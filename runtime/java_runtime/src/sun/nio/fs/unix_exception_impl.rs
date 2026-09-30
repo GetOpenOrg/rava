@@ -121,31 +121,26 @@ impl UnixException {
     }
 
     /// `rethrowAsIOException(UnixPath file, UnixPath other)`：翻译并以 IOException
-    /// 异常形态抛出（Rust 侧 = JvmError 传播）。
-    pub fn rethrowAsIOException_unixpath_unixpath(
-        &self,
-        file: Option<&UnixPath>,
-        other: Option<&UnixPath>,
-    ) -> Result<()> {
-        let a = match file {
-            Some(f) => f.getPathForExceptionMessage()?,
-            None => String::default(),
+    /// 异常形态抛出（Rust 侧 = JvmError 传播）。形参按生成层约定按值传递，null 表示缺省。
+    pub fn rethrowAsIOException_unixpath_unixpath(&self, file: UnixPath, other: UnixPath) -> Result<()> {
+        let msg = |p: &UnixPath| -> Result<String> {
+            if crate::java::lang::ObjectVTable::is_jvm_null(p) {
+                Ok(String::default())
+            } else {
+                p.getPathForExceptionMessage()
+            }
         };
-        let b = match other {
-            Some(o) => o.getPathForExceptionMessage()?,
-            None => String::default(),
-        };
-        let x = self.translateToIOException(a, b)?;
+        let x = self.translateToIOException(msg(&file)?, msg(&other)?)?;
         Err(JvmError::from(x))
     }
 
     /// `rethrowAsIOException(UnixPath file)`。
-    pub fn rethrowAsIOException_unixpath(&self, file: &UnixPath) -> Result<()> {
-        self.rethrowAsIOException_unixpath_unixpath(Some(file), None)
+    pub fn rethrowAsIOException_unixpath(&self, file: UnixPath) -> Result<()> {
+        self.rethrowAsIOException_unixpath_unixpath(file, UnixPath::default())
     }
 
     /// `asIOException(UnixPath file)`：翻译为 IOException 值（不抛出）。
-    pub fn asIOException(&self, file: &UnixPath) -> Result<IOException> {
+    pub fn asIOException(&self, file: UnixPath) -> Result<IOException> {
         self.translateToIOException(file.getPathForExceptionMessage()?, String::default())
     }
 }

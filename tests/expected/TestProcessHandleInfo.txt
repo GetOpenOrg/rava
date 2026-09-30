@@ -1,0 +1,19 @@
+self pid positive: true
+self alive: true
+self start present: true
+self start in past: true
+self cpu present: true
+self user matches: true
+self command present: true
+self parent present: true
+child listed: true
+child in descendants: true
+child parent is self: true
+all processes contain self: true
+child command: sleep
+child arguments: [5]
+child commandLine ends: true
+child start present: true
+child equals by pid: true
+child exit: 137
+child alive after: false

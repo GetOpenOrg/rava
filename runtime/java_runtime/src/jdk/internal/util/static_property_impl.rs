@@ -131,4 +131,72 @@ impl StaticProperty {
     pub fn FILE_ENCODING() -> Result<String> {
         Ok(String::from("UTF-8"))
     }
+
+    // ── 公开访问器（字段快照同值；JDK 的 StaticProperty.xxx() 直接返回对应静态字段）────
+
+    #[jvm_boundary]
+    pub fn nativeEncoding() -> Result<String> {
+        Self::NATIVE_ENCODING()
+    }
+
+    #[jvm_boundary]
+    pub fn fileEncoding() -> Result<String> {
+        Self::FILE_ENCODING()
+    }
+
+    #[jvm_boundary]
+    pub fn jnuEncoding() -> Result<String> {
+        Self::SUN_JNU_ENCODING()
+    }
+
+    /// `java.library.path`：原生单二进制无 JNI 库搜索路径（System 属性同值：空串）。
+    #[jvm_boundary]
+    pub fn javaLibraryPath() -> Result<String> {
+        Ok(String::from(""))
+    }
+
+    /// `sun.boot.library.path`：`<java.home>/lib`（System 属性同值）。
+    #[jvm_boundary]
+    pub fn sunBootLibraryPath() -> Result<String> {
+        Ok(String::from(format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME).as_str()))
+    }
+
+    /// `jdk.serialFilter`：未设置 → null。
+    #[jvm_boundary]
+    pub fn jdkSerialFilter() -> Result<String> {
+        Ok(String::default())
+    }
+
+    /// `jdk.serialFilterFactory`：未设置 → null。
+    #[jvm_boundary]
+    pub fn jdkSerialFilterFactory() -> Result<String> {
+        Ok(String::default())
+    }
+
+    /// `java.properties.date`：未设置 → null（Properties.store 写当前时间注释）。
+    #[jvm_boundary]
+    pub fn javaPropertiesDate() -> Result<String> {
+        Ok(String::default())
+    }
+
+    /// `java.locale.useOldISOCodes`：缺省空串（JDK getProperty(props, key, "")）。
+    #[jvm_boundary]
+    pub fn javaLocaleUseOldISOCodes() -> Result<String> {
+        Ok(String::from(""))
+    }
+
+    #[jvm_boundary]
+    pub fn osName() -> Result<String> {
+        Ok(String::from(crate::posix::os_name()))
+    }
+
+    #[jvm_boundary]
+    pub fn osArch() -> Result<String> {
+        Ok(String::from(crate::posix::os_arch()))
+    }
+
+    #[jvm_boundary]
+    pub fn osVersion() -> Result<String> {
+        Ok(String::from(crate::posix::os_release().as_str()))
+    }
 }

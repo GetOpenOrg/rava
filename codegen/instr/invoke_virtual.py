@@ -368,7 +368,8 @@ def _emit_class_vtable_dispatch(sim, obj_e, cls_ci, cls_binary, cls_rust,
                                         sim, registry)
     barg_str = ', '.join(wargs)
     _cls_tps = _effective_class_type_params(cls_ci, registry)
-    _erased_targs = f"<{', '.join(['Object'] * len(_cls_tps))}>" if _cls_tps else ''
+    # 表达式位置的类型实参须为 turbofish（`Cls::<Object>::f`；`Cls<Object>::f` 是语法错误）
+    _erased_targs = f"::<{', '.join(['Object'] * len(_cls_tps))}>" if _cls_tps else ''
     # 接收者静态类型串可能已带泛型实参（K-6b 擦除发射后为 Cls<Object>）：turbofish
     # 统一在裸基名上追加擦除实参，避免 Cls<Object><Object> 双后缀
     _cls_base_rust = rust_type_head(cls_rust).strip()

@@ -190,7 +190,7 @@ impl UnixChannelFactory {
                             msg
                         )))?;
                     }
-                    x.rethrowAsIOException_unixpath(&path)?;
+                    x.rethrowAsIOException_unixpath(Clone::clone(&path))?;
                 }
                 return Err(e);
             }

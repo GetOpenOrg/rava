@@ -1,8 +1,9 @@
 //! `jdk/internal/misc/ScopedMemoryAccess`（内部边界类，按调用链按需手写）。
 //!
-//! JDK 的 nio 堆缓冲（HeapByteBuffer.getShort / getInt …）经本类按 (base, offset) 读多字节值，
-//! session 为 null（堆缓冲无内存段作用域）。原生二进制只承载堆 byte[]：offset 为
-//! Unsafe.ARRAY_BYTE_BASE_OFFSET + 下标（与 unsafe__impl 同一约定），按 bigEndian 组装。
+//! JDK 的 nio 缓冲（HeapByteBuffer / DirectByteBuffer 的 getShort / getInt …）经本类按
+//! (base, offset) 读写多字节值，session 为 null（缓冲无内存段作用域）。寻址经
+//! crate::native_memory：base 为 null 时 offset 是直接内存地址，否则是基本类型数组内偏移
+//! （Unsafe.ARRAY_*_BASE_OFFSET + 下标 × 宽度），按 bigEndian 组装。
 //! 消费方：AnnotationParser 经 ByteBuffer.wrap 解析注解原始字节（FS-R R4b）；
 //! 写入族（putInt / putLong … 经 put*Unaligned）：用户代码的 ByteBuffer.putInt 等。其余方法保持存根。
 
@@ -10,28 +11,18 @@ use crate::prelude::*;
 use super::scoped_memory_access::ScopedMemoryAccess;
 use crate::jdk::internal::foreign::MemorySessionImpl;
 
-/// Unsafe.ARRAY_BYTE_BASE_OFFSET（unsafe__impl.rs ARRAY_BASE_OFFSET 同值）。
-const ARRAY_BASE_OFFSET: i64 = 16;
-
 fn read_bytes(base: &Object, offset: i64, n: usize) -> Result<Vec<u8>> {
-    let arr = <JArray<i8> as From<Object>>::from(Clone::clone(base));
-    let start = (offset - ARRAY_BASE_OFFSET) as i32;
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n as i32 {
-        out.push(arr.get(start + i)? as u8);
-    }
+    let mut out = vec![0u8; n];
+    crate::native_memory::read(base, offset, &mut out)?;
     Ok(out)
 }
 
 fn write_bytes(base: &Object, offset: i64, v: u64, n: usize, big_endian: bool) -> Result<()> {
-    let arr = <JArray<i8> as From<Object>>::from(Clone::clone(base));
-    let start = (offset - ARRAY_BASE_OFFSET) as i32;
-    for i in 0..n {
-        // 大端：最高字节在前；小端：最低字节在前
-        let shift = if big_endian { 8 * (n - 1 - i) } else { 8 * i };
-        arr.set(start + i as i32, (v >> shift) as u8 as i8)?;
-    }
-    Ok(())
+    // 大端：最高字节在前；小端：最低字节在前
+    let bytes: Vec<u8> = (0..n)
+        .map(|i| (v >> if big_endian { 8 * (n - 1 - i) } else { 8 * i }) as u8)
+        .collect();
+    crate::native_memory::write(base, offset, &bytes)
 }
 
 fn compose(bytes: &[u8], big_endian: bool) -> u64 {
@@ -106,5 +97,29 @@ impl ScopedMemoryAccess {
     #[jvm_boundary]
     pub fn putLongUnaligned(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i64, big_endian: bool) -> Result<()> {
         write_bytes(&base, offset, value as u64, 8, big_endian)
+    }
+
+    /// `copyMemory(srcSession, dstSession, srcBase, srcOffset, destBase, destOffset, bytes)`：
+    /// 缓冲批量读写（DirectByteBuffer.get(byte[]) / put(byte[]) 等）。
+    #[jvm_boundary]
+    pub fn copyMemory(&self, _src_session: MemorySessionImpl, _dst_session: MemorySessionImpl,
+                      src_base: Object, src_offset: i64, dst_base: Object, dst_offset: i64,
+                      bytes: i64) -> Result<()> {
+        crate::native_memory::copy(&src_base, src_offset, &dst_base, dst_offset, bytes, 1)
+    }
+
+    /// `copySwapMemory(..., bytes, elemSize)`：按元素宽度翻转字节序的批量拷贝
+    /// （非本机字节序视图缓冲的批量读写）。
+    #[jvm_boundary]
+    pub fn copySwapMemory(&self, _src_session: MemorySessionImpl, _dst_session: MemorySessionImpl,
+                          src_base: Object, src_offset: i64, dst_base: Object, dst_offset: i64,
+                          bytes: i64, elem_size: i64) -> Result<()> {
+        crate::native_memory::copy(&src_base, src_offset, &dst_base, dst_offset, bytes, elem_size as usize)
+    }
+
+    /// `setMemory(session, o, offset, bytes, value)`：填充（缓冲清零等）。
+    #[jvm_boundary]
+    pub fn setMemory(&self, _session: MemorySessionImpl, o: Object, offset: i64, bytes: i64, value: i8) -> Result<()> {
+        crate::native_memory::fill(&o, offset, bytes, value)
     }
 }

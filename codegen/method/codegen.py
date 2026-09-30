@@ -248,6 +248,17 @@ def gen_method_body(
 ) -> str:
     _class_tparams = class_type_params or []
 
+    # 死处理器剔除：catch 类型不在 registry（本程序闭包内不存在该异常类，运行期不可能抛出）
+    # 的异常表条目与闭包分析 folds 的 dead_handlers 同语义——按类型逐条剔除；多类型 catch
+    # 只去掉缺失的类型。保留则 catch 头引用未生成的类型（E0425，MethodAccessorGenerator$1 的
+    # `catch (InstantiationException | IllegalAccessException)` 实证）。
+    if registry and method.exception_table and any(
+            ct is not None and ct not in registry for _s, _e, _h, ct in method.exception_table):
+        import copy as _copy_et
+        method = _copy_et.copy(method)
+        method.exception_table = [e for e in method.exception_table
+                                  if e[3] is None or e[3] in registry]
+
     # 如果方法有泛型签名，用签名推断参数/返回类型。
     # 注：非泛型类的 generic_signature（如 ClassLoader.getInterfaces0 →
     # Vec<Class<Object>>）同样需要采用 —— 门控不要求类有类型参数；

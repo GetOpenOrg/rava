@@ -172,7 +172,7 @@ impl UnixFileSystemProvider {
         let errno = UnixNativeDispatcher::access(Clone::clone(&file), mode)?;
         if errno != 0 {
             let x = UnixException::new_i(errno)?;
-            x.rethrowAsIOException_unixpath(&file)?;
+            x.rethrowAsIOException_unixpath(Clone::clone(&file))?;
         }
         Ok(())
     }
@@ -256,7 +256,7 @@ impl UnixFileSystemProvider {
                         )?,
                     ));
                 }
-                UnixException::new_i(errno)?.rethrowAsIOException_unixpath(&file)?;
+                UnixException::new_i(errno)?.rethrowAsIOException_unixpath(Clone::clone(&file))?;
                 Ok(false)
             }
         }
@@ -284,7 +284,7 @@ impl UnixFileSystemProvider {
                 if e.is_instance_of("sun/nio/fs/UnixException") {
                     let x: UnixException =
                         e.catch_as::<UnixException>("sun/nio/fs/UnixException");
-                    x.rethrowAsIOException_unixpath(&file1)?;
+                    x.rethrowAsIOException_unixpath(Clone::clone(&file1))?;
                 }
                 return Err(e);
             }
@@ -295,7 +295,7 @@ impl UnixFileSystemProvider {
                 if e.is_instance_of("sun/nio/fs/UnixException") {
                     let x: UnixException =
                         e.catch_as::<UnixException>("sun/nio/fs/UnixException");
-                    x.rethrowAsIOException_unixpath(&file2)?;
+                    x.rethrowAsIOException_unixpath(Clone::clone(&file2))?;
                 }
                 return Err(e);
             }
@@ -320,7 +320,7 @@ impl UnixFileSystemProvider {
             Err(e) => {
                 if e.is_instance_of("sun/nio/fs/UnixException") {
                     let x: UnixException = e.catch_as::<UnixException>("sun/nio/fs/UnixException");
-                    x.rethrowAsIOException_unixpath(&file)?;
+                    x.rethrowAsIOException_unixpath(Clone::clone(&file))?;
                 }
                 Err(e)
             }
@@ -373,7 +373,7 @@ impl UnixFileSystemProvider {
                         )?,
                     ));
                 }
-                UnixException::new_i(errno)?.rethrowAsIOException_unixpath(&dir)?;
+                UnixException::new_i(errno)?.rethrowAsIOException_unixpath(Clone::clone(&dir))?;
                 Ok(())
             }
         }

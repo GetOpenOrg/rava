@@ -217,6 +217,14 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     _impl_cls_bin = _impl_method_ref[:_dot]           # "TestLambda" or "pkg/Cls"
                     _impl_mname   = _impl_method_ref[_dot+1:_impl_colon]  # "lambda$main$0"
                     _impl_desc    = _impl_method_ref[_impl_colon+1:]  # "(I)I"
+                    # 接口重声明的根类公开方法（`handle::equals` → ProcessHandle.equals）：接口不发射
+                    # 这类成员（经根类 vtable 分派），实现句柄按 JVM 方法解析落到根类
+                    _impl_ci0 = registry.get(_impl_cls_bin) if registry else None
+                    if _impl_ci0 is not None and _impl_ci0.is_interface:
+                        from ..member_owner import _root_virtual_methods as _rvm_lam
+                        from ...constants import OBJECT_CLASS as _OBJ_LAM
+                        if (_impl_mname, _impl_desc[:_impl_desc.index(')') + 1]) in _rvm_lam():
+                            _impl_cls_bin = _OBJ_LAM
                     # 转换为 Rust 标识符
                     _impl_cls_rust  = short_cls(_impl_cls_bin)      # 内部类 `$` → `_`，与定义侧一致
                     # G-10：实现方法名取 lambda_impl_rust_name 单一来源（定义侧 class_writer
@@ -277,11 +285,10 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                     if (_impl_ci is None and not _impl_is_ctor):
                         # impl 类不在 registry（java/lang/Object 等运行时手写层类）：其实例
                         # 方法是 &self 形态（描述符不含接收者）。接收者来自两处之一：
-                        #   - SAM 首参（未绑定 X::m，A-3）：SAM 实参数恰比描述符形参多一个
-                        #   - 捕获首值（绑定 recv::m / this::m）：捕获数恰比描述符形参多一个
-                        if len(_impl_params) + 1 == len(_sam_params):
-                            _impl_is_instance = True
-                        elif _cap_var_names and len(_cap_var_names) == len(_impl_params) + 1:
+                        #   - SAM 首参（未绑定 X::m，A-3）；
+                        #   - 捕获首值（绑定 recv::m / this::m，`handle::equals`）。
+                        # 两者合计：捕获数 + SAM 实参数 恰比描述符形参多一个（接收者）
+                        if len(_cap_var_names) + len(_sam_params) == len(_impl_params) + 1:
                             _impl_is_instance = True
                     _call_cap_list = [f'Clone::clone(&{v})' for v in _cap_var_names]
                     _call_sam_list = list(_sam_anames)
@@ -320,7 +327,7 @@ def sim_dynamic(ins, sim, class_name, registry) -> bool:
                                     # 目标类型由形参推断，turbofish 不写）
                                     _sam_bin = _pd if _pd.startswith('[') else _pd[1:-1]
                                     _call_sam_list[_si] = f'{_sam_anames[_si]}.try_cast("{_sam_bin}")?'
-                            elif (_is_erased_ref(_sd) and not _impl_ci.is_interface
+                            elif (_is_erased_ref(_sd) and _impl_ci is not None and not _impl_ci.is_interface
                                   and len(_impl_sig_types) == len(_impl_params)
                                   and _impl_sig_types[_pi] in _impl_tparams):
                                 # 实现方法形参是声明类的类型变量（`this::addLast`，addLast(E)）：

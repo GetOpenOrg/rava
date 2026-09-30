@@ -44,4 +44,12 @@ impl CRC32 {
         }
         Ok(crc_update(crc, buf.into_iter()))
     }
+
+    /// `updateByteBuffer0(int, long addr, int off, int len)`：直接缓冲区（直接内存地址 addr + off 起 len 字节）。
+    #[jvm_native]
+    pub fn updateByteBuffer0(v: i32, addr: i64, off: i32, len: i32) -> Result<i32> {
+        // SAFETY: addr 为 DirectByteBuffer 的直接内存地址，Java 侧已做 off / len 界检查
+        let bytes = unsafe { std::slice::from_raw_parts((addr + off as i64) as *const u8, len.max(0) as usize) };
+        Ok(crc_update(v, bytes.iter().copied()))
+    }
 }

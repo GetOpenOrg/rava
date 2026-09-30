@@ -75,3 +75,25 @@ gap_scan 在转译后（cargo 之前）按生成产物列出调用链上**全部
 | MethodHandleNatives expand / getMemberVMInfo / getNamedCon | 不做 | MH-native 模型替代；getNamedCon 只在断言校验路径 |
 | NetworkInterface | 暂缓 | 语料无网络接口枚举 |
 
+
+## 七、native 补全（语料扫描驱动，2026-09-30）
+
+扫描口径改为 Rust 闭包分析器：`scripts/native_gap_scan.py` 对 tests/e2e 全语料逐例 `rava closure`
+（1080 例，每例约 1 秒），与 runtime/ 手写 fn 交叉比对，报告 `docs/reports/native-gap-scan.md`。
+（gap_scan.py 的 API 模式全量种子在 16G 本机 OOM，不再作为主口径。）
+
+| 批次 | 内容 | 提交 |
+|---|---|---|
+| 7a | ProcessHandleImpl.getProcessPids0 / Info.info0 / Info.initIDs（/proc），isAlive0 / parent0 返回与校验真实启动时刻；e2e TestProcessHandleInfo | d0ee300 |
+| 7b | 直接内存：`native_memory` 基础模块 + Unsafe allocateMemory0 / reallocateMemory0 / freeMemory0 / setMemory0 / copyMemory0 / copySwapMemory0 及包装、get/put(Object,long) 直接内存分支、ScopedMemoryAccess 批量操作；zip 直接缓冲区族（CRC32 / Adler32 / Inflater / Deflater 的 Buffer 变体）；e2e TestDirectBuffer | d0ee300 |
+| 7c | NetworkInterface 全部 native（getifaddrs + /sys/class/net）、Inet4Address / Inet6Address.init；NativeConstructorAccessorImpl.newInstance0 / NativeMethodAccessorImpl.invoke0；VarHandle.getAndAdd 族；StaticProperty 公开访问器；e2e TestNetworkInterface | a8f7698 |
+
+native 缺口 16 → 6。剩余 6 个均为静态可达、运行期不执行：
+
+| native | 触达路径 | 结论 |
+|---|---|---|
+| StackStreamFactory.callStackWalk / checkStackWalkModes、StackTraceElement.initStackTraceElement | ThreadLocal.dumpStackIfVirtualThread（仅 `-Djdk.traceVirtualThreadLocals`） | 暂缓（需真实 Java 帧） |
+| MethodHandleNatives.expand / getMemberVMInfo / getNamedCon | MemberName.expandFromVM（type 已由手写 resolve 填好时直接返回）/ 断言校验路径 | 不做（MH-native 模型替代） |
+
+另：6 例（DeepCopy / StockTrans / RecordsSerializationTest / SerializableDemo / TestSerialDefaultSuid /
+TestSerializationPrimitives）的 `rava closure` 超过 120 秒，未纳入统计——序列化闭包的分析耗时问题，转闭包分析器。
