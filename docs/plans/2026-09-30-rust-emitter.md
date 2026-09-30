@@ -30,6 +30,7 @@ generator/crates/
 ├── classfile/   ✅ 已有：.class 解析
 ├── resolve/     ✅ 已有：classpath / 层次 / jimage
 ├── closure/     ✅ 已有：精确闭包分析 + 手写层扫描（handwritten.rs 供发射层复用）
+├── input/       P1：发射层输入（registry 插入序 / 调用链 visited / 反射面 / 补种 / 折叠与 VM 常量剪枝后的规范化方法体 / 手写扫描 / 逐方法发射判定）（← closure_input / closure_folds / vm_constants / runtime_manifest / transpile 的 registry 构建）
 ├── ty/          P2：签名解析 + 类型映射 + 层次实参 + 签名类型 + JvmType（← sig_parse / type_map / type_args / sig_types / jvm_type）
 ├── ir/          P3：RsIR 节点 + render 单出口（← rs_ir / render）
 ├── sim/  cfg/  instr/   P4：栈模拟 / 结构化 / 指令翻译（← stack / cfg/ / instr/ / method/）
