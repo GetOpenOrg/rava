@@ -64,3 +64,10 @@
   - `build_cli.rs` `api_package_precheck`：端到端出 `[api]` 行与预检行。
   - `gap_scan.py api java/util/function`：43 类 / 79 入口方法，与 Python 口径的枚举结果相同。
 - **生成树**：以 31dba6a0（迁移前，脚本经 Python 解析器取 `--image`、main.py 做 overlay）为基线，对照 3fb1aea1（rava 自行派生镜像目录、自行 overlay）。27 例逐字节 0 差异，raw-audit 相同。
+- **合入 rust-closure-analyzer 后（04394b7d）**：
+  - 对照迁移后树（3fb1aea1），差异全部来自合入的发射层改动（存根 `__stub`、`clinit_enter` 非泛型化、根 profile 等）。
+  - 另以 rust-closure-analyzer 自身产出的 27 例树对照，余差只有三类：
+    - 本分支合并前已有的修复（spliterator 的 `virtual_in` / `vtable_owner`、`__om_*` 局部变量），合并前树里已存在；
+    - scratch 的 `rava_macros` 绝对路径与包版本号（工作区路径不同所致）；
+    - raw-audit 行本分支多出 `raw_expr` / `raw_stmt` 计数。
+  - 并行发射下 raw-audit 计数与合并前串行发射逐例相同。
