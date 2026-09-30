@@ -93,9 +93,12 @@ fn use_decl(name: &str) -> String {
     }
 }
 
-/// 本轮未写入、带生成标记的 .rs（lib.rs / mod.rs 除外）清除
-fn sweep_stale(src_root: &Path, writer: &Writer) -> Result<()> {
+/// 本轮未写入的陈旧 .rs（lib.rs / mod.rs 除外）清除：带生成标记的上轮生成文件；
+/// `handwritten_src` 给出时（java_runtime）还有手写真源已删除的无标记文件。
+/// 在本轮写出之后判定，本轮生成的无标记文件（如模块资源表）不会被先删后写
+fn sweep_stale(src_root: &Path, handwritten_src: Option<&Path>, writer: &Writer) -> Result<()> {
     for (dir, _, files) in walk(src_root) {
+        let rel = dir.strip_prefix(src_root).unwrap_or(Path::new(""));
         for f in files {
             if !f.ends_with(".rs") || f == "lib.rs" || f == "mod.rs" {
                 continue;
@@ -104,7 +107,12 @@ fn sweep_stale(src_root: &Path, writer: &Writer) -> Result<()> {
             if writer.written_this_run(&p) {
                 continue;
             }
-            if has_marker(&p) == Some(true) {
+            let stale = match has_marker(&p) {
+                Some(true) => true,
+                Some(false) => handwritten_src.is_some_and(|hw| !hw.join(rel).join(&f).exists()),
+                None => false,
+            };
+            if stale {
                 std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
             }
         }
@@ -243,11 +251,11 @@ fn companions(
 /// 重建 `src_root` 下各包的 mod.rs（根目录自身除外：lib.rs 手写）。
 /// `runtime_dir`：手写真源 `runtime/java_runtime`（java_runtime 时给出，lib crate 为 None）
 pub fn write_mod_tree(src_root: &Path, runtime_dir: Option<&Path>, writer: &mut Writer) -> Result<()> {
-    sweep_stale(src_root, writer)?;
+    let handwritten_src = runtime_dir.map(|r| r.join("src"));
+    sweep_stale(src_root, handwritten_src.as_deref(), writer)?;
     if !src_root.is_dir() {
         return Ok(());
     }
-    let handwritten_src = runtime_dir.map(|r| r.join("src"));
     let tree = scan_tree(src_root, handwritten_src.as_deref());
     prune_stale_pkg_dirs(src_root, handwritten_src.as_deref(), &tree)?;
     let deps = runtime_dir.map(|r| CompanionDeps::new(r, src_root));
@@ -280,14 +288,15 @@ fn is_identifier(s: &str) -> bool {
     matches!(cs.next(), Some(c) if c == '_' || c.is_alphabetic()) && cs.all(|c| c == '_' || c.is_alphanumeric())
 }
 
-/// scratch `java_runtime/src/lib.rs` 顶层模块补全（jar 输入模式的新顶层包根）
-pub fn complete_lib_rs(src_root: &Path) -> Result<()> {
-    let lib_rs = src_root.join("lib.rs");
-    let Ok(text) = std::fs::read_to_string(&lib_rs) else { return Ok(()) };
+/// scratch `java_runtime/src/lib.rs` 写出：手写真源 `runtime_src/lib.rs` + 顶层模块补全
+/// （jar 输入模式的新顶层包根）。整体经 [`Writer`] 写出：内容不变不重写（保留 mtime）
+pub fn complete_lib_rs(src_root: &Path, runtime_src: &Path, writer: &mut Writer) -> Result<()> {
+    let Ok(text) = std::fs::read_to_string(runtime_src.join("lib.rs")) else { return Ok(()) };
     let re = regex::Regex::new(r"(?m)^\s*(?:pub\s+)?mod\s+(r#\s*)?(\w+)\s*;").expect("静态正则");
     let declared: BTreeSet<&str> = re.captures_iter(&text).filter_map(|c| c.get(2)).map(|m| m.as_str()).collect();
-    let Ok(rd) = std::fs::read_dir(src_root) else { return Ok(()) };
-    let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let mut names: Vec<String> = std::fs::read_dir(src_root)
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
     names.sort();
     let missing: Vec<String> = names
         .iter()
@@ -295,13 +304,10 @@ pub fn complete_lib_rs(src_root: &Path) -> Result<()> {
         .filter(|n| src_root.join(n).join("mod.rs").is_file())
         .map(|n| mod_decl(n))
         .collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    let add = format!(
-        "\n// jar 输入模式：新顶层包根（按磁盘实际目录补全，非手写清单成员）\n{}\n",
-        missing.join("\n")
-    );
-    let out = text + &add;
-    std::fs::write(&lib_rs, out).map_err(|e| io_err(&lib_rs.display().to_string(), e))
+    let out = if missing.is_empty() {
+        text
+    } else {
+        format!("{text}\n// jar 输入模式：新顶层包根（按磁盘实际目录补全，非手写清单成员）\n{}\n", missing.join("\n"))
+    };
+    writer.write(&src_root.join("lib.rs"), &out)
 }

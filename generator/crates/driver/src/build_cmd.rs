@@ -313,12 +313,10 @@ mod tests {
         remove_dir(&out).unwrap();
         assert!(!out.exists());
         put(&out.join(CLOSURE_INPUT_DIR).join("classes/A.class"), "cafebabe");
-        put(&out.join("java_runtime/src/gone_impl.rs"), "impl X {}\n");
         let macros = root.join("runtime/rava_macros");
         prepare_scratch(&out, &rt, &macros, false).unwrap();
         assert!(out.join(CLOSURE_INPUT_DIR).join("classes/A.class").is_file());
-        assert_eq!(std::fs::read_to_string(out.join("java_runtime/src/lib.rs")).unwrap(), "pub mod java;\n");
-        assert!(!out.join("java_runtime/src/gone_impl.rs").exists());
+        assert!(!out.join("java_runtime/src/lib.rs").exists(), "lib.rs 由 mod 树阶段写出");
         let cargo = std::fs::read_to_string(out.join("java_runtime/Cargo.toml")).unwrap();
         assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
         assert!(!cargo.contains("version = \"0.1.0\""));

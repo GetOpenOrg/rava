@@ -117,7 +117,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
     perf.mark("write");
     mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), &mut w)?;
-    mod_tree::complete_lib_rs(&jrt_src)?;
+    mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &disp)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin)?;
