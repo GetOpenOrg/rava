@@ -137,7 +137,7 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 时区 / 格式化链的 ASCII 快路径判定（TestZonedDateTime）。
     fn countPositives(&self, arg0: JArray<i8>, arg1: i32, arg2: i32) -> Result<i32> {
         for i in 0..arg2 {
-            if arg0.get(arg1 + i)? < 0 {
+            if arg0.get(arg1.wrapping_add(i))? < 0 {
                 return Ok(i);
             }
         }

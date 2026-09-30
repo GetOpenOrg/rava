@@ -1022,7 +1022,7 @@ impl Unsafe {
 
 /// JDK `alignToHeapWordSize`：按 8 字节向上取整。
 fn _align_to_heap_word(bytes: i64) -> i64 {
-    if bytes >= 0 { (bytes + 7) & !7 } else { bytes }
+    if bytes >= 0 { bytes.wrapping_add(7) & !7 } else { bytes }
 }
 
 fn _check_size(bytes: i64) -> Result<()> {
