@@ -410,7 +410,7 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 | 段 | Digester 改前 | 改后 | DeepCopy 改前 | 改后 |
 |---|---:|---:|---:|---:|
-| `closure_json`（value + 文本 + 落盘） | 约 150 ms | **0**（缺省不写） | 约 400 ms | **0** |
+| `closure_json`（value + 文本 + 落盘；`--closure-json` 下另含解析回读与比对） | 约 100–130 ms | **0**（缺省不写） | 约 250 ms（含比对） | **0** |
 | 闭包析构（原 `input` 余项） | 58–157 ms | **与发射重叠** | 约 617 ms | **与发射重叠** |
 | `input.normalize` | 44.8 ms | **7.6 ms** | 101.8 ms | **8.2 ms** |
 | `input.reflect` | 11.5 ms | 5.8 ms | 15.2 ms | 6.4 ms |
