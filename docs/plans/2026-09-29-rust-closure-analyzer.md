@@ -178,7 +178,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ✅（反射目标可靠性）、耗时 ⏳ |
+| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | 🔄 进行中：第 0 步 ✅ bfcb75d7、第 1 步 ✅ 32a789c6、第 2 步 ✅、第 3 步 ✅（CPA 实测否决，改为手写数组写入模型）、第 3b 步 ✅、第 4 步 ✅（反射目标可靠性）、耗时 ✅（CollectorsDemo 28 s → 2.7 s） |
 | C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ⏳ 未开始（2026-09-29 用户确认方向，C1c 之后实施） |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ⏳ 未开始（syn 解析手写层已在 C1 / C1c 第 0 步先行落地） |
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 进行中（用户负责；folds v1 消费侧在 `claude/jolly-dijkstra-diftum`） |
@@ -559,6 +559,59 @@ C1b 引入的机制（全部通用，无类名特判）：
      这些查找点是否运行时可达，由 C1d 对 MH / LambdaForm（VM 契约第 3 类，运行模型替换）的建模决定。
    - 两例的 ×1.3 与 CollectorsDemo 的耗时（28 s，验收要求 ≤ 3 s）仍未达标：×1.3 由 C1d 承接；
      耗时在 C1d 放行实测前单独处理（C1d 每包 × 8 例实测，单例 30 s 不可接受）。
+
+**耗时（2026-09-30 完成）**：CollectorsDemo 28 s → 2.7 s，全部是求解算法改进，不设时间预算、不降精度；
+CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证过的输出）逐项比对一致。
+
+1. 求解正确性（先于提速）：
+   - 第 4 步的增量求解不是真不动点：字节码调用点已接入枢纽后重跑时提前返回，枢纽上逐调用点派发的 lambda
+     接收者增长不再处理，漏掉派发目标。TestStreamBasic 的 `AbstractCollection.toString` 因此取不到列表元素。
+   - 改为 lambda 调用各自登记为读者单元（`LCall`）：只读自己的输入值集，增长时只处理新增接收者。
+2. 精度（同时减少计算量）：
+   - 逃逸模型：open 值只代表已逃逸的对象。抽象对象到达逃逸汇点（手写体 / native 的值池、VM 回调返回值、未知数组）
+     后，才与字段的未知接收者视图相连；未逃逸对象只经字节码可见的引用访问。
+   - 清单 `[facts.memory_reads]`：`Unsafe.getReference*` / `getAndSetReference` / `compareAndExchangeReference`
+     的返回值按调用点读自形参所指对象（数组元素 / 引用实例字段），替代手写返回的 open(返回类型)。
+   - `MethodHandle.invoke` / `linkTo*` 与 `invokeExact` / `invokeBasic` 同口径登记为调用器。
+   - 手写体 `let x = T::new*(…)` 绑定的不可变局部变量上的调用，接收者只取该方法新建的 `T`（`fresh`）；
+     手写体对 `self` 字段的访问按接收者对象逐个接入。
+3. 求解结构：
+   - 派发枢纽：同一调用成员在同一接收者集合上的派发共用一个枢纽。调用点实参汇入 `HP`、目标返回值汇入 `HR`，
+     边数从「调用点 × 接收者」降为「调用点 + 接收者」。精确集合增长时换接新枢纽，以原枢纽为父，只派发增量。
+   - G 按类型惰性建子集索引：open 展开与 catch 存活判定与 |G| 无关。
+     open 展开过的方法 / 站点按 (open 类型, 接收者上界) 索引，G 增长时只重跑受影响者。
+   - 站点级去重（`dispatched` / `hub_linked` / `recv_done` / `lambda_done`）：同一分析结果下重跑只处理新增接收者。
+     字段站点与值无关的部分（登记类 / 值集 / 手写访问器）只接一次。
+4. 重分析：
+   - 调用方对被调方分析的依赖只有透传摘要，摘要变化才重处理调用方（返回常量经 rdeps、「尚无返回」经 never 各自失效）。
+   - 重分析后只执行与上次已执行分析不同的偏移上的事件，并只清这些偏移的去重记录。
+5. 常数因子：
+   - `IdSet` 超过 64 元素附位图：差集 / 并入与大集合规模无关，两侧都有位图时按字求差。
+   - 类型集收窄按过滤类型缓存子类型判定行。
+   - 流传播时边表借出不克隆，同一过滤类型只收窄一次，Object 过滤直接推增量。
+   - release 开 `lto = "fat"`、`codegen-units = 1`。
+
+实测（2026-09-30，JDK 21，release）：
+
+| 用例 | 总类 | translate∩code | 方法 | 上下文 | 对象 | 耗时 |
+|---|---:|---:|---:|---:|---:|---:|
+| HelloWorld | 223 | 130 | 605 | 807 | 50 | 89 ms |
+| TestSwitchString | 223 | 130 | 598 | 790 | 49 | 71 ms |
+| PatternSwitchTest | 225 | 131 | 611 | 803 | 49 | 76 ms |
+| FileIOTest | 265 | 153 | 777 | 978 | 52 | 84 ms |
+| ChineseRemainderTheorem | 267 | 161 | 716 | 911 | 52 | 80 ms |
+| TestStreamBasic | 379 | 257 | 1442 | 2335 | 177 | 0.14 s |
+| TestRecordComponents | 555 | 389 | 2913 | 5272 | 337 | 0.38 s |
+| CollectorsDemo | 1204 | 943 | 7558 | 17904 | 1064 | 2.7 s |
+
+- 对第 4 步：
+  - TestStreamBasic +28 类，是第 1 项漏传修正后的真不动点。列表元素流到 `toString` 后带上 open(Object)，
+    来源是 TimSort 的临时数组：`Array.newArray`（native）返回 open(Object)，从中读出的元素也是 open(Object)。
+    `String.valueOf` 因此派发到 G 中全部 `toString`，引出 `Thread` / `ProtectionDomain` / `Permissions` 一族。
+    后续把 `Array.newArray` 按调用点建模为数组分配（元素类型取 Class 实参）即可收窄；这个 native 属 VM 契约第 1 类。
+  - TestRecordComponents −2（`HashMap$KeySet` / `HashMap$KeyIterator`）、CollectorsDemo −4：第 2 项精度改进的净效果。
+- 动态对照：7 例漏报均不增；唯一的新增漏报仍是上文说明过的 `DirectMethodHandleAccessor`（边界域）。
+  folds 自检违约 = 0，fold_check 8 例 1453 条全部通过，两次运行输出一致。
 
 第 1 步完成后单独测一次 TestStreamBasic，量出并行流路径（ForkJoin / VarHandles）占多少类，再定第 2、3 步做多深。
 

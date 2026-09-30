@@ -70,6 +70,9 @@ pub struct TypedCall {
     /// 方法调用的接收者类型：外层 None = 路径调用；内层 None = 未知
     pub recv: Option<Option<TypeRef>>,
     pub args: Vec<Option<TypeRef>>,
+    /// 接收者是本 fn 内 `let x = T::new*(…)` 绑定、此后未被遮蔽的不可变局部变量：
+    /// 实际接收者只能是该方法手写体新建的 `T` 对象
+    pub fresh: Option<TypeRef>,
 }
 
 /// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型
@@ -89,6 +92,8 @@ pub struct FieldAccess {
     pub recv: Option<SType>,
     /// 写入值的动态类型（同 [`TypedCall`] 实参规则）
     pub value: Option<TypeRef>,
+    /// 接收者是本 fn 的 `self`（即被调 Java 方法的接收者；经同文件被调 fn 传递来的访问不算）
+    pub on_self: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -607,9 +612,11 @@ struct CallScan<'a> {
     locals: &'a HashMap<String, Option<Vec<String>>>,
     /// 形参 / self / let 绑定 → 静态类型（块作用域；其余模式绑定遮蔽为 None）
     scope: HashMap<String, Option<SType>>,
-    calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型)
-    fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>)>,
+    /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
+    fresh: HashMap<String, Vec<String>>,
+    calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self)
+    fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool)>,
     opaque: HashSet<String>,
 }
 
@@ -637,10 +644,15 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             // Java 字段名是 Rust 关键字时访问器带 `_` 后缀（`in` → `__set_in_`）
             let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
             let value = m.args.first().and_then(|a| infer(a, self.locals));
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value));
+            let on_self = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self));
         }
         let args = m.args.iter().map(|a| infer(a, self.locals)).collect();
-        self.calls.push((name, None, Some(infer(&m.receiver, self.locals)), args));
+        let fresh = match &*m.receiver {
+            syn::Expr::Path(p) => p.path.get_ident().and_then(|i| self.fresh.get(&i.to_string()).cloned()),
+            _ => None,
+        };
+        self.calls.push((name, None, Some(infer(&m.receiver, self.locals)), args, fresh));
         syn::visit::visit_expr_method_call(self, m);
     }
 
@@ -650,7 +662,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             if let Some((last, head)) = segs.split_last() {
                 let args = c.args.iter().map(|a| infer(a, self.locals)).collect();
                 let ty = (!head.is_empty()).then(|| head.to_vec());
-                self.calls.push((last.clone(), ty, None, args));
+                self.calls.push((last.clone(), ty, None, args, None));
             }
         }
         syn::visit::visit_expr_call(self, c);
@@ -661,40 +673,40 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
     }
 
     fn visit_block(&mut self, b: &'ast syn::Block) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_block(self, b);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     fn visit_expr_closure(&mut self, c: &'ast syn::ExprClosure) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_expr_closure(self, c);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     // for / while let / if let / match 分支的模式绑定只在其内有效
     fn visit_expr_for_loop(&mut self, e: &'ast syn::ExprForLoop) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_expr_for_loop(self, e);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     fn visit_expr_while(&mut self, e: &'ast syn::ExprWhile) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_expr_while(self, e);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     fn visit_expr_if(&mut self, e: &'ast syn::ExprIf) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_expr_if(self, e);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     fn visit_arm(&mut self, a: &'ast syn::Arm) {
-        let outer = self.scope.clone();
+        let outer = (self.scope.clone(), self.fresh.clone());
         syn::visit::visit_arm(self, a);
-        self.scope = outer;
+        (self.scope, self.fresh) = outer;
     }
 
     fn visit_local(&mut self, l: &'ast syn::Local) {
@@ -705,16 +717,43 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 _ => l.init.as_ref().and_then(|i| stype(&i.expr, &self.scope, self.locals)),
             };
             self.scope.insert(pi.ident.to_string(), st);
+            let name = pi.ident.to_string();
+            match l.init.as_ref().filter(|i| pi.mutability.is_none() && i.diverge.is_none()).and_then(|i| ctor_type(&i.expr)) {
+                Some(t) => {
+                    self.fresh.insert(name, t);
+                }
+                None => {
+                    self.fresh.remove(&name);
+                }
+            }
         }
     }
 
     // 模式绑定（闭包形参 / match / if let / for）遮蔽同名变量
     fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
         self.scope.insert(p.ident.to_string(), None);
+        self.fresh.remove(&p.ident.to_string());
         syn::visit::visit_pat_ident(self, p);
     }
 
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
+}
+
+/// 构造调用 `T::new*(…)`（可带 `?` / 括号）的类型路径
+fn ctor_type(e: &syn::Expr) -> Option<Vec<String>> {
+    match e {
+        syn::Expr::Paren(p) => ctor_type(&p.expr),
+        syn::Expr::Group(g) => ctor_type(&g.expr),
+        syn::Expr::Try(t) => ctor_type(&t.expr),
+        syn::Expr::Call(c) => {
+            let syn::Expr::Path(p) = &*c.func else { return None };
+            let segs = path_segs(&p.path);
+            let (last, head) = segs.split_last()?;
+            let head_is_type = head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase()));
+            (head_is_type && (last == CTOR_RUST || last.starts_with("new_"))).then(|| head.to_vec())
+        }
+        _ => None,
+    }
 }
 
 /// 手写体取得数组视图的标识符：数组类型本身、协变视图、Object 上的数组存取 / 转换
@@ -774,10 +813,11 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, scope, calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
+        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
         cs.visit_block(block);
-        for (field, write, recv, value) in cs.fields {
+        for (field, write, recv, value, on_self) in cs.fields {
             info.fields.push(FieldAccess {
+                on_self,
                 field,
                 write,
                 recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
@@ -785,12 +825,13 @@ impl FileScan<'_> {
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
-        for (name, ty, recv, args) in cs.calls {
+        for (name, ty, recv, args, fresh) in cs.calls {
             info.calls.push(TypedCall {
                 name,
                 path_ty: tr(ty),
                 recv: recv.map(tr),
                 args: args.into_iter().map(tr).collect(),
+                fresh: tr(fresh),
             });
         }
         info.opaque = cs.opaque;
@@ -927,7 +968,9 @@ fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, H
                 ctors.extend(f.ctors.iter().cloned());
                 tcalls.extend(f.calls.iter().cloned());
                 opaque.extend(f.opaque.iter().cloned());
-                fields.extend(f.fields.iter().cloned());
+                // 被调 fn 的 self 不一定是本方法的接收者
+                let own = x == n.as_str();
+                fields.extend(f.fields.iter().map(|fa| FieldAccess { on_self: fa.on_self && own, ..fa.clone() }));
             }
             for c in calls.get(x).into_iter().flatten() {
                 if fns.contains_key(c) && seen.insert(c.as_str()) {

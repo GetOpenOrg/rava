@@ -22,3 +22,5 @@ syn = { version = "2", features = ["full", "visit", "parsing"] }
 
 [profile.release]
 debug = 1
+lto = "fat"
+codegen-units = 1

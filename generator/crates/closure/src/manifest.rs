@@ -69,6 +69,7 @@ pub struct Manifest {
     field_enumerators: HashSet<String>,
     deserializers: HashSet<String>,
     array_writes: HashMap<String, ArrayWrite>,
+    memory_reads: HashMap<String, usize>,
     mirror_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
@@ -165,6 +166,16 @@ impl Manifest {
             }
         }
 
+        let mut memory_reads = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("memory_reads")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(src) = v.as_table().and_then(|e| e.get("src")).and_then(|x| x.as_integer()) else {
+                    return Err(format!("vm_intrinsics.toml [facts.memory_reads]：{k} 须为 {{ src = 形参序号 }}"));
+                };
+                memory_reads.insert(k.clone(), src as usize);
+            }
+        }
+
         let field_writes = |key: &str| facts("field_writes", key);
         let reflect = |key: &str| facts("reflect", key);
         let mut member_enumerators = HashMap::new();
@@ -199,6 +210,7 @@ impl Manifest {
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
             array_writes,
+            memory_reads,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
@@ -267,6 +279,11 @@ impl Manifest {
     /// 手写方法写入实参数组元素的声明（未声明 = 按手写体是否取得数组视图保守处理）
     pub fn array_writes(&self, member: &str) -> Option<&ArrayWrite> {
         self.array_writes.get(member)
+    }
+
+    /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
+    pub fn memory_read(&self, member: &str) -> Option<usize> {
+        self.memory_reads.get(member).copied()
     }
 
     /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）

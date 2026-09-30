@@ -220,9 +220,26 @@ constructor_invokers = [
 "jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.invoke:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.linkToStatic:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.linkToVirtual:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.linkToSpecial:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/MethodHandle.linkToInterface:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
+
+[facts.memory_reads]
+# 手写方法的返回值按 VM 语义读自形参 src 所指对象（形参序号按描述符，0 起，不含接收者）：
+# 数组取其元素，对象取其引用实例字段（偏移只能指向这些位置）。分析器按调用点接入，替代手写返回的
+# open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
+# Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值
+"jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
+"jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
+"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
+"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
+"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
 
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：

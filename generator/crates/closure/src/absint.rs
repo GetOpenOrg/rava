@@ -192,7 +192,7 @@ pub trait Oracle {
     fn catch_live(&self, ty: &str) -> bool;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// invokevirtual / special / static / interface；args 含接收者
     Invoke { opcode: u8, mref: MemberRef, iface: bool, args: Vec<V> },
