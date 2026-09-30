@@ -6,7 +6,7 @@ impl<'a> Engine<'a> {
     pub(super) fn process_bytecode(&mut self, m: usize) {
         let Some(a) = self.analysis(m) else { return };
         if !self.methods[m].applied.as_ref().is_some_and(|o| Rc::ptr_eq(o, &a)) {
-            self.sysprops_scan(&a);
+            self.sysprops_scan(m, &a);
         }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
@@ -190,6 +190,7 @@ impl<'a> Engine<'a> {
             }
         }
         let Some(r) = r else { return };
+        self.sysprops_rval(m, a, &r);
         let key = self.methods[m].key.clone();
         let cur = self.ctx.rvals.borrow().get(&key).cloned();
         let new = PV::join(cur.as_ref(), &r);
