@@ -9,6 +9,7 @@ pub mod constant;
 pub mod descriptor;
 pub mod extras;
 pub mod insn;
+pub mod module;
 pub mod reader;
 
 pub use class::{acc, parse, Annotation, BootstrapMethod, ClassFile, Code, ElementValue, ExceptionEntry, Field, Method};

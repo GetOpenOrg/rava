@@ -27,12 +27,13 @@ impl<'a> Engine<'a> {
             let mut f = fold_of(key.to_string(), code, &all);
             self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones);
+            self.noreturn_calls(code, &all, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() {
                 out.push(f);
             }
         }
@@ -159,6 +160,10 @@ impl<'a> Engine<'a> {
             let mut last = None;
             while let Some(n) = q.pop_front() {
                 last = Some(n);
+                // 最近的引入点（没有含该类的前驱）即源头
+                if !rev.get(&n).is_some_and(|v| v.iter().any(|p| has(p))) {
+                    break;
+                }
                 let mut ps: Vec<Node> = rev.get(&n).map(|v| v.iter().filter(|p| has(p) && !prev.contains_key(*p)).copied().collect()).unwrap_or_default();
                 ps.sort_by_key(|p| format!("{p:?}"));
                 for p in ps {
@@ -166,7 +171,7 @@ impl<'a> Engine<'a> {
                     q.push_back(p);
                 }
             }
-            // 最远的源头往回打印到起点
+            // 源头（或最远节点）往回打印到起点
             let mut cur = last;
             while let Some(n) = cur {
                 let sz = self.graph.get(&n).map_or(0, |s| s.classes.len());
@@ -211,9 +216,11 @@ impl<'a> Engine<'a> {
             return v.into_iter().take(40).map(|x| x.1).collect();
         }
         // open 源头诊断：`@opens:<类型>`——含 open(类型)、但没有任何含同一 open 的前驱的节点（open 的引入点）
-        if let Some(q) = pat.strip_prefix("@opens:") {
+        // 来源诊断：`@opens:<类型>` 为 open(类型) 的引入点，`@srcs:<类>` 为含该类（非 open）的引入点（直接播种、无同类前驱的节点）
+        let src_q = pat.strip_prefix("@opens:").map(|q| (q, true)).or_else(|| pat.strip_prefix("@srcs:").map(|q| (q, false)));
+        if let Some((q, open)) = src_q {
             let Some(&cid) = self.ids.get(q) else { return vec![format!("无此类：{q}")] };
-            let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.contains(&cid));
+            let has = |x: &Node| self.graph.get(x).is_some_and(|s| if open { s.open.contains(&cid) } else { s.classes.contains(&cid) });
             let mut fed: HashSet<Node> = HashSet::default();
             for (src, edges) in &self.graph.flow_list() {
                 if has(src) {
@@ -340,6 +347,11 @@ impl<'a> Engine<'a> {
             .enumerate()
             .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_hwobj_method(*i))
             .map(|(_, m)| m)
+    }
+
+    /// 成员是边界截断方法（见 `Ctx::boundary_cut`）
+    pub fn is_boundary_cut(&self, key: &MemberRef) -> bool {
+        self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|m| self.ctx.boundary_cut(&cf, m)))
     }
 
     /// 输出序的类表：按类名排序，与处理次序无关（计划 2026-09-30-closure-analyzer-performance.md §二 不变量）

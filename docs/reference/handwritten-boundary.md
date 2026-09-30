@@ -74,7 +74,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
   类同样按方法划分；
 - 编译成本截断：如 `sun/reflect/generics`（泛型 visitor 体系使 `java_runtime` 编译峰值内存越过 15G）；
 - 因截断而补的手写：如 `sun/nio/cs` 的 `StreamDecoder` / `StreamEncoder`（以 Charset 直连编解码）、
-  `ServicesCatalog.findServices`、`CleanerImpl$PhantomCleanableRef` 等。
+  `ServicesCatalog.getServicesCatalogOrNull`、`CleanerImpl$PhantomCleanableRef` 等。
 
 规则：
 

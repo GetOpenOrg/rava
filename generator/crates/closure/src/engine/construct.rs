@@ -16,16 +16,19 @@ impl Ctx<'_> {
         if let Some(o) = self.objs.borrow().get(&key) {
             return o.clone();
         }
-        let fs = self.ctor_fields(init, &rest)?;
-        let vals: Vec<(MemberRef, V)> = fs.into_iter().filter_map(|(k, pv)| pv.value().map(|v| (k, v))).collect();
+        let mut clean = true;
+        let fs = self.ctor_fields(init, &rest, &mut clean);
+        let vals: Vec<(MemberRef, V)> = fs.into_iter().flatten().filter_map(|(k, pv)| pv.value().map(|v| (k, v))).collect();
         let o = (!vals.is_empty()).then(|| Rc::new(Obj::Fields(vals)));
-        self.objs.borrow_mut().insert(key, o.clone());
+        if clean {
+            self.objs.borrow_mut().insert(key, o.clone());
+        }
         o
     }
 
     /// 构造器 init 以实参 rest（不含接收者）写入的本类 final 实例字段（按字段键排序）；
-    /// 分析不了（边界 / 手写 / 递归中 / 保守分析）→ None
-    fn ctor_fields(&self, init: &MemberRef, rest: &[V]) -> Option<Vec<(MemberRef, PV)>> {
+    /// 分析不了（边界 / 手写 / 递归中 / 保守分析）→ None；答复与外层计算有关（递归截断）时 clean 置 false
+    fn ctor_fields(&self, init: &MemberRef, rest: &[V], clean: &mut bool) -> Option<Vec<(MemberRef, PV)>> {
         let cf = self.h.class(&init.owner)?;
         let finals: Vec<MemberRef> = cf
             .fields
@@ -41,15 +44,15 @@ impl Ctx<'_> {
             return None;
         }
         let code = meth.code.as_ref()?;
-        let guard = format!("<init>:{init}");
-        if !self.in_progress.borrow_mut().insert(guard.clone()) {
+        let Some(frame) = self.memo_enter(format!("<init>:{init}"), true) else {
+            *clean = false;
             return None;
-        }
+        };
         let params: Vec<Option<V>> = std::iter::once(None).chain(rest.iter().map(|v| PV::of(v).value())).collect();
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params });
+        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
         let out = (!a.conservative).then(|| self.ctor_puts(&cf.name, &finals, &a)).flatten();
-        self.in_progress.borrow_mut().remove(&guard);
+        *clean = self.memo_leave(frame);
         out
     }
 
@@ -79,7 +82,8 @@ impl Ctx<'_> {
                     if mref.name == "<init>" && mref.owner == cls && args.first().is_some_and(this) =>
                 {
                     let rest: Vec<V> = args.iter().skip(1).map(V::stripped).collect();
-                    let Some(fs) = self.ctor_fields(mref, &rest) else {
+                    // 在外层构造器帧内：递归截断由帧栈记入外层
+                    let Some(fs) = self.ctor_fields(mref, &rest, &mut true) else {
                         finals.iter().for_each(|k| put(k.clone(), PV::Top));
                         continue;
                     };
@@ -106,9 +110,12 @@ impl Ctx<'_> {
         }
         let o = recv.and_then(V::obj)?;
         let v = o.field(&fi.key)?.clone();
-        if let Some(m) = m {
-            self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
-            self.pdeps.borrow_mut().insert(m);
+        match m {
+            Some(m) => {
+                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+                self.pdeps.borrow_mut().insert(m);
+            }
+            None => self.note_aux_read(&fi.key),
         }
         // 反序列化只写它自己分配的对象（不经构造器），构造器建出的标签对象不受其影响：不看 `deser`
         let open = fi.open || self.fopen_all.get() || self.fopen.borrow().contains(&fi.key) || self.fopen_names.borrow().contains(&fi.key.name);

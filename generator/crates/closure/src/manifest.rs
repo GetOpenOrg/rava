@@ -58,7 +58,7 @@ pub enum Members {
 
 mod sysprops;
 mod names;
-pub use names::NameFacts;
+pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
 
 /// 方法返回值事实（[vm_constants] / [facts]）
@@ -66,6 +66,16 @@ pub use sysprops::{PropRead, PropValue, SysProps};
 pub enum Fact {
     Null,
     Int(i32),
+}
+
+/// 字符串纯函数（[facts.string_ops]）：接收者与实参都是字符串常量时结果即常量
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrOp {
+    /// 忽略大小写相等（实参 null 为 false）
+    EqualsIgnoreCase,
+    /// UTF-16 长度
+    Length,
+    IsEmpty,
 }
 
 pub struct Manifest {
@@ -83,8 +93,10 @@ pub struct Manifest {
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     deserializers: HashSet<String>,
+    serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
+    class_initializers: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
@@ -98,6 +110,8 @@ pub struct Manifest {
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
+    /// 字符串纯函数
+    string_ops: HashMap<String, StrOp>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 按名取类与字符串拼接
@@ -162,6 +176,19 @@ impl Manifest {
             }
         }
 
+        let mut string_ops = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("string_ops")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let op = match v.as_str() {
+                    Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
+                    Some("length") => StrOp::Length,
+                    Some("is_empty") => StrOp::IsEmpty,
+                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                };
+                string_ops.insert(k.clone(), op);
+            }
+        }
+
         let facts = |sec: &str, key: &str| -> Vec<String> {
             vm.get("facts")
                 .and_then(|s| s.get(sec))
@@ -201,6 +228,16 @@ impl Manifest {
                     return Err(format!("vm_intrinsics.toml [facts.memory_reads]：{k} 须为 {{ src = 形参序号 }}"));
                 };
                 memory_reads.insert(k.clone(), src as usize);
+            }
+        }
+
+        let mut class_initializers = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("class_init")).and_then(|s| s.get("initializers")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(i) = v.as_integer().and_then(|x| usize::try_from(x).ok()) else {
+                    return Err(format!("vm_intrinsics.toml [facts.class_init.initializers]：{k} 须为 Class 形参序号"));
+                };
+                class_initializers.insert(k.clone(), i);
             }
         }
 
@@ -273,8 +310,10 @@ impl Manifest {
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
+            serializable_markers: field_writes("serializable_markers"),
             array_writes,
             memory_reads,
+            class_initializers,
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             member_enumerators,
@@ -285,6 +324,7 @@ impl Manifest {
             indy,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
         })
@@ -364,6 +404,11 @@ impl Manifest {
         self.array_writes.get(member)
     }
 
+    /// 初始化以实参传入的类的方法（`[facts.class_init]`）：返回 Class 形参序号（按描述符，不含接收者）
+    pub fn class_initializer(&self, member: &str) -> Option<usize> {
+        self.class_initializers.get(member).copied()
+    }
+
     /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
     pub fn memory_read(&self, member: &str) -> Option<usize> {
         self.memory_reads.get(member).copied()
@@ -395,6 +440,11 @@ impl Manifest {
         self.deserializers.contains(member)
     }
 
+    /// 可序列化标记接口：反序列化只写实现者（声明类是其子类型）的字段；空 = 不区分（全部字段）
+    pub fn serializable_markers(&self) -> &[String] {
+        &self.serializable_markers
+    }
+
     /// 返回接收者的类镜像（`Object.getClass` 语义）
     pub fn returns_mirror(&self, member: &str) -> bool {
         self.mirror_returns.contains(member)
@@ -418,6 +468,10 @@ impl Manifest {
     /// 纯函数：null 实参 → false
     pub fn is_value_equals(&self, member: &str) -> bool {
         self.value_equals.contains(member)
+    }
+
+    pub fn string_op(&self, member: &str) -> Option<StrOp> {
+        self.string_ops.get(member).copied()
     }
 
     pub fn is_null_to_false(&self, member: &str) -> bool {
@@ -470,6 +524,21 @@ mod tests {
     }
 
     #[test]
+    fn class_initializers_parse() {
+        let m = with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = 0\n").unwrap();
+        assert_eq!(m.class_initializer("a/U.ensure:(Ljava/lang/Class;)V"), Some(0));
+        assert_eq!(m.class_initializer("a/U.other:()V"), None);
+        assert!(with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = -1\n").is_err());
+    }
+
+    #[test]
+    fn serializable_markers_parse() {
+        let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
+        assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
+        assert!(with_vm("").unwrap().serializable_markers().is_empty());
+    }
+
+    #[test]
     fn array_returns_reject_non_array() {
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
         assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
@@ -483,6 +552,15 @@ mod tests {
         assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
         assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
         assert_eq!(m.boxed_class(b'J'), None);
+    }
+
+    #[test]
+    fn string_ops_parse() {
+        let m = with_vm("[facts.string_ops]\n\"a/S.eic:(La/S;)Z\" = \"equals_ignore_case\"\n\"a/S.len:()I\" = \"length\"\n").unwrap();
+        assert_eq!(m.string_op("a/S.eic:(La/S;)Z"), Some(StrOp::EqualsIgnoreCase));
+        assert_eq!(m.string_op("a/S.len:()I"), Some(StrOp::Length));
+        assert_eq!(m.string_op("a/S.x:()I"), None);
+        assert!(with_vm("[facts.string_ops]\n\"a/S.f:()I\" = \"upper\"\n").is_err());
     }
 }
 

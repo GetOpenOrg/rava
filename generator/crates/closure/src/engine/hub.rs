@@ -17,7 +17,7 @@ impl<'a> Engine<'a> {
         let ptypes = md.params.iter().map(|p| self.ptype(p)).collect();
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
         let (open, pending, parent) = match &key.2 {
-            HubSet::Open(o) => (Some(*o), Vec::new(), None),
+            HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None),
             HubSet::Exact(rs) => {
                 let parent = parent.filter(|&p| {
                     let ph = &self.hubs[p as usize];
@@ -226,6 +226,12 @@ impl<'a> Engine<'a> {
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
         let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+        if self.vm_hubs.contains(&h) {
+            // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
+            self.add_to(Node::P(t, 0), &TypeSet::exact(r));
+            self.open_params(t);
+            return;
+        }
         // 先并入形参常量，再判定是否按调用点建模（透传摘要依赖分析）
         if self.methods[t].kind == Kind::Bytecode && !self.methods[t].is_static {
             self.hub_bind(h, t);
@@ -269,5 +275,24 @@ impl<'a> Engine<'a> {
             return None;
         }
         self.analysis(t)?.returned_params()
+    }
+
+    /// VM 按反射对象虚调用 key（声明类 cls 上的实例方法）：经 open(cls) 的 VM 枢纽派发到各接收者的选中实现，
+    /// G 增长时增量展开（反射取到基类方法、以子类实例调用时执行的是子类覆写）
+    pub(super) fn vm_dispatch(&mut self, key: &MemberRef, iface: bool, via: Via) {
+        let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
+            self.unresolved.insert(key.to_string());
+            return;
+        };
+        let Some(md) = parse_method(&key.desc) else { return };
+        let owner = self.id(&key.owner);
+        let before = self.hubs.len();
+        let h = self.hub(key, iface, owner, HubSet::Vm(owner), None, &site, &md, via);
+        if (h as usize) < before {
+            return;
+        }
+        self.vm_hubs.insert(h);
+        self.hubs[h as usize].vals = Some(vec![PV::Top; md.params.len()]);
+        self.hub_expand(h);
     }
 }
