@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30 深夜）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec），闭包对照 / cargo check / e2e 抽查中；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、类初始化事实）进行中。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
+> 状态（2026-10-01）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec）；`c1d-final` 已并入 `c1d-prec`，删除后暴露缺口的修复进行中（Digester E0433、枚举反射 values、System.in 已修；UnsafeConstants / 直接内存、反射 signature 待修），另一会话的 VM 注入状态修复（dc9fd946 / d8a0b082：UnsafeConstants、VM.directMemory、System.in、jca 别名、ScopedMemoryAccess 等）已经 b1ac5b7c 并入主干，由 `c1d-prec` 合并时按手写边界规范取舍；内容感知精度实测可靠收益为 0、不实施（19cf2b5b），编译成本改由 rustc 拆 crate 方案解决（`2026-10-01-rustc-memory-and-crate-split.md`）；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实）9 项完成，TestCharsetForName 回归已修（98bc2e68 / 17fc2e7e，§6.11），e2e 验证后合入。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
 
 ## 一、目标
 
