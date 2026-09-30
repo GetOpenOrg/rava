@@ -15,6 +15,7 @@
 | `--debug` | 诊断明细：兜底点 traceback 与逐条触发、闭包分析未解析调用、cfg 结构化逐块判定 |
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
+| `--cut 类.方法:描述符[@偏移]` / `--cut-file FILE` / `--dump-edges FILE` | 闭包归因诊断（缺省关闭）：反事实切除方法体或调用点（可重复；文件每行一条，`#` 注释）/ 触发边转储（每行 `源\t目标\t条件`）。原样转交 `rava build` / `rava closure` 的同名选项；切除会改变闭包结果，仅供归因，方法见 `docs/plans/2026-10-01-c1d-closure-bloat.md` |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码 |
 | `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `rust`（2026-10-01 起；缺省值唯一定义在 `scripts/generator_select.py`）。`rust` 下暂不支持 `--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites`（显式报错，需要时加 `--generator python`） |
 
@@ -64,6 +65,24 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--no-run` | 仅 build：只生成不编译运行 |
 | `--skeleton-only` | 骨架模式：方法体为 `/*BODY 类.方法:描述符*/` 占位（`PlaceholderBodies`）。不给时以 `NoBodies` 发射，首个方法体请求报「P4c/P5b 未接入」 |
 | `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
+| `--cut E` / `--cut-file F` / `--dump-edges F` | 仅 build：闭包诊断，同下 `rava closure` |
+
+### `rava closure`（闭包分析器，`generator/crates/driver/src/closure_cmd.rs`）
+
+| 选项 | 用途 |
+|---|---|
+| `<Test.java \| 类目录>` | 输入；`.java` 先经 javac 编译到临时目录 |
+| `-o closure.json` / `--report md` | 闭包结果 / 报告 |
+| `--why 类或方法` / `--flows 片段` | 入闭包的 provenance 链 / 类型流诊断（均可多次） |
+| `--lib jar` / `--image D` / `--root M` / `--seed-class C` / `--locale L` / `--release P` / `--release-bytecode P` | 转译接入与放行实测（均可多次） |
+| `--cut 类.方法:描述符[@偏移]` | 反事实切除（可多次）：不带偏移 = 方法体不处理（节点保留）；带偏移 = 该偏移处的调用 / 字段 / new 事件不执行。只宜切消费型节点（方法体、派发点），切构造器 / 写入点会让字段按初值折叠，结果非单调 |
+| `--cut-file F` | 切除条目文件（每行一条，空行与 `#` 注释跳过；条目多时用） |
+| `--dump-edges F` | 触发边转储：方法（`M:`）/ 类型提及（`C:`）/ 类初始化（`I:`）/ 分配（`A:`）/ 枢纽（`H:`）节点间的全部触发边，派发边第三列为接收者分配条件 |
+
+```bash
+rava closure tests/e2e/01_basics/HelloWorld.java --cut 'java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;' -o /tmp/c.json
+python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --no-run --cut-file /tmp/cuts.txt --dump-edges /tmp/edges.tsv
+```
 
 ### 重型闭包的自动处理（无需配置）
 

@@ -38,7 +38,8 @@ def resolve(cli_value: str | None) -> str:
     return g
 
 
-def run_rust(java_files: list[str], out_dir: str, *, strict: bool, locales: tuple[str, ...]) -> None:
+def run_rust(java_files: list[str], out_dir: str, *, strict: bool, locales: tuple[str, ...],
+             extra: list[str] = ()) -> None:
     """`rava build --no-run`：javac → 闭包 → 发射进 out_dir（overlay 已由调用方完成，rava 内幂等重放）"""
     home = os.environ.get('JAVA_HOME', '')
     if not home:
@@ -56,6 +57,7 @@ def run_rust(java_files: list[str], out_dir: str, *, strict: bool, locales: tupl
         cmd += ['--locale', loc]
     if strict:
         cmd.append('--strict')
+    cmd += list(extra)  # 闭包诊断（--cut / --cut-file / --dump-edges），main.py 已转成 rava 参数
     print(f"[rava] build {' '.join(os.path.basename(f) for f in java_files)} → {out_dir}", flush=True)
     r = subprocess.run(cmd)
     if r.returncode != 0:

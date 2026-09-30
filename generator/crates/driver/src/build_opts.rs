@@ -1,7 +1,8 @@
 //! `rava build` / `rava emit` 的参数解析（纯函数，单测覆盖）。
 //!
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
-//!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--skeleton-only] [--strict]`
+//!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--skeleton-only] [--strict]
+//!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]`（后三项为闭包诊断，同 `rava closure`）
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--skeleton-only] [--strict]`（`--java`：源文件，决定用户类包布局与入口序）
 
@@ -31,17 +32,23 @@ pub struct BuildOpts {
     pub images: Vec<PathBuf>,
     pub locales: Vec<String>,
     pub roots: Vec<String>,
+    /// 闭包诊断：反事实切除条目 / 条目文件 / 触发边转储文件
+    pub cuts: Vec<String>,
+    pub cut_files: Vec<String>,
+    pub dump_edges: Option<String>,
     pub clean: bool,
     pub no_run: bool,
     pub skeleton_only: bool,
     pub strict: bool,
 }
 
-const VALUED: [&str; 11] =
-    ["--jdk", "--java-home", "--runtime", "--out", "--main", "--classes", "--java", "--image", "--locale", "--root", "-o"];
+const VALUED: [&str; 14] = [
+    "--jdk", "--java-home", "--runtime", "--out", "--main", "--classes", "--java", "--image", "--locale", "--root", "-o",
+    "--cut", "--cut-file", "--dump-edges",
+];
 const FLAGS: [&str; 4] = ["--clean", "--no-run", "--skeleton-only", "--strict"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 5] = ["--main", "--locale", "--root", "--no-run", "-o"];
+const BUILD_ONLY: [&str; 8] = ["--main", "--locale", "--root", "--no-run", "-o", "--cut", "--cut-file", "--dump-edges"];
 /// 只属于 emit 的选项
 const EMIT_ONLY: [&str; 2] = ["--classes", "--java"];
 
@@ -81,6 +88,9 @@ impl BuildOpts {
                 "--java" => o.java.push(PathBuf::from(v)),
                 "--image" => o.images.push(PathBuf::from(v)),
                 "--locale" => o.locales.push(v.clone()),
+                "--cut" => o.cuts.push(v.clone()),
+                "--cut-file" => o.cut_files.push(v.clone()),
+                "--dump-edges" => o.dump_edges = Some(v.clone()),
                 _ => o.roots.push(v.clone()),
             }
         }
@@ -174,6 +184,19 @@ mod tests {
         assert_eq!(o.locales, vec!["fr".to_string()]);
         assert!(o.clean && o.no_run && o.skeleton_only && !o.strict);
         assert_eq!(o.main.as_deref(), Some("p/Main"));
+    }
+
+    #[test]
+    fn build_parses_closure_diag() {
+        let o = BuildOpts::parse(
+            Mode::Build,
+            &args("A.java --cut a/B.m:(Ljava/lang/String;)V --cut a/B.n:()V@7 --cut-file /c.txt --dump-edges /e.tsv"),
+        )
+        .unwrap();
+        assert_eq!(o.cuts, vec!["a/B.m:(Ljava/lang/String;)V".to_string(), "a/B.n:()V@7".to_string()]);
+        assert_eq!(o.cut_files, vec!["/c.txt".to_string()]);
+        assert_eq!(o.dump_edges.as_deref(), Some("/e.tsv"));
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --cut a/B.m:()V")).is_err());
     }
 
     #[test]

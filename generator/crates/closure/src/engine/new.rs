@@ -117,6 +117,7 @@ impl<'a> Engine<'a> {
             reflect_members: BTreeSet::new(),
             hw_written: BTreeSet::new(),
             fwriter_live: false,
+            cuts: Default::default(),
             spret: Default::default(),
             fenum_pending: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),

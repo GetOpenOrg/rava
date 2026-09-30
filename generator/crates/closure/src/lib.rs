@@ -31,6 +31,8 @@ pub struct Input<'a> {
     pub seed_roots: Vec<MemberRef>,
     /// `--locale` 显式给出的 locale 标签
     pub locales: Vec<String>,
+    /// 诊断选项（反事实切除 / 触发边转储；缺省关闭，不影响闭包结果）
+    pub diag: engine::Diag,
 }
 
 pub struct Closure<'a> {
@@ -42,6 +44,10 @@ pub struct Closure<'a> {
 pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, hw: &'a Handwritten) -> Closure<'a> {
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
+    e.cuts = engine::cut::Cuts::parse(&input.diag.cuts);
+    if input.diag.dump_edges.is_some() {
+        engine::cut::edges_begin();
+    }
     e.seeds.locales = input.locales.clone();
     for r in &input.roots {
         e.root(r.clone(), "main");
@@ -59,6 +65,11 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         e.root_boot_call(m, "boot_init");
     }
     e.run();
+    if let Some(p) = &input.diag.dump_edges {
+        if let Err(err) = engine::cut::edges_finish(p) {
+            eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
+        }
+    }
     Closure { engine: e, elapsed_ms: t0.elapsed().as_millis() }
 }
 

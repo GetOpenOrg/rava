@@ -88,6 +88,7 @@ def discover(class_infos, class_files, out_dir: str, *, lib_jars=(), lib_registr
         args += ['--image', d]
     if _options.TRACE_CLASS:
         args += ['--why', _options.TRACE_CLASS]
+    args += _options.CLOSURE_DIAG
     _run_analyzer(args)
     with open(json_path, encoding='utf-8') as f:
         cj = json.load(f)

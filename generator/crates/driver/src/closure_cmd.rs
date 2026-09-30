@@ -6,7 +6,9 @@
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
 //! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
-//! `--locale <标签>`（locale 资源束种子）。
+//! `--locale <标签>`（locale 资源束种子）；
+//! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
+//! `--dump-edges <文件>`（触发边转储）。
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +45,17 @@ pub(crate) fn find_runtime_dir(explicit: Option<PathBuf>) -> Result<PathBuf, Str
         return Ok(fallback);
     }
     Err("找不到 runtime/java_runtime（用 --runtime 指定）".into())
+}
+
+/// 诊断选项：`--cut` 条目 + `--cut-file` 文件逐行条目（空行 / `#` 注释跳过）+ `--dump-edges` 路径
+pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: Option<String>) -> Result<closure::engine::Diag, String> {
+    let mut all: Vec<String> = cuts.iter().map(|c| c.as_ref().to_string()).collect();
+    for f in cut_files {
+        let f = f.as_ref();
+        let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
+        all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
+    }
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from) })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -107,6 +120,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
+        diag: diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))?,
     };
     let c = closure::analyze(&input_desc, &h, &man, &hw);
 

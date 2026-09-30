@@ -69,8 +69,8 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<Rc<ClassFile>>) {
-        let c = cut::cuts();
-        if c.active() {
+        if self.cuts.active() {
+            let c = &self.cuts;
             // 方法级切除也要挡住读者站点重跑（不经 process）
             let k = self.methods[m].key.to_string();
             if c.method(&k) || c.site(&k, off) {

@@ -287,6 +287,18 @@ def _python_codegen(args, java_files: list[str], out_dir: str, lib_specs: list) 
     return True
 
 
+
+def _closure_diag_args(args) -> list:
+    """闭包诊断选项（--cut / --cut-file / --dump-edges）→ rava 参数（路径转绝对：rava 在生成器目录运行）"""
+    out = []
+    for c in args.cut:
+        out += ['--cut', c]
+    for f in args.cut_file:
+        out += ['--cut-file', os.path.abspath(f)]
+    if args.dump_edges:
+        out += ['--dump-edges', os.path.abspath(args.dump_edges)]
+    return out
+
 def main():
     ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
     ap.add_argument('java_files', nargs='*', help='.java 源文件列表（默认 tests/e2e/01_basics/HelloWorld.java）')
@@ -310,6 +322,12 @@ def main():
     ap.add_argument('--trace-class', default='', metavar='CLASS',
                     help='打印该类或方法（斜线形态，如 java/net/InetAddress 或 类.方法:描述符）入闭包的'
                          '最短 provenance 链（rava closure --why）')
+    ap.add_argument('--cut', action='append', default=[], metavar='类.方法:描述符[@偏移]',
+                    help='闭包诊断：反事实切除该方法体或调用点（可重复；转交 rava --cut，改变闭包结果，仅供归因）')
+    ap.add_argument('--cut-file', action='append', default=[], metavar='FILE',
+                    help='闭包诊断：切除条目文件，每行一条（# 注释；转交 rava --cut-file）')
+    ap.add_argument('--dump-edges', default='', metavar='FILE',
+                    help='闭包诊断：触发边转储到 FILE（每行 源\\t目标\\t条件；转交 rava --dump-edges）')
     ap.add_argument('--precheck-only', action='store_true',
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
@@ -327,6 +345,7 @@ def main():
     from codegen import options as _options, raw_audit as _raw_audit_opt
     _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
     _options.PRECHECK_ONLY = args.precheck_only
+    _options.CLOSURE_DIAG = _closure_diag_args(args)
     _raw_audit_opt.enable_raw_sites(args.raw_sites)
 
     lib_specs = _parse_lib_specs(args.lib)
@@ -356,7 +375,8 @@ def main():
     t0 = time.perf_counter()
     if generator == 'rust':
         run_rust(java_files, out_dir, strict=args.strict,
-                 locales=tuple(t for t in args.locales.split(',') if t.strip()))
+                 locales=tuple(t for t in args.locales.split(',') if t.strip()),
+                 extra=_options.CLOSURE_DIAG)
     elif not _python_codegen(args, java_files, out_dir, lib_specs):
         return
     t_codegen = time.perf_counter() - t0

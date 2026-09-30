@@ -1,12 +1,21 @@
-//! 反事实调试开关（仅诊断，缺省关闭）：环境变量 `RAVA_CLOSURE_CUT` 指定视为不可达的方法 / 调用点，
-//! 用于量化「切掉某条路径后闭包实际减少多少」。条目以 `|` 分隔（描述符内含 `;`）：
-//! - `类.方法:描述符`：该方法体不处理（节点保留、体内事件全部不执行）
-//! - `类.方法:描述符@偏移`：该方法在该偏移处的调用 / 字段 / new 事件不执行
-//!
-//! 不改变任何缺省行为；仅供离线归因，不可用于生产闭包。
+//! 反事实诊断（仅诊断，缺省关闭；由 `closure::Input::diag` 给出，CLI `--cut` / `--cut-file` / `--dump-edges`）：
+//! - 切除：条目 `类.方法:描述符` 表示该方法体不处理（节点保留、体内事件全部不执行，读者站点重跑同样挡住）；
+//!   `类.方法:描述符@偏移` 表示该方法在该偏移处的调用 / 字段 / new 事件不执行。
+//!   用于量化「切掉某条路径后闭包实际减少多少」。只宜切「消费型」节点（方法体、派发点）：切构造器 / 写入点会让
+//!   字段值集变空、按初值折叠为恒 null，结果非单调（见 docs/plans/2026-10-01-c1d-closure-bloat.md §7）。
+//! - 触发边转储：方法 / 类 / 分配 / 枢纽节点被登记的每一条触发边（不止首次溯源），派发边带接收者分配条件。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::path::PathBuf;
+
+/// 诊断选项
+#[derive(Debug, Default, Clone)]
+pub struct Diag {
+    /// 切除条目（每项一个 `类.方法:描述符[@偏移]`）
+    pub cuts: Vec<String>,
+    /// 触发边转储文件（每行 `源\t目标\t条件`）
+    pub dump_edges: Option<PathBuf>,
+}
 
 #[derive(Default)]
 pub struct Cuts {
@@ -14,26 +23,21 @@ pub struct Cuts {
     sites: HashMap<String, HashSet<u32>>,
 }
 
-pub fn cuts() -> &'static Cuts {
-    static C: OnceLock<Cuts> = OnceLock::new();
-    C.get_or_init(|| {
+impl Cuts {
+    pub fn parse<'s>(entries: impl IntoIterator<Item = &'s String>) -> Cuts {
         let mut c = Cuts::default();
-        let Ok(s) = std::env::var("RAVA_CLOSURE_CUT") else { return c };
-        for e in s.split('|').map(str::trim).filter(|e| !e.is_empty()) {
-            match e.rsplit_once('@') {
-                Some((m, off)) if off.parse::<u32>().is_ok() => {
-                    c.sites.entry(m.to_string()).or_default().insert(off.parse().unwrap());
+        for e in entries.into_iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
+            match e.rsplit_once('@').and_then(|(m, off)| Some((m, off.parse::<u32>().ok()?))) {
+                Some((m, off)) => {
+                    c.sites.entry(m.to_string()).or_default().insert(off);
                 }
-                _ => {
+                None => {
                     c.methods.insert(e.to_string());
                 }
             }
         }
         c
-    })
-}
-
-impl Cuts {
+    }
     pub fn active(&self) -> bool {
         !self.methods.is_empty() || !self.sites.is_empty()
     }
@@ -45,8 +49,7 @@ impl Cuts {
     }
 }
 
-// ── 触发边转储（`RAVA_CLOSURE_EDGES=<文件>`）：方法 / 类节点被登记的每一条触发边（不止首次溯源），
-// 供离线求支配树，估计「切掉某节点后闭包减少多少」。缺省关闭 ──
+// ── 触发边转储：方法 / 类节点被登记的每一条触发边（不止首次溯源），供离线归因。缺省关闭 ──
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -54,8 +57,12 @@ use std::io::Write;
 thread_local! {
     /// 当前派发的边属性：(源节点覆盖, 条件节点)——派发边只在接收者类型已实例化时成立
     static CTX: RefCell<(Option<String>, Option<String>)> = const { RefCell::new((None, None)) };
-    static EDGES: RefCell<Option<(HashMap<String, u32>, HashSet<(u32, u32, u32)>)>> = RefCell::new(
-        std::env::var_os("RAVA_CLOSURE_EDGES").map(|_| (HashMap::new(), HashSet::new())));
+    static EDGES: RefCell<Option<(HashMap<String, u32>, HashSet<(u32, u32, u32)>)>> = const { RefCell::new(None) };
+}
+
+/// 开始记录触发边（分析开始前调用）
+pub fn edges_begin() {
+    EDGES.with(|e| *e.borrow_mut() = Some((HashMap::new(), HashSet::new())));
 }
 
 pub fn edges_on() -> bool {
@@ -95,22 +102,21 @@ pub fn edge_plain(from: &str, to: &str) {
     with_ctx(None, None, || edge(from, to));
 }
 
-/// 运行结束时写出：每行 `源\t目标`
-pub fn dump_edges() {
-    let Some(path) = std::env::var_os("RAVA_CLOSURE_EDGES") else { return };
+/// 运行结束时写出并停止记录：每行 `源\t目标\t条件`
+pub fn edges_finish(path: &std::path::Path) -> std::io::Result<()> {
     EDGES.with(|e| {
-        let e = e.borrow();
-        let Some((ids, set)) = e.as_ref() else { return };
+        let Some((ids, set)) = e.borrow_mut().take() else { return Ok(()) };
         let mut names = vec![""; ids.len()];
-        for (k, v) in ids {
-            names[*v as usize] = k;
+        for (k, v) in &ids {
+            names[*v as usize] = k.as_str();
         }
-        let Ok(mut f) = std::fs::File::create(path) else { return };
-        for (a, b, c) in set {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+        for (a, b, c) in &set {
             let c = if *c == u32::MAX { "" } else { names[*c as usize] };
-            let _ = writeln!(f, "{}\t{}\t{}", names[*a as usize], names[*b as usize], c);
+            writeln!(f, "{}\t{}\t{}", names[*a as usize], names[*b as usize], c)?;
         }
-    });
+        f.flush()
+    })
 }
 
 impl super::Engine<'_> {
@@ -122,5 +128,22 @@ impl super::Engine<'_> {
             super::From::Class(c) if matches!(v.kind, "clinit" | "super-init" | "iface-init") => format!("I:{c}"),
             super::From::Class(c) => format!("C:{c}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cuts;
+
+    #[test]
+    fn cut_entries_keep_descriptor_semicolons() {
+        let e = ["java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;".to_string(),
+            "a/B.m:(Ljava/lang/Object;)V@11".to_string(), " ".to_string()];
+        let c = Cuts::parse(&e);
+        assert!(c.active());
+        assert!(c.method("java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;"));
+        assert!(c.site("a/B.m:(Ljava/lang/Object;)V", 11));
+        assert!(!c.site("a/B.m:(Ljava/lang/Object;)V", 12));
+        assert!(!Cuts::parse(&[]).active());
     }
 }
