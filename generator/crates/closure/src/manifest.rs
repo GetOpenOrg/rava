@@ -96,6 +96,7 @@ pub struct Manifest {
     serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
+    class_initializers: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
@@ -230,6 +231,16 @@ impl Manifest {
             }
         }
 
+        let mut class_initializers = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("class_init")).and_then(|s| s.get("initializers")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(i) = v.as_integer().and_then(|x| usize::try_from(x).ok()) else {
+                    return Err(format!("vm_intrinsics.toml [facts.class_init.initializers]：{k} 须为 Class 形参序号"));
+                };
+                class_initializers.insert(k.clone(), i);
+            }
+        }
+
         let mut array_returns = HashMap::new();
         if let Some(t) = vm.get("facts").and_then(|s| s.get("array_returns")).and_then(|v| v.as_table()) {
             for (k, v) in t {
@@ -302,6 +313,7 @@ impl Manifest {
             serializable_markers: field_writes("serializable_markers"),
             array_writes,
             memory_reads,
+            class_initializers,
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             member_enumerators,
@@ -390,6 +402,11 @@ impl Manifest {
     /// 手写方法写入实参数组元素的声明（未声明 = 按手写体是否取得数组视图保守处理）
     pub fn array_writes(&self, member: &str) -> Option<&ArrayWrite> {
         self.array_writes.get(member)
+    }
+
+    /// 初始化以实参传入的类的方法（`[facts.class_init]`）：返回 Class 形参序号（按描述符，不含接收者）
+    pub fn class_initializer(&self, member: &str) -> Option<usize> {
+        self.class_initializers.get(member).copied()
     }
 
     /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
@@ -504,6 +521,14 @@ mod tests {
         let m = with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [\"a/C\", \"a/D\"] }\n").unwrap();
         assert_eq!(m.array_return("a/B.f:()[Ljava/lang/Object;"), Some(&["a/C".to_string(), "a/D".to_string()][..]));
         assert_eq!(m.array_return("a/B.g:()[Ljava/lang/Object;"), None);
+    }
+
+    #[test]
+    fn class_initializers_parse() {
+        let m = with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = 0\n").unwrap();
+        assert_eq!(m.class_initializer("a/U.ensure:(Ljava/lang/Class;)V"), Some(0));
+        assert_eq!(m.class_initializer("a/U.other:()V"), None);
+        assert!(with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = -1\n").is_err());
     }
 
     #[test]

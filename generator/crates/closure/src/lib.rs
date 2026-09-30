@@ -225,6 +225,11 @@ impl Closure<'_> {
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,
+            "class_init": {
+                "targets": e.class_init.targets(),
+                "sites": e.class_init.sites.iter().map(|(s, cs)| json!({"site": s, "classes": cs})).collect::<Vec<_>>(),
+                "unknown": e.class_init.unknown,
+            },
             "reflect": {
                 "members": e.reflect_members.iter().map(|(k, m)| json!({"kind": members_str(*k), "member": m.to_string()})).collect::<Vec<_>>(),
                 "gaps": e.reflect_gaps,

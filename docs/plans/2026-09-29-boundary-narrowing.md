@@ -653,6 +653,27 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 结果：DeepCopy 类 / 方法 / 上下文 1623 / 10845 / 39770 → **1623 / 10806 / 37735**，耗时 45 s → 13 s，站点新增数组 5 477 256 → 39 403（剩余写入扇入是
 `System.arraycopy` 按清单语义的逐站点扇入，如 `Arrays.copyOf` 单上下文 2 714 个源数组，属上下文敏感度问题）；其余 8 例类 / 方法 / 上下文不变；9 例动态对照漏均为 0。
 
+**项 8 类初始化事实（`Unsafe.ensureClassInitialized` 等）**。原状：`ensureClassInitialized` 是整方法手写边界（空操作），分析器不建模其效果——
+`ldc X.class` 只让 X 进 type 层（JVMS §5.5 类字面量不触发初始化），X 的 `<clinit>` 不入链。例：DeepCopy `DirectMethodHandle.<clinit>@85`
+的 `DirectMethodHandle$Holder` 原为 type 层；`SharedSecrets.getJavaXxxAccess` 的「先 ensureClassInitialized(目标类) 再读静态字段」形状下，目标类
+`<clinit>` 缺席会让静态字段值域缺少其写入（健全性缺口，C1d 后 SharedSecrets 按字节码翻译即暴露）。
+实现（通用规则，类名只在清单）：`vm_intrinsics.toml [facts.class_init.initializers]` 登记「初始化以实参传入的类」的成员 → Class 形参序号
+（`Unsafe.ensureClassInitialized` / `ensureClassInitialized0`）；`engine/class_init.rs` 在调用点取 Class 实参值集里的类镜像（常量 / 值集，增长时站点重跑），
+所指类（数组类除外）进入初始化层，按调用点记录；值集含 open / 非镜像值记 `unknown`。输出 closure.json：
+`class_init: { targets: [类…], sites: [{ site: "调用方成员@偏移", classes: [类…] }], unknown: bool }`。单测 `class_initializers_parse`、`targets_union_sites`。
+结果（类 / 方法 / 上下文，漏）：HelloWorld、Digester、FileIOTest、CollectorsDemo、TestStreamBasic、TestCharsetForName 类 / 方法 / 上下文不变
+（Digester：`VarHandleGuards` type → init）；DeepCopy 1623 / 10806 / 37735 → 1623 / **10808 / 37737**（新入 `CallSite.<clinit>`、`InetAddressResolverProvider.<clinit>`；
+4 个 `$Holder` 等 type → init；10 个站点 723 个目标，其中 `MethodHandleAccessorFactory.ensureClassInitialized@14` 718 个——反射字段访问器的
+`field.getDeclaringClass()` 值集即全部类镜像，另有 unknown）；MH Combinators 1057 → **1058**、MH Direct 1066 → **1067**（+`VarHandleGuards`，
++`VarHandle.<clinit>`）；9 例漏均为 0。
+MH 两例的 +1 经 `--why` 为不精确：`VarHandle` 由 `DirectMethodHandle.shouldBeInitialized@104` 初始化，该处 `member.getDeclaringClass()` 的值集是
+`MemberName.clazz` 字段汇合的 18 个镜像；动态对照中 `VarHandleGuards` 属 extra（JVM 未加载），即 `VarHandle.<clinit>` 实际未执行。
+不精确的来源是 MemberName 声明类的值集（字段按对象敏感不足），不是本事实本身；列为项 9 候选。
+**C3 生成器接口**：生成器按 `class_init.targets` 为每个带 `<clinit>` 的目标类登记初始化钩子（与用户类 / 注解枚举的 `CLASS_INIT_HOOKS` 同一张表，
+键为类的 binary name）；手写 `Unsafe.ensureClassInitialized(0)` 由空操作改为 `crate::ensure_class_initialized(c)`——按类镜像名查钩子执行，
+查不到即无 `<clinit>` 或未入闭包（此时语义为空操作）。`unknown = true` 时钩子表覆盖闭包内全部带 `<clinit>` 的类（`clinit` 列表），
+保证所指未知的实参同样可初始化。`sites` 仅供溯源 / 审计。`build_time_init`（§6.11 项 3）与本事实共用这张钩子表。
+
 ## 七、验收
 
 - §一 终态表各项达标。

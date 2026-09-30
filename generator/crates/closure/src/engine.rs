@@ -50,6 +50,7 @@ mod report;
 mod diag;
 mod seeds;
 mod services;
+mod class_init;
 mod noreturn;
 mod class_lookup;
 mod method_lookup;
@@ -529,6 +530,8 @@ pub struct Engine<'a> {
     named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
+    /// 类初始化事实（`[facts.class_init]`）
+    pub class_init: class_init::ClassInitFacts,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）

@@ -399,6 +399,16 @@ results = [
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
 
+[facts.class_init]
+# 类初始化事实（闭包分析，generator `rava closure` 读取；closure.json `class_init`）。所列方法由 VM 初始化以实参传入的类
+# （`ldc` 类字面量本身不触发初始化，JVMS §5.5）：分析器按调用点取 Class 实参值集里的类镜像，所指类进入初始化层（`<clinit>`
+# 入链）并记入输出；值为 Class 形参序号（按描述符，0 起，不含接收者）。
+# 准入：JDK 文档给出的初始化语义（Unsafe.ensureClassInitialized：「Ensures the given class has been initialized」）。
+# 生成器（C3）按 `class_init.targets` 登记初始化钩子，手写 ensureClassInitialized 按类名分派到钩子。
+[facts.class_init.initializers]
+"jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V" = 0
+"jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = 0
+
 [facts.array_returns]
 # 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
 # 分析器把返回值建模为该方法的一个数组分配点、元素为所列类型的 open，替代 open(返回类型)——

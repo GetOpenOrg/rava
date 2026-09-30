@@ -122,6 +122,7 @@ impl<'a> Engine<'a> {
             named_ctors: BTreeSet::new(),
             invokable: BTreeSet::new(),
             reflect_gaps: BTreeSet::new(),
+            class_init: Default::default(),
             reflect_members: BTreeSet::new(),
             hw_written: BTreeSet::new(),
             fwriter_live: false,

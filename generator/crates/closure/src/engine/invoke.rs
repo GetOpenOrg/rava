@@ -7,6 +7,7 @@ impl<'a> Engine<'a> {
         self.refs.insert(mref.to_string());
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
+        self.class_init_site(m, off, opcode, mref, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         self.invoke_inner(m, off, opcode, mref, iface, args);
