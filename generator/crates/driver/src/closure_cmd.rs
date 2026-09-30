@@ -6,7 +6,8 @@
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
 //! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
-//! `--locale <标签>`（locale 资源束种子）；诊断 `--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
+//! `--locale <标签>`（locale 资源束种子）；诊断 `--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）；
+//! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）。
 
 use std::path::{Path, PathBuf};
 
@@ -67,6 +68,10 @@ fn user_classes(input: &Path, home: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &Args) -> Result<(), String> {
+    let num = |k: &str| args.opt(k).map(|v| v.parse::<u64>().map_err(|_| format!("{k} 需为非负整数：{v}"))).transpose();
+    if let Some(s) = num("--hash-seed")? {
+        closure::engine::set_hash_seed(s);
+    }
     let input = args.rest.first().filter(|a| !a.starts_with('-')).ok_or("缺少输入（.java 文件或类目录）")?;
     let home = crate::java_home(args)?;
     let rt = runtime_dir(args)?;
@@ -108,6 +113,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
+        flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
     let c = closure::analyze(&input_desc, &h, &man, &hw);
 

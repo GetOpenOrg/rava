@@ -94,6 +94,10 @@ impl<'a> Engine<'a> {
 
     /// 按名查方法调用点（方法 m）的名字实参 v 拆成的拼接段；None = 形状不符或无任何约束
     pub(super) fn method_name_parts(&mut self, m: usize, v: &V) -> Option<Vec<Part>> {
+        // 拆段读本方法其它偏移的事件：登记为跨偏移读者（同 `class_lookup`）
+        if let Some((sm, off)) = self.cur_site.filter(|s| s.0 == m) {
+            self.xreaders.entry(sm).or_default().insert(off);
+        }
         let a = self.methods[m].analysis.clone()?;
         if a.conservative {
             return None;
@@ -122,6 +126,17 @@ impl<'a> Engine<'a> {
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
         let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
+        if let Some((outer, _)) = self.cur_site {
+            for (_, e) in &ca.events {
+                let Event::Field { opcode, mref, .. } = e else { continue };
+                if matches!(*opcode, classfile::op::GETSTATIC | classfile::op::GETFIELD) {
+                    if let Some(fi) = self.ctx.field_info(mref) {
+                        self.ctx.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(outer);
+                    }
+                }
+            }
+        }
         (!ca.conservative).then(|| Rc::new(ca))
     }
 
@@ -145,7 +160,7 @@ impl<'a> Engine<'a> {
             any = true;
             let plain = match v {
                 V::Str(_) => true,
-                V::Ref { src, .. } => !src.is_empty() && src.iter().all(|s| *s == Src::Str),
+                V::Ref { src, .. } => !src.is_empty() && src.iter().all(|s| matches!(s, Src::Str(_))),
                 _ => false,
             };
             if !plain {

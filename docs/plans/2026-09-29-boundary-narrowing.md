@@ -693,6 +693,13 @@ MH Combinators 1058 / 6730 / 15600 → **1070 / 6803 / 15752**；MH Direct 1067 
 `JulianCalendar` 三类；需要「映射值的字符串来源」建模（按容器对象的值槽追踪常量拼接），不在本期范围，记为后续候选。性能线 §4.5 所记
 「批量排空时 CollectorsDemo 丢 11 类 / 69 方法」即本缺口的另一次序表现，修复后与次序无关。
 
+**合并 rust-closure-analyzer 6e0849c6（closure-mono 顺序依赖修复）**。上游以「跨偏移读者」`xreaders`（按名取类 / 按名查方法，重分析即重跑，事件全同也跑）
+加按调用点粘滞的 top（`lookup_top`）修了同一缺口，覆盖项 9-c 的 `whole_sites`；合并时取上游实现、删去本分支的重复登记（语义等价且更强）。
+合并后（类 / 方法 / 上下文）：HelloWorld 246 / 605 / 867、Digester 1166 / 6638 / 17300、DeepCopy 1624 / **10821** / 37756、FileIOTest 288 / 780 / 1047、
+CollectorsDemo 933 / 5372 / 12560、MH Combinators 1070 / **6807** / 15756、MH Direct 1078 / **6822** / 15907、TestStreamBasic 370 / 1361 / 2145、
+TestCharsetForName 429 / 1492 / 2405；9 例漏均为 0（DeepCopy / MH 两例各 +4～5 方法来自上游的顺序修复）。
+顺序矩阵（`--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）：HelloWorld、CollectorsDemo、DeepCopy 四种组合的类集与方法集逐一相同。
+
 ## 七、验收
 
 - §一 终态表各项达标。

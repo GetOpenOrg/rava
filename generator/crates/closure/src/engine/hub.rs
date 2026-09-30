@@ -1,5 +1,6 @@
 //! 引擎：派发枢纽——精确接收者多时经集合枢纽派发。
 
+use super::pstrs::PSlot;
 use super::*;
 
 impl<'a> Engine<'a> {
@@ -54,6 +55,9 @@ impl<'a> Engine<'a> {
         if let Some(p) = parent {
             // 父枢纽承接集合的旧部分：实参下传、返回值上汇
             let (ptypes, ret) = (self.hubs[h as usize].ptypes.clone(), self.hubs[h as usize].ret);
+            for j in 0..ptypes.len() {
+                self.pstr_edge(PSlot::H(h, j), PSlot::H(p, j));
+            }
             for (j, pt) in ptypes.iter().enumerate() {
                 if let Some(pt) = pt {
                     self.flow(Node::HP(h, j as u16), Node::HP(p, j as u16), *pt);
@@ -94,6 +98,9 @@ impl<'a> Engine<'a> {
             self.flow(Node::HR(h), res, rt);
         }
         let cv = self.call_vals.clone();
+        if let Some(vs) = &cv {
+            self.pstr_site(m, vs, |j| PSlot::H(h, j));
+        }
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);
         let hub = &mut self.hubs[h as usize];
@@ -156,9 +163,12 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn hub_bind(&mut self, h: u32, t: usize) {
+        let base = usize::from(!self.methods[t].is_static);
+        for j in 0..self.hubs[h as usize].ptypes.len() {
+            self.pstr_edge(PSlot::H(h, j), PSlot::M(t, base + j));
+        }
         let Some(vals) = self.hubs[h as usize].vals.clone() else { return };
         let n = self.methods[t].ptypes.len();
-        let base = usize::from(!self.methods[t].is_static);
         self.bind_pvs(t, base, n, Some(&vals));
     }
 

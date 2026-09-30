@@ -54,9 +54,11 @@ mod class_init;
 mod noreturn;
 mod class_lookup;
 mod method_lookup;
+mod pstrs;
 mod new;
 mod methods;
 mod worklist;
+pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
 mod scc;
@@ -426,10 +428,8 @@ pub struct Engine<'a> {
     recv_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
-    /// 形参上出现过的字符串常量实参（(方法, 形参槽) → 常量集；按名查找的名字来自形参时逐个展开）
-    pstrs: HashMap<(usize, usize), BTreeSet<Rc<str>>>,
-    /// 读过 pstrs 的按名查找站点（(方法, 形参槽) → 偏移）：常量集增长时重跑
-    pstr_sites: HashMap<(usize, usize), BTreeSet<u32>>,
+    /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
+    pstr: pstrs::PStrs,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
@@ -473,9 +473,6 @@ pub struct Engine<'a> {
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象
     recv_done: HashMap<usize, HashSet<(u32, u32)>>,
-    /// 求值读取同一分析里其他偏移事件的站点（按名取类 / 按名查方法：沿拼接链、常量表接收者回溯）：方法 → 偏移。
-    /// 重分析时只要有事件变化，这些站点连同变化的偏移一起重跑（见 `process_bytecode`）
-    whole_sites: HashMap<usize, BTreeSet<u32>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
@@ -501,6 +498,14 @@ pub struct Engine<'a> {
     open_statics: Vec<(usize, u32)>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
+    /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
+    xreaders: HashMap<usize, BTreeSet<u32>>,
+    /// 按名取类已推不出的调用点：恒按推不出处理（`class_lookup` 单调）
+    lookup_top: HashSet<(usize, u32)>,
+    /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
+    lookup_partial: bool,
+    /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
+    pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）

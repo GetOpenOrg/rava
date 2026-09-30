@@ -34,6 +34,8 @@ pub struct Input<'a> {
     pub locales: Vec<String>,
     /// 诊断 `--cold-cut`：丢弃冷路径事件（不健全，只用于测量冷路径独占规模）
     pub cold_cut: bool,
+    /// 流传播批量（`--flow-batch`；缺省 `engine::FLOW_BATCH`）
+    pub flow_batch: Option<usize>,
 }
 
 pub struct Closure<'a> {
@@ -47,6 +49,9 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     let mut e = Engine::new(h, input.cp, man, hw);
     e.seeds.locales = input.locales.clone();
     e.cold_cut = input.cold_cut;
+    if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
+        e.flow_batch = n;
+    }
     for r in &input.roots {
         e.root(r.clone(), "main");
     }
