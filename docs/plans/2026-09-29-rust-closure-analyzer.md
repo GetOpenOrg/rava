@@ -250,6 +250,8 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | 闭包计算耗时（HelloWorld） | Python 发现阶段数十秒 | ≤ 3s |
 | 全量 e2e | 现行通过集 | 不减少 |
 
+性能、内存与工程化终态（全量语料 ≤ 10 s / ≤ 1 GB、预算降级、缓存、健壮性）另见 [`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)。
+
 上限依据：trace Internal Boundary 模式（同样有边界截断，只用单程分析）为 174 类 / 388 方法；现行机制额外承担的 VM 初始化（`vm-upcalls` 根、System 初始化链、手写层回调）预留约 40% 余量。
 C1 完成后以实测替换这些上限，并写回本节（只允许下调）。
 
