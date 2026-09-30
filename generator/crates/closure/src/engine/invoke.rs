@@ -128,7 +128,7 @@ impl<'a> Engine<'a> {
     /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
     /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
     pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
-        if !self.man.is_field_handle_writer(&key.to_string()) {
+        if !self.man.is_field_handle_writer(key) {
             return;
         }
         if let From::Method(c) = via.from {

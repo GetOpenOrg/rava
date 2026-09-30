@@ -184,14 +184,15 @@ impl Closure<'_> {
     pub fn to_json(&self) -> Value {
         let e = &self.engine;
         let classes: Vec<Value> = e
-            .classes
-            .iter()
+            .class_entries()
+            .into_iter()
             .map(|(n, c)| {
                 json!({"name": n, "domain": domain_str(c.domain), "level": level_str(c.level), "via": self.via_json(&c.via)})
             })
             .collect();
         let methods: Vec<Value> = e
-            .method_nodes()
+            .method_entries()
+            .into_iter()
             .map(|m| {
                 let mut v = json!({"id": m.key.to_string(), "kind": kind_str(m.kind), "via": self.via_json(&m.via)});
                 if !m.hw_fns.is_empty() {
@@ -212,7 +213,7 @@ impl Closure<'_> {
             "classes": classes,
             "methods": methods,
             "instantiated": e.instantiated(),
-            "clinit": e.inited.keys().collect::<Vec<_>>(),
+            "clinit": e.clinit_list(),
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
             "refs": e.refs,

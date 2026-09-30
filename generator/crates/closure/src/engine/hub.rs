@@ -99,10 +99,21 @@ impl<'a> Engine<'a> {
         let hub = &mut self.hubs[h as usize];
         hub.links.insert((m, off), (a.clone(), res, cv));
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
+        let replay = self.methods[m].kind == Kind::Bytecode;
         for r in lambdas {
+            if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
+                continue;
+            }
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
         }
         for (t, rs) in special {
+            if replay {
+                let sent = self.hub_ssent.entry(m).or_default().entry((off, t)).or_default();
+                if rs.iter().all(|r| sent.contains(r)) {
+                    continue;
+                }
+                sent.extend(rs.iter().copied());
+            }
             let recv = TypeSet { classes: rs.into_iter().collect(), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
         }
@@ -187,6 +198,9 @@ impl<'a> Engine<'a> {
             self.hubs[h as usize].lambdas.push(r);
             let saved = self.call_vals.take();
             for ((m, off), (a, res, cv)) in links {
+                if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
+                    continue;
+                }
                 self.call_vals = cv;
                 self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
             }
@@ -237,17 +251,6 @@ impl<'a> Engine<'a> {
             return false;
         }
         self.methods[t].ret_model == RetModel::Plain && self.passthrough(t).is_none()
-    }
-
-    /// 枢纽（含父链）中转的目标
-    pub(super) fn hub_targets(&self, h: u32) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut cur = Some(h);
-        while let Some(c) = cur {
-            out.extend(self.hubs[c as usize].plain.iter().copied());
-            cur = self.hubs[c as usize].parent;
-        }
-        out
     }
 
     /// 字节码方法的返回值只来自形参时，返回这些形参序号

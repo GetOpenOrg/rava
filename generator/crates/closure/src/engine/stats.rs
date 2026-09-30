@@ -246,6 +246,16 @@ impl<'a> Engine<'a> {
             "lcall_reruns": s.lcall_reruns,
             "flow_edges": self.graph.seen.len(),
             "adds": self.graph.adds,
+            // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
+            "scc": self.graph.scc_stats,
+            // 新接边收窄记忆：命中 / 未命中（flow.rs）
+            "fmemo": self.graph.fmemo_stats,
+            // 传播推送按边种类：次数 / 有增量次数（前 20）
+            "pushes_by_kind": self.push_kinds(),
+            // 枢纽数 / 调用点接入枢纽总数 / 单调用点最多接入数（hub.rs）
+            "hubs": [self.hubs.len(), self.hub_sites.values().map(|h| h.len()).sum::<usize>(), self.hub_sites.values().map(|h| h.len()).max().unwrap_or(0)],
+            // 枢纽重放去重记录的规模：(调用点, lambda) 条数 / 按调用点建模目标的接收者条数（hub.rs）
+            "hub_sent": [self.hub_lsent.values().map(|d| d.len()).sum::<usize>(), self.hub_ssent.values().flat_map(|d| d.values()).map(|d| d.len()).sum::<usize>()],
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),
@@ -265,6 +275,31 @@ impl Ctx<'_> {
         s.aux_analyses += 1;
         s.leave();
         a
+    }
+}
+
+/// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
+pub(super) const KINDS: usize = 16;
+const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "?"];
+
+#[inline]
+pub(super) fn kind_ix(n: &Node) -> usize {
+    match n {
+        Node::P(..) => 0,
+        Node::R(..) => 1,
+        Node::S(_, o) if *o == POOL || *o == PROD || *o == ARRAY_RET => 2,
+        Node::S(_, o) if o & CATCH != 0 => 3,
+        Node::S(..) => 4,
+        Node::F(..) => 5,
+        Node::U(..) => 6,
+        Node::O(..) => 7,
+        Node::E(..) => 8,
+        Node::Array => 9,
+        Node::A(..) => 10,
+        Node::W(..) => 11,
+        Node::HP(..) => 12,
+        Node::HR(..) => 13,
+        Node::Esc => 14,
     }
 }
 
@@ -290,6 +325,20 @@ fn node_kind(n: &Node) -> &'static str {
 }
 
 impl<'a> Engine<'a> {
+    /// 传播推送按（源种类 → 目标种类）计数：次数 / 有增量次数，按次数降序前 20
+    fn push_kinds(&self) -> serde_json::Value {
+        let mut v: Vec<(String, [u64; 2])> = self
+            .graph
+            .pushes
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p[0] > 0)
+            .map(|(k, p)| (format!("{}->{}", KIND_NAMES[k / KINDS], KIND_NAMES[k % KINDS]), *p))
+            .collect();
+        v.sort_by(|a, b| b.1[0].cmp(&a.1[0]).then_with(|| a.0.cmp(&b.0)));
+        serde_json::json!(v.into_iter().take(20).collect::<Vec<_>>())
+    }
+
     /// 流边按（源类别 → 目标类别）计数
     fn edge_kinds(&self) -> serde_json::Value {
         let mut m: BTreeMap<String, u64> = BTreeMap::new();
