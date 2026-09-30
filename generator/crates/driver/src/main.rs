@@ -12,6 +12,11 @@ mod dump;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// 全局分配器：生成管线以大量小字符串 / 小向量分配为主，mimalloc 比系统分配器省约两成指令
+/// （输出与分配器无关：生成结果不依赖地址或哈希种子）
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>]\n  \

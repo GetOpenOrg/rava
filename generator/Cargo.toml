@@ -30,6 +30,7 @@ crc32fast = "1"
 toml = "1"
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit", "parsing"] }
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.release]
 debug = 1
