@@ -880,6 +880,27 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
 - 已知局限：`lookup` 对 map 值做 `Class.forName(className).newInstance()`；本例查的是不存在的字符集名，走不到。若测试查扩展字符集
   （如按别名取 jdk.charsets 里的编码），被取的类需要按名取类的值集覆盖（`charset(name, className, aliases)` 的常量实参进 map 值），届时实测。
 
+**dyn_compare 为何没报出，及补强（方法粒度对照）**。类粒度对照在本例结构性失明，原因有二：一是 `ExtendedCharsets` / `AbstractCharsetProvider`
+已在闭包内（alloc / init 级），「闭包内类上漏掉的方法」按类对照看不见（前文已记）；二是它们属边界域，程序期加载的类与经过边界帧的加载一律
+归 `boundary` / `boundary-code`，前提是「边界方法由手写层承载，运行期不执行其字节码」——而对无手写承载的边界方法这个前提不成立（发射层翻译其
+字节码）。实测 1b87995d 闭包的对照，程序期没有任何加载事件的调用栈含 `sun/nio/cs/ext` 帧（`TreeMap` 等早在 main 之前已加载）。补强：
+- 分析器在 closure.json 的方法条目上附加 `"cut": true`（`Ctx::boundary_cut`）：内部边界类上无手写承载（非 native、有体、非 `<clinit>`、
+  非 VM 内建、无共置手写体按精确名提供、无伴生核心 `core_<名>`）的方法——发射层翻译其字节码、分析器不展开其体。附加字段，现有消费方忽略。
+- `scripts/dyn_agent/load_trace.c` 新增 `methods=<主类>` 模式：开 MethodEntry 事件，按 jmethodID 去重记录主类 main 首次进入之后每个方法的
+  首次进入及其调用方帧（`M` 行）。`dyn_compare.py --methods` 逐条对照：调用方是翻译体（bytecode 或 cut）而被调方不在闭包 → `mmiss`
+  （indy 模型调用点、`vm_upcall_classes`、隐藏帧除外；调用方为手写 / native / 不在闭包的不可比）；结果行附 `mmiss N cut K`。
+  单测 `tests/unit/test_dyn_compare.py::MethodCompareTest`（虚构类名）。
+- 验证：修复前的闭包（同一代码去掉 provider 执行线）对照，TestCharsetForName 报出 `cut` 调用方的 mmiss 6 条，首条即
+  `AbstractCharsetProvider.<init>:(Ljava/lang/String;)V ← ExtendedCharsets.<init>@3（边界截断体）`，其后 `charset` / `init` / `canonicalize` / `lookup`；
+  修复后只剩 `BuiltinClassLoader.findResources ← BootLoader.findResources@4`。
+- 9 例 mmiss（修复后）：HelloWorld 7、FileIOTest 6、TestStreamBasic 11、CollectorsDemo 20、Digester 28、MH Combinators 37、MH Direct 47、
+  DeepCopy 81、TestCharsetForName 39。字节码调用方的条目多为 JVM 与原生运行期执行模型不同：VM 自建对象上的虚派发（`ConcurrentHashMap.get`
+  对 `StrongReferenceKey` / `MemberName` 取 hashCode）、手写层替换的子系统（反射访问器工厂、类加载器、`AccessController.executePrivileged`
+  的 action、`InternalLock`）。cut 调用方条目：MH / DeepCopy 的 `jdk/internal/org/objectweb/asm` 一族（JVM 编译 LambdaForm / 生成类，原生
+  由运行模型替换）、Digester 的 `jdk/internal/event/Event.<init>`、MH Direct 的 `Unsafe.bool2byte` / `compareAndSetByte`、
+  TestCharsetForName / DeepCopy 的 `BootLoader.findResources` → `BuiltinClassLoader.findResources`（JVM 平台加载器有类路径；原生
+  `BootLoader.hasClassPath` 为手写，`LazyClassPathLookupIterator` 走空枚举）。因此 `mmiss` 暂作诊断输出、不作门槛；cut 调用方的条目
+  是高信号子集，e2e 命中存根时先查它。耗时：methods 模式 HelloWorld + TestCharsetForName 两例（含闭包分析）合计 3.3 s。
 
 ## 七、验收
 

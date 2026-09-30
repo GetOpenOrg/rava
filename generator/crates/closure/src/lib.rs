@@ -211,6 +211,9 @@ impl Closure<'_> {
                 if !m.hw_fns.is_empty() {
                     v["fns"] = json!(m.hw_fns);
                 }
+                if e.is_boundary_cut(&m.key) {
+                    v["cut"] = json!(true);
+                }
                 v
             })
             .collect();

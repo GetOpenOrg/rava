@@ -349,6 +349,11 @@ impl<'a> Engine<'a> {
             .map(|(_, m)| m)
     }
 
+    /// 成员是边界截断方法（见 `Ctx::boundary_cut`）
+    pub fn is_boundary_cut(&self, key: &MemberRef) -> bool {
+        self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|m| self.ctx.boundary_cut(&cf, m)))
+    }
+
     /// 输出序的类表：按类名排序，与处理次序无关（计划 2026-09-30-closure-analyzer-performance.md §二 不变量）
     pub fn class_entries(&self) -> Vec<(&String, &ClassNode)> {
         let mut v: Vec<_> = self.classes.iter().collect();
