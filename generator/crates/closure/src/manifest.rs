@@ -220,6 +220,11 @@ impl Manifest {
         })
     }
 
+    /// 分析期追加放行条目（`rava closure --release`，C1d 放行实测），不改清单文件
+    pub fn release_more(&mut self, entries: impl IntoIterator<Item = String>) {
+        self.release.extend(entries);
+    }
+
     /// 放行条目：包前缀（`/` 结尾）或类（含 `$` 嵌套类）
     fn released(&self, cls: &str) -> bool {
         self.release.iter().any(|r| {

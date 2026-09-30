@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 0 / 3b、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态：⏳ 未开始。2026-09-29 用户确认方向；实测数据在 C1c 第 3b 步（流水线对象敏感）完成后采集。
+> 状态：🔄 第 1 步完成（`--release` 实测，§六）；第 2 步分类见 §6.4，删除候选待用户逐项确认。
 
 ## 一、目标
 
@@ -123,7 +123,105 @@ MethodHandle / LambdaForm 相关。预期放行候选：`sun/nio/cs`、`sun/util
 
 ## 六、实测数据
 
-（C1c 第 3b 步完成后采集。）
+2026-09-30 采集。基线 = C1c 终值（`build/closure/<t>.json`，C1c 耗时步提交 `1e09a9a4`）；每个前缀单独
+`rava closure --release <前缀>`，验收集 8 例（HelloWorld / TestSwitchString / PatternSwitchTest / FileIOTest /
+ChineseRemainderTheorem / TestStreamBasic / TestRecordComponents / CollectorsDemo，逐例增量按此顺序）。
+嵌套前缀（`sun/util/` ⊃ `sun/util/locale/` ⊃ `sun/util/locale/provider/`）含其子包。
+
+列说明：预算 = 手写文件数 × 3（§4.3）；Δ 为 8 例合计；前缀内 = 新增类中位于前缀内的去重数；
+穿透 = 新增且仍属边界域（其它截断包 / `[vm_boundary]`）的类去重数；候选 = 基线 `handwritten:boundary`、
+放行后不再按边界手写的方法（有手写 fn / 全部，差额是基线里无手写体的存根）；native = 放行后触达的
+`ACC_NATIVE`；漏覆盖 = 动态对照（`-Xlog:class+load`，main 之后加载）中属前缀、却不在闭包的类；
+耗时 = 8 例中最大 `elapsed_ms`（CollectorsDemo，机器负载 ≈ 4，只作量级参考）。
+
+### 6.1 增量总表
+
+| 前缀 | 文件 | 预算 | Δ类 | Δtranslate∩code | Δ方法 | 逐例 Δ类 | 前缀内 | 穿透 | 候选 | native | 漏覆盖 | 耗时 ms |
+|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| `jdk/internal/access/` | 3 | 9 | +0 | +4 | +4 | 0/0/0/0/0/0/0/0 | 0 | 0 | 11/14 | 0 | 1 | 3198 |
+| `jdk/internal/math/` | 3 | 9 | +0 | +0 | +0 | 0/0/0/0/0/0/0/0 | 0 | 0 | 8/8 | 0 | 1 | 2723 |
+| `sun/security/action/` | 2 | 6 | +0 | +0 | +0 | 0/0/0/0/0/0/0/0 | 0 | 0 | 7/7 | 0 | 1 | 3081 |
+| `jdk/internal/module/` | 1 | 3 | +1 | +2 | +4 | 0/0/0/0/0/0/0/1 | 1 | 0 | 0/2 | 0 | 0 | 3408 |
+| `jdk/internal/perf/` | 1 | 3 | +2 | +3 | +8 | 0/0/0/0/0/0/0/2 | 2 | 0 | 6/8 | 1 | 0 | 3259 |
+| `sun/security/util/` | 3 | 9 | +3 | +2 | +27 | 0/0/0/0/0/0/0/3 | 0 | 1 | 1/2 | 0 | 0 | 2782 |
+| `sun/text/` | 0 | 0 | +1 | +1 | +1 | 0/0/0/0/0/0/0/1 | 0 | 1 | 0/1 | 0 | 0 | 2829 |
+| `sun/invoke/util/` | 3 | 9 | +6 | +10 | +56 | 0/0/0/0/0/4/1/1 | 1 | 2 | 21/26 | 0 | 7 | 2684 |
+| `sun/nio/cs/` | 12 | 36 | +27 | +56 | +164 | 1/1/1/1/0/0/20/3 | 3 | 4 | 21/28 | 0 | 1 | 2815 |
+| `sun/util/locale/provider/` | 4 | 12 | +20 | +16 | +69 | 0/0/0/0/0/0/0/20 | 3 | 2 | 15/22 | 0 | 0 | 2970 |
+| `sun/util/locale/` | 5 | 15 | +20 | +17 | +72 | 0/0/0/0/0/0/0/20 | 3 | 2 | 23/32 | 0 | 0 | 2885 |
+| `sun/util/logging/` | 0 | 0 | +20 | +13 | +65 | 0/0/0/0/13/0/0/7 | 3 | 3 | 0/3 | 0 | 0 | 2850 |
+| `sun/util/` | 6 | 18 | +37 | +30 | +135 | 0/0/0/0/13/0/0/24 | 7 | 3 | 23/44 | 0 | 0 | 3262 |
+| `jdk/internal/vm/` | 4 | 12 | +31 | +38 | +119 | 5/5/5/4/3/3/3/3 | 3 | 1 | 6/13 | 2 | 0 | 2684 |
+| `jdk/internal/ref/` | 3 | 9 | +50 | +45 | +235 | 0/0/0/40/0/0/0/10 | 5 | 8 | 5/6 | 0 | 0 | 2730 |
+| `jdk/internal/org/objectweb/asm/` | 0 | 0 | +52 | +49 | +412 | 0/0/0/0/0/0/19/33 | 30 | 0 | 0/5 | 0 | 20 | 2844 |
+| `jdk/internal/icu/` | 0 | 0 | +57 | +56 | +281 | 0/0/0/0/0/0/0/57 | 50 | 0 | 0/2 | 0 | 0 | 2825 |
+| `jdk/internal/util/` | 11 | 33 | +135 | +90 | +323 | 5/5/5/4/4/3/56/53 | 5 | 16 | 21/34 | 0 | 5 | 2778 |
+| `java/security/` | 2 | 6 | +188 | +137 | +1120 | 0/0/0/0/0/−4/−1/193 | 18 | 48 | 0/12 | 3 | 0 | 4177 |
+| `jdk/internal/loader/` | 3 | 9 | +208 | +143 | +1326 | 0/0/0/0/0/0/20/188 | 22 | 45 | 4/9 | 1 | 0 | 3963 |
+| `sun/reflect/generics/` | 1 | 3 | +6587 | +5504 | +45839 | 1007/1007/1005/966/963/903/688/48 | 39 | 74 | 0/6 | 0 | 0 | 3170 |
+| `jdk/internal/misc/` | 9 | 27 | −128 | −68 | −900 | 2/2/2/2/1/1/−33/−105 | 1 | 1 | 55/74 | 26 | 2 | 2487 |
+
+验收集未触达（8 例 Δ 全 0、候选 0）：`sun/nio/ch/`（4 文件）、`sun/nio/fs/`（11）、`jdk/internal/event/`（6）、
+`sun/security/jca/`（5）、`jdk/internal/logger/`（1）、`jdk/internal/invoke/`（1）、`sun/reflect/misc/`（1）、
+`sun/util/resources/`（1）、`jdk/internal/foreign/`、`sun/invoke/empty/`、`sun/util/spi/`、`sun/util/cldr/`、
+`sun/security/provider/`（0）。验收集口径下无数据，需在全量 e2e 语料上重测（§6.5）。
+
+### 6.2 增量成因
+
+- **`jdk/internal/misc/` 负增量**：基线 open(Object) 的 5 个引入点里有 2 个是该包手写返回
+  （`InternalLock.newLockOr`、`Unsafe.allocateUninitializedArray`）。手写返回对分析不透明，只能取 open(返回类型)；
+  放行后按字节码建模更精确，CollectorsDemo −105 类（去掉的 `ArrayDeque` / `IdentityHashMap` / 流水线类在动态对照中
+  均不加载）。这是「手写的代价」（§三 分析可见性）的直接实测。
+- **大增量来自分析器精度缺口，不是包自身规模**。按 `--why` / `--flows @path` / `@openstat` 追到的三类：
+  - **G1 静态转发不分调用点**：`AccessController.doPrivileged → executePrivileged → action.run()` 的 action 形参
+    跨调用点合并，`AccessibleObject.<clinit>` 的特权块分派到 `ClassFileDumper$1.run` 等全部动作
+    （`jdk/internal/util/` 的 `java/nio/file` / `sun/nio/fs` 穿透、`jdk/internal/loader/` 的 `URLClassPath` → `JarFile`）。
+  - **G2 全局汇合点上的 open(Object) 广播**：`StringBuilder.append(Object)` / `String.valueOf` / `Objects.equals`
+    的形参无上下文区分，open(Object) 一旦流入即对全部逃逸对象分派 `toString` / `equals`，逃逸集随之扩大
+    （`sun/reflect/generics/`：`Reifier → ParameterizedTypeImpl.validateConstructorArguments → String.format` 起，
+    HelloWorld open(Object) 节点 44 → 2266、展开 568 → 2950 类；`java/security/`：`Set12.contains → SocketPermission.equals`
+    → `InetAddress`）。
+  - **G3 native 返回数组的元素取 open**：`Class.getEnclosingMethod0` 的 `Object[]` 元素按 open(Object) 进入
+    `Class$EnclosingMethodInfo.<init>`，是 G2 的一个引入源；VM 实际只写入 `{Class, String, String}`。
+  - 真实路径（非精度问题）：`jdk/internal/ref/` 在 FileIOTest 的 +40 来自 `FileCleanable.register → CleanerFactory
+    → Cleaner`；`jdk/internal/icu/` 来自 `Pattern` 的 `\N{}` 分支 → `CharacterName` → 归一化数据。
+
+### 6.3 漏覆盖
+
+| 前缀 | 漏覆盖类 | 性质 |
+|---|---|---|
+| `sun/nio/cs/` | `UTF_8$Decoder` | `StreamDecoder` 仍按 provides 取手写（以 Charset 重载直连解码），删除该手写后复测 |
+| `jdk/internal/math/` | `MathUtils` | `DoubleToDecimal` / `FloatToDecimal` 仍按 provides 取手写，删除后复测 |
+| `sun/security/action/` | `GetBooleanAction` | 同上（provides 取手写） |
+| `jdk/internal/access/` | `JavaLangInvokeAccess` | JVM 的 MethodHandle 引导加载；rava 以运行模型替换，待核对后入白名单 |
+| `sun/invoke/util/` | `Wrapper` / `ValueConversions` 等 7 个 | 同上（indy / MethodHandle 引导） |
+| `jdk/internal/util/` | `ReferencedKeyMap` / `ReferencedKeySet` 等 5 个 | `MethodType` 驻留表（同上） |
+| `jdk/internal/org/objectweb/asm/` | 20 个 | `InvokerBytecodeGenerator` 运行期字节码生成（运行模型替换，VM 契约第 3 类） |
+| `jdk/internal/misc/` | `MainMethodFinder` / `PreviewFeatures` | JVM 启动器找 main（rava 启动模型替换） |
+
+「provides 取手写」一类是实测工具的口径所致（放行后同名手写仍优先），删除候选落地后按字节码执行即应消失。
+
+### 6.4 判定（§4.3）
+
+| 结论 | 前缀 | 依据 |
+|---|---|---|
+| 放行 | `jdk/internal/access/`、`jdk/internal/math/`、`sun/security/action/`、`jdk/internal/module/`、`jdk/internal/perf/`、`sun/invoke/util/`、`sun/security/util/`、`sun/text/` | 增量 ≤ 预算；穿透目标在同批（`sun/invoke/util` → `jdk/internal/math`）或为 VM 契约接口 |
+| 放行（附条件） | `sun/nio/cs/` | +27 ≤ 36；穿透 `jdk/internal/access`（同批放行）、`jdk/internal/misc/ScopedMemoryAccess` / `jdk/internal/foreign/MemorySessionImpl`（VM 契约）；`StreamDecoder` 的 Charset 直连解码需用户判定是否属运行模型替换 |
+| 部分放行 | `jdk/internal/misc/` | 负增量；VM 契约类逐类列清单：`Unsafe`、`VM`、`CDS`、`ScopedMemoryAccess`、`PreviewFeatures`（放行后触达的 26 个 native 全部落在这 5 类），其余按字节码 |
+| 部分放行 | `jdk/internal/vm/` | +31 > 12；`Continuation` / `ContinuationSupport` 承载 native（虚拟线程，VM 契约），其余类待 G1–G3 修正后重测 |
+| 待重测（分析器先修） | `sun/reflect/generics/`、`java/security/`、`jdk/internal/loader/`、`jdk/internal/util/`、`jdk/internal/ref/`、`sun/util/`（含 `locale`、`locale/provider`、`logging`）、`jdk/internal/icu/`、`jdk/internal/org/objectweb/asm/` | 超预算，主因 G1–G3；按 §八「精确分析的问题先修分析器」处理，不据此保留截断 |
+| 无数据 | §6.1 末段 13 个前缀 | 验收集未触达，全量 e2e 语料重测 |
+
+`jdk/internal/org/objectweb/asm/` 属运行期字节码生成（VM 契约第 3 类），终态由 `InvokerBytecodeGenerator` 的承载点截断，
+无需放行；此处只记录数据。
+
+### 6.5 后续
+
+1. 分析器：G1 静态转发按调用点克隆（形参流入分派接收者的静态方法）、G2 汇合点上下文（`append(Object)` /
+   `valueOf` / `equals` 按调用点）、G3 `[facts]` 增加 native 返回数组元素类型（`Class.getEnclosingMethod0` 等）；
+   修正后对「待重测」行复测。
+2. 「无数据」行在全量 e2e 语料上重测（`rava closure --release` 批量）。
+3. 放行行的删除候选经用户逐项确认后，按 §五 第 3 步逐包实施并复测漏覆盖。
 
 ## 七、验收
 
