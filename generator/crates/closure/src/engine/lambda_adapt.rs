@@ -161,7 +161,10 @@ mod tests {
     use super::*;
 
     fn manifest(vm: &str) -> Manifest {
-        let dir = std::env::temp_dir().join(format!("rava-lambda-adapt-{}-{}", std::process::id(), vm.len()));
+        // 各测试并行运行：目录名带进程内序号，避免互删
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rava-lambda-adapt-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("vm_intrinsics.toml"), vm).unwrap();
         let r = Manifest::load(&dir).unwrap();
