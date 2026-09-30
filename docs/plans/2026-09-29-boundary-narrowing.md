@@ -358,7 +358,7 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 用户确认「直接删除这些不要的手写方法」。逐包独立提交，每包：删除手写 → `[boundary]` 去前缀 → 抽查
 （`master_passed_jdk21.txt` 中触达该包的用例）通过数不降、动态对照漏覆盖不增。顺序按依赖与风险由低到高：
 
-1. `jdk/internal/math`（已有实施分支 `c1d-math-release`，061a7b13）
+1. `jdk/internal/math` ✅ 705d54f5（抽查 10 例 4 过；6 例失败经闭包对照与本包无关：3+1 例为手写 LocaleProviderAdapter 返回流未建模的既有精度缺口，已转闭包精度子任务；2 例为并发编译资源争抢）
 2. `sun/security/action`
 3. `jdk/internal/module`
 4. `jdk/internal/perf`
