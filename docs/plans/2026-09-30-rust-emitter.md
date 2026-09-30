@@ -1,7 +1,7 @@
 # Rust 生成器（发射层）实施计划：单二进制 `rava build`
 
 > 日期：2026-09-30
-> 状态（2026-09-30 晚）：P1（`input`）/ P2（`ty`）/ P3（`ir`）/ P4a（`sim` / `cfg`）/ P4b（`instr`，golden 5 例全量逐字节一致；移植期差异 D1 / D3 已并入 cacea617）已合入；P4c（`method`）子代理进行中（try 规划 / 逐块模拟与归约 / 变量提升 / 行级后处理已提交，golden 逐方法对照待验收）；P5a + P0（`emit`）子代理进行中（(a) 工程骨架 da4e1580、(b) 类块头 / struct / 字段 / 导入 e08bf650 已提交，(c) 方法签名、(d) vtable 继承、(e) `rava build` 待做）；P5b / C3 待排。input golden 待按 folds v2 重新转储
+> 状态（2026-09-30 深夜）：P1（`input`）/ P2（`ty`）/ P3（`ir`）/ P4a（`sim` / `cfg`）/ P4b（`instr`，golden 5 例逐字节一致；移植期差异 D1 / D3 已并入 cacea617）/ P4c（`method`，golden 3 例 0 失配，bb50f5f0）/ P5a（`emit`，golden 3 例 2132 文件全文 0 失配）/ P0 外壳（`rava build` / `rava emit`、脚本 `--generator` / `RAVA_GENERATOR` 缺省 python，20c4ab58）已合入；input golden 已按 folds v2 重新转储并通过。P5b（method 接入 emit、27 例逐字节一致，并处理 unported 清点报告的 P5b 前置项）子代理进行中；C3（null_recv 抛 NPE、系统属性表与 `[facts.system_properties]` 同源等，见边界收窄计划 §6.9）待 P5b 后实施
 > 决策（用户 2026-09-30 拍板）：
 > ① Python 生成器用 Rust 重写，与 Rust 闭包分析器合为**一个二进制** `rava build`：闭包分析 → 发射 → cargo，闭包结果进程内传递；管道形态（`rava closure … -o x.json` / `rava emit x.json`）只作调试与审计入口。
 > ② **C3（发射层消费 levels / dispatch / folds）直接在 Rust 生成器做**，Python 侧不再投入。
