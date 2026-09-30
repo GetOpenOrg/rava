@@ -750,6 +750,11 @@ population 根已在分析侧覆盖（此后漏 0），本项让运行期与之�
 CollectorsDemo 934 / 5372 / 12560、MH Combinators 1070 / 6807 / 15756、MH Direct 1078 / 6822 / 15907、TestStreamBasic 371 / 1361 / 2145、
 TestCharsetForName 429 / 1486 / 2375。
 
+**合并 rust-closure-analyzer f6d80103（closure-mono + emitter-perf2，共享类数据 Rc → Arc）**：无文本冲突；唯一适配为项 5 的
+`resolve/classpath.rs::module_views`——上游 `archives` 改为 `Mutex<Vec<Archive>>`、来源移到并列的只读 `origins`，改为 `origins.zip(lock(archives))`，
+失败记录走 `lock(&self.failures)`。合并后 9 例类 / 方法 / 上下文与上表逐一相同，漏均为 0；顺序矩阵（HelloWorld / CollectorsDemo / DeepCopy ×
+`--flow-batch 1 / 64` × `--hash-seed 0 / 12345`）类集与方法集四组一致（仅 via 不同）。
+
 ## 七、验收
 
 - §一 终态表各项达标。

@@ -169,12 +169,13 @@ impl ClassPath {
     /// 各档案的模块描述符与类路径服务配置（按档案序）。描述符解析失败记入 failures
     pub fn module_views(&self) -> Vec<ArchiveView> {
         let mut out = Vec::new();
-        for (origin, a) in self.archives.borrow_mut().iter_mut() {
+        let mut archives = lock(&self.archives);
+        for (origin, a) in self.origins.iter().zip(archives.iter_mut()) {
             let module = match a.read_module_info() {
                 Ok(Some(b)) => match classfile::module::parse_module_info(&b) {
                     Ok(m) => m,
                     Err(e) => {
-                        self.failures.borrow_mut().push((format!("{}!module-info", a.path.display()), e.to_string()));
+                        lock(&self.failures).push((format!("{}!module-info", a.path.display()), e.to_string()));
                         None
                     }
                 },
