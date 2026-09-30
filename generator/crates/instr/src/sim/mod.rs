@@ -16,10 +16,10 @@ pub mod stack;
 
 use classfile::{Insn, Operand};
 use input::NInsn;
-use ir::{MacroCall, Expr, Lit, Stmt};
+use ir::{Expr, Lit, Stmt};
 use sim::StackSim;
 
-use crate::build::{id, let_discard};
+use crate::build::let_discard;
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
 use crate::log::InstrLog;
@@ -75,10 +75,9 @@ fn sim_insn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) 
         || control::sim_control(env, sim, log, ins)?
         || dynamic::sim_dynamic(env, sim, log, ins)?;
     if !handled {
-        // 未支持的字节码不得静默丢弃：发射 panic 存根，运行时命中即精确报出指令
+        // 未支持的字节码不得静默丢弃：发射存根（共享冷路径 `__stub`），运行时命中即精确报出指令
         let msg = format!("stub: unsupported bytecode {} {}", ins.name(), operand_text(&ins.operand));
-        let mac = MacroCall { name: id("panic")?, args: vec![Expr::Lit(Lit::Str(msg))] };
-        sim.emit(Stmt::Expr(Expr::Macro(mac)));
+        sim.emit(Stmt::Expr(crate::build::call(&["__stub"], vec![Expr::Lit(Lit::Str(msg))])?));
     }
     Ok(())
 }

@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use classfile::{ClassFile, Field, Method};
 
@@ -20,7 +21,7 @@ const ARRAY_SUPERTYPES: [&str; 3] = [OBJECT, "java/lang/Cloneable", "java/io/Ser
 /// 已解析的方法：声明类 + 方法下标
 #[derive(Clone)]
 pub struct MethodSite {
-    pub class: Rc<ClassFile>,
+    pub class: Arc<ClassFile>,
     pub index: usize,
 }
 
@@ -43,7 +44,7 @@ impl std::fmt::Debug for MethodSite {
 
 #[derive(Clone)]
 pub struct FieldSite {
-    pub class: Rc<ClassFile>,
+    pub class: Arc<ClassFile>,
     pub index: usize,
 }
 
@@ -72,16 +73,16 @@ impl<'a> Hierarchy<'a> {
         Hierarchy { cp, supertypes: RefCell::new(HashMap::new()) }
     }
 
-    pub fn class(&self, name: &str) -> Option<Rc<ClassFile>> {
+    pub fn class(&self, name: &str) -> Option<Arc<ClassFile>> {
         self.cp.get(name)
     }
 
     /// 自身 + 父类链（最近优先）
-    pub fn superclasses(&self, name: &str) -> Vec<Rc<ClassFile>> {
+    pub fn superclasses(&self, name: &str) -> Vec<Arc<ClassFile>> {
         let mut out = Vec::new();
         let mut cur = self.class(name);
         while let Some(c) = cur {
-            if out.iter().any(|x: &Rc<ClassFile>| x.name == c.name) {
+            if out.iter().any(|x: &Arc<ClassFile>| x.name == c.name) {
                 break;
             }
             cur = c.super_name.as_deref().and_then(|s| self.class(s));
@@ -183,7 +184,7 @@ impl<'a> Hierarchy<'a> {
     }
 
     /// 全部超接口（传递，含父类的接口）
-    pub fn all_superinterfaces(&self, c: &ClassFile) -> Vec<Rc<ClassFile>> {
+    pub fn all_superinterfaces(&self, c: &ClassFile) -> Vec<Arc<ClassFile>> {
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         let mut stack: Vec<String> = Vec::new();

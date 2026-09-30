@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 性质：本文记录用户拍板的优化方向、验收口径和各执行线的分工，是总纲，执行细节以各子计划为准。
-> 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、`2026-09-30-emitter-performance.md`（生成器效率，由执行者创建）。
+> 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、[`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md)（生成器效率）。
 
 ---
 
@@ -34,8 +34,8 @@
 | 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 约 130 s user（P2 后） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
 | 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 2.3–2.8 GB | ≤ 1 GB |
 | 闭包分析效率 | 跨测试缓存命中时单测试墙钟 | 无缓存 | ≤ 2 s |
-| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | 待 P0 实测 | 实测后量化（建议 ≤ 2 s / ≤ 500 MB） |
-| 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 全部重写 | 0 |
+| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB → 并行发射 1.02 s / 396 MB（DeepCopy 热写出；冷写出 1.08 s） | ≤ 2 s / ≤ 500 MB |
+| 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
 | 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
 
@@ -69,6 +69,11 @@
 - P0 观测：`rava build` 分阶段耗时、峰值内存、按类 / 方法的 Top-N。
 - 生成器自身优化：热路径分配、类型 / 描述符驻留与缓存、按类并行发射（输出确定）、闭包结果进程内传递、写文件去重（内容不变不重写、保持 mtime，减少下游 cargo 重编译）。
 - 降低下游编译成本：按 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md) §五 执行，依次为 rustc 分阶段测量 → 泛型擦除核心（先论证布局前提）→ decl / body 分层拆 crate。实测表明按包 / 按 SCC 直接拆不可行（95% 文件在同一个环里）。
+- `emitter-perf2` 进展（详见 [`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md) §4.4–4.7）：
+  - 已做：引用字段协议合并、clinit 去泛型、存根改调共享冷函数。HelloWorld java_runtime 的 mono size_est −24.2%，rustc −10%，峰值 RSS −14%。
+  - 已做：`panic = "abort"`，panic 钩子保持退出码 101。mono −25.6%，二进制约 −25%，HelloWorld user 时间约 −10%。
+  - `overflow-checks = false` 实测无收益，不做；手写层的 Java 整数运算已全部显式化。
+  - 按类并行发射：✅ 已做（2a800b4b），DeepCopy 冷写出 2.10 → 1.08 s，峰值 RSS 314 → 396 MB，输出与串行逐字节一致。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
 
 ## 四、待用户决策

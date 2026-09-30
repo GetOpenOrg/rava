@@ -1,6 +1,7 @@
 //! 变量引用检测（← `vars._ir_names` / `_refs`）：语句按 IR 收集变量名（字段名 / 方法名 /
 //! 类型 / 字符串字面量不计，Raw 文本与宏实参仍按标识符扫描）；结构行与文本行按词边界扫描。
 
+use std::cell::OnceCell;
 use std::collections::BTreeSet;
 
 use instr::InstrEnv;
@@ -167,6 +168,34 @@ pub fn refs(env: &InstrEnv, e: &Entry, rendered: &str, name: &str) -> (bool, boo
         Item::Line(_) | Item::Struct { .. } | Item::Removed => {
             let hit = text::has_word(rendered, name);
             (hit, hit && has_let_decl(rendered, name))
+        }
+    }
+}
+
+/// 条目不变期间（一轮扫描的只读阶段）的引用名缓存：语句条目的变量名集按条目惰性求一次，
+/// 结果与逐次调用 [`refs`] 相同。条目被改写后不得继续使用
+pub struct RefCache {
+    names: Vec<OnceCell<BTreeSet<String>>>,
+}
+
+impl RefCache {
+    pub fn new(len: usize) -> RefCache {
+        RefCache { names: (0..len).map(|_| OnceCell::new()).collect() }
+    }
+
+    /// 同 [`refs`]`(env, &entries[k], rendered, name)`
+    pub fn refs(&self, env: &InstrEnv, entries: &[Entry], k: usize, rendered: &str, name: &str) -> (bool, bool) {
+        match &entries[k].item {
+            Item::Stmt(s) => {
+                let names = self.names[k].get_or_init(|| {
+                    let mut out = BTreeSet::new();
+                    stmt_names(env, s, &mut out);
+                    out
+                });
+                let is_let = matches!(&**s, Stmt::Let(l) if !l.name.is_discard() && l.name.as_str() == name);
+                (names.contains(name), is_let)
+            }
+            _ => refs(env, &entries[k], rendered, name),
         }
     }
 }

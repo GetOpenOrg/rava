@@ -54,7 +54,7 @@ fn has_field(ci: &ClassInfo, name: &str, desc: &str) -> bool {
 fn stub_body(ci: &ClassInfo, m: &Method) -> String {
     if m.is_native() || m.is_abstract() {
         let label = if m.is_native() { "native" } else { "stub" };
-        return format!("panic!(\"{label}: {}.{}:{}\")", ci.name(), m.name, m.desc);
+        return format!("__stub(\"{label}: {}.{}:{}\")", ci.name(), m.name, m.desc);
     }
     if m.name == "toString" && m.desc == lang::TO_STRING_DESC {
         return "Ok(String::from(Self::BINARY_NAME))".into();
@@ -66,7 +66,7 @@ fn stub_body(ci: &ClassInfo, m: &Method) -> String {
             "Ok(0)".into()
         };
     }
-    format!("panic!(\"stub: {}.{}:{}\")", ci.name(), m.name, m.desc)
+    format!("__stub(\"stub: {}.{}:{}\")", ci.name(), m.name, m.desc)
 }
 
 /// 形参名：局部变量表名（缺失为 `arg{i}`）→ safe_ident → 重名加序号

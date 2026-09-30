@@ -194,15 +194,23 @@ pub fn contains_word(hay: &str, word: &str) -> bool {
 
 /// 每行前加缩进（空行保持为空，与 Python `_indent` 同形）
 pub fn indent(text: &str, pad: &str) -> String {
-    text.split('\n')
-        .map(|l| if l.trim().is_empty() { String::new() } else { format!("{pad}{l}") })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    for (i, l) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if !l.trim().is_empty() {
+            out.push_str(pad);
+            out.push_str(l);
+        }
+    }
+    out
 }
 
 /// 源文本中的 `pub fn` 名（`\bpub fn\s+(\w+)\s*[(<]`）
 pub fn pub_fn_names(text: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"\bpub fn\s+(\w+)\s*[(<]").expect("静态正则");
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\bpub fn\s+(\w+)\s*[(<]").expect("静态正则"));
     re.captures_iter(text).map(|c| c[1].to_string()).collect()
 }
 

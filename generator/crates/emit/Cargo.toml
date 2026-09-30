@@ -9,6 +9,7 @@ resolve.workspace = true
 ty.workspace = true
 input.workspace = true
 regex.workspace = true
+regex-syntax.workspace = true
 crc32fast.workspace = true
 indexmap.workspace = true
 closure.workspace = true

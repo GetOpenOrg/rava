@@ -171,7 +171,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 登记类（及其超类型，作为类型层级）；返回类文件
-    pub(super) fn touch(&mut self, cls: &str, level: Level, via: Via) -> Option<Rc<ClassFile>> {
+    pub(super) fn touch(&mut self, cls: &str, level: Level, via: Via) -> Option<std::sync::Arc<ClassFile>> {
         let cls = cls.trim_start_matches('[');
         let cls = cls.strip_prefix('L').and_then(|c| c.strip_suffix(';')).unwrap_or(cls);
         if cls.len() == 1 && "BCDFIJSZV".contains(cls) {
@@ -413,7 +413,7 @@ impl<'a> Engine<'a> {
             cur = cf.super_name.as_deref().and_then(|s| self.h.class(s));
             chain.push(cf);
         }
-        let inst = |cf: &Rc<ClassFile>| cf.fields.iter().filter(|f| !f.is_static()).cloned().collect::<Vec<_>>();
+        let inst = |cf: &std::sync::Arc<ClassFile>| cf.fields.iter().filter(|f| !f.is_static()).cloned().collect::<Vec<_>>();
         // 先看自身形态，再按字段声明类型递归（成环时结果与查询顺序无关）。
         // 字段签名直接引用类型变量即元素存储；擦除为 `Object[]` 的字段、容器形态的字段类型只在泛型类链
         // （类签名引用类型变量，含外部类的）里才算——非泛型类的 `Object[]` 是异构记录（表达式节点的实参表），

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::if_emit::{emit, outer};
-use super::refs::{refs, render_entries};
+use super::refs::{refs, render_entries, RefCache};
 use super::{apply_insertions, entry_nesting, let_of, VarsCtx};
 use crate::entry::Entry;
 use crate::error::MethodResult;
@@ -70,7 +70,7 @@ pub fn hoist_if_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) -> MethodResult<boo
     // Pass 2：渲染与深度
     let frame = Frame { rendered: render_entries(cx.env, entries), depth: entry_nesting(entries), blocks, outer_first_k };
     // Pass 3：选出需提升的变量
-    let candidates = select(cx, entries, &frame, declared_at);
+    let candidates = select(cx, entries, &frame, &RefCache::new(entries.len()), declared_at);
     if candidates.is_empty() {
         return Ok(false);
     }
@@ -87,14 +87,18 @@ pub fn hoist_if_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) -> MethodResult<boo
     Ok(true)
 }
 
-/// 条目 k 是否引用 name（非 let 声明）：Some(true) 命中读取，Some(false) 命中 let，None 未命中
-fn read_at(cx: &VarsCtx, entries: &[Entry], f: &Frame, k: usize, name: &str) -> Option<bool> {
-    let (hit, is_let) = refs(cx.env, &entries[k], &f.rendered[k], name);
+/// 条目 k 是否引用 name（非 let 声明）：Some(true) 命中读取，Some(false) 命中 let，None 未命中。
+/// `cache` 只在条目未被改写的阶段（Pass 3）传入
+fn read_at(cx: &VarsCtx, entries: &[Entry], f: &Frame, cache: Option<&RefCache>, k: usize, name: &str) -> Option<bool> {
+    let (hit, is_let) = match cache {
+        Some(c) => c.refs(cx.env, entries, k, &f.rendered[k], name),
+        None => refs(cx.env, &entries[k], &f.rendered[k], name),
+    };
     hit.then_some(!is_let)
 }
 
 /// Pass 3：在声明作用域关闭后（或 else 兄弟块中）被引用的变量；每个名字取首个触发声明
-fn select(cx: &VarsCtx, entries: &[Entry], f: &Frame, declared_at: Vec<(String, Vec<(usize, i32)>)>) -> Vec<Candidate> {
+fn select(cx: &VarsCtx, entries: &[Entry], f: &Frame, cache: &RefCache, declared_at: Vec<(String, Vec<(usize, i32)>)>) -> Vec<Candidate> {
     let n = entries.len();
     let mut out = Vec::new();
     for (name, decl_list) in declared_at {
@@ -107,7 +111,7 @@ fn select(cx: &VarsCtx, entries: &[Entry], f: &Frame, declared_at: Vec<(String, 
             let mut found = false;
             let mut ref_idx = None;
             for k2 in close..n {
-                if let Some(read) = read_at(cx, entries, f, k2, &name) {
+                if let Some(read) = read_at(cx, entries, f, Some(cache), k2, &name) {
                     if read {
                         found = true;
                         ref_idx = Some(k2);
@@ -123,7 +127,7 @@ fn select(cx: &VarsCtx, entries: &[Entry], f: &Frame, declared_at: Vec<(String, 
                             if f.depth[k_ref] < decl_nesting {
                                 break;
                             }
-                            if let Some(read) = read_at(cx, entries, f, k_ref, &name) {
+                            if let Some(read) = read_at(cx, entries, f, Some(cache), k_ref, &name) {
                                 found = read;
                                 break;
                             }
@@ -200,7 +204,7 @@ fn else_reads(cx: &VarsCtx, entries: &[Entry], f: &Frame, check_k: usize, check_
                 if f.depth[k_ref] <= check_nesting {
                     break;
                 }
-                if let Some(read) = read_at(cx, entries, f, k_ref, name) {
+                if let Some(read) = read_at(cx, entries, f, None, k_ref, name) {
                     return Some(read);
                 }
             }

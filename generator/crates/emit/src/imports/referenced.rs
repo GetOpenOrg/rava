@@ -139,11 +139,9 @@ fn multi_catch_refs(ctx: &EmitCtx<'_>, table: &[ExceptionEntry], out: &mut BTree
 
 /// 方法体（指令 / 局部变量表 / 异常表）引用
 fn scan_method_body(ctx: &EmitCtx<'_>, s: ScanMethod<'_>, out: &mut BTreeSet<String>) {
-    if let Some(code) = ctx.input.code(s.owner.name(), s.method) {
-        for ni in &code.insns {
-            if let Some(insn) = ni.insn() {
-                scan_insn(ctx, s.owner, insn, out);
-            }
+    if let Some(code) = ctx.input.code_ops(s.owner.name(), s.method) {
+        for insn in code.ops() {
+            scan_insn(ctx, s.owner, insn, out);
         }
         let ex = ctx.extras(s.owner.name());
         if let Some(mx) = ex.methods.get(s.index) {
@@ -152,7 +150,7 @@ fn scan_method_body(ctx: &EmitCtx<'_>, s: ScanMethod<'_>, out: &mut BTreeSet<Str
                 add_desc_refs(&lv.signature, out);
             }
         }
-        multi_catch_refs(ctx, &code.exception_table, out);
+        multi_catch_refs(ctx, code.exception_table(), out);
     }
 }
 
@@ -198,9 +196,9 @@ pub fn subtypes_ordered(ctx: &EmitCtx<'_>, root: &str) -> Vec<String> {
 fn dispatch_subtype_refs(ctx: &EmitCtx<'_>, methods: &[ScanMethod<'_>], out: &mut BTreeSet<String>) {
     let mut owners: BTreeSet<&str> = BTreeSet::new();
     for s in methods {
-        let Some(code) = ctx.input.code(s.owner.name(), s.method) else { continue };
-        for ni in &code.insns {
-            if let Some(Insn { operand: Operand::Method(r, _), .. }) = ni.insn() {
+        let Some(code) = ctx.input.code_ops(s.owner.name(), s.method) else { continue };
+        for insn in code.ops() {
+            if let Insn { operand: Operand::Method(r, _), .. } = insn {
                 if let Some(ci) = ctx.ty.reg.get(&r.owner) {
                     owners.insert(ci.name());
                 }

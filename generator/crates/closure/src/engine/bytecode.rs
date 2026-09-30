@@ -73,13 +73,13 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<Rc<ClassFile>>) {
+    pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {
         let prev = self.cur_site.replace((m, off));
         self.event_inner(m, off, e, cf);
         self.cur_site = prev;
     }
 
-    pub(super) fn event_inner(&mut self, m: usize, off: u32, e: &Event, cf: &Option<Rc<ClassFile>>) {
+    pub(super) fn event_inner(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {
         let obj = self.id(OBJECT);
         {
             let via = |k: &'static str| Via::method(k, m, Some(off));

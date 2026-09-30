@@ -49,7 +49,8 @@ fn overlay_copies_rewrites_and_prunes() {
     prepare_scratch(&out, &rt, &macros, false).unwrap();
     let src = out.join("java_runtime/src");
     assert_eq!(read(&src.join("java/lang/object.rs")), "// 手写\n");
-    assert!(!src.join("java/lang/gone.rs").exists(), "陈旧手写文件清除");
+    assert!(src.join("java/lang/gone.rs").exists(), "陈旧手写文件留待 mod 树阶段清扫");
+    assert!(!src.join("lib.rs").exists(), "lib.rs 由 mod 树阶段写出");
     assert!(src.join("java/lang/string.rs").exists(), "生成文件保留（mod 树阶段清扫）");
     let cargo = read(&out.join("java_runtime/Cargo.toml"));
     assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
@@ -89,9 +90,12 @@ fn mod_tree_declares_disk_contents() {
     w.write(&src.join("java/lang/r#ref/reference.rs"), "x").unwrap();
     w.write(&src.join("java/util/stream/collectors_collector_impl.rs"), "rava_macros::java_class! {}\n").unwrap();
     put(&src.join("java/util/stale.rs"), "rava_macros::java_class! {}\n");
-    put(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n");
+    w.write(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n").unwrap();
+    put(&src.join("java/lang/gone.rs"), "// 旧手写\n");
     write_mod_tree(&src, Some(&rt), &mut w).unwrap();
     assert!(!src.join("java/util/stale.rs").exists(), "本轮未写的生成文件清扫");
+    assert!(!src.join("java/lang/gone.rs").exists(), "手写真源已删除的无标记文件清扫");
+    assert!(src.join("jdk_resources/module_resources.rs").exists(), "本轮写出的无标记生成文件保留");
     assert_eq!(
         read(&src.join("java/lang/mod.rs")),
         "#![allow(ambiguous_glob_reexports)]\npub mod object;\npub use object::*;\npub mod r#ref;\n\
@@ -104,8 +108,14 @@ fn mod_tree_declares_disk_contents() {
     assert_eq!(read(&src.join("jdk_resources/mod.rs")), "pub mod module_resources;\n", "手写模块目录不重建");
     std::fs::create_dir_all(src.join("javax")).unwrap();
     put(&src.join("javax/mod.rs"), "");
-    complete_lib_rs(&src).unwrap();
-    assert!(read(&src.join("lib.rs")).ends_with("非手写清单成员）\npub mod javax;\n"));
+    complete_lib_rs(&src, &rt.join("src"), &mut w).unwrap();
+    let lib = read(&src.join("lib.rs"));
+    assert!(lib.starts_with("pub mod java;\n") && lib.ends_with("非手写清单成员）\npub mod javax;\n"));
+    let mtime = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+    let before = mtime(&src.join("lib.rs"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    complete_lib_rs(&src, &rt.join("src"), &mut w).unwrap();
+    assert_eq!(mtime(&src.join("lib.rs")), before, "内容不变不重写");
     let _ = std::fs::remove_dir_all(&root);
 }
 

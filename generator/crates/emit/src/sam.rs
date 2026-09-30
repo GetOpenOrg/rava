@@ -143,9 +143,9 @@ impl SamLedger {
         for cls in input.user_classes.iter().chain(&input.jdk_classes) {
             let Some(ci) = ctx.ty.reg.get(cls) else { continue };
             for m in ci.methods() {
-                let Some(code) = input.code(cls, m) else { continue };
-                for ni in &code.insns {
-                    let Some(Operand::InvokeDynamic { desc, .. }) = ni.insn().map(|i| &i.operand) else { continue };
+                let Some(code) = input.code_ops(cls, m) else { continue };
+                for insn in code.ops() {
+                    let Operand::InvokeDynamic { desc, .. } = &insn.operand else { continue };
                     let rd = parse_descriptor_return(desc);
                     if let Some(b) = rd.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
                         candidates.insert(b.to_string());

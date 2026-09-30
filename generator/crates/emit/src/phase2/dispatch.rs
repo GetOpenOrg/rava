@@ -63,18 +63,16 @@ fn field_decl_re() -> &'static Regex {
 
 /// 属性行里 `key = "value"`（`\bkey`）
 fn extract<'t>(window: &'t str, key: &str) -> Option<&'t str> {
-    let pat = format!(r#"\b{}\s*=\s*"([^"]*)""#, regex::escape(key));
-    Regex::new(&pat).ok()?.captures(window).and_then(|c| c.get(1)).map(|m| m.as_str())
+    crate::scan::attr_str(window, key)
 }
 
 fn flag(window: &str, key: &str) -> bool {
-    Regex::new(&format!(r"\b{}\s*=\s*true", regex::escape(key))).is_ok_and(|r| r.is_match(window))
+    crate::scan::attr_true(window, key)
 }
 
 /// 类文本中 `pub struct Short<..>` 的类型形参表文本
 fn struct_generics<'t>(text: &'t str, short: &str) -> Option<&'t str> {
-    let pat = format!(r"pub struct {}<([^>{{]*)>", regex::escape(short));
-    Regex::new(&pat).ok()?.captures(text).and_then(|c| c.get(1)).map(|m| m.as_str())
+    crate::scan::struct_generics(text, short)
 }
 
 fn runtime_prefix(em: &ClassEmission) -> &'static str {
@@ -173,7 +171,7 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
     let inner = ret.strip_prefix("Result<").and_then(|r| r.strip_suffix('>'));
     let boxed = ret_box(inner);
     let (Some(boxed), true) = (boxed, exprs.iter().all(Option::is_some)) else {
-        let body = format!("panic!(\"stub: L3 分派未支持的签名形态 {class_bin}.{mname}:{descriptor}\")");
+        let body = format!("__stub(\"stub: L3 分派未支持的签名形态 {class_bin}.{mname}:{descriptor}\")");
         arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some({body}),"));
         return;
     };
@@ -184,8 +182,7 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
         let mut b = format!("let __r = {call_expr}; {tail}");
         let init_on_ctor = rust_name.strip_prefix("new").map(|r| format!("__init_on{r}"));
         if let Some(ctor) = &init_on_ctor {
-            let pat = format!(r"\bfn {}\s*\(", regex::escape(ctor));
-            if Regex::new(&pat).is_ok_and(|r| r.is_match(&em.text)) {
+            if crate::scan::has_fn(&em.text, ctor) {
                 let on_args = format!("recv.try_cast::<Self>(\"{class_bin}\")?{}", if call.is_empty() { String::new() } else { format!(", {call}") });
                 b = format!("let __r = if {rt}::_is_jnull(&recv) {{ {call_expr} }} else {{ Self::{ctor}({on_args})? }}; {tail}");
             }

@@ -64,6 +64,7 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--no-run` | 仅 build：只生成不编译运行 |
 | `--skeleton-only` | 骨架模式：方法体为 `/*BODY 类.方法:描述符*/` 占位（`PlaceholderBodies`）。不给时以 `NoBodies` 发射，首个方法体请求报「P4c/P5b 未接入」 |
 | `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
+| `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
 
 ### 重型闭包的自动处理（无需配置）
 

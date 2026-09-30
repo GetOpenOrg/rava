@@ -90,7 +90,7 @@ impl Cx<'_, '_> {
     fn body(
         &self,
         state: &mut ProjectState,
-        bodies: &mut dyn MethodBodyEmitter,
+        bodies: &dyn MethodBodyEmitter,
         e: &Emitted<'_>,
         ctparams: &[String],
         rust_name: &str,
@@ -104,7 +104,7 @@ impl Cx<'_, '_> {
     pub fn body_with(
         &self,
         state: &mut ProjectState,
-        bodies: &mut dyn MethodBodyEmitter,
+        bodies: &dyn MethodBodyEmitter,
         e: &Emitted<'_>,
         spec: &BodySpec<'_>,
     ) -> Result<Option<String>> {
@@ -118,7 +118,7 @@ impl Cx<'_, '_> {
             rust_name: spec.rust_name,
             in_vtable_body: spec.in_vtable_body,
         };
-        match bodies.emit_body(self.ctx, &req) {
+        match bodies.emit_body(self.ctx, &req, &mut state.body_log) {
             Ok(out) => {
                 state.absorb(&out.effects);
                 Ok(Some(out.text))
@@ -188,7 +188,7 @@ fn lambda_rust_name(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method) -> String {
 pub fn emit_method_blocks(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     ci: &ClassInfo,
     tps: &[String],
     overrides: &[HwOverride<'_>],
@@ -234,7 +234,7 @@ pub fn emit_method_blocks(
 fn clinit_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
 ) -> Result<String> {
@@ -244,7 +244,7 @@ fn clinit_block(
         _ => None,
     };
     let text = body.unwrap_or_else(|| {
-        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    panic!(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
+        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    __stub(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
     });
     Ok(format!("{attr}\n{text}"))
 }
@@ -292,7 +292,7 @@ fn core_adapter(sig: &str, core: &str, core_ret: &str) -> String {
 fn member_block(
     cx: &Cx<'_, '_>,
     state: &mut ProjectState,
-    bodies: &mut dyn MethodBodyEmitter,
+    bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
 ) -> Result<String> {

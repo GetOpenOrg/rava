@@ -283,7 +283,7 @@ impl Ctx<'_> {
     }
 
     /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）
-    pub(super) fn exact_target(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<(Rc<ClassFile>, MemberRef)> {
+    pub(super) fn exact_target(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<(std::sync::Arc<ClassFile>, MemberRef)> {
         use classfile::op;
         let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
         let rm = site.method();

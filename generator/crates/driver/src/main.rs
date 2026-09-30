@@ -12,11 +12,16 @@ mod dump;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// 全局分配器：生成管线以大量小字符串 / 小向量分配为主，mimalloc 比系统分配器省约两成指令
+/// （输出与分配器无关：生成结果不依赖地址或哈希种子）
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava dump-classes [--jdk <主版本> | --java-home <路径>] [--module <jmod 名>] [--prefix <包前缀>]\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--skeleton-only] [--strict]\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--skeleton-only] [--strict]"
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--clean] [--no-run] [--skeleton-only] [--strict] [--emit-jobs N]\n  \
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--skeleton-only] [--strict] [--emit-jobs N]"
     );
     ExitCode::from(2)
 }

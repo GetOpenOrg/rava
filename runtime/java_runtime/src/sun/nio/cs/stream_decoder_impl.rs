@@ -259,7 +259,7 @@ impl StreamDecoder {
                 "Stream closed",
             ))?));
         }
-        if offset < 0 || length < 0 || offset + length > cbuf.len()? {
+        if offset < 0 || length < 0 || offset as i64 + length as i64 > cbuf.len()? as i64 {
             return Err(JvmError::from(
                 crate::java::lang::IndexOutOfBoundsException::new()?,
             ));
