@@ -1,0 +1,331 @@
+//! `java_class! { ... }` 类块头（← `attrs._java_class_block_head` 及其辅助计算）。
+//!
+//! 两段：字节码元数据（缺省即默认，缺省键整行不写）与宏展开输入。
+
+use std::collections::{BTreeSet, VecDeque};
+
+use ty::class_params::parse_class_type_params;
+use ty::consts::{OBJECT, STRING};
+use ty::ident::safe_ident;
+use ty::rs_type::render_arg_list;
+use ty::ClassInfo;
+
+use super::attrs::{access_str, anno_cpool_str, class_modifiers_str, q};
+use crate::ctx::EmitCtx;
+use crate::text::hex;
+
+/// 类块头的调用方输入（class_writer 展平继承链得到）
+#[derive(Debug, Default)]
+pub struct HeadInput<'s> {
+    pub superclass_rust: &'s str,
+    pub superclass_fields: &'s [(String, String)],
+    pub superclass_reference_fields: &'s [String],
+    pub superclass_erased_fields: &'s [String],
+    /// 共置手写 impl 提供的方法名
+    pub impl_methods: Option<&'s BTreeSet<String>>,
+}
+
+fn rule(title: &str) -> String {
+    format!("// ── {title} {}", "─".repeat(46))
+}
+
+/// 类修饰符来源合并：类文件 access 与 InnerClasses 自引用条目
+fn effective_class_flags(ci: &ClassInfo) -> u16 {
+    let cf = ci.class_file();
+    cf.inner_classes
+        .iter()
+        .filter(|ic| ic.inner == cf.name)
+        .fold(cf.access, |acc, ic| acc | ic.access)
+}
+
+/// 生成类块头行
+pub fn block_head(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>) -> Vec<String> {
+    let mut lines = metadata_lines(ctx, ci);
+    lines.push(String::new());
+    lines.push(rule("宏展开输入"));
+    macro_input_lines(ctx, ci, inp, &mut lines);
+    lines
+}
+
+fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    let cf = ci.class_file();
+    let ex = ctx.extras(ci.name());
+    let mut lines = vec![rule("字节码元数据")];
+    lines.push(format!("#[binary_name       = \"{}\"]", q(&cf.name)));
+    if !ci.super_class().is_empty() {
+        lines.push(format!("#[super_class       = \"{}\"]", q(ci.super_class())));
+    }
+    if !cf.interfaces.is_empty() {
+        lines.push(format!("#[interfaces        = \"{}\"]", q(&cf.interfaces.join(","))));
+    }
+    if cf.access != 0 {
+        let a = access_str(cf.access);
+        if a != "package" {
+            lines.push(format!("#[access            = \"{a}\"]"));
+        }
+        let mods = class_modifiers_str(effective_class_flags(ci));
+        if !mods.is_empty() {
+            lines.push(format!("#[modifiers         = \"{mods}\"]"));
+        }
+    }
+    if !ci.generic_signature().is_empty() {
+        lines.push(format!("#[generic_signature = \"{}\"]", q(ci.generic_signature())));
+    }
+    if cf.access & super::attrs::ACC_ABSTRACT != 0 {
+        lines.push("#[is_abstract       = true]".into());
+    }
+    if cf.access & super::attrs::ACC_ENUM != 0 {
+        lines.push("#[is_enum           = true]".into());
+    }
+    if cf.record_components.is_some() {
+        lines.push("#[is_record         = true]".into());
+        if !ex.record_components.is_empty() {
+            let rc: Vec<String> = ex
+                .record_components
+                .iter()
+                .map(|r| format!("{}:{}:{}", r.name, r.desc, r.signature))
+                .collect();
+            lines.push(format!("#[record_components = \"{}\"]", q(&rc.join("|"))));
+        }
+    }
+    if !cf.permitted_subclasses.is_empty() {
+        lines.push(format!("#[permitted_subclasses = \"{}\"]", q(&cf.permitted_subclasses.join(","))));
+    }
+    if ci.methods().iter().any(|m| m.name == "<clinit>") {
+        lines.push("#[has_clinit        = true]".into());
+    }
+    if ex.deprecated {
+        lines.push("#[is_deprecated     = true]".into());
+    }
+    if let Some(src) = cf.source_file.as_deref().filter(|s| !s.is_empty()) {
+        lines.push(format!("#[source            = \"{}\"]", q(src)));
+    }
+    if !cf.inner_classes.is_empty() {
+        let ics: Vec<String> = cf
+            .inner_classes
+            .iter()
+            .map(|ic| {
+                format!(
+                    "{}:{}:{}:{}",
+                    ic.inner,
+                    ic.outer.as_deref().unwrap_or(""),
+                    ic.simple_name.as_deref().unwrap_or(""),
+                    ic.access
+                )
+            })
+            .collect();
+        lines.push(format!("#[inner_classes     = \"{}\"]", q(&ics.join(";"))));
+    }
+    if let Some((ec, em)) = cf.enclosing_method.as_ref().filter(|(c, _)| !c.is_empty()) {
+        let (n, d) = em.as_ref().map_or(("", ""), |(n, d)| (n.as_str(), d.as_str()));
+        lines.push(format!("#[enclosing_method  = \"{}:{}:{}\"]", q(ec), q(n), q(d)));
+    }
+    if !ex.raw_annotations.is_empty() {
+        lines.push(format!("#[raw_annotations   = \"{}\"]", hex(&ex.raw_annotations)));
+    }
+    if !ex.anno_cpool.is_empty() {
+        lines.push(format!("#[anno_cpool        = \"{}\"]", anno_cpool_str(&ex.anno_cpool)));
+    }
+    lines
+}
+
+fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lines: &mut Vec<String>) {
+    if ci.is_interface() {
+        lines.push("#[is_interface      = true]".into());
+    }
+    if !inp.superclass_rust.is_empty() {
+        lines.push(format!("#[superclass        = \"{}\"]", inp.superclass_rust));
+    }
+    let init_ifaces = default_init_interfaces(ctx, ci);
+    if !init_ifaces.is_empty() {
+        lines.push(format!("#[init_interfaces   = \"{}\"]", init_ifaces.join(";")));
+    }
+    if !inp.superclass_fields.is_empty() {
+        let items: Vec<String> = inp.superclass_fields.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+        lines.push(format!("#[superclass_fields({})]", items.join(", ")));
+    }
+    if !inp.superclass_reference_fields.is_empty() {
+        lines.push(format!("#[superclass_reference_fields = \"{}\"]", inp.superclass_reference_fields.join(";")));
+    }
+    if !inp.superclass_erased_fields.is_empty() {
+        lines.push(format!("#[superclass_erased_fields = \"{}\"]", inp.superclass_erased_fields.join(";")));
+    }
+    if ci.is_interface() {
+        return;
+    }
+    let supers = all_superclasses(ctx, ci);
+    if !supers.is_empty() {
+        lines.push(format!("#[all_superclasses  = \"{}\"]", supers.join(";")));
+    }
+    let layout = ancestor_fields_layout(ctx, ci);
+    if !layout.is_empty() {
+        let parts: Vec<String> = layout.iter().map(|(n, fs)| format!("{n}:{}", fs.join(","))).collect();
+        lines.push(format!("#[ancestor_fields_layout = \"{}\"]", parts.join(";")));
+    }
+    let supertypes = all_supertypes(ctx, ci);
+    lines.push(format!("#[all_supertypes    = \"{}\"]", supertypes.join(";")));
+    let views = iface_carrier_views(ctx, ci, &supertypes);
+    if !views.is_empty() {
+        lines.push(format!("#[iface_carrier_views = \"{}\"]", views.join(";")));
+    }
+    let root_sigs = [
+        ("to_string_vtable  ", "toString", format!("()L{STRING};")),
+        ("hash_code_vtable  ", "hashCode", "()I".to_string()),
+        ("equals_vtable     ", "equals", format!("(L{OBJECT};)Z")),
+    ];
+    for (key, name, desc) in &root_sigs {
+        if let Some(owner) = root_method_vtable_owner(ctx, ci, name, desc) {
+            lines.push(format!("#[{key}= \"{owner}\"]"));
+        }
+    }
+    if let Some(im) = inp.impl_methods.filter(|s| !s.is_empty()) {
+        lines.push(format!("#[impl_methods      = \"{}\"]", im.iter().cloned().collect::<Vec<_>>().join(";")));
+    }
+}
+
+/// 类型文本 `Short<args>`（← `type_args.rust_type_with_args`）
+fn with_args(short: &str, args: &str) -> String {
+    format!("{short}{args}")
+}
+
+/// 线性超类链 Rust 类型（最深祖先在前；链出注册表时保留尾部裸短名）
+pub fn all_superclasses(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    let resolved = ctx.ty.ancestor_type_args(ci, None);
+    let mut chain: Vec<String> = resolved
+        .iter()
+        .map(|(b, args)| with_args(&ctx.short(b), &render_arg_list(args, ctx.ty.names)))
+        .collect();
+    let tail = match resolved.last() {
+        Some((b, _)) => ctx.class(b).map_or("", |c| c.super_class()),
+        None => ci.super_class(),
+    };
+    if !tail.is_empty() && tail != OBJECT {
+        chain.push(ctx.short(tail));
+    }
+    chain.reverse();
+    chain
+}
+
+/// 超类链上的祖先类名（直接父类在前；止于根类 / 注册表外 / 环）
+pub fn superclass_chain<'a>(ctx: &EmitCtx<'a>, ci: &ClassInfo) -> Vec<&'a ClassInfo> {
+    let mut chain = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut cur = ci.super_class().to_string();
+    while !cur.is_empty() && cur != OBJECT && seen.insert(cur.clone()) {
+        let Some(c) = ctx.class(&cur) else { break };
+        chain.push(c);
+        cur = c.super_class().to_string();
+    }
+    chain
+}
+
+/// 各祖先自己声明的非静态字段（最深祖先在前；无字段的祖先省略）
+fn ancestor_fields_layout(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<(String, Vec<String>)> {
+    let mut declared = BTreeSet::new();
+    let mut out = Vec::new();
+    for anc in superclass_chain(ctx, ci).into_iter().rev() {
+        let own: Vec<String> = anc
+            .fields()
+            .iter()
+            .filter(|f| !f.is_static())
+            .map(|f| ctx.ty.instance_field_rust_name(anc.name(), &safe_ident(&f.name)))
+            .filter(|n| declared.insert(n.clone()))
+            .collect();
+        if !own.is_empty() {
+            out.push((ctx.short(anc.name()), own));
+        }
+    }
+    out
+}
+
+/// 全部超类型（含自身，binary 名，排序）
+pub fn all_supertypes(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    let mut out: BTreeSet<String> = BTreeSet::from([ci.name().to_string()]);
+    let mut q: VecDeque<String> = VecDeque::new();
+    if !ci.super_class().is_empty() {
+        q.push_back(ci.super_class().to_string());
+    }
+    q.extend(ci.interfaces().iter().cloned());
+    let mut visited = BTreeSet::new();
+    while let Some(n) = q.pop_front() {
+        if !visited.insert(n.clone()) {
+            continue;
+        }
+        if let Some(p) = ctx.class(&n) {
+            if !p.super_class().is_empty() {
+                q.push_back(p.super_class().to_string());
+            }
+            q.extend(p.interfaces().iter().cloned());
+        }
+        out.insert(n);
+    }
+    out.into_iter().collect()
+}
+
+/// 本类实现且在闭包内的接口的擦除载体类型（排序去重）
+fn iface_carrier_views(ctx: &EmitCtx<'_>, ci: &ClassInfo, supertypes: &[String]) -> Vec<String> {
+    let mut views = BTreeSet::new();
+    for st in supertypes {
+        if st == ci.name() {
+            continue;
+        }
+        let Some(ic) = ctx.class(st).filter(|c| c.is_interface()) else { continue };
+        let n = ctx.ty.effective_class_type_params(ic).len();
+        let args = if n > 0 { format!("<{}>", vec!["Object"; n].join(", ")) } else { String::new() };
+        views.insert(with_args(&ctx.short(st), &args));
+    }
+    views.into_iter().collect()
+}
+
+/// 类初始化随之初始化的超接口（有 default 方法且有 `<clinit>`；后序；泛型实参取 Object）
+fn default_init_interfaces(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    fn visit(ctx: &EmitCtx<'_>, name: &str, seen: &mut BTreeSet<String>, out: &mut Vec<String>) {
+        if !seen.insert(name.to_string()) {
+            return;
+        }
+        let Some(ic) = ctx.class(name) else { return };
+        for sup in ic.interfaces() {
+            visit(ctx, sup, seen, out);
+        }
+        let has_default = ic
+            .methods()
+            .iter()
+            .any(|m| !m.is_abstract() && !m.is_static() && m.name != "<init>" && m.name != "<clinit>");
+        let has_clinit = ic.methods().iter().any(|m| m.name == "<clinit>");
+        if has_default && has_clinit {
+            let n = parse_class_type_params(ic.generic_signature()).len();
+            let args = if n > 0 { format!("<{}>", vec!["Object"; n].join(", ")) } else { String::new() };
+            out.push(with_args(&ctx.short(name), &args));
+        }
+    }
+    let mut out = Vec::new();
+    if ci.is_interface() {
+        return out;
+    }
+    let mut seen = BTreeSet::new();
+    for i in ci.interfaces() {
+        visit(ctx, i, &mut seen, &mut out);
+    }
+    out
+}
+
+/// 根类虚方法（toString / hashCode / equals）在本类视角的 vtable 所属类 Rust 名
+fn root_method_vtable_owner(ctx: &EmitCtx<'_>, ci: &ClassInfo, name: &str, desc: &str) -> Option<String> {
+    let mut seen = BTreeSet::new();
+    let mut cur = Some(ci);
+    while let Some(c) = cur {
+        if !seen.insert(c.name().to_string()) {
+            break;
+        }
+        if let Some(decl) = c.methods().iter().find(|m| m.name == name && m.desc == desc && !m.is_static()) {
+            let hw = ctx.input.handwritten.get(c.name()).is_some_and(|h| h.methods.contains(&safe_ident(&decl.name)));
+            if hw || ctx.member_rust_name(c, decl) != decl.name {
+                return None;
+            }
+            return Some(ctx.find_virtual_in(decl, c)).filter(|s| !s.is_empty());
+        }
+        let sc = c.super_class();
+        cur = if !sc.is_empty() && sc != OBJECT { ctx.class(sc) } else { None };
+    }
+    None
+}

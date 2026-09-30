@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 
 use crate::ctx::EmitCtx;
+use crate::lang;
 use crate::text::{pkg_from_java, safe_pkg_part, to_snake};
 
-/// 不加入全局跨包 glob 导入的 JDK 包前缀（内部实现类，避免命名冲突）
-const SKIP_GLOBAL_IMPORT_PREFIX: &str = "jdk/";
 
 /// java_runtime 侧布局
 #[derive(Debug, Default)]
@@ -54,13 +53,13 @@ impl JdkLayout {
         let mut sn_to_pkgs: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for c in classes {
             let parts = pkg_parts(c);
-            if !c.starts_with(SKIP_GLOBAL_IMPORT_PREFIX) && !parts.is_empty() {
+            if !c.starts_with(lang::INTERNAL_IMPL_PREFIX) && !parts.is_empty() {
                 pkg_set.insert(rust_pkg(&parts));
             }
             if !parts.is_empty() {
                 let simple = c.rsplit('/').next().unwrap_or(c);
                 sn_to_pkgs.entry(simple.to_string()).or_default().push(parts.join("/"));
-                if c.starts_with(SKIP_GLOBAL_IMPORT_PREFIX) {
+                if c.starts_with(lang::INTERNAL_IMPL_PREFIX) {
                     lay.skipped_classes.insert(format!("{}::{}", rust_pkg(&parts), ctx.short(c)));
                 }
             }

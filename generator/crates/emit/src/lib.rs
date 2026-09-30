@@ -23,8 +23,11 @@ pub mod class_writer;
 pub mod ctx;
 pub mod emission;
 pub mod error;
+pub mod imports;
+pub mod lang;
 pub mod project;
 pub mod text;
+pub mod vtable;
 
 pub use body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter, NoBodies, PlaceholderBodies};
 pub use ctx::{EmitCtx, EmitOptions, ProjectState};

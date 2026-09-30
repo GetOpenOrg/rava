@@ -76,10 +76,26 @@ pub fn pkg_from_java(java_file: &Path) -> String {
     String::new()
 }
 
-/// scratch 包版本：`0.0.<crc32(绝对路径)>`
-pub fn scratch_pkg_version(dir: &Path) -> String {
+/// `os.path.abspath`：绝对化并按词法消去 `.` / `..`（不解析符号链接）
+pub fn lexical_abspath(dir: &Path) -> std::path::PathBuf {
+    use std::path::Component;
     let abs = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let crc = crc32fast::hash(abs.to_string_lossy().as_bytes());
+    let mut out = std::path::PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// scratch 包版本：`0.0.<crc32(abspath)>`
+pub fn scratch_pkg_version(dir: &Path) -> String {
+    let crc = crc32fast::hash(lexical_abspath(dir).to_string_lossy().as_bytes());
     format!("0.0.{crc}")
 }
 
@@ -163,12 +179,31 @@ pub fn py_float_repr(v: f64) -> String {
     format!("{sign}{body}")
 }
 
+/// `\bword\b` 检索（单词字符 = 字母数字与 `_`，与 Python `re` 的 ASCII 语义一致）
+pub fn contains_word(hay: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let is_w = |c: char| c.is_alphanumeric() || c == '_';
+    hay.match_indices(word).any(|(i, _)| {
+        let before = hay[..i].chars().next_back().is_none_or(|c| !is_w(c));
+        let after = hay[i + word.len()..].chars().next().is_none_or(|c| !is_w(c));
+        before && after
+    })
+}
+
 /// 每行前加缩进（空行保持为空，与 Python `_indent` 同形）
 pub fn indent(text: &str, pad: &str) -> String {
     text.split('\n')
-        .map(|l| if l.is_empty() { String::new() } else { format!("{pad}{l}") })
+        .map(|l| if l.trim().is_empty() { String::new() } else { format!("{pad}{l}") })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// 源文本中的 `pub fn` 名（`\bpub fn\s+(\w+)\s*[(<]`）
+pub fn pub_fn_names(text: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"\bpub fn\s+(\w+)\s*[(<]").expect("静态正则");
+    re.captures_iter(text).map(|c| c[1].to_string()).collect()
 }
 
 #[cfg(test)]
@@ -184,6 +219,12 @@ mod tests {
         assert_eq!(to_snake("Ref"), "ref_");
         assert_eq!(to_snake("A1B"), "a1_b");
         assert_eq!(to_snake("UTF8Encoder"), "utf8_encoder");
+    }
+
+    #[test]
+    fn abspath_is_lexical() {
+        assert_eq!(lexical_abspath(Path::new("/a/b/../c/./d")), Path::new("/a/c/d"));
+        assert_eq!(scratch_pkg_version(Path::new("/a/b/../c")), scratch_pkg_version(Path::new("/a/c")));
     }
 
     #[test]

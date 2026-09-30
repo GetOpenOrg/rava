@@ -1,6 +1,6 @@
 //! 发射上下文（不可变输入）与每项目状态（Python 模块级全局账本的显式化）。
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -39,6 +39,8 @@ pub struct EmitCtx<'a> {
     pub seeds: SeedCfg,
     pub opts: EmitOptions,
     extras: RefCell<HashMap<String, Rc<ClassExtras>>>,
+    subtype_children: OnceCell<BTreeMap<String, Vec<String>>>,
+    root_api: OnceCell<BTreeSet<String>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -69,6 +71,8 @@ impl<'a> EmitCtx<'a> {
             seeds: SeedCfg::from_toml(&table),
             opts,
             extras: RefCell::new(HashMap::new()),
+            subtype_children: OnceCell::new(),
+            root_api: OnceCell::new(),
         })
     }
 
@@ -94,6 +98,40 @@ impl<'a> EmitCtx<'a> {
         let x = Rc::new(self.cp.bytes(cls).and_then(|b| parse_extras(&b).ok()).unwrap_or_default());
         self.extras.borrow_mut().insert(cls.to_string(), x.clone());
         x
+    }
+
+    /// 直接子类型索引：父类 / 直接接口 → 子类型（按 binary 排序；`_get_all_subtypes_ordered`
+    /// 逐层遍历排序注册表的等价预计算）
+    pub fn subtype_children(&self) -> &BTreeMap<String, Vec<String>> {
+        self.subtype_children.get_or_init(|| {
+            let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for ci in self.ty.reg.iter() {
+                let mut parents: BTreeSet<&str> = ci.interfaces().iter().map(String::as_str).collect();
+                parents.insert(ci.super_class());
+                for p in parents.into_iter().filter(|p| !p.is_empty()) {
+                    out.entry(p.to_string()).or_default().push(ci.name().to_string());
+                }
+            }
+            out
+        })
+    }
+
+    /// 手写根类的 API 名面（根类 `object{,_impl,_ext}.rs` 中的 `pub fn` 名；
+    /// `member_naming._handwritten_root_api`）
+    pub fn root_api(&self) -> &BTreeSet<String> {
+        self.root_api.get_or_init(|| {
+            let root = ty::consts::OBJECT;
+            let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
+            let dir = pkg.split('/').fold(self.runtime_src(), |d, p| d.join(p));
+            let stem = crate::text::to_snake(simple);
+            let mut names = BTreeSet::new();
+            for f in [format!("{stem}_impl.rs"), format!("{stem}_ext.rs"), format!("{stem}.rs")] {
+                if let Ok(text) = std::fs::read_to_string(dir.join(f)) {
+                    names.extend(crate::text::pub_fn_names(&text));
+                }
+            }
+            names
+        })
     }
 
     /// 类是否为本编译单元的用户类

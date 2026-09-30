@@ -12,7 +12,6 @@ pub mod overlay;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use indexmap::IndexMap;
@@ -24,6 +23,7 @@ use crate::class_writer::{gen_class_rs, ClassSite};
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::{EmitError, Result};
+use crate::imports::collect_referenced;
 use entry::DispatchReg;
 use fs::Writer;
 use layout::{JdkLayout, UserLayout};
@@ -49,7 +49,7 @@ fn emit_classes(
     let mut ems = IndexMap::new();
     for (c, path) in &jdk.files {
         let Some(ci) = ctx.class(c) else { continue };
-        let text = gen_class_rs(ctx, state, bodies, ci, &ClassSite::Jdk(jdk))?;
+        let text = gen_class_rs(ctx, state, bodies, ci, &ClassSite { jdk, user_sibling_imports: None })?;
         let em = ClassEmission {
             binary_name: c.clone(),
             crate_prefix: "crate".into(),
@@ -62,9 +62,9 @@ fn emit_classes(
     }
     for (c, e) in &user.entries {
         let Some(ci) = ctx.class(c) else { continue };
-        // 字节码引用集（import_gen.collect_referenced）步骤 (b) 接入
-        let referenced = BTreeSet::new();
-        let site = ClassSite::User { sibling_imports: user.sibling_imports(ctx, c, &referenced) };
+        // 兄弟类导入按未过滤引用集（生成集过滤只作用于 JDK 导入）
+        let referenced = collect_referenced(ctx, ci, None);
+        let site = ClassSite { jdk, user_sibling_imports: Some(user.sibling_imports(ctx, c, &referenced)) };
         let text = gen_class_rs(ctx, state, bodies, ci, &site)?;
         let em = ClassEmission {
             binary_name: c.clone(),
