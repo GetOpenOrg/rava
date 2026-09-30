@@ -22,7 +22,8 @@ use syn::visit::Visit;
 mod type_refs;
 pub use type_refs::MODULE_SUFFIXES;
 
-const GENERATED_MARK: &str = "rava_macros::java_class";
+/// 生成类文件的标记（手写共置文件恒不含限定宏调用）
+pub const GENERATED_MARK: &str = "rava_macros::java_class";
 const SUFFIXES: [&str; 2] = ["_impl.rs", "_ext.rs"];
 const CTOR_RUST: &str = "new";
 /// prelude 导出的 Java 根类型的 Rust 名（`Object::from(x)` 是保持身份的上转；字符串字面量产出 String）
