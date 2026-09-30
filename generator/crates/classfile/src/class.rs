@@ -88,9 +88,17 @@ pub struct Method {
     pub exceptions: Vec<String>,
     pub annotations: Vec<Annotation>,
     pub annotation_default: Option<ElementValue>,
+    /// MethodParameters 属性：(形参名, access_flags)；名字索引为 0 时为 None
+    pub parameters: Vec<(Option<String>, u16)>,
+    /// 存在 `Synthetic` 属性（与 ACC_SYNTHETIC 并列的老式标记）
+    pub synthetic_attr: bool,
 }
 
 impl Method {
+    /// ACC_SYNTHETIC 或 `Synthetic` 属性
+    pub fn is_synthetic(&self) -> bool {
+        self.synthetic_attr || self.access & acc::SYNTHETIC != 0
+    }
     pub fn is_static(&self) -> bool {
         self.access & acc::STATIC != 0
     }
@@ -226,6 +234,8 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, Error> {
             exceptions: vec![],
             annotations: vec![],
             annotation_default: None,
+            parameters: vec![],
+            synthetic_attr: false,
         };
         let n_attr = r.u2()?;
         for _ in 0..n_attr {
@@ -242,6 +252,16 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, Error> {
                 }
                 "RuntimeVisibleAnnotations" => m.annotations = annotations(&mut ar, &pool)?,
                 "AnnotationDefault" => m.annotation_default = Some(element_value(&mut ar, &pool)?),
+                "MethodParameters" => {
+                    let n = ar.u1()?;
+                    for _ in 0..n {
+                        let ni = ar.u2()?;
+                        let pacc = ar.u2()?;
+                        let pname = if ni == 0 { None } else { Some(pool.utf8(ni)?.to_string()) };
+                        m.parameters.push((pname, pacc));
+                    }
+                }
+                "Synthetic" => m.synthetic_attr = true,
                 _ => {}
             }
         }

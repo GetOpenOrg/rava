@@ -165,3 +165,18 @@ classes = [
     "sun/util/locale/LocaleObjectCache",
     "sun/util/locale/LocaleUtils",
 ]
+
+# ── 动态对照：JVM 直接调用的 Java 入口 ────────────────────────────────────────────────
+# 只供 scripts/dyn_compare.py（C5：真实 JVM 类加载轨迹 vs 静态闭包，只用于验证）读取；闭包分析器与
+# 生成器不读本段，它不影响闭包。
+#
+# 动态对照按类加载时的调用栈归因：自入口帧起逐帧上溯，全部是闭包内按字节码建模的方法时，
+# 加载的翻译域类若不在闭包即为漏覆盖；途经手写 / native / 边界域方法则归因于该帧。本段列出的
+# 类，其方法由 JVM 在链接期直接调用（不经任何字节码调用点）：invokedynamic 调用点链接、
+# 动态常量 / MethodType / MethodHandle 常量解析。rava 以运行模型替换这条链接路径（vm_intrinsics.toml
+# [indy]、MH-native），这些帧之上的加载归因为「VM 上调」，不计漏覆盖。
+# 条目形态同 [vm_boundary]：类 binary name，覆盖自身与其 `$` 嵌套类。
+[dynamic]
+vm_upcall_classes = [
+    "java/lang/invoke/MethodHandleNatives",
+]

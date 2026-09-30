@@ -113,6 +113,12 @@ def release_entries() -> list[str]:
     return _packages(sec, 'packages', 'release') + _classes(sec, 'classes', 'release')
 
 
+def dynamic_vm_upcall_classes() -> list[str]:
+    """JVM 在链接期直接调用的 Java 入口类（closure.toml [dynamic]）：只供动态对照
+    （scripts/dyn_compare.py）归因类加载调用栈，闭包与生成不读。"""
+    return _classes(_toml('closure.toml').get('dynamic', {}), 'vm_upcall_classes', 'dynamic')
+
+
 def seed_section(name: str) -> dict:
     """seeds.toml 的一节（annotation / locale / jca / data_bundle / boot_init）。"""
     return _toml('seeds.toml').get(name, {})

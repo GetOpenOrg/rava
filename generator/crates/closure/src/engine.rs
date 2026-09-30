@@ -22,7 +22,7 @@ use indexmap::IndexMap;
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Oracle, Ret, Src, V};
-use crate::handwritten::{member_matches, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
+use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members};
 
 mod sets;
@@ -36,7 +36,11 @@ mod invoke;
 mod hub;
 mod lambda;
 mod hw;
+mod hw_infer;
 mod report;
+mod seeds;
+
+pub use seeds::SeedState;
 
 pub use fold::Fold;
 use facts::*;
@@ -388,6 +392,8 @@ pub struct Engine<'a> {
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
     call_vals: Option<Rc<[V]>>,
     pub unresolved: BTreeSet<String>,
+    /// 活代码调用点的符号引用（常量池 owner.name:desc）：发射层槽位需求按调用点键消费
+    pub refs: BTreeSet<String>,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,
@@ -458,6 +464,10 @@ pub struct Engine<'a> {
     pub hw_written_names: BTreeSet<String>,
     /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
     hw_read_names: BTreeMap<String, BTreeSet<Node>>,
+    /// `包/蛇形名` → 类（手写 `use super::<类>_impl` 模块引用的反查；首次使用时建立）
+    snake_index: Option<HashMap<String, String>>,
+    /// 清单种子状态与输出
+    pub seeds: SeedState,
 }
 
 impl<'a> Engine<'a> {
@@ -523,6 +533,7 @@ impl<'a> Engine<'a> {
             callers: HashMap::default(),
             call_vals: None,
             unresolved: BTreeSet::new(),
+            refs: BTreeSet::new(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),
             watch: HashMap::default(),
@@ -563,6 +574,8 @@ impl<'a> Engine<'a> {
             hw_written: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
+            snake_index: None,
+            seeds: SeedState::default(),
             fdelta: HashMap::default(),
         }
     }
@@ -806,6 +819,14 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 外部种子方法（缺口扫描的 JDK 入口 / lib 公开 API 面）：等价于「某个用户程序调用了它」，构造器同时实例化
+    pub fn root_seed(&mut self, key: MemberRef, kind: &'static str) {
+        if key.name == "<init>" {
+            self.instantiate(&key.owner.clone(), Via::root(kind, &key.to_string()));
+        }
+        self.root(key, kind);
+    }
+
     pub fn root_init(&mut self, cls: &str, kind: &'static str) {
         self.init(cls, Via::root(kind, cls));
     }
@@ -830,6 +851,10 @@ impl<'a> Engine<'a> {
                 if let Some(c) = self.cwork.pop_front() {
                     self.in_cwork.remove(&c);
                     self.rerun_lcall(c);
+                    continue;
+                }
+                // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
+                if self.seed_round() {
                     continue;
                 }
                 // 乐观阶段收敛：仍「尚无返回」的被调方法确实不返回。关掉乐观假设，把得到过该答复的

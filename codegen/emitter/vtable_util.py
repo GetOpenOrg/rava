@@ -207,7 +207,7 @@ def slot_member_rust_name(m: 'ParsedMethod', ci: 'ClassInfo',
             decl = next((x for x in registry[cur].methods
                          if not x.is_synthetic and _same_vtable_slot(x, m)), None)
             if decl is None:
-                return ''
+                return _injected_default_rust_name(registry[cur], m, registry)
             return (_mangle(decl.name, decl.descriptor)
                     if method_name_is_mangled(registry[cur], decl, registry)
                     else decl.name)
@@ -215,6 +215,86 @@ def slot_member_rust_name(m: 'ParsedMethod', ci: 'ClassInfo',
             return ''
         cur = registry[cur].super_class
     return ''
+
+
+def _param_only(desc: str) -> str:
+    idx = desc.find(')')
+    return desc[:idx + 1] if idx >= 0 else desc
+
+
+def injected_default_sigs(ci: 'ClassInfo', registry: 'dict | None') -> 'frozenset[tuple[str, str]]':
+    """类 ci 发射时注入的接口 default 方法（name, descriptor）——与
+    class_writer._emit_interface_default_inheritance 的注入规则同源：
+    直接 / 间接超接口中、祖先类未实现过的接口上的 default（非抽象 / 非静态 /
+    非 synthetic / 非私有），且本类与超类链均无同名同参声明，(name, 参数签名)
+    按广度优先首见去重。注入的 default 在该类开 vtable 槽位（VirtualDefine），
+    子类覆盖须归属此槽位，否则槽位落空为 stub。"""
+    if not registry or ci.is_interface or not ci.interfaces:
+        return frozenset()
+    covered: set[tuple] = set()
+    cur, seen = ci, set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        for m in cur.methods:
+            if cur is ci and m.is_synthetic:
+                continue
+            if cur is not ci and (m.is_static or m.is_synthetic or m.name in ('<init>', '<clinit>')
+                                  or (m.access_flags & _ACC_PRIVATE)):
+                continue
+            covered.add((m.name, _param_only(m.descriptor)))
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    anc_ifaces: set[str] = set()
+    cur, seen = registry.get(ci.super_class) if ci.super_class else None, set()
+    while cur is not None and cur.name not in seen:
+        seen.add(cur.name)
+        q = list(cur.interfaces or [])
+        while q:
+            n = q.pop(0)
+            if n in anc_ifaces:
+                continue
+            anc_ifaces.add(n)
+            x = registry.get(n)
+            if x is not None:
+                q.extend(x.interfaces or [])
+        cur = registry.get(cur.super_class) if cur.super_class else None
+    out: set[tuple] = set()
+    q, visited = list(ci.interfaces), set(anc_ifaces)
+    while q:
+        n = q.pop(0)
+        if n in visited:
+            continue
+        visited.add(n)
+        ici = registry.get(n)
+        if ici is None:
+            continue
+        q.extend(ici.interfaces or [])
+        for dm in ici.methods:
+            if (dm.is_abstract or dm.is_static or dm.is_synthetic or (dm.access_flags & _ACC_PRIVATE)
+                    or dm.name in ('<init>', '<clinit>')):
+                continue
+            key = (dm.name, _param_only(dm.descriptor))
+            if key in covered:
+                continue
+            covered.add(key)
+            out.add((dm.name, dm.descriptor))
+    return frozenset(out)
+
+
+def _injected_default_rust_name(ci: 'ClassInfo', m: 'ParsedMethod', registry: dict) -> str:
+    """ci 注入的接口 default 中与 m 同槽位者的 Rust 名（与 class_writer 注入段的
+    needs_mangle 同源：重载名 / 与本类方法名冲突 / 注入 default 之间重名）；无则空串。"""
+    from ..sig_types import hierarchy_overloaded_names, method_name_is_mangled
+    injected = injected_default_sigs(ci, registry)
+    hit = next(((n, d) for n, d in injected
+                if n == m.name and _param_only(d) == _param_only(m.descriptor)), None)
+    if hit is None:
+        return ''
+    own = {(mangle_name(x.name, x.descriptor) if method_name_is_mangled(ci, x, registry) else x.name)
+           for x in ci.methods if not x.is_synthetic and x.name not in ('<init>', '<clinit>')}
+    same_name = sum(1 for n, _ in injected if n == hit[0])
+    if hit[0] in hierarchy_overloaded_names(ci, registry) or hit[0] in own or same_name > 1:
+        return mangle_name(hit[0], hit[1])
+    return hit[0]
 
 
 def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
@@ -262,6 +342,10 @@ def _find_virtual_in(m: 'ParsedMethod', ci: 'ClassInfo',
                     elif not (am.access_flags & _ACC_PRIVATE):
                         oldest = cur
                     break
+            else:
+                # 祖先发射时注入的接口 default 同样是该祖先的槽位声明
+                if (m.name, m.descriptor) in injected_default_sigs(anc, registry):
+                    oldest = cur
             cur = anc.super_class
         if oldest is not None:
             return _bin_to_rust(oldest)

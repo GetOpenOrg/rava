@@ -30,6 +30,14 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 | `--build-timeout SEC` | 单测试 cargo 构建超时。缺省按闭包规模自动：重型闭包 3000 秒，其余 600 秒 |
 | `--debug` / `--strict` | 透传给每个测试的 `main.py` |
 | `--deny SPEC` | 审计计数非零升级为整体失败（`equiv` / `fallback` / `stub-hit` 等，见 `--help`） |
+| `--no-dyn` | 关闭动态对照（缺省开，见下） |
+
+**动态对照**（闭包计划 C5，`scripts/dyn_compare.py`）：每个测试转译成功后（cargo 之前，`--no-run` 下同样执行）
+用 JVMTI agent + `-Xlog:class+load,class+init` 跑一次原始 Java 程序，把 JVM 实际加载的类与 `closure.json` 对照。
+结果行附 `dyn miss N / extra M prov P%`（翻译域漏覆盖 / 静态多出 / 多出类 provenance 覆盖率；有无调用栈的加载时再附
+`unattr K`），明细落盘 `build/jdk<N>/logs/dyn/<test>.json`，汇总行 `[dyn-compare]` 列出全部漏覆盖。
+每测试一次 java 运行（实测约 0.1 秒，相对 5–70 秒的转译可忽略），故缺省开启。agent 首次使用时以 `$CC`（缺省 `cc`）
+编译，按源码 + JDK 缓存于 `build/dyn_agent/`。单独运行：`python3 scripts/dyn_compare.py build/jdk21/<test> [-o out.json]`。
 
 启动时的 `[meta]` 行打印 `PYTHONHASHSEED`、`CARGO_INCREMENTAL`、`CARGO_BUILD_JOBS` 与透传选项，便于事后解读结果。
 
@@ -59,6 +67,7 @@ RUST_BACKTRACE=1 python3 scripts/main.py Foo.java
 
 | 变量 | 读取 / 设置方 | 说明 |
 |---|---|---|
+| `CC` | `dyn_compare.py` | 编译动态对照 JVMTI agent 的 C 编译器（缺省 `cc`；需要能找到 `$JAVA_HOME/include` 下的 jvmti.h） |
 | `JAVA_HOME` | `jdk_select.py`、`jdk_resolver.py`、各脚本 | JDK 位置。选中 JDK 后由脚本写回，javac / java / jmods 均经它取得 |
 | `CARGO_BUILD_JOBS` | 用户 / `cargo_env.py` | rustc 并行作业数，显式设置时优先于重型闭包自动判定 |
 | `RUST_BACKTRACE` | 生成程序 | 见第二节 |

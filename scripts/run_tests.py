@@ -14,7 +14,8 @@
     python3 scripts/run_tests.py --record-passed             # PASS 即时落盘；中断续跑自动跳过已通过（删清单即从头）
     python3 scripts/run_tests.py --batch 3/10                # 全量按发现序均分 10 批，跑第 3 批（可与 --record-passed 叠加）
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
-    python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比
+    python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比（动态对照照常，不触发 cargo）
+    python3 scripts/run_tests.py --no-dyn                # 关闭动态对照（JVM 类加载轨迹 vs 静态闭包，缺省开）
     python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
     python3 scripts/run_tests.py --deny equiv            # 任一等价发射点非零 → 整体失败
     python3 scripts/run_tests.py --deny equiv::neg-array # 细粒度拒绝（对齐 rustc lint 模型）
@@ -34,10 +35,14 @@
   1. main.py 转译 → overlay 手写 + 生成 build/<test>/{java_runtime,user}
   2. cargo run --bin <class>（共享 target 缓存）捕获 stdout
   3. 与 tests/expected/<Class>.txt diff
+  转译成功后（cargo 之前）另做动态对照（scripts/dyn_compare.py，闭包计划 C5）：真实 JVM 跑原始
+  Java 程序的类加载轨迹 vs closure.json，结果行附 `dyn miss N / extra M prov P%`，明细落盘
+  build/<jdk>/logs/dyn/<test>.json，汇总列出全部漏覆盖。每测试一次 java 运行（约 0.1–1 s）。
 """
 
 import argparse
 import difflib
+import json
 import os
 import re
 import subprocess
@@ -51,6 +56,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from jdk_select import apply_jdk, _major_of
 from cargo_env import with_heavy_jobs, is_heavy
+import dyn_compare
 
 
 def _current_jdk_major() -> 'int | None':
@@ -97,6 +103,8 @@ MAIN_FLAGS: list[str] = []
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
 # 120 足够且让挂起类用例快速出列
 EXPECTED_GEN_TIMEOUT = 120
+# 动态对照（C5）：缺省开，--no-dyn 关闭；每测试一次原始 Java 程序运行，相对转译耗时可忽略
+DYN_COMPARE = True
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
 # 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
@@ -245,6 +253,27 @@ def _aux_full(cls_aux: str, raw_v: int, eq_v: int, bin_name: str = "",
                          f"bin {_bin_size_mb(bin_name)}" if bin_name else "",
                          eta) if p]
     return " | ".join(parts)
+
+
+def _dyn_compare(bin_name: str, ws: Path, sink: dict[str, dict]) -> str:
+    """转译成功后的动态对照（C5）：明细落盘 logs/dyn/<test>.json，返回结果行短指标。"""
+    if not DYN_COMPARE:
+        return ""
+    java = Path(_jdk_tool("java"))
+    java_home = Path(os.environ.get("JAVA_HOME") or java.resolve().parent.parent)
+    try:
+        res = dyn_compare.run(ws, java_home, OUT / "dyn_agent", ROOT, timeout=EXPECTED_GEN_TIMEOUT)
+    except Exception as e:  # 对照只做观测，自身故障不影响测试判定
+        res = {"error": f"{type(e).__name__}: {e}"}
+    sink[bin_name] = res
+    out = LOGS_DIR / "dyn" / f"{bin_name}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res, ensure_ascii=False, indent=1))
+    return dyn_compare.summary_tag(res)
+
+
+def _join_aux(*parts: str) -> str:
+    return " | ".join(p for p in parts if p)
 
 
 # ── 失败清单（棘轮）：全量跑批累积失败，--failed 只跑清单，通过自动出列 ──
@@ -1084,6 +1113,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     fallback_counts: dict[str, dict[str, int]] = {}
     run_sub: dict[str, tuple[str, str]] = {}
     fail_categories: dict[str, list[str]] = {}
+    dyn_results: dict[str, dict] = {}
 
     ratchet = _FailedRatchet(failed_path, prev_failed, jdk_major)
 
@@ -1136,11 +1166,12 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
             equiv_counts[class_name] = _ec
         if _fc:
             fallback_counts[class_name] = _fc
+        _cls_aux = _join_aux(_transpile_aux(log), _dyn_compare(bin_name, ws, dyn_results))
 
         if no_run:
             _pline(name_w, "NORUN", java_file.relative_to(E2E),
                    f"— transpile OK ({fmt_dur(t_transpile)})",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, eta=_eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, eta=_eta), prog=prog)
             skipped += 1
             continue
 
@@ -1151,7 +1182,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         if not ok:
             _pline(name_w, "FAIL", java_file.relative_to(E2E),
                    f"— compile error ({_fmt_build_dur(t_build)})  {err}",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, eta=_eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, eta=_eta), prog=prog)
             _fail("compile", str(rel))
             continue
 
@@ -1163,7 +1194,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         if status == "timeout":
             _pline(name_w, "FAIL", java_file.relative_to(E2E),
                    f"— run timeout (> {fmt_dur(RUN_TIMEOUT)})  ({timing})",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             _fail("run-timeout", str(rel))
             continue
         if status == "error":
@@ -1172,7 +1203,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
             run_sub[class_name] = (fam, detail)
             _pline(name_w, "FAIL", java_file.relative_to(E2E),
                    f"— run error  ({timing})",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             _fail("run", str(rel))
             continue
 
@@ -1181,7 +1212,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
             _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
             _pline(name_w, "FAIL", java_file.relative_to(E2E),
                    f"— output mismatch · diff {_n_diff} 行  ({timing})",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             print("".join(diff[:40]))
             if len(diff) > 40:
                 print(f"  … ({len(diff) - 40} more lines)")
@@ -1189,7 +1220,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         else:
             _pline(name_w, "PASS", java_file.relative_to(E2E),
                    f"({timing})",
-                   aux=_aux_full(_transpile_aux(log), _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
             passed += 1
             ratchet.record(str(rel), True)
             if pratchet is not None:
@@ -1214,6 +1245,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
     _print_equiv_summary(equiv_counts)
     _print_fallback_summary(fallback_counts)
     _summarize_raw()
+    dyn_compare.print_summary(dyn_results)
     return _apply_deny(deny, equiv_counts, run_sub, failed,
                        fallback_counts=fallback_counts)
 
@@ -1284,13 +1316,17 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     print(f"\n[batch] 并行转译 {len(pending)} 个测试（max_workers={jobs}）…")
     t_all = time.perf_counter()
 
+    dyn_results: dict[str, dict] = {}
+
     def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int],
-                                                 dict[str, int], dict[str, int]]:
-        ws = _test_workspace(_to_bin_name(_class_name(java_file)))
+                                                 dict[str, int], dict[str, int], str]:
+        bin_name = _to_bin_name(_class_name(java_file))
+        ws = _test_workspace(bin_name)
         ok, log = _transpile(java_file, out_dir=ws)
         _parse_raw(log)
+        dyn = _dyn_compare(bin_name, ws, dyn_results) if ok else ""
         return (java_file, ok, log, _parse_readability(log), _parse_equiv(log),
-                _parse_fallback(log))
+                _parse_fallback(log), dyn)
 
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
@@ -1300,7 +1336,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_transpile_one, f): f for f in pending}
         for fut in as_completed(futures):
-            java_file, ok, log, rc, ec, fc = fut.result()
+            java_file, ok, log, rc, ec, fc, dyn = fut.result()
             rel = java_file.relative_to(ROOT)
             if ok:
                 print(f"  [transpile] {rel} OK", flush=True)
@@ -1311,7 +1347,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
                     equiv_counts[_class_name(java_file)] = ec
                 if fc:
                     fallback_counts[_class_name(java_file)] = fc
-                aux_by_file[java_file] = (_transpile_aux(log),
+                aux_by_file[java_file] = (_join_aux(_transpile_aux(log), dyn),
                                           sum(ec.values()) if ec else 0,
                                           _parse_raw(log))
             else:
@@ -1444,6 +1480,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     _print_equiv_summary(equiv_counts)
     _print_fallback_summary(fallback_counts)
     _summarize_raw()
+    dyn_compare.print_summary(dyn_results)
     return _apply_deny(deny, equiv_counts, run_sub, failed,
                        fallback_counts=fallback_counts)
 
@@ -1565,9 +1602,12 @@ def main():
     ap.add_argument("--debug",           action="store_true", help="透传 main.py --debug（转译诊断明细）")
     ap.add_argument("--strict",          action="store_true",
                     help="透传 main.py --strict（兜底硬失败 + 缺手写 native 编译报错）")
+    ap.add_argument("--no-dyn",          action="store_true",
+                    help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
     args = ap.parse_args()
 
-    global BUILD_TIMEOUT, MAIN_FLAGS
+    global BUILD_TIMEOUT, MAIN_FLAGS, DYN_COMPARE
+    DYN_COMPARE = not args.no_dyn
     BUILD_TIMEOUT = args.build_timeout
     MAIN_FLAGS = [f for f, on in (("--debug", args.debug), ("--strict", args.strict)) if on]
 

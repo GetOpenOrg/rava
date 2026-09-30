@@ -181,7 +181,18 @@ impl Ctx<'_> {
         if let Some(&d) = self.domains.borrow().get(cls) {
             return d;
         }
-        let d = self.man.domain(cls, self.cp.origin(cls) == Some(Origin::User));
+        let origin = self.cp.origin(cls);
+        let d = match self.man.domain(cls, origin == Some(Origin::User)) {
+            // 依赖库类（`--lib`）：库自身不属 JDK 边界，一律按字节码翻译
+            Domain::Boundary if origin == Some(Origin::Lib) => Domain::Translate,
+            // 纯数据资源束：数据不是实现细节，即便位于边界前缀内也按字节码翻译
+            Domain::Boundary
+                if !self.man.is_vm_boundary(cls) && self.cp.get(cls).is_some_and(|cf| self.man.seeds.carriers.is_pure_data_bundle(self.cp, &cf)) =>
+            {
+                Domain::Translate
+            }
+            d => d,
+        };
         self.domains.borrow_mut().insert(cls.to_string(), d);
         d
     }

@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use super::module_t::Module;
+use super::Module;
 
 // java.lang.Module 伴生：单二进制运行时的模块语义。
 //

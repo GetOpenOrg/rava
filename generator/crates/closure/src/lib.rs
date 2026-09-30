@@ -8,6 +8,7 @@ pub mod absint;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
+pub mod seeds;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,6 +27,10 @@ pub struct Input<'a> {
     pub runtime_dir: &'a Path,
     /// 入口方法
     pub roots: Vec<MemberRef>,
+    /// 外部种子方法（`--root` / `--seed-class` 展开）
+    pub seed_roots: Vec<MemberRef>,
+    /// `--locale` 显式给出的 locale 标签
+    pub locales: Vec<String>,
 }
 
 pub struct Closure<'a> {
@@ -37,8 +42,12 @@ pub struct Closure<'a> {
 pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, hw: &'a Handwritten) -> Closure<'a> {
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
+    e.seeds.locales = input.locales.clone();
     for r in &input.roots {
         e.root(r.clone(), "main");
+    }
+    for r in &input.seed_roots {
+        e.root_seed(r.clone(), "seed");
     }
     for u in hw.vm_upcalls() {
         e.root_upcall(&u, "vm-upcalls");
@@ -200,12 +209,20 @@ impl Closure<'_> {
             "clinit": e.inited.keys().collect::<Vec<_>>(),
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
+            "refs": e.refs,
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,
             "reflect": {
                 "members": e.reflect_members.iter().map(|(k, m)| json!({"kind": members_str(*k), "member": m.to_string()})).collect::<Vec<_>>(),
                 "gaps": e.reflect_gaps,
+            },
+            "seeds": {
+                "data_bundles": e.seeds.data_bundles,
+                "annotation_enums": e.seeds.annotation_enums,
+                "jca": e.seeds.jca.iter().map(|s| json!({"type": s.ty, "algorithm": s.algorithm, "impl": s.imp, "provider": s.provider})).collect::<Vec<_>>(),
+                "reflect_names": e.seeds.reflect_names,
+                "reflect_all": e.seeds.reflect_all,
             },
         })
     }

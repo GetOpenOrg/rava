@@ -3,7 +3,10 @@
 //! 选项：`--jdk N | --java-home P`、`--runtime <runtime/java_runtime>`、`--main <类>`、
 //! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--flows <方法标签片段>`（类型流诊断，可多次）、`--report <报告.md>`、
 //! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
-//! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）。
+//! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
+//! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
+//! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
+//! `--locale <标签>`（locale 资源束种子）。
 
 use std::path::{Path, PathBuf};
 
@@ -64,9 +67,19 @@ pub fn run(args: &Args) -> Result<(), String> {
     let rt = runtime_dir(args)?;
     let classes = user_classes(Path::new(input), &home)?;
 
+    let multi = |flag: &str| -> Vec<&String> {
+        args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
+    };
+    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类
     let mut cp = ClassPath::new();
     cp.add(Origin::User, &classes).map_err(|e| e.to_string())?;
+    for jar in multi("--lib") {
+        cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
+    }
     cp.add_jdk(&home).map_err(|e| e.to_string())?;
+    for d in multi("--image") {
+        cp.add(Origin::Image, Path::new(d)).map_err(|e| format!("{d}：{e}"))?;
+    }
 
     let users = cp.names_of(Origin::User);
     let main = match args.opt("--main") {
@@ -78,9 +91,6 @@ pub fn run(args: &Args) -> Result<(), String> {
             .ok_or("用户类中没有 static main(String[])")?,
     };
 
-    let multi = |flag: &str| -> Vec<&String> {
-        args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
-    };
     let mut man = Manifest::load(&rt)?;
     man.release_more(multi("--release").into_iter().cloned());
     man.release_bytecode(multi("--release-bytecode").into_iter().cloned());
@@ -90,6 +100,8 @@ pub fn run(args: &Args) -> Result<(), String> {
         cp: &cp,
         runtime_dir: &rt,
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
+        seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
+        locales: multi("--locale").into_iter().cloned().collect(),
     };
     let c = closure::analyze(&input_desc, &h, &man, &hw);
 
@@ -121,4 +133,25 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
     println!("{}", serde_json::to_string_pretty(&c.summary()).map_err(|e| e.to_string())?);
     Ok(())
+}
+
+/// `--root 类.方法:描述符` 与 `--seed-class 类`（全部 public 方法，命令行入口 main 除外）展开为种子方法
+fn seed_roots(cp: &ClassPath, roots: &[&String], classes: &[&String]) -> Result<Vec<MemberRef>, String> {
+    let mut out = Vec::new();
+    for r in roots {
+        let (head, desc) = r.split_once(':').ok_or_else(|| format!("--root 格式应为 类.方法:描述符：{r}"))?;
+        let (owner, name) = head.rsplit_once('.').ok_or_else(|| format!("--root 格式应为 类.方法:描述符：{r}"))?;
+        out.push(MemberRef { owner: owner.replace('.', "/"), name: name.into(), desc: desc.into() });
+    }
+    for c in classes {
+        let c = c.replace('.', "/");
+        let Some(cf) = cp.get(&c) else {
+            eprintln!("[closure] --seed-class 未命中类路径：{c}");
+            continue;
+        };
+        for m in cf.methods.iter().filter(|m| m.access & classfile::acc::PUBLIC != 0 && !(m.is_static() && (m.name.as_str(), m.desc.as_str()) == MAIN)) {
+            out.push(MemberRef { owner: c.clone(), name: m.name.clone(), desc: m.desc.clone() });
+        }
+    }
+    Ok(out)
 }

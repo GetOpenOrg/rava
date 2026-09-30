@@ -19,6 +19,9 @@ use std::rc::Rc;
 use classfile::MemberRef;
 use syn::visit::Visit;
 
+mod type_refs;
+pub use type_refs::MODULE_SUFFIXES;
+
 const GENERATED_MARK: &str = "rava_macros::java_class";
 const SUFFIXES: [&str; 2] = ["_impl.rs", "_ext.rs"];
 const CTOR_RUST: &str = "new";
@@ -73,14 +76,18 @@ pub struct TypedCall {
     /// 接收者是本 fn 内 `let x = T::new*(…)` 绑定、此后未被遮蔽的不可变局部变量：
     /// 实际接收者只能是该方法手写体新建的 `T` 对象
     pub fresh: Option<TypeRef>,
+    /// 方法调用接收者的静态类型（语法推断；推断回调目标用）
+    pub srecv: Option<SType>,
 }
 
-/// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型
+/// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型 /
+/// `x.m(…)` 的返回类型（`x` 静态类型上 Rust 名为 `m` 的方法）
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SType {
     Named(TypeRef),
     Ret(TypeRef, String),
     Field(Box<SType>, String),
+    Call(Box<SType>, String),
 }
 
 /// 手写体里的字段访问器调用：`recv.__set_<字段>(v)` / `recv.__get_<字段>()`（字段名即 Java 名）
@@ -121,6 +128,8 @@ pub struct ClassHw {
     pub files: Vec<PathBuf>,
     /// fn 名 → 信息（同名 fn 合并）
     pub fns: HashMap<String, FnInfo>,
+    /// 手写文件（共置 `_impl` / `_ext` 与整体手写 `<snake>.rs`）的编译期类型路径
+    pub type_refs: BTreeSet<TypeRef>,
 }
 
 /// 成员（Java 名）对应的手写体汇总
@@ -231,6 +240,14 @@ impl Handwritten {
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
             hw.files.push(path);
+        }
+        for suf in SUFFIXES.iter().chain([".rs"].iter()) {
+            let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            match type_refs::scan(&content, &self.prelude) {
+                Ok(t) => hw.type_refs.extend(t),
+                Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
+            }
         }
         close_transitive(&mut hw.fns, &calls);
         hw
@@ -344,7 +361,11 @@ impl Handwritten {
         }
         let ty = segs.last().cloned().unwrap_or_default();
         let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
-            Some("super") => (pkg.iter().map(|s| s.to_string()).collect(), &segs[1..]),
+            // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
+            Some("super") => {
+                let k = segs.iter().take_while(|s| *s == "super").count();
+                (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
+            }
             Some("crate") => (vec![], &segs[1..]),
             _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
             _ => (vec![], &segs[..]),
@@ -531,7 +552,7 @@ fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, locals: &HashM
                 _ if matches!(name.as_str(), "clone" | "unwrap" | "expect" | "unwrap_or_else" | "unwrap_or") => {
                     stype(&m.receiver, statics, locals)
                 }
-                _ => None,
+                _ => stype(&m.receiver, statics, locals).map(|r| SType::Call(Box::new(r), name)),
             }
         }
         Expr::Call(c) => match &*c.func {
@@ -565,6 +586,7 @@ fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &Option<Vec<
         SType::Named(t) => SType::Named(tr(t)),
         SType::Ret(t, m) => SType::Ret(tr(t), m),
         SType::Field(b, f) => SType::Field(Box::new(expand_s(uses, *b, self_ty)), f),
+        SType::Call(b, m) => SType::Call(Box::new(expand_s(uses, *b, self_ty)), m),
     }
 }
 
@@ -614,7 +636,7 @@ struct CallScan<'a> {
     scope: HashMap<String, Option<SType>>,
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     fresh: HashMap<String, Vec<String>>,
-    calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>)>,
+    calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>)>,
     /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self)
     fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool)>,
     opaque: HashSet<String>,
@@ -652,7 +674,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             syn::Expr::Path(p) => p.path.get_ident().and_then(|i| self.fresh.get(&i.to_string()).cloned()),
             _ => None,
         };
-        self.calls.push((name, None, Some(infer(&m.receiver, self.locals)), args, fresh));
+        let srecv = stype(&m.receiver, &self.scope, self.locals);
+        self.calls.push((name, None, Some(infer(&m.receiver, self.locals)), args, fresh, srecv));
         syn::visit::visit_expr_method_call(self, m);
     }
 
@@ -662,7 +685,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             if let Some((last, head)) = segs.split_last() {
                 let args = c.args.iter().map(|a| infer(a, self.locals)).collect();
                 let ty = (!head.is_empty()).then(|| head.to_vec());
-                self.calls.push((last.clone(), ty, None, args, None));
+                self.calls.push((last.clone(), ty, None, args, None, None));
             }
         }
         syn::visit::visit_expr_call(self, c);
@@ -825,13 +848,14 @@ impl FileScan<'_> {
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
-        for (name, ty, recv, args, fresh) in cs.calls {
+        for (name, ty, recv, args, fresh, srecv) in cs.calls {
             info.calls.push(TypedCall {
                 name,
                 path_ty: tr(ty),
                 recv: recv.map(tr),
                 args: args.into_iter().map(tr).collect(),
                 fresh: tr(fresh),
+                srecv: srecv.map(|r| expand_s(self.uses, r, &self.self_ty)),
             });
         }
         info.opaque = cs.opaque;
@@ -1037,5 +1061,30 @@ mod tests {
         assert_eq!(get(6), ("a", true, None));
         assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
         assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
+    }
+
+    #[test]
+    fn call_receivers() {
+        let src = r#"
+            impl Factory {
+                pub fn open(options: Set<Object>) {
+                    let it = options.iterator()?;
+                    while it.hasNext()? { let o = it.next()?; }
+                    Factory::make(1, 2);
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let (mut fns, mut calls) = (HashMap::new(), HashMap::new());
+        scan_file(&file, &HashMap::new(), &mut fns, &mut calls);
+        let cs = fns.remove("open").map(|i| i.calls).unwrap_or_default();
+        let site = |n: &str| cs.iter().find(|c| c.name == n).expect("调用点已登记");
+        let set = named(&["Set"]);
+        let iter = SType::Call(Box::new(set.clone()), "iterator".into());
+        assert_eq!(site("iterator").srecv, Some(set));
+        assert_eq!(site("hasNext").srecv, Some(iter.clone()));
+        assert_eq!(site("next").srecv, Some(iter));
+        let make = site("make");
+        assert_eq!((make.path_ty.clone(), make.args.len(), make.srecv.clone()), (Some(TypeRef(vec!["Factory".into()])), 2, None));
     }
 }
