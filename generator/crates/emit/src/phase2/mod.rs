@@ -25,6 +25,7 @@ use ty::ClassInfo;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::Result;
+use crate::perf::Perf;
 use crate::project::entry::DispatchReg;
 
 /// 发射记录（binary name → 记录；发射序）
@@ -91,13 +92,18 @@ pub fn provided_methods(ctx: &EmitCtx<'_>, bin: &str) -> BTreeSet<String> {
 
 /// 第二阶段全序（Python 同序）：接口实现 → 接口接收者继承成员 → 类接收者继承成员 →
 /// SAM 合成对象 → 反射闭包；返回 main 反射登记行
-pub fn finish(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions) -> Result<DispatchReg> {
+pub fn finish(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions, perf: &mut Perf) -> Result<DispatchReg> {
     ctx.sam().check_sites(&state.sam_sites)?;
     iface_impls::resolve_interface_impls(ctx, state, ems);
+    perf.mark("phase2.impls");
     iface_impls::resolve_interface_inherited_members(ctx, state, ems);
     inherited::resolve_inherited_members(ctx, state, ems);
+    perf.mark("phase2.inherited");
     sam_objects::synthesize(ctx, ems)?;
-    Ok(dispatch::synthesize(ctx, ems))
+    perf.mark("phase2.sam");
+    let reg = dispatch::synthesize(ctx, ems);
+    perf.mark("phase2.dispatch");
+    Ok(reg)
 }
 
 #[cfg(test)]

@@ -35,12 +35,12 @@ ph() { grep "\[perf\] 阶段 $2 " "$1" | awk '{printf "%.0f", $4}'; }
 
 TABLE="$OUT/bench.md"
 {
-echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | 指令 G | 周期 G | closure | input | names+ctx | overlay | classes.prep | classes.imports | classes | phase2 | write | mod+entry |"
-echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | 指令 G | 周期 G | closure | input | names+ctx | overlay | classes.prep | classes.imports | classes | p2.impls | p2.inherited | p2.sam | p2.dispatch | write | mod+entry |"
+echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 } > "$TABLE"
 row() { # 用例 模式 log timefile
     read -r w u s r i c <<< "$(tm "$4")"
-    echo "| $1 | $2 | $w | $u | $s | $r | $i | $c | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes.prep) | $(ph "$3" classes.imports) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
+    echo "| $1 | $2 | $w | $u | $s | $r | $i | $c | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes.prep) | $(ph "$3" classes.imports) | $(ph "$3" classes) | $(ph "$3" phase2.impls) | $(ph "$3" phase2.inherited) | $(ph "$3" phase2.sam) | $(ph "$3" phase2.dispatch) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
 }
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)

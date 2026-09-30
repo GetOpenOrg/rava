@@ -44,28 +44,65 @@ pub fn rust_pkg_of(bin: &str) -> Option<String> {
 struct Acc<'x> {
     prefix: &'x str,
     self_simple: String,
+    /// 本类已登记的导入键：短名候选键（`pkg::Simple`）与 `__VTable` / `__base` 键格式互不相交
     seen: BTreeSet<String>,
+    /// 与发射序相关的短名候选（首次出现序，已按键去重）
+    candidates: Vec<Candidate>,
+    /// 与发射序无关的尾段（`__VTable` / `__base` / 兄弟模块）
     lines: Vec<String>,
 }
 
+/// 短名导入候选：是否采纳取决于 `seen_simples`（跨类累积，首个引入者胜出）
+#[derive(Debug, Clone)]
+struct Candidate {
+    key: String,
+    simple: String,
+    /// 采纳时输出的 use 行；prelude 同名 newtype 只登记短名、不输出
+    line: Option<String>,
+}
+
 impl Acc<'_> {
+    /// 登记短名候选（`_add_precise_import` / 跳过包导入的共同形态）。
+    ///
+    /// 同键重复出现可在本地去重：`seen_simples` 的值一经写入不再改变（只在缺席或同键时写入），
+    /// 首次出现被拒则之后同键必然被拒，首次出现被采纳则之后同键被本类 `seen` 拒绝
+    fn candidate(&mut self, key: String, simple: String, line: Option<String>) {
+        if simple == self.self_simple || !self.seen.insert(key.clone()) {
+            return;
+        }
+        self.candidates.push(Candidate { key, simple, line });
+    }
+
     /// `_add_precise_import`
-    fn precise(&mut self, ctx: &EmitCtx<'_>, st: &mut ProjectState, full: &str) {
+    fn precise(&mut self, ctx: &EmitCtx<'_>, full: &str) {
         let Some(pkg) = rust_pkg_of(full) else { return };
         let simple = ctx.short(full);
-        if simple == self.self_simple {
-            return;
-        }
         let key = format!("{pkg}::{simple}");
-        if self.seen.contains(&key) || st.seen_simples.get(&simple).is_some_and(|k| *k != key) {
-            return;
+        let line = (!PRELUDE_NEWTYPE_NAMES.contains(&simple.as_str())).then(|| format!("use {}::{key};", self.prefix));
+        self.candidate(key, simple, line);
+    }
+}
+
+/// 单类跨类导入的发射序无关部分（可按类并行求得）；[`CrossPlan::resolve`] 按发射序串行裁决
+#[derive(Debug, Clone)]
+pub struct CrossPlan {
+    candidates: Vec<Candidate>,
+    tail: Vec<String>,
+}
+
+impl CrossPlan {
+    /// 按发射序裁决短名候选：简单名未被别的路径占用时采纳并登记（首个引入者胜出）
+    pub fn resolve(&self, seen_simples: &mut BTreeMap<String, String>) -> Vec<String> {
+        let mut lines = Vec::with_capacity(self.candidates.len() + self.tail.len());
+        for c in &self.candidates {
+            if seen_simples.get(&c.simple).is_some_and(|k| *k != c.key) {
+                continue;
+            }
+            seen_simples.insert(c.simple.clone(), c.key.clone());
+            lines.extend(c.line.clone());
         }
-        self.seen.insert(key.clone());
-        st.seen_simples.insert(simple.clone(), key);
-        if PRELUDE_NEWTYPE_NAMES.contains(&simple.as_str()) {
-            return;
-        }
-        self.lines.push(format!("use {}::{pkg}::{simple};", self.prefix));
+        lines.extend(self.tail.iter().cloned());
+        lines
     }
 }
 
@@ -73,7 +110,7 @@ fn pkg_of(bin: &str) -> Option<&str> {
     bin.rsplit_once('/').map(|(p, _)| p)
 }
 
-/// `gen_cross_imports`
+/// `gen_cross_imports`：串行形态（规划 + 按 `st.seen_simples` 裁决）
 pub fn gen_cross_imports(
     ctx: &EmitCtx<'_>,
     st: &mut ProjectState,
@@ -81,13 +118,30 @@ pub fn gen_cross_imports(
     inp: &CrossInput<'_>,
     referenced: &BTreeSet<String>,
 ) -> Result<Vec<String>> {
-    let mut acc = Acc { prefix: inp.prefix, self_simple: ctx.short(ci.name()), seen: BTreeSet::new(), lines: Vec::new() };
+    Ok(plan_cross_imports(ctx, ci, inp, referenced)?.resolve(&mut st.seen_simples))
+}
+
+/// 跨类导入规划：JDK 包 → 同包兄弟 → 同名消歧 → 跳过包 的短名候选（发射序相关），
+/// 以及超类链 `__VTable` → `__base` 自由函数 → 用户类兄弟模块（发射序无关）
+pub fn plan_cross_imports(
+    ctx: &EmitCtx<'_>,
+    ci: &ClassInfo,
+    inp: &CrossInput<'_>,
+    referenced: &BTreeSet<String>,
+) -> Result<CrossPlan> {
+    let mut acc = Acc {
+        prefix: inp.prefix,
+        self_simple: ctx.short(ci.name()),
+        seen: BTreeSet::new(),
+        candidates: Vec::new(),
+        lines: Vec::new(),
+    };
     let pkg_paths = inp.pkg_paths.filter(|p| !p.is_empty());
     if let Some(paths) = pkg_paths {
         let slash: BTreeSet<String> = paths.iter().map(|p| p.replace("::", "/").replace("r#", "")).collect();
         for full in referenced {
             if pkg_of(full).is_some_and(|p| slash.contains(p)) {
-                acc.precise(ctx, st, full);
+                acc.precise(ctx, full);
             }
         }
     }
@@ -96,7 +150,7 @@ pub fn gen_cross_imports(
         if !pkg_paths.is_some_and(|p| p.contains(&own_path)) {
             for full in referenced {
                 if pkg_of(full) == Some(own_pkg) {
-                    acc.precise(ctx, st, full);
+                    acc.precise(ctx, full);
                 }
             }
         }
@@ -107,7 +161,7 @@ pub fn gen_cross_imports(
         for p in pkgs {
             let full = format!("{p}/{sn}");
             if referenced.contains(&full) {
-                acc.precise(ctx, st, &full);
+                acc.precise(ctx, &full);
             }
         }
     }
@@ -116,14 +170,9 @@ pub fn gen_cross_imports(
             let Some(pkg) = rust_pkg_of(full) else { continue };
             let simple = ctx.short(full);
             let key = format!("{pkg}::{simple}");
-            if skipped.contains(&key)
-                && simple != acc.self_simple
-                && !acc.seen.contains(&key)
-                && st.seen_simples.get(&simple).is_none_or(|k| *k == key)
-            {
-                acc.lines.push(format!("use {}::{key};", inp.prefix));
-                acc.seen.insert(key.clone());
-                st.seen_simples.insert(simple, key);
+            if skipped.contains(&key) {
+                let line = format!("use {}::{key};", inp.prefix);
+                acc.candidate(key, simple, Some(line));
             }
         }
     }
@@ -132,7 +181,7 @@ pub fn gen_cross_imports(
         base_fn_imports(ctx, ci, inp, &mut acc)?;
     }
     acc.lines.extend(inp.sibling_imports.iter().cloned());
-    Ok(acc.lines)
+    Ok(CrossPlan { candidates: acc.candidates, tail: acc.lines })
 }
 
 /// 超类链祖先的 `Ancestor__VTable` 导入（宏生成 `impl Ancestor__VTable for Self`）

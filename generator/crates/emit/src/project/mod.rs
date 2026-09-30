@@ -55,8 +55,8 @@ struct ClassJob<'c> {
 }
 
 /// 逐类生成文本（尚未落盘）。三段：
-/// 1. 并行：引用集 / 手写覆盖副本（只读）；
-/// 2. 串行（发射序）：跨类导入——`seen_simples` 首个引入者胜出，结果依赖发射序；
+/// 1. 并行：引用集 / 手写覆盖副本 / 跨类导入规划（只读）；
+/// 2. 串行（发射序）：跨类导入短名裁决——`seen_simples` 首个引入者胜出，结果依赖发射序（只做查表）；
 /// 3. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
 ///
 /// 除 2 外各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
@@ -93,10 +93,8 @@ fn emit_classes(
         (site, prep, t.elapsed())
     });
     perf.mark("classes.prep");
-    let mut cross = Vec::with_capacity(jobs.len());
-    for (j, (site, prep, _)) in jobs.iter().zip(&preps) {
-        cross.push(class_cross_imports(ctx, state, j.ci, site, prep)?);
-    }
+    let preps: Vec<_> = preps.into_iter().map(|(s, p, t)| p.map(|p| (s, p, t))).collect::<Result<_>>()?;
+    let cross: Vec<_> = preps.iter().map(|(_, prep, _)| class_cross_imports(state, prep)).collect();
     perf.mark("classes.imports");
     let work: Vec<_> = jobs.iter().zip(preps).zip(cross).collect();
     let texts = crate::par::par_map(threads, &work, |((j, (site, prep, _)), imports)| {
@@ -141,8 +139,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &jdk, &user, &mut perf)?;
     state.check_lambda_ledger()?;
     perf.mark("classes");
-    let disp = crate::phase2::finish(ctx, &mut state, &mut ems)?;
-    perf.mark("phase2");
+    let disp = crate::phase2::finish(ctx, &mut state, &mut ems, &mut perf)?;
     for em in ems.values() {
         w.write(&em.path, &em.text)?;
     }
