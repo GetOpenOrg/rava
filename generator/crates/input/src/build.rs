@@ -22,7 +22,7 @@ use ty::Registry;
 use crate::facts::{ClosureFacts, JcaService};
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
-use crate::norm::{apply_fold, NInsn, NormCode};
+use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
 use crate::InputError;
 
 /// 方法键 (类, 方法名, 描述符)
@@ -118,6 +118,16 @@ impl EmitInput {
         Some(match self.normalized.get(&k) {
             Some(n) => Cow::Borrowed(n),
             None => Cow::Owned(NormCode::raw(code)),
+        })
+    }
+
+    /// 方法体指令视图（同 [`EmitInput::code`] 的取值，不复制指令；只读扫描用）
+    pub fn code_ops<'s>(&'s self, cls: &str, m: &'s Method) -> Option<CodeOps<'s>> {
+        let code = m.code.as_ref()?;
+        let k = (cls.to_string(), m.name.clone(), m.desc.clone());
+        Some(match self.normalized.get(&k) {
+            Some(n) => CodeOps::Norm(n),
+            None => CodeOps::Raw(code),
         })
     }
 

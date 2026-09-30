@@ -209,10 +209,8 @@ pub(crate) fn interface_special_member_name(ctx: &EmitCtx<'_>, owner: &ClassInfo
 
 /// 方法体中 invokespecial（非构造器）的方法引用 (常量池类, 名, 描述符)
 fn special_refs(ctx: &EmitCtx<'_>, owner: &ClassInfo, m: &Method) -> Vec<(String, String, String)> {
-    let Some(code) = ctx.input.code(owner.name(), m) else { return Vec::new() };
-    code.insns
-        .iter()
-        .filter_map(|n| n.insn())
+    let Some(code) = ctx.input.code_ops(owner.name(), m) else { return Vec::new() };
+    code.ops()
         .filter(|i| i.opcode == op::INVOKESPECIAL)
         .filter_map(|i| match &i.operand {
             Operand::Method(r, _) if r.name != "<init>" => Some((r.owner.clone(), r.name.clone(), r.desc.clone())),

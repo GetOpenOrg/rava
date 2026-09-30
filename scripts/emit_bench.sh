@@ -23,21 +23,23 @@ from codegen.jdk_resolver import JdkResolver
 print(' '.join('--image ' + d for d in JdkResolver(prefer_major=$JDKV).image_class_dirs()))")
 COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime $IMAGES --perf"
 
-# /usr/bin/time -l 输出 → "墙钟 user sys RSS_MB"
+# /usr/bin/time -l 输出 → "墙钟 user sys RSS_MB 指令G 周期G"（指令数不受机器负载影响，作 A/B 主指标）
 tm() {
-    awk '/real/ && /user/ {w=$1; u=$3; s=$5} /maximum resident set size/ {r=int($1/1048576)} END {printf "%s %s %s %s", w, u, s, r}' "$1"
+    awk '/real/ && /user/ {w=$1; u=$3; s=$5} /maximum resident set size/ {r=int($1/1048576)}
+         /instructions retired/ {i=$1/1e9} /cycles elapsed/ {c=$1/1e9}
+         END {printf "%s %s %s %s %.1f %.1f", w, u, s, r, i, c}' "$1"
 }
 # [perf] 阶段 name ms
 ph() { grep "\[perf\] 阶段 $2 " "$1" | awk '{printf "%.0f", $4}'; }
 
 TABLE="$OUT/bench.md"
 {
-echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | closure | input | names+ctx | overlay | classes | phase2 | write | mod+entry |"
-echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+echo "| 用例 | 模式 | 墙钟 s | user s | sys s | 峰值 RSS MB | 指令 G | 周期 G | closure | input | names+ctx | overlay | classes | phase2 | write | mod+entry |"
+echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 } > "$TABLE"
 row() { # 用例 模式 log timefile
-    read -r w u s r <<< "$(tm "$4")"
-    echo "| $1 | $2 | $w | $u | $s | $r | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
+    read -r w u s r i c <<< "$(tm "$4")"
+    echo "| $1 | $2 | $w | $u | $s | $r | $i | $c | $(ph "$3" closure) | $(ph "$3" input) | $(ph "$3" names+ctx) | $(ph "$3" overlay) | $(ph "$3" classes) | $(ph "$3" phase2) | $(ph "$3" write) | $(ph "$3" mod_tree+entry) |" >> "$TABLE"
 }
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)

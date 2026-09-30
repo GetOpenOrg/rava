@@ -97,18 +97,19 @@ impl InstrFacts {
         let snake = to_snake(simple);
         [format!("{pkg}/{snake}_impl.rs"), format!("{pkg}/{snake}_t_impl.rs")]
             .iter()
-            .any(|rel| self.impl_fns(rel).contains(rust_name))
+            .any(|rel| self.impl_fns_contain(rel, rust_name))
     }
 
-    fn impl_fns(&self, rel: &str) -> BTreeSet<String> {
+    fn impl_fns_contain(&self, rel: &str, rust_name: &str) -> bool {
         if let Some(hit) = self.impl_fn_cache.borrow().get(rel) {
-            return hit.clone();
+            return hit.contains(rust_name);
         }
         let names = std::fs::read_to_string(self.runtime_src.join(rel))
             .map(|t| scan_fn_names(&t, false))
             .unwrap_or_default();
-        self.impl_fn_cache.borrow_mut().insert(rel.to_string(), names.clone());
-        names
+        let hit = names.contains(rust_name);
+        self.impl_fn_cache.borrow_mut().insert(rel.to_string(), names);
+        hit
     }
 }
 

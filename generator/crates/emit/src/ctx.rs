@@ -44,6 +44,8 @@ pub struct EmitCtx<'a> {
     chain_slots: OnceCell<BTreeMap<String, BTreeSet<(String, String)>>>,
     root_keys: OnceCell<BTreeSet<(String, String)>>,
     sam: OnceCell<crate::sam::SamLedger>,
+    /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
+    pub(crate) use_index: RefCell<HashMap<String, Rc<crate::phase2::uses::UseIndex>>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -79,6 +81,7 @@ impl<'a> EmitCtx<'a> {
             chain_slots: OnceCell::new(),
             root_keys: OnceCell::new(),
             sam: OnceCell::new(),
+            use_index: RefCell::new(HashMap::new()),
         })
     }
 
