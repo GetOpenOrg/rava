@@ -369,7 +369,52 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
 8. `sun/nio/cs`
 9. `jdk/internal/misc` 中非 VM 契约部分（`Unsafe` / `VM` / `Signal` 等 VM 契约类保留）
 
-精度项 G2′ ✅（02bf00ff + c731a473）/ G4–G6 ⏳ 与删除并行推进，不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+精度项 G4–G6 与删除并行推进（G2′ 已完成，见 §6.9），不作为删除的前置条件（精度只影响闭包大小，不影响正确性）。
+
+### 6.9 精度线进展（`closure-precision`，2026-09-30）
+
+| 提交 | 内容 | 实测 |
+|---|---|---|
+| 5f40dcb0 / c501c499 / bfae1dee | 系统属性表折叠（`[facts.system_properties]`）、手写 static setter 识别、属性表作返回值不判逃逸 | 默认为 null 的属性读点折叠，其守卫分支成为死代码（`jdk.security.defaultKeySize` 等） |
+| 02bf00ff / c731a473 | **G2′ ✅**：字段枚举须与句柄写入口（按调用边）同时可达才放开字段 | `checkContext` 等随 SecurityManager 常量折叠 |
+| 8078f2b1 | 手写扫描：turbofish 转换、let-else / if let / match 绑定、宏实参调用点 | — |
+| b7f76452 | folds v2：逐条目 `dead_catches` | Python 与 Rust input 两侧消费 |
+| b643a597 | 按名查找的名字来自形参时取各调用点字符串常量；`MemberName` 按名构造登记为方法查找 | DMH / Invokers 具名函数进入反射分派 |
+| 0333ede2 | 类镜像作静态字段基址：`Unsafe` 按「镜像 + 偏移」读写接到该类静态引用字段；镜像所指类未知时按名开放静态字段 | RecordsSerializationTest：`SpeciesData.transformHelper` 入链，null_recv 691 → 503，missing 0 |
+| f1d00887 | **按名取类**：`Class.forName` 的名字为「常量前缀 + 常量表取值」拼接时解析成具体类（清单 `class_lookups` / `instantiators` / `constant_tables`、`[facts.string_concat]`），经实例化再 checkcast 到 T 时只留 T 的子类型 | `--release-bytecode sun/nio/cs/`：FileIOTest 661 → 478 类、反射缺口 1 → 0；HelloWorld 缺口 0 |
+
+**`MethodHandleAccessorFactory` 实况**：`StandardCharsets.lookup → Class.newInstance → ReflectionFactory.newConstructorAccessor`
+按字节码进入该类，但只有 `<clinit>` / `newConstructorAccessor` / `useNativeAccessor` 三个方法；`useNativeAccessor`
+折叠为 true，MethodHandle 生成分支（`newConstructorAccessor` dead_pcs [12, 84]）为死代码，实际只走
+`DirectConstructorHandleAccessor$NativeAccessor`。这是 `Class.newInstance` 字节码的如实结果，不据此手写。
+同一路径上 `getConstructor0` 的错误消息分支（`methodToString → Arrays.stream`）带入约 60 个 stream 类，属 G5 同类冷路径。
+
+**剩余缺口**：
+
+- `TestCharsetForName` / `TestStreamEncoderCharsets` 的 `getDeclaredConstructors0 <- open(Class)` 来自
+  `Charset$ExtendedProviderHolder → ServiceLoader → LazyClassPathLookupIterator.nextProviderClass` 的 `forName`：名字读自
+  `META-INF/services`，非常量，按设计记为缺口；终态由「服务目录」事实（模块描述符 `provides` + 类路径服务文件，
+  分析期可枚举）给出候选类，不做模糊扩展。
+- `SystemJavaLangAccess`：`JavaLangAccess.decodeASCII` / `encodeASCII` / `inflateBytesToChars` 选择失败（FileIOTest
+  unresolved 3），`SharedSecrets` 注入的实现对象（`System$2`）未建模到接口调用点。
+- **G6**（未实施，设计）：`Pattern.flags0` 被构造器形参与 `addFlag` 的常量位或写入，`has(CANON_EQ)` 读字段后与实参
+  按位与。终态：整型字段「可能置位掩码」域——字段掩码 = 全部写入值掩码之并（常量取其值；`x | C` 取 `x ∪ C`；
+  `x & C` 取 `x ∩ C`；形参取各调用点实参掩码之并；其余为全 1）；`(field & C) != 0` 在掩码与 C 不交时折叠为 false，
+  布尔返回的小方法（`has`）按调用点实参常量求值。验收：`jdk/internal/icu` 增量归零。
+
+**下游须知**：
+
+- **emitter 须消费 `null_recv`**：接收者值集为空的调用点目前仍生成对存根的调用，运行时若走到即 panic；终态
+  按 `null_recv` 生成 NullPointerException 抛出（与 JVM 在该点的行为一致），不再引用存根。
+- **运行时须加载 `[facts.system_properties]`**：分析器按清单初值折叠属性读点，运行时初始属性表必须来自同一张表，
+  否则折叠不可靠（死分支在运行时实际可达）。
+- **`Debug` 过渡手写可删**：`java.security.debug` 等属性默认 null，折叠后 `Debug.getInstance` 结果为 null，
+  各 `Debug.println` 调用点只以 null_recv 形式出现（TestNetworkInterface 中 KnownOIDs / Provider 各点均如此），
+  按字节码翻译不引入新类；前提是上面两条落地。
+- **TestNetworkInterface `SHA-1 not available`**（非分析器问题）：`GetInstance` 手写边界按 `crate::jca::providers_for`
+  精确匹配算法名，服务表只登记标准名（`SHA-1`），JDK 内部以别名 `SHA` 查询时返回空表。终态：provider 选择与 JDK
+  `ProviderList` 同构——遍历已登记 provider 逐个调翻译字节码的 `Provider.getService`（别名由 serviceMap 解析），服务表只决定
+  构造哪些 provider。`getInstance("SHA","SUN")` 同样失败，需运行期定位 `Sun.getService` 的别名查找。
 
 ## 七、验收
 
