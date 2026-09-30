@@ -21,6 +21,20 @@ pub enum Audit {
 }
 
 impl Audit {
+    /// 审计行输出序（← `equiv_audit.IDS`，compatibility.md §4 目录序）
+    pub const REPORT_ORDER: [Audit; 10] = [
+        Audit::IdentityHash,
+        Audit::InternIdentity,
+        Audit::NullArray,
+        Audit::BoxedNull,
+        Audit::ClassLiteral,
+        Audit::RecordHash,
+        Audit::NegArray,
+        Audit::FieldNpe,
+        Audit::ClassInit,
+        Audit::MonitorMt,
+    ];
+
     /// Python 侧的口径名
     pub fn as_str(self) -> &'static str {
         match self {

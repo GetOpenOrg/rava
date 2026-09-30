@@ -120,7 +120,7 @@ fn impl_shape(env: &InstrEnv, ci: Option<&ClassInfo>, mname: &str, desc: &str, i
 
 /// invokedynamic 的 lambda / 其余形态分支；`is_lambda`：引导方法属 `[indy] lambda` 类
 pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, site: &IndySite, is_lambda: bool) -> InstrResult<()> {
-    let idx = site.cp_index(env)?;
+    let idx = site.cp_index;
     let caps = pop_captures(sim, site.desc)?;
     let (sam_desc, impl_ref) = lambda_args(site, is_lambda);
     if impl_ref.is_empty() || sam_desc.is_empty() {

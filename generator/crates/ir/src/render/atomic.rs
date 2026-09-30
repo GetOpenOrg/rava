@@ -14,7 +14,7 @@ impl Renderer<'_> {
         match e {
             Expr::Lit(l) => {
                 let mut s = String::new();
-                write_lit(&mut s, l);
+                write_lit(self, &mut s, l);
                 scan_atomic(&s)
             }
             Expr::Var(_) | Expr::Paren(_) | Expr::Block(_) | Expr::InstanceOf { .. } => true,

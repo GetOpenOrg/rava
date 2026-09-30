@@ -1,8 +1,8 @@
 //! 发射层（P5a）：类文件骨架与 Cargo workspace 工程发射（← `codegen/emitter/` + `project_writer`）。
 //!
 //! 输入是 [`input::EmitInput`]（闭包事实 + registry + 清单），输出是 scratch 下的
-//! `java_runtime/src/**` 生成类文件、包 mod 树、`user/` crate 与 workspace 根。方法体不在本 crate：
-//! 经 [`body::MethodBodyEmitter`] 取得（P4c `method` crate 实现；golden 测试以回放实现）。
+//! `java_runtime/src/**` 生成类文件、包 mod 树、`user/` crate 与 workspace 根。方法体经
+//! [`body::MethodBodyEmitter`] 取得：[`method_bodies::MethodBodies`] 以 P4c `method` crate 实现（P5b）。
 //!
 //! 结构：
 //! - [`ctx`]：只读发射上下文 [`ctx::EmitCtx`] 与每项目可变状态 [`ctx::ProjectState`]
@@ -19,6 +19,7 @@
 //! - **folds**：方法体侧消费（`EmitInput::code` 已给出折叠后的规范化方法体）；发射层只在
 //!   `<clinit>` 静态字段初值提取处消费常量折叠结果。
 
+pub mod audit;
 pub mod body;
 pub mod class_writer;
 pub mod ctx;
@@ -26,6 +27,7 @@ pub mod emission;
 pub mod error;
 pub mod imports;
 pub mod lang;
+pub mod method_bodies;
 pub mod phase2;
 pub mod project;
 pub mod sam;
@@ -36,4 +38,5 @@ pub use body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitte
 pub use ctx::{EmitCtx, EmitOptions, ProjectState};
 pub use emission::ClassEmission;
 pub use error::{EmitError, Result};
+pub use method_bodies::MethodBodies;
 pub use project::{prepare_scratch, write_project};

@@ -73,8 +73,3 @@ pub type MethodResult<T> = Result<T, MethodError>;
 pub fn cfg_err<T>(msg: impl Into<String>) -> MethodResult<T> {
     Err(MethodError::Cfg(msg.into()))
 }
-
-/// 未移植分支的简写
-pub fn unported<T>(what: impl Into<String>) -> MethodResult<T> {
-    Err(MethodError::Unported(what.into()))
-}

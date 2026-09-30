@@ -6,11 +6,12 @@
 //! `template` / `template_consts` 口径）。
 
 use classfile::Const;
+use ir::{Expr, Lit, Raw};
 use sim::StackSim;
 use ty::RsType;
 
 use super::boxing::obj_text;
-use super::{numeric_const_text, raw, raw_stmt, IndySite};
+use super::{numeric_const_text, raw_stmt, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
@@ -90,9 +91,13 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, p: &str) -> InstrResult<String
     })
 }
 
+/// 拼接结果值（← Python 以 `Lit` 承载：参与 trivial / opaque-let 判定）
+fn concat_value(fmt: Option<String>, args: Vec<String>) -> Expr {
+    Expr::Lit(Lit::JStringConcat { fmt, args: args.into_iter().map(|a| Expr::Raw(Raw(a))).collect() })
+}
+
 /// 拼接调用点：弹出动态实参，按配方生成 `String::from_owned(format!(..))`
 pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrResult<()> {
-    let s = ir::anchors::STRING;
     let string_t = RsType::class(ty::consts::STRING.to_string(), Vec::new());
     // Python 以 `^InvokeDynamic [^: ]+:(\([^)]*\))` 取形参段；取不到时按单个 String 实参
     let name_ok = !site.name.is_empty() && !site.name.contains([':', ' ']);
@@ -118,23 +123,13 @@ pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite)
                     fmt_str.push_str("{}");
                 }
             }
-            let value = if args.is_empty() {
-                format!("{s}::from(\"{fmt_str}\")")
-            } else {
-                // from_owned 避免 From<&str> 与 From<std::string::String> 歧义
-                format!("{s}::from_owned(format!(\"{fmt_str}\", {}))", args.join(", "))
-            };
-            sim.push(raw(value), string_t);
+            sim.push(concat_value(Some(fmt_str), args), string_t);
             return Ok(());
         }
     }
 
     // 无配方 / 配方实参位与实参数不符：逐个实参直接拼接
-    let value = match args.len() {
-        0 => format!("{s}::new()"),
-        1 => format!("{s}::from_owned(format!(\"{{}}\", {}))", args[0]),
-        n => format!("{s}::from_owned(format!(\"{}\", {}))", "{}".repeat(n), args.join(", ")),
-    };
-    sim.push(raw(value), string_t);
+    let fmt = (!args.is_empty()).then(|| "{}".repeat(args.len()));
+    sim.push(concat_value(fmt, args), string_t);
     Ok(())
 }

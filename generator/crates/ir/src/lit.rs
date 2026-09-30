@@ -100,6 +100,10 @@ pub enum Lit {
     ClassRef(String),
     /// 空引用 `aconst_null`：`Object::default()`
     Null,
+    /// 字符串拼接点（`makeConcatWithConstants` 等）的结果值（← Python 以 `Lit` 承载，故在 let 类型标注、
+    /// 平凡值判定等处与字面量同类）：`fmt` 为 None → `String::new()`；无实参 → `String::from("fmt")`；
+    /// 否则 `String::from_owned(format!("fmt", args..))`。`fmt` 为已转义的格式串（花括号已双写）
+    JStringConcat { fmt: Option<String>, args: Vec<crate::Expr> },
 }
 
 impl Lit {

@@ -23,7 +23,7 @@ pub(crate) fn precedence(op: BinOp) -> u8 {
 impl Renderer<'_> {
     pub(crate) fn write_expr(&self, out: &mut String, e: &Expr) {
         match e {
-            Expr::Lit(l) => write_lit(out, l),
+            Expr::Lit(l) => write_lit(self, out, l),
             Expr::Var(v) => out.push_str(v.as_str()),
             Expr::Binary { op, lhs, rhs } => {
                 let prec = precedence(*op);

@@ -112,7 +112,7 @@ impl Renderer<'_> {
         for arm in &m.arms {
             out.push('\n');
             pad(out, indent + 1);
-            write_pattern(out, &arm.pattern);
+            write_pattern(self, out, &arm.pattern);
             out.push_str(" => ");
             match &arm.body {
                 ArmBody::Block(b) => {
@@ -187,7 +187,7 @@ fn write_label(out: &mut String, label: Option<&Label>) {
     }
 }
 
-fn write_pattern(out: &mut String, p: &Pattern) {
+fn write_pattern(rd: &Renderer<'_>, out: &mut String, p: &Pattern) {
     match p {
         Pattern::Wildcard => out.push('_'),
         Pattern::Alts(lits) => {
@@ -195,7 +195,7 @@ fn write_pattern(out: &mut String, p: &Pattern) {
                 if i > 0 {
                     out.push_str(" | ");
                 }
-                super::lit::write_lit(out, l);
+                super::lit::write_lit(rd, out, l);
             }
         }
     }

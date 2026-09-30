@@ -20,7 +20,7 @@ pub use overlay::prepare_scratch;
 
 use crate::body::MethodBodyEmitter;
 use crate::class_writer::{gen_class_rs, ClassSite};
-use crate::ctx::{EmitCtx, ProjectState};
+use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::{EmitError, Result};
 use crate::imports::collect_referenced;
@@ -36,6 +36,8 @@ pub struct ProjectReport {
     pub bin_name: String,
     /// 类发射记录（发射序）
     pub emissions: Vec<ClassEmission>,
+    /// FS-H0 手写审计（发射序）
+    pub hw_audit: Vec<(HwAudit, String)>,
 }
 
 /// 逐类生成文本（尚未落盘）
@@ -111,5 +113,6 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &mut dyn MethodB
         user_classes: user.entries.len(),
         bin_name: bin,
         emissions: ems.into_values().collect(),
+        hw_audit: std::mem::take(&mut state.hw_audit),
     })
 }
