@@ -16,7 +16,7 @@
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码 |
-| `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `python`（缺省值唯一定义在 `scripts/generator_select.py`，P5b 验收后改为 `rust`）。`rust` 下暂不支持 `--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites`（显式报错）；方法体生成器（P4c）接入前 Rust 路径在首个方法体请求处报「P4c/P5b 未接入」 |
+| `--generator {python,rust}` | 生成器实现：`python` = `codegen/`；`rust` = `generator/` 的 `rava build --no-run`（只替换转译段，overlay 与 cargo 流程共用）。缺省取 `RAVA_GENERATOR`，再缺省 `rust`（2026-10-01 起；缺省值唯一定义在 `scripts/generator_select.py`）。`rust` 下暂不支持 `--lib` / `--batch` / `--debug` / `--trace-class` / `--precheck-only` / `--raw-sites`（显式报错，需要时加 `--generator python`） |
 
 ```bash
 python3 scripts/main.py Foo.java --no-run --trace-class java/security/Provider

@@ -1,8 +1,9 @@
 """生成器选择：Python codegen 与 Rust 生成器（`rava build`）的唯一定义点。
 
 优先级：命令行 `--generator` > 环境变量 `RAVA_GENERATOR` > DEFAULT_GENERATOR。
-P5b 验收（验收集 27 例生成树逐字节一致）后把 DEFAULT_GENERATOR 改为 'rust'，随后删除 Python 路径
-与本开关（docs/plans/2026-09-20-rust-generator-rewrite.md）。
+缺省为 'rust'（2026-10-01 用户决定；P5b 验收集 27 例生成树与 Python 逐字节一致）。Rust 生成器此后
+允许为降低编译成本偏离 Python 基线。Rust 路径补齐 CLI 选项与审计后删除 Python 路径与本开关
+（docs/plans/2026-09-30-rust-emitter.md）。
 
 Rust 路径只替换「转译」段：overlay（main.py prepare_scratch）与 cargo 流程与 Python 路径共用；
 `rava build --no-run` 在同一 scratch 内完成 javac → 闭包分析 → 发射（closure.json 同样落
@@ -13,7 +14,7 @@ import os
 import subprocess
 import sys
 
-DEFAULT_GENERATOR = 'python'
+DEFAULT_GENERATOR = 'rust'
 CHOICES = ('python', 'rust')
 ENV_VAR = 'RAVA_GENERATOR'
 

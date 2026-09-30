@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30 深夜）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec），闭包对照 / cargo check / e2e 抽查中；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），G4–G6 未开始（G6 仅设计）。
+> 状态（2026-09-30 深夜）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec），闭包对照 / cargo check / e2e 抽查中；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、类初始化事实）进行中。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
 
 ## 一、目标
 
@@ -415,6 +415,21 @@ G3 版本在 generics 配置下只是经 `MethodHandleImpl.createFunction` 的 `
   精确匹配算法名，服务表只登记标准名（`SHA-1`），JDK 内部以别名 `SHA` 查询时返回空表。终态：provider 选择与 JDK
   `ProviderList` 同构——遍历已登记 provider 逐个调翻译字节码的 `Provider.getService`（别名由 serviceMap 解析），服务表只决定
   构造哪些 provider。`getInstance("SHA","SUN")` 同样失败，需运行期定位 `Sun.getService` 的别名查找。
+
+### 6.10 精度二期（`closure-prec2`，2026-09-30，已合入 a6b4c6d5）
+
+| 提交 | 内容 | 实测（类 / 方法） |
+|---|---|---|
+| dd2737ad | lambda 方法引用装箱适配（C 组） | TestMethodRef / TestMethodRefKinds / TestOptional / TestRecordHashCode 闭包正常 |
+| c111e64f | record `ObjectMethods` 引导（K 组） | 同上 |
+| b06fb0b6 / 66e176b2 | 按名方法查找（findStatic / findVirtual / resolveOrFail / MemberName.&lt;init&gt;）复用「常量前缀 + 常量表 / 枚举值」拼接解析，只保留目标类确实声明的方法；跟进单目标 String 返回辅助方法（≤ 2 层）、枚举 final String 字段候选值集；`[facts.string_concat]` 增 `StringBuilder.append(C/I/J/Z)` | TestMethodHandleCombinators 537/2741 → 540/2968（补 ValueConversions box/unbox 等）；HelloWorld 不变；Digester +9 / +1045（见下） |
+
+- **Digester +1045 方法**：几乎全部来自 `VarForm.resolveMemberName` 按访问模式名在约 25 个 VarHandle* 类里查方法。按现有可达性结果健全，但上游 `Invokers.checkVarHandleGenericType` 经反射根可达，而 VarHandle 访问模式实际走手写运行时——列入精度三期第 1 项收窄。
+- **EasterRelatedHolidays 诊断**：不是「静态字段缺默认 null」，是边界截断——`ZipUtils.<clinit>` 调 `SharedSecrets.getJavaNioAccess`（`jdk/` 边界手写），`ensureClassInitialized` 成为存根；且 `Unsafe.ensureClassInitialized` 手写为空操作，`CLASS_INIT_HOOKS` 只覆盖用户类与注解枚举。终态：C1d 取消截断后 SharedSecrets 按字节码翻译；分析器输出「初始化以参数传入的 Class」事实（精度三期第 8 项）；生成器按事实登记 JDK 类初始化钩子，`Unsafe.ensureClassInitialized` 接 `crate::ensure_class_initialized`（C3）。
+
+### 6.11 精度三期（`closure-prec3`，2026-09-30 起）
+
+清单与验收见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md) §三.1。执行者按项把前后类 / 方法数与漏覆盖检查结果记录在本节。
 
 ## 七、验收
 
