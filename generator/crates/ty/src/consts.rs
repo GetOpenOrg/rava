@@ -9,6 +9,8 @@
 //! - [`CLASS`]：类字面量类型（JLS 15.8.2）——其类型参数是纯 phantom，类级签名被置空、
 //!   签名解析直映射为裸 `Class`（与 `codegen/classfile.py` / `sig_parse._CLASSNAME_MAP` 一致）；
 //! - [`CLONEABLE`] / [`SERIALIZABLE`]：数组类型的固定超接口（JLS 4.10.3）；
+//! - [`THROWABLE`]：异常类层次的根（JLS 11.1.1）——`athrow` 操作数与 catch-any 处理器
+//!   绑定的静态类型（JVMS §4.7.3 catch_type 为 0）；
 //! - [`BOXED_BY_DESC`]：基本类型的装箱类（JLS 5.1.7 装箱转换点名的 8 个包装类）。
 //!
 //! 其余模块不得再写这些名字的字面量。
@@ -23,6 +25,9 @@ pub const CLASS: &str = "java/lang/Class";
 pub const CLONEABLE: &str = "java/lang/Cloneable";
 /// 数组超接口之一
 pub const SERIALIZABLE: &str = "java/io/Serializable";
+
+/// 异常类层次的根（catch-any 绑定类型）
+pub const THROWABLE: &str = "java/lang/Throwable";
 
 /// 数组类型的全部固定超类型（JLS 4.10.3）
 pub const ARRAY_SUPERTYPES: [&str; 3] = [OBJECT, CLONEABLE, SERIALIZABLE];
