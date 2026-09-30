@@ -129,3 +129,17 @@ fn lib_crate_and_precheck_only() {
     std::fs::remove_dir_all(&out).ok();
     std::fs::remove_dir_all(&work).ok();
 }
+
+/// try/finally 内 `return e;` 的返回值暂存：各臂存储同槽、类型不一（汇合为根类）时，已是汇合类型
+/// 那一臂的存储不得丢失（回归：DeepCopy `ObjectInputStream.readObject0` 的 E0381）
+#[test]
+fn try_finally_return_temp_kept_in_every_arm() {
+    let Some((_, out)) = build("TryFinallyReturn.java", "try-finally-return", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/try_finally_return.rs")).unwrap();
+    let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn pick(")).take_while(|l| !l.contains("pub fn main(")).collect();
+    let arm1 = body.iter().position(|l| l.trim() == "1 => {").expect("case 1 臂");
+    assert!(body[arm1 + 1].contains("Self::a()?"), "{}", body.join("\n"));
+    assert_eq!(body[arm1 + 2].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
+    assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
+    std::fs::remove_dir_all(&out).ok();
+}
