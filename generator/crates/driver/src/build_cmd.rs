@@ -193,7 +193,10 @@ fn analyze(
         }
     }
     perf.mark("closure");
-    let s = serde_json::to_string_pretty(&c.to_json()).map_err(|e| e.to_string())?;
+    let v = c.to_json();
+    perf.mark("closure_json.value");
+    let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    perf.mark("closure_json.text");
     std::fs::write(json_path, s).map_err(|e| format!("{}：{e}", json_path.display()))?;
     perf.mark("closure_json");
     let facts = ClosureFacts::from_closure(&c);

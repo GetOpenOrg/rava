@@ -305,23 +305,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
 
 /// 节点类别名（诊断）
 fn node_kind(n: &Node) -> &'static str {
-    match n {
-        Node::P(..) => "P",
-        Node::R(..) => "R",
-        Node::S(_, o) if *o == POOL || *o == PROD || *o == ARRAY_RET => "Spool",
-        Node::S(_, o) if o & CATCH != 0 => "Scatch",
-        Node::S(..) => "S",
-        Node::F(..) => "F",
-        Node::U(..) => "U",
-        Node::O(..) => "O",
-        Node::E(..) => "E",
-        Node::Array => "Array",
-        Node::A(..) => "A",
-        Node::W(..) => "W",
-        Node::HP(..) => "HP",
-        Node::HR(..) => "HR",
-        Node::Esc => "Esc",
-    }
+    KIND_NAMES[kind_ix(n)]
 }
 
 impl<'a> Engine<'a> {
@@ -341,13 +325,23 @@ impl<'a> Engine<'a> {
 
     /// 流边按（源类别 → 目标类别）计数
     fn edge_kinds(&self) -> serde_json::Value {
-        let mut m: BTreeMap<String, u64> = BTreeMap::new();
-        for (src, es) in &self.graph.flow_list() {
-            for (dst, _) in es {
-                *m.entry(format!("{}->{}", node_kind(src), node_kind(dst))).or_default() += 1;
+        // 先按种类序号对计数，最后才拼键（避免逐边 format!）
+        let mut m = [0u64; KINDS * KINDS];
+        for (s, es) in self.graph.edges.iter().enumerate() {
+            if es.is_empty() {
+                continue;
+            }
+            let sk = kind_ix(self.graph.node_at(s as u32)) * KINDS;
+            for &(d, _) in es {
+                m[sk + kind_ix(self.graph.node_at(d))] += 1;
             }
         }
-        let mut v: Vec<(String, u64)> = m.into_iter().collect();
+        let mut v: Vec<(String, u64)> = m
+            .iter()
+            .enumerate()
+            .filter(|x| *x.1 > 0)
+            .map(|(k, &c)| (format!("{}->{}", KIND_NAMES[k / KINDS], KIND_NAMES[k % KINDS]), c))
+            .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         serde_json::json!(v.into_iter().take(30).collect::<Vec<_>>())
     }
@@ -366,18 +360,27 @@ impl<'a> Engine<'a> {
 
     /// 出度 / 入度最大的节点
     fn top_degree(&self, top: usize, incoming: bool) -> serde_json::Value {
-        let mut deg: HashMap<Node, u64> = HashMap::default();
-        for (src, es) in &self.graph.flow_list() {
+        // 节点驻留唯一，按序号计度数
+        let es = &self.graph.edges;
+        let mut deg = vec![0u64; es.len()];
+        for (s, out) in es.iter().enumerate() {
             if incoming {
-                for (dst, _) in es {
-                    *deg.entry(*dst).or_default() += 1;
+                for &(d, _) in out {
+                    deg[d as usize] += 1;
                 }
             } else {
-                *deg.entry(*src).or_default() += es.len() as u64;
+                deg[s] += out.len() as u64;
             }
         }
-        let mut v: Vec<(Node, u64)> = deg.into_iter().collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        serde_json::json!(v.into_iter().take(top).map(|(n, d)| serde_json::json!([self.node_label(&n), d])).collect::<Vec<_>>())
+        let mut v: Vec<(&Node, u64)> =
+            deg.iter().enumerate().filter(|x| *x.1 > 0).map(|(i, &d)| (self.graph.node_at(i as u32), d)).collect();
+        // 节点唯一，排序键全序：先选出前 top 再排，结果同全排
+        let cmp = |a: &(&Node, u64), b: &(&Node, u64)| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0));
+        if v.len() > top && top > 0 {
+            v.select_nth_unstable_by(top - 1, cmp);
+            v.truncate(top);
+        }
+        v.sort_by(cmp);
+        serde_json::json!(v.into_iter().take(top).map(|(n, d)| serde_json::json!([self.node_label(n), d])).collect::<Vec<_>>())
     }
 }
