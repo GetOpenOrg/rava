@@ -1,5 +1,6 @@
 //! 引擎：类型流——节点类型集、流边、实参来源、字段节点与逃逸。
 
+use super::stats::{kind_ix, KINDS};
 use super::*;
 
 /// 新接边整集合收窄走记忆的源集合元素数下限
@@ -186,8 +187,32 @@ impl<'a> Engine<'a> {
         self.graph.fmemo.insert((rs, filter), (n, out));
     }
 
+    /// 沿一条出边推送增量 s；同一过滤类型只收窄一次（`narrowed`），Object 过滤直接推增量本身
+    fn push_edge(&mut self, dst: u32, f: u32, obj: Option<u32>, s: &TypeSet, narrowed: &mut Vec<(u32, TypeSet)>) {
+        if Some(f) == obj {
+            self.via_flow = true;
+            self.add_to_id(dst, s);
+            return;
+        }
+        let k = match narrowed.iter().position(|x| x.0 == f) {
+            Some(k) => k,
+            None => {
+                let out = self.filter(s, f);
+                narrowed.push((f, out));
+                narrowed.len() - 1
+            }
+        };
+        let out = std::mem::take(&mut narrowed[k].1);
+        self.via_flow = true;
+        self.add_to_id(dst, &out);
+        narrowed[k].1 = out;
+    }
+
     pub(super) fn drain_flows(&mut self) {
         let obj = self.ids.get(OBJECT).copied();
+        if self.graph.pushes.is_empty() {
+            self.graph.pushes = vec![[0; 2]; KINDS * KINDS];
+        }
         loop {
             if self.scc_due() {
                 self.collapse_cycles();
@@ -204,24 +229,14 @@ impl<'a> Engine<'a> {
             // 同一过滤类型只收窄一次，Object 过滤直接推增量本身
             let edges = std::mem::take(&mut self.graph.edges[ix]);
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
+            let sk = kind_ix(&self.graph.node(i)) * KINDS;
             for &(dst, f) in &edges {
-                if Some(f) == obj {
-                    self.via_flow = true;
-                    self.add_to_id(dst, &s);
-                    continue;
-                }
-                let k = match narrowed.iter().position(|x| x.0 == f) {
-                    Some(k) => k,
-                    None => {
-                        let out = self.filter(&s, f);
-                        narrowed.push((f, out));
-                        narrowed.len() - 1
-                    }
-                };
-                let out = std::mem::take(&mut narrowed[k].1);
-                self.via_flow = true;
-                self.add_to_id(dst, &out);
-                narrowed[k].1 = out;
+                let pk = sk + kind_ix(&self.graph.node(dst));
+                let grew = self.graph.adds[1];
+                self.push_edge(dst, f, obj, &s, &mut narrowed);
+                let p = &mut self.graph.pushes[pk];
+                p[0] += 1;
+                p[1] += u64::from(self.graph.adds[1] != grew);
             }
             if !edges.is_empty() {
                 let slot = &mut self.graph.edges[ix];

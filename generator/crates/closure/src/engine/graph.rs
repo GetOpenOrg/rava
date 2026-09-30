@@ -35,6 +35,8 @@ pub(super) struct FlowGraph {
     pub(super) fmemo: HashMap<(u32, u32), (usize, TypeSet)>,
     /// 收窄记忆的堆占用（估算字节）；超预算整表清空
     pub(super) fmemo_bytes: usize,
+    /// 观测：`drain_flows` 按（源种类, 目标种类）的推送次数 / 其中有增量的次数（种类序号见 `stats.rs::kind_ix`）
+    pub(super) pushes: Vec<[u64; 2]>,
     /// 观测：收窄记忆命中 / 未命中 / 超预算清空次数
     pub(super) fmemo_stats: [u64; 3],
 }
