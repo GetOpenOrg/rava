@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 性质：本文记录用户拍板的优化方向、验收口径和各执行线的分工，是总纲，执行细节以各子计划为准。
-> 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、`2026-09-30-emitter-performance.md`（生成器效率，由执行者创建）。
+> 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、[`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md)（生成器效率）。
 
 ---
 
@@ -34,8 +34,8 @@
 | 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 约 130 s user（P2 后） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
 | 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 2.3–2.8 GB | ≤ 1 GB |
 | 闭包分析效率 | 跨测试缓存命中时单测试墙钟 | 无缓存 | ≤ 2 s |
-| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | 待 P0 实测 | 实测后量化（建议 ≤ 2 s / ≤ 500 MB） |
-| 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 全部重写 | 0 |
+| 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB（DeepCopy 热写出；冷写出 2.13 s） | ≤ 2 s / ≤ 500 MB |
+| 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 生成代码的 cargo 编译成本 | 待量化 | 实测后量化（方案待用户决定，见 §四） |
 
 ## 三、执行线
