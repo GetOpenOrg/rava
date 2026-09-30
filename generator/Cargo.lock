@@ -106,6 +106,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "instr"
+version = "0.1.0"
+dependencies = [
+ "classfile",
+ "input",
+ "ir",
+ "resolve",
+ "serde_json",
+ "sim",
+ "ty",
+]
+
+[[package]]
 name = "ir"
 version = "0.1.0"
 dependencies = [

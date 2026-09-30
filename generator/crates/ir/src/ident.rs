@@ -20,6 +20,15 @@ impl Ident {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// 丢弃绑定 `_`（只用于 `let _ = <expr>;`：保留有副作用表达式的求值、丢弃其值）
+    pub fn discard() -> Ident {
+        Ident("_".to_string())
+    }
+
+    pub fn is_discard(&self) -> bool {
+        self.0 == "_"
+    }
 }
 
 impl fmt::Display for Ident {

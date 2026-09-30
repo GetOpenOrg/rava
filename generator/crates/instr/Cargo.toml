@@ -1,0 +1,15 @@
+[package]
+name = "instr"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classfile.workspace = true
+ty.workspace = true
+ir.workspace = true
+sim.workspace = true
+input.workspace = true
+
+[dev-dependencies]
+resolve.workspace = true
+serde_json.workspace = true
