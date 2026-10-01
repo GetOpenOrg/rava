@@ -23,8 +23,11 @@ impl Engine<'_> {
         out
     }
 
-    /// 静态类型推不出的接收者调用点（审计）：`宿主 方法名`（同宿主同名合并）。方法名须是闭包内某 Java 方法的
-    /// 名字（Rust 标准方法不计），且接收者的静态类型与语法推断都解析不到 Java 类
+    /// 静态类型推不出的接收者调用点（审计）：`类别 宿主 方法名`（同宿主同名合并）。方法名须是闭包内某 Java
+    /// 方法的名字，且接收者的静态类型与语法推断都解析不到 Java 类。类别：
+    /// - `chain`：经字段 / 返回推导的链，基底已解析到 Java 类、中途某级推不出（推断缺口，应归零）；
+    /// - `camel`：基底无类型、方法名为 Java 驼峰形（含大写；Rust 标准方法一律蛇形），多为 Java 值；
+    /// - `lower`：基底无类型、全小写单词名（get / map / set …），与 Rust 标准方法同名，语法上无法区分
     pub fn hw_untyped_sites(&self) -> BTreeSet<String> {
         let java_names: HashSet<String> =
             self.classes.keys().filter_map(|c| self.cp.get(c)).flat_map(|cf| cf.methods.iter().map(|m| m.name.clone()).collect::<Vec<_>>()).collect();
@@ -36,11 +39,27 @@ impl Engine<'_> {
             }
             let typed = c.srecv.as_ref().and_then(|s| self.stype_class(&host, s)).is_some()
                 || c.recv.as_ref().and_then(|r| r.as_ref()).and_then(|t| self.resolve_tref(&host, t)).is_some();
-            if !typed {
-                out.insert(format!("{host} {}", c.name));
+            if typed {
+                continue;
             }
+            let kind = if c.srecv.as_ref().is_some_and(|s| self.stype_base_resolves(&host, s)) {
+                "chain"
+            } else if c.name.chars().any(|ch| ch.is_ascii_uppercase()) {
+                "camel"
+            } else {
+                "lower"
+            };
+            out.insert(format!("{kind} {host} {}", c.name));
         }
         out
+    }
+
+    /// 推导链的基底（具名类型 / 辅助 fn 返回的宿主类型）解析到 Java 类
+    fn stype_base_resolves(&self, host: &str, s: &SType) -> bool {
+        match s {
+            SType::Named(t) | SType::Ret(t, _) => self.resolve_tref(host, t).is_some(),
+            SType::Field(b, _) | SType::Call(b, _) => self.stype_base_resolves(host, b),
+        }
     }
 
     /// 闭包内全部共置手写文件与模块单元中写成「接收者.方法」的调用点：(宿主, fn 名, 调用点)；
