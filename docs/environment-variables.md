@@ -108,7 +108,8 @@ RUST_BACKTRACE=1 python3 scripts/main.py Foo.java
 | `CARGO_TARGET_DIR` | 脚本自动设置 | 共享编译缓存（`run_tests.py` 为 `build/jdk<N>/target`，`main.py` 为 `build/target`），无需手动设置 |
 | `CARGO_INCREMENTAL` | 脚本自动设为 `0` | 关闭增量编译：宽闭包下增量元数据是 OOM 的主要诱因 |
 | `CARGO_PROFILE_DEV_DEBUG` | 脚本缺省 `line-tables-only`（`cargo_env.py`，显式设置时尊重） | 减少调试信息：debuginfo=2 下大闭包 rustc 峰值约 13.8G 会被 OOM 杀；减量后二进制约减半、保留行号回溯 |
-| `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8` | 保证非 ASCII 输出一致 |
+| `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8`；`run_tests.py` 对 golden JVM 与被测二进制设 `LC_ALL=en_US.UTF-8` | 保证非 ASCII 输出一致；固定默认 locale（JVM 另加 `-Duser.language=en -Duser.country=US`，macOS 的 JVM 取系统偏好而非 LANG），golden 不随机器变化 |
+| `TZ` | `run_tests.py` 对 golden JVM 与被测二进制设为 `UTC` | 固定默认时区（JVM 另加 `-Duser.timezone=UTC`）；运行时按 JDK 语义取 TZ |
 | `PYTHONHASHSEED` | `seed_check.sh` | 双种子确定性检查（1 / 2 各转译一次，生成树必须一致） |
 | `XDG_CACHE_HOME` | `jdk_resolver.py` | JDK 解包缓存根目录（缺省 `~/.cache`，缓存在 `<根>/rava/`） |
 | `HOMEBREW_PREFIX` | `jdk_select.py` | macOS 自定义 brew 前缀，优先于 `/opt/homebrew`、`/usr/local` 扫描 |

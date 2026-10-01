@@ -492,6 +492,20 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 仍未做（与泛型擦除布局相关，并入拆 crate 一并处理，见 §五 N4）：`__shallow_copy`（15.7k）、`__erased_vtable`（11.8k）、`__view_into`（11.0k）、`__clinit`（19.3k，按类体量）、`From`（20.4k）。
 
+### 5.6 `wrapper.rs` 拆分与宏展开确定性（emitter-perf2，提交 ef2c2035、14b9ce84）
+
+- **拆分**：`block/gen/wrapper.rs`（672 行）按职责拆为三个文件，各段的拼装顺序不变。
+  - `wrapper/mod.rs`（141 行）：§5 struct 与基础 trait impl，负责拼装。
+  - `wrapper/object_vtable.rs`（287 行）：§6 `impl ObjectVTable for Wrapper`。
+  - `wrapper/methods.rs`（290 行）：§7 wrapper impl 块。
+- **对照时发现**：同一源码的两次宏展开（`-Z unpretty=expanded`，HelloWorld java_runtime，21.6 MB）互相不一致。
+  - 原因：`GenContext.vtable_overrides` 是 `HashMap`，迭代序随进程的哈希种子变化，wrapper impl 块与 vtable impl 里的方法顺序因此每次编译都不同。
+  - 按行排序后，拆分前、拆分后和重复展开三者的摘要一致，说明拆分没有改变展开内容。
+- **确定性修复**：`vtable_overrides` 改为 `BTreeMap`。修复后两次展开逐字节一致，按行排序的摘要与修复前相同，说明只改了顺序。
+  - 同名方法出现在多个 `vtable_class` 下时，`seen_delegators` 的去重胜者原先随哈希序变化，现在固定为类名序靠前者。
+  - HelloWorld 的排序摘要不变，说明其中不存在这种重名。
+- 生成器与 runtime overlay 均未改动，所以生成树不受影响（宏展开不落生成树）。
+
 ## 六、需要主会话 e2e 抽查的用例
 
 - **N1**（按类并行发射）：27 例生成树与串行逐字节一致，生成形态没有变化，抽查可选。建议正常跑一次 `DeepCopy`（最多类，走并行）和 `TestCompletableFuture`，确认生成器在多线程下无 panic、结果与此前一致。

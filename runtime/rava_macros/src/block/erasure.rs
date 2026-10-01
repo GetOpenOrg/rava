@@ -15,6 +15,27 @@ use super::parse::FnItem;
 use super::rewrite::{rewrite_base_calls_for_wrapper, rewrite_block, ForwardConvSpec};
 use super::util::{attr_str, strip_meta_attrs};
 
+/// 非虚方法（构造器 / 静态 / 私有实例方法）体的宏改写：类初始化触发注入 + 字段 / base
+/// 调用改写；返回 (空接收者检查, 改写后的体)。无体 → None。
+pub(crate) fn prepare_non_virtual_body(
+    f: &FnItem,
+    basic_names: &HashSet<String>,
+    ref_names: &HashSet<String>,
+) -> Option<(TokenStream2, syn::Block)> {
+    let sig = &f.sig;
+    let mut b = f.block.as_ref()?.clone();
+    // static 方法 / 构造器入口是类初始化触发点（JVMS §5.5：invokestatic / new）
+    if class_init::is_init_trigger(sig) {
+        class_init::inject_init_trigger(&mut b);
+    }
+    let null_check = class_init::null_receiver_check(sig);
+    rewrite_block(&mut b, basic_names, ref_names);
+    // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
+    // super.method() 的 __base(this, ...) 需经 vtable 取得 &dyn AncestorVTable
+    rewrite_base_calls_for_wrapper(&mut b);
+    Some((null_check, b))
+}
+
 /// Constructor / NonVirtual / static 方法：保持原 body（走 Rewriter）；无 body → panic stub。
 /// 类的 wrapper impl 与接口载体的 impl 共用。
 pub(crate) fn expand_non_virtual_fn(
@@ -26,18 +47,8 @@ pub(crate) fn expand_non_virtual_fn(
     let keep_attrs = strip_meta_attrs(&f.attrs);
     let vis = &f.vis;
     let sig = &f.sig;
-    match &f.block {
-        Some(block) => {
-            let mut b = block.clone();
-            // static 方法 / 构造器入口是类初始化触发点（JVMS §5.5：invokestatic / new）
-            if class_init::is_init_trigger(sig) {
-                class_init::inject_init_trigger(&mut b);
-            }
-            let null_check = class_init::null_receiver_check(sig);
-            rewrite_block(&mut b, basic_names, ref_names);
-            // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
-            // super.method() 的 __base(this, ...) 需经 vtable 取得 &__BT: AncestorVTable
-            rewrite_base_calls_for_wrapper(&mut b);
+    match prepare_non_virtual_body(f, basic_names, ref_names) {
+        Some((null_check, b)) => {
             let stmts = &b.stmts;
             quote! {
                 #(#keep_attrs)*
