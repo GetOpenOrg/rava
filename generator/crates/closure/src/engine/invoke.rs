@@ -156,7 +156,10 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke_inner(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         use classfile::op;
         let via = Via::method("invoke", m, Some(off));
-        self.touch(&mref.owner, Level::Type, via.clone());
+        // 静态 / 特殊调用按属主类发射（`X::m(..)` / 固有方法），属主至少 L2；
+        // 虚 / 接口调用的属主可停在 L1：其值只可能是 null，调用点导出为 null_recv（`fold.rs`）
+        let lvl = if opcode == op::INVOKESTATIC || opcode == op::INVOKESPECIAL { Level::Layout } else { Level::Type };
+        self.touch(&mref.owner, lvl, via.clone());
         let Some(site) = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, iface) else {
             self.unresolved.insert(mref.to_string());
             return;

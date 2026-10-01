@@ -118,6 +118,7 @@ impl<'a> Engine<'a> {
                 if self.nr_drain() {
                     continue;
                 }
+                self.promote_layout();
                 self.ctx.stats.borrow_mut().mark_rss("final");
                 break;
             };

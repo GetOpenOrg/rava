@@ -371,6 +371,7 @@ fn parse_domain(s: &str) -> Result<Domain, InputError> {
 fn parse_level(s: &str) -> Result<Level, InputError> {
     Ok(match s {
         "type" => Level::Type,
+        "layout" => Level::Layout,
         "init" => Level::Init,
         "alloc" => Level::Alloc,
         "code" => Level::Code,
