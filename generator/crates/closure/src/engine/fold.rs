@@ -279,8 +279,8 @@ impl Engine<'_> {
             let Some(a) = &self.methods[i].analysis else { continue };
             for (pc, e) in &a.events {
                 if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, mref, args, .. } = e {
-                    // 属主停在 L1：非 null 值的运行时类及其全部超类型至少 L2（`levels.rs`），接收者只可能是 null，
-                    // 未建模来源也不例外
+                    // 属主停在 L1：非 null 值的运行时类及其全部超类型至少 L2，接收者可能来自未建模来源（含运行期
+                    // 定义类的对象）的调用点属主也已升 L2（`levels.rs`）——接收者只可能是 null
                     let opaque = self.classes.get(mref.owner.as_str()).is_some_and(|c| c.level == Level::Type);
                     let h = hit.entry(*pc).or_default();
                     if !*h && !opaque {

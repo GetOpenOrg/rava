@@ -290,6 +290,18 @@ fn name_level_classes_emit_opaque() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 动态代理实现的接口（无静态实现类）：属主升 L2 照常发射，接口调用不导出 null_recv
+#[test]
+fn proxy_interface_owner_not_opaque() {
+    let Some((_, out)) = build("ProxyIface.java", "proxy-iface", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let greeter = read("proxy_iface_greeter.rs");
+    assert!(!greeter.contains("java_class_opaque"), "代理接口须至少 L2：{greeter}");
+    let main = read("proxy_iface.rs");
+    assert!(!main.contains("__null_recv("), "代理对象上的接口调用不得判恒 null：{main}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// 手写体经注册表工厂构造的资源束经 setParent 串成父链：束对象须作为值进入流图，
 /// `ResourceBundle.getObject` 的 `parent.getObject(key)`（@22）不得判为接收者恒 null
 #[test]
