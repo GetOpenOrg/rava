@@ -33,6 +33,25 @@ impl<'a> Engine<'a> {
     }
 
     /// (类内无重载时的裸名, mangle 名)
+    /// 成员引用的文本键 `owner.name:desc`（按引用缓存）
+    pub(super) fn mref_key(&mut self, mref: &MemberRef) -> Rc<str> {
+        if let Some((k, _)) = self.mref_keys.get(mref) {
+            return k.clone();
+        }
+        let k: Rc<str> = mref.to_string().into();
+        self.mref_keys.insert(mref.clone(), (k.clone(), false));
+        k
+    }
+
+    /// 调用引用记入 `refs`（每个引用一次）
+    pub(super) fn note_ref(&mut self, mref: &MemberRef) {
+        let k = self.mref_key(mref);
+        let e = self.mref_keys.get_mut(mref).expect("mref_key 已登记");
+        if !std::mem::replace(&mut e.1, true) {
+            self.refs.insert(k.to_string());
+        }
+    }
+
     pub(super) fn rust_names(&self, cf: &ClassFile, name: &str, desc: &str) -> (Option<String>, String) {
         self.ctx.rust_names(cf, name, desc)
     }
@@ -109,7 +128,8 @@ impl<'a> Engine<'a> {
         if kind == Kind::Bytecode {
             self.nr_created(&key);
         }
-        let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Type };
+        // 调用链上的方法（含手写 / native / 抽象声明）都按本类的布局发射：至少 L2
+        let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Layout };
         self.touch(&key.owner, lvl, Via::method("member", idx, None));
         if cf.is_some() {
             let v = Via::method("signature", idx, None);

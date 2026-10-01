@@ -72,6 +72,10 @@ extern "Rust" {
     static RECORD_COMPONENTS: &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])];
     #[link_name = "__java_meta_MODULE_SERVICES"]
     static MODULE_SERVICES: &'static [(&'static str, &'static str)];
+    #[link_name = "__java_meta_VM_CONST_PROPERTIES"]
+    static VM_CONST_PROPERTIES: &'static [(&'static str, &'static str)];
+    #[link_name = "__java_meta_VM_DYNAMIC_PROPERTIES"]
+    static VM_DYNAMIC_PROPERTIES: &'static [&'static str];
 }
 
 // SAFETY（以下各函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
@@ -105,3 +109,7 @@ pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, 
 }
 /// 模块服务 (服务, provider)：closure.json seeds.services 的模块 provider，事实序。
 pub fn module_services() -> &'static [(&'static str, &'static str)] { unsafe { MODULE_SERVICES } }
+/// VM 初始系统属性的常量键（键, 值）：closure.json system_properties.values，与分析器折叠同源。
+pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe { VM_CONST_PROPERTIES } }
+/// VM 初始系统属性的动态键（由手写层取宿主值）：closure.json system_properties.dynamic。
+pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }

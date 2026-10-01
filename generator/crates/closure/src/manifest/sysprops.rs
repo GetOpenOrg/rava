@@ -82,6 +82,16 @@ impl SysProps {
         }
     }
 
+    /// 启动时的常量属性（键 → 值）
+    pub fn values(&self) -> &BTreeMap<String, String> {
+        &self.values
+    }
+
+    /// 运行期取值的键（不折叠）
+    pub fn dynamic(&self) -> &BTreeSet<String> {
+        &self.dynamic
+    }
+
     /// 成员（字段 `类.名:描述符` / 方法）持有系统属性表对象
     pub fn is_holder(&self, member: &str) -> bool {
         self.holders.contains(member)

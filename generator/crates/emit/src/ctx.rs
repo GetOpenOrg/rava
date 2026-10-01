@@ -53,6 +53,9 @@ pub struct EmitCtx<'a> {
     sam: OnceLock<crate::sam::SamLedger>,
     instr_facts: OnceLock<instr::InstrFacts>,
     lib_crate_of: OnceLock<HashMap<String, String>>,
+    /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
+    pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
+    pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
     /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
     pub(crate) use_index: Mutex<HashMap<String, Vec<Arc<crate::phase2::uses::UseIndex>>>>,
 }
@@ -93,6 +96,8 @@ impl<'a> EmitCtx<'a> {
             sam: OnceLock::new(),
             instr_facts: OnceLock::new(),
             lib_crate_of: OnceLock::new(),
+            slot_plan: OnceLock::new(),
+            slot_memo: Mutex::new(HashMap::new()),
             use_index: Mutex::new(HashMap::new()),
         })
     }
@@ -231,6 +236,11 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// 调用链成员判定（用户类恒全量）
+    /// L1（名字级）类：发不透明形态（`class_writer::opaque`）
+    pub fn is_opaque(&self, cls: &str) -> bool {
+        self.input.opaque.contains(cls)
+    }
+
     pub fn in_chain(&self, cls: &str, name: &str, desc: &str) -> bool {
         self.input
             .visited

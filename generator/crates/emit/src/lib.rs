@@ -38,6 +38,7 @@ pub mod sam;
 pub mod scan;
 pub mod text;
 pub mod vtable;
+pub mod vtable_prune;
 
 pub use body::{BodyEffects, BodyError, BodyOutput, BodyRequest, MethodBodyEmitter};
 pub use ctx::{EmitCtx, EmitOptions, ProjectState};

@@ -9,6 +9,9 @@
 //! 4. 常量读取点：getstatic 直接替换为装载指令；getfield 替换为 [`NInsn::FoldField`]
 //!    （弹出 receiver 后压入常量）；invoke 替换为 [`NInsn::FoldCall`]：调用照常执行（被调方
 //!    副作用保留），只丢弃返回值、改压常量。
+//! 5. 控制流终点：null_recv 调用点替换为 [`NInsn::NullRecv`]（不调用，抛 NPE），noreturn 调用点
+//!    替换为 [`NInsn::NoReturn`]（调用后终止）；两者其后另外不可达的 noreturn_dead_pcs 与 dead_pcs
+//!    合并删除。死区只从跳转 / switch / return / athrow 或这两类终点之后开始。
 //!
 //! 违反格式约定的输入返回 [`InputError::Fold`]。
 
@@ -36,6 +39,10 @@ pub enum NInsn {
     FoldField { offset: u32, load: Insn },
     /// invoke 折叠点：调用 `call` 照常翻译、丢弃返回值，再执行装载指令 `load`
     FoldCall { call: Insn, load: Insn },
+    /// 接收者恒为 null 的虚调用点：弹出实参与接收者后抛 NullPointerException，`call` 不翻译
+    NullRecv { call: Insn },
+    /// 不返回的调用点：`call` 照常翻译，其后控制流终止
+    NoReturn { call: Insn },
 }
 
 impl NInsn {
@@ -43,16 +50,21 @@ impl NInsn {
         match self {
             NInsn::Op(i) => i.offset,
             NInsn::FoldField { offset, .. } => *offset,
-            NInsn::FoldCall { call, .. } => call.offset,
+            NInsn::FoldCall { call, .. } | NInsn::NullRecv { call } | NInsn::NoReturn { call } => call.offset,
         }
     }
-    /// JVM 指令本体（FoldCall 为保留的调用指令；FoldField 为 None）
+    /// 翻译出的 JVM 指令本体（FoldCall / NoReturn 为保留的调用指令；FoldField / NullRecv 为 None）
     pub fn insn(&self) -> Option<&Insn> {
         match self {
             NInsn::Op(i) => Some(i),
-            NInsn::FoldCall { call, .. } => Some(call),
-            NInsn::FoldField { .. } => None,
+            NInsn::FoldCall { call, .. } | NInsn::NoReturn { call } => Some(call),
+            NInsn::FoldField { .. } | NInsn::NullRecv { .. } => None,
         }
+    }
+
+    /// 控制流终点（无正常后继，只经覆盖它的异常处理器转移）
+    pub fn is_abrupt(&self) -> bool {
+        matches!(self, NInsn::NullRecv { .. } | NInsn::NoReturn { .. })
     }
 }
 
@@ -262,9 +274,28 @@ fn rewrite_branch(ins: &Insn, next_dead: bool, is_dead: &dyn Fn(u32) -> bool, wh
 
 fn validate(fold: &MethodFold, code: &Code, is_dead: &dyn Fn(u32) -> bool, where_: &str) -> Result<(), InputError> {
     let starts: BTreeSet<u32> = code.insns.iter().map(|x| x.offset).collect();
-    for &(s, e) in &fold.dead_pcs {
-        if !starts.contains(&s) || !(starts.contains(&e) || e == code.code_len) || s >= e {
-            return Err(err(where_, format!("dead_pcs [{s}, {e}) 端点不在指令起点")));
+    for (key, ranges) in [("dead_pcs", &fold.dead_pcs), ("noreturn_dead_pcs", &fold.noreturn_dead_pcs)] {
+        for &(s, e) in ranges {
+            if !starts.contains(&s) || !(starts.contains(&e) || e == code.code_len) || s >= e {
+                return Err(err(where_, format!("{key} [{s}, {e}) 端点不在指令起点")));
+            }
+        }
+    }
+    let opcode_at = |pc: u32| code.insns.iter().find(|x| x.offset == pc).map(|x| x.opcode);
+    for &pc in &fold.null_recv {
+        if is_dead(pc) || !matches!(opcode_at(pc), Some(op::INVOKEVIRTUAL | op::INVOKEINTERFACE)) {
+            return Err(err(where_, format!("null_recv pc={pc} 不是活的虚调用指令")));
+        }
+        if fold.consts.contains_key(&pc) || fold.noreturn_calls.contains(&pc) {
+            return Err(err(where_, format!("null_recv pc={pc} 同时列为常量 / noreturn 调用")));
+        }
+    }
+    for &pc in &fold.noreturn_calls {
+        if is_dead(pc) || !opcode_at(pc).is_some_and(is_invoke) {
+            return Err(err(where_, format!("noreturn_calls pc={pc} 不是活的调用指令")));
+        }
+        if fold.consts.contains_key(&pc) {
+            return Err(err(where_, format!("noreturn_calls pc={pc} 同时列为常量")));
         }
     }
     for h in &fold.dead_handlers {
@@ -289,7 +320,8 @@ fn is_dead_catch(fold: &MethodFold, ent: &ExceptionEntry) -> bool {
 /// 按折叠点规范化一个方法体（`method_key` = `类.方法:描述符`，只用于报错定位）
 pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<NormCode, InputError> {
     let where_ = method_key;
-    let is_dead = |pc: u32| fold.dead_pcs.iter().any(|&(s, e)| s <= pc && pc < e);
+    let in_ranges = |r: &[(u32, u32)], pc: u32| r.iter().any(|&(s, e)| s <= pc && pc < e);
+    let is_dead = |pc: u32| in_ranges(&fold.dead_pcs, pc) || in_ranges(&fold.noreturn_dead_pcs, pc);
     validate(fold, code, &is_dead, where_)?;
     let dead: Vec<bool> = code.insns.iter().map(|x| is_dead(x.offset)).collect();
     let mut out = Vec::with_capacity(code.insns.len());
@@ -298,6 +330,14 @@ pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<No
             continue;
         }
         let next_dead = dead.get(i + 1).copied().unwrap_or(false);
+        if fold.null_recv.contains(&ins.offset) {
+            out.push(NInsn::NullRecv { call: ins.clone() });
+            continue;
+        }
+        if fold.noreturn_calls.contains(&ins.offset) {
+            out.push(NInsn::NoReturn { call: ins.clone() });
+            continue;
+        }
         let o = ins.opcode;
         if next_dead && !no_fallthrough(o) && !one_operand_branch(o) && !two_operand_branch(o) {
             return Err(err(where_, format!("活指令 pc={} {} 顺序落入 dead_pcs", ins.offset, ins.name())));
@@ -312,7 +352,8 @@ pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<No
     let first_live = |pc: u32| live_offs.iter().copied().find(|o| *o >= pc);
     let mut table = Vec::new();
     for ent in &code.exception_table {
-        if fold.dead_handlers.contains(&ent.handler) || is_dead_catch(fold, ent) {
+        // noreturn_dead_pcs 内的处理器只由被截断的区间进入：连同表项删除
+        if fold.dead_handlers.contains(&ent.handler) || is_dead_catch(fold, ent) || in_ranges(&fold.noreturn_dead_pcs, ent.handler) {
             continue;
         }
         if is_dead(ent.handler) {

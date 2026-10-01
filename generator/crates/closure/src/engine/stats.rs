@@ -102,6 +102,8 @@ pub(super) struct Stats {
     pub(super) site_reruns: u64,
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
+    /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
+    pub(super) ceval: [u64; 3],
     /// 各阶段结束时的峰值 RSS（MB）
     rss_marks: Vec<(&'static str, u64)>,
 }
@@ -124,6 +126,7 @@ impl Default for Stats {
             site_reruns: 0,
             lcall_reruns: 0,
             aux_analyses: 0,
+            ceval: [0; 3],
             rss_marks: Vec::new(),
         }
     }
@@ -270,6 +273,7 @@ impl<'a> Engine<'a> {
             "analyses": total,
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
+            "ceval_memo": s.ceval,
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,
@@ -314,7 +318,7 @@ impl Ctx<'_> {
 
 /// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
 pub(super) const KINDS: usize = 16;
-const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "?"];
+const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G"];
 
 #[inline]
 pub(super) fn kind_ix(n: &Node) -> usize {
@@ -334,6 +338,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
         Node::HP(..) => 12,
         Node::HR(..) => 13,
         Node::Esc => 14,
+        Node::G(..) => 15,
     }
 }
 

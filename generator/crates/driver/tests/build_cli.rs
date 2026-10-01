@@ -203,16 +203,15 @@ fn more_specific_default_overrides_ancestor_injected_slot() {
     std::fs::remove_dir_all(&out).ok();
 }
 
-/// 视图派发的接收者为 null（字段类型无实例、读作 null）：先判空抛 NullPointerException，
-/// 视图落空（生成器缺陷）以类名 + 方法名 + 描述符精确 panic，不得静默给默认值
+/// 恒 null 接收者（字段类型无实例、读作 null）：调用点按 invokevirtual 语义抛 NullPointerException
+/// （`__null_recv` 携类名 + 方法名 + 描述符，接收者非 null 时精确 panic），不翻译调用、不得静默给默认值
 #[test]
 fn virtual_view_null_receiver_throws_npe() {
     let Some((_, out)) = build("NullView.java", "null-view", &[]) else { return };
     let rs = std::fs::read_to_string(out.join("user/src/null_view_holder.rs")).unwrap();
-    let line = rs.lines().find(|l| l.contains("__virtual_view(")).expect("h.name() 走视图派发");
-    assert!(line.contains(".__nn()?)"), "接收者先判空：{line}");
-    assert!(line.contains("panic!(\"vtable-view-miss: NullView$Handler.name:()Ljava/lang/String;\")"), "{line}");
-    assert!(!line.contains("Default::default()"), "{line}");
+    let line = rs.lines().find(|l| l.contains("__null_recv(")).expect("h.name() 导出为 null_recv");
+    assert!(line.contains("\"NullView$Handler.name:()Ljava/lang/String;\""), "{line}");
+    assert!(!line.contains("Default::default()") && !rs.contains("__virtual_view("), "{line}");
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -262,6 +261,44 @@ fn api_package_precheck() {
     assert!(stdout.contains("[precheck] native-missing="), "{stdout}");
     let facts = std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap();
     assert!(facts.contains("java/util/function/BiFunction"), "API 入口类入闭包");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// L1（名字级）类发不透明形态：只作 instanceof / 字段类型出现、无实例的类型发 `java_class_opaque!`，
+/// 已实例化类的超接口升 L2 照常发射；L1 属主上的虚调用导出为 null_recv（不翻译调用）
+#[test]
+fn name_level_classes_emit_opaque() {
+    let Some((_, out)) = build("OpaqueLevels.java", "opaque-levels", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let marker = read("opaque_levels_marker.rs");
+    assert!(marker.contains("rava_macros::java_class_opaque!") && marker.contains("pub struct OpaqueLevels_Marker;"), "{marker}");
+    let ghost = read("opaque_levels_ghost.rs");
+    assert!(ghost.contains("pub struct OpaqueLevels_Ghost: OpaqueLevels_Shape;"), "{ghost}");
+    let shape = read("opaque_levels_shape.rs");
+    assert!(shape.contains("rava_macros::java_class!") && !shape.contains("java_class_opaque"), "已实例化类的超接口至少 L2：{shape}");
+    let main = read("opaque_levels.rs");
+    assert!(main.contains("__null_recv(") && main.contains("OpaqueLevels$Ghost.name:()Ljava/lang/String;"), "{main}");
+    // 接收者静态类型为 L1 类（局部变量 Phantom）、成员在 L2 祖先 Base 上：先上转到属主视图
+    let phantom = read("opaque_levels_phantom.rs");
+    assert!(phantom.contains("rava_macros::java_class_opaque!"), "{phantom}");
+    let view = "Into::<OpaqueLevels_Base>::into(Clone::clone(&p))";
+    assert!(main.contains(&format!("{view}.__nn()?.__get_tag()")), "L1 接收者读字段须上转：{main}");
+    assert!(main.contains(&format!("{view}.__nn()?.__set_tag(5i32)")), "L1 接收者写字段须上转：{main}");
+    // 折叠出的 null 常量接收者：取声明类的 null
+    assert!(main.contains("<OpaqueLevels_Base>::default().__nn()?.__get_tag()"), "{main}");
+    assert!(!main.contains("Object::default().__nn()?.__get_tag()"), "{main}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 动态代理实现的接口（无静态实现类）：属主升 L2 照常发射，接口调用不导出 null_recv
+#[test]
+fn proxy_interface_owner_not_opaque() {
+    let Some((_, out)) = build("ProxyIface.java", "proxy-iface", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let greeter = read("proxy_iface_greeter.rs");
+    assert!(!greeter.contains("java_class_opaque"), "代理接口须至少 L2：{greeter}");
+    let main = read("proxy_iface.rs");
+    assert!(!main.contains("__null_recv("), "代理对象上的接口调用不得判恒 null：{main}");
     std::fs::remove_dir_all(&out).ok();
 }
 

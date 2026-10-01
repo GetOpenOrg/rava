@@ -108,7 +108,8 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
         if em.crate_name != "java_runtime" || em.handwritten {
             continue;
         }
-        if ctx.class(&em.binary_name).is_none_or(|ci| ci.is_interface()) {
+        // 接口与不透明（L1）类不拆：后者只有类型身份（`java_class_opaque!`，无方法体 / 存储层），整类留声明层
+        if ctx.class(&em.binary_name).is_none_or(|ci| ci.is_interface()) || ctx.is_opaque(&em.binary_name) {
             continue;
         }
         let Ok(rel) = em.path.strip_prefix(jrt_src) else { continue };

@@ -39,6 +39,7 @@ pub mod hierarchy;
 pub mod invoke;
 pub mod log;
 pub mod naming;
+pub mod opaque;
 pub mod owner;
 pub mod sim;
 pub mod text;

@@ -22,7 +22,7 @@ pub struct Fold {
     /// 定论不返回的活调用点：唯一目标为字节码方法，全部节点已分析且没有任何返回路径（见 `noreturn.rs`）。
     /// 分析在定论阶段按值未知继续分析其后的代码（folds 规则 7），这里单独给出；发射层可在调用后终止控制流
     pub noreturn_calls: Vec<u32>,
-    /// 把 noreturn_calls 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
+    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
     /// 常量来自系统属性读取折叠的调用点（consts 的子集；统计用，不导出）
     pub props: Vec<u32>,
@@ -226,7 +226,9 @@ impl Engine<'_> {
     }
 
     /// 定论不返回的活调用点与因此另外不可达的区间：唯一目标为字节码方法（无清单返回事实 / 派生结果），
-    /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）
+    /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）。
+    /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）；
+    /// 须在 consts / null_recv 算出之后、prop_folds 之前调用
     pub(super) fn noreturn_calls(&self, code: &classfile::Code, all: &[Rc<Analysis>], f: &mut Fold) {
         let reachable: Vec<bool> = (0..code.insns.len()).map(|i| all.iter().any(|a| a.reachable[i])).collect();
         let nr = self.ctx.noreturn.borrow();
@@ -246,17 +248,27 @@ impl Engine<'_> {
                 stops.push(x.offset);
             }
         }
-        if stops.is_empty() {
-            return;
+        // null_recv 调用点的目标集为空，同样不会正常返回：一并作为截断终点（须先算出 f.null_recv）
+        let mut ends: Vec<u32> = stops.iter().chain(&f.null_recv).copied().collect();
+        ends.sort_unstable();
+        ends.dedup();
+        if !ends.is_empty() {
+            f.noreturn_dead_pcs = cut_after(code, &reachable, &ends);
         }
-        f.noreturn_dead_pcs = cut_after(code, &reachable, &stops);
-        f.noreturn_calls = stops;
+        // 落入截断区间的终点与常量折叠点本身已不可达（被前一终点截断）：不再列出
+        let cut = &f.noreturn_dead_pcs;
+        let live = |pc: &u32| !cut.iter().any(|&(s, e)| s <= *pc && *pc < e);
+        f.null_recv.retain(live);
+        // null_recv 调用点只会抛 NPE：目标集为空时返回值格缺席而被当作常量的，不再列为常量
+        let nulls = &f.null_recv;
+        f.consts.retain(|c| live(&c.0) && nulls.binary_search(&c.0).is_err());
+        f.noreturn_calls = stops.into_iter().filter(live).collect();
     }
 
     /// 调用结果由清单派生规则给出（值相等 / 字符串运算 / 系统属性读取）：不按被调字节码判定
     fn derived_call(&self, opcode: u8, m: &MemberRef, iface: bool, c: &CallInfo) -> bool {
         let named = |k: &str| self.man.is_value_equals(k) || self.man.string_op(k).is_some() || self.man.sysprops.is_holder(k);
-        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(opcode, m, iface, Some(c)).is_some()
+        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(None, opcode, m, iface, Some(c)).is_some()
     }
 
     /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、或接收者的值流
@@ -266,9 +278,12 @@ impl Engine<'_> {
         for &i in clones {
             let Some(a) = &self.methods[i].analysis else { continue };
             for (pc, e) in &a.events {
-                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, args, .. } = e {
+                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, mref, args, .. } = e {
+                    // 属主停在 L1：非 null 值的运行时类及其全部超类型至少 L2，接收者可能来自未建模来源（含运行期
+                    // 定义类的对象）的调用点属主也已升 L2（`levels.rs`）——接收者只可能是 null
+                    let opaque = self.classes.get(mref.owner.as_str()).is_some_and(|c| c.level == Level::Type);
                     let h = hit.entry(*pc).or_default();
-                    if !*h {
+                    if !*h && !opaque {
                         *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| self.recv_unmodeled(i, r, um));
                     }
                 }

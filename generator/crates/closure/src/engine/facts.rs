@@ -56,8 +56,8 @@ pub(super) struct Ctx<'a> {
     pub(super) cp: &'a ClassPath,
     pub(super) man: &'a Manifest,
     pub(super) hw: &'a Handwritten,
-    /// static final 字段常量缓存（None = 非常量）
-    pub(super) consts: RefCell<HashMap<MemberRef, Option<V>>>,
+    /// static final 字段常量缓存（None = 非常量）与其 `<clinit>` 求值的输入
+    pub(super) consts: RefCell<HashMap<MemberRef, (Option<V>, super::memo::Inputs)>>,
     /// 类的分析域缓存
     pub(super) domains: RefCell<HashMap<String, Domain>>,
     /// 调用点的静态摘要缓存：成员引用 → [(opcode, iface, 摘要)]
@@ -92,19 +92,22 @@ pub(super) struct Ctx<'a> {
     /// 当前分析得到过「不返回」答复的方法节点（排空时按值未知重算）
     pub(super) never: RefCell<BTreeSet<usize>>,
     /// 构造器摘要缓存：`构造器|实参` → 构造完成的对象标签
-    pub(super) objs: RefCell<HashMap<String, Option<Rc<Obj>>>>,
+    pub(super) objs: RefCell<HashMap<String, (Option<Rc<Obj>>, super::memo::Inputs)>>,
     /// 字节码方法的属性读取摘要（None = 不是读取形态）
-    pub(super) psums: RefCell<HashMap<MemberRef, Option<PropSum>>>,
+    pub(super) psums: RefCell<HashMap<MemberRef, (Option<PropSum>, super::memo::Inputs)>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
     pub(super) pdeps: RefCell<BTreeSet<usize>>,
     /// 分析进行中登记的依赖日志（摘要共享时向新上下文重放，见 `share.rs`）；None = 未在记录
     pub(super) dep_log: RefCell<Option<Vec<super::share::Dep>>>,
-    /// 常量实参求值记忆：`目标|常量实参` → (结果, 读过的字段)
-    pub(super) cevals: RefCell<HashMap<String, super::consteval::CEval>>,
-    /// 进行中的常量实参求值的字段读集（栈）
-    pub(super) ceval_reads: RefCell<Vec<Vec<MemberRef>>>,
+    /// 常量实参求值记忆：(目标, 常量实参, 起始深度) → (结果, 输入)
+    pub(super) cevals: RefCell<HashMap<super::consteval::CKey, super::consteval::CEval>>,
+    /// 进行中的记忆化计算的输入记录（栈，见 `memo.rs`）
+    pub(super) mrecs: RefCell<Vec<super::memo::MemoRec>>,
+    /// 记忆条目编号 → 取用过它的方法；下一个编号
+    pub(super) mdeps: RefCell<HashMap<u32, BTreeSet<usize>>>,
+    pub(super) memo_next: Cell<u32>,
     pub(super) ceval_depth: Cell<u32>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
@@ -117,6 +120,14 @@ pub(super) struct CallInfo {
     pub(super) null_to_false: bool,
     /// 唯一目标且为字节码方法
     pub(super) target: Option<MemberRef>,
+    /// 清单 value_equals（调用名或唯一目标名）
+    pub(super) value_eq: bool,
+    /// 清单字符串纯函数（调用名优先，其次唯一目标名）
+    pub(super) str_op: Option<crate::manifest::StrOp>,
+    /// 清单属性表持有方法
+    pub(super) holder: bool,
+    /// 清单属性读取锚点的读取形态
+    pub(super) reader: Option<super::sysprops::PropSum>,
 }
 
 /// 字段引用解析结果
@@ -260,11 +271,16 @@ impl Ctx<'_> {
 
     /// 字段的写入来源超出字节码（手写 / 边界类 / 反射 / 反序列化）：不折叠
     pub(super) fn field_open(&self, fi: &FieldInfo) -> bool {
+        self.field_open_under(fi, self.fopen_all.get(), self.deser.get())
+    }
+
+    /// 按给定的全局开关（全部放开 / 反序列化可达）判定字段是否不折叠
+    pub(super) fn field_open_under(&self, fi: &FieldInfo, all: bool, deser: bool) -> bool {
         fi.open
-            || self.fopen_all.get()
+            || all
             || self.fopen.borrow().contains(&fi.key)
             || self.fopen_names.borrow().contains(&fi.key.name)
-            || self.deser.get() && deser_writes(fi.access, fi.serializable)
+            || deser && deser_writes(fi.access, fi.serializable)
     }
 
     pub(super) fn field_info(&self, f: &MemberRef) -> Option<Rc<FieldInfo>> {
@@ -286,17 +302,17 @@ impl Ctx<'_> {
     /// 字段读的常量值；方法 m 登记为该字段的读者
     pub(super) fn field_value(&self, m: Option<usize>, f: &MemberRef) -> Option<V> {
         let fi = self.field_info(f)?;
-        match m {
-            Some(m) => {
-                self.dep(m, Dep::Field(fi.key.clone()));
-            }
-            None => self.note_aux_read(&fi.key),
+        if let Some(m) = m {
+            self.dep(m, Dep::Field(fi.key.clone()));
         }
         if self.field_open(&fi) {
             return None;
         }
+        if m.is_none() {
+            self.note_aux_read(&fi.key);
+        }
         if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-            return self.static_const(&fi.key, fi.constant.as_ref());
+            return self.static_const(m, &fi.key, fi.constant.as_ref());
         }
         m?;
         self.fvals.borrow().get(&fi.key).cloned().unwrap_or_else(|| default_pv(&fi.key.desc)).value()
@@ -316,7 +332,18 @@ impl Ctx<'_> {
             .exact_target(opcode, m, iface)
             .filter(|(cf, t)| cf.method(&t.name, &t.desc).is_some_and(|tm| self.kind_of(cf, tm) == Kind::Bytecode))
             .map(|(_, t)| t);
-        let c = Rc::new(CallInfo { fact, null_to_false: self.man.is_null_to_false(&k), target });
+        let tk = target.as_ref().map(|t| t.to_string());
+        let value_eq = self.man.is_value_equals(&k) || tk.as_ref().is_some_and(|t| self.man.is_value_equals(t));
+        let str_op = self.man.string_op(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_op(t)));
+        let c = Rc::new(CallInfo {
+            fact,
+            null_to_false: self.man.is_null_to_false(&k),
+            target,
+            value_eq,
+            str_op,
+            holder: self.man.sysprops.is_holder(&k),
+            reader: self.reader_spec(&k),
+        });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
     }
@@ -336,12 +363,14 @@ impl Ctx<'_> {
     }
 
     /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值
-    pub(super) fn static_const(&self, key: &MemberRef, cv: Option<&Const>) -> Option<V> {
+    pub(super) fn static_const(&self, me: Option<usize>, key: &MemberRef, cv: Option<&Const>) -> Option<V> {
         if let Some(c) = cv {
             return const_value(c);
         }
-        if let Some(v) = self.consts.borrow().get(key) {
-            return v.clone();
+        let hit = self.consts.borrow().get(key).cloned();
+        if let Some((v, inp)) = hit {
+            self.memo_use(me, &inp);
+            return v;
         }
         // `<clinit>` 唯一一次常量赋值（递归保护：分析中的类不再展开）。
         // 一次分析得出本类全部 static final 字段的答复，与外层无关时逐字段缓存
@@ -359,7 +388,8 @@ impl Ctx<'_> {
                 }
             }
         }
-        let clean = self.memo_leave(frame);
+        let (clean, inp) = self.memo_leave(frame);
+        self.memo_use(me, &inp);
         let value_of = |name: &str, desc: &str| match puts.get(&(name, desc)).map(Vec::as_slice) {
             Some([Some(v)]) => PV::of(v).value(),
             _ => None,
@@ -372,9 +402,10 @@ impl Ctx<'_> {
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 || fd.constant_value.is_some() {
                 continue;
             }
-            consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, value_of(&fd.name, &fd.desc));
+            let k = MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
+            consts.insert(k, (value_of(&fd.name, &fd.desc), inp.clone()));
         }
-        consts.get(key).cloned().flatten()
+        consts.get(key).and_then(|e| e.0.clone())
     }
 }
 
@@ -414,7 +445,7 @@ impl Oracle for Facts<'_, '_> {
         self.ctx.field_value(self.m, f)
     }
     fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
-        self.ctx.construct(init, args)
+        self.ctx.construct(self.m, init, args)
     }
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()

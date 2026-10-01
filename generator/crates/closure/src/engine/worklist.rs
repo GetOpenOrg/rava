@@ -118,6 +118,7 @@ impl<'a> Engine<'a> {
                 if self.nr_drain() {
                     continue;
                 }
+                self.promote_layout();
                 self.ctx.stats.borrow_mut().mark_rss("final");
                 break;
             };
@@ -164,18 +165,17 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
-            self.ctx.cevals.borrow_mut().clear();
-            let deps = self.ctx.fdeps.borrow().get(&key).cloned();
-            self.invalidate_all(deps, Why::FieldOpen);
+            let mut deps = self.ctx.ceval_drop_field(&key);
+            deps.extend(self.ctx.fdeps.borrow().get(&key).into_iter().flatten().copied());
+            self.invalidate_all(Some(deps), Why::FieldOpen);
             self.open_static(&key);
         }
     }
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
-            self.ctx.cevals.borrow_mut().clear();
-            let deps: BTreeSet<usize> =
-                self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
+            let mut deps = self.ctx.ceval_drop_name(name);
+            deps.extend(self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()));
             self.invalidate_all(Some(deps), Why::FieldOpenName);
             // 已登记的同名字段；之后登记的由 field_node 按 fopen_names 接入
             let hits: Vec<MemberRef> = self.fields.keys().filter(|k| k.name == name).cloned().collect();
@@ -185,10 +185,24 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 全局开关（反射枚举 / 反序列化）打开：所有读过字段的方法失效
-    pub(super) fn open_fields_all(&mut self) {
-        self.ctx.cevals.borrow_mut().clear();
-        let deps: BTreeSet<usize> = self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()).collect();
+    /// 全局开关（反射枚举 / 反序列化）打开（was_all / was_deser = 打开前的开关）：读过因此转为不折叠的
+    /// 字段的方法失效（此前已不折叠的字段读答复不变）
+    pub(super) fn open_fields_all(&mut self, was_all: bool, was_deser: bool) {
+        let ctx = &self.ctx;
+        let mut changed: HashMap<MemberRef, bool> = HashMap::default();
+        let mut newly = |k: &MemberRef| match changed.get(k) {
+            Some(&c) => c,
+            None => {
+                let c = ctx.field_info(k).is_none_or(|fi| ctx.field_open(&fi) && !ctx.field_open_under(&fi, was_all, was_deser));
+                changed.insert(k.clone(), c);
+                c
+            }
+        };
+        let mut deps = ctx.ceval_drop(|inp| inp.reads.iter().any(&mut newly));
+        let keys: Vec<MemberRef> = ctx.fdeps.borrow().keys().cloned().collect();
+        for k in keys.iter().filter(|k| newly(k)) {
+            deps.extend(ctx.fdeps.borrow().get(k).into_iter().flatten().copied());
+        }
         self.invalidate_all(Some(deps), Why::FieldsAll);
     }
 
@@ -295,6 +309,9 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.recv_done.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
+        if let Some(d) = self.gather_last.get_mut(&m) {
+            d.retain(|o, _| !offs.contains(o));
+        }
         if let Some(d) = self.lambda_done.get_mut(&m) {
             for off in offs {
                 for (_, id) in d.remove(off).unwrap_or_default() {
@@ -310,6 +327,7 @@ impl<'a> Engine<'a> {
         self.hub_linked.remove(&m);
         self.hub_lsent.remove(&m);
         self.recv_done.remove(&m);
+        self.gather_last.remove(&m);
         for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
             for (_, id) in at {
                 self.lcalls[id as usize].live = false;

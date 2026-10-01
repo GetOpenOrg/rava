@@ -44,6 +44,10 @@ impl Engine<'_> {
                         if !exact {
                             return member_matches(m, &x.name);
                         }
+                        // Rust 名 = 方法名或「方法名_描述符后缀」：前缀不符即不命中，免算重载与后缀
+                        if !m.strip_prefix(x.name.as_str()).is_some_and(|r| r.is_empty() || r.starts_with('_')) {
+                            return false;
+                        }
                         let (plain, mangled) = self.rust_names(cf, &x.name, &x.desc);
                         plain.as_deref() == Some(m) || mangled == m
                     })

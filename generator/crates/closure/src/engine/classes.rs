@@ -193,20 +193,30 @@ impl<'a> Engine<'a> {
         Some(cf)
     }
 
-    /// 类入生成范围即编译其手写文件：文件里出现的每个类型路径与共置手写模块要求对应类存在（L1）
+    /// 类入生成范围即编译其手写文件：文件里出现的每个类型路径与共置手写模块要求对应类存在。
+    /// 手写体对分析器不透明（可读写字段、调用方法、实现 vtable），按 L2 布局登记
     fn touch_hw_types(&mut self, cls: &str) {
         let hw = self.hw.class(cls);
+        // 有手写文件的类：手写 `impl X { ... }` 按本类的布局（字段 / 方法 / vtable）编译
+        if !hw.files.is_empty() {
+            self.touch(cls, Level::Layout, Via::class("hw-file", cls));
+        }
+        // 手写实现对象的 `impl X__VTable for S` 随文件编译（与对象是否在调用链上无关）：X 须有 vtable
+        let obj_supers: Vec<&TypeRef> = hw.objects.values().flat_map(|o| o.supers.iter()).collect();
+        for c in obj_supers.into_iter().filter_map(|t| self.resolve_tref(cls, t)).collect::<Vec<_>>() {
+            self.touch(&c, Level::Layout, Via::class("hw-type", cls));
+        }
         for t in &hw.type_refs {
             let found = match t.0.last().and_then(|l| MODULE_SUFFIXES.iter().find_map(|x| l.strip_suffix(x))) {
                 Some(snake) => self.class_of_module(cls, &t.0, snake).into_iter().collect::<Vec<_>>(),
                 None => self.resolve_hw_type(cls, t),
             };
             for c in found {
-                self.touch(&c, Level::Type, Via::class("hw-type", cls));
+                self.touch(&c, Level::Layout, Via::class("hw-type", cls));
             }
         }
         // 接收者静态类型经访问器 / 方法返回推得的类（`mh.__get_form().__get_names()` 的 form 类型）：
-        // 文件中不以类型路径出现，但方法体按该类的访问器编译——同为 L1 需求
+        // 文件中不以类型路径出现，但方法体按该类的访问器编译——同为 L2 需求
         let mut recvs: Vec<SType> = Vec::new();
         for f in hw.fns.values().chain(hw.objects.values().flat_map(|o| o.fns.values())) {
             recvs.extend(f.fields.iter().filter_map(|fa| fa.recv.clone()));
@@ -215,7 +225,7 @@ impl<'a> Engine<'a> {
         let derived: BTreeSet<String> =
             recvs.iter().flat_map(derived_nodes).filter_map(|s| self.stype_class(cls, s)).collect();
         for c in derived {
-            self.touch(&c, Level::Type, Via::class("hw-type", cls));
+            self.touch(&c, Level::Layout, Via::class("hw-type", cls));
         }
     }
 
@@ -264,7 +274,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 截断体：边界类里有字节码、未经手写提供的方法，发射层翻译其方法体但不展开被调方（规模截断的
-    /// 过渡语义）。体内引用的类按类型级入闭包，使翻译体里的类型与字段访问器可解析；被调方不入链
+    /// 过渡语义）。体内引用的类入闭包（属主 / 类操作数 L2，描述符类型 L1），使翻译体里的类型与字段访问器可解析；被调方不入链
     pub(super) fn touch_truncated_body(&mut self, m: usize, cf: &ClassFile, key: &MemberRef, via: &Via) {
         if self.methods[m].kind != Kind::Handwritten("boundary")
             || self.man.is_intrinsic(&key.to_string())
@@ -291,9 +301,11 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
+        // 截断体照字节码翻译、不经分析（无 null_recv 等折叠）：体内字段 / 方法属主与 new / checkcast 类
+        // 按成员访问器与布局编译，至少 L2
         for c in classes {
             if !c.starts_with('[') {
-                self.touch(&c, Level::Type, via.clone());
+                self.touch(&c, Level::Layout, via.clone());
             }
         }
         for d in descs {
