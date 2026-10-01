@@ -252,7 +252,7 @@ fn image_dirs_lists_existing_class_dirs() {
     assert!(dirs.iter().filter(|d| d.contains("/rava/vmsupport/")).count() == modules, "{text}");
 }
 
-/// `--api-package`：包内公开 API 为入口，`--full-precheck` 出预检明细（gap_scan.py api 模式）
+/// `--api-package`：包内公开 API 为入口，`--full-precheck` 出预检明细（同 `rava audit api` 入口）
 #[test]
 fn api_package_precheck() {
     let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--full-precheck", "--closure-json"]) else {

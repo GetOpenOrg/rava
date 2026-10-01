@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// 签名多态调用点的伴生 fn 后缀：清单登记需要调用点类型的签名多态成员 `m`，发射层改发
+/// `recv.m__site("<调用点描述符>", 实参数组)`（`instr::sim::methods`），其体即该调用点的落地语义
+const SIGPOLY_SITE_SUFFIX: &str = "__site";
+
 impl<'a> Engine<'a> {
     // ── 手写节点 ────────────────────────────────────────────────────────────
 
@@ -56,6 +60,9 @@ impl<'a> Engine<'a> {
         let Some(cf) = self.h.class(&key.owner) else { return };
         self.touch_truncated_body(m, &cf, &key, &via);
         let mh = self.hw_member(&cf, &key.name, &key.desc);
+        if mh.fns.is_empty() {
+            self.hw_base_fn(m, &cf, &key.name, &key.desc);
+        }
         // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像）时不经 open 返回值交出
         let modeled = reads || array_ret.is_some() || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
@@ -107,11 +114,14 @@ impl<'a> Engine<'a> {
     pub(super) fn hw_member(&self, cf: &ClassFile, name: &str, desc: &str) -> crate::handwritten::MemberHw {
         let all = self.hw.member(&cf.name, name);
         let (rust, mangled) = self.rust_names(cf, name, desc);
+        // 签名多态成员（JVMS §2.9.3，结构判定）的调用点经 `__site` 伴生落地，伴生体与成员体同属本成员
+        let sigpoly = cf.methods.iter().any(|m| m.name == name && m.desc == desc && resolve::is_signature_polymorphic(m));
         let exact: Vec<String> = all
             .fns
             .iter()
             .filter(|f| {
                 let f = f.strip_prefix("__impl_").unwrap_or(f);
+                let f = if sigpoly { f.strip_suffix(SIGPOLY_SITE_SUFFIX).unwrap_or(f) } else { f };
                 f == mangled || rust.as_deref() == Some(f)
             })
             .cloned()
@@ -137,9 +147,10 @@ impl<'a> Engine<'a> {
 
     pub(super) fn apply_hw(&mut self, m: usize, host: &str, mh: &MemberHw, via: &Via) {
         let prod = Node::S(m, PROD);
-        self.sysprops_hw(mh);
+        self.sysprops_hw(host, mh);
         self.hwobj_made(m, host, mh);
         self.hw_fields(m, host, &mh.fields);
+        self.hw_fn_calls(m, host, mh);
         let mut k = 0u32;
         // 手写体新建的对象（按类）：新建局部变量上的回调以它们为接收者
         let mut made: HashMap<String, Vec<u32>> = HashMap::default();
@@ -186,6 +197,9 @@ impl<'a> Engine<'a> {
             match u {
                 Upcall::Field(f) => {
                     let f = f.clone();
+                    if !self.hw_static_reads.insert((m, f.clone())) {
+                        continue;
+                    }
                     self.field(m, 0, classfile::op::GETSTATIC, &f, None, None, prod);
                 }
                 Upcall::Method(u) => {

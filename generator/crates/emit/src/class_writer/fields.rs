@@ -221,9 +221,8 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
                 ));
                 continue;
             }
-            blocks.push(format!(
-                "{head}pub fn {fname}() -> Result<{ty}> {{\n    __stub(\"stub: {cls}.{fnm}:{fd}\")\n}}\n{setter}"
-            ));
+            let stub = crate::precheck::stub_call("stub", &format!("{cls}.{fnm}:{fd}"));
+            blocks.push(format!("{head}pub fn {fname}() -> Result<{ty}> {{\n    {stub}\n}}\n{setter}"));
         } else {
             blocks.push(format!("{head}pub static {fname}: {ty};"));
         }

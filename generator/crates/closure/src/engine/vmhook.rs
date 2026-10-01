@@ -47,7 +47,15 @@ impl<'a> Engine<'a> {
 
     fn vm_hook_node(&mut self, id: u32, cls: &str, f: String) {
         let key = MemberRef { owner: cls.to_string(), name: f.clone(), desc: "()V".into() };
-        if self.methods.contains_key(&(key.clone(), NOCTX)) {
+        if let Some(i) = self.methods.get_index_of(&(key.clone(), NOCTX)) {
+            // 先经手写体调用建成的同一 fn 节点（无接收者）：补上接收者
+            if self.methods[i].kind == Kind::Handwritten(RTFN_KIND) {
+                let n = &mut self.methods[i];
+                n.kind = Kind::Handwritten(VMHOOK_KIND);
+                n.is_static = false;
+                n.ptypes = vec![Some(id)];
+                self.push_m(i);
+            }
             return;
         }
         let idx = self.methods.len();
@@ -91,6 +99,6 @@ impl<'a> Engine<'a> {
 
     /// 不进输出的伪方法节点：手写实现对象的方法与 VM 钩子
     pub(super) fn is_pseudo_method(&self, t: usize) -> bool {
-        matches!(self.methods[t].kind, Kind::Handwritten(HWOBJ_KIND) | Kind::Handwritten(VMHOOK_KIND))
+        matches!(self.methods[t].kind, Kind::Handwritten(HWOBJ_KIND) | Kind::Handwritten(VMHOOK_KIND) | Kind::Handwritten(RTFN_KIND))
     }
 }

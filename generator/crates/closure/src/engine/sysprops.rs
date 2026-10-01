@@ -342,11 +342,11 @@ impl Engine<'_> {
     }
 
     /// 手写体调用改写入口（接收者推不出）：全部不折叠
-    pub(super) fn sysprops_hw(&mut self, mh: &MemberHw) {
+    pub(super) fn sysprops_hw(&mut self, host: &str, mh: &MemberHw) {
         if self.man.sysprops.is_empty() {
             return;
         }
-        let hit = mh.upcalls.iter().any(|u| matches!(u, Upcall::Method(r) if self.man.sysprops.writer(&r.to_string()).is_some()));
+        let hit = self.hw_upcalls(host, mh).iter().any(|u| matches!(u, Upcall::Method(r) if self.man.sysprops.writer(&r.to_string()).is_some()));
         if hit {
             self.sysprops_unstable(vec![None]);
         }

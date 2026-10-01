@@ -12,7 +12,7 @@ const RUST_TRAIT_METHODS: &[&str] = &["clone"];
 
 impl Engine<'_> {
     /// 类及其全部超类型（超类链与超接口，广度优先，自类在前）
-    fn supertypes(&self, c: &str) -> Vec<std::sync::Arc<ClassFile>> {
+    pub(super) fn supertypes(&self, c: &str) -> Vec<std::sync::Arc<ClassFile>> {
         let mut out = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut q: VecDeque<String> = VecDeque::from([c.to_string()]);
@@ -92,7 +92,14 @@ impl Engine<'_> {
                 _ => continue,
             };
             let Some(cls) = cls else { continue };
-            for (_, name, desc, is_static) in self.methods_by_rust_name(&cls, &c.name, Some(c.args.len())) {
+            let hits = self.methods_by_rust_name(&cls, &c.name, Some(c.args.len()));
+            // 路径调用 `T::f()` 不是方法时是 static 字段读访问器（生成层 static 访问器名 = 字段名）：getstatic
+            if hits.is_empty() && want_static && c.args.is_empty() {
+                if let Some((_, desc)) = self.static_field(&cls, &c.name) {
+                    out.insert(Upcall::Field(MemberRef { owner: cls.clone(), name: c.name.clone(), desc }));
+                }
+            }
+            for (_, name, desc, is_static) in hits {
                 if is_static == want_static {
                     out.insert(Upcall::Method(MemberRef { owner: cls.clone(), name, desc }));
                 }

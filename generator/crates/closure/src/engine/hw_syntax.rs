@@ -93,6 +93,13 @@ impl<'a> Engine<'a> {
             .find_map(|s| self.field_by_name(s, name))
     }
 
+    /// 类（含超类型）中按名字找 static 字段 → (声明类, 描述符)
+    pub(super) fn static_field(&self, cls: &str, name: &str) -> Option<(String, String)> {
+        self.supertypes(cls)
+            .iter()
+            .find_map(|c| c.fields.iter().find(|f| f.name == name && f.is_static()).map(|f| (c.name.clone(), f.desc.clone())))
+    }
+
     /// 手写体接收者静态类型 → 类名（引用类型；推不出为 None）
     pub(super) fn stype_class(&self, host: &str, s: &SType) -> Option<String> {
         let of_desc = |d: &str| match parse_field(d)? {

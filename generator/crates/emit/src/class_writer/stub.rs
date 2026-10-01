@@ -11,6 +11,7 @@ use ty::ClassInfo;
 
 use crate::ctx::EmitCtx;
 use crate::lang;
+use crate::precheck::stub_call;
 
 /// 存根：`sig` 为签名行（不含 ` {`，供无体声明 / `[meta]` 行复用），`text` 为完整函数文本
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +55,7 @@ fn has_field(ci: &ClassInfo, name: &str, desc: &str) -> bool {
 fn stub_body(ci: &ClassInfo, m: &Method) -> String {
     if m.is_native() || m.is_abstract() {
         let label = if m.is_native() { "native" } else { "stub" };
-        return format!("__stub(\"{label}: {}.{}:{}\")", ci.name(), m.name, m.desc);
+        return stub_call(label, &format!("{}.{}:{}", ci.name(), m.name, m.desc));
     }
     if m.name == "toString" && m.desc == lang::TO_STRING_DESC {
         return "Ok(String::from(Self::BINARY_NAME))".into();
@@ -66,7 +67,7 @@ fn stub_body(ci: &ClassInfo, m: &Method) -> String {
             "Ok(0)".into()
         };
     }
-    format!("__stub(\"stub: {}.{}:{}\")", ci.name(), m.name, m.desc)
+    stub_call("stub", &format!("{}.{}:{}", ci.name(), m.name, m.desc))
 }
 
 /// 形参名：局部变量表名（缺失为 `arg{i}`）→ safe_ident → 重名加序号
