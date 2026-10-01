@@ -516,6 +516,70 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 - 测量：Digester 声明 crate 峰值（目标 ≤ 2 GB）、HelloWorld `cargo build` 墙钟（目标 ≤ 12 s）。
 - 主会话 e2e 抽查：覆盖 Safe 定义 / 覆盖、`safe_stub`、`__impl_` 函数化、构造器与静态方法（含类初始化触发）、super 调用。
 
+#### 7.5.3 V1：ObjectVTable 视图改为按父类链委托（§7.4 第 2 项，2026-10-01 方案）
+
+**问题**：wrapper 的 `__view_into` / `__view_as` / `__erased_vtable` 与 inner 的 `__erased_vtable` 对每个祖先各展开一个 if 臂，臂内含 downcast、克隆、上转与旧值析构。每类代码量与继承深度成正比，接口载体臂与接口数成正比。S5 测得 Digester 声明 crate 中这几项与 `__shallow_copy` 合计约 10.0 万 size_est，`__virtual_view` 另有 2.4 万（单态化总量 114.6 万）。
+
+**做法**：每类只处理自身，祖先交给父类的同名入口，逐级上行。每类代码量变为常数，祖先臂在父类处只编一份。
+
+| 入口 | 新形态 | 落在 |
+|---|---|---|
+| `<dyn X__VTable>::__rava_erased_vtable(vt, slot) -> Option<__Shared<dyn ObjectVTable>>` | 槽是 `Option<__Shared<dyn X__VTable>>` 就填入并返回 None；否则把 `vt` 上转为父类 trait 对象，转交父类同名入口；没有父类（父类是 Object）时把 `vt` 上转为 `dyn ObjectVTable` 原样返回 | 声明层；trait 对象上的固有关联函数，不泛型，每类一份 |
+| wrapper `__erased_vtable` | 调上一行，返回 Some 时转交 `ObjectVTable::__erased_vtable`，与现状最后一步相同 | 声明层 |
+| inner `__erased_vtable` | 调上一行，返回 Some 时释放，与现状最后一步相同 | 实现层 |
+| `X::<G>::__rava_view_chain(vt, &any, is_null, slot) -> bool` | 槽是 `Option<Self>` 就填 `__from_parts(vt, any 克隆, is_null)`；否则把 `vt` 上转后转交 `<父类<实参>>::__rava_view_chain`；没有父类时返回 false | 声明层 |
+| wrapper `__view_into` | 先调上一行（传 vtable 克隆），未命中再查接口载体表 | 声明层 |
+| `X::<G>::__rava_view_as_chain(vt, &any, is_null, type_id)` | 与 `__rava_view_chain` 同形，按 `BINARY_NAME` 比较，命中返回 `Box<dyn Any>` | 声明层 |
+| 接口载体臂 | 改为 runtime 的泛型 helper `__iface_view_fill::<I>(slot, &dyn Fn() -> Object) -> bool`，按接口载体类型单态化，全部类共用。每类只有一个闭包 `\|\| Object::from(self 克隆)`，再加一张函数指针表依次调用 | helper 手写在 `object_ext.rs`；表由声明层生成 |
+
+**等价性**
+- 槽类型两两不同（本类与各祖先的 wrapper / trait 对象 / 接口载体），任一查询至多一个臂命中。因此结果只取决于「槽类型 → 填入值」这个映射，与臂的顺序无关。
+- 祖先 wrapper 值：
+  - 现状经 `From<Self> for Anc` 得到 `Anc::__from_parts(vtable as dyn Anc__VTable, any, _jvm_null)`。
+  - 逐级上行得到的部件完全相同：同一 vtable 对象（trait 上转，Rc 指向不变，分派到同一具体类型的实现），同一 `any`，同一 null 标志。
+  - 本类臂原为 `Clone::clone(self)`，即 `{vtable 克隆, any 克隆, _jvm_null}`，与 `__from_parts` 结果相同。
+- 未命中时的回落：
+  - wrapper `__erased_vtable` 最终把同一 vtable 对象上转为 `dyn ObjectVTable` 再转交，与现状相同。
+  - inner 最终释放 self，与现状相同。
+  - inner 不能复用 wrapper 的转交（会递归回自身），所以链返回未应答的对象，由两侧各自收尾。
+- 接口载体臂：填入值同为 `<I as From<Object>>::from(Object::from(self 克隆))`，只在命中时构造。宿主仍是本类 wrapper，不改由父类视图包装，因此后续从载体取回的 Object 内部类型不变。
+- **前提一（需实测）**：祖先集合与类型实参可以逐级复合。
+  - 要求：对每个类 X 及其父类 P，X 的 `all_superclasses` 等于 {P} ∪ P 的 `all_superclasses`；且 X 记录的祖先实参，等于 P 记录的实参代入「P 的形参 := X 给 P 的实参」后的结果。
+  - 生成器按 SuperclassSignature 逐级代入，按构造应成立。实施前写脚本扫 27 例生成树全部类，不成立的类列出原因；不全部成立则不实施（视图槽按精确类型匹配，实参不同就是另一个类型）。
+  - 同时确认每个祖先都是 `java_class!` 生成类。runtime 中没有手写的类 wrapper，已查。
+- **前提二（已查）**：手写的类 vtable 实现者（locale provider 等）不应答 `__erased_vtable` / `__shallow_copy`，取 trait 缺省值。新形态在 wrapper 侧仍按静态类逐级应答，这些对象的行为不变。若改成「全交给运行时类 inner 应答」，它们会丢失应答，所以不采用。
+- 运行期代价：
+  - `__view_into` / `__view_as` 每次调用多一次 vtable 引用计数的增减。上行过程中 vtable 按值移动，不再增加计数。
+  - 未命中时由 if 链的类型比较变为逐级函数调用，层数相同。
+  - 命中时的克隆次数与现状相同。
+
+**不做（写明原因）**
+- `__shallow_copy` 的逐字段回落：只在 vtable 对象不应答时可达，即只对手写实现者可达。它的代码量与字段数成正比，无法链式委托（需要按静态类重新分配存储）。可达性论证要连同 `Object.clone` 的 Cloneable 判定一起做，留作单独一步。
+- `__virtual_view` 与 `From<Object>` 擦除路径按实例化单态化：拆出非泛型部件函数，归第 2 项（`From<Object>` / checkcast / new）。
+
+**步骤（每步单独提交、单独测量）**
+1. 前提一扫描脚本与结论（只读）。
+2. `__erased_vtable`：wrapper 与 inner 两侧改用链。
+3. `__view_into` 与 `__view_as`：类链部分。
+4. 接口载体表。
+
+**每步验收**
+- 宏单测。
+- 27 例生成树：生成器文本不变（本项只改宏展开与 runtime），所以只对照宏展开：变化只出现在上述方法。
+- 真编译单例抽查。
+- 同锁背靠背测量：Digester 声明 crate 峰值、HelloWorld 构建墙钟，并附 size_est 分项。
+
+**主会话 e2e 抽查用例**（覆盖面在括号内）：
+- 异常：CustomExceptionHierarchyTest、ExceptionHierarchy、MultiCatchTest（catch 祖先 / 中间类型）；
+- 继承与转型：InstanceOfInherit、TestNullVirtualView、InheritanceChain（checkcast 到祖先，虚分派视图）；
+- 泛型：GenericClassDemo、TestBoundedGenerics（泛型祖先实参）；
+- 接口：InterfaceDispatch、TestCollections（接口 checkcast）；
+- 数组：TestArrayCovariance、TestArrayCopy（协变存取与 arraycopy）；
+- Unsafe 与 clone：TestAtomics、TestObjectClone；
+- 另加必选 5 例。
+
+**预期**：这几项合计约 12 万 size_est，即单态化总量的 10% 左右；峰值预计下降 0.1–0.3 GB。单靠这一项达不到 ≤ 2 GB，仍需第 2 项及之后各项。
+
 ### 7.6 量化目标
 
 | 指标 | 现状 | 终态 |
