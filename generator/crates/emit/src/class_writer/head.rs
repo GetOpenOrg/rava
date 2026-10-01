@@ -104,6 +104,12 @@ fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     if !cf.permitted_subclasses.is_empty() {
         lines.push(format!("#[permitted_subclasses = \"{}\"]", q(&cf.permitted_subclasses.join(","))));
     }
+    if !cf.nest_members.is_empty() {
+        lines.push(format!("#[nest_members      = \"{}\"]", q(&cf.nest_members.join(","))));
+    }
+    // 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内，含 ACC_SUPER / ACC_SYNTHETIC 等）：
+    // Class.getClassAccessFlagsRaw0 的数据源（HotSpot JVM_GetClassAccessFlags 同源）
+    lines.push(format!("#[class_access_flags = \"{}\"]", cf.access & 0x7FFF));
     if ci.methods().iter().any(|m| m.name == "<clinit>") {
         lines.push("#[has_clinit        = true]".into());
     }

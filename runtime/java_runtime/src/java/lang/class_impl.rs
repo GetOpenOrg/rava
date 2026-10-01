@@ -544,10 +544,18 @@ impl Class {
         Ok(Default::default())
     }
 
-    /// native `getSigners()`：无 jar 签名者——null（未签名类的 JDK 返回值）。
+    /// native `getSigners()`：HotSpot `JVM_GetClassSigners`——基本类型或未经 setSigners 记录 → null
+    /// （原生二进制无 jar 签名者，未签名类的 JDK 返回值）；已记录 → 返回其 Object[] 副本。
     #[jvm_native]
     pub fn getSigners(&self) -> Result<JArray<Object>> {
-        Ok(Default::default())
+        if self.isPrimitive()? {
+            return Ok(Default::default());
+        }
+        let key = self.__slash_name();
+        Ok(match _signers_table(|t| t.get(&key).cloned()) {
+            Some(a) if !a.is_jvm_null() => JArray::from(a.to_vec()),
+            _ => Default::default(),
+        })
     }
 }
 
@@ -857,4 +865,72 @@ impl Class {
         }
         Ok(crate::java::lang::reflect::Method::default())
     }
+}
+
+// ── 嵌套成员 / 访问标志 / 签名者 native（数据源 = 元数据表；HotSpot 读同一 class 文件属性）────
+impl Class {
+    /// 实例类（非数组、非基本类型）的斜线名；数组 / 基本类型 → None。
+    fn __instance_klass_name(&self) -> Result<Option<std::string::String>> {
+        let key = self.__slash_name();
+        Ok(if key.starts_with('[') || self.isPrimitive()? { None } else { Some(key) })
+    }
+
+    /// native `getDeclaredClasses0()`：InnerClasses 中 outer 为本类、inner 非本类的条目（属性序），
+    /// HotSpot `JVM_GetDeclaredClasses` 同源；数组 / 基本类型 → 空数组（同 HotSpot）。
+    #[jvm_native]
+    pub fn getDeclaredClasses0(&self) -> Result<JArray<Class>> {
+        if self.__instance_klass_name()?.is_none() {
+            return Ok(JArray::from(Vec::<Class>::new()));
+        }
+        let members: &[&str] = self.__nest().map(|m| m.members).unwrap_or(&[]);
+        Ok(JArray::from(members.iter().map(|n| Class::for_class(String::from(*n))).collect::<Vec<Class>>()))
+    }
+
+    /// native `getNestMembers0()`：嵌套宿主在首位，其后为宿主 NestMembers 属性所列成员（声明序），
+    /// HotSpot `JVM_GetNestMembers` 同形；非宿主类先取其宿主（getNestHost0）再列宿主的成员；
+    /// 数组 / 基本类型 → 仅自身（`Class.getNestMembers` 在 Java 侧已对其短路，此处与 VM 同解）。
+    #[jvm_native]
+    pub fn getNestMembers0(&self) -> Result<JArray<Class>> {
+        if self.__instance_klass_name()?.is_none() {
+            return Ok(JArray::from(vec![Clone::clone(self)]));
+        }
+        let host = self.getNestHost0()?;
+        let host_name = host.__slash_name();
+        let mut out = vec![Clone::clone(&host)];
+        if let Some((_, list)) = crate::meta::nest_members().iter().find(|(n, _)| *n == host_name) {
+            out.extend(list.iter().map(|n| Class::for_class(String::from(*n))));
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// native `getClassAccessFlagsRaw0()`：类文件 access_flags 原值（含 ACC_SUPER / ACC_SYNTHETIC，
+    /// 不含 InnerClasses 条目的修饰符），HotSpot `JVM_GetClassAccessFlags`：基本类型 →
+    /// `ACC_ABSTRACT | ACC_FINAL | ACC_PUBLIC`（0x411）；数组类 → 0（JDK 21 实测同值）。
+    #[jvm_native]
+    pub fn getClassAccessFlagsRaw0(&self) -> Result<i32> {
+        if self.isPrimitive()? {
+            return Ok(0x0411);
+        }
+        let key = self.__slash_name();
+        Ok(crate::meta::class_access_flags().iter().find(|(n, _)| *n == key).map_or(0, |(_, f)| *f))
+    }
+
+    /// native `setSigners(Object[])`：记录类的签名者（HotSpot `JVM_SetClassSigners` 写镜像注入字段
+    /// `signers`；基本类型类不记录）。镜像按类名唯一（for_class 缓存），以类名为键的进程表承载该注入
+    /// 状态；读取方为同文件的 `getSigners`。
+    #[jvm_native]
+    pub fn setSigners(&self, signers: JArray<Object>) -> Result<()> {
+        if !self.isPrimitive()? {
+            _signers_table(|t| { t.insert(self.__slash_name(), signers); });
+        }
+        Ok(())
+    }
+}
+
+/// 类镜像注入字段 `signers` 的承载表（类名 → 签名者数组）。
+fn _signers_table<R>(f: impl FnOnce(&mut HashMap<std::string::String, JArray<Object>>) -> R) -> R {
+    crate::__process_static! {
+        static SIGNERS: RefCell<HashMap<std::string::String, JArray<Object>>> = RefCell::new(HashMap::new());
+    }
+    SIGNERS.with(|t| f(&mut t.borrow_mut()))
 }

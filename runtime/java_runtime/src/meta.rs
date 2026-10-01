@@ -38,6 +38,8 @@ pub struct NestMeta {
     pub simple:     &'static str,
     pub self_entry: bool,
     pub enclosing:  Option<(&'static str, &'static str, &'static str)>,
+    /// 本类声明的成员类（InnerClasses 中 outer 为本类的条目，属性序）
+    pub members:    &'static [&'static str],
 }
 
 /// 注解引用的稀疏常量池条目值。
@@ -66,6 +68,10 @@ extern "Rust" {
     static CLINIT_CLASSES: Names;
     #[link_name = "__java_meta_PERMITTED_SUBCLASSES"]
     static PERMITTED_SUBCLASSES: &'static [(&'static str, Names)];
+    #[link_name = "__java_meta_NEST_MEMBERS"]
+    static NEST_MEMBERS: &'static [(&'static str, Names)];
+    #[link_name = "__java_meta_CLASS_ACCESS_FLAGS"]
+    static CLASS_ACCESS_FLAGS: &'static [(&'static str, i32)];
     #[link_name = "__java_meta_RECORD_CLASSES"]
     static RECORD_CLASSES: Names;
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
@@ -101,6 +107,10 @@ pub fn class_anno() -> &'static [(&'static str, &'static [u8], &'static [(i32, C
 pub fn clinit_classes() -> Names { unsafe { CLINIT_CLASSES } }
 /// sealed 类 → 许可子类型。
 pub fn permitted_subclasses() -> &'static [(&'static str, Names)] { unsafe { PERMITTED_SUBCLASSES } }
+/// 嵌套宿主 → NestMembers 属性所列成员。
+pub fn nest_members() -> &'static [(&'static str, Names)] { unsafe { NEST_MEMBERS } }
+/// 类 → 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内）。
+pub fn class_access_flags() -> &'static [(&'static str, i32)] { unsafe { CLASS_ACCESS_FLAGS } }
 /// record 类集。
 pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 /// record 类 → 分量（名、描述符、泛型签名）。
