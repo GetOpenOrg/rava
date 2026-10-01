@@ -179,6 +179,7 @@ fn analyze<R: Send>(
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_members,
         locales: o.locales.clone(),
+        diag: crate::closure_cmd::diag_opts(&o.cuts, &o.cut_files, o.dump_edges.clone())?,
         cold_cut: false,
         flow_batch: None,
     };

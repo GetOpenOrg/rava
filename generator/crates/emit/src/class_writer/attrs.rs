@@ -113,28 +113,11 @@ pub fn constant_value_str(c: &Const) -> String {
                 py_float_repr(v)
             }
         }
-        Const::String(s) => escape_const_string(s),
+        Const::String(s) => ir::render::escape_str(s),
         // 元数据文本只作展示；常量值本身由 `utf16_const_literal` 无损发射
-        Const::StringUtf16(u) => escape_const_string(&String::from_utf16_lossy(u)),
+        Const::StringUtf16(u) => ir::render::escape_str(&String::from_utf16_lossy(u)),
         _ => String::new(),
     }
-}
-
-fn escape_const_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        let cp = ch as u32;
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ if cp < 0x20 || (0x7f..=0x9f).contains(&cp) => out.push_str(&format!("\\u{{{cp:04x}}}")),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 /// 稀疏注解常量池编码 `idx:K:值;…`（← `classfile.encode_anno_cpool`）；字符串 `U` = UTF-8 字节 hex，

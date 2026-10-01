@@ -25,12 +25,14 @@ def rava_cmd(*args: str) -> list[str]:
 
 def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict: bool, locales: tuple[str, ...],
              libs: tuple[str, ...] = (), batch: bool = False, debug: bool = False, trace_class: str = '',
-             precheck_only: bool = False, raw_sites: str = '', closure_json: bool = False) -> None:
+             precheck_only: bool = False, raw_sites: str = '', closure_json: bool = False,
+             extra: list[str] = ()) -> None:
     """`rava build --stop-after emit`：（clean 时先清空 out_dir）overlay → javac → 闭包 → 发射进 out_dir。
 
     镜像独有 / VM 支持类目录由 rava 自行派生（resolve::image）。
 
-    libs 为 main.py `--lib` 原样规格（NAME=JAR[:seed=FQN,…]），解析与校验在 rava 内完成"""
+    libs 为 main.py `--lib` 原样规格（NAME=JAR[:seed=FQN,…]），解析与校验在 rava 内完成；
+    extra 为闭包诊断参数（--cut / --cut-file / --dump-edges），main.py 已转成 rava 参数"""
     home = os.environ.get('JAVA_HOME', '')
     if not home:
         sys.exit('rava build 需要 JAVA_HOME（main.py 经 jdk_select.apply_jdk 设置）')
@@ -52,6 +54,7 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
                      ('--closure-json', closure_json)):
         if on:
             cmd.append(flag)
+    cmd += list(extra)
     print(f"[rava] build {' '.join(os.path.basename(f) for f in java_files)} → {out_dir}", flush=True)
     r = subprocess.run(cmd)
     if r.returncode != 0:

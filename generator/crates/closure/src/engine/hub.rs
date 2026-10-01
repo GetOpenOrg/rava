@@ -68,6 +68,7 @@ impl<'a> Engine<'a> {
             if let Some(rt) = ret {
                 self.flow(Node::HR(p), Node::HR(h), rt);
             }
+            cut::edge_plain(&format!("H:{h}"), &format!("H:{p}"));
             let rs = self.hubs[p as usize].recvs.clone();
             self.hubs[h as usize].recvs.extend(rs);
         }
@@ -89,6 +90,9 @@ impl<'a> Engine<'a> {
             return;
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
+        if cut::edges_on() {
+            cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("H:{h}"));
+        }
         let hub = &self.hubs[h as usize];
         let (ptypes, ret) = (hub.ptypes.clone(), hub.ret);
         for (j, f) in a.iter().enumerate() {
@@ -243,7 +247,8 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
-        let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.recv_ctx(r), via);
+        let cx = self.recv_ctx(r);
+        let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
         if self.vm_hubs.contains(&h) {
             // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
             self.vm_targets.insert(t);

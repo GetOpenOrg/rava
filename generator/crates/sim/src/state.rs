@@ -1,10 +1,10 @@
 //! 模拟器本体：配置、状态、栈操作、局部变量读取与槽位命名（← `StackSim` 除 store 外的部分）。
 
-use crate::env::{ident, to_ir_type, type_text, SimEnv};
+use crate::env::{erase, erased_base, ident, to_ir_type, type_text, SimEnv};
 use crate::error::SimResult;
 use crate::exprs::{is_trivial, materialized_needs_type, reads_state, underflow_value};
 use crate::names::safe_name;
-use crate::types::is_scalar;
+use crate::types::{is_object, is_scalar};
 use ir::{Expr, Ident, LetStmt, Stmt};
 use std::collections::{BTreeMap, BTreeSet};
 use ty::{Prim, RsType};
@@ -19,6 +19,14 @@ pub struct StackEntry {
     pub expr: Expr,
     pub ty: RsType,
     pub id: ValueId,
+}
+
+/// 合成槽的类型类别（← `_synth_slot_kind`）：基本类型各自一类；引用类别是互相关联
+/// （同擦除基名 / 任一方向子类型）的引用类型集合
+#[derive(Debug, Clone, PartialEq)]
+pub enum SynthKind {
+    Scalar(String),
+    Ref(Vec<RsType>),
 }
 
 /// 局部变量槽的当前绑定（`locals[slot] = (name, ty, is_new)`）
@@ -78,8 +86,8 @@ pub struct SimState {
     pub next_id: ValueId,
     /// 形参占用的槽位（类型由签名决定）
     pub param_slots: BTreeSet<u16>,
-    /// 合成槽按类型类别分名：slot → 类别序列（标量渲染名或 `ref`）
-    pub synth_slot_kinds: BTreeMap<u16, Vec<String>>,
+    /// 合成槽按类型类别分名：slot → 类别序列（首个类别用 `local_N`）
+    pub synth_slot_kinds: BTreeMap<u16, Vec<SynthKind>>,
     /// 当前字节码偏移
     pub current_offset: u32,
     /// 下一条指令偏移（store 后变量作用域起点）
@@ -266,27 +274,56 @@ impl<'e> StackSim<'e> {
         entries.iter().find(|d| d.start == nxt || (nxt <= off && off < d.start && d.start <= off + 4))
     }
 
-    /// 合成槽名：同一槽位的合成临时变量按类型类别（标量各自一类，引用同属 `ref`）分名，
-    /// 首个类别 `local_N`，其后 `local_N_k`；ty=None → 首名
+    /// 合成槽名：同一槽位的合成临时变量按类型类别分名（见 [`SynthKind`]）——javac 在不同
+    /// 用途间复用同一合成槽（record 模式的 `int` 分量与记录本身；for-each 迭代器与
+    /// try-finally 返回值暂存），同名会在分支提升时合并成根类声明。首个类别 `local_N`，
+    /// 其后 `local_N_k`；ty=None → 首名
     pub fn synth_slot_name(&mut self, slot: u16, ty: Option<&RsType>) -> String {
         let base = format!("local_{slot}");
         let Some(ty) = ty else {
             return base;
         };
-        let key = if is_scalar(ty) { type_text(ty, self.env) } else { "ref".to_string() };
-        let seen = self.state.synth_slot_kinds.entry(slot).or_default();
-        let k = match seen.iter().position(|s| *s == key) {
-            Some(k) => k,
-            None => {
-                seen.push(key);
-                seen.len() - 1
-            }
-        };
+        let k = self.synth_slot_kind(slot, ty);
         if k == 0 {
             base
         } else {
             format!("{base}_{k}")
         }
+    }
+
+    /// 合成槽类别下标（登记新类别）：引用类型与已有引用类别任一成员同擦除基名或存在
+    /// 子类型关系即同类；根类（含 null）不带区分信息，并入首个引用类别
+    fn synth_slot_kind(&mut self, slot: u16, ty: &RsType) -> usize {
+        let env = self.env;
+        let kinds = self.state.synth_slot_kinds.entry(slot).or_default();
+        if is_scalar(ty) {
+            let key = type_text(ty, env);
+            if let Some(k) = kinds.iter().position(|s| matches!(s, SynthKind::Scalar(x) if *x == key)) {
+                return k;
+            }
+            kinds.push(SynthKind::Scalar(key));
+            return kinds.len() - 1;
+        }
+        let root = is_object(ty);
+        let base = erased_base(ty, env);
+        let erased = erase(ty);
+        for (k, kind) in kinds.iter_mut().enumerate() {
+            let SynthKind::Ref(members) = kind else { continue };
+            let related = root
+                || members.iter().all(is_object)
+                || members.iter().filter(|m| !is_object(m)).any(|m| {
+                    let me = erase(m);
+                    erased_base(m, env) == base || env.is_subtype(&erased, &me) || env.is_subtype(&me, &erased)
+                });
+            if related {
+                if !members.contains(ty) {
+                    members.push(ty.clone());
+                }
+                return k;
+            }
+        }
+        kinds.push(SynthKind::Ref(vec![ty.clone()]));
+        kinds.len() - 1
     }
 
     /// 当前偏移无声明覆盖的 slot 的变量名（槽位被别的 Java 变量复用 / 无 LVT 名 → 合成名）
