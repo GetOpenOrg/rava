@@ -99,6 +99,11 @@ impl InstrHooks for Hooks<'_, '_> {
         };
         Some(ir::Path::new(segs))
     }
+
+    fn slot_pruned(&self, owner: &str, name: &str, desc: &str) -> bool {
+        let Some(ci) = self.ctx.ty.reg.get(owner) else { return false };
+        ci.methods().iter().find(|m| m.name == name && m.desc == desc).is_some_and(|m| self.ctx.slot_pruned(m, ci))
+    }
 }
 
 /// 登记事实 → 发射层账本条目

@@ -224,11 +224,14 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
         parts.push(format!("access = \"{}\"", method.access));
     }
     parts.push(format!("inherited_from = \"{}\"", rust_type(&ctx.short(owner_bin), &owner_args)));
+    let slotless = method.virtual_in.is_empty() && !method.handwritten;
     if !method.virtual_in.is_empty() {
         parts.push(format!("vtable_owner = \"{}\"", rust_type(&ctx.short(&vt_bin), &vt_args)));
         if &recv_name != slot_name {
             parts.push(format!("vtable_name = \"{slot_name}\""));
         }
+    } else if slotless && recv_name != method.rust_name {
+        parts.push(format!("target = \"{}\"", method.rust_name));
     }
     let mut erasure = slot_erasure_entries(ctx, &vt_bin, method, &signature);
     if erasure.is_empty() {
@@ -237,6 +240,10 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     let ev = erasure_attr(&erasure, &signature);
     if !ev.is_empty() {
         parts.push(format!("vtable_erasure = \"{ev}\""));
+    }
+    // 不占槽（未被派发到）的祖先方法：宏上转到声明者 wrapper 直接调用，无转发体
+    if slotless {
+        return format!("#[java_method({})]\n{signature};", parts.join(", "));
     }
     let body = forward_body(ctx, method, owner_bin, &owner_args);
     format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", "))
@@ -300,7 +307,7 @@ impl<'a> RecvPass<'a, '_> {
 
     /// 转发体调用的 owner `__base` 自由函数的导入
     fn base_fn_import(&mut self, owner_bin: &str, method: &EmittedMethod) {
-        if method.handwritten {
+        if method.handwritten || method.virtual_in.is_empty() {
             return;
         }
         let base_short = format!("{}__{}_base", self.ctx.short(owner_bin), method.rust_name);

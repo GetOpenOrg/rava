@@ -101,6 +101,8 @@ pub struct EmitInput {
     /// 按名初始化（`ensure_class_initialized`）可能命中的类：分析器 class_init 事实的目标；
     /// 目标不可定论（`unknown`）→ 链上全部有 `<clinit>` 的类
     pub class_init_targets: Vec<String>,
+    /// 经虚分派到达的实现（分析器 `dispatched`）：vtable 槽只为其中的实现占位（C3 第 5 项）
+    pub dispatched: BTreeSet<MethodKey>,
     pub jca_seeds: Vec<JcaService>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
@@ -362,6 +364,7 @@ impl<'a> BuildInput<'a> {
             data_bundle_seeds: f.seeds.data_bundles.clone(),
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
             class_init_targets: if f.class_init.unknown { f.clinit.clone() } else { f.class_init.targets.clone() },
+            dispatched: f.dispatched.iter().map(key_of).collect(),
             jca_seeds: f.seeds.jca.clone(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),

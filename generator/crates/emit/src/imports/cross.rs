@@ -277,6 +277,13 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
             if orig == ci.name() {
                 continue;
             }
+            // 不占槽的落点无 `__base` 自由函数（调用点改为 wrapper 直接调用）
+            let pruned = reg
+                .get(&orig)
+                .and_then(|oc| oc.methods().iter().find(|am| am.name == r.name && am.desc == r.desc).map(|am| ctx.slot_pruned(am, oc)));
+            if pruned == Some(true) {
+                continue;
+            }
             let is_jdk = orig.contains('/');
             let (base_simple, base_mod) = if is_jdk {
                 let is_root = orig == chain_top(ctx, ci) && orig != ci.name();

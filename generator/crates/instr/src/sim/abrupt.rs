@@ -44,7 +44,11 @@ pub fn null_recv(env: &InstrEnv, sim: &mut StackSim, call_insn: &Insn) -> InstrR
             sim.emit(let_discard(a.expr));
         }
     }
-    let err = call(&["__null_recv"], vec![Expr::reference(recv_expr), Expr::Lit(Lit::Str(member))])?;
+    // 非 vtable 体的实例方法（含不占槽的 NonVirtual 方法）里 `this` 已是 `&Self`，不再取引用；
+    // 构造器里 `this` 是值，vtable 体由宏改写接收者，二者照常取引用
+    let this_is_ref = !sim.cfg.in_vtable_body && !sim.cfg.is_constructor && !sim.cfg.is_static && text(env, &recv_expr) == "this";
+    let recv_arg = if this_is_ref { recv_expr } else { Expr::reference(recv_expr) };
+    let err = call(&["__null_recv"], vec![recv_arg, Expr::Lit(Lit::Str(member))])?;
     sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)));
     Ok(())
 }

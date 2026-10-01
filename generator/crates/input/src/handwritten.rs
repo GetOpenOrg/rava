@@ -33,6 +33,9 @@ pub struct HwEntry {
     pub method_cores: BTreeMap<String, (String, String)>,
     /// 接口伴生实现的方法：rust fn 名 → (参数文本（不含接收者）, 返回类型文本)
     pub iface_method_sigs: BTreeMap<String, (String, String)>,
+    /// 手写实现对象为该（非接口）类的 vtable trait 提供的 fn 名（`impl X__VTable for S`）：
+    /// 这些槽由手写对象实现，发射层不得按分派结果裁剪
+    pub class_vtable_fns: BTreeSet<String>,
 }
 
 /// 类 binary name → 手写事实
@@ -197,6 +200,10 @@ fn vtable_sigs(content: &str) -> BTreeMap<String, BTreeMap<String, (String, Stri
     out
 }
 
+fn is_word_str(s: &str) -> bool {
+    s.chars().all(is_word)
+}
+
 /// 在 `impl` 位置匹配 vtable 头，返回 (trait 标识, `{` 之后的位置)
 fn vtable_head(content: &str, p: usize) -> Option<(&str, usize)> {
     if !starts_word(content, p) {
@@ -207,8 +214,11 @@ fn vtable_head(content: &str, p: usize) -> Option<(&str, usize)> {
     if i == after {
         return None;
     }
-    let end = i + content[i..].find(|c: char| !is_word(c)).unwrap_or(content.len() - i);
-    let ident = content[i..end].strip_suffix(VTABLE_SUFFIX).filter(|s| !s.is_empty())?;
+    // 路径限定的 trait（`crate::a::b::X__VTable`）取末段
+    let end = i + content[i..].find(|c: char| !(is_word(c) || c == ':')).unwrap_or(content.len() - i);
+    let path = &content[i..end];
+    let last = path.rsplit("::").next().unwrap_or(path);
+    let ident = last.strip_suffix(VTABLE_SUFFIX).filter(|s| !s.is_empty() && is_word_str(s))?;
     let j = skip_ws(content, end);
     if j == end || !content[j..].starts_with("for") {
         return None;
@@ -289,6 +299,7 @@ impl HandwrittenMap {
             let same_pkg = cands.iter().find(|c| c.rsplit_once('/').is_some_and(|(p, _)| p == file_pkg));
             let target = same_pkg.or(cands.first()).copied().unwrap_or(class_binary);
             if reg.get(target).is_some_and(|ci| !ci.is_interface()) {
+                self.classes.entry(target.to_string()).or_default().class_vtable_fns.extend(methods.into_keys());
                 continue;
             }
             self.classes.entry(target.to_string()).or_default().iface_method_sigs.extend(methods);

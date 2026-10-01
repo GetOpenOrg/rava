@@ -170,6 +170,8 @@ pub struct ClosureFacts {
     pub reflect_gaps: Vec<String>,
     pub seeds: SeedFacts,
     pub class_init: ClassInitFacts,
+    /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
+    pub dispatched: Vec<MemberRef>,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -276,6 +278,7 @@ impl ClosureFacts {
                 targets: e.class_init.targets().into_iter().map(String::from).collect(),
                 unknown: e.class_init.unknown,
             },
+            dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
         }
     }
 
@@ -320,6 +323,7 @@ impl ClosureFacts {
                 unknown: ci.get("unknown").and_then(Value::as_bool).unwrap_or(false),
             };
         }
+        out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         Ok(out)
     }
 }

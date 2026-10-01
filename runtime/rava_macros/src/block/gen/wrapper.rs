@@ -599,9 +599,14 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             .#target(#(#param_names),*)
                     }
                 } else {
+                    // 不占槽的类祖先方法（C3 按分派裁剪）：上转到声明者 wrapper 直接调用；
+                    // 声明者视角的方法名（重载改名）与本类视角不同时同样取 `target`
+                    let target = attr_str(&f.attrs, "target")
+                        .map(|t| Ident::new(&t, proc_macro2::Span::call_site()))
+                        .unwrap_or_else(|| mname.clone());
                     quote! {
                         <#owner_ty as ::std::convert::From<Self>>::from(::std::clone::Clone::clone(self))
-                            .#mname(#(#param_names),*)
+                            .#target(#(#param_names),*)
                     }
                 }
             }
