@@ -28,7 +28,7 @@ use crate::text::scratch_pkg_version;
 pub const BODY_CRATE_PREFIX: &str = "java_body_";
 
 /// 单个实现 crate 的块文本字节上限（§7.6：单个实现 crate rustc 峰值 ≤ 1.5 GB）
-pub const BODY_CRATE_BYTES: usize = 6 << 20;
+pub const BODY_CRATE_BYTES: usize = 5 << 20;
 
 const BLOCK_OPEN: &str = "rava_macros::java_class! {\n";
 
@@ -103,18 +103,38 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
         bodies.push((em.binary_name.clone(), rel, body));
     }
     bodies.sort_by(|a, b| a.0.cmp(&b.0));
+    let sizes: Vec<usize> = bodies.iter().map(|b| b.2.len()).collect();
+    let bins = pack(&sizes, BODY_CRATE_BYTES);
     let mut plan = BodyPlan::default();
-    let mut used = 0usize;
-    for (_, rel, body) in bodies {
-        if plan.crates.is_empty() || (used > 0 && used + body.len() > BODY_CRATE_BYTES) {
+    for ((_, rel, body), bin) in bodies.into_iter().zip(bins) {
+        while plan.crates.len() <= bin {
             let name = format!("{BODY_CRATE_PREFIX}{}", plan.crates.len() + 1);
             plan.crates.push(BodyCrate { name, files: BTreeMap::new() });
-            used = 0;
         }
-        used += body.len();
-        plan.crates.last_mut().expect("刚建").files.insert(rel, body);
+        plan.crates[bin].files.insert(rel, body);
     }
     plan
+}
+
+/// 均衡装箱：箱数 k = ⌈总字节 / 上限⌉，按序把每项分到其字节中点落入的 1/k 区间，
+/// 各箱约为总量 / k（≤ 上限，偏差不超过单项大小），不出现贪心装箱尾部的小箱；
+/// 结果只依赖项序与大小（确定性）。返回每项的箱号（单调不减、无空箱）。
+fn pack(sizes: &[usize], cap: usize) -> Vec<usize> {
+    let total: usize = sizes.iter().sum();
+    let k = total.div_ceil(cap.max(1)).max(1);
+    let mut prefix = 0usize;
+    let mut out = Vec::with_capacity(sizes.len());
+    let mut last = 0usize;
+    for &n in sizes {
+        let mid = prefix + n / 2;
+        prefix += n;
+        // 箱号单调不减，且相邻项最多跳一箱（大项跨越多个区间时不留空箱）
+        let bin = ((mid as u128 * k as u128 / total.max(1) as u128) as usize).min(k - 1);
+        let bin = if out.is_empty() { 0 } else { bin.clamp(last, last + 1) };
+        out.push(bin);
+        last = bin;
+    }
+    out
 }
 
 /// 模块声明行（关键字名加 `r#`）
@@ -206,5 +226,16 @@ mod tests {
             "#![allow(x)]\nuse crate::prelude::*;\n\nuse java_runtime::a::b::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"body\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n"
         );
         assert_eq!(module_path(Path::new("java/lang/ref/reference.rs")), "java::lang::r#ref::reference");
+    }
+
+    #[test]
+    fn pack_balances_bins() {
+        // 总 25、上限 10 → 3 箱，各约 8
+        let bins = pack(&[3, 3, 3, 3, 3, 3, 3, 4], 10);
+        assert_eq!(bins, vec![0, 0, 0, 1, 1, 1, 2, 2]);
+        assert_eq!(pack(&[5], 10), vec![0]);
+        assert_eq!(pack(&[], 10), Vec::<usize>::new());
+        // 单项超上限：箱号不跳空
+        assert_eq!(pack(&[1, 30, 1], 10), vec![0, 1, 2]);
     }
 }
