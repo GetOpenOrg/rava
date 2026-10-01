@@ -914,8 +914,15 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
 - 闭包分析：`StringUtf16` 按非空 String 站点值入栈（不进常量格），ldc 事件照常实例化 String。
 - 单测：`classfile reader::mutf8_tests::lone_surrogate_keeps_units`、`instr sim::consts::tests::lone_surrogate_string_keeps_units`、
   `emit class_writer::fields::tests::names_and_literals`。单例验证 `scripts/main.py` 输出三行 split 与 JVM 一致。
-- 已知局限：字符串拼接（indy 配方经 `format!` 构造 Rust 文本）对孤立代理项仍不保值——配方常量、`char` 实参（`char::from_u32(..).unwrap_or('?')`）、
-  String 实参的 Display 同一口径；注解元素的字符串常量亦按文本。终态需把拼接改为 UTF-16 码元级构造，另列。
+- ~~已知局限：字符串拼接与注解字符串常量按 Rust 文本~~ → 已在 UTF-16 层构造（2026-10-01，bc7eb54b）：
+  - 拼接 IR 改为 `Lit::JStringConcat(Vec<ConcatPart>)`（`Text` / `Units` / `Arg`），渲染 `(String::of("首段") + &s + c + n)`，运行时
+    `String` 的 `Add<&str | &[u16] | &String | u16 | bool | i8..i64 | f32 | f64>` 逐段追加码元（`string_ext.rs`）。配方模板与常量位值按码元
+    切分（含 `StringUtf16`），`char` 实参以 `u16` 码元追加，String 实参按引用追加码元（null → `"null"`），不再经 `format!` / Display。
+  - 注解稀疏常量池：含孤立代理项的 Utf8 → `AnnoConst::Utf16` → `idx:W:<码元 hex>` → `CpVal::W`，`getUTF8At0` 以 `from_utf16_lit` 构造。
+  - 单测：`instr concat::tests::{recipe_keeps_lone_surrogates, recipe_text_segments_and_arity, prim_operands_are_typed}`、
+    `ir render::lit::tests::concat_parts`、`classfile extras::tests::anno_const_keeps_lone_surrogate_units`、`emit attrs::tests::anno_cpool_strings`。
+  - e2e：`17_string_advanced/TestConcatLoneSurrogate`（配方常量段 / 常量位值 / char 实参 / String 实参 / 半代理拼成代理对 / 注解字符串常量，
+    期望输出由 JDK 21 生成），`scripts/main.py` 单例 11 行与 JVM 逐字一致。
 
 **TestNetworkInterface：命中 `UnixNativeDispatcher.openatSupported:()Z` 存根（归属：边界截断 + 手写层缺口，非精度改动；主干同样失败）**。
 `dyn_compare --methods` 的 cut 条目直接给出链：`SHA1PRNG` → `SeedGenerator$1.run`（JCA 放行，翻译体）列举临时目录 →
