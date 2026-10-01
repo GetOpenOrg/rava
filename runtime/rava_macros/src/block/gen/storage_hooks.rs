@@ -14,19 +14,21 @@ pub(crate) fn hook_ident(ctx: &GenContext, what: &str) -> Ident {
     format_ident!("__jb_{}__{}", ctx.struct_ident, what)
 }
 
-pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
+/// 三个钩子各为一个模块级自由函数（拆层时逐个拆为导出定义 + 外壳）
+pub(crate) fn generate(ctx: &GenContext) -> Vec<TokenStream2> {
     let inner_ident = &ctx.inner_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let alloc = hook_ident(ctx, "alloc");
     let cells = hook_ident(ctx, "cells");
     let from_any = hook_ident(ctx, "from_any");
-    quote! {
+    vec![quote! {
         /// 分配一个默认存储，返回 (vtable, 存储) 部件（wrapper 的 Default 与浅拷贝共用）
         #[doc(hidden)]
         pub fn #alloc() -> (__Shared<dyn #vtable_trait_ident>, __AnyRef) {
             let __rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
             (__Shared::clone(&__rc) as __Shared<dyn #vtable_trait_ident>, __rc as __AnyRef)
         }
+    }, quote! {
         /// 存储恰是本类存储时，返回其 ObjectVTable 视图（按名字段协议的静态类应答方）
         #[doc(hidden)]
         pub fn #cells(any: &__AnyRef) -> ::std::option::Option<&dyn ObjectVTable> {
@@ -34,6 +36,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 any.downcast_ref::<#inner_ident>(),
                 |__i| __i as &dyn ObjectVTable)
         }
+    }, quote! {
         /// 存储恰是本类存储时还原 (vtable, 存储) 部件；否则原样交还
         #[doc(hidden)]
         pub fn #from_any(
@@ -45,5 +48,5 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 ::std::result::Result::Err(__other) => ::std::result::Result::Err(__other),
             }
         }
-    }
+    }]
 }

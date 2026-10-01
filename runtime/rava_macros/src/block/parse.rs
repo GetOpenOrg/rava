@@ -209,6 +209,8 @@ pub(crate) struct ClassMeta {
     pub equals_vtable: Option<String>,
     /// 共置 `_impl.rs` 手写 impl 块提供的 wrapper inherent 方法名（不在宏块内、不进 vtable）。
     pub impl_methods: Vec<String>,
+    /// 展开层（`#[rava_layer = "decl" | "body"]`；缺省完整展开），见 `gen::layer`
+    pub layer: super::gen::layer::Layer,
 }
 
 impl ClassMeta {
@@ -273,6 +275,10 @@ impl ClassMeta {
                 let s = lit_str(attr)?;
                 m.impl_methods =
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
+            } else if path.is_ident("rava_layer") {
+                let s = lit_str(attr)?;
+                m.layer = super::gen::layer::Layer::parse(&s)
+                    .ok_or_else(|| syn::Error::new_spanned(attr, "rava_layer 取 full / decl / body"))?;
             } else if path.is_ident("superclass_reference_fields") {
                 let s = lit_str(attr)?;
                 m.superclass_reference_fields =
