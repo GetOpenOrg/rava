@@ -164,6 +164,9 @@ impl<'a> Engine<'a> {
             self.unresolved.insert(mref.to_string());
             return;
         };
+        if resolve::is_signature_polymorphic(site.method()) {
+            self.sigpoly_sites.insert(format!("{}@{off}", self.methods[m].key));
+        }
         let (o, n, d) = site.key();
         self.nest_access(m, off, &o, site.method().is_private());
         let resolved = MemberRef { owner: o, name: n, desc: d };

@@ -90,6 +90,7 @@ impl<'a> Engine<'a> {
             refs: BTreeSet::new(),
             mref_keys: HashMap::default(),
             indy_models: BTreeMap::new(),
+            sigpoly_sites: BTreeSet::new(),
             cold_cut: false,
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),

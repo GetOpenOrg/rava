@@ -143,19 +143,34 @@ class AttributeTest(unittest.TestCase):
         # 运行模型替换的 indy 调用点上的链接期加载（栈顶即该帧 / 其上全是模型外帧）
         site = 'java/util/A.f:()V@1'
         self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 1), MAIN), self.methods, self.r,
-                                      frozenset(), {site}), ('indy-model', site))
+                                      frozenset(), {site: 'indy-model'}), ('indy-model', site))
         self.assertEqual(dc.attribute(ev(('java/lang/invoke/LMF', 'mf', '()V', 0),
                                          ('java/util/A', 'f', '()V', 1), MAIN),
-                                      self.methods, self.r, frozenset(), {site})[0], 'indy-model')
+                                      self.methods, self.r, frozenset(), {site: 'indy-model'})[0], 'indy-model')
         # 模型再次进入已建模方法（拼接调 toString）：从该帧起照常归因，不被 indy 掩盖
         c, f = dc.attribute(ev(('java/util/B', 'g', '()V', 2), ('java/util/A', 'f', '()V', 3),
                                ('java/lang/invoke/SCH', 's', '()V', 0),
                                ('java/util/A', 'f', '()V', 1), MAIN),
-                            self.methods, self.r, frozenset(), {site})
+                            self.methods, self.r, frozenset(), {site: 'indy-model'})
         self.assertEqual((c, f), (dc.MISS, 'java/util/B.g:()V@2'))
         # 非模型调用点照旧
         self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 2), MAIN), self.methods, self.r,
-                                      frozenset(), {site}), (dc.MISS, None))
+                                      frozenset(), {site: 'indy-model'}), (dc.MISS, None))
+
+    def test_sigpoly_model(self):
+        # 签名多态调用点（MethodHandle.invoke）上方是 LambdaForm 调用器帧：跳到其上方首个已建模帧，
+        # 再经该帧的 indy 调用点进入链接期（TestBmhDynamicSpecies：main → invoke_MT → f → linkCallSite）
+        poly, indy = MAIN_ID + '@5', 'java/util/A.f:()V@1'
+        sites = {poly: 'sigpoly-model', indy: 'indy-model'}
+        e = ev(('java/lang/invoke/CS', 'makeSite', '()V', 8),
+               ('java/lang/invoke/Holder', 'invoke_MT', '()V', 17),
+               ('java/util/A', 'f', '()V', 1),
+               ('java/lang/invoke/Holder', 'invoke_MT', '()V', 17), MAIN)
+        self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), sites), ('indy-model', indy))
+        # 调用器帧自身的加载（其上无已建模帧）
+        e = ev(('java/lang/invoke/Holder', 'invoke_MT', '()V', 17), MAIN)
+        self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), sites), ('sigpoly-model', poly))
+        self.assertEqual(dc.model_sites({'sigpoly_sites': [poly], 'indy_models': [{'site': indy}]}), sites)
 
 
 def closure():
@@ -219,7 +234,7 @@ class MethodCompareTest(unittest.TestCase):
                    E('p/X.y:()V', ('q/Hw', 'n', '()V', 1)),                  # 手写承载体内：不可比
                    E('p/L.z:()V', ('p/A', 'f', '()V', 9)),                   # indy 模型调用点
                    E('p/M.w:()V', None)]
-        r = dc.compare_methods(self.closure(), entries, rules(), {'p/A.f:()V@9'})
+        r = dc.compare_methods(self.closure(), entries, rules(), {'p/A.f:()V@9': 'indy-model'})
         self.assertEqual([(m['method'], m['caller_cut']) for m in r['mmiss']],
                          [('q/Base.<init>:(I)V', True), ('p/B.h:()V', False)])
         self.assertEqual(r['by_category'], {'covered': 1, 'indy-model': 1,
