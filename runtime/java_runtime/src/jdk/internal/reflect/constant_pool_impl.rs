@@ -2,7 +2,7 @@
 //!
 //! HotSpot 以 constantPoolOop 指向类的常量池。原生二进制不携带完整常量池：constantPoolOop
 //! 是所属 Class（Class.getConstantPool 设置），条目来自该类注解属性体引用的稀疏常量池
-//! （build.rs class_anno_table，原索引）。消费方：AnnotationParser（getUTF8At / getIntAt /
+//! （java_meta class_anno 表，原索引）。消费方：AnnotationParser（getUTF8At / getIntAt /
 //! getLongAt / getFloatAt / getDoubleAt）。表外索引 → IllegalArgumentException（HotSpot 对
 //! 越界 / 错型索引同）。
 
