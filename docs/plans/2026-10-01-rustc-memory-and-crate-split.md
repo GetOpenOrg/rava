@@ -547,6 +547,7 @@ user                       用户类（声明 + 实现同 crate，full 模式）
   - 要求：对每个类 X 及其父类 P，X 的 `all_superclasses` 等于 {P} ∪ P 的 `all_superclasses`；且 X 记录的祖先实参，等于 P 记录的实参代入「P 的形参 := X 给 P 的实参」后的结果。
   - 生成器按 SuperclassSignature 逐级代入，按构造应成立。实施前写脚本扫 27 例生成树全部类，不成立的类列出原因；不全部成立则不实施（视图槽按精确类型匹配，实参不同就是另一个类型）。
   - 同时确认每个祖先都是 `java_class!` 生成类。runtime 中没有手写的类 wrapper，已查。
+  - **实测结论（2026-10-01，成立）**：基线为 emitter-s5 合并 c9d0a0ca 后的生成器，27 例加 Digester、HelloWorld 共 29 棵生成树，扫描全部有父类的非接口类（声明层块，`rava_layer = "body"` 的副本不重复计）：5,178 个类，父类缺失 0、祖先集合不符 0、实参个数不符 0、实参代入不符 0。扫描脚本是一次性工具（按块属性 `superclass` / `all_superclasses` 与 struct 形参做代入比对），未入库。
 - **前提二（已查）**：手写的类 vtable 实现者（locale provider 等）不应答 `__erased_vtable` / `__shallow_copy`，取 trait 缺省值。新形态在 wrapper 侧仍按静态类逐级应答，这些对象的行为不变。若改成「全交给运行时类 inner 应答」，它们会丢失应答，所以不采用。
 - 运行期代价：
   - `__view_into` / `__view_as` 每次调用多一次 vtable 引用计数的增减。上行过程中 vtable 按值移动，不再增加计数。
@@ -579,6 +580,113 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 - 另加必选 5 例。
 
 **预期**：这几项合计约 12 万 size_est，即单态化总量的 10% 左右；峰值预计下降 0.1–0.3 GB。单靠这一项达不到 ≤ 2 GB，仍需第 2 项及之后各项。
+
+#### 7.5.4 终态达标账（2026-10-01）
+
+**度量与换算**
+- 数据源（emitter-s5 合并 c9d0a0ca 后同一生成器，nightly）：
+  - Digester / HelloWorld 声明 crate 的 `-Z unpretty=expanded` 产物，按条目归类统计字节。工具是一次性脚本，未入库。
+  - `-Z dump-mono-stats` 按方法名归并。
+  - `-Z time-passes`。
+- 现状：
+
+  | | 展开后 | 单态化 size_est | 峰值 | 墙钟 |
+  |---|---:|---:|---:|---:|
+  | Digester 声明 crate | 56.5 MB | 116.2 万（78,462 项） | 3.59 GB | 42.5 s |
+  | HelloWorld 声明 crate | 12.8 MB | 31.6 万 | 1.21 GB | 10.1 s |
+
+- 峰值的构成（Digester，time-passes 阶段末 RSS）：
+  - 宏展开后：1.40 GB；
+  - 名称解析与 HIR：2.15 GB；
+  - 类型检查：3.17 GB；
+  - 借用检查之后到单态化收集起点：3.59 GB（峰值）；
+  - 单态化收集与 codegen 阶段 RSS 只降不升。
+  
+  结论：峰值是前端各阶段按代码体量逐级累积出来的，不是单态化收集单独造成的。因此用「展开后体量」作主度量，size_est 作辅助度量。
+- 换算：§7.1 剥离实验的两点标定给出 峰值 ≈ 0.72 GB + 0.048 GB/MB × 展开体量。
+  - 校验：56.5 MB 代入得 3.43 GB，实测 3.1–3.6 GB。
+  - 由此 Digester ≤ 2 GB 要求展开体量 ≤ 26.7 MB，即从现状削去 ≥ 29.8 MB（−53%）。
+  - 墙钟按 §7.1 HelloWorld 标定，约 0.59 s/MB。HelloWorld `cargo build` 关键路径是「声明 crate + 实现 / 用户 crate + 链接」，要 ≤ 12 s，声明 crate 约需 ≤ 6 s，即展开体量 ≤ 约 7 MB（−45%）。
+  - `use` 与属性在 HIR 之后几乎不占内存，换算时按 0.5 折算。
+
+**Digester 声明 crate 体量构成（56.5 MB）**
+
+| 类别 | MB | 占比 | 说明 |
+|---|---:|---:|---|
+| `__jb_*` 外壳自由函数 | 9.28 | 16.4% | 30,568 个；每个都是「pub fn + 内嵌 `extern "Rust"` 声明 + unsafe 调用」，覆盖下沉方法体与存储钩子 |
+| `_base` 外壳 | 2.20 | 3.9% | 同上形态 |
+| wrapper 固有 impl：每类基础设施（非泛型类） | 6.29 | 11.1% | `__class_init` 1.56、`from` 1.02、`__virtual_view` 0.95、`__from_parts` 0.88、`__reflect_field` 0.84、访问器 1.29 等 |
+| wrapper 固有 impl：每类基础设施（泛型类） | 6.57 | 11.6% | 泛型类的 ObjectVTable 等价物同在固有 impl：`__view_into` / `__erased_*` / `__view_as` / `__shallow_copy` / `__unsafe_*` |
+| wrapper 固有 impl：Java 方法外壳（非泛型） | 6.90 | 12.2% | 可读层 API，形态是外壳调 `__jb_*` |
+| wrapper 固有 impl：泛型类 Java 方法（含体） | 2.78 | 4.9% | S6 范围 |
+| `impl ObjectVTable for X`（wrapper） | 6.60 | 11.7% | 其中 `__view_into` / `__erased_vtable` / `__view_as` 2.68，`__shallow_copy` 0.72，`__erased_inner` 0.71，`__unsafe_*` 0.99 |
+| 属性 | 4.94 | 8.7% | `#[doc(hidden)]` 约 4.0 万、`#[inline]` 3.8 万、`#[link_name]` 1.8 万、中文 doc 1.6 万 |
+| `use` | 3.60 | 6.4% | |
+| `From` impl | 2.33 | 4.1% | |
+| static / const、vtable trait、struct、PartialEq / Clone / Debug / Default 等 | 4.6 | 8% | |
+
+**单态化大头（Digester，size_est）**
+- std 泛型按类型实例化，共约 33 万：
+  - `Weak::drop` 4.2 万 ×1087，`Arc::drop_slow` 1.2 万 ×1087；
+  - `Box::new` 2.2 万 ×3123，`Arc::new` 2.0 万 ×2214，`Box::drop` 1.6 万，`Arc::drop` 1.1 万；
+  - `downcast_mut` 2.5 万 ×1787，`Box<dyn Any>::downcast` 2.2 万，`downcast_ref` 1.2 万；
+  - `OnceLock` 家族 3.2 万 ×320；`Option::and_then` 1.5 万。
+- 宏产物：`From::from` 6.8 万；`checkcast` 3.6 万；`__view_into` / `__erased_vtable` / `__view_as` / `__shallow_copy` / `__erased_inner` 共 11.1 万；`__virtual_view` 2.4 万；`__reflect_field` 及闭包 5.3 万；`__class_init` 及闭包 3.5 万。
+
+**逐项账**（Δ展开体量为削减量；Δ峰值按上面的换算）
+
+| # | 手段 | Digester Δ展开 | Δsize_est | Δ峰值 | HelloWorld Δ展开 | 状态 |
+|---|---|---:|---:|---:|---:|---|
+| 1 | V1 ObjectVTable 按父类链委托（§7.5.3） | −2.9 MB（三方法 3.8 MB，链函数回加约 0.9 MB） | −5 万 | −0.14 GB | −0.6 MB | 实施中 |
+| 2 | `From<Object>` / checkcast / new 按类收敛：统一走槽式 `__view_into` 的非泛型部件函数，按类只留一行 | −2.0 MB | −8 万（含 Box downcast / downcast_mut 按 T 的实例） | −0.10 GB | −0.4 MB | 待方案 |
+| 3 | 分层 `use` 表 | −2.5 MB | 0 | −0.06 GB | −0.2 MB | 待做 |
+| 4 | 字段访问器只为本类声明字段生成 | −0.8 MB | −0.5 万 | −0.04 GB | −0.2 MB | 等价性待论证 |
+| 5 | S6 泛型类擦除核心 | −1.9 MB（体移走，留外壳） | −6 万 | −0.09 GB | −0.3 MB | 待做 |
+| 6 | **外壳去一层**（本账新增）：声明层每个下沉体只留一条模块级 `extern "Rust"` 声明，可读层外壳与 vtable 缺省方法直接调用它；删掉中间的 `__jb_*` / `_base` 包装函数 | −5.5 MB（11.5 MB 中的约 48%），同时少 3.3 万个 fn 条目 | −1 万 | −0.26 GB | −1.6 MB | 待方案（形态改动，逐字段论证 ABI 与签名不变） |
+| 7 | 声明层生成条目去掉中文 doc 与 `doc(hidden)`（可读性说明改写在宏源码注释） | −3.0 MB | 0 | −0.07 GB | −0.7 MB | 待做 |
+| | **合计 1–7** | **−18.6 MB → 37.9 MB** | **−20.5 万** | **约 2.5–2.6 GB** | **−4.0 MB → 8.8 MB** | |
+
+**结论：1–7 合计达不到终态。**
+- Digester 约 2.5–2.6 GB，目标 ≤ 2 GB，还差约 11 MB 展开体量。
+- HelloWorld 声明 crate 约 6.5 s，`cargo build` 约 13 s，目标 ≤ 12 s。
+
+剩下的大头有两块，根因相同：**每个 Java 类有自己的一套 Rust 类型，凡是对这些类型的操作，宏都要按类各展开一份、rustc 也要按类各单态化一份。**
+- **每类基础设施代码**（展开体量）：做完 1–7 后，wrapper 固有基础设施、ObjectVTable 其余方法、From / Clone / PartialEq / Debug / Default、`__class_init` / `__reflect_field` 合计仍约 18 MB，每类几十行。这些代码的逻辑与具体类无关，按类展开只是因为签名里写着类型 `X`。
+- **std 泛型按类实例化**（size_est 约 25 万）：wrapper 持有的指针类型 `__Shared<dyn X__VTable>` 每类一个。每个类各自引发一份：
+  - `Arc` / `Weak` 的 drop、`drop_slow` 与 new；
+  - 视图槽 `Option<__Shared<dyn X__VTable>>` 的 `downcast_mut`；
+  - `Box<dyn Any>` 的 new / downcast。
+
+**结构性消除：S7 统一对象句柄 + 每类静态描述符**（终态项，形态改动大，先出单独方案并经确认后再动）
+- wrapper 改为 `#[repr(transparent)]` 包一个与类无关的句柄（底层是 `__Shared<dyn ObjectVTable>` 加 null 标志）。各类的 vtable trait 只在虚分派入口处按需从句柄取得：经 `ObjectVTable` 上一个按类槽位返回 `&dyn X__VTable`，不引用计数。
+- 每类的类型知识改为一份 `static` 数据描述符，取代每类代码：
+  - 二进制名；
+  - 祖先表，元素为（类 id，上转函数指针）；
+  - 接口载体表；
+  - 字段 cell 布局；
+  - `__class_init` 状态。
+- runtime 里一份非泛型实现读描述符，完成视图、擦除、checkcast、`__view_as`、浅拷贝、反射字段、类初始化与相等 / 调试 / 缺省值。宏按类只生成描述符和一行转交。这些都是数据，在前端的代价远小于同体量的代码。
+- 预计效果：
+  - 每类基础设施约 18 MB 降到约 4 MB（描述符加一行转交），Digester 合计到约 24 MB，峰值约 1.85 GB；
+  - std 按类实例约 25 万降为常数个，size_est 合计降到约 65 万；
+  - HelloWorld 声明 crate 约 6 MB，约 4.6 s，`cargo build` 约 11 s。
+- 与 1、2 的关系：V1 的链式委托就是描述符祖先表的代码形态。做 S7 时链函数改为读描述符，1、2 的等价性论证（槽类型两两不同、部件相同）原样沿用，不是要拆掉的过渡形态。
+- 与命名原则的关系：描述符是数据类型，不是自造 trait；句柄类型就是 `Object` 的内部表示，不新增 Java 命名空间之外的 trait。
+- 需要先论证的事项，写进 S7 方案：
+  - 手写 vtable 实现者（locale provider）如何取得描述符；
+  - `JArray` 协变视图与描述符的关系；
+  - 虚分派从句柄取 `&dyn X__VTable` 的开销需做性能验收（热循环用例）。
+
+**汇总**
+
+| | Digester 声明 crate 峰值 | HelloWorld `cargo build` |
+|---|---:|---:|
+| 现状 | 3.59 GB（56.5 MB） | 16.9 s |
+| 1–7 | 约 2.5–2.6 GB（37.9 MB） | 约 13 s |
+| 1–7 + S7 | **约 1.85 GB（约 24 MB）** | **约 11 s** |
+
+- 估算误差：换算式的残差约 ±0.2 GB，单次测量噪声 ±10%。所以每项做完都要实测，按实测值更新本账。
+- 跨测试编译复用另有方案（`docs/plans/2026-10-01-cross-test-compile-reuse.md`）。它决定 JDK 部分在单个测试里是否需要编译，与本账互补：本账压的是单个 crate 的峰值与墙钟。
 
 ### 7.6 量化目标
 
