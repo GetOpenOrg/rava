@@ -1,6 +1,6 @@
 # Python 生成器删除清单
 
-> 状态（2026-10-01）：本文只是清单，**当前不删除任何文件**。Python 生成器（`codegen/`）作为对照基线保留，
+> 状态（2026-10-01）：用户已确认删除，执行中（依据见 §五）。原状态：本文只是清单，不删除任何文件。Python 生成器（`codegen/`）作为对照基线保留，
 > `--generator python` 开关继续保留并可用。迁移项见 [`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)（已全部完成）。
 
 ## 一、删除条件
@@ -81,4 +81,15 @@
 
 ## 五、删除依据记录
 
-（条件满足时填写：R21 提交号、通过数、`P21 − R21` 差集及说明、日志路径。）
+**2026-10-01 用户决定执行删除**（「可以删除 Python 生成器了」），依据为两轮 rust 缺省的 JDK 21 分布式全量：
+
+- **第一轮**（f00b6858，1083 例跑完）：失败 41 例，其中基线回归 13 例：
+  - 4 例本地复跑通过（ReportStringLengths、TestComparator、TestSwitchEnum〔ubuntu 取 libc 失败，环境问题〕、EisensteinPrimes）；
+  - ComparatorFactory、TestDynamicProxy 抽查通过；
+  - 7 例交 c4-regfix：6 例已修并进 main（d0384043、07f6f1b2、c293b082、bc2df454、f7977d04）；
+    TestInterfaceInheritedOverloads 是 `[boundary]` 截断所致，随 C1d 解决；
+  - 其余 28 例失败为运行超时（归 R1）和基线外失败。
+- **第二轮**（c9d0a0ca 为主，进行到约一半）：已有结论 551 例通过，基线回归 20 例：
+  - `[sam-objects] 接口未发射` 生成期断言 19 例，c4-regfix 修复中；
+  - PolymorphicCopy（`clone` 后动态类型丢失）1 例。
+- **结论**：差集未清零，但剩余回归都在 Rust 生成器 / 分析器一侧，已有归属；用户确认不以清零为删除前提。回归继续修复，以后续全量收口。
