@@ -663,6 +663,8 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 结果：DeepCopy 类 / 方法 / 上下文 1623 / 10845 / 39770 → **1623 / 10806 / 37735**，耗时 45 s → 13 s，站点新增数组 5 477 256 → 39 403（剩余写入扇入是
 `System.arraycopy` 按清单语义的逐站点扇入，如 `Arrays.copyOf` 单上下文 2 714 个源数组，属上下文敏感度问题）；其余 8 例类 / 方法 / 上下文不变；9 例动态对照漏均为 0。
 
+> 2026-10-02 注：本项的 `[facts.class_init]` / `engine/class_init.rs` 已由 `[facts.reflect] class_initializers` + `engine/mirror_init.rs` 取代，见 `2026-10-01-c1d-closure-bloat.md` §18.10。
+
 **项 8 类初始化事实（`Unsafe.ensureClassInitialized` 等）**。原状：`ensureClassInitialized` 是整方法手写边界（空操作），分析器不建模其效果——
 `ldc X.class` 只让 X 进 type 层（JVMS §5.5 类字面量不触发初始化），X 的 `<clinit>` 不入链。例：DeepCopy `DirectMethodHandle.<clinit>@85`
 的 `DirectMethodHandle$Holder` 原为 type 层；`SharedSecrets.getJavaXxxAccess` 的「先 ensureClassInitialized(目标类) 再读静态字段」形状下，目标类

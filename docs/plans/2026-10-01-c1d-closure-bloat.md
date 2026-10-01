@@ -420,7 +420,7 @@ CollectorsDemo 重测后结论不变（「String.format 咽喉不迁移」对它
 合并中另外按终态处理的分析器项（精度三期 d8212bee 带入）：
 
 - `boundary_cut` / `core_` 转发 / provider line / 纯数据束载体：终态无包前缀截断与 `core_` 转发器，相关代码与 `cut` 输出（含 dyn_compare 的 `cut` / `caller_cut` 标记）删除。
-- 类初始化事实两套并存：主干 `[facts.class_init.initializers]`（输出 closure.json `class_init`，下游无人读取）与 `c1d-prec` 的 `[facts.reflect] class_initializers`（`mirror_inits`，生成器钩子表消费，另含成员声明类初始化点收窄 §11）。只留后者，删 `engine/class_init.rs` 与清单段。
+- 类初始化事实两套并存：主干 `[facts.class_init.initializers]`（输出 closure.json `class_init`；01b88d7d 起发射层经 `class_init_targets` 读取，`unknown` 时退回 `<clinit>` 全表）与 `c1d-prec` 的 `[facts.reflect] class_initializers`（`mirror_inits`，生成器钩子表消费，另含成员声明类初始化点收窄 §11）。只留后者，删 `engine/class_init.rs` 与清单段。
 - 系统属性只读形参判定（`sysprops_readonly`）改用主干的 `memo_enter` / `memo_leave` 帧（记忆与处理次序无关），替代原 `in_progress` 集合。
 - 服务目录事实（`seeds.toml [services]`）保留。
 
@@ -726,3 +726,16 @@ DeepCopy 失败归因：序列化路径触发了 `ExceptionInInitializerError �
 3. P4（−10）、P5（HelloWorld −0～2，收益在其他用例）在闸门之后做，每步单独合入，HelloWorld 降到约 355。
 4. P6 在 P2、P3 之后做。
 5. 每步提交前记录 4 例闭包类数（HelloWorld、Digester、DeepCopy、TestForNameInit），写进本节表格。
+
+### 18.10 类初始化事实：`class_init` 与 `mirror_init` 归并结论（2026-10-02，读代码）
+
+- 现状：`c1d-prec` 合入 01b88d7d（aa829d0b）时已归并为一套。分析器只有 `engine/mirror_init.rs`，清单只有 `[facts.reflect] class_initializers` / `handle_owner_initializers` / `reflect_owner_initializers`，输出 `seeds.mirror_inits` → 输入 `mirror_init_classes` → 发射层 `class_init_hooks`。全仓代码已无 `engine/class_init.rs`、`[facts.class_init]`、`class_init_targets`，只剩历史计划文档里的记载。
+- 主干那套被舍弃的两点，终态都不需要：
+  1. **`unknown` 时退回 `<clinit>` 全表**：所指类推不出时，分析期该类的 `<clinit>` 本来就没进链，静态字段值集已经缺了它的写入。运行期补钩子修不了闭包的健全性，还会把钩子表放大到全部带 `<clinit>` 的类。终态口径是把它记为反射缺口（`reflect.gaps`，按站点列出），目标是缺口为 0。现有用例里 `ensureClassInitialized` 相关缺口已经是 0（§11）。
+  2. **`ensureClassInitialized0` 及形参序号表**：`Unsafe` 是 VM 边界类，`ensureClassInitialized` 是共置手写（按名调用 `ensure_class_initialized`），它的 native 内层不会出现在调用链上。`mirror_init` 按描述符扫描全部 `Class` 形参，不需要序号表。
+- `mirror_init` 多出来的、主干没有的部分是成员声明类初始化点的收窄（§11）：
+  - `handle_owner_initializers` / `reflect_owner_initializers` 不按 `MemberName.clazz` 这类汇合值集求目标；
+  - 运行期目标取按句柄 / 反射实际链接到的成员声明类（`linked_owners` × `live_routes`）；
+  - 按名取静态字段、所属类推不出时，扫描闭包内声明了该名静态字段的类。
+- 结论：不需要再改代码。命名维持 `mirror_init`（清单段位于 `[facts.reflect]`，语义是「按类镜像初始化」），旧计划文档里的 `class_init` 记载加注已被取代。
+
