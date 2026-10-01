@@ -410,8 +410,11 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 - 今天每个虚方法的方法体最多出现 3 份：wrapper 的 `__impl_m`、`X__VTable for X__inner` 里的私有方法直展开、`X__m_base::<__BT>` 泛型体（被 vtable trait 缺省方法按实现类型单态化）。
 - 终态每个方法体只保留一份定义（实现层的 `__jb_` 函数）。另外两处改为调用它：
-  - vtable trait 缺省方法调 `_base` 外壳，`_base` 外壳收 `&dyn X__VTable`（非泛型）；实现类型 `X__inner` 是 Sized，调用点做 unsize 转换。
-  - 等价性：`_base` 体只经 trait 方法访问 `this`（宏源码约束 `__BT: X__VTable + ?Sized`），换成 `&dyn X__VTable` 调的是同一组 trait 方法，分派目标不变。
+  - `_base` 收 `this: &dyn X__VTable`（非泛型；类泛型 K、V 留到 S6 擦除）。调用方三种形态：`&X__inner`（unsize）、`&dyn Sub__VTable`（trait upcasting，rustc ≥ 1.86 稳定）、wrapper 的 `&*w.vtable`。
+  - vtable trait 缺省方法的 `Self` 可能非 Sized，不能直接 unsize：每个有 Safe 缺省方法的类加一个视图 trait `X__AsVTable { fn __dyn_X(&self) -> &dyn X__VTable; }`，一揽子 impl 覆盖全部 Sized 实现类型，并作为 `X__VTable` 的 supertrait。生成的与手写的实现类型（如 locale provider 的 `_impl.rs`）都自动具备，`dyn` 对象经 supertrait 槽位取得同一视图。
+  - 等价性：Safe 体不含 `this.<非 __ 方法>(`、裸 `Clone::clone(this)`、`Self::`（classify.rs 判定），只经 `__` 前缀访问器和本类 vtable trait 链上的方法访问 `this`；原先在 `__BT: X__VTable + ?Sized` 约束下即可编译，换成 `&dyn X__VTable` 调的是同一组 trait 方法、命中同一实现（`dyn` 的具体类型就是原先的 `__BT`）。
+  - 体只一份：`X__VTable for X__inner` 里 Safe VirtualDefine 的私有直展开删除，沿用 trait 缺省方法（其体就是 `X__m_base(视图, ..)`）；Safe VirtualOverride 中作为 `_base` 所有者的条目（同名首个），覆盖体改为 `X__m_base(self, ..)` 转发，形参擦除还原（K-6b）与返回装箱（K-6a）保留在外壳。
+  - 生成器侧：继承成员转发体与 `super.m()` 的 turbofish 去掉末位接收者类型（`Self` / `_`），非泛型 owner 不带 turbofish。
 - N4 剩余项：
   - `__shallow_copy` / `__unsafe_*`：改走 §7.3.1 的钩子，随本方案实施。
   - `__erased_vtable` / `__view_into` / `__view_as`：逐祖先展开，留在声明层，属于 §7.4 的样板收窄。
@@ -471,6 +474,16 @@ HelloWorld：
 | `java_runtime` rustc | 21.4 s / 1671 MB | 19.9 s / 1319 MB（峰值 −21%） |
 | `java_meta` rustc | — | 1.1 s / 396 MB |
 | 仅改 user 源文件后的增量构建 | 重编 `java_runtime`：19.0 s / 1688 MB，总 20.7 s | 只重编 `java_meta`：1.0 s / 407 MB，总 2.9 s |
+
+Digester（全机锁内测量，机器上无其他重进程；两侧用同一份冻结宏快照）：
+
+| | 前 | 后 |
+|---|---|---|
+| `java_runtime` rustc | 122.2 s / 5047 MB | 116.7 s / 4979 MB（峰值 −1.3%） |
+| `java_meta` rustc | — | 3.9 s / 1638 MB（与 `java_runtime` 后段流水并行） |
+| 总墙钟 | 131.2 s | 124.7 s |
+
+Digester 的峰值落在方法体与存储层（类型检查 / 借用检查 / 代码生成），表在其中占比小，S1 对它的峰值几乎无影响；收益在增量构建（user 变化不再重编 `java_runtime`）。峰值目标靠 S3–S6 的拆层。
 
 链接：ld64 下 `hello_world` 正常链接，用到的 `__java_meta_*` 符号已解析，未用到的表被死代码剥除。
 
