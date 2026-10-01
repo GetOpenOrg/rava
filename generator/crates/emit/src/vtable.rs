@@ -149,9 +149,10 @@ impl<'a> EmitCtx<'a> {
         self.raw_find_virtual_in(m, ci)
     }
 
-    /// 槽族归属（不按分派结果裁剪）：精确描述符的最远非私有非手写声明者
+    /// 槽族归属（不按分派结果裁剪）：精确描述符的最远非私有非手写声明者。
+    /// 手写 native 不进宏块、不占槽位；未手写的 native 以存根进块，与子类覆盖同槽（祖先侧同判据）
     fn raw_find_virtual_in(&self, m: &Method, ci: &ClassInfo) -> String {
-        if ci.is_constructor(m) || m.is_static() || m.is_native() {
+        if ci.is_constructor(m) || m.is_static() || (m.is_native() && self.hw_has(ci.name(), m)) {
             return String::new();
         }
         if ci.is_interface() {
@@ -217,7 +218,7 @@ impl<'a> EmitCtx<'a> {
 
     /// 同名 + 同参数描述符（返回可协变）的最远槽位声明者（K-6a）；空串 = 无
     fn raw_covariant_virtual_owner(&self, m: &Method, ci: &ClassInfo) -> String {
-        if ci.is_constructor(m) || m.is_static() || m.is_native() || ci.is_interface() {
+        if ci.is_constructor(m) || m.is_static() || (m.is_native() && self.hw_has(ci.name(), m)) || ci.is_interface() {
             return String::new();
         }
         let reg = self.ty.reg;
