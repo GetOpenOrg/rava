@@ -194,6 +194,7 @@ impl<'a> Engine<'a> {
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
             Kind::Handwritten(VMHOOK_KIND) => self.process_vm_hook(m),
             Kind::Handwritten(RTFN_KIND) => self.process_rt_fn(m),
+            Kind::Handwritten(HWFIELD_KIND) => self.process_hwfield_method(m),
             Kind::Handwritten(_) => self.process_handwritten(m),
             Kind::Abstract | Kind::Missing => {}
         }
