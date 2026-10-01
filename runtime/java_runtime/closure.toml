@@ -82,8 +82,11 @@ translate_nested = [
 # 运行期改写由翻译的字节码完成（handwritten-boundary.md：方法语义以它自己的字节码为准）：
 #   VM：lock、directMemory 缺省值；引导期 System.initPhase1 → VM.saveProperties（字节码）按保存属性
 #       改写 directMemory / pageAlignDirectMemory / classFileMajorVersion 等
+#   BootLoader：引导层无名模块（JLA.defineUnnamedModule(null)）、类加载器值表 CLASS_LOADER_VALUE_MAP、
+#       NativeLibraries 均由字节码建立；唯一 native 外调 setBootLoaderUnnamedModule0 为 VM 登记（手写 no-op）
 # Unsafe 的数组布局与指针宽度静态字段属 VM 注入常量，见 vm_intrinsics.toml [vm_constants.injected_statics]。
 translate_clinit = [
+    "jdk/internal/loader/BootLoader",
     "jdk/internal/misc/VM",
 ]
 

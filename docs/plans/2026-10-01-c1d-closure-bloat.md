@@ -596,6 +596,14 @@ DeepCopy 失败归因：序列化路径触发了 `ExceptionInInitializerError �
   - `runtime/java_runtime/src/java/lang/module_impl.rs`、`class_impl.rs`（`getModule` 改用 BootLoader 的未命名模块）；
   - `vm_intrinsics.toml` 登记该 native。生成器 crate 不改。
 
+- 实施结论（2026-10-02，读代码后修正上面「引导类的模块必须是同一个对象」一条）：
+  - 只做 `translate_clinit` + native `setBootLoaderUnnamedModule0`（`#[jvm_native]` 由 build.rs 自动登记 native_status，`vm_intrinsics.toml` 无需新条目）。
+  - `Class.getModule` 不改接 `BootLoader.getUnnamedModule()`。理由：
+    1. JVM 中引导加载器的无名模块只承载 `-Xbootclasspath/a` 上的类；JDK 类属命名模块 java.base，用户类属应用加载器的无名模块。任何类的 `getModule()` 都不是它，改接反而偏离 JVM。
+    2. 原生二进制没有引导类路径（`hasClassPath` 恒 false），所以 VM 登记是 no-op，模块对象仍由字节码建立，`getUnnamedModule()` 照常返回它。
+    3. DeepCopy 只依赖 `CLASS_LOADER_VALUE_MAP` 由 `<clinit>` 字节码赋值，与 `getModule` 无关。
+  - 顺带发现的手写层重复（不在 P0 内，记为后续清理项）：`class_impl.rs` 里有两套模块单例。生效的是 `#[jvm_boundary] getModule`，它用自己的 `THE_MODULE`，loader 为 null；另有 `__impl_getModule` → `module_impl::unnamed_module()`，loader 为系统加载器，但两者全仓无调用方，是死代码。终态应只保留一个单例：用户类对应应用加载器的无名模块，即 loader = 系统加载器。改它会改变 `getModule().getClassLoader()` 的可观测值，需要单独验收。
+
 ### 18.3 步骤 P1：3 条 asm Type/Frame 漏覆盖（dyn_compare 归因修正）
 
 - 定位（已实测）：这 3 条不是闭包漏类。

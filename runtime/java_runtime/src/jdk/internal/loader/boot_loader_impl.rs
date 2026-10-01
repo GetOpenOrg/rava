@@ -50,6 +50,15 @@ impl BootLoader {
     pub fn getSystemPackageNames() -> Result<JArray<String>> {
         Ok(JArray::new(0))
     }
+
+    /// native `setBootLoaderUnnamedModule0(Module)`：`<clinit>`（字节码翻译）把引导加载器的无名模块
+    /// 交给 VM，VM 据此给 `-Xbootclasspath/a` 追加路径上加载的类定模块。原生单二进制无引导类路径
+    /// （`hasClassPath` 恒 false），没有类归属该模块——无需登记，no-op。模块对象本身仍由字节码建立，
+    /// `BootLoader.getUnnamedModule()` 照常返回它。
+    #[jvm_native]
+    pub fn setBootLoaderUnnamedModule0(_module: crate::java::lang::Module) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// 引导服务目录：进程内唯一，首次请求时按分析器导出的服务事实装填
