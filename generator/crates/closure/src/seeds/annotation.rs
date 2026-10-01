@@ -24,7 +24,7 @@ impl AnnoCfg {
     }
 }
 
-/// 收集结果（不含用户类）
+/// 收集结果（注解类型不含用户类；枚举 / Class 元素类型含用户类）
 #[derive(Debug, Default)]
 pub struct AnnoSeeds {
     /// 注解类型（方法表 = 元素面，全部入链）
@@ -88,18 +88,25 @@ pub fn collect(cp: &ClassPath, users: &[std::sync::Arc<ClassFile>]) -> AnnoSeeds
             }
             let Some(acf) = cp.get(&t) else { continue };
             pending.extend(mounted(&acf).cloned()); // 元注解传递
+            // 元素缺省值（AnnotationDefault）：未显式给值时由 AnnotationParser 按缺省值解析
+            for d in acf.methods.iter().filter_map(|m| m.annotation_default.as_ref()) {
+                let mut nd = Vec::new();
+                value_types(d, &mut enums, &mut types, &mut nd);
+                pending.extend(nd);
+            }
             if !user_names.contains(t.as_str()) {
                 out.annos.insert(t);
             }
         }
     }
+    // 枚举 / Class 元素类型含用户类：用户类同样只按可达入链，注解属性体里的引用没有静态边
     for e in enums {
-        if seen.insert(e.clone()) && !user_names.contains(e.as_str()) && cp.contains(&e) {
+        if seen.insert(e.clone()) && cp.contains(&e) {
             out.enums.insert(e);
         }
     }
     for t in types {
-        if seen.insert(t.clone()) && !user_names.contains(t.as_str()) {
+        if seen.insert(t.clone()) {
             out.types.insert(t);
         }
     }
