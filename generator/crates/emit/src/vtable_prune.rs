@@ -10,7 +10,7 @@
 //!   方法本身（super 调用 / 直接调用）照常翻译；
 //! - private 实例方法不占槽（JVMS §5.4.6：invokevirtual 只选中它本身）；
 //! - 不裁剪也不发存根（强制保留）：覆盖根类公开方法（ObjectVTable 桥）、手写参与（共置手写 / 伴生
-//!   核心 / 手写子类覆盖 / 手写实现对象的 `impl X__VTable for S`）、synthetic 桥参与、族根不声明（注入的接口 default）、接口方法、
+//!   核心 / 手写子类覆盖（含按祖先声明合成的手写继承覆盖）/ 手写实现对象的 `impl X__VTable for S`）、synthetic 桥参与、族根不声明（注入的接口 default）、接口方法、
 //!   非本类声明的方法（default 注入 / 祖先方法的重发射由声明者口径决定）。
 //!
 //! 正确性：运行期对象只可能是已实例化类的实例。不需要槽的族里，所有实例化类选中的都是族根实现，
@@ -25,6 +25,7 @@ use ty::ident::safe_ident;
 use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
+use crate::class_writer::hw_overrides::handwritten_inherited_overrides;
 use crate::ctx::EmitCtx;
 use crate::vtable::{param_part, same_slot};
 
@@ -104,6 +105,16 @@ impl<'a> EmitCtx<'a> {
                     // 桥：同类同名方法（真实方法）所在族一并保留
                     for x in ci.methods().iter().filter(|x| !x.is_static() && (x.name == b.name) && (bridge || std::ptr::eq(*x, b))) {
                         if let Some(key) = self.fam_key(x, ci) {
+                            plan.forced.insert(key);
+                        }
+                    }
+                }
+                // 手写覆盖的继承虚方法：与类发射同一来源（`handwritten_inherited_overrides`）合成的
+                // 覆盖声明照常占祖先槽，所在族一并保留
+                if has_hw {
+                    let visible: Vec<&Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
+                    for o in handwritten_inherited_overrides(self, ci, &visible) {
+                        if let Some(key) = self.fam_key(&o.method, ci) {
                             plan.forced.insert(key);
                         }
                     }
