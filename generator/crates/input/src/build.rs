@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::{ClosureFacts, JcaService};
+use crate::facts::{ClosureFacts, JcaService, SysPropFacts};
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -111,6 +111,10 @@ pub struct EmitInput {
     /// 手写体继承成员需求（分析器 `hw_inherited`）：接收者类须承载的祖先实例方法（接收者, 方法名, 描述符）
     pub hw_inherited: Vec<MethodKey>,
     pub jca_seeds: Vec<JcaService>,
+    /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
+    pub module_services: Vec<(String, String)>,
+    /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
+    pub system_properties: SysPropFacts,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -410,6 +414,8 @@ impl<'a> BuildInput<'a> {
             instantiated: f.instantiated.iter().cloned().collect(),
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
             jca_seeds: f.seeds.jca.clone(),
+            module_services: f.seeds.module_services.clone(),
+            system_properties: f.system_properties.clone(),
             module_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,
