@@ -96,6 +96,16 @@
 - **方向**：在生成器侧降低热路径的调用与检查成本，例如对已证明完成初始化的类省去重复的初始化检查、final / 私有 / 静态调用直接调用并标注内联、热点小方法生成 `#[inline]`、减少临时对象分配。具体手段由实测剖析决定。约束：不手写替代 JDK 方法，性能替换不是手写理由（handwritten-boundary.md §一）。
 - **验收**：LynchBell 在 debug 构建下运行段 ≤ 30 s，输出与 JVM 一致；同时 e2e 不回归。后续发现的同类超时用例并入本任务，作为附加验收用例。
 
+**附加验收用例**（2026-10-01 分布式跑批运行段 > 300 s 超时；三例写法都合法，JVM 上都能正常结束）：
+
+| 用例 | 负载（按代码逻辑） | 主要热点 |
+|---|---|---|
+| `23_algorithms/Factorion.java` | 4 种进制 × 149 万次迭代，约 600 万次 | 每次迭代：`String.valueOf` + `Integer.parseInt` + `fromDeci`（StringBuilder 追加、`reverse`、`new String`）；每位数字再调一次 `String.valueOf(char)` + `parseInt` + 最深 12 层的递归 `factorialRec`。合计约数亿次小调用和数千万次字符串分配 |
+| `23_algorithms/FWord.java` | 第 37 个 Fibonacci 词长 2416 万字符，37 个词累计约 6300 万字符 | `entropy` 对每个字符执行 `HashMap<Character, Integer>` 的 `containsKey` / `get` / `put`，涉及装箱、哈希、equals；拼接也要复制同样量级的字符 |
+| `23_algorithms/FibonacciMatrixExponentiation.java` | `fib(10^7)` 约 209 万位十进制（约 690 万比特） | 大数 `BigInteger.multiply`（Toom-Cook 路径）对 `int[]` 做大量逐元素运算；`toString` 走递归进制转换。debug 构建下每次数组访问都有越界检查、无向量化。JVM 上也要秒级 |
+
+终态：四例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
+
 ## 四、待用户决策
 
 | # | 事项 | 现状 |
