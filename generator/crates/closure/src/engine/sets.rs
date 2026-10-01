@@ -14,7 +14,8 @@ pub fn set_hash_seed(seed: u64) {
     let _ = HASH_SEED.set(seed);
 }
 
-fn hash_seed() -> u64 {
+/// 当前内部表哈希初值（跨运行缓存键的一项）
+pub fn hash_seed() -> u64 {
     *HASH_SEED.get_or_init(|| 0)
 }
 

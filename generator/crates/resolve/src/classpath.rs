@@ -96,6 +96,12 @@ impl ClassPath {
         Ok(())
     }
 
+    /// 档案清单（加入序）：(来源角色, 路径)。跨运行缓存按它对全部输入取指纹
+    pub fn archives(&self) -> Vec<(Origin, PathBuf)> {
+        let a = lock(&self.archives);
+        self.origins.iter().zip(a.iter()).map(|(o, a)| (*o, a.path.clone())).collect()
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         self.index.contains_key(name)
     }
