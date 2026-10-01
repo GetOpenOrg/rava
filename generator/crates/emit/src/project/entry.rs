@@ -46,7 +46,8 @@ fn block(head: &str, lines: &[String], tail: &str) -> String {
 fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> Vec<String> {
     let mut out = Vec::new();
     for (c, e) in &user.entries {
-        let Some(ci) = ctx.class(c) else { continue };
+        // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
+        let Some(ci) = ctx.class(c).filter(|_| !ctx.is_opaque(c)) else { continue };
         let self_desc = format!("L{c};");
         let enum_shaped = ci.fields().iter().any(|f| f.is_static() && f.desc == self_desc);
         let has_clinit = ci.methods().iter().any(|m| m.name == "<clinit>");
@@ -63,10 +64,11 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             registration_turbofish(ctx, ems, c)
         ));
     }
-    // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`
+    // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`；
+    // 不透明（L1）类只有类型身份、不初始化，不登记
     let mut seen = std::collections::BTreeSet::new();
     for en in ctx.input.annotation_enum_seeds.iter().chain(&ctx.input.mirror_init_classes) {
-        if !jdk.generated.contains(en) || !seen.insert(en) {
+        if !jdk.generated.contains(en) || ctx.is_opaque(en) || !seen.insert(en) {
             continue;
         }
         out.push(format!(

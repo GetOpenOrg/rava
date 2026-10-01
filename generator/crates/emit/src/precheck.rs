@@ -1,11 +1,13 @@
 //! 编译前预检（← `callchain.precheck_from_tree` / `print_precheck`）。
 //!
-//! java_runtime 生成类文本里的存根调用（方法体存根 [`stub_call`]：`__stub("stub: …")` / `__stub("native: …")`；
-//! 调用点存根 `panic!("stub: …")`）且签名在调用链上（分析器方法节点 id）者，即编译前可知的缺口：
+//! java_runtime 生成类文本里的方法体存根（[`stub_call`]：`__stub("stub: …")` / `__stub("native: …")`；
+//! 旧形态 `panic!("stub: …")` 同样识别）且签名在调用链上（分析器方法节点 id）者，即编译前可知的缺口：
 //! - `native-missing`：调用链上的 native 方法缺手写实现；
 //! - `boundary-stub`：调用链上的方法落为存根（缺手写或未补译）。
 //!
-//! 只看 java_runtime crate 的生成类（带生成标记）。扫描点在第二阶段收尾之后、物理拆层之前
+//! 只看 java_runtime crate 的生成类（带生成标记），且只认声明类自身文本里的存根：子类里的继承转发副本
+//! 以声明者签名作标签，为存根时表示该槽未被派发（`slot_stub`），不代表方法体缺失。
+//! 扫描点在第二阶段收尾之后、物理拆层之前
 //! （[`write_project`](crate::project::write_project) / [`scan_gaps`](crate::project::scan_gaps)）：
 //! 拆层后声明层的方法体已省略、体在实现层 crate，拆层前的整块文本才是完整的方法体集合。
 
@@ -45,12 +47,12 @@ impl Precheck {
         let texts = emissions
             .into_iter()
             .filter(|e| e.crate_name == "java_runtime" && !e.handwritten)
-            .map(|e| e.text.as_str())
-            .filter(|t| t.contains(GEN_MARKER) && (t.contains(STUB_FN) || t.contains("panic!(\"")));
-        for t in texts {
-            for c in PANIC_STUB.captures_iter(t) {
+            .filter(|e| e.text.contains(GEN_MARKER) && (e.text.contains(STUB_FN) || e.text.contains("panic!(\"")));
+        for e in texts {
+            for c in PANIC_STUB.captures_iter(&e.text) {
                 let sig = &c[2];
-                if visited.contains(sig) {
+                let own = sig.split_once(':').and_then(|(h, _)| h.rsplit_once('.')).is_some_and(|(cls, _)| cls == e.binary_name);
+                if own && visited.contains(sig) {
                     let set = if &c[1] == "native" { &mut natives } else { &mut stubs };
                     set.insert(sig.to_string());
                 }
@@ -81,7 +83,8 @@ mod tests {
     use super::*;
 
     fn em(crate_name: &str, handwritten: bool, text: &str) -> ClassEmission {
-        ClassEmission { crate_name: crate_name.into(), handwritten, text: text.into(), ..ClassEmission::default() }
+        let binary_name = "p/A".into();
+        ClassEmission { binary_name, crate_name: crate_name.into(), handwritten, text: text.into(), ..ClassEmission::default() }
     }
 
     #[test]
@@ -92,7 +95,9 @@ mod tests {
              fn d() {{ panic!(\"stub: p/A.d:()V\") }}\n}}"
         );
         let body = body.as_str();
-        let ems = vec![em("java_runtime", false, body), em("user", false, body), em("java_runtime", true, body)];
+        // 子类 p/B 里继承转发副本的槽存根（声明者签名）不计
+        let sub = ClassEmission { binary_name: "p/B".into(), ..em("java_runtime", false, body) };
+        let ems = vec![em("java_runtime", false, body), em("user", false, body), em("java_runtime", true, body), sub];
         let visited: BTreeSet<String> = ["p/A.a:()V", "p/A.b:()V", "p/A.d:()V"].into_iter().map(String::from).collect();
         let p = Precheck::scan(&ems, &visited);
         assert_eq!(p.native_missing, vec!["p/A.b:()V"]);

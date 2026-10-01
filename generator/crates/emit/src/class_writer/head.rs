@@ -47,6 +47,19 @@ pub fn block_head(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>) -> Vec
     lines
 }
 
+/// 不透明（L1）类的类级元数据行：类镜像仍是非 null 的 Class 对象，`getSimpleName` / `isMemberClass` /
+/// `getDeclaringClass` / `isRecord` / `isAssignableFrom` 等经 java_meta 表读这些属性（与实例层级无关）。
+/// 不含类初始化（L1 不初始化）与注解（注解类型不随 L1 类进入闭包）
+pub fn opaque_metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    const SKIP: [&str; 3] = ["#[has_clinit", "#[raw_annotations", "#[anno_cpool"];
+    let mut lines: Vec<String> = metadata_lines(ctx, ci)
+        .into_iter()
+        .filter(|l| l.starts_with("#[") && !SKIP.iter().any(|k| l.starts_with(k)))
+        .collect();
+    lines.push(format!("#[all_supertypes    = \"{}\"]", all_supertypes(ctx, ci).join(";")));
+    lines
+}
+
 fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     let cf = ci.class_file();
     let ex = ctx.extras(ci.name());

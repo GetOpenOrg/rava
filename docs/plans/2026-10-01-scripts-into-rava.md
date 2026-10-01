@@ -109,6 +109,17 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
   共有行触达数全同。旧独有 58 行均为误报：56 行闭包种类为 `handwritten:boundary`，但发射层已按字节码翻译出方法体
   （如 `Policy.isSet`、`VM.initLevel`），旧规则只看手写层有无同名 fn；2 行为 abstract 方法
   （`LocaleProviderAdapter.getBreakIteratorProvider`、`PhantomCleanable.performCleanup`），按上条排除。
+- 只认声明类自身文本里的存根：子类的继承转发副本以声明者签名作标签，声明者方法 `slot_stub`（槽未被派发）时副本体为
+  存根，但声明者自身的方法体已翻译，不是缺口（如 `LinkedHashMap` 里的 `HashMap.compute`、`Stack` 里的 `Vector.clear`）。
+- API 模式验收（`rava audit api java/lang java/util`，JDK 21）：已提交报告出自 09-29 Python 流水线（261 类 / 3630 入口，
+  23 native-missing / 193 boundary-stub），新审计 267 类 / 3828 入口，35 / 0（排除继承副本前为 35 / 12）。旧报告对比：
+  - 旧 193 个 boundary-stub 全部消失：134 个已按字节码翻译出方法体（C1d 边界收窄，如 `ClassLoader.<init>`、`Policy.isSet`），
+    45 个仍为存根但已不在调用链上（Rust 闭包分析器精度，如 `InvokerBytecodeGenerator.<init>`），14 个所在类不再入闭包
+    （如 `jdk/internal/module/Modules`）。
+  - 旧 23 个 native-missing 中 18 个消失：14 个已有手写实现（09-29 之后的缺口批次，如 `ProcessImpl.forkAndExec`、
+    `NetworkInterface.*`、`Class.getGenericSignature0`），3 个不在调用链上，1 个所在类不再入闭包。
+  - 新增 30 个 native-missing 为真实缺口：闭包变化后入链的 native（`Module.*0`、`ClassLoader.defineClass1/2`、
+    `Class.getDeclaredClasses0` 等）与无手写实现的 `Unsafe.{get,put}*Volatile`、`Unsafe.throwException`。
 - 输出 `docs/reports/gap-scan-<模式>.md` 与 `native-gap-scan.md`，格式不变。逐例只做 javac + 闭包 + 内存发射，
   不写 scratch（javac 产物落 `build/audit/` 临时目录，用完即删）；corpus / native 逐例起 `rava audit test` 子进程并行。
 
@@ -116,6 +127,10 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
 
 - S4 物理拆层已合入，划分在 emit 内；查看划分用 `rava build --stop-after emit --perf`（perf 报告列各 crate 类数 / 体规模，
   A2 的重型判定同源）。crate-split 文档 §三 的「复现」行改指向历史提交 + 该命令。
+- **已完成（S4）**：`scripts/dep_scc.py` 删除；`Perf.crates`（`emit::perf::CrateStat`）在拆层后按
+  java_runtime → lib → java_body_k → user 记各 crate 类数与生成文本字节（手写真源不计字节），
+  java_runtime 行类数取 JDK 布局类数，与 `Heavy::decide(r.jdk_classes)` 同源；driver 的 `--perf` 输出末尾补一行
+  重型判定（同一函数，阈值 `HEAVY_CLASSES`）。crate-split 文档复现行改指 `git show 4bae5479:scripts/dep_scc.py` + 该命令。
 
 ### C 类：e2e 编排拆为 `scripts/e2e/`
 

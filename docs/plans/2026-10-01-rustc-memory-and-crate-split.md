@@ -3,7 +3,7 @@
 > 日期：2026-10-01
 > 性质：设计分析与执行顺序。结论先行：**按包 / 按 SCC 直接拆 crate 不可行**（实测 95% 文件在同一个环里）。可行路径是「声明层 / 方法体层」分离，跨 crate 调用在链接期解析。**2026-10-01 实测修订（§七）**：只剥方法体压不低峰值——声明层本身（逐类 wrapper / vtable / 对象存储样板 + 反射数据表）才是峰值主体；终态因此是「元数据 crate + 声明 crate + N 个实现 crate」三层，对象存储 `X__inner` 及其全部 trait impl 与方法体一起下沉到实现 crate，并收窄声明层样板。实施步骤见 §七.5。
 > 关联：[`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（总纲 §二「下游编译」、§三.3 生成器效率）、`2026-09-30-emitter-performance.md`（生成器效率线，执行者维护）、`scripts/cargo_env.py`（N8）、`scripts/run_bg.sh`。
-> 复现：`python3 scripts/dep_scc.py build/<test>/java_runtime/src [--dump 清单]`
+> 复现：§三 的 SCC 统计脚本已删（历史版本 `git show 4bae5479:scripts/dep_scc.py`，基于拆层前生成树）；拆层后的现行 crate 划分用 `rava build <Test.java> --stop-after emit --perf` 查看（perf 报告列各 crate 类数 / 生成文本规模，并给出与编译阶段同源的重型判定）
 
 ---
 
@@ -51,7 +51,7 @@
 
 ## 三、依赖图实测：JDK 类几乎全部互相依赖
 
-方法：依赖边取生成文件的 `use crate::…::<类型>;`，解析到定义该 struct 的生成文件；只统计带 `rava_macros::java_class` 生成标记的文件（`scripts/dep_scc.py`，基于 rust-closure-analyzer a484fbac 的生成树）。
+方法：依赖边取生成文件的 `use crate::…::<类型>;`，解析到定义该 struct 的生成文件；只统计带 `rava_macros::java_class` 生成标记的文件（当时的 `scripts/dep_scc.py`，已删，见 4bae5479；基于 rust-closure-analyzer a484fbac 的生成树）。
 
 | 用例 | 生成文件 | 行 | 依赖边 | 最大 SCC（文件 / 行） | 包数 | 最大包级 SCC（包 / 覆盖文件） |
 |---|---:|---:|---:|---|---:|---|
