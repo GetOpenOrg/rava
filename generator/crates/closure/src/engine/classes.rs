@@ -161,13 +161,16 @@ impl<'a> Engine<'a> {
         self.ctx.domain(cls)
     }
 
-    /// 登记类（及其超类型，作为类型层级）；返回类文件
+    /// 登记类（及其超类型，作为类型层级）；返回类文件。
+    /// 入参是类的内部名或数组描述符：数组取元素描述符（`L..;` 为类，单字符为基本类型）；
+    /// 非数组即类名——`S`、`I` 等单字母是合法类名（JVMS §4.2.1），不得按基本类型描述符跳过
     pub(super) fn touch(&mut self, cls: &str, level: Level, via: Via) -> Option<std::sync::Arc<ClassFile>> {
-        let cls = cls.trim_start_matches('[');
-        let cls = cls.strip_prefix('L').and_then(|c| c.strip_suffix(';')).unwrap_or(cls);
-        if cls.len() == 1 && "BCDFIJSZV".contains(cls) {
-            return None;
-        }
+        let elem = cls.trim_start_matches('[');
+        let cls = match elem.strip_prefix('L').and_then(|c| c.strip_suffix(';')) {
+            Some(c) => c,
+            None if elem.len() != cls.len() => return None,
+            None => elem,
+        };
         let Some(cf) = self.h.class(cls) else {
             self.missing.entry(cls.to_string()).or_insert(via);
             return None;

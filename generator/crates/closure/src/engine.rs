@@ -281,6 +281,9 @@ pub struct Engine<'a> {
     mref_keys: HashMap<MemberRef, (Rc<str>, bool)>,
     /// 运行模型替换的 indy 调用点（`方法@偏移` → (引导方法, 类别)）
     pub indy_models: BTreeMap<String, (String, IndyKind)>,
+    /// 签名多态调用点（`方法@偏移`，JVMS §2.9.3）：JVM 链接到 LambdaForm 调用器，发射层走手写 `__site` 伴生——
+    /// 与 indy 同属运行模型替换，动态对照据此归因其上方的调用器帧
+    pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
 

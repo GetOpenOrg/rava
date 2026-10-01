@@ -12,7 +12,3 @@ cfg.workspace = true
 instr.workspace = true
 input.workspace = true
 regex = "1"
-
-[dev-dependencies]
-resolve.workspace = true
-serde_json.workspace = true

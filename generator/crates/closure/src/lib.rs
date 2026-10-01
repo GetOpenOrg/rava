@@ -255,6 +255,7 @@ impl Closure<'_> {
             "unresolved": e.unresolved,
             "refs": e.refs,
             "indy_models": e.indy_models.iter().map(|(site, (bsm, k))| json!({"site": site, "bootstrap": bsm, "kind": indy_str(*k)})).collect::<Vec<_>>(),
+            "sigpoly_sites": e.sigpoly_sites,
             "dispatch": dispatch,
             "dispatched": e.dispatched(),
             "folds_version": FOLDS_VERSION,

@@ -140,7 +140,7 @@ impl EmitInput {
         })
     }
 
-    /// 规范化改动过的方法（golden 对照 / 审计用）
+    /// 规范化改动过的方法（审计用）
     pub fn normalized(&self) -> &BTreeMap<MethodKey, NormCode> {
         &self.normalized
     }

@@ -39,18 +39,18 @@ animal.speak()?;
 .java ──javac──▶ .class（用户类）      JDK jmods（所选 JDK 版本的类库）
                       │                        │
                       └──────────┬─────────────┘
+                                 ▼   rava build（generator/ 的 Rust 生成器，各阶段为同名 crate）
+             classfile      二进制解析（常量池 / BootstrapMethods / LVT / 注解 / 异常表）
                                  ▼
-             classfile.py   二进制解析（常量池 / BootstrapMethods / LVT / 注解 / 异常表）
+             closure        精确闭包分析：可达方法 + 类初始化 + 分派目标 + 折叠点
+                            （closure.toml 边界 / seeds.toml 补种 / vm_intrinsics.toml）
+             input          闭包事实 → 发射范围；边界判定 / 种子全局 / 预检
                                  ▼
-             rava closure   Rust 精确闭包分析器（generator/）→ closure.json：可达方法 + 类初始化
-                            + 分派目标 + 折叠点（closure.toml 边界 / seeds.toml 补种 / vm_intrinsics.toml）
-             closure_input.py  读 closure.json → 发射范围；callchain.py 边界判定 / 种子全局 / 预检
+             cfg            控制流结构化（循环 / try 区域 / 条件）
+             sim / instr    操作数栈模拟 → ir（Rust IR）
+             method         变量提升 / 可变性 / 融合 / 后处理 → ir::render 渲染
                                  ▼
-             cfg/           控制流结构化（循环 / try 区域 / 条件）
-             instr/ stack   操作数栈模拟 → rs_ir（Rust IR）
-             method/        变量提升 / 可变性 / 融合 / 后处理 → render.py 渲染
-                                 ▼
-             emitter/       java_class! 宏块、模块树、Cargo workspace、main 引导
+             emit           java_class! 宏块、模块树、Cargo workspace、main 引导
                                  ▼
              build/<测试>/   scratch workspace（runtime/ 手写 overlay + 生成代码）
                                  ▼  cargo build（rava_macros 展开）
@@ -83,19 +83,15 @@ scripts/run_bg.sh <tag> python3 scripts/run_tests.py --filter TestXxx   # 后台
 
 ```
 rava/
-├── codegen/                       # 生成器（Python）
-│   ├── classfile.py               # .class 解析
-│   ├── closure_input.py           # 闭包来源：调用 rava closure，读 closure.json
-│   ├── callchain.py               # 边界判定 / 种子全局 / 编译前预检
-│   ├── vm_constants.py            # VM 常量守卫的死分支剪除
-│   ├── cfg/                       # 控制流结构化
-│   ├── instr/                     # 指令模拟（调用 / 字段 / 数组 / 强制转换）
-│   ├── method/                    # 方法体生成与后处理
-│   ├── emitter/                   # 类 / 模块 / workspace 发射
-│   ├── rs_ir.py / render.py       # Rust IR 与渲染
-│   ├── jvm_type.py                # 类型 IR（TypeIR）
-│   ├── runtime_manifest.py        # 运行时清单读取
-│   └── *_audit.py                 # 审计线（raw / equiv / fallback）
+├── generator/                     # 生成器（Rust workspace，rava CLI）
+│   └── crates/
+│       ├── classfile / resolve    # .class 解析 / JDK 与镜像定位
+│       ├── closure                # 闭包分析（rava closure）
+│       ├── input                  # 闭包事实 → 发射输入、运行时清单读取
+│       ├── ty / ir                # 类型层 / Rust IR 与渲染
+│       ├── cfg / sim / instr      # 控制流结构化 / 栈模拟 / 指令翻译
+│       ├── method / emit          # 方法体生成 / 类、模块、workspace 发射与审计行
+│       └── driver                 # rava 命令行（build / emit / closure）
 ├── runtime/                       # 手写代码唯一真源（提交 git）
 │   ├── java_runtime/              # 运行时 crate：native 方法 *_impl.rs、VM 边界类、build.rs
 │   │   ├── closure.toml           # 调用链边界 / VM 边界类 / 放行清单
@@ -103,11 +99,11 @@ rava/
 │   │   └── vm_intrinsics.toml     # VM 承载方法、调用点特判、VM 常量
 │   ├── java_support/              # VM 支持类的 Java 源（动态代理、BMH 物种等载体）
 │   └── rava_macros/               # proc-macro crate（java_class! 块级宏）
-├── scripts/                       # main.py / run_tests.py / 跑批与对照工具
+├── scripts/                       # main.py / run_tests.py / 跑批与对照工具（rava_cli.py 调用 rava）
 ├── tests/
 │   ├── e2e/                       # e2e 语料（61 个类别，1066 例）
 │   ├── expected/                  # JVM 生成的期望输出
-│   ├── unit/                      # 生成器单元测试（python3 -m unittest tests.unit.<模块>）
+│   ├── unit/                      # 脚本单元测试（python3 -m unittest tests.unit.<模块>）；生成器单测在 generator/ 下 cargo test
 │   └── lib_pilot/                 # jar 输入模式（JUnit / hamcrest crate）试点
 ├── docs/                          # 任务、兼容性、方案与报告
 └── build/                         # 每测试一次性 scratch 与共享编译缓存（gitignore）
@@ -118,6 +114,6 @@ rava/
 - 任务与进展：[`docs/tasks.md`](docs/tasks.md)（只列开放项），完成项归档在 `docs/tasks-history-2026-09.md`
 - 过渡态总清单（距最终态的全部差距，编号 FS-xx）：
   [`docs/plans/2026-09-26-transitional-state-inventory.md`](docs/plans/2026-09-26-transitional-state-inventory.md)
-- 长期路线（含 Python 生成器 → Rust 单二进制重写 R0）：
+- 长期路线（含 Rust 单二进制重写 R0；Python 生成器已于 2026-10-01 删除）：
   [`docs/plans/2026-09-23-long-term-roadmap.md`](docs/plans/2026-09-23-long-term-roadmap.md)
 - 开发约定（架构原则、手写层规则、命名原则）：[`CLAUDE.md`](CLAUDE.md)

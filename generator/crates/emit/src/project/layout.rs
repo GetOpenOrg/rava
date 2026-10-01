@@ -127,7 +127,7 @@ impl UserLayout {
                 .cloned()
                 .unwrap_or_default();
             let pkg_parts: Vec<String> = if pkg.is_empty() { Vec::new() } else { pkg.split('.').map(str::to_string).collect() };
-            // Python 以完整 binary name 取 snake（含包时路径形态异常，见 GOLDEN_DIFF）；此处取简单名
+            // 模块名取简单名的 snake（不取完整 binary name：含包时路径形态异常）
             let simple = c.rsplit('/').next().unwrap_or(c);
             let mod_name = to_snake(simple);
             let dir = pkg_parts.iter().fold(user_src.to_path_buf(), |d, p| d.join(p));

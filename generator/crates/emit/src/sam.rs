@@ -135,14 +135,16 @@ fn runtime_handwritten(ctx: &EmitCtx<'_>, iface: &str) -> bool {
 }
 
 impl SamLedger {
-    /// 预扫描用户类 + JDK 类全部方法（规范化方法体）的 invokedynamic 站点：
-    /// 函数式接口 = 调用点描述符的返回类型
+    /// 预扫描会翻译出方法体的方法（用户类全量 + JDK 类调用链上方法）的 invokedynamic 站点：
+    /// 函数式接口 = 调用点描述符的返回类型。调用链外 JDK 方法发 `panic!("stub: ..")` 存根，
+    /// 其站点不发射，分析器也不据此抬升接口级别（可能停在 L1 不透明形态），不得入账
     pub fn prescan(ctx: &EmitCtx<'_>) -> SamLedger {
         let input = ctx.input;
         let mut candidates = BTreeSet::new();
         for cls in input.user_classes.iter().chain(&input.jdk_classes) {
             let Some(ci) = ctx.ty.reg.get(cls) else { continue };
-            for m in ci.methods() {
+            let user = ctx.is_user(cls);
+            for m in ci.methods().iter().filter(|m| user || ctx.in_chain(cls, &m.name, &m.desc)) {
                 let Some(code) = input.code_ops(cls, m) else { continue };
                 for insn in code.ops() {
                     let Operand::InvokeDynamic { desc, .. } = &insn.operand else { continue };

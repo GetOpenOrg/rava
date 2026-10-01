@@ -1,8 +1,5 @@
 //! 发射层输入：从 classfile + 闭包分析结果构建发射所需的 Registry 与输入事实（P1）。
 //!
-//! 取代 Python `codegen/closure_input.py` / `closure_folds.py` / `vm_constants.py` /
-//! `runtime_manifest.py` 的发射层消费部分与 `transpile.py` 的 registry 构建步骤。
-//!
 //! 终态是 `rava build` 单进程：闭包结果以 [`closure::Closure`] 在进程内传入
 //! （[`facts::ClosureFacts::from_closure`]）；closure.json 只作调试入口
 //! （[`facts::ClosureFacts::from_json`]）。

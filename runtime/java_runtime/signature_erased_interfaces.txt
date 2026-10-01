@@ -1,2 +1,2 @@
-# 泛型签名解析时直接擦除为 Object 的接口（codegen/sig_parse._CLASSNAME_MAP 的库知识部分）。
+# 泛型签名解析时直接擦除为 Object 的接口（读取端 generator/crates/ty/src/manifest.rs，签名解析的库知识部分）。
 java/lang/CharSequence

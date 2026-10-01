@@ -7,7 +7,7 @@
 //! - [`OBJECT`]：根类（JLS 4.3.2）——Rust 侧直映射为 `Object`，也是一切引用类型的上界；
 //! - [`STRING`]：字符串字面量类型（JLS 3.10.5）——`java_runtime::prelude` 的同名本主；
 //! - [`CLASS`]：类字面量类型（JLS 15.8.2）——其类型参数是纯 phantom，类级签名被置空、
-//!   签名解析直映射为裸 `Class`（与 `codegen/classfile.py` / `sig_parse._CLASSNAME_MAP` 一致）；
+//!   签名解析直映射为裸 `Class`；
 //! - [`CLONEABLE`] / [`SERIALIZABLE`]：数组类型的固定超接口（JLS 4.10.3）；
 //! - [`THROWABLE`]：异常类层次的根（JLS 11.1.1）——`athrow` 操作数与 catch-any 处理器
 //!   绑定的静态类型（JVMS §4.7.3 catch_type 为 0）；
@@ -35,8 +35,7 @@ pub const ARRAY_SUPERTYPES: [&str; 3] = [OBJECT, CLONEABLE, SERIALIZABLE];
 /// MethodParameters 的 ACC_MANDATED（隐式声明的形参，如内部类构造器的外部实例）
 pub const ACC_MANDATED: u16 = 0x8000;
 
-/// 基本类型描述符字符 → 装箱类（JLS 5.1.7；与 `codegen/constants.py` 的
-/// `BOXED_CLASS_BY_DESC` 同表，按描述符字符排序）
+/// 基本类型描述符字符 → 装箱类（JLS 5.1.7；按描述符字符排序）
 pub const BOXED_BY_DESC: [(u8, &str); 8] = [
     (b'B', "java/lang/Byte"),
     (b'C', "java/lang/Character"),

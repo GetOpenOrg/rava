@@ -1,4 +1,4 @@
-//! 镜像独有类与 VM 支持类的类目录（← `codegen/jdk_resolver.py` `image_class_dirs`）：`--image` 的缺省来源。
+//! 镜像独有类与 VM 支持类的类目录：`--image` 的缺省来源。
 //!
 //! - **镜像独有类**：jlink 插件在链接期写进运行时镜像（`lib/modules`）、jmod 中不存在的类
 //!   （BoundMethodHandle 物种类、`SystemModules$*` 等）。JDK 运行期按名加载它们，原生二进制的类宇宙在

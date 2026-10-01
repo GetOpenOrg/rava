@@ -8,7 +8,7 @@
 //! 取反走德摩根律，始终保持可读形态：`!(a || b)` → `!a && !b`。
 //! 与 Python 的差异：原子是 [`ir::Expr`] 而非文本；`render_cond` 变为 [`Cond::to_expr`]
 //! （嵌套复合条件以 [`Expr::Paren`] 显式定界，渲染文本与 Python 一致）；
-//! `cmp_op` 产出结构化比较（`(a==0)` 渲染为 `(a == 0)`，见 `GOLDEN_DIFF.md`）。
+//! `cmp_op` 产出结构化比较（`(a==0)` 渲染为 `(a == 0)`）。
 
 use ir::{BinOp, Expr, Ident, Lit, Path, UnOp};
 

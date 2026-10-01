@@ -13,7 +13,7 @@ use crate::ctx::EmitCtx;
 
 /// 一次方法体生成请求（Python `gen_method_body(method, class_info, ...)` 的参数）
 pub struct BodyRequest<'a> {
-    /// 发射类（方法体的 `this` 所属类；golden 键取其名）
+    /// 发射类（方法体的 `this` 所属类）
     pub class: &'a ClassInfo,
     /// 被翻译的方法。接口方法展开到实现类时是改写后的副本：
     /// 泛型签名里的接口类型变量已换成实现类视角的类型实参（见 `type_var_view`）

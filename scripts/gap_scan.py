@@ -136,7 +136,7 @@ _API_RE = re.compile(r'^\[api\] .*→ (\d+) 个 public 类，(\d+) 个入口方�
 
 def run_api(ns) -> None:
     from jdk_select import apply_jdk
-    from generator_select import rava_cmd
+    from rava_cli import rava_cmd
     _, home = apply_jdk(int(ns.jdk) if ns.jdk else None, quiet=True)
     scan_dir = ROOT / 'build' / 'gap_scan'
     entry_dir = scan_dir / 'entry'

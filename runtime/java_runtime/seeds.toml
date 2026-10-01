@@ -1,7 +1,7 @@
 # 入链种子清单：无静态调用边、由生成器按「触发成员 + 结构证据」补入闭包的类 / 成员，以及 VM
 # 引导期初始化。
 #
-# 读取入口：codegen/runtime_manifest.py（原则 4：类名只在本清单出现）。
+# 读取入口：generator/crates/closure/src/seeds.rs（原则 4：类名只在本清单出现）。
 # 公共写法：成员引用 `类.成员`（触发）或 `类.成员:描述符`（精确方法）；类为斜线形态 binary name。
 
 # ── 注解类型种子（FS-R R4b，docs/plans/2026-09-27-reflection-metadata-table.md §2.6）──────────

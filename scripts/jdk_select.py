@@ -7,7 +7,7 @@
     homes = list_installed_jdks()        # -> [(21, Path), (25, Path), ...]
 
 设计要点：
-  - 与 codegen/jdk_resolver.py 的关系：resolver 的优先级 1 就是 JAVA_HOME
+  - 与 rava（generator/crates/resolve/src/jdk.rs）的关系：rava 的 JDK 解析认 JAVA_HOME
     环境变量——本模块只负责「把 --jdk N 解析成 JAVA_HOME 并写入环境」，
     javac / java / jmods 语料全部经同一 JAVA_HOME 取得，保证工具链同源。
   - 扫描来源：macOS brew Cellar（openjdk@NN 与裸 openjdk 即最新版两种命名）、

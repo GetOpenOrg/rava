@@ -1,4 +1,4 @@
-//! 值强转（← `codegen/instr/coerce.py`）：栈值 → 目标类型的表达式构造（基本类型互转 /
+//! 值强转：栈值 → 目标类型的表达式构造（基本类型互转 /
 //! Object 装箱 / null 还原 / 跨实例化视图转换）。
 //!
 //! Python 的字符串入口（`_coerce_to_object` / `_render_cast` / `_coerce_value`）与节点版

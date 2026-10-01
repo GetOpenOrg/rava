@@ -1,4 +1,4 @@
-//! raw-audit 构造事件计数（← `codegen/raw_audit.py` 的 `raw_expr` / `raw_stmt` 运行时口径）。
+//! raw-audit 构造事件计数（`raw_expr` / `raw_stmt`）。
 //!
 //! [`Raw`](crate::Raw) 逃生舱只能经 [`Expr::raw`](crate::Expr::raw) / [`Stmt::raw`](crate::Stmt::raw) /
 //! [`Item::raw`](crate::Item::raw) 构造（字段私有），构造即计数；终态 0。位点剖面（`--raw-sites`）

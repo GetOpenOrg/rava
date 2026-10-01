@@ -102,7 +102,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 ## 六、登记与审计
 
 - **清单即边界**：边界、放行、补种、VM 承载、手写登记全部在 `runtime/java_runtime/` 的 TOML 清单中
-  （读取入口 `codegen/runtime_manifest.py`、`generator/crates/closure/src/manifest.rs`），生成器代码里不写类名。
+  （读取入口 `generator/crates/input/src/manifest.rs`、`generator/crates/closure/src/manifest.rs`），生成器代码里不写类名。
 - **每个非 native 的手写方法在清单里登记类别**：运行模型（类 2）/ VM 行为（类 3）/ 策略截断（过渡），附依据。
 - raw-audit 按类别计数：
   - 策略截断：终态 0，只减不增；

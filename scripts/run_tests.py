@@ -57,7 +57,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from jdk_select import apply_jdk, _major_of
 from cargo_env import with_heavy_jobs, is_heavy
 import dyn_compare
-import generator_select
 
 
 def _current_jdk_major() -> 'int | None':
@@ -93,7 +92,7 @@ def fmt_dur(sec: float) -> str:
 # —— 四段超时各自独立常量，勿共用（各阶段正常耗时与病态形态不同）——
 # 运行段（cargo run）超时（秒）
 RUN_TIMEOUT = 300
-# 转译段（main.py：javap 全闭包 + 代码生成）超时（秒）
+# 转译段（main.py → rava build：闭包分析 + 代码生成）超时（秒）
 TRANSPILE_TIMEOUT = 600
 # 构建段（cargo build 单测试 crate）超时（秒）
 BUILD_TIMEOUT: "int | None" = None   # --build-timeout 显式值；未给时按闭包规模自动（见 _build_timeout）
@@ -447,8 +446,7 @@ def _apply_failed_filter(files: list, failed_set: set) -> list:
 def _print_env_header() -> None:
     """环境头：跨机器日志可比性（OS/架构 + 工具链版本 + 代码版本 + 影响
     生成/编译行为的开关）。git 哈希与 dirty 标记让每份日志可追溯到确切树
-    （dirty=工作树有未提交改动，结果解释需注意）；PYTHONHASHSEED 未设时
-    每进程随机（双种子验证需显式固定）；CARGO_INCREMENTAL 影响编译内存
+    （dirty=工作树有未提交改动，结果解释需注意）；CARGO_INCREMENTAL 影响编译内存
     行为（服务器 OOM 缓解）。"""
     import platform
     try:
@@ -472,7 +470,7 @@ def _print_env_header() -> None:
         except Exception:
             return "git ?"
 
-    _flag_vars = ("PYTHONHASHSEED", "CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "CARGO_PROFILE_DEV_DEBUG")
+    _flag_vars = ("CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "CARGO_PROFILE_DEV_DEBUG")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
     _flags += f" options={' '.join(MAIN_FLAGS) or '(none)'}"
     print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
@@ -712,8 +710,8 @@ _EQUIV_RE = re.compile(r"^\[equiv-audit\]\s+(.+)$", re.MULTILINE)
 _RAW_RE = re.compile(r"^\[raw-audit\]\s+(.+)$", re.MULTILINE)
 _RAW_TOTALS: dict[str, int] = {}
 
-# 可 --deny 的等价 ID（= codegen/equiv_audit.py 的发射口径全集；
-# monitor-mt 已随 S-20 落地补埋（2026-09-21）；stacktrace 无 codegen 发射点，不在列）
+# 可 --deny 的等价 ID（= generator/crates/instr/src/log.rs `Audit` 的发射口径全集，
+# 埋点检索 `log.audit(Audit::…)`；stacktrace 无生成器发射点，不在列）
 EQUIV_IDS = (
     'identity-hash', 'intern-identity', 'null-array', 'boxed-null',
     'class-literal', 'record-hash', 'neg-array', 'field-npe', 'class-init',
@@ -764,13 +762,8 @@ def _print_equiv_summary(per_test: dict[str, dict[str, int]]) -> None:
 _FALLBACK_RE = re.compile(r"^\[fallback-audit\]\s+(.+)$", re.MULTILINE)
 _FALLBACK_RUNS = 0   # 带 [fallback-audit] 行的转译次数（全零时汇总也可见）
 
-# 可 --deny 的兜底 ID（= codegen/fallback_audit.py 的 B 组口径全集）
+# 可 --deny 的兜底 ID（= generator/crates/emit/src/fallback.rs `FALLBACK_IDS`）
 FALLBACK_IDS = (
-    'sig-parse-field', 'sig-parse-method', 'type-map-params',
-    'vars-render-loop', 'vars-render-if', 'vars-type-decl',
-    'vars-type-outer', 'vars-type-later',
-    'sam-functional', 'sam-prescan',
-    # rust 生成器自有降级点（generator/crates/emit/src/fallback.rs FALLBACK_IDS）
     'class-extras', 'lvt-substitute', 'sam-ctor-path',
 )
 
@@ -794,7 +787,7 @@ def _parse_fallback(log: str) -> dict[str, int]:
 
 
 def _print_fallback_summary(per_test: dict[str, dict[str, int]]) -> None:
-    """汇总各测试的静默兜底计数。目标全 0：B 组收窄是死代码收窄（2026-09-23
+    """汇总各测试的静默兜底计数。目标全 0：兜底收窄是死代码收窄（2026-09-23
     审计实证全语料零触发），任何非零都极可能是真 bug（K-6b / typeir-b3 型
     「安全网吞 bug」）——与 equiv 的「观测即可」不同，非零应当排查。"""
     if not per_test:
@@ -1629,7 +1622,6 @@ def main():
                     help="透传 main.py --strict（兜底硬失败 + 缺手写 native 编译报错）")
     ap.add_argument("--no-dyn",          action="store_true",
                     help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
-    generator_select.add_argument(ap)
     args = ap.parse_args()
 
     global BUILD_TIMEOUT, MAIN_FLAGS, DYN_COMPARE
@@ -1639,10 +1631,6 @@ def main():
     # 动态对照读 closure_input/closure.json：rava build 缺省不写，开对照时要求写出
     if DYN_COMPARE:
         MAIN_FLAGS.append("--closure-json")
-    # 生成器选择（generator_select 唯一定义缺省）：非缺省时显式透传，[meta] options 可见
-    _generator = generator_select.resolve(args.generator)
-    if _generator != generator_select.DEFAULT_GENERATOR:
-        MAIN_FLAGS += ["--generator", _generator]
 
     _validate_deny(args.deny)
     if args.failed and args.skip_failed:

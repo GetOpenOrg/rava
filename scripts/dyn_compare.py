@@ -32,6 +32,9 @@
   - 帧停在闭包 `indy_models` 列出的 invokedynamic 调用点（引导方法由运行模型替换：lambda / 字符串拼接 /
     record 方法 / native 引导），加载发生在该调用点的 JVM 链接期（解析引导方法句柄、执行引导方法）→
     `indy-model`：原生程序不执行引导方法，这些类不属翻译程序；
+  - 帧停在闭包 `sigpoly_sites` 列出的签名多态调用点（JVMS §2.9.3：JVM 链接到 LambdaForm 调用器执行，
+    发射层由手写 `__site` 伴生承载，同属运行模型替换）→ 同 indy 规则跳到其上方首个已建模帧，
+    其上全是模型外帧 → `sigpoly-model`；
   - 其余不在闭包的帧（调用方已建模，被调方未建模）→ **漏覆盖**，记录该帧（静态分析漏掉的方法）；
   - 全部帧已建模而类不在闭包 → **漏覆盖**（漏掉的是类引用边）。
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
@@ -45,7 +48,7 @@
 方法粒度对照（`--methods`，agent 开 MethodEntry 事件）：类粒度对照对「已在闭包内的类上漏掉的方法」
 结构性失明，且边界域类整体按手写归因。方法粒度逐条检查程序期首次进入的方法：调用方是闭包内的翻译体
 （字节码方法）而被调方不在闭包
-→ **方法漏覆盖**（`mmiss`：原生程序上该调用落到 panic 存根）。调用方在 indy 模型调用点、被调方类列在
+→ **方法漏覆盖**（`mmiss`：原生程序上该调用落到 panic 存根）。调用方在 indy / 签名多态模型调用点、被调方类列在
 `vm_upcall_classes` 的不计；调用方是手写 / native / 不在闭包的不可比（执行路径由手写层决定）。
 
 静态多出 = 闭包内、而 JVM 全程未加载的类；provenance 说明 = 该类的 `via` 边能解析到闭包内的
@@ -67,6 +70,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -216,7 +220,7 @@ def parse_methods(text: str) -> list[MethodEntry]:
 
 
 def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRules",
-                    indy_sites: set[str]) -> dict:
+                    model_sites: Mapping[str, str]) -> dict:
     """方法粒度对照：翻译体（字节码方法）调用的、不在闭包内的方法 → 方法漏覆盖。"""
     kinds = {m["id"]: m.get("kind", "") for m in closure.get("methods", [])}
     cats: Counter = Counter()
@@ -236,8 +240,8 @@ def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRul
         if e.callee in kinds:
             cats["covered"] += 1
             continue
-        if _frame_str(e.caller) in indy_sites:
-            cats["indy-model"] += 1
+        if (mc := model_sites.get(_frame_str(e.caller))) is not None:
+            cats[mc] += 1
             continue
         if rules.is_vm_upcall(callee_cls):
             cats["vm-upcall"] += 1
@@ -277,9 +281,16 @@ def boundary_ref_sigs(refs: list[str], rules: DomainRules) -> set[str]:
     return out
 
 
+def model_sites(closure: dict) -> dict[str, str]:
+    """运行模型替换的调用点 → 归因类别：indy 模型（`indy_models`）与签名多态调用（`sigpoly_sites`）。"""
+    out = {s: "sigpoly-model" for s in closure.get("sigpoly_sites", [])}
+    out.update({x["site"]: "indy-model" for x in closure.get("indy_models", [])})
+    return out
+
+
 def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
               boundary_sigs: set[str] = frozenset(),
-              indy_sites: set[str] = frozenset()) -> tuple[str, str | None]:
+              model_sites: Mapping[str, str] = {}) -> tuple[str, str | None]:
     """按调用栈归因一次程序期加载 → (分类, 负责帧)。"""
     frames = list(reversed(ev.frames))           # 栈底在前
     if not frames:
@@ -290,12 +301,12 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
         mid = _frame_id(f)
         kind = methods.get(mid)
         if kind == BYTECODE:
-            if _frame_str(f) in indy_sites:
-                # 运行模型替换的 indy：其上方是 JVM 链接期 / 引导产物的执行帧。模型再次进入的已建模方法
+            if (mc := model_sites.get(_frame_str(f))) is not None:
+                # 运行模型替换的 indy / 签名多态调用：其上方是 JVM 链接期 / 引导产物的执行帧。模型再次进入的已建模方法
                 # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载
                 above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
                 if not above:
-                    return "indy-model", _frame_str(f)
+                    return mc, _frame_str(f)
                 depth = above[0]
                 continue
             depth += 1
@@ -335,7 +346,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
     loaded, program, hidden = parse_xlog(xlog, main_class)
     events = parse_agent(agent)
     bsigs = boundary_ref_sigs(closure.get("refs", []), rules)
-    indy_sites = {x["site"] for x in closure.get("indy_models", [])}
+    msites = model_sites(closure)
 
     miss: list[dict] = []
     unattributed: list[dict] = []
@@ -347,7 +358,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
         seen.add(name)
         dom = rules.domain(name)
         ev = events.get(name)
-        cat, frame = attribute(ev, methods, rules, bsigs, indy_sites) if ev is not None else (UNATTRIBUTED, None)
+        cat, frame = attribute(ev, methods, rules, bsigs, msites) if ev is not None else (UNATTRIBUTED, None)
         item = {"class": name, "domain": dom, "frame": frame,
                 "thread": ev.thread if ev else None,
                 "stack": [_frame_str(f) for f in ev.frames[:16]] if ev else []}
@@ -495,8 +506,7 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
     rules = DomainRules.from_manifest(user_classes(classes_dir))
     res = compare(closure, xlog, agent, rules, main)
     if methods:
-        indy_sites = {x["site"] for x in closure.get("indy_models", [])}
-        res["methods"] = compare_methods(closure, parse_methods(agent), rules, indy_sites)
+        res["methods"] = compare_methods(closure, parse_methods(agent), rules, model_sites(closure))
     res["java_status"] = err or "ok"
     res["elapsed_s"] = round(time.perf_counter() - t0, 2)
     return res

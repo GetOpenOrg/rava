@@ -1,4 +1,4 @@
-//! 发射层的边界判定（`codegen/callchain.py` `_is_vm_boundary_class` 的移植）。
+//! 发射层的边界判定。
 //!
 //! C1d 终态：包前缀截断已取消，边界只剩 VM 契约类——最外层类列在 closure.toml
 //! `[vm_boundary] classes`，且不属于 `translate_nested`（按字节码翻译的纯 Java 嵌套类）。

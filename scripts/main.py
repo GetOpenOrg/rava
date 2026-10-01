@@ -3,8 +3,8 @@
 Java → Rust 转译器 CLI 入口。
 
 per-test scratch workspace（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
-    手写代码唯一真源在 runtime/，每次转译前 overlay 复制进 scratch；
-    生成代码与编译产物全部落在 build/<测试名>/，不进 git。
+    手写代码唯一真源在 runtime/，转译由 `rava build --no-run`（generator/ 的 Rust 生成器）完成：
+    overlay 手写层 → javac → 闭包分析 → 发射；生成代码与编译产物全部落在 build/<测试名>/，不进 git。
 
 用法：
     python3 scripts/main.py                                        # 默认运行 tests/e2e/01_basics/HelloWorld.java
@@ -29,17 +29,11 @@ import re
 import subprocess
 import sys
 import os
-import shutil
 import time
 import tomllib
 
-# 将项目根目录加入 path，使 Python 生成器分支的 `import codegen` 可以找到根目录下的 codegen/ 包。
-# codegen 只在 --generator python 分支按需导入：rust 缺省路径不经过 codegen
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generator_select import (add_argument as add_generator_argument, resolve as resolve_generator,
-                              run_rust)
+from rava_cli import run_rust
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_JAVA = os.path.join(_REPO_ROOT, 'tests', 'e2e', '01_basics', 'HelloWorld.java')
@@ -76,267 +70,6 @@ def _bin_name(out_dir: str, stem: str) -> str:
     sys.exit(f'user/Cargo.toml 无主类 {stem} 的 [[bin]]（现有：{", ".join(bins) or "无"}）')
 
 
-def _copy_fresh(src: str, dst: str) -> None:
-    """内容变更的复制：mtime 取当前时间（不沿用源文件 mtime）。
-
-    沿用源 mtime（copy2）时，若上一轮构建产物晚于源文件的修改时刻（源文件在上一轮
-    overlay 之后、编译完成之前被编辑），cargo 按 mtime 判「未变」而跳过重编——
-    build.rs 新增的表文件缺席即此竞态（nest_table.rs，2026-09-27）。"""
-    shutil.copyfile(src, dst)
-    shutil.copymode(src, dst)
-
-
-def _copy_if_changed_file(src: str, dst: str) -> None:
-    """复制单个文件，内容相同则跳过（保留 mtime），变更则以当前时间落盘。"""
-    os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
-    if os.path.exists(dst):
-        with open(src, 'rb') as f1, open(dst, 'rb') as f2:
-            if f1.read() == f2.read():
-                return
-    _copy_fresh(src, dst)
-
-
-def _write_if_changed(path: str, content: str) -> None:
-    """写文本文件，内容相同则跳过（保留 mtime）。"""
-    if os.path.exists(path):
-        try:
-            with open(path, encoding='utf-8') as f:
-                if f.read() == content:
-                    return
-        except Exception:
-            pass
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(content)
-
-
-def _copy_if_changed(src: str, dst: str) -> None:
-    """递归复制目录，内容未变的文件跳过（保留 mtime），让 cargo 跳过重编。"""
-    for root, dirs, files in os.walk(src):
-        rel = os.path.relpath(root, src)
-        dst_root = os.path.join(dst, rel) if rel != '.' else dst
-        os.makedirs(dst_root, exist_ok=True)
-        for fname in files:
-            src_file = os.path.join(root, fname)
-            dst_file = os.path.join(dst_root, fname)
-            if os.path.exists(dst_file):
-                with open(src_file, 'rb') as f1, open(dst_file, 'rb') as f2:
-                    if f1.read() == f2.read():
-                        continue
-            _copy_fresh(src_file, dst_file)
-
-
-def _prune_stale_handwritten(rt_src: str, dst_src: str) -> None:
-    """删除 runtime/ 已移除的手写文件在 scratch 中的残留。
-
-    overlay 只增改不删：手写文件从 runtime/ 删除（越界覆盖回到字节码）后，scratch 旧副本
-    继续被 codegen 当作手写实现扫描并编译——覆盖不消失（FS-R R2b 的 ReflectionFactory 伴生）。
-    手写文件的识别与 codegen 同口径：无 `rava_macros::java_class` 生成标记；生成的包
-    `mod.rs` 同样无标记，按文件名排除（每轮由 codegen 重写）。"""
-    for root, _dirs, files in os.walk(dst_src):
-        rel_root = os.path.relpath(root, dst_src)
-        for fname in files:
-            if not fname.endswith('.rs') or fname == 'mod.rs':
-                continue
-            rel = os.path.normpath(os.path.join(rel_root, fname))
-            if os.path.exists(os.path.join(rt_src, rel)):
-                continue
-            path = os.path.join(root, fname)
-            try:
-                with open(path, encoding='utf-8', errors='replace') as f:
-                    if 'rava_macros::java_class' in f.read():
-                        continue
-            except OSError:
-                continue
-            os.remove(path)
-
-
-def prepare_scratch(out_dir: str, clean: bool = False) -> None:
-    """将 runtime/ 手写代码 overlay 进 scratch 工作区。
-
-    必须在 codegen 之前调用：codegen 的 _scan_impl_files 扫描 scratch 里的
-    *_impl.rs 生成 new_format_map（决定哪些方法跳过存根生成）。
-
-    overlay 内容：
-      - runtime/java_runtime/src/**  → scratch/java_runtime/src/**（手写 .rs）
-      - runtime/java_runtime/build.rs → scratch/java_runtime/build.rs
-      - runtime/java_runtime/Cargo.toml → 重写宏依赖为 runtime/ 绝对路径
-        （宏 crate 不复制：绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，
-         syn/quote/宏的编译缓存可跨测试复用）
-      - runtime/java_meta/** → scratch/java_meta/**（反射元数据表 crate，全部手写：
-        整体镜像，包版本唯一化，真源已无的文件删除）
-      - java/ jdk/ sun/ 顶层目录保证存在且含占位 mod.rs
-        （lib.rs 手写了 `pub mod java; jdk; sun;`，目录缺失会 E0583；
-         codegen 在有生成类时会覆写占位文件）
-
-    Python 生成器分支专用；rust 分支由 `rava build` 完成同一 overlay（emit::project::overlay）。
-    """
-    from codegen.constants import RUNTIME_JAVA_RUNTIME, RUNTIME_MACROS_CRATE, scratch_pkg_version
-    if clean and os.path.isdir(out_dir):
-        shutil.rmtree(out_dir)
-
-    rt_src = os.path.join(RUNTIME_JAVA_RUNTIME, 'src')
-    dst_src = os.path.join(out_dir, 'java_runtime', 'src')
-    _copy_if_changed(rt_src, dst_src)
-    _prune_stale_handwritten(rt_src, dst_src)
-
-    _copy_if_changed_file(os.path.join(RUNTIME_JAVA_RUNTIME, 'build.rs'),
-                          os.path.join(out_dir, 'java_runtime', 'build.rs'))
-
-    cargo_toml = open(os.path.join(RUNTIME_JAVA_RUNTIME, 'Cargo.toml'),
-                      encoding='utf-8').read()
-    cargo_toml = cargo_toml.replace(
-        'path = "../rava_macros"',
-        f'path = "{RUNTIME_MACROS_CRATE}"')
-    # 包版本唯一化：共享 CARGO_TARGET_DIR 下避免与其他 scratch 的同名包
-    # 元数据哈希碰撞（陈旧 artifact 跨工作区复用）
-    cargo_toml = cargo_toml.replace(
-        'version = "0.1.0"',
-        f'version = "{scratch_pkg_version(out_dir)}"')
-    os.makedirs(os.path.join(out_dir, 'java_runtime'), exist_ok=True)
-    _write_if_changed(os.path.join(out_dir, 'java_runtime', 'Cargo.toml'), cargo_toml)
-
-    meta_src = os.path.join(os.path.dirname(RUNTIME_JAVA_RUNTIME), 'java_meta')
-    meta_dst = os.path.join(out_dir, 'java_meta')
-    for root, _dirs, files in os.walk(meta_src):
-        for fname in files:
-            rel = os.path.relpath(os.path.join(root, fname), meta_src)
-            if rel == 'Cargo.toml':
-                os.makedirs(meta_dst, exist_ok=True)
-                meta_toml = open(os.path.join(meta_src, rel), encoding='utf-8').read()
-                _write_if_changed(os.path.join(meta_dst, rel), meta_toml.replace(
-                    'version = "0.1.0"', f'version = "{scratch_pkg_version(out_dir)}"'))
-            else:
-                _copy_if_changed_file(os.path.join(root, fname), os.path.join(meta_dst, rel))
-    for root, _dirs, files in os.walk(meta_dst):
-        for fname in files:
-            rel = os.path.relpath(os.path.join(root, fname), meta_dst)
-            if not os.path.exists(os.path.join(meta_src, rel)):
-                os.remove(os.path.join(root, fname))
-    for root, _dirs, _files in os.walk(meta_dst, topdown=False):
-        if root != meta_dst and not os.listdir(root):
-            os.rmdir(root)
-
-    # lib.rs 声明的顶层包目录兜底（占位 mod.rs，codegen 有生成类时覆写）
-    for pkg in ('java', 'jdk', 'sun'):
-        pkg_dir = os.path.join(dst_src, pkg)
-        os.makedirs(pkg_dir, exist_ok=True)
-        mod_path = os.path.join(pkg_dir, 'mod.rs')
-        if not os.path.exists(mod_path):
-            with open(mod_path, 'w', encoding='utf-8') as f:
-                f.write('// placeholder（overlay 兜底）：本包无生成类时 lib.rs 的\n'
-                        '// `pub mod` 声明仍需可解析；有生成类时被 codegen 覆写。\n')
-
-
-def _parse_lib_specs(raw_libs: list[str]) -> list:
-    """解析 --lib 规格 NAME=JAR[:seed=FQN[,FQN...]] → LibSpec 列表。"""
-    from codegen.transpile import LibSpec
-    specs = []
-    seen_names: set[str] = set()
-    for raw in raw_libs:
-        head, _, seed_part = raw.partition(':seed=')
-        if '=' not in head:
-            sys.exit(f"--lib 格式应为 NAME=JAR[:seed=FQN[,FQN...]]，收到: {raw}")
-        name, _, jar = head.partition('=')
-        if not name or not jar:
-            sys.exit(f"--lib 的 NAME/JAR 不能为空: {raw}")
-        if name in seen_names:
-            sys.exit(f"--lib crate 名重复: {name}")
-        if not os.path.exists(jar):
-            sys.exit(f"--lib jar 不存在: {jar}")
-        seen_names.add(name)
-        seeds = None
-        if seed_part:
-            seeds = [fqn.strip().replace('.', '/') for fqn in seed_part.split(',')
-                     if fqn.strip()]
-            if not seeds:
-                sys.exit(f"--lib seed 为空: {raw}")
-        specs.append(LibSpec(crate_name=name, jar_path=os.path.abspath(jar),
-                             seed_classes=seeds))
-    return specs
-
-
-def _python_codegen(args, java_files: list[str], out_dir: str, lib_specs: list) -> bool:
-    """Python 生成器转译段 + 审计汇总行；--precheck-only 时返回 False（调用方就此结束）"""
-    from codegen import transpile, options as _options, raw_audit as _raw_audit_opt
-    from codegen.cfg import STATS as CFG_AUDIT_STATS
-    from codegen import equiv_audit as EQUIV_AUDIT
-    from codegen import fallback_audit as FALLBACK_AUDIT
-    _options.DEBUG, _options.STRICT, _options.TRACE_CLASS = args.debug, args.strict, args.trace_class
-    _options.PRECHECK_ONLY = args.precheck_only
-    _options.CLOSURE_DIAG = _closure_diag_args(args)
-    _raw_audit_opt.enable_raw_sites(args.raw_sites)
-    transpile(java_files, out_dir, batch_bin=args.batch, lib_specs=lib_specs,
-              locales=tuple(t for t in args.locales.split(',') if t.strip()))
-    if args.precheck_only:
-        return False
-    # 跳转消费自检统计（未消费跳转会在转译期直接抛 CfgAuditError，这里只汇报总量）
-    print(CFG_AUDIT_STATS.summary())
-    if args.debug:
-        for method_id, site, reason in CFG_AUDIT_STATS.stub_fallbacks:
-            print(f"[cfg-audit] stub fallback ({site}): {method_id}: {reason}")
-    # 可读性自检（V-3）：§16 禁止出现在可读层的调用形态计数，终态全 0。
-    # 只统计生成文件（含 rava_macros::java_class 标记）：手写 *_impl.rs / *_ext.rs /
-    # 基础设施（object.rs、error.rs 等）不计入，与 A-2 验收口径一致。
-    _READABILITY_PATTERNS = (
-        ('from_any', 'Object::from_any'),
-        ('downcast', '.downcast::<'),
-        ('downcast_ref', 'downcast_ref'),
-        ('rc_new', 'Rc::new('),
-        ('borrow', '.borrow()'),
-    )
-    _counts = {label: 0 for label, _pat in _READABILITY_PATTERNS}
-    _audit_crates = ['java_runtime', 'user']
-    if lib_specs:
-        _audit_crates = ['java_runtime', *[s.crate_name for s in lib_specs], 'user']
-    for _crate in _audit_crates:
-        _src_root = os.path.join(out_dir, _crate, 'src')
-        for _root, _dirs, _files in os.walk(_src_root):
-            for _fname in _files:
-                if not _fname.endswith('.rs'):
-                    continue
-                _fpath = os.path.join(_root, _fname)
-                try:
-                    with open(_fpath, encoding='utf-8') as _rf:
-                        _text = _rf.read()
-                except Exception:
-                    continue
-                if 'rava_macros::java_class' not in _text:
-                    continue  # 手写 / 基础设施文件
-                for _label, _pat in _READABILITY_PATTERNS:
-                    _counts[_label] += _text.count(_pat)
-    print("[readability-audit] " + ' '.join(f"{k}={v}" for k, v in _counts.items()))
-    # 近似/条件等价发射点审计（compatibility.md §4）：逐发射点计数，只列非零项。
-    # 口径：计数是「该形态的发射点数」而非缺陷数——目标是可观测（runner 汇总 +
-    # --deny 升级），不是全 0。monitor-mt 待 S-20（锁真实化）合入后补埋，
-    # 详见 codegen/equiv_audit.py 模块注释。
-    print(EQUIV_AUDIT.summary())
-    # 静默兜底审计（fallback-audit 方案 §4.3）：B 组 10 处非 stub 静默降级点
-    # 的触发计数（equiv_audit 同款模式）。2026-09-23 审计实证全语料零触发
-    # （死代码收窄零损失）——非零即极可能是真 bug（K-6b 型），runner 可经
-    # --deny fallback 升级。A 组 stub 兜底（九吞点）归 [cfg-audit] 的
-    # stub_fallback 计数（位点分解），不与本行混同。
-    print(FALLBACK_AUDIT.summary())
-    # 短名消歧审计（prelude 第二域）：Java 类短名遮蔽 Rust prelude 名而触发限定
-    # 改名的类清单——触发面应收敛在 junit 闭包等少数语料（163 语料零扰动）。
-    from codegen.type_map import _PRELUDE_DISAMBIGUATED as _PRELUDE_RENAMES
-    print(f"[shortname-audit] prelude-disambig={len(_PRELUDE_RENAMES)}"
-          + (f" ({', '.join(_PRELUDE_RENAMES)})" if _PRELUDE_RENAMES else ''))
-    # Raw 发射与类型字符串手术仪表（收敛路线图 L5-b / 阶段 A）：
-    # raw_expr/raw_stmt 为本次转译的构造事件数，type_surgery_sites 为源码静态位点数。
-    # 终态全 0（Raw 全部类型化、类型查询全部经 TypeIR）；趋势只降不升。
-    from codegen import raw_audit as _RAW_AUDIT
-    print(_RAW_AUDIT.summary())
-    _ov = _RAW_AUDIT.override_lines()
-    if _ov:
-        # FS-H0：公开 API 非 native 方法的手写覆盖明细（最终态为 0）
-        print('[override-audit] ' + ' '.join(_ov))
-    _vb = _RAW_AUDIT.vm_boundary_lines()
-    if _vb:
-        # VM 耦合边界类的手写方法（策略边界，单独计数；随对应子系统落地逐类复核）
-        print('[vm-boundary-audit] ' + ' '.join(_vb))
-    return True
-
-
 def _closure_diag_args(args) -> list:
     """闭包诊断选项（--cut / --cut-file / --dump-edges）→ rava 参数（路径转绝对：rava 在生成器目录运行）"""
     out = []
@@ -347,6 +80,7 @@ def _closure_diag_args(args) -> list:
     if args.dump_edges:
         out += ['--dump-edges', os.path.abspath(args.dump_edges)]
     return out
+
 
 def main():
     ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
@@ -365,7 +99,7 @@ def main():
                     help='额外编入的 locale（BCP 47 或下划线形式，逗号分隔；默认只含用户字节码'
                          '静态可见的 locale + en + ROOT，见闭包分析器 generator/crates/closure/src/seeds/locale.rs）')
     ap.add_argument('--debug', action='store_true',
-                    help='诊断明细：兜底 / 闭包未解析调用 / cfg 结构化判定逐条输出')
+                    help='诊断明细：闭包未解析调用 / 存根兜底逐条输出')
     ap.add_argument('--strict', action='store_true',
                     help='严格模式：转译兜底改为硬失败，缺手写实现的 native 方法编译报错')
     ap.add_argument('--trace-class', default='', metavar='CLASS',
@@ -380,20 +114,17 @@ def main():
     ap.add_argument('--precheck-only', action='store_true',
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--closure-json', action='store_true',
-                    help='Rust 生成器另写出 <scratch>/closure_input/closure.json（动态对照 / 生成树对照 / rava emit 用），'
+                    help='另写出 <scratch>/closure_input/closure.json（动态对照 / 生成树对照 / rava emit 用），'
                          '并校验由它解析的闭包事实与进程内直传的一致；缺省不写')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
                     help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
-    add_generator_argument(ap)
     args = ap.parse_args()
-    generator = resolve_generator(args.generator)
     if args.lib and args.batch:
         sys.exit('jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）')
 
     # JDK 选择（jdk_select.apply_jdk 唯一入口）：--jdk > JAVA_HOME >
     # .jdk-version > 最新已安装——多 JDK 并存时不随系统默认 java 漂移。run_tests 子进程
     # 已继承父进程选定的 JAVA_HOME，此处静默沿用
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from jdk_select import apply_jdk
     apply_jdk(args.jdk, quiet=(args.jdk is None and bool(os.environ.get('JAVA_HOME'))))
 
@@ -403,28 +134,17 @@ def main():
 
     t_total = time.perf_counter()
 
-    # 1. overlay 手写代码（必须在转译之前）：Python 分支在此完成；rust 分支由 rava build 内部完成（计入 transpile）
-    t_overlay = 0.0
-    if generator == 'python':
-        t0 = time.perf_counter()
-        prepare_scratch(out_dir, clean=args.clean)
-        t_overlay = time.perf_counter() - t0
-        print(f"[time] overlay     {fmt_dur(t_overlay)}")
-
-    # 2. 转译（生成器选择：generator_select.py）
+    # 转译：rava build 内完成 overlay 手写代码 → javac → 闭包 → 发射
     t0 = time.perf_counter()
-    if generator == 'rust':
-        run_rust(java_files, out_dir, clean=args.clean, strict=args.strict,
-                 locales=tuple(t for t in args.locales.split(',') if t.strip()),
-                 libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
-                 precheck_only=args.precheck_only, raw_sites=args.raw_sites, closure_json=args.closure_json,
-                 extra=_closure_diag_args(args))
-        if args.precheck_only:
-            return
-    elif not _python_codegen(args, java_files, out_dir, _parse_lib_specs(args.lib)):
+    run_rust(java_files, out_dir, clean=args.clean, strict=args.strict,
+             locales=tuple(t for t in args.locales.split(',') if t.strip()),
+             libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
+             precheck_only=args.precheck_only, raw_sites=args.raw_sites, closure_json=args.closure_json,
+             extra=_closure_diag_args(args))
+    if args.precheck_only:
         return
-    t_codegen = time.perf_counter() - t0
-    print(f"[time] transpile   {fmt_dur(t_codegen)}")
+    t_transpile = time.perf_counter() - t0
+    print(f"[time] transpile   {fmt_dur(t_transpile)}")
 
     if not args.no_run:
         bin_name = _bin_name(out_dir, stem)
@@ -439,12 +159,11 @@ def main():
         t_run = time.perf_counter() - t0
         print(f"[time] cargo run   {fmt_dur(t_run)}")
         print(f"[time] total       {fmt_dur(time.perf_counter() - t_total)}"
-              f"  (overlay {fmt_dur(t_overlay)} + transpile {fmt_dur(t_codegen)}"
-              f" + run {fmt_dur(t_run)})")
+              f"  (transpile {fmt_dur(t_transpile)} + run {fmt_dur(t_run)})")
         sys.exit(r.returncode)
 
     print(f"[time] total       {fmt_dur(time.perf_counter() - t_total)}"
-          f"  (overlay {fmt_dur(t_overlay)} + transpile {fmt_dur(t_codegen)})")
+          f"  (transpile {fmt_dur(t_transpile)})")
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-//! 共置手写文件扫描（`codegen/emitter/method_gen._scan_impl_files` 的移植）。
+//! 共置手写文件扫描。
 //!
 //! 遍历 `src/**/*_impl.rs` / `*_ext.rs`（目录与文件名排序，与 `os.walk` 同序：先本目录文件、
 //! 后子目录），按文本形态提取：

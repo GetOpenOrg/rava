@@ -5,7 +5,7 @@
 //! 本 crate 无全局可变状态：副作用按发生顺序追加到调用方持有的 [`InstrLog`]，
 //! 由方法体 / 类发射层（P4c / P5）在合适的时机汇总消费。
 
-/// 等价性审计口径（`codegen/equiv_audit.py` 的 equiv_id）
+/// 等价性审计口径（`[equiv-audit]` 行的 ID）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Audit {
     IdentityHash,

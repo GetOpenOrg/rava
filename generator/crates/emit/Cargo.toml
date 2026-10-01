@@ -20,6 +20,3 @@ cfg.workspace = true
 ir.workspace = true
 # 拆层剥体：与 java_class! 宏同一份解析与判定（§7.5.2）
 rava_macros_core = { path = "../../../runtime/rava_macros_core", features = ["plan"] }
-
-[dev-dependencies]
-serde_json.workspace = true

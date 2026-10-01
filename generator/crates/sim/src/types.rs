@@ -2,7 +2,7 @@
 //! `is_jvm_array`、`coerce._same_generic_family`、菱形构造正则 `^(\w+)<(_(?:, _)*)>$`）。
 //!
 //! Python 的 `RsPrimitive` / `RsNamed` 区分在 [`RsType`] 上对应「标量（`Prim` / `Unit`）/
-//! 引用（其余）」；以基本类型名构造的 `RsNamed('i32')` 在这里同为标量（见 GOLDEN_DIFF.md）。
+//! 引用（其余）」；以基本类型名构造的 `RsNamed('i32')` 在这里同为标量。
 
 use crate::env::{erased_base, type_text, SimEnv, INFER_PARAM};
 use ty::{consts, Prim, RsType};

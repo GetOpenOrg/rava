@@ -2,7 +2,7 @@
 //!
 //! 「纯位」= 只凭描述符字符串即可确定 Rust 类型、与生成闭包 / registry 无关的位置：
 //! 基本类型、基本类型数组（含多维）、`String` / `Object` 及其（多维）数组。口径与生成器
-//! `codegen/type_map.py` 的 `JVM_RUST` / `jvm_to_rust` 逐项一致（`C` → `u16`、
+//! `generator/crates/ty/src/type_map.rs` 的 `jvm_to_rust` 逐项一致（`C` → `u16`、
 //! 数组 → `JArray<T>`；装箱类是引用类型，不属纯位——S-3.1）。
 //! 其余引用类型（是否在闭包、接口载体、同名消歧、形参个数）依赖 registry，返回 `None`。
 

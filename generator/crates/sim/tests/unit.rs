@@ -1,4 +1,4 @@
-//! 栈模拟的基本行为（不依赖 golden）：形参绑定、dup 物化、store 的 let / 赋值 / int 族收窄、下溢。
+//! 栈模拟的基本行为：形参绑定、dup 物化、store 的 let / 赋值 / int 族收窄、下溢。
 
 use ir::{Expr, Lit, Renderer, ShortNames};
 use sim::{SimConfig, SimEnv, SimResult, StackEntry, StackSim};

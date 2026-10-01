@@ -1,4 +1,4 @@
-//! runtime/ 手写层 overlay 进 scratch（`scripts/main.py prepare_scratch` 的移植）。
+//! runtime/ 手写层 overlay 进 scratch。
 //!
 //! - `runtime/java_runtime/src/**` → `<scratch>/java_runtime/src/**`（内容相同跳过，保留 mtime）；
 //! - 根 `lib.rs` 不在此复制：由 [`super::mod_tree::complete_lib_rs`] 写出（手写真源 + 顶层包补全）；

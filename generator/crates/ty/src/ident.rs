@@ -1,4 +1,4 @@
-//! Java 标识符 → 合法 Rust 标识符（`codegen/constants.safe_ident` 的移植）。
+//! Java 标识符 → 合法 Rust 标识符。
 
 /// Rust 关键字（含保留字）
 const RUST_KEYWORDS: &[&str] = &[

@@ -9,7 +9,7 @@
  * 方案：docs/plans/2026-09-27-bmh-dynamic-species.md
  *
  * 编译：转译时以当前 JDK 的 javac --patch-module java.base 编入 java.lang.invoke 包，
- * 经常规字节码翻译进入类宇宙（codegen/jdk_resolver.py vm_support_classes）。
+ * 经常规字节码翻译进入类宇宙（generator/crates/resolve/src/image.rs VM 支持类目录）。
  */
 package java.lang.invoke;
 

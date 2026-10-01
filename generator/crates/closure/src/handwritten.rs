@@ -363,7 +363,7 @@ impl Handwritten {
         self.class(cls).fns.values().any(|f| f.is_pub)
     }
 
-    /// Rust 构造器名：`new` + 描述符重载后缀（codegen/type_map.mangle_name 同规则）
+    /// Rust 构造器名：`new` + 描述符重载后缀（`ty::type_map::mangle_name` 同规则）
     pub fn ctor_name(&self, desc: &str) -> String {
         let suffix = self.descriptor_suffix(desc);
         if suffix.is_empty() {
