@@ -268,6 +268,8 @@ pub struct Engine<'a> {
     pub unresolved: BTreeSet<String>,
     /// 活代码调用点的符号引用（常量池 owner.name:desc）：发射层槽位需求按调用点键消费
     pub refs: BTreeSet<String>,
+    /// 成员引用的文本键（清单按文本查询；字节码事件反复查同一引用）及是否已记入 `refs`
+    mref_keys: HashMap<MemberRef, (Rc<str>, bool)>,
     /// 运行模型替换的 indy 调用点（`方法@偏移` → (引导方法, 类别)）
     pub indy_models: BTreeMap<String, (String, IndyKind)>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
