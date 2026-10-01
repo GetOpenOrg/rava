@@ -1,6 +1,6 @@
 # Python 脚本并入 rava：产品路径 Python 归零
 
-> 状态：方案已认可（2026-10-01），S1–S4 实施中，S5 起按 §4.1 闸门等协调者通知。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
+> 状态：方案已认可（2026-10-01），S1–S4 已完成，S5（A1）已实施（2026-10-02），S6 起按 §4.1 闸门等协调者通知。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
 > 本文 B 类随之结清；本次修订刷新现状、细化 A 类为可逐步提交的步骤，给出与 c1d-prec / c4-regfix 的
 > 合并顺序，并为 JUnit 形态（[`2026-10-01-junit-crate-as-test-harness.md`](2026-10-01-junit-crate-as-test-harness.md)）
 > 在 e2e 编排中预留 `--lib` 接口。
@@ -47,7 +47,11 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
   `--closure-json` / `--precheck-only`；c1d-prec 另加 `--cut` / `--cut-file` / `--dump-edges`）。
 - 阶段选择统一为 `--stop-after <javac|closure|emit|compile|run>`（缺省 `run`），删除 `--no-run` /
   `--precheck-only` 两个布尔开关：`--no-run` ≡ `--stop-after emit`；`--precheck-only` 更名 `--full-precheck`
-  （仅 `--stop-after emit` 下可用；预检明细全量打印，不出审计行；S2 已实施）。run_tests 用 `--stop-after compile`（运行与输出比对由编排做）。
+  （仅 `--stop-after emit` 下可用；预检明细全量打印，不出审计行；S2 已实施）。run_tests 分两段（S5 实施时修订）：
+  `rava build --stop-after emit` → 动态对照 → `rava compile <scratch>`（读 `build_status.json` 的 `emit` 段编译已发射的
+  工作区，与 build 的 compile 段同一实现 `compile_cmd::compile_stage`）；运行与输出比对由编排做。不用单次
+  `--stop-after compile` 的原因：动态对照（S6 前在 Python 侧）位于发射与编译之间；并行模式先并行发射、再逐例编译，
+  发射进程不必常驻等待共享 target 的 cargo 文件锁。编译成功后 `build_status.json` 另记 `exe`（可执行文件路径）。
 - `--build-timeout SECS` 进 rava：超时终止整个 cargo 进程组，状态写入 build_status.json（A2）。
 - 现 rava_cli 显式传的 `--runtime` / `--closure-cache` / `--java-home` 改为 rava 缺省派生：仓库根由可执行文件向上
   查找 `runtime/java_runtime/closure.toml` 得到，`--runtime` 缺省 `<repo>/runtime/java_runtime`、`--closure-cache` 缺省

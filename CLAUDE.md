@@ -128,20 +128,23 @@ build/                              # gitignore：每测试一次性 scratch
 
 **规则**：
 - 生成代码**永不提交**；仓库里只有 `runtime/` 手写真源
-- 每次转译（`scripts/main.py`）流程：清空或复用 scratch → `rava build`（overlay `runtime/` → javac → 闭包 → 发射）→ cargo
+- 每次转译（`rava build`）流程：清空或复用 scratch → overlay `runtime/` → javac → 闭包 → 发射 → cargo build → 运行；rava 二进制在 `build/analyzer-target/release/rava`，run_tests 与各 shell 脚本每批开头自动构建
 - 手写文件靠「无 `rava_macros::java_class` 生成标记」识别，`rava build` 不会覆盖它们
 - `rava_macros` 不复制进 scratch，以绝对 path 依赖参与编译（共享 target 下缓存命中）
 
 ## 常用命令
 
 ```bash
-python3 scripts/main.py <Test.java>            # 转译 + 运行（scratch = build/<test>）
-python3 scripts/main.py <Test.java> --no-run    # 只生成
-python3 scripts/main.py <Test.java> --clean     # 清空 scratch 重建
+cargo build --release -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target   # 构建 rava（新鲜时为空操作）
+build/analyzer-target/release/rava build <Test.java>                     # 转译 + 编译 + 运行（scratch = build/<test>）
+build/analyzer-target/release/rava build <Test.java> --stop-after emit   # 只生成
+build/analyzer-target/release/rava build <Test.java> --clean             # 清空 scratch 重建
+build/analyzer-target/release/rava compile build/<test>                  # 编译已生成的 scratch（结果见 build_status.json）
 python3 scripts/run_tests.py                    # 全量 e2e（顺序）
 python3 scripts/run_tests.py -j 4               # 并行
 python3 scripts/run_tests.py --filter TestXxx   # 单测试
-python3 scripts/main.py <Test.java> --no-run --trace-class <类>   # 查某类为何入闭包（转交 rava closure --why；另有 --debug / --strict / --raw-sites）
+build/analyzer-target/release/rava build <Test.java> --stop-after emit --trace-class <类>   # 查某类为何入闭包（同 rava closure --why；另有 --debug / --strict / --raw-sites）
+build/analyzer-target/release/rava audit api|corpus|native ...          # 编译前缺口审计（报告写 docs/reports/）
 (cd generator && cargo test --release)         # 生成器 / 闭包分析器单元测试
 python3 -m unittest tests.unit.<模块>            # 脚本单元测试（test_dyn_compare / test_baseline_diff）
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
@@ -154,7 +157,7 @@ scripts/fetch_pilot_deps.sh [--no-scan]         # lib pilot 语料取包（清�
 scripts/lib_pilot_golden.sh m1..m5              # JUnit/hamcrest crate golden 对账（前置：上一条）
 ```
 
-命令行选项（`--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--build-timeout`）与会读取的标准环境变量见 **[`docs/environment-variables.md`](docs/environment-variables.md)**。
+命令行选项（`--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--build-timeout` / `--release`）与会读取的标准环境变量见 **[`docs/environment-variables.md`](docs/environment-variables.md)**。
 
 ---
 

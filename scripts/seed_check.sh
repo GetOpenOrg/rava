@@ -6,11 +6,12 @@
 set -u
 SRC="${1:?用法: $0 <Test.java> [jdk]}"; JDKV="${2:-21}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
+. "$REPO/scripts/rava_env.sh" "$REPO"
 n=$(basename "$SRC" .java)
 s=$(python3 -c "import re;print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])','_','$n').lower())")
 TMP=$(mktemp -d)
 for run in 1 2; do
-    python3 scripts/main.py "$SRC" --jdk "$JDKV" --clean --no-run \
+    "$RAVA" build "$SRC" --jdk "$JDKV" --clean --stop-after emit \
         > "$TMP/run$run.log" 2>&1 || { echo "TRANSPILE-FAIL run=$run（见 $TMP）"; exit 1; }
     cp -r "build/$s" "$TMP/run$run"
 done

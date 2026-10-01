@@ -17,13 +17,13 @@ TESTS="${*:-$DEFAULT_SET}"
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 cd "$REPO"
-# 生成树对照含 closure.json：rava build 缺省不写，按 REPO 的 main.py 是否支持该选项决定是否要求写出
-CJ=""; grep -q -- "--closure-json" scripts/main.py && CJ="--closure-json"
+. "$REPO/scripts/rava_env.sh" "$REPO"
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)
     [ -n "$f" ] || { echo "NOT-FOUND $n"; continue; }
     s=$(python3 -c "import re;print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])','_','$n').lower())")
-    python3 scripts/main.py "$f" --jdk "${JDK:-21}" --clean --no-run $CJ > "$OUT/$n.log" 2>&1 \
+    # 生成树对照含 closure.json（rava build 缺省不写）
+    "$RAVA" build "$f" --jdk "${JDK:-21}" --clean --stop-after emit --closure-json > "$OUT/$n.log" 2>&1 \
         || echo "TRANSPILE-FAIL $n"
     rm -rf "${OUT:?}/$n" && cp -r "build/$s" "$OUT/$n"
     echo "$(grep -h 'raw-audit\|fallback-audit' "$OUT/$n.log" | tr '\n' ' ') $n"
