@@ -256,8 +256,9 @@ impl<'a> Engine<'a> {
                 self.call_vals = vals;
                 return;
             }
-            let iface = l.iface.clone();
-            if let Some(sel) = self.h.select(&iface, site) {
+            // 非 SAM 方法（default / Object 方法）按 lambda 类实现的接口选择：函数式接口在前，其后为 altMetafactory 附加接口
+            let ifaces: Vec<String> = std::iter::once(&l.iface).chain(&l.markers).cloned().collect();
+            if let Some(sel) = ifaces.iter().find_map(|i| self.h.select(i, site)) {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);

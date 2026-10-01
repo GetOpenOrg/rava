@@ -362,6 +362,8 @@ struct Lambda {
     site: (usize, u32),
     ctx: u32,
     iface: String,
+    /// `altMetafactory` 附加实现的接口（序列化标记 / 标记接口），参与子类型判定
+    markers: Vec<String>,
     sam: String,
     imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）

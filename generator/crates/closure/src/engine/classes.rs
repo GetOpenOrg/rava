@@ -33,7 +33,7 @@ impl<'a> Engine<'a> {
             let c = self.id(CLASS);
             self.sub(c, f)
         } else if let Some(l) = self.lambdas.get(&x) {
-            &*fname == OBJECT || self.h.is_subtype(&l.iface, &fname)
+            &*fname == OBJECT || std::iter::once(&l.iface).chain(&l.markers).any(|i| self.h.is_subtype(i, &fname))
         } else if let Some(r) = self.hwobj_sub(x, &fname) {
             r
         } else {

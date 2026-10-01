@@ -8,6 +8,29 @@ fn object_method_desc(md: &MethodDesc) -> String {
     format!("({params}){}", md.ret.as_ref().map_or_else(|| "V".to_string(), FieldType::descriptor))
 }
 
+/// `altMetafactory` 静态实参的附加接口（LambdaMetafactory 协议：`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`；
+/// flags 位 1 = 可序列化、2 = 带标记接口、4 = 带桥接）。可序列化时 lambda 类实现清单的序列化标记接口。
+/// `metafactory` 只有前三项，结果为空
+fn alt_markers(bargs: &[Const], serializable: &[String]) -> Vec<String> {
+    const FLAG_SERIALIZABLE: i32 = 1;
+    const FLAG_MARKERS: i32 = 2;
+    let Some(Const::Int(flags)) = bargs.get(3) else { return vec![] };
+    let mut out = Vec::new();
+    if flags & FLAG_SERIALIZABLE != 0 {
+        out.extend(serializable.iter().cloned());
+    }
+    if flags & FLAG_MARKERS != 0 {
+        if let Some(Const::Int(n)) = bargs.get(4) {
+            let n = usize::try_from(*n).unwrap_or(0);
+            out.extend(bargs.iter().skip(5).take(n).filter_map(|c| match c {
+                Const::Class(c) => Some(c.clone()),
+                _ => None,
+            }));
+        }
+    }
+    out
+}
+
 /// 站点键：record 引用分量值的汇合节点（`ObjectMethods` 调用点偏移 | 本位）
 const COMPONENTS: u32 = 1 << 30;
 
@@ -190,7 +213,11 @@ impl<'a> Engine<'a> {
                 let lid = self.id(&lname);
                 let ctx = self.methods[m].ctx;
                 let adapt = self.lambda_plan(&b.args, imh, cap.len());
-                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap, adapt });
+                let markers = alt_markers(&b.args, self.man.serializable_markers());
+                for x in &markers {
+                    self.touch(x, Level::Type, via.clone());
+                }
+                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: name.to_string(), imh: imh.clone(), cap, adapt });
                 self.touch(&iface, Level::Alloc, via.clone());
                 for a in &b.args {
                     if let Const::MethodType(d) = a {
@@ -325,5 +352,18 @@ mod tests {
         assert_eq!(d("(Lt/R;Lt/O;)Z"), "(Lt/O;)Z");
         assert_eq!(d("(Lt/R;)I"), "()I");
         assert_eq!(d("(Lt/R;)Lt/S;"), "()Lt/S;");
+    }
+
+    #[test]
+    fn alt_markers_by_flags() {
+        let ser = vec!["a/Ser".to_string()];
+        let mt = || Const::MethodType("()V".into());
+        let base = || vec![mt(), Const::Int(0), mt()];
+        assert!(alt_markers(&base(), &ser).is_empty());
+        let with = |extra: Vec<Const>| [base(), extra].concat();
+        assert_eq!(alt_markers(&with(vec![Const::Int(1)]), &ser), ser);
+        assert!(alt_markers(&with(vec![Const::Int(4), Const::Int(1), mt()]), &ser).is_empty());
+        let m = alt_markers(&with(vec![Const::Int(3), Const::Int(1), Const::Class("a/M".into()), Const::Int(0)]), &ser);
+        assert_eq!(m, vec!["a/Ser".to_string(), "a/M".to_string()]);
     }
 }
