@@ -5,7 +5,9 @@
 //! - 本文件：§5 wrapper struct 与基础 trait impl，并按固定顺序拼装各段
 //! - `object_vtable`：§6 impl ObjectVTable for Wrapper
 //! - `methods`：§7 wrapper impl 块（访问器 / 虚方法委托 / 继承转发 / 构造器 / 静态与类初始化）
+//! - `body_fns`：方法体函数化（体移入模块级 `__jbm_<类>__<方法>`，wrapper 方法为外壳）
 
+mod body_fns;
 mod methods;
 mod object_vtable;
 

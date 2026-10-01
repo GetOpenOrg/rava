@@ -10,7 +10,7 @@ use syn::{Ident, Type};
 use super::super::super::class_init;
 use super::super::super::erasure::{
     erased_call_args, erased_call_args_with, erased_call_ret_conv, erased_call_ret_conv_with,
-    erasure_set_of, expand_non_virtual_fn,
+    erasure_set_of, expand_non_virtual_fn, prepare_non_virtual_body,
 };
 use super::super::super::classify::{vtable_body_kind_gated, VTableBodyKind};
 use super::super::super::parse::split_type_name_args;
@@ -19,6 +19,7 @@ use super::super::super::rewrite::{
 };
 use super::super::super::util::{attr_str, strip_meta_attrs};
 use super::super::context::GenContext;
+use super::body_fns::functionize;
 
 pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let struct_ident = &ctx.struct_ident;
@@ -33,6 +34,8 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     // ══════════════════════════════════════════════════════════════════════════
 
     let mut wrapper_methods: Vec<TokenStream2> = Vec::new();
+    // 方法体函数化后的模块级体函数（wrapper impl 块之后输出）
+    let mut body_fns: Vec<TokenStream2> = Vec::new();
 
     // _init_not_null：构造器完成后调用，将 _jvm_null 标志清零
     wrapper_methods.push(quote! {
@@ -99,11 +102,14 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
                 let mut impl_sig = sig.clone();
                 impl_sig.ident = format_ident!("__impl_{}", mname);
-                wrapper_methods.push(quote! {
-                    #(#keep_attrs)*
-                    #[doc(hidden)]
-                    pub #impl_sig #b
-                });
+                let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
+                match functionize(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &b.stmts, &quote! {}) {
+                    Some(fz) => {
+                        wrapper_methods.push(fz.shell);
+                        body_fns.push(fz.body_fn);
+                    }
+                    None => wrapper_methods.push(quote! { #attrs pub #impl_sig #b }),
+                }
             }
         }
 
@@ -148,11 +154,14 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     rewrite_virtual_calls_for_wrapper(&mut b, &ctx.own_method_names, &ctx.vdispatch);
                     let mut impl_sig = sig.clone();
                     impl_sig.ident = format_ident!("__impl_{}", mname);
-                    wrapper_methods.push(quote! {
-                        #(#keep_attrs)*
-                        #[doc(hidden)]
-                        pub #impl_sig #b
-                    });
+                    let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
+                    match functionize(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &b.stmts, &quote! {}) {
+                        Some(fz) => {
+                            wrapper_methods.push(fz.shell);
+                            body_fns.push(fz.body_fn);
+                        }
+                        None => wrapper_methods.push(quote! { #attrs pub #impl_sig #b }),
+                    }
                 }
             }
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）；
@@ -251,7 +260,20 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
 
     // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
     for f in &ctx.non_virtual {
-        wrapper_methods.push(expand_non_virtual_fn(f, &ctx.meta.binary_name, &ctx.basic_names, &ctx.ref_names));
+        let fz = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names).and_then(|(null_check, b)| {
+            let keep_attrs = strip_meta_attrs(&f.attrs);
+            let vis = &f.vis;
+            functionize(ctx, &quote! { #(#keep_attrs)* }, &quote! { #vis }, &f.sig, &f.sig.ident,
+                        &b.stmts, &null_check)
+        });
+        match fz {
+            Some(fz) => {
+                wrapper_methods.push(fz.shell);
+                body_fns.push(fz.body_fn);
+            }
+            None => wrapper_methods.push(
+                expand_non_virtual_fn(f, &ctx.meta.binary_name, &ctx.basic_names, &ctx.ref_names)),
+        }
     }
 
     // K-5 构造器链身份：不再有 __new_with_super。对象身份在最外层 `new` 的具体类
@@ -284,6 +306,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             #(#static_accessors)*
             #class_init_fn
         }
+        #(#body_fns)*
     };
 
     Ok(wrapper_impl)
