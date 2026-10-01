@@ -26,7 +26,7 @@ impl ClassInitFacts {
 impl<'a> Engine<'a> {
     /// 调用点（方法 m、偏移 off）若是类初始化入口，按 Class 实参初始化所指类
     pub(super) fn class_init_site(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, args: &[V]) {
-        let Some(j) = self.man.class_initializer(&mref.to_string()) else { return };
+        let Some(j) = self.man.class_initializer(&self.mref_key(mref)) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
         let Some(a) = args.get(skip + j) else { return };
         let mut known: Vec<String> = vec![];
