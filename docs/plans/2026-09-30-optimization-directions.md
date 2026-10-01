@@ -38,6 +38,7 @@
 | 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
 | 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
+| 生成代码运行性能 | 计算密集用例运行段（debug 构建，服务器；标杆 LynchBell） | > 300 s（`RUN_TIMEOUT` 超时，2026-10-01 分布式跑批） | ≤ 30 s，且不放宽 `RUN_TIMEOUT` |
 
 ## 三、执行线
 
@@ -78,6 +79,22 @@
   - 以上 ✅ 已合入 rust-closure-analyzer（f6d80103，e2e 抽查 7 例全过，二进制约 −40%）。待做：N6 剩余串行段（约 460 ms）、rustc 分阶段测量（拆 crate 方案 §五 第 1 步）。
 - `emitter-final`（生成器补齐）✅ 已合入（ef1daf34，e2e 抽查 10 例全过，含 DeepCopy / CollectorsDemo 修复）：S1–S6 清零、CLI 选项与审计补齐、缺省路径不再导入 `codegen`（[`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)）；删除清单见 [`2026-10-01-python-generator-deletion.md`](2026-10-01-python-generator-deletion.md)。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
+
+### 4. 生成代码运行性能（任务 R1，待排期）
+
+用户 2026-10-01 决定：运行超时的算法用例，只要 Java 写法合法，就不改测试文件，也不放宽 `RUN_TIMEOUT`（300 s）。超时按性能问题处理，归入本线，原用例作为验收用例。
+
+**标杆用例**：`tests/e2e/23_algorithms/LynchBell.java`（期望输出 `Number found: 9867312`）。
+
+- **负载**：`i` 从 98764321 递减到 9867312，共约 8890 万次迭代。每次迭代执行 `String.valueOf(i)`，新分配一个 8 位字符串，赋给静态字段 `s`；`uniqueDigits` 再在双重循环里反复调用 `s.length()` 和 `s.charAt()`。
+- **JVM**：JIT 内联加逃逸分析后，每次迭代在几十纳秒量级，整程序几秒完成。
+- **rava 现状**：分布式跑批以 debug 构建运行，没有内联；运行段超过 300 s 超时。按代码逻辑，热点有四处：
+  1. `charAt` / `length` 逐层走字节码翻译链（`isLatin1` → `StringLatin1.charAt` → `checkIndex`），每层都是一次独立调用；
+  2. 每次访问静态字段 `s` 都要做类初始化检查；
+  3. `String.valueOf` 每次都分配 `byte[]` 和 `String`，带 Rc 引用计数；
+  4. 实例调用都经过 vtable 分派。
+- **方向**：在生成器侧降低热路径的调用与检查成本，例如对已证明完成初始化的类省去重复的初始化检查、final / 私有 / 静态调用直接调用并标注内联、热点小方法生成 `#[inline]`、减少临时对象分配。具体手段由实测剖析决定。约束：不手写替代 JDK 方法，性能替换不是手写理由（handwritten-boundary.md §一）。
+- **验收**：LynchBell 在 debug 构建下运行段 ≤ 30 s，输出与 JVM 一致；同时 e2e 不回归。后续发现的同类超时用例并入本任务，作为附加验收用例。
 
 ## 四、待用户决策
 
