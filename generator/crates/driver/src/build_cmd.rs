@@ -330,11 +330,18 @@ fn report(r: &ProjectReport, out: &Path) {
     println!("[emit] {} JDK 类 + {} 用户类 → {}（bin {}）", r.jdk_classes, r.user_classes, out.display(), r.bin_name);
 }
 
-fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)]) {
-    if on {
-        for l in report_lines(perf, methods, PERF_TOP) {
-            println!("{l}");
-        }
+/// `--perf` 报告；已发射时（`jdk_classes` 为 Some）补一行重型判定（与编译阶段 `Heavy::decide` 同一函数）
+fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)], jdk_classes: Option<usize>) {
+    if !on {
+        return;
+    }
+    for l in report_lines(perf, methods, PERF_TOP) {
+        println!("{l}");
+    }
+    if let Some(n) = jdk_classes {
+        let h = cargo::Heavy::decide(n);
+        let verdict = h.jobs.map_or_else(|| "不干预作业数".to_string(), |j| format!("强制 {j} 作业"));
+        println!("[perf] 重型判定：{} {n} 类（阈值 {}）→ {verdict}", cargo::PEAK_CRATE, cargo::HEAVY_CLASSES);
     }
 }
 
@@ -389,11 +396,11 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         emit_scratch(&job, perf).map(Some)
     })?;
     let Some((r, timings)) = emitted else {
-        print_perf(o.perf, &perf, &[]);
+        print_perf(o.perf, &perf, &[], None);
         return Ok(());
     };
     st.stage = Stage::Emit;
-    print_perf(o.perf, &perf, &timings);
+    print_perf(o.perf, &perf, &timings, Some(r.jdk_classes));
     if o.full_precheck {
         return Ok(());
     }
@@ -444,7 +451,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     if !o.full_precheck {
         report(&r, &out);
     }
-    print_perf(o.perf, &perf, &timings);
+    print_perf(o.perf, &perf, &timings, Some(r.jdk_classes));
     Ok(())
 }
 
