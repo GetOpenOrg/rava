@@ -1,6 +1,6 @@
 # Python 脚本并入 rava：产品路径 Python 归零
 
-> 状态：分步方案待确认（2026-10-01 修订）。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
+> 状态：方案已认可（2026-10-01），S1–S4 实施中，S5 起按 §4.1 闸门等协调者通知。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
 > 本文 B 类随之结清；本次修订刷新现状、细化 A 类为可逐步提交的步骤，给出与 c1d-prec / c4-regfix 的
 > 合并顺序，并为 JUnit 形态（[`2026-10-01-junit-crate-as-test-harness.md`](2026-10-01-junit-crate-as-test-harness.md)）
 > 在 e2e 编排中预留 `--lib` 接口。
@@ -187,8 +187,11 @@ S7 拆分时落地接口，注册表为空，不改变现有行为；JUnit 步�
 - 接线点①（转译）：`e2e/rava.py` 拼 `rava build` 参数时追加 `form.lib_args`。`--lib` 只支持单 bin，e2e 每例单独转译，形态兼容。
 - 接线点②（期望输出）：`e2e/expected.py` 的 javac / java 加 `-cp <classes>:<jars>`。
 - 接线点③（动态对照）：编排侧零接线——A4 已让 `rava build --dyn-compare` 按 `--lib` 自动扩 JVM classpath 并归类 lib 域。
-- jar 目录：run_tests 新选项 `--pilot-libs DIR`（缺省 `tests/lib_pilot/deps/target/pilot-libs`，不新增环境变量）；jar 缺失时
-  该形态用例记 `deps-missing` 并提示 `scripts/fetch_pilot_deps.sh --no-scan`，不计入失败棘轮。
+- jar 目录：run_tests 新选项 `--pilot-libs DIR`（缺省 `tests/lib_pilot/deps/target/pilot-libs`，不新增环境变量）。
+  jar 缺失时**不跳过**（静默跳过会掩盖回归）：批次开头（选例后、调度前）对选中的形态统一自动取包，逻辑与
+  `scripts/fetch_pilot_deps.sh --no-scan` 相同（`mvn -B -q -f tests/lib_pilot/deps/pom.xml package` 导出到缺省目录），
+  只调一次；取包后仍缺 jar（mvn 不在 PATH、网络失败等）则该形态全部用例记失败（`deps-fetch-fail`，进失败棘轮），
+  批次结束报错退出码非 0。
 - 台账、并行、内存纪律、产物清理全部继承；lib crate 的产物由 build_artifacts.json 一并纳入清理。
 
 附带给用户的勘误（junit 计划文档由用户维护，本计划不改）：其 §现状「`main.py --lib`（scripts/main.py:230,349）」
