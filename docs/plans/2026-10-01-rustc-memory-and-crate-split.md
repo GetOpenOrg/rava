@@ -503,3 +503,19 @@ Digester 的峰值落在方法体与存储层（类型检查 / 借用检查 / �
   - `From<Object>` 路径 B：`downcast` 成功 → 部件同原式构造；失败 → 原样交还 `__AnyRef`，随后 `drop`，与原 `Err(__other) => drop(__other)` 相同。
 - HelloWorld `java_runtime` 宏展开对照（nightly `-Z unpretty=expanded`，前后同一 scratch，仅宏 crate 不同）：差异 1543 处，逐类只有「新增 3 个钩子 + 4 处调用点替换」两类（190 类 × 3 钩子；删除行全部是上述 4 处的原内联代码）。`cargo build` 通过。
 - 生成树：宏不进 scratch，生成树不变。
+
+#### S3a：`_base` 去泛型 + 体只一份（2026-10-01）
+
+- 宏：`_base` 接收者 `this: &__BT`（按调用方类型单态化）→ `this: &dyn X__VTable`；有 Safe 缺省方法的类加视图 trait `X__AsVTable`（§7.3.3）；`X__VTable for X__inner` 里 Safe VirtualDefine 的私有直展开删除、沿用缺省方法；Safe VirtualOverride 的 `_base` 所有者条目改为转发外壳。`virtual_dispatch/base_fns.rs` 首句 `let this = self;` 的剥离改为去空白后精确匹配（rustc 记号流文本化为 `let this = self;`，与 proc_macro2 回退实现的 `self ;` 不同，按原文比较会漏剥，导致 E0424）。
+- 生成器（Rust / Python 两套）：继承成员转发体与 `super.m()` 去掉 turbofish 末位接收者类型。
+- 27 例生成树对照（基线 `trees_s1`）：除基线早于 `build_script` 改名的目录名与 closure.json 计时字段外，代码差异全部是 `_base::<…, Self>(` / `_base::<…, _>(` → `_base::<…>(`、`_base::<Self>(` / `_base::<_>(` → `_base(`（新旧各 52,309 行，归一后多重集合相等）；closure.json 差异全部位于 `/summary/perf` 与 `elapsed_ms`（计时 / RSS 统计）；raw-audit 一致。
+- HelloWorld `cargo build` 通过（java_runtime + user + 链接）。nightly 分阶段测量（`scripts/rustc_profile.sh`，仅 java_runtime）：
+
+| | 前（S2） | 后（S3a） |
+|---|---|---|
+| 墙钟 / 峰值 RSS | 14.08 s / 1797 MB | 13.73 s / 1801 MB |
+| 单态化条目 / 实例 / size_est | 27,357 / 53,603 / 576,201 | 29,016 / 54,628 / 582,466 |
+| 其中 `_base` 条目 / 实例 | 420 / 1,444 | 2,268 / 2,280 |
+
+- 解读：`_base` 去泛型后每个定义恰好编一份（之前只编被调用到的实例化，但一个体可按调用方类型编多份，如 `Throwable__toString_base` 32 份）；未被调用的 `_base`（多为 NeedsWrapper 的钩子桥与 stub）现在也会编出，size_est 合计 +1.1%，峰值与墙钟持平。这是拆层的前提形态：实现层的体函数必须是非泛型的单一定义，才能经 extern 边界被声明层调用，并在多个实现 crate 中并行编译。
+- 运行期：Safe 体内对 `this` 的访问器调用由静态分派变为经 `&dyn` 分派（转发外壳与 `_base` 同 crate，LLVM 内联后 vtable 为常量可去虚化）。属性能观察项，随 S6 性能验收一并测。

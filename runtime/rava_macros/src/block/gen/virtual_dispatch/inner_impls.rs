@@ -1,6 +1,7 @@
 //! `impl *__VTable for __inner`：字段访问器、覆盖方法、继承槽位、接口桥接。
 
 use super::*;
+use super::base_fns::{base_shell_call, define_base_has_body, override_base_owners};
 
 /// §4 impl vtable traits for __inner（含实现的接口 `impl Iface__VTable for __inner` 桥接）。
 pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
@@ -10,6 +11,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let erased_ty_args = &ctx.erased_ty_args;
     let phantom_init = &ctx.phantom_init;
+    let base_owners = override_base_owners(ctx);
 
     // 实现的接口：impl Iface__VTable for __inner（擦除签名 → 本类成员的桥接）
     let interface_impls: Vec<TokenStream2> = ctx.iface_impls.iter()
@@ -78,6 +80,11 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         for f in &ctx.vtable_defines {
             if let Some(block) = &f.block {
                 if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+                    // 体只一份：base 函数（`&dyn` 接收者）。trait 缺省方法已委托它，
+                    // 本类实现直接沿用缺省方法，不再内联第二份体
+                    if define_base_has_body(ctx, f) {
+                        continue;
+                    }
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
                     let mut b = block.clone();
@@ -171,6 +178,28 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
                             if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+                                // 体只一份：本条目是 base 函数的所有者时，覆盖体改为转发
+                                // （形参已按原签名类型化还原，base 函数收原签名形参）
+                                let base_call: Option<TokenStream2> =
+                                    if base_owners.iter().any(|o| ::std::ptr::eq(*o, *f)) {
+                                        let mut probe = sig.clone();
+                                        base_shell_call(ctx, f, &mut probe)
+                                    } else {
+                                        None
+                                    };
+                                let shell_body: Option<syn::Block> =
+                                    base_call.map(|c| syn::parse_quote! { { #c } });
+                                if shell_body.is_some() {
+                                    for a in erased_item_sig.inputs.iter_mut() {
+                                        if let syn::FnArg::Typed(pt) = a {
+                                            if let syn::Pat::Ident(pi) = &mut *pt.pat {
+                                                pi.mutability = None;
+                                            }
+                                        }
+                                    }
+                                }
+                                let forwards = shell_body.is_some();
+                                let b = shell_body.unwrap_or(b);
                                 // K-6b：参数位擦除还原——槽位签名被 vtable_erasure /
                                 // 类型形参提及 Object 化的形参，体开头以类型化局部
                                 // 遮蔽（From<Object> 还原，与 NeedsWrapper 路径的
@@ -192,7 +221,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                                             return None;
                                         }
                                         let ident = &opi.ident;
-                                        let mut_kw = if opi.mutability.is_some() {
+                                        let mut_kw = if opi.mutability.is_some() && !forwards {
                                             quote! { mut }
                                         } else {
                                             quote! {}
@@ -222,12 +251,14 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                                     _ => false,
                                 };
                                 if let (true, Some(orig_inner)) = (ret_erased_hit, orig_ret_inner) {
+                                    // 转发外壳无 return / ?，直接求值；原体经闭包保 return 语义
+                                    let ret_eval = if forwards { quote! { #b } } else { quote! { (|| #b)() } };
                                     items.push(quote! {
                                         #(#keep_attrs)*
                                         #erased_item_sig {
                                             #(#arg_restores)*
                                             // Result 经 prelude 可见（java_runtime 与 user crate 同一形态）
-                                            let __ret: Result<#orig_inner> = (|| #b)();
+                                            let __ret: Result<#orig_inner> = #ret_eval;
                                             Ok(::std::convert::Into::<Object>::into(__ret?))
                                         }
                                     });
@@ -366,6 +397,11 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         for f in &ctx.vtable_defines {
             if let Some(block) = &f.block {
                 if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+                    // 体只一份：base 函数（`&dyn` 接收者）。trait 缺省方法已委托它，
+                    // 本类实现直接沿用缺省方法，不再内联第二份体
+                    if define_base_has_body(ctx, f) {
+                        continue;
+                    }
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
                     let mut b = block.clone();

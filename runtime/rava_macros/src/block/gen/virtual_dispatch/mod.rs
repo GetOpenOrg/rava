@@ -19,7 +19,7 @@ use super::super::erasure::{
 };
 use super::super::generic_sig::rebuild_sig_with_generics;
 use super::super::interface::{erased_impl_call, erased_wrapper_call, expand_interface_impl};
-use super::super::parse::split_type_name_args;
+use super::super::parse::{split_type_name_args, FnItem};
 use super::super::rewrite::{
     replace_clone_this_in_ok, rewrite_block, rewrite_dropped_params_in_inherited_body,
     rewrite_vtable_calls_ufcs_for_base,

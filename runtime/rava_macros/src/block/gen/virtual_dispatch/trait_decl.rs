@@ -8,6 +8,8 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let as_self_hook = &ctx.as_self_hook;
     let erased_ty_args = &ctx.erased_ty_args;
+    let dyn_view_trait = format_ident!("{}__AsVTable", struct_ident);
+    let dyn_view_hook = format_ident!("__dyn_{}", struct_ident);
 
     // ══════════════════════════════════════════════════════════════════════════
     // 1. VTable trait —— 非泛型（A-1 去形参：与接口载体 `I__VTable` 对齐）
@@ -78,9 +80,12 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
         if let Some(block) = &f.block {
             if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
                 // vtable-safe 方法体（仅非泛型类）→ default 委托 base 函数
-                // （体可直接在 &Self 上运行）；turbofish ::<Self>
+                // （体可直接在 vtable 视图上运行）：本类 vtable 的 `&dyn` 视图经
+                // `__dyn_<X>` 取得（缺省方法的 Self 可能非 Sized，不能直接 unsize）
                 vtable_default_methods.push(quote! {
-                    #erased_default_sig { #fn_base_name::<Self>(self, #(#param_names_for_default),*) }
+                    #erased_default_sig {
+                        #fn_base_name(#dyn_view_trait::#dyn_view_hook(self), #(#param_names_for_default),*)
+                    }
                 });
             } else {
                 // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）→
@@ -116,9 +121,31 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
         }
     }
 
+    // 本类 vtable 的 `&dyn` 视图（仅 Safe 缺省方法需要）：独立 trait + 覆盖全部 Sized 实现类型的
+    // 一揽子 impl，作为本类 vtable trait 的 supertrait——生成的与手写的实现类型都自动具备，
+    // `dyn` 对象经 supertrait 槽位取得同一视图。
+    let needs_dyn_view = ctx.vtable_defines.iter().any(|f| f.block.as_ref().is_some_and(|b|
+        matches!(vtable_body_kind_gated(b, ctx.class_is_generic), VTableBodyKind::Safe)));
+    let (dyn_view_decl, dyn_view_bound) = if needs_dyn_view {
+        (quote! {
+            #[doc(hidden)]
+            #[allow(non_camel_case_types)]
+            pub trait #dyn_view_trait {
+                fn #dyn_view_hook(&self) -> &dyn #vtable_trait_ident;
+            }
+            impl<__T: #vtable_trait_ident> #dyn_view_trait for __T {
+                #[inline]
+                fn #dyn_view_hook(&self) -> &dyn #vtable_trait_ident { self }
+            }
+        }, quote! { + #dyn_view_trait })
+    } else {
+        (quote! {}, quote! {})
+    };
+
     let vtable_trait = quote! {
+        #dyn_view_decl
         #[allow(non_camel_case_types)]
-        pub trait #vtable_trait_ident: #vtable_supertrait {
+        pub trait #vtable_trait_ident: #vtable_supertrait #dyn_view_bound {
             #[doc(hidden)]
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args;
             #(#vtable_abstract_methods)*

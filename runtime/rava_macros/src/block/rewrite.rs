@@ -297,7 +297,7 @@ pub(crate) fn rewrite_virtual_calls_for_wrapper(
     VirtualCallRewriter(own_method_names, dispatch).visit_block_mut(block);
 }
 
-/// 在 base 函数体（`this: &__BT: VTable + ?Sized`）中，将 `this.vtable_method(args)` 改写为
+/// 在 base 函数体（`this: &dyn VTable`）中，将 `this.vtable_method(args)` 改写为
 /// `VTableTrait::vtable_method(this, args)` UFCS，消除同名方法多 supertrait 来源的 E0034 歧义。
 /// `vtable_names`：当前类的 VirtualDefine 方法名集合（即 VTable trait 中声明的方法）。
 pub(crate) fn rewrite_vtable_calls_ufcs_for_base(
@@ -399,7 +399,7 @@ pub(crate) fn rewrite_dropped_params_in_inherited_body(
     impl VisitMut for DroppedRewriter<'_> {
         fn visit_expr_mut(&mut self, e: &mut Expr) {
             visit_mut::visit_expr_mut(self, e);
-            // `Owner__m_base::<A, B, Self>(...)`：turbofish 实参里被删形参 / 擦除形态 → Object
+            // `Owner__m_base::<A, B>(...)`：turbofish 实参里被删形参 / 擦除形态 → Object
             if let Expr::Call(call) = e {
                 let mut is_base = false;
                 if let Expr::Path(p) = &mut *call.func {
