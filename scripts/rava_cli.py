@@ -1,6 +1,6 @@
 """rava（`generator/` 的 Rust 生成器）调用形态的唯一定义点。
 
-`rava build --no-run` 在同一 scratch 内完成 overlay → javac → 闭包分析 → 发射；闭包结果进程内直传发射层，
+`rava build --stop-after emit` 在同一 scratch 内完成 overlay → javac → 闭包分析 → 发射；闭包结果进程内直传发射层，
 closure.json 只在 `closure_json=True`（main.py `--closure-json`）时落 `<scratch>/closure_input/`
 （动态对照、生成树对照、`rava emit` 需要它）。
 """
@@ -27,7 +27,7 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
              libs: tuple[str, ...] = (), batch: bool = False, debug: bool = False, trace_class: str = '',
              precheck_only: bool = False, raw_sites: str = '', closure_json: bool = False,
              extra: list[str] = ()) -> None:
-    """`rava build --no-run`：（clean 时先清空 out_dir）overlay → javac → 闭包 → 发射进 out_dir。
+    """`rava build --stop-after emit`：（clean 时先清空 out_dir）overlay → javac → 闭包 → 发射进 out_dir。
 
     镜像独有 / VM 支持类目录由 rava 自行派生（resolve::image）。
 
@@ -37,7 +37,7 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
     if not home:
         sys.exit('rava build 需要 JAVA_HOME（main.py 经 jdk_select.apply_jdk 设置）')
     cmd = rava_cmd('build', *[os.path.abspath(f) for f in java_files],
-                   '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--no-run')
+                   '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--stop-after', 'emit')
     # 闭包分析跨运行结果缓存（键覆盖分析器、JDK、手写层、用户类与全部分析参数，见 closure::cache）
     cmd += ['--closure-cache', _CLOSURE_CACHE]
     if clean:
@@ -50,7 +50,7 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
         cmd += ['--trace-class', trace_class]
     if raw_sites:
         cmd += ['--raw-sites', os.path.abspath(raw_sites)]
-    for flag, on in (('--strict', strict), ('--batch', batch), ('--debug', debug), ('--precheck-only', precheck_only),
+    for flag, on in (('--strict', strict), ('--batch', batch), ('--debug', debug), ('--full-precheck', precheck_only),
                      ('--closure-json', closure_json)):
         if on:
             cmd.append(flag)

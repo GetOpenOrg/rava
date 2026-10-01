@@ -71,6 +71,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     for u in hw.vm_upcalls() {
         e.root_upcall(&u, "vm-upcalls");
     }
+    e.root_vm_rules();
     for c in &man.boot_init {
         e.root_init(c, "boot_init");
     }

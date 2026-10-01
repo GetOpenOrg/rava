@@ -143,10 +143,12 @@ impl<'a> Engine<'a> {
         let mut out: BTreeSet<String> = BTreeSet::new();
         for n in names {
             let cls = n.replace('.', "/");
-            if cls.starts_with('[') || self.h.class(&cls).is_none() {
+            // 数组类名（描述符形式）：元素类型可解析时取到数组类镜像；数组类不可实例化，有期望类型时不保留
+            let found = if cls.starts_with('[') { expect.is_none() && self.array_name_resolves(&cls) } else { self.h.class(&cls).is_some() };
+            if !found {
                 continue;
             }
-            if expect.as_ref().is_some_and(|t| !self.h.is_subtype(&cls, t)) {
+            if !cls.starts_with('[') && expect.as_ref().is_some_and(|t| !self.h.is_subtype(&cls, t)) {
                 continue;
             }
             out.insert(cls);
@@ -328,10 +330,24 @@ impl<'a> Engine<'a> {
         Some(t.clone())
     }
 
-    /// 按名取到的类：其构造器进入反射面（类已被构造器枚举且反射构造可达时立即补入）
+    /// 描述符形式的数组类名（`[I`、`[[Lp/C;`）：元素是单字符基本类型（非 void）或类路径上存在的类
+    fn array_name_resolves(&self, cls: &str) -> bool {
+        let elem = cls.trim_start_matches('[');
+        match elem.strip_prefix('L').and_then(|c| c.strip_suffix(';')) {
+            Some(c) => self.h.class(c).is_some(),
+            None => elem.len() == 1 && "ZBCSIJFD".contains(elem),
+        }
+    }
+
+    /// 按名取到的类：其构造器进入反射面（类已被构造器枚举且反射构造可达时立即补入）；
+    /// 数组类只取镜像（同 ldc 数组类常量），不初始化元素类（JLS §12.4.1）
     pub(super) fn named_class(&mut self, m: usize, off: u32, cls: &str) {
         let k = self.mirror(cls);
         self.add_to(Node::S(m, off), &TypeSet::exact(k));
+        if cls.starts_with('[') {
+            self.touch(cls, Level::Type, Via::method("reflect", m, Some(off)));
+            return;
+        }
         self.init(cls, Via::method("reflect", m, Some(off)));
         let c = self.id(cls);
         if self.named_ctors.insert(c) && self.enumerated.contains(&(Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {

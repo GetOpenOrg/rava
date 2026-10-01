@@ -182,6 +182,16 @@ fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Arc
     (out, opaque)
 }
 
+/// 预检链事实：分析器方法节点 id；abstract 方法除外（无方法体，派发落到子类实现，
+/// 其存根体不可达——边界类上的 abstract 方法由手写子类经 vtable 实现，不是缺口）
+fn precheck_visited(f: &ClosureFacts, closure: &[Arc<ClassFile>]) -> BTreeSet<String> {
+    let by_name: BTreeMap<&str, &ClassFile> = closure.iter().map(|c| (c.name.as_str(), &**c)).collect();
+    let is_abstract = |r: &MemberRef| {
+        by_name.get(r.owner.as_str()).and_then(|c| c.method(&r.name, &r.desc)).is_some_and(|m| m.is_abstract())
+    };
+    f.methods.iter().filter(|m| !is_abstract(&m.id)).map(|m| m.id.to_string()).collect()
+}
+
 fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
     let f = inp.facts;
     let boundary: BTreeSet<&str> = f
@@ -393,7 +403,7 @@ impl<'a> BuildInput<'a> {
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
             module_resources,
-            precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),
+            precheck_visited: precheck_visited(f, &closure),
             handwritten,
             warnings,
             normalized,

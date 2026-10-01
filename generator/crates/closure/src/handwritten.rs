@@ -23,8 +23,10 @@ mod objects;
 mod scan;
 mod syntax;
 mod type_refs;
+mod units;
 mod vm_writes;
 pub use type_refs::MODULE_SUFFIXES;
+pub use units::CRATE_ROOT;
 use scan::{close_transitive, collect_uses, prelude_uses, scan_file, FileFns};
 use syntax::path_segs;
 
@@ -159,6 +161,8 @@ pub struct ClassHw {
     pub type_refs: BTreeSet<TypeRef>,
     /// 手写实现对象（struct 名 → 对象）；其 trait impl fn 不并入 `fns`
     pub objects: BTreeMap<String, HwObject>,
+    /// 文件定义的类型名（只对模块单元填写：路径调用 `模块::T::f` 的定位）
+    pub types: BTreeSet<String>,
 }
 
 /// 成员（Java 名）对应的手写体汇总
@@ -198,6 +202,8 @@ pub struct Handwritten {
     /// `lib.rs` 的 `mod prelude` 导出（手写文件 `use crate::prelude::*` 引入）
     prelude: HashMap<String, Vec<String>>,
     cache: RefCell<HashMap<String, Rc<ClassHw>>>,
+    /// 模块单元（见 `units.rs`；首次使用时载入）
+    units: RefCell<Option<Rc<BTreeMap<String, Rc<ClassHw>>>>>,
     abbrev: HashMap<String, String>,
     pub errors: RefCell<Vec<String>>,
 }
@@ -294,6 +300,7 @@ impl Handwritten {
             src: runtime_dir.join("src"),
             prelude,
             cache: RefCell::new(HashMap::new()),
+            units: RefCell::new(None),
             abbrev,
             errors: RefCell::new(Vec::new()),
         }

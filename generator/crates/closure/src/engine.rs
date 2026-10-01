@@ -23,7 +23,7 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
-use crate::handwritten::{member_matches, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
+use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
@@ -55,6 +55,8 @@ mod hw_infer;
 mod hwobj;
 mod hwfield;
 mod vmhook;
+mod rtfn;
+mod vmrules;
 mod report;
 mod diag;
 mod write_audit;
@@ -103,6 +105,7 @@ pub use idset::{IdIter, IdSet};
 use hwfield::HWFIELD_KIND;
 use hwobj::{HwObj, HWOBJ_KIND};
 use vmhook::VMHOOK_KIND;
+use rtfn::RTFN_KIND;
 
 /// 精确接收者达到此数时经集合枢纽派发
 const HUB_MIN: usize = 8;
@@ -395,4 +398,8 @@ pub struct Engine<'a> {
     snake_index: Option<HashMap<String, String>>,
     /// 清单种子状态与输出
     pub seeds: SeedState,
+    /// 已触发的 VM 规则（位图，见 `vmrules.rs`）
+    vm_rules_fired: u64,
+    /// 手写体 static 字段读已接入的 (方法, 字段)：访问器手写体自引用时不重入
+    hw_static_reads: HashSet<(usize, MemberRef)>,
 }

@@ -1,7 +1,7 @@
-//! `--api-package`：公开 API 包为调用链入口（`scripts/gap_scan.py` api 模式，← Python `JDK_SEEDS`）。
+//! `--api-package`：公开 API 包为调用链入口（`rava audit api` 同一入口枚举，← Python `JDK_SEEDS`）。
 //!
 //! 指定包内全部 public 类的 public / protected 方法（`<clinit>` 除外）作为闭包根，一次 BFS 得出
-//! 「从这些公开 API 可达」的全部缺口（`--precheck-only` 明细）。C1d 终态无包前缀截断，边界只剩 VM 契约类，
+//! 「从这些公开 API 可达」的全部缺口（`--full-precheck` 明细）。C1d 终态无包前缀截断，边界只剩 VM 契约类，
 //! 按方法划分，照常纳入。包名斜线或点形态均可；`recursive` 含子包。
 
 use classfile::{acc, MemberRef};

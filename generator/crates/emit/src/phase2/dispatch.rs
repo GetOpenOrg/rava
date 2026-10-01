@@ -171,7 +171,7 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
     let inner = ret.strip_prefix("Result<").and_then(|r| r.strip_suffix('>'));
     let boxed = ret_box(inner);
     let (Some(boxed), true) = (boxed, exprs.iter().all(Option::is_some)) else {
-        let body = format!("__stub(\"stub: L3 分派未支持的签名形态 {class_bin}.{mname}:{descriptor}\")");
+        let body = crate::precheck::stub_call("stub", &format!("L3 分派未支持的签名形态 {class_bin}.{mname}:{descriptor}"));
         arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some({body}),"));
         return;
     };

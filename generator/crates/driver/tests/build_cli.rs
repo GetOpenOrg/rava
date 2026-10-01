@@ -1,4 +1,4 @@
-//! `rava build --no-run` 端到端：夹具（tests/fixtures/*.java）经 javac → 闭包分析 → 发射，
+//! `rava build --stop-after emit` 端到端：夹具（tests/fixtures/*.java）经 javac → 闭包分析 → 发射，
 //! 断言生成文本形态与命令行输出（不编译生成物）。找不到 JDK 21 时跳过。
 
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ fn build(java: &str, tag: &str, extra: &[&str]) -> Option<(String, PathBuf)> {
     let o = Command::new(env!("CARGO_BIN_EXE_rava"))
         .arg("build")
         .arg(fixture(java))
-        .args(["--jdk", "21", "--no-run", "--clean", "--runtime"])
+        .args(["--jdk", "21", "--stop-after", "emit", "--clean", "--runtime"])
         .arg(runtime_dir())
         .arg("--out")
         .arg(&out)
@@ -27,7 +27,7 @@ fn build(java: &str, tag: &str, extra: &[&str]) -> Option<(String, PathBuf)> {
         .expect("启动 rava");
     let stderr = String::from_utf8_lossy(&o.stderr).to_string();
     if !o.status.success() {
-        if stderr.contains("找不到含 jmods/ 的 JDK") {
+        if stderr.contains("未找到 JDK") {
             eprintln!("[build_cli] 跳过：无 JDK 21");
             return None;
         }
@@ -58,6 +58,9 @@ fn rs_text(dir: &Path) -> String {
 #[test]
 fn record_and_switch_bootstraps_translate() {
     let Some((_, out)) = build("RecordSwitch.java", "record-switch", &[]) else { return };
+    let st: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("build_status.json")).unwrap()).unwrap();
+    assert_eq!((st["stage"].as_str(), st["ok"].as_bool()), (Some("emit"), Some(true)), "build_status.json：{st}");
+    assert_eq!(st["jdk"]["major"], 21);
     let user = rs_text(&out.join("user/src"));
     for bad in ["panic!(\"stub:", "TODO", "Object::from_any", ".downcast::<", "Default::default() /*"] {
         assert!(!user.contains(bad), "用户类生成文本含 {bad}");
@@ -134,7 +137,7 @@ fn batch_trace_and_debug() {
     std::fs::remove_dir_all(&out).ok();
 }
 
-/// `--lib`：jar 类进独立 lib crate（Java 可见性、lib.rs 包模块、user 依赖）；`--precheck-only`
+/// `--lib`：jar 类进独立 lib crate（Java 可见性、lib.rs 包模块、user 依赖）；`--full-precheck`
 /// 只出预检，不出审计与发射汇总
 #[test]
 fn lib_crate_and_precheck_only() {
@@ -147,10 +150,10 @@ fn lib_crate_and_precheck_only() {
     let jar = work.join("greet.jar");
     assert!(Command::new(home.join("bin/jar")).arg("cf").arg(&jar).arg("-C").arg(&classes).arg(".").status().unwrap().success());
     let spec = format!("greet={}", jar.display());
-    let Some((stdout, out)) = build("LibUser.java", "lib", &["--lib", &spec, "--precheck-only"]) else { return };
+    let Some((stdout, out)) = build("LibUser.java", "lib", &["--lib", &spec, "--full-precheck"]) else { return };
     assert!(stdout.contains("[jar] greet ← greet.jar（1 类）"), "{stdout}");
     assert!(stdout.contains("[precheck] native-missing="), "预检行");
-    assert!(!stdout.contains("[equiv-audit]") && !stdout.contains("[emit]"), "--precheck-only 不出审计 / 汇总：{stdout}");
+    assert!(!stdout.contains("[equiv-audit]") && !stdout.contains("[emit]"), "--full-precheck 不出审计 / 汇总：{stdout}");
     let lib_cargo = std::fs::read_to_string(out.join("greet/Cargo.toml")).unwrap();
     assert!(lib_cargo.contains("crate-type = [\"lib\"]"), "{lib_cargo}");
     assert!(std::fs::read_to_string(out.join("greet/src/lib.rs")).unwrap().contains("pub mod greet;"));
@@ -249,10 +252,10 @@ fn image_dirs_lists_existing_class_dirs() {
     assert!(dirs.iter().filter(|d| d.contains("/rava/vmsupport/")).count() == modules, "{text}");
 }
 
-/// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
+/// `--api-package`：包内公开 API 为入口，`--full-precheck` 出预检明细（同 `rava audit api` 入口）
 #[test]
 fn api_package_precheck() {
-    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only", "--closure-json"]) else {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--full-precheck", "--closure-json"]) else {
         return;
     };
     let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));
@@ -306,7 +309,7 @@ fn proxy_interface_owner_not_opaque() {
 /// `ResourceBundle.getObject` 的 `parent.getObject(key)`（@22）不得判为接收者恒 null
 #[test]
 fn locale_bundle_parent_not_null_recv() {
-    let Some((_, out)) = build("LocaleBundleParent.java", "rbparent", &["--precheck-only", "--closure-json"]) else {
+    let Some((_, out)) = build("LocaleBundleParent.java", "rbparent", &["--full-precheck", "--closure-json"]) else {
         return;
     };
     let facts: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap()).unwrap();

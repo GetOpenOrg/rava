@@ -1,7 +1,8 @@
 //! `rava build` / `rava emit`：P0 转译外壳（计划 docs/plans/2026-09-20-rust-generator-rewrite.md P0 / P5a）。
 //!
 //! build：javac → 闭包分析（同 `rava closure`）→ 闭包事实进程内直传 →
-//! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch →（缺省）`cargo run`。
+//! [`EmitInput`](input::EmitInput) → overlay → 发射层写 scratch → cargo 编译（[`crate::cargo`]）→ 运行，
+//! 到 `--stop-after` 为止；阶段与失败现场写 `<scratch>/build_status.json`（[`crate::status`]）。
 //! `--closure-json` 时另把 closure.json 落 `<scratch>/closure_input/`，并校验由它解析的事实与直传的一致。
 //! emit：从既有 closure.json + 用户类目录重建输入后同样发射（不编译运行）。
 //!
@@ -17,7 +18,7 @@ use emit::audit::{append_raw_sites, audit_lines, AuditInputs};
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::method_bodies::{BodyAudit, MethodBodies};
 use emit::perf::{report_lines, Perf};
-use emit::precheck::{Precheck, DEFAULT_LIMIT};
+use emit::precheck::DEFAULT_LIMIT;
 use emit::project::{prepare_scratch, write_project, ProjectReport};
 use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
@@ -25,27 +26,20 @@ use ty::short_names::ShortNames;
 
 use crate::api_roots::api_roots;
 use crate::build_libs::{self, Libs};
-use crate::build_opts::{BuildOpts, Mode, CLOSURE_INPUT_DIR};
+use crate::build_opts::{BuildOpts, Mode, Stage, CLOSURE_INPUT_DIR};
+use crate::cargo;
+use crate::status::{BuildStatus, STATUS_FILE};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
 use crate::Args;
 
-/// JDK 选择（[`resolve::jdk::choose`]，仓库根 = runtime 上两级）；`announce` 时打印来源行
-fn java_home(o: &BuildOpts, rt: &Path, announce: bool) -> Result<PathBuf, String> {
-    let c = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(&repo_root(rt)))?;
-    if announce {
-        println!("{}", c.describe());
-    }
-    Ok(c.home)
-}
-
 use resolve::jdk::release_major as jdk_major;
 
-fn abs(p: &Path) -> PathBuf {
+pub(crate) fn abs(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// 仓库根：`<repo>/runtime/java_runtime` 上两级
-fn repo_root(rt: &Path) -> PathBuf {
+pub(crate) fn repo_root(rt: &Path) -> PathBuf {
     rt.parent().and_then(Path::parent).map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
@@ -58,7 +52,7 @@ fn remove_dir(d: &Path) -> Result<(), String> {
 
 /// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
 /// jar 输入模式下全部 jar 上 `-cp`）
-fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
+pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
     remove_dir(out)?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}：{e}", out.display()))?;
     let mut cmd = Command::new(home.join("bin/javac"));
@@ -78,7 +72,7 @@ fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> R
 }
 
 /// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
-fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+pub(crate) fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
     let mut cp = ClassPath::new();
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
     for j in jars {
@@ -92,7 +86,7 @@ fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]
 }
 
 /// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
-fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
+pub(crate) fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
     if !o.images.is_empty() {
         return o.images.clone();
     }
@@ -153,7 +147,7 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
 /// Digester 约 60 ms、DeepCopy 数百 ms）：闭包借用非 `Sync` 的手写层，只能在创建它的线程析构，
 /// 所以挪走的是发射。发射线程栈同发射工作线程（方法体生成有深递归）
 #[allow(clippy::too_many_arguments)]
-fn analyze<R: Send>(
+pub(crate) fn analyze<R: Send>(
     cp: &ClassPath,
     rt: &Path,
     main: &str,
@@ -238,23 +232,27 @@ fn analyze<R: Send>(
 }
 
 /// 一次发射所需的全部输入
-struct EmitJob<'a> {
-    cp: &'a ClassPath,
-    facts: &'a ClosureFacts,
-    rt: &'a Path,
-    user: &'a [String],
-    java_files: Vec<PathBuf>,
-    home: &'a Path,
-    out: &'a Path,
-    libs: &'a [LibCrate],
-    o: &'a BuildOpts,
+pub(crate) struct EmitJob<'a> {
+    pub cp: &'a ClassPath,
+    pub facts: &'a ClosureFacts,
+    pub rt: &'a Path,
+    pub user: &'a [String],
+    pub java_files: Vec<PathBuf>,
+    pub home: &'a Path,
+    pub out: &'a Path,
+    pub libs: &'a [LibCrate],
+    pub o: &'a BuildOpts,
 }
 
 /// `--perf` 报告的 Top-N 条数
 const PERF_TOP: usize = 15;
 
-/// EmitInput → overlay → 写 scratch → 预检 →（非 `--precheck-only`）审计行；另返回逐方法耗时（`--perf`）
-fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
+/// 闭包事实 → [`input::EmitInput`] → 短名表 → [`EmitCtx`]，交给 `f`（落盘发射与 `rava audit` 的内存发射共用）
+pub(crate) fn with_emit_ctx<R>(
+    j: &EmitJob<'_>,
+    perf: &mut Perf,
+    f: impl FnOnce(&EmitCtx<'_>, &ShortNames, &mut Perf) -> Result<R, String>,
+) -> Result<R, String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
     let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src, jobs: j.o.emit_jobs }
@@ -275,21 +273,35 @@ fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<
     };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
+    f(&ctx, &names, perf)
+}
+
+/// EmitInput → overlay → 写 scratch → 预检 →（非 `--full-precheck`）审计行；另返回逐方法耗时（`--perf`）
+fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
+    with_emit_ctx(j, perf, |ctx, names, perf| write_scratch(j, ctx, names, perf))
+}
+
+fn write_scratch(
+    j: &EmitJob<'_>,
+    ctx: &EmitCtx<'_>,
+    names: &ShortNames,
+    perf: &mut Perf,
+) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
     perf.mark("overlay");
     ir::raw_audit::reset();
     if j.o.raw_sites.is_some() {
         ir::raw_audit::enable_sites();
     }
-    let bodies = MethodBodies::new(&ctx);
+    let bodies = MethodBodies::new(ctx);
     perf.mark("body_facts");
-    let mut r = write_project(&ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
+    let mut r = write_project(ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
     perf.absorb(std::mem::take(&mut r.perf));
-    let limit = if j.o.precheck_only { usize::MAX } else { DEFAULT_LIMIT };
-    for line in Precheck::scan(&r.emissions, &inp.precheck_visited).lines(limit) {
+    let limit = if j.o.full_precheck { usize::MAX } else { DEFAULT_LIMIT };
+    for line in r.precheck.lines(limit) {
         println!("{line}");
     }
-    if !j.o.precheck_only {
+    if !j.o.full_precheck {
         let crates: Vec<String> =
             std::iter::once("java_runtime".to_string()).chain(j.libs.iter().map(|l| l.name.clone())).chain(["user".to_string()]).collect();
         let body = BodyAudit::from_log(&r.body_log);
@@ -326,69 +338,90 @@ fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)]) 
     }
 }
 
-/// 重型工作区阈值（生成类数）：16G 机器上单 rustc 峰值约 14G，达到阈值的工作区单作业编译；
-/// 调用方显式设置 `CARGO_BUILD_JOBS` 时尊重调用方（与 scripts/cargo_env.py `HEAVY_CLASSES` 同值）
-const HEAVY_CLASSES: usize = 1700;
-
-/// 与 main.py 同一 cargo 流程：共享 `build/target`、关闭增量、重型工作区单作业
-/// （调试信息级别由生成的 workspace `[profile.dev]` 决定）
-fn cargo_run(out: &Path, bin: &str, repo: &Path, classes: usize) -> Result<(), String> {
-    println!("\n[run] cargo run --bin {bin}");
-    let mut cmd = Command::new("cargo");
-    cmd.args(["run", "--bin", bin])
-        .current_dir(out)
-        .env("CARGO_TARGET_DIR", repo.join("build").join("target"))
-        .env("CARGO_INCREMENTAL", "0");
-    if classes >= HEAVY_CLASSES && std::env::var_os("CARGO_BUILD_JOBS").is_none() {
-        println!("[cargo-env] 生成类 {classes} ≥ {HEAVY_CLASSES}：CARGO_BUILD_JOBS=1（内存上限）");
-        cmd.env("CARGO_BUILD_JOBS", "1");
-    }
-    let st = cmd.status().map_err(|e| format!("cargo：{e}"))?;
-    if !st.success() {
-        return Err(format!("cargo run 失败（{st}）"));
-    }
-    Ok(())
-}
-
 pub fn run_build(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Build, &args.rest)?;
-    let mut perf = Perf::new();
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
-    let home = java_home(&o, &rt, true)?;
     let repo = repo_root(&rt);
     let out = abs(&o.scratch_dir(Mode::Build, &repo)?);
     if o.clean {
         remove_dir(&out)?;
     }
+    // 上一轮的状态 / 产物清单不得冒充本轮
+    for f in [STATUS_FILE, cargo::ARTIFACTS_FILE] {
+        let p = out.join(f);
+        if p.exists() {
+            std::fs::remove_file(&p).map_err(|e| format!("{}：{e}", p.display()))?;
+        }
+    }
+    let mut st = BuildStatus::default();
+    let r = build_stages(&o, &rt, &repo, &out, &mut st);
+    st.write(&out, r.as_ref().err())?;
+    r
+}
+
+/// build 各阶段（javac → 闭包 → 发射 → 编译 → 运行），到 `--stop-after` 为止；进度与失败现场记入 `st`
+fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut BuildStatus) -> Result<(), String> {
+    let mut perf = Perf::new();
+    st.stage = Stage::Javac;
+    let jdk = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(repo))?;
+    println!("{}", jdk.describe());
+    st.jdk = Some(jdk.clone());
+    let home = jdk.home;
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
     let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
     javac(&home, &o.inputs, &jars, &classes)?;
     perf.mark("javac");
-    let cp = class_path(&classes, &jars, &home, &image_dirs(&o, &home, &rt))?;
+    if o.stop_after == Stage::Javac {
+        return Ok(());
+    }
+    st.stage = Stage::Closure;
+    let cp = class_path(&classes, &jars, &home, &image_dirs(o, &home, rt))?;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
     perf.mark("classpath");
     let java_files: Vec<PathBuf> = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
-    let (r, timings) = analyze(&cp, &rt, &user[0], &o, &seed_classes, &cin.join("closure.json"), &mut perf, |facts, perf| {
-        let job = EmitJob { cp: &cp, facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &crates, o: &o };
-        emit_scratch(&job, perf)
+    let emit_too = o.stop_after >= Stage::Emit;
+    let emitted = analyze(&cp, rt, &user[0], o, &seed_classes, &cin.join("closure.json"), &mut perf, |facts, perf| {
+        if !emit_too {
+            return Ok(None);
+        }
+        let job = EmitJob { cp: &cp, facts, rt, user: &user, java_files, home: &home, out, libs: &crates, o };
+        emit_scratch(&job, perf).map(Some)
     })?;
+    let Some((r, timings)) = emitted else {
+        print_perf(o.perf, &perf, &[]);
+        return Ok(());
+    };
+    st.stage = Stage::Emit;
     print_perf(o.perf, &perf, &timings);
-    if o.precheck_only {
+    if o.full_precheck {
         return Ok(());
     }
-    report(&r, &out);
-    if o.no_run {
+    report(&r, out);
+    if o.stop_after == Stage::Emit {
         return Ok(());
     }
-    cargo_run(&out, &r.bin_name, &repo, r.jdk_classes + r.user_classes)
+    st.stage = Stage::Compile;
+    let heavy = cargo::Heavy::decide(r.jdk_classes);
+    st.heavy = Some(heavy.clone());
+    let timeout = o.build_timeout.map(std::time::Duration::from_secs);
+    let exe = cargo::compile(out, &r.bin_name, repo, &heavy, timeout).map_err(|f| {
+        let msg = f.summary();
+        st.failure = Some(f);
+        msg
+    })?;
+    if o.stop_after == Stage::Compile {
+        return Ok(());
+    }
+    st.stage = Stage::Run;
+    cargo::run(&exe)
 }
 
 pub fn run_emit(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Emit, &args.rest)?;
     let mut perf = Perf::new();
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
-    let home = java_home(&o, &rt, false)?;
+    let home = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(&repo_root(&rt)))?.home;
     let out = abs(&o.scratch_dir(Mode::Emit, &repo_root(&rt))?);
     let cj = abs(&o.inputs[0]);
     let classes = abs(&o.emit_classes_dir());
@@ -408,7 +441,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
     let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };
     let (r, timings) = emit_scratch(&job, &mut perf)?;
-    if !o.precheck_only {
+    if !o.full_precheck {
         report(&r, &out);
     }
     print_perf(o.perf, &perf, &timings);
