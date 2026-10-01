@@ -107,8 +107,8 @@ impl<'a> Engine<'a> {
             Node::HP(h, i) => format!("hub 实参{i} {}", self.hub_label(h)),
             Node::HR(h) => format!("hub 返回 {}", self.hub_label(h)),
             Node::G(g) => {
-                let (fi, n) = self.gathers[g as usize];
-                format!("field {} of {n} objects", self.field_label(fi))
+                let (fi, n, put) = self.gathers[g as usize];
+                format!("field {} {} {n} objects", self.field_label(fi), if put { "into" } else { "of" })
             }
             Node::A(s, i) | Node::W(s, i) => {
                 let (m, off, t) = self.hw_sites[s as usize];
