@@ -302,18 +302,15 @@ impl<'a> Engine<'a> {
                 let oid = self.id(&f.owner);
                 let fs = self.feeds(m, v, oid);
                 let s = self.value_set(&fs);
+                // 字节码站点重跑：只看新增的接收者值（过滤结果按值确定，已看过的值已接上）
+                let s = if fresh { self.recv_delta(m, off, s) } else { s };
                 let s = self.filter(&s, oid);
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
             }
             None => (vec![], true),
         };
-        let (objs, other) = if fresh {
-            let objs = self.recv_mark_all(m, off, &objs);
-            (objs, other && self.recv_mark(m, off, FIELD_OTHER))
-        } else {
-            (objs, other)
-        };
+        let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {
@@ -329,6 +326,17 @@ impl<'a> Engine<'a> {
             // 边界类字段 / 有手写访问器的字段：写入值由手写层读出
             if first && (matches!(self.domain(&decl), Domain::Boundary | Domain::Root) || !self.hw.member(&decl, &f.name).fns.is_empty()) {
                 self.feed(&fs, Node::Esc, tid);
+            }
+        } else if fresh {
+            // 字节码读站点：抽象对象多时经汇集节点（与逐对象接边同集合，见 `gather.rs`）
+            if !objs.is_empty() {
+                self.gather_read(m, off, fi, tid, &objs, res);
+            }
+            if other {
+                self.flow(Node::F(fi), res, tid);
+            }
+            if first {
+                self.field_handwritten(m, &decl, &f.name, &via, Some((fi, tid)));
             }
         } else {
             for n in nodes {
@@ -395,6 +403,19 @@ impl Engine<'_> {
             *v = out;
         }
         new
+    }
+
+    /// 站点 (m, off) 的接收者值集 s 中尚未接过的部分（精确值与 open 值分别登记，open 值以 `OPEN_MARK` 区分）
+    pub(super) fn recv_delta(&mut self, m: usize, off: u32, s: TypeSet) -> TypeSet {
+        let cs: Vec<u32> = s.classes.iter().collect();
+        let classes = IdSet::from_sorted(self.recv_mark_all(m, off, &cs));
+        let open = if s.open.is_empty() {
+            s.open
+        } else {
+            let os: Vec<u32> = s.open.iter().map(|o| o | OPEN_MARK).collect();
+            IdSet::from_sorted(self.recv_mark_all(m, off, &os).into_iter().map(|o| o & !OPEN_MARK).collect())
+        };
+        TypeSet { classes, open }
     }
 
     pub(super) fn recv_mark(&mut self, m: usize, off: u32, x: u32) -> bool {

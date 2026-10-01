@@ -106,6 +106,10 @@ impl<'a> Engine<'a> {
             Node::Esc => "escape".into(),
             Node::HP(h, i) => format!("hub 实参{i} {}", self.hub_label(h)),
             Node::HR(h) => format!("hub 返回 {}", self.hub_label(h)),
+            Node::G(g) => {
+                let (fi, n) = self.gathers[g as usize];
+                format!("field {} of {n} objects", self.field_label(fi))
+            }
             Node::A(s, i) | Node::W(s, i) => {
                 let (m, off, t) = self.hw_sites[s as usize];
                 let k = if matches!(n, Node::A(..)) { "实参" } else { "写入" };
