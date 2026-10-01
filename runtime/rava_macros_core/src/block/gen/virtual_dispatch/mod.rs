@@ -19,6 +19,7 @@ use super::super::erasure::{
 };
 use super::super::generic_sig::rebuild_sig_with_generics;
 use super::super::interface::{erased_impl_call, erased_wrapper_call, expand_interface_impl};
+use super::super::moved::{has_body, is_safe};
 use super::super::parse::{split_type_name_args, FnItem};
 use super::super::rewrite::{
     replace_clone_this_in_ok, rewrite_block, rewrite_dropped_params_in_inherited_body,
@@ -31,6 +32,6 @@ mod base_fns;
 mod inner_impls;
 mod trait_decl;
 
-pub(crate) use base_fns::base_fns;
+pub(crate) use base_fns::{base_fns, define_base_has_body};
 pub(crate) use inner_impls::vtable_impls;
 pub(crate) use trait_decl::vtable_trait;

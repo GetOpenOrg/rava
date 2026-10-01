@@ -688,3 +688,60 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
   - 前提：宏决定「是否下沉」的判据不能读方法体。今天的判据里，回落条件（体内含 `impl`、`this` 与 `self` 同时出现）和存根判定（体为 `panic!("stub: …")`）都要读体。需要先把这些判据改为由生成器在块属性里显式标注，两层读同一标注，再做剥体。
   - 等价性要逐项论证，属不确定的形态改动，本步不做。
 - 墙钟：HelloWorld 的关键路径是「声明层到元数据（约 9 s）→ 实现层两箱并行（约 4.7 s）→ 链接」。≤ 12 s 需要声明层降到 §7.1 预测的约 6 s 量级，取决于 S5（含上面的剥体项）。实现层再细分不能缩短关键路径（`CARGO_BUILD_JOBS=2`）。
+
+#### S5 剥体（2026-10-01，§7.5.2）
+
+- 范围：只做 §7.5.2 的剥体（声明层文本不带下沉方法体）。§7.4 前三项（`use` 列表、`ObjectVTable` if 链、字段访问器）未做，仍列在 S5。
+- 27 例生成树对照：
+  - 基线是 S4 的 8cbcfc57，S5 树来自 3504dd5f，工具为 `runtime/rava_macros_core/examples/decl_check.rs` 加上实现层 `diff -r`；
+  - 声明层：每个声明层类文件都等于「S4 同名文件按剥体计划插标注、体换 `;`」，块外文本逐字节一致；
+  - 声明模式展开（带体 vs 剥体）逐记号一致，归一项只有摘要常量值和 `java_try` 标签序号：
+    - 标签序号来自进程级计数器，只要求函数内唯一；
+    - 对照进程里 S4 侧多解析了下沉体，后续序号整体平移；
+    - 按首次出现重编号后一致；
+  - 结果：27 例 bad = 0，单例下沉方法体 4,648–13,284 个，声明层文本 −21% 到 −31%（Digester 未在 27 例内；DateTimeFormat 为 16.9 MB → 11.7 MB）；
+  - 实现层 `java_body_k/src` 逐字节一致，箱数一致；
+  - 声明层之外的 `java_runtime/src` 文件无差异；
+  - raw-audit / fallback-audit 27 例一致；
+  - 其余差异只有两类：
+    - Cargo.toml 的仓库路径与由路径派生的包版本号；
+    - closure.json 的 `/summary/perf` 与 `elapsed_ms`。
+- 构建与运行：HelloWorld、Digester `cargo build` 0 错误（实现层常量断言全部通过），二进制输出与 JVM 一致。
+- 测量（S4 = 8cbcfc57，S5 = 3504dd5f，同一次持锁背靠背，`scripts/crate_profile.sh`）：
+
+| | S4 | S5 |
+|---|---|---|
+| HelloWorld `java_runtime`（声明层） | 11.97 s / 1095 MB | 11.04 s / 1210 MB |
+| HelloWorld `cargo build` 墙钟 | 17.2 s | 16.9 s |
+| Digester `java_runtime`（声明层） | 59.7 s / 3085 MB | 52.7 s / 3421 MB |
+| Digester `java_body_1..4` | 13.4–15.4 s / 1126–1252 MB | 12.3–17.9 s / 1067–1245 MB |
+| Digester `cargo build` 墙钟 | 91.3 s | 86.5 s |
+
+  - 同一 S5 树隔一次持锁再测，Digester 声明层为 61.1 s / 3167 MB，实现层逐字节相同的 `java_body_1` 为 21.1 s。可见单次测量的噪声：峰值约 ±10%，墙钟约 ±20%。
+  - 基线更正：§7.7 S4 记录的 Digester 声明层 4509 MB 测于并入闭包精度三期（prec3 / mono）之前。同一 S4 生成器在 8cbcfc57 上测得 3085 MB，下降来自闭包缩小，与剥体无关。
+- Digester 声明 crate nightly 分阶段（S5，`scripts/rustc_profile.sh`）：48.0 s，峰值 3.11 GB。
+
+| 阶段 | 耗时 | RSS |
+|---|---:|---|
+| 宏展开 | 11.6 s | 45 → 1399 MB |
+| 名称解析 | 0.9 s | → 1680 MB |
+| coherence / 类型检查 | 2.2 / 10.0 s | 2410 → 2139 MB |
+| 借用检查 | 10.5 s | → 2418 MB |
+| misc_checking_3 | 1.2 s | → 2740 MB |
+| 单态化收集 | 2.8 s | 峰值 3122 MB |
+| 元数据 / codegen / LLVM | 5.0 / 5.2 / 4.9 s | 2.2–2.75 GB |
+
+  - 单态化 size_est 114.6 万（72,104 项）。前列：`Drop` 7.9 万；`From<Object>` 6.9 万；`new` 4.9 万；`checkcast` 3.5 万；`ObjectVTable` 的 `__view_into` / `__erased_vtable` / `__shallow_copy` / `__view_as` 合计 10.0 万，另有 `__virtual_view` 2.4 万；`__class_init` 2.3 万；`__reflect_field` 2.3 万。
+- 结论：
+  - 剥体只缩短宏展开阶段：宏展开从 S4 记录的 17.3 s 降到 11.6 s，但两次测量的闭包不同，只作量级参考。
+  - 峰值不在宏展开：峰值落在单态化收集，且由类型检查起各阶段逐步累积；剥体对峰值和总墙钟没有可测改善。
+  - 剥体的价值在结构：声明层不再携带实现层文本，JDK 方法体变化不再使声明 crate 失效。§7.6 的两项仍未达成：
+    - Digester 声明层 3.1–3.4 GB，目标 ≤ 2 GB；
+    - HelloWorld 墙钟 16.9 s，目标 ≤ 12 s。
+  - 剩余手段按单态化 / 前端占比排列：
+    - §7.4 的 `ObjectVTable` 表驱动（约 12.4 万 size_est）；
+    - `From<Object>` / `checkcast` / `new` 的每类单态化（约 15 万，S5 新增调查项）；
+    - `use` 列表按层计算；
+    - S6 泛型类擦除核心；
+    - 字段访问器。
+  - 逐项测量仍按 §7.4。

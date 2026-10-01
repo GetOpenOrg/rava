@@ -81,7 +81,7 @@ pub(crate) fn expand(input: TokenStream2) -> TokenStream2 {
 
 fn expand_inner(p: &OpaqueInput) -> syn::Result<TokenStream2> {
     let OpaqueInput { binary_name, vis, ident, .. } = p;
-    let gen = crate::block::augment_generic_bounds(&p.generics);
+    let gen = rava_macros_core::augment_generic_bounds(&p.generics);
     let (impl_g, ty_g, where_c) = gen.split_for_impl();
     let type_params: Vec<&Ident> = gen
         .params
@@ -97,7 +97,7 @@ fn expand_inner(p: &OpaqueInput) -> syn::Result<TokenStream2> {
         for a in &anc {
             g.params.push(GenericParam::Type(syn::parse_quote! { #a }));
         }
-        let g = crate::block::augment_generic_bounds(&g);
+        let g = rava_macros_core::augment_generic_bounds(&g);
         let (u_impl_g, _, u_where_c) = g.split_for_impl();
         let target = if anc.is_empty() { quote! { #path } } else { quote! { #path<#(#anc),*> } };
         upcasts.push(quote! {

@@ -70,6 +70,7 @@ pub(crate) const META_ATTRS: &[&str] = &[
     "java_method",
     "java_native",
     "jvm_native",
+    "rava_moved",
 ];
 
 pub(crate) fn strip_meta_attrs(attrs: &[Attribute]) -> Vec<&Attribute> {
