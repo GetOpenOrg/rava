@@ -940,7 +940,12 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   `UnixNativeDispatcher.c`：`close0` / `closedir` 忽略 EINTR，`dup` 重试，`readdir0` 以 errno 区分目录尾与错误，错误抛 `UnixException(errno)`），
   `init()I` 返回能力位（OPENAT / FUTIMES / FUTIMENS / LUTIMES / XATTR，macOS 另含 BIRTHTIME）；顺带修 `fill_stat` 的 ctime 取值与纳秒 / birthtime 字段。
   ACC_NATIVE 方法属手写准入第 ① 类，无需清单登记（`native_status.toml` 由 build.rs 维护）。`scripts/main.py` 单跑：TestFilesApi（341 JDK 类）、
-  FileIODemo（350）、TestFileAccessSpace（1273）输出与期望一致，`native-missing=0`、`non_native_overrides=0`。余下 `handwritten:provides` 覆写
+  FileIODemo（350）、TestFileAccessSpace（1273）输出与期望一致，`native-missing=0`、`non_native_overrides=0`。
+  TestNetworkInterface（1255 JDK 类）不再命中 `openatSupported` 存根，余下一行 `loopback mtu positive: false` 为手写 `getMTU0` 只读 Linux sysfs
+  （macOS 恒 -1）；改为与 JDK `NetworkInterface.c` 同取法的 `ioctl(SIOCGIFMTU)`（`network_interface_impl.rs::ioctl_mtu`）后输出与期望一致。
+  闭包规模（类 / 方法，放行前 → 后）：TestFilesApi 334 / 866 → 340 / 889、FileIODemo 344 / 935 → 350 / 957、TestFileAccessSpace 1253 / 6939 →
+  1275 / 7099、TestNetworkInterface 1240 / 6820 → 1257 / 6989，HelloWorld 247 / 605、FileIOTest 289 / 780 不变（增量全是新可达的
+  `sun/nio/fs` 执行线，属健全性补全）。余下 `handwritten:provides` 覆写
   （`open` / `close` / `stat` / `lstat` / `unlink` / `rmdir` / `access`）留作后续逐个改回字节码。
 - 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
   MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
