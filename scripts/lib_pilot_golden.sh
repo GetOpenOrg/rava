@@ -11,8 +11,8 @@
 #
 # 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
 #（scripts/fetch_pilot_deps.sh --no-scan 导出；可经 PILOT_LIBS 覆盖）。
-# 流程：javac（-cp jars）→ java 真 jar 侧 golden → main.py --lib 转译 →
-# cargo run 翻译侧输出 → diff 逐字对账。golden 文本随仓库存档于
+# 流程：javac（-cp jars）→ java 真 jar 侧 golden → rava build --lib 转译 + 编译 →
+# 运行翻译侧产物 → diff 逐字对账。golden 文本随仓库存档于
 # tests/lib_pilot/golden/（跑批可复现的对账凭据）。
 set -euo pipefail
 
@@ -20,9 +20,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # jar 资产默认取仓库内导出位（依赖清单 tests/lib_pilot/deps/pom.xml）
 LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
 [ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
-# JDK 选择与 main.py / run_tests.py 同一入口（jdk_select）：JAVA_HOME >
+. "$REPO_ROOT/scripts/rava_env.sh" "$REPO_ROOT"
+# JDK 选择与 rava build / run_tests.py 同一实现（rava jdk）：JAVA_HOME >
 # .jdk-version（21）> 最新已安装；macOS brew / Linux /usr/lib/jvm 通吃
-JAVA_HOME="$(python3 "$REPO_ROOT/scripts/jdk_select.py")" || { echo "未找到可用 JDK，请设置 JAVA_HOME" >&2; exit 2; }
+JAVA_HOME="$("$RAVA" jdk --home-only)" || { echo "未找到可用 JDK，请设置 JAVA_HOME" >&2; exit 2; }
 export JAVA_HOME
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
 MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile]}"
@@ -76,21 +77,23 @@ rm -rf classes && "$JAVAC" -d classes -cp "$CP" "$MAIN.java"
 "$JAVA" -Dstdout.encoding=UTF-8 -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
 echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
-echo "== [2/3] 转译 + cargo run（翻译 crate）=="
+echo "== [2/3] 转译 + 编译 + 运行（翻译 crate）=="
 cd "$REPO_ROOT"
-if [[ "$TRANSPILE" == 1 ]]; then
-    python3 scripts/main.py "tests/lib_pilot/$MAIN.java" --jdk 21 --clean \
-        "${LIB_ARGS[@]}" --no-run > "/tmp/${MODE}_transpile.log" 2>&1
-fi
-SCRATCH="build/$(python3 - "$MAIN" <<'PY'
+SCRATCH="$REPO_ROOT/build/$(python3 - "$MAIN" <<'PY'
 import re, sys
 print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
-(cd "$SCRATCH" && CARGO_TARGET_DIR="$REPO_ROOT/build/target" \
-    cargo run --quiet --bin "$(basename "$SCRATCH")" \
-    > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>"/tmp/${MODE}_cargo.err") \
-    || { echo "cargo run 失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
+if [[ "$TRANSPILE" == 1 ]]; then
+    "$RAVA" build "tests/lib_pilot/$MAIN.java" --jdk 21 --clean "${LIB_ARGS[@]}" \
+        --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
+        || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
+fi
+"$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
+    || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
+EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
+"$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>>"/tmp/${MODE}_cargo.err" \
+    || { echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then

@@ -32,9 +32,11 @@
 
 流程：
   对每个 tests/e2e/**/*.java：
-  1. main.py 转译 → overlay 手写 + 生成 build/<test>/{java_runtime,user}
-  2. cargo run --bin <class>（共享 target 缓存）捕获 stdout
+  1. `rava build --stop-after emit` 转译 → overlay 手写 + 生成 build/<test>/{java_runtime,user}
+  2. `rava compile <scratch>`（共享 target 缓存；重型判定 / 超时 / 产物清单在 rava 内，结果读
+     build_status.json / build_artifacts.json），直接执行产物捕获 stdout
   3. 与 tests/expected/<Class>.txt diff
+  rava 二进制（build/analyzer-target/release/rava）在批次开头构建一次，逐例直接执行。
   转译成功后（cargo 之前）另做动态对照（scripts/dyn_compare.py，闭包计划 C5）：真实 JVM 跑原始
   Java 程序的类加载轨迹 vs closure.json，结果行附 `dyn miss N / extra M prov P%`，明细落盘
   build/<jdk>/logs/dyn/<test>.json，汇总列出全部漏覆盖。每测试一次 java 运行（约 0.1–1 s）。
@@ -54,17 +56,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from jdk_select import apply_jdk, _major_of
-from cargo_env import with_heavy_jobs, is_heavy
 import dyn_compare
+
+ROOT   = Path(__file__).parent.parent
+# rava 二进制：批次开头构建一次（_ensure_rava），逐例直接执行
+RAVA_TARGET = ROOT / "build" / "analyzer-target"
+RAVA = RAVA_TARGET / "release" / "rava"
+# 当前生效 JDK 的主版本（apply_jdk_choice 由 `rava jdk --json` 取得；None=未解析，不分版本层）
+JDK_MAJOR: "int | None" = None
 
 
 def _current_jdk_major() -> 'int | None':
-    """当前生效 JDK 的 major（JAVA_HOME 同源解析；无法解析时 None=旧式不分文件）。"""
-    home = os.environ.get('JAVA_HOME', '')
-    return _major_of(Path(home)) if home else None
-
-ROOT   = Path(__file__).parent.parent
+    return JDK_MAJOR
 TESTS  = ROOT / "tests"
 E2E    = TESTS / "e2e"
 EXPECT = TESTS / "expected"
@@ -92,13 +95,11 @@ def fmt_dur(sec: float) -> str:
 # —— 四段超时各自独立常量，勿共用（各阶段正常耗时与病态形态不同）——
 # 运行段（cargo run）超时（秒）
 RUN_TIMEOUT = 300
-# 转译段（main.py → rava build：闭包分析 + 代码生成）超时（秒）
+# 转译段（rava build --stop-after emit：闭包分析 + 代码生成）超时（秒）
 TRANSPILE_TIMEOUT = 600
-# 构建段（cargo build 单测试 crate）超时（秒）
-BUILD_TIMEOUT: "int | None" = None   # --build-timeout 显式值；未给时按闭包规模自动（见 _build_timeout）
-_DEFAULT_BUILD_TIMEOUT = 600
-_HEAVY_BUILD_TIMEOUT = 3000           # 重型闭包单作业编译（cargo_env.is_heavy）
-# 透传给 main.py 的转译选项（--debug / --strict）
+# 构建段（rava compile）超时：--build-timeout 显式值透传；未给时由 rava 按重型判定取缺省
+BUILD_TIMEOUT: "int | None" = None
+# 透传给 rava build 的转译选项（--debug / --strict / --closure-json）
 MAIN_FLAGS: list[str] = []
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
 # 120 足够且让挂起类用例快速出列
@@ -111,11 +112,6 @@ PROFILE_DIR = "debug"
 LOGS_DIR = _versioned(OUT) / "logs"
 
 
-def _cargo_profile_args() -> list[str]:
-    # 并行后端为默认且唯一后端（#42：Arc + 原子单元 + 读写锁，无 GIL）
-    return ["--release"] if PROFILE_DIR == "release" else []
-
-
 def _jdk_tool(name: str) -> str:
     """javac / java 从 JAVA_HOME 同源解析（未设时回退 PATH）。"""
     home = os.environ.get('JAVA_HOME', '')
@@ -126,20 +122,27 @@ def _jdk_tool(name: str) -> str:
     return name
 
 
+def _ensure_rava() -> None:
+    """批次开头构建 rava（新鲜时为空操作），保证不用陈旧生成器。"""
+    r = subprocess.run(["cargo", "build", "--release", "-q", "-p", "driver",
+                        "--manifest-path", str(ROOT / "generator" / "Cargo.toml"),
+                        "--target-dir", str(RAVA_TARGET)], cwd=ROOT)
+    if r.returncode != 0 or not RAVA.exists():
+        sys.exit(f"[rava] 生成器构建失败（{r.returncode}）")
+
+
 def apply_jdk_choice(major: 'int | None') -> None:
-    """JDK 选择（jdk_select.apply_jdk 唯一入口，javac/java/翻译语料全部同源）：
-    --jdk > JAVA_HOME > .jdk-version > 最新已安装。"""
-    apply_jdk(major)
-
-
-def _cargo_env() -> dict:
-    """共享编译缓存环境变量。
-
-    CARGO_INCREMENTAL=0：1500+ 类的宽闭包 crate 上，增量编译的元数据
-    双份内存是 OOM 的压垮点（服务器 SIGKILL 实证——同树本地 PASS）；
-    scratch 语义下每轮重生成源文件，增量命中本就趋零，关闭无损失。"""
-    return dict(os.environ, CARGO_TARGET_DIR=str(SHARED_TARGET),
-                CARGO_INCREMENTAL='0')
+    """JDK 选择（rava 内唯一实现，javac/java/翻译语料全部同源）：
+    --jdk > JAVA_HOME > .jdk-version > 最新已安装。选中结果写回 JAVA_HOME，子进程继承。"""
+    global JDK_MAJOR
+    cmd = [str(RAVA), "jdk", "--json"] + (["--jdk", str(major)] if major is not None else [])
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"[jdk] {r.stderr.strip() or 'rava jdk 失败'}")
+    j = json.loads(r.stdout)
+    os.environ["JAVA_HOME"] = j["home"]
+    JDK_MAJOR = j.get("major")
+    print(f"[jdk] JAVA_HOME → {j['home']} (JDK {JDK_MAJOR or '?'}，来源：{j['source']})")
 
 
 def _run(cmd: list[str], cwd: Path, capture: bool = True,
@@ -482,11 +485,13 @@ def _test_workspace(bin_name: str) -> Path:
 
 
 def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
-    """运行转译器：overlay 手写代码 + 生成该测试的 Rust 代码。"""
-    args = [sys.executable, str(ROOT / "scripts" / "main.py"), str(java_file),
-            "--no-run", "--out", str(out_dir), *MAIN_FLAGS]
-    # 此前无超时——大闭包在慢环境下爬行会无限等
-    r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
+    """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。"""
+    args = [str(RAVA), "build", str(java_file), "--stop-after", "emit", "--out", str(out_dir),
+            "--java-home", os.environ["JAVA_HOME"], *MAIN_FLAGS]
+    try:
+        r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, f"transpile timeout ({fmt_dur(TRANSPILE_TIMEOUT)})"
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
@@ -497,41 +502,20 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
 # 以往失败留下的 logs/<bin>.build.log / .run.log。共享依赖（syn / quote / parking_lot /
 # libc / rava_macros 等）跨测试复用，不属于任何单个测试，永不清理。
 #
-# 归属判定不靠文件名猜测：cargo 的 JSON 产物清单（compiler-artifact / build-script-executed）
-# 带 manifest_path，只收 manifest 位于本测试 scratch 内的包（java_runtime / 用户 bin crate /
-# lib crate），再按 `<crate>-<hash>` 扩展到同哈希的 .d / .rcgu.o 与 .fingerprint 目录。
+# 归属判定不靠文件名猜测：rava compile 写出的 <scratch>/build_artifacts.json（cargo JSON 产物中
+# manifest 位于本测试 scratch 内的包：java_runtime / 实现层 / 用户 bin crate / lib crate），
+# 再按 `<crate>-<hash>` 扩展到同哈希的 .d / .rcgu.o 与 .fingerprint 目录。
 # 失败测试（转译 / 编译 / 运行 / 输出不一致）不清理，全部生成物保留供分析。
 
 KEEP_ARTIFACTS = False
 _BUILD_ARTIFACTS: dict[str, set] = {}
 
 
-def _record_build_artifacts(bin_name: str, out_dir: Path, json_stdout: str) -> None:
-    import json as _json
-    scratch = str(Path(out_dir).resolve())
-    paths: set = set()
-    for ln in json_stdout.splitlines():
-        if not ln.startswith("{"):
-            continue
-        try:
-            msg = _json.loads(ln)
-        except ValueError:
-            continue
-        manifest = str(msg.get("manifest_path") or "")
-        if not manifest.startswith(scratch):
-            # build-script-executed 无 manifest_path，按 package_id 的 path+file 前缀判定
-            pid = str(msg.get("package_id") or "")
-            if scratch not in pid:
-                continue
-        reason = msg.get("reason")
-        if reason == "compiler-artifact":
-            for f in msg.get("filenames") or []:
-                paths.add(Path(f))
-            if msg.get("executable"):
-                paths.add(Path(msg["executable"]))
-        elif reason == "build-script-executed" and msg.get("out_dir"):
-            paths.add(Path(msg["out_dir"]).parent)       # build/<crate>-<hash>/（含 out/ output）
-    _BUILD_ARTIFACTS[bin_name] = paths
+def _read_json(p: Path) -> dict:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _expand_artifact(p: Path) -> list[Path]:
@@ -627,39 +611,29 @@ def _prune_passed(jdk_major: int | None) -> int:
     return 0
 
 
-def _build_timeout(ws: Path) -> int:
-    """构建超时：--build-timeout 显式值优先；否则重型闭包（单作业编译）3000 秒，其余 600 秒。"""
-    if BUILD_TIMEOUT is not None:
-        return BUILD_TIMEOUT
-    return _HEAVY_BUILD_TIMEOUT if is_heavy(ws) else _DEFAULT_BUILD_TIMEOUT
-
-
 def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
-    """cargo build --bin <class>（共享 target 缓存）。返回 (ok, 首个 error 行)。"""
+    """`rava compile <scratch>`（共享 target 缓存）。返回 (ok, 失败摘要)；结果读 build_status.json，
+    产物清单读 build_artifacts.json（通过测试的清理用）。"""
     bin_name = _to_bin_name(class_name)
-    timeout = _build_timeout(out_dir)
-    try:
-        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name,
-                  "--message-format=json-render-diagnostics"], cwd=out_dir,
-                 env=with_heavy_jobs(_cargo_env(), out_dir),
-                 timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, f"build timeout ({fmt_dur(timeout)})"
-    _record_build_artifacts(bin_name, out_dir, r.stdout or "")
-    if r.returncode != 0:
-        if r.returncode < 0:
-            sig = -r.returncode
-            return False, (f"killed by signal {sig}"
-                           + ("——疑似 OOM（rustc 被 OOM Killer，CARGO_INCREMENTAL=0/加 swap" if sig == 9 else ""))
-        # rustc 完整输出落盘（行式只留首错行；悬案定位曾靠用户手工重跑 cargo 取全文）
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        (LOGS_DIR / f"{_to_bin_name(class_name)}.build.log").write_text(
-            r.stderr or "", encoding="utf-8")
-        err = next((ln for ln in r.stderr.splitlines() if ln.startswith("error")),
-                   "unknown build error")
-        log_path = LOGS_DIR / (_to_bin_name(class_name) + ".build.log")
-        return False, err[:120] + f"（全文 → {log_path}）"
-    return True, ""
+    cmd = [str(RAVA), "compile", str(out_dir), "--target-dir", str(SHARED_TARGET)]
+    if PROFILE_DIR == "release":
+        cmd.append("--release")
+    if BUILD_TIMEOUT is not None:
+        cmd += ["--build-timeout", str(BUILD_TIMEOUT)]
+    r = _run(cmd, cwd=ROOT)
+    _BUILD_ARTIFACTS[bin_name] = {Path(p) for p in _read_json(out_dir / "build_artifacts.json").get("paths") or []}
+    st = _read_json(out_dir / "build_status.json")
+    if st.get("ok") and st.get("stage") == "compile" and r.returncode == 0:
+        return True, ""
+    if st.get("timeout"):
+        return False, f"build timeout ({st.get('first_error')})"
+    if st.get("signal"):
+        sig = st["signal"]
+        return False, (f"killed by signal {sig}"
+                       + ("——疑似 OOM（rustc 被 OOM Killer）" if sig == 9 else ""))
+    err = st.get("first_error") or (r.stderr.strip().splitlines() or ["unknown build error"])[-1]
+    log = f"（全文 → {st['log']}）" if st.get("log") else ""
+    return False, err[:120] + log
 
 
 # ── V-3 可读性审计汇总 ──────────────────────────────────────────────
@@ -1396,17 +1370,14 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         ws = _test_workspace(bin_name)
         print(f"  [build] {bin_name}…", end=" ", flush=True)
         t0 = time.perf_counter()
-        r = _run(["cargo", "build", *_cargo_profile_args(), "--bin", bin_name], cwd=ws,
-                 env=with_heavy_jobs(_cargo_env(), ws))
+        ok, err = _cargo_build(class_name, ws)
         dur = time.perf_counter() - t0
         build_durations[bin_name] = dur
-        if r.returncode == 0:
+        if ok:
             print(f"OK ({_fmt_build_dur(dur)})", flush=True)
             build_ok.append(java_file)
         else:
-            err = next((ln for ln in r.stderr.splitlines() if ln.startswith("error")),
-                       "unknown error")
-            print(f"FAIL ({fmt_dur(dur)})  {err[:100]}", flush=True)
+            print(f"FAIL ({fmt_dur(dur)})  {err}", flush=True)
             build_fail.append(java_file)
 
     t_build = time.perf_counter() - t_build_start
@@ -1616,10 +1587,10 @@ def main():
                          "收窄后非零极可能是真 bug）；"
                          "stub-hit = run 失败的 stub 子族（二进制 stderr 含 `stub: `）")
     ap.add_argument("--build-timeout",   type=int, default=None, metavar="SEC",
-                    help="单测试 cargo 构建超时秒数（默认按闭包规模自动：重型 3000，其余 600）")
-    ap.add_argument("--debug",           action="store_true", help="透传 main.py --debug（转译诊断明细）")
+                    help="单测试 cargo 构建超时秒数（透传 rava compile；缺省由 rava 按重型判定取值）")
+    ap.add_argument("--debug",           action="store_true", help="透传 rava build --debug（转译诊断明细）")
     ap.add_argument("--strict",          action="store_true",
-                    help="透传 main.py --strict（兜底硬失败 + 缺手写 native 编译报错）")
+                    help="透传 rava build --strict（兜底硬失败 + 缺手写 native 编译报错）")
     ap.add_argument("--no-dyn",          action="store_true",
                     help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
     args = ap.parse_args()
@@ -1647,6 +1618,7 @@ def main():
     if args.release:
         PROFILE_DIR = "release"
 
+    _ensure_rava()
     apply_jdk_choice(args.jdk)
 
     if args.filter:

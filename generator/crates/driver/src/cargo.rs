@@ -1,6 +1,6 @@
 //! rava 内唯一的 cargo 调用点：编译生成的 workspace、记录产物清单与失败现场、执行产物。
 //!
-//! - 环境：共享 `CARGO_TARGET_DIR=<repo>/build/target`、`CARGO_INCREMENTAL=0`（scratch 每轮重生成源文件，
+//! - 环境：共享 `CARGO_TARGET_DIR`（缺省 `<repo>/build/target`，`--target-dir` 覆盖）、`CARGO_INCREMENTAL=0`（scratch 每轮重生成源文件，
 //!   增量命中趋零，而宽闭包 crate 上增量元数据的双份内存是 OOM 的压垮点）。调试信息级别由生成的
 //!   workspace `[profile.dev]` 决定。
 //! - 重型判定按**最大单 crate**：S4 拆层后实现层按体积均衡装箱（每箱峰值有界），峰值在声明层
@@ -25,6 +25,19 @@ pub const PEAK_CRATE: &str = "java_runtime";
 pub const ARTIFACTS_FILE: &str = "build_artifacts.json";
 pub const BUILD_LOG: &str = "logs/build.log";
 
+/// 编译超时缺省（秒）：普通工作区 / 重型工作区（单作业编译，墙钟数倍）；`--build-timeout` 覆盖
+pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
+pub const HEAVY_TIMEOUT_SECS: u64 = 3000;
+
+/// 一次 cargo 编译的调用设置
+#[derive(Debug, Clone)]
+pub struct CargoOpts {
+    pub target_dir: PathBuf,
+    pub release: bool,
+    /// None = 按重型判定取缺省
+    pub timeout: Option<Duration>,
+}
+
 /// 重型判定结果
 #[derive(Debug, Clone)]
 pub struct Heavy {
@@ -41,6 +54,15 @@ impl Heavy {
     fn decide_with(peak_classes: usize, caller_jobs: bool) -> Heavy {
         let forced = peak_classes >= HEAVY_CLASSES && !caller_jobs;
         Heavy { classes: peak_classes, jobs: forced.then_some(1) }
+    }
+
+    /// 规模达阈值（不论作业数是否由调用方指定）
+    pub fn is_heavy(&self) -> bool {
+        self.classes >= HEAVY_CLASSES
+    }
+
+    pub fn default_timeout(&self) -> Duration {
+        Duration::from_secs(if self.is_heavy() { HEAVY_TIMEOUT_SECS } else { DEFAULT_TIMEOUT_SECS })
     }
 
     pub fn to_json(&self) -> Value {
@@ -120,8 +142,7 @@ pub fn first_error(stderr: &str) -> String {
 }
 
 /// 等待子进程；超时则杀整个进程组（子进程以自身为组长启动）
-fn wait(child: &mut std::process::Child, timeout: Option<Duration>) -> Result<Option<ExitStatus>, String> {
-    let Some(limit) = timeout else { return child.wait().map(Some).map_err(|e| format!("cargo：{e}")) };
+fn wait(child: &mut std::process::Child, limit: Duration) -> Result<Option<ExitStatus>, String> {
     let start = Instant::now();
     loop {
         if let Some(st) = child.try_wait().map_err(|e| format!("cargo：{e}"))? {
@@ -146,16 +167,19 @@ fn own_group(cmd: &mut Command) {
 fn own_group(_: &mut Command) {}
 
 /// `cargo build --bin <bin>`：成功返回可执行文件路径；产物清单与 rustc 全文落 scratch
-pub fn compile(out: &Path, bin: &str, repo: &Path, heavy: &Heavy, timeout: Option<Duration>) -> Result<PathBuf, Failure> {
+pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<PathBuf, Failure> {
+    let timeout = c.timeout.unwrap_or_else(|| heavy.default_timeout());
     let log = out.join(BUILD_LOG);
     let fail = |first_error: String| Failure { first_error, ..Failure::default() };
     std::fs::create_dir_all(log.parent().unwrap_or(out)).map_err(|e| fail(format!("{}：{e}", log.display())))?;
     let log_file = std::fs::File::create(&log).map_err(|e| fail(format!("{}：{e}", log.display())))?;
-    println!("\n[build] cargo build --bin {bin}");
+    let profile: &[&str] = if c.release { &["--release"] } else { &[] };
+    println!("\n[build] cargo build {}--bin {bin}", if c.release { "--release " } else { "" });
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--bin", bin, "--message-format=json-render-diagnostics"])
+        .args(profile)
         .current_dir(out)
-        .env("CARGO_TARGET_DIR", repo.join("build").join("target"))
+        .env("CARGO_TARGET_DIR", &c.target_dir)
         .env("CARGO_INCREMENTAL", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log_file));
@@ -163,10 +187,8 @@ pub fn compile(out: &Path, bin: &str, repo: &Path, heavy: &Heavy, timeout: Optio
         println!("[cargo-env] 声明层 {PEAK_CRATE} 生成类 {} ≥ {HEAVY_CLASSES}：CARGO_BUILD_JOBS={j}（内存上限）", heavy.classes);
         cmd.env("CARGO_BUILD_JOBS", j.to_string());
     }
-    if timeout.is_some() {
-        // 超时要连同 rustc 子进程一起终止：独立进程组（无超时时留在前台组，Ctrl-C 照常传到）
-        own_group(&mut cmd);
-    }
+    // 超时要连同 rustc 子进程一起终止：独立进程组（交互 Ctrl-C 只终止 rava；cargo 随 stdout 管道断开退出）
+    own_group(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| fail(format!("cargo：{e}")))?;
     let stdout = child.stdout.take().expect("piped stdout");
     let reader = std::thread::spawn(move || {
@@ -185,8 +207,7 @@ pub fn compile(out: &Path, bin: &str, repo: &Path, heavy: &Heavy, timeout: Optio
     std::fs::write(out.join(ARTIFACTS_FILE), text).map_err(|e| fail(format!("{ARTIFACTS_FILE}：{e}")))?;
     let stderr = std::fs::read_to_string(&log).unwrap_or_default();
     let Some(status) = status else {
-        let secs = timeout.map_or(0, |t| t.as_secs());
-        return Err(Failure { timeout: true, first_error: format!("{secs} s"), log: Some(log), ..Failure::default() });
+        return Err(Failure { timeout: true, first_error: format!("{} s", timeout.as_secs()), log: Some(log), ..Failure::default() });
     };
     if !status.success() {
         #[cfg(unix)]
@@ -243,5 +264,7 @@ mod tests {
         assert_eq!(Heavy::decide_with(HEAVY_CLASSES, false).jobs, Some(1));
         assert_eq!(Heavy::decide_with(HEAVY_CLASSES - 1, false).jobs, None);
         assert_eq!(Heavy::decide_with(HEAVY_CLASSES * 2, true).jobs, None, "调用方显式设置时不干预");
+        assert_eq!(Heavy::decide_with(HEAVY_CLASSES * 2, true).default_timeout(), Duration::from_secs(HEAVY_TIMEOUT_SECS));
+        assert_eq!(Heavy::decide_with(1, false).default_timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
     }
 }
