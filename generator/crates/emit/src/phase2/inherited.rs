@@ -7,7 +7,7 @@
 //! ```text
 //! #[java_method(name = "speak", descriptor = "()I", access = "public",
 //!               inherited_from = "Animal", vtable_owner = "Animal")]
-//! pub fn speak(&self) -> Result<i32> { Animal__speak_base::<Self>(self) }
+//! pub fn speak(&self) -> Result<i32> { Animal__speak_base(self) }
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,10 +54,10 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
     let mut args = param_idents(&method.signature);
     let owner_short = ctx.short(owner_bin);
     if !method.handwritten {
-        let mut turbo: Vec<&str> = owner_args.iter().map(String::as_str).collect();
-        turbo.push("Self");
+        // base 函数接收者是 `&dyn Owner__VTable`（非泛型）：只有声明类的类型形参需要显式给出
+        let turbo = if owner_args.is_empty() { String::new() } else { format!("::<{}>", owner_args.join(", ")) };
         let call = if args.is_empty() { "self".to_string() } else { format!("self, {}", args.join(", ")) };
-        return format!("{owner_short}__{}_base::<{}>({call})", method.rust_name, turbo.join(", "));
+        return format!("{owner_short}__{}_base{turbo}({call})", method.rust_name);
     }
     let (ptypes, ret) = sig_param_types(&method.signature);
     let wrap = |a: &String, ty: &String| {

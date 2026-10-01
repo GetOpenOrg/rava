@@ -940,7 +940,12 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   `UnixNativeDispatcher.c`：`close0` / `closedir` 忽略 EINTR，`dup` 重试，`readdir0` 以 errno 区分目录尾与错误，错误抛 `UnixException(errno)`），
   `init()I` 返回能力位（OPENAT / FUTIMES / FUTIMENS / LUTIMES / XATTR，macOS 另含 BIRTHTIME）；顺带修 `fill_stat` 的 ctime 取值与纳秒 / birthtime 字段。
   ACC_NATIVE 方法属手写准入第 ① 类，无需清单登记（`native_status.toml` 由 build.rs 维护）。`scripts/main.py` 单跑：TestFilesApi（341 JDK 类）、
-  FileIODemo（350）、TestFileAccessSpace（1273）输出与期望一致，`native-missing=0`、`non_native_overrides=0`。余下 `handwritten:provides` 覆写
+  FileIODemo（350）、TestFileAccessSpace（1273）输出与期望一致，`native-missing=0`、`non_native_overrides=0`。
+  TestNetworkInterface（1255 JDK 类）不再命中 `openatSupported` 存根，余下一行 `loopback mtu positive: false` 为手写 `getMTU0` 只读 Linux sysfs
+  （macOS 恒 -1）；改为与 JDK `NetworkInterface.c` 同取法的 `ioctl(SIOCGIFMTU)`（`network_interface_impl.rs::ioctl_mtu`）后输出与期望一致。
+  闭包规模（类 / 方法，放行前 → 后）：TestFilesApi 334 / 866 → 340 / 889、FileIODemo 344 / 935 → 350 / 957、TestFileAccessSpace 1253 / 6939 →
+  1275 / 7099、TestNetworkInterface 1240 / 6820 → 1257 / 6989，HelloWorld 247 / 605、FileIOTest 289 / 780 不变（增量全是新可达的
+  `sun/nio/fs` 执行线，属健全性补全）。余下 `handwritten:provides` 覆写
   （`open` / `close` / `stat` / `lstat` / `unlink` / `rmdir` / `access`）留作后续逐个改回字节码。
 - 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
   MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
@@ -978,11 +983,46 @@ null_recv 计数（`folds[].null_recv` 总条数；类 / 方法集三列均不�
 （`getKeys()` 为 `aconst_null; areturn`），真实束类（`ListResourceBundle` / `OpenListResourceBundle` / `ParallelListResourceBundle`）均覆写 `handleKeySet`。
 验收：`scripts/main.py` 单跑 TestStreamAdvanced（经 heavy_lock）`native-missing=0`，965 JDK 类 + 1 用户类，输出与 `tests/expected` 一致。提交 9f04499e。
 
+**健全性 S4：lambda 上的 Comparator default 方法不入闭包（ComparatorFactory / EisensteinPrimes 基线回归，运行期命中 `Comparator.reversed` /
+`thenComparingInt` 存根）**。闭包 JSON：`ComparatorFactory.main` 的 null_recv = `[75, 163]`（`reversed` / `thenComparing` 调用点），
+`--why Comparator.reversed` 为「不在闭包内」。根因不在 default 方法派发（`invoke.rs::dispatch_one` 对 lambda 接收者的非 SAM 方法本就按接口选择），
+而在值流：`Comparator.comparing*` / `thenComparing*` 以 `(Comparator<T> & Serializable)` 返回 lambda——引导为 `altMetafactory`（flags 含
+FLAG_SERIALIZABLE），字节码随后 `checkcast Serializable; checkcast Comparator`。引擎的 lambda 伪类型只算函数式接口的子类型，
+`checkcast Serializable` 把 lambda 对象滤空，返回值集为空 → 调用方接收者被判 null_recv（值确有建模来源，未建模来源守卫不适用）。
+修法（通用，类名只在清单）：`lambda.rs::alt_markers` 按 LambdaMetafactory 协议解析 `altMetafactory` 静态实参
+（`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`）：FLAG_SERIALIZABLE → 清单 `serializable_markers`，FLAG_MARKERS → 列出的标记接口；
+记入 `Lambda.markers`，`classes.rs::sub` 与非 SAM 方法选择（`invoke.rs`，函数式接口在前、附加接口在后）一并使用。单测 `lambda::tests::alt_markers_by_flags`。
+覆盖整个 default 方法族：`comparing*` / `thenComparing*` / `reversed` 返回的 lambda 均经此路径，无逐方法处理。
+结果：ComparatorFactory 257 / 726 → 260 / 743（+`reversed`、`thenComparing`、`Collections$ReverseComparator(2)`、`Comparators$NaturalOrderComparator` 等），
+null_recv 总数 62 → 39，`main` 的 null_recv 为空；dyn 漏 4 → 0（`DirectMethodHandle$Interface ← thenComparing@7` 随 `thenComparing` 入闭包、
+其 indy 进 `indy_models` 后归 `indy-model`）。EisensteinPrimes 928 / 5274，dyn 漏 1 → 0。DeepCopy / Digester / CollectorsDemo / TestStreamAdvanced
+类 / 方法与上一项逐一相同，漏均为 0。`scripts/main.py` 持锁单跑 ComparatorFactory（258 JDK 类）、EisensteinPrimes（925 JDK 类）输出与期望一致。提交 fb5ffb99。
+
+**健全性 S5：VM 钩子的回调边未入闭包（TestDynamicProxy 运行期命中存根 `Character.valueOf:(C)`，main 5476da30 同样失败）**：
+归因——不是代理分派模型、也不是装箱模型的缺口，而是手写层「VM 钩子」未建模。`Proxy$Dyn` 手写文件里的 `__vm_proxy_invoke`
+由 rava_macros 接口载体回落直接调用（不经 Java 调用点），其 `#[jvm_boundary(upcalls=…)]` 声明了 `Proxy$Dyn.dispatch` 与 8 个
+`<Box>.valueOf`（`rebox` 把 `h.invoke` 的结果按接口方法返回类型拆装箱）。闭包只按 Java 成员名匹配手写 fn（`Handwritten::member`），
+非成员 fn 上的回调边从不被吸收；Integer / Long / Boolean.valueOf 恰好经别处可达，Character.valueOf 无人引用。dyn_compare 按类对照，
+Character 类已在闭包内，故报 miss 0 而漏掉方法。
+修法（通用规则，无类名）：`ClassHw::vm_hooks`——类的手写文件里声明了回调边、却不匹配该类及其全部超类型任何方法名的 pub fn 即
+VM 钩子（`handwritten/hooks.rs`）；该类进 G（实例化）时，每个钩子登记一个伪方法节点（`engine/vmhook.rs`，kind `vm-hook`，接收者
+= 该类对象，形参经值池），手写体效果（回调 / 分配 / 字段）按 `apply_hw` 照常建模；钩子节点与手写实现对象伪方法一样不进输出。
+单测 `hooks_are_non_member_pub_fns_with_upcalls`。`--why`：`Character.valueOf ← [handwritten] Proxy$Dyn.__vm_proxy_invoke ← [vm-hook] 类 Proxy$Dyn`。
+实测（基线 = c7d7b62e 二进制）：9 例中只有 TestDynamicProxy 变化，358/1258 → 365/1364（+7 类 +106 方法，0 删除：8 个装箱类的
+valueOf / 缓存 `<clinit>` 与经 Object 接收者可达的 toString / hashCode / equals / compareTo，Float/Double.toString 带入
+FloatToDecimal / DoubleToDecimal / MathUtils），其余 8 例（HelloWorld、TestStreamAdvanced、CollectorsDemo、DeepCopy、Digester、
+TestFilesApi、TestNetworkInterface、ComparatorFactory）类 / 方法集合逐项相同；9 例 dyn miss 均为 0。main.py TestDynamicProxy MATCH（33 行与 expected 一致）。
+
+**合入 rust-closure-analyzer f00b6858（含 perf2）后验收（合并提交 6e6ab7cd）**：冲突仅 `runtime/java_runtime/build.rs`（取对方，CpVal::W 移植到
+java_meta）。closure 62 / emit 35+1+2 单测通过；main.py ComparatorFactory、EisensteinPrimes、TestStreamAdvanced、TestNetworkInterface、
+DateTest、TestDynamicProxy 6 例全部 MATCH。DateTest 闭包（934 类 / 5403 方法）的 610 个折叠点中没有任何 null_recv 涉及
+`LocaleData.getDateFormatData`（c3 抽查所见的恒 null 违约由 S3 修复覆盖）。
+
 **driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
 `pick`：三臂都存储 `local_1`（`Clone::clone(&_t1)` / `Object::from(..)`），E0381 回归保护的语义仍在，只是臂标签变了。
-修法（不在本分支做）：夹具让 `k` 在调用点非常量（如取 `args.length + 1`），恢复 `1 =>` 臂。
+已修：夹具改为 `int k = args.length; pick(k + 1/2/3)`，选择子非常量，各臂（含 default）可达，`1 =>` 臂与三处存储断言恢复；测试通过（生成代码未改）。
 
 ## 七、验收
 

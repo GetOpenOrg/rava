@@ -17,8 +17,10 @@ public class TryFinallyReturn {
         }
     }
     public static void main(String[] args) {
-        System.out.println(pick(1));
-        System.out.println(pick(2));
-        System.out.println(pick(3));
+        // 选择子取运行期值（非常量），switch 各臂（含 default）在分析中均可达
+        int k = args.length;
+        System.out.println(pick(k + 1));
+        System.out.println(pick(k + 2));
+        System.out.println(pick(k + 3));
     }
 }

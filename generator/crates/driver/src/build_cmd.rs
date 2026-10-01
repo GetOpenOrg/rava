@@ -436,6 +436,7 @@ mod tests {
         put(&rt.join("src/lib.rs"), "pub mod java;\n");
         put(&rt.join("build.rs"), "fn main() {}\n");
         put(&rt.join("Cargo.toml"), "[package]\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\n");
+        put(&root.join("runtime/java_meta/Cargo.toml"), "[package]\nversion = \"0.1.0\"\n");
         let out = root.join("scratch");
         put(&out.join("stale.txt"), "x");
         remove_dir(&out).unwrap();
@@ -449,6 +450,7 @@ mod tests {
         assert!(cargo.contains(&format!("path = \"{}\"", macros.display())));
         assert!(!cargo.contains("version = \"0.1.0\""));
         assert!(out.join("java_runtime/src/java/mod.rs").is_file());
+        assert!(out.join("java_meta/Cargo.toml").is_file());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

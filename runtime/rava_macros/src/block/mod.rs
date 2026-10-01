@@ -75,6 +75,7 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     let ctx = GenContext::build(input, meta, generics);
 
     let layout = gen::struct_layout::generate(&ctx);
+    let hooks = gen::storage_hooks::generate(&ctx);
     let dispatch_trait = gen::virtual_dispatch::vtable_trait(&ctx);
     let dispatch_impls = gen::virtual_dispatch::vtable_impls(&ctx)?;
     let wrapper = gen::wrapper::generate(&ctx)?;
@@ -84,6 +85,7 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         #dispatch_trait
         #layout
+        #hooks
         #dispatch_impls
         #wrapper
         #conversions
