@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；P6 整体结果缓存（`closure-p6`，§4.8）✅，同输入重跑分析段 24–30 ms；待做：P5 / P7 / P8（预算降级、并行、工程化，另分担冷路径 DeepCopy ≤ 2 s）。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
+> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；P6 整体结果缓存（`closure-p6`，§4.8）✅，同输入重跑分析段 24–29 ms；待做：P5 / P7 / P8（预算降级、并行、工程化，另分担冷路径 DeepCopy ≤ 2 s）。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
 
 ---
 
@@ -353,13 +353,13 @@
 **冷路径不因缓存放弃**：未跑过的测试、改过的用户代码、改过的分析器都走冷分析。DeepCopy 冷启动终态 **≤ 2 s**，分担为
 P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `aux_analyze` 1.14 → ≤ 0.4 s、P8 `process` 1.18 → ≤ 0.4 s，其余阶段合计 ≤ 0.3 s。
 
-**验收**（持锁，release，基线 closure-mono e9c4e1ee 的 27 例生成树 `build/trees/mono`）：
+**验收**（持锁，release，并入 rust-closure-analyzer 3c7ca8e6 后复跑，基线为 3c7ca8e6 的 27 例生成树）：
 
 - 27 例：清空缓存后冷算树与基线 `compare_trees` 全 0、raw-audit 一致；再跑一遍全部命中，命中树与冷算树全 0；
   closure.json 剔除 `summary.elapsed_ms` / `summary.perf` 后 27 例逐字节一致（`elapsed_ms` 之前的原文前缀亦逐字节一致）。
-- 命中分析段（键计算 + 读条目 + 校验 + 解析）24–30 ms，27 例全部命中，缓存目录 28 条共 23 MB。
-- DeepCopy（`rava build --perf`）：`closure` 阶段冷 5097 ms / 命中 32 ms；整次 `--no-run` 墙钟 6.27 → 1.13 s，最大 RSS 686 → 378 MB。
-- 单测：`cargo test -p closure -p input -p emit` 全过（cache 6 项）。
+- 命中分析段（键计算 + 读条目 + 校验 + 解析）24–29 ms，27 例全部命中，缓存目录 28 条共 23 MB。
+- DeepCopy（`rava build --perf`）：`closure` 阶段冷 5110 ms / 命中 33 ms；整次 `--no-run` 墙钟 6.34 → 1.12 s，最大 RSS 687 → 372 MB。
+- 单测：`cargo test -p closure -p input -p emit -p driver` 全过（cache 6 项，build_opts 新增 `closure_cache_options`）。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
