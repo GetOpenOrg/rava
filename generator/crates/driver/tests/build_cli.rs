@@ -82,9 +82,10 @@ fn record_and_switch_bootstraps_translate() {
     );
     assert!(user.contains("wrapping_mul(31)"), "record hashCode");
     assert!(user.contains("o.is_instance_of(\"RecordSwitch$Point\") && {"), "record equals");
-    // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句
+    // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句；
+    // 引用分量调用清单登记的 component_equals（不再内联判空）
     let label_eq = user.lines().find(|l| l.contains("o.is_instance_of(\"RecordSwitch$Label\") && {")).expect("Label equals");
-    assert!(label_eq.contains("); ({ let x"), "引用首分量的比较整体加括号：{label_eq}");
+    assert!(label_eq.contains("); ({ let _t") && label_eq.contains("::equals("), "引用首分量的比较整体加括号：{label_eq}");
     // typeSwitch 的限定枚举常量标签按身份比较常量；enumSwitch 同一翻译
     assert!(user.contains("__ts_sel1 == Object::from(Clone::clone(&RecordSwitch_Color::RED()?))"), "枚举常量标签");
     // 拼接实参的 toString 物化按 Java 求值序（从左到右）

@@ -71,7 +71,7 @@
   `let _tN: String = String::valueOf_obj(..)?;`；String 静态类型的实参仍按引用直接追加（null 由运行时给 "null"）。
 - 验证：TestPropertiesDefaults / TestSystemPropsSpec / HelloWorld / TestRecord 单例与期望一致；四例闭包
   classes / methods / instantiated 集合与改前完全相同（valueOf(Object) 原已在链上）。
-- 未动：record hashCode / equals 的引用分量仍内联 `_is_jnull`（语义为 Objects.hashCode / Objects.equals，可同法改写，另行处理）。
+- 未动：record hashCode / equals 的引用分量仍内联 `_is_jnull`（语义为 Objects.hashCode / Objects.equals，可同法改写）——已在 §9 处理。
 
 ## 8. 6 的实施：两张表随 ClosureFacts 由发射层写入
 
@@ -83,3 +83,22 @@
   构建脚本的 closure.json 解析（`build_script/closure_tables.rs`）删除。
 - 验证：TestSystemPropsSpec / TestPropertiesDefaults / HelloWorld 不带 `--closure-json` 经 `rava build` 单跑与期望一致
   （scratch 中无 closure.json）；`cargo test --release -- --test-threads=1` 通过。
+
+## 9. 去掉「清单未登记回落」；record hashCode / equals 引用分量改调 Objects.hashCode / Objects.equals
+
+- 清单（`vm_intrinsics.toml [indy]`）新增 `component_hash = Objects.hashCode(Object)`、
+  `component_equals = Objects.equals(Object,Object)`，与 `concat_stringify` 并列为分量处理入口。
+  两侧装载时校验：登记了 concat 引导而缺 `concat_stringify`、或登记了 object_methods 而缺三项之一，直接报错
+  （分析器 `closure/src/manifest/indy_helpers.rs`；生成器 `input/src/manifest.rs` `indy_helpers` / `indy_helper(key)`）。
+- 分析器（`engine/lambda.rs`）：`stringify` 泛化为 `indy_helper`，Concat 引用实参、ObjectMethods 三个方法的引用分量
+  一律经静态边接入入口形参（equals 两个实参取同一分量汇合节点）；原 toString / Object 方法直接派发的回落路径与
+  `object_method_desc` 删除。HelloWorld / TestRecord 闭包 classes / methods / instantiated 与改前完全一致。
+- 生成器：`concat.rs` 无回落分支，缺项报 `清单缺 concat_stringify`；`object_methods.rs` 引用分量压栈后
+  `gen_invokestatic` 调入口（`hash_of` / `eq_of` 拆为基本类型专用的 `prim_hash` / `prim_eq`），equals 每个分量的物化语句
+  收进该分量自己的块（`{ 语句; 比较 } && { .. }`），保持短路求值。
+- import 扫描（`emit/src/imports/referenced.rs` `indy_helper_refs`）：concat / object_methods 调用点把入口声明类计入引用，
+  否则用户类缺 `use Objects`（E0433）。
+- `_is_jnull` 生成面复核：record / 拼接路径计数为 0。仍存在且属正当语义的：
+  - ifnull / ifnonnull（Java `== null`）：`cfg/src/cond.rs`、`method/src/unify.rs`、`method/src/cond_text.rs`；
+  - typeSwitch null 选择子 → -1：`instr/src/sim/dynamic/type_switch.rs`；
+  - 反射构造分派按接收者是否为 null 区分 new / `<init>`：`emit/src/phase2/dispatch.rs`。

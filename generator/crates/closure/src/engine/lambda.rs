@@ -2,12 +2,6 @@
 
 use super::*;
 
-/// `ObjectMethods` 调用点对应的 Object 方法描述符：indy 描述符去掉首个（record 接收者）形参
-fn object_method_desc(md: &MethodDesc) -> String {
-    let params: String = md.params.iter().skip(1).map(FieldType::descriptor).collect();
-    format!("({params}){}", md.ret.as_ref().map_or_else(|| "V".to_string(), FieldType::descriptor))
-}
-
 /// `altMetafactory` 静态实参的附加接口（LambdaMetafactory 协议：`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`；
 /// flags 位 1 = 可序列化、2 = 带标记接口、4 = 带桥接）。可序列化时 lambda 类实现清单的序列化标记接口。
 /// `metafactory` 只有前三项，结果为空
@@ -264,15 +258,8 @@ impl<'a> Engine<'a> {
                 for (p, v) in md.params.iter().zip(args.iter()) {
                     let Some(t) = self.ptype(p) else { continue };
                     let fs = self.feeds(m, v, t);
-                    if self.stringify(m, off, Some(v), fs.clone()) {
-                        continue;
-                    }
-                    let Some(site) = self.h.resolve_method(OBJECT, TO_STRING.0, TO_STRING.1, false) else { return };
-                    let s = self.value_set(&fs);
-                    let recv = self.receivers(m, &s, t);
-                    for r in recv {
-                        self.dispatch_one(m, off, r, &site, &vec![], None, None, NOCTX);
-                    }
+                    let entry = self.man.indy_helpers.stringify.clone();
+                    self.indy_helper(m, off, entry.as_deref(), std::slice::from_ref(v), vec![Some(fs)]);
                 }
             }
             Some(IndyKind::ObjectMethods) => self.object_methods(m, off, &b.args, name, &md, args),
@@ -301,24 +288,23 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 拼接 / record toString 的引用实参接入清单登记的字符串化入口（`[indy] concat_stringify`，
-    /// 语义即 `String.valueOf(Object)`）的形参：生成器在调用点发射对它的静态调用。
-    /// 返回 false = 未登记或解析不到，调用方回落为在实参值集上直接派发 toString
-    fn stringify(&mut self, m: usize, off: u32, v: Option<&V>, fs: Vec<Feed>) -> bool {
-        let Some(key) = self.man.concat_stringify().and_then(super::seeds::parse_member) else { return false };
+    /// 拼接的引用实参 / record 的引用分量接入清单登记的 `[indy]` 分量处理入口（静态方法，
+    /// 如 `String.valueOf(Object)` / `Objects.hashCode(Object)` / `Objects.equals(Object,Object)`）的形参：
+    /// 生成器在调用点发射对它的静态调用。清单装载时已校验必填项；解析不到记入 unresolved，不回落
+    fn indy_helper(&mut self, m: usize, off: u32, entry: Option<&str>, vals: &[V], fs: Args) {
+        let Some(key) = entry.and_then(super::seeds::parse_member) else { return };
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, false) else {
             self.unresolved.insert(key.to_string());
-            return false;
+            return;
         };
         let via = Via::method("indy", m, Some(off));
         let (o, n, d) = site.key();
         let resolved = MemberRef { owner: o, name: n, desc: d };
         self.init(&resolved.owner, via.clone());
-        let args = v.map(std::slice::from_ref).unwrap_or(&[]);
-        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref: true, args });
+        let ret_ref = parse_method(&resolved.desc).and_then(|md| md.ret).is_some_and(|r| r.is_reference());
+        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: vals });
         let t = self.method_ctx(resolved, ctx, via);
-        self.edge(m, off, t, Recv::None, &[Some(fs)], None, None);
-        true
+        self.edge(m, off, t, Recv::None, &fs, None, None);
     }
 
     /// `ObjectMethods` 引导的 record equals / hashCode / toString：静态实参里的 getter 句柄读出各分量
@@ -357,35 +343,25 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
-        if !any || name == TO_STRING.0 && self.stringify(m, off, None, vec![Feed::N(node)]) {
+        if !any {
             return;
         }
-        let odesc = object_method_desc(md);
-        let Some(site) = self.h.resolve_method(OBJECT, name, &odesc, false) else {
-            self.unresolved.insert(format!("{OBJECT}.{name}:{odesc}"));
-            return;
+        // 引用分量接入对应的分量处理入口；equals 的两个实参（本方 / 对方分量）取同一汇合节点
+        let h = &self.man.indy_helpers;
+        let (entry, n) = match name {
+            n if n == TO_STRING.0 => (h.stringify.clone(), 1),
+            "hashCode" => (h.hash.clone(), 1),
+            "equals" => (h.equals.clone(), 2),
+            _ => return,
         };
-        let obj = self.id(OBJECT);
-        let s = self.value_set(&[Feed::N(node)]);
-        let a: Args = md.params.iter().skip(1).map(|p| p.is_reference().then(|| vec![Feed::N(node)])).collect();
-        let recv = self.receivers(m, &s, obj);
-        for r in recv {
-            self.dispatch_one(m, off, r, &site, &a, ret, None, NOCTX);
-        }
+        let fs: Args = vec![Some(vec![Feed::N(node)]); n];
+        self.indy_helper(m, off, entry.as_deref(), &[], fs);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn object_method_desc_drops_record_receiver() {
-        let d = |s: &str| object_method_desc(&parse_method(s).unwrap());
-        assert_eq!(d("(Lt/R;Lt/O;)Z"), "(Lt/O;)Z");
-        assert_eq!(d("(Lt/R;)I"), "()I");
-        assert_eq!(d("(Lt/R;)Lt/S;"), "()Lt/S;");
-    }
 
     #[test]
     fn alt_markers_by_flags() {

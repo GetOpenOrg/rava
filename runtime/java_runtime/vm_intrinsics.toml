@@ -481,6 +481,12 @@ object_methods = [
 # String.valueOf(Object)（null → "null"，否则虚分派 toString；JLS §5.1.11）。
 # 生成器在拼接点发射对它的调用（由字节码翻译），分析器把各引用实参接入它的形参
 concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"
+# object_methods（record hashCode / equals）引用分量的入口：语义即 Objects.hashCode(Object)
+# （null → 0，否则虚分派 hashCode）与 Objects.equals(Object,Object)（同一引用或均 null → true，
+# 否则 a != null && 虚分派 a.equals(b)）。生成器在 record 方法体发射对它们的调用，分析器把分量接入形参。
+# 清单是唯一真源：登记了 concat / object_methods 引导方法而缺这三项时装载报错
+component_hash = "java/util/Objects.hashCode:(Ljava/lang/Object;)I"
+component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Object;)Z"
 
 # ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
 # LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：

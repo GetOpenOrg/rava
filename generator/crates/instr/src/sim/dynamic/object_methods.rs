@@ -3,8 +3,10 @@
 //! 引导静态实参：`[record 类, "a;b;..." 分量名, getter 句柄...]`（getter 为 REF_getField）。
 //! 调用点名决定语义（`java.lang.runtime.ObjectMethods`）：
 //! - `toString (R)String`：`简单名[a=.., b=..]`，分量按 `String.valueOf` 字符串化（与拼接同一翻译）；
-//! - `hashCode (R)I`：`h = 31 * h + hash(分量)` 自 0 起，基本类型按装箱类 `hashCode`，引用按 `Objects.hashCode`；
-//! - `equals (R, Object)Z`：实参是本 record 类实例，且逐分量相等（浮点按 `compare == 0`，引用按 `Objects.equals`）。
+//! - `hashCode (R)I`：`h = 31 * h + hash(分量)` 自 0 起，基本类型按装箱类 `hashCode`，引用分量调用清单
+//!   `[indy] component_hash`（`Objects.hashCode(Object)`）；
+//! - `equals (R, Object)Z`：实参是本 record 类实例，且逐分量相等（浮点按 `compare == 0`，引用分量调用清单
+//!   `[indy] component_equals`（`Objects.equals(Object,Object)`））。引用分量的入口方法体均由字节码翻译。
 //!
 //! 分量读取与 getfield 同一翻译（访问器命名、声明类型恢复都复用 [`crate::sim::fields::getfield`]）。
 
@@ -14,7 +16,7 @@ use sim::StackSim;
 use ty::{Prim, RsType};
 
 use super::boxing::obj_text;
-use super::concat::{concat_from_stack, Recipe};
+use super::concat::{call_indy_helper, concat_from_stack, Recipe};
 use super::{raw_stmt, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
@@ -61,12 +63,20 @@ fn pop_bound(sim: &mut StackSim) -> InstrResult<sim::StackEntry> {
     Ok(sim::StackEntry { expr: v, ty: e.ty, id: e.id })
 }
 
-/// 在接收者上读一个分量（getfield 同一翻译），返回 (值文本, 类型)
-fn read(env: &InstrEnv, sim: &mut StackSim, recv: &sim::StackEntry, g: &MemberRef) -> InstrResult<(String, RsType)> {
+/// 在接收者上读一个分量（getfield 同一翻译）
+fn read(env: &InstrEnv, sim: &mut StackSim, recv: &sim::StackEntry, g: &MemberRef) -> InstrResult<sim::StackEntry> {
     sim.push(recv.expr.clone(), recv.ty.clone());
     getfield(env, sim, g)?;
-    let e = sim.pop()?;
-    Ok((text(env, &e.expr), e.ty))
+    Ok(sim.pop()?)
+}
+
+/// 引用分量：实参压栈后调用清单登记的分量处理入口（`[indy] component_hash` / `component_equals`），返回 (结果文本, 类型)
+fn ref_call(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, key: &str, args: Vec<sim::StackEntry>) -> InstrResult<(String, RsType)> {
+    for a in args {
+        sim.push(a.expr, a.ty);
+    }
+    let r = call_indy_helper(env, sim, log, key)?;
+    Ok((text(env, &r.expr), r.ty))
 }
 
 /// 浮点位模式（NaN 归一：`floatToIntBits` / `doubleToLongBits`）
@@ -78,33 +88,22 @@ fn float_bits(v: &str, desc: &str) -> String {
     }
 }
 
-/// 分量的 hashCode（装箱类 hashCode / Objects.hashCode）
-fn hash_of(env: &InstrEnv, v: &str, t: &RsType, desc: &str) -> String {
+/// 基本类型分量的 hashCode（装箱类 hashCode）
+fn prim_hash(v: &str, desc: &str) -> String {
     match desc {
         "Z" => format!("(if {v} {{ 1231i32 }} else {{ 1237i32 }})"),
         "J" => format!("{{ let v = {v}; (v ^ ((v as u64) >> 32) as i64) as i32 }}"),
         "F" => format!("({} as i32)", float_bits(v, desc)),
         "D" => format!("{{ let b = {}; (b ^ (b >> 32)) as i32 }}", float_bits(v, desc)),
-        _ if matches!(t, RsType::Prim(_)) => format!("({v} as i32)"),
-        _ => {
-            let o = obj_text(env, v, t);
-            format!("{{ let c: {O} = {o}; if _is_jnull(&c) {{ 0i32 }} else {{ c.hashCode()? }} }}", O = ir::anchors::OBJECT)
-        }
+        _ => format!("({v} as i32)"),
     }
 }
 
-/// 两分量相等（基本类型 `==`，浮点 `compare == 0`，引用 `Objects.equals`：null 仅等于 null，
-/// 否则虚分派 equals）
-fn eq_of(env: &InstrEnv, (a, at): &(String, RsType), (b, bt): &(String, RsType), desc: &str) -> String {
+/// 两基本类型分量相等（`==`，浮点 `compare == 0`）
+fn prim_eq(a: &str, b: &str, desc: &str) -> String {
     match desc {
         "F" | "D" => format!("{} == {}", float_bits(a, desc), float_bits(b, desc)),
-        _ if matches!(at, RsType::Prim(_)) => format!("{a} == {b}"),
-        _ => format!(
-            "{{ let x: {O} = {}; let y: {O} = {}; if _is_jnull(&x) {{ _is_jnull(&y) }} else {{ x.equals(y)? }} }}",
-            obj_text(env, a, at),
-            obj_text(env, b, bt),
-            O = ir::anchors::OBJECT
-        ),
+        _ => format!("{a} == {b}"),
     }
 }
 
@@ -127,8 +126,11 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
             let h = sim.fresh("__om_hash")?;
             sim.emit(raw_stmt(format!("let mut {h}: i32 = 0;")))?;
             for g in &getters {
-                let (v, t) = read(env, sim, &recv, g)?;
-                let term = hash_of(env, &v, &t, &g.desc);
+                let e = read(env, sim, &recv, g)?;
+                let term = match &e.ty {
+                    RsType::Prim(_) => prim_hash(&text(env, &e.expr), &g.desc),
+                    _ => ref_call(env, sim, log, "component_hash", vec![e])?.0,
+                };
                 sim.emit(raw_stmt(format!("{h} = {h}.wrapping_mul(31).wrapping_add({term});")))?;
             }
             sim.push(Expr::Var(h), RsType::Prim(Prim::I32));
@@ -150,27 +152,31 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
                 }
             };
             let r_ty = ty_text(env, &recv.ty);
-            // 类型相符分支：实参转为本 record 类型后逐分量比较（分量读取可能物化的语句一并收入块内，
-            // 只在 instanceof 成立时求值）
-            let mark = sim.state.stmts.len();
+            // 类型相符分支：实参转为本 record 类型后逐分量比较。每个分量读取 / 比较物化的语句收入
+            // 该分量自己的块（`{ 语句; 比较 }`），只在 instanceof 成立且前序分量相等时求值（短路）
             let that = sim.fresh("__om_that")?;
             let that_e = sim::StackEntry { expr: Expr::Var(that.clone()), ty: recv.ty.clone(), id: recv.id };
             let mut cmps = Vec::with_capacity(getters.len());
             for g in &getters {
+                let mark = sim.state.stmts.len();
                 let mine = read(env, sim, &recv, g)?;
                 let theirs = read(env, sim, &that_e, g)?;
-                cmps.push(eq_of(env, &mine, &theirs, &g.desc));
+                let cmp = match &mine.ty {
+                    RsType::Prim(_) => prim_eq(&text(env, &mine.expr), &text(env, &theirs.expr), &g.desc),
+                    _ => match ref_call(env, sim, log, "component_equals", vec![mine, theirs])? {
+                        (t, RsType::Prim(Prim::Bool)) => t,
+                        // 布尔结果按 i32（1/0）流动时归一为 bool
+                        (t, _) => format!("({t} != 0)"),
+                    },
+                };
+                let names = sim::TyNames(env);
+                let renderer = ir::Renderer::new(&names);
+                let captured: Vec<String> = sim.state.stmts.split_off(mark).iter().map(|st| renderer.stmt(st, 0)).collect();
+                cmps.push(if captured.is_empty() { cmp } else { format!("{{ {} {cmp} }}", captured.join(" ")) });
             }
-            let names = sim::TyNames(env);
-            let renderer = ir::Renderer::new(&names);
-            let captured: Vec<String> = sim.state.stmts.split_off(mark).iter().map(|st| renderer.stmt(st, 0)).collect();
             // 语句位置的 `{ .. } && ..` 会被解析为块语句，整体加括号成表达式
             let all = if cmps.is_empty() { "true".to_string() } else { format!("({})", cmps.join(" && ")) };
-            let mut block = format!("let {that}: {r_ty} = Into::<{r_ty}>::into(Clone::clone(&{o_s}));");
-            for c in captured {
-                block.push(' ');
-                block.push_str(&c);
-            }
+            let block = format!("let {that}: {r_ty} = Into::<{r_ty}>::into(Clone::clone(&{o_s}));");
             let v = format!("{o_s}.is_instance_of(\"{cls}\") && {{ {block} {all} }}");
             let e = sim.fresh_let("__om_eq", Expr::raw(v), &RsType::Prim(Prim::Bool))?;
             sim.push(e, RsType::Prim(Prim::Bool));
