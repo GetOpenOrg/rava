@@ -288,8 +288,8 @@ impl<'a> Engine<'a> {
             "pushes_by_kind": self.push_kinds(),
             // 枢纽数 / 调用点接入枢纽总数 / 单调用点最多接入数（hub.rs）
             "hubs": [self.hubs.len(), self.hub_sites.values().map(|h| h.len()).sum::<usize>(), self.hub_sites.values().map(|h| h.len()).max().unwrap_or(0)],
-            // 枢纽重放去重记录的规模：(调用点, lambda) 条数 / 按调用点建模目标的接收者条数（hub.rs）
-            "hub_sent": [self.hub_lsent.values().map(|d| d.len()).sum::<usize>(), self.hub_ssent.values().flat_map(|d| d.values()).map(|d| d.len()).sum::<usize>()],
+            // 枢纽重放去重记录的规模：(调用点, lambda) 条数（hub.rs；按调用点建模目标按祖先枢纽判定，不留记录）
+            "hub_sent": self.hub_lsent.values().map(|d| d.len()).sum::<usize>(),
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),

@@ -114,18 +114,30 @@ impl<'a> Engine<'a> {
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
         }
         for (t, rs) in special {
-            if replay {
-                let sent = self.hub_ssent.entry(m).or_default().entry((off, t)).or_default();
-                if rs.iter().all(|r| sent.contains(r)) {
-                    continue;
-                }
-                sent.extend(rs.iter().copied());
+            if replay && self.ancestor_sent(m, off, h, t, &rs) {
+                continue;
             }
             let recv = TypeSet { classes: rs.into_iter().collect(), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
         self.hub_expand(h);
+    }
+
+    /// 调用点 (m, off) 已接入枢纽 h 的某个祖先、且该祖先已把目标 t 的接收者 rs 全部送达：重放恒等。
+    /// 精确集合枢纽在首个调用点接入时一次展开、其后接收者不再增长，子枢纽的接收者表以父枢纽的为前缀，
+    /// 故已接入的祖先的接收者表即本调用点经它收到的全部接收者
+    fn ancestor_sent(&self, m: usize, off: u32, h: u32, t: usize, rs: &[u32]) -> bool {
+        let Some(linked) = self.hub_linked.get(&m) else { return false };
+        let mut p = self.hubs[h as usize].parent;
+        while let Some(a) = p {
+            if linked.contains(&(off, a)) {
+                let ps = self.hubs[a as usize].special.get(&t).map_or(&[][..], |v| &v[..]);
+                return rs.len() <= ps.len() && (ps.starts_with(rs) || rs.iter().all(|r| ps.contains(r)));
+            }
+            p = self.hubs[a as usize].parent;
+        }
+        false
     }
 
     /// 实参常量并入枢纽（沿父链下传）；变化时重新并入各中转目标
