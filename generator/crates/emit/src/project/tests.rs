@@ -34,6 +34,10 @@ fn runtime(root: &Path) -> PathBuf {
         &rt.join("Cargo.toml"),
         "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\n",
     );
+    let meta = root.join("runtime").join("java_meta");
+    put(&meta.join("Cargo.toml"), "[package]\nname = \"java_meta\"\nversion = \"0.1.0\"\n");
+    put(&meta.join("build_script/main.rs"), "fn main() {}\n");
+    put(&meta.join("src/lib.rs"), "// 表\n");
     rt
 }
 
@@ -57,6 +61,17 @@ fn overlay_copies_rewrites_and_prunes() {
     assert!(!cargo.contains("0.1.0"));
     assert!(src.join("sun/mod.rs").exists(), "顶层占位 mod.rs");
     assert!(out.join("java_runtime/build.rs").exists());
+    // java_meta 整体镜像：版本唯一化，真源已无的文件删除
+    let meta = out.join("java_meta");
+    assert_eq!(read(&meta.join("build_script/main.rs")), "fn main() {}\n");
+    assert!(!read(&meta.join("Cargo.toml")).contains("0.1.0"));
+    put(&meta.join("build_script/gone.rs"), "// 旧\n");
+    put(&meta.join("old_dir/gone.rs"), "// 旧\n");
+    prepare_scratch(&out, &rt, &macros, false).unwrap();
+    assert!(!meta.join("build_script/gone.rs").exists());
+    assert!(!meta.join("old_dir").exists());
+    assert!(meta.join("build_script/main.rs").exists());
+    assert!(meta.join("src/lib.rs").exists());
     prepare_scratch(&out, &rt, &macros, true).unwrap();
     assert!(!src.join("java/lang/string.rs").exists(), "--clean 清空");
     let _ = std::fs::remove_dir_all(&root);

@@ -83,6 +83,8 @@ fn ninsn_proj(n: &NInsn) -> String {
         NInsn::Op(i) => insn_proj(i),
         NInsn::FoldField { offset, load } => format!("{offset} fold_field {}", tail(load)),
         NInsn::FoldCall { call, load } => format!("{} fold_call {}", insn_proj(call), tail(load)),
+        NInsn::NullRecv { call } => format!("{} null_recv", insn_proj(call)),
+        NInsn::NoReturn { call } => format!("{} noreturn", insn_proj(call)),
     }
 }
 
@@ -176,7 +178,7 @@ impl Ctx<'_> {
             "lib_crates" => json!(e.lib_crates),
             "jdk_classes" => json!(e.jdk_classes),
             "visited" => json!(e.visited.iter().map(key_str).collect::<BTreeSet<_>>()),
-            "field_stubs" => json!(e.field_stubs),
+            "field_stubs" => json!(e.opaque),
             "reflect_consts" => json!(e.reflect.consts),
             "reflect_all" => json!(e.reflect.all_members),
             "reflect_field_names" => json!(e.reflect.field_names),

@@ -145,20 +145,59 @@ fn gen_super_method(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call
         return emit_call_result(env, sim, call, &format!("{obj_e}.{member}({})?", args.join(", ")));
     }
     let rust_m = ty::ident::safe_ident(&mangle_if_overloaded(ctx, &sp_owner, &call.name, Some(&call.desc))?);
+    if ctx.hooks.slot_pruned(&sp_owner, &call.name, &call.desc) {
+        return gen_slotless_special(env, sim, call, &sp_owner, &obj_e, &rust_m, &args);
+    }
     let mut base_fn = format!("{owner_short}__{rust_m}_base");
-    // base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参无处推断时（E0283）显式给出
+    // base 函数的泛型形参 = 声明类的类型形参（接收者是 `&dyn Owner__VTable`，不参与泛型）；
+    // 实参无处推断时（E0283）显式给出
     if let (Some(ci), Some(st)) = (self_ci, self_ty.as_ref()) {
         if owner_short != self_short {
             let targs = ctx.ty.ancestor_vtable_args_by_short(ci, st).remove(&owner_short).unwrap_or_default();
             if !targs.is_empty() {
-                base_fn.push_str(&format!("::<{}, _>", join_types(env, &targs)));
+                base_fn.push_str(&format!("::<{}>", join_types(env, &targs)));
             }
         } else if !sim.cfg.class_type_params.is_empty() {
-            base_fn.push_str(&format!("::<{}, _>", sim.cfg.class_type_params.join(", ")));
+            base_fn.push_str(&format!("::<{}>", sim.cfg.class_type_params.join(", ")));
         }
     }
     // 首参是 vtable 引用：宏把字面 this/self 接收者重写为 `&*this.vtable`；其余按同一形态发射
     let recv_arg = if obj_e == "this" || obj_e == "self" { obj_e } else { format!("&*({obj_e}).vtable") };
     let all: Vec<String> = std::iter::once(recv_arg).chain(args).collect();
     emit_call_result(env, sim, call, &format!("{base_fn}({})?", all.join(", ")))
+}
+
+/// 不占 vtable 槽的落点（无 `Owner__m_base`）：本类 / private → 接收者 wrapper 直接调用；
+/// 祖先 → 上转到声明者 wrapper 后直接调用（NonVirtual 方法不经分派，与 super 语义一致）
+fn gen_slotless_special(
+    env: &InstrEnv,
+    sim: &mut StackSim,
+    call: &CallRef,
+    sp_owner: &str,
+    obj_e: &str,
+    rust_m: &str,
+    args: &[String],
+) -> InstrResult<()> {
+    let ctx = &env.ctx;
+    let reg = ctx.reg();
+    let joined = args.join(", ");
+    let (Some(self_ci), Some(owner_ci)) = (reg.get(ctx.class_name), reg.get(sp_owner)) else {
+        return emit_call_result(env, sim, call, &format!("{obj_e}.{rust_m}({joined})?"));
+    };
+    if sp_owner == ctx.class_name {
+        return emit_call_result(env, sim, call, &format!("{obj_e}.{rust_m}({joined})?"));
+    }
+    let self_ty = self_type(env, self_ci);
+    let owner_short = ctx.short(sp_owner);
+    let mut targs = ctx.ty.ancestor_vtable_args_by_short(self_ci, &self_ty).remove(&owner_short).unwrap_or_default();
+    let n_owner = ctx.ty.effective_class_type_params(owner_ci).len();
+    if targs.len() != n_owner {
+        targs = vec![RsType::Object; n_owner];
+    }
+    let owner_ty = if targs.is_empty() { owner_short } else { format!("{owner_short}<{}>", join_types(env, &targs)) };
+    let self_text = join_types(env, std::slice::from_ref(&self_ty));
+    let text = format!(
+        "<{owner_ty} as ::std::convert::From<{self_text}>>::from(::std::clone::Clone::clone({obj_e})).{rust_m}({joined})?"
+    );
+    emit_call_result(env, sim, call, &text)
 }

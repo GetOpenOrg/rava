@@ -115,7 +115,7 @@ impl<'a> Engine<'a> {
             }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
-            self.open_fields_all();
+            self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
     }
 
@@ -143,7 +143,7 @@ impl<'a> Engine<'a> {
             }
             None => {
                 if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all();
+                    self.open_fields_all(false, self.ctx.deser.get());
                 }
             }
         }
@@ -176,12 +176,16 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke_inner(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         use classfile::op;
         let via = Via::method("invoke", m, Some(off));
-        self.touch(&mref.owner, Level::Type, via.clone());
+        // 静态 / 特殊调用按属主类发射（`X::m(..)` / 固有方法），属主至少 L2；
+        // 虚 / 接口调用的属主可停在 L1：其值只可能是 null，调用点导出为 null_recv（`fold.rs`）
+        let lvl = if opcode == op::INVOKESTATIC || opcode == op::INVOKESPECIAL { Level::Layout } else { Level::Type };
+        self.touch(&mref.owner, lvl, via.clone());
         let Some(site) = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, iface) else {
             self.unresolved.insert(mref.to_string());
             return;
         };
         let (o, n, d) = site.key();
+        self.nest_access(m, off, &o, site.method().is_private());
         let resolved = MemberRef { owner: o, name: n, desc: d };
         let Some(md) = parse_method(&mref.desc) else { return };
         let owner = self.id(&mref.owner);
@@ -201,23 +205,13 @@ impl<'a> Engine<'a> {
         };
         match opcode {
             op::INVOKESTATIC => {
-                // 静态调用继承调用方的克隆上下文（容器方法里的静态辅助方法随容器对象分开）
                 self.init(&resolved.owner, via.clone());
-                // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
-                // 上下文无关的调用方调用新鲜工厂（返回本方法新分配的容器 / 引用数组）：按调用点克隆，
-                // 否则各调用点的实参元素经同一个返回对象汇合（`Arrays.copyOf` 的副本数组）
-                // 分派转发方法（形参流到分派接收者）按调用点克隆，优先于以上规则（边界计划 §6.2 G1）
-                let caller_ctx = self.methods[m].ctx;
-                let ctx = match caller_ctx {
-                    _ if !md.ret.as_ref().is_some_and(|r| r.is_reference()) => NOCTX,
-                    NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
-                    c => c,
-                };
-                // 选择子形参上传常量（或调用方已在上下文中）：按调用点克隆，分支按形参常量剪枝（`selector.rs`）
-                let ctx = self.selector_ctx(m, off, &resolved, pargs).unwrap_or(ctx);
+                // 克隆上下文的选择见 `ctxsel.rs`
+                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
-                let t = self.callee(m, off, resolved, ctx, via);
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
                     self.named_class(m, off, &c);
@@ -229,8 +223,13 @@ impl<'a> Engine<'a> {
             }
             _ => {
                 let rm = site.method();
-                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() {
-                    // 非虚：直接到已解析方法，接收者值流入 this
+                // 数组类型上的调用（`arr.clone()` 等）同样非虚：数组没有覆盖方法，目标恒为已解析的继承方法。
+                // 若经枢纽派发，手写层 / VM 产出的 open 数组没有分配点可展开，结果（clone 的副本）会丢失
+                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() || is_array_type(&mref.owner) {
+                    // 非虚：直接到已解析方法，接收者值流入 this。非 private 的目标在生成代码里仍经槽调用，计入 `dispatched`
+                    if !rm.is_private() && !rm.is_static() {
+                        self.direct_virtual_sites.insert((m, off));
+                    }
                     let r = recv_feeds(self);
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
                     return;
@@ -245,9 +244,17 @@ impl<'a> Engine<'a> {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
                     }
                 } else {
-                    let parent = self.hub_last.get(&(m, off)).copied();
-                    let h = self.hub(mref, iface, owner, HubSet::Exact(recv), parent, &site, &md, via.clone());
-                    self.hub_last.insert((m, off), h);
+                    // 同一调用点、同一接收者集合即同一枢纽键（成员与接口标志由该偏移的指令决定）
+                    let last = self.hub_last.get(&(m, off)).cloned();
+                    let h = match last {
+                        Some((h, rs)) if *rs == recv[..] => h,
+                        last => {
+                            let rs: Rc<[u32]> = recv.into();
+                            let h = self.hub(mref, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
+                            self.hub_last.insert((m, off), (h, rs));
+                            h
+                        }
+                    };
                     self.link_hub(h, m, off, &a, res);
                 }
                 for o in s.open.iter() {
@@ -276,8 +283,9 @@ impl<'a> Engine<'a> {
                 self.call_vals = vals;
                 return;
             }
-            let iface = l.iface.clone();
-            if let Some(sel) = self.h.select(&iface, site) {
+            // 非 SAM 方法（default / Object 方法）按 lambda 类实现的接口选择：函数式接口在前，其后为 altMetafactory 附加接口
+            let ifaces: Vec<String> = std::iter::once(&l.iface).chain(&l.markers).cloned().collect();
+            if let Some(sel) = ifaces.iter().find_map(|i| self.h.select(i, site)) {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
@@ -295,7 +303,7 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let cx = self.ctx_of(r);
+                let cx = self.recv_ctx(r);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
@@ -312,20 +320,25 @@ impl<'a> Engine<'a> {
         // 接收者按被调方法声明类收窄（checkcast 不改变值来源，来源节点可能更宽）
         let owner = self.id(&key.owner);
         let s = self.value_set(&fs);
+        // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增的值（同一分析结果下实参来源、常量与
+        // 被调方摘要不变，调用边的其余部分已接上；接收者各部分的效果按值累加）
+        let dedup = site && self.methods[m].kind == Kind::Bytecode;
+        let s = if dedup { self.recv_delta(m, off, s) } else { s };
         let s = self.filter(&s, owner);
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
-        // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
-        let dedup = site && self.methods[m].kind == Kind::Bytecode;
+        let mut objs: Vec<u32> = Vec::new();
+        let mut cls: Vec<u32> = Vec::new();
         for x in &s.classes {
             if self.objs.contains_key(&x) {
-                if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
-                    continue;
-                }
-                let t = self.method_ctx(key.clone(), x, via.clone());
-                self.edge(m, off, t, Recv::Exact(x), a, ret, res);
+                objs.push(x);
             } else {
-                rest.classes.insert(x);
+                cls.push(x);
             }
+        }
+        rest.classes = IdSet::from_sorted(cls);
+        for x in objs {
+            let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
+            self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
             let t = self.method(key, via);
@@ -345,25 +358,46 @@ impl<'a> Engine<'a> {
         if let Some(cv) = self.call_vals.clone() {
             self.pstr_site(m, &cv, |j| pstrs::PSlot::M(t, base + j));
         }
-        let mut recv_fs: Option<Vec<Feed>> = None;
-        if !is_static {
-            match (recv, ptypes.first().copied().flatten()) {
-                (Recv::Exact(r), _) => {
-                    self.add_to(Node::P(t, 0), &TypeSet::exact(r));
-                    recv_fs = Some(vec![Feed::S(TypeSet::exact(r))]);
-                }
-                (Recv::Feeds(fs), Some(pt)) => {
-                    self.feed(&fs, Node::P(t, 0), pt);
-                    recv_fs = Some(fs);
-                }
-                _ => {}
-            }
-        }
+        let recv_fs = self.edge_this(t, recv);
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);
             }
         }
+        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+    }
+
+    /// 已对 (m, off, t) 以同一实参 a（同一实参值）完整接边后，再派发新接收者 r：
+    /// 调用关系、形参常量、字符串常量与实参边都已接上且不随接收者变化，只接接收者及依赖接收者的结果部分
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn edge_more(&mut self, m: usize, off: u32, t: usize, r: u32, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+        let recv_fs = self.edge_this(t, Recv::Exact(r));
+        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+    }
+
+    /// 接收者流入被调方 this，返回本调用点的接收者来源
+    fn edge_this(&mut self, t: usize, recv: Recv) -> Option<Vec<Feed>> {
+        if self.methods[t].is_static {
+            return None;
+        }
+        match (recv, self.methods[t].ptypes.first().copied().flatten()) {
+            (Recv::Exact(r), _) => {
+                self.add_to(Node::P(t, 0), &TypeSet::exact(r));
+                Some(vec![Feed::S(TypeSet::exact(r))])
+            }
+            (Recv::Feeds(fs), Some(pt)) => {
+                self.feed(&fs, Node::P(t, 0), pt);
+                Some(fs)
+            }
+            _ => None,
+        }
+    }
+
+    /// 手写调用点与按调用点建模的返回值
+    #[allow(clippy::too_many_arguments)]
+    fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+        let is_static = self.methods[t].is_static;
+        let base = usize::from(!is_static);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
         }
@@ -441,5 +475,22 @@ impl<'a> Engine<'a> {
         if cur.is_some() {
             self.invalidate(t, Why::ParamConst);
         }
+    }
+}
+
+/// 调用描述中的属主是数组类型（`[` 开头的描述符形式）
+fn is_array_type(owner: &str) -> bool {
+    owner.starts_with('[')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_array_type;
+
+    #[test]
+    fn array_owners_are_recognized_by_descriptor_form() {
+        assert!(is_array_type("[Lp/C;"));
+        assert!(is_array_type("[[I"));
+        assert!(!is_array_type("p/C"));
     }
 }

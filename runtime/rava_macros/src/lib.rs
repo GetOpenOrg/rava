@@ -2,6 +2,7 @@ use proc_macro::TokenStream;
 
 mod block;
 mod native_attr;
+mod opaque;
 mod try_macro;
 mod upcast;
 
@@ -12,6 +13,14 @@ mod upcast;
 #[proc_macro]
 pub fn java_class(input: TokenStream) -> TokenStream {
     block::expand(input.into()).into()
+}
+
+/// `java_class_opaque! { #[binary_name = ".."] pub struct X<T>: Anc<_>, Iface; }` — L1（名字级）类型的
+/// 不透明声明：只保留类型身份（Object 引用载体 + checkcast + 祖先 upcast），无字段 / 方法 / vtable。
+/// 宏名以 `java_class` 开头：生成文件标记（`rava_macros::java_class`）同时覆盖两种形态。
+#[proc_macro]
+pub fn java_class_opaque(input: TokenStream) -> TokenStream {
+    opaque::expand(input.into()).into()
 }
 
 /// `iface_upcasts! { impl<E> C<E> => I<Object>, J<Object> }` — 类实例 → 擦除接口载体视图的协变

@@ -368,6 +368,11 @@ impl Manifest {
     }
 
     /// 该类的共置手写在分析期视为已删除（`--release-bytecode`）
+    /// 命令行追加的放行项（`--release`）与按字节码建模的手写项（`--release-bytecode`）：跨运行缓存键的一项
+    pub fn cli_overrides(&self) -> (&[String], &[String]) {
+        (&self.release, &self.hw_dropped)
+    }
+
     pub fn hw_dropped(&self, cls: &str) -> bool {
         self.hw_dropped.iter().any(|r| entry_matches(r, cls))
     }

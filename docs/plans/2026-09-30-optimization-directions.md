@@ -31,13 +31,14 @@
 | 闭包精度 | 动态对照翻译域漏覆盖 | 0 | 0（底线） |
 | 闭包精度 | 已登记的精度缺口（§三.1 清单） | 三期 9 项完成（G6 按实测修订目标），✅ 已合入 d8212bee（2026-10-01） | 0 |
 | 闭包精度 | 无运行期依据的可达链（如 Digester 的 VarHandle 访问模式链，约 +1045 方法） | 存在 | 0 |
-| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 6.8 s（批量排空 + 精度三期，均已合入） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
-| 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 2.3–2.8 GB | ≤ 1 GB |
-| 闭包分析效率 | 跨测试缓存命中时单测试墙钟 | 无缓存 | ≤ 2 s |
+| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 冷算 5.1 s（P6 前）；P7 三项后分段 analyze 420 + aux 293 + sites 947 + flows 997 + process 1057 ms（d842653d） | ≤ 10 s（HelloWorld ≤ 0.5 s）；DeepCopy 冷算 ≤ 2 s |
+| 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 652 MB（P4，✅ 已达标） | ≤ 1 GB |
+| 闭包分析效率 | 同输入重跑（缓存命中）单测试墙钟 | P6 整体结果缓存：分析段 24–33 ms，DeepCopy `--no-run` 1.12 s（✅ 已达标） | ≤ 2 s |
 | 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB → 并行发射 1.02 s / 396 MB（DeepCopy 热写出；冷写出 1.08 s） | ≤ 2 s / ≤ 500 MB |
 | 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
 | 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
+| 生成代码运行性能 | 计算密集用例运行段（debug 构建，服务器；标杆 LynchBell） | > 300 s（`RUN_TIMEOUT` 超时，2026-10-01 分布式跑批） | ≤ 30 s，且不放宽 `RUN_TIMEOUT` |
 
 ## 三、执行线
 
@@ -60,6 +61,7 @@
 ### 2. 闭包分析效率（性能结构改造，分支 `closure-perf2` → `closure-mono`）
 
 - P0–P2 已合入（5b95675a），4 例 closure.json 逐字节一致，DeepCopy user 351 s → 130 s。
+- 状态（2026-10-01，main d842653d）：P0–P4、P6 ✅；P7 进行中（一 / 二 / 三已合入：站点重跑常数开销、记忆条目精确作废、站点只处理新增接收者 + 字段读汇集节点；剩写站点分发节点、hub 路径常数）；P5 flows、P8 process 与工程化待做。分段数据见性能计划 §4.8。
 - 结构性改造（`closure-perf2`）与顺序依赖修复 + 批量排空（`closure-mono`，6e0849c6）✅ 已合入：集合结果与处理顺序无关（`--flow-batch 1/7/64 × --hash-seed` 矩阵一致），DeepCopy 59.5 s → 41.7 s。待做：P3、P4、W→E 扇出，P5–P8。
 - P0 剖析推翻原假设：方法整体重分析不到 1%。真正的热点是类型流传播，手写调用点数组读写的双向扇出占全部边的 82%，其中 99.7% 的传播不带来新类型。
 - 按 D3 放宽不变量后做结构性改造：扇出边经共享节点、按调用图 SCC 排序；然后按数据推进 P3 上下文共享、P4 内存；P5–P8（预算降级、跨测试缓存、并行、工程化）随后。
@@ -77,7 +79,36 @@
   - 按类并行发射：✅ 已做（2a800b4b），DeepCopy 冷写出 2.10 → 1.08 s，峰值 RSS 314 → 396 MB，输出与串行逐字节一致。
   - 以上 ✅ 已合入 rust-closure-analyzer（f6d80103，e2e 抽查 7 例全过，二进制约 −40%）。待做：N6 剩余串行段（约 460 ms）、rustc 分阶段测量（拆 crate 方案 §五 第 1 步）。
 - `emitter-final`（生成器补齐）✅ 已合入（ef1daf34，e2e 抽查 10 例全过，含 DeepCopy / CollectorsDemo 修复）：S1–S6 清零、CLI 选项与审计补齐、缺省路径不再导入 `codegen`（[`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)）；删除清单见 [`2026-10-01-python-generator-deletion.md`](2026-10-01-python-generator-deletion.md)。
+- 拆 crate S4（声明层 / 实现层，`emitter-perf2`）✅ 已合入（55c5dacc，e2e 抽查 11 例全过）；未达标项：Digester 声明 crate 峰值 4.51 GB（目标 ≤ 2 GB）、HelloWorld 构建 15.9 s（目标 ≤ 12 s），由 S5（声明层剥体）继续，见生成器效率计划 §7.5–7.7。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
+
+### 4. 生成代码运行性能（任务 R1，待排期）
+
+用户 2026-10-01 决定：运行超时的算法用例，只要 Java 写法合法，就不改测试文件，也不放宽 `RUN_TIMEOUT`（300 s）。超时按性能问题处理，归入本线，原用例作为验收用例。
+
+**标杆用例**：`tests/e2e/23_algorithms/LynchBell.java`（期望输出 `Number found: 9867312`）。
+
+- **负载**：`i` 从 98764321 递减到 9867312，共约 8890 万次迭代。每次迭代执行 `String.valueOf(i)`，新分配一个 8 位字符串，赋给静态字段 `s`；`uniqueDigits` 再在双重循环里反复调用 `s.length()` 和 `s.charAt()`。
+- **JVM**：JIT 内联加逃逸分析后，每次迭代在几十纳秒量级，整程序几秒完成。
+- **rava 现状**：分布式跑批以 debug 构建运行，没有内联；运行段超过 300 s 超时。按代码逻辑，热点有四处：
+  1. `charAt` / `length` 逐层走字节码翻译链（`isLatin1` → `StringLatin1.charAt` → `checkIndex`），每层都是一次独立调用；
+  2. 每次访问静态字段 `s` 都要做类初始化检查；
+  3. `String.valueOf` 每次都分配 `byte[]` 和 `String`，带 Rc 引用计数；
+  4. 实例调用都经过 vtable 分派。
+- **方向**：在生成器侧降低热路径的调用与检查成本，例如对已证明完成初始化的类省去重复的初始化检查、final / 私有 / 静态调用直接调用并标注内联、热点小方法生成 `#[inline]`、减少临时对象分配。具体手段由实测剖析决定。约束：不手写替代 JDK 方法，性能替换不是手写理由（handwritten-boundary.md §一）。
+- **验收**：LynchBell 在 debug 构建下运行段 ≤ 30 s，输出与 JVM 一致；同时 e2e 不回归。后续发现的同类超时用例并入本任务，作为附加验收用例。
+
+**附加验收用例**（2026-10-01 分布式跑批运行段 > 300 s 超时；三例写法都合法，JVM 上都能正常结束）：
+
+| 用例 | 负载（按代码逻辑） | 主要热点 |
+|---|---|---|
+| `23_algorithms/Factorion.java` | 4 种进制 × 149 万次迭代，约 600 万次 | 每次迭代：`String.valueOf` + `Integer.parseInt` + `fromDeci`（StringBuilder 追加、`reverse`、`new String`）；每位数字再调一次 `String.valueOf(char)` + `parseInt` + 最深 12 层的递归 `factorialRec`。合计约数亿次小调用和数千万次字符串分配 |
+| `23_algorithms/FWord.java` | 第 37 个 Fibonacci 词长 2416 万字符，37 个词累计约 6300 万字符 | `entropy` 对每个字符执行 `HashMap<Character, Integer>` 的 `containsKey` / `get` / `put`，涉及装箱、哈希、equals；拼接也要复制同样量级的字符 |
+| `23_algorithms/FibonacciMatrixExponentiation.java` | `fib(10^7)` 约 209 万位十进制（约 690 万比特） | 大数 `BigInteger.multiply`（Toom-Cook 路径）对 `int[]` 做大量逐元素运算；`toString` 走递归进制转换。debug 构建下每次数组访问都有越界检查、无向量化。JVM 上也要秒级 |
+| `23_algorithms/IQPuzzle.java` | 15 孔三角跳棋，15 个起始空位逐一做全树深度优先搜索，遍历全部合法走法序列（千万级节点） | 每个节点 `new Puzzle`、复制 `boolean[16]`，并逐个 `new Move` 复制走法历史（最深 13 步）；`getValidMoves` 每次新建 `ArrayList`，并查 `HashMap<Integer, List<Move>>`（装箱）；`Stack` 进出。合计上亿次对象分配和虚调用 |
+| `23_algorithms/FourIsTheNumberOfLetters.java` | 依次生成 201、10³ … 10⁷ 个词的自指句子，累计约 1111 万词 | 每个句段调用 `numToString` 递归拼接，`toOrdinal` 做 `split` / `HashMap` 查询 / `substring`；每个词做两次 `replace`、一次 `split`。合计数百万次字符串分配与拷贝 |
+
+终态：六例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
 
 ## 四、待用户决策
 

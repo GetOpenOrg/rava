@@ -261,6 +261,7 @@ pub(super) fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> Method
             extra.vtable_name = slot_name;
         }
         extra.vtable_erasure = override_vtable_erasure(cx.ctx, cx.ci, m, &extra.virtual_in);
+        extra.slot_stub = cx.ctx.slot_stub(m, cx.ci);
     }
     extra
 }

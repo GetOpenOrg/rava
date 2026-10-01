@@ -43,6 +43,8 @@ impl<'a> Engine<'a> {
                 hw_fns: Vec::new(),
                 ctx: NOCTX,
                 ret_model: RetModel::Plain,
+                aseq: 0,
+                applied_seq: 0,
             },
         );
         self.mbase.entry(key).or_insert(idx);

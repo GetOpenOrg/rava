@@ -87,42 +87,53 @@ fn param_of(v: &V) -> Option<usize> {
 impl Ctx<'_> {
     /// 由调用实参派生的结果：值相等判定、属性表持有方法、属性读取
     pub(super) fn derived_result(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
-        let k = m.to_string();
-        if self.man.is_value_equals(&k) || c.target.as_ref().is_some_and(|t| self.man.is_value_equals(&t.to_string())) {
+        if c.value_eq {
             return match args {
                 [V::Str(a), V::Str(b)] => Some(Ret::Value(V::Int((a == b) as i32))),
                 [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
                 _ => None,
             };
         }
-        let op = self.man.string_op(&k).or_else(|| c.target.as_ref().and_then(|t| self.man.string_op(&t.to_string())));
-        if let Some(op) = op {
+        if let Some(op) = c.str_op {
             return string_op(op, args).map(Ret::Value);
         }
         if self.man.sysprops.is_empty() {
             return None;
         }
-        if self.man.sysprops.is_holder(&k) {
+        if c.holder {
             let ret = parse_method(&m.desc).and_then(|md| md.ret).map(|t| t.descriptor())?;
             return Some(Ret::Value(self.sysprops_ref(&ret)));
         }
         if !args.iter().any(|a| matches!(a, V::Str(_))) {
             return None;
         }
-        let spec = self.read_spec(opcode, m, iface, Some(c))?;
+        let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
         self.prop_read(me, &spec, args)
     }
 
+    /// 清单属性读取锚点（成员键）的读取形态
+    pub(super) fn reader_spec(&self, k: &str) -> Option<PropSum> {
+        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) })
+    }
+
     /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
-    pub(super) fn read_spec(&self, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
-        if let Some(r) = self.man.sysprops.reader(&m.to_string()) {
-            return Some(PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) });
-        }
+    /// me = 外层被分析的方法（读取摘要的输入登记给它；辅助分析 / 引擎侧查询为 None）
+    pub(super) fn read_spec(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
         let c = match c {
-            Some(c) => c.target.clone(),
-            None => self.call_info(opcode, m, iface).target.clone(),
+            Some(c) => {
+                if c.reader.is_some() {
+                    return c.reader.clone();
+                }
+                c.target.clone()
+            }
+            None => {
+                if let Some(r) = self.reader_spec(&m.to_string()) {
+                    return Some(r);
+                }
+                self.call_info(opcode, m, iface).target.clone()
+            }
         }?;
-        self.prop_summary(&c)
+        self.prop_summary(me, &c)
     }
 
     /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）
@@ -131,9 +142,7 @@ impl Ctx<'_> {
             return None;
         }
         let V::Str(key) = args.get(spec.key)? else { return None };
-        if let Some(me) = me {
-            self.pdeps.borrow_mut().insert(me);
-        }
+        self.note_props(me);
         {
             let u = self.punstable.borrow();
             if u.all || u.keys.contains(&**key) {
@@ -157,17 +166,21 @@ impl Ctx<'_> {
 
     /// 字节码方法的读取摘要：全部返回值恰为某读取点的结果，读取键为本方法形参、缺省值为形参或常量
     /// （与调用点无关的独立分析，按成员缓存）
-    fn prop_summary(&self, t: &MemberRef) -> Option<PropSum> {
-        if let Some(s) = self.psums.borrow().get(t) {
-            return s.clone();
+    fn prop_summary(&self, me: Option<usize>, t: &MemberRef) -> Option<PropSum> {
+        let hit = self.psums.borrow().get(t).cloned();
+        if let Some((s, inp)) = hit {
+            self.memo_use(me, &inp);
+            return s;
         }
         if !t.desc.ends_with(';') {
             return None;
         }
         let frame = self.memo_enter(format!("psum:{t}"), true)?;
         let s = self.compute_summary(t);
-        if self.memo_leave(frame) {
-            self.psums.borrow_mut().insert(t.clone(), s.clone());
+        let (clean, inp) = self.memo_leave(frame);
+        self.memo_use(me, &inp);
+        if clean {
+            self.psums.borrow_mut().insert(t.clone(), (s.clone(), inp));
         }
         s
     }
@@ -198,7 +211,7 @@ impl Ctx<'_> {
                     _ => None,
                 });
                 let (opc, mref, iface, args) = inv?;
-                let inner = self.read_spec(opc, mref, iface, None)?;
+                let inner = self.read_spec(None, opc, mref, iface, None)?;
                 let sum = Self::compose(&inner, args)?;
                 if out.as_ref().is_some_and(|x| *x != sum) {
                     return None;
@@ -230,12 +243,12 @@ impl Ctx<'_> {
 impl Ctx<'_> {
     /// 属性表对象作调用的第 i 个实参不构成逃逸：只读查询 / 读取入口的接收者，
     /// 或唯一字节码目标上的只读形参（该形参在被调方法里只流向同类不逃逸的用途）
-    fn sysprops_arg_ok(&self, opcode: u8, mref: &MemberRef, iface: bool, i: usize) -> bool {
+    fn sysprops_arg_ok(&self, me: Option<usize>, opcode: u8, mref: &MemberRef, iface: bool, i: usize) -> bool {
         let k = mref.to_string();
         if self.man.sysprops.writer(&k).is_some() {
             return false;
         }
-        if i == 0 && (self.man.sysprops.is_query(&k) || self.read_spec(opcode, mref, iface, None).is_some_and(|s| s.receiver)) {
+        if i == 0 && (self.man.sysprops.is_query(&k) || self.read_spec(None, opcode, mref, iface, None).is_some_and(|s| s.receiver)) {
             return true;
         }
         let static_call = opcode == classfile::op::INVOKESTATIC;
@@ -243,21 +256,25 @@ impl Ctx<'_> {
             return false;
         }
         match self.call_info(opcode, mref, iface).target.clone() {
-            Some(t) => self.sysprops_readonly(&t, i),
+            Some(t) => self.sysprops_readonly(me, &t, i),
             None => false,
         }
     }
 
     /// 字节码方法第 i 个形参（含接收者序号）为属性表对象时，方法体内不改写、不逃逸（按成员缓存；递归按逃逸）
-    fn sysprops_readonly(&self, t: &MemberRef, i: usize) -> bool {
+    fn sysprops_readonly(&self, me: Option<usize>, t: &MemberRef, i: usize) -> bool {
         let ck = (t.clone(), i);
-        if let Some(r) = self.preadonly.borrow().get(&ck) {
-            return *r;
+        let hit = self.preadonly.borrow().get(&ck).cloned();
+        if let Some((r, inp)) = hit {
+            self.memo_use(me, &inp);
+            return r;
         }
         let Some(frame) = self.memo_enter(format!("pro:{t}#{i}"), true) else { return false };
         let r = self.compute_readonly(t, i);
-        if self.memo_leave(frame) {
-            self.preadonly.borrow_mut().insert(ck, r);
+        let (clean, inp) = self.memo_leave(frame);
+        self.memo_use(me, &inp);
+        if clean {
+            self.preadonly.borrow_mut().insert(ck, (r, inp));
         }
         r
     }
@@ -281,7 +298,7 @@ impl Ctx<'_> {
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| may_be_sysprops(v))
-                .all(|(j, _)| self.sysprops_arg_ok(*opcode, mref, *iface, j)),
+                .all(|(j, _)| self.sysprops_arg_ok(None, *opcode, mref, *iface, j)),
             Event::Field { value, .. } => !value.as_ref().is_some_and(may_be_sysprops),
             Event::ArrayStore { value, .. } => !may_be_sysprops(value),
             Event::Return(value) => !may_be_sysprops(value),
@@ -318,7 +335,7 @@ impl Engine<'_> {
                         keys.push(None);
                     }
                     for (i, _) in args.iter().enumerate().filter(|(_, v)| may_be_sysprops(v)) {
-                        if self.ctx.sysprops_arg_ok(*opcode, mref, *iface, i) {
+                        if self.ctx.sysprops_arg_ok(Some(m), *opcode, mref, *iface, i) {
                             continue;
                         }
                         let w = self.man.sysprops.writer(&k).filter(|_| i == 0);
@@ -436,13 +453,25 @@ impl Engine<'_> {
         if !grew {
             return;
         }
-        self.ctx.consts.borrow_mut().clear();
-        self.ctx.objs.borrow_mut().clear();
-        self.ctx.psums.borrow_mut().clear();
-        self.ctx.preadonly.borrow_mut().clear();
-        self.ctx.cevals.borrow_mut().clear();
-        let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
-        deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
+        // 只作废答复可能变化的记忆（查询过不折叠集合，或读过的字段此后已放开）：其余记忆的输入未变，
+        // 重算结果相同。取用过作废记忆的方法经条目编号失效；属性读者（含取用过不可记忆结果的方法）全部失效
+        let ctx = &self.ctx;
+        let mut open: HashMap<MemberRef, bool> = HashMap::default();
+        let mut ids: BTreeSet<u32> = BTreeSet::new();
+        let mut keep = |inp: &super::memo::Inputs| {
+            let stale = ctx.memo_stale(inp, &mut open);
+            if stale {
+                ids.insert(inp.id);
+            }
+            !stale
+        };
+        ctx.consts.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.objs.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.cevals.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        let mut deps: BTreeSet<usize> = std::mem::take(&mut *ctx.pdeps.borrow_mut());
+        deps.extend(ctx.memo_consumers(ids));
         self.invalidate_all(Some(deps), Why::Sysprops);
     }
 }

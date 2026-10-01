@@ -241,8 +241,8 @@ impl Unsafe {
 
     /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议
     /// 下「未初始化」只在首次主动使用前可观察——对查询方恒「已初始化」
-    /// （false）等价于把初始化时机推迟到真实首次使用，与 ensureClassInitialized
-    /// 的 no-op 语义自洽。
+    /// （false）等价于把初始化时机推迟到真实首次使用（静态字段访问器入口自带
+    /// `__class_init` 触发）。
     #[jvm_boundary]
     pub fn shouldBeInitialized(&self, _c: Class) -> Result<bool> {
         Ok(false)

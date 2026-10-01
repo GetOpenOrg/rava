@@ -25,7 +25,7 @@ impl<'a> Engine<'a> {
                 });
                 let pending = match parent {
                     Some(p) => rs.iter().copied().filter(|x| !self.hubs[p as usize].recvs.contains(x)).collect(),
-                    None => rs.clone(),
+                    None => rs.to_vec(),
                 };
                 (None, pending, parent)
             }
@@ -47,6 +47,8 @@ impl<'a> Engine<'a> {
             lambdas,
             special,
             links: BTreeMap::new(),
+            link_seq: 0,
+            edged: HashSet::default(),
         });
         self.hub_ids.insert(key, h);
         if let Some(o) = open {
@@ -108,7 +110,9 @@ impl<'a> Engine<'a> {
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);
         let hub = &mut self.hubs[h as usize];
-        hub.links.insert((m, off), (a.clone(), res, cv));
+        let id = hub.link_seq;
+        hub.link_seq += 1;
+        hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
         let replay = self.methods[m].kind == Kind::Bytecode;
         for r in lambdas {
@@ -118,18 +122,31 @@ impl<'a> Engine<'a> {
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
         }
         for (t, rs) in special {
-            if replay {
-                let sent = self.hub_ssent.entry(m).or_default().entry((off, t)).or_default();
-                if rs.iter().all(|r| sent.contains(r)) {
-                    continue;
-                }
-                sent.extend(rs.iter().copied());
+            if replay && self.ancestor_sent(m, off, h, t, &rs) {
+                continue;
             }
             let recv = TypeSet { classes: rs.into_iter().collect(), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+            self.hubs[h as usize].edged.insert((id, t));
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
         self.hub_expand(h);
+    }
+
+    /// 调用点 (m, off) 已接入枢纽 h 的某个祖先、且该祖先已把目标 t 的接收者 rs 全部送达：重放恒等。
+    /// 精确集合枢纽在首个调用点接入时一次展开、其后接收者不再增长，子枢纽的接收者表以父枢纽的为前缀，
+    /// 故已接入的祖先的接收者表即本调用点经它收到的全部接收者
+    fn ancestor_sent(&self, m: usize, off: u32, h: u32, t: usize, rs: &[u32]) -> bool {
+        let Some(linked) = self.hub_linked.get(&m) else { return false };
+        let mut p = self.hubs[h as usize].parent;
+        while let Some(a) = p {
+            if linked.contains(&(off, a)) {
+                let ps = self.hubs[a as usize].special.get(&t).map_or(&[][..], |v| &v[..]);
+                return rs.len() <= ps.len() && (ps.starts_with(rs) || rs.iter().all(|r| ps.contains(r)));
+            }
+            p = self.hubs[a as usize].parent;
+        }
+        false
     }
 
     /// 实参常量并入枢纽（沿父链下传）；变化时重新并入各中转目标
@@ -205,18 +222,19 @@ impl<'a> Engine<'a> {
             return;
         }
         let site = self.hubs[h as usize].site.clone();
-        let links: Vec<_> = self.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect();
+        // 调用点表只在逐调用点派发时用到（经枢纽中转的目标不逐调用点接边）
+        let links = |e: &Self| -> Vec<_> { e.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect() };
         let ret = self.hubs[h as usize].ret;
         // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             self.hubs[h as usize].lambdas.push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links {
+            for ((m, off), l) in links(self) {
                 if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                     continue;
                 }
-                self.call_vals = cv;
-                self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
+                self.call_vals = l.cv.clone();
+                self.dispatch_one(m, off, r, &site, &l.a, ret, l.res, NOCTX);
             }
             self.call_vals = saved;
             return;
@@ -229,10 +247,11 @@ impl<'a> Engine<'a> {
         };
         let (o, n, d) = sel.key();
         let via = self.hubs[h as usize].via.clone();
-        let cx = self.ctx_of(r);
+        let cx = self.recv_ctx(r);
         let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
         if self.vm_hubs.contains(&h) {
             // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
+            self.vm_targets.insert(t);
             self.add_to(Node::P(t, 0), &TypeSet::exact(r));
             self.open_params(t);
             return;
@@ -244,9 +263,15 @@ impl<'a> Engine<'a> {
         if !self.hub_plain(t) {
             self.hubs[h as usize].special.entry(t).or_default().push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links {
-                self.call_vals = cv;
-                self.edge(m, off, t, Recv::Exact(r), &a, ret, res);
+            for ((m, off), l) in links(self) {
+                // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
+                self.call_vals = l.cv.clone();
+                if self.hubs[h as usize].edged.contains(&(l.id, t)) {
+                    self.edge_more(m, off, t, r, &l.a, ret, l.res);
+                    continue;
+                }
+                self.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res);
+                self.hubs[h as usize].edged.insert((l.id, t));
             }
             self.call_vals = saved;
             return;

@@ -96,12 +96,16 @@ pub struct EmitInput {
     pub jdk_classes: Vec<String>,
     /// 调用链：已解析方法 ∪ 继承槽位需求的调用点符号键 ∪ `<clinit>`
     pub visited: BTreeSet<MethodKey>,
-    /// 只按类型层级入闭包的类
-    pub field_stubs: BTreeSet<String>,
+    /// L1（名字级）类：只发不透明类型（`java_class_opaque!`），无字段 / 方法 / vtable
+    pub opaque: BTreeSet<String>,
     pub reflect: ReflectFacts,
     pub annotation_enum_seeds: Vec<String>,
     /// 按类镜像强制初始化的目标类（需类初始化钩子）
     pub mirror_init_classes: Vec<String>,
+    /// 经虚分派到达的实现（分析器 `dispatched`）：vtable 槽条目对未派发到的实现发存根（C3 第 5 项）
+    pub dispatched: BTreeSet<MethodKey>,
+    /// 已实例化的类（分析器 `instantiated`）：槽是否保留按实例化类实际选中的实现判定
+    pub instantiated: BTreeSet<String>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -154,25 +158,28 @@ fn declares(cf: &ClassFile, name: &str, desc: &str) -> bool {
     cf.methods.iter().any(|m| m.name == name && m.desc == desc)
 }
 
-/// 闭包类 → (非用户域的可装载类序, 类型层级类, 告警)
+/// 闭包类 → (非用户域的可装载类序, L1 类（含用户类）, 告警)
 fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Arc<ClassFile>>, BTreeSet<String>) {
     let users: BTreeSet<&str> = inp.user_classes.iter().map(String::as_str).collect();
     let mut out = Vec::new();
-    let mut field_stubs = BTreeSet::new();
+    let mut opaque = BTreeSet::new();
     for c in &inp.facts.classes {
-        if c.domain == Domain::Root || (c.domain == Domain::User && users.contains(c.name.as_str())) {
+        if c.domain == Domain::Root {
+            continue;
+        }
+        if c.level == Level::Type {
+            opaque.insert(c.name.clone());
+        }
+        if c.domain == Domain::User && users.contains(c.name.as_str()) {
             continue;
         }
         let Some(cf) = load(inp.cp, &c.name) else {
             warnings.push(format!("闭包类无法装载：{}", c.name));
             continue;
         };
-        if c.level == Level::Type {
-            field_stubs.insert(c.name.clone());
-        }
         out.push(cf);
     }
-    (out, field_stubs)
+    (out, opaque)
 }
 
 fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
@@ -354,7 +361,7 @@ impl<'a> BuildInput<'a> {
             since = now;
         };
         let mut warnings = Vec::new();
-        let (closure, field_stubs) = closure_classes(self, &mut warnings);
+        let (closure, opaque) = closure_classes(self, &mut warnings);
         let visited = visited_of(self);
         lap("input.closure");
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
@@ -379,10 +386,12 @@ impl<'a> BuildInput<'a> {
             lib_crates,
             jdk_classes,
             visited,
-            field_stubs,
+            opaque,
             reflect,
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
             mirror_init_classes: f.seeds.mirror_inits.clone(),
+            dispatched: f.dispatched.iter().map(key_of).collect(),
+            instantiated: f.instantiated.iter().cloned().collect(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),
             handwritten,

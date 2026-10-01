@@ -3,15 +3,6 @@
 use super::*;
 
 impl<'a> Engine<'a> {
-    /// 接收者对应的克隆上下文
-    pub(super) fn ctx_of(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) {
-            r
-        } else {
-            NOCTX
-        }
-    }
-
     pub(super) fn on_g_grow(&mut self, id: u32) {
         let ts: Vec<u32> = self.g_sub.keys().copied().collect();
         for t in ts {
@@ -25,6 +16,7 @@ impl<'a> Engine<'a> {
         }
         self.hubs_grow(id);
         self.reopen(id);
+        self.vm_hooks_on_alloc(id);
         let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {

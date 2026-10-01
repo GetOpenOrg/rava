@@ -55,7 +55,7 @@ impl Class {
     ///
     /// `getName()` 返回 Java 形式的二进制名：斜线换点（`java/util/List` →
     /// `java.util.List`），数组类型保持 JVM 描述符形态（`[Ljava.lang.String;`）。
-    /// isAssignableFrom 的层次查询在运行时经 build.rs 生成的层次表进行，
+    /// isAssignableFrom 的层次查询在运行时经 java_meta 生成的层次表进行，
     /// 此处不再携带/登记超类型数据。
     pub fn for_class(binary_name: String) -> Class {
         crate::__process_static! {
@@ -103,10 +103,10 @@ impl Class {
 
     /// 反射族内部：按字段名查本类声明元数据（描述符 / static 标志 / 修饰位 /
     /// ConstantValue 整数值）。getDeclaredField 与 Field.get/set（reflect 邻域
-    /// 伴生 field_impl.rs）共用同一张 build.rs 字段表；未声明 → None。
+    /// 伴生 field_impl.rs）共用同一张 java_meta 字段表；未声明 → None。
     pub fn __declared_field_meta(&self, name: &str) -> Option<(&'static str, bool, i32, Option<i64>)> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        __fields::CLASS_FIELDS.iter()
+        crate::meta::class_fields().iter()
             .find(|(n, _)| *n == cls_key)
             .and_then(|(_, fs)| fs.iter().find(|f| f.name == name))
             .map(|f| (f.descriptor, f.is_static, f.modifiers, f.constant))
@@ -119,7 +119,7 @@ impl Class {
     /// （method_handle_natives_impl.rs，MemberName 解析内核）；未声明 → None。
     pub fn __declared_method_meta(&self, name: &str, descriptor: &str) -> Option<(i32, bool, bool, bool)> {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        __methods::CLASS_METHODS.iter()
+        crate::meta::class_methods().iter()
             .find(|(n, _)| *n == cls_key)
             .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
             .map(|m| (m.modifiers, m.is_static, m.is_native, m.is_abstract))
@@ -127,9 +127,9 @@ impl Class {
 
     /// 反射族内部：本类声明方法行（构造器/类初始化器行含在内，消费方按
     /// JDK 语义过滤）。消费方：getDeclaredMethod / getDeclaredMethods。
-    fn __declared_method_rows(&self) -> &'static [__methods::MethodMeta] {
+    fn __declared_method_rows(&self) -> &'static [crate::meta::MethodMeta] {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
-        __methods::CLASS_METHODS.iter()
+        crate::meta::class_methods().iter()
             .find(|(n, _)| *n == cls_key)
             .map(|(_, ms)| *ms)
             .unwrap_or(&[])
@@ -155,7 +155,7 @@ impl Class {
     /// 方法元数据行 → Method（查询即构造）。parameterTypes / returnType 从
     /// 描述符还原（class_for_descriptor 的数组形态：`[...` 直接 for_class），
     /// exceptionTypes 从 throws 子句列表还原。
-    fn __method_from_meta(clazz: Class, meta: &'static __methods::MethodMeta, slot: i32) -> crate::java::lang::reflect::Method {
+    fn __method_from_meta(clazz: Class, meta: &'static crate::meta::MethodMeta, slot: i32) -> crate::java::lang::reflect::Method {
         let params: Vec<Class> = descriptor_params(meta.descriptor)
             .into_iter()
             .map(|p| class_for_descriptor(&p))
@@ -198,11 +198,11 @@ impl Class {
         if self_name == cls_name {
             return Ok(true);
         }
-        // cls 的超类型闭包（含自身）包含 self 即可赋值。层次表由 build.rs 从
+        // cls 的超类型闭包（含自身）包含 self 即可赋值。层次表由 java_meta 从
         // java_class! 的 all_supertypes 属性生成（class 元数据的唯一表达）；
         // 未生成/接口载体的 cls 不在表中，退化为同名相等（与 JVM 语义的差异
         // 仅影响"参数侧从未进入闭包"的场景）。
-        Ok(__hierarchy::CLASS_HIERARCHY.iter()
+        Ok(crate::meta::class_hierarchy().iter()
             .find(|(n, _)| *n == cls_name)
             .map(|(_, supers)| supers.iter().any(|s| *s == self_name))
             .unwrap_or(false))
@@ -211,7 +211,7 @@ impl Class {
     /// 按 binary name（斜线形态；数组为描述符形态 `[I`、`[Ljava/lang/String;`）判定
     /// 「source 类型的值可赋给 target 类型」（JLS §5.2 引用赋值、§4.10.3 数组协变）：
     /// 同名；数组对数组按组件递归（基本组件须相同）；数组可赋给 Object / Cloneable /
-    /// Serializable；类经层次表（build.rs 生成的超类型闭包）。数组运行时类判定
+    /// Serializable；类经层次表（java_meta 生成的超类型闭包）。数组运行时类判定
     /// （反射创建数组的组件标签，FS-R6）与 `isAssignableFrom` 同一真源。
     pub fn __name_assignable(target: &str, source: &str) -> bool {
         if target == source || target == "java/lang/Object" {
@@ -233,7 +233,7 @@ impl Class {
                 _ => tgt_elem == src_elem, // 基本组件：描述符字符相同
             };
         }
-        if __hierarchy::CLASS_HIERARCHY.iter()
+        if crate::meta::class_hierarchy().iter()
             .find(|(n, _)| *n == source)
             .map(|(_, supers)| supers.iter().any(|s| *s == target))
             .unwrap_or(false)
@@ -248,7 +248,7 @@ impl Class {
             if !seen.insert(cur) {
                 continue;
             }
-            if let Some((_, ifaces)) = __interfaces::CLASS_INTERFACES.iter().find(|(n, _)| *n == cur) {
+            if let Some((_, ifaces)) = crate::meta::class_interfaces().iter().find(|(n, _)| *n == cur) {
                 for i in ifaces.iter() {
                     if *i == target {
                         return true;
@@ -263,13 +263,13 @@ impl Class {
 
     /// native `Class.getSuperclass()`：直接父类的 Class 对象。
     ///
-    /// 查询经 build.rs 从 `java_class!` 的 super_class 属性生成的直接父类表
+    /// 查询经 java_meta 从 `java_class!` 的 super_class 属性生成的直接父类表
     /// （与 isAssignableFrom 的层次表同源）。Object 自身 / 接口 / 基本类型 /
     /// 未登记类（闭包外、数组）→ null（JLS 对接口与 Object 返回 null 的语义）。
     #[jvm_native]
     pub fn getSuperclass(&self) -> Result<Class> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
-        match __direct_super::CLASS_DIRECT_SUPER.iter().find(|(n, _)| *n == name) {
+        match crate::meta::class_direct_super().iter().find(|(n, _)| *n == name) {
             // for_class 的缓存键是斜线形态（与 ldc 类字面量同一调用形态）——身份语义
             //（`zuper == Enum.class`）依赖同一缓存条目
             Some((_, sup)) => Ok(Class::for_class(String::from(*sup))),
@@ -286,7 +286,7 @@ impl Class {
     }
 
     /// native `Class.getModifiers()`：类修饰符位集（Modifier 协议）。
-    /// 查询经 build.rs 从 java_class! 的 access/super_class 属性生成的修饰符
+    /// 查询经 java_meta 从 java_class! 的 access/super_class 属性生成的修饰符
     /// 表；未登记形态按 JVM 语义：数组/基本类型类恒 PUBLIC|FINAL|ABSTRACT，
     /// 其余（闭包外类）同款位集（语料合法程序跨包引用必经 public）。
     #[jvm_native]
@@ -295,19 +295,19 @@ impl Class {
         if name.starts_with('[') {
             return Ok(0x0001 | 0x0010 | 0x0400);
         }
-        Ok(__modifiers::CLASS_MODIFIERS.iter()
+        Ok(crate::meta::class_modifiers().iter()
             .find(|(n, _)| *n == name)
             .map(|(_, m)| *m)
             .unwrap_or(0x0001 | 0x0010 | 0x0400))
     }
 
     /// `getDeclaredFields()`：本类全部声明字段的构造序列（字段表驱动，
-    /// getDeclaredField 的复数形态——同一张 build.rs 字段表循环输出）。
+    /// getDeclaredField 的复数形态——同一张 java_meta 字段表循环输出）。
     pub(crate) fn __table_declared_fields(&self) -> Result<JArray<Field>> {
         Field::__class_init()?;
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<Field> = Vec::new();
-        if let Some((_, fs)) = __fields::CLASS_FIELDS.iter().find(|(n, _)| *n == cls_key) {
+        if let Some((_, fs)) = crate::meta::class_fields().iter().find(|(n, _)| *n == cls_key) {
             for (slot, meta) in fs.iter().enumerate() {
                 let mut f = Field::default();
                 f._init_not_null();
@@ -331,7 +331,7 @@ impl Class {
         crate::java::lang::reflect::Constructor::<Object>::__class_init()?;
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         let mut out: Vec<crate::java::lang::reflect::Constructor<Object>> = Vec::new();
-        if let Some((_, ms)) = __methods::CLASS_METHODS.iter().find(|(n, _)| *n == cls_key) {
+        if let Some((_, ms)) = crate::meta::class_methods().iter().find(|(n, _)| *n == cls_key) {
             for (slot, meta) in ms.iter().enumerate() {
                 if meta.name != "<init>" {
                     continue;
@@ -385,7 +385,7 @@ impl Class {
 
 
     /// `Class.isRecord()`：record 类判定（JVMS §4.7.30 Record 属性在场；
-    /// 发射侧 is_record 属性 → build.rs record 表）。数组 / 基本类型类恒 false。
+    /// 发射侧 is_record 属性 → java_meta record 表）。数组 / 基本类型类恒 false。
     /// native `Class.isInstance(Object)`：null → false；否则按运行时类的
     /// is_instance_of（vtable 按 binary name 斜线形态应答，含超类与接口闭包）。
     /// 基本类型类恒 false（JLS：无值是基本类型 Class 的实例）。
@@ -418,12 +418,12 @@ impl Class {
     }
 
     /// native `getPermittedSubclasses0()`：sealed 类 / 接口的许可子类型（PermittedSubclasses 属性，
-    /// 声明序）；非 sealed → null（JVM_GetPermittedSubclasses 同形）。数据源为 build.rs 的
+    /// 声明序）；非 sealed → null（JVM_GetPermittedSubclasses 同形）。数据源为 java_meta 的
     /// PERMITTED_SUBCLASSES 表；许可子类型不在生成闭包内时跳过（JVM 对无法加载的条目同样跳过）。
     #[jvm_native]
     pub fn getPermittedSubclasses0(&self) -> Result<JArray<Class>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
-        let Some((_, subs)) = __class_meta::PERMITTED_SUBCLASSES.iter().find(|(n, _)| *n == name) else {
+        let Some((_, subs)) = crate::meta::permitted_subclasses().iter().find(|(n, _)| *n == name) else {
             return Ok(JArray::default());
         };
         let out: Vec<Class> = subs.iter()
@@ -433,12 +433,12 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// 类文件是否声明了 `<clinit>`（build.rs 的 CLINIT_CLASSES 表；VM 注入的类信息）。
+    /// 类文件是否声明了 `<clinit>`（java_meta 的 CLINIT_CLASSES 表；VM 注入的类信息）。
     /// 供 `ObjectStreamClass.hasStaticInitializer`（默认 serialVersionUID 计算）。
     #[doc(hidden)]
     pub fn __has_static_initializer(&self) -> bool {
         let name = format!("{}", self.__get_name()).replace('.', "/");
-        __class_meta::CLINIT_CLASSES.contains(&name.as_str())
+        crate::meta::clinit_classes().contains(&name.as_str())
     }
 
     pub fn getInterfaces0(&self) -> Result<JArray<Class>> {
@@ -448,7 +448,7 @@ impl Class {
         } else if self.isPrimitive()? {
             Vec::new()
         } else {
-            __interfaces::CLASS_INTERFACES.iter()
+            crate::meta::class_interfaces().iter()
                 .find(|(n, _)| *n == name)
                 .map(|(_, l)| l.to_vec())
                 .unwrap_or_default()
@@ -459,7 +459,7 @@ impl Class {
         Ok(JArray::from(out))
     }
 
-    /// native `Class.isInterface()`：接口（含注解类型）判定，读 build.rs 修饰符表的
+    /// native `Class.isInterface()`：接口（含注解类型）判定，读 java_meta 修饰符表的
     /// INTERFACE 位（与 getModifiers 同源）。数组类 / 基本类型类 → false
     /// （JLS：数组类型与基本类型都不是接口）；闭包外类（表中缺席）→ false。
     /// 消费方：ObjectStreamClass 构造链（Result.<clinit> 的序列化元数据查询）。
@@ -469,7 +469,7 @@ impl Class {
         if name.starts_with('[') || self.isPrimitive()? {
             return Ok(false);
         }
-        Ok(__modifiers::CLASS_MODIFIERS.iter()
+        Ok(crate::meta::class_modifiers().iter()
             .find(|(n, _)| *n == name)
             .map(|(_, m)| (*m & 0x0200) != 0)
             .unwrap_or(false))
@@ -477,7 +477,7 @@ impl Class {
 
 
     /// native `Class.forName0(name, initialize, loader, caller)`：按 binary name 取 Class 对象。
-    /// 原生镜像的「可加载类」= 生成闭包内的类（build.rs 修饰符表，含用户类）；数组名
+    /// 原生镜像的「可加载类」= 生成闭包内的类（java_meta 修饰符表，含用户类）；数组名
     /// （`[I` / `[Ljava.lang.String;`）直接构造。未知类名 → `ClassNotFoundException(name)`
     /// （JDK 同消息）。initialize=true（`Class.forName(String)` 的缺省）立即执行类初始化
     /// （JLS §12.4.1 / FS-C5）：经 main 启动时登记的类初始化钩子（有 `<clinit>` 的用户类）
@@ -499,17 +499,17 @@ impl Class {
         Ok(Class::for_class(String::from(slash.as_str())))
     }
 
-    /// 原生镜像中「可加载」的类：生成闭包内的类（build.rs 修饰符表，含用户类）与数组类名。
+    /// 原生镜像中「可加载」的类：生成闭包内的类（java_meta 修饰符表，含用户类）与数组类名。
     /// 供 `forName0` 与 `ClassLoader.findBootstrapClass` 共用。
     #[doc(hidden)]
     pub fn __is_known_class(slash_name: &str) -> bool {
         slash_name.starts_with('[')
-            || __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == slash_name)
+            || crate::meta::class_modifiers().iter().any(|(n, _)| *n == slash_name)
     }
 
     /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是
     /// java_class! 块的 `record_components` 属性（classfile Record 属性：名字 /
-    /// 描述符 / 泛型签名），build.rs 汇总为 RECORD_COMPONENTS 表。查询即构造
+    /// 描述符 / 泛型签名），java_meta 汇总为 RECORD_COMPONENTS 表。查询即构造
     /// RecordComponent：clazz=本类、type=描述符还原、accessor=同名无参声明方法、
     /// signature=泛型签名（无则 null）。非 record（表中缺席）→ null（JDK 语义）。
     /// 消费方：ObjectStreamClass 的 record 序列化（规范构造器 / 分量取值）。
@@ -518,10 +518,10 @@ impl Class {
     #[jvm_native(upcalls = "java/lang/reflect/RecordComponent.<init>:()V java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;")]
     pub fn getRecordComponents0(&self) -> Result<JArray<crate::java::lang::reflect::RecordComponent>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
-        let comps: &[(&str, &str, &str)] = match __record::RECORD_COMPONENTS.iter().find(|(c, _)| *c == name) {
+        let comps: &[(&str, &str, &str)] = match crate::meta::record_components().iter().find(|(c, _)| *c == name) {
             Some((_, comps)) => comps,
             // 无分量的 record（`record Empty()`）不产生 record_components 属性 → 空数组
-            None if __record::RECORD_CLASSES.contains(&name.as_str()) => &[],
+            None if crate::meta::record_classes().contains(&name.as_str()) => &[],
             None => return Ok(JArray::default()),
         };
         let mut out: Vec<crate::java::lang::reflect::RecordComponent> = Vec::new();
@@ -565,7 +565,7 @@ impl Class {
     pub(crate) fn __from_descriptor_checked(desc: &str) -> Result<Class> {
         let elem = desc.trim_start_matches('[');
         if let Some(name) = elem.strip_prefix('L').and_then(|x| x.strip_suffix(';')) {
-            let known = __modifiers::CLASS_MODIFIERS.iter().any(|(n, _)| *n == name)
+            let known = crate::meta::class_modifiers().iter().any(|(n, _)| *n == name)
                 || name == "java/lang/Object";
             if !known {
                 let ex = crate::java::lang::TypeNotPresentException::new(
@@ -632,7 +632,7 @@ fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
 /// 反射族内部：直接父类表查询（L3 分派协议的上溯数据面，
 /// reflect_dispatch::reflect_invoke 消费）。
 pub fn __direct_super_lookup(class_slash: &str) -> Option<&'static str> {
-    __direct_super::CLASS_DIRECT_SUPER.iter()
+    crate::meta::class_direct_super().iter()
         .find(|(n, _)| *n == class_slash)
         .map(|(_, s)| *s)
 }
@@ -640,49 +640,19 @@ pub fn __direct_super_lookup(class_slash: &str) -> Option<&'static str> {
 /// 反射族内部：方法元数据表的 static 判定（L3 分派协议的 static/虚分派
 /// 判别面，reflect_dispatch 消费）。未声明 → false（按虚方法处理，上溯）。
 pub fn __method_is_static(class_slash: &str, name: &str, descriptor: &str) -> bool {
-    __methods::CLASS_METHODS.iter()
+    crate::meta::class_methods().iter()
         .find(|(n, _)| *n == class_slash)
         .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
         .map(|m| m.is_static)
         .unwrap_or(false)
 }
 
-/// build.rs 生成的类层次表（OUT_DIR/hierarchy_table.rs，含模块级 static）。
-mod __hierarchy {
-    include!(concat!(env!("OUT_DIR"), "/hierarchy_table.rs"));
-}
 
-/// build.rs 生成的直接父类表（OUT_DIR/direct_super_table.rs）。
-mod __direct_super {
-    include!(concat!(env!("OUT_DIR"), "/direct_super_table.rs"));
-}
 
-/// build.rs 生成的字段元数据表（OUT_DIR/field_table.rs，含 FieldMeta 与
-/// CLASS_FIELDS static）。
-mod __fields {
-    include!(concat!(env!("OUT_DIR"), "/field_table.rs"));
-}
 
-/// build.rs 生成的方法元数据表（OUT_DIR/method_table.rs，含 MethodMeta 与
-/// CLASS_METHODS static）。
-mod __methods {
-    include!(concat!(env!("OUT_DIR"), "/method_table.rs"));
-}
 
-/// build.rs 生成的类修饰符表（OUT_DIR/modifiers_table.rs）。
-mod __modifiers {
-    include!(concat!(env!("OUT_DIR"), "/modifiers_table.rs"));
-}
 
-/// build.rs 生成的类文件级元数据（OUT_DIR/class_meta_table.rs：<clinit> 类集、sealed 许可子类型）。
-mod __class_meta {
-    include!(concat!(env!("OUT_DIR"), "/class_meta_table.rs"));
-}
 
-/// build.rs 生成的 record 类集（OUT_DIR/record_table.rs）。
-mod __record {
-    include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
-}
 
 /// 注解原始属性体 → Java byte[]（空 = 属性缺席 → null，与 HotSpot 同）。
 fn __anno_bytes(raw: &'static [u8]) -> JArray<i8> {
@@ -698,28 +668,20 @@ fn __signature(sig: &str) -> String {
     if sig.is_empty() { String::default() } else { String::from(sig) }
 }
 
-/// build.rs 生成的直接超接口表（OUT_DIR/interfaces_table.rs）。
-mod __interfaces {
-    include!(concat!(env!("OUT_DIR"), "/interfaces_table.rs"));
-}
 
-/// build.rs 生成的嵌套元数据表（OUT_DIR/nest_table.rs，FS-R R1）。
-mod __nest {
-    include!(concat!(env!("OUT_DIR"), "/nest_table.rs"));
-}
 
 // ── FS-R R1：类级 native（数据源 = 元数据表，JDK 公开方法体回到字节码）────────────
 //
 // HotSpot 从 class 文件的 InnerClasses / EnclosingMethod / Record 属性取值；原生二进制
-// 以 build.rs 表承载同一数据（docs/plans/2026-09-27-reflection-metadata-table.md）。
+// 以 java_meta 表承载同一数据（docs/plans/2026-09-27-reflection-metadata-table.md）。
 impl Class {
     fn __slash_name(&self) -> std::string::String {
         format!("{}", self.__get_name()).replace('.', "/")
     }
 
-    fn __nest(&self) -> Option<&'static __nest::NestMeta> {
+    fn __nest(&self) -> Option<&'static crate::meta::NestMeta> {
         let key = self.__slash_name();
-        __nest::CLASS_NEST.iter().find(|(n, _)| *n == key).map(|(_, m)| m)
+        crate::meta::class_nest().iter().find(|(n, _)| *n == key).map(|(_, m)| m)
     }
 
     /// native `getDeclaringClass0()`：本类 InnerClasses 条目的 outer_class（成员类）；
@@ -761,7 +723,7 @@ impl Class {
     #[jvm_native]
     pub fn isRecord0(&self) -> Result<bool> {
         let key = self.__slash_name();
-        Ok(!key.starts_with('[') && __record::RECORD_CLASSES.contains(&key.as_str()))
+        Ok(!key.starts_with('[') && crate::meta::record_classes().contains(&key.as_str()))
     }
 
     /// static native `desiredAssertionStatus0(Class)`：断言恒关（`-ea` 缺省，JVM 同）。

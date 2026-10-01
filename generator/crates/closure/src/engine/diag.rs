@@ -16,8 +16,9 @@ impl Engine<'_> {
             }
         }
         let mut out: Vec<String> = Vec::new();
+        let um = self.unmodeled();
         for (k, cs) in &clones {
-            for pc in self.null_recv(cs) {
+            for pc in self.null_recv(cs, &um) {
                 let callee = cs.iter().filter_map(|&i| self.methods[i].analysis.as_ref()).find_map(|a| {
                     a.events.iter().find_map(|(p, e)| match e {
                         Event::Invoke { mref, .. } if *p == pc => Some(mref.to_string()),

@@ -15,6 +15,10 @@ pub struct SeedState {
     pub locales: Vec<String>,
     anno_done: bool,
     locale_bases: BTreeSet<String>,
+    /// 束族基名 → 该族入选的资源束（类型 id）
+    locale_bundles: BTreeMap<String, BTreeSet<u32>>,
+    /// 已产出束对象的（手写触发方法节点序号, 束族基名）
+    locale_fed: StdSet<(usize, String)>,
     jca_services: Option<BTreeSet<Service>>,
     jca_algos: StdSet<String>,
     jca_aliases: StdMap<String, StdSet<String>>,
@@ -65,11 +69,11 @@ impl<'a> Engine<'a> {
         let before = self.methods.len() + self.g.len() + self.inited.len();
         let reached = self.reached_members();
         self.seed_annotations(&reached);
-        self.seed_locale(&reached);
+        let fed = self.seed_locale(&reached);
         self.seed_jca(&reached);
         self.seed_image();
         self.seed_static_owner_names();
-        self.methods.len() + self.g.len() + self.inited.len() != before
+        fed || self.methods.len() + self.g.len() + self.inited.len() != before
     }
 
     fn seed_annotations(&mut self, reached: &HashSet<String>) {
@@ -99,24 +103,53 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn seed_locale(&mut self, reached: &HashSet<String>) {
+    /// 补种 locale 束；有新产出的束值返回 true
+    fn seed_locale(&mut self, reached: &HashSet<String>) -> bool {
         let cfg = &self.man.seeds.locale;
         let bases: Vec<String> = cfg.triggered_bases(|m| reached.contains(m)).into_iter().filter(|b| !self.seeds.locale_bases.contains(b)).collect();
-        if bases.is_empty() {
-            return;
+        if !bases.is_empty() {
+            self.seeds.locale_bases.extend(bases.iter().cloned());
+            let locs = locale::collect(cfg, self.cp, &self.user_classes(), &self.seeds.locales);
+            let mut total = 0;
+            for base in &bases {
+                let names = locale::bundle_classes(&locs, std::slice::from_ref(base), self.cp);
+                total += names.len();
+                for b in names {
+                    // 资源束由 ResourceBundle / LocaleData 按类名反射构造（Class.forName + newInstance）：
+                    // 无参构造器入链并登记反射分派面；内容方法经虚分派随实例化可达
+                    self.instantiate(&b, Via::root("locale", &b));
+                    self.init(&b, Via::root("locale", &b));
+                    self.seed_method(MemberRef { owner: b.clone(), name: "<init>".into(), desc: "()V".into() }, "locale");
+                    let id = self.id(&b);
+                    self.seeds.locale_bundles.entry(base.clone()).or_default().insert(id);
+                    self.seeds.reflect_names.entry(b).or_default().insert("<init>".into());
+                }
+            }
+            eprintln!("[closure] locale 种子：{} 个 locale → {} 个资源束（{}）", locs.len(), total, bases.join(", "));
         }
-        self.seeds.locale_bases.extend(bases.iter().cloned());
-        let locs = locale::collect(cfg, self.cp, &self.user_classes(), &self.seeds.locales);
-        let names = locale::bundle_classes(&locs, &bases, self.cp);
-        eprintln!("[closure] locale 种子：{} 个 locale → {} 个资源束（{}）", locs.len(), names.len(), bases.join(", "));
-        for b in names {
-            // 资源束由 ResourceBundle / LocaleData 按类名反射构造（Class.forName + newInstance）：
-            // 无参构造器入链并登记反射分派面；内容方法经虚分派随实例化可达
-            self.instantiate(&b, Via::root("locale", &b));
-            self.init(&b, Via::root("locale", &b));
-            self.seed_method(MemberRef { owner: b.clone(), name: "<init>".into(), desc: "()V".into() }, "locale");
-            self.seeds.reflect_names.entry(b).or_default().insert("<init>".into());
+        self.locale_values()
+    }
+
+    /// 束对象作为值产出：资源束由手写触发成员经注册表工厂（语法不可见）构造，作为该方法手写体的产出
+    /// 进入其值池——回调实参（`setParent` 等）与交回值由此看到各束，而不是从缺失的值流推出空集
+    fn locale_values(&mut self) -> bool {
+        let mut feeds: Vec<(usize, TypeSet)> = Vec::new();
+        for (base, ids) in &self.seeds.locale_bundles {
+            let triggers = self.man.seeds.locale.base_triggers(base);
+            for (i, n) in self.methods.values().enumerate() {
+                if !matches!(n.kind, Kind::Handwritten(_)) || !triggers.iter().any(|t| *t == format!("{}.{}", n.key.owner, n.key.name)) {
+                    continue;
+                }
+                if self.seeds.locale_fed.insert((i, base.clone())) {
+                    feeds.push((i, TypeSet { classes: ids.iter().copied().collect(), open: IdSet::default() }));
+                }
+            }
         }
+        let fed = !feeds.is_empty();
+        for (i, s) in feeds {
+            self.add_to(Node::S(i, PROD), &s);
+        }
+        fed
     }
 
     fn seed_jca(&mut self, reached: &HashSet<String>) {

@@ -10,6 +10,7 @@ pub mod fields;
 pub mod head;
 pub(crate) mod inherit;
 pub mod methods;
+pub mod opaque;
 pub mod slot;
 pub mod stub;
 mod super_inherit;
@@ -174,6 +175,12 @@ pub struct ClassPrep<'c> {
 /// 前置事实：引用集 → 跨类导入规划
 pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
+    if ctx.is_opaque(ci.name()) {
+        // 不透明形态只引用全部传递超类型（upcast 目标）
+        let referenced: BTreeSet<String> = opaque::opaque_supers(ctx, ci).into_iter().collect();
+        let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
+        return Ok(ClassPrep { visible: Vec::new(), cross });
+    }
     let referenced = collect_referenced(ctx, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
     let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
@@ -209,6 +216,9 @@ pub fn class_text(
     prep: &ClassPrep<'_>,
     cross_imports: Vec<String>,
 ) -> Result<ClassText> {
+    if ctx.is_opaque(ci.name()) {
+        return Ok(opaque::opaque_text(ctx, state, ci, site, cross_imports));
+    }
     let visible = &prep.visible;
     let is_iface = ci.is_interface();
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];

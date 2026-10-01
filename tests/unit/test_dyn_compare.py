@@ -232,12 +232,27 @@ class ManifestTest(unittest.TestCase):
         self.assertNotIn('codegen.runtime_manifest', sys.modules)
         self.assertEqual(rules.domain('Main'), 'user')
 
-    def test_model_property_args_read_toml_without_codegen(self):
-        args = dc.model_property_args()
-        self.assertIn('-Djdk.reflect.useNativeAccessorOnly=true', args)
-        self.assertFalse(any(a.startswith('-Djava.class.path=') for a in args))
-        self.assertEqual(args, sorted(args))
-        self.assertNotIn('codegen.runtime_manifest', sys.modules)
+
+
+
+class NativeConfigTest(unittest.TestCase):
+    SETTINGS = ("Property settings:\n"
+                "    file.encoding = UTF-8\n"
+                "    java.class.path = \n"
+                "    java.library.path = /a\n"
+                "        /b\n"
+                "    java.vm.name = OpenJDK 64-Bit Server VM\n"
+                "openjdk version \"21\"\n")
+
+    def test_parse_keys(self):
+        self.assertEqual(dc.parse_property_keys(self.SETTINGS),
+                         {'file.encoding', 'java.class.path', 'java.library.path', 'java.vm.name'})
+
+    def test_only_keys_absent_from_jvm_are_injected(self):
+        values = {'java.class.path': '', 'java.vm.name': 'rava native runtime',
+                  'jdk.reflect.useNativeAccessorOnly': 'true'}
+        keys = dc.parse_property_keys(self.SETTINGS)
+        self.assertEqual(dc.native_config_args(values, keys), ['-Djdk.reflect.useNativeAccessorOnly=true'])
 
 
 if __name__ == '__main__':

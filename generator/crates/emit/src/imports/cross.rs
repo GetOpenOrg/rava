@@ -237,7 +237,8 @@ pub fn plan_cross_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_
 
 /// 超类链 `__VTable` → `__base` 自由函数 → 用户类兄弟模块
 fn finish(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, mut acc: Acc) -> Result<CrossPlan> {
-    if !ci.is_interface() {
+    // 不透明类（L1）无 vtable 实现 / 方法体：不引祖先 vtable 与 `__base`
+    if !ci.is_interface() && !ctx.is_opaque(ci.name()) {
         vtable_imports(ctx, ci, inp, &mut acc);
         base_fn_imports(ctx, ci, inp, &mut acc)?;
     }
@@ -314,6 +315,13 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
             }
             let orig = resolve_special_method_owner(reg, &r.owner, &r.name, &r.desc);
             if orig == ci.name() {
+                continue;
+            }
+            // 不占槽的落点无 `__base` 自由函数（调用点改为 wrapper 直接调用）
+            let pruned = reg
+                .get(&orig)
+                .and_then(|oc| oc.methods().iter().find(|am| am.name == r.name && am.desc == r.desc).map(|am| ctx.slot_pruned(am, oc)));
+            if pruned == Some(true) {
                 continue;
             }
             let is_jdk = orig.contains('/');

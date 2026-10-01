@@ -151,7 +151,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
                 return r;
             }
         }
-        // 上溯：直接父类表（Class.getSuperclass 的公共查询面，build.rs 生成）；
+        // 上溯：直接父类表（Class.getSuperclass 的公共查询面，java_meta 生成）；
         // 无父类 / 表外（接口 / Object 上方）→ 终止
         let zuper = crate::java::lang::Class::for_class(
             crate::java::lang::String::from(cur.as_str()))

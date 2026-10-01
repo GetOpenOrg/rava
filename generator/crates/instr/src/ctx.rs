@@ -24,6 +24,15 @@ pub trait InstrHooks {
     /// invokedynamic lambda 站点的 SAM 合成对象构造路径（`sam_objects.site_ctor_path`）：
     /// `iface` 为函数式接口 binary 名，`current_class` 为站点所在类。None → 该接口不可合成。
     fn sam_ctor_path(&self, iface: &str, current_class: &str) -> Option<ir::Path>;
+    /// 声明类 `owner` 的实例方法 `name:desc` 是否不占 vtable 槽（按分派结果裁剪）：
+    /// 不占槽者无 `Owner__m_base` 自由函数，invokespecial 改为 wrapper 直接调用
+    fn slot_pruned(&self, _owner: &str, _name: &str, _desc: &str) -> bool {
+        false
+    }
+    /// 类发 L1 不透明形态（`java_class_opaque!`：无字段访问器、无方法，只有身份与 upcast）
+    fn is_opaque(&self, _cls: &str) -> bool {
+        false
+    }
 }
 
 /// 无合成对象的缺省回调（单元测试 / 不含 lambda 的调用方）

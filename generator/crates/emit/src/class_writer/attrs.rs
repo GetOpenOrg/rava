@@ -120,11 +120,13 @@ pub fn constant_value_str(c: &Const) -> String {
     }
 }
 
-/// 稀疏注解常量池编码 `idx:K:值;…`（← `classfile.encode_anno_cpool`）
+/// 稀疏注解常量池编码 `idx:K:值;…`（← `classfile.encode_anno_cpool`）；字符串 `U` = UTF-8 字节 hex，
+/// 含孤立代理项时 `W` = UTF-16 码元 hex（每码元 4 位），不经有损文本
 pub fn anno_cpool_str(pool: &std::collections::BTreeMap<u16, AnnoConst>) -> String {
     pool.iter()
         .map(|(idx, c)| match c {
             AnnoConst::Utf8(s) => format!("{idx}:U:{}", hex(s.as_bytes())),
+            AnnoConst::Utf16(u) => format!("{idx}:W:{}", u.iter().map(|x| format!("{x:04x}")).collect::<String>()),
             AnnoConst::Int(v) => format!("{idx}:I:{v}"),
             AnnoConst::Long(v) => format!("{idx}:J:{v}"),
             AnnoConst::Float(b) => format!("{idx}:F:{b:08x}"),
@@ -173,6 +175,8 @@ pub struct MethodAttrExtra {
     pub vtable_name: String,
     pub vtable_erasure: Vec<String>,
     pub handwritten_body: bool,
+    /// 覆盖方法未被分派到：槽条目发 `__stub` 存根（漏派发显式失败）
+    pub slot_stub: bool,
 }
 
 /// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）
@@ -210,6 +214,9 @@ pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtr
         parts.push(format!("virtual_in = \"{}\"", esc(&extra.virtual_in)));
         if !extra.vtable_name.is_empty() {
             parts.push(format!("vtable_name = \"{}\"", esc(&extra.vtable_name)));
+        }
+        if extra.slot_stub {
+            parts.push("slot_stub = \"true\"".into());
         }
     }
     if !extra.vtable_erasure.is_empty() {
@@ -263,6 +270,15 @@ mod tests {
         assert_eq!(constant_value_str(&Const::Float(0.1f32.to_bits())), "0.10000000149011612");
         assert_eq!(constant_value_str(&Const::Double(f64::NAN.to_bits())), "NaN");
         assert_eq!(constant_value_str(&Const::Double(f64::INFINITY.to_bits())), "inf");
+    }
+
+    #[test]
+    fn anno_cpool_strings() {
+        let pool: std::collections::BTreeMap<u16, AnnoConst> =
+            [(1, AnnoConst::Utf8("ab".into())), (4, AnnoConst::Utf16(vec![0xD800, 0x41])), (5, AnnoConst::Int(-2))]
+                .into_iter()
+                .collect();
+        assert_eq!(anno_cpool_str(&pool), "1:U:6162;4:W:d8000041;5:I:-2");
         assert_eq!(constant_value_str(&Const::String("a\"\\\n\u{1}".into())), "a\\\"\\\\\\n\\u{0001}");
     }
 }

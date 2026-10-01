@@ -146,6 +146,8 @@ generator/
 │   └── driver/        # bin `rava`：先提供 `rava closure` 子命令
 ```
 
+**实际布局（2026-10-01）**：上图是立项时的划分。落地后分析器与 Rust 生成器合为单一二进制 `rava`（`rava build` 为缺省转译路径，闭包结果进程内直传发射，不再经 closure.json 文件）；`closure` crate 下为 `absint`、`manifest`、`handwritten`、`seeds`、`cache`（P6 整体结果缓存）、`cold.rs` 与 `engine/`。xta / init / levels / provenance 都在 `engine/` 内按职责拆为子模块：类型流图（`flow` / `graph` / `hub` / `gather` / `worklist` / `scc`）、调用与分派（`invoke` / `selector` / `method_lookup` / `nest`）、折叠（`fold` / `consteval` / `sysprops` / `noreturn` / `unmodeled`）、手写层（`hw*` / `vmhook`）、反射与服务（`reflect` / `services` / `sealed`）、类初始化（`class_init`）、上下文与记忆（`ctxsel` / `share` / `memo` / `setstore`）。
+
 - 所有集合都用 `IndexMap` / `BTreeSet`，确定性由数据结构保证，不再到处加 `sorted()`。
 - 性能目标：HelloWorld 闭包计算 ≤ 3s（现行 Python 转译总计 1m37s，其中发现阶段占主要部分）。
 
@@ -157,6 +159,12 @@ rava closure … --why <Class|Class.method:desc>   # 最短 provenance 链（替
 rava closure … --report md                       # 按等级 / 包 / 边种类统计（替代 jdk-scan 报告）
 rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 ```
+
+**现行命令面（2026-10-01）**：`rava build <Test.java>` 一次完成闭包分析与发射（`scripts/main.py` 缺省调用）；`rava closure` 保留为诊断入口（`--why` / `--flows` / `--report`，需引擎本体，不读缓存）。
+影响闭包结果的选项：`--jdk` / `--java-home` / `--image`、`--lib`、`--root` / `--seed-class` / `--main`、`--release` / `--release-bytecode`、`--locale`、`--enable-preview`、`--cold-cut`、`--flow-batch` / `--hash-seed`（集合结果与之无关，用于确定性矩阵验收）。
+缓存：`--closure-cache <目录>`（`main.py` 缺省 `build/closure_cache/`）、`--closure-cache-max-mb`（缺省 4096）；键覆盖全部输入，见性能计划 §4.8。
+观测：`--perf`（分段耗时与峰值内存进 `summary.perf`）、`--closure-json`（另写出 `<scratch>/closure_input/closure.json` 供动态对照与生成树对照）。
+分析器不读任何自有环境变量。
 
 ### 4.2 输出 `closure.json`（Python 生成器的唯一闭包输入）
 
@@ -176,6 +184,9 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 ```
 
 `dispatch` 与 `folds` 交给发射层使用：vtable 只发射实际存在分派目标的槽；折叠点直接生成常量。
+
+现行顶层字段（2026-10-01）：`classes`（列表，每项 `name` / `level` / `domain` / `via`）、`methods`、`instantiated`、`clinit`、`class_init`（以参数传入的 Class 的初始化事实）、`dispatch`、`folds` / `folds_version`（含 `consts`、`null_recv`、`noreturn`、死区间与死处理器）、`indy_models`、`reflect`、`seeds`、`refs`、`missing`、`unresolved`、`summary`。
+`null_recv` 只在接收者值集为空且没有任何未建模来源时导出：手写 / native / boundary / intrinsic / 伪方法 / VM 钩子 / Missing 方法的返回值、受污染数组的元素、受污染接收者或基址上的字段读取与实例调用返回值，均视为未建模来源（6ced8de5、380bcf80）。
 `folds` 的格式约定见 §7.3「折叠点导出」。
 
 ## 五、可以移除的现行机制
@@ -213,7 +224,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | ✅ 已完成（1e09a9a4）：第 0 步 bfcb75d7、第 1 步 32a789c6、第 2 步、第 3 步（CPA 实测否决，改为手写数组写入模型）、第 3b 步、第 4 步 97b0393c（反射目标可靠性）、耗时（CollectorsDemo 28 s → 2.7 s） |
 | C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ✅ 终态落地（分支 `c1d-final`，见边界收窄计划 §6.12）：`[boundary]` 前缀与非 VM 契约过渡手写一次性删除 1e623cec；系统属性表只读形参不算逃逸 d641abd3；入链 native 补齐 4a1437d3；生成器缺口 9a231b6b（HelloWorld cargo check 0 错误）；精度二期 ✅ a6b4c6d5（§6.10）、精度三期 ✅ 已合入 d8212bee；dc9fd946 / d8a0b082（VM 注入状态）经 `c1d-prec` 合并取舍（VM 注入常量清单驱动 34d5989a）。待：下标区间推理剪异常消息路径（共同底座 ≈1589 类）、DeepCopy 342 s / 5.5 GB、剩余 native 缺口 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ✅ 已完成（分散落地，2026-09-30 核对）：syn 手写扫描（C1 / C1c 第 0 步，`closure::handwritten`；宏内调用点 8078f2b1）、补种（`closure::seeds`：注解 / locale / JCA / data bundle）、反射常量数据流（`engine/reflect.rs`，`[facts.reflect]`，反射缺口随 report 输出）、`[facts]` 各段；现行 upcalls 的 Python 机制已随 C4 删除 |
-| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 改在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。2026-10-01 派发 `emitter-c3`（起点 closure-prec3 98bc2e68，计划 `2026-10-01-emitter-c3.md`）：null_recv 抛 NPE、noreturn 终止控制流与死区间 0 翻译、consts 常量、class_init 事实、按 dispatch 发 vtable 槽、L1 不透明类型。前置已合入：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish（`emitter-final`，c7a9d7b4）。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
+| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | ✅ 在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。2026-10-01 派发 `emitter-c3`（起点 closure-prec3 98bc2e68，计划 `2026-10-01-emitter-c3.md`）：null_recv 抛 NPE、noreturn 终止控制流与死区间 0 翻译、consts 常量、class_init 事实、按 dispatch 发 vtable 槽、L1 不透明类型。前置已合入：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish（`emitter-final`，c7a9d7b4）。✅ 已合入（30df3e74，2026-10-01；单测全过、e2e 抽查 14 例全过、动态对照漏覆盖 0）：6 项全部实现——null_recv 抛 NPE、noreturn 终止控制流、运行时初始系统属性表与分析器折叠同源、class_init 事实、按 dispatch 保留 vtable 槽（手写继承覆盖所在槽族强制保留 8075b674）、L1 不透明类型（`java_class_opaque!`；分析器级别阶梯新增 L2 layout，01711d08；L1 静态类型访问 L2 属主成员时发射侧上转，96de08ea；经未建模来源进入值流的虚调用点属主升为 L2，修动态代理接口误判 null_recv，43d727a2）；不透明类不参与 S4 拆层，整类留在声明层。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21）通过集合 ⊇ 冻结的 Python 基线；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`，Rust 生成器由 `input` crate 消费，`rava build` 进程内直传见 `emitter-perf2`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；待：全量 e2e（JDK 21，基线 `2026-10-01-python-baseline-jdk21.txt` 1029 例；JDK 25 不设 Python 基线，2026-10-01 用户决定） |
 | C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
 
@@ -249,6 +260,8 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | 生成器中的补扫 / 门控补丁段 | 5 段 | 0 |
 | 闭包计算耗时（HelloWorld） | Python 发现阶段数十秒 | ≤ 3s |
 | 全量 e2e | 现行通过集 | 不减少 |
+
+2026-10-01 实测（JDK 21，HelloWorld，main d842653d）：总类 250（Type 75 / Init 30 / Alloc 12 / Code 133）、翻译方法体类 131、入链方法 605、闭包计算 219 ms；无 provenance 节点 0；验收 31 例动态对照翻译域漏覆盖 0。除翻译方法体类按 §七 订正后的相对口径（≤ 134）考核外，上表各项均已达到终态。
 
 性能、内存与工程化终态（全量语料 ≤ 10 s / ≤ 1 GB、预算降级、缓存、健壮性）另见 [`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)。
 

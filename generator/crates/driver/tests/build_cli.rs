@@ -63,7 +63,11 @@ fn record_and_switch_bootstraps_translate() {
         assert!(!user.contains(bad), "用户类生成文本含 {bad}");
     }
     // toString：简单名 + 分量模板；hashCode：31 累乘；equals：instanceof 后逐分量比较
-    assert!(user.contains("format!(\"Point[x={}, y={}, z={}, b={}, name={}]\""), "record toString 模板");
+    assert!(
+        user.contains("(String::of(\"Point[x=\") + this.__get_x() + \", y=\" + this.__get_y() + \", z=\"")
+            && user.contains("\", name=\" + &this.__get_name() + \"]\")"),
+        "record toString 模板（UTF-16 层拼接）"
+    );
     assert!(user.contains("wrapping_mul(31)"), "record hashCode");
     assert!(user.contains("o.is_instance_of(\"RecordSwitch$Point\") && {"), "record equals");
     // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句
@@ -80,7 +84,7 @@ fn record_and_switch_bootstraps_translate() {
     // `System.out` 的 getstatic 先于拼接实参求值（JVM 栈序），物化在 toString 之前
     assert!(at("= System::out()?;") < vp, "System.out 读取先于实参 toString");
     let name = |i: usize| lines[i].trim_start().trim_start_matches("let ").split(':').next().unwrap().to_string();
-    assert!(main_rs.contains(&format!("format!(\"{{}} / {{}}\", {}, {})", name(vp), name(vq))), "拼接模板");
+    assert!(main_rs.contains(&format!("(String::of(\"\") + &{} + \" / \" + &{})", name(vp), name(vq))), "拼接模板");
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -169,10 +173,10 @@ fn try_finally_return_temp_kept_in_every_arm() {
     let Some((_, out)) = build("TryFinallyReturn.java", "try-finally-return", &[]) else { return };
     let rs = std::fs::read_to_string(out.join("user/src/try_finally_return.rs")).unwrap();
     let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn pick(")).take_while(|l| !l.contains("pub fn main(")).collect();
-    // case 1 臂按内容定位：闭包按实参值域（k ∈ {1,2,3}）删去 default 抛出臂时，case 1 落为 `_ =>` 臂
-    let arm1 = body.iter().position(|l| l.trim() == "let _t1: Object = Self::a()?;").expect("case 1 臂");
-    assert!(body[arm1 - 1].trim().ends_with("=> {"), "{}", body.join("\n"));
-    assert_eq!(body[arm1 + 1].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
+    // 终态语义与臂的字面形态无关（case 标签可能因选择子值域与 default 合臂）：
+    // 返回值类型已是汇合类型（Object）的 case 1 臂，取值后紧接着存入暂存槽
+    let a1 = body.iter().position(|l| l.contains("let _t1: Object = Self::a()?;")).expect("case 1 取返回值");
+    assert_eq!(body[a1 + 1].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
     assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
     std::fs::remove_dir_all(&out).ok();
 }
@@ -199,16 +203,15 @@ fn more_specific_default_overrides_ancestor_injected_slot() {
     std::fs::remove_dir_all(&out).ok();
 }
 
-/// 视图派发的接收者为 null（字段类型无实例、读作 null）：先判空抛 NullPointerException，
-/// 视图落空（生成器缺陷）以类名 + 方法名 + 描述符精确 panic，不得静默给默认值
+/// 恒 null 接收者（字段类型无实例、读作 null）：调用点按 invokevirtual 语义抛 NullPointerException
+/// （`__null_recv` 携类名 + 方法名 + 描述符，接收者非 null 时精确 panic），不翻译调用、不得静默给默认值
 #[test]
 fn virtual_view_null_receiver_throws_npe() {
     let Some((_, out)) = build("NullView.java", "null-view", &[]) else { return };
     let rs = std::fs::read_to_string(out.join("user/src/null_view_holder.rs")).unwrap();
-    let line = rs.lines().find(|l| l.contains("__virtual_view(")).expect("h.name() 走视图派发");
-    assert!(line.contains(".__nn()?)"), "接收者先判空：{line}");
-    assert!(line.contains("panic!(\"vtable-view-miss: NullView$Handler.name:()Ljava/lang/String;\")"), "{line}");
-    assert!(!line.contains("Default::default()"), "{line}");
+    let line = rs.lines().find(|l| l.contains("__null_recv(")).expect("h.name() 导出为 null_recv");
+    assert!(line.contains("\"NullView$Handler.name:()Ljava/lang/String;\""), "{line}");
+    assert!(!line.contains("Default::default()") && !rs.contains("__virtual_view("), "{line}");
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -258,5 +261,65 @@ fn api_package_precheck() {
     assert!(stdout.contains("[precheck] native-missing="), "{stdout}");
     let facts = std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap();
     assert!(facts.contains("java/util/function/BiFunction"), "API 入口类入闭包");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// L1（名字级）类发不透明形态：只作 instanceof / 字段类型出现、无实例的类型发 `java_class_opaque!`，
+/// 已实例化类的超接口升 L2 照常发射；L1 属主上的虚调用导出为 null_recv（不翻译调用）
+#[test]
+fn name_level_classes_emit_opaque() {
+    let Some((_, out)) = build("OpaqueLevels.java", "opaque-levels", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let marker = read("opaque_levels_marker.rs");
+    assert!(marker.contains("rava_macros::java_class_opaque!") && marker.contains("pub struct OpaqueLevels_Marker;"), "{marker}");
+    let ghost = read("opaque_levels_ghost.rs");
+    assert!(ghost.contains("pub struct OpaqueLevels_Ghost: OpaqueLevels_Shape;"), "{ghost}");
+    let shape = read("opaque_levels_shape.rs");
+    assert!(shape.contains("rava_macros::java_class!") && !shape.contains("java_class_opaque"), "已实例化类的超接口至少 L2：{shape}");
+    let main = read("opaque_levels.rs");
+    assert!(main.contains("__null_recv(") && main.contains("OpaqueLevels$Ghost.name:()Ljava/lang/String;"), "{main}");
+    // 接收者静态类型为 L1 类（局部变量 Phantom）、成员在 L2 祖先 Base 上：先上转到属主视图
+    let phantom = read("opaque_levels_phantom.rs");
+    assert!(phantom.contains("rava_macros::java_class_opaque!"), "{phantom}");
+    let view = "Into::<OpaqueLevels_Base>::into(Clone::clone(&p))";
+    assert!(main.contains(&format!("{view}.__nn()?.__get_tag()")), "L1 接收者读字段须上转：{main}");
+    assert!(main.contains(&format!("{view}.__nn()?.__set_tag(5i32)")), "L1 接收者写字段须上转：{main}");
+    // 折叠出的 null 常量接收者：取声明类的 null
+    assert!(main.contains("<OpaqueLevels_Base>::default().__nn()?.__get_tag()"), "{main}");
+    assert!(!main.contains("Object::default().__nn()?.__get_tag()"), "{main}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 动态代理实现的接口（无静态实现类）：属主升 L2 照常发射，接口调用不导出 null_recv
+#[test]
+fn proxy_interface_owner_not_opaque() {
+    let Some((_, out)) = build("ProxyIface.java", "proxy-iface", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let greeter = read("proxy_iface_greeter.rs");
+    assert!(!greeter.contains("java_class_opaque"), "代理接口须至少 L2：{greeter}");
+    let main = read("proxy_iface.rs");
+    assert!(!main.contains("__null_recv("), "代理对象上的接口调用不得判恒 null：{main}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 手写体经注册表工厂构造的资源束经 setParent 串成父链：束对象须作为值进入流图，
+/// `ResourceBundle.getObject` 的 `parent.getObject(key)`（@22）不得判为接收者恒 null
+#[test]
+fn locale_bundle_parent_not_null_recv() {
+    let Some((_, out)) = build("LocaleBundleParent.java", "rbparent", &["--precheck-only", "--closure-json"]) else {
+        return;
+    };
+    let facts: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap()).unwrap();
+    let get_object = "java/util/ResourceBundle.getObject:(Ljava/lang/String;)Ljava/lang/Object;";
+    let folds = facts["folds"].as_array().unwrap();
+    let nr: Vec<u64> = folds
+        .iter()
+        .filter(|f| f["method"] == get_object)
+        .flat_map(|f| f["null_recv"].as_array().cloned().unwrap_or_default())
+        .filter_map(|x| x.as_u64())
+        .collect();
+    assert!(!nr.contains(&22), "getObject@22 误判恒 null：{nr:?}");
+    // 非空断言：getObject 在闭包内（父链查找路径确实被分析）
+    assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == get_object), "getObject 不在闭包内");
     std::fs::remove_dir_all(&out).ok();
 }

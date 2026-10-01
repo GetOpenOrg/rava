@@ -877,7 +877,7 @@ def _classify_run_failure(class_name: str) -> tuple[str, str]:
         return "", "binary missing on re-run"
     try:
         r = subprocess.run([str(bin_path)], capture_output=True, text=True,
-                           timeout=RUN_TIMEOUT)
+                           timeout=RUN_TIMEOUT, env=_fixed_env())
     except subprocess.TimeoutExpired:
         return "", "timeout on re-run"
     stderr = r.stderr or ""
@@ -994,7 +994,7 @@ def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
     try:
         r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout,
-                           env=dict(os.environ, RUST_BACKTRACE="1"))
+                           env=_fixed_env(RUST_BACKTRACE="1"))
     except subprocess.TimeoutExpired:
         return "timeout", ""
     if r.returncode != 0:
@@ -1018,7 +1018,7 @@ def _run_binary(class_name: str) -> tuple[bool, str]:
     """直接执行已编译的 binary（共享 target 目录下，不经 cargo 避免锁竞争）。"""
     bin_name = _to_bin_name(class_name)
     bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
-    r = subprocess.run([str(bin_path)], capture_output=True, text=True)
+    r = subprocess.run([str(bin_path)], capture_output=True, text=True, env=_fixed_env())
     return r.returncode == 0, r.stdout
 
 
@@ -1040,6 +1040,29 @@ def _diff(expected: str, actual: str, class_name: str) -> list[str]:
     ))
 
 
+# golden 的 JVM 参照按字节码语义取值（handwritten-boundary.md §一「性能替换不是手写理由」）：
+# HotSpot 以平台数学内建替换 Math 超越函数（结果与其字节码 → StrictMath / FdLibm 可差 1 ulp，且随平台不同），
+# rava 翻译字节码；关掉这些内建后 JVM 回落到 fdlibm，与字节码语义逐位一致，golden 也不再随平台变化。
+#
+# 默认 locale / 时区同样固定：golden 的 JVM 与被测二进制在同一环境下运行，结果不随机器变化
+# （macOS 的 JVM 取系统偏好而非 LANG，服务器 LANG 各异；运行时按 JDK 语义取 LC_ALL / TZ）。
+GOLDEN_LOCALE = ("en", "US")
+GOLDEN_TIMEZONE = "UTC"
+GOLDEN_JVM_FLAGS = [
+    "-XX:+UnlockDiagnosticVMOptions",
+    "-XX:DisableIntrinsic=_dsin,_dcos,_dtan,_dexp,_dlog,_dlog10,_dpow",
+    f"-Duser.language={GOLDEN_LOCALE[0]}",
+    f"-Duser.country={GOLDEN_LOCALE[1]}",
+    f"-Duser.timezone={GOLDEN_TIMEZONE}",
+]
+
+
+def _fixed_env(**extra: str) -> dict:
+    """golden JVM 与被测二进制共用的进程环境：固定默认 locale 与时区。"""
+    return dict(os.environ, LC_ALL=f"{GOLDEN_LOCALE[0]}_{GOLDEN_LOCALE[1]}.UTF-8",
+                TZ=GOLDEN_TIMEZONE, **extra)
+
+
 def _update_expected(java_file: Path) -> tuple[str, str]:
     """生成期望输出。返回 (状态, 摘要)：状态 ∈ updated / javac-fail / java-fail / timeout。
 
@@ -1051,8 +1074,9 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
     if r.returncode != 0:
         return "javac-fail", r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "javac error"
     try:
-        r = subprocess.run([_jdk_tool("java"), "-cp", str(classes_dir), class_name],
-                           cwd=ROOT, capture_output=True, text=True, timeout=EXPECTED_GEN_TIMEOUT)
+        r = subprocess.run([_jdk_tool("java"), *GOLDEN_JVM_FLAGS, "-cp", str(classes_dir), class_name],
+                           cwd=ROOT, capture_output=True, text=True, timeout=EXPECTED_GEN_TIMEOUT,
+                           env=_fixed_env())
     except subprocess.TimeoutExpired:
         return "timeout", f"exceeded {fmt_dur(EXPECTED_GEN_TIMEOUT)}"
     if r.returncode != 0:

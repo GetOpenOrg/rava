@@ -36,6 +36,7 @@ use quote::quote;
 use gen::GenContext;
 /// 类型参数约束补齐（`iface_upcasts!` 与类路径同源复用）
 pub(crate) use gen::context::augment_generic_bounds;
+use gen::layer::{place_fns, Layer};
 use interface::expand_interface;
 use parse::ClassInput;
 
@@ -67,6 +68,10 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
 
     // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
     if meta.is_interface {
+        // 接口载体整体属声明层（default / static 方法体进实现层是后续项，见拆 crate 文档 §7.5）
+        if meta.layer == Layer::Body {
+            return Ok(TokenStream2::new());
+        }
         return Ok(expand_interface(
             &meta, &input.struct_ident, &generics, &input.fns, &input.statics,
         ));
@@ -74,19 +79,52 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
 
     let ctx = GenContext::build(input, meta, generics);
 
+    let layer = ctx.meta.layer;
+    let binary_name = ctx.meta.binary_name.clone();
     let layout = gen::struct_layout::generate(&ctx);
+    let hooks = gen::storage_hooks::generate(&ctx);
     let dispatch_trait = gen::virtual_dispatch::vtable_trait(&ctx);
     let dispatch_impls = gen::virtual_dispatch::vtable_impls(&ctx)?;
-    let wrapper = gen::wrapper::generate(&ctx)?;
-    let conversions = gen::type_conversions::generate(&ctx);
+    let (wrapper, body_fns) = gen::wrapper::generate(&ctx)?;
+    let (conversions, inner_consts) = gen::type_conversions::generate(&ctx);
     let base_fns = gen::virtual_dispatch::base_fns(&ctx);
+    // 非泛型 base 函数随存储层拆入实现层；泛型者（类 / 方法泛型）与存根留在声明层
+    let (generic_base, split_base): (Vec<_>, Vec<_>) = base_fns.into_iter().partition(|b| b.decl_only);
+    let generic_base: Vec<TokenStream2> = generic_base.into_iter().map(|b| b.item).collect();
+    let split_base: Vec<TokenStream2> = split_base.into_iter().map(|b| b.item).collect();
 
-    Ok(quote! {
-        #dispatch_trait
-        #layout
-        #dispatch_impls
-        #wrapper
-        #conversions
-        #base_fns
+    let hooks = place_fns(layer, &binary_name, &hooks)?;
+    let body_fns = place_fns(layer, &binary_name, &body_fns)?;
+    let split_base = place_fns(layer, &binary_name, &split_base)?;
+    Ok(match layer {
+        Layer::Full => quote! {
+            #dispatch_trait
+            #layout
+            #hooks
+            #dispatch_impls
+            #wrapper
+            #body_fns
+            #conversions
+            #inner_consts
+            #(#generic_base)*
+            #split_base
+        },
+        Layer::Decl => quote! {
+            #dispatch_trait
+            #hooks
+            #wrapper
+            #body_fns
+            #conversions
+            #(#generic_base)*
+            #split_base
+        },
+        Layer::Body => quote! {
+            #layout
+            #hooks
+            #dispatch_impls
+            #body_fns
+            #inner_consts
+            #split_base
+        },
     })
 }

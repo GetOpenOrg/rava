@@ -197,6 +197,7 @@ dynamic = [
     "java.home", "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
     "os.name", "os.arch", "os.version", "sun.arch.data.model", "sun.cpu.endian", "sun.io.unicode.encoding",
     "sun.boot.library.path", "native.encoding", "sun.jnu.encoding", "user.timezone",
+    "user.language", "user.country",
     # VersionProps.init（翻译的字节码，取值随语料 JDK）
     "java.version", "java.version.date", "java.runtime.version", "java.runtime.name", "java.vendor.version",
     "java.class.version", "java.specification.version", "java.specification.name", "java.specification.vendor",

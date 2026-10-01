@@ -7,8 +7,10 @@ use syn::Ident;
 
 use super::super::erasure::type_args_arity;
 use super::context::GenContext;
+use super::storage_hooks::hook_ident;
 
-pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
+/// 返回 (声明层转换项, 存储类型 `X__inner` 上的 BINARY_NAME 常量——随存储层进实现层)
+pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     let struct_ident = &ctx.struct_ident;
     let inner_ident = &ctx.inner_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
@@ -17,24 +19,26 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let where_c = &ctx.where_c;
     let phantom_init = &ctx.phantom_init;
     let binary_name = &ctx.meta.binary_name;
+    let from_any = hook_ident(ctx, "from_any");
 
     // ══════════════════════════════════════════════════════════════════════════
     // 8. BINARY_NAME 常量
     // ══════════════════════════════════════════════════════════════════════════
 
-    let binary_name_impl: TokenStream2 = if !binary_name.is_empty() {
-        quote! {
+    let (binary_name_impl, inner_binary_name): (TokenStream2, TokenStream2) = if !binary_name.is_empty() {
+        (quote! {
             impl #impl_g #struct_ident #ty_g #where_c {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
+        }, quote! {
             // vtable 上下文（impl XxxVTable for __inner）中的方法体里 Self = __inner，
             // Self::BINARY_NAME 必须同样可解析（__inner 非泛型，A-1 存储层擦除）
             impl #inner_ident {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
-        }
+        })
     } else {
-        quote! {}
+        (quote! {}, quote! {})
     };
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -80,12 +84,11 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                         }
                         // 部件路径 B（祖先视图值）：运行时 inner 就是本类 inner（如
                         // `Enum<E>::from(枚举常量)` 装箱后按子类取回）→ 按精确 inner 还原
-                        match __any.downcast::<#inner_ident>() {
-                            ::std::result::Result::Ok(__rc) => {
+                        match #from_any(__any) {
+                            ::std::result::Result::Ok((__vt, __any)) => {
                                 return #struct_ident {
-                                    vtable: __Shared::clone(&__rc)
-                                        as __Shared<dyn #vtable_trait_ident>,
-                                    any: __rc as __AnyRef,
+                                    vtable: __vt,
+                                    any: __any,
                                     _jvm_null: false,
                                     #phantom_init
                                 };
@@ -177,10 +180,10 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         quote! {}
     };
 
-    quote! {
+    (quote! {
         #binary_name_impl
         #from_object_impl
         #into_object_impl
         #from_child_for_parent
-    }
+    }, inner_binary_name)
 }

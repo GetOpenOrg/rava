@@ -5,12 +5,16 @@ use super::*;
 impl<'a> Engine<'a> {
     pub(super) fn process_bytecode(&mut self, m: usize) {
         let Some(a) = self.analysis(m) else { return };
-        if !self.methods[m].applied.as_ref().is_some_and(|o| Rc::ptr_eq(o, &a)) {
+        // 同一次装入：`applied` 就是当前这次装入的分析（共享摘要下 `Rc` 身份不足以判定）
+        let seq = self.methods[m].aseq;
+        let same = self.methods[m].applied.is_some() && self.methods[m].applied_seq == seq;
+        if !same {
             self.sysprops_scan(m, &a);
         }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);
         self.returns(m, &a);
+        self.methods[m].applied_seq = seq;
         let old = match self.methods[m].applied.replace(a.clone()) {
             // 首次 / 被调方摘要变化：站点按新摘要完整重接
             None => {
@@ -18,7 +22,7 @@ impl<'a> Engine<'a> {
                 None
             }
             // 同一分析重处理（open 展开的 G 增长）：站点去重记录仍成立
-            Some(o) if Rc::ptr_eq(&o, &a) => {
+            Some(_) if same => {
                 self.ctx.stats.borrow_mut().reprocess += 1;
                 None
             }
@@ -266,7 +270,7 @@ impl<'a> Engine<'a> {
         // 字节码站点重跑（接收者集合增长）：与值无关的部分（登记类 / 值集 / 手写访问器）与未知接收者视图
         // 各只接一次，只处理新增抽象对象（`recv_done` 以哨兵登记，同一分析结果下成立）
         let fresh = self.methods[m].kind == Kind::Bytecode && res == Node::S(m, off);
-        let first = !fresh || self.recv_done.entry(m).or_default().insert((off, FIELD_STATIC));
+        let first = !fresh || self.recv_mark(m, off, FIELD_STATIC);
         let via = Via::method("field", m, Some(off));
         let Some(site) = self.h.resolve_field(&f.owner, &f.name, &f.desc) else {
             self.touch(&f.owner, Level::Type, via);
@@ -275,8 +279,10 @@ impl<'a> Engine<'a> {
         };
         let decl = site.class.name.clone();
         if first {
-            self.touch(&f.owner, Level::Type, via.clone());
+            // 字段读写按属主的字段访问器发射（静态字段经属主类名访问）：属主至少 L2
+            self.touch(&f.owner, Level::Layout, via.clone());
             self.touch_desc(&f.desc, &via);
+            self.nest_access(m, off, &decl, site.field().access & acc::PRIVATE != 0);
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
@@ -305,26 +311,30 @@ impl<'a> Engine<'a> {
                 let oid = self.id(&f.owner);
                 let fs = self.feeds(m, v, oid);
                 let s = self.value_set(&fs);
+                // 字节码站点重跑：只看新增的接收者值（过滤结果按值确定，已看过的值已接上）
+                let s = if fresh { self.recv_delta(m, off, s) } else { s };
                 let s = self.filter(&s, oid);
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
             }
             None => (vec![], true),
         };
-        let (objs, other) = if fresh {
-            let done = self.recv_done.entry(m).or_default();
-            (objs.into_iter().filter(|&o| done.insert((off, o))).collect(), other && done.insert((off, FIELD_OTHER)))
-        } else {
-            (objs, other)
-        };
+        let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {
                 Some(v) => self.feeds(m, v, tid),
                 None => vec![Feed::S(TypeSet::open(tid))],
             };
-            for n in nodes {
-                self.feed(&fs, n, tid);
+            if fresh {
+                // 字节码写站点：抽象对象多时经汇集节点分发（与逐对象接边同集合，见 `gather.rs`）
+                if !objs.is_empty() {
+                    self.gather_write(m, off, fi, tid, &objs, &fs);
+                }
+            } else {
+                for n in nodes {
+                    self.feed(&fs, n, tid);
+                }
             }
             if other {
                 self.feed(&fs, Node::U(fi), tid);
@@ -332,6 +342,17 @@ impl<'a> Engine<'a> {
             // 边界类字段 / 有手写访问器的字段：写入值由手写层读出
             if first && (matches!(self.domain(&decl), Domain::Boundary | Domain::Root) || !self.hw.member(&decl, &f.name).fns.is_empty()) {
                 self.feed(&fs, Node::Esc, tid);
+            }
+        } else if fresh {
+            // 字节码读站点：抽象对象多时经汇集节点汇集（与逐对象接边同集合，见 `gather.rs`）
+            if !objs.is_empty() {
+                self.gather_read(m, off, fi, tid, &objs, res);
+            }
+            if other {
+                self.flow(Node::F(fi), res, tid);
+            }
+            if first {
+                self.field_handwritten(&decl, &f.name, &f.desc, &via, Some((fi, tid)));
             }
         } else {
             for n in nodes {
@@ -365,3 +386,63 @@ impl<'a> Engine<'a> {
     }
 }
 
+
+impl Engine<'_> {
+    /// 站点 (m, off) 登记已接上的接收者对象（或哨兵）x；首次登记返回 true
+    /// 批量登记升序的对象 xs，返回其中新登记的（升序）；一趟归并，免逐个插入的搬移
+    pub(super) fn recv_mark_all(&mut self, m: usize, off: u32, xs: &[u32]) -> Vec<u32> {
+        let v = self.recv_done.entry(m).or_default().entry(off).or_default();
+        let mut new = Vec::new();
+        let mut i = 0;
+        for &x in xs {
+            while i < v.len() && v[i] < x {
+                i += 1;
+            }
+            if i == v.len() || v[i] != x {
+                new.push(x);
+            }
+        }
+        if !new.is_empty() {
+            let old = std::mem::take(v);
+            let mut out = Vec::with_capacity(old.len() + new.len());
+            let (mut a, mut b) = (old.iter().peekable(), new.iter().peekable());
+            while let (Some(&&p), Some(&&q)) = (a.peek(), b.peek()) {
+                if p < q {
+                    out.push(p);
+                    a.next();
+                } else {
+                    out.push(q);
+                    b.next();
+                }
+            }
+            out.extend(a);
+            out.extend(b);
+            *v = out;
+        }
+        new
+    }
+
+    /// 站点 (m, off) 的接收者值集 s 中尚未接过的部分（精确值与 open 值分别登记，open 值以 `OPEN_MARK` 区分）
+    pub(super) fn recv_delta(&mut self, m: usize, off: u32, s: TypeSet) -> TypeSet {
+        let cs: Vec<u32> = s.classes.iter().collect();
+        let classes = IdSet::from_sorted(self.recv_mark_all(m, off, &cs));
+        let open = if s.open.is_empty() {
+            s.open
+        } else {
+            let os: Vec<u32> = s.open.iter().map(|o| o | OPEN_MARK).collect();
+            IdSet::from_sorted(self.recv_mark_all(m, off, &os).into_iter().map(|o| o & !OPEN_MARK).collect())
+        };
+        TypeSet { classes, open }
+    }
+
+    pub(super) fn recv_mark(&mut self, m: usize, off: u32, x: u32) -> bool {
+        let v = self.recv_done.entry(m).or_default().entry(off).or_default();
+        match v.binary_search(&x) {
+            Ok(_) => false,
+            Err(i) => {
+                v.insert(i, x);
+                true
+            }
+        }
+    }
+}

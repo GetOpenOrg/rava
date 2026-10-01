@@ -9,12 +9,13 @@ impl<'a> Engine<'a> {
     /// 按方法标签排序；只含有折叠内容的字节码方法
     /// 同一成员的各克隆合并：任一克隆可达即可达，常量须在其可达的全部克隆里一致
     pub fn folds(&self) -> Vec<Fold> {
-        let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::new();
+        let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::default();
         for (i, mn) in self.methods.values().enumerate() {
             if mn.kind == Kind::Bytecode {
                 groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
             }
         }
+        let um = self.unmodeled();
         let mut out = Vec::new();
         for (key, group) in groups {
             let clones: Vec<usize> = group.iter().map(|(i, _)| *i).collect();
@@ -26,7 +27,7 @@ impl<'a> Engine<'a> {
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
             self.dead_catches(code, &mut f);
-            f.null_recv = self.null_recv(&clones);
+            f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
@@ -41,13 +42,18 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 折叠所用的系统属性表（清单 `[facts.system_properties]`）：运行时初始属性表与之同源
+    pub fn sysprops(&self) -> &crate::manifest::SysProps {
+        &self.man.sysprops
+    }
+
     /// 折叠常量里来自系统属性读取的调用点
     fn prop_folds(&self, f: &Fold, all: &[Rc<Analysis>]) -> Vec<u32> {
         f.consts
             .iter()
             .filter(|c| {
                 all.iter().flat_map(|a| a.events.iter()).any(|(pc, e)| {
-                    *pc == c.0 && matches!(e, Event::Invoke { opcode, mref, iface, .. } if self.ctx.read_spec(*opcode, mref, *iface, None).is_some())
+                    *pc == c.0 && matches!(e, Event::Invoke { opcode, mref, iface, .. } if self.ctx.read_spec(None, *opcode, mref, *iface, None).is_some())
                 })
             })
             .map(|c| c.0)
@@ -105,6 +111,10 @@ impl<'a> Engine<'a> {
             Node::Esc => "escape".into(),
             Node::HP(h, i) => format!("hub 实参{i} {}", self.hub_label(h)),
             Node::HR(h) => format!("hub 返回 {}", self.hub_label(h)),
+            Node::G(g) => {
+                let (fi, n, put) = self.gathers[g as usize];
+                format!("field {} {} {n} objects", self.field_label(fi), if put { "into" } else { "of" })
+            }
             Node::A(s, i) | Node::W(s, i) => {
                 let (m, off, t) = self.hw_sites[s as usize];
                 let k = if matches!(n, Node::A(..)) { "实参" } else { "写入" };
@@ -345,7 +355,7 @@ impl<'a> Engine<'a> {
         self.methods
             .values()
             .enumerate()
-            .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_hwobj_method(*i))
+            .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_pseudo_method(*i))
             .map(|(_, m)| m)
     }
 
@@ -374,17 +384,40 @@ impl<'a> Engine<'a> {
         self.method_nodes().count()
     }
 
+    /// 经虚分派到达的实现（按成员合并克隆，标签排序）：全部活虚调用点（字节码 invokevirtual /
+    /// invokeinterface，含单目标及按非虚处理的 final 方法 / final 类调用点；手写层回调；枢纽中转）的目标之并，
+    /// 以及 VM 反射虚调用选中的实现。
+    /// 生成器据此只为被派发到的实现占 vtable 槽（C3 第 5 项）；手写实现对象的方法不是 Java 方法，不输出
+    pub fn dispatched(&self) -> Vec<String> {
+        let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
+        let mut ids: BTreeSet<usize> = BTreeSet::new();
+        for site in self.recv_sites.iter().chain(self.direct_virtual_sites.iter()).chain(self.hub_sites.keys()) {
+            ids.extend(self.dispatch.get(site).into_iter().flatten().filter(|t| !self.is_pseudo_method(**t)).map(|&t| canon[t]));
+        }
+        let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
+        for hs in self.hub_sites.values() {
+            for &h in hs {
+                ids.extend(self.hub_targets_canon(h, &canon, &mut memo).iter().copied());
+            }
+        }
+        ids.extend(self.vm_targets.iter().map(|&t| canon[t]));
+        let mut out: Vec<String> = ids.into_iter().map(|i| self.method_label(i)).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// 调用点分派（按成员合并克隆）：调用方法标签@偏移 → 目标方法标签。
     /// 先按成员代表序号（`mbase`）聚合、枢纽目标链逐枢纽记忆，最后才格式化标签
     pub fn dispatch_sites(&self) -> BTreeMap<(String, u32), BTreeSet<String>> {
         let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
         let mut ids: HashMap<(usize, u32), BTreeSet<usize>> = HashMap::default();
         for ((m, off), ts) in &self.dispatch {
-            if self.is_hwobj_method(*m) {
+            if self.is_pseudo_method(*m) {
                 continue;
             }
             let e = ids.entry((canon[*m], *off)).or_default();
-            e.extend(ts.iter().filter(|t| !self.is_hwobj_method(**t)).map(|&t| canon[t]));
+            e.extend(ts.iter().filter(|t| !self.is_pseudo_method(**t)).map(|&t| canon[t]));
         }
         let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
         for ((m, off), hs) in &self.hub_sites {

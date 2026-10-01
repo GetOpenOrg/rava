@@ -5,7 +5,7 @@
 //! `erased_own` / `erased_super` / `phantom_field` / `phantom_init` / `inherited` /
 //! `vdispatch` 等字段（差异见拆分报告）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -126,7 +126,7 @@ pub(crate) struct GenContext<'a> {
 
     // ── 方法分类 ──────────────────────────────────────────────
     pub(crate) vtable_defines: Vec<&'a FnItem>,
-    pub(crate) vtable_overrides: HashMap<String, Vec<&'a FnItem>>,
+    pub(crate) vtable_overrides: BTreeMap<String, Vec<&'a FnItem>>,
     /// Constructor + NonVirtual 合并（代码中不分离）
     pub(crate) non_virtual: Vec<&'a FnItem>,
     /// 继承成员声明（祖先声明、本类未覆盖）→ wrapper 上的转发方法
@@ -199,10 +199,10 @@ impl<'a> GenContext<'a> {
 
         // ── 方法分类 ─────────────────────────────────────────────────────────────
         // vtable_defines:  VirtualDefine 方法
-        // vtable_overrides: vtable_class → Vec<method>
+        // vtable_overrides: vtable_class → Vec<method>（有序表：展开结果跨进程确定）
         // non_virtual:     Constructor / NonVirtual 方法
         let mut vtable_defines: Vec<&FnItem> = Vec::new();
-        let mut vtable_overrides: HashMap<String, Vec<&FnItem>> = HashMap::new();
+        let mut vtable_overrides: BTreeMap<String, Vec<&FnItem>> = BTreeMap::new();
         let mut non_virtual: Vec<&FnItem> = Vec::new();
         // inherited:       继承成员声明（祖先声明、本类未覆盖）→ wrapper 上的转发方法
         let mut inherited: Vec<(&FnItem, String, Option<String>, bool)> = Vec::new();
@@ -257,7 +257,7 @@ impl<'a> GenContext<'a> {
             let params: Vec<&Ident> = gen.params.iter()
                 .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
                 .collect();
-            quote! { __phantom: ( #( ::std::marker::PhantomData<fn() -> #params>, )* ) }
+            quote! { #[doc(hidden)] pub __phantom: ( #( ::std::marker::PhantomData<fn() -> #params>, )* ) }
         } else {
             quote! {}
         };

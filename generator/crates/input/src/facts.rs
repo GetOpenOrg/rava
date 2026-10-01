@@ -116,6 +116,12 @@ pub struct MethodFold {
     pub dead_catches: BTreeSet<DeadCatch>,
     /// pc → 常量读取点
     pub consts: BTreeMap<u32, FoldConst>,
+    /// 接收者恒为 null 的活虚调用点：执行即 NullPointerException，调用不翻译
+    pub null_recv: BTreeSet<u32>,
+    /// 定论不返回的活调用点：调用照常翻译，其后控制流终止
+    pub noreturn_calls: BTreeSet<u32>,
+    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
+    pub noreturn_dead_pcs: Vec<(u32, u32)>,
 }
 
 /// 种子输出
@@ -145,6 +151,10 @@ pub struct ClosureFacts {
     pub reflect_members: Vec<MemberRef>,
     pub reflect_gaps: Vec<String>,
     pub seeds: SeedFacts,
+    /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
+    pub dispatched: Vec<MemberRef>,
+    /// 已实例化的类（lambda / 手写实现对象 / 数组除外）
+    pub instantiated: Vec<String>,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -214,6 +224,9 @@ impl ClosureFacts {
                     .map(|c| DeadCatch { start: c.start, end: c.end, handler: c.handler, catch_type: c.catch_type.clone() })
                     .collect(),
                 consts,
+                null_recv: f.null_recv.iter().copied().collect(),
+                noreturn_calls: f.noreturn_calls.iter().copied().collect(),
+                noreturn_dead_pcs: f.noreturn_dead_pcs.clone(),
             };
             folds.insert(f.method.clone(), mf);
         }
@@ -234,6 +247,8 @@ impl ClosureFacts {
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
             },
+            dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
+            instantiated: e.instantiated(),
         }
     }
 
@@ -272,6 +287,8 @@ impl ClosureFacts {
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
         }
+        out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
+        out.instantiated = strings(v.get("instantiated"))?;
         Ok(out)
     }
 }
@@ -315,6 +332,7 @@ fn parse_domain(s: &str) -> Result<Domain, InputError> {
 fn parse_level(s: &str) -> Result<Level, InputError> {
     Ok(match s {
         "type" => Level::Type,
+        "layout" => Level::Layout,
         "init" => Level::Init,
         "alloc" => Level::Alloc,
         "code" => Level::Code,
@@ -336,12 +354,27 @@ fn parse_fold_value(v: &Value, ty: &str) -> Result<FoldValue, InputError> {
     })
 }
 
-pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
-    let mut mf = MethodFold::default();
-    for r in f.get("dead_pcs").and_then(Value::as_array).into_iter().flatten() {
-        let pair = r.as_array().filter(|p| p.len() == 2).ok_or_else(|| InputError::Format(format!("dead_pcs 项不合法：{r}")))?;
-        mf.dead_pcs.push((u32_of(&pair[0])?, u32_of(&pair[1])?));
+fn parse_ranges(f: &Value, key: &str) -> Result<Vec<(u32, u32)>, InputError> {
+    let mut out = Vec::new();
+    for r in f.get(key).and_then(Value::as_array).into_iter().flatten() {
+        let pair = r.as_array().filter(|p| p.len() == 2).ok_or_else(|| InputError::Format(format!("{key} 项不合法：{r}")))?;
+        out.push((u32_of(&pair[0])?, u32_of(&pair[1])?));
     }
+    Ok(out)
+}
+
+fn parse_pcs(f: &Value, key: &str) -> Result<BTreeSet<u32>, InputError> {
+    f.get(key).and_then(Value::as_array).into_iter().flatten().map(u32_of).collect()
+}
+
+pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
+    let mut mf = MethodFold {
+        dead_pcs: parse_ranges(f, "dead_pcs")?,
+        null_recv: parse_pcs(f, "null_recv")?,
+        noreturn_calls: parse_pcs(f, "noreturn_calls")?,
+        noreturn_dead_pcs: parse_ranges(f, "noreturn_dead_pcs")?,
+        ..MethodFold::default()
+    };
     for h in f.get("dead_handlers").and_then(Value::as_array).into_iter().flatten() {
         mf.dead_handlers.insert(u32_of(h)?);
     }

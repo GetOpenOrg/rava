@@ -28,21 +28,8 @@ fn bit(i: u16) -> SlotMask {
 }
 
 impl<'a> Engine<'a> {
-    /// 调用点 (m, off) 的被调方法节点：字节码调用方调用上下文无关的分派转发方法时按调用点克隆
-    /// （调用方在上下文中则继承之），其余照 `ctx`。在建节点前判定，不建出无调用方的本体
-    pub(super) fn callee(&mut self, m: usize, off: u32, key: MemberRef, ctx: u32, via: Via) -> usize {
-        let ctx = match ctx {
-            NOCTX if self.methods[m].kind == Kind::Bytecode && self.forwarder(&key) => match self.methods[m].ctx {
-                NOCTX => self.site_ctx(m, off),
-                c => c,
-            },
-            c => c,
-        };
-        self.method_ctx(key, ctx, via)
-    }
-
     /// 分派转发方法：静态方法，且有引用形参流到分派接收者
-    fn forwarder(&mut self, key: &MemberRef) -> bool {
+    pub(super) fn forwarder(&mut self, key: &MemberRef) -> bool {
         let is_static = self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(|m| m.is_static())).unwrap_or(false);
         is_static && self.dispatch_slots(key) != 0
     }

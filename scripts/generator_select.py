@@ -24,6 +24,7 @@ _GENERATOR_MANIFEST = os.path.join(_REPO, 'generator', 'Cargo.toml')
 # 与 codegen/closure_input.py 的闭包分析器共用构建目录（同一 rava 二进制，避免重复编译）
 _RAVA_TARGET = os.path.join(_REPO, 'build', 'analyzer-target')
 _RUNTIME = os.path.join(_REPO, 'runtime', 'java_runtime')
+_CLOSURE_CACHE = os.path.join(_REPO, 'build', 'closure_cache')
 
 
 def add_argument(ap) -> None:
@@ -60,6 +61,8 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
         sys.exit('Rust 生成器需要 JAVA_HOME（main.py 经 jdk_select.apply_jdk 设置）')
     cmd = rava_cmd('build', *[os.path.abspath(f) for f in java_files],
                    '--java-home', home, '--runtime', _RUNTIME, '--out', os.path.abspath(out_dir), '--no-run')
+    # 闭包分析跨运行结果缓存（键覆盖分析器、JDK、手写层、用户类与全部分析参数，见 closure::cache）
+    cmd += ['--closure-cache', _CLOSURE_CACHE]
     if clean:
         cmd.append('--clean')
     for loc in locales:

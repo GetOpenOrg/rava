@@ -13,7 +13,7 @@
 //! 引擎据此把实参、返回值、字段写入、数组写入精确连到各自的类型节点（值级 VTA），
 //! 而不是整个方法共用一个类型集。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use classfile::descriptor::{parse_field, parse_method, FieldType};
@@ -116,6 +116,21 @@ impl V {
                 .iter()
                 .filter_map(|s| match *s {
                     Src::Str(id) => Some(lit_str(id)),
+                    _ => None,
+                })
+                .collect(),
+            _ => vec![],
+        }
+    }
+
+    /// 同 [`V::lits`]，取字面量序号（见 `lit.rs`）
+    pub fn lit_ids(&self) -> Vec<u32> {
+        match self {
+            V::Str(s) => vec![lit_id(s)],
+            V::Ref { src, .. } => src
+                .iter()
+                .filter_map(|s| match *s {
+                    Src::Str(id) => Some(id),
                     _ => None,
                 })
                 .collect(),
@@ -1009,8 +1024,8 @@ pub fn analyze<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code,
 fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle: &O) -> Option<Analysis> {
     let insns = &code.insns;
     let n = insns.len();
-    let idx: HashMap<u32, usize> = insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
-    let at = |off: u32| idx.get(&off).copied();
+    // 指令按偏移升序：偏移 → 下标用二分（免逐次分析建表）
+    let at = |off: u32| insns.binary_search_by_key(&off, |x| x.offset).ok();
 
     // 基本块首指令
     let mut leader = vec![false; n];

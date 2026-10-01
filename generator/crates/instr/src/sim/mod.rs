@@ -3,6 +3,7 @@
 //! 逐一尝试；折叠点（[`NInsn::FoldField`] / [`NInsn::FoldCall`]）先按原语义处理再压常量；
 //! 未知指令发射 `panic!("stub: unsupported bytecode ..")` 存根（不得静默丢弃）。
 
+pub mod abrupt;
 pub mod arith;
 pub mod arrays;
 pub mod consts;
@@ -44,6 +45,8 @@ pub fn sim_instr(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &N
             }
             load_const(env, sim, log, load)
         }
+        NInsn::NullRecv { call } => abrupt::null_recv(env, sim, call),
+        NInsn::NoReturn { call } => abrupt::noreturn(env, sim, log, call),
     }
 }
 
@@ -63,7 +66,7 @@ fn load_const(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, load: &Ins
     Ok(())
 }
 
-fn sim_insn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) -> InstrResult<()> {
+pub(crate) fn sim_insn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) -> InstrResult<()> {
     let handled = consts::sim_consts(env, sim, log, ins)?
         || locals::sim_locals(env, sim, ins)?
         || arith::sim_arith(env, sim, ins)?

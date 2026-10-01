@@ -20,7 +20,7 @@ impl Engine<'_> {
                 continue;
             }
             let (class, v) = if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-                ("clinit", self.ctx.static_const(&fi.key, None))
+                ("clinit", self.ctx.static_const(None, &fi.key, None))
             } else {
                 match self.ctx.fvals.borrow().get(&fi.key) {
                     Some(pv) => ("writes", pv.value()),

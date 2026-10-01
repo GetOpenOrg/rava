@@ -73,6 +73,8 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`scripts/gap_scan.py api` 使用） |
 | `--raw-sites FILE` | 同 `main.py --raw-sites`（位点为构造调用处 `文件:行:列`） |
 | `--closure-json` | 仅 build：另写出 `<scratch>/closure_input/closure.json`（`rava emit` 与动态对照的输入），并校验 `ClosureFacts::from_json` 与 `ClosureFacts::from_closure` 的结果逐字节一致（`Debug` 文本）。缺省不写，同时删除该处上轮遗留的 closure.json |
+| `--closure-cache DIR` | 闭包分析跨运行结果缓存目录（`main.py` 缺省传 `<仓库>/build/closure_cache`，无需配置）。键覆盖分析器可执行文件内容、JDK jmods 与镜像目录、`runtime/java_runtime` 全部文件、用户类与 `--lib` 内容、全部影响结果的参数（入口、`--root` / `--seed-class` / `--api-package` 展开后的种子、`--locale`）与条目格式 / closure.json 折叠点版本；任一变化即不命中。命中时诊断行原样重放、`closure.json` 除 `summary.elapsed_ms` / `summary.perf` 外与冷算逐字节相同，事实经 `ClosureFacts::from_json` 交给发射。冷算时（启用缓存即）总校验 `from_json` 与进程内直传一致。条目损坏即删除重算；`--trace-class`（及 `rava closure` 的 `--why` / `--flows` / `--report`）需引擎本体，不读缓存（冷算结果仍写回）。`rava closure` 同样接受本组选项。不设则不缓存 |
+| `--closure-cache-max-mb N` | 缓存目录总量上限（缺省 4096），写入后超出即按最近使用时间从旧到新淘汰；须配合 `--closure-cache` |
 | `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
 | `--perf` | 输出 `[perf]` 分阶段耗时、峰值 RSS 与逐类 / 逐方法耗时 Top-N |
 | `--cut E` / `--cut-file F` / `--dump-edges F` | 仅 build：闭包诊断，同下 `rava closure` |
@@ -128,7 +130,8 @@ RUST_BACKTRACE=1 python3 scripts/main.py Foo.java
 | `CARGO_TARGET_DIR` | 脚本自动设置 | 共享编译缓存（`run_tests.py` 为 `build/jdk<N>/target`，`main.py` 为 `build/target`），无需手动设置 |
 | `CARGO_INCREMENTAL` | 脚本自动设为 `0` | 关闭增量编译：宽闭包下增量元数据是 OOM 的主要诱因 |
 | `CARGO_PROFILE_DEV_DEBUG` | 脚本缺省 `line-tables-only`（`cargo_env.py`，显式设置时尊重） | 减少调试信息：debuginfo=2 下大闭包 rustc 峰值约 13.8G 会被 OOM 杀；减量后二进制约减半、保留行号回溯 |
-| `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8` | 保证非 ASCII 输出一致 |
+| `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8`；`run_tests.py` 对 golden JVM 与被测二进制设 `LC_ALL=en_US.UTF-8` | 保证非 ASCII 输出一致；固定默认 locale（JVM 另加 `-Duser.language=en -Duser.country=US`，macOS 的 JVM 取系统偏好而非 LANG），golden 不随机器变化 |
+| `TZ` | `run_tests.py` 对 golden JVM 与被测二进制设为 `UTC` | 固定默认时区（JVM 另加 `-Duser.timezone=UTC`）；运行时按 JDK 语义取 TZ |
 | `PYTHONHASHSEED` | `seed_check.sh` | 双种子确定性检查（1 / 2 各转译一次，生成树必须一致） |
 | `XDG_CACHE_HOME` | `jdk_resolver.py` | JDK 解包缓存根目录（缺省 `~/.cache`，缓存在 `<根>/rava/`） |
 | `HOMEBREW_PREFIX` | `jdk_select.py` | macOS 自定义 brew 前缀，优先于 `/opt/homebrew`、`/usr/local` 扫描 |

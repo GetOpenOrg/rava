@@ -389,7 +389,7 @@ def _gen_native_stub(m: ParsedMethod, ci: ClassInfo, rust_name: str | None = Non
                 # 不使用外层 {} 包裹：宏会把整个内层 block 作为单条语句剥离掉。
                 # 用 let this = self; 兼容两种上下文：
                 #   - impl VTable for __inner：self 是 &__inner，赋值给 this
-                #   - base 自由函数：宏剥离 "let this = self;" 后，this 是参数 &__BT
+                #   - base 自由函数：宏剥离 "let this = self;" 后，this 是参数 &dyn VTable
                 body = (
                     'let this = self;\n'
                     '    let val = this.__get_value();\n'

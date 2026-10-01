@@ -63,7 +63,7 @@ pub struct Blocks<'s, 'e> {
     pub(crate) log: &'s mut InstrLog,
     pub(crate) ledger: &'s mut JumpLedger,
     code: &'s [NInsn],
-    /// CFG 视图：FoldCall → 调用指令，FoldField → nop
+    /// CFG 视图：FoldCall → 调用指令，FoldField → nop，NullRecv / NoReturn → athrow
     insns: Vec<Insn>,
     exception_table: &'s [ExceptionEntry],
     pub(crate) plan: TryPlan,
@@ -78,10 +78,12 @@ pub struct Blocks<'s, 'e> {
     pub(crate) conds: CondValues,
 }
 
-/// 规范化指令的 CFG 视图
+/// 规范化指令的 CFG 视图：控制流终点（null_recv / noreturn 调用）视同 athrow——无正常后继，
+/// 只经覆盖它的异常处理器转移
 pub fn cfg_view(code: &[NInsn]) -> Vec<Insn> {
     code.iter()
         .map(|n| match n.insn() {
+            _ if n.is_abrupt() => Insn { offset: n.offset(), opcode: classfile::insn::op::ATHROW, operand: Operand::None },
             Some(i) => i.clone(),
             None => Insn { offset: n.offset(), opcode: 0x00, operand: Operand::None },
         })

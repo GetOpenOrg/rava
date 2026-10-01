@@ -4,7 +4,8 @@
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
 //!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
-//!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]`（后三项为闭包诊断，同 `rava closure`）
+//!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
+//!   [--closure-cache DIR [--closure-cache-max-mb N]]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]
 //!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
@@ -103,9 +104,15 @@ pub struct BuildOpts {
     /// build：另写出 `<scratch>/closure_input/closure.json`（调试 / 审计 / `rava emit` 输入），并校验
     /// 由它解析的发射输入与进程内直传的一致；缺省不写（闭包结果只在内存中交给发射层）
     pub closure_json: bool,
+    /// build：闭包分析跨运行结果缓存目录（`closure::cache`；缺省不用缓存）
+    pub closure_cache: Option<PathBuf>,
+    /// 缓存总量上限（MB；缺省 `closure::cache::DEFAULT_MAX_MB`）
+    pub closure_cache_max_mb: Option<u64>,
 }
 
-const VALUED: [&str; 19] = [
+const VALUED: [&str; 21] = [
+    "--closure-cache",
+    "--closure-cache-max-mb",
     "--jdk",
     "--java-home",
     "--runtime",
@@ -129,7 +136,9 @@ const VALUED: [&str; 19] = [
 const FLAGS: [&str; 9] =
     ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf", "--closure-json"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 14] = [
+const BUILD_ONLY: [&str; 16] = [
+    "--closure-cache",
+    "--closure-cache-max-mb",
     "--main",
     "--locale",
     "--root",
@@ -197,6 +206,10 @@ impl BuildOpts {
                 "--trace-class" => o.trace_class = Some(v.clone()),
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
                 "--api-package" => o.api_packages.push(v.clone()),
+                "--closure-cache" => o.closure_cache = Some(PathBuf::from(v)),
+                "--closure-cache-max-mb" => {
+                    o.closure_cache_max_mb = Some(v.parse().map_err(|_| format!("--closure-cache-max-mb 需为数字：{v}"))?)
+                }
                 _ => o.roots.push(v.clone()),
             }
         }
@@ -207,6 +220,9 @@ impl BuildOpts {
     fn validate(&self, mode: Mode) -> Result<(), String> {
         if self.jdk.is_some() && self.java_home.is_some() {
             return Err("--jdk 与 --java-home 互斥".into());
+        }
+        if self.closure_cache_max_mb.is_some() && self.closure_cache.is_none() {
+            return Err("--closure-cache-max-mb 需配合 --closure-cache".into());
         }
         if self.api_recursive && self.api_packages.is_empty() {
             return Err("--api-recursive 需配合 --api-package".into());
@@ -372,6 +388,16 @@ mod tests {
         assert!(o.api_recursive);
         assert!(BuildOpts::parse(Mode::Build, &args("E.java --api-recursive")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --api-package java/util")).is_err());
+    }
+
+    #[test]
+    fn closure_cache_options() {
+        let o = BuildOpts::parse(Mode::Build, &args("E.java --closure-cache /c --closure-cache-max-mb 64")).unwrap();
+        assert_eq!(o.closure_cache.as_deref(), Some(Path::new("/c")));
+        assert_eq!(o.closure_cache_max_mb, Some(64));
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache-max-mb 64")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache /c --closure-cache-max-mb x")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --closure-cache /c")).is_err());
     }
 
     #[test]
