@@ -998,6 +998,21 @@ null_recv 总数 62 → 39，`main` 的 null_recv 为空；dyn 漏 4 → 0（`Di
 其 indy 进 `indy_models` 后归 `indy-model`）。EisensteinPrimes 928 / 5274，dyn 漏 1 → 0。DeepCopy / Digester / CollectorsDemo / TestStreamAdvanced
 类 / 方法与上一项逐一相同，漏均为 0。`scripts/main.py` 持锁单跑 ComparatorFactory（258 JDK 类）、EisensteinPrimes（925 JDK 类）输出与期望一致。提交 fb5ffb99。
 
+**健全性 S5：VM 钩子的回调边未入闭包（TestDynamicProxy 运行期命中存根 `Character.valueOf:(C)`，main 5476da30 同样失败）**：
+归因——不是代理分派模型、也不是装箱模型的缺口，而是手写层「VM 钩子」未建模。`Proxy$Dyn` 手写文件里的 `__vm_proxy_invoke`
+由 rava_macros 接口载体回落直接调用（不经 Java 调用点），其 `#[jvm_boundary(upcalls=…)]` 声明了 `Proxy$Dyn.dispatch` 与 8 个
+`<Box>.valueOf`（`rebox` 把 `h.invoke` 的结果按接口方法返回类型拆装箱）。闭包只按 Java 成员名匹配手写 fn（`Handwritten::member`），
+非成员 fn 上的回调边从不被吸收；Integer / Long / Boolean.valueOf 恰好经别处可达，Character.valueOf 无人引用。dyn_compare 按类对照，
+Character 类已在闭包内，故报 miss 0 而漏掉方法。
+修法（通用规则，无类名）：`ClassHw::vm_hooks`——类的手写文件里声明了回调边、却不匹配该类及其全部超类型任何方法名的 pub fn 即
+VM 钩子（`handwritten/hooks.rs`）；该类进 G（实例化）时，每个钩子登记一个伪方法节点（`engine/vmhook.rs`，kind `vm-hook`，接收者
+= 该类对象，形参经值池），手写体效果（回调 / 分配 / 字段）按 `apply_hw` 照常建模；钩子节点与手写实现对象伪方法一样不进输出。
+单测 `hooks_are_non_member_pub_fns_with_upcalls`。`--why`：`Character.valueOf ← [handwritten] Proxy$Dyn.__vm_proxy_invoke ← [vm-hook] 类 Proxy$Dyn`。
+实测（基线 = c7d7b62e 二进制）：9 例中只有 TestDynamicProxy 变化，358/1258 → 365/1364（+7 类 +106 方法，0 删除：8 个装箱类的
+valueOf / 缓存 `<clinit>` 与经 Object 接收者可达的 toString / hashCode / equals / compareTo，Float/Double.toString 带入
+FloatToDecimal / DoubleToDecimal / MathUtils），其余 8 例（HelloWorld、TestStreamAdvanced、CollectorsDemo、DeepCopy、Digester、
+TestFilesApi、TestNetworkInterface、ComparatorFactory）类 / 方法集合逐项相同；9 例 dyn miss 均为 0。main.py TestDynamicProxy MATCH（33 行与 expected 一致）。
+
 **driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的

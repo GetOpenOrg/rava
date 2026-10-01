@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+mod hooks;
 mod objects;
 mod scan;
 mod syntax;
