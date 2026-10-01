@@ -4,7 +4,7 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
-        self.refs.insert(mref.to_string());
+        self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
         self.class_init_site(m, off, opcode, mref, args);
@@ -33,7 +33,7 @@ impl<'a> Engine<'a> {
                 _ => None,
             })
             .collect();
-        let k = mref.to_string();
+        let k = self.mref_key(mref);
         if self.man.is_method_lookup(&k) {
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 拼接出的名字按目标类逐个解析（只保留该类上声明的方法）；目标类另取 Class 实参值集里类镜像所指的类
@@ -190,7 +190,7 @@ impl<'a> Engine<'a> {
                 let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
                 let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
-                let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
+                let (named, top) = if self.man.names.is_class_lookup(&self.mref_key(mref)) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
