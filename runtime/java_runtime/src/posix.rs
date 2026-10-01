@@ -105,3 +105,33 @@ pub fn locale() -> (std::string::String, std::string::String) {
     let country = parts.next().unwrap_or("").to_owned();
     (language, country)
 }
+
+/// uid → passwd 条目的用户名（getpwuid_r）；无对应条目 → None。
+pub fn passwd_name(uid: u32) -> Option<std::string::String> {
+    let mut buf = vec![0 as libc::c_char; 4096];
+    // SAFETY: passwd 全零为合法初值；getpwuid_r 只写入 pwd / buf，result 指向 pwd 或为 null
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let r = unsafe { libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
+    if r == 0 && !result.is_null() && !pwd.pw_name.is_null() {
+        // SAFETY: 成功时 pw_name 是 buf 内以 NUL 结尾的字符串
+        let name = unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) };
+        return Some(name.to_string_lossy().into_owned());
+    }
+    None
+}
+
+/// 当前进程实际用户的用户名：`user.name` 系统属性（JDK java_props_md.c：`getpwuid(getuid())->pw_name`，
+/// 无条目时为 `"?"`；不读 `USER` 环境变量）。
+pub fn current_user_name() -> std::string::String {
+    // SAFETY: getuid 无副作用
+    passwd_name(unsafe { libc::getuid() }).unwrap_or_else(|| std::string::String::from("?"))
+}
+
+/// JVM 缺省 MaxHeapSize（物理内存 1/4；不可得时 Long.MAX_VALUE）：`Runtime.maxMemory` 与
+/// `VM.directMemory`（未指定 MaxDirectMemorySize 时取 maxMemory）同源。
+pub fn default_max_heap() -> i64 {
+    // SAFETY: sysconf 只查询系统常量
+    let (pages, page) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
+    if pages > 0 && page > 0 { (pages as u64 * page as u64 / 4) as i64 } else { i64::MAX }
+}

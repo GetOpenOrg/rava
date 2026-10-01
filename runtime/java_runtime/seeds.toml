@@ -91,6 +91,23 @@ triggers = [
     "sun/security/jca/GetInstance.getService",
 ]
 
+# ── 服务目录（ServiceLoader，模块 provides / 类路径 META-INF/services 作事实）─────────────────────
+# provider 由 ServiceLoader 按服务目录反射构造（Class.forName + 无参构造器 / provider()），无静态调用边。
+# 目录由分析器从所用 JDK 的 jmod 模块描述符（JVM 默认引导层：API 根集 + requires 闭包 + uses 绑定）与
+# 用户 / 库档案的 META-INF/services 得出，不在此登记类名；入选服务与 provider 导出为 closure.json
+# seeds.services（运行期 build.rs 按它装填引导服务目录，见 boundary-narrowing §6.11 项 5 / 决策 4）。
+#   lookups     服务查找入口 → 服务 Class 形参序号（不含接收者，0 起）：该实参值集里的类镜像即被查找的服务
+#   population  模块服务目录的装填入口：有模块 provider 入选时作根（引导期按事实逐条调用）
+[services]
+population = [
+    "jdk/internal/module/ServicesCatalog.create:()Ljdk/internal/module/ServicesCatalog;",
+    "jdk/internal/module/ServicesCatalog.addProvider:(Ljava/lang/Module;Ljava/lang/Class;Ljava/lang/Class;)V",
+]
+[services.lookups]
+"java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/ModuleLayer;Ljava/lang/Class;)V" = 2
+"java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
+"java/util/ServiceLoader.<init>:(Ljava/lang/Module;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
+
 # ── VM 引导期类初始化（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）───────────────
 # 生成项目 main 启动时按本表顺序初始化其中「在闭包内翻译在场」的类（runtime vm_boot_init）。
 # 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。

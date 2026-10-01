@@ -6,6 +6,7 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         self.refs.insert(mref.to_string());
         self.reflective_writes(m, off, mref, opcode, args);
+        self.service_lookup(m, off, opcode, mref, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         self.invoke_inner(m, off, opcode, mref, iface, args);
@@ -212,6 +213,8 @@ impl<'a> Engine<'a> {
                     NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
                     c => c,
                 };
+                // 选择子形参上传常量（或调用方已在上下文中）：按调用点克隆，分支按形参常量剪枝（`selector.rs`）
+                let ctx = self.selector_ctx(m, off, &resolved, pargs).unwrap_or(ctx);
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.callee(m, off, resolved, ctx, via);

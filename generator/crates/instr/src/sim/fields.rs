@@ -12,7 +12,7 @@ mod types;
 
 use classfile::{Insn, MemberRef, Operand};
 use ir::{Expr, Ident, Path, StaticFieldRef};
-use sim::{StackEntry, StackSim};
+use sim::StackSim;
 use ty::RsType;
 
 use crate::build::{call_path, expr_stmt, ir_ty, mcall, seg, text, try_};
@@ -44,23 +44,6 @@ pub fn sim_fields(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
         _ => return Ok(false),
     }
     Ok(true)
-}
-
-/// 写字段前物化栈上仍在读取同一字段的待求值表达式（JVM 操作数栈求值顺序：
-/// `new X(from, from = from + k, 0)` 若不物化，读取会在写入之后才求值）
-fn spill_pending_reads(env: &InstrEnv, sim: &mut StackSim, marker: &str) -> InstrResult<()> {
-    for i in 0..sim.state.stack.len() {
-        let e = &sim.state.stack[i];
-        if !text(env, &e.expr).contains(marker) {
-            continue;
-        }
-        let (expr, ty) = (e.expr.clone(), e.ty.clone());
-        let v = sim.fresh_let("_t", expr, &ty)?;
-        let id = sim.state.next_id;
-        sim.state.next_id += 1;
-        sim.state.stack[i] = StackEntry { expr: v, ty, id };
-    }
-    Ok(())
 }
 
 /// getfield / putfield 接收者判空（JVMS §6.5）：`this` 恒非 null 保持原形，其余经 `__nn()?`
@@ -116,9 +99,8 @@ fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRe
     let sc = StoreCtx { obj_text: &obj_text, slot_is_type_var: slot_gsig.starts_with('T'), class_tps: &class_tps };
     let val_str = coerce_stored_value(env, log, &val.expr, &val.ty, &ftype, &sc)?;
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    spill_pending_reads(env, sim, &format!(".__get_{slot}()"))?;
     let set = mcall(null_checked(env, obj_e)?, &format!("__set_{slot}"), vec![value_node(env, val.expr, val_str)])?;
-    sim.emit(expr_stmt(set));
+    sim.emit(expr_stmt(set))?;
     Ok(())
 }
 
@@ -150,12 +132,11 @@ fn putstatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberR
         let val_str = coerce_stored_value(env, log, &val_e, &val.ty, &sf.ty, &sc)?;
         value_node(env, val_e, val_str)
     };
-    spill_pending_reads(env, sim, &format!("::{}()", sf.accessor))?;
     // static 写入 → 宏生成的 set_xxx 访问器（入口触发类初始化，JVMS §5.5）
     let turbofish = sf.turbofish.iter().map(|t| ir_ty(env, t)).collect::<InstrResult<Vec<_>>>()?;
     let mut segs = class_segs(&env.ctx.short(&sf.class), turbofish)?;
     segs.push(seg(&format!("set_{}", sf.accessor))?);
-    sim.emit(expr_stmt(try_(call_path(Path::new(segs), vec![node]))));
+    sim.emit(expr_stmt(try_(call_path(Path::new(segs), vec![node]))))?;
     Ok(())
 }
 

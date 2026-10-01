@@ -38,6 +38,8 @@ pub struct SeedState {
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     /// 输出：全量反射面（字段 + 方法）的类
     pub reflect_all: BTreeSet<String>,
+    /// 服务目录事实（`[services]`）
+    pub services: super::services::ServiceState,
 }
 
 impl<'a> Engine<'a> {

@@ -64,6 +64,18 @@ fn may_be_sysprops(v: &V) -> bool {
     v.obj().is_some_and(|o| o.may_be_sysprops())
 }
 
+/// 字符串纯函数在常量实参上的值（非 ASCII 的大小写比较不求值：UTF-16 逐字符大小写映射不在此复刻）
+pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
+    use crate::manifest::StrOp;
+    match (op, args) {
+        (StrOp::EqualsIgnoreCase, [V::Str(_), V::Null]) => Some(V::Int(0)),
+        (StrOp::EqualsIgnoreCase, [V::Str(a), V::Str(b)]) if a.is_ascii() && b.is_ascii() => Some(V::Int(a.eq_ignore_ascii_case(b) as i32)),
+        (StrOp::Length, [V::Str(a)]) => Some(V::Int(a.encode_utf16().count() as i32)),
+        (StrOp::IsEmpty, [V::Str(a)]) => Some(V::Int(a.is_empty() as i32)),
+        _ => None,
+    }
+}
+
 /// 值恰为本方法某形参（无其它来源）
 fn param_of(v: &V) -> Option<usize> {
     match &*v.srcs() {
@@ -82,6 +94,10 @@ impl Ctx<'_> {
                 [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
                 _ => None,
             };
+        }
+        let op = self.man.string_op(&k).or_else(|| c.target.as_ref().and_then(|t| self.man.string_op(&t.to_string())));
+        if let Some(op) = op {
+            return string_op(op, args).map(Ret::Value);
         }
         if self.man.sysprops.is_empty() {
             return None;
@@ -145,13 +161,14 @@ impl Ctx<'_> {
         if let Some(s) = self.psums.borrow().get(t) {
             return s.clone();
         }
-        let guard = format!("psum:{t}");
-        if !t.desc.ends_with(';') || !self.in_progress.borrow_mut().insert(guard.clone()) {
+        if !t.desc.ends_with(';') {
             return None;
         }
+        let frame = self.memo_enter(format!("psum:{t}"), true)?;
         let s = self.compute_summary(t);
-        self.in_progress.borrow_mut().remove(&guard);
-        self.psums.borrow_mut().insert(t.clone(), s.clone());
+        if self.memo_leave(frame) {
+            self.psums.borrow_mut().insert(t.clone(), s.clone());
+        }
         s
     }
 
@@ -161,7 +178,7 @@ impl Ctx<'_> {
         let code = meth.code.as_ref()?;
         let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n] });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![] });
         if a.conservative {
             return None;
         }
@@ -237,13 +254,11 @@ impl Ctx<'_> {
         if let Some(r) = self.preadonly.borrow().get(&ck) {
             return *r;
         }
-        let guard = format!("pro:{t}#{i}");
-        if !self.in_progress.borrow_mut().insert(guard.clone()) {
-            return false;
-        }
+        let Some(frame) = self.memo_enter(format!("pro:{t}#{i}"), true) else { return false };
         let r = self.compute_readonly(t, i);
-        self.in_progress.borrow_mut().remove(&guard);
-        self.preadonly.borrow_mut().insert(ck, r);
+        if self.memo_leave(frame) {
+            self.preadonly.borrow_mut().insert(ck, r);
+        }
         r
     }
 
@@ -257,7 +272,7 @@ impl Ctx<'_> {
         let mut params = vec![None; md.params.len() + base];
         params[i] = Some(self.sysprops_ref(&p.descriptor()));
         let live = |_: &str| true;
-        let a = absint::analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params });
+        let a = absint::analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
         if a.conservative {
             return false;
         }
@@ -425,6 +440,7 @@ impl Engine<'_> {
         self.ctx.objs.borrow_mut().clear();
         self.ctx.psums.borrow_mut().clear();
         self.ctx.preadonly.borrow_mut().clear();
+        self.ctx.cevals.borrow_mut().clear();
         let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
         deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
         self.invalidate_all(Some(deps), Why::Sysprops);

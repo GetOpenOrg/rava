@@ -442,16 +442,57 @@ pub(super) fn ctor_type(e: &syn::Expr) -> Option<Vec<String>> {
     }
 }
 
-/// 手写体取得数组视图的标识符：数组类型本身、协变视图、Object 上的数组存取 / 转换
+/// 手写体取得数组视图的标识符：数组类型本身、协变视图、Object 上的数组存取 / 转换（宏内按标识符保守判定）
 pub(super) fn is_array_ident(s: &str) -> bool {
-    s == "JArray" || s == "__view_into" || s == "try_cast_array" || s.starts_with("array_store")
+    s == ARRAY_TYPE || s == "__view_into" || s == ARRAY_CAST || s.starts_with("array_store")
 }
 
+const ARRAY_TYPE: &str = "JArray";
+const ARRAY_CAST: &str = "try_cast_array";
+/// 只存取基本类型元素的 Object 数组存取（不改写引用元素）
+const PRIMITIVE_STORES: &[&str] = &["array_store_byte"];
+/// Java 基本类型在运行时里的 Rust 元素类型
+const PRIMITIVE_ELEMS: &[&str] = &["i8", "u16", "i16", "i32", "i64", "f32", "f64", "bool"];
+
+/// 泛型实参恰为一个基本元素类型（`JArray<i8>`、`try_cast_array::<i32>`）
+fn primitive_elem(args: Option<&syn::AngleBracketedGenericArguments>) -> bool {
+    let Some(a) = args else { return false };
+    let mut it = a.args.iter();
+    match (it.next(), it.next()) {
+        (Some(syn::GenericArgument::Type(syn::Type::Path(t))), None) => {
+            t.qself.is_none() && t.path.get_ident().is_some_and(|i| PRIMITIVE_ELEMS.contains(&i.to_string().as_str()))
+        }
+        _ => false,
+    }
+}
+
+/// 手写体是否取得引用元素数组的视图（可改写引用元素，数组写入建模的前提）。
+/// 基本元素数组视图（`JArray<i8>` 等）的元素不携带类型，不计；元素类型未写明（裸 `JArray`、泛型、
+/// 宏内标识符）按引用保守计
 pub(super) struct ArrayIdents(pub(super) bool);
 
 impl<'ast> Visit<'ast> for ArrayIdents {
     fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
-        self.0 |= is_array_ident(&i.to_string());
+        let s = i.to_string();
+        self.0 |= s != ARRAY_TYPE && s != ARRAY_CAST && is_array_ident(&s) && !PRIMITIVE_STORES.contains(&s.as_str());
+    }
+
+    fn visit_path_segment(&mut self, seg: &'ast syn::PathSegment) {
+        if seg.ident == ARRAY_TYPE || seg.ident == ARRAY_CAST {
+            let args = match &seg.arguments {
+                syn::PathArguments::AngleBracketed(a) => Some(a),
+                _ => None,
+            };
+            self.0 |= !primitive_elem(args);
+        }
+        syn::visit::visit_path_segment(self, seg);
+    }
+
+    fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        if m.method == ARRAY_CAST {
+            self.0 |= !primitive_elem(m.turbofish.as_ref());
+        }
+        syn::visit::visit_expr_method_call(self, m);
     }
 }
 

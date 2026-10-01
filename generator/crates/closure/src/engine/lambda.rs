@@ -178,7 +178,12 @@ impl<'a> Engine<'a> {
         let Some(md) = parse_method(desc) else { return };
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
         let bkey = format!("{}.{}", b.handle.member.owner, b.handle.member.name);
-        match self.man.indy_kind(&bkey) {
+        let kind = self.man.indy_kind(&bkey);
+        if let Some(k) = kind {
+            // 运行模型替换的调用点：引导方法不执行（JVM 链接期对其所属类的加载不属翻译程序）
+            self.indy_models.insert(format!("{}@{off}", self.methods[m].key), (b.handle.member.to_string(), k));
+        }
+        match kind {
             Some(IndyKind::Lambda) => {
                 let (Some(Const::MethodHandle(imh)), Some(iface)) =
                     (b.args.get(1), md.ret.as_ref().and_then(|r| r.class_ref().map(String::from)))

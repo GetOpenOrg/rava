@@ -124,18 +124,12 @@ impl<'a> Engine<'a> {
                 if seeded {
                     continue;
                 }
-                // 乐观阶段收敛：仍「尚无返回」的被调方法确实不返回。关掉乐观假设，把得到过该答复的
-                // 方法按值未知重算——导出的不可达代码只从跳转 / switch / return / athrow 之后开始
-                if !self.ctx.optimistic.replace(false) {
-                    self.ctx.stats.borrow_mut().mark_rss("final");
-                    break;
+                // 收尾：得到过「不返回」答复的方法按值未知重算（定论判定见 `noreturn.rs`）
+                if self.nr_drain() {
+                    continue;
                 }
-                let never: Vec<usize> = std::mem::take(&mut *self.ctx.never.borrow_mut()).into_iter().collect();
-                self.ctx.stats.borrow_mut().mark_rss("optimistic");
-                for m in never {
-                    self.invalidate(m, Why::Never);
-                }
-                continue;
+                self.ctx.stats.borrow_mut().mark_rss("final");
+                break;
             };
             self.in_mwork.remove(&m);
             self.stat_enter(Phase::Process);
@@ -147,6 +141,9 @@ impl<'a> Engine<'a> {
     /// 方法的分析结果失效：重分析，调用方重处理
     pub(super) fn invalidate(&mut self, m: usize, why: Why) {
         let had = self.methods[m].analysis.take().is_some();
+        if had {
+            self.nr_dropped(m);
+        }
         self.ctx.stats.borrow_mut().invalidated(m, why, had);
         if !had && self.in_mwork.contains(&m) {
             return;
@@ -177,6 +174,7 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
+            self.ctx.cevals.borrow_mut().clear();
             let deps = self.ctx.fdeps.borrow().get(&key).cloned();
             self.invalidate_all(deps, Why::FieldOpen);
             self.open_static(&key);
@@ -185,6 +183,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            self.ctx.cevals.borrow_mut().clear();
             let deps: BTreeSet<usize> =
                 self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
             self.invalidate_all(Some(deps), Why::FieldOpenName);
@@ -198,6 +197,7 @@ impl<'a> Engine<'a> {
 
     /// 全局开关（反射枚举 / 反序列化）打开：所有读过字段的方法失效
     pub(super) fn open_fields_all(&mut self) {
+        self.ctx.cevals.borrow_mut().clear();
         let deps: BTreeSet<usize> = self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()).collect();
         self.invalidate_all(Some(deps), Why::FieldsAll);
     }
@@ -223,10 +223,14 @@ impl<'a> Engine<'a> {
         let cf = self.h.class(&key.owner)?;
         let meth = cf.method(&key.name, &key.desc)?;
         let code = meth.code.as_ref()?;
-        // catch 类型存活：G 中有其子类型（预先计算，避免 Oracle 借用引擎）
+        // catch / instanceof 目标类型存活：G 中有其子类型（预先计算，避免 Oracle 借用引擎）
         let mut live_cache: HashMap<String, bool> = HashMap::default();
-        for h in &code.exception_table {
-            if let Some(ct) = &h.catch_type {
+        let inst_types = code.insns.iter().filter(|x| x.opcode == classfile::op::INSTANCEOF).filter_map(|x| match &x.operand {
+            classfile::Operand::Class(c) => Some(c),
+            _ => None,
+        });
+        for ct in code.exception_table.iter().filter_map(|h| h.catch_type.as_ref()).chain(inst_types) {
+            if !live_cache.contains_key(ct) {
                 let tid = self.id(ct);
                 let live = !self.g_of(tid).is_empty();
                 live_cache.insert(ct.clone(), live);
@@ -240,9 +244,17 @@ impl<'a> Engine<'a> {
         }
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
-        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params };
+        let mirrors = self.param_mirror_sets(m);
+        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
         self.stat_enter(Phase::Analyze);
-        let a = Rc::new(absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts));
+        self.nr_begin(m);
+        let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
+        if self.cold_cut {
+            let cold = crate::cold::doomed(code);
+            let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
+            a.events.retain(|(off, _)| hot.contains(off));
+        }
+        let a = Rc::new(a);
         self.stat_leave();
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);
@@ -255,10 +267,15 @@ impl<'a> Engine<'a> {
                 self.push_m(c);
             }
         }
-        if !a.pending_catch.is_empty() {
-            self.pending_catch.insert(m, a.pending_catch.clone());
+        if !a.pending_types.is_empty() {
+            self.pending_types.insert(m, a.pending_types.clone());
+        }
+        for (i, c) in &a.mirror_assumed {
+            let cid = self.id(c);
+            self.mirror_watch.entry(Node::P(m, *i)).or_default().insert((m, cid));
         }
         self.methods[m].analysis = Some(a.clone());
+        self.nr_end(m);
         Some(a)
     }
 

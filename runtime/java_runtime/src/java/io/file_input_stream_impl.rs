@@ -139,7 +139,8 @@ impl FileInputStream {
         Ok((target - cur) as i64)
     }
 
-    /// native available0()：不经阻塞可读字节数（常规文件 = 剩余字节）。
+    /// native available0()：不经阻塞可读字节数（JDK io_util_md.c handleAvailable）：字符设备 / FIFO /
+    /// socket 取 `ioctl(FIONREAD)`（进程管道、标准输入），其余（常规文件）= 长度 − 当前偏移。
     #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
     pub fn available0(&self) -> Result<i32> {
         let fd = self.__get_fd().__get_fd();
@@ -150,7 +151,16 @@ impl FileInputStream {
             return Err(io_err(std::io::Error::last_os_error()));
         }
         use std::io::Seek;
+        use std::os::unix::fs::FileTypeExt;
         let mut f = borrow_file(fd);
+        let ft = f.metadata().map_err(io_err)?.file_type();
+        if ft.is_char_device() || ft.is_fifo() || ft.is_socket() {
+            let mut n: libc::c_int = 0;
+            // SAFETY: FIONREAD 只向 n 写入可读字节数
+            if unsafe { libc::ioctl(fd, libc::FIONREAD as _, &mut n) } >= 0 {
+                return Ok(n.max(0));
+            }
+        }
         let len = f.metadata().map_err(io_err)?.len();
         let pos = f.stream_position().map_err(io_err)?;
         Ok((len.saturating_sub(pos)).min(i32::MAX as u64) as i32)

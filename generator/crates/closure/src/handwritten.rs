@@ -130,8 +130,8 @@ pub struct FnInfo {
     pub ctors: BTreeSet<(TypeRef, String)>,
     /// 字段访问器调用，同样传递闭包
     pub fields: Vec<FieldAccess>,
-    /// 取得数组视图（`JArray` 类型、`__view_into`、`array_store_*` 等，含宏内与同文件被调 fn）：
-    /// 没有数组视图的手写体不可能改写实参数组的元素
+    /// 取得引用元素数组视图（`JArray<引用>`、`__view_into`、`array_store_object` 等，含宏内与同文件被调 fn；
+    /// 基本元素视图 `JArray<i8>` 等不计）：没有这种视图的手写体不可能改写实参数组的引用元素
     pub array_access: bool,
     /// 引用的手写实现对象（本文件的 struct 名 `S`，或经 `use` 引入的 `…::<类>_impl::S`），同样传递闭包：
     /// 手写体可能在此新建该对象并交给建模代码

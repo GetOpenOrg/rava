@@ -4,16 +4,19 @@
 pub mod annotation;
 pub mod jca;
 pub mod locale;
+pub mod services;
 
 use annotation::AnnoCfg;
 use jca::JcaCfg;
 use locale::LocaleCfg;
+use services::ServicesCfg;
 
 #[derive(Debug, Default)]
 pub struct SeedCfg {
     pub annotation: AnnoCfg,
     pub locale: LocaleCfg,
     pub jca: JcaCfg,
+    pub services: ServicesCfg,
 }
 
 impl SeedCfg {
@@ -22,6 +25,7 @@ impl SeedCfg {
             annotation: AnnoCfg::from_toml(t.get("annotation")),
             locale: LocaleCfg::from_toml(t.get("locale")),
             jca: JcaCfg::from_toml(t.get("jca")),
+            services: ServicesCfg::from_toml(t.get("services")),
         }
     }
 }

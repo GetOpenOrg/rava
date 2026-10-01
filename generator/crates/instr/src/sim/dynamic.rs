@@ -98,7 +98,7 @@ fn athrow(sim: &mut StackSim) -> InstrResult<()> {
         _ => e,
     };
     let err = call(&[JVM_ERROR, "from"], vec![thrown])?;
-    sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)));
+    sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)))?;
     Ok(())
 }
 
@@ -133,12 +133,12 @@ fn bootstrap_stub(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrR
     let stub = format!("panic!(\"stub: {}.{}:{}\")", m.owner, m.name, m.desc);
     let ret = ty::type_map::parse_descriptor_return(site.desc);
     if ret == "V" {
-        sim.emit(raw_stmt(format!("{stub};")));
+        sim.emit(raw_stmt(format!("{stub};")))?;
         return Ok(());
     }
     let t = env.ctx.ty.jvm_to_rust(ret);
     let v = sim.fresh(&format!("__indy{}_", site.cp_index))?;
-    sim.emit(raw_stmt(format!("let {v}: {} = {stub};", ty_text(env, &t))));
+    sim.emit(raw_stmt(format!("let {v}: {} = {stub};", ty_text(env, &t))))?;
     sim.push(Expr::Var(v), t);
     Ok(())
 }
@@ -154,12 +154,12 @@ pub fn sim_dynamic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: 
             log.audit(Audit::MonitorMt);
             let e = sim.pop()?;
             let op = monitor_operand(env, &e.expr);
-            sim.emit(raw_stmt(format!("{op}.monitor_enter()?;")));
+            sim.emit(raw_stmt(format!("{op}.monitor_enter()?;")))?;
         }
         "monitorexit" => {
             let e = sim.pop()?;
             let op = monitor_operand(env, &e.expr);
-            sim.emit(raw_stmt(format!("{op}.monitor_exit()?;")));
+            sim.emit(raw_stmt(format!("{op}.monitor_exit()?;")))?;
         }
         "nop" | "wide" => {}
         "athrow" => athrow(sim)?,

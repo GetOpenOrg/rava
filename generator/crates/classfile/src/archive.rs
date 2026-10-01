@@ -19,6 +19,8 @@ pub struct Archive {
     index: HashMap<String, usize>,
     /// 非类资源：档案内路径（去 `classes/` 前缀）→ 条目下标
     resources: HashMap<String, usize>,
+    /// 根目录的 `module-info.class` 条目下标
+    module_info: Option<usize>,
 }
 
 impl Archive {
@@ -29,6 +31,7 @@ impl Archive {
                 kind: Kind::Dir(path.to_path_buf()),
                 index: HashMap::new(),
                 resources: HashMap::new(),
+                module_info: None,
             });
         }
         let io = |e: std::io::Error| Error::Io(path.display().to_string(), e.to_string());
@@ -39,10 +42,13 @@ impl Archive {
             .map_err(|e| Error::Io(path.display().to_string(), e.to_string()))?;
         let mut index = HashMap::new();
         let mut resources = HashMap::new();
+        let mut module_info = None;
         for i in 0..zip.len() {
             let Some(name) = zip.name_for_index(i) else { continue };
             let Some(rest) = name.strip_prefix(prefix) else { continue };
-            if let Some(bin) = rest.strip_suffix(".class") {
+            if rest == "module-info.class" {
+                module_info = Some(i);
+            } else if let Some(bin) = rest.strip_suffix(".class") {
                 if !bin.ends_with("module-info") {
                     index.insert(bin.to_string(), i);
                 }
@@ -50,7 +56,7 @@ impl Archive {
                 resources.insert(rest.to_string(), i);
             }
         }
-        Ok(Archive { path: path.to_path_buf(), kind: Kind::Zip(zip), index, resources })
+        Ok(Archive { path: path.to_path_buf(), kind: Kind::Zip(zip), index, resources, module_info })
     }
 
     /// 档案内全部类的 binary name（目录档案递归枚举）
@@ -104,6 +110,44 @@ impl Archive {
                 Ok(std::fs::read(p).ok())
             }
         }
+    }
+}
+
+impl Archive {
+    /// 根目录的 `module-info.class` 字节（jmod 为 `classes/module-info.class`）
+    pub fn read_module_info(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        match &mut self.kind {
+            Kind::Zip(zip) => match self.module_info {
+                Some(i) => read_entry(zip, i, &self.path).map(Some),
+                None => Ok(None),
+            },
+            Kind::Dir(root) => Ok(std::fs::read(root.join("module-info.class")).ok()),
+        }
+    }
+
+    /// 类路径服务配置 `META-INF/services/<服务二进制名>`：(服务二进制名, 文件字节)，按名排序
+    pub fn service_files(&mut self) -> Vec<(String, Vec<u8>)> {
+        const DIR: &str = "META-INF/services/";
+        let names: Vec<String> = match &self.kind {
+            Kind::Zip(_) => self.resources.keys().filter_map(|k| k.strip_prefix(DIR)).map(String::from).collect(),
+            Kind::Dir(root) => std::fs::read_dir(root.join(DIR))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect(),
+        };
+        let mut out: Vec<(String, Vec<u8>)> = names
+            .into_iter()
+            .filter(|n| !n.is_empty() && !n.contains('/'))
+            .filter_map(|n| {
+                let b = self.read_resource(&format!("{DIR}{n}")).ok().flatten()?;
+                Some((n, b))
+            })
+            .collect();
+        out.sort();
+        out
     }
 }
 

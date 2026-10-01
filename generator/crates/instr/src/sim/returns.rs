@@ -41,7 +41,7 @@ pub fn sim_returns(env: &InstrEnv, sim: &mut StackSim, _log: &mut InstrLog, ins:
         "return" => {
             // 构造函数 return：返回 Ok(this) 而非 Ok(())
             let v = if sim.cfg.is_constructor { var("this")? } else { Expr::Lit(Lit::Unit) };
-            sim.emit(return_ok(v)?);
+            sim.emit(return_ok(v)?)?;
         }
         "ireturn" | "lreturn" | "freturn" | "dreturn" => {
             let e = sim.pop()?;
@@ -49,12 +49,12 @@ pub fn sim_returns(env: &InstrEnv, sim: &mut StackSim, _log: &mut InstrLog, ins:
             let ret = sim.cfg.return_type.clone();
             let narrow = matches!(ret, RsType::Prim(Prim::I8 | Prim::I16 | Prim::U16 | Prim::Bool | Prim::I32));
             let v = if ty_text(env, &e.ty) != ty_text(env, &ret) && narrow { coerce::value(e.expr, &e.ty, &ret) } else { e.expr };
-            sim.emit(return_ok(v)?);
+            sim.emit(return_ok(v)?)?;
         }
         "areturn" => {
             let e = sim.pop()?;
             let v = areturn_value(env, sim, e.expr, &e.ty)?;
-            sim.emit(return_ok(v)?);
+            sim.emit(return_ok(v)?)?;
         }
         _ => return Ok(false),
     }

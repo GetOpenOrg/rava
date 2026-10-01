@@ -28,6 +28,7 @@ use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, Prop
 mod sets;
 mod idset;
 mod facts;
+mod consteval;
 mod construct;
 mod sysprops;
 mod fold;
@@ -52,7 +53,13 @@ mod write_audit;
 mod field_names;
 mod mirror_init;
 mod seeds;
+mod services;
+mod memo;
+mod mirror_eq;
+mod selector;
+mod noreturn;
 mod class_lookup;
+mod sealed;
 mod method_lookup;
 mod pstrs;
 mod new;
@@ -350,6 +357,9 @@ struct Hub {
 enum HubSet {
     Open(u32),
     Exact(Vec<u32>),
+    /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
+    /// 无字节码调用点；展开到的每个目标形参 open
+    Vm(u32),
 }
 
 #[derive(Clone)]
@@ -440,6 +450,8 @@ pub struct Engine<'a> {
     /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     hub_last: HashMap<(usize, u32), u32>,
+    /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
+    vm_hubs: HashSet<u32>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
@@ -447,6 +459,10 @@ pub struct Engine<'a> {
     pub unresolved: BTreeSet<String>,
     /// 活代码调用点的符号引用（常量池 owner.name:desc）：发射层槽位需求按调用点键消费
     pub refs: BTreeSet<String>,
+    /// 运行模型替换的 indy 调用点（`方法@偏移` → (引导方法, 类别)）
+    pub indy_models: BTreeMap<String, (String, IndyKind)>,
+    /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
+    pub cold_cut: bool,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,
@@ -477,6 +493,8 @@ pub struct Engine<'a> {
     cur_call: Option<u32>,
     /// 类型集节点 → 读它的 lambda 调用；open 展开过的 lambda 调用，按 (open 类型, 接收者上界) 索引
     call_watch: HashMap<Node, HashSet<u32>>,
+    /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
+    mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,
@@ -507,7 +525,8 @@ pub struct Engine<'a> {
     open_methods: BTreeMap<(u32, u32), BTreeSet<usize>>,
     /// 按 open 在 G 上展开过接收者的字节码站点，索引同上（只重跑这些站点）
     open_sites: BTreeMap<(u32, u32), BTreeSet<(usize, u32)>>,
-    pending_catch: BTreeMap<usize, Vec<String>>,
+    /// 分析时按「尚无实例」处理的类型（catch / instanceof 目标）：其子类型进入 G 时方法重分析
+    pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
     /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）

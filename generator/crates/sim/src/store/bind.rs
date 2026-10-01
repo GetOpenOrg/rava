@@ -31,6 +31,7 @@ impl StackSim<'_> {
 
     fn emit_assign(&mut self, slot: u16, name: Ident, value: Expr) -> SimResult<()> {
         let origin = self.origin(slot, None)?;
+        self.spill_stateful(None)?;
         self.state.stmts.push(Stmt::Assign(AssignStmt { target: Expr::Var(name), value, origin }));
         Ok(())
     }
@@ -216,6 +217,7 @@ impl StackSim<'_> {
         // Java 局部变量间赋值在 Rust 中是 move，包 Clone 保活源变量（E0382）
         let value = clone_moved_var(value, &c.ty)?;
         let origin = self.origin(slot, Some(&c.ty))?;
+        self.spill_stateful(None)?;
         self.state.stmts.push(Stmt::Let(LetStmt { name: name.clone(), ty: let_ty, mutable: true, value: Some(value), origin }));
         c.name = Some(name);
         Ok(())

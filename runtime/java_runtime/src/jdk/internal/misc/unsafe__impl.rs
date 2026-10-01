@@ -198,6 +198,14 @@ impl Unsafe {
         Ok(())
     }
 
+    /// native `fullFence()`：全栅栏（StoreLoad 在内）——SeqCst 栅栏（进程回收线程的
+    /// ProcessHandleImpl 完成通知等 VarHandle.fullFence 路径触达）。
+    #[jvm_native]
+    pub fn fullFence(&self) -> Result<()> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
     /// `storeStoreFence()`：StoreStore 栅栏——Release 栅栏覆盖。
     pub fn storeStoreFence(&self) -> Result<()> {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);

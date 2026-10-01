@@ -64,7 +64,12 @@ pub(super) struct Ctx<'a> {
     pub(super) calls: RefCell<HashMap<MemberRef, Vec<(u8, bool, Rc<CallInfo>)>>>,
     /// 字段引用的解析缓存（None = 解析失败）
     pub(super) fields: RefCell<HashMap<MemberRef, Option<Rc<FieldInfo>>>>,
-    pub(super) in_progress: RefCell<HashSet<String>>,
+    /// 进行中的记忆化计算（递归保护与截断记录，见 `memo.rs`）
+    pub(super) guards: RefCell<super::memo::Guards>,
+    /// 服务目录与 provider 执行线（见 `services.rs`）
+    pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
+    /// 选择子形参缓存（见 `selector.rs`）
+    pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
@@ -81,9 +86,9 @@ pub(super) struct Ctx<'a> {
     pub(super) fdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
     /// 被调方法 → 查询过其返回常量的方法
     pub(super) rdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
-    /// 乐观阶段：被调方法尚无返回路径时，调用之后按不可达处理
-    pub(super) optimistic: Cell<bool>,
-    /// 乐观阶段得到过「尚无返回」答复的方法（收尾时按值未知重算）
+    /// 「尚无返回」答复的阶段与定论判定（见 `noreturn.rs`）
+    pub(super) noreturn: RefCell<super::noreturn::NoReturn>,
+    /// 当前分析得到过「不返回」答复的方法节点（排空时按值未知重算）
     pub(super) never: RefCell<BTreeSet<usize>>,
     /// 构造器摘要缓存：`构造器|实参` → 构造完成的对象标签
     pub(super) objs: RefCell<HashMap<String, Option<Rc<Obj>>>>,
@@ -95,6 +100,11 @@ pub(super) struct Ctx<'a> {
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
     pub(super) pdeps: RefCell<BTreeSet<usize>>,
+    /// 常量实参求值记忆：`目标|常量实参` → (结果, 读过的字段)
+    pub(super) cevals: RefCell<HashMap<String, super::consteval::CEval>>,
+    /// 进行中的常量实参求值的字段读集（栈）
+    pub(super) ceval_reads: RefCell<Vec<Vec<MemberRef>>>,
+    pub(super) ceval_depth: Cell<u32>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }
@@ -116,6 +126,8 @@ pub(super) struct FieldInfo {
     pub(super) constant: Option<Const>,
     /// 写入来源超出字节码（边界类 / 手写字段）
     pub(super) open: bool,
+    /// 声明类实现可序列化标记接口（反序列化可写该字段）
+    pub(super) serializable: bool,
 }
 
 pub(super) struct Facts<'c, 'a> {
@@ -125,6 +137,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) m: Option<usize>,
     /// 形参常量（按形参槽序号）
     pub(super) params: Vec<Option<V>>,
+    /// Class 形参值集所指的类镜像（按形参序号；None = 非 Class 形参或值集含所指未知的 Class）
+    pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -145,11 +159,7 @@ impl Ctx<'_> {
             // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
             // 写入的字段）从分析中消失，成为漏报。类初始化器由清单逐类决定（`translate_clinit`）
             Domain::Boundary => {
-                let hw = m.is_native()
-                    || m.code.is_none()
-                    || (m.name == "<clinit>" && !self.man.translates_clinit(&cf.name))
-                    || self.man.is_intrinsic(&member)
-                    || self.provided(cf, &m.name, &m.desc);
+                let hw = self.boundary_carried(cf, m, &member);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
             }
             Domain::Root => return Kind::Handwritten("root"),
@@ -168,6 +178,15 @@ impl Ctx<'_> {
             return Kind::Abstract;
         }
         Kind::Bytecode
+    }
+
+    /// 边界方法由手写层承载（native / 无体 / 未登记翻译的 `<clinit>` / VM 内建 / 共置手写体提供）
+    fn boundary_carried(&self, cf: &ClassFile, m: &classfile::Method, member: &str) -> bool {
+        m.is_native()
+            || m.code.is_none()
+            || (m.name == "<clinit>" && !self.man.translates_clinit(&cf.name))
+            || self.man.is_intrinsic(member)
+            || self.provided(cf, &m.name, &m.desc)
     }
 
     /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
@@ -212,7 +231,7 @@ impl Ctx<'_> {
             || self.fopen_all.get()
             || self.fopen.borrow().contains(&fi.key)
             || self.fopen_names.borrow().contains(&fi.key.name)
-            || self.deser.get() && fi.access & (acc::STATIC | acc::TRANSIENT) == 0
+            || self.deser.get() && deser_writes(fi.access, fi.serializable)
     }
 
     pub(super) fn field_info(&self, f: &MemberRef) -> Option<Rc<FieldInfo>> {
@@ -228,7 +247,9 @@ impl Ctx<'_> {
                 || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
                 || !self.hw.member(&key.owner, &key.name).fns.is_empty();
             let constant = if injected { None } else { fd.constant_value.clone() };
-            Rc::new(FieldInfo { key, access: fd.access, constant, open })
+            let markers = self.man.serializable_markers();
+            let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
+            Rc::new(FieldInfo { key, access: fd.access, constant, open, serializable })
         });
         self.fields.borrow_mut().insert(f.clone(), fi.clone());
         fi
@@ -237,8 +258,11 @@ impl Ctx<'_> {
     /// 字段读的常量值；方法 m 登记为该字段的读者
     pub(super) fn field_value(&self, m: Option<usize>, f: &MemberRef) -> Option<V> {
         let fi = self.field_info(f)?;
-        if let Some(m) = m {
-            self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+        match m {
+            Some(m) => {
+                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+            }
+            None => self.note_aux_read(&fi.key),
         }
         if self.field_open(&fi) {
             return None;
@@ -292,15 +316,13 @@ impl Ctx<'_> {
             return v.clone();
         }
         // `<clinit>` 唯一一次常量赋值（递归保护：分析中的类不再展开）。
-        // 一次分析得出本类全部 static final 字段的答复，逐字段缓存
+        // 一次分析得出本类全部 static final 字段的答复，与外层无关时逐字段缓存
         let cls = self.h.class(&key.owner)?;
-        if !self.in_progress.borrow_mut().insert(cls.name.clone()) {
-            return None;
-        }
+        let frame = self.memo_enter(format!("clinit:{}", cls.name), true)?;
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![] })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
@@ -309,17 +331,20 @@ impl Ctx<'_> {
                 }
             }
         }
-        self.in_progress.borrow_mut().remove(&cls.name);
+        let clean = self.memo_leave(frame);
+        let value_of = |name: &str, desc: &str| match puts.get(&(name, desc)).map(Vec::as_slice) {
+            Some([Some(v)]) => PV::of(v).value(),
+            _ => None,
+        };
+        if !clean {
+            return value_of(&key.name, &key.desc);
+        }
         let mut consts = self.consts.borrow_mut();
         for fd in &cls.fields {
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 || fd.constant_value.is_some() {
                 continue;
             }
-            let v = match puts.get(&(fd.name.as_str(), fd.desc.as_str())).map(Vec::as_slice) {
-                Some([Some(v)]) => PV::of(v).value(),
-                _ => None,
-            };
-            consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, v);
+            consts.insert(MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() }, value_of(&fd.name, &fd.desc));
         }
         consts.get(key).cloned().flatten()
     }
@@ -337,19 +362,21 @@ impl Oracle for Facts<'_, '_> {
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
         }
-        let Some(me) = self.m else { return Ret::Unknown };
-        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）
+        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）；
+        // 返回常量在各调用点上汇合为 Top 时按本调用点的常量实参求值
         let Some(t) = &c.target else { return Ret::Unknown };
+        let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
+        let Some(me) = self.m else { return eval() };
         let r = self.ctx.rvals.borrow().get(t).cloned();
         self.ctx.rdeps.borrow_mut().entry(t.clone()).or_default().insert(me);
         match r {
             Some(PV::Const(v)) => Ret::Value(v),
-            Some(PV::Top) => Ret::Unknown,
-            None if self.ctx.optimistic.get() => {
+            Some(PV::Top) => eval(),
+            None if self.ctx.noreturn.borrow().answer_never(t) => {
                 self.ctx.never.borrow_mut().insert(me);
                 Ret::Never
             }
-            None => Ret::Unknown,
+            None => eval(),
         }
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
@@ -364,7 +391,28 @@ impl Oracle for Facts<'_, '_> {
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()
     }
-    fn catch_live(&self, ty: &str) -> bool {
+    fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
+        self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
+    }
+    fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)
+    }
+}
+
+/// 反序列化可写的字段：非 static、非 transient，且声明类可序列化（非可序列化超类的字段由其无参构造器初始化，走字节码）
+fn deser_writes(access: u16, serializable: bool) -> bool {
+    serializable && access & (acc::STATIC | acc::TRANSIENT) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deser_writes_rule() {
+        assert!(deser_writes(acc::PRIVATE, true));
+        assert!(!deser_writes(acc::PRIVATE, false));
+        assert!(!deser_writes(acc::STATIC, true));
+        assert!(!deser_writes(acc::TRANSIENT, true));
     }
 }

@@ -25,15 +25,18 @@ impl<'a> Engine<'a> {
         }
         self.hubs_grow(id);
         self.reopen(id);
-        let pend: Vec<(usize, Vec<String>)> = self.pending_catch.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {
                 let tid = self.id(t);
                 self.sub(id, tid)
             });
             if hit {
-                self.pending_catch.remove(&m);
+                self.pending_types.remove(&m);
                 let had = self.methods[m].analysis.take().is_some();
+                if had {
+                    self.nr_dropped(m);
+                }
                 self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
                 self.push_m(m);
             }

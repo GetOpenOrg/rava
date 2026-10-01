@@ -5,6 +5,7 @@
 //! 每个节点带溯源（via），`why` 沿溯源回溯到根。
 
 pub mod absint;
+pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
@@ -33,6 +34,8 @@ pub struct Input<'a> {
     pub locales: Vec<String>,
     /// 诊断选项（反事实切除 / 触发边转储；缺省关闭，不影响闭包结果）
     pub diag: engine::Diag,
+    /// 诊断 `--cold-cut`：丢弃冷路径事件（不健全，只用于测量冷路径独占规模）
+    pub cold_cut: bool,
     /// 流传播批量（`--flow-batch`；缺省 `engine::FLOW_BATCH`）
     pub flow_batch: Option<usize>,
 }
@@ -51,6 +54,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         engine::cut::edges_begin();
     }
     e.seeds.locales = input.locales.clone();
+    e.cold_cut = input.cold_cut;
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
         e.flow_batch = n;
     }
@@ -108,6 +112,8 @@ fn fold_json(f: &Fold) -> Value {
         "dead_catches": f.dead_catches.iter().map(|c| json!({"start": c.start, "end": c.end, "handler": c.handler, "catch_type": c.catch_type})).collect::<Vec<_>>(),
         "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
         "null_recv": f.null_recv,
+        "noreturn_calls": f.noreturn_calls,
+        "noreturn_dead_pcs": f.noreturn_dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
     })
 }
 
@@ -192,6 +198,8 @@ impl Closure<'_> {
             "fold_consts": folds.iter().map(|f| f.consts.len()).sum::<usize>(),
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
+            "fold_noreturn_calls": folds.iter().map(|f| f.noreturn_calls.len()).sum::<usize>(),
+            "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "sysprops_unstable": e.sysprops_report(),
             "reflect_members": e.reflect_members.len(),
@@ -240,6 +248,7 @@ impl Closure<'_> {
             "missing": e.missing.iter().map(|(n, v)| json!({"name": n, "via": self.via_json(v)})).collect::<Vec<_>>(),
             "unresolved": e.unresolved,
             "refs": e.refs,
+            "indy_models": e.indy_models.iter().map(|(site, (bsm, k))| json!({"site": site, "bootstrap": bsm, "kind": indy_str(*k)})).collect::<Vec<_>>(),
             "dispatch": dispatch,
             "folds_version": FOLDS_VERSION,
             "folds": folds,
@@ -252,6 +261,11 @@ impl Closure<'_> {
                 "mirror_inits": e.seeds.mirror_inits,
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
+                "services": e.seeds.services.selected.iter().map(|(s, ps)| json!({
+                    "service": s,
+                    "providers": ps.iter().map(|p| json!({"module": p.module, "class": p.class})).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "services_unknown": e.seeds.services.unknown,
             },
         })
     }
@@ -373,5 +387,15 @@ impl Closure<'_> {
             md.push_str(&format!("| {c} | {n} |\n"));
         }
         md
+    }
+}
+
+/// indy 运行模型类别名（closure.json `indy_models`）
+fn indy_str(k: manifest::IndyKind) -> &'static str {
+    match k {
+        manifest::IndyKind::Lambda => "lambda",
+        manifest::IndyKind::Concat => "concat",
+        manifest::IndyKind::Native => "native",
+        manifest::IndyKind::ObjectMethods => "object_methods",
     }
 }

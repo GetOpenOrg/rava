@@ -211,10 +211,10 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
 | C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
 | C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | ✅ 已完成（1e09a9a4）：第 0 步 bfcb75d7、第 1 步 32a789c6、第 2 步、第 3 步（CPA 实测否决，改为手写数组写入模型）、第 3b 步、第 4 步 97b0393c（反射目标可靠性）、耗时（CollectorsDemo 28 s → 2.7 s） |
-| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ✅ 终态落地（分支 `c1d-final`，见边界收窄计划 §6.12）：`[boundary]` 前缀与非 VM 契约过渡手写一次性删除 1e623cec；系统属性表只读形参不算逃逸 d641abd3；入链 native 补齐 4a1437d3；生成器缺口 9a231b6b（HelloWorld cargo check 0 错误）；精度二期 ✅ a6b4c6d5（§6.10）、精度三期 closure-prec3 进行中。待：下标区间推理剪异常消息路径（共同底座 ≈1589 类）、DeepCopy 342 s / 5.5 GB、剩余 native 缺口 |
+| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | ✅ 终态落地（分支 `c1d-final`，见边界收窄计划 §6.12）：`[boundary]` 前缀与非 VM 契约过渡手写一次性删除 1e623cec；系统属性表只读形参不算逃逸 d641abd3；入链 native 补齐 4a1437d3；生成器缺口 9a231b6b（HelloWorld cargo check 0 错误）；精度二期 ✅ a6b4c6d5（§6.10）、精度三期 ✅ 已合入 d8212bee；dc9fd946 / d8a0b082（VM 注入状态）经 `c1d-prec` 合并取舍（VM 注入常量清单驱动 34d5989a）。待：下标区间推理剪异常消息路径（共同底座 ≈1589 类）、DeepCopy 342 s / 5.5 GB、剩余 native 缺口 |
 | C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ✅ 已完成（分散落地，2026-09-30 核对）：syn 手写扫描（C1 / C1c 第 0 步，`closure::handwritten`；宏内调用点 8078f2b1）、补种（`closure::seeds`：注解 / locale / JCA / data bundle）、反射常量数据流（`engine/reflect.rs`，`[facts.reflect]`，反射缺口随 report 输出）、`[facts]` 各段；现行 upcalls 的 Python 机制已随 C4 删除 |
-| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 改在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
-| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21 + 25）全绿；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；待：全量 e2e（JDK 21 + 25） |
+| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | 🔄 改在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。2026-10-01 派发 `emitter-c3`（起点 closure-prec3 98bc2e68，计划 `2026-10-01-emitter-c3.md`）：null_recv 抛 NPE、noreturn 终止控制流与死区间 0 翻译、consts 常量、class_init 事实、按 dispatch 发 vtable 槽、L1 不透明类型。前置已合入：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish（`emitter-final`，c7a9d7b4）。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
+| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21）通过集合 ⊇ 冻结的 Python 基线；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`，Rust 生成器由 `input` crate 消费，`rava build` 进程内直传见 `emitter-perf2`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；待：全量 e2e（JDK 21，基线 `2026-10-01-python-baseline-jdk21.txt` 1029 例；JDK 25 不设 Python 基线，2026-10-01 用户决定） |
 | C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
@@ -688,6 +688,9 @@ CollectorsDemo 每一步都与真不动点基线（逐站点全量重跑验证�
    例如调用一个永不返回的方法，其后的代码不标死。Rust 侧导出前自检，Python 侧违反即报 `FoldError`。
 8. **`invoke` 的范围**：`kind: "invoke"` 只出现在 invokevirtual / invokespecial / invokestatic / invokeinterface 上，
    invokedynamic 不折叠。
+9. **附加字段（v2 内，忽略即保持原行为）**：`null_recv`（接收者恒为 null 的活虚调用点）；`noreturn_calls`（定论不返回的活调用点）与
+   `noreturn_dead_pcs`（以这些调用为控制流终点时另外不可达的区间，与 `dead_pcs` 不相交）。消费 `noreturn_*` 时在调用后终止控制流并删去该区间，
+   规则 7 相应放宽为「死区只从跳转 / switch / return / athrow 或 noreturn 调用之后开始」。详见边界收窄计划 §6.11。
 
 原有的 `dead_branches` 输出整体由 `folds` 取代。Python 只消费这份数据，不另写判定。
 

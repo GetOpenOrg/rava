@@ -111,7 +111,9 @@ impl<'a> Engine<'a> {
         let named = k == Members::Constructors && self.named_ctors.contains(&c);
         let user = (self.domain(&cls) == Domain::User || named) && self.enumerated.contains(&(k, c));
         let names = self.reflect_names.get(&c).cloned().unwrap_or_default();
-        let picked: Vec<(String, String)> = cf
+        // 可被覆写的实例方法：反射调用按接收者虚分派（覆写可在子类，含未枚举的类）
+        let overridable = |mm: &classfile::Method| reflect_virtual(mm.access, cf.access);
+        let picked: Vec<(String, String, bool)> = cf
             .methods
             .iter()
             .filter(|mm| match k {
@@ -119,7 +121,7 @@ impl<'a> Engine<'a> {
                 Members::Constructors => mm.name == "<init>" && user,
                 Members::RecordAccessors => comps.iter().any(|(n, d)| mm.name == *n && mm.desc == format!("(){d}")),
             })
-            .map(|mm| (mm.name.clone(), mm.desc.clone()))
+            .map(|mm| (mm.name.clone(), mm.desc.clone(), k != Members::Constructors && overridable(mm)))
             .collect();
         let via = Via::class("reflect", &cls);
         if k == Members::Constructors && !picked.is_empty() {
@@ -128,13 +130,36 @@ impl<'a> Engine<'a> {
         if !picked.is_empty() {
             self.init(&cls, via.clone());
         }
-        for (name, desc) in picked {
+        for (name, desc, virt) in picked {
             let key = MemberRef { owner: cls.clone(), name, desc };
             if !self.reflect_members.insert((k, key.clone())) {
                 continue;
             }
+            if virt {
+                self.vm_dispatch(&key, cf.is_interface(), via.clone());
+            }
             let t = self.method(key, via.clone());
             self.open_params(t);
         }
+    }
+}
+
+/// 反射调用该方法按接收者虚分派（可被覆写的实例方法：非 static / private / final，所属类非 final）
+fn reflect_virtual(method_access: u16, class_access: u16) -> bool {
+    method_access & (acc::STATIC | acc::PRIVATE | acc::FINAL) == 0 && class_access & acc::FINAL == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reflect_virtual_rule() {
+        assert!(reflect_virtual(acc::PUBLIC, acc::PUBLIC));
+        assert!(reflect_virtual(0, acc::ABSTRACT));
+        assert!(!reflect_virtual(acc::STATIC, 0));
+        assert!(!reflect_virtual(acc::PRIVATE, 0));
+        assert!(!reflect_virtual(acc::FINAL, 0));
+        assert!(!reflect_virtual(0, acc::FINAL));
     }
 }

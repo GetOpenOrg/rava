@@ -115,6 +115,9 @@ impl<'a> Engine<'a> {
             MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None },
         );
         self.mbase.entry(key.clone()).or_insert(idx);
+        if kind == Kind::Bytecode {
+            self.nr_created(&key);
+        }
         let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Type };
         self.touch(&key.owner, lvl, Via::method("member", idx, None));
         if cf.is_some() {

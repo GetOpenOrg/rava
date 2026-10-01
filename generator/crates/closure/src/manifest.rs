@@ -69,7 +69,7 @@ mod sysprops;
 mod names;
 mod field_names;
 pub use field_names::NameResolver;
-pub use names::NameFacts;
+pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
 
 /// 方法返回值事实（[vm_constants] / [facts]）
@@ -77,6 +77,16 @@ pub use sysprops::{PropRead, PropValue, SysProps};
 pub enum Fact {
     Null,
     Int(i32),
+}
+
+/// 字符串纯函数（[facts.string_ops]）：接收者与实参都是字符串常量时结果即常量
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrOp {
+    /// 忽略大小写相等（实参 null 为 false）
+    EqualsIgnoreCase,
+    /// UTF-16 长度
+    Length,
+    IsEmpty,
 }
 
 pub struct Manifest {
@@ -99,6 +109,7 @@ pub struct Manifest {
     field_handle_bridges: HashSet<String>,
     field_name_resolvers: HashMap<String, NameResolver>,
     deserializers: HashSet<String>,
+    serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
     memory_reads: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
@@ -118,6 +129,8 @@ pub struct Manifest {
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
+    /// 字符串纯函数
+    string_ops: HashMap<String, StrOp>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 按名取类与字符串拼接
@@ -175,6 +188,19 @@ impl Manifest {
                     _ => return Err(format!("vm_intrinsics.toml [facts] returns：{k} 的值须为 null / 整数 / 布尔")),
                 };
                 returns.insert(k.clone(), f);
+            }
+        }
+
+        let mut string_ops = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("string_ops")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let op = match v.as_str() {
+                    Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
+                    Some("length") => StrOp::Length,
+                    Some("is_empty") => StrOp::IsEmpty,
+                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                };
+                string_ops.insert(k.clone(), op);
             }
         }
 
@@ -296,6 +322,7 @@ impl Manifest {
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
             deserializers: field_writes("deserializers").into_iter().collect(),
+            serializable_markers: field_writes("serializable_markers"),
             array_writes,
             memory_reads,
             array_returns,
@@ -315,6 +342,7 @@ impl Manifest {
             indy,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
+            string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
         })
@@ -445,6 +473,11 @@ impl Manifest {
         self.deserializers.contains(member)
     }
 
+    /// 可序列化标记接口：反序列化只写实现者（声明类是其子类型）的字段；空 = 不区分（全部字段）
+    pub fn serializable_markers(&self) -> &[String] {
+        &self.serializable_markers
+    }
+
     /// 返回接收者的类镜像（`Object.getClass` 语义）
     pub fn returns_mirror(&self, member: &str) -> bool {
         self.mirror_returns.contains(member)
@@ -468,6 +501,10 @@ impl Manifest {
     /// 纯函数：null 实参 → false
     pub fn is_value_equals(&self, member: &str) -> bool {
         self.value_equals.contains(member)
+    }
+
+    pub fn string_op(&self, member: &str) -> Option<StrOp> {
+        self.string_ops.get(member).copied()
     }
 
     pub fn is_null_to_false(&self, member: &str) -> bool {
@@ -499,82 +536,12 @@ fn entry_matches(entry: &str, cls: &str) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_vm(vm: &str) -> Result<Manifest, String> {
-        let dir = std::env::temp_dir().join(format!("rava-manifest-{}-{}", std::process::id(), vm.len()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("vm_intrinsics.toml"), vm).unwrap();
-        let r = Manifest::load(&dir);
-        std::fs::remove_dir_all(&dir).ok();
-        r
-    }
-
-    #[test]
-    fn array_returns_parse() {
-        let m = with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [\"a/C\", \"a/D\"] }\n").unwrap();
-        assert_eq!(m.array_return("a/B.f:()[Ljava/lang/Object;"), Some(&["a/C".to_string(), "a/D".to_string()][..]));
-        assert_eq!(m.array_return("a/B.g:()[Ljava/lang/Object;"), None);
-    }
-
-    #[test]
-    fn array_returns_reject_non_array() {
-        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
-        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
-    }
-
-    #[test]
-    fn indy_object_methods_refines_native_and_boxing() {
-        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
-        assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
-        assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
-        assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
-        assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
-        assert_eq!(m.boxed_class(b'J'), None);
-    }
-
-    #[test]
-    fn field_name_resolvers_and_class_initializers_parse() {
-        let m = with_vm(
-            "[facts.field_writes]\nenumerators = []\n[facts.field_writes.name_resolvers]\n\"a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J\" = { class = 0, name = 1 }\n[facts.reflect]\nclass_initializers = [\"a/U.init:(Ljava/lang/Class;)V\"]\nhandle_owner_initializers = [\"a/D.check:(La/M;)Z\"]\nreflect_owner_initializers = [\"a/F.acc:(La/M;)V\"]\n",
-        )
-        .unwrap();
-        assert_eq!(
-            m.field_name_resolver("a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J"),
-            Some(NameResolver { class: Some(0), name: 1, handle: false })
-        );
-        assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
-        assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));
-        assert_eq!(m.member_owner_route("a/D.check:(La/M;)Z"), Some(LinkRoute::Handle));
-        assert_eq!(m.member_owner_route("a/F.acc:(La/M;)V"), Some(LinkRoute::Reflect));
-        assert_eq!(m.member_owner_route("a/U.init:(Ljava/lang/Class;)V"), None);
-    }
-
-    /// 仓库清单：按名取字段的入口与按镜像初始化入口都已登记（写入来源审计的闭合项）
-    #[test]
-    fn repo_manifest_declares_write_sources() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime");
-        let m = Manifest::load(&dir).unwrap();
-        let r = m.field_name_resolver("java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;").unwrap();
-        assert!(r.handle && r.class.is_none());
-        assert!(m.field_name_resolver("jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J").is_some());
-        assert!(m.is_class_initializer("jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V"));
-        assert_eq!(
-            m.member_owner_route("java/lang/invoke/DirectMethodHandle.checkInitialized:(Ljava/lang/invoke/MemberName;)Z"),
-            Some(LinkRoute::Handle)
-        );
-        assert_eq!(
-            m.member_owner_route("jdk/internal/reflect/MethodHandleAccessorFactory.ensureClassInitialized:(Ljava/lang/Class;)V"),
-            Some(LinkRoute::Reflect)
-        );
-    }
-}
-
 /// `s` 是否恰为 `key` 的「类.名:描述符」形式（与 `MemberRef` 的 Display 同式，免分配）
 fn member_is(s: &str, key: &classfile::constant::MemberRef) -> bool {
     let rest = s.strip_prefix(key.owner.as_str()).and_then(|r| r.strip_prefix('.'));
     let rest = rest.and_then(|r| r.strip_prefix(key.name.as_str())).and_then(|r| r.strip_prefix(':'));
     rest == Some(key.desc.as_str())
 }
+
+#[cfg(test)]
+mod tests;

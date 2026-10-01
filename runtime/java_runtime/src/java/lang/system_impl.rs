@@ -249,9 +249,7 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
         ("user.dir", std::env::current_dir().map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()),
         ("user.home", std::env::var("HOME").unwrap_or_default()),
-        ("user.name", std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .unwrap_or_default()),
+        ("user.name", crate::posix::current_user_name()),
         ("java.io.tmpdir", std::env::var("TMPDIR").unwrap_or_else(|_| std::string::String::from("/tmp"))),
         ("os.name", crate::posix::os_name().to_owned()),
         ("os.arch", crate::posix::os_arch().to_owned()),
