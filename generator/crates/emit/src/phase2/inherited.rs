@@ -37,6 +37,14 @@ fn after_attr(decl: &str) -> &str {
     decl.split_once('\n').map_or("", |(_, r)| r)
 }
 
+/// 导入扫描的文本：签名 + 转发体；存根体的消息串（Java 二进制名）不参与导入扫描
+fn scan_text(decl: &str) -> &str {
+    let body = after_attr(decl);
+    body.find(STUB_BODY).map_or(body, |i| &body[..i])
+}
+
+const STUB_BODY: &str = " { __stub(\"stub: ";
+
 /// `pub fn <name>` 的名字
 fn fn_name(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("pub fn")?;
@@ -83,6 +91,15 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
         }
     }
     call
+}
+
+/// owner 的覆盖方法未被分派到：继承成员填的槽条目与 owner 自身的槽条目同为存根
+fn owner_slot_stub(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str) -> bool {
+    if method.handwritten || method.virtual_in.is_empty() {
+        return false;
+    }
+    let Some(oci) = ctx.ty.reg.get(owner_bin) else { return false };
+    oci.methods().iter().find(|m| m.name == method.name && m.desc == method.descriptor).is_some_and(|m| ctx.slot_stub(m, oci))
 }
 
 /// 擦除条目位置
@@ -245,7 +262,11 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     if slotless {
         return format!("#[java_method({})]\n{signature};", parts.join(", "));
     }
-    let body = forward_body(ctx, method, owner_bin, &owner_args);
+    let body = if owner_slot_stub(ctx, method, owner_bin) {
+        format!("__stub(\"stub: {owner_bin}.{}:{}\")", method.name, method.descriptor)
+    } else {
+        forward_body(ctx, method, owner_bin, &owner_args)
+    };
     format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", "))
 }
 
@@ -307,7 +328,7 @@ impl<'a> RecvPass<'a, '_> {
 
     /// 转发体调用的 owner `__base` 自由函数的导入
     fn base_fn_import(&mut self, owner_bin: &str, method: &EmittedMethod) {
-        if method.handwritten || method.virtual_in.is_empty() {
+        if method.handwritten || method.virtual_in.is_empty() || owner_slot_stub(self.ctx, method, owner_bin) {
             return;
         }
         let base_short = format!("{}__{}_base", self.ctx.short(owner_bin), method.rust_name);
@@ -338,7 +359,7 @@ impl<'a> RecvPass<'a, '_> {
         self.taken.insert(real_recv_name);
         let real_decl = member_declaration(self.ctx, real_m, &real_owner, self.recv_ci);
         let owner_em = &self.ems[&real_owner];
-        let u = imports_for(self.ctx, after_attr(&real_decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), None);
+        let u = imports_for(self.ctx, scan_text(&real_decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), None);
         self.members.push(real_decl);
         self.imports.extend(u);
         self.base_fn_import(&real_owner, real_m);
@@ -389,7 +410,7 @@ impl<'a> RecvPass<'a, '_> {
         }
         let decl = member_declaration(self.ctx, method, &owner_bin, self.recv_ci);
         let owner_em = &self.ems[&owner_bin];
-        let u = imports_for(self.ctx, after_attr(&decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), Some(self.ems));
+        let u = imports_for(self.ctx, scan_text(&decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), Some(self.ems));
         self.members.push(decl);
         self.imports.extend(u);
         self.base_fn_import(&owner_bin, method);

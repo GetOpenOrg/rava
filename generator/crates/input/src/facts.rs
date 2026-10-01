@@ -172,6 +172,8 @@ pub struct ClosureFacts {
     pub class_init: ClassInitFacts,
     /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
     pub dispatched: Vec<MemberRef>,
+    /// 已实例化的类（lambda / 手写实现对象 / 数组除外）
+    pub instantiated: Vec<String>,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -279,6 +281,7 @@ impl ClosureFacts {
                 unknown: e.class_init.unknown,
             },
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
+            instantiated: e.instantiated(),
         }
     }
 
@@ -324,6 +327,7 @@ impl ClosureFacts {
             };
         }
         out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
+        out.instantiated = strings(v.get("instantiated"))?;
         Ok(out)
     }
 }

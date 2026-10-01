@@ -314,7 +314,19 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     if let Some(vn) = attr_str(&f.attrs, "vtable_name") {
                         erased_item_sig.ident = Ident::new(&vn, proc_macro2::Span::call_site());
                     }
+                    // 覆盖方法不在分派结果里（slot_stub）：槽条目发存根——分析器漏掉
+                    // 派发边时经槽命中显式失败（类名 + 方法名 + 描述符），而非静默执行
+                    // 祖先实现；本类 base 函数 / wrapper 方法照常持有方法体
+                    let slot_stub = attr_str(&f.attrs, "slot_stub").as_deref() == Some("true");
                     match &f.block {
+                        _ if slot_stub => {
+                            let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
+                            let jname = attr_str(&f.attrs, "name").unwrap_or_else(|| sig.ident.to_string());
+                            let msg = format!("stub: {}.{}:{}", ctx.meta.binary_name, jname, desc);
+                            items.push(quote! {
+                                #erased_item_sig { __stub(#msg) }
+                            });
+                        }
                         Some(block) => {
                             let mut b = block.clone();
                             rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
