@@ -481,8 +481,8 @@ pub struct Engine<'a> {
     /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
     hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
-    /// 站点因接收者集合增长重跑时只接新增对象
-    recv_done: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
+    recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,

@@ -292,7 +292,7 @@ impl<'a> Engine<'a> {
             d.retain(|k| !offs.contains(&k.0));
         }
         if let Some(d) = self.recv_done.get_mut(&m) {
-            d.retain(|k| !offs.contains(&k.0));
+            d.retain(|o, _| !offs.contains(o));
         }
         if let Some(d) = self.lambda_done.get_mut(&m) {
             for off in offs {

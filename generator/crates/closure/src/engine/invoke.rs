@@ -287,7 +287,7 @@ impl<'a> Engine<'a> {
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
         for x in &s.classes {
             if self.objs.contains_key(&x) {
-                if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
+                if dedup && !self.recv_mark(m, off, x) {
                     continue;
                 }
                 let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
