@@ -20,8 +20,9 @@ public class NoConnection {
     public static void main(String[] args) {
 
         List<Integer> vals = range(1, 9).mapToObj(i -> i).collect(toList());
+        Random rnd = new Random(42); // 固定种子，输出可复现；须在循环外创建，否则每轮同一置换、永不终止
         do {
-            Collections.shuffle(vals, new Random(42)); // 固定种子，输出可复现
+            Collections.shuffle(vals, rnd);
             for (int i = 0; i < pegs.length; i++)
                 pegs[i] = vals.get(i);
 
