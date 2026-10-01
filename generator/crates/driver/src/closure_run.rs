@@ -44,6 +44,8 @@ pub fn analyze<'a>(
         r.map_err(|e| eprintln!("[closure-cache] 停用：{e}")).ok()
     });
     let key_ms = t0.elapsed().as_millis();
+    // 触发边转储是冷算的副产物：要转储时不读缓存
+    let need_engine = need_engine || input.diag.dump_edges.is_some();
     if let (Some((s, k)), false) = (&slot, need_engine) {
         match s.load(k) {
             Load::Hit(Entry { diag, closure: mut v }) => {

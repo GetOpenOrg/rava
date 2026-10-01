@@ -28,6 +28,10 @@ pub fn safe_name(name: &str) -> String {
         out.extend(run.iter().flat_map(|c| c.to_lowercase()));
     }
     out.push_str(&rest);
+    // 小写化撞上接收者名（ICU Trie2 的局部变量 `This`）：`this` 在生成代码中专指接收者
+    if out == "this" {
+        out.push('_');
+    }
     out
 }
 

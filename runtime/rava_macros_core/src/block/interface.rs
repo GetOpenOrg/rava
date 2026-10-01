@@ -179,6 +179,13 @@ pub(crate) fn expand_interface(
     let (init_state, class_init_fn) =
         class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit, quote! {});
 
+    // 无 binary name 的载体（手写接口块缺元数据）退化为无类型 null
+    let null_ref = if binary_name.is_empty() {
+        quote! { <Object as ::std::default::Default>::default() }
+    } else {
+        quote! { Object::__typed_null(#binary_name) }
+    };
+
     quote! {
         #[allow(non_camel_case_types)]
         pub trait #vtable_ident: 'static + __ThreadSafe {
@@ -188,10 +195,18 @@ pub(crate) fn expand_interface(
         #(#static_storage)*
         #init_state
 
-        #[derive(::core::clone::Clone, ::core::default::Default)]
+        #[derive(::core::clone::Clone)]
         pub struct #struct_ident #impl_g #where_c {
             __ref: Object,
             __phantom: ( #( ::std::marker::PhantomData<fn() -> #type_params>, )* ),
+        }
+
+        // 载体的 null 带本接口静态类型（与类 wrapper 的 null 探针同形）：接口元素数组的
+        // 数组类、存储检查与 checkcast 目标元素类由此取得，值语义仍是 Java null
+        impl #impl_g ::core::default::Default for #struct_ident #ty_g #where_c {
+            fn default() -> Self {
+                Self { __ref: #null_ref, __phantom: ::std::default::Default::default() }
+            }
         }
 
         impl #impl_g From<Object> for #struct_ident #ty_g #where_c {

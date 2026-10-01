@@ -38,7 +38,7 @@ pub fn key(input: &Input<'_>, man: &Manifest) -> Result<String, String> {
 
 /// [`key`] 的主体：分析器身份与命令行放行项由调用方给出（单测用）
 pub fn key_with(analyzer: &[u8], input: &Input<'_>, overrides: (&[String], &[String])) -> Result<String, String> {
-    let Input { cp, runtime_dir, roots, seed_roots, locales, cold_cut, flow_batch } = input;
+    let Input { cp, runtime_dir, roots, seed_roots, locales, diag, cold_cut, flow_batch } = input;
     let mut f = Fp::default();
     f.field("format", &store::FORMAT.to_le_bytes());
     f.field("folds_version", &crate::FOLDS_VERSION.to_le_bytes());
@@ -57,6 +57,10 @@ pub fn key_with(analyzer: &[u8], input: &Input<'_>, overrides: (&[String], &[Str
     }
     for l in locales {
         f.field("locale", l.as_bytes());
+    }
+    // 反事实切除改变闭包结果，入指纹；触发边转储不影响结果
+    for c in &diag.cuts {
+        f.field("cut", c.as_bytes());
     }
     f.field("cold_cut", &[*cold_cut as u8]);
     let batch = flow_batch.filter(|&n| n > 0).unwrap_or(crate::engine::FLOW_BATCH);

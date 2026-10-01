@@ -14,6 +14,7 @@
 | `--debug` | 诊断明细：闭包分析未解析调用、存根兜底逐条（转交 `rava build --debug`） |
 | `--strict` | 严格模式：转译兜底改为硬失败；缺手写实现的 native 方法编译报错（写入 scratch 的 `java_runtime/strict.txt`，`build.rs` 读取） |
 | `--trace-class CLASS` | 打印该类或方法（斜线形态，如 `java/net/InetAddress`、`类.方法:描述符`）入闭包的最短 provenance 链，回答“为什么被拉进闭包”（转交 `rava closure --why`） |
+| `--cut 类.方法:描述符[@偏移]` / `--cut-file FILE` / `--dump-edges FILE` | 闭包归因诊断（缺省关闭）：反事实切除方法体或调用点（可重复；文件每行一条，`#` 注释）/ 触发边转储（每行 `源\t目标\t条件`）。原样转交 `rava build` / `rava closure` 的同名选项；切除会改变闭包结果，仅供归因，选项说明见下文 `rava closure` 节 |
 | `--closure-json` | Rust 生成器另写出 `<scratch>/closure_input/closure.json`，并校验由它解析的闭包事实与进程内直传的逐字节一致（不一致即转译失败）。缺省不写：闭包结果只在内存中交给发射层。`run_tests.py` 开动态对照时自动加上，`gen_trees.sh` / `emit_bench.sh` 也会加 |
 | `--raw-sites FILE` | Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序），不影响生成代码。行格式 `{次数}\t{种类}\t{位点}`，次数降序；位点为构造调用处 `文件:行:列`（`#[track_caller]`），种类 `raw_expr` / `raw_stmt` / `raw_item` |
 
@@ -74,6 +75,25 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--closure-cache-max-mb N` | 缓存目录总量上限（缺省 4096），写入后超出即按最近使用时间从旧到新淘汰；须配合 `--closure-cache` |
 | `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
 | `--perf` | 输出 `[perf]` 分阶段耗时、峰值 RSS 与逐类 / 逐方法耗时 Top-N |
+| `--cut E` / `--cut-file F` / `--dump-edges F` | 仅 build：闭包诊断，同下 `rava closure` |
+
+### `rava closure`（闭包分析器，`generator/crates/driver/src/closure_cmd.rs`）
+
+| 选项 | 用途 |
+|---|---|
+| `<Test.java \| 类目录>` | 输入；`.java` 先经 javac 编译到临时目录 |
+| `-o closure.json` / `--report md` | 闭包结果 / 报告 |
+| `--why 类或方法` / `--flows 片段` | 入闭包的 provenance 链 / 类型流诊断（均可多次） |
+| `--lib jar` / `--image D` / `--root M` / `--seed-class C` / `--locale L` / `--release P` / `--release-bytecode P` | 转译接入与放行实测（均可多次） |
+| `--cut 类.方法:描述符[@偏移]` | 反事实切除（可多次）：不带偏移 = 方法体不处理（节点保留）；带偏移 = 该偏移处的调用 / 字段 / new 事件不执行。只宜切消费型节点（方法体、派发点），切构造器 / 写入点会让字段按初值折叠，结果非单调 |
+| `--cut-file F` | 切除条目文件（每行一条，空行与 `#` 注释跳过；条目多时用） |
+| `--dump-edges F` | 触发边转储：方法（`M:`）/ 类型提及（`C:`）/ 类初始化（`I:`）/ 分配（`A:`）/ 枢纽（`H:`）节点间的全部触发边，派发边第三列为接收者分配条件 |
+| `--flow-batch N` / `--hash-seed N` | 顺序无关检验：流传播批量（缺省 64，1 = 逐个排空）/ 内部表哈希初值（缺省 0） |
+
+```bash
+rava closure tests/e2e/01_basics/HelloWorld.java --cut 'java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;' -o /tmp/c.json
+python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java --no-run --cut-file /tmp/cuts.txt --dump-edges /tmp/edges.tsv
+```
 
 ### `rava audit`（编译前缺口审计）
 
