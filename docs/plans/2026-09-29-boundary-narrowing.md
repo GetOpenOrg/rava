@@ -978,8 +978,11 @@ null_recv 计数（`folds[].null_recv` 总条数；类 / 方法集三列均不�
 （`getKeys()` 为 `aconst_null; areturn`），真实束类（`ListResourceBundle` / `OpenListResourceBundle` / `ParallelListResourceBundle`）均覆写 `handleKeySet`。
 验收：`scripts/main.py` 单跑 TestStreamAdvanced（经 heavy_lock）`native-missing=0`，965 JDK 类 + 1 用户类，输出与 `tests/expected` 一致。提交 9f04499e。
 
-**driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属另记，非本分支）**：合入 85d282b4 前后都失败，本分支未改动其涉及的生成器路径；
-测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入。
+**driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
+测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
+a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
+`pick`：三臂都存储 `local_1`（`Clone::clone(&_t1)` / `Object::from(..)`），E0381 回归保护的语义仍在，只是臂标签变了。
+修法（不在本分支做）：夹具让 `k` 在调用点非常量（如取 `args.length + 1`），恢复 `1 =>` 臂。
 
 ## 七、验收
 
