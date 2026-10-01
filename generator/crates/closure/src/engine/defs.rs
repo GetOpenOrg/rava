@@ -188,8 +188,20 @@ pub(super) struct Hub {
     pub(super) lambdas: Vec<u32>,
     /// 按调用点建模的目标 → 其接收者（含父枢纽的）：逐调用点接边，同目标的接收者合成一条
     pub(super) special: BTreeMap<usize, Vec<u32>>,
-    /// 调用点（方法, 偏移）→ 实参来源、结果节点、实参值
-    pub(super) links: BTreeMap<(usize, u32), (Args, Option<Node>, Option<Rc<[V]>>)>,
+    /// 调用点（方法, 偏移）→ 接入记录（重接入时换新记录）
+    pub(super) links: BTreeMap<(usize, u32), Rc<Link>>,
+    /// 接入记录序号分配
+    pub(super) link_seq: u32,
+    /// 已对 (接入记录, 按调用点建模的目标) 完整接边：同一记录再派发该目标的新接收者时只接接收者相关部分
+    pub(super) edged: HashSet<(u32, usize)>,
+}
+
+/// 调用点接入枢纽的记录：实参来源、结果节点、实参值
+pub(super) struct Link {
+    pub(super) id: u32,
+    pub(super) a: Args,
+    pub(super) res: Option<Node>,
+    pub(super) cv: Option<Rc<[V]>>,
 }
 
 /// 枢纽的接收者集合键
