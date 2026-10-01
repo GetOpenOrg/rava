@@ -73,9 +73,14 @@ fn record_and_switch_bootstraps_translate() {
     assert!(user.contains("__ts_sel1 == Object::from(Clone::clone(&RecordSwitch_Color::RED()?))"), "枚举常量标签");
     // 拼接实参的 toString 物化按 Java 求值序（从左到右）
     let main_rs = std::fs::read_to_string(out.join("user/src/record_switch.rs")).unwrap();
-    let def = |t: &str| main_rs.lines().find(|l| l.trim_start().starts_with(&format!("let {t}: String = "))).unwrap_or_default().to_string();
-    assert!(main_rs.contains("format!(\"{} / {}\", _t0, _t1)"), "拼接模板");
-    assert!(def("_t0").contains("(&p)") && def("_t1").contains("(&q)"), "拼接实参字符串化次序");
+    let lines: Vec<&str> = main_rs.lines().collect();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("缺 {needle}"));
+    let (vp, vq) = (at("valueOf_obj(Object::from(Clone::clone(&p)))"), at("valueOf_obj(Object::from(Clone::clone(&q)))"));
+    assert!(vp < vq, "拼接实参字符串化次序");
+    // `System.out` 的 getstatic 先于拼接实参求值（JVM 栈序），物化在 toString 之前
+    assert!(at("= System::out()?;") < vp, "System.out 读取先于实参 toString");
+    let name = |i: usize| lines[i].trim_start().trim_start_matches("let ").split(':').next().unwrap().to_string();
+    assert!(main_rs.contains(&format!("format!(\"{{}} / {{}}\", {}, {})", name(vp), name(vq))), "拼接模板");
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -193,6 +198,34 @@ fn more_specific_default_overrides_ancestor_injected_slot() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 视图派发的接收者为 null（字段类型无实例、读作 null）：先判空抛 NullPointerException，
+/// 视图落空（生成器缺陷）以类名 + 方法名 + 描述符精确 panic，不得静默给默认值
+#[test]
+fn virtual_view_null_receiver_throws_npe() {
+    let Some((_, out)) = build("NullView.java", "null-view", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/null_view_holder.rs")).unwrap();
+    let line = rs.lines().find(|l| l.contains("__virtual_view(")).expect("h.name() 走视图派发");
+    assert!(line.contains(".__nn()?)"), "接收者先判空：{line}");
+    assert!(line.contains("panic!(\"vtable-view-miss: NullView$Handler.name:()Ljava/lang/String;\")"), "{line}");
+    assert!(!line.contains("Default::default()"), "{line}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 字符串拼接求值顺序（JDK 21 语义）：实参从左到右求值与转换，toString 物化依实参序；
+/// 夹在两个有副作用调用之间的静态字段读取不得推迟到后一个调用之后（JVM 输出 `X-1-Y`）
+#[test]
+fn concat_operands_evaluate_left_to_right() {
+    let Some((_, out)) = build("ConcatOrder.java", "concat-order", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/concat_order.rs")).unwrap();
+    let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn main(")).collect();
+    let at = |needle: &str| body.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("缺 {needle}：\n{}", body.join("\n")));
+    assert!(at("valueOf_obj(Object::from(Clone::clone(&a)))") < at("valueOf_obj(Object::from(Clone::clone(&b)))"));
+    let (x, step, y) = (at("String::from(\"X\")"), at("ConcatOrder::step()?"), at("String::from(\"Y\")"));
+    assert!(x < step && step < y, "step 读取在 make(X) 与 make(Y) 之间：\n{}", body.join("\n"));
+    assert!(body[step].trim_start().starts_with("let "), "step 读取物化为临时量：{}", body[step]);
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// `rava image-dirs`：每行一个已存在的类目录；VM 支持类按模块给出（与 `build` 缺省派生同源）
 #[test]
 fn image_dirs_lists_existing_class_dirs() {
@@ -215,7 +248,7 @@ fn image_dirs_lists_existing_class_dirs() {
 /// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
 #[test]
 fn api_package_precheck() {
-    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only"]) else {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only", "--closure-json"]) else {
         return;
     };
     let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));

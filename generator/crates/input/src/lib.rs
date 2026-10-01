@@ -13,6 +13,7 @@ pub mod facts;
 pub mod handwritten;
 pub mod manifest;
 pub mod norm;
+mod par;
 pub mod plan;
 pub mod prune;
 mod scan_text;

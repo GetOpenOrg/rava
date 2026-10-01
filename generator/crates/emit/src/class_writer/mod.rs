@@ -25,7 +25,7 @@ use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::error::Result;
 use crate::imports::refs::add_desc_refs;
-use crate::imports::{collect_referenced, gen_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, Prefix};
+use crate::imports::{collect_referenced, plan_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, CrossPlan, Prefix};
 use crate::lang;
 use crate::project::layout::JdkLayout;
 use crate::text::indent;
@@ -170,15 +170,15 @@ pub struct ClassText {
     pub methods: Vec<crate::emission::EmittedMethod>,
 }
 
-/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、引用集
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、跨类导入规划
 pub struct ClassPrep<'c> {
     visible: Vec<&'c classfile::Method>,
     overrides: Vec<hw_overrides::HwOverride<'c>>,
-    referenced: BTreeSet<String>,
+    cross: CrossPlan,
 }
 
-/// 前置事实：引用集（含手写覆盖副本的签名引用）
-pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> ClassPrep<'c> {
+/// 前置事实：引用集（含手写覆盖副本的签名引用）→ 跨类导入规划
+pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
     let mut referenced = collect_referenced(ctx, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
@@ -187,18 +187,13 @@ pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>
         add_desc_refs(&o.method.desc, &mut referenced);
         add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
     }
-    ClassPrep { visible, overrides, referenced }
+    let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
+    Ok(ClassPrep { visible, overrides, cross })
 }
 
-/// 跨类导入行：`seen_simples`（跨包同名冲突守卫）跨类累积，必须按发射序串行调用
-pub fn class_cross_imports(
-    ctx: &EmitCtx<'_>,
-    state: &mut ProjectState,
-    ci: &ClassInfo,
-    site: &ClassSite<'_>,
-    prep: &ClassPrep<'_>,
-) -> Result<Vec<String>> {
-    gen_cross_imports(ctx, state, ci, &site.cross_input(), &prep.referenced)
+/// 跨类导入行：`seen_simples`（跨包同名冲突守卫）跨类累积，必须按发射序串行调用（只做裁决）
+pub fn class_cross_imports(state: &mut ProjectState, prep: &ClassPrep<'_>) -> Vec<String> {
+    prep.cross.resolve(&mut state.seen_simples)
 }
 
 /// 生成单类文件文本（串行形态：前置 → 跨类导入 → 类体）
@@ -209,8 +204,8 @@ pub fn gen_class_rs(
     ci: &ClassInfo,
     site: &ClassSite<'_>,
 ) -> Result<ClassText> {
-    let prep = class_prep(ctx, ci, site);
-    let cross_imports = class_cross_imports(ctx, state, ci, site, &prep)?;
+    let prep = class_prep(ctx, ci, site)?;
+    let cross_imports = class_cross_imports(state, &prep);
     class_text(ctx, state, bodies, ci, site, &prep, cross_imports)
 }
 

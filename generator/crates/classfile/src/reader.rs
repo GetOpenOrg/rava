@@ -80,11 +80,9 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Modified UTF-8（JVMS §4.4.7）解码：`C0 80` 为 NUL，补充平面字符以代理对编码。
-/// 残缺字节序列替换为 U+FFFD（同 Python 侧）。孤立代理项无法放进 Rust String，
-/// 同样替换为 U+FFFD（闭包分析只用字符串做成员名 / 类名匹配，孤立代理不构成合法名字）；
-/// golden 对照时 Python 侧按同规则归一。
-pub fn decode_mutf8(b: &[u8]) -> String {
+/// Modified UTF-8（JVMS §4.4.7）解码为 UTF-16 码元：`C0 80` 为 NUL，补充平面字符以代理对编码，
+/// 孤立代理项原样保留。残缺字节序列替换为 U+FFFD（同 Python 侧）。
+pub fn decode_mutf8_units(b: &[u8]) -> Vec<u16> {
     let mut units: Vec<u16> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
@@ -105,5 +103,35 @@ pub fn decode_mutf8(b: &[u8]) -> String {
             i += 1;
         }
     }
-    String::from_utf16_lossy(&units)
+    units
+}
+
+/// Modified UTF-8 解码为 Rust String 及（仅当含孤立代理项时）无损的 UTF-16 码元。
+/// 孤立代理项放不进 Rust String，文本侧替换为 U+FFFD——成员名 / 类名匹配只用文本
+/// （孤立代理不构成合法名字）；字符串常量（ldc / ConstantValue / 拼接配方）取码元，保值。
+pub fn decode_mutf8(b: &[u8]) -> (String, Option<Box<[u16]>>) {
+    let units = decode_mutf8_units(b);
+    match String::from_utf16(&units) {
+        Ok(s) => (s, None),
+        Err(_) => (String::from_utf16_lossy(&units), Some(units.into_boxed_slice())),
+    }
+}
+
+#[cfg(test)]
+mod mutf8_tests {
+    use super::*;
+
+    #[test]
+    fn lone_surrogate_keeps_units() {
+        // "a" + U+D83D（孤立高代理，三字节形态 ED A0 BD）
+        let (s, units) = decode_mutf8(&[0x61, 0xED, 0xA0, 0xBD]);
+        assert_eq!(s, "a\u{FFFD}");
+        assert_eq!(units.as_deref(), Some(&[0x61u16, 0xD83D][..]));
+        // 成对代理（六字节形态）无损，不携带码元
+        let (s, units) = decode_mutf8(&[0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80]);
+        assert_eq!(s, "\u{1F600}");
+        assert!(units.is_none());
+        // NUL 两字节形态
+        assert_eq!(decode_mutf8(&[0xC0, 0x80]).0, "\0");
+    }
 }

@@ -70,7 +70,7 @@ fn close_constructed_receiver(env: &InstrEnv, site: &mut Site) {
 /// 结果形态：void → `{call};`，否则 `let v: R = {call};` 入栈
 fn emit_value(env: &InstrEnv, sim: &mut StackSim, call: &str, ret: RsType) -> InstrResult<()> {
     if ret == RsType::Unit {
-        raw(sim, format!("{call};"));
+        raw(sim, format!("{call};"))?;
         Ok(())
     } else {
         let_push(env, sim, "_t", call, ret)
@@ -150,9 +150,9 @@ pub(super) fn emit_object_direct_call(
     let v = sim.fresh("_t")?;
     let c = format!("{}.{rust_mname}({})?", site.obj_e, site.arg_str());
     if *rust_ret == RsType::Unit {
-        raw(sim, format!("{c};"));
+        raw(sim, format!("{c};"))?;
     } else {
-        raw(sim, format!("let {v}: {} = {c};", ty_text(env, rust_ret)));
+        raw(sim, format!("let {v}: {} = {c};", ty_text(env, rust_ret)))?;
         sim.push(Expr::Var(v), rust_ret.clone());
     }
     Ok(true)

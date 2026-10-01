@@ -140,6 +140,11 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
 }
 
+/// fn 名是成员的伴生核心 `core_<Rust 名>`（mangle 名，或类内无重载时的裸名）
+fn is_core_of(f: &str, rust: Option<&str>, mangled: &str) -> bool {
+    f.strip_prefix("core_").is_some_and(|n| n == mangled || rust == Some(n))
+}
+
 pub(super) fn const_value(c: &Const) -> Option<V> {
     match c {
         Const::Int(v) => Some(V::Int(*v)),
@@ -159,12 +164,7 @@ impl Ctx<'_> {
             // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
             // 写入的字段）从分析中消失，成为漏报
             Domain::Boundary => {
-                let hw = m.is_native()
-                    || m.code.is_none()
-                    || m.name == "<clinit>"
-                    || self.man.is_intrinsic(&member)
-                    || self.provided(cf, &m.name, &m.desc)
-                    || !self.man.is_vm_boundary(&cf.name);
+                let hw = self.boundary_carried(cf, m, &member) || !self.man.is_vm_boundary(&cf.name);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
             }
             Domain::Root => return Kind::Handwritten("root"),
@@ -183,6 +183,33 @@ impl Ctx<'_> {
             return Kind::Abstract;
         }
         Kind::Bytecode
+    }
+
+    /// 边界方法由手写层承载（native / 无体 / `<clinit>` / VM 内建 / 共置手写体提供）
+    fn boundary_carried(&self, cf: &ClassFile, m: &classfile::Method, member: &str) -> bool {
+        m.is_native()
+            || m.code.is_none()
+            || m.name == "<clinit>"
+            || self.man.is_intrinsic(member)
+            || self.provided(cf, &m.name, &m.desc)
+    }
+
+    /// 边界截断方法：内部边界类上无手写承载的方法——发射层翻译其字节码，分析器不展开其体
+    /// （体内的被调方只在另有路径时入闭包）。动态对照按此把运行期执行到的截断体当翻译体归因
+    pub(super) fn boundary_cut(&self, cf: &ClassFile, m: &classfile::Method) -> bool {
+        self.domain(&cf.name) == Domain::Boundary
+            && !self.man.is_vm_boundary(&cf.name)
+            && !self.boundary_carried(cf, m, &format!("{}.{}:{}", cf.name, m.name, m.desc))
+            && !self.core_provided(cf, m)
+    }
+
+    /// 实例方法由伴生核心 `core_<Rust 名>` 承载（发射侧 `Verdict::Core` 同口径：适配转发到手写核心）
+    fn core_provided(&self, cf: &ClassFile, m: &classfile::Method) -> bool {
+        if m.is_static() || self.man.hw_dropped(&cf.name) {
+            return false;
+        }
+        let (rust, mangled) = self.rust_names(cf, &m.name, &m.desc);
+        self.hw.class(&cf.name).fns.keys().any(|f| is_core_of(f, rust.as_deref(), &mangled))
     }
 
     /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
@@ -413,5 +440,13 @@ mod tests {
         assert!(!deser_writes(acc::PRIVATE, false));
         assert!(!deser_writes(acc::STATIC, true));
         assert!(!deser_writes(acc::TRANSIENT, true));
+    }
+
+    #[test]
+    fn core_name_matches_mangled_or_bare() {
+        assert!(is_core_of("core_len", Some("len"), "len__I"));
+        assert!(is_core_of("core_len__I", None, "len__I"));
+        assert!(!is_core_of("core_len", None, "len__I"));
+        assert!(!is_core_of("len", Some("len"), "len__I"));
     }
 }

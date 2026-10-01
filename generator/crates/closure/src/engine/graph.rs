@@ -114,6 +114,11 @@ impl FlowGraph {
         self.iter().count()
     }
     /// 全部流边按源节点展开（诊断 / 观测）
+    /// 序号对应的节点
+    #[inline]
+    pub(super) fn node_at(&self, i: u32) -> &Node {
+        &self.nodes[i as usize]
+    }
     pub(super) fn flow_list(&self) -> Vec<(Node, Vec<(Node, u32)>)> {
         self.edges
             .iter()

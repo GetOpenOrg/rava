@@ -9,7 +9,8 @@ impl System {
     /// 同时承担 HotSpot `System.initPhase1` 的角色：`<clinit>` 后由 VM 引导填充
     /// `System.props`。原生二进制无 -D 注入机制，属性表的键集与常量值来自闭包分析器折叠
     /// 属性读点所用的同一张表（清单 `vm_intrinsics.toml [facts.system_properties]`，经
-    /// closure.json 由 build.rs 生成 `VM_CONST_PROPERTIES` / `VM_DYNAMIC_PROPERTIES`）：
+    /// closure.json 由 java_meta 构建脚本生成，经 `crate::meta::vm_const_properties` /
+    /// `vm_dynamic_properties` 读取）：
     /// - 常量键按表中值写入；
     /// - 动态键由本层取宿主值（[`host_property`]：文件系统 / 用户 / os / 编码族，
     ///   `java.home` 为嵌入资源伪值 jdk_resources::JAVA_RUNTIME_HOME，`user.timezone`
@@ -33,17 +34,17 @@ impl System {
             map.put(Object::from(String::from(k)), Object::from(String::from(v)))?;
             Ok(())
         };
-        for (k, v) in VM_CONST_PROPERTIES {
+        for (k, v) in crate::meta::vm_const_properties() {
             store(k, v)?;
         }
-        for k in VM_DYNAMIC_PROPERTIES {
+        for k in crate::meta::vm_dynamic_properties() {
             if let Some(v) = host_property(k) {
                 store(k, &v)?;
             }
         }
         crate::java::lang::VersionProps::init(
             Object::from(Clone::clone(&map)).try_cast("java/util/Map")?)?;
-        for k in VM_DYNAMIC_PROPERTIES {
+        for k in crate::meta::vm_dynamic_properties() {
             if let Some(v) = derived_vm_property(k, &map)? {
                 store(k, &v)?;
             }
@@ -200,7 +201,27 @@ impl System {
     /// native `setIn0(InputStream)`：System.setIn 的写入步（改写 static final 字段 in）。
     #[jvm_native]
     pub fn setIn0(input: crate::java::io::InputStream) -> Result<()> {
-        System::set_in_(input)
+        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
+        Ok(())
+    }
+
+    /// System.in：HotSpot 在 initPhase1 经 native setIn0 写入的静态字段（字节码 `<clinit>` 只写 null），
+    /// 与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
+    /// `new BufferedInputStream(new FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本。
+    #[jvm_native(upcalls = "
+        java/io/FileDescriptor.<init>:(I)V
+        java/io/FileInputStream.<init>:(Ljava/io/FileDescriptor;)V
+        java/io/BufferedInputStream.<init>:(Ljava/io/InputStream;)V
+    ")]
+    pub fn in_() -> Result<crate::java::io::InputStream> {
+        if let Some(is) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
+            return Ok(is);
+        }
+        let fdi = FileDescriptor::new_i(0)?;
+        let fis = crate::java::io::FileInputStream::new_filedescriptor(fdi)?;
+        let bis = crate::java::io::BufferedInputStream::new_inputstream(fis.into())?;
+        let is: crate::java::io::InputStream = bis.into();
+        Ok(STDIN.with(|s| Clone::clone(s.borrow_mut().get_or_insert(is))))
     }
 
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
@@ -215,9 +236,6 @@ impl System {
     }
 }
 
-// VM_CONST_PROPERTIES / VM_DYNAMIC_PROPERTIES：closure.json system_properties（build_closure.rs）
-include!(concat!(env!("OUT_DIR"), "/system_properties.rs"));
-
 /// 动态键的宿主取值（HotSpot `SystemProps.Raw` / `os::` 的同名来源）；版本族与 VM 族不在此
 /// （分别由 VersionProps.init 与 [`derived_vm_property`] 写入）→ None
 fn host_property(key: &str) -> Option<std::string::String> {
@@ -227,7 +245,7 @@ fn host_property(key: &str) -> Option<std::string::String> {
         "line.separator" => s(if cfg!(windows) { "\r\n" } else { "\n" }),
         "user.dir" => std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
         "user.home" => std::env::var("HOME").unwrap_or_default(),
-        "user.name" => std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default(),
+        "user.name" => crate::posix::current_user_name(),
         "java.io.tmpdir" => std::env::var("TMPDIR").unwrap_or_else(|_| s("/tmp")),
         "os.name" => s(crate::posix::os_name()),
         "os.arch" => s(crate::posix::os_arch()),
@@ -265,6 +283,8 @@ crate::__process_static! {
     /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
     static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
     static STDERR: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
+    /// System.in 的当前流：首次读取时建标准输入（fd 0），setIn0 改写。
+    static STDIN: crate::sync_model::__RefSlot<Option<crate::java::io::InputStream>> = const { crate::sync_model::__RefSlot::new(None) };
 }
 
 fn std_stream(

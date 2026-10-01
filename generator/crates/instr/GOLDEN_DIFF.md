@@ -93,9 +93,9 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 
 ## 已知差异（不影响 golden 比对）
 
-1. **`Const::String` 孤立代理项丢失**：`classfile::reader::decode_mutf8` 解码到 Rust `String`，孤立
-   代理项替换为 U+FFFD；Python 字符串可以保留孤立代理并原样进入 `ldc` 字面量。含孤立代理的字符串
-   常量两侧发射不同（本批三例未出现，ldc 全等）。
+1. **`Const::String` 孤立代理项（已消解，2026-10-01）**：`classfile::reader::decode_mutf8` 在含孤立代理项时
+   另携无损 UTF-16 码元，常量池字符串常量产出 `Const::StringUtf16`，ldc 发射 `Lit::JStringUtf16`
+   （`String::from_utf16_lit`），与 Python 侧保值一致；拼接配方（format! 构造 Rust 文本）仍按替换字符承载。
 2. **`hierarchy._has_subtypes` / `_is_direct_subtype` 未移植**：Python 侧两函数无调用点（死代码），
    Rust `hierarchy` 不提供对应 API。
 3. **invokedynamic 常量池下标（已消解，P5b）**：`classfile::Operand::InvokeDynamic` 直接携带常量池下标
@@ -142,3 +142,8 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 2. **字符串拼接实参的 toString 物化次序**：Python `concat_from_stack` 逐个出栈并即时物化 `toString()`
    临时量，临时量按**从右到左**求值（与 Java 从左到右的求值序相反，副作用可见时语义错误）；Rust 先整体出栈
    再按实参顺序物化，`_t0` 对应最左实参。
+3. **类 vtable 视图分派落空**（`invoke/virtual_/vtable.rs`）：Python 在 `__virtual_view` 返回 None 时
+   发射 `else { Default::default() }`，静默给默认值。Rust 按 invokevirtual 语义处理：
+   - 接收者先判空（`__virtual_view(obj.__nn()?)`），null 抛 NullPointerException，与 getfield / putfield 判空同一路径；
+   - 非 null 而视图落空，只可能是生成器缺陷（接收者静态类型已由 javac 校验）。以
+     `panic!("vtable-view-miss: 类.方法:描述符")` 精确报出，不再给默认值。

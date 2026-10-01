@@ -282,11 +282,11 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 | # | 事项 | 说明 |
 |---|---|---|
 | N1 | 按类并行发射（输出确定） | ✅ 已做，见 §5.1 |
-| N2 | 闭包结果进程内传递 | `rava build` 现在由闭包写出 closure.json，发射再读入并二次解析手写层（`syn` 约 3%）、按类二次解析补充属性（`extras` 约 2.7%）。终态由闭包直接交出内存结构，手写层解析结果复用。需要闭包 crate 暴露接口（闭包线） |
+| N2 | 闭包结果进程内传递 | ✅ 已做，见 §5.4（提交 b5291a03）。手写层二次解析（`syn` 约 3%）与按类补充属性（`extras` 约 2.7%）是 `rava emit` / 剖析口径的数字；`rava build` 路径下 `input.handwritten` 已降到约 10–14 ms |
 | N3 | 冷写出 DeepCopy ≤ 2 s | ✅ N1 落地后达成（1.08 s）。剩余串行段见 §5.1 N6 |
-| N4 | 剩余 mono 热点（步 1–3 后） | `drop`（逐 T 的 Weak / Arc 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
+| N4 | 剩余 mono 热点（步 1–3 后） | 第一步 ✅（§5.5）：逐类 `Arc<inner>` / `Arc<wrapper>` 析构、监视器默认方法、路径 B 的 `Result::ok`，mono size_est −8.6%。剩余：`drop`（字段所需的逐 T 析构）、`__shallow_copy`（内层 12.8k、wrapper 回退 10.8k；回退路径被 `NativeNumberFormatProvider` 等手写 `X__VTable` impl 用到，保留）、`From<Object>`、`__clinit`、`__erased_vtable`、`__view_into`、`__virtual_view`。这些与泛型擦除布局相关，并入拆 crate（泛型擦除为其前提）一并处理 |
 | N5 | 按类并行发射（N1）的实施时机 | 协调决定：等 closure-perf2 合入主线后，本线先合主线，再把 `resolve` 的 `Rc` 改为 `Arc`，改完闭包 4 例集合必须一致 |
-| N6 | 并行后剩余串行段 | DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
+| N6 | 并行后剩余串行段 | 跨类导入、phase2 已做，见 §5.2；输入重建见 §5.2 分项；`rava build` 路径的闭包 JSON、落盘、mod 树见 §5.3。原记录：DeepCopy 冷写出 1.08 s 中：输入重建约 100 ms、跨类导入裁决约 120 ms、phase2 约 240 ms 仍串行。跨类导入是「先引入者得短名」语义，必须按发射序；终态可改为并行收集各类候选短名、再按序一次裁决（纯计算约数十 ms）。phase2 按 crate 分片可并行。输入重建并入 N2 |
 
 
 ### 5.1 N1 按类并行发射（emitter-perf2，提交 2a800b4b）
@@ -322,6 +322,190 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
 
 类阶段三项依次为 prep / imports / text。RSS 增加约 80 MB，来自各工作线程并存的类体缓冲与线程栈，仍低于 500 MB 目标。总指令数增加约 2%，为锁与合并开销。
 
+### 5.2 N6 剩余串行段并行化（emitter-perf2）
+
+**跨类导入：并行收集候选、串行只裁决**
+- `seen_simples` 是「先引入者得短名」，值一经写入不再改变。所以每类的候选（键 `包::简单名`、短名、use 行）只依赖本类，可在 `class_prep` 里并行算出，类内按键首现去重。
+- 串行段 `CrossPlan::resolve` 只做查表：短名已被别的键占用就跳过，否则登记并输出 use 行；之后追加与顺序无关的 `__VTable` / `__base` / 同包尾部。候选键与尾部键（`__VTable`、`crate::…`）不相交，所以拆分前后输出相同。
+
+**phase2**
+- `resolve_inherited_members`：按接收者分组并行计算成员声明与 use 行，按原序并入；最后逐类回填也并行。计算只读 `ems`，回填在最后，与原串行等价。
+- `dispatch::synthesize`：三轮（用户类字段闭包、JDK 字段闭包、方法派发目标）都改为逐类并行。每类的闭包只由本类文本推出，账本行按原序插入。
+- `resolve_interface_impls`：原串行按发射序逐类回写。类之间唯一的读写交叠是：接口处理时会在自己的文件头插入 use 行，排在它之后的具体类经 `imports_for` 读取该接口文件头。改为两轮并行，结果与串行逐字节相同：
+  1. 接口：非具体类不生成 impl 声明，也不读别的类文件头，彼此独立；
+  2. 其余类：保留第 1 轮回写前的接口记录副本；接口排在本类之前就取回写后的记录，排在之后就取回写前的记录（`IfaceView`）；继承成员需求按发射序并入账本。
+- `use_index` 缓存按文件头文本区分版本，每个 owner 最多存 4 版，避免上述两版交替使用时反复重建。
+- `resolve_interface_inherited_members` 仍串行：同一轮里超接口的文件头会被先处理者修改。实测 Digester 上它约 2.1 ms、sam 约 0.3 ms（`phase2.iface_inherited` / `phase2.sam`），不值得改。
+- 新增 `--perf` 分项：`phase2.impls` / `phase2.inherited` / `phase2.sam` / `phase2.dispatch`；输入重建分项：`input.closure` / `input.registry` / `input.normalize` / `input.reflect` / `input.handwritten`。
+
+**验证**
+- 27 例生成树与基线 f6d80103 对照 0 差异，raw-audit 一致。
+- DeepCopy / Digester 冷写出目录与基线逐文件一致；唯一不同是 `Cargo.toml` 的 `version = 0.0.<crc32(scratch 绝对路径)>`，因为输出目录不同。
+
+**实测**（`emit_bench.sh`，共享机负载 4–6；ms 为 `--perf` 分阶段）
+
+| 用例 | 指标 | 基线 f6d80103 | N6 |
+|---|---|---:|---:|
+| DeepCopy | 冷写出墙钟 | 1.13 s | **1.02 s** |
+| DeepCopy | 热写出墙钟 | 1.00 s | **0.83 s** |
+| DeepCopy | 跨类导入裁决（classes.imports） | 122 ms | **18 ms** |
+| DeepCopy | phase2 | 259 ms | **87 ms**（26 + 49 + 0 + 12） |
+| DeepCopy | 指令数（冷） | 27.0 G | 27.1 G |
+| DeepCopy | 峰值 RSS（冷） | 396 MB | 413 MB |
+| Digester | 冷写出墙钟 | 0.99 s | **0.88 s** |
+| Digester | 热写出墙钟 | 0.93 s | **0.70 s** |
+| Digester | 跨类导入裁决 | 101 ms | **16 ms** |
+| Digester | phase2 | 222 ms | **88 ms** |
+
+- 候选收集挪进并行的 prep 段，prep 从 49 ms 升到 76 ms。
+- 指令数基本不变，说明省下的是串行墙钟而不是计算量。
+
+**输入重建分项**（DeepCopy 冷写出，约 98 ms）
+
+| 分项 | 耗时 |
+|---|---:|
+| `input.closure` | 60 ms |
+| `input.normalize` | 20 ms |
+| `input.reflect` | 9 ms |
+| `input.handwritten` | 7 ms |
+| `input.registry` | 0.7 ms |
+
+- `input.closure` 是闭包类的首次装载（class 文件解析），走 `ClassPath::get`，目前串行。
+- 手写层扫描原先对每个 vtable 标识遍历整个 registry，复杂度 O(标识 × 类)。现改为一次性建「标识 → 类」索引，候选序不变。
+
+### 5.3 `rava build` 路径的剩余串行段（emitter-perf2，提交 db72cc60、82412b89）
+
+`rava build` 里类装载已由闭包阶段缓存（`input.closure` 约 3 ms），emit_bench 看不到的串行段在闭包收尾与落盘。Digester 实测（`--perf`，共享机负载 20–46，数值波动约 ±30%）：
+
+| 段 | 改前 | 改后 | 做法 |
+|---|---:|---:|---|
+| `closure_json.value`（`Closure::to_json`） | 232 ms | **86 ms** | 边种类计数改按种类序号数组（原先逐边 `format!` 键 + BTreeMap 字符串比较）；出入度按节点序号计数，先选前 N 再排序；`folds()` 只算一次 |
+| `write`（类文件落盘） | 131 ms | 100–127 ms | `Writer::write_all` 按 `--emit-jobs` 并行，写入记录按发射序并入，出错报发射序第一个 |
+| `mod_tree` | 86 ms | **44–53 ms** | 共置手写依赖判定只需类型路径：新增 `closure::handwritten::HwTypeRefs`（与 `Handwritten::class` 的 `type_refs` 同一函数算出），不再 `syn` 解析 fn 表；各目录 mod.rs 并行生成、并行写出 |
+
+等价性：
+- `to_json`：closure.json 连同 `summary.perf` 的结构字段（edges_by_kind / top_*_degree / top_members 等，剔除计时与 RSS）与改前逐字节一致。节点驻留唯一，度数排序键是全序，先选后排与全排结果相同；`node_kind` 改为 `KIND_NAMES[kind_ix]`，两表逐项相同。
+- mod.rs：每个目录的内容只取决于该目录的磁盘列举与类型路径在场判定；写 mod.rs 不改变任何目录里 `_impl` / `_ext` / 类文件 / 子目录的在场情况，所以并行与逐目录串行结果相同。
+- 27 例生成树与 ef1daf34 对照 0 差异，raw-audit 一致；Digester scratch 改前后逐文件一致。
+
+仍在串行段上的（Digester / DeepCopy）：
+- 闭包结构析构、`input.normalize`：已由 N2 处理，见 §5.4。
+- `mod_tree` 的三次目录遍历（清扫 / 扫描 / 陈旧目录）：✅ 已合并，见下。
+
+**mod 树单次列举**（提交 092f9bed）：`write_mod_tree` 只列举一次目录，清扫、扫描、陈旧目录清除和共置手写判定共用这份列举。清扫阶段的生成标记（原先逐个整文件串行读取，扫描阶段还会对 `_impl` / `_ext` 再读一遍）改为按 `jobs` 并行读取，而且每个文件只读一次。
+
+等价性：
+- 清扫只删文件，不删目录，删掉的文件从列举中剔除，所以之后看到的列举与重新遍历一致。
+- 扫描不改盘。
+- 陈旧目录清除只删除不在 mod 树中的目录及其 mod.rs，共置手写判定只针对 mod 树中的目录，不受影响。
+- 共置手写原先 `read_dir` 取全部名字（含子目录名），现在只取列举中的文件名。包目录名是 Java 包名段或手写模块名，不含 `.`，不可能以 `_impl.rs` / `_ext.rs` 结尾，所以两者等价。
+- 删除仍按列举序串行，出错时报的是同一个文件。
+
+实测：
+- Digester 冷写出：mod_tree 44–53 ms → 36 ms。
+- DeepCopy 的 scratch 复用转 Digester（不加 `--clean`，清扫 210 个陈旧文件）：99 ms → 54 ms。改前、改后二进制在这一场景下的 scratch 逐文件一致，只有 Cargo.toml 的版本戳不同（每次运行都不同）。
+
+**user crate 陈旧清扫**（提交 a7170673）：复用 scratch 换测试时，user/src 原先会残留上一个测试的类文件（例如 DeepCopy 转 Digester 后还留着 `deep_copy*.rs`）。现在 user crate 与 java_runtime 走同一机制：
+- 本轮未写入的带生成标记的 .rs 一律清除（user crate 没有手写真源）。
+- 不在本轮 user mod 树中的包目录，删除其 mod.rs；目录变空则删除目录。顶层包也照此处理，因为顶层模块由本轮重写的 main.rs 声明。
+- 冷生成（`--clean`）时 user/src 本来就是空的，这一步不做任何事，所以 27 例生成树不变。
+- 复用 DeepCopy 的 scratch 转 Digester 后，user/src 只剩 `digester.rs` 和 `main.rs`，整个 scratch 与冷生成逐文件一致（Cargo.toml 的版本戳除外）。
+- 单测：`user_crate_sweeps_previous_test`。
+
+### 5.4 N2：闭包事实进程内直传（emitter-perf2，提交 b5291a03）
+
+做法：
+- `rava build` 缺省不再生成 closure.json。闭包分析结束后直接由 `ClosureFacts::from_closure` 交给发射。
+- `--closure-json` 时另写出 `<scratch>/closure_input/closure.json`，同时用 `ClosureFacts::from_json` 把刚写出的内容解析回来，与直传的事实比对 `Debug` 全文，不一致就报错退出。两条路径的等价性由此在每次写 json 时自检。
+- 不写 json 时，删除 scratch 里上一轮遗留的 closure.json，避免它与本轮结果不符。
+- 需要 closure.json 的调用方显式开启：`run_tests.py` 在开动态对照（缺省）时开启，`gen_trees.sh`（生成树对照含 closure.json）和 `emit_bench.sh`（`rava emit` 读它）也开启。因此每次 e2e 默认都会做一遍直传与 json 两路事实的比对。
+- 闭包结构的析构与发射重叠：`Closure` 借用含 `RefCell` 的 `Handwritten`，不能交给别的线程析构，所以改为把发射放到作用域线程（栈 16 MiB，与发射工作线程相同），本线程析构闭包。
+- 输入构建：
+  - 方法体规范化逐类并行，结果按类序归并进 BTreeMap；出错时报类序最先的错误，与串行一致。
+  - 手写文件扫描改为逐文件并行读取和提取文本，归并仍按遍历序串行进行。
+  - 反射字符串扫描不再把未改写的方法体复制成 `NormCode`，而是直接读原字节码。原先读的是 `NInsn::Op` 的 LDC，`FoldCall` / `FoldField` 本来就不含 LDC，所以集合不变。
+  - `BuildInput.jobs` 取 `--emit-jobs`。
+
+实测（`--perf`，共享机负载 7–20）：
+
+| 段 | Digester 改前 | 改后 | DeepCopy 改前 | 改后 |
+|---|---:|---:|---:|---:|
+| `closure_json`（value + 文本 + 落盘；`--closure-json` 下另含解析回读与比对） | 约 100–130 ms | **0**（缺省不写） | 约 250 ms（含比对） | **0** |
+| 闭包析构（原 `input` 余项） | 58–157 ms | **与发射重叠** | 约 617 ms | **与发射重叠** |
+| `input.normalize` | 44.8 ms | **7.6 ms** | 101.8 ms | **8.2 ms** |
+| `input.reflect` | 11.5 ms | 5.8 ms | 15.2 ms | 6.4 ms |
+| `input.handwritten` | 28.1 ms | 14.0 ms | 133.1 ms | 9.3 ms |
+
+等价性：
+- 发射只消费 `ClosureFacts`。直传与 json 两条路径产出的事实在 `--closure-json` 下逐字节比对，27 例生成树全部走这条路径，未报不一致。
+- Digester 开与不开 `--closure-json` 的 scratch，除 closure.json 本身外逐文件一致。
+- 27 例生成树（含 closure.json）与 ef1daf34 对照 0 差异，raw-audit 一致，单测通过。
+
+观测：DeepCopy 闭包阶段的峰值 RSS 在同一二进制的多次运行间波动很大（1276–2097 MB）。这发生在闭包分析内部，早于本步改动的起点（`closure` 标记之后），与本步无关，已记为闭包线的观测项。
+
+### 5.5 N4 第一步：逐类析构与监视器默认方法去单态化（emitter-perf2，提交 b488e11c、b1520ee7、7b1638bc）
+
+计量：HelloWorld 的 java_runtime crate，`-Z dump-mono-stats` 与 `-Z print-mono-items`（口径同 §4.5 第 5 步之后）。
+
+改前热点（按 size_est）：
+- `Weak::drop` 832 份、`Arc::drop_slow` 832 份、`Arc::drop` 834 份，合计约 5 万。按类型实参分：`dyn X__VTable` 244、`X__inner` 202、wrapper 约 238，其余是数组与存储单元。
+- `ObjectVTable` 的 `wait` / `wait_l` / `wait_l_i` / `notify` / `notify_all` / `monitor_enter`、`monitor_exit` 各 454 份，前六项每项 size_est 4,086。
+
+来源：
+- `Arc<X__inner>` 与 `Arc<wrapper>` 的析构来自 `ObjectVTable` 上三个按值接收 `__Shared<Self>` 的钩子：`__interface`、`__erased_inner`、`__erased_vtable`。未把 self 移交出去的路径（含 trait 默认的空体）在函数末尾析构 self，每个实现类型各实例化一份 `Arc<Self>` 析构链。
+  - 最小复现（panic = "abort"）确认：`let rc = Arc::new(..); W { vt: rc.clone() as _, any: rc as _ }` 这种全部移走的写法不产生析构；只有未移走的路径才产生。
+- 监视器方法是 trait 默认方法，从不被覆盖。它们在 vtable 里，所以每个实现类型都要实例化一份，虽然调用点从不经 vtable 调用它们。
+- `From<Object>` 部件路径 B 的 `downcast::<X__inner>().ok()` 另为每类多出一份 `Result::ok`。
+
+改动与等价性论证：
+1. **按值 self 钩子统一经擦除释放。**
+   - inner 侧：`__interface`（无接口时也生成）、`__erased_inner`、`__erased_vtable` 全部显式覆盖。wrapper 侧：三个钩子保留原逻辑。
+   - 未移交 self 的出口改为 `drop::<__Shared<dyn ObjectVTable>>(self)`。
+   - 语义：释放的是同一个 `Arc` 句柄，引用计数同样减一。析构若恰为最后一个引用，经 vtable 调用的 `drop_in_place::<Self>` 与静态析构是同一个函数。内存布局与对齐取自 vtable，与静态值相同。释放时刻不变：wrapper 与 inner 的释放仍在函数末尾。wrapper 的 `__erased_vtable` 把 `return` 改为跳出带标签的块，释放语句位于块后，每条路径释放一次。
+   - inner 的 `__erased_inner` 原为 trait 默认空体（不填 slot），覆盖后同样不填 slot。无接口类的 `__interface` 同理。
+   - inner 的 `__erased_vtable` 原先写 `Some(__Shared::clone(&self) as …)` 再返回，返回时析构 self；现改为 `Some(self as …)`。「克隆后释放原句柄」与「直接移交」的最终引用计数相同。
+   - panic = "abort"（§4.6）下没有展开清理路径，所以上述移交之前的调用即使 panic，也不产生额外析构。
+2. **监视器默认方法加 `where Self: Sized`（`object.rs` 7 个）。**
+   - 方法体不变。它们由此移出 vtable，只在被调用的具体类型上实例化。
+   - 调用点：生成侧的 `{op}.monitor_enter()?` / `monitor_exit()` 与 `Object.wait/notify*` 调用，其接收者都是具体类型：wrapper、数组、盒类型，或 `Object`。`Object` 走 `object_impl.rs` 的固有方法，固有方法的解析优先于 trait 方法。
+   - 若某处经 `dyn` 调用这些方法，会得到编译错误（「cannot be invoked on a trait object」），而不会静默改走别的实现。所以等价性由编译通过即可判定。
+3. **`From<Object>` 部件路径 B 改用 `match`。** 写法为 `match __any.downcast::<X__inner>() { Ok(__rc) => return …, Err(__other) => drop(__other) }`。两臂都完整移走值，判定与构造的结果与 `if let Some(__rc) = ….ok()` 相同。`Err` 臂释放的是 `__AnyRef`，与原 `.ok()` 丢弃 `Err` 值的行为相同。
+
+结果（HelloWorld java_runtime，同一 scratch）：
+
+| 指标 | 改前 | 改后 |
+|---|---:|---:|
+| mono 实例 | 57,066 | **52,460（−8.1%）** |
+| mono size_est | 621,292 | **568,144（−8.6%）** |
+| `Weak::drop` / `Arc::drop_slow` / `Arc::drop` 份数 | 832 / 832 / 834 | 415 / 415 / 417 |
+| 监视器 7 方法实例 | 各 454 | 0（HelloWorld 无具体类型调用点） |
+| rustc 墙钟 / 峰值 RSS（dev，共享机） | 17.1 s / 1.82 GB | 17.6 s / 1.82 GB（噪声内） |
+
+- dev 构建的墙钟与峰值 RSS 没有可测的变化：峰值出现在前端（类型检查、借用检查），不在代码生成段。收益在确定性指标（IR 体积）上，release（LTO）构建会更明显。
+- 剩下的 415 份 `Weak::drop` 按 `dyn X__VTable` / wrapper 字段逐类型实参各一份，是字段析构所必需的。
+
+验证：
+- 27 例生成树与上一步（user crate 清扫后）对照：各例只有 runtime overlay 的 `object.rs` 不同（54 行差异），加上随它变化的 Cargo.toml 版本哈希与 closure.json 的计时字段。宏展开不落生成树。raw-audit 逐行一致。
+- `cargo check` 通过：TestSynchronized（34 s，1.37 GB）、TestCasting（18 s，1.62 GB）、TestCompletableFuture（96 s，5.88 GB）。HelloWorld java_runtime 的 dev 完整编译通过（见上表）。
+- 生成侧的 `monitor_enter` 接收者全是 `Object::from(..)` / `Into::<Object>::into(..)`，走固有方法。手写层没有经 trait 调用监视器方法的点。
+- 生成器单测通过。
+
+仍未做（与泛型擦除布局相关，并入拆 crate 一并处理，见 §五 N4）：`__shallow_copy`（15.7k）、`__erased_vtable`（11.8k）、`__view_into`（11.0k）、`__clinit`（19.3k，按类体量）、`From`（20.4k）。
+
+### 5.6 `wrapper.rs` 拆分与宏展开确定性（emitter-perf2，提交 ef2c2035、14b9ce84）
+
+- **拆分**：`block/gen/wrapper.rs`（672 行）按职责拆为三个文件，各段的拼装顺序不变。
+  - `wrapper/mod.rs`（141 行）：§5 struct 与基础 trait impl，负责拼装。
+  - `wrapper/object_vtable.rs`（287 行）：§6 `impl ObjectVTable for Wrapper`。
+  - `wrapper/methods.rs`（290 行）：§7 wrapper impl 块。
+- **对照时发现**：同一源码的两次宏展开（`-Z unpretty=expanded`，HelloWorld java_runtime，21.6 MB）互相不一致。
+  - 原因：`GenContext.vtable_overrides` 是 `HashMap`，迭代序随进程的哈希种子变化，wrapper impl 块与 vtable impl 里的方法顺序因此每次编译都不同。
+  - 按行排序后，拆分前、拆分后和重复展开三者的摘要一致，说明拆分没有改变展开内容。
+- **确定性修复**：`vtable_overrides` 改为 `BTreeMap`。修复后两次展开逐字节一致，按行排序的摘要与修复前相同，说明只改了顺序。
+  - 同名方法出现在多个 `vtable_class` 下时，`seen_delegators` 的去重胜者原先随哈希序变化，现在固定为类名序靠前者。
+  - HelloWorld 的排序摘要不变，说明其中不存在这种重名。
+- 生成器与 runtime overlay 均未改动，所以生成树不受影响（宏展开不落生成树）。
+
 ## 六、需要主会话 e2e 抽查的用例
 
 - **N1**（按类并行发射）：27 例生成树与串行逐字节一致，生成形态没有变化，抽查可选。建议正常跑一次 `DeepCopy`（最多类，走并行）和 `TestCompletableFuture`，确认生成器在多线程下无 panic、结果与此前一致。
@@ -339,6 +523,17 @@ P4 之后的剖析是平的（DeepCopy 约 1790 样本）：方法体翻译（`g
   - `HelloWorld`、`TestStreamBasic`：普通工作区的 profile 生效。
   - `DeepCopy`：≥ 1700 类，经 `rava build` 走 `CARGO_BUILD_JOBS=1` 分支。
   - 任选一个依赖 panic 回溯 / 异常路径的用例（如 `TestSuppressed`、`TestNestedTry`）：确认 unwind 语义未变。
+- **N2**（闭包事实直传，提交 b5291a03）：生成形态不变。
+  - `run_tests.py` 缺省带 `--closure-json`，每次运行都会校验两路事实一致；若出现「由 closure.json 解析的闭包事实与进程内直传的不一致」即为回归。
+  - 建议抽查 `DeepCopy`（最多类，析构与发射重叠）、`Digester`，再加一例开动态对照的常规用例（如 `TestStreamBasic`）。
+  - 另跑一例 `--no-dyn`（不写 closure.json 的缺省路径），确认输出与 JVM 一致。
+- **mod 树单次列举**（提交 092f9bed）：生成形态不变。建议抽查一例复用 scratch 且闭包缩小的运行：先跑 `DeepCopy`，再不加 `--clean` 把同一 scratch 用于一个小用例，确认编译运行正常（陈旧文件清扫、陈旧包目录清除）；同一场景下 user/src 只应剩本测试的文件（user crate 清扫，提交 a7170673）。
+- **N4 第一步**（提交 b488e11c、b1520ee7、7b1638bc）：宏展开形态改变，生成树文本不变。
+  - `TestSynchronized`：wait / notify / synchronized，覆盖监视器方法。
+  - `TestCasting`：checkcast / `From<Object>`，覆盖部件路径 A / B。
+  - `TestSwitchString`、`TestZonedDateTime`：枚举常量经 Object 取回子类视图，走路径 B。
+  - `TestNestedTry`、`TestSuppressed`：中间型 catch 的擦除重建，经 `__erased_vtable`。
+  - 带接口视图的用例，如 `TestStreamBasic`、`TestCompletableFuture`，经 `__interface`。
 - **P3**（全局分配器）与 **P5**（lib.rs / 陈旧清扫时机）：影响所有生成器运行，生成树已逐字节一致。
   - 抽查一例复用 scratch 的连续两次运行（不加 `--clean`），确认第二次 cargo 不重编 java_runtime。
   - 抽查一例在 runtime/ 删除手写文件后的复用 scratch 运行（陈旧手写清扫）。

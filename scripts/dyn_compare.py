@@ -33,6 +33,12 @@
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
 - 无加载事件（agent 盲区）→ `unattributed`。
 
+方法粒度对照（`--methods`，agent 开 MethodEntry 事件）：类粒度对照对「已在闭包内的类上漏掉的方法」
+结构性失明，且边界域类整体按手写归因。方法粒度逐条检查程序期首次进入的方法：调用方是闭包内的翻译体
+（字节码方法，或闭包标 `cut` 的边界截断方法——发射层翻译其字节码而分析器不展开其体）而被调方不在闭包
+→ **方法漏覆盖**（`mmiss`：原生程序上该调用落到 panic 存根）。调用方在 indy 模型调用点、被调方类列在
+`vm_upcall_classes` 的不计；调用方是手写 / native / 不在闭包的不可比（执行路径由手写层决定）。
+
 静态多出 = 闭包内、而 JVM 全程未加载的类；provenance 说明 = 该类的 `via` 边能解析到闭包内的
 来源（根 / 闭包内的类 / 闭包内的方法）。
 
@@ -179,6 +185,58 @@ def parse_agent(text: str) -> dict[str, LoadEvent]:
             if len(parts) == 4 and not is_hidden_frame(parts[0]):
                 cur.frames.append((parts[0], parts[1], parts[2], int(parts[3])))
     return events
+
+
+@dataclass
+class MethodEntry:
+    callee: str                    # `类.方法:描述符`
+    caller: tuple[str, str, str, int] | None
+
+
+def parse_methods(text: str) -> list[MethodEntry]:
+    """agent `M` 行 → 程序期首次进入的方法及其调用方帧。"""
+    out = []
+    for ln in text.splitlines():
+        if not ln.startswith("M "):
+            continue
+        p = ln[2:].split(" ")
+        if len(p) != 7:
+            continue
+        caller = None if p[3] == "-" else (p[3], p[4], p[5], int(p[6]))
+        out.append(MethodEntry(f"{p[0]}.{p[1]}:{p[2]}", caller))
+    return out
+
+
+def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRules",
+                    indy_sites: set[str]) -> dict:
+    """方法粒度对照：翻译体（字节码 / 边界截断）调用的、不在闭包内的方法 → 方法漏覆盖。"""
+    kinds = {m["id"]: m.get("kind", "") for m in closure.get("methods", [])}
+    cut = {m["id"] for m in closure.get("methods", []) if m.get("cut")}
+    cats: Counter = Counter()
+    mmiss: list[dict] = []
+    for e in entries:
+        if e.caller is None:
+            cats["vm-entry"] += 1
+            continue
+        callee_cls = e.callee.partition(":")[0].rsplit(".", 1)[0]
+        if is_hidden_frame(callee_cls) or is_hidden_frame(e.caller[0]):
+            cats["hidden"] += 1
+            continue
+        caller = _frame_id(e.caller)
+        if kinds.get(caller) != BYTECODE and caller not in cut:
+            cats["untranslated-caller"] += 1
+            continue
+        if e.callee in kinds:
+            cats["covered"] += 1
+            continue
+        if _frame_str(e.caller) in indy_sites:
+            cats["indy-model"] += 1
+            continue
+        if rules.is_vm_upcall(callee_cls):
+            cats["vm-upcall"] += 1
+            continue
+        mmiss.append({"method": e.callee, "caller": _frame_str(e.caller), "caller_cut": caller in cut})
+    return {"entered": len(entries), "by_category": dict(sorted(cats.items())), "mmiss": mmiss}
 
 
 def is_hidden_frame(cls: str) -> bool:
@@ -374,7 +432,7 @@ def _java_run(cmd: list[str], cwd: Path, timeout: float) -> str | None:
 
 
 def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
-        timeout: float = 120.0) -> dict:
+        timeout: float = 120.0, methods: bool = False) -> dict:
     """对一个转译 scratch（含 closure_input/）做动态对照，返回结果字典（`error` 键表示未完成）。"""
     t0 = time.perf_counter()
     cin = ws / "closure_input"
@@ -395,7 +453,8 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
         xlog_p = Path(tmp) / "load.log"
         agent_p = Path(tmp) / "agent.txt"
         # 基准与归因同一次运行：JVMTI agent 不执行 Java 代码，不改变加载序列
-        err = _java_run([java, "-Xshare:off", f"-agentpath:{lib}={agent_p}",
+        opt = f"{agent_p},methods={main}" if methods else str(agent_p)
+        err = _java_run([java, "-Xshare:off", f"-agentpath:{lib}={opt}",
                          f"-Xlog:class+load=info,class+init=info:file={xlog_p}",
                          "-cp", str(classes_dir), main.replace("/", ".")], cwd, timeout)
         xlog = xlog_p.read_text(errors="replace") if xlog_p.exists() else ""
@@ -404,6 +463,9 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
         return {"error": f"基准轨迹为空（java {err or '无输出'}）"}
     rules = DomainRules.from_manifest(user_classes(classes_dir))
     res = compare(closure, xlog, agent, rules, main)
+    if methods:
+        indy_sites = {x["site"] for x in closure.get("indy_models", [])}
+        res["methods"] = compare_methods(closure, parse_methods(agent), rules, indy_sites)
     res["java_status"] = err or "ok"
     res["elapsed_s"] = round(time.perf_counter() - t0, 2)
     return res
@@ -423,6 +485,9 @@ def summary_tag(res: dict) -> str:
     tag = f"dyn miss {len(res['miss'])} / extra {res['extra']['count']} prov {provenance_pct(res)}"
     if res["unattributed"]:
         tag += f" / unattr {len(res['unattributed'])}"
+    if "methods" in res:
+        mm = res["methods"]["mmiss"]
+        tag += f" / mmiss {len(mm)} cut {sum(1 for m in mm if m['caller_cut'])}"
     return tag
 
 
@@ -448,6 +513,9 @@ def print_summary(per_test: dict[str, dict]) -> None:
         for m in v["miss"]:
             print(f"  [miss] {name}: {m['class']}  ← {m['frame'] or '全栈已建模（类引用边）'}")
     for name, v in sorted(ok.items()):
+        for m in v.get("methods", {}).get("mmiss", []):
+            print(f"  [mmiss] {name}: {m['method']}  ← {m['caller']}" + ("（边界截断体）" if m["caller_cut"] else ""))
+    for name, v in sorted(ok.items()):
         for m in v["unattributed"]:
             print(f"  [unattr] {name}: {m['class']}")
     for name, v in sorted(ok.items()):
@@ -463,11 +531,13 @@ def main() -> int:
     ap.add_argument("-o", "--out", help="明细 JSON 输出路径（缺省打印到 stdout）")
     ap.add_argument("--java-home", default=os.environ.get("JAVA_HOME"),
                     help="JDK home（缺省 JAVA_HOME）")
+    ap.add_argument("--methods", action="store_true",
+                    help="方法粒度对照（MethodEntry 事件，解释执行，慢一个量级）")
     args = ap.parse_args()
     if not args.java_home:
         sys.exit("需要 --java-home 或 JAVA_HOME")
     ws = Path(args.workspace).resolve()
-    res = run(ws, Path(args.java_home), ROOT / "build" / "dyn_agent", ROOT)
+    res = run(ws, Path(args.java_home), ROOT / "build" / "dyn_agent", ROOT, methods=args.methods)
     text = json.dumps(res, ensure_ascii=False, indent=1)
     if args.out:
         Path(args.out).write_text(text)

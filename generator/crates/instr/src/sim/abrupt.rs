@@ -41,7 +41,7 @@ pub fn null_recv(env: &InstrEnv, sim: &mut StackSim, call_insn: &Insn) -> InstrR
     };
     for a in args {
         if effectful(&a.expr) {
-            sim.emit(let_discard(a.expr));
+            sim.emit(let_discard(a.expr))?;
         }
     }
     // 非 vtable 体的实例方法（含不占槽的 NonVirtual 方法）里 `this` 已是 `&Self`，不再取引用；
@@ -49,7 +49,7 @@ pub fn null_recv(env: &InstrEnv, sim: &mut StackSim, call_insn: &Insn) -> InstrR
     let this_is_ref = !sim.cfg.in_vtable_body && !sim.cfg.is_constructor && !sim.cfg.is_static && text(env, &recv_expr) == "this";
     let recv_arg = if this_is_ref { recv_expr } else { Expr::reference(recv_expr) };
     let err = call(&["__null_recv"], vec![recv_arg, Expr::Lit(Lit::Str(member))])?;
-    sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)));
+    sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)))?;
     Ok(())
 }
 
@@ -61,8 +61,8 @@ pub fn noreturn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call_ins
     super::sim_insn(env, sim, log, call_insn)?;
     if sim.state.stack.len() as i64 > depth {
         let e = sim.pop()?;
-        sim.emit(let_discard(e.expr));
+        sim.emit(let_discard(e.expr))?;
     }
-    sim.emit(Stmt::Expr(call(&["__noreturn"], vec![Expr::Lit(Lit::Str(member))])?));
+    sim.emit(Stmt::Expr(call(&["__noreturn"], vec![Expr::Lit(Lit::Str(member))])?))?;
     Ok(())
 }

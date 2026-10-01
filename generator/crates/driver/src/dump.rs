@@ -14,6 +14,7 @@ const NEWARRAY_TYPES: [&str; 8] = ["boolean", "char", "float", "double", "byte",
 fn ldc(c: &Const) -> String {
     match c {
         Const::String(s) => format!("S:{s}"),
+        Const::StringUtf16(u) => format!("S:{}", std::string::String::from_utf16_lossy(u)),
         Const::Int(v) => format!("I:{v}"),
         Const::Long(v) => format!("J:{v}"),
         Const::Class(n) => format!("C:{n}"),

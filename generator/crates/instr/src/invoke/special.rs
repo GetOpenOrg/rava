@@ -104,7 +104,7 @@ fn pop_args_text(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &
 fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, call_text: &str) -> InstrResult<()> {
     let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
     if matches!(rust_ret, RsType::Unit) {
-        sim.emit(Stmt::raw(format!("{call_text};")));
+        sim.emit(Stmt::raw(format!("{call_text};")))?;
         return Ok(());
     }
     let v = sim.fresh("_t")?;
@@ -113,7 +113,7 @@ fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, call_tex
     } else {
         format!("let {v} = {call_text};")
     };
-    sim.emit(Stmt::raw(stmt));
+    sim.emit(Stmt::raw(stmt))?;
     sim.push(Expr::Var(v), rust_ret);
     Ok(())
 }
@@ -149,15 +149,16 @@ fn gen_super_method(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call
         return gen_slotless_special(env, sim, call, &sp_owner, &obj_e, &rust_m, &args);
     }
     let mut base_fn = format!("{owner_short}__{rust_m}_base");
-    // base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参无处推断时（E0283）显式给出
+    // base 函数的泛型形参 = 声明类的类型形参（接收者是 `&dyn Owner__VTable`，不参与泛型）；
+    // 实参无处推断时（E0283）显式给出
     if let (Some(ci), Some(st)) = (self_ci, self_ty.as_ref()) {
         if owner_short != self_short {
             let targs = ctx.ty.ancestor_vtable_args_by_short(ci, st).remove(&owner_short).unwrap_or_default();
             if !targs.is_empty() {
-                base_fn.push_str(&format!("::<{}, _>", join_types(env, &targs)));
+                base_fn.push_str(&format!("::<{}>", join_types(env, &targs)));
             }
         } else if !sim.cfg.class_type_params.is_empty() {
-            base_fn.push_str(&format!("::<{}, _>", sim.cfg.class_type_params.join(", ")));
+            base_fn.push_str(&format!("::<{}>", sim.cfg.class_type_params.join(", ")));
         }
     }
     // 首参是 vtable 引用：宏把字面 this/self 接收者重写为 `&*this.vtable`；其余按同一形态发射

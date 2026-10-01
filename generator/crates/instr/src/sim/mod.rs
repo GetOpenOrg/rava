@@ -41,7 +41,7 @@ pub fn sim_instr(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &N
             sim_insn(env, sim, log, call)?;
             if sim.state.stack.len() as i64 > depth {
                 let e = sim.pop()?;
-                sim.emit(let_discard(e.expr));
+                sim.emit(let_discard(e.expr))?;
             }
             load_const(env, sim, log, load)
         }
@@ -80,7 +80,7 @@ pub(crate) fn sim_insn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, i
     if !handled {
         // 未支持的字节码不得静默丢弃：发射存根（共享冷路径 `__stub`），运行时命中即精确报出指令
         let msg = format!("stub: unsupported bytecode {} {}", ins.name(), operand_text(&ins.operand));
-        sim.emit(Stmt::Expr(crate::build::call(&["__stub"], vec![Expr::Lit(Lit::Str(msg))])?));
+        sim.emit(Stmt::Expr(crate::build::call(&["__stub"], vec![Expr::Lit(Lit::Str(msg))])?))?;
     }
     Ok(())
 }

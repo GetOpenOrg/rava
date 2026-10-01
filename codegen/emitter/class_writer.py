@@ -1194,7 +1194,7 @@ def _patch_record_method_blocks(ci, registry, struct_name, struct_generic,
                 return _rf_get
             return f'Into::<Object>::into({_rf_get}).toString()?'
         # 方法体与字节码翻译的方法同一约定：`let this = self;` + 字段访问器
-        # （宏把虚方法体搬进 `this: &__BT` 的自由函数，其中不存在 `self` / `Self`）
+        # （宏把虚方法体搬进 `this: &dyn VTable` 的自由函数，其中不存在 `self` / `Self`）
         fmt_args = ', '.join(_record_component_text(f) for f in record_fields)
         _record_ty = f'{struct_name}{struct_generic}'
         new_blocks = []

@@ -119,6 +119,18 @@ impl SharedSecrets {
     /// `ForkJoinPool.<clinit>` 登记的 FJP 访问器（容器/配置查询，供
     /// serviceability 与虚拟线程层消费）。当前闭包内无读取方
     /// （getJavaUtilConcurrentFJPAccess 未被触达）——按 JDK 形态存储即可。
+    /// `ensureClassInitialized(Class)`（JDK：`unsafe.ensureClassInitialized(c)`，VM 执行类初始化）：
+    /// 翻译字节码的 `getJavaXxxAccess` 在槽位为空时经此触发访问器登记类的 `<clinit>`。按 VM 行为（准入
+    /// 第 ③ 类）走运行时类初始化入口；未登记初始化钩子的类为 no-op，与 `Unsafe.ensureClassInitialized`
+    /// 手写（unsafe__impl.rs）同一语义。
+    #[jvm_boundary(upcalls = "java/lang/Class.getName:()Ljava/lang/String;")]
+    pub fn ensureClassInitialized(c: crate::java::lang::Class) -> Result<()> {
+        if c.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        crate::ensure_class_initialized(&format!("{}", c.getName()?))
+    }
+
     /// `Security.<clinit>` 登记的 `JavaSecurityPropertiesAccess`（Security$1：getInitialProperties）。
     #[jvm_boundary]
     pub fn setJavaSecurityPropertiesAccess(a: impl Into<Object>) -> Result<()> {

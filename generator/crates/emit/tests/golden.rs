@@ -253,7 +253,7 @@ fn run_golden(root: &Path, stem: &str) -> (usize, BTreeMap<String, String>) {
     let runtime = PathBuf::from(meta["runtime"].as_str().unwrap_or_default());
     let manifest = RuntimeManifest::load(&runtime).expect("runtime 清单");
     let user = str_list(&meta["user_classes"]);
-    let inp = BuildInput { cp: &cp, facts: &facts, manifest: &manifest, user_classes: &user, libs: &[], runtime_src: &runtime.join("src") }
+    let inp = BuildInput { cp: &cp, facts: &facts, manifest: &manifest, user_classes: &user, libs: &[], runtime_src: &runtime.join("src"), jobs: 0 }
         .build()
         .expect("构建发射层输入");
     let names = ShortNames::build(&inp.registry);

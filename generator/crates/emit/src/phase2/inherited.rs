@@ -7,7 +7,7 @@
 //! ```text
 //! #[java_method(name = "speak", descriptor = "()I", access = "public",
 //!               inherited_from = "Animal", vtable_owner = "Animal")]
-//! pub fn speak(&self) -> Result<i32> { Animal__speak_base::<Self>(self) }
+//! pub fn speak(&self) -> Result<i32> { Animal__speak_base(self) }
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,10 +62,10 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
     let mut args = param_idents(&method.signature);
     let owner_short = ctx.short(owner_bin);
     if !method.handwritten {
-        let mut turbo: Vec<&str> = owner_args.iter().map(String::as_str).collect();
-        turbo.push("Self");
+        // base 函数接收者是 `&dyn Owner__VTable`（非泛型）：只有声明类的类型形参需要显式给出
+        let turbo = if owner_args.is_empty() { String::new() } else { format!("::<{}>", owner_args.join(", ")) };
         let call = if args.is_empty() { "self".to_string() } else { format!("self, {}", args.join(", ")) };
-        return format!("{owner_short}__{}_base::<{}>({call})", method.rust_name, turbo.join(", "));
+        return format!("{owner_short}__{}_base{turbo}({call})", method.rust_name);
     }
     let (ptypes, ret) = sig_param_types(&method.signature);
     let wrap = |a: &String, ty: &String| {
@@ -417,50 +417,57 @@ impl<'a> RecvPass<'a, '_> {
     }
 }
 
-/// 按登记的需求为各接收者类生成继承成员声明，并填充所有类文本的两个插入位
+/// 单接收者的继承成员 (声明, use 行)；接收者不承载继承成员时 None。只读 `ems`
+fn recv_members(ctx: &EmitCtx<'_>, ems: &Emissions, recv_bin: &str, wanted: &BTreeSet<(String, String)>) -> Option<(Vec<String>, Vec<String>)> {
+    let (Some(recv), Some(recv_ci)) = (ems.get(recv_bin), ctx.ty.reg.get(recv_bin)) else { return None };
+    if recv.handwritten || !recv.text.contains(INHERITED_MEMBERS_SLOT) {
+        return None;
+    }
+    let mut taken: BTreeSet<String> = recv.methods.iter().map(|m| m.rust_name.clone()).collect();
+    taken.extend(provided_methods(ctx, recv_bin));
+    let mut imported = imported_names(&recv.text);
+    imported.insert(ctx.short(recv_bin));
+    let arg_uses = type_arg_uses(ctx, recv_ci, ems, &recv.crate_prefix, &recv.crate_name);
+    let mut pass = RecvPass { ctx, ems, recv, recv_ci, taken, imported, arg_uses, members: Vec::new(), imports: Vec::new() };
+    for (name, pdesc) in wanted {
+        pass.want(name, pdesc);
+    }
+    Some((pass.members, pass.imports))
+}
+
+/// 填充单类的两个继承插入位
+fn fill_inherited(text: &str, decls: Option<&Vec<String>>, uses: Option<&Vec<String>>) -> String {
+    let member_text = match decls.filter(|d| !d.is_empty()) {
+        Some(decls) => {
+            let body = decls.join("\n\n");
+            let pad = " ".repeat(8);
+            let indented: Vec<String> = body.split('\n').map(|l| if l.is_empty() { String::new() } else { format!("{pad}{l}") }).collect();
+            format!("\n{pad}// ── 继承成员（祖先声明，本类未覆盖）──────────────────\n{}\n", indented.join("\n"))
+        }
+        None => String::new(),
+    };
+    let use_text: String = uses.map(|v| v.iter().map(|l| format!("{l}\n")).collect()).unwrap_or_default();
+    let text = super::fill_slot(text, INHERITED_MEMBERS_SLOT, &member_text);
+    super::fill_slot(&text, INHERITED_IMPORTS_SLOT, &use_text)
+}
+
+/// 按登记的需求为各接收者类生成继承成员声明，并填充所有类文本的两个插入位。
+///
+/// 各接收者只读 `ems`（本阶段在全部生成完毕后才回写文本），按接收者并行，结果按需求登记序归并
 pub fn resolve_inherited_members(ctx: &EmitCtx<'_>, state: &ProjectState, ems: &mut Emissions) {
+    let jobs = crate::par::resolve_jobs(ctx.opts.jobs);
+    let groups = requests_by_recv(state);
+    let passes = crate::par::par_map(jobs, &groups, |(recv_bin, wanted)| recv_members(ctx, ems, recv_bin, wanted));
     let mut members: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut imports: IndexMap<String, Vec<String>> = IndexMap::new();
-    for (recv_bin, wanted) in requests_by_recv(state) {
-        let (Some(recv), Some(recv_ci)) = (ems.get(&recv_bin), ctx.ty.reg.get(&recv_bin)) else { continue };
-        if recv.handwritten || !recv.text.contains(INHERITED_MEMBERS_SLOT) {
-            continue;
-        }
-        let mut taken: BTreeSet<String> = recv.methods.iter().map(|m| m.rust_name.clone()).collect();
-        taken.extend(provided_methods(ctx, &recv_bin));
-        let mut imported = imported_names(&recv.text);
-        imported.insert(ctx.short(&recv_bin));
-        let arg_uses = type_arg_uses(ctx, recv_ci, ems, &recv.crate_prefix, &recv.crate_name);
-        let mut pass = RecvPass {
-            ctx,
-            ems,
-            recv,
-            recv_ci,
-            taken,
-            imported,
-            arg_uses,
-            members: Vec::new(),
-            imports: Vec::new(),
-        };
-        for (name, pdesc) in &wanted {
-            pass.want(name, pdesc);
-        }
-        members.entry(recv_bin.clone()).or_default().extend(pass.members);
-        imports.entry(recv_bin).or_default().extend(pass.imports);
+    for ((recv_bin, _), pass) in groups.into_iter().zip(passes) {
+        let Some((m, u)) = pass else { continue };
+        members.entry(recv_bin.clone()).or_default().extend(m);
+        imports.entry(recv_bin).or_default().extend(u);
     }
-    for (bin, em) in ems.iter_mut() {
-        let member_text = match members.get(bin).filter(|d| !d.is_empty()) {
-            Some(decls) => {
-                let body = decls.join("\n\n");
-                let pad = " ".repeat(8);
-                let indented: Vec<String> =
-                    body.split('\n').map(|l| if l.is_empty() { String::new() } else { format!("{pad}{l}") }).collect();
-                format!("\n{pad}// ── 继承成员（祖先声明，本类未覆盖）──────────────────\n{}\n", indented.join("\n"))
-            }
-            None => String::new(),
-        };
-        let use_text: String = imports.get(bin).map(|v| v.iter().map(|l| format!("{l}\n")).collect()).unwrap_or_default();
-        em.text = super::fill_slot(&em.text, INHERITED_MEMBERS_SLOT, &member_text);
-        em.text = super::fill_slot(&em.text, INHERITED_IMPORTS_SLOT, &use_text);
+    let all: Vec<(&String, &ClassEmission)> = ems.iter().collect();
+    let texts = crate::par::par_map(jobs, &all, |(bin, em)| fill_inherited(&em.text, members.get(*bin), imports.get(*bin)));
+    for (em, text) in ems.values_mut().zip(texts) {
+        em.text = text;
     }
 }

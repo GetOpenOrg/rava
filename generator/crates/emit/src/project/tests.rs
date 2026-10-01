@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::fs::Writer;
-use super::mod_tree::{complete_lib_rs, write_mod_tree};
+use super::mod_tree::{complete_lib_rs, sweep_user_crate, write_mod_tree};
 use super::overlay::prepare_scratch;
 
 fn tmp(tag: &str) -> PathBuf {
@@ -34,6 +34,10 @@ fn runtime(root: &Path) -> PathBuf {
         &rt.join("Cargo.toml"),
         "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\n",
     );
+    let meta = root.join("runtime").join("java_meta");
+    put(&meta.join("Cargo.toml"), "[package]\nname = \"java_meta\"\nversion = \"0.1.0\"\n");
+    put(&meta.join("build_script/main.rs"), "fn main() {}\n");
+    put(&meta.join("src/lib.rs"), "// 表\n");
     rt
 }
 
@@ -57,6 +61,17 @@ fn overlay_copies_rewrites_and_prunes() {
     assert!(!cargo.contains("0.1.0"));
     assert!(src.join("sun/mod.rs").exists(), "顶层占位 mod.rs");
     assert!(out.join("java_runtime/build.rs").exists());
+    // java_meta 整体镜像：版本唯一化，真源已无的文件删除
+    let meta = out.join("java_meta");
+    assert_eq!(read(&meta.join("build_script/main.rs")), "fn main() {}\n");
+    assert!(!read(&meta.join("Cargo.toml")).contains("0.1.0"));
+    put(&meta.join("build_script/gone.rs"), "// 旧\n");
+    put(&meta.join("old_dir/gone.rs"), "// 旧\n");
+    prepare_scratch(&out, &rt, &macros, false).unwrap();
+    assert!(!meta.join("build_script/gone.rs").exists());
+    assert!(!meta.join("old_dir").exists());
+    assert!(meta.join("build_script/main.rs").exists());
+    assert!(meta.join("src/lib.rs").exists());
     prepare_scratch(&out, &rt, &macros, true).unwrap();
     assert!(!src.join("java/lang/string.rs").exists(), "--clean 清空");
     let _ = std::fs::remove_dir_all(&root);
@@ -92,7 +107,7 @@ fn mod_tree_declares_disk_contents() {
     put(&src.join("java/util/stale.rs"), "rava_macros::java_class! {}\n");
     w.write(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n").unwrap();
     put(&src.join("java/lang/gone.rs"), "// 旧手写\n");
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/util/stale.rs").exists(), "本轮未写的生成文件清扫");
     assert!(!src.join("java/lang/gone.rs").exists(), "手写真源已删除的无标记文件清扫");
     assert!(src.join("jdk_resources/module_resources.rs").exists(), "本轮写出的无标记生成文件保留");
@@ -139,7 +154,7 @@ fn mod_tree_prunes_stale_package_dirs() {
     prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&src.join("java/lang/module.rs"), "rava_macros::java_class! {}\n").unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/lang/module").exists(), "陈旧包目录删除（与 module.rs 并存即 E0761）");
     assert!(read(&src.join("java/lang/mod.rs")).contains("pub mod module;\npub use module::*;"));
     assert!(!src.join("javax").exists(), "lib.rs 未声明的顶层陈旧包删除");
@@ -165,12 +180,53 @@ fn companion_skipped_when_used_module_absent() {
     let gen = "rava_macros::java_class! {}\n";
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!read(&dir.join("mod.rs")).contains("mod natives_impl;"), "依赖模块缺席 → 不声明");
     let mut w = Writer::new(&out, &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     w.write(&dir.join("member_name.rs"), gen).unwrap();
-    write_mod_tree(&src, Some(&rt), &mut w).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(read(&dir.join("mod.rs")).ends_with("mod natives_impl;\n"), "依赖齐 → 声明");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 复用 scratch 换测试：user crate 上轮的生成类文件与陈旧包目录清除，本轮写出与无标记文件保留
+#[test]
+fn user_crate_sweeps_previous_test() {
+    let root = tmp("user_sweep");
+    let rt = runtime(&root);
+    let out = root.join("build").join("t");
+    let src = out.join("user/src");
+    let gen = "rava_macros::java_class! {}\n";
+    // 上轮（另一测试）遗留
+    put(&src.join("deep_copy.rs"), gen);
+    put(&src.join("deep_copy_person.rs"), gen);
+    put(&src.join("com/acme/old.rs"), gen);
+    put(&src.join("com/acme/mod.rs"), "pub mod old;\n");
+    put(&src.join("com/mod.rs"), "pub mod acme;\n");
+    put(&src.join("org/x/gone.rs"), gen);
+    put(&src.join("notes.rs"), "// 非生成\n");
+    // 本轮写出
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&src.join("digester.rs"), gen).unwrap();
+    w.write(&src.join("org/x/y.rs"), gen).unwrap();
+    w.write(&src.join("org/x/mod.rs"), "pub mod y;\n").unwrap();
+    w.write(&src.join("org/mod.rs"), "pub mod x;\n").unwrap();
+    w.write(&src.join("main.rs"), "mod digester;\nmod org;\n").unwrap();
+    let mut dirs = std::collections::BTreeMap::new();
+    for (d, c) in [(src.clone(), ["digester", "org"].as_slice()), (src.join("org"), &["x"]), (src.join("org/x"), &["y"])] {
+        dirs.insert(d, c.iter().map(|s| s.to_string()).collect::<std::collections::BTreeSet<_>>());
+    }
+    sweep_user_crate(&src, &dirs, &w, 2).unwrap();
+    let mut left: Vec<String> = super::fs::walk(&src)
+        .into_iter()
+        .flat_map(|(d, _, fs)| {
+            let rel = d.strip_prefix(&src).unwrap().to_path_buf();
+            fs.into_iter().map(move |f| rel.join(f).to_string_lossy().into_owned())
+        })
+        .collect();
+    left.sort();
+    assert_eq!(left, ["digester.rs", "main.rs", "notes.rs", "org/mod.rs", "org/x/mod.rs", "org/x/y.rs"]);
+    assert!(!src.join("com").exists(), "陈旧包目录整棵删除");
     let _ = std::fs::remove_dir_all(&root);
 }

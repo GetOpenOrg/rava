@@ -5,14 +5,14 @@ Java 子类天然拥有祖先的非私有实例方法；Rust wrapper 之间没�
 
     #[java_method(name = "speak", descriptor = "()I", access = "public",
                   inherited_from = "Animal", vtable_owner = "Animal")]
-    pub fn speak(&self) -> Result<i32> { Animal__speak_base::<Self>(self) }
+    pub fn speak(&self) -> Result<i32> { Animal__speak_base(self) }
 
 宏据此做两件事（见 block/mod.rs「继承成员填槽」）：
   - wrapper 上展开同名转发方法（虚方法经声明它的祖先 VTable 分派，保持多态）
   - 本类对 vtable_owner 的 vtable impl 用该体填槽——否则 vtable_owner 声明为
     abstract（实现位于中间祖先）时，槽位落到声明类的 trait default（stub panic），
     虚分派命中空洞（S-16）。转发体与 super 调用同源：精确命中 owner 的实现，
-    this 以本类 __inner 视图传入（supertrait 链满足 base 函数的 `__BT` 约束）。
+    this 以本类 __inner 视图传入（unsize 为 base 函数接收者 `&dyn Owner__VTable`）。
 
 数据流：
   1. 方法体生成期间，调用点向 codegen.inherited_calls 登记需求（按需，不全量）
@@ -175,16 +175,16 @@ def _forward_body(method: EmittedMethod, owner_bin: str, owner_args: list[str]) 
 
     运行上下文是「本类对 vtable_owner 的 vtable impl」（Self = 本类 __inner）：
       - 常规：调用 owner 宏展开生成的 `Owner__m_base` 自由函数；this 以 __inner 视图
-        传入，经 supertrait 链满足 base 函数的 `__BT: Owner__VTable` 约束。turbofish
-        传 owner 视角实参 + Self。
+        传入，unsize 为 base 函数接收者 `&dyn Owner__VTable`（经 supertrait 链）。
+        turbofish 只传 owner 视角实参（非泛型 owner 不带 turbofish）。
       - 手写（body = "handwritten"，宏不生成 base 函数）：经 `__as_Owner` 钩子（owner
         自身 vtable trait 的 self-hook）重建 owner wrapper 视图后执行其共置 `__impl_<m>`。"""
     args = _param_idents(method.signature)
     owner_short = short_cls(owner_bin)
     if not method.handwritten:
-        turbo = ', '.join([*owner_args, 'Self'])
+        turbo = f"::<{', '.join(owner_args)}>" if owner_args else ''
         call = f"self, {', '.join(args)}" if args else 'self'
-        return f"{owner_short}__{method.rust_name}_base::<{turbo}>({call})"
+        return f"{owner_short}__{method.rust_name}_base{turbo}({call})"
     # VTable trait 不带类型参数；钩子返回擦除视图 `Owner<Object, …>`。泛型 owner 的
     # 实参 / 返回因此在「本类代入视角」与「擦除视角」之间经 Object 往返转换
     # （与字节码体中 checkcast 的 From/Into 同口径；基本类型不涉泛型、原样传递）。

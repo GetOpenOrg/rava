@@ -11,6 +11,6 @@ pub mod referenced;
 pub mod refs;
 pub mod scan;
 
-pub use cross::{gen_cross_imports, CrateRoute, CrossInput, Prefix};
+pub use cross::{gen_cross_imports, plan_cross_imports, CrateRoute, CrossInput, CrossPlan, Prefix};
 pub use referenced::collect_referenced;
 pub use scan::{supplementary_iface_imports, used_vtable_imports};

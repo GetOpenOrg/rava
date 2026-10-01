@@ -7,6 +7,7 @@ use syn::Ident;
 
 use super::super::erasure::type_args_arity;
 use super::context::GenContext;
+use super::storage_hooks::hook_ident;
 
 pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let struct_ident = &ctx.struct_ident;
@@ -17,6 +18,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let where_c = &ctx.where_c;
     let phantom_init = &ctx.phantom_init;
     let binary_name = &ctx.meta.binary_name;
+    let from_any = hook_ident(ctx, "from_any");
 
     // ══════════════════════════════════════════════════════════════════════════
     // 8. BINARY_NAME 常量
@@ -80,16 +82,16 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                         }
                         // 部件路径 B（祖先视图值）：运行时 inner 就是本类 inner（如
                         // `Enum<E>::from(枚举常量)` 装箱后按子类取回）→ 按精确 inner 还原
-                        if let ::std::option::Option::Some(__rc) =
-                            __any.downcast::<#inner_ident>().ok()
-                        {
-                            return #struct_ident {
-                                vtable: __Shared::clone(&__rc)
-                                    as __Shared<dyn #vtable_trait_ident>,
-                                any: __rc as __AnyRef,
-                                _jvm_null: false,
-                                #phantom_init
-                            };
+                        match #from_any(__any) {
+                            ::std::result::Result::Ok((__vt, __any)) => {
+                                return #struct_ident {
+                                    vtable: __vt,
+                                    any: __any,
+                                    _jvm_null: false,
+                                    #phantom_init
+                                };
+                            }
+                            ::std::result::Result::Err(__other) => ::std::mem::drop(__other),
                         }
                     }
                 }

@@ -29,15 +29,16 @@
 | 方向 | 指标 | 现状（2026-09-30） | 终态 |
 |---|---|---:|---:|
 | 闭包精度 | 动态对照翻译域漏覆盖 | 0 | 0（底线） |
-| 闭包精度 | 已登记的精度缺口（§三.1 清单） | 9 项未完成 | 0 |
+| 闭包精度 | 已登记的精度缺口（§三.1 清单） | 三期 9 项完成（G6 按实测修订目标），✅ 已合入 d8212bee（2026-10-01） | 0 |
 | 闭包精度 | 无运行期依据的可达链（如 Digester 的 VarHandle 访问模式链，约 +1045 方法） | 存在 | 0 |
-| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 约 130 s user（P2 后） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
+| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 6.8 s（批量排空 + 精度三期，均已合入） | ≤ 10 s（HelloWorld ≤ 0.5 s） |
 | 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 2.3–2.8 GB | ≤ 1 GB |
 | 闭包分析效率 | 跨测试缓存命中时单测试墙钟 | 无缓存 | ≤ 2 s |
 | 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB → 并行发射 1.02 s / 396 MB（DeepCopy 热写出；冷写出 1.08 s） | ≤ 2 s / ≤ 500 MB |
 | 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
 | 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
 | 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
+| 生成代码运行性能 | 计算密集用例运行段（debug 构建，服务器；标杆 LynchBell） | > 300 s（`RUN_TIMEOUT` 超时，2026-10-01 分布式跑批） | ≤ 30 s，且不放宽 `RUN_TIMEOUT` |
 
 ## 三、执行线
 
@@ -57,9 +58,10 @@
 | 8 | 类初始化事实：「初始化以参数传入的 Class」（`Unsafe.ensureClassInitialized` 等），供生成器消费（EasterRelatedHolidays） | 精度二期诊断 |
 | 9 | 实施中发现的其余精度缺口 | — |
 
-### 2. 闭包分析效率（性能结构改造，分支 `closure-perf2`）
+### 2. 闭包分析效率（性能结构改造，分支 `closure-perf2` → `closure-mono`）
 
 - P0–P2 已合入（5b95675a），4 例 closure.json 逐字节一致，DeepCopy user 351 s → 130 s。
+- 结构性改造（`closure-perf2`）与顺序依赖修复 + 批量排空（`closure-mono`，6e0849c6）✅ 已合入：集合结果与处理顺序无关（`--flow-batch 1/7/64 × --hash-seed` 矩阵一致），DeepCopy 59.5 s → 41.7 s。待做：P3、P4、W→E 扇出，P5–P8。
 - P0 剖析推翻原假设：方法整体重分析不到 1%。真正的热点是类型流传播，手写调用点数组读写的双向扇出占全部边的 82%，其中 99.7% 的传播不带来新类型。
 - 按 D3 放宽不变量后做结构性改造：扇出边经共享节点、按调用图 SCC 排序；然后按数据推进 P3 上下文共享、P4 内存；P5–P8（预算降级、跨测试缓存、并行、工程化）随后。
 - 顺序影响的检查：确认 Python / Rust 两个生成器不依赖 closure.json 的条目顺序。如果依赖，由分析器按键排序输出，并用生成树对照确认不变。
@@ -74,14 +76,42 @@
   - 已做：`panic = "abort"`，panic 钩子保持退出码 101。mono −25.6%，二进制约 −25%，HelloWorld user 时间约 −10%。
   - `overflow-checks = false` 实测无收益，不做；手写层的 Java 整数运算已全部显式化。
   - 按类并行发射：✅ 已做（2a800b4b），DeepCopy 冷写出 2.10 → 1.08 s，峰值 RSS 314 → 396 MB，输出与串行逐字节一致。
+  - 以上 ✅ 已合入 rust-closure-analyzer（f6d80103，e2e 抽查 7 例全过，二进制约 −40%）。待做：N6 剩余串行段（约 460 ms）、rustc 分阶段测量（拆 crate 方案 §五 第 1 步）。
+- `emitter-final`（生成器补齐）✅ 已合入（ef1daf34，e2e 抽查 10 例全过，含 DeepCopy / CollectorsDemo 修复）：S1–S6 清零、CLI 选项与审计补齐、缺省路径不再导入 `codegen`（[`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)）；删除清单见 [`2026-10-01-python-generator-deletion.md`](2026-10-01-python-generator-deletion.md)。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
+
+### 4. 生成代码运行性能（任务 R1，待排期）
+
+用户 2026-10-01 决定：运行超时的算法用例，只要 Java 写法合法，就不改测试文件，也不放宽 `RUN_TIMEOUT`（300 s）。超时按性能问题处理，归入本线，原用例作为验收用例。
+
+**标杆用例**：`tests/e2e/23_algorithms/LynchBell.java`（期望输出 `Number found: 9867312`）。
+
+- **负载**：`i` 从 98764321 递减到 9867312，共约 8890 万次迭代。每次迭代执行 `String.valueOf(i)`，新分配一个 8 位字符串，赋给静态字段 `s`；`uniqueDigits` 再在双重循环里反复调用 `s.length()` 和 `s.charAt()`。
+- **JVM**：JIT 内联加逃逸分析后，每次迭代在几十纳秒量级，整程序几秒完成。
+- **rava 现状**：分布式跑批以 debug 构建运行，没有内联；运行段超过 300 s 超时。按代码逻辑，热点有四处：
+  1. `charAt` / `length` 逐层走字节码翻译链（`isLatin1` → `StringLatin1.charAt` → `checkIndex`），每层都是一次独立调用；
+  2. 每次访问静态字段 `s` 都要做类初始化检查；
+  3. `String.valueOf` 每次都分配 `byte[]` 和 `String`，带 Rc 引用计数；
+  4. 实例调用都经过 vtable 分派。
+- **方向**：在生成器侧降低热路径的调用与检查成本，例如对已证明完成初始化的类省去重复的初始化检查、final / 私有 / 静态调用直接调用并标注内联、热点小方法生成 `#[inline]`、减少临时对象分配。具体手段由实测剖析决定。约束：不手写替代 JDK 方法，性能替换不是手写理由（handwritten-boundary.md §一）。
+- **验收**：LynchBell 在 debug 构建下运行段 ≤ 30 s，输出与 JVM 一致；同时 e2e 不回归。后续发现的同类超时用例并入本任务，作为附加验收用例。
+
+**附加验收用例**（2026-10-01 分布式跑批运行段 > 300 s 超时；三例写法都合法，JVM 上都能正常结束）：
+
+| 用例 | 负载（按代码逻辑） | 主要热点 |
+|---|---|---|
+| `23_algorithms/Factorion.java` | 4 种进制 × 149 万次迭代，约 600 万次 | 每次迭代：`String.valueOf` + `Integer.parseInt` + `fromDeci`（StringBuilder 追加、`reverse`、`new String`）；每位数字再调一次 `String.valueOf(char)` + `parseInt` + 最深 12 层的递归 `factorialRec`。合计约数亿次小调用和数千万次字符串分配 |
+| `23_algorithms/FWord.java` | 第 37 个 Fibonacci 词长 2416 万字符，37 个词累计约 6300 万字符 | `entropy` 对每个字符执行 `HashMap<Character, Integer>` 的 `containsKey` / `get` / `put`，涉及装箱、哈希、equals；拼接也要复制同样量级的字符 |
+| `23_algorithms/FibonacciMatrixExponentiation.java` | `fib(10^7)` 约 209 万位十进制（约 690 万比特） | 大数 `BigInteger.multiply`（Toom-Cook 路径）对 `int[]` 做大量逐元素运算；`toString` 走递归进制转换。debug 构建下每次数组访问都有越界检查、无向量化。JVM 上也要秒级 |
+
+终态：四例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
 
 ## 四、待用户决策
 
 | # | 事项 | 现状 |
 |---|---|---|
 | Q1 | 为了降低下游 cargo 编译成本，是否允许 Rust 生成器的生成形态偏离 Python 基线 | ✅ 允许（2026-10-01）：降编译成本的生成形态改造纳入生成器效率线实施，验收改为 e2e 通过 + 生成树差异只含预期改动 |
-| Q2 | 缺省生成器切换为 rust 的时机 | ✅ 已切换（2026-10-01）。Python 生成器保留为对照基线（只读，不再投入），删除条件：① S1–S6 占位清零、CLI 选项与审计补齐、Python 依赖（jimage 提取、golden 转储等）迁完；② rust 缺省下全量 e2e（JDK 21 + 25）通过数 ≥ Python 基线且无回归用例。满足后由用户确认删除 |
+| Q2 | 缺省生成器切换为 rust 的时机 | ✅ 已切换（2026-10-01）。Python 生成器保留为对照基线（只读，不再投入），删除条件：① S1–S6 占位清零、CLI 选项与审计补齐、Python 依赖（jimage 提取、golden 转储等）迁完（✅ 2026-10-01，ef1daf34）；② rust 缺省下 JDK 21 全量 e2e 通过集合 ⊇ 冻结的 Python 基线（1029 例，`2026-10-01-python-baseline-jdk21.txt`；JDK 25 不设 Python 基线，2026-10-01 用户决定）。满足后由用户确认删除 |
 
 ## 五、执行约束（所有执行线共用）
 

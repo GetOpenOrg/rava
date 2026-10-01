@@ -99,6 +99,74 @@ impl ScopedMemoryAccess {
         write_bytes(&base, offset, value as u64, 8, big_endian)
     }
 
+    // 对齐访问族（本机字节序；视图缓冲 DirectIntBufferS / DirectLongBufferU … 的 get / put 经此）。
+    // JDK：`putXxx(session, base, offset, v)` → `UNSAFE.putXxx(base, offset, v)`，与 Unaligned 族同一寻址。
+    #[jvm_boundary]
+    pub fn getShort(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<i16> {
+        let v = compose(&read_bytes(&base, offset, 2)?, cfg!(target_endian = "big"));
+        Ok(v as u16 as i16)
+    }
+
+    #[jvm_boundary]
+    pub fn putShort(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i16) -> Result<()> {
+        write_bytes(&base, offset, value as u16 as u64, 2, cfg!(target_endian = "big"))
+    }
+
+    #[jvm_boundary]
+    pub fn getChar(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<u16> {
+        let v = compose(&read_bytes(&base, offset, 2)?, cfg!(target_endian = "big"));
+        Ok(v as u16)
+    }
+
+    #[jvm_boundary]
+    pub fn putChar(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: u16) -> Result<()> {
+        write_bytes(&base, offset, value as u64, 2, cfg!(target_endian = "big"))
+    }
+
+    #[jvm_boundary]
+    pub fn getInt(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<i32> {
+        let v = compose(&read_bytes(&base, offset, 4)?, cfg!(target_endian = "big"));
+        Ok(v as u32 as i32)
+    }
+
+    #[jvm_boundary]
+    pub fn putInt(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i32) -> Result<()> {
+        write_bytes(&base, offset, value as u32 as u64, 4, cfg!(target_endian = "big"))
+    }
+
+    #[jvm_boundary]
+    pub fn getLong(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<i64> {
+        let v = compose(&read_bytes(&base, offset, 8)?, cfg!(target_endian = "big"));
+        Ok(v as i64)
+    }
+
+    #[jvm_boundary]
+    pub fn putLong(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: i64) -> Result<()> {
+        write_bytes(&base, offset, value as u64, 8, cfg!(target_endian = "big"))
+    }
+
+    #[jvm_boundary]
+    pub fn getFloat(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<f32> {
+        let v = compose(&read_bytes(&base, offset, 4)?, cfg!(target_endian = "big"));
+        Ok(f32::from_bits(v as u32))
+    }
+
+    #[jvm_boundary]
+    pub fn putFloat(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: f32) -> Result<()> {
+        write_bytes(&base, offset, value.to_bits() as u64, 4, cfg!(target_endian = "big"))
+    }
+
+    #[jvm_boundary]
+    pub fn getDouble(&self, _session: MemorySessionImpl, base: Object, offset: i64) -> Result<f64> {
+        let v = compose(&read_bytes(&base, offset, 8)?, cfg!(target_endian = "big"));
+        Ok(f64::from_bits(v))
+    }
+
+    #[jvm_boundary]
+    pub fn putDouble(&self, _session: MemorySessionImpl, base: Object, offset: i64, value: f64) -> Result<()> {
+        write_bytes(&base, offset, value.to_bits(), 8, cfg!(target_endian = "big"))
+    }
+
     /// `copyMemory(srcSession, dstSession, srcBase, srcOffset, destBase, destOffset, bytes)`：
     /// 缓冲批量读写（DirectByteBuffer.get(byte[]) / put(byte[]) 等）。
     #[jvm_boundary]
