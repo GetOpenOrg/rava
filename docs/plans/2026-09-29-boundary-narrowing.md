@@ -1015,14 +1015,82 @@ TestFilesApi、TestNetworkInterface、ComparatorFactory）类 / 方法集合逐�
 
 **合入 rust-closure-analyzer f00b6858（含 perf2）后验收（合并提交 6e6ab7cd）**：冲突仅 `runtime/java_runtime/build.rs`（取对方，CpVal::W 移植到
 java_meta）。closure 62 / emit 35+1+2 单测通过；main.py ComparatorFactory、EisensteinPrimes、TestStreamAdvanced、TestNetworkInterface、
-DateTest、TestDynamicProxy 6 例全部 MATCH。DateTest 闭包（934 类 / 5403 方法）的 610 个折叠点中没有任何 null_recv 涉及
-`LocaleData.getDateFormatData`（c3 抽查所见的恒 null 违约由 S3 修复覆盖）。
+DateTest、TestDynamicProxy 6 例全部 MATCH。~~DateTest 闭包（934 类 / 5403 方法）的 610 个折叠点中没有任何 null_recv 涉及
+`LocaleData.getDateFormatData`~~（**此结论有误**：按名检索偏移列表，见下文 S6；该站点在 fdfa4dfb 上确为 null_recv，S6 修复）。
+
+**健全性 S6：手写 / native 值出口的未建模来源补全（emitter-c3 消费 null_recv 后报两处误判恒 null；提交 6ced8de5、380bcf80）**。
+
+- **两边结论不一致的原因（检查方法漏洞，已修正）**：上一段称「DateTest 没有任何 null_recv 涉及 getDateFormatData」，结论**不成立**。
+  当时按被调方法名在 `folds[].null_recv` 中检索，而该字段是**字节码偏移**列表，按名检索永远命不中。改为按偏移反查指令
+  （javap 反汇编所在方法，输出 `方法@pc → 指令`）后，直接检查 fdfa4dfb 的 closure.json：
+  `DateFormatSymbols.initializeData@93 invokevirtual LocaleData.getDateFormatData`、`@107 / @131 ResourceBundle.containsKey`
+  均在 null_recv 中；DeepCopy 的 `ReflectionFactory.superHasAccessibleConstructor@81 / @147 Constructor.getModifiers` 也在其中。
+  c3 的结论成立。此后 null_recv 抽查一律按偏移反查。
+- **成因 1（DateTest）**：接收者来自 `ResourceBundleBasedAdapter.getLocaleData()`，运行期对象是手写实现对象，返回的是 Rust 侧构造的
+  静态 LocaleData。伪方法节点的返回值是 open(返回类型)，但 Rust 构造的对象不在 G 中，按 G 展开为空集；而 R 节点又不算未建模来源。
+  下一层也有同样问题：以该对象为接收者的 `getDateFormatData`，派发目标不在流图里，返回值集为空，结果 `containsKey` 同样被误判。
+- **成因 2（DeepCopy）**：`Class.copyConstructors` 对 native `getDeclaredConstructors0` 返回的 open 数组调用 `arr.clone()`，该调用经
+  open 枢纽派发。open 数组没有分配点可展开，副本只剩字节码分配的空数组（`privateGetDeclaredConstructors@39`，`new Constructor[0]`），
+  元素值集为空。这在类型层同样是健全性缺口，不只影响 null_recv。
+- **修法（通用规则，不写类名）**：
+  1. `engine/unmodeled.rs` 的未建模根：
+     - 手写方法的值池、产出与返回值，涵盖 native、boundary、intrinsic、手写实现对象伪方法与 VM 钩子；
+     - 手写调用点写回实参数组的元素来源（W）；
+     - 缺失方法（Missing）的返回值。
+  2. `engine/unmodeled.rs` 的派生读取点：基址或接收者受污染（或值未知）时，读取结果也受污染。覆盖三类读取：
+     - 数组读取；
+     - 实例字段读取；
+     - 实例调用的返回值。
+     派生与流边可达传播交替迭代，直到不动点。单测 `unmodeled::tests::{reach_follows_edges_through_representatives,
+     array_loads_derive_to_fixpoint, derived_base_by_event_kind}`。
+  3. `engine/invoke.rs`：属主为数组类型的 invokevirtual 改按非虚处理（数组没有覆盖方法，目标恒为已解析的继承方法），接收者的
+     open 部分经 `RetModel::Receiver` 流入 clone 结果。单测 `invoke::tests::array_owners_are_recognized_by_descriptor_form`。
+  4. 其余值出口逐项核对，均已覆盖：
+     - 手写返回值与产出池；
+     - 按名字段写入（U / F）；
+     - 写回实参数组（W）；
+     - Missing 返回值；
+     - open 数组读取（取 open(分量)）；
+     - 数组类型上的调用（本条第 3 项）。
+- **实测**：基线为 fdfa4dfb 二进制；31 例 = 验收 27 例 + DateTest / DeepCopy / Currency / TestReflectFieldMethod。
+  - 类集合逐例相同。
+  - 方法集合只增不减，新增均为健全性补入（数组副本元素上的反射方法）：
+    - TestDateTimeFormat +1（`Constructor.getParameterTypes`）；
+    - DeepCopy +1（`Constructor.getName`）；
+    - TestOptionalFull、TestStreamAdvanced、TestStreamCollectors、DateTest、Currency、TestReflectFieldMethod 各 +2
+      （`Constructor.getParameterTypes / newInstance`）；
+    - 其余 23 例相同。
+  - null_recv 总数 3257 → 1570，按「方法@pc」逐站点对照**没有新增站点**：
+
+  | 用例 | null_recv | 用例 | null_recv |
+  |---|---|---|---|
+  | 15 个基础用例（TestTernary 等，各） | 39 → 13 | TestAtomics | 34 → 13 |
+  | TestSuppressed | 39 → 13 | TestSynchronized | 40 → 13 |
+  | TestZonedDateTime | 65 → 31 | TestFilesApi | 40 → 11 |
+  | TestDateTimeFormat | 294 → 158 | TestOptionalFull | 266 → 140 |
+  | TestArrayList | 41 → 15 | TestStreamBasic | 67 → 47 |
+  | TestStreamAdvanced | 282 → 152 | TestStreamCollectors | 270 → 144 |
+  | TestCompletableFuture | 38 → 14 | DateTest | 265 → 140 |
+  | DeepCopy | 453 → 204 | Currency | 245 → 136 |
+  | TestReflectFieldMethod | 233 → 144 | | |
+
+  按偏移反查：DateTest 的 `initializeData@93 / @107 / @131` 与 DeepCopy 的 `superHasAccessibleConstructor@81 / @147` 均已不在 null_recv 中。
+- **dyn**：29 例 miss 0。TestOptionalFull miss 1（`java/util/stream/Streams`）、TestReflectFieldMethod miss 4
+  （`ClassSpecializer$Factory$1Var`、`BoundMethodHandle$Species_LI`、`AccessorUtils`、`StackTraceElement$HashedModules`）在 c7d7b62e 与
+  fdfa4dfb 的二进制上同样存在，类集合与本修复前逐项相同，不是本修复引入，另行跟踪。
+- **c3 验收**：在本 worktree 临时合入 emitter-c3（e9baa615），合入时补了两处：
+  - `invoke.rs` 冲突：保留数组属主非虚分支，同时记录 c3 的 `direct_virtual_sites`；
+  - `report.rs` 语义冲突：`is_hwobj_method` 改为 `is_pseudo_method`。
+  main.py 跑 DateTest、DeepCopy、Currency、TestReflectFieldMethod、TestDateTimeFormat，5 例全部与 JVM 一致（MATCH）。
+  其中 DateTest 只做 6ced8de5 时仍在 `containsKey` 处违约，补上 380bcf80 后 MATCH。临时合入已 abort，未提交。
 
 **driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
 `pick`：三臂都存储 `local_1`（`Clone::clone(&_t1)` / `Object::from(..)`），E0381 回归保护的语义仍在，只是臂标签变了。
 已修：夹具改为 `int k = args.length; pick(k + 1/2/3)`，选择子非常量，各臂（含 default）可达，`1 =>` 臂与三处存储断言恢复；测试通过（生成代码未改）。
+后续（mono 合并后报 case 1 与 default 合为 `_ =>`）：断言改为与臂字面形态无关——case 1 的 `let _t1: Object = Self::a()?;`
+之后紧接 `local_1 = Clone::clone(&_t1);`，且三处存储 `local_1`。在本分支与临时合入 closure-p6（f607ba0a）的树上均通过（6ced8de5）。
 
 ## 七、验收
 
