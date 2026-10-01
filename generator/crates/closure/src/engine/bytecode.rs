@@ -317,8 +317,15 @@ impl<'a> Engine<'a> {
                 Some(v) => self.feeds(m, v, tid),
                 None => vec![Feed::S(TypeSet::open(tid))],
             };
-            for n in nodes {
-                self.feed(&fs, n, tid);
+            if fresh {
+                // 字节码写站点：抽象对象多时经汇集节点分发（与逐对象接边同集合，见 `gather.rs`）
+                if !objs.is_empty() {
+                    self.gather_write(m, off, fi, tid, &objs, &fs);
+                }
+            } else {
+                for n in nodes {
+                    self.feed(&fs, n, tid);
+                }
             }
             if other {
                 self.feed(&fs, Node::U(fi), tid);
@@ -328,7 +335,7 @@ impl<'a> Engine<'a> {
                 self.feed(&fs, Node::Esc, tid);
             }
         } else if fresh {
-            // 字节码读站点：抽象对象多时经汇集节点（与逐对象接边同集合，见 `gather.rs`）
+            // 字节码读站点：抽象对象多时经汇集节点汇集（与逐对象接边同集合，见 `gather.rs`）
             if !objs.is_empty() {
                 self.gather_read(m, off, fi, tid, &objs, res);
             }
