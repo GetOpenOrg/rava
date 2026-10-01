@@ -317,6 +317,10 @@ fn expr_never_falls_through(e: &Expr) -> bool {
         // switch 的每个臂都以 return / throw 结束（match 总是穷尽的，含 `_` 臂）
         Expr::Match(m) => m.arms.iter().all(|arm| expr_never_falls_through(&arm.body)),
         Expr::Macro(m) => macro_never_falls_through(&m.mac),
+        // 生成器在「分析结论为不返回」的调用之后发射 `__noreturn("被调方")`（运行时返回 `!`），
+        // 其后控制流终止：处理器以它结尾时同样不落出
+        Expr::Call(c) => matches!(&*c.func, Expr::Path(p)
+            if p.path.segments.last().is_some_and(|s| s.ident == "__noreturn")),
         _ => false,
     }
 }
@@ -543,4 +547,31 @@ pub fn expand(input: TokenStream2) -> TokenStream2 {
 pub fn expand_in_block(block: &mut Block) {
     let mut expander = TryExpander { loops: Vec::new(), error: None };
     expander.visit_block_mut(block);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noreturn_call_never_falls_through() {
+        let b: Block = syn::parse_quote!({ f()?; __noreturn("A.m:()V"); });
+        assert!(never_falls_through(&b.stmts));
+        let b: Block = syn::parse_quote!({ crate::__noreturn("A.m:()V") });
+        assert!(never_falls_through(&b.stmts));
+        let b: Block = syn::parse_quote!({ noreturn_like("A.m:()V"); });
+        assert!(!never_falls_through(&b.stmts));
+    }
+
+    #[test]
+    fn nested_try_ending_in_noreturn_handler() {
+        let b: Block = syn::parse_quote!({
+            java_try! {
+                try { return Ok(x); }
+                catch (e: A) { g()?; __noreturn("B.n:()V"); }
+                catch (e: C) { return Err(e.into()); }
+            }
+        });
+        assert!(never_falls_through(&b.stmts));
+    }
 }
