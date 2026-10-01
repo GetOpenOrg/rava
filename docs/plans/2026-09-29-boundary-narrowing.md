@@ -914,8 +914,15 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
 - 闭包分析：`StringUtf16` 按非空 String 站点值入栈（不进常量格），ldc 事件照常实例化 String。
 - 单测：`classfile reader::mutf8_tests::lone_surrogate_keeps_units`、`instr sim::consts::tests::lone_surrogate_string_keeps_units`、
   `emit class_writer::fields::tests::names_and_literals`。单例验证 `scripts/main.py` 输出三行 split 与 JVM 一致。
-- 已知局限：字符串拼接（indy 配方经 `format!` 构造 Rust 文本）对孤立代理项仍不保值——配方常量、`char` 实参（`char::from_u32(..).unwrap_or('?')`）、
-  String 实参的 Display 同一口径；注解元素的字符串常量亦按文本。终态需把拼接改为 UTF-16 码元级构造，另列。
+- ~~已知局限：字符串拼接与注解字符串常量按 Rust 文本~~ → 已在 UTF-16 层构造（2026-10-01，bc7eb54b）：
+  - 拼接 IR 改为 `Lit::JStringConcat(Vec<ConcatPart>)`（`Text` / `Units` / `Arg`），渲染 `(String::of("首段") + &s + c + n)`，运行时
+    `String` 的 `Add<&str | &[u16] | &String | u16 | bool | i8..i64 | f32 | f64>` 逐段追加码元（`string_ext.rs`）。配方模板与常量位值按码元
+    切分（含 `StringUtf16`），`char` 实参以 `u16` 码元追加，String 实参按引用追加码元（null → `"null"`），不再经 `format!` / Display。
+  - 注解稀疏常量池：含孤立代理项的 Utf8 → `AnnoConst::Utf16` → `idx:W:<码元 hex>` → `CpVal::W`，`getUTF8At0` 以 `from_utf16_lit` 构造。
+  - 单测：`instr concat::tests::{recipe_keeps_lone_surrogates, recipe_text_segments_and_arity, prim_operands_are_typed}`、
+    `ir render::lit::tests::concat_parts`、`classfile extras::tests::anno_const_keeps_lone_surrogate_units`、`emit attrs::tests::anno_cpool_strings`。
+  - e2e：`17_string_advanced/TestConcatLoneSurrogate`（配方常量段 / 常量位值 / char 实参 / String 实参 / 半代理拼成代理对 / 注解字符串常量，
+    期望输出由 JDK 21 生成），`scripts/main.py` 单例 11 行与 JVM 逐字一致。
 
 **TestNetworkInterface：命中 `UnixNativeDispatcher.openatSupported:()Z` 存根（归属：边界截断 + 手写层缺口，非精度改动；主干同样失败）**。
 `dyn_compare --methods` 的 cut 条目直接给出链：`SHA1PRNG` → `SeedGenerator$1.run`（JCA 放行，翻译体）列举临时目录 →
@@ -928,9 +935,197 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   TestFileAccessSpace 6939 → 7099、TestNetworkInterface 6820 → 6989，HelloWorld / FileIOTest 不变；`openatSupported` / `opendir` /
   `readdir` / `UnixDirectoryStream` 族入闭包。但放行后 `UnixNativeDispatcher.<clinit>` 转为翻译体，需要的 native 在手写层缺 6 个
   （`close0` / `closedir` / `dup` / `fdopendir` / `opendir0` / `readdir0`），且现有手写 `init(int[])` 与 JDK 21 的 `init()I` 签名不符——
-  属 POSIX 原生族档 B 的手写层工作，放行须与这批 native 同批落地并跑 `TestFilesApi` / `TestFileAccessSpace` / `FileIODemo` 回归。未提交，待排期。
+  属 POSIX 原生族档 B 的手写层工作，放行须与这批 native 同批落地并跑 `TestFilesApi` / `TestFileAccessSpace` / `FileIODemo` 回归。
+  **已实施（aa218c05）**：`closure.toml [release]` 加 `sun/nio/fs/`；`unix_native_dispatcher_impl.rs` 按 JDK 21 签名补 6 个 native（EINTR 语义同
+  `UnixNativeDispatcher.c`：`close0` / `closedir` 忽略 EINTR，`dup` 重试，`readdir0` 以 errno 区分目录尾与错误，错误抛 `UnixException(errno)`），
+  `init()I` 返回能力位（OPENAT / FUTIMES / FUTIMENS / LUTIMES / XATTR，macOS 另含 BIRTHTIME）；顺带修 `fill_stat` 的 ctime 取值与纳秒 / birthtime 字段。
+  ACC_NATIVE 方法属手写准入第 ① 类，无需清单登记（`native_status.toml` 由 build.rs 维护）。`scripts/main.py` 单跑：TestFilesApi（341 JDK 类）、
+  FileIODemo（350）、TestFileAccessSpace（1273）输出与期望一致，`native-missing=0`、`non_native_overrides=0`。
+  TestNetworkInterface（1255 JDK 类）不再命中 `openatSupported` 存根，余下一行 `loopback mtu positive: false` 为手写 `getMTU0` 只读 Linux sysfs
+  （macOS 恒 -1）；改为与 JDK `NetworkInterface.c` 同取法的 `ioctl(SIOCGIFMTU)`（`network_interface_impl.rs::ioctl_mtu`）后输出与期望一致。
+  闭包规模（类 / 方法，放行前 → 后）：TestFilesApi 334 / 866 → 340 / 889、FileIODemo 344 / 935 → 350 / 957、TestFileAccessSpace 1253 / 6939 →
+  1275 / 7099、TestNetworkInterface 1240 / 6820 → 1257 / 6989，HelloWorld 247 / 605、FileIOTest 289 / 780 不变（增量全是新可达的
+  `sun/nio/fs` 执行线，属健全性补全）。余下 `handwritten:provides` 覆写
+  （`open` / `close` / `stat` / `lstat` / `unlink` / `rmdir` / `access`）留作后续逐个改回字节码。
 - 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
   MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
+
+**健全性 S3：`ResourceBundle.getObject@22` 被判 null_recv（emitter-c3 报，TestStreamAdvanced 生成代码违约 panic）**。
+`--flows "ResourceBundle.setParent"` / `@path:ResourceBundle.parent|…/FormatData`（修前）：`parent` 只在 `setParent` 写入，调用者是手写
+`locale_resources_impl.rs::__bundle_chain`（`chain[i].setParent(chain[i+1])`）。两处值流缺失叠加成「空集 → 恒 null」：
+(a) `hw_syntax::hw_type` 遇抽象类实参返回 None，`hw_args` 退回宿主值池 `S(m, POOL)`；(b) `seeds::seed_locale` 只把束类加入闭包，从不把束对象
+作为值放进任何节点——池为空，P1 为空，`parent` 字段为空，`getObject@22` 的接收者值集为空即被判 null_recv。修法（三处，均为通用规则）：
+- **手写实参 open 化**（`hw_syntax.rs::HwArg`）：实参静态类型为具体类 → 精确值；为抽象类 / 接口 → 并入 `open(该类型)`（按 G 展开为已实例化子类）
+  且保留宿主值池；未知 → 宿主值池。
+- **locale 种子按值产出**（`seeds.rs::locale_values`）：各基名解析出的束类 id 作为精确值写入触发该基名的手写方法（清单 `base_triggers`）的
+  `S(m, PROD)` 产出节点，`seed_round` 在新喂值时继续迭代。单测 `seeds::locale::base_triggers_family_then_global`。
+- **null_recv 只在值流完整时成立**（`engine/unmodeled.rs`）：「值集为空」可能是真 null，也可能是值流缺失（手写不可见、种子不完整）。
+  未建模来源 = 手写方法的 `S(m, POOL|PROD)`、`W(..)` 宽化节点、Missing 方法的返回 `R(m)`；从这些根沿流边（忽略类型过滤）可达的节点标为「受污染」。
+  接收者抽象值为 `Null` → 可判；为 `Top` → 不判；为 `Ref` 时其任一来源节点（形参 / 调用点 / catch）受污染 → 不判。只有确有 null 常量流入、
+  或全部来源节点均未受污染且值集为空时才折 null_recv。单测 `unmodeled::tests::{reach_follows_edges_through_representatives, recv_sources_by_value_kind}`；
+  driver 集成测试 `locale_bundle_parent_not_null_recv`（夹具 `LocaleBundleParent.java`：`String.format("%.2f", …)`，断言 getObject 在闭包且 null_recv 不含 22）。
+修后 flows：`setParent` P1 = {`FormatData`, `FormatData_en`, `CurrencyNames`, `CurrencyNames_en`}，`parent` 字段同 4 类，路径
+`prod(getDecimalFormatSymbolsData) → pool → P1 setParent → field parent`；`getObject` 的 null_recv 不再含 22。
+
+null_recv 计数（`folds[].null_recv` 总条数；类 / 方法集三列均不变）：
+
+| 测试 | 修前 | 修 (a)(b) | 再加未建模来源守卫 | 类 / 方法 |
+|---|---|---|---|---|
+| DeepCopy | 517 | 516 | **453** | 1584 / 9699 |
+| Digester | 320 | 319 | **280** | 1168 / 6657 |
+| CollectorsDemo | 197 | 196 | **172** | 935 / 5389 |
+| TestStreamAdvanced | 328 | 327 | **282** | 967 / 5489 |
+
+守卫只撤回、不新增（修后集合 ⊂ 修前集合，差集 0）。TestStreamAdvanced 撤回 45 处，分布在 `BufferedInputStream.available` / `read`、
+`Class.getResourceAsStream`、`AbstractMap.equals`、`Formatter$FormatSpecifier.print*`、`Inflater.inflate(ByteBuffer)`、`ConcurrentHashMap.equals` 等——
+接收者来自手写返回或宽化值，此前同样属「无值流 → 判 null」的不可靠结论。
+`ResourceBundle.handleKeySet` 的 null_recv `[32, 41]` 保留，经核实为真 null：闭包内到达 `ResourceBundle.handleKeySet` 的接收者只有 `ResourceBundle$2`
+（`getKeys()` 为 `aconst_null; areturn`），真实束类（`ListResourceBundle` / `OpenListResourceBundle` / `ParallelListResourceBundle`）均覆写 `handleKeySet`。
+验收：`scripts/main.py` 单跑 TestStreamAdvanced（经 heavy_lock）`native-missing=0`，965 JDK 类 + 1 用户类，输出与 `tests/expected` 一致。提交 9f04499e。
+
+**健全性 S4：lambda 上的 Comparator default 方法不入闭包（ComparatorFactory / EisensteinPrimes 基线回归，运行期命中 `Comparator.reversed` /
+`thenComparingInt` 存根）**。闭包 JSON：`ComparatorFactory.main` 的 null_recv = `[75, 163]`（`reversed` / `thenComparing` 调用点），
+`--why Comparator.reversed` 为「不在闭包内」。根因不在 default 方法派发（`invoke.rs::dispatch_one` 对 lambda 接收者的非 SAM 方法本就按接口选择），
+而在值流：`Comparator.comparing*` / `thenComparing*` 以 `(Comparator<T> & Serializable)` 返回 lambda——引导为 `altMetafactory`（flags 含
+FLAG_SERIALIZABLE），字节码随后 `checkcast Serializable; checkcast Comparator`。引擎的 lambda 伪类型只算函数式接口的子类型，
+`checkcast Serializable` 把 lambda 对象滤空，返回值集为空 → 调用方接收者被判 null_recv（值确有建模来源，未建模来源守卫不适用）。
+修法（通用，类名只在清单）：`lambda.rs::alt_markers` 按 LambdaMetafactory 协议解析 `altMetafactory` 静态实参
+（`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`）：FLAG_SERIALIZABLE → 清单 `serializable_markers`，FLAG_MARKERS → 列出的标记接口；
+记入 `Lambda.markers`，`classes.rs::sub` 与非 SAM 方法选择（`invoke.rs`，函数式接口在前、附加接口在后）一并使用。单测 `lambda::tests::alt_markers_by_flags`。
+覆盖整个 default 方法族：`comparing*` / `thenComparing*` / `reversed` 返回的 lambda 均经此路径，无逐方法处理。
+结果：ComparatorFactory 257 / 726 → 260 / 743（+`reversed`、`thenComparing`、`Collections$ReverseComparator(2)`、`Comparators$NaturalOrderComparator` 等），
+null_recv 总数 62 → 39，`main` 的 null_recv 为空；dyn 漏 4 → 0（`DirectMethodHandle$Interface ← thenComparing@7` 随 `thenComparing` 入闭包、
+其 indy 进 `indy_models` 后归 `indy-model`）。EisensteinPrimes 928 / 5274，dyn 漏 1 → 0。DeepCopy / Digester / CollectorsDemo / TestStreamAdvanced
+类 / 方法与上一项逐一相同，漏均为 0。`scripts/main.py` 持锁单跑 ComparatorFactory（258 JDK 类）、EisensteinPrimes（925 JDK 类）输出与期望一致。提交 fb5ffb99。
+
+**健全性 S5：VM 钩子的回调边未入闭包（TestDynamicProxy 运行期命中存根 `Character.valueOf:(C)`，main 5476da30 同样失败）**：
+归因——不是代理分派模型、也不是装箱模型的缺口，而是手写层「VM 钩子」未建模。`Proxy$Dyn` 手写文件里的 `__vm_proxy_invoke`
+由 rava_macros 接口载体回落直接调用（不经 Java 调用点），其 `#[jvm_boundary(upcalls=…)]` 声明了 `Proxy$Dyn.dispatch` 与 8 个
+`<Box>.valueOf`（`rebox` 把 `h.invoke` 的结果按接口方法返回类型拆装箱）。闭包只按 Java 成员名匹配手写 fn（`Handwritten::member`），
+非成员 fn 上的回调边从不被吸收；Integer / Long / Boolean.valueOf 恰好经别处可达，Character.valueOf 无人引用。dyn_compare 按类对照，
+Character 类已在闭包内，故报 miss 0 而漏掉方法。
+修法（通用规则，无类名）：`ClassHw::vm_hooks`——类的手写文件里声明了回调边、却不匹配该类及其全部超类型任何方法名的 pub fn 即
+VM 钩子（`handwritten/hooks.rs`）；该类进 G（实例化）时，每个钩子登记一个伪方法节点（`engine/vmhook.rs`，kind `vm-hook`，接收者
+= 该类对象，形参经值池），手写体效果（回调 / 分配 / 字段）按 `apply_hw` 照常建模；钩子节点与手写实现对象伪方法一样不进输出。
+单测 `hooks_are_non_member_pub_fns_with_upcalls`。`--why`：`Character.valueOf ← [handwritten] Proxy$Dyn.__vm_proxy_invoke ← [vm-hook] 类 Proxy$Dyn`。
+实测（基线 = c7d7b62e 二进制）：9 例中只有 TestDynamicProxy 变化，358/1258 → 365/1364（+7 类 +106 方法，0 删除：8 个装箱类的
+valueOf / 缓存 `<clinit>` 与经 Object 接收者可达的 toString / hashCode / equals / compareTo，Float/Double.toString 带入
+FloatToDecimal / DoubleToDecimal / MathUtils），其余 8 例（HelloWorld、TestStreamAdvanced、CollectorsDemo、DeepCopy、Digester、
+TestFilesApi、TestNetworkInterface、ComparatorFactory）类 / 方法集合逐项相同；9 例 dyn miss 均为 0。main.py TestDynamicProxy MATCH（33 行与 expected 一致）。
+
+**合入 rust-closure-analyzer f00b6858（含 perf2）后验收（合并提交 6e6ab7cd）**：冲突仅 `runtime/java_runtime/build.rs`（取对方，CpVal::W 移植到
+java_meta）。closure 62 / emit 35+1+2 单测通过；main.py ComparatorFactory、EisensteinPrimes、TestStreamAdvanced、TestNetworkInterface、
+DateTest、TestDynamicProxy 6 例全部 MATCH。~~DateTest 闭包（934 类 / 5403 方法）的 610 个折叠点中没有任何 null_recv 涉及
+`LocaleData.getDateFormatData`~~（**此结论有误**：按名检索偏移列表，见下文 S6；该站点在 fdfa4dfb 上确为 null_recv，S6 修复）。
+
+**健全性 S6：手写 / native 值出口的未建模来源补全（emitter-c3 消费 null_recv 后报两处误判恒 null；提交 6ced8de5、380bcf80）**。
+
+- **两边结论不一致的原因（检查方法漏洞，已修正）**：上一段称「DateTest 没有任何 null_recv 涉及 getDateFormatData」，结论**不成立**。
+  当时按被调方法名在 `folds[].null_recv` 中检索，而该字段是**字节码偏移**列表，按名检索永远命不中。改为按偏移反查指令
+  （javap 反汇编所在方法，输出 `方法@pc → 指令`）后，直接检查 fdfa4dfb 的 closure.json：
+  `DateFormatSymbols.initializeData@93 invokevirtual LocaleData.getDateFormatData`、`@107 / @131 ResourceBundle.containsKey`
+  均在 null_recv 中；DeepCopy 的 `ReflectionFactory.superHasAccessibleConstructor@81 / @147 Constructor.getModifiers` 也在其中。
+  c3 的结论成立。此后 null_recv 抽查一律按偏移反查。
+- **成因 1（DateTest）**：接收者来自 `ResourceBundleBasedAdapter.getLocaleData()`，运行期对象是手写实现对象，返回的是 Rust 侧构造的
+  静态 LocaleData。伪方法节点的返回值是 open(返回类型)，但 Rust 构造的对象不在 G 中，按 G 展开为空集；而 R 节点又不算未建模来源。
+  下一层也有同样问题：以该对象为接收者的 `getDateFormatData`，派发目标不在流图里，返回值集为空，结果 `containsKey` 同样被误判。
+- **成因 2（DeepCopy）**：`Class.copyConstructors` 对 native `getDeclaredConstructors0` 返回的 open 数组调用 `arr.clone()`，该调用经
+  open 枢纽派发。open 数组没有分配点可展开，副本只剩字节码分配的空数组（`privateGetDeclaredConstructors@39`，`new Constructor[0]`），
+  元素值集为空。这在类型层同样是健全性缺口，不只影响 null_recv。
+- **修法（通用规则，不写类名）**：
+  1. `engine/unmodeled.rs` 的未建模根：
+     - 手写方法的值池、产出与返回值，涵盖 native、boundary、intrinsic、手写实现对象伪方法与 VM 钩子；
+     - 手写调用点写回实参数组的元素来源（W）；
+     - 缺失方法（Missing）的返回值。
+  2. `engine/unmodeled.rs` 的派生读取点：基址或接收者受污染（或值未知）时，读取结果也受污染。覆盖三类读取：
+     - 数组读取；
+     - 实例字段读取；
+     - 实例调用的返回值。
+     派生与流边可达传播交替迭代，直到不动点。单测 `unmodeled::tests::{reach_follows_edges_through_representatives,
+     array_loads_derive_to_fixpoint, derived_base_by_event_kind}`。
+  3. `engine/invoke.rs`：属主为数组类型的 invokevirtual 改按非虚处理（数组没有覆盖方法，目标恒为已解析的继承方法），接收者的
+     open 部分经 `RetModel::Receiver` 流入 clone 结果。单测 `invoke::tests::array_owners_are_recognized_by_descriptor_form`。
+  4. 其余值出口逐项核对，均已覆盖：
+     - 手写返回值与产出池；
+     - 按名字段写入（U / F）；
+     - 写回实参数组（W）；
+     - Missing 返回值；
+     - open 数组读取（取 open(分量)）；
+     - 数组类型上的调用（本条第 3 项）。
+- **实测**：基线为 fdfa4dfb 二进制；31 例 = 验收 27 例 + DateTest / DeepCopy / Currency / TestReflectFieldMethod。
+  - 类集合逐例相同。
+  - 方法集合只增不减，新增均为健全性补入（数组副本元素上的反射方法）：
+    - TestDateTimeFormat +1（`Constructor.getParameterTypes`）；
+    - DeepCopy +1（`Constructor.getName`）；
+    - TestOptionalFull、TestStreamAdvanced、TestStreamCollectors、DateTest、Currency、TestReflectFieldMethod 各 +2
+      （`Constructor.getParameterTypes / newInstance`）；
+    - 其余 23 例相同。
+  - null_recv 总数 3257 → 1570，按「方法@pc」逐站点对照**没有新增站点**：
+
+  | 用例 | null_recv | 用例 | null_recv |
+  |---|---|---|---|
+  | 15 个基础用例（TestTernary 等，各） | 39 → 13 | TestAtomics | 34 → 13 |
+  | TestSuppressed | 39 → 13 | TestSynchronized | 40 → 13 |
+  | TestZonedDateTime | 65 → 31 | TestFilesApi | 40 → 11 |
+  | TestDateTimeFormat | 294 → 158 | TestOptionalFull | 266 → 140 |
+  | TestArrayList | 41 → 15 | TestStreamBasic | 67 → 47 |
+  | TestStreamAdvanced | 282 → 152 | TestStreamCollectors | 270 → 144 |
+  | TestCompletableFuture | 38 → 14 | DateTest | 265 → 140 |
+  | DeepCopy | 453 → 204 | Currency | 245 → 136 |
+  | TestReflectFieldMethod | 233 → 144 | | |
+
+  按偏移反查：DateTest 的 `initializeData@93 / @107 / @131` 与 DeepCopy 的 `superHasAccessibleConstructor@81 / @147` 均已不在 null_recv 中。
+- **dyn**：29 例 miss 0。TestOptionalFull miss 1（`java/util/stream/Streams`）、TestReflectFieldMethod miss 4
+  （`ClassSpecializer$Factory$1Var`、`BoundMethodHandle$Species_LI`、`AccessorUtils`、`StackTraceElement$HashedModules`）在 c7d7b62e 与
+  fdfa4dfb 的二进制上同样存在，类集合与本修复前逐项相同，不是本修复引入，另行跟踪。
+- **c3 验收**：在本 worktree 临时合入 emitter-c3（e9baa615），合入时补了两处：
+  - `invoke.rs` 冲突：保留数组属主非虚分支，同时记录 c3 的 `direct_virtual_sites`；
+  - `report.rs` 语义冲突：`is_hwobj_method` 改为 `is_pseudo_method`。
+  main.py 跑 DateTest、DeepCopy、Currency、TestReflectFieldMethod、TestDateTimeFormat，5 例全部与 JVM 一致（MATCH）。
+  其中 DateTest 只做 6ced8de5 时仍在 `containsKey` 处违约，补上 380bcf80 后 MATCH。临时合入已 abort，未提交。
+
+**driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
+测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
+a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
+`pick`：三臂都存储 `local_1`（`Clone::clone(&_t1)` / `Object::from(..)`），E0381 回归保护的语义仍在，只是臂标签变了。
+已修：夹具改为 `int k = args.length; pick(k + 1/2/3)`，选择子非常量，各臂（含 default）可达，`1 =>` 臂与三处存储断言恢复；测试通过（生成代码未改）。
+后续（mono 合并后报 case 1 与 default 合为 `_ =>`）：断言改为与臂字面形态无关——case 1 的 `let _t1: Object = Self::a()?;`
+之后紧接 `local_1 = Clone::clone(&_t1);`，且三处存储 `local_1`。在本分支与临时合入 closure-p6（f607ba0a）的树上均通过（6ced8de5）。
+
+**合入 rust-closure-analyzer d41b3006（含 mono、P6 缓存；合并提交 c53b06bc，无冲突）**：
+- 测试：closure / emit / driver build_cli 全部通过。
+- main.py：ComparatorFactory、TestDynamicProxy、DateTest、DeepCopy 四例全部 MATCH。
+- 31 例对照 d41b3006 二进制：
+  - 类集合逐例相同；
+  - 方法只增不减，增量全部是上文 S6 已归因的 `Constructor.getParameterTypes / newInstance / getName`；
+  - null_recv 3257 → 1570，没有新增站点。
+
+**dyn miss 归零（31 例 miss 全部 0）**：先按调用栈归因，两类原因都不是类名特判能覆盖的，各用一条通用规则处理。
+
+- **TestOptionalFull `java/util/stream/Streams`（frame 为空：栈上的帧全部已建模，漏的是类引用边）。**
+  - 现象：`Streams$StreamBuilderImpl.<init>@1` 以 invokespecial 调 `Streams$AbstractStreamBuilderImpl` 的 **private** 构造器。
+  - 原因：两者是嵌套伙伴，声明类与访问类不同，VM 访问检查（JVMS §5.4.4）读取双方的 `NestHost` 并加载宿主 `Streams`。
+    `Streams` 本身没有可达成员，分析器之前没有这条边。
+  - 规则（`engine/nest.rs`）：字节码方法解析到**其他类声明的 private 成员**（方法：`invoke_inner`；字段：`field`）时，
+    按 `Level::Type` 登记访问方与声明方的嵌套宿主，溯源记为 `nest-host`。只登记不是访问双方本身的宿主；同类访问和非 private 成员不检查。
+  - 单测：`nest::tests` 三项。
+- **TestReflectFieldMethod 4 类（两条链，均为基准 JVM 与原生程序配置不一致）。**
+  - `ClassSpecializer$Factory$1Var`、`BoundMethodHandle$Species_LI` 经 `MethodHandleAccessorFactory.getDirectMethod@82` 加载。
+  - `AccessorUtils`、`StackTraceElement$HashedModules` 经 `DirectMethodHandleAccessor.invoke@30` 加载。
+  - 归因：原生系统属性表 `jdk.reflect.useNativeAccessorOnly = "true"`（vm_intrinsics.toml）。分析器据此把
+    `MethodHandleAccessorFactory.useNativeAccessor` 折叠为真，`Method.invoke` 只走 `DirectMethodHandleAccessor$NativeAccessor`（手写 `invoke0`）。
+    这对原生程序是对的。但 `dyn_compare` 起的基准 JVM 没有该属性，走了 MethodHandle 访问器：运行期生成 BMH species、
+    异常路径上调 `AccessorUtils`。这两条链是原生程序不执行的库路径，闭包不应、也没有覆盖它们。
+  - 规则（`scripts/dyn_compare.py` `native_config`）：基准 JVM 与原生二进制同一配置。`[facts.system_properties.values]` 中
+    基准 JVM 缺省不定义的键（由 `java -XshowSettings:properties` 取 JVM 自有键集）以 `-D` 注入。
+    JVM 自有键（路径、编码、VM 名等）保留 JVM 取值。当前注入的只有 `jdk.reflect.useNativeAccessorOnly=true`。
+  - 单测：`test_dyn_compare.NativeConfigTest` 两项。
+  - 注入后 TestReflectFieldMethod 程序期加载 124 → 114，extra 676 → 683：闭包未变，是基准不再加载 MH 访问器族。
+- **集合**（对照 c53b06bc）：
+  - 7 例类 +1，都是 `java/util/stream/Streams`，via 为 `nest-host`（`Streams$StreamBuilderImpl.<init>@1`）：
+    TestDateTimeFormat、TestOptionalFull、TestStreamAdvanced、TestStreamCollectors、DateTest、Currency、TestReflectFieldMethod。
+  - 其余 24 例类不变；31 例方法与 null_recv 全部不变。
+- **main.py**：TestOptionalFull、TestReflectFieldMethod、DateTest 三例全部 MATCH。
 
 ## 七、验收
 

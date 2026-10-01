@@ -103,8 +103,10 @@
 | `23_algorithms/Factorion.java` | 4 种进制 × 149 万次迭代，约 600 万次 | 每次迭代：`String.valueOf` + `Integer.parseInt` + `fromDeci`（StringBuilder 追加、`reverse`、`new String`）；每位数字再调一次 `String.valueOf(char)` + `parseInt` + 最深 12 层的递归 `factorialRec`。合计约数亿次小调用和数千万次字符串分配 |
 | `23_algorithms/FWord.java` | 第 37 个 Fibonacci 词长 2416 万字符，37 个词累计约 6300 万字符 | `entropy` 对每个字符执行 `HashMap<Character, Integer>` 的 `containsKey` / `get` / `put`，涉及装箱、哈希、equals；拼接也要复制同样量级的字符 |
 | `23_algorithms/FibonacciMatrixExponentiation.java` | `fib(10^7)` 约 209 万位十进制（约 690 万比特） | 大数 `BigInteger.multiply`（Toom-Cook 路径）对 `int[]` 做大量逐元素运算；`toString` 走递归进制转换。debug 构建下每次数组访问都有越界检查、无向量化。JVM 上也要秒级 |
+| `23_algorithms/IQPuzzle.java` | 15 孔三角跳棋，15 个起始空位逐一做全树深度优先搜索，遍历全部合法走法序列（千万级节点） | 每个节点 `new Puzzle`、复制 `boolean[16]`，并逐个 `new Move` 复制走法历史（最深 13 步）；`getValidMoves` 每次新建 `ArrayList`，并查 `HashMap<Integer, List<Move>>`（装箱）；`Stack` 进出。合计上亿次对象分配和虚调用 |
+| `23_algorithms/FourIsTheNumberOfLetters.java` | 依次生成 201、10³ … 10⁷ 个词的自指句子，累计约 1111 万词 | 每个句段调用 `numToString` 递归拼接，`toOrdinal` 做 `split` / `HashMap` 查询 / `substring`；每个词做两次 `replace`、一次 `split`。合计数百万次字符串分配与拷贝 |
 
-终态：四例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
+终态：六例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
 
 ## 四、待用户决策
 

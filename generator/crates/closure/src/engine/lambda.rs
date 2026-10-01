@@ -8,6 +8,29 @@ fn object_method_desc(md: &MethodDesc) -> String {
     format!("({params}){}", md.ret.as_ref().map_or_else(|| "V".to_string(), FieldType::descriptor))
 }
 
+/// `altMetafactory` 静态实参的附加接口（LambdaMetafactory 协议：`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`；
+/// flags 位 1 = 可序列化、2 = 带标记接口、4 = 带桥接）。可序列化时 lambda 类实现清单的序列化标记接口。
+/// `metafactory` 只有前三项，结果为空
+fn alt_markers(bargs: &[Const], serializable: &[String]) -> Vec<String> {
+    const FLAG_SERIALIZABLE: i32 = 1;
+    const FLAG_MARKERS: i32 = 2;
+    let Some(Const::Int(flags)) = bargs.get(3) else { return vec![] };
+    let mut out = Vec::new();
+    if flags & FLAG_SERIALIZABLE != 0 {
+        out.extend(serializable.iter().cloned());
+    }
+    if flags & FLAG_MARKERS != 0 {
+        if let Some(Const::Int(n)) = bargs.get(4) {
+            let n = usize::try_from(*n).unwrap_or(0);
+            out.extend(bargs.iter().skip(5).take(n).filter_map(|c| match c {
+                Const::Class(c) => Some(c.clone()),
+                _ => None,
+            }));
+        }
+    }
+    out
+}
+
 /// 站点键：record 引用分量值的汇合节点（`ObjectMethods` 调用点偏移 | 本位）
 const COMPONENTS: u32 = 1 << 30;
 
@@ -75,13 +98,14 @@ impl<'a> Engine<'a> {
         match l.imh.kind {
             6 => {
                 // 静态实现方法继承 lambda 创建时的克隆上下文；分派转发的实现方法按调用点克隆
-                let t = self.callee(m, off, resolved, l.ctx, via);
+                let ctx = self.static_ctx(m, off, &resolved, Call::Lambda(l.ctx));
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &all, ret, res);
             }
             8 => {
                 // 构造器引用：容器类在 lambda 创建点分配抽象对象
                 let oid = if self.container(&k.owner) { self.obj_at(l.site.0, l.site.1, &k.owner) } else { self.id(&k.owner) };
-                let t = self.method_ctx(resolved, self.ctx_of(oid), via);
+                let t = self.method_ctx(resolved, self.recv_ctx(oid), via);
                 self.edge(m, off, t, Recv::Exact(oid), &all, None, None);
                 if let (Some(res), Some(rt)) = (res, ret) {
                     let s = self.filter(&TypeSet::exact(oid), rt);
@@ -138,7 +162,8 @@ impl<'a> Engine<'a> {
                 match mh.kind {
                     6 => {
                         self.init(&resolved.owner, via.clone());
-                        let t = self.callee(m, off, resolved, NOCTX, via);
+                        let ctx = self.static_ctx(m, off, &resolved, Call::Handle);
+                        let t = self.method_ctx(resolved, ctx, via);
                         self.edge(m, off, t, Recv::None, &a, None, None);
                     }
                     7 => {
@@ -191,7 +216,11 @@ impl<'a> Engine<'a> {
                 let lid = self.id(&lname);
                 let ctx = self.methods[m].ctx;
                 let adapt = self.lambda_plan(&b.args, imh, cap.len());
-                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), sam: name.to_string(), imh: imh.clone(), cap, adapt });
+                let markers = alt_markers(&b.args, self.man.serializable_markers());
+                for x in &markers {
+                    self.touch(x, Level::Type, via.clone());
+                }
+                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: name.to_string(), imh: imh.clone(), cap, adapt });
                 self.touch(&iface, Level::Alloc, via.clone());
                 for a in &b.args {
                     if let Const::MethodType(d) = a {
@@ -214,8 +243,9 @@ impl<'a> Engine<'a> {
                             self.instantiate(&k.owner, via.clone());
                             self.init(&k.owner, via.clone());
                         }
-                        let c = if imh.kind == 6 { self.methods[m].ctx } else { NOCTX };
-                        self.method_ctx(MemberRef { owner: o, name: n, desc: d }, c, via);
+                        let key = MemberRef { owner: o, name: n, desc: d };
+                        let c = if imh.kind == 6 { self.static_ctx(m, off, &key, Call::Eager) } else { NOCTX };
+                        self.method_ctx(key, c, via);
                     } else {
                         self.unresolved.insert(k.to_string());
                     }
@@ -326,5 +356,18 @@ mod tests {
         assert_eq!(d("(Lt/R;Lt/O;)Z"), "(Lt/O;)Z");
         assert_eq!(d("(Lt/R;)I"), "()I");
         assert_eq!(d("(Lt/R;)Lt/S;"), "()Lt/S;");
+    }
+
+    #[test]
+    fn alt_markers_by_flags() {
+        let ser = vec!["a/Ser".to_string()];
+        let mt = || Const::MethodType("()V".into());
+        let base = || vec![mt(), Const::Int(0), mt()];
+        assert!(alt_markers(&base(), &ser).is_empty());
+        let with = |extra: Vec<Const>| [base(), extra].concat();
+        assert_eq!(alt_markers(&with(vec![Const::Int(1)]), &ser), ser);
+        assert!(alt_markers(&with(vec![Const::Int(4), Const::Int(1), mt()]), &ser).is_empty());
+        let m = alt_markers(&with(vec![Const::Int(3), Const::Int(1), Const::Class("a/M".into()), Const::Int(0)]), &ser);
+        assert_eq!(m, vec!["a/Ser".to_string(), "a/M".to_string()]);
     }
 }

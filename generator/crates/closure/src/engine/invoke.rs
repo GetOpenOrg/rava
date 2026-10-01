@@ -100,7 +100,7 @@ impl<'a> Engine<'a> {
             self.enumerate_fields(cls);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
-            self.open_fields_all();
+            self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
     }
 
@@ -123,7 +123,7 @@ impl<'a> Engine<'a> {
             }
             None => {
                 if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all();
+                    self.open_fields_all(false, self.ctx.deser.get());
                 }
             }
         }
@@ -165,6 +165,7 @@ impl<'a> Engine<'a> {
             return;
         };
         let (o, n, d) = site.key();
+        self.nest_access(m, off, &o, site.method().is_private());
         let resolved = MemberRef { owner: o, name: n, desc: d };
         let Some(md) = parse_method(&mref.desc) else { return };
         let owner = self.id(&mref.owner);
@@ -184,23 +185,13 @@ impl<'a> Engine<'a> {
         };
         match opcode {
             op::INVOKESTATIC => {
-                // 静态调用继承调用方的克隆上下文（容器方法里的静态辅助方法随容器对象分开）
                 self.init(&resolved.owner, via.clone());
-                // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
-                // 上下文无关的调用方调用新鲜工厂（返回本方法新分配的容器 / 引用数组）：按调用点克隆，
-                // 否则各调用点的实参元素经同一个返回对象汇合（`Arrays.copyOf` 的副本数组）
-                // 分派转发方法（形参流到分派接收者）按调用点克隆，优先于以上规则（边界计划 §6.2 G1）
-                let caller_ctx = self.methods[m].ctx;
-                let ctx = match caller_ctx {
-                    _ if !md.ret.as_ref().is_some_and(|r| r.is_reference()) => NOCTX,
-                    NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
-                    c => c,
-                };
-                // 选择子形参上传常量（或调用方已在上下文中）：按调用点克隆，分支按形参常量剪枝（`selector.rs`）
-                let ctx = self.selector_ctx(m, off, &resolved, pargs).unwrap_or(ctx);
+                // 克隆上下文的选择见 `ctxsel.rs`
+                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
-                let t = self.callee(m, off, resolved, ctx, via);
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
                     self.named_class(m, off, &c);
@@ -212,7 +203,9 @@ impl<'a> Engine<'a> {
             }
             _ => {
                 let rm = site.method();
-                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() {
+                // 数组类型上的调用（`arr.clone()` 等）同样非虚：数组没有覆盖方法，目标恒为已解析的继承方法。
+                // 若经枢纽派发，手写层 / VM 产出的 open 数组没有分配点可展开，结果（clone 的副本）会丢失
+                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() || is_array_type(&mref.owner) {
                     // 非虚：直接到已解析方法，接收者值流入 this。非 private 的目标在生成代码里仍经槽调用，计入 `dispatched`
                     if !rm.is_private() && !rm.is_static() {
                         self.direct_virtual_sites.insert((m, off));
@@ -231,9 +224,17 @@ impl<'a> Engine<'a> {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
                     }
                 } else {
-                    let parent = self.hub_last.get(&(m, off)).copied();
-                    let h = self.hub(mref, iface, owner, HubSet::Exact(recv), parent, &site, &md, via.clone());
-                    self.hub_last.insert((m, off), h);
+                    // 同一调用点、同一接收者集合即同一枢纽键（成员与接口标志由该偏移的指令决定）
+                    let last = self.hub_last.get(&(m, off)).cloned();
+                    let h = match last {
+                        Some((h, rs)) if *rs == recv[..] => h,
+                        last => {
+                            let rs: Rc<[u32]> = recv.into();
+                            let h = self.hub(mref, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
+                            self.hub_last.insert((m, off), (h, rs));
+                            h
+                        }
+                    };
                     self.link_hub(h, m, off, &a, res);
                 }
                 for o in s.open.iter() {
@@ -262,8 +263,9 @@ impl<'a> Engine<'a> {
                 self.call_vals = vals;
                 return;
             }
-            let iface = l.iface.clone();
-            if let Some(sel) = self.h.select(&iface, site) {
+            // 非 SAM 方法（default / Object 方法）按 lambda 类实现的接口选择：函数式接口在前，其后为 altMetafactory 附加接口
+            let ifaces: Vec<String> = std::iter::once(&l.iface).chain(&l.markers).cloned().collect();
+            if let Some(sel) = ifaces.iter().find_map(|i| self.h.select(i, site)) {
                 let (o, n, d) = sel.key();
                 let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
@@ -281,7 +283,7 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+                let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.recv_ctx(r), via);
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
@@ -301,16 +303,20 @@ impl<'a> Engine<'a> {
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
         // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
+        let mut objs: Vec<u32> = Vec::new();
         for x in &s.classes {
             if self.objs.contains_key(&x) {
-                if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
-                    continue;
-                }
-                let t = self.method_ctx(key.clone(), x, via.clone());
-                self.edge(m, off, t, Recv::Exact(x), a, ret, res);
+                objs.push(x);
             } else {
                 rest.classes.insert(x);
             }
+        }
+        if dedup {
+            objs = self.recv_mark_all(m, off, &objs);
+        }
+        for x in objs {
+            let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
+            self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
             let t = self.method(key, via);
@@ -425,5 +431,22 @@ impl<'a> Engine<'a> {
         if cur.is_some() {
             self.invalidate(t, Why::ParamConst);
         }
+    }
+}
+
+/// 调用描述中的属主是数组类型（`[` 开头的描述符形式）
+fn is_array_type(owner: &str) -> bool {
+    owner.starts_with('[')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_array_type;
+
+    #[test]
+    fn array_owners_are_recognized_by_descriptor_form() {
+        assert!(is_array_type("[Lp/C;"));
+        assert!(is_array_type("[[I"));
+        assert!(!is_array_type("p/C"));
     }
 }

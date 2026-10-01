@@ -41,7 +41,7 @@ pub struct NestMeta {
 }
 
 /// 注解引用的稀疏常量池条目值。
-pub enum CpVal { U(&'static str), I(i32), J(i64), F(f32), D(f64) }
+pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
 type Names = &'static [&'static str];
 

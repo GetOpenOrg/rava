@@ -100,10 +100,21 @@ pub enum Lit {
     ClassRef(String),
     /// 空引用 `aconst_null`：`Object::default()`
     Null,
-    /// 字符串拼接点（`makeConcatWithConstants` 等）的结果值（← Python 以 `Lit` 承载，故在 let 类型标注、
-    /// 平凡值判定等处与字面量同类）：`fmt` 为 None → `String::new()`；无实参 → `String::from("fmt")`；
-    /// 否则 `String::from_owned(format!("fmt", args..))`。`fmt` 为已转义的格式串（花括号已双写）
-    JStringConcat { fmt: Option<String>, args: Vec<crate::Expr> },
+    /// 字符串拼接点（`makeConcatWithConstants` 等）的结果值（在 let 类型标注、平凡值判定等处与字面量同类）：
+    /// 在 UTF-16 层构造，渲染为 `String::of("首段") + 片段 + ..`（运行时 `Add` 逐段追加码元），
+    /// 孤立代理项（常量段、char 实参、String 实参）不经有损的 Rust 文本
+    JStringConcat(Vec<ConcatPart>),
+}
+
+/// 字符串拼接片段（按 Java 求值序）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConcatPart {
+    /// 常量文本段（配方常量 / 常量位值，合法 UTF-16）：`+ "..."`
+    Text(String),
+    /// 含孤立代理项的常量段：`+ &[0xD800, ..][..]`
+    Units(Vec<u16>),
+    /// 动态实参（已按形参描述符整形为 `Add` 右操作数：`&String` / `u16` / 数值 / `bool`）
+    Arg(crate::Expr),
 }
 
 impl Lit {

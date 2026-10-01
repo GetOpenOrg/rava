@@ -2,7 +2,7 @@
 //! `_float_lit`）的文本逐字一致。
 
 use super::Renderer;
-use crate::{anchors, FloatLit, Lit};
+use crate::{anchors, ConcatPart, FloatLit, Lit};
 use std::fmt::Write as _;
 
 pub(crate) fn write_lit(rd: &Renderer<'_>, out: &mut String, lit: &Lit) {
@@ -38,12 +38,7 @@ pub(crate) fn write_lit(rd: &Renderer<'_>, out: &mut String, lit: &Lit) {
         }
         Lit::JStringUtf16(units) => {
             let _ = write!(out, "{}::from_utf16_lit(&[", anchors::STRING);
-            for (i, u) in units.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                let _ = write!(out, "0x{u:04X}");
-            }
+            write_units(out, units);
             out.push_str("])");
         }
         Lit::ClassRef(binary) => {
@@ -54,20 +49,53 @@ pub(crate) fn write_lit(rd: &Renderer<'_>, out: &mut String, lit: &Lit) {
         Lit::Null => {
             let _ = write!(out, "{}::default()", anchors::OBJECT);
         }
-        Lit::JStringConcat { fmt: None, .. } => {
-            let _ = write!(out, "{}::new()", anchors::STRING);
+        Lit::JStringConcat(parts) => write_concat(rd, out, parts),
+    }
+}
+
+/// 拼接：`String::of("首段文本")`（首片段非文本时为 `String::of("")`）起，余下片段逐个 `+`；
+/// 含 `+` 时整体加括号（字面量在任何位置都作原子表达式使用，如 `&(..)`、`(..).length()`）
+fn write_concat(rd: &Renderer<'_>, out: &mut String, parts: &[ConcatPart]) {
+    let wrap = parts.len() > 1 || matches!(parts.first(), Some(p) if !matches!(p, ConcatPart::Text(_)));
+    if wrap {
+        out.push('(');
+    }
+    let _ = write!(out, "{}::of(", anchors::STRING);
+    let rest = match parts.first() {
+        Some(ConcatPart::Text(t)) => {
+            write_str_token(out, t);
+            &parts[1..]
         }
-        Lit::JStringConcat { fmt: Some(fmt), args } if args.is_empty() => {
-            let _ = write!(out, "{}::from(\"{fmt}\")", anchors::STRING);
+        _ => {
+            out.push_str("\"\"");
+            parts
         }
-        Lit::JStringConcat { fmt: Some(fmt), args } => {
-            let _ = write!(out, "{}::from_owned(format!(\"{fmt}\"", anchors::STRING);
-            for a in args {
-                out.push_str(", ");
-                rd.write_expr(out, a);
+    };
+    out.push(')');
+    for p in rest {
+        out.push_str(" + ");
+        match p {
+            ConcatPart::Text(t) => write_str_token(out, t),
+            ConcatPart::Units(units) => {
+                out.push_str("&[");
+                write_units(out, units);
+                out.push_str("][..]");
             }
-            out.push_str("))");
+            ConcatPart::Arg(e) => rd.write_expr(out, e),
         }
+    }
+    if wrap {
+        out.push(')');
+    }
+}
+
+/// UTF-16 码元列表 `0x0041, 0xD800`（不含方括号）
+fn write_units(out: &mut String, units: &[u16]) {
+    for (i, u) in units.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "0x{u:04X}");
     }
 }
 
@@ -141,5 +169,16 @@ mod tests {
         assert_eq!(r(&Lit::Null), "Object::default()");
         assert_eq!(r(&Lit::Unit), "()");
         assert_eq!(r(&Lit::Str("x={}".into())), "\"x={}\"");
+    }
+
+    #[test]
+    fn concat_parts() {
+        use crate::{ConcatPart as P, Expr};
+        assert_eq!(r(&Lit::JStringConcat(vec![])), "String::of(\"\")");
+        let parts = vec![P::Text("a{".into()), P::Arg(Expr::raw("&s")), P::Units(vec![0xD800]), P::Arg(Expr::raw("c"))];
+        assert_eq!(r(&Lit::JStringConcat(parts)), "(String::of(\"a{\") + &s + &[0xD800][..] + c)");
+        let parts = vec![P::Arg(Expr::raw("n")), P::Text("\n".into())];
+        assert_eq!(r(&Lit::JStringConcat(parts)), "(String::of(\"\") + n + \"\\n\")");
+        assert_eq!(r(&Lit::JStringConcat(vec![P::Text("k".into())])), "String::of(\"k\")");
     }
 }

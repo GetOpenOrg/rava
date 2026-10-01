@@ -268,19 +268,24 @@ impl Engine<'_> {
     /// 调用结果由清单派生规则给出（值相等 / 字符串运算 / 系统属性读取）：不按被调字节码判定
     fn derived_call(&self, opcode: u8, m: &MemberRef, iface: bool, c: &CallInfo) -> bool {
         let named = |k: &str| self.man.is_value_equals(k) || self.man.string_op(k).is_some() || self.man.sysprops.is_holder(k);
-        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(opcode, m, iface, Some(c)).is_some()
+        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(None, opcode, m, iface, Some(c)).is_some()
     }
 
-    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者即不算
-    pub(super) fn null_recv(&self, clones: &[usize]) -> Vec<u32> {
+    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、或接收者的值流
+    /// 可能缺失（来源可经流边从未建模来源到达，见 `unmodeled.rs`）即不算
+    pub(super) fn null_recv(&self, clones: &[usize], um: &super::unmodeled::Unmodeled) -> Vec<u32> {
         let mut hit: BTreeMap<u32, bool> = BTreeMap::new();
         for &i in clones {
             let Some(a) = &self.methods[i].analysis else { continue };
             for (pc, e) in &a.events {
-                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, mref, .. } = e {
-                    // 属主停在 L1：非 null 值的运行时类及其全部超类型至少 L2（`levels.rs`），接收者只可能是 null
+                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, mref, args, .. } = e {
+                    // 属主停在 L1：非 null 值的运行时类及其全部超类型至少 L2（`levels.rs`），接收者只可能是 null，
+                    // 未建模来源也不例外
                     let opaque = self.classes.get(mref.owner.as_str()).is_some_and(|c| c.level == Level::Type);
-                    *hit.entry(*pc).or_default() |= !opaque && self.site_has_recv(i, *pc);
+                    let h = hit.entry(*pc).or_default();
+                    if !*h && !opaque {
+                        *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| self.recv_unmodeled(i, r, um));
+                    }
                 }
             }
         }

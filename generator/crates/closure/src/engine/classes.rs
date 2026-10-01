@@ -23,8 +23,8 @@ impl<'a> Engine<'a> {
         if x == f {
             return true;
         }
-        if let Some(r) = self.sub_cache.get(&(x, f)) {
-            return *r;
+        if let Some(r) = self.sub_rows.get(f as usize).and_then(|row| row.get(x)) {
+            return r;
         }
         let fname = self.names[f as usize].clone();
         let r = if let Some(&t) = self.arrays.get(&x).or_else(|| self.objs.get(&x)) {
@@ -33,14 +33,18 @@ impl<'a> Engine<'a> {
             let c = self.id(CLASS);
             self.sub(c, f)
         } else if let Some(l) = self.lambdas.get(&x) {
-            &*fname == OBJECT || self.h.is_subtype(&l.iface, &fname)
+            &*fname == OBJECT || std::iter::once(&l.iface).chain(&l.markers).any(|i| self.h.is_subtype(i, &fname))
         } else if let Some(r) = self.hwobj_sub(x, &fname) {
             r
         } else {
             let xname = self.names[x as usize].clone();
             self.h.is_subtype(&xname, &fname)
         };
-        self.sub_cache.insert((x, f), r);
+        let fi = f as usize;
+        if self.sub_rows.len() <= fi {
+            self.sub_rows.resize_with(fi + 1, Default::default);
+        }
+        self.sub_rows[fi].set(x, r);
         r
     }
 
@@ -77,25 +81,13 @@ impl<'a> Engine<'a> {
         }
         let mut out = TypeSet::default();
         let ti = t as usize;
-        if self.sub_rows.len() <= ti {
-            self.sub_rows.resize_with(ti + 1, Vec::new);
-        }
-        let mut row = std::mem::take(&mut self.sub_rows[ti]);
         let mut kept: Vec<u32> = Vec::new();
         for (k, x) in s.classes.iter().enumerate() {
-            let i = x as usize;
-            let v = match row.get(i) {
-                Some(&v) if v != 0 => v,
-                _ => {
-                    let v = if self.sub(x, t) { 2 } else { 1 };
-                    if row.len() <= i {
-                        row.resize(i + 1, 0);
-                    }
-                    row[i] = v;
-                    v
-                }
+            let v = match self.sub_rows.get(ti).and_then(|row| row.get(x)) {
+                Some(v) => v,
+                None => self.sub(x, t),
             };
-            if v == 2 {
+            if v {
                 // 输入有序，输出按序追加（首个命中时按剩余输入一次预留）
                 if kept.capacity() == 0 {
                     kept.reserve(s.classes.len() - k);
@@ -104,7 +96,6 @@ impl<'a> Engine<'a> {
             }
         }
         out.classes = IdSet::from_sorted(kept);
-        self.sub_rows[ti] = row;
         for o in &s.open {
             if let Some(r) = self.open_narrow(o, t) {
                 out.open.insert(r);
@@ -493,28 +484,6 @@ impl<'a> Engine<'a> {
         let tid = self.id(cls);
         let id = self.id(&name);
         self.objs.insert(id, tid);
-        self.obj_chain.insert(id, Rc::from(chain));
-        id
-    }
-
-    /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首
-    pub(super) fn site_ctx(&mut self, m: usize, off: u32) -> u32 {
-        self.site_ctx_in(m, off, NOCTX)
-    }
-
-    /// 调用点上下文，链尾接外层上下文 outer 的链（截断到 HEAP_DEPTH；outer = NOCTX 即 `site_ctx`）
-    pub(super) fn site_ctx_in(&mut self, m: usize, off: u32, outer: u32) -> u32 {
-        let mut chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
-        if outer != NOCTX {
-            for seg in self.obj_chain.get(&outer).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
-                chain.push('#');
-                chain.push_str(seg);
-            }
-        }
-        if let Some(&id) = self.ids.get(chain.as_str()) {
-            return id;
-        }
-        let id = self.id(&chain);
         self.obj_chain.insert(id, Rc::from(chain));
         id
     }

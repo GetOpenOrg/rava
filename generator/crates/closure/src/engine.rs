@@ -18,7 +18,8 @@ use std::rc::Rc;
 
 use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType, MethodDesc};
 use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
-use indexmap::IndexMap;
+/// 插入序映射（遍历按插入序，与哈希无关）；哈希用引擎的 Fx
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<sets::FxHasher>>;
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
@@ -32,7 +33,9 @@ mod consteval;
 mod construct;
 mod sysprops;
 mod fold;
+mod unmodeled;
 mod forward;
+mod ctxsel;
 mod classes;
 mod reflect;
 mod flow;
@@ -46,6 +49,7 @@ mod hw_mem;
 mod hw_syntax;
 mod hw_infer;
 mod hwobj;
+mod vmhook;
 mod report;
 mod diag;
 mod seeds;
@@ -57,20 +61,26 @@ mod selector;
 mod noreturn;
 mod class_lookup;
 mod sealed;
+mod nest;
 mod method_lookup;
 mod pstrs;
+mod share;
 mod new;
 mod methods;
 mod worklist;
 pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
+mod setstore;
+use setstore::SetStore;
 mod scc;
 mod levels;
 
 use graph::FlowGraph;
+use share::Dep;
+use ctxsel::Call;
 use stats::{Phase, Why};
-pub use stats::peak_rss_mb;
+pub use stats::{peak_mem_mb, peak_rss_mb};
 
 pub use seeds::SeedState;
 
@@ -81,6 +91,7 @@ use fold::*;
 pub use sets::*;
 pub use idset::{IdIter, IdSet};
 use hwobj::{HwObj, HWOBJ_KIND};
+use vmhook::VMHOOK_KIND;
 
 
 /// 精确接收者达到此数时经集合枢纽派发
@@ -211,6 +222,10 @@ pub struct MNode {
     analysis: Option<Rc<Analysis>>,
     /// 事件已全部执行过的分析（None = 须完整执行）：重分析后只执行与之不同的事件
     applied: Option<Rc<Analysis>>,
+    /// `analysis` 的装入序号（每次装入加一）；`applied_seq` 为 `applied` 装入时的序号。
+    /// 摘要在上下文间共享（`share.rs`），「同一次装入」不能再按 `Rc` 身份判定
+    aseq: u32,
+    applied_seq: u32,
     /// 最近一次分析的透传摘要（None = 尚未分析）
     returned: Option<Option<Vec<u16>>>,
     /// 手写体命中的 fn 名（溯源）
@@ -352,7 +367,7 @@ struct Hub {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum HubSet {
     Open(u32),
-    Exact(Vec<u32>),
+    Exact(Rc<[u32]>),
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
@@ -364,6 +379,8 @@ struct Lambda {
     site: (usize, u32),
     ctx: u32,
     iface: String,
+    /// `altMetafactory` 附加实现的接口（序列化标记 / 标记接口），参与子类型判定
+    markers: Vec<String>,
     sam: String,
     imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）
@@ -383,11 +400,10 @@ pub struct Engine<'a> {
 
     names: Vec<Rc<str>>,
     ids: HashMap<Rc<str>, u32>,
-    sub_cache: HashMap<(u32, u32), bool>,
     /// open(o) 按过滤类型 t 收窄的结果缓存（`u32::MAX` = 空）
     narrow_cache: HashMap<(u32, u32), u32>,
-    /// 按过滤类型 f 的子类型判定行（下标为类型 id；0 未判定、1 否、2 是）：类型集收窄逐元素只做一次数组索引
-    sub_rows: Vec<Vec<u8>>,
+    /// 子类型判定缓存，按上界 f 分行、每个类型 id 两位（已判定 / 结果）：`sub` 与类型集收窄共用
+    sub_rows: Vec<sets::SubRow>,
 
     pub classes: IndexMap<String, ClassNode>,
     pub missing: BTreeMap<String, Via>,
@@ -446,7 +462,8 @@ pub struct Engine<'a> {
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
     /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    hub_last: HashMap<(usize, u32), u32>,
+    /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
+    hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
@@ -479,12 +496,9 @@ pub struct Engine<'a> {
     /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者)（同 `hub_linked` 清空）。
     /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
     hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
-    /// 字节码调用点经枢纽已接的按调用点建模目标：方法 → (偏移, 目标) → 已送达的接收者（同上）。
-    /// `edge` 对接收者值集逐元素单调（首接生效的手写站点登记已在首次完成），接收者全已送达即恒等重放
-    hub_ssent: HashMap<usize, HashMap<(u32, usize), HashSet<u32>>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
-    /// 站点因接收者集合增长重跑时只接新增对象
-    recv_done: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
+    recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
@@ -494,6 +508,8 @@ pub struct Engine<'a> {
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
+    /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
+    shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,
@@ -575,15 +591,6 @@ pub struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    /// 接收者对应的克隆上下文
-    fn ctx_of(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) {
-            r
-        } else {
-            NOCTX
-        }
-    }
-
     fn on_g_grow(&mut self, id: u32) {
         let ts: Vec<u32> = self.g_sub.keys().copied().collect();
         for t in ts {
@@ -597,6 +604,7 @@ impl<'a> Engine<'a> {
         }
         self.hubs_grow(id);
         self.reopen(id);
+        self.vm_hooks_on_alloc(id);
         let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {

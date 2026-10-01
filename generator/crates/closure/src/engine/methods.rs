@@ -103,7 +103,7 @@ impl<'a> Engine<'a> {
         let idx = self.methods.len();
         self.methods.insert(
             (key.clone(), ctx),
-            MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None },
+            MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None, aseq: 0, applied_seq: 0 },
         );
         self.mbase.entry(key.clone()).or_insert(idx);
         if kind == Kind::Bytecode {

@@ -61,6 +61,11 @@ impl LocaleCfg {
         }
     }
 
+    /// 束族的触发成员（`类.成员`）：族自带触发成员优先，否则取全局触发成员
+    pub fn base_triggers(&self, base: &str) -> &[String] {
+        self.bundles.iter().find(|(b, _)| b == base).and_then(|(_, t)| t.as_deref()).unwrap_or(&self.triggers)
+    }
+
     /// 触发成员（`类.成员`）已可达的束族基名
     pub fn triggered_bases(&self, reached: impl Fn(&str) -> bool) -> Vec<String> {
         self.bundles
@@ -348,5 +353,17 @@ mod tests {
         assert_eq!(parent_chain(&l), vec!["zh_Hant_TW", "zh_Hant", "zh_TW", "zh"]);
         assert_eq!(parent_chain(&parse_tag("fr_FR").unwrap()), vec!["fr_FR", "fr"]);
         assert!(parse_tag("123").is_none());
+    }
+
+    #[test]
+    fn base_triggers_family_then_global() {
+        let cfg = LocaleCfg {
+            bundles: vec![("a/B".into(), None), ("a/C".into(), Some(vec!["a/X.f".into()]))],
+            triggers: vec!["a/Y.g".into()],
+            ..Default::default()
+        };
+        assert_eq!(cfg.base_triggers("a/B"), ["a/Y.g".to_string()]);
+        assert_eq!(cfg.base_triggers("a/C"), ["a/X.f".to_string()]);
+        assert_eq!(cfg.triggered_bases(|m| m == "a/X.f"), vec!["a/C".to_string()]);
     }
 }

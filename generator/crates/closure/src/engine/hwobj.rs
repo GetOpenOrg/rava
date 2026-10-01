@@ -122,6 +122,8 @@ impl<'a> Engine<'a> {
                 rtype,
                 analysis: None,
                 applied: None,
+                aseq: 0,
+                applied_seq: 0,
                 returned: None,
                 hw_fns: fns,
                 ctx: NOCTX,
@@ -156,19 +158,18 @@ impl<'a> Engine<'a> {
         self.apply_hw(m, &host, &mh, &via);
     }
 
-    /// 手写方法节点的手写体（宿主类, 汇总）：伪方法取实现对象的 fn，其余按成员匹配宿主类手写文件
+    /// 手写方法节点的手写体（宿主类, 汇总）：伪方法取实现对象的 fn，VM 钩子取宿主类的钩子 fn，其余按成员匹配宿主类手写文件
     pub(super) fn hw_body(&self, t: usize) -> Option<(String, MemberHw)> {
         let mn = &self.methods[t];
         if mn.kind == Kind::Handwritten(HWOBJ_KIND) {
             let o = mn.ptypes.first().copied().flatten().and_then(|r| self.hwobjs.get(&r))?;
             return Some((o.host.clone(), self.hw.object_member(&o.host, &o.rust, &mn.hw_fns)));
         }
+        if mn.kind == Kind::Handwritten(VMHOOK_KIND) {
+            return Some((mn.key.owner.clone(), self.hw.class(&mn.key.owner).fns_member(&mn.hw_fns)));
+        }
         let cf = self.h.class(&mn.key.owner)?;
         Some((mn.key.owner.clone(), self.hw_member(&cf, &mn.key.name, &mn.key.desc)))
     }
 
-    /// 伪方法节点（不进输出）
-    pub(super) fn is_hwobj_method(&self, t: usize) -> bool {
-        self.methods[t].kind == Kind::Handwritten(HWOBJ_KIND)
-    }
 }

@@ -146,8 +146,9 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
     Ok(out)
 }
 
-/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`）。`--closure-json` 时向 `json_path` 写出 closure.json，
-/// 并校验两条路径（进程内 [`ClosureFacts::from_closure`] 与 closure.json 经 [`ClosureFacts::from_json`]）
+/// 闭包分析（同 `rava closure`；lib 种子类同 `--seed-class`；`--closure-cache` 时先查跨运行结果缓存，命中即由缓存的
+/// closure.json 值经 [`ClosureFacts::from_json`] 得事实）。`--closure-json` 时向 `json_path` 写出 closure.json；
+/// 冷算且持有产物值时校验两条路径（进程内 [`ClosureFacts::from_closure`] 与 closure.json 经 [`ClosureFacts::from_json`]）
 /// 产出的事实逐字节一致（`Debug` 文本）；否则删除该处上轮遗留的 closure.json，免得与本轮不符。
 /// `--trace-class` 打印 provenance 链（`[why]`），`--debug` 列未解析调用。
 ///
@@ -190,31 +191,33 @@ fn analyze<R: Send>(
         cold_cut: false,
         flow_batch: None,
     };
-    let c = closure::analyze(&input, &h, &man, &hw);
-    for e in hw.errors.borrow().iter() {
-        eprintln!("[closure] 手写文件解析失败：{e}");
-    }
-    for (n, e) in cp.failures() {
-        eprintln!("[closure] 类解析失败：{n}：{e}");
-    }
-    if let Some(t) = &o.trace_class {
+    let cache = crate::closure_run::CacheOpts { dir: o.closure_cache.clone(), max_mb: o.closure_cache_max_mb };
+    let out = crate::closure_run::analyze(&cache, &input, &h, &man, &hw, o.trace_class.is_some(), o.closure_json);
+    if let (Some(t), Some(c)) = (&o.trace_class, &out.closure) {
         for line in c.why(&t.replace('.', "/")).into_iter().chain([String::new()]) {
             println!("{}", if line.is_empty() { line } else { format!("      [why] {line}") });
         }
     }
     perf.mark("closure");
-    let facts = ClosureFacts::from_closure(&c);
-    perf.mark("closure_facts");
     let p = json_path;
-    if o.closure_json {
-        let v = c.to_json();
-        let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-        std::fs::write(p, s).map_err(|e| format!("{}：{e}", p.display()))?;
-        let parsed = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", p.display()))?;
+    let facts = match (&out.closure, &out.json) {
+        (Some(c), _) => ClosureFacts::from_closure(c),
+        (None, Some(v)) => ClosureFacts::from_json(v).map_err(|e| format!("闭包缓存条目：{e}"))?,
+        (None, None) => return Err("闭包产物缺失".into()),
+    };
+    perf.mark("closure_facts");
+    // 冷算且产物值在手（启用缓存或 --closure-json）：校验 closure.json 路径与进程内直传的事实一致——
+    // 缓存命中走的正是 from_json，这一校验保证命中与冷算交给发射的事实相同
+    if let (Some(_), Some(v)) = (&out.closure, &out.json) {
+        let parsed = ClosureFacts::from_json(v).map_err(|e| format!("closure.json：{e}"))?;
         if format!("{parsed:#?}") != format!("{facts:#?}") {
-            return Err(format!("{}：由 closure.json 解析的闭包事实与进程内直传的不一致", p.display()));
+            return Err("由 closure.json 解析的闭包事实与进程内直传的不一致".into());
         }
         perf.mark("closure_json");
+    }
+    if let (true, Some(v)) = (o.closure_json, &out.json) {
+        let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
+        std::fs::write(p, s).map_err(|e| format!("{}：{e}", p.display()))?;
     } else if p.exists() {
         std::fs::remove_file(p).map_err(|e| format!("{}：{e}", p.display()))?;
     }
@@ -228,7 +231,7 @@ fn analyze<R: Send>(
             .stack_size(emit::par::WORKER_STACK)
             .spawn_scoped(s, || then(&facts, perf))
             .map_err(|e| format!("创建发射线程：{e}"))?;
-        drop(c);
+        drop(out);
         match t.join() {
             Ok(r) => r,
             Err(p) => std::panic::resume_unwind(p),
