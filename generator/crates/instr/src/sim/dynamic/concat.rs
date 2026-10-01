@@ -178,12 +178,16 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
         // String 实参（栈类型即 String）：按引用追加码元，null → "null" 由运行时承担
         _ if p == string_desc && have == ir::anchors::STRING => format!("&{}", paren(raw_s)),
         _ => {
-            // 引用类型实参：Java 语义是 String.valueOf(x)（虚 toString 分派）。预物化为临时变量
-            // （toString 返回 Result，需在语句层传播 ?）；Object::toString 经 vtable 桥接，
-            // null 给出 "null"
+            // 引用类型实参：Java 语义是 String.valueOf(x)——null 给出 "null"，否则虚 toString 分派。
+            // 预物化为临时变量（toString 返回 Result，需在语句层传播 ?）；null 判定在此显式给出
+            // （Object.toString 对 null 接收者按 invokevirtual 隐式判空抛 NPE）
             let boxed = obj_text(env, &raw_s, &e.ty);
             let sv = sim.fresh("_t")?;
-            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)))?;
+            let s = ir::anchors::STRING;
+            sim.emit(raw_stmt(format!(
+                "let {}: {s} = {{ let __o = {boxed}; if _is_jnull(&__o) {{ {s}::from(\"null\") }} else {{ __o.toString()? }} }};",
+                sv.as_str()
+            )))?;
             format!("&{}", sv.as_str())
         }
     })

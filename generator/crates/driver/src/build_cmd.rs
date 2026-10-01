@@ -28,7 +28,8 @@ use crate::api_roots::api_roots;
 use crate::build_libs::{self, Libs};
 use crate::build_opts::{BuildOpts, Mode, Stage, CLOSURE_INPUT_DIR};
 use crate::cargo;
-use crate::status::{BuildStatus, STATUS_FILE};
+use crate::compile_cmd::{compile_stage, CompileArgs};
+use crate::status::{BuildStatus, EmitSummary, STATUS_FILE};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
 use crate::Args;
 
@@ -50,7 +51,7 @@ fn remove_dir(d: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
+/// javac 编译到独占目录（参数：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
 /// jar 输入模式下全部 jar 上 `-cp`）
 pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
     remove_dir(out)?;
@@ -106,7 +107,7 @@ fn has_main(cp: &ClassPath, n: &str) -> bool {
     cp.get(n).is_some_and(|c| c.method(MAIN.0, MAIN.1).is_some_and(|m| m.is_static()))
 }
 
-/// 用户类序（与 main.py 同）：逐源文件取同名类，再取 SourceFile 同源的其余类（按 `<简单名>.class`
+/// 用户类序：逐源文件取同名类，再取 SourceFile 同源的其余类（按 `<简单名>.class`
 /// 文件名序）；无源文件对应的类殿后。入口类（`--main` 或首个带 static main 的类）移到最前
 pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) -> Result<Vec<String>, String> {
     let names = cp.names_of(Origin::User);
@@ -183,7 +184,9 @@ pub(crate) fn analyze<R: Send>(
         cold_cut: false,
         flow_batch: None,
     };
-    let cache = crate::closure_run::CacheOpts { dir: o.closure_cache.clone(), max_mb: o.closure_cache_max_mb };
+    // 跨运行闭包缓存缺省落仓库 build/closure_cache（键覆盖分析器、JDK、手写层、用户类与全部分析参数）
+    let dir = o.closure_cache.clone().unwrap_or_else(|| repo_root(rt).join("build").join("closure_cache"));
+    let cache = crate::closure_run::CacheOpts { dir: Some(dir), max_mb: o.closure_cache_max_mb };
     let out = crate::closure_run::analyze(&cache, &input, &h, &man, &hw, o.trace_class.is_some(), o.closure_json);
     if let (Some(t), Some(c)) = (&o.trace_class, &out.closure) {
         for line in c.why(&t.replace('.', "/")).into_iter().chain([String::new()]) {
@@ -405,18 +408,13 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         return Ok(());
     }
     report(&r, out);
+    let emit = EmitSummary { bin: r.bin_name.clone(), jdk_classes: r.jdk_classes };
+    st.emit = Some(emit.clone());
     if o.stop_after == Stage::Emit {
         return Ok(());
     }
-    st.stage = Stage::Compile;
-    let heavy = cargo::Heavy::decide(r.jdk_classes);
-    st.heavy = Some(heavy.clone());
-    let timeout = o.build_timeout.map(std::time::Duration::from_secs);
-    let exe = cargo::compile(out, &r.bin_name, repo, &heavy, timeout).map_err(|f| {
-        let msg = f.summary();
-        st.failure = Some(f);
-        msg
-    })?;
+    let c = CompileArgs { release: o.release, target_dir: o.target_dir.clone(), build_timeout: o.build_timeout };
+    let exe = compile_stage(out, repo, &emit, &c, st)?;
     if o.stop_after == Stage::Compile {
         return Ok(());
     }

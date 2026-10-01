@@ -19,7 +19,7 @@ fn main() {
     let status_file = Path::new("../native_status.toml");
 
     println!("cargo:rerun-if-changed=src/");
-    // 严格模式标记（生成侧按 main.py --strict 写入 strict.txt：1 / 0）
+    // 严格模式标记（生成侧按 rava build --strict 写入 strict.txt：1 / 0）
     println!("cargo:rerun-if-changed=strict.txt");
     // 语料 JDK 特性版本（生成侧写入 jdk_feature.txt）→ OUT_DIR/jdk_feature.rs 常量，
     // 手写层经 crate::jdk_feature() 读取（缺省 21）

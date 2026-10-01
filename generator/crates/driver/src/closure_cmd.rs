@@ -27,19 +27,17 @@ fn runtime_dir(args: &Args) -> Result<PathBuf, String> {
     find_runtime_dir(args.opt("--runtime").map(PathBuf::from))
 }
 
-/// 手写层真源 `runtime/java_runtime`：显式路径优先，否则自当前目录向上找，最后取本仓库
+/// 手写层真源 `runtime/java_runtime`：显式路径优先，否则自可执行文件所在目录向上找（二进制在
+/// `<仓库>/build/analyzer-target/release/` 下，与 cwd 无关），再自当前目录向上找，最后取编译本二进制的仓库
 pub(crate) fn find_runtime_dir(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(p) = explicit {
         return Ok(p);
     }
-    let mut cur = std::env::current_dir().map_err(|e| e.to_string())?;
-    loop {
-        let cand = cur.join("runtime/java_runtime");
-        if cand.join("closure.toml").is_file() {
-            return Ok(cand);
-        }
-        if !cur.pop() {
-            break;
+    let exe_dir = std::env::current_exe().ok().and_then(|e| e.canonicalize().ok()).and_then(|e| e.parent().map(Path::to_path_buf));
+    let cwd = std::env::current_dir().ok();
+    for start in exe_dir.into_iter().chain(cwd) {
+        if let Some(found) = start.ancestors().map(|d| d.join("runtime/java_runtime")).find(|c| c.join("closure.toml").is_file()) {
+            return Ok(found);
         }
     }
     let fallback = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime");

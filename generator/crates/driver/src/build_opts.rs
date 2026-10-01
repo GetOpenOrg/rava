@@ -3,10 +3,10 @@
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
-//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS]
+//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release] [--target-dir D]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
-//!   [--closure-cache DIR [--closure-cache-max-mb N]]`
+//!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE]
 //!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
@@ -126,8 +126,12 @@ pub struct BuildOpts {
     pub clean: bool,
     /// build 的最后一个阶段
     pub stop_after: Stage,
-    /// cargo build 超时（秒；超时终止整个 cargo 进程组）
+    /// cargo build 超时（秒；超时终止整个 cargo 进程组；缺省按重型判定，见 `cargo::Heavy::default_timeout`）
     pub build_timeout: Option<u64>,
+    /// cargo build --release
+    pub release: bool,
+    /// 共享编译缓存（CARGO_TARGET_DIR；缺省 `<仓库>/build/target`）
+    pub target_dir: Option<PathBuf>,
     pub strict: bool,
     /// 诊断明细：存根兜底逐条 / 闭包未解析调用
     pub debug: bool,
@@ -148,8 +152,9 @@ pub struct BuildOpts {
     pub closure_cache_max_mb: Option<u64>,
 }
 
-const VALUED: [&str; 23] = [
+const VALUED: [&str; 24] = [
     "--stop-after",
+    "--target-dir",
     "--build-timeout",
     "--closure-cache",
     "--closure-cache-max-mb",
@@ -173,10 +178,21 @@ const VALUED: [&str; 23] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 8] =
-    ["--clean", "--strict", "--batch", "--debug", "--full-precheck", "--api-recursive", "--perf", "--closure-json"];
+const FLAGS: [&str; 9] = [
+    "--clean",
+    "--strict",
+    "--batch",
+    "--debug",
+    "--full-precheck",
+    "--api-recursive",
+    "--perf",
+    "--closure-json",
+    "--release",
+];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 17] = [
+const BUILD_ONLY: [&str; 19] = [
+    "--release",
+    "--target-dir",
     "--closure-cache",
     "--closure-cache-max-mb",
     "--main",
@@ -223,6 +239,7 @@ impl BuildOpts {
                     "--api-recursive" => o.api_recursive = true,
                     "--perf" => o.perf = true,
                     "--closure-json" => o.closure_json = true,
+                    "--release" => o.release = true,
                     _ => o.strict = true,
                 }
                 continue;
@@ -237,6 +254,7 @@ impl BuildOpts {
                 "--emit-jobs" => o.emit_jobs = v.parse().map_err(|_| format!("--emit-jobs 需为数字：{v}"))?,
                 "--java-home" => o.java_home = Some(PathBuf::from(v)),
                 "--runtime" => o.runtime = Some(PathBuf::from(v)),
+                "--target-dir" => o.target_dir = Some(PathBuf::from(v)),
                 "--out" | "-o" => o.out = Some(PathBuf::from(v)),
                 "--main" => o.main = Some(v.replace('.', "/")),
                 "--classes" => o.classes = Some(PathBuf::from(v)),
@@ -264,9 +282,6 @@ impl BuildOpts {
     fn validate(&self, mode: Mode) -> Result<(), String> {
         if self.jdk.is_some() && self.java_home.is_some() {
             return Err("--jdk 与 --java-home 互斥".into());
-        }
-        if self.closure_cache_max_mb.is_some() && self.closure_cache.is_none() {
-            return Err("--closure-cache-max-mb 需配合 --closure-cache".into());
         }
         if self.api_recursive && self.api_packages.is_empty() {
             return Err("--api-recursive 需配合 --api-package".into());
@@ -321,7 +336,7 @@ impl BuildOpts {
     }
 
     /// scratch 目录：显式 `--out`；build 缺省 `<仓库>/build/<入口 snake 名>`；emit 缺省为
-    /// `<scratch>/closure_input/closure.json` 布局（`rava build` / main.py 产物）的 scratch
+    /// `<scratch>/closure_input/closure.json` 布局（`rava build` 产物）的 scratch
     pub fn scratch_dir(&self, mode: Mode, repo_root: &Path) -> Result<PathBuf, String> {
         if let Some(o) = &self.out {
             return Ok(o.clone());
@@ -342,7 +357,7 @@ impl BuildOpts {
     }
 }
 
-/// scratch 内闭包输入目录（用户类 `classes/` + `closure.json`；与 main.py 同布局）
+/// scratch 内闭包输入目录（用户类 `classes/` + `closure.json`）
 pub const CLOSURE_INPUT_DIR: &str = "closure_input";
 
 #[cfg(test)]
@@ -452,7 +467,11 @@ mod tests {
         let o = BuildOpts::parse(Mode::Build, &args("E.java --closure-cache /c --closure-cache-max-mb 64")).unwrap();
         assert_eq!(o.closure_cache.as_deref(), Some(Path::new("/c")));
         assert_eq!(o.closure_cache_max_mb, Some(64));
-        assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache-max-mb 64")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache-max-mb 64")).is_ok(), "缓存目录有缺省");
+        let o = BuildOpts::parse(Mode::Build, &args("E.java --release --target-dir /t")).unwrap();
+        assert!(o.release);
+        assert_eq!(o.target_dir.as_deref(), Some(Path::new("/t")));
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --release")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache /c --closure-cache-max-mb x")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --closure-cache /c")).is_err());
     }
