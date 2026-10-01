@@ -161,6 +161,7 @@ pub fn write_main(
     user: &UserLayout,
     jdk: &JdkLayout,
     disp: &DispatchReg,
+    bodies: &[&str],
 ) -> Result<String> {
     let Some((main_bin, main_e)) = user.entries.first() else {
         return Err(crate::error::EmitError::Input("无用户类：无法确定入口".into()));
@@ -190,6 +191,8 @@ pub fn write_main(
     lines.push(format!("use {use_path};"));
     // 反射元数据表 crate：java_runtime 以导出符号读取其表，此处把它纳入链接
     lines.push("use java_meta as _;".into());
+    // 实现层 crate：声明层外壳经导出符号调用其定义，此处把它们纳入链接
+    lines.extend(bodies.iter().map(|b| format!("use {b} as _;")));
     lines.push(String::new());
     lines.push("fn main() {".into());
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
@@ -244,26 +247,30 @@ pub fn lints_section() -> Vec<String> {
     l
 }
 
-/// user/Cargo.toml 的依赖行：java_runtime、java_meta、宏 crate、全部 lib crate（声明序）
-fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
+/// user/Cargo.toml 的依赖行：java_runtime、java_meta、宏 crate、全部 lib crate（声明序）、
+/// 全部实现层 crate
+fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str], bodies: &[&str]) -> Vec<String> {
     let mut d = vec![
         "java_runtime    = { path = \"../java_runtime\" }".to_string(),
         "java_meta       = { path = \"../java_meta\" }".to_string(),
         format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
     ];
     d.extend(libs.iter().map(|l| super::lib_crates::dep_line(l)));
+    d.extend(bodies.iter().map(|b| super::lib_crates::dep_line(b)));
     d
 }
 
 /// 批量模式：向 user/Cargo.toml 追加 `[[bin]]`（同名已在则跳过；插在 `[dependencies]` 前）；
 /// 文件缺席时先建最小清单
-fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name: &str) -> Result<()> {
+fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name: &str, bodies: &[&str]) -> Result<()> {
     let path = user_dir.join("Cargo.toml");
     let new_bin = format!("\n[[bin]]\nname = \"{bin_name}\"\npath = \"src/bin/{bin_name}.rs\"\n");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => {
+            // 实现层 crate 依赖补齐（清单先于拆层建立、或本轮装箱数增加）
+            let c = with_dep_lines(c, bodies);
             if c.contains(&format!("name = \"{bin_name}\"")) {
-                return Ok(());
+                return w.write(&path, &c);
             }
             c
         }
@@ -276,7 +283,7 @@ fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name
                 String::new(),
                 "[dependencies]".into(),
             ];
-            base.extend(user_deps(ctx, &[]));
+            base.extend(user_deps(ctx, &[], bodies));
             base.push(String::new());
             base.join("\n")
         }
@@ -288,11 +295,29 @@ fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name
     w.write(&path, &out)
 }
 
+/// 清单缺席的依赖行插到 `[dependencies]` 段首
+fn with_dep_lines(content: String, crates: &[&str]) -> String {
+    let missing: Vec<String> = crates
+        .iter()
+        .filter(|c| !content.lines().any(|l| l.split_whitespace().next() == Some(**c)))
+        .map(|c| super::lib_crates::dep_line(c) + "\n")
+        .collect();
+    match content.find("[dependencies]\n") {
+        Some(i) if !missing.is_empty() => {
+            let at = i + "[dependencies]\n".len();
+            format!("{}{}{}", &content[..at], missing.concat(), &content[at..])
+        }
+        _ => content,
+    }
+}
+
 /// user/Cargo.toml（批量模式为追加 `[[bin]]`）、根 Cargo.toml、strict.txt、jdk_feature.txt
-pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str, libs: &[&str]) -> Result<()> {
+pub fn write_cargo_files(
+    ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str, libs: &[&str], bodies: &[&str],
+) -> Result<()> {
     let user_dir = out_dir.join("user");
     if ctx.opts.batch {
-        append_cargo_bin(ctx, w, &user_dir, bin_name)?;
+        append_cargo_bin(ctx, w, &user_dir, bin_name, bodies)?;
     } else {
         let mut l = vec![
             "[package]".to_string(),
@@ -306,12 +331,18 @@ pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_
             String::new(),
             "[dependencies]".into(),
         ];
-        l.extend(user_deps(ctx, libs));
+        l.extend(user_deps(ctx, libs, bodies));
         l.push(String::new());
         l.extend(lints_section());
         w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
     }
-    let members: Vec<String> = ["java_runtime", "java_meta"].into_iter().chain(libs.iter().copied()).chain(["user"]).map(|m| format!("\"{m}\"")).collect();
+    let members: Vec<String> = ["java_runtime", "java_meta"]
+        .into_iter()
+        .chain(libs.iter().copied())
+        .chain(bodies.iter().copied())
+        .chain(["user"])
+        .map(|m| format!("\"{m}\""))
+        .collect();
     // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
     // 编译耗时约 +20%），关闭增量（scratch 每轮重生成，增量元数据只占内存与磁盘）。
     // 两项只影响调试信息与编译缓存，不影响程序语义。

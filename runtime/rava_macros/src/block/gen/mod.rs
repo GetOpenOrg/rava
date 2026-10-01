@@ -5,9 +5,11 @@
 //! - `storage_hooks`：存储钩子（声明层对 __inner 的全部依赖只经此）
 //! - `virtual_dispatch`：Java 虚方法分派（vtable trait + vtable impls + base 自由函数）
 //! - `wrapper`：Java 类型包装（wrapper struct + 方法委托 + 构造器）
+//! - `layer`：物理拆层（声明层 / 实现层按块属性只展开一层）
 //! - `type_conversions`：Java 类型转换（BINARY_NAME / From<Object> / From<Child> for Parent）
 
 pub(crate) mod context;
+pub(crate) mod layer;
 pub(crate) mod storage_hooks;
 pub(crate) mod struct_layout;
 pub(crate) mod type_conversions;

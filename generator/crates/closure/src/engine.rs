@@ -42,6 +42,7 @@ mod flow;
 mod bytecode;
 mod invoke;
 mod hub;
+mod gather;
 mod lambda;
 mod lambda_adapt;
 mod hw;
@@ -99,6 +100,8 @@ const HUB_MIN: usize = 8;
 /// 字段站点在 `recv_done` 中的哨兵：与值无关的部分已接 / 未知接收者视图已接（抽象对象 id 不会取到）
 const FIELD_STATIC: u32 = u32::MAX;
 const FIELD_OTHER: u32 = u32::MAX - 1;
+/// 站点接收者登记里 open 值的标记位（类型编号远小于此）
+const OPEN_MARK: u32 = 1 << 30;
 
 const OBJECT: &str = "java/lang/Object";
 const STRING: &str = "java/lang/String";
@@ -275,6 +278,8 @@ enum Node {
     HP(u32, u16),
     /// 开放接收者派发枢纽的返回值：各目标的返回值汇入，再流向各调用点的结果
     HR(u32),
+    /// 字段读汇集节点（`gathers` 序号）：同一字段、同一抽象对象集合的读取站点共用（见 `gather.rs`）
+    G(u32),
     /// 逃逸汇点：流入非建模代码（手写体 / native 的值池、VM 回调的返回值、未知数组）的值。
     /// 抽象对象到达这里即「已逃逸」——只有它们可能以 open / 非抽象接收者的身份被读写
     Esc,
@@ -464,6 +469,10 @@ pub struct Engine<'a> {
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
+    /// 字段读汇集节点：序号 → (字段, 对象数)；(字段, 对象集合) → 序号；字节码读站点 → (字段, 当前汇集节点, 累计对象)
+    gathers: Vec<(usize, u32)>,
+    gather_ids: HashMap<(usize, Rc<[u32]>), u32>,
+    gather_last: HashMap<usize, HashMap<u32, (usize, u32, Rc<[u32]>)>>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）

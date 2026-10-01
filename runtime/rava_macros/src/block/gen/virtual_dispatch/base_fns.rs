@@ -74,10 +74,17 @@ pub(super) fn base_fn_ident(ctx: &GenContext, f: &FnItem) -> Ident {
     format_ident!("{}__{}_base", ctx.self_name, f.sig.ident)
 }
 
+/// 一个 base 函数项；`decl_only` = 带类 / 方法泛型或体为存根（拆层时留在声明层直接定义，
+/// 其余拆入实现层）
+pub(crate) struct BaseFn {
+    pub(crate) item: TokenStream2,
+    pub(crate) decl_only: bool,
+}
+
 /// §11 自由函数 ClassName__methodName_base（供 invokespecial super() 调用）。
-pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
+pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
     let vtable_trait_ident = &ctx.vtable_trait_ident;
-    let mut base_fns: Vec<TokenStream2> = Vec::new();
+    let mut base_fns: Vec<BaseFn> = Vec::new();
 
     // 泛型 = 类泛型 + 方法自身 where 子句（方法体依赖类型变量上界约束）
     let generics_of = |sig: &syn::Signature| {
@@ -87,20 +94,23 @@ pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
         }
         g
     };
-    let emit = |sig: &syn::Signature, fn_name: &Ident, body: TokenStream2| -> TokenStream2 {
+    let emit = |sig: &syn::Signature, fn_name: &Ident, body: TokenStream2, stub: bool| -> BaseFn {
         let non_self_params: Vec<_> = sig.inputs.iter()
             .filter(|a| matches!(a, syn::FnArg::Typed(_)))
             .collect();
         let ret = &sig.output;
         let g = generics_of(sig);
+        let generic = !g.params.is_empty()
+            || g.where_clause.as_ref().is_some_and(|w| !w.predicates.is_empty());
         let (impl_g, _, where_c) = g.split_for_impl();
-        quote! {
+        let item = quote! {
             #[doc(hidden)]
             #[allow(non_snake_case, unused_variables)]
             pub fn #fn_name #impl_g (this: &dyn #vtable_trait_ident #(, #non_self_params)*) #ret #where_c {
                 #body
             }
-        }
+        };
+        BaseFn { item, decl_only: generic || stub }
     };
 
     // VirtualDefine：
@@ -112,6 +122,7 @@ pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
         let Some(block) = &f.block else { continue };
         let sig = &f.sig;
         let fn_name = base_fn_ident(ctx, f);
+        let mut stub = false;
         let body = if !matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
             erased_hook_call(
                 sig, &format_ident!("__impl_{}", sig.ident), &ctx.vtable_trait_ident,
@@ -125,9 +136,10 @@ pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
         } else {
             let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
             let msg = format!("stub: super {}.{}:{}", ctx.meta.binary_name, sig.ident, desc);
+            stub = true;
             quote! { __stub(#msg) }
         };
-        base_fns.push(emit(sig, &fn_name, body));
+        base_fns.push(emit(sig, &fn_name, body, stub));
     }
 
     // VirtualOverride（`super.m()` 的精确目标，不分派）：
@@ -145,10 +157,10 @@ pub(crate) fn base_fns(ctx: &GenContext) -> TokenStream2 {
                 sig, &format_ident!("__impl_{}", sig.ident),
                 &ctx.vtable_trait_ident, &ctx.as_self_hook, &ctx.type_param_names)
         };
-        base_fns.push(emit(sig, &base_fn_ident(ctx, f), body));
+        base_fns.push(emit(sig, &base_fn_ident(ctx, f), body, false));
     }
 
-    quote! { #(#base_fns)* }
+    base_fns
 }
 
 /// 外壳调用：`X__m_base(self, a, b, ..)`，并把签名形参的 `mut` 去掉（体已搬进 base 函数，

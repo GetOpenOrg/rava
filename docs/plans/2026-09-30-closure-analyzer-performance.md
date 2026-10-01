@@ -361,6 +361,25 @@ P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `a
 - DeepCopy（`rava build --perf`）：`closure` 阶段冷 5110 ms / 命中 33 ms；整次 `--no-run` 墙钟 6.34 → 1.12 s，最大 RSS 687 → 372 MB。
 - 单测：`cargo test -p closure -p input -p emit -p driver` 全过（cache 6 项，build_opts 新增 `closure_cache_options`）。
 
+**P7 冷路径进展（`closure-p6` 续，2026-10-01；release，DeepCopy 分段 ms，单次运行波动约 ±5%）**：
+
+计量口径：各版本 `git archive` 到 `build/verify/<提交>`，**各用独立 target-dir 全新构建**，对照前核对 md5 互异。
+曾出现的计量事故：快照目录与工作区共用 target 时，cargo 指纹按工作区相对路径 + mtime 判定，快照源文件 mtime 早于上次构建即被当作最新，
+两个「不同版本」实为同一二进制（只影响未提交的 p7e2 中间结论，已作废重测）；已提交版本按上述口径复核。
+
+| 版本 | analyze | aux_analyze | sites | flows | process | 流边 | 集合（对 29 例：验收 27 + DeepCopy + Digester） |
+|---|---|---|---|---|---|---|---|
+| d41b3006（基线） | 558 | 589 | 1460 | 1130 | 1128 | — | — |
+| 6c8d48f6（P7 一、二） | 423 | 295 | 1153 | 1116 | 1100 | — | 对 d41b3006 全部 SAME |
+| f67d1de8（prec3 嵌套宿主边，集成分支） | 550 | 575 | 1396 | 1141 | 1115 | — | 精度改动，对 d41b3006 有差异 |
+| 48dcfc01（合并） | 418 | 294 | 1083 | 1130 | 1088 | 2.22 M | 对 f67d1de8 全部 SAME |
+| P7 三（站点只处理新增接收者 + 字段读汇集节点） | 420 | 293 | 947 | 997 | 1057 | 1.32 M | 对 48dcfc01 全部 SAME |
+
+- P7 一：站点重跑常数开销、辅助分析去重（aux_analyses 54 121 → 25 130）；P7 二：记忆条目按条目号精确作废（`Dep::Memo`）。
+- P7 三：字节码站点重跑只处理新增接收者值（含 open 值，`recv_delta`）；字段读站点按 (字段, 对象集合) 共用汇集节点 `G`，
+  O→S 推送 1436 万次（有效 31 万）→ G→S 74 万 + O→G 62 万；Digester sites 516 → 431、flows 694 → 551。
+- 下一步：写站点对称的分发节点（S→O 推送 536 万次、有效 3 万）、hub 路径常数，之后 P5 flows、P8 process。
+
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
 - Linux：`ulimit -v`、`prlimit --as=`、`systemd-run --scope -p MemoryMax=4G`、容器 `--memory`；

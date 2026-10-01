@@ -105,7 +105,9 @@ fn discover_lib_crate_roots() -> Vec<PathBuf> {
             && p.join("Cargo.toml").is_file()
             && p.join("src").is_dir()
             && !p.file_name().and_then(|n| n.to_str())
-                .is_some_and(|n| ["java_runtime", "java_meta", "user"].contains(&n)))
+                .is_some_and(|n| ["java_runtime", "java_meta", "user"].contains(&n)
+                    // 实现层 crate（拆 crate S4）是声明层类块的副本，类宇宙已由 java_runtime 覆盖
+                    || n.starts_with("java_body_")))
         .map(|p| p.join("src"))
         .collect();
     roots.sort();
