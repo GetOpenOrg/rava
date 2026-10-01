@@ -173,6 +173,8 @@ pub fn write_main(
         lines.extend(top.map(|m| user_mod_decl(user_src, m, "")));
     }
     lines.push(format!("use {use_path};"));
+    // 反射元数据表 crate：java_runtime 以导出符号读取其表，此处把它纳入链接
+    lines.push("use java_meta as _;".into());
     lines.push(String::new());
     lines.push("fn main() {".into());
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
@@ -227,10 +229,11 @@ pub fn lints_section() -> Vec<String> {
     l
 }
 
-/// user/Cargo.toml 的依赖行：java_runtime、宏 crate、全部 lib crate（声明序）
+/// user/Cargo.toml 的依赖行：java_runtime、java_meta、宏 crate、全部 lib crate（声明序）
 fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
     let mut d = vec![
         "java_runtime    = { path = \"../java_runtime\" }".to_string(),
+        "java_meta       = { path = \"../java_meta\" }".to_string(),
         format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
     ];
     d.extend(libs.iter().map(|l| super::lib_crates::dep_line(l)));
@@ -293,7 +296,7 @@ pub fn write_cargo_files(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_
         l.extend(lints_section());
         w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
     }
-    let members: Vec<String> = std::iter::once("java_runtime").chain(libs.iter().copied()).chain(["user"]).map(|m| format!("\"{m}\"")).collect();
+    let members: Vec<String> = ["java_runtime", "java_meta"].into_iter().chain(libs.iter().copied()).chain(["user"]).map(|m| format!("\"{m}\"")).collect();
     // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
     // 编译耗时约 +20%），关闭增量（scratch 每轮重生成，增量元数据只占内存与磁盘）。
     // 两项只影响调试信息与编译缓存，不影响程序语义。

@@ -10,6 +10,7 @@ pub mod error;
 pub mod java;
 pub mod jdk;
 pub mod jdk_resources;
+pub mod meta;
 pub mod monitor;
 pub mod native_memory;
 pub mod posix;

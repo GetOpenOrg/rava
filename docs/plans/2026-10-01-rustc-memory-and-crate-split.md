@@ -346,16 +346,20 @@ Digester 声明 crate 的剩余构成（展开后字节）：
 ### 7.2 终态结构
 
 ```
-java_meta                 反射 / 元数据表（build.rs 生成的纯数据 + 元数据类型），无依赖
-   ↑
-java_runtime（声明层）     runtime 基础设施（手写）+ 每类：wrapper struct、vtable trait 声明、
-   ↑   ↑   ↑               wrapper 固有 API（虚分派入口、字段访问器、静态字段、方法外壳）、
-   │   │   │               From / Clone / PartialEq / Debug、ObjectVTable for wrapper、静态存储
+java_runtime（声明层）     runtime 基础设施（手写，含元数据元素类型 `meta.rs`）+ 每类：wrapper struct、
+   ↑   ↑   ↑   ↑           vtable trait 声明、wrapper 固有 API（虚分派入口、字段访问器、静态字段、
+   │   │   │   │           方法外壳）、From / Clone / PartialEq / Debug、ObjectVTable for wrapper、静态存储
+   │   │   │   java_meta   反射 / 元数据表（构建脚本扫描整个 workspace 生成的纯数据），表 static 以
+   │   │   │   │           `__java_meta_<表名>` 符号导出，java_runtime::meta 以 extern 声明读取
 java_body_1 … java_body_N（实现层，彼此不依赖）
-   │   │   │               每类：X__inner 存储、ObjectVTable / 各级 vtable trait for X__inner、
-   │   │   │               方法体（#[no_mangle]）、_base 体、__clinit 体、存储钩子
-user                       用户类（声明 + 实现同 crate，full 模式）；`use java_body_k as _;` 保证链接
+   │   │   │   │           每类：X__inner 存储、ObjectVTable / 各级 vtable trait for X__inner、
+   │   │   │   │           方法体（#[no_mangle]）、_base 体、__clinit 体、存储钩子
+user                       用户类（声明 + 实现同 crate，full 模式）；`use java_meta as _;`、
+                           `use java_body_k as _;` 保证链接
 ```
+
+- 元数据表覆盖用户类，所以 `java_meta` 必须位于 `java_runtime` 之上（依赖它取元素类型），而不是之下：若 `java_runtime` 依赖 `java_meta`，任何用户类改动都会经 `java_meta` 连带重编 `java_runtime`。表与读取方之间走导出符号，与实现层同一机制。
+- 链接次序：rustc 把依赖方排在被依赖方之前传给链接器，`java_runtime` 对 `java_meta` / `java_body_k` 符号的引用出现在定义之后。macOS ld64、`rust-lld`（x86_64-unknown-linux-gnu 自 Rust 1.90 起缺省）按全部输入解析，不受次序影响；GNU ld / gold 按次序单遍扫描归档，会报未定义符号——这类目标须在 `.cargo/config.toml` 里指定 `-C link-arg=-fuse-ld=lld`。
 
 - 类型环全部留在 `java_runtime` 内部；实现层只依赖声明层，结构上不可能成环。
 - 链接器把声明层外壳里的 `extern "Rust"` 声明和实现层的 `#[no_mangle]` 定义接上。
@@ -435,7 +439,7 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 | 步 | 内容 | 生成形态改动 | 验收重点 |
 |---|---|---|---|
-| S1 | **`java_meta` crate**：反射数据表与元数据类型从 `java_runtime` 移出，build.rs 随之移动；`java_runtime` 依赖 `java_meta` 并再导出原路径 | 仅 workspace 结构；表内容逐字节不变 | 表文件逐字节对照；HelloWorld / Digester `java_runtime` 峰值 |
+| S1 ✅ | **`java_meta` crate**：反射数据表与造表构建脚本从 `java_runtime` 移出；元素类型留在 `java_runtime::meta`（手写），表 static 以导出符号交给 `java_runtime` 读取（依赖方向见 §7.2） | 仅 workspace 结构；表数据逐字节不变 | 表文件逐字节对照；HelloWorld / Digester `java_runtime` 峰值（§7.7） |
 | S2 | **存储钩子**：§7.3.1 的 4 处改走钩子（同 crate 内先落地为 wrapper 的隐藏关联函数，签名即终态 extern 签名） | 宏展开：4 处调用点换钩子调用 | 展开对照只在 4 处变化；抽查 |
 | S3 | **方法体函数化**：方法体移入 `__jb_<符号>` 自由函数，wrapper 方法与 `_base` 变外壳；`_base` 去泛型；vtable-for-inner 私有方法直展开改调同一函数 | 宏展开：方法体搬家；单态化 `_base` 实例归一 | 单态化统计；抽查（覆盖私有方法、super 调用、`_base` 缺省分派） |
 | S4 | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树（实现 crate 根 `pub use java_runtime::*;`，本 crate 类模块名加 `_body` 后缀以免遮蔽）；可见性：wrapper 的 `vtable` / `any` / `__from_parts` 改为 `pub` + `#[doc(hidden)]` | 生成树结构变化（新增实现 crate 目录） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
@@ -450,3 +454,28 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | 单个 rustc 峰值：声明 crate | HelloWorld 1.97 GB；Digester 3.9 GB | HelloWorld ≤ 1.2 GB；Digester ≤ 2 GB |
 | HelloWorld `cargo build` 墙钟（`CARGO_BUILD_JOBS=2`） | 16.0 s | ≤ 12 s |
 | 仅用户类变化时 JDK 部分重编 | 全量 | 0 个 crate |
+
+### 7.7 测量记录（生成器效率线）
+
+#### S1：`java_meta` 拆出（2026-10-01）
+
+条件：stable、`CARGO_BUILD_JOBS=2`、`CARGO_INCREMENTAL=0`、全新 target；每 crate 墙钟与峰值由 RUSTC_WRAPPER（`/usr/bin/time -l`）记录。「前」= 同一 scratch 换回 S1 之前的 `build.rs` / `class_impl.rs` / `anno_pool.rs`、去掉 `java_meta`。
+
+表数据等价：HelloWorld、Digester 两例的 10 个表文件，去掉类型定义与导出属性两处机械差异后逐字节相同（Digester `method_table.rs` 7,984,036 B）。
+
+HelloWorld：
+
+| | 前 | 后 |
+|---|---|---|
+| `java_runtime` rustc | 21.4 s / 1671 MB | 19.9 s / 1319 MB（峰值 −21%） |
+| `java_meta` rustc | — | 1.1 s / 396 MB |
+| 仅改 user 源文件后的增量构建 | 重编 `java_runtime`：19.0 s / 1688 MB，总 20.7 s | 只重编 `java_meta`：1.0 s / 407 MB，总 2.9 s |
+
+链接：ld64 下 `hello_world` 正常链接，用到的 `__java_meta_*` 符号已解析，未用到的表被死代码剥除。
+
+27 例生成树对照：每例差异 1196 行且完全相同，全部来自三类预期改动：
+- 根 `Cargo.toml` 的 members 加 `java_meta`；`user/Cargo.toml` 加 `java_meta` 依赖；`user/src/main.rs` 加 `use java_meta as _;`；
+- 新增 `java_meta/` 目录（`runtime/java_meta` 手写镜像）；
+- `java_runtime` 手写 overlay：`build.rs`、新增 `src/meta.rs`、`class_impl.rs` / `anno_pool.rs` 改读 `crate::meta`，另有 5 个文件只改注释。
+
+生成的类文件零差异，raw-audit 一致。
