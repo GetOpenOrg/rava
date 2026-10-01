@@ -7,13 +7,14 @@
 //! 表：类层次（Class.isAssignableFrom）、直接父类、字段（Class.getDeclaredField /
 //! Field.get/set）、方法（Class.getDeclaredMethod、MethodHandleNatives.resolve；身份键为
 //! (name, descriptor)）、类修饰符、record、<clinit> 类集与 sealed 许可子类型、嵌套、直接超接口、
-//! 类级注解。表元素类型定义在 java_runtime::meta（手写）；每个表 static 以
+//! 类级注解、模块服务（来自 closure.json 的服务事实，非 java_class! 属性）。表元素类型定义在 java_runtime::meta（手写）；每个表 static 以
 //! `__java_meta_<表名>` 符号导出，java_runtime 以同名 extern 声明读取——用户类变化只重编
 //! 本 crate，不重编 java_runtime（方案 docs/plans/2026-10-01-rustc-memory-and-crate-split.md §7.5 S1）。
 
 mod anno_table;
 mod class_tables;
 mod member_tables;
+mod services_table;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,6 +46,8 @@ fn main() {
     write_nest_table(&scan_nest_meta(&meta_roots));
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));
+    // 分析器导出的闭包事实（scratch 根下 closure_input/，与本 crate 同级）
+    services_table::write_services_table(Path::new("../closure_input/closure.json"));
 }
 
 /// 生成属性的键与 '=' 之间有对齐填充空格（`#[binary_name       = "..."]`），

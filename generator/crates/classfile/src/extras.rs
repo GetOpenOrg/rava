@@ -230,7 +230,7 @@ fn code_locals(body: &[u8], pool: &ConstantPool, m: &mut MethodExtras) -> Result
 
 fn anno_const(pool: &ConstantPool, idx: u16) -> Option<AnnoConst> {
     Some(match pool.get(idx).ok()? {
-        CpEntry::Utf8(s) => AnnoConst::Utf8(s.clone()),
+        CpEntry::Utf8(s, _) => AnnoConst::Utf8(s.clone()),
         CpEntry::Integer(v) => AnnoConst::Int(*v),
         CpEntry::Long(v) => AnnoConst::Long(*v),
         CpEntry::Float(v) => AnnoConst::Float(*v),

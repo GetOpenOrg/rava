@@ -194,7 +194,27 @@ impl System {
     /// native `setIn0(InputStream)`：System.setIn 的写入步（改写 static final 字段 in）。
     #[jvm_native]
     pub fn setIn0(input: crate::java::io::InputStream) -> Result<()> {
-        System::set_in_(input)
+        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
+        Ok(())
+    }
+
+    /// System.in：HotSpot 在 initPhase1 经 native setIn0 写入的静态字段（字节码 `<clinit>` 只写 null），
+    /// 与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
+    /// `new BufferedInputStream(new FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本。
+    #[jvm_native(upcalls = "
+        java/io/FileDescriptor.<init>:(I)V
+        java/io/FileInputStream.<init>:(Ljava/io/FileDescriptor;)V
+        java/io/BufferedInputStream.<init>:(Ljava/io/InputStream;)V
+    ")]
+    pub fn in_() -> Result<crate::java::io::InputStream> {
+        if let Some(is) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
+            return Ok(is);
+        }
+        let fdi = FileDescriptor::new_i(0)?;
+        let fis = crate::java::io::FileInputStream::new_filedescriptor(fdi)?;
+        let bis = crate::java::io::BufferedInputStream::new_inputstream(fis.into())?;
+        let is: crate::java::io::InputStream = bis.into();
+        Ok(STDIN.with(|s| Clone::clone(s.borrow_mut().get_or_insert(is))))
     }
 
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
@@ -220,9 +240,7 @@ fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
         ("user.dir", std::env::current_dir().map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()),
         ("user.home", std::env::var("HOME").unwrap_or_default()),
-        ("user.name", std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .unwrap_or_default()),
+        ("user.name", crate::posix::current_user_name()),
         ("java.io.tmpdir", std::env::var("TMPDIR").unwrap_or_else(|_| std::string::String::from("/tmp"))),
         ("os.name", crate::posix::os_name().to_owned()),
         ("os.arch", crate::posix::os_arch().to_owned()),
@@ -280,6 +298,8 @@ crate::__process_static! {
     /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
     static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
     static STDERR: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
+    /// System.in 的当前流：首次读取时建标准输入（fd 0），setIn0 改写。
+    static STDIN: crate::sync_model::__RefSlot<Option<crate::java::io::InputStream>> = const { crate::sync_model::__RefSlot::new(None) };
 }
 
 fn std_stream(

@@ -143,7 +143,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 手写方法按形参（含接收者序号）的数组写入来源。`[facts.array_writes]` 声明的按声明；
-    /// 其余取得数组视图的手写体保守处理：每个非接收者引用形参都可被写入，来源为其它形参的值、
+    /// 其余取得引用元素数组视图的手写体保守处理（基本元素视图不改写引用元素，见 `MemberHw::array_access`）：每个非接收者引用形参都可被写入，来源为其它形参的值、
     /// 全部实参数组的元素与手写体产出。数组只有 Object 的方法，没有一个改写元素，接收者不是写入目标
     pub(super) fn hw_writes(&mut self, t: usize) -> Rc<[Option<HwWrite>]> {
         if let Some(w) = self.hw_writes.get(&t) {

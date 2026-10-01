@@ -36,7 +36,7 @@ pub(super) fn dispatch_bare_object(
     if env.ctx.facts.root_virtual.contains(&(call.name.clone(), call.param_desc().to_string())) {
         let root_call = format!("{}.{rust_mname}({})?", site.obj_e, site.arg_str());
         if *rust_ret == RsType::Unit {
-            raw(sim, format!("{root_call};"));
+            raw(sim, format!("{root_call};"))?;
         } else {
             let_push(env, sim, "_t", &root_call, rust_ret.clone())?;
         }
@@ -57,7 +57,7 @@ pub(super) fn dispatch_bare_object(
 pub(super) fn unresolved_stub(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, rust_ret: &RsType) -> InstrResult<()> {
     let stub = format!("panic!(\"stub: {}.{}:{}\")", call.owner, call.name, call.desc);
     if *rust_ret == RsType::Unit {
-        raw(sim, format!("{stub};"));
+        raw(sim, format!("{stub};"))?;
         Ok(())
     } else {
         let_push(env, sim, "_vdispatch", &stub, rust_ret.clone())
@@ -89,7 +89,7 @@ fn iface_dispatch(
         site.arg_str()
     );
     if *rust_ret == RsType::Unit {
-        raw(sim, format!("{iface_call};"));
+        raw(sim, format!("{iface_call};"))?;
         return Ok(());
     }
     let v = sim.fresh("_t")?;
@@ -112,7 +112,7 @@ fn iface_dispatch(
         }
         _ => iface_call,
     };
-    raw(sim, format!("let {v}: {r} = {value};"));
+    raw(sim, format!("let {v}: {r} = {value};"))?;
     sim.push(Expr::Var(v), rust_ret.clone());
     Ok(())
 }

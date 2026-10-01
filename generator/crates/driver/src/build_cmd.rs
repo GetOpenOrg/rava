@@ -187,6 +187,7 @@ fn analyze<R: Send>(
         roots: vec![MemberRef { owner: main.to_string(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_members,
         locales: o.locales.clone(),
+        cold_cut: false,
         flow_batch: None,
     };
     let c = closure::analyze(&input, &h, &man, &hw);

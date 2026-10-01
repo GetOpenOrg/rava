@@ -69,7 +69,7 @@ fn iinc(env: &InstrEnv, sim: &mut StackSim, slot: u16, delta: i16) -> InstrResul
     let (method, k) = if delta >= 0 { ("wrapping_add", i32::from(delta)) } else { ("wrapping_sub", -i32::from(delta)) };
     let target = Expr::Var(id(&name)?);
     let value = mcall(target.clone(), method, vec![Expr::Lit(Lit::i32(k))])?;
-    sim.emit(Stmt::Assign(AssignStmt { target, value, origin: VarOrigin::default() }));
+    sim.emit(Stmt::Assign(AssignStmt { target, value, origin: VarOrigin::default() }))?;
     Ok(())
 }
 

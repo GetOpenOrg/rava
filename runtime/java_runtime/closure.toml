@@ -90,8 +90,8 @@ packages = [
     # 属过渡类（策略截断），删除后闭包变小（手写不透明返回的 Character* 过近似消失，计划 §6.6）。
     "sun/security/action/",
     # C1d：模块系统工具（ServicesCatalog / Resources / Checks 等，纯 Java，0 个 ACC_NATIVE）。
-    # ServicesCatalog 的 getServicesCatalogOrNull / findServices 仍为过渡手写（被 jdk/internal/access 的
-    # 整体手写 JavaLangAccess 与 jdk/internal/loader 截断阻塞，见 services_catalog_impl.rs），其余按字节码。
+    # ServicesCatalog 的 getServicesCatalogOrNull 仍为过渡手写（被 jdk/internal/loader 截断阻塞，见
+    # services_catalog_impl.rs），其余按字节码；引导目录按 closure.json 的服务事实装填（__boot_catalog）。
     "jdk/internal/module/",
     # C1d：HotSpot 性能计数器（PerfCounter / Perf 包装，Java 部分纯字节码）。Perf 的 ACC_NATIVE
     # （registerNatives / createLong 等）按需手写于 perf_impl.rs：原生二进制无 jvmstat 共享内存，
@@ -116,6 +116,8 @@ classes = [
     "sun/util/resources/OpenListResourceBundle",
     # URL 解析的纯 Java 工具（主机串校验、延迟解析开关 $MASKS.DELAY_URL_PARSING_SP_VALUE）
     "sun/net/util/IPAddressUtil",
+    # URL 规范串工具（纯 Java）：CodeSource.<init> 的 urlNoFragString（去片段的 URL 串，含缺省端口判定）
+    "sun/net/util/URLUtil",
 
     # FS-R：VM 边界类 java/lang/Class 的纯 Java 嵌套辅助类（0 个 ACC_NATIVE）：reflectionData()
     # 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass / getEnclosingClass）、Atomic
@@ -156,6 +158,14 @@ classes = [
     # 有界随机数核心（boundedNextInt 等）、mix 函数。唯一手写例外 initialSeed：其 secureRandomSeed
     # 分支经 SecureRandom.getSeed 拉入整条 JCA 链（random_support_impl.rs）。
     "jdk/internal/util/random/RandomSupport",
+
+    # 平台枚举（纯 Java；initOS 取 JDK 构建期常量 "linux"）。消费方：ProcessImpl.<clinit> 的 OS 字段
+    # （initStreams / 启动模式按平台分支）。边界截断下 <clinit> 不发射，CURRENT_OS 恒 null → NPE。
+    "jdk/internal/util/OperatingSystem",
+    # 旧式 Cleaner（PhantomReference 子类，纯 Java：静态双链表登记 + clean() 执行 thunk）。消费方：
+    # DirectByteBuffer 的内存释放登记（Cleaner.create(this, new Deallocator(..))）。原生二进制无 GC，
+    # 与 JDK 在引用不入队时同形：只在显式 clean() 时执行。
+    "jdk/internal/ref/Cleaner",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存

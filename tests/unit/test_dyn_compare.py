@@ -139,6 +139,24 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(self.cat(ev(('java/lang/System$2', 'get', '(I)I', 1), MAIN), sigs),
                          'boundary-dispatch')
 
+    def test_indy_model(self):
+        # 运行模型替换的 indy 调用点上的链接期加载（栈顶即该帧 / 其上全是模型外帧）
+        site = 'java/util/A.f:()V@1'
+        self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 1), MAIN), self.methods, self.r,
+                                      frozenset(), {site}), ('indy-model', site))
+        self.assertEqual(dc.attribute(ev(('java/lang/invoke/LMF', 'mf', '()V', 0),
+                                         ('java/util/A', 'f', '()V', 1), MAIN),
+                                      self.methods, self.r, frozenset(), {site})[0], 'indy-model')
+        # 模型再次进入已建模方法（拼接调 toString）：从该帧起照常归因，不被 indy 掩盖
+        c, f = dc.attribute(ev(('java/util/B', 'g', '()V', 2), ('java/util/A', 'f', '()V', 3),
+                               ('java/lang/invoke/SCH', 's', '()V', 0),
+                               ('java/util/A', 'f', '()V', 1), MAIN),
+                            self.methods, self.r, frozenset(), {site})
+        self.assertEqual((c, f), (dc.MISS, 'java/util/B.g:()V@2'))
+        # 非模型调用点照旧
+        self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 2), MAIN), self.methods, self.r,
+                                      frozenset(), {site}), (dc.MISS, None))
+
 
 def closure():
     return {
@@ -176,6 +194,39 @@ class CompareTest(unittest.TestCase):
 
     def test_main_class_of(self):
         self.assertEqual(dc.main_class_of(closure()), 'Main')
+
+
+class MethodCompareTest(unittest.TestCase):
+    """方法粒度对照：翻译体（字节码 / 边界截断）调用的不在闭包内的方法 → mmiss"""
+
+    def closure(self):
+        return {'methods': [{'id': 'p/A.f:()V', 'kind': 'bytecode'},
+                            {'id': 'q/Cut.<init>:()V', 'kind': 'handwritten:boundary', 'cut': True},
+                            {'id': 'q/Hw.n:()V', 'kind': 'handwritten:boundary'},
+                            {'id': 'p/A.g:()V', 'kind': 'bytecode'}]}
+
+    def test_parse(self):
+        es = dc.parse_methods('M p/B g ()V p/A f ()V 3\nM p/A f ()V - - - -1\nL x main\n')
+        self.assertEqual([e.callee for e in es], ['p/B.g:()V', 'p/A.f:()V'])
+        self.assertEqual(es[0].caller, ('p/A', 'f', '()V', 3))
+        self.assertIsNone(es[1].caller)
+
+    def test_categories(self):
+        E = dc.MethodEntry
+        entries = [E('q/Base.<init>:(I)V', ('q/Cut', '<init>', '()V', 3)),   # 截断体调用未入闭包的超类构造
+                   E('p/B.h:()V', ('p/A', 'f', '()V', 5)),                   # 字节码体调用未入闭包的方法
+                   E('p/A.g:()V', ('p/A', 'f', '()V', 7)),                   # 已覆盖
+                   E('p/X.y:()V', ('q/Hw', 'n', '()V', 1)),                  # 手写承载体内：不可比
+                   E('p/L.z:()V', ('p/A', 'f', '()V', 9)),                   # indy 模型调用点
+                   E('p/M.w:()V', None)]
+        r = dc.compare_methods(self.closure(), entries, rules(), {'p/A.f:()V@9'})
+        self.assertEqual([(m['method'], m['caller_cut']) for m in r['mmiss']],
+                         [('q/Base.<init>:(I)V', True), ('p/B.h:()V', False)])
+        self.assertEqual(r['by_category'], {'covered': 1, 'indy-model': 1,
+                                            'untranslated-caller': 1, 'vm-entry': 1})
+        tag = dc.summary_tag({'miss': [], 'unattributed': [], 'extra': {'count': 0, 'explained': 0},
+                              'methods': r})
+        self.assertEqual(tag, 'dyn miss 0 / extra 0 prov 100% / mmiss 2 cut 1')
 
 
 class ManifestTest(unittest.TestCase):

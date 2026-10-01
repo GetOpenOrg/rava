@@ -28,6 +28,8 @@ fn recipe(site: &IndySite) -> Option<(String, Vec<String>)> {
         for c in &args[1..] {
             match c {
                 Const::String(s) => consts.push(s.clone()),
+                // 拼接经 format! 构造 Rust 文本，孤立代理项无法承载（实参侧同此口径）
+                Const::StringUtf16(u) => consts.push(std::string::String::from_utf16_lossy(u)),
                 other => match numeric_const_text(other) {
                     Some(t) => consts.push(t),
                     None => {
@@ -83,7 +85,7 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
             // null 给出 "null"。String 自身走 Display 快速路径不变
             let boxed = obj_text(env, &raw_s, &e.ty);
             let sv = sim.fresh("_t")?;
-            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)));
+            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)))?;
             sv.as_str().to_string()
         }
         _ => raw_s,

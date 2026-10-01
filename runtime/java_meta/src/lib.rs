@@ -1,5 +1,5 @@
 //! 反射元数据表（类层次 / 直接父类 / 字段 / 方法 / 修饰符 / record / 类文件级 / 嵌套 /
-//! 直接超接口 / 类级注解）。表由构建脚本从整个 workspace（java_runtime、user、lib crate）
+//! 直接超接口 / 类级注解 / 模块服务）。表由构建脚本从整个 workspace（java_runtime、user、lib crate）
 //! 的 java_class! 属性生成，每个 static 以 `__java_meta_<表名>` 符号导出，由
 //! java_runtime::meta 的同名 extern 声明读取。本 crate 只承载数据，不含逻辑。
 
@@ -15,3 +15,4 @@ include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/nest_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/interfaces_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/class_anno_table.rs"));
+include!(concat!(env!("OUT_DIR"), "/services_table.rs"));

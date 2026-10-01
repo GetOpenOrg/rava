@@ -70,6 +70,8 @@ extern "Rust" {
     static RECORD_CLASSES: Names;
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
     static RECORD_COMPONENTS: &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])];
+    #[link_name = "__java_meta_MODULE_SERVICES"]
+    static MODULE_SERVICES: &'static [(&'static str, &'static str)];
 }
 
 // SAFETY（以下各函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
@@ -101,3 +103,5 @@ pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])] {
     unsafe { RECORD_COMPONENTS }
 }
+/// 模块服务 (服务, provider)：closure.json seeds.services 的模块 provider，事实序。
+pub fn module_services() -> &'static [(&'static str, &'static str)] { unsafe { MODULE_SERVICES } }

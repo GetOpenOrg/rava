@@ -19,8 +19,11 @@ use std::rc::Rc;
 use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
+pub mod cfg;
 mod lit;
 mod obj;
+#[cfg(test)]
+mod tests;
 pub use lit::{lit_id, lit_str};
 pub use obj::Obj;
 
@@ -58,6 +61,8 @@ pub enum V {
     Int(i32),
     /// 奇偶已知的 int（true = 奇）：数组下标奇偶敏感（键值交错数组等）
     Par(bool),
+    /// 值未知、但恒等于入口处 int 族形参 i 的值（只经复制保持；参与运算 / 合流即为 Top）：判定形参是否选择分支
+    Arg(u16),
     Long(i64),
     Null,
     /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空 + 来源集合 + 对象身份标签（见 [`Obj`]）
@@ -161,7 +166,10 @@ fn value_of(ft: &FieldType, s: Src) -> V {
     if ft.is_reference() {
         V::Ref { ty: Some(ft_name(ft)), nonnull: false, src: src1(s), obj: None }
     } else {
-        V::Top
+        match (ft, s) {
+            (FieldType::Prim(b'B' | b'C' | b'I' | b'S' | b'Z'), Src::Param(i)) => V::Arg(i),
+            _ => V::Top,
+        }
     }
 }
 
@@ -212,8 +220,13 @@ pub trait Oracle {
     fn param(&self, _i: u16) -> Option<V> {
         None
     }
-    /// catch 类型是否可能被抛出（有已实例化的子类型）
-    fn catch_live(&self, ty: &str) -> bool;
+    /// 类型是否可能有实例（有已实例化的子类型）：catch 类型能否被抛出、instanceof 能否为真
+    fn type_live(&self, ty: &str) -> bool;
+    /// 形参 i（Class 类型）能否是类 cls 的类镜像：Some(false) = 值集已知且不含（乐观答复，值集增长时由引擎重分析，
+    /// 见 [`Analysis::mirror_assumed`]）；None = 未知
+    fn param_mirror(&self, _i: u16, _cls: &str) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -247,10 +260,16 @@ pub struct Analysis {
     pub reachable: Vec<bool>,
     /// (指令偏移, 事件)
     pub events: Vec<(u32, Event)>,
-    /// try 区间可达、但 catch 类型尚不存活的处理器（catch 类型）——类型存活后需重分析
-    pub pending_catch: Vec<String>,
+    /// 按「尚无实例」处理的类型：try 区间可达的未进入处理器的 catch 类型、可达 instanceof 的目标类型——类型存活后需重分析
+    pub pending_types: Vec<String>,
+    /// 按「形参 i 不是类 c 的镜像」折叠的引用比较（形参序号, 类）——形参值集增长后需重分析
+    pub mirror_assumed: Vec<(u16, String)>,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
+    /// 基本块控制流图（拼接链拆段的循环判定用）
+    pub cfg: Rc<cfg::Cfg>,
+    /// 值未知时直接作 switch 键 / 条件跳转操作数的 int 族形参（按形参序号的位掩码，≥ 64 不计）
+    pub selector_params: u64,
 }
 
 impl Analysis {
@@ -319,6 +338,44 @@ type Step = Result<Flow, ()>;
 struct Interp<'a, O: Oracle> {
     oracle: &'a O,
     emit: Option<&'a mut Vec<(u32, Event)>>,
+    /// 已作出的「形参不是该类镜像」乐观答复
+    assumed: Vec<(u16, String)>,
+    /// 见 [`Analysis::selector_params`]
+    selects: u64,
+}
+
+impl<O: Oracle> Interp<'_, O> {
+    /// 引用相等（if_acmp）：null 性已知；两个类字面量（同名即同一镜像）；类字面量与只来自一个 Class 形参的值——
+    /// 形参值集不含该类镜像时不等（记为乐观答复）
+    fn select(&mut self, v: &V) {
+        if let V::Arg(i) = v {
+            if *i < 64 {
+                self.selects |= 1 << i;
+            }
+        }
+    }
+
+    fn ref_eq(&mut self, a: &V, b: &V) -> Option<bool> {
+        match (a.nonnull(), b.nonnull()) {
+            (Some(false), Some(false)) => return Some(true),
+            (Some(false), Some(true)) | (Some(true), Some(false)) => return Some(false),
+            _ => {}
+        }
+        let (c, v) = match (a, b) {
+            (V::Class(x, _), V::Class(y, _)) => return Some(x == y),
+            (V::Class(c, _), v) | (v, V::Class(c, _)) => (c, v),
+            _ => return None,
+        };
+        let V::Ref { src, .. } = v else { return None };
+        let [Src::Param(i)] = &src[..] else { return None };
+        if self.oracle.param_mirror(*i, c)? {
+            return None;
+        }
+        if !self.assumed.iter().any(|(j, x)| j == i && **x == **c) {
+            self.assumed.push((*i, c.to_string()));
+        }
+        Some(false)
+    }
 }
 
 fn pop(st: &mut State) -> Result<V, ()> {
@@ -472,6 +529,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         s.stack.push(V::Hi);
                     }
                     Const::String(x) => s.stack.push(V::Str(Rc::from(x.as_str()))),
+                    // 含孤立代理项：值不入常量格（格上字符串为 Rust 文本，无法无损表示），按非空 String 站点值
+                    Const::StringUtf16(_) => s.stack.push(site_ref(STRING, true, off)),
                     Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()), off)),
                     Const::MethodType(_) => s.stack.push(site_ref("java/lang/invoke/MethodType", true, off)),
                     Const::MethodHandle(_) => s.stack.push(site_ref("java/lang/invoke/MethodHandle", true, off)),
@@ -480,7 +539,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         push_typed(&mut s.stack, &ft, value_of(&ft, Src::Site(off)));
                     }
                 }
-                if matches!(c, Const::String(_) | Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(_) | Const::Dynamic(..)) {
+                if matches!(c, Const::String(_) | Const::StringUtf16(_) | Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(_) | Const::Dynamic(..)) {
                     self.ev(off, Event::Ldc(c.clone()));
                 }
             }
@@ -671,6 +730,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
             }
             0x99..=0x9e => {
                 let a = pop(s)?;
+                self.select(&a);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
                 let k = if let V::Int(a) = a { Some(cond(opc, a, 0)) } else { None };
                 return Ok(Flow::Cond(t, k));
@@ -678,6 +738,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
             0x9f..=0xa4 => {
                 let b = pop(s)?;
                 let a = pop(s)?;
+                self.select(&a);
+                self.select(&b);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
                 let k = match (a, b) {
                     (V::Int(a), V::Int(b)) => Some(cond(opc, a, b)),
@@ -689,11 +751,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let b = pop(s)?;
                 let a = pop(s)?;
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
-                let eq = match (a.nonnull(), b.nonnull()) {
-                    (Some(false), Some(false)) => Some(true),
-                    (Some(false), Some(true)) | (Some(true), Some(false)) => Some(false),
-                    _ => None,
-                };
+                let eq = self.ref_eq(&a, &b);
                 return Ok(Flow::Cond(t, eq.map(|e| if opc == 0xa5 { e } else { !e })));
             }
             op::GOTO | op::GOTO_W => {
@@ -703,6 +761,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::JSR | op::RET | op::JSR_W => return Err(()),
             op::TABLESWITCH | op::LOOKUPSWITCH => {
                 let key = pop(s)?;
+                self.select(&key);
                 let (default, cases): (u32, Vec<(i32, u32)>) = match &ins.operand {
                     Operand::TableSwitch { default, low, targets, .. } => {
                         (*default, targets.iter().enumerate().map(|(i, t)| (low + i as i32, *t)).collect())
@@ -853,7 +912,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
             op::INSTANCEOF => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
                 let v = pop(s)?;
-                s.stack.push(if v == V::Null { V::Int(0) } else { V::Top });
+                // 目标类型（非数组）无已实例化子类型时恒为 false：值只可能是 null 或其它类型的对象
+                let dead = matches!(v, V::Ref { .. }) && !c.starts_with('[') && !self.oracle.type_live(c);
+                s.stack.push(if v == V::Null || dead { V::Int(0) } else { V::Top });
                 self.ev(off, Event::InstanceOf(c.clone()));
             }
             0xc2 | 0xc3 => popn(s, 1)?,
@@ -934,7 +995,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_catch: vec![], conservative: true }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
 }
 
 /// 分析一个方法体
@@ -993,7 +1054,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         })
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
-    let mut interp = Interp { oracle, emit: None };
+    let mut interp = Interp { oracle, emit: None, assumed: vec![], selects: 0 };
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
         match entry.get_mut(&i) {
@@ -1070,7 +1131,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             let Some(hl) = &hlocals[hi] else { continue };
             if !handler_on[hi] {
                 if let Some(ct) = &h.catch_type {
-                    if !oracle.catch_live(ct) {
+                    if !oracle.type_live(ct) {
                         continue;
                     }
                 }
@@ -1105,19 +1166,33 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             }
         }
     }
-    let mut pending_catch = Vec::new();
+    let mut mirror_assumed = std::mem::take(&mut interp.assumed);
+    let selector_params = interp.selects;
+    drop(interp);
+    mirror_assumed.sort();
+    let mut pending_types: Vec<String> = insns
+        .iter()
+        .enumerate()
+        .filter(|(i, x)| reachable[*i] && x.opcode == op::INSTANCEOF)
+        .filter_map(|(_, x)| match &x.operand {
+            Operand::Class(c) if !c.starts_with('[') && !oracle.type_live(c) => Some(c.clone()),
+            _ => None,
+        })
+        .collect();
     for (hi, h) in code.exception_table.iter().enumerate() {
         if handler_on[hi] {
             events.push((h.handler, Event::Catch(h.catch_type.clone())));
         } else if let Some(ct) = &h.catch_type {
             let live_range = insns.iter().enumerate().any(|(i, x)| reachable[i] && x.offset >= h.start && x.offset < h.end);
             if live_range {
-                pending_catch.push(ct.clone());
+                pending_types.push(ct.clone());
             }
         }
     }
     events.sort_by_key(|e| e.0);
-    Some(Analysis { reachable, events, pending_catch, conservative: false })
+    pending_types.sort();
+    pending_types.dedup();
+    Some(Analysis { reachable, events, pending_types, mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params })
 }
 
 fn targets_empty(o: &Operand) -> bool {

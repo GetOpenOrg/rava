@@ -37,15 +37,16 @@ impl fmt::Display for Ident {
     }
 }
 
-/// `[A-Za-z_][A-Za-z0-9_]*`（不含单独的 `_`）或 `r#` + 该形态。
+/// 首字符字母或 `_`、其余字母数字或 `_`（不含单独的 `_`），或 `r#` + 该形态。字母数字按 Unicode：
+/// Java 标识符可含非 ASCII 字母（`möbiusFunction`），rustc 同样接受（非 ASCII 模块名另由发射层补 `#[path]`）。
 pub(crate) fn is_ident(s: &str) -> bool {
     let body = s.strip_prefix("r#").unwrap_or(s);
     let mut chars = body.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        Some(c) if c.is_alphabetic() || c == '_' => {}
         _ => return false,
     }
-    body != "_" && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    body != "_" && chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// 循环 / 带标签块的标签，渲染为 `'name`（如 `'l0`、`'b1`）。
@@ -70,7 +71,7 @@ mod tests {
 
     #[test]
     fn ident_validation() {
-        for ok in ["x", "_t0", "this", "r#type", "HashMap_Node", "__get_first"] {
+        for ok in ["x", "_t0", "this", "r#type", "HashMap_Node", "__get_first", "möbiusFunction", "MöbiusFunction"] {
             assert!(Ident::new(ok).is_ok(), "{ok}");
         }
         for bad in ["", "_", "0a", "a.b", "a b", "a::b", "x?", "r#"] {

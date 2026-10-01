@@ -28,6 +28,14 @@ pub enum Origin {
     Image,
 }
 
+/// 档案的模块视图：模块描述符（jmod / 模块化 jar）与 `META-INF/services` 配置
+pub struct ArchiveView {
+    pub origin: Origin,
+    pub module: Option<classfile::module::ModuleDecl>,
+    /// (服务二进制名, 配置文件字节)
+    pub services: Vec<(String, Vec<u8>)>,
+}
+
 pub struct ClassPath {
     /// 档案（读取需可变游标：并行发射下以互斥锁串行化）
     archives: Mutex<Vec<Archive>>,
@@ -156,6 +164,27 @@ impl ClassPath {
             }
         }
         None
+    }
+
+    /// 各档案的模块描述符与类路径服务配置（按档案序）。描述符解析失败记入 failures
+    pub fn module_views(&self) -> Vec<ArchiveView> {
+        let mut out = Vec::new();
+        let mut archives = lock(&self.archives);
+        for (origin, a) in self.origins.iter().zip(archives.iter_mut()) {
+            let module = match a.read_module_info() {
+                Ok(Some(b)) => match classfile::module::parse_module_info(&b) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        lock(&self.failures).push((format!("{}!module-info", a.path.display()), e.to_string()));
+                        None
+                    }
+                },
+                _ => None,
+            };
+            let services = a.service_files();
+            out.push(ArchiveView { origin: *origin, module, services });
+        }
+        out
     }
 
     pub fn failures(&self) -> Vec<(String, String)> {

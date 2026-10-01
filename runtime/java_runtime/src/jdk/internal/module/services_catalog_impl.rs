@@ -1,44 +1,45 @@
 use crate::prelude::*;
 use super::services_catalog::ServicesCatalog;
 
-// jdk.internal.module.ServicesCatalog 伴生（jdk/internal/module 已放行，其余成员按字节码翻译）。
+// jdk.internal.module.ServicesCatalog 伴生（jdk/internal/module 已放行，其余成员按字节码翻译，
+// findServices 亦然：`map.getOrDefault(service, List.of())`）。
 //
-// 本文件三项均为过渡类（handwritten-boundary.md §三，策略截断 / 因截断而补的手写），终态删除，
-// 当前被 jdk/internal/access、jdk/internal/loader 的截断阻塞（C1d 计划 §6.8 第 7 步起随之删除）：
-// - getServicesCatalogOrNull：字节码 `CLV.get(loader)` 经 jdk/internal/loader/AbstractClassLoaderValue
-//   （边界内，get / map 为存根）→ JavaLangAccess.createOrGetClassLoaderValueMap（整体手写的实现对象未实现）。
-// - findServices / __empty_layer_catalog：层目录由整体手写的 JavaLangAccess.getServicesCatalog(ModuleLayer)
-//   返回；该实现对象对闭包分析不透明（接口分派无 Java 实现类可达），其中对 ServicesCatalog.create 的调用
-//   不入闭包、map 字段无写入来源——按字节码的 findServices 会被折叠为对 null 调 getOrDefault。
+// getServicesCatalogOrNull 为过渡手写（handwritten-boundary.md §三，因截断而补的手写），终态删除：
+// 字节码 `CLV.get(loader)` 经 jdk/internal/loader/AbstractClassLoaderValue（边界内，get / map 为存根）
+// → JavaLangAccess.createOrGetClassLoaderValueMap（整体手写的实现对象未实现）。
 //
-// 语义：单二进制无模块层——加载器没有已登记的服务目录（getServicesCatalogOrNull 恒 null，消费方
-// ServiceLoader 的 ModuleServicesLookupIterator.iteratorFor 对 null 目录退空 provider 列表）；boot 层无命名模块，
-// 层目录为空目录。
+// 运行期加载器模型：全部类由 boot 定义（Class.getClassLoader 恒 null，Class.getModule 为进程唯一的
+// 模块且其加载器为 null），故模块 provider 全部登记在 boot 目录（BootLoader.getServicesCatalog）；
+// app / platform 加载器没有自己定义的模块 → 无目录（null；消费方 ServiceLoader 的
+// ModuleServicesLookupIterator.iteratorFor 对 null 目录退空列表，继续沿父链走到 boot）。
+// JDK 上 platform 模块（如 jdk.charsets）的 provider 在 platform 一步命中；此处在 boot 一步命中，
+// 同一 provider、同一迭代结果。
 impl ServicesCatalog {
     #[jvm_boundary]
     pub fn getServicesCatalogOrNull(_loader: crate::java::lang::ClassLoader) -> Result<ServicesCatalog> {
         Ok(Default::default())
     }
 
-    /// 层服务目录（`JavaLangAccess.getServicesCatalog(ModuleLayer)` 的返回值）：进程内唯一的空目录。
-    /// JDK 的 `ServiceLoader.LayerLookupIterator.providers` 不对目录判空，直接 `findServices`，
-    /// 故层目录须为非 null 对象（boot 层无命名模块 → 目录为空）。
-    pub fn __empty_layer_catalog() -> ServicesCatalog {
+    /// 引导服务目录：进程内唯一，首次请求时按分析器导出的服务事实装填
+    /// （closure.json seeds.services 的模块 provider，java_meta 造表、经 `meta::module_services` 读取）。
+    /// 装填走字节码翻译的 `create()` + `addProvider(provider 所在模块, 服务, provider)`，
+    /// 与 JDK 引导期 `ServicesCatalog.register(Module)` 按模块描述符 provides 登记的结果同构。
+    /// 同时充当 boot 层的层目录（`JavaLangAccess.getServicesCatalog(ModuleLayer)`：
+    /// JDK 引导层目录即全部模块 provides 的汇总）。
+    pub fn __boot_catalog() -> Result<ServicesCatalog> {
         crate::__process_static! {
-            static EMPTY: ServicesCatalog = {
-                let mut c = ServicesCatalog::default();
-                c._init_not_null();
-                c
-            };
+            static BOOT: RefCell<Option<ServicesCatalog>> = const { RefCell::new(None) };
         }
-        EMPTY.with(Clone::clone)
-    }
-
-    /// `findServices(String)`：单二进制无命名模块的 provides 声明——恒空列表
-    /// （JDK：`map.getOrDefault(service, List.of())` 在空目录上的结果）。
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V")]
-    pub fn findServices(&self, _service: String) -> Result<crate::java::util::List<Object>> {
-        let empty = crate::java::util::ArrayList::<Object>::new()?;
-        Ok(<crate::java::util::List<Object> as ::std::convert::From<_>>::from(empty))
+        if let Some(c) = BOOT.with(|b| b.borrow().clone()) {
+            return Ok(c);
+        }
+        let catalog = ServicesCatalog::create()?;
+        for (service, provider) in crate::meta::module_services() {
+            let service = crate::java::lang::Class::for_class(String::from(*service));
+            let provider = crate::java::lang::Class::for_class(String::from(*provider));
+            catalog.addProvider(provider.getModule()?, service, provider)?;
+        }
+        BOOT.with(|b| *b.borrow_mut() = Some(catalog.clone()));
+        Ok(catalog)
     }
 }

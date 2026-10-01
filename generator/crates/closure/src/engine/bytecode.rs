@@ -213,7 +213,7 @@ impl<'a> Engine<'a> {
     pub(super) fn ldc(&mut self, m: usize, off: u32, c: &Const) {
         let via = Via::method("ldc", m, Some(off));
         match c {
-            Const::String(_) => {
+            Const::String(_) | Const::StringUtf16(_) => {
                 self.instantiate(STRING, via);
             }
             Const::Class(n) => {
@@ -355,3 +355,4 @@ impl<'a> Engine<'a> {
         self.apply_hw(m, decl, &mh, via);
     }
 }
+

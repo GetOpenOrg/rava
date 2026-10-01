@@ -214,6 +214,18 @@ impl<'a> Engine<'a> {
                 self.touch(&c, Level::Type, Via::class("hw-type", cls));
             }
         }
+        // 接收者静态类型经访问器 / 方法返回推得的类（`mh.__get_form().__get_names()` 的 form 类型）：
+        // 文件中不以类型路径出现，但方法体按该类的访问器编译——同为 L1 需求
+        let mut recvs: Vec<SType> = Vec::new();
+        for f in hw.fns.values().chain(hw.objects.values().flat_map(|o| o.fns.values())) {
+            recvs.extend(f.fields.iter().filter_map(|fa| fa.recv.clone()));
+            recvs.extend(f.calls.iter().filter_map(|c| c.srecv.clone()));
+        }
+        let derived: BTreeSet<String> =
+            recvs.iter().flat_map(derived_nodes).filter_map(|s| self.stype_class(cls, s)).collect();
+        for c in derived {
+            self.touch(&c, Level::Type, Via::class("hw-type", cls));
+        }
     }
 
     /// 类型路径 → 存在的类；按路径找不到时去掉类型前的模块段重试（`module_t::Module` 这类改名的类文件模块）
@@ -475,7 +487,18 @@ impl<'a> Engine<'a> {
 
     /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首
     pub(super) fn site_ctx(&mut self, m: usize, off: u32) -> u32 {
-        let chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        self.site_ctx_in(m, off, NOCTX)
+    }
+
+    /// 调用点上下文，链尾接外层上下文 outer 的链（截断到 HEAP_DEPTH；outer = NOCTX 即 `site_ctx`）
+    pub(super) fn site_ctx_in(&mut self, m: usize, off: u32, outer: u32) -> u32 {
+        let mut chain = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        if outer != NOCTX {
+            for seg in self.obj_chain.get(&outer).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
+                chain.push('#');
+                chain.push_str(seg);
+            }
+        }
         if let Some(&id) = self.ids.get(chain.as_str()) {
             return id;
         }
@@ -507,7 +530,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return false };
         let live = |_: &str| true;
-        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![] });
         if a.conservative {
             return false;
         }
@@ -543,5 +566,33 @@ impl<'a> Engine<'a> {
             }
         }
         false
+    }
+}
+
+/// 接收者静态类型链上经字段 / 方法返回推得的各级节点（内层在前）；具名类型段已由类型路径覆盖，不列
+fn derived_nodes(s: &SType) -> Vec<&SType> {
+    let mut out = match s {
+        SType::Named(_) => return Vec::new(),
+        SType::Field(b, _) | SType::Call(b, _) => derived_nodes(b),
+        SType::Ret(..) => Vec::new(),
+    };
+    out.push(s);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_nodes_walk_accessor_chain() {
+        let named = SType::Named(TypeRef(vec!["Handle".into()]));
+        assert!(derived_nodes(&named).is_empty());
+        let form = SType::Field(Box::new(named.clone()), "form".into());
+        let names = SType::Call(Box::new(form.clone()), "names".into());
+        assert_eq!(derived_nodes(&names), vec![&form, &names]);
+        let ret = SType::Ret(TypeRef(vec!["Handle".into()]), "make".into());
+        let inner = SType::Field(Box::new(ret.clone()), "form".into());
+        assert_eq!(derived_nodes(&inner), vec![&ret, &inner]);
     }
 }

@@ -63,7 +63,7 @@ fn ctor_writes_plain(cf: &ClassFile, name: &str, desc: &str) -> bool {
             !hit || match (&w[0].opcode, &w[0].operand) {
                 (&ALOAD, classfile::Operand::Local(i)) => *i > 0,
                 (op, _) if (ALOAD_0 + 1..=ALOAD_3).contains(op) => true,
-                (_, classfile::Operand::Ldc(Const::String(_))) => true,
+                (_, classfile::Operand::Ldc(Const::String(_) | Const::StringUtf16(_))) => true,
                 _ => false,
             }
         })
@@ -125,7 +125,7 @@ impl<'a> Engine<'a> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
-        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![] });
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![] });
         // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
         if let Some((outer, _)) = self.cur_site {
             for (_, e) in &ca.events {
