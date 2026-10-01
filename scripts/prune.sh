@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 清理共享编译缓存中的过期产物（跑批间调用，防磁盘写满）。
 #
-# 每个测试在共享 CARGO_TARGET_DIR 下各留一份 java_runtime 库（0.5–1G，包版本
+# 每个测试在共享 CARGO_TARGET_DIR 下各留一份 java_runtime / java_body_k / java_meta 库（拆层后单个
+# 产物多在 50M 以下，须按 crate 名清；包版本
 # 按 scratch 唯一化，互不复用）与测试二进制（50–500M）；scratch 语义下源码每轮
 # 重生成，这些产物下一轮必然重建，删除无损。宏 crate 与第三方依赖缓存保留。
 #
@@ -23,10 +24,13 @@ for t in "$BUILD"/jdk*/target "$BUILD"/target; do
     [ -d "$t/debug" ] || continue
     if [ "$BUSY" = 1 ]; then
         find "$t/debug" -maxdepth 2 -type f -size +50M -mmin +20 -delete 2>/dev/null
-        find "$t/debug/deps" -maxdepth 1 \( -name 'libjava_runtime-*' -o -name 'java_runtime-*' \) \
+        find "$t/debug/deps" -maxdepth 1 \( -name 'libjava_runtime-*' -o -name 'java_runtime-*' \
+            -o -name 'libjava_body_*' -o -name 'java_body_*' -o -name 'libjava_meta-*' -o -name 'java_meta-*' \) \
             -mmin +20 -delete 2>/dev/null
     else
-        rm -f "$t"/debug/deps/libjava_runtime-* "$t"/debug/deps/java_runtime-* 2>/dev/null
+        rm -f "$t"/debug/deps/libjava_runtime-* "$t"/debug/deps/java_runtime-* \
+            "$t"/debug/deps/libjava_body_* "$t"/debug/deps/java_body_* \
+            "$t"/debug/deps/libjava_meta-* "$t"/debug/deps/java_meta-* 2>/dev/null
         find "$t/debug" -maxdepth 2 -type f -size +50M -delete 2>/dev/null
     fi
 done
