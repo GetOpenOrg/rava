@@ -1013,6 +1013,11 @@ valueOf / 缓存 `<clinit>` 与经 Object 接收者可达的 toString / hashCode
 FloatToDecimal / DoubleToDecimal / MathUtils），其余 8 例（HelloWorld、TestStreamAdvanced、CollectorsDemo、DeepCopy、Digester、
 TestFilesApi、TestNetworkInterface、ComparatorFactory）类 / 方法集合逐项相同；9 例 dyn miss 均为 0。main.py TestDynamicProxy MATCH（33 行与 expected 一致）。
 
+**合入 rust-closure-analyzer f00b6858（含 perf2）后验收（合并提交 6e6ab7cd）**：冲突仅 `runtime/java_runtime/build.rs`（取对方，CpVal::W 移植到
+java_meta）。closure 62 / emit 35+1+2 单测通过；main.py ComparatorFactory、EisensteinPrimes、TestStreamAdvanced、TestNetworkInterface、
+DateTest、TestDynamicProxy 6 例全部 MATCH。DateTest 闭包（934 类 / 5403 方法）的 610 个折叠点中没有任何 null_recv 涉及
+`LocaleData.getDateFormatData`（c3 抽查所见的恒 null 违约由 S3 修复覆盖）。
+
 **driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
