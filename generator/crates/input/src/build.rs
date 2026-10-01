@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::{ClosureFacts, JcaService};
+use crate::facts::{ClosureFacts, JcaService, SysPropFacts};
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -109,6 +109,10 @@ pub struct EmitInput {
     /// 已实例化的类（分析器 `instantiated`）：槽是否保留按实例化类实际选中的实现判定
     pub instantiated: BTreeSet<String>,
     pub jca_seeds: Vec<JcaService>,
+    /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
+    pub module_services: Vec<(String, String)>,
+    /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
+    pub system_properties: SysPropFacts,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -407,6 +411,8 @@ impl<'a> BuildInput<'a> {
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
             jca_seeds: f.seeds.jca.clone(),
+            module_services: f.seeds.module_services.clone(),
+            system_properties: f.system_properties.clone(),
             module_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,

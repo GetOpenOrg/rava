@@ -251,6 +251,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
+    entry::write_closure_tables(ctx, &mut w, out_dir)?;
     perf.mark("write");
     mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     perf.mark("mod_tree");

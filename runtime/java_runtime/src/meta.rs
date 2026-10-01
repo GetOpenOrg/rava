@@ -107,9 +107,9 @@ pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])] {
     unsafe { RECORD_COMPONENTS }
 }
-/// 模块服务 (服务, provider)：closure.json seeds.services 的模块 provider，事实序。
+/// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
 pub fn module_services() -> &'static [(&'static str, &'static str)] { unsafe { MODULE_SERVICES } }
-/// VM 初始系统属性的常量键（键, 值）：closure.json system_properties.values，与分析器折叠同源。
+/// VM 初始系统属性的常量键（键, 值）：闭包事实 system_properties.values，与分析器折叠同源。
 pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe { VM_CONST_PROPERTIES } }
-/// VM 初始系统属性的动态键（由手写层取宿主值）：closure.json system_properties.dynamic。
+/// VM 初始系统属性的动态键（由手写层取宿主值）：闭包事实 system_properties.dynamic。
 pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }
