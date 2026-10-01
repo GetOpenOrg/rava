@@ -413,13 +413,22 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     if o.stop_after == Stage::Emit {
         return Ok(());
     }
-    let c = CompileArgs { release: o.release, target_dir: o.target_dir.clone(), build_timeout: o.build_timeout };
+    let c = CompileArgs {
+        release: o.release,
+        target_dir: o.target_dir.clone(),
+        build_timeout: o.build_timeout,
+        keep_artifacts: o.keep_artifacts,
+    };
     let exe = compile_stage(out, repo, &emit, &c, st)?;
     if o.stop_after == Stage::Compile {
         return Ok(());
     }
     st.stage = Stage::Run;
-    cargo::run(&exe)
+    let ran = cargo::run(&exe);
+    if !o.keep_artifacts {
+        crate::artifacts::prune_scratch(out, false)?;
+    }
+    ran
 }
 
 pub fn run_emit(args: &Args) -> Result<(), String> {

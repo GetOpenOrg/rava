@@ -22,7 +22,7 @@
     python3 scripts/run_tests.py --deny stub-hit         # run 失败的 stub 子族 → 整体失败
     python3 scripts/run_tests.py --deny fallback         # 任一静默兜底点非零 → 整体失败（K-6b 防线）
     python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
-    python3 scripts/run_tests.py --keep-artifacts               # 保留通过测试的生成物（缺省 PASS 即清理）
+    python3 scripts/run_tests.py --keep-artifacts               # 保留生成物（缺省逐例删编译产物、PASS 删 scratch）
     python3 scripts/run_tests.py --jdk 21 --prune-passed        # 只清理：通过清单测试的遗留生成物 + java_runtime 中间缓存
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
@@ -495,20 +495,14 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
     return r.returncode == 0, (r.stdout + r.stderr)
 
 
-# ── 通过测试的生成物清理（默认开启，--keep-artifacts 关闭）──────────────────────
+# ── 生成物清理（默认开启，--keep-artifacts 关闭）──────────────────────────────
 #
-# 每个测试的生成物：scratch 工作区 build/jdkN/<bin>/；共享 target 里本测试独有的编译产物
-# （可执行文件、该测试的 java_runtime 库、build.rs 编译 / 输出目录、指纹、.d / .rcgu.o）；
-# 以往失败留下的 logs/<bin>.build.log / .run.log。共享依赖（syn / quote / parking_lot /
-# libc / rava_macros 等）跨测试复用，不属于任何单个测试，永不清理。
-#
-# 归属判定不靠文件名猜测：rava compile 写出的 <scratch>/build_artifacts.json（cargo JSON 产物中
-# manifest 位于本测试 scratch 内的包：java_runtime / 实现层 / 用户 bin crate / lib crate），
-# 再按 `<crate>-<hash>` 扩展到同哈希的 .d / .rcgu.o 与 .fingerprint 目录。
-# 失败测试（转译 / 编译 / 运行 / 输出不一致）不清理，全部生成物保留供分析。
+# 编译产物由 rava 逐例清理（归属读 <scratch>/build_artifacts.json，见 driver artifacts.rs）：
+# `rava compile` 链接后即删本例专属中间产物、只留可执行文件；本例运行（含失败分类重跑）完成后
+# `rava prune <scratch>` 删可执行文件。共享依赖（rava_macros 等）不在清单内，永不删除。
+# 通过测试另删 scratch 与残留失败日志；失败测试的 scratch 源码与日志保留供分析。
 
 KEEP_ARTIFACTS = False
-_BUILD_ARTIFACTS: dict[str, set] = {}
 
 
 def _read_json(p: Path) -> dict:
@@ -518,40 +512,20 @@ def _read_json(p: Path) -> dict:
         return {}
 
 
-def _expand_artifact(p: Path) -> list[Path]:
-    """产物文件 → 同 `<crate>-<hash>` 前缀的兄弟文件与指纹目录。"""
-    out = [p]
-    name = p.name
-    if name.startswith("lib"):
-        name = name[3:]
-    stem = name.split(".", 1)[0]                      # <crate>-<hash>
-    if "-" in stem and p.parent.name == "deps":
-        out.extend(p.parent.glob(stem + "*"))         # .d / .rcgu.o 等同哈希兄弟文件
-        # 指纹目录按「包名-哈希」命名（bin crate 的包名可与 bin 名不同）→ 按哈希匹配
-        out.extend((p.parent.parent / ".fingerprint").glob("*-" + stem.rsplit("-", 1)[1]))
-    elif p.parent.parent.name == "build":             # build/<crate>-<hash>/build-script-build
-        out.append(p.parent)
-        out.extend((p.parent.parent.parent / ".fingerprint").glob(
-            "*-" + p.parent.name.rsplit("-", 1)[1]))
-    elif p.parent.name == "build" and "-" in p.name:   # build/<crate>-<hash>/（build.rs 执行输出）
-        out.extend((p.parent.parent / ".fingerprint").glob("*-" + p.name.rsplit("-", 1)[1]))
-    elif p.parent.name == PROFILE_DIR:                 # target/debug/<bin>（deps 内原件的硬链接）
-        out.append(p.with_name(p.name + ".d"))
-    return out
+def _prune_case(class_name: str) -> None:
+    """本例运行完成：删除其剩余编译产物（可执行文件；KEEP_ARTIFACTS 时跳过）。"""
+    if KEEP_ARTIFACTS:
+        return
+    _run([str(RAVA), "prune", str(_test_workspace(_to_bin_name(class_name)))], cwd=ROOT)
 
 
 def _cleanup_passed(class_name: str) -> None:
-    """通过测试：删除其 scratch、独有编译产物与残留失败日志（KEEP_ARTIFACTS 时跳过）。"""
+    """通过测试：删除其 scratch 与残留失败日志（KEEP_ARTIFACTS 时跳过）。"""
     if KEEP_ARTIFACTS:
         return
     import shutil
     bin_name = _to_bin_name(class_name)
-    targets: list[Path] = [_test_workspace(bin_name),
-                           LOGS_DIR / f"{bin_name}.build.log",
-                           LOGS_DIR / f"{bin_name}.run.log"]
-    for a in _BUILD_ARTIFACTS.pop(bin_name, set()):
-        targets.extend(_expand_artifact(a))
-    for t in targets:
+    for t in (_test_workspace(bin_name), LOGS_DIR / f"{bin_name}.build.log", LOGS_DIR / f"{bin_name}.run.log"):
         try:
             if t.is_dir() and not t.is_symlink():
                 shutil.rmtree(t, ignore_errors=True)
@@ -612,16 +586,16 @@ def _prune_passed(jdk_major: int | None) -> int:
 
 
 def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
-    """`rava compile <scratch>`（共享 target 缓存）。返回 (ok, 失败摘要)；结果读 build_status.json，
-    产物清单读 build_artifacts.json（通过测试的清理用）。"""
-    bin_name = _to_bin_name(class_name)
+    """`rava compile <scratch>`（共享 target 缓存）。返回 (ok, 失败摘要)；结果读 build_status.json。
+    缺省链接后 rava 即删本例中间产物（只留可执行文件），KEEP_ARTIFACTS 时透传 --keep-artifacts。"""
     cmd = [str(RAVA), "compile", str(out_dir), "--target-dir", str(SHARED_TARGET)]
     if PROFILE_DIR == "release":
         cmd.append("--release")
+    if KEEP_ARTIFACTS:
+        cmd.append("--keep-artifacts")
     if BUILD_TIMEOUT is not None:
         cmd += ["--build-timeout", str(BUILD_TIMEOUT)]
     r = _run(cmd, cwd=ROOT)
-    _BUILD_ARTIFACTS[bin_name] = {Path(p) for p in _read_json(out_dir / "build_artifacts.json").get("paths") or []}
     st = _read_json(out_dir / "build_status.json")
     if st.get("ok") and st.get("stage") == "compile" and r.returncode == 0:
         return True, ""
@@ -1180,43 +1154,46 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
 
         t0 = time.perf_counter()
         status, actual = _run_bin(class_name)
-        t_run = time.perf_counter() - t0
-        t_run_total += t_run
-        timing = f"transpile {fmt_dur(t_transpile)}, build {_fmt_build_dur(t_build)}, run {fmt_dur(t_run)}"
-        if status == "timeout":
-            _pline(name_w, "FAIL", java_file.relative_to(E2E),
-                   f"— run timeout (> {fmt_dur(RUN_TIMEOUT)})  ({timing})",
-                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
-            _fail("run-timeout", str(rel))
-            continue
-        if status == "error":
-            # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
-            fam, detail = _classify_run_failure(class_name)
-            run_sub[class_name] = (fam, detail)
-            _pline(name_w, "FAIL", java_file.relative_to(E2E),
-                   f"— run error  ({timing})",
-                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
-            _fail("run", str(rel))
-            continue
+        try:
+            t_run = time.perf_counter() - t0
+            t_run_total += t_run
+            timing = f"transpile {fmt_dur(t_transpile)}, build {_fmt_build_dur(t_build)}, run {fmt_dur(t_run)}"
+            if status == "timeout":
+                _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                       f"— run timeout (> {fmt_dur(RUN_TIMEOUT)})  ({timing})",
+                       aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                _fail("run-timeout", str(rel))
+                continue
+            if status == "error":
+                # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
+                fam, detail = _classify_run_failure(class_name)
+                run_sub[class_name] = (fam, detail)
+                _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                       f"— run error  ({timing})",
+                       aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                _fail("run", str(rel))
+                continue
 
-        diff = _diff(expected, actual, class_name)
-        if diff:
-            _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
-            _pline(name_w, "FAIL", java_file.relative_to(E2E),
-                   f"— output mismatch · diff {_n_diff} 行  ({timing})",
-                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
-            print("".join(diff[:40]))
-            if len(diff) > 40:
-                print(f"  … ({len(diff) - 40} more lines)")
-            _fail("output", str(rel))
-        else:
-            _pline(name_w, "PASS", java_file.relative_to(E2E),
-                   f"({timing})",
-                   aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
-            passed += 1
-            ratchet.record(str(rel), True)
-            if pratchet is not None:
-                pratchet.record(str(rel), True)
+            diff = _diff(expected, actual, class_name)
+            if diff:
+                _n_diff = sum(1 for l in diff if l[:1] in "+-" and not l.startswith(("+++", "---")))
+                _pline(name_w, "FAIL", java_file.relative_to(E2E),
+                       f"— output mismatch · diff {_n_diff} 行  ({timing})",
+                       aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                print("".join(diff[:40]))
+                if len(diff) > 40:
+                    print(f"  … ({len(diff) - 40} more lines)")
+                _fail("output", str(rel))
+            else:
+                _pline(name_w, "PASS", java_file.relative_to(E2E),
+                       f"({timing})",
+                       aux=_aux_full(_cls_aux, _raw_per, _eq_sum, bin_name, _eta), prog=prog)
+                passed += 1
+                ratchet.record(str(rel), True)
+                if pratchet is not None:
+                    pratchet.record(str(rel), True)
+        finally:
+            _prune_case(class_name)  # 本例运行（含失败分类重跑）完成：删可执行文件
 
     total = passed + failed + skipped
     elapsed = time.perf_counter() - t_all
@@ -1421,6 +1398,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
             _a = aux_by_file.get(java_file) or ("", 0, 0)
             _aux = _aux_full(_a[0], _a[2], _a[1],
                              _to_bin_name(_class_name(java_file)))
+            _prune_case(_class_name(java_file))
             if not ok and err_msg:
                 _pline(name_w, "FAIL", java_file.relative_to(E2E), f"— {err_msg}", aux=_aux)
                 ratchet.record(str(java_file.relative_to(ROOT)), False)
@@ -1574,8 +1552,8 @@ def main():
                     help="只清理不跑测试：删除通过清单中测试的遗留生成物（scratch / 可执行文件 / 日志）"
                          "与全部 java_runtime 中间编译缓存；失败测试的生成物与共享依赖保留")
     ap.add_argument("--keep-artifacts",  action="store_true",
-                    help="保留通过测试的生成物（缺省：PASS 即删除其 scratch 与独有编译产物，"
-                         "失败测试的生成物始终保留）")
+                    help="保留生成物（缺省：每例编译产物由 rava 逐例删除——链接后删中间产物、"
+                         "运行后删可执行文件；PASS 另删 scratch，失败测试的 scratch 与日志保留）")
     ap.add_argument("--batch",           metavar="K/N", default=None,
                     help="批跑：按发现序均分 N 批取第 K 批（1-based，如 --batch 3/10）；"
                          "分批基于稳定排序，与 --record-passed 叠加时批内容不随通过集增长漂移")
