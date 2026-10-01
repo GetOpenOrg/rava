@@ -18,7 +18,8 @@ use std::rc::Rc;
 
 use classfile::descriptor::{class_refs, parse_field, parse_method, FieldType, MethodDesc};
 use classfile::{acc, ClassFile, Const, MemberRef, MethodHandle};
-use indexmap::IndexMap;
+/// 插入序映射（遍历按插入序，与哈希无关）；哈希用引擎的 Fx
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<sets::FxHasher>>;
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
@@ -363,7 +364,7 @@ struct Hub {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum HubSet {
     Open(u32),
-    Exact(Vec<u32>),
+    Exact(Rc<[u32]>),
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
@@ -455,7 +456,8 @@ pub struct Engine<'a> {
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
     /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
-    hub_last: HashMap<(usize, u32), u32>,
+    /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
+    hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）

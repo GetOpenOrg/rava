@@ -102,6 +102,8 @@ pub(super) struct Stats {
     pub(super) site_reruns: u64,
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
+    /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
+    pub(super) ceval: [u64; 3],
     /// 各阶段结束时的峰值 RSS（MB）
     rss_marks: Vec<(&'static str, u64)>,
 }
@@ -124,6 +126,7 @@ impl Default for Stats {
             site_reruns: 0,
             lcall_reruns: 0,
             aux_analyses: 0,
+            ceval: [0; 3],
             rss_marks: Vec::new(),
         }
     }
@@ -270,6 +273,7 @@ impl<'a> Engine<'a> {
             "analyses": total,
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
+            "ceval_memo": s.ceval,
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,

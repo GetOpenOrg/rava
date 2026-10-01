@@ -25,7 +25,7 @@ impl<'a> Engine<'a> {
                 });
                 let pending = match parent {
                     Some(p) => rs.iter().copied().filter(|x| !self.hubs[p as usize].recvs.contains(x)).collect(),
-                    None => rs.clone(),
+                    None => rs.to_vec(),
                 };
                 (None, pending, parent)
             }
@@ -213,13 +213,14 @@ impl<'a> Engine<'a> {
             return;
         }
         let site = self.hubs[h as usize].site.clone();
-        let links: Vec<_> = self.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect();
+        // 调用点表只在逐调用点派发时用到（经枢纽中转的目标不逐调用点接边）
+        let links = |e: &Self| -> Vec<_> { e.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect() };
         let ret = self.hubs[h as usize].ret;
         // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             self.hubs[h as usize].lambdas.push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links {
+            for ((m, off), (a, res, cv)) in links(self) {
                 if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                     continue;
                 }
@@ -251,7 +252,7 @@ impl<'a> Engine<'a> {
         if !self.hub_plain(t) {
             self.hubs[h as usize].special.entry(t).or_default().push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links {
+            for ((m, off), (a, res, cv)) in links(self) {
                 self.call_vals = cv;
                 self.edge(m, off, t, Recv::Exact(r), &a, ret, res);
             }

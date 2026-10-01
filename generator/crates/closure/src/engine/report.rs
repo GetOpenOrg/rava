@@ -9,7 +9,7 @@ impl<'a> Engine<'a> {
     /// 按方法标签排序；只含有折叠内容的字节码方法
     /// 同一成员的各克隆合并：任一克隆可达即可达，常量须在其可达的全部克隆里一致
     pub fn folds(&self) -> Vec<Fold> {
-        let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::new();
+        let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::default();
         for (i, mn) in self.methods.values().enumerate() {
             if mn.kind == Kind::Bytecode {
                 groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
@@ -48,7 +48,7 @@ impl<'a> Engine<'a> {
             .iter()
             .filter(|c| {
                 all.iter().flat_map(|a| a.events.iter()).any(|(pc, e)| {
-                    *pc == c.0 && matches!(e, Event::Invoke { opcode, mref, iface, .. } if self.ctx.read_spec(*opcode, mref, *iface, None).is_some())
+                    *pc == c.0 && matches!(e, Event::Invoke { opcode, mref, iface, .. } if self.ctx.read_spec(None, *opcode, mref, *iface, None).is_some())
                 })
             })
             .map(|c| c.0)

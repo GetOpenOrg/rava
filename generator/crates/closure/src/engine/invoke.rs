@@ -100,7 +100,7 @@ impl<'a> Engine<'a> {
             self.enumerate_fields(cls);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
-            self.open_fields_all();
+            self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
     }
 
@@ -123,7 +123,7 @@ impl<'a> Engine<'a> {
             }
             None => {
                 if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all();
+                    self.open_fields_all(false, self.ctx.deser.get());
                 }
             }
         }
@@ -218,9 +218,17 @@ impl<'a> Engine<'a> {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
                     }
                 } else {
-                    let parent = self.hub_last.get(&(m, off)).copied();
-                    let h = self.hub(mref, iface, owner, HubSet::Exact(recv), parent, &site, &md, via.clone());
-                    self.hub_last.insert((m, off), h);
+                    // 同一调用点、同一接收者集合即同一枢纽键（成员与接口标志由该偏移的指令决定）
+                    let last = self.hub_last.get(&(m, off)).cloned();
+                    let h = match last {
+                        Some((h, rs)) if *rs == recv[..] => h,
+                        last => {
+                            let rs: Rc<[u32]> = recv.into();
+                            let h = self.hub(mref, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
+                            self.hub_last.insert((m, off), (h, rs));
+                            h
+                        }
+                    };
                     self.link_hub(h, m, off, &a, res);
                 }
                 for o in s.open.iter() {
@@ -289,16 +297,20 @@ impl<'a> Engine<'a> {
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
         // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
+        let mut objs: Vec<u32> = Vec::new();
         for x in &s.classes {
             if self.objs.contains_key(&x) {
-                if dedup && !self.recv_mark(m, off, x) {
-                    continue;
-                }
-                let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
-                self.edge(m, off, t, Recv::Exact(x), a, ret, res);
+                objs.push(x);
             } else {
                 rest.classes.insert(x);
             }
+        }
+        if dedup {
+            objs = self.recv_mark_all(m, off, &objs);
+        }
+        for x in objs {
+            let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
+            self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
             let t = self.method(key, via);

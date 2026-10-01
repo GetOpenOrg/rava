@@ -4,7 +4,6 @@
 //! 都成立——即从追加点出发、不经过任何清空点能否回到追加点（能 = 上一轮内容可能残留，拆段不成立）。
 //! 异常边按保守处理：块被某 try 区间覆盖时，从块首即可进入其处理器（块内清空点之前也可能抛出）。
 
-use std::collections::HashMap;
 
 use classfile::{insn, Code, Operand};
 
@@ -27,7 +26,8 @@ impl Cfg {
         if n == 0 {
             return Cfg::default();
         }
-        let idx: HashMap<u32, usize> = insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
+        // 指令按偏移升序：偏移 → 下标用二分（免逐次分析建表）
+        let idx = |off: &u32| insns.binary_search_by_key(off, |x| x.offset).ok();
         let targets = |o: &Operand| -> Vec<u32> {
             match o {
                 Operand::Branch(t) => vec![*t],
@@ -41,7 +41,7 @@ impl Cfg {
         for (i, ins) in insns.iter().enumerate() {
             let ts = targets(&ins.operand);
             for t in &ts {
-                if let Some(&j) = idx.get(t) {
+                if let Some(j) = idx(t) {
                     leader[j] = true;
                 }
             }
@@ -50,7 +50,7 @@ impl Cfg {
             }
         }
         for h in &code.exception_table {
-            if let Some(&j) = idx.get(&h.handler) {
+            if let Some(j) = idx(&h.handler) {
                 leader[j] = true;
             }
         }
@@ -60,7 +60,7 @@ impl Cfg {
         for (b, &s) in first.iter().enumerate() {
             let e = first.get(b + 1).map_or(n, |&x| x) - 1;
             let last = &insns[e];
-            let mut succ: Vec<usize> = targets(&last.operand).iter().filter_map(|t| idx.get(t)).map(|&j| block_of_insn(j)).collect();
+            let mut succ: Vec<usize> = targets(&last.operand).iter().filter_map(|t| idx(t)).map(block_of_insn).collect();
             if !insn::is_terminal(last.opcode) && e + 1 < n {
                 succ.push(b + 1);
             }
@@ -71,8 +71,8 @@ impl Cfg {
                 .exception_table
                 .iter()
                 .filter(|h| h.start <= hi && lo < h.end)
-                .filter_map(|h| idx.get(&h.handler))
-                .map(|&j| block_of_insn(j))
+                .filter_map(|h| idx(&h.handler))
+                .map(block_of_insn)
                 .collect();
             hs.sort_unstable();
             hs.dedup();
