@@ -26,6 +26,7 @@ impl<'a> Engine<'a> {
             let Some(cf) = self.h.class(&key.owner) else { continue };
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
+            self.init_reads(&key.owner, code, &mut f);
             self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &mut f);

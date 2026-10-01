@@ -225,6 +225,24 @@ impl Engine<'_> {
         }
     }
 
+    /// 可能触发类初始化的 getstatic 不导出为常量（JVMS §5.5）：字段声明类（类则连同父类链）中有不在当前类
+    /// 父类链上（当前类初始化时父类链已初始化）且带 `<clinit>` 的——常量替换会丢掉这次初始化的副作用。
+    /// 不可达区间照常导出，发射层按真实读取翻译（访问器触发初始化）
+    pub(super) fn init_reads(&self, owner: &str, code: &classfile::Code, f: &mut Fold) {
+        let mine: Vec<String> = self.h.superclasses(owner).iter().map(|c| c.name.clone()).collect();
+        f.consts.retain(|c| {
+            if c.1 != classfile::op::GETSTATIC {
+                return true;
+            }
+            let Some(x) = code.insns.iter().find(|x| x.offset == c.0) else { return true };
+            let classfile::Operand::Field(fr) = &x.operand else { return true };
+            let Some(site) = self.h.resolve_field(&fr.owner, &fr.name, &fr.desc) else { return true };
+            // 接口初始化不连带父接口；类初始化连带父类链，已在当前类父类链上的不再触发
+            let chain = if site.class.is_interface() { vec![site.class.clone()] } else { self.h.superclasses(&site.class.name) };
+            !chain.iter().any(|c| !mine.contains(&c.name) && c.methods.iter().any(|m| m.is_clinit()))
+        });
+    }
+
     /// 定论不返回的活调用点与因此另外不可达的区间：唯一目标为字节码方法（无清单返回事实 / 派生结果），
     /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）。
     /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）；
