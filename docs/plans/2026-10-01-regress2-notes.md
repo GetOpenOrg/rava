@@ -21,3 +21,15 @@
 - 修法（`instr/src/invoke/bind.rs`）：裸类型变量形参收到顶层 Object 实参且别处未绑定时绑定为 Object
   （存储擦除下实例化只是视图，Object 恒可行；取调用方 T 会引入 Java 不做的检查转换）。
 - 验证：TestNestedGeneric 通过；HelloWorld / GenericClassDemo / GenericMethodTest / TestRawTypes / ArrayListTest 单例通过（编译 + 输出）。
+
+## 3. TestClassNaming / TestClassLiteral —— 已修
+
+- 现象：TestClassNaming 编译 E0599（main.rs 类初始化钩子引用不透明类 `__class_init`）；修掉后 / TestClassLiteral
+  输出不符：`isAssignableFrom` 恒 false、`getEnclosingClass` / `isMemberClass` 等反射结果缺失。
+- 根因：L1 不透明类发射（C3 第 6 项）只发 `#[binary_name]`，丢了类级元数据（all_supertypes / inner_classes /
+  enclosing_method / modifiers / super_class / interfaces 等），java_meta 构建脚本建不出层次表与内部类表；
+  而类镜像是非 null 的 Class，镜像上的反射查询读的正是这些表。另 `class_init_hooks` 未排除不透明类。
+- 修法（emit）：`head::opaque_metadata_lines` 对不透明类照发类级元数据（去掉 has_clinit / 注解原始字节），
+  `opaque.rs` 写入 `java_class_opaque!`（宏解析本就忽略未知外层属性）；`entry.rs` 钩子跳过不透明类（用户 / JDK 两侧）。
+- 验证：TestClassNaming / TestClassLiteral / HelloWorld 单例与期望一致；`cargo test --release -- --test-threads=1` 通过。
+  TestAnnoValues 编译错误随之消失，运行期另有根因（见 4）。

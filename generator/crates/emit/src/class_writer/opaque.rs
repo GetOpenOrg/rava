@@ -3,6 +3,7 @@
 //! 分析器判为 L1 的类只作类型出现、值只可能是 null（其全部非 L1 子类型为空，见分析器
 //! `levels.rs`）：不发字段、方法、vtable trait、类初始化，只保留类型身份——签名 / checkcast /
 //! instanceof 照常引用；向全部传递超类型的 upcast 由宏按 Object 边界展开。
+//! 类级元数据（超类型、修饰符、内部类 / 外围方法、record 等）照发：类镜像经 java_meta 表读取。
 
 use std::collections::BTreeSet;
 
@@ -65,7 +66,7 @@ pub fn opaque_text(
     parts.extend(cross_imports);
     parts.push(String::new());
     parts.push("rava_macros::java_class_opaque! {".into());
-    parts.push(format!("    #[binary_name = \"{}\"]", ci.name()));
+    parts.extend(super::head::opaque_metadata_lines(ctx, ci).into_iter().map(|l| format!("    {l}")));
     parts.push(format!("    pub struct {sname}{generics}{bound};"));
     parts.push("}".into());
     parts.push(String::new());
