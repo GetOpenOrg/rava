@@ -35,8 +35,9 @@ const IF_ACMPNE: u8 = 0xa6;
 pub enum NInsn {
     /// 原始 / 改写后的 JVM 指令
     Op(Insn),
-    /// getfield 折叠点：弹出 receiver 后执行装载指令 `load`
-    FoldField { offset: u32, load: Insn },
+    /// getfield 折叠点：receiver 照常判空（JVMS §6.5，null 抛 NullPointerException）后执行装载指令
+    /// `load`；`get` 为原 getfield 指令（字段属主决定 receiver 视图）
+    FoldField { get: Insn, load: Insn },
     /// invoke 折叠点：调用 `call` 照常翻译、丢弃返回值，再执行装载指令 `load`
     FoldCall { call: Insn, load: Insn },
     /// 接收者恒为 null 的虚调用点：弹出实参与接收者后抛 NullPointerException，`call` 不翻译
@@ -49,7 +50,7 @@ impl NInsn {
     pub fn offset(&self) -> u32 {
         match self {
             NInsn::Op(i) => i.offset,
-            NInsn::FoldField { offset, .. } => *offset,
+            NInsn::FoldField { get, .. } => get.offset,
             NInsn::FoldCall { call, .. } | NInsn::NullRecv { call } | NInsn::NoReturn { call } => call.offset,
         }
     }
@@ -187,7 +188,7 @@ fn const_insn(ins: &Insn, c: &FoldConst, where_: &str) -> Result<NInsn, InputErr
     let load = push_insn(ins.offset, c, where_)?;
     Ok(match c.kind {
         ReadKind::GetStatic => NInsn::Op(load),
-        ReadKind::GetField => NInsn::FoldField { offset: ins.offset, load },
+        ReadKind::GetField => NInsn::FoldField { get: ins.clone(), load },
         ReadKind::Invoke => NInsn::FoldCall { call: ins.clone(), load },
     })
 }
