@@ -253,9 +253,6 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(rules.domain('Main'), 'user')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class NativeConfigTest(unittest.TestCase):
     SETTINGS = ("Property settings:\n"
@@ -275,3 +272,7 @@ class NativeConfigTest(unittest.TestCase):
                   'jdk.reflect.useNativeAccessorOnly': 'true'}
         keys = dc.parse_property_keys(self.SETTINGS)
         self.assertEqual(dc.native_config_args(values, keys), ['-Djdk.reflect.useNativeAccessorOnly=true'])
+
+
+if __name__ == '__main__':
+    unittest.main()
