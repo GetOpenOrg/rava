@@ -41,7 +41,7 @@ impl Perf {
 
     /// 记录一个在别处计时、已结束的子阶段（紧接当前阶段起点之后；起点随之后移）
     pub fn mark_sub(&mut self, name: &'static str, elapsed: Duration) {
-        self.phases.push(PhaseMark { name, elapsed, peak_rss_mb: closure::engine::peak_rss_mb() });
+        self.phases.push(PhaseMark { name, elapsed, peak_mem_mb: closure::engine::peak_mem_mb() });
         self.since += elapsed;
     }
 
