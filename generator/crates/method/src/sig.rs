@@ -54,24 +54,22 @@ pub fn rust_fn_name(env: &InstrEnv, m: &Method, overloaded: bool, rust_name: Opt
     }
 }
 
-/// 形参列表 `mut name: Ty`：名字取 LVT 槽位名（缺省 `arg_k`），long / double 占两个槽位
-pub fn params_with_slot(
-    env: &InstrEnv,
-    m: &Method,
-    start_slot: u16,
-    types: &[RsType],
-    names: &BTreeMap<u16, String>,
-) -> Vec<String> {
+/// 形参名：取 LVT 槽位名（缺省 `arg_k`），long / double 占两个槽位
+pub fn param_slot_names(m: &Method, start_slot: u16, n: usize, names: &BTreeMap<u16, String>) -> Vec<String> {
     let raw = parse_descriptor_params(&m.desc);
     let mut slot = start_slot;
-    let mut out = Vec::with_capacity(types.len());
-    for (k, rt) in types.iter().enumerate() {
-        let name = safe_name(names.get(&slot).map_or(&format!("arg_{k}"), |n| n));
-        out.push(format!("mut {name}: {}", text::ty(env, rt)));
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        out.push(safe_name(names.get(&slot).map_or(&format!("arg_{k}"), |n| n)));
         let wide = matches!(raw.get(k).map(String::as_str), Some("J" | "D"));
         slot += if wide { 2 } else { 1 };
     }
     out
+}
+
+/// 形参列表 `mut name: Ty`（名字见 [`param_slot_names`]）
+pub fn params_text(env: &InstrEnv, pnames: &[String], types: &[RsType]) -> Vec<String> {
+    pnames.iter().zip(types).map(|(n, rt)| format!("mut {n}: {}", text::ty(env, rt))).collect()
 }
 
 /// 返回类型的 `Result<..>` 形态（void → `Result<()>`）

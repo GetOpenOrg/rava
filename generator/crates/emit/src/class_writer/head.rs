@@ -335,7 +335,7 @@ fn root_method_vtable_owner(ctx: &EmitCtx<'_>, ci: &ClassInfo, name: &str, desc:
             if hw || ctx.member_rust_name(c, decl) != decl.name {
                 return None;
             }
-            return Some(ctx.find_virtual_in(decl, c)).filter(|s| !s.is_empty());
+            return Some(ctx.find_virtual_in(decl, c)).filter(|s| !s.is_empty()).map(|b| ctx.short(&b));
         }
         let sc = c.super_class();
         cur = if !sc.is_empty() && sc != OBJECT { ctx.class(sc) } else { None };
