@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// 工作线程栈大小：不小于主线程（macOS 8 MiB），留一倍余量
-const WORKER_STACK: usize = 16 << 20;
+pub const WORKER_STACK: usize = 16 << 20;
 
 /// 并行度：0 = 可用核数
 pub fn resolve_jobs(jobs: usize) -> usize {

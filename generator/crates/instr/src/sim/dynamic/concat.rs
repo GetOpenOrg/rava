@@ -165,7 +165,7 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
             // null 给出 "null"
             let boxed = obj_text(env, &raw_s, &e.ty);
             let sv = sim.fresh("_t")?;
-            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)));
+            sim.emit(raw_stmt(format!("let {}: {} = {boxed}.toString()?;", sv.as_str(), ir::anchors::STRING)))?;
             format!("&{}", sv.as_str())
         }
     })

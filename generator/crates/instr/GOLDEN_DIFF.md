@@ -142,3 +142,8 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 2. **字符串拼接实参的 toString 物化次序**：Python `concat_from_stack` 逐个出栈并即时物化 `toString()`
    临时量，临时量按**从右到左**求值（与 Java 从左到右的求值序相反，副作用可见时语义错误）；Rust 先整体出栈
    再按实参顺序物化，`_t0` 对应最左实参。
+3. **类 vtable 视图分派落空**（`invoke/virtual_/vtable.rs`）：Python 在 `__virtual_view` 返回 None 时
+   发射 `else { Default::default() }`，静默给默认值。Rust 按 invokevirtual 语义处理：
+   - 接收者先判空（`__virtual_view(obj.__nn()?)`），null 抛 NullPointerException，与 getfield / putfield 判空同一路径；
+   - 非 null 而视图落空，只可能是生成器缺陷（接收者静态类型已由 javac 校验）。以
+     `panic!("vtable-view-miss: 类.方法:描述符")` 精确报出，不再给默认值。

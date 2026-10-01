@@ -224,6 +224,7 @@ fn run_golden(path: &Path) -> (usize, Vec<Diff>) {
         user_classes: &user,
         libs: &[],
         runtime_src: &runtime.join("src"),
+        jobs: 0,
     }
     .build()
     .expect("构建发射层输入");

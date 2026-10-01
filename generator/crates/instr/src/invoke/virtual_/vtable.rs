@@ -54,10 +54,14 @@ pub(super) fn emit_class_vtable_dispatch(
     let base = cls_rust.head_name(env.ctx.ty.names).unwrap_or_default();
     let n_tps = env.ctx.ty.effective_class_type_params(cls_ci).len();
     let erased_targs = if n_tps == 0 { String::new() } else { format!("::<{}>", vec![super::O; n_tps].join(", ")) };
-    let view_recv = format!("{base}{erased_targs}::__virtual_view(&{})", site.obj_e);
+    // invokevirtual 语义：null 接收者先抛 NullPointerException（`__nn()?`，与 getfield / putfield
+    // 判空同一路径）；非 null 而运行时类不在本类视图中只可能是生成器缺陷（静态类型已由 javac 校验），
+    // 以精确 panic 报出被调方法，不以默认值静默继续
+    let view_recv = view_query(&format!("{base}{erased_targs}"), &site.obj_e);
+    let miss = view_miss_panic(call);
     let call_expr = format!("_d.{mname_r}({barg_str})?");
     if *rust_ret == RsType::Unit {
-        raw(sim, format!("if let Some(_d) = {view_recv} {{ {call_expr}; }}"));
+        raw(sim, format!("if let Some(_d) = {view_recv} {{ {call_expr}; }} else {{ {miss}; }}"))?;
         return Ok(());
     }
     let v = sim.fresh("_vdispatch")?;
@@ -68,20 +72,36 @@ pub(super) fn emit_class_vtable_dispatch(
     let pushed = match sig_r {
         Some(s) if is_object(env, rust_ret) && !is_object(env, &s) => {
             let boxed = boxed_text(env, &call_expr, &s)?;
-            raw(sim, format!("let {v}: {r} = if let Some(_d) = {view_recv} {{ {boxed} }} else {{ Default::default() }};"));
+            raw(sim, format!("let {v}: {r} = if let Some(_d) = {view_recv} {{ {boxed} }} else {{ {miss} }};"))?;
             rust_ret.clone()
         }
         Some(s) if !same_text(env, &s, rust_ret) && !is_prim(rust_ret) => {
-            raw(sim, format!("let {v} = if let Some(_d) = {view_recv} {{ {call_expr} }} else {{ Default::default() }};"));
+            raw(sim, format!("let {v} = if let Some(_d) = {view_recv} {{ {call_expr} }} else {{ {miss} }};"))?;
             s
         }
         _ => {
-            raw(sim, format!("let {v}: {r} = if let Some(_d) = {view_recv} {{ {call_expr} }} else {{ Default::default() }};"));
+            raw(sim, format!("let {v}: {r} = if let Some(_d) = {view_recv} {{ {call_expr} }} else {{ {miss} }};"))?;
             rust_ret.clone()
         }
     };
     sim.push(Expr::Var(v), pushed);
     Ok(())
+}
+
+/// 视图查询 `Cls::<..>::__virtual_view(recv.__nn()?)`：先判空（null → NullPointerException）
+fn view_query(view_ty: &str, obj_e: &str) -> String {
+    format!("{view_ty}::__virtual_view({}.__nn()?)", postfix_recv(obj_e))
+}
+
+/// 视图查询落空（非 null 接收者的运行时类不是本类或其子类）的精确 panic：视图类 + 被调方法
+fn view_miss_panic(call: &CallRef) -> String {
+    format!("panic!(\"vtable-view-miss: {}.{}:{}\")", call.owner, call.name, call.desc)
+}
+
+/// 接收者文本作后缀调用（`.m()`）的接收方：前缀运算 / `as` / 块表达式加括号，其余原样
+fn postfix_recv(e: &str) -> String {
+    let needs = e.starts_with(['&', '*', '!', '-']) || e.contains(" as ") || e.starts_with("if ") || e.starts_with("match ");
+    if needs { format!("({e})") } else { e.to_string() }
 }
 
 /// 形参边界：wrapper 方法（擦除实例化）签名 vs 调用点实参逐位对齐——类型变量位装箱为
@@ -231,7 +251,26 @@ fn chain_has_bridge(env: &InstrEnv, sub_bin: &str, mname: &str, pdesc: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::has_type_var_token;
+    use super::{has_type_var_token, postfix_recv, view_miss_panic, view_query};
+    use crate::invoke::CallRef;
+
+    #[test]
+    fn view_query_null_checks_receiver() {
+        assert_eq!(view_query("Animal", "a"), "Animal::__virtual_view(a.__nn()?)");
+        assert_eq!(view_query("Box::<Object>", "&r"), "Box::<Object>::__virtual_view((&r).__nn()?)");
+        assert_eq!(
+            view_query("Animal", "Into::<Object>::into(Clone::clone(&t))"),
+            "Animal::__virtual_view(Into::<Object>::into(Clone::clone(&t)).__nn()?)"
+        );
+        assert_eq!(postfix_recv("x as Object"), "(x as Object)");
+        assert_eq!(postfix_recv("if c { a } else { b }"), "(if c { a } else { b })");
+    }
+
+    #[test]
+    fn view_miss_is_precise_panic() {
+        let call = CallRef::with("p/Animal", "speak", "()Ljava/lang/String;");
+        assert_eq!(view_miss_panic(&call), "panic!(\"vtable-view-miss: p/Animal.speak:()Ljava/lang/String;\")");
+    }
 
     #[test]
     fn type_var_token() {

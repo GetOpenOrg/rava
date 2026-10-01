@@ -67,7 +67,7 @@ fn from_object_push(env: &InstrEnv, sim: &mut StackSim, target: RsType, src: &st
     let v = sim.fresh("_t")?;
     let t = ty_text(env, &target);
     let o = ir::anchors::OBJECT;
-    sim.emit(Stmt::raw(format!("let {v}: {t} = <{t} as ::std::convert::From<{o}>>::from({src});")));
+    sim.emit(Stmt::raw(format!("let {v}: {t} = <{t} as ::std::convert::From<{o}>>::from({src});")))?;
     sim.push(Expr::Var(v), target);
     Ok(())
 }
@@ -114,7 +114,7 @@ fn gen_signature_polymorphic(
         ty_text(env, &elem_ty),
         ir::anchors::ARRAY,
         packed.join(", ")
-    )));
+    )))?;
     let decl_ret = ty::type_map::parse_descriptor_return(decl_desc);
     let site_key = format!("{}.{}", call.owner, call.name);
     if !is_static && env.ctx.rt.sigpoly_callsite_typed.contains(&site_key) {
@@ -126,7 +126,7 @@ fn gen_signature_polymorphic(
             ty_text(env, &ret_ty),
             call.name,
             call.desc
-        )));
+        )))?;
         if call.ret == "V" {
             return Ok(());
         }

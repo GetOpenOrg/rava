@@ -6,6 +6,20 @@ use crate::java::lang::String;
 static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 impl VM {
+    /// 静态字段 directMemory：HotSpot initPhase1 的 `VM.saveProperties` 写入——未指定
+    /// `-XX:MaxDirectMemorySize` 时取 `Runtime.maxMemory()`（原生二进制无启动选项，恒取此值）。
+    /// 边界类 `<clinit>` 不发射，由手写层提供（VM 注入状态，准入第 ③ 类）。消费方：Bits.reserveMemory。
+    #[jvm_boundary]
+    pub fn directMemory() -> Result<i64> {
+        Ok(crate::posix::default_max_heap())
+    }
+
+    /// 静态字段 pageAlignDirectMemory：`-XX:+PageAlignDirectMemory`（`sun.nio.PageAlignDirectMemory`）缺省 false。
+    #[jvm_boundary]
+    pub fn pageAlignDirectMemory() -> Result<bool> {
+        Ok(false)
+    }
+
     /// 原生二进制进入 main 时运行时已完成初始化（对应 initLevel == SYSTEM_BOOTED）。
     #[jvm_boundary]
     pub fn isBooted() -> Result<bool> {

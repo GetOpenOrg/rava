@@ -291,8 +291,11 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn is_jvm_null(&self) -> bool { self._jvm_null }
+                // 按值 self 的钩子：未移交的 self 经 ObjectVTable 擦除后释放，Arc<wrapper>
+                // 析构不逐类单态化（emitter-performance §5.5 N4；inner 侧同型）
                 fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
-                    ObjectVTable::__interface(__Shared::clone(&self.vtable), slot)
+                    ObjectVTable::__interface(__Shared::clone(&self.vtable), slot);
+                    ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
                 fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: ::std::vec::Vec<Object>)
                     -> ::std::option::Option<Result<Object>> {
@@ -308,17 +311,19 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     {
                         *s = ::std::option::Option::Some(__Shared::clone(&self.any));
                     }
+                    ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
                 /// 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
                 /// 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
                 /// （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
                 /// 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
                 fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
+                    '__answered: {
                     if let ::std::option::Option::Some(s) =
                         slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
                     {
                         *s = ::std::option::Option::Some(__Shared::clone(&self.vtable));
-                        return;
+                        break '__answered;
                     }
                     #(
                         if let ::std::option::Option::Some(s) =
@@ -327,7 +332,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             *s = ::std::option::Option::Some(
                                 __Shared::clone(&self.vtable)
                                     as __Shared<dyn #ancestor_vtable_idents>);
-                            return;
+                            break '__answered;
                         }
                     )*
                     // 静态类臂未命中 → 委托 vtable 对象（= 运行时类 inner）的擦除查询：
@@ -340,6 +345,8 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
                             as __Shared<dyn ObjectVTable>,
                         slot,
                     );
+                    }
+                    ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
                 fn __view_as(
                     &self,

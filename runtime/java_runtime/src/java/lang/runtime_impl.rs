@@ -18,7 +18,7 @@ impl Runtime {
     /// 报告；物理内存不可得时 Long.MAX_VALUE（JDK「无上限」约定）。
     #[jvm_native]
     pub fn maxMemory(&self) -> Result<i64> {
-        Ok(physical_memory().map(|m| (m / 4) as i64).unwrap_or(i64::MAX))
+        Ok(crate::posix::default_max_heap())
     }
 
     /// native `totalMemory()`：当前已向 OS 申请的内存（进程常驻集，/proc/self/statm）。
@@ -39,13 +39,6 @@ impl Runtime {
     pub fn gc(&self) -> Result<()> {
         Ok(())
     }
-}
-
-/// 物理内存字节数（sysconf(_SC_PHYS_PAGES) × 页大小）。
-fn physical_memory() -> Option<u64> {
-    // SAFETY: sysconf 只查询系统常量
-    let (pages, page) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
-    if pages > 0 && page > 0 { Some(pages as u64 * page as u64) } else { None }
 }
 
 /// 进程常驻集字节数（Linux /proc/self/statm 第 2 列 × 页大小；其余平台不可得）。

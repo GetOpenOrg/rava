@@ -3,7 +3,7 @@
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
-//!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]`
+//!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]
 //!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
@@ -95,6 +95,9 @@ pub struct BuildOpts {
     pub perf: bool,
     /// 逐类发射并行度（缺省 0 = 可用核数；输出与并行度无关）
     pub emit_jobs: usize,
+    /// build：另写出 `<scratch>/closure_input/closure.json`（调试 / 审计 / `rava emit` 输入），并校验
+    /// 由它解析的发射输入与进程内直传的一致；缺省不写（闭包结果只在内存中交给发射层）
+    pub closure_json: bool,
 }
 
 const VALUED: [&str; 16] = [
@@ -115,10 +118,22 @@ const VALUED: [&str; 16] = [
     "--api-package",
     "--emit-jobs",
 ];
-const FLAGS: [&str; 8] = ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf"];
+const FLAGS: [&str; 9] =
+    ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf", "--closure-json"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 10] =
-    ["--main", "--locale", "--root", "--no-run", "-o", "--lib", "--batch", "--trace-class", "--api-package", "--api-recursive"];
+const BUILD_ONLY: [&str; 11] = [
+    "--main",
+    "--locale",
+    "--root",
+    "--no-run",
+    "-o",
+    "--lib",
+    "--batch",
+    "--trace-class",
+    "--api-package",
+    "--api-recursive",
+    "--closure-json",
+];
 /// 只属于 emit 的选项
 const EMIT_ONLY: [&str; 2] = ["--classes", "--java"];
 
@@ -147,6 +162,7 @@ impl BuildOpts {
                     "--precheck-only" => o.precheck_only = true,
                     "--api-recursive" => o.api_recursive = true,
                     "--perf" => o.perf = true,
+                    "--closure-json" => o.closure_json = true,
                     _ => o.strict = true,
                 }
                 continue;
