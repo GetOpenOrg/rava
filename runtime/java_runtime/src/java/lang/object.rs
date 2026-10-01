@@ -462,6 +462,37 @@ impl ObjectVTable for () {
     fn is_jvm_null(&self) -> bool { true }
 }
 
+/// 带静态类型的 null：接口载体（`java_class!` 接口块）的 null 值。与类 wrapper 的 null 探针
+/// （`_jvm_null` + 本类 vtable）同形——值语义仍是 Java null（`is_jvm_null`，身份即 null 单例，
+/// 与任意 null 引用相等），但 `__class_name` 报静态类型。数组以元素类型的 null 探针取元素类
+/// （`new I[0].getClass()` 为 `[LI;`、aastore 存储检查的元素类名、checkcast 的目标元素类），
+/// 接口元素数组据此得到 JVM 的数组类，而非退化为 `Object[]`。
+struct TypedNull(&'static str);
+
+impl ObjectVTable for TypedNull {
+    fn __obj_str(&self) -> std::string::String { "null".to_owned() }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn is_jvm_null(&self) -> bool { true }
+    fn __class_name(&self) -> &'static str { self.0 }
+    fn __identity(&self) -> *const () { Object::default().0.__identity() }
+}
+
+impl Object {
+    /// 静态类型为 `binary_name` 的 null（按名缓存，同名共享一个实例）。
+    #[doc(hidden)]
+    pub fn __typed_null(binary_name: &'static str) -> Object {
+        crate::__process_static! {
+            static TYPED_NULLS: crate::sync_model::__RefSlot<std::collections::HashMap<&'static str, Object>> =
+                crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
+        }
+        if let Some(n) = TYPED_NULLS.with(|m| m.borrow().get(binary_name).cloned()) {
+            return n;
+        }
+        let n = Object(Rc::new(TypedNull(binary_name)));
+        TYPED_NULLS.with(|m| Clone::clone(m.borrow_mut().entry(binary_name).or_insert(n)))
+    }
+}
+
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
 impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
