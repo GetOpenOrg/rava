@@ -10,6 +10,7 @@
 
 use crate::prelude::*;
 use super::file_channel_impl::FileChannelImpl;
+use crate::java::io::Closeable;
 use crate::java::io::FileDescriptor;
 use crate::java::io::IOException;
 use crate::java::lang::String;
@@ -61,7 +62,7 @@ impl FileChannelImpl {
         readable: bool,
         writable: bool,
         direct: bool,
-        parent: Object,
+        parent: Closeable,
     ) -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();
@@ -73,7 +74,7 @@ impl FileChannelImpl {
         this.__set_readable(readable);
         this.__set_writable(writable);
         this.__set_direct(direct);
-        this.__set_parent(parent.into());
+        this.__set_parent(parent);
         this.__set_alignment(-1);
         Ok(this)
     }
@@ -94,7 +95,7 @@ impl FileChannelImpl {
         readable: bool,
         writable: bool,
         direct: bool,
-        parent: Object,
+        parent: Closeable,
     ) -> Result<crate::java::nio::channels::FileChannel> {
         Ok(Self::new(fd, path, readable, writable, direct, parent)?.into())
     }
