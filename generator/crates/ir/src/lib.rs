@@ -1,9 +1,9 @@
-//! Rust IR 与渲染单出口（← `codegen/rs_ir.py` + `codegen/render.py`）。
+//! Rust IR 与渲染单出口。
 //!
 //! 生成器各层之间以本 crate 的 [`Type`] / [`Expr`] / [`Stmt`] / [`Item`] 为唯一货币：
 //! 公开 API 不接受、不返回字符串形式的表达式或类型，文本只在 [`Renderer`] 出口产生。
 //!
-//! 与 Python 版的差异（详见 `GOLDEN_DIFF.md` 与各模块文档）：
+//! 设计要点（相对已删除的 Python 生成器，详见各模块文档）：
 //! - 标识符、路径、类型、字面量均结构化（[`Ident`] / [`Path`] / [`Type`] / [`Lit`]）；
 //!   Python 里 `RsNamed('HashMap<K, V>')`、`Call('JArray::<u16>::try_new')`、
 //!   `Lit('Class::for_class(...)')` 这类文本载体在这里没有对应物；

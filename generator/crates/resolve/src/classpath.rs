@@ -1,6 +1,6 @@
 //! 类路径：有序档案列表，首个命中者胜出；解析结果缓存（含「不存在」）。
 //!
-//! JDK 语料的 jmod 顺序与 `codegen/jdk_resolver.py` 一致：优先级清单在前，其余按名排序。
+//! JDK 语料的 jmod 顺序：优先级清单在前，其余按名排序。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -156,7 +156,7 @@ impl ClassPath {
         }
     }
 
-    /// 读取原始字节（golden 对照等）
+    /// 读取原始字节
     pub fn bytes(&self, name: &str) -> Option<Vec<u8>> {
         let &i = self.index.get(name)?;
         lock(&self.archives)[i].read_class(name).ok().flatten()

@@ -1,4 +1,4 @@
-//! 闭包事实：发射层消费的 [`closure::Closure`] 投影（`codegen/closure_input.py` 读取的形状）。
+//! 闭包事实：发射层消费的 [`closure::Closure`] 投影。
 //!
 //! 两个入口，产出同一结构：
 //! - [`ClosureFacts::from_closure`]：终态路径，`rava build` 进程内直接读引擎结构；

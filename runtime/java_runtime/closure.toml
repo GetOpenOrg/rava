@@ -1,6 +1,6 @@
 # 闭包边界清单：调用链 BFS 在哪里截断（手写边界）、哪里放行（按字节码翻译）。
 #
-# 读取入口：codegen/runtime_manifest.py（生成器不出现 JDK 类名——原则 4，类名只在本清单）。
+# 读取入口：generator/crates/closure/src/manifest.rs（生成器不出现 JDK 类名——原则 4，类名只在本清单）。
 # 条目形态：`packages` 为包前缀（必须以 `/` 结尾）；`classes` 为类 binary name（覆盖自身与其
 # `$` 嵌套类，不作字符串前缀匹配——`java/security/Permission` 不覆盖 `Permissions`）。
 # 加载器校验两种形态不混用。

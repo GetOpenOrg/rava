@@ -1,4 +1,4 @@
-//! 转译审计行（← `scripts/main.py _python_codegen` 的审计汇总段），输出序与 Python 一致：
+//! 转译审计行（`scripts/run_tests.py` 按行解析汇总），输出序：
 //!
 //! 1. `[cfg-audit]`：控制流审计（跳转消费 / try 区域 / instanceof 折叠 / 存根兜底位点分解）；
 //!    `debug` 时逐条列存根兜底 `[cfg-audit] stub fallback ({site}): {method}: {reason}`；
@@ -7,9 +7,8 @@
 //! 4. `[fallback-audit]`：静默兜底触发计数（[`crate::fallback`]），只列非零项；
 //! 5. `[shortname-audit]`：因遮蔽 Rust prelude 名而限定改名的类；
 //! 6. `[raw-audit]`：Raw 逃生舱构造事件（`raw_expr` / `raw_stmt`，[`ir::raw_audit`]，终态 0）+ 手写审计三项
-//!    （FS-H0：越界覆盖 / VM 内建 / VM 边界方法，按成员去重）。Python 行的 `type_surgery_*` / `jdk_literals`
-//!    是 Python 源码的静态卫生度量；Rust 源码的对应约束由测试守护（生成器源码无 JDK 类名字面量、
-//!    类型查询全部经类型层），不输出；
+//!    （FS-H0：越界覆盖 / VM 内建 / VM 边界方法，按成员去重）。生成器源码的静态卫生约束
+//!    由测试守护（生成器源码无 JDK 类名字面量、类型查询全部经类型层），不输出；
 //! 7. `[override-audit]` / `[vm-boundary-audit]`：非空时的逐成员明细。
 
 use std::collections::BTreeSet;

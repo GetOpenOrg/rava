@@ -1,4 +1,4 @@
-//! 发射层（P5a）：类文件骨架与 Cargo workspace 工程发射（← `codegen/emitter/` + `project_writer`）。
+//! 发射层（P5a）：类文件骨架与 Cargo workspace 工程发射。
 //!
 //! 输入是 [`input::EmitInput`]（闭包事实 + registry + 清单），输出是 scratch 下的
 //! `java_runtime/src/**` 生成类文件、包 mod 树、`user/` crate 与 workspace 根。方法体经

@@ -136,7 +136,7 @@ impl<'e> StackSim<'e> {
         Ok(sim)
     }
 
-    /// 以既有状态恢复模拟器（P4b 子路径 / golden 回放）
+    /// 以既有状态恢复模拟器（P4b 子路径）
     pub fn from_state(cfg: SimConfig, state: SimState, env: &'e dyn SimEnv) -> StackSim<'e> {
         let class_tparams = cfg.class_type_params.iter().cloned().collect();
         StackSim { cfg, state, env, class_tparams }

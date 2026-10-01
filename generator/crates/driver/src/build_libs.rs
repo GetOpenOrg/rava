@@ -1,4 +1,4 @@
-//! `rava build --lib`：jar 输入模式的 lib crate 装配（← `codegen/transpile.py` 步骤 2b）。
+//! `rava build --lib`：jar 输入模式的 lib crate 装配。
 //!
 //! 每个 `--lib NAME=JAR[:seed=…]` 枚举 jar 类成 [`LibCrate`]，并给出闭包分析的种子类：
 //! 整包模式 = jar 全部类（按名排序），子集模式 = 声明的种子类（须在 jar 内）。种子类统一经

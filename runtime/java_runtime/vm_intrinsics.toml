@@ -1,6 +1,6 @@
 # VM 承载清单：公开 API 中由 VM（手写层）承载、不执行其 Java 体的方法，以及生成器对调用点的特判。
 #
-# 读取入口：codegen/runtime_manifest.py。内建与「手写覆盖」（FS-H0 审计线，最终态 0）分开计数：
+# 读取入口：generator/crates/closure/src/manifest.rs、generator/crates/input/src/manifest.rs。内建与「手写覆盖」（FS-H0 审计线，最终态 0）分开计数：
 # 内建是最终态的一部分，`[raw-audit] intrinsics=` 单独统计。
 #
 # 内建准入类别（kind）——每条须写明依据（reason）：
@@ -96,7 +96,7 @@ callsite_typed = [
 
 # ── VM 常量（死分支剪除）──────────────────────────────────────────────────────────────
 # 手写边界方法在原生二进制中返回恒定值（无启动选项可改变），其守卫的分支静态可判。
-# 字节码规范化阶段（codegen/vm_constants.py，classfile 解码后单点执行）剪除恒不执行的分支体：
+# 字节码规范化阶段（generator/crates/input/src/prune.rs，classfile 解码后单点执行）剪除恒不执行的分支体：
 # 调用链不再经它拉入类，生成代码也不含该分支——与 JVM 在同一配置下的执行路径一致。
 #   null_returns   恒返回 null 的方法（`类.方法:描述符`）
 #   null_to_false  纯函数：null 实参 → false（JDK 规范语义）

@@ -1,27 +1,23 @@
 # P5b 工作记录：method crate 接入 emit，`rava build` 生成完整工程
 
-## 步骤 1：方法体适配器 + emit golden 切真实方法体
+> 历史记录。Python 生成器与逐层 golden 对照设施已于 2026-10-01 删除，文中 Python 对照口径仅作当时依据。
+
+## 步骤 1：方法体适配器
 
 - `src/method_bodies.rs`：`MethodBodies` 实现 `MethodBodyEmitter`
   - 字节码 / 局部变量表取自出处类（`declaring_class`），接口方法展开按 `type_var_view` 代换局部变量签名；
   - `InstrHooks::sam_ctor_path` 经 `SamLedger::site_ctor_path`；
   - `MethodSink` → `BodyEffects`（inherited / lambda_ref / sam_site），审计项与控制流审计留在 `BodyAudit`；
   - 错误映射：`MethodError::Cfg` 非 strict → `BodyError::Fallback`（与 Python fallback 白名单一致），其余 Fatal。
-- `tests/golden.rs`：`Checked` 包装真实生成器，逐次与 bodies.jsonl 对照（文本 / 兜底 / 副作用），
-  返回哨兵包裹文本以复用文件对照。
-- 结果：TestHashMapOps 660 次 / 315 文件、TestStreamBasic 1310 / 452、TestCompletableFuture 7321 / 1354，全部失配 0；
-  method golden 三例文本 / 登记失配 0。
 
 ### 同批并入（unported 盘点 2026-09-30）
 
 - U3：`classfile::Operand::InvokeDynamic` 携带常量池下标 `index`，`InstrHooks::indy_cp_index` 删除；
 - U9：删除死函数 `method::error::unported`；method §5 出处类为空改为显式 `MethodError::Runtime`；
-- 登记更正：instr GOLDEN_DIFF 删除 lambda_args 陈旧行、已知差异 3 改为已消解、补登 BadFloat 与 S1–S6；
-  input 第 9 条、method 第 5 条按实际行为重写。
 
 ## 步骤 2：`rava build` 缺省真实方法体 + 审计行
 
-- `python3 scripts/main.py <Test.java> --generator rust --no-run` 生成完整工程；HelloWorld 与 Python 树
+- `python3 scripts/main.py <Test.java> --no-run`（`rava build --no-run`）生成完整工程；HelloWorld 与 Python 树
   逐字节一致（`Cargo.toml` 除外；`closure_input/closure.json` 的 `elapsed_ms` 为计时值，两侧恒不同）。
 - 审计行（`emit::audit::audit_lines`）：`[cfg-audit]` / `[readability-audit]` / `[equiv-audit]` /
   `[fallback-audit]` / `[shortname-audit]` / `[raw-audit]` / `[override-audit]` / `[vm-boundary-audit]`，序与 Python 一致。
@@ -34,13 +30,13 @@
 
 ## 步骤 3：27 例生成树对照
 
-- 方法：`scripts/gen_trees.sh build/trees/py`（缺省 python）与 `RAVA_GENERATOR=rust scripts/gen_trees.sh build/trees/rs`，
+- 方法：`scripts/gen_trees.sh` 分别以 Python 与 Rust 生成器生成 `build/trees/py`、`build/trees/rs`，
   `diff -r -x Cargo.toml -x closure.json` 逐例对照；审计行 `[cfg-audit]` / `[equiv-audit]` / `[override-audit]` /
   `[vm-boundary-audit]` 逐例一致，`[raw-audit]` 手写三项一致。两侧均无 TRANSPILE-FAIL。
 - 唯一失配（已修）：TestTernary `let mut s: String = String::from_owned(format!(..))` 的类型标注。
   Python 拼接结果以 `Lit` 入栈，参与 `_opaque_let_value` / `_is_trivial_expr` 判定；Rust 原为 `Raw`，被判不透明而省略标注。
   修复：`ir::Lit::JStringConcat { fmt, args }`（渲染 `String::new()` / `String::from("..")` /
-  `String::from_owned(format!(..))`），`instr` 拼接点改压该字面量。emit / method golden 保持 0 失配。
+  `String::from_owned(format!(..))`），`instr` 拼接点改压该字面量。
 
 | 用例 | 文件数（不含 Cargo.toml / closure.json） | 失配 |
 |---|---|---|

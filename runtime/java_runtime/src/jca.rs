@@ -3,8 +3,8 @@
 //!
 //! JDK 的 provider 列表（ProviderList / ProviderConfig）在运行期按配置装载 provider，
 //! 服务实现类由 `Provider$Service.newInstance` 按类名反射构造，都无静态调用边。
-//! codegen 从 provider 注册字节码抽取服务表，对入选服务（engine 类在调用链上 × 算法名是
-//! 用户字符串常量，见 `codegen/jca_services.py`）翻译实现类字节码并登记反射构造面；生成
+//! 生成器从 provider 注册字节码抽取服务表，对入选服务（engine 类在调用链上 × 算法名是
+//! 用户字符串常量，见 `generator/crates/closure/src/seeds/jca.rs`）翻译实现类字节码并登记反射构造面；生成
 //! main 启动时经 [`register_services`] 登记 `(类型, 算法, 实现类, provider)`，经
 //! [`register_providers`] 登记 provider 构造闭包（JDK ProviderConfig 对内建 provider 同样
 //! 直接 `new`）。

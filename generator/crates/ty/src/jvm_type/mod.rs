@@ -1,4 +1,4 @@
-//! JVM 类型代数（`codegen/jvm_type.py` 的移植）：擦除 / 代入 / 子类型 / 构造入口。
+//! JVM 类型代数：擦除 / 代入 / 子类型 / 构造入口。
 //!
 //! 与 Python 的差异：registry 参数改为 [`Registry`]（空注册表 = Python 的 `None` /
 //! 空 dict，二者在 Python 侧同为假值、行为一致）；闭包短名回退 `_closure_hit`

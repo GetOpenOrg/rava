@@ -1,4 +1,4 @@
-//! JDK 语料定位（与 `codegen/jdk_resolver.py` 的 find_java_home / _installed_jdks 同规则）。
+//! JDK 语料定位（`JAVA_HOME` / 已安装 JDK 扫描）。
 
 use std::path::{Path, PathBuf};
 

@@ -1,4 +1,4 @@
-//! 方法体生成（← `codegen/method/`）：**类 + 方法 → 完整 Rust 函数文本**。
+//! 方法体生成：**类 + 方法 → 完整 Rust 函数文本**。
 //!
 //! 入口 [`gen_method_body`]`(env, &MethodRequest, &mut MethodSink) -> MethodResult<String>`：
 //! - `env`：[`instr::InstrEnv`]，以发射所在类构造（`InstrCtx::new(.., class)`，继承展开时

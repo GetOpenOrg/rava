@@ -1,5 +1,4 @@
-//! 发射层类型层（`codegen/type_map.py` / `sig_parse.py` / `type_args.py` /
-//! `sig_types.py` / `jvm_type.py` 的 Rust 移植）。
+//! 发射层类型层（类型映射 / 签名解析 / 类型实参 / 签名类型 / JVM 类型代数）。
 //!
 //! 与 Python 的结构差异：
 //! - 注册表 [`Registry`]、短名 [`ShortNames`]、清单 [`Manifest`] 是显式上下文，

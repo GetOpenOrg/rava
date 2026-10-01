@@ -1,4 +1,4 @@
-//! 指令翻译层（← Python `codegen/instr/`）：把一条规范化 JVM 指令（[`input::NInsn`]）在
+//! 指令翻译层：把一条规范化 JVM 指令（[`input::NInsn`]）在
 //! [`::sim::StackSim`] 上归约为 [`ir`] 语句 / 表达式。不含 CFG 结构化（`cfg` crate）与
 //! 方法体组装（P4c）；公开接口不以字符串往返表达式或类型。
 //!

@@ -3,7 +3,7 @@
 //! - `signature_erased_interfaces.txt`：签名解析直接擦为 `Object` 的接口；
 //! - `overload_abbrev.txt`：重载后缀的类名缩写（`小写简单名 缩写`）。
 //!
-//! 格式与 `codegen/runtime_manifest.read_list / read_map` 一致：每行一条，
+//! 格式：每行一条，
 //! 首个非空白字符为 `#` 的行是注释，文件缺失视为空表。runtime 目录由调用方显式传入。
 
 use std::collections::{BTreeMap, BTreeSet};

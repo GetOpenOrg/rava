@@ -1,6 +1,6 @@
 //! 手写层三清单（runtime/java_runtime/{closure,seeds,vm_intrinsics}.toml）的读取与域判定。
 //!
-//! 与 `codegen/runtime_manifest.py` 同一数据源、同一语义；库知识（类名）只出现在清单里。
+//! 发射层的清单读取见 `input::manifest`（同一数据源、同一语义）；库知识（类名）只出现在清单里。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

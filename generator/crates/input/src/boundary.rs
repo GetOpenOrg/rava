@@ -1,4 +1,4 @@
-//! 发射层的边界判定（`codegen/callchain.py` `_is_boundary_class` / `_is_vm_boundary_class` 的移植）。
+//! 发射层的边界判定。
 //!
 //! - 内部边界类：类名落在 closure.toml `[boundary]` 包前缀内，且不属于 K-JCA 放行、通用放行、
 //!   纯数据资源束三者之一。

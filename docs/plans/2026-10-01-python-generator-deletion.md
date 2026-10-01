@@ -1,7 +1,7 @@
 # Python 生成器删除清单
 
-> 状态（2026-10-01）：用户已确认删除，执行中（依据见 §五）。原状态：本文只是清单，不删除任何文件。Python 生成器（`codegen/`）作为对照基线保留，
-> `--generator python` 开关继续保留并可用。迁移项见 [`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)（已全部完成）。
+> 状态（2026-10-01）：已删除。§二 A–D 一次删到终态（`--generator` / `RAVA_GENERATOR` 一并删除，`rava_cmd` / `run_rust` 迁入
+> `scripts/rava_cli.py`），依据见 §五。迁移项见 [`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)（已全部完成）。
 
 ## 一、删除条件
 

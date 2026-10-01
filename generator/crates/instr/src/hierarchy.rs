@@ -1,4 +1,4 @@
-//! 层次查询（← `codegen/instr/hierarchy.py`）：registry 继承链 / 接口链上的严格子类型判定、
+//! 层次查询：registry 继承链 / 接口链上的严格子类型判定、
 //! 公共祖先、`_super` 路径、具体子类枚举。
 //!
 //! Python 以 Rust 短名串为实参（`_rust_type_to_binary` 反查短名索引）；这里以结构化

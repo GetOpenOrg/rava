@@ -10,7 +10,7 @@
  * 方案：docs/plans/2026-09-27-reflection-metadata-table.md §2.6
  *
  * 编译：转译时以当前 JDK 的 javac --patch-module java.base 编入 java.lang.reflect 包
- * （codegen/jdk_resolver.py vm_support_classes）。
+ * （generator/crates/resolve/src/image.rs VM 支持类目录）。
  */
 package java.lang.reflect;
 

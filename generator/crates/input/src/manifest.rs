@@ -1,4 +1,4 @@
-//! 发射层读取的 runtime 清单（`codegen/runtime_manifest.py` 发射层消费部分的移植）。
+//! 发射层读取的 runtime 清单。
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；

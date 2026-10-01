@@ -1,11 +1,10 @@
-//! 静默兜底审计（← `codegen/fallback_audit.py` B 组的 record / summary 模式）。
+//! 静默兜底审计（record / summary 模式）。
 //!
 //! 口径：非存根的质量降级点（解析失败回退默认值、代换失败沿用原文、路径拼装失败放弃合成对象）。
 //! 存根兜底（A 组）归 `[cfg-audit]` 的位点分解，不在本行。目标全 0：非零即极可能是真 bug。
 //!
-//! Python B 组十点在 Rust 侧的对应：签名 / 形参表解析器是全函数（残缺签名在类型层硬失败），
-//! `vars` 渲染与类型渲染不会失败（IR 渲染是全函数），SAM 描述符映射同理——这些点在 Rust
-//! 实现里没有失败分支，无需计数。Rust 自有的降级点见 [`FALLBACK_IDS`]。
+//! 签名 / 形参表解析器是全函数（残缺签名在类型层硬失败），`vars` 渲染与类型渲染不会失败
+//! （IR 渲染是全函数），SAM 描述符映射同理——这些位置没有失败分支，无需计数。降级点见 [`FALLBACK_IDS`]。
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;

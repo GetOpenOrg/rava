@@ -1,4 +1,4 @@
-//! IR → Rust 源码文本的唯一出口（← `codegen/render.py`）。
+//! IR → Rust 源码文本的唯一出口。
 //!
 //! 需要类名短名的节点（`NewPending` / `StaticField` / catch 子句类型）经注入的
 //! [`ShortNames`] 查询；类型渲染不依赖短名，另有自由函数 [`render_type`]。
