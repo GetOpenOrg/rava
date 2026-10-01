@@ -257,7 +257,7 @@ impl<'a> GenContext<'a> {
             let params: Vec<&Ident> = gen.params.iter()
                 .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
                 .collect();
-            quote! { __phantom: ( #( ::std::marker::PhantomData<fn() -> #params>, )* ) }
+            quote! { #[doc(hidden)] pub __phantom: ( #( ::std::marker::PhantomData<fn() -> #params>, )* ) }
         } else {
             quote! {}
         };

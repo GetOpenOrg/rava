@@ -9,7 +9,8 @@ use super::super::erasure::type_args_arity;
 use super::context::GenContext;
 use super::storage_hooks::hook_ident;
 
-pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
+/// 返回 (声明层转换项, 存储类型 `X__inner` 上的 BINARY_NAME 常量——随存储层进实现层)
+pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     let struct_ident = &ctx.struct_ident;
     let inner_ident = &ctx.inner_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
@@ -24,19 +25,20 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 8. BINARY_NAME 常量
     // ══════════════════════════════════════════════════════════════════════════
 
-    let binary_name_impl: TokenStream2 = if !binary_name.is_empty() {
-        quote! {
+    let (binary_name_impl, inner_binary_name): (TokenStream2, TokenStream2) = if !binary_name.is_empty() {
+        (quote! {
             impl #impl_g #struct_ident #ty_g #where_c {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
+        }, quote! {
             // vtable 上下文（impl XxxVTable for __inner）中的方法体里 Self = __inner，
             // Self::BINARY_NAME 必须同样可解析（__inner 非泛型，A-1 存储层擦除）
             impl #inner_ident {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
-        }
+        })
     } else {
-        quote! {}
+        (quote! {}, quote! {})
     };
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -178,10 +180,10 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         quote! {}
     };
 
-    quote! {
+    (quote! {
         #binary_name_impl
         #from_object_impl
         #into_object_impl
         #from_child_for_parent
-    }
+    }, inner_binary_name)
 }

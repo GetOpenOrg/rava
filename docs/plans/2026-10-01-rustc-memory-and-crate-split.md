@@ -446,9 +446,75 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | S1 ✅ | **`java_meta` crate**：反射数据表与造表构建脚本从 `java_runtime` 移出；元素类型留在 `java_runtime::meta`（手写），表 static 以导出符号交给 `java_runtime` 读取（依赖方向见 §7.2） | 仅 workspace 结构；表数据逐字节不变 | 表文件逐字节对照；HelloWorld / Digester `java_runtime` 峰值（§7.7） |
 | S2 | **存储钩子**：§7.3.1 的 4 处改走钩子（同 crate 内落地为与存储布局同模块的非泛型自由函数，签名即终态 extern 签名） | 宏展开：4 处调用点换钩子调用 | 展开对照只在 4 处变化；抽查 |
 | S3 | **方法体函数化**：方法体移入 `__jb_<符号>` 自由函数，wrapper 方法与 `_base` 变外壳；`_base` 去泛型；vtable-for-inner 私有方法直展开改调同一函数 | 宏展开：方法体搬家；单态化 `_base` 实例归一 | 单态化统计；抽查（覆盖私有方法、super 调用、`_base` 缺省分派） |
-| S4 | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树（实现 crate 根 `pub use java_runtime::*;`，本 crate 类模块名加 `_body` 后缀以免遮蔽）；可见性：wrapper 的 `vtable` / `any` / `__from_parts` 改为 `pub` + `#[doc(hidden)]` | 生成树结构变化（新增实现 crate 目录） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
-| S5 | **声明层样板收窄**（§7.4 前三项） | 宏展开与导入列表 | 逐项测声明 crate 峰值 |
+| S4 ✅ | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树；可见性收口。细化见 §7.5.1 | 生成树结构变化（新增实现 crate 目录；声明层文件块首多一行属性） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
+| S5 | **声明层样板收窄**（§7.4 前三项）；声明层文本不带下沉方法体（§7.7 S4 记录：先把下沉判据改为生成器显式标注，再剥体） | 宏展开与导入列表 | 逐项测声明 crate 峰值 |
 | S6 | **泛型类擦除核心**（§4.2 / §7.4 第四项） | 泛型类方法体进实现层 | 性能验收（排序 / 拷贝热循环）+ 抽查 |
+
+#### 7.5.1 S4 细化（2026-10-01）
+
+**宏（`rava_macros`，`block/gen/layer.rs`）**
+- 块属性 `#[rava_layer = "decl" | "body"]`，缺省完整展开（用户 crate、lib crate、Python 生成器不受影响）。
+- 实现层（body）：`X__inner` 及其 derive、`ObjectVTable for X__inner`、`impl X__inner { BINARY_NAME }`、全部 `Y__VTable for X__inner` 与接口 impl、三个存储钩子、`__jbm_` 方法体函数、非泛型且非存根的 `_base` 函数。
+- 声明层（decl）：其余全部（vtable trait 与 `AsVTable`、wrapper 及其 trait impl、固有方法与外壳、静态存储与类初始化、From / Into、泛型或存根 `_base`）。
+- 可拆的三类自由函数（钩子 / 体函数 / 非泛型 `_base`）由同一个拆分函数处理：实现层定义加 `#[export_name = SYM]`；声明层生成同名外壳 `#[inline] pub fn f(..) -> R { extern "Rust" { #[link_name = SYM] fn f(..) -> R; } unsafe { f(..) } }`。外壳形参与返回类型取自同一函数项，调用点文本不变。
+- `SYM = __rava_<binary name 转义>__<函数名>_<FNV-1a 64(binary name, 函数名, 签名记号文本)>`：两侧签名不一致只会是链接错误。
+- 实现层文件 glob 导入声明层本类模块；同名的实现层定义遮蔽 glob 导入的外壳，所以实现 crate 内对本类钩子 / 体函数 / `_base` 的调用直达定义，别的类的经声明层外壳转调。
+- 存根 `_base` 留在声明层直接定义（一行 panic，无依赖，不值得走 extern）。
+- 接口块整体属声明层（body 模式展开为空，生成器也不为接口写实现层文件）。接口 default / static 方法体下沉是后续项，与 S6 一并做。
+- 泛型类：`X__inner` 与 vtable impl 本就非泛型，随存储层下沉；wrapper 方法体与泛型 `_base` 留在声明层，到 S6 擦除核心再下沉。
+- 可见性：wrapper 的 `vtable` / `any` / `__phantom` 字段由 `pub(crate)` / 私有改为 `pub` + `#[doc(hidden)]`。实现层的 `__as_X` 钩子与体函数按部件构造、读取 wrapper。
+
+**生成器（Rust 生成器，`emit/src/project/layers.rs`）**
+- 第二阶段收尾之后、落盘之前拆分：JDK 生成类（非手写、非接口）的块首加 `#[rava_layer = "decl"]`，原位落盘。
+- 实现层文本 = 原文件头（allow 属性 + use 列表）+ `use java_runtime::<本类模块路径>::*;` + 同一块（`#[rava_layer = "body"]`）。块后的 `iface_upcasts!` / `implref` / 反射字段闭包属声明层，不进实现层。
+- 装箱：类按 binary name 排序，均衡装箱。箱数 = max(⌈总字节 / `BODY_CRATE_BYTES`（5 MiB）⌉, 2)，每类按其字节中点落入的区间归箱。上限按 §7.6 的峰值目标实测校准，见 §7.7 S4 记录。
+- 实现 crate `java_body_k`：
+  - `src/lib.rs` 是 allow 属性 + 私有 `use java_runtime::*;` + `mod body;`；
+  - 类文件放在 `src/body/<原相对路径>`，mod.rs 只写 `mod x;`，不再导出。
+  - 这样类文件头的 `crate::java::…` / `crate::prelude` 经根 glob 解析到声明层，不被本 crate 模块遮蔽（取代原设想的 `_body` 后缀）。
+  - Cargo 依赖只有 `java_runtime` 与 `rava_macros`。
+- workspace 成员加实现 crate。`user` 依赖全部实现 crate，`main.rs` 写 `use java_body_k as _;` 纳入链接。批量模式的既有 user 清单补齐依赖行。
+- `java_meta` 构建脚本扫描兄弟 crate 时排除 `java_body_` 前缀：实现层是声明层块的副本，类宇宙已由 `java_runtime` 覆盖。
+- 陈旧实现层类文件（带生成标记、本轮未写）删除。装箱数减少时多余的 `java_body_k` 目录不在 workspace 成员内，不参与编译。
+
+**等价性**
+- 拆分只改变函数定义所在的 crate 和调用经过的一层 `#[inline]` 转发：形参按值原样转交，返回值原样交回，求值顺序与副作用不变。
+- trait impl（`ObjectVTable` / `Y__VTable for X__inner`）在哪个 crate 定义不影响分派：vtable 由实现层的 `alloc` 钩子在 unsize 时取用。
+- `#[export_name]` 项恒被代码生成且作为导出符号保留。dev 下跨 crate 调用不内联；release 的 `lto = true` 仍跨 crate 内联。
+
+#### 7.5.2 S5 剥体：声明层文本不带下沉方法体（2026-10-01）
+
+**问题**：S4 声明层收到整块文本，宏在声明模式下仍要词法分析、解析、改写全部方法体，再丢弃实现层部分。声明模式只读方法体的这几个结论：
+
+| 读体位置（声明模式） | 读出的结论 |
+|---|---|
+| `wrapper/methods.rs` 虚方法（定义 / 覆盖） | gated 分类是否 Safe；非 Safe 时 `__impl_` 能否函数化（不能则体内联在 wrapper） |
+| `wrapper/methods.rs` 构造器 / 非虚方法 | 能否函数化（不能则体内联） |
+| `virtual_dispatch/trait_decl.rs` | 定义方法是否 Safe（缺省方法走 base 还是钩子；是否要 `AsVTable` 视图） |
+| `virtual_dispatch/base_fns.rs` | 是否 Safe、Safe 定义方法的 base 是真实体还是存根；真实体的 base 非泛型时拆入实现层，声明层只用外壳 |
+
+外壳（wrapper 外壳、体函数外壳、base 外壳）只取签名，不取体。
+
+**做法**
+- **分析逻辑独立成库 crate `runtime/rava_macros_core`**：`block/` 与 `try_macro.rs` 原样移入，`rava_macros` 只剩 proc-macro 入口。生成器（emit crate）依赖同一个库，用与宏相同的代码对同一份块文本做判定，不另写一份移植。
+- **判定函数 `moved_fact`（库内，宏与生成器共用）**：对非泛型、非接口类里有体的方法，体在声明模式下不被消费时给出标注，否则 None（体留在声明层）：
+  - 虚方法：Safe 且方法无泛型形参 / where 子句 → `safe`（base 真实体）或 `safe_stub`（base 存根）；非 Safe 且 `__impl_` 可函数化 → `wrapper`；
+  - 构造器 / 非虚方法：可函数化 → `plain`；
+  - 继承成员声明不下沉。
+- **生成器**：拆层时用 `rava_macros_core` 解析块（`proc-macro2` 回落实现 + `span-locations` 取字节区间），对有标注的方法：方法项前插 `#[rava_moved = "<标注>"] `，体 `{ … }` 换成 `;`。实现层文本不变。
+- **宏声明模式**：`rava_moved` 方法按标注走与有体时相同的分支：分类结论取标注；函数化外壳与 base 外壳只用签名生成；base 存根消息只用描述符。声明模式不再计算实现层的 vtable impl。完整 / 实现模式下出现 `rava_moved` 即 `compile_error`。
+- **一致性断言（每次构建都编译）**：声明模式把本类全部标注按方法序拼成文本，取 FNV-1a 64 写成 `pub const __RAVA_MOVED_<X>: u64`；实现模式对完整块重算 `moved_fact`，生成 `const _: () = assert!(__RAVA_MOVED_<X> == <重算值>)`。生成器在回落实现下算出的标注与编译器记号流下宏的结论若有出入，实现 crate 编译失败，不会静默错配。
+
+**等价性**
+- 声明模式展开只依赖上表各结论与签名。标注 = 同一函数对同一块文本的结论（断言保证在编译器记号流下也成立），所以声明模式展开与 S4 逐项相同，只多一个 `u64` 常量。
+- 实现层文本逐字节不变；实现模式展开只多一个常量断言。
+- 完整模式（用户 crate、lib crate、Python 生成器）不受影响。
+
+**验收**
+- 27 例生成树对照：实现层逐字节一致；声明层差异只是「插标注 + 体换 `;`」，还原后与 S4 逐字节一致（对照脚本做还原比对）。
+- 宏展开对照：用库对 27 例每个可拆类分别展开「S4 声明文本（带体）」与「S5 声明文本（剥体）」，记号文本一致（只差常量）。
+- 测量：Digester 声明 crate 峰值（目标 ≤ 2 GB）、HelloWorld `cargo build` 墙钟（目标 ≤ 12 s）。
+- 主会话 e2e 抽查：覆盖 Safe 定义 / 覆盖、`safe_stub`、`__impl_` 函数化、构造器与静态方法（含类初始化触发）、super 调用。
 
 ### 7.6 量化目标
 
@@ -534,3 +600,91 @@ Digester 的峰值落在方法体与存储层（类型检查 / 借用检查 / �
 | 其中 `__jbm_` 体函数 | — | 2,603 条目，size_est 57,362 |
 
 - 解读：体函数从 wrapper 方法（统计归 `gen`，−40,489）搬到 `__jbm_`（归 `macro`），外壳每个多一次调用，size_est 合计 +0.9%，峰值 +1.4%，墙钟 +2.9%（单次测量，含噪声）。单 crate 内这是纯搬移的固定开销；收益在 S4：体函数整体离开声明层，声明 crate 只剩外壳与样板。
+
+#### S4：物理拆层（2026-10-01）
+
+- 宏与生成器形态见 §7.5.1。测量工具 `scripts/crate_profile.sh`：对已生成的 scratch 预编依赖后，强制重编 workspace 自有 crate，经 RUSTC_WRAPPER（`/usr/bin/time -l`）记录每 crate 的墙钟和峰值 RSS，以及整次 `cargo build` 的墙钟（`CARGO_BUILD_JOBS=2`、`CARGO_INCREMENTAL=0`）。`PROFILE_TOUCH=user` 只 touch `user/src/main.rs`，测「仅用户类变化」时的重编集合。
+- 27 例生成树对照（基线是 f00b6858 的临时 worktree；`/tmp` 下的分类脚本按 `split_text` 从基线文件重建期望文本后逐字节比较）：
+  - 每个 `java_runtime/src` 生成类文件都等于「基线 + 块首 `#[rava_layer = "decl"]`」或与基线相同（手写、接口）；
+  - 每个 `java_body_k/src/body/<rel>` 都等于从基线同路径文件重建的实现层文本，两个集合完全相同；
+  - 其余差异只有以下几类：
+    - 根 `Cargo.toml` 的 members 加 `java_body_k`（21 例 1 个、2 例 2 个、4 例 3 个）；
+    - `user/Cargo.toml` 加 body 依赖行，`user/src/main.rs` 加 `use java_body_k as _;`；
+    - `java_body_k` 脚手架（lib.rs / mod.rs / Cargo.toml）；
+    - `java_meta/build_script/main.rs` 排除 `java_body_` 前缀；
+    - 仓库路径与由路径派生的包版本号；
+    - closure.json `/summary/perf` 与 `elapsed_ms` 的计时字段。
+  - raw-audit 与 fallback-audit 27 例一致。
+- 装箱校准：
+  - 初版按 6 MiB 贪心装箱，Digester 实现 crate 为 1.44–1.55 GB，另有 0.06 MiB 的尾箱；
+  - 改为均衡装箱：箱数 = max(⌈总字节 / 5 MiB⌉, 2)，各箱均分。至少两箱是为了声明层元数据就绪后让实现层两箱并行。
+  - 均衡装箱只改变类文件归哪个 `java_body_k`，每个类文件的文本不变。上面的 27 例分类脚本不依赖箱的划分。
+- 构建与运行：HelloWorld、DeepCopy、Digester 三例 `cargo build` 均 0 错误。DeepCopy 在 §6.2 时编译失败，现在能编过。HelloWorld 二进制运行输出正确，`nm` 可见 2417 个 `__rava_` 导出符号。
+- 测量条件：stable，`CARGO_BUILD_JOBS=2`，`CARGO_INCREMENTAL=0`，依赖预编，其余为全新 target，全机锁内测量。
+
+| HelloWorld | 前（§6.2 / §7.6） | S4 |
+|---|---|---|
+| `java_runtime`（声明层） | 1.97 GB | 11.0 s / 1246 MB |
+| `java_body_1` / `java_body_2` | — | 4.7 s / 502 MB；4.1 s / 512 MB |
+| `java_meta` | — | 0.6 s / 405 MB |
+| bin | — | 0.2 s / 184 MB |
+| `cargo build` 墙钟 | 16.0 s | 15.9 s（单箱时 18.1 s） |
+| 仅改 user 源文件 | — | 2.0 s：只重编 `java_meta`（含用户类元数据，S1 设计）与 bin，`java_runtime` / `java_body_*` 0 个 |
+
+| Digester | 前（§7.7 S1，stable） | S4 |
+|---|---|---|
+| `java_runtime`（声明层） | 116.7 s / 4979 MB | 53.8 s / 4509 MB |
+| `java_body_1..4` | — | 11.4–15.0 s / 1196–1261 MB |
+| `java_meta` | 3.9 s / 1638 MB | 2.7 s / 1291 MB |
+| `cargo build` 墙钟 | 124.7 s | 82.7 s |
+
+| DeepCopy | 前（§6.2，借用检查处失败） | S4 |
+|---|---|---|
+| `java_runtime`（声明层） | ≥ 6.11 GB（失败退出） | 76.3 s / 5437 MB |
+| `java_body_1..6` | — | 11.7–13.8 s / 1112–1244 MB |
+| `java_meta` | — | 3.7 s / 1691 MB |
+| `cargo build` 墙钟 | — | 116.6 s |
+
+对照 §7.6：
+
+| 指标 | 终态目标 | S4 实测 | 结论 |
+|---|---|---|---|
+| 实现 crate 峰值 | 每个 ≤ 1.5 GB | 最大 1.26 GB（Digester / DeepCopy） | 达成 |
+| HelloWorld 声明 crate 峰值 | ≤ 1.2 GB | 1.25 GB | 差 0.05 GB |
+| Digester 声明 crate 峰值 | ≤ 2 GB | 4.51 GB | 未达 |
+| HelloWorld 墙钟 | ≤ 12 s | 15.9 s | 未达 |
+| 仅用户类变化时 JDK 重编 | 0 个 crate | 0 个（`java_meta` 属元数据，含用户类） | 达成 |
+
+**声明层为何高于 §7.1 的 3.21 GB 预测**
+
+Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`）：49.4 s，峰值 4.65 GB。
+
+| 阶段 | 耗时 | RSS |
+|---|---:|---|
+| 宏展开 | 17.3 s | 45 → 1650 MB |
+| 名称解析 + HIR 降级 | — | → 2496 MB |
+| coherence | 1.8 s | → 2886 MB |
+| 类型检查 | 8.6 s | → 3765 MB |
+| 借用检查 | 9.9 s | → 4214 MB |
+| 单态化收集 / 元数据 / codegen | 2.0 / 3.6 / 4.6 s | → 4.7–4.97 GB |
+
+- 后端已大幅缩小：单态化 size_est 从 419.5 万降到 114.5 万。剩余部分都是声明层样板，前列为：
+  - `From` 8.1 万；
+  - `ObjectVTable for X` 的 `__view_into` / `__erased_vtable` / `__virtual_view` / `__shallow_copy` / `__view_as` / `__erased_inner` / `__unsafe_*`，合计约 15 万；
+  - `__class_init` 2.3 万；
+  - `__reflect_field` 2.3 万。
+  
+  这与 §7.4 的样板构成一致。
+- 峰值逐阶段累积，不集中在某一阶段。§7.1 实验测的是「去掉方法体后的展开结果」直接编译，S4 的声明层比它多出三类：
+  1. **声明层源码仍含整块文本（含方法体）**：
+     - Digester 声明 crate 源码 19.9 MB，其中 17.8 MB 与实现层重复；
+     - 宏在声明模式下仍要词法分析、解析、改写全部方法体，再丢弃实现层部分；
+     - 宏展开 17.3 s，占声明 crate 的 35%；
+     - §7.1 实验 1 测得方法体记号使展开后 RSS 多约 0.43 GB。
+  2. **泛型类方法体与接口 default / static 方法体仍在声明层**：它们随 S6 下沉。
+  3. **每个下沉函数在声明层多一个 extern 外壳**：Digester 有 10,508 个 `__jb` 外壳，size_est 2.1 万，前端按函数定义计费。
+- 因此声明层降到 2 GB 需要 S5 / S6，并新增一项（列入 S5）：
+  - **声明层文本不带下沉方法体**：生成器写声明层时，把已下沉方法的方法体换成空体标记，宏的声明模式不再接收、解析这些记号。
+  - 前提：宏决定「是否下沉」的判据不能读方法体。今天的判据里，回落条件（体内含 `impl`、`this` 与 `self` 同时出现）和存根判定（体为 `panic!("stub: …")`）都要读体。需要先把这些判据改为由生成器在块属性里显式标注，两层读同一标注，再做剥体。
+  - 等价性要逐项论证，属不确定的形态改动，本步不做。
+- 墙钟：HelloWorld 的关键路径是「声明层到元数据（约 9 s）→ 实现层两箱并行（约 4.7 s）→ 链接」。≤ 12 s 需要声明层降到 §7.1 预测的约 6 s 量级，取决于 S5（含上面的剥体项）。实现层再细分不能缩短关键路径（`CARGO_BUILD_JOBS=2`）。
