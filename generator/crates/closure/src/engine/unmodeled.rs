@@ -22,8 +22,9 @@ impl Engine<'_> {
     ///   返回值按 open(返回类型) 建模，Rust 侧构造的对象（静态单例、`T::default()` 填表）不在 G 中，
     ///   open 展开为空集并不说明只可能是 null；
     /// - 手写调用点写回实参数组的元素来源；无字节码可分析（类缺失）的方法返回值；
-    /// - 派生：从值流可能缺失的数组读出的元素（数组本身来自手写 / native，元素由 Rust 填入，流图里
-    ///   没有元素到读取点的边）。
+    /// - 派生：以值流可能缺失的对象为基址 / 接收者的读取结果——数组元素（数组来自手写 / native，元素由
+    ///   Rust 填入，流图里没有元素到读取点的边）、实例字段（Rust 侧构造的对象，字段由 Rust 写入）、
+    ///   实例方法返回值（接收者不在 G 中，派发目标与其返回值都不在流图里）。
     /// 从这些节点沿流边（不按过滤类型收窄，保守）可达的节点均视为「值流可能缺失」；派生规则与可达
     /// 传播交替到不动点
     pub(super) fn unmodeled(&self) -> Unmodeled {
@@ -37,24 +38,22 @@ impl Engine<'_> {
         });
         let mut marked = vec![false; n];
         reach(&g.edges, |i| g.rep(i), &mut marked, roots);
-        // 数组读取点：(读取点代表, 数组值来源代表；None = 值未知)
+        // 派生读取点：(读取点代表, 基址 / 接收者值来源代表；None = 值未知)
         let loads: Vec<(u32, Option<Vec<u32>>)> = self
             .methods
             .values()
             .enumerate()
             .filter_map(|(i, mn)| mn.analysis.as_ref().map(|a| (i, a)))
             .flat_map(|(i, a)| {
-                a.events.iter().filter_map(move |(pc, e)| match e {
-                    Event::ArrayLoad { array, .. } => {
-                        let at = g.lookup(&Node::S(i, *pc)).map(|x| g.rep(x))?;
-                        let src = recv_sources(i, array).map(|ns| ns.iter().filter_map(|n| g.lookup(n).map(|x| g.rep(x))).collect());
-                        Some((at, src))
-                    }
-                    _ => None,
+                a.events.iter().filter_map(move |(pc, e)| {
+                    let base = derived_base(e)?;
+                    let at = g.lookup(&Node::S(i, *pc)).map(|x| g.rep(x))?;
+                    let src = recv_sources(i, base).map(|ns| ns.iter().filter_map(|n| g.lookup(n).map(|x| g.rep(x))).collect());
+                    Some((at, src))
                 })
             })
             .collect();
-        derive_loads(&g.edges, |i| g.rep(i), &mut marked, &loads);
+        derive_sites(&g.edges, |i| g.rep(i), &mut marked, &loads);
         Unmodeled { marked }
     }
 
@@ -67,8 +66,18 @@ impl Engine<'_> {
     }
 }
 
-/// 派生规则到不动点：数组值来源有已标记者（或值未知）的读取点并入标记，再沿流边传播
-fn derive_loads(edges: &[Vec<(u32, u32)>], rep: impl Fn(u32) -> u32 + Copy, marked: &mut [bool], loads: &[(u32, Option<Vec<u32>>)]) {
+/// 结果随基址 / 接收者派生污染的读取事件：数组读取、实例字段读取、实例方法调用（返回其基址 / 接收者值）
+fn derived_base(e: &Event) -> Option<&V> {
+    match e {
+        Event::ArrayLoad { array, .. } => Some(array),
+        Event::Field { recv: Some(r), value: None, .. } => Some(r),
+        Event::Invoke { opcode, args, .. } if *opcode != classfile::op::INVOKESTATIC => args.first(),
+        _ => None,
+    }
+}
+
+/// 派生规则到不动点：基址 / 接收者值来源有已标记者（或值未知）的读取点并入标记，再沿流边传播
+fn derive_sites(edges: &[Vec<(u32, u32)>], rep: impl Fn(u32) -> u32 + Copy, marked: &mut [bool], loads: &[(u32, Option<Vec<u32>>)]) {
     loop {
         let fresh: Vec<u32> = loads
             .iter()
@@ -151,12 +160,29 @@ mod tests {
         let mut m = vec![false; 7];
         reach(&edges, rep, &mut m, [0].into_iter());
         let loads = vec![(4, Some(vec![3])), (2, Some(vec![1])), (5, Some(vec![6]))];
-        derive_loads(&edges, rep, &mut m, &loads);
+        derive_sites(&edges, rep, &mut m, &loads);
         assert_eq!(m, vec![true, true, true, true, true, false, false]);
         // 数组值未知：读取点恒并入
         let mut m = vec![false; 7];
-        derive_loads(&edges, rep, &mut m, &[(5, None)]);
+        derive_sites(&edges, rep, &mut m, &[(5, None)]);
         assert!(m[5] && !m[6]);
+    }
+
+    /// 派生读取事件：数组读取、实例字段读取、实例调用取基址 / 接收者；静态读取 / 静态调用 / 字段写入不派生
+    #[test]
+    fn derived_base_by_event_kind() {
+        use classfile::op;
+        let mref = MemberRef { owner: "p/C".into(), name: "f".into(), desc: "()Lp/C;".into() };
+        let r = V::Null;
+        let inv = |opcode| Event::Invoke { opcode, mref: mref.clone(), iface: false, args: vec![r.clone()] };
+        let fld = |opcode, recv: Option<V>, value: Option<V>| Event::Field { opcode, mref: mref.clone(), recv, value };
+        assert!(derived_base(&Event::ArrayLoad { array: r.clone(), index: V::Top }).is_some());
+        assert!(derived_base(&inv(op::INVOKEVIRTUAL)).is_some());
+        assert!(derived_base(&inv(op::INVOKEINTERFACE)).is_some());
+        assert!(derived_base(&inv(op::INVOKESTATIC)).is_none());
+        assert!(derived_base(&fld(op::GETFIELD, Some(r.clone()), None)).is_some());
+        assert!(derived_base(&fld(op::PUTFIELD, Some(r.clone()), Some(V::Top))).is_none());
+        assert!(derived_base(&fld(op::GETSTATIC, None, None)).is_none());
     }
 
     #[test]
