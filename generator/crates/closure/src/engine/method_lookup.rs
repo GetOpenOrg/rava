@@ -63,7 +63,7 @@ fn ctor_writes_plain(cf: &ClassFile, name: &str, desc: &str) -> bool {
             !hit || match (&w[0].opcode, &w[0].operand) {
                 (&ALOAD, classfile::Operand::Local(i)) => *i > 0,
                 (op, _) if (ALOAD_0 + 1..=ALOAD_3).contains(op) => true,
-                (_, classfile::Operand::Ldc(Const::String(_))) => true,
+                (_, classfile::Operand::Ldc(Const::String(_) | Const::StringUtf16(_))) => true,
                 _ => false,
             }
         })

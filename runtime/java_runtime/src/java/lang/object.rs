@@ -71,9 +71,15 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     // 不感知；`Object` 包装器的固有方法（object_impl.rs）承载 bare-Object 接收者
     // 的调用（invokevirtual java/lang/Object.*）。重载命名与生成侧同源：
     // wait()V → wait、wait(J)V → wait_l、wait(JI)V → wait_l_i（描述符后缀 _PRIM_SUFFIX，J→l）。
+    // 调用点恒为具体类型接收者（生成侧对 wrapper / 数组 / 盒类型静态调用，Object 走固有
+    // 方法），故以 `where Self: Sized` 移出 vtable：只在被调用的类型上单态化，不再为每个
+    // 实现类型各生成一份（emitter-performance §5.5 N4）。
 
     /// java.lang.Object.wait()V（等价 wait(0)）
-    fn wait(&self) -> crate::error::Result<()> {
+    fn wait(&self) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -81,7 +87,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// java.lang.Object.wait(J)V：millis 为 0 表示无限等待，负值抛 IllegalArgumentException。
-    fn wait_l(&self, millis: i64) -> crate::error::Result<()> {
+    fn wait_l(&self, millis: i64) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -89,7 +98,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// java.lang.Object.wait(JI)V：nanos 须在 0..=999999。
-    fn wait_l_i(&self, millis: i64, nanos: i32) -> crate::error::Result<()> {
+    fn wait_l_i(&self, millis: i64, nanos: i32) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -97,7 +109,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// java.lang.Object.notify()V：唤醒一个在该对象监视器上等待的线程，无等待者时静默。
-    fn notify(&self) -> crate::error::Result<()> {
+    fn notify(&self) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -105,7 +120,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// java.lang.Object.notifyAll()V
-    fn notify_all(&self) -> crate::error::Result<()> {
+    fn notify_all(&self) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -113,7 +131,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// monitorenter（指令侧）：进入本对象的监视器（可重入）。
-    fn monitor_enter(&self) -> crate::error::Result<()> {
+    fn monitor_enter(&self) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -121,7 +142,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// monitorexit（指令侧）：退出本对象的监视器一层。
-    fn monitor_exit(&self) -> crate::error::Result<()> {
+    fn monitor_exit(&self) -> crate::error::Result<()>
+    where
+        Self: Sized,
+    {
         crate::monitor::exit(self.__identity() as usize)
     }
 

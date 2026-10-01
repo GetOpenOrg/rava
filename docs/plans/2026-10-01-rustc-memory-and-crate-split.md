@@ -219,3 +219,70 @@ extern 函数只能是单态的。实测泛型 struct 占比：HelloWorld 56 / 2
    - ④ 拆 crate（第 4 步）：降低单个 rustc 峰值的唯一结构性手段；前端内存按 crate 体量线性分摊。
    - ①③ 归 runtime / 宏的属主。
 
+
+### 6.2 第 1 步复测：emitter-perf2 合入后（2026-10-01，生成器效率线）
+
+**测量方法**
+- 生成树：`rust-closure-analyzer` @ f6d80103（含 emitter-perf2：宏样板收窄、二进制约小 40%），JDK 21，`rava build --no-run`。
+- 脚本化：`scripts/rustc_profile.sh <out> <scratch>...`（nightly 1.100.0-nightly 2026-09-04；依赖先编好；`-Z time-passes` + `-Z dump-mono-stats`；`/usr/bin/time -l` 取峰值；每 2 s 采样 RSS）。单态化归类：`scripts/mono_stats.py`。
+- `-Z self-profile` 可产出 `.mm_profdata`，但本机没有 measureme 的 `summarize`，无法汇总，本次只用 time-passes。
+- 测量前等待本机无 rustc 空闲 30 s 再启动；Digester 测量期间有其他工作树的 `cargo build`（closure / emit crate，约 0.6 GB）插入，耗时略偏高，峰值 RSS 不受影响（按进程计）。
+
+**规模**
+
+| 用例 | 生成类 | 生成源码（java_runtime） | `fn` 数 |
+|---|---:|---:|---:|
+| HelloWorld | 249 | 4.7 MB | 9,120 |
+| Digester | 1,439 | 27.9 MB | 39,290 |
+| DeepCopy | 1,646 | 31.2 MB | 42,970 |
+
+**java_runtime 单个 rustc：耗时（s）/ 阶段结束时 RSS（MB）**
+
+| 阶段 | HelloWorld | Digester | DeepCopy |
+|---|---|---|---|
+| 宏展开 `expand_crate` | 2.9 / 45 → 430 | 19.2 / 45 → 2443 | 20.6 / 45 → 2722 |
+| 名称解析 `resolve_crate` | 0.2 / 530 | 1.4 / 2891 | 1.5 / 3203 |
+| AST → HIR 降级（按前后阶段 RSS 推算） | +193 MB → 723 | +1.27 GB → 4157 | +1.35 GB → 4553 |
+| coherence | 0.5 / 831 | 2.9 / 4733 | 3.0 / 4525 |
+| 类型检查 `type_check_crate` | 3.3 / 1264 | 31.8 / —（压缩回落） | 23.9 / 4822 |
+| MIR 借用检查 | 3.2 / 1605 | 28.4 / — | 25.6 / —（此处失败） |
+| lints / misc_checking_3 | 0.2 | 3.8 | — |
+| 单态化收集 | 1.0 / 1817 | 10.0 / 3813 | — |
+| crate 元数据 | 1.4 | 16.5 | — |
+| codegen（含 → LLVM IR） | 2.4 / 1932 | 28.6 | — |
+| LLVM passes（与 codegen 重叠） | 2.4 | 27.9 | — |
+| 链接 rlib | 0.06 | 1.2 | — |
+| **rustc 合计** | **14.4**（墙钟 16.0） | **138.3**（墙钟 144.9） | 77.4（失败退出，墙钟 83.4） |
+| **峰值 RSS（time -l）** | **1.97 GB** | **4.45 GB** | **≥ 6.11 GB**（只到借用检查） |
+
+与 §6.1 对照：
+- HelloWorld：墙钟 17.1 → 16.0 s，峰值 2.35 → 1.97 GB（−16%）；宏展开后 RSS 504 → 430 MB。
+- Digester：rustc 合计 332.6 → 138.3 s。§6.1 那次处在内存压力下（sys 68 s），这次 sys 20 s，两次耗时不可直接比；各阶段比例可比：前端（宏展开到 misc_checking_3）约 88 s（64%），后端约 50 s。峰值 4.35 → 4.45 GB（§6.1 在压力下偏低，按持平看）。
+- DeepCopy：宏展开后 RSS 2944 → 2722 MB，coherence 时 6067 → 4553 MB（阶段 RSS，受压缩影响只作下限），峰值 6.14 → 6.11 GB，基本持平——前端峰值出现在类型检查 / 借用检查阶段，这部分按函数定义计费，宏样板收窄对它影响小。
+- **DeepCopy 仍编译失败**：同一位置 `java/io/object_input_stream.rs:977` E0381（`local_5`），属主会话在修的方法体结构化缺陷，后端数据仍以 Digester 代替。
+
+**单态化实例**
+
+| | HelloWorld | Digester |
+|---|---|---|
+| 条目 / 实例 / size_est | 26,224 / 57,077 / 62.1 万 | 155,522 / 329,431 / 419.5 万 |
+| 对 §6.1 | 实例 −17%，size −37% | 实例 −18%，size −38% |
+
+按 `scripts/mono_stats.py` 归类（启发式与 §6.1 的手工归类口径不同：`gen` 只含单份实例项，多份实例的非 std 项归 `gen-generic`；`__clinit` 不算宏样板），实例 / size 占比：
+
+| 类别 | HelloWorld | Digester |
+|---|---|---|
+| 生成代码单份项 `gen`（方法体、存根、`__clinit`、From 等） | 21.4% / 27.0% | 22.3% / 33.1% |
+| 宏 / runtime `__` 样板 `macro` | 25.3% / 23.3% | 28.2% / 27.8% |
+| std / core 泛型实例 | 27.6% / 31.2% | 23.3% / 21.9% |
+| 多份实例的生成项 `gen-generic` | 11.1% / 7.8% | 10.8% / 7.6% |
+| `ObjectVTable` 缺省方法 | 11.8% / 7.8% | 12.9% / 6.9% |
+| `object_ext` 泛型辅助 | 1.4% / 2.4% | 1.5% / 2.4% |
+| `gil` / `sync_model` | 1.4% / 0.4% | 1.0% / 0.2% |
+
+size_est 前列（Digester）：`Weak::drop` 4,799 份（18.7 万，占 4.5%）、`Box::new` 7,882 份、`checkcast::<T>` 1,253 份、`Arc::drop_slow` / `Arc::new` / `Arc::drop` 各约 4,800–5,600 份、`dyn Any::downcast_mut` 3,268 份。`Weak` / `Arc` 一族按持有类型单态化，来源是每类一份的弱自引用 / 共享载体，合计约 10% size。
+
+**结论（在 §6.1 基础上更新）**
+1. 结论 1、2 不变：内存与耗时都在前端。emitter-perf2 让宏展开与 HIR 体量下降约 10–15%，单态化规模下降 37–38%，HelloWorld 峰值降到 1.97 GB；大用例的峰值由类型检查 / 借用检查阶段决定，基本没动。
+2. 后端（单态化 + codegen + LLVM）的剩余热点从宏样板转向 std 智能指针按类型的实例（`Weak` / `Arc` / `Box` / `downcast_*`，合计约 20% size），与 `ObjectVTable` 缺省方法（约 7%）。这两项的收窄方向是 runtime 非泛型内核 + 薄泛型入口（§6.1 结论 4 ③），归 runtime / 宏属主。
+3. 单个 rustc 峰值 ≤ 2 GB 的目标（第 4 步）只有 HelloWorld 达到；Digester / DeepCopy 仍需第 2 步收窄闭包和第 4 步拆 crate。

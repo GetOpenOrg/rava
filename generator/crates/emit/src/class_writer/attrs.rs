@@ -114,6 +114,8 @@ pub fn constant_value_str(c: &Const) -> String {
             }
         }
         Const::String(s) => ir::render::escape_str(s),
+        // 元数据文本只作展示；常量值本身由 `utf16_const_literal` 无损发射
+        Const::StringUtf16(u) => ir::render::escape_str(&String::from_utf16_lossy(u)),
         _ => String::new(),
     }
 }

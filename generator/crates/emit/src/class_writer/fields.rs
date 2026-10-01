@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use classfile::Field;
+use classfile::{Const, Field};
 use ty::ident::safe_ident;
 use ty::{ClassInfo, RsType};
 
@@ -203,6 +203,8 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
             if !hw.is_some_and(|h| h.methods.contains(&fname)) {
                 blocks.push(injected_static_block(&head, &fname, &ty, expr));
             }
+        } else if let Some(Const::StringUtf16(units)) = &sf.constant_value {
+            blocks.push(format!("{head}pub const {fname}: {ty} = {};", utf16_const_literal(units)));
         } else if !cv.is_empty() {
             blocks.push(format!("{head}pub const {fname}: {ty} = {};", const_literal(&ty, &cv)));
         } else if type_only {
@@ -245,6 +247,12 @@ fn injected_static_block(head: &str, fname: &str, ty: &str, expr: &str) -> Strin
 }
 
 /// ConstantValue 的 Rust 字面量
+/// 含孤立代理项的 String 常量（Rust `&str` 无法表示）：UTF-16 码元数组形态，与 ldc 同形
+fn utf16_const_literal(units: &[u16]) -> String {
+    let body: Vec<String> = units.iter().map(|u| format!("0x{u:04X}")).collect();
+    format!("String::from_utf16_lit(&[{}])", body.join(", "))
+}
+
 fn const_literal(ty: &str, cv: &str) -> String {
     let float = |suffix: &str| match cv {
         "inf" => format!("{suffix}::INFINITY"),
@@ -271,6 +279,7 @@ mod tests {
         assert_eq!(type_names("Rc<RefCell<Vec<T>>>, &'a [X]"), vec!["Rc", "RefCell", "Vec", "T", "a", "X"]);
         assert_eq!(idents("Foo<T1, _x>"), vec!["Foo", "T1", "_x"]);
         assert_eq!(const_literal("f32", "1e-05"), "1e-05f32");
+        assert_eq!(utf16_const_literal(&[0x61, 0xD83D]), "String::from_utf16_lit(&[0x0061, 0xD83D])");
         assert_eq!(const_literal("f64", "-inf"), "f64::NEG_INFINITY");
         assert_eq!(const_literal("bool", "1"), "true");
         assert_eq!(const_literal("String", "a"), "String::from(\"a\")");

@@ -13,16 +13,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use classfile::{op, ClassFile, Const, Method, MemberRef, Operand};
+use classfile::{op, ClassFile, Const, Insn, Method, MemberRef, Operand};
 use closure::engine::Level;
 use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
-use ty::Registry;
+use ty::{ClassInfo, Registry};
 
 use crate::facts::ClosureFacts;
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
+use crate::par::par_map;
 use crate::InputError;
 
 /// 方法键 (类, 方法名, 描述符)
@@ -70,6 +71,8 @@ pub struct BuildInput<'a> {
     pub libs: &'a [LibCrate],
     /// 手写层真源 `runtime/java_runtime/src`
     pub runtime_src: &'a Path,
+    /// 规范化并行度：0 = 可用核数，1 = 串行（结果与并行度无关）
+    pub jobs: usize,
 }
 
 /// 反射面事实
@@ -108,6 +111,8 @@ pub struct EmitInput {
     pub warnings: Vec<String>,
     /// 规范化后与原字节码不同的方法体
     normalized: BTreeMap<MethodKey, NormCode>,
+    /// 构建各步耗时（观测用，`--perf` 报告；不影响输出）
+    pub timings: Vec<(&'static str, std::time::Duration)>,
 }
 
 impl EmitInput {
@@ -213,12 +218,9 @@ fn is_identifier(s: &str) -> bool {
     }
 }
 
-fn ldc_string(ins: &NInsn) -> Option<&str> {
-    match ins {
-        NInsn::Op(i) if matches!(i.opcode, op::LDC | op::LDC_W | op::LDC2_W) => match &i.operand {
-            Operand::Ldc(Const::String(s)) => Some(s),
-            _ => None,
-        },
+fn ldc_string(i: &Insn) -> Option<&str> {
+    match &i.operand {
+        Operand::Ldc(Const::String(s)) if matches!(i.opcode, op::LDC | op::LDC_W | op::LDC2_W) => Some(s),
         _ => None,
     }
 }
@@ -272,25 +274,36 @@ impl<'a> BuildInput<'a> {
         Ok(reg)
     }
 
-    /// 全部 registry 类的方法体规范化（折叠点 → VM 常量剪枝），只留改动过的
+    /// 全部 registry 类的方法体规范化（折叠点 → VM 常量剪枝），只留改动过的。
+    ///
+    /// 逐类并行：各类方法体规范化互不依赖，结果按类序归并入 BTreeMap（与并行度无关）；
+    /// 出错时报类序最先的错误，与串行遍历一致。
     fn normalize(&self, reg: &Registry) -> Result<BTreeMap<MethodKey, NormCode>, InputError> {
-        let vmc = &self.manifest.vm_constants;
+        let classes: Vec<&ClassInfo> = reg.iter().collect();
+        let per_class = par_map(self.jobs, &classes, |ci| self.normalize_class(ci));
         let mut out = BTreeMap::new();
-        for ci in reg.iter() {
-            for m in ci.methods() {
-                let Some(code) = &m.code else { continue };
-                let id = format!("{}.{}:{}", ci.name(), m.name, m.desc);
-                let (base, folded) = match self.facts.folds.get(&id) {
-                    Some(f) => (apply_fold(&id, code, f)?, true),
-                    None => (NormCode::raw(code), false),
-                };
-                let before = base.insns.len();
-                let NormCode { max_stack, max_locals, code_len, insns, exception_table } = base;
-                let insns = vmc.prune(insns, &exception_table);
-                if folded || insns.len() != before {
-                    let n = NormCode { max_stack, max_locals, code_len, insns, exception_table };
-                    out.insert((ci.name().to_string(), m.name.clone(), m.desc.clone()), n);
-                }
+        for r in per_class {
+            out.extend(r?);
+        }
+        Ok(out)
+    }
+
+    fn normalize_class(&self, ci: &ClassInfo) -> Result<Vec<(MethodKey, NormCode)>, InputError> {
+        let vmc = &self.manifest.vm_constants;
+        let mut out = Vec::new();
+        for m in ci.methods() {
+            let Some(code) = &m.code else { continue };
+            let id = format!("{}.{}:{}", ci.name(), m.name, m.desc);
+            let (base, folded) = match self.facts.folds.get(&id) {
+                Some(f) => (apply_fold(&id, code, f)?, true),
+                None => (NormCode::raw(code), false),
+            };
+            let before = base.insns.len();
+            let NormCode { max_stack, max_locals, code_len, insns, exception_table } = base;
+            let insns = vmc.prune(insns, &exception_table);
+            if folded || insns.len() != before {
+                let n = NormCode { max_stack, max_locals, code_len, insns, exception_table };
+                out.push(((ci.name().to_string(), m.name.clone(), m.desc.clone()), n));
             }
         }
         Ok(out)
@@ -311,15 +324,15 @@ impl<'a> BuildInput<'a> {
             let Some(cf) = by_name.get(k.0.as_str()) else { continue };
             for m in cf.methods.iter().filter(|m| m.name == k.1 && m.desc == k.2) {
                 let Some(code) = &m.code else { continue };
-                let owned;
-                let n = match norm.get(k) {
-                    Some(n) => n,
-                    None => {
-                        owned = NormCode::raw(code);
-                        &owned
-                    }
+                // 未改写的方法体直接读原字节码，不复制成 NormCode
+                let ops: Box<dyn Iterator<Item = &Insn>> = match norm.get(k) {
+                    Some(n) => Box::new(n.insns.iter().filter_map(|x| match x {
+                        NInsn::Op(i) => Some(i),
+                        _ => None,
+                    })),
+                    None => Box::new(code.insns.iter()),
                 };
-                let strs = n.insns.iter().filter_map(ldc_string).filter(|s| is_identifier(s));
+                let strs = ops.filter_map(ldc_string).filter(|s| is_identifier(s));
                 field_names.extend(strs.map(str::to_string));
             }
         }
@@ -333,12 +346,22 @@ impl<'a> BuildInput<'a> {
     /// 构建发射层输入
     pub fn build(&self) -> Result<EmitInput, InputError> {
         let f = self.facts;
+        let mut timings = Vec::new();
+        let mut since = std::time::Instant::now();
+        let mut lap = |name: &'static str| {
+            let now = std::time::Instant::now();
+            timings.push((name, now - since));
+            since = now;
+        };
         let mut warnings = Vec::new();
         let (closure, field_stubs) = closure_classes(self, &mut warnings);
         let visited = visited_of(self);
+        lap("input.closure");
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
         let registry = self.registry(&lib_crates, &jdk_classes)?;
+        lap("input.registry");
         let normalized = self.normalize(&registry)?;
+        lap("input.normalize");
         let reflect = self.reflect(&closure, &visited, &normalized);
         let module_resources = self
             .manifest
@@ -348,7 +371,9 @@ impl<'a> BuildInput<'a> {
             .collect();
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
-        let handwritten = HandwrittenMap::scan(self.runtime_src, &registry);
+        lap("input.reflect");
+        let handwritten = HandwrittenMap::scan(self.runtime_src, &registry, self.jobs);
+        lap("input.handwritten");
         Ok(EmitInput {
             user_classes: self.user_classes.to_vec(),
             lib_crates,
@@ -364,6 +389,7 @@ impl<'a> BuildInput<'a> {
             warnings,
             normalized,
             registry,
+            timings,
         })
     }
 }

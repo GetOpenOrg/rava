@@ -318,12 +318,12 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
 
 /// 泛型类的登记路径实参（反射分派 / 类初始化钩子 / 引导初始化的按名登记共用）：无发射（手写类）→ 空
 pub fn registration_turbofish(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> String {
-    ems.get(bin).map(|em| object_turbofish(ctx, em, bin)).unwrap_or_default()
+    ems.get(bin).map(|em| object_turbofish(ctx, &em.text, bin)).unwrap_or_default()
 }
 
 /// 泛型类的登记路径实参：每个类型形参取 Object
-fn object_turbofish(ctx: &EmitCtx<'_>, em: &ClassEmission, bin: &str) -> String {
-    object_turbofish_of(&em.text, &ctx.short(bin))
+fn object_turbofish(ctx: &EmitCtx<'_>, text: &str, bin: &str) -> String {
+    object_turbofish_of(text, &ctx.short(bin))
 }
 
 /// 按发射文本里的 struct 声明取泛型形参个数（形参带约束 `V: Clone` 时同样按逗号计）
@@ -333,40 +333,58 @@ fn object_turbofish_of(text: &str, short: &str) -> String {
     format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
 }
 
-fn append(em: &mut ClassEmission, text: &str) {
-    em.text = format!("{}\n{text}\n", em.text.trim_end_matches('\n'));
+fn appended(text: &str, tail: &str) -> String {
+    format!("{}\n{tail}\n", text.trim_end_matches('\n'))
 }
 
-/// 字段闭包：发射并登记（无臂 → 不登记）
-fn field_closure(ctx: &EmitCtx<'_>, ems: &mut Emissions, bin: &str, only: Option<&BTreeSet<String>>, ledger: &mut BTreeMap<String, String>) {
-    let Some(text) = ems.get(bin).and_then(|em| emit_fields_for(ctx, bin, em, only)) else { return };
+/// 字段闭包：(追加后的类文本, 登记行)；无臂 → None（不登记）。只读 `ems`
+fn field_closure(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str, only: Option<&BTreeSet<String>>) -> Option<(String, String)> {
+    let em = ems.get(bin)?;
+    let text = emit_fields_for(ctx, bin, em, only)?;
     let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
-    let em = ems.get_mut(bin).expect("已校验存在");
-    append(em, &text);
-    let tf = object_turbofish(ctx, em, bin);
-    ledger.insert(
-        bin.to_string(),
-        format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),"),
-    );
+    let new = appended(&em.text, &text);
+    let tf = object_turbofish(ctx, &new, bin);
+    let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),");
+    Some((new, line))
 }
 
 fn emittable(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> bool {
     ems.get(bin).is_some_and(|e| !e.handwritten) && ctx.ty.reg.contains(bin)
 }
 
+/// 按类并行求值 `f`（各类只读 `ems`、只改写自己的文本），再按 `bins` 序回写文本、收集登记行
+fn per_class<'b>(
+    ctx: &EmitCtx<'_>,
+    ems: &mut Emissions,
+    bins: &[(&'b str, Option<&'b BTreeSet<String>>)],
+    ledger: &mut BTreeMap<String, String>,
+    f: impl Fn(&Emissions, &str, Option<&BTreeSet<String>>) -> Option<(String, String)> + Sync,
+) {
+    let jobs = crate::par::resolve_jobs(ctx.opts.jobs);
+    let shared: &Emissions = ems;
+    let out = crate::par::par_map(jobs, bins, |(bin, only)| f(shared, bin, *only));
+    for ((bin, _), r) in bins.iter().zip(out) {
+        let Some((text, line)) = r else { continue };
+        ems.get_mut(*bin).expect("已校验存在").text = text;
+        ledger.insert(bin.to_string(), line);
+    }
+}
+
 /// 用户树类的分派 / 字段闭包 + 序列化协议 / 按名反射的 JDK 字段闭包 + 常量反射引用面的
-/// JDK 方法臂；返回 main 登记行（binary 序）
+/// JDK 方法臂；返回 main 登记行（binary 序）。
+///
+/// 每类的闭包只由该类自己的文本推出，三轮各自按类并行、按原序回写：字段闭包（用户类）→
+/// 字段闭包（其余类，不含上一轮已登记者）→ 方法分派（读取字段闭包追加后的文本）
 pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     let reflect = &ctx.input.reflect;
     let user_bins: BTreeSet<&str> = ctx.input.user_classes.iter().map(String::as_str).collect();
     let mut fields: BTreeMap<String, String> = BTreeMap::new();
-    for bin in &user_bins {
-        if emittable(ctx, ems, bin) {
-            field_closure(ctx, ems, bin, None, &mut fields);
-        }
-    }
+    let users: Vec<(&str, Option<&BTreeSet<String>>)> =
+        user_bins.iter().filter(|b| emittable(ctx, ems, b)).map(|b| (*b, None)).collect();
+    per_class(ctx, ems, &users, &mut fields, |ems, bin, only| field_closure(ctx, ems, bin, only));
     let mut all: Vec<String> = ems.keys().cloned().collect();
     all.sort();
+    let mut onlys: Vec<(&str, Option<BTreeSet<String>>)> = Vec::new();
     for bin in &all {
         if user_bins.contains(bin.as_str()) || fields.contains_key(bin) || !emittable(ctx, ems, bin) {
             continue;
@@ -376,31 +394,34 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
             let named = ci.fields().iter().filter(|f| f.is_static() && reflect.field_names.contains(&f.name)).map(|f| f.name.clone());
             SERIAL_PROTOCOL_FIELDS.iter().map(|s| s.to_string()).chain(named).collect()
         });
-        if let Some(o) = &only {
-            let text = &ems[bin.as_str()].text;
+        onlys.push((bin, only));
+    }
+    let jdk: Vec<(&str, Option<&BTreeSet<String>>)> = onlys.iter().map(|(b, o)| (*b, o.as_ref())).collect();
+    per_class(ctx, ems, &jdk, &mut fields, |ems, bin, only| {
+        if let Some(o) = only {
+            let text = &ems[bin].text;
             if !o.iter().any(|n| text.contains(&format!("name = \"{n}\""))) {
-                continue;
+                return None;
             }
         }
-        field_closure(ctx, ems, bin, only.as_ref(), &mut fields);
-    }
+        field_closure(ctx, ems, bin, only)
+    });
     let mut targets: BTreeMap<&str, Option<&BTreeSet<String>>> = user_bins.iter().map(|b| (*b, None)).collect();
     for (b, names) in &reflect.consts {
         targets.entry(b.as_str()).or_insert(Some(names));
     }
+    let targets: Vec<(&str, Option<&BTreeSet<String>>)> = targets
+        .into_iter()
+        .filter(|(bin, _)| ems.get(*bin).is_some_and(|e| !e.handwritten) && ctx.ty.reg.get(bin).is_some_and(|c| !c.is_interface()))
+        .collect();
     let mut methods: BTreeMap<String, String> = BTreeMap::new();
-    for (bin, only) in targets {
-        if !ems.get(bin).is_some_and(|e| !e.handwritten) || !ctx.ty.reg.get(bin).is_some_and(|c| !c.is_interface()) {
-            continue;
-        }
-        let Some(text) = emit_for(ctx, bin, &ems[bin], only) else { continue };
+    per_class(ctx, ems, &targets, &mut methods, |ems, bin, only| {
+        let em = &ems[bin];
+        let text = emit_for(ctx, bin, em, only)?;
         let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
-        append(ems.get_mut(bin).expect("已校验存在"), &text);
-        methods.insert(
-            bin.to_string(),
-            format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),"),
-        );
-    }
+        let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),");
+        Some((appended(&em.text, &text), line))
+    });
     DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }
 }
 

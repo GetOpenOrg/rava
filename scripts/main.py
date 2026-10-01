@@ -356,6 +356,9 @@ def main():
                     help='闭包诊断：触发边转储到 FILE（每行 源\\t目标\\t条件；转交 rava --dump-edges）')
     ap.add_argument('--precheck-only', action='store_true',
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
+    ap.add_argument('--closure-json', action='store_true',
+                    help='Rust 生成器另写出 <scratch>/closure_input/closure.json（动态对照 / 生成树对照 / rava emit 用），'
+                         '并校验由它解析的闭包事实与进程内直传的一致；缺省不写')
     ap.add_argument('--raw-sites', default='', metavar='FILE',
                     help='Raw 逃生舱构造位点剖面追加写入 FILE（FS-Q1 热点排序）')
     add_generator_argument(ap)
@@ -391,7 +394,7 @@ def main():
         run_rust(java_files, out_dir, clean=args.clean, strict=args.strict,
                  locales=tuple(t for t in args.locales.split(',') if t.strip()),
                  libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
-                 precheck_only=args.precheck_only, raw_sites=args.raw_sites,
+                 precheck_only=args.precheck_only, raw_sites=args.raw_sites, closure_json=args.closure_json,
                  extra=_closure_diag_args(args))
         if args.precheck_only:
             return

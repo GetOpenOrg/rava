@@ -72,8 +72,8 @@ struct ClassJob<'c> {
 }
 
 /// 逐类生成文本（尚未落盘），发射序：JDK（闭包序）→ lib crate（声明序，类名序）→ 用户类。三段：
-/// 1. 并行：引用集 / 手写覆盖副本（只读）；
-/// 2. 串行（发射序）：跨类导入——`seen_simples` 首个引入者胜出，结果依赖发射序；
+/// 1. 并行：引用集 / 手写覆盖副本 / 跨类导入规划（只读）；
+/// 2. 串行（发射序）：跨类导入短名裁决——`seen_simples` 首个引入者胜出，结果依赖发射序（只做查表）；
 /// 3. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
 ///
 /// 除 2 外各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
@@ -123,10 +123,8 @@ fn emit_classes<'l>(
         (site, prep, t.elapsed())
     });
     perf.mark("classes.prep");
-    let mut cross = Vec::with_capacity(jobs.len());
-    for (j, (site, prep, _)) in jobs.iter().zip(&preps) {
-        cross.push(class_cross_imports(ctx, state, j.ci, site, prep)?);
-    }
+    let preps: Vec<_> = preps.into_iter().map(|(s, p, t)| p.map(|p| (s, p, t))).collect::<Result<_>>()?;
+    let cross: Vec<_> = preps.iter().map(|(_, prep, _)| class_cross_imports(state, prep)).collect();
     perf.mark("classes.imports");
     let work: Vec<_> = jobs.iter().zip(preps).zip(cross).collect();
     let texts = crate::par::par_map(threads, &work, |((j, (site, prep, _)), imports)| {
@@ -175,21 +173,21 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
     perf.mark("classes");
-    let disp = crate::phase2::finish(ctx, &mut state, &mut ems)?;
-    perf.mark("phase2");
-    for em in ems.values() {
-        w.write(&em.path, &em.text)?;
-    }
+    let disp = crate::phase2::finish(ctx, &mut state, &mut ems, &mut perf)?;
+    let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
+    w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
     perf.mark("write");
-    mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), &mut w)?;
+    mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
+    perf.mark("mod_tree");
     libs.write_crates(ctx, &mut w, out_dir)?;
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp)?;
+    mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names)?;
-    perf.mark("mod_tree+entry");
+    perf.mark("entry");
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
         user_classes: user.entries.len(),

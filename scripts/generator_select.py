@@ -6,8 +6,9 @@
 删除条件见 docs/plans/2026-10-01-python-generator-deletion.md。
 
 Rust 路径只替换「转译」段：overlay（main.py prepare_scratch）与 cargo 流程与 Python 路径共用；
-`rava build --no-run` 在同一 scratch 内完成 javac → 闭包分析 → 发射（closure.json 同样落
-`<scratch>/closure_input/`，动态对照照常可用）。
+`rava build --no-run` 在同一 scratch 内完成 javac → 闭包分析 → 发射；闭包结果进程内直传发射层，
+closure.json 只在 `closure_json=True`（main.py `--closure-json`）时落 `<scratch>/closure_input/`
+（动态对照、生成树对照、`rava emit` 需要它）。
 """
 
 import os
@@ -46,7 +47,7 @@ def rava_cmd(*args: str) -> list[str]:
 
 def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict: bool, locales: tuple[str, ...],
              libs: tuple[str, ...] = (), batch: bool = False, debug: bool = False, trace_class: str = '',
-             precheck_only: bool = False, raw_sites: str = '',
+             precheck_only: bool = False, raw_sites: str = '', closure_json: bool = False,
              extra: list[str] = ()) -> None:
     """`rava build --no-run`：（clean 时先清空 out_dir）overlay → javac → 闭包 → 发射进 out_dir。
 
@@ -69,7 +70,8 @@ def run_rust(java_files: list[str], out_dir: str, *, clean: bool = False, strict
         cmd += ['--trace-class', trace_class]
     if raw_sites:
         cmd += ['--raw-sites', os.path.abspath(raw_sites)]
-    for flag, on in (('--strict', strict), ('--batch', batch), ('--debug', debug), ('--precheck-only', precheck_only)):
+    for flag, on in (('--strict', strict), ('--batch', batch), ('--debug', debug), ('--precheck-only', precheck_only),
+                     ('--closure-json', closure_json)):
         if on:
             cmd.append(flag)
     cmd += list(extra)

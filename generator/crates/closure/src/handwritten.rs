@@ -201,6 +201,48 @@ pub struct Handwritten {
     pub errors: RefCell<Vec<String>>,
 }
 
+/// 类的手写文件（共置 `_impl` / `_ext` 与整体手写 `<snake>.rs`）中的编译期类型路径；解析错误追加到 `errors`
+fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str, errors: &mut Vec<String>) -> BTreeSet<TypeRef> {
+    let (pkg, simple) = cls.rsplit_once('/').unwrap_or(("", cls));
+    let mut out = BTreeSet::new();
+    for suf in SUFFIXES.iter().chain([".rs"].iter()) {
+        let path = src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        match type_refs::scan(&content, prelude) {
+            Ok(t) => out.extend(t),
+            Err(e) => errors.push(format!("{}：{e}", path.display())),
+        }
+    }
+    out
+}
+
+/// 只取手写文件类型路径的只读扫描器（无缓存、可跨线程共享）：与 [`Handwritten::class`] 的
+/// `type_refs` 同源同值，供落盘阶段按目录并行判定共置手写的模块依赖
+pub struct HwTypeRefs {
+    src: PathBuf,
+    prelude: HashMap<String, Vec<String>>,
+}
+
+impl HwTypeRefs {
+    /// `runtime_dir` = runtime/java_runtime
+    pub fn new(runtime_dir: &Path) -> Self {
+        HwTypeRefs { src: runtime_dir.join("src"), prelude: load_prelude(runtime_dir) }
+    }
+
+    /// 同 `Handwritten::class(cls).type_refs`（解析错误忽略）
+    pub fn class(&self, cls: &str) -> BTreeSet<TypeRef> {
+        class_type_refs(&self.src, &self.prelude, cls, &mut Vec::new())
+    }
+}
+
+fn load_prelude(runtime_dir: &Path) -> HashMap<String, Vec<String>> {
+    std::fs::read_to_string(runtime_dir.join("src/lib.rs"))
+        .ok()
+        .and_then(|c| syn::parse_file(&c).ok())
+        .map(|f| prelude_uses(&f))
+        .unwrap_or_default()
+}
+
 pub fn to_snake(name: &str) -> String {
     let s: Vec<char> = name.replace('$', "_").chars().collect();
     // ([A-Z]+)([A-Z][a-z]) → \1_\2 ；([a-z\d])([A-Z]) → \1_\2
@@ -246,11 +288,7 @@ impl Handwritten {
                 }
             }
         }
-        let prelude = std::fs::read_to_string(runtime_dir.join("src/lib.rs"))
-            .ok()
-            .and_then(|c| syn::parse_file(&c).ok())
-            .map(|f| prelude_uses(&f))
-            .unwrap_or_default();
+        let prelude = load_prelude(runtime_dir);
         Handwritten {
             src: runtime_dir.join("src"),
             prelude,
@@ -286,14 +324,7 @@ impl Handwritten {
             }
             hw.files.push(path);
         }
-        for suf in SUFFIXES.iter().chain([".rs"].iter()) {
-            let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            match type_refs::scan(&content, &self.prelude) {
-                Ok(t) => hw.type_refs.extend(t),
-                Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
-            }
-        }
+        hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls);
         hw.objects = objects::close(&raw);
         hw.fns = raw.fns;

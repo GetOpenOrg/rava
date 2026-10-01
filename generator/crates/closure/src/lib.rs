@@ -163,8 +163,11 @@ impl Closure<'_> {
     }
 
     pub fn summary(&self) -> Value {
+        self.summary_with(&self.engine.folds())
+    }
+
+    fn summary_with(&self, folds: &[engine::Fold]) -> Value {
         let e = &self.engine;
-        let folds = e.folds();
         let mut by_level: BTreeMap<&str, usize> = BTreeMap::new();
         let mut by_domain: BTreeMap<&str, usize> = BTreeMap::new();
         for c in e.classes.values() {
@@ -238,9 +241,10 @@ impl Closure<'_> {
             .filter(|(_, t)| t.len() > 1)
             .map(|((m, off), t)| json!({"site": format!("{m}@{off}"), "targets": t}))
             .collect();
-        let folds: Vec<Value> = e.folds().iter().map(fold_json).collect();
+        let fold_list = e.folds();
+        let folds: Vec<Value> = fold_list.iter().map(fold_json).collect();
         json!({
-            "summary": self.summary(),
+            "summary": self.summary_with(&fold_list),
             "classes": classes,
             "methods": methods,
             "instantiated": e.instantiated(),

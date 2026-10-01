@@ -169,9 +169,10 @@ fn try_finally_return_temp_kept_in_every_arm() {
     let Some((_, out)) = build("TryFinallyReturn.java", "try-finally-return", &[]) else { return };
     let rs = std::fs::read_to_string(out.join("user/src/try_finally_return.rs")).unwrap();
     let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn pick(")).take_while(|l| !l.contains("pub fn main(")).collect();
-    let arm1 = body.iter().position(|l| l.trim() == "1 => {").expect("case 1 臂");
-    assert!(body[arm1 + 1].contains("Self::a()?"), "{}", body.join("\n"));
-    assert_eq!(body[arm1 + 2].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
+    // case 1 臂按内容定位：闭包按实参值域（k ∈ {1,2,3}）删去 default 抛出臂时，case 1 落为 `_ =>` 臂
+    let arm1 = body.iter().position(|l| l.trim() == "let _t1: Object = Self::a()?;").expect("case 1 臂");
+    assert!(body[arm1 - 1].trim().ends_with("=> {"), "{}", body.join("\n"));
+    assert_eq!(body[arm1 + 1].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
     assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
     std::fs::remove_dir_all(&out).ok();
 }
@@ -248,7 +249,7 @@ fn image_dirs_lists_existing_class_dirs() {
 /// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
 #[test]
 fn api_package_precheck() {
-    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only"]) else {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only", "--closure-json"]) else {
         return;
     };
     let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));

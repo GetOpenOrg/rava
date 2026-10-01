@@ -49,6 +49,7 @@ fn class_path(meta: &Value) -> ClassPath {
 fn const_proj(c: &Const) -> String {
     match c {
         Const::String(s) => format!("String {s}"),
+        Const::StringUtf16(u) => format!("String {}", std::string::String::from_utf16_lossy(u)),
         Const::Int(i) => format!("int {i}"),
         Const::Long(l) => format!("long {l}"),
         Const::Class(c) => format!("class {c}"),
@@ -219,6 +220,7 @@ fn run_golden(path: &Path) -> (usize, Vec<Diff>) {
         user_classes: &user,
         libs: &[],
         runtime_src: &runtime.join("src"),
+        jobs: 0,
     }
     .build()
     .expect("构建发射层输入");

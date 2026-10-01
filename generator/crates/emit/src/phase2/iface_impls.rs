@@ -138,7 +138,7 @@ struct ImplTexts {
 #[allow(clippy::too_many_arguments)]
 fn iface_decls(
     ctx: &EmitCtx<'_>,
-    state: &mut ProjectState,
+    reqs: &mut Vec<(String, String, String)>,
     ems: &Emissions,
     recv: &ClassEmission,
     recv_ci: &ClassInfo,
@@ -181,7 +181,7 @@ fn iface_decls(
                 if own_names.contains(recv_target.as_str()) || provided.contains(&recv_target) {
                     continue;
                 }
-                state.inherited_requests.insert((recv_bin.to_string(), im.name.clone(), pdesc.clone()));
+                reqs.push((recv_bin.to_string(), im.name.clone(), pdesc.clone()));
                 recv_target
             } else {
                 method.rust_name.clone()
@@ -201,8 +201,16 @@ fn iface_decls(
     decls
 }
 
-/// 单接收者：全部接口的 impl 块 / 协变 upcast / use 行
-fn recv_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &Emissions, recv: &ClassEmission, recv_ci: &ClassInfo) -> ImplTexts {
+/// 单接收者：全部接口的 impl 块 / 协变 upcast / use 行；需要的继承成员需求追加到 `reqs`。
+/// `iface_view` 给出接口在本接收者处理时刻的发射记录（文件头 use 行随处理序变化）
+fn recv_impls<'e>(
+    ctx: &EmitCtx<'_>,
+    reqs: &mut Vec<(String, String, String)>,
+    ems: &'e Emissions,
+    iface_view: &IfaceView<'e>,
+    recv: &ClassEmission,
+    recv_ci: &ClassInfo,
+) -> ImplTexts {
     let mut out = ImplTexts::default();
     let recv_bin = recv.binary_name.as_str();
     let recv_abstract = recv_ci.class_file().access & acc::ABSTRACT != 0;
@@ -215,7 +223,7 @@ fn recv_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &Emissions, recv
     let recv_ty = format!("{recv_short}{recv_generics}");
     let up_src = if recv_is_iface { rust_type(&recv_short, &object_args(recv_params.len())) } else { recv_ty.clone() };
     for iface_bin in all_interfaces(ctx, recv_ci) {
-        let (Some(iface), Some(iface_ci)) = (ems.get(&iface_bin), ctx.ty.reg.get(&iface_bin)) else { continue };
+        let (Some(iface), Some(iface_ci)) = (iface_view.get(&iface_bin), ctx.ty.reg.get(&iface_bin)) else { continue };
         if iface.handwritten {
             continue;
         }
@@ -230,7 +238,7 @@ fn recv_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &Emissions, recv
         let decls = if non_concrete {
             Vec::new()
         } else {
-            iface_decls(ctx, state, ems, recv, recv_ci, iface, &type_params, &mut imported, &mut out)
+            iface_decls(ctx, reqs, ems, recv, recv_ci, iface, &type_params, &mut imported, &mut out)
         };
         if decls.is_empty() && !non_concrete {
             continue;
@@ -281,20 +289,72 @@ fn apply_impls(text: &str, t: &ImplTexts) -> String {
     text
 }
 
+/// 接收者是否生成接口实现段（其余类只清空插入位）
+fn wants_impls(ctx: &EmitCtx<'_>, recv_bin: &str, recv: &ClassEmission) -> bool {
+    ctx.ty.reg.get(recv_bin).is_some_and(|ci| !recv.handwritten && (recv.text.contains(INTERFACE_IMPLS_SLOT) || ci.is_interface()))
+}
+
 /// 为每个具体类生成接口实现声明（填充 `IMPLS_SLOT` / `UPCASTS_SLOT`，use 行插在继承导入位之前）；
-/// 需要的继承成员登记到需求账本。须先于继承成员解析
+/// 需要的继承成员登记到需求账本。须先于继承成员解析。
+///
+/// 串行语义是按发射序逐类处理并立即回写文本；类之间唯一的读写交叠是：接口自身处理时在文件头
+/// 插入 use 行，排在它之后的具体类经 `imports_for` 读取该接口文件头。据此分两轮并行、结果逐字节
+/// 等同串行：
+/// 1. 接口（及其余非具体类）：不生成 impl 声明、不读别的类文件头，彼此独立；
+/// 2. 具体类：接口视图按发射序取——接口排在本类之前取第 1 轮回写后的记录，之后取回写前的记录；
+///    继承成员需求按发射序并入账本
 pub fn resolve_interface_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions) {
-    for i in 0..ems.len() {
+    let is_iface = |i: usize| ctx.ty.reg.get(ems.get_index(i).expect("下标").0).is_some_and(ClassInfo::is_interface);
+    let (first, second): (Vec<usize>, Vec<usize>) = (0..ems.len()).partition(|&i| is_iface(i));
+    let before: Before = first
+        .iter()
+        .map(|&i| {
+            let (b, e) = ems.get_index(i).expect("下标");
+            (b.clone(), (i, e.clone()))
+        })
+        .collect();
+    for (&i, (text, reqs)) in first.iter().zip(impls_pass(ctx, ems, &first, None)) {
+        debug_assert!(reqs.is_empty(), "接口不登记继承成员需求");
+        ems[i].text = text;
+    }
+    for (&i, (text, reqs)) in second.iter().zip(impls_pass(ctx, ems, &second, Some(&before))) {
+        ems[i].text = text;
+        state.inherited_requests.extend(reqs);
+    }
+}
+
+/// 第 1 轮回写前的接口发射记录：binary → (发射序下标, 记录)
+type Before = BTreeMap<String, (usize, ClassEmission)>;
+
+/// 接收者（发射序下标 `at`）处理时刻所见的接口发射记录
+pub(super) struct IfaceView<'e> {
+    ems: &'e Emissions,
+    before: Option<&'e Before>,
+    at: usize,
+}
+
+impl<'e> IfaceView<'e> {
+    fn get(&self, bin: &str) -> Option<&'e ClassEmission> {
+        match self.before.and_then(|b| b.get(bin)) {
+            Some((idx, old)) if *idx > self.at => Some(old),
+            _ => self.ems.get(bin),
+        }
+    }
+}
+
+/// 一轮并行：各接收者的新文本与继承成员需求（按 `idx` 序）
+fn impls_pass(ctx: &EmitCtx<'_>, ems: &Emissions, idx: &[usize], before: Option<&Before>) -> Vec<(String, Vec<(String, String, String)>)> {
+    crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), idx, |&i| {
         let (recv_bin, recv) = ems.get_index(i).expect("下标");
+        let mut reqs = Vec::new();
         let texts = match ctx.ty.reg.get(recv_bin) {
-            Some(ci) if !recv.handwritten && (recv.text.contains(INTERFACE_IMPLS_SLOT) || ci.is_interface()) => {
-                recv_impls(ctx, state, ems, recv, ci)
+            Some(ci) if wants_impls(ctx, recv_bin, recv) => {
+                recv_impls(ctx, &mut reqs, ems, &IfaceView { ems, before, at: i }, recv, ci)
             }
             _ => ImplTexts::default(),
         };
-        let text = apply_impls(&ems[i].text, &texts);
-        ems[i].text = text;
-    }
+        (apply_impls(&recv.text, &texts), reqs)
+    })
 }
 
 /// 接口 recv 的全部超接口及其在 recv 视角下的类型实参（广度优先，近者在前）
