@@ -138,13 +138,13 @@ impl<'a> EmitCtx<'a> {
         false
     }
 
-    /// 族根类（`ci` 超类链上短名为 `root` 者）是否声明该槽位
+    /// 族根类（`ci` 超类链上 binary 为 `root` 者）是否声明该槽位
     fn root_declares(&self, root: &str, m: &Method, ci: &ClassInfo) -> bool {
         let reg = self.ty.reg;
         let mut seen: HashSet<&str> = HashSet::new();
         let mut cur = Some(ci);
         while let Some(c) = cur.filter(|c| seen.insert(c.name())) {
-            if self.short(c.name()) == root {
+            if c.name() == root {
                 return c.methods().iter().any(|x| !x.is_synthetic() && same_slot(x, m));
             }
             cur = reg.get(c.super_class());
@@ -187,10 +187,10 @@ impl<'a> EmitCtx<'a> {
             return false;
         }
         let Some(eff) = plan.effective.get(&key) else { return true };
-        if !eff.iter().any(|b| self.short(b) != key.0) {
+        if !eff.iter().any(|b| *b != key.0) {
             return true;
         }
-        if key.0 == self.short(ci.name()) {
+        if key.0 == ci.name() {
             return false;
         }
         !eff.iter().any(|b| b == ci.name() || self.strict_subclass(b, ci.name()))
@@ -205,7 +205,7 @@ impl<'a> EmitCtx<'a> {
             return false;
         }
         let Some(key) = self.fam_key(m, ci) else { return false };
-        if key.0 == self.short(ci.name()) || self.root_keys().contains(&(key.1.clone(), key.2.clone())) {
+        if key.0 == ci.name() || self.root_keys().contains(&(key.1.clone(), key.2.clone())) {
             return false;
         }
         let plan = self.slot_plan();
