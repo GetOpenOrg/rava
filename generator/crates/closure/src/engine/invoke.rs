@@ -293,21 +293,22 @@ impl<'a> Engine<'a> {
         // 接收者按被调方法声明类收窄（checkcast 不改变值来源，来源节点可能更宽）
         let owner = self.id(&key.owner);
         let s = self.value_set(&fs);
+        // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增的值（同一分析结果下实参来源、常量与
+        // 被调方摘要不变，调用边的其余部分已接上；接收者各部分的效果按值累加）
+        let dedup = site && self.methods[m].kind == Kind::Bytecode;
+        let s = if dedup { self.recv_delta(m, off, s) } else { s };
         let s = self.filter(&s, owner);
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
-        // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增对象
-        let dedup = site && self.methods[m].kind == Kind::Bytecode;
         let mut objs: Vec<u32> = Vec::new();
+        let mut cls: Vec<u32> = Vec::new();
         for x in &s.classes {
             if self.objs.contains_key(&x) {
                 objs.push(x);
             } else {
-                rest.classes.insert(x);
+                cls.push(x);
             }
         }
-        if dedup {
-            objs = self.recv_mark_all(m, off, &objs);
-        }
+        rest.classes = IdSet::from_sorted(cls);
         for x in objs {
             let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
