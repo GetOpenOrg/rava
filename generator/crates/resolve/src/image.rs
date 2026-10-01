@@ -243,7 +243,7 @@ mod tests {
     /// 真 JDK：镜像独有类目录下有类文件，且都不在 jmod 里；VM 支持类目录非空
     #[test]
     fn real_jdk_image_and_support_dirs() {
-        let Some(home) = crate::jdk::find_java_home(Some(21)) else { return };
+        let Some(home) = crate::jdk::find_major(21) else { return };
         let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_support");
         let dirs = image_class_dirs(&home, &support);
         let jmods = jmod_class_names(&home);

@@ -138,7 +138,7 @@ fn batch_trace_and_debug() {
 /// 只出预检，不出审计与发射汇总
 #[test]
 fn lib_crate_and_precheck_only() {
-    let Some(home) = resolve::jdk::find_java_home(Some(21)) else { return };
+    let Some(home) = resolve::jdk::find_major(21) else { return };
     let work = std::env::temp_dir().join(format!("rava-it-libjar-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     let classes = work.join("classes");
@@ -233,7 +233,7 @@ fn concat_operands_evaluate_left_to_right() {
 /// `rava image-dirs`：每行一个已存在的类目录；VM 支持类按模块给出（与 `build` 缺省派生同源）
 #[test]
 fn image_dirs_lists_existing_class_dirs() {
-    if resolve::jdk::find_java_home(Some(21)).is_none() {
+    if resolve::jdk::find_major(21).is_none() {
         return;
     }
     let o = Command::new(env!("CARGO_BIN_EXE_rava"))

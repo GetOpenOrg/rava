@@ -55,7 +55,7 @@ mod tests {
     /// VM 耦合边界类（按方法划分）照常纳入
     #[test]
     fn real_jdk_roots() {
-        let Some(home) = resolve::jdk::find_java_home(Some(21)) else { return };
+        let Some(home) = resolve::jdk::find_major(21) else { return };
         let rt = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime");
         let mut cp = ClassPath::new();
         cp.add_jdk(&home).unwrap();
