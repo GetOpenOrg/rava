@@ -78,6 +78,7 @@ mod graph;
 mod setstore;
 use setstore::SetStore;
 mod scc;
+mod levels;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -237,6 +238,9 @@ pub struct Engine<'a> {
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
     /// 有接收者到达过的虚调用点（含选不出目标的）：接收者恒为 null 的判定（folds `null_recv`）
     recv_sites: HashSet<(usize, u32)>,
+    /// 按非虚处理的虚指令调用点（invokevirtual / invokeinterface 指向 final 方法或 final 类）：
+    /// 目标照样经 vtable 槽到达，并入 `dispatched` 输出
+    direct_virtual_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
     /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
@@ -255,6 +259,8 @@ pub struct Engine<'a> {
     gather_last: HashMap<usize, HashMap<u32, (usize, u32, Rc<[u32]>)>>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
+    /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
+    vm_targets: HashSet<usize>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知

@@ -271,7 +271,8 @@ impl<'a> Engine<'a> {
         };
         let decl = site.class.name.clone();
         if first {
-            self.touch(&f.owner, Level::Type, via.clone());
+            // 字段读写按属主的字段访问器发射（静态字段经属主类名访问）：属主至少 L2
+            self.touch(&f.owner, Level::Layout, via.clone());
             self.touch_desc(&f.desc, &via);
             self.nest_access(m, off, &decl, site.field().access & acc::PRIVATE != 0);
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {

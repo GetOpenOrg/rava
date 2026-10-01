@@ -27,7 +27,7 @@ pub fn return_part(desc: &str) -> &str {
 }
 
 /// 同名且参数描述符一致（JVMS §5.4.5 覆盖判定，返回可协变）
-fn same_slot(a: &Method, m: &Method) -> bool {
+pub(crate) fn same_slot(a: &Method, m: &Method) -> bool {
     a.name == m.name && param_part(&a.desc) == param_part(&m.desc)
 }
 
@@ -37,7 +37,7 @@ fn is_private(m: &Method) -> bool {
 
 impl<'a> EmitCtx<'a> {
     /// 类的共置手写 `pub fn` 名集合是否含该方法（原名或 mangle 名）
-    fn hw_has(&self, cls: &str, m: &Method) -> bool {
+    pub(crate) fn hw_has(&self, cls: &str, m: &Method) -> bool {
         self.input.handwritten.get(cls).is_some_and(|h| {
             h.methods.contains(&safe_ident(&m.name))
                 || h.methods.contains(&safe_ident(&mangle_name(&self.manifest.ty, &m.name, &m.desc)))
@@ -140,8 +140,17 @@ impl<'a> EmitCtx<'a> {
         }
     }
 
-    /// 虚方法归属的 vtable 类 Rust 名（精确描述符的最远非私有非手写声明者）
+    /// 虚方法归属的 vtable 类 Rust 名（精确描述符的最远非私有非手写声明者）；
+    /// 未被派发到、不占槽的实现（[`Self::slot_pruned`]）为空串
     pub fn find_virtual_in(&self, m: &Method, ci: &ClassInfo) -> String {
+        if self.slot_pruned(m, ci) {
+            return String::new();
+        }
+        self.raw_find_virtual_in(m, ci)
+    }
+
+    /// 槽族归属（不按分派结果裁剪）：精确描述符的最远非私有非手写声明者
+    fn raw_find_virtual_in(&self, m: &Method, ci: &ClassInfo) -> String {
         if ci.is_constructor(m) || m.is_static() || m.is_native() {
             return String::new();
         }
@@ -187,7 +196,7 @@ impl<'a> EmitCtx<'a> {
     where
         'a: 'm,
     {
-        let owner = self.covariant_virtual_owner(am, anc);
+        let owner = self.raw_covariant_virtual_owner(am, anc);
         if owner.is_empty() || owner == self.short(anc.name()) {
             return (anc, am);
         }
@@ -207,7 +216,7 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// 同名 + 同参数描述符（返回可协变）的最远槽位声明者（K-6a）；空串 = 无
-    pub fn covariant_virtual_owner(&self, m: &Method, ci: &ClassInfo) -> String {
+    fn raw_covariant_virtual_owner(&self, m: &Method, ci: &ClassInfo) -> String {
         if ci.is_constructor(m) || m.is_static() || m.is_native() || ci.is_interface() {
             return String::new();
         }
@@ -256,13 +265,21 @@ impl<'a> EmitCtx<'a> {
         -1
     }
 
-    /// 虚方法槽位归属的完整解析（精确描述符与协变模型取链上更远者）
+    /// 虚方法槽位归属的完整解析（精确描述符与协变模型取链上更远者）；不占槽的实现为空串
     pub fn resolve_virtual_slot(&self, m: &Method, ci: &ClassInfo) -> String {
-        let slot = self.find_virtual_in(m, ci);
+        if self.slot_pruned(m, ci) {
+            return String::new();
+        }
+        self.raw_resolve_virtual_slot(m, ci)
+    }
+
+    /// 槽族根（不按分派结果裁剪）：精确描述符与协变模型取链上更远者
+    pub(crate) fn raw_resolve_virtual_slot(&self, m: &Method, ci: &ClassInfo) -> String {
+        let slot = self.raw_find_virtual_in(m, ci);
         if slot.is_empty() || ci.is_interface() {
             return slot;
         }
-        let cov = self.covariant_virtual_owner(m, ci);
+        let cov = self.raw_covariant_virtual_owner(m, ci);
         if !cov.is_empty() && cov != slot {
             if slot == self.short(ci.name()) {
                 return cov;

@@ -33,8 +33,10 @@ impl Via {
 /// 类在闭包中的层级（取最高）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
-    /// 仅作类型出现（签名 / checkcast / catch / 超类型）
+    /// L1 名字：仅作类型出现（签名 / checkcast / instanceof / catch），值只可能是 null
     Type,
+    /// L2 布局：需要 struct / 接口载体（非 L1 类的超类型、手写层引用、实例字段属主），见 `levels.rs`
+    Layout,
     /// 类初始化被触发
     Init,
     /// 被实例化

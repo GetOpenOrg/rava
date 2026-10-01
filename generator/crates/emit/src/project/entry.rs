@@ -35,11 +35,21 @@ fn jrt_path(ctx: &EmitCtx<'_>, bin: &str) -> String {
     parts.join("::")
 }
 
+/// 泛型类静态路径的擦除 turbofish（`::<Object, ..>`；非泛型为空）：main 里的静态调用没有推断上下文（E0283）
+fn erased_turbofish(ctx: &EmitCtx<'_>, bin: &str) -> String {
+    let n = ctx.class(bin).map(|ci| ctx.ty.effective_class_type_params(ci).len()).unwrap_or(0);
+    if n == 0 {
+        return String::new();
+    }
+    format!("::<{}>", vec!["java_runtime::prelude::Object"; n].join(", "))
+}
+
 fn block(head: &str, lines: &[String], tail: &str) -> String {
     format!("{head}\n{}\n{tail}\n", lines.join("\n"))
 }
 
-/// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子（JDK）
+/// 类初始化钩子（`ensure_class_initialized` 按名查表）：枚举形态 / 有 `<clinit>` 的用户类 +
+/// 注解枚举种子与分析器 class_init 目标（JDK）
 fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Vec<String> {
     let mut out = Vec::new();
     for (c, e) in &user.entries {
@@ -55,17 +65,25 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
         p.push(e.mod_name.clone());
         p.push(ctx.short(c));
         out.push(format!(
-            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}::__class_init())),",
-            p.join("::")
+            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            p.join("::"),
+            erased_turbofish(ctx, c)
         ));
     }
-    for en in &ctx.input.annotation_enum_seeds {
-        if !jdk.generated.contains(en) {
-            continue;
-        }
+    // JDK 侧：注解枚举种子 + 分析器 class_init 事实（Unsafe.ensureClassInitialized 等按名初始化的
+    // 目标；`unknown` = 目标类不可定论 → 链上全部有 `<clinit>` 的类）。只登记本轮生成的类
+    let jdk_targets: std::collections::BTreeSet<&String> = ctx
+        .input
+        .annotation_enum_seeds
+        .iter()
+        .chain(&ctx.input.class_init_targets)
+        .filter(|c| jdk.generated.contains(*c))
+        .collect();
+    for c in jdk_targets {
         out.push(format!(
-            "    (\"{en}\", java_runtime::sync_model::__Shared::new(|| {}::__class_init())),",
-            jrt_path(ctx, en)
+            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            jrt_path(ctx, c),
+            erased_turbofish(ctx, c)
         ));
     }
     out
@@ -121,7 +139,10 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, disp: &Disp
         .boot_init_classes
         .iter()
         .filter(|b| jdk.generated.contains(*b))
-        .map(|b| format!("        (\"{b}\", {}::__class_init as fn() -> java_runtime::error::Result<()>),", jrt_path(ctx, b)))
+        .map(|b| {
+            let path = format!("{}{}", jrt_path(ctx, b), erased_turbofish(ctx, b));
+            format!("        (\"{b}\", {path}::__class_init as fn() -> java_runtime::error::Result<()>),")
+        })
         .collect();
     if !boot.is_empty() {
         hb += &block("    java_runtime::vm_boot_init(&[", &boot, "    ]);");
@@ -155,13 +176,7 @@ pub fn write_main(
     };
     let bin_name = to_snake(main_bin.rsplit('/').next().unwrap_or(main_bin));
     // 主类自身泛型：静态 main 的路径表达式无推断上下文（E0283），类型实参按擦除取 Object
-    let tps = ctx.class(main_bin).map(|ci| ctx.ty.effective_class_type_params(ci).len()).unwrap_or(0);
-    let main_call = if tps > 0 {
-        let args = vec!["java_runtime::prelude::Object"; tps].join(", ");
-        format!("{main_short}::<{args}>::main()")
-    } else {
-        format!("{main_short}::main()")
-    };
+    let main_call = format!("{main_short}{}::main()", erased_turbofish(ctx, main_bin));
     let mut lines = vec![MAIN_ALLOW.to_string()];
     let top = user.mod_tree.get(user_src).into_iter().flatten();
     if ctx.opts.batch {

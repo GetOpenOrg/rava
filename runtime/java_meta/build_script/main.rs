@@ -14,7 +14,7 @@
 mod anno_table;
 mod class_tables;
 mod member_tables;
-mod services_table;
+mod closure_tables;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -47,7 +47,7 @@ fn main() {
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));
     // 分析器导出的闭包事实（scratch 根下 closure_input/，与本 crate 同级）
-    services_table::write_services_table(Path::new("../closure_input/closure.json"));
+    closure_tables::write_closure_tables(Path::new("../closure_input/closure.json"));
 }
 
 /// 生成属性的键与 '=' 之间有对齐填充空格（`#[binary_name       = "..."]`），

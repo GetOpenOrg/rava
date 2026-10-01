@@ -42,6 +42,11 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 折叠所用的系统属性表（清单 `[facts.system_properties]`）：运行时初始属性表与之同源
+    pub fn sysprops(&self) -> &crate::manifest::SysProps {
+        &self.man.sysprops
+    }
+
     /// 折叠常量里来自系统属性读取的调用点
     fn prop_folds(&self, f: &Fold, all: &[Rc<Analysis>]) -> Vec<u32> {
         f.consts
@@ -382,6 +387,29 @@ impl<'a> Engine<'a> {
 
     pub fn method_count(&self) -> usize {
         self.method_nodes().count()
+    }
+
+    /// 经虚分派到达的实现（按成员合并克隆，标签排序）：全部活虚调用点（字节码 invokevirtual /
+    /// invokeinterface，含单目标及按非虚处理的 final 方法 / final 类调用点；手写层回调；枢纽中转）的目标之并，
+    /// 以及 VM 反射虚调用选中的实现。
+    /// 生成器据此只为被派发到的实现占 vtable 槽（C3 第 5 项）；手写实现对象的方法不是 Java 方法，不输出
+    pub fn dispatched(&self) -> Vec<String> {
+        let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
+        let mut ids: BTreeSet<usize> = BTreeSet::new();
+        for site in self.recv_sites.iter().chain(self.direct_virtual_sites.iter()).chain(self.hub_sites.keys()) {
+            ids.extend(self.dispatch.get(site).into_iter().flatten().filter(|t| !self.is_pseudo_method(**t)).map(|&t| canon[t]));
+        }
+        let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
+        for hs in self.hub_sites.values() {
+            for &h in hs {
+                ids.extend(self.hub_targets_canon(h, &canon, &mut memo).iter().copied());
+            }
+        }
+        ids.extend(self.vm_targets.iter().map(|&t| canon[t]));
+        let mut out: Vec<String> = ids.into_iter().map(|i| self.method_label(i)).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// 调用点分派（按成员合并克隆）：调用方法标签@偏移 → 目标方法标签。

@@ -156,7 +156,10 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke_inner(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
         use classfile::op;
         let via = Via::method("invoke", m, Some(off));
-        self.touch(&mref.owner, Level::Type, via.clone());
+        // 静态 / 特殊调用按属主类发射（`X::m(..)` / 固有方法），属主至少 L2；
+        // 虚 / 接口调用的属主可停在 L1：其值只可能是 null，调用点导出为 null_recv（`fold.rs`）
+        let lvl = if opcode == op::INVOKESTATIC || opcode == op::INVOKESPECIAL { Level::Layout } else { Level::Type };
+        self.touch(&mref.owner, lvl, via.clone());
         let Some(site) = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, iface) else {
             self.unresolved.insert(mref.to_string());
             return;
@@ -203,7 +206,10 @@ impl<'a> Engine<'a> {
                 // 数组类型上的调用（`arr.clone()` 等）同样非虚：数组没有覆盖方法，目标恒为已解析的继承方法。
                 // 若经枢纽派发，手写层 / VM 产出的 open 数组没有分配点可展开，结果（clone 的副本）会丢失
                 if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() || is_array_type(&mref.owner) {
-                    // 非虚：直接到已解析方法，接收者值流入 this
+                    // 非虚：直接到已解析方法，接收者值流入 this。非 private 的目标在生成代码里仍经槽调用，计入 `dispatched`
+                    if !rm.is_private() && !rm.is_static() {
+                        self.direct_virtual_sites.insert((m, off));
+                    }
                     let r = recv_feeds(self);
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
                     return;

@@ -121,6 +121,7 @@ fn members_str(k: Members) -> &'static str {
 fn level_str(l: Level) -> &'static str {
     match l {
         Level::Type => "type",
+        Level::Layout => "layout",
         Level::Init => "init",
         Level::Alloc => "alloc",
         Level::Code => "code",
@@ -240,8 +241,13 @@ impl Closure<'_> {
             "refs": e.refs,
             "indy_models": e.indy_models.iter().map(|(site, (bsm, k))| json!({"site": site, "bootstrap": bsm, "kind": indy_str(*k)})).collect::<Vec<_>>(),
             "dispatch": dispatch,
+            "dispatched": e.dispatched(),
             "folds_version": FOLDS_VERSION,
             "folds": folds,
+            "system_properties": {
+                "values": e.sysprops().values(),
+                "dynamic": e.sysprops().dynamic(),
+            },
             "class_init": {
                 "targets": e.class_init.targets(),
                 "sites": e.class_init.sites.iter().map(|(s, cs)| json!({"site": s, "classes": cs})).collect::<Vec<_>>(),
@@ -358,16 +364,16 @@ impl Closure<'_> {
         for (k, v) in s["methods_by_kind"].as_object().into_iter().flatten() {
             md.push_str(&format!("| {k} | {v} |\n"));
         }
-        let mut pkgs: BTreeMap<&str, [usize; 4]> = BTreeMap::new();
+        let mut pkgs: BTreeMap<&str, [usize; 5]> = BTreeMap::new();
         for (n, c) in &e.classes {
             let p = resolve::package_of(n);
             pkgs.entry(p).or_default()[c.level as usize] += 1;
         }
         let mut pv: Vec<_> = pkgs.into_iter().collect();
         pv.sort_by_key(|(_, v)| std::cmp::Reverse(v.iter().sum::<usize>()));
-        md.push_str("\n## 包分布（Top 40）\n\n| 包 | type | init | alloc | code |\n|---|---:|---:|---:|---:|\n");
+        md.push_str("\n## 包分布（Top 40）\n\n| 包 | type | layout | init | alloc | code |\n|---|---:|---:|---:|---:|---:|\n");
         for (p, v) in pv.into_iter().take(40) {
-            md.push_str(&format!("| {p} | {} | {} | {} | {} |\n", v[0], v[1], v[2], v[3]));
+            md.push_str(&format!("| {p} | {} | {} | {} | {} | {} |\n", v[0], v[1], v[2], v[3], v[4]));
         }
         // 引入者：code 层类的首个 via 所在方法的类
         let mut intro: BTreeMap<String, usize> = BTreeMap::new();

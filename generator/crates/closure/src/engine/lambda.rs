@@ -141,7 +141,8 @@ impl<'a> Engine<'a> {
     pub(super) fn invoke_mh(&mut self, m: usize, off: u32, mh: &MethodHandle) {
         let k = &mh.member;
         let via = Via::method("method-handle", m, Some(off));
-        self.touch(&k.owner, Level::Type, via.clone());
+        // 句柄按属主的成员（字段访问器 / 方法）发射，属主至少 L2
+        self.touch(&k.owner, Level::Layout, via.clone());
         match mh.kind {
             // getField / getStatic / putField / putStatic
             1..=4 => {

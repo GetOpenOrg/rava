@@ -82,6 +82,14 @@ fn erased_head(env: &InstrEnv, t: &RsType) -> String {
     env.ctx.ty.rust_head_name(&jt.erasure())
 }
 
+/// 接收者擦除类型是类 / 接口时的 binary 名
+fn erased_binary(env: &InstrEnv, t: &RsType) -> Option<String> {
+    match env.ctx.ty.from_rs_type(t, &Default::default()).erasure() {
+        JvmType::Class { binary, .. } => Some(binary),
+        _ => None,
+    }
+}
+
 /// 类型文本 `{Short}<Object, ..>`：类的有效类型形参全取 Object（无形参 → 裸短名）
 fn erased_inst(env: &InstrEnv, binary: &str) -> RsType {
     let n = env.ctx.reg().get(binary).map_or(0, |ci| env.ctx.ty.effective_class_type_params(ci).len());
@@ -111,6 +119,12 @@ pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         site.obj_e = format!("Into::<{O}>::into(Clone::clone(&{}))", site.obj_e);
         site.obj_ty = RsType::Object;
     }
+    // 不透明（L1）类接收者：成员在其有布局的祖先上 → 先上转到调用属主视图
+    if let Some(view) = crate::opaque::receiver_view(env, &site.obj_ty, &call.owner) {
+        site.obj_e = crate::opaque::upcast_text(env, &site.obj_e, &view);
+        site.obj_node = Expr::raw(site.obj_e.clone());
+        site.obj_ty = view;
+    }
     if args::try_early_receiver_paths(env, sim, log, obj_is_typevar, call, &site)? {
         return Ok(());
     }
@@ -120,8 +134,12 @@ pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
     // 接收方是手写根类：API 名面固定，仅根类同名重载按描述符后缀取名；
     // 否则优先按接收者实际类型 mangle（接口视角可能漏判重载）
     let obj_base = erased_head(env, &site.obj_ty);
+    // 重载命名按接收者擦除类型的 binary 名查注册表：短名可能与别的类重名（默认包用户类与 JDK 类同简单名）
+    let obj_bin = erased_binary(env, &site.obj_ty);
     let rust_mname = if obj_base == env.ctx.short(ty::consts::OBJECT) {
         member_name(env, ty::consts::OBJECT, call)?
+    } else if let Some(bin) = &obj_bin {
+        member_name(env, bin, call)?
     } else if !obj_base.is_empty() && obj_base != "()" {
         member_name(env, &obj_base, call)?
     } else {

@@ -16,3 +16,4 @@ include!(concat!(env!("OUT_DIR"), "/nest_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/interfaces_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/class_anno_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/services_table.rs"));
+include!(concat!(env!("OUT_DIR"), "/system_properties.rs"));

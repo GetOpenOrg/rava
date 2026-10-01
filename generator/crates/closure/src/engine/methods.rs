@@ -109,7 +109,8 @@ impl<'a> Engine<'a> {
         if kind == Kind::Bytecode {
             self.nr_created(&key);
         }
-        let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Type };
+        // 调用链上的方法（含手写 / native / 抽象声明）都按本类的布局发射：至少 L2
+        let lvl = if kind == Kind::Bytecode { Level::Code } else { Level::Layout };
         self.touch(&key.owner, lvl, Via::method("member", idx, None));
         if cf.is_some() {
             let v = Via::method("signature", idx, None);

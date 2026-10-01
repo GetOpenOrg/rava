@@ -7,25 +7,20 @@ impl System {
     /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数。
     ///
     /// 同时承担 HotSpot `System.initPhase1` 的角色：`<clinit>` 后由 VM 引导填充
-    /// `System.props`（JDK 里来自 VM 快照属性）。原生二进制无 -D 注入机制，
-    /// 属性表填充为宿主导出的 VM 快照子集：文件系统分隔符 / 用户目录 / 临时
-    /// 目录 / os 标识来自宿主 POSIX 环境，`java.home` 为嵌入资源伪值
-    /// （jdk_resources::JAVA_RUNTIME_HOME，与 StaticProperty.javaHome 同源），
-    /// `user.timezone` 来自 TZ（缺席则不设——JDK 惰性解析语义）。构造不经
-    /// JDK 构造器链（Properties.<init> → Hashtable 族种子在 sig_types 载体化
+    /// `System.props`。原生二进制无 -D 注入机制，属性表的键集与常量值来自闭包分析器折叠
+    /// 属性读点所用的同一张表（清单 `vm_intrinsics.toml [facts.system_properties]`，经
+    /// closure.json 由 java_meta 构建脚本生成，经 `crate::meta::vm_const_properties` /
+    /// `vm_dynamic_properties` 读取）：
+    /// - 常量键按表中值写入；
+    /// - 动态键由本层取宿主值（[`host_property`]：文件系统 / 用户 / os / 编码族，
+    ///   `java.home` 为嵌入资源伪值 jdk_resources::JAVA_RUNTIME_HOME，`user.timezone`
+    ///   只在 TZ 存在时设），版本族由翻译的 `VersionProps.init(Map)` 写入（JDK initPhase1
+    ///   同一来源），VM 族随版本族派生（[`derived_vm_property`]）；
+    /// - 表外的键不写入（分析器按缺省 null 折叠），手写层无取值的动态键同样缺席。
+    ///
+    /// 构造不经 JDK 构造器链（Properties.<init> → Hashtable 族种子在 sig_types 载体化
     /// 上有 codegen 域缺口），按擦除字段协议直接挂后备 ConcurrentHashMap
     /// （Properties.getProperty 消费 `map` 字段）。
-    /// 消费链：ZoneRulesProvider.<clinit> 的 doPrivileged 回调
-    /// ZoneRulesProvider$1.run → System.getProperty（属性缺席 → 走
-    /// TzdbZoneRulesProvider 默认分支）；UnixFileSystem.<init> →
-    /// GetPropertyAction.privilegedGetProperties → file.separator /
-    /// path.separator（缺席会 NPE）。
-    ///
-    /// FS-P1：版本族属性（java.version / java.runtime.* / java.specification.* /
-    /// java.vendor* / java.class.version）按 JDK initPhase1 同一来源——翻译的
-    /// `VersionProps.init(Map)`（常量即语料 JDK 构建时写入 VersionProps.class 的值）；
-    /// VM 族（java.vm.*）、平台族（os.version / sun.* / *.encoding）由本层按
-    /// HotSpot `Arguments` / `SystemProps.Raw` 的同名来源填充。
     #[jvm_native(upcalls = "
         java/util/concurrent/ConcurrentHashMap.<init>:()V
         java/util/concurrent/ConcurrentHashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
@@ -34,13 +29,25 @@ impl System {
     pub fn registerNatives() -> Result<()> {
         use crate::java::util::concurrent::ConcurrentHashMap;
         let map = ConcurrentHashMap::<Object, Object>::new()?;
-        for (k, v) in vm_snapshot_properties() {
+        // 局部闭包不取 Java 方法名（分析器按「名字 + 实参个数」反解手写回调的实参来源）
+        let store = |k: &str, v: &str| -> Result<()> {
             map.put(Object::from(String::from(k)), Object::from(String::from(v)))?;
+            Ok(())
+        };
+        for (k, v) in crate::meta::vm_const_properties() {
+            store(k, v)?;
+        }
+        for k in crate::meta::vm_dynamic_properties() {
+            if let Some(v) = host_property(k) {
+                store(k, &v)?;
+            }
         }
         crate::java::lang::VersionProps::init(
             Object::from(Clone::clone(&map)).try_cast("java/util/Map")?)?;
-        for (k, v) in vm_derived_properties(&map)? {
-            map.put(Object::from(String::from(k)), Object::from(String::from(v.as_str())))?;
+        for k in crate::meta::vm_dynamic_properties() {
+            if let Some(v) = derived_vm_property(k, &map)? {
+                store(k, &v)?;
+            }
         }
         let mut p = crate::java::util::Properties::default();
         p._init_not_null();
@@ -229,69 +236,47 @@ impl System {
     }
 }
 
-/// VM 快照属性子集（initPhase1 对应物）：键集 = 库代码在类初始化/常规路径
-/// 上会读取的标准属性。宿主 POSIX 环境导出；`java.home` 恒为嵌入资源伪值。
-fn vm_snapshot_properties() -> Vec<(&'static str, std::string::String)> {
-    let mut props = vec![
-        ("java.home", crate::jdk_resources::JAVA_RUNTIME_HOME.to_owned()),
-        ("file.separator", std::string::String::from("/")),
-        ("path.separator", std::string::String::from(":")),
-        ("line.separator", std::string::String::from(if cfg!(windows) { "\r\n" } else { "\n" })),
-        ("user.dir", std::env::current_dir().map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default()),
-        ("user.home", std::env::var("HOME").unwrap_or_default()),
-        ("user.name", crate::posix::current_user_name()),
-        ("java.io.tmpdir", std::env::var("TMPDIR").unwrap_or_else(|_| std::string::String::from("/tmp"))),
-        ("os.name", crate::posix::os_name().to_owned()),
-        ("os.arch", crate::posix::os_arch().to_owned()),
-    ];
-    // 平台族（HotSpot SystemProps.Raw / os::）：
-    props.push(("os.version", crate::posix::os_release()));
-    props.push(("sun.arch.data.model", std::string::String::from(if cfg!(target_pointer_width = "64") { "64" } else { "32" })));
-    props.push(("sun.cpu.endian", std::string::String::from(if cfg!(target_endian = "little") { "little" } else { "big" })));
-    props.push(("sun.io.unicode.encoding", std::string::String::from(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" })));
-    props.push(("java.class.path", std::string::String::new()));
-    props.push(("java.library.path", std::string::String::new()));
-    props.push(("sun.boot.library.path", format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME)));
-    props.push(("jdk.debug", std::string::String::from("release")));
-    // 编码族（JDK 18+ JEP 400：file.encoding 缺省 UTF-8；native / jnu 编码取宿主区域
-    // 的 codeset；标准流按本运行时实际编码器（UTF-8，见 new_std_print_stream））
-    let native = crate::posix::native_encoding();
-    props.push(("file.encoding", std::string::String::from("UTF-8")));
-    props.push(("native.encoding", native.clone()));
-    props.push(("sun.jnu.encoding", native));
-    props.push(("stdout.encoding", std::string::String::from("UTF-8")));
-    props.push(("stderr.encoding", std::string::String::from("UTF-8")));
-    // user.timezone：TZ 环境变量存在才设（JDK initPhase1 同款条件），
-    // 缺席留给 TimeZone/ZoneId 惰性解析
-    if let Ok(tz) = std::env::var("TZ") {
-        if !tz.is_empty() {
-            props.push(("user.timezone", tz));
-        }
-    }
-    props
+/// 动态键的宿主取值（HotSpot `SystemProps.Raw` / `os::` 的同名来源）；版本族与 VM 族不在此
+/// （分别由 VersionProps.init 与 [`derived_vm_property`] 写入）→ None
+fn host_property(key: &str) -> Option<std::string::String> {
+    let s = std::string::String::from;
+    Some(match key {
+        "java.home" => s(crate::jdk_resources::JAVA_RUNTIME_HOME),
+        "line.separator" => s(if cfg!(windows) { "\r\n" } else { "\n" }),
+        "user.dir" => std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        "user.home" => std::env::var("HOME").unwrap_or_default(),
+        "user.name" => crate::posix::current_user_name(),
+        "java.io.tmpdir" => std::env::var("TMPDIR").unwrap_or_else(|_| s("/tmp")),
+        "os.name" => s(crate::posix::os_name()),
+        "os.arch" => s(crate::posix::os_arch()),
+        "os.version" => crate::posix::os_release(),
+        "sun.arch.data.model" => s(if cfg!(target_pointer_width = "64") { "64" } else { "32" }),
+        "sun.cpu.endian" => s(if cfg!(target_endian = "little") { "little" } else { "big" }),
+        "sun.io.unicode.encoding" => s(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" }),
+        "sun.boot.library.path" => format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME),
+        // native / jnu 编码取宿主区域的 codeset（file.encoding 与标准流编码为常量键 UTF-8，JEP 400）
+        "native.encoding" | "sun.jnu.encoding" => crate::posix::native_encoding(),
+        // TZ 环境变量存在才设（JDK initPhase1 同款条件），缺席留给 TimeZone/ZoneId 惰性解析
+        "user.timezone" => std::env::var("TZ").ok().filter(|tz| !tz.is_empty())?,
+        _ => return None,
+    })
 }
 
-/// VM 族属性（HotSpot `Arguments::init_system_properties` / `VM_Version`）：规范三项取
-/// 语料 JDK 的特性版本；实现侧如实标识本运行时（原生二进制，非 HotSpot），版本号与
-/// 供应商随 `java.runtime.version` / `java.vendor`（VersionProps 已写入 map）。
-fn vm_derived_properties(
+/// VM 族动态键（HotSpot `Arguments::init_system_properties` / `VM_Version`）：规范版本取语料
+/// JDK 的特性版本，实现侧版本号与供应商随 `java.runtime.version` / `java.vendor`
+/// （VersionProps 已写入 map）；其余键 → None
+fn derived_vm_property(
+    key: &str,
     map: &crate::java::util::concurrent::ConcurrentHashMap<Object, Object>,
-) -> Result<Vec<(&'static str, std::string::String)>> {
-    let get = |k: &str| -> Result<std::string::String> {
-        let v = map.get(Object::from(String::from(k)))?;
-        Ok(if v.0.is_jvm_null() { std::string::String::new() } else { format!("{}", v) })
+) -> Result<Option<std::string::String>> {
+    let from = match key {
+        "java.vm.specification.version" => "java.specification.version",
+        "java.vm.vendor" => "java.vendor",
+        "java.vm.version" => "java.runtime.version",
+        _ => return Ok(None),
     };
-    let spec = get("java.specification.version")?;
-    Ok(vec![
-        ("java.vm.specification.name", std::string::String::from("Java Virtual Machine Specification")),
-        ("java.vm.specification.vendor", std::string::String::from("Oracle Corporation")),
-        ("java.vm.specification.version", spec),
-        ("java.vm.name", std::string::String::from("rava native runtime")),
-        ("java.vm.vendor", get("java.vendor")?),
-        ("java.vm.version", get("java.runtime.version")?),
-        ("java.vm.info", std::string::String::from("native image")),
-    ])
+    let v = map.get(Object::from(String::from(from)))?;
+    Ok(Some(if v.0.is_jvm_null() { std::string::String::new() } else { format!("{}", v) }))
 }
 
 crate::__process_static! {

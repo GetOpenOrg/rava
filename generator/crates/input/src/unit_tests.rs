@@ -38,6 +38,8 @@ fn shape(v: &[NInsn]) -> Vec<(u32, u8)> {
             NInsn::Op(i) => (i.offset, i.opcode),
             NInsn::FoldField { offset, .. } => (*offset, 0),
             NInsn::FoldCall { call, .. } => (call.offset, call.opcode),
+            NInsn::NullRecv { call } => (call.offset, 1),
+            NInsn::NoReturn { call } => (call.offset, 2),
         })
         .collect()
 }
@@ -99,6 +101,50 @@ fn const_invoke_keeps_call() {
     // 调用保留（被调方副作用不随返回值折叠而丢失），insn() 对扫描方暴露原调用
     assert!(matches!(&n.insns[2], NInsn::FoldCall { call, .. } if call.opcode == op::INVOKEVIRTUAL));
     assert_eq!(n.insns[2].insn().map(|i| i.offset), Some(2));
+}
+
+/// [0] aload_1; [1] iconst_0; [2] invokevirtual p/A.f(I)Z; [5] ireturn; [6] iconst_0; [7] ireturn；
+/// catch-any [0, 5) → 6
+fn call_code() -> Code {
+    code(
+        vec![i(0, ALOAD_1), i(1, ICONST_0), call(2, op::INVOKEVIRTUAL, "p/A", "f", "(I)Z"), i(5, op::IRETURN), i(6, ICONST_0), i(7, op::IRETURN)],
+        8,
+        vec![ExceptionEntry { start: 0, end: 5, handler: 6, catch_type: None }],
+    )
+}
+
+#[test]
+fn null_recv_is_abrupt_and_cuts_after() {
+    let fold = MethodFold { null_recv: [2].into(), noreturn_dead_pcs: vec![(5, 6)], ..Default::default() };
+    let n = apply_fold("A.m:()Z", &call_code(), &fold).unwrap();
+    assert_eq!(shape(&n.insns), vec![(0, ALOAD_1), (1, ICONST_0), (2, 1), (6, ICONST_0), (7, op::IRETURN)]);
+    // 调用不翻译：扫描方看不到被调方；处理器仍覆盖调用点（NPE 按异常表转移）
+    assert!(n.insns[2].insn().is_none() && n.insns[2].is_abrupt());
+    assert_eq!(n.exception_table.len(), 1);
+}
+
+#[test]
+fn noreturn_keeps_call_and_drops_cut_handler() {
+    // 处理器 6 只由被截断的区间进入：连同表项删除，不要求列入 dead_handlers
+    let mut c = call_code();
+    c.exception_table = vec![ExceptionEntry { start: 5, end: 6, handler: 6, catch_type: None }];
+    let fold = MethodFold { noreturn_calls: [2].into(), noreturn_dead_pcs: vec![(5, 8)], ..Default::default() };
+    let n = apply_fold("A.m:()Z", &c, &fold).unwrap();
+    assert_eq!(shape(&n.insns), vec![(0, ALOAD_1), (1, ICONST_0), (2, 2)]);
+    assert_eq!(n.insns[2].insn().map(|i| i.opcode), Some(op::INVOKEVIRTUAL));
+    assert!(n.exception_table.is_empty());
+}
+
+#[test]
+fn abrupt_sites_are_validated() {
+    // null_recv 须为活的虚调用指令；noreturn 调用落入 dead_pcs 以外的非调用指令同样报错
+    let bad = MethodFold { null_recv: [1].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+    let bad = MethodFold { noreturn_calls: [0].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+    // 普通调用顺序落入 noreturn_dead_pcs 仍是格式错
+    let bad = MethodFold { noreturn_dead_pcs: vec![(5, 6)], ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
 }
 
 #[test]

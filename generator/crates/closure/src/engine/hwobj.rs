@@ -44,7 +44,7 @@ impl<'a> Engine<'a> {
         let supers: Vec<String> = o.supers.iter().filter_map(|s| self.resolve_tref(&owner, s)).collect();
         let id = self.id(&name);
         for s in &supers {
-            self.touch(s, Level::Type, Via::class("hw-object", &owner));
+            self.touch(s, Level::Layout, Via::class("hw-object", &owner));
         }
         self.hwobjs.insert(id, HwObj { host: owner, rust, supers });
         Some(id)

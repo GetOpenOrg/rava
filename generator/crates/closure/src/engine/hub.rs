@@ -241,6 +241,7 @@ impl<'a> Engine<'a> {
         let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.recv_ctx(r), via);
         if self.vm_hubs.contains(&h) {
             // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
+            self.vm_targets.insert(t);
             self.add_to(Node::P(t, 0), &TypeSet::exact(r));
             self.open_params(t);
             return;
