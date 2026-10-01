@@ -8,7 +8,7 @@
 use super::*;
 
 /// Rust 内建 trait 方法名：同名调用是 Rust 语义（`Rc` 引用克隆），不是 Java 回调
-const RUST_TRAIT_METHODS: &[&str] = &["clone"];
+pub(super) const RUST_TRAIT_METHODS: &[&str] = &["clone"];
 
 impl Engine<'_> {
     /// 类及其全部超类型（超类链与超接口，广度优先，自类在前）

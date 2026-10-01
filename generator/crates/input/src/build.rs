@@ -108,6 +108,8 @@ pub struct EmitInput {
     pub dispatched: BTreeSet<MethodKey>,
     /// 已实例化的类（分析器 `instantiated`）：槽是否保留按实例化类实际选中的实现判定
     pub instantiated: BTreeSet<String>,
+    /// 手写体继承成员需求（分析器 `hw_inherited`）：接收者类须承载的祖先实例方法（接收者, 方法名, 描述符）
+    pub hw_inherited: Vec<MethodKey>,
     pub jca_seeds: Vec<JcaService>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
@@ -396,6 +398,7 @@ impl<'a> BuildInput<'a> {
             class_init_targets: if f.class_init.unknown { f.clinit.clone() } else { f.class_init.targets.clone() },
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
+            hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
             jca_seeds: f.seeds.jca.clone(),
             module_resources,
             precheck_visited: f.methods.iter().map(|m| m.id.to_string()).collect(),

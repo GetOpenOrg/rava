@@ -196,6 +196,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");
     let mut state = ProjectState::default();
+    // 手写体的继承成员需求与生成方法体登记的同一账本（手写文件整体编译，与 fn 可达性无关）
+    for (recv, name, desc) in &ctx.input.hw_inherited {
+        state.inherited_requests.insert((recv.clone(), name.clone(), crate::vtable::param_part(desc).to_string()));
+    }
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;

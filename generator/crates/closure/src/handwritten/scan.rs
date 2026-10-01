@@ -58,6 +58,57 @@ pub(super) struct FileScan<'a> {
     pub(super) self_ty: Option<Vec<String>>,
     /// 当前 impl 块的 self 类型是本文件的手写实现对象
     pub(super) cur_obj: Option<String>,
+    /// 本文件 impl 块关联 fn 的返回类型（见 [`local_rets`]）
+    pub(super) rets: &'a LocalRets,
+}
+
+/// (impl self 类型全路径, fn 名) → 返回类型全路径
+pub(super) type LocalRets = HashMap<(Vec<String>, String), Vec<String>>;
+
+/// 本文件顶层 impl 块关联 fn 的返回类型（剥 `Result` / `Option`；`Self` 换成 impl 类型）：
+/// 手写辅助 fn（`Self::new_format(…)`）返回值的静态类型
+pub(super) fn local_rets(file: &syn::File, uses: &HashMap<String, Vec<String>>) -> LocalRets {
+    let mut out = HashMap::new();
+    for item in &file.items {
+        let syn::Item::Impl(i) = item else { continue };
+        let Some(st) = type_path(&i.self_ty).map(|t| expand(uses, t)) else { continue };
+        for it in &i.items {
+            let syn::ImplItem::Fn(f) = it else { continue };
+            let syn::ReturnType::Type(_, t) = &f.sig.output else { continue };
+            let Some(r) = ret_path(t) else { continue };
+            let r = if r == ["Self"] { st.clone() } else { expand(uses, r) };
+            out.insert((st.clone(), f.sig.ident.to_string()), r);
+        }
+    }
+    out
+}
+
+/// 返回类型路径：`Result<T>` / `Option<T>` 取 `T`
+fn ret_path(t: &syn::Type) -> Option<Vec<String>> {
+    if let syn::Type::Path(p) = t {
+        let last = p.path.segments.last()?;
+        if matches!(last.ident.to_string().as_str(), "Result" | "Option") {
+            let syn::PathArguments::AngleBracketed(a) = &last.arguments else { return None };
+            let Some(syn::GenericArgument::Type(inner)) = a.args.first() else { return None };
+            return ret_path(inner);
+        }
+    }
+    type_path(t)
+}
+
+/// 静态类型中本文件辅助 fn 的返回（`SType::Ret`）换成其声明的返回类型；非本文件声明的构造器形态
+/// `T::new*` 取 `T`
+fn local_ret(s: SType, rets: &LocalRets) -> SType {
+    match s {
+        SType::Ret(t, m) => match rets.get(&(t.0.clone(), m.clone())) {
+            Some(r) => SType::Named(TypeRef(r.clone())),
+            None if super::syntax::is_ctor_name(&m) => SType::Named(t),
+            None => SType::Ret(t, m),
+        },
+        SType::Field(b, f) => SType::Field(Box::new(local_ret(*b, rets)), f),
+        SType::Call(b, m) => SType::Call(Box::new(local_ret(*b, rets)), m),
+        n => n,
+    }
 }
 
 /// 标识符收集（宏外；宏内标识符另经 `macro_idents` 收集）
@@ -102,7 +153,7 @@ impl FileScan<'_> {
                 path,
                 field,
                 write,
-                recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                recv: recv.map(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
             });
         }
@@ -128,7 +179,7 @@ impl FileScan<'_> {
                 recv: recv.map(tr),
                 args: args.into_iter().map(tr).collect(),
                 fresh: tr(fresh),
-                srecv: srecv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                srecv: srecv.map(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
             });
         }
         info.opaque = cs.opaque;
@@ -285,7 +336,9 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     let mut us = UseScan(prelude.clone());
     us.visit_file(file);
     let local = super::objects::object_structs(file);
+    let rets = local_rets(file, &us.0);
     let mut fs = FileScan {
+        rets: &rets,
         uses: &us.0,
         local_objects: &local,
         fns: Vec::new(),
@@ -472,6 +525,31 @@ mod tests {
         assert_eq!(site("next").srecv, Some(iter));
         let make = site("make");
         assert_eq!((make.path_ty.clone(), make.args.len(), make.srecv.clone()), (Some(TypeRef(vec!["Factory".into()])), 2, None));
+    }
+
+    /// 本文件辅助 fn 的返回值：`let df = Self::make(…)?` 的静态类型取 `make` 声明的返回类型
+    #[test]
+    fn local_helper_returns() {
+        let src = r#"
+            impl Provider {
+                fn make(n: i32) -> Result<Format> { todo() }
+                fn new_view(n: i32) -> Result<View> { todo() }
+                pub fn get(&self) { let df = Self::make(0)?; df.setFlag(true)?; }
+            }
+            impl Provider__VTable for Provider {
+                fn put(&self) { let v = Self::new_view(0)?; v.setMode(1)?; let w = Widget::new_i(1); w.show()?; }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("get").map(|i| i.calls).unwrap_or_default();
+        let site = cs.iter().find(|c| c.name == "setFlag").expect("调用点已登记");
+        assert_eq!(site.srecv, Some(named(&["Format"])));
+        let cs = out.fns.remove("put").map(|i| i.calls).unwrap_or_default();
+        let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
+        assert_eq!(srecv("setMode"), Some(named(&["View"])));
+        assert_eq!(srecv("show"), Some(named(&["Widget"])));
     }
 
     #[test]
