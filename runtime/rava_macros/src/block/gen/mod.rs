@@ -2,11 +2,13 @@
 //!
 //! - `context`：GenContext —— 唯一的跨阶段数据传递机制（expand_inner 局部变量的收拢）
 //! - `struct_layout`：Java 字段布局（__inner struct + impl ObjectVTable for __inner）
+//! - `storage_hooks`：存储钩子（声明层对 __inner 的全部依赖只经此）
 //! - `virtual_dispatch`：Java 虚方法分派（vtable trait + vtable impls + base 自由函数）
 //! - `wrapper`：Java 类型包装（wrapper struct + 方法委托 + 构造器）
 //! - `type_conversions`：Java 类型转换（BINARY_NAME / From<Object> / From<Child> for Parent）
 
 pub(crate) mod context;
+pub(crate) mod storage_hooks;
 pub(crate) mod struct_layout;
 pub(crate) mod type_conversions;
 pub(crate) mod virtual_dispatch;

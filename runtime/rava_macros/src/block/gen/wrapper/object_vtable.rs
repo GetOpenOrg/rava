@@ -7,11 +7,13 @@ use syn::Type;
 
 use super::super::super::util::{is_basic, type_is_bool, type_is_int, type_is_long};
 use super::super::context::GenContext;
+use super::super::storage_hooks::hook_ident;
 
 pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     let struct_ident = &ctx.struct_ident;
-    let inner_ident = &ctx.inner_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
+    let alloc = hook_ident(ctx, "alloc");
+    let cells = hook_ident(ctx, "cells");
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
     let where_c = &ctx.where_c;
@@ -136,7 +138,7 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                 quote! {
                     ::std::option::Option::or_else(
                         ::std::option::Option::and_then(
-                            self.any.downcast_ref::<#inner_ident>(),
+                            #cells(&self.any),
                             |i| ObjectVTable::#method(i, field)),
                         || ObjectVTable::#method(&*self.vtable, field))
                 }
@@ -158,7 +160,7 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
         let has_ref = flat_fields().any(|(n, _, basic)| ctx.is_erased(n) || !basic);
         let ref_access_inner = if has_ref {
             quote! {
-                if let ::std::option::Option::Some(i) = self.any.downcast_ref::<#inner_ident>() {
+                if let ::std::option::Option::Some(i) = #cells(&self.any) {
                     if let __r @ ::std::option::Option::Some(_) =
                         ObjectVTable::__unsafe_ref_access(i, field, op)
                     {
@@ -256,12 +258,12 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     if let ::std::option::Option::Some(__o) = ObjectVTable::__shallow_copy(&*self.vtable) {
                         return ::std::option::Option::Some(__o);
                     }
-                    let __rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
+                    let (__vt, __any) = #alloc();
                     // 类型标注：vtable 去形参后字面量的字段不再提及本类形参——全部字段
                     // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住
                     let __copy: Self = #struct_ident {
-                        vtable: __Shared::clone(&__rc) as __Shared<dyn #vtable_trait_ident>,
-                        any: __rc as __AnyRef,
+                        vtable: __vt,
+                        any: __any,
                         _jvm_null: false,
                         #phantom_init
                     };

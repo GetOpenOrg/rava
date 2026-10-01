@@ -394,9 +394,10 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | `wrapper/mod.rs` `Default for X` | 分配一个默认存储（null 引用与 `new_*` 构造器共用） | 钩子 `__jb_<X>__alloc() -> (__Shared<dyn X__VTable>, __AnyRef)` |
 | `wrapper/object_vtable.rs` `__shallow_copy` | 同上，分配后逐字段拷贝 | 同一钩子 |
 | `wrapper/object_vtable.rs` `__unsafe_*_cell` / `__unsafe_ref_access` | 把 `any` 精确 downcast 成本类存储，取字段单元 | 钩子 `__jb_<X>__cells(any: &__AnyRef) -> Option<&dyn ObjectVTable>`（精确类型命中时返回存储的 ObjectVTable 视图，调用方随后调同名方法；未命中回落 vtable，与现状同序） |
-| `type_conversions.rs` `From<Object>` 部件路径 B | `any` 精确 downcast 成本类存储，重建 wrapper | 钩子 `__jb_<X>__from_any(any: __AnyRef) -> Result<X, __AnyRef>` |
+| `type_conversions.rs` `From<Object>` 部件路径 B | `any` 精确 downcast 成本类存储，重建 wrapper | 钩子 `__jb_<X>__from_any(any: __AnyRef) -> Result<(__Shared<dyn X__VTable>, __AnyRef), __AnyRef>`（返回部件而非 `X`：wrapper 可能带类型参数，钩子保持非泛型） |
 
 - 等价性：钩子体就是今天内联在原位置的代码，原样搬进实现层，调用点语义、求值顺序、失败回落顺序都不变。
+- 钩子是与存储布局同模块的非泛型 `pub fn`（`#[doc(hidden)]`），不挂在 wrapper 上：S4 拆层后定义随存储层进实现 crate，声明层以同签名 extern 声明调用，调用点文本不变。
 - `impl X__inner { pub const BINARY_NAME }`（让 vtable 上下文的方法体里 `Self::BINARY_NAME` 可解析）随存储层下沉。
 
 #### 7.3.2 extern 边界
@@ -440,7 +441,7 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | 步 | 内容 | 生成形态改动 | 验收重点 |
 |---|---|---|---|
 | S1 ✅ | **`java_meta` crate**：反射数据表与造表构建脚本从 `java_runtime` 移出；元素类型留在 `java_runtime::meta`（手写），表 static 以导出符号交给 `java_runtime` 读取（依赖方向见 §7.2） | 仅 workspace 结构；表数据逐字节不变 | 表文件逐字节对照；HelloWorld / Digester `java_runtime` 峰值（§7.7） |
-| S2 | **存储钩子**：§7.3.1 的 4 处改走钩子（同 crate 内先落地为 wrapper 的隐藏关联函数，签名即终态 extern 签名） | 宏展开：4 处调用点换钩子调用 | 展开对照只在 4 处变化；抽查 |
+| S2 | **存储钩子**：§7.3.1 的 4 处改走钩子（同 crate 内落地为与存储布局同模块的非泛型自由函数，签名即终态 extern 签名） | 宏展开：4 处调用点换钩子调用 | 展开对照只在 4 处变化；抽查 |
 | S3 | **方法体函数化**：方法体移入 `__jb_<符号>` 自由函数，wrapper 方法与 `_base` 变外壳；`_base` 去泛型；vtable-for-inner 私有方法直展开改调同一函数 | 宏展开：方法体搬家；单态化 `_base` 实例归一 | 单态化统计；抽查（覆盖私有方法、super 调用、`_base` 缺省分派） |
 | S4 | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树（实现 crate 根 `pub use java_runtime::*;`，本 crate 类模块名加 `_body` 后缀以免遮蔽）；可见性：wrapper 的 `vtable` / `any` / `__from_parts` 改为 `pub` + `#[doc(hidden)]` | 生成树结构变化（新增实现 crate 目录） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
 | S5 | **声明层样板收窄**（§7.4 前三项） | 宏展开与导入列表 | 逐项测声明 crate 峰值 |
@@ -479,3 +480,13 @@ HelloWorld：
 - `java_runtime` 手写 overlay：`build.rs`、新增 `src/meta.rs`、`class_impl.rs` / `anno_pool.rs` 改读 `crate::meta`，另有 5 个文件只改注释。
 
 生成的类文件零差异，raw-audit 一致。
+
+#### S2：存储钩子（2026-10-01）
+
+- 宏新增 `gen/storage_hooks.rs`：每类在存储布局旁生成 3 个非泛型 `#[doc(hidden)] pub fn`（`__jb_<X>__alloc` / `__jb_<X>__cells` / `__jb_<X>__from_any`），§7.3.1 的 4 处调用点改调钩子。
+- 等价性逐处：
+  - `Default` / `__shallow_copy`：钩子体与原内联代码同为「`__Shared::new(Default)` → 先克隆出 vtable 视图、再转 `__AnyRef`」，求值顺序相同；`_jvm_null` 取值不变。
+  - `__unsafe_*_cell` / `__unsafe_ref_access`：原为对 `&X__inner` 静态调用 `ObjectVTable` 方法，现为对同一对象的 `&dyn ObjectVTable` 调用，命中同一 impl；未命中时回落 `self.vtable` 的顺序不变。
+  - `From<Object>` 路径 B：`downcast` 成功 → 部件同原式构造；失败 → 原样交还 `__AnyRef`，随后 `drop`，与原 `Err(__other) => drop(__other)` 相同。
+- HelloWorld `java_runtime` 宏展开对照（nightly `-Z unpretty=expanded`，前后同一 scratch，仅宏 crate 不同）：差异 1543 处，逐类只有「新增 3 个钩子 + 4 处调用点替换」两类（190 类 × 3 钩子；删除行全部是上述 4 处的原内联代码）。`cargo build` 通过。
+- 生成树：宏不进 scratch，生成树不变。

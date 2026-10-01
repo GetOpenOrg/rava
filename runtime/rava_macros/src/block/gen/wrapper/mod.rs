@@ -13,12 +13,12 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use super::context::GenContext;
+use super::storage_hooks::hook_ident;
 
 /// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + impl ObjectVTable for Wrapper
 /// + wrapper impl 块。
 pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let struct_ident = &ctx.struct_ident;
-    let inner_ident = &ctx.inner_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
@@ -78,13 +78,14 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         }
     };
 
+    let alloc = hook_ident(ctx, "alloc");
     let wrapper_default = quote! {
         impl #impl_g ::std::default::Default for #struct_ident #ty_g #where_c {
             fn default() -> Self {
-                let rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
+                let (vtable, any) = #alloc();
                 #struct_ident {
-                    vtable: __Shared::clone(&rc) as __Shared<dyn #vtable_trait_ident>,
-                    any: rc as __AnyRef,
+                    vtable,
+                    any,
                     _jvm_null: true,
                     #phantom_init
                 }
