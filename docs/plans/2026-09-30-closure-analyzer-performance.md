@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；P6 整体结果缓存（`closure-p6`，§4.8）✅，同输入重跑分析段 24–29 ms；待做：P5 / P7 / P8（预算降级、并行、工程化，另分担冷路径 DeepCopy ≤ 2 s）。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
+> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；P6 整体结果缓存（`closure-p6`，§4.8）✅，同输入重跑分析段 24–29 ms；P7 冷路径一 / 二 / 三 ✅ 已合入（d842653d，§4.8；DeepCopy sites 1460 → 947 ms、analyze + aux 1147 → 713 ms、流边 2.22 M → 1.32 M），P7 余项进行中；待做：P5 / P8（预算降级、工程化，另分担冷路径 DeepCopy ≤ 2 s）。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
 
 ---
 
