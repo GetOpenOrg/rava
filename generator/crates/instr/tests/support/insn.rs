@@ -35,9 +35,11 @@ pub fn resolve(env: &Env, rec: &Value) -> R<(NInsn, Option<String>)> {
         let mut parts = c.splitn(3, '\t');
         let (lop, operand, comment) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
         let load = synth(lop, off, non_empty(operand), non_empty(comment))?;
-        return Ok((NInsn::FoldField { offset: off, load }, None));
+        // 原 getfield 指令（receiver 判空的视图依据）：类文件同偏移的 getfield，成员引用不比对
+        let (get, _) = real_insn(env, rec, off, "getfield", None).ok_or("fold_const：类文件中无同偏移 getfield")?;
+        return Ok((NInsn::FoldField { get, load }, None));
     }
-    let (main, owner) = match real_insn(env, rec, off, op) {
+    let (main, owner) = match real_insn(env, rec, off, op, ins["comment"].as_str()) {
         Some((i, c)) => (i, Some(c)),
         None => (synth(op, off, ins["operand"].as_str(), ins["comment"].as_str())?, None),
     };
@@ -57,7 +59,7 @@ fn non_empty(s: &str) -> Option<&str> {
 /// 类文件里的同一条指令：沿记录类 → 超类 / 接口广度优先找同名同描述符、且该偏移上操作码
 /// 与视图一致的方法体。记录类是发射所在类，而继承展开会把祖先 / 接口 default 方法体
 /// （含 `super.m()` 展开的接口 default 体）发射进子类，此时记录类自身的同名方法不是出处
-fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<(Insn, String)> {
+fn real_insn(env: &Env, rec: &Value, off: u32, op: &str, comment: Option<&str>) -> Option<(Insn, String)> {
     let (cls, m, d) = (rec["cls"].as_str()?, rec["m"].as_str()?, rec["d"].as_str()?);
     let mut queue = std::collections::VecDeque::from([cls.to_string()]);
     let mut seen = std::collections::BTreeSet::new();
@@ -67,7 +69,6 @@ fn real_insn(env: &Env, rec: &Value, off: u32, op: &str) -> Option<(Insn, String
         }
         let Some(ci) = env.reg.get(&c) else { continue };
         let code = ci.class_file().methods.iter().find(|x| x.name == m && x.desc == d).and_then(|x| x.code.as_ref());
-        let comment = rec["ins"]["comment"].as_str();
         let hit = |i: &&Insn| i.offset == off && i.name() == op && member_matches(i, comment);
         if let Some(i) = code.and_then(|code| code.insns.iter().find(hit)) {
             return Some((i.clone(), c));
