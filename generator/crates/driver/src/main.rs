@@ -1,6 +1,6 @@
 //! rava：Rust 生成器入口。当前子命令：
 //! - `closure`：精确闭包分析（XTA + 抽象解释 + 手写层 syn 扫描），输出 closure.json / 溯源 / 报告
-//! - `build`：javac → 闭包 → 发射 scratch →（缺省）cargo run
+//! - `build`：javac → 闭包 → 发射 scratch → cargo 编译 → 运行（`--stop-after` 截停）
 //! - `emit`：既有 closure.json → 发射 scratch
 //! - `image-dirs`：镜像独有 / VM 支持类目录（`build` / `emit` 未给 `--image` 时的缺省来源），每行一个
 //! - `jdk`：JDK 选择结果与来源 / 已安装列表（与 `build` 同一选择逻辑，见 [`resolve::jdk`]）
@@ -9,8 +9,10 @@ mod api_roots;
 mod build_cmd;
 mod build_libs;
 mod build_opts;
+mod cargo;
 mod closure_cmd;
 mod closure_run;
+mod status;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,8 +25,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug] [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
          rava image-dirs [--jdk N | --java-home P] [--runtime R]\n  \
          rava jdk [--jdk N | --java-home P] [--runtime R] [--home-only] | rava jdk --list"
     );

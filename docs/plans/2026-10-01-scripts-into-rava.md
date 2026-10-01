@@ -46,8 +46,8 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
   `--no-run` / `--batch` / `--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--lib` / `--locale` /
   `--closure-json` / `--precheck-only`；c1d-prec 另加 `--cut` / `--cut-file` / `--dump-edges`）。
 - 阶段选择统一为 `--stop-after <javac|closure|emit|compile|run>`（缺省 `run`），删除 `--no-run` /
-  `--precheck-only` 两个布尔开关：`--no-run` ≡ `--stop-after emit`；`--precheck-only` ≡ `--stop-after emit --report precheck`
-  （预检明细全量打印，不编译）。run_tests 用 `--stop-after compile`（运行与输出比对由编排做）。
+  `--precheck-only` 两个布尔开关：`--no-run` ≡ `--stop-after emit`；`--precheck-only` 更名 `--full-precheck`
+  （仅 `--stop-after emit` 下可用；预检明细全量打印，不出审计行；S2 已实施）。run_tests 用 `--stop-after compile`（运行与输出比对由编排做）。
 - `--build-timeout SECS` 进 rava：超时终止整个 cargo 进程组，状态写入 build_status.json（A2）。
 - 现 rava_cli 显式传的 `--runtime` / `--closure-cache` / `--java-home` 改为 rava 缺省派生：仓库根由可执行文件向上
   查找 `runtime/java_runtime/closure.toml` 得到，`--runtime` 缺省 `<repo>/runtime/java_runtime`、`--closure-cache` 缺省

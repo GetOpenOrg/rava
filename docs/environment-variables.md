@@ -45,7 +45,7 @@ python3 scripts/main.py tests/e2e/01_basics/BubbleSort.java --strict
 ### `rava build` / `rava emit`（Rust 生成器外壳，`generator/crates/driver`）
 
 ```bash
-cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --no-run --closure-json
+cd generator && cargo run --release -q -- build ../tests/e2e/01_basics/HelloWorld.java --jdk 21 --stop-after emit --closure-json
 cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json --jdk 21 --java ../tests/e2e/01_basics/HelloWorld.java
 ```
 
@@ -59,13 +59,14 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--image D` | 镜像独有 / VM 支持类目录（可多次；缺省由 rava 自行派生，见 `resolve::image`，`main.py` 不传） |
 | `--main 类` / `--locale L` / `--root 类.方法:描述符` | 仅 build：入口类（缺省首个源文件的同名类，否则首个带 static main 的用户类）/ locale 种子 / 外部种子方法（均可多次） |
 | `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
-| `--no-run` | 仅 build：只生成不编译运行 |
+| `--stop-after STAGE` | 仅 build：最后执行的阶段 `javac` / `closure` / `emit` / `compile` / `run`（缺省 `run`）。`emit` = 只生成；`compile` = 生成并 `cargo build`，产物清单写 `<scratch>/build_artifacts.json`（`{bin, executable, paths}`，仅本 scratch 的产物），rustc 全文写 `<scratch>/logs/build.log`。每次 build 都写 `<scratch>/build_status.json`：`{stage, ok, exit, signal, timeout, first_error, log, jdk:{home,major,source}, heavy}`（stage = 停止或失败的阶段）。编译环境：共享 `CARGO_TARGET_DIR=<仓库>/build/target`、`CARGO_INCREMENTAL=0`；声明层 `java_runtime` 生成类数 ≥ 1700 且调用方未设 `CARGO_BUILD_JOBS` 时单作业编译（`[cargo-env]` 行） |
+| `--build-timeout 秒` | 仅 build：cargo 编译超时，到时终止整个 cargo 进程组，`build_status.json` 记 `timeout: true`；须配合 `--stop-after compile` 或 `run` |
 | `--strict` | 同 `main.py --strict`（写入 scratch 的 `java_runtime/strict.txt`） |
 | `--lib NAME=JAR[:seed=FQN,…]` | 仅 build：jar 输入模式（可多次，声明序即 crate 依赖序）。jar 上 javac `-cp` 与类路径；无 seed = 整包（jar 全部类进 lib crate，种子 = 全部类的 public 方法），有 seed = 子集（种子类须在 jar 内，只收闭包触达的 jar 类）。每个 lib 一个 `crate-type = ["lib"]` 的 crate：public / protected → `pub`，其余 → `pub(crate)`；user 依赖全部 lib。与 `--batch` 互斥 |
 | `--batch` | 仅 build：入口写 `user/src/bin/<bin>.rs`（`#[path]` 引用同级类文件），向 `user/Cargo.toml` 追加 `[[bin]]`（已有同名 bin 跳过） |
 | `--trace-class 类` | 仅 build：打印该类或方法（`类.方法:描述符`）入闭包的最短 provenance 链（`      [why] …`，同 `rava closure --why`） |
 | `--debug` | 闭包未解析调用（`[closure] unresolved: …`）与存根兜底逐条（`[cfg-audit] stub fallback (位点): 方法: 原因`） |
-| `--precheck-only` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行、不编译运行。缺省时预检每类明细封顶 40 行 |
+| `--full-precheck` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行；build 下须配合 `--stop-after emit`。缺省时预检每类明细封顶 40 行 |
 | `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`scripts/gap_scan.py api` 使用） |
 | `--raw-sites FILE` | 同 `main.py --raw-sites`（位点为构造调用处 `文件:行:列`） |
 | `--closure-json` | 仅 build：另写出 `<scratch>/closure_input/closure.json`（`rava emit` 与动态对照的输入），并校验 `ClosureFacts::from_json` 与 `ClosureFacts::from_closure` 的结果逐字节一致（`Debug` 文本）。缺省不写，同时删除该处上轮遗留的 closure.json |
