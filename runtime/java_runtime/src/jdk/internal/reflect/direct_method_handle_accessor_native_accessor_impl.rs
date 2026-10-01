@@ -22,7 +22,7 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
 }
 
 impl DirectMethodHandleAccessor_NativeAccessor {
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V")]
+    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
     pub fn invoke0(m: Method, obj: Object, args: JArray<Object>) -> Result<Object> {
         let Some((cls, name, desc)) = m.__reflect_key() else {
             panic!("stub: NativeAccessor.invoke0 无声明键（非表构造的 Method）");
