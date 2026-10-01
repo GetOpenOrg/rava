@@ -35,7 +35,7 @@ fn objects(n: usize) -> String {
 /// 发射记录的方法 → (vtable 擦除条目签名（不含 `fn `）, 形参名, 条目形参类型)
 fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Option<(String, Vec<String>, Vec<String>)> {
     let tparams: BTreeSet<String> = class_params(ctx, jci).into_iter().collect();
-    let erased = erased_declaration(m, &tparams)?;
+    let erased = erased_declaration(ctx.ty.names, m, &tparams)?;
     let head = erased["fn ".len()..].to_string();
     let rest = &erased[erased.find('(')? + 1..erased.rfind(')')?];
     let parts = split_top_level_trimmed(rest);
@@ -45,8 +45,8 @@ fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Opt
 }
 
 /// 载体声明签名 → (形参类型（去 self）, 返回类型文本)
-fn declared_sig_parts(m: &EmittedMethod) -> Option<(Vec<String>, String)> {
-    let sig = &m.signature;
+fn declared_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod) -> Option<(Vec<String>, String)> {
+    let sig = &m.signature(ctx.ty.names);
     if !sig.starts_with("pub fn ") || !sig.contains('(') {
         return None;
     }
@@ -79,7 +79,7 @@ fn is_carrier_type(ctx: &EmitCtx<'_>, ty: &str) -> bool {
 
 /// default 条目体：`<J<Object,..> as From<Object>>::from(..).__default_m(..)`
 fn default_entry_body(ctx: &EmitCtx<'_>, m: &EmittedMethod, kci: &ClassInfo, k_ty: &str, args: &[String], entry_tys: &[String]) -> Option<String> {
-    let (param_tys, ret_ty) = declared_sig_parts(m)?;
+    let (param_tys, ret_ty) = declared_sig_parts(ctx, m)?;
     let tparams: BTreeSet<String> = class_params(ctx, kci).into_iter().collect();
     if param_tys.len() != args.len() {
         return None;

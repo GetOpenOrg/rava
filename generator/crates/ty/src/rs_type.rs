@@ -130,6 +130,20 @@ impl RsType {
         }
     }
 
+    /// 引用的全部注册表类（binary，渲染序，含重复；`Bare` 锚点不经短名、不计入）
+    pub fn collect_classes<'s>(&'s self, out: &mut Vec<&'s str>) {
+        match self {
+            RsType::Class { binary, args } => {
+                out.push(binary);
+                for a in args {
+                    a.collect_classes(out);
+                }
+            }
+            RsType::Array(e) => e.collect_classes(out),
+            _ => {}
+        }
+    }
+
     /// 渲染为 Rust 类型文本
     pub fn render(&self, names: &ShortNames) -> String {
         let mut s = String::new();

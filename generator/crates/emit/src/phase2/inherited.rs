@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use ty::ClassInfo;
 
 use super::bridge::{bridge_override_member, covariant_bridge_pending};
-use super::sig::{param_idents, param_mapping, param_part, result_inner, rust_type, sig_param_types, substitute_type_params};
+use super::sig::{param_mapping, param_part, result_inner, rust_type, sig_param_types, substitute_type_params};
 use super::uses::{class_use_path, imported_names, imports_for, type_arg_uses};
 use super::{anc_args, class_params, provided_methods, requests_by_recv, Emissions};
 use crate::class_writer::{INHERITED_IMPORTS_SLOT, INHERITED_MEMBERS_SLOT};
@@ -59,7 +59,7 @@ fn fn_name(line: &str) -> Option<&str> {
 
 /// 继承成员的转发体：精确执行 owner 祖先的实现（super 调用同源，不经 vtable 分派）
 fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owner_args: &[String]) -> String {
-    let mut args = param_idents(&method.signature);
+    let mut args = method.sig.param_names();
     let owner_short = ctx.short(owner_bin);
     if !method.handwritten {
         // base 函数接收者是 `&dyn Owner__VTable`（非泛型）：只有声明类的类型形参需要显式给出
@@ -67,7 +67,7 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
         let call = if args.is_empty() { "self".to_string() } else { format!("self, {}", args.join(", ")) };
         return format!("{owner_short}__{}_base{turbo}({call})", method.rust_name);
     }
-    let (ptypes, ret) = sig_param_types(&method.signature);
+    let (ptypes, ret) = sig_param_types(&method.signature(ctx.ty.names));
     let wrap = |a: &String, ty: &String| {
         if is_prim(ty) {
             a.clone()
@@ -222,7 +222,7 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     let get_args = |b: &str| anc.iter().find(|(x, _)| x == b).map(|(_, a)| a.clone()).unwrap_or_default();
     let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
     let owner_args = get_args(owner_bin);
-    let mut signature = substitute_type_params(&method.signature, &param_mapping(&owner_params, &owner_args));
+    let mut signature = substitute_type_params(&method.signature(ctx.ty.names), &param_mapping(&owner_params, &owner_args));
     let recv_name = ctx.ty.receiver_member_name(&method.name, &method.descriptor, recv_ci);
     if recv_name != method.rust_name {
         let old_head = format!("pub fn {}(", method.rust_name);
@@ -232,7 +232,7 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     }
     let (mut vt_bin, mut vt_args) = (owner_bin.to_string(), owner_args.clone());
     if !method.virtual_in.is_empty() {
-        vt_bin = anc.iter().find(|(b, _)| ctx.short(b) == method.virtual_in).map_or_else(|| owner_bin.to_string(), |(b, _)| b.clone());
+        vt_bin = anc.iter().find(|(b, _)| *b == method.virtual_in).map_or_else(|| owner_bin.to_string(), |(b, _)| b.clone());
         vt_args = get_args(&vt_bin);
     }
     let slot_name = if method.vtable_name.is_empty() { &method.rust_name } else { &method.vtable_name };
@@ -252,7 +252,7 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     }
     let mut erasure = slot_erasure_entries(ctx, &vt_bin, method, &signature);
     if erasure.is_empty() {
-        erasure = owner_erasure_entries(&method.signature, &signature, &owner_params);
+        erasure = owner_erasure_entries(&method.signature(ctx.ty.names), &signature, &owner_params);
     }
     let ev = erasure_attr(&erasure, &signature);
     if !ev.is_empty() {
@@ -279,7 +279,7 @@ fn interface_member_declaration(
     recv_ci: &ClassInfo,
 ) -> (String, String) {
     let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
-    let mut signature = substitute_type_params(&method.signature, &param_mapping(&owner_params, owner_args));
+    let mut signature = substitute_type_params(&method.signature(ctx.ty.names), &param_mapping(&owner_params, owner_args));
     let local = ctx.ty.interface_member_local_name(recv_ci, &method.name, &method.descriptor);
     let mut parts = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
     if !method.access.is_empty() {

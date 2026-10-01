@@ -140,7 +140,7 @@ impl<'a> EmitCtx<'a> {
         }
     }
 
-    /// 虚方法归属的 vtable 类 Rust 名（精确描述符的最远非私有非手写声明者）；
+    /// 虚方法归属的 vtable 类 binary（精确描述符的最远非私有非手写声明者）；
     /// 未被派发到、不占槽的实现（[`Self::slot_pruned`]）为空串
     pub fn find_virtual_in(&self, m: &Method, ci: &ClassInfo) -> String {
         if self.slot_pruned(m, ci) {
@@ -156,7 +156,7 @@ impl<'a> EmitCtx<'a> {
             return String::new();
         }
         if ci.is_interface() {
-            return self.short(ci.name());
+            return ci.name().to_string();
         }
         let reg = self.ty.reg;
         let mut oldest: Option<&str> = None;
@@ -178,7 +178,7 @@ impl<'a> EmitCtx<'a> {
             }
             cur = anc.super_class();
         }
-        self.short(oldest.unwrap_or(ci.name()))
+        oldest.unwrap_or(ci.name()).to_string()
     }
 
     /// 声明者 `decl_m` 的槽位返回是否为 Object 位
@@ -198,7 +198,7 @@ impl<'a> EmitCtx<'a> {
         'a: 'm,
     {
         let owner = self.raw_covariant_virtual_owner(am, anc);
-        if owner.is_empty() || owner == self.short(anc.name()) {
+        if owner.is_empty() || owner == anc.name() {
             return (anc, am);
         }
         let reg = self.ty.reg;
@@ -206,7 +206,7 @@ impl<'a> EmitCtx<'a> {
         let mut cur = anc.super_class();
         while !cur.is_empty() && cur != ty::consts::OBJECT && seen.insert(cur) {
             let Some(c) = reg.get(cur) else { break };
-            if self.short(cur) == owner {
+            if cur == owner {
                 if let Some(hit) = c.methods().iter().find(|x| !x.is_synthetic() && same_slot(x, am)) {
                     return (c, hit);
                 }
@@ -216,7 +216,7 @@ impl<'a> EmitCtx<'a> {
         (anc, am)
     }
 
-    /// 同名 + 同参数描述符（返回可协变）的最远槽位声明者（K-6a）；空串 = 无
+    /// 同名 + 同参数描述符（返回可协变）的最远槽位声明者 binary（K-6a）；空串 = 无
     fn raw_covariant_virtual_owner(&self, m: &Method, ci: &ClassInfo) -> String {
         if ci.is_constructor(m) || m.is_static() || (m.is_native() && self.hw_has(ci.name(), m)) || ci.is_interface() {
             return String::new();
@@ -247,16 +247,16 @@ impl<'a> EmitCtx<'a> {
             }
             cur = anc.super_class();
         }
-        oldest.map(|o| self.short(o)).unwrap_or_default()
+        oldest.map(str::to_string).unwrap_or_default()
     }
 
-    /// `owner_rust` 在 `ci` 超类链上的位置（直接父类 0；不在链上 -1）
-    fn chain_depth(&self, owner_rust: &str, ci: &ClassInfo) -> i32 {
+    /// `owner`（binary）在 `ci` 超类链上的位置（直接父类 0；不在链上 -1）
+    fn chain_depth(&self, owner: &str, ci: &ClassInfo) -> i32 {
         let mut seen: BTreeSet<&str> = BTreeSet::from([ci.name()]);
         let mut cur = ci.super_class();
         let mut depth = 0;
         while !cur.is_empty() && seen.insert(cur) {
-            if self.short(cur) == owner_rust {
+            if cur == owner {
                 return depth;
             }
             let Some(c) = self.ty.reg.get(cur) else { return -1 };
@@ -266,7 +266,7 @@ impl<'a> EmitCtx<'a> {
         -1
     }
 
-    /// 虚方法槽位归属的完整解析（精确描述符与协变模型取链上更远者）；不占槽的实现为空串
+    /// 虚方法槽位归属类 binary 的完整解析（精确描述符与协变模型取链上更远者）；不占槽的实现为空串
     pub fn resolve_virtual_slot(&self, m: &Method, ci: &ClassInfo) -> String {
         if self.slot_pruned(m, ci) {
             return String::new();
@@ -282,7 +282,7 @@ impl<'a> EmitCtx<'a> {
         }
         let cov = self.raw_covariant_virtual_owner(m, ci);
         if !cov.is_empty() && cov != slot {
-            if slot == self.short(ci.name()) {
+            if slot == ci.name() {
                 return cov;
             }
             return if self.chain_depth(&slot, ci) >= self.chain_depth(&cov, ci) { slot } else { cov };
@@ -297,7 +297,7 @@ impl<'a> EmitCtx<'a> {
     /// 覆盖条目对应的祖先 vtable 槽位成员名（声明者视角）；不解耦时空串
     pub fn slot_member_rust_name(&self, m: &Method, ci: &ClassInfo) -> String {
         let owner = self.resolve_virtual_slot(m, ci);
-        if owner.is_empty() || owner == self.short(ci.name()) {
+        if owner.is_empty() || owner == ci.name() {
             return String::new();
         }
         let reg = self.ty.reg;
@@ -305,7 +305,7 @@ impl<'a> EmitCtx<'a> {
         let mut cur = ci.super_class();
         while !cur.is_empty() && seen.insert(cur) {
             let Some(c) = reg.get(cur) else { return String::new() };
-            if self.short(cur) == owner {
+            if cur == owner {
                 return match c.methods().iter().find(|x| !x.is_synthetic() && same_slot(x, m)) {
                     Some(decl) => self.member_rust_name(c, decl),
                     None => self.injected_default_rust_name(c, m),

@@ -3,6 +3,7 @@
 
 use classfile::extras::{AnnoConst, FieldExtras, MethodExtras};
 use classfile::{Const, Field, Method};
+use ty::ShortNames;
 
 use crate::text::{hex, py_float_repr};
 
@@ -171,6 +172,7 @@ pub fn field_attr(f: &Field, fx: Option<&FieldExtras>) -> String {
 /// 方法属性行的发射期附加信息（Python 在 ParsedMethod 副本上挂的动态属性）
 #[derive(Debug, Clone, Default)]
 pub struct MethodAttrExtra {
+    /// 槽位归属类 binary（空 = 不占槽）
     pub virtual_in: String,
     pub vtable_name: String,
     pub vtable_erasure: Vec<String>,
@@ -179,8 +181,9 @@ pub struct MethodAttrExtra {
     pub slot_stub: bool,
 }
 
-/// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）
-pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtra) -> String {
+/// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）；
+/// `virtual_in` 按 `names` 渲染为槽位类 Rust 名
+pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtra, names: &ShortNames) -> String {
     let esc = |s: &str| s.replace('"', "\\\"");
     let tag = if m.is_native() { "java_native" } else { "java_method" };
     let mut parts = vec![format!("name = \"{}\"", esc(&m.name)), format!("descriptor = \"{}\"", esc(&m.desc))];
@@ -211,7 +214,7 @@ pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtr
         parts.push("is_deprecated = true".into());
     }
     if !extra.virtual_in.is_empty() {
-        parts.push(format!("virtual_in = \"{}\"", esc(&extra.virtual_in)));
+        parts.push(format!("virtual_in = \"{}\"", esc(&names.short(&extra.virtual_in))));
         if !extra.vtable_name.is_empty() {
             parts.push(format!("vtable_name = \"{}\"", esc(&extra.vtable_name)));
         }
