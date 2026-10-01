@@ -23,7 +23,7 @@ impl ModuleLayer {
 
     /// `parents()`：boot 层的父层列表。产物无 JPMS 层级（boot 层即唯一空层），返回空列表——
     /// ServiceLoader 的 LayerLookupIterator 遍历到此即止（boot 层无 provider）。
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V")]
+    #[jvm_boundary]
     pub fn parents(&self) -> Result<crate::java::util::List<Object>> {
         let empty = crate::java::util::ArrayList::<Object>::new()?;
         Ok(<crate::java::util::List<Object> as ::std::convert::From<_>>::from(empty))

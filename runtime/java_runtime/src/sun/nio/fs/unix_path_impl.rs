@@ -55,7 +55,7 @@ impl UnixPath {
     /// `normalizeAndCheck(String)`：压缩重复 '/'，拒绝 NUL 字符。
     /// char 索引以 Unicode 标量遍历（'/' 与 NUL 不出现于增补字符内部，
     /// 切分点语义与 UTF-16 索引一致）。
-    #[jvm_boundary(upcalls = "java/nio/file/InvalidPathException.<init>:(Ljava/lang/String;Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn normalizeAndCheck(input: String) -> Result<String> {
         let s: std::string::String = format!("{}", input);
         let chars: Vec<char> = s.chars().collect();
@@ -160,7 +160,7 @@ impl UnixPath {
     }
 
     /// `toUnixPath(Path)`：null → NPE；非 UnixPath → ProviderMismatchException。
-    #[jvm_boundary(upcalls = "java/nio/file/ProviderMismatchException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn toUnixPath(obj: Object) -> Result<UnixPath> {
         if _is_jnull(&obj) {
             return Err(JvmError::null_pointer());

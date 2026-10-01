@@ -9,7 +9,7 @@ impl RandomSupport {
     /// （VM 属性 java.util.secureRandomSeed）在原生二进制无 VM 属性面，恒走
     /// JDK 默认路径：`mixStafford13(currentTimeMillis) ^ mixStafford13(nanoTime)`
     /// ——值不进可观察输出（消费方为 SplittableRandom defaultGen 等）。
-    #[jvm_boundary(upcalls = "jdk/internal/util/random/RandomSupport.mixStafford13:(J)J")]
+    #[jvm_boundary]
     pub fn initialSeed() -> Result<i64> {
         let t = crate::java::lang::System::currentTimeMillis()?;
         let n = crate::java::lang::System::nanoTime()?;

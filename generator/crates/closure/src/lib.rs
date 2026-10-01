@@ -1,6 +1,6 @@
 //! rava closure：精确闭包分析器（计划 docs/plans/2026-09-29-rust-closure-analyzer.md）。
 //!
-//! 入口 [`analyze`]：用户类 main 为根，加 VM 基础设施种子（`error.rs` vm-upcalls、boot_init），
+//! 入口 [`analyze`]：用户类 main 为根，加 VM 基础设施种子（VM 规则、boot_init），
 //! 以 XTA + 抽象解释计算调用链实际需要的类、方法、字段、实例化与初始化集合。
 //! 每个节点带溯源（via），`why` 沿溯源回溯到根。
 
@@ -64,9 +64,6 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     for r in &input.seed_roots {
         e.root_seed(r.clone(), "seed");
-    }
-    for u in hw.vm_upcalls() {
-        e.root_upcall(&u, "vm-upcalls");
     }
     e.root_vm_rules();
     for c in &man.boot_init {
@@ -255,6 +252,8 @@ impl Closure<'_> {
             "sigpoly_sites": e.sigpoly_sites,
             "dispatch": dispatch,
             "dispatched": e.dispatched(),
+            "hw_inherited": e.hw_inherited_requests().iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+            "hw_untyped_sites": e.hw_untyped_sites(),
             "folds_version": FOLDS_VERSION,
             "folds": folds,
             "system_properties": {

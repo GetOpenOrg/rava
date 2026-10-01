@@ -21,7 +21,7 @@ fn __wrap_target_exception(e: crate::error::JvmError) -> crate::error::JvmError 
 }
 
 impl DirectConstructorHandleAccessor_NativeAccessor {
-    #[jvm_native(upcalls = "java/lang/reflect/InvocationTargetException.<init>:(Ljava/lang/Throwable;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn newInstance0(c: Constructor<Object>, args: JArray<Object>) -> Result<Object> {
         let Some((cls, desc)) = c.__reflect_key() else {
             panic!("stub: NativeAccessor.newInstance0 无声明键（非表构造的 Constructor）");

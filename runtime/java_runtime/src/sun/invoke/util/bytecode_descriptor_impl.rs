@@ -50,13 +50,13 @@ fn split_method_descriptor(desc: &str) -> Option<Vec<std::string::String>> {
 
 impl BytecodeDescriptor {
     /// `unparse(Class)`：类型描述符（`I` / `Ljava/lang/String;` / `[J` …）。
-    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn unparse_class(type_: Class) -> Result<String> {
         type_.descriptorString()
     }
 
     /// `unparse(Object)`：Class → 描述符；MethodType → 方法描述符；其余（String）原样。
-    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn unparse_obj(type_: Object) -> Result<String> {
         if type_.0.is_instance_of("java/lang/Class") {
             return Clone::clone(&type_).try_cast::<Class>("java/lang/Class")?.descriptorString();
@@ -70,7 +70,7 @@ impl BytecodeDescriptor {
     }
 
     /// `unparseMethod(Class rtype, Class[] ptypes)`：`(P…)R`。
-    #[jvm_boundary(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn unparseMethod_class_arr_class(rtype: Class, ptypes: JArray<Class>) -> Result<String> {
         let mut s = std::string::String::from("(");
         for i in 0..ptypes.len()? {
@@ -84,7 +84,7 @@ impl BytecodeDescriptor {
     /// `parseMethod(String, ClassLoader)`：分量 Class 表（形参在前、返回类型在末），可变
     /// ArrayList——`MethodType.fromMethodDescriptorString` 对其 `remove(size-1)` 取返回类型。
     /// 格式错误 → IllegalArgumentException（JDK parseError 同型）。
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z")]
+    #[jvm_boundary]
     pub fn parseMethod_str_classloader(bytecodeSignature: String, _loader: ClassLoader) -> Result<List<Object>> {
         let desc = format!("{}", bytecodeSignature);
         let Some(parts) = split_method_descriptor(&desc) else {

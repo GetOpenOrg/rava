@@ -174,6 +174,8 @@ pub struct ClosureFacts {
     pub dispatched: Vec<MemberRef>,
     /// 已实例化的类（lambda / 手写实现对象 / 数组除外）
     pub instantiated: Vec<String>,
+    /// 手写体继承成员需求：`owner` 为接收者静态类型，方法声明在其超类型上（L1 编译期事实）
+    pub hw_inherited: Vec<MemberRef>,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -282,6 +284,7 @@ impl ClosureFacts {
             },
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
+            hw_inherited: e.hw_inherited_requests().into_iter().collect(),
         }
     }
 
@@ -328,6 +331,7 @@ impl ClosureFacts {
         }
         out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         out.instantiated = strings(v.get("instantiated"))?;
+        out.hw_inherited = strings(v.get("hw_inherited"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         Ok(out)
     }
 }

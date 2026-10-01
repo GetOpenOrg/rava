@@ -56,7 +56,7 @@ impl ArraysSupport {
 
     /// @IntrinsicCandidate vectorizedHashCode：按 basicType（JVM T_* 常量）解释数组元素，
     /// 计算 31 进制多项式哈希（与 JDK 标量回退路径逐位一致，i32 回绕）。
-    #[jvm_native(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn vectorizedHashCode(array: Object, from_index: i32, length: i32,
                               initial_value: i32, basic_type: i32) -> Result<i32> {
         const T_BOOLEAN: i32 = 4;

@@ -874,7 +874,7 @@ impl Unsafe {
 
     /// 分配基本类型数组。Rust 侧不存在未初始化内存的可观察差异，元素一律零值
     /// （JDK 规格允许实现返回已清零的数组）。
-    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_allocateUninitializedArray(&self, componentType: Class, length: i32) -> Result<Object> {
         if length < 0 {
             return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(String::from("Negative length"))?));

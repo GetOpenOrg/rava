@@ -1,13 +1,11 @@
 //! 手写层（runtime/java_runtime/src 共置 `_impl.rs` / `_ext.rs`）的语法级扫描（syn）。
 //!
 //! 走真实语法树（取代已删除的 Python 正则扫描 native_upcalls.py），抽取：
-//! - `#[jvm_native|jvm_boundary|jvm_ext(upcalls = "类.成员:描述符 …")]` 声明的 Rust→Java 回调边；
 //! - `pub fn` 名（成员由手写体提供的判定）；
 //! - 手写体分配：`let mut x = T::default(); x._init_not_null();`（单独的 `T::default()` 是 Java null）
 //!   与构造调用 `T::new*(…)`；沿同文件 fn 调用传递闭包；
-//! - `error.rs` 头部 `// vm-upcalls:` 行（VM 基础设施的无条件种子）；
-//! - 调用表达式的实参 / 接收者类型（语法推断，见 [`TypedCall`]）：回调边的实参按调用点精确接入，
-//!   推断不出时由引擎退回手写方法的值池。
+//! - 调用表达式的名字与实参 / 接收者类型（语法推断，见 [`TypedCall`]）：引擎据此反解 Rust→Java 回调边
+//!  （手写层不声明回调），实参按调用点精确接入，推断不出时退回手写方法的值池。
 //!
 //! 成员匹配：Rust fn 名 = Java 名或 `名_<重载后缀>`；虚方法体前缀 `__impl_`；构造器 `<init>` ↔ `new`。
 
@@ -51,21 +49,11 @@ const RUST_KEYWORDS: &[&str] = &[
     "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 回调目标：方法（描述符以 `(` 开头）或静态字段
+/// 回调目标（由手写体调用点推断）：方法或静态字段
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Upcall {
     Method(MemberRef),
     Field(MemberRef),
-}
-
-pub fn parse_upcall(tok: &str) -> Option<Upcall> {
-    let colon = tok.find(':')?;
-    let dot = tok[..colon].rfind('.')?;
-    if dot == 0 {
-        return None;
-    }
-    let m = MemberRef { owner: tok[..dot].into(), name: tok[dot + 1..colon].into(), desc: tok[colon + 1..].into() };
-    Some(if m.desc.starts_with('(') { Upcall::Method(m) } else { Upcall::Field(m) })
 }
 
 /// Rust 类型路径（分段）→ binary name 候选（由调用方按类路径验证存在）
@@ -121,7 +109,6 @@ pub struct FieldAccess {
 #[derive(Debug, Default, Clone)]
 pub struct FnInfo {
     pub is_pub: bool,
-    pub upcalls: Vec<Upcall>,
     /// 调用点（含同文件被调 fn 的传递闭包）
     pub calls: Vec<TypedCall>,
     /// 宏调用内出现的标识符（syn 不展开宏：同名回调可能藏在宏里 → 按未知处理）
@@ -168,7 +155,6 @@ pub struct ClassHw {
 #[derive(Debug, Default)]
 pub struct MemberHw {
     pub provided: bool,
-    pub upcalls: Vec<Upcall>,
     pub allocs: BTreeSet<TypeRef>,
     pub ctors: BTreeSet<(TypeRef, String)>,
     pub calls: Vec<TypedCall>,
@@ -184,7 +170,6 @@ impl MemberHw {
     /// 并入一个命中的 fn
     pub fn absorb(&mut self, name: &str, f: &FnInfo) {
         self.provided |= f.is_pub;
-        self.upcalls.extend(f.upcalls.iter().cloned());
         self.allocs.extend(f.allocs.iter().cloned());
         self.ctors.extend(f.ctors.iter().cloned());
         self.calls.extend(f.calls.iter().cloned());
@@ -430,16 +415,6 @@ impl Handwritten {
             }
         }
         parts.join("_")
-    }
-
-    /// `error.rs` 的 `// vm-upcalls:` 行
-    pub fn vm_upcalls(&self) -> Vec<Upcall> {
-        let Ok(s) = std::fs::read_to_string(self.src.join("error.rs")) else { return vec![] };
-        s.lines()
-            .filter_map(|l| l.trim_start().strip_prefix("//").map(str::trim_start))
-            .filter_map(|l| l.strip_prefix("vm-upcalls:"))
-            .flat_map(|l| l.split_whitespace().filter_map(parse_upcall).collect::<Vec<_>>())
-            .collect()
     }
 
     /// 类型路径 → binary name 候选（`Self` → 宿主类；单段按 use 表或同包；`_` 可能是 `$`）

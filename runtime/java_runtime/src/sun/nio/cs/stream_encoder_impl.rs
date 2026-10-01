@@ -58,18 +58,18 @@ impl StreamEncoder {
 
     /// `forOutputStreamWriter(OutputStream, Object, String)`：按字符集名查找，名字非法 / 不支持 →
     /// `UnsupportedEncodingException(charsetName)`（JDK 同形）。
-    #[jvm_boundary(upcalls = "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset; java/io/UnsupportedEncodingException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn forOutputStreamWriter_outputstream_obj_str(out: OutputStream, lock: Object, charset_name: String) -> Result<StreamEncoder> {
         let cs = charset_for_name(charset_name)?;
         Self::forOutputStreamWriter_outputstream_obj_charset(out, lock, cs)
     }
 
-    #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V")]
+    #[jvm_boundary]
     pub fn write_i(&self, c: i32) -> Result<()> {
         self.encode_units(&[c as u16])
     }
 
-    #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V")]
+    #[jvm_boundary]
     pub fn write_arr_c_i_i(&self, cbuf: JArray<u16>, off: i32, len: i32) -> Result<()> {
         let mut units: Vec<u16> = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {
@@ -78,7 +78,7 @@ impl StreamEncoder {
         self.encode_units(&units)
     }
 
-    #[jvm_boundary(upcalls = "java/io/OutputStream.write:([BII)V java/lang/String.charAt:(I)C")]
+    #[jvm_boundary]
     pub fn write_str_i_i(&self, s: String, off: i32, len: i32) -> Result<()> {
         let mut units: Vec<u16> = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {
@@ -92,7 +92,7 @@ impl StreamEncoder {
         Ok(())
     }
 
-    #[jvm_boundary(upcalls = "java/io/OutputStream.flush:()V")]
+    #[jvm_boundary]
     pub fn flush(&self) -> Result<()> {
         self.__get_out().flush()
     }
@@ -101,7 +101,7 @@ impl StreamEncoder {
     /// 再关闭底层 OutputStream；重复关闭无操作（closed 位）。
     /// 消费方：`PrintStream(out, autoFlush, charsetName).close()` → BufferedWriter →
     /// OutputStreamWriter → 本类。
-    #[jvm_boundary(upcalls = "java/io/OutputStream.close:()V java/io/OutputStream.write:([BII)V")]
+    #[jvm_boundary]
     pub fn close(&self) -> Result<()> {
         if self.__get_closed() {
             return Ok(());

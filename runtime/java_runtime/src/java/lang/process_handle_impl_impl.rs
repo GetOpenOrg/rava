@@ -131,7 +131,7 @@ impl ProcessHandleImpl {
     /// native `getProcessPids0(long pid, long[] pids, long[] ppids, long[] stimes)`：
     /// pid == 0 枚举全部进程，否则只取父进程为 pid 的子进程；逐项写入三个数组（ppids / stimes
     /// 可为 null），返回匹配总数——超过数组长度时只写前 len 项，调用方按返回值扩容重试。
-    #[jvm_native(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn getProcessPids0(pid: i64, pids: JArray<i64>, ppids: JArray<i64>, stimes: JArray<i64>) -> Result<i32> {
         let size = pids.len()?;
         if (!ppids.is_jvm_null() && ppids.len()? != size)

@@ -46,7 +46,7 @@ impl SharedSecrets {
 
     /// 槽位为空时先触发 Console 的类初始化（JDK：ensureClassInitialized(Console.class)），
     /// 由其 <clinit> 登记。消费方：System.console()。
-    #[jvm_boundary(upcalls = "java/io/Console.<clinit>:()V")]
+    #[jvm_boundary]
     pub fn getJavaIOAccess<T: From<Object>>() -> Result<T> {
         if JAVA_IO_ACCESS.with(|slot| slot.borrow().is_none()) {
             crate::java::io::Console::__class_init()?;
@@ -80,7 +80,7 @@ impl SharedSecrets {
 
     /// JDK：槽位为空时 `Class.forName("java.lang.invoke.MethodHandleImpl", true, null)` 触发其
     /// <clinit> 登记。消费方 `MethodHandleAccessorFactory$LazyStaticHolder.<clinit>`（反射访问器族）。
-    #[jvm_boundary(upcalls = "java/lang/invoke/MethodHandleImpl.<clinit>:()V")]
+    #[jvm_boundary]
     pub fn getJavaLangInvokeAccess<T: From<Object>>() -> Result<T> {
         if JAVA_LANG_INVOKE_ACCESS.with(|slot| slot.borrow().is_none()) {
             crate::java::lang::invoke::MethodHandleImpl::__class_init()?;
@@ -99,7 +99,7 @@ impl SharedSecrets {
     /// HotSpot 在 VM 引导期即初始化 AccessibleObject（登记 ReflectAccess），JDK 的取用方
     ///（ReflectionFactory 构造器）依赖该时序；惰性类初始化下槽位为空时先触发其 <clinit>
     ///（与 getJavaIOFileDescriptorAccess 同一约定）。
-    #[jvm_boundary(upcalls = "java/lang/reflect/ReflectAccess.<init>:()V")]
+    #[jvm_boundary]
     pub fn getJavaLangReflectAccess<T: From<Object>>() -> Result<T> {
         if JAVA_LANG_REFLECT_ACCESS.with(|slot| slot.borrow().is_none()) {
             crate::java::lang::reflect::AccessibleObject::__class_init()?;
@@ -123,7 +123,7 @@ impl SharedSecrets {
     /// 翻译字节码的 `getJavaXxxAccess` 在槽位为空时经此触发访问器登记类的 `<clinit>`。按 VM 行为（准入
     /// 第 ③ 类）走运行时类初始化入口；未登记初始化钩子的类为 no-op，与 `Unsafe.ensureClassInitialized`
     /// 手写（unsafe__impl.rs）同一语义。
-    #[jvm_boundary(upcalls = "java/lang/Class.getName:()Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn ensureClassInitialized(c: crate::java::lang::Class) -> Result<()> {
         if c.is_jvm_null() {
             return Err(JvmError::null_pointer());
@@ -160,10 +160,10 @@ impl SharedSecrets {
     /// `Stream.toList` 的 trusted-array 路径消费）。与 getJavaLangAccess 同约定：
     /// 槽位为空时直接构造登记（无状态对象，首次取用即生效）。
     ///
-    /// upcalls：匿名类的两个转发目标静态不在任何字节码调用边上（BFS 在本边界
-    /// 截断），经此声明拉入闭包——触达即翻译，`listFromTrustedArrayNullsAllowed`
-    /// （ReferencePipeline.toList 实际消费的变体）不再停留 panic 存根。
-    #[jvm_boundary(upcalls = "java/util/ImmutableCollections.listFromTrustedArray:([Ljava/lang/Object;)Ljava/util/List; java/util/ImmutableCollections.listFromTrustedArrayNullsAllowed:([Ljava/lang/Object;)Ljava/util/List;")]
+    /// 匿名类的两个转发目标静态不在任何字节码调用边上：闭包分析把本处新建的手写实现对象
+    /// 当作接收者，其方法体的路径调用推断为回调边——`listFromTrustedArrayNullsAllowed`
+    /// （ReferencePipeline.toList 实际消费的变体）触达即翻译。
+    #[jvm_boundary]
     pub fn getJavaUtilCollectionAccess<T: From<Object>>() -> Result<T> {
         if JAVA_UTIL_COLLECTION_ACCESS.with(|slot| slot.borrow().is_none()) {
             let obj = Object::from(ImmutableCollectionsCollAccess);

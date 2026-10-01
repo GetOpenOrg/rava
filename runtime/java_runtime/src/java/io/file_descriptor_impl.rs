@@ -43,7 +43,7 @@ impl FileDescriptor {
     /// native sync0()：强制落盘（fsync）。失败抛 IOException（JDK 精确类型为
     /// SyncFailedException——IOException 子类，仅当语料引用时才生成，按捕获
     /// 语义等价降型为 IOException，消息保留 "sync failed" 前缀）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn sync0(&self) -> Result<()> {
         let fd = self.__get_fd();
         if fd <= -2 {

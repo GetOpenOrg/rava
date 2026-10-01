@@ -51,7 +51,7 @@ impl ChannelInputStream {
 
     /// `read(byte[], int, int)`：单次通道读（ByteBuffer.wrap + ch.read 的
     /// 精确直调形态）；返回 -1 表示 EOF。
-    #[jvm_boundary(upcalls = "java/lang/IndexOutOfBoundsException.<init>:()V")]
+    #[jvm_boundary]
     pub fn __impl_read_arr_b_i_i(&self, bs: JArray<i8>, off: i32, len: i32) -> Result<i32> {
         check_from_index_size(off, len, bs.len()?)?;
         if len == 0 {

@@ -33,7 +33,7 @@ impl FileOutputStream {
     /// native open0(String, boolean)：按 JDK io_util_md.c 语义打开写入目标——
     /// `O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC)`，权限 0666（受 umask）。
     /// 失败抛 FileNotFoundException，消息 `path (strerror)`。
-    #[jvm_native(upcalls = "java/io/FileNotFoundException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn open0(&self, name: String, append: bool) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         let path = format!("{}", name);
@@ -60,7 +60,7 @@ impl FileOutputStream {
 
     /// native write(int, boolean)：写单字节（取低 8 位）。重载改名形态 `write_i_z`（与生成侧
     /// mangle 一致，否则不覆盖 native 存根）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn write_i_z(&self, b: i32, _append: bool) -> Result<()> {
         self.write_all_fd(&[b as u8])
     }
@@ -68,7 +68,7 @@ impl FileOutputStream {
     /// native writeBytes(byte[], int, int, boolean)：写入底层文件描述符。
     /// 与 write(2) 一致不做用户态缓冲：写完立即 flush。越界按 io_util.c 抛
     /// ArrayIndexOutOfBoundsException（经 JArray::get）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn writeBytes(&self, b: JArray<i8>, off: i32, len: i32, _append: bool) -> Result<()> {
         let mut bytes: Vec<u8> = Vec::with_capacity(len.max(0) as usize);
         for i in off..off.saturating_add(len) {

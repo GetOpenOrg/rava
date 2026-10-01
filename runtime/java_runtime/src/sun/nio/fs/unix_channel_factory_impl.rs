@@ -43,7 +43,7 @@ fn option_name(option: &Object) -> Result<std::string::String> {
 
 impl UnixChannelFactory {
     /// `newFileChannel(UnixPath, Set, int)`：open + FileChannelImpl 组装。
-    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V java/lang/UnsupportedOperationException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn newFileChannel(
         path: UnixPath,
         options: Set<Object>,

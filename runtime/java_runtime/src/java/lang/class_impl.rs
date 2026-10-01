@@ -373,7 +373,7 @@ impl Class {
     /// native `getConstantPool()`：本类常量池视图（HotSpot 返回持 constantPoolOop 的
     /// ConstantPool）。原生二进制的常量池是注解属性引用的稀疏表，以本 Class 作为
     /// constantPoolOop，ConstantPool natives 按类名查表（constant_pool_impl.rs）。
-    #[jvm_native(upcalls = "jdk/internal/reflect/ConstantPool.<init>:()V")]
+    #[jvm_native]
     pub fn getConstantPool(&self) -> Result<crate::jdk::internal::reflect::ConstantPool> {
         let cp = crate::jdk::internal::reflect::ConstantPool::new()?;
         cp.__set_constantPoolOop(Object::from(Clone::clone(self)));
@@ -480,7 +480,7 @@ impl Class {
     /// （JLS §12.4.1 / FS-C5）：经 main 启动时登记的类初始化钩子（有 `<clinit>` 的用户类）
     /// 按名代调 `__class_init`，初始化异常按状态机语义传播（ExceptionInInitializerError /
     /// 其后 NoClassDefFoundError）；initialize=false 只取 Class 对象（init-passive）。
-    #[jvm_native(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn forName0(name: String, initialize: bool, _loader: crate::java::lang::ClassLoader,
                     _caller: Class) -> Result<Class> {
         let dotted = format!("{}", name);
@@ -510,9 +510,9 @@ impl Class {
     /// RecordComponent：clazz=本类、type=描述符还原、accessor=同名无参声明方法、
     /// signature=泛型签名（无则 null）。非 record（表中缺席）→ null（JDK 语义）。
     /// 消费方：ObjectStreamClass 的 record 序列化（规范构造器 / 分量取值）。
-    /// upcalls：RecordComponent 由此处构造（无 `new` 指令可见）→ 声明其构造器使 BFS
-    /// 记为已实例化（toString 等覆盖经 Object 视图可达）；访问器经 getDeclaredMethod 查询。
-    #[jvm_native(upcalls = "java/lang/reflect/RecordComponent.<init>:()V java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;")]
+    /// RecordComponent 由此处构造（无 `new` 指令可见，闭包分析按手写体的构造调用记为已实例化，
+    /// toString 等覆盖经 Object 视图可达）；访问器经 getDeclaredMethod 查询。
+    #[jvm_native]
     pub fn getRecordComponents0(&self) -> Result<JArray<crate::java::lang::reflect::RecordComponent>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         let comps: &[(&str, &str, &str)] = match crate::meta::record_components().iter().find(|(c, _)| *c == name) {
@@ -805,7 +805,7 @@ impl Class {
     /// `enumConstantDirectory` 字段。原生侧枚举宇宙取运行时常量目录（`java_class!` 宏在类初始化
     /// 后登记，与 `JavaLangAccess.getEnumConstantsShared` 同源），其余逐句同 JDK：先查字段缓存；
     /// 非枚举类（修饰符无 ACC_ENUM）抛 `IllegalArgumentException(getName() + " is not an enum class")`。
-    #[jvm_boundary(upcalls = "java/util/HashMap.<init>:()V java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_enumConstantDirectory(&self) -> Result<crate::java::util::Map<Object, Object>> {
         let cached = self.__get_enumConstantDirectory();
         if !cached.is_jvm_null() {

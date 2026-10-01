@@ -66,7 +66,7 @@ impl UnixException {
     /// `translateToIOException(String file, String other)`：JDK 错误映射表
     /// （EACCES/EEXIST/ENOENT/ELOOP → 具体子类，其余 → FileSystemException）。
     /// file/other 语义为 null 载体（JVM null String）。
-    #[jvm_boundary(upcalls = "java/nio/file/AccessDeniedException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/NoSuchFileException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/FileAlreadyExistsException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V java/nio/file/FileSystemException.<init>:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn translateToIOException(&self, file: String, other: String) -> Result<IOException> {
         let msg = self.__get_msg();
         // msg 为 String wrapper：null 判定走 vtable 钩子（`_is_jnull` 对 wrapper 恒

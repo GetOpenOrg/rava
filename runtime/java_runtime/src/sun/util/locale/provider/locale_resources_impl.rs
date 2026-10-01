@@ -134,7 +134,7 @@ impl LocaleResources {
     }
 
     /// private `getNumberStrings(ResourceBundle, String)`（字节码语义；仅手写体内调用，
-    /// 回调边声明在两个公开入口上）：
+    /// 回调边经两个公开入口的同文件调用传递推断）：
     /// `<nu 扩展>.<type>` → `<DefaultNumberingSystem>.<type>` → `<type>`，首个存在的键胜出。
     #[doc(hidden)]
     pub fn getNumberStrings(&self, rb: ResourceBundle, type_: String) -> Result<JArray<String>> {
@@ -159,7 +159,7 @@ impl LocaleResources {
     /// DecimalFormatSymbols 的货币缓存槽（JDK 由 initializeCurrency 回填，初值 null）。
     ///
     /// 回调边（手写体 → 翻译层）：束链串接与键查找的 ResourceBundle / Locale 成员。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/Locale.getUnicodeLocaleType:(Ljava/lang/String;)Ljava/lang/String; java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String; java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getDecimalFormatSymbolsData(&self) -> Result<JArray<Object>> {
         let rb = self.__number_format_data()?;
         let data: JArray<Object> = JArray::new(3);
@@ -170,7 +170,7 @@ impl LocaleResources {
     /// `getCurrencyName(String key)`（L-2）：CurrencyNames 束链上 `containsKey(key)` 则取值，否则
     /// null——键为大写货币代码（符号）或小写货币代码（显示名），与 JDK `CurrencyNameProviderImpl`
     /// 的取键约定一致。束链串接同 `getNumberFormatData`，查表 / 父链回退走翻译字节码。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getCurrencyName(&self, key: String) -> Result<String> {
         let rb = self.__bundle_chain(CURRENCY_NAMES_BASE, CURRENCY_NAMES_EXT, &CURRENCY_NAMES)?;
         if rb.containsKey(Clone::clone(&key))? {
@@ -180,7 +180,7 @@ impl LocaleResources {
     }
 
     /// `getNumberPatterns()`：NumberPatterns（number / currency / percent / accounting）。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/Locale.getUnicodeLocaleType:(Ljava/lang/String;)Ljava/lang/String; java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String; java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getNumberPatterns(&self) -> Result<JArray<String>> {
         let rb = self.__number_format_data()?;
         self.getNumberStrings(rb, String::from("NumberPatterns"))
@@ -188,7 +188,7 @@ impl LocaleResources {
 
     /// `getCNPatterns(NumberFormat.Style)`：`<short|long>.CompactNumberPatterns`（FormatData 束链，
     /// 字节码语义：LONG → "long"，其余 → "short"；键经 getObject 取 String[]）。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String; java/lang/Enum.name:()Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getCNPatterns(&self, style: crate::java::text::NumberFormat_Style) -> Result<JArray<String>> {
         let prefix = if format!("{}", style.name()?) == "LONG" { "long" } else { "short" };
         let rb = self.__number_format_data()?;
@@ -197,7 +197,7 @@ impl LocaleResources {
 
     /// `getRules()`：`String[2]` = [PluralRules, DayPeriodRules]（FormatData 束链——CLDR 的
     /// DateFormatData 与 NumberFormatData 同为 FormatData 束；键缺席取空串，字节码语义）。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getString:(Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getRules(&self) -> Result<JArray<String>> {
         let rb = self.__number_format_data()?;
         let rules: JArray<String> = JArray::new(2);
@@ -215,7 +215,7 @@ impl LocaleResources {
     /// `getDateTimePattern(int timeStyle, int dateStyle, Calendar cal)`（字节码语义）：
     /// 历法类型取 `cal.getCalendarType()`，按 TimePatterns / DatePatterns / DateTimePatterns
     /// 组装；模式缺席返回 null。
-    #[jvm_boundary(upcalls = "java/util/Calendar.getCalendarType:()Ljava/lang/String; java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getDateTimePattern_i_i_calendar(&self, time_style: i32, date_style: i32,
                                                   cal: crate::java::util::Calendar) -> Result<String> {
         let cal_type = format!("{}", cal.getCalendarType()?);

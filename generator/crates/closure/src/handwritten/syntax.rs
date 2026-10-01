@@ -106,7 +106,7 @@ impl<'ast> Visit<'ast> for BodyScan {
             let segs = expr_path_segs(p);
             if let Some(last) = segs.last() {
                 self.calls.insert(last.clone());
-                let is_ctor = last == CTOR_RUST || last.starts_with("new_");
+                let is_ctor = is_ctor_name(last);
                 let head_is_type = segs.len() >= 2 && segs[segs.len() - 2].starts_with(|ch: char| ch.is_ascii_uppercase());
                 if is_ctor && head_is_type {
                     self.ctors.push((segs[..segs.len() - 1].to_vec(), last.clone()));
@@ -218,8 +218,9 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
                 match segs.split_last() {
                     Some((last, head)) if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) => {
                         let t = TypeRef(head.to_vec());
-                        // `T::from(x)`：引用类型间转换即 checkcast，静态类型为 T
-                        Some(if last == "default" || last == "from" || last == CTOR_RUST || last.starts_with("new_") {
+                        // `T::from(x)`：引用类型间转换即 checkcast，静态类型为 T。构造器形态的 `T::new*` 亦记为
+                        // `Ret`：本文件同名辅助 fn（`Self::new_format`）以声明的返回类型为准，否则取 T（见 scan::local_ret）
+                        Some(if last == "default" || last == "from" {
                             SType::Named(t)
                         } else {
                             SType::Ret(t, last.clone())
@@ -233,6 +234,11 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
         _ => None,
     };
     direct.or_else(|| infer(e, locals).map(|t| SType::Named(TypeRef(t))))
+}
+
+/// 构造器的 Rust 名形态：`new` / `new_<签名>`
+pub(super) fn is_ctor_name(name: &str) -> bool {
+    name == CTOR_RUST || name.starts_with("new_")
 }
 
 pub(super) fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &Option<Vec<String>>) -> SType {
@@ -270,7 +276,7 @@ pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>
                 return arg0();
             }
             let head_is_type = head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase()));
-            if head_is_type && (last == CTOR_RUST || last.starts_with("new_")) {
+            if head_is_type && is_ctor_name(last) {
                 return Some(head.to_vec());
             }
             if head_is_type && last == "from" {
@@ -525,7 +531,7 @@ pub(super) fn ctor_type(e: &syn::Expr) -> Option<Vec<String>> {
             let segs = expr_path_segs(p);
             let (last, head) = segs.split_last()?;
             let head_is_type = head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase()));
-            (head_is_type && (last == CTOR_RUST || last.starts_with("new_"))).then(|| head.to_vec())
+            (head_is_type && is_ctor_name(last)).then(|| head.to_vec())
         }
         _ => None,
     }

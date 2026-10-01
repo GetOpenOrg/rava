@@ -27,7 +27,7 @@ impl super::unix_file_system::implref::UnixFileSystem {
     /// （JEP 486 移除 SecurityManager 后 `sun/security/action` 整包删除）；JDK21 的
     /// `GetPropertyAction.privilegedGetProperty` 在无安全管理器时即 doPrivileged
     /// 包裹同一查询——两版语义一致，手写层不依赖已删除的包。
-    #[jvm_boundary(upcalls = "java/lang/System.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn new(provider: UnixFileSystemProvider, dir: String) -> Result<Self> {
         let normalized = UnixPath::normalizeAndCheck(Clone::clone(&dir))?;
         let default_dir = to_bytes(&normalized);
@@ -94,7 +94,7 @@ impl super::unix_file_system::implref::UnixFileSystem {
     /// UnixFileSystem.standardFileAttributeViews（basic / posix / unix / owner）加平台扩展：
     /// Linux 另有 dos / user，macOS 另有 user。消费方：TempFileHelper.<clinit> 的
     /// isPosix 判定（Files.createTempFile / createTempDirectory 链）。
-    #[jvm_boundary(upcalls = "java/util/HashSet.<init>:()V java/util/HashSet.add:(Ljava/lang/Object;)Z")]
+    #[jvm_boundary]
     pub fn __impl_supportedFileAttributeViews(&self) -> Result<crate::java::util::Set<Object>> {
         let set = crate::java::util::HashSet::<Object>::new()?;
         let views: &[&str] = if cfg!(target_os = "linux") {

@@ -261,7 +261,7 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
     /// 加载器目录同一（全部类由 boot 定义；JDK 引导层目录即全部模块 provides 的汇总）。
     /// 非 null：ServiceLoader.LayerLookupIterator.providers 不判空，直接 findServices
     /// （Console.<clinit> 的 JdkConsoleProvider 查找经此路径）。
-    #[jvm_boundary(upcalls = "jdk/internal/module/ServicesCatalog.create:()Ljdk/internal/module/ServicesCatalog;")]
+    #[jvm_boundary]
     fn getServicesCatalog(&self, _arg0: crate::java::lang::ModuleLayer) -> Result<crate::jdk::internal::module::ServicesCatalog> {
         crate::jdk::internal::module::ServicesCatalog::__boot_catalog()
     }

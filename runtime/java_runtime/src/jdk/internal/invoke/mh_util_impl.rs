@@ -17,7 +17,7 @@ use crate::java::lang::invoke::{MethodHandles_Lookup, VarHandle};
 impl MhUtil {
     /// static `findVarHandle(Lookup, String, Class)`：
     /// `findVarHandle(lookup, lookup.lookupClass(), name, type)` 的 Lookup 直调形态。
-    #[jvm_boundary(upcalls = "java/lang/invoke/MethodHandles$Lookup.lookupClass:()Ljava/lang/Class; java/lang/invoke/MethodHandles$Lookup.findVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;")]
+    #[jvm_boundary]
     pub fn findVarHandle_methodhandles_lookup_str_class(
         lookup: MethodHandles_Lookup,
         name: String,
@@ -29,7 +29,7 @@ impl MhUtil {
 
     /// static `findVarHandle(Lookup, Class recv, String, Class)`：显式接收者类形态
     ///（CompletableFuture 等对嵌套类字段取 VarHandle）——委托 Lookup.findVarHandle。
-    #[jvm_boundary(upcalls = "java/lang/invoke/MethodHandles$Lookup.findVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;")]
+    #[jvm_boundary]
     pub fn findVarHandle_methodhandles_lookup_class_str_class(
         lookup: MethodHandles_Lookup,
         recv: Class,

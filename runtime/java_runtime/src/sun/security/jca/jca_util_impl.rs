@@ -14,7 +14,7 @@ crate::__process_static! {
 
 impl JCAUtil {
     /// `getDefSecureRandom()`：见模块说明。
-    #[jvm_boundary(upcalls = "java/security/SecureRandom.<init>:()V")]
+    #[jvm_boundary]
     pub fn getDefSecureRandom() -> Result<SecureRandom> {
         if let Some(r) = DEF.with(|d| d.borrow().as_ref().map(Clone::clone)) {
             return Ok(r);

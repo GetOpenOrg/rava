@@ -23,7 +23,7 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
-use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
+use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, ClassHw, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
 
 mod sets;
@@ -52,6 +52,7 @@ mod hw;
 mod hw_mem;
 mod hw_syntax;
 mod hw_infer;
+mod hw_inherit;
 mod hwobj;
 mod vmhook;
 mod rtfn;

@@ -39,7 +39,7 @@ impl UnixFileSystemProvider {
     /// 抽象基类——实际由平台薄层（macOS/Linux）构造，newFileSystem 虚分派
     /// 解析到平台覆写；本形态以基类 UnixFileSystem 承载（档 A 落差见
     /// mac_osx_file_system_provider_impl 的注释）。
-    #[jvm_boundary(upcalls = "sun/nio/fs/UnixFileSystem.<init>:(Lsun/nio/fs/UnixFileSystemProvider;Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn new() -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();
@@ -65,7 +65,7 @@ impl UnixFileSystemProvider {
     /// 四个 URI 组件均为 String wrapper：null 判定走 vtable 钩子 `is_jvm_null()`
     /// （`_is_jnull` 只对 `Object` 载体生效、对 wrapper 恒 false——原判定全死，
     /// 组件判空形同虚设）。
-    #[jvm_boundary(upcalls = "java/net/URI.getScheme:()Ljava/lang/String; java/net/URI.getRawAuthority:()Ljava/lang/String; java/net/URI.getPath:()Ljava/lang/String; java/net/URI.getRawQuery:()Ljava/lang/String; java/net/URI.getRawFragment:()Ljava/lang/String; java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn checkUri(&self, uri: URI) -> Result<()> {
         let scheme_ok = uri.getScheme()?
             .equalsIgnoreCase(Clone::clone(&self.getScheme()?))?;
@@ -119,7 +119,7 @@ impl UnixFileSystemProvider {
     }
 
     /// `getFileSystem(URI)`: checkUri 后返回 theFileSystem（final，声明类即实现体）。
-    #[jvm_boundary(upcalls = "java/nio/file/FileSystemAlreadyExistsException.<init>:()V")]
+    #[jvm_boundary]
     pub fn __impl_getFileSystem(
         &self,
         uri: URI,
@@ -219,7 +219,7 @@ impl UnixFileSystemProvider {
     /// `implDelete(Path, boolean failIfNotExists)`：stat → 目录 rmdir / 文件
     /// unlink；ENOENT 且 !failIfNotExists → false；EEXIST/ENOTEMPTY 的目录 →
     /// DirectoryNotEmptyException；其余翻译抛出。
-    #[jvm_boundary(upcalls = "java/nio/file/DirectoryNotEmptyException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_implDelete(&self, obj: Object, fail_if_not_exists: bool) -> Result<bool> {
         let file = UnixPath::toUnixPath(Clone::clone(&obj))?;
         file.checkDelete()?;
@@ -354,7 +354,7 @@ impl UnixFileSystemProvider {
     /// UnixFileModeAttribute.toUnixMode(ALL_PERMISSIONS 0777, attrs) → mkdir(2)
     /// （umask 由宿主施加）；EISDIR → FileAlreadyExistsException，其余经 UnixException
     /// 翻译抛出（EEXIST → FileAlreadyExistsException 同路）。
-    #[jvm_boundary(upcalls = "java/nio/file/attribute/FileAttribute.name:()Ljava/lang/String; java/nio/file/attribute/FileAttribute.value:()Ljava/lang/Object; java/nio/file/FileAlreadyExistsException.<init>:(Ljava/lang/String;)V java/lang/UnsupportedOperationException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_createDirectory(&self, obj: Object, attrs: JArray<crate::java::nio::file::attribute::FileAttribute<Object>>) -> Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         let dir = UnixPath::toUnixPath(Clone::clone(&obj))?;

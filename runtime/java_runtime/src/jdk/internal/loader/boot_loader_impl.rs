@@ -17,7 +17,7 @@ impl BootLoader {
     /// `ServicesCatalog.register` 装填）。运行期全部类由 boot 定义 → 全部模块 provider 在此；
     /// 进程唯一目录，首次请求时按服务事实装填（addProvider 在有模块 provider 时由
     /// seeds.toml [services] population 作根，与此处只在服务表非空时调用一致）。
-    #[jvm_boundary(upcalls = "jdk/internal/module/ServicesCatalog.create:()Ljdk/internal/module/ServicesCatalog;")]
+    #[jvm_boundary]
     pub fn getServicesCatalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
         crate::jdk::internal::module::ServicesCatalog::__boot_catalog()
     }
@@ -26,7 +26,7 @@ impl BootLoader {
     /// 不属于该模块 → null（与字节码同：`loadClassOrNull(name)` 后比对 `getModule()`）。
     /// 消费方：`Class.forName(Module, String)`（模块加载器为 null 时），即
     /// `ServiceLoader.loadProvider` 按服务目录的 provider 名加载实现类。
-    #[jvm_boundary(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn loadClass(module: crate::java::lang::Module, name: String) -> Result<crate::java::lang::Class> {
         let c = BootLoader::loadClassOrNull(name)?;
         if !c.is_jvm_null() && c.getModule()? == module {
@@ -47,7 +47,7 @@ impl BootLoader {
     /// `loadClassOrNull(String name)`：boot 层按名加载，未找到 → null。原生单二进制的类宇宙
     /// 编译期定死，经 `Class.forName0` 同一元数据表判定存在性（ClassNotFoundException → null）。
     /// 消费方：ClassSpecializer 按类名先查预生成的 BMH 物种类（MH-native）。
-    #[jvm_boundary(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn loadClassOrNull(name: String) -> Result<crate::java::lang::Class> {
         match crate::java::lang::Class::forName0(name, false, Default::default(), Default::default()) {
             Ok(c) => Ok(c),

@@ -205,7 +205,7 @@ impl NetworkInterface {
     }
 
     /// native `getAll()`：全部接口。
-    #[jvm_native(upcalls = "java/net/NetworkInterface.<init>:()V java/net/InterfaceAddress.<init>:()V java/net/Inet4Address.<init>:(Ljava/lang/String;[B)V java/net/Inet6Address.<init>:(Ljava/lang/String;[BI)V")]
+    #[jvm_native]
     pub fn getAll() -> Result<JArray<NetworkInterface>> {
         let mut out = Vec::new();
         for info in enumerate() {
@@ -215,7 +215,7 @@ impl NetworkInterface {
     }
 
     /// native `getByName0(String)`：按名查找；不存在返回 null。
-    #[jvm_native(upcalls = "java/net/NetworkInterface.<init>:()V java/net/InterfaceAddress.<init>:()V java/net/Inet4Address.<init>:(Ljava/lang/String;[B)V java/net/Inet6Address.<init>:(Ljava/lang/String;[BI)V")]
+    #[jvm_native]
     pub fn getByName0(name: String) -> Result<NetworkInterface> {
         match find(&name.to_string()) {
             Some(info) => build(&info),
@@ -224,7 +224,7 @@ impl NetworkInterface {
     }
 
     /// native `getByIndex0(int)`：按 index 查找；不存在返回 null。
-    #[jvm_native(upcalls = "java/net/NetworkInterface.<init>:()V java/net/InterfaceAddress.<init>:()V java/net/Inet4Address.<init>:(Ljava/lang/String;[B)V java/net/Inet6Address.<init>:(Ljava/lang/String;[BI)V")]
+    #[jvm_native]
     pub fn getByIndex0(index: i32) -> Result<NetworkInterface> {
         match enumerate().into_iter().find(|i| if_index(&i.name) == index) {
             Some(info) => build(&info),
@@ -233,14 +233,14 @@ impl NetworkInterface {
     }
 
     /// native `boundInetAddress0(InetAddress)`：地址是否绑定在某个接口上。
-    #[jvm_native(upcalls = "java/net/InetAddress.getAddress:()[B")]
+    #[jvm_native]
     pub fn boundInetAddress0(addr: InetAddress) -> Result<bool> {
         let bytes = address_bytes(&addr)?;
         Ok(enumerate().iter().any(|i| i.addrs.iter().any(|a| a.addr == bytes)))
     }
 
     /// native `getByInetAddress0(InetAddress)`：绑定该地址的接口；无则 null。
-    #[jvm_native(upcalls = "java/net/InetAddress.getAddress:()[B java/net/NetworkInterface.<init>:()V java/net/InterfaceAddress.<init>:()V java/net/Inet4Address.<init>:(Ljava/lang/String;[B)V java/net/Inet6Address.<init>:(Ljava/lang/String;[BI)V")]
+    #[jvm_native]
     pub fn getByInetAddress0(addr: InetAddress) -> Result<NetworkInterface> {
         let bytes = address_bytes(&addr)?;
         match enumerate().into_iter().find(|i| i.addrs.iter().any(|a| a.addr == bytes)) {

@@ -9,7 +9,7 @@ use crate::java::util::List;
 
 impl ProviderList {
     /// `providers()`：按优先序的全部 provider（不可变视图语义；调用方只遍历）。
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z")]
+    #[jvm_boundary]
     pub fn __impl_providers(&self) -> Result<List<Object>> {
         let out = ArrayList::<Object>::new()?;
         for p in crate::jca::all_providers()? {

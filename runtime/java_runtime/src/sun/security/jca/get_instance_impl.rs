@@ -56,7 +56,7 @@ fn instance_of(s: &Provider_Service) -> Result<GetInstance_Instance> {
 impl GetInstance {
     /// `getInstance(String type, Class<?> clazz, String algorithm)`：JDK 同序——首个服务构造
     /// 失败（NoSuchAlgorithmException）时依次尝试其余服务，全部失败抛最后一个失败。
-    #[jvm_boundary(upcalls = "java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    #[jvm_boundary]
     pub fn getInstance_str_class_str(type_: String, _clazz: Class, algorithm: String) -> Result<GetInstance_Instance> {
         let type_ = format!("{}", type_);
         if algorithm.is_jvm_null() {
@@ -83,7 +83,7 @@ impl GetInstance {
     /// IllegalArgumentException("missing provider")；未登记 → NoSuchProviderException("no such
     /// provider: " + provider)；该 provider 无此服务 → NoSuchAlgorithmException("no such
     /// algorithm: " + algorithm + " for provider " + provider)。
-    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V java/security/NoSuchProviderException.<init>:(Ljava/lang/String;)V java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    #[jvm_boundary]
     pub fn getInstance_str_class_str_str(type_: String, _clazz: Class, algorithm: String, provider: String) -> Result<GetInstance_Instance> {
         if provider.is_jvm_null() || provider.length()? == 0 {
             let ex = crate::java::lang::IllegalArgumentException::new_str(String::from("missing provider"))?;
@@ -111,7 +111,7 @@ impl GetInstance {
     /// NoSuchAlgorithmException("no such algorithm: " + algorithm + " for provider " + provider.getName())。
     /// 消费方：`Security.getImpl(String, String, Provider)`（AlgorithmParameters.getInstance(String, Provider)，
     /// CipherCore.getParameters 经此以 SunJCE 实例取参数对象）。
-    #[jvm_boundary(upcalls = "java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V java/security/NoSuchAlgorithmException.<init>:(Ljava/lang/String;)V java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service; java/security/Provider.getName:()Ljava/lang/String; java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    #[jvm_boundary]
     pub fn getInstance_str_class_str_provider(type_: String, _clazz: Class, algorithm: String, provider: Provider) -> Result<GetInstance_Instance> {
         if provider.is_jvm_null() {
             let ex = crate::java::lang::IllegalArgumentException::new_str(String::from("missing provider"))?;
@@ -127,7 +127,7 @@ impl GetInstance {
     }
 
     /// `getInstance(Provider.Service s, Class<?> clazz)`：`s.newInstance(null)` 包成 `Instance`。
-    #[jvm_boundary(upcalls = "java/security/Provider$Service.newInstance:(Ljava/lang/Object;)Ljava/lang/Object; java/security/Provider$Service.getProvider:()Ljava/security/Provider;")]
+    #[jvm_boundary]
     pub fn getInstance_provider_service_class(s: Provider_Service, _clazz: Class) -> Result<GetInstance_Instance> {
         instance_of(&s)
     }
@@ -136,14 +136,14 @@ impl GetInstance {
     /// 无匹配 → 空表（Cipher 据此抛 `NoSuchAlgorithmException("Cannot find any provider
     /// supporting ..")`，走翻译字节码）。
     #[cfg(not(jdk_ge_25))]
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;")]
+    #[jvm_boundary]
     pub fn getServices_list(ids: Object) -> Result<List<Object>> {
         Self::services_for(ids)
     }
 
     /// JDK 25：`getServices(List<ServiceId>)` 返回类型改为 `Iterator<Service>`（同一候选序）。
     #[cfg(jdk_ge_25)]
-    #[jvm_boundary(upcalls = "java/util/ArrayList.<init>:()V java/util/ArrayList.add:(Ljava/lang/Object;)Z java/util/List.size:()I java/util/List.get:(I)Ljava/lang/Object; java/util/List.iterator:()Ljava/util/Iterator; java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;")]
+    #[jvm_boundary]
     pub fn getServices_list(ids: Object) -> Result<crate::java::util::Iterator<Object>> {
         Self::services_for(ids)?.iterator()
     }
