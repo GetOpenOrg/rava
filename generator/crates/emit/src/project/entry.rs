@@ -53,7 +53,8 @@ fn block(head: &str, lines: &[String], tail: &str) -> String {
 fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Vec<String> {
     let mut out = Vec::new();
     for (c, e) in &user.entries {
-        let Some(ci) = ctx.class(c) else { continue };
+        // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
+        let Some(ci) = ctx.class(c).filter(|_| !ctx.is_opaque(c)) else { continue };
         let self_desc = format!("L{c};");
         let enum_shaped = ci.fields().iter().any(|f| f.is_static() && f.desc == self_desc);
         let has_clinit = ci.methods().iter().any(|m| m.name == "<clinit>");
@@ -77,7 +78,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
         .annotation_enum_seeds
         .iter()
         .chain(&ctx.input.class_init_targets)
-        .filter(|c| jdk.generated.contains(*c))
+        .filter(|c| jdk.generated.contains(*c) && !ctx.is_opaque(c))
         .collect();
     for c in jdk_targets {
         out.push(format!(

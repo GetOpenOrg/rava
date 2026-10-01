@@ -98,6 +98,16 @@ pub fn resolve_ctor_turbofish_args(
     let mut subst = TargMap::new();
     if let Some(sp) = ctor_sig.filter(|_| !arg_tys.is_empty()) {
         subst = bind_type_args(env, &sp, arg_tys, &cls_tparams);
+        // 裸类型变量形参收到顶层 Object 实参（擦除值：方法级类型变量 / 真 Object）且别处未绑定：取 Object。
+        // 取调用方同名形参会把实参经 From<Object> 转成该形参的当前实例化——Java 不做的检查转换
+        // （Box<T>.map 内 new Box<R>(f.apply(value))：R ≠ T）
+        for (s, a) in sp.iter().zip(arg_tys) {
+            if let RsType::Param(n) = s {
+                if cls_tparams.contains(n) && matches!(a, RsType::Object) {
+                    subst.entry(n.clone()).or_insert(RsType::Object);
+                }
+            }
+        }
         if subst.len() == cls_tparams.len() {
             return Some(cls_tparams.iter().map(|t| subst.get(t).cloned().unwrap_or(RsType::Object)).collect());
         }

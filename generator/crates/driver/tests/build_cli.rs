@@ -2,7 +2,16 @@
 //! 断言生成文本形态与命令行输出（不编译生成物）。找不到 JDK 21 时跳过。
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::Mutex;
+
+/// 同一进程内的 rava 子进程串行：每次 `rava build` 峰值约 4 GB，测试线程并行会叠加到耗尽内存
+static RAVA: Mutex<()> = Mutex::new(());
+
+fn run_rava(cmd: &mut Command) -> Output {
+    let _guard = RAVA.lock().unwrap_or_else(|e| e.into_inner());
+    cmd.output().expect("启动 rava")
+}
 
 fn runtime_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime")
@@ -15,16 +24,16 @@ fn fixture(name: &str) -> PathBuf {
 /// 一次 `rava build`：返回 (stdout, scratch 目录)；缺 JDK → None
 fn build(java: &str, tag: &str, extra: &[&str]) -> Option<(String, PathBuf)> {
     let out = std::env::temp_dir().join(format!("rava-it-{tag}-{}", std::process::id()));
-    let o = Command::new(env!("CARGO_BIN_EXE_rava"))
-        .arg("build")
-        .arg(fixture(java))
-        .args(["--jdk", "21", "--stop-after", "emit", "--clean", "--runtime"])
-        .arg(runtime_dir())
-        .arg("--out")
-        .arg(&out)
-        .args(extra)
-        .output()
-        .expect("启动 rava");
+    let o = run_rava(
+        Command::new(env!("CARGO_BIN_EXE_rava"))
+            .arg("build")
+            .arg(fixture(java))
+            .args(["--jdk", "21", "--stop-after", "emit", "--clean", "--runtime"])
+            .arg(runtime_dir())
+            .arg("--out")
+            .arg(&out)
+            .args(extra),
+    );
     let stderr = String::from_utf8_lossy(&o.stderr).to_string();
     if !o.status.success() {
         if stderr.contains("未找到 JDK") {
@@ -239,11 +248,7 @@ fn image_dirs_lists_existing_class_dirs() {
     if resolve::jdk::find_major(21).is_none() {
         return;
     }
-    let o = Command::new(env!("CARGO_BIN_EXE_rava"))
-        .args(["image-dirs", "--jdk", "21", "--runtime"])
-        .arg(runtime_dir())
-        .output()
-        .expect("启动 rava");
+    let o = run_rava(Command::new(env!("CARGO_BIN_EXE_rava")).args(["image-dirs", "--jdk", "21", "--runtime"]).arg(runtime_dir()));
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let text = String::from_utf8_lossy(&o.stdout).to_string();
     let dirs: Vec<&str> = text.lines().collect();
@@ -252,7 +257,7 @@ fn image_dirs_lists_existing_class_dirs() {
     assert!(dirs.iter().filter(|d| d.contains("/rava/vmsupport/")).count() == modules, "{text}");
 }
 
-/// `--api-package`：包内公开 API 为入口，`--full-precheck` 出预检明细（gap_scan.py api 模式）
+/// `--api-package`：包内公开 API 为入口，`--full-precheck` 出预检明细（同 `rava audit api` 入口）
 #[test]
 fn api_package_precheck() {
     let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--full-precheck", "--closure-json"]) else {
