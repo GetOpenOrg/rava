@@ -5,6 +5,7 @@
 //! 每个节点带溯源（via），`why` 沿溯源回溯到根。
 
 pub mod absint;
+pub mod cache;
 pub mod cold;
 pub mod engine;
 pub mod handwritten;

@@ -54,6 +54,11 @@ impl NoReturn {
         !self.settled && (!self.created.contains(t) || self.unanalyzed.contains_key(t) || self.waiting.contains_key(t))
     }
 
+    /// 收尾阶段（「尚无返回」答复随进度变化，见 `share.rs`）
+    pub(super) fn closing(&self) -> bool {
+        self.closing
+    }
+
     /// 分析结束后：t 有节点且全部节点已分析（返回常量格缺席即定论不返回）
     pub(super) fn settled_never(&self, t: &MemberRef) -> bool {
         self.created.contains(t) && !self.unanalyzed.contains_key(t)

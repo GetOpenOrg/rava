@@ -99,6 +99,8 @@ pub(super) struct Ctx<'a> {
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
     pub(super) pdeps: RefCell<BTreeSet<usize>>,
+    /// 分析进行中登记的依赖日志（摘要共享时向新上下文重放，见 `share.rs`）；None = 未在记录
+    pub(super) dep_log: RefCell<Option<Vec<super::share::Dep>>>,
     /// 常量实参求值记忆：`目标|常量实参` → (结果, 读过的字段)
     pub(super) cevals: RefCell<HashMap<String, super::consteval::CEval>>,
     /// 进行中的常量实参求值的字段读集（栈）
@@ -286,7 +288,7 @@ impl Ctx<'_> {
         let fi = self.field_info(f)?;
         match m {
             Some(m) => {
-                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
+                self.dep(m, Dep::Field(fi.key.clone()));
             }
             None => self.note_aux_read(&fi.key),
         }
@@ -394,12 +396,12 @@ impl Oracle for Facts<'_, '_> {
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
         let r = self.ctx.rvals.borrow().get(t).cloned();
-        self.ctx.rdeps.borrow_mut().entry(t.clone()).or_default().insert(me);
+        self.ctx.dep(me, Dep::Ret(t.clone()));
         match r {
             Some(PV::Const(v)) => Ret::Value(v),
             Some(PV::Top) => eval(),
             None if self.ctx.noreturn.borrow().answer_never(t) => {
-                self.ctx.never.borrow_mut().insert(me);
+                self.ctx.dep(me, Dep::Never);
                 Ret::Never
             }
             None => eval(),

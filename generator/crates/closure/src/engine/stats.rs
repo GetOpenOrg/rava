@@ -97,6 +97,8 @@ pub(super) struct Stats {
     pub(super) reapply: u64,
     /// 同一分析结果的整方法重处理（open 展开的 G 增长等）
     pub(super) reprocess: u64,
+    /// 按入口状态复用共享摘要（免分析）的次数
+    pub(super) shared: u64,
     pub(super) site_reruns: u64,
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
@@ -118,6 +120,7 @@ impl Default for Stats {
             unchanged: Default::default(),
             reapply: 0,
             reprocess: 0,
+            shared: 0,
             site_reruns: 0,
             lcall_reruns: 0,
             aux_analyses: 0,
@@ -132,6 +135,30 @@ fn phase_index(p: Phase) -> usize {
 
 fn why_index(w: Why) -> usize {
     WHYS.iter().position(|x| x.0 == w).unwrap_or(0)
+}
+
+/// 进程峰值内存占用（MB），内存预算与 A/B 对照的主指标。
+/// macOS 取物理占用峰值（`proc_pid_rusage` 的 `ri_lifetime_max_phys_footprint`：含被压缩 / 换出的脏页，
+/// 与 `/usr/bin/time -l` 的 peak memory footprint 同口径）；驻留集 RSS 在系统内存压力下会被压缩器收走，
+/// 同一二进制多次运行可差 30% 以上（DeepCopy 实测 1621–2090 MB，占用恒为约 2.15 GB），不作预算依据。
+/// 其它平台取峰值 RSS。
+pub fn peak_mem_mb() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut u64) -> i32;
+            fn getpid() -> i32;
+        }
+        // rusage_info_v4：16 字节 uuid 后为 u64 字段序列，ri_lifetime_max_phys_footprint 是第 28 个（0 起）
+        const RUSAGE_INFO_V4: i32 = 4;
+        const LIFETIME_MAX_PHYS_FOOTPRINT: usize = 2 + 28;
+        let mut buf = [0u64; 64];
+        // SAFETY：缓冲区 512 字节，大于 rusage_info_v4（304 字节）
+        if unsafe { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, buf.as_mut_ptr()) } == 0 {
+            return buf[LIFETIME_MAX_PHYS_FOOTPRINT] >> 20;
+        }
+    }
+    peak_rss_mb()
 }
 
 /// 进程峰值 RSS（MB）：getrusage；macOS 以字节计，Linux 以 KB 计
@@ -172,7 +199,7 @@ impl Stats {
     }
 
     pub(super) fn mark_rss(&mut self, at: &'static str) {
-        self.rss_marks.push((at, peak_rss_mb()));
+        self.rss_marks.push((at, peak_mem_mb()));
     }
 
     /// 失效请求；`effective` = 该方法确有分析结果被丢弃（随后必重分析）
@@ -238,27 +265,31 @@ impl<'a> Engine<'a> {
         json!({
             "phases_ms": phases,
             "peak_rss_mb": peak_rss_mb(),
-            "rss_marks_mb": s.rss_marks.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+            "peak_mem_mb": peak_mem_mb(),
+            "mem_marks_mb": s.rss_marks.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
             "analyses": total,
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,
+            "shared_analyses": s.shared,
             "site_reruns": s.site_reruns,
             "lcall_reruns": s.lcall_reruns,
-            "flow_edges": self.graph.seen.len(),
+            "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
             "scc": self.graph.scc_stats,
             // 新接边收窄记忆：命中 / 未命中（flow.rs）
             "fmemo": self.graph.fmemo_stats,
+            // 类型集驻留：写入 / 写后共享已有内容 / 表清理次数，及不同内容份数（setstore.rs）
+            "set_intern": [self.graph.sets.stats[0], self.graph.sets.stats[1], self.graph.sets.stats[2], self.graph.sets.unique() as u64],
             // 传播推送按边种类：次数 / 有增量次数（前 20）
             "pushes_by_kind": self.push_kinds(),
             // 枢纽数 / 调用点接入枢纽总数 / 单调用点最多接入数（hub.rs）
             "hubs": [self.hubs.len(), self.hub_sites.values().map(|h| h.len()).sum::<usize>(), self.hub_sites.values().map(|h| h.len()).max().unwrap_or(0)],
-            // 枢纽重放去重记录的规模：(调用点, lambda) 条数 / 按调用点建模目标的接收者条数（hub.rs）
-            "hub_sent": [self.hub_lsent.values().map(|d| d.len()).sum::<usize>(), self.hub_ssent.values().flat_map(|d| d.values()).map(|d| d.len()).sum::<usize>()],
+            // 枢纽重放去重记录的规模：(调用点, lambda) 条数（hub.rs；按调用点建模目标按祖先枢纽判定，不留记录）
+            "hub_sent": self.hub_lsent.values().map(|d| d.len()).sum::<usize>(),
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),

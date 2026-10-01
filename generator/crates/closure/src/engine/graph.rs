@@ -10,16 +10,19 @@ use super::*;
 pub(super) struct FlowGraph {
     ids: HashMap<Node, u32>,
     nodes: Vec<Node>,
-    /// 节点类型集（空 = 尚无值）
-    sets: Vec<TypeSet>,
+    /// 节点类型集（空 = 尚无值），按内容驻留共享（`setstore.rs`）
+    pub(super) sets: SetStore,
     /// 出边（目标序号, 过滤类型 id），按接边顺序
     pub(super) edges: Vec<Vec<(u32, u32)>>,
     /// 待沿出边推送的新增类型（差分传播；空 = 无待推）
     pub(super) delta: Vec<TypeSet>,
     /// 已在 `fwork` 中
     pub(super) queued: Vec<bool>,
-    /// 去重的流边（源, 目标, 过滤类型）
-    pub(super) seen: HashSet<(u32, u32, u32)>,
+    /// 流边去重索引：高出度（≥ `SEEN_AT`）源 → 出边表下标的哈希表（哈希 / 判等回查出边表，
+    /// 每槽 5 字节）；低出度源直接扫自己的出边表。按需建立，环合并后整体清空
+    seen: HashMap<u32, hashbrown::HashTable<u32>>,
+    /// 流边总数（去重后）
+    pub(super) edge_count: usize,
     /// 观测：`add_to` 调用次数 / 有增量的次数 / 并入的元素数
     pub(super) adds: [u64; 3],
     /// 节点 → 所属代表（自身 = 代表）；合并时整组改指，恒为一跳
@@ -41,7 +44,55 @@ pub(super) struct FlowGraph {
     pub(super) fmemo_stats: [u64; 3],
 }
 
+/// 出度达到此数的源建去重索引；以下逐条比对出边表（多数源只有几条出边）
+const SEEN_AT: usize = 16;
+
+/// 出边（目标, 过滤类型）的哈希（只用于去重索引，与哈希种子无关）
+#[inline]
+fn edge_hash(e: (u32, u32)) -> u64 {
+    let m = u128::from(u64::from(e.0) << 32 | u64::from(e.1)) * 0x9e37_79b9_7f4a_7c15;
+    (m as u64) ^ (m >> 64) as u64
+}
+
 impl FlowGraph {
+    /// 接流边 rs → rd（代表间）；已有同一（目标, 过滤类型）的边时返回 false
+    pub(super) fn add_edge(&mut self, rs: u32, rd: u32, f: u32) -> bool {
+        let es = &mut self.edges[rs as usize];
+        let e = (rd, f);
+        if es.len() < SEEN_AT {
+            if es.contains(&e) {
+                return false;
+            }
+        } else {
+            let at = |es: &[(u32, u32)], j: u32| edge_hash(es[j as usize]);
+            let t = self.seen.entry(rs).or_insert_with(|| {
+                let mut t = hashbrown::HashTable::with_capacity(es.len() * 2);
+                for (j, &x) in es.iter().enumerate() {
+                    t.insert_unique(edge_hash(x), j as u32, |&k| at(es, k));
+                }
+                t
+            });
+            let h = edge_hash(e);
+            if t.find(h, |&j| es[j as usize] == e).is_some() {
+                return false;
+            }
+            t.insert_unique(h, es.len() as u32, |&k| at(es, k));
+        }
+        es.push(e);
+        self.edge_count += 1;
+        true
+    }
+    /// 源 s 的出边整体替换为已去重的 es（环合并重写出边用）；须先 `clear_seen`
+    pub(super) fn set_edges(&mut self, s: u32, es: Vec<(u32, u32)>) {
+        self.edge_count += es.len();
+        self.edges[s as usize] = es;
+    }
+    /// 清空去重索引与边计数（随后逐源 `set_edges` 重写；索引在下次接边时按需重建）
+    pub(super) fn clear_seen(&mut self) {
+        self.seen = HashMap::default();
+        self.edge_count = 0;
+    }
+
     /// 节点序号（首次出现时驻留）
     #[inline]
     pub(super) fn id(&mut self, n: Node) -> u32 {
@@ -51,7 +102,7 @@ impl FlowGraph {
         let i = self.nodes.len() as u32;
         self.ids.insert(n, i);
         self.nodes.push(n);
-        self.sets.push(TypeSet::default());
+        self.sets.push_empty();
         self.edges.push(Vec::new());
         self.delta.push(TypeSet::default());
         self.queued.push(false);
@@ -88,16 +139,24 @@ impl FlowGraph {
     /// 节点（按所属代表）的类型集
     #[inline]
     pub(super) fn set(&self, i: u32) -> &TypeSet {
-        &self.sets[self.rep[i as usize] as usize]
+        self.sets.get(self.rep[i as usize] as usize)
     }
+    /// 节点（按所属代表）的类型集，共享引用（调用方可在改图期间持有）
     #[inline]
-    pub(super) fn set_mut(&mut self, i: u32) -> &mut TypeSet {
-        let r = self.rep[i as usize] as usize;
-        &mut self.sets[r]
+    pub(super) fn set_rc(&self, i: u32) -> Rc<TypeSet> {
+        self.sets.get_rc(self.rep[i as usize] as usize)
     }
-    /// 代表自身存储的类型集（合并用；成员的存储在合并后为空）
-    pub(super) fn own_set_mut(&mut self, r: u32) -> &mut TypeSet {
-        &mut self.sets[r as usize]
+    /// 代表 r 的类型集并入 delta（delta 与原集合不相交）
+    pub(super) fn grow(&mut self, r: u32, delta: &TypeSet) {
+        self.sets.grow(r as usize, delta);
+    }
+    /// 取出代表 r 自身存储的类型集（合并用），原处置空
+    pub(super) fn take_own(&mut self, r: u32) -> Rc<TypeSet> {
+        self.sets.take(r as usize)
+    }
+    /// 代表 r 的存储整体置为 s（合并用）
+    pub(super) fn put_own(&mut self, r: u32, s: TypeSet) {
+        self.sets.put(r as usize, s);
     }
     /// 节点的类型集（无值时 None）
     pub(super) fn get(&self, n: &Node) -> Option<&TypeSet> {

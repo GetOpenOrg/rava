@@ -112,8 +112,8 @@ impl Ctx<'_> {
         let v = o.field(&fi.key)?.clone();
         match m {
             Some(m) => {
-                self.fdeps.borrow_mut().entry(fi.key.clone()).or_default().insert(m);
-                self.pdeps.borrow_mut().insert(m);
+                self.dep(m, Dep::Field(fi.key.clone()));
+                self.dep(m, Dep::Props);
             }
             None => self.note_aux_read(&fi.key),
         }

@@ -34,6 +34,7 @@ mod sysprops;
 mod fold;
 mod unmodeled;
 mod forward;
+mod ctxsel;
 mod classes;
 mod reflect;
 mod flow;
@@ -61,17 +62,22 @@ mod class_lookup;
 mod sealed;
 mod method_lookup;
 mod pstrs;
+mod share;
 mod new;
 mod methods;
 mod worklist;
 pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
+mod setstore;
+use setstore::SetStore;
 mod scc;
 
 use graph::FlowGraph;
+use share::Dep;
+use ctxsel::Call;
 use stats::{Phase, Why};
-pub use stats::peak_rss_mb;
+pub use stats::{peak_mem_mb, peak_rss_mb};
 
 pub use seeds::SeedState;
 
@@ -211,6 +217,10 @@ pub struct MNode {
     analysis: Option<Rc<Analysis>>,
     /// 事件已全部执行过的分析（None = 须完整执行）：重分析后只执行与之不同的事件
     applied: Option<Rc<Analysis>>,
+    /// `analysis` 的装入序号（每次装入加一）；`applied_seq` 为 `applied` 装入时的序号。
+    /// 摘要在上下文间共享（`share.rs`），「同一次装入」不能再按 `Rc` 身份判定
+    aseq: u32,
+    applied_seq: u32,
     /// 最近一次分析的透传摘要（None = 尚未分析）
     returned: Option<Option<Vec<u16>>>,
     /// 手写体命中的 fn 名（溯源）
@@ -385,11 +395,10 @@ pub struct Engine<'a> {
 
     names: Vec<Rc<str>>,
     ids: HashMap<Rc<str>, u32>,
-    sub_cache: HashMap<(u32, u32), bool>,
     /// open(o) 按过滤类型 t 收窄的结果缓存（`u32::MAX` = 空）
     narrow_cache: HashMap<(u32, u32), u32>,
-    /// 按过滤类型 f 的子类型判定行（下标为类型 id；0 未判定、1 否、2 是）：类型集收窄逐元素只做一次数组索引
-    sub_rows: Vec<Vec<u8>>,
+    /// 子类型判定缓存，按上界 f 分行、每个类型 id 两位（已判定 / 结果）：`sub` 与类型集收窄共用
+    sub_rows: Vec<sets::SubRow>,
 
     pub classes: IndexMap<String, ClassNode>,
     pub missing: BTreeMap<String, Via>,
@@ -476,12 +485,9 @@ pub struct Engine<'a> {
     /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者)（同 `hub_linked` 清空）。
     /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
     hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
-    /// 字节码调用点经枢纽已接的按调用点建模目标：方法 → (偏移, 目标) → 已送达的接收者（同上）。
-    /// `edge` 对接收者值集逐元素单调（首接生效的手写站点登记已在首次完成），接收者全已送达即恒等重放
-    hub_ssent: HashMap<usize, HashMap<(u32, usize), HashSet<u32>>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
-    /// 站点因接收者集合增长重跑时只接新增对象
-    recv_done: HashMap<usize, HashSet<(u32, u32)>>,
+    /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
+    recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
@@ -491,6 +497,8 @@ pub struct Engine<'a> {
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
+    /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
+    shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,
@@ -572,15 +580,6 @@ pub struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    /// 接收者对应的克隆上下文
-    fn ctx_of(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) {
-            r
-        } else {
-            NOCTX
-        }
-    }
-
     fn on_g_grow(&mut self, id: u32) {
         let ts: Vec<u32> = self.g_sub.keys().copied().collect();
         for t in ts {

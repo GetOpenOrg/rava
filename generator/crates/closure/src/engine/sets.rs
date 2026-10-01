@@ -14,7 +14,8 @@ pub fn set_hash_seed(seed: u64) {
     let _ = HASH_SEED.set(seed);
 }
 
-fn hash_seed() -> u64 {
+/// 当前内部表哈希初值（跨运行缓存键的一项）
+pub fn hash_seed() -> u64 {
     *HASH_SEED.get_or_init(|| 0)
 }
 
@@ -88,5 +89,32 @@ impl TypeSet {
     #[inline]
     pub(super) fn is_subset_of(&self, o: &TypeSet) -> bool {
         self.classes.is_subset(&o.classes) && self.open.is_subset(&o.open)
+    }
+}
+
+/// 子类型判定行（上界固定）：按类型 id 两个位图，`known` 置位表示已判定，`yes` 为结果
+#[derive(Default)]
+pub struct SubRow {
+    known: Vec<u64>,
+    yes: Vec<u64>,
+}
+
+impl SubRow {
+    #[inline]
+    pub(super) fn get(&self, x: u32) -> Option<bool> {
+        let (w, b) = ((x / 64) as usize, x % 64);
+        let k = *self.known.get(w)?;
+        (k >> b & 1 != 0).then(|| self.yes[w] >> b & 1 != 0)
+    }
+    pub(super) fn set(&mut self, x: u32, r: bool) {
+        let (w, b) = ((x / 64) as usize, x % 64);
+        if self.known.len() <= w {
+            self.known.resize(w + 1, 0);
+            self.yes.resize(w + 1, 0);
+        }
+        self.known[w] |= 1 << b;
+        if r {
+            self.yes[w] |= 1 << b;
+        }
     }
 }

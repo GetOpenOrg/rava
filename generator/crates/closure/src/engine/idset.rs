@@ -9,16 +9,32 @@
 /// 稀疏 → 稠密的元素数阈值
 pub(super) const DENSE_AT: usize = 64;
 
-#[derive(Debug, Clone, Default)]
-pub struct IdSet {
-    /// 稀疏形态的有序元素（稠密形态为空）
-    v: Vec<u32>,
-    /// 稠密形态的位图（稀疏形态为空）
+/// 内联只占一个 `Vec` 宽（24 字节）：稠密形态的位图与计数装箱。
+/// 流图每节点存两份类型集（值 + 待推增量）、每份两个 `IdSet`，内联宽度直接决定节点表的常驻内存
+#[derive(Debug, Clone)]
+pub struct IdSet(Repr);
+
+#[derive(Debug, Clone)]
+enum Repr {
+    /// 有序元素
+    Sparse(Vec<u32>),
+    Dense(Box<Dense>),
+}
+
+#[derive(Debug, Clone)]
+struct Dense {
+    /// 位图
     words: Vec<u64>,
-    /// 稠密形态：第 i 位 = `words[i]` 非零
+    /// 第 i 位 = `words[i]` 非零
     sum: Vec<u64>,
-    /// 稠密形态的元素数
+    /// 元素数
     n: usize,
+}
+
+impl Default for IdSet {
+    fn default() -> IdSet {
+        IdSet(Repr::Sparse(Vec::new()))
+    }
 }
 
 impl PartialEq for IdSet {
@@ -30,38 +46,15 @@ impl Eq for IdSet {}
 impl std::hash::Hash for IdSet {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
         // 与旧形态（`Vec<u32>` 的哈希）逐字节相同：内部表的遍历顺序不因形态改变
-        if self.dense() {
-            self.iter().collect::<Vec<u32>>().hash(h);
-        } else {
-            self.v.hash(h);
+        match &self.0 {
+            Repr::Dense(_) => self.iter().collect::<Vec<u32>>().hash(h),
+            Repr::Sparse(v) => v.hash(h),
         }
     }
 }
 
-impl IdSet {
-    #[inline]
-    fn dense(&self) -> bool {
-        !self.words.is_empty()
-    }
-    /// 由升序去重的元素构造
-    pub(super) fn from_sorted(v: Vec<u32>) -> IdSet {
-        let mut s = IdSet { v, ..IdSet::default() };
-        if s.v.len() >= DENSE_AT {
-            s.densify();
-        }
-        s
-    }
-    fn densify(&mut self) {
-        let v = std::mem::take(&mut self.v);
-        let Some(&max) = v.last() else { return };
-        self.words = vec![0u64; max as usize / 64 + 1];
-        self.sum = vec![0u64; self.words.len() / 64 + 1];
-        for &x in &v {
-            self.set_bit(x);
-        }
-        self.n = v.len();
-    }
-    /// 稠密形态置位（不维护计数）；返回是否新置
+impl Dense {
+    /// 置位（不维护计数）；返回是否新置
     #[inline]
     fn set_bit(&mut self, x: u32) -> bool {
         let w = x as usize / 64;
@@ -77,41 +70,83 @@ impl IdSet {
         self.sum[w / 64] |= 1 << (w % 64);
         true
     }
-    pub fn insert(&mut self, x: u32) -> bool {
-        if self.dense() {
-            let new = self.set_bit(x);
-            self.n += usize::from(new);
-            return new;
+    #[inline]
+    fn contains(&self, x: u32) -> bool {
+        let w = x as usize / 64;
+        w < self.words.len() && self.words[w] >> (x % 64) & 1 != 0
+    }
+    #[inline]
+    fn word(&self, w: usize) -> u64 {
+        self.words.get(w).copied().unwrap_or(0)
+    }
+    /// 非零字下标（升序）
+    fn nz_words(&self) -> impl Iterator<Item = usize> + '_ {
+        self.sum.iter().enumerate().flat_map(|(si, &s)| BitIter(s).map(move |b| si * 64 + b as usize))
+    }
+    fn from_sparse(v: &[u32]) -> Dense {
+        let max = v.last().copied().unwrap_or(0);
+        let words = vec![0u64; max as usize / 64 + 1];
+        let sum = vec![0u64; words.len() / 64 + 1];
+        let mut d = Dense { words, sum, n: v.len() };
+        for &x in v {
+            d.set_bit(x);
         }
-        match self.v.binary_search(&x) {
-            Ok(_) => false,
-            Err(i) => {
-                self.v.insert(i, x);
-                if self.v.len() >= DENSE_AT {
-                    self.densify();
-                }
-                true
+        d
+    }
+}
+
+impl IdSet {
+    #[cfg(test)]
+    fn dense(&self) -> bool {
+        matches!(self.0, Repr::Dense(_))
+    }
+    /// 由升序去重的元素构造
+    pub(super) fn from_sorted(v: Vec<u32>) -> IdSet {
+        if v.len() >= DENSE_AT {
+            IdSet(Repr::Dense(Box::new(Dense::from_sparse(&v))))
+        } else {
+            IdSet(Repr::Sparse(v))
+        }
+    }
+    pub fn insert(&mut self, x: u32) -> bool {
+        match &mut self.0 {
+            Repr::Dense(d) => {
+                let new = d.set_bit(x);
+                d.n += usize::from(new);
+                new
             }
+            Repr::Sparse(v) => match v.binary_search(&x) {
+                Ok(_) => false,
+                Err(i) => {
+                    v.insert(i, x);
+                    if v.len() >= DENSE_AT {
+                        let d = Dense::from_sparse(v);
+                        self.0 = Repr::Dense(Box::new(d));
+                    }
+                    true
+                }
+            },
         }
     }
     #[inline]
     pub fn contains(&self, x: &u32) -> bool {
-        if self.dense() {
-            let w = *x as usize / 64;
-            return w < self.words.len() && self.words[w] >> (x % 64) & 1 != 0;
+        match &self.0 {
+            Repr::Dense(d) => d.contains(*x),
+            Repr::Sparse(v) => v.binary_search(x).is_ok(),
         }
-        self.v.binary_search(x).is_ok()
     }
     /// 堆占用字节（估算，用于记忆表的内存预算）
     pub(super) fn heap_bytes(&self) -> usize {
-        self.v.capacity() * 4 + (self.words.capacity() + self.sum.capacity()) * 8
+        match &self.0 {
+            Repr::Sparse(v) => v.capacity() * 4,
+            Repr::Dense(d) => std::mem::size_of::<Dense>() + (d.words.capacity() + d.sum.capacity()) * 8,
+        }
     }
     #[inline]
     pub fn len(&self) -> usize {
-        if self.dense() {
-            self.n
-        } else {
-            self.v.len()
+        match &self.0 {
+            Repr::Dense(d) => d.n,
+            Repr::Sparse(v) => v.len(),
         }
     }
     #[inline]
@@ -120,49 +155,45 @@ impl IdSet {
     }
     /// 升序遍历
     pub fn iter(&self) -> IdIter<'_> {
-        if self.dense() {
-            IdIter::Dense { words: &self.words, sum: &self.sum, si: 0, sbits: 0, w: 0, bits: 0 }
-        } else {
-            IdIter::Sparse(self.v.iter())
+        match &self.0 {
+            Repr::Dense(d) => IdIter::Dense { words: &d.words, sum: &d.sum, si: 0, sbits: 0, w: 0, bits: 0 },
+            Repr::Sparse(v) => IdIter::Sparse(v.iter()),
         }
-    }
-    /// 稠密形态的非零字下标（升序）
-    fn nz_words(&self) -> impl Iterator<Item = usize> + '_ {
-        self.sum.iter().enumerate().flat_map(|(si, &s)| BitIter(s).map(move |b| si * 64 + b as usize))
     }
     /// self \ o（差为空时不分配）
     pub(super) fn minus(&self, o: &IdSet) -> IdSet {
         if o.is_empty() {
             return self.clone();
         }
-        if self.dense() && o.dense() {
-            let word = |w: usize| self.words[w] & !o.words.get(w).copied().unwrap_or(0);
-            let mut out = Vec::new();
-            for w in self.nz_words() {
-                let x = word(w);
-                if x != 0 {
-                    out.extend(BitIter(x).map(|b| (w * 64) as u32 + b));
-                }
-            }
-            return IdSet::from_sorted(out);
-        }
-        if !self.dense() && !o.dense() && self.v.len() * 16 >= o.v.len() {
-            // 两侧有序归并
-            let (a, b) = (&self.v, &o.v);
-            let mut out: Vec<u32> = Vec::new();
-            let mut j = 0;
-            for (i, &x) in a.iter().enumerate() {
-                while j < b.len() && b[j] < x {
-                    j += 1;
-                }
-                if j == b.len() || b[j] != x {
-                    if out.capacity() == 0 {
-                        out.reserve(a.len() - i);
+        match (&self.0, &o.0) {
+            (Repr::Dense(a), Repr::Dense(b)) => {
+                let mut out = Vec::new();
+                for w in a.nz_words() {
+                    let x = a.words[w] & !b.word(w);
+                    if x != 0 {
+                        out.extend(BitIter(x).map(|b| (w * 64) as u32 + b));
                     }
-                    out.push(x);
                 }
+                return IdSet::from_sorted(out);
             }
-            return IdSet::from_sorted(out);
+            (Repr::Sparse(a), Repr::Sparse(b)) if a.len() * 16 >= b.len() => {
+                // 两侧有序归并
+                let mut out: Vec<u32> = Vec::new();
+                let mut j = 0;
+                for (i, &x) in a.iter().enumerate() {
+                    while j < b.len() && b[j] < x {
+                        j += 1;
+                    }
+                    if j == b.len() || b[j] != x {
+                        if out.capacity() == 0 {
+                            out.reserve(a.len() - i);
+                        }
+                        out.push(x);
+                    }
+                }
+                return IdSet::from_sorted(out);
+            }
+            _ => {}
         }
         // 逐个查成员
         let mut it = self.iter();
@@ -176,25 +207,29 @@ impl IdSet {
         if self.len() > o.len() {
             return false;
         }
-        if self.dense() {
+        match (&self.0, &o.0) {
             // o 元素不少于 self，故也是稠密形态
-            return self.nz_words().all(|w| self.words[w] & !o.words.get(w).copied().unwrap_or(0) == 0);
-        }
-        if o.dense() || self.v.len() * 16 < o.v.len() {
-            return self.v.iter().all(|x| o.contains(x));
-        }
-        let b = &o.v;
-        let mut j = 0;
-        for &x in &self.v {
-            while j < b.len() && b[j] < x {
-                j += 1;
+            (Repr::Dense(a), Repr::Dense(b)) => a.nz_words().all(|w| a.words[w] & !b.word(w) == 0),
+            // 形态只由元素数决定，稠密集合的超集必为稠密；此臂仅作完备
+            (Repr::Dense(_), Repr::Sparse(_)) => self.iter().all(|x| o.contains(&x)),
+            (Repr::Sparse(a), Repr::Dense(b)) => a.iter().all(|&x| b.contains(x)),
+            (Repr::Sparse(a), Repr::Sparse(b)) => {
+                if a.len() * 16 < b.len() {
+                    return a.iter().all(|x| b.binary_search(x).is_ok());
+                }
+                let mut j = 0;
+                for &x in a {
+                    while j < b.len() && b[j] < x {
+                        j += 1;
+                    }
+                    if j == b.len() || b[j] != x {
+                        return false;
+                    }
+                    j += 1;
+                }
+                true
             }
-            if j == b.len() || b[j] != x {
-                return false;
-            }
-            j += 1;
         }
-        true
     }
     /// 并入 o
     pub(super) fn union_with(&mut self, o: &IdSet) {
@@ -205,60 +240,61 @@ impl IdSet {
             *self = o.clone();
             return;
         }
-        if !self.dense() && o.dense() {
-            let mut d = o.clone();
-            for x in std::mem::take(&mut self.v) {
-                d.insert(x);
-            }
-            *self = d;
-            return;
-        }
-        if self.dense() {
-            if o.dense() {
-                if self.words.len() < o.words.len() {
-                    self.words.resize(o.words.len(), 0);
-                    self.sum.resize(o.sum.len(), 0);
+        match (&mut self.0, &o.0) {
+            (Repr::Sparse(a), Repr::Dense(b)) => {
+                let mut d = b.clone();
+                for &x in a.iter() {
+                    let new = d.set_bit(x);
+                    d.n += usize::from(new);
                 }
-                for w in o.nz_words() {
-                    let add = o.words[w] & !self.words[w];
+                self.0 = Repr::Dense(d);
+            }
+            (Repr::Dense(a), Repr::Dense(b)) => {
+                if a.words.len() < b.words.len() {
+                    a.words.resize(b.words.len(), 0);
+                    a.sum.resize(b.sum.len(), 0);
+                }
+                for w in b.nz_words() {
+                    let add = b.words[w] & !a.words[w];
                     if add != 0 {
-                        self.words[w] |= add;
-                        self.sum[w / 64] |= 1 << (w % 64);
-                        self.n += add.count_ones() as usize;
+                        a.words[w] |= add;
+                        a.sum[w / 64] |= 1 << (w % 64);
+                        a.n += add.count_ones() as usize;
                     }
                 }
-            } else {
-                for &x in &o.v {
-                    let new = self.set_bit(x);
-                    self.n += usize::from(new);
+            }
+            (Repr::Dense(a), Repr::Sparse(b)) => {
+                for &x in b {
+                    let new = a.set_bit(x);
+                    a.n += usize::from(new);
                 }
             }
-            return;
-        }
-        // 两侧稀疏且并集不足阈值：有序归并
-        let (a, b) = (&self.v, &o.v);
-        let mut out = Vec::with_capacity(a.len() + b.len());
-        let (mut i, mut j) = (0, 0);
-        while i < a.len() && j < b.len() {
-            match a[i].cmp(&b[j]) {
-                std::cmp::Ordering::Less => {
-                    out.push(a[i]);
-                    i += 1;
+            (Repr::Sparse(a), Repr::Sparse(b)) => {
+                // 两侧稀疏：有序归并
+                let mut out = Vec::with_capacity(a.len() + b.len());
+                let (mut i, mut j) = (0, 0);
+                while i < a.len() && j < b.len() {
+                    match a[i].cmp(&b[j]) {
+                        std::cmp::Ordering::Less => {
+                            out.push(a[i]);
+                            i += 1;
+                        }
+                        std::cmp::Ordering::Greater => {
+                            out.push(b[j]);
+                            j += 1;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            out.push(a[i]);
+                            i += 1;
+                            j += 1;
+                        }
+                    }
                 }
-                std::cmp::Ordering::Greater => {
-                    out.push(b[j]);
-                    j += 1;
-                }
-                std::cmp::Ordering::Equal => {
-                    out.push(a[i]);
-                    i += 1;
-                    j += 1;
-                }
+                out.extend_from_slice(&a[i..]);
+                out.extend_from_slice(&b[j..]);
+                *self = IdSet::from_sorted(out);
             }
         }
-        out.extend_from_slice(&a[i..]);
-        out.extend_from_slice(&b[j..]);
-        *self = IdSet::from_sorted(out);
     }
 }
 
@@ -339,7 +375,7 @@ impl Extend<u32> for IdSet {
 
 impl std::convert::From<[u32; 1]> for IdSet {
     fn from(a: [u32; 1]) -> Self {
-        IdSet { v: a.to_vec(), ..IdSet::default() }
+        IdSet(Repr::Sparse(a.to_vec()))
     }
 }
 
@@ -352,6 +388,12 @@ mod tests {
         v.sort_unstable();
         v.dedup();
         v
+    }
+
+    /// 内联宽度：类型集（两个 IdSet）是流图节点表的主体
+    #[test]
+    fn inline_width() {
+        assert_eq!(std::mem::size_of::<IdSet>(), 24);
     }
 
     /// 并 / 差 / 子集 / 插入与朴素实现一致（覆盖稀疏、稠密、跨形态各路径）

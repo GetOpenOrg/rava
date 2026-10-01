@@ -181,23 +181,13 @@ impl<'a> Engine<'a> {
         };
         match opcode {
             op::INVOKESTATIC => {
-                // 静态调用继承调用方的克隆上下文（容器方法里的静态辅助方法随容器对象分开）
                 self.init(&resolved.owner, via.clone());
-                // 只有返回引用的辅助方法随上下文克隆（返回值按容器对象分开）；返回基本类型 / void 的静态方法克隆收益可忽略，按本体共享
-                // 上下文无关的调用方调用新鲜工厂（返回本方法新分配的容器 / 引用数组）：按调用点克隆，
-                // 否则各调用点的实参元素经同一个返回对象汇合（`Arrays.copyOf` 的副本数组）
-                // 分派转发方法（形参流到分派接收者）按调用点克隆，优先于以上规则（边界计划 §6.2 G1）
-                let caller_ctx = self.methods[m].ctx;
-                let ctx = match caller_ctx {
-                    _ if !md.ret.as_ref().is_some_and(|r| r.is_reference()) => NOCTX,
-                    NOCTX if self.fresh_factory(&resolved) => self.site_ctx(m, off),
-                    c => c,
-                };
-                // 选择子形参上传常量（或调用方已在上下文中）：按调用点克隆，分支按形参常量剪枝（`selector.rs`）
-                let ctx = self.selector_ctx(m, off, &resolved, pargs).unwrap_or(ctx);
+                // 克隆上下文的选择见 `ctxsel.rs`
+                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 let (named, top) = if self.man.names.is_class_lookup(&mref.to_string()) { self.class_lookup(m, off, args) } else { (vec![], true) };
-                let t = self.callee(m, off, resolved, ctx, via);
+                let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
                     self.named_class(m, off, &c);
@@ -278,7 +268,7 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.ctx_of(r), via);
+                let t = self.method_ctx(MemberRef { owner: o, name: n, desc: d }, self.recv_ctx(r), via);
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
@@ -300,10 +290,10 @@ impl<'a> Engine<'a> {
         let dedup = site && self.methods[m].kind == Kind::Bytecode;
         for x in &s.classes {
             if self.objs.contains_key(&x) {
-                if dedup && !self.recv_done.entry(m).or_default().insert((off, x)) {
+                if dedup && !self.recv_mark(m, off, x) {
                     continue;
                 }
-                let t = self.method_ctx(key.clone(), x, via.clone());
+                let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
                 self.edge(m, off, t, Recv::Exact(x), a, ret, res);
             } else {
                 rest.classes.insert(x);
