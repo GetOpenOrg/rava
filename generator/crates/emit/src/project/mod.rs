@@ -6,6 +6,7 @@
 
 pub mod entry;
 pub mod fs;
+pub mod layers;
 pub mod layout;
 pub mod lib_crates;
 pub mod mod_tree;
@@ -174,6 +175,8 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     state.check_lambda_ledger()?;
     perf.mark("classes");
     let disp = crate::phase2::finish(ctx, &mut state, &mut ems, &mut perf)?;
+    // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
+    let body_plan = layers::split(ctx, &mut ems, &jrt_src);
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
@@ -181,12 +184,14 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     perf.mark("mod_tree");
     libs.write_crates(ctx, &mut w, out_dir)?;
+    body_plan.write_crates(ctx, &mut w, out_dir)?;
+    let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
-    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &disp)?;
+    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &disp, &body_names)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
-    entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names)?;
+    entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
     perf.mark("entry");
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),

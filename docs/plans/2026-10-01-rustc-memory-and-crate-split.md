@@ -446,9 +446,41 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | S1 ✅ | **`java_meta` crate**：反射数据表与造表构建脚本从 `java_runtime` 移出；元素类型留在 `java_runtime::meta`（手写），表 static 以导出符号交给 `java_runtime` 读取（依赖方向见 §7.2） | 仅 workspace 结构；表数据逐字节不变 | 表文件逐字节对照；HelloWorld / Digester `java_runtime` 峰值（§7.7） |
 | S2 | **存储钩子**：§7.3.1 的 4 处改走钩子（同 crate 内落地为与存储布局同模块的非泛型自由函数，签名即终态 extern 签名） | 宏展开：4 处调用点换钩子调用 | 展开对照只在 4 处变化；抽查 |
 | S3 | **方法体函数化**：方法体移入 `__jb_<符号>` 自由函数，wrapper 方法与 `_base` 变外壳；`_base` 去泛型；vtable-for-inner 私有方法直展开改调同一函数 | 宏展开：方法体搬家；单态化 `_base` 实例归一 | 单态化统计；抽查（覆盖私有方法、super 调用、`_base` 缺省分派） |
-| S4 | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树（实现 crate 根 `pub use java_runtime::*;`，本 crate 类模块名加 `_body` 后缀以免遮蔽）；可见性：wrapper 的 `vtable` / `any` / `__from_parts` 改为 `pub` + `#[doc(hidden)]` | 生成树结构变化（新增实现 crate 目录） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
+| S4 | **物理拆层**：宏 `rava_layer` 模式；生成器写 decl / body 两份文件、实现 crate 装箱、各 crate 的 Cargo.toml 与模块树；可见性收口。细化见 §7.5.1 | 生成树结构变化（新增实现 crate 目录；声明层文件块首多一行属性） | Digester / DeepCopy 各 crate 峰值与总墙钟；user 变化时 JDK 部分零重编 |
 | S5 | **声明层样板收窄**（§7.4 前三项） | 宏展开与导入列表 | 逐项测声明 crate 峰值 |
 | S6 | **泛型类擦除核心**（§4.2 / §7.4 第四项） | 泛型类方法体进实现层 | 性能验收（排序 / 拷贝热循环）+ 抽查 |
+
+#### 7.5.1 S4 细化（2026-10-01）
+
+**宏（`rava_macros`，`block/gen/layer.rs`）**
+- 块属性 `#[rava_layer = "decl" | "body"]`，缺省完整展开（用户 crate、lib crate、Python 生成器不受影响）。
+- 实现层（body）：`X__inner` 及其 derive、`ObjectVTable for X__inner`、`impl X__inner { BINARY_NAME }`、全部 `Y__VTable for X__inner` 与接口 impl、三个存储钩子、`__jbm_` 方法体函数、非泛型且非存根的 `_base` 函数。
+- 声明层（decl）：其余全部（vtable trait 与 `AsVTable`、wrapper 及其 trait impl、固有方法与外壳、静态存储与类初始化、From / Into、泛型或存根 `_base`）。
+- 可拆的三类自由函数（钩子 / 体函数 / 非泛型 `_base`）由同一个拆分函数处理：实现层定义加 `#[export_name = SYM]`；声明层生成同名外壳 `#[inline] pub fn f(..) -> R { extern "Rust" { #[link_name = SYM] fn f(..) -> R; } unsafe { f(..) } }`。外壳形参与返回类型取自同一函数项，调用点文本不变。
+- `SYM = __rava_<binary name 转义>__<函数名>_<FNV-1a 64(binary name, 函数名, 签名记号文本)>`：两侧签名不一致只会是链接错误。
+- 实现层文件 glob 导入声明层本类模块；同名的实现层定义遮蔽 glob 导入的外壳，所以实现 crate 内对本类钩子 / 体函数 / `_base` 的调用直达定义，别的类的经声明层外壳转调。
+- 存根 `_base` 留在声明层直接定义（一行 panic，无依赖，不值得走 extern）。
+- 接口块整体属声明层（body 模式展开为空，生成器也不为接口写实现层文件）。接口 default / static 方法体下沉是后续项，与 S6 一并做。
+- 泛型类：`X__inner` 与 vtable impl 本就非泛型，随存储层下沉；wrapper 方法体与泛型 `_base` 留在声明层，到 S6 擦除核心再下沉。
+- 可见性：wrapper 的 `vtable` / `any` / `__phantom` 字段由 `pub(crate)` / 私有改为 `pub` + `#[doc(hidden)]`。实现层的 `__as_X` 钩子与体函数按部件构造、读取 wrapper。
+
+**生成器（Rust 生成器，`emit/src/project/layers.rs`）**
+- 第二阶段收尾之后、落盘之前拆分：JDK 生成类（非手写、非接口）的块首加 `#[rava_layer = "decl"]`，原位落盘。
+- 实现层文本 = 原文件头（allow 属性 + use 列表）+ `use java_runtime::<本类模块路径>::*;` + 同一块（`#[rava_layer = "body"]`）。块后的 `iface_upcasts!` / `implref` / 反射字段闭包属声明层，不进实现层。
+- 装箱：类按 binary name 排序，按实现层文本字节贪心装箱。单箱上限 `BODY_CRATE_BYTES` 按 §7.6 的峰值目标实测校准，见 §7.7 S4 记录。
+- 实现 crate `java_body_k`：
+  - `src/lib.rs` 是 allow 属性 + 私有 `use java_runtime::*;` + `mod body;`；
+  - 类文件放在 `src/body/<原相对路径>`，mod.rs 只写 `mod x;`，不再导出。
+  - 这样类文件头的 `crate::java::…` / `crate::prelude` 经根 glob 解析到声明层，不被本 crate 模块遮蔽（取代原设想的 `_body` 后缀）。
+  - Cargo 依赖只有 `java_runtime` 与 `rava_macros`。
+- workspace 成员加实现 crate。`user` 依赖全部实现 crate，`main.rs` 写 `use java_body_k as _;` 纳入链接。批量模式的既有 user 清单补齐依赖行。
+- `java_meta` 构建脚本扫描兄弟 crate 时排除 `java_body_` 前缀：实现层是声明层块的副本，类宇宙已由 `java_runtime` 覆盖。
+- 陈旧实现层类文件（带生成标记、本轮未写）删除。装箱数减少时多余的 `java_body_k` 目录不在 workspace 成员内，不参与编译。
+
+**等价性**
+- 拆分只改变函数定义所在的 crate 和调用经过的一层 `#[inline]` 转发：形参按值原样转交，返回值原样交回，求值顺序与副作用不变。
+- trait impl（`ObjectVTable` / `Y__VTable for X__inner`）在哪个 crate 定义不影响分派：vtable 由实现层的 `alloc` 钩子在 unsize 时取用。
+- `#[export_name]` 项恒被代码生成且作为导出符号保留。dev 下跨 crate 调用不内联；release 的 `lto = true` 仍跨 crate 内联。
 
 ### 7.6 量化目标
 
