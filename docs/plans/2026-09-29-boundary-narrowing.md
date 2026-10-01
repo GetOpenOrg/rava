@@ -978,6 +978,21 @@ null_recv 计数（`folds[].null_recv` 总条数；类 / 方法集三列均不�
 （`getKeys()` 为 `aconst_null; areturn`），真实束类（`ListResourceBundle` / `OpenListResourceBundle` / `ParallelListResourceBundle`）均覆写 `handleKeySet`。
 验收：`scripts/main.py` 单跑 TestStreamAdvanced（经 heavy_lock）`native-missing=0`，965 JDK 类 + 1 用户类，输出与 `tests/expected` 一致。提交 9f04499e。
 
+**健全性 S4：lambda 上的 Comparator default 方法不入闭包（ComparatorFactory / EisensteinPrimes 基线回归，运行期命中 `Comparator.reversed` /
+`thenComparingInt` 存根）**。闭包 JSON：`ComparatorFactory.main` 的 null_recv = `[75, 163]`（`reversed` / `thenComparing` 调用点），
+`--why Comparator.reversed` 为「不在闭包内」。根因不在 default 方法派发（`invoke.rs::dispatch_one` 对 lambda 接收者的非 SAM 方法本就按接口选择），
+而在值流：`Comparator.comparing*` / `thenComparing*` 以 `(Comparator<T> & Serializable)` 返回 lambda——引导为 `altMetafactory`（flags 含
+FLAG_SERIALIZABLE），字节码随后 `checkcast Serializable; checkcast Comparator`。引擎的 lambda 伪类型只算函数式接口的子类型，
+`checkcast Serializable` 把 lambda 对象滤空，返回值集为空 → 调用方接收者被判 null_recv（值确有建模来源，未建模来源守卫不适用）。
+修法（通用，类名只在清单）：`lambda.rs::alt_markers` 按 LambdaMetafactory 协议解析 `altMetafactory` 静态实参
+（`[samMT, impl, instMT, flags, (n, 标记类×n)?, (n, 桥接 MT×n)?]`）：FLAG_SERIALIZABLE → 清单 `serializable_markers`，FLAG_MARKERS → 列出的标记接口；
+记入 `Lambda.markers`，`classes.rs::sub` 与非 SAM 方法选择（`invoke.rs`，函数式接口在前、附加接口在后）一并使用。单测 `lambda::tests::alt_markers_by_flags`。
+覆盖整个 default 方法族：`comparing*` / `thenComparing*` / `reversed` 返回的 lambda 均经此路径，无逐方法处理。
+结果：ComparatorFactory 257 / 726 → 260 / 743（+`reversed`、`thenComparing`、`Collections$ReverseComparator(2)`、`Comparators$NaturalOrderComparator` 等），
+null_recv 总数 62 → 39，`main` 的 null_recv 为空；dyn 漏 4 → 0（`DirectMethodHandle$Interface ← thenComparing@7` 随 `thenComparing` 入闭包、
+其 indy 进 `indy_models` 后归 `indy-model`）。EisensteinPrimes 928 / 5274，dyn 漏 1 → 0。DeepCopy / Digester / CollectorsDemo / TestStreamAdvanced
+类 / 方法与上一项逐一相同，漏均为 0。`scripts/main.py` 持锁单跑 ComparatorFactory（258 JDK 类）、EisensteinPrimes（925 JDK 类）输出与期望一致。提交 fb5ffb99。
+
 **driver 测试 `try_finally_return_temp_kept_in_every_arm` 失败（归属：a8fdf1d0 选择子形参按调用点克隆；测试期望过时，生成代码正确）**：
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
