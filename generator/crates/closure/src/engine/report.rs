@@ -15,6 +15,7 @@ impl<'a> Engine<'a> {
                 groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
             }
         }
+        let um = self.unmodeled();
         let mut out = Vec::new();
         for (key, group) in groups {
             let clones: Vec<usize> = group.iter().map(|(i, _)| *i).collect();
@@ -26,7 +27,7 @@ impl<'a> Engine<'a> {
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
             self.dead_catches(code, &mut f);
-            f.null_recv = self.null_recv(&clones);
+            f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷

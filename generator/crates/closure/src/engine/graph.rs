@@ -58,6 +58,10 @@ impl FlowGraph {
         self.rep.push(i);
         i
     }
+    /// 已驻留节点的序号（未出现过为 None）
+    pub(super) fn lookup(&self, n: &Node) -> Option<u32> {
+        self.ids.get(n).copied()
+    }
     /// 节点所属代表
     #[inline]
     pub(super) fn rep(&self, i: u32) -> u32 {

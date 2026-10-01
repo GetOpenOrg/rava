@@ -263,3 +263,25 @@ fn api_package_precheck() {
     assert!(facts.contains("java/util/function/BiFunction"), "API 入口类入闭包");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// 手写体经注册表工厂构造的资源束经 setParent 串成父链：束对象须作为值进入流图，
+/// `ResourceBundle.getObject` 的 `parent.getObject(key)`（@22）不得判为接收者恒 null
+#[test]
+fn locale_bundle_parent_not_null_recv() {
+    let Some((_, out)) = build("LocaleBundleParent.java", "rbparent", &["--precheck-only", "--closure-json"]) else {
+        return;
+    };
+    let facts: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap()).unwrap();
+    let get_object = "java/util/ResourceBundle.getObject:(Ljava/lang/String;)Ljava/lang/Object;";
+    let folds = facts["folds"].as_array().unwrap();
+    let nr: Vec<u64> = folds
+        .iter()
+        .filter(|f| f["method"] == get_object)
+        .flat_map(|f| f["null_recv"].as_array().cloned().unwrap_or_default())
+        .filter_map(|x| x.as_u64())
+        .collect();
+    assert!(!nr.contains(&22), "getObject@22 误判恒 null：{nr:?}");
+    // 非空断言：getObject 在闭包内（父链查找路径确实被分析）
+    assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == get_object), "getObject 不在闭包内");
+    std::fs::remove_dir_all(&out).ok();
+}
