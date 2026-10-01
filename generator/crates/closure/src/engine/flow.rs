@@ -45,7 +45,7 @@ impl<'a> Engine<'a> {
             }
         }
         let r = self.graph.rep(i);
-        let cur = self.graph.set_mut(r);
+        let cur = self.graph.set(r);
         let delta = TypeSet {
             classes: s.classes.minus(&cur.classes),
             open: s.open.minus(&cur.open),
@@ -53,7 +53,7 @@ impl<'a> Engine<'a> {
         if delta.is_empty() {
             return;
         }
-        cur.add_all(&delta);
+        self.graph.grow(r, &delta);
         self.graph.adds[1] += 1;
         self.graph.adds[2] += (delta.classes.len() + delta.open.len()) as u64;
         if direct && !delta.open.is_empty() {
@@ -152,9 +152,8 @@ impl<'a> Engine<'a> {
             s.classes.len() + s.open.len()
         };
         if objf || n < FILTER_MEMO_AT {
-            let s = std::mem::take(self.graph.own_set_mut(rs));
+            let s = self.graph.set_rc(rs);
             let out = self.filter(&s, filter);
-            *self.graph.own_set_mut(rs) = s;
             self.via_flow = true;
             self.add_to_id(di, &out);
             return;
@@ -171,9 +170,8 @@ impl<'a> Engine<'a> {
             }
             _ => {
                 self.graph.fmemo_stats[1] += 1;
-                let s = std::mem::take(self.graph.own_set_mut(rs));
+                let s = self.graph.set_rc(rs);
                 let out = self.filter(&s, filter);
-                *self.graph.own_set_mut(rs) = s;
                 out
             }
         };

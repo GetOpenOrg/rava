@@ -125,7 +125,7 @@ impl<'a> Engine<'a> {
             let mut pend = TypeSet::default();
             let mut edges: Vec<(u32, u32)> = Vec::new();
             for &c in comp {
-                let own = std::mem::take(self.graph.own_set_mut(c));
+                let own = self.graph.take_own(c);
                 let d = TypeSet { classes: u.classes.minus(&own.classes), open: u.open.minus(&own.open) };
                 if !d.is_empty() {
                     let ms = self.graph.members.get(&c).cloned().unwrap_or_else(|| vec![c]);
@@ -138,7 +138,7 @@ impl<'a> Engine<'a> {
             for &b in &comp[1..] {
                 self.graph.union_into(a, b);
             }
-            *self.graph.own_set_mut(a) = u;
+            self.graph.put_own(a, u);
             self.graph.edges[a as usize] = edges;
             self.graph.scc_stats[1] += (comp.len() - 1) as u64;
             if !pend.is_empty() {

@@ -282,6 +282,8 @@ impl<'a> Engine<'a> {
             "scc": self.graph.scc_stats,
             // 新接边收窄记忆：命中 / 未命中（flow.rs）
             "fmemo": self.graph.fmemo_stats,
+            // 类型集驻留：写入 / 写后共享已有内容 / 表清理次数，及不同内容份数（setstore.rs）
+            "set_intern": [self.graph.sets.stats[0], self.graph.sets.stats[1], self.graph.sets.stats[2], self.graph.sets.unique() as u64],
             // 传播推送按边种类：次数 / 有增量次数（前 20）
             "pushes_by_kind": self.push_kinds(),
             // 枢纽数 / 调用点接入枢纽总数 / 单调用点最多接入数（hub.rs）

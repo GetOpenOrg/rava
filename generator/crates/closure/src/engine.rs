@@ -67,6 +67,8 @@ mod worklist;
 pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
+mod setstore;
+use setstore::SetStore;
 mod scc;
 
 use graph::FlowGraph;

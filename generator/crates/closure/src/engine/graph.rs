@@ -10,8 +10,8 @@ use super::*;
 pub(super) struct FlowGraph {
     ids: HashMap<Node, u32>,
     nodes: Vec<Node>,
-    /// 节点类型集（空 = 尚无值）
-    sets: Vec<TypeSet>,
+    /// 节点类型集（空 = 尚无值），按内容驻留共享（`setstore.rs`）
+    pub(super) sets: SetStore,
     /// 出边（目标序号, 过滤类型 id），按接边顺序
     pub(super) edges: Vec<Vec<(u32, u32)>>,
     /// 待沿出边推送的新增类型（差分传播；空 = 无待推）
@@ -102,7 +102,7 @@ impl FlowGraph {
         let i = self.nodes.len() as u32;
         self.ids.insert(n, i);
         self.nodes.push(n);
-        self.sets.push(TypeSet::default());
+        self.sets.push_empty();
         self.edges.push(Vec::new());
         self.delta.push(TypeSet::default());
         self.queued.push(false);
@@ -135,16 +135,24 @@ impl FlowGraph {
     /// 节点（按所属代表）的类型集
     #[inline]
     pub(super) fn set(&self, i: u32) -> &TypeSet {
-        &self.sets[self.rep[i as usize] as usize]
+        self.sets.get(self.rep[i as usize] as usize)
     }
+    /// 节点（按所属代表）的类型集，共享引用（调用方可在改图期间持有）
     #[inline]
-    pub(super) fn set_mut(&mut self, i: u32) -> &mut TypeSet {
-        let r = self.rep[i as usize] as usize;
-        &mut self.sets[r]
+    pub(super) fn set_rc(&self, i: u32) -> Rc<TypeSet> {
+        self.sets.get_rc(self.rep[i as usize] as usize)
     }
-    /// 代表自身存储的类型集（合并用；成员的存储在合并后为空）
-    pub(super) fn own_set_mut(&mut self, r: u32) -> &mut TypeSet {
-        &mut self.sets[r as usize]
+    /// 代表 r 的类型集并入 delta（delta 与原集合不相交）
+    pub(super) fn grow(&mut self, r: u32, delta: &TypeSet) {
+        self.sets.grow(r as usize, delta);
+    }
+    /// 取出代表 r 自身存储的类型集（合并用），原处置空
+    pub(super) fn take_own(&mut self, r: u32) -> Rc<TypeSet> {
+        self.sets.take(r as usize)
+    }
+    /// 代表 r 的存储整体置为 s（合并用）
+    pub(super) fn put_own(&mut self, r: u32, s: TypeSet) {
+        self.sets.put(r as usize, s);
     }
     /// 节点的类型集（无值时 None）
     pub(super) fn get(&self, n: &Node) -> Option<&TypeSet> {
