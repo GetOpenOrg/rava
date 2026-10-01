@@ -102,3 +102,29 @@
   - ifnull / ifnonnull（Java `== null`）：`cfg/src/cond.rs`、`method/src/unify.rs`、`method/src/cond_text.rs`；
   - typeSwitch null 选择子 → -1：`instr/src/sim/dynamic/type_switch.rs`；
   - 反射构造分派按接收者是否为 null 区分 new / `<init>`：`emit/src/phase2/dispatch.rs`。
+
+## 10. 分布式基线外非超时失败 14 例（regress2-b）
+
+复现交由服务器（本机不跑 e2e / 单例）。读码预分类：
+
+### 10.1 PrintDebugStatement / ReflectionGetSource —— FS-E1（栈帧为 Rust 符号），架构项
+
+- 现状：`throwable_impl.rs` `fillInStackTrace` 解析 `std::backtrace` 的 Display，类名 / 方法名取 Rust 符号路径，
+  文件名 / 行号为生成的 `.rs` 位置。classfile 未解析 LineNumberTable（只读了 SourceFile）。
+- 终态：StackTraceElement 的类 / 方法 / 文件 / 行号与 JVM 一致，Rust 符号 / `.rs` 路径外露 0 处；运行期零额外开销
+  （不维护影子栈，只在 fillInStackTrace 时查表）。
+- 机制：回溯帧本就带 `at <生成文件>:<行>`（宏对方法体 token 保留原 span），据「生成文件行 → (Java 方法, Java 行)」
+  表即可同时恢复方法名与行号，不依赖 Rust 符号。
+- 步骤（每步单独提交；S2 起以「剥去行标记后生成树逐字节不变」为验收，交服务器跑 gen_trees / compare_trees）：
+  - S1 classfile：Code 属性解析 `LineNumberTable`（pc → 行），NormCode 透传。生成物不变。
+  - S2 sim / ir：新增行标记语句 `Stmt::Line(u32)`；sim 在发出语句前若当前指令所在 Java 行变化则先发标记
+    （`emit` / `fresh_let` / 直接入栈点统一走一个入口）。各遍历遇标记透明（`first/last` 类判断跳过标记）。
+    渲染为 `// line N` 尾注释并入下一行语句（不增行，生成代码可读性同时受益）。
+  - S3 emit：发射文件时按方法区段收集 (Rust 行, Java 行)，写入每个生成类的静态行表
+    （`__LINES: &[(u32 rust_line, u16 method_idx, u32 java_line)]` + 方法名表 + SourceFile），
+    以文件路径（crate 内相对路径）注册到全局表（linkme 式分布式切片不可用时由 mod.rs 汇总生成）。
+  - S4 运行时（throwable_impl.rs，VM 驱动类 ③）：帧按 `at` 的文件 + 行查表得 (类, 方法, 文件, 行)；查不到的帧
+    （运行时内部 / std）剔除；按 JVM 规则跳过 fillInStackTrace 与本异常类及其超类的 `<init>` 帧。
+  - S5 scratch profile：dev / release 均 `debug = "line-tables-only"`（行表需要调试行信息），确认 release 内联帧仍带 `at`。
+- 验收用例：PrintDebugStatement、ReflectionGetSource、TestCustomException（printStackTrace 形态）。
+- 量级：classfile / ir+sim / emit / 运行时 / profile 五步，main 已同意先行实施。
