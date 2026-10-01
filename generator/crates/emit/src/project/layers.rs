@@ -30,6 +30,10 @@ pub const BODY_CRATE_PREFIX: &str = "java_body_";
 /// 单个实现 crate 的块文本字节上限（§7.6：单个实现 crate rustc 峰值 ≤ 1.5 GB）
 pub const BODY_CRATE_BYTES: usize = 5 << 20;
 
+/// 实现 crate 至少分两箱：声明层编完元数据后实现层并行编译（`CARGO_BUILD_JOBS=2` 下两箱同时跑），
+/// 小闭包（HelloWorld 一箱 3.7 MB）的实现层墙钟减半
+pub const MIN_BODY_CRATES: usize = 2;
+
 const BLOCK_OPEN: &str = "rava_macros::java_class! {\n";
 
 /// 实现 crate 的 lib.rs
@@ -116,12 +120,12 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
     plan
 }
 
-/// 均衡装箱：箱数 k = ⌈总字节 / 上限⌉，按序把每项分到其字节中点落入的 1/k 区间，
+/// 均衡装箱：箱数 k = max(⌈总字节 / 上限⌉, [`MIN_BODY_CRATES`])（不超过项数），按序把每项分到其字节中点落入的 1/k 区间，
 /// 各箱约为总量 / k（≤ 上限，偏差不超过单项大小），不出现贪心装箱尾部的小箱；
 /// 结果只依赖项序与大小（确定性）。返回每项的箱号（单调不减、无空箱）。
 fn pack(sizes: &[usize], cap: usize) -> Vec<usize> {
     let total: usize = sizes.iter().sum();
-    let k = total.div_ceil(cap.max(1)).max(1);
+    let k = total.div_ceil(cap.max(1)).max(MIN_BODY_CRATES).min(sizes.len().max(1));
     let mut prefix = 0usize;
     let mut out = Vec::with_capacity(sizes.len());
     let mut last = 0usize;
@@ -234,6 +238,8 @@ mod tests {
         let bins = pack(&[3, 3, 3, 3, 3, 3, 3, 4], 10);
         assert_eq!(bins, vec![0, 0, 0, 1, 1, 1, 2, 2]);
         assert_eq!(pack(&[5], 10), vec![0]);
+        // 总量不足一箱也分两箱
+        assert_eq!(pack(&[2, 2, 2, 2], 10), vec![0, 0, 1, 1]);
         assert_eq!(pack(&[], 10), Vec::<usize>::new());
         // 单项超上限：箱号不跳空
         assert_eq!(pack(&[1, 30, 1], 10), vec![0, 1, 2]);
