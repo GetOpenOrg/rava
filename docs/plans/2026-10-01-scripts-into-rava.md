@@ -96,9 +96,21 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
 ### A5 审计：gap_scan.py、native_gap_scan.py 并入 `rava audit`
 
 - `rava audit api <package>... [--recursive]`、`rava audit corpus [--filter S]... [-j N]`、`rava audit native [--filter S]...`：
-  缺口判定直接用 emit 的方法归类（native-missing / 调用链存根 / 手写已覆盖），不 grep 生成文本，不复制手写 fn 名规则。
-- 输出 `docs/reports/gap-scan-<模式>.md` 与 `native-gap-scan.md`，格式不变。corpus / native 模式逐例只做闭包 + 归类，
-  不写 scratch。
+  缺口判定即发射层预检（`emit::precheck`）：闭包方法节点 ∩ 生成体为方法体存根者，不再 grep stdout，不复制手写 fn 名规则
+  （native 模式 = 同一缺口集合按闭包种类 `handwritten:native` / `handwritten:boundary` 过滤）。存根文本统一经
+  `emit::precheck::stub_call` 生成，预检按同一形态识别。
+- 预检扫描点在第二阶段收尾之后、物理拆层之前（`write_project` 产出 `ProjectReport.precheck`；审计用只发射不落盘的
+  `emit::project::scan_gaps`）。S3 实施时查出两处既有回归，均随本步修复：① 84fc5581 存根改调 `__stub(…)` 后预检正则
+  仍只认 `panic!(…)`，`[precheck]` 恒为 0；② S4 物理拆层后声明层方法体已省略、体在 `java_body_k`，预检只扫
+  `java_runtime` 文本，漏掉实现层的全部存根。
+- 预检链事实不含 abstract 方法：abstract 方法无方法体，派发落到子类实现，其存根体不可达（边界类上的 abstract 方法由
+  手写子类经 vtable 实现，闭包种类记为 `handwritten:boundary`，但不是缺口）。
+- native 模式与旧 fn 名启发式的差异（Cal / AStar / Date 19 例子集实测）：旧 72 行，新 14 行；新集合 ⊂ 旧集合，
+  共有行触达数全同。旧独有 58 行均为误报：56 行闭包种类为 `handwritten:boundary`，但发射层已按字节码翻译出方法体
+  （如 `Policy.isSet`、`VM.initLevel`），旧规则只看手写层有无同名 fn；2 行为 abstract 方法
+  （`LocaleProviderAdapter.getBreakIteratorProvider`、`PhantomCleanable.performCleanup`），按上条排除。
+- 输出 `docs/reports/gap-scan-<模式>.md` 与 `native-gap-scan.md`，格式不变。逐例只做 javac + 闭包 + 内存发射，
+  不写 scratch（javac 产物落 `build/audit/` 临时目录，用完即删）；corpus / native 逐例起 `rava audit test` 子进程并行。
 
 ### A6 crate 划分：dep_scc.py 删除
 

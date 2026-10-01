@@ -18,7 +18,7 @@ use emit::audit::{append_raw_sites, audit_lines, AuditInputs};
 use emit::ctx::{EmitCtx, EmitOptions};
 use emit::method_bodies::{BodyAudit, MethodBodies};
 use emit::perf::{report_lines, Perf};
-use emit::precheck::{Precheck, DEFAULT_LIMIT};
+use emit::precheck::DEFAULT_LIMIT;
 use emit::project::{prepare_scratch, write_project, ProjectReport};
 use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
@@ -34,12 +34,12 @@ use crate::Args;
 
 use resolve::jdk::release_major as jdk_major;
 
-fn abs(p: &Path) -> PathBuf {
+pub(crate) fn abs(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// 仓库根：`<repo>/runtime/java_runtime` 上两级
-fn repo_root(rt: &Path) -> PathBuf {
+pub(crate) fn repo_root(rt: &Path) -> PathBuf {
     rt.parent().and_then(Path::parent).map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
@@ -52,7 +52,7 @@ fn remove_dir(d: &Path) -> Result<(), String> {
 
 /// javac 编译到独占目录（与 main.py 同参：`-g`，JDK ≥ 14 时 `--enable-preview --release N`；
 /// jar 输入模式下全部 jar 上 `-cp`）
-fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
+pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> Result<(), String> {
     remove_dir(out)?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}：{e}", out.display()))?;
     let mut cmd = Command::new(home.join("bin/javac"));
@@ -72,7 +72,7 @@ fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: &Path) -> R
 }
 
 /// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
-fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+pub(crate) fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
     let mut cp = ClassPath::new();
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
     for j in jars {
@@ -86,7 +86,7 @@ fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]
 }
 
 /// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
-fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
+pub(crate) fn image_dirs(o: &BuildOpts, home: &Path, rt: &Path) -> Vec<PathBuf> {
     if !o.images.is_empty() {
         return o.images.clone();
     }
@@ -147,7 +147,7 @@ pub fn user_order(cp: &ClassPath, java_files: &[PathBuf], main: Option<&str>) ->
 /// Digester 约 60 ms、DeepCopy 数百 ms）：闭包借用非 `Sync` 的手写层，只能在创建它的线程析构，
 /// 所以挪走的是发射。发射线程栈同发射工作线程（方法体生成有深递归）
 #[allow(clippy::too_many_arguments)]
-fn analyze<R: Send>(
+pub(crate) fn analyze<R: Send>(
     cp: &ClassPath,
     rt: &Path,
     main: &str,
@@ -231,23 +231,27 @@ fn analyze<R: Send>(
 }
 
 /// 一次发射所需的全部输入
-struct EmitJob<'a> {
-    cp: &'a ClassPath,
-    facts: &'a ClosureFacts,
-    rt: &'a Path,
-    user: &'a [String],
-    java_files: Vec<PathBuf>,
-    home: &'a Path,
-    out: &'a Path,
-    libs: &'a [LibCrate],
-    o: &'a BuildOpts,
+pub(crate) struct EmitJob<'a> {
+    pub cp: &'a ClassPath,
+    pub facts: &'a ClosureFacts,
+    pub rt: &'a Path,
+    pub user: &'a [String],
+    pub java_files: Vec<PathBuf>,
+    pub home: &'a Path,
+    pub out: &'a Path,
+    pub libs: &'a [LibCrate],
+    pub o: &'a BuildOpts,
 }
 
 /// `--perf` 报告的 Top-N 条数
 const PERF_TOP: usize = 15;
 
-/// EmitInput → overlay → 写 scratch → 预检 →（非 `--full-precheck`）审计行；另返回逐方法耗时（`--perf`）
-fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
+/// 闭包事实 → [`input::EmitInput`] → 短名表 → [`EmitCtx`]，交给 `f`（落盘发射与 `rava audit` 的内存发射共用）
+pub(crate) fn with_emit_ctx<R>(
+    j: &EmitJob<'_>,
+    perf: &mut Perf,
+    f: impl FnOnce(&EmitCtx<'_>, &ShortNames, &mut Perf) -> Result<R, String>,
+) -> Result<R, String> {
     let manifest = RuntimeManifest::load(j.rt).map_err(|e| e.to_string())?;
     let runtime_src = j.rt.join("src");
     let inp = BuildInput { cp: j.cp, facts: j.facts, manifest: &manifest, user_classes: j.user, libs: j.libs, runtime_src: &runtime_src, jobs: j.o.emit_jobs }
@@ -268,18 +272,32 @@ fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<
     };
     let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
+    f(&ctx, &names, perf)
+}
+
+/// EmitInput → overlay → 写 scratch → 预检 →（非 `--full-precheck`）审计行；另返回逐方法耗时（`--perf`）
+fn emit_scratch(j: &EmitJob<'_>, perf: &mut Perf) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
+    with_emit_ctx(j, perf, |ctx, names, perf| write_scratch(j, ctx, names, perf))
+}
+
+fn write_scratch(
+    j: &EmitJob<'_>,
+    ctx: &EmitCtx<'_>,
+    names: &ShortNames,
+    perf: &mut Perf,
+) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
     prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
     perf.mark("overlay");
     ir::raw_audit::reset();
     if j.o.raw_sites.is_some() {
         ir::raw_audit::enable_sites();
     }
-    let bodies = MethodBodies::new(&ctx);
+    let bodies = MethodBodies::new(ctx);
     perf.mark("body_facts");
-    let mut r = write_project(&ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
+    let mut r = write_project(ctx, j.out, &bodies).map_err(|e| format!("发射：{e}"))?;
     perf.absorb(std::mem::take(&mut r.perf));
     let limit = if j.o.full_precheck { usize::MAX } else { DEFAULT_LIMIT };
-    for line in Precheck::scan(&r.emissions, &inp.precheck_visited).lines(limit) {
+    for line in r.precheck.lines(limit) {
         println!("{line}");
     }
     if !j.o.full_precheck {

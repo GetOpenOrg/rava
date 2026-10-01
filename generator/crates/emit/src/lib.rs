@@ -45,4 +45,4 @@ pub use ctx::{EmitCtx, EmitOptions, ProjectState};
 pub use emission::ClassEmission;
 pub use error::{EmitError, Result};
 pub use method_bodies::MethodBodies;
-pub use project::{prepare_scratch, write_project};
+pub use project::{prepare_scratch, scan_gaps, write_project};

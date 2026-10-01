@@ -249,7 +249,8 @@ fn clinit_block(
         _ => None,
     };
     let text = body.unwrap_or_else(|| {
-        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    __stub(\"stub: {}.<clinit>:()V\")\n}}", cx.ci.name())
+        let stub = crate::precheck::stub_call("stub", &format!("{}.<clinit>:()V", cx.ci.name()));
+        format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    {stub}\n}}")
     });
     Ok(format!("{attr}\n{text}"))
 }

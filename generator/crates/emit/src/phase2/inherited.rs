@@ -263,7 +263,7 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
         return format!("#[java_method({})]\n{signature};", parts.join(", "));
     }
     let body = if owner_slot_stub(ctx, method, owner_bin) {
-        format!("__stub(\"stub: {owner_bin}.{}:{}\")", method.name, method.descriptor)
+        crate::precheck::stub_call("stub", &format!("{owner_bin}.{}:{}", method.name, method.descriptor))
     } else {
         forward_body(ctx, method, owner_bin, &owner_args)
     };

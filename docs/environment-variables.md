@@ -53,7 +53,7 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 |---|---|
 | `build <A.java>…` | javac（`-g`，JDK ≥ 14 加 `--enable-preview --release N`）→ 闭包分析（同 `rava closure`）→ 闭包事实进程内直传 → 发射 scratch →（缺省）`cargo run --bin <入口 snake 名>`（`CARGO_TARGET_DIR=<仓库>/build/target`、`CARGO_INCREMENTAL=0`）。用户类落 `<scratch>/closure_input/`；`closure.json` 只在 `--closure-json` 时写出 |
 | `emit <closure.json>` | 由既有 `closure.json` 与用户类目录重建输入后发射（不编译运行）。`--classes DIR` 缺省 `closure.json` 同目录的 `classes/`；`--java A.java`（可多次）给出源文件，决定用户类包布局与入口序 |
-| `--jdk N` / `--java-home P` | JDK 选择（互斥；缺省同 `rava closure`：`JAVA_HOME` → 已安装最新版） |
+| `--jdk N` / `--java-home P` | JDK 选择（互斥；缺省依次：有效 `JAVA_HOME` → 仓库根 `.jdk-version` → 已安装最新版；`rava jdk` 打印选择结果与来源，`rava jdk --list` 列已安装版本） |
 | `--runtime R` | 手写层真源 `runtime/java_runtime`（缺省自当前目录向上查找） |
 | `--out DIR` | scratch 目录。build 缺省 `<仓库>/build/<入口 snake 名>`；emit 缺省为 `closure.json` 所在 `closure_input/` 的上级 |
 | `--image D` | 镜像独有 / VM 支持类目录（可多次；缺省由 rava 自行派生，见 `resolve::image`，`main.py` 不传） |
@@ -67,13 +67,28 @@ cargo run --release -q -- emit ../build/hello_world/closure_input/closure.json -
 | `--trace-class 类` | 仅 build：打印该类或方法（`类.方法:描述符`）入闭包的最短 provenance 链（`      [why] …`，同 `rava closure --why`） |
 | `--debug` | 闭包未解析调用（`[closure] unresolved: …`）与存根兜底逐条（`[cfg-audit] stub fallback (位点): 方法: 原因`） |
 | `--full-precheck` | 发射后只输出完整预检明细（`[precheck]` 不截断），不出审计行；build 下须配合 `--stop-after emit`。缺省时预检每类明细封顶 40 行 |
-| `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`scripts/gap_scan.py api` 使用） |
+| `--api-package P` / `--api-recursive` | 仅 build：以公开 API 包为调用链入口（包内 public 类的 public / protected 方法，边界域包跳过；可多次）。`--api-recursive` 含子包，须配合 `--api-package`。输出 `[api] …` 行（`rava audit api` 同一入口枚举） |
 | `--raw-sites FILE` | 同 `main.py --raw-sites`（位点为构造调用处 `文件:行:列`） |
 | `--closure-json` | 仅 build：另写出 `<scratch>/closure_input/closure.json`（`rava emit` 与动态对照的输入），并校验 `ClosureFacts::from_json` 与 `ClosureFacts::from_closure` 的结果逐字节一致（`Debug` 文本）。缺省不写，同时删除该处上轮遗留的 closure.json |
 | `--closure-cache DIR` | 闭包分析跨运行结果缓存目录（`main.py` 缺省传 `<仓库>/build/closure_cache`，无需配置）。键覆盖分析器可执行文件内容、JDK jmods 与镜像目录、`runtime/java_runtime` 全部文件、用户类与 `--lib` 内容、全部影响结果的参数（入口、`--root` / `--seed-class` / `--api-package` 展开后的种子、`--locale`）与条目格式 / closure.json 折叠点版本；任一变化即不命中。命中时诊断行原样重放、`closure.json` 除 `summary.elapsed_ms` / `summary.perf` 外与冷算逐字节相同，事实经 `ClosureFacts::from_json` 交给发射。冷算时（启用缓存即）总校验 `from_json` 与进程内直传一致。条目损坏即删除重算；`--trace-class`（及 `rava closure` 的 `--why` / `--flows` / `--report`）需引擎本体，不读缓存（冷算结果仍写回）。`rava closure` 同样接受本组选项。不设则不缓存 |
 | `--closure-cache-max-mb N` | 缓存目录总量上限（缺省 4096），写入后超出即按最近使用时间从旧到新淘汰；须配合 `--closure-cache` |
 | `--emit-jobs N` | 按类并行发射的线程数（缺省 0 = 可用核数；1 = 串行）。输出与串行逐字节一致 |
 | `--perf` | 输出 `[perf]` 分阶段耗时、峰值 RSS 与逐类 / 逐方法耗时 Top-N |
+
+### `rava audit`（编译前缺口审计）
+
+```bash
+rava audit api java/lang java/util [--recursive]      # 公开 API 包为入口 → docs/reports/gap-scan-api-<包>.md
+rava audit corpus [--filter S…] [-j N]                # e2e 语料逐例 → docs/reports/gap-scan-corpus-<过滤|all>.md
+rava audit native [--filter S…] [-j N]                # 同上，只取 handwritten:native / boundary 缺口 → docs/reports/native-gap-scan.md
+```
+
+缺口 = 调用链可达（闭包方法节点）且生成体为方法体存根（`native-missing`：native 方法无手写体；`boundary-stub`：
+其余存根）的成员，与 build 的 `[precheck]` 同一归类（第二阶段收尾后、物理拆层前扫描）。发射只在内存进行，不写
+scratch；javac 产物落 `build/audit/` 下临时目录，用完即删。corpus / native 逐例起子进程（`rava audit test`，缺省
+`-j 2`，单例超时 30 分钟），任一例失败则报告照写、退出码非 0。另可带 `--jdk` / `--java-home` / `--runtime` /
+`--closure-cache`（缺省 `build/closure_cache`）。口径是静态可达（过近似），运行期是否执行用
+`rava closure <Test.java> --why <方法>` 核对。
 
 ### 重型闭包的自动处理（无需配置）
 
