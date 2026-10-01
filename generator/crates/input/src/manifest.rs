@@ -67,6 +67,8 @@ pub struct RuntimeManifest {
     pub sigpoly_callsite_typed: BTreeSet<String>,
     /// 引导方法（`类.方法`）→ 分类
     pub indy_kinds: BTreeMap<String, IndyKind>,
+    /// concat / record toString 引用实参的字符串化入口（`[indy] concat_stringify`，`类.方法:描述符`）
+    pub concat_stringify: Option<String>,
     pub vm_constants: VmConstants,
 }
 
@@ -185,6 +187,15 @@ impl RuntimeManifest {
                 .into_iter()
                 .collect(),
             indy_kinds: indy_kinds(&vm)?,
+            concat_stringify: match section(&vm, "indy").and_then(|s| s.get("concat_stringify")) {
+                None => None,
+                Some(v) => Some(
+                    v.as_str()
+                        .filter(|m| split_member(m).is_some())
+                        .ok_or_else(|| InputError::Manifest(format!("indy.concat_stringify：应为 `类.方法:描述符`：{v}")))?
+                        .to_string(),
+                ),
+            },
             vm_constants: VmConstants {
                 null_returns: str_list(vmc, "null_returns", "vm_constants")?.into_iter().collect(),
                 null_to_false: str_list(vmc, "null_to_false", "vm_constants")?.into_iter().collect(),
@@ -196,4 +207,16 @@ impl RuntimeManifest {
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy_kinds.get(bsm).copied()
     }
+
+    /// 拼接引用实参的字符串化入口 `(类, 方法, 描述符)`；未配置 = 内联 null 判定 + toString
+    pub fn concat_stringify(&self) -> Option<(&str, &str, &str)> {
+        self.concat_stringify.as_deref().and_then(split_member)
+    }
+}
+
+/// `类.方法:描述符` → `(类, 方法, 描述符)`
+fn split_member(m: &str) -> Option<(&str, &str, &str)> {
+    let (head, desc) = m.split_once(':')?;
+    let (owner, name) = head.rsplit_once('.')?;
+    desc.starts_with('(').then_some((owner, name, desc))
 }

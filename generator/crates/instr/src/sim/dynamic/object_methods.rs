@@ -19,6 +19,7 @@ use super::{raw_stmt, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
 use crate::error::{InstrError, InstrResult};
+use crate::log::InstrLog;
 use crate::sim::fields::getfield;
 
 /// 引导静态实参：(record 类, 分量名, getter 字段引用)
@@ -107,7 +108,7 @@ fn eq_of(env: &InstrEnv, (a, at): &(String, RsType), (b, bt): &(String, RsType),
     }
 }
 
-pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrResult<()> {
+pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, site: &IndySite) -> InstrResult<()> {
     let (cls, names, getters) = components(site)?;
     match (site.name, site.desc.ends_with(")Z")) {
         ("toString", _) => {
@@ -119,7 +120,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, site: &Indy
             let parts: Vec<String> = names.iter().map(|n| format!("{n}=\u{1}")).collect();
             let template = format!("{}[{}]", simple_name(env, &cls), parts.join(", "));
             let descs: Vec<String> = getters.iter().map(|g| g.desc.clone()).collect();
-            concat_from_stack(env, sim, &descs, Some(Recipe::text(&template)))
+            concat_from_stack(env, sim, log, &descs, Some(Recipe::text(&template)))
         }
         ("hashCode", _) => {
             let recv = pop_bound(sim)?;
