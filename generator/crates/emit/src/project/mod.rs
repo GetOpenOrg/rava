@@ -28,6 +28,7 @@ use crate::emission::ClassEmission;
 use crate::error::Result;
 use crate::imports::collect_referenced;
 use crate::perf::Perf;
+use crate::precheck::Precheck;
 use fs::Writer;
 use layout::{JdkLayout, UserLayout};
 use lib_crates::LibPlan;
@@ -41,6 +42,8 @@ pub struct ProjectReport {
     pub bin_name: String,
     /// 类发射记录（发射序）
     pub emissions: Vec<ClassEmission>,
+    /// 编译前缺口预检（拆层前的完整方法体文本上扫描）
+    pub precheck: Precheck,
     /// FS-H0 手写审计（发射序）
     pub hw_audit: Vec<(HwAudit, String)>,
     /// 方法体生成日志（发射序）
@@ -184,6 +187,23 @@ fn finish_phase2(
     Ok(disp)
 }
 
+/// 只发射、不落盘的缺口预检（`rava audit` 用）：布局 → 逐类发射 → 第二阶段收尾 → [`Precheck`]。
+/// `out_dir` 只用于推导目标路径（判定手写真源同路径覆盖），不创建、不写入
+pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<Precheck> {
+    let jrt_src = out_dir.join("java_runtime").join("src");
+    let w = Writer::new(out_dir, &ctx.runtime_src());
+    let jdk = JdkLayout::build(ctx, &jrt_src);
+    let user = UserLayout::build(ctx, &out_dir.join("user").join("src"));
+    let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
+    let mut perf = Perf::new();
+    let mut state = ProjectState::default();
+    let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
+    let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
+    state.check_lambda_ledger()?;
+    finish_phase2(ctx, &mut state, &mut ems, &mut perf)?;
+    Ok(Precheck::scan(ems.values(), &ctx.input.precheck_visited))
+}
+
 /// 发射完整 scratch workspace（overlay 需先完成：mod 树按磁盘实际内容重建）
 pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<ProjectReport> {
     let jrt_src = out_dir.join("java_runtime").join("src");
@@ -201,6 +221,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     state.check_lambda_ledger()?;
     perf.mark("classes");
     let disp = finish_phase2(ctx, &mut state, &mut ems, &mut perf)?;
+    let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
     let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
     perf.mark("layers");
@@ -225,6 +246,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         user_classes: user.entries.len(),
         bin_name: bin,
         emissions: ems.into_values().collect(),
+        precheck,
         hw_audit: std::mem::take(&mut state.hw_audit),
         body_log: std::mem::take(&mut state.body_log),
         perf,

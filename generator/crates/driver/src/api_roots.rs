@@ -1,4 +1,4 @@
-//! `--api-package`：公开 API 包为调用链入口（`scripts/gap_scan.py` api 模式，← Python `JDK_SEEDS`）。
+//! `--api-package`：公开 API 包为调用链入口（`rava audit api` 同一入口枚举，← Python `JDK_SEEDS`）。
 //!
 //! 指定包内全部 public 类的 public / protected 方法（`<clinit>` 除外）作为闭包根，一次 BFS 得出
 //! 「从这些公开 API 可达」的全部缺口（`--precheck-only` 明细）。边界域类（整类手写、BFS 截断）跳过；

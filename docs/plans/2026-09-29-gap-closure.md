@@ -1,6 +1,6 @@
 # 缺口成批补全（gap_scan 驱动）
 
-> 关联：`scripts/gap_scan.py`（编译前缺口扫描）、每次转译日志的 `[precheck]` 行、
+> 关联：`rava audit`（编译前缺口扫描；原 `scripts/gap_scan.py` / `native_gap_scan.py`，2026-10-01 并入）、每次转译日志的 `[precheck]` 行、
 > `docs/reports/gap-scan-api-*.md`（API 模式报告）。
 
 ## 一、动机
@@ -42,7 +42,7 @@ gap_scan 在转译后（cargo 之前）按生成产物列出调用链上**全部
 
 - 每批：新增 / 相关 e2e（期望输出由 JVM 生成）；手写层编译以 `cargo check` 在本机验证
   （16G 本机完整构建贴 OOM 线，见 N8 / N14），运行期回归由用户机器批量验证。
-- 每批合入后重跑 `gap_scan.py api …`，缺口数只降不升。
+- 每批合入后重跑 `rava audit api …`，缺口数只降不升。
 
 ## 五、VM 耦合边界类按方法划分（Python 生成器侧，2026-09-29）
 
