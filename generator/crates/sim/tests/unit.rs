@@ -124,7 +124,9 @@ fn reads_state_classifies_pending_values() {
     assert!(!reads_state(&Expr::raw("(local_1 + 1)")));
     assert!(!reads_state(&Expr::raw("Clone::clone(&a)")));
     assert!(!reads_state(&int(3)));
-    let concat = |arg: &str| Expr::Lit(Lit::JStringConcat { fmt: Some("{}-".into()), args: vec![Expr::raw(arg)] });
+    let concat = |arg: &str| {
+        Expr::Lit(Lit::JStringConcat(vec![ir::ConcatPart::Arg(Expr::raw(arg)), ir::ConcatPart::Text("-".into())]))
+    };
     assert!(reads_state(&concat("Foo::step()?")), "拼接字面量的实参读状态");
     assert!(!reads_state(&concat("_t3")));
 }

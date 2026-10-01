@@ -78,6 +78,10 @@ packages = [
     # 恒为描述符形态，结果即描述符 → Class（annotation_parser_impl.rs）——sun/reflect/generics 不放行
     # （其泛型 visitor 体系使 java_runtime 编译峰值内存越过 15G）。
     "sun/reflect/annotation/",
+    # 精度三期方案 B：Unix 文件系统族（UnixFileSystemProvider / UnixPath / UnixDirectoryStream /
+    # UnixFileAttributes 等，按字节码）。UnixNativeDispatcher 的 ACC_NATIVE（init()I、close0 / dup /
+    # opendir0 / fdopendir / closedir / readdir0、strerror）由 unix_native_dispatcher_impl.rs 以 libc 承载。
+    "sun/nio/fs/",
     # 旧日历 API 的历法引擎（GregorianCalendar / Date / TimeZone 的 CalendarSystem、Gregorian、
     # BaseCalendar、ZoneInfo、ZoneInfoFile 等，纯 Java）。ZoneInfoFile 读
     # <java.home>/lib/tzdb.dat → jdk_resources 嵌入数据；TimeZone 的两个 native 见 time_zone_impl.rs。

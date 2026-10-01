@@ -164,6 +164,34 @@ fn sysfs(name: &str, attr: &str) -> Option<std::string::String> {
     std::fs::read_to_string(format!("/sys/class/net/{}/{}", name, attr)).ok().map(|s| s.trim().to_owned())
 }
 
+/// `SIOCGIFMTU`：Linux 取自 libc；macOS 为 `_IOWR('i', 51, struct ifreq)`（libc 未导出）。
+#[cfg(target_os = "macos")]
+const SIOCGIFMTU: libc::c_ulong = 0xc020_6933;
+#[cfg(not(target_os = "macos"))]
+const SIOCGIFMTU: libc::c_ulong = libc::SIOCGIFMTU as libc::c_ulong;
+
+/// 接口 MTU（`ioctl(SIOCGIFMTU)`，名称超长或调用失败为 None）。
+fn ioctl_mtu(name: &str) -> Option<i32> {
+    let bytes = name.as_bytes();
+    if bytes.len() >= libc::IFNAMSIZ {
+        return None;
+    }
+    // SAFETY：ifreq 为纯 C 结构，全零合法；套接字在返回前关闭
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        if fd < 0 {
+            return None;
+        }
+        let mut req: libc::ifreq = std::mem::zeroed();
+        for (d, b) in req.ifr_name.iter_mut().zip(bytes) {
+            *d = *b as libc::c_char;
+        }
+        let rc = libc::ioctl(fd, SIOCGIFMTU as _, &mut req);
+        libc::close(fd);
+        (rc >= 0).then_some(req.ifr_ifru.ifru_mtu)
+    }
+}
+
 /// InetAddress → 地址字节（经其 getAddress）。
 fn address_bytes(addr: &InetAddress) -> Result<Vec<u8>> {
     Ok(addr.getAddress()?.to_vec().into_iter().map(|b| b as u8).collect())
@@ -255,9 +283,10 @@ impl NetworkInterface {
         }
     }
 
-    /// native `getMTU0(String name, int index)`：MTU；不可得返回 -1。
+    /// native `getMTU0(String name, int index)`：与 JDK `NetworkInterface.c` 同取法——数据报套接字上
+    /// `ioctl(SIOCGIFMTU)`；不可得返回 -1。
     #[jvm_native]
     pub fn getMTU0(name: String, _index: i32) -> Result<i32> {
-        Ok(sysfs(&name.to_string(), "mtu").and_then(|s| s.parse().ok()).unwrap_or(-1))
+        Ok(ioctl_mtu(&name.to_string()).unwrap_or(-1))
     }
 }

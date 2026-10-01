@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// 手写体值的静态类型推断结果
+pub(super) enum HwArg {
+    /// 可实例化的类
+    Exact(u32),
+    /// 抽象类 / 接口：值是其某个已实例化子类的对象
+    Open(u32),
+    /// 推不出
+    Unknown,
+}
+
 impl<'a> Engine<'a> {
     pub(super) fn resolve_tref(&self, host: &str, t: &TypeRef) -> Option<String> {
         self.hw.resolve_type(host, t).into_iter().find(|c| self.cp.contains(c))
@@ -9,12 +19,20 @@ impl<'a> Engine<'a> {
 
     /// 手写体调用点推断出的具体类型（须是可实例化的类）
     pub(super) fn hw_type(&mut self, host: &str, t: &Option<TypeRef>) -> Option<u32> {
-        let c = self.resolve_tref(host, t.as_ref()?)?;
-        let cf = self.h.class(&c)?;
-        if cf.is_interface() || cf.access & acc::ABSTRACT != 0 {
-            return None;
+        match self.hw_arg_type(host, t) {
+            HwArg::Exact(id) => Some(id),
+            _ => None,
         }
-        Some(self.id(&c))
+    }
+
+    /// 手写体值的静态类型：可实例化类 → 精确；抽象类 / 接口 → 该类型（取其已实例化子类的 open 集）；推不出 → 未知
+    pub(super) fn hw_arg_type(&mut self, host: &str, t: &Option<TypeRef>) -> HwArg {
+        let Some(c) = t.as_ref().and_then(|t| self.resolve_tref(host, t)) else { return HwArg::Unknown };
+        let Some(cf) = self.h.class(&c) else { return HwArg::Unknown };
+        if cf.is_interface() || cf.access & acc::ABSTRACT != 0 {
+            return HwArg::Open(self.id(&c));
+        }
+        HwArg::Exact(self.id(&c))
     }
 
     /// 回调 / 构造在手写体里的调用点：同名（Rust 名规则）、实参个数一致；
@@ -27,7 +45,9 @@ impl<'a> Engine<'a> {
         (!v.is_empty()).then_some(v)
     }
 
-    /// 实参来源：各调用点该位置都推断出具体类型 → 精确类型集；否则值池
+    /// 实参来源：各调用点该位置都推断出具体类型 → 精确类型集；否则值池。
+    /// 静态类型为抽象类 / 接口的实参另并入 open(该类型)：手写体经语法不可见的途径（函数指针工厂、
+    /// 注册表、缓存）构造的对象不在值池里，只以其静态类型的已实例化子类身份出现——不能因值池缺失推出空集
     pub(super) fn hw_args(&mut self, m: usize, host: &str, desc: &str, sites: &Option<Vec<&TypedCall>>) -> Args {
         let pool = Node::S(m, POOL);
         let Some(md) = parse_method(desc) else { return vec![] };
@@ -37,20 +57,26 @@ impl<'a> Engine<'a> {
                 out.push(None);
                 continue;
             }
-            let mut set = TypeSet::default();
+            let mut exact = TypeSet::default();
+            let mut open = TypeSet::default();
             let mut ok = sites.is_some();
             for c in sites.iter().flatten() {
-                match self.hw_type(host, &c.args[j]) {
-                    Some(id) => {
-                        set.classes.insert(id);
+                match self.hw_arg_type(host, &c.args[j]) {
+                    HwArg::Exact(id) => {
+                        exact.classes.insert(id);
                     }
-                    None => {
+                    HwArg::Open(id) => {
+                        open.open.insert(id);
                         ok = false;
-                        break;
                     }
+                    HwArg::Unknown => ok = false,
                 }
             }
-            out.push(Some(if ok { vec![Feed::S(set)] } else { vec![Feed::N(pool)] }));
+            let mut fs = if ok { vec![Feed::S(exact)] } else { vec![Feed::N(pool)] };
+            if !open.is_empty() {
+                fs.push(Feed::S(open));
+            }
+            out.push(Some(fs));
         }
         out
     }

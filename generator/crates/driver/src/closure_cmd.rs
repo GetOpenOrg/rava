@@ -7,7 +7,8 @@
 //! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
 //! `--locale <标签>`（locale 资源束种子）；诊断 `--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）；
-//! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）。
+//! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
+//! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 
 use std::path::{Path, PathBuf};
 
@@ -115,35 +116,39 @@ pub fn run(args: &Args) -> Result<(), String> {
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
-    let c = closure::analyze(&input_desc, &h, &man, &hw);
-
-    for e in hw.errors.borrow().iter() {
-        eprintln!("[closure] 手写文件解析失败：{e}");
-    }
-    for (n, e) in cp.failures() {
-        eprintln!("[closure] 类解析失败：{n}：{e}");
-    }
-
+    let whys = multi("--why");
+    let flows = multi("--flows");
+    let need_engine = args.opt("--report").is_some() || !whys.is_empty() || !flows.is_empty();
+    let cache = crate::closure_run::CacheOpts {
+        dir: args.opt("--closure-cache").map(PathBuf::from),
+        max_mb: num("--closure-cache-max-mb")?,
+    };
+    let out = crate::closure_run::analyze(&cache, &input_desc, &h, &man, &hw, need_engine, true);
+    let v = out.json.as_ref().ok_or("闭包产物缺失")?;
     if let Some(o) = args.opt("-o") {
-        let s = serde_json::to_string_pretty(&c.to_json()).map_err(|e| e.to_string())?;
+        let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
         std::fs::write(&o, s).map_err(|e| format!("{o}：{e}"))?;
     }
+    let Some(c) = out.closure else {
+        println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
+        return Ok(());
+    };
     if let Some(r) = args.opt("--report") {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
-    for w in multi("--why") {
+    for w in whys {
         for line in c.why(w) {
             println!("{line}");
         }
         println!();
     }
-    for w in multi("--flows") {
+    for w in flows {
         for line in c.flows(w) {
             println!("{line}");
         }
         println!();
     }
-    println!("{}", serde_json::to_string_pretty(&c.summary()).map_err(|e| e.to_string())?);
+    println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
     Ok(())
 }
 

@@ -194,7 +194,9 @@ fn raw_reads_state(t: &str) -> bool {
 /// 栈上这类待求值条目在任何语句发射之前按栈序物化（JVM 已在语句之前求值它们）
 pub fn reads_state(e: &Expr) -> bool {
     match e {
-        Expr::Lit(Lit::JStringConcat { args, .. }) => args.iter().any(reads_state),
+        Expr::Lit(Lit::JStringConcat(parts)) => {
+            parts.iter().any(|p| matches!(p, ir::ConcatPart::Arg(a) if reads_state(a)))
+        }
         _ if is_trivial(e) => false,
         Expr::Lit(_) | Expr::Var(_) | Expr::NewPending { .. } => false,
         Expr::Call { .. }

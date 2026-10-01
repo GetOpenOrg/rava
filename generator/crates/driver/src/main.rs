@@ -10,6 +10,7 @@ mod build_cmd;
 mod build_libs;
 mod build_opts;
 mod closure_cmd;
+mod closure_run;
 mod dump;
 
 use std::path::PathBuf;

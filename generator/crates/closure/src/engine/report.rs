@@ -15,6 +15,7 @@ impl<'a> Engine<'a> {
                 groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
             }
         }
+        let um = self.unmodeled();
         let mut out = Vec::new();
         for (key, group) in groups {
             let clones: Vec<usize> = group.iter().map(|(i, _)| *i).collect();
@@ -26,7 +27,7 @@ impl<'a> Engine<'a> {
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
             self.dead_catches(code, &mut f);
-            f.null_recv = self.null_recv(&clones);
+            f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
@@ -345,7 +346,7 @@ impl<'a> Engine<'a> {
         self.methods
             .values()
             .enumerate()
-            .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_hwobj_method(*i))
+            .filter(|(i, m)| self.mbase[&m.key] == *i && !self.is_pseudo_method(*i))
             .map(|(_, m)| m)
     }
 
@@ -385,11 +386,11 @@ impl<'a> Engine<'a> {
         let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
         let mut ids: HashMap<(usize, u32), BTreeSet<usize>> = HashMap::default();
         for ((m, off), ts) in &self.dispatch {
-            if self.is_hwobj_method(*m) {
+            if self.is_pseudo_method(*m) {
                 continue;
             }
             let e = ids.entry((canon[*m], *off)).or_default();
-            e.extend(ts.iter().filter(|t| !self.is_hwobj_method(**t)).map(|&t| canon[t]));
+            e.extend(ts.iter().filter(|t| !self.is_pseudo_method(**t)).map(|&t| canon[t]));
         }
         let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
         for ((m, off), hs) in &self.hub_sites {

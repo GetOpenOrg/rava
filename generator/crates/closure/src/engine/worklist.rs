@@ -196,6 +196,7 @@ impl<'a> Engine<'a> {
         match self.methods[m].kind {
             Kind::Bytecode => self.process_bytecode(m),
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
+            Kind::Handwritten(VMHOOK_KIND) => self.process_vm_hook(m),
             Kind::Handwritten(_) => self.process_handwritten(m),
             Kind::Abstract | Kind::Missing => {}
         }
@@ -228,16 +229,33 @@ impl<'a> Engine<'a> {
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let mirrors = self.param_mirror_sets(m);
-        let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
-        let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
-        if self.cold_cut {
-            let cold = crate::cold::doomed(code);
-            let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
-            a.events.retain(|(off, _)| hot.contains(off));
-        }
-        let a = Rc::new(a);
+        // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）
+        let closing = self.ctx.noreturn.borrow().closing();
+        let reuse = if closing { None } else { self.shared_analysis(&key, &params, &mirrors) };
+        let a = if let Some((a, deps)) = reuse {
+            self.share_join(m, &a, &deps);
+            a
+        } else {
+            let entry = (!closing).then(|| (params.clone(), mirrors.clone()));
+            *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
+            let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
+            let deps = self.ctx.dep_log.borrow_mut().take();
+            if self.cold_cut {
+                let cold = crate::cold::doomed(code);
+                let hot: HashSet<u32> = code.insns.iter().zip(&cold).filter(|(_, c)| !**c).map(|(x, _)| x.offset).collect();
+                a.events.retain(|(off, _)| hot.contains(off));
+            }
+            // 摘要常驻到下次失效（读者重跑 / 重分析按偏移比对都要用），收掉构建期的余量
+            a.events.shrink_to_fit();
+            let a = Rc::new(a);
+            if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
+                self.share_record(m, params, mirrors, &a, deps);
+            }
+            a
+        };
         self.stat_leave();
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);
@@ -258,6 +276,7 @@ impl<'a> Engine<'a> {
             self.mirror_watch.entry(Node::P(m, *i)).or_default().insert((m, cid));
         }
         self.methods[m].analysis = Some(a.clone());
+        self.methods[m].aseq = self.methods[m].aseq.wrapping_add(1);
         self.nr_end(m);
         Some(a)
     }
@@ -273,11 +292,8 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.hub_lsent.get_mut(&m) {
             d.retain(|k| !offs.contains(&k.0));
         }
-        if let Some(d) = self.hub_ssent.get_mut(&m) {
-            d.retain(|k, _| !offs.contains(&k.0));
-        }
         if let Some(d) = self.recv_done.get_mut(&m) {
-            d.retain(|k| !offs.contains(&k.0));
+            d.retain(|o, _| !offs.contains(o));
         }
         if let Some(d) = self.lambda_done.get_mut(&m) {
             for off in offs {
@@ -293,7 +309,6 @@ impl<'a> Engine<'a> {
         self.dispatched.remove(&m);
         self.hub_linked.remove(&m);
         self.hub_lsent.remove(&m);
-        self.hub_ssent.remove(&m);
         self.recv_done.remove(&m);
         for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
             for (_, id) in at {

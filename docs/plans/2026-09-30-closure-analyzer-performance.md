@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。待做：P3 上下文共享、P4 内存、W→E 扇出，P5–P8（预算降级、跨测试缓存、并行、工程化）随后。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
+> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；P6 整体结果缓存（`closure-p6`，§4.8）✅，同输入重跑分析段 24–29 ms；待做：P5 / P7 / P8（预算降级、并行、工程化，另分担冷路径 DeepCopy ≤ 2 s）。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
 
 ---
 
@@ -36,7 +36,8 @@
 |---|---:|---:|
 | e2e 语料任一测试闭包分析墙钟 | 最坏 174 s | **≤ 10 s**（HelloWorld ≤ 0.5 s） |
 | e2e 语料任一测试峰值 RSS | 最坏 5.6 GB | **≤ 1 GB** |
-| 跨测试缓存命中时单测试墙钟 | 无缓存 | **≤ 2 s** |
+| 同输入重跑（缓存命中）分析段墙钟 | 无缓存 | **≤ 0.3 s**（P6） |
+| DeepCopy 冷启动分析墙钟 | 5.1 s | **≤ 2 s**（P5 / P7 / P8 分担，§4.8） |
 | 超预算时被系统杀进程 | 可能 | **0**（预算内降级或带诊断退出） |
 | 输出确定性 | 双种子脚本人工跑 | 双种子一致纳入 CI 必过 |
 | 库代码 `unwrap` / `expect` / `panic!` | 24 处（classfile / resolve / closure） | **0**（`Result` + 上下文） |
@@ -55,10 +56,10 @@
 | **P2 增量重分析** | 按 P0 数据选定：失效按「方法内依赖该字段 / 返回值的站点」精确重跑，替代整方法重分析；同一轮内的失效合并后一次处理；工作队列按调用图 SCC 逆拓扑序 | 输出逐字节一致；DeepCopy 重分析总次数与墙钟下降到 Digester 同量级（按上下文数线性） |
 | **P3 上下文共享** | 入口抽象状态相同的上下文合并复用摘要；`TypeSet` / `PV` 哈希驻留（相同值集共享一份）；上下文克隆只在容器 / 工厂 / 转发等需要处发生（现有判定收拢为单一策略点） | 输出逐字节一致（若合并规则改变形态：动态对照漏覆盖 0、类集不增） |
 | **P4 内存** | 方法摘要产出后释放逐指令帧（需要时重算）；阶段性 arena；评估 mimalloc 作为全局分配器 | 基准集峰值 RSS ≤ 1 GB |
-| **P5 预算与降级** | `--max-mem <MB>` / `--time-budget <s>`：计数型全局分配器；逼近上限时剩余方法降为上下文不敏感（结果仍健全，只是更粗），summary 标记 `degraded` 与触发点；硬上限处带诊断退出（非系统 OOM）。`rava build` 缺省预算按机器内存推导 | 人为设低预算：输出 ⊇ 无预算输出、动态对照漏覆盖 0、进程不被杀 |
-| **P6 跨测试缓存** | 缓存键 =（jmod 集合哈希、`runtime/` 清单哈希、分析器版本）；第一层缓存已解码类与方法 CFG；第二层缓存 JDK 方法摘要，用户类增量分析；缓存目录在 `build/`，损坏即重建 | 命中时输出与冷启动逐字节一致；命中墙钟 ≤ 2 s |
-| **P7 并行** | 类解码 / CFG 预构建并行；不动点主循环保持单线程（确定性优先） | 输出逐字节一致；双种子一致 |
-| **P8 工程化** | `unwrap` / `panic` 清零；规则单测补齐；27 例闭包快照测试（变化须审查）；清单 schema 校验；`engine.rs` 等超长文件拆分；classfile 解析器 `cargo-fuzz`；双种子确定性与 Linux / macOS 双平台纳入 CI | §二 对应指标达成 |
+| **P5 预算与降级** | 另承担冷路径的流传播段：DeepCopy `flows` 1.21 s → **≤ 0.4 s**（差量传播与汇聚点批量，§4.8）；`--max-mem <MB>` / `--time-budget <s>`：计数型全局分配器；逼近上限时剩余方法降为上下文不敏感（结果仍健全，只是更粗），summary 标记 `degraded` 与触发点；硬上限处带诊断退出（非系统 OOM）。`rava build` 缺省预算按机器内存推导 | 人为设低预算：输出 ⊇ 无预算输出、动态对照漏覆盖 0、进程不被杀 |
+| **P6 整体结果缓存** | 键 = 分析的全部输入（分析器可执行文件内容、JDK jmods 与镜像目录、`runtime/java_runtime` 全部文件、用户类与 `--lib` 内容、全部影响结果的参数、条目格式与 closure.json 版本）；值 = closure.json 值 + 分析期诊断行；`--closure-cache <目录>`，`main.py` 缺省 `build/closure_cache/`。原计划的两层缓存（已解码类、JDK 方法摘要）按实测「不实施」，见 §4.8 | 任一输入变化不命中；损坏删除重建；写入中断可恢复；命中 closure.json 与冷算逐字节一致（计时字段除外，27 例）；同测试第二次分析段 ≤ 0.3 s |
+| **P7 并行** | 另承担冷路径的站点重跑与方法体分析：DeepCopy `sites` 1.54 s → **≤ 0.5 s**、`analyze` + `aux_analyze` 1.14 s → **≤ 0.4 s**（按方法分片并行、确定性合并，§4.8）；类解码 / CFG 预构建并行；不动点主循环保持单线程（确定性优先） | 输出逐字节一致；双种子一致 |
+| **P8 工程化** | 另承担冷路径的建图段：DeepCopy `process` 1.18 s → **≤ 0.4 s**（§4.8）；`unwrap` / `panic` 清零；规则单测补齐；27 例闭包快照测试（变化须审查）；清单 schema 校验；`engine.rs` 等超长文件拆分；classfile 解析器 `cargo-fuzz`；双种子确定性与 Linux / macOS 双平台纳入 CI | §二 对应指标达成 |
 
 顺序：P0 必须先做（后续取舍依赖数据）；P1 → P2 → P3 → P4 按收益；P5 在 P4 之后（先把常态压到预算内，降级只兜底）；P6 / P7 / P8 可在 P2 之后穿插。
 
@@ -231,6 +232,134 @@
 - 常量表签名读取在尚无常量表接收者时会落到其它策略。若这时经被调方常量推出名字，读取之后再变成 `partial` 时，这些名字不会撤回。
   - 名字只增不减，所以结果仍健全，但可能不是最小。
 - 其它依赖 `pvals` 乐观值的判定不在本次范围。
+
+### 4.7 P3 上下文共享、P4 内存、W→E 扇出（`closure-mono` 第二轮，2026-10-01）
+
+**计量口径**（584a8916）：
+
+- 内存一律取物理占用 footprint（`summary.perf.peak_mem_mb`；`/usr/bin/time -l` 的 peak memory footprint），CPU 取 instructions retired。墙钟只作参考。
+- 此前 DeepCopy 的 maxrss 在 1276–2097 MB 之间抖动。根因是 macOS 的 maxrss 不计被内存压缩器收走的页，内存压力越大读数越低；同一时期 footprint 稳定在 2128–2183 MB。
+- 本节数字都在全机锁（`heavy_lock.py`）内测得，期间没有其它重进程争用。DeepCopy footprint 复测落在 649–685 MB，读数稳定。
+
+**逐步实测**（DeepCopy，release，批量 64 / 种子 0）：
+
+| 步骤 | 提交 | footprint MB | 指令 G | 说明 |
+|---|---|---:|---:|---|
+| 起点（合入 prec3 后） | 46fe88a1 | 965 | — | |
+| 子类型判定缓存改为两位位图 | 23a78e07 | 902 | — | |
+| `IdSet` 内联压到 24 B | 1dc941c1 | 871 | — | |
+| 流边去重只收高出度源 | 9103382f | 860 | — | |
+| 高出度去重改为出边下标哈希表 | 4e47ca01 | 843 | — | |
+| P3 上下文共享摘要 | 3ffe1eed | 764–775 | 79.8 | 摘要复用 23 960 次；analyze 阶段 1156 → 723 ms |
+| P3 克隆上下文选择收拢到 `ctxsel.rs` | ea5beac2 | 775 | 79.7 | 纯结构调整，统计逐项不变 |
+| P3 TypeSet 按内容哈希驻留（`setstore.rs`） | d882bccd | 685 | 80.4 | |
+| P4 枢纽重放按祖先链判定，去掉 `hub_ssent` | 43b20741 | 669 | 79.6 | |
+| P4 `recv_done` 改为按站点的升序表 | 59f8385b | 652 | 80.5 | |
+
+同期其它用例（d882bccd）：Digester 440 MB，CollectorsDemo 351 MB。终态目标「峰值 ≤ 1 GB」已达成。
+
+**各步验收**：
+
+- 每一步都在 HelloWorld / Digester / CollectorsDemo / DeepCopy / TestClassForName / TestForNameInit 上跑批量 64 × 种子 0 与批量 1 × 种子 99 两组配置。两组都与合并基线比对：类、方法、派发、折叠、事实集合全部 SAME。
+- ea5beac2、43b20741、59f8385b 三步的 `flow_edges`、`pushes_by_kind`、`shared_analyses` 等统计与上一步逐项相同，只有计时字段不同。
+- `dyn_compare` 在 d882bccd 上 6 例漏覆盖均为 0。
+
+**P3 上下文共享**（3ffe1eed，`engine/share.rs`）：
+
+- 方法体的抽象解释只取决于三样东西：
+  - 方法本身；
+  - 入口形参常量 `pvals`；
+  - Class 形参的镜像集。
+- 全局事实的读取都已按被分析上下文登记依赖（`fdeps` / `rdeps` / `never` / `pdeps`）。
+- 因此入口状态相同、并且摘要仍被某个上下文有效持有时，新上下文直接共享这份摘要（`Rc`），同时原样重放依赖。之后任何一条依赖触发，全部持有者一起失效。
+- 收尾阶段（`NoReturn::closing`）的「尚无返回」答复有时效性，所以这一阶段既不复用摘要，也不登记依赖。
+- 实测：DeepCopy 共 29 923 个上下文，不同的入口状态只有 9 866 种。
+
+**P3 克隆上下文选择单点化**（ea5beac2，`engine/ctxsel.rs`）：
+
+- 接收者上下文 `recv_ctx` 和静态 / lambda / 句柄调用上下文 `static_ctx(Call::{Invoke, Lambda, Handle, Eager})` 收拢到同一个文件。
+- 此前这些逻辑分散在 `classes.rs`、`selector.rs`、`forward.rs`、`engine.rs` 四处。
+
+**P3 TypeSet 驻留**（d882bccd，`engine/setstore.rs`）：
+
+- 每个节点持有 `Rc<TypeSet>`，另维护一个加法内容哈希（元素哈希之和，增量更新）。
+- 增长时先在驻留表里查找增长后的内容，比对元素数与子集关系，查找本身不需要克隆：
+  - 命中则共享表里的集合；
+  - 未命中、且只有本节点和表持有（引用计数为 2）时，原地增长。
+- 表长每翻倍一次，清扫只剩表自身引用的项。
+- 实测 DeepCopy：写入 1.52 M 次，命中 1.45 M 次，不同集合约 15 k 个；`graph.sets` 从 83 MB 降到 9.8 MB。
+- 先后试过两种更简单的做法，都放弃了：
+  - 周期性压缩：压缩后写时又各自克隆，占用不降；
+  - 每次写入都驻留、命中前先克隆：指令 +10%。
+
+**P4**：
+
+- **按指令的帧**：分析器本来就只保留合流点的帧，逐条指令的帧用完即丢，「释放逐指令帧」已经成立，无需改动。
+- **枢纽重放去重**（43b20741）：
+  - 精确枢纽展开后，其目标列表即为终值；子枢纽的 `special` 列表以父枢纽的同名列表为前缀。
+  - 站点若已链接过某个祖先枢纽，且该祖先的 `special[t]` 覆盖待重放的接收者集，就跳过重放。
+  - 由此删去按站点记录的 `hub_ssent`（DeepCopy 约 21 MB）。
+- **`recv_done`**（59f8385b）：
+  - 由「站点 → 哈希集」改为「站点 → 升序 `Vec<u32>`」，两个哨兵值 `FIELD_STATIC`、`FIELD_OTHER` 同在表内。
+  - 实测 2.24 M 项分布在 106 k 个站点上，其中 2.1 M 项集中在对象数 ≥ 64 的站点。按升序表二分插入，指令约 +1%。
+- **mimalloc**：保留。系统分配器 A/B 实测 footprint +100 MB、指令 +25%。
+- **剩余占用**（d882bccd 后按「逐项 drop」测量，DeepCopy 存活约 486 MB）：
+
+  | 项 | MB |
+  |---|---:|
+  | classpath.cache | 113 |
+  | methods | 66 |
+  | edges | 32 |
+  | recv_done | 31 |
+  | seen | 30 |
+  | hubs | 23 |
+  | pstr | 22 |
+  | hub_ssent（已删） | 21 |
+  | dispatch | 15 |
+  | watch | 13 |
+  | fmemo | 12.5 |
+  | delta | 12 |
+
+  - classpath.cache 是解析后的类文件，其中 `Insn` 每条 96 B，属于 input crate 的表示问题，不在本节范围。
+  - 单项 ≤ 15 MB 的条目已到收益递减区。
+
+**PV 哈希驻留**：`pvals` 总计约 4.8 MB，驻留的收益上限即为此数，只作记录，不实施。
+
+**W→E 扇出**（结构化 `hw_site_arrays`）：DeepCopy 实测只有 1906 条边、61 k 次推送，在总推送量中占比可以忽略，价值低，不实施。
+
+### 4.8 P6 整体结果缓存（`closure-p6`，2026-10-01）
+
+**原计划两层缓存的实测（持锁，release）——均「不实施」**：
+
+- 第一层（已解码类）：类解码只占总耗时 1–3%。HelloWorld 488 类 48 ms / 总 0.24 s，Digester 1434 类 97 ms / 3.3 s，
+  CollectorsDemo 1194 类 42 ms / 2.2 s，DeepCopy 1832 类 72 ms / 5.1 s。class 格式本身已接近反序列化格式，
+  换成缓存的解码结果读回也是同一量级；分析器不建 CFG（cfg crate 只在生成器用）。
+- 第二层（JDK 方法摘要）：收益上限约 22%。DeepCopy 5.1 s 中方法体分析（`analyze` 0.56 + `aux_analyze` 0.58）合计 1.14 s，
+  其余约 4 s 是整程序不动点（`process` 1.18、`sites` 1.54、`flows` 1.21 s），JDK 节点的内容取决于用户代码流入什么，
+  没有跨测试可复用的单元；摘要全部命中 DeepCopy 仍约 4 s。各测试共有的前缀状态（种子部分）规模约一个 HelloWorld，热启动只省约 0.15 s。
+- 跨测试复用不再追求；跨测试摘要命中率不测。
+
+**终态：整体结果缓存**（`closure::cache`，驱动侧 `driver/src/closure_run.rs`）：
+
+- 键：128 位分帧流式指纹，覆盖条目格式版本、`FOLDS_VERSION`、分析器可执行文件内容、类路径全部档案（加入序、来源角色、路径与内容）、
+  `runtime_dir` 全部文件、`Input` 每个字段（解构穷举，新增字段不进键即编译失败）、内部表哈希初值、命令行放行项。
+  分析器不读环境变量，JDK 位置等环境项都经命令行化为档案路径。
+- 条目：`<键>.entry`，头部带格式、键、载荷长度与摘要；先写临时文件再改名；任一校验不过即删除并冷算重写；遗留超过 1 h 的临时文件下次写入时清掉；
+  总量超过 `--closure-cache-max-mb`（缺省 4096）按修改时间淘汰。
+- 命中：诊断行原样重放，事实经 `ClosureFacts::from_json` 交给发射；冷算且启用缓存时总校验 `from_json` 与 `from_closure` 一致，
+  保证命中与冷算交给发射的事实相同。`--trace-class`（`rava closure` 的 `--why` / `--flows` / `--report`）需引擎本体，不读缓存。
+- 单测（`closure/src/cache/tests.rs`）：任一输入变化不命中、损坏（截断 / 翻位 / 空 / 缺头 / 错键 / 错格式）删除重建、写入中断恢复、往返逐字节一致、淘汰。
+
+**冷路径不因缓存放弃**：未跑过的测试、改过的用户代码、改过的分析器都走冷分析。DeepCopy 冷启动终态 **≤ 2 s**，分担为
+P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `aux_analyze` 1.14 → ≤ 0.4 s、P8 `process` 1.18 → ≤ 0.4 s，其余阶段合计 ≤ 0.3 s。
+
+**验收**（持锁，release，并入 rust-closure-analyzer 3c7ca8e6 后复跑，基线为 3c7ca8e6 的 27 例生成树）：
+
+- 27 例：清空缓存后冷算树与基线 `compare_trees` 全 0、raw-audit 一致；再跑一遍全部命中，命中树与冷算树全 0；
+  closure.json 剔除 `summary.elapsed_ms` / `summary.perf` 后 27 例逐字节一致（`elapsed_ms` 之前的原文前缀亦逐字节一致）。
+- 命中分析段（键计算 + 读条目 + 校验 + 解析）24–29 ms，27 例全部命中，缓存目录 28 条共 23 MB。
+- DeepCopy（`rava build --perf`）：`closure` 阶段冷 5110 ms / 命中 33 ms；整次 `--no-run` 墙钟 6.34 → 1.12 s，最大 RSS 687 → 372 MB。
+- 单测：`cargo test -p closure -p input -p emit -p driver` 全过（cache 6 项，build_opts 新增 `closure_cache_options`）。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
