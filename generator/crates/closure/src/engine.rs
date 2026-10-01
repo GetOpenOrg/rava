@@ -48,6 +48,7 @@ mod hw_mem;
 mod hw_syntax;
 mod hw_infer;
 mod hwobj;
+mod vmhook;
 mod report;
 mod diag;
 mod seeds;
@@ -87,6 +88,7 @@ use fold::*;
 pub use sets::*;
 pub use idset::{IdIter, IdSet};
 use hwobj::{HwObj, HWOBJ_KIND};
+use vmhook::VMHOOK_KIND;
 
 
 /// 精确接收者达到此数时经集合枢纽派发
@@ -372,6 +374,8 @@ struct Lambda {
     site: (usize, u32),
     ctx: u32,
     iface: String,
+    /// `altMetafactory` 附加实现的接口（序列化标记 / 标记接口），参与子类型判定
+    markers: Vec<String>,
     sam: String,
     imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）
@@ -589,6 +593,7 @@ impl<'a> Engine<'a> {
         }
         self.hubs_grow(id);
         self.reopen(id);
+        self.vm_hooks_on_alloc(id);
         let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {

@@ -162,6 +162,8 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
       - runtime/java_runtime/Cargo.toml → 重写宏依赖为 runtime/ 绝对路径
         （宏 crate 不复制：绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，
          syn/quote/宏的编译缓存可跨测试复用）
+      - runtime/java_meta/** → scratch/java_meta/**（反射元数据表 crate，全部手写：
+        整体镜像，包版本唯一化，真源已无的文件删除）
       - java/ jdk/ sun/ 顶层目录保证存在且含占位 mod.rs
         （lib.rs 手写了 `pub mod java; jdk; sun;`，目录缺失会 E0583；
          codegen 在有生成类时会覆写占位文件）
@@ -192,6 +194,27 @@ def prepare_scratch(out_dir: str, clean: bool = False) -> None:
         f'version = "{scratch_pkg_version(out_dir)}"')
     os.makedirs(os.path.join(out_dir, 'java_runtime'), exist_ok=True)
     _write_if_changed(os.path.join(out_dir, 'java_runtime', 'Cargo.toml'), cargo_toml)
+
+    meta_src = os.path.join(os.path.dirname(RUNTIME_JAVA_RUNTIME), 'java_meta')
+    meta_dst = os.path.join(out_dir, 'java_meta')
+    for root, _dirs, files in os.walk(meta_src):
+        for fname in files:
+            rel = os.path.relpath(os.path.join(root, fname), meta_src)
+            if rel == 'Cargo.toml':
+                os.makedirs(meta_dst, exist_ok=True)
+                meta_toml = open(os.path.join(meta_src, rel), encoding='utf-8').read()
+                _write_if_changed(os.path.join(meta_dst, rel), meta_toml.replace(
+                    'version = "0.1.0"', f'version = "{scratch_pkg_version(out_dir)}"'))
+            else:
+                _copy_if_changed_file(os.path.join(root, fname), os.path.join(meta_dst, rel))
+    for root, _dirs, files in os.walk(meta_dst):
+        for fname in files:
+            rel = os.path.relpath(os.path.join(root, fname), meta_dst)
+            if not os.path.exists(os.path.join(meta_src, rel)):
+                os.remove(os.path.join(root, fname))
+    for root, _dirs, _files in os.walk(meta_dst, topdown=False):
+        if root != meta_dst and not os.listdir(root):
+            os.rmdir(root)
 
     # lib.rs 声明的顶层包目录兜底（占位 mod.rs，codegen 有生成类时覆写）
     for pkg in ('java', 'jdk', 'sun'):

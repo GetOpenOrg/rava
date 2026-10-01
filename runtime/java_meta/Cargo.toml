@@ -1,0 +1,17 @@
+[package]
+name = "java_meta"
+version = "0.1.0"
+edition = "2021"
+# 构建脚本扫描整个 workspace 的 java_class! 属性造反射元数据表（按职责分模块，入口 build_script/main.rs）
+build = "build_script/main.rs"
+
+[lib]
+name = "java_meta"
+path = "src/lib.rs"
+
+[dependencies]
+# 表元素类型（java_runtime::meta）；java_runtime 不反向依赖本 crate，以导出符号读取表
+java_runtime = { path = "../java_runtime" }
+
+[lints.rust]
+non_upper_case_globals = "allow"

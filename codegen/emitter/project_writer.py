@@ -133,6 +133,7 @@ def _append_cargo_bin(user_dir: str, bin_name: str, bin_src: str) -> None:
         f'version = "{_scratch_pkg_version(user_dir)}"', 'edition = "2021"', '',
         '[dependencies]',
         'java_runtime    = { path = "../java_runtime" }',
+        'java_meta       = { path = "../java_meta" }',
         f'rava_macros = {{ path = "{_MACROS_CRATE}" }}',
         '',
     ])
@@ -893,6 +894,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
             *path_decls,
             f'use {use_path};',
+            'use java_meta as _;',
             '',
             'fn main() {',
             *([hook_block] if hook_block else []),
@@ -908,6 +910,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
             '#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]',
             *[_user_mod_decl(user_src, m, '') for m in top_user_mods],
             f'use {use_path};',
+            'use java_meta as _;',
             '',
             'fn main() {',
             *([hook_block] if hook_block else []),
@@ -918,6 +921,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
         _write(os.path.join(user_src, 'main.rs'), '\n'.join(main_lines))
         _user_dep_lines = [
             'java_runtime    = { path = "../java_runtime" }',
+            'java_meta       = { path = "../java_meta" }',
             f'rava_macros = {{ path = "{_MACROS_CRATE}" }}',
         ]
         # lib 模式：用户 bin crate 消费全部 lib crate（jar 输入的交付形态）
@@ -956,7 +960,7 @@ def write_cargo_project(out_dir: str, class_infos: list[ClassInfo],
     # 5. scratch workspace 根 Cargo.toml（幂等，每次覆写相同内容）
     #    rava_macros 不复制进 scratch，作为 runtime/ 的 path 依赖参与编译
     #    （绝对路径稳定 → 共享 CARGO_TARGET_DIR 下指纹不变，宏与 syn/quote 缓存命中）
-    _members = ['java_runtime', *(lib_crate_classes or {}), 'user']
+    _members = ['java_runtime', 'java_meta', *(lib_crate_classes or {}), 'user']
     _write(os.path.join(out_dir, 'Cargo.toml'), '\n'.join([
         '[workspace]',
         'members = ' + repr(_members).replace("'", '"'),

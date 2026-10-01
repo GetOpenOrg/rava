@@ -417,19 +417,19 @@ def _gen_invokespecial(sim: StackSim, comment: str, class_name: str, registry: d
         # _sp_owner/_owner_short 已在 sig_params 重建段解析（本函数前部）
         rust_mname = _safe_field(_mangle_if_overloaded(_owner_short or '', mname, comment, registry))
         base_fn = f"{_owner_short}__{rust_mname}_base"
-        # base 函数的泛型形参 = 声明类的类型形参 + 接收者类型；实参不提及声明类类型形参时
+        # base 函数的泛型形参 = 声明类的类型形参（接收者 `&dyn Owner__VTable` 不参与）；实参不提及声明类类型形参时
         # （onCompletion(CountedCompleter<?>)）无处可推断（E0283）→ 按本类视角的祖先实参显式给出
         if _self_ci is not None and _owner_short != short_cls(class_name):
             from ..type_args import ancestor_vtable_args_by_short as _anc_args_by_short
             _owner_targs = _anc_args_by_short(_self_ci, _self_ty, registry).get(_owner_short, '')
             if _owner_targs:
-                base_fn += f"::{_owner_targs[:-1]}, _>"
+                base_fn += f"::{_owner_targs}"
         elif (_self_ci is not None and _owner_short == short_cls(class_name)
                 and sim.class_type_params):
             # 同类泛型 base 调用（私有成员经 invokespecial 自调用，如
             # CombinableMatcher.templatedListWith）：base 函数的类形参在 this
             # 擦除形态上不可推断（E0283）→ 按当前 impl 的类型形参显式给出
-            base_fn += f"::<{', '.join(sim.class_type_params)}, _>"
+            base_fn += f"::<{', '.join(sim.class_type_params)}>"
         # base 函数首参是 vtable 引用：宏（rewrite.rs）把字面 this/self 接收者
         # 重写为 `&*this.vtable`；非 this 接收者（synthetic access$ 桥的参数局部，
         # access$100 实证）宏不重写——此处按同一形态发射。

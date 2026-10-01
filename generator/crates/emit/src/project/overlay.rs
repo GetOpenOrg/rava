@@ -5,7 +5,9 @@
 //! - scratch 中 runtime/ 已删除的手写文件在 mod 树阶段清扫（[`super::mod_tree`] `sweep_stale`：
 //!   须在本轮写出之后判定，否则本轮生成的无标记文件会被先删后写）；
 //! - `build.rs` 原样复制；`Cargo.toml` 宏依赖改绝对路径、包版本唯一化；
-//! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs。
+//! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs；
+//! - `runtime/java_meta/`（反射元数据表 crate，全部手写、无生成文件）整体镜像到
+//!   `<scratch>/java_meta/`：包版本唯一化，scratch 中真源已无的文件删除。
 
 use std::path::Path;
 
@@ -67,6 +69,51 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
         let m = d.join("mod.rs");
         if !m.exists() {
             std::fs::write(&m, EMPTY_PKG_MOD).map_err(|e| io_err(&m.display().to_string(), e))?;
+        }
+    }
+    let meta_src = runtime_dir.parent().unwrap_or(Path::new("")).join("java_meta");
+    mirror_meta_crate(&meta_src, &out_dir.join("java_meta"), &scratch_pkg_version(out_dir))
+}
+
+/// `runtime/java_meta` → `<scratch>/java_meta`：逐文件复制（内容相同跳过），`Cargo.toml` 包版本
+/// 唯一化；目标侧真源已无的文件删除（本 crate 无生成文件，镜像即真源）
+fn mirror_meta_crate(src: &Path, dst: &Path, version: &str) -> Result<()> {
+    if !src.join("Cargo.toml").is_file() {
+        return Err(io_err(
+            &src.display().to_string(),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "java_meta crate 缺失"),
+        ));
+    }
+    let mut kept = std::collections::BTreeSet::new();
+    for (dir, _, files) in walk(src) {
+        let rel = dir.strip_prefix(src).unwrap_or(Path::new(""));
+        for f in files {
+            let (from, to) = (dir.join(&f), dst.join(rel).join(&f));
+            if rel.as_os_str().is_empty() && f == "Cargo.toml" {
+                let text = std::fs::read_to_string(&from).map_err(|e| io_err(&from.display().to_string(), e))?;
+                std::fs::create_dir_all(dst).map_err(|e| io_err(&dst.display().to_string(), e))?;
+                write_if_changed(&to, &text.replace("version = \"0.1.0\"", &format!("version = \"{version}\"")))?;
+            } else {
+                copy_if_changed(&from, &to)?;
+            }
+            kept.insert(to);
+        }
+    }
+    for (dir, _, files) in walk(dst) {
+        for f in files {
+            let p = dir.join(&f);
+            if !kept.contains(&p) {
+                std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
+            }
+        }
+    }
+    // 真源已无的目录：删文件后剩下的空目录自底向上移除
+    let mut dirs: Vec<_> = walk(dst).into_iter().map(|(d, _, _)| d).filter(|d| d != dst).collect();
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for d in dirs {
+        let empty = std::fs::read_dir(&d).map(|mut it| it.next().is_none()).unwrap_or(false);
+        if empty {
+            std::fs::remove_dir(&d).map_err(|e| io_err(&d.display().to_string(), e))?;
         }
     }
     Ok(())
