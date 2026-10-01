@@ -1002,7 +1002,7 @@ null_recv 总数 62 → 39，`main` 的 null_recv 为空；dyn 漏 4 → 0（`Di
 测试由 a41c3961（Rust 生成器，DeepCopy E0381 修复）引入，断言 `pick` 的 `1 => {` 臂。夹具 `main` 只以常量 1 / 2 / 3 调 `pick(int)`，
 a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部克隆上不可达，生成器把 case 1 合为 `_ =>` 臂。实测 `rava build` 生成的
 `pick`：三臂都存储 `local_1`（`Clone::clone(&_t1)` / `Object::from(..)`），E0381 回归保护的语义仍在，只是臂标签变了。
-修法（不在本分支做）：夹具让 `k` 在调用点非常量（如取 `args.length + 1`），恢复 `1 =>` 臂。
+已修：夹具改为 `int k = args.length; pick(k + 1/2/3)`，选择子非常量，各臂（含 default）可达，`1 =>` 臂与三处存储断言恢复；测试通过（生成代码未改）。
 
 ## 七、验收
 
