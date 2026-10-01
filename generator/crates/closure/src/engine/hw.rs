@@ -195,6 +195,7 @@ impl<'a> Engine<'a> {
         }
         for u in &self.hw_upcalls(host, mh) {
             match u {
+                Upcall::Init(c) => self.init(c, via.clone()),
                 Upcall::Field(f) => {
                     let f = f.clone();
                     if !self.hw_static_reads.insert((m, f.clone())) {

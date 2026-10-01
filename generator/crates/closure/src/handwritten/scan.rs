@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use syn::visit::Visit;
 
+use super::stype::*;
 use super::syntax::*;
 use super::*;
 
@@ -84,7 +85,7 @@ fn local_ret(s: SType, rets: &LocalRets) -> SType {
     match s {
         SType::Ret(t, m) => match rets.get(&(t.0.clone(), m.clone())) {
             Some(r) => SType::Named(TypeRef(r.clone())),
-            None if super::syntax::is_ctor_name(&m) => SType::Named(t),
+            None if super::stype::is_ctor_name(&m) => SType::Named(t),
             None => SType::Ret(t, m),
         },
         SType::Field(b, f) => SType::Field(Box::new(local_ret(*b, rets)), f),
@@ -116,6 +117,7 @@ impl FileScan<'_> {
                 syn::FnArg::Typed(pt) => {
                     if let syn::Pat::Ident(pi) = &*pt.pat {
                         scope.insert(pi.ident.to_string(), type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))));
+                        scope.insert(elem_key(&pi.ident.to_string()), elem_type(&pt.ty).map(|p| SType::Named(TypeRef(p))));
                     }
                 }
             }
@@ -531,6 +533,35 @@ mod tests {
         let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
         assert_eq!(srecv("setMode"), Some(named(&["View"])));
         assert_eq!(srecv("show"), Some(named(&["Widget"])));
+    }
+
+    #[test]
+    fn container_elements() {
+        let src = r#"
+            impl Resources {
+                fn chain(names: &[Name], m: HashMap<Key, Bundle>, d: Decoder) {
+                    d.__get_in_().readAll()?;
+                    let mut chain: Vec<Bundle> = Vec::new();
+                    chain[0].setParent(Clone::clone(&chain[1]))?;
+                    for n in names.iter() { n.intern()?; }
+                    for b in &chain { b.close()?; }
+                    let first = chain[0].clone();
+                    first.reset()?;
+                    for (k, v) in m.iter() { v.drop_all()?; }
+                    let chain = 3; chain[0].stale()?;
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("chain").map(|i| i.calls).unwrap_or_default();
+        let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
+        assert_eq!(srecv("setParent"), Some(named(&["Bundle"])));
+        assert_eq!(srecv("intern"), Some(named(&["Name"])));
+        assert_eq!(srecv("close"), Some(named(&["Bundle"])));
+        assert_eq!(srecv("stale"), None);
+        assert_eq!(srecv("readAll"), Some(SType::Field(Box::new(named(&["Decoder"])), "in".into())));
     }
 
     #[test]

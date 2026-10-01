@@ -19,6 +19,7 @@ use classfile::MemberRef;
 mod hooks;
 mod objects;
 mod scan;
+mod stype;
 mod syntax;
 mod type_refs;
 mod units;
@@ -49,11 +50,15 @@ const RUST_KEYWORDS: &[&str] = &[
     "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 回调目标（由手写体调用点推断）：方法或静态字段
+/// 生成类的类初始化入口名（`T::__class_init()`：JVMS §5.5 主动初始化 T）
+pub(crate) const CLASS_INIT_RUST: &str = "__class_init";
+
+/// 回调目标（由手写体调用点推断）：方法、静态字段或类初始化
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Upcall {
     Method(MemberRef),
     Field(MemberRef),
+    Init(String),
 }
 
 /// Rust 类型路径（分段）→ binary name 候选（由调用方按类路径验证存在）

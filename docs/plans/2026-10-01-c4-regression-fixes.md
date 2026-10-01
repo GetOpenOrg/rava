@@ -70,7 +70,25 @@ DeepCopy、TestBmhDynamicSpecies、TestCtorReflect 在 59dbedc1 及其后两次�
 分类前的 DeepCopy 计数为 792 条，大头是与 Rust 标准方法同名的调用：map 54、get 43、collect 34、toString 32 等。
 分类后的计数与逐条说明待补。
 
-## 六、范围外
+## 六、集成头 52bf5311 的日期 / 区域与 IO / 反射回归（C6 步骤 2 引起）
+
+逐个对照 59dbedc1 删掉的声明与对应调用点，三类失败都是「声明删了、推断没接上」，不是 regress2 的提交引起的：
+
+| 现象 | 调用点 | 推断缺口 |
+|---|---|---|
+| 9 例命中 `ResourceBundle.setParent` 存根（DateTest、CalendarTask、Currency 等） | `locale_resources_impl.rs` `__bundle_chain`：`chain[i].setParent(…)`，`chain: Vec<ResourceBundle>` | 索引表达式没有静态类型，容器的元素类型丢失 |
+| FileIODemo 命中 `FileInputStream.read([BII)I` 存根 | `stream_decoder_impl.rs`：`self.__get_in_().read_arr_b_i_i(…)` | 字段名是 Rust 关键字时访问器带 `_` 后缀（`in` → `__get_in_`）；字段写入侧已还原，静态类型推导侧没有还原，按 `in_` 查字段查不到 |
+| FieldDemo 报 `JavaLangInvokeAccess.unreflectField` 接收者为 null，动态对照漏覆盖 28 | `shared_secrets_impl.rs`：`MethodHandleImpl::__class_init()` | 类初始化入口 `T::__class_init()` 没有对应的回调目标，`MethodHandleImpl.<clinit>` 不可达，SharedSecrets 槽位没有登记 |
+
+修法（推断补全，不加声明、不加种子）：
+- 容器元素类型：`elem_type` 取 `Vec<T>` / `HashMap<K, V>` 末个泛型实参、`[T]` / `[T; N]` 的元素；作用域以 `<变量名>[]` 为键记录
+  元素类型（来源为形参与带注解的 let），`v[i]` 的静态类型取它；`for x in v` / `&v` / `v.iter()` / `v.into_iter()` / `v.iter_mut()`
+  的 x 绑定元素类型；同名变量重新绑定时清掉元素类型。
+- 访问器字段名：`java_field_name` 统一把关键字后缀还原为 Java 字段名，静态类型推导、字段读写登记共用这一处。
+- 类初始化：`T::__class_init()` 推断为回调目标 `Upcall::Init(T)`，按 JVMS §5.5 主动初始化 T（超类链与 `<clinit>`）。
+- 静态类型推导从 `syntax.rs` 拆到 `handwritten/stype.rs`（文件行数约束）。
+
+## 七、范围外
 
 - 合并 c3e2b40c 后，precheck 的 `native-missing` 从 0 变为 18：涉及 `Module.addExports*0`、`Unsafe.get/put*Volatile` 等。
   只合并、不带步骤 2 的树上数值相同，所以不是 C6 引入的。这一项由 regress2 的 native 缺口任务覆盖。

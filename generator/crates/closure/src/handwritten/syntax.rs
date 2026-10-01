@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use syn::visit::Visit;
 
 use super::*;
+use super::stype::*;
 
 pub(super) fn path_segs(p: &syn::Path) -> Vec<String> {
     p.segments.iter().map(|s| s.ident.to_string()).collect()
@@ -34,7 +35,7 @@ pub(super) fn expand(uses: &HashMap<String, Vec<String>>, segs: Vec<String>) -> 
 const CAST_METHODS: [&str; 3] = ["try_cast", "try_checkcast", "catch_as"];
 
 /// 转换调用的目标类型路径（turbofish 单个类型实参）
-fn cast_target(m: &syn::ExprMethodCall) -> Option<Vec<String>> {
+pub(super) fn cast_target(m: &syn::ExprMethodCall) -> Option<Vec<String>> {
     if !CAST_METHODS.contains(&m.method.to_string().as_str()) {
         return None;
     }
@@ -180,80 +181,6 @@ pub(super) fn bind<T: PartialEq>(env: &mut HashMap<String, Option<T>>, name: Str
     }
 }
 
-/// 类型注解的路径（剥引用 / 括号；`Self` 原样保留，由解析时换成宿主类）
-pub(super) fn type_path(t: &syn::Type) -> Option<Vec<String>> {
-    match t {
-        syn::Type::Reference(r) => type_path(&r.elem),
-        syn::Type::Paren(p) => type_path(&p.elem),
-        syn::Type::Group(g) => type_path(&g.elem),
-        syn::Type::Path(p) if p.qself.is_none() => Some(path_segs(&p.path)),
-        _ => None,
-    }
-}
-
-/// 表达式的静态类型：形参 / let 注解、`T::default()` / `T::new*`、`T::m(…)` 的返回、`x.__get_f()` 的字段；
-/// 其余退回动态类型推断
-pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, locals: &HashMap<String, Option<Vec<String>>>) -> Option<SType> {
-    use syn::Expr;
-    let direct = match e {
-        Expr::Paren(p) => stype(&p.expr, statics, locals),
-        Expr::Group(g) => stype(&g.expr, statics, locals),
-        Expr::Reference(r) => stype(&r.expr, statics, locals),
-        Expr::Try(t) => stype(&t.expr, statics, locals),
-        Expr::Path(p) => p.path.get_ident().and_then(|i| statics.get(&i.to_string()).cloned().flatten()),
-        Expr::MethodCall(m) if cast_target(m).is_some() => cast_target(m).map(|t| SType::Named(TypeRef(t))),
-        Expr::MethodCall(m) => {
-            let name = m.method.to_string();
-            match name.strip_prefix(GET_PREFIX) {
-                Some(f) if m.args.is_empty() => stype(&m.receiver, statics, locals).map(|r| SType::Field(Box::new(r), f.to_string())),
-                _ if matches!(name.as_str(), "clone" | "unwrap" | "expect" | "unwrap_or_else" | "unwrap_or") => {
-                    stype(&m.receiver, statics, locals)
-                }
-                _ => stype(&m.receiver, statics, locals).map(|r| SType::Call(Box::new(r), name)),
-            }
-        }
-        Expr::Call(c) => match &*c.func {
-            Expr::Path(p) => {
-                let segs = expr_path_segs(p);
-                match segs.split_last() {
-                    Some((last, head)) if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) => {
-                        let t = TypeRef(head.to_vec());
-                        // `T::from(x)`：引用类型间转换即 checkcast，静态类型为 T。构造器形态的 `T::new*` 亦记为
-                        // `Ret`：本文件同名辅助 fn（`Self::new_format`）以声明的返回类型为准，否则取 T（见 scan::local_ret）
-                        Some(if last == "default" || last == "from" {
-                            SType::Named(t)
-                        } else {
-                            SType::Ret(t, last.clone())
-                        })
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-        _ => None,
-    };
-    direct.or_else(|| infer(e, locals).map(|t| SType::Named(TypeRef(t))))
-}
-
-/// 构造器的 Rust 名形态：`new` / `new_<签名>`
-pub(super) fn is_ctor_name(name: &str) -> bool {
-    name == CTOR_RUST || name.starts_with("new_")
-}
-
-pub(super) fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &Option<Vec<String>>) -> SType {
-    let tr = |t: TypeRef| match (t.0.as_slice(), self_ty) {
-        ([one], Some(st)) if one == "Self" => TypeRef(expand(uses, st.clone())),
-        _ => TypeRef(expand(uses, t.0)),
-    };
-    match s {
-        SType::Named(t) => SType::Named(tr(t)),
-        SType::Ret(t, m) => SType::Ret(tr(t), m),
-        SType::Field(b, f) => SType::Field(Box::new(expand_s(uses, *b, self_ty)), f),
-        SType::Call(b, m) => SType::Call(Box::new(expand_s(uses, *b, self_ty)), m),
-    }
-}
-
 /// 表达式的对象类型（语法推断；见 [`TypedCall`]）
 pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>) -> Option<Vec<String>> {
     use syn::Expr;
@@ -371,7 +298,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         };
         if let Some((f, write)) = access {
             // Java 字段名是 Rust 关键字时访问器带 `_` 后缀（`in` → `__set_in_`）
-            let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
+            let f = java_field_name(f);
             let value = m.args.first().and_then(|a| infer(a, self.locals));
             let on_self = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
             self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false));
@@ -393,7 +320,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 // static 字段写访问器 `T::set_<字段>(v)`（类型段首字母大写；关键字字段名带 `_` 后缀）
                 if let Some(f) = last.strip_prefix(STATIC_SET_PREFIX).filter(|_| c.args.len() == 1) {
                     if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) {
-                        let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).unwrap_or(f);
+                        let f = java_field_name(f);
                         let value = c.args.first().and_then(|a| infer(a, self.locals));
                         self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true));
                     }
@@ -437,10 +364,16 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
-    // for / while let / if let / match 分支的模式绑定只在其内有效
+    // for / while let / if let / match 分支的模式绑定只在其内有效；`for x in <容器>` 的 x 取容器元素类型
     fn visit_expr_for_loop(&mut self, e: &'ast syn::ExprForLoop) {
         let outer = (self.scope.clone(), self.fresh.clone());
-        syn::visit::visit_expr_for_loop(self, e);
+        self.visit_expr(&e.expr);
+        self.visit_pat(&e.pat);
+        if let syn::Pat::Ident(pi) = strip_type(&e.pat) {
+            let el = elem_stype(&e.expr, &self.scope);
+            self.scope.insert(pi.ident.to_string(), el);
+        }
+        self.visit_block(&e.body);
         (self.scope, self.fresh) = outer;
     }
 
@@ -497,6 +430,11 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 _ => l.init.as_ref().and_then(|i| stype(&i.expr, &self.scope, self.locals)),
             };
             self.scope.insert(pi.ident.to_string(), st);
+            let el = match &l.pat {
+                syn::Pat::Type(pt) => elem_type(&pt.ty).map(|p| SType::Named(TypeRef(p))),
+                _ => None,
+            };
+            self.scope.insert(elem_key(&pi.ident.to_string()), el);
             let name = pi.ident.to_string();
             let plain = matches!(strip_type(&l.pat), syn::Pat::Ident(_));
             match l.init.as_ref().filter(|i| plain && pi.mutability.is_none() && i.diverge.is_none()).and_then(|i| ctor_type(&i.expr)) {
@@ -513,6 +451,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
     // 模式绑定（闭包形参 / match / if let / for）遮蔽同名变量
     fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
         self.scope.insert(p.ident.to_string(), None);
+        self.scope.remove(&elem_key(&p.ident.to_string()));
         self.fresh.remove(&p.ident.to_string());
         syn::visit::visit_pat_ident(self, p);
     }

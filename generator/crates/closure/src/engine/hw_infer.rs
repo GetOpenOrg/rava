@@ -92,6 +92,10 @@ impl Engine<'_> {
                 _ => continue,
             };
             let Some(cls) = cls else { continue };
+            if want_static && c.args.is_empty() && c.name == crate::handwritten::CLASS_INIT_RUST {
+                out.insert(Upcall::Init(cls));
+                continue;
+            }
             let hits = self.methods_by_rust_name(&cls, &c.name, Some(c.args.len()));
             // 路径调用 `T::f()` 不是方法时是 static 字段读访问器（生成层 static 访问器名 = 字段名）：getstatic
             if hits.is_empty() && want_static && c.args.is_empty() {
