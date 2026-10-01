@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 上级计划：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（§七 终态指标「闭包计算耗时 ≤ 3s」只按 HelloWorld 定义，本文扩展到全量语料并补内存、健壮性指标）
-> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。待做：P3 上下文共享、P4 内存、W→E 扇出，P5–P8（预算降级、跨测试缓存、并行、工程化）随后。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
+> 状态（2026-10-01）：P0 ✅、P1 ✅（按数据改为图节点驻留，见 §4.4）、P2 ✅（保序常数优化，DeepCopy user 351 s → 130 s）；结构性改造（`closure-perf2`，§4.5）✅ 已合入；顺序依赖修复与批量排空（`closure-mono`，§4.6，集合结果与处理顺序无关，`--flow-batch` / `--hash-seed` 矩阵验收）✅ 已合入 6e0849c6，DeepCopy 59.5 s → 41.7 s / 2.3 GB；精度三期（`closure-prec3`）的数组汇聚与选择子克隆另把 DeepCopy 降到 6.8 s（✅ 已合入 d8212bee）。P3 上下文共享 / P4 内存 / W→E 扇出（`closure-mono` 第二轮，§4.7）✅，DeepCopy 物理占用 965 → 652 MB；待做：P5–P8（预算降级、跨测试缓存、并行、工程化）随后。不变量：集合一致、`via` / 顺序可变（用户 2026-09-30 同意）。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)。
 
 ---
 
@@ -231,6 +231,100 @@
 - 常量表签名读取在尚无常量表接收者时会落到其它策略。若这时经被调方常量推出名字，读取之后再变成 `partial` 时，这些名字不会撤回。
   - 名字只增不减，所以结果仍健全，但可能不是最小。
 - 其它依赖 `pvals` 乐观值的判定不在本次范围。
+
+### 4.7 P3 上下文共享、P4 内存、W→E 扇出（`closure-mono` 第二轮，2026-10-01）
+
+**计量口径**（584a8916）：
+
+- 内存一律取物理占用 footprint（`summary.perf.peak_mem_mb`；`/usr/bin/time -l` 的 peak memory footprint），CPU 取 instructions retired。墙钟只作参考。
+- 此前 DeepCopy 的 maxrss 在 1276–2097 MB 之间抖动。根因是 macOS 的 maxrss 不计被内存压缩器收走的页，内存压力越大读数越低；同一时期 footprint 稳定在 2128–2183 MB。
+- 本节数字都在全机锁（`heavy_lock.py`）内测得，期间没有其它重进程争用。DeepCopy footprint 复测落在 649–685 MB，读数稳定。
+
+**逐步实测**（DeepCopy，release，批量 64 / 种子 0）：
+
+| 步骤 | 提交 | footprint MB | 指令 G | 说明 |
+|---|---|---:|---:|---|
+| 起点（合入 prec3 后） | 46fe88a1 | 965 | — | |
+| 子类型判定缓存改为两位位图 | 23a78e07 | 902 | — | |
+| `IdSet` 内联压到 24 B | 1dc941c1 | 871 | — | |
+| 流边去重只收高出度源 | 9103382f | 860 | — | |
+| 高出度去重改为出边下标哈希表 | 4e47ca01 | 843 | — | |
+| P3 上下文共享摘要 | 3ffe1eed | 764–775 | 79.8 | 摘要复用 23 960 次；analyze 阶段 1156 → 723 ms |
+| P3 克隆上下文选择收拢到 `ctxsel.rs` | ea5beac2 | 775 | 79.7 | 纯结构调整，统计逐项不变 |
+| P3 TypeSet 按内容哈希驻留（`setstore.rs`） | d882bccd | 685 | 80.4 | |
+| P4 枢纽重放按祖先链判定，去掉 `hub_ssent` | 43b20741 | 669 | 79.6 | |
+| P4 `recv_done` 改为按站点的升序表 | 59f8385b | 652 | 80.5 | |
+
+同期其它用例（d882bccd）：Digester 440 MB，CollectorsDemo 351 MB。终态目标「峰值 ≤ 1 GB」已达成。
+
+**各步验收**：
+
+- 每一步都在 HelloWorld / Digester / CollectorsDemo / DeepCopy / TestClassForName / TestForNameInit 上跑批量 64 × 种子 0 与批量 1 × 种子 99 两组配置。两组都与合并基线比对：类、方法、派发、折叠、事实集合全部 SAME。
+- ea5beac2、43b20741、59f8385b 三步的 `flow_edges`、`pushes_by_kind`、`shared_analyses` 等统计与上一步逐项相同，只有计时字段不同。
+- `dyn_compare` 在 d882bccd 上 6 例漏覆盖均为 0。
+
+**P3 上下文共享**（3ffe1eed，`engine/share.rs`）：
+
+- 方法体的抽象解释只取决于三样东西：
+  - 方法本身；
+  - 入口形参常量 `pvals`；
+  - Class 形参的镜像集。
+- 全局事实的读取都已按被分析上下文登记依赖（`fdeps` / `rdeps` / `never` / `pdeps`）。
+- 因此入口状态相同、并且摘要仍被某个上下文有效持有时，新上下文直接共享这份摘要（`Rc`），同时原样重放依赖。之后任何一条依赖触发，全部持有者一起失效。
+- 收尾阶段（`NoReturn::closing`）的「尚无返回」答复有时效性，所以这一阶段既不复用摘要，也不登记依赖。
+- 实测：DeepCopy 共 29 923 个上下文，不同的入口状态只有 9 866 种。
+
+**P3 克隆上下文选择单点化**（ea5beac2，`engine/ctxsel.rs`）：
+
+- 接收者上下文 `recv_ctx` 和静态 / lambda / 句柄调用上下文 `static_ctx(Call::{Invoke, Lambda, Handle, Eager})` 收拢到同一个文件。
+- 此前这些逻辑分散在 `classes.rs`、`selector.rs`、`forward.rs`、`engine.rs` 四处。
+
+**P3 TypeSet 驻留**（d882bccd，`engine/setstore.rs`）：
+
+- 每个节点持有 `Rc<TypeSet>`，另维护一个加法内容哈希（元素哈希之和，增量更新）。
+- 增长时先在驻留表里查找增长后的内容，比对元素数与子集关系，查找本身不需要克隆：
+  - 命中则共享表里的集合；
+  - 未命中、且只有本节点和表持有（引用计数为 2）时，原地增长。
+- 表长每翻倍一次，清扫只剩表自身引用的项。
+- 实测 DeepCopy：写入 1.52 M 次，命中 1.45 M 次，不同集合约 15 k 个；`graph.sets` 从 83 MB 降到 9.8 MB。
+- 先后试过两种更简单的做法，都放弃了：
+  - 周期性压缩：压缩后写时又各自克隆，占用不降；
+  - 每次写入都驻留、命中前先克隆：指令 +10%。
+
+**P4**：
+
+- **按指令的帧**：分析器本来就只保留合流点的帧，逐条指令的帧用完即丢，「释放逐指令帧」已经成立，无需改动。
+- **枢纽重放去重**（43b20741）：
+  - 精确枢纽展开后，其目标列表即为终值；子枢纽的 `special` 列表以父枢纽的同名列表为前缀。
+  - 站点若已链接过某个祖先枢纽，且该祖先的 `special[t]` 覆盖待重放的接收者集，就跳过重放。
+  - 由此删去按站点记录的 `hub_ssent`（DeepCopy 约 21 MB）。
+- **`recv_done`**（59f8385b）：
+  - 由「站点 → 哈希集」改为「站点 → 升序 `Vec<u32>`」，两个哨兵值 `FIELD_STATIC`、`FIELD_OTHER` 同在表内。
+  - 实测 2.24 M 项分布在 106 k 个站点上，其中 2.1 M 项集中在对象数 ≥ 64 的站点。按升序表二分插入，指令约 +1%。
+- **mimalloc**：保留。系统分配器 A/B 实测 footprint +100 MB、指令 +25%。
+- **剩余占用**（d882bccd 后按「逐项 drop」测量，DeepCopy 存活约 486 MB）：
+
+  | 项 | MB |
+  |---|---:|
+  | classpath.cache | 113 |
+  | methods | 66 |
+  | edges | 32 |
+  | recv_done | 31 |
+  | seen | 30 |
+  | hubs | 23 |
+  | pstr | 22 |
+  | hub_ssent（已删） | 21 |
+  | dispatch | 15 |
+  | watch | 13 |
+  | fmemo | 12.5 |
+  | delta | 12 |
+
+  - classpath.cache 是解析后的类文件，其中 `Insn` 每条 96 B，属于 input crate 的表示问题，不在本节范围。
+  - 单项 ≤ 15 MB 的条目已到收益递减区。
+
+**PV 哈希驻留**：`pvals` 总计约 4.8 MB，驻留的收益上限即为此数，只作记录，不实施。
+
+**W→E 扇出**（结构化 `hw_site_arrays`）：DeepCopy 实测只有 1906 条边、61 k 次推送，在总推送量中占比可以忽略，价值低，不实施。
 
 ## 五、内存上限的系统层手段（运维参考，不替代 P5）
 
