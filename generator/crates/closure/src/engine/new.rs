@@ -69,6 +69,7 @@ impl<'a> Engine<'a> {
             inited: IndexMap::new(),
             dispatch: BTreeMap::new(),
             recv_sites: HashSet::default(),
+            direct_virtual_sites: HashSet::default(),
             pvals: HashMap::default(),
             pstr: Default::default(),
             hubs: Vec::new(),

@@ -380,12 +380,13 @@ impl<'a> Engine<'a> {
     }
 
     /// 经虚分派到达的实现（按成员合并克隆，标签排序）：全部活虚调用点（字节码 invokevirtual /
-    /// invokeinterface，含单目标；手写层回调；枢纽中转）的目标之并，以及 VM 反射虚调用选中的实现。
+    /// invokeinterface，含单目标及按非虚处理的 final 方法 / final 类调用点；手写层回调；枢纽中转）的目标之并，
+    /// 以及 VM 反射虚调用选中的实现。
     /// 生成器据此只为被派发到的实现占 vtable 槽（C3 第 5 项）；手写实现对象的方法不是 Java 方法，不输出
     pub fn dispatched(&self) -> Vec<String> {
         let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
         let mut ids: BTreeSet<usize> = BTreeSet::new();
-        for site in self.recv_sites.iter().chain(self.hub_sites.keys()) {
+        for site in self.recv_sites.iter().chain(self.direct_virtual_sites.iter()).chain(self.hub_sites.keys()) {
             ids.extend(self.dispatch.get(site).into_iter().flatten().filter(|t| !self.is_hwobj_method(**t)).map(|&t| canon[t]));
         }
         let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();

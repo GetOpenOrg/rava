@@ -210,7 +210,10 @@ impl<'a> Engine<'a> {
             _ => {
                 let rm = site.method();
                 if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() {
-                    // 非虚：直接到已解析方法，接收者值流入 this
+                    // 非虚：直接到已解析方法，接收者值流入 this。非 private 的目标在生成代码里仍经槽调用，计入 `dispatched`
+                    if !rm.is_private() && !rm.is_static() {
+                        self.direct_virtual_sites.insert((m, off));
+                    }
                     let r = recv_feeds(self);
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
                     return;

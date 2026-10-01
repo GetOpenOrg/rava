@@ -430,6 +430,9 @@ pub struct Engine<'a> {
     pub dispatch: BTreeMap<(usize, u32), BTreeSet<usize>>,
     /// 有接收者到达过的虚调用点（含选不出目标的）：接收者恒为 null 的判定（folds `null_recv`）
     recv_sites: HashSet<(usize, u32)>,
+    /// 按非虚处理的虚指令调用点（invokevirtual / invokeinterface 指向 final 方法或 final 类）：
+    /// 目标照样经 vtable 槽到达，并入 `dispatched` 输出
+    direct_virtual_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
     /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
