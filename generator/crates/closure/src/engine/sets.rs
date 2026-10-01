@@ -28,8 +28,18 @@ impl Default for FxHasher {
 
 impl Hasher for FxHasher {
     fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.add(u64::from(b));
+        // 按 8 / 4 字节成字并入（字符串、整数切片的哈希是逐字节 write，逐字节并入在长键上占比可观）
+        let mut b = bytes;
+        while let Some((w, rest)) = b.split_first_chunk::<8>() {
+            self.add(u64::from_le_bytes(*w));
+            b = rest;
+        }
+        if let Some((w, rest)) = b.split_first_chunk::<4>() {
+            self.add(u64::from(u32::from_le_bytes(*w)));
+            b = rest;
+        }
+        for &x in b {
+            self.add(u64::from(x));
         }
     }
     fn write_u8(&mut self, i: u8) {

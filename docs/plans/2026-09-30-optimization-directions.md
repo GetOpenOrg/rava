@@ -2,7 +2,7 @@
 
 > 日期：2026-09-30
 > 性质：本文记录用户拍板的优化方向、验收口径和各执行线的分工，是总纲，执行细节以各子计划为准。
-> 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、[`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md)（生成器效率）。
+> 关联：[`2026-10-01-cross-test-compile-reuse.md`](2026-10-01-cross-test-compile-reuse.md)（跨测试编译复用，方案编写中）、[`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)（rustc 内存与拆 crate，§7.5.4 终态达标账）、[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md)（C0–C5）、[`2026-09-29-boundary-narrowing.md`](2026-09-29-boundary-narrowing.md)（C1d 与精度线 §6.9）、[`2026-09-30-closure-analyzer-performance.md`](2026-09-30-closure-analyzer-performance.md)（闭包分析性能 P0–P8）、[`2026-09-30-rust-emitter.md`](2026-09-30-rust-emitter.md)（Rust 生成器）、[`2026-09-30-emitter-performance.md`](2026-09-30-emitter-performance.md)（生成器效率）。
 
 ---
 
@@ -31,13 +31,15 @@
 | 闭包精度 | 动态对照翻译域漏覆盖 | 0 | 0（底线） |
 | 闭包精度 | 已登记的精度缺口（§三.1 清单） | 三期 9 项完成（G6 按实测修订目标），✅ 已合入 d8212bee（2026-10-01） | 0 |
 | 闭包精度 | 无运行期依据的可达链（如 Digester 的 VarHandle 访问模式链，约 +1045 方法） | 存在 | 0 |
-| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 冷算 5.1 s（P6 前）；P7 三项后分段 analyze 420 + aux 293 + sites 947 + flows 997 + process 1057 ms（d842653d） | ≤ 10 s（HelloWorld ≤ 0.5 s）；DeepCopy 冷算 ≤ 2 s |
+| 闭包分析效率 | e2e 任一用例的墙钟 | DeepCopy 冷算 5.1 s（P6 前）；P7 四项 + P5 一 + P8 一后分段 analyze 423 + aux 299 + sites ~890 + flows ~607 + process ~875 + setup ~165 ms（c9d0a0ca） | ≤ 10 s（HelloWorld ≤ 0.5 s）；DeepCopy 冷算 ≤ 2 s |
 | 闭包分析效率 | e2e 任一用例的峰值 RSS | DeepCopy 652 MB（P4，✅ 已达标） | ≤ 1 GB |
 | 闭包分析效率 | 同输入重跑（缓存命中）单测试墙钟 | P6 整体结果缓存：分析段 24–33 ms，DeepCopy `--no-run` 1.12 s（✅ 已达标） | ≤ 2 s |
 | 生成器效率 | 发射阶段墙钟 / 峰值 RSS（任一用例） | P0 5.9 s / 342 MB → P5 1.99 s / 315 MB → 并行发射 1.02 s / 396 MB（DeepCopy 热写出；冷写出 1.08 s） | ≤ 2 s / ≤ 500 MB |
 | 生成器效率 | 内容未变文件的重写次数（复用 scratch 时） | 0（P5） | 0 |
-| 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8 实测，单 crate） | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
-| 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）/ 2 m 40 s（C1d） | ≤ 20 s；仅用户类变化时 JDK 部分零重编 |
+| 下游编译 | 单个 rustc 峰值 RSS | 约 14 GB（N8，单 crate）→ S4/S5 后 Digester 声明 crate 3.1–3.4 GB | ≤ 2 GB（路径见 [`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md)） |
+| 下游编译 | HelloWorld 编译墙钟 | 23.9 s（主线）→ S5 后 cargo 16.9 s / 2 m 40 s（C1d） | ≤ 12 s；仅用户类变化时 JDK 部分零重编 |
+| 测试效率 | JDK 21 全量 e2e（1083 例，7 台服务器） | 约 5 h 墙钟、约 35 机时；cargo 编译约占 70–75%，转译约 20%，超时空等约 4%，运行约 3%（2026-10-01，主要在 f00b6858） | 由跨测试编译复用方案（§三.5）量化给出；超时空等 0 |
+| 测试效率 | 同一 JDK 类跨测试重复编译 | 每个测试各编一遍（生成文本随测试闭包变化，无法复用） | 同内容只编一次 |
 | 生成代码运行性能 | 计算密集用例运行段（debug 构建，服务器；标杆 LynchBell） | > 300 s（`RUN_TIMEOUT` 超时，2026-10-01 分布式跑批） | ≤ 30 s，且不放宽 `RUN_TIMEOUT` |
 
 ## 三、执行线
@@ -61,7 +63,8 @@
 ### 2. 闭包分析效率（性能结构改造，分支 `closure-perf2` → `closure-mono`）
 
 - P0–P2 已合入（5b95675a），4 例 closure.json 逐字节一致，DeepCopy user 351 s → 130 s。
-- 状态（2026-10-01，main d842653d）：P0–P4、P6 ✅；P7 进行中（一 / 二 / 三已合入：站点重跑常数开销、记忆条目精确作废、站点只处理新增接收者 + 字段读汇集节点；剩写站点分发节点、hub 路径常数）；P5 flows、P8 process 与工程化待做。分段数据见性能计划 §4.8。
+- 状态（2026-10-01，main c9d0a0ca）：P7 四项 ✅（含写站点经汇集节点分发）；P5 第一项 ✅（枢纽对按调用点建模目标增量接边，2c503775，DeepCopy flows 914 → ~600 ms）；P8 第一项 ✅（成员引用文本键缓存、按 Rust 名查方法先比前缀，93dcccb2，DeepCopy process 1050 → ~875 ms）；进行中：P8 余量、sites。
+- 早先状态（main d842653d）：P0–P4、P6 ✅；P7 进行中（一 / 二 / 三已合入：站点重跑常数开销、记忆条目精确作废、站点只处理新增接收者 + 字段读汇集节点；剩写站点分发节点、hub 路径常数）；P5 flows、P8 process 与工程化待做。分段数据见性能计划 §4.8。
 - 结构性改造（`closure-perf2`）与顺序依赖修复 + 批量排空（`closure-mono`，6e0849c6）✅ 已合入：集合结果与处理顺序无关（`--flow-batch 1/7/64 × --hash-seed` 矩阵一致），DeepCopy 59.5 s → 41.7 s。待做：P3、P4、W→E 扇出，P5–P8。
 - P0 剖析推翻原假设：方法整体重分析不到 1%。真正的热点是类型流传播，手写调用点数组读写的双向扇出占全部边的 82%，其中 99.7% 的传播不带来新类型。
 - 按 D3 放宽不变量后做结构性改造：扇出边经共享节点、按调用图 SCC 排序；然后按数据推进 P3 上下文共享、P4 内存；P5–P8（预算降级、跨测试缓存、并行、工程化）随后。
@@ -80,6 +83,21 @@
   - 以上 ✅ 已合入 rust-closure-analyzer（f6d80103，e2e 抽查 7 例全过，二进制约 −40%）。待做：N6 剩余串行段（约 460 ms）、rustc 分阶段测量（拆 crate 方案 §五 第 1 步）。
 - `emitter-final`（生成器补齐）✅ 已合入（ef1daf34，e2e 抽查 10 例全过，含 DeepCopy / CollectorsDemo 修复）：S1–S6 清零、CLI 选项与审计补齐、缺省路径不再导入 `codegen`（[`2026-10-01-codegen-dependency-inventory.md`](2026-10-01-codegen-dependency-inventory.md)）；删除清单见 [`2026-10-01-python-generator-deletion.md`](2026-10-01-python-generator-deletion.md)。
 - 拆 crate S4（声明层 / 实现层，`emitter-perf2`）✅ 已合入（55c5dacc，e2e 抽查 11 例全过）；未达标项：Digester 声明 crate 峰值 4.51 GB（目标 ≤ 2 GB）、HelloWorld 构建 15.9 s（目标 ≤ 12 s），由 S5（声明层剥体）继续，见生成器效率计划 §7.5–7.7。
+- S5（声明层剥体，生成器与宏共用判定 `runtime/rava_macros_core`）✅ 已合入（0f21a9da，e2e 抽查 13 例全过）：与 S4 等价（27 例声明层逐记号一致、实现层逐字节一致），宏展开 17.3 → 11.6 s，但峰值与总耗时在噪声内未变；Digester 声明 crate 3.1–3.4 GB、HelloWorld cargo 16.9 s，仍未达标。
+- 终态达标账（生成器效率计划 §7.5.4，853b3cec）：峰值 ≈ 0.72 GB + 0.048 GB × 声明 crate 宏展开体量（MB）。峰值在前端各阶段按代码量逐级累积（Digester 宏展开后 1.40 GB → HIR 2.15 GB → 类型检查 3.17 GB → 单态化起点 3.59 GB），不是单态化收集独占。Digester 展开现为 56.5 MB，≤ 2 GB 须压到 ≤ 26.7 MB。候选手段：
+
+  | 项 | 内容 | 预计削减（展开 MB） |
+  |---|---|---:|
+  | V1 | ObjectVTable 表驱动视图：`__view_into` / `__view_as` / `__erased_vtable` 改为每类只判自身、逐级转交父类；接口载体臂改共享泛型 helper（第 1 步前提扫描 ✅，29 棵树 5178 类 bad=0） | −2.9 |
+  | V2 | `From<Object>` / checkcast / `new` 按类收敛 | −2.0 |
+  | V3 | 分层 `use` 表 | −2.5 |
+  | V4 | 字段访问器收敛 | −0.8 |
+  | V5 | S6 泛型擦除 | −1.9 |
+  | V6 | 外壳去一层：声明层 3.06 万个 `__jb_*` / `_base` 包装函数改为模块级 extern 直调（该类占 11.5 MB） | −5.5 |
+  | V7 | 去掉生成条目上的 doc 属性 | −3.0 |
+  | 合计 | V1–V7 | −18.6 → 37.9 MB，约 2.5–2.6 GB，**不达标** |
+
+- 剩余大头的根因：每个 Java 类都有自己的一整套 Rust 类型。每类基础设施约 18 MB；`__Shared<dyn X__VTable>` 每类一个类型，带出 std 按类实例化约 25 万 size_est（如 `Weak::drop` / `Arc::drop_slow` 各 ×1087、`Box::new` ×3123）。结构性候选 **S7「统一对象句柄 + 每类静态描述符」**：wrapper 改为 `repr(transparent)` 包一个与类无关的句柄，每类只生成一份 static 描述符（祖先表、接口表、字段布局），由 runtime 的非泛型实现读取。预计 Digester 展开约 24 MB、峰值约 1.85 GB，HelloWorld cargo 约 11 s。S7 并入跨测试编译复用方案统一评估（§三.5），待用户决策（Q3）。V1 的链式委托与 S7 的祖先表一致，不是过渡形态；V1 后续步骤在复用方案定稿前暂停。
 - 验收：生成器自身优化（不改输出的）要求 27 例生成树与改前逐字节一致；降低下游编译成本的生成形态改造（Q1 已允许）要求 e2e 通过，生成树差异只含预期改动。
 
 ### 4. 生成代码运行性能（任务 R1，待排期）
@@ -108,7 +126,22 @@
 | `23_algorithms/IQPuzzle.java` | 15 孔三角跳棋，15 个起始空位逐一做全树深度优先搜索，遍历全部合法走法序列（千万级节点） | 每个节点 `new Puzzle`、复制 `boolean[16]`，并逐个 `new Move` 复制走法历史（最深 13 步）；`getValidMoves` 每次新建 `ArrayList`，并查 `HashMap<Integer, List<Move>>`（装箱）；`Stack` 进出。合计上亿次对象分配和虚调用 |
 | `23_algorithms/FourIsTheNumberOfLetters.java` | 依次生成 201、10³ … 10⁷ 个词的自指句子，累计约 1111 万词 | 每个句段调用 `numToString` 递归拼接，`toOrdinal` 做 `split` / `HashMap` 查询 / `substring`；每个词做两次 `replace`、一次 `split`。合计数百万次字符串分配与拷贝 |
 
-终态：六例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
+**2026-10-01 全量新增超时用例**（同样运行段 > 300 s，负载与热点待按代码逻辑分析后补入上表）：`PartitionInteger`、`PrimorialNumbers`、`RailwayCircuit`、`SelfNumbers`、`UnprimeableNumbers`、`WeirdNumbers`（均在 `23_algorithms/`）。
+
+终态：以上十二例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
+
+### 5. 测试流程效率（用户 2026-10-01）
+
+2026-10-01 分布式全量：1083 例、7 台服务器、约 5 h 墙钟、约 35 机时。按本地抽查比例（13 例：编译 7 m 08 s / 共 9 m 44 s）推算：cargo 编译约 70–75%，转译约 20%，超时空等约 1.5 机时（约 4%），运行约 3%。
+
+| # | 方向 | 收益面 | 状态 |
+|---|---|---|---|
+| T1 | **跨测试编译复用**（最关键）：同一 JDK 类在上千个测试里各编一遍，是机时的主要去处。终态要让同内容只编一次：(a) 类的翻译与测试无关，可达性只在链接 / 分派层面决定；或 (b) 按内容寻址的 crate / 产物缓存，含 7 台服务器之间的缓存共享。须与 CLAUDE.md 第 2 条（调用链外方法生成存根）和第 1 条（手写边界）协调，原则若需调整交用户决策 | 总机时中的编译部分 | perf2 编写方案中（[`2026-10-01-cross-test-compile-reuse.md`](2026-10-01-cross-test-compile-reuse.md)），与 S7 统一评估 |
+| T2 | 降低单例编译成本：S 系列拆层、V1–V7、S7（§三.3） | 每例编译时间与峰值 | S4、S5 已合入；其余见 §三.3 |
+| T3 | 超时用例修复：12 例每例空等 5 min | 约 1.5 机时 | R1（§三.4） |
+| T4 | 服务器拉新提交后首例转译约 2 min（推断为重编 `rava` 生成器本身，待服务器核实） | 每台每提交约 2 min | 待核实；可考虑每个提交只构建一次生成器再分发 |
+| T5 | 派发按历史耗时降序（LPT）：只缩短收尾长尾（约 10 min，约 3%），不减总机时 | 收尾阶段 | 用户 2026-10-01 决定不作为优化重点，暂不做 |
+
 
 ## 四、待用户决策
 
@@ -116,9 +149,11 @@
 |---|---|---|
 | Q1 | 为了降低下游 cargo 编译成本，是否允许 Rust 生成器的生成形态偏离 Python 基线 | ✅ 允许（2026-10-01）：降编译成本的生成形态改造纳入生成器效率线实施，验收改为 e2e 通过 + 生成树差异只含预期改动 |
 | Q2 | 缺省生成器切换为 rust 的时机 | ✅ 已切换（2026-10-01）。Python 生成器保留为对照基线（只读，不再投入），删除条件：① S1–S6 占位清零、CLI 选项与审计补齐、Python 依赖（jimage 提取、golden 转储等）迁完（✅ 2026-10-01，ef1daf34）；② rust 缺省下 JDK 21 全量 e2e 通过集合 ⊇ 冻结的 Python 基线（1029 例，`2026-10-01-python-baseline-jdk21.txt`；JDK 25 不设 Python 基线，2026-10-01 用户决定）。满足后由用户确认删除 |
+| Q3 | 跨测试编译复用路线与 S7（统一对象句柄 + 每类静态描述符）是否实施、取哪条路线 | 待 perf2 复用方案定稿后由用户一次决策（§三.3、§三.5） |
 
 ## 五、执行约束（所有执行线共用）
 
 - 各线使用独立 worktree 与分支（自 rust-closure-analyzer），每完成一步合并主线、自行解决冲突；由主会话审查后合入。
+- 小步同步（用户 2026-10-01）：每完成一个可验证小步就提交、报告，主会话尽快合入并广播「集成分支已更新到 X」；开始新步前先合并集成分支最新版；拆文件 / 搬模块等结构性改动单独成提交、优先合入，期间其他执行线暂停合并。
 - `CARGO_BUILD_JOBS=2`；执行者不跑 e2e（由主会话串行抽查）；同一时间只跑一个重进程；禁止 pkill / killall 按名杀进程。
 - 生成器 / 分析器代码不得出现 JDK 类名字面量；精度改进不得新增手写代码或清单中的类名特判掩盖。
