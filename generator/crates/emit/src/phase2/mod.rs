@@ -20,7 +20,7 @@ pub mod uses;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
-use ty::ClassInfo;
+use ty::{ClassInfo, FnSig, RsType};
 
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::ClassEmission;
@@ -33,12 +33,29 @@ pub type Emissions = IndexMap<String, ClassEmission>;
 
 /// 超类链每个祖先的类型实参（渲染文本；直接父类在前）
 pub fn anc_args(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<(String, Vec<String>)> {
-    let names = ctx.ty.names;
-    ctx.ty
-        .ancestor_type_args(ci, None)
-        .into_iter()
-        .map(|(b, a)| (b, a.iter().map(|t| t.render(names)).collect()))
-        .collect()
+    ctx.ty.ancestor_type_args(ci, None).into_iter().map(|(b, a)| (b, render_args(ctx, &a))).collect()
+}
+
+/// 类型实参表渲染为文本
+pub fn render_args(ctx: &EmitCtx<'_>, args: &[RsType]) -> Vec<String> {
+    args.iter().map(|t| t.render(ctx.ty.names)).collect()
+}
+
+/// 祖先 `owner_bin` 的方法签名在接收者视角下引用的类（binary，渲染序）：owner 类型形参按
+/// `owner_args` 结构化代入（缺位实参按擦除语义取 Object）
+pub fn substituted_classes(ctx: &EmitCtx<'_>, sig: &FnSig, owner_bin: &str, owner_args: &[RsType]) -> Vec<String> {
+    let params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
+    let mapping = |p: &str| params.iter().position(|x| x == p).map(|i| owner_args.get(i).cloned().unwrap_or(RsType::Object));
+    sig.substitute(&mapping).classes().into_iter().map(str::to_string).collect()
+}
+
+/// 类型（含实参）引用的类（binary，渲染序）
+pub fn type_classes(owner_bin: &str, owner_args: &[RsType]) -> Vec<String> {
+    let mut out = vec![owner_bin];
+    for a in owner_args {
+        a.collect_classes(&mut out);
+    }
+    out.into_iter().map(str::to_string).collect()
 }
 
 /// 类的有效类型形参

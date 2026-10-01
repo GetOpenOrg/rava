@@ -10,10 +10,10 @@ use std::collections::{BTreeSet, VecDeque};
 use classfile::{acc, Method, Operand};
 use ty::ident::safe_ident;
 use ty::type_map::{parse_descriptor_params, parse_descriptor_return};
-use ty::ClassInfo;
+use ty::{ClassInfo, RsType};
 
 use super::sig::{param_mapping, param_part, result_inner, sig_param_types, substitute_type_params};
-use super::{anc_args, class_params, Emissions};
+use super::{anc_args, class_params, substituted_classes, Emissions};
 use crate::class_writer::inherit::interface_special_member_name;
 use crate::class_writer::slot::override_vtable_erasure;
 use crate::ctx::EmitCtx;
@@ -103,6 +103,8 @@ pub struct BridgeMember<'c> {
     /// 真实方法签名与调用名（接收者视角）
     pub real_sig: String,
     pub real_rust: String,
+    /// 真实方法签名（接收者视角代入后）引用的类 binary
+    pub real_classes: Vec<String>,
     /// 真实方法在祖先时的补充需求 (名, 参数描述符)
     pub real_want: Option<(String, String)>,
     pub bridge: &'c Method,
@@ -197,8 +199,11 @@ pub fn resolve_bridge_member<'c>(
         return None;
     }
 
-    let (real_sig, real_rust, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
-        Some(m) => (m.signature(ctx.ty.names), m.rust_name.clone(), None),
+    let (real_sig, real_rust, real_classes, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
+        Some(m) => {
+            let classes = m.sig.classes().into_iter().map(str::to_string).collect();
+            (m.signature(ctx.ty.names), m.rust_name.clone(), classes, None)
+        }
         None => {
             let owner_em = ems.get(real_owner_ci.name()).filter(|e| !e.handwritten)?;
             let found = owner_em.find(name, &real_param)?;
@@ -206,7 +211,9 @@ pub fn resolve_bridge_member<'c>(
             let mapping = param_mapping(&class_params(ctx, real_owner_ci), &owner_args.unwrap_or_default());
             let sig = substitute_type_params(&found.signature(ctx.ty.names), &mapping);
             let rust = ctx.ty.receiver_member_name(&found.name, &found.descriptor, recv_ci);
-            (sig, rust, Some((name.to_string(), real_param.clone())))
+            let owner_args_ty = ctx.ty.ancestor_type_args(recv_ci, None).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a).unwrap_or_default();
+            let classes = substituted_classes(ctx, &found.sig, real_owner_ci.name(), &owner_args_ty);
+            (sig, rust, classes, Some((name.to_string(), real_param.clone())))
         }
     };
 
@@ -241,7 +248,7 @@ pub fn resolve_bridge_member<'c>(
             return None;
         }
     }
-    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_want, bridge, vtable_name })
+    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_classes, real_want, bridge, vtable_name })
 }
 
 /// 本类的协变返回覆盖已声明 (name, param_desc)，但同参异返回的 ACC_BRIDGE 桥承担的是另一个
@@ -294,10 +301,11 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
     })
 }
 
-/// 桥接转发成员声明：(声明文本, 导入扫描用签名文本, 真实方法的补充需求)
+/// 桥接转发成员声明：(声明文本, 签名与转发体引用的类, 真实方法的补充需求)
 pub struct BridgeDecl {
     pub decl: String,
     pub sig_text: String,
+    pub classes: Vec<String>,
     pub real_want: Option<(String, String)>,
 }
 
@@ -316,20 +324,28 @@ pub fn bridge_override_member(
     let bridge = r.bridge;
     let eff = class_params(ctx, recv_ci);
     let es = ctx.ty.emitted_method_sig_types(recv_ci, bridge, &eff);
-    let param_tys: Vec<String> = if es.params.is_empty() {
-        parse_descriptor_params(&bridge.desc).iter().map(|p| ctx.ty.jvm_to_rust(p).render(names)).collect()
+    let param_rs: Vec<RsType> = if es.params.is_empty() {
+        parse_descriptor_params(&bridge.desc).iter().map(|p| ctx.ty.jvm_to_rust(p)).collect()
     } else {
-        es.params.iter().map(|t| t.render(names)).collect()
+        es.params.clone()
     };
+    let param_tys: Vec<String> = param_rs.iter().map(|t| t.render(names)).collect();
     let ret_desc = parse_descriptor_return(&bridge.desc);
     let sig_ret = es.ret.render(names);
-    let ret_ty = if ret_desc == "V" {
-        "()".to_string()
+    let ret_rs = if ret_desc == "V" {
+        RsType::Unit
     } else if !sig_ret.is_empty() && sig_ret != "()" {
-        sig_ret
+        es.ret.clone()
     } else {
-        ctx.ty.jvm_to_rust(ret_desc).render(names)
+        ctx.ty.jvm_to_rust(ret_desc)
     };
+    let ret_ty = ret_rs.render(names);
+    let mut classes: Vec<&str> = Vec::new();
+    for t in param_rs.iter().chain(std::iter::once(&ret_rs)) {
+        t.collect_classes(&mut classes);
+    }
+    let mut classes: Vec<String> = classes.into_iter().map(str::to_string).collect();
+    classes.extend(r.real_classes.iter().cloned());
     let params: Vec<String> = param_tys.iter().enumerate().map(|(i, t)| format!("arg{i}: {t}")).collect();
     let signature = format!("pub fn {}(&self, {}) -> Result<{ret_ty}>", r.member_name, params.join(", "));
 
@@ -375,5 +391,5 @@ pub fn bridge_override_member(
         }
     }
     let decl = format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", "));
-    Some(BridgeDecl { sig_text: decl.clone(), decl, real_want: r.real_want })
+    Some(BridgeDecl { sig_text: decl.clone(), decl, classes, real_want: r.real_want })
 }

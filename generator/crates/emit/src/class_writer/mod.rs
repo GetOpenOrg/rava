@@ -27,7 +27,7 @@ use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
 use crate::imports::refs::add_desc_refs;
-use crate::imports::{collect_referenced, plan_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, CrossPlan, Prefix};
+use crate::imports::{collect_referenced, cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, Prefix};
 use crate::lang;
 use crate::project::layout::JdkLayout;
 use crate::text::indent;
@@ -85,14 +85,11 @@ impl ClassSite<'_> {
         Prefix { base: self.prefix(), route: self.lib.map(|l| l.route) }
     }
 
-    /// cross_imports 参数（用户类在无 JDK 类时不做包集合导入与生成集过滤；lib 模式只按生成集定向）
+    /// cross_imports 参数（用户类在无 JDK 类时不导入生成类；lib 模式按生成集定向）
     fn cross_input(&self) -> CrossInput<'_> {
         if let Some(l) = self.lib {
             return CrossInput {
-                pkg_paths: None,
                 generated: Some(l.generated),
-                conflict_map: None,
-                skipped: None,
                 sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
                 prefix: self.prefix(),
                 all_in_chain: self.is_user(),
@@ -101,10 +98,7 @@ impl ClassSite<'_> {
         }
         let jdk_on = !self.is_user() || !self.jdk.files.is_empty();
         CrossInput {
-            pkg_paths: jdk_on.then_some(self.jdk.pkg_paths.as_slice()),
             generated: jdk_on.then_some(&self.jdk.generated),
-            conflict_map: jdk_on.then_some(&self.jdk.conflict_map),
-            skipped: jdk_on.then_some(&self.jdk.skipped_classes),
             sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
             prefix: self.prefix(),
             all_in_chain: self.is_user(),
@@ -172,20 +166,20 @@ pub struct ClassText {
     pub methods: Vec<EmittedMethod>,
 }
 
-/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、跨类导入规划
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、跨类导入行
 pub struct ClassPrep<'c> {
     visible: Vec<&'c classfile::Method>,
     overrides: Vec<hw_overrides::HwOverride<'c>>,
-    cross: CrossPlan,
+    cross: Vec<String>,
 }
 
-/// 前置事实：引用集（含手写覆盖副本的签名引用）→ 跨类导入规划
+/// 前置事实：引用集（含手写覆盖副本的签名引用）→ 跨类导入行
 pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
     if ctx.is_opaque(ci.name()) {
         // 不透明形态只引用全部传递超类型（upcast 目标）
         let referenced: BTreeSet<String> = opaque::opaque_supers(ctx, ci).into_iter().collect();
-        let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
+        let cross = cross_imports(ctx, ci, &cross, &referenced)?;
         return Ok(ClassPrep { visible: Vec::new(), overrides: Vec::new(), cross });
     }
     let mut referenced = collect_referenced(ctx, ci, cross.generated);
@@ -195,16 +189,11 @@ pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>
         add_desc_refs(&o.method.desc, &mut referenced);
         add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
     }
-    let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
+    let cross = cross_imports(ctx, ci, &cross, &referenced)?;
     Ok(ClassPrep { visible, overrides, cross })
 }
 
-/// 跨类导入行：`seen_simples`（跨包同名冲突守卫）跨类累积，必须按发射序串行调用（只做裁决）
-pub fn class_cross_imports(state: &mut ProjectState, prep: &ClassPrep<'_>) -> Vec<String> {
-    prep.cross.resolve(&mut state.seen_simples)
-}
-
-/// 生成单类文件文本（串行形态：前置 → 跨类导入 → 类体）
+/// 生成单类文件文本（串行形态：前置 → 类体）
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
@@ -213,11 +202,10 @@ pub fn gen_class_rs(
     site: &ClassSite<'_>,
 ) -> Result<ClassText> {
     let prep = class_prep(ctx, ci, site)?;
-    let cross_imports = class_cross_imports(state, &prep);
-    class_text(ctx, state, bodies, ci, site, &prep, cross_imports)
+    class_text(ctx, state, bodies, ci, site, &prep)
 }
 
-/// 类体文本：除跨类导入外只读共享上下文、只向 `state` 追加账本（可按类并行，
+/// 类体文本：只读共享上下文、只向 `state` 追加账本（可按类并行，
 /// `state` 为本类增量，由调用方按发射序并入）
 pub fn class_text(
     ctx: &EmitCtx<'_>,
@@ -226,8 +214,8 @@ pub fn class_text(
     ci: &ClassInfo,
     site: &ClassSite<'_>,
     prep: &ClassPrep<'_>,
-    cross_imports: Vec<String>,
 ) -> Result<ClassText> {
+    let cross_imports = prep.cross.clone();
     if ctx.is_opaque(ci.name()) {
         return Ok(opaque::opaque_text(ctx, state, ci, site, cross_imports));
     }

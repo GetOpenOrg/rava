@@ -23,7 +23,7 @@ use ty::ClassInfo;
 pub use overlay::prepare_scratch;
 
 use crate::body::MethodBodyEmitter;
-use crate::class_writer::{class_cross_imports, class_prep, class_text, ClassSite};
+use crate::class_writer::{class_prep, class_text, ClassSite};
 use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::Result;
@@ -76,12 +76,11 @@ struct ClassJob<'c> {
     krate: JobCrate<'c>,
 }
 
-/// 逐类生成文本（尚未落盘），发射序：JDK（闭包序）→ lib crate（声明序，类名序）→ 用户类。三段：
-/// 1. 并行：引用集 / 手写覆盖副本 / 跨类导入规划（只读）；
-/// 2. 串行（发射序）：跨类导入短名裁决——`seen_simples` 首个引入者胜出，结果依赖发射序（只做查表）；
-/// 3. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
+/// 逐类生成文本（尚未落盘），发射序：JDK（闭包序）→ lib crate（声明序，类名序）→ 用户类。两段：
+/// 1. 并行：引用集 / 手写覆盖副本 / 跨类导入行（只读）；
+/// 2. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
 ///
-/// 除 2 外各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
+/// 各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
 fn emit_classes<'l>(
     ctx: &'l EmitCtx<'_>,
     state: &mut ProjectState,
@@ -129,17 +128,15 @@ fn emit_classes<'l>(
     });
     perf.mark("classes.prep");
     let preps: Vec<_> = preps.into_iter().map(|(s, p, t)| p.map(|p| (s, p, t))).collect::<Result<_>>()?;
-    let cross: Vec<_> = preps.iter().map(|(_, prep, _)| class_cross_imports(state, prep)).collect();
-    perf.mark("classes.imports");
-    let work: Vec<_> = jobs.iter().zip(preps).zip(cross).collect();
-    let texts = crate::par::par_map(threads, &work, |((j, (site, prep, _)), imports)| {
+    let work: Vec<_> = jobs.iter().zip(preps).collect();
+    let texts = crate::par::par_map(threads, &work, |(j, (site, prep, _))| {
         let t = std::time::Instant::now();
         let mut delta = ProjectState::default();
-        let ct = class_text(ctx, &mut delta, bodies, j.ci, site, prep, imports.clone());
+        let ct = class_text(ctx, &mut delta, bodies, j.ci, site, prep);
         (ct, delta, t.elapsed())
     });
     let mut ems = IndexMap::new();
-    for (((j, (_, _, t_prep)), _), (ct, delta, t_text)) in work.iter().zip(texts) {
+    for ((j, (_, _, t_prep)), (ct, delta, t_text)) in work.iter().zip(texts) {
         let ct = ct?;
         state.merge(delta);
         let (crate_prefix, crate_name, handwritten) = match j.krate {

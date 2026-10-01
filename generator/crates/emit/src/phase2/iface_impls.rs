@@ -12,12 +12,12 @@ use std::sync::OnceLock;
 use classfile::acc;
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
-use ty::ClassInfo;
+use ty::{ClassInfo, RsType};
 
 use super::bridge::{resolve_bridge_member, resolve_bridge_target};
 use super::sig::{idents, param_mapping, param_part, rust_type, rust_type_head, split_top_level_trimmed, substitute_type_params};
-use super::uses::{class_use_path, imported_names, imports_for, type_arg_uses};
-use super::{class_params, fill_slot, insert_before_slot, provided_methods, requests_by_recv, Emissions};
+use super::uses::{class_use_path, class_uses, imported_names};
+use super::{class_params, fill_slot, insert_before_slot, provided_methods, render_args, requests_by_recv, substituted_classes, type_classes, Emissions};
 use crate::class_writer::{INHERITED_IMPORTS_SLOT, INHERITED_MEMBERS_SLOT, INTERFACE_IMPLS_SLOT, INTERFACE_UPCASTS_SLOT};
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::{ClassEmission, EmittedMethod};
@@ -51,6 +51,17 @@ pub fn erased_declaration(names: &ty::ShortNames, m: &EmittedMethod, type_params
         out.push(format!("{}: {}", pname.trim(), erase(pty.trim(), type_params)));
     }
     Some(format!("fn {}({}) -> Result<{}>", &c[1], out.join(", "), erase(c[3].trim(), type_params)))
+}
+
+/// 擦除声明引用的类：提及类型变量而擦成 Object 的位置不引用类（与 [`erase`] 同一判定）
+fn erased_classes(names: &ty::ShortNames, m: &EmittedMethod, type_params: &BTreeSet<String>) -> Vec<String> {
+    let mut out: Vec<&str> = Vec::new();
+    for t in m.sig.params.iter().map(|(_, t)| t).chain(std::iter::once(&m.sig.ret)) {
+        if !idents(&t.render(names)).any(|i| type_params.contains(i)) {
+            t.collect_classes(&mut out);
+        }
+    }
+    out.into_iter().map(str::to_string).collect()
 }
 
 /// 成员的返回类型与接口擦除声明的返回类型是同一泛型类的不同实例化
@@ -198,18 +209,16 @@ fn iface_decls(
         }
         let attr = if attr_parts.is_empty() { String::new() } else { format!("#[java_method({})]\n", attr_parts.join(", ")) };
         decls.push(format!("{attr}{erased};"));
-        out.uses.extend(imports_for(ctx, &erased, iface, recv, imported, None, Some(ems)));
+        out.uses.extend(class_uses(ctx, &erased_classes(ctx.ty.names, im, type_params), recv, imported, ems));
     }
     decls
 }
 
-/// 单接收者：全部接口的 impl 块 / 协变 upcast / use 行；需要的继承成员需求追加到 `reqs`。
-/// `iface_view` 给出接口在本接收者处理时刻的发射记录（文件头 use 行随处理序变化）
-fn recv_impls<'e>(
+/// 单接收者：全部接口的 impl 块 / 协变 upcast / use 行；需要的继承成员需求追加到 `reqs`
+fn recv_impls(
     ctx: &EmitCtx<'_>,
     reqs: &mut Vec<(String, String, String)>,
-    ems: &'e Emissions,
-    iface_view: &IfaceView<'e>,
+    ems: &Emissions,
     recv: &ClassEmission,
     recv_ci: &ClassInfo,
 ) -> ImplTexts {
@@ -225,7 +234,7 @@ fn recv_impls<'e>(
     let recv_ty = format!("{recv_short}{recv_generics}");
     let up_src = if recv_is_iface { rust_type(&recv_short, &object_args(recv_params.len())) } else { recv_ty.clone() };
     for iface_bin in all_interfaces(ctx, recv_ci) {
-        let (Some(iface), Some(iface_ci)) = (iface_view.get(&iface_bin), ctx.ty.reg.get(&iface_bin)) else { continue };
+        let (Some(iface), Some(iface_ci)) = (ems.get(&iface_bin), ctx.ty.reg.get(&iface_bin)) else { continue };
         if iface.handwritten {
             continue;
         }
@@ -299,78 +308,36 @@ fn wants_impls(ctx: &EmitCtx<'_>, recv_bin: &str, recv: &ClassEmission) -> bool 
 /// 为每个具体类生成接口实现声明（填充 `IMPLS_SLOT` / `UPCASTS_SLOT`，use 行插在继承导入位之前）；
 /// 需要的继承成员登记到需求账本。须先于继承成员解析。
 ///
-/// 串行语义是按发射序逐类处理并立即回写文本；类之间唯一的读写交叠是：接口自身处理时在文件头
-/// 插入 use 行，排在它之后的具体类经 `imports_for` 读取该接口文件头。据此分两轮并行、结果逐字节
-/// 等同串行：
-/// 1. 接口（及其余非具体类）：不生成 impl 声明、不读别的类文件头，彼此独立；
-/// 2. 具体类：接口视图按发射序取——接口排在本类之前取第 1 轮回写后的记录，之后取回写前的记录；
-///    继承成员需求按发射序并入账本
+/// 各接收者只读别的类的结构化记录（方法签名、binary），导入按引用的 binary 生成，不读别的类
+/// 文件头，故全部接收者一轮并行；继承成员需求按发射序并入账本
 pub fn resolve_interface_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions) {
-    let is_iface = |i: usize| ctx.ty.reg.get(ems.get_index(i).expect("下标").0).is_some_and(ClassInfo::is_interface);
-    let (first, second): (Vec<usize>, Vec<usize>) = (0..ems.len()).partition(|&i| is_iface(i));
-    let before: Before = first
-        .iter()
-        .map(|&i| {
-            let (b, e) = ems.get_index(i).expect("下标");
-            (b.clone(), (i, e.clone()))
-        })
-        .collect();
-    for (&i, (text, reqs)) in first.iter().zip(impls_pass(ctx, ems, &first, None)) {
-        debug_assert!(reqs.is_empty(), "接口不登记继承成员需求");
-        ems[i].text = text;
-    }
-    for (&i, (text, reqs)) in second.iter().zip(impls_pass(ctx, ems, &second, Some(&before))) {
+    let idx: Vec<usize> = (0..ems.len()).collect();
+    let results = crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), &idx, |&i| {
+        let (recv_bin, recv) = ems.get_index(i).expect("下标");
+        let mut reqs = Vec::new();
+        let texts = match ctx.ty.reg.get(recv_bin) {
+            Some(ci) if wants_impls(ctx, recv_bin, recv) => recv_impls(ctx, &mut reqs, ems, recv, ci),
+            _ => ImplTexts::default(),
+        };
+        (apply_impls(&recv.text, &texts), reqs)
+    });
+    for (i, (text, reqs)) in results.into_iter().enumerate() {
         ems[i].text = text;
         state.inherited_requests.extend(reqs);
     }
 }
 
-/// 第 1 轮回写前的接口发射记录：binary → (发射序下标, 记录)
-type Before = BTreeMap<String, (usize, ClassEmission)>;
-
-/// 接收者（发射序下标 `at`）处理时刻所见的接口发射记录
-pub(super) struct IfaceView<'e> {
-    ems: &'e Emissions,
-    before: Option<&'e Before>,
-    at: usize,
-}
-
-impl<'e> IfaceView<'e> {
-    fn get(&self, bin: &str) -> Option<&'e ClassEmission> {
-        match self.before.and_then(|b| b.get(bin)) {
-            Some((idx, old)) if *idx > self.at => Some(old),
-            _ => self.ems.get(bin),
-        }
-    }
-}
-
-/// 一轮并行：各接收者的新文本与继承成员需求（按 `idx` 序）
-fn impls_pass(ctx: &EmitCtx<'_>, ems: &Emissions, idx: &[usize], before: Option<&Before>) -> Vec<(String, Vec<(String, String, String)>)> {
-    crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), idx, |&i| {
-        let (recv_bin, recv) = ems.get_index(i).expect("下标");
-        let mut reqs = Vec::new();
-        let texts = match ctx.ty.reg.get(recv_bin) {
-            Some(ci) if wants_impls(ctx, recv_bin, recv) => {
-                recv_impls(ctx, &mut reqs, ems, &IfaceView { ems, before, at: i }, recv, ci)
-            }
-            _ => ImplTexts::default(),
-        };
-        (apply_impls(&recv.text, &texts), reqs)
-    })
-}
-
 /// 接口 recv 的全部超接口及其在 recv 视角下的类型实参（广度优先，近者在前）
-fn superinterface_views(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo) -> Vec<(String, Vec<String>)> {
-    let names = ctx.ty.names;
+fn superinterface_views(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo) -> Vec<(String, Vec<RsType>)> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::from([recv_ci.name().to_string()]);
-    let mut queue: VecDeque<(&ClassInfo, BTreeMap<String, String>)> = VecDeque::from([(recv_ci, BTreeMap::new())]);
+    let mut queue: VecDeque<(&ClassInfo, BTreeMap<String, RsType>)> = VecDeque::from([(recv_ci, BTreeMap::new())]);
     while let Some((cur, mapping)) = queue.pop_front() {
         for (sup_bin, sup_args) in ctx.ty.superinterface_type_args(cur) {
             if !seen.insert(sup_bin.clone()) {
                 continue;
             }
-            let args: Vec<String> = sup_args.iter().map(|a| substitute_type_params(&a.render(names), &mapping)).collect();
+            let args: Vec<RsType> = sup_args.iter().map(|a| a.substitute(&|n| mapping.get(n).cloned())).collect();
             let Some(sup_ci) = ctx.ty.reg.get(&sup_bin) else { continue };
             out.push((sup_bin, args.clone()));
             let m = class_params(ctx, sup_ci).into_iter().zip(args).collect();
@@ -386,14 +353,14 @@ fn iface_recv_member(
     ctx: &EmitCtx<'_>,
     ems: &Emissions,
     recv: &ClassEmission,
-    views: &[(String, Vec<String>)],
+    views: &[(String, Vec<RsType>)],
     name: &str,
     pdesc: &str,
     taken: &mut BTreeSet<String>,
     imported: &mut BTreeSet<String>,
-    arg_uses: &BTreeMap<String, String>,
 ) -> Option<(String, Vec<String>)> {
-    for (owner_bin, owner_args) in views {
+    for (owner_bin, owner_args_ty) in views {
+        let owner_args = &render_args(ctx, owner_args_ty);
         let Some(owner) = ems.get(owner_bin).filter(|e| !e.handwritten) else { continue };
         let Some(method) = owner.find(name, pdesc) else { continue };
         if !taken.insert(method.rust_name.clone()) {
@@ -408,12 +375,9 @@ fn iface_recv_member(
         }
         attr.push(format!("inherited_from = \"{owner_ty}\""));
         let decl = format!("#[java_method({})]\n{signature};", attr.join(", "));
-        let scan = format!("{signature} {owner_ty}");
-        let mut uses = imports_for(ctx, &scan, owner, recv, imported, Some(arg_uses), Some(ems));
-        if imported.insert(ctx.short(owner_bin)) {
-            uses.push(format!("use {};", class_use_path(ctx, owner_bin, &recv.crate_prefix, Some(ems), &recv.crate_name)));
-        }
-        return Some((decl, uses));
+        let mut classes = substituted_classes(ctx, &method.sig, owner_bin, owner_args_ty);
+        classes.extend(type_classes(owner_bin, owner_args_ty));
+        return Some((decl, class_uses(ctx, &classes, recv, imported, ems)));
     }
     None
 }
@@ -432,13 +396,12 @@ pub fn resolve_interface_inherited_members(ctx: &EmitCtx<'_>, state: &ProjectSta
         let mut imported = imported_names(&recv.text);
         imported.insert(ctx.short(&recv_bin));
         let views = superinterface_views(ctx, recv_ci);
-        let arg_uses = type_arg_uses(ctx, recv_ci, ems, &recv.crate_prefix, &recv.crate_name);
         let (mut decls, mut uses) = (Vec::new(), Vec::new());
         for (name, pdesc) in &wanted {
             if recv.find(name, pdesc).is_some() {
                 continue;
             }
-            if let Some((d, u)) = iface_recv_member(ctx, ems, recv, &views, name, pdesc, &mut taken, &mut imported, &arg_uses) {
+            if let Some((d, u)) = iface_recv_member(ctx, ems, recv, &views, name, pdesc, &mut taken, &mut imported) {
                 decls.push(d);
                 uses.extend(u);
             }

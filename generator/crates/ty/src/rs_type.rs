@@ -130,7 +130,7 @@ impl RsType {
         }
     }
 
-    /// 引用的全部注册表类（binary，渲染序，含重复；`Bare` 锚点不经短名、不计入）
+    /// 引用的全部类（binary，渲染序，含重复；含 `Bare` 锚点）
     pub fn collect_classes<'s>(&'s self, out: &mut Vec<&'s str>) {
         match self {
             RsType::Class { binary, args } => {
@@ -139,6 +139,7 @@ impl RsType {
                     a.collect_classes(out);
                 }
             }
+            RsType::Bare { binary } => out.push(binary),
             RsType::Array(e) => e.collect_classes(out),
             _ => {}
         }

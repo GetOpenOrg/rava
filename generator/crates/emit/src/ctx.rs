@@ -56,8 +56,6 @@ pub struct EmitCtx<'a> {
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
-    /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
-    pub(crate) use_index: Mutex<HashMap<String, Vec<Arc<crate::phase2::uses::UseIndex>>>>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -98,7 +96,6 @@ impl<'a> EmitCtx<'a> {
             lib_crate_of: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
-            use_index: Mutex::new(HashMap::new()),
         })
     }
 
@@ -251,8 +248,6 @@ impl<'a> EmitCtx<'a> {
 /// 每项目可变状态：Python 模块级全局（跨类累积）的显式化，按类发射序更新
 #[derive(Debug, Default)]
 pub struct ProjectState {
-    /// import_gen `_seen_simples`：简单名 → 首个引入它的完整路径（跨类累积）
-    pub seen_simples: BTreeMap<String, String>,
     /// inherited_calls：(接收者, 方法名, 参数描述符) 插入序去重
     pub inherited_requests: indexmap::IndexSet<(String, String, String)>,
     /// G-10 账本：调用点引用 (类, 方法名) → Rust 名
@@ -281,10 +276,8 @@ pub enum HwAudit {
 }
 
 impl ProjectState {
-    /// 并入一个类的账本增量（按发射序调用：插入序账本与串行发射逐项一致）。
-    /// `seen_simples` 只在串行的跨类导入阶段累积，不经增量
+    /// 并入一个类的账本增量（按发射序调用：插入序账本与串行发射逐项一致）
     pub fn merge(&mut self, d: ProjectState) {
-        debug_assert!(d.seen_simples.is_empty());
         self.inherited_requests.extend(d.inherited_requests);
         self.lambda_refs.extend(d.lambda_refs);
         for (k, v) in d.lambda_defs {
