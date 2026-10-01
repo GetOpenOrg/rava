@@ -31,7 +31,9 @@
   - 栈底帧不在闭包（VM 自行启动的线程 / 入口）→ `vm-entry`；
   - 帧停在闭包 `indy_models` 列出的 invokedynamic 调用点（引导方法由运行模型替换：lambda / 字符串拼接 /
     record 方法 / native 引导），加载发生在该调用点的 JVM 链接期（解析引导方法句柄、执行引导方法）→
-    `indy-model`：原生程序不执行引导方法，这些类不属翻译程序；
+    `indy-model`：原生程序不执行引导方法，这些类不属翻译程序。调用点正上方是 `vm_upcall_classes` 的帧
+    即为链接期，整段归该模型——链接途经的 JDK 帧（`MethodHandles.insertArguments`、BMH species 等）
+    即便在闭包内也不按已建模帧继续上溯（否则 LambdaForm 编译加载的 asm 类会被误报为漏覆盖）；
   - 帧停在闭包 `sigpoly_sites` 列出的签名多态调用点（JVMS §2.9.3：JVM 链接到 LambdaForm 调用器执行，
     发射层由手写 `__site` 伴生承载，同属运行模型替换）→ 同 indy 规则跳到其上方首个已建模帧，
     其上全是模型外帧 → `sigpoly-model`；
@@ -303,7 +305,11 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
         if kind == BYTECODE:
             if (mc := model_sites.get(_frame_str(f))) is not None:
                 # 运行模型替换的 indy / 签名多态调用：其上方是 JVM 链接期 / 引导产物的执行帧。模型再次进入的已建模方法
-                # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载
+                # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载。
+                # 正上方是 JVM 链接期上调入口（`vm_upcall_classes`）→ 整段是该调用点的链接（解析引导方法、
+                # 执行引导方法、编译 LambdaForm），途经的 JDK 帧即便在闭包内也不是模型再次进入
+                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0]):
+                    return mc, _frame_str(f)
                 above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
                 if not above:
                     return mc, _frame_str(f)

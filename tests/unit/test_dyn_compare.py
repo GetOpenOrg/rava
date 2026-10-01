@@ -156,6 +156,18 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 2), MAIN), self.methods, self.r,
                                       frozenset(), {site: 'indy-model'}), (dc.MISS, None))
 
+    def test_indy_linkage_through_modeled_jdk_frames(self):
+        # 调用点正上方是 JVM 链接期上调（MethodHandleNatives.linkCallSite）：链接途经的已建模 JDK 帧
+        # （insertArguments → … → LambdaForm 编译 → asm）不算模型再次进入，整段归 indy 模型
+        site = 'java/util/A.f:()V@1'
+        e = ev(('jdk/internal/org/objectweb/asm/Frame', '<init>', '()V', 0),
+               ('java/lang/invoke/LambdaForm', 'compileToBytecode', '()V', 9),
+               ('java/util/A', 'f', '()V', 4),
+               ('java/lang/invoke/MethodHandleNatives', 'linkCallSite', '()V', 0),
+               ('java/util/A', 'f', '()V', 1), MAIN)
+        self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), {site: 'indy-model'}),
+                         ('indy-model', site))
+
     def test_sigpoly_model(self):
         # 签名多态调用点（MethodHandle.invoke）上方是 LambdaForm 调用器帧：跳到其上方首个已建模帧，
         # 再经该帧的 indy 调用点进入链接期（TestBmhDynamicSpecies：main → invoke_MT → f → linkCallSite）
