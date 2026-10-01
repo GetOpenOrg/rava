@@ -330,7 +330,7 @@ impl Engine<'_> {
                     if self.sysprops_virtual(*opcode, mref, *iface, a.conservative) {
                         keys.push(None);
                     }
-                    let k = mref.to_string();
+                    let k = self.mref_key(mref);
                     if self.man.sysprops.is_holder(&k) && a.conservative {
                         keys.push(None);
                     }

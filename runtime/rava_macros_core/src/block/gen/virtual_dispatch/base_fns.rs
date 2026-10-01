@@ -23,7 +23,11 @@ pub(super) fn base_body(ctx: &GenContext, block: &syn::Block) -> syn::Block {
 
 /// VirtualDefine 的 vtable-safe 方法体在 base 函数里是否保留真实体（否则为精确报告的
 /// stub；分类为 Safe 时不会出现，判定与 base 函数生成同一谓词）。
-pub(super) fn define_base_has_body(ctx: &GenContext, f: &FnItem) -> bool {
+pub(crate) fn define_base_has_body(ctx: &GenContext, f: &FnItem) -> bool {
+    if f.moved.is_some() {
+        // 已下沉：结论即标注（标注由本函数对完整体求得，见 moved::moved_fact）
+        return f.moved == Some(super::super::super::moved::Moved::Safe);
+    }
     let Some(block) = &f.block else { return false };
     if !matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
         return false;
@@ -56,7 +60,7 @@ pub(super) fn override_base_owners<'c>(ctx: &'c GenContext) -> Vec<&'c FnItem> {
     let mut out = Vec::new();
     for override_fns in ctx.vtable_overrides.values() {
         for f in override_fns {
-            if f.block.is_none() {
+            if !has_body(f) {
                 continue;
             }
             let name = f.sig.ident.to_string();
@@ -119,20 +123,28 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
     //   - vtable-safe → 真实体（只有字段访问器 / vtable 方法调用；UFCS 消同名歧义 E0034）
     //   - 其余（Safe 分类下不会出现）→ stub 精确报告
     for f in &ctx.vtable_defines {
-        let Some(block) = &f.block else { continue };
+        if !has_body(f) {
+            continue;
+        }
         let sig = &f.sig;
         let fn_name = base_fn_ident(ctx, f);
         let mut stub = false;
-        let body = if !matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+        let body = if !is_safe(ctx, f) {
             erased_hook_call(
                 sig, &format_ident!("__impl_{}", sig.ident), &ctx.vtable_trait_ident,
                 &ctx.as_self_hook, &ctx.type_param_names)
         } else if define_base_has_body(ctx, f) {
-            let mut b = base_body(ctx, block);
-            replace_clone_this_in_ok(&mut b);
-            rewrite_vtable_calls_ufcs_for_base(&mut b, &ctx.vtable_define_names, &ctx.vtable_trait_ident);
-            let stmts = &b.stmts;
-            quote! { #(#stmts)* }
+            match &f.block {
+                Some(block) => {
+                    let mut b = base_body(ctx, block);
+                    replace_clone_this_in_ok(&mut b);
+                    rewrite_vtable_calls_ufcs_for_base(&mut b, &ctx.vtable_define_names, &ctx.vtable_trait_ident);
+                    let stmts = &b.stmts;
+                    quote! { #(#stmts)* }
+                }
+                // 已下沉：声明层只取外壳（拆层只用签名），体在实现层
+                None => quote! {},
+            }
         } else {
             let desc = attr_str(&f.attrs, "descriptor").unwrap_or_default();
             let msg = format!("stub: super {}.{}:{}", ctx.meta.binary_name, sig.ident, desc);
@@ -146,12 +158,17 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
     //   - vtable-safe 方法体（只有字段访问器）→ 直接在 `this` 上执行
     //   - 其余 → 经钩子重建本类 wrapper，执行 wrapper 上的 `__impl_<method>`
     for f in override_base_owners(ctx) {
-        let Some(block) = &f.block else { continue };
         let sig = &f.sig;
-        let body: TokenStream2 = if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
-            let b = base_body(ctx, block);
-            let stmts = &b.stmts;
-            quote! { #(#stmts)* }
+        let body: TokenStream2 = if is_safe(ctx, f) {
+            match &f.block {
+                Some(block) => {
+                    let b = base_body(ctx, block);
+                    let stmts = &b.stmts;
+                    quote! { #(#stmts)* }
+                }
+                // 已下沉：声明层只取外壳
+                None => quote! {},
+            }
         } else {
             erased_hook_call(
                 sig, &format_ident!("__impl_{}", sig.ident),

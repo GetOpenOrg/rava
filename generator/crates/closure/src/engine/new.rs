@@ -89,6 +89,7 @@ impl<'a> Engine<'a> {
             call_vals: None,
             unresolved: BTreeSet::new(),
             refs: BTreeSet::new(),
+            mref_keys: HashMap::default(),
             indy_models: BTreeMap::new(),
             cold_cut: false,
             mwork: VecDeque::new(),

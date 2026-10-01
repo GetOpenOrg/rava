@@ -11,6 +11,8 @@ mod body_fns;
 mod methods;
 mod object_vtable;
 
+pub(crate) use body_fns::functionize_applicable;
+
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 

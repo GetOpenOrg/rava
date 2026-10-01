@@ -26,6 +26,9 @@ mod erasure;
 mod gen;
 mod generic_sig;
 mod interface;
+mod moved;
+#[cfg(feature = "plan")]
+pub mod plan;
 mod parse;
 mod rewrite;
 mod util;
@@ -35,7 +38,7 @@ use quote::quote;
 
 use gen::GenContext;
 /// 类型参数约束补齐（`iface_upcasts!` 与类路径同源复用）
-pub(crate) use gen::context::augment_generic_bounds;
+pub use gen::context::augment_generic_bounds;
 use gen::layer::{place_fns, Layer};
 use interface::expand_interface;
 use parse::ClassInput;
@@ -66,6 +69,13 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
     // ── 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> ──────────────────────────────
     let generics = gen::context::augment_generic_bounds(&input.generics);
 
+    // 剥体标注只出现在非接口类的声明层（§7.5.2）
+    if let Some(f) = input.fns.iter().find(|f| f.moved.is_some()) {
+        if meta.layer != Layer::Decl || meta.is_interface {
+            return Err(syn::Error::new_spanned(&f.sig.ident, "rava_moved 只用于非接口类的声明层"));
+        }
+    }
+
     // ── 接口：同名载体类型（接口引用 + 静态成员）────────────────────────────
     if meta.is_interface {
         // 接口载体整体属声明层（default / static 方法体进实现层是后续项，见拆 crate 文档 §7.5）
@@ -81,10 +91,14 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
 
     let layer = ctx.meta.layer;
     let binary_name = ctx.meta.binary_name.clone();
-    let layout = gen::struct_layout::generate(&ctx);
+    // 存储层与 vtable impl 只进实现层：声明模式不计算（已下沉的体不在声明层文本里）
+    let (layout, dispatch_impls) = if layer == Layer::Decl {
+        (TokenStream2::new(), TokenStream2::new())
+    } else {
+        (gen::struct_layout::generate(&ctx), gen::virtual_dispatch::vtable_impls(&ctx)?)
+    };
     let hooks = gen::storage_hooks::generate(&ctx);
     let dispatch_trait = gen::virtual_dispatch::vtable_trait(&ctx);
-    let dispatch_impls = gen::virtual_dispatch::vtable_impls(&ctx)?;
     let (wrapper, body_fns) = gen::wrapper::generate(&ctx)?;
     let (conversions, inner_consts) = gen::type_conversions::generate(&ctx);
     let base_fns = gen::virtual_dispatch::base_fns(&ctx);
@@ -109,7 +123,10 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
             #(#generic_base)*
             #split_base
         },
-        Layer::Decl => quote! {
+        Layer::Decl => {
+            let digest = moved::decl_digest(&ctx);
+            quote! {
+            #digest
             #dispatch_trait
             #hooks
             #wrapper
@@ -117,14 +134,19 @@ fn expand_class(input: &ClassInput) -> syn::Result<TokenStream2> {
             #conversions
             #(#generic_base)*
             #split_base
-        },
-        Layer::Body => quote! {
+            }
+        }
+        Layer::Body => {
+            let check = moved::body_assert(&ctx);
+            quote! {
+            #check
             #layout
             #hooks
             #dispatch_impls
             #body_fns
             #inner_consts
             #split_base
-        },
+            }
+        }
     })
 }

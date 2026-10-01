@@ -77,8 +77,8 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
             .and_then(|gs| rebuild_sig_with_generics(&f.sig, &gs, &ctx.class_type_params))
             .unwrap_or_else(|| f.sig.clone());
         let erased_default_sig = erase_signature(&effective_sig, &ctx.type_param_names);
-        if let Some(block) = &f.block {
-            if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
+        if has_body(f) {
+            if is_safe(ctx, f) {
                 // vtable-safe 方法体（仅非泛型类）→ default 委托 base 函数
                 // （体可直接在 vtable 视图上运行）：本类 vtable 的 `&dyn` 视图经
                 // `__dyn_<X>` 取得（缺省方法的 Self 可能非 Sized，不能直接 unsize）
@@ -124,8 +124,7 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
     // 本类 vtable 的 `&dyn` 视图（仅 Safe 缺省方法需要）：独立 trait + 覆盖全部 Sized 实现类型的
     // 一揽子 impl，作为本类 vtable trait 的 supertrait——生成的与手写的实现类型都自动具备，
     // `dyn` 对象经 supertrait 槽位取得同一视图。
-    let needs_dyn_view = ctx.vtable_defines.iter().any(|f| f.block.as_ref().is_some_and(|b|
-        matches!(vtable_body_kind_gated(b, ctx.class_is_generic), VTableBodyKind::Safe)));
+    let needs_dyn_view = ctx.vtable_defines.iter().any(|f| has_body(f) && is_safe(ctx, f));
     let (dyn_view_decl, dyn_view_bound) = if needs_dyn_view {
         (quote! {
             #[doc(hidden)]

@@ -74,18 +74,8 @@ fn rename_ident(ts: TokenStream2, from: &str, to: &Ident, skip_path_prefix: bool
     out.into_iter().collect()
 }
 
-/// 把一个已完成宏改写的 wrapper 方法（签名 + 体语句）拆成体函数 + 外壳；不适用时 None。
-/// `fn_name` 是 wrapper 上的方法名（外壳用），`body_name` 是体函数名后缀（方法名）。
-/// `prologue` 是外壳在转发前执行的语句（空接收者检查）。
-pub(super) fn functionize(
-    ctx: &GenContext,
-    attrs: &TokenStream2,
-    vis: &TokenStream2,
-    sig: &syn::Signature,
-    body_name: &Ident,
-    stmts: &[syn::Stmt],
-    prologue: &TokenStream2,
-) -> Option<Functionized> {
+/// 签名形态：(有 `&self` 接收者, 非 self 形参名)；不适用函数化时 None
+fn shape(ctx: &GenContext, sig: &syn::Signature) -> Option<(bool, Vec<Ident>)> {
     if ctx.class_is_generic || !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
         return None;
     }
@@ -111,6 +101,11 @@ pub(super) fn functionize(
             }
         }
     }
+    Some((has_recv, idents))
+}
+
+/// 体语句去掉首句 `let this = self;`（有接收者时）后的记号流；改名不保义时 None
+fn body_tokens(has_recv: bool, stmts: &[syn::Stmt]) -> Option<TokenStream2> {
     let mut stmts: Vec<&syn::Stmt> = stmts.iter().collect();
     if has_recv {
         if stmts.first().is_some_and(|s| flat(&quote!(#s)) == "letthis=self;") {
@@ -122,10 +117,62 @@ pub(super) fn functionize(
         && mentions_ident(&body, "self")) {
         return None;
     }
+    Some(body)
+}
+
+/// 已完成宏改写的方法能否函数化（与 [`functionize`] 同一判据；剥体标注用）
+pub(crate) fn functionize_applicable(ctx: &GenContext, sig: &syn::Signature, stmts: &[syn::Stmt]) -> bool {
+    shape(ctx, sig).is_some_and(|(has_recv, _)| body_tokens(has_recv, stmts).is_some())
+}
+
+/// 把一个已完成宏改写的 wrapper 方法（签名 + 体语句）拆成体函数 + 外壳；不适用时 None。
+/// `fn_name` 是 wrapper 上的方法名（外壳用），`body_name` 是体函数名后缀（方法名）。
+/// `prologue` 是外壳在转发前执行的语句（空接收者检查）。
+pub(super) fn functionize(
+    ctx: &GenContext,
+    attrs: &TokenStream2,
+    vis: &TokenStream2,
+    sig: &syn::Signature,
+    body_name: &Ident,
+    stmts: &[syn::Stmt],
+    prologue: &TokenStream2,
+) -> Option<Functionized> {
+    let (has_recv, idents) = shape(ctx, sig)?;
+    let body = body_tokens(has_recv, stmts)?;
     let this_ident = format_ident!("this");
-    let struct_ident = &ctx.struct_ident;
     let body = if has_recv { rename_ident(body, "self", &this_ident, true) } else { body };
-    let body = rename_ident(body, "Self", struct_ident, false);
+    let body = rename_ident(body, "Self", &ctx.struct_ident, false);
+    Some(build(ctx, attrs, vis, sig, body_name, body, prologue, has_recv, &idents))
+}
+
+/// 已下沉方法（声明层，体不在本文本）的函数化：体函数只用于拆层取外壳（体为空），
+/// 外壳与有体时逐记号相同——二者都只取签名。标注保证有体时函数化成立。
+pub(super) fn functionize_moved(
+    ctx: &GenContext,
+    attrs: &TokenStream2,
+    vis: &TokenStream2,
+    sig: &syn::Signature,
+    body_name: &Ident,
+    prologue: &TokenStream2,
+) -> syn::Result<Functionized> {
+    let (has_recv, idents) = shape(ctx, sig).ok_or_else(|| syn::Error::new_spanned(
+        &sig.ident, "rava_moved：方法签名不适用函数化，体不能下沉"))?;
+    Ok(build(ctx, attrs, vis, sig, body_name, TokenStream2::new(), prologue, has_recv, &idents))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build(
+    ctx: &GenContext,
+    attrs: &TokenStream2,
+    vis: &TokenStream2,
+    sig: &syn::Signature,
+    body_name: &Ident,
+    body: TokenStream2,
+    prologue: &TokenStream2,
+    has_recv: bool,
+    idents: &[Ident],
+) -> Functionized {
+    let struct_ident = &ctx.struct_ident;
 
     // 体函数签名：接收者 → `this: &X`；其余形参（含 mut）与返回类型原样，`Self` → `X`
     let fn_ident = body_fn_ident(ctx, body_name);
@@ -157,5 +204,5 @@ pub(super) fn functionize(
         #attrs
         #vis #shell_sig { #prologue #fn_ident(#recv_arg #(#idents),*) }
     };
-    Some(Functionized { body_fn, shell })
+    Functionized { body_fn, shell }
 }
