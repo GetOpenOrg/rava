@@ -70,6 +70,18 @@ def _bin_name(out_dir: str, stem: str) -> str:
     sys.exit(f'user/Cargo.toml 无主类 {stem} 的 [[bin]]（现有：{", ".join(bins) or "无"}）')
 
 
+def _closure_diag_args(args) -> list:
+    """闭包诊断选项（--cut / --cut-file / --dump-edges）→ rava 参数（路径转绝对：rava 在生成器目录运行）"""
+    out = []
+    for c in args.cut:
+        out += ['--cut', c]
+    for f in args.cut_file:
+        out += ['--cut-file', os.path.abspath(f)]
+    if args.dump_edges:
+        out += ['--dump-edges', os.path.abspath(args.dump_edges)]
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description='Java .class → Rust 转译器')
     ap.add_argument('java_files', nargs='*', help='.java 源文件列表（默认 tests/e2e/01_basics/HelloWorld.java）')
@@ -93,6 +105,12 @@ def main():
     ap.add_argument('--trace-class', default='', metavar='CLASS',
                     help='打印该类或方法（斜线形态，如 java/net/InetAddress 或 类.方法:描述符）入闭包的'
                          '最短 provenance 链（rava closure --why）')
+    ap.add_argument('--cut', action='append', default=[], metavar='类.方法:描述符[@偏移]',
+                    help='闭包诊断：反事实切除该方法体或调用点（可重复；转交 rava --cut，改变闭包结果，仅供归因）')
+    ap.add_argument('--cut-file', action='append', default=[], metavar='FILE',
+                    help='闭包诊断：切除条目文件，每行一条（# 注释；转交 rava --cut-file）')
+    ap.add_argument('--dump-edges', default='', metavar='FILE',
+                    help='闭包诊断：触发边转储到 FILE（每行 源\\t目标\\t条件；转交 rava --dump-edges）')
     ap.add_argument('--precheck-only', action='store_true',
                     help='只转译并输出完整编译前预检明细（调用链上的 panic 存根 / 缺失 native），不编译不运行')
     ap.add_argument('--closure-json', action='store_true',
@@ -121,7 +139,8 @@ def main():
     run_rust(java_files, out_dir, clean=args.clean, strict=args.strict,
              locales=tuple(t for t in args.locales.split(',') if t.strip()),
              libs=tuple(args.lib), batch=args.batch, debug=args.debug, trace_class=args.trace_class,
-             precheck_only=args.precheck_only, raw_sites=args.raw_sites, closure_json=args.closure_json)
+             precheck_only=args.precheck_only, raw_sites=args.raw_sites, closure_json=args.closure_json,
+             extra=_closure_diag_args(args))
     if args.precheck_only:
         return
     t_transpile = time.perf_counter() - t0

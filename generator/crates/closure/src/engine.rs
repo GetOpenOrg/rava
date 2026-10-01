@@ -75,6 +75,7 @@ mod worklist;
 pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
+pub mod cut;
 mod setstore;
 use setstore::SetStore;
 mod scc;
@@ -84,6 +85,7 @@ use graph::FlowGraph;
 use share::Dep;
 use ctxsel::Call;
 use stats::{Phase, Why};
+pub use cut::Diag;
 pub use stats::{peak_mem_mb, peak_rss_mb};
 
 pub use seeds::SeedState;
@@ -374,6 +376,8 @@ pub struct Engine<'a> {
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
     fwriter_live: bool,
+    /// 反事实切除（诊断，缺省为空）
+    pub(crate) cuts: cut::Cuts,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段

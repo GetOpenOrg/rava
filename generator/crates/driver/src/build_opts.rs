@@ -4,6 +4,7 @@
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
 //!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
+//!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
 //!   [--closure-cache DIR [--closure-cache-max-mb N]]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]
@@ -74,6 +75,10 @@ pub struct BuildOpts {
     pub images: Vec<PathBuf>,
     pub locales: Vec<String>,
     pub roots: Vec<String>,
+    /// 闭包诊断：反事实切除条目 / 条目文件 / 触发边转储文件
+    pub cuts: Vec<String>,
+    pub cut_files: Vec<String>,
+    pub dump_edges: Option<String>,
     /// 公开 API 包为调用链入口（包内 public 类的 public / protected 方法，[`crate::api_roots`]）
     pub api_packages: Vec<String>,
     /// `--api-package` 含子包
@@ -105,7 +110,7 @@ pub struct BuildOpts {
     pub closure_cache_max_mb: Option<u64>,
 }
 
-const VALUED: [&str; 18] = [
+const VALUED: [&str; 21] = [
     "--closure-cache",
     "--closure-cache-max-mb",
     "--jdk",
@@ -124,11 +129,14 @@ const VALUED: [&str; 18] = [
     "--raw-sites",
     "--api-package",
     "--emit-jobs",
+    "--cut",
+    "--cut-file",
+    "--dump-edges",
 ];
 const FLAGS: [&str; 9] =
     ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf", "--closure-json"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 13] = [
+const BUILD_ONLY: [&str; 16] = [
     "--closure-cache",
     "--closure-cache-max-mb",
     "--main",
@@ -141,6 +149,9 @@ const BUILD_ONLY: [&str; 13] = [
     "--trace-class",
     "--api-package",
     "--api-recursive",
+    "--cut",
+    "--cut-file",
+    "--dump-edges",
     "--closure-json",
 ];
 /// 只属于 emit 的选项
@@ -188,6 +199,9 @@ impl BuildOpts {
                 "--java" => o.java.push(PathBuf::from(v)),
                 "--image" => o.images.push(PathBuf::from(v)),
                 "--locale" => o.locales.push(v.clone()),
+                "--cut" => o.cuts.push(v.clone()),
+                "--cut-file" => o.cut_files.push(v.clone()),
+                "--dump-edges" => o.dump_edges = Some(v.clone()),
                 "--lib" => o.libs.push(LibSpec::parse(v)?),
                 "--trace-class" => o.trace_class = Some(v.clone()),
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
@@ -302,6 +316,19 @@ mod tests {
         assert_eq!(o.locales, vec!["fr".to_string()]);
         assert!(o.clean && o.no_run && !o.strict);
         assert_eq!(o.main.as_deref(), Some("p/Main"));
+    }
+
+    #[test]
+    fn build_parses_closure_diag() {
+        let o = BuildOpts::parse(
+            Mode::Build,
+            &args("A.java --cut a/B.m:(Ljava/lang/String;)V --cut a/B.n:()V@7 --cut-file /c.txt --dump-edges /e.tsv"),
+        )
+        .unwrap();
+        assert_eq!(o.cuts, vec!["a/B.m:(Ljava/lang/String;)V".to_string(), "a/B.n:()V@7".to_string()]);
+        assert_eq!(o.cut_files, vec!["/c.txt".to_string()]);
+        assert_eq!(o.dump_edges.as_deref(), Some("/e.tsv"));
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --cut a/B.m:()V")).is_err());
     }
 
     #[test]

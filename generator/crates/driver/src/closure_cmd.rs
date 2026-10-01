@@ -6,7 +6,9 @@
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
 //! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
-//! `--locale <标签>`（locale 资源束种子）；诊断 `--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）；
+//! `--locale <标签>`（locale 资源束种子）；
+//! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
+//! `--dump-edges <文件>`（触发边转储）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 
@@ -45,6 +47,17 @@ pub(crate) fn find_runtime_dir(explicit: Option<PathBuf>) -> Result<PathBuf, Str
         return Ok(fallback);
     }
     Err("找不到 runtime/java_runtime（用 --runtime 指定）".into())
+}
+
+/// 诊断选项：`--cut` 条目 + `--cut-file` 文件逐行条目（空行 / `#` 注释跳过）+ `--dump-edges` 路径
+pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: Option<String>) -> Result<closure::engine::Diag, String> {
+    let mut all: Vec<String> = cuts.iter().map(|c| c.as_ref().to_string()).collect();
+    for f in cut_files {
+        let f = f.as_ref();
+        let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
+        all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
+    }
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from) })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -113,6 +126,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
+        diag: diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))?,
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
