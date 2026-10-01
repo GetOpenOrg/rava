@@ -173,9 +173,10 @@ fn try_finally_return_temp_kept_in_every_arm() {
     let Some((_, out)) = build("TryFinallyReturn.java", "try-finally-return", &[]) else { return };
     let rs = std::fs::read_to_string(out.join("user/src/try_finally_return.rs")).unwrap();
     let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn pick(")).take_while(|l| !l.contains("pub fn main(")).collect();
-    let arm1 = body.iter().position(|l| l.trim() == "1 => {").expect("case 1 臂");
-    assert!(body[arm1 + 1].contains("Self::a()?"), "{}", body.join("\n"));
-    assert_eq!(body[arm1 + 2].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
+    // 终态语义与臂的字面形态无关（case 标签可能因选择子值域与 default 合臂）：
+    // 返回值类型已是汇合类型（Object）的 case 1 臂，取值后紧接着存入暂存槽
+    let a1 = body.iter().position(|l| l.contains("let _t1: Object = Self::a()?;")).expect("case 1 取返回值");
+    assert_eq!(body[a1 + 1].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
     assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
     std::fs::remove_dir_all(&out).ok();
 }

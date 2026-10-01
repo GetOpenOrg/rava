@@ -209,7 +209,9 @@ impl<'a> Engine<'a> {
             }
             _ => {
                 let rm = site.method();
-                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() {
+                // 数组类型上的调用（`arr.clone()` 等）同样非虚：数组没有覆盖方法，目标恒为已解析的继承方法。
+                // 若经枢纽派发，手写层 / VM 产出的 open 数组没有分配点可展开，结果（clone 的副本）会丢失
+                if rm.is_private() || rm.is_static() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface() || is_array_type(&mref.owner) {
                     // 非虚：直接到已解析方法，接收者值流入 this
                     let r = recv_feeds(self);
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
@@ -420,5 +422,22 @@ impl<'a> Engine<'a> {
         if cur.is_some() {
             self.invalidate(t, Why::ParamConst);
         }
+    }
+}
+
+/// 调用描述中的属主是数组类型（`[` 开头的描述符形式）
+fn is_array_type(owner: &str) -> bool {
+    owner.starts_with('[')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_array_type;
+
+    #[test]
+    fn array_owners_are_recognized_by_descriptor_form() {
+        assert!(is_array_type("[Lp/C;"));
+        assert!(is_array_type("[[I"));
+        assert!(!is_array_type("p/C"));
     }
 }
