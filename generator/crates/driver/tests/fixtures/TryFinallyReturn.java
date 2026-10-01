@@ -17,8 +17,10 @@ public class TryFinallyReturn {
         }
     }
     public static void main(String[] args) {
-        System.out.println(pick(1));
-        System.out.println(pick(2));
-        System.out.println(pick(3));
+        // 选择子经非常量实参传入：常量实参会让分析器按调用上下文剪掉 default 臂（选择子形参精度），偏离本夹具关注点
+        int base = args0.length;
+        System.out.println(pick(base + 1));
+        System.out.println(pick(base + 2));
+        System.out.println(pick(base + 3));
     }
 }

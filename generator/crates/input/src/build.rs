@@ -96,8 +96,8 @@ pub struct EmitInput {
     pub jdk_classes: Vec<String>,
     /// 调用链：已解析方法 ∪ 继承槽位需求的调用点符号键 ∪ `<clinit>`
     pub visited: BTreeSet<MethodKey>,
-    /// 只按类型层级入闭包的类
-    pub field_stubs: BTreeSet<String>,
+    /// L1（名字级）类：只发不透明类型（`java_class_opaque!`），无字段 / 方法 / vtable
+    pub opaque: BTreeSet<String>,
     pub reflect: ReflectFacts,
     pub data_bundle_seeds: Vec<String>,
     pub annotation_enum_seeds: Vec<String>,
@@ -161,25 +161,28 @@ fn declares(cf: &ClassFile, name: &str, desc: &str) -> bool {
     cf.methods.iter().any(|m| m.name == name && m.desc == desc)
 }
 
-/// 闭包类 → (非用户域的可装载类序, 类型层级类, 告警)
+/// 闭包类 → (非用户域的可装载类序, L1 类（含用户类）, 告警)
 fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Arc<ClassFile>>, BTreeSet<String>) {
     let users: BTreeSet<&str> = inp.user_classes.iter().map(String::as_str).collect();
     let mut out = Vec::new();
-    let mut field_stubs = BTreeSet::new();
+    let mut opaque = BTreeSet::new();
     for c in &inp.facts.classes {
-        if c.domain == Domain::Root || (c.domain == Domain::User && users.contains(c.name.as_str())) {
+        if c.domain == Domain::Root {
+            continue;
+        }
+        if c.level == Level::Type {
+            opaque.insert(c.name.clone());
+        }
+        if c.domain == Domain::User && users.contains(c.name.as_str()) {
             continue;
         }
         let Some(cf) = load(inp.cp, &c.name) else {
             warnings.push(format!("闭包类无法装载：{}", c.name));
             continue;
         };
-        if c.level == Level::Type {
-            field_stubs.insert(c.name.clone());
-        }
         out.push(cf);
     }
-    (out, field_stubs)
+    (out, opaque)
 }
 
 fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
@@ -361,7 +364,7 @@ impl<'a> BuildInput<'a> {
             since = now;
         };
         let mut warnings = Vec::new();
-        let (closure, field_stubs) = closure_classes(self, &mut warnings);
+        let (closure, opaque) = closure_classes(self, &mut warnings);
         let visited = visited_of(self);
         lap("input.closure");
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
@@ -386,7 +389,7 @@ impl<'a> BuildInput<'a> {
             lib_crates,
             jdk_classes,
             visited,
-            field_stubs,
+            opaque,
             reflect,
             data_bundle_seeds: f.seeds.data_bundles.clone(),
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),

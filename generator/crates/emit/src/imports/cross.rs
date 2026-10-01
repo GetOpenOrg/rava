@@ -237,7 +237,8 @@ pub fn plan_cross_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_
 
 /// 超类链 `__VTable` → `__base` 自由函数 → 用户类兄弟模块
 fn finish(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, mut acc: Acc) -> Result<CrossPlan> {
-    if !ci.is_interface() {
+    // 不透明类（L1）无 vtable 实现 / 方法体：不引祖先 vtable 与 `__base`
+    if !ci.is_interface() && !ctx.is_opaque(ci.name()) {
         vtable_imports(ctx, ci, inp, &mut acc);
         base_fn_imports(ctx, ci, inp, &mut acc)?;
     }

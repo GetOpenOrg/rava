@@ -180,7 +180,7 @@ impl Ctx<'_> {
             "lib_crates" => json!(e.lib_crates),
             "jdk_classes" => json!(e.jdk_classes),
             "visited" => json!(e.visited.iter().map(key_str).collect::<BTreeSet<_>>()),
-            "field_stubs" => json!(e.field_stubs),
+            "field_stubs" => json!(e.opaque),
             "reflect_consts" => json!(e.reflect.consts),
             "reflect_all" => json!(e.reflect.all_members),
             "reflect_field_names" => json!(e.reflect.field_names),

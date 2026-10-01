@@ -236,6 +236,11 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// 调用链成员判定（用户类恒全量）
+    /// L1（名字级）类：发不透明形态（`class_writer::opaque`）
+    pub fn is_opaque(&self, cls: &str) -> bool {
+        self.input.opaque.contains(cls)
+    }
+
     pub fn in_chain(&self, cls: &str, name: &str, desc: &str) -> bool {
         self.input
             .visited
