@@ -164,7 +164,7 @@ impl<'a> Engine<'a> {
     /// 字段的写入来源超出字节码：不折叠，读者失效
     pub(super) fn open_field(&mut self, key: MemberRef) {
         if self.ctx.fopen.borrow_mut().insert(key.clone()) {
-            self.ctx.cevals.borrow_mut().clear();
+            self.ctx.ceval_drop_field(&key);
             let deps = self.ctx.fdeps.borrow().get(&key).cloned();
             self.invalidate_all(deps, Why::FieldOpen);
             self.open_static(&key);
@@ -173,7 +173,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
-            self.ctx.cevals.borrow_mut().clear();
+            self.ctx.ceval_drop_name(name);
             let deps: BTreeSet<usize> =
                 self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()).collect();
             self.invalidate_all(Some(deps), Why::FieldOpenName);

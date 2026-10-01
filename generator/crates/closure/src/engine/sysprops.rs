@@ -84,22 +84,20 @@ fn param_of(v: &V) -> Option<usize> {
 impl Ctx<'_> {
     /// 由调用实参派生的结果：值相等判定、属性表持有方法、属性读取
     pub(super) fn derived_result(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
-        let k = m.to_string();
-        if self.man.is_value_equals(&k) || c.target.as_ref().is_some_and(|t| self.man.is_value_equals(&t.to_string())) {
+        if c.value_eq {
             return match args {
                 [V::Str(a), V::Str(b)] => Some(Ret::Value(V::Int((a == b) as i32))),
                 [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
                 _ => None,
             };
         }
-        let op = self.man.string_op(&k).or_else(|| c.target.as_ref().and_then(|t| self.man.string_op(&t.to_string())));
-        if let Some(op) = op {
+        if let Some(op) = c.str_op {
             return string_op(op, args).map(Ret::Value);
         }
         if self.man.sysprops.is_empty() {
             return None;
         }
-        if self.man.sysprops.is_holder(&k) {
+        if c.holder {
             let ret = parse_method(&m.desc).and_then(|md| md.ret).map(|t| t.descriptor())?;
             return Some(Ret::Value(self.sysprops_ref(&ret)));
         }
@@ -110,14 +108,26 @@ impl Ctx<'_> {
         self.prop_read(me, &spec, args)
     }
 
+    /// 清单属性读取锚点（成员键）的读取形态
+    pub(super) fn reader_spec(&self, k: &str) -> Option<PropSum> {
+        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) })
+    }
+
     /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
     pub(super) fn read_spec(&self, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
-        if let Some(r) = self.man.sysprops.reader(&m.to_string()) {
-            return Some(PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) });
-        }
         let c = match c {
-            Some(c) => c.target.clone(),
-            None => self.call_info(opcode, m, iface).target.clone(),
+            Some(c) => {
+                if c.reader.is_some() {
+                    return c.reader.clone();
+                }
+                c.target.clone()
+            }
+            None => {
+                if let Some(r) = self.reader_spec(&m.to_string()) {
+                    return Some(r);
+                }
+                self.call_info(opcode, m, iface).target.clone()
+            }
         }?;
         self.prop_summary(&c)
     }

@@ -19,28 +19,32 @@ pub(super) enum PSlot {
 
 #[derive(Default)]
 pub(super) struct PStrs {
-    sets: HashMap<PSlot, BTreeSet<Rc<str>>>,
+    /// 字面量序号集（`absint::lit`；传递只做位运算）
+    sets: HashMap<PSlot, IdSet>,
     succ: HashMap<PSlot, BTreeSet<PSlot>>,
     /// 读过方法形参槽的按名查找站点（偏移）
     sites: HashMap<(usize, usize), BTreeSet<u32>>,
 }
 
 impl<'a> Engine<'a> {
-    /// 方法 m 形参槽 i 上的字符串常量；登记站点 (m, off) 为读者
+    /// 方法 m 形参槽 i 上的字符串常量（按字符串序）；登记站点 (m, off) 为读者
     pub(super) fn pstr_read(&mut self, m: usize, i: usize, off: u32) -> Vec<Rc<str>> {
         self.pstr.sites.entry((m, i)).or_default().insert(off);
-        self.pstr.sets.get(&PSlot::M(m, i)).into_iter().flatten().cloned().collect()
+        let mut out: Vec<Rc<str>> = self.pstr.sets.get(&PSlot::M(m, i)).into_iter().flatten().map(crate::absint::lit_str).collect();
+        out.sort_unstable();
+        out
     }
 
-    /// 常量并入槽 at，沿子集边传递
-    fn pstr_add(&mut self, at: PSlot, strs: Vec<Rc<str>>) {
+    /// 常量并入槽 at，沿子集边传递（只传新增部分）
+    fn pstr_add(&mut self, at: PSlot, strs: IdSet) {
         let mut work = vec![(at, strs)];
         while let Some((s, xs)) = work.pop() {
             let set = self.pstr.sets.entry(s).or_default();
-            let new: Vec<Rc<str>> = xs.into_iter().filter(|x| set.insert(x.clone())).collect();
+            let new = xs.minus(set);
             if new.is_empty() {
                 continue;
             }
+            set.union_with(&new);
             if let PSlot::M(t, i) = s {
                 for &off in self.pstr.sites.get(&(t, i)).into_iter().flatten() {
                     if self.in_swork.insert((t, off)) {
@@ -59,7 +63,7 @@ impl<'a> Engine<'a> {
         if from == to || !self.pstr.succ.entry(from).or_default().insert(to) {
             return;
         }
-        let xs: Vec<Rc<str>> = self.pstr.sets.get(&from).into_iter().flatten().cloned().collect();
+        let xs = self.pstr.sets.get(&from).cloned().unwrap_or_default();
         if !xs.is_empty() {
             self.pstr_add(to, xs);
         }
@@ -68,9 +72,9 @@ impl<'a> Engine<'a> {
     /// 调用方 m 的调用点实参值 vals（不含接收者）流入槽 to(j)
     pub(super) fn pstr_site(&mut self, m: usize, vals: &[V], to: impl Fn(usize) -> PSlot) {
         for (j, v) in vals.iter().enumerate() {
-            let lits = v.lits();
+            let lits = v.lit_ids();
             if !lits.is_empty() {
-                self.pstr_add(to(j), lits);
+                self.pstr_add(to(j), lits.into_iter().collect());
             }
             if let V::Ref { src, .. } = v {
                 for s in src.iter() {

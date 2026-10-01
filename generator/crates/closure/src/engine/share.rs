@@ -43,11 +43,28 @@ impl Ctx<'_> {
     /// 上下文 m 登记依赖 d；分析进行中（`dep_log` 打开）同时记入日志
     pub(super) fn dep(&self, m: usize, d: Dep) {
         match &d {
+            // 已登记的键不再克隆（逐调用点 / 逐字段读都会走到这里）
             Dep::Field(k) => {
-                self.fdeps.borrow_mut().entry(k.clone()).or_default().insert(m);
+                let mut ds = self.fdeps.borrow_mut();
+                match ds.get_mut(k) {
+                    Some(s) => {
+                        s.insert(m);
+                    }
+                    None => {
+                        ds.entry(k.clone()).or_default().insert(m);
+                    }
+                }
             }
             Dep::Ret(t) => {
-                self.rdeps.borrow_mut().entry(t.clone()).or_default().insert(m);
+                let mut ds = self.rdeps.borrow_mut();
+                match ds.get_mut(t) {
+                    Some(s) => {
+                        s.insert(m);
+                    }
+                    None => {
+                        ds.entry(t.clone()).or_default().insert(m);
+                    }
+                }
             }
             Dep::Never => {
                 self.never.borrow_mut().insert(m);

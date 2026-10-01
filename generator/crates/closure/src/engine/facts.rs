@@ -102,7 +102,7 @@ pub(super) struct Ctx<'a> {
     /// 分析进行中登记的依赖日志（摘要共享时向新上下文重放，见 `share.rs`）；None = 未在记录
     pub(super) dep_log: RefCell<Option<Vec<super::share::Dep>>>,
     /// 常量实参求值记忆：`目标|常量实参` → (结果, 读过的字段)
-    pub(super) cevals: RefCell<HashMap<String, super::consteval::CEval>>,
+    pub(super) cevals: RefCell<HashMap<super::consteval::CKey, super::consteval::CEval>>,
     /// 进行中的常量实参求值的字段读集（栈）
     pub(super) ceval_reads: RefCell<Vec<Vec<MemberRef>>>,
     pub(super) ceval_depth: Cell<u32>,
@@ -117,6 +117,14 @@ pub(super) struct CallInfo {
     pub(super) null_to_false: bool,
     /// 唯一目标且为字节码方法
     pub(super) target: Option<MemberRef>,
+    /// 清单 value_equals（调用名或唯一目标名）
+    pub(super) value_eq: bool,
+    /// 清单字符串纯函数（调用名优先，其次唯一目标名）
+    pub(super) str_op: Option<crate::manifest::StrOp>,
+    /// 清单属性表持有方法
+    pub(super) holder: bool,
+    /// 清单属性读取锚点的读取形态
+    pub(super) reader: Option<super::sysprops::PropSum>,
 }
 
 /// 字段引用解析结果
@@ -316,7 +324,18 @@ impl Ctx<'_> {
             .exact_target(opcode, m, iface)
             .filter(|(cf, t)| cf.method(&t.name, &t.desc).is_some_and(|tm| self.kind_of(cf, tm) == Kind::Bytecode))
             .map(|(_, t)| t);
-        let c = Rc::new(CallInfo { fact, null_to_false: self.man.is_null_to_false(&k), target });
+        let tk = target.as_ref().map(|t| t.to_string());
+        let value_eq = self.man.is_value_equals(&k) || tk.as_ref().is_some_and(|t| self.man.is_value_equals(t));
+        let str_op = self.man.string_op(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_op(t)));
+        let c = Rc::new(CallInfo {
+            fact,
+            null_to_false: self.man.is_null_to_false(&k),
+            target,
+            value_eq,
+            str_op,
+            holder: self.man.sysprops.is_holder(&k),
+            reader: self.reader_spec(&k),
+        });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
     }

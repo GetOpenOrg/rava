@@ -308,7 +308,7 @@ impl<'a> Engine<'a> {
             None => (vec![], true),
         };
         let (objs, other) = if fresh {
-            let objs: Vec<u32> = objs.into_iter().filter(|&o| self.recv_mark(m, off, o)).collect();
+            let objs = self.recv_mark_all(m, off, &objs);
             (objs, other && self.recv_mark(m, off, FIELD_OTHER))
         } else {
             (objs, other)
@@ -363,6 +363,39 @@ impl<'a> Engine<'a> {
 
 impl Engine<'_> {
     /// 站点 (m, off) 登记已接上的接收者对象（或哨兵）x；首次登记返回 true
+    /// 批量登记升序的对象 xs，返回其中新登记的（升序）；一趟归并，免逐个插入的搬移
+    pub(super) fn recv_mark_all(&mut self, m: usize, off: u32, xs: &[u32]) -> Vec<u32> {
+        let v = self.recv_done.entry(m).or_default().entry(off).or_default();
+        let mut new = Vec::new();
+        let mut i = 0;
+        for &x in xs {
+            while i < v.len() && v[i] < x {
+                i += 1;
+            }
+            if i == v.len() || v[i] != x {
+                new.push(x);
+            }
+        }
+        if !new.is_empty() {
+            let old = std::mem::take(v);
+            let mut out = Vec::with_capacity(old.len() + new.len());
+            let (mut a, mut b) = (old.iter().peekable(), new.iter().peekable());
+            while let (Some(&&p), Some(&&q)) = (a.peek(), b.peek()) {
+                if p < q {
+                    out.push(p);
+                    a.next();
+                } else {
+                    out.push(q);
+                    b.next();
+                }
+            }
+            out.extend(a);
+            out.extend(b);
+            *v = out;
+        }
+        new
+    }
+
     pub(super) fn recv_mark(&mut self, m: usize, off: u32, x: u32) -> bool {
         let v = self.recv_done.entry(m).or_default().entry(off).or_default();
         match v.binary_search(&x) {

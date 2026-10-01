@@ -26,23 +26,48 @@ fn exportable(v: &V) -> bool {
 /// 求值记忆：结果与求值中读过的字段
 pub(super) type CEval = (Option<V>, Rc<[MemberRef]>);
 
+/// 记忆键里的常量实参（字符串取字面量序号）
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum CArg {
+    Int(i32),
+    Long(i64),
+    Null,
+    Str(u32),
+}
+
+/// 记忆键：目标、各实参（非常量 = None）、起始深度
+pub(super) type CKey = (MemberRef, Vec<Option<CArg>>, u32);
+
+fn carg(v: &V) -> Option<CArg> {
+    match v {
+        V::Int(i) => Some(CArg::Int(*i)),
+        V::Long(l) => Some(CArg::Long(*l)),
+        V::Null => Some(CArg::Null),
+        V::Str(s) => Some(CArg::Str(crate::absint::lit_id(s))),
+        _ => None,
+    }
+}
+
 impl Ctx<'_> {
     /// 调用 `t`（唯一字节码目标）在实参 `args`（含接收者）上的常量结果；me = 外层被分析的方法
     pub(super) fn const_eval(&self, me: Option<usize>, t: &MemberRef, args: &[V]) -> Option<V> {
         if !args.iter().any(is_const) {
             return None;
         }
-        let bound: Vec<Option<V>> = args.iter().map(|a| is_const(a).then(|| a.clone())).collect();
         // 记忆键带起始深度：嵌套求值的深度上限截断只取决于它
-        let key = format!("{t}|{bound:?}");
-        let memo_key = format!("{key}|{}", self.ceval_depth.get());
+        let memo_key: CKey = (t.clone(), args.iter().map(carg).collect(), self.ceval_depth.get());
         let hit = self.cevals.borrow().get(&memo_key).cloned();
+        self.stats.borrow_mut().ceval[usize::from(hit.is_none())] += 1;
         let (v, reads) = match hit {
             Some(e) => e,
             None => {
+                let bound: Vec<Option<V>> = args.iter().map(|a| is_const(a).then(|| a.clone())).collect();
+                let key = format!("{t}|{bound:?}");
                 let (e, clean) = self.const_eval_fresh(&key, t, bound)?;
                 if clean {
                     self.cevals.borrow_mut().insert(memo_key, e.clone());
+                } else {
+                    self.stats.borrow_mut().ceval[3] += 1;
                 }
                 e
             }
@@ -75,6 +100,7 @@ impl Ctx<'_> {
             return None;
         }
         let frame = self.memo_enter(format!("ceval:{key}"), false)?;
+        self.stats.borrow_mut().ceval[2] += 1;
         self.ceval_depth.set(self.ceval_depth.get() + 1);
         self.ceval_reads.borrow_mut().push(Vec::new());
         let live = |_: &str| true;
@@ -94,6 +120,16 @@ impl Ctx<'_> {
             _ => None,
         };
         Some(((v, reads), clean))
+    }
+
+    /// 字段 f 转为不折叠：读过它的求值记忆作废（其余记忆的输入未变，重算结果相同）
+    pub(super) fn ceval_drop_field(&self, f: &MemberRef) {
+        self.cevals.borrow_mut().retain(|_, (_, reads)| !reads.contains(f));
+    }
+
+    /// 名为 name 的字段全部转为不折叠：读过同名字段的求值记忆作废
+    pub(super) fn ceval_drop_name(&self, name: &str) {
+        self.cevals.borrow_mut().retain(|_, (_, reads)| !reads.iter().any(|r| r.name == name));
     }
 
     /// 辅助分析（m = None）读字段：计入当前常量实参求值的读集
