@@ -148,6 +148,8 @@ impl<'a> Engine<'a> {
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
             snake_index: None,
+            vm_rules_fired: 0,
+            hw_static_reads: HashSet::default(),
             seeds: SeedState::default(),
             via_flow: false,
             open_inj: HashMap::default(),

@@ -1,8 +1,8 @@
-//! VM 钩子：类的共置手写文件里声明了回调边（`upcalls = "…"`）、却不对应该类任何 Java 成员的 pub fn。
+//! VM 钩子：类的共置手写文件里不对应该类任何 Java 成员的 pub fn。
 //!
-//! 它们不经 Java 调用点进入：生成代码 / rava_macros 在该类对象上直接调用（接口载体回落到代理调用等），
-//! 运行期随该类对象一同存活。回调边只登记在钩子自身的属性上，成员匹配看不到它们——引擎在该类实例化时
-//! 把钩子当作入口建模（见 `engine/vmhook.rs`）。
+//! 它们不经 Java 调用点进入：生成代码 / rava_macros / 其他手写体在该类对象上直接调用（接口载体回落到
+//! 代理调用等），运行期随该类对象一同存活。成员匹配看不到它们——引擎在该类实例化时把钩子当作入口建模
+//!（见 `engine/vmhook.rs`），手写体调用点照常推断回调边。
 
 use super::{ClassHw, FnInfo, MemberHw};
 
@@ -28,19 +28,18 @@ impl ClassHw {
 }
 
 fn is_hook(f: &FnInfo) -> bool {
-    f.is_pub && !f.upcalls.is_empty()
+    f.is_pub
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::scan::{close_transitive, scan_file};
     use super::super::{member_matches, ClassHw};
-    use super::*;
     use std::collections::HashMap;
 
-    /// 声明回调边的非成员 pub fn 才是钩子：成员 fn、无回调声明的 pub fn、私有 fn 都不是
+    /// 非成员 pub fn 才是钩子：成员 fn、私有 fn 都不是
     #[test]
-    fn hooks_are_non_member_pub_fns_with_upcalls() {
+    fn hooks_are_non_member_pub_fns() {
         let src = r#"
             impl P {
                 #[jvm_boundary(upcalls = "a/B.valueOf:(C)La/B;")]
@@ -60,9 +59,8 @@ mod tests {
         let hw = ClassHw { fns: raw.fns, ..Default::default() };
         let members = ["dispatch", "<init>"];
         let hooks = hw.vm_hooks(|f| members.iter().any(|m| member_matches(f, m)));
-        assert_eq!(hooks, vec!["__vm_hook".to_string()]);
+        assert_eq!(hooks, vec!["__vm_hook".to_string(), "__vm_plain".to_string()]);
         let mh = hw.fns_member(&hooks);
-        assert_eq!(mh.upcalls.len(), 1);
         assert_eq!(mh.fns, hooks);
     }
 }
