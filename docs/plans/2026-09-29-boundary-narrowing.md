@@ -1092,6 +1092,41 @@ a8fdf1d0 起 `switch (k)` 按调用点常量剪枝，`default: throw` 在全部�
 后续（mono 合并后报 case 1 与 default 合为 `_ =>`）：断言改为与臂字面形态无关——case 1 的 `let _t1: Object = Self::a()?;`
 之后紧接 `local_1 = Clone::clone(&_t1);`，且三处存储 `local_1`。在本分支与临时合入 closure-p6（f607ba0a）的树上均通过（6ced8de5）。
 
+**合入 rust-closure-analyzer d41b3006（含 mono、P6 缓存；合并提交 c53b06bc，无冲突）**：
+- 测试：closure / emit / driver build_cli 全部通过。
+- main.py：ComparatorFactory、TestDynamicProxy、DateTest、DeepCopy 四例全部 MATCH。
+- 31 例对照 d41b3006 二进制：
+  - 类集合逐例相同；
+  - 方法只增不减，增量全部是上文 S6 已归因的 `Constructor.getParameterTypes / newInstance / getName`；
+  - null_recv 3257 → 1570，没有新增站点。
+
+**dyn miss 归零（31 例 miss 全部 0）**：先按调用栈归因，两类原因都不是类名特判能覆盖的，各用一条通用规则处理。
+
+- **TestOptionalFull `java/util/stream/Streams`（frame 为空：栈上的帧全部已建模，漏的是类引用边）。**
+  - 现象：`Streams$StreamBuilderImpl.<init>@1` 以 invokespecial 调 `Streams$AbstractStreamBuilderImpl` 的 **private** 构造器。
+  - 原因：两者是嵌套伙伴，声明类与访问类不同，VM 访问检查（JVMS §5.4.4）读取双方的 `NestHost` 并加载宿主 `Streams`。
+    `Streams` 本身没有可达成员，分析器之前没有这条边。
+  - 规则（`engine/nest.rs`）：字节码方法解析到**其他类声明的 private 成员**（方法：`invoke_inner`；字段：`field`）时，
+    按 `Level::Type` 登记访问方与声明方的嵌套宿主，溯源记为 `nest-host`。只登记不是访问双方本身的宿主；同类访问和非 private 成员不检查。
+  - 单测：`nest::tests` 三项。
+- **TestReflectFieldMethod 4 类（两条链，均为基准 JVM 与原生程序配置不一致）。**
+  - `ClassSpecializer$Factory$1Var`、`BoundMethodHandle$Species_LI` 经 `MethodHandleAccessorFactory.getDirectMethod@82` 加载。
+  - `AccessorUtils`、`StackTraceElement$HashedModules` 经 `DirectMethodHandleAccessor.invoke@30` 加载。
+  - 归因：原生系统属性表 `jdk.reflect.useNativeAccessorOnly = "true"`（vm_intrinsics.toml）。分析器据此把
+    `MethodHandleAccessorFactory.useNativeAccessor` 折叠为真，`Method.invoke` 只走 `DirectMethodHandleAccessor$NativeAccessor`（手写 `invoke0`）。
+    这对原生程序是对的。但 `dyn_compare` 起的基准 JVM 没有该属性，走了 MethodHandle 访问器：运行期生成 BMH species、
+    异常路径上调 `AccessorUtils`。这两条链是原生程序不执行的库路径，闭包不应、也没有覆盖它们。
+  - 规则（`scripts/dyn_compare.py` `native_config`）：基准 JVM 与原生二进制同一配置。`[facts.system_properties.values]` 中
+    基准 JVM 缺省不定义的键（由 `java -XshowSettings:properties` 取 JVM 自有键集）以 `-D` 注入。
+    JVM 自有键（路径、编码、VM 名等）保留 JVM 取值。当前注入的只有 `jdk.reflect.useNativeAccessorOnly=true`。
+  - 单测：`test_dyn_compare.NativeConfigTest` 两项。
+  - 注入后 TestReflectFieldMethod 程序期加载 124 → 114，extra 676 → 683：闭包未变，是基准不再加载 MH 访问器族。
+- **集合**（对照 c53b06bc）：
+  - 7 例类 +1，都是 `java/util/stream/Streams`，via 为 `nest-host`（`Streams$StreamBuilderImpl.<init>@1`）：
+    TestDateTimeFormat、TestOptionalFull、TestStreamAdvanced、TestStreamCollectors、DateTest、Currency、TestReflectFieldMethod。
+  - 其余 24 例类不变；31 例方法与 null_recv 全部不变。
+- **main.py**：TestOptionalFull、TestReflectFieldMethod、DateTest 三例全部 MATCH。
+
 ## 七、验收
 
 - §一 终态表各项达标。

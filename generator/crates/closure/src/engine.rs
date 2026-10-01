@@ -60,6 +60,7 @@ mod selector;
 mod noreturn;
 mod class_lookup;
 mod sealed;
+mod nest;
 mod method_lookup;
 mod pstrs;
 mod share;

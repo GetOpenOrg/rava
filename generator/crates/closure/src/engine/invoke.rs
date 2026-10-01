@@ -162,6 +162,7 @@ impl<'a> Engine<'a> {
             return;
         };
         let (o, n, d) = site.key();
+        self.nest_access(m, off, &o, site.method().is_private());
         let resolved = MemberRef { owner: o, name: n, desc: d };
         let Some(md) = parse_method(&mref.desc) else { return };
         let owner = self.id(&mref.owner);

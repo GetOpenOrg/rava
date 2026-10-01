@@ -273,6 +273,7 @@ impl<'a> Engine<'a> {
         if first {
             self.touch(&f.owner, Level::Type, via.clone());
             self.touch_desc(&f.desc, &via);
+            self.nest_access(m, off, &decl, site.field().access & acc::PRIVATE != 0);
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }

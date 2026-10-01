@@ -3,7 +3,11 @@
 
 只用于验证，不参与闭包计算。每个测试跑一次原始 Java 程序：
 
-    java -Xshare:off -agentpath:<load_trace>=<轨迹> -Xlog:class+load,class+init:file=<日志> <主类>
+    java -Xshare:off -D<原生配置>... -agentpath:<load_trace>=<轨迹> -Xlog:class+load,class+init:file=<日志> <主类>
+
+- `-D`：基准 JVM 与原生二进制同一配置——原生系统属性表（vm_intrinsics.toml `[facts.system_properties.values]`）
+  里 JVM 缺省不定义的键（如 `jdk.reflect.useNativeAccessorOnly`：原生反射只走 native 访问器）按原值注入。
+  否则 JVM 走原生程序不走的库路径（MethodHandle 反射访问器及其运行期类生成），其加载不是闭包的漏覆盖。
 
 - `-Xlog`：JVM 实际加载的类全集（静态多出的判据），以及主类初始化（main 即将执行）之后加载的
   「程序期」类集合（漏覆盖的判据；启动器装载与反射找 main 均在此之前，自然排除）。
@@ -52,6 +56,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -422,6 +427,30 @@ def user_classes(classes_dir: Path) -> set[str]:
             for p in classes_dir.rglob("*.class")}
 
 
+_PROP_LINE = re.compile(r"^    (\S+) =(?: |$)")
+
+
+def parse_property_keys(settings: str) -> set[str]:
+    """`java -XshowSettings:properties` 输出（stderr）里的属性键（续行缩进更深，不含键）。"""
+    return {m.group(1) for m in map(_PROP_LINE.match, settings.splitlines()) if m}
+
+
+def native_config_args(values: dict[str, str], jvm_keys: set[str]) -> list[str]:
+    """基准 JVM 与原生二进制同一配置：原生系统属性表（vm_intrinsics.toml
+    `[facts.system_properties.values]`，闭包按它折叠属性读取）里、基准 JVM 缺省不定义的键以 `-D` 注入。
+    JVM 自有的键（路径、编码、VM 名等）保留 JVM 取值——它们由 JVM 启动期填充，不选择库代码路径。"""
+    return [f"-D{k}={v}" for k, v in sorted(values.items()) if k not in jvm_keys]
+
+
+def native_config(java: str) -> list[str]:
+    import tomllib
+    with open(MANIFEST_DIR / "vm_intrinsics.toml", "rb") as f:
+        values = tomllib.load(f).get("facts", {}).get("system_properties", {}).get("values", {})
+    r = subprocess.run([java, "-XshowSettings:properties", "-version"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    return native_config_args(values, parse_property_keys(r.stderr))
+
+
 def _java_run(cmd: list[str], cwd: Path, timeout: float) -> str | None:
     try:
         r = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -454,7 +483,7 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
         agent_p = Path(tmp) / "agent.txt"
         # 基准与归因同一次运行：JVMTI agent 不执行 Java 代码，不改变加载序列
         opt = f"{agent_p},methods={main}" if methods else str(agent_p)
-        err = _java_run([java, "-Xshare:off", f"-agentpath:{lib}={opt}",
+        err = _java_run([java, "-Xshare:off", *native_config(java), f"-agentpath:{lib}={opt}",
                          f"-Xlog:class+load=info,class+init=info:file={xlog_p}",
                          "-cp", str(classes_dir), main.replace("/", ".")], cwd, timeout)
         xlog = xlog_p.read_text(errors="replace") if xlog_p.exists() else ""
