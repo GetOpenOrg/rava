@@ -114,18 +114,26 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let iface_vtable_idents: Vec<Ident> = ctx.iface_impls.iter()
         .map(|ii| format_ident!("{}__VTable", ii.iface))
         .collect();
-    let interface_query: TokenStream2 = if iface_vtable_idents.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
-                #(
-                    if let Some(s) = slot.downcast_mut::<::std::option::Option<__Shared<dyn #iface_vtable_idents>>>() {
-                        *s = Some(self);
-                        return;
-                    }
-                )*
-            }
+    // 按值 `__Shared<Self>` 接收者的三个钩子（`__interface` / `__erased_inner` /
+    // `__erased_vtable`）一律显式覆盖，未移交的 self 经 `ObjectVTable` 擦除后释放：
+    // 引用计数减一的语义不变，而 `Arc<X__inner>` 的析构代码（Arc::drop → drop_slow →
+    // Weak::drop）不再逐类单态化——全部类共用 `__Shared<dyn ObjectVTable>` 一份
+    //（emitter-performance §5.5 N4）。
+    let release_self = quote! {
+        ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
+    };
+    let interface_query: TokenStream2 = quote! {
+        fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
+            #(
+                if let Some(s) = slot.downcast_mut::<::std::option::Option<__Shared<dyn #iface_vtable_idents>>>() {
+                    *s = Some(self);
+                    return;
+                }
+            )*
+            #release_self
+        }
+        fn __erased_inner(self: __Shared<Self>, _slot: &mut dyn ::std::any::Any) {
+            #release_self
         }
     };
 
@@ -163,8 +171,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
             {
                 *s = ::std::option::Option::Some(
-                    __Shared::clone(&self)
-                        as __Shared<dyn #vtable_trait_ident>);
+                    self as __Shared<dyn #vtable_trait_ident>);
                 return;
             }
             #(
@@ -172,11 +179,11 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                     slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
                 {
                     *s = ::std::option::Option::Some(
-                        __Shared::clone(&self)
-                            as __Shared<dyn #ancestor_vtable_idents>);
+                        self as __Shared<dyn #ancestor_vtable_idents>);
                     return;
                 }
             )*
+            #release_self
         }
     };
 

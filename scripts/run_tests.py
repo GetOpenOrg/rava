@@ -1612,6 +1612,9 @@ def main():
     DYN_COMPARE = not args.no_dyn
     BUILD_TIMEOUT = args.build_timeout
     MAIN_FLAGS = [f for f, on in (("--debug", args.debug), ("--strict", args.strict)) if on]
+    # 动态对照读 closure_input/closure.json：rava build 缺省不写，开对照时要求写出
+    if DYN_COMPARE:
+        MAIN_FLAGS.append("--closure-json")
     # 生成器选择（generator_select 唯一定义缺省）：非缺省时显式透传，[meta] options 可见
     _generator = generator_select.resolve(args.generator)
     if _generator != generator_select.DEFAULT_GENERATOR:

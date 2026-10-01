@@ -60,11 +60,15 @@ fn header_of(text: &str) -> &str {
     text.find(&marker).map_or(text, |i| &text[..i + 1])
 }
 
-/// owner 的 use 行索引（缓存；头部文本变化——继承 use 插入位填充后——即重建）
+/// 每个 owner 缓存的文件头版本数上限（接口实现并行解析时同一接口的插入前 / 后两版同时在用）
+const USE_INDEX_VERSIONS: usize = 4;
+
+/// owner 的 use 行索引（缓存；按文件头文本区分版本——继承 use 插入位填充后即是新版本）
 fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::sync::Arc<UseIndex> {
     let header = header_of(&owner.text);
-    if let Some(ix) = ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).get(&owner.binary_name).filter(|ix| ix.header == header) {
-        return ix.clone();
+    let cached = ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).get(&owner.binary_name).and_then(|v| v.iter().find(|ix| ix.header == header).cloned());
+    if let Some(ix) = cached {
+        return ix;
     }
     let mut map = BTreeMap::new();
     for ln in header.split('\n') {
@@ -73,7 +77,14 @@ fn use_index(ctx: &EmitCtx<'_>, owner: &ClassEmission) -> std::sync::Arc<UseInde
         }
     }
     let ix = std::sync::Arc::new(UseIndex { header: header.to_string(), map });
-    ctx.use_index.lock().unwrap_or_else(|e| e.into_inner()).insert(owner.binary_name.clone(), ix.clone());
+    let mut cache = ctx.use_index.lock().unwrap_or_else(|e| e.into_inner());
+    let versions = cache.entry(owner.binary_name.clone()).or_default();
+    if !versions.iter().any(|v| v.header == ix.header) {
+        if versions.len() == USE_INDEX_VERSIONS {
+            versions.remove(0);
+        }
+        versions.push(ix.clone());
+    }
     ix
 }
 

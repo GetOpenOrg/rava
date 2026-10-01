@@ -39,6 +39,12 @@ impl Perf {
         self.since = now;
     }
 
+    /// 记录一个在别处计时、已结束的子阶段（紧接当前阶段起点之后；起点随之后移）
+    pub fn mark_sub(&mut self, name: &'static str, elapsed: Duration) {
+        self.phases.push(PhaseMark { name, elapsed, peak_rss_mb: closure::engine::peak_rss_mb() });
+        self.since += elapsed;
+    }
+
     /// 重置阶段起点（丢弃未计入的时间段）
     pub fn restart(&mut self) {
         self.since = Instant::now();

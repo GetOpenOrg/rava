@@ -88,7 +88,7 @@ impl LibPlan {
         for (i, (name, files)) in self.files.iter().enumerate() {
             let dir = out_dir.join(name);
             let src = dir.join("src");
-            write_mod_tree(&src, None, w)?;
+            write_mod_tree(&src, None, crate::par::resolve_jobs(ctx.opts.jobs), w)?;
             let tops: BTreeSet<&str> = files.keys().filter_map(|c| c.split_once('/').map(|(t, _)| t)).collect();
             let mut lib_rs = vec![LIB_ALLOW.to_string()];
             lib_rs.extend(tops.iter().map(|t| format!("pub mod {};", safe_pkg_part(t))));

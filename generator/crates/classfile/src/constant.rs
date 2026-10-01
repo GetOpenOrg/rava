@@ -7,7 +7,8 @@ use crate::Error;
 pub enum CpEntry {
     /// 索引 0 与 long/double 的第二槽
     Unusable,
-    Utf8(String),
+    /// 文本 + 含孤立代理项时的无损 UTF-16 码元（见 `decode_mutf8`）
+    Utf8(String, Option<Box<[u16]>>),
     Integer(i32),
     Float(u32),
     Long(i64),
@@ -57,6 +58,8 @@ pub enum Const {
     Long(i64),
     Double(u64),
     String(String),
+    /// 含孤立代理项的字符串常量：UTF-16 码元（Rust String 无法表示；成员名匹配等按名用途不匹配它）
+    StringUtf16(Vec<u16>),
     /// 类字面量：binary name 或数组描述符
     Class(String),
     MethodType(String),
@@ -80,7 +83,8 @@ impl ConstantPool {
             let e = match tag {
                 1 => {
                     let len = r.u2()? as usize;
-                    CpEntry::Utf8(decode_mutf8(r.bytes(len)?))
+                    let (text, units) = decode_mutf8(r.bytes(len)?);
+                    CpEntry::Utf8(text, units)
                 }
                 3 => CpEntry::Integer(r.i4()?),
                 4 => CpEntry::Float(r.u4()?),
@@ -117,7 +121,7 @@ impl ConstantPool {
 
     pub fn utf8(&self, idx: u16) -> Result<&str, Error> {
         match self.get(idx)? {
-            CpEntry::Utf8(s) => Ok(s),
+            CpEntry::Utf8(s, _) => Ok(s),
             _ => Err(Error::BadIndex(idx)),
         }
     }
@@ -159,6 +163,15 @@ impl ConstantPool {
         }
     }
 
+    /// 字符串常量（ldc / ConstantValue）：含孤立代理项时取无损码元
+    pub fn string_const(&self, idx: u16) -> Result<Const, Error> {
+        match self.get(idx)? {
+            CpEntry::Utf8(_, Some(units)) => Ok(Const::StringUtf16(units.to_vec())),
+            CpEntry::Utf8(s, None) => Ok(Const::String(s.clone())),
+            _ => Err(Error::BadIndex(idx)),
+        }
+    }
+
     /// 可装载常量（JVMS §4.4 表 4.4-C）
     pub fn loadable(&self, idx: u16) -> Result<Const, Error> {
         Ok(match self.get(idx)? {
@@ -166,7 +179,7 @@ impl ConstantPool {
             CpEntry::Float(v) => Const::Float(*v),
             CpEntry::Long(v) => Const::Long(*v),
             CpEntry::Double(v) => Const::Double(*v),
-            CpEntry::String(s) => Const::String(self.utf8(*s)?.to_string()),
+            CpEntry::String(s) => self.string_const(*s)?,
             CpEntry::Class(n) => Const::Class(self.utf8(*n)?.to_string()),
             CpEntry::MethodType(d) => Const::MethodType(self.utf8(*d)?.to_string()),
             CpEntry::MethodHandle(..) => Const::MethodHandle(self.method_handle(idx)?),

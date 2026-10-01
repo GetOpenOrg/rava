@@ -529,6 +529,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         s.stack.push(V::Hi);
                     }
                     Const::String(x) => s.stack.push(V::Str(Rc::from(x.as_str()))),
+                    // 含孤立代理项：值不入常量格（格上字符串为 Rust 文本，无法无损表示），按非空 String 站点值
+                    Const::StringUtf16(_) => s.stack.push(site_ref(STRING, true, off)),
                     Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()), off)),
                     Const::MethodType(_) => s.stack.push(site_ref("java/lang/invoke/MethodType", true, off)),
                     Const::MethodHandle(_) => s.stack.push(site_ref("java/lang/invoke/MethodHandle", true, off)),
@@ -537,7 +539,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         push_typed(&mut s.stack, &ft, value_of(&ft, Src::Site(off)));
                     }
                 }
-                if matches!(c, Const::String(_) | Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(_) | Const::Dynamic(..)) {
+                if matches!(c, Const::String(_) | Const::StringUtf16(_) | Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(_) | Const::Dynamic(..)) {
                     self.ev(off, Event::Ldc(c.clone()));
                 }
             }

@@ -109,6 +109,10 @@ impl FlowGraph {
         self.rep.push(i);
         i
     }
+    /// 已驻留节点的序号（未出现过为 None）
+    pub(super) fn lookup(&self, n: &Node) -> Option<u32> {
+        self.ids.get(n).copied()
+    }
     /// 节点所属代表
     #[inline]
     pub(super) fn rep(&self, i: u32) -> u32 {
@@ -173,6 +177,11 @@ impl FlowGraph {
         self.iter().count()
     }
     /// 全部流边按源节点展开（诊断 / 观测）
+    /// 序号对应的节点
+    #[inline]
+    pub(super) fn node_at(&self, i: u32) -> &Node {
+        &self.nodes[i as usize]
+    }
     pub(super) fn flow_list(&self) -> Vec<(Node, Vec<(Node, u32)>)> {
         self.edges
             .iter()

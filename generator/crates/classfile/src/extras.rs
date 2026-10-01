@@ -94,6 +94,8 @@ impl MethodExtras {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnnoConst {
     Utf8(String),
+    /// 含孤立代理项的字符串（UTF-16 码元原样保留；合法文本一律走 `Utf8`）
+    Utf16(Vec<u16>),
     Int(i32),
     Long(i64),
     /// IEEE 754 位模式
@@ -230,7 +232,8 @@ fn code_locals(body: &[u8], pool: &ConstantPool, m: &mut MethodExtras) -> Result
 
 fn anno_const(pool: &ConstantPool, idx: u16) -> Option<AnnoConst> {
     Some(match pool.get(idx).ok()? {
-        CpEntry::Utf8(s) => AnnoConst::Utf8(s.clone()),
+        CpEntry::Utf8(_, Some(units)) => AnnoConst::Utf16(units.to_vec()),
+        CpEntry::Utf8(s, None) => AnnoConst::Utf8(s.clone()),
         CpEntry::Integer(v) => AnnoConst::Int(*v),
         CpEntry::Long(v) => AnnoConst::Long(*v),
         CpEntry::Float(v) => AnnoConst::Float(*v),
@@ -354,5 +357,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(m.local_types()[&3], ("S1".to_string(), 60));
+    }
+
+    #[test]
+    fn anno_const_keeps_lone_surrogate_units() {
+        // 常量池：#1 = Utf8 "\uD800"（Modified UTF-8 三字节），#2 = Utf8 "ab"
+        let bytes = [0x00, 0x03, 0x01, 0x00, 0x03, 0xED, 0xA0, 0x80, 0x01, 0x00, 0x02, b'a', b'b'];
+        let pool = ConstantPool::parse(&mut Reader::new(&bytes)).unwrap();
+        assert_eq!(anno_const(&pool, 1), Some(AnnoConst::Utf16(vec![0xD800])));
+        assert_eq!(anno_const(&pool, 2), Some(AnnoConst::Utf8("ab".into())));
     }
 }

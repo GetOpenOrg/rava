@@ -36,7 +36,7 @@ pub use expr::{
 };
 pub use ident::{Ident, Label};
 pub use item::{FnItem, ImplItem, Item, ModItem, Param, StructField, StructItem, TypeAlias, UseTree, Vis};
-pub use lit::{FloatLit, FloatTy, IntTy, Lit};
+pub use lit::{ConcatPart, FloatLit, FloatTy, IntTy, Lit};
 pub use render::Renderer;
 pub use stmt::{
     ArmBody, AssignStmt, CatchClause, ElseBranch, IfStmt, LetStmt, LoopStmt, MatchArm, MatchStmt,

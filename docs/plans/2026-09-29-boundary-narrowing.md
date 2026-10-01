@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-09-30 深夜）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec），闭包对照 / cargo check / e2e 抽查中；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、类初始化事实）进行中。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
+> 状态（2026-10-01）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec）；`c1d-final` 已并入 `c1d-prec`，删除后暴露缺口的修复进行中（Digester E0433、枚举反射 values、System.in 已修；UnsafeConstants / 直接内存、反射 signature 待修），另一会话的 VM 注入状态修复（dc9fd946 / d8a0b082：UnsafeConstants、VM.directMemory、System.in、jca 别名、ScopedMemoryAccess 等）已经 b1ac5b7c 并入主干，由 `c1d-prec` 合并时按手写边界规范取舍；内容感知精度实测可靠收益为 0、不实施（19cf2b5b），编译成本改由 rustc 拆 crate 方案解决（`2026-10-01-rustc-memory-and-crate-split.md`）；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实）9 项完成，TestCharsetForName 回归已修（98bc2e68 / 17fc2e7e，§6.11），✅ 已合入 d8212bee。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
 
 ## 一、目标
 
@@ -901,6 +901,43 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   TestCharsetForName / DeepCopy 的 `BootLoader.findResources` → `BuiltinClassLoader.findResources`（JVM 平台加载器有类路径；原生
   `BootLoader.hasClassPath` 为手写，`LazyClassPathLookupIterator` 走空枚举）。因此 `mmiss` 暂作诊断输出、不作门槛；cut 调用方的条目
   是高信号子集，e2e 命中存根时先查它。耗时：methods 模式 HelloWorld + TestCharsetForName 两例（含闭包分析）合计 3.3 s。
+
+**TestStreamEncoderCharsets：跨写入拆开的代理对输出 U+FFFD（归属：Rust 生成器，非闭包精度）**。主干 c7a9d7b4 同样失败（协调方对照）。
+闭包侧排查：`StreamEncoder` 的写入 / 关闭全部为手写（`stream_encoder_impl.rs::encode_units` 按 `haveLeftoverChar` / `leftoverChar` 跨写入
+配对），翻译体 `CharsetEncoder.encode` 的折叠（`dead_pcs [8,9]`、`replacement` null）不在本例执行路径上。决定性证据是 UTF-8 行：手写层对
+孤立代理项输出 `?`，而实测输出 `ef bf bd`（U+FFFD 的正常编码），说明进入 `StreamEncoder` 的码元已经是 U+FFFD——字面量 `"a\uD83D"` 在
+生成器里被替换。根因：`classfile::reader::decode_mutf8` 解码到 Rust `String`，孤立代理项按 `from_utf16_lossy` 变成 U+FFFD
+（`instr/GOLDEN_DIFF.md` 已知差异 1；Python 侧保值发射 UTF-16 码元数组，故 Python 基线通过）。修复：
+- `decode_mutf8` 在含孤立代理项时另携无损码元（`CpEntry::Utf8(text, Option<units>)`），常量池字符串常量产出 `Const::StringUtf16(units)`；
+  文本侧（成员名 / 类名匹配）不变。
+- 生成器：ldc 发射 `Lit::JStringUtf16`（`String::from_utf16_lit`，驻留语义同 `String::from`）；ConstantValue 字段常量同形。
+- 闭包分析：`StringUtf16` 按非空 String 站点值入栈（不进常量格），ldc 事件照常实例化 String。
+- 单测：`classfile reader::mutf8_tests::lone_surrogate_keeps_units`、`instr sim::consts::tests::lone_surrogate_string_keeps_units`、
+  `emit class_writer::fields::tests::names_and_literals`。单例验证 `scripts/main.py` 输出三行 split 与 JVM 一致。
+- ~~已知局限：字符串拼接与注解字符串常量按 Rust 文本~~ → 已在 UTF-16 层构造（2026-10-01，bc7eb54b）：
+  - 拼接 IR 改为 `Lit::JStringConcat(Vec<ConcatPart>)`（`Text` / `Units` / `Arg`），渲染 `(String::of("首段") + &s + c + n)`，运行时
+    `String` 的 `Add<&str | &[u16] | &String | u16 | bool | i8..i64 | f32 | f64>` 逐段追加码元（`string_ext.rs`）。配方模板与常量位值按码元
+    切分（含 `StringUtf16`），`char` 实参以 `u16` 码元追加，String 实参按引用追加码元（null → `"null"`），不再经 `format!` / Display。
+  - 注解稀疏常量池：含孤立代理项的 Utf8 → `AnnoConst::Utf16` → `idx:W:<码元 hex>` → `CpVal::W`，`getUTF8At0` 以 `from_utf16_lit` 构造。
+  - 单测：`instr concat::tests::{recipe_keeps_lone_surrogates, recipe_text_segments_and_arity, prim_operands_are_typed}`、
+    `ir render::lit::tests::concat_parts`、`classfile extras::tests::anno_const_keeps_lone_surrogate_units`、`emit attrs::tests::anno_cpool_strings`。
+  - e2e：`17_string_advanced/TestConcatLoneSurrogate`（配方常量段 / 常量位值 / char 实参 / String 实参 / 半代理拼成代理对 / 注解字符串常量，
+    期望输出由 JDK 21 生成），`scripts/main.py` 单例 11 行与 JVM 逐字一致。
+
+**TestNetworkInterface：命中 `UnixNativeDispatcher.openatSupported:()Z` 存根（归属：边界截断 + 手写层缺口，非精度改动；主干同样失败）**。
+`dyn_compare --methods` 的 cut 条目直接给出链：`SHA1PRNG` → `SeedGenerator$1.run`（JCA 放行，翻译体）列举临时目录 →
+`Files.newDirectoryStream` → `UnixFileSystemProvider.newDirectoryStream`（`sun/` 边界类，无手写承载 → `cut`：发射层翻译其体，分析器不展开）
+→ 体内的 `toUnixPath` / `checkRead` / `openatSupported` / `opendir` / `UnixDirectoryStream.<init>` 5 条 mmiss 均标 `caller_cut`；
+其后 `UnixDirectoryStream.iterator` / `hasNext` / `next` / `close` 由翻译体 `SeedGenerator$1.run` 调用，同样不在闭包（返回值来自截断体，类型集为空）。
+- 方案 A（分析器把全部边界截断体按字节码展开，与发射层一致）实测不可行：HelloWorld 605 → 19292 方法、3226 类，DeepCopy 9669 → 22614
+  （截断体 `ClassRepository.make` 等经 `sun/reflect/generics` 展开全族），已撤回。
+- 方案 B（清单放行 `sun/nio/fs/`，按字节码建模该执行线）实测增量小：TestFilesApi 866 → 889 方法、FileIODemo 935 → 957、
+  TestFileAccessSpace 6939 → 7099、TestNetworkInterface 6820 → 6989，HelloWorld / FileIOTest 不变；`openatSupported` / `opendir` /
+  `readdir` / `UnixDirectoryStream` 族入闭包。但放行后 `UnixNativeDispatcher.<clinit>` 转为翻译体，需要的 native 在手写层缺 6 个
+  （`close0` / `closedir` / `dup` / `fdopendir` / `opendir0` / `readdir0`），且现有手写 `init(int[])` 与 JDK 21 的 `init()I` 签名不符——
+  属 POSIX 原生族档 B 的手写层工作，放行须与这批 native 同批落地并跑 `TestFilesApi` / `TestFileAccessSpace` / `FileIODemo` 回归。未提交，待排期。
+- 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
+  MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
 
 ## 七、验收
 

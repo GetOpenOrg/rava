@@ -93,9 +93,10 @@ stack / arith / arrays / returns / control / dynamic / invoke / fields——与�
 
 ## 已知差异（不影响 golden 比对）
 
-1. **`Const::String` 孤立代理项丢失**：`classfile::reader::decode_mutf8` 解码到 Rust `String`，孤立
-   代理项替换为 U+FFFD；Python 字符串可以保留孤立代理并原样进入 `ldc` 字面量。含孤立代理的字符串
-   常量两侧发射不同（本批三例未出现，ldc 全等）。
+1. **`Const::String` 孤立代理项（已消解，2026-10-01）**：`classfile::reader::decode_mutf8` 在含孤立代理项时
+   另携无损 UTF-16 码元，常量池字符串常量产出 `Const::StringUtf16`，ldc 发射 `Lit::JStringUtf16`
+   （`String::from_utf16_lit`），与 Python 侧保值一致。字符串拼接亦已改为 UTF-16 层构造
+   （`(String::of("..") + 片段 ..)`，替代 Python 的 `String::from_owned(format!(..))` 形态，2026-10-01），与 Python 生成文本不再逐字一致。
 2. **`hierarchy._has_subtypes` / `_is_direct_subtype` 未移植**：Python 侧两函数无调用点（死代码），
    Rust `hierarchy` 不提供对应 API。
 3. **invokedynamic 常量池下标（已消解，P5b）**：`classfile::Operand::InvokeDynamic` 直接携带常量池下标

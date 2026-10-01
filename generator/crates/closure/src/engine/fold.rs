@@ -259,14 +259,18 @@ impl Engine<'_> {
         named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(opcode, m, iface, Some(c)).is_some()
     }
 
-    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者即不算
-    pub(super) fn null_recv(&self, clones: &[usize]) -> Vec<u32> {
+    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、或接收者的值流
+    /// 可能缺失（来源可经流边从未建模来源到达，见 `unmodeled.rs`）即不算
+    pub(super) fn null_recv(&self, clones: &[usize], um: &super::unmodeled::Unmodeled) -> Vec<u32> {
         let mut hit: BTreeMap<u32, bool> = BTreeMap::new();
         for &i in clones {
             let Some(a) = &self.methods[i].analysis else { continue };
             for (pc, e) in &a.events {
-                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, .. } = e {
-                    *hit.entry(*pc).or_default() |= self.site_has_recv(i, *pc);
+                if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, args, .. } = e {
+                    let h = hit.entry(*pc).or_default();
+                    if !*h {
+                        *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| self.recv_unmodeled(i, r, um));
+                    }
                 }
             }
         }

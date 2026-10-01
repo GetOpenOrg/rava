@@ -63,7 +63,11 @@ fn record_and_switch_bootstraps_translate() {
         assert!(!user.contains(bad), "用户类生成文本含 {bad}");
     }
     // toString：简单名 + 分量模板；hashCode：31 累乘；equals：instanceof 后逐分量比较
-    assert!(user.contains("format!(\"Point[x={}, y={}, z={}, b={}, name={}]\""), "record toString 模板");
+    assert!(
+        user.contains("(String::of(\"Point[x=\") + this.__get_x() + \", y=\" + this.__get_y() + \", z=\"")
+            && user.contains("\", name=\" + &this.__get_name() + \"]\")"),
+        "record toString 模板（UTF-16 层拼接）"
+    );
     assert!(user.contains("wrapping_mul(31)"), "record hashCode");
     assert!(user.contains("o.is_instance_of(\"RecordSwitch$Point\") && {"), "record equals");
     // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句
@@ -80,7 +84,7 @@ fn record_and_switch_bootstraps_translate() {
     // `System.out` 的 getstatic 先于拼接实参求值（JVM 栈序），物化在 toString 之前
     assert!(at("= System::out()?;") < vp, "System.out 读取先于实参 toString");
     let name = |i: usize| lines[i].trim_start().trim_start_matches("let ").split(':').next().unwrap().to_string();
-    assert!(main_rs.contains(&format!("format!(\"{{}} / {{}}\", {}, {})", name(vp), name(vq))), "拼接模板");
+    assert!(main_rs.contains(&format!("(String::of(\"\") + &{} + \" / \" + &{})", name(vp), name(vq))), "拼接模板");
     std::fs::remove_dir_all(&out).ok();
 }
 
@@ -248,7 +252,7 @@ fn image_dirs_lists_existing_class_dirs() {
 /// `--api-package`：包内公开 API 为入口，`--precheck-only` 出预检明细（gap_scan.py api 模式）
 #[test]
 fn api_package_precheck() {
-    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only"]) else {
+    let Some((stdout, out)) = build("TryFinallyReturn.java", "api", &["--api-package", "java/util/function", "--precheck-only", "--closure-json"]) else {
         return;
     };
     let line = stdout.lines().find(|l| l.starts_with("[api] java/util/function（不含子包）→ ")).unwrap_or_else(|| panic!("{stdout}"));
@@ -257,5 +261,27 @@ fn api_package_precheck() {
     assert!(stdout.contains("[precheck] native-missing="), "{stdout}");
     let facts = std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap();
     assert!(facts.contains("java/util/function/BiFunction"), "API 入口类入闭包");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 手写体经注册表工厂构造的资源束经 setParent 串成父链：束对象须作为值进入流图，
+/// `ResourceBundle.getObject` 的 `parent.getObject(key)`（@22）不得判为接收者恒 null
+#[test]
+fn locale_bundle_parent_not_null_recv() {
+    let Some((_, out)) = build("LocaleBundleParent.java", "rbparent", &["--precheck-only", "--closure-json"]) else {
+        return;
+    };
+    let facts: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap()).unwrap();
+    let get_object = "java/util/ResourceBundle.getObject:(Ljava/lang/String;)Ljava/lang/Object;";
+    let folds = facts["folds"].as_array().unwrap();
+    let nr: Vec<u64> = folds
+        .iter()
+        .filter(|f| f["method"] == get_object)
+        .flat_map(|f| f["null_recv"].as_array().cloned().unwrap_or_default())
+        .filter_map(|x| x.as_u64())
+        .collect();
+    assert!(!nr.contains(&22), "getObject@22 误判恒 null：{nr:?}");
+    // 非空断言：getObject 在闭包内（父链查找路径确实被分析）
+    assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == get_object), "getObject 不在闭包内");
     std::fs::remove_dir_all(&out).ok();
 }

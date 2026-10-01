@@ -43,17 +43,38 @@ impl Writer {
 
     /// 写文件：手写文件跳过；内容相同不重写（保留 mtime）
     pub fn write(&mut self, path: &Path, content: &str) -> Result<()> {
+        if self.put(path, content)? {
+            self.written.insert(path.to_path_buf());
+        }
+        Ok(())
+    }
+
+    /// 批量写文件（语义同逐个 [`Writer::write`]）：各文件互不相干，按 `jobs` 并行落盘；
+    /// 出错时报发射序上第一个错误
+    pub fn write_all(&mut self, jobs: usize, files: &[(&Path, &str)]) -> Result<()> {
+        let this: &Writer = self;
+        let done = crate::par::par_map(jobs, files, |(p, c)| this.put(p, c));
+        for ((p, _), r) in files.iter().zip(done) {
+            if r? {
+                self.written.insert(p.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+
+    /// 单文件落盘；返回是否计入本轮已写（手写文件不计）
+    fn put(&self, path: &Path, content: &str) -> Result<bool> {
         if self.is_handwritten(path) {
-            return Ok(());
+            return Ok(false);
         }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
         }
-        self.written.insert(path.to_path_buf());
         if std::fs::read(path).is_ok_and(|old| old == content.as_bytes()) {
-            return Ok(());
+            return Ok(true);
         }
-        std::fs::write(path, content).map_err(|e| io_err(&path.display().to_string(), e))
+        std::fs::write(path, content).map_err(|e| io_err(&path.display().to_string(), e))?;
+        Ok(true)
     }
 
     /// 写二进制（内容相同不重写）

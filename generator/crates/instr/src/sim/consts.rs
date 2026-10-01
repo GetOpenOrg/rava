@@ -31,16 +31,21 @@ fn prim(p: Prim) -> RsType {
     RsType::Prim(p)
 }
 
-/// 常量池 String：含孤立代理项（Rust `&str` 无法表示）→ UTF-16 码元数组形态
-fn string_lit(s: &str) -> Lit {
-    // classfile 解码为 Rust String，孤立代理项已按替换字符解码（见 GOLDEN_DIFF.md）
-    Lit::JString(s.to_string())
+
+/// 常量池 String 的字面量形态：含孤立代理项（Rust `&str` 无法表示）→ UTF-16 码元数组形态，保值
+fn string_lit(c: &Const) -> Option<Lit> {
+    match c {
+        Const::String(s) => Some(Lit::JString(s.clone())),
+        Const::StringUtf16(units) => Some(Lit::JStringUtf16(units.clone())),
+        _ => None,
+    }
 }
 
 fn ldc(_env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, c: &Const) -> InstrResult<()> {
     match c {
-        Const::String(s) => {
-            sim.push(Expr::Lit(string_lit(s)), RsType::class(ty::consts::STRING.to_string(), Vec::new()));
+        Const::String(_) | Const::StringUtf16(_) => {
+            let lit = string_lit(c).ok_or_else(|| InstrError::BadInsn("ldc 字符串常量".into()))?;
+            sim.push(Expr::Lit(lit), RsType::class(ty::consts::STRING.to_string(), Vec::new()));
         }
         Const::Int(i) => {
             sim.push(int((*i).into(), IntTy::I32), prim(Prim::I32));
@@ -113,4 +118,19 @@ pub fn sim_consts(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &
 /// 整数记号的浮点字面量（fconst / dconst：`2f32`，不经 `repr(float)`）
 fn int_float(n: i128, ty: FloatTy) -> InstrResult<Expr> {
     Ok(Expr::Lit(Lit::Float { value: FloatLit::parse(&n.to_string())?, ty }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lone_surrogate_string_keeps_units() {
+        assert_eq!(string_lit(&Const::String("ab".into())), Some(Lit::JString("ab".into())));
+        assert_eq!(
+            string_lit(&Const::StringUtf16(vec![0x61, 0xD83D])),
+            Some(Lit::JStringUtf16(vec![0x61, 0xD83D]))
+        );
+        assert_eq!(string_lit(&Const::Int(1)), None);
+    }
 }
