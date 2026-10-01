@@ -29,19 +29,16 @@ use crate::build_opts::{BuildOpts, Mode, CLOSURE_INPUT_DIR};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
 use crate::Args;
 
-fn java_home(o: &BuildOpts) -> Result<PathBuf, String> {
-    if let Some(h) = &o.java_home {
-        return Ok(h.clone());
+/// JDK 选择（[`resolve::jdk::choose`]，仓库根 = runtime 上两级）；`announce` 时打印来源行
+fn java_home(o: &BuildOpts, rt: &Path, announce: bool) -> Result<PathBuf, String> {
+    let c = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(&repo_root(rt)))?;
+    if announce {
+        println!("{}", c.describe());
     }
-    resolve::jdk::find_java_home(o.jdk).ok_or_else(|| "找不到含 jmods/ 的 JDK".to_string())
+    Ok(c.home)
 }
 
-/// `<java_home>/release` 的 JAVA_VERSION 主版本
-fn jdk_major(home: &Path) -> Option<u32> {
-    let text = std::fs::read_to_string(home.join("release")).ok()?;
-    let v = text.lines().find_map(|l| l.strip_prefix("JAVA_VERSION="))?.trim_matches('"');
-    v.split('.').next()?.parse().ok()
-}
+use resolve::jdk::release_major as jdk_major;
 
 fn abs(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
@@ -356,8 +353,8 @@ fn cargo_run(out: &Path, bin: &str, repo: &Path, classes: usize) -> Result<(), S
 pub fn run_build(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Build, &args.rest)?;
     let mut perf = Perf::new();
-    let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
+    let home = java_home(&o, &rt, true)?;
     let repo = repo_root(&rt);
     let out = abs(&o.scratch_dir(Mode::Build, &repo)?);
     if o.clean {
@@ -390,8 +387,8 @@ pub fn run_build(args: &Args) -> Result<(), String> {
 pub fn run_emit(args: &Args) -> Result<(), String> {
     let o = BuildOpts::parse(Mode::Emit, &args.rest)?;
     let mut perf = Perf::new();
-    let home = java_home(&o)?;
     let rt = abs(&find_runtime_dir(o.runtime.clone())?);
+    let home = java_home(&o, &rt, false)?;
     let out = abs(&o.scratch_dir(Mode::Emit, &repo_root(&rt))?);
     let cj = abs(&o.inputs[0]);
     let classes = abs(&o.emit_classes_dir());
