@@ -7,13 +7,14 @@
 # 用法：scripts/fetch_pilot_deps.sh            # 取包 + 逐 jar 透视
 #       scripts/fetch_pilot_deps.sh --no-scan  # 只取包（golden 对账前置）
 # 依赖树全貌：mvn -B -f tests/lib_pilot/deps/pom.xml dependency:tree
-# 前置：mvn 在 PATH；JDK 经 scripts/jdk_select.py 选择（与 main.py / run_tests.py 同一入口）。
+# 前置：mvn 在 PATH；JDK 经 rava jdk 选择（与 rava build / run_tests.py 同一实现）。
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="$REPO/tests/lib_pilot/deps"
 SCAN=1; [[ "${1:-}" == "--no-scan" ]] && SCAN=0
 
-JAVA_HOME="$(python3 "$REPO/scripts/jdk_select.py")" || { echo "未找到可用 JDK" >&2; exit 2; }
+. "$REPO/scripts/rava_env.sh" "$REPO"
+JAVA_HOME="$("$RAVA" jdk --home-only)" || { echo "未找到可用 JDK" >&2; exit 2; }
 export JAVA_HOME
 
 # 清残留：copy-dependencies 不清目录，升版后旧 jar 会并存污染语料口径

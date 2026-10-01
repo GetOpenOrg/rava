@@ -63,12 +63,17 @@ animal.speak()?;
 大闭包单个 rustc 峰值约 14G 内存，16G 机器上重型用例自动单作业编译。
 
 ```bash
-# 转译 + 编译 + 运行（scratch = build/<主类 snake 名>）
-python3 scripts/main.py tests/e2e/01_basics/HelloWorld.java
+# 构建 rava（generator/ 的 Rust 生成器；新鲜时为空操作，跑批脚本每批开头自动执行）
+cargo build --release -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target
+RAVA=build/analyzer-target/release/rava
 
-python3 scripts/main.py Foo.java --no-run          # 只生成
-python3 scripts/main.py Foo.java --clean           # 清空 scratch 重建
-python3 scripts/main.py Foo.java --jdk 25          # 指定 JDK
+# 转译 + 编译 + 运行（scratch = build/<主类 snake 名>）
+$RAVA build tests/e2e/01_basics/HelloWorld.java
+
+$RAVA build Foo.java --stop-after emit            # 只生成（另有 javac / closure / compile 阶段）
+$RAVA build Foo.java --clean                      # 清空 scratch 重建
+$RAVA build Foo.java --jdk 25                     # 指定 JDK（rava jdk 查看选择结果与来源）
+$RAVA compile build/foo                           # 编译已生成的 scratch（结果见 build_status.json）
 
 # e2e 测试（期望输出由 JVM 生成，逐字比对）
 python3 scripts/run_tests.py                       # 全量
@@ -76,7 +81,7 @@ python3 scripts/run_tests.py --filter TestXxx      # 单测试
 scripts/run_bg.sh <tag> python3 scripts/run_tests.py --filter TestXxx   # 后台低内存跑批
 ```
 
-诊断与构建选项（`--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--build-timeout`）见
+诊断与构建选项（`--debug` / `--strict` / `--trace-class` / `--raw-sites` / `--build-timeout` / `--release`）见
 [`docs/environment-variables.md`](docs/environment-variables.md)。项目不设自有环境变量。
 
 ## 目录结构
@@ -91,7 +96,7 @@ rava/
 │       ├── ty / ir                # 类型层 / Rust IR 与渲染
 │       ├── cfg / sim / instr      # 控制流结构化 / 栈模拟 / 指令翻译
 │       ├── method / emit          # 方法体生成 / 类、模块、workspace 发射与审计行
-│       └── driver                 # rava 命令行（build / emit / closure）
+│       └── driver                 # rava 命令行（build / compile / emit / closure / jdk / audit）
 ├── runtime/                       # 手写代码唯一真源（提交 git）
 │   ├── java_runtime/              # 运行时 crate：native 方法 *_impl.rs、VM 边界类、build.rs
 │   │   ├── closure.toml           # 调用链边界 / VM 边界类 / 放行清单
@@ -99,7 +104,7 @@ rava/
 │   │   └── vm_intrinsics.toml     # VM 承载方法、调用点特判、VM 常量
 │   ├── java_support/              # VM 支持类的 Java 源（动态代理、BMH 物种等载体）
 │   └── rava_macros/               # proc-macro crate（java_class! 块级宏）
-├── scripts/                       # main.py / run_tests.py / 跑批与对照工具（rava_cli.py 调用 rava）
+├── scripts/                       # run_tests.py 跑批编排与对照工具（经 rava_env.sh / 直接执行 rava 二进制）
 ├── tests/
 │   ├── e2e/                       # e2e 语料（61 个类别，1066 例）
 │   ├── expected/                  # JVM 生成的期望输出

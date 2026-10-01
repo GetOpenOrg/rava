@@ -1,7 +1,8 @@
 //! `<scratch>/build_status.json`：`rava build` 本轮停在哪一阶段、是否成功、失败现场、所用 JDK 与重型判定。
-//! 批量驱动（run_tests）只读此文件判定构建结果，不解析 stdout。
+//! 批量驱动（run_tests）只读此文件判定构建结果，不解析 stdout。发射完成后另记 `emit` 段（bin 名、声明层类数），
+//! `rava compile <scratch>` 据此编译已发射的工作区；编译成功后记 `exe`（可执行文件路径）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use resolve::jdk::JdkChoice;
 use serde_json::json;
@@ -11,14 +12,39 @@ use crate::cargo::{Failure, Heavy};
 
 pub const STATUS_FILE: &str = "build_status.json";
 
+/// 发射结果中编译阶段需要的部分
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmitSummary {
+    pub bin: String,
+    /// 声明层 `java_runtime` 类数（重型判定输入）
+    pub jdk_classes: usize,
+}
+
+impl EmitSummary {
+    /// 从既有 `build_status.json` 读回（须为发射已成功的工作区）
+    pub fn read(out: &Path) -> Result<(EmitSummary, serde_json::Value), String> {
+        let p = out.join(STATUS_FILE);
+        let text = std::fs::read_to_string(&p).map_err(|e| format!("{}：{e}（先 rava build --stop-after emit）", p.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}：{e}", p.display()))?;
+        let e = &v["emit"];
+        match (e["bin"].as_str(), e["jdk_classes"].as_u64()) {
+            (Some(bin), Some(n)) => Ok((EmitSummary { bin: bin.to_string(), jdk_classes: n as usize }, v)),
+            _ => Err(format!("{}：无发射结果（emit 段缺失，发射未完成）", p.display())),
+        }
+    }
+}
+
 /// 本轮构建状态（各阶段推进时更新 `stage`）
 #[derive(Debug, Default)]
 pub struct BuildStatus {
     pub stage: Stage,
     pub jdk: Option<JdkChoice>,
     pub heavy: Option<Heavy>,
+    pub emit: Option<EmitSummary>,
     /// 编译失败现场（仅 cargo 阶段）
     pub failure: Option<Failure>,
+    /// 编译成功的可执行文件（编排直接执行它）
+    pub exe: Option<PathBuf>,
 }
 
 impl BuildStatus {
@@ -41,6 +67,8 @@ impl BuildStatus {
                 "home": j.home, "major": j.major, "source": j.source.to_string(),
             })),
             "heavy": self.heavy.as_ref().map(Heavy::to_json),
+            "emit": self.emit.as_ref().map(|e| json!({ "bin": e.bin, "jdk_classes": e.jdk_classes })),
+            "exe": self.exe,
         })
     }
 
@@ -66,8 +94,22 @@ mod tests {
         assert_eq!(v["ok"], false);
         assert_eq!(v["exit"], 101);
         assert_eq!(v["first_error"], "error[E0308]: x");
-        let ok = BuildStatus { stage: Stage::Run, ..BuildStatus::default() }.to_json(None);
+        assert!(v["exe"].is_null());
+        let ok = BuildStatus { stage: Stage::Run, exe: Some(PathBuf::from("/t/debug/a")), ..BuildStatus::default() }.to_json(None);
         assert_eq!(ok["ok"], true);
         assert!(ok["first_error"].is_null());
+        assert_eq!(ok["exe"], "/t/debug/a");
+    }
+
+    #[test]
+    fn emit_summary_round_trip() {
+        let d = std::env::temp_dir().join(format!("rava-status-{}", std::process::id()));
+        let st = BuildStatus { stage: Stage::Emit, ..BuildStatus::default() };
+        st.write(&d, None).unwrap();
+        assert!(EmitSummary::read(&d).is_err(), "无 emit 段");
+        let e = EmitSummary { bin: "hello_world".into(), jdk_classes: 260 };
+        BuildStatus { stage: Stage::Emit, emit: Some(e.clone()), ..BuildStatus::default() }.write(&d, None).unwrap();
+        assert_eq!(EmitSummary::read(&d).unwrap().0, e);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }
