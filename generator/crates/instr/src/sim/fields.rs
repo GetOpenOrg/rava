@@ -105,6 +105,32 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
     Ok(())
 }
 
+/// getfield 折叠点的 receiver：值已由分析器折叠，读取本身不翻译，但 JVMS §6.5 的判空照留——
+/// null receiver 抛 NullPointerException（字段常量与 receiver 是否为 null 无关）。`this` 恒非 null 不发射；
+/// 基本类型 receiver（装箱类擦除特例）只保留副作用
+pub(crate) fn fold_getfield_receiver(env: &InstrEnv, sim: &mut StackSim, get: &Insn) -> InstrResult<()> {
+    let Operand::Field(f) = &get.operand else {
+        return Err(InstrError::BadInsn(format!("getfield 折叠点 pc={} 不是 getfield", get.offset)));
+    };
+    let ctx = &env.ctx;
+    if sim.state.stack.is_empty() {
+        return Ok(());
+    }
+    let obj = sim.pop()?;
+    if sim::types::is_scalar(&obj.ty) {
+        return super::stack::keep_effect(env, sim, obj);
+    }
+    let (obj_e, obj_ty) = sig::type_var_receiver_bound_view(env, sim, obj.expr, obj.ty)?;
+    let owner = if f.owner.is_empty() { ctx.class_name } else { &f.owner };
+    let (obj_e, _) = field_receiver_view(env, obj_e, obj_ty, owner, &f.name);
+    let t = text(env, &obj_e);
+    if t == "this" || t == "self" {
+        return Ok(());
+    }
+    sim.emit(expr_stmt(null_checked(env, obj_e)?))?;
+    Ok(())
+}
+
 fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRef) -> InstrResult<()> {
     let ctx = &env.ctx;
     let val = sim.pop()?;

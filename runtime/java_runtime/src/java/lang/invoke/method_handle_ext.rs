@@ -292,13 +292,16 @@ impl MethodHandle {
     /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 vm_intrinsics.toml [sigpoly]）。
     ///
     /// upcalls：调用点类型检查 / 适配用到的 JDK 方法（运行时 → Java 调用边，字节码不可见）。
-    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String; java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodHandle.type:()Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String; java/lang/Class.descriptorString:()Ljava/lang/String;")]
     pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// native `invoke(Object...)`：同上（用户调用点经 `invoke__site`）。
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    ///
+    /// upcalls：`invoke__site` 的调用点类型解析 / 比较 / asType 适配与解释执行的实参拆箱用到的 JDK 方法
+    ///（闭包分析把带类型调用点按本成员建模，`invoke__site` 体内的回调边须在此声明）。
+    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodHandle.type:()Ljava/lang/invoke/MethodType; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String; java/lang/Class.descriptorString:()Ljava/lang/String;")]
     pub fn invoke(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }

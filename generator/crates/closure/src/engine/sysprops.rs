@@ -346,7 +346,13 @@ impl Engine<'_> {
                     }
                 }
                 Event::Field { opcode, mref, value, .. } => {
-                    let holder = self.ctx.field_info(mref).is_some_and(|fi| self.man.sysprops.is_holder(&fi.key.to_string()));
+                    let holder = match self.ctx.field_info(mref) {
+                        Some(fi) => {
+                            let k = self.mref_key(&fi.key);
+                            self.man.sysprops.is_holder(&k)
+                        }
+                        None => false,
+                    };
                     let put = matches!(*opcode, classfile::op::PUTSTATIC | classfile::op::PUTFIELD);
                     if holder && (put || a.conservative) || value.as_ref().is_some_and(may_be_sysprops) {
                         keys.push(None);

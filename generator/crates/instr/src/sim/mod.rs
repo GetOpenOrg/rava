@@ -30,9 +30,9 @@ use crate::log::InstrLog;
 pub fn sim_instr(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &NInsn) -> InstrResult<()> {
     match ins {
         NInsn::Op(i) => sim_insn(env, sim, log, i),
-        NInsn::FoldField { load, .. } => {
-            // getfield 折叠点：弹出 receiver（有副作用的按求值序保留），再压常量
-            stack::fold_pop(env, sim, 1)?;
+        NInsn::FoldField { get, load } => {
+            // getfield 折叠点：receiver 照常判空（null → NullPointerException，副作用随判空求值），再压常量
+            fields::fold_getfield_receiver(env, sim, get)?;
             load_const(env, sim, log, load)
         }
         NInsn::FoldCall { call, load } => {

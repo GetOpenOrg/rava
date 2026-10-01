@@ -36,7 +36,7 @@ fn shape(v: &[NInsn]) -> Vec<(u32, u8)> {
     v.iter()
         .map(|x| match x {
             NInsn::Op(i) => (i.offset, i.opcode),
-            NInsn::FoldField { offset, .. } => (*offset, 0),
+            NInsn::FoldField { get, .. } => (get.offset, 0),
             NInsn::FoldCall { call, .. } => (call.offset, call.opcode),
             NInsn::NullRecv { call } => (call.offset, 1),
             NInsn::NoReturn { call } => (call.offset, 2),

@@ -81,7 +81,7 @@ fn tail(load: &classfile::Insn) -> String {
 fn ninsn_proj(n: &NInsn) -> String {
     match n {
         NInsn::Op(i) => insn_proj(i),
-        NInsn::FoldField { offset, load } => format!("{offset} fold_field {}", tail(load)),
+        NInsn::FoldField { get, load } => format!("{} fold_field {}", get.offset, tail(load)),
         NInsn::FoldCall { call, load } => format!("{} fold_call {}", insn_proj(call), tail(load)),
         NInsn::NullRecv { call } => format!("{} null_recv", insn_proj(call)),
         NInsn::NoReturn { call } => format!("{} noreturn", insn_proj(call)),

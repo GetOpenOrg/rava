@@ -93,9 +93,45 @@ HelloWorld 只做一次 `println`，却有 `java/util/stream` 169 个翻译类�
 - **回调由算法推断，声明只兜底**（`engine/hw_infer.rs`）：手写层与生成层命名空间同构，调用点按「接收者静态类型（方法调用）/ 路径类型（`T::m(…)` 关联函数）+ Rust 名 + 实参个数」反解为 Java 方法引用，与 `upcalls` 声明同等处理。
   - 接收者静态类型的来源：形参 / `let` 标注、构造调用、字段访问器 `__get_f()`，以及链式调用的返回类型（`SType::Call`：`options.iterator()` 的返回类型取 Java 描述符 → `it.next()` 的接收者为 `Iterator`）。
   - 名字匹配规则与 `hw_member` 一致：先匹配无重载时的裸名或描述符 mangle 名，全层次都不中时再按 Java 名前缀回退。手写层对重载成员也可能用裸名或缩写后缀调用。
-  - 只有语法上看不见的调用才需要声明 `upcalls`：宏内调用（syn 不展开，记为 opaque）、按字符串名反射。Rust 内建 trait 同名方法（`clone`）不作为 Java 回调。
+  - Rust 内建 trait 同名方法（`clone`）不作为 Java 回调。
   - 实证：精确分派下，未声明的回调直接暴露为运行期存根（TestFilesApi：`newByteChannel` → `UnixChannelFactory.newFileChannel` → `Set.iterator`）。旧 BFS 是按 CHA 过近似，把这类遗漏掩盖了。
-- `error.rs` 的 `vm-upcalls` 保留，作为无条件根（VM 基础设施确实需要）。
+- **终态：回调全部由算法推出，人工 `upcalls` 声明为 0**（2026-10-01 用户确认，见 3.7.1）。
+
+#### 3.7.1 回调零声明（C6）
+
+现状（2026-10-01，粗扫）：手写层 173 个 fn 共 426 条 `upcalls` 声明，分布在 66 个文件。其中 132 条的目标方法在同一 fn 体内语法可见，
+294 条不可见；`error.rs` 头部的 `vm-upcalls` 行另有 18 条。c293b082（反射访问器拆箱、`MethodHandle.invoke` 调用点）用声明填补的是
+推断缺口，不是语法不可见的调用，属于本节要消除的对象。
+
+每一类回调边由下表对应的算法推出，不再逐个函数声明：
+
+| 类别 | 推断方式 |
+|---|---|
+| 同文件 / 跨文件辅助函数 | 手写 fn 建全局调用图，回调、分配、类型引用沿调用传递（现只传递同文件调用） |
+| 运行时内部方法（`ObjectVTable` 的 `__obj_str` 等） | 内部方法映射到对应的 Java 虚方法（`toString` / `hashCode` / `equals`），再按已实例化子类分派展开 |
+| 签名多态调用点（`invoke` / `invokeExact` → `invoke__site`） | 按 `vm_intrinsics.toml [sigpoly]` 的映射，把 `__site` 体作为该成员的手写体扫描 |
+| 宏内调用 | 自有过程宏由分析器调用 `rava_macros_core::expand_*` 展开后扫描；自有 `macro_rules` 同样展开，或改写为普通函数 |
+| 手写体按字符串名反射 | 名字为常量时，用与 `engine/reflect.rs` 同类的常量传播解析；名字不是常量的手写代码改成直接调用 |
+| VM 抛出的异常（现 `vm-upcalls` 的异常构造器） | 按 JVMS 指令语义从字节码推出（如 `aaload` → `ArrayIndexOutOfBoundsException`，`invokevirtual` → `NullPointerException`），只在含相应指令的可达方法里生效 |
+| VM 驱动的回调（线程入口、关闭钩子、类初始化错误等） | 分析器规则目录中的 VM 语义规则：按 Java 语义事件触发，每条带规则 ID 与 JVMS / JDK 依据；不在各个函数上声明 |
+
+前提：手写层保持与 Java 命名空间同构（现行约定）；手写代码里不出现名字无法推出的反射。
+
+声明归零后，承载声明的机制一并删除，`upcalls` 属性参数不再存在：
+
+| 删除项 | 位置 | 替代 |
+|---|---|---|
+| `upcalls = "…"` 参数的解析与说明 | `runtime/rava_macros/src/native_attr.rs`（宏忽略该参数）；`#[jvm_boundary]` / `#[jvm_ext]` 同 | 无（`#[jvm_native]` 等属性只保留 `no_class_init` 等其余参数；`#[jvm_boundary]` 无其余参数时整个属性删除） |
+| 声明解析 `upcalls_of`、`FnInfo` / `MemberHw` 的 `upcalls` 字段 | `generator/crates/closure/src/handwritten/scan.rs`、`handwritten.rs` | 回调边只来自推断（`engine/hw_infer.rs`），`hw_upcalls` 不再并入声明 |
+| `error.rs` 头部 `// vm-upcalls:` 行与 `vm_upcalls()`、`root_upcall(…, "vm-upcalls")` | `handwritten.rs`、`lib.rs` | JVMS 指令异常推导与 VM 语义规则（3.7.1 表末两行） |
+| VM 钩子判定「pub fn 且带声明」 | `handwritten/hooks.rs` `is_hook` | 改为「不对应该类及超类型任何 Java 成员的 pub fn」，钩子体的回调边同样由推断得出 |
+| 系统属性改写判定读声明 | `engine/sysprops.rs` `sysprops_hw` | 改读推断结果（`hw_upcalls`） |
+
+`closure.toml [dynamic] vm_upcall_classes`（JVM 链接期直接调用的入口类，`dyn_compare` 用于归因）不属于手写层声明，不在本项范围；
+它是否同样可由规则推出，在 VM 语义规则落地时一并评估。
+
+验收：手写层 `upcalls` 声明 = 0；`error.rs` 的 `vm-upcalls` 行 = 0；上表机制已删除（仓库内 `upcalls` 属性参数与 `vm-upcalls` 行的解析代码为 0）；删除声明后，验收集闭包集合不缩小；动态对照翻译域漏覆盖 = 0；
+相关 e2e 通过。实施先输出分类统计（现已可删 / 补齐哪一类推断后可删），再按类别小步提交。
 
 ### 3.8 动态视角：真实 JVM 运行轨迹作为健全性基准（只用于验证）
 
@@ -227,6 +263,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | ✅ 在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。2026-10-01 派发 `emitter-c3`（起点 closure-prec3 98bc2e68，计划 `2026-10-01-emitter-c3.md`）：null_recv 抛 NPE、noreturn 终止控制流与死区间 0 翻译、consts 常量、class_init 事实、按 dispatch 发 vtable 槽、L1 不透明类型。前置已合入：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish（`emitter-final`，c7a9d7b4）。✅ 已合入（30df3e74，2026-10-01；单测全过、e2e 抽查 14 例全过、动态对照漏覆盖 0）：6 项全部实现——null_recv 抛 NPE、noreturn 终止控制流、运行时初始系统属性表与分析器折叠同源、class_init 事实、按 dispatch 保留 vtable 槽（手写继承覆盖所在槽族强制保留 8075b674）、L1 不透明类型（`java_class_opaque!`；分析器级别阶梯新增 L2 layout，01711d08；L1 静态类型访问 L2 属主成员时发射侧上转，96de08ea；经未建模来源进入值流的虚调用点属主升为 L2，修动态代理接口误判 null_recv，43d727a2）；不透明类不参与 S4 拆层，整类留在声明层。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
 | C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21）通过集合 ⊇ 冻结的 Python 基线；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`，Rust 生成器由 `input` crate 消费，`rava build` 进程内直传见 `emitter-perf2`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；待：全量 e2e（JDK 21，基线 `2026-10-01-python-baseline-jdk21.txt` 1029 例；JDK 25 不设 Python 基线，2026-10-01 用户决定） |
 | C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
+| C6 | 手写层回调零声明（3.7.1）：辅助函数全局传递、内部 vtable 方法映射、sigpoly `__site` 体、宏展开、常量反射、JVMS 指令异常、VM 语义规则 | 手写层 `upcalls` 声明 = 0；`error.rs` `vm-upcalls` = 0；`upcalls` 属性参数及其解析机制删除；验收集闭包集合不缩小；动态对照漏覆盖 = 0 | 🔄 2026-10-01 派发 `c4-regfix`（排在 TestBmhDynamicSpecies 漏覆盖之后）；首项：分类统计，并撤回 c293b082 的声明 |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
 
@@ -258,6 +295,7 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 | 翻译域内动态加载类未被覆盖 | 不可观测 | 0 |
 | 名字模式类反射启发式 | 4 类 | 0 |
 | 生成器中的补扫 / 门控补丁段 | 5 段 | 0 |
+| 手写层人工 `upcalls` 声明（含 `error.rs` `vm-upcalls`） | 426 + 18 条 | 0 |
 | 闭包计算耗时（HelloWorld） | Python 发现阶段数十秒 | ≤ 3s |
 | 全量 e2e | 现行通过集 | 不减少 |
 
