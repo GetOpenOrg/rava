@@ -42,6 +42,10 @@ impl<'ast> Visit<'ast> for TypePaths {
         self.record(path_segs(p));
         syn::visit::visit_path(self, p);
     }
+    // 宏体里的类型路径（`vec![T::new()?]` 等）同样随文件编译
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        super::syntax::visit_macro_body(self, m);
+    }
     fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
         let mut m = HashMap::new();
         collect_uses(&u.tree, &mut Vec::new(), &mut m);

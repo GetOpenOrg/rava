@@ -10,6 +10,17 @@ pub(super) fn path_segs(p: &syn::Path) -> Vec<String> {
     p.segments.iter().map(|s| s.ident.to_string()).collect()
 }
 
+/// 表达式路径的段：限定路径 `<T as Trait>::f` 按 `T::f`（trait 关联函数在 T 上调用）
+pub(super) fn expr_path_segs(p: &syn::ExprPath) -> Vec<String> {
+    match (&p.qself, p.path.segments.last()) {
+        (Some(q), Some(last)) => type_path(&q.ty).map(|mut t| {
+            t.push(last.ident.to_string());
+            t
+        }).unwrap_or_default(),
+        _ => path_segs(&p.path),
+    }
+}
+
 /// 路径按 use 表展开首段
 pub(super) fn expand(uses: &HashMap<String, Vec<String>>, segs: Vec<String>) -> Vec<String> {
     match segs.first().and_then(|f| uses.get(f)) {
@@ -65,7 +76,7 @@ impl<'ast> Visit<'ast> for BodyScan {
                 if let Some(init) = &l.init {
                     if let syn::Expr::Call(c) = &*init.expr {
                         if let syn::Expr::Path(p) = &*c.func {
-                            let segs = path_segs(&p.path);
+                            let segs = expr_path_segs(p);
                             if segs.len() >= 2 && segs.last().is_some_and(|s| s == "default") && c.args.is_empty() {
                                 self.defaults.insert(pi.ident.to_string(), segs[..segs.len() - 1].to_vec());
                             }
@@ -92,7 +103,7 @@ impl<'ast> Visit<'ast> for BodyScan {
 
     fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
         if let syn::Expr::Path(p) = &*c.func {
-            let segs = path_segs(&p.path);
+            let segs = expr_path_segs(p);
             if let Some(last) = segs.last() {
                 self.calls.insert(last.clone());
                 let is_ctor = last == CTOR_RUST || last.starts_with("new_");
@@ -125,8 +136,36 @@ impl<'ast> Visit<'ast> for BodyScan {
         syn::visit::visit_expr_match(self, e);
     }
 
+    fn visit_macro(&mut self, m: &'ast syn::Macro) {
+        visit_macro_body(self, m);
+    }
+
+    // 作值的 fn 路径（`.map_err(wrap)` 的 fn 指针）：同文件 fn 按被调处理（传递闭包只认本文件 fn 名）
+    fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+        if let Some(last) = path_segs(&p.path).last() {
+            self.calls.insert(last.clone());
+        }
+        syn::visit::visit_expr_path(self, p);
+    }
+
     // 嵌套 fn 单独登记（由外层 FileScan 处理）
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
+}
+
+/// 宏体按 Rust 语法访问：逗号分隔表达式（`format!` / `write!` / `assert!` 等），否则语句序列
+/// （块状宏、在宏内声明 static 并以初始化表达式构造值的宏）。都解析不了的宏体只经标识符保守处理
+pub(super) fn visit_macro_body<'a, V: for<'ast> Visit<'ast>>(v: &mut V, m: &'a syn::Macro) {
+    if let Ok(args) = m.parse_body_with(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated) {
+        for a in &args {
+            v.visit_expr(a);
+        }
+        return;
+    }
+    if let Ok(stmts) = m.parse_body_with(syn::Block::parse_within) {
+        for st in &stmts {
+            v.visit_stmt(st);
+        }
+    }
 }
 
 /// 同名重复绑定且类型不一致 → None
@@ -175,11 +214,12 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
         }
         Expr::Call(c) => match &*c.func {
             Expr::Path(p) => {
-                let segs = path_segs(&p.path);
+                let segs = expr_path_segs(p);
                 match segs.split_last() {
                     Some((last, head)) if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) => {
                         let t = TypeRef(head.to_vec());
-                        Some(if last == "default" || last == CTOR_RUST || last.starts_with("new_") {
+                        // `T::from(x)`：引用类型间转换即 checkcast，静态类型为 T
+                        Some(if last == "default" || last == "from" || last == CTOR_RUST || last.starts_with("new_") {
                             SType::Named(t)
                         } else {
                             SType::Ret(t, last.clone())
@@ -220,7 +260,7 @@ pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>
         Expr::Path(p) => p.path.get_ident().and_then(|i| locals.get(&i.to_string()).cloned().flatten()),
         Expr::Call(c) => {
             let Expr::Path(p) = &*c.func else { return None };
-            let segs = path_segs(&p.path);
+            let segs = expr_path_segs(p);
             let (last, head) = segs.split_last()?;
             let arg0 = || c.args.first().and_then(|a| infer(a, locals));
             if head.last().is_some_and(|h| h == OBJECT_RUST) && last == "from" {
@@ -274,8 +314,49 @@ pub(super) fn macro_idents(ts: proc_macro2::TokenStream, out: &mut HashSet<Strin
     }
 }
 
+/// 根类 vtable（`ObjectVTable`）的运行时内部入口 → 其分派到的 Java 方法名：`__to_string`（可失败形态）与
+/// `__obj_str`（Rust 侧 Display / Debug）都是 `toString()` 的虚分派（rava_macros 把覆盖桥接到翻译体）
+const ROOT_VTABLE_ALIASES: &[(&str, &str)] = &[("__to_string", JAVA_TO_STRING), ("__obj_str", JAVA_TO_STRING)];
+/// Java 对象的 Display 即 `toString()`（`impl Display for Object` 经 `__obj_str`）
+const JAVA_TO_STRING: &str = "toString";
+
+/// 格式化宏（首参为含占位符的字符串字面量）里以 Display / Debug 输出的实参：显式实参与内联捕获 `{x}`
+fn formatted_args(args: &syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>) -> Option<(Vec<&syn::Expr>, Vec<String>)> {
+    let pos = args.iter().position(|a| matches!(a, syn::Expr::Lit(l) if matches!(l.lit, syn::Lit::Str(_))))?;
+    let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(fmt), .. }) = &args[pos] else { return None };
+    let fmt = fmt.value();
+    if !fmt.contains('{') {
+        return None;
+    }
+    let captured = fmt
+        .split('{')
+        .skip(1)
+        .filter_map(|x| x.split(['}', ':']).next())
+        .filter(|n| n.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && n.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        .map(str::to_string)
+        .collect();
+    let explicit = args.iter().skip(pos + 1).filter(|a| !matches!(a, syn::Expr::Assign(_))).collect();
+    Some((explicit, captured))
+}
+
+impl CallScan<'_> {
+    /// 静态类型已知的值以 Display 输出：即其 `toString()` 虚调用
+    fn display_call(&mut self, recv: Option<Vec<String>>, st: Option<SType>) {
+        if st.is_some() {
+            self.calls.push((JAVA_TO_STRING.to_string(), None, Some(recv), vec![], None, st));
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for CallScan<'_> {
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        if let Some((_, java)) = ROOT_VTABLE_ALIASES.iter().find(|(r, _)| m.method == r).filter(|_| m.args.is_empty()) {
+            // 接收者静态类型推不出（`v.0` 等）→ 根类型（按 open 分派到全部覆盖）
+            let st = stype(&m.receiver, &self.scope, self.locals).or_else(|| Some(SType::Named(TypeRef(vec![OBJECT_RUST.to_string()]))));
+            self.calls.push((java.to_string(), None, Some(infer(&m.receiver, self.locals)), vec![], None, st));
+            syn::visit::visit_expr_method_call(self, m);
+            return;
+        }
         let name = m.method.to_string();
         let access = match (name.strip_prefix(SET_PREFIX), name.strip_prefix(GET_PREFIX)) {
             (Some(f), _) if m.args.len() == 1 => Some((f, true)),
@@ -301,7 +382,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
 
     fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
         if let syn::Expr::Path(p) = &*c.func {
-            let segs = path_segs(&p.path);
+            let segs = expr_path_segs(p);
             if let Some((last, head)) = segs.split_last() {
                 // static 字段写访问器 `T::set_<字段>(v)`（类型段首字母大写；关键字字段名带 `_` 后缀）
                 if let Some(f) = last.strip_prefix(STATIC_SET_PREFIX).filter(|_| c.args.len() == 1) {
@@ -321,11 +402,19 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
 
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         macro_idents(m.tokens.clone(), &mut self.opaque);
-        // 实参形如逗号分隔表达式的宏（format! / write! / assert! 等）：按表达式记调用点，
+        // 宏体可按 Rust 语法解析时按表达式 / 语句记调用点（见 [`visit_macro_body`]），
         // 标识符仍记入 opaque，实参来源推断对宏内同名调用保持保守
+        visit_macro_body(self, m);
         if let Ok(args) = m.parse_body_with(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated) {
-            for a in &args {
-                self.visit_expr(a);
+            if let Some((explicit, captured)) = formatted_args(&args) {
+                for a in explicit {
+                    let st = stype(a, &self.scope, self.locals);
+                    self.display_call(infer(a, self.locals), st);
+                }
+                for n in captured {
+                    let st = self.scope.get(&n).cloned().flatten();
+                    self.display_call(self.locals.get(&n).cloned().flatten(), st);
+                }
             }
         }
     }
@@ -433,7 +522,7 @@ pub(super) fn ctor_type(e: &syn::Expr) -> Option<Vec<String>> {
         syn::Expr::Try(t) => ctor_type(&t.expr),
         syn::Expr::Call(c) => {
             let syn::Expr::Path(p) = &*c.func else { return None };
-            let segs = path_segs(&p.path);
+            let segs = expr_path_segs(p);
             let (last, head) = segs.split_last()?;
             let head_is_type = head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase()));
             (head_is_type && (last == CTOR_RUST || last.starts_with("new_"))).then(|| head.to_vec())

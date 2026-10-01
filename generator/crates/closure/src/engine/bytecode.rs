@@ -10,6 +10,7 @@ impl<'a> Engine<'a> {
         let same = self.methods[m].applied.is_some() && self.methods[m].applied_seq == seq;
         if !same {
             self.sysprops_scan(m, &a);
+            self.vm_rules_scan(m, &a);
         }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);

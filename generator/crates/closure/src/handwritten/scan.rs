@@ -107,7 +107,21 @@ impl FileScan<'_> {
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
-        for (name, ty, recv, args, fresh, srecv) in cs.calls {
+        for (mut name, mut ty, mut recv, mut args, fresh, mut srecv) in cs.calls {
+            // vtable trait 的完全限定调用 `X__VTable::m(&*recv, …)`：首个实参是接收者，即 X 上的虚调用
+            if recv.is_none() && !args.is_empty() {
+                if let Some(t) = ty.as_ref().map(|t| expand(self.uses, t.clone())).as_ref().and_then(|t| Some((t, t.last()?.strip_suffix(VTABLE_SUFFIX)?))).filter(|(_, s)| !s.is_empty()).map(|(t, s)| [&t[..t.len() - 1], &[s.to_string()]].concat()) {
+                    recv = Some(args.remove(0));
+                    srecv = Some(SType::Named(TypeRef(t)));
+                    ty = None;
+                }
+            }
+            // 经 use 引入的自由 fn（`use crate::m::f;` 后的 `f(…)`）：路径取引入的全路径
+            if ty.is_none() && recv.is_none() {
+                if let Some((last, head)) = self.uses.get(&name).and_then(|full| full.split_last()).filter(|(_, h)| !h.is_empty()) {
+                    (name, ty) = (last.clone(), Some(head.to_vec()));
+                }
+            }
             info.calls.push(TypedCall {
                 name,
                 path_ty: tr(ty),
