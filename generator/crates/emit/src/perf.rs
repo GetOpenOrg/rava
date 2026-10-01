@@ -12,6 +12,16 @@ pub struct PhaseMark {
     pub peak_mem_mb: u64,
 }
 
+/// 一个 crate 的发射规模（拆层后、落盘前；查看 crate 划分与重型判定的依据）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateStat {
+    pub name: String,
+    /// 类数（`java_runtime` 行与重型判定同源：JDK 布局类数，含手写类）
+    pub classes: usize,
+    /// 生成文本字节（手写真源不计；`java_runtime` 为剥体后的声明层）
+    pub bytes: usize,
+}
+
 /// 分阶段计时器 + 逐项耗时表
 #[derive(Debug)]
 pub struct Perf {
@@ -19,11 +29,13 @@ pub struct Perf {
     pub phases: Vec<PhaseMark>,
     /// 逐类发射耗时（类 binary 名；含其方法体生成）
     pub classes: Vec<(String, Duration)>,
+    /// 各 crate 规模（发射序：java_runtime → lib → 实现层 → user）
+    pub crates: Vec<CrateStat>,
 }
 
 impl Default for Perf {
     fn default() -> Perf {
-        Perf { since: Instant::now(), phases: Vec::new(), classes: Vec::new() }
+        Perf { since: Instant::now(), phases: Vec::new(), classes: Vec::new(), crates: Vec::new() }
     }
 }
 
@@ -54,6 +66,7 @@ impl Perf {
     pub fn absorb(&mut self, other: Perf) {
         self.phases.extend(other.phases);
         self.classes.extend(other.classes);
+        self.crates.extend(other.crates);
         self.since = Instant::now();
     }
 
@@ -74,12 +87,18 @@ pub fn top_n(items: &[(String, Duration)], n: usize) -> Vec<(String, Duration)> 
     v
 }
 
-/// `[perf]` 报告行：阶段表 + 逐类 / 逐方法 Top-N
+/// `[perf]` 报告行：阶段表 + crate 表 + 逐类 / 逐方法 Top-N
 pub fn report_lines(perf: &Perf, methods: &[(String, Duration)], n: usize) -> Vec<String> {
     let mut out = Vec::new();
     out.push(format!("[perf] 合计 {:.1} ms，峰值占用 {} MB（RSS {} MB）", ms(perf.total()), closure::engine::peak_mem_mb(), closure::engine::peak_rss_mb()));
     for p in &perf.phases {
         out.push(format!("[perf] 阶段 {:<16} {:>10.1} ms  峰值占用 {:>6} MB", p.name, ms(p.elapsed), p.peak_mem_mb));
+    }
+    if !perf.crates.is_empty() {
+        out.push(format!("[perf] crate {} 个：", perf.crates.len()));
+        for c in &perf.crates {
+            out.push(format!("[perf]   {:<20} 类 {:>6}  生成文本 {:>9.1} KB", c.name, c.classes, c.bytes as f64 / 1024.0));
+        }
     }
     let class_sum: Duration = perf.classes.iter().map(|c| c.1).sum();
     out.push(format!("[perf] 类 {} 个，合计 {:.1} ms；Top {n}：", perf.classes.len(), ms(class_sum)));
@@ -113,5 +132,8 @@ mod tests {
         p.mark("b");
         assert_eq!(p.phases.len(), 2);
         assert!(report_lines(&p, &[], 5).iter().any(|l| l.contains("阶段 a")));
+        p.crates.push(CrateStat { name: "java_runtime".into(), classes: 3, bytes: 2048 });
+        let lines = report_lines(&p, &[], 5);
+        assert!(lines.iter().any(|l| l.contains("java_runtime") && l.contains("类      3") && l.contains("2.0 KB")));
     }
 }

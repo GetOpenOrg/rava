@@ -127,6 +127,10 @@ docs/compatibility.md、docs/tasks.md、CLAUDE.md（**CLAUDE.md 由用户改**�
 
 - S4 物理拆层已合入，划分在 emit 内；查看划分用 `rava build --stop-after emit --perf`（perf 报告列各 crate 类数 / 体规模，
   A2 的重型判定同源）。crate-split 文档 §三 的「复现」行改指向历史提交 + 该命令。
+- **已完成（S4）**：`scripts/dep_scc.py` 删除；`Perf.crates`（`emit::perf::CrateStat`）在拆层后按
+  java_runtime → lib → java_body_k → user 记各 crate 类数与生成文本字节（手写真源不计字节），
+  java_runtime 行类数取 JDK 布局类数，与 `Heavy::decide(r.jdk_classes)` 同源；driver 的 `--perf` 输出末尾补一行
+  重型判定（同一函数，阈值 `HEAVY_CLASSES`）。crate-split 文档复现行改指 `git show 4bae5479:scripts/dep_scc.py` + 该命令。
 
 ### C 类：e2e 编排拆为 `scripts/e2e/`
 
