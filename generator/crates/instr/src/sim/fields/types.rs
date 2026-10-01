@@ -52,14 +52,21 @@ fn declares_instance_field(ci: &ClassInfo, fname: &str) -> bool {
 /// 声明在接收者静态类型的祖先上时按接收者视角的超类实参代入。解析结果中的类型名在调用方
 /// 不可见（跨类形参名不同）时保持擦除形态。
 pub fn restore_field_declared_type(env: &InstrEnv, sim: &StackSim, f_owner: &str, fname: &str, ftype: RsType, recv_ty: Option<&RsType>) -> RsType {
+    field_view(env, sim, f_owner, fname, ftype, recv_ty).0
+}
+
+/// 字段声明类型恢复 + 访问器擦除标记：第二项为真表示字段槽位是类型变量、接收者实例化把它
+/// 代入为 Object（宏访问器按实例化返回 Object），而描述符擦除类型（上界）不是 Object——
+/// 读取值须经 `From<Object>` 取回上界视图
+pub fn field_view(env: &InstrEnv, sim: &StackSim, f_owner: &str, fname: &str, ftype: RsType, recv_ty: Option<&RsType>) -> (RsType, bool) {
     let ctx = &env.ctx;
     let reg = ctx.reg();
     if reg.is_empty() {
-        return ftype;
+        return (ftype, false);
     }
     let g_owner = if f_owner.is_empty() { ctx.class_name } else { f_owner };
     if g_owner.is_empty() {
-        return ftype;
+        return (ftype, false);
     }
     let ref_ci = reg.get(g_owner);
     // 字段解析（JVMS §5.4.3.2）：声明类可能是限定类的祖先，类型变量属于声明类
@@ -79,20 +86,22 @@ pub fn restore_field_declared_type(env: &InstrEnv, sim: &StackSim, f_owner: &str
     if parsed.is_none() {
         let gsig = field_generic_signature(reg, g_owner, fname);
         let Some(g) = g_ci.filter(|_| !gsig.is_empty()) else {
-            return ftype;
+            return (ftype, false);
         };
         parsed = ctx.ty.parse_field_type(&gsig, &ctx.ty.effective_class_type_params(g));
     }
     let (Some(mut p), Some(g)) = (parsed, g_ci) else {
-        return ftype;
+        return (ftype, false);
     };
+    let slot_is_var = matches!(p, RsType::Param(_));
     if let Some(rt) = recv_ty {
         p = recv_view(env, p, g, ref_ci, rt);
     }
     if !sim::types::is_object(&p) && ty_text(env, &p) != ty_text(env, &ftype) && all_visible(env, &p, &sim.cfg.class_type_params) {
-        return p;
+        return (p, false);
     }
-    ftype
+    let erased = slot_is_var && sim::types::is_object(&p) && !sim::types::is_object(&ftype) && !sim::types::is_scalar(&ftype);
+    (ftype, erased)
 }
 
 /// 声明类类型变量按接收者视角代入：祖先上声明 → 祖先链实参；接收者自身类声明 → 接收者实参

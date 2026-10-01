@@ -170,6 +170,22 @@ fn scan_method_body(ctx: &EmitCtx<'_>, s: ScanMethod<'_>, out: &mut BTreeSet<Str
     }
 }
 
+/// 分支汇合值的公共超类（`method::unify` 取两臂超类链上的最近公共类）只出现在合流文本里，
+/// 字节码不直接引用：已引用类的超类链全部入集
+fn add_join_supers(ctx: &EmitCtx<'_>, out: &mut BTreeSet<String>) {
+    let reg = ctx.ty.reg;
+    let mut extra: Vec<String> = Vec::new();
+    for c in out.iter() {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut cur = reg.get(c.as_str()).map_or("", |ci| ci.super_class());
+        while !cur.is_empty() && cur != lang::OBJECT && seen.insert(cur) {
+            extra.push(cur.to_string());
+            cur = reg.get(cur).map_or("", |ci| ci.super_class());
+        }
+    }
+    out.extend(extra);
+}
+
 /// 字段描述符 / 签名（本类全部字段 + 祖先未遮蔽的实例字段）
 fn scan_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo, out: &mut BTreeSet<String>) {
     // 祖先字段不按名字去重：本类同名字段隐藏祖先字段时，祖先字段仍以独立槽位名进入
@@ -254,6 +270,7 @@ pub fn collect_referenced(ctx: &EmitCtx<'_>, ci: &ClassInfo, generated: Option<&
     for s in &methods {
         scan_method_body(ctx, *s, &mut out);
     }
+    add_join_supers(ctx, &mut out);
     scan_fields(ctx, ci, &mut out);
     for s in &methods {
         add_narrow_refs(&s.method.desc, &mut out);

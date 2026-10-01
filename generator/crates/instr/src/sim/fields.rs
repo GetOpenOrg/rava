@@ -24,7 +24,7 @@ use crate::log::InstrLog;
 use crate::owner::field_generic_signature;
 
 use store::{coerce_stored_value, StoreCtx};
-use types::{resolve_static_field, restore_field_declared_type};
+use types::{field_view, resolve_static_field, restore_field_declared_type};
 
 /// 本组指令；非本组 → Ok(false)
 pub fn sim_fields(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &Insn) -> InstrResult<bool> {
@@ -76,10 +76,14 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
     let ftype = if f.desc.is_empty() { RsType::Object } else { ctx.ty.jvm_to_rust(&f.desc) };
     // 类型变量接收者：访问器定义在上界类上，经上界视图读字段
     let (obj_e, obj_ty) = sig::type_var_receiver_bound_view(env, sim, obj.expr, obj.ty)?;
-    let ftype = restore_field_declared_type(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
+    let (ftype, erased) = field_view(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let owner = if f.owner.is_empty() { ctx.class_name } else { &f.owner };
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    let get = mcall(null_checked(env, obj_e)?, &format!("__get_{slot}"), Vec::new())?;
+    let mut get = mcall(null_checked(env, obj_e)?, &format!("__get_{slot}"), Vec::new())?;
+    if erased {
+        // 类型变量槽位按接收者实例化读出 Object：经 From<Object> 取回描述符上界视图
+        get = crate::coerce::cast_node(get, ir_ty(env, &ftype)?, "", false, false);
+    }
     sim.push(get, ftype);
     Ok(())
 }
