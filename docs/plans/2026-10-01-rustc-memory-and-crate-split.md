@@ -482,6 +482,40 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 - trait impl（`ObjectVTable` / `Y__VTable for X__inner`）在哪个 crate 定义不影响分派：vtable 由实现层的 `alloc` 钩子在 unsize 时取用。
 - `#[export_name]` 项恒被代码生成且作为导出符号保留。dev 下跨 crate 调用不内联；release 的 `lto = true` 仍跨 crate 内联。
 
+#### 7.5.2 S5 剥体：声明层文本不带下沉方法体（2026-10-01）
+
+**问题**：S4 声明层收到整块文本，宏在声明模式下仍要词法分析、解析、改写全部方法体，再丢弃实现层部分。声明模式只读方法体的这几个结论：
+
+| 读体位置（声明模式） | 读出的结论 |
+|---|---|
+| `wrapper/methods.rs` 虚方法（定义 / 覆盖） | gated 分类是否 Safe；非 Safe 时 `__impl_` 能否函数化（不能则体内联在 wrapper） |
+| `wrapper/methods.rs` 构造器 / 非虚方法 | 能否函数化（不能则体内联） |
+| `virtual_dispatch/trait_decl.rs` | 定义方法是否 Safe（缺省方法走 base 还是钩子；是否要 `AsVTable` 视图） |
+| `virtual_dispatch/base_fns.rs` | 是否 Safe、Safe 定义方法的 base 是真实体还是存根；真实体的 base 非泛型时拆入实现层，声明层只用外壳 |
+
+外壳（wrapper 外壳、体函数外壳、base 外壳）只取签名，不取体。
+
+**做法**
+- **分析逻辑独立成库 crate `runtime/rava_macros_core`**：`block/` 与 `try_macro.rs` 原样移入，`rava_macros` 只剩 proc-macro 入口。生成器（emit crate）依赖同一个库，用与宏相同的代码对同一份块文本做判定，不另写一份移植。
+- **判定函数 `moved_fact`（库内，宏与生成器共用）**：对非泛型、非接口类里有体的方法，体在声明模式下不被消费时给出标注，否则 None（体留在声明层）：
+  - 虚方法：Safe 且方法无泛型形参 / where 子句 → `safe`（base 真实体）或 `safe_stub`（base 存根）；非 Safe 且 `__impl_` 可函数化 → `wrapper`；
+  - 构造器 / 非虚方法：可函数化 → `plain`；
+  - 继承成员声明不下沉。
+- **生成器**：拆层时用 `rava_macros_core` 解析块（`proc-macro2` 回落实现 + `span-locations` 取字节区间），对有标注的方法：方法项前插 `#[rava_moved = "<标注>"] `，体 `{ … }` 换成 `;`。实现层文本不变。
+- **宏声明模式**：`rava_moved` 方法按标注走与有体时相同的分支：分类结论取标注；函数化外壳与 base 外壳只用签名生成；base 存根消息只用描述符。声明模式不再计算实现层的 vtable impl。完整 / 实现模式下出现 `rava_moved` 即 `compile_error`。
+- **一致性断言（每次构建都编译）**：声明模式把本类全部标注按方法序拼成文本，取 FNV-1a 64 写成 `pub const __RAVA_MOVED_<X>: u64`；实现模式对完整块重算 `moved_fact`，生成 `const _: () = assert!(__RAVA_MOVED_<X> == <重算值>)`。生成器在回落实现下算出的标注与编译器记号流下宏的结论若有出入，实现 crate 编译失败，不会静默错配。
+
+**等价性**
+- 声明模式展开只依赖上表各结论与签名。标注 = 同一函数对同一块文本的结论（断言保证在编译器记号流下也成立），所以声明模式展开与 S4 逐项相同，只多一个 `u64` 常量。
+- 实现层文本逐字节不变；实现模式展开只多一个常量断言。
+- 完整模式（用户 crate、lib crate、Python 生成器）不受影响。
+
+**验收**
+- 27 例生成树对照：实现层逐字节一致；声明层差异只是「插标注 + 体换 `;`」，还原后与 S4 逐字节一致（对照脚本做还原比对）。
+- 宏展开对照：用库对 27 例每个可拆类分别展开「S4 声明文本（带体）」与「S5 声明文本（剥体）」，记号文本一致（只差常量）。
+- 测量：Digester 声明 crate 峰值（目标 ≤ 2 GB）、HelloWorld `cargo build` 墙钟（目标 ≤ 12 s）。
+- 主会话 e2e 抽查：覆盖 Safe 定义 / 覆盖、`safe_stub`、`__impl_` 函数化、构造器与静态方法（含类初始化触发）、super 调用。
+
 ### 7.6 量化目标
 
 | 指标 | 现状 | 终态 |
