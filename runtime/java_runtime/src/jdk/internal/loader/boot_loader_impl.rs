@@ -53,7 +53,7 @@ impl BootLoader {
 }
 
 /// 引导服务目录：进程内唯一，首次请求时按分析器导出的服务事实装填
-/// （closure.json seeds.services 的模块 provider，经 build.rs 生成 services_table.rs）。
+/// （closure.json seeds.services 的模块 provider，经 java_meta 的 MODULE_SERVICES 表读取）。
 /// 装填走字节码翻译的 `create()` + `addProvider(provider 所在模块, 服务, provider)`，
 /// 与 JDK 引导期 `ServicesCatalog.register(Module)` 按模块描述符 provides 登记的结果同构。
 fn boot_catalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
@@ -65,15 +65,11 @@ fn boot_catalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
         return Ok(c);
     }
     let catalog = ServicesCatalog::create()?;
-    for (service, provider) in services_table::MODULE_SERVICES {
+    for (service, provider) in crate::meta::module_services() {
         let service = crate::java::lang::Class::for_class(String::from(*service));
         let provider = crate::java::lang::Class::for_class(String::from(*provider));
         catalog.addProvider(provider.getModule()?, service, provider)?;
     }
     BOOT.with(|b| *b.borrow_mut() = Some(catalog.clone()));
     Ok(catalog)
-}
-
-mod services_table {
-    include!(concat!(env!("OUT_DIR"), "/services_table.rs"));
 }
