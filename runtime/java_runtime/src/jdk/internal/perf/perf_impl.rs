@@ -19,7 +19,7 @@ impl Perf {
     /// `value` 初始化（本机字节序写入，与 HotSpot 一致），返回覆盖该 8 字节的缓冲（默认
     /// BIG_ENDIAN 序，调用方 PerfCounter 自行改为 nativeOrder）。名字 / 可变性 / 单位只影响
     /// jvmstat 元数据，进程内不可观测。
-    #[jvm_native(upcalls = "java/nio/ByteBuffer.allocate:(I)Ljava/nio/ByteBuffer; java/nio/ByteOrder.nativeOrder:()Ljava/nio/ByteOrder; java/nio/ByteBuffer.order:(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer; java/nio/ByteBuffer.putLong:(IJ)Ljava/nio/ByteBuffer;")]
+    #[jvm_native]
     pub fn createLong(&self, _name: String, _variability: i32, _units: i32, value: i64) -> Result<ByteBuffer> {
         let bb = ByteBuffer::allocate(8)?;
         if value != 0 {

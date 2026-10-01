@@ -32,37 +32,37 @@ impl InnocuousThread {
         Ok(String::from(format!("InnocuousThread-{}", THREAD_NUMBER.fetch_add(1, Ordering::Relaxed))))
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newThread_runnable(target: Runnable) -> Result<Thread> {
         system_thread(Self::newName()?, target, 0, NORM_PRIORITY)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newThread_str_runnable(name: String, target: Runnable) -> Result<Thread> {
         system_thread(name, target, 0, NORM_PRIORITY)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newThread_str_runnable_i(name: String, target: Runnable, priority: i32) -> Result<Thread> {
         system_thread(name, target, 0, priority)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newSystemThread_runnable(target: Runnable) -> Result<Thread> {
         system_thread(Self::newName()?, target, 0, NORM_PRIORITY)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newSystemThread_str_runnable(name: String, target: Runnable) -> Result<Thread> {
         system_thread(name, target, 0, NORM_PRIORITY)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newSystemThread_str_runnable_i(name: String, target: Runnable, priority: i32) -> Result<Thread> {
         system_thread(name, target, 0, priority)
     }
 
-    #[jvm_boundary(upcalls = "java/lang/Thread.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V java/lang/Thread.setDaemon:(Z)V java/lang/Thread.setPriority:(I)V")]
+    #[jvm_boundary]
     pub fn newSystemThread_str_runnable_l_i(name: String, target: Runnable, stack_size: i64, priority: i32) -> Result<Thread> {
         system_thread(name, target, stack_size, priority)
     }

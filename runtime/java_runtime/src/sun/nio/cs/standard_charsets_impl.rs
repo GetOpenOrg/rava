@@ -52,7 +52,7 @@ fn matches(cs: &Charset, name: &str) -> Result<bool> {
 
 impl StandardCharsets {
     /// `<init>()`：provider 本身无状态。
-    #[jvm_boundary(upcalls = "sun/nio/cs/UTF_8.<init>:()V sun/nio/cs/ISO_8859_1.<init>:()V sun/nio/cs/US_ASCII.<init>:()V sun/nio/cs/UTF_16.<init>:()V sun/nio/cs/UTF_16BE.<init>:()V sun/nio/cs/UTF_16LE.<init>:()V sun/nio/cs/UTF_32.<init>:()V sun/nio/cs/UTF_32BE.<init>:()V sun/nio/cs/UTF_32LE.<init>:()V")]
+    #[jvm_boundary]
     pub fn new() -> Result<Self> {
         let mut this = Self::default();
         this._init_not_null();

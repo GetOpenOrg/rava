@@ -67,7 +67,7 @@ fn time_text(hour: i32, minute: i32, second: i32, nano: i32) -> std::string::Str
 
 impl DateTimeHelper {
     /// static `formatTo(StringBuilder, LocalDateTime)`：日期 + `T` + 时间。
-    #[jvm_boundary(upcalls = "java/time/LocalDateTime.toLocalDate:()Ljava/time/LocalDate; java/time/LocalDateTime.toLocalTime:()Ljava/time/LocalTime; java/time/LocalDate.getYear:()I java/time/LocalDate.getMonthValue:()I java/time/LocalDate.getDayOfMonth:()I java/time/LocalTime.getHour:()I java/time/LocalTime.getMinute:()I java/time/LocalTime.getSecond:()I java/time/LocalTime.getNano:()I java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;")]
+    #[jvm_boundary]
     pub fn formatTo_sb_localdatetime(buf: StringBuilder, dateTime: LocalDateTime) -> Result<()> {
         Self::formatTo_sb_localdate(Clone::clone(&buf), dateTime.toLocalDate()?)?;
         buf.append_str(String::from("T"))?;
@@ -75,7 +75,7 @@ impl DateTimeHelper {
     }
 
     /// static `formatTo(StringBuilder, LocalDate)`：`[±]yyyy-MM-dd`。
-    #[jvm_boundary(upcalls = "java/time/LocalDate.getYear:()I java/time/LocalDate.getMonthValue:()I java/time/LocalDate.getDayOfMonth:()I java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;")]
+    #[jvm_boundary]
     pub fn formatTo_sb_localdate(buf: StringBuilder, date: LocalDate) -> Result<()> {
         let text = date_text(date.getYear()?, date.getMonthValue()?, date.getDayOfMonth()?);
         buf.append_str(String::from(text.as_str()))?;
@@ -83,7 +83,7 @@ impl DateTimeHelper {
     }
 
     /// static `formatTo(StringBuilder, LocalTime)`：`HH:mm[:ss[.fraction]]`。
-    #[jvm_boundary(upcalls = "java/time/LocalTime.getHour:()I java/time/LocalTime.getMinute:()I java/time/LocalTime.getSecond:()I java/time/LocalTime.getNano:()I java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;")]
+    #[jvm_boundary]
     pub fn formatTo_sb_localtime(buf: StringBuilder, time: LocalTime) -> Result<()> {
         let text = time_text(time.getHour()?, time.getMinute()?, time.getSecond()?, time.getNano()?);
         buf.append_str(String::from(text.as_str()))?;

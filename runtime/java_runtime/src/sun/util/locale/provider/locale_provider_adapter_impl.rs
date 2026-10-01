@@ -368,10 +368,10 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         ))
     }
 
-    /// `getDateFormatProvider()`：DateFormat.getXxxInstance 的服务入口。回调边挂在本方法上
-    /// （BFS 触达 LocaleProviderAdapter.getDateFormatProvider 才入链），只用数字格式的程序
+    /// `getDateFormatProvider()`：DateFormat.getXxxInstance 的服务入口。实现对象在本方法新建
+    /// （闭包触达 LocaleProviderAdapter.getDateFormatProvider 才入链），只用数字格式的程序
     /// 不带入 SimpleDateFormat。
-    #[jvm_boundary(upcalls = "java/text/SimpleDateFormat.<init>:(Ljava/lang/String;Ljava/util/Locale;)V java/text/DateFormat.getCalendar:()Ljava/util/Calendar; java/util/Calendar.getCalendarType:()Ljava/lang/String; java/text/SimpleDateFormat.applyPattern:(Ljava/lang/String;)V java/text/SimpleDateFormat.format:(Ljava/util/Date;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer; java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V java/util/ResourceBundle.containsKey:(Ljava/lang/String;)Z java/util/ResourceBundle.getStringArray:(Ljava/lang/String;)[Ljava/lang/String;")]
+    #[jvm_boundary]
     fn getDateFormatProvider(&self) -> Result<DateFormatProvider> {
         let rc = Rc::new(NativeDateFormatProvider);
         Ok(DateFormatProvider::__from_parts(
@@ -382,8 +382,8 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
     }
 
     /// `getDateFormatSymbolsProvider()`：DateFormatSymbols.getInstance(locale) 的服务入口
-    /// （回调边挂在本方法上，只有用到日期格式符号的程序才带入其构造器）。
-    #[jvm_boundary(upcalls = "java/text/DateFormatSymbols.<init>:(Ljava/util/Locale;)V")]
+    /// （实现对象在本方法新建，只有用到日期格式符号的程序才带入其构造器）。
+    #[jvm_boundary]
     fn getDateFormatSymbolsProvider(&self) -> Result<DateFormatSymbolsProvider> {
         let rc = Rc::new(NativeDateFormatSymbolsProvider);
         Ok(DateFormatSymbolsProvider::__from_parts(
@@ -393,9 +393,9 @@ impl LocaleProviderAdapter__VTable for NativeLocaleAdapter {
         ))
     }
 
-    /// `getCalendarProvider()`：Calendar.getInstance(locale) 的服务入口（回调边挂在本方法上，
+    /// `getCalendarProvider()`：Calendar.getInstance(locale) 的服务入口（实现对象在本方法新建，
     /// 只有用到 Calendar 工厂的程序才带入 Calendar.Builder）。
-    #[jvm_boundary(upcalls = "java/util/Calendar$Builder.<init>:()V java/util/Calendar$Builder.setLocale:(Ljava/util/Locale;)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.setTimeZone:(Ljava/util/TimeZone;)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.setInstant:(J)Ljava/util/Calendar$Builder; java/util/Calendar$Builder.build:()Ljava/util/Calendar;")]
+    #[jvm_boundary]
     fn getCalendarProvider(&self) -> Result<crate::sun::util::spi::CalendarProvider> {
         let rc = Rc::new(NativeCalendarProvider);
         Ok(crate::sun::util::spi::CalendarProvider::__from_parts(
@@ -499,10 +499,7 @@ impl LocaleProviderAdapter {
     /// `getAdapter(Class, Locale)`：JDK 按 adapterPreference 与 provider 的
     /// isSupportedLocale 逐级挑选，终态 FALLBACK。原生侧唯一数据适配器即终态
     /// ——直接返回（CLDR 子集数据在 provider/符号表层按 locale 区分）。
-    ///
-    /// 回调边：DFS provider 的翻译构造器、LocaleResources 构造、NumberFormatProvider 的
-    /// INTEGERSTYLE 收窄（DecimalFormat 成员）。
-    #[jvm_boundary(upcalls = "java/text/DecimalFormatSymbols.<init>:(Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.<init>:(Lsun/util/locale/provider/ResourceBundleBasedAdapter;Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.getNumberPatterns:()[Ljava/lang/String; sun/util/locale/provider/LocaleResources.getDecimalFormatSymbolsData:()[Ljava/lang/Object; java/text/DecimalFormat.setMaximumFractionDigits:(I)V java/text/DecimalFormat.setDecimalSeparatorAlwaysShown:(Z)V java/text/NumberFormat.setParseIntegerOnly:(Z)V java/text/DecimalFormat.getDecimalFormatSymbols:()Ljava/text/DecimalFormatSymbols; java/text/DecimalFormatSymbols.getCurrency:()Ljava/util/Currency; java/text/DecimalFormatSymbols.getInternationalCurrencySymbol:()Ljava/lang/String; java/util/Currency.getInstance:(Ljava/lang/String;)Ljava/util/Currency; java/util/Currency.getDefaultFractionDigits:()I java/text/DecimalFormat.getMinimumFractionDigits:()I java/text/DecimalFormat.getMaximumFractionDigits:()I java/text/DecimalFormat.setMinimumFractionDigits:(I)V java/text/CompactNumberFormat.<init>:(Ljava/lang/String;Ljava/text/DecimalFormatSymbols;[Ljava/lang/String;Ljava/lang/String;)V sun/util/locale/provider/LocaleResources.getCNPatterns:(Ljava/text/NumberFormat$Style;)[Ljava/lang/String; sun/util/locale/provider/LocaleResources.getRules:()[Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn getAdapter(_providerClass: Class, _locale: Locale) -> Result<LocaleProviderAdapter> {
         Ok(_adapter_view())
     }

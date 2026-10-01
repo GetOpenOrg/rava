@@ -2,8 +2,8 @@
 //!
 //! 手写层与生成层命名空间同构（Rust 类型路径 ↔ Java binary name；Rust 方法名 = Java 名，重载取
 //! 描述符 mangle 名），手写体调用点按「接收者静态类型（方法调用）/ 路径类型（关联函数调用）+ Rust 名 +
-//! 实参个数」反解为 Java 方法引用，与 `upcalls` 声明同等处理。声明只兜底语法上不可见的调用
-//! （宏内调用、按名反射）。
+//! 实参个数」反解为 Java 方法引用。手写层不声明回调：宏体按 Rust 语法展开访问，跨文件调用经模块
+//! 单元调用图（`rtfn.rs`），VM 驱动的入口经 VM 规则（`vmrules.rs`）。
 
 use super::*;
 
@@ -108,10 +108,8 @@ impl Engine<'_> {
         out
     }
 
-    /// 回调目标：声明 ∪ 推断
+    /// 回调目标（推断）
     pub(super) fn hw_upcalls(&self, host: &str, mh: &MemberHw) -> Vec<Upcall> {
-        let mut all = self.hw_inferred_upcalls(host, mh);
-        all.extend(mh.upcalls.iter().cloned());
-        all.into_iter().collect()
+        self.hw_inferred_upcalls(host, mh).into_iter().collect()
     }
 }

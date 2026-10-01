@@ -26,13 +26,13 @@ impl ThreadContainer {
     /// final `add(Thread)`：按字节码——pin/unpin（虚拟线程即 OS 线程、无 continuation，空操作）包裹
     /// 虚调用 `onStart(thread)`（子类簿记钩子）。消费方：JDK 25 `Thread.start(ThreadContainer)`
     ///（ForkJoinPool 工作线程经池容器启动）。
-    #[jvm_boundary(upcalls = "jdk/internal/vm/ThreadContainer.onStart:(Ljava/lang/Thread;)V")]
+    #[jvm_boundary]
     pub fn add(&self, thread: crate::java::lang::Thread) -> Result<()> {
         self.onStart(thread)
     }
 
     /// final `remove(Thread)`：同上，虚调用 `onExit(thread)`（线程终结 / 启动失败回滚）。
-    #[jvm_boundary(upcalls = "jdk/internal/vm/ThreadContainer.onExit:(Ljava/lang/Thread;)V")]
+    #[jvm_boundary]
     pub fn remove(&self, thread: crate::java::lang::Thread) -> Result<()> {
         self.onExit(thread)
     }

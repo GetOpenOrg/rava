@@ -78,7 +78,7 @@ impl UnixFileSystem {
 
     /// native canonicalize0(String)：realpath(3) 语义（解析符号链接、消解
     /// `..`）。失败抛 IOException。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn canonicalize0(&self, path: String) -> Result<String> {
         match std::fs::canonicalize(format!("{}", path)) {
             Ok(p) => Ok(String::from(p.to_str().unwrap_or_default())),

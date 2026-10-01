@@ -42,12 +42,12 @@ mod tests {
     fn hooks_are_non_member_pub_fns() {
         let src = r#"
             impl P {
-                #[jvm_boundary(upcalls = "a/B.valueOf:(C)La/B;")]
+                #[jvm_boundary]
                 pub fn __vm_hook(&self, args: Vec<Object>) -> Result<Object> { helper() }
-                #[jvm_native(upcalls = "a/B.valueOf:(C)La/B;")]
+                #[jvm_native]
                 pub fn dispatch_i(&self, x: i32) {}
                 pub fn __vm_plain(&self) {}
-                #[jvm_boundary(upcalls = "a/B.valueOf:(C)La/B;")]
+                #[jvm_boundary]
                 fn private_hook(&self) {}
             }
             fn helper() -> Result<Object> { todo() }

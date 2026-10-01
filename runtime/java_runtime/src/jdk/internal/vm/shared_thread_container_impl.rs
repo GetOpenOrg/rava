@@ -26,7 +26,7 @@ impl SharedThreadContainer {
     /// `JLA.start(thread, this)` 即 `Thread.start(ThreadContainer)` 启动（平台线程
     /// 经 start0 派生 OS 线程，线程模型方案 A）。消费方：JDK 25
     /// ForkJoinPool.createWorker（工作线程经池容器启动；JDK 21 为 wt.start() 直调）。
-    #[jvm_boundary(upcalls = "java/lang/Thread.start:(Ljdk/internal/vm/ThreadContainer;)V java/lang/IllegalStateException.<init>:()V")]
+    #[jvm_boundary]
     pub fn __impl_start(&self, thread: crate::java::lang::Thread) -> Result<()> {
         if self.__get_closed() {
             return Err(JvmError::from(crate::java::lang::IllegalStateException::new()?));

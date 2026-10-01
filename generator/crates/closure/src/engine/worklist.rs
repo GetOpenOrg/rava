@@ -33,27 +33,6 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub fn root_upcall(&mut self, u: &Upcall, kind: &'static str) {
-        match u {
-            Upcall::Method(k) => {
-                let via = Via::root(kind, &k.to_string());
-                if k.name == "<init>" {
-                    self.instantiate(&k.owner, via.clone());
-                }
-                self.init(&k.owner, via.clone());
-                if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, false) {
-                    let (o, n, d) = site.key();
-                    let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
-                    self.open_params(t);
-                    self.returns_to_vm(t);
-                } else {
-                    self.unresolved.insert(k.to_string());
-                }
-            }
-            Upcall::Field(f) => self.init(&f.owner, Via::root(kind, &f.to_string())),
-        }
-    }
-
     /// 外部种子方法（缺口扫描的 JDK 入口 / lib 公开 API 面）：等价于「某个用户程序调用了它」，构造器同时实例化
     pub fn root_seed(&mut self, key: MemberRef, kind: &'static str) {
         if key.name == "<init>" {

@@ -86,7 +86,7 @@ impl LocaleServiceProviderPool {
 
     /// `getLocalizedObject(getter, locale, key, params)`：见模块说明。provider 按池的 providerClass
     /// 取 CLDR 实现对象；未建模的 provider 类 → 精确存根。
-    #[jvm_boundary(upcalls = "sun/util/locale/provider/LocaleServiceProviderPool$LocalizedObjectGetter.getObject:(Ljava/util/spi/LocaleServiceProvider;Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object; java/util/spi/CurrencyNameProvider.getSymbol:(Ljava/lang/String;Ljava/util/Locale;)Ljava/lang/String; java/util/spi/CurrencyNameProvider.getDisplayName:(Ljava/lang/String;Ljava/util/Locale;)Ljava/lang/String; sun/util/locale/provider/LocaleResources.<init>:(Lsun/util/locale/provider/ResourceBundleBasedAdapter;Ljava/util/Locale;)V sun/util/locale/provider/LocaleResources.getCurrencyName:(Ljava/lang/String;)Ljava/lang/String;")]
+    #[jvm_boundary]
     pub fn __impl_getLocalizedObject_localeserviceproviderpool_localizedobjectgetter_locale_str_arr_obj(
         &self, getter: Object, locale: Locale, key: String, params: JArray<Object>,
     ) -> Result<Object> {

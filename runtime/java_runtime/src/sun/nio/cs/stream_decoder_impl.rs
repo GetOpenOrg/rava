@@ -195,7 +195,7 @@ impl StreamDecoder {
 
     /// `forInputStreamReader(InputStream, Object, String)`：按字符集名查找（`Charset.forName`），
     /// 名字非法 / 不支持 → `UnsupportedEncodingException(charsetName)`（JDK 同形）。
-    #[jvm_boundary(upcalls = "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset; java/io/UnsupportedEncodingException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn forInputStreamReader_inputstream_obj_str(
         in_: InputStream,
         lock: Object,
@@ -225,7 +225,7 @@ impl StreamDecoder {
     }
 
     /// `read()`：read0 语义——leftover 优先；否则 2 char 读 + 拆分。
-    #[jvm_boundary(upcalls = "java/io/InputStream.read:([BII)I")]
+    #[jvm_boundary]
     pub fn __impl_read(&self) -> Result<i32> {
         if self.__get_haveLeftoverChar() {
             self.__set_haveLeftoverChar(false);
@@ -247,7 +247,7 @@ impl StreamDecoder {
 
     /// `read(char[], int, int)`：lockedRead 语义——leftover 回填、len==1 走
     /// read0、其余 implRead（≥2 char，代理对安全）。
-    #[jvm_boundary(upcalls = "java/io/InputStream.read:([BII)I")]
+    #[jvm_boundary]
     pub fn __impl_read_arr_c_i_i(
         &self,
         cbuf: JArray<u16>,
@@ -358,7 +358,7 @@ impl StreamDecoder {
     }
 
     /// `close()`：幂等；in.close()（ChannelInputStream → FileChannelImpl）。
-    #[jvm_boundary(upcalls = "java/io/InputStream.close:()V")]
+    #[jvm_boundary]
     pub fn __impl_close(&self) -> Result<()> {
         if self.__get_closed() {
             return Ok(());

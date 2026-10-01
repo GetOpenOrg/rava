@@ -18,13 +18,13 @@ use super::{LambdaForm, LambdaForm_Name, LambdaForm_NamedFunction, MemberName, M
 
 impl InvokerBytecodeGenerator {
     /// `generateCustomizedCode(LambdaForm, MethodType)`：不生成字节码 → 解释入口 vmentry。
-    #[jvm_boundary(upcalls = "java/lang/invoke/MemberName.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V")]
+    #[jvm_boundary]
     pub fn generateCustomizedCode(_form: LambdaForm, invokerType: MethodType) -> Result<MemberName> {
         interpreter_entry(invokerType)
     }
 
     /// `generateLambdaFormInterpreterEntryPoint(MethodType)`：解释入口由原生解释器承载。
-    #[jvm_boundary(upcalls = "java/lang/invoke/MemberName.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V")]
+    #[jvm_boundary]
     pub fn generateLambdaFormInterpreterEntryPoint(mt: MethodType) -> Result<MemberName> {
         interpreter_entry(mt)
     }

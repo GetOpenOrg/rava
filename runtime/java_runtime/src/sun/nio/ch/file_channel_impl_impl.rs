@@ -88,7 +88,7 @@ impl FileChannelImpl {
 
     /// `open(FileDescriptor, String, boolean, boolean, boolean, Closeable)`：
     /// 静态工厂（UnixChannelFactory 的落点）。
-    #[jvm_boundary(upcalls = "java/nio/channels/FileChannel.<clinit>:()V")]
+    #[jvm_boundary]
     pub fn open_filedescriptor_str_z_z_z_closeable(
         fd: FileDescriptor,
         path: String,
@@ -110,7 +110,7 @@ impl FileChannelImpl {
     /// `read(ByteBuffer)`：单次 read(2) 到 dst 的剩余空间；EOF 归一化为 -1
     /// （IOStatus.normalize 语义）；position 前移 n。不可读通道 /
     /// 已关闭通道按 JDK 抛 NonReadableChannelException / ClosedChannelException。
-    #[jvm_boundary(upcalls = "java/nio/channels/NonReadableChannelException.<init>:()V java/nio/channels/ClosedChannelException.<init>:()V")]
+    #[jvm_boundary]
     pub fn __impl_read_bytebuffer(&self, dst: ByteBuffer) -> Result<i32> {
         use std::io::Read;
         if self.__get_closed() {
@@ -149,7 +149,7 @@ impl FileChannelImpl {
 
     /// `write(ByteBuffer)`：单次 write(2) 自 src 的剩余区（部分写允许——调用方
     /// writeFully 循环，JDK 同语义）；position 前移 n。
-    #[jvm_boundary(upcalls = "java/nio/channels/NonWritableChannelException.<init>:()V java/nio/channels/ClosedChannelException.<init>:()V")]
+    #[jvm_boundary]
     pub fn __impl_write_bytebuffer(&self, src: ByteBuffer) -> Result<i32> {
         use std::io::Write;
         if self.__get_closed() {

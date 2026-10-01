@@ -11,7 +11,7 @@ use super::annotation_parser::AnnotationParser;
 use crate::java::lang::Class;
 
 impl AnnotationParser {
-    #[jvm_boundary(upcalls = "java/lang/TypeNotPresentException.<init>:(Ljava/lang/String;Ljava/lang/Throwable;)V")]
+    #[jvm_boundary]
     pub fn parseSig(sig: String, _container: Class) -> Result<Class> {
         Class::__from_descriptor_checked(&format!("{}", sig))
     }

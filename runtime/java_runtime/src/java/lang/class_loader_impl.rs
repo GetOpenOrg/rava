@@ -71,7 +71,7 @@ impl ClassLoader {
     }
 
     /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
-    #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
+    #[jvm_boundary]
     pub fn getResources(&self, name: String) -> Result<Object> {
         let _ = name;
         crate::java::util::Collections::emptyEnumeration().map(Into::into)
@@ -86,19 +86,19 @@ impl ClassLoader {
 
     /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
     ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
-    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    #[jvm_boundary]
     pub fn getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 
     /// static `getSystemResourceAsStream(String)`：委托系统加载器（同实例形态）。
-    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    #[jvm_boundary]
     pub fn getSystemResourceAsStream(name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 
     /// static getSystemResources：委托实例形态（恒空枚举）。
-    #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
+    #[jvm_boundary]
     pub fn getSystemResources(name: String) -> Result<Object> {
         crate::java::util::Collections::emptyEnumeration().map(Into::into)
     }

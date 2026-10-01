@@ -18,7 +18,7 @@ impl ChannelOutputStream {
     }
 
     /// `write(byte[], int, int)`：writeFully 循环（n <= 0 视为异常，JDK 同款）。
-    #[jvm_boundary(upcalls = "java/lang/IndexOutOfBoundsException.<init>:()V java/lang/RuntimeException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_write_arr_b_i_i(&self, bs: JArray<i8>, off: i32, len: i32) -> Result<()> {
         check_from_index_size(off, len, bs.len()?)?;
         if len == 0 {

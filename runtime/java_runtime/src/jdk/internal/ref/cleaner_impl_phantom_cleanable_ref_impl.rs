@@ -23,7 +23,7 @@ impl CleanerImpl_PhantomCleanableRef {
     }
 
     /// `performCleanup()`：运行登记的动作（JDK：`action.run()`）。
-    #[jvm_boundary(upcalls = "java/lang/Runnable.run:()V")]
+    #[jvm_boundary]
     pub fn __impl_performCleanup(&self) -> Result<()> {
         crate::java::lang::Runnable::from(self.__get_action()).run()
     }

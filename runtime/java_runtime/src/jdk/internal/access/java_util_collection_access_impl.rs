@@ -5,8 +5,8 @@
 //! 登记到 `SharedSecrets.setJavaUtilCollectionAccess`，两个方法各自转发
 //! `ImmutableCollections` 的同名静态。匿名类实现 `jdk/internal/` 内部接口，
 //! 属内部边界族 → 整体手写（过渡类，docs/reference/handwritten-boundary.md §三）：转发目标静态由
-//! `shared_secrets_impl.rs::getJavaUtilCollectionAccess` 的 upcalls 声明拉入
-//! 闭包（BFS 触达即翻译，签名引用保证任意闭包形态可编译）。
+//! 闭包分析按本文件手写体的调用点推断拉入（`getJavaUtilCollectionAccess` 新建本对象，
+//! 其方法体的路径调用即回调边）。
 
 use crate::prelude::*;
 use super::java_util_collection_access::JavaUtilCollectionAccess__VTable;

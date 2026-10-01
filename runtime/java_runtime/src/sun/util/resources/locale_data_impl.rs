@@ -13,7 +13,7 @@ use crate::sun::util::locale::provider::LocaleResources;
 impl LocaleData {
     /// `getDateFormatData(Locale)`：FormatData 束链（月名 / 星期名 / 纪元 / 日期模式）。
     /// 消费方：DateFormatSymbols.initializeData（`new DateFormatSymbols(locale)`）。
-    #[jvm_boundary(upcalls = "java/util/ResourceBundle.setParent:(Ljava/util/ResourceBundle;)V")]
+    #[jvm_boundary]
     pub fn __impl_getDateFormatData(&self, locale: Locale) -> Result<ResourceBundle> {
         LocaleResources::new(Object::default(), locale)?.__number_format_data()
     }

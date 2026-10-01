@@ -1,4 +1,4 @@
-//! 手写文件的 syn 扫描：逐 fn 收集回调、调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
+//! 手写文件的 syn 扫描：逐 fn 收集调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -6,24 +6,6 @@ use syn::visit::Visit;
 
 use super::syntax::*;
 use super::*;
-
-pub(super) fn upcalls_of(attrs: &[syn::Attribute]) -> Vec<Upcall> {
-    let mut out = Vec::new();
-    for a in attrs {
-        let Some(id) = a.path().get_ident() else { continue };
-        if !matches!(id.to_string().as_str(), "jvm_native" | "jvm_boundary" | "jvm_ext") {
-            continue;
-        }
-        let _ = a.parse_nested_meta(|meta| {
-            if meta.path.is_ident("upcalls") {
-                let s: syn::LitStr = meta.value()?.parse()?;
-                out.extend(s.value().split_whitespace().filter_map(parse_upcall));
-            }
-            Ok(())
-        });
-    }
-    out
-}
 
 pub(super) struct RawFn {
     pub(super) info: FnInfo,
@@ -121,7 +103,7 @@ impl<'ast> Visit<'ast> for Idents {
 }
 
 impl FileScan<'_> {
-    fn add(&mut self, sig: &syn::Signature, is_pub: bool, attrs: &[syn::Attribute], block: &syn::Block) {
+    fn add(&mut self, sig: &syn::Signature, is_pub: bool, block: &syn::Block) {
         let name = sig.ident.to_string();
         let mut b = BodyScan::default();
         b.visit_block(block);
@@ -138,7 +120,7 @@ impl FileScan<'_> {
                 }
             }
         }
-        let mut info = FnInfo { is_pub, upcalls: upcalls_of(attrs), ..Default::default() };
+        let mut info = FnInfo { is_pub, ..Default::default() };
         for (var, ty) in &b.defaults {
             if b.inited.contains(var) {
                 info.allocs.insert(TypeRef(expand(self.uses, ty.clone())));
@@ -220,7 +202,7 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
         // 自由 fn 内的 Self 无意义：暂离 impl 上下文
         let outer = self.self_ty.take();
         let outer_obj = self.cur_obj.take();
-        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_item_fn(self, f);
         self.self_ty = outer;
         self.cur_obj = outer_obj;
@@ -246,7 +228,7 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
         let is_pub = matches!(f.vis, syn::Visibility::Public(_));
-        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_impl_item_fn(self, f);
     }
 }
@@ -322,7 +304,6 @@ fn merge_fn(fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashS
     calls.entry(name.clone()).or_default().extend(raw.calls);
     let e = fns.entry(name).or_default();
     e.is_pub |= raw.info.is_pub;
-    e.upcalls.extend(raw.info.upcalls);
     e.allocs.extend(raw.info.allocs);
     e.ctors.extend(raw.info.ctors);
     e.calls.extend(raw.info.calls);
