@@ -477,6 +477,10 @@ enum_switch = [
 object_methods = [
     "java/lang/runtime/ObjectMethods.bootstrap",
 ]
+# concat / object_methods（record toString）引用实参的字符串化入口：两者对引用实参的语义即
+# String.valueOf(Object)（null → "null"，否则虚分派 toString；JLS §5.1.11）。
+# 生成器在拼接点发射对它的调用（由字节码翻译），分析器把各引用实参接入它的形参
+concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"
 
 # ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
 # LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：

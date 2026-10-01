@@ -261,10 +261,13 @@ impl<'a> Engine<'a> {
                 self.instantiate(STRING, via.clone());
                 let sid = self.id(STRING);
                 self.add_to(Node::S(m, off), &TypeSet::exact(sid));
-                let Some(site) = self.h.resolve_method(OBJECT, TO_STRING.0, TO_STRING.1, false) else { return };
                 for (p, v) in md.params.iter().zip(args.iter()) {
                     let Some(t) = self.ptype(p) else { continue };
                     let fs = self.feeds(m, v, t);
+                    if self.stringify(m, off, Some(v), fs.clone()) {
+                        continue;
+                    }
+                    let Some(site) = self.h.resolve_method(OBJECT, TO_STRING.0, TO_STRING.1, false) else { return };
                     let s = self.value_set(&fs);
                     let recv = self.receivers(m, &s, t);
                     for r in recv {
@@ -296,6 +299,26 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 拼接 / record toString 的引用实参接入清单登记的字符串化入口（`[indy] concat_stringify`，
+    /// 语义即 `String.valueOf(Object)`）的形参：生成器在调用点发射对它的静态调用。
+    /// 返回 false = 未登记或解析不到，调用方回落为在实参值集上直接派发 toString
+    fn stringify(&mut self, m: usize, off: u32, v: Option<&V>, fs: Vec<Feed>) -> bool {
+        let Some(key) = self.man.concat_stringify().and_then(super::seeds::parse_member) else { return false };
+        let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, false) else {
+            self.unresolved.insert(key.to_string());
+            return false;
+        };
+        let via = Via::method("indy", m, Some(off));
+        let (o, n, d) = site.key();
+        let resolved = MemberRef { owner: o, name: n, desc: d };
+        self.init(&resolved.owner, via.clone());
+        let args = v.map(std::slice::from_ref).unwrap_or(&[]);
+        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref: true, args });
+        let t = self.method_ctx(resolved, ctx, via);
+        self.edge(m, off, t, Recv::None, &[Some(fs)], None, None);
+        true
     }
 
     /// `ObjectMethods` 引导的 record equals / hashCode / toString：静态实参里的 getter 句柄读出各分量
@@ -334,7 +357,7 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
-        if !any {
+        if !any || name == TO_STRING.0 && self.stringify(m, off, None, vec![Feed::N(node)]) {
             return;
         }
         let odesc = object_method_desc(md);

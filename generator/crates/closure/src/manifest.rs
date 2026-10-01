@@ -106,6 +106,8 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// concat / record toString 引用实参的字符串化入口（`[indy] concat_stringify`，`类.方法:描述符`）
+    concat_stringify: Option<String>,
     /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
@@ -322,6 +324,7 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            concat_stringify: vm.get("indy").and_then(|s| s.get("concat_stringify")).and_then(|v| v.as_str()).map(str::to_string),
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
@@ -486,6 +489,11 @@ impl Manifest {
     /// 引导方法（`类.方法`）的分类；未登记 = 按普通静态调用分析
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy.get(bsm).copied()
+    }
+
+    /// concat / record toString 引用实参的字符串化入口（`类.方法:描述符`；未配置 = 直接派发 toString）
+    pub fn concat_stringify(&self) -> Option<&str> {
+        self.concat_stringify.as_deref()
     }
 
     /// 基本类型描述符字符的装箱类（`[boxing]`）
