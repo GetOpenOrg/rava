@@ -1,8 +1,6 @@
 use proc_macro::TokenStream;
 
-mod block;
 mod native_attr;
-mod try_macro;
 mod upcast;
 
 /// `java_class! { ... }` — 块级宏，封装单个 Java 类的全部 Rust 复杂度。
@@ -11,7 +9,7 @@ mod upcast;
 /// 字段），同样经此宏翻译；不再有独立的 enum 表示路径。
 #[proc_macro]
 pub fn java_class(input: TokenStream) -> TokenStream {
-    block::expand(input.into()).into()
+    rava_macros_core::expand_class(input.into()).into()
 }
 
 /// `iface_upcasts! { impl<E> C<E> => I<Object>, J<Object> }` — 类实例 → 擦除接口载体视图的协变
@@ -25,7 +23,7 @@ pub fn iface_upcasts(input: TokenStream) -> TokenStream {
 /// 按异常对象的运行时类（含子类）匹配 catch 子句，未匹配则继续向外传播。
 #[proc_macro]
 pub fn java_try(input: TokenStream) -> TokenStream {
-    try_macro::expand(input.into()).into()
+    rava_macros_core::expand_try(input.into()).into()
 }
 
 

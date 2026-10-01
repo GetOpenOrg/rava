@@ -37,7 +37,7 @@ pub(crate) fn expand(input: TokenStream2) -> TokenStream2 {
         Ok(p) => p,
         Err(e) => return e.to_compile_error(),
     };
-    let generics = crate::block::augment_generic_bounds(&parsed.generics);
+    let generics = rava_macros_core::augment_generic_bounds(&parsed.generics);
     let (impl_g, _, where_c) = generics.split_for_impl();
     let src = &parsed.source;
     let impls = parsed.targets.iter().map(|tgt| {

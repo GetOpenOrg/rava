@@ -12,14 +12,15 @@ use super::super::super::erasure::{
     erased_call_args, erased_call_args_with, erased_call_ret_conv, erased_call_ret_conv_with,
     erasure_set_of, expand_non_virtual_fn, prepare_non_virtual_body,
 };
-use super::super::super::classify::{vtable_body_kind_gated, VTableBodyKind};
+use super::super::super::moved::{has_body, is_safe};
+use super::super::super::parse::FnItem;
 use super::super::super::parse::split_type_name_args;
 use super::super::super::rewrite::{
     rewrite_base_calls_for_wrapper, rewrite_block, rewrite_virtual_calls_for_wrapper,
 };
 use super::super::super::util::{attr_str, strip_meta_attrs};
 use super::super::context::GenContext;
-use super::body_fns::functionize;
+use super::body_fns::{functionize, functionize_moved};
 
 /// 返回 (wrapper impl 段, 方法体函数化后的模块级体函数)
 pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
@@ -93,25 +94,10 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         // 1. 将 __base(this, ...) 改为 __base(&*this.vtable, ...)
         // 2. 将 this.method(args) 改为 (&*this.vtable).method(args)，
         //    通过 vtable supertrait 链访问继承但未显式覆盖的虚方法。
-        if let Some(block) = &f.block {
-            if !matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
-                let mut b = block.clone();
-                rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
-                rewrite_base_calls_for_wrapper(&mut b);
-                rewrite_virtual_calls_for_wrapper(&mut b, &ctx.own_method_names, &ctx.vdispatch);
-                // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
-                // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
-                let mut impl_sig = sig.clone();
-                impl_sig.ident = format_ident!("__impl_{}", mname);
-                let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
-                match functionize(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &b.stmts, &quote! {}) {
-                    Some(fz) => {
-                        wrapper_methods.push(fz.shell);
-                        body_fns.push(fz.body_fn);
-                    }
-                    None => wrapper_methods.push(quote! { #attrs pub #impl_sig #b }),
-                }
-            }
+        // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
+        // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
+        if has_body(f) && !is_safe(ctx, f) {
+            impl_method(ctx, f, &keep_attrs, &mut wrapper_methods, &mut body_fns)?;
         }
 
         // vtable 方法签名已 Object 化（A-1）→ 类型化 wrapper 方法与擦除分派之间在
@@ -147,23 +133,8 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             let vis = &f.vis;
             // 需要 wrapper 上下文的覆盖体：方法体落在隐藏的 `__impl_<method>`（不分派），
             // vtable impl 与 super 调用的 base 函数都经钩子重建 wrapper 后执行它。
-            if let Some(block) = &f.block {
-                if !matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
-                    let mut b = block.clone();
-                    rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
-                    rewrite_base_calls_for_wrapper(&mut b);
-                    rewrite_virtual_calls_for_wrapper(&mut b, &ctx.own_method_names, &ctx.vdispatch);
-                    let mut impl_sig = sig.clone();
-                    impl_sig.ident = format_ident!("__impl_{}", mname);
-                    let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
-                    match functionize(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &b.stmts, &quote! {}) {
-                        Some(fz) => {
-                            wrapper_methods.push(fz.shell);
-                            body_fns.push(fz.body_fn);
-                        }
-                        None => wrapper_methods.push(quote! { #attrs pub #impl_sig #b }),
-                    }
-                }
+            if has_body(f) && !is_safe(ctx, f) {
+                impl_method(ctx, f, &keep_attrs, &mut wrapper_methods, &mut body_fns)?;
             }
             // UFCS：用 vtable_class__VTable 消歧义（VirtualOverride 同名方法冲突）；
             // 方法签名已 Object 化 → 边界转换同 VirtualDefine 委托（含 vtable_erasure 名集）。
@@ -261,6 +232,16 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
 
     // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
     for f in &ctx.non_virtual {
+        if f.moved.is_some() {
+            // 已下沉：外壳只取签名，空接收者检查同 prepare_non_virtual_body
+            let keep_attrs = strip_meta_attrs(&f.attrs);
+            let vis = &f.vis;
+            let fz = functionize_moved(ctx, &quote! { #(#keep_attrs)* }, &quote! { #vis }, &f.sig,
+                                       &f.sig.ident, &class_init::null_receiver_check(&f.sig))?;
+            wrapper_methods.push(fz.shell);
+            body_fns.push(fz.body_fn);
+            continue;
+        }
         let fz = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names).and_then(|(null_check, b)| {
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
@@ -310,4 +291,38 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     };
 
     Ok((wrapper_impl, body_fns))
+}
+
+/// 需要 wrapper 上下文的虚方法体：落在隐藏的 `__impl_<method>`（函数化为体函数 + 外壳，
+/// 不适用时内联）。已下沉的体只生成外壳（标注保证有体时函数化成立）。
+fn impl_method(
+    ctx: &GenContext,
+    f: &FnItem,
+    keep_attrs: &[&syn::Attribute],
+    wrapper_methods: &mut Vec<TokenStream2>,
+    body_fns: &mut Vec<TokenStream2>,
+) -> syn::Result<()> {
+    let sig = &f.sig;
+    let mname = &sig.ident;
+    let mut impl_sig = sig.clone();
+    impl_sig.ident = format_ident!("__impl_{}", mname);
+    let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
+    let Some(block) = &f.block else {
+        let fz = functionize_moved(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &quote! {})?;
+        wrapper_methods.push(fz.shell);
+        body_fns.push(fz.body_fn);
+        return Ok(());
+    };
+    let mut b = block.clone();
+    rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+    rewrite_base_calls_for_wrapper(&mut b);
+    rewrite_virtual_calls_for_wrapper(&mut b, &ctx.own_method_names, &ctx.vdispatch);
+    match functionize(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &b.stmts, &quote! {}) {
+        Some(fz) => {
+            wrapper_methods.push(fz.shell);
+            body_fns.push(fz.body_fn);
+        }
+        None => wrapper_methods.push(quote! { #attrs pub #impl_sig #b }),
+    }
+    Ok(())
 }

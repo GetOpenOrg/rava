@@ -18,7 +18,7 @@ use super::super::util::{classify_method, is_basic, MethodKind};
 
 /// 泛型参数补齐 Clone + Default + 'static + From<Object> + Into<Object> + __ThreadSafe
 /// （接口路径与类路径共用；Java 类型实参恒为引用类型：与 Object 双向可转）。
-pub(crate) fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics {
+pub fn augment_generic_bounds(generics: &syn::Generics) -> syn::Generics {
     let mut gen = generics.clone();
     for param in &mut gen.params {
         if let GenericParam::Type(tp) = param {

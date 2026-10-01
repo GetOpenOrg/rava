@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
+use rava_macros_core::plan::{decl_elisions, elide};
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
 use crate::ctx::EmitCtx;
 use crate::emission::ClassEmission;
-use crate::error::{io_err, Result};
+use crate::error::{io_err, EmitError, Result};
 use crate::text::scratch_pkg_version;
 
 /// 实现 crate 名前缀（`java_meta` 构建脚本扫描兄弟 crate 时据此排除实现层副本）
@@ -75,25 +76,35 @@ fn module_path(rel: &Path) -> String {
     segs.join("::")
 }
 
-/// 一个类文本拆成 (声明层文本, 实现层文本)；块不存在时 None
-pub fn split_text(text: &str, module: &str) -> Option<(String, String)> {
-    let open = text.find(BLOCK_OPEN)?;
+/// 一个类文本拆成 (声明层文本, 实现层文本)；块不存在时 Ok(None)。
+/// 声明层剥去下沉方法体（判定与宏同一份代码，`rava_macros_core::plan`）。
+pub fn split_text(text: &str, module: &str) -> std::result::Result<Option<(String, String)>, String> {
+    let Some(open) = text.find(BLOCK_OPEN) else { return Ok(None) };
     let start = open + BLOCK_OPEN.len();
     // 块以第 0 列的 `}` 行结束（块内各项至少缩进 4 列）
-    let close = start + text[start..].find("\n}\n")? + 3;
-    let decl = format!("{}{BLOCK_OPEN}    #[rava_layer = \"decl\"]\n{}", &text[..open], &text[start..]);
+    let Some(end) = text[start..].find("\n}\n") else { return Ok(None) };
+    let inner_end = start + end + 1;
+    let close = start + end + 3;
+    let plan = decl_elisions(&text[start..inner_end])?;
+    let decl = format!(
+        "{}{BLOCK_OPEN}    #[rava_layer = \"decl\"]\n{}{}",
+        &text[..open],
+        elide(&text[start..inner_end], &plan),
+        &text[inner_end..]
+    );
     let body = format!(
         "{}use java_runtime::{module}::*;\n\n{BLOCK_OPEN}    #[rava_layer = \"body\"]\n{}",
         &text[..open],
         &text[start..close]
     );
-    Some((decl, body))
+    Ok(Some((decl, body)))
 }
 
 /// 改写 `ems` 中可拆类的文本为声明层，返回实现层装箱结果
-pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_src: &Path) -> BodyPlan {
-    let mut bodies: Vec<(String, PathBuf, String)> = Vec::new();
-    for em in ems.values_mut() {
+pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_src: &Path) -> Result<BodyPlan> {
+    // 可拆类：(ems 下标, 相对路径)
+    let mut cands: Vec<(usize, PathBuf)> = Vec::new();
+    for (i, em) in ems.values().enumerate() {
         if em.crate_name != "java_runtime" || em.handwritten {
             continue;
         }
@@ -101,8 +112,20 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
             continue;
         }
         let Ok(rel) = em.path.strip_prefix(jrt_src) else { continue };
-        let rel = rel.to_path_buf();
-        let Some((decl, body)) = split_text(&em.text, &module_path(&rel)) else { continue };
+        cands.push((i, rel.to_path_buf()));
+    }
+    // 剥体计划要解析整块（与宏同一解析器），按类并行
+    let split: Vec<std::result::Result<Option<(String, String)>, String>> = {
+        let ems_ref = &*ems;
+        crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), &cands, |(i, rel)| {
+            let em = &ems_ref[*i];
+            split_text(&em.text, &module_path(rel)).map_err(|e| format!("{}：剥体计划失败：{e}", em.binary_name))
+        })
+    };
+    let mut bodies: Vec<(String, PathBuf, String)> = Vec::new();
+    for ((i, rel), r) in cands.into_iter().zip(split) {
+        let Some((decl, body)) = r.map_err(EmitError::Input)? else { continue };
+        let em = &mut ems[i];
         em.text = decl;
         bodies.push((em.binary_name.clone(), rel, body));
     }
@@ -117,7 +140,7 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
         }
         plan.crates[bin].files.insert(rel, body);
     }
-    plan
+    Ok(plan)
 }
 
 /// 均衡装箱：箱数 k = max(⌈总字节 / 上限⌉, [`MIN_BODY_CRATES`])（不超过项数），按序把每项分到其字节中点落入的 1/k 区间，
@@ -220,7 +243,7 @@ mod tests {
     #[test]
     fn split_text_separates_layers() {
         let text = "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n";
-        let (decl, body) = split_text(text, "a::b").unwrap();
+        let (decl, body) = split_text(text, "a::b").unwrap().unwrap();
         assert_eq!(
             decl,
             "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"decl\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n"

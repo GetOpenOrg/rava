@@ -16,6 +16,8 @@ pub(crate) struct FnItem {
     pub vis: Visibility,
     pub sig: Signature,
     pub block: Option<Block>,
+    /// 声明层已剥去的方法体的下沉标注（`#[rava_moved = "…"]`，此时 `block` 为 None）
+    pub moved: Option<super::moved::Moved>,
 }
 
 /// `impl Iface<Args> for Class<Args> { 擦除签名的方法声明 }` —— 类实现的一个接口（Java `implements`）。
@@ -154,7 +156,18 @@ pub(crate) fn parse_impl_fns(input: ParseStream) -> syn::Result<(Vec<FnItem>, Ve
             crate::try_macro::expand_in_block(&mut body);
             Some(body)
         };
-        out.push(FnItem { attrs, vis, sig, block });
+        let moved = match super::util::attr_str(&attrs, "rava_moved") {
+            Some(s) => {
+                let m = super::moved::Moved::parse(&s)
+                    .ok_or_else(|| syn::Error::new_spanned(&sig.ident, "rava_moved 取 safe / safe_stub / wrapper / plain"))?;
+                if block.is_some() {
+                    return Err(syn::Error::new_spanned(&sig.ident, "rava_moved 方法不应带体"));
+                }
+                Some(m)
+            }
+            None => None,
+        };
+        out.push(FnItem { attrs, vis, sig, block, moved });
     }
     Ok((out, statics))
 }

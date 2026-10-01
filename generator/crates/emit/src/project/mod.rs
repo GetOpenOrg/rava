@@ -176,7 +176,8 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("classes");
     let disp = crate::phase2::finish(ctx, &mut state, &mut ems, &mut perf)?;
     // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
-    let body_plan = layers::split(ctx, &mut ems, &jrt_src);
+    let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
+    perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
