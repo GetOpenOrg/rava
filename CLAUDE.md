@@ -88,9 +88,9 @@ D()  ← 不在调用链上，panic!("stub: ...") 存根，其依赖的类不被
 - **禁止** `/// @field name: Type` 注释注入与 `#[path = "..."] mod _impl;` 远程引用
 - 边界、放行、补种、VM 承载、手写登记全部集中在 `runtime/java_runtime/` 下的 TOML 清单（`closure.toml` / `seeds.toml` / `vm_intrinsics.toml`），生成器代码里不写类名特判
 
-### 4. Python 代码中不得出现任何 JDK 类名常量
+### 4. 生成器 crate 中不得出现任何 JDK 类名字面量
 
-`instr.py`、`type_map.py`、`emitter.py` 等生成器模块中，不允许以字面量形式出现 `ArrayList`、`HashMap`、`String`、`System` 等 JDK 类名。所有类型信息必须从 `.class` 文件的字节码注释中动态解析。
+`generator/crates/` 下的闭包分析器与生成器 crate 中，不允许以字面量形式出现 `ArrayList`、`HashMap`、`String`、`System` 等 JDK 类名（由 `no_jdk_literals` / `jdk_literal_lint` 测试守护）。所有类型信息必须从 `.class` 文件与 `runtime/java_runtime/` 下的清单动态获得。
 
 ---
 
@@ -128,8 +128,8 @@ build/                              # gitignore：每测试一次性 scratch
 
 **规则**：
 - 生成代码**永不提交**；仓库里只有 `runtime/` 手写真源
-- 每次转译（`scripts/main.py`）流程：清空或复用 scratch → overlay `runtime/` → codegen → cargo
-- 手写文件靠「无 `rava_macros::java_class` 生成标记」识别，codegen 不会覆盖它们
+- 每次转译（`scripts/main.py`）流程：清空或复用 scratch → `rava build`（overlay `runtime/` → javac → 闭包 → 发射）→ cargo
+- 手写文件靠「无 `rava_macros::java_class` 生成标记」识别，`rava build` 不会覆盖它们
 - `rava_macros` 不复制进 scratch，以绝对 path 依赖参与编译（共享 target 下缓存命中）
 
 ## 常用命令
@@ -142,13 +142,14 @@ python3 scripts/run_tests.py                    # 全量 e2e（顺序）
 python3 scripts/run_tests.py -j 4               # 并行
 python3 scripts/run_tests.py --filter TestXxx   # 单测试
 python3 scripts/main.py <Test.java> --no-run --trace-class <类>   # 查某类为何入闭包（转交 rava closure --why；另有 --debug / --strict / --raw-sites）
-python3 -m unittest tests.unit.<模块>            # 生成器单元测试
+(cd generator && cargo test --release)         # 生成器 / 闭包分析器单元测试
+python3 -m unittest tests.unit.<模块>            # 脚本单元测试（test_dyn_compare / test_baseline_diff）
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
 scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/
 scripts/gen_trees.sh <out> [Test...]            # 生成转译树（缺省=验收集 27 例）
 scripts/compare_trees.sh <base> <new>           # 生成树逐字节对照 + raw-audit 对照（重构验收）
-scripts/seed_check.sh <Test.java>               # 双种子确定性检查
+scripts/seed_check.sh <Test.java>               # 两次生成确定性检查
 scripts/fetch_pilot_deps.sh [--no-scan]         # lib pilot 语料取包（清单 tests/lib_pilot/deps/pom.xml）+ dep_scan 透视
 scripts/lib_pilot_golden.sh m1..m5              # JUnit/hamcrest crate golden 对账（前置：上一条）
 ```
