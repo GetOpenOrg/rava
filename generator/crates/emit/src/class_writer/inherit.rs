@@ -89,6 +89,11 @@ fn walk_interfaces<'c>(ctx: &EmitCtx<'c>, ci: &ClassInfo, mut visited: BTreeSet<
     }
 }
 
+/// 实例桥方法（ACC_BRIDGE，非静态）
+fn is_bridge(m: &Method) -> bool {
+    m.access & acc::BRIDGE != 0 && !m.is_static()
+}
+
 fn is_inheritable_default(m: &Method) -> bool {
     !m.is_abstract() && !m.is_static() && !m.is_synthetic() && m.access & acc::PRIVATE == 0 && !is_ctor_name(&m.name)
 }
@@ -109,11 +114,20 @@ pub(super) fn interface_default_inheritance<'c>(
     let mut existing: BTreeSet<(String, String)> = visible.iter().map(|m| (m.name.clone(), m.desc.clone())).collect();
     let mut existing_pp: BTreeSet<(String, String)> =
         visible.iter().map(|m| (m.name.clone(), param_part(&m.desc).to_string())).collect();
+    // 桥方法与 default 同名同描述符即构成覆盖（JVMS §5.4.6 类方法优先于接口 default）：
+    // 该槽位经桥转发到被桥接的类方法，不注入 default 体
+    for b in ci.methods().iter().filter(|m| is_bridge(m)) {
+        existing.insert((b.name.clone(), b.desc.clone()));
+    }
     // 覆盖判定沿父类链（祖先类自身的非私有实例方法同样构成覆盖）
     let mut seen = BTreeSet::new();
     let mut cur = ci.super_class();
     while let Some(sci) = ctx.ty.reg.get(cur).filter(|_| !cur.is_empty() && seen.insert(cur.to_string())) {
         for sm in sci.methods() {
+            if is_bridge(sm) {
+                existing.insert((sm.name.clone(), sm.desc.clone()));
+                continue;
+            }
             if sm.is_static() || sm.is_synthetic() || is_ctor_name(&sm.name) || sm.access & acc::PRIVATE != 0 {
                 continue;
             }

@@ -34,8 +34,14 @@ impl Object {
         self.0.getClass()
     }
 
+    /// JVM 语义：null 接收者抛 NPE（invokevirtual 的隐式 null 检查；类型化 null 不进入覆盖体）。
     #[jvm_native]
-    pub fn hashCode(&self) -> Result<i32> { Ok(self.0.hashCode()) }
+    pub fn hashCode(&self) -> Result<i32> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        Ok(self.0.hashCode())
+    }
 
     /// `finalize()`（protected，方法体为空）：静态祖先链未覆盖 finalize 的类上
     /// `this.finalize()` 经根路由落此（invoke_virtual 的 protected void 根方法分支）。
@@ -47,6 +53,9 @@ impl Object {
         // 不做引用相等捷径：equals 是虚方法，覆盖者（如动态代理转发 InvocationHandler）对
         // 自身同样须执行覆盖体；未覆盖类的身份比较由 ObjectVTable::equals 默认体承载。
         // String 内容比较：通过 Display impl（string_ext.rs 中使用字节数组解码）
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
         let s1 = self.0.as_any().downcast_ref::<JvmString>();
         let s2 = other.0.as_any().downcast_ref::<JvmString>();
         if let (Some(a), Some(b)) = (s1, s2) {
@@ -56,7 +65,12 @@ impl Object {
     }
 
     #[jvm_native]
-    pub fn toString(&self) -> Result<String> { Ok(String::from(self.0.__to_string()?.as_str())) }
+    pub fn toString(&self) -> Result<String> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        Ok(String::from(self.0.__to_string()?.as_str()))
+    }
 
     // ── Object 监视器方法（S-20）：bare-Object 接收者的调用落点 ─────────────
     //
