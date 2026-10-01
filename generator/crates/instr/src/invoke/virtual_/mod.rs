@@ -119,6 +119,12 @@ pub fn gen_invokevirtual(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
         site.obj_e = format!("Into::<{O}>::into(Clone::clone(&{}))", site.obj_e);
         site.obj_ty = RsType::Object;
     }
+    // 不透明（L1）类接收者：成员在其有布局的祖先上 → 先上转到调用属主视图
+    if let Some(view) = crate::opaque::receiver_view(env, &site.obj_ty, &call.owner) {
+        site.obj_e = crate::opaque::upcast_text(env, &site.obj_e, &view);
+        site.obj_node = Expr::raw(site.obj_e.clone());
+        site.obj_ty = view;
+    }
     if args::try_early_receiver_paths(env, sim, log, obj_is_typevar, call, &site)? {
         return Ok(());
     }

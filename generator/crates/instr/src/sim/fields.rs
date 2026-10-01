@@ -55,6 +55,22 @@ fn null_checked(env: &InstrEnv, recv: Expr) -> InstrResult<Expr> {
     Ok(try_(mcall(recv, "__nn", Vec::new())?))
 }
 
+/// 字段接收者视图：访问器定义在声明类上。
+/// - 不透明（L1）类接收者 → 上转到声明类视图（见 [`crate::opaque`]）
+/// - 空引用字面量接收者（分析器折叠出的 null 常量只剩 `Object` 类型）→ 声明类的 null
+///   （`<View>::default()`），随后的 `__nn()?` 按 JVM 语义抛 NullPointerException
+fn field_receiver_view(env: &InstrEnv, obj_e: Expr, obj_ty: RsType, owner: &str, name: &str) -> (Expr, RsType) {
+    let declarer = crate::opaque::field_declarer(env, owner, name);
+    if let Some(view) = crate::opaque::receiver_view(env, &obj_ty, &declarer) {
+        return (Expr::raw(crate::opaque::upcast_text(env, &text(env, &obj_e), &view)), view);
+    }
+    if matches!(obj_ty, RsType::Object) && sim::exprs::is_null(&obj_e) {
+        let view = crate::opaque::class_view(env, &declarer);
+        return (Expr::raw(format!("<{}>::default()", crate::build::ty_text(env, &view))), view);
+    }
+    (obj_e, obj_ty)
+}
+
 /// 存储值节点：未经转换时直接携带栈上节点，经转换的值为 Raw 叶子
 fn value_node(env: &InstrEnv, val: Expr, val_str: String) -> Expr {
     if text(env, &val) == val_str {
@@ -76,8 +92,9 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
     let ftype = if f.desc.is_empty() { RsType::Object } else { ctx.ty.jvm_to_rust(&f.desc) };
     // 类型变量接收者：访问器定义在上界类上，经上界视图读字段
     let (obj_e, obj_ty) = sig::type_var_receiver_bound_view(env, sim, obj.expr, obj.ty)?;
-    let ftype = restore_field_declared_type(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let owner = if f.owner.is_empty() { ctx.class_name } else { &f.owner };
+    let (obj_e, obj_ty) = field_receiver_view(env, obj_e, obj_ty, owner, &f.name);
+    let ftype = restore_field_declared_type(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
     let get = mcall(null_checked(env, obj_e)?, &format!("__get_{slot}"), Vec::new())?;
     sim.push(get, ftype);
@@ -91,8 +108,9 @@ fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRe
     let fname = ty::ident::safe_ident(&f.name);
     let ftype = if f.desc.is_empty() { RsType::Prim(ty::Prim::I32) } else { ctx.ty.jvm_to_rust(&f.desc) };
     let (obj_e, obj_ty) = sig::type_var_receiver_bound_view(env, sim, obj.expr, obj.ty)?;
-    let ftype = restore_field_declared_type(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let owner = if f.owner.is_empty() { ctx.class_name } else { &f.owner };
+    let (obj_e, obj_ty) = field_receiver_view(env, obj_e, obj_ty, owner, &f.name);
+    let ftype = restore_field_declared_type(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let slot_gsig = field_generic_signature(ctx.reg(), owner, &fname);
     let obj_text = text(env, &obj_e);
     let class_tps = sim.cfg.class_type_params.clone();

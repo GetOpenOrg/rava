@@ -273,5 +273,14 @@ fn name_level_classes_emit_opaque() {
     assert!(shape.contains("rava_macros::java_class!") && !shape.contains("java_class_opaque"), "已实例化类的超接口至少 L2：{shape}");
     let main = read("opaque_levels.rs");
     assert!(main.contains("__null_recv(") && main.contains("OpaqueLevels$Ghost.name:()Ljava/lang/String;"), "{main}");
+    // 接收者静态类型为 L1 类（局部变量 Phantom）、成员在 L2 祖先 Base 上：先上转到属主视图
+    let phantom = read("opaque_levels_phantom.rs");
+    assert!(phantom.contains("rava_macros::java_class_opaque!"), "{phantom}");
+    let view = "Into::<OpaqueLevels_Base>::into(Clone::clone(&p))";
+    assert!(main.contains(&format!("{view}.__nn()?.__get_tag()")), "L1 接收者读字段须上转：{main}");
+    assert!(main.contains(&format!("{view}.__nn()?.__set_tag(5i32)")), "L1 接收者写字段须上转：{main}");
+    // 折叠出的 null 常量接收者：取声明类的 null
+    assert!(main.contains("<OpaqueLevels_Base>::default().__nn()?.__get_tag()"), "{main}");
+    assert!(!main.contains("Object::default().__nn()?.__get_tag()"), "{main}");
     std::fs::remove_dir_all(&out).ok();
 }

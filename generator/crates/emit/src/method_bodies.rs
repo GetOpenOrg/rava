@@ -104,6 +104,10 @@ impl InstrHooks for Hooks<'_, '_> {
         let Some(ci) = self.ctx.ty.reg.get(owner) else { return false };
         ci.methods().iter().find(|m| m.name == name && m.desc == desc).is_some_and(|m| self.ctx.slot_pruned(m, ci))
     }
+
+    fn is_opaque(&self, cls: &str) -> bool {
+        self.ctx.is_opaque(cls)
+    }
 }
 
 /// 登记事实 → 发射层账本条目

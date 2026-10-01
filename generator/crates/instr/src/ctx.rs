@@ -29,6 +29,10 @@ pub trait InstrHooks {
     fn slot_pruned(&self, _owner: &str, _name: &str, _desc: &str) -> bool {
         false
     }
+    /// 类发 L1 不透明形态（`java_class_opaque!`：无字段访问器、无方法，只有身份与 upcast）
+    fn is_opaque(&self, _cls: &str) -> bool {
+        false
+    }
 }
 
 /// 无合成对象的缺省回调（单元测试 / 不含 lambda 的调用方）
