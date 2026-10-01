@@ -27,6 +27,8 @@ pub(super) enum Dep {
     Never,
     /// 系统属性 / 标签对象读者
     Props,
+    /// 记忆条目（编号见 `memo.rs`）的取用者
+    Memo(u32),
 }
 
 /// 一份可共享的摘要
@@ -71,6 +73,9 @@ impl Ctx<'_> {
             }
             Dep::Props => {
                 self.pdeps.borrow_mut().insert(m);
+            }
+            Dep::Memo(i) => {
+                self.mdeps.borrow_mut().entry(*i).or_default().insert(m);
             }
         }
         if let Some(log) = self.dep_log.borrow_mut().as_mut() {

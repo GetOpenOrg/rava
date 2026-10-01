@@ -23,7 +23,7 @@ impl Ctx<'_> {
         }
         let Some(frame) = self.memo_enter(format!("sel:{key}"), true) else { return 0 };
         let r = self.selector_uncached(key);
-        if self.memo_leave(frame) {
+        if self.memo_leave(frame).0 {
             self.selectors.borrow_mut().insert(key.clone(), r);
         }
         r

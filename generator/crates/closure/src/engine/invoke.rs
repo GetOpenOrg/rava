@@ -100,7 +100,7 @@ impl<'a> Engine<'a> {
             self.enumerate_fields(cls);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
-            self.open_fields_all();
+            self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
     }
 
@@ -123,7 +123,7 @@ impl<'a> Engine<'a> {
             }
             None => {
                 if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all();
+                    self.open_fields_all(false, self.ctx.deser.get());
                 }
             }
         }

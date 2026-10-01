@@ -256,7 +256,7 @@ impl Engine<'_> {
     /// 调用结果由清单派生规则给出（值相等 / 字符串运算 / 系统属性读取）：不按被调字节码判定
     fn derived_call(&self, opcode: u8, m: &MemberRef, iface: bool, c: &CallInfo) -> bool {
         let named = |k: &str| self.man.is_value_equals(k) || self.man.string_op(k).is_some() || self.man.sysprops.is_holder(k);
-        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(opcode, m, iface, Some(c)).is_some()
+        named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(None, opcode, m, iface, Some(c)).is_some()
     }
 
     /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、或接收者的值流

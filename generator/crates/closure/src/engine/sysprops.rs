@@ -104,7 +104,7 @@ impl Ctx<'_> {
         if !args.iter().any(|a| matches!(a, V::Str(_))) {
             return None;
         }
-        let spec = self.read_spec(opcode, m, iface, Some(c))?;
+        let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
         self.prop_read(me, &spec, args)
     }
 
@@ -114,7 +114,8 @@ impl Ctx<'_> {
     }
 
     /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
-    pub(super) fn read_spec(&self, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
+    /// me = 外层被分析的方法（读取摘要的输入登记给它；辅助分析 / 引擎侧查询为 None）
+    pub(super) fn read_spec(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, c: Option<&CallInfo>) -> Option<PropSum> {
         let c = match c {
             Some(c) => {
                 if c.reader.is_some() {
@@ -129,7 +130,7 @@ impl Ctx<'_> {
                 self.call_info(opcode, m, iface).target.clone()
             }
         }?;
-        self.prop_summary(&c)
+        self.prop_summary(me, &c)
     }
 
     /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）
@@ -138,9 +139,7 @@ impl Ctx<'_> {
             return None;
         }
         let V::Str(key) = args.get(spec.key)? else { return None };
-        if let Some(me) = me {
-            self.dep(me, Dep::Props);
-        }
+        self.note_props(me);
         {
             let u = self.punstable.borrow();
             if u.all || u.keys.contains(&**key) {
@@ -164,17 +163,21 @@ impl Ctx<'_> {
 
     /// 字节码方法的读取摘要：全部返回值恰为某读取点的结果，读取键为本方法形参、缺省值为形参或常量
     /// （与调用点无关的独立分析，按成员缓存）
-    fn prop_summary(&self, t: &MemberRef) -> Option<PropSum> {
-        if let Some(s) = self.psums.borrow().get(t) {
-            return s.clone();
+    fn prop_summary(&self, me: Option<usize>, t: &MemberRef) -> Option<PropSum> {
+        let hit = self.psums.borrow().get(t).cloned();
+        if let Some((s, inp)) = hit {
+            self.memo_use(me, &inp);
+            return s;
         }
         if !t.desc.ends_with(';') {
             return None;
         }
         let frame = self.memo_enter(format!("psum:{t}"), true)?;
         let s = self.compute_summary(t);
-        if self.memo_leave(frame) {
-            self.psums.borrow_mut().insert(t.clone(), s.clone());
+        let (clean, inp) = self.memo_leave(frame);
+        self.memo_use(me, &inp);
+        if clean {
+            self.psums.borrow_mut().insert(t.clone(), (s.clone(), inp));
         }
         s
     }
@@ -205,7 +208,7 @@ impl Ctx<'_> {
                     _ => None,
                 });
                 let (opc, mref, iface, args) = inv?;
-                let inner = self.read_spec(opc, mref, iface, None)?;
+                let inner = self.read_spec(None, opc, mref, iface, None)?;
                 let sum = Self::compose(&inner, args)?;
                 if out.as_ref().is_some_and(|x| *x != sum) {
                     return None;
@@ -252,7 +255,7 @@ impl Engine<'_> {
                         keys.push(None);
                     }
                     for (i, _) in args.iter().enumerate().filter(|(_, v)| may_be_sysprops(v)) {
-                        if i == 0 && (self.man.sysprops.is_query(&k) || self.ctx.read_spec(*opcode, mref, *iface, None).is_some_and(|s| s.receiver)) {
+                        if i == 0 && (self.man.sysprops.is_query(&k) || self.ctx.read_spec(None, *opcode, mref, *iface, None).is_some_and(|s| s.receiver)) {
                             continue;
                         }
                         let w = self.man.sysprops.writer(&k).filter(|_| i == 0);
@@ -363,12 +366,24 @@ impl Engine<'_> {
         if !grew {
             return;
         }
-        self.ctx.consts.borrow_mut().clear();
-        self.ctx.objs.borrow_mut().clear();
-        self.ctx.psums.borrow_mut().clear();
-        self.ctx.cevals.borrow_mut().clear();
-        let mut deps: BTreeSet<usize> = std::mem::take(&mut *self.ctx.pdeps.borrow_mut());
-        deps.extend(self.ctx.fdeps.borrow().values().flat_map(|v| v.iter().copied()));
+        // 只作废答复可能变化的记忆（查询过不折叠集合，或读过的字段此后已放开）：其余记忆的输入未变，
+        // 重算结果相同。取用过作废记忆的方法经条目编号失效；属性读者（含取用过不可记忆结果的方法）全部失效
+        let ctx = &self.ctx;
+        let mut open: HashMap<MemberRef, bool> = HashMap::default();
+        let mut ids: BTreeSet<u32> = BTreeSet::new();
+        let mut keep = |inp: &super::memo::Inputs| {
+            let stale = ctx.memo_stale(inp, &mut open);
+            if stale {
+                ids.insert(inp.id);
+            }
+            !stale
+        };
+        ctx.consts.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.objs.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        ctx.cevals.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        let mut deps: BTreeSet<usize> = std::mem::take(&mut *ctx.pdeps.borrow_mut());
+        deps.extend(ctx.memo_consumers(ids));
         self.invalidate_all(Some(deps), Why::Sysprops);
     }
 }
