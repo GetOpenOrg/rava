@@ -14,6 +14,7 @@ pub mod overlay;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -27,7 +28,7 @@ use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::Result;
 use crate::imports::collect_referenced;
-use crate::perf::Perf;
+use crate::perf::{CrateStat, Perf};
 use crate::precheck::Precheck;
 use fs::Writer;
 use layout::{JdkLayout, UserLayout};
@@ -187,6 +188,27 @@ fn finish_phase2(
     Ok(disp)
 }
 
+/// 拆层后各 crate 规模：java_runtime（类数取 JDK 布局，与重型判定同源）→ lib（名字序）→
+/// 实现层 java_body_k → user
+fn crate_stats(ems: &IndexMap<String, ClassEmission>, body: &layers::BodyPlan, jdk_classes: usize) -> Vec<CrateStat> {
+    let mut by_crate: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for em in ems.values() {
+        let e = by_crate.entry(em.crate_name.as_str()).or_default();
+        e.0 += 1;
+        if !em.handwritten {
+            e.1 += em.text.len();
+        }
+    }
+    let stat = |name: &str, classes: usize, bytes: usize| CrateStat { name: name.to_string(), classes, bytes };
+    let jrt = by_crate.remove("java_runtime").unwrap_or_default();
+    let user = by_crate.remove("user");
+    let mut out = vec![stat("java_runtime", jdk_classes, jrt.1)];
+    out.extend(by_crate.iter().map(|(n, (c, b))| stat(n, *c, *b)));
+    out.extend(body.crates.iter().map(|c| stat(&c.name, c.files.len(), c.files.values().map(String::len).sum())));
+    out.extend(user.map(|(c, b)| stat("user", c, b)));
+    out
+}
+
 /// 只发射、不落盘的缺口预检（`rava audit` 用）：布局 → 逐类发射 → 第二阶段收尾 → [`Precheck`]。
 /// `out_dir` 只用于推导目标路径（判定手写真源同路径覆盖），不创建、不写入
 pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<Precheck> {
@@ -224,6 +246,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
     let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
+    perf.crates = crate_stats(&ems, &body_plan, jdk.files.len());
     perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
