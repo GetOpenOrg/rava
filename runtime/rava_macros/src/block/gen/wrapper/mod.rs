@@ -18,8 +18,8 @@ use super::context::GenContext;
 use super::storage_hooks::hook_ident;
 
 /// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + impl ObjectVTable for Wrapper
-/// + wrapper impl 块。
-pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
+/// + wrapper impl 块；第二项为方法体函数（`__jbm_`，拆层时进实现层）。
+pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
     let struct_ident = &ctx.struct_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let impl_g = &ctx.impl_g;
@@ -35,8 +35,11 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     let wrapper_struct = quote! {
         #[allow(non_camel_case_types)]
         pub struct #struct_ident #impl_g #where_c {
-            pub(crate) vtable: __Shared<dyn #vtable_trait_ident>,
-            pub(crate) any: __AnyRef,
+            // 部件对实现层 crate（存储层 impl 按部件构造本类视图）可见
+            #[doc(hidden)]
+            pub vtable: __Shared<dyn #vtable_trait_ident>,
+            #[doc(hidden)]
+            pub any: __AnyRef,
             /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
             pub _jvm_null: bool,
             #phantom_field
@@ -129,9 +132,9 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
     };
 
     let obj_vtable_for_wrapper = object_vtable::generate(ctx);
-    let wrapper_impl = methods::generate(ctx)?;
+    let (wrapper_impl, body_fns) = methods::generate(ctx)?;
 
-    Ok(quote! {
+    Ok((quote! {
         #wrapper_struct
         #wrapper_from_parts
         #wrapper_default
@@ -140,5 +143,5 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
         #wrapper_debug
         #obj_vtable_for_wrapper
         #wrapper_impl
-    })
+    }, body_fns))
 }

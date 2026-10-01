@@ -21,7 +21,8 @@ use super::super::super::util::{attr_str, strip_meta_attrs};
 use super::super::context::GenContext;
 use super::body_fns::functionize;
 
-pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
+/// 返回 (wrapper impl 段, 方法体函数化后的模块级体函数)
+pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
     let struct_ident = &ctx.struct_ident;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
     let impl_g = &ctx.impl_g;
@@ -306,8 +307,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<TokenStream2> {
             #(#static_accessors)*
             #class_init_fn
         }
-        #(#body_fns)*
     };
 
-    Ok(wrapper_impl)
+    Ok((wrapper_impl, body_fns))
 }
