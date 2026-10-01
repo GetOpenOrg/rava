@@ -13,7 +13,7 @@
   - 来源：服务器 `distribute_tests.py --jdk 21` 在 master 上的通过记录（`test_results/master_passed_jdk21.txt`），文件时间 2026-09-30 23:36 (+0800)。
   - 当时的缺省生成器是 Python：缺省切到 rust 的提交是 49a7684d（2026-10-01 00:02），而且只在工作分支上。
   - sha256 `c69f200bb30a1fd834a9d1a8bf24a92c41846b4ee55fb18119544f8c8493b78c`。
-  - 口径说明：2026-10-01 之前 distribute_tests 会把各服务器残留的 `--record-passed` 清单合并进 master，所以 P21 是**多个提交通过集的并集**，比任何单一提交的通过集都大。用它作为 ⊆ 的左侧只会更严，不会放过回归；差集里若有用例从未在同一提交上通过，在 §五 逐例说明即可。
+  - 口径说明：2026-10-01 之前 distribute_tests 会把各服务器残留的 `--record-passed` 清单合并进 master，所以 P21 是**多个提交通过集的并集**，与 R21 的累计口径一致。
 - **R21**：JDK 21 全量 `run_tests.py`，rust 缺省（或服务器 `distribute_tests.py --jdk 21`）。
 - **判定**：
   - 按测试名，`P21 ⊆ R21 通过`。只看数量不够：rust 多通过的测试不能抵消 Python 通过而 rust 失败的测试。
@@ -69,7 +69,7 @@
 
 ## 四、执行顺序（条件满足后）
 
-1. 按 §一 跑 R21 全量（服务器 `distribute_tests.py --jdk 21`，或本地 `run_tests.py --jdk 21 --record-passed`），与冻结的 P21 对照：分布式用 `scripts/baseline_diff.py --results <server_maintenance/rava/test_results>`，本地用 `--passed <通过清单> --log <跑批日志> --commit <sha>`。报告（Markdown，退出码 0 = 满足，2 = 输入口径错误）贴入 §五。R21 必须是单一提交上的全量结论：未跑、无结果、跨提交清单一律不满足。
+1. 按 §一 跑 R21 全量（服务器 `distribute_tests.py --jdk 21`，或本地 `run_tests.py --jdk 21 --record-passed`），与冻结的 P21 对照：分布式用 `scripts/baseline_diff.py --results <server_maintenance/rava/test_results>`，本地用 `--passed <通过清单> --log <跑批日志> --commit <sha>`。报告（Markdown，退出码 0 = 满足，2 = 输入错误）贴入 §五。R21 按跨提交累计口径（2026-10-01 用户决定：已通过的用例默认在最新代码上仍通过，续跑只跑未通过的，手动 --reset 才在最新代码上全量重跑）；未跑、无结果一律不满足，报告列出通过时的提交分布。
 2. 一次性删除 A、B，并修改 C（按「一次删到终态再验证」原则，不逐文件分批）；与 [`2026-10-01-scripts-into-rava.md`](2026-10-01-scripts-into-rava.md) 同轮实施，main.py 不保留转发层。
 3. 验证：
    - 生成器各 crate 通过 `cargo build` / `cargo test`；
