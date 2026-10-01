@@ -49,11 +49,17 @@ impl Engine<'_> {
     fn gather_node(&mut self, m: usize, off: u32, fi: usize, tid: u32, objs: &[u32], put: bool) -> Option<u32> {
         let last = self.gather_last.get(&m).and_then(|s| s.get(&off)).filter(|x| x.0 == fi).map(|x| (x.1, x.2.clone()));
         let (g0, prev) = last.unwrap_or((NO_GATHER, Rc::from([])));
+        // 两段均升序：归并
         let mut full: Vec<u32> = Vec::with_capacity(prev.len() + objs.len());
-        full.extend(prev.iter().copied());
-        full.extend(objs.iter().copied());
-        full.sort_unstable();
-        full.dedup();
+        let (mut i, mut j) = (0, 0);
+        while i < prev.len() && j < objs.len() {
+            let (p, o) = (prev[i], objs[j]);
+            full.push(p.min(o));
+            i += usize::from(p <= o);
+            j += usize::from(o <= p);
+        }
+        full.extend_from_slice(&prev[i..]);
+        full.extend_from_slice(&objs[j..]);
         if full.len() < GATHER_MIN {
             self.gather_last.entry(m).or_default().insert(off, (fi, NO_GATHER, full.into()));
             return None;

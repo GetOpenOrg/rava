@@ -44,7 +44,8 @@ impl<'a> Engine<'a> {
 
     /// 调用点（方法 m、偏移 off）若是服务查找入口，按服务 Class 实参补种 provider
     pub(super) fn service_lookup(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, args: &[V]) {
-        let Some(&j) = self.man.seeds.services.lookups.get(&mref.to_string()) else { return };
+        let k = self.mref_key(mref);
+        let Some(&j) = self.man.seeds.services.lookups.get(&*k) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
         let Some(a) = args.get(skip + j) else { return };
         let (known, unknown) = match a {
