@@ -529,3 +529,192 @@ DeepCopy 失败归因：序列化路径触发了 `ExceptionInInitializerError �
 - 修法待定，有两个方向：
   - 把 `BootLoader` 列入边界类中按字节码翻译 `<clinit>` 的名单。其 `<clinit>` 另含 `defineUnnamedModule`、`setBootLoaderUnnamedModule0`、`NativeLibraries.newInstance`，需要逐项核对 VM 契约。
   - 由 VM 注入常量清单给 `CLASS_LOADER_VALUE_MAP` 赋初值。
+
+## 18. 精度分步方案（c1d-prec 72873705 = 合入集成分支 a1e781a8 后）
+
+口径：闭包缩小是目标。每一步的判据是 e2e 通过、动态对照漏覆盖为 0、无存根命中。下文「切除模拟」指用 `rava closure --cut-file` 把某一精度手段将证明不可达的调用点切掉，用来量这一手段在终态下的上界。切除模拟本身不健全，只用于测量，不进入实现。
+
+### 18.0 实测底数（HelloWorld，`rava closure -o`）
+
+| 配置 | 类 | 方法 | 说明 |
+|---|---:|---:|---|
+| e0：无切除 | 3092 | 18742 | 比 §16 的 2825 多 268 类，全部来自合入带来的已知服务 provider（`sun/security/pkcs11` 72、`javax/crypto` 27 等），属于健全性补齐（同 §14.6） |
+| e6：只切区域**内部**（CHM 两处、FormatSpecifier.print 六个非 `%s` 分支、Formatter.parse 的两个正则回退、VM.saveProperties@71、HashMap.<init>(IF)@74、ClassFileDumper.<init>@52） | 3079 | 18595 | −13：入口还开着，区域内部互为替补（§16），切内部基本无效 |
+| f0：切四个**入口**（Preconditions.outOfBoundsMessage、PTI.validateConstructorArguments、Class.getGenericInterfaces、CHM.fullAddCount） | 319 | 1228 | 区域整体脱落 |
+| f1：f0 + e6（本节全部精度手段的上界） | 317 | 1202 | code 223 / layout 60 / type 17 / init 15 / alloc 2 |
+
+结论一：**有效的是入口，不是内部。** 闸门是 3 个入口：OOB 消息、PTI.validateConstructorArguments、getGenericInterfaces（经 CHM.comparableClassFor）。三者同时关掉，区域才会脱落（3092 → 约 320）；任何一个开着，类数都会回到约 3000。fullAddCount、Formatter 内部、saveProperties、HashMap、dumper 在闸门关掉后只值 0～10 类。因此下面各步的 Δ 分两栏：「终态缺此步」是在 f1 上撤掉这一步的切除后的类数（留一法，表示这一步在终态里的价值）；「单独落地」是只做这一步时 HelloWorld 的变化。
+
+留一法实测（f1 基础上撤掉一项）：
+
+| 撤掉的一项 | 类 |
+|---|---:|
+| 无（f1） | 317 |
+| CHM.comparableClassFor@21 + getGenericInterfaces | 区域重开（>5 min 未结束，约 3000） |
+| CHM.fullAddCount | 327（+10） |
+| Formatter 内部（print 六分支 + parse 两回退） | 317（+0） |
+| VM.saveProperties@71 | 317（+0） |
+| HashMap.<init>(IF)@74 | 319（+2） |
+| ClassFileDumper.<init>@52 | 317（+0） |
+| 以上全部撤掉，只留 OOB + PTI 两个入口 | 区域重开（>90 s 未结束） |
+
+和 JVM 对照（`-Xshare:off -verbose:class`，HelloWorld 初始化 437 类）：f1 与 JVM 已初始化集合的交集是 202 类。其余 115 类中，77 类是 layout/type 级的接口与声明（Serializable、Comparable、CharSequence 的父接口、`JavaXxxAccess` 等）；其余是异常类、CharacterData0x、CHM 内部节点、Float/DoubleToDecimal 等可达的代码。f1 已经接近 rava 运行模型下的健全下限。
+
+### 18.1 ≤ 250 的可行性：如实说明
+
+- **健全终态的估算是 ≈ 355 类**，不是 ≤ 250：
+  - f1 = 317 是各项精度手段都做到极致时的**类数下限**，前提是把越界消息路径整条切掉。但 `String.charAt` 越界时，`Preconditions.outOfBoundsMessage` → `String.format("Index %s out of bounds for length %s", …)` 是真实会执行的 Java 语义，健全的分析不能切。
+  - 常量实参求值（18.5）能做到的是：只保留 `%s` 这一种转换。这样仍要保留 Formatter、Pattern（`Formatter.<clinit>` 无条件 `Pattern.compile` 一个常量正则）、Locale 等，JVM 实测约 40 类（单独执行一次 `String.format("%s", …)` 的增量）。
+  - 合计约 317 + 40 ≈ 355 类，其中 code 级约 260。
+- **集成分支的 248 来自 `[boundary]` 截断**，不是来自精度。截断本身不健全：§17 的 DeepCopy 失败就是截断掩盖的路径。拿它作合入门槛，等于要求健全分析逼近一个不健全的数。
+- 再往下，只剩改变语义的手段：
+  - 构建期声明「越界不发生」；
+  - 把 Formatter 的静态状态做成构建期堆快照（类似 GraalVM 的 image heap）。
+
+  前者不健全。后者是另一条架构线（构建期执行 `<clinit>`），不在本方案范围内。
+- **请主会话裁定门槛**，二选一：
+  - (a) 改为 **HelloWorld 总类 ≤ 360，且 code 级 ≤ 270**。这是 18.2–18.8 全部落地后的健全终态，各步数字可逐项验收。
+  - (b) 坚持 ≤ 250。那就必须先批准一种构建期语义声明（例如「越界消息惰性化」）。它不属于精度手段，需要单独立项。
+
+  本节按 (a) 编写。
+
+### 18.2 步骤 P0：BootLoader `<clinit>` 按字节码翻译（修 DeepCopy，§17）
+
+- 机制：
+  - 把 `jdk/internal/loader/BootLoader` 加入 `closure.toml` 的 `translate_clinit`（同 `jdk/internal/misc/VM`）。
+  - `<clinit>` 的四个外调逐项核对 VM 契约：
+    1. `JLA.defineUnnamedModule(null)`：字节码，经 `System$2` 到 `new Module(null)`。
+    2. `JLA.addEnableNativeAccess`：字节码。
+    3. `setBootLoaderUnnamedModule0`：`ACC_NATIVE`，属手写准入 ①。手写到 `boot_loader_impl.rs`，语义是登记引导类加载器的未命名模块。
+    4. `NativeLibraries.newInstance(null)`：字节码。
+  - 引导类的模块必须是同一个对象。现在 `module_impl.rs` 的进程单例要改成：`setBootLoaderUnnamedModule0` 登记的那个 Module；`Class.getModule` 对引导类返回 `BootLoader.getUnnamedModule()`（字节码方法，会触发 `<clinit>`）。这样 `CLASS_LOADER_VALUE_MAP` 等静态字段由字节码赋值，不需要 VM 常量注入。
+- 预期 HelloWorld 类数：+0～+5（BootLoader 已在闭包里；新增的是 `<clinit>` 链上的 NativeLibraries 等）。
+- 验收用例：DeepCopy 通过；TestForNameInit、HelloWorld、TestInterfaceInheritedOverloads 不回归；动态对照漏覆盖为 0；无存根命中。
+- 改动：
+  - `runtime/java_runtime/closure.toml`（`translate_clinit`）；
+  - `runtime/java_runtime/src/jdk/internal/loader/boot_loader_impl.rs`（native `setBootLoaderUnnamedModule0`）；
+  - `runtime/java_runtime/src/java/lang/module_impl.rs`、`class_impl.rs`（`getModule` 改用 BootLoader 的未命名模块）；
+  - `vm_intrinsics.toml` 登记该 native。生成器 crate 不改。
+
+### 18.3 步骤 P1：3 条 asm Type/Frame 漏覆盖（dyn_compare 归因修正）
+
+- 定位（已实测）：这 3 条不是闭包漏类。
+  - JVM 栈是：HelloWorld.greet@7（indy 站点，已由 indy 模型覆盖）→ `MethodHandleNatives.linkCallSite` → `StringConcatFactory` → … → `LambdaForm.compileToBytecode` → `InvokerBytecodeGenerator` → asm `Type` / `Frame`。
+  - 这是 JVM 自己的链接过程，rava 的运行模型从不执行这段（准入 ②：运行模型替换）。
+  - `dyn_compare.attribute()` 的 model_sites 规则取的是「站点之上的第一个字节码帧」。链接中途的 JDK invoke 帧都在 c1d 闭包里，于是归因在链接内部恢复，误报为漏覆盖。
+- 修法：
+  - 模型站点正上方是 `closure.toml [dynamic] vm_upcall_classes` 的帧（即 `MethodHandleNatives`）时，整段归给该 indy 模型，不再往下找。
+  - 规则由清单驱动，脚本里不写类名。
+- 预期 HelloWorld 类数：Δ = 0。漏覆盖从 3 降到 0（HelloWorld 2、TestInterfaceInheritedOverloads 1）。
+- 验收用例：
+  - 对 HelloWorld、TestInterfaceInheritedOverloads 跑 dyn_compare，漏覆盖为 0；
+  - `python3 -m unittest tests.unit.test_dyn_compare` 新增「链接段归 indy 模型」用例。
+- 改动：`scripts/dyn_compare.py`、`tests/unit/test_dyn_compare.py`。
+
+### 18.4 步骤 P2：守卫收窄（absint 条件边上按局部变量收窄值集）
+
+- 机制：在 `ifeq` / `ifne` / `if_acmpeq` / `if_acmpne` 的真假边上，对来源局部变量收窄镜像或类型值集：
+  - `x.getClass() == C.class`：真边 x ∈ {C}，假边去掉 C；
+  - `instanceof C`：真边与 C 求交；
+  - `A.class.isAssignableFrom(c)`：真边把 c 收窄为 A 的子类型；open 镜像带上界 A（§14.6）。
+- 服务查找按上界只选 A 的子类型服务。`ResourceBundle$3.run` 的未知回退因此不再选入 `java/security/Provider`、`RandomGenerator`（§14.6 实测 19 类）。
+- `CHM.comparableClassFor`：守卫本身只排除 String；getGenericInterfaces 是否可达，取决于进入 CHM 树化箱的键的类集合。
+  - 键类集合的来源：`putVal` 的 key 参数，经 `treeifyBin` → `TreeBin.<init>` → `comparableClassFor`，需要参数值集在方法间传播。
+  - 已有的「方法参数类型值集」在本步扩到这条链。
+  - 若闭包内进入 CHM 的 Comparable 键只有 String，getGenericInterfaces 就不可达。
+  - 否则改由 18.5 的具体求值器对键类候选集逐个求值 `getGenericInterfaces`：签名串是构建期常量，解析轨迹确定。
+  - 实测 getGenericInterfaces 是独立闸门：OOB 与 PTI 都切掉、只留它开着，区域仍重开（留一法 >5 min）。所以本步与 18.5 至少一条必须关掉它。
+- 预期 HelloWorld 类数：
+  - 终态缺此步：区域重开（>5 min 未结束，约 3000） 类；
+  - 单独落地：Δ ≈ 0（OOB / PTI 入口仍开着）。
+  - 在全闭包形态下，ResourceBundle 一项 −19。
+- 验收用例：
+  - HelloWorld；
+  - 带 ResourceBundle 的用例（TestFormatLocale、TestLocaleLanguageTag）；
+  - 序列化、反射用例（DeepCopy、TestAnnoValues），用来确认收窄不误杀。
+- 改动：`generator/crates/` 闭包分析器的 absint 条件边（`engine/` 下的分支求值模块与值集表示，open 镜像加上界字段）、`engine/services.rs`（按上界选服务）。不涉及清单。
+
+### 18.5 步骤 P3：常量实参求值（确定性具体求值器）
+
+- 机制：
+  - 调用点实参全是常量（ldc / 已折叠的静态常量）、被调方法体只读常量和自身新建的对象、步数有界时，在分析期按字节码**具体执行**被调方法。
+  - 执行轨迹上实际经过的方法和分支计入闭包；未经过的分支不计入。
+  - 产生的对象把字段的具体值并入该字段的值集，供后续非常量代码的分派收窄。
+  - 任一条件不满足（遇到非白名单 native、写外部静态字段、超出步数），整次回退到现有抽象解释。这样保证健全。
+- 覆盖的入口：
+  1. **OOB 消息**：`outOfBoundsMessage(常量 kind, …)` 按常量 kind 只走对应分支。`String.format(常量格式串)` → `Formatter.parse(常量)` 得到具体的 FormatSpecifier 列表。所有常量格式串的转换字符并集写入 `FormatSpecifier.c` 的值集；`print` 的 switch 按值集只留 `%s`（printString）分支。
+     - 只要闭包内出现一个非常量格式串，`c` 的值集就是 open，退回现状。
+  2. **Formatter.parse 的正则回退 @141/@174**：常量格式串能被手写解析器吃完时不经过回退。
+  3. **HashMap.<init>(IF)@74**：所有调用点的 loadFactor 都是正常量，`loadFactor <= 0 || isNaN` 的分支死，`"Illegal load factor: " + float` 不可达。这需要参数常量值集按调用点合并。
+  4. **ClassFileDumper.<init>@52**：dumper 的属性键由调用点常量传入；`privilegedGetProperty(常量键)` 交给 18.7 的属性事实（键缺省即 null）；`Boolean.parseBoolean(null)` = false，`validateDumpDir` 不可达。
+  5. **PTI.validateConstructorArguments**（泛型签名构建期校验）：
+     - PTI 只由泛型签名解析器创建，签名串是 class 文件里的构建期常量。
+     - 分析器对闭包内所有带签名的类校验「参数化类型的实参个数 = 原始类的类型形参个数」。全部通过时，错误分支（`String.format` 的 `%d`）死。
+     - 有类不通过时只放开那一处。
+- 预期 HelloWorld 类数：
+  - 本步加上 P2、P4 一起关掉全部入口后，约 355 类（f1 = 317，加上 Formatter `%s` 下限约 40）。
+  - 单独落地：Δ ≈ 0（fullAddCount、getGenericInterfaces 入口仍开着）。
+  - 终态缺此步：OOB / PTI 入口重开，约 3000 类；Formatter 内部 317（+0）；HashMap 319（+2）；dumper 317（+0）。
+- 验收用例：
+  - HelloWorld；
+  - 真正使用 `%d` / `%f` 的用例（TestStringFormat、StringFormatTest、FormatOutput）（确认值集 open 时退回、不漏）；
+  - TestForNameInit；
+  - DeepCopy；
+  - 动态对照漏覆盖为 0。
+- 改动：
+  - `generator/crates/` 闭包分析器新增具体求值子模块（`engine/concrete/`，按 ~600 行拆分：解释器、堆、白名单）；
+  - 字段值集表（并入具体值）；
+  - 参数常量值集按调用点合并；
+  - 泛型签名校验（`input` crate 读签名，`engine` 校验）；
+  - 具体求值可调用的 native 白名单放在 `vm_intrinsics.toml`，不在代码里写类名。
+
+### 18.6 步骤 P4：单线程期 CAS 事实（CHM.fullAddCount）
+
+- 机制：
+  - `CHM.addCount` 只在 `counterCells != null` 或 `U.compareAndSetLong(BASECOUNT)` 失败时进入 `fullAddCount`；而 `counterCells` 只在 `fullAddCount` 内被赋值。
+  - 闭包内不可达任何线程启动点时（`Thread.start0` 等，由 `vm_intrinsics.toml` 登记为线程派生点），`Unsafe.compareAndSet*` 对未被其他线程触及的字段必然成功，CAS 的失败边死。
+  - 线程派生点一旦入闭包，就整体重跑（同 §14.6 的 touch 钩子）。x1 实测 `Thread.start` 经 `CleanerImpl.start` 可达，所以这条事实依赖闭包，必须带重跑。
+- 预期 HelloWorld 类数：
+  - 终态缺此步：327（+10） 类；
+  - 单独落地：Δ ≈ 0。
+  - 多线程用例不受影响：派生点可达时事实不成立。
+- 验收用例：HelloWorld；起线程的用例（ThreadTest、TestThreadJoin、TestVirtualThread），确认事实撤销后闭包与现状相同；动态对照漏覆盖为 0。
+- 改动：
+  - `vm_intrinsics.toml`（新 `[facts.single_thread]`：线程派生点、CAS 族）；
+  - 闭包分析器 `engine/` 的 CAS 折叠与 touch 重跑钩子（`classes.rs` touch）。
+
+### 18.7 步骤 P5：VM 启动态事实走 TOML 清单注入
+
+- 机制：把 VM 启动形态里确定的状态写进清单，由分析器读取并折叠。
+  1. **saved properties 读取器**：`VM.saveProperties(Map)` 的参数就是初始属性表。`props.get(常量键)` 按 `[facts.system_properties]` 折叠：原生二进制没有 `-D`，键不在 `values` / `dynamic` 中即为 null。
+     - 新增 `map_readers` 条目，声明哪些方法的哪个 Map 形参承载初始属性表。
+     - 效果：@71 `Long.parseLong` 不可达（`sun.nio.MaxDirectMemorySize` 缺省）。
+  2. **ClassFileDumper 开关**：`MethodHandles$Lookup.<clinit>` 以常量键 `jdk.invoke.MethodHandle.dumpClassFiles` 构造 dumper，该键缺省即 null。与 18.5 第 4 项配合。
+  3. **服务目录**：`seeds.toml [services]` 已有，本步不变。
+  4. **时区、locale**：`user.timezone`、`user.language`、`user.country` 在 `dynamic` 中，取自宿主环境，运行期才知道，**不能**健全地折叠成常量。
+     - 只作为构建期**声明**的 opt-in 事实（§13.5）：例如 `rava build --locale en-US --timezone UTC` 写进清单，生成的二进制在启动时也固定这些值，语义自洽。
+     - 未声明时保持现状。
+- 预期 HelloWorld 类数：
+  - saveProperties 终态缺此步 317（+0）；
+  - dumper 见 18.5；
+  - 时区 / locale 在 HelloWorld 的 f1 形态中不出现，Δ = 0。它们的收益在真正用到 `%d`、Calendar 的用例上（§16 第 6、7 条链）。
+- 验收用例：HelloWorld；TestAnnoValues；TestDateTimeFormat（未声明时与现状一致）。
+- 改动：`runtime/java_runtime/vm_intrinsics.toml`（`[facts.system_properties] map_readers`；opt-in 的 locale / timezone 声明段）；闭包分析器读清单的模块（`input` 的清单解析、`engine` 的属性折叠）；`driver` 的 build 选项。
+
+### 18.8 步骤 P6：ServiceLoader 已知服务类型
+
+- 机制：
+  - `ServiceLoader.load(ldc C)` 或 `load(C, loader)` 的服务 Class 是常量时，只选目录里 C 的 provider（已实现）。
+  - 本步把「常量」扩到 18.5 求值器能求出的 Class，以及 18.4 带上界 A 的 open 镜像（只选 A 的子类型服务）。
+  - 未知且无上界时，保持 §14.6 的健全回退。
+- 预期 HelloWorld 类数：f1 形态下 Δ = 0（ServiceLoader 不可达）。全闭包形态下与 18.4 合计 −19 起。真正的收益在用到 ResourceBundle、Charset.forName 的用例上。
+- 验收用例：TestFormatLocale、TestLocaleConstants；Digester；动态对照漏覆盖为 0。
+- 改动：`engine/services.rs`。清单不变。
+
+### 18.9 实施顺序与合入点
+
+1. P0、P1 互相独立，先做，各自单独合入。它们不改变 HelloWorld 类数，修的是 DeepCopy 和漏覆盖。
+2. 闸门步骤 P2、P3 分别开发，各自以单元测试和切除对照验收：「单独落地 Δ ≈ 0」是预期，不算失败。两者都完成后，三个闸门全部关掉，HelloWorld 从约 3092 降到约 365，届时合入并跑 9 例批次。
+3. P4（−10）、P5（HelloWorld −0～2，收益在其他用例）在闸门之后做，每步单独合入，HelloWorld 降到约 355。
+4. P6 在 P2、P3 之后做。
+5. 每步提交前记录 4 例闭包类数（HelloWorld、Digester、DeepCopy、TestForNameInit），写进本节表格。
