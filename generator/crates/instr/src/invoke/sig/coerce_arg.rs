@@ -7,7 +7,7 @@ use sim::exprs::{clone_plain, clone_ref, from_call, into_call, object_from, obje
 use sim::StackSim;
 use ty::{JvmType, RsType};
 
-use super::{downcast_target_valid, exact_ancestor_type, is_generated_concrete_class, is_prim, jvm};
+use super::{downcast_target_valid, exact_ancestor_type, is_generated_concrete_class, is_prim, jvm, reinstantiation_target_valid};
 use crate::build::{cast, ir_ty, str_leaf, text, ty_text};
 use crate::coerce;
 use crate::env::InstrEnv;
@@ -84,7 +84,7 @@ pub(super) fn coerce(env: &InstrEnv, sim: &StackSim, log: &mut InstrLog, e: Expr
         return Ok(cast(e, Type::I32, true));
     }
     let cast_leaf = |e: Expr| str_leaf(e);
-    if downcast_target_valid(env, sim, expected) && coerce::same_generic_family(env, actual, expected) {
+    if reinstantiation_target_valid(env, sim, expected) && coerce::same_generic_family(env, actual, expected) {
         return Ok(coerce::cast_node(cast_leaf(e), ir_ty(env, expected)?, "", false, true));
     }
     let (act_t, exp_t) = (jvm(ctx, actual), jvm(ctx, expected));

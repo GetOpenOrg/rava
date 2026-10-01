@@ -36,4 +36,4 @@ pub mod types;
 pub use env::{erase, erased_base, to_ir_type, type_text, SimEnv, TyNames, INFER_PARAM};
 pub use error::{SimError, SimResult};
 pub use names::safe_name;
-pub use state::{Local, SimConfig, SimState, SlotDecl, StackEntry, StackSim, ValueId};
+pub use state::{Local, SimConfig, SimState, SlotDecl, StackEntry, StackSim, SynthKind, ValueId};

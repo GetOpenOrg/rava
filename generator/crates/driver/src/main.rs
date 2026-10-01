@@ -1,15 +1,18 @@
 //! rava：Rust 生成器入口。当前子命令：
 //! - `closure`：精确闭包分析（XTA + 抽象解释 + 手写层 syn 扫描），输出 closure.json / 溯源 / 报告
-//! - `build`：javac → 闭包 → 发射 scratch →（缺省）cargo run
+//! - `build`：javac → 闭包 → 发射 scratch → cargo 编译 → 运行（`--stop-after` 截停）
 //! - `emit`：既有 closure.json → 发射 scratch
 //! - `image-dirs`：镜像独有 / VM 支持类目录（`build` / `emit` 未给 `--image` 时的缺省来源），每行一个
+//! - `jdk`：JDK 选择结果与来源 / 已安装列表（与 `build` 同一选择逻辑，见 [`resolve::jdk`]）
 
 mod api_roots;
 mod build_cmd;
 mod build_libs;
 mod build_opts;
+mod cargo;
 mod closure_cmd;
 mod closure_run;
+mod status;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,10 +24,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug] [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
-         rava image-dirs [--jdk N | --java-home P] [--runtime R]"
+        "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N] [--cut <类.方法:描述符[@偏移]>]… [--cut-file <文件>]… [--dump-edges <文件>]\n  \
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F]\n  \
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
+         rava image-dirs [--jdk N | --java-home P] [--runtime R]\n  \
+         rava jdk [--jdk N | --java-home P] [--runtime R] [--home-only] | rava jdk --list"
     );
     ExitCode::from(2)
 }
@@ -40,12 +44,39 @@ impl Args {
     }
 }
 
-pub fn java_home(args: &Args) -> Result<PathBuf, String> {
-    if let Some(h) = args.opt("--java-home") {
-        return Ok(PathBuf::from(h));
-    }
+/// `--jdk` / `--java-home` / 环境 / 仓库固定版本 → 选中的 JDK（[`resolve::jdk::choose`]）
+pub fn choose_jdk(args: &Args) -> Result<resolve::jdk::JdkChoice, String> {
     let major = args.opt("--jdk").map(|v| v.parse::<u32>().map_err(|_| format!("--jdk 需为数字：{v}"))).transpose()?;
-    resolve::jdk::find_java_home(major).ok_or_else(|| "找不到含 jmods/ 的 JDK".to_string())
+    let explicit = args.opt("--java-home").map(PathBuf::from);
+    if major.is_some() && explicit.is_some() {
+        return Err("--jdk 与 --java-home 互斥".into());
+    }
+    // 仓库根（读 .jdk-version）：runtime 目录上两级；找不到 runtime 时跳过固定版本这一级
+    let repo = closure_cmd::find_runtime_dir(args.opt("--runtime").map(PathBuf::from))
+        .ok()
+        .and_then(|rt| std::path::absolute(rt).ok()?.parent()?.parent().map(PathBuf::from));
+    resolve::jdk::choose(major, explicit.as_deref(), repo.as_deref())
+}
+
+pub fn java_home(args: &Args) -> Result<PathBuf, String> {
+    Ok(choose_jdk(args)?.home)
+}
+
+/// `rava jdk`：打印选中的 JDK 与来源（`--home-only` 只打印 home，供 shell 取 JAVA_HOME）；`--list` 列出已安装版本
+fn jdk_cmd(args: &Args) -> Result<(), String> {
+    if args.rest.iter().any(|a| a == "--list") {
+        for (m, h) in resolve::jdk::installed_jdks() {
+            println!("JDK {m}: {}", h.display());
+        }
+        return Ok(());
+    }
+    let c = choose_jdk(args)?;
+    if args.rest.iter().any(|a| a == "--home-only") {
+        println!("{}", c.home.display());
+    } else {
+        println!("{}", c.describe());
+    }
+    Ok(())
 }
 
 /// `rava image-dirs`：与 `build` 缺省派生同一实现（[`resolve::image`]）
@@ -67,6 +98,7 @@ fn main() -> ExitCode {
         "build" => build_cmd::run_build(&args),
         "emit" => build_cmd::run_emit(&args),
         "image-dirs" => image_dirs(&args),
+        "jdk" => jdk_cmd(&args),
         _ => return usage(),
     };
     match r {

@@ -175,6 +175,10 @@ impl<'a> Engine<'a> {
             self.missing.entry(cls.to_string()).or_insert(via);
             return None;
         };
+        if cut::edges_on() {
+            let from = self.via_node(&via);
+            cut::edge(&from, &format!("C:{cls}"));
+        }
         let domain = self.domain(cls);
         let fresh = !self.classes.contains_key(cls);
         let node = self.classes.entry(cls.to_string()).or_insert_with(|| ClassNode {
@@ -388,6 +392,10 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn instantiate(&mut self, cls: &str, via: Via) {
+        if cut::edges_on() {
+            let from = self.via_node(&via);
+            cut::edge_plain(&from, &format!("A:{cls}"));
+        }
         let id = self.id(cls);
         if !cls.starts_with('[') && self.touch(cls, Level::Alloc, via).is_none() {
             return;

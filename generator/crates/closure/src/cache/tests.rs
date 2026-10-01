@@ -65,6 +65,7 @@ fn key_of(c: &Case, user: &Path, jar: &Path, rt: &Path) -> String {
         roots: c.roots.clone(),
         seed_roots: c.seed_roots.clone(),
         locales: c.locales.clone(),
+        diag: Default::default(),
         cold_cut: c.cold_cut,
         flow_batch: c.flow_batch,
     };

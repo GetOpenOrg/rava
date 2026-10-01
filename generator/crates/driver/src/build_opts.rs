@@ -2,16 +2,52 @@
 //!
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
-//!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--no-run] [--strict] [--debug]
-//!   [--precheck-only] [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
+//!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
+//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS]
+//!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
+//!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
 //!   [--closure-cache DIR [--closure-cache-max-mb N]]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
-//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--precheck-only] [--raw-sites FILE]
+//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE]
 //!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
 //!
-//! 选项语义与 `scripts/main.py` 同名选项一致（docs/environment-variables.md）。
+//! 选项语义见 docs/environment-variables.md。
 
 use std::path::{Path, PathBuf};
+
+/// `--stop-after`：build 的最后一个阶段（缺省 run）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    Javac,
+    Closure,
+    Emit,
+    Compile,
+    #[default]
+    Run,
+}
+
+impl Stage {
+    pub fn parse(s: &str) -> Result<Stage, String> {
+        Ok(match s {
+            "javac" => Stage::Javac,
+            "closure" => Stage::Closure,
+            "emit" => Stage::Emit,
+            "compile" => Stage::Compile,
+            "run" => Stage::Run,
+            _ => return Err(format!("--stop-after 取值应为 javac|closure|emit|compile|run，收到：{s}")),
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Stage::Javac => "javac",
+            Stage::Closure => "closure",
+            Stage::Emit => "emit",
+            Stage::Compile => "compile",
+            Stage::Run => "run",
+        }
+    }
+}
 
 /// 子命令
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +110,10 @@ pub struct BuildOpts {
     pub images: Vec<PathBuf>,
     pub locales: Vec<String>,
     pub roots: Vec<String>,
+    /// 闭包诊断：反事实切除条目 / 条目文件 / 触发边转储文件
+    pub cuts: Vec<String>,
+    pub cut_files: Vec<String>,
+    pub dump_edges: Option<String>,
     /// 公开 API 包为调用链入口（包内 public 类的 public / protected 方法，[`crate::api_roots`]）
     pub api_packages: Vec<String>,
     /// `--api-package` 含子包
@@ -84,12 +124,15 @@ pub struct BuildOpts {
     /// 打印该类 / 方法入闭包的最短 provenance 链（`rava closure --why`）
     pub trace_class: Option<String>,
     pub clean: bool,
-    pub no_run: bool,
+    /// build 的最后一个阶段
+    pub stop_after: Stage,
+    /// cargo build 超时（秒；超时终止整个 cargo 进程组）
+    pub build_timeout: Option<u64>,
     pub strict: bool,
     /// 诊断明细：存根兜底逐条 / 闭包未解析调用
     pub debug: bool,
-    /// 只发射并输出完整预检明细，不输出审计、不编译运行
-    pub precheck_only: bool,
+    /// 输出完整预检明细（不截断），不输出审计与发射汇总；build 须配合 `--stop-after emit`
+    pub full_precheck: bool,
     /// Raw 逃生舱构造位点剖面追加写入的文件
     pub raw_sites: Option<PathBuf>,
     /// 输出 `[perf]` 分阶段耗时 / 峰值 RSS / 逐类逐方法 Top-N
@@ -105,7 +148,9 @@ pub struct BuildOpts {
     pub closure_cache_max_mb: Option<u64>,
 }
 
-const VALUED: [&str; 18] = [
+const VALUED: [&str; 23] = [
+    "--stop-after",
+    "--build-timeout",
     "--closure-cache",
     "--closure-cache-max-mb",
     "--jdk",
@@ -124,23 +169,30 @@ const VALUED: [&str; 18] = [
     "--raw-sites",
     "--api-package",
     "--emit-jobs",
+    "--cut",
+    "--cut-file",
+    "--dump-edges",
 ];
-const FLAGS: [&str; 9] =
-    ["--clean", "--no-run", "--strict", "--batch", "--debug", "--precheck-only", "--api-recursive", "--perf", "--closure-json"];
+const FLAGS: [&str; 8] =
+    ["--clean", "--strict", "--batch", "--debug", "--full-precheck", "--api-recursive", "--perf", "--closure-json"];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 13] = [
+const BUILD_ONLY: [&str; 17] = [
     "--closure-cache",
     "--closure-cache-max-mb",
     "--main",
     "--locale",
     "--root",
-    "--no-run",
+    "--stop-after",
+    "--build-timeout",
     "-o",
     "--lib",
     "--batch",
     "--trace-class",
     "--api-package",
     "--api-recursive",
+    "--cut",
+    "--cut-file",
+    "--dump-edges",
     "--closure-json",
 ];
 /// 只属于 emit 的选项
@@ -165,10 +217,9 @@ impl BuildOpts {
             if FLAGS.contains(&a.as_str()) {
                 match a.as_str() {
                     "--clean" => o.clean = true,
-                    "--no-run" => o.no_run = true,
                     "--batch" => o.batch = true,
                     "--debug" => o.debug = true,
-                    "--precheck-only" => o.precheck_only = true,
+                    "--full-precheck" => o.full_precheck = true,
                     "--api-recursive" => o.api_recursive = true,
                     "--perf" => o.perf = true,
                     "--closure-json" => o.closure_json = true,
@@ -179,6 +230,10 @@ impl BuildOpts {
             let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
             match a.as_str() {
                 "--jdk" => o.jdk = Some(v.parse().map_err(|_| format!("--jdk 需为数字：{v}"))?),
+                "--stop-after" => o.stop_after = Stage::parse(v)?,
+                "--build-timeout" => {
+                    o.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?)
+                }
                 "--emit-jobs" => o.emit_jobs = v.parse().map_err(|_| format!("--emit-jobs 需为数字：{v}"))?,
                 "--java-home" => o.java_home = Some(PathBuf::from(v)),
                 "--runtime" => o.runtime = Some(PathBuf::from(v)),
@@ -188,6 +243,9 @@ impl BuildOpts {
                 "--java" => o.java.push(PathBuf::from(v)),
                 "--image" => o.images.push(PathBuf::from(v)),
                 "--locale" => o.locales.push(v.clone()),
+                "--cut" => o.cuts.push(v.clone()),
+                "--cut-file" => o.cut_files.push(v.clone()),
+                "--dump-edges" => o.dump_edges = Some(v.clone()),
                 "--lib" => o.libs.push(LibSpec::parse(v)?),
                 "--trace-class" => o.trace_class = Some(v.clone()),
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
@@ -212,6 +270,12 @@ impl BuildOpts {
         }
         if self.api_recursive && self.api_packages.is_empty() {
             return Err("--api-recursive 需配合 --api-package".into());
+        }
+        if mode == Mode::Build && self.full_precheck && self.stop_after != Stage::Emit {
+            return Err("--full-precheck 需配合 --stop-after emit".into());
+        }
+        if self.build_timeout.is_some() && self.stop_after < Stage::Compile {
+            return Err("--build-timeout 只对 compile / run 阶段有效".into());
         }
         if !self.libs.is_empty() && self.batch {
             return Err("jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）".into());
@@ -293,20 +357,40 @@ mod tests {
     fn build_parses_flags_values_and_repeats() {
         let o = BuildOpts::parse(
             Mode::Build,
-            &args("A.java B.java --jdk 21 --image /i1 --image /i2 --locale fr --clean --no-run --main p.Main"),
+            &args("A.java B.java --jdk 21 --image /i1 --image /i2 --locale fr --clean --stop-after emit --main p.Main"),
         )
         .unwrap();
         assert_eq!(o.inputs, vec![PathBuf::from("A.java"), PathBuf::from("B.java")]);
         assert_eq!(o.jdk, Some(21));
         assert_eq!(o.images, vec![PathBuf::from("/i1"), PathBuf::from("/i2")]);
         assert_eq!(o.locales, vec!["fr".to_string()]);
-        assert!(o.clean && o.no_run && !o.strict);
+        assert!(o.clean && o.stop_after == Stage::Emit && !o.strict);
+        assert_eq!(BuildOpts::parse(Mode::Build, &args("A.java")).unwrap().stop_after, Stage::Run);
         assert_eq!(o.main.as_deref(), Some("p/Main"));
     }
 
     #[test]
+    fn build_parses_closure_diag() {
+        let o = BuildOpts::parse(
+            Mode::Build,
+            &args("A.java --cut a/B.m:(Ljava/lang/String;)V --cut a/B.n:()V@7 --cut-file /c.txt --dump-edges /e.tsv"),
+        )
+        .unwrap();
+        assert_eq!(o.cuts, vec!["a/B.m:(Ljava/lang/String;)V".to_string(), "a/B.n:()V@7".to_string()]);
+        assert_eq!(o.cut_files, vec!["/c.txt".to_string()]);
+        assert_eq!(o.dump_edges.as_deref(), Some("/e.tsv"));
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --cut a/B.m:()V")).is_err());
+    }
+
+    #[test]
     fn build_rejects_bad_input() {
-        assert!(BuildOpts::parse(Mode::Build, &args("--no-run")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("--clean")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("A.java --no-run")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("A.java --stop-after link")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("A.java --full-precheck")).is_err());
+        assert!(BuildOpts::parse(Mode::Build, &args("A.java --stop-after emit --build-timeout 60")).is_err());
+        let o = BuildOpts::parse(Mode::Build, &args("A.java --stop-after compile --build-timeout 60")).unwrap();
+        assert_eq!((o.stop_after, o.build_timeout), (Stage::Compile, Some(60)));
         assert!(BuildOpts::parse(Mode::Build, &args("A.class")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --jdk x")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --jdk")).is_err());
@@ -320,7 +404,7 @@ mod tests {
         let o = BuildOpts::parse(Mode::Emit, &args("/s/closure_input/closure.json --java A.java")).unwrap();
         assert_eq!(o.emit_classes_dir(), PathBuf::from("/s/closure_input/classes"));
         assert_eq!(o.java_files(Mode::Emit), &[PathBuf::from("A.java")]);
-        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --no-run")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --stop-after emit")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("a.json b.json")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("")).is_err());
     }
@@ -329,14 +413,14 @@ mod tests {
     fn lib_specs_and_diagnostic_flags() {
         let o = BuildOpts::parse(
             Mode::Build,
-            &args("A.java --lib h=/j/h.jar --lib ju=/j/ju.jar:seed=org.junit.Assert,,org.junit.Test --trace-class java/net/X --debug --precheck-only --raw-sites /tmp/r.txt"),
+            &args("A.java --lib h=/j/h.jar --lib ju=/j/ju.jar:seed=org.junit.Assert,,org.junit.Test --trace-class java/net/X --debug --stop-after emit --full-precheck --raw-sites /tmp/r.txt"),
         )
         .unwrap();
         assert_eq!(o.libs.len(), 2);
         assert_eq!(o.libs[0], LibSpec { name: "h".into(), jar: PathBuf::from("/j/h.jar"), seeds: None });
         assert_eq!(o.libs[1].seeds, Some(vec!["org/junit/Assert".to_string(), "org/junit/Test".to_string()]));
         assert_eq!(o.trace_class.as_deref(), Some("java/net/X"));
-        assert!(o.debug && o.precheck_only && !o.batch);
+        assert!(o.debug && o.full_precheck && !o.batch);
         assert_eq!(o.raw_sites, Some(PathBuf::from("/tmp/r.txt")));
         for bad in [
             "A.java --lib h",
@@ -351,7 +435,7 @@ mod tests {
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --batch")).unwrap().batch);
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --lib h=/a.jar")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --trace-class X")).is_err());
-        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --debug --precheck-only")).is_ok());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --debug --full-precheck")).is_ok());
     }
 
     #[test]
