@@ -33,3 +33,28 @@
   `opaque.rs` 写入 `java_class_opaque!`（宏解析本就忽略未知外层属性）；`entry.rs` 钩子跳过不透明类（用户 / JDK 两侧）。
 - 验证：TestClassNaming / TestClassLiteral / HelloWorld 单例与期望一致；`cargo test --release -- --test-threads=1` 通过。
   TestAnnoValues 编译错误随之消失，运行期另有根因（见 4）。
+
+## 4. TestAnnoValues —— 已修
+
+- 现象：`AnnotationFormatError: Invalid default: public abstract TestAnnoValues$Color TestAnnoValues$Rich.color()`。
+- 根因：注解种子收集（`closure/src/seeds/annotation.rs`）把用户类排除在枚举 / Class 元素类型之外——沿用「用户类全部入链」
+  的旧假设；分析器改为按可达入链后，只在注解属性体里出现的用户枚举 `Color` 停在 L1（不透明，无 `<clinit>`），
+  AnnotationParser 取不到枚举常量。另外收集只扫挂载点上的注解，不扫注解类型的 `AnnotationDefault`。
+- 修法：枚举 / Class 元素类型不再排除用户类；注解类型方法的 AnnotationDefault 值一并收集（含嵌套注解）。
+- 验证：TestAnnoValues 单例通过；HelloWorld / TestAnnoValues 闭包集合只增不减。
+
+## 5. TestPropertiesDefaults / TestSystemPropsSpec —— 已修（拼接 null）
+
+- 现象：`"... absent=" + System.getProperty("no.such.prop")` 处 NPE。
+- 根因：分析器把表外键折叠为 null，拼接实参静态类型不再是 String，走引用实参分支，生成 `Object::toString()`；
+  f7977d04 起手写 Object.toString 对 null 接收者按 invokevirtual 隐式判空抛 NPE，而拼接语义是 String.valueOf（null → "null"）。
+  非 String 静态类型的 null 拼接实参（如 `"x" + (Object) null`）同样受影响。
+- 修法（`instr/src/sim/dynamic/concat.rs`）：引用实参按 String.valueOf 语义显式判空，null 给 "null"，否则 toString。
+- 验证：两例 `--closure-json` 单例与期望一致（e2e 跑批带 --closure-json）。
+
+## 6. 遗留（未修，已报告）：java_meta 系统属性 / 模块服务表依赖可选的 closure.json
+
+- N2（b5291a03）起 closure.json 只在 `--closure-json` 时落盘、否则删除；C3 第 3 项（ea82aedd）的 java_meta 构建脚本从
+  `closure_input/closure.json` 读系统属性表与模块服务表。缺省 `main.py` 不带该选项 → 表为空：
+  `java.vm.specification.version` 等键在运行期为 null（TestSystemPropsSpec 缺省单跑 NPE）。e2e 跑批带 --closure-json，不受影响。
+- 终态：两张表进 ClosureFacts（from_closure / from_json 同源），由发射层恒写入 scratch，构建脚本不再读调试产物。
