@@ -107,9 +107,27 @@ fn recipe_parts(recipe: &Recipe, args: Vec<Expr>) -> Option<Vec<ConcatPart>> {
     Some(parts)
 }
 
-/// `+` 右操作数是否无需括号（标识符 / 路径 / 调用链等无空白的原子形态）
+/// `+` 右操作数是否无需括号（标识符 / 路径 / 调用链等无空白的原子形态，或整体已被一对括号包住）
 fn is_atomic(s: &str) -> bool {
-    !s.is_empty() && !s.contains(char::is_whitespace) && !s.contains(['+', '*', '/', '%', '<', '>', '=', '|', '^', '{'])
+    if !s.is_empty() && !s.contains(char::is_whitespace) && !s.contains(['+', '*', '/', '%', '<', '>', '=', '|', '^', '{']) {
+        return true;
+    }
+    // 首个 `(` 与末尾 `)` 配对（深度在末尾之前不归零）
+    let Some(inner) = s.strip_prefix('(').and_then(|r| r.strip_suffix(')')) else { return false };
+    let mut depth = 1i32;
+    for c in inner.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 fn paren(s: String) -> String {
@@ -253,5 +271,7 @@ mod tests {
         assert_eq!(prim_operand("c".into(), "i32", "u16"), "(c as u16)");
         assert_eq!(prim_operand("a + b".into(), "i64", "i64"), "(a + b)");
         assert_eq!(prim_operand("self.n".into(), "i16", "i16"), "self.n");
+        assert_eq!(paren("(a == b)".into()), "(a == b)");
+        assert_eq!(paren("(a) + (b)".into()), "((a) + (b))");
     }
 }

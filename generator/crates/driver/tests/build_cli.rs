@@ -84,7 +84,7 @@ fn record_and_switch_bootstraps_translate() {
     // `System.out` 的 getstatic 先于拼接实参求值（JVM 栈序），物化在 toString 之前
     assert!(at("= System::out()?;") < vp, "System.out 读取先于实参 toString");
     let name = |i: usize| lines[i].trim_start().trim_start_matches("let ").split(':').next().unwrap().to_string();
-    assert!(main_rs.contains(&format!("format!(\"{{}} / {{}}\", {}, {})", name(vp), name(vq))), "拼接模板");
+    assert!(main_rs.contains(&format!("(String::of(\"\") + &{} + \" / \" + &{})", name(vp), name(vq))), "拼接模板");
     std::fs::remove_dir_all(&out).ok();
 }
 
