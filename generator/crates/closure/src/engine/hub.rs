@@ -47,6 +47,8 @@ impl<'a> Engine<'a> {
             lambdas,
             special,
             links: BTreeMap::new(),
+            link_seq: 0,
+            edged: HashSet::default(),
         });
         self.hub_ids.insert(key, h);
         if let Some(o) = open {
@@ -104,7 +106,9 @@ impl<'a> Engine<'a> {
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);
         let hub = &mut self.hubs[h as usize];
-        hub.links.insert((m, off), (a.clone(), res, cv));
+        let id = hub.link_seq;
+        hub.link_seq += 1;
+        hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
         let replay = self.methods[m].kind == Kind::Bytecode;
         for r in lambdas {
@@ -119,6 +123,7 @@ impl<'a> Engine<'a> {
             }
             let recv = TypeSet { classes: rs.into_iter().collect(), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+            self.hubs[h as usize].edged.insert((id, t));
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
         self.hub_expand(h);
@@ -220,12 +225,12 @@ impl<'a> Engine<'a> {
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             self.hubs[h as usize].lambdas.push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links(self) {
+            for ((m, off), l) in links(self) {
                 if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                     continue;
                 }
-                self.call_vals = cv;
-                self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
+                self.call_vals = l.cv.clone();
+                self.dispatch_one(m, off, r, &site, &l.a, ret, l.res, NOCTX);
             }
             self.call_vals = saved;
             return;
@@ -252,9 +257,15 @@ impl<'a> Engine<'a> {
         if !self.hub_plain(t) {
             self.hubs[h as usize].special.entry(t).or_default().push(r);
             let saved = self.call_vals.take();
-            for ((m, off), (a, res, cv)) in links(self) {
-                self.call_vals = cv;
-                self.edge(m, off, t, Recv::Exact(r), &a, ret, res);
+            for ((m, off), l) in links(self) {
+                // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
+                self.call_vals = l.cv.clone();
+                if self.hubs[h as usize].edged.contains(&(l.id, t)) {
+                    self.edge_more(m, off, t, r, &l.a, ret, l.res);
+                    continue;
+                }
+                self.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res);
+                self.hubs[h as usize].edged.insert((l.id, t));
             }
             self.call_vals = saved;
             return;

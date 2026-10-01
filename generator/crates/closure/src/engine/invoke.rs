@@ -331,25 +331,46 @@ impl<'a> Engine<'a> {
         if let Some(cv) = self.call_vals.clone() {
             self.pstr_site(m, &cv, |j| pstrs::PSlot::M(t, base + j));
         }
-        let mut recv_fs: Option<Vec<Feed>> = None;
-        if !is_static {
-            match (recv, ptypes.first().copied().flatten()) {
-                (Recv::Exact(r), _) => {
-                    self.add_to(Node::P(t, 0), &TypeSet::exact(r));
-                    recv_fs = Some(vec![Feed::S(TypeSet::exact(r))]);
-                }
-                (Recv::Feeds(fs), Some(pt)) => {
-                    self.feed(&fs, Node::P(t, 0), pt);
-                    recv_fs = Some(fs);
-                }
-                _ => {}
-            }
-        }
+        let recv_fs = self.edge_this(t, recv);
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);
             }
         }
+        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+    }
+
+    /// 已对 (m, off, t) 以同一实参 a（同一实参值）完整接边后，再派发新接收者 r：
+    /// 调用关系、形参常量、字符串常量与实参边都已接上且不随接收者变化，只接接收者及依赖接收者的结果部分
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn edge_more(&mut self, m: usize, off: u32, t: usize, r: u32, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+        let recv_fs = self.edge_this(t, Recv::Exact(r));
+        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+    }
+
+    /// 接收者流入被调方 this，返回本调用点的接收者来源
+    fn edge_this(&mut self, t: usize, recv: Recv) -> Option<Vec<Feed>> {
+        if self.methods[t].is_static {
+            return None;
+        }
+        match (recv, self.methods[t].ptypes.first().copied().flatten()) {
+            (Recv::Exact(r), _) => {
+                self.add_to(Node::P(t, 0), &TypeSet::exact(r));
+                Some(vec![Feed::S(TypeSet::exact(r))])
+            }
+            (Recv::Feeds(fs), Some(pt)) => {
+                self.feed(&fs, Node::P(t, 0), pt);
+                Some(fs)
+            }
+            _ => None,
+        }
+    }
+
+    /// 手写调用点与按调用点建模的返回值
+    #[allow(clippy::too_many_arguments)]
+    fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+        let is_static = self.methods[t].is_static;
+        let base = usize::from(!is_static);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
         }
