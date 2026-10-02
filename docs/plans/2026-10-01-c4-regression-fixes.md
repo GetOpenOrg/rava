@@ -122,6 +122,12 @@ union：chain 0、value 55、camel 63、lower 849。camel 比 DeepCopy 多 6 条
 或实参写明的 `<X<E> as Tr>::f(…)` / `X::<E>::f(…)` 的 `E`）。调用点访问闭包实参时代入，注解类型优先。
 TestAnnoReflect 实测该条消失（camel 49，余 `← Vec`），21 例 union 的 camel 应为 62 条、全部归组。
 回归用例：e2e `47_annotations/TestAnnoNestedArray`（嵌套注解数组 toString，expected 取 JDK 21 输出）。
+c6audit-4173cebd 复跑：chain 0、value 50、camel 62，与上一轮相比只少了这一条，其余全部归入上述 5 组。
+
+TestAnnoNestedArray 运行暴露 null_recv 健全性缺口：`first.annotationType().getSimpleName()` 的接收者被判恒 null。
+`first` 是代理注解 `inners.value()[0]`，代理接口调用经 open 枢纽派发不到目标，结果类型集始终为空，读取点因此
+**不驻留流图**；未建模派生（`engine/unmodeled.rs`）只给驻留节点打标，空读取点的派生标记无处存放，下游以它为接收者
+的调用就按空集判了恒 null。修法：不驻留的读取点取虚序号（流图节点数之后、无出边）参与派生，`recv_unmodeled` 按虚序号查标记。
 
 ## 六、集成头 52bf5311 的日期 / 区域与 IO / 反射回归（C6 步骤 2 引起）
 

@@ -11,9 +11,11 @@
 use super::*;
 use crate::absint::Src;
 
-/// 未建模来源可达标记（按流图节点序号，经代表归并）
+/// 未建模来源可达标记（按流图节点序号，经代表归并）。类型集始终为空的读取点不驻留流图：
+/// 它们按虚序号（流图节点数之后）参与派生，无出边
 pub(super) struct Unmodeled {
     marked: Vec<bool>,
+    absent: HashMap<Node, u32>,
 }
 
 impl Engine<'_> {
@@ -41,31 +43,41 @@ impl Engine<'_> {
         // 未知值按声明类型……），其上游来源可能是未建模节点而流图里没有这条边——同样视为未建模来源
         let injected = self.open_inj.keys().filter_map(|x| g.lookup(x));
         let mut marked = vec![false; n];
-        reach(&g.edges, |i| g.rep(i), &mut marked, roots.chain(injected));
-        // 派生读取点：(读取点代表, 基址 / 接收者值来源代表；None = 值未知)
-        let loads: Vec<(u32, Option<Vec<u32>>)> = self
+        let rep = |i: u32| if (i as usize) < n { g.rep(i) } else { i };
+        reach(&g.edges, rep, &mut marked, roots.chain(injected));
+        // 派生读取点：(读取点代表, 基址 / 接收者值来源代表；None = 值未知)。类型集始终为空的读取点
+        // （值流缺失时恰是这种情形：未建模的基址 / 接收者派发不到目标、读不出元素）不在流图里，
+        // 取虚序号——否则它的派生标记无处存放，下游以它为接收者的调用会被误判恒 null
+        let reads: Vec<(Node, Option<Vec<Node>>)> = self
             .methods
             .values()
             .enumerate()
             .filter_map(|(i, mn)| mn.analysis.as_ref().map(|a| (i, a)))
-            .flat_map(|(i, a)| {
-                a.events.iter().filter_map(move |(pc, e)| {
-                    let base = derived_base(e)?;
-                    let at = g.lookup(&Node::S(i, *pc)).map(|x| g.rep(x))?;
-                    let src = recv_sources(i, base).map(|ns| ns.iter().filter_map(|n| g.lookup(n).map(|x| g.rep(x))).collect());
-                    Some((at, src))
-                })
-            })
+            .flat_map(|(i, a)| a.events.iter().filter_map(move |(pc, e)| Some((Node::S(i, *pc), recv_sources(i, derived_base(e)?)))))
             .collect();
-        derive_sites(&g.edges, |i| g.rep(i), &mut marked, &loads);
-        Unmodeled { marked }
+        let mut absent: HashMap<Node, u32> = HashMap::default();
+        for (at, _) in &reads {
+            if g.lookup(at).is_none() {
+                let k = (n + absent.len()) as u32;
+                absent.entry(*at).or_insert(k);
+            }
+        }
+        marked.resize(n + absent.len(), false);
+        let idx = |x: &Node| g.lookup(x).map(|i| g.rep(i)).or_else(|| absent.get(x).copied());
+        let loads: Vec<(u32, Option<Vec<u32>>)> =
+            reads.iter().filter_map(|(at, src)| Some((idx(at)?, src.as_ref().map(|ns| ns.iter().filter_map(&idx).collect())))).collect();
+        derive_sites(&g.edges, rep, &mut marked, &loads);
+        Unmodeled { marked, absent }
     }
 
     /// 方法 m 内抽象值 v 作为接收者时，值流是否可能缺失（true = 不得据空集判恒 null）
     pub(super) fn recv_unmodeled(&self, m: usize, v: &V, um: &Unmodeled) -> bool {
         match recv_sources(m, v) {
             None => true,
-            Some(ns) => ns.iter().any(|n| self.graph.lookup(n).is_some_and(|i| um.marked[self.graph.rep(i) as usize])),
+            Some(ns) => ns.iter().any(|n| {
+                let i = self.graph.lookup(n).map(|i| self.graph.rep(i)).or_else(|| um.absent.get(n).copied());
+                i.is_some_and(|i| um.marked[i as usize])
+            }),
         }
     }
 }
@@ -104,7 +116,8 @@ fn reach(edges: &[Vec<(u32, u32)>], rep: impl Fn(u32) -> u32, marked: &mut [bool
         }
     }
     while let Some(r) = work.pop() {
-        for &(d, _) in &edges[r as usize] {
+        // 虚序号（不驻留流图的读取点）无出边
+        for &(d, _) in edges.get(r as usize).into_iter().flatten() {
             let d = rep(d);
             if !std::mem::replace(&mut marked[d as usize], true) {
                 work.push(d);
@@ -170,6 +183,18 @@ mod tests {
         let mut m = vec![false; 7];
         derive_sites(&edges, rep, &mut m, &[(5, None)]);
         assert!(m[5] && !m[6]);
+    }
+
+    /// 不驻留流图的读取点（虚序号，无出边）：基址值未知或已标记时并入标记，并作为下游读取点的来源继续派生
+    #[test]
+    fn absent_read_points_derive() {
+        // 流图 0 → 1；虚序号 2 = 以 1 为接收者的调用结果（不在流图），3 = 以 2 为接收者的调用结果，4 = 值未知的接收者
+        let edges = vec![vec![(1, 0)], vec![]];
+        let rep = |i: u32| i;
+        let mut m = vec![false; 5];
+        reach(&edges, rep, &mut m, [0].into_iter());
+        derive_sites(&edges, rep, &mut m, &[(3, Some(vec![2])), (2, Some(vec![1])), (4, None)]);
+        assert_eq!(m, vec![true; 5]);
     }
 
     /// 派生读取事件：数组读取、实例字段读取、实例调用取基址 / 接收者；静态读取 / 静态调用 / 字段写入不派生
