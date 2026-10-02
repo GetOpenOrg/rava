@@ -4,7 +4,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::Ident;
 
-use super::super::util::{is_basic, type_is_int, type_is_bool, type_is_long};
+use super::super::util::{is_basic, type_is_int, type_is_bool, type_is_long, type_is_word};
 use super::context::GenContext;
 
 /// Inner struct（平铺字段：superclass_fields + own fields，非泛型——A-1 存储层擦除）
@@ -242,6 +242,34 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             }
         }
     };
+    // Unsafe int 字视图（int 与子字字段，`__unsafe_word`）：字段名 → 单元的字视图读-改-写
+    // （`__PrimCell::__word_update` 按单元类型实例化）。
+    let inner_word_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
+        .chain(ctx.fields.iter())
+        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_word(ty))
+        .map(|(name, _)| {
+            let field_str = name.to_string();
+            quote! {
+                #field_str => ::std::option::Option::Some(self.#name.__word_update(op)),
+            }
+        })
+        .collect();
+    let inner_word_query: TokenStream2 = if inner_word_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __unsafe_word(
+                &self,
+                field: &str,
+                op: &mut dyn FnMut(i32) -> ::std::option::Option<i32>,
+            ) -> ::std::option::Option<i32> {
+                match field {
+                    #(#inner_word_arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
     let inner_long_cell_query: TokenStream2 = if inner_long_cell_arms.is_empty() {
         quote! {}
     } else {
@@ -373,6 +401,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #inner_long_cell_query
                 #inner_int_cell_query
                 #inner_bool_cell_query
+                #inner_word_query
                 #inner_ref_access_query
                 #to_string_inner_bridge
                 #inner_shallow_copy

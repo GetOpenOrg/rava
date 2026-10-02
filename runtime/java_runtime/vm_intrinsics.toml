@@ -263,6 +263,8 @@ serializable_markers = ["java/io/Serializable"]
 #   mirror_of_receiver  返回接收者的类镜像（JLS §4.3.2 getClass）
 #   superclass_of_receiver  返回接收者镜像所指类的直接超类镜像（接口 / 根类为 null，数组为根类；所指未知仍未知），
 #                       逐调用点——getInheritableMethod 的上溯、Enum.getDeclaringClass 由此得到确定值集
+#   primitive_class     返回基本类型（含 void）的类镜像（JLS §15.8.2 `int.class`、`Integer.TYPE`）：所指不是字节码类，
+#                       类初始化无对象（JVMS §5.5）、无成员可枚举；与类镜像区分，不使 class_init 记为所指未知
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -277,6 +279,9 @@ mirror_of_receiver = [
 ]
 superclass_of_receiver = [
     "java/lang/Class.getSuperclass:()Ljava/lang/Class;",
+]
+primitive_class = [
+    "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",

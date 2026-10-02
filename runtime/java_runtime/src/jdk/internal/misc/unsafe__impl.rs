@@ -3,6 +3,7 @@ use super::unsafe_::Unsafe;
 use crate::java::lang::Class;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
+use crate::reflect_dispatch::FIELD_SLOT;
 
 // 内部边界类 jdk.internal.misc.Unsafe：按调用链按需实现，其余保持 panic 存根。
 
@@ -57,7 +58,7 @@ crate::__process_static! {
     /// `_instance_long_cell`（实例字段 long 原子）与 `getAndAddInt`（计数器键）。
     static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
         RefCell::new(HashMap::new());
-    static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(1) };
+    static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(FIELD_SLOT) };
     static FIELD_OFFSET_BY_ID: RefCell<HashMap<i64, std::string::String>> = RefCell::new(HashMap::new());
 }
 
@@ -73,14 +74,17 @@ crate::__process_static! {
 /// offset) 寻址）。id 具体值不进可观察输出。
 fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::string::String) -> i64 {
     FIELD_OFFSETS.with(|offsets| {
-        let next = FIELD_OFFSET_NEXT.with(|n| {
+        let mut offsets = offsets.borrow_mut();
+        let key = (clazz_name, Clone::clone(&field_name));
+        if let Some(&id) = offsets.get(&key) {
+            return id;
+        }
+        let id = FIELD_OFFSET_NEXT.with(|n| {
             let v = *n.borrow();
-            *n.borrow_mut() += 1;
+            *n.borrow_mut() += FIELD_SLOT;
             v
         });
-        let id = *offsets.borrow_mut()
-            .entry((clazz_name, Clone::clone(&field_name)))
-            .or_insert(next);
+        offsets.insert(key, id);
         FIELD_OFFSET_BY_ID.with(|by_id| {
             by_id.borrow_mut().insert(id, field_name);
         });
@@ -110,10 +114,69 @@ fn _instance_long_cell(o: &Object, offset: i64) -> Option<Rc<crate::sync_model::
     o.0.__unsafe_long_cell(&field)
 }
 
-/// 偏移 id → 实例字段的共享 int 存储单元（`_instance_long_cell` 的 int 镜像）。
-fn _instance_int_cell(o: &Object, offset: i64) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
+/// 偏移 id → 实例字段的 int 字视图读-改-写（int 与子字字段，经 ObjectVTable 的
+/// `__unsafe_word` 协议）：`op(旧字)` 给新字则原子写入，返回旧字；op 给 None 即只读。
+/// 未登记的 id 或运行时类无该平铺字段 → None。
+fn _instance_word(o: &Object, offset: i64, op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> {
     let field = _offset_field_name(offset)?;
-    o.0.__unsafe_int_cell(&field)
+    o.0.__unsafe_word(&field, op)
+}
+
+/// 装箱字段值 → int 字（静态字段经字段闭包读写的字视图形态，零扩展同 `__word_update`）。
+fn _boxed_word(v: &Object) -> Option<i32> {
+    if let Some(b) = v.0.as_any().downcast_ref::<bool>() {
+        return Some(*b as i32);
+    }
+    if let Some(b) = v.0.as_any().downcast_ref::<i8>() {
+        return Some(*b as u8 as i32);
+    }
+    if let Some(b) = v.0.as_any().downcast_ref::<i16>() {
+        return Some(*b as u16 as i32);
+    }
+    if let Some(b) = crate::reflect_dispatch::unbox_bool(v) {
+        return Some(b as i32);
+    }
+    crate::reflect_dispatch::unbox_i32(v)
+}
+
+/// int 字写回装箱字段：按当前值的装箱类型截断（字视图写入只改该字段自身的槽）。
+fn _word_boxed_like(cur: &Object, w: i32) -> Object {
+    let any = cur.0.as_any();
+    if any.downcast_ref::<bool>().is_some() || crate::reflect_dispatch::unbox_bool(cur).is_some() {
+        Object::from((w & 0xFF) != 0)
+    } else if any.downcast_ref::<i8>().is_some() {
+        Object::from(w as i8)
+    } else if any.downcast_ref::<i16>().is_some() {
+        Object::from(w as i16)
+    } else if any.downcast_ref::<u16>().is_some() {
+        Object::from(w as u16)
+    } else {
+        Object::from(w)
+    }
+}
+
+/// int 访问器的统一载体（实例字段走原子字视图；其余经字段闭包按装箱值读写，静态字段形态）：
+/// 返回旧字。字段闭包形态的读-改-写非原子——只承载读与无条件写（getInt / putInt）。
+fn _word_access(o: &Object, offset: i64, what: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> Result<i32> {
+    if !o.0.is_jvm_null() {
+        if let Some(old) = _instance_word(o, offset, op) {
+            return Ok(old);
+        }
+    }
+    let cur = _field_get(o, offset, what)?;
+    let old = _boxed_word(&cur).ok_or_else(|| _bad(what))?;
+    if let Some(w) = op(old) {
+        _field_put(o, offset, _word_boxed_like(&cur, w), what)?;
+    }
+    Ok(old)
+}
+
+/// int 原子读-改-写（CAS / getAndSet / getAndBitwise* 族）：只走实例字段字视图；
+/// 无共享单元 → 如实报缺口。
+fn _word_rmw(o: &Object, offset: i64, what: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> i32 {
+    _instance_word(o, offset, op).unwrap_or_else(|| {
+        panic!("stub: jdk/internal/misc/Unsafe.{} (实例字段 offset={} 无共享 int 字单元)", what, offset)
+    })
 }
 
 /// 偏移 id → 实例引用字段读（VarHandle 引用族消费）：字段名经登记表反查后走
@@ -249,13 +312,16 @@ impl Unsafe {
         crate::ensure_class_initialized(&format!("{}", c.__get_name()))
     }
 
-    /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议
-    /// 下「未初始化」只在首次主动使用前可观察——对查询方恒「已初始化」
-    /// （false）等价于把初始化时机推迟到真实首次使用（静态字段访问器入口自带
-    /// `__class_init` 触发）。
+    /// `shouldBeInitialized(Class)`：类尚未完成初始化（HotSpot `should_be_initialized`）。调用方据此决定是否
+    /// 立即初始化：VarHandles.makeFieldHandle 的静态字段分支在创建句柄时初始化声明类，DirectMethodHandle
+    /// 据此选带初始化屏障的形态。不能恒答「已初始化」——那会把创建句柄时的初始化推迟到首次访问，
+    /// `<clinit>` 的副作用顺序与 JVM 不同。只对登记了初始化钩子的类作答（与 `ensureClassInitialized` 同一张表）。
     #[jvm_boundary]
-    pub fn shouldBeInitialized(&self, _c: Class) -> Result<bool> {
-        Ok(false)
+    pub fn shouldBeInitialized(&self, c: Class) -> Result<bool> {
+        if crate::_is_jnull_ref(&c) {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        Ok(crate::class_needs_initialization(&format!("{}", c.__get_name())))
     }
 
     /// `allocateInstance(Class)`：分配实例、不运行构造器（MH `newInvokeSpecial` 的
@@ -305,7 +371,7 @@ impl Unsafe {
 
     /// 偏移 id → 实例 int 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
     pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<i32> {
-        Some(_instance_int_cell(o, offset)?.__fetch_update(f))
+        _instance_word(o, offset, &mut |c| Some(f(c)))
     }
 
     /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
@@ -476,10 +542,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return Ok(i32::from_ne_bytes(crate::native_memory::read_ne(&o, offset)?));
         }
-        if let Some(cell) = _instance_int_cell(&o, offset) {
-            return Ok(cell.get());
-        }
-        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "int")?).ok_or_else(|| _bad("int"))
+        _word_access(&o, offset, "Int", &mut |_| None)
     }
 
     /// `putInt(Object o, long offset, int x)`：实例字段 int 写（plain 形态）。
@@ -488,21 +551,14 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return crate::native_memory::write(&o, offset, &x.to_ne_bytes());
         }
-        if let Some(cell) = _instance_int_cell(&o, offset) {
-            cell.set(x);
-            return Ok(());
-        }
-        _field_put(&o, offset, Object::from(x), "Int")
+        _word_access(&o, offset, "Int", &mut |_| Some(x)).map(|_| ())
     }
 
     /// `compareAndSetInt(Object o, long offset, int expected, int x)`：实例字段
     /// int 的 CAS（`_instance_long_cell` 的 int 镜像路径）。
     #[jvm_boundary]
     pub fn compareAndSetInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<bool> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.compareAndSetInt:(Ljava/lang/Object;JII)Z (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.__cas(expected, x))
+        Ok(_word_rmw(&o, offset, "compareAndSetInt:(Ljava/lang/Object;JII)Z", &mut |c| (c == expected).then_some(x)) == expected)
     }
 
     /// `getAndBitwiseAndInt(Object o, long offset, int mask)`：实例字段 int 的
@@ -511,29 +567,20 @@ impl Unsafe {
     ///（CountDownLatch.countDown → releaseShared → signalNext）。
     #[jvm_boundary]
     pub fn getAndBitwiseAndInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseAndInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.__fetch_update(|old| old & mask))
+        Ok(_word_rmw(&o, offset, "getAndBitwiseAndInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old & mask)))
     }
 
     /// `getAndBitwiseOrInt(Object o, long offset, int mask)`：按位或的读-改-写，
     /// 返回旧值（AQS `Node.setStatus` 族的对偶面；同 getAndBitwiseAndInt 取舍）。
     #[jvm_boundary]
     pub fn getAndBitwiseOrInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getAndBitwiseOrInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.__fetch_update(|old| old | mask))
+        Ok(_word_rmw(&o, offset, "getAndBitwiseOrInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old | mask)))
     }
 
     /// `getAndSetInt(Object o, long offset, int x)`：原子交换，返回旧值。
     #[jvm_boundary]
     pub fn getAndSetInt(&self, o: Object, offset: i64, x: i32) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getAndSetInt:(Ljava/lang/Object;JI)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.__fetch_update(|old| x))
+        Ok(_word_rmw(&o, offset, "getAndSetInt:(Ljava/lang/Object;JI)I", &mut |_| Some(x)))
     }
 
     /// `putIntOpaque` / `putIntRelease`：访问序变体——原子单元 SeqCst 存取（#42）不弱于
@@ -576,20 +623,14 @@ impl Unsafe {
     ///（compareAndExchangeLong 的同族对偶）。native。
     #[jvm_boundary]
     pub fn compareAndExchangeInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.compareAndExchangeInt:(Ljava/lang/Object;JII)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.__fetch_update(|c| if c == expected { x } else { c }))
+        Ok(_word_rmw(&o, offset, "compareAndExchangeInt:(Ljava/lang/Object;JII)I", &mut |c| (c == expected).then_some(x)))
     }
 
     /// `getIntAcquire(o, offset)`：acquire 读——原子单元 SeqCst 读（#42）不弱于 volatile /
     /// plain 读同一存储单元（ForkJoinPool.WorkQueue 的 top/base 读）。
     #[jvm_boundary]
     pub fn getIntAcquire(&self, o: Object, offset: i64) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getIntAcquire:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.get())
+        _word_access(&o, offset, "Int", &mut |_| None)
     }
 
     /// `compareAndExchangeReference(o, offset, expected, x)`：引用见证值 CAS——
@@ -616,10 +657,7 @@ impl Unsafe {
     /// （CompletableFuture 公共池并行度 → USE_COMMON_POOL 判定链）。
     #[jvm_boundary]
     pub fn getIntOpaque(&self, o: Object, offset: i64) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getIntOpaque:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.get())
+        _word_access(&o, offset, "Int", &mut |_| None)
     }
 
     /// `putIntVolatile(Object o, long offset, int x)`：int volatile 写（单元与 plain 同一）。
@@ -827,8 +865,8 @@ impl Unsafe {
     #[jvm_boundary]
     pub fn getAndAddInt(&self, base: Object, offset: i64, delta: i32) -> Result<i32> {
         if !base.0.is_jvm_null() {
-            if let Some(cell) = _instance_int_cell(&base, offset) {
-                return Ok(cell.__fetch_update(|old| old.wrapping_add(delta)));
+            if let Some(old) = _instance_word(&base, offset, &mut |old| Some(old.wrapping_add(delta))) {
+                return Ok(old);
             }
         }
         use crate::sync_model::__RefSlot as RefCell;
@@ -872,9 +910,10 @@ impl Unsafe {
 // ── 按名字段协议承载的基本类型读写（N2 反序列化字段回填 / 序列化字段读取）──────────
 //
 // ObjectStreamClass.FieldReflector 以 (对象, objectFieldOffset) 读写全部基本类型字段。偏移经
-// 登记表反查 (声明类, 字段名)，走 codegen 字段闭包（reflect_dispatch::reflect_field，与
-// Field.get/set 同一协议）——覆盖 boolean / byte / short / char / float / double（int / long
-// 另有共享单元协议）。字段闭包缺席（非用户类）→ 如实报缺口。
+// 登记表反查 (声明类, 字段名)：boolean / byte / short / char 与 int 同走 int 字视图
+// （`_word_access`：实例字段经 `__unsafe_word` 共享单元，其余经字段闭包），float / double 走
+// codegen 字段闭包（reflect_dispatch::reflect_field，与 Field.get/set 同一协议）；long 另有共享
+// 单元协议。字段闭包缺席 → 如实报缺口。
 
 fn _field_get(o: &Object, offset: i64, what: &str) -> Result<Object> {
     // 静态字段 id（staticFieldBase + staticFieldOffset，MH 静态字段句柄 / VarHandle 静态形态）：
@@ -909,12 +948,12 @@ fn _bad(what: &str) -> crate::error::JvmError {
 impl Unsafe {
     #[jvm_boundary]
     pub fn getBoolean(&self, o: Object, offset: i64) -> Result<bool> {
-        crate::reflect_dispatch::unbox_bool(&_field_get(&o, offset, "Boolean")?).ok_or_else(|| _bad("Boolean"))
+        _word_access(&o, offset, "Boolean", &mut |_| None).map(|w| (w & 0xFF) != 0)
     }
 
     #[jvm_boundary]
     pub fn putBoolean(&self, o: Object, offset: i64, x: bool) -> Result<()> {
-        _field_put(&o, offset, Object::from(x), "Boolean")
+        _word_access(&o, offset, "Boolean", &mut |_| Some(x as i32)).map(|_| ())
     }
 
     #[jvm_boundary]
@@ -922,7 +961,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return Ok(i8::from_ne_bytes(crate::native_memory::read_ne(&o, offset)?));
         }
-        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "Byte")?).map(|v| v as i8).ok_or_else(|| _bad("Byte"))
+        _word_access(&o, offset, "Byte", &mut |_| None).map(|w| w as i8)
     }
 
     #[jvm_boundary]
@@ -930,7 +969,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return crate::native_memory::write(&o, offset, &x.to_ne_bytes());
         }
-        _field_put(&o, offset, Object::from(x), "Byte")
+        _word_access(&o, offset, "Byte", &mut |_| Some(x as u8 as i32)).map(|_| ())
     }
 
     #[jvm_boundary]
@@ -938,7 +977,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return Ok(i16::from_ne_bytes(crate::native_memory::read_ne(&o, offset)?));
         }
-        crate::reflect_dispatch::unbox_i32(&_field_get(&o, offset, "Short")?).map(|v| v as i16).ok_or_else(|| _bad("Short"))
+        _word_access(&o, offset, "Short", &mut |_| None).map(|w| w as i16)
     }
 
     #[jvm_boundary]
@@ -946,7 +985,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return crate::native_memory::write(&o, offset, &x.to_ne_bytes());
         }
-        _field_put(&o, offset, Object::from(x), "Short")
+        _word_access(&o, offset, "Short", &mut |_| Some(x as u16 as i32)).map(|_| ())
     }
 
     #[jvm_boundary]
@@ -954,7 +993,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return Ok(u16::from_ne_bytes(crate::native_memory::read_ne(&o, offset)?));
         }
-        crate::reflect_dispatch::unbox_char(&_field_get(&o, offset, "Char")?).ok_or_else(|| _bad("Char"))
+        _word_access(&o, offset, "Char", &mut |_| None).map(|w| w as u16)
     }
 
     #[jvm_boundary]
@@ -962,7 +1001,7 @@ impl Unsafe {
         if crate::native_memory::is_raw(&o) {
             return crate::native_memory::write(&o, offset, &x.to_ne_bytes());
         }
-        _field_put(&o, offset, Object::from(x), "Char")
+        _word_access(&o, offset, "Char", &mut |_| Some(x as i32)).map(|_| ())
     }
 
     #[jvm_boundary]

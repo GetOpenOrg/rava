@@ -1,0 +1,17 @@
+declaring ByField type int
+payload type Payload
+ByField init
+count = 7
+payload = null
+handle ready
+ByHandle init
+total = 42
+payload via handle = null
+ByVarHandle init
+varhandle ready
+ratio = 1.5
+untouched type int primitive true
+int.class == Integer.TYPE: true
+long.class == total type: true
+void.class: void true
+double.class super: null

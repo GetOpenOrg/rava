@@ -61,6 +61,19 @@ pub(crate) fn type_is_int(ty: &Type) -> bool {
     false
 }
 
+/// 字段类型是否为 Unsafe int 字视图可承载的类型（Java `int` / `boolean` / `byte` / `short` /
+/// `char` 的非擦除形态 `i32` / `bool` / `i8` / `i16` / `u16`）——`__unsafe_word` 的臂生成条件。
+pub(crate) fn type_is_word(ty: &Type) -> bool {
+    if let Type::Path(tp) = ty {
+        if tp.qself.is_none() && tp.path.segments.len() == 1 {
+            let seg = &tp.path.segments[0];
+            return seg.arguments.is_empty()
+                && ["i32", "bool", "i8", "i16", "u16"].iter().any(|n| seg.ident == n);
+        }
+    }
+    false
+}
+
 pub(crate) const META_ATTRS: &[&str] = &[
     "descriptor",
     "generic_signature",

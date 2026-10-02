@@ -55,7 +55,7 @@ mod tests {
         let file = syn::parse_file(src).expect("测试源码可解析");
         let mut raw = super::super::scan::FileFns::default();
         scan_file(&file, &HashMap::new(), &mut raw);
-        close_transitive(&mut raw.fns, &raw.calls);
+        close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
         let hw = ClassHw { fns: raw.fns, ..Default::default() };
         let members = ["dispatch", "<init>"];
         let hooks = hw.vm_hooks(|f| members.iter().any(|m| member_matches(f, m)));
