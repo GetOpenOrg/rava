@@ -458,9 +458,6 @@ impl<'a> Engine<'a> {
                     self.feed(fs, res, rt);
                 }
             } else if let RetModel::Read(src) = model {
-                if delegated {
-                    return;
-                }
                 let i = src + usize::from(!is_static);
                 let fs = if subsumed {
                     None
