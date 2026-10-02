@@ -59,10 +59,14 @@
 
 ### 1.5 与 C1d-a（1e623cec / c1d-p0）的重叠
 
-- C1d-a 把 `jdk/internal/loader/ClassLoaders` 列入 `[vm_boundary]`（按方法划分），并删除 `[release]` 段。
-  本任务同样把 `ClassLoaders` 列入 `[vm_boundary]`；为 `BuiltinClassLoader` / `URLClassPath` /
-  `ArchivedClassLoaders` 加的放行条目在 C1d-a 取消 `jdk/` 前缀截断后成为冗余，合并时随 `[release]` 一起删即可。
-- C1d-a 没有改 `class_loader_impl.rs` 与 `class_loaders_impl.rs`。本任务对这两个文件的改动见 §四。
+- C1d-a 把 `jdk/internal/loader/ClassLoaders` 列入 `[vm_boundary]`（按方法划分，手写体仍是 `class_loaders_impl.rs`
+  的三个访问点），并删除 `[release]` 段。
+- 本任务核实后，`ClassLoaders` **没有**属于准入第 ③ 类的方法（理由见 §2.2），整类按字节码翻译：
+  - 本分支在 `[release]` 放行 `ClassLoaders` / `BuiltinClassLoader` / `URLClassPath` / `ArchivedClassLoaders`
+    （它们目前被 `jdk/` 前缀截断）；
+  - 与 C1d-a 合并时，`ClassLoaders` 从 C1d-a 的 `[vm_boundary]` 中删去，放行条目随 `[release]` 一起删除；
+  - `class_loaders_impl.rs` 整个删除。C1d-a 未改该文件与 `class_loader_impl.rs`，本任务的改动清单见 §四。
+- `VM.initLevel()` 在 C1d-a 中归 `VM` 的 VM 契约（引导阶段状态），本任务用到的同一状态见 §2.2。
 
 ## 二、终态
 
@@ -79,12 +83,37 @@
        `bootModules` / `platformModules` 常量集合，类名与字段名写在清单里，生成器不写 JDK 类名。在 boot 集合
        的为 boot（null，不带属性），在 platform 集合的为 platform，其余 JDK 模块为 app。
    - 数组类取元素类的加载器；基本类型与 `void` 为 null。
-2. **加载器层级 app → platform → null 按 JDK 字节码初始化。**
-   - `ClassLoaders.<clinit>` 经 `BootClassLoader` / `PlatformClassLoader` / `AppClassLoader` 构造器建出三个加载器，
-     `getParent()`、`ClassLoader.getClassLoader(Class)` 走字节码。
-   - `ClassLoader.getSystemClassLoader()` 保留为 VM 状态承载（准入 ③）。`scl` 在 HotSpot 中由 initPhase3 的
-     `initSystemClassLoader` 写入；原生二进制没有 `java.system.class.loader` 启动选项，`scl` 即内建 app 加载器，
-     所以承载体返回 `ClassLoaders.appClassLoader()`，与用户类的定义加载器是同一对象。
+2. **加载器层级 app → platform → null 与系统类加载器都按 JDK 字节码建立。**
+   - `ClassLoaders.<clinit>` 经 `BootClassLoader` / `PlatformClassLoader` / `AppClassLoader` 构造器建出三个加载器；
+     `appClassLoader()` / `platformClassLoader()` / `bootLoader()`、`getParent()`、`ClassLoader.getClassLoader(Class)`
+     都走字节码。
+   - `ClassLoaders` 的方法逐个核对，没有一个属于准入第 ③ 类：
+     - 三个静态字段由它自己的 `<clinit>` 字节码写入，不是 VM 注入的；
+     - `<clinit>` 读到的 VM 输入都已由别处承载：
+       - `VM.getSavedProperty("jdk.boot.class.path.append")`：VM 保存属性，原生二进制为 null；
+       - `System.getProperty("java.class.path")`：系统属性表，取值见 `[facts.system_properties]`；
+       - `ArchivedClassLoaders` / `CDS`：CDS 归档查询走 native，原生二进制无归档，取 null 分支。
+     - 所以它不进 `[vm_boundary]`，也不手写近似。
+   - `ClassLoader.getSystemClassLoader()` 走字节码：先按 `VM.initLevel()` 分派，第 4 档返回静态字段 `scl`。
+   - `scl` 由 initPhase3 的字节码写入。HotSpot 的顺序是：
+     1. `VM.initLevel(3)`；
+     2. `ClassLoader.initSystemClassLoader()`：
+        - `java.system.class.loader` 为 null，所以 `scl = getBuiltinAppClassLoader()`；
+        - 原生二进制没有 `-D` 注入，这个属性折叠为 null，自定义加载器分支不可达；
+     3. `VM.initLevel(4)`。
+
+     原生二进制把这一段 VM 驱动的引导序列（准入 ③）放到**首次读取 `scl`** 时执行：
+     - 清单 `[vm_state.field_reads]` 为 `ClassLoader.scl` 声明读取钩子；
+     - 钩子在 `scl` 为空时，按上面的顺序执行 `initSystemClassLoader` 的字节码，然后返回字段值；
+     - 钩子带可重入互斥：`initSystemClassLoader` 内部读 `scl` 做递归检查，执行中的线程直接读到原值 null，
+       其余线程等待执行结束。
+
+     程序从不读 `scl` 时，系统类加载器与加载器层级都不进闭包（HelloWorld 不增长）。
+   - `VM.initLevel()` 是 VM 注入状态（准入 ③，与 `isBooted` 同源）：
+     - 进入 `main` 时为 4（SYSTEM_BOOTED）；
+     - 只有上面的钩子在执行 `initSystemClassLoader` 期间把它置为 3。
+   - 主线程的上下文类加载器：initPhase3 还会调用 `Thread.currentThread().setContextClassLoader(scl)`。
+     这一项不在本任务内，记为遗留，见 §四。
 3. **`desiredAssertionStatus` 走 `Class` / `ClassLoader` 的字节码路径。**
    - 删除 `Class.desiredAssertionStatus:()Z` 常量特判。
    - VM 初值保留为 `desiredAssertionStatus0 = false`（`-ea` 未启用）与 `retrieveDirectives` 的空指令表（native）。
@@ -111,5 +140,20 @@
 
 ## 四、实施记录与 C1d-a 合并取舍
 
-（随实施逐步补充：改动的手写文件 / 函数、提交哈希。）
+改动的手写文件 / 函数（供 C1d-a 合并核对）：
 
+| 文件 | 改动 |
+|---|---|
+| `runtime/java_runtime/src/jdk/internal/loader/class_loaders_impl.rs` | 整个删除（`appClassLoader` / `platformClassLoader` / `bootLoader` 回字节码） |
+| `runtime/java_runtime/src/java/lang/class_loader_impl.rs` | 删 `getSystemClassLoader` / `getParent` / `getClassLoader(Class)` / `build_system_class_loader`；新增 `scl` 读取钩子 `__vm_system_loader` |
+| `runtime/java_runtime/src/java/lang/class_impl.rs` | 新增 `classLoader` 读取钩子 `__vm_defining_loader` |
+| `runtime/java_runtime/src/jdk/internal/misc/vm_impl.rs` | 新增 `initLevel()`（VM 引导阶段状态） |
+| `closure.toml` | `[release]` 加 `ClassLoaders` / `BuiltinClassLoader` / `URLClassPath` / `ArchivedClassLoaders`（C1d-a 合并时随 `[release]` 删除，并把 `ClassLoaders` 移出 `[vm_boundary]`） |
+| `vm_intrinsics.toml` | 新增 `[vm_state]`；删 `Class.desiredAssertionStatus:()Z` 常量条目（独立提交） |
+
+`vm_boundary_methods` 目标：`ClassLoader` 的 `getSystemClassLoader` / `getParent` / `getClassLoader` 三项移出，
+30 → 27。
+
+遗留：主线程上下文类加载器（initPhase3 的 `setContextClassLoader(scl)`）仍为 null，另立条目。
+
+提交：（随实施补充。）
