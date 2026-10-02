@@ -1,7 +1,7 @@
 //! 字节码解释（JVMS §6.5）：帧、操作数栈、异常表。
 //!
-//! 只建模显式抛出（athrow）的异常；隐式异常（空指针、越界、类型转换、除零、数组存储）一律求值失败——
-//! 它们在真实程序里多半是缺陷路径，具体轨迹不值得为之建模，回退抽象调用边即可。
+//! 异常：athrow 抛出的对象与隐式异常（空指针、越界、类型转换、除零、数组存储、负数组长度，见 `init.rs`）
+//! 都按异常表查找处理器；隐式异常的类型取自清单 `[concrete.implicit]`。
 
 use classfile::{Insn, Operand};
 
@@ -106,7 +106,11 @@ impl Vm {
             if tracing {
                 hits[ix] = true;
             }
-            match self.step(env, info, insn, locals, &mut stack) {
+            let r = match self.step(env, info, insn, locals, &mut stack) {
+                Err(Flow::Implicit(k)) => self.implicit(env, k).and_then(|o| Err(Flow::Throw(o))),
+                r => r,
+            };
+            match r {
                 Ok(Next::Fall) => ix += 1,
                 Ok(Next::Jump(off)) => ix = *info.index.get(&off).map_or_else(|| fail("分支目标非指令边界"), Ok)?,
                 Ok(Next::Ret(v)) => return Ok(v),
@@ -122,6 +126,8 @@ impl Vm {
                     stack.push(CV::R(o));
                     ix = *info.index.get(&h.handler).map_or_else(|| fail("处理器非指令边界"), Ok)?;
                 }
+                // 失败位置：最内层的方法与偏移（外层不再追加）
+                Err(Flow::Fail(w)) if !w.contains(" @ ") => return fail(format!("{w} @ {}@{}", info.key, insn.offset)),
                 Err(f) => return Err(f),
             }
         }
@@ -178,7 +184,7 @@ impl Vm {
                 let i = pop!().i()?;
                 let a = pop!().obj()?;
                 let arr = self.arr(a)?;
-                let v = *arr.get(i as usize).filter(|_| i >= 0).map_or_else(|| fail("数组越界"), Ok)?;
+                let v = *arr.get(i as usize).filter(|_| i >= 0).map_or_else(|| implicit("index"), Ok)?;
                 st.push(v);
             }
             0x36..=0x3a => {
@@ -204,7 +210,7 @@ impl Vm {
                             let ct = e.strip_prefix('L').and_then(|x| x.strip_suffix(';')).unwrap_or(e);
                             let vt = self.ty(o);
                             if !self.instance_of(env, &vt, o, ct) {
-                                return fail("数组存储类型不符");
+                                return implicit("store");
                             }
                         }
                         v
@@ -212,7 +218,7 @@ impl Vm {
                     _ => v,
                 };
                 let arr = self.arr_mut(a)?;
-                let slot = arr.get_mut(i as usize).filter(|_| i >= 0).map_or_else(|| fail("数组越界"), Ok)?;
+                let slot = arr.get_mut(i as usize).filter(|_| i >= 0).map_or_else(|| implicit("index"), Ok)?;
                 *slot = v;
             }
             0x57 => {
@@ -340,7 +346,7 @@ impl Vm {
                 };
                 if op == 0xc0 {
                     if is == Some(false) {
-                        return fail("类型转换失败");
+                        return implicit("cast");
                     }
                     st.push(v);
                 } else {
@@ -451,7 +457,7 @@ impl Vm {
             (0x69, CV::J(x), CV::J(y)) => CV::J(x.wrapping_mul(y)),
             (0x6a, CV::F(x), CV::F(y)) => CV::F(x * y),
             (0x6b, CV::D(x), CV::D(y)) => CV::D(x * y),
-            (0x6c | 0x70, CV::I(_), CV::I(0)) | (0x6d | 0x71, CV::J(_), CV::J(0)) => return fail("整数除零"),
+            (0x6c | 0x70, CV::I(_), CV::I(0)) | (0x6d | 0x71, CV::J(_), CV::J(0)) => return implicit("arith"),
             (0x6c, CV::I(x), CV::I(y)) => CV::I(x.wrapping_div(y)),
             (0x6d, CV::J(x), CV::J(y)) => CV::J(x.wrapping_div(y)),
             (0x6e, CV::F(x), CV::F(y)) => CV::F(x / y),
@@ -478,7 +484,7 @@ impl Vm {
         Ok(())
     }
 
-    fn ldc(&mut self, env: &Env, c: &Const) -> R<CV> {
+    pub(super) fn ldc(&mut self, env: &Env, c: &Const) -> R<CV> {
         Ok(match c {
             Const::Int(v) => CV::I(*v),
             Const::Float(b) => CV::F(f32::from_bits(*b)),
@@ -489,181 +495,6 @@ impl Vm {
             Const::Class(n) => CV::R(self.mirror(env, n)?),
             _ => return fail("ldc 方法类型 / 句柄 / 动态常量"),
         })
-    }
-
-    fn field_op(&mut self, env: &Env, op: u8, insn: &Insn, st: &mut Vec<CV>) -> R<()> {
-        let Operand::Field(f) = &insn.operand else { return fail("字段操作数") };
-        let fr = self.field_res(env, f)?;
-        let pop = |st: &mut Vec<CV>| st.pop().map_or_else(|| fail("操作数栈下溢"), Ok);
-        match op {
-            0xb2 => {
-                self.ensure_init(env, &fr.decl)?;
-                // 非 final 静态字段只在其类初始化期间可读：初始化之后它可能被程序其它部分改写
-                let running = matches!(self.init.get(&fr.decl), Some(Init::Running));
-                if !fr.fin && !fr.memo && !running {
-                    return fail(format!("读取可变静态字段 {}.{}", fr.decl, fr.name));
-                }
-                let v = match self.statics.get(&fr.key) {
-                    Some(v) => *v,
-                    None => match &fr.constant {
-                        Some(c) => self.ldc(env, c)?,
-                        None => CV::zero(&fr.desc),
-                    },
-                };
-                st.push(v);
-            }
-            0xb3 => {
-                self.ensure_init(env, &fr.decl)?;
-                let v = pop(st)?;
-                if self.image > 0 && !matches!(self.init.get(&fr.decl), Some(Init::Running)) && !fr.memo {
-                    return fail(format!("类初始化写入它类静态字段 {}.{}", fr.decl, fr.name));
-                }
-                self.put_static(&fr, v)?;
-                if self.tracing() {
-                    self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
-                    self.trace.memo_vals.push((fr.mref(), v));
-                }
-            }
-            0xb4 => {
-                let o = pop(st)?.obj()?;
-                let v = self.get_field(o, &fr)?;
-                st.push(v);
-            }
-            _ => {
-                let v = pop(st)?;
-                let o = pop(st)?.obj()?;
-                self.put_field(o, &fr, v)?;
-                if self.tracing() {
-                    self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
-                    if self.heap[o as usize].epoch == 0 {
-                        self.trace.memo_vals.push((fr.mref(), v));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn invoke_op(&mut self, env: &Env, info: &Rc<MInfo>, op: u8, insn: &Insn, st: &mut Vec<CV>) -> R<()> {
-        let Operand::Method(m, iface) = &insn.operand else { return fail("调用操作数") };
-        let n = nparams(&m.desc) + usize::from(op != 0xb8);
-        let args = st.split_off(st.len().checked_sub(n).map_or_else(|| fail("操作数栈下溢"), Ok)?);
-        let resolved = self.resolve(env, m, *iface)?;
-        let target = match op {
-            0xb8 => {
-                self.ensure_init(env, &resolved.class.name)?;
-                resolved
-            }
-            _ => {
-                let recv = args[0].obj()?;
-                if let Body::Lam(l) = &self.heap[recv as usize].body {
-                    // 求值纪元内的 lambda 调用：生成代码经 lambda 类的方法转调，轨迹不记该跳转，不建模
-                    if self.tracing() {
-                        return fail("求值纪元内调用 lambda");
-                    }
-                    let l = l.clone();
-                    let v = self.call_lambda(env, &l, &resolved, args)?;
-                    if let Some(v) = v {
-                        st.push(v);
-                    }
-                    return Ok(());
-                }
-                if op == 0xb7 {
-                    self.special(env, &info.site, resolved)?
-                } else {
-                    let ty = self.ty(recv);
-                    self.select(env, &ty, &resolved)?
-                }
-            }
-        };
-        if self.tracing() {
-            let (o, nm, d) = target.key();
-            let t = MemberRef { owner: o, name: nm, desc: d };
-            self.trace.calls.entry((info.key.clone(), insn.offset)).or_default().insert(t);
-        }
-        let ret = self.call(env, &target, args)?;
-        match (ret, returns_void(&m.desc)) {
-            (Some(v), false) => st.push(v),
-            (None, true) => {}
-            _ => return fail(format!("返回值与描述符不符 {m}")),
-        }
-        Ok(())
-    }
-
-    /// invokespecial 的方法选择（JVMS §6.5 invokespecial：超类方法调用从当前类的直接超类起查）
-    fn special(&mut self, env: &Env, cur: &MethodSite, resolved: MethodSite) -> R<MethodSite> {
-        let rm = resolved.method();
-        if rm.is_init() || rm.is_private() || resolved.class.is_interface() || resolved.class.name == cur.class.name {
-            return Ok(resolved);
-        }
-        match &cur.class.super_name {
-            Some(s) => {
-                let s: Rc<str> = Rc::from(s.as_str());
-                self.select(env, &s, &resolved)
-            }
-            None => Ok(resolved),
-        }
-    }
-
-    /// 类初始化（JVMS §5.5：超类、声明默认方法的超接口先于本类；`<clinit>` 在映像纪元执行）
-    pub(super) fn ensure_init(&mut self, env: &Env, c: &str) -> R<()> {
-        if c.starts_with('[') {
-            return Ok(());
-        }
-        match self.init.get(c) {
-            Some(Init::Done | Init::Running) => return Ok(()),
-            Some(Init::Failed(w)) => return fail(format!("类初始化失败 {c}：{w}")),
-            None => {}
-        }
-        let key: Rc<str> = Rc::from(c);
-        self.init.insert(key.clone(), Init::Running);
-        let r = self.do_init(env, c);
-        self.init.insert(key, match &r {
-            Ok(()) => Init::Done,
-            Err(Flow::Fail(w)) => Init::Failed(Rc::from(w.as_str())),
-            Err(Flow::Throw(o)) => Init::Failed(Rc::from(format!("抛出 {}", self.ty(*o)).as_str())),
-        });
-        if r.is_ok() && self.tracing() {
-            self.trace.inited.insert(c.to_string());
-        }
-        r.map_or_else(|e| match e {
-            Flow::Fail(w) => fail(format!("类初始化失败 {c}：{w}")),
-            Flow::Throw(_) => fail(format!("类初始化抛出异常 {c}")),
-        }, Ok)
-    }
-
-    fn do_init(&mut self, env: &Env, c: &str) -> R<()> {
-        let cf = self.class(env, c)?;
-        if !cf.is_interface() {
-            if let Some(s) = &cf.super_name {
-                self.ensure_init(env, s)?;
-            }
-            for i in env.h().all_superinterfaces(&cf) {
-                if i.methods.iter().any(|m| !m.is_abstract() && !m.is_static()) {
-                    self.ensure_init(env, &i.name)?;
-                }
-            }
-        }
-        let Some(idx) = cf.methods.iter().position(|m| m.is_clinit()) else { return Ok(()) };
-        let site = MethodSite { class: cf, index: idx };
-        let info = self.info(env, &site);
-        if !info.bytecode {
-            return fail(format!("类初始化器无字节码语义 {c}"));
-        }
-        self.image += 1;
-        let r = self.run(env, &info, Vec::new());
-        self.image -= 1;
-        r.map(|_| ())
-    }
-}
-
-/// 写入值的常量格投影
-fn put_of(v: CV) -> Put {
-    match v {
-        CV::I(x) => Put::Int(x),
-        CV::J(x) => Put::Long(x),
-        CV::N => Put::Null,
-        _ => Put::Other,
     }
 }
 

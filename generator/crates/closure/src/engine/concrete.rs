@@ -10,9 +10,12 @@
 
 mod apply;
 mod indy;
+mod init;
 mod interp;
+mod members;
 mod natives;
 mod snap;
+mod stable;
 mod vm;
 
 use resolve::MethodSite;
@@ -181,7 +184,7 @@ impl<'a> Engine<'a> {
             return r.clone();
         }
         let mut vm = self.concrete.vm.take().unwrap_or_else(|| Box::new(Vm::new()));
-        let env = Env { ctx: &self.ctx };
+        let env = Env { ctx: &self.ctx, cp: self.cp };
         let r = eval(&mut vm, &env, site, args);
         self.concrete.vm = Some(vm);
         let r = Rc::new(r);
@@ -205,6 +208,7 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
             let (ret, thrown) = match r {
                 Ok(v) => (v, None),
                 Err(Flow::Throw(o)) => (None, Some(CV::R(o))),
+                Err(Flow::Implicit(k)) => (None, Some(CV::R(vm.implicit(env, k)?))),
                 Err(f) => return Err(f),
             };
             let mut sn = snap::Snap::new(vm, env, &mut out.objs);
@@ -229,7 +233,7 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
     match r {
         Ok(()) => Ok(out),
         Err(Flow::Fail(w)) => Err(w),
-        Err(Flow::Throw(_)) => Err("实参构造抛出异常".into()),
+        Err(Flow::Throw(_) | Flow::Implicit(_)) => Err("实参构造抛出异常".into()),
     }
 }
 

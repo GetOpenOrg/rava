@@ -564,6 +564,7 @@ Z = "java/lang/Boolean"
 # 入口（`类.方法:描述符`）
 entries = [
     "java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;",
+    "java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern;",
 ]
 # 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入
 memo_fields = [
@@ -572,14 +573,38 @@ memo_fields = [
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
 ]
+# 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结；
+# 声明在这类类型上的静态字段所指映像数组同样冻结。
+# Pattern 的契约是「实例不可变、可多线程共享」：节点图与字符谓词在构造（compile）中建成，匹配状态全在 Matcher；
+# CharacterData 各子类的 Unicode 属性表、ASCII 的字符类别表、各装箱缓存（JLS §5.1.7 的规范化实例表）
+# 在类初始化中建成，之后只读
+stable_types = [
+    "java/lang/CharacterData",
+    "java/lang/Byte$ByteCache",
+    "java/lang/Character$CharacterCache",
+    "java/lang/Short$ShortCache",
+    "java/lang/Integer$IntegerCache",
+    "java/lang/Long$LongCache",
+    "java/util/regex/ASCII",
+    "java/util/regex/Pattern",
+    "java/util/regex/Pattern$Node",
+    "java/util/regex/Pattern$CharPredicate",
+]
 
 # 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
+# `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
+# `opaque`（只用于 `<clinit>`）：静态状态由 VM / 手写层承载的类，初始化不执行、其静态字段不可读（读即求值失败）
 [concrete.natives]
 "java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = "arraycopy"
 "java/lang/System.identityHashCode:(Ljava/lang/Object;)I" = "identity_hash"
+"java/lang/Object.<init>:()V" = "noop"
 "java/lang/Object.getClass:()Ljava/lang/Class;" = "get_class"
 "java/lang/Object.hashCode:()I" = "identity_hash"
 "java/lang/Object.clone:()Ljava/lang/Object;" = "clone"
+"java/lang/Class.<clinit>:()V" = "bytecode"
+"jdk/internal/misc/Unsafe.<clinit>:()V" = "opaque"
+"jdk/internal/misc/Unsafe.getUnsafe:()Ljdk/internal/misc/Unsafe;" = "bytecode"
+"java/lang/Class.registerNatives:()V" = "noop"
 "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
 "java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"
 "java/lang/Class.isArray:()Z" = "class_is_array"
@@ -595,6 +620,15 @@ memo_fields = [
 "java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
 "java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+# 原生二进制不携带 CDS 归档（cds_impl.rs / vm_impl.rs）：查询恒 false、归档恢复为空操作、转储种子恒 0
+"jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
+"jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
+"jdk/internal/misc/CDS.isSharingEnabled0:()Z" = "const:false"
+"jdk/internal/misc/CDS.initializeFromArchive:(Ljava/lang/Class;)V" = "noop"
+"jdk/internal/misc/CDS.getRandomSeedForDumping:()J" = "noop"
+"jdk/internal/misc/VM.initialize:()V" = "noop"
+# 求值器的 UTF16 字符串布局按小端码元（与目标平台一致，string_utf16_impl.rs）
+"java/lang/StringUTF16.isBigEndian:()Z" = "const:false"
 "java/lang/String.intern:()Ljava/lang/String;" = "intern"
 "java/lang/Float.floatToRawIntBits:(F)I" = "float_to_raw_int_bits"
 "java/lang/Float.intBitsToFloat:(I)F" = "int_bits_to_float"
@@ -603,6 +637,16 @@ memo_fields = [
 "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
 "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+
+# 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
+# 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
+[concrete.implicit]
+null = "java/lang/NullPointerException"
+index = "java/lang/ArrayIndexOutOfBoundsException"
+cast = "java/lang/ClassCastException"
+arith = "java/lang/ArithmeticException"
+store = "java/lang/ArrayStoreException"
+size = "java/lang/NegativeArraySizeException"
 
 # VM 直接构造字符串字面量与类镜像时写入的字段（语义名 → `类.字段`）
 [concrete.vm_fields]

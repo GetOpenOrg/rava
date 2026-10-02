@@ -62,9 +62,9 @@ impl CV {
             v => fail(format!("期望引用：{v:?}")),
         }
     }
-    /// 非空引用（null 即失败：隐式异常不建模）
+    /// 非空引用（null 即空指针隐式异常）
     pub(super) fn obj(self) -> R<u32> {
-        self.r()?.map_or_else(|| fail("空引用"), Ok)
+        self.r()?.map_or_else(|| implicit("null"), Ok)
     }
     /// 描述符的缺省值
     pub(super) fn zero(desc: &str) -> CV {
@@ -82,10 +82,16 @@ impl CV {
 #[derive(Debug)]
 pub(super) enum Flow {
     Throw(u32),
+    /// 隐式异常（种类见清单 `[concrete.implicit]`）：由解释循环分配异常对象后按 `Throw` 处理
+    Implicit(&'static str),
     Fail(String),
 }
 
 pub(super) type R<T> = Result<T, Flow>;
+
+pub(super) fn implicit<T>(kind: &'static str) -> R<T> {
+    Err(Flow::Implicit(kind))
+}
 
 pub(super) fn fail<T>(why: impl Into<String>) -> R<T> {
     Err(Flow::Fail(why.into()))
@@ -93,11 +99,15 @@ pub(super) fn fail<T>(why: impl Into<String>) -> R<T> {
 
 /// lambda 对象（LambdaMetafactory 产物）
 #[derive(Debug)]
-pub(super) struct Lam {
+pub(in crate::engine) struct Lam {
     pub iface: String,
     pub markers: Vec<String>,
     pub sam: String,
     pub imp: classfile::MethodHandle,
+    /// LambdaMetafactory 静态实参（物化为抽象 lambda 时计算适配表）
+    pub bargs: Rc<[Const]>,
+    /// indy 调用点描述符（形参为捕获值类型）
+    pub desc: Rc<str>,
     pub captured: Vec<CV>,
 }
 
@@ -191,11 +201,21 @@ pub(super) struct Vm {
     pub image: u32,
     pub statics: HashMap<u32, CV>,
     pub init: HashMap<Rc<str>, Init>,
+    /// 静态状态由 VM / 手写层承载的类（`<clinit>` 操作名 `opaque`）
+    pub opaque: HashSet<Rc<str>>,
+    /// 完成初始化的类（按完成次序）/ 正在执行的 `<clinit>` 开始时的堆大小 / 映像纪元内改写既有映像对象的次数
+    pub done_log: Vec<Rc<str>>,
+    pub clinit_floor: Vec<usize>,
+    pub foreign: u64,
     fkeys: HashMap<String, u32>,
     /// 字段键 → (声明类, 字段名)
     pub fnames: Vec<(Rc<str>, Rc<str>)>,
     /// 不可变的映像数组（字符串内容）：求值纪元内可读
     pub frozen: HashSet<u32>,
+    /// 类型 → 是否发布后不再改写（`[concrete] stable_types`）
+    pub stable_ty: HashMap<Rc<str>, bool>,
+    /// 包 → 包内类名（静态字段写入点扫描，concrete/stable.rs）
+    pub pkgs: Option<HashMap<String, Vec<String>>>,
     pub fres: HashMap<MemberRef, Option<Rc<FRes>>>,
     pub minfo: HashMap<MemberRef, Rc<MInfo>>,
     pub mres: HashMap<(MemberRef, bool), Option<MethodSite>>,
@@ -220,9 +240,15 @@ impl Vm {
             image: 0,
             statics: HashMap::default(),
             init: HashMap::default(),
+            opaque: HashSet::default(),
+            done_log: Vec::new(),
+            clinit_floor: Vec::new(),
+            foreign: 0,
             fkeys: HashMap::default(),
             fnames: Vec::new(),
             frozen: HashSet::default(),
+            stable_ty: HashMap::default(),
+            pkgs: None,
             fres: HashMap::default(),
             minfo: HashMap::default(),
             mres: HashMap::default(),
@@ -258,7 +284,7 @@ impl Vm {
 
     pub(super) fn new_array(&mut self, ty: &str, n: i32) -> R<u32> {
         if n < 0 {
-            return fail("负数组长度");
+            return implicit("size");
         }
         let comp = &ty[1..];
         Ok(self.alloc(ty, Body::Arr(vec![CV::zero(comp); n as usize])))
@@ -278,8 +304,16 @@ impl Vm {
         }
     }
 
+    /// 类初始化中改写其开始前已有的映像对象（初始化失败时不能降级为静态不可读）
+    fn note_foreign(&mut self, o: u32) {
+        if self.image > 0 && self.clinit_floor.last().is_some_and(|&f| (o as usize) < f) {
+            self.foreign += 1;
+        }
+    }
+
     pub(super) fn arr_mut(&mut self, o: u32) -> R<&mut Vec<CV>> {
         let ep = self.cur_epoch();
+        self.note_foreign(o);
         let h = &mut self.heap[o as usize];
         if h.epoch != ep {
             return fail(format!("写入共享数组 {}", h.ty));
@@ -311,12 +345,13 @@ impl Vm {
             let decl: Rc<str> = Rc::from(site.class.name.as_str());
             let key = self.fkey(&decl, &fd.name);
             let memo = env.cfg().memo_fields.contains(&format!("{decl}.{}", fd.name));
+            let fin = fd.access & acc::FINAL != 0 || fd.access & acc::STATIC != 0 && self.clinit_only(env, &site.class, fd);
             Rc::new(FRes {
                 key,
                 decl,
                 name: fd.name.clone(),
                 desc: fd.desc.clone(),
-                fin: fd.access & acc::FINAL != 0,
+                fin,
                 memo,
                 constant: fd.constant_value.clone(),
             })
@@ -325,15 +360,24 @@ impl Vm {
         r.map_or_else(|| fail(format!("字段解析失败 {f}")), Ok)
     }
 
-    /// 实例字段读：映像对象（`<clinit>` 构造、程序其余部分可见）只许读 final 字段与内存缓存字段
-    pub(super) fn get_field(&self, o: u32, fr: &FRes) -> R<CV> {
-        if self.image == 0 && self.heap[o as usize].epoch == 0 && !fr.fin && !fr.memo {
+    /// 实例字段读：映像对象（`<clinit>` 构造、程序其余部分可见）只许读 final 字段、内存缓存字段，以及
+    /// 发布后不再改写的类型（`[concrete] stable_types`）的全部字段——经后者取到的映像数组同样冻结
+    pub(super) fn get_field(&mut self, env: &Env, o: u32, fr: &FRes) -> R<CV> {
+        let image = self.image == 0 && self.heap[o as usize].epoch == 0;
+        let stable = image && self.stable(env, o);
+        if image && !fr.fin && !fr.memo && !stable {
             return fail(format!("读取映像对象可变字段 {}.{}", fr.decl, fr.name));
         }
-        match &self.heap[o as usize].body {
-            Body::Inst(fs) => Ok(fs.iter().find(|(k, _)| *k == fr.key).map_or_else(|| CV::zero(&fr.desc), |(_, v)| *v)),
-            _ => fail(format!("对非实例对象取字段 {}", fr.name)),
+        let v = match &self.heap[o as usize].body {
+            Body::Inst(fs) => fs.iter().find(|(k, _)| *k == fr.key).map_or_else(|| CV::zero(&fr.desc), |(_, v)| *v),
+            _ => return fail(format!("对非实例对象取字段 {}", fr.name)),
+        };
+        if let (true, CV::R(a)) = (stable, v) {
+            if matches!(self.heap[a as usize].body, Body::Arr(_)) && self.heap[a as usize].epoch == 0 {
+                self.frozen.insert(a);
+            }
         }
+        Ok(v)
     }
 
     /// 实例字段写入：映像对象只许写内存缓存字段（记撤销）
@@ -342,6 +386,9 @@ impl Vm {
         let shared = self.heap[o as usize].epoch != ep;
         if shared && !fr.memo {
             return fail(format!("写入共享对象字段 {}.{}", fr.decl, fr.name));
+        }
+        if !fr.memo {
+            self.note_foreign(o);
         }
         let Body::Inst(fs) = &mut self.heap[o as usize].body else {
             return fail(format!("对非实例对象写字段 {}", fr.name));
@@ -519,7 +566,14 @@ impl Vm {
             return i.clone();
         }
         let index = site.method().code.as_ref().map(|c| c.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect()).unwrap_or_default();
-        let op = env.cfg().natives.get(&key.to_string()).cloned();
+        // 显式操作优先；其次清单的返回值事实（`[facts.returns]` / `[vm_constants] null_returns`：原生二进制里恒定的返回值）
+        let ks = key.to_string();
+        let op = env.cfg().natives.get(&ks).cloned().or_else(|| {
+            env.man().return_fact(&ks).map(|f| match f {
+                crate::manifest::Fact::Null => "const:null".to_string(),
+                crate::manifest::Fact::Int(x) => format!("const:{x}"),
+            })
+        });
         let bytecode = site.method().code.is_some() && matches!(env.ctx.kind_of(&site.class, site.method()), Kind::Bytecode);
         let i = Rc::new(MInfo { key: key.clone(), site: site.clone(), index, op, bytecode });
         self.minfo.insert(key, i.clone());
@@ -534,6 +588,7 @@ impl Vm {
 /// 求值环境：类层次、清单与方法承载判定
 pub(super) struct Env<'e, 'a> {
     pub ctx: &'e Ctx<'a>,
+    pub cp: &'a ClassPath,
 }
 
 impl<'e, 'a> Env<'e, 'a> {

@@ -2,7 +2,7 @@
 //!
 //! 求值纪元内分配的对象按字段 / 元素展开；字符串、类镜像按值；映像对象（`<clinit>` 构造）只记类型——
 //! 其抽象值来自抽象分析对 `<clinit>` 的建模，物化时只有非容器形态的类可按类型代表（见 `apply.rs`）；
-//! 映像数组与 lambda 对象不可物化，快照失败。
+//! lambda 对象按函数式接口、实现句柄与捕获值展开（捕获值记为元素）；映像数组不可物化，快照失败。
 
 use super::vm::*;
 use super::*;
@@ -24,7 +24,10 @@ pub(in crate::engine) struct MObj {
     pub ty: Rc<str>,
     pub arr: bool,
     pub fields: Vec<(MemberRef, MV)>,
+    /// 数组元素 / lambda 的捕获值
     pub elems: Vec<MV>,
+    /// lambda 对象（`ty` 为函数式接口）
+    pub lam: Option<Rc<Lam>>,
 }
 
 pub(super) struct Snap<'s, 'e, 'a> {
@@ -59,7 +62,17 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
         }
         let ty = h.ty.clone();
         match &h.body {
-            Body::Lam(_) => fail("结果引用 lambda 对象"),
+            Body::Lam(l) => {
+                let l = l.clone();
+                let i = self.push(o, ty, false);
+                let mut out = Vec::with_capacity(l.captured.len());
+                for &e in &l.captured {
+                    out.push(self.value(e)?);
+                }
+                self.objs[i].elems = out;
+                self.objs[i].lam = Some(l);
+                Ok(MV::Obj(i))
+            }
             Body::Arr(_) if h.epoch == 0 => fail(format!("结果引用映像数组 {ty}")),
             Body::Inst(_) if h.epoch == 0 => Ok(MV::Image(ty)),
             Body::Arr(es) => {
@@ -91,7 +104,7 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
 
     fn push(&mut self, o: u32, ty: Rc<str>, arr: bool) -> usize {
         let i = self.objs.len();
-        self.objs.push(MObj { ty, arr, fields: Vec::new(), elems: Vec::new() });
+        self.objs.push(MObj { ty, arr, fields: Vec::new(), elems: Vec::new(), lam: None });
         self.seen.insert(o, i);
         i
     }

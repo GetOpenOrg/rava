@@ -71,7 +71,7 @@ impl Vm {
                 }
             }
         }
-        let lam = Lam { iface: iface.to_string(), markers, sam: name.to_string(), imp: imp.clone(), captured };
+        let lam = Lam { iface: iface.to_string(), markers, sam: name.to_string(), imp: imp.clone(), bargs: Rc::from(bargs), desc: Rc::from(desc), captured };
         Ok(CV::R(self.alloc(iface, Body::Lam(Rc::new(lam)))))
     }
 

@@ -3,7 +3,7 @@
 use classfile::{op, Operand};
 
 use super::snap::{MObj, MV};
-use super::vm::Put;
+use super::vm::{Lam, Put};
 use super::*;
 
 /// 物化时不可按类型代表的结果（映像中的容器形态对象：其抽象值是按分配点区分的抽象对象）
@@ -14,6 +14,11 @@ pub(in crate::engine) fn image_types(o: &Outcome) -> impl Iterator<Item = &Rc<st
         MV::Image(t) => Some(t),
         _ => None,
     })
+}
+
+/// 物化 lambda 的类型名：实现方法 + 具体求值调用点 + 快照序号
+fn lam_name(l: &Lam, m: usize, off: u32, i: usize) -> String {
+    format!("{}$$Lambda@concrete:{m}:{off}:{i}:{}", l.imp.member.owner, l.imp.member.name)
 }
 
 fn pv_of(v: &MV) -> PV {
@@ -70,7 +75,9 @@ impl<'a> Engine<'a> {
         }
         for (i, x) in o.objs.iter().enumerate() {
             let me = ids[i].clone().unwrap_or_default();
-            if x.arr {
+            if let Some(l) = &x.lam {
+                self.mat_lambda(m, off, l, &lam_name(l, m, off, i), &x.elems, &ids, &via);
+            } else if x.arr {
                 let id = me.classes.iter().next().expect("数组物化为分配点");
                 for (j, e) in x.elems.iter().enumerate() {
                     if let Some(s) = self.mat_val(e, &ids, &via) {
@@ -123,7 +130,9 @@ impl<'a> Engine<'a> {
 
     fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via) {
         let x = &objs[i];
-        let s = if x.arr {
+        let s = if let Some(l) = &x.lam {
+            TypeSet::exact(self.id(&lam_name(l, m, off, i)))
+        } else if x.arr {
             TypeSet::exact(self.array_site(m, off, &x.ty, false, via.clone()))
         } else {
             self.instantiate(&x.ty, via.clone());
@@ -152,6 +161,28 @@ impl<'a> Engine<'a> {
                 Some(TypeSet::exact(self.id(t)))
             }
         }
+    }
+
+    /// lambda 对象物化为调用点 m@off 名下的抽象 lambda（捕获来源取各次物化的并）
+    #[allow(clippy::too_many_arguments)]
+    fn mat_lambda(&mut self, m: usize, off: u32, l: &Lam, name: &str, caps: &[MV], ids: &[Option<TypeSet>], via: &Via) {
+        let Some(md) = parse_method(&l.desc) else { return };
+        let mut cap: Args = Vec::with_capacity(md.params.len());
+        for (p, v) in md.params.iter().zip(caps) {
+            let slot = self.ptype(p).map(|_| self.mat_val(v, ids, via).map(Feed::S).into_iter().collect::<Vec<_>>());
+            cap.push(slot);
+        }
+        let lid = self.id(name);
+        if let Some(old) = self.lambdas.get(&lid) {
+            for (slot, prev) in cap.iter_mut().zip(&old.cap) {
+                if let (Some(fs), Some(prev)) = (slot.as_mut(), prev) {
+                    fs.extend(prev.iter().cloned());
+                }
+            }
+        }
+        let ctx = self.methods[m].ctx;
+        let Some(Const::MethodHandle(imh)) = l.bargs.get(1) else { return };
+        self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, cap, &l.bargs);
     }
 
     /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）

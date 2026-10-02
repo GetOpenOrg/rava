@@ -13,6 +13,11 @@ pub struct ConcreteCfg {
     pub natives: HashMap<String, String>,
     /// 内存缓存字段（`类.字段`）：首次求值写入、之后命中；轨迹按冷 / 热两次求值取并
     pub memo_fields: HashSet<String>,
+    /// 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结。
+    /// 依据是类的不可变契约（如正则模式及其节点图编译后只读），由清单逐类声明
+    pub stable_types: Vec<String>,
+    /// 隐式异常的类型：种类（`null` / `index` / `cast` / `arith` / `store` / `size`）→ 类
+    pub implicit: HashMap<String, String>,
     /// VM 布局的字段（字符串字面量与类镜像由 VM 直接构造）：键为语义名（`string_value` / `string_coder` / `component_type`），值为 `类.字段`
     pub vm_fields: HashMap<String, String>,
 }
@@ -38,6 +43,8 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         entries: strs(get("entries")).into_iter().collect(),
         natives: table(get("natives"), "natives")?,
         memo_fields: strs(get("memo_fields")).into_iter().collect(),
+        stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
+        implicit: table(get("implicit"), "implicit")?,
     })
 }

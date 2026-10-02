@@ -196,6 +196,61 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 登记 lambda 对象（创建点 m@off 所在上下文 ctx；`bargs` 为 LambdaMetafactory 静态实参）：函数式接口入
+    /// 实例化集，静态 / 私有 / 构造实现在创建点即入链（实参随 SAM 调用接入）。同名重复登记覆盖捕获来源
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_lambda(
+        &mut self,
+        m: usize,
+        off: u32,
+        lname: &str,
+        ctx: u32,
+        (iface, sam): (String, &str),
+        imh: &MethodHandle,
+        cap: Args,
+        bargs: &[Const],
+    ) -> u32 {
+        let via = Via::method("indy", m, Some(off));
+        let lid = self.id(lname);
+        if super::cut::edges_on() {
+            super::cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("A:{lname}"));
+        }
+        let adapt = self.lambda_plan(bargs, imh, cap.len());
+        let markers = alt_markers(bargs, self.man.serializable_markers());
+        for x in &markers {
+            self.touch(x, Level::Type, via.clone());
+        }
+        self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: sam.to_string(), imh: imh.clone(), cap, adapt });
+        self.touch(&iface, Level::Alloc, via.clone());
+        for a in bargs {
+            if let Const::MethodType(d) = a {
+                self.touch_desc(d, &via);
+            }
+        }
+        if self.g.insert(lid) {
+            self.on_g_grow(lid);
+        }
+        let k = &imh.member;
+        if matches!(imh.kind, 6..=8) {
+            if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, imh.interface) {
+                let (o, n, d) = site.key();
+                if imh.kind == 6 {
+                    self.init(&o, via.clone());
+                }
+                if imh.kind == 8 {
+                    self.instantiate(&k.owner, via.clone());
+                    self.init(&k.owner, via.clone());
+                }
+                let key = MemberRef { owner: o, name: n, desc: d };
+                let c = if imh.kind == 6 { self.static_ctx(m, off, &key, Call::Eager) } else { NOCTX };
+                self.method_ctx(key, c, via);
+            } else {
+                self.unresolved.insert(k.to_string());
+            }
+        }
+        lid
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn indy(&mut self, m: usize, off: u32, cf: &ClassFile, bsm: u16, name: &str, desc: &str, args: &[V]) {
         let via = Via::method("indy", m, Some(off));
@@ -222,46 +277,9 @@ impl<'a> Engine<'a> {
                     cap.push(f);
                 }
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
-                let lid = self.id(&lname);
-                if super::cut::edges_on() {
-                    super::cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("A:{lname}"));
-                }
                 let ctx = self.methods[m].ctx;
-                let adapt = self.lambda_plan(&b.args, imh, cap.len());
-                let markers = alt_markers(&b.args, self.man.serializable_markers());
-                for x in &markers {
-                    self.touch(x, Level::Type, via.clone());
-                }
-                self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: name.to_string(), imh: imh.clone(), cap, adapt });
-                self.touch(&iface, Level::Alloc, via.clone());
-                for a in &b.args {
-                    if let Const::MethodType(d) = a {
-                        self.touch_desc(d, &via);
-                    }
-                }
+                let lid = self.new_lambda(m, off, &lname, ctx, (iface, name), imh, cap, &b.args);
                 self.add_to(Node::S(m, off), &TypeSet::exact(lid));
-                if self.g.insert(lid) {
-                    self.on_g_grow(lid);
-                }
-                // 静态 / 私有 / 构造实现在创建点即入链（实参随 SAM 调用接入）
-                let k = &imh.member;
-                if matches!(imh.kind, 6..=8) {
-                    if let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, imh.interface) {
-                        let (o, n, d) = site.key();
-                        if imh.kind == 6 {
-                            self.init(&o, via.clone());
-                        }
-                        if imh.kind == 8 {
-                            self.instantiate(&k.owner, via.clone());
-                            self.init(&k.owner, via.clone());
-                        }
-                        let key = MemberRef { owner: o, name: n, desc: d };
-                        let c = if imh.kind == 6 { self.static_ctx(m, off, &key, Call::Eager) } else { NOCTX };
-                        self.method_ctx(key, c, via);
-                    } else {
-                        self.unresolved.insert(k.to_string());
-                    }
-                }
             }
             Some(IndyKind::Concat) => {
                 self.instantiate(STRING, via.clone());

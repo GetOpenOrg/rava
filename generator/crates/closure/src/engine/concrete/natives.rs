@@ -48,6 +48,10 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         "const:false" | "const:0" => ret(CV::I(0)),
         "const:true" => ret(CV::I(1)),
         "const:null" => ret(CV::N),
+        c if c.starts_with("const:") => match c["const:".len()..].parse::<i32>() {
+            Ok(x) => ret(CV::I(x)),
+            Err(_) => fail(format!("未知常量操作 {c}")),
+        },
         "self" => ret(arg(0)?),
         "bytecode" => vm.run(env, &Rc::new(MInfo { key: info.key.clone(), site: info.site.clone(), index: info.index.clone(), op: None, bytecode: true }), args),
         "identity_hash" => {
@@ -84,7 +88,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             let vals = vm.arr(src)?;
             if sp < 0 || dp < 0 || n < 0 || (sp as i64 + n as i64) as usize > vals.len() {
-                return fail("arraycopy 越界");
+                return implicit("index");
             }
             let part: Vec<CV> = vals[sp as usize..(sp + n) as usize].to_vec();
             if st != dt {
@@ -100,7 +104,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             let d = vm.arr_mut(dst)?;
             if (dp as i64 + n as i64) as usize > d.len() {
-                return fail("arraycopy 越界");
+                return implicit("index");
             }
             d[dp as usize..(dp + n) as usize].copy_from_slice(&part);
             Ok(None)
