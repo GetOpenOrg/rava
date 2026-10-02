@@ -376,6 +376,11 @@ pub struct Engine<'a> {
     /// 流入 dst（逐调用点）
     mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
     mflow_seen: HashSet<(Node, Node, MirrorOp)>,
+    /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
+    mirror_open: BTreeMap<u32, Vec<Node>>,
+    mirror_open_seen: HashSet<(u32, Node)>,
+    /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
+    synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
     rpending: Vec<(Members, usize, TypeSet)>,
@@ -411,6 +416,8 @@ pub struct Engine<'a> {
     spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
     fenum_pending: BTreeSet<Option<String>>,
+    /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠
+    pub field_enum_gaps: BTreeSet<String>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理
     pub hw_written_names: BTreeSet<String>,
     /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
@@ -494,6 +501,7 @@ impl<'a> Engine<'a> {
                 self.swork.push_back(w);
             }
         }
+        self.mirror_reopen(x);
     }
 
 }

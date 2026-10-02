@@ -114,8 +114,8 @@ impl<'a> Engine<'a> {
     }
 
     /// Class 值 v 所指的类并入 out（常量直接取；引用值取值集里的类镜像，值集增长时本站点重跑）；
-    /// 返回值集是否含所指未知的 Class
-    fn class_values(&mut self, m: usize, v: &V, out: &mut BTreeSet<String>) -> bool {
+    /// 返回值集是否含所指未知的 Class（非字节码类镜像无 Java 字段，不并入、不算未知）
+    pub(super) fn class_values(&mut self, m: usize, v: &V, out: &mut BTreeSet<String>) -> bool {
         match v {
             V::Class(c, _) => {
                 out.insert(c.to_string());
@@ -131,6 +131,7 @@ impl<'a> Engine<'a> {
                         Some(&c) => {
                             out.insert(self.names[c as usize].to_string());
                         }
+                        None if Some(x) == self.synth_mirror => {}
                         None => unknown = true,
                     }
                 }
