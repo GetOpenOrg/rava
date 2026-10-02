@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use syn::visit::Visit;
 
+use super::generic_fns::*;
 use super::stype::*;
 use super::syntax::*;
 use super::*;
@@ -47,6 +48,8 @@ pub(super) struct FileScan<'a> {
     pub(super) rets: &'a LocalRets,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
+    /// 本文件带闭包形参的泛型辅助 fn（见 [`generic_fns`]）
+    pub(super) generics: &'a GenericFns,
 }
 
 /// 标识符收集（宏外；宏内标识符另经 `macro_idents` 收集）
@@ -85,7 +88,7 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers };
+        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
         cs.visit_block(block);
         for (field, write, recv, value, on_self, path) in cs.fields {
             info.fields.push(FieldAccess {
@@ -278,9 +281,11 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     let rets = local_rets(file, &us.0);
     out.rets.extend(rets.iter().map(|(k, v)| (k.clone(), v.clone())));
     let helpers = local_helpers(file);
+    let generics = generic_fns(file);
     let mut fs = FileScan {
         rets: &rets,
         helpers: &helpers,
+        generics: &generics,
         uses: &us.0,
         local_objects: &local,
         fns: Vec::new(),

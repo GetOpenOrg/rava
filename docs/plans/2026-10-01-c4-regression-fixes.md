@@ -3,6 +3,9 @@
 分支 `c4-regfix`。C6 的目标与删除清单见 [`2026-09-29-rust-closure-analyzer.md` §3.7.1](2026-09-29-rust-closure-analyzer.md#371-回调零声明c6)，
 本文记录实施过程、验收证据与遗留审计。
 
+> 状态（2026-10-02）：`c4-regfix` ✅ 已合入集成分支 1ba0d9aa（6b996b33）；TestCharsetNamedStreams 移交 C1d-a；
+> 后续在分支 `c6-generic-closure`（复用本 worktree，4173cebd）：泛型辅助 fn 闭包形参推断、TestAnnoNestedArray null_recv 违例修复。
+
 ## 一、提交序列
 
 | 提交 | 内容 |
@@ -12,6 +15,8 @@
 | 535b8834 | E0308 回归：`FileChannelImpl.open` / `<init>` 手写签名的 `parent` 形参改为与描述符一致的 `Closeable` |
 | a3f4a479 | 手写体继承成员需求 `hw_inherited`；手写辅助 fn 返回类型入静态类型；审计 `hw_untyped_sites` |
 | 59dbedc1 | C6 步骤 2：删除全部 `upcalls` 声明（66 文件 173 处）、`error.rs` vm-upcalls 行与声明机制 |
+| ea6f61fb | `hw_untyped_sites` 审计：chain 清零（静态类型逐级解析 hw_stype），camel 附基底类型并逐条说明 |
+| 6b996b33 | 发射：被派发的桥方法所桥接的真实方法算作已派发，并入继承槽的条目不发存根 |
 
 ## 二、删除结果（终态核对）
 
@@ -109,7 +114,32 @@ c6audit-622ea4b0（kr1，21 例）的 union 为 937 条：chain 63、camel 47、
 5. **Option 闭包形参（1 条）**：`UnixFileSystemProvider isDirectory ← ?` 是 `attrs.as_ref().map(|a| a.isDirectory())`，
    `attrs` 为 `….ok()` 的 `Option<UnixFileAttributes>`；`UnixFileAttributes.isDirectory` 本身是该类手写（`handwritten:provides`），不是 Java 回调。
 
-21 例 union 的复跑见下一轮审计作业（同一命令）。
+### 21 例 union 复核（c6audit-ea6f61fb）
+
+union：chain 0、value 55、camel 63、lower 849。camel 比 DeepCopy 多 6 条：`ProcessHandleImpl toString ← i64`、
+`ProcessImpl toString ← i32 / str`、`Proxy$Dyn toString ← str`、`AnnotationInvocationHandler toString ← Vec` 归第 1 组；
+`AnnotationInvocationHandler toString ← ?` 不归组——它是 `memberValueToString` 里 `each(&<JArray<Object> as From<Object>>::from(…), |x| … x.toString())`
+的闭包形参，即 Object 数组元素（嵌套注解代理）上真实的 `Object.toString` 回调，推断缺口在闭包形参类型。
+
+修法（推断补全，c6-generic-closure）：`handwritten/generic_fns.rs` 登记本文件带闭包形参的辅助 fn（自由 fn 与 impl 关联 fn，
+`Self::f` 按 impl 类型末段查）。闭包形参类型取自 `impl Fn*(…)` 形参或 `Fn*` 约束的类型形参（泛型列表 / where 子句）；
+其中的类型形参按其余实参解出——声明为 `T` / `&T` 取实参静态类型，声明为 `X<…, T>` 取实参元素类型（作用域内容器元素，
+或实参写明的 `<X<E> as Tr>::f(…)` / `X::<E>::f(…)` 的 `E`）。调用点访问闭包实参时代入，注解类型优先。
+TestAnnoReflect 实测该条消失（camel 49，余 `← Vec`），21 例 union 的 camel 应为 62 条、全部归组。
+回归用例：e2e `47_annotations/TestAnnoNestedArray`（嵌套注解数组 toString，expected 取 JDK 21 输出）。
+c6audit-4173cebd 复跑：chain 0、value 50、camel 62，与上一轮相比只少了这一条，其余全部归入上述 5 组。
+
+TestAnnoNestedArray 运行暴露 null_recv 健全性缺口：`first.annotationType().getSimpleName()` 的接收者被判恒 null。
+`first` 是代理注解 `inners.value()[0]`，代理接口调用经 open 枢纽派发不到目标，结果类型集始终为空，读取点因此
+**不驻留流图**；未建模派生（`engine/unmodeled.rs`）只给驻留节点打标，空读取点的派生标记无处存放，下游以它为接收者
+的调用就按空集判了恒 null。修法：不驻留的读取点取虚序号（流图节点数之后、无出边）参与派生，`recv_unmodeled` 按虚序号查标记。
+
+TestAnnoNestedArray 第二层嵌套注解成员丢失（`@Branch({…})` 打印成 `@Branch()`）：注解种子收集（`seeds/annotation.rs`）
+把用户注解类型排除在补种之外，假定用户注解都有静态边。只出现在注解属性体里的嵌套用户注解（Branch / Leaf）没有静态边，
+方法表从未入链，Branch 仅以类型级不透明发射、Leaf 不入闭包；运行期 `AnnotationType.getInstance(Branch)` 成员表为空，
+AnnotationParser 按未知成员丢弃全部取值。修法：用户注解类型与 JDK 注解类型同等补种（仍只按挂载点传递可达入链，
+与枚举 / Class 元素类型口径一致）。边界用例 `TestAnnoArrayMembers`：三层嵌套逐层下钻、各层空数组、8 种基本类型数组、
+字符串（含转义 / 空串）、枚举、Class（用户类 / JDK 类 / 基本类型 / 数组类型）数组成员，expected 取 JDK 21.0.11 实测。
 
 ## 六、集成头 52bf5311 的日期 / 区域与 IO / 反射回归（C6 步骤 2 引起）
 

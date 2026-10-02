@@ -51,6 +51,8 @@ pub struct RuntimeManifest {
     pub boundary_packages: Vec<String>,
     /// VM 耦合边界类
     pub vm_boundary_classes: BTreeSet<String>,
+    /// `<clinit>` 由手写层承载的 VM 边界类（其余 VM 边界类的 `<clinit>` 按字节码翻译）
+    pub vm_clinit_carried: BTreeSet<String>,
     /// 通用边界放行：包前缀在前、类在后
     pub release: Vec<String>,
     /// K-JCA 放行：包前缀在前、类在后
@@ -162,6 +164,7 @@ impl RuntimeManifest {
 
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
+        let vm_clinit_carried: BTreeSet<String> = classes(vmb, "clinit_carried", "vm_boundary")?.into_iter().collect();
         let rel = section(&closure, "release");
         let mut release = packages(rel, "packages", "release")?;
         release.extend(classes(rel, "classes", "release")?);
@@ -173,6 +176,7 @@ impl RuntimeManifest {
             ty,
             boundary_packages: packages(section(&closure, "boundary"), "packages", "boundary")?,
             vm_boundary_classes,
+            vm_clinit_carried,
             release,
             jca_release,
             boot_init_classes: classes(section(&seeds, "boot_init"), "classes", "boot_init")?,

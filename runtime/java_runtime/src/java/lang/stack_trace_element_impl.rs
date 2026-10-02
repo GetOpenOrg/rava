@@ -48,4 +48,47 @@ impl StackTraceElement {
         }
         Ok(())
     }
+
+    /// native `initStackTraceElement(StackTraceElement, StackFrameInfo)`：HotSpot
+    /// `java_lang_StackFrameInfo::to_stack_trace_element` → `java_lang_StackTraceElement::fill_in`。
+    /// 方法取自 StackFrameInfo.memberName（栈遍历数据面写入的 clazz / name / flags）：填
+    /// declaringClassObject、declaringClass、methodName；fileName = 声明类的 SourceFile 属性（java_meta
+    /// 表，无该属性为 null）；lineNumber：native 方法 -2，否则按 memberName 的 (类, 名, type) 取行表中的
+    /// LineNumberTable，由 StackFrameInfo.bci 定行（`Method::line_number_from_bci`，无表 -1）。模块 / 类加载器名与 initStackTraceElements 同口径不填。
+    /// 形参以 `Into<Object>` 接收：StackFrameInfo 只在 StackFrameTraverser 路径进入生成范围，本文件不以
+    /// 类型名引用它。
+    #[jvm_native]
+    pub fn initStackTraceElement<S: Into<Object>>(mut element: StackTraceElement, info: S) -> Result<()> {
+        const ACC_NATIVE: i32 = 0x100;
+        let info: Object = info.into();
+        if info.0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let member = info.0.__unsafe_ref_get("memberName")
+            .unwrap_or_else(|| panic!("stub: java/lang/StackFrameInfo.memberName 无按名协议"));
+        let field = |name: &str| member.0.__unsafe_ref_get(name)
+            .unwrap_or_else(|| panic!("stub: java/lang/invoke/MemberName.{} 无按名协议", name));
+        let clazz = field("clazz").try_cast::<Class>("java/lang/Class")?;
+        let method_name = field("name").try_cast::<String>("java/lang/String")?;
+        let flags = member.0.__unsafe_int_cell("flags").map_or(0, |c| c.get());
+        let binary = format!("{}", clazz.__get_name());
+        let slash = binary.replace('.', "/");
+        element.__set_declaringClassObject(Clone::clone(&clazz));
+        element.__set_declaringClass(String::from(binary.as_str()));
+        let name = format!("{}", method_name);
+        element.__set_methodName(method_name);
+        if let Some((_, file)) = crate::meta::class_source_file().iter().find(|(c, _)| *c == slash) {
+            element.__set_fileName(String::from(*file));
+        }
+        let line = if flags & ACC_NATIVE != 0 {
+            -2
+        } else {
+            // type 由数据面写为描述符串；Java 侧可能已把它展开为 MethodType，此时按 (类, 名) 唯一对位
+            let descriptor = field("type_").try_cast::<String>("java/lang/String").ok().map(|d| format!("{}", d));
+            let bci = info.0.__unsafe_int_cell("bci").map_or(0, |c| c.get());
+            crate::vm_stack::line_number_from_bci(&slash, &name, descriptor.as_deref(), bci)
+        };
+        element.__set_lineNumber(line);
+        Ok(())
+    }
 }

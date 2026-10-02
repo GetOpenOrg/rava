@@ -422,6 +422,11 @@ resets = [
 [facts.class_init.initializers]
 "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V" = 0
 "jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = 0
+# 枚举宇宙（EnumSet.getUniverse / EnumMap.getKeyUniverse 的消费面）：JDK 实现 System$2 → Class.getEnumConstantsShared
+# 反射调用目标类的静态方法 values()，按 JVMS §5.5（invokestatic）初始化该类。手写 getEnumConstantsShared
+# （java_lang_access_impl.rs）按名调初始化钩子后读常量目录；`EnumSet.noneOf(X.class)` 时 X 尚未初始化（ldc 不触发），
+# 无钩子则宇宙为空 → ClassCastException "not an enum"（StackWalker.<clinit> 的 noneOf(Option.class) 即此形）。
+"jdk/internal/access/JavaLangAccess.getEnumConstantsShared:(Ljava/lang/Class;)[Ljava/lang/Enum;" = 0
 
 [facts.array_returns]
 # 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
