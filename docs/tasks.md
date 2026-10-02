@@ -65,7 +65,7 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
-## 🌳 任务依赖树（2026-10-02，集成分支 rust-closure-analyzer 3f9d4cc9）
+## 🌳 任务依赖树（2026-10-02，集成分支 rust-closure-analyzer 417a6594）
 
 > 图例：✅ 已完成　🔄 进行中　⏳ 已立项待启　⏸ 按用户决定暂停　◇ 待用户决策
 > `A ──▶ B` 表示 A 是 B 的前置。同一层内无箭头相连的任务互不依赖，可以并行。
@@ -108,17 +108,20 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
 │   │     └─ ⏳ b3 任务 3：class_init.unknown 归 false
 │   │
-│   ├─ 🔄 native-gaps 补 native 缺口（2026-10-02-native-gaps.md）
-│   │     ├─ 🔄 TestModuleLayerDefine E0599、TestSecurityManagerContext 多余 Runnable 帧
-│   │     └─ 🔄 TestReflectProbe Integer.MAX_VALUE 存根定性（集成分支同样出现则转 C1d-b）
+│   ├─ ✅ native-gaps（bdc4cd64，合入 417a6594）：sun/nio/fs native 21 个、loop_hoist 合流变量、栈帧按声明类归属（declared_by）
+│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2；TestModuleLayerDefine ◀── boot layer；
+│   │     TestClassNestNatives ◀── FS-C2；TestReflectProbe（Integer.MAX_VALUE）已转 C1d-b
 │   │
-│   ├─ ⏳ FS-C2 应用类加载器非空、断言状态按加载器求值 ◀── native-gaps 合入（2026-10-02-fs-c2-app-classloader.md）
+│   ├─ 🔄 FS-C2 应用类加载器非空、断言状态按加载器求值（分支 fs-c2，原 native-gaps 子代理）（2026-10-02-fs-c2-app-classloader.md）
 │   │     └─ 验收：TestClassNestNatives 原样通过 + 边界 e2e
 │   │
-│   ├─ ⏸ regress2 续：栈帧来源统一 ◀── native-gaps 合入
+│   ├─ ⏳ boot layer：ModuleBootstrap.boot 引导期建层、System.bootLayer 按字节码读取、系统模块描述符承载（FS-H12）
+│   │     ◀── C1d-a a2（1e623cec 的 [boot_init] 与 jdk/ 去截断）、FS-C2　验收：TestModuleLayerDefine 原样通过
+│   │
+│   ├─ 🔄 regress2 续：栈帧来源统一（native-gaps 已合入）
 │   │
 │   └─ ⏳ C4 收官：全量 e2e（JDK 21）⊇ 1029 例基线
-│         ◀── C1d-a（a1–a4）、C1d-b、native-gaps、FS-C2、regress2 续 全部合入
+│         ◀── C1d-a（a1–a4）、C1d-b、FS-C2、boot layer、regress2 续 全部合入
 │
 ├─ 【近期】阶段 C 之后，依赖 C4 收官
 │   │
@@ -157,8 +160,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 C1d-a a1 具体求值器 ──▶ a2 合入 1e623cec ──▶ a3 jvm_boundary 归零 ─┐
 C1d-b b1 序列化收窄 ───────────────────────────────────────────────┤
 C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
-native-gaps ──▶ FS-C2 ─────────────────────────────────────────────┤        │
-            └─▶ regress2 栈帧来源统一 ─────────────────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
+native-gaps ✅ ──▶ FS-C2 ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
+               └─▶ regress2 栈帧来源统一 ─────────────────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
 ```
 
 工期瓶颈是 C1d-a：具体求值器把正式闭包降到 ≤360 类之前，1e623cec 不能合入，C4 全量 e2e 也不能启动。
@@ -173,9 +176,10 @@ native-gaps ──▶ FS-C2 ─────────────────�
 |------|------|------------|
 | C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | 具体求值器 engine/concrete/ 判定三道闸门；正式 HelloWorld ≈3091 类 / ≈600 s → ≤360 类、≤3 s；之后合入 1e623cec、139 个 `#[jvm_boundary]` 归零、TestCharsetNamedStreams |
 | C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | c72bfd88（lib crate `pub(crate)` 成员发反射臂，修 m3 serialVersionUID）抽查中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
-| native-gaps · native 缺口补齐 | 🔄 2026-10-02 | TestModuleLayerDefine E0599、TestSecurityManagerContext 多余帧；合入后接 FS-C2 |
-| FS-C2 应用类加载器 | ⏳ | `2026-10-02-fs-c2-app-classloader.md`；TestClassNestNatives 为已知失败 |
-| regress2 续 · 栈帧来源统一 | ⏸ | 等 native-gaps 合入 |
+| native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
+| FS-C2 应用类加载器 | 🔄 fs-c2 | `2026-10-02-fs-c2-app-classloader.md`；TestClassNestNatives 为已知失败 |
+| regress2 续 · 栈帧来源统一 | 🔄 | native-gaps 已合入，开始 |
+| boot layer | ⏳ | ModuleBootstrap 引导建层；◀── C1d-a a2、FS-C2 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
 
