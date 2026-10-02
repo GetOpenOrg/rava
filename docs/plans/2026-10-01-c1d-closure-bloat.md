@@ -1189,6 +1189,7 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
 `fullAddCount`（CAS 竞争分支，约 +8 类）属线程逃逸分析，只记录不实施（§20.8 后续项 2）。
 
 **a5-4（精度待查，2026-10-03 登记）**：TestUnixFileNatives 闭包偏大——服务器 transpile 3m33s、二进制 391M（c1d-p0 b17a6496 前后的 a2 抽查）。该例只调文件系统 API，量级应与 HelloWorld + `sun.nio.fs` 相当；先用 `rava closure --why` / `--flows '@trace:<类>'` 找引入面最大的入口，再定收窄手段。目标：transpile ≤60 s、类数的引入链逐条可解释。
+  - 旁证（2026-10-03，Linux 目标 JDK 21.0.12 jmods 实测 `rava emit --full-precheck`，闭包 2961 类）：文件系统 native 补全后（UnixNativeDispatcher 49 个全承载、FileDispatcherImpl / UnixFileDispatcherImpl 的 transfer / map 补齐），闭包内仍缺 18 个 native，全部与文件 API 无关，是膨胀的指纹：`sun.security.pkcs11.Secmod` nss* 5 个、`sun.security.pkcs11.wrapper.PKCS11` 5 个、`sun.security.smartcardio.PCSC` / `PlatformPCSC` 2 个、`jdk.internal.jimage.NativeImageBuffer.getNativeMap`、`jdk.internal.loader.NativeLibraries` findBuiltinLib / load / unload、`BootLoader.getSystemPackageLocation`、`ClassLoader.defineClass0`。收窄判据之一：这 18 个从闭包消失（不补手写）；macOS 目标另有 `KeychainStore._scanKeychain`、`HostLocaleProviderAdapterImpl.getDefaultLocale` 两个同类指纹。
 
 ### 21.6 并行编排
 

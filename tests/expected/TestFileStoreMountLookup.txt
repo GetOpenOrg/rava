@@ -1,0 +1,26 @@
+store name nonempty = true
+store type nonempty = true
+store same as dir = true
+store posix view = true
+store total > 0 = true
+store usable <= total = true
+stores listed = true / contains store true
+owner by name = true
+group by name = true
+missing user -> UserPrincipalNotFoundException
+missing group -> UserPrincipalNotFoundException
+hard link = hard.txt
+hard same file = true
+hard same key = true
+rename = moved.txt / old exists false
+rename onto same file = data.txt / src exists true
+rename onto other -> FileAlreadyExistsException
+dir stream = [a, b] size(b)=2 after [c]
+xattr = ok
+transferTo = 6 mounts / src pos 0
+transferFrom = 5 mountshello / src pos 5
+transferTo append = 5 mountshellohello
+map = mounts / remaining 0
+Files.copy = hello mounts
+Files.copy onto existing -> FileAlreadyExistsException
+Files.copy replace = mountshellohello

@@ -3,17 +3,19 @@
 //! 包装方法（`open` / `stat` / `unlink` …：UnixPath → NativeBuffer → `*0(address)`）按字节码翻译；
 //! 本文件只承载 JNI 对应物（libnio `UnixNativeDispatcher.c`）：路径参数是 NativeBuffer 的绝对地址
 //! （以 NUL 结尾的 C 串，`Unsafe.allocateMemory` 所得），失败时按 JNI 同款抛 `UnixException(errno)`
-//! 或返回 errno。未实现的 native 保持 panic 存根。
+//! 或返回 errno。本类 49 个 native 全部承载（续见 `unix_native_dispatcher_ext.rs`）。
 
 use crate::prelude::*;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_exception::UnixException;
 use super::unix_file_attributes::UnixFileAttributes;
 
-// UnixNativeDispatcher 的能力位（JDK 常量值；init 只报告本运行时实际承载的面）
+// UnixNativeDispatcher 的能力位（JDK 常量值）
+const SUPPORTS_OPENAT: i32 = 1 << 1;
 const SUPPORTS_FUTIMES: i32 = 1 << 2;
 const SUPPORTS_FUTIMENS: i32 = 1 << 3;
 const SUPPORTS_LUTIMES: i32 = 1 << 4;
+const SUPPORTS_XATTR: i32 = 1 << 5;
 const SUPPORTS_BIRTHTIME: i32 = 1 << 16;
 
 pub(super) fn errno() -> i32 {
@@ -58,15 +60,143 @@ pub(super) fn restartable(mut f: impl FnMut() -> i32) -> std::result::Result<i32
 }
 
 impl UnixNativeDispatcher {
-    /// native `init()`：能力位图（libnio `UnixNativeDispatcher.c` 按平台探测 openat / futimes / futimens /
-    /// lutimes / xattr / birthtime）。futimes0 / futimens0 / lutimes0 已承载（libc 在 Linux 与 macOS 都提供），
-    /// 两平台同 JDK 报告 FUTIMES / FUTIMENS / LUTIMES——不报 LUTIMES 时，不跟随链接的 setTimes 退回
-    /// `openForAttributeAccess(false)`（O_NOFOLLOW 打开符号链接本身）得 ELOOP；birthtime 只有 macOS stat 提供；
-    /// *at 系列与 xattr 的 native 未承载，不报告（报告即把调用引到未实现的 native）。
+    /// native `init()`：能力位图，与 JDK 21 libnio `UnixNativeDispatcher.c` 在两平台的探测结果一致——
+    /// 本类全部 native 均已承载，能力位不再受实现面限制：
+    /// - Linux：OPENAT（openat / fstatat / unlinkat / renameat / futimesat / fdopendir 齐备，
+    ///   `Files.newDirectoryStream` 得 SecureDirectoryStream）、FUTIMES、FUTIMENS、LUTIMES、XATTR；
+    /// - macOS：无 futimesat，故不报 OPENAT；另报 BIRTHTIME（stat 提供 st_birthtime）。
+    ///
+    /// 不报 LUTIMES 时，不跟随链接的 setTimes 退回 `openForAttributeAccess(false)`（O_NOFOLLOW 打开链接
+    /// 本身）得 ELOOP，与 JDK 行为不符（边界用例 TestSymlinkNoFollowAttrs）。
     #[jvm_native]
     pub fn init() -> Result<i32> {
-        let times = SUPPORTS_FUTIMES | SUPPORTS_FUTIMENS | SUPPORTS_LUTIMES;
-        Ok(if cfg!(target_os = "macos") { times | SUPPORTS_BIRTHTIME } else { times })
+        let common = SUPPORTS_FUTIMES | SUPPORTS_FUTIMENS | SUPPORTS_LUTIMES | SUPPORTS_XATTR;
+        Ok(if cfg!(target_os = "macos") { common | SUPPORTS_BIRTHTIME } else { common | SUPPORTS_OPENAT })
+    }
+
+    /// native `openat0(int dfd, long path, int flags, int mode)`：openat(2)。
+    #[jvm_native]
+    pub fn openat0(dfd: i32, path_address: i64, flags: i32, mode: i32) -> Result<i32> {
+        // SAFETY: path_address 指向 NUL 结尾路径；dfd 为调用方持有的目录描述符
+        restartable(|| unsafe { libc::openat(dfd, c_path(path_address), flags, mode as libc::c_uint) })
+            .map_err(unix_exception)
+    }
+
+    /// native `rewind(long stream)`：rewind(3)；rewind 无返回值，以 ferror 判错（JNI 同款先清 errno）。
+    #[jvm_native]
+    pub fn rewind(stream: i64) -> Result<()> {
+        let fp = stream as *mut libc::FILE;
+        // SAFETY: stream 为 setmntent / fopen 返回的 FILE*
+        unsafe {
+            *errno_location() = 0;
+            libc::rewind(fp);
+            let saved = errno();
+            if libc::ferror(fp) != 0 {
+                return Err(unix_exception(saved));
+            }
+        }
+        Ok(())
+    }
+
+    /// native `getlinelen(long stream)`：getline(3) 读一行，返回该行字节数（含换行）；流已到尾返回 -1
+    /// （JNI 同款先判 feof：末行无换行时读到该行也返回 -1）。LinuxFileSystem.getMountEntries 用它
+    /// 求 /proc/mounts 最长行定 getmntent 缓冲。
+    #[jvm_native]
+    pub fn getlinelen(stream: i64) -> Result<i32> {
+        let fp = stream as *mut libc::FILE;
+        let mut line: *mut libc::c_char = std::ptr::null_mut();
+        let mut size: libc::size_t = 0;
+        // SAFETY: fp 为有效 FILE*；getline 分配的 line 由本函数 free（无论成败，man page 约定）
+        let (res, saved, eof) = unsafe {
+            let res = libc::getline(&mut line, &mut size, fp);
+            let saved = errno();
+            if !line.is_null() {
+                libc::free(line as *mut libc::c_void);
+            }
+            (res, saved, libc::feof(fp) != 0)
+        };
+        if eof {
+            return Ok(-1);
+        }
+        if res == -1 {
+            return Err(unix_exception(saved));
+        }
+        if res > i32::MAX as isize {
+            return Err(unix_exception(libc::EOVERFLOW));
+        }
+        Ok(res as i32)
+    }
+
+    /// native `link0(long existing, long newfile)`：link(2)。
+    #[jvm_native]
+    pub fn link0(existing: i64, newfile: i64) -> Result<()> {
+        // SAFETY: 两个地址均指向 NUL 结尾路径
+        restartable(|| unsafe { libc::link(c_path(existing), c_path(newfile)) }).map(drop).map_err(unix_exception)
+    }
+
+    /// native `unlinkat0(int dfd, long path, int flag)`：unlinkat(2)。
+    #[jvm_native]
+    pub fn unlinkat0(dfd: i32, path_address: i64, flag: i32) -> Result<()> {
+        // SAFETY: 同 openat0
+        if unsafe { libc::unlinkat(dfd, c_path(path_address), flag) } == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(())
+    }
+
+    /// native `mknod0(long path, int mode, long dev)`：mknod(2)。
+    #[jvm_native]
+    pub fn mknod0(path_address: i64, mode: i32, dev: i64) -> Result<()> {
+        // SAFETY: 同 open0
+        restartable(|| unsafe { libc::mknod(c_path(path_address), mode as libc::mode_t, dev as libc::dev_t) })
+            .map(drop)
+            .map_err(unix_exception)
+    }
+
+    /// native `rename0(long from, long to)`：rename(2)。
+    #[jvm_native]
+    pub fn rename0(from: i64, to: i64) -> Result<()> {
+        // SAFETY: 两个地址均指向 NUL 结尾路径
+        if unsafe { libc::rename(c_path(from), c_path(to)) } == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(())
+    }
+
+    /// native `renameat0(int fromfd, long from, int tofd, long to)`：renameat(2)。
+    #[jvm_native]
+    pub fn renameat0(fromfd: i32, from: i64, tofd: i32, to: i64) -> Result<()> {
+        // SAFETY: 两个地址均指向 NUL 结尾路径；两 fd 为调用方持有的目录描述符
+        if unsafe { libc::renameat(fromfd, c_path(from), tofd, c_path(to)) } == -1 {
+            return Err(unix_exception(errno()));
+        }
+        Ok(())
+    }
+
+    /// native `fstatat0(int dfd, long path, int flag, UnixFileAttributes)`：fstatat(2) 后填 st_* 字段。
+    #[jvm_native]
+    pub fn fstatat0(dfd: i32, path_address: i64, flag: i32, attrs: UnixFileAttributes) -> Result<()> {
+        // SAFETY: 同 openat0；buf 为栈上 stat 结构
+        let mut buf: libc::stat = unsafe { std::mem::zeroed() };
+        restartable(|| unsafe { libc::fstatat(dfd, c_path(path_address), &mut buf, flag) }).map_err(unix_exception)?;
+        fill_stat(&attrs, &buf);
+        Ok(())
+    }
+
+    /// native `read0(int fd, long address, int nbytes)`：read(2) 到直接内存，返回读到的字节数。
+    #[jvm_native]
+    pub fn read0(fd: i32, address: i64, nbytes: i32) -> Result<i32> {
+        // SAFETY: address 为调用方 NativeBuffer，至少 nbytes 字节可写
+        restartable(|| unsafe { libc::read(fd, address as *mut libc::c_void, nbytes as libc::size_t) as i32 })
+            .map_err(unix_exception)
+    }
+
+    /// native `write0(int fd, long address, int nbytes)`：write(2) 自直接内存，返回写出的字节数。
+    #[jvm_native]
+    pub fn write0(fd: i32, address: i64, nbytes: i32) -> Result<i32> {
+        // SAFETY: address 为调用方 NativeBuffer，至少 nbytes 字节可读
+        restartable(|| unsafe { libc::write(fd, address as *const libc::c_void, nbytes as libc::size_t) as i32 })
+            .map_err(unix_exception)
     }
 
     /// native `open0(long path, int flags, int mode)`：open(2)。

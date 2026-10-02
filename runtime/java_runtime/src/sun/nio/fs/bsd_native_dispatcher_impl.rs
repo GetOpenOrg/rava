@@ -3,9 +3,12 @@
 //! 对标 JDK 21 `BsdNativeDispatcher.c`：setattrlist0 / fsetattrlist0 按 `commonattr` 位
 //! （ATTR_CMN_CRTIME / MODTIME / ACCTIME 的位序）依次装入纳秒拆分的 `timespec`；initIDs 只为
 //! 挂载表枚举（UnixMountEntry）缓存字段 ID，本模型按名访问字段，无需缓存。
+//! 挂载表枚举（getfsstat / fsstatEntry / endfsstat）的迭代器是堆上的 [`FsStatIter`]，地址作 long 句柄；
+//! clonefile0 返回 errno（0 = 成功），不抛异常（JNI 同款）。本类 8 个 native 全部承载。
 
 use crate::prelude::*;
 use super::bsd_native_dispatcher::BsdNativeDispatcher;
+use super::unix_mount_entry::UnixMountEntry;
 #[cfg(target_os = "macos")]
 use super::unix_native_dispatcher_impl::errno;
 use super::unix_native_dispatcher_impl::unix_exception;
@@ -93,6 +96,123 @@ impl BsdNativeDispatcher {
     pub fn getmntonname0(path: i64) -> Result<JArray<i8>> {
         mount_point(path)
     }
+
+    /// native `getfsstat()`：getfsstat(2) 快照全部挂载项，返回迭代器句柄。先计数再取（多留 16 项，
+    /// 防两次调用之间新挂载），任一次结果 ≤ 0 抛 UnixException(errno)。
+    #[jvm_native]
+    pub fn getfsstat() -> Result<i64> {
+        fs_stat_open()
+    }
+
+    /// native `fsstatEntry(long iter, UnixMountEntry entry)`：取下一挂载项填 name（f_mntfromname）/
+    /// dir（f_mntonname）/ fstype（f_fstypename）/ opts（MNT_RDONLY ? "ro" : "rw"），返回 0；取尽返回 -1。
+    #[jvm_native]
+    pub fn fsstatEntry(iter: i64, entry: UnixMountEntry) -> Result<i32> {
+        fs_stat_next(iter, &entry)
+    }
+
+    /// native `endfsstat(long iter)`：释放迭代器。
+    #[jvm_native]
+    pub fn endfsstat(iter: i64) -> Result<()> {
+        fs_stat_close(iter);
+        Ok(())
+    }
+
+    /// native `clonefile0(long src, long dst, int flags)`：clonefile(2)，返回 errno（0 = 成功）。
+    #[jvm_native]
+    pub fn clonefile0(src: i64, dst: i64, flags: i32) -> Result<i32> {
+        Ok(clone_file(src, dst, flags))
+    }
+}
+
+/// getfsstat 快照与游标（`BsdNativeDispatcher.c` 的 `struct fsstat_iter`）。
+#[cfg(target_os = "macos")]
+struct FsStatIter {
+    entries: Vec<libc::statfs>,
+    pos: usize,
+}
+
+/// `<sys/mount.h>` MNT_RDONLY
+#[cfg(target_os = "macos")]
+const MNT_RDONLY: u32 = 0x0000_0001;
+
+#[cfg(target_os = "macos")]
+fn fs_stat_open() -> Result<i64> {
+    // SAFETY: 缓冲为空时只返回挂载项数
+    let n = unsafe { libc::getfsstat(std::ptr::null_mut(), 0, libc::MNT_NOWAIT) };
+    if n <= 0 {
+        return Err(unix_exception(errno()));
+    }
+    let cap = n as usize + 16;
+    // SAFETY: statfs 为纯数据结构，零值合法
+    let mut entries: Vec<libc::statfs> = (0..cap).map(|_| unsafe { std::mem::zeroed() }).collect();
+    let size = (cap * std::mem::size_of::<libc::statfs>()) as libc::c_int;
+    // SAFETY: entries 可写 size 字节
+    let n = unsafe { libc::getfsstat(entries.as_mut_ptr(), size, libc::MNT_WAIT) };
+    if n <= 0 {
+        return Err(unix_exception(errno()));
+    }
+    entries.truncate(n as usize);
+    Ok(Box::into_raw(Box::new(FsStatIter { entries, pos: 0 })) as i64)
+}
+
+#[cfg(target_os = "macos")]
+fn fs_stat_next(iter: i64, entry: &UnixMountEntry) -> Result<i32> {
+    // SAFETY: iter 为 fs_stat_open 返回、尚未 endfsstat 的句柄
+    let it = unsafe { &mut *(iter as *mut FsStatIter) };
+    let Some(sfs) = it.entries.get(it.pos) else {
+        return Ok(-1);
+    };
+    let bytes = |a: &[libc::c_char]| {
+        // SAFETY: statfs 的名字字段为 NUL 结尾的定长数组
+        let s = unsafe { std::ffi::CStr::from_ptr(a.as_ptr()) };
+        JArray::from(s.to_bytes().iter().map(|b| *b as i8).collect::<Vec<i8>>())
+    };
+    entry.__set_name(bytes(&sfs.f_mntfromname));
+    entry.__set_dir(bytes(&sfs.f_mntonname));
+    entry.__set_fstype(bytes(&sfs.f_fstypename));
+    let opts: &[u8] = if sfs.f_flags & MNT_RDONLY != 0 { b"ro" } else { b"rw" };
+    entry.__set_opts(JArray::from(opts.iter().map(|b| *b as i8).collect::<Vec<i8>>()));
+    it.pos += 1;
+    Ok(0)
+}
+
+#[cfg(target_os = "macos")]
+fn fs_stat_close(iter: i64) {
+    if iter != 0 {
+        // SAFETY: iter 为 fs_stat_open 的 Box 指针，只释放一次（UnixFileSystem 的 finally）
+        drop(unsafe { Box::from_raw(iter as *mut FsStatIter) });
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clone_file(src: i64, dst: i64, flags: i32) -> i32 {
+    // SAFETY: src / dst 指向 NUL 结尾路径
+    match super::unix_native_dispatcher_impl::restartable(|| unsafe {
+        libc::clonefile(src as *const libc::c_char, dst as *const libc::c_char, flags as u32)
+    }) {
+        Ok(_) => 0,
+        Err(e) => e,
+    }
+}
+
+// 非 macOS 宿主：本类只在 macOS 的 JDK 中存在，下列落点不会被翻译体调用，只为保持文件可编译。
+#[cfg(not(target_os = "macos"))]
+fn fs_stat_open() -> Result<i64> {
+    Err(unix_exception(libc::ENOTSUP))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fs_stat_next(_iter: i64, _entry: &UnixMountEntry) -> Result<i32> {
+    Ok(-1)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fs_stat_close(_iter: i64) {}
+
+#[cfg(not(target_os = "macos"))]
+fn clone_file(_src: i64, _dst: i64, _flags: i32) -> i32 {
+    libc::ENOTSUP
 }
 
 /// 路径所在文件系统的挂载点字节。

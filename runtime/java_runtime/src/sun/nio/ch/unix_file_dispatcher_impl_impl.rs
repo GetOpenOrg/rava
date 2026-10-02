@@ -12,12 +12,16 @@ const IOS_EOF: i64 = -1;
 const IOS_UNAVAILABLE: i64 = -2;
 const IOS_INTERRUPTED: i64 = -3;
 
-fn errno() -> i32 {
+/// `FileChannelImpl.MAP_RO` / `MAP_RW` / `MAP_PV`（map0 的 prot 实参）
+const MAP_RO: i32 = 0;
+const MAP_RW: i32 = 1;
+
+pub(super) fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
 /// `JNU_ThrowIOExceptionWithLastError`：有系统错误文案用文案，否则用缺省消息。
-fn io_exception(default: &str) -> JvmError {
+pub(super) fn io_exception(default: &str) -> JvmError {
     let err = errno();
     let msg = if err == 0 {
         default.to_owned()
@@ -57,7 +61,7 @@ fn handle(rv: i64, msg: &str) -> Result<i64> {
     Err(io_exception(msg))
 }
 
-fn fd_of(fdo: &FileDescriptor) -> i32 {
+pub(super) fn fd_of(fdo: &FileDescriptor) -> i32 {
     fdo.__get_fd()
 }
 
@@ -158,4 +162,55 @@ impl UnixFileDispatcherImpl {
             Ok(vfs.f_frsize as i32)
         }
     }
+
+    /// native `map0(FileDescriptor, int prot, long position, long length, boolean isSync)`：mmap(2)，
+    /// 返回映射地址。prot：MAP_RO → PROT_READ + MAP_SHARED，MAP_RW → 读写 + MAP_SHARED，
+    /// MAP_PV → 读写 + MAP_PRIVATE。isSync 在 Linux 加 MAP_SYNC | MAP_SHARED_VALIDATE（不支持时
+    /// IOException「map with mode MAP_SYNC unsupported」）；其余平台 Java 侧不会以 isSync 调用
+    /// （JNI 为 InternalError「should never call …」，此处同文案报 IOException）。
+    /// ENOMEM 抛 OutOfMemoryError("Map failed")，其余失败经 `handle`（"Map failed"）。
+    #[jvm_native]
+    pub fn map0(fdo: FileDescriptor, prot: i32, position: i64, length: i64, is_sync: bool) -> Result<i64> {
+        let (protections, flags) = match prot {
+            MAP_RO => (libc::PROT_READ, libc::MAP_SHARED),
+            MAP_RW => (libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED),
+            _ => (libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE),
+        };
+        let flags = if is_sync { flags | map_sync_flags()? } else { flags };
+        // SAFETY: 新建映射（地址由内核选择），fd 为调用方持有的描述符
+        let addr = unsafe {
+            libc::mmap(std::ptr::null_mut(), length as libc::size_t, protections, flags, fd_of(&fdo), position as libc::off_t)
+        };
+        if addr == libc::MAP_FAILED {
+            let err = errno();
+            if is_sync && err == libc::ENOTSUP {
+                return Err(io_exception("map with mode MAP_SYNC unsupported"));
+            }
+            if err == libc::ENOMEM {
+                return Err(JvmError::out_of_memory("Map failed"));
+            }
+            return handle(-1, "Map failed");
+        }
+        Ok(addr as i64)
+    }
+
+    /// native `unmap0(long address, long length)`：munmap(2)，经 `handle`（"Unmap failed"）。
+    #[jvm_native]
+    pub fn unmap0(address: i64, length: i64) -> Result<i32> {
+        // SAFETY: address / length 为 map0 返回的映射（Unmapper 持有，只解除一次）
+        let r = unsafe { libc::munmap(address as *mut libc::c_void, length as libc::size_t) };
+        Ok(handle(r as i64, "Unmap failed")? as i32)
+    }
+}
+
+/// map0 的 isSync 附加标志：Linux 为 MAP_SYNC | MAP_SHARED_VALIDATE。
+#[cfg(target_os = "linux")]
+fn map_sync_flags() -> Result<i32> {
+    Ok(libc::MAP_SYNC | libc::MAP_SHARED_VALIDATE)
+}
+
+/// 非 Linux：Java 侧不会以 isSync 调用 map0（JNI 为 InternalError，此处同文案报 IOException）。
+#[cfg(not(target_os = "linux"))]
+fn map_sync_flags() -> Result<i32> {
+    Err(io_exception("should never call map on platform where MAP_SYNC is unimplemented"))
 }
