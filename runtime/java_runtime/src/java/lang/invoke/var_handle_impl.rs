@@ -12,7 +12,7 @@
 //!   - Array 家族（*Array*）：见 `var_handle_ext.rs`。
 //!
 //! CAS 族（compareAndSet/weakCompareAndSet*/compareAndExchange*/getAndSet*/getAndAdd*）
-//! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / int、long 原子单元）。
+//! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / long 原子单元 / int 与子字字段的 int 字视图）。
 
 use crate::prelude::*;
 use super::var_handle::VarHandle;
@@ -113,7 +113,8 @@ fn _field_exchange(c: _Carrier, holder: &Object, off: i64, expected: Option<&Obj
                 _ => nv.take(),
             }).ok_or_else(_state_err)
         }
-        _Carrier::Long | _Carrier::Int => {
+        // int 与子字族（boolean / byte / short / char）同走 int 字视图：位形即零扩展字
+        _Carrier::Long | _Carrier::Int | _Carrier::Bool | _Carrier::Byte | _Carrier::Short | _Carrier::Char => {
             let eb = e.as_ref().and_then(|e| _bits(c, e));
             let vb = _bits(c, &nv).ok_or_else(|| _bad_arg("bad value form"))?;
             let old = if c == _Carrier::Long {

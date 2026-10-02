@@ -109,6 +109,7 @@ pub struct Manifest {
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
+    primitive_class_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
@@ -334,6 +335,7 @@ impl Manifest {
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
+            primitive_class_returns: reflect("primitive_class").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -494,6 +496,11 @@ impl Manifest {
     /// 返回接收者镜像所指类的直接超类镜像（`Class.getSuperclass` 语义：接口 / 根类 / 基本类型为 null，数组为根类）
     pub fn returns_superclass(&self, member: &str) -> bool {
         self.superclass_returns.contains(member)
+    }
+
+    /// 返回基本类型（含 void）的类镜像（`Class.getPrimitiveClass` 语义）：所指类不是字节码类，无初始化、无成员
+    pub fn returns_primitive_class(&self, member: &str) -> bool {
+        self.primitive_class_returns.contains(member)
     }
 
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象

@@ -67,6 +67,8 @@ pub(super) struct BodyScan {
     pub(super) inited: HashSet<String>,
     pub(super) ctors: Vec<(Vec<String>, String)>,
     pub(super) calls: HashSet<String>,
+    /// 至少一处不以 `self` 为接收者调用 / 引用的名字（`calls` 中其余名字只经 `self.f(…)` 调用，被调 fn 的 `self` 即本 fn 的 `self`）
+    pub(super) nonself: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: HashSet<String>,
 }
@@ -101,6 +103,9 @@ impl<'ast> Visit<'ast> for BodyScan {
                 }
             }
         }
+        if !is_self_path(&m.receiver) {
+            self.nonself.insert(name.clone());
+        }
         self.calls.insert(name);
         syn::visit::visit_expr_method_call(self, m);
     }
@@ -110,6 +115,7 @@ impl<'ast> Visit<'ast> for BodyScan {
             let segs = expr_path_segs(p);
             if let Some(last) = segs.last() {
                 self.calls.insert(last.clone());
+                self.nonself.insert(last.clone());
                 let head_is_type = segs.len() >= 2 && segs[segs.len() - 2].starts_with(|ch: char| ch.is_ascii_uppercase());
                 let is_ctor = is_ctor_call(&segs[..segs.len() - 1], last, &self.helpers);
                 if is_ctor && head_is_type {
@@ -148,6 +154,7 @@ impl<'ast> Visit<'ast> for BodyScan {
     fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
         if let Some(last) = path_segs(&p.path).last() {
             self.calls.insert(last.clone());
+            self.nonself.insert(last.clone());
         }
         syn::visit::visit_expr_path(self, p);
     }
@@ -181,6 +188,36 @@ pub(super) fn bind<T: PartialEq>(env: &mut HashMap<String, Option<T>>, name: Str
         _ => {
             env.insert(name, t);
         }
+    }
+}
+
+/// 表达式是 `self` 本身
+pub(super) fn is_self_path(e: &syn::Expr) -> bool {
+    matches!(e, syn::Expr::Path(p) if p.path.is_ident("self"))
+}
+
+/// 表达式的值是 `self` 所指对象：`self` 经保持对象身份的转换（括号 / 引用 / `?` / `Clone::clone` /
+/// `Object::from` / `T::from` / `.clone()` 等，同 [`infer`] 的身份规则）
+pub(super) fn is_self_value(e: &syn::Expr) -> bool {
+    use syn::Expr;
+    match e {
+        Expr::Paren(p) => is_self_value(&p.expr),
+        Expr::Group(g) => is_self_value(&g.expr),
+        Expr::Reference(r) => is_self_value(&r.expr),
+        Expr::Try(t) => is_self_value(&t.expr),
+        Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => is_self_value(&u.expr),
+        Expr::Path(_) => is_self_path(e),
+        Expr::Call(c) => {
+            let Expr::Path(p) = &*c.func else { return false };
+            let segs = expr_path_segs(p);
+            let Some((last, head)) = segs.split_last() else { return false };
+            let identity = (head == ["Clone"] && last == "clone") || (head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) && last == "from");
+            identity && c.args.len() == 1 && c.args.first().is_some_and(is_self_value)
+        }
+        Expr::MethodCall(m) => {
+            matches!(m.method.to_string().as_str(), "clone" | "into" | "unwrap" | "expect") && is_self_value(&m.receiver)
+        }
+        _ => false,
     }
 }
 
@@ -234,8 +271,8 @@ pub(super) struct CallScan<'a> {
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     pub(super) fresh: HashMap<String, Vec<String>>,
     pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用)
-    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self)
+    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool)>,
     pub(super) opaque: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
@@ -330,8 +367,9 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             // Java 字段名是 Rust 关键字时访问器带 `_` 后缀（`in` → `__set_in_`）
             let f = java_field_name(f);
             let value = m.args.first().and_then(|a| infer(a, self.locals, self.helpers));
-            let on_self = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false));
+            let on_self = is_self_path(&m.receiver);
+            let value_self = write && m.args.first().is_some_and(is_self_value);
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self));
         }
         // 按名协议 `o.0.__unsafe_ref_set("字段", v)`：接收者是擦除的 vtable 对象，只知字段名
         let by_name = (BY_NAME_WRITES.contains(&name.as_str()), BY_NAME_READS.contains(&name.as_str()));
@@ -340,7 +378,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let f = lit.value();
                 let f = java_field_name(&f).to_string();
                 let value = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| infer(a, self.locals, self.helpers))).flatten();
-                self.fields.push((f, by_name.0, None, value, false, false));
+                let value_self = by_name.0 && m.args.iter().nth(1).is_some_and(is_self_value);
+                self.fields.push((f, by_name.0, None, value, false, false, value_self));
             }
         }
         let args = m.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
@@ -362,7 +401,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                     if head.last().is_some_and(|h| h.starts_with(|ch: char| ch.is_ascii_uppercase())) {
                         let f = java_field_name(f);
                         let value = c.args.first().and_then(|a| infer(a, self.locals, self.helpers));
-                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true));
+                        let value_self = c.args.first().is_some_and(is_self_value);
+                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self));
                     }
                 }
                 let args = c.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();

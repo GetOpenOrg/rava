@@ -18,6 +18,9 @@ impl<'a> Engine<'a> {
         if let Some(rt) = self.methods[m].rtype {
             if let Some(es) = &array_ret {
                 self.array_return(m, rt, es);
+            } else if self.man.returns_primitive_class(&key.to_string()) {
+                let k = self.primitive_mirror();
+                self.add_to(Node::R(m), &TypeSet::exact(k));
             } else if !self.man.returns_receiver(&key.to_string()) && !reads {
                 self.add_to(Node::R(m), &TypeSet::open(rt));
             }
@@ -64,7 +67,12 @@ impl<'a> Engine<'a> {
             self.hw_base_fn(m, &cf, &key.name, &key.desc);
         }
         // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类镜像）时不经 open 返回值交出
-        let modeled = reads || array_ret.is_some() || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks) || self.man.returns_superclass(&ks);
+        let modeled = reads
+            || array_ret.is_some()
+            || self.man.returns_receiver(&ks)
+            || self.man.returns_mirror(&ks)
+            || self.man.returns_superclass(&ks)
+            || self.man.returns_primitive_class(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {
@@ -135,6 +143,19 @@ impl<'a> Engine<'a> {
             out.absorb(f, &hwc.fns[f]);
         }
         out
+    }
+
+    /// 基本类型（含 void）的类镜像：一个 Class 类型的抽象对象，九个基本类型类合一。不登记为类镜像——所指不是
+    /// 字节码类：类初始化无对象（跳过），成员查找与枚举、超类、引用比较照所指未知处理
+    pub(super) fn primitive_mirror(&mut self) -> u32 {
+        if let Some(k) = self.prim_mirror {
+            return k;
+        }
+        let class = self.id(CLASS);
+        let k = self.id(&format!("{CLASS}#<primitive>"));
+        self.objs.insert(k, class);
+        self.prim_mirror = Some(k);
+        k
     }
 
     /// 手写体效果：分配 / 构造 / 回调。实参按手写体调用点的语法推断精确接入，推断不出的经方法 m 的值池流转
