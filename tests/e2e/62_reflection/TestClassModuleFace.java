@@ -21,7 +21,9 @@ public class TestClassModuleFace {
         // isExported：java.lang 公开导出；jdk.internal.* 不导出
         System.out.println("exported-lang=" + javaBase.isExported("java.lang"));
         System.out.println("exported-internal=" + !javaBase.isExported("jdk.internal.misc"));
-        System.out.println("own-exported=" + own.isExported(own.getName()));
+        // 未命名模块：getName() 为 null；导出任意包（类路径语义）
+        System.out.println("own-name-null=" + (own.getName() == null));
+        System.out.println("own-exported-default=" + own.isExported("any.pkg"));
 
         // canRead 边界
         System.out.println("can-read=" + own.canRead(javaBase));
