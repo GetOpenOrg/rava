@@ -50,13 +50,18 @@ impl<'a> Engine<'a> {
     }
 
     /// Class 值集中各类镜像所指类的直接超类镜像（`getSuperclass`）：接口与根类无超类（null，不入结果），
-    /// 数组的超类是根类；所指未知的 Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open。
+    /// 数组与非字节码类镜像的超类是根类；所指未知的 Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open。
     /// 镜像只由类字面量与 `getClass` 产生，不指向基本类型
     pub(super) fn super_set(&mut self, s: &TypeSet) -> TypeSet {
         let class = self.id(CLASS);
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
+            if Some(x) == self.synth_mirror {
+                let k = self.mirror(OBJECT);
+                out.classes.insert(k);
+                continue;
+            }
             let Some(&c) = self.mirrors.get(&x) else {
                 out.classes.insert(class);
                 continue;
@@ -87,7 +92,7 @@ impl<'a> Engine<'a> {
 
     /// 值集中各值的类镜像（`getClass`）。open(T) 是「任意已实例化的 T 子类型」，其类镜像是 G 中 T 的子类型
     /// （数组分配点须已逃逸，同虚调用接收者的 open 展开）各自的镜像；G 增长时由 [`Self::mirror_into`] 登记的
-    /// 结果节点补入（[`Self::mirror_reopen`]）。类型推不出（lambda 合成类、手写实现对象）为所指未知的 Class
+    /// 结果节点补入（[`Self::mirror_reopen`]）。lambda 合成类、手写实现对象给非字节码类镜像（[`Self::synthetic_mirror`]）
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
@@ -107,13 +112,27 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// 值 x 的类镜像：lambda / 手写实现对象的运行期类不是字节码类，为所指未知的 Class
+    /// 值 x 的类镜像：lambda / 手写实现对象的运行期类不是字节码类，为共用的非字节码类镜像
     fn value_mirror(&mut self, x: u32) -> u32 {
         if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-            return self.id(CLASS);
+            return self.synthetic_mirror();
         }
         let t = self.ty(x);
         self.mirror_id(t)
+    }
+
+    /// 非字节码类（lambda 合成类、手写实现对象）的类镜像：一个 Class 类型的抽象对象（Class 实例字段按对象建模）。
+    /// 不登记为镜像——它不指向任何字节码类：类初始化、成员查找与枚举照所指未知处理；字段查找与字段枚举视为
+    /// 所指已知且无 Java 字段（合成类的捕获字段不经反射写入）；超类是根类
+    pub(super) fn synthetic_mirror(&mut self) -> u32 {
+        if let Some(k) = self.synth_mirror {
+            return k;
+        }
+        let class = self.id(CLASS);
+        let k = self.id(&format!("{CLASS}#<synthetic>"));
+        self.objs.insert(k, class);
+        self.synth_mirror = Some(k);
+        k
     }
 
     /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，

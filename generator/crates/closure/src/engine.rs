@@ -377,6 +377,8 @@ pub struct Engine<'a> {
     /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
     mirror_open: BTreeMap<u32, Vec<Node>>,
     mirror_open_seen: HashSet<(u32, Node)>,
+    /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
+    synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
     rpending: Vec<(Members, usize, TypeSet)>,

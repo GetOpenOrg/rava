@@ -1,0 +1,12 @@
+serial circle(r=1.5) area=7.07
+serial rect(2x3,cache=0) area=6.0
+serial logged(side=4,note=note-4) area=16.0
+fields Circle[r, serialVersionUID] super=Base[serialVersionUID, tag]
+fields Rect[cache, h, serialVersionUID, w] super=Base[serialVersionUID, tag]
+fields Logged[note, serialVersionUID, side] super=Base[serialVersionUID, tag]
+read tag=circle ints=[]
+read tag=rect ints=[cache=99, h=3, w=2]
+read tag=logged ints=[side=4]
+lambda super=java.lang.Object fields=0
+run
+array Shape[] super=java.lang.Object fields=[]
