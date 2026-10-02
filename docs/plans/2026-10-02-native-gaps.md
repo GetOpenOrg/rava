@@ -65,6 +65,16 @@
 
 ## 三、移交 C1d
 
+- `java/lang/invoke/MethodHandle.linkToNative`（不在 35 项清单内，TestSecurityManagerContext 预检报出）：
+  - `rava closure --why` 实测的入链路径：
+    ```
+    main@68 → [dispatch] Method.invoke@90 → [invoke] DirectMethodHandleAccessor$NativeAccessor.invoke@91
+      → [signature] NativeAccessor.methodAccessorInvoker:()Ljava/lang/invoke/MethodHandle;
+      → [reflect] 类 java/lang/invoke/MethodHandle → linkToNative
+    ```
+  - 结论：MethodHandle 只是作为返回类型出现在方法签名里，反射模型却因此把该类的全部成员都当作反射可达。用户的反射目标（getMethod 的 Class 实参）只有 TestSecurityManagerContext 本类，没有任何调用经 FFM 下调桩到达 linkToNative。
+  - 处理：属闭包过近似（反射成员集），**移交 C1d**，不手写。
+  - 备注：即使将来有真实调用，linkToNative 的目标也是运行期生成的下调桩（`NativeEntryPoint.makeDowncallStub`），归第②类。
 - `com/sun/media/sound/DirectAudioDeviceProvider`、`PortMixerProvider` 的 nGetNumDevices / nNew*Info：
   - 来由（推断，`rava closure --why` 证实前不作定论）：audit api 的入口是包内全部 public 方法。
     `ServiceLoader.<init>` 的服务 Class 形参值集不精确（[services.lookups]）。因此模块服务目录中
