@@ -154,10 +154,10 @@ pub fn capture_java_frames() -> Vec<JavaFrame> {
         if !executes_body(&parsed.class, seg, row) {
             continue;
         }
-        // 帧归属方法体的声明类（HotSpot 帧的 method holder）：注入本类的接口 default 体归声明接口；
+        // 帧归属方法体的声明类（HotSpot 帧的 method holder）：复制进本类的方法体（接口 default / 未覆盖的超类虚方法）归声明类型；
         // 继承转发行只是转发外壳（体在声明类的帧上执行），不成帧
-        let (class, method) = if !row.default_of.is_empty() {
-            (row.default_of.to_owned(), declared_row(row.default_of, row).unwrap_or(row))
+        let (class, method) = if !row.declared_by.is_empty() {
+            (row.declared_by.to_owned(), declared_row(row.declared_by, row).unwrap_or(row))
         } else if row.inherited {
             continue;
         } else {

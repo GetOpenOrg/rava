@@ -37,6 +37,10 @@ public class TestClassContextDispatch {
 
     static class Derived extends Base {
         String run(Probe p) { return p.context(); }
+        String whereAmI() {
+            StackTraceElement e = new Throwable().getStackTrace()[0];
+            return e.getClassName() + "." + e.getMethodName() + " " + e.getFileName();
+        }
     }
 
     static class SuperCall extends Derived {
@@ -79,6 +83,8 @@ public class TestClassContextDispatch {
         InheritsRun ir = new InheritsRun();
         System.out.println("inherited = " + ir.run(p));
         Concrete hk = new Hooked();
+        System.out.println("inherited trace top = " + ir.whereAmI());
+        System.out.println("declared in subclass = " + InheritsRun.class.getDeclaredMethods().length);
         System.out.println("concrete override = " + hk.hook(p));
         Concrete dl = new Delegator();
         System.out.println("delegation = " + dl.hook(p));

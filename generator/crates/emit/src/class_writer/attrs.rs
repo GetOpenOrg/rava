@@ -183,9 +183,9 @@ pub struct MethodAttrExtra {
     pub handwritten_body: bool,
     /// 覆盖方法未被分派到：槽条目发 `__stub` 存根（漏派发显式失败）
     pub slot_stub: bool,
-    /// 注入本类的接口 default 方法体的声明接口 binary（空 = 本类声明）：类文件里该方法不属于
-    /// 本类，反射声明表与栈帧归属都以声明接口为准
-    pub default_of: String,
+    /// 复制进本类的方法体的声明类型 binary（接口 default 体 / 未覆盖的用户超类虚方法体；空 = 本类
+    /// 声明）：类文件里该方法不属于本类，反射声明表与栈帧归属都以声明类型为准
+    pub declared_by: String,
 }
 
 /// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）；
@@ -235,8 +235,8 @@ pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtr
     if extra.handwritten_body {
         parts.push("body = \"handwritten\"".into());
     }
-    if !extra.default_of.is_empty() {
-        parts.push(format!("default_of = \"{}\"", esc(&extra.default_of)));
+    if !extra.declared_by.is_empty() {
+        parts.push(format!("declared_by = \"{}\"", esc(&extra.declared_by)));
     }
     if !m.parameters.is_empty() {
         let mp: Vec<String> = m
