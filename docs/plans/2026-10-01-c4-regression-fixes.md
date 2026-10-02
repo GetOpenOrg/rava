@@ -88,6 +88,11 @@ DeepCopy、TestBmhDynamicSpecies、TestCtorReflect 在 59dbedc1 及其后两次�
 - 类初始化：`T::__class_init()` 推断为回调目标 `Upcall::Init(T)`，按 JVMS §5.5 主动初始化 T（超类链与 `<clinit>`）。
 - 静态类型推导从 `syntax.rs` 拆到 `handwritten/stype.rs`（文件行数约束）。
 
+复抽（622ea4b0）又暴露一处：DateTest 命中 `NumberFormat.setParseIntegerOnly` 存根。`getIntegerInstance` 中
+`df = Self::new_format(…)?`，动态类型推断按 `new_` 前缀把它当成构造 `Self`（手写实现对象，非 Java 类），接收者记为
+「已推出」却解析不到类，回调边落空。修法（d78940ff）：构造器名形态、但由本文件 impl 块声明的 fn 是辅助 fn，不当作构造——
+返回值动态类型推不出，按静态类型 `DecimalFormat` 的 open 接收者分派；构造登记与 fresh 绑定共用同一判定（`is_ctor_call`）。
+
 ## 七、范围外
 
 - 合并 c3e2b40c 后，precheck 的 `native-missing` 从 0 变为 18：涉及 `Module.addExports*0`、`Unsafe.get/put*Volatile` 等。
