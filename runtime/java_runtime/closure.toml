@@ -175,6 +175,11 @@ classes = [
     # （`extends ClassLoader`）一经实例化即走此路径。jdk/ 前缀截断下 newInstance 被翻译而 <init> 留存根，
     # 运行期命中 panic。load / find 族（System.loadLibrary）不在该调用链上，仍为存根。
     "jdk/internal/loader/NativeLibraries",
+    # VM 边界类 ClassLoader 的嵌套类 ParallelLoaders（纯 Java：静态 loaderTypes = newSetFromMap(WeakHashMap)
+    # 并登记 ClassLoader.class）。vm_boundary 按外层类覆盖嵌套类，其 <clinit> 被判为手写承载而不生成，
+    # loaderTypes 保持 null；ClassLoader 构造器按字节码调 isRegistered 即 monitor_enter(null) 抛 NPE。
+    # 整类放行按字节码翻译（含 <clinit>）。
+    "java/lang/ClassLoader$ParallelLoaders",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存

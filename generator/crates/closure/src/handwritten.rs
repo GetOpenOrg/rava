@@ -31,6 +31,8 @@ use syntax::path_segs;
 pub const GENERATED_MARK: &str = "rava_macros::java_class";
 const SUFFIXES: [&str; 2] = ["_impl.rs", "_ext.rs"];
 const CTOR_RUST: &str = "new";
+/// 类初始化入口的 Rust 名（rava_macros 生成）：手写体 `T::__class_init()` 显式触发 T 的类初始化
+pub const CLASS_INIT_RUST: &str = "__class_init";
 /// prelude 导出的 Java 根类型的 Rust 名（`Object::from(x)` 是保持身份的上转；字符串字面量产出 String）
 const OBJECT_RUST: &str = "Object";
 const STRING_RUST: &str = "String";
