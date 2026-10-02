@@ -119,18 +119,23 @@ impl<'a> Engine<'a> {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
         }
         if self.man.is_field_enumerator(&k) {
-            let cls = match args.first() {
-                Some(V::Class(c, _)) => Some(c.to_string()),
-                _ => None,
-            };
-            self.enumerate_fields(cls);
+            // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
+            let mut cs = BTreeSet::new();
+            let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            for c in cs {
+                self.enumerate_fields(Some(c));
+            }
+            if unknown {
+                self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
+                self.enumerate_fields(None);
+            }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
     }
 
-    /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
+    /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
     fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
             if self.fenum_pending.insert(cls) {
@@ -419,10 +424,7 @@ impl<'a> Engine<'a> {
                 for f in recv_fs.iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => {
-                            let k = self.mirror_op(op, s);
-                            self.add_to(res, &k);
-                        }
+                        Feed::S(s) => self.mirror_into(op, s, res),
                     }
                 }
             } else if model == RetModel::Receiver {

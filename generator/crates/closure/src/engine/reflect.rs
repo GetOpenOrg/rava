@@ -42,7 +42,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 镜像流边的变换：op 作用于值集 s
-    pub(super) fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
+    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
         match op {
             MirrorOp::Of => self.mirror_set(s),
             MirrorOp::Super => self.super_set(s),
@@ -85,23 +85,70 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
+    /// 值集中各值的类镜像（`getClass`）。open(T) 是「任意已实例化的 T 子类型」，其类镜像是 G 中 T 的子类型
+    /// （数组分配点须已逃逸，同虚调用接收者的 open 展开）各自的镜像；G 增长时由 [`Self::mirror_into`] 登记的
+    /// 结果节点补入（[`Self::mirror_reopen`]）。类型推不出（lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
-            let k = if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-                self.id(CLASS)
-            } else {
-                let t = self.ty(x);
-                self.mirror_id(t)
-            };
+            let k = self.value_mirror(x);
             out.classes.insert(k);
         }
-        if !s.open.is_empty() {
-            out.classes.insert(self.id(CLASS));
+        for o in s.open.iter() {
+            for &x in self.g_of(o).iter() {
+                if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+                    continue;
+                }
+                let k = self.value_mirror(x);
+                out.classes.insert(k);
+            }
         }
         out
+    }
+
+    /// 值 x 的类镜像：lambda / 手写实现对象的运行期类不是字节码类，为所指未知的 Class
+    fn value_mirror(&mut self, x: u32) -> u32 {
+        if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
+            return self.id(CLASS);
+        }
+        let t = self.ty(x);
+        self.mirror_id(t)
+    }
+
+    /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，
+    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像
+    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+        if op == MirrorOp::Of {
+            for o in s.open.iter() {
+                if self.mirror_open_seen.insert((o, dst)) {
+                    self.mirror_open.entry(o).or_default().push(dst);
+                }
+            }
+        }
+        let k = self.mirror_op(op, s);
+        self.add_to(dst, &k);
+    }
+
+    /// open 展开的取值面扩大（x 进入 G / 数组 x 逃逸）：`getClass(open T)`（x ⊂ T）的结果节点补入 x 的类镜像
+    pub(super) fn mirror_reopen(&mut self, x: u32) {
+        if self.mirror_open.is_empty() || (self.arrays.contains_key(&x) && !self.escaped.contains(&x)) {
+            return;
+        }
+        let os: Vec<u32> = self.mirror_open.keys().copied().collect();
+        let mut dsts: Vec<Node> = vec![];
+        for o in os {
+            if self.sub(x, o) {
+                dsts.extend(self.mirror_open[&o].iter().copied());
+            }
+        }
+        if dsts.is_empty() {
+            return;
+        }
+        let k = TypeSet::exact(self.value_mirror(x));
+        for d in dsts {
+            self.add_to(d, &k);
+        }
     }
 
     /// 成员类别由哪类反射调用执行
