@@ -23,6 +23,7 @@ pub mod emit;
 pub mod entry;
 pub mod error;
 pub mod fold_array;
+pub mod lines;
 pub mod node;
 pub mod postprocess;
 pub mod sig;

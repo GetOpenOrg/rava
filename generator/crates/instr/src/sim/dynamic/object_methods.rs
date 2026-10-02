@@ -171,7 +171,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
                 };
                 let names = sim::TyNames(env);
                 let renderer = ir::Renderer::new(&names);
-                let captured: Vec<String> = sim.state.stmts.split_off(mark).iter().map(|st| renderer.stmt(st, 0)).collect();
+                let captured: Vec<String> = sim.split_stmts_off(mark).iter().map(|st| renderer.stmt(st, 0)).collect();
                 cmps.push(if captured.is_empty() { cmp } else { format!("{{ {} {cmp} }}", captured.join(" ")) });
             }
             // 语句位置的 `{ .. } && ..` 会被解析为块语句，整体加括号成表达式

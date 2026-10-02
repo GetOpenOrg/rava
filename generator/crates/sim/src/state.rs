@@ -80,6 +80,8 @@ pub struct SimState {
     pub stack: Vec<StackEntry>,
     pub locals: BTreeMap<u16, Local>,
     pub stmts: Vec<Stmt>,
+    /// 与 `stmts` 等长：各语句发出时的字节码偏移（Java 行号映射的来源，经 [`StackSim::push_stmt`] 维护）
+    pub stmt_pcs: Vec<u32>,
     /// 临时变量计数（`_ctr`）
     pub counter: u32,
     /// 下一个栈值身份
@@ -211,7 +213,7 @@ impl<'e> StackSim<'e> {
     fn materialize(&mut self, value: Expr, ty: &RsType) -> SimResult<Ident> {
         let name = self.fresh("_t")?;
         let ty = if materialized_needs_type(&value) { Some(to_ir_type(ty, self.env)?) } else { None };
-        self.state.stmts.push(Stmt::Let(LetStmt::new(name.clone(), ty, Some(value))));
+        self.push_stmt(Stmt::Let(LetStmt::new(name.clone(), ty, Some(value))));
         Ok(name)
     }
 
@@ -244,8 +246,25 @@ impl<'e> StackSim<'e> {
     /// 发射语句（先物化栈上待求值的有状态条目，见 [`Self::spill_stateful`]）
     pub fn emit(&mut self, stmt: Stmt) -> SimResult<()> {
         self.spill_stateful(None)?;
-        self.state.stmts.push(stmt);
+        self.push_stmt(stmt);
         Ok(())
+    }
+
+    /// 追加语句并记录当前字节码偏移（`stmts` / `stmt_pcs` 唯一的追加入口）
+    pub(crate) fn push_stmt(&mut self, stmt: Stmt) {
+        self.state.stmts.push(stmt);
+        self.state.stmt_pcs.push(self.state.current_offset);
+    }
+
+    /// 取走本块语句及其字节码偏移
+    pub fn take_stmts(&mut self) -> (Vec<Stmt>, Vec<u32>) {
+        (std::mem::take(&mut self.state.stmts), std::mem::take(&mut self.state.stmt_pcs))
+    }
+
+    /// 截下 `mark` 之后发出的语句（偏移一并截去）
+    pub fn split_stmts_off(&mut self, mark: usize) -> Vec<Stmt> {
+        self.state.stmt_pcs.truncate(mark);
+        self.state.stmts.split_off(mark)
     }
 
     /// `let {prefix}N: ty = value;`，返回 `Var(prefixN)`
@@ -253,7 +272,7 @@ impl<'e> StackSim<'e> {
         self.spill_stateful(None)?;
         let name = self.fresh(prefix)?;
         let ir_ty = to_ir_type(ty, self.env)?;
-        self.state.stmts.push(Stmt::Let(LetStmt::new(name.clone(), Some(ir_ty), Some(value))));
+        self.push_stmt(Stmt::Let(LetStmt::new(name.clone(), Some(ir_ty), Some(value))));
         Ok(Expr::Var(name))
     }
 

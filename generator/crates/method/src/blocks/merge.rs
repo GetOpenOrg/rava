@@ -36,11 +36,8 @@ impl Blocks<'_, '_> {
                     Ok(id) if text::is_ident(&v) => Expr::Var(id),
                     _ => Expr::raw(v),
                 };
-                self.nodes.node_mut(*p).stmts.push(Stmt::Assign(AssignStmt {
-                    target: Expr::Var(name.clone()),
-                    value,
-                    origin: VarOrigin::default(),
-                }));
+                let assign = Stmt::Assign(AssignStmt { target: Expr::Var(name.clone()), value, origin: VarOrigin::default() });
+                self.nodes.node_mut(*p).push_stmt(assign, None);
             }
             // 前置声明以 LetStmt 进入 entries：合并值在其声明所在块之外被消费时由变量提升移到外层
             let ir_ty = sim::to_ir_type(&ty, self.env)?;

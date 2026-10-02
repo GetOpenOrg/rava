@@ -156,6 +156,8 @@ impl MethodBodyEmitter for MethodBodies {
         let index = owner.methods().iter().position(|m| &m.name == name && &m.desc == desc);
         let code = index.and_then(|i| ctx.input.code(req.declaring_class, &owner.methods()[i]));
         let lvs = local_vars(ctx, req, index);
+        let ex = ctx.extras(req.declaring_class);
+        let line_numbers = index.and_then(|i| ex.methods.get(i)).map_or(&[][..], |m| m.line_numbers.as_slice());
         let hooks = Hooks { ctx };
         let ictx = InstrCtx::new(ctx.ty, ctx.manifest, &self.facts, &hooks, req.class.name()).with_code_owner(req.declaring_class);
         let env = InstrEnv::new(ictx, req.class_type_params);
@@ -164,6 +166,7 @@ impl MethodBodyEmitter for MethodBodies {
             method: req.method,
             code: code.as_deref(),
             local_vars: &lvs,
+            line_numbers,
             overloaded: req.overloaded_names.contains(name),
             rust_name: req.rust_name,
             in_vtable_body: req.in_vtable_body,

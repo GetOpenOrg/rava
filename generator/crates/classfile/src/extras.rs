@@ -59,11 +59,16 @@ pub struct MethodExtras {
     pub line_numbers: Vec<(u16, u16)>,
 }
 
+/// 按起始 pc 升序的 LineNumberTable 中 pc 所在的源行（起始 pc ≤ `pc` 的最后一条；表空或 pc 在首条之前 → None）
+pub fn line_at(table: &[(u16, u16)], pc: u32) -> Option<u16> {
+    let i = table.partition_point(|&(start, _)| u32::from(start) <= pc);
+    i.checked_sub(1).map(|i| table[i].1)
+}
+
 impl MethodExtras {
     /// pc 所在的源行：起始 pc ≤ `pc` 的最后一条（JVMS §4.7.12；表空或 pc 在首条之前 → None）
     pub fn line_at(&self, pc: u32) -> Option<u16> {
-        let i = self.line_numbers.partition_point(|&(start, _)| u32::from(start) <= pc);
-        i.checked_sub(1).map(|i| self.line_numbers[i].1)
+        line_at(&self.line_numbers, pc)
     }
 
     /// slot → 代表名：作用域最长的 LVT 条目（等长取先出现者）

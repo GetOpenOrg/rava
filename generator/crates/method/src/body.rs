@@ -40,6 +40,8 @@ pub struct MethodRequest<'a> {
     pub code: Option<&'a NormCode>,
     /// 局部变量表（LVT + LVTT 签名；继承展开时为适配后的视图）
     pub local_vars: &'a [LocalVar],
+    /// 出处方法的 LineNumberTable（(起始 pc, 行)，按 pc 升序；无则为空，不出行标记）
+    pub line_numbers: &'a [(u16, u16)],
     /// 同名方法在发射类内有重载（名字加描述符后缀，前置 `// java:` 注释）
     pub overloaded: bool,
     /// 调用方给定的已去重 Rust 名
@@ -173,10 +175,15 @@ fn structured_entries<'e>(
     Ok(entries)
 }
 
-/// entries → 行（语句条目按条目缩进渲染）
-fn render(env: &InstrEnv, entries: &[Entry]) -> Vec<String> {
+/// entries → 行（语句条目按条目缩进渲染；来源行变化处先出独立行标记，见 [`crate::lines`]）
+fn render(env: &InstrEnv, entries: &[Entry], line_numbers: &[(u16, u16)]) -> Vec<String> {
     let mut lines = Vec::with_capacity(entries.len());
+    let mut marker = crate::lines::Marker::new(line_numbers);
     for e in entries {
+        if matches!(e.item, Item::Removed) {
+            continue;
+        }
+        lines.extend(marker.before(e.pc));
         match &e.item {
             Item::Stmt(s) => lines.push(format!("{}{}", e.indent, text::stmt(env, s).trim_start())),
             Item::Line(t) | Item::Struct { text: t, .. } => lines.push(t.clone()),
@@ -284,7 +291,7 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     }
     vars_passes(env, &mut entries, &predeclared, &sim.cfg.slot_decls)?;
 
-    let mut lines = render(env, &entries);
+    let mut lines = render(env, &entries, req.line_numbers);
     pp::erase_boxed_ctor_type_args(&mut lines);
     let own_short = env.ctx.short(class_name);
     let static_getters: BTreeSet<String> = req
@@ -297,7 +304,9 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     let mut lines = fold_array_literals(lines, &static_getters);
 
     if is_ctor {
-        while lines.last().is_some_and(|l| matches!(text::py_strip(l), "return;" | "return Ok(());" | "return Ok(this);")) {
+        while lines.last().is_some_and(|l| {
+            crate::lines::is_mark(l) || matches!(text::py_strip(l), "return;" | "return Ok(());" | "return Ok(this);")
+        }) {
             lines.pop();
         }
         lines.push("    Ok(this)".to_string());
@@ -313,16 +322,17 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         pp::add_ok_return(&mut lines, &ret, function_always_returns(&req.code.map(|c| cfg_view(&c.insns)).unwrap_or_default()));
     }
 
-    let mut body = lines.join("\n");
+    let args_used = |args: &str| lines.iter().any(|l| !crate::lines::is_mark(l) && text::has_word(l, args));
+    let main_args = (!is_ctor && is_main(m))
+        .then(|| req.local_vars.iter().find(|lv| lv.slot == 0).map_or("args", |lv| lv.name.as_str()))
+        .filter(|a| args_used(a));
+    let mut body = crate::lines::attach(lines).join("\n");
     let prefix = if req.overloaded { format!("// java: {}{}\n", m.name, m.desc) } else { String::new() };
     let text = if is_ctor {
         ctor_functions(&prefix, &fn_name, &params, &body)
     } else {
-        if is_main(m) {
-            let args = req.local_vars.iter().find(|lv| lv.slot == 0).map_or("args", |lv| lv.name.as_str());
-            if text::has_word(&body, args) {
-                body = format!("    let mut {args}: JArray<{}> = java_runtime::main_args();\n{body}", ir::anchors::STRING);
-            }
+        if let Some(args) = main_args {
+            body = format!("    let mut {args}: JArray<{}> = java_runtime::main_args();\n{body}", ir::anchors::STRING);
         }
         format!("{prefix}{sig_line} {{\n{body}\n}}")
     };
