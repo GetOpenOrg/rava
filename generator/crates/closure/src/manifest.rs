@@ -98,8 +98,9 @@ pub struct Manifest {
     release: Vec<String>,
     /// VM 边界类中 `<clinit>` 按字节码翻译的类（`[vm_boundary] translate_clinit`）
     translate_clinit: HashSet<String>,
-    /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出
-    injected_statics: HashSet<String>,
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出；
+    /// 取值是整数 / 布尔字面量时记其值（分析器按该值折叠）
+    injected_statics: HashMap<String, Option<i64>>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
@@ -314,7 +315,7 @@ impl Manifest {
                 .get("vm_constants")
                 .and_then(|s| s.get("injected_statics"))
                 .and_then(|v| v.as_table())
-                .map(|t| t.keys().cloned().collect())
+                .map(|t| t.iter().map(|(k, v)| (k.clone(), literal_value(v))).collect())
                 .unwrap_or_default(),
             hw_dropped: Vec::new(),
             intrinsics,
@@ -412,7 +413,15 @@ impl Manifest {
 
     /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：值不来自字节码，读取不折叠
     pub fn is_injected_static(&self, owner: &str, name: &str) -> bool {
-        !self.injected_statics.is_empty() && self.injected_statics.contains(&format!("{owner}.{name}"))
+        !self.injected_statics.is_empty() && self.injected_statics.contains_key(&format!("{owner}.{name}"))
+    }
+
+    /// VM 注入的静态字段的字面量取值（取值为整数 / 布尔字面量时）：读取恒为该值
+    pub fn injected_literal(&self, owner: &str, name: &str) -> Option<i64> {
+        if self.injected_statics.is_empty() {
+            return None;
+        }
+        self.injected_statics.get(&format!("{owner}.{name}")).copied().flatten()
     }
 
     /// VM 内建（手写承载、不分析 Java 体）
@@ -555,3 +564,12 @@ fn member_is(s: &str, key: &classfile::constant::MemberRef) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// 取值的字面量值：整数 / 布尔（取值表达式字符串不是字面量）
+fn literal_value(v: &toml::Value) -> Option<i64> {
+    match v {
+        toml::Value::Integer(n) => Some(*n),
+        toml::Value::Boolean(b) => Some(i64::from(*b)),
+        _ => None,
+    }
+}

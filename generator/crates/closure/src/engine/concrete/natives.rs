@@ -53,6 +53,21 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             Err(_) => fail(format!("未知常量操作 {c}")),
         },
         "self" => ret(arg(0)?),
+        // VM 持有的单例（如 Unsafe.getUnsafe 的实例）：返回类型的唯一映像对象，无实例字段状态
+        "vm_singleton" => {
+            let Some(t) = desc.rsplit(')').next().and_then(|d| d.strip_prefix('L')).and_then(|d| d.strip_suffix(';')) else {
+                return fail("vm_singleton 返回类型非类");
+            };
+            if let Some(&o) = vm.singletons.get(t) {
+                return ret(CV::R(o));
+            }
+            let image = vm.image;
+            vm.image += 1;
+            let o = vm.alloc(t, Body::Inst(Vec::new()));
+            vm.image = image;
+            vm.singletons.insert(Rc::from(t), o);
+            ret(CV::R(o))
+        }
         "bytecode" => vm.run(env, &Rc::new(MInfo { key: info.key.clone(), site: info.site.clone(), index: info.index.clone(), op: None, bytecode: true }), args),
         "identity_hash" => {
             let h = arg(0)?.r()?.map_or(0, |o| vm.identity_hash(o));
@@ -152,7 +167,10 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             ret(CV::R(vm.new_array(&array_of(&t), arg(1)?.i()?)?))
         }
-        _ => class_op(vm, env, op, &args),
+        _ => match super::unsafe_ops::call(vm, env, op, &args) {
+            Some(r) => r,
+            None => class_op(vm, env, op, &args),
+        },
     }
 }
 

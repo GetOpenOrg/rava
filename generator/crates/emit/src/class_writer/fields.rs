@@ -239,7 +239,7 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
 fn injected_static_block(head: &str, fname: &str, ty: &str, expr: &str) -> String {
     let cast = if ty == "bool" { String::new() } else { format!(" as {ty}") };
     format!(
-        "{head}pub fn {fname}() -> Result<{ty}> {{\n    Ok(crate::{expr}{cast})\n}}\n\
+        "{head}pub fn {fname}() -> Result<{ty}> {{\n    Ok({expr}{cast})\n}}\n\
          // VM 注入值覆盖字节码写入（同 HotSpot 在 <clinit> 之后改写）\n\
          pub fn set_{fname}(_v: {ty}) -> Result<()> {{\n    Ok(())\n}}"
     )
@@ -286,10 +286,12 @@ mod tests {
 
     #[test]
     fn injected_static_accessors() {
-        let b = injected_static_block("// h\n", "PAGE_SIZE", "i32", "vm_constants::page_size()");
+        let b = injected_static_block("// h\n", "PAGE_SIZE", "i32", "crate::vm_constants::page_size()");
         assert!(b.contains("pub fn PAGE_SIZE() -> Result<i32> {\n    Ok(crate::vm_constants::page_size() as i32)\n}"));
         assert!(b.contains("pub fn set_PAGE_SIZE(_v: i32) -> Result<()> {\n    Ok(())\n}"));
-        let b = injected_static_block("", "BIG_ENDIAN", "bool", "vm_constants::big_endian()");
+        let b = injected_static_block("", "BIG_ENDIAN", "bool", "crate::vm_constants::big_endian()");
         assert!(b.contains("Ok(crate::vm_constants::big_endian())"));
+        let b = injected_static_block("", "allowSecurityManager", "i32", "1i64");
+        assert!(b.contains("Ok(1i64 as i32)"));
     }
 }

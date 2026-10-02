@@ -16,6 +16,7 @@ mod members;
 mod natives;
 mod snap;
 mod stable;
+mod unsafe_ops;
 mod vm;
 
 use resolve::MethodSite;
@@ -85,8 +86,9 @@ impl<'a> Engine<'a> {
         self.concrete.traces.get(key).map(|t| &t.0)
     }
 
-    /// 静态调用 m@off → resolved 按具体求值处理；返回 true 即不再接抽象调用边
-    pub(super) fn concrete_call(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, args: &[V]) -> bool {
+    /// 调用 m@off → resolved（静态调用，或接收者值集为 recv 的非虚调用）按具体求值处理；返回 true 即不再接抽象调用边。
+    /// 接收者尚无取值时暂不接边（接收者增长时调用方重处理）
+    pub(super) fn concrete_call(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> bool {
         if self.concrete.fallback.contains(&(m, off)) || self.is_concrete(m) {
             return false;
         }
@@ -95,7 +97,10 @@ impl<'a> Engine<'a> {
             return false;
         }
         let site_name = format!("{}@{off}", self.methods[m].key);
-        let combos = match self.combos(m, off, md, args) {
+        if recv.is_some_and(|s| s.classes.is_empty() && s.open.is_empty()) {
+            return true;
+        }
+        let combos = match self.combos(m, off, md, recv, args) {
             Ok(c) => c,
             Err(why) => return self.concrete_fallback(m, off, site_name, why),
         };
@@ -133,8 +138,14 @@ impl<'a> Engine<'a> {
     }
 
     /// 调用点实参的全部组合（笛卡尔积，超上限即失败）
-    fn combos(&mut self, m: usize, off: u32, md: &MethodDesc, args: &[V]) -> Result<Vec<Vec<AK>>, String> {
+    fn combos(&mut self, m: usize, off: u32, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> Result<Vec<Vec<AK>>, String> {
         let mut out: Vec<Vec<AK>> = vec![vec![]];
+        if let Some(s) = recv {
+            out = self.recv_keys(s)?.into_iter().map(|k| vec![k]).collect();
+            if out.len() > COMBO_LIMIT {
+                return Err(format!("接收者超过 {COMBO_LIMIT} 个"));
+            }
+        }
         for (i, (p, v)) in md.params.iter().zip(args).enumerate() {
             let ks = self.arg_keys(m, off, p, v).ok_or_else(|| format!("实参 {i} 不可枚举：{v:?}"))?;
             if ks.is_empty() {
@@ -144,6 +155,22 @@ impl<'a> Engine<'a> {
                 return Err(format!("实参组合超过 {COMBO_LIMIT}"));
             }
             out = out.into_iter().flat_map(|c| ks.iter().map(move |k| [c.clone(), vec![k.clone()]].concat())).collect();
+        }
+        Ok(out)
+    }
+
+    /// 接收者值集的枚举：只接受所指已知的类镜像
+    fn recv_keys(&mut self, s: &TypeSet) -> Result<Vec<AK>, String> {
+        let mut out = Vec::new();
+        let mut bad: Vec<String> = s.open.iter().map(|o| format!("open({})", self.names[o as usize])).collect();
+        for x in s.classes.iter() {
+            match self.mirrors.get(&x) {
+                Some(&c) => out.push(AK::Mirror(self.names[c as usize].clone())),
+                None => bad.push(self.names[x as usize].to_string()),
+            }
+        }
+        if !bad.is_empty() {
+            return Err(format!("接收者 {} 不是所指已知的类镜像", bad.join(" / ")));
         }
         Ok(out)
     }

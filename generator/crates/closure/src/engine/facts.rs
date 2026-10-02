@@ -283,6 +283,10 @@ impl Ctx<'_> {
         if let Some(m) = m {
             self.dep(m, Dep::Field(fi.key.clone()));
         }
+        // VM 注入的字面量值：字节码写入被 VM 值覆盖，读取恒为该值
+        if let Some(x) = self.man.injected_literal(&fi.key.owner, &fi.key.name) {
+            return Some(if fi.key.desc == "J" { V::Long(x) } else { V::Int(x as i32) });
+        }
         if self.field_open(&fi) {
             return None;
         }

@@ -370,6 +370,8 @@ pub struct Engine<'a> {
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
     mflows: HashMap<Node, Vec<Node>>,
     mflow_seen: HashSet<(Node, Node)>,
+    /// 镜像变换的 open 展开登记：open(o) → 收其镜像的节点；G 增长时 ⊂ o 的新成员的镜像补推到这些节点
+    open_mirrors: HashMap<u32, BTreeSet<Node>>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
     rpending: Vec<(Members, usize, TypeSet)>,

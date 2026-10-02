@@ -223,6 +223,8 @@ pub(super) struct Vm {
     pub strings: HashMap<Vec<u16>, u32>,
     pub mirrors: HashMap<Rc<str>, u32>,
     pub mirror_of: HashMap<u32, Rc<str>>,
+    /// VM 持有的单例对象（操作 `vm_singleton`，按类型）
+    pub singletons: HashMap<Rc<str>, u32>,
     ihash: HashMap<u32, i32>,
     pub steps: u64,
     /// 调用栈（调用方类查询）
@@ -256,6 +258,7 @@ impl Vm {
             strings: HashMap::default(),
             mirrors: HashMap::default(),
             mirror_of: HashMap::default(),
+            singletons: HashMap::default(),
             ihash: HashMap::default(),
             steps: 0,
             frames: Vec::new(),
@@ -345,7 +348,7 @@ impl Vm {
             let decl: Rc<str> = Rc::from(site.class.name.as_str());
             let key = self.fkey(&decl, &fd.name);
             let memo = env.cfg().memo_fields.contains(&format!("{decl}.{}", fd.name));
-            let fin = fd.access & acc::FINAL != 0 || fd.access & acc::STATIC != 0 && self.clinit_only(env, &site.class, fd);
+            let fin = fd.access & acc::FINAL != 0 || self.init_only(env, &site.class, fd);
             Rc::new(FRes {
                 key,
                 decl,

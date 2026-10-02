@@ -209,7 +209,7 @@ impl<'a> Engine<'a> {
         match opcode {
             op::INVOKESTATIC => {
                 self.init(&resolved.owner, via.clone());
-                if self.concrete_call(m, off, &resolved, &md, pargs) {
+                if self.concrete_call(m, off, &resolved, &md, None, pargs) {
                     return;
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
@@ -237,6 +237,12 @@ impl<'a> Engine<'a> {
                         self.direct_virtual_sites.insert((m, off));
                     }
                     let r = recv_feeds(self);
+                    if !rm.is_static() && self.man.concrete.entries.contains(&*self.mref_key(&resolved)) {
+                        let s = self.value_set(&r);
+                        if self.concrete_call(m, off, &resolved, &md, Some(&s), pargs) {
+                            return;
+                        }
+                    }
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
                     return;
                 }
@@ -415,8 +421,7 @@ impl<'a> Engine<'a> {
                     match f {
                         Feed::N(n) => self.mflow(*n, res),
                         Feed::S(s) => {
-                            let k = self.mirror_set(s);
-                            self.add_to(res, &k);
+                            self.mirrors_into(s, res);
                         }
                     }
                 }

@@ -243,9 +243,8 @@ impl<'a> Engine<'a> {
             for m in ms {
                 let n = self.graph.node(m);
                 if let Some(ds) = self.mflows.get(&n).cloned() {
-                    let k = self.mirror_set(&s);
                     for d in ds {
-                        self.add_to(d, &k);
+                        self.mirrors_into(&s, d);
                     }
                 }
             }
@@ -259,8 +258,7 @@ impl<'a> Engine<'a> {
         }
         self.mflows.entry(src).or_default().push(dst);
         let s = self.set_of(src);
-        let k = self.mirror_set(&s);
-        self.add_to(dst, &k);
+        self.mirrors_into(&s, dst);
     }
 
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open

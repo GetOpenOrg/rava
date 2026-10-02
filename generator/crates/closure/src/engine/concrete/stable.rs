@@ -2,11 +2,12 @@
 //!
 //! - 类型：清单 `[concrete] stable_types` 逐类声明的不可变契约（含子类型）：实例的全部字段可读（`Vm::get_field`），
 //!   声明类的静态字段所指映像数组视为冻结（如字符属性表）；
-//! - 静态字段：非 final 的静态字段若全部写入点都在声明类的 `<clinit>` 中，初始化完成后即事实上不变。
+//! - 字段：非 final 的静态字段若全部写入点都在声明类的 `<clinit>` 中、实例字段若全部写入点都在声明类的
+//!   构造器中，初始化完成后即事实上不变（如只由 VM 改写的计数字段）。
 //!   写入点按访问控制界定范围：private / 包私有字段只可能由同包的类写入（嵌套成员同包），扫描该包全部类的
-//!   `putstatic`；public / protected 字段的写入方不可穷举，不算稳定。
+//!   `putstatic` / `putfield` 与按名取字段的字符串常量；public / protected 字段的写入方不可穷举，不算稳定。
 
-use classfile::{acc, op, ClassFile, Field, Operand};
+use classfile::{acc, op, ClassFile, Const, Field, Operand};
 use resolve::classpath::Origin;
 
 use super::vm::*;
@@ -36,26 +37,31 @@ impl Vm {
         }
     }
 
-    /// 静态字段的写入点是否全部在声明类的 `<clinit>` 中
-    pub(super) fn clinit_only(&mut self, env: &Env, decl: &ClassFile, fd: &Field) -> bool {
+    /// 字段的写入点是否全部在声明类的初始化方法中：静态字段限 `<clinit>`，实例字段限构造器（对象发布前）。
+    /// 包内任何类以字符串常量给出该字段名（Unsafe 偏移 / VarHandle / 反射按名取字段）即不算
+    pub(super) fn init_only(&mut self, env: &Env, decl: &ClassFile, fd: &Field) -> bool {
         if fd.access & (acc::PUBLIC | acc::PROTECTED) != 0 {
             return false;
         }
+        let is_static = fd.access & acc::STATIC != 0;
+        let put = if is_static { op::PUTSTATIC } else { op::PUTFIELD };
         let pkg = resolve::hierarchy::package_of(&decl.name).to_string();
         let names = self.package(env, &pkg);
         for n in names.iter() {
             let Some(cf) = env.h().class(n) else { continue };
             for m in &cf.methods {
-                let clinit = cf.name == decl.name && m.is_clinit();
+                let init = cf.name == decl.name && if is_static { m.is_clinit() } else { m.is_init() };
                 let Some(code) = m.code.as_ref() else { continue };
                 for x in &code.insns {
-                    let Operand::Field(f) = &x.operand else { continue };
-                    if x.opcode != op::PUTSTATIC || f.name != fd.name || f.desc != fd.desc || clinit {
-                        continue;
-                    }
-                    let hit = env.h().resolve_field(&f.owner, &f.name, &f.desc).is_none_or(|s| s.class.name == decl.name);
-                    if hit {
-                        return false;
+                    match &x.operand {
+                        Operand::Field(f) if x.opcode == put && !init && f.name == fd.name && f.desc == fd.desc => {
+                            let hit = env.h().resolve_field(&f.owner, &f.name, &f.desc).is_none_or(|s| s.class.name == decl.name);
+                            if hit {
+                                return false;
+                            }
+                        }
+                        Operand::Ldc(Const::String(s)) if *s == fd.name => return false,
+                        _ => {}
                     }
                 }
             }

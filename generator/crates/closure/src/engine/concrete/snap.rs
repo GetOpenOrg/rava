@@ -2,7 +2,7 @@
 //!
 //! 求值纪元内分配的对象按字段 / 元素展开；字符串、类镜像按值；映像对象（`<clinit>` 构造）只记类型——
 //! 其抽象值来自抽象分析对 `<clinit>` 的建模，物化时只有非容器形态的类可按类型代表（见 `apply.rs`）；
-//! lambda 对象按函数式接口、实现句柄与捕获值展开（捕获值记为元素）；映像数组不可物化，快照失败。
+//! lambda 对象按函数式接口、实现句柄与捕获值展开（捕获值记为元素）；映像数组除空数组与冻结数组外不可物化，快照失败。
 
 use super::vm::*;
 use super::*;
@@ -73,7 +73,8 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
                 self.objs[i].lam = Some(l);
                 Ok(MV::Obj(i))
             }
-            Body::Arr(_) if h.epoch == 0 => fail(format!("结果引用映像数组 {ty}")),
+            // 映像数组：空数组与冻结数组（初始化后只读）不可变，按值展开；其余可能被程序其它部分改写
+            Body::Arr(es) if h.epoch == 0 && !es.is_empty() && !self.vm.frozen.contains(&o) => fail(format!("结果引用映像数组 {ty}")),
             Body::Inst(_) if h.epoch == 0 => Ok(MV::Image(ty)),
             Body::Arr(es) => {
                 let i = self.push(o, ty, true);

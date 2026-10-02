@@ -41,23 +41,61 @@ impl<'a> Engine<'a> {
         k
     }
 
-    /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
-    pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
+    /// 值 x 的类镜像；类型推不出（lambda 合成类、手写实现对象）为所指未知的 Class
+    fn value_mirror(&mut self, x: u32) -> u32 {
+        if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
+            self.id(CLASS)
+        } else {
+            let t = self.ty(x);
+            self.mirror_id(t)
+        }
+    }
+
+    /// open 值可取的对象：G 中 ⊂ o 的成员（同 `receivers` 的 open 展开口径；数组须已逃逸）
+    fn open_members(&mut self, o: u32) -> Vec<u32> {
+        let xs = self.g_of(o);
+        xs.iter().copied().filter(|x| !self.arrays.contains_key(x) || self.escaped.contains(x)).collect()
+    }
+
+    /// 值集 s 中各值的类镜像并入 dst。open(o) 按 G 中 ⊂ o 的成员展开并登记，G 增长时由
+    /// `reopen_mirrors` 补推新成员的镜像（闭世界：open 值只能是 G 中已分配的对象）
+    pub(super) fn mirrors_into(&mut self, s: &TypeSet, dst: Node) {
         let mut out = TypeSet::default();
-        let xs: Vec<u32> = s.classes.iter().collect();
-        for x in xs {
-            let k = if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-                self.id(CLASS)
-            } else {
-                let t = self.ty(x);
-                self.mirror_id(t)
-            };
+        for x in s.classes.iter() {
+            let k = self.value_mirror(x);
             out.classes.insert(k);
         }
-        if !s.open.is_empty() {
-            out.classes.insert(self.id(CLASS));
+        for o in s.open.iter() {
+            if !self.open_mirrors.entry(o).or_default().insert(dst) {
+                continue;
+            }
+            for x in self.open_members(o) {
+                let k = self.value_mirror(x);
+                out.classes.insert(k);
+            }
         }
-        out
+        self.add_to(dst, &out);
+    }
+
+    /// G 新成员 / 新逃逸数组 x：登记过的 open 镜像展开补入 x 的镜像
+    pub(super) fn reopen_mirrors(&mut self, x: u32) {
+        if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+            return;
+        }
+        let os: Vec<u32> = self.open_mirrors.keys().copied().collect();
+        let mut dsts: BTreeSet<Node> = BTreeSet::new();
+        for o in os {
+            if self.sub(x, o) {
+                dsts.extend(self.open_mirrors[&o].iter().copied());
+            }
+        }
+        if dsts.is_empty() {
+            return;
+        }
+        let k = TypeSet::exact(self.value_mirror(x));
+        for d in dsts {
+            self.add_to(d, &k);
+        }
     }
 
     /// 成员类别由哪类反射调用执行

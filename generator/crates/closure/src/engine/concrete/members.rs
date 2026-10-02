@@ -14,6 +14,11 @@ impl Vm {
         match op {
             0xb2 => {
                 self.ensure_init(env, &fr.decl)?;
+                // VM 注入的字面量值：字节码写入被 VM 值覆盖，读取恒为该值
+                if let Some(x) = env.man().injected_literal(&fr.decl, &fr.name) {
+                    st.push(if &*fr.desc == "J" { CV::J(x) } else { CV::I(x as i32) });
+                    return Ok(());
+                }
                 // 非 final 静态字段只在其类初始化期间可读：初始化之后它可能被程序其它部分改写
                 let running = matches!(self.init.get(&fr.decl), Some(Init::Running));
                 if !fr.fin && !fr.memo && !running {
@@ -52,13 +57,19 @@ impl Vm {
             _ => {
                 let v = pop(st)?;
                 let o = pop(st)?.obj()?;
-                self.put_field(o, &fr, v)?;
-                if self.tracing() {
-                    self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
-                    if self.heap[o as usize].epoch == 0 {
-                        self.trace.memo_vals.push((fr.mref(), v));
-                    }
-                }
+                self.traced_put_field(o, &fr, v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 实例字段写入并记入轨迹（字段写入值；映像对象上的写入另记内存缓存值）
+    pub(super) fn traced_put_field(&mut self, o: u32, fr: &FRes, v: CV) -> R<()> {
+        self.put_field(o, fr, v)?;
+        if self.tracing() {
+            self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
+            if self.heap[o as usize].epoch == 0 {
+                self.trace.memo_vals.push((fr.mref(), v));
             }
         }
         Ok(())

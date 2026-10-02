@@ -115,7 +115,8 @@ null_to_false = [
 # VM 注入的静态字段（handwritten-boundary.md 类 ③）：HotSpot 在类初始化期间写入平台 / 对象布局常量，
 # 字节码里的初值（UnsafeConstants.<clinit> 的 0 / false）或初始化器（Unsafe.<clinit> 经 VM 原语
 # arrayBaseOffset0 / arrayIndexScale0 取值，Unsafe 为 VM 边界类、<clinit> 不翻译）不给出运行期值。
-# 条目 `类.字段` = 取值表达式（crate 根下路径，返回 i64 / bool；runtime/java_runtime/src/vm_constants.rs）。
+# 条目 `类.字段` = 取值表达式（crate 根下路径，返回 i64 / bool；runtime/java_runtime/src/vm_constants.rs），
+# 或整数 / 布尔字面量（值与宿主无关的 VM 引导状态；分析器按该值折叠读取）。
 # 生成器把字段发为读取该表达式的访问器（按字段描述符做数值宽度转换；字节码对它的写入被 VM 值覆盖，
 # 同 HotSpot UnsafeConstantsFixup 在 <clinit> 后改写），分析器不按字节码值折叠其读取。
 [vm_constants.injected_statics]
@@ -143,6 +144,10 @@ null_to_false = [
 "jdk/internal/misc/Unsafe.ARRAY_DOUBLE_INDEX_SCALE" = "vm_constants::array_index_scale('D')"
 "jdk/internal/misc/Unsafe.ARRAY_OBJECT_BASE_OFFSET" = "vm_constants::array_base_offset()"
 "jdk/internal/misc/Unsafe.ARRAY_OBJECT_INDEX_SCALE" = "vm_constants::array_index_scale('L')"
+# 安全管理器档位：HotSpot 由 System.initPhase3（VM 驱动的引导入口，原生二进制不执行）按系统属性
+# java.security.manager 写入；原生二进制无 -D，属性缺席即 NEVER（= 1，JDK 21 缺省）：getSecurityManager
+# 恒 null、setSecurityManager 抛 UnsupportedOperationException，与 JVM 缺省配置一致
+"java/lang/System.allowSecurityManager" = 1
 
 # ── VM 事实（闭包分析的常量条件，generator `rava closure` 读取）─────────────────────────
 # 手写层承载的方法在原生二进制中返回恒定值；分析器据此做常量传播与死分支剪枝（计划
@@ -565,6 +570,8 @@ Z = "java/lang/Boolean"
 entries = [
     "java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;",
     "java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern;",
+    # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
+    "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
 ]
 # 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入
 memo_fields = [
@@ -603,7 +610,12 @@ stable_types = [
 "java/lang/Object.clone:()Ljava/lang/Object;" = "clone"
 "java/lang/Class.<clinit>:()V" = "bytecode"
 "jdk/internal/misc/Unsafe.<clinit>:()V" = "opaque"
-"jdk/internal/misc/Unsafe.getUnsafe:()Ljdk/internal/misc/Unsafe;" = "bytecode"
+# Unsafe 实例由 VM 持有（Unsafe.<clinit> 不执行）：取单例
+"jdk/internal/misc/Unsafe.getUnsafe:()Ljdk/internal/misc/Unsafe;" = "vm_singleton"
+"jdk/internal/misc/Unsafe.allocateUninitializedArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "bytecode"
+# 字段偏移即字段身份（unsafe__impl.rs objectFieldOffset_class_str 的不透明 id 同口径），按身份 CAS 实例引用字段
+"jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = "field_offset"
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "cas_reference"
 "java/lang/Class.registerNatives:()V" = "noop"
 "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
 "java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"

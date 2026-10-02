@@ -109,7 +109,7 @@ fn classes(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, 
     Ok(v)
 }
 
-/// `[vm_constants.injected_statics]`：`"类.字段" = "取值表达式"`
+/// `[vm_constants.injected_statics]`：`"类.字段" = "取值表达式"` 或字面量；结果为可直接发射的 Rust 表达式
 fn injected_statics(vmc: Option<&Table>) -> Result<BTreeMap<String, String>, InputError> {
     let Some(t) = vmc.and_then(|s| s.get("injected_statics")) else {
         return Ok(BTreeMap::new());
@@ -119,11 +119,17 @@ fn injected_statics(vmc: Option<&Table>) -> Result<BTreeMap<String, String>, Inp
         .ok_or_else(|| InputError::Manifest("vm_constants.injected_statics：应为表".into()))?;
     t.iter()
         .map(|(k, v)| {
-            let expr = v.as_str().filter(|e| !e.is_empty());
+            // 取值：crate 根下的取值表达式（字符串）或字面量（整数 / 布尔，分析器按值折叠）
+            let expr = match v {
+                Value::String(e) if !e.is_empty() => Some(format!("crate::{e}")),
+                Value::Integer(n) => Some(format!("{n}i64")),
+                Value::Boolean(b) => Some(b.to_string()),
+                _ => None,
+            };
             match (k.split_once('.'), expr) {
-                (Some((c, f)), Some(e)) if !c.is_empty() && !f.is_empty() => Ok((k.clone(), e.to_string())),
+                (Some((c, f)), Some(e)) if !c.is_empty() && !f.is_empty() => Ok((k.clone(), e)),
                 _ => Err(InputError::Manifest(format!(
-                    "vm_constants.injected_statics：条目须为 \"类.字段\" = \"取值表达式\"：{k}"
+                    "vm_constants.injected_statics：条目须为 \"类.字段\" = \"取值表达式\" / 字面量：{k}"
                 ))),
             }
         })

@@ -133,6 +133,7 @@ impl<'a> Engine<'a> {
             mirror_of: Vec::new(),
             mflows: HashMap::default(),
             mflow_seen: HashSet::default(),
+            open_mirrors: HashMap::default(),
             enum_recv: HashMap::default(),
             rpending: Vec::new(),
             enumerated: BTreeSet::new(),
