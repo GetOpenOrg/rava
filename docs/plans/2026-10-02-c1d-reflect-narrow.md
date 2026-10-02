@@ -451,6 +451,19 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
 - 边界用例 `tests/e2e/53_io_api/TestBuiltinUrlProtocol.java`（期望为 JDK 21 实测）：file / FILE / jar / jrt / 未知协议的 URL
   构造，字符串 switch，`hashCode` 常量（含 "Aa" / "BB" 碰撞），非 ASCII 的 `Character.toLowerCase`（É、İ）与越界 `charAt`。
 
+**待查精度项：另一扇出源**（登记，不在本步做）。TestAppClassLoader / TestAtomics / TestZonedDateTime /
+TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后仍稳定在 1450–1520 类，截
+`initSystemClassLoader` 或 `getURLStreamHandler@68` 都只降 4 类。起点（TestAtomics，`rava closure --why`）：
+
+- `sun/util/locale/provider/LocaleProviderAdapter` ← `BreakIterator` ← `ConditionalSpecialCasing` ← `String.toUpperCase(Locale)`
+  ← `regex/CharPredicates.forUnicodeProperty` ← `Pattern.compile` ← `Formatter.<clinit>` ← `String.format` ←
+  `VarHandle.toString@23` ← **`[dispatch] reflect_dispatch.unbox_bool`**（手写体内对开放接收者的 toString 分派）←
+  `[hw-call] VarHandle.setVolatile` ← `AtomicIntegerArray.set@9` ← `TestAtomics.main@243`。
+  疑点：手写 `unbox_bool` 的 Display / 格式化落成对 Object 的 toString 虚分派，接收者值集开放，把 `VarHandle.toString`
+  → `String.format` → `Formatter` / regex / locale 整片拉入（同 registerNatives toString 的形态，需按手写扫描的静态类型收窄）。
+- 同一用例里 `java/util/ServiceLoader` 仍经 `ParseUtil.fileToEncodedURL → URL.<init> → getURLStreamHandler@68
+  lookupViaProviders` 进入：协议名形参常量在该用例被别的调用点汇合为 Top（待查是哪条 URL 构造链带入非常量协议）。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
