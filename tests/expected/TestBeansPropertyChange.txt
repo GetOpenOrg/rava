@@ -1,0 +1,9 @@
+evt level 1->2
+fired=1
+evt only null->x
+named x
+evt other null->y
+has-only=true
+has-other=true
+evt manual a->b
+after-remove=4

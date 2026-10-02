@@ -1,0 +1,14 @@
+start cfg debug=on
+start name
+text=rava
+end name
+start nums
+start n
+text=1
+end n
+start n
+text=2
+end n
+end nums
+end cfg
+written=[<?xml version="1.0" ?><out k="v"><inner>text</inner></out>]

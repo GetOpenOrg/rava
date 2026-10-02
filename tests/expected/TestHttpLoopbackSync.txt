@@ -1,0 +1,6 @@
+code=200
+body=hello-http
+hdr=v1
+uri-path=/hello
+echo-code=201 echo-body=ping-body
+not-found=404

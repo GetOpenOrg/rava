@@ -1,0 +1,4 @@
+INFO e2e.hierarchy.child child-infoWARNING e2e.hierarchy parent-warningSEVERE e2e.hierarchy.child child-severechild-null-level=true
+child-loggable-severe=true
+child-loggable-fine=false
+anon-name-null=true
