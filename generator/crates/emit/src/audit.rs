@@ -33,43 +33,33 @@ const READABILITY_PATTERNS: [(&str, &str); 5] = [
     ("borrow", ".borrow()"),
 ];
 
+/// 可读层禁用形态计数（与 [`READABILITY_PATTERNS`] 同序）
+pub type ReadabilityCounts = [(&'static str, usize); 5];
+
 /// 审计行的全部输入
 pub struct AuditInputs<'a> {
     pub body: &'a BodyAudit,
     pub hw: &'a [(HwAudit, String)],
     pub fallback: &'a FallbackAudit,
-    /// scratch 根目录与参与可读性扫描的 crate（`java_runtime`、lib crate…、`user`）
-    pub out: &'a Path,
-    pub crates: &'a [String],
+    /// 可读层禁用形态计数（[`readability_counts`]，发射期在拆层前统计）
+    pub readability: &'a ReadabilityCounts,
     /// 因 prelude 冲突限定改名的类（binary，已排序）
     pub prelude_disambiguated: &'a [String],
     pub debug: bool,
 }
 
-/// 可读层禁用形态计数：各 crate `src/` 下含生成标记的 `.rs` 文件逐形态计次
-pub fn readability_counts(out: &Path, crates: &[String]) -> [(&'static str, usize); 5] {
+/// 可读层禁用形态计数：含生成标记的类文本逐形态计次。
+///
+/// 输入取物理拆层（声明层 `java_runtime` / 实现层 `java_body_k`）之前的类发射文本：每个类的
+/// 每个方法体恰好计一次——落盘后声明层与实现层各持一份块文本，按磁盘扫描会漏计实现层或重计。
+pub fn readability_counts<'t>(texts: impl IntoIterator<Item = &'t str>) -> ReadabilityCounts {
     let mut counts = READABILITY_PATTERNS.map(|(label, _)| (label, 0usize));
-    for c in crates {
-        let mut stack = vec![out.join(c).join("src")];
-        while let Some(d) = stack.pop() {
-            let Ok(rd) = std::fs::read_dir(&d) else { continue };
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                    continue;
-                }
-                if p.extension().is_none_or(|x| x != "rs") {
-                    continue;
-                }
-                let Ok(text) = std::fs::read_to_string(&p) else { continue };
-                if !text.contains(GENERATED_MARKER) {
-                    continue;
-                }
-                for (i, (_, pat)) in READABILITY_PATTERNS.iter().enumerate() {
-                    counts[i].1 += text.matches(pat).count();
-                }
-            }
+    for text in texts {
+        if !text.contains(GENERATED_MARKER) {
+            continue;
+        }
+        for (i, (_, pat)) in READABILITY_PATTERNS.iter().enumerate() {
+            counts[i].1 += text.matches(pat).count();
         }
     }
     counts
@@ -83,8 +73,7 @@ pub fn audit_lines(a: &AuditInputs<'_>) -> Vec<String> {
             a.body.cfg.stub_fallbacks.iter().map(|f| format!("[cfg-audit] stub fallback ({}): {}: {}", f.site, f.method_id, f.reason)),
         );
     }
-    let rd = readability_counts(a.out, a.crates);
-    lines.push(format!("[readability-audit] {}", rd.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")));
+    lines.push(format!("[readability-audit] {}", a.readability.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")));
     let equiv: Vec<String> = Audit::REPORT_ORDER
         .iter()
         .filter_map(|x| a.body.equiv.get(x).filter(|n| **n > 0).map(|n| format!("{}={n}", x.as_str())))
@@ -132,15 +121,9 @@ mod tests {
 
     #[test]
     fn readability_counts_only_generated_files() {
-        let out = std::env::temp_dir().join(format!("rava-readability-{}", std::process::id()));
-        let src = out.join("user/src/p");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("a.rs"), "rava_macros::java_class! { x.borrow(); Rc::new(1); Object::from_any(v) }").unwrap();
-        std::fs::write(src.join("a_impl.rs"), "x.borrow(); x.borrow();").unwrap();
-        std::fs::write(src.join("b.txt"), "rava_macros::java_class! x.borrow()").unwrap();
-        let c = readability_counts(&out, &["user".to_string(), "missing".to_string()]);
+        let texts = ["rava_macros::java_class! { x.borrow(); Rc::new(1); Object::from_any(v) }", "x.borrow(); x.borrow();"];
+        let c = readability_counts(texts);
         assert_eq!(c, [("from_any", 1), ("downcast", 0), ("downcast_ref", 0), ("rc_new", 1), ("borrow", 1)]);
-        std::fs::remove_dir_all(&out).ok();
     }
 
     #[test]
@@ -149,13 +132,12 @@ mod tests {
         let fb = FallbackAudit::new(false);
         let pd = vec!["p/Option".to_string()];
         let hw = vec![(HwAudit::Override, "p/A.m:()V".to_string())];
-        let out = std::env::temp_dir().join("rava-audit-none");
+        let rd = readability_counts([]);
         let lines = audit_lines(&AuditInputs {
             body: &body,
             hw: &hw,
             fallback: &fb,
-            out: &out,
-            crates: &[],
+            readability: &rd,
             prelude_disambiguated: &pd,
             debug: false,
         });
