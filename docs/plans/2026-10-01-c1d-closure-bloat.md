@@ -1023,3 +1023,47 @@ java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V
 
 **结论**：≤360 在现有分析能力下不可达。正式口径 423 / 305、≤3 s；超出部分由 OOB 真实调用链（约 52）与
 CAS 竞争分支（约 8）构成。
+
+**后续项 a5（C1d-a，不挂起）**
+
+1. **OOB：`checkBoundsOffCount` 出错分支，采用关系型边界推理。**
+   - 两条候选：
+     - **关系型边界推理**：证明 `dstOff + len ≤ dst.length >> 1`。
+     - **全程序 `String.coder` 分析**：证明 `coder` 恒为 LATIN1，`inflate` 不可达。
+   - 取舍：
+
+     | 维度 | 关系型边界推理 | 全程序 `String.coder` 分析 |
+     |---|---|---|
+     | 覆盖面 | 所有 JDK 内部「下标 / 偏移由结构保证」的检查点：`Preconditions.check*`、`checkBoundsOffCount`、`Arrays.copyOfRange`、`System.arraycopy` 前置、Buffer 索引等；每个被证伪的出错分支都切掉同一片 `String.format` / Formatter / Locale 区域 | 只有 `inflate` 一类入口 |
+     | 稳定性 | 与程序处理哪些字符无关 | 只要程序中出现非 Latin-1 字符的来源（任何类中的字面量、`char` 运算、IO 解码、`Character` 转换），或 VM 注入 `COMPACT_STRINGS = false`，结论就失效。只对玩具程序成立，真实程序几乎全部退回 |
+     | 代价 | 需要数值域与堆不变量 | 只需一个字段的值集 |
+
+   - 结论：采用关系型边界推理。
+   - 做法，三层：
+     1. **方法内差分约束 / 八边形域。**
+        - 变量：局部变量、`arraylength`、移位 / 加减常数。
+        - 接在 absint 条件边上（与 P2 守卫收窄同一入口）。
+        - `newBytesFor(n)` 的返回值携带 `length == n << 1`，按方法摘要（返回值与形参的关系）跨调用传递。
+     2. **类不变量。**
+        - 形如 `this.count ≤ this.value.length` 的字段间关系。
+        - 由全部写点（构造器与所有 `putfield count` / `putfield value`）归纳验证：每个写点在其路径约束下保持不变量才成立；任何一处不成立则不变量不成立。
+        - 候选不变量由检查点的前置条件反推生成，不靠清单。
+     3. **检查点判定。**
+        - `Preconditions` 系列与 `checkBoundsOffCount` 的出错分支：在调用点约束下若不可满足，该分支不入轨迹。
+        - 判定按调用点进行，不改被调方法的抽象摘要。
+   - 健全性：数值域只在整数不溢出的前提下使用。`newBytesFor` 自带溢出检查分支，溢出路径照常可达。
+   - 用户下标（如 `list.get(i)`，`i` 来自输入）证不出时保持可达，属于正确行为。
+   - 目标：HelloWorld 正式口径 ≤371 类（§20.8 切除 OOB 的实测值）。
+   - 再往下的目标在 a2（1e623cec 合入后的形态）实测之后定。
+
+2. **`fullAddCount`：CAS 竞争分支，只记录，不实施。**
+   - 属于线程模型范围：单线程下 CAS 不会失败，但只有分析能证明「该 CHM 实例在发布前 / 只被单线程触及」时，才能剪掉这条分支。这归线程逃逸分析，不在 C1d 范围内。
+   - 约 +8 类，计入健全保守。
+
+**合入集成分支后的实测（c1d-p0 144a33a4 = 合入 be1b97be）**
+
+- 生成器单测全过。
+- HelloWorld `--stop-after emit`：424 个 JDK 类 + 1 个用户类，`non_native_overrides=0`，`vm_boundary_methods=86`。
+- 冲突解法：vm_boundary 类的 `<clinit>` 缺省按字节码翻译，手写承载的改为在 `clinit_carried` 中正向登记，取代原来的 `translate_clinit`；`ClassLoader$ParallelLoaders` 加入 `translate_nested`。
+- 1e623cec 早已在 c1d-p0 的祖先中，a2 无需另行合入。
+- FS-C2（ClassLoaders 整类按字节码翻译）与本分支冲突时，后合入的一方按「整类翻译、不进 vm_boundary」解冲突。
