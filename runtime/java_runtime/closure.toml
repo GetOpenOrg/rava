@@ -82,10 +82,11 @@ translate_nested = [
 
 # VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，
 # 其 <clinit> 按字节码翻译（方法语义以它自己的字节码为准）：纯 Java 静态状态（如 ClassLoader.nocerts、
-# VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表）不翻译就保持 null。
+# VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表、ModuleLayer 的空层与 CLV）
+# 不翻译就保持 null（ModuleLayer.CLV 为 null 时 ServiceLoader 的模块层查找即 NPE）。
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
 # - VirtualThread：调度器（ForkJoinPool / 延时调度器）——虚拟线程映射为 OS 线程；
-# - Module / ModuleLayer：CDS 归档模块图与引导层由 VM 构建；
+# - Module：CDS 归档模块图（ArchivedData）与无名 / everyone 模块由 VM 模型承载（module_impl.rs）；
 # - InetAddress：名字服务（resolver SPI、hosts、loadLibrary）由操作系统解析器承载；
 # - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
 # - InvokerBytecodeGenerator：运行期字节码生成器，句柄调用由原生解释器承载；
@@ -96,7 +97,6 @@ translate_nested = [
 clinit_carried = [
     "java/lang/VirtualThread",
     "java/lang/Module",
-    "java/lang/ModuleLayer",
     "java/net/InetAddress",
     "javax/crypto/JceSecurity",
     "java/lang/invoke/InvokerBytecodeGenerator",
