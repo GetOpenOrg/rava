@@ -1,0 +1,10 @@
+file -> file file:/tmp/a.txt
+FILE -> file file:/tmp/b.txt
+jar -> jar jar:file:/tmp/c.jar!/d
+jrt -> jrt jrt:/java.base
+nosuchproto -> MalformedURLException: unknown protocol: nosuchproto
+FJR?
+3143036 0 2112 2112
+102 233 105
+true
+SIOOBE Index 2 out of bounds for length 2

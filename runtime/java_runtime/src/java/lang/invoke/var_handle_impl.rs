@@ -12,7 +12,8 @@
 //!   - Array 家族（*Array*）：见 `var_handle_ext.rs`。
 //!
 //! CAS 族（compareAndSet/weakCompareAndSet*/compareAndExchange*/getAndSet*/getAndAdd*）
-//! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / long 原子单元 / int 与子字字段的 int 字视图）。
+//! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / 基本类型槽经 Unsafe 统一载体：实例字段
+//! 字 / 双字视图、静态字段写锁）。
 
 use crate::prelude::*;
 use super::var_handle::VarHandle;
@@ -95,9 +96,22 @@ fn _field_write(c: _Carrier, holder: &Object, off: i64, v: &Object, volatile: bo
     }
 }
 
+/// 基本类型族的槽宽（字节）：Unsafe 同族访问器的宽度（boolean / byte 1，short / char 2，
+/// int / float 4，long / double 8）。
+fn _width(c: _Carrier) -> usize {
+    match c {
+        _Carrier::Bool | _Carrier::Byte => 1,
+        _Carrier::Short | _Carrier::Char => 2,
+        _Carrier::Int | _Carrier::Float => 4,
+        _Carrier::Ref | _Carrier::Long | _Carrier::Double => 8,
+    }
+}
+
 /// 交换语义（getAndSet / compareAndExchange 共用）：读旧值，可选比较（Some：不「相同」
 /// 则不写，返回当前值——exchange 的见证形态；None：无条件换），写新值，返回旧值。
-/// 读-比-写在字段存储单元内原子完成：引用槽写锁 / int、long 原子单元。
+/// 读-比-写与 Unsafe 同族访问器同一载体、在该槽的存储上原子完成：引用族经引用槽写锁，
+/// 基本类型族按位形（浮点为原始位，与 JDK 的 floatToRawIntBits 比较同义）经统一载体
+///（实例字段字 / 双字视图、静态字段写锁）。
 fn _field_exchange(c: _Carrier, holder: &Object, off: i64, expected: Option<&Object>, new: &Object) -> Result<Object> {
     let u = Unsafe::getUnsafe()?;
     let e = match expected {
@@ -105,33 +119,20 @@ fn _field_exchange(c: _Carrier, holder: &Object, off: i64, expected: Option<&Obj
         None => None,
     };
     let nv = _norm(c, new)?;
-    match c {
-        _Carrier::Ref => {
-            let mut nv = Some(nv);
-            u.__vh_ref_update(holder, off, &mut |cur| match &e {
-                Some(e) if !_same(c, &cur, e) => None,
-                _ => nv.take(),
-            }).ok_or_else(_state_err)?
-        }
-        // int 与子字族（boolean / byte / short / char）同走 int 字视图：位形即零扩展字
-        _Carrier::Long | _Carrier::Int | _Carrier::Bool | _Carrier::Byte | _Carrier::Short | _Carrier::Char => {
-            let eb = e.as_ref().and_then(|e| _bits(c, e));
-            let vb = _bits(c, &nv).ok_or_else(|| _bad_arg("bad value form"))?;
-            let old = if c == _Carrier::Long {
-                u.__vh_long_update(holder, off, |cur| match eb {
-                    Some(e) if cur as u64 != e => cur,
-                    _ => vb as i64,
-                }).map(|r| r.map(|o| o as u64))
-            } else {
-                u.__vh_int_update(holder, off, |cur| match eb {
-                    Some(e) if cur as u32 as u64 != e => cur,
-                    _ => vb as u32 as i32,
-                }).map(|r| r.map(|o| o as u32 as u64))
-            };
-            Ok(_box(c, old.ok_or_else(_state_err)??))
-        }
-        _ => panic!("stub: java/lang/invoke/VarHandle 字段读-比-写（{:?} 族无共享原子单元协议）", c),
+    if c == _Carrier::Ref {
+        let mut nv = Some(nv);
+        return u.__vh_ref_update(holder, off, &mut |cur| match &e {
+            Some(e) if !_same(c, &cur, e) => None,
+            _ => nv.take(),
+        });
     }
+    let eb = e.as_ref().and_then(|e| _bits(c, e));
+    let vb = _bits(c, &nv).ok_or_else(|| _bad_arg("bad value form"))?;
+    let old = u.__vh_prim_update(holder, off, _width(c), &mut |cur| match eb {
+        Some(e) if cur != e => None,
+        _ => Some(vb),
+    })?;
+    Ok(_box(c, old))
 }
 
 fn _field_cas(c: _Carrier, holder: &Object, off: i64, expected: &Object, new: &Object) -> Result<bool> {

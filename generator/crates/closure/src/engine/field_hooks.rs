@@ -23,6 +23,11 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 字段登记了接收者钩子（`receiver = true`）
+    pub(super) fn recv_hook_field(&self, decl: &str, f: &MemberRef) -> bool {
+        self.man.vm_state.field_hook(decl, &f.name, &f.desc).is_some_and(|h| h.receiver)
+    }
+
     /// 接收者钩子字段：接收者值集 s（已按属主过滤）中是否有钩子需落地的对象
     pub(super) fn recv_hook_needed(&mut self, decl: &str, f: &MemberRef, s: &TypeSet) -> bool {
         match self.man.vm_state.field_hook(decl, &f.name, &f.desc) {

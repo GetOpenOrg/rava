@@ -253,13 +253,19 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> { None }
 
     /// Unsafe 实例字段 int 字视图协议（`getInt`/`putInt`/`compareAndSetInt` 等 int 访问器的
-    /// 实例字段形态）：按字段名对 int 及子字（boolean / byte / short / char）字段的共享单元执行
+    /// 实例字段形态）：按字段名对 int、float（原始位）及子字（boolean / byte / short / char）字段的共享单元执行
     /// 字视图读-改-写（`__PrimCell::__word_update`），返回旧字。子字字段独占 4 字节对齐槽，
     /// JDK 的子字 CAS（compareAndExchangeByte / Short：`getIntVolatile(o, offset & ~3)` +
     /// `weakCompareAndSetInt`）经此落在该字段自身。java_class! 宏为含这些平铺非擦除字段的
     /// 生成类生成臂（含继承字段）；未命中 → None。
     #[doc(hidden)]
     fn __unsafe_word(&self, _field: &str, _op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> { None }
+
+    /// Unsafe 实例字段双字视图协议（`__unsafe_word` 的 64 位镜像）：按字段名对 long / double
+    /// 字段（double 以原始位）的共享单元执行读-改-写（`__PrimCell::__dword_update`），返回旧双字。
+    /// 承载 Unsafe 的 long 访问器族与 JDK compareAndSetDouble（→ compareAndSetLong 原始位）。
+    #[doc(hidden)]
+    fn __unsafe_dword(&self, _field: &str, _op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> { None }
 
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
     /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名对共享的引用存储单元

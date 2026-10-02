@@ -330,6 +330,10 @@ serializable_markers = ["java/io/Serializable"]
 #   component_of_receiver  返回接收者镜像所指数组类的元素类型镜像（JVMS §4.3.2，基本类型元素给基本类型类镜像；非数组为 null）
 #   primitive_class     返回基本类型（含 void）的类镜像（JLS §15.8.2 `int.class`、`Integer.TYPE`）：所指不是字节码类，
 #                       类初始化无对象（JVMS §5.5）、无成员可枚举；与类镜像区分，不使 class_init 记为所指未知
+#   caller_class        返回调用它的 @CallerSensitive 方法的调用者类镜像（[caller_sensitive] 注解）：在 CS 方法 M 体内
+#                       调用时，值集 = M 各压栈调用边上调用方所在类的镜像（生成器在被调引用解析到 CS 声明的字节码
+#                       调用点压入调用方类）；M 另有不压栈的调用边（手写体、lambda / 方法句柄转接等）时再并入全部
+#                       压栈调用方类与根类（运行期取外层栈顶或回退）；在非 CS 方法体内调用时所指未知
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -352,6 +356,9 @@ component_of_receiver = [
 ]
 primitive_class = [
     "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;",
+]
+caller_class = [
+    "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",

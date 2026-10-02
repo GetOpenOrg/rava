@@ -107,19 +107,19 @@ mod mt {
             }
         }
     }
-    // Unsafe int 字视图（`ObjectVTable::__unsafe_word`）：int 及子字（boolean / byte / short / char）
-    // 字段各占独享的 4 字节对齐槽（objectFieldOffset 的 id 恒为 4 的倍数），字段值位于槽的低位
+    // Unsafe int 字视图（`ObjectVTable::__unsafe_word`）：int、float 及子字（boolean / byte / short /
+    // char）字段各占独享的 4 字节对齐槽（objectFieldOffset 的 id 恒为 4 的倍数），字段值位于槽的低位
     // （小端，JDK compareAndExchangeByte / Short 的 `offset & ~3` 与 shift 落在槽内且 shift = 0），
     // 其余位是恒为 0 的填充。to_word：字段值零扩展为字（JVM 字段内存形态）；from_word：取字的
     // 低位截断回字段（boolean 取低字节非 0，与 HotSpot 的 boolean 规范化一致）。
     macro_rules! word_view {
-        ($($t:ty => |$v:ident| $to:expr, |$w:ident| $from:expr;)*) => {$(
+        ($method:ident: $w_ty:ty; $($t:ty => |$v:ident| $to:expr, |$w:ident| $from:expr;)*) => {$(
             impl __PrimCell<$t> {
                 /// 字视图读-改-写：`op(旧字)` 给出新字则原子写入其低位截断，返回旧字；
                 /// 给 None 即只读。CAS 重试时 op 重新求值（op 须为纯函数）。
-                pub fn __word_update(&self, op: &mut dyn FnMut(i32) -> Option<i32>) -> i32 {
-                    let to = |$v: $t| -> i32 { $to };
-                    let from = |$w: i32| -> $t { $from };
+                pub fn $method(&self, op: &mut dyn FnMut($w_ty) -> Option<$w_ty>) -> $w_ty {
+                    let to = |$v: $t| -> $w_ty { $to };
+                    let from = |$w: $w_ty| -> $t { $from };
                     let mut cur = self.bits.load(SeqCst);
                     loop {
                         let old = to(<$t as __AtomicRepr>::__from_bits(cur));
@@ -133,12 +133,20 @@ mod mt {
             }
         )*};
     }
-    word_view! {
+    // float 字段的字形态是其原始位（JDK compareAndSetFloat → compareAndSetInt(floatToRawIntBits)）
+    word_view! { __word_update: i32;
         i32 => |v| v, |w| w;
         bool => |v| v as i32, |w| (w & 0xFF) != 0;
         i8 => |v| v as u8 as i32, |w| w as i8;
         i16 => |v| v as u16 as i32, |w| w as i16;
         u16 => |v| v as i32, |w| w as u16;
+        f32 => |v| v.to_bits() as i32, |w| f32::from_bits(w as u32);
+    }
+    // 双字视图（`ObjectVTable::__unsafe_dword`）：long 与 double（原始位，JDK compareAndSetDouble →
+    // compareAndSetLong(doubleToRawLongBits)）字段
+    word_view! { __dword_update: i64;
+        i64 => |v| v, |w| w;
+        f64 => |v| v.to_bits() as i64, |w| f64::from_bits(w as u64);
     }
 
     impl<T: __AtomicRepr + Default> Default for __PrimCell<T> {

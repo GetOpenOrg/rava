@@ -377,6 +377,110 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
   普通写入与 CAS 同一存储；未初始化类的静态方法句柄首次调用（`DirectMethodHandle.ensureInitialized` →
   `MethodHandle.updateForm` → `Unsafe.compareAndSetBoolean` 字节码路径）与同一句柄反复调用。
 
+**基本类型统一载体：数组元素 / 直接内存 / 实例字段同一读-改-写口径**（补上一条的残余）。
+
+- 载体 `jdk/internal/misc/unsafe__ext.rs::prim(o, offset, width, op)`：值以零扩展 u64 位形流转，`op(旧)` 给新值即写、
+  给 None 即只读，返回旧值。Unsafe 基本类型访问器全族（boolean / byte / short / char / int / float / long / double 的
+  get / put / CAS / compareAndExchange / getAndSet / getAndAdd / getAndBitwise*）与 VarHandle 字段族 `_field_exchange`
+  都只是对它的薄包装（宽度 + op），不按方法分支。按载体三路：
+  - 原生内存（null 基址的绝对地址、基本类型数组的 `arrayBaseOffset + i × arrayIndexScale`）→ `native_memory::update`：
+    数组在存储写锁内对字节视图读-改-写（boolean 数组写后规范为 0 / 1），直接内存对齐时经同宽原子 CAS 循环。
+    子字元素与按字对齐的 int 访问落在同一字节序列上，字外相邻元素不变（小端，与 HotSpot 同）；
+  - 静态字段 id → 声明类字段闭包按装箱值读写（位形 ↔ 装箱值换算）。静态存储的原子读-改-写由 b1 的
+    `_static_rmw`（c1d-b1 94f1edf3）承载，b1 合入后本臂改经它（子字静态字段 CAS 一并落在其上）；
+  - 实例字段 id → ObjectVTable 字视图 `__unsafe_word`（int / float 原始位 / 子字）或新增双字视图 `__unsafe_dword`
+    （long / double 原始位，`__PrimCell::__dword_update`），宽度小于视图的访问按掩码合成。
+- float / double 字段与 int / long 同一视图（原始位比较：-0.0 ≠ 0.0、NaN 与自身相同，同 JDK 位比较语义），VarHandle
+  浮点族不再存根。
+- `Thread.getNextThreadIdOffset` 返回 VM 静态 `AtomicI64` 的真实地址，`getAndAddLong(null, addr, 1)` 走直接内存原子路径；
+  原 getAndAdd 族按 (基址身份, offset) 键的旁路计数表删除（它与字段真实存储分离）。
+- 边界用例 `tests/e2e/48_refs/TestUnsafePrimitiveArray.java`（经 `sun.misc.Unsafe`，期望为 JDK 21 实测）：int / long 元素
+  CAS、getAndAdd、getAndSet；int 宽度按字访问 byte[] / short[]（CAS 只改该字覆盖的元素）；boolean / char / float /
+  double 元素读写；实例 float / double 字段经 Unsafe 读写、经 VarHandle 的 CAS / compareAndExchange / getAndAdd /
+  getAndSet。静态字段（含子字）的原子读-改-写按协调归 b1。
+
+**S3：`Reflection.getCallerClass` 按 @CallerSensitive 调用者给值**（`engine/caller.rs`）。
+
+- 清单 `[facts.reflect] caller_class` 登记 `getCallerClass`，返回模型 `RetModel::Caller`：@CallerSensitive 方法 M 体内的
+  调用点结果取 M 的调用者节点 `S(M, CALLER)`，不经 `R(getCallerClass)` 汇合；非 CS 方法体内调用照旧取返回值节点。
+- 调用者节点按调用边增长（`edge` → `caller_edge`），压栈判据与生成器 `caller_sensitive_decl` 同一：边出自字节码调用指令
+  （`invoke` 期间置 `cs.site_wrapped`），且该指令的被调引用沿超类链解析到 CS 声明 → 并入调用方所在类镜像。其余进入 M 的边
+  （手写体、lambda / 方法引用经 SAM 转接、方法句柄、indy 辅助、虚调用汇点的后续补边）运行期不压栈，M 的调用者节点改跟
+  「全部 CS 调用边的调用方所在类镜像 ∪ 根类镜像」（运行期取外层栈顶，栈空时栈遍历 / 根类）。
+- 与 b1 的原生 Class 返回建模同一形态（清单登记的返回模型 + `RetModel` 变体，接在 `edge_ret`），谁先合入以谁为准。
+- 实测（`rava closure`；对照为清空 `caller_class` 的同一二进制）：`MethodHandles.lookup@0` 由 open(Class) 收窄为调用点
+  所在类镜像集（TestMethodHandleDirect：{TestMethodHandleDirect, ValueConversions}）；TestModuleLayerDefine
+  `class_init.unknown` true → false（`VarHandles.makeFieldHandle@442` 消失），类数不变（1829）；TestMethodHandleDirect /
+  TestReflectFieldMethod 剩 DMH 两点、MHAF@14（S2 / S4，属 b1）；HelloWorld / TestByteArrayViewVarHandle 不变。
+- class_init 跳过 `Class#<synthetic>`（非字节码类镜像，无 `<clinit>`）已在 1314a487 完成。
+- 边界用例 `tests/e2e/62_reflection/TestCallerSensitiveLookup.java`（期望为 JDK 21 实测）：静态方法、嵌套类实例方法、
+  接口 default 方法、经他类转调、静态初始化块内的 `lookup().lookupClass()`；lookup 后的 `findStaticVarHandle` /
+  `findStatic` 首次访问触发目标类 `<clinit>`。
+- 抽查 c1db3-212c9229 三败的修复：
+  - TestCallerSensitiveLookup：生成器压栈的调用处类改取字节码所属类（`code_owner`）。接口 default 方法体复制进实现类发射时，
+    JVM 栈帧所属仍是声明接口（JDK 21：`default: …$Probe`）。分析侧 `caller_edge` 取方法节点键的属主（即声明类），本就一致。
+  - TestUnsafePrimitiveArray：`sun/misc/Unsafe` 在 `sun/` 前缀截断下 `<clinit>` 不发射，`theUnsafe` 恒 null → NPE。
+    该类纯 Java（0 个 ACC_NATIVE，全部委托 jdk.internal.misc.Unsafe），按 `[release] classes` 放行。
+  - ThreadTest：非接收者字段钩子（`ClassLoader.scl` / `Thread.contextClassLoader` → `__vm_init_phase3`）在有接收者的实例字段
+    访问点只走 `recv_hook_needed`（只认接收者钩子），钩子体从闭包消失，`initSystemClassLoader` 成存根。改为只有接收者钩子
+    按值集判定，静态钩子在一切访问点无条件接入（`bytecode.rs::field` / `field_hooks.rs::recv_hook_field`）。
+
+**建线程用例的加载器链扇出收窄**（ThreadTest 1445 → 346）。
+
+- 反事实截断定位（`rava closure --cut`，基线 1445）：主扇出不是 `System.registerNatives` 的开放接收者 toString（截掉后仍
+  1445），而是 `initPhase3 → ClassLoaders.<clinit>@144 → URLClassPath.<init> → toFileURL("") → ParseUtil.fileToEncodedURL
+  → new URL("file", …) → URL.getURLStreamHandler@68 lookupViaProviders`（截该点 → 411）。JDK 中协议 "file" 的
+  `isOverrideable` 为 false，providers / 属性 / factory 三路都不执行；分析器缺的是协议名常量上的分支判定。
+- 修复（清单 `[facts.string_ops]` 新增三种纯函数，`sysprops.rs::string_op` 求值）：`String.charAt`（越界不折叠，运行期抛
+  SIOOBE）、`String.hashCode`（规范值）、`Character.toLowerCase(C)`（只折叠 ASCII）。形参常量（`pvals`）把 "file" 经
+  `URL(String,String,String)` → 4 参 → 5 参构造、`lowerCaseProtocol`（常量求值）送到 `getURLStreamHandler` 与
+  `DefaultFactory.createURLStreamHandler`：`isOverrideable("file")` 折叠为 false，providers / lookupViaProperty /
+  factory 分支不可达；DefaultFactory 的 `switch (protocol)` 按 hashCode 常量只留 file 臂。
+- (b) URLClassPath jar 分支（`getLoader` / `JarLoader`）与 (c) `URL$DefaultFactory` 反射臂（`Class.forName` +
+  `getDeclaredConstructor`）随之出闭包：前者只由扇出后的资源查找可达，后者被 hashCode 分派剪掉；无需单独改动。
+  `URLClassPath.<init>` 的 `new jar.Handler()` 为 JDK 实际执行，保留。
+- 实测（`rava closure`，前 → 后）：ThreadTest 1445 → 346、TestParallelCapable 1448 → 336、TestSynchronized 1446 → 345、
+  TestFilesApi 1454 → 460；HelloWorld 264、TestAppClassLoader 1450 等不变（后者的 ~1450 与 TestAtomics /
+  TestZonedDateTime / TestCompletableFuture 同属另一扇出源，截 `initSystemClassLoader` 或 providers 都不降，不在本项）。
+  ThreadTest 加载器链剩余（相对截 `initSystemClassLoader` 体的 280）约 66 类：ClassLoaders 三加载器、URLClassPath、URL /
+  file 与 jar Handler、ParseUtil / IPAddressUtil、SecureClassLoader / ProtectionDomain 族，均为 initPhase3 实际执行。
+- `system_impl.rs::derived_vm_property` 读属性表值先按 String 转换再取文本（原以 Object 直接 Display 即 toString 虚分派），
+  精度改进，类数不变。
+- (d) 不做：`Thread.<init>` 复制父线程的上下文加载器时，JDK 语义要求该值已是 app loader（`getContextClassLoader()` 可观察），
+  把 initPhase3 延迟到首次真正使用加载器会改变可观察语义。
+- 边界用例 `tests/e2e/53_io_api/TestBuiltinUrlProtocol.java`（期望为 JDK 21 实测）：file / FILE / jar / jrt / 未知协议的 URL
+  构造，字符串 switch，`hashCode` 常量（含 "Aa" / "BB" 碰撞），非 ASCII 的 `Character.toLowerCase`（É、İ）与越界 `charAt`。
+
+**抽查 c1db3-fab05aaf 两败：`Thread.setContextClassLoader` 存根**（ThreadTest / TestParallelCapable）。
+
+- 现象：运行期 initPhase3 段（字段钩子 `__vm_init_phase3`，`Thread.<init>@284` 读 `contextClassLoader` 触发）调到存根
+  `Thread.setContextClassLoader`。`--why`：`initSystemClassLoader ← [handwritten] __vm_init_phase3 ← [field] Thread.<init>@284`
+  在闭包，同一钩子体里的 `super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)` 不在。
+- 根因：手写扫描给接收者定静态类型时，路径调用只认「类型路径 `T::f()`」与「本文件自由 fn `f()`」，**模块路径上的自由 fn**
+  （`super::x_impl::f()` / `crate::m::f()`）推不出静态类型（`srecv = None`），其上的 Java 方法调用丢回调。01572ce6 之前
+  `setContextClassLoader` 经加载器链扇出另有字节码路径入闭包，掩盖了这个缺口；收窄后暴露。不是折叠剪错分支。
+- 修复：`handwritten/stype.rs` 对小写末段的模块路径调用记 `SType::Ret(模块路径, fn)`；`hw_stype.rs::colocated_fn_ret` 按路径
+  解析定义它的手写文件——共置手写模块（`…::<x>_impl` / `_ext`，经 `class_of_module` 反查宿主类）或模块单元（`unit_fn`）——取该
+  自由 fn 声明的返回类型；`rtfn.rs::hw_fn_target` 同样把共置手写模块路径上的 fn 调用接成手写 fn 节点（原只认模块单元）。
+  `class_of_module` 的蛇形名索引改 `OnceCell`，可在只读推断中使用。
+- 实测：ThreadTest / TestParallelCapable 闭包含 `setContextClassLoader`（`← [dispatch] __vm_init_phase3@0`），类数 346 / 336 不变；
+  本机编译通过。
+- 边界用例 `tests/e2e/34_concurrency/TestThreadContextLoaderInit.java`（期望为 JDK 21 实测）：只建线程、字节码不直接调用
+  `setContextClassLoader`，读主线程与子线程的上下文加载器（非 null、相同、AppClassLoader）。
+
+**待查精度项：另一扇出源**（登记，不在本步做）。TestAppClassLoader / TestAtomics / TestZonedDateTime /
+TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后仍稳定在 1450–1520 类，截
+`initSystemClassLoader` 或 `getURLStreamHandler@68` 都只降 4 类。起点（TestAtomics，`rava closure --why`）：
+
+- `sun/util/locale/provider/LocaleProviderAdapter` ← `BreakIterator` ← `ConditionalSpecialCasing` ← `String.toUpperCase(Locale)`
+  ← `regex/CharPredicates.forUnicodeProperty` ← `Pattern.compile` ← `Formatter.<clinit>` ← `String.format` ←
+  `VarHandle.toString@23` ← **`[dispatch] reflect_dispatch.unbox_bool`**（手写体内对开放接收者的 toString 分派）←
+  `[hw-call] VarHandle.setVolatile` ← `AtomicIntegerArray.set@9` ← `TestAtomics.main@243`。
+  疑点：手写 `unbox_bool` 的 Display / 格式化落成对 Object 的 toString 虚分派，接收者值集开放，把 `VarHandle.toString`
+  → `String.format` → `Formatter` / regex / locale 整片拉入（同 registerNatives toString 的形态，需按手写扫描的静态类型收窄）。
+- 同一用例里 `java/util/ServiceLoader` 仍经 `ParseUtil.fileToEncodedURL → URL.<init> → getURLStreamHandler@68
+  lookupViaProviders` 进入：协议名形参常量在该用例被别的调用点汇合为 Top（待查是哪条 URL 构造链带入非常量协议）。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
@@ -512,7 +616,8 @@ getClassDataLayout0 / `<init>` 的 getSuperclass 只是 open → open 传播）�
 类数上界 −1 / −1（<10），时间差在噪声内；ST 两个池几乎不变——池由 writeObject0 对象池（assertionLock SCC）决定，
 不由句柄通道决定。结论：T3 不实施句柄路由，T3 关闭；剩余收益在 T2（writeObject0 对象池 = ArrayList.writeObject `this`
 收窄、名字 × 镜像交叉、forName0 回退、Serializable 有界镜像）。
-（2026-10-02，C1d-b 停止）
+
+## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
 

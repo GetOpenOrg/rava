@@ -130,6 +130,8 @@ impl<'a> Engine<'a> {
             RetModel::Receiver
         } else if let Some(src) = self.man.memory_read(&ks) {
             RetModel::Read(src)
+        } else if self.man.returns_caller_class(&ks) {
+            RetModel::Caller
         } else {
             RetModel::Plain
         };

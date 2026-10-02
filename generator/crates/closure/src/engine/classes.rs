@@ -253,7 +253,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 共置手写模块路径（`super::x_impl` / `crate::a::b::x_impl`）→ 其宿主类
-    pub(super) fn class_of_module(&mut self, host: &str, segs: &[String], snake: &str) -> Option<String> {
+    pub(super) fn class_of_module(&self, host: &str, segs: &[String], snake: &str) -> Option<String> {
         let host_pkg = host.rsplit_once('/').map_or("", |(p, _)| p);
         let dirs: Vec<&str> = segs[..segs.len() - 1].iter().map(String::as_str).filter(|s| *s != "self").collect();
         let supers = dirs.iter().take_while(|s| **s == "super").count();
@@ -268,7 +268,7 @@ impl<'a> Engine<'a> {
             Some(&"crate") => dirs[1..].join("/"),
             _ => dirs.join("/"),
         };
-        if self.snake_index.is_none() {
+        let idx = self.snake_index.get_or_init(|| {
             let mut idx = HashMap::default();
             for o in [Origin::Jdk, Origin::Lib, Origin::Image] {
                 for n in self.cp.names_of(o) {
@@ -276,9 +276,15 @@ impl<'a> Engine<'a> {
                     idx.entry(format!("{p}/{}", to_snake(simple))).or_insert_with(|| n.clone());
                 }
             }
-            self.snake_index = Some(idx);
-        }
-        self.snake_index.as_ref().unwrap().get(&format!("{pkg}/{snake}")).cloned()
+            idx
+        });
+        idx.get(&format!("{pkg}/{snake}")).cloned()
+    }
+
+    /// 路径 `…::<x>_impl` / `…::<x>_ext`（共置手写模块，非类型）→ 其宿主类
+    pub(super) fn colocated_module_class(&self, host: &str, segs: &[String]) -> Option<String> {
+        let snake = segs.last().and_then(|l| MODULE_SUFFIXES.iter().find_map(|x| l.strip_suffix(x)))?;
+        self.class_of_module(host, segs, snake)
     }
 
     /// 截断体：边界类里有字节码、未经手写提供的方法，发射层翻译其方法体但不展开被调方（规模截断的

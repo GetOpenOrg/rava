@@ -293,8 +293,12 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
-            // 接收者钩子在有接收者值集时按值集判定（见下），其余访问点无条件接入
-            if !(instance_op(opcode) && recv.is_some()) {
+            // 接收者钩子（`receiver = true`）在有接收者值集时按值集判定（见下）；静态钩子与其余访问点
+            // 无条件接入——静态钩子（如 initPhase3 段）不看接收者，实例字段读写同样先执行它
+            let recv_hook = instance_op(opcode)
+                && recv.is_some()
+                && self.recv_hook_field(&decl, f);
+            if !recv_hook {
                 self.field_hook(&decl, f, opcode, &via, res);
             }
         }
@@ -309,9 +313,9 @@ impl<'a> Engine<'a> {
         }
         let Some(ft) = parse_field(&f.desc) else { return };
         let Some(tid) = self.ptype(&ft) else {
-            // 手写字段访问器仍需沿其回调入链
+            // 手写字段访问器仍需沿其回调入链；基本类型字段无值集，接收者钩子在此无条件接入
             if first {
-                if instance_op(opcode) && recv.is_some() {
+                if instance_op(opcode) && recv.is_some() && self.recv_hook_field(&decl, f) {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, None);

@@ -115,6 +115,7 @@ impl<'a> Engine<'a> {
             Node::R(m) => format!("R {}", self.ctx_label(m)),
             Node::S(m, o) if o == POOL => format!("pool {}", self.ctx_label(m)),
             Node::S(m, o) if o == PROD => format!("prod {}", self.ctx_label(m)),
+            Node::S(m, o) if o == CALLER => format!("callers {}", self.ctx_label(m)),
             Node::S(m, o) if o & CATCH != 0 => format!("catch@{} {}", o & !CATCH, self.ctx_label(m)),
             Node::S(m, o) => format!("@{o} {}", self.ctx_label(m)),
             Node::F(f) => format!("field {}", self.field_label(f)),
