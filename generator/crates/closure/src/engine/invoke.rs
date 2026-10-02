@@ -357,7 +357,7 @@ impl<'a> Engine<'a> {
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
-        self.bind_params(t, base, ptypes.len());
+        self.bind_params(m, t, base, ptypes.len());
         if let Some(cv) = self.call_vals.clone() {
             self.pstr_site(m, &cv, |j| pstrs::PSlot::M(t, base + j));
         }
@@ -443,9 +443,14 @@ impl<'a> Engine<'a> {
     }
 
     /// 形参常量：并入本调用点的实参值（非字节码调用点 = Top）；变化时被调方法失效
-    pub(super) fn bind_params(&mut self, t: usize, base: usize, n: usize) {
-        let vals: Option<Vec<PV>> = self.call_vals.as_ref().map(|vs| vs.iter().map(PV::of).collect());
-        self.bind_pvs(t, base, n, vals.as_deref());
+    pub(super) fn bind_params(&mut self, m: usize, t: usize, base: usize, n: usize) {
+        let cv = self.call_vals.clone();
+        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of).collect());
+        match &cv {
+            Some(vs) => self.taint_site(m, t, base, n, vs),
+            None => self.taint_params(t, base, n, None),
+        }
+        self.join_pvs(t, base, n, vals.as_deref());
     }
 
     /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
@@ -461,6 +466,10 @@ impl<'a> Engine<'a> {
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         self.taint_params(t, base, n, vals);
+        self.join_pvs(t, base, n, vals);
+    }
+
+    fn join_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {

@@ -82,13 +82,36 @@ impl Engine<'_> {
     /// 形参槽并入实参（vals 不含接收者；None = 实参值未知）：非字符串常量的槽记为污染，重跑读过它的站点
     pub(super) fn taint_params(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         for i in base..n {
-            let clean = slot_clean(vals.and_then(|vs| vs.get(i - base)));
-            if clean || !self.ptaint.insert((t, i)) {
+            if !slot_clean(vals.and_then(|vs| vs.get(i - base))) {
+                self.taint_slot(t, i);
+            }
+        }
+    }
+
+    /// 字节码调用点 m → t 的形参槽污染：实参是字符串常量 / null，或全部来源是字面量与调用方未污染的形参槽
+    /// （透传：其常量集沿子集边到达，见 `pstrs.rs`）时保持干净；调用方槽日后被污染时沿子集边传来
+    pub(super) fn taint_site(&mut self, m: usize, t: usize, base: usize, n: usize, vals: &[V]) {
+        for i in base..n {
+            let clean = vals.get(i - base).is_some_and(|v| {
+                slot_clean(Some(&PV::of(v))) || names_known(&v.srcs(), |j| self.ptaint.contains(&(m, j)))
+            });
+            if !clean {
+                self.taint_slot(t, i);
+            }
+        }
+    }
+
+    /// 槽 (t, i) 记为污染：重跑读过它的站点，沿形参子集边传给透传的被调槽
+    fn taint_slot(&mut self, t: usize, i: usize) {
+        let mut work = vec![(t, i)];
+        while let Some((t, i)) = work.pop() {
+            if !self.ptaint.insert((t, i)) {
                 continue;
             }
             for off in self.pstr_readers(t, i) {
                 self.rerun_site(t, off);
             }
+            work.extend(self.pstr_succ_methods(t, i));
         }
     }
 }
