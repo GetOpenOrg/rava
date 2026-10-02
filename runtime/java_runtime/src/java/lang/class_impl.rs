@@ -54,7 +54,9 @@ impl Class {
     /// 的身份语义（JVMS §5.1 运行时常量池的类引用只解析一次）。
     ///
     /// `getName()` 返回 Java 形式的二进制名：斜线换点（`java/util/List` →
-    /// `java.util.List`），数组类型保持 JVM 描述符形态（`[Ljava.lang.String;`）。
+    /// `java.util.List`），数组类型保持 JVM 描述符形态（`[Ljava.lang.String;`）；隐藏类
+    /// （lambda 调用点类 `p/C$$Lambda/0x…`）只换调用者类部分，后缀前保留 `/`（`p.C$$Lambda/0x…`，
+    /// JVM 隐藏类命名），反向换回斜线即元数据表键。
     /// isAssignableFrom 的层次查询在运行时经 java_meta 生成的层次表进行，
     /// 此处不再携带/登记超类型数据。
     pub fn for_class(binary_name: String) -> Class {
@@ -68,7 +70,8 @@ impl Class {
         }
         let mut c = Class::default();
         c._init_not_null();
-        c.__set_name(String::from(key.replace('/', ".").as_str()));
+        let dotted = crate::meta::java_name(&key);
+        c.__set_name(String::from(dotted.as_str()));
         // 数组类的 componentType 字段由 VM 在建镜像时填充（HotSpot set_component_mirror）：
         // 字节码翻译的 `componentType()` / `arrayType` 链直接读该字段（MethodHandleImpl
         // .makeCollector 的 nCopies(n, arrayType.componentType())）。元素 Class 经 for_class
@@ -529,12 +532,14 @@ impl Class {
         Ok(Class::for_class(String::from(slash.as_str())))
     }
 
-    /// 原生镜像中「可加载」的类：生成闭包内的类（java_meta 修饰符表，含用户类）与数组类名。
+    /// 原生镜像中「可加载」的类：生成闭包内的类（java_meta 修饰符表，含用户类）与数组类名；
+    /// 隐藏类不可按名加载（JVM 同：`Class.forName` 对隐藏类名抛 ClassNotFoundException）。
     /// 供 `forName0` 与 `ClassLoader.findBootstrapClass` 共用。
     #[doc(hidden)]
     pub fn __is_known_class(slash_name: &str) -> bool {
         slash_name.starts_with('[')
-            || crate::meta::class_modifiers().iter().any(|(n, _)| *n == slash_name)
+            || !crate::meta::is_hidden_class(slash_name)
+                && crate::meta::class_modifiers().iter().any(|(n, _)| *n == slash_name)
     }
 
     /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是
@@ -770,10 +775,11 @@ impl Class {
         Ok(false)
     }
 
-    /// native `isHidden()`：原生二进制无运行期定义的隐藏类（lambda 代理为编译期合成类）。
+    /// native `isHidden()`：隐藏类判定，读 java_meta 隐藏类表（lambda 调用点隐藏类由生成器按站点
+    /// 声明，元数据与其余类同表）；数组 / 基本类型 / 普通类 → false。
     #[jvm_native]
     pub fn isHidden(&self) -> Result<bool> {
-        Ok(false)
+        Ok(crate::meta::is_hidden_class(&self.__slash_name()))
     }
 
     /// native `getNestHost0()`：javac 的 NestHost 恒为最外层封闭类（binary name 首个 `$` 前）。
