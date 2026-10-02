@@ -1,0 +1,11 @@
+sleep: sleep interrupted
+  java.lang.Thread.sleep0 native=true
+  java.lang.Thread.sleep native=false
+  TestNativeFrameTrace.main native=false line=32
+lambda:
+  TestNativeFrameTrace.lambda$fromLambda$0 native=false line=16
+  TestNativeFrameTrace.fromLambda native=false line=17
+  TestNativeFrameTrace.main native=false line=37
+catch:
+  TestNativeFrameTrace.fromCatch native=false line=25
+  TestNativeFrameTrace.main native=false line=38
