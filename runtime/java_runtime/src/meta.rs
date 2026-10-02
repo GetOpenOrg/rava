@@ -58,6 +58,8 @@ type Names = &'static [&'static str];
 pub type LineTable = (&'static str, &'static [LineMethod], &'static [(u32, u32, u32)]);
 /// 行表方法项 (帧归属类, 方法名, 描述符, 源文件, 宿主类)
 pub type LineMethod = (&'static str, &'static str, &'static str, &'static str, &'static str);
+/// 帧方法的 LineNumberTable：(类, 方法名, 描述符, [(start_pc, 行)])，按 (类, 名, 描述符) 升序
+pub type LineNumbers = (&'static str, &'static str, &'static str, &'static [(u16, u16)]);
 /// 行表方法下标哨兵：块外 / 非 Java 方法
 pub const NO_METHOD: u32 = u32::MAX;
 /// 行表 Java 行哨兵：native 方法帧（`StackTraceElement.lineNumber = -2`）
@@ -104,6 +106,8 @@ extern "Rust" {
     static VM_DYNAMIC_PROPERTIES: &'static [&'static str];
     #[link_name = "__java_meta_LINE_TABLES"]
     static LINE_TABLES: &'static [LineTable];
+    #[link_name = "__java_meta_LINE_NUMBERS"]
+    static LINE_NUMBERS: &'static [LineNumbers];
 }
 
 // SAFETY（以下各函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
@@ -149,3 +153,5 @@ pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe
 pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }
 /// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
 pub fn line_tables() -> &'static [LineTable] { unsafe { LINE_TABLES } }
+/// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
+pub fn line_numbers() -> &'static [LineNumbers] { unsafe { LINE_NUMBERS } }

@@ -92,7 +92,7 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     _ensure(member.0.__unsafe_ref_set("name", Object::from(String::from(frame.method.name))), "name");
     _ensure(member.0.__unsafe_ref_set("type_", Object::from(String::from(frame.method.descriptor))), "type");
     _ensure(member.0.__unsafe_int_set("flags", frame.member_name_flags()), "flags");
-    _ensure(info.0.__unsafe_int_set("bci", 0), "bci");
+    _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
 }
 
 impl<R, T> StackStreamFactory_AbstractStackWalker<R, T>

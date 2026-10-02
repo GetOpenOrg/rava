@@ -29,6 +29,8 @@ pub struct JavaFrame {
     pub source: Option<&'static str>,
     /// Java 行号（LineNumberTable）；不可得 -1，native 方法 -2（`StackTraceElement` 约定）
     pub line: i32,
+    /// 字节码下标：该行在 LineNumberTable 中的首个 start_pc（帧位置的精度是语句行）；无行号 0
+    pub bci: i32,
 }
 
 impl JavaFrame {
@@ -223,7 +225,37 @@ fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
         crate::meta::LINE_UNKNOWN => -1,
         n => n as i32,
     };
-    Some(JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line })
+    let bci = if line > 0 { bci_of_line(class, name, descriptor, line as u16) } else { 0 };
+    Some(JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line, bci })
+}
+
+/// 方法的 LineNumberTable（行表方法项；无表 → None）。描述符缺省时按 (类, 名) 唯一对位。
+fn line_number_table(class: &str, name: &str, descriptor: Option<&str>) -> Option<&'static [(u16, u16)]> {
+    let all = crate::meta::line_numbers();
+    match descriptor {
+        Some(d) => all.binary_search_by(|e| (e.0, e.1, e.2).cmp(&(class, name, d))).ok().map(|at| all[at].3),
+        None => {
+            let from = all.partition_point(|e| (e.0, e.1) < (class, name));
+            match all[from..].iter().take_while(|e| e.0 == class && e.1 == name).collect::<Vec<_>>()[..] {
+                [only] => Some(only.3),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// 行的首个 start_pc
+fn bci_of_line(class: &str, name: &str, descriptor: &str, line: u16) -> i32 {
+    line_number_table(class, name, Some(descriptor))
+        .and_then(|t| t.iter().find(|(_, l)| *l == line))
+        .map_or(0, |(pc, _)| *pc as i32)
+}
+
+/// HotSpot `Method::line_number_from_bci`：start_pc 不大于 bci 的最后一项的行；无 LineNumberTable → -1。
+pub fn line_number_from_bci(class: &str, name: &str, descriptor: Option<&str>, bci: i32) -> i32 {
+    let Some(table) = line_number_table(class, name, descriptor) else { return -1 };
+    let at = table.partition_point(|(pc, _)| (*pc as i32) <= bci);
+    at.checked_sub(1).map_or(-1, |i| table[i].1 as i32)
 }
 
 /// 帧方法的元数据：归属类自身声明的行；方法体复制进他类（`declared_by`）而归属类无表项时取宿主类的行。

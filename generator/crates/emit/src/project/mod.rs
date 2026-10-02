@@ -292,7 +292,11 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let body_files = body_plan.files(out_dir);
     let mut final_files = files;
     final_files.extend(body_files.iter().map(|(p, t)| (p.as_path(), *t)));
-    line_tables::write(&mut w, out_dir, &final_files)?;
+    let lnt = |class: &str, name: &str, desc: &str| {
+        let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
+        ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
+    };
+    line_tables::write(&mut w, out_dir, &final_files, &lnt)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;

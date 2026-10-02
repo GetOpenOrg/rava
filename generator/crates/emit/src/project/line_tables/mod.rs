@@ -178,8 +178,11 @@ fn class_sources(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// 方法的 LineNumberTable：(类, 方法名, 描述符) → [(start_pc, 行)]（按 start_pc 升序）
+pub type LineNumbers = std::collections::BTreeMap<(String, String, String), Vec<(u16, u16)>>;
+
 /// 行表源文本（java_meta 的 lib.rs 以 `include!` 引入）
-pub fn render(tables: &[FileLines]) -> String {
+pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
     let mut src = String::from(
         "// 生成：Java 栈帧行表（FS-E1），由 java_meta 的 lib.rs 引入。\n\
          // (scratch 相对路径, [(类, 方法, 描述符, 源文件, 宿主类)], [(Rust 行, 方法下标, Java 行)])\n\n\
@@ -197,12 +200,29 @@ pub fn render(tables: &[FileLines]) -> String {
         }
         src += "]),\n";
     }
+    src += "];\n\n\
+        // 帧方法的 LineNumberTable（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序\n\
+        #[export_name = \"__java_meta_LINE_NUMBERS\"] pub static LINE_NUMBERS: \
+        &[(&str, &str, &str, &[(u16, u16)])] = &[\n";
+    for ((c, m, d), lnt) in numbers {
+        src += &format!("    ({c:?}, {m:?}, {d:?}, &[");
+        for (pc, line) in lnt {
+            src += &format!("({pc}, {line}), ");
+        }
+        src += "]),\n";
+    }
     src += "];\n";
     src
 }
 
-/// 汇总写入 `<out_dir>/closure_input/line_tables.rs`（`files` 为 (绝对路径, 最终文本)）
-pub fn write(w: &mut Writer, out_dir: &Path, files: &[(&Path, &str)]) -> Result<()> {
+/// 汇总写入 `<out_dir>/closure_input/line_tables.rs`（`files` 为 (绝对路径, 最终文本)；`lnt` 给出
+/// 方法 (类, 名, 描述符) 的 LineNumberTable，行表中出现的每个有 Java 行的方法各写一项）
+pub fn write(
+    w: &mut Writer,
+    out_dir: &Path,
+    files: &[(&Path, &str)],
+    lnt: &dyn Fn(&str, &str, &str) -> Option<Vec<(u16, u16)>>,
+) -> Result<()> {
     let mut tables: Vec<FileLines> = files
         .iter()
         .filter_map(|(path, text)| {
@@ -234,7 +254,17 @@ pub fn write(w: &mut Writer, out_dir: &Path, files: &[(&Path, &str)]) -> Result<
         }
     }
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
-    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&tables))
+    let mut numbers = LineNumbers::new();
+    for m in tables.iter().flat_map(|t| &t.methods) {
+        let key = (m.class.clone(), m.name.clone(), m.descriptor.clone());
+        if numbers.contains_key(&key) {
+            continue;
+        }
+        if let Some(table) = lnt(&m.class, &m.name, &m.descriptor).filter(|t| !t.is_empty()) {
+            numbers.insert(key, table);
+        }
+    }
+    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&tables, &numbers))
 }
 
 #[cfg(test)]
@@ -272,7 +302,11 @@ mod tests {
         );
         assert_eq!(t.rows, vec![(7, 0, 0), (9, 0, 7), (11, 0, 8), (13, 1, 0), (14, 1, 3), (16, NO_METHOD, 0)]);
         assert!(scan("x.rs", "fn main() {}\n").is_none());
-        assert!(render(&[t]).contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", \"\"), "));
+        let mut numbers = LineNumbers::new();
+        numbers.insert(("p/A".into(), "f".into(), "()V".into()), vec![(0, 7), (4, 8)]);
+        let src = render(&[t], &numbers);
+        assert!(src.contains("(\"p/A\", \"f\", \"()V\", &[(0, 7), (4, 8), ]),"));
+        assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", \"\"), "));
     }
 
     #[test]
