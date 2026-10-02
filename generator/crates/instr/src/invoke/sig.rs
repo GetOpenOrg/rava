@@ -124,25 +124,14 @@ fn zip_map(params: &[String], args: Vec<RsType>) -> TargMap {
     params.iter().cloned().zip(args).collect()
 }
 
-/// 类接收者 → 接口声明者的形参映射（`_iface_view_targ_map`）
+/// 类接收者 → 接口声明者的形参映射（`_iface_view_targ_map`）：接口视图按接收者实参代入，
+/// 原始类型接收者的形参按根类擦除
 pub fn iface_view_targ_map(ctx: &InstrCtx, recv_ty: &RsType, iface: &ClassInfo) -> Option<TargMap> {
     let recv_ci = ctx.reg().get(&hierarchy::type_binary(ctx, recv_ty)?)?;
     let owner_params = ctx.ty.effective_class_type_params(iface);
-    for (if_bin, if_args) in ctx.ty.implemented_interface_views(recv_ci) {
-        if if_bin != iface.name() {
-            continue;
-        }
-        let recv_params = ctx.ty.effective_class_type_params(recv_ci);
-        let recv_args = recv_ty.type_args();
-        let if_args: Vec<RsType> = if !recv_args.is_empty() && recv_args.len() == recv_params.len() {
-            let amap = zip_map(&recv_params, recv_args.to_vec());
-            if_args.iter().map(|a| a.substitute(&|n| amap.get(n).cloned())).collect()
-        } else {
-            if_args
-        };
-        return (if_args.len() == owner_params.len()).then(|| zip_map(&owner_params, if_args));
-    }
-    None
+    let (_, if_args) =
+        ctx.ty.interface_views_with_args(recv_ci, Some(recv_ty.type_args())).into_iter().find(|(b, _)| b == iface.name())?;
+    (if_args.len() == owner_params.len()).then(|| zip_map(&owner_params, if_args))
 }
 
 /// 接收者静态类型视角下声明类 `owner_bin` 的类型形参 → 实参映射（`receiver_type_arg_map`）

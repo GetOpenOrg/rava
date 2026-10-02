@@ -415,4 +415,31 @@ mod tests {
         assert_eq!(sv[1].0, "p/Coll");
         assert_eq!(sv[1].1["E"], "Ljava/lang/String;");
     }
+
+    /// 接口视图代入接收者实参：自身实现的接口与经超类实现的接口都按实参；原始类型 → 根类
+    #[test]
+    fn interface_views_with_receiver_args() {
+        let f = Fixture::new(vec![
+            class(consts::OBJECT).sup(""),
+            class(consts::STRING),
+            class("p/Coll").iface().sig(&format!("<E:{OBJ_TP}>{OBJ_TP}")),
+            class("p/List").iface().ifaces(&["p/Coll"]).sig(&format!("<E:{OBJ_TP}>{OBJ_TP}Lp/Coll<TE;>;")),
+            class("p/AList").ifaces(&["p/List"]).sig(&format!("<A:{OBJ_TP}>{OBJ_TP}Lp/List<TA;>;")),
+            class("p/Sub").sup("p/AList").sig(&format!("<X:{OBJ_TP}>Lp/AList<TX;>;")),
+        ]);
+        let c = f.ctx();
+        let render = |ci, args: Option<&[crate::RsType]>| -> Vec<(String, String)> {
+            c.interface_views_with_args(ci, args)
+                .into_iter()
+                .map(|(b, a)| (b, crate::rs_type::render_arg_list(&a, &f.names)))
+                .collect()
+        };
+        let string = [crate::RsType::class(consts::STRING.to_string(), vec![])];
+        let alist = f.reg.get("p/AList").unwrap();
+        assert_eq!(render(alist, None), [("p/List".to_string(), "<A>".to_string()), ("p/Coll".into(), "<A>".into())]);
+        assert_eq!(render(alist, Some(&string)), [("p/List".to_string(), "<String>".to_string()), ("p/Coll".into(), "<String>".into())]);
+        let sub = f.reg.get("p/Sub").unwrap();
+        assert_eq!(render(sub, Some(&string)), [("p/List".to_string(), "<String>".to_string()), ("p/Coll".into(), "<String>".into())]);
+        assert_eq!(render(sub, Some(&[])), [("p/List".to_string(), "<Object>".to_string()), ("p/Coll".into(), "<Object>".into())]);
+    }
 }
