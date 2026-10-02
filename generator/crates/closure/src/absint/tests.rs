@@ -185,3 +185,49 @@ fn final_static_read_after_put() {
     let a = analyze("p/A", "()V", true, &code, &Sets);
     assert_eq!(a.reachable, vec![true, true, true, true, false, true]);
 }
+
+/// 桩 Oracle：static 字段 p/A.OFF 的值是符号偏移
+struct Offsets;
+
+impl Oracle for Offsets {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, f: &MemberRef, _: Option<&V>) -> Option<V> {
+        (f.name == "OFF").then(|| V::Offset(Rc::new(MemberRef { owner: "p/N".into(), name: "next".into(), desc: "Lp/N;".into() })))
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+}
+
+/// 符号偏移经字段读原样作为调用实参；参与运算（数组下标式偏移）即为 Top
+#[test]
+fn symbolic_offset_flows_to_call_and_dies_in_arithmetic() {
+    let off = MemberRef { owner: "p/A".into(), name: "OFF".into(), desc: "J".into() };
+    let put = MemberRef { owner: "p/U".into(), name: "put".into(), desc: "(Ljava/lang/Object;JLjava/lang/Object;)V".into() };
+    let i = |offset, opcode, operand| Insn { offset, opcode, operand };
+    let insns = vec![
+        i(0, ALOAD_0, Operand::None),
+        i(1, op::GETSTATIC, Operand::Field(off.clone())),
+        i(4, 0x01, Operand::None), // aconst_null
+        i(5, op::INVOKESTATIC, Operand::Method(put.clone(), false)),
+        i(8, ALOAD_0, Operand::None),
+        i(9, op::GETSTATIC, Operand::Field(off)),
+        i(12, 0x0a, Operand::None), // lconst_1
+        i(13, 0x61, Operand::None), // ladd
+        i(14, 0x01, Operand::None), // aconst_null
+        i(15, op::INVOKESTATIC, Operand::Method(put, false)),
+        i(18, op::RETURN, Operand::None),
+    ];
+    let code = Code { max_stack: 6, max_locals: 1, code_len: 19, insns, exception_table: vec![] };
+    let a = analyze("p/A", "(Ljava/lang/Object;)V", true, &code, &Offsets);
+    let arg = |at: u32| {
+        a.events.iter().find_map(|(o, e)| match e {
+            Event::Invoke { args, .. } if *o == at => Some(args[1].clone()),
+            _ => None,
+        })
+    };
+    assert!(matches!(arg(5), Some(V::Offset(f)) if f.name == "next"));
+    assert_eq!(arg(15), Some(V::Top));
+}

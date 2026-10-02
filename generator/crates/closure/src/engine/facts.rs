@@ -16,7 +16,7 @@ impl PV {
     /// 标签引用只在分析内部传递，不作为折叠常量导出）
     pub(super) fn of(v: &V) -> PV {
         match v {
-            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
+            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Str(_) | V::Offset(_) => PV::Const(v.clone()),
             V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
@@ -133,6 +133,8 @@ pub(super) struct CallInfo {
     pub(super) holder: bool,
     /// 清单属性读取锚点的读取形态
     pub(super) reader: Option<super::sysprops::PropSum>,
+    /// 按名取字段偏移的入口（`name_resolvers` 里 offset = true）
+    pub(super) offset: Option<crate::manifest::NameResolver>,
 }
 
 /// 字段引用解析结果
@@ -325,6 +327,7 @@ impl Ctx<'_> {
             str_op,
             holder: self.man.sysprops.is_holder(&k),
             reader: self.reader_spec(&k),
+            offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
@@ -342,6 +345,20 @@ impl Ctx<'_> {
             || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
         let (o, n, d) = site.key();
         exact.then(|| (site.class.clone(), MemberRef { owner: o, name: n, desc: d }))
+    }
+
+    /// 按名取字段偏移的调用折叠为符号偏移：Class 实参是类字面量、名字是字符串常量，且该类自身声明了
+    /// 同名实例字段（VM 只查声明类本身，查不到即抛出）
+    pub(super) fn field_offset(&self, opcode: u8, r: crate::manifest::NameResolver, args: &[V]) -> Option<V> {
+        let base = usize::from(opcode != classfile::op::INVOKESTATIC);
+        let cls = match r.class {
+            Some(i) => args.get(i + base)?,
+            None => args.first()?,
+        };
+        let (V::Class(c, _), Some(V::Str(name))) = (cls, args.get(r.name + base)) else { return None };
+        let cf = self.h.class(c)?;
+        let fd = cf.fields.iter().find(|f| f.name == **name && !f.is_static())?;
+        Some(V::Offset(Rc::new(MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() })))
     }
 
     /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值
@@ -399,6 +416,9 @@ impl Oracle for Facts<'_, '_> {
         }
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
+        }
+        if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
+            return Ret::Value(v);
         }
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;

@@ -116,6 +116,7 @@ impl<'a> Engine<'a> {
             hw_site_ids: HashMap::default(),
             hw_sites: Vec::new(),
             hw_reads: HashMap::default(),
+            hw_offsets: HashMap::default(),
             ref_fields: HashMap::default(),
             hw_writes: HashMap::default(),
             poly_writes: Vec::new(),

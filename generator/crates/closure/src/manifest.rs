@@ -43,6 +43,8 @@ pub struct ArrayWrite {
     pub fields: bool,
     /// 写入值取自调用点最后一个实参（签名多态方法：实参个数随调用点变化）
     pub last: bool,
+    /// 字段偏移形参：调用点上该实参是符号偏移（见 `NameResolver::offset`）时只写入所指字段
+    pub offset: Option<usize>,
 }
 
 /// 反射成员对象所表示的成员类别（`[facts.reflect]`）
@@ -114,7 +116,7 @@ pub struct Manifest {
     deserializers: HashSet<String>,
     serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
-    memory_reads: HashMap<String, usize>,
+    memory_reads: HashMap<String, (usize, Option<usize>)>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
@@ -236,6 +238,7 @@ impl Manifest {
                         produced: e.get("produced").and_then(|x| x.as_bool()).unwrap_or(false),
                         fields: e.get("fields").and_then(|x| x.as_bool()).unwrap_or(false),
                         last: e.get("last").and_then(|x| x.as_bool()).unwrap_or(false),
+                        offset: e.get("offset").and_then(|x| x.as_integer()).map(|x| x as usize),
                     },
                 );
             }
@@ -247,7 +250,8 @@ impl Manifest {
                 let Some(src) = v.as_table().and_then(|e| e.get("src")).and_then(|x| x.as_integer()) else {
                     return Err(format!("vm_intrinsics.toml [facts.memory_reads]：{k} 须为 {{ src = 形参序号 }}"));
                 };
-                memory_reads.insert(k.clone(), src as usize);
+                let offset = v.get("offset").and_then(|x| x.as_integer()).map(|x| x as usize);
+                memory_reads.insert(k.clone(), (src as usize, offset));
             }
         }
 
@@ -446,7 +450,12 @@ impl Manifest {
 
     /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
     pub fn memory_read(&self, member: &str) -> Option<usize> {
-        self.memory_reads.get(member).copied()
+        self.memory_reads.get(member).map(|x| x.0)
+    }
+
+    /// 读内存手写方法的字段偏移形参（序号不含接收者）：调用点上为符号偏移时只读所指字段
+    pub fn memory_read_offset(&self, member: &str) -> Option<usize> {
+        self.memory_reads.get(member).and_then(|x| x.1)
     }
 
     /// 手写方法返回新数组、VM 只写入所列类型的元素（`[facts.array_returns]`）：返回元素类型（binary name / 数组描述符）

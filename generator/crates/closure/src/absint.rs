@@ -74,6 +74,9 @@ pub enum V {
     Str(Rc<str>),
     /// 类字面量（ldc class）：值是 Class 对象，携带所指类与 ldc 偏移（合流后以该偏移为来源，引擎在此处给出类镜像）
     Class(Rc<str>, u32),
+    /// 符号字段偏移（long）：按名取得的实例字段偏移即字段身份（声明类上的字段键），只经复制 / 字段传递保持，
+    /// 参与运算即为 Top；按偏移读写的手写调用点据此只触及该字段。不作为折叠常量导出
+    Offset(Rc<MemberRef>),
 }
 
 pub const STRING: &str = "java/lang/String";

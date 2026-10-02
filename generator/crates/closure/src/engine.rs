@@ -50,6 +50,7 @@ mod lambda;
 mod lambda_adapt;
 mod hw;
 mod hw_mem;
+mod hw_offset;
 mod hw_syntax;
 mod hw_infer;
 mod hwobj;
@@ -333,6 +334,8 @@ pub struct Engine<'a> {
     hw_sites: Vec<(usize, u32, usize)>,
     /// 读内存的手写调用点（`[facts.memory_reads]`）：站点 → (源实参序号（含接收者）, 结果节点, 返回类型)
     hw_reads: HashMap<u32, (u16, Node, u32)>,
+    /// 按偏移读写的手写调用点所触及的字段：站点 → 偏移实参所指字段节点（None = 偏移非符号常量，触及全部引用字段）
+    hw_offsets: HashMap<u32, Option<usize>>,
     /// 类（含超类）的引用实例字段节点（内存读取的对象分量）
     ref_fields: HashMap<u32, Rc<[(usize, u32)]>>,
     hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,

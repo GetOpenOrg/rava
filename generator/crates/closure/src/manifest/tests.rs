@@ -49,7 +49,7 @@ fn field_name_resolvers_and_class_initializers_parse() {
     .unwrap();
     assert_eq!(
         m.field_name_resolver("a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J"),
-        Some(NameResolver { class: Some(0), name: 1, handle: false })
+        Some(NameResolver { class: Some(0), name: 1, handle: false, offset: false })
     );
     assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
     assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));
@@ -65,7 +65,11 @@ fn repo_manifest_declares_write_sources() {
     let m = Manifest::load(&dir).unwrap();
     let r = m.field_name_resolver("java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;").unwrap();
     assert!(r.handle && r.class.is_none());
-    assert!(m.field_name_resolver("jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J").is_some());
+    assert!(m.field_name_resolver("jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J").is_some_and(|r| r.offset));
+    // 按偏移读写的 Unsafe 引用操作登记偏移形参（符号偏移收窄到所指字段）
+    let cas = "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z";
+    assert_eq!(m.array_writes(cas).and_then(|w| w.offset), Some(1));
+    assert_eq!(m.memory_read_offset("jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;"), Some(1));
     assert!(m.is_class_initializer("jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V"));
     assert_eq!(
         m.member_owner_route("java/lang/invoke/DirectMethodHandle.checkInitialized:(Ljava/lang/invoke/MemberName;)Z"),

@@ -410,7 +410,11 @@ impl<'a> Engine<'a> {
     fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
-        if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
+        // 调用方自身是声明了内存效果的手写方法（`[facts.array_writes]` / `[facts.memory_reads]`）：其声明按调用方的
+        // 每个调用点给出完整读写效果，手写体内部对其它内存操作的调用（如 putReferenceOpaque 体内的 putReference）
+        // 是该声明的实现，不另按本调用点建模——否则经调用方形参汇合，偏移与对象跨调用点相乘
+        let delegated = self.declares_memory(m);
+        if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !delegated {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
         }
         if let (Some(rt), Some(res)) = (ret, res) {
@@ -431,6 +435,9 @@ impl<'a> Engine<'a> {
                     self.feed(fs, res, rt);
                 }
             } else if let RetModel::Read(src) = model {
+                if delegated {
+                    return;
+                }
                 let i = src + usize::from(!is_static);
                 let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(src).cloned().flatten() };
                 if let Some(fs) = fs {
