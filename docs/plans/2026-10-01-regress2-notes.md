@@ -52,9 +52,170 @@
 - 修法（`instr/src/sim/dynamic/concat.rs`）：引用实参按 String.valueOf 语义显式判空，null 给 "null"，否则 toString。
 - 验证：两例 `--closure-json` 单例与期望一致（e2e 跑批带 --closure-json）。
 
-## 6. 遗留（未修，已报告）：java_meta 系统属性 / 模块服务表依赖可选的 closure.json
+## 6. java_meta 系统属性 / 模块服务表依赖可选的 closure.json —— 已修
 
 - N2（b5291a03）起 closure.json 只在 `--closure-json` 时落盘、否则删除；C3 第 3 项（ea82aedd）的 java_meta 构建脚本从
   `closure_input/closure.json` 读系统属性表与模块服务表。缺省 `main.py` 不带该选项 → 表为空：
   `java.vm.specification.version` 等键在运行期为 null（TestSystemPropsSpec 缺省单跑 NPE）。e2e 跑批带 --closure-json，不受影响。
 - 终态：两张表进 ClosureFacts（from_closure / from_json 同源），由发射层恒写入 scratch，构建脚本不再读调试产物。
+
+## 7. 拼接 / record toString 引用实参改为调用 String.valueOf(Object)（5 的终态写法）
+
+- 5 的修法在生成代码里内联 `_is_jnull` 判空，可读层不对应 Java 语义。拼接（JLS §5.1.11）与 record toString
+  对引用实参的语义即 `String.valueOf(Object)`，终态直接发射对它的调用，方法体由 JDK 字节码翻译。
+- 清单：`vm_intrinsics.toml [indy] concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"`
+  （生成器 / 分析器不写类名）。
+- 分析器（`closure/src/engine/lambda.rs` `stringify`）：Concat 调用点的每个引用实参、ObjectMethods toString 的引用分量
+  汇合节点，经静态边接入该方法的形参（上下文选择同 invokestatic）；toString 派发由其字节码自然产生。未登记时回落为直接派发。
+- 生成器（`instr/src/sim/dynamic/concat.rs`）：引用实参压栈后走 `gen_invokestatic`，生成
+  `let _tN: String = String::valueOf_obj(..)?;`；String 静态类型的实参仍按引用直接追加（null 由运行时给 "null"）。
+- 验证：TestPropertiesDefaults / TestSystemPropsSpec / HelloWorld / TestRecord 单例与期望一致；四例闭包
+  classes / methods / instantiated 集合与改前完全相同（valueOf(Object) 原已在链上）。
+- 未动：record hashCode / equals 的引用分量仍内联 `_is_jnull`（语义为 Objects.hashCode / Objects.equals，可同法改写）——已在 §9 处理。
+
+## 8. 6 的实施：两张表随 ClosureFacts 由发射层写入
+
+- `input/src/facts.rs`：`ClosureFacts.system_properties`（`SysPropFacts { values, dynamic }`）与
+  `SeedFacts.module_services`（模块 provider 的 (服务, provider)，事实序）；from_closure 读引擎、from_json 读
+  closure.json 同名字段，两路同源（driver 冷算时的 `{:#?}` 一致性校验覆盖新字段）。经 `EmitInput` 交给发射层。
+- `emit/src/project/entry.rs` `write_closure_tables`：每次构建写 `<scratch>/closure_input/closure_tables.rs`
+  （内容相同不重写，保留 mtime，java_meta 不无谓重编）。java_meta 的 `lib.rs` 直接 `include!` 该文件；
+  构建脚本的 closure.json 解析（`build_script/closure_tables.rs`）删除。
+- 验证：TestSystemPropsSpec / TestPropertiesDefaults / HelloWorld 不带 `--closure-json` 经 `rava build` 单跑与期望一致
+  （scratch 中无 closure.json）；`cargo test --release -- --test-threads=1` 通过。
+
+## 9. 去掉「清单未登记回落」；record hashCode / equals 引用分量改调 Objects.hashCode / Objects.equals
+
+- 清单（`vm_intrinsics.toml [indy]`）新增 `component_hash = Objects.hashCode(Object)`、
+  `component_equals = Objects.equals(Object,Object)`，与 `concat_stringify` 并列为分量处理入口。
+  两侧装载时校验：登记了 concat 引导而缺 `concat_stringify`、或登记了 object_methods 而缺三项之一，直接报错
+  （分析器 `closure/src/manifest/indy_helpers.rs`；生成器 `input/src/manifest.rs` `indy_helpers` / `indy_helper(key)`）。
+- 分析器（`engine/lambda.rs`）：`stringify` 泛化为 `indy_helper`，Concat 引用实参、ObjectMethods 三个方法的引用分量
+  一律经静态边接入入口形参（equals 两个实参取同一分量汇合节点）；原 toString / Object 方法直接派发的回落路径与
+  `object_method_desc` 删除。HelloWorld / TestRecord 闭包 classes / methods / instantiated 与改前完全一致。
+- 生成器：`concat.rs` 无回落分支，缺项报 `清单缺 concat_stringify`；`object_methods.rs` 引用分量压栈后
+  `gen_invokestatic` 调入口（`hash_of` / `eq_of` 拆为基本类型专用的 `prim_hash` / `prim_eq`），equals 每个分量的物化语句
+  收进该分量自己的块（`{ 语句; 比较 } && { .. }`），保持短路求值。
+- import 扫描（`emit/src/imports/referenced.rs` `indy_helper_refs`）：concat / object_methods 调用点把入口声明类计入引用，
+  否则用户类缺 `use Objects`（E0433）。
+- `_is_jnull` 生成面复核：record / 拼接路径计数为 0。仍存在且属正当语义的：
+  - ifnull / ifnonnull（Java `== null`）：`cfg/src/cond.rs`、`method/src/unify.rs`、`method/src/cond_text.rs`；
+  - typeSwitch null 选择子 → -1：`instr/src/sim/dynamic/type_switch.rs`；
+  - 反射构造分派按接收者是否为 null 区分 new / `<init>`：`emit/src/phase2/dispatch.rs`。
+
+## 10. 分布式基线外非超时失败 14 例（regress2-b）
+
+复现交由服务器（本机不跑 e2e / 单例）。读码预分类：
+
+### 10.1 PrintDebugStatement / ReflectionGetSource —— FS-E1（栈帧为 Rust 符号），架构项
+
+- 现状：`throwable_impl.rs` `fillInStackTrace` 解析 `std::backtrace` 的 Display，类名 / 方法名取 Rust 符号路径，
+  文件名 / 行号为生成的 `.rs` 位置。classfile 未解析 LineNumberTable（只读了 SourceFile）。
+- 终态：StackTraceElement 的类 / 方法 / 文件 / 行号与 JVM 一致，Rust 符号 / `.rs` 路径外露 0 处；运行期零额外开销
+  （不维护影子栈，只在 fillInStackTrace 时查表）。
+- 机制：回溯帧本就带 `at <生成文件>:<行>`（宏对方法体 token 保留原 span），据「生成文件行 → (Java 方法, Java 行)」
+  表即可同时恢复方法名与行号，不依赖 Rust 符号。
+- 步骤（每步单独提交；S2 起以「剥去行标记后生成树逐字节不变」为验收，交服务器跑 gen_trees / compare_trees）：
+  - S1 classfile：Code 属性解析 `LineNumberTable`（pc → 行），NormCode 透传。生成物不变。
+  - S2 sim / method：语句的来源偏移随语句流动，不进 IR 语句树（避免各遍历对标记做透明处理）：
+    `SimState.stmt_pcs` 与 `stmts` 等长，`push_stmt` 是唯一追加入口；`Node.stmt_pcs`（合成语句 None）经
+    `push_stmt` / `append_stmts` / `clear_stmts` 维护；`Entry.pc` 由树发射标注（语句 = 来源指令，if / while /
+    match 头 = 节点终结跳转指令）。渲染时（`method/src/lines.rs`）行变化处先出独立标记行，行级后处理
+    （尾 return 删除、补 Ok、构造器收尾、数组折叠）对其透明，方法体收尾并入其后第一条内容行行尾 `// line N`
+    （不增行）。验收：剥去 ` // line N` 后生成树与改前逐字节一致。
+  - S3 emit（`emit/src/project/line_tables.rs`）：拆层后、落盘的每个生成文件（声明层 / 实现层 / 用户类）扫描最终文本：
+    `java_class!` 块内 `#[java_method(name)]` 行起一个方法区段（`__init_on` 等紧随的辅助体归同一方法），行尾标记
+    给 (Rust 行, 方法下标, Java 行)，块结束行记「块外」。汇总写 `<scratch>/closure_input/line_tables.rs`
+    （同 closure_tables，内容不变不重写），java_meta 以 `__java_meta_LINE_TABLES` 导出，`meta::line_tables()` 读取。
+  - S4 运行时（throwable_impl.rs，VM 驱动类 ③）：帧按 `at` 的路径（各 `/` 边界后缀查表）+ 行取「Rust 行不大于该行」
+    的末项得 (类, 方法, SourceFile, Java 行)；查不到 / 块外 / 方法首个标记之前（宏生成的分派包装、`new` 序言）的帧剔除；
+    方法体内 Rust 闭包帧与紧随的同一 Java 方法外层帧合一；按 HotSpot 规则跳过 fillInStackTrace 帧与本异常类及其
+    超类（`meta::class_hierarchy`）的 `<init>` 帧；上限 1024 帧。
+  - S5 scratch profile：release 由 `strip = "symbols"` 改为 `debug = "line-tables-only"`（与 dev 同；剥离会连同行信息
+    一起去掉，栈帧无从恢复）。代价是 release 二进制带行表段，属 JVM 语义所需。
+  - 已知缺口：继承展开到子类块内的方法体按所在块的类报告（JVM 报声明类），待确认生成器是否有此形态后补。
+- 验收用例：PrintDebugStatement、ReflectionGetSource、TestCustomException（printStackTrace 形态）。
+- 量级：classfile / ir+sim / emit / 运行时 / profile 五步，main 已同意先行实施。
+
+- S2 生成树对照（s2-a6a7c26e，基线 59da6137）：剥去 `// line N` 后方法体文本逐字节不变；7 例的差异是个别文件换了
+  body crate（`layers.rs` 按文本字节数装箱，标记使文本变长，边界附近的文件可能换箱）。行表按落盘路径扫描，不受影响。
+
+### 10.1a 栈帧来源统一（frames-unify，实施）
+
+- 终态落地：`vm_stack::capture_java_frames` 是全部栈帧消费方（fillInStackTrace / getCallerClass / getClassContext /
+  StackWalker）的唯一来源，帧由行表给出；Rust 符号解析（parse_symbol / java_method_of / executes_body / 派发入口规则 /
+  capture_frame_classes 等）整段删除，`MethodMeta.dispatched`（只服务于符号规则）随之删除。
+- 行表（`emit/src/project/line_tables/`）：方法项为 (帧归属类, 方法名, 描述符, 源文件, 宿主类)，运行时按
+  (类, 名, 描述符) 取归属类自身声明的 MethodMeta，归属类无表项时取宿主类的行。手写方法的 `// [meta]` 行结束上一区间。
+- 手写方法成帧（`line_tables/handwritten.rs`）：生成文件以 `// [meta]` 注释对、`#[java_native]` 声明、
+  `body = "handwritten"` 声明登记手写方法，伴生 `<stem>_impl.rs` 用 syn（span-locations）解析 `impl` 块，各登记 fn 的区间
+  （含属性行，`#[jvm_native]` 插入的类初始化 span 在属性行）写行表项，Java 行取哨兵：native → -2（Native Method），
+  其余 → -1。getCallerClass / getClassContext / callStackWalk 自身的 native 帧由此出现，跳帧规则改为 HotSpot 原样：
+  getCallerClass 第 0 帧本方法、第 1 帧 CS 方法、其后首个不被安全栈遍历忽略的帧。
+- native-gaps 的语义经行表自然保留：帧归 `declared_by`（行表本就读该属性）；继承转发外壳、派发入口、vtable impl、
+  `X__m_base` 包装以调用点 span 落在块外或方法序言，不成帧，方法体 token 保留原 span 在实际执行帧上成帧。
+- 闭包帧一律不成帧（符号含 `{closure`）：原位闭包单行，外层帧同一行；延迟 lambda 代理闭包的位置是创建点，
+  旧 Throwable 规则会在创建方法上多出一帧，现消除。
+- 手写根类成帧：根类无生成文件，登记源为根类自身字节码（`project::root_line_registration` →
+  `handwritten::root_methods`）：每个方法对应 `invokespecial` 落点 `<根>__<fn>_base`（根类实现本体，object.rs），
+  不可覆盖方法（final / private / static）另对应 `impl <根>` 固有 fn（object_impl.rs；可覆盖方法的固有 fn 是静态类型
+  为根类的虚调用入口，转 vtable 到覆盖体，与派发入口同样不登记）；fn 名按调用侧根类重载命名规则（与方法体生成器同源）。
+  伴生 fn 首条语句若为接收者 null 检查 `if <recv>.is_jvm_null() {..}`，该区间记 Java 行 0（序言，不成帧）：
+  invokevirtual 的隐式 null 检查在调用点抛 NPE，被调方法不入栈。clone / notify / notifyAll / getClass / wait 由此成帧。
+- StackWalker 行号与 Throwable 同源：行表另附各方法的 LineNumberTable（`__java_meta_LINE_NUMBERS`），帧的 bci 取
+  行表 Java 行的首个 start_pc（手写无行 → -1），`StackStreamFactory` 填 `StackFrameInfo.bci`，
+  `initStackTraceElement` 按 HotSpot `Method::line_number_from_bci` 由 bci 定行（native → -2）。
+- 过渡类手写 `<init>`（手写构造工厂不对应 Java `<init>` 帧）不成帧，只记录：随 C1d-a 删除过渡类手写后自然消失。
+  根类 `wait(J)` / `wait(JI)` 等有字节码的非 native 方法当前为手写体（帧行 -1，JDK 为 `wait0` native 帧 + `wait` 行号），
+  归手写边界收窄（字节码翻译后自然对齐），不属帧来源问题。
+- 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段）、
+  62_reflection/TestStackWalkerLines（直接 / 递归 / lambda / default / 继承 / 构造器 / clinit 帧的 StackWalker 行号）、
+  06_exceptions/TestObjectNativeFrames（Object.clone / notify / notifyAll native 帧），expected 均为 JDK 21 实测。
+
+### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
+
+- 现象（C6 抽查，ubuntu）：运行期 `InternalError`，`Caused by: NullPointerException`，dyn miss 0，未命中存根。
+- 根因（读码）：`Character.getName` → `CharacterName` 构造经 `getClass().getResourceAsStream("uniName.dat")` 读名称表；
+  模块资源只嵌入 seeds.toml `[module_resources]` 手登记的路径（仅 currency.data），`uniName.dat` 缺席 → 资源流为 null →
+  `InflaterInputStream(null)` NPE → 构造器包成 InternalError。
+- 终态：资源名本就是读取方法体里的 ldc 常量，由字节码推导，不再手登记（`[module_resources]` 删除）：
+  调用链上方法体的路径形 ldc 字符串按 `Class.resolveName` 规则（`/` 开头为绝对名，否则相对所在类的包；另按原样试
+  `ClassLoader.getResource` 形态）解析，类路径上存在的非类文件即嵌入（`input/src/resources.rs`）。资源随读取代码进出
+  闭包：不调 `Character.getName` 的程序不再嵌入它，currency.data 同理只在 Currency 数据读取在链上时嵌入。
+
+### 10.3 SequenceGenerator —— 再赋值的接口声明局部取接口载体
+
+- 现象（r2 抽查）：运行期 `ClassCastException: java/util/ArrayList$SubList cannot be cast to java/util/ArrayList`。
+- 根因：`List<Integer> s = new ArrayList<>(); … s = s.subList(..)`。存储管线把接口声明的局部收窄为首值具体类
+  `ArrayList<Object>`；后续存入 subList 结果命中同变量漂移，经 Object 边界按 `ArrayList` 重建 → 运行期 CCE。
+- 终态：方法体在 LVT 声明区间内另有引用存储（`SlotDecl.reassigned`，由字节码 astore 扫描得出）且声明类型为接口时，
+  首值经 `From` 上转到接口擦除载体（`List<Object>`），声明不收窄；只赋值一次的局部维持具体类收窄（可读性不变）。
+- 验收：SequenceGenerator；广谱回归建议 gen_trees / compare_trees（声明类型形态会变）。
+- 生成树对照（trees-b8f5ba28，验收集 27 例，raw-audit 不变）：差异仅一种形态——已声明为接口载体的局部被再赋新建
+  具体实例时，由 `<I<Object> as From<Object>>::from(Object::from(new C))` 变为 `<I<Object> as From<_>>::from(new C)`
+  （HashMap / TreeMap / EnumMap / AbstractMap 的 keySet / values 懒建、Pattern.groups、InternalLocaleBuilder 等），
+  经 iface_upcasts 直接上转，少一次 Object 往返，运行期视图相同。
+
+### 10.4 RecordPatternTest —— 同一擦除类的 instanceof 被静态折叠为 false
+
+- 现象：`genericInferenceTest` 的嵌套记录模式整段消失，少输出一行与一个空行。
+- 根因：静态 instanceof 判定只认「类型文本相等」或「严格子类型」；`Decorator<Decorator<ColoredPoint>> instanceof Decorator`
+  两者擦除基相同但文本不同（目标为 `Decorator<Object>`），落入「互不为子类型」分支被折叠为 false，整个 if 被删。
+- 修复：同一擦除类（非数组）与同型同判。
+- 验收：RecordPatternTest。
+
+### 10.5 r2-a77f6dd2 其余失败归类
+
+- PrintDebugStatement / ReflectionGetSource：同 10.1（FS-E1，7fdabf63），a77f6dd2 早于该修复。与 native-gaps 07918da9 的
+  `vm_stack.rs` 是同一语义的两个帧源：后者按 Rust 符号名解析帧（声明类 + 方法表），行号恒 -1；FS-E1 按 (文件, 行) 查行表，
+  给出类 / 方法 / SourceFile / Java 行号，且不受内联与符号形态影响。终态只留一个帧源：`vm_stack::capture_java_frames`
+  改走行表（行表条目补方法描述符以对上 MethodMeta），`fillInStackTrace`、StackWalker、getCallerClass、
+  getClassContext 共用；符号解析整段删除。两线合入集成分支后由 regress2-b 实施。
+- TestRandomAccessFile（`JavaLangAccess.registerShutdownHook` 存根）、TestCharsetNamedStreams（StreamDecoder UTF-16 存根）：
+  均为过渡手写类（`java_lang_access_impl.rs` / `stream_decoder_impl.rs`）未实现的方法；c1d-prec 的 1e623cec 已删除二者、
+  改按字节码翻译 → 归 C1d，并入后在 c1d-prec 上复测。
+- StockTrans / TestSerialDefaultSuid（L3 反射分派缺 `ArrayList.writeObject`）：`ObjectStreamClass.getPrivateMethod(cl, "writeObject", ..)`
+  的 `cl` 来自 `obj.getClass()`，不是类常量，按名方法查找的事实只认常量所指类 → 分派闭包缺席。终态：类未知、名与形参
+  已知的查找 → 已实例化且声明该名 / 形参方法的类全部计入（序列化钩子 writeObject / readObject / readObjectNoData /
+  writeReplace / readResolve 由此进入）。闭包分析器 → 归 C1d。
+- UTF8EncodeDecode：同 10.2（404f56b7），待 fse1-404f56b7 结果。

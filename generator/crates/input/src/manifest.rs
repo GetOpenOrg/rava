@@ -1,7 +1,7 @@
 //! 发射层读取的 runtime 清单。
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
-//! - closure.toml：`[vm_boundary]`（含 `translate_nested`）；
+//! - closure.toml：`[vm_boundary]`（含 `translate_nested` / `clinit_carried`）；
 //! - seeds.toml：`[module_resources]`、`[boot_init]`；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）。
 //!
@@ -51,8 +51,8 @@ pub struct RuntimeManifest {
     pub vm_boundary_classes: BTreeSet<String>,
     /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）
     pub release: Vec<String>,
-    /// VM 边界类中 `<clinit>` 按字节码翻译的类（`[vm_boundary] translate_clinit`）
-    pub vm_translate_clinit: BTreeSet<String>,
+    /// `<clinit>` 由手写层承载的 VM 边界类（`[vm_boundary] clinit_carried`；其余 VM 边界类的 `<clinit>` 按字节码翻译）
+    pub vm_clinit_carried: BTreeSet<String>,
     /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：`类.字段` → crate 根下取值表达式
     pub vm_injected_statics: BTreeMap<String, String>,
     /// 模块资源路径（jmod `classes/` 下相对路径）
@@ -67,6 +67,9 @@ pub struct RuntimeManifest {
     pub sigpoly_callsite_typed: BTreeSet<String>,
     /// 引导方法（`类.方法`）→ 分类
     pub indy_kinds: BTreeMap<String, IndyKind>,
+    /// `[indy]` 分量处理入口：`concat_stringify` / `component_hash` / `component_equals` → `类.方法:描述符`
+    /// （登记了 concat / object_methods 引导方法时必填，装载时校验）
+    pub indy_helpers: BTreeMap<String, String>,
     pub vm_constants: VmConstants,
 }
 
@@ -181,7 +184,7 @@ impl RuntimeManifest {
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
         let release = classes(vmb, "translate_nested", "vm_boundary")?;
-        let vm_translate_clinit: BTreeSet<String> = classes(vmb, "translate_clinit", "vm_boundary")?.into_iter().collect();
+        let vm_clinit_carried: BTreeSet<String> = classes(vmb, "clinit_carried", "vm_boundary")?.into_iter().collect();
         let boot = section(&seeds, "boot_init");
         let boot_init_calls = str_list(boot, "calls", "boot_init")?;
         if let Some(bad) = boot_init_calls.iter().find(|c| !c.ends_with(":()V") || !c.contains('.')) {
@@ -191,8 +194,8 @@ impl RuntimeManifest {
         Ok(RuntimeManifest {
             ty,
             vm_boundary_classes,
+            vm_clinit_carried,
             release,
-            vm_translate_clinit,
             vm_injected_statics: injected_statics(vmc)?,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
             boot_init_classes: classes(boot, "classes", "boot_init")?,
@@ -205,6 +208,7 @@ impl RuntimeManifest {
                 .into_iter()
                 .collect(),
             indy_kinds: indy_kinds(&vm)?,
+            indy_helpers: indy_helpers(&vm)?,
             vm_constants: VmConstants {
                 null_returns: str_list(vmc, "null_returns", "vm_constants")?.into_iter().collect(),
                 null_to_false: str_list(vmc, "null_to_false", "vm_constants")?.into_iter().collect(),
@@ -216,4 +220,47 @@ impl RuntimeManifest {
     pub fn indy_kind(&self, bsm: &str) -> Option<IndyKind> {
         self.indy_kinds.get(bsm).copied()
     }
+
+    /// `[indy]` 分量处理入口 `(类, 方法, 描述符)`；`key` 为清单键名。
+    /// 未登记 → 错误串（装载时已对已登记的引导类别校验必填，只在清单未登记对应引导时出现）
+    pub fn indy_helper(&self, key: &str) -> Result<(&str, &str, &str), String> {
+        self.indy_helpers
+            .get(key)
+            .and_then(|m| split_member(m))
+            .ok_or_else(|| format!("vm_intrinsics.toml [indy] 缺 {key}"))
+    }
+}
+
+/// `[indy]` 分量处理入口：值须为 `类.方法:描述符`；登记了 concat（需 concat_stringify）或
+/// object_methods（需三项）引导方法而缺项时报错——清单是唯一真源，不做回落
+fn indy_helpers(vm: &Table) -> Result<BTreeMap<String, String>, InputError> {
+    let sec = section(vm, "indy");
+    let has = |kind: IndyKind| -> Result<bool, InputError> { Ok(!str_list(sec, kind.as_str(), "indy")?.is_empty()) };
+    let (concat, om) = (has(IndyKind::Concat)?, has(IndyKind::ObjectMethods)?);
+    let mut out = BTreeMap::new();
+    for (key, need) in [("concat_stringify", concat || om), ("component_hash", om), ("component_equals", om)] {
+        match sec.and_then(|s| s.get(key)) {
+            Some(v) => {
+                let m = v
+                    .as_str()
+                    .filter(|m| split_member(m).is_some())
+                    .ok_or_else(|| InputError::Manifest(format!("indy.{key}：应为 `类.方法:描述符`：{v}")))?;
+                out.insert(key.to_string(), m.to_string());
+            }
+            None if need => {
+                return Err(InputError::Manifest(format!(
+                    "vm_intrinsics.toml [indy] 缺 {key}（已登记的 concat / object_methods 引导方法需要它）"
+                )))
+            }
+            None => {}
+        }
+    }
+    Ok(out)
+}
+
+/// `类.方法:描述符` → `(类, 方法, 描述符)`
+fn split_member(m: &str) -> Option<(&str, &str, &str)> {
+    let (head, desc) = m.split_once(':')?;
+    let (owner, name) = head.rsplit_once('.')?;
+    desc.starts_with('(').then_some((owner, name, desc))
 }

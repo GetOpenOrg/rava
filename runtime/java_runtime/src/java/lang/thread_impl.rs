@@ -122,10 +122,10 @@ impl Thread {
     /// native `start0`：`NEW→RUNNABLE`，派生 OS 线程执行 `run()`（模块注释「线程生命周期」）。
     /// eetop 取非零（JVM 中为 native 线程句柄，仅以非零承载 alive 语义）。
     ///
-    /// upcalls：新线程以 vtable 分派调用 `Thread.run()`——这条 runtime→Java 调用边
-    /// 不在任何字节码里，经 upcalls 声明使 BFS 翻译 run() 的方法体（Runnable task 的
-    /// 转发入口）而非停留在存根。
-    #[jvm_native(upcalls = "java/lang/Thread.run:()V")]
+    /// 新线程以 vtable 分派调用 `Thread.run()`——这条 runtime→Java 调用边不在任何字节码里，
+    /// 闭包分析沿 `spawn_java_thread` → `run_java_thread` 的手写体调用点（`Thread__VTable::run`）
+    /// 推断，run() 的方法体（Runnable task 的转发入口）照常翻译。
+    #[jvm_native]
     pub fn start0(&self) -> Result<()> {
         self.__set_eetop(1);
         let holder = self.__get_holder();
@@ -176,12 +176,11 @@ impl Thread {
     /// 语料消费清单填充（模块注释），构造路径绕开 `Thread.<init>` 的安全
     /// 管制分支（JVM 的主线程对象同样由 VM 原生构造，不经 Java 构造器）。
     ///
-    /// upcalls：主线程对象的 holder 经 `Thread$FieldHolder.<init>` 构造
-    /// （runtime→Java 构造边，字节码不可见）。经此声明，凡闭包触达
-    /// currentThread（如 PrintStream 的 println 路径），FieldHolder 类一并
-    /// 入闭包——Thread.holder 字段保持真实类型而非擦除 Object，本文件的
-    /// holder 访问在任意闭包形态下可编译。
-    #[jvm_native(upcalls = "java/lang/Thread$FieldHolder.<init>:(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;JIZ)V")]
+    /// 主线程对象的 holder 经 `Thread$FieldHolder.<init>` 构造（runtime→Java 构造边，
+    /// 字节码不可见，由手写体的构造调用推断）：凡闭包触达 currentThread（如 PrintStream 的
+    /// println 路径），FieldHolder 类一并入闭包——Thread.holder 字段保持真实类型而非擦除
+    /// Object，本文件的 holder 访问在任意闭包形态下可编译。
+    #[jvm_native]
     pub fn currentThread() -> Result<Thread> {
         if let Some(t) = CURRENT.with(|c| c.borrow().as_ref().map(Clone::clone)) {
             return Ok(t);

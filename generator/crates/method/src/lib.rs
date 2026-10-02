@@ -1,6 +1,6 @@
 //! 方法体生成：**类 + 方法 → 完整 Rust 函数文本**。
 //!
-//! 入口 [`gen_method_body`]`(env, &MethodRequest, &mut MethodSink) -> MethodResult<String>`：
+//! 入口 [`gen_method_body`]`(env, &MethodRequest, &mut MethodSink) -> MethodResult<MethodText>`：
 //! - `env`：[`instr::InstrEnv`]，以发射所在类构造（`InstrCtx::new(.., class)`，继承展开时
 //!   `.with_code_owner(字节码出处类)`），`tparams` 为该类的有效类型形参；
 //! - [`MethodRequest`]：发射类 [`ty::ClassInfo`]、方法视图 [`classfile::Method`]（名字 / 描述符 /
@@ -23,6 +23,7 @@ pub mod emit;
 pub mod entry;
 pub mod error;
 pub mod fold_array;
+pub mod lines;
 pub mod node;
 pub mod postprocess;
 pub mod sig;
@@ -33,5 +34,5 @@ pub mod types;
 pub mod unify;
 pub mod vars;
 
-pub use body::{gen_method_body, CfgStats, MethodRequest, MethodSink};
+pub use body::{gen_method_body, CfgStats, MethodRequest, MethodSink, MethodText};
 pub use error::{MethodError, MethodResult};

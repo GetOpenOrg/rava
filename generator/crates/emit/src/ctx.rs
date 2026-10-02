@@ -8,7 +8,7 @@ use classfile::extras::{parse_extras, ClassExtras};
 use closure::seeds::SeedCfg;
 use input::{Boundary, EmitInput, Planner, RuntimeManifest};
 use resolve::classpath::ClassPath;
-use ty::{ClassInfo, ShortNames, TyCtx};
+use ty::{ClassInfo, NameScope, ShortNames, TyCtx};
 
 use crate::error::{EmitError, Result};
 
@@ -29,8 +29,9 @@ pub struct EmitOptions {
     pub jobs: usize,
 }
 
-/// 发射上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）
-pub struct EmitCtx<'a> {
+/// 发射共享上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）。
+/// 发射代码经 [`EmitCtx`] 视图访问；名字只经视图的 `ty`（带文件作用域）取得
+pub struct EmitShared<'a> {
     pub input: &'a EmitInput,
     pub ty: TyCtx<'a>,
     pub manifest: &'a RuntimeManifest,
@@ -56,11 +57,50 @@ pub struct EmitCtx<'a> {
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
-    /// 类文件头 use 行索引缓存（binary → 索引；按头部文本校验，见 `phase2::uses`）
-    pub(crate) use_index: Mutex<HashMap<String, Vec<Arc<crate::phase2::uses::UseIndex>>>>,
+}
+
+/// 发射上下文视图：共享上下文 + 本文件的类型层（名字经文件作用域认领）
+#[derive(Clone, Copy)]
+pub struct EmitCtx<'a> {
+    sh: &'a EmitShared<'a>,
+    pub ty: TyCtx<'a>,
+}
+
+impl<'a> std::ops::Deref for EmitCtx<'a> {
+    type Target = EmitShared<'a>;
+    fn deref(&self) -> &EmitShared<'a> {
+        self.sh
+    }
 }
 
 impl<'a> EmitCtx<'a> {
+    /// 换上文件作用域的视图（该文件的全部文本经此视图生成）
+    pub fn scoped<'b>(&'b self, scope: &'b NameScope) -> EmitCtx<'b> {
+        EmitCtx { sh: self.sh, ty: self.ty.scoped(scope) }
+    }
+
+    /// 无作用域视图（分析期查询：结构化引用集等不取名的计算）
+    pub fn unscoped(&self) -> EmitCtx<'a> {
+        self.sh.view()
+    }
+
+    /// 本处的 Rust 类型名（经文件作用域）
+    pub fn short(&self, binary: &str) -> String {
+        self.ty.short(binary)
+    }
+
+    /// 类的定义名（类自己文件里的 struct 名；跨文件全路径末段）
+    pub fn declared(&self, binary: &str) -> String {
+        self.ty.global_names().declared(binary)
+    }
+}
+
+impl<'a> EmitShared<'a> {
+    /// 无作用域视图
+    pub fn view(&self) -> EmitCtx<'_> {
+        EmitCtx { sh: self, ty: self.ty }
+    }
+
     pub fn new(
         input: &'a EmitInput,
         names: &'a ShortNames,
@@ -68,7 +108,7 @@ impl<'a> EmitCtx<'a> {
         cp: &'a ClassPath,
         runtime_dir: &Path,
         opts: EmitOptions,
-    ) -> Result<EmitCtx<'a>> {
+    ) -> Result<EmitShared<'a>> {
         let seeds_path = runtime_dir.join("seeds.toml");
         let seeds_text = std::fs::read_to_string(&seeds_path).map_err(|e| EmitError::Io(format!("{}：{e}", seeds_path.display())))?;
         let table: toml::Table = seeds_text
@@ -76,7 +116,7 @@ impl<'a> EmitCtx<'a> {
             .map_err(|e| EmitError::Input(format!("{}：{e}", seeds_path.display())))?;
         let runtime_dir = std::path::absolute(runtime_dir).unwrap_or_else(|_| runtime_dir.to_path_buf());
         let macros_crate = runtime_dir.parent().map_or_else(|| PathBuf::from("rava_macros"), |p| p.join("rava_macros"));
-        Ok(EmitCtx {
+        Ok(EmitShared {
             input,
             ty: TyCtx::new(&input.registry, names, &manifest.ty),
             manifest,
@@ -98,7 +138,6 @@ impl<'a> EmitCtx<'a> {
             lib_crate_of: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
-            use_index: Mutex::new(HashMap::new()),
         })
     }
 
@@ -109,11 +148,6 @@ impl<'a> EmitCtx<'a> {
 
     pub fn class(&self, name: &str) -> Option<&'a ClassInfo> {
         self.input.registry.get(name)
-    }
-
-    /// 短名（`ShortNames::short`）
-    pub fn short(&self, binary: &str) -> String {
-        self.ty.names.short(binary).into_owned()
     }
 
     /// 类的补充属性（LVT、注解原始字节、Deprecated 等；按需二次解析并缓存）
@@ -159,18 +193,23 @@ impl<'a> EmitCtx<'a> {
     /// `member_naming._handwritten_root_api`）
     pub fn root_api(&self) -> &BTreeSet<String> {
         self.root_api.get_or_init(|| {
-            let root = ty::consts::OBJECT;
-            let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
-            let dir = pkg.split('/').fold(self.runtime_src(), |d, p| d.join(p));
-            let stem = crate::text::to_snake(simple);
             let mut names = BTreeSet::new();
-            for f in [format!("{stem}_impl.rs"), format!("{stem}_ext.rs"), format!("{stem}.rs")] {
-                if let Ok(text) = std::fs::read_to_string(dir.join(f)) {
+            for f in Self::root_files(&self.runtime_src()) {
+                if let Ok(text) = std::fs::read_to_string(f) {
                     names.extend(crate::text::pub_fn_names(&text));
                 }
             }
             names
         })
+    }
+
+    /// 手写根类的源文件 `<src>/<包>/<stem>{_impl,_ext,}.rs`（`src` 为 runtime 真源或 scratch overlay）
+    pub fn root_files(src: &Path) -> Vec<PathBuf> {
+        let root = ty::consts::OBJECT;
+        let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
+        let dir = pkg.split('/').fold(src.to_path_buf(), |d, p| d.join(p));
+        let stem = crate::text::to_snake(simple);
+        ["_impl", "_ext", ""].iter().map(|suffix| dir.join(format!("{stem}{suffix}.rs"))).collect()
     }
 
     /// 根类的 public 实例方法键 {(名, 参数描述符部分)}（从 JDK 字节码解析；
@@ -199,7 +238,7 @@ impl<'a> EmitCtx<'a> {
     /// A-5 可合成函数式接口账本（首次查询时预扫描；方法体生成器在 invokedynamic 站点经
     /// [`crate::sam::SamLedger::site_ctor_path`] 查询构造路径）
     pub fn sam(&self) -> &crate::sam::SamLedger {
-        self.sam.get_or_init(|| crate::sam::SamLedger::prescan(self))
+        self.sam.get_or_init(|| crate::sam::SamLedger::prescan(&self.view()))
     }
 
     /// 调用链按类索引的槽位键：类 → {(方法名, 参数描述符部分)}（`_cc_slot_index`）
@@ -251,8 +290,6 @@ impl<'a> EmitCtx<'a> {
 /// 每项目可变状态：Python 模块级全局（跨类累积）的显式化，按类发射序更新
 #[derive(Debug, Default)]
 pub struct ProjectState {
-    /// import_gen `_seen_simples`：简单名 → 首个引入它的完整路径（跨类累积）
-    pub seen_simples: BTreeMap<String, String>,
     /// inherited_calls：(接收者, 方法名, 参数描述符) 插入序去重
     pub inherited_requests: indexmap::IndexSet<(String, String, String)>,
     /// G-10 账本：调用点引用 (类, 方法名) → Rust 名
@@ -281,10 +318,8 @@ pub enum HwAudit {
 }
 
 impl ProjectState {
-    /// 并入一个类的账本增量（按发射序调用：插入序账本与串行发射逐项一致）。
-    /// `seen_simples` 只在串行的跨类导入阶段累积，不经增量
+    /// 并入一个类的账本增量（按发射序调用：插入序账本与串行发射逐项一致）
     pub fn merge(&mut self, d: ProjectState) {
-        debug_assert!(d.seen_simples.is_empty());
         self.inherited_requests.extend(d.inherited_requests);
         self.lambda_refs.extend(d.lambda_refs);
         for (k, v) in d.lambda_defs {

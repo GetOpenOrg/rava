@@ -31,7 +31,7 @@ fn io_exception(default: &str) -> JvmError {
 
 impl NativeThread {
     /// native `init()`：为中断信号安装空处理器（sa_flags = 0：被打断的系统调用返回 EINTR）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn init() -> Result<()> {
         // SAFETY: sigaction 结构按零初始化后填写处理器与空掩码
         let rc = unsafe {
@@ -55,7 +55,7 @@ impl NativeThread {
     }
 
     /// native `signal0(long)`：向目标线程发中断信号；目标已结束（ESRCH）不报错（macOS JNI 同款）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn signal0(thread: i64) -> Result<()> {
         // SAFETY: thread 为 current0 返回的 pthread_t
         let ret = unsafe { libc::pthread_kill(thread as usize as libc::pthread_t, interrupt_signal()) };

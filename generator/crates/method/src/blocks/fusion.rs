@@ -38,7 +38,7 @@ impl Blocks<'_, '_> {
         let old_pcs = self.nodes.node(pid).pcs.clone();
         self.consume(&old_pcs, JumpKind::Structured);
         let p = self.nodes.node_mut(pid);
-        p.stmts.extend(node.stmts);
+        p.append_stmts(node.stmts, node.stmt_pcs);
         (p.kind, p.cond, p.key) = (node.kind, node.cond, node.key);
         (p.target, p.fallthrough) = (node.target, node.fallthrough);
         (p.cases, p.default) = (node.cases, node.default);

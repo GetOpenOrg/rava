@@ -35,6 +35,8 @@ impl<'a> Engine<'a> {
         let k = self.mref_key(mref);
         if self.man.is_method_lookup(&k) {
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
+            // 本调用点上的字面量名（常量实参 / 合流前的各字面量）；形参透传来的名字不在此列
+            let mut site_names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 拼接出的名字按目标类逐个解析（只保留该类上声明的方法）；目标类另取 Class 实参值集里类镜像所指的类
             // （如取自 static final Class 字段）。形参透传的名字不与镜像类相乘：其类同样来自形参，交叉组合会失真
             let mut per_class: Vec<(String, Rc<str>)> = vec![];
@@ -43,10 +45,13 @@ impl<'a> Engine<'a> {
                 match a {
                     V::Str(name) => {
                         names.insert(name.clone());
+                        site_names.insert(name.clone());
                     }
                     V::Ref { .. } => {
                         // 合流前的各字面量（如按条件二选一的名字）与形参上流入的字符串常量
-                        names.extend(a.lits());
+                        let lits = a.lits();
+                        site_names.extend(lits.iter().cloned());
+                        names.extend(lits);
                         names.extend(self.param_strs(m, off, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
                         if targets.is_none() {
@@ -67,21 +72,27 @@ impl<'a> Engine<'a> {
                     _ => {}
                 }
             }
-            // 常量名的查找目标：Class 常量实参 + Class 接收者值集里类镜像所指的类
-            // （如 `this.getMethod("values")`：接收者是流到该方法的类镜像）。拼段名只按常量类 / Class 形参定目标：
-            // 接收者镜像与推不出的段相乘会把镜像类的全部方法拉进反射面
-            let mut lit_targets = classes.clone();
-            if class_recv && !names.is_empty() {
-                for c in args.first().map(|r| self.recv_mirrors(m, r)).unwrap_or_default() {
-                    if !lit_targets.contains(&c) {
-                        lit_targets.push(c);
-                    }
-                }
-            }
+            // 常量名的查找目标：Class 常量实参；本调用点的字面量名另对 Class 接收者值集里类镜像所指的类点名
+            // （如 `this.getMethod("values")`：接收者是流到该方法的类镜像）。
+            // 形参透传的名字不与接收者镜像相乘：名字与接收者各自来自全部调用点，交叉组合会把任意镜像类上的
+            // 同名方法拉进反射面（如序列化辅助方法按形参取名、按形参取类）；拼段名同理只按常量类 / Class 形参定目标
             for name in &names {
-                for c in &lit_targets {
+                for c in &classes {
                     self.reflect_name(c, name);
                 }
+            }
+            if class_recv && !site_names.is_empty() {
+                for c in args.first().map(|r| self.recv_mirrors(m, r)).unwrap_or_default() {
+                    if classes.contains(&c) {
+                        continue;
+                    }
+                    for name in &site_names {
+                        self.reflect_name(&c, name);
+                    }
+                }
+            } else if class_recv && !names.is_empty() && classes.is_empty() {
+                // 名字只经形参流入、接收者非常量：查找目标推不出，记为反射缺口
+                self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }
             for (c, name) in &per_class {
                 self.reflect_name(c, name);

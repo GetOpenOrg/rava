@@ -11,11 +11,13 @@ use ir::{ConcatPart, Expr, Lit};
 use sim::StackSim;
 use ty::RsType;
 
-use super::boxing::obj_text;
-use super::{numeric_const_text, raw_stmt, IndySite};
+use super::{numeric_const_text, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
-use crate::error::InstrResult;
+use crate::error::{InstrError, InstrResult};
+use crate::invoke::static_call::gen_invokestatic;
+use crate::invoke::CallRef;
+use crate::log::InstrLog;
 
 /// 实参位 / 常量位标记码元
 const ARG_SLOT: u16 = 0x0001;
@@ -156,8 +158,8 @@ fn prim_operand(raw_s: String, have: &str, want: &str) -> String {
 }
 
 /// 一个拼接实参按 Java 字符串化语义整形为 `Add` 右操作数（`p` 为形参描述符）；
-/// 引用实参的 toString 物化为临时变量
-fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -> InstrResult<String> {
+/// 引用实参经字符串化入口物化为临时变量
+fn concat_arg(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, e: sim::StackEntry, p: &str) -> InstrResult<String> {
     let raw_s = text(env, &e.expr);
     let have = ty_text(env, &e.ty);
     let string_desc = format!("L{};", ty::consts::STRING);
@@ -177,24 +179,26 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, e: sim::StackEntry, p: &str) -
         "Z" => paren(raw_s),
         // String 实参（栈类型即 String）：按引用追加码元，null → "null" 由运行时承担
         _ if p == string_desc && have == ir::anchors::STRING => format!("&{}", paren(raw_s)),
+        // 引用类型实参：Java 语义是 String.valueOf(x)（null → "null"，否则虚 toString 分派）。
+        // 发射对清单登记的字符串化入口（`[indy] concat_stringify`）的静态调用，结果落临时变量
         _ => {
-            // 引用类型实参：Java 语义是 String.valueOf(x)——null 给出 "null"，否则虚 toString 分派。
-            // 预物化为临时变量（toString 返回 Result，需在语句层传播 ?）；null 判定在此显式给出
-            // （Object.toString 对 null 接收者按 invokevirtual 隐式判空抛 NPE）
-            let boxed = obj_text(env, &raw_s, &e.ty);
-            let sv = sim.fresh("_t")?;
-            let s = ir::anchors::STRING;
-            sim.emit(raw_stmt(format!(
-                "let {}: {s} = {{ let __o = {boxed}; if _is_jnull(&__o) {{ {s}::from(\"null\") }} else {{ __o.toString()? }} }};",
-                sv.as_str()
-            )))?;
-            format!("&{}", sv.as_str())
+            sim.push(e.expr, e.ty);
+            let r = call_indy_helper(env, sim, log, "concat_stringify")?;
+            format!("&{}", paren(text(env, &r.expr)))
         }
     })
 }
 
+/// 调用清单登记的 `[indy]` 分量处理入口（`key` = 清单键名）：实参已按序压栈，发射对它的静态调用
+/// （方法体由字节码翻译），弹出结果。清单是唯一真源，缺项报错
+pub(super) fn call_indy_helper(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, key: &str) -> InstrResult<sim::StackEntry> {
+    let (owner, name, desc) = env.ctx.rt.indy_helper(key).map_err(|e| InstrError::BadInsn(format!("清单缺 {key}：{e}")))?;
+    gen_invokestatic(env, sim, log, &CallRef::with(owner, name, desc))?;
+    Ok(sim.pop()?)
+}
+
 /// 拼接调用点：弹出动态实参，按配方生成 `String::from_owned(format!(..))`
-pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite) -> InstrResult<()> {
+pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, site: &IndySite) -> InstrResult<()> {
     // Python 以 `^InvokeDynamic [^: ]+:(\([^)]*\))` 取形参段；取不到时按单个 String 实参
     let name_ok = !site.name.is_empty() && !site.name.contains([':', ' ']);
     let params = if name_ok && site.desc.starts_with('(') && site.desc.contains(')') {
@@ -202,7 +206,7 @@ pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite)
     } else {
         vec![format!("L{};", ty::consts::STRING)]
     };
-    concat_from_stack(env, sim, &params, recipe(site))
+    concat_from_stack(env, sim, log, &params, recipe(site))
 }
 
 /// 按配方拼接栈顶 `params.len()` 个实参（`params` 为其描述符，声明序），压入 String 结果；
@@ -210,6 +214,7 @@ pub(super) fn string_concat(env: &InstrEnv, sim: &mut StackSim, site: &IndySite)
 pub(super) fn concat_from_stack(
     env: &InstrEnv,
     sim: &mut StackSim,
+    log: &mut InstrLog,
     params: &[String],
     recipe: Option<Recipe>,
 ) -> InstrResult<()> {
@@ -222,7 +227,7 @@ pub(super) fn concat_from_stack(
     entries.reverse();
     let mut args = Vec::with_capacity(params.len());
     for (e, p) in entries.into_iter().zip(params) {
-        args.push(Expr::raw(concat_arg(env, sim, e, p)?));
+        args.push(Expr::raw(concat_arg(env, sim, log, e, p)?));
     }
     // 无配方 / 配方实参位与实参数不符：逐个实参直接拼接
     let parts = match recipe.as_ref().and_then(|r| recipe_parts(r, args.clone())) {

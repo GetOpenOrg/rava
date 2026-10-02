@@ -83,7 +83,8 @@ pub const STRING: &str = "java/lang/String";
 pub const CLASS: &str = "java/lang/Class";
 
 impl V {
-    fn nonnull(&self) -> Option<bool> {
+    /// 可空性：Some(true) 恒非 null（实例方法的 this、`new` 结果、catch 值、字面量）；Some(false) 恒 null
+    pub(crate) fn nonnull(&self) -> Option<bool> {
         match self {
             V::Null => Some(false),
             V::Ref { nonnull: true, .. } | V::Str(_) | V::Class(..) => Some(true),

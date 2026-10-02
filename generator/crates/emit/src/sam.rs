@@ -32,8 +32,9 @@ pub struct SamSpec {
     pub sam_name: String,
     pub sam_desc: String,
     /// SAM 擦除 Rust 签名（站点闭包与合成对象字段的公共类型）
-    pub erased_params: Vec<String>,
-    pub erased_ret: String,
+    pub erased_params: Vec<ty::RsType>,
+    /// None = `()`
+    pub erased_ret: Option<ty::RsType>,
     /// `[I]` + 传递超接口（广度优先发现序；含注册表外名字，只进 instanceof 名单）
     pub closure: Vec<String>,
 }
@@ -119,10 +120,9 @@ fn functional_sam(ctx: &EmitCtx<'_>, iface: &str) -> Option<SamSpec> {
         }
     }
     let [m] = uncovered[..] else { return None };
-    let names = ctx.ty.names;
-    let erased_params = parse_descriptor_params(&m.desc).iter().map(|p| ctx.ty.jvm_to_rust(p).render(names)).collect();
+    let erased_params = parse_descriptor_params(&m.desc).iter().map(|p| ctx.ty.jvm_to_rust(p)).collect();
     let rd = parse_descriptor_return(&m.desc);
-    let erased_ret = if rd == "V" { "()".to_string() } else { ctx.ty.jvm_to_rust(rd).render(names) };
+    let erased_ret = (rd != "V").then(|| ctx.ty.jvm_to_rust(rd));
     Some(SamSpec { iface_bin: iface.to_string(), sam_name: m.name.clone(), sam_desc: m.desc.clone(), erased_params, erased_ret, closure })
 }
 
@@ -132,6 +132,14 @@ fn runtime_handwritten(ctx: &EmitCtx<'_>, iface: &str) -> bool {
     let dir = pkg.split('/').filter(|p| !p.is_empty()).fold(ctx.runtime_src(), |d, p| d.join(p));
     let stem = to_snake(simple);
     [stem.clone(), format!("{stem}_t")].iter().any(|s| dir.join(format!("{s}.rs")).is_file())
+}
+
+impl SamSpec {
+    /// SAM 擦除签名渲染（按使用处的文件作用域取名）：(参数类型表, 返回类型)
+    pub fn erased_sig(&self, ctx: &EmitCtx<'_>) -> (Vec<String>, String) {
+        let ps = self.erased_params.iter().map(|t| t.render(&ctx.ty)).collect();
+        (ps, self.erased_ret.as_ref().map_or_else(|| "()".to_string(), |t| t.render(&ctx.ty)))
+    }
 }
 
 impl SamLedger {

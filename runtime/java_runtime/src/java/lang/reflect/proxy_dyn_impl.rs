@@ -84,7 +84,7 @@ impl Proxy_Dyn {
     }
 
     /// 接口方法调用（接口载体分派回退点）：转入 `dispatch(Method, Object[])`。
-    #[jvm_boundary(upcalls = "java/lang/reflect/Proxy$Dyn.dispatch:(Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object; java/lang/Integer.valueOf:(I)Ljava/lang/Integer; java/lang/Long.valueOf:(J)Ljava/lang/Long; java/lang/Boolean.valueOf:(Z)Ljava/lang/Boolean; java/lang/Character.valueOf:(C)Ljava/lang/Character; java/lang/Byte.valueOf:(B)Ljava/lang/Byte; java/lang/Short.valueOf:(S)Ljava/lang/Short; java/lang/Float.valueOf:(F)Ljava/lang/Float; java/lang/Double.valueOf:(D)Ljava/lang/Double;")]
+    #[jvm_boundary]
     pub fn __vm_proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>) -> Result<Object> {
         let m = proxy_method(iface, name, desc)?;
         let kinds = param_kinds(desc);

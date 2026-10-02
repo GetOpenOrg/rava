@@ -4,6 +4,7 @@
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
 //!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release] [--target-dir D]
+//!   [--keep-artifacts]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
 //!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N]`
@@ -130,6 +131,8 @@ pub struct BuildOpts {
     pub build_timeout: Option<u64>,
     /// cargo build --release
     pub release: bool,
+    /// 保留本例编译产物（缺省链接后删中间产物、运行后删可执行文件，见 [`crate::artifacts`]）
+    pub keep_artifacts: bool,
     /// 共享编译缓存（CARGO_TARGET_DIR；缺省 `<仓库>/build/target`）
     pub target_dir: Option<PathBuf>,
     pub strict: bool,
@@ -178,7 +181,7 @@ const VALUED: [&str; 24] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 9] = [
+const FLAGS: [&str; 10] = [
     "--clean",
     "--strict",
     "--batch",
@@ -188,10 +191,12 @@ const FLAGS: [&str; 9] = [
     "--perf",
     "--closure-json",
     "--release",
+    "--keep-artifacts",
 ];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 19] = [
+const BUILD_ONLY: [&str; 20] = [
     "--release",
+    "--keep-artifacts",
     "--target-dir",
     "--closure-cache",
     "--closure-cache-max-mb",
@@ -240,6 +245,7 @@ impl BuildOpts {
                     "--perf" => o.perf = true,
                     "--closure-json" => o.closure_json = true,
                     "--release" => o.release = true,
+                    "--keep-artifacts" => o.keep_artifacts = true,
                     _ => o.strict = true,
                 }
                 continue;

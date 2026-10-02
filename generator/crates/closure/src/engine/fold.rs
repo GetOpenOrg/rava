@@ -292,8 +292,10 @@ impl Engine<'_> {
         named(&m.to_string()) || c.target.as_ref().is_some_and(|t| named(&t.to_string())) || self.ctx.read_spec(None, opcode, m, iface, Some(c)).is_some()
     }
 
-    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、或接收者的值流
-    /// 可能缺失（来源可经流边从未建模来源到达，见 `unmodeled.rs`）即不算
+    /// 成员各克隆（方法节点序号）的接收者恒为 null 的活虚调用点：任一克隆有接收者、接收者恒非 null
+    /// （实例方法的 this 按 JVMS 恒非 null，`new` 结果、catch 值同理——类型集为空只说明值来自未建模来源
+    /// 或所在路径不执行，不说明是 null）、或接收者的值流可能缺失（来源可经流边从未建模来源到达，见
+    /// `unmodeled.rs`）即不算
     pub(super) fn null_recv(&self, clones: &[usize], um: &super::unmodeled::Unmodeled) -> Vec<u32> {
         let mut hit: BTreeMap<u32, bool> = BTreeMap::new();
         for &i in clones {
@@ -305,7 +307,7 @@ impl Engine<'_> {
                     let opaque = self.classes.get(mref.owner.as_str()).is_some_and(|c| c.level == Level::Type);
                     let h = hit.entry(*pc).or_default();
                     if !*h && !opaque {
-                        *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| self.recv_unmodeled(i, r, um));
+                        *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| r.nonnull() == Some(true) || self.recv_unmodeled(i, r, um));
                     }
                 }
             }

@@ -42,19 +42,27 @@ pub struct Entry {
     /// 语句条目的缩进；文本行 / 结构行为空（缩进写在文本里）
     pub indent: String,
     pub item: Item,
+    /// 来源指令的字节码偏移（渲染时映射为 Java 行号标记；合成条目为 None）
+    pub pc: Option<u32>,
 }
 
 impl Entry {
     pub fn stmt(indent: &str, s: Stmt) -> Entry {
-        Entry { indent: indent.to_string(), item: Item::Stmt(Box::new(s)) }
+        Entry { indent: indent.to_string(), item: Item::Stmt(Box::new(s)), pc: None }
     }
 
     pub fn line(text: String) -> Entry {
-        Entry { indent: String::new(), item: Item::Line(text) }
+        Entry { indent: String::new(), item: Item::Line(text), pc: None }
     }
 
     pub fn structure(text: String, delta: i32, tag: Tag) -> Entry {
-        Entry { indent: String::new(), item: Item::Struct { text, delta, tag } }
+        Entry { indent: String::new(), item: Item::Struct { text, delta, tag }, pc: None }
+    }
+
+    /// 标注来源指令偏移
+    pub fn at(mut self, pc: Option<u32>) -> Entry {
+        self.pc = pc;
+        self
     }
 
     /// 文本条目（Python `isinstance(item, str)`；已删除条目的 `None` 不在内）

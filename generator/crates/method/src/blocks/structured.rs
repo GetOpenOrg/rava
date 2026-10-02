@@ -109,7 +109,7 @@ impl Blocks<'_, '_> {
             if let Some(cond) = inline_temps(self.env, &node.stmts, c, &node.exit_stack) {
                 let n = self.nodes.node_mut(*h);
                 n.cond = Some(cond);
-                n.stmts.clear();
+                n.clear_stmts();
             }
         }
     }

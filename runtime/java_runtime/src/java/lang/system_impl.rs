@@ -23,12 +23,7 @@ impl System {
     /// （Properties.getProperty 消费 `map` 字段）。
     ///
     /// 属性表建成后与 initPhase1 同样交 `VM.saveProperties`（翻译的字节码）保存快照。
-    #[jvm_native(upcalls = "
-        java/util/concurrent/ConcurrentHashMap.<init>:()V
-        java/util/concurrent/ConcurrentHashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
-        java/lang/VersionProps.init:(Ljava/util/Map;)V
-        jdk/internal/misc/VM.saveProperties:(Ljava/util/Map;)V
-    ")]
+    #[jvm_native]
     pub fn registerNatives() -> Result<()> {
         use crate::java::util::concurrent::ConcurrentHashMap;
         let map = ConcurrentHashMap::<Object, Object>::new()?;
@@ -169,24 +164,12 @@ impl System {
     /// 不经 `<clinit>`，故由手写层提供（签名与宏生成的 static 访问器一致：`Result<T>`）。
     /// 对象图与 JDK 一致：PrintStream(BufferedOutputStream(FileOutputStream(fd), 128), autoFlush)，
     /// 三个类全部是字节码翻译版本；本函数只负责「native 写入静态字段」这一步。
-    #[jvm_native(upcalls = "
-        java/io/FileDescriptor.<init>:(I)V
-        java/io/FileOutputStream.<init>:(Ljava/io/FileDescriptor;)V
-        java/io/BufferedOutputStream.<init>:(Ljava/io/OutputStream;I)V
-        java/io/PrintStream.<init>:(Ljava/io/OutputStream;ZLjava/nio/charset/Charset;)V
-        sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
-    ")]
+    #[jvm_native]
     pub fn out() -> Result<PrintStream> {
         Ok(std_stream(&STDOUT, 1))
     }
 
-    #[jvm_native(upcalls = "
-        java/io/FileDescriptor.<init>:(I)V
-        java/io/FileOutputStream.<init>:(Ljava/io/FileDescriptor;)V
-        java/io/BufferedOutputStream.<init>:(Ljava/io/OutputStream;I)V
-        java/io/PrintStream.<init>:(Ljava/io/OutputStream;ZLjava/nio/charset/Charset;)V
-        sun/nio/cs/UTF_8.INSTANCE:Lsun/nio/cs/UTF_8;
-    ")]
+    #[jvm_native]
     pub fn err() -> Result<PrintStream> {
         Ok(std_stream(&STDERR, 2))
     }
@@ -209,11 +192,7 @@ impl System {
     /// 故与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
     /// `BufferedInputStream(FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本；
     /// 本函数只负责「native 写入静态字段」这一步（首次读取时建立，setIn0 改写）。
-    #[jvm_native(upcalls = "
-        java/io/FileDescriptor.in:Ljava/io/FileDescriptor;
-        java/io/FileInputStream.<init>:(Ljava/io/FileDescriptor;)V
-        java/io/BufferedInputStream.<init>:(Ljava/io/InputStream;)V
-    ")]
+    #[jvm_native]
     pub fn in_() -> Result<InputStream> {
         if let Some(s) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
             return Ok(s);

@@ -20,6 +20,7 @@ use super::attrs::MethodAttrExtra;
 use super::methods::{slot_extra, BodySpec, Cx, Emitted};
 use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
+use crate::emission::MethodBlock;
 use crate::error::{EmitError, Result};
 use crate::vtable::param_part;
 
@@ -104,7 +105,7 @@ pub(super) fn interface_default_inheritance<'c>(
     state: &mut ProjectState,
     bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
-    out: &mut Vec<String>,
+    out: &mut Vec<MethodBlock>,
 ) -> Result<Vec<(&'c ClassInfo, &'c Method)>> {
     let (ctx, ci) = (cx.ctx, cx.ci);
     let mut translated = Vec::new();
@@ -176,7 +177,8 @@ pub(super) fn interface_default_inheritance<'c>(
         let e = Emitted { method: Cow::Owned(adapted), owner: ici, index: method_index(ici, dm) };
         // 槽位归属：祖先类已经由（别的接口的）default 注入同一槽位时覆盖那一槽位（JVM 选最具体
         // default 的结果须经祖先 vtable 派发）；否则本类新开槽位
-        let attr = cx.attr(&e, &slot_extra(cx, &e.method, &rust));
+        let mut extra = slot_extra(cx, &e.method, &rust);
+        extra.declared_by = ici.name().to_string();
         let in_cc = chain_all(ctx, ci) || ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
         let mut text = None;
         if in_cc {
@@ -186,8 +188,7 @@ pub(super) fn interface_default_inheritance<'c>(
                 translated.push((ici, dm));
             }
         }
-        let text = text.unwrap_or_else(|| cx.stub(&e, &rust, cx.tps).text);
-        out.push(format!("{attr}\n{text}"));
+        out.push(cx.body_block(&e, &extra, text, &rust, cx.tps));
     }
     Ok(translated)
 }
@@ -242,7 +243,7 @@ pub(super) fn interface_special_members<'c>(
     bodies: &dyn MethodBodyEmitter,
     visible: &[(&'c ClassInfo, &Method)],
     translated: Vec<(&'c ClassInfo, &'c Method)>,
-    out: &mut Vec<String>,
+    out: &mut Vec<MethodBlock>,
 ) -> Result<()> {
     let (ctx, ci) = (cx.ctx, cx.ci);
     if ci.is_interface() {
@@ -273,7 +274,7 @@ pub(super) fn interface_special_members<'c>(
             let rust = safe_ident(&interface_special_member_name(ctx, owner, &name, &desc));
             let (adapted, view) = adapt_interface_method(ctx, ci, owner.name(), sp_m)?;
             let e = Emitted { method: Cow::Owned(adapted), owner, index: idx };
-            let attr = cx.attr(&e, &MethodAttrExtra::default());
+            let extra = MethodAttrExtra::default();
             let mut text = None;
             if all || ctx.in_chain(owner.name(), &name, &desc) {
                 let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref(), site: "iface-special" };
@@ -282,8 +283,7 @@ pub(super) fn interface_special_members<'c>(
                     sources.push_back((owner, Cow::Borrowed(sp_m)));
                 }
             }
-            let text = text.unwrap_or_else(|| cx.stub(&e, &rust, cx.tps).text);
-            out.push(format!("{attr}\n{text}"));
+            out.push(cx.body_block(&e, &extra, text, &rust, cx.tps));
         }
     }
     Ok(())

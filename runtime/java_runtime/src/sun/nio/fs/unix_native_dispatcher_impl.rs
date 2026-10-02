@@ -13,11 +13,11 @@ use super::unix_file_attributes::UnixFileAttributes;
 /// UnixNativeDispatcher.SUPPORTS_BIRTHTIME（JDK 常量值；init 的能力位只报告本文件实际承载的面）。
 const SUPPORTS_BIRTHTIME: i32 = 1 << 16;
 
-fn errno() -> i32 {
+pub(super) fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
-fn unix_exception(err: i32) -> JvmError {
+pub(super) fn unix_exception(err: i32) -> JvmError {
     match UnixException::new_i(err) {
         Ok(e) => JvmError::from(e),
         Err(e) => e,
@@ -40,12 +40,16 @@ fn c_path(address: i64) -> *const libc::c_char {
     address as *const libc::c_char
 }
 
-/// JNI `RESTARTABLE`：EINTR 时重试。
-fn restartable(mut f: impl FnMut() -> i32) -> i32 {
+/// JNI `RESTARTABLE`：返回 -1 且 errno == EINTR 时重试；其它失败返回 errno。
+pub(super) fn restartable(mut f: impl FnMut() -> i32) -> std::result::Result<i32, i32> {
     loop {
         let r = f();
-        if r != -1 || errno() != libc::EINTR {
-            return r;
+        if r != -1 {
+            return Ok(r);
+        }
+        let err = errno();
+        if err != libc::EINTR {
+            return Err(err);
         }
     }
 }
@@ -62,11 +66,8 @@ impl UnixNativeDispatcher {
     #[jvm_native]
     pub fn open0(path_address: i64, flags: i32, mode: i32) -> Result<i32> {
         // SAFETY: path_address 指向 NativeBuffer 中以 NUL 结尾的路径串
-        let fd = restartable(|| unsafe { libc::open(c_path(path_address), flags, mode as libc::c_uint) });
-        if fd == -1 {
-            return Err(unix_exception(errno()));
-        }
-        Ok(fd)
+        restartable(|| unsafe { libc::open(c_path(path_address), flags, mode as libc::c_uint) })
+            .map_err(unix_exception)
     }
 
     /// native `close0(int fd)`：close(2)；EINTR 视为已关闭（JNI 同款）。
@@ -87,9 +88,8 @@ impl UnixNativeDispatcher {
     pub fn stat0(path_address: i64, attrs: UnixFileAttributes) -> Result<i32> {
         // SAFETY: 同 open0；buf 为栈上 stat 结构
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
-        let r = restartable(|| unsafe { libc::stat(c_path(path_address), &mut buf) });
-        if r == -1 {
-            return Ok(errno());
+        if let Err(err) = restartable(|| unsafe { libc::stat(c_path(path_address), &mut buf) }) {
+            return Ok(err);
         }
         fill_stat(&attrs, &buf);
         Ok(0)
@@ -100,10 +100,7 @@ impl UnixNativeDispatcher {
     pub fn lstat0(path_address: i64, attrs: UnixFileAttributes) -> Result<()> {
         // SAFETY: 同 stat0
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
-        let r = restartable(|| unsafe { libc::lstat(c_path(path_address), &mut buf) });
-        if r == -1 {
-            return Err(unix_exception(errno()));
-        }
+        restartable(|| unsafe { libc::lstat(c_path(path_address), &mut buf) }).map_err(unix_exception)?;
         fill_stat(&attrs, &buf);
         Ok(())
     }
@@ -142,8 +139,7 @@ impl UnixNativeDispatcher {
     #[jvm_native]
     pub fn access0(path_address: i64, amode: i32) -> Result<i32> {
         // SAFETY: 同 open0
-        let r = restartable(|| unsafe { libc::access(c_path(path_address), amode) });
-        Ok(if r == -1 { errno() } else { 0 })
+        Ok(restartable(|| unsafe { libc::access(c_path(path_address), amode) }).err().unwrap_or(0))
     }
 
     /// native `getcwd()`：当前工作目录（字节形态）；失败抛 UnixException(errno)。
@@ -163,11 +159,7 @@ impl UnixNativeDispatcher {
     #[jvm_native]
     pub fn dup(fd: i32) -> Result<i32> {
         // SAFETY: dup 只作用于 fd
-        let r = restartable(|| unsafe { libc::dup(fd) });
-        if r == -1 {
-            return Err(unix_exception(errno()));
-        }
-        Ok(r)
+        restartable(|| unsafe { libc::dup(fd) }).map_err(unix_exception)
     }
 
     /// native `opendir0(long path)`：opendir(3)，返回 DIR* 地址。
@@ -234,7 +226,7 @@ impl UnixNativeDispatcher {
 }
 
 /// stat 结构 → UnixFileAttributes.st_* 字段（JNI `prepAttributes` 同款）。
-fn fill_stat(attrs: &UnixFileAttributes, st: &libc::stat) {
+pub(super) fn fill_stat(attrs: &UnixFileAttributes, st: &libc::stat) {
     attrs.__set_st_mode(st.st_mode as i32);
     attrs.__set_st_ino(st.st_ino as i64);
     attrs.__set_st_dev(st.st_dev as i64);

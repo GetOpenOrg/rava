@@ -65,10 +65,125 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
+## 🌳 任务依赖树（2026-10-02，集成分支 rust-closure-analyzer 417a6594）
+
+> 图例：✅ 已完成　🔄 进行中　⏳ 已立项待启　⏸ 按用户决定暂停　◇ 待用户决策
+> `A ──▶ B` 表示 A 是 B 的前置。同一层内无箭头相连的任务互不依赖，可以并行。
+> 每项后面的括号写分支 / 提交 / 计划文档。完成后改图例，整枝完成后折叠为一行。
+
+### 一、全景树
+
+```
+rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原生二进制）
+│  量化：JDK 21 全量 e2e ⊇ 1029 例基线；HelloWorld ≤250 类、闭包 ≤3 s；`[boundary]` 前缀 0、`#[jvm_boundary]` 0；
+│        手写只剩准入三类；产品路径 Python 0；JDK 25 适配
+│
+├─ 【已完成的大分支】（只列与剩余任务有依赖的）
+│   ├─ ✅ Rust 生成器取代 Python 生成器，Python 生成器已删（py-delete，2026-10-01-python-generator-deletion.md）
+│   ├─ ✅ C1 / C1c / C2 / C3：Rust 闭包分析器、精确分析、seeds、反射数据流（2026-09-29-rust-closure-analyzer.md）
+│   ├─ ✅ C4 接入、第五节 Python 机制删除（closure-c4-cleanup）
+│   ├─ ✅ 闭包精度一 / 二 / 三期，闭包性能 closure-perf2 / closure-mono（d8212bee / 6e0849c6）
+│   ├─ ✅ C6 主体：upcalls 声明与解析机制清零（59dbedc1），c4-regfix 合入 1ba0d9aa
+│   ├─ ✅ regress2 第二轮基线回归 + FS-E1（6c7eb831）
+│   ├─ ✅ C1d-b 第一段 c1d-pick（4b73ea61）
+│   ├─ ✅ scripts-into-rava S1–S5：Python 脚本并入 rava、名字作用域统一、m3 编译错误 0（bb0b7736）
+│   ├─ ✅ run-tests-prune：逐例清理产物、rava prune（ad9e938d）
+│   └─ ✅ 测试分发：全部 e2e 与重命令作业走 8 台服务器（server_maintenance/rava/distribute_tests.py）
+│
+├─ 【当前】阶段 C 收官：闭包分析器（rust-closure-analyzer）── 用户 2026-10-01 决定先做完本阶段
+│   │
+│   ├─ ✅ C6 后续（c6-generic-closure 7fdbfa8c，合入 3f9d4cc9）：泛型辅助 fn 闭包形参、TestAnnoNestedArray null_recv、用户注解类型补种
+│   │
+│   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
+│   │     ├─ 🔄 a1 具体求值器 engine/concrete/：判定 OOB 消息、PTI 校验、getGenericInterfaces 三道闸门
+│   │     │       验收：正式 HelloWorld（无 --cut-file）从 ≈3091 类 / ≈600 s 降到 ≤360 类、≤3 s
+│   │     ├─ ⏳ a2 合入 1e623cec（删全部非 VM 契约过渡手写、取消 [boundary] 前缀）◀── a1
+│   │     ├─ ⏳ a3 剩余 139 个 #[jvm_boundary]（19 文件）按准入类别登记 → 删宏与分析器解析 ◀── a2
+│   │     └─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
+│   │
+│   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
+│   │     ├─ 🔄 b0 m3 serialVersionUID 无字段闭包 c72bfd88（m3 golden 已跑完）；合入前须修 ArrayList.writeObject L3 分派存根
+│   │     │       （StockTrans / TestSerialDefaultSuid / TestSerialProxyForm）与 TestReflectProbe（Integer.MAX_VALUE 反射字段）
+│   │     ├─ 🔄 b1 序列化收窄：大值集来自未知接收者字段视图（Unsafe 读 ↔ setObjFieldValues 手写写入成环）
+│   │     │       验收：DeepCopy ≤1640 类、fold_props ≥42、StockTrans / TestSerialDefaultSuid 回调保留
+│   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
+│   │     └─ ⏳ b3 任务 3：class_init.unknown 归 false
+│   │
+│   ├─ ✅ native-gaps（bdc4cd64，合入 417a6594）：sun/nio/fs native 21 个、loop_hoist 合流变量、栈帧按声明类归属（declared_by）
+│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2；TestModuleLayerDefine ◀── boot layer；
+│   │     TestClassNestNatives ◀── FS-C2；TestReflectProbe（Integer.MAX_VALUE）已转 C1d-b
+│   │
+│   ├─ 🔄 FS-C2 应用类加载器非空、断言状态按加载器求值（分支 fs-c2，原 native-gaps 子代理）（2026-10-02-fs-c2-app-classloader.md）
+│   │     └─ 验收：TestClassNestNatives 原样通过 + 边界 e2e
+│   │
+│   ├─ ⏳ boot layer：ModuleBootstrap.boot 引导期建层、System.bootLayer 按字节码读取、系统模块描述符承载（FS-H12）
+│   │     ◀── C1d-a a2（1e623cec 的 [boot_init] 与 jdk/ 去截断）、FS-C2　验收：TestModuleLayerDefine 原样通过
+│   │
+│   ├─ ✅ regress2 续：栈帧来源统一（frames-unify bf91f075，合入 be1b97be）：行表单一帧源、删符号解析、手写 native / Object 成帧、StackWalker 行号
+│   │     遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 <init> 不成帧 ◀── C1d-a a2
+│   │
+│   └─ ⏳ C4 收官：全量 e2e（JDK 21）⊇ 1029 例基线
+│         ◀── C1d-a（a1–a4）、C1d-b、FS-C2、boot layer 全部合入
+│
+├─ 【近期】阶段 C 之后，依赖 C4 收官
+│   │
+│   ├─ ⏳ scripts-into-rava S6–S8（2026-10-01-scripts-into-rava.md）
+│   │     S6 dyn 对照并入 rava（dyn crate，删 dyn_compare.py / dyn_agent）◀── C4 收官（dyn_compare 改动冻结）
+│   │      └─▶ S7 run_tests 拆 scripts/e2e/，预留形态接口 ──▶ S8 产品路径 Python 归零、计划结项
+│   │
+│   ├─ ⏳ JUnit 依赖包作为测试（2026-10-01-junit-crate-as-test-harness.md）
+│   │     步骤 0 m1..m5 Rust 路径复跑 golden，清零回归（可提前；m3 编译 0 ✅，运行期存根由 C1d-b b0 处理）
+│   │      └─▶ 步骤 A：63_junit 形态接入 run_tests ◀── S7 ──▶ 步骤 B ──▶ 步骤 C
+│   │
+│   └─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
+│         （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
+│
+├─ 【中期】优化线（用户 2026-10-01 决定暂停，C 阶段收官后恢复；精度 / 效率优化都要做）
+│   │
+│   ├─ ⏸ 闭包分析效率 P8 余量、sites（optimization-directions §三.2）
+│   ├─ ⏸ 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）
+│   ├─ ◇ S7 统一对象句柄 + 每类静态描述符 ─┐
+│   ├─ ◇ T1 跨测试编译复用（2026-10-01-cross-test-compile-reuse.md）─┴─ Q3：方案定稿后由用户一次决策
+│   │     └─▶ T4 生成器只构建一次再分发（待服务器核实）
+│   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线）
+│
+└─ 【远期】
+    ├─ ◇ 线程模型终态：单线程协作调度深化，或改真并发（2026-09-26-real-multithreading.md）
+    │     ◀── VirtualThread 调查 + 真实语料需求（long-term-roadmap §四 决策 2）
+    ├─ ⏳ 真实项目 pilot：P1 commons-lang3 对账 harness ◀── JUnit 步骤 C、T1 / S7 决策
+    │     └─▶ Spring Boot 等知名项目完整转译 ◀── 线程模型终态、反射 / 动态代理完备
+    └─ ⏳ 产品化：构建流程集成（开发者写 Java、构建自动出原生二进制）──▶ 公开 Demo 与性能对比
+          ◀── 真实项目 pilot、R1 运行性能（2026-09-18-product-vision.md）
+```
+
+### 二、关键路径
+
+```
+C1d-a a1 具体求值器 ──▶ a2 合入 1e623cec ──▶ a3 jvm_boundary 归零 ─┐
+C1d-b b1 序列化收窄 ───────────────────────────────────────────────┤
+C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
+native-gaps ✅ ──▶ FS-C2 ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
+               └─▶ regress2 栈帧来源统一 ✅ be1b97be ─────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
+```
+
+工期瓶颈是 C1d-a：具体求值器把正式闭包降到 ≤360 类之前，1e623cec 不能合入，C4 全量 e2e 也不能启动。
+
+---
+
 ## 🔴 活跃任务
+
+> 依赖关系见上方「任务依赖树」。本表只列在途分支的当前状态。
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
+| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | 具体求值器 engine/concrete/ 判定三道闸门；正式 HelloWorld ≈3091 类 / ≈600 s → ≤360 类、≤3 s；之后合入 1e623cec、139 个 `#[jvm_boundary]` 归零、TestCharsetNamedStreams |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | c72bfd88（lib crate `pub(crate)` 成员发反射臂，修 m3 serialVersionUID）待合入，先修 ArrayList.writeObject 分派存根与 TestReflectProbe；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
+| FS-C2 应用类加载器 | 🔄 fs-c2 | `2026-10-02-fs-c2-app-classloader.md`；TestClassNestNatives 为已知失败 |
+| regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
+| boot layer | ⏳ | ModuleBootstrap 引导建层；◀── C1d-a a2、FS-C2 |
+| C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
+| 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
 
 ---
 

@@ -18,7 +18,7 @@ pub(super) fn object_structs(file: &syn::File) -> HashSet<String> {
     file.items
         .iter()
         .filter_map(|i| match i {
-            syn::Item::Impl(im) if vtable_trait(im).is_some() => syntax::type_path(&im.self_ty),
+            syn::Item::Impl(im) if vtable_trait(im).is_some() => stype::type_path(&im.self_ty),
             _ => None,
         })
         .filter_map(|t| (t.len() == 1 && local.contains(&t[0])).then(|| t[0].clone()))

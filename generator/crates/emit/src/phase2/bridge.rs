@@ -10,10 +10,10 @@ use std::collections::{BTreeSet, VecDeque};
 use classfile::{acc, Method, Operand};
 use ty::ident::safe_ident;
 use ty::type_map::{parse_descriptor_params, parse_descriptor_return};
-use ty::ClassInfo;
+use ty::{ClassInfo, RsType};
 
 use super::sig::{param_mapping, param_part, result_inner, sig_param_types, substitute_type_params};
-use super::{anc_args, class_params, Emissions};
+use super::{anc_args, class_params, substituted_classes, Emissions};
 use crate::class_writer::inherit::interface_special_member_name;
 use crate::class_writer::slot::override_vtable_erasure;
 use crate::ctx::EmitCtx;
@@ -44,7 +44,7 @@ fn resolve_method_owner<'c>(ctx: &EmitCtx<'c>, cls: &str, mname: &str, desc: &st
 }
 
 /// bridge 方法体里被桥接的真实方法：(声明类, 真实描述符)
-fn bridge_call_target<'c>(ctx: &EmitCtx<'c>, owner: &ClassInfo, bridge: &Method, mname: &str) -> Option<(&'c ClassInfo, String)> {
+pub(crate) fn bridge_call_target<'c>(ctx: &EmitCtx<'c>, owner: &ClassInfo, bridge: &Method, mname: &str) -> Option<(&'c ClassInfo, String)> {
     let code = ctx.input.code_ops(owner.name(), bridge)?;
     for insn in code.ops().rev() {
         let Operand::Method(r, _) = &insn.operand else { continue };
@@ -98,11 +98,13 @@ pub fn resolve_bridge_target<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, mname: &s
 pub struct BridgeMember<'c> {
     /// wrapper 成员名（槽位声明者名；纯接口桥接按接收者视角）
     pub member_name: String,
-    /// vtable 槽位声明类短名（纯接口桥接为空）
-    pub vt_short: String,
+    /// vtable 槽位声明类 binary（纯接口桥接为空）
+    pub vt_bin: String,
     /// 真实方法签名与调用名（接收者视角）
     pub real_sig: String,
     pub real_rust: String,
+    /// 真实方法签名（接收者视角代入后）引用的类 binary
+    pub real_classes: Vec<String>,
     /// 真实方法在祖先时的补充需求 (名, 参数描述符)
     pub real_want: Option<(String, String)>,
     pub bridge: &'c Method,
@@ -112,7 +114,7 @@ pub struct BridgeMember<'c> {
 
 fn find_slot<'e>(em: &'e ClassEmission, name: &str, param_desc: &str, covariant_desc: Option<&str>) -> Option<&'e EmittedMethod> {
     match covariant_desc {
-        Some(d) => em.methods.iter().find(|m| m.name == name && m.descriptor == d),
+        Some(d) => em.slotted().find(|m| m.name == name && m.descriptor == d),
         None => em.find(name, param_desc),
     }
 }
@@ -129,12 +131,12 @@ fn climb_slot<'e>(
 ) -> (String, &'e EmittedMethod) {
     let reg = ctx.ty.reg;
     let (mut slot_cur, mut slot_m) = (start.to_string(), found);
-    while !slot_m.virtual_in.is_empty() && slot_m.virtual_in != ctx.short(&slot_cur) {
+    while !slot_m.virtual_in.is_empty() && slot_m.virtual_in != slot_cur {
         let mut up = slot_cur.clone();
         let mut up_seen = BTreeSet::new();
         let mut nxt = None;
         while !up.is_empty() && up != lang::OBJECT && reg.contains(&up) && up_seen.insert(up.clone()) {
-            if ctx.short(&up) == slot_m.virtual_in {
+            if up == slot_m.virtual_in {
                 nxt = Some(up.clone());
                 break;
             }
@@ -197,29 +199,33 @@ pub fn resolve_bridge_member<'c>(
         return None;
     }
 
-    let (real_sig, real_rust, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
-        Some(m) => (m.signature.clone(), m.rust_name.clone(), None),
+    let (real_sig, real_rust, real_classes, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
+        Some(m) => {
+            let classes = m.sig.classes().into_iter().map(str::to_string).collect();
+            (m.signature(&ctx.ty), m.rust_name.clone(), classes, None)
+        }
         None => {
             let owner_em = ems.get(real_owner_ci.name()).filter(|e| !e.handwritten)?;
             let found = owner_em.find(name, &real_param)?;
             let owner_args = anc_args(ctx, recv_ci).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a);
             let mapping = param_mapping(&class_params(ctx, real_owner_ci), &owner_args.unwrap_or_default());
-            let sig = substitute_type_params(&found.signature, &mapping);
+            let sig = substitute_type_params(&found.signature(&ctx.ty), &mapping);
             let rust = ctx.ty.receiver_member_name(&found.name, &found.descriptor, recv_ci);
-            (sig, rust, Some((name.to_string(), real_param.clone())))
+            let owner_args_ty = ctx.ty.ancestor_type_args(recv_ci, None).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a).unwrap_or_default();
+            let classes = substituted_classes(ctx, &found.sig, real_owner_ci.name(), &owner_args_ty);
+            (sig, rust, classes, Some((name.to_string(), real_param.clone())))
         }
     };
 
     let cov = covariant.then_some(bridge.desc.as_str());
-    let (mut vt_short, mut member_name, mut slot_bin) = (String::new(), String::new(), String::new());
+    let (mut vt_bin, mut member_name) = (String::new(), String::new());
     let mut cur = recv_ci.super_class().to_string();
     let mut seen = BTreeSet::new();
     while !cur.is_empty() && cur != lang::OBJECT && reg.contains(&cur) && seen.insert(cur.clone()) {
         if let Some(found) = ems.get(&cur).filter(|e| !e.handwritten).and_then(|e| find_slot(e, name, param_desc, cov)) {
             let (slot_cur, slot_m) = climb_slot(ctx, ems, &cur, found, name, param_desc, cov);
-            vt_short = ctx.short(&slot_cur);
             member_name = if slot_m.vtable_name.is_empty() { slot_m.rust_name.clone() } else { slot_m.vtable_name.clone() };
-            slot_bin = slot_cur;
+            vt_bin = slot_cur;
             break;
         }
         cur = reg.get(&cur).map(|c| c.super_class().to_string()).unwrap_or_default();
@@ -228,7 +234,7 @@ pub fn resolve_bridge_member<'c>(
         member_name = ctx.ty.interface_member_local_name(recv_ci, name, &bridge.desc);
     }
     let mut vtable_name = String::new();
-    if covariant && vt_short.is_empty() {
+    if covariant && vt_bin.is_empty() {
         return None;
     }
     if member_name == real_rust {
@@ -236,13 +242,13 @@ pub fn resolve_bridge_member<'c>(
             return None;
         }
         vtable_name = member_name;
-        let slot_ci = reg.get(&slot_bin)?;
+        let slot_ci = reg.get(&vt_bin)?;
         member_name = safe_ident(&interface_special_member_name(ctx, slot_ci, name, &bridge.desc));
         if member_name == real_rust {
             return None;
         }
     }
-    Some(BridgeMember { member_name, vt_short, real_sig, real_rust, real_want, bridge, vtable_name })
+    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_classes, real_want, bridge, vtable_name })
 }
 
 /// 本类的协变返回覆盖已声明 (name, param_desc)，但同参异返回的 ACC_BRIDGE 桥承担的是另一个
@@ -261,7 +267,7 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
             .collect()
     };
     let mut bridges = bridges_of(recv_ci);
-    if !bridges.is_empty() && own.virtual_in == ctx.short(recv_bin) {
+    if !bridges.is_empty() && own.virtual_in == recv_bin {
         return true;
     }
     if bridges.is_empty() {
@@ -283,7 +289,7 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
         while !cur.is_empty() && seen.insert(cur.clone()) {
             let Some(sci) = reg.get(&cur) else { break };
             if sci.methods().iter().any(|m| m.name == name && m.desc == desc && !m.is_static()) {
-                root = ctx.short(&cur);
+                root = cur.clone();
             }
             cur = sci.super_class().to_string();
         }
@@ -295,10 +301,11 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
     })
 }
 
-/// 桥接转发成员声明：(声明文本, 导入扫描用签名文本, 真实方法的补充需求)
+/// 桥接转发成员声明：(声明文本, 签名与转发体引用的类, 真实方法的补充需求)
 pub struct BridgeDecl {
     pub decl: String,
     pub sig_text: String,
+    pub classes: Vec<String>,
     pub real_want: Option<(String, String)>,
 }
 
@@ -313,24 +320,32 @@ pub fn bridge_override_member(
     ems: &Emissions,
 ) -> Option<BridgeDecl> {
     let r = resolve_bridge_member(ctx, recv_ci, name, param_desc, ems, Some(recv), true)?;
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let bridge = r.bridge;
     let eff = class_params(ctx, recv_ci);
     let es = ctx.ty.emitted_method_sig_types(recv_ci, bridge, &eff);
-    let param_tys: Vec<String> = if es.params.is_empty() {
-        parse_descriptor_params(&bridge.desc).iter().map(|p| ctx.ty.jvm_to_rust(p).render(names)).collect()
+    let param_rs: Vec<RsType> = if es.params.is_empty() {
+        parse_descriptor_params(&bridge.desc).iter().map(|p| ctx.ty.jvm_to_rust(p)).collect()
     } else {
-        es.params.iter().map(|t| t.render(names)).collect()
+        es.params.clone()
     };
+    let param_tys: Vec<String> = param_rs.iter().map(|t| t.render(names)).collect();
     let ret_desc = parse_descriptor_return(&bridge.desc);
     let sig_ret = es.ret.render(names);
-    let ret_ty = if ret_desc == "V" {
-        "()".to_string()
+    let ret_rs = if ret_desc == "V" {
+        RsType::Unit
     } else if !sig_ret.is_empty() && sig_ret != "()" {
-        sig_ret
+        es.ret.clone()
     } else {
-        ctx.ty.jvm_to_rust(ret_desc).render(names)
+        ctx.ty.jvm_to_rust(ret_desc)
     };
+    let ret_ty = ret_rs.render(names);
+    let mut classes: Vec<&str> = Vec::new();
+    for t in param_rs.iter().chain(std::iter::once(&ret_rs)) {
+        t.collect_classes(&mut classes);
+    }
+    let mut classes: Vec<String> = classes.into_iter().map(str::to_string).collect();
+    classes.extend(r.real_classes.iter().cloned());
     let params: Vec<String> = param_tys.iter().enumerate().map(|(i, t)| format!("arg{i}: {t}")).collect();
     let signature = format!("pub fn {}(&self, {}) -> Result<{ret_ty}>", r.member_name, params.join(", "));
 
@@ -365,16 +380,16 @@ pub fn bridge_override_member(
     } else if bridge.access & acc::PROTECTED != 0 {
         parts.push("access = \"protected\"".into());
     }
-    if !r.vt_short.is_empty() {
-        parts.push(format!("virtual_in = \"{}\"", r.vt_short));
+    if !r.vt_bin.is_empty() {
+        parts.push(format!("virtual_in = \"{}\"", ctx.short(&r.vt_bin)));
         if !r.vtable_name.is_empty() {
             parts.push(format!("vtable_name = \"{}\"", r.vtable_name));
         }
-        let erasure = override_vtable_erasure(ctx, recv_ci, bridge, &r.vt_short);
+        let erasure = override_vtable_erasure(ctx, recv_ci, bridge, &r.vt_bin);
         if !erasure.is_empty() {
             parts.push(format!("vtable_erasure = \"{}\"", erasure.join(";")));
         }
     }
     let decl = format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", "));
-    Some(BridgeDecl { sig_text: decl.clone(), decl, real_want: r.real_want })
+    Some(BridgeDecl { sig_text: decl.clone(), decl, classes, real_want: r.real_want })
 }

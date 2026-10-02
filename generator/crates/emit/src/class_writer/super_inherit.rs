@@ -23,6 +23,7 @@ use super::methods::{BodySpec, Cx, Emitted};
 use super::slot::override_vtable_erasure;
 use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
+use crate::emission::MethodBlock;
 use crate::error::Result;
 use crate::vtable::param_part;
 
@@ -110,7 +111,7 @@ pub(super) fn superclass_virtual_inheritance(
     state: &mut ProjectState,
     bodies: &dyn MethodBodyEmitter,
     visible: &[&Method],
-    out: &mut Vec<String>,
+    out: &mut Vec<MethodBlock>,
 ) -> Result<()> {
     let (ctx, ci) = (cx.ctx, cx.ci);
     let sup0 = ci.super_class();
@@ -182,7 +183,7 @@ fn user_ancestor_block(
     visible: &[&Method],
     a: &Anc<'_>,
     bridge: Option<usize>,
-) -> Result<Option<String>> {
+) -> Result<Option<MethodBlock>> {
     let (ctx, ci, vm) = (cx.ctx, cx.ci, a.vm);
     let virt_in = ctx.resolve_virtual_slot(vm, a.sci);
     if virt_in.is_empty() {
@@ -196,13 +197,13 @@ fn user_ancestor_block(
         return Ok(None); // 槽位已由本类可见覆盖经协变落位填充
     }
     let vm_is_bridge = vm.access & ACC_BRIDGE != 0;
-    if vm_is_bridge && a.user && virt_in == ctx.short(a.sci.name()) {
+    if vm_is_bridge && a.user && virt_in == a.sci.name() {
         return Ok(None); // 祖先自身的桥只承载接口槽位
     }
-    let own_short = ctx.short(ci.name());
     let mangled = mangle_name(&ctx.manifest.ty, &vm.name, &vm.desc);
-    let mut extra = MethodAttrExtra { virtual_in: virt_in.clone(), ..Default::default() };
-    if vm_is_bridge && virt_in != own_short {
+    // 祖先方法体按本类重发射：方法仍由祖先声明（反射声明表、栈帧归属以祖先为准）
+    let mut extra = MethodAttrExtra { virtual_in: virt_in.clone(), declared_by: a.sci.name().to_string(), ..Default::default() };
+    if vm_is_bridge && virt_in != ci.name() {
         let slot = ctx.slot_member_rust_name(vm, ci);
         if !slot.is_empty() && slot != mangled {
             extra.vtable_name = slot;
@@ -210,12 +211,11 @@ fn user_ancestor_block(
         extra.vtable_erasure = override_vtable_erasure(ctx, ci, vm, &virt_in);
     }
     let e = Emitted { method: Cow::Borrowed(vm), owner: a.sci, index: a.index };
-    let attr = cx.attr(&e, &extra);
     if let Some(bi) = bridge.filter(|_| a.in_cc) {
         let b = &ci.methods()[bi];
-        let base = bridge_wrapper_name(ctx, visible, b, &virt_in, a.sci.name());
+        let base = bridge_wrapper_name(ctx, visible, b, &virt_in);
         let mut bx = MethodAttrExtra { virtual_in: virt_in.clone(), ..Default::default() };
-        if virt_in != own_short {
+        if virt_in != ci.name() {
             let slot = ctx.slot_member_rust_name(vm, ci);
             if !slot.is_empty() && slot != base {
                 bx.vtable_name = slot;
@@ -224,8 +224,8 @@ fn user_ancestor_block(
         }
         let be = Emitted::declared(ci, bi);
         let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&base), in_vtable_body: true, view: None, site: "bridge" };
-        if let Some(text) = cx.body_with(state, bodies, &be, &spec)? {
-            return Ok(Some(format!("{}\n{text}", cx.attr(&be, &bx))));
+        if let Some(f) = cx.body_with(state, bodies, &be, &spec)? {
+            return Ok(Some(cx.block(&be, &bx, f.text, f.sig.as_ref(), true)));
         }
         if visible.iter().any(|m| m.name == vm.name && param_part(&m.desc) == param_part(&vm.desc)) {
             return Ok(None);
@@ -237,17 +237,15 @@ fn user_ancestor_block(
         let spec = BodySpec { ctparams: cx.tps, rust_name: None, in_vtable_body: true, view: None, site: "super-inherit" };
         cx.body_with(state, bodies, &e, &spec)?
     };
-    let text = text.unwrap_or_else(|| cx.stub(&e, "", cx.tps).text);
-    Ok(Some(format!("{attr}\n{text}")))
+    Ok(Some(cx.body_block(&e, &extra, text, "", cx.tps)))
 }
 
 /// 桥 wrapper 名：与可见方法同名即 mangle；同名同参（仅返回不同）取 `Iface_super_m` 形态唯一名
-fn bridge_wrapper_name(ctx: &EmitCtx<'_>, visible: &[&Method], b: &Method, virt_in: &str, sup: &str) -> String {
+fn bridge_wrapper_name(ctx: &EmitCtx<'_>, visible: &[&Method], b: &Method, owner_bin: &str) -> String {
     if !visible.iter().any(|m| m.name == b.name) {
         return b.name.clone();
     }
     if visible.iter().any(|m| m.name == b.name && param_part(&m.desc) == param_part(&b.desc)) {
-        let owner_bin = ctx.ty.names.binary_of(virt_in).unwrap_or(sup);
         if let Some(owner) = ctx.ty.reg.get(owner_bin) {
             return safe_ident(&interface_special_member_name(ctx, owner, &b.name, &b.desc));
         }

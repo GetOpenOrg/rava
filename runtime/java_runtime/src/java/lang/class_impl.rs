@@ -376,7 +376,7 @@ impl Class {
     /// native `getConstantPool()`：本类常量池视图（HotSpot 返回持 constantPoolOop 的
     /// ConstantPool）。原生二进制的常量池是注解属性引用的稀疏表，以本 Class 作为
     /// constantPoolOop，ConstantPool natives 按类名查表（constant_pool_impl.rs）。
-    #[jvm_native(upcalls = "jdk/internal/reflect/ConstantPool.<init>:()V")]
+    #[jvm_native]
     pub fn getConstantPool(&self) -> Result<crate::jdk::internal::reflect::ConstantPool> {
         let cp = crate::jdk::internal::reflect::ConstantPool::new()?;
         cp.__set_constantPoolOop(Object::from(Clone::clone(self)));
@@ -483,7 +483,7 @@ impl Class {
     /// （JLS §12.4.1 / FS-C5）：经 main 启动时登记的类初始化钩子（有 `<clinit>` 的用户类）
     /// 按名代调 `__class_init`，初始化异常按状态机语义传播（ExceptionInInitializerError /
     /// 其后 NoClassDefFoundError）；initialize=false 只取 Class 对象（init-passive）。
-    #[jvm_native(upcalls = "java/lang/ClassNotFoundException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn forName0(name: String, initialize: bool, _loader: crate::java::lang::ClassLoader,
                     _caller: Class) -> Result<Class> {
         let dotted = format!("{}", name);
@@ -513,9 +513,9 @@ impl Class {
     /// RecordComponent：clazz=本类、type=描述符还原、accessor=同名无参声明方法、
     /// signature=泛型签名（无则 null）。非 record（表中缺席）→ null（JDK 语义）。
     /// 消费方：ObjectStreamClass 的 record 序列化（规范构造器 / 分量取值）。
-    /// upcalls：RecordComponent 由此处构造（无 `new` 指令可见）→ 声明其构造器使 BFS
-    /// 记为已实例化（toString 等覆盖经 Object 视图可达）；访问器经 getDeclaredMethod 查询。
-    #[jvm_native(upcalls = "java/lang/reflect/RecordComponent.<init>:()V java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;")]
+    /// RecordComponent 由此处构造（无 `new` 指令可见，闭包分析按手写体的构造调用记为已实例化，
+    /// toString 等覆盖经 Object 视图可达）；访问器经 getDeclaredMethod 查询。
+    #[jvm_native]
     pub fn getRecordComponents0(&self) -> Result<JArray<crate::java::lang::reflect::RecordComponent>> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
         let comps: &[(&str, &str, &str)] = match crate::meta::record_components().iter().find(|(c, _)| *c == name) {
@@ -547,10 +547,18 @@ impl Class {
         Ok(Default::default())
     }
 
-    /// native `getSigners()`：无 jar 签名者——null（未签名类的 JDK 返回值）。
+    /// native `getSigners()`：HotSpot `JVM_GetClassSigners`——基本类型或未经 setSigners 记录 → null
+    /// （原生二进制无 jar 签名者，未签名类的 JDK 返回值）；已记录 → 返回其 Object[] 副本。
     #[jvm_native]
     pub fn getSigners(&self) -> Result<JArray<Object>> {
-        Ok(Default::default())
+        if self.isPrimitive()? {
+            return Ok(Default::default());
+        }
+        let key = self.__slash_name();
+        Ok(match _signers_table(|t| t.get(&key).cloned()) {
+            Some(a) if !a.is_jvm_null() => JArray::from(a.to_vec()),
+            _ => Default::default(),
+        })
     }
 }
 
@@ -814,7 +822,7 @@ impl Class {
     /// `enumConstantDirectory` 字段。原生侧枚举宇宙取运行时常量目录（`java_class!` 宏在类初始化
     /// 后登记，与 `JavaLangAccess.getEnumConstantsShared` 同源），其余逐句同 JDK：先查字段缓存；
     /// 非枚举类（修饰符无 ACC_ENUM）抛 `IllegalArgumentException(getName() + " is not an enum class")`。
-    #[jvm_boundary(upcalls = "java/util/HashMap.<init>:()V java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; java/lang/IllegalArgumentException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_boundary]
     pub fn __impl_enumConstantDirectory(&self) -> Result<crate::java::util::Map<Object, Object>> {
         let cached = self.__get_enumConstantDirectory();
         if !cached.is_jvm_null() {
@@ -866,4 +874,72 @@ impl Class {
         }
         Ok(crate::java::lang::reflect::Method::default())
     }
+}
+
+// ── 嵌套成员 / 访问标志 / 签名者 native（数据源 = 元数据表；HotSpot 读同一 class 文件属性）────
+impl Class {
+    /// 实例类（非数组、非基本类型）的斜线名；数组 / 基本类型 → None。
+    fn __instance_klass_name(&self) -> Result<Option<std::string::String>> {
+        let key = self.__slash_name();
+        Ok(if key.starts_with('[') || self.isPrimitive()? { None } else { Some(key) })
+    }
+
+    /// native `getDeclaredClasses0()`：InnerClasses 中 outer 为本类、inner 非本类的条目（属性序），
+    /// HotSpot `JVM_GetDeclaredClasses` 同源；数组 / 基本类型 → 空数组（同 HotSpot）。
+    #[jvm_native]
+    pub fn getDeclaredClasses0(&self) -> Result<JArray<Class>> {
+        if self.__instance_klass_name()?.is_none() {
+            return Ok(JArray::from(Vec::<Class>::new()));
+        }
+        let members: &[&str] = self.__nest().map(|m| m.members).unwrap_or(&[]);
+        Ok(JArray::from(members.iter().map(|n| Class::for_class(String::from(*n))).collect::<Vec<Class>>()))
+    }
+
+    /// native `getNestMembers0()`：嵌套宿主在首位，其后为宿主 NestMembers 属性所列成员（声明序），
+    /// HotSpot `JVM_GetNestMembers` 同形；非宿主类先取其宿主（getNestHost0）再列宿主的成员；
+    /// 数组 / 基本类型 → 仅自身（`Class.getNestMembers` 在 Java 侧已对其短路，此处与 VM 同解）。
+    #[jvm_native]
+    pub fn getNestMembers0(&self) -> Result<JArray<Class>> {
+        if self.__instance_klass_name()?.is_none() {
+            return Ok(JArray::from(vec![Clone::clone(self)]));
+        }
+        let host = self.getNestHost0()?;
+        let host_name = host.__slash_name();
+        let mut out = vec![Clone::clone(&host)];
+        if let Some((_, list)) = crate::meta::nest_members().iter().find(|(n, _)| *n == host_name) {
+            out.extend(list.iter().map(|n| Class::for_class(String::from(*n))));
+        }
+        Ok(JArray::from(out))
+    }
+
+    /// native `getClassAccessFlagsRaw0()`：类文件 access_flags 原值（含 ACC_SUPER / ACC_SYNTHETIC，
+    /// 不含 InnerClasses 条目的修饰符），HotSpot `JVM_GetClassAccessFlags`：基本类型 →
+    /// `ACC_ABSTRACT | ACC_FINAL | ACC_PUBLIC`（0x411）；数组类 → 0（JDK 21 实测同值）。
+    #[jvm_native]
+    pub fn getClassAccessFlagsRaw0(&self) -> Result<i32> {
+        if self.isPrimitive()? {
+            return Ok(0x0411);
+        }
+        let key = self.__slash_name();
+        Ok(crate::meta::class_access_flags().iter().find(|(n, _)| *n == key).map_or(0, |(_, f)| *f))
+    }
+
+    /// native `setSigners(Object[])`：记录类的签名者（HotSpot `JVM_SetClassSigners` 写镜像注入字段
+    /// `signers`；基本类型类不记录）。镜像按类名唯一（for_class 缓存），以类名为键的进程表承载该注入
+    /// 状态；读取方为同文件的 `getSigners`。
+    #[jvm_native]
+    pub fn setSigners(&self, signers: JArray<Object>) -> Result<()> {
+        if !self.isPrimitive()? {
+            _signers_table(|t| { t.insert(self.__slash_name(), signers); });
+        }
+        Ok(())
+    }
+}
+
+/// 类镜像注入字段 `signers` 的承载表（类名 → 签名者数组）。
+fn _signers_table<R>(f: impl FnOnce(&mut HashMap<std::string::String, JArray<Object>>) -> R) -> R {
+    crate::__process_static! {
+        static SIGNERS: RefCell<HashMap<std::string::String, JArray<Object>>> = RefCell::new(HashMap::new());
+    }
+    SIGNERS.with(|t| f(&mut t.borrow_mut()))
 }

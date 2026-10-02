@@ -15,5 +15,7 @@ include!(concat!(env!("OUT_DIR"), "/record_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/nest_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/interfaces_table.rs"));
 include!(concat!(env!("OUT_DIR"), "/class_anno_table.rs"));
-include!(concat!(env!("OUT_DIR"), "/services_table.rs"));
-include!(concat!(env!("OUT_DIR"), "/system_properties.rs"));
+// 闭包派生表（模块服务 / VM 初始系统属性）：发射层每次构建写入 scratch 的 closure_input/（与本 crate 同级）
+include!("../../closure_input/closure_tables.rs");
+// Java 栈帧行表（FS-E1）：发射层扫描落盘文本的行标记写入 closure_input/
+include!("../../closure_input/line_tables.rs");

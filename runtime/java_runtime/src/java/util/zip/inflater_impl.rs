@@ -64,7 +64,7 @@ impl Inflater {
     }
 
     /// native `init(boolean nowrap)`：inflateInit2（nowrap → 原始 deflate，-MAX_WBITS）。
-    #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn init(nowrap: bool) -> Result<i64> {
         let z = lib()?;
         let addr = zlib::alloc_stream();
@@ -85,7 +85,7 @@ impl Inflater {
 
     /// native `setDictionary(long, byte[], int, int)`：inflateSetDictionary；流状态不符 →
     /// IllegalArgumentException。
-    #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn setDictionary_l_arr_b_i_i(addr: i64, b: JArray<i8>, off: i32, len: i32) -> Result<()> {
         let z = lib()?;
         let dict = copy_in(&b, off, len)?;
@@ -104,7 +104,7 @@ impl Inflater {
     /// 返回值编码 inputUsed | outputUsed<<31 | finished<<62 | needDict<<63（Inflater.c
     /// checkInflateStatus）。Z_NEED_DICT / Z_DATA_ERROR 回写 inputConsumed / outputConsumed；
     /// Z_DATA_ERROR 抛 DataFormatException(strm->msg)。
-    #[jvm_native(upcalls = "java/util/zip/DataFormatException.<init>:(Ljava/lang/String;)V java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn inflateBytesBytes(&self, addr: i64, input: JArray<i8>, input_off: i32, input_len: i32,
                              output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
         let inbuf = copy_in(&input, input_off, input_len)?;
@@ -115,7 +115,7 @@ impl Inflater {
     }
 
     /// native `inflateBytesBuffer(addr, in, inOff, inLen, outAddr, outLen)`：输出为直接缓冲区。
-    #[jvm_native(upcalls = "java/util/zip/DataFormatException.<init>:(Ljava/lang/String;)V java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn inflateBytesBuffer(&self, addr: i64, input: JArray<i8>, input_off: i32, input_len: i32,
                               output_addr: i64, output_len: i32) -> Result<i64> {
         let inbuf = copy_in(&input, input_off, input_len)?;
@@ -124,7 +124,7 @@ impl Inflater {
     }
 
     /// native `inflateBufferBytes(addr, inAddr, inLen, out, outOff, outLen)`：输入为直接缓冲区。
-    #[jvm_native(upcalls = "java/util/zip/DataFormatException.<init>:(Ljava/lang/String;)V java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn inflateBufferBytes(&self, addr: i64, input_addr: i64, input_len: i32,
                               output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
         let mut outbuf = vec![0u8; output_len.max(0) as usize];
@@ -134,7 +134,7 @@ impl Inflater {
     }
 
     /// native `inflateBufferBuffer(addr, inAddr, inLen, outAddr, outLen)`：输入输出均为直接缓冲区。
-    #[jvm_native(upcalls = "java/util/zip/DataFormatException.<init>:(Ljava/lang/String;)V java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn inflateBufferBuffer(&self, addr: i64, input_addr: i64, input_len: i32,
                                output_addr: i64, output_len: i32) -> Result<i64> {
         let r = inflate_raw(addr, input_addr as *const u8, input_len, output_addr as *mut u8, output_len)?;
@@ -163,7 +163,7 @@ impl Inflater {
     }
 
     /// native `setDictionaryBuffer(long addr, long bufAddress, int len)`：字典来自直接缓冲区。
-    #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn setDictionaryBuffer(addr: i64, buf_addr: i64, len: i32) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流；buf_addr 为直接内存地址，len 已由 Java 侧界检查
@@ -185,7 +185,7 @@ impl Inflater {
     }
 
     /// native `reset(long)`：inflateReset。
-    #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn reset_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流
@@ -196,7 +196,7 @@ impl Inflater {
     }
 
     /// native `end(long)`：inflateEnd 并释放流。
-    #[jvm_native(upcalls = "java/lang/InternalError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn end_l(addr: i64) -> Result<()> {
         let z = lib()?;
         // SAFETY: addr 为活动流，end 之后 Java 侧不再使用该地址

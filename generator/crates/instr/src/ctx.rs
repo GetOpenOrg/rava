@@ -183,7 +183,7 @@ impl<'a> InstrCtx<'a> {
 
     /// binary → Rust 短名
     pub fn short(&self, binary: &str) -> String {
-        self.ty.names.short(binary).into_owned()
+        self.ty.short(binary)
     }
 
     /// 指令出处类的类文件（invokedynamic 的 bootstrap 方法表取自此处）

@@ -25,7 +25,7 @@
 //! （`reflect_dispatch::reflect_invoke`，与 `Method.invoke` 同一协议）按描述符拆装箱。
 
 use crate::prelude::*;
-use super::method_handle::implref::MethodHandle;
+use super::method_handle::MethodHandle;
 use super::{LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
 use crate::java::lang::Class;
 
@@ -283,25 +283,21 @@ fn invoke_unsafe(name: &str, argv: Vec<Object>) -> Result<Object> {
 impl MethodHandle {
     /// native `invokeBasic(Object...)`：解释执行本句柄的 LambdaForm（无类型检查——
     /// 调用方保证基本类型形态一致，JDK 语义）。
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn invokeBasic(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// native `invokeExact(Object...)`：无调用点类型的入口（翻译字节码内部调用）按 invokeBasic
-    /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 vm_intrinsics.toml [sigpoly]）。
-    ///
-    /// upcalls：调用点类型检查 / 适配用到的 JDK 方法（运行时 → Java 调用边，字节码不可见）。
-    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodHandle.type:()Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.toString:()Ljava/lang/String; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/invoke/WrongMethodTypeException.<init>:(Ljava/lang/String;)V java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String; java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 vm_intrinsics.toml [sigpoly]）；
+    /// 闭包分析把 `__site` 伴生体并入本成员（签名多态成员的调用点落地语义）。
+    #[jvm_native]
     pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// native `invoke(Object...)`：同上（用户调用点经 `invoke__site`）。
-    ///
-    /// upcalls：`invoke__site` 的调用点类型解析 / 比较 / asType 适配与解释执行的实参拆箱用到的 JDK 方法
-    ///（闭包分析把带类型调用点按本成员建模，`invoke__site` 体内的回调边须在此声明）。
-    #[jvm_native(upcalls = "java/lang/invoke/MethodType.fromMethodDescriptorString:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType; java/lang/invoke/MethodType.equals:(Ljava/lang/invoke/MethodType;)Z java/lang/invoke/MethodHandle.type:()Ljava/lang/invoke/MethodType; java/lang/invoke/MethodHandle.asType:(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle; java/lang/Integer.toString:()Ljava/lang/String; java/lang/Long.toString:()Ljava/lang/String; java/lang/Short.toString:()Ljava/lang/String; java/lang/Byte.toString:()Ljava/lang/String; java/lang/Character.toString:()Ljava/lang/String; java/lang/Boolean.toString:()Ljava/lang/String; java/lang/Float.toString:()Ljava/lang/String; java/lang/Double.toString:()Ljava/lang/String; java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn invoke(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
@@ -330,22 +326,22 @@ impl MethodHandle {
         interpret(adapted, args.to_vec())
     }
 
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn linkToStatic(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn linkToVirtual(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn linkToSpecial(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native(upcalls = "java/lang/Class.descriptorString:()Ljava/lang/String;")]
+    #[jvm_native]
     pub fn linkToInterface(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }

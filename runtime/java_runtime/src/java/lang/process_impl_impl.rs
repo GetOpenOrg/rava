@@ -170,7 +170,7 @@ impl ProcessImpl {
     /// `fds[i] == -1` 表示该标准流走管道（父进程保留另一端，回写到 `fds[i]`），否则是子进程
     /// 直接使用的描述符（INHERIT 为 0/1/2，文件重定向为已打开的描述符），回写 -1。
     /// redirectErrorStream 时子进程 stderr 复制 stdout，`fds[2]` 回写 -1（getErrorStream 为空流）。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     #[allow(clippy::too_many_arguments)]
     pub fn forkAndExec(&self, _mode: i32, _helperpath: JArray<i8>, prog: JArray<i8>,
                        arg_block: JArray<i8>, argc: i32, env_block: JArray<i8>, envc: i32,

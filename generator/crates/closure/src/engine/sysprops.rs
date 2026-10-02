@@ -289,7 +289,7 @@ impl Ctx<'_> {
         let mut params = vec![None; md.params.len() + base];
         params[i] = Some(self.sysprops_ref(&p.descriptor()));
         let live = |_: &str| true;
-        let a = absint::analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
         if a.conservative {
             return false;
         }

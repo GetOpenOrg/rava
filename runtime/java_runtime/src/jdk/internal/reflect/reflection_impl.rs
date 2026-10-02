@@ -8,247 +8,31 @@ use crate::java::util::Set;
 use crate::sync_model::__RefSlot as RefCell;
 use std::collections::HashMap;
 
-/// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
-///
-/// 翻译方法的符号形态（std Backtrace Display，随 rustc 版本而异）：
-/// - 包裹体形态：`<java_runtime::jdk::internal::reflect::reflection::Reflection>::getCallerClass`
-///   / `<Type as Trait>::m`（inherent / trait 方法的限定 Self 形态）；
-/// - 泛型形态两种：`...::AtomicReference::<Object>::__clinit`（rustc 1.98 实测）与
-///   `...::AtomicReference<V>::__clinit`（rustc 1.94 实测，泛型组紧贴类型段）；
-/// - 闭包尾巴：`...::{closure#0}`。
-/// 解析规则：
-/// - 跨模块 impl 组 `<impl T>` / `<impl Tr for T>` 取实现类型（_impl_self_type），
-///   限定 Self 包裹体取 Self 类型（_unwrap_qualified_self），再删除全部成对
-///   尖括号泛型组（_strip_generic_groups）——与泛型打印形态无关。旧实现取
-///   「首个 `<` 到首个 `>`」，在 1.94 形态下取到泛型形参 `V`，泛型类帧全部
-///   解析失败 → getCallerClass 越过调用者返回 null → MethodHandles.lookup
-///   抛 IllegalCallerException（TestAtomics 服务器侧 EIIE 根因）；
-/// - 从右向左跳过方法/函数段（小写或下划线开头、空段），首个大写开头段 = 类型段；
-/// - 类型段的 `_` 是内部类 `$` 分隔（Java 类名不含下划线，宏对嵌套类即此命名）；
-/// - 包段末段的「类文件 stem」（snake(类简单名)，如 atomic_reference / reflection /
-///   method_handles）不是 Java 包——codegen 每类一文件，类型自身模块名恰是 stem，
-///   归一化比较（去 `_`/`$` 后小写相等）命中即剥掉；不命中（非 java_runtime 形态）保留；
-/// - 包段的单词式关键字转义（尾随一个 `_`，如 `unsafe_`）剥掉下划线。
-/// - 用户 crate 帧（`<bin>::<包段…>::<stem>::Class::method`）同一规则解析（首段为 crate 根）。
-/// 解析不出（标准库 / 依赖帧、形态不符）返回 None。
-fn _java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
-    const KEYWORDS: &[&str] = &[
-        "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false",
-        "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
-        "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe",
-        "use", "where", "while",
-    ];
-    let path = _strip_generic_groups(&_unwrap_qualified_self(&_impl_self_type(symbol)));
-    // 翻译类所在 crate：JDK 类在 java_runtime，用户类在用户 crate（bin 名为 crate 根，
-    // 模块路径 = 包段 + 类文件 stem，与 java_runtime 同一布局）。Rust 标准库与第三方
-    // 依赖帧不是 Java 帧。
-    const NON_JAVA_CRATES: &[&str] = &[
-        "std", "core", "alloc", "parking_lot", "parking_lot_core", "lock_api", "backtrace",
-        "rustc_demangle", "gimli", "addr2line", "rava_macros",
-    ];
-    let in_runtime = path.contains("java_runtime::");
-    let start = match path.find("java_runtime::") {
-        Some(s) => s,
-        None => {
-            let first = path.split("::").next()?;
-            if first.is_empty() || !first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                || NON_JAVA_CRATES.contains(&first) {
-                return None;
-            }
-            0
-        }
-    };
-    let segs: Vec<&str> = path[start..].split("::").filter(|s| !s.is_empty()).collect();
-    // 从右向左找类型段（首个大写开头段；小写/下划线开头为方法或辅助函数段）
-    let mut idx = segs.len();
-    while idx > 0 {
-        let seg = segs[idx - 1];
-        match seg.chars().next() {
-            Some(c) if c.is_uppercase() => break,
-            _ => idx -= 1,
-        }
-    }
-    if idx < 2 {
-        return None; // 至少「crate 根 + 类型段」
-    }
-    let type_name = segs[idx - 1].replace('_', "$");
-    let mut pkg: Vec<std::string::String> = Vec::new();
-    for seg in &segs[1..idx - 1] {
-        if seg.is_empty() {
-            return None;
-        }
-        // 关键字转义模块（尾随 _）还原
-        let stripped = seg.strip_suffix('_').unwrap_or(seg);
-        if stripped.len() + 1 == seg.len() && KEYWORDS.contains(&stripped) {
-            pkg.push(stripped.to_owned());
-        } else {
-            pkg.push((*seg).to_owned());
-        }
-    }
-    // 末段若是类型自身文件的 stem（snake(类简单名)）则剥掉——它不是 Java 包段
-    if let Some(last) = pkg.last() {
-        let norm = |s: &str| -> std::string::String {
-            s.chars().filter(|c| *c != '_' && *c != '$').flat_map(|c| c.to_lowercase()).collect()
-        };
-        if norm(last) == norm(&type_name) {
-            pkg.pop();
-        }
-    }
-    if pkg.is_empty() {
-        // 无名包：只对用户 crate 成立（JDK 类恒在具名包）
-        return if in_runtime { None } else { Some(type_name) };
-    }
-    Some(format!("{}/{}", pkg.join("/"), type_name))
-}
-
-/// 跨模块 impl 形态 `mod::<impl Type<T>>::m` / `mod::<impl Trait for Type>::m`
-/// （`_impl.rs` 伴生方法与宏展开的 trait impl 即此形态，rustc 1.94 实测）→
-/// 实现类型的绝对路径 `Type<T>`：取深度 0 处 `<impl ` 组的内部，trait impl
-/// 取深度 1 的 ` for ` 之后。非此形态原样返回。
-fn _impl_self_type(symbol: &str) -> std::string::String {
-    let Some(open) = symbol.find("<impl ") else { return symbol.to_owned() };
-    // 须是深度 0 的组（泛型实参内部的 `<impl` 不是 Self 路径）
-    if symbol[..open].matches('<').count() != symbol[..open].matches('>').count() {
-        return symbol.to_owned();
-    }
-    let body = &symbol[open + 1..];
-    let mut depth = 1usize;
-    let mut end = body.len();
-    let mut for_at: Option<usize> = None;
-    let bytes = body.as_bytes();
-    for (i, c) in body.char_indices() {
-        match c {
-            '<' => depth += 1,
-            '>' if i > 0 && bytes[i - 1] == b'-' => {}
-            '>' => {
-                depth -= 1;
-                if depth == 0 { end = i; break; }
-            }
-            _ if depth == 1 && for_at.is_none() && body[i..].starts_with(" for ") => for_at = Some(i + 5),
-            _ => {}
-        }
-    }
-    let inner = &body[..end];
-    match for_at {
-        Some(k) if k <= end => inner[k..].to_owned(),
-        _ => inner.trim_start_matches("impl ").to_owned(),
-    }
-}
-
-/// 限定 Self 包裹体 `<Type as Trait>::m` / `<Type>::m` → `Type`（成对尖括号
-/// 深度计数定位包裹体终点；` as ` 只在深度 1 处切分，泛型实参内的 ` as ` 不误切）。
-/// 非包裹形态原样返回。
-fn _unwrap_qualified_self(symbol: &str) -> std::string::String {
-    if !symbol.starts_with('<') {
-        return symbol.to_owned();
-    }
-    let mut depth = 0usize;
-    let mut out = std::string::String::new();
-    let bytes = symbol.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        match c {
-            '<' => { depth += 1; if depth > 1 { out.push(c); } }
-            // 函数指针类型的 `->` 不是尖括号
-            '>' if i > 0 && bytes[i - 1] == b'-' => out.push(c),
-            '>' => {
-                depth -= 1;
-                if depth == 0 { break; }
-                out.push(c);
-            }
-            _ if depth == 1 && symbol[i..].starts_with(" as ") => break,
-            _ => out.push(c),
-        }
-        i += 1;
-    }
-    out
-}
-
-/// 删除全部成对尖括号泛型组（含嵌套）：兼容 std Backtrace 的两种泛型打印——
-/// `Type<T>::m`（rustc 1.94 实测）与 `Type::<T>::m`（1.98 实测）；删后遗留的
-/// 空 `::` 段由调用方过滤。
-fn _strip_generic_groups(path: &str) -> std::string::String {
-    let mut depth = 0usize;
-    let mut out = std::string::String::new();
-    let mut prev = '\0';
-    for c in path.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' if prev == '-' => { if depth == 0 { out.push(c); } }
-            '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-        prev = c;
-    }
-    out
-}
-
-/// 捕获当前 Rust 栈的符号帧序列（std Backtrace Display 行 `   N: symbol`；
-/// `at file:line` 续行与序号列无关，跳过）。返回逐帧的 Java 声明类（解析不出
-/// 为 None）。
-fn _capture_frame_classes() -> Vec<Option<std::string::String>> {
-    let text = std::format!("{}", std::backtrace::Backtrace::force_capture());
-    let mut classes: Vec<Option<std::string::String>> = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let Some((idx, symbol)) = trimmed.split_once(": ") else { continue };
-        if idx.trim().parse::<u32>().is_err() {
-            continue; // `at file:line` 续行
-        }
-        classes.push(_java_class_of_symbol(symbol.trim()));
-    }
-    classes
-}
 
 impl Reflection {
     /// native `getCallerClass()`：`@CallerSensitive`——返回「调用 getCallerClass
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
     /// java.lang.reflect.Method.invoke）。
     ///
-    /// 帧源为 std::backtrace 的真实 Rust 栈（栈回溯数据面，compatibility.md
-    /// 「栈回溯」近似等价边界——与 throwable_impl 的 fillInStackTrace 同族；
-    /// 逐字节的 Java 帧元数据在原生二进制不存在）。跳帧规则：
-    ///   1. 定位本方法帧（声明类 jdk.internal.reflect.Reflection）；
-    ///   2. 其后第一帧组 = `@CallerSensitive` 声明者（如 MethodHandles.lookup）
-    ///      ——同一 Java 方法的多个 Rust 帧（含解析不出类的辅助帧）按类名
-    ///      聚合，整组跳过；
-    ///   3. 首个声明类不同的帧即调用者的调用者，返回其 Class。
-    /// 帧不可解析（匿名类 / PrivilegedAction 转发帧等符号形态不符，或平台符号化不全）时
-    /// 退回 `java.lang.Object`：JDK 中仅 JNI 附着线程无 Java 调用者，Java 代码调用恒有；
-    /// 原生单镜像内全部代码同属可信调用者（getModule 同一无名模块），退回可信类与 JDK
-    /// 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
+    /// 生成器在 `@CallerSensitive` 调用点显式压栈的调用者优先（平台无关）；手写层直接调用 CS
+    /// 方法时回退栈遍历数据面（`crate::vm_stack`），跳帧同 HotSpot `JVM_GetCallerClass`：
+    /// 第 0 帧为本方法（手写 native 帧），第 1 帧为 `@CallerSensitive` 方法，其后首个不被安全栈
+    /// 遍历忽略（`is_ignored_by_security_stack_walk`）的帧即调用者。
+    /// 帧不可得（平台符号化不全等）时退回 `java.lang.Object`：JDK 中仅 JNI 附着线程无 Java 调用者，
+    /// Java 代码调用恒有；原生单镜像内全部代码同属可信调用者（getModule 同一无名模块），退回可信类
+    /// 与 JDK 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
     /// （Charset.forName 未知名的扩展 provider 查找，macOS 实测揭出）。
     #[jvm_native]
     pub fn getCallerClass() -> Result<Class> {
-        // 生成器显式传入的调用者（@CallerSensitive 调用点压栈，平台无关）优先
         if let Some(caller) = crate::reflect_dispatch::current_caller_sensitive() {
             return Ok(Class::for_class(String::from(caller)));
         }
-        const SELF_CLASS: &str = "jdk/internal/reflect/Reflection";
-        let fallback = || Class::for_class(String::from("java/lang/Object"));
-        let frames = _capture_frame_classes();
-        // 1. 定位本方法帧
-        let Some(mut i) = frames.iter().position(|c| c.as_deref() == Some(SELF_CLASS)) else {
-            return Ok(fallback());
-        };
-        // 2. 调用者帧组的类（@CallerSensitive 声明者）
-        i += 1;
-        let Some(caller) = frames.get(i).and_then(|c| c.clone()) else {
-            return Ok(fallback());
-        };
-        // 3. 跳过同类（与解析失败跟随前帧）的帧，取首个异类帧
-        i += 1;
-        while i < frames.len() {
-            match &frames[i] {
-                Some(c) if c != &caller => {
-                    return Ok(Class::for_class(String::from(c.as_str())));
-                }
-                _ => i += 1,
-            }
-        }
-        Ok(fallback())
+        let frames = crate::vm_stack::capture_java_frames();
+        let caller = frames
+            .iter()
+            .position(|f| f.class == "jdk/internal/reflect/Reflection" && f.method.name == "getCallerClass")
+            .and_then(|at| frames[at + 1..].iter().skip(1).find(|f| !f.is_ignored_by_security_stack_walk()));
+        Ok(Class::for_class(String::from(caller.map_or("java/lang/Object", |f| f.class))))
     }
 
     /// native `getClassAccessFlags(Class)`：class 文件的类访问标志（非 InnerClasses 的内部标志）。

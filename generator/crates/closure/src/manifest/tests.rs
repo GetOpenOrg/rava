@@ -33,7 +33,7 @@ fn array_returns_reject_non_array() {
 
 #[test]
 fn indy_object_methods_refines_native_and_boxing() {
-    let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
+    let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\nconcat_stringify = \"a/S.v:(La/O;)La/S;\"\ncomponent_hash = \"a/U.h:(La/O;)I\"\ncomponent_equals = \"a/U.e:(La/O;La/O;)Z\"\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
     assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
     assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
     assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));

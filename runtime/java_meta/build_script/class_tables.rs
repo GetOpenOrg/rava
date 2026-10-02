@@ -116,7 +116,7 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
                     let name = std::mem::take(&mut current);
                     let is_object = name == "java/lang/Object";
                     result.insert(name,
-                        class_modifier_bits(is_public, has_super, is_object)
+                        class_modifier_bits(is_public && !member_restricted(&mods_str), has_super, is_object)
                             | modifier_bits(&mods_str));
                 }
                 current = name;
@@ -140,7 +140,7 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
         if !current.is_empty() && touched {
             let is_object = current == "java/lang/Object";
             result.insert(current,
-                class_modifier_bits(is_public, has_super, is_object)
+                class_modifier_bits(is_public && !member_restricted(&mods_str), has_super, is_object)
                     | modifier_bits(&mods_str));
         }
     }
@@ -149,6 +149,12 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
     // ReflectionFactory 据 ABSTRACT 位走 InstantiationException 访问器）
     result.entry("java/lang/Object".to_owned()).or_insert(0x0001);
     result
+}
+
+/// 成员类修饰符（InnerClasses 条目）为 private / protected：顶层 access 的 public 位不作数
+///（protected 成员类在类文件顶层记为 public）
+fn member_restricted(mods: &str) -> bool {
+    mods.split_whitespace().any(|t| t == "private" || t == "protected")
 }
 
 /// public 位 + 接口位（无父类且非 java/lang/Object → INTERFACE|ABSTRACT）。
@@ -189,6 +195,8 @@ pub(crate) struct NestMeta {
     simple: String,
     self_entry: bool,
     enclosing: Option<(String, String, String)>,
+    /// 本类声明的成员类：InnerClasses 中 outer 为本类、inner 非本类的条目（属性序）
+    members: Vec<String>,
 }
 
 pub(crate) fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
@@ -206,9 +214,14 @@ pub(crate) fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
             if let Some(v) = extract_attr_padded(trimmed, "inner_classes") {
                 for ent in v.split(';') {
                     let parts: Vec<&str> = ent.split(':').collect();
+                    if parts.len() >= 3 && parts[1] == current && parts[0] != current {
+                        result.entry(current.clone()).or_insert(NestMeta {
+                            outer: String::new(), simple: String::new(), self_entry: false, enclosing: None, members: vec![],
+                        }).members.push(parts[0].to_owned());
+                    }
                     if parts.len() >= 3 && parts[0] == current {
                         let e = result.entry(current.clone()).or_insert(NestMeta {
-                            outer: String::new(), simple: String::new(), self_entry: false, enclosing: None,
+                            outer: String::new(), simple: String::new(), self_entry: false, enclosing: None, members: vec![],
                         });
                         e.outer = parts[1].to_owned();
                         e.simple = parts[2].to_owned();
@@ -220,7 +233,7 @@ pub(crate) fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
                 let parts: Vec<&str> = v.splitn(3, ':').collect();
                 if parts.len() == 3 {
                     let e = result.entry(current.clone()).or_insert(NestMeta {
-                        outer: String::new(), simple: String::new(), self_entry: false, enclosing: None,
+                        outer: String::new(), simple: String::new(), self_entry: false, enclosing: None, members: vec![],
                     });
                     e.enclosing = Some((parts[0].to_owned(), parts[1].to_owned(), parts[2].to_owned()));
                 }
@@ -246,8 +259,8 @@ pub(crate) fn write_nest_table(entries: &BTreeMap<String, NestMeta>) {
             None => "None".to_owned(),
         };
         out.push_str(&format!(
-            "    ({:?}, NestMeta {{ outer: {:?}, simple: {:?}, self_entry: {}, enclosing: {} }}),\n",
-            name, m.outer, m.simple, m.self_entry, enc));
+            "    ({:?}, NestMeta {{ outer: {:?}, simple: {:?}, self_entry: {}, enclosing: {}, members: &{:?} }}),\n",
+            name, m.outer, m.simple, m.self_entry, enc, m.members));
     }
     out.push_str("];\n");
     let path = Path::new(&out_dir).join("nest_table.rs");
@@ -398,8 +411,10 @@ pub(crate) fn scan_clinit_classes(roots: &[&Path]) -> BTreeSet<String> {
     result
 }
 
-/// sealed 许可子类型表（permitted_subclasses 属性：binary name，`,` 分隔，声明序）。
-pub(crate) fn scan_permitted_subclasses(roots: &[&Path]) -> BTreeMap<String, String> {
+/// 类级字符串属性表：类 → 属性值（键须以 `#[` 前缀出现）。用于 permitted_subclasses（sealed 许可子类型，
+/// `,` 分隔，声明序）、nest_members（NestMembers 属性，`,` 分隔，声明序）、class_access_flags（类文件
+/// access_flags 原值，十进制）。
+pub(crate) fn scan_class_attr(roots: &[&Path], key: &str) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
     for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
@@ -411,7 +426,7 @@ pub(crate) fn scan_permitted_subclasses(roots: &[&Path]) -> BTreeMap<String, Str
                 continue;
             }
             if !current.is_empty() {
-                if let Some(v) = extract_attr_padded(trimmed, "permitted_subclasses") {
+                if let Some(v) = extract_attr_padded(trimmed, key) {
                     result.insert(current.clone(), v);
                 }
             }
@@ -420,12 +435,31 @@ pub(crate) fn scan_permitted_subclasses(roots: &[&Path]) -> BTreeMap<String, Str
     result
 }
 
-pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTreeMap<String, String>) {
+/// 类 → 名单（`,` 分隔属性值）表的发射体。
+fn push_name_lists(out: &mut String, table: &str, lists: &BTreeMap<String, String>) {
+    out.push_str(&format!(
+        "\n#[export_name = \"__java_meta_{table}\"] pub static {table}: &[(&str, &[&str])] = &[\n"));
+    for (cls, list) in lists {
+        out.push_str(&format!("    ({:?}, &[", cls));
+        for sub in list.split(',').filter(|c| !c.is_empty()) {
+            out.push_str(&format!("{:?}, ", sub));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+}
+
+pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
+                                     nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>,
+                                     source: &BTreeMap<String, String>) {
     let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
     let mut out = String::from(
         "// 由 build.rs 自动生成：类文件级元数据（VM 注入的类信息）。请勿手改。
          // CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer。
          // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
+         // NEST_MEMBERS：嵌套宿主的 NestMembers 属性（nest_members 属性）——Class.getNestMembers0。
+         // CLASS_ACCESS_FLAGS：类文件 access_flags 原值（class_access_flags 属性）——Class.getClassAccessFlagsRaw0。
+         // CLASS_SOURCE_FILE：SourceFile 属性（source 属性）——StackTraceElement.initStackTraceElement 的 fileName。
 
          #[export_name = \"__java_meta_CLINIT_CLASSES\"] pub static CLINIT_CLASSES: &[&str] = &[
 ",
@@ -433,13 +467,19 @@ pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTre
     for name in clinit {
         out.push_str(&format!("    {:?},\n", name));
     }
-    out.push_str("];\n\n#[export_name = \"__java_meta_PERMITTED_SUBCLASSES\"] pub static PERMITTED_SUBCLASSES: &[(&str, &[&str])] = &[\n");
-    for (cls, list) in permitted {
-        out.push_str(&format!("    ({:?}, &[", cls));
-        for sub in list.split(',').filter(|c| !c.is_empty()) {
-            out.push_str(&format!("{:?}, ", sub));
+    out.push_str("];\n");
+    push_name_lists(&mut out, "PERMITTED_SUBCLASSES", permitted);
+    push_name_lists(&mut out, "NEST_MEMBERS", nest_members);
+    out.push_str("\n#[export_name = \"__java_meta_CLASS_ACCESS_FLAGS\"] pub static CLASS_ACCESS_FLAGS: &[(&str, i32)] = &[\n");
+    for (cls, v) in access {
+        if let Ok(bits) = v.trim().parse::<i32>() {
+            out.push_str(&format!("    ({:?}, {}),\n", cls, bits));
         }
-        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+    out.push_str("\n#[export_name = \"__java_meta_CLASS_SOURCE_FILE\"] pub static CLASS_SOURCE_FILE: &[(&str, &str)] = &[\n");
+    for (cls, file) in source {
+        out.push_str(&format!("    ({:?}, {:?}),\n", cls, file));
     }
     out.push_str("];\n");
     let path = Path::new(&out_dir).join("class_meta_table.rs");

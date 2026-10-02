@@ -2,13 +2,13 @@
 //!
 //! 手写层与生成层命名空间同构（Rust 类型路径 ↔ Java binary name；Rust 方法名 = Java 名，重载取
 //! 描述符 mangle 名），手写体调用点按「接收者静态类型（方法调用）/ 路径类型（关联函数调用）+ Rust 名 +
-//! 实参个数」反解为 Java 方法引用，与 `upcalls` 声明同等处理。声明只兜底语法上不可见的调用
-//! （宏内调用、按名反射）。
+//! 实参个数」反解为 Java 方法引用。手写层不声明回调：宏体按 Rust 语法展开访问，跨文件调用经模块
+//! 单元调用图（`rtfn.rs`），VM 驱动的入口经 VM 规则（`vmrules.rs`）。
 
 use super::*;
 
 /// Rust 内建 trait 方法名：同名调用是 Rust 语义（`Rc` 引用克隆），不是 Java 回调
-const RUST_TRAIT_METHODS: &[&str] = &["clone"];
+pub(super) const RUST_TRAIT_METHODS: &[&str] = &["clone"];
 
 impl Engine<'_> {
     /// 类及其全部超类型（超类链与超接口，广度优先，自类在前）
@@ -62,22 +62,6 @@ impl Engine<'_> {
         Vec::new()
     }
 
-    /// 类型层次上 Rust 名为 `m` 的方法的返回类（返回类型须唯一且为引用类型）
-    pub(super) fn rust_method_ret(&self, c: &str, m: &str) -> Option<String> {
-        let rets: BTreeSet<String> = self
-            .methods_by_rust_name(c, m, None)
-            .into_iter()
-            .filter_map(|(_, _, d, _)| parse_method(&d).and_then(|d| d.ret).map(|r| r.descriptor()))
-            .collect();
-        if rets.len() != 1 {
-            return None;
-        }
-        match parse_field(rets.first()?)? {
-            FieldType::Object(c) => Some(c),
-            _ => None,
-        }
-    }
-
     /// 手写体调用点反解出的 Java 回调目标：方法调用按接收者静态类型取实例方法，
     /// 路径调用 `T::m(…)` 取 `T` 上的静态方法（构造器经 ctors 另行处理）
     pub(super) fn hw_inferred_upcalls(&self, host: &str, mh: &MemberHw) -> BTreeSet<Upcall> {
@@ -92,6 +76,10 @@ impl Engine<'_> {
                 _ => continue,
             };
             let Some(cls) = cls else { continue };
+            if want_static && c.args.is_empty() && c.name == crate::handwritten::CLASS_INIT_RUST {
+                out.insert(Upcall::Init(cls));
+                continue;
+            }
             let hits = self.methods_by_rust_name(&cls, &c.name, Some(c.args.len()));
             // 路径调用 `T::f()` 不是方法时是 static 字段读访问器（生成层 static 访问器名 = 字段名）：getstatic
             if hits.is_empty() && want_static && c.args.is_empty() {
@@ -108,10 +96,8 @@ impl Engine<'_> {
         out
     }
 
-    /// 回调目标：声明 ∪ 推断
+    /// 回调目标（推断）
     pub(super) fn hw_upcalls(&self, host: &str, mh: &MemberHw) -> Vec<Upcall> {
-        let mut all = self.hw_inferred_upcalls(host, mh);
-        all.extend(mh.upcalls.iter().cloned());
-        all.into_iter().collect()
+        self.hw_inferred_upcalls(host, mh).into_iter().collect()
     }
 }

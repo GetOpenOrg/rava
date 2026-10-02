@@ -99,10 +99,12 @@ dependencies = [
  "instr",
  "ir",
  "method",
+ "proc-macro2",
  "rava_macros_core",
  "regex",
  "regex-syntax",
  "resolve",
+ "syn 2.0.119",
  "toml",
  "ty",
 ]

@@ -1,12 +1,14 @@
-//! Rust 类型短名消歧（`type_map.configure_short_names` / `short_cls` /
-//! `_registry_short_index` 的移植）。Python 侧是模块级全局表，这里是由注册表
-//! 显式构建的不可变上下文。
+//! 类的 Rust 名：定义名（declared）与全局令牌（token）。
 //!
-//! Rust 类型名 = 类的简单名（`$` → `_`）。两类冲突源：
-//! 1. 注册表内不同包同简单名：组内 binary 字典序最小者保留简单名，其余以完整
-//!    binary（`/`、`$` → `_`）为名；
-//! 2. Rust prelude 可见名（[`PRELUDE_CONFLICT_NAMES`]）：同名的类同样限定改名——
-//!    `Object` / `String` 的本主除外（直映射即 prelude 名本身，同一实体）。
+//! - **定义名**：类在自己文件里的 struct 名，只由类自身决定——简单名（`$` → `_`）；简单名是
+//!   Rust prelude 可见名（[`PRELUDE_CONFLICT_NAMES`]）时取限定名，
+//!   `Object` / `String` 的本主除外（直映射即 prelude 名本身，同一实体）。
+//! - **限定名**：完整 binary（`/`、`$` → `_`）；无包类为 `_简单名`（与有包同名类的限定名、
+//!   与自身定义名都不同）。
+//! - **令牌**：全局唯一的类名——同简单名组（≥2 个成员，无包类同样入组）的每个成员都取
+//!   限定名，其余同定义名。
+//!   令牌用于无作用域的反查（显示名 → binary），并作为文件作用域里定义名被占用时的本地别名
+//!   （`use path::Simple as 令牌;`）。各文件里一个类叫什么由文件名字作用域（[`crate::NameScope`]）决定。
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,11 +43,13 @@ const CANONICAL_OWNERS: [&str; 2] = [consts::STRING, consts::OBJECT];
 
 #[derive(Debug, Clone, Default)]
 pub struct ShortNames {
+    /// 令牌与定义名不同的类：binary → 令牌（同简单名组成员 + prelude 同名类）
     qualified: BTreeMap<String, String>,
+    /// 定义名取限定名的类（prelude 同名，字典序）
     prelude_disambiguated: Vec<String>,
-    /// 短名 → binary（Python dict 推导式语义：按注册表插入序，同短名后者胜出）
+    /// 令牌 → binary
     index: BTreeMap<String, String>,
-    /// 注册表内全部接口的短名
+    /// 注册表内全部接口的令牌
     iface_shorts: BTreeSet<String>,
 }
 
@@ -56,44 +60,50 @@ fn plain_short(binary: &str) -> String {
     last.replace('$', "_")
 }
 
-fn qualify(binary: &str) -> String {
-    binary.replace(['/', '$'], "_")
+/// 限定名：完整 binary（`/`、`$` → `_`）；无包类前缀 `_`
+pub fn qualify(binary: &str) -> String {
+    let q = binary.replace(['/', '$'], "_");
+    if binary.contains('/') {
+        q
+    } else {
+        format!("_{q}")
+    }
+}
+
+/// 定义名是否取限定名：简单名与 prelude 名同名（本主除外）
+fn prelude_named(binary: &str) -> bool {
+    !CANONICAL_OWNERS.contains(&binary) && PRELUDE_CONFLICT_NAMES.contains(&plain_short(binary).as_str())
+}
+
+/// 类的定义名（只由类自身决定）
+pub fn declared(binary: &str) -> String {
+    if prelude_named(binary) {
+        qualify(binary)
+    } else {
+        plain_short(binary)
+    }
 }
 
 impl ShortNames {
     pub fn build(reg: &Registry) -> ShortNames {
-        let canonical: BTreeSet<&str> = CANONICAL_OWNERS
-            .iter()
-            .copied()
-            .filter(|b| reg.contains(b))
-            .collect();
         let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for ci in reg.iter() {
             let b = ci.name();
-            if !b.contains('/') || canonical.contains(b) {
+            if CANONICAL_OWNERS.contains(&b) {
                 continue;
             }
-            let simple = b.rsplit('/').next().unwrap_or(b).replace('$', "_");
-            groups.entry(simple).or_default().push(b);
+            groups.entry(plain_short(b)).or_default().push(b);
         }
         let mut qualified = BTreeMap::new();
-        for members in groups.values() {
-            // BTreeMap 迭代已按字典序：首个保留简单名
-            for b in members.iter().skip(1) {
-                qualified.insert(b.to_string(), qualify(b));
-            }
-        }
         let mut prelude_disambiguated = Vec::new();
-        for (short, members) in &groups {
-            if !PRELUDE_CONFLICT_NAMES.contains(&short.as_str()) {
-                continue;
-            }
+        for members in groups.values() {
             for b in members {
-                if qualified.contains_key(*b) {
-                    continue;
+                if prelude_named(b) {
+                    prelude_disambiguated.push(b.to_string());
+                    qualified.insert(b.to_string(), qualify(b));
+                } else if members.len() > 1 {
+                    qualified.insert(b.to_string(), qualify(b));
                 }
-                qualified.insert(b.to_string(), qualify(b));
-                prelude_disambiguated.push(b.to_string());
             }
         }
         prelude_disambiguated.sort();
@@ -113,12 +123,17 @@ impl ShortNames {
         names
     }
 
-    /// `short_cls`：binary name → Rust 类型名
+    /// 令牌：binary → 全局唯一的 Rust 类型名
     pub fn short<'a>(&'a self, binary: &str) -> Cow<'a, str> {
         match self.qualified.get(binary) {
             Some(q) => Cow::Borrowed(q),
             None => Cow::Owned(plain_short(binary)),
         }
+    }
+
+    /// 定义名：类在自己文件里的 struct 名（导入路径末段）
+    pub fn declared(&self, binary: &str) -> String {
+        declared(binary)
     }
 
     /// 限定改名表（binary → 限定名）
@@ -144,5 +159,19 @@ impl ShortNames {
     /// 短名是否属于注册表内某个接口（`registry_iface_shorts`）
     pub fn is_iface_short(&self, short: &str) -> bool {
         self.iface_shorts.contains(short)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualified_names_by_package() {
+        assert_eq!(qualify("org/junit/Test"), "org_junit_Test");
+        assert_eq!(qualify("Test$Inner"), "_Test_Inner");
+        assert_eq!(declared("Test$Inner"), "Test_Inner");
+        assert_eq!(declared("p/Option"), "p_Option");
+        assert_eq!(declared("Option"), "_Option");
     }
 }

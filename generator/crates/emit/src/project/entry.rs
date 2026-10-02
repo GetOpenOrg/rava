@@ -33,7 +33,7 @@ fn jrt_path(ctx: &EmitCtx<'_>, bin: &str) -> String {
     let mut segs: Vec<&str> = bin.split('/').collect();
     segs.pop();
     parts.extend(segs.iter().map(|p| safe_pkg_part(p)));
-    parts.push(ctx.short(bin));
+    parts.push(ctx.declared(bin));
     parts.join("::")
 }
 
@@ -57,7 +57,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
         let mut p = vec!["crate".to_string()];
         p.extend(e.pkg_parts.iter().cloned());
         p.push(e.mod_name.clone());
-        p.push(ctx.short(c));
+        p.push(ctx.declared(c));
         out.push(format!(
             "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
             p.join("::"),
@@ -147,7 +147,7 @@ pub fn write_main(
     let Some((main_bin, main_e)) = user.entries.first() else {
         return Err(crate::error::EmitError::Input("无用户类：无法确定入口".into()));
     };
-    let main_short = ctx.short(main_bin);
+    let main_short = ctx.declared(main_bin);
     let use_path = if main_e.pkg_parts.is_empty() {
         format!("{}::{main_short}", main_e.mod_name)
     } else {
@@ -332,7 +332,7 @@ pub fn write_cargo_files(
     // 免除全部 unwind 清理路径（landing pad）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
-         opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\npanic     = \"abort\"\n\n\
+         opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\n\n\
          [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n",
         members.join(", ")
     );
@@ -363,4 +363,32 @@ pub fn write_module_resources(ctx: &EmitCtx<'_>, w: &mut Writer, jrt_src: &Path)
          {arms}        _ => None,\n    }}\n}}\n"
     );
     w.write(&res_dir.join("module_resources.rs"), &text)
+}
+
+/// 闭包派生表文件（scratch 相对路径）：java_meta 的 `lib.rs` 以 `include!` 引入
+pub const CLOSURE_TABLES: &str = "closure_input/closure_tables.rs";
+
+/// 闭包派生表：模块服务表（`__java_meta_MODULE_SERVICES`，BootLoader.getServicesCatalog 装填引导服务目录）
+/// 与 VM 初始系统属性表（`__java_meta_VM_CONST_PROPERTIES` / `__java_meta_VM_DYNAMIC_PROPERTIES`，
+/// System.registerNatives 写入）。java_runtime::meta 以同名 extern 声明读取；事实随闭包（即用户代码）变化，
+/// 放在 java_meta 才不连带重编 java_runtime。每次构建写入（内容相同不重写）
+pub fn write_closure_tables(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
+    let input = &ctx.input;
+    let mut src = String::from(
+        "// 生成：闭包派生表（模块服务表 / VM 初始系统属性表），由 java_meta 的 lib.rs 引入。\n\n\
+         #[export_name = \"__java_meta_MODULE_SERVICES\"] pub static MODULE_SERVICES: &[(&str, &str)] = &[\n",
+    );
+    for (s, p) in &input.module_services {
+        src += &format!("    ({s:?}, {p:?}),\n");
+    }
+    src += "];\n#[export_name = \"__java_meta_VM_CONST_PROPERTIES\"] pub static VM_CONST_PROPERTIES: &[(&str, &str)] = &[\n";
+    for (k, v) in &input.system_properties.values {
+        src += &format!("    ({k:?}, {v:?}),\n");
+    }
+    src += "];\n#[export_name = \"__java_meta_VM_DYNAMIC_PROPERTIES\"] pub static VM_DYNAMIC_PROPERTIES: &[&str] = &[\n";
+    for k in &input.system_properties.dynamic {
+        src += &format!("    {k:?},\n");
+    }
+    src += "];\n";
+    w.write(&out_dir.join(CLOSURE_TABLES), &src)
 }

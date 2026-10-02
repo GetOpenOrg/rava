@@ -69,25 +69,42 @@ classes = [
 # FS-R：java/lang/Class 的 reflectionData() 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass /
 # getEnclosingClass）、Atomic（reflectionData / annotationData 的 CAS）、AnnotationData；Class$1 为
 # Class.newInstance 的特权块（构造器 setAccessible(true)）。
+# ClassLoader$ParallelLoaders：静态 loaderTypes = newSetFromMap(WeakHashMap) 并登记 ClassLoader.class；
+# ClassLoader 构造器按字节码调 isRegistered，归入边界则 loaderTypes 为 null → NPE。
 translate_nested = [
     "java/lang/Class$ReflectionData",
     "java/lang/Class$EnclosingMethodInfo",
     "java/lang/Class$Atomic",
     "java/lang/Class$AnnotationData",
     "java/lang/Class$1",
+    "java/lang/ClassLoader$ParallelLoaders",
 ]
 
-# VM 边界类中 `<clinit>` 按字节码翻译的类（逐类精确匹配；其余边界类的 `<clinit>` 不翻译——其静态状态
-# 由 VM 建立并由手写层承载，如类加载器层级、调度器）。准入：初始化器只写 VM 之外可复现的缺省值，
-# 运行期改写由翻译的字节码完成（handwritten-boundary.md：方法语义以它自己的字节码为准）：
-#   VM：lock、directMemory 缺省值；引导期 System.initPhase1 → VM.saveProperties（字节码）按保存属性
-#       改写 directMemory / pageAlignDirectMemory / classFileMajorVersion 等
-#   BootLoader：引导层无名模块（JLA.defineUnnamedModule(null)）、类加载器值表 CLASS_LOADER_VALUE_MAP、
-#       NativeLibraries 均由字节码建立；唯一 native 外调 setBootLoaderUnnamedModule0 为 VM 登记（手写 no-op）
-# Unsafe 的数组布局与指针宽度静态字段属 VM 注入常量，见 vm_intrinsics.toml [vm_constants.injected_statics]。
-translate_clinit = [
-    "jdk/internal/loader/BootLoader",
-    "jdk/internal/misc/VM",
+# VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，
+# 其 <clinit> 按字节码翻译（方法语义以它自己的字节码为准）：纯 Java 静态状态（如 ClassLoader.nocerts、
+# VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表）不翻译就保持 null。
+# 列入须说明 <clinit> 的哪部分由 VM 模型替换：
+# - VirtualThread：调度器（ForkJoinPool / 延时调度器）——虚拟线程映射为 OS 线程；
+# - Module / ModuleLayer：CDS 归档模块图与引导层由 VM 构建；
+# - InetAddress：名字服务（resolver SPI、hosts、loadLibrary）由操作系统解析器承载；
+# - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
+# - InvokerBytecodeGenerator：运行期字节码生成器，句柄调用由原生解释器承载；
+# - FileSystems：默认文件系统持有者链（策略截断，见上）；
+# - Unsafe：数组布局与指针宽度静态字段属 VM 注入常量（vm_intrinsics.toml [vm_constants.injected_statics]）；
+# - ClassLoaders：内建类加载器层级由 VM 建立（FS-C2 整类改字节码翻译时移出）；
+# - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
+clinit_carried = [
+    "java/lang/VirtualThread",
+    "java/lang/Module",
+    "java/lang/ModuleLayer",
+    "java/net/InetAddress",
+    "javax/crypto/JceSecurity",
+    "java/lang/invoke/InvokerBytecodeGenerator",
+    "java/nio/file/FileSystems",
+    "jdk/internal/misc/Unsafe",
+    "jdk/internal/loader/ClassLoaders",
+    "java/lang/Class",
+    "java/lang/SecurityManager",
 ]
 
 # ── 动态对照：JVM 直接调用的 Java 入口 ────────────────────────────────────────────────

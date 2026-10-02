@@ -4,7 +4,7 @@
 //! `AlgorithmParameters.getInstance` 等 engine 类。
 
 use crate::prelude::*;
-use super::get_instance_instance::implref::GetInstance_Instance;
+use super::get_instance_instance::GetInstance_Instance;
 
 impl GetInstance_Instance {
     /// `toArray()`：`new Object[] { impl, provider }`（JDK 同序）。

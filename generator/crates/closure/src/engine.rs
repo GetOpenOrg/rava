@@ -23,7 +23,7 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault
 use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
-use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
+use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, ClassHw, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
 use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
@@ -52,7 +52,9 @@ mod hw;
 mod hw_mem;
 mod hw_offset;
 mod hw_syntax;
+mod hw_stype;
 mod hw_infer;
+mod hw_inherit;
 mod hwobj;
 mod hwfield;
 mod vmhook;
@@ -344,6 +346,8 @@ pub struct Engine<'a> {
     poly_writes: Vec<Node>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
+    /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
+    mirror_writes: HashMap<u32, Vec<Node>>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑

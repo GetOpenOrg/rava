@@ -1,6 +1,6 @@
 # Python 脚本并入 rava：产品路径 Python 归零
 
-> 状态：方案已认可（2026-10-01），S1–S4 已完成，S5（A1）已实施（2026-10-02），S6 起按 §4.1 闸门等协调者通知。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
+> 状态：方案已认可（2026-10-01），S1–S5 已完成并合入集成分支（bb0b7736，a61803cb；同批：名字作用域统一——删 implref 别名、无包类入同简单名组、`__base` 派生名导入、泛型判定结构化，m3 编译错误归零；m3 剩余运行期存根移交 C1d-b）；逐例清理产物 `rava prune` / `--keep-artifacts` 已合入 ad9e938d；S6 起按 §4.1 闸门等协调者通知。第一步「Python 生成器删除」已完成（fc801d83，main 1ca2ab76），
 > 本文 B 类随之结清；本次修订刷新现状、细化 A 类为可逐步提交的步骤，给出与 c1d-prec / c4-regfix 的
 > 合并顺序，并为 JUnit 形态（[`2026-10-01-junit-crate-as-test-harness.md`](2026-10-01-junit-crate-as-test-harness.md)）
 > 在 e2e 编排中预留 `--lib` 接口。

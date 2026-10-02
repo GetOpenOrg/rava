@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 
 use crate::ctx::EmitCtx;
-use crate::lang;
-use crate::text::{pkg_from_java, safe_pkg_part, to_snake};
+use crate::text::{pkg_from_java, to_snake};
 
 
 /// java_runtime 侧布局
@@ -15,13 +14,6 @@ use crate::text::{pkg_from_java, safe_pkg_part, to_snake};
 pub struct JdkLayout {
     /// 类 → 文件路径（闭包序）
     pub files: IndexMap<String, PathBuf>,
-    /// 跨包 glob 导入的 crate 包路径（`java::util` 形态，排序）
-    pub pkg_paths: Vec<String>,
-    /// 跳过全局导入但已生成的类完整路径（`jdk::internal::misc::X`）
-    pub skipped_classes: BTreeSet<String>,
-    /// 简单名 → 同名类所在包（`/` 分隔；≥2 个时入表）。
-    /// Python 为 `list(set)`（顺序不定），此处排序
-    pub conflict_map: BTreeMap<String, Vec<String>>,
     /// 本轮生成的 JDK 类
     pub generated: BTreeSet<String>,
 }
@@ -30,10 +22,6 @@ fn pkg_parts(bin: &str) -> Vec<&str> {
     let mut v: Vec<&str> = bin.split('/').collect();
     v.pop();
     v
-}
-
-fn rust_pkg(parts: &[&str]) -> String {
-    parts.iter().map(|p| safe_pkg_part(p)).collect::<Vec<_>>().join("::")
 }
 
 impl JdkLayout {
@@ -49,31 +37,6 @@ impl JdkLayout {
             }
         }
         let mut lay = JdkLayout::default();
-        let mut pkg_set = BTreeSet::new();
-        let mut sn_to_pkgs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for c in classes {
-            let parts = pkg_parts(c);
-            if !c.starts_with(lang::INTERNAL_IMPL_PREFIX) && !parts.is_empty() {
-                pkg_set.insert(rust_pkg(&parts));
-            }
-            if !parts.is_empty() {
-                let simple = c.rsplit('/').next().unwrap_or(c);
-                sn_to_pkgs.entry(simple.to_string()).or_default().push(parts.join("/"));
-                if c.starts_with(lang::INTERNAL_IMPL_PREFIX) {
-                    lay.skipped_classes.insert(format!("{}::{}", rust_pkg(&parts), ctx.short(c)));
-                }
-            }
-        }
-        lay.pkg_paths = pkg_set.iter().cloned().collect();
-        for (sn, pkgs) in sn_to_pkgs {
-            let in_scope: BTreeSet<String> = pkgs
-                .into_iter()
-                .filter(|p| pkg_set.contains(&rust_pkg(&p.split('/').collect::<Vec<_>>())))
-                .collect();
-            if in_scope.len() >= 2 {
-                lay.conflict_map.insert(sn, in_scope.into_iter().collect());
-            }
-        }
         for c in classes {
             let parts = pkg_parts(c);
             let simple = c.rsplit('/').next().unwrap_or(c);
@@ -138,27 +101,19 @@ impl UserLayout {
                 parent = parent.join(p);
             }
             lay.mod_tree.entry(parent.clone()).or_default().insert(mod_name.clone());
-            lay.reexport.entry(parent).or_default().insert((mod_name.clone(), ctx.short(c)));
+            lay.reexport.entry(parent).or_default().insert((mod_name.clone(), ctx.declared(c)));
             lay.entries.insert(c.clone(), UserEntry { path, pkg_parts, mod_name });
         }
         lay
     }
 
-    /// 同 crate 兄弟类导入（`use crate::[pkg::]mod::Type;`）：`referenced` 为字节码引用集
-    /// （import_gen `collect_referenced(ci, None)`），另经 InnerClasses 补内部类 / 外部类 / 同级内部类
-    pub fn sibling_imports(&self, ctx: &EmitCtx<'_>, cls: &str, referenced: &BTreeSet<String>) -> Vec<String> {
-        let mut seen = BTreeSet::new();
-        let mut out = Vec::new();
+    /// 同 crate 兄弟类（结构化引用集的 user crate 部分）：`referenced` 为字节码引用集
+    /// （`collect_referenced(ci, None)`），另经 InnerClasses 补内部类 / 外部类 / 同级内部类
+    pub fn sibling_set(&self, ctx: &EmitCtx<'_>, cls: &str, referenced: &BTreeSet<String>) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
         let mut add = |name: &str| {
-            let Some(e) = self.entries.get(name) else { return };
-            if name == cls {
-                return;
-            }
-            let mut path = e.pkg_parts.clone();
-            path.push(e.mod_name.clone());
-            let line = format!("use crate::{}::{};", path.join("::"), ctx.short(name));
-            if seen.insert(line.clone()) {
-                out.push(line);
+            if name != cls && self.entries.contains_key(name) {
+                out.insert(name.to_string());
             }
         };
         for r in referenced {

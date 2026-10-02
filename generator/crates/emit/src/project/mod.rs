@@ -7,6 +7,7 @@
 pub mod entry;
 pub mod fs;
 pub mod layers;
+mod line_tables;
 pub mod layout;
 pub mod lib_crates;
 pub mod mod_tree;
@@ -16,18 +17,19 @@ mod tests;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use indexmap::IndexMap;
-use ty::ClassInfo;
+use ty::{ClassInfo, NameScope};
 
 pub use overlay::prepare_scratch;
 
 use crate::body::MethodBodyEmitter;
-use crate::class_writer::{class_cross_imports, class_prep, class_text, ClassSite};
+use crate::class_writer::{class_prep, class_text, ClassSite, INHERITED_IMPORTS_SLOT};
 use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::ClassEmission;
 use crate::error::Result;
-use crate::imports::collect_referenced;
+use crate::imports::import_lines;
 use crate::perf::{CrateStat, Perf};
 use crate::precheck::Precheck;
 use fs::Writer;
@@ -76,12 +78,43 @@ struct ClassJob<'c> {
     krate: JobCrate<'c>,
 }
 
-/// 逐类生成文本（尚未落盘），发射序：JDK（闭包序）→ lib crate（声明序，类名序）→ 用户类。三段：
-/// 1. 并行：引用集 / 手写覆盖副本 / 跨类导入规划（只读）；
-/// 2. 串行（发射序）：跨类导入短名裁决——`seen_simples` 首个引入者胜出，结果依赖发射序（只做查表）；
-/// 3. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
+/// 类所在 crate 的发射参数
+fn site_for<'l>(lay: &Layouts<'l>, krate: JobCrate<'l>) -> ClassSite<'l> {
+    let jdk = lay.jdk;
+    match krate {
+        JobCrate::Jdk => ClassSite { jdk, user: None, lib: None },
+        JobCrate::Lib(lib) => ClassSite { jdk, user: None, lib: lay.libs.site(Some(lib)) },
+        JobCrate::User => ClassSite { jdk, user: Some(lay.user), lib: lay.libs.site(None) },
+    }
+}
+
+/// 发射记录所属 crate
+fn crate_of<'l>(lay: &Layouts<'l>, em: &ClassEmission) -> JobCrate<'l> {
+    match em.crate_name.as_str() {
+        "java_runtime" => JobCrate::Jdk,
+        "user" => JobCrate::User,
+        n => lay.libs.names().find(|l| *l == n).map_or(JobCrate::Jdk, JobCrate::Lib),
+    }
+}
+
+/// 各文件导入块：文件作用域的认领记录（第一、二阶段全部文本生成完毕后）→ 导入插入位
+fn fill_imports(ctx: &EmitCtx<'_>, lay: &Layouts<'_>, ems: &mut IndexMap<String, ClassEmission>) {
+    let all: Vec<&ClassEmission> = ems.values().collect();
+    let texts = crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), &all, |em| {
+        let site = site_for(lay, crate_of(lay, em));
+        let block: String = import_lines(ctx, &site.import_site(), &em.scope).into_iter().map(|l| l + "\n").collect();
+        crate::phase2::fill_slot(&em.text, INHERITED_IMPORTS_SLOT, &block)
+    });
+    for (em, t) in ems.values_mut().zip(texts) {
+        em.text = t;
+    }
+}
+
+/// 逐类生成文本（尚未落盘），发射序：JDK（闭包序）→ lib crate（声明序，类名序）→ 用户类。两段：
+/// 1. 并行：引用集预认领 / 手写覆盖副本（每类只写自己的作用域）；
+/// 2. 并行：类体（方法体生成占绝大部分耗时），每类账本写入独立增量，按发射序并入 `state`。
 ///
-/// 除 2 外各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
+/// 各类只读共享上下文（缓存为纯函数记忆化），故输出与串行发射逐字节一致
 fn emit_classes<'l>(
     ctx: &'l EmitCtx<'_>,
     state: &mut ProjectState,
@@ -110,36 +143,26 @@ fn emit_classes<'l>(
         }
     }
     let threads = crate::par::resolve_jobs(ctx.opts.jobs);
-    let site_of = |j: &ClassJob<'l>| -> ClassSite<'l> {
-        match j.krate {
-            JobCrate::Jdk => ClassSite { jdk, user_sibling_imports: None, lib: None },
-            JobCrate::Lib(lib) => ClassSite { jdk, user_sibling_imports: None, lib: lay.libs.site(Some(lib)) },
-            JobCrate::User => {
-                // 用户类兄弟导入按未过滤引用集（生成集过滤只作用于 JDK 导入）
-                let sib = user.sibling_imports(ctx, j.binary, &collect_referenced(ctx, j.ci, None));
-                ClassSite { jdk, user_sibling_imports: Some(sib), lib: lay.libs.site(None) }
-            }
-        }
-    };
-    let preps = crate::par::par_map(threads, &jobs, |j| {
+    // 每文件一个名字作用域：本类先认领自己的名字，前置阶段预认领结构化引用集，其后文本渲染时认领
+    let scopes: Vec<Arc<NameScope>> = jobs.iter().map(|j| Arc::new(NameScope::new(j.binary, ctx.ty.global_names()))).collect();
+    let staged: Vec<(&ClassJob<'l>, &Arc<NameScope>)> = jobs.iter().zip(&scopes).collect();
+    let preps = crate::par::par_map(threads, &staged, |(j, scope)| {
         let t = std::time::Instant::now();
-        let site = site_of(j);
-        let prep = class_prep(ctx, j.ci, &site);
+        let site = site_for(lay, j.krate);
+        let prep = class_prep(&ctx.scoped(scope), j.ci, &site);
         (site, prep, t.elapsed())
     });
     perf.mark("classes.prep");
     let preps: Vec<_> = preps.into_iter().map(|(s, p, t)| p.map(|p| (s, p, t))).collect::<Result<_>>()?;
-    let cross: Vec<_> = preps.iter().map(|(_, prep, _)| class_cross_imports(state, prep)).collect();
-    perf.mark("classes.imports");
-    let work: Vec<_> = jobs.iter().zip(preps).zip(cross).collect();
-    let texts = crate::par::par_map(threads, &work, |((j, (site, prep, _)), imports)| {
+    let work: Vec<_> = staged.into_iter().zip(preps).collect();
+    let texts = crate::par::par_map(threads, &work, |((j, scope), (site, prep, _))| {
         let t = std::time::Instant::now();
         let mut delta = ProjectState::default();
-        let ct = class_text(ctx, &mut delta, bodies, j.ci, site, prep, imports.clone());
+        let ct = class_text(&ctx.scoped(scope), &mut delta, bodies, j.ci, site, prep);
         (ct, delta, t.elapsed())
     });
     let mut ems = IndexMap::new();
-    for (((j, (_, _, t_prep)), _), (ct, delta, t_text)) in work.iter().zip(texts) {
+    for (((j, scope), (_, _, t_prep)), (ct, delta, t_text)) in work.iter().zip(texts) {
         let ct = ct?;
         state.merge(delta);
         let (crate_prefix, crate_name, handwritten) = match j.krate {
@@ -155,6 +178,7 @@ fn emit_classes<'l>(
             crate_name: crate_name.into(),
             text: ct.text,
             methods: ct.methods,
+            scope: Arc::clone(scope),
         };
         perf.classes.push((j.binary.to_string(), *t_prep + t_text));
         ems.insert(j.binary.to_string(), em);
@@ -163,11 +187,12 @@ fn emit_classes<'l>(
 }
 
 /// 第二阶段（接口实现 / 继承成员 / SAM 对象 / 反射分派）只作用于有布局的类：L1 不透明类
-/// 无成员可补，先摘出、完成后按原发射序放回
+/// 无成员可补，先摘出、完成后按原发射序放回；最后由各文件作用域记录填导入块
 fn finish_phase2(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
     ems: &mut IndexMap<String, ClassEmission>,
+    lay: &Layouts<'_>,
     perf: &mut Perf,
 ) -> Result<crate::project::entry::DispatchReg> {
     let order: Vec<String> = ems.keys().cloned().collect();
@@ -185,6 +210,8 @@ fn finish_phase2(
         }
     }
     ems.extend(rest);
+    fill_imports(ctx, lay, ems);
+    perf.mark("phase2.imports");
     Ok(disp)
 }
 
@@ -222,7 +249,7 @@ pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitt
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
-    finish_phase2(ctx, &mut state, &mut ems, &mut perf)?;
+    finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
     Ok(Precheck::scan(ems.values(), &ctx.input.precheck_visited))
 }
 
@@ -238,11 +265,15 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");
     let mut state = ProjectState::default();
+    // 手写体的继承成员需求与生成方法体登记的同一账本（手写文件整体编译，与 fn 可达性无关）
+    for (recv, name, desc) in &ctx.input.hw_inherited {
+        state.inherited_requests.insert((recv.clone(), name.clone(), crate::vtable::param_part(desc).to_string()));
+    }
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
     perf.mark("classes");
-    let disp = finish_phase2(ctx, &mut state, &mut ems, &mut perf)?;
+    let disp = finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
     let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
@@ -251,11 +282,21 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     entry::write_module_resources(ctx, &mut w, &jrt_src)?;
+    entry::write_closure_tables(ctx, &mut w, out_dir)?;
     perf.mark("write");
     mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     perf.mark("mod_tree");
     libs.write_crates(ctx, &mut w, out_dir)?;
     body_plan.write_crates(ctx, &mut w, out_dir)?;
+    // FS-E1：落盘文本的 Java 行表（拆层后各文件的最终行号）
+    let body_files = body_plan.files(out_dir);
+    let mut final_files = files;
+    final_files.extend(body_files.iter().map(|(p, t)| (p.as_path(), *t)));
+    let lnt = |class: &str, name: &str, desc: &str| {
+        let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
+        ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
+    };
+    line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
@@ -274,4 +315,23 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         body_log: std::mem::take(&mut state.body_log),
         perf,
     })
+}
+
+/// 手写根类的行表登记（根类无生成文件）：根类字节码的方法按调用侧根类命名规则对应 overlay
+/// 落盘的根类手写文件中的 fn（根类重载取描述符后缀名，前提是该名在手写 API 名面中；
+/// 规则与登记形态见 `line_tables::handwritten::root_methods`）
+fn root_line_registration(ctx: &EmitCtx<'_>, jrt_src: &Path) -> Vec<(PathBuf, Vec<line_tables::handwritten::HwMethod>)> {
+    let root = ty::consts::OBJECT;
+    let Some(cf) = ctx.cp.get(root) else { return Vec::new() };
+    let source = cf.source_file.clone().unwrap_or_default();
+    let rust_name = |name: &str, desc: &str| {
+        let mangled = ty::type_map::mangle_name(&ctx.manifest.ty, name, desc);
+        let chosen = if mangled != name && ctx.root_api().contains(&mangled) { mangled } else { name.to_string() };
+        ty::ident::safe_ident(&chosen)
+    };
+    // 可覆盖 = 实例、非 final、非 private（虚派发目标可被子类替换）
+    let overridable = |a: u16| a & (classfile::acc::STATIC | classfile::acc::FINAL | classfile::acc::PRIVATE) == 0;
+    let methods = cf.methods.iter().map(|m| (m.name.as_str(), m.desc.as_str(), m.is_native(), overridable(m.access)));
+    let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
+    crate::ctx::EmitShared::root_files(jrt_src).into_iter().map(|p| (p, hws.clone())).collect()
 }

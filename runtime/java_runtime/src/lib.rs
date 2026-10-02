@@ -11,6 +11,7 @@ pub mod jdk_resources;
 pub mod meta;
 pub mod monitor;
 pub mod native_memory;
+pub mod vm_stack;
 pub mod posix;
 pub mod species_dyn;
 pub mod zlib;

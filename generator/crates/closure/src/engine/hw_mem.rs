@@ -242,7 +242,22 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段按名打开：静态引用字段接收签名多态写入调用点的写入值
+    /// 以类 c 的镜像为静态字段基址的按偏移写入：静态字段偏移只能经按名取到的字段句柄 / MemberName 得到
+    /// （`staticFieldOffset(Field)` 等），写入目标限于 c 上按名打开的静态引用字段；之后打开的由 `open_static` 接入
+    fn mirror_write(&mut self, c: u32, wn: Node) {
+        let ws = self.mirror_writes.entry(c).or_default();
+        if ws.contains(&wn) {
+            return;
+        }
+        ws.push(wn);
+        for (fi, tid) in self.static_ref_fields(c) {
+            if self.open_statics.iter().any(|&(f, _)| f == fi) {
+                self.flow(wn, Node::U(fi), tid);
+            }
+        }
+    }
+
+    /// 字段按名打开：静态引用字段接收签名多态写入调用点、以及以所属类镜像为基址的按偏移写入的写入值
     pub(super) fn open_static(&mut self, key: &MemberRef) {
         let is_static = self.h.class(&key.owner).and_then(|cf| cf.field(&key.name, &key.desc).map(|f| f.is_static())).unwrap_or(false);
         let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)).filter(|_| is_static) else { return };
@@ -251,7 +266,9 @@ impl<'a> Engine<'a> {
             return;
         }
         self.open_statics.push((fi, tid));
-        for wn in self.poly_writes.clone() {
+        let owner = self.id(&key.owner);
+        let mws = self.mirror_writes.get(&owner).cloned().unwrap_or_default();
+        for wn in self.poly_writes.iter().copied().chain(mws).collect::<Vec<_>>() {
             self.flow(wn, Node::U(fi), tid);
         }
     }
@@ -278,9 +295,7 @@ impl<'a> Engine<'a> {
         let xs: Vec<u32> = delta.classes.iter().filter(|x| !self.arrays.contains_key(x)).collect();
         for x in xs {
             if let Some(&c) = self.mirrors.get(&x) {
-                for (fi, tid) in self.static_ref_fields(c) {
-                    self.flow(wn, Node::U(fi), tid);
-                }
+                self.mirror_write(c, wn);
             } else if x == class {
                 self.poly_write(wn);
             }

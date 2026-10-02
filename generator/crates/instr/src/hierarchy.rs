@@ -14,22 +14,22 @@ pub fn type_binary(ctx: &InstrCtx, t: &RsType) -> Option<String> {
         RsType::Class { binary, .. } | RsType::Bare { binary } if ctx.reg().contains(binary) => Some(binary.clone()),
         RsType::Class { binary, .. } | RsType::Bare { binary } => {
             // 注册表外 binary：按短名反查（Python 短名索引口径）
-            let short = ctx.short(binary);
-            ctx.ty.names.binary_of(&short).filter(|b| ctx.reg().contains(b)).map(str::to_string)
+            let g = ctx.ty.global_names();
+            g.binary_of(&g.short(binary)).filter(|b| ctx.reg().contains(b)).map(str::to_string)
         }
-        RsType::Param(n) => ctx.ty.names.binary_of(n).filter(|b| ctx.reg().contains(b)).map(str::to_string),
+        RsType::Param(n) => ctx.ty.binary_of(n).filter(|b| ctx.reg().contains(b)),
         _ => None,
     }
 }
 
 /// 短名 → 注册表内 binary（`_rust_type_to_binary` 的原形，供仍以短名定位的调用点）
 pub fn short_binary(ctx: &InstrCtx, short: &str) -> Option<String> {
-    ctx.ty.names.binary_of(short).filter(|b| ctx.reg().contains(b)).map(str::to_string)
+    ctx.ty.binary_of(short).filter(|b| ctx.reg().contains(b))
 }
 
 /// 类型的比较键：Rust 擦除头名（Python 以短名比较）
 fn head(ctx: &InstrCtx, t: &RsType) -> String {
-    t.head_name(ctx.ty.names).unwrap_or_else(|| "()".to_string())
+    t.head_name(&ctx.ty).unwrap_or_else(|| "()".to_string())
 }
 
 /// `child` 是否为 `parent` 的**严格**子类型（`_is_subtype`）：
@@ -145,7 +145,7 @@ pub fn common_ref_type_widening(ctx: &InstrCtx, a: &RsType, b: &RsType) -> Optio
     if aa.is_empty() && ba.is_empty() {
         return Some(common);
     }
-    let text = |xs: &[RsType]| ty::rs_type::render_arg_list(xs, ctx.ty.names);
+    let text = |xs: &[RsType]| ty::rs_type::render_arg_list(xs, &ctx.ty);
     if !aa.is_empty() && text(aa) == text(ba) {
         let RsType::Class { binary, .. } = common else {
             return None;
@@ -162,8 +162,7 @@ pub fn super_chain_to_class(ctx: &InstrCtx, current: &str, target: &str) -> usiz
     if ctx.reg().is_empty() || current.is_empty() || target.is_empty() {
         return 1;
     }
-    let short_of = |b: &str| if b.contains('/') { ctx.short(b) } else { b.replace('$', "_") };
-    let same = |b: &str| b == target || short_of(b) == target;
+    let same = |b: &str| b == target || ctx.short(b) == target;
     if same(current) {
         return 0;
     }

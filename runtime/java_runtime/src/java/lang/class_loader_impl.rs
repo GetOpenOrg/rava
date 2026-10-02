@@ -15,6 +15,12 @@ use super::class_loader::ClassLoader;
 //     外部 provider 发现终止（TzdbZoneRulesProvider 已由 ZoneRulesProvider
 //     <clinit> 的默认分支直接注册，正是 JDK 对无发现环境的回退设计）。
 impl ClassLoader {
+    /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
+    #[jvm_native]
+    pub fn registerNatives() -> Result<()> {
+        Ok(())
+    }
+
     /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找已定义类，
     /// 找不到返回 null。原生镜像的类全集编译期定死、全部由引导形态承载（`Class.getClassLoader`
     /// 恒 null），故「引导加载器可见」即闭包内的类（与 `Class.forName0` 同一判定）。
@@ -71,10 +77,10 @@ impl ClassLoader {
     }
 
     /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
-    #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
-    pub fn getResources(&self, name: String) -> Result<Object> {
+    #[jvm_boundary]
+    pub fn getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
         let _ = name;
-        crate::java::util::Collections::emptyEnumeration().map(Into::into)
+        crate::java::util::Collections::emptyEnumeration()
     }
 
     /// static getSystemResource：委托实例形态（恒 null）。
@@ -86,21 +92,196 @@ impl ClassLoader {
 
     /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
     ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
-    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    #[jvm_boundary]
     pub fn getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 
     /// static `getSystemResourceAsStream(String)`：委托系统加载器（同实例形态）。
-    #[jvm_boundary(upcalls = "java/io/ByteArrayInputStream.<init>:([B)V")]
+    #[jvm_boundary]
     pub fn getSystemResourceAsStream(name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 
     /// static getSystemResources：委托实例形态（恒空枚举）。
-    #[jvm_boundary(upcalls = "java/util/Collections.emptyEnumeration:()Ljava/util/Enumeration;")]
-    pub fn getSystemResources(name: String) -> Result<Object> {
-        crate::java::util::Collections::emptyEnumeration().map(Into::into)
+    #[jvm_boundary]
+    pub fn getSystemResources(name: String) -> Result<crate::java::util::Enumeration<Object>> {
+        crate::java::util::Collections::emptyEnumeration()
+    }
+}
+
+// ── 运行期类定义点（类 2：运行模型替换）────────────────────────────────────────────────
+// 原生二进制没有运行期类定义：类全集在编译期定死，字节码不再被加载执行。defineClass1 / 2 按
+// HotSpot `jvm_define_class_common` → `ClassFileParser` 的检查次序给出可在不定义类的前提下判定的
+// 结果（截断 / 魔数 / 主次版本，异常类型与消息与 JDK 21 实测一致）；格式合法的类文件无法定义，
+// 抛 LinkageError 说明原因（Java 可捕获，不 panic）。登记：vm_intrinsics.toml 注释 / docs/plans/2026-10-02-native-gaps.md。
+
+/// 类文件头检查；返回应抛出的异常。`name` 为调用方给出的类名（null → `<Unknown>`，点换斜线）。
+fn _define_class_error(name: &String, bytes: &[u8]) -> JvmError {
+    let shown = if _is_jnull(&Object::from(Clone::clone(name))) {
+        "<Unknown>".to_owned()
+    } else {
+        format!("{}", name).replace('.', "/")
+    };
+    let built = if bytes.len() < 8 {
+        crate::java::lang::ClassFormatError::new_str(String::from("Truncated class file")).map(Object::from)
+    } else {
+        let magic = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let minor = u16::from_be_bytes([bytes[4], bytes[5]]);
+        let major = u16::from_be_bytes([bytes[6], bytes[7]]);
+        const MAX_MAJOR: u16 = 65; // JDK 21
+        if magic != 0xCAFE_BABE {
+            crate::java::lang::ClassFormatError::new_str(String::from(
+                format!("Incompatible magic value {} in class file {}", magic, shown).as_str())).map(Object::from)
+        } else if major > MAX_MAJOR {
+            crate::java::lang::UnsupportedClassVersionError::new_str(String::from(format!(
+                "{} has been compiled by a more recent version of the Java Runtime (class file version {}.{}), \
+                 this version of the Java Runtime only recognizes class file versions up to {}.0",
+                shown, major, minor, MAX_MAJOR).as_str())).map(Object::from)
+        } else if major < 45 {
+            crate::java::lang::UnsupportedClassVersionError::new_str(String::from(format!(
+                "{} (class file version {}.{}) was compiled with an invalid major version", shown, major, minor).as_str()))
+                .map(Object::from)
+        } else if major == MAX_MAJOR && minor == 0xFFFF {
+            crate::java::lang::UnsupportedClassVersionError::new_str(String::from(format!(
+                "Preview features are not enabled for {} (class file version {}.{}). Try running with '--enable-preview'",
+                shown, major, minor).as_str())).map(Object::from)
+        } else {
+            match _walk_class_file(bytes) {
+                ClassFileShape::Truncated => crate::java::lang::ClassFormatError::new_str(
+                    String::from("Truncated class file")).map(Object::from),
+                ClassFileShape::UnknownTag(tag) => crate::java::lang::ClassFormatError::new_str(String::from(
+                    format!("Unknown constant tag {} in class file {}", tag, shown).as_str())).map(Object::from),
+                ClassFileShape::ExtraBytes => crate::java::lang::ClassFormatError::new_str(String::from(
+                    format!("Extra bytes at the end of class file {}", shown).as_str())).map(Object::from),
+                ClassFileShape::Complete => crate::java::lang::LinkageError::new_str(String::from(format!(
+                    "{}: runtime class definition is not supported by the native image (class universe is fixed at build time)",
+                    shown).as_str())).map(Object::from),
+            }
+        }
+    };
+    match built {
+        Ok(e) => JvmError::from(e),
+        Err(e) => e,
+    }
+}
+
+/// 类文件结构走查结果（只按长度前缀走一遍，不做语义校验）。
+enum ClassFileShape { Truncated, UnknownTag(u8), ExtraBytes, Complete }
+
+/// 按 ClassFileParser 的顺序走查常量池、类头、字段、方法与属性表的长度结构：任一处读越界即
+/// `Truncated class file`（HotSpot `guarantee_more`），未知常量标签即 `Unknown constant tag`，
+/// 走完仍有剩余字节即 `Extra bytes at the end of class file`。
+fn _walk_class_file(bytes: &[u8]) -> ClassFileShape {
+    struct Cursor<'a> { b: &'a [u8], pos: usize }
+    impl Cursor<'_> {
+        fn skip(&mut self, n: usize) -> Option<()> {
+            (self.b.len() - self.pos >= n).then(|| self.pos += n)
+        }
+        fn u1(&mut self) -> Option<u8> { self.skip(1).map(|_| self.b[self.pos - 1]) }
+        fn u2(&mut self) -> Option<usize> {
+            self.skip(2).map(|_| u16::from_be_bytes([self.b[self.pos - 2], self.b[self.pos - 1]]) as usize)
+        }
+        fn u4(&mut self) -> Option<usize> {
+            self.skip(4).map(|_| u32::from_be_bytes(self.b[self.pos - 4..self.pos].try_into().unwrap()) as usize)
+        }
+        fn attributes(&mut self) -> Option<()> {
+            for _ in 0..self.u2()? {
+                self.skip(2)?;
+                let len = self.u4()?;
+                self.skip(len)?;
+            }
+            Some(())
+        }
+        fn members(&mut self) -> Option<()> {
+            for _ in 0..self.u2()? {
+                self.skip(6)?;
+                self.attributes()?;
+            }
+            Some(())
+        }
+    }
+    let mut c = Cursor { b: bytes, pos: 8 };
+    let mut walk = || -> std::result::Result<(), ClassFileShape> {
+        let cp_count = c.u2().ok_or(ClassFileShape::Truncated)?;
+        let mut i = 1;
+        while i < cp_count {
+            let tag = c.u1().ok_or(ClassFileShape::Truncated)?;
+            let fixed = match tag {
+                1 => c.u2().ok_or(ClassFileShape::Truncated)?,
+                7 | 8 | 16 | 19 | 20 => 2,
+                15 => 3,
+                3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 => 4,
+                5 | 6 => { i += 1; 8 }
+                other => return Err(ClassFileShape::UnknownTag(other)),
+            };
+            c.skip(fixed).ok_or(ClassFileShape::Truncated)?;
+            i += 1;
+        }
+        (|| -> Option<()> {
+            c.skip(6)?;
+            let interfaces = c.u2()?;
+            c.skip(interfaces * 2)?;
+            c.members()?;
+            c.members()?;
+            c.attributes()
+        })().ok_or(ClassFileShape::Truncated)?;
+        if c.pos != c.b.len() { Err(ClassFileShape::ExtraBytes) } else { Ok(()) }
+    };
+    match walk() {
+        Ok(()) => ClassFileShape::Complete,
+        Err(shape) => shape,
+    }
+}
+
+impl ClassLoader {
+    /// static native `defineClass1(loader, name, b, off, len, pd, source)`：ClassLoader.c 的
+    /// 参数检查（b 为 null → NPE；len < 0 或区间越界 → ArrayIndexOutOfBoundsException）后取区间字节，
+    /// 经 `_define_class_error` 判定（见上）。
+    #[jvm_native]
+    pub fn defineClass1(_loader: ClassLoader, name: String, b: JArray<i8>, off: i32, len: i32,
+                        _pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
+        if b.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let all = b.to_vec();
+        if len < 0 || off < 0 || (off as i64 + len as i64) > all.len() as i64 {
+            return Err(JvmError::array_index_out_of_bounds_message(std::string::String::new()));
+        }
+        let bytes: Vec<u8> = all[off as usize..(off + len) as usize].iter().map(|v| *v as u8).collect();
+        Err(_define_class_error(&name, &bytes))
+    }
+
+    /// static native `defineClass2(loader, name, b, off, len, pd, source)`：直接缓冲区形态
+    /// （ClassLoader.defineClass(ByteBuffer) 只对 direct 缓冲区调用本 native）；地址取 Buffer.address
+    /// （GetDirectBufferAddress），为 0 → NPE。
+    #[jvm_native]
+    pub fn defineClass2(_loader: ClassLoader, name: String, b: crate::java::nio::ByteBuffer, off: i32, len: i32,
+                        _pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
+        if _is_jnull(&Object::from(Clone::clone(&b))) {
+            return Err(JvmError::null_pointer());
+        }
+        let address = b.__get_address();
+        if address == 0 {
+            return Err(JvmError::null_pointer());
+        }
+        let mut bytes = vec![0u8; len.max(0) as usize];
+        crate::native_memory::read(&Object::default(), address + off as i64, &mut bytes)?;
+        Err(_define_class_error(&name, &bytes))
+    }
+
+    /// static native `retrieveDirectives()`：HotSpot `JVM_AssertionStatusDirectives`——按 `-ea` / `-da`
+    /// 选项填表。原生二进制无启动选项，断言恒关（与 `Class.desiredAssertionStatus0` 同源）：
+    /// 四个数组为空、deflt 为 false。
+    #[jvm_native]
+    pub fn retrieveDirectives() -> Result<super::AssertionStatusDirectives> {
+        let mut d = super::AssertionStatusDirectives::new()?;
+        d.__set_classes(JArray::from(Vec::<String>::new()));
+        d.__set_classEnabled(JArray::from(Vec::<bool>::new()));
+        d.__set_packages(JArray::from(Vec::<String>::new()));
+        d.__set_packageEnabled(JArray::from(Vec::<bool>::new()));
+        d.__set_deflt(false);
+        Ok(d)
     }
 }
 

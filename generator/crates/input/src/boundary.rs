@@ -26,15 +26,15 @@ impl<'a> Boundary<'a> {
         Boundary { manifest }
     }
 
-    /// VM 耦合边界类：按方法划分，`<clinit>` 不翻译
+    /// VM 耦合边界类：按方法划分
     pub fn is_vm_boundary_class(&self, cls: &str) -> bool {
         let m = self.manifest;
         m.vm_boundary_classes.contains(outer_of(cls)) && !listed(&m.release, cls)
     }
 
-    /// VM 边界类的 `<clinit>` 不翻译（清单 `translate_clinit` 逐类放行者除外）
-    pub fn skips_clinit(&self, cls: &str) -> bool {
-        self.is_vm_boundary_class(cls) && !self.manifest.vm_translate_clinit.contains(cls)
+    /// VM 边界类中 `<clinit>` 由手写层承载、不翻译的类（`[vm_boundary] clinit_carried`）
+    pub fn is_vm_clinit_carried(&self, cls: &str) -> bool {
+        self.is_vm_boundary_class(cls) && self.manifest.vm_clinit_carried.contains(outer_of(cls))
     }
 }
 

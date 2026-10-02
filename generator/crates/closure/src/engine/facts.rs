@@ -199,11 +199,12 @@ impl Ctx<'_> {
         Kind::Bytecode
     }
 
-    /// 边界方法由手写层承载（native / 无体 / 未登记翻译的 `<clinit>` / VM 内建 / 共置手写体提供）
+    /// 边界方法由手写层承载（native / 无体 / 内部边界类与 `clinit_carried` 所列 VM 边界类的 `<clinit>` /
+    /// VM 内建 / 共置手写体提供）。其余 VM 边界类的 `<clinit>` 是纯 Java 静态状态，按字节码翻译
     fn boundary_carried(&self, cf: &ClassFile, m: &classfile::Method, member: &str) -> bool {
         m.is_native()
             || m.code.is_none()
-            || (m.name == "<clinit>" && !self.man.translates_clinit(&cf.name))
+            || (m.name == "<clinit>" && (!self.man.is_vm_boundary(&cf.name) || self.man.is_vm_clinit_carried(&cf.name)))
             || self.man.is_intrinsic(member)
             || self.provided(cf, &m.name, &m.desc)
     }

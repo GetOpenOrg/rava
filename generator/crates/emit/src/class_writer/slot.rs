@@ -57,7 +57,7 @@ fn result_inner(t: &str) -> Option<&str> {
     t.strip_prefix("Result<").and_then(|r| r.strip_suffix('>')).map(str::trim)
 }
 
-/// 覆盖方法在声明祖先（槽位类短名 `virtual_in`）vtable 上的擦除名单（去重保序）
+/// 覆盖方法在声明祖先（槽位类 binary `virtual_in`）vtable 上的擦除名单（去重保序）
 pub fn override_vtable_erasure(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method, virtual_in: &str) -> Vec<String> {
     let reg = ctx.ty.reg;
     let mut owner = None;
@@ -65,7 +65,7 @@ pub fn override_vtable_erasure(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method, vi
     let mut cur = ci.super_class();
     while !cur.is_empty() && seen.insert(cur) {
         let Some(c) = reg.get(cur) else { break };
-        if ctx.short(cur) == virtual_in {
+        if cur == virtual_in {
             owner = Some(c);
             break;
         }
@@ -74,7 +74,7 @@ pub fn override_vtable_erasure(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method, vi
     let Some(owner) = owner else { return Vec::new() };
     let Some((decl_ci, owner_m)) = owner_slot_declaration(ctx, owner, m) else { return Vec::new() };
     let owner_params = ctx.ty.effective_class_type_params(decl_ci).to_vec();
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let anc = ctx.ty.emitted_method_sig_types(decl_ci, owner_m, &owner_params);
     let own_params = ctx.ty.effective_class_type_params(ci).to_vec();
     let own = ctx.ty.emitted_method_sig_types(ci, m, &own_params);

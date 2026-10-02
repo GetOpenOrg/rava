@@ -1,8 +1,8 @@
 //! 单类文件文本（← `emitter/class_writer._gen_class_rs`）。
 //!
-//! 组装顺序与 Python 一致：文件头 + cross_imports + 继承导入插入位 → `java_class! { 类块头 /
+//! 组装顺序：文件头 + 导入块插入位（第二阶段后由文件作用域记录填充）→ `java_class! { 类块头 /
 //! struct / impl { static 字段 · 方法块 · 继承成员插入位 } / 接口实现插入位 }` → 协变 upcast
-//! 插入位 → implref 稳定别名 → 接口 lambda 擦除 impl → 按文本补导的 use。
+//! 插入位 → 接口 lambda 擦除 impl。
 //! 方法块在步骤 (c)、vtable / 继承段在步骤 (d) 接入 [`gen_class_rs`] 的方法块表。
 
 pub mod attrs;
@@ -23,13 +23,14 @@ use ty::ClassInfo;
 
 use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
+use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
-use crate::imports::{collect_referenced, plan_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, CrossPlan, Prefix};
+use crate::imports::{claim_structural, collect_referenced, CrateRoute, CrossInput, ImportSite};
 use crate::lang;
-use crate::project::layout::JdkLayout;
+use crate::project::layout::{JdkLayout, UserLayout};
 use crate::text::indent;
 
-/// 继承成员 use 插入位（`inherited_gen.IMPORTS_SLOT`）
+/// 导入块插入位（第二阶段后由文件作用域记录填充）
 pub const INHERITED_IMPORTS_SLOT: &str = "//@@rava:inherited-imports@@";
 /// 继承成员声明插入位（`inherited_gen.MEMBERS_SLOT`）
 pub const INHERITED_MEMBERS_SLOT: &str = "//@@rava:inherited-members@@";
@@ -53,15 +54,15 @@ pub struct LibSite<'l> {
 pub struct ClassSite<'l> {
     /// java_runtime 布局（包路径 / 同名消歧 / 跳过包 / 生成集）
     pub jdk: &'l JdkLayout,
-    /// user crate 类：同 crate 兄弟类导入行；None = java_runtime / lib crate 内的类
-    pub user_sibling_imports: Option<Vec<String>>,
+    /// user crate 布局：本类属 user crate 时；None = java_runtime / lib crate 内的类
+    pub user: Option<&'l UserLayout>,
     /// lib 模式定向；None = 单 crate 发射（无 --lib）
     pub lib: Option<LibSite<'l>>,
 }
 
-impl ClassSite<'_> {
+impl<'l> ClassSite<'l> {
     fn is_user(&self) -> bool {
-        self.user_sibling_imports.is_some()
+        self.user.is_some()
     }
 
     /// lib crate 内的类：Java 可见性映射生效
@@ -78,19 +79,16 @@ impl ClassSite<'_> {
         }
     }
 
-    fn scan_prefix(&self) -> Prefix<'_> {
-        Prefix { base: self.prefix(), route: self.lib.map(|l| l.route) }
+    /// 导入定向参数
+    pub fn import_site(&self) -> ImportSite<'l> {
+        ImportSite { cross: self.cross_input(), user: self.user }
     }
 
-    /// cross_imports 参数（用户类在无 JDK 类时不做包集合导入与生成集过滤；lib 模式只按生成集定向）
-    fn cross_input(&self) -> CrossInput<'_> {
+    /// 跨类引用参数（用户类在无 JDK 类时不导入生成类；lib 模式按生成集定向）
+    fn cross_input(&self) -> CrossInput<'l> {
         if let Some(l) = self.lib {
             return CrossInput {
-                pkg_paths: None,
                 generated: Some(l.generated),
-                conflict_map: None,
-                skipped: None,
-                sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
                 prefix: self.prefix(),
                 all_in_chain: self.is_user(),
                 route: Some(l.route),
@@ -98,11 +96,7 @@ impl ClassSite<'_> {
         }
         let jdk_on = !self.is_user() || !self.jdk.files.is_empty();
         CrossInput {
-            pkg_paths: jdk_on.then_some(self.jdk.pkg_paths.as_slice()),
             generated: jdk_on.then_some(&self.jdk.generated),
-            conflict_map: jdk_on.then_some(&self.jdk.conflict_map),
-            skipped: jdk_on.then_some(&self.jdk.skipped_classes),
-            sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
             prefix: self.prefix(),
             all_in_chain: self.is_user(),
             route: None,
@@ -135,7 +129,7 @@ fn parent_rust(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
         .ancestor_type_args(ci, None)
         .into_iter()
         .find(|(n, _)| n == sup)
-        .map(|(_, a)| render_arg_list(&a, ctx.ty.names))
+        .map(|(_, a)| render_arg_list(&a, &ctx.ty))
         .unwrap_or_default();
     format!("{}{args}", ctx.short(sup))
 }
@@ -149,7 +143,7 @@ fn inherited_segments<'c>(
     ci: &'c ClassInfo,
     tps: &[String],
     visible: &[&'c classfile::Method],
-    out: &mut Vec<String>,
+    out: &mut Vec<MethodBlock>,
 ) -> Result<()> {
     let overloaded = ctx.ty.hierarchy_overloaded_names(ci);
     let cx = methods::Cx { ctx, ci, tps, overloaded: &overloaded };
@@ -163,36 +157,37 @@ fn inherited_segments<'c>(
 /// 单类发射结果：文件文本 + 实际输出的实例方法声明记录
 pub struct ClassText {
     pub text: String,
-    pub methods: Vec<crate::emission::EmittedMethod>,
+    pub methods: Vec<EmittedMethod>,
 }
 
-/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、跨类导入规划
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法
 pub struct ClassPrep<'c> {
     visible: Vec<&'c classfile::Method>,
-    cross: CrossPlan,
 }
 
-/// 前置事实：引用集 → 跨类导入规划
+/// 前置事实：结构化引用集（含 user crate 兄弟类）在本文件作用域
+/// 按 binary 序预认领（先于任何文本渲染）→ 派生名登记
 pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
+    // 引用集只是 binary 集合，在无作用域视图上求得，不产生认领
+    let plain = ctx.unscoped();
     if ctx.is_opaque(ci.name()) {
         // 不透明形态只引用全部传递超类型（upcast 目标）
-        let referenced: BTreeSet<String> = opaque::opaque_supers(ctx, ci).into_iter().collect();
-        let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
-        return Ok(ClassPrep { visible: Vec::new(), cross });
+        let referenced: BTreeSet<String> = opaque::opaque_supers(&plain, ci).into_iter().collect();
+        claim_structural(ctx, ci, &cross, &referenced)?;
+        return Ok(ClassPrep { visible: Vec::new() });
     }
-    let referenced = collect_referenced(ctx, ci, cross.generated);
+    let mut referenced = collect_referenced(&plain, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
-    let cross = plan_cross_imports(ctx, ci, &cross, &referenced)?;
-    Ok(ClassPrep { visible, cross })
+    if let Some(user) = site.user {
+        // 用户类兄弟按未过滤引用集（生成集过滤只作用于 JDK 引用）
+        referenced.extend(user.sibling_set(&plain, ci.name(), &collect_referenced(&plain, ci, None)));
+    }
+    claim_structural(ctx, ci, &cross, &referenced)?;
+    Ok(ClassPrep { visible })
 }
 
-/// 跨类导入行：`seen_simples`（跨包同名冲突守卫）跨类累积，必须按发射序串行调用（只做裁决）
-pub fn class_cross_imports(state: &mut ProjectState, prep: &ClassPrep<'_>) -> Vec<String> {
-    prep.cross.resolve(&mut state.seen_simples)
-}
-
-/// 生成单类文件文本（串行形态：前置 → 跨类导入 → 类体）
+/// 生成单类文件文本（串行形态：前置 → 类体）
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
@@ -201,11 +196,10 @@ pub fn gen_class_rs(
     site: &ClassSite<'_>,
 ) -> Result<ClassText> {
     let prep = class_prep(ctx, ci, site)?;
-    let cross_imports = class_cross_imports(state, &prep);
-    class_text(ctx, state, bodies, ci, site, &prep, cross_imports)
+    class_text(ctx, state, bodies, ci, site, &prep)
 }
 
-/// 类体文本：除跨类导入外只读共享上下文、只向 `state` 追加账本（可按类并行，
+/// 类体文本：只读共享上下文、只向 `state` 追加账本（可按类并行，
 /// `state` 为本类增量，由调用方按发射序并入）
 pub fn class_text(
     ctx: &EmitCtx<'_>,
@@ -214,15 +208,13 @@ pub fn class_text(
     ci: &ClassInfo,
     site: &ClassSite<'_>,
     prep: &ClassPrep<'_>,
-    cross_imports: Vec<String>,
 ) -> Result<ClassText> {
     if ctx.is_opaque(ci.name()) {
-        return Ok(opaque::opaque_text(ctx, state, ci, site, cross_imports));
+        return Ok(opaque::opaque_text(ctx, state, ci, site));
     }
     let visible = &prep.visible;
     let is_iface = ci.is_interface();
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];
-    parts.extend(cross_imports.iter().cloned());
     parts.push(INHERITED_IMPORTS_SLOT.to_string());
     parts.push(String::new());
 
@@ -240,13 +232,15 @@ pub fn class_text(
 
     // G-10 账本：本类方法由本轮生成
     state.generated_classes.insert(ci.name().to_string());
-    let mut method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
+    let mut method_blocks: Vec<MethodBlock> =
+        fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site)).into_iter().map(MethodBlock::plain).collect();
     let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps)?;
     method_blocks.extend(mb.method_blocks);
-    let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
+    let iface_lambda_blocks = mb.iface_lambda_blocks;
     inherited_segments(ctx, state, bodies, ci, &tps, visible, &mut method_blocks)?;
-    // 先按 `pub fn` 形态记录方法声明，再做可见性降级（记录与文本最终形态解耦）
-    let methods = crate::emission::record_methods(&method_blocks);
+    // 方法声明记录由各方法段生成点给出（与文本最终形态解耦）
+    let methods: Vec<EmittedMethod> = method_blocks.iter().filter_map(|b| b.decl.clone()).collect();
+    let mut method_blocks: Vec<String> = method_blocks.into_iter().map(|b| b.text).collect();
     if java_vis {
         visibility::downgrade_non_public_blocks(&mut method_blocks);
     }
@@ -289,11 +283,6 @@ pub fn class_text(
     parts.push(INTERFACE_UPCASTS_SLOT.into());
     parts.push(String::new());
 
-    let java_simple = ci.name().rsplit('/').next().unwrap_or(ci.name()).replace('$', "_");
-    parts.push("#[doc(hidden)]".into());
-    parts.push(format!("pub mod implref {{ pub use super::{sname} as {java_simple}; }}"));
-    parts.push(String::new());
-
     if !iface_lambda_blocks.is_empty() {
         let recv = if tps.is_empty() { sname.clone() } else { format!("{sname}<{}>", vec!["Object"; tps.len()].join(", ")) };
         parts.push("// G-10: 接口私有实例 lambda body —— 载体擦除实例化上的固有方法".into());
@@ -303,10 +292,5 @@ pub fn class_text(
         parts.push(String::new());
     }
 
-    let scanned: Vec<String> = method_blocks.iter().chain(&iface_lambda_blocks).cloned().collect();
-    parts.extend(used_vtable_imports(ctx, &scanned, &cross_imports, &sname, site.scan_prefix()));
-    if !iface_supp_blocks.is_empty() {
-        parts.extend(supplementary_iface_imports(ctx, &iface_supp_blocks, &cross_imports, &sname, site.scan_prefix()));
-    }
     Ok(ClassText { text: parts.join("\n"), methods })
 }

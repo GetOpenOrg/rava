@@ -34,6 +34,8 @@ pub struct MethodMeta {
     /// Signature 属性（泛型签名）；无则空串
     pub signature:   &'static str,
     pub inherited:   bool,
+    /// 复制进本类的方法体（接口 default / 未覆盖的超类虚方法）的声明类型（binary name）；本类声明 / 继承转发行为空串
+    pub declared_by:  &'static str,
 }
 
 /// 嵌套元数据（InnerClasses 本类条目 + EnclosingMethod）。
@@ -42,12 +44,28 @@ pub struct NestMeta {
     pub simple:     &'static str,
     pub self_entry: bool,
     pub enclosing:  Option<(&'static str, &'static str, &'static str)>,
+    /// 本类声明的成员类（InnerClasses 中 outer 为本类的条目，属性序）
+    pub members:    &'static [&'static str],
 }
 
 /// 注解引用的稀疏常量池条目值。
 pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
 type Names = &'static [&'static str];
+/// 生成文件行表：(scratch 相对路径, [(帧归属类 binary name, 方法名, 描述符, 源文件, 宿主类（同归属类为空）)],
+/// [(Rust 行, 方法下标, Java 行)]——按 Rust 行升序；方法下标 `u32::MAX` = 块外，Java 行 0 = 方法内首个
+/// 标记之前，[`LINE_NATIVE`] / [`LINE_UNKNOWN`] = 手写伴生方法体（native / 无行号）)
+pub type LineTable = (&'static str, &'static [LineMethod], &'static [(u32, u32, u32)]);
+/// 行表方法项 (帧归属类, 方法名, 描述符, 源文件, 宿主类)
+pub type LineMethod = (&'static str, &'static str, &'static str, &'static str, &'static str);
+/// 帧方法的 LineNumberTable：(类, 方法名, 描述符, [(start_pc, 行)])，按 (类, 名, 描述符) 升序
+pub type LineNumbers = (&'static str, &'static str, &'static str, &'static [(u16, u16)]);
+/// 行表方法下标哨兵：块外 / 非 Java 方法
+pub const NO_METHOD: u32 = u32::MAX;
+/// 行表 Java 行哨兵：native 方法帧（`StackTraceElement.lineNumber = -2`）
+pub const LINE_NATIVE: u32 = u32::MAX;
+/// 行表 Java 行哨兵：无行号的手写方法帧（`-1`）
+pub const LINE_UNKNOWN: u32 = u32::MAX - 1;
 
 extern "Rust" {
     #[link_name = "__java_meta_CLASS_HIERARCHY"]
@@ -70,6 +88,12 @@ extern "Rust" {
     static CLINIT_CLASSES: Names;
     #[link_name = "__java_meta_PERMITTED_SUBCLASSES"]
     static PERMITTED_SUBCLASSES: &'static [(&'static str, Names)];
+    #[link_name = "__java_meta_NEST_MEMBERS"]
+    static NEST_MEMBERS: &'static [(&'static str, Names)];
+    #[link_name = "__java_meta_CLASS_ACCESS_FLAGS"]
+    static CLASS_ACCESS_FLAGS: &'static [(&'static str, i32)];
+    #[link_name = "__java_meta_CLASS_SOURCE_FILE"]
+    static CLASS_SOURCE_FILE: &'static [(&'static str, &'static str)];
     #[link_name = "__java_meta_RECORD_CLASSES"]
     static RECORD_CLASSES: Names;
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
@@ -80,6 +104,10 @@ extern "Rust" {
     static VM_CONST_PROPERTIES: &'static [(&'static str, &'static str)];
     #[link_name = "__java_meta_VM_DYNAMIC_PROPERTIES"]
     static VM_DYNAMIC_PROPERTIES: &'static [&'static str];
+    #[link_name = "__java_meta_LINE_TABLES"]
+    static LINE_TABLES: &'static [LineTable];
+    #[link_name = "__java_meta_LINE_NUMBERS"]
+    static LINE_NUMBERS: &'static [LineNumbers];
 }
 
 // SAFETY（以下各函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
@@ -105,15 +133,25 @@ pub fn class_anno() -> &'static [(&'static str, &'static [u8], &'static [(i32, C
 pub fn clinit_classes() -> Names { unsafe { CLINIT_CLASSES } }
 /// sealed 类 → 许可子类型。
 pub fn permitted_subclasses() -> &'static [(&'static str, Names)] { unsafe { PERMITTED_SUBCLASSES } }
+/// 嵌套宿主 → NestMembers 属性所列成员。
+pub fn nest_members() -> &'static [(&'static str, Names)] { unsafe { NEST_MEMBERS } }
+/// 类 → 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内）。
+pub fn class_access_flags() -> &'static [(&'static str, i32)] { unsafe { CLASS_ACCESS_FLAGS } }
+/// 类 → SourceFile 属性值（无该属性的类不在表中）。
+pub fn class_source_file() -> &'static [(&'static str, &'static str)] { unsafe { CLASS_SOURCE_FILE } }
 /// record 类集。
 pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 /// record 类 → 分量（名、描述符、泛型签名）。
 pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])] {
     unsafe { RECORD_COMPONENTS }
 }
-/// 模块服务 (服务, provider)：closure.json seeds.services 的模块 provider，事实序。
+/// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
 pub fn module_services() -> &'static [(&'static str, &'static str)] { unsafe { MODULE_SERVICES } }
-/// VM 初始系统属性的常量键（键, 值）：closure.json system_properties.values，与分析器折叠同源。
+/// VM 初始系统属性的常量键（键, 值）：闭包事实 system_properties.values，与分析器折叠同源。
 pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe { VM_CONST_PROPERTIES } }
-/// VM 初始系统属性的动态键（由手写层取宿主值）：closure.json system_properties.dynamic。
+/// VM 初始系统属性的动态键（由手写层取宿主值）：闭包事实 system_properties.dynamic。
 pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }
+/// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
+pub fn line_tables() -> &'static [LineTable] { unsafe { LINE_TABLES } }
+/// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
+pub fn line_numbers() -> &'static [LineNumbers] { unsafe { LINE_NUMBERS } }

@@ -82,9 +82,10 @@ fn record_and_switch_bootstraps_translate() {
     );
     assert!(user.contains("wrapping_mul(31)"), "record hashCode");
     assert!(user.contains("o.is_instance_of(\"RecordSwitch$Point\") && {"), "record equals");
-    // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句
+    // 首分量为引用（块表达式开头）时整体加括号，否则语句位置的 `{ .. } && ..` 被解析成块语句；
+    // 引用分量调用清单登记的 component_equals（不再内联判空）
     let label_eq = user.lines().find(|l| l.contains("o.is_instance_of(\"RecordSwitch$Label\") && {")).expect("Label equals");
-    assert!(label_eq.contains("); ({ let x"), "引用首分量的比较整体加括号：{label_eq}");
+    assert!(label_eq.contains("); ({ let _t") && label_eq.contains("::equals("), "引用首分量的比较整体加括号：{label_eq}");
     // typeSwitch 的限定枚举常量标签按身份比较常量；enumSwitch 同一翻译
     assert!(user.contains("__ts_sel1 == Object::from(Clone::clone(&RecordSwitch_Color::RED()?))"), "枚举常量标签");
     // 拼接实参的 toString 物化按 Java 求值序（从左到右）
@@ -298,6 +299,17 @@ fn name_level_classes_emit_opaque() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 实例方法自身的 this 恒非 null：经手写边界拿到的编码器，CharsetEncoder 方法体里 this 上的虚调用
+/// 及其结果上的调用不折叠为 null_recv（不发 `__null_recv(&this, …)`）
+#[test]
+fn this_receiver_never_null_recv() {
+    let Some((_, out)) = build("NullRecvThis.java", "nullrecv-this", &[]) else { return };
+    let enc = std::fs::read_to_string(out.join("java_runtime/src/java/nio/charset/charset_encoder.rs")).unwrap();
+    let hits: Vec<&str> = enc.lines().filter(|l| l.contains("__null_recv(")).collect();
+    assert!(hits.is_empty(), "{hits:#?}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// 动态代理实现的接口（无静态实现类）：属主升 L2 照常发射，接口调用不导出 null_recv
 #[test]
 fn proxy_interface_owner_not_opaque() {
@@ -329,5 +341,16 @@ fn locale_bundle_parent_not_null_recv() {
     assert!(!nr.contains(&22), "getObject@22 误判恒 null：{nr:?}");
     // 非空断言：getObject 在闭包内（父链查找路径确实被分析）
     assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == get_object), "getObject 不在闭包内");
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// 被派发的桥方法所桥接的真实方法算作已派发：桥被省略、槽并入继承的真实实现时，
+/// 该继承槽条目照常转发，不发 `__stub`
+#[test]
+fn bridge_merged_inherited_slot_not_stubbed() {
+    let Some((_, out)) = build("BridgeMergedSlot.java", "bridge-slot", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("java_runtime/src/java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
+    let line = rs.lines().find(|l| l.contains("pub fn tryAdvance(")).expect("继承的 tryAdvance 转发");
+    assert!(!line.contains("__stub"), "{line}");
     std::fs::remove_dir_all(&out).ok();
 }

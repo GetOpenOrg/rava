@@ -63,7 +63,7 @@ fn fd_of(fdo: &FileDescriptor) -> i32 {
 
 impl UnixFileDispatcherImpl {
     /// native `read0(FileDescriptor, long address, int len)`：read(2)。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = unsafe { libc::read(fd_of(&fdo), address as *mut libc::c_void, len as usize) };
@@ -71,7 +71,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `pread0(FileDescriptor, long address, int len, long position)`：pread(2)。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn pread0(fdo: FileDescriptor, address: i64, len: i32, position: i64) -> Result<i32> {
         // SAFETY: 同 read0
         let n = unsafe { libc::pread(fd_of(&fdo), address as *mut libc::c_void, len as usize, position as libc::off_t) };
@@ -79,7 +79,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `write0(FileDescriptor, long address, int len)`：write(2)。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn write0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = unsafe { libc::write(fd_of(&fdo), address as *const libc::c_void, len as usize) };
@@ -87,7 +87,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `pwrite0(FileDescriptor, long address, int len, long position)`：pwrite(2)。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn pwrite0(fdo: FileDescriptor, address: i64, len: i32, position: i64) -> Result<i32> {
         // SAFETY: 同 write0
         let n = unsafe { libc::pwrite(fd_of(&fdo), address as *const libc::c_void, len as usize, position as libc::off_t) };
@@ -95,7 +95,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `seek0(FileDescriptor, long offset)`：offset < 0 取当前位置，否则定位到 offset。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn seek0(fdo: FileDescriptor, offset: i64) -> Result<i64> {
         // SAFETY: lseek 只作用于 fd
         let r = unsafe {
@@ -109,7 +109,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `size0(FileDescriptor)`：fstat(2) 的 st_size。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn size0(fdo: FileDescriptor) -> Result<i64> {
         // SAFETY: buf 为栈上 stat 结构
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
@@ -120,7 +120,7 @@ impl UnixFileDispatcherImpl {
     }
 
     /// native `truncate0(FileDescriptor, long size)`：ftruncate(2)。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn truncate0(fdo: FileDescriptor, size: i64) -> Result<i32> {
         // SAFETY: ftruncate 只作用于 fd
         let r = unsafe { libc::ftruncate(fd_of(&fdo), size as libc::off_t) };
@@ -136,7 +136,7 @@ impl UnixFileDispatcherImpl {
 
     /// native `setDirect0(FileDescriptor)`：打开直接 I/O 并返回文件系统块大小。
     /// macOS：fcntl(F_NOCACHE)；Linux：追加 O_DIRECT。失败抛 IOException("DirectIO setup failed")。
-    #[jvm_native(upcalls = "java/io/IOException.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn setDirect0(fdo: FileDescriptor) -> Result<i32> {
         let fd = fd_of(&fdo);
         // SAFETY: fcntl / fstatvfs 只作用于 fd，vfs 为栈上结构

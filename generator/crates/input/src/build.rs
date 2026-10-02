@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::ClosureFacts;
+use crate::facts::{ClosureFacts, SysPropFacts};
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -106,6 +106,12 @@ pub struct EmitInput {
     pub dispatched: BTreeSet<MethodKey>,
     /// 已实例化的类（分析器 `instantiated`）：槽是否保留按实例化类实际选中的实现判定
     pub instantiated: BTreeSet<String>,
+    /// 手写体继承成员需求（分析器 `hw_inherited`）：接收者类须承载的祖先实例方法（接收者, 方法名, 描述符）
+    pub hw_inherited: Vec<MethodKey>,
+    /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
+    pub module_services: Vec<(String, String)>,
+    /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
+    pub system_properties: SysPropFacts,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -235,6 +241,31 @@ fn is_identifier(s: &str) -> bool {
     }
 }
 
+/// 调用链上方法体的 ldc 字符串常量：(所在类, 字符串)。未改写的方法体直接读原字节码，不复制成 NormCode
+fn visited_strings<'c>(
+    closure: &'c [Arc<ClassFile>],
+    visited: &BTreeSet<MethodKey>,
+    norm: &'c BTreeMap<MethodKey, NormCode>,
+) -> BTreeSet<(&'c str, &'c str)> {
+    let by_name: BTreeMap<&str, &ClassFile> = closure.iter().map(|c| (c.name.as_str(), &**c)).collect();
+    let mut out = BTreeSet::new();
+    for k in visited {
+        let Some(cf) = by_name.get(k.0.as_str()) else { continue };
+        for m in cf.methods.iter().filter(|m| m.name == k.1 && m.desc == k.2) {
+            let Some(code) = &m.code else { continue };
+            let ops: Box<dyn Iterator<Item = &'c Insn>> = match norm.get(k) {
+                Some(n) => Box::new(n.insns.iter().filter_map(|x| match x {
+                    NInsn::Op(i) => Some(i),
+                    _ => None,
+                })),
+                None => Box::new(code.insns.iter()),
+            };
+            out.extend(ops.filter_map(ldc_string).map(|s| (cf.name.as_str(), s)));
+        }
+    }
+    out
+}
+
 fn ldc_string(i: &Insn) -> Option<&str> {
     match &i.operand {
         Operand::Ldc(Const::String(s)) if matches!(i.opcode, op::LDC | op::LDC_W | op::LDC2_W) => Some(s),
@@ -326,7 +357,7 @@ impl<'a> BuildInput<'a> {
         Ok(out)
     }
 
-    fn reflect(&self, closure: &[Arc<ClassFile>], visited: &BTreeSet<MethodKey>, norm: &BTreeMap<MethodKey, NormCode>) -> ReflectFacts {
+    fn reflect(&self, strings: &BTreeSet<(&str, &str)>) -> ReflectFacts {
         let f = self.facts;
         let mut consts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for r in &f.reflect_members {
@@ -335,24 +366,7 @@ impl<'a> BuildInput<'a> {
         for (owner, names) in &f.seeds.reflect_names {
             consts.entry(owner.clone()).or_default().extend(names.iter().cloned());
         }
-        let by_name: BTreeMap<&str, &ClassFile> = closure.iter().map(|c| (c.name.as_str(), &**c)).collect();
-        let mut field_names = BTreeSet::new();
-        for k in visited {
-            let Some(cf) = by_name.get(k.0.as_str()) else { continue };
-            for m in cf.methods.iter().filter(|m| m.name == k.1 && m.desc == k.2) {
-                let Some(code) = &m.code else { continue };
-                // 未改写的方法体直接读原字节码，不复制成 NormCode
-                let ops: Box<dyn Iterator<Item = &Insn>> = match norm.get(k) {
-                    Some(n) => Box::new(n.insns.iter().filter_map(|x| match x {
-                        NInsn::Op(i) => Some(i),
-                        _ => None,
-                    })),
-                    None => Box::new(code.insns.iter()),
-                };
-                let strs = ops.filter_map(ldc_string).filter(|s| is_identifier(s));
-                field_names.extend(strs.map(str::to_string));
-            }
-        }
+        let field_names = strings.iter().map(|(_, s)| *s).filter(|s| is_identifier(s)).map(str::to_string).collect();
         ReflectFacts {
             consts,
             all_members: f.seeds.reflect_all.clone(),
@@ -379,13 +393,9 @@ impl<'a> BuildInput<'a> {
         lap("input.registry");
         let normalized = self.normalize(&registry)?;
         lap("input.normalize");
-        let reflect = self.reflect(&closure, &visited, &normalized);
-        let module_resources = self
-            .manifest
-            .module_resource_paths
-            .iter()
-            .filter_map(|p| self.cp.resource(p).map(|b| (p.clone(), b)))
-            .collect();
+        let strings = visited_strings(&closure, &visited, &normalized);
+        let reflect = self.reflect(&strings);
+        let module_resources = crate::resources::derive(self.cp, strings.iter().copied());
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
@@ -402,6 +412,9 @@ impl<'a> BuildInput<'a> {
             mirror_init_classes: f.seeds.mirror_inits.clone(),
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
+            hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
+            module_services: f.seeds.module_services.clone(),
+            system_properties: f.system_properties.clone(),
             module_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,

@@ -170,7 +170,7 @@ pub fn from_rust_text(env: &InstrEnv, s: &str) -> Option<RsType> {
         return Some(RsType::Param(head.to_string()));
     }
     let arg_tys: Vec<RsType> = args.iter().map(|a| from_rust_text(env, a).unwrap_or(RsType::Object)).collect();
-    match env.ctx.ty.names.binary_of(head) {
+    match env.ctx.ty.binary_of(head) {
         Some(b) => Some(RsType::class(b.to_string(), arg_tys)),
         None => Some(RsType::Param(s.to_string())),
     }

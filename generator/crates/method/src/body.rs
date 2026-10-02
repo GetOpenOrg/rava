@@ -5,12 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cfg::{analyze, build_dispatch, AuditStats, function_always_returns, simplify, structure, verify_tree, JumpLedger, NodeId, Succs};
 use classfile::extras::LocalVar;
-use classfile::{acc, Method};
-use input::NormCode;
+use classfile::{acc, Method, Operand};
+use input::{NInsn, NormCode};
 use instr::{Audit, InstrEnv, InstrLog};
 use sim::{SimConfig, SlotDecl, StackSim};
 use ty::ident::safe_ident;
-use ty::{ClassInfo, RsType};
+use ty::{ClassInfo, FnSig, RsType};
 
 use crate::blocks::{cfg_view, Blocks};
 use crate::emit::{emit_dispatch, emit_tree};
@@ -18,7 +18,7 @@ use crate::entry::{Entry, Item};
 use crate::error::{cfg_err, MethodError, MethodResult};
 use crate::fold_array::fold_array_literals;
 use crate::node::{Graph, Node};
-use crate::sig::{ctor_functions, is_main, local_names, params_with_slot, rust_fn_name, signature_line};
+use crate::sig::{ctor_functions, is_main, local_names, param_slot_names, params_text, rust_fn_name, signature_line};
 use crate::split_try::split_disjoint_try_ranges;
 use crate::unify::CondValues;
 use crate::vars::{analyze_mutation, hoist_if_vars, hoist_loop_vars, promote_undeclared_assigns, VarsCtx};
@@ -40,6 +40,8 @@ pub struct MethodRequest<'a> {
     pub code: Option<&'a NormCode>,
     /// 局部变量表（LVT + LVTT 签名；继承展开时为适配后的视图）
     pub local_vars: &'a [LocalVar],
+    /// 出处方法的 LineNumberTable（(起始 pc, 行)，按 pc 升序；无则为空，不出行标记）
+    pub line_numbers: &'a [(u16, u16)],
     /// 同名方法在发射类内有重载（名字加描述符后缀，前置 `// java:` 注释）
     pub overloaded: bool,
     /// 调用方给定的已去重 Rust 名
@@ -92,8 +94,28 @@ fn try_region_stats(code: &NormCode, nodes: &Graph) -> (usize, usize) {
     (live.iter().filter(|n| n.is_try()).count(), declared.difference(&translated).count())
 }
 
+/// 方法体的引用存储（astore 族）：(槽, pc)。LVT 区间起于首次存储之后，区间内的存储即再赋值
+fn ref_stores(code: Option<&NormCode>) -> Vec<(u16, u32)> {
+    const ASTORE: u8 = 0x3a;
+    const ASTORE_0: u8 = 0x4b;
+    const ASTORE_3: u8 = 0x4e;
+    let Some(code) = code else { return Vec::new() };
+    code.insns
+        .iter()
+        .filter_map(|x| match x {
+            NInsn::Op(i) => match (i.opcode, &i.operand) {
+                (ASTORE, Operand::Local(s)) => Some((*s, i.offset)),
+                (ASTORE_0..=ASTORE_3, _) => Some((u16::from(i.opcode - ASTORE_0), i.offset)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// 局部变量声明表：泛型签名（非根类）优先，否则描述符（非根类、非路径形态）；按起点升序
-fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar]) -> BTreeMap<u16, Vec<SlotDecl>> {
+fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar], code: Option<&NormCode>) -> BTreeMap<u16, Vec<SlotDecl>> {
+    let stores = ref_stores(code);
     let ty_ctx = &env.ctx.ty;
     let usable = |t: &RsType| {
         let s = text::ty(env, t);
@@ -123,6 +145,10 @@ fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar]) -> BTreeMap<u16, Vec<Slot
             from_sig,
             raw_sig: lv.signature.clone(),
             desc: lv.desc.clone(),
+            reassigned: {
+                let (start, end) = (u32::from(lv.start), u32::from(lv.start) + u32::from(lv.len));
+                stores.iter().any(|&(slot, pc)| slot == lv.slot && start <= pc && pc < end)
+            },
         });
     }
     for v in out.values_mut() {
@@ -173,10 +199,15 @@ fn structured_entries<'e>(
     Ok(entries)
 }
 
-/// entries → 行（语句条目按条目缩进渲染）
-fn render(env: &InstrEnv, entries: &[Entry]) -> Vec<String> {
+/// entries → 行（语句条目按条目缩进渲染；来源行变化处先出独立行标记，见 [`crate::lines`]）
+fn render(env: &InstrEnv, entries: &[Entry], line_numbers: &[(u16, u16)]) -> Vec<String> {
     let mut lines = Vec::with_capacity(entries.len());
+    let mut marker = crate::lines::Marker::new(line_numbers);
     for e in entries {
+        if matches!(e.item, Item::Removed) {
+            continue;
+        }
+        lines.extend(marker.before(e.pc));
         match &e.item {
             Item::Stmt(s) => lines.push(format!("{}{}", e.indent, text::stmt(env, s).trim_start())),
             Item::Line(t) | Item::Struct { text: t, .. } => lines.push(t.clone()),
@@ -200,7 +231,7 @@ fn new_sim<'e>(
         class_name: req.class.name().to_string(),
         class_type_params: env.tparams.clone(),
         local_names: local_names(req.local_vars),
-        slot_decls: slot_decls(env, req.local_vars),
+        slot_decls: slot_decls(env, req.local_vars, req.code),
         return_type: ret,
         is_constructor: m.name == "<init>",
         in_vtable_body: req.in_vtable_body,
@@ -256,7 +287,7 @@ fn vars_passes(
 }
 
 /// 类 + 方法 → 完整 Rust 函数文本（见 crate 文档）
-pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mut MethodSink) -> MethodResult<String> {
+pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mut MethodSink) -> MethodResult<MethodText> {
     let m = req.method;
     if env.ctx.code_owner.is_empty() {
         // 字节码出处类决定常量池 / bootstrap 表的归属，调用方必须给出（无回退推断）
@@ -269,8 +300,14 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     let ret = text::ty(env, &sig.ret);
     let fn_name = rust_fn_name(env, m, req.overloaded, req.rust_name);
     let names = local_names(req.local_vars);
-    let params = params_with_slot(env, m, if is_static { 0 } else { 1 }, &sig.params, &names);
+    let pnames = param_slot_names(m, if is_static { 0 } else { 1 }, sig.params.len(), &names);
+    let params = params_text(env, &pnames, &sig.params);
     let sig_line = signature_line(m, &fn_name, &params, &ret);
+    let decl = (!is_ctor && !is_static && !is_main(m)).then(|| FnSig {
+        name: fn_name.clone(),
+        params: pnames.iter().cloned().zip(sig.params.iter().cloned()).collect(),
+        ret: sig.ret.clone(),
+    });
 
     let mut sim = new_sim(env, req, sig.params.clone(), sig.ret.clone())?;
     let predeclared: BTreeSet<String> = sim.state.locals.values().map(|l| l.name.as_str().to_string()).collect();
@@ -284,7 +321,7 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     }
     vars_passes(env, &mut entries, &predeclared, &sim.cfg.slot_decls)?;
 
-    let mut lines = render(env, &entries);
+    let mut lines = render(env, &entries, req.line_numbers);
     pp::erase_boxed_ctor_type_args(&mut lines);
     let own_short = env.ctx.short(class_name);
     let static_getters: BTreeSet<String> = req
@@ -297,7 +334,9 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     let mut lines = fold_array_literals(lines, &static_getters);
 
     if is_ctor {
-        while lines.last().is_some_and(|l| matches!(text::py_strip(l), "return;" | "return Ok(());" | "return Ok(this);")) {
+        while lines.last().is_some_and(|l| {
+            crate::lines::is_mark(l) || matches!(text::py_strip(l), "return;" | "return Ok(());" | "return Ok(this);")
+        }) {
             lines.pop();
         }
         lines.push("    Ok(this)".to_string());
@@ -313,18 +352,26 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         pp::add_ok_return(&mut lines, &ret, function_always_returns(&req.code.map(|c| cfg_view(&c.insns)).unwrap_or_default()));
     }
 
-    let mut body = lines.join("\n");
+    let args_used = |args: &str| lines.iter().any(|l| !crate::lines::is_mark(l) && text::has_word(l, args));
+    let main_args = (!is_ctor && is_main(m))
+        .then(|| req.local_vars.iter().find(|lv| lv.slot == 0).map_or("args", |lv| lv.name.as_str()))
+        .filter(|a| args_used(a));
+    let mut body = crate::lines::attach(lines).join("\n");
     let prefix = if req.overloaded { format!("// java: {}{}\n", m.name, m.desc) } else { String::new() };
     let text = if is_ctor {
         ctor_functions(&prefix, &fn_name, &params, &body)
     } else {
-        if is_main(m) {
-            let args = req.local_vars.iter().find(|lv| lv.slot == 0).map_or("args", |lv| lv.name.as_str());
-            if text::has_word(&body, args) {
-                body = format!("    let mut {args}: JArray<{}> = java_runtime::main_args();\n{body}", ir::anchors::STRING);
-            }
+        if let Some(args) = main_args {
+            body = format!("    let mut {args}: JArray<{}> = java_runtime::main_args();\n{body}", ir::anchors::STRING);
         }
         format!("{prefix}{sig_line} {{\n{body}\n}}")
     };
-    Ok(text)
+    Ok(MethodText { text, sig: decl })
+}
+
+/// 方法体生成产物：完整函数文本 + 实例方法的结构化签名（构造器 / 静态方法为 None）
+#[derive(Debug, Clone)]
+pub struct MethodText {
+    pub text: String,
+    pub sig: Option<FnSig>,
 }

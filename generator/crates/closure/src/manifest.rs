@@ -73,6 +73,8 @@ mod concrete;
 mod field_names;
 pub use concrete::ConcreteCfg;
 pub use field_names::NameResolver;
+mod indy_helpers;
+pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
 
@@ -96,10 +98,11 @@ pub enum StrOp {
 pub struct Manifest {
     pub runtime_dir: PathBuf,
     vm_boundary: HashSet<String>,
+    /// `<clinit>` 由手写层承载的 VM 边界类（`[vm_boundary] clinit_carried`，含嵌套类）；其余 VM 边界类的
+    /// `<clinit>` 按字节码翻译
+    vm_clinit_carried: HashSet<String>,
     /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）与分析期追加的放行条目
     release: Vec<String>,
-    /// VM 边界类中 `<clinit>` 按字节码翻译的类（`[vm_boundary] translate_clinit`）
-    translate_clinit: HashSet<String>,
     /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出；
     /// 取值是整数 / 布尔字面量时记其值（分析器按该值折叠）
     injected_statics: HashMap<String, Option<i64>>,
@@ -130,6 +133,8 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
+    /// 拼接 / record ObjectMethods 调用点的分量处理入口（`[indy]`，见 `indy_helpers.rs`）
+    pub indy_helpers: IndyHelpers,
     /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
@@ -313,8 +318,8 @@ impl Manifest {
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
+            vm_clinit_carried: strings(&closure, "vm_boundary", "clinit_carried").into_iter().collect(),
             release,
-            translate_clinit: strings(&closure, "vm_boundary", "translate_clinit").into_iter().collect(),
             injected_statics: vm
                 .get("vm_constants")
                 .and_then(|s| s.get("injected_statics"))
@@ -349,6 +354,11 @@ impl Manifest {
             boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
+            indy_helpers: IndyHelpers::from_toml(
+                vm.get("indy"),
+                !strings(&vm, "indy", "concat").is_empty(),
+                !strings(&vm, "indy", "object_methods").is_empty(),
+            )?,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
@@ -410,9 +420,9 @@ impl Manifest {
         self.vm_boundary.contains(cls.split('$').next().unwrap_or(cls))
     }
 
-    /// VM 边界类的 `<clinit>` 按字节码翻译（`[vm_boundary] translate_clinit`，按类名精确匹配）
-    pub fn translates_clinit(&self, cls: &str) -> bool {
-        self.translate_clinit.contains(cls)
+    /// VM 边界类的 `<clinit>` 由手写层承载（`[vm_boundary] clinit_carried`，按最外层类匹配）
+    pub fn is_vm_clinit_carried(&self, cls: &str) -> bool {
+        self.vm_clinit_carried.contains(cls.split('$').next().unwrap_or(cls))
     }
 
     /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：值不来自字节码，读取不折叠

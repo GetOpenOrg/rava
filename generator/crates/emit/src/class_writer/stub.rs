@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use classfile::Method;
 use ty::ident::safe_ident;
-use ty::ClassInfo;
+use ty::{ClassInfo, FnSig};
 
 use crate::ctx::EmitCtx;
 use crate::lang;
@@ -18,6 +18,8 @@ use crate::precheck::stub_call;
 pub struct Stub {
     pub sig: String,
     pub text: String,
+    /// 实例方法的结构化签名（构造器 / 静态方法为 None）
+    pub decl: Option<FnSig>,
 }
 
 /// String 结构类（`value:[B` + `coder:B`）的 hashCode 存根体：Latin1 / UTF16 双路径散列。
@@ -117,7 +119,7 @@ pub fn native_stub(
     let args: Vec<String> = names
         .iter()
         .zip(&sig.params)
-        .map(|(n, t)| format!("{n}: {}", t.render(ctx.ty.names)))
+        .map(|(n, t)| format!("{n}: {}", t.render(&ctx.ty)))
         .collect();
     let args = args.join(", ");
     let ctor = ci.is_constructor(m);
@@ -129,14 +131,14 @@ pub fn native_stub(
     let ret_type = if ctor {
         "Result<Self>".to_string()
     } else {
-        format!("Result<{}>", sig.ret.render(ctx.ty.names))
+        format!("Result<{}>", sig.ret.render(&ctx.ty))
     };
     let fn_name = safe_ident(if rust_name.is_empty() { &m.name } else { rust_name });
     let body = stub_body(ci, m);
     if m.is_static() && m.name == "main" && m.desc == lang::MAIN_DESC {
         let sig = "pub fn main() -> Result<()>".to_string();
         let text = format!("{sig} {{\n    {body}\n}}");
-        return Stub { sig, text };
+        return Stub { sig, text, decl: None };
     }
     let sig_line = format!("pub fn {fn_name}({sig_self}{args}) -> {ret_type}");
     let mut text = format!("{sig_line} {{\n    {body}\n}}");
@@ -151,7 +153,12 @@ pub fn native_stub(
             "\n\n#[doc(hidden)]\npub fn {twin}({twin_args}) -> {ret_type} {{\n    let _ = &this;\n    {body}\n}}"
         ));
     }
-    Stub { sig: sig_line, text }
+    let decl = (!m.is_static() && !ctor).then(|| FnSig {
+        name: fn_name.clone(),
+        params: names.iter().cloned().zip(sig.params.iter().cloned()).collect(),
+        ret: sig.ret.clone(),
+    });
+    Stub { sig: sig_line, text, decl }
 }
 
 #[cfg(test)]

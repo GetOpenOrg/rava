@@ -1,13 +1,11 @@
 //! 手写层（runtime/java_runtime/src 共置 `_impl.rs` / `_ext.rs`）的语法级扫描（syn）。
 //!
 //! 走真实语法树（取代已删除的 Python 正则扫描 native_upcalls.py），抽取：
-//! - `#[jvm_native|jvm_boundary|jvm_ext(upcalls = "类.成员:描述符 …")]` 声明的 Rust→Java 回调边；
 //! - `pub fn` 名（成员由手写体提供的判定）；
 //! - 手写体分配：`let mut x = T::default(); x._init_not_null();`（单独的 `T::default()` 是 Java null）
 //!   与构造调用 `T::new*(…)`；沿同文件 fn 调用传递闭包；
-//! - `error.rs` 头部 `// vm-upcalls:` 行（VM 基础设施的无条件种子）；
-//! - 调用表达式的实参 / 接收者类型（语法推断，见 [`TypedCall`]）：回调边的实参按调用点精确接入，
-//!   推断不出时由引擎退回手写方法的值池。
+//! - 调用表达式的名字与实参 / 接收者类型（语法推断，见 [`TypedCall`]）：引擎据此反解 Rust→Java 回调边
+//!  （手写层不声明回调），实参按调用点精确接入，推断不出时退回手写方法的值池。
 //!
 //! 成员匹配：Rust fn 名 = Java 名或 `名_<重载后缀>`；虚方法体前缀 `__impl_`；构造器 `<init>` ↔ `new`。
 
@@ -18,9 +16,11 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+mod generic_fns;
 mod hooks;
 mod objects;
 mod scan;
+mod stype;
 mod syntax;
 mod type_refs;
 mod units;
@@ -45,6 +45,9 @@ const SET_PREFIX: &str = "__set_";
 const GET_PREFIX: &str = "__get_";
 /// java_class! 为 static 字段生成的写访问器前缀（`T::set_<字段>(v)`）
 const STATIC_SET_PREFIX: &str = "set_";
+/// ObjectVTable 的实例字段按名协议（object.rs）：首参为字段名字面量时即该名字段的读 / 写
+const BY_NAME_WRITES: &[&str] = &["__unsafe_ref_set", "__unsafe_ref_update", "__unsafe_int_set"];
+const BY_NAME_READS: &[&str] = &["__unsafe_ref_get", "__unsafe_int_cell", "__unsafe_long_cell", "__unsafe_bool_cell"];
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
     "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
@@ -52,21 +55,15 @@ const RUST_KEYWORDS: &[&str] = &[
     "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 回调目标：方法（描述符以 `(` 开头）或静态字段
+/// 生成类的类初始化入口名（`T::__class_init()`：JVMS §5.5 主动初始化 T）
+pub(crate) const CLASS_INIT_RUST: &str = "__class_init";
+
+/// 回调目标（由手写体调用点推断）：方法、静态字段或类初始化
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Upcall {
     Method(MemberRef),
     Field(MemberRef),
-}
-
-pub fn parse_upcall(tok: &str) -> Option<Upcall> {
-    let colon = tok.find(':')?;
-    let dot = tok[..colon].rfind('.')?;
-    if dot == 0 {
-        return None;
-    }
-    let m = MemberRef { owner: tok[..dot].into(), name: tok[dot + 1..colon].into(), desc: tok[colon + 1..].into() };
-    Some(if m.desc.starts_with('(') { Upcall::Method(m) } else { Upcall::Field(m) })
+    Init(String),
 }
 
 /// Rust 类型路径（分段）→ binary name 候选（由调用方按类路径验证存在）
@@ -122,7 +119,6 @@ pub struct FieldAccess {
 #[derive(Debug, Default, Clone)]
 pub struct FnInfo {
     pub is_pub: bool,
-    pub upcalls: Vec<Upcall>,
     /// 调用点（含同文件被调 fn 的传递闭包）
     pub calls: Vec<TypedCall>,
     /// 宏调用内出现的标识符（syn 不展开宏：同名回调可能藏在宏里 → 按未知处理）
@@ -163,13 +159,14 @@ pub struct ClassHw {
     pub objects: BTreeMap<String, HwObject>,
     /// 文件定义的类型名（只对模块单元填写：路径调用 `模块::T::f` 的定位）
     pub types: BTreeSet<String>,
+    /// 顶层 impl 块关联 fn 的返回类型：(impl self 类型全路径, fn 名) → 返回类型全路径（剥 `Result` / `Option`）
+    pub rets: stype::LocalRets,
 }
 
 /// 成员（Java 名）对应的手写体汇总
 #[derive(Debug, Default)]
 pub struct MemberHw {
     pub provided: bool,
-    pub upcalls: Vec<Upcall>,
     pub allocs: BTreeSet<TypeRef>,
     pub ctors: BTreeSet<(TypeRef, String)>,
     pub calls: Vec<TypedCall>,
@@ -185,7 +182,6 @@ impl MemberHw {
     /// 并入一个命中的 fn
     pub fn absorb(&mut self, name: &str, f: &FnInfo) {
         self.provided |= f.is_pub;
-        self.upcalls.extend(f.upcalls.iter().cloned());
         self.allocs.extend(f.allocs.iter().cloned());
         self.ctors.extend(f.ctors.iter().cloned());
         self.calls.extend(f.calls.iter().cloned());
@@ -335,6 +331,7 @@ impl Handwritten {
         hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls);
         hw.objects = objects::close(&raw);
+        hw.rets = std::mem::take(&mut raw.rets);
         hw.fns = raw.fns;
         hw
     }
@@ -433,59 +430,67 @@ impl Handwritten {
         parts.join("_")
     }
 
-    /// `error.rs` 的 `// vm-upcalls:` 行
-    pub fn vm_upcalls(&self) -> Vec<Upcall> {
-        let Ok(s) = std::fs::read_to_string(self.src.join("error.rs")) else { return vec![] };
-        s.lines()
-            .filter_map(|l| l.trim_start().strip_prefix("//").map(str::trim_start))
-            .filter_map(|l| l.strip_prefix("vm-upcalls:"))
-            .flat_map(|l| l.split_whitespace().filter_map(parse_upcall).collect::<Vec<_>>())
-            .collect()
-    }
-
     /// 类型路径 → binary name 候选（`Self` → 宿主类；单段按 use 表或同包；`_` 可能是 `$`）
     pub fn resolve_type(&self, host: &str, t: &TypeRef) -> Vec<String> {
-        let pkg: Vec<&str> = host.rsplit_once('/').map_or(vec![], |(p, _)| p.split('/').collect());
-        let segs = &t.0;
-        if segs.len() == 1 && segs[0] == "Self" {
-            return vec![host.to_string()];
-        }
-        let ty = segs.last().cloned().unwrap_or_default();
-        let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
-            // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
-            Some("super") => {
-                let k = segs.iter().take_while(|s| *s == "super").count();
-                (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
-            }
-            Some("crate") => (vec![], &segs[1..]),
-            _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
-            _ => (vec![], &segs[..]),
-        };
-        let snake = to_snake(&ty);
-        let mut full = base;
-        for m in &rest[..rest.len().saturating_sub(1)] {
-            let m = m.strip_prefix("r#").unwrap_or(m);
-            if m != "implref" && m != "self" {
-                full.push(m.to_string());
-            }
-        }
-        // 末段模块与类型同名：可能是类文件模块（`stream_decoder::StreamDecoder`），也可能是包
-        // （`charset::Charset`）——两种前缀都给出
-        let mut prefixes = vec![full.clone()];
-        if full.last() == Some(&snake) {
-            full.pop();
-            prefixes.insert(0, full);
-        }
-        let mut out = Vec::new();
-        for mut p in prefixes {
-            if p.is_empty() {
-                p = pkg.iter().map(|s| s.to_string()).collect();
-            }
-            let prefix = p.join("/");
-            out.extend(dollar_variants(&ty).into_iter().map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") }));
-        }
-        out
+        resolve_type(host, t)
     }
+}
+
+/// 手写文件的 use 表：本地名 → 完整路径段（解析失败为空）
+pub fn file_uses(content: &str) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    if let Ok(file) = syn::parse_file(content) {
+        for item in &file.items {
+            if let syn::Item::Use(u) = item {
+                collect_uses(&u.tree, &mut Vec::new(), &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// 类型路径 → binary name 候选（`host` 为手写文件的宿主类；见 [`Handwritten::resolve_type`]）
+pub fn resolve_type(host: &str, t: &TypeRef) -> Vec<String> {
+    let pkg: Vec<&str> = host.rsplit_once('/').map_or(vec![], |(p, _)| p.split('/').collect());
+    let segs = &t.0;
+    if segs.len() == 1 && segs[0] == "Self" {
+        return vec![host.to_string()];
+    }
+    let ty = segs.last().cloned().unwrap_or_default();
+    let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
+        // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
+        Some("super") => {
+            let k = segs.iter().take_while(|s| *s == "super").count();
+            (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
+        }
+        Some("crate") => (vec![], &segs[1..]),
+        _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
+        _ => (vec![], &segs[..]),
+    };
+    let snake = to_snake(&ty);
+    let mut full = base;
+    for m in &rest[..rest.len().saturating_sub(1)] {
+        let m = m.strip_prefix("r#").unwrap_or(m);
+        if m != "self" {
+            full.push(m.to_string());
+        }
+    }
+    // 末段模块与类型同名：可能是类文件模块（`stream_decoder::StreamDecoder`），也可能是包
+    // （`charset::Charset`）——两种前缀都给出
+    let mut prefixes = vec![full.clone()];
+    if full.last() == Some(&snake) {
+        full.pop();
+        prefixes.insert(0, full);
+    }
+    let mut out = Vec::new();
+    for mut p in prefixes {
+        if p.is_empty() {
+            p = pkg.iter().map(|s| s.to_string()).collect();
+        }
+        let prefix = p.join("/");
+        out.extend(dollar_variants(&ty).into_iter().map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") }));
+    }
+    out
 }
 
 /// `A_B_C` 的 `_` ↔ `$` 组合（嵌套类的 Rust 名把 `$` 换成 `_`）；原名优先

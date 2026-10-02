@@ -1,29 +1,13 @@
-//! 手写文件的 syn 扫描：逐 fn 收集回调、调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
+//! 手写文件的 syn 扫描：逐 fn 收集调用、分配、字段访问，同文件 fn 调用的传递闭包，use 表与 prelude。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use syn::visit::Visit;
 
+use super::generic_fns::*;
+use super::stype::*;
 use super::syntax::*;
 use super::*;
-
-pub(super) fn upcalls_of(attrs: &[syn::Attribute]) -> Vec<Upcall> {
-    let mut out = Vec::new();
-    for a in attrs {
-        let Some(id) = a.path().get_ident() else { continue };
-        if !matches!(id.to_string().as_str(), "jvm_native" | "jvm_boundary" | "jvm_ext") {
-            continue;
-        }
-        let _ = a.parse_nested_meta(|meta| {
-            if meta.path.is_ident("upcalls") {
-                let s: syn::LitStr = meta.value()?.parse()?;
-                out.extend(s.value().split_whitespace().filter_map(parse_upcall));
-            }
-            Ok(())
-        });
-    }
-    out
-}
 
 pub(super) struct RawFn {
     pub(super) info: FnInfo,
@@ -44,6 +28,8 @@ pub(super) struct FileFns {
     pub(super) fns: HashMap<String, FnInfo>,
     pub(super) calls: HashMap<String, HashSet<String>>,
     pub(super) objects: BTreeMap<String, RawObject>,
+    /// 文件顶层 impl 块关联 fn 的返回类型（见 [`local_rets`]）
+    pub(super) rets: LocalRets,
 }
 
 pub(super) struct FileScan<'a> {
@@ -58,6 +44,12 @@ pub(super) struct FileScan<'a> {
     pub(super) self_ty: Option<Vec<String>>,
     /// 当前 impl 块的 self 类型是本文件的手写实现对象
     pub(super) cur_obj: Option<String>,
+    /// 本文件 impl 块关联 fn 的返回类型（见 [`local_rets`]）
+    pub(super) rets: &'a LocalRets,
+    /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
+    pub(super) helpers: &'a HashSet<String>,
+    /// 本文件带闭包形参的泛型辅助 fn（见 [`generic_fns`]）
+    pub(super) generics: &'a GenericFns,
 }
 
 /// 标识符收集（宏外；宏内标识符另经 `macro_idents` 收集）
@@ -70,9 +62,10 @@ impl<'ast> Visit<'ast> for Idents {
 }
 
 impl FileScan<'_> {
-    fn add(&mut self, sig: &syn::Signature, is_pub: bool, attrs: &[syn::Attribute], block: &syn::Block) {
+    fn add(&mut self, sig: &syn::Signature, is_pub: bool, block: &syn::Block) {
         let name = sig.ident.to_string();
-        let mut b = BodyScan::default();
+        let helpers = helpers_in(self.helpers, self.self_ty.as_ref());
+        let mut b = BodyScan { helpers: helpers.clone(), ..Default::default() };
         b.visit_block(block);
         let mut scope = HashMap::new();
         for a in &sig.inputs {
@@ -83,18 +76,19 @@ impl FileScan<'_> {
                 syn::FnArg::Typed(pt) => {
                     if let syn::Pat::Ident(pi) = &*pt.pat {
                         scope.insert(pi.ident.to_string(), type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))));
+                        scope.insert(elem_key(&pi.ident.to_string()), elem_type(&pt.ty).map(|p| SType::Named(TypeRef(p))));
                     }
                 }
             }
         }
-        let mut info = FnInfo { is_pub, upcalls: upcalls_of(attrs), ..Default::default() };
+        let mut info = FnInfo { is_pub, ..Default::default() };
         for (var, ty) in &b.defaults {
             if b.inited.contains(var) {
                 info.allocs.insert(TypeRef(expand(self.uses, ty.clone())));
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
+        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
         cs.visit_block(block);
         for (field, write, recv, value, on_self, path) in cs.fields {
             info.fields.push(FieldAccess {
@@ -102,7 +96,7 @@ impl FileScan<'_> {
                 path,
                 field,
                 write,
-                recv: recv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                recv: recv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
             });
         }
@@ -128,7 +122,7 @@ impl FileScan<'_> {
                 recv: recv.map(tr),
                 args: args.into_iter().map(tr).collect(),
                 fresh: tr(fresh),
-                srecv: srecv.map(|r| expand_s(self.uses, r, &self.self_ty)),
+                srecv: srecv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
             });
         }
         info.opaque = cs.opaque;
@@ -169,7 +163,7 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
         // 自由 fn 内的 Self 无意义：暂离 impl 上下文
         let outer = self.self_ty.take();
         let outer_obj = self.cur_obj.take();
-        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_item_fn(self, f);
         self.self_ty = outer;
         self.cur_obj = outer_obj;
@@ -195,7 +189,7 @@ impl<'ast> Visit<'ast> for FileScan<'_> {
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
         let is_pub = matches!(f.vis, syn::Visibility::Public(_));
-        self.add(&f.sig, is_pub, &f.attrs, &f.block);
+        self.add(&f.sig, is_pub, &f.block);
         syn::visit::visit_impl_item_fn(self, f);
     }
 }
@@ -271,7 +265,6 @@ fn merge_fn(fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashS
     calls.entry(name.clone()).or_default().extend(raw.calls);
     let e = fns.entry(name).or_default();
     e.is_pub |= raw.info.is_pub;
-    e.upcalls.extend(raw.info.upcalls);
     e.allocs.extend(raw.info.allocs);
     e.ctors.extend(raw.info.ctors);
     e.calls.extend(raw.info.calls);
@@ -285,7 +278,14 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     let mut us = UseScan(prelude.clone());
     us.visit_file(file);
     let local = super::objects::object_structs(file);
+    let rets = local_rets(file, &us.0);
+    out.rets.extend(rets.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let helpers = local_helpers(file);
+    let generics = generic_fns(file);
     let mut fs = FileScan {
+        rets: &rets,
+        helpers: &helpers,
+        generics: &generics,
         uses: &us.0,
         local_objects: &local,
         fns: Vec::new(),
@@ -472,6 +472,64 @@ mod tests {
         assert_eq!(site("next").srecv, Some(iter));
         let make = site("make");
         assert_eq!((make.path_ty.clone(), make.args.len(), make.srecv.clone()), (Some(TypeRef(vec!["Factory".into()])), 2, None));
+    }
+
+    /// 本文件辅助 fn 的返回值：`let df = Self::make(…)?` 的静态类型取 `make` 声明的返回类型
+    #[test]
+    fn local_helper_returns() {
+        let src = r#"
+            impl Provider {
+                fn make(n: i32) -> Result<Format> { todo() }
+                fn new_view(n: i32) -> Result<View> { todo() }
+                pub fn get(&self) { let df = Self::make(0)?; df.setFlag(true)?; }
+            }
+            impl Provider__VTable for Provider {
+                fn put(&self) { let v = Self::new_view(0)?; v.setMode(1)?; let w = Widget::new_i(1); w.show()?; }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("get").map(|i| i.calls).unwrap_or_default();
+        let site = cs.iter().find(|c| c.name == "setFlag").expect("调用点已登记");
+        assert_eq!(site.srecv, Some(named(&["Format"])));
+        let cs = out.fns.remove("put").map(|i| i.calls).unwrap_or_default();
+        let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
+        assert_eq!(srecv("setMode"), Some(named(&["View"])));
+        assert_eq!(srecv("show"), Some(named(&["Widget"])));
+        // 构造器名形态的本文件辅助 fn 不是构造：返回值动态类型推不出（不当成构造 Provider）
+        let recv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.recv.clone());
+        assert_eq!(recv("setMode"), Some(None));
+        assert_eq!(recv("show"), Some(Some(TypeRef(vec!["Widget".into()]))));
+    }
+
+    #[test]
+    fn container_elements() {
+        let src = r#"
+            impl Resources {
+                fn chain(names: &[Name], m: HashMap<Key, Bundle>, d: Decoder) {
+                    d.__get_in_().readAll()?;
+                    let mut chain: Vec<Bundle> = Vec::new();
+                    chain[0].setParent(Clone::clone(&chain[1]))?;
+                    for n in names.iter() { n.intern()?; }
+                    for b in &chain { b.close()?; }
+                    let first = chain[0].clone();
+                    first.reset()?;
+                    for (k, v) in m.iter() { v.drop_all()?; }
+                    let chain = 3; chain[0].stale()?;
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("chain").map(|i| i.calls).unwrap_or_default();
+        let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
+        assert_eq!(srecv("setParent"), Some(named(&["Bundle"])));
+        assert_eq!(srecv("intern"), Some(named(&["Name"])));
+        assert_eq!(srecv("close"), Some(named(&["Bundle"])));
+        assert_eq!(srecv("stale"), None);
+        assert_eq!(srecv("readAll"), Some(SType::Field(Box::new(named(&["Decoder"])), "in".into())));
     }
 
     #[test]

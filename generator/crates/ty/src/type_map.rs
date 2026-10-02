@@ -177,7 +177,7 @@ impl TyCtx<'_> {
             let Some(ci) = self.reg.get(inner) else {
                 return RsType::Object;
             };
-            if self.names.short(inner).is_empty() {
+            if self.global_names().short(inner).is_empty() {
                 return RsType::Object;
             }
             if ci.is_interface() {

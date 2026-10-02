@@ -11,6 +11,13 @@ use crate::java::lang::Class;
 use crate::java::lang::NoSuchFieldError;
 use crate::java::lang::NoSuchMethodError;
 
+fn _internal_error(msg: &str) -> JvmError {
+    match crate::java::lang::InternalError::new_str(String::from(msg)) {
+        Ok(e) => JvmError::from(e),
+        Err(e) => e,
+    }
+}
+
 /// MemberName flags 的 MN_ 常量（JVMS 之外的 HotSpot 私有布局，
 /// MethodHandleNatives.java 与 member_name.rs 的 flagsMods 同一编码）：
 /// 低 16 位 = java.lang.reflect.Modifier 位集；bits 16-19 = 成员类别；
@@ -109,7 +116,7 @@ impl MethodHandleNatives {
     /// ——Factory 的 catch (LinkageError) 捕获后挂到 resolution 再返回，
     /// resolveOrFail 经 makeAccessException 还原 NoSuchField(/Method)
     /// Exception（与 JDK 解析失败同型）；speculative → Ok(null MemberName)。
-    #[jvm_native(upcalls = "java/lang/NoSuchFieldError.<init>:(Ljava/lang/String;)V java/lang/NoSuchMethodError.<init>:(Ljava/lang/String;)V")]
+    #[jvm_native]
     pub fn resolve(m: MemberName, _lookupClass: Class, _allowedModes: i32, speculativeResolve: bool) -> Result<MemberName> {
         let flags = m.__get_flags();
         let ref_kind: i8 = (((flags >> 24) & 15) as i8);
@@ -230,6 +237,42 @@ impl MethodHandleNatives {
     pub fn staticFieldOffset(m: MemberName) -> Result<i64> {
         let decl = format!("{}", m.__get_clazz().__get_name()).replace('.', "/");
         Ok(crate::reflect_dispatch::static_field_id(decl, format!("{}", m.__get_name())))
+    }
+
+    /// native `expand(MemberName)`：HotSpot `MethodHandles::expand_MemberName`（suppress = 0）。
+    /// clazz / name / type 齐全 → 无事可做；方法 / 构造器的补全来源是 vmtarget（Method*），本模型的
+    /// MemberName 由 init / resolve / 栈遍历一次填齐 name 与 type，不留 vmtarget 形态 → 与 HotSpot
+    /// vmtarget 为空时同：IAE "nothing to expand"。字段：clazz 为空 → IAE "nothing to expand (as field)"；
+    /// HotSpot 按 vmindex（偏移）回查字段，本模型偏移是不透明标识，按已知名字回查字段表补 type，名字也缺
+    /// 则回查不到 → 与 HotSpot 回查失败同落到 "unrecognized MemberName format"。
+    #[jvm_native]
+    pub fn expand(m: MemberName) -> Result<()> {
+        if _is_jnull_ref(&m) {
+            return Err(_internal_error("mname is null"));
+        }
+        let have_defc = !_is_jnull_ref(&m.__get_clazz());
+        let have_name = !_is_jnull_ref(&m.__get_name());
+        let have_type = !_is_jnull_ref(&m.__get_type_());
+        if have_defc && have_name && have_type {
+            return Ok(());
+        }
+        let flags = m.__get_flags();
+        if flags & (MN_IS_METHOD | MN_IS_CONSTRUCTOR) != 0 && flags & MN_IS_FIELD == 0 {
+            return Err(JvmError::illegal_argument("nothing to expand"));
+        }
+        if flags & MN_IS_FIELD != 0 && flags & (MN_IS_METHOD | MN_IS_CONSTRUCTOR) == 0 {
+            if !have_defc {
+                return Err(JvmError::illegal_argument("nothing to expand (as field)"));
+            }
+            if have_name {
+                let name = format!("{}", m.__get_name());
+                if let Some((descriptor, _, _, _)) = m.__get_clazz().__declared_field_meta(&name) {
+                    m.__set_type_(Object::from(Class::__class_for_descriptor(descriptor)));
+                    return Ok(());
+                }
+            }
+        }
+        Err(JvmError::illegal_argument("unrecognized MemberName format"))
     }
 
     #[jvm_native]
