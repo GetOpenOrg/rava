@@ -250,6 +250,35 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 构造器查找（`[facts.reflect] constructor_lookups`）：Class 实参与 Class 接收者值集里类镜像所指的类，其构造器
+    /// 成为反射构造目标（构造器没有按名形状，查找即点名该类的构造器；同按名取类解析到的类），反射构造可达时入链。
+    /// 数组类没有构造器；推不出所指类的镜像记为反射缺口
+    pub(super) fn constructor_lookup(&mut self, m: usize, off: u32, k: &str, mref: &MemberRef, opcode: u8, args: &[V]) {
+        let Some(md) = parse_method(&mref.desc) else { return };
+        let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
+        let mut vals: Vec<&V> = vec![];
+        if skip == 1 && mref.owner == CLASS {
+            vals.extend(args.first());
+        }
+        for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
+            if matches!(p, FieldType::Object(c) if c == CLASS) {
+                vals.push(a);
+            }
+        }
+        let mut classes: BTreeSet<String> = BTreeSet::new();
+        for v in vals {
+            classes.extend(self.mirror_classes(m, off, k, v));
+        }
+        for cls in classes.into_iter().filter(|c| !c.starts_with('[')) {
+            let c = self.id(&cls);
+            let named = self.named_ctors.insert(c);
+            let listed = self.enumerated.insert((Members::Constructors, c));
+            if (named || listed) && self.invokable.contains(&Members::Constructors) {
+                self.expose(Members::Constructors, c);
+            }
+        }
+    }
+
     /// 类 c 的 k 类成员入链：方法经反射调用通道执行，形参与接收者取自通道的实参池（`reflect_call.rs`；
     /// 枚举得到的方法为反射对象通道，按名查找到的按查找结果的类型定通道）；记录分量访问器与构造器另有调用面
     /// （记录对象方法的引导模型 / 反射构造），VM 按反射对象调用，形参按声明类型 open（同 VM 入口）；构造器实例化其类
@@ -257,9 +286,9 @@ impl<'a> Engine<'a> {
         let cls = self.names[c as usize].to_string();
         let Some(cf) = self.h.class(&cls) else { return };
         let comps: Vec<(String, String)> = cf.record_components.clone().unwrap_or_default();
-        // 用户类被枚举即全部成员有分派臂；其余类只有按名查找点到的方法（运行时反射分派面同口径：
-        // 构造器无按名形状，非用户类的反射构造只经清单补种，如 JCA 服务实现类）
-        // 按名取类解析到的类（常量名拼出的具体类）同样按枚举给出构造器
+        // 用户类被枚举即全部成员有分派臂；其余类只有按名查找点到的方法（运行时反射分派面同口径）。
+        // 构造器无按名形状：非用户类的构造器经按名取类解析到的类（常量名拼出的具体类）、构造器查找
+        // （`constructor_lookup`）点名的类给出，其余经清单补种（如 JCA 服务实现类）
         let named = k == Members::Constructors && self.named_ctors.contains(&c);
         let user = (self.domain(&cls) == Domain::User || named) && self.enumerated.contains(&(k, c));
         let names = self.reflect_names.get(&c).cloned().unwrap_or_default();

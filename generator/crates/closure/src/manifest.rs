@@ -138,6 +138,7 @@ pub struct Manifest {
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
+    constructor_lookups: HashSet<String>,
     class_initializers: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
     method_to_handle: HashSet<String>,
@@ -371,6 +372,7 @@ impl Manifest {
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
+            constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
             class_initializers: reflect("class_initializers").into_iter().collect(),
             member_owner_initializers: reflect("handle_owner_initializers")
                 .into_iter()
@@ -584,6 +586,11 @@ impl Manifest {
     /// 按名查找方法（类 + 方法名常量点名反射目标）
     pub fn is_method_lookup(&self, member: &str) -> bool {
         self.method_lookups.contains(member)
+    }
+
+    /// 查找构造器（Class 实参 / 接收者所指类的构造器成为反射构造目标）
+    pub fn is_constructor_lookup(&self, member: &str) -> bool {
+        self.constructor_lookups.contains(member)
     }
 
     /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）

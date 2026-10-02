@@ -34,6 +34,9 @@ impl<'a> Engine<'a> {
             })
             .collect();
         let k = self.mref_key(mref);
+        if self.man.is_constructor_lookup(&k) {
+            self.constructor_lookup(m, off, &k, mref, opcode, args);
+        }
         if self.man.is_method_lookup(&k) {
             // 查找结果经哪条反射调用通道调用（按查找结果的类型，见 `reflect_call.rs`）
             let ch = self.rcall_lookup_channel(&mref.desc);
