@@ -31,9 +31,9 @@ impl<'a> Engine<'a> {
         let ks = key.to_string();
         if let Some(k) = self.man.member_enumerator(&ks) {
             let n = Node::P(m, 0);
-            if self.enum_recv.insert(n, (k, m)).is_none() {
+            if self.enum_recv.insert(n, (RHook::Enum(k), m)).is_none() {
                 let s = self.set_of(n);
-                self.rpending.push((k, m, s));
+                self.rpending.push((RHook::Enum(k), m, s));
             }
         }
         for &k in self.man.member_invoker(&ks) {

@@ -1,0 +1,10 @@
+describe: shape circle
+describe: four sides square
+ints: 1 2 3
+words: alpha beta
+base:7
+derived:7
+supplier: from lambda
+handle: circle
+handle: square
+IAE for wrong receiver
