@@ -128,7 +128,7 @@ impl Object {
         }
         Err(crate::error::JvmError::class_cast(format!(
             "class {} cannot be cast to class {}",
-            self.0.__class_name().replace('/', "."),
+            crate::meta::java_name(self.0.__class_name()),
             binary_name.replace('/', "."),
         )))
     }
@@ -146,7 +146,7 @@ impl Object {
             Some(view) => Ok(view),
             None => Err(crate::error::JvmError::class_cast(format!(
                 "class {} cannot be cast to class {}",
-                self.0.__class_name().replace('/', "."),
+                crate::meta::java_name(self.0.__class_name()),
                 binary_name.replace('/', "."),
             ))),
         }
@@ -164,7 +164,7 @@ impl Object {
         }
         Err(crate::error::JvmError::class_cast(format!(
             "class {} cannot be cast to interface {}",
-            self.0.__class_name().replace('/', "."),
+            crate::meta::java_name(self.0.__class_name()),
             binary_name.replace('/', "."),
         )))
     }

@@ -193,12 +193,12 @@ impl SamLedger {
     }
 
     /// 站点一致性断言（G-10 同款）：站点 samtype 描述符与预扫描 SAM 描述符恒等
-    pub fn check_sites(&self, sites: &[(String, String, String)]) -> Result<()> {
-        for (iface, sam_desc, cur) in sites {
-            if let Some(spec) = self.specs.get(iface).filter(|s| &s.sam_desc != sam_desc) {
+    pub fn check_sites(&self, sites: &[crate::body::SamSite]) -> Result<()> {
+        for site in sites {
+            if let Some(spec) = self.specs.get(&site.iface).filter(|s| s.sam_desc != site.sam_desc) {
                 return Err(EmitError::Assert(format!(
-                    "[sam-objects] samtype 描述符发散: {iface} 站点 {sam_desc} vs 预扫描 SAM {}（{cur}）",
-                    spec.sam_desc
+                    "[sam-objects] samtype 描述符发散: {} 站点 {} vs 预扫描 SAM {}（{}）",
+                    site.iface, site.sam_desc, spec.sam_desc, site.class
                 )));
             }
         }

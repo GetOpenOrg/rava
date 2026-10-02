@@ -391,8 +391,10 @@ pub(crate) fn write_record_table(entries: &BTreeSet<String>, components: &BTreeM
     }
 }
 
-/// 声明了 `<clinit>` 的类集（has_clinit 属性在场）。
-pub(crate) fn scan_clinit_classes(roots: &[&Path]) -> BTreeSet<String> {
+/// 布尔类属性为 true 的类集：`has_clinit`（声明了 `<clinit>`）、`is_hidden`（lambda 调用点隐藏类，
+/// `hidden_class!` 声明块）。
+pub(crate) fn scan_flag_classes(roots: &[&Path], key: &str) -> BTreeSet<String> {
+    let tag = format!("#[{key}");
     let mut result = BTreeSet::new();
     for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
         let content = fs::read_to_string(&path).unwrap_or_default();
@@ -403,7 +405,7 @@ pub(crate) fn scan_clinit_classes(roots: &[&Path]) -> BTreeSet<String> {
                 current = name;
                 continue;
             }
-            if !current.is_empty() && trimmed.starts_with("#[has_clinit") && trimmed.contains("true") {
+            if !current.is_empty() && trimmed.starts_with(&tag) && trimmed.contains("true") {
                 result.insert(current.clone());
             }
         }
@@ -449,13 +451,14 @@ fn push_name_lists(out: &mut String, table: &str, lists: &BTreeMap<String, Strin
     out.push_str("];\n");
 }
 
-pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
+pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, hidden: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
                                      nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>,
                                      source: &BTreeMap<String, String>, loaders: &BTreeMap<String, String>) {
     let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
     let mut out = String::from(
         "// 由 build.rs 自动生成：类文件级元数据（VM 注入的类信息）。请勿手改。
          // CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer。
+         // HIDDEN_CLASSES：lambda 调用点隐藏类（is_hidden 属性）——Class.isHidden / 镜像名 / forName 排除。
          // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
          // NEST_MEMBERS：嵌套宿主的 NestMembers 属性（nest_members 属性）——Class.getNestMembers0。
          // CLASS_ACCESS_FLAGS：类文件 access_flags 原值（class_access_flags 属性）——Class.getClassAccessFlagsRaw0。
@@ -467,6 +470,11 @@ pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTre
 ",
     );
     for name in clinit {
+        out.push_str(&format!("    {:?},\n", name));
+    }
+    out.push_str("];\n");
+    out.push_str("\n#[export_name = \"__java_meta_HIDDEN_CLASSES\"] pub static HIDDEN_CLASSES: &[&str] = &[\n");
+    for name in hidden {
         out.push_str(&format!("    {:?},\n", name));
     }
     out.push_str("];\n");

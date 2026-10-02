@@ -1,5 +1,6 @@
 //! lambda 闭包体（实现方法调用 + 返回值适配）与闭包装箱（SAM 合成对象 / 不透明闭包）。
 
+use classfile::Const;
 use ir::Expr;
 use sim::StackSim;
 use ty::type_map::parse_descriptor_return;
@@ -157,14 +158,17 @@ pub(super) fn boxed_closure(env: &InstrEnv, log: &mut InstrLog, site: &IndySite,
         ""
     };
     let ctor = if iface.is_empty() { None } else { env.ctx.hooks.sam_ctor_path(iface, env.ctx.class_name) };
-    Ok(match ctor {
-        Some(path) => {
+    let hidden = ctor.as_ref().and_then(|_| env.ctx.hooks.lambda_class_name(site.pc));
+    Ok(match ctor.zip(hidden) {
+        Some((path, hidden)) => {
             log.push(Effect::SamSite {
                 iface: iface.to_string(),
                 sam_desc: lam.sam_desc.clone(),
                 class: env.ctx.class_name.to_string(),
+                hidden: hidden.clone(),
+                interfaces: lambda_interfaces(env, site, iface),
             });
-            sim::exprs::object_from(Expr::call(path, vec![raw(closure)]))?
+            sim::exprs::object_from(Expr::call(path, vec![raw(closure), raw(format!("{hidden:?}"))]))?
         }
         None => {
             // Result 用裸名：user crate 里 crate::error 是 E0433，两边均经 prelude 引入
@@ -172,4 +176,49 @@ pub(super) fn boxed_closure(env: &InstrEnv, log: &mut InstrLog, site: &IndySite,
             raw(format!("{obj}::from_any({closure} as {fn_type})"))
         }
     })
+}
+
+/// lambda 隐藏类的直接超接口（`InnerClassLambdaMetafactory` 同序）：samtype，altMetafactory 的
+/// 标记接口（FLAG_MARKERS，去重），FLAG_SERIALIZABLE 且已列接口均非 Serializable 子类型时追加
+/// Serializable（`altMetafactory` 的 foundSerializableSupertype 判定）。altMetafactory 的
+/// 静态实参为 (samMethodType, implMethod, instantiatedMethodType, flags, [markerCount, markers..],
+/// [bridgeCount, bridges..])；metafactory 只有前三项
+fn lambda_interfaces(env: &InstrEnv, site: &IndySite, iface: &str) -> Vec<String> {
+    const FLAG_SERIALIZABLE: i32 = 1;
+    const FLAG_MARKERS: i32 = 2;
+    let mut out = vec![iface.to_string()];
+    let args = site.bsm.map(|b| b.args.as_slice()).unwrap_or_default();
+    let Some(Const::Int(flags)) = args.get(3) else { return out };
+    if flags & FLAG_MARKERS != 0 {
+        if let Some(Const::Int(n)) = args.get(4) {
+            for a in args.iter().skip(5).take(usize::try_from(*n).unwrap_or(0)) {
+                if let Const::Class(c) = a {
+                    if !out.contains(c) {
+                        out.push(c.clone());
+                    }
+                }
+            }
+        }
+    }
+    if flags & FLAG_SERIALIZABLE != 0 && !out.iter().any(|i| extends_serializable(env, i)) {
+        out.push(ty::consts::SERIALIZABLE.to_string());
+    }
+    out
+}
+
+/// 接口 `i` 是否为 Serializable 或其传递子接口（注册表内展开）
+fn extends_serializable(env: &InstrEnv, i: &str) -> bool {
+    let mut stack = vec![i.to_string()];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(c) = stack.pop() {
+        if c == ty::consts::SERIALIZABLE {
+            return true;
+        }
+        if seen.insert(c.clone()) {
+            if let Some(ci) = env.ctx.reg().get(&c) {
+                stack.extend(ci.interfaces().iter().cloned());
+            }
+        }
+    }
+    false
 }
