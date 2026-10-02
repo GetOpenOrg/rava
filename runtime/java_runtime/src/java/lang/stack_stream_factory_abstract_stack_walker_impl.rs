@@ -87,7 +87,7 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     let Some(member) = info.0.__unsafe_ref_get("memberName") else {
         panic!("stub: java/lang/StackFrameInfo.memberName 无按名协议");
     };
-    let clazz = Object::from(Class::for_class(String::from(frame.class.as_str())));
+    let clazz = Object::from(Class::for_class(String::from(frame.class)));
     _ensure(member.0.__unsafe_ref_set("clazz", clazz), "clazz");
     _ensure(member.0.__unsafe_ref_set("name", Object::from(String::from(frame.method.name))), "name");
     _ensure(member.0.__unsafe_ref_set("type_", Object::from(String::from(frame.method.descriptor))), "type");
@@ -125,7 +125,7 @@ where
                         "StackWalker::getCallerClass called from @CallerSensitive '{}' method",
                         frame.external_name())));
                 }
-                let class = Class::for_class(String::from(frame.class.as_str()));
+                let class = Class::for_class(String::from(frame.class));
                 frames.set(index, T::from(Object::from(class)))?;
             }
             decoded += 1;
@@ -146,7 +146,7 @@ where
             return Err(JvmError::illegal_argument("not enough space in buffers"));
         }
         let all = crate::vm_stack::capture_java_frames();
-        let mut cursor = all.iter().position(|f| !_is_walker_impl(&f.class)).unwrap_or(all.len());
+        let mut cursor = all.iter().position(|f| !_is_walker_impl(f.class)).unwrap_or(all.len());
         cursor = (cursor + skipframes.max(0) as usize).min(all.len());
         let mut stream = Anchored { frames: all, cursor };
         let end_index = Self::__fill_in_frames(mode, &mut stream, batch_size, start_index, &frames)?;

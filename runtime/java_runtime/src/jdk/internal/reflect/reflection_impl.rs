@@ -31,48 +31,25 @@ impl Reflection {
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
     /// java.lang.reflect.Method.invoke）。
     ///
-    /// 帧源为 std::backtrace 的真实 Rust 栈（栈回溯数据面，compatibility.md
-    /// 「栈回溯」近似等价边界——与 throwable_impl 的 fillInStackTrace 同族；
-    /// 逐字节的 Java 帧元数据在原生二进制不存在）。跳帧规则：
-    ///   1. 定位本方法帧（声明类 jdk.internal.reflect.Reflection）；
-    ///   2. 其后第一帧组 = `@CallerSensitive` 声明者（如 MethodHandles.lookup）
-    ///      ——同一 Java 方法的多个 Rust 帧（含解析不出类的辅助帧）按类名
-    ///      聚合，整组跳过；
-    ///   3. 首个声明类不同的帧即调用者的调用者，返回其 Class。
-    /// 帧不可解析（匿名类 / PrivilegedAction 转发帧等符号形态不符，或平台符号化不全）时
-    /// 退回 `java.lang.Object`：JDK 中仅 JNI 附着线程无 Java 调用者，Java 代码调用恒有；
-    /// 原生单镜像内全部代码同属可信调用者（getModule 同一无名模块），退回可信类与 JDK
-    /// 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
+    /// 生成器在 `@CallerSensitive` 调用点显式压栈的调用者优先（平台无关）；手写层直接调用 CS
+    /// 方法时回退栈遍历数据面（`crate::vm_stack`），跳帧同 HotSpot `JVM_GetCallerClass`：
+    /// 第 0 帧为本方法（手写 native 帧），第 1 帧为 `@CallerSensitive` 方法，其后首个不被安全栈
+    /// 遍历忽略（`is_ignored_by_security_stack_walk`）的帧即调用者。
+    /// 帧不可得（平台符号化不全等）时退回 `java.lang.Object`：JDK 中仅 JNI 附着线程无 Java 调用者，
+    /// Java 代码调用恒有；原生单镜像内全部代码同属可信调用者（getModule 同一无名模块），退回可信类
+    /// 与 JDK 默认安装的可观测行为一致——`ServiceLoader.checkCaller` 不再误报 "no caller to check"
     /// （Charset.forName 未知名的扩展 provider 查找，macOS 实测揭出）。
     #[jvm_native]
     pub fn getCallerClass() -> Result<Class> {
-        // 生成器显式传入的调用者（@CallerSensitive 调用点压栈，平台无关）优先
         if let Some(caller) = crate::reflect_dispatch::current_caller_sensitive() {
             return Ok(Class::for_class(String::from(caller)));
         }
-        const SELF_CLASS: &str = "jdk/internal/reflect/Reflection";
-        let fallback = || Class::for_class(String::from("java/lang/Object"));
-        let frames = crate::vm_stack::capture_frame_classes();
-        // 1. 定位本方法帧
-        let Some(mut i) = frames.iter().position(|c| c.as_deref() == Some(SELF_CLASS)) else {
-            return Ok(fallback());
-        };
-        // 2. 调用者帧组的类（@CallerSensitive 声明者）
-        i += 1;
-        let Some(caller) = frames.get(i).and_then(|c| c.clone()) else {
-            return Ok(fallback());
-        };
-        // 3. 跳过同类（与解析失败跟随前帧）的帧，取首个异类帧
-        i += 1;
-        while i < frames.len() {
-            match &frames[i] {
-                Some(c) if c != &caller => {
-                    return Ok(Class::for_class(String::from(c.as_str())));
-                }
-                _ => i += 1,
-            }
-        }
-        Ok(fallback())
+        let frames = crate::vm_stack::capture_java_frames();
+        let caller = frames
+            .iter()
+            .position(|f| f.class == "jdk/internal/reflect/Reflection" && f.method.name == "getCallerClass")
+            .and_then(|at| frames[at + 1..].iter().skip(1).find(|f| !f.is_ignored_by_security_stack_walk()));
+        Ok(Class::for_class(String::from(caller.map_or("java/lang/Object", |f| f.class))))
     }
 
     /// native `getClassAccessFlags(Class)`：class 文件的类访问标志（非 InnerClasses 的内部标志）。

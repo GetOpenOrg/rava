@@ -119,8 +119,6 @@ pub(crate) struct MethodMeta {
     inherited: bool,
     /// 复制进本类的方法体的声明类型（`declared_by`）；本类声明 / 继承转发行为空串
     declared_by: String,
-    /// 经 vtable 派发（`virtual_in` 槽位）：类上公开的同名方法只是派发入口，方法体另有符号
-    dispatched: bool,
 }
 
 /// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
@@ -173,7 +171,6 @@ pub(crate) fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<Method
                 inherited: extract_key(window, "inherited_from").is_some()
                     || extract_key(window, "declared_by").is_some(),
                 declared_by: extract_key(window, "declared_by").unwrap_or_default(),
-                dispatched: extract_key(window, "virtual_in").is_some(),
             });
         }
     }
@@ -220,7 +217,7 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
             modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
             exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
             annotations: Vec::new(), param_annotations: Vec::new(), annotation_default: Vec::new(),
-            signature: String::new(), inherited: false, declared_by: String::new(), dispatched: false,
+            signature: String::new(), inherited: false, declared_by: String::new(),
         });
     }
     methods
@@ -245,9 +242,9 @@ pub(crate) fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
         for m in methods {
             let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
             out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {}, declared_by: {:?}, dispatched: {} }},\n",
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {}, declared_by: {:?} }},\n",
                 m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
-                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited, m.declared_by, m.dispatched,
+                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited, m.declared_by,
             ));
         }
         out.push_str("    ]),\n");

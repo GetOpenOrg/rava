@@ -1,24 +1,34 @@
-//! 栈遍历数据面（运行时基础设施）：真实 Rust 栈 → Java 帧序列。
+//! 栈遍历数据面（运行时基础设施）：真实 Rust 栈 → Java 帧序列，全部栈帧消费方的唯一来源。
 //!
 //! HotSpot 的 vframeStream 逐帧给出 (Method*, bci)；原生二进制没有 Java 帧元数据，帧源为
-//! std::backtrace 的真实 Rust 栈（compatibility.md「栈回溯」边界，与 fillInStackTrace 同族）：
-//! 符号 → 声明类（java_class_of_symbol）→ 方法段对到 java_meta 方法表的 (name, descriptor)。
-//! 消费方：Reflection.getCallerClass、SecurityManager.getClassContext、StackWalker
-//!（StackStreamFactory$AbstractStackWalker.callStackWalk / fetchStackFrames）。
+//! std::backtrace 的真实 Rust 栈（compatibility.md「栈回溯」边界）。每个 Rust 帧带
+//! `at <文件>:<行>`；发射层为每个生成文件与手写伴生文件写出行表（`meta::line_tables()`，
+//! 发射层 `project/line_tables`）：Rust 行 → (帧归属类, 方法名, 描述符, 源文件, 宿主类, Java 行)。
+//! 据帧位置查表得 Java 帧，(类, 名, 描述符) 对到 java_meta 方法表的 `MethodMeta`。
+//! 消费方：Throwable.fillInStackTrace、Reflection.getCallerClass、SecurityManager.getClassContext、
+//! StackWalker（StackStreamFactory$AbstractStackWalker.callStackWalk / fetchStackFrames）。
 //!
-//! 帧归并：翻译的一个 Java 方法在 Rust 栈上可展开为多帧（派发包装 → `__impl_` 方法体、trait
-//! 限定形态）。同一 (类, 方法) 的连续 Rust 帧归为一个 Java 帧，组内同一符号再次出现即新帧
-//!（直接递归每层一个符号帧）。闭包帧（lambda 代理调用、方法体内的局部闭包）不是 Java 帧，
-//! 其外层方法帧另行出现；未对上方法表的辅助函数帧同样跳过。
+//! 成帧规则（行表即判据，不解析符号形态）：
+//! - 帧归属方法体的声明类（HotSpot 帧的 method holder）：复制进本类的接口 default / 超类虚方法体
+//!   归 `declared_by`；继承转发外壳无行标记，不成帧；
+//! - 宏生成的派发入口、vtable impl、`new` 分配外壳以调用点 span 落在块外或方法序言（Java 行 0），
+//!   不成帧——帧落在实际执行方法体的 Rust 帧上，直接递归每层一帧；
+//! - 手写方法体在伴生 `_impl.rs`，按生成文件的登记成帧（native 行号 -2，其余 -1）；
+//! - 闭包帧（符号含 `{closure`）不成帧：原位闭包（`__caller_sensitive`、`try_new_with`）与外层
+//!   方法同一行，外层帧即该 Java 帧；延迟闭包（lambda 代理）的位置是创建点，不在执行栈上。
 
 use crate::meta::MethodMeta;
 use std::collections::HashMap;
 
-/// 一个 Java 帧：声明类（binary name，斜线形态）与方法元数据。
+/// 一个 Java 帧：方法持有类（binary name，斜线形态）、方法元数据与源位置。
 #[derive(Clone)]
 pub struct JavaFrame {
-    pub class: std::string::String,
+    pub class: &'static str,
     pub method: &'static MethodMeta,
+    /// SourceFile 属性；缺失为 None
+    pub source: Option<&'static str>,
+    /// Java 行号（LineNumberTable）；不可得 -1，native 方法 -2（`StackTraceElement` 约定）
+    pub line: i32,
 }
 
 impl JavaFrame {
@@ -27,12 +37,12 @@ impl JavaFrame {
     /// HotSpot `Method::is_hidden`：`@jdk.internal.vm.annotation.Hidden` 注解的方法。隐藏类（lambda
     /// 代理等）的方法在本模型是闭包帧，已不成帧。
     pub fn is_hidden(&self) -> bool {
-        crate::anno_pool::has_annotation(&self.class, self.method.annotations, "Ljdk/internal/vm/annotation/Hidden;")
+        crate::anno_pool::has_annotation(self.class, self.method.annotations, "Ljdk/internal/vm/annotation/Hidden;")
     }
 
     /// HotSpot `Method::caller_sensitive`：`@jdk.internal.reflect.CallerSensitive` 注解的方法。
     pub fn is_caller_sensitive(&self) -> bool {
-        crate::anno_pool::has_annotation(&self.class, self.method.annotations, "Ljdk/internal/reflect/CallerSensitive;")
+        crate::anno_pool::has_annotation(self.class, self.method.annotations, "Ljdk/internal/reflect/CallerSensitive;")
     }
 
     /// HotSpot `MethodHandles::init_method_MemberName` 对本帧方法给出的 MemberName.flags：
@@ -53,7 +63,7 @@ impl JavaFrame {
         const REF_INVOKE_SPECIAL: i32 = 7;
         const REF_INVOKE_INTERFACE: i32 = 9;
         let mods = self.method.modifiers;
-        let class_flags = class_access_flags(&self.class);
+        let class_flags = class_access_flags(self.class);
         let initializer = self.method.name == "<init>";
         let statically_bound = self.method.is_static || initializer
             || mods & (ACC_PRIVATE | ACC_FINAL) != 0 || class_flags & ACC_FINAL != 0;
@@ -88,9 +98,17 @@ impl JavaFrame {
         format!("{} {}.{}({})", external_type(ret).0, self.class.replace('/', "."), self.method.name, names.join(", "))
     }
 
+    /// HotSpot `Method::is_ignored_by_security_stack_walk`：Method.invoke、MethodAccessorImpl 子类的
+    /// 方法、`@LambdaForm.Compiled` 帧（getCallerClass / getClassContext 跳过）。
+    pub fn is_ignored_by_security_stack_walk(&self) -> bool {
+        (self.class == "java/lang/reflect/Method" && self.method.name == "invoke")
+            || self.class_extends("jdk/internal/reflect/MethodAccessorImpl")
+            || crate::anno_pool::has_annotation(self.class, self.method.annotations, "Ljava/lang/invoke/LambdaForm$Compiled;")
+    }
+
     /// 声明类是 `ancestor` 或其（任意深度）子类。
     pub fn class_extends(&self, ancestor: &str) -> bool {
-        class_extends(&self.class, ancestor)
+        class_extends(self.class, ancestor)
     }
 }
 
@@ -142,369 +160,83 @@ pub fn direct_super(class: &str) -> Option<&'static str> {
 
 /// 捕获当前线程的 Java 帧序列（自栈顶向下）。
 pub fn capture_java_frames() -> Vec<JavaFrame> {
-    let mut frames: Vec<JavaFrame> = Vec::new();
-    let mut group: Vec<std::string::String> = Vec::new(); // 当前 Java 帧已归入的 Rust 符号
-    for symbol in capture_symbols() {
-        let Some(parsed) = parse_symbol(&symbol) else { continue };
-        if parsed.closure {
-            continue;
-        }
-        let Some(seg) = parsed.method.as_deref() else { continue };
-        let Some(row) = java_method_of(&parsed.class, seg) else { continue };
-        if !executes_body(&parsed.class, seg, row) {
-            continue;
-        }
-        // 帧归属方法体的声明类（HotSpot 帧的 method holder）：复制进本类的方法体（接口 default / 未覆盖的超类虚方法）归声明类型；
-        // 继承转发行只是转发外壳（体在声明类的帧上执行），不成帧
-        let (class, method) = if !row.declared_by.is_empty() {
-            (row.declared_by.to_owned(), declared_row(row.declared_by, row).unwrap_or(row))
-        } else if row.inherited {
-            continue;
-        } else {
-            (parsed.class, row)
-        };
-        // 类上虚方法的公开 `X::m` 只是 vtable 派发入口（方法体在 `__impl_m` / `X__m_base` / vtable impl）：
-        // 上一帧是另一类的同签名方法即派发落到了覆盖实现，入口本身不成帧
-        let dispatched_override = parsed.dispatch_entry && row.dispatched
-            && frames.last().is_some_and(|f| f.class != class && f.method.name == method.name && f.method.descriptor == method.descriptor);
-        if dispatched_override {
-            continue;
-        }
-        let same = frames.last().is_some_and(|f| f.class == class && std::ptr::eq(f.method, method));
-        if same && !group.contains(&symbol) {
-            group.push(symbol);
-            continue;
-        }
-        group.clear();
-        group.push(symbol);
-        frames.push(JavaFrame { class, method });
-    }
-    frames
-}
-
-/// `class` 以 `row` 的 (名, 描述符) 声明的方法行。
-fn declared_row(class: &str, row: &MethodMeta) -> Option<&'static MethodMeta> {
-    methods_of(class)?.iter().find(|m| !m.inherited && m.name == row.name && m.descriptor == row.descriptor)
-}
-
-/// 该 Rust 符号是否执行 Java 方法体（HotSpot 帧只属于正在执行的方法）。abstract 方法没有方法体，其符号只是
-/// 派发入口；接口的实例方法（非 static / private）在接口载体上的同名符号是 vtable 派发入口，default 方法体
-/// 另在 `__default_<m>` 执行——两者都不成帧，帧落在实际执行的实现方法上。
-fn executes_body(class: &str, seg: &str, method: &MethodMeta) -> bool {
-    const ACC_PRIVATE: i32 = 0x2;
-    const ACC_INTERFACE: i32 = 0x200;
-    if method.is_abstract {
-        return false;
-    }
-    let dispatched = !method.is_static && method.modifiers & ACC_PRIVATE == 0 && !method.name.starts_with('<');
-    !(dispatched && class_access_flags(class) & ACC_INTERFACE != 0 && !seg.starts_with(DEFAULT_BODY_PREFIX))
-}
-
-/// 接口 default 方法体的 Rust 名前缀（java_class! 生成：`__default_<m>`）。
-const DEFAULT_BODY_PREFIX: &str = "__default_";
-
-/// 逐帧的 Java 声明类（解析不出为 None），不做方法对位与归并（getCallerClass 的帧组口径）。
-pub fn capture_frame_classes() -> Vec<Option<std::string::String>> {
-    capture_symbols().iter().map(|s| java_class_of_symbol(s)).collect()
-}
-
-/// std Backtrace Display 的帧符号行（`   N: symbol`；`at file:line` 续行跳过）。
-fn capture_symbols() -> Vec<std::string::String> {
     let text = std::format!("{}", std::backtrace::Backtrace::force_capture());
+    rust_frames(&text)
+        .into_iter()
+        .filter(|(symbol, _)| !symbol.contains("{closure"))
+        .filter_map(|(_, at)| at.and_then(|(file, line)| frame_at(file, line)))
+        .collect()
+}
+
+/// 回溯 Display 解析为 (符号, 文件, 行)：`   {index}: {symbol}` 行，可随
+/// `             at {file}:{line}:{col}` 行（缺省 = 未解析位置）。内联帧各自成行。
+fn rust_frames(text: &str) -> Vec<(&str, Option<(&str, u32)>)> {
     let mut out = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let Some((idx, symbol)) = trimmed.split_once(": ") else { continue };
-        if idx.trim().parse::<u32>().is_err() {
-            continue;
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some((index, symbol)) = line.trim_start().split_once(": ") else { continue };
+        if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+            continue; // "note:" 等非帧行
         }
-        out.push(symbol.trim().to_owned());
+        let mut at = None;
+        if let Some(location) = lines.peek().and_then(|n| n.trim_start().strip_prefix("at ")) {
+            lines.next();
+            // `path/file.rs:{line}:{col}`：自右取列、行，余下为文件路径
+            let parts: Vec<&str> = location.rsplitn(3, ':').collect();
+            if let [_, ln, file] = parts[..] {
+                at = ln.parse::<u32>().ok().map(|ln| (file, ln));
+            }
+        }
+        out.push((symbol.trim(), at));
     }
     out
 }
 
-/// 声明类的方法表（非继承副本），按类名索引（首次使用时建表）。
+/// 行表索引：scratch 相对路径 → 行表（首次查表时建立）
+fn table_index() -> &'static HashMap<&'static str, &'static crate::meta::LineTable> {
+    static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static crate::meta::LineTable>> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| crate::meta::line_tables().iter().map(|t| (t.0, t)).collect())
+}
+
+/// 帧位置 → Java 帧。`file` 为回溯 `at` 行的路径（绝对、相对工作区或 `./` 前缀均可）：
+/// 依次取其各 `/` 边界后缀查行表；行取「Rust 行不大于该行」的最后一行表项。
+fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
+    let index = table_index();
+    let file = file.replace('\\', "/");
+    let mut rest = file.as_str();
+    let table = loop {
+        if let Some(t) = index.get(rest) {
+            break *t;
+        }
+        rest = &rest[rest.find('/')? + 1..];
+    };
+    let (_, methods, rows) = *table;
+    let at = rows.partition_point(|r| r.0 <= line).checked_sub(1)?;
+    let (_, idx, java_line) = rows[at];
+    if idx == crate::meta::NO_METHOD || java_line == 0 {
+        return None; // 块外 / 方法序言（宏生成的派发与分配外壳）
+    }
+    let (class, name, descriptor, source, host) = methods[idx as usize];
+    let method = method_meta(class, name, descriptor, host)?;
+    let line = match java_line {
+        crate::meta::LINE_NATIVE => -2,
+        crate::meta::LINE_UNKNOWN => -1,
+        n => n as i32,
+    };
+    Some(JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line })
+}
+
+/// 帧方法的元数据：归属类自身声明的行；方法体复制进他类（`declared_by`）而归属类无表项时取宿主类的行。
+fn method_meta(class: &str, name: &str, descriptor: &str, host: &str) -> Option<&'static MethodMeta> {
+    let find = |c: &str, own: bool| {
+        methods_of(c)?.iter().find(|m| (!own || !m.inherited) && m.name == name && m.descriptor == descriptor)
+    };
+    find(class, true).or_else(|| (!host.is_empty()).then(|| find(host, false)).flatten())
+}
+
+/// 声明类的方法表，按类名索引（首次使用时建表）。
 fn methods_of(class: &str) -> Option<&'static [MethodMeta]> {
     static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static [MethodMeta]>> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| crate::meta::class_methods().iter().map(|(c, m)| (*c, *m)).collect())
         .get(class).copied()
-}
-
-/// Rust 方法段 → Java 方法。生成器命名：`<Java 名>`（`$` → `_`）或 `<Java 名>_<重载后缀>`；
-/// 构造器为 `new` / `new_<后缀>` 与 `__init*`（在已分配对象上执行构造体），类初始化为
-/// `__clinit`；`__impl_` 前缀为派发包装后的方法体。同名重载按描述符后缀对位，对不上取首个。
-fn java_method_of(class: &str, seg: &str) -> Option<&'static MethodMeta> {
-    let methods = methods_of(class)?;
-    let seg = seg.strip_prefix("__impl_").or_else(|| seg.strip_prefix(DEFAULT_BODY_PREFIX)).unwrap_or(seg);
-    let (java_name, suffix): (&str, &str) = if seg == "__clinit" {
-        ("<clinit>", "")
-    } else if seg == "new" || seg.starts_with("__init") {
-        ("<init>", "")
-    } else if let Some(rest) = seg.strip_prefix("new_") {
-        ("<init>", rest)
-    } else {
-        // 最长的 Java 名前缀（Java 名可含 `_`，如 `lambda$main$0` → `lambda_main_0`）
-        let mut best: Option<(&'static str, usize)> = None;
-        for m in methods.iter() {
-            let mangled = m.name.replace('$', "_");
-            let hit = seg == mangled || (seg.starts_with(mangled.as_str()) && seg.as_bytes().get(mangled.len()) == Some(&b'_'));
-            if hit && best.map_or(true, |(_, l)| mangled.len() > l) {
-                best = Some((m.name, mangled.len()));
-            }
-        }
-        let (name, len) = best?;
-        (name, seg.get(len + 1..).unwrap_or(""))
-    };
-    // 本类声明行在前，非本类声明行（继承转发 / 注入 default）在后
-    let mut candidates = methods.iter().filter(|m| !m.inherited && m.name == java_name)
-        .chain(methods.iter().filter(|m| m.inherited && m.name == java_name));
-    let first = candidates.next()?;
-    if suffix.is_empty() || descriptor_suffix(first.descriptor) == suffix {
-        return Some(first);
-    }
-    candidates.find(|m| descriptor_suffix(m.descriptor) == suffix).or(Some(first))
-}
-
-/// 描述符参数 → 重载后缀（基本类型单字母、类取小写简单名、数组加 `arr_`）。生成器另按清单缩写
-///（如 String → str），缩写未知时对不上，退回首个同名方法。
-fn descriptor_suffix(descriptor: &str) -> std::string::String {
-    let params = descriptor.strip_prefix('(').and_then(|d| d.split_once(')')).map(|(p, _)| p).unwrap_or("");
-    let prim = |c: u8| -> Option<&'static str> {
-        Some(match c { b'I' => "i", b'J' => "l", b'Z' => "z", b'B' => "b", b'S' => "s", b'F' => "f", b'D' => "d", b'C' => "c", _ => return None })
-    };
-    let class = |body: &str| -> std::string::String {
-        let short = body.rsplit('/').next().unwrap_or(body).to_lowercase().replace('$', "_");
-        match short.as_str() { "object" => "obj".to_owned(), "string" => "str".to_owned(), _ => short }
-    };
-    let b = params.as_bytes();
-    let mut parts: Vec<std::string::String> = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        let mut arr = false;
-        while i < b.len() && b[i] == b'[' { arr = true; i += 1; }
-        let part = match b.get(i) {
-            Some(b'L') => {
-                let end = params[i..].find(';').map(|p| i + p).unwrap_or(b.len());
-                let p = class(&params[i + 1..end]);
-                i = end + 1;
-                p
-            }
-            Some(&c) => { i += 1; prim(c).unwrap_or("x").to_owned() }
-            None => break,
-        };
-        parts.push(if arr { format!("arr_{part}") } else { part });
-    }
-    parts.join("_")
-}
-
-/// Rust 符号路径 → Java 声明类 binary name（斜线形态）。
-///
-/// 翻译方法的符号形态（std Backtrace Display，随 rustc 版本而异）：
-/// - 包裹体形态：`<java_runtime::jdk::internal::reflect::reflection::Reflection>::getCallerClass`
-///   / `<Type as Trait>::m`（inherent / trait 方法的限定 Self 形态）；
-/// - 泛型形态两种：`...::AtomicReference::<Object>::__clinit`（rustc 1.98 实测）与
-///   `...::AtomicReference<V>::__clinit`（rustc 1.94 实测，泛型组紧贴类型段）；
-/// - 闭包尾巴：`...::{closure#0}`。
-/// 解析规则：
-/// - 跨模块 impl 组 `<impl T>` / `<impl Tr for T>` 取实现类型（impl_self_type），
-///   限定 Self 包裹体取 Self 类型（unwrap_qualified_self），再删除全部成对
-///   尖括号泛型组（strip_generic_groups）——与泛型打印形态无关。旧实现取
-///   「首个 `<` 到首个 `>`」，在 1.94 形态下取到泛型形参 `V`，泛型类帧全部
-///   解析失败 → getCallerClass 越过调用者返回 null → MethodHandles.lookup
-///   抛 IllegalCallerException（TestAtomics 服务器侧 EIIE 根因）；
-/// - 从右向左跳过方法/函数段（小写或下划线开头、空段），首个大写开头段 = 类型段；
-/// - 类型段的 `_` 是内部类 `$` 分隔（Java 类名不含下划线，宏对嵌套类即此命名）；
-/// - 类型段的 `__` 之后是宏派发设施后缀：`X__inner`（存储类型）归 X，`X__m_base`（方法体自由函数）
-///   归 X 的方法 m；
-/// - 包段末段的「类文件 stem」（snake(类简单名)，如 atomic_reference / reflection /
-///   method_handles）不是 Java 包——codegen 每类一文件，类型自身模块名恰是 stem，
-///   归一化比较（去 `_`/`$` 后小写相等）命中即剥掉；不命中（非 java_runtime 形态）保留；
-/// - 包段的单词式关键字转义（尾随一个 `_`，如 `unsafe_`）剥掉下划线。
-/// - 用户 crate 帧（`<bin>::<包段…>::<stem>::Class::method`）同一规则解析（首段为 crate 根）。
-/// 解析不出（标准库 / 依赖帧、形态不符）返回 None。
-pub(crate) fn java_class_of_symbol(symbol: &str) -> Option<std::string::String> {
-    parse_symbol(symbol).map(|p| p.class)
-}
-
-/// 符号解析结果：声明类 + 类型段之后的首个方法段 + 是否闭包帧。
-struct ParsedSymbol {
-    class: std::string::String,
-    method: Option<std::string::String>,
-    closure: bool,
-    /// 类型上的固有方法 `X::m`（非 trait 限定、非宏派发设施、非 `__` 隐藏体）：虚方法的派发入口形态
-    dispatch_entry: bool,
-}
-
-fn parse_symbol(symbol: &str) -> Option<ParsedSymbol> {
-    const KEYWORDS: &[&str] = &[
-        "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false",
-        "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
-        "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe",
-        "use", "where", "while",
-    ];
-    let path = strip_generic_groups(&unwrap_qualified_self(&impl_self_type(symbol)));
-    // 翻译类所在 crate：JDK 类在 java_runtime，用户类在用户 crate（bin 名为 crate 根，
-    // 模块路径 = 包段 + 类文件 stem，与 java_runtime 同一布局）。Rust 标准库与第三方
-    // 依赖帧不是 Java 帧。
-    const NON_JAVA_CRATES: &[&str] = &[
-        "std", "core", "alloc", "parking_lot", "parking_lot_core", "lock_api", "backtrace",
-        "rustc_demangle", "gimli", "addr2line", "rava_macros",
-    ];
-    let in_runtime = path.contains("java_runtime::");
-    let start = match path.find("java_runtime::") {
-        Some(s) => s,
-        None => {
-            let first = path.split("::").next()?;
-            if first.is_empty() || !first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                || NON_JAVA_CRATES.contains(&first) {
-                return None;
-            }
-            0
-        }
-    };
-    let segs: Vec<&str> = path[start..].split("::").filter(|s| !s.is_empty()).collect();
-    // 从右向左找类型段（首个大写开头段；小写/下划线开头为方法或辅助函数段）
-    let mut idx = segs.len();
-    while idx > 0 {
-        let seg = segs[idx - 1];
-        match seg.chars().next() {
-            Some(c) if c.is_uppercase() => break,
-            _ => idx -= 1,
-        }
-    }
-    if idx < 2 {
-        return None; // 至少「crate 根 + 类型段」
-    }
-    // 方法段从原符号取：包裹体 / impl 组解析只保留 Self 类型，方法段在组外
-    let tail = strip_generic_groups(symbol);
-    let tail_segs: Vec<&str> = tail.split("::").filter(|s| !s.is_empty()).collect();
-    let closure = tail_segs.iter().any(|s| s.starts_with("{closure"));
-    let mut method = tail_segs.iter().rev().find(|s| !s.starts_with('{')).map(|s| (*s).to_owned());
-    // java_class! 的派发设施（宏命名 `<类>__<后缀>`）：`<类>__inner` 是对象存储类型，其 vtable impl
-    // 即该类的方法；`<类>__<方法>_base` 是方法体所在的自由函数（vtable-safe 覆盖体 / super 调用目标）
-    let dispatch_entry = !symbol.contains(" as ") && !symbol.contains("<impl ") && !segs[idx - 1].contains("__")
-        && method.as_deref().is_some_and(|m| !m.starts_with("__"));
-    let raw_type = match segs[idx - 1].split_once("__") {
-        Some((ty, "inner")) => ty,
-        Some((ty, rest)) => match rest.strip_suffix("_base") {
-            Some(m) if !m.is_empty() => {
-                method = Some(m.to_owned());
-                ty
-            }
-            _ => segs[idx - 1],
-        },
-        None => segs[idx - 1],
-    };
-    let type_name = raw_type.replace('_', "$");
-    let mut pkg: Vec<std::string::String> = Vec::new();
-    for seg in &segs[1..idx - 1] {
-        if seg.is_empty() {
-            return None;
-        }
-        // 关键字转义模块（尾随 _）还原
-        let stripped = seg.strip_suffix('_').unwrap_or(seg);
-        if stripped.len() + 1 == seg.len() && KEYWORDS.contains(&stripped) {
-            pkg.push(stripped.to_owned());
-        } else {
-            pkg.push((*seg).to_owned());
-        }
-    }
-    // 末段若是类型自身文件的 stem（snake(类简单名)）则剥掉——它不是 Java 包段
-    if let Some(last) = pkg.last() {
-        let norm = |s: &str| -> std::string::String {
-            s.chars().filter(|c| *c != '_' && *c != '$').flat_map(|c| c.to_lowercase()).collect()
-        };
-        if norm(last) == norm(&type_name) {
-            pkg.pop();
-        }
-    }
-    if pkg.is_empty() {
-        // 无名包：只对用户 crate 成立（JDK 类恒在具名包）
-        return if in_runtime { None } else { Some(ParsedSymbol { class: type_name, method, closure, dispatch_entry }) };
-    }
-    Some(ParsedSymbol { class: format!("{}/{}", pkg.join("/"), type_name), method, closure, dispatch_entry })
-}
-
-/// 跨模块 impl 形态 `mod::<impl Type<T>>::m` / `mod::<impl Trait for Type>::m`
-/// （`_impl.rs` 伴生方法与宏展开的 trait impl 即此形态，rustc 1.94 实测）→
-/// 实现类型的绝对路径 `Type<T>`：取深度 0 处 `<impl ` 组的内部，trait impl
-/// 取深度 1 的 ` for ` 之后。非此形态原样返回。
-fn impl_self_type(symbol: &str) -> std::string::String {
-    let Some(open) = symbol.find("<impl ") else { return symbol.to_owned() };
-    // 须是深度 0 的组（泛型实参内部的 `<impl` 不是 Self 路径）
-    if symbol[..open].matches('<').count() != symbol[..open].matches('>').count() {
-        return symbol.to_owned();
-    }
-    let body = &symbol[open + 1..];
-    let mut depth = 1usize;
-    let mut end = body.len();
-    let mut for_at: Option<usize> = None;
-    let bytes = body.as_bytes();
-    for (i, c) in body.char_indices() {
-        match c {
-            '<' => depth += 1,
-            '>' if i > 0 && bytes[i - 1] == b'-' => {}
-            '>' => {
-                depth -= 1;
-                if depth == 0 { end = i; break; }
-            }
-            _ if depth == 1 && for_at.is_none() && body[i..].starts_with(" for ") => for_at = Some(i + 5),
-            _ => {}
-        }
-    }
-    let inner = &body[..end];
-    match for_at {
-        Some(k) if k <= end => inner[k..].to_owned(),
-        _ => inner.trim_start_matches("impl ").to_owned(),
-    }
-}
-
-/// 限定 Self 包裹体 `<Type as Trait>::m` / `<Type>::m` → `Type`（成对尖括号
-/// 深度计数定位包裹体终点；` as ` 只在深度 1 处切分，泛型实参内的 ` as ` 不误切）。
-/// 非包裹形态原样返回。
-fn unwrap_qualified_self(symbol: &str) -> std::string::String {
-    if !symbol.starts_with('<') {
-        return symbol.to_owned();
-    }
-    let mut depth = 0usize;
-    let mut out = std::string::String::new();
-    let bytes = symbol.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        match c {
-            '<' => { depth += 1; if depth > 1 { out.push(c); } }
-            // 函数指针类型的 `->` 不是尖括号
-            '>' if i > 0 && bytes[i - 1] == b'-' => out.push(c),
-            '>' => {
-                depth -= 1;
-                if depth == 0 { break; }
-                out.push(c);
-            }
-            _ if depth == 1 && symbol[i..].starts_with(" as ") => break,
-            _ => out.push(c),
-        }
-        i += 1;
-    }
-    out
-}
-
-/// 删除全部成对尖括号泛型组（含嵌套）：兼容 std Backtrace 的两种泛型打印——
-/// `Type<T>::m`（rustc 1.94 实测）与 `Type::<T>::m`（1.98 实测）；删后遗留的
-/// 空 `::` 段由调用方过滤。
-fn strip_generic_groups(path: &str) -> std::string::String {
-    let mut depth = 0usize;
-    let mut out = std::string::String::new();
-    let mut prev = '\0';
-    for c in path.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' if prev == '-' => { if depth == 0 { out.push(c); } }
-            '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-        prev = c;
-    }
-    out
 }
