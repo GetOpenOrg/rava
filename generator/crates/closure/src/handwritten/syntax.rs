@@ -362,9 +362,18 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
+    // 闭包形参：带类型注解的取注解类型（`|p: &UnixPath| …`），其余遮蔽同名变量
     fn visit_expr_closure(&mut self, c: &'ast syn::ExprClosure) {
         let outer = (self.scope.clone(), self.fresh.clone());
-        syn::visit::visit_expr_closure(self, c);
+        for input in &c.inputs {
+            self.visit_pat(input);
+            if let (syn::Pat::Type(pt), Some(pi)) = (input, bound_ident(input)) {
+                let st = type_path(&pt.ty).map(|p| SType::Named(TypeRef(p)));
+                self.scope.insert(pi.ident.to_string(), st);
+            }
+        }
+        self.visit_return_type(&c.output);
+        self.visit_expr(&c.body);
         (self.scope, self.fresh) = outer;
     }
 

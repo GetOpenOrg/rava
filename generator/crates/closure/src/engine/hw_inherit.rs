@@ -5,6 +5,7 @@
 //! 接收者类承载该继承成员——与生成方法体登记的继承成员需求是同一事实，且与该 fn 是否可达无关
 //! （不可达的手写 fn 照样要通过类型检查）。按闭包内全部类的共置手写文件与全部模块单元逐 fn 收集。
 
+use super::hw_stype::StypeBreak;
 use super::*;
 use std::collections::HashSet;
 
@@ -25,8 +26,11 @@ impl Engine<'_> {
 
     /// 静态类型推不出的接收者调用点（审计）：`类别 宿主 方法名`（同宿主同名合并）。方法名须是闭包内某 Java
     /// 方法的名字，且接收者的静态类型与语法推断都解析不到 Java 类。类别：
-    /// - `chain`：经字段 / 返回推导的链，基底已解析到 Java 类、中途某级推不出（推断缺口，应归零）；
-    /// - `camel`：基底无类型、方法名为 Java 驼峰形（含大写；Rust 标准方法一律蛇形），多为 Java 值；
+    /// - `chain`：经字段 / 返回推导的链，基底与中途各级都是 Java 类、某级在类型层次上查不到或不唯一
+    ///   （推断缺口，应归零），附断开的那一级；
+    /// - `value`：链中途的值不是 Java 对象（数组 / 基本类型、手写 fn 返回的 Rust 类型），之后的同名调用
+    ///   是 Rust 方法（`JArray::get`、`Iterator::map` …），不是 Java 回调；
+    /// - `camel`：基底无类型、方法名为 Java 驼峰形（含大写；Rust 标准方法一律蛇形），附基底的类型路径（推不出为 `?`）；
     /// - `lower`：基底无类型、全小写单词名（get / map / set …），与 Rust 标准方法同名，语法上无法区分
     pub fn hw_untyped_sites(&self) -> BTreeSet<String> {
         let java_names: HashSet<String> =
@@ -37,29 +41,27 @@ impl Engine<'_> {
             if !java_names.contains(&c.name) && !java_names.contains(plain) {
                 continue;
             }
-            let typed = c.srecv.as_ref().and_then(|s| self.stype_class(&host, s)).is_some()
-                || c.recv.as_ref().and_then(|r| r.as_ref()).and_then(|t| self.resolve_tref(&host, t)).is_some();
-            if typed {
+            if c.recv.as_ref().and_then(|r| r.as_ref()).and_then(|t| self.resolve_tref(&host, t)).is_some() {
                 continue;
             }
-            let kind = if c.srecv.as_ref().is_some_and(|s| self.stype_base_resolves(&host, s)) {
-                "chain"
-            } else if c.name.chars().any(|ch| ch.is_ascii_uppercase()) {
-                "camel"
-            } else {
-                "lower"
+            let brk = match c.srecv.as_ref().map(|s| self.stype_desc(&host, s)) {
+                Some(Ok(d)) if d.starts_with('L') => continue,
+                Some(Ok(d)) => StypeBreak::Value(d),
+                Some(Err(b)) => b,
+                None => StypeBreak::Base(String::new()),
             };
-            out.insert(format!("{kind} {host} {}", c.name));
+            let line = match brk {
+                StypeBreak::Gap(why) => format!("chain {host} {} ← {why}", c.name),
+                StypeBreak::Value(_) => format!("value {host} {}", c.name),
+                StypeBreak::Base(t) if c.name.chars().any(|ch| ch.is_ascii_uppercase()) => {
+                    let t = if t.is_empty() { "?" } else { t.as_str() };
+                    format!("camel {host} {} ← {t}", c.name)
+                }
+                StypeBreak::Base(_) => format!("lower {host} {}", c.name),
+            };
+            out.insert(line);
         }
         out
-    }
-
-    /// 推导链的基底（具名类型 / 辅助 fn 返回的宿主类型）解析到 Java 类
-    fn stype_base_resolves(&self, host: &str, s: &SType) -> bool {
-        match s {
-            SType::Named(t) | SType::Ret(t, _) => self.resolve_tref(host, t).is_some(),
-            SType::Field(b, _) | SType::Call(b, _) => self.stype_base_resolves(host, b),
-        }
     }
 
     /// 闭包内全部共置手写文件与模块单元中写成「接收者.方法」的调用点：(宿主, fn 名, 调用点)；

@@ -61,14 +61,55 @@ DeepCopy、TestBmhDynamicSpecies、TestCtorReflect 在 59dbedc1 及其后两次�
 ## 五、审计：手写体接收者静态类型推不出的调用点（`hw_untyped_sites`）
 
 `closure.json` 的 `hw_untyped_sites` 列出这样的调用点：方法名是闭包内某个 Java 方法的名字，但接收者的静态类型和语法推断
-都解析不到 Java 类。每条格式为 `类别 宿主 方法名`，同一宿主下的同名方法合并为一条。类别如下：
+都解析不到 Java 类（同一宿主下同名合并为一条）。静态类型逐级解析在 `engine/hw_stype.rs`（`stype_desc`），断开原因决定类别：
 
-- `chain`：推导链的基底已解析到 Java 类，中途某一级推不出。这是推断缺口，目标为 0。
-- `camel`：基底没有类型，方法名是 Java 驼峰形。Rust 标准方法一律是蛇形，所以这类多半是 Java 值，需要逐条说明原因。
-- `lower`：基底没有类型，方法名是全小写单词（get / map / set …），与 Rust 标准方法同名，语法上无法区分，不计入。
+- `chain 宿主 方法 ← 断开级`：基底与中途各级都是 Java 类，某级在类型层次上查不到或无法唯一确定。推断缺口，**终态 0**。
+- `value 宿主 方法`：链中途的值不是 Java 对象（数组 / 基本类型，或手写 fn 返回的 Rust 类型），之后的同名调用是 Rust 方法
+  （`JArray::get` / `to_vec`、`Iterator::map` / `collect`、`Option::unwrap_or` …），不是 Java 回调，不计入。
+- `camel 宿主 方法 ← 基底类型`：基底不是 Java 类、方法名为 Java 驼峰形，附基底类型路径（推不出为 `?`），逐条说明见下。
+- `lower 宿主 方法`：基底无类型、全小写单词名，与 Rust 标准方法同名，语法上无法区分，不计入。
 
-分类前的 DeepCopy 计数为 792 条，大头是与 Rust 标准方法同名的调用：map 54、get 43、collect 34、toString 32 等。
-分类后的计数与逐条说明待补。
+### chain 清零（c6audit-622ea4b0 的 63 条 → 0）
+
+c6audit-622ea4b0（kr1，21 例）的 union 为 937 条：chain 63、camel 47、lower 827。chain 的断开级分五类，修法均为推断补全：
+
+| 断开原因 | 例 | 修法 |
+|---|---|---|
+| 数组 / 基本类型值上的 Rust 方法 | `String.value [B` 上的 `to_vec`、`Thread::MAX_PRIORITY()` 上的 `min` | 逐级按字段描述符解析；数组上的 `get` 取元素描述符，其余数组 / 基本类型上的调用归 `value` |
+| 跨文件的手写 fn（Java 类型上的非 Java 方法） | `Class.__declared_method_meta`、`LocaleResources.__bundle_chain`、`UnixFileAttributes.ok` | 共置手写与模块单元的 impl 块 fn 返回类型入 `ClassHw.rets`，按超类型查找；返回非类型路径（元组 / 引用 / 无返回）记空路径 → `value` |
+| static 字段访问器 | `Thread::NORM_PRIORITY()` | 路径调用在类型上无同名 Java 方法时取 static 字段描述符 |
+| 协变返回 | `UnixPath.getFileSystem` 返回 `{FileSystem, UnixFileSystem}`（桥） | 取各返回类型中是其余全部子类型者 |
+| Result / Option 适配 | `Class.ok`、`Class.unwrap_or_default` | `x.ok()?` 与 `unwrap_or_default` 透传被包装值；未经 `?` 的 `x.ok()` 是 Rust `Option`，无 Java 静态类型 |
+
+同时补齐的静态类型来源（使原先 `?` 基底的调用点解析到 Java 类）：带类型注解的闭包形参（`|p: &UnixPath|`）、
+`match r { Ok(x) => x, Err(..) => .. }`、`Clone::clone(&x)`、带元素类型注解的容器 `ptypes: JArray<Class>` 的 `get(i)`、
+本文件顶层自由 fn 的返回类型。DeepCopy 实测：chain 0、value 53、camel 57、lower 770；闭包类集 1906 / 方法集 13457
+与改动前逐项相同（解析更准只体现在调用边，如 `UnixPath.getByteArrayForSysCalls` 的派发多出 `UnixFileSystem.defaultDirectory`）。
+
+### camel 逐条说明（DeepCopy 57 条，按基底类型归组）
+
+全部不是漏掉的 Java 回调：
+
+1. **Rust 值的 Display（44 条：`toString` 43 条，另有 `Object hashCode ← Instance`）**。格式化宏里静态类型已知的实参登记为 `toString()` 调用（Java 对象的 Display 即
+   `toString`），基底是 Rust 类型时是 Rust 自己的 Display：
+   - 基本类型与 `str` / `std::string::String` / `Vec`：array、error、lib、proxy_dyn、reflect_dispatch、species_dyn、
+     FileInputStream、FileOutputStream、Object、String、MethodHandle、MethodHandleNatives、Constructor、Method、
+     NetworkInterface、JavaLangAccess、Unsafe、ConstantPool、Reflection、ArraysSupport、Preconditions、Wrapper、
+     UnixChannelFactory、GetInstance、LocaleResources 下的 `toString`；
+   - `std::io::Error` / `std::backtrace::Backtrace`：FileInputStream、FileOutputStream、FileChannelImpl、Throwable、Reflection、error；
+   - 运行时内部类型 `crate::error::JvmError` / `crate::sync_model::__Shared` / `Instance`：error、array、Object（`Instance` 上的 `hashCode` 是其 Rust 方法）。
+2. **根类 vtable 自身（7 条）**：
+   - `java/lang/Object` 的 `compareTo` / `getClass` / `hashCode ← ?` 是 `self.0.x()`，`self.0` 是 `Rc<dyn ObjectVTable>`；
+   - `array getClass ← ?` 是 `view.origin.0.getClass()` / `Into::<Object>::into(T::default()).0.getClass()`；
+   - `java/lang/object` 的 `getClass` / `hashCode` / `toString ← T` 是泛型 `T: Into<Object>` 的转发。
+   这些都是 invokevirtual `Object.x` 在运行时的落点，分派目标由字节码调用点的派发覆盖，手写体不引入额外目标。
+3. **数组镜像（2 条）**：`array getClass` / `toString ← crate::array::JArray` 是 `JArray` 自己的数组类语义（JLS §10.8），在 array.rs 手写。
+4. **手写实现对象自身（3 条）**：`JavaLangAccess` 的 `countPositives` / `getBytesNoRepl` / `newStringNoRepl ← SystemJavaLangAccess`
+   是 SharedSecrets 实现对象在自身 impl 内的互调，被调的是同一手写对象的 Rust fn。
+5. **Option 闭包形参（1 条）**：`UnixFileSystemProvider isDirectory ← ?` 是 `attrs.as_ref().map(|a| a.isDirectory())`，
+   `attrs` 为 `….ok()` 的 `Option<UnixFileAttributes>`；`UnixFileAttributes.isDirectory` 本身是该类手写（`handwritten:provides`），不是 Java 回调。
+
+21 例 union 的复跑见下一轮审计作业（同一命令）。
 
 ## 六、集成头 52bf5311 的日期 / 区域与 IO / 反射回归（C6 步骤 2 引起）
 

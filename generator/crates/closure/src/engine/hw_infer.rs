@@ -62,22 +62,6 @@ impl Engine<'_> {
         Vec::new()
     }
 
-    /// 类型层次上 Rust 名为 `m` 的方法的返回类（返回类型须唯一且为引用类型）
-    pub(super) fn rust_method_ret(&self, c: &str, m: &str) -> Option<String> {
-        let rets: BTreeSet<String> = self
-            .methods_by_rust_name(c, m, None)
-            .into_iter()
-            .filter_map(|(_, _, d, _)| parse_method(&d).and_then(|d| d.ret).map(|r| r.descriptor()))
-            .collect();
-        if rets.len() != 1 {
-            return None;
-        }
-        match parse_field(rets.first()?)? {
-            FieldType::Object(c) => Some(c),
-            _ => None,
-        }
-    }
-
     /// 手写体调用点反解出的 Java 回调目标：方法调用按接收者静态类型取实例方法，
     /// 路径调用 `T::m(…)` 取 `T` 上的静态方法（构造器经 ctors 另行处理）
     pub(super) fn hw_inferred_upcalls(&self, host: &str, mh: &MemberHw) -> BTreeSet<Upcall> {

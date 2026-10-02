@@ -98,6 +98,7 @@ impl Handwritten {
             let mut hw = ClassHw { files: vec![path], ..Default::default() };
             defined_types(&file.items, &mut hw.types);
             hw.objects = objects::close(&raw);
+            hw.rets = std::mem::take(&mut raw.rets);
             hw.fns = raw.fns;
             out.insert(host, Rc::new(hw));
         }

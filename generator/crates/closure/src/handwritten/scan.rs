@@ -27,6 +27,8 @@ pub(super) struct FileFns {
     pub(super) fns: HashMap<String, FnInfo>,
     pub(super) calls: HashMap<String, HashSet<String>>,
     pub(super) objects: BTreeMap<String, RawObject>,
+    /// 文件顶层 impl 块关联 fn 的返回类型（见 [`local_rets`]）
+    pub(super) rets: LocalRets,
 }
 
 pub(super) struct FileScan<'a> {
@@ -45,55 +47,6 @@ pub(super) struct FileScan<'a> {
     pub(super) rets: &'a LocalRets,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
-}
-
-/// (impl self 类型全路径, fn 名) → 返回类型全路径
-pub(super) type LocalRets = HashMap<(Vec<String>, String), Vec<String>>;
-
-/// 本文件顶层 impl 块关联 fn 的返回类型（剥 `Result` / `Option`；`Self` 换成 impl 类型）：
-/// 手写辅助 fn（`Self::new_format(…)`）返回值的静态类型
-pub(super) fn local_rets(file: &syn::File, uses: &HashMap<String, Vec<String>>) -> LocalRets {
-    let mut out = HashMap::new();
-    for item in &file.items {
-        let syn::Item::Impl(i) = item else { continue };
-        let Some(st) = type_path(&i.self_ty).map(|t| expand(uses, t)) else { continue };
-        for it in &i.items {
-            let syn::ImplItem::Fn(f) = it else { continue };
-            let syn::ReturnType::Type(_, t) = &f.sig.output else { continue };
-            let Some(r) = ret_path(t) else { continue };
-            let r = if r == ["Self"] { st.clone() } else { expand(uses, r) };
-            out.insert((st.clone(), f.sig.ident.to_string()), r);
-        }
-    }
-    out
-}
-
-/// 返回类型路径：`Result<T>` / `Option<T>` 取 `T`
-fn ret_path(t: &syn::Type) -> Option<Vec<String>> {
-    if let syn::Type::Path(p) = t {
-        let last = p.path.segments.last()?;
-        if matches!(last.ident.to_string().as_str(), "Result" | "Option") {
-            let syn::PathArguments::AngleBracketed(a) = &last.arguments else { return None };
-            let Some(syn::GenericArgument::Type(inner)) = a.args.first() else { return None };
-            return ret_path(inner);
-        }
-    }
-    type_path(t)
-}
-
-/// 静态类型中本文件辅助 fn 的返回（`SType::Ret`）换成其声明的返回类型；非本文件声明的构造器形态
-/// `T::new*` 取 `T`
-fn local_ret(s: SType, rets: &LocalRets) -> SType {
-    match s {
-        SType::Ret(t, m) => match rets.get(&(t.0.clone(), m.clone())) {
-            Some(r) => SType::Named(TypeRef(r.clone())),
-            None if super::stype::is_ctor_name(&m) => SType::Named(t),
-            None => SType::Ret(t, m),
-        },
-        SType::Field(b, f) => SType::Field(Box::new(local_ret(*b, rets)), f),
-        SType::Call(b, m) => SType::Call(Box::new(local_ret(*b, rets)), m),
-        n => n,
-    }
 }
 
 /// 标识符收集（宏外；宏内标识符另经 `macro_idents` 收集）
@@ -140,7 +93,7 @@ impl FileScan<'_> {
                 path,
                 field,
                 write,
-                recv: recv.map(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
+                recv: recv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
             });
         }
@@ -166,7 +119,7 @@ impl FileScan<'_> {
                 recv: recv.map(tr),
                 args: args.into_iter().map(tr).collect(),
                 fresh: tr(fresh),
-                srecv: srecv.map(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
+                srecv: srecv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
             });
         }
         info.opaque = cs.opaque;
@@ -323,6 +276,7 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     us.visit_file(file);
     let local = super::objects::object_structs(file);
     let rets = local_rets(file, &us.0);
+    out.rets.extend(rets.iter().map(|(k, v)| (k.clone(), v.clone())));
     let helpers = local_helpers(file);
     let mut fs = FileScan {
         rets: &rets,
