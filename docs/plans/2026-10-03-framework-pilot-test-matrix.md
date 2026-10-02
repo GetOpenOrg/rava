@@ -149,7 +149,8 @@
 
 - main 较本文初稿基线（2a3f4397）新增 12 提交，全部闭包分析器域：C1d-b1（返回模型收窄）+ C1d-b T3（**L3 反射分派按接收者、接口 `__reflect_dispatch`、错接收者 IAE**；StockTrans 分派 22949→1645）+ from_any ②；**T2 在途**。T3 对反射深水 pilot（#8/#10/#11）是直接利好。
 - **scripts-into-rava S1–S5 ✅（bb0b7736）**：Python 入口并入 rava（main.py 已删）、lib_pilot_golden.sh 已走 `rava build --lib`、**m3 编译错误 0**。S6–S8 在列：S6（dyn 并入 rava）◀── **C4 收官**（dyn_compare 冻结）→ S7（run_tests 拆 scripts/e2e/ 预留形态接口）→ S8（Python 归零）。
-- **JUnit 步骤 0 在 tasks.md 登记「可提前；m3 编译 0 ✅，运行期存根由 C1d-b b0 处理」**——初稿发现的 m1 E0433（拆 crate import 缺陷）：**2026-10-03 worktree 复跑核实 = m1 GOLDEN OK（fe197231）**，已被 S1–S5 / C1d-b 顺带修复，**F1 闸门清除**；m2–m5 复跑（W0-2）随即启动。
+- **JUnit 步骤 0 在 tasks.md 登记「可提前；m3 编译 0 ✅，运行期存根由 C1d-b b0 处理」**——初稿发现的 m1 E0433（拆 crate import 缺陷）：**2026-10-03 worktree 复跑核实 = m1 GOLDEN OK（fe197231）**，已被 S1–S5 / C1d-b 顺带修复，**F1 闸门清除**。
+- **W0-2 复跑结果（2026-10-03，fe197231）：m1–m4 全 GOLDEN OK；m5 GOLDEN DIFF，双层根因**——① 库存档 m5 golden 失真：N13 改名（dbbcb057）把测试 `subject` 由 `"java-rta"` 机械替换为 `"rava"` 并手工改了 golden 文本但**未重跑**（subject="rava" 使 prefixOk 由过转败，fresh JVM = fail=2，存档仍 fail=1）；② **真缺陷：翻译侧两个 @Test 读 `subject` 均为 `was null` = `@Before setUp()` 的字段写入未生效**（@Before 未发现 or 反射写回丢失，二选一待定位；m3/m4 无 @Before 用例故未暴露）。**无状态跨 crate 回调（even/prefix/length 六检查）翻译侧全 PASS**——坏面精确限定在「回调带字段状态」。fresh 输出存证 /tmp/m5_{jvm,rs}_fresh.txt；worktree golden 已还原未提交。缺陷归闭包分析器域（T 系列队列，与 T2 并轨，W0-4 跟踪）。
 - 全量 e2e 与重命令已走 **8 台服务器分发**（distribute_tests.py）；**T1 跨测试编译复用 ◇ Q3**（用户一次决策）= per-test 成本闸门的替代路径（与预构建缓存 C-CACHE 组合或二选一）。
 - 时序主链：阶段 C（闭包分析器）收官 → C4 → S6 → S7 → H1（e2e 形态接口）。**golden mains 不在这条链上**，W0 复跑与 W1 反射件可提前。
 
@@ -170,8 +171,9 @@
 | 任务 | 依赖 | 验收判据 | 解锁 |
 |---|---|---|---|
 | W0-1 m1 复跑核实（E0433） | 最新 main（不等任何队列） | **✅ 2026-10-03 完成：GOLDEN OK（fe197231），缺陷已被 S1–S5/C1d-b 顺带修复** | W0-2 |
-| W0-2 m2–m5 复跑 | W0-1 ✅ | 5×GOLDEN OK（m1 ✅），golden 入库零 diff | **W1 全部、#8 OGNL、#11 spring-core 切片、W5 池纯计算件**；步骤 A（W0-3）另等 H1 |
+| W0-2 m2–m5 复跑 | W0-1 ✅ | **部分达成（2026-10-03）：m1–m4 ✅ 4×GOLDEN OK；m5 ❌ DIFF → W0-4** | m1–m4 面（断言/Runner/timeout/跨 crate 编译链）已解锁 **W1 五连、#8 OGNL、#11 spring-core 切片、W5 池纯计算件**；m5 面（跨 crate 回调带字段状态）推迟到 W0-4；步骤 A 另等 H1 |
 | W0-3 e2e 形态接线（= junit 计划步骤 A：form.toml + 63_junit） | **H1**（◀ C4 收官）+ D-2 | 63_junit 首批 ≥10 例绿 + m1–m5 零回归 | 一切 e2e 目录放量（64_… 编号段） |
+| **W0-4 m5 缺陷修复**（@Before 字段写丢失 / 库存档失真重生成） | 归属闭包分析器域（与 T2 并轨，排期由用户裁决） | 定位修复后 m5 复跑 GOLDEN OK + **m5 golden 库存档重生成**（替换 dbbcb057 的失真存档） | 「用户类被 lib 回调 + 字段状态」面加固：#6 servlet 容器件的状态用例最受益；无状态回调面已验证可用（m5 六检查 PASS） |
 
 **W1 纯计算五连（依赖 W0-2；一次一个 pilot）**
 
@@ -225,7 +227,8 @@
 | 条件达成 | 立即可做 |
 |---|---|
 | F1 核实通过（m1 绿） | W0-2（m2–m5 复跑） |
-| W0-2 全绿 | W1 五连、#8 OGNL、#11 spring-core 切片、W5 池全部纯计算件（Jsoup/Caffeine/SnakeYAML/typesafe/AssertJ/Fastjson2 流式/在盘顺手件） |
+| W0-2（m1–m4 绿，已达成） | W1 五连、#8 OGNL、#11 spring-core 切片、W5 池全部纯计算件（Jsoup/Caffeine/SnakeYAML/typesafe/AssertJ/Fastjson2 流式/在盘顺手件） |
+| W0-4（m5 修复） | 「跨 crate 回调 + 字段状态」面（servlet 容器件状态用例、@Before 式生命周期断言） |
 | H1 就绪（C4 → S6 → S7 合入） | W0-3 接线 → 各 pilot e2e 目录逐波放量 |
 | D-2 拍板（servlet 代次） | #6、#7 |
 | C-SQL 落地 | #9 H2 → #10 mybatis →（+C-MT）HikariCP、Quartz |
