@@ -1,0 +1,29 @@
+direct:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines.main:56 TestStackWalkerLines.java
+recursive:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines.nested:50 TestStackWalkerLines.java
+  TestStackWalkerLines.nested:52 TestStackWalkerLines.java
+  TestStackWalkerLines.nested:52 TestStackWalkerLines.java
+  TestStackWalkerLines.main:57 TestStackWalkerLines.java
+lambda:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines.lambda$main$3:58 TestStackWalkerLines.java
+  TestStackWalkerLines.main:59 TestStackWalkerLines.java
+default:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines$Walker.viaDefault:26 TestStackWalkerLines.java
+  TestStackWalkerLines.main:61 TestStackWalkerLines.java
+inherited:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines$Base.inherited:32 TestStackWalkerLines.java
+  TestStackWalkerLines.main:62 TestStackWalkerLines.java
+constructor:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines$Derived.<init>:40 TestStackWalkerLines.java
+  TestStackWalkerLines.main:60 TestStackWalkerLines.java
+clinit:
+  TestStackWalkerLines.walk:9 TestStackWalkerLines.java
+  TestStackWalkerLines$Holder.<clinit>:45 TestStackWalkerLines.java
+  TestStackWalkerLines.main:64 TestStackWalkerLines.java

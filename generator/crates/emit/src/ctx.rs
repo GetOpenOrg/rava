@@ -193,18 +193,23 @@ impl<'a> EmitShared<'a> {
     /// `member_naming._handwritten_root_api`）
     pub fn root_api(&self) -> &BTreeSet<String> {
         self.root_api.get_or_init(|| {
-            let root = ty::consts::OBJECT;
-            let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
-            let dir = pkg.split('/').fold(self.runtime_src(), |d, p| d.join(p));
-            let stem = crate::text::to_snake(simple);
             let mut names = BTreeSet::new();
-            for f in [format!("{stem}_impl.rs"), format!("{stem}_ext.rs"), format!("{stem}.rs")] {
-                if let Ok(text) = std::fs::read_to_string(dir.join(f)) {
+            for f in Self::root_files(&self.runtime_src()) {
+                if let Ok(text) = std::fs::read_to_string(f) {
                     names.extend(crate::text::pub_fn_names(&text));
                 }
             }
             names
         })
+    }
+
+    /// 手写根类的源文件 `<src>/<包>/<stem>{_impl,_ext,}.rs`（`src` 为 runtime 真源或 scratch overlay）
+    pub fn root_files(src: &Path) -> Vec<PathBuf> {
+        let root = ty::consts::OBJECT;
+        let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
+        let dir = pkg.split('/').fold(src.to_path_buf(), |d, p| d.join(p));
+        let stem = crate::text::to_snake(simple);
+        ["_impl", "_ext", ""].iter().map(|suffix| dir.join(format!("{stem}{suffix}.rs"))).collect()
     }
 
     /// 根类的 public 实例方法键 {(名, 参数描述符部分)}（从 JDK 字节码解析；

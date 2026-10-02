@@ -140,6 +140,38 @@
 - S2 生成树对照（s2-a6a7c26e，基线 59da6137）：剥去 `// line N` 后方法体文本逐字节不变；7 例的差异是个别文件换了
   body crate（`layers.rs` 按文本字节数装箱，标记使文本变长，边界附近的文件可能换箱）。行表按落盘路径扫描，不受影响。
 
+### 10.1a 栈帧来源统一（frames-unify，实施）
+
+- 终态落地：`vm_stack::capture_java_frames` 是全部栈帧消费方（fillInStackTrace / getCallerClass / getClassContext /
+  StackWalker）的唯一来源，帧由行表给出；Rust 符号解析（parse_symbol / java_method_of / executes_body / 派发入口规则 /
+  capture_frame_classes 等）整段删除，`MethodMeta.dispatched`（只服务于符号规则）随之删除。
+- 行表（`emit/src/project/line_tables/`）：方法项为 (帧归属类, 方法名, 描述符, 源文件, 宿主类)，运行时按
+  (类, 名, 描述符) 取归属类自身声明的 MethodMeta，归属类无表项时取宿主类的行。手写方法的 `// [meta]` 行结束上一区间。
+- 手写方法成帧（`line_tables/handwritten.rs`）：生成文件以 `// [meta]` 注释对、`#[java_native]` 声明、
+  `body = "handwritten"` 声明登记手写方法，伴生 `<stem>_impl.rs` 用 syn（span-locations）解析 `impl` 块，各登记 fn 的区间
+  （含属性行，`#[jvm_native]` 插入的类初始化 span 在属性行）写行表项，Java 行取哨兵：native → -2（Native Method），
+  其余 → -1。getCallerClass / getClassContext / callStackWalk 自身的 native 帧由此出现，跳帧规则改为 HotSpot 原样：
+  getCallerClass 第 0 帧本方法、第 1 帧 CS 方法、其后首个不被安全栈遍历忽略的帧。
+- native-gaps 的语义经行表自然保留：帧归 `declared_by`（行表本就读该属性）；继承转发外壳、派发入口、vtable impl、
+  `X__m_base` 包装以调用点 span 落在块外或方法序言，不成帧，方法体 token 保留原 span 在实际执行帧上成帧。
+- 闭包帧一律不成帧（符号含 `{closure`）：原位闭包单行，外层帧同一行；延迟 lambda 代理闭包的位置是创建点，
+  旧 Throwable 规则会在创建方法上多出一帧，现消除。
+- 手写根类成帧：根类无生成文件，登记源为根类自身字节码（`project::root_line_registration` →
+  `handwritten::root_methods`）：每个方法对应 `invokespecial` 落点 `<根>__<fn>_base`（根类实现本体，object.rs），
+  不可覆盖方法（final / private / static）另对应 `impl <根>` 固有 fn（object_impl.rs；可覆盖方法的固有 fn 是静态类型
+  为根类的虚调用入口，转 vtable 到覆盖体，与派发入口同样不登记）；fn 名按调用侧根类重载命名规则（与方法体生成器同源）。
+  伴生 fn 首条语句若为接收者 null 检查 `if <recv>.is_jvm_null() {..}`，该区间记 Java 行 0（序言，不成帧）：
+  invokevirtual 的隐式 null 检查在调用点抛 NPE，被调方法不入栈。clone / notify / notifyAll / getClass / wait 由此成帧。
+- StackWalker 行号与 Throwable 同源：行表另附各方法的 LineNumberTable（`__java_meta_LINE_NUMBERS`），帧的 bci 取
+  行表 Java 行的首个 start_pc（手写无行 → -1），`StackStreamFactory` 填 `StackFrameInfo.bci`，
+  `initStackTraceElement` 按 HotSpot `Method::line_number_from_bci` 由 bci 定行（native → -2）。
+- 过渡类手写 `<init>`（手写构造工厂不对应 Java `<init>` 帧）不成帧，只记录：随 C1d-a 删除过渡类手写后自然消失。
+  根类 `wait(J)` / `wait(JI)` 等有字节码的非 native 方法当前为手写体（帧行 -1，JDK 为 `wait0` native 帧 + `wait` 行号），
+  归手写边界收窄（字节码翻译后自然对齐），不属帧来源问题。
+- 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段）、
+  62_reflection/TestStackWalkerLines（直接 / 递归 / lambda / default / 继承 / 构造器 / clinit 帧的 StackWalker 行号）、
+  06_exceptions/TestObjectNativeFrames（Object.clone / notify / notifyAll native 帧），expected 均为 JDK 21 实测。
+
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
 - 现象（C6 抽查，ubuntu）：运行期 `InternalError`，`Caused by: NullPointerException`，dyn miss 0，未命中存根。
