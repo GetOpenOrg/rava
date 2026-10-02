@@ -940,3 +940,24 @@ java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V
 
 预算：f0 = 319；泛型区域按 h1 抽象形态 +52，具体轨迹应明显更少；Formatter `%s` 约 +40。
 ≤360 是否可达取决于两段轨迹的实际规模，接入后实测记入本节。
+
+### 20.6 正式口径超时的归因与污染重入修复（2026-10-02）
+
+- 服务器 4 例（HelloWorld、TestRandomAccessFile、TestCharsetNamedStreams、DeepCopy）在 f88259df 上 transpile 10m01s 超时。
+  本机正式口径（不带 `--cut-file`）HelloWorld `rava closure`：f88259df 与其父提交（代码同 c1d-prec）都在 300 s 内未完成，
+  RSS 约 3 GB。这是 1e623cec 取消截断后的既有状态（§19.1、§20.1 g2：约 3091 类、588–600 s），不是透传污染引入的；
+  污染重跑有上界（每槽只入 `ptaint` 一次）。正式口径回到秒级只能靠关闭三个闸门。
+- 顺带修复（5904b512）：`taint_slot` 原在接边中途（`edge` → `bind_params`）同步 `rerun_site`，重入调用事件后
+  `call_vals` 被置空，外层调用点余下接边跳过 `pstr_site`、丢失形参字符串集（健全性问题）。改为入站点队列。
+  f0 切除形态类集逐项不变（319 / 224 / 1228）。
+
+### 20.7 闸门之后的收尾：`#[jvm_boundary]` 归零
+
+- 现状：1e623cec 之后 `runtime/` 中仍有 139 个 `#[jvm_boundary]`，分布在 19 个文件（Class / ClassLoader / Module /
+  ModuleLayer / VirtualThread / Proxy$Dyn / FileSystems / JceSecurity 等）。
+- 终态：计数为 0。
+  1. 逐个方法按 `docs/reference/handwritten-boundary.md` 判定：`ACC_NATIVE` 用 `#[jvm_native]`；运行模型替换、VM 注入状态 / VM 驱动行为两类在清单中登记类别；
+  2. 其余全部改为按字节码翻译，删除手写；
+  3. 删除 `rava_macros` 的 `jvm_boundary` 宏与分析器中的相关解析。
+- 修复中遇到的测试问题：JDK 能跑的合法 Java 测试一律不改；修复时补充覆盖边界情况的 e2e 用例，expected 取真 JDK 输出。
+- 次序：排在三个闸门关闭、HelloWorld 正式口径 ≤3 s 且 ≤360 类之后。
