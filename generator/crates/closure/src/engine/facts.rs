@@ -69,6 +69,8 @@ pub(super) struct Ctx<'a> {
     /// 服务目录与 provider 执行线（见 `services.rs`）
     pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
     pub(super) svc_lines: std::cell::OnceCell<BTreeSet<String>>,
+    /// 类的定义加载器表（字段钩子的接收者判定与镜像读取折叠，惰性建立）
+    pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -445,6 +447,9 @@ impl Oracle for Facts<'_, '_> {
         }
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
+        if let Some(v) = self.ctx.mirror_hook_field(opcode, f, recv) {
+            return Some(v);
+        }
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
             return Some(v);
         }

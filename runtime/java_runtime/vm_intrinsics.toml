@@ -137,10 +137,11 @@ value_equals = [
 "java/lang/String.isEmpty:()Z" = "is_empty"
 
 [facts.returns]
-# 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
-# `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
+# 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`
+# 本身走字节码：引导类镜像的 classLoader 为 null（分析器常量求值按定义加载器表给出）→ 落到本条 → 引导类
+# `$assertionsDisabled = !X.class.desiredAssertionStatus()` 折叠为常量，assert 体不入闭包；应用 / 平台类按
+# 加载器的断言表在运行期求值
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
-"java/lang/Class.desiredAssertionStatus:()Z" = false
 # 原生二进制进入 main 时运行时已完成引导（vm_impl.rs：isBooted / isModuleSystemInited /
 # isJavaLangInvokeInited 恒 true）；引导期分支（如 ReflectionFactory.config 的 DEFAULT_CONFIG）不可达
 "jdk/internal/misc/VM.isBooted:()Z" = true

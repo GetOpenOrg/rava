@@ -182,4 +182,51 @@
 | TestClassNestNatives | 366 / 1122 | 393 / 1258 | 读用户类加载器（`$Loader` 构造的父加载器） |
 | TestStackWalkerFrames | 422 / 1468 | 483 / 1965 | `StackTraceElement.computeFormat` 读用户帧类的加载器（JDK 据 BuiltinClassLoader 决定格式） |
 
-提交：（随实施补充。）
+B 步（删 `desiredAssertionStatus:()Z` 常量特判，独立提交）：
+
+- 只删特判、分析器不改时：HelloWorld 267 / 737，TestStackWalkerFrames 1575 / 9494（引导类 `$assertionsDisabled`
+  不再折叠，assert 体与 `AssertionError` 构造链入闭包）。
+- 分析器补两处后回到 A 步结果，HelloWorld 的类 / 方法集合与带特判时逐项一致：
+  - 常量实参求值接受类字面量 `V::Class`（求值记忆键 `CArg::Class`）；实例方法的接收者为非空常量（字符串 / 类
+    字面量）时入口状态按该值绑定（`absint.rs::entry_state`；此前接收者恒为属主类型的未知引用）；
+  - 求值器读清单的接收者钩子字段时，接收者为引导类的类字面量即读出 null（`field_hooks.rs::mirror_hook_field`，
+    与访问点钩子的接收者判定同一张定义加载器表，表移到 `Ctx`）。
+
+| 用例 | 类 / 方法 |
+|---|---|
+| HelloWorld | 266 / 723 |
+| TestClassNestNatives | 393 / 1258 |
+| TestStackWalkerFrames | 483 / 1965 |
+| TestAppClassLoader | 1417 / 7650 |
+
+### 4.1 TestAppClassLoader 闭包规模（C1d-b 输入）
+
+闭包 1417 类 / 7650 方法，主体来自 `ServiceLoader` 与 `toString` 过近似，属 C1d-b 收窄范围，不在本任务内处理。
+按包分布（前 10）：
+
+| 包 | 类数 |
+|---|---|
+| `java/util` | 256 |
+| `java/lang` | 138 |
+| `java/util/stream` | 81 |
+| `java/util/regex` | 61 |
+| `java/security` | 56 |
+| `java/io` | 55 |
+| `sun/security/util` | 55 |
+| `java/util/concurrent` | 47 |
+| `java/net` | 37 |
+| `java/time/temporal` | 29 |
+
+代表性引入链（`rava closure --why`）：
+
+- `java/util/regex/Pattern`：`Formatter.<clinit>` ← `String.format` ← `StreamSpliterators$AbstractWrappingSpliterator.toString`
+  ← `System.registerNatives` 处的 `toString` 分派；
+- `java/time/temporal/ChronoField`：`LocalDateTime.ofEpochSecond` ← `FileTime.toString` ← `String.valueOf` ←
+  `Arrays.toString` ← `CopyOnWriteArrayList.toString` ← 同上分派；
+- `sun/security/util/KnownOIDs`：`CryptoAlgorithmConstraints` ← `MessageDigest.getInstance` ←
+  `ManifestEntryVerifier.setEntry`（jar 清单校验链）。
+
+即：大头是 `registerNatives` 处 `Object.toString` 分派对全部存活类型展开，其次是 `URLClassPath` 读 jar 时的清单
+校验链。
+
+提交：A 步 4896b5a7；B 步见分支日志。
