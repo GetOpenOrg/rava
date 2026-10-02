@@ -101,7 +101,9 @@ impl Engine<'_> {
         }
     }
 
-    /// 槽 (t, i) 记为污染：重跑读过它的站点，沿形参子集边传给透传的被调槽
+    /// 槽 (t, i) 记为污染：读过它的站点入站点队列重跑，沿形参子集边传给透传的被调槽。
+    /// 不在此处同步重跑：污染发生在接边中途（`edge` → `bind_params`），同步重跑会重入调用事件并清掉
+    /// 外层调用点的实参值（`call_vals`），外层余下的接边随之丢失形参字符串集
     fn taint_slot(&mut self, t: usize, i: usize) {
         let mut work = vec![(t, i)];
         while let Some((t, i)) = work.pop() {
@@ -109,7 +111,9 @@ impl Engine<'_> {
                 continue;
             }
             for off in self.pstr_readers(t, i) {
-                self.rerun_site(t, off);
+                if self.in_swork.insert((t, off)) {
+                    self.swork.push_back((t, off));
+                }
             }
             work.extend(self.pstr_succ_methods(t, i));
         }
