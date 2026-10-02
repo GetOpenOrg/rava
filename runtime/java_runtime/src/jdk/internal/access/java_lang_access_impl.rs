@@ -266,6 +266,12 @@ impl JavaLangAccess__VTable for SystemJavaLangAccess {
         crate::jdk::internal::module::ServicesCatalog::__boot_catalog()
     }
 
+    /// `createOrGetClassLoaderValueMap(ClassLoader)`：转发加载器自身的同名方法（JDK System$2 同形）。
+    /// 消费方：AbstractClassLoaderValue.map（ClassLoaderValue 的非引导加载器分支）。
+    fn createOrGetClassLoaderValueMap(&self, cl: crate::java::lang::ClassLoader) -> Result<crate::java::util::concurrent::ConcurrentHashMap<Object, Object>> {
+        cl.createOrGetClassLoaderValueMap()
+    }
+
     fn layers_classloader(&self, _arg0: crate::java::lang::ClassLoader) -> Result<crate::java::util::stream::Stream<Object>> {
         crate::java::util::stream::Stream::<Object>::empty()
     }

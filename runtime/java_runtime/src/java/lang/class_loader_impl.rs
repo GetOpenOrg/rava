@@ -75,15 +75,17 @@ impl ClassLoader {
     }
 
     /// 单资源查询：单二进制无 classpath 资源 → 恒 null。
+    /// 三个实例资源方法为虚方法体（`__impl_`，声明在生成的宏块内经 vtable 分派）：自定义加载器的覆盖
+    /// （如 ServiceLoader 经上下文加载器调 `getResources`）按 Java 语义分派到子类。
     #[jvm_boundary]
-    pub fn getResource(&self, name: String) -> Result<crate::java::net::URL> {
+    pub fn __impl_getResource(&self, name: String) -> Result<crate::java::net::URL> {
         let _ = name;
         Ok(Default::default())
     }
 
     /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
     #[jvm_boundary]
-    pub fn getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
+    pub fn __impl_getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
         let _ = name;
         crate::java::util::Collections::emptyEnumeration()
     }
@@ -98,7 +100,7 @@ impl ClassLoader {
     /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
     ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
     #[jvm_boundary]
-    pub fn getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
+    pub fn __impl_getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 

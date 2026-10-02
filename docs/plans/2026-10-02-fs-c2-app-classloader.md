@@ -230,3 +230,21 @@ B 步（删 `desiredAssertionStatus:()Z` 常量特判，独立提交）：
 校验链。
 
 提交：A 步 4896b5a7；B 步见分支日志。
+
+### 4.2 抽查修复：`Unable to register as parallel capable`（B 步之后）
+
+抽查 fsc2-4896b5a7 除 HelloWorld 外运行期报 `InternalError: Unable to register as parallel capable`。根因不在
+`getCallerClass`（合并集成分支后调用者类正确），而是 `[boundary]` 截断：
+
+- `java/security/SecureClassLoader` 在边界包内，其 `<clinit>`（登记自身为并行加载器）是边界空操作；
+  `BuiltinClassLoader.<clinit>` 登记时父类未登记即失败。`[release]` 放行 `SecureClassLoader`。
+- 续发的存根命中：`URLClassPath.toFileURL` → `ParseUtil`（空 classpath 元素 = 当前目录）；
+  `ArchivedClassLoaders.archive` → `ServicesCatalog` → `AbstractClassLoaderValue.map`。`[release]` 放行
+  `sun/net/www/ParseUtil`、`AbstractClassLoaderValue`、`ClassLoaderValue`；手写 `class_loader_value_impl.rs`
+  （构造替身）由字节码 `<init>` 取代，删除；JLA 手写补 `createOrGetClassLoaderValueMap`（转发加载器同名方法，
+  JDK `System$2` 同形）。`ServicesCatalog.getServicesCatalogOrNull` 的过渡手写由此可删（C1d 范围，本步不动）。
+- `ClassLoader` 手写的 `getResource` / `getResources` / `getResourceAsStream` 改为虚方法体 `__impl_*`：此前为
+  非虚 `[meta]` 方法，自定义加载器覆盖（ServiceLoader 经上下文加载器查资源）不分派到子类。
+
+边界用例 `62_reflection/TestParallelCapable`（JDK 21 实测 expected）：直接子类登记成功、父类未登记的子类失败、
+已登记类的子类成功、系统 / 平台加载器已登记。TestAppClassLoader 闭包 1422 / 7708。

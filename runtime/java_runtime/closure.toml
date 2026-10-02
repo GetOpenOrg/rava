@@ -206,6 +206,17 @@ classes = [
     "jdk/internal/loader/BuiltinClassLoader",
     "jdk/internal/loader/URLClassPath",
     "jdk/internal/loader/ArchivedClassLoaders",
+    # 内建加载器的父类（纯 Java）。其 <clinit> 调 registerAsParallelCapable 把自己登记进 ParallelLoaders，
+    # BuiltinClassLoader / AppClassLoader / PlatformClassLoader 的 <clinit> 登记前查父类已登记——边界截断下
+    # <clinit> 不执行，子类登记失败抛 InternalError。
+    "java/security/SecureClassLoader",
+    # URLClassPath 把类路径元素转为 file URL（纯 Java：File.getAbsolutePath → 路径编码 → new URL）。
+    # 空类路径元素即当前目录，ClassLoaders.<clinit> 建应用类路径时必经。
+    "sun/net/www/ParseUtil",
+    # 加载器关联值（纯 Java）。ClassLoaders.<clinit> 末尾的 ArchivedClassLoaders.archive() 为三个内建加载器
+    # 建服务目录（ServicesCatalog.getServicesCatalog → CLV.computeIfAbsent → map → 加载器的 classLoaderValueMap）。
+    "jdk/internal/loader/AbstractClassLoaderValue",
+    "jdk/internal/loader/ClassLoaderValue",
     # 载体线程本地变量族（纯 Java，0 个 ACC_NATIVE）：TerminatingThreadLocal 是 CarrierThreadLocal 子类，
     # get / set 经 JavaLangAccess 落到 ThreadLocal 的载体线程表。消费方：sun/nio/fs/NativeBuffers 的线程本地
     # 缓冲缓存（copyToNativeBuffer：realpath / readlink / mkdir 等以 NativeBuffer 传路径的调用）。jdk/ 前缀
