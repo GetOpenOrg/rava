@@ -298,6 +298,7 @@ impl<'a> Engine<'a> {
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
                 let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
                 self.field_put(&key, value.map_or(PV::Top, PV::of));
+                self.field_strs_put(&key, value);
             }
         }
         let Some(ft) = parse_field(&f.desc) else { return };

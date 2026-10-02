@@ -54,6 +54,7 @@ impl<'a> Engine<'a> {
                         site_names.extend(lits.iter().cloned());
                         names.extend(lits);
                         names.extend(self.param_strs(m, off, a));
+                        names.extend(self.field_strs(m, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
                         if targets.is_none() {
                             let mut ts = classes.clone();
@@ -113,6 +114,9 @@ impl<'a> Engine<'a> {
                     self.open_field_name(name);
                 }
             }
+        }
+        if (class_param || class_recv) && !self.man.is_method_lookup(&k) {
+            self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
         }
         if self.man.is_field_enumerator(&k) {
             let cls = match args.first() {
@@ -451,7 +455,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
-    fn param_strs(&mut self, m: usize, off: u32, v: &V) -> Vec<Rc<str>> {
+    pub(super) fn param_strs(&mut self, m: usize, off: u32, v: &V) -> Vec<Rc<str>> {
         let mut out = Vec::new();
         for s in v.srcs().iter() {
             let Src::Param(i) = s else { continue };

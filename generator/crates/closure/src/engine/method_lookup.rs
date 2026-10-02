@@ -24,7 +24,7 @@ const CTOR: &str = "<init>";
 const MAX_DEPTH: u8 = 2;
 
 /// 名字 s 是否能由拼接段拼出
-fn parts_match(parts: &[Part], s: &str) -> bool {
+pub(super) fn parts_match(parts: &[Part], s: &str) -> bool {
     let Some((p, rest)) = parts.split_first() else { return s.is_empty() };
     match p {
         Part::Lit(l) => s.strip_prefix(&**l).is_some_and(|t| parts_match(rest, t)),

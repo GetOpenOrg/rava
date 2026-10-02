@@ -1,0 +1,159 @@
+//! 引擎：按名查字段——名字经值流到达「Class 形参 / 接收者 + String 形参」调用（`getDeclaredField`、
+//! `findStaticVarHandle`、`objectFieldOffset(Class, String)` 等；清单 `method_lookups` 的按名查方法除外）的名字实参时，
+//! 点名目标类（含超类型）上声明的该名字段，发射层据此生成按名字段臂。
+//!
+//! - 名字：String 形参上的字面量（含合流前的各字面量）、形参透传的各调用点常量、读自 String 字段时该字段各写入处的
+//!   常量（字段可被字节码外写入或有非常量写入时不给出）、拼接链 / 拼接 indy 拆出的段（按目标类上的字段名反向匹配，
+//!   同按名查方法）；
+//! - 目标类：Class 常量实参、Class 形参与接收者值集里类镜像所指的类；值集含所指未知的 Class（open、非镜像值）时
+//!   目标类推不出：字面量名按名字点名（任意类的同名字段），拼接名记为反射缺口。
+
+use super::class_lookup::{event_at, Part};
+use super::sealed::is_field;
+use super::method_lookup::parts_match;
+use super::*;
+
+impl<'a> Engine<'a> {
+    pub(super) fn field_lookup(&mut self, m: usize, off: u32, mref: &MemberRef, opcode: u8, args: &[V], classes: &[String], class_recv: bool) {
+        let Some(md) = parse_method(&mref.desc) else { return };
+        let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
+        let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
+        let mut patterns: Vec<Vec<Part>> = vec![];
+        let mut targets: BTreeSet<String> = classes.iter().cloned().collect();
+        let mut unknown = false;
+        if class_recv {
+            if let Some(r) = args.first() {
+                unknown |= self.class_values(m, r, &mut targets);
+            }
+        }
+        for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
+            match p {
+                FieldType::Object(c) if c == CLASS => unknown |= self.class_values(m, a, &mut targets),
+                FieldType::Object(c) if c == absint::STRING => {
+                    names.extend(a.lits());
+                    if matches!(a, V::Ref { .. }) {
+                        names.extend(self.param_strs(m, off, a));
+                        names.extend(self.field_strs(m, a));
+                        if let Some(parts) = self.method_name_parts(m, a) {
+                            patterns.push(parts);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for c in &targets {
+            for name in &names {
+                if let Some((decl, _)) = self.field_by_name(c, name) {
+                    self.reflect_fields.insert((decl, name.to_string()));
+                }
+            }
+            for parts in &patterns {
+                for (decl, name) in self.fields_matching(c, parts) {
+                    self.reflect_fields.insert((decl, name));
+                }
+            }
+        }
+        if unknown {
+            self.reflect_field_names.extend(names.iter().map(|n| n.to_string()));
+            if !patterns.is_empty() {
+                self.reflect_gaps.insert(format!("{} <- 按名查字段：目标类推不出、名字为拼接", self.methods[m].key));
+            }
+        }
+    }
+
+    /// String 字段写入值并入该字段的常量集（null 不计；非常量写入置为推不出）；变化时读者失效
+    pub(super) fn field_strs_put(&mut self, key: &MemberRef, v: Option<&V>) {
+        if key.desc != format!("L{};", absint::STRING) {
+            return;
+        }
+        let add: Option<Vec<Rc<str>>> = match v {
+            Some(V::Null) => Some(vec![]),
+            Some(V::Str(s)) => Some(vec![s.clone()]),
+            Some(r @ V::Ref { src, .. }) if !src.is_empty() && src.iter().all(|s| matches!(s, Src::Str(_))) => Some(r.lits()),
+            _ => None,
+        };
+        let cur = self.field_strs.entry(key.clone()).or_insert_with(|| Some(BTreeSet::new()));
+        let changed = match (cur.as_mut(), add) {
+            (None, _) => false,
+            (Some(_), None) => {
+                *cur = None;
+                true
+            }
+            (Some(set), Some(xs)) => {
+                let n = set.len();
+                set.extend(xs);
+                set.len() != n
+            }
+        };
+        if changed {
+            let deps = self.ctx.fdeps.borrow().get(key).cloned();
+            self.invalidate_all(deps, Why::FieldPut);
+        }
+    }
+
+    /// 值 v 读自 String 字段时，该字段各写入处的字符串常量（字段不折叠——可被字节码外写入——或有非常量写入时不给出）
+    pub(super) fn field_strs(&mut self, m: usize, v: &V) -> Vec<Rc<str>> {
+        let Some(a) = self.methods[m].analysis.clone() else { return vec![] };
+        let mut out = vec![];
+        for s in v.srcs().iter() {
+            let Src::Site(o) = *s else { continue };
+            let Some(Event::Field { opcode, mref, .. }) = event_at(&a, o, is_field) else { continue };
+            if !matches!(*opcode, classfile::op::GETSTATIC | classfile::op::GETFIELD) {
+                continue;
+            }
+            let Some(fi) = self.ctx.field_info(mref) else { continue };
+            if self.ctx.field_open(&fi) {
+                continue;
+            }
+            if let Some(Some(set)) = self.field_strs.get(&fi.key) {
+                out.extend(set.iter().cloned());
+            }
+        }
+        out
+    }
+
+    /// Class 值 v 所指的类并入 out（常量直接取；引用值取值集里的类镜像，值集增长时本站点重跑）；
+    /// 返回值集是否含所指未知的 Class
+    fn class_values(&mut self, m: usize, v: &V, out: &mut BTreeSet<String>) -> bool {
+        match v {
+            V::Class(c, _) => {
+                out.insert(c.to_string());
+                false
+            }
+            V::Ref { .. } => {
+                let class = self.id(CLASS);
+                let fs = self.feeds(m, v, class);
+                let s = self.value_set(&fs);
+                let mut unknown = !s.open.is_empty();
+                for x in s.classes.iter() {
+                    match self.mirrors.get(&x) {
+                        Some(&c) => {
+                            out.insert(self.names[c as usize].to_string());
+                        }
+                        None => unknown = true,
+                    }
+                }
+                unknown
+            }
+            V::Null => false,
+            _ => true,
+        }
+    }
+
+    /// 类 cls 及其超类型上声明的、名字能由拼接段拼出的字段 → (声明类, 名字)
+    fn fields_matching(&self, cls: &str, parts: &[Part]) -> Vec<(String, String)> {
+        let mut out = vec![];
+        let mut stack = vec![cls.to_string()];
+        let mut seen = BTreeSet::new();
+        while let Some(c) = stack.pop() {
+            if !seen.insert(c.clone()) {
+                continue;
+            }
+            let Some(cf) = self.h.class(&c) else { continue };
+            out.extend(cf.fields.iter().filter(|f| parts_match(parts, &f.name)).map(|f| (c.clone(), f.name.clone())));
+            stack.extend(cf.super_name.iter().cloned().chain(cf.interfaces.iter().cloned()));
+        }
+        out
+    }
+}
