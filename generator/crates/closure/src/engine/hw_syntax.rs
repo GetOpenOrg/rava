@@ -100,6 +100,25 @@ impl<'a> Engine<'a> {
             .find_map(|c| c.fields.iter().find(|f| f.name == name && f.is_static()).map(|f| (c.name.clone(), f.desc.clone())))
     }
 
+    /// 手写体写入字段：只不折叠、读者失效。与按名取得（`open_field`）分开——手写体按 Rust 字段直接写，
+    /// 不产出偏移，字段不因此可按偏移读写，也不接按名打开的静态字段写入
+    fn hw_open_field(&mut self, key: &MemberRef) {
+        if self.ctx.fhw.borrow_mut().insert(key.clone()) {
+            let mut deps = self.ctx.ceval_drop_field(key);
+            deps.extend(self.ctx.fdeps.borrow().get(key).into_iter().flatten().copied());
+            self.invalidate_all(Some(deps), Why::FieldOpen);
+        }
+    }
+
+    /// 手写体写入推不出所属类的字段名：同名字段只不折叠
+    fn hw_open_field_name(&mut self, name: &str) {
+        if self.ctx.fhw_names.borrow_mut().insert(name.to_string()) {
+            let mut deps = self.ctx.ceval_drop_name(name);
+            deps.extend(self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()));
+            self.invalidate_all(Some(deps), Why::FieldOpenName);
+        }
+    }
+
     /// 手写体字段访问器：写入值接进字段节点并登记「有手写写入」；读出值汇入值池。
     /// 接收者推不出 → 所有同名字段按 open 处理（安全回退）
     pub(super) fn hw_fields(&mut self, m: usize, host: &str, fields: &[FieldAccess]) {
@@ -114,7 +133,7 @@ impl<'a> Engine<'a> {
             }
             let Some((decl, desc)) = site else {
                 if fa.write {
-                    self.open_field_name(&fa.field);
+                    self.hw_open_field_name(&fa.field);
                 }
                 let fresh = if fa.write {
                     self.hw_written_names.insert(fa.field.clone())
@@ -147,7 +166,7 @@ impl<'a> Engine<'a> {
             let tid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
             if fa.write {
                 self.hw_written.insert(key.clone());
-                self.open_field(key.clone());
+                self.hw_open_field(&key);
             }
             let Some(tid) = tid else { continue };
             let fi = self.field_node(key);

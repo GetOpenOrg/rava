@@ -23,6 +23,8 @@ impl<'a> Engine<'a> {
                 rvals: Default::default(),
                 fopen: Default::default(),
                 fopen_names: Default::default(),
+                fhw: Default::default(),
+                fhw_names: Default::default(),
                 fopen_all: Cell::new(false),
                 deser: Cell::new(false),
                 fdeps: Default::default(),

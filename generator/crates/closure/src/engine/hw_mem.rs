@@ -300,14 +300,16 @@ impl<'a> Engine<'a> {
     }
 
     /// 实例字段 fi 可经偏移写入：实例字段偏移只能经按名取到的字段句柄 / MemberName（含方法句柄的字段访问器成员）、
-    /// 字段枚举或反序列化取得，这些来源同时决定字段不折叠（`field_open`）——两者是同一集合。
+    /// 字段枚举或反序列化取得（[`Ctx::field_offset_under`]）。手写体写入、边界类 / VM 状态字段的字节码外写入
+    /// 按 Rust 字段直接落地、不产出偏移，只使字段不折叠，不在此列——否则 Unsafe / 句柄解释器的写入值会经这些字段
+    /// 的未知接收者视图汇成全程序一个大值集。
     /// 方法句柄解释器（[`Gate::Handle`]）只写 DMH 所指字段：偏移须经字段句柄 / MemberName 取得，
     /// 只经反序列化放开的字段不算（反序列化经 FieldReflector 自身的 Unsafe 调用点写入）。
     /// 所属类推不出的字段按可写
     fn offset_exposed(&self, fi: usize, gate: Gate) -> bool {
         let Some((key, _)) = self.fields.get_index(fi) else { return true };
         let deser = gate == Gate::Offset && self.ctx.deser.get();
-        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_open_under(&i, self.ctx.fopen_all.get(), deser))
+        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_offset_under(&i, self.ctx.fopen_all.get(), deser))
     }
 
     /// 字段 fi 的偏移可经字节码外的途径取得、从而可按偏移读取：可按偏移写入的字段（[`Self::offset_exposed`]），
