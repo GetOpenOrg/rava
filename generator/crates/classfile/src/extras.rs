@@ -3,6 +3,7 @@
 //! 闭包分析不需要、而类文件发射需要逐字节复述的属性，在这里对同一份 `.class` 字节
 //! 二次解析得到：
 //! - 局部变量表（LVT / LVTT，形参名与局部变量声明）；
+//! - 行号表（LineNumberTable，Java 栈帧的行号来源）；
 //! - 注解原始字节（RuntimeVisibleAnnotations / RuntimeVisibleParameterAnnotations /
 //!   AnnotationDefault）与其引用的稀疏常量池；
 //! - `Deprecated` 属性；
@@ -54,9 +55,22 @@ pub struct MethodExtras {
     pub local_vars: Vec<LocalVar>,
     /// LVTT 条目（属性内出现序）
     pub local_type_entries: Vec<LocalTypeEntry>,
+    /// 行号表 (起始 pc, 源行)，按 pc 升序（多个 LineNumberTable 属性合并）
+    pub line_numbers: Vec<(u16, u16)>,
+}
+
+/// 按起始 pc 升序的 LineNumberTable 中 pc 所在的源行（起始 pc ≤ `pc` 的最后一条；表空或 pc 在首条之前 → None）
+pub fn line_at(table: &[(u16, u16)], pc: u32) -> Option<u16> {
+    let i = table.partition_point(|&(start, _)| u32::from(start) <= pc);
+    i.checked_sub(1).map(|i| table[i].1)
 }
 
 impl MethodExtras {
+    /// pc 所在的源行：起始 pc ≤ `pc` 的最后一条（JVMS §4.7.12；表空或 pc 在首条之前 → None）
+    pub fn line_at(&self, pc: u32) -> Option<u16> {
+        line_at(&self.line_numbers, pc)
+    }
+
     /// slot → 代表名：作用域最长的 LVT 条目（等长取先出现者）
     pub fn local_names(&self) -> BTreeMap<u16, String> {
         let mut best: BTreeMap<u16, (u16, &str)> = BTreeMap::new();
@@ -196,6 +210,14 @@ fn code_locals(body: &[u8], pool: &ConstantPool, m: &mut MethodExtras) -> Result
     let mut lvt: Vec<(u16, u16, String, u16, String)> = Vec::new();
     for _ in 0..r.u2()? {
         let (name, sub) = attribute(&mut r, pool)?;
+        if name == "LineNumberTable" {
+            let mut sr = Reader::new(sub);
+            for _ in 0..sr.u2()? {
+                let pc = sr.u2()?;
+                m.line_numbers.push((pc, sr.u2()?));
+            }
+            continue;
+        }
         let is_lvt = name == "LocalVariableTable";
         if !is_lvt && name != "LocalVariableTypeTable" {
             continue;
@@ -227,6 +249,7 @@ fn code_locals(body: &[u8], pool: &ConstantPool, m: &mut MethodExtras) -> Result
         })
         .collect();
     m.local_type_entries = lvtt;
+    m.line_numbers.sort_by_key(|&(pc, _)| pc);
     Ok(())
 }
 
@@ -357,6 +380,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(m.local_types()[&3], ("S1".to_string(), 60));
+    }
+
+    #[test]
+    fn line_at_takes_last_entry_not_after_pc() {
+        let m = MethodExtras { line_numbers: vec![(0, 10), (4, 11), (9, 13)], ..Default::default() };
+        assert_eq!(m.line_at(0), Some(10));
+        assert_eq!(m.line_at(3), Some(10));
+        assert_eq!(m.line_at(4), Some(11));
+        assert_eq!(m.line_at(100), Some(13));
+        let late = MethodExtras { line_numbers: vec![(2, 5)], ..Default::default() };
+        assert_eq!(late.line_at(1), None);
+        assert_eq!(MethodExtras::default().line_at(0), None);
     }
 
     #[test]

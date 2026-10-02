@@ -10,9 +10,14 @@ fn strip(s: &str) -> &str {
     crate::text::py_strip(s)
 }
 
+/// 末尾最后一条内容行（跳过空行与 [`crate::lines`] 独立行标记）
+fn last_content(lines: &[String]) -> Option<usize> {
+    lines.iter().rposition(|l| !strip(l).is_empty() && !crate::lines::is_mark(l))
+}
+
 /// 删除末尾多余的 `return;` / `return Ok(());`（void 函数）
 pub fn remove_trailing_return_ok(lines: &mut Vec<String>) {
-    if let Some(i) = lines.iter().rposition(|l| !strip(l).is_empty()) {
+    if let Some(i) = last_content(lines) {
         if matches!(strip(&lines[i]), "return;" | "return Ok(());") {
             lines.remove(i);
         }
@@ -96,7 +101,7 @@ static RETURN_OK_RE: LazyLock<Regex> =
 /// 末尾补返回表达式：void → `Ok(())`；有返回值 → 末尾 `return Ok(e);` 改尾表达式，块尾自然结束且
 /// CFG 未证明总是返回时补 `unreachable!()`
 pub fn add_ok_return(lines: &mut Vec<String>, rust_ret: &str, always_returns: bool) {
-    let last = lines.iter().rposition(|l| !strip(l).is_empty());
+    let last = last_content(lines);
     if rust_ret == "()" {
         match last {
             Some(i) if matches!(strip(&lines[i]), "Ok(())" | "return Ok(());") => {}

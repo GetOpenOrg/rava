@@ -46,6 +46,9 @@ pub struct Node {
     /// 本节点终结承载的跳转指令 pc
     pub pcs: Vec<u32>,
     pub stmts: Vec<Stmt>,
+    /// 与 `stmts` 等长：语句来源指令的字节码偏移（合成语句为 None）；经 [`Node::push_stmt`] /
+    /// [`Node::append_stmts`] 维护，发射时映射为 Java 行号
+    pub stmt_pcs: Vec<Option<u32>>,
     /// 入口合并变量的声明
     pub decls: Vec<Stmt>,
     pub entry_stack: Vec<StackEntry>,
@@ -79,6 +82,7 @@ impl Node {
             key: String::new(),
             pcs: Vec::new(),
             stmts: Vec::new(),
+            stmt_pcs: Vec::new(),
             decls: Vec::new(),
             entry_stack: Vec::new(),
             entry_locals: BTreeMap::new(),
@@ -122,6 +126,30 @@ impl Node {
             Kind::Exit => {}
         }
         out
+    }
+
+    /// 追加一条语句（`pc` 为来源指令偏移，合成语句为 None）
+    pub fn push_stmt(&mut self, stmt: Stmt, pc: Option<u32>) {
+        self.stmts.push(stmt);
+        self.stmt_pcs.push(pc);
+    }
+
+    /// 追加语句序列及其来源偏移（两者等长）
+    pub fn append_stmts(&mut self, stmts: Vec<Stmt>, pcs: Vec<Option<u32>>) {
+        debug_assert_eq!(stmts.len(), pcs.len());
+        self.stmts.extend(stmts);
+        self.stmt_pcs.extend(pcs);
+    }
+
+    /// 清空语句
+    pub fn clear_stmts(&mut self) {
+        self.stmts.clear();
+        self.stmt_pcs.clear();
+    }
+
+    /// 第 k 条语句的来源偏移
+    pub fn stmt_pc(&self, k: usize) -> Option<u32> {
+        self.stmt_pcs.get(k).copied().flatten()
     }
 
     pub fn is_try(&self) -> bool {

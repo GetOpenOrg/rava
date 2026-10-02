@@ -65,6 +65,10 @@ fn foldable_value(v: &str, getter: Option<&GetterValue<'_>>) -> bool {
 }
 
 fn is_arr_intermediate(stmt: &str, getter: Option<&GetterValue<'_>>) -> bool {
+    if crate::lines::is_mark(stmt) {
+        // 行标记（元素跨源行时出现）不阻断折叠，原位保留
+        return true;
+    }
     if stmt.contains('\n') || stmt.contains("JArray::from_strs(") || stmt.contains("JArray::objects_from_strs(") {
         // 已折叠块（多行 vec! / 去重表形态或单行字符串切片形态）
         return FOLDED_DECL_RE.is_match(stmt)
