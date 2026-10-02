@@ -130,11 +130,17 @@ value_equals = [
 ]
 
 # 字符串纯函数：接收者与实参都是字符串常量（或实参 null）时结果即常量（JDK 规范语义）。
-# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty
+# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty / char_at（越界不折叠）/
+# hash_code / char_to_lower_case（静态，只折叠 ASCII）
 [facts.string_ops]
 "java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z" = "equals_ignore_case"
 "java/lang/String.length:()I" = "length"
 "java/lang/String.isEmpty:()Z" = "is_empty"
+# 下标处 UTF-16 单元 / 规范 hashCode / ASCII 小写：协议名等常量上的分支判定（URL.isOverrideable 的逐字符
+# 比较、URL$DefaultFactory 按协议名 switch 的 hashCode 分派）随之折叠，内建协议不走 providers / 反射路径
+"java/lang/String.charAt:(I)C" = "char_at"
+"java/lang/String.hashCode:()I" = "hash_code"
+"java/lang/Character.toLowerCase:(C)C" = "char_to_lower_case"
 
 [facts.returns]
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`

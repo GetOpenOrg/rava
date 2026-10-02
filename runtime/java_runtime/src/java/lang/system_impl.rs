@@ -255,8 +255,10 @@ fn derived_vm_property(
         "java.vm.version" => "java.runtime.version",
         _ => return Ok(None),
     };
-    let v = map.get(Object::from(String::from(from)))?;
-    Ok(Some(if v.0.is_jvm_null() { std::string::String::new() } else { format!("{}", v) }))
+    // 表值恒为 String（VersionProps.init 写入）：先按 String 转换再取文本——以 Object 直接 Display
+    // 即 Object.toString 虚分派，接收者为 CHM 值字段的全部值集
+    let v = map.get(Object::from(String::from(from)))?.try_cast::<String>("java/lang/String")?;
+    Ok(Some(if v.is_jvm_null() { std::string::String::new() } else { format!("{}", v) }))
 }
 
 crate::__process_static! {

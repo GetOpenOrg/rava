@@ -343,6 +343,32 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
     访问点只走 `recv_hook_needed`（只认接收者钩子），钩子体从闭包消失，`initSystemClassLoader` 成存根。改为只有接收者钩子
     按值集判定，静态钩子在一切访问点无条件接入（`bytecode.rs::field` / `field_hooks.rs::recv_hook_field`）。
 
+**建线程用例的加载器链扇出收窄**（ThreadTest 1445 → 346）。
+
+- 反事实截断定位（`rava closure --cut`，基线 1445）：主扇出不是 `System.registerNatives` 的开放接收者 toString（截掉后仍
+  1445），而是 `initPhase3 → ClassLoaders.<clinit>@144 → URLClassPath.<init> → toFileURL("") → ParseUtil.fileToEncodedURL
+  → new URL("file", …) → URL.getURLStreamHandler@68 lookupViaProviders`（截该点 → 411）。JDK 中协议 "file" 的
+  `isOverrideable` 为 false，providers / 属性 / factory 三路都不执行；分析器缺的是协议名常量上的分支判定。
+- 修复（清单 `[facts.string_ops]` 新增三种纯函数，`sysprops.rs::string_op` 求值）：`String.charAt`（越界不折叠，运行期抛
+  SIOOBE）、`String.hashCode`（规范值）、`Character.toLowerCase(C)`（只折叠 ASCII）。形参常量（`pvals`）把 "file" 经
+  `URL(String,String,String)` → 4 参 → 5 参构造、`lowerCaseProtocol`（常量求值）送到 `getURLStreamHandler` 与
+  `DefaultFactory.createURLStreamHandler`：`isOverrideable("file")` 折叠为 false，providers / lookupViaProperty /
+  factory 分支不可达；DefaultFactory 的 `switch (protocol)` 按 hashCode 常量只留 file 臂。
+- (b) URLClassPath jar 分支（`getLoader` / `JarLoader`）与 (c) `URL$DefaultFactory` 反射臂（`Class.forName` +
+  `getDeclaredConstructor`）随之出闭包：前者只由扇出后的资源查找可达，后者被 hashCode 分派剪掉；无需单独改动。
+  `URLClassPath.<init>` 的 `new jar.Handler()` 为 JDK 实际执行，保留。
+- 实测（`rava closure`，前 → 后）：ThreadTest 1445 → 346、TestParallelCapable 1448 → 336、TestSynchronized 1446 → 345、
+  TestFilesApi 1454 → 460；HelloWorld 264、TestAppClassLoader 1450 等不变（后者的 ~1450 与 TestAtomics /
+  TestZonedDateTime / TestCompletableFuture 同属另一扇出源，截 `initSystemClassLoader` 或 providers 都不降，不在本项）。
+  ThreadTest 加载器链剩余（相对截 `initSystemClassLoader` 体的 280）约 66 类：ClassLoaders 三加载器、URLClassPath、URL /
+  file 与 jar Handler、ParseUtil / IPAddressUtil、SecureClassLoader / ProtectionDomain 族，均为 initPhase3 实际执行。
+- `system_impl.rs::derived_vm_property` 读属性表值先按 String 转换再取文本（原以 Object 直接 Display 即 toString 虚分派），
+  精度改进，类数不变。
+- (d) 不做：`Thread.<init>` 复制父线程的上下文加载器时，JDK 语义要求该值已是 app loader（`getContextClassLoader()` 可观察），
+  把 initPhase3 延迟到首次真正使用加载器会改变可观察语义。
+- 边界用例 `tests/e2e/53_io_api/TestBuiltinUrlProtocol.java`（期望为 JDK 21 实测）：file / FILE / jar / jrt / 未知协议的 URL
+  构造，字符串 switch，`hashCode` 常量（含 "Aa" / "BB" 碰撞），非 ASCII 的 `Character.toLowerCase`（É、İ）与越界 `charAt`。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交

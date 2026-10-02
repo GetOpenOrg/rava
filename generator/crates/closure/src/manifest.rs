@@ -80,6 +80,12 @@ pub enum StrOp {
     /// UTF-16 长度
     Length,
     IsEmpty,
+    /// 下标处的 UTF-16 单元（越界不求值：运行期抛 StringIndexOutOfBoundsException）
+    CharAt,
+    /// `String.hashCode` 规范值（UTF-16 单元上 `s[0]*31^(n-1) + … + s[n-1]`，int 回绕）
+    HashCode,
+    /// 单个 UTF-16 单元的小写映射（只求值 ASCII：非 ASCII 的 UnicodeData 映射不在此复刻）
+    CharToLowerCase,
 }
 
 pub struct Manifest {
@@ -201,7 +207,14 @@ impl Manifest {
                     Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
                     Some("length") => StrOp::Length,
                     Some("is_empty") => StrOp::IsEmpty,
-                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                    Some("char_at") => StrOp::CharAt,
+                    Some("hash_code") => StrOp::HashCode,
+                    Some("char_to_lower_case") => StrOp::CharToLowerCase,
+                    _ => {
+                        return Err(format!(
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / char_at / hash_code / char_to_lower_case"
+                        ))
+                    }
                 };
                 string_ops.insert(k.clone(), op);
             }
