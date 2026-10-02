@@ -3,6 +3,9 @@
 分支 `c4-regfix`。C6 的目标与删除清单见 [`2026-09-29-rust-closure-analyzer.md` §3.7.1](2026-09-29-rust-closure-analyzer.md#371-回调零声明c6)，
 本文记录实施过程、验收证据与遗留审计。
 
+> 状态（2026-10-02）：`c4-regfix` ✅ 已合入集成分支 1ba0d9aa（6b996b33）；TestCharsetNamedStreams 移交 C1d-a；
+> 后续在分支 `c6-generic-closure`（复用本 worktree，4173cebd）：泛型辅助 fn 闭包形参推断、TestAnnoNestedArray null_recv 违例修复。
+
 ## 一、提交序列
 
 | 提交 | 内容 |
@@ -12,6 +15,8 @@
 | 535b8834 | E0308 回归：`FileChannelImpl.open` / `<init>` 手写签名的 `parent` 形参改为与描述符一致的 `Closeable` |
 | a3f4a479 | 手写体继承成员需求 `hw_inherited`；手写辅助 fn 返回类型入静态类型；审计 `hw_untyped_sites` |
 | 59dbedc1 | C6 步骤 2：删除全部 `upcalls` 声明（66 文件 173 处）、`error.rs` vm-upcalls 行与声明机制 |
+| ea6f61fb | `hw_untyped_sites` 审计：chain 清零（静态类型逐级解析 hw_stype），camel 附基底类型并逐条说明 |
+| 6b996b33 | 发射：被派发的桥方法所桥接的真实方法算作已派发，并入继承槽的条目不发存根 |
 
 ## 二、删除结果（终态核对）
 

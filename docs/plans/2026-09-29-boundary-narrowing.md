@@ -2,7 +2,7 @@
 
 > 关联：`docs/plans/2026-09-29-rust-closure-analyzer.md`（§6.1 分工原则、C1c 精确分析）、`CLAUDE.md` 原则 1、[`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（手写边界规范，准入与审计的权威定义）、
 > `runtime/java_runtime/closure.toml`、`docs/reports/2026-09-14-impl-strategy.md`（截断的原始规模数据）。
-> 状态（2026-10-01）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec）；`c1d-final` 已并入 `c1d-prec`，删除后暴露缺口的修复进行中（Digester E0433、枚举反射 values、System.in 已修；UnsafeConstants / 直接内存、反射 signature 待修），另一会话的 VM 注入状态修复（dc9fd946 / d8a0b082：UnsafeConstants、VM.directMemory、System.in、jca 别名、ScopedMemoryAccess 等）已经 b1ac5b7c 并入主干，由 `c1d-prec` 合并时按手写边界规范取舍；内容感知精度实测可靠收益为 0、不实施（19cf2b5b），编译成本改由 rustc 拆 crate 方案解决（`2026-10-01-rustc-memory-and-crate-split.md`）；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实）9 项完成，TestCharsetForName 回归已修（98bc2e68 / 17fc2e7e，§6.11），✅ 已合入 d8212bee。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
+> 状态（2026-10-01）：🔄 第 1 步完成（`--release` 实测，§六）；删除方式按用户决定改为**一次性删到终态再统一验证**（不再逐包，§6.8 的包序仅作参考）：c1d-p6 已并入 `c1d-final`，全部非 VM 契约过渡手写删除与 `[boundary]` 前缀取消已提交（1e623cec）；`c1d-final` 已并入 `c1d-prec`，删除后暴露缺口的修复进行中（Digester E0433、枚举反射 values、System.in 已修；UnsafeConstants / 直接内存、反射 signature 待修），另一会话的 VM 注入状态修复（dc9fd946 / d8a0b082：UnsafeConstants、VM.directMemory、System.in、jca 别名、ScopedMemoryAccess 等）已经 b1ac5b7c 并入主干，由 `c1d-prec` 合并时按手写边界规范取舍；内容感知精度实测可靠收益为 0、不实施（19cf2b5b），编译成本改由 rustc 拆 crate 方案解决（`2026-10-01-rustc-memory-and-crate-split.md`）；精度线已收尾（§6.9：G2′ ✅、系统属性折叠 ✅、类镜像静态字段 ✅、按名取类 ✅），精度二期已合入（a6b4c6d5：方法引用装箱适配、record ObjectMethods、按名方法查找，§6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实）9 项完成，TestCharsetForName 回归已修（98bc2e68 / 17fc2e7e，§6.11），✅ 已合入 d8212bee。2026-10-02：c1d-p0 去截断正式 HelloWorld ≈3091 类 / ≈600 s，由 C1d-a 以具体求值器判定三道闸门（目标 ≤360 类、≤3 s）后合入 1e623cec，再把 139 个 `#[jvm_boundary]` 归零。优化方向总纲见 [`2026-09-30-optimization-directions.md`](2026-09-30-optimization-directions.md)（用户决策：凡能提升精度的优化都要做）。
 
 ## 一、目标
 
@@ -13,7 +13,7 @@
 | 指标 | 现状 | 终态 |
 |---|---:|---:|
 | `closure.toml [boundary].packages` 前缀条目 | 5（`sun/` `jdk/` `com/sun/` `com/oracle/` `java/security/`） | 0，改为逐类的 VM 契约清单 |
-| 边界手写 fn 中非 VM 契约者（`#[jvm_boundary]` 标注、运行时本可执行字节码的成员） | 435 个 fn 的待分类集合 | 0 |
+| 边界手写 fn 中非 VM 契约者（`#[jvm_boundary]` 标注、运行时本可执行字节码的成员） | 集成分支 ad9e938d：522（98 文件，仍含过渡手写）；c1d-p0 删除过渡手写后（1e623cec）剩 139（19 文件：Class、ClassLoader、Module、ModuleLayer、VirtualThread、Proxy$Dyn、FileSystems、JceSecurity 等） | 0，并删除 `#[jvm_boundary]` 宏与分析器解析 |
 | 放行包的动态对照翻译域漏覆盖 | — | 0 |
 | 全量 e2e（JDK 21 + 25） | 现行通过集 | 不减少 |
 | 验收集闭包规模（C1c 7 例） | C1c 终值 | 每例增量逐包记录；translate∩code ≤ 运行时下限 × 1.3（C1c 验收口径） |
