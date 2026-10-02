@@ -102,6 +102,8 @@ pub struct Manifest {
     deserializers: HashSet<String>,
     serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
+    /// 方法句柄解释器（`[facts.handle_interpreters]`）：其手写体调用点上的字段写入成员只写 DMH 所指字段
+    handle_interpreters: Vec<String>,
     memory_reads: HashMap<String, usize>,
     class_initializers: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
@@ -324,6 +326,7 @@ impl Manifest {
             deserializers: field_writes("deserializers").into_iter().collect(),
             serializable_markers: field_writes("serializable_markers"),
             array_writes,
+            handle_interpreters: facts("handle_interpreters", "members"),
             memory_reads,
             class_initializers,
             array_returns,
@@ -430,6 +433,12 @@ impl Manifest {
     /// 手写方法写入实参数组元素的声明（未声明 = 按手写体是否取得数组视图保守处理）
     pub fn array_writes(&self, member: &str) -> Option<&ArrayWrite> {
         self.array_writes.get(member)
+    }
+
+    /// 方法句柄解释器：手写体经 LambdaForm 调用的内存读写成员只作用于 DMH 所指字段（不读写数组元素）。
+    /// 按成员引用逐项比对，不格式化（手写调用点增长热路径，清单只有几项）
+    pub fn is_handle_interpreter(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.handle_interpreters.iter().any(|s| member_is(s, key))
     }
 
     /// 初始化以实参传入的类的方法（`[facts.class_init]`）：返回 Class 形参序号（按描述符，不含接收者）
@@ -580,6 +589,14 @@ mod tests {
         assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
         assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
         assert_eq!(m.boxed_class(b'J'), None);
+    }
+
+    #[test]
+    fn handle_interpreters_parse() {
+        let m = with_vm("[facts.handle_interpreters]\nmembers = [\"a/H.run:([La/O;)La/O;\"]\n").unwrap();
+        let key = |n: &str| classfile::constant::MemberRef { owner: "a/H".into(), name: n.into(), desc: "([La/O;)La/O;".into() };
+        assert!(m.is_handle_interpreter(&key("run")));
+        assert!(!m.is_handle_interpreter(&key("other")));
     }
 
     #[test]
