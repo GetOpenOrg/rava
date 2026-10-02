@@ -287,13 +287,13 @@ impl Thread {
         Ok(())
     }
 
-    /// native `getNextThreadIdOffset()`：`Thread$ThreadIdentifiers` 的线程 id
-    /// 计数静态字偏移。HotSpot 返回静态字的真实地址偏移；原生二进制按
-    /// 「静态原子字」约定承载（`Unsafe.getAndAddLong` 的 null 基址 + offset 键），
-    /// 返回固定哨兵键。
+    /// native `getNextThreadIdOffset()`：`Thread$ThreadIdentifiers` 的线程 id 计数字地址。
+    /// 与 HotSpot 同形：计数字是 VM 侧静态存储（`ThreadIdentifier` 的 next 字），返回其
+    /// 绝对地址，`Unsafe.getAndAddLong(null, 地址, 1)` 经原生内存的原子指令推进。
     #[jvm_native]
     pub fn getNextThreadIdOffset() -> Result<i64> {
-        Ok(1)
+        static NEXT_THREAD_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        Ok(NEXT_THREAD_ID.as_ptr() as i64)
     }
 
     /// native `holdsLock(Object)`：当前线程是否持有 obj 的监视器（null → NPE）。

@@ -31,22 +31,111 @@ pub fn free(address: i64) {
     unsafe { libc::free(address as *mut libc::c_void) }
 }
 
-/// 基本类型数组 `o` 的本机字节视图上执行 `f`（按元素类型分派）；非基本类型数组返回 None。
+/// 基本类型数组 `o` 的本机字节视图上执行 `f`（按元素类型分派，数组存储写锁内）；非基本类型数组
+/// 返回 None。boolean 数组在 `f` 之后把每个字节规范化为 0 / 1（`bool` 的合法位形；锁内完成，
+/// 读者不会看到中间态）。
 fn with_array_bytes<R>(o: &Object, f: impl FnOnce(&mut [u8]) -> R) -> Option<Result<R>> {
+    fn bytes_of<T>(v: &mut [T]) -> &mut [u8] {
+        let n = std::mem::size_of_val(v);
+        // SAFETY: 基本类型元素的存储即连续字节，视图不越过 Vec 的初始化区间
+        unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, n) }
+    }
+    if let Some(a) = o.0.as_any().downcast_ref::<JArray<bool>>() {
+        return Some(a.with_vec(|v| {
+            let bytes = bytes_of(v);
+            let r = f(&mut *bytes);
+            for b in bytes.iter_mut() {
+                *b = (*b != 0) as u8;
+            }
+            r
+        }));
+    }
     macro_rules! try_elem {
         ($($t:ty),*) => {$(
             if let Some(a) = o.0.as_any().downcast_ref::<JArray<$t>>() {
-                return Some(a.with_vec(|v| {
-                    let n = std::mem::size_of_val(v);
-                    // SAFETY: 基本类型元素的存储即连续字节，视图不越过 Vec 的初始化区间
-                    let bytes = unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, n) };
-                    f(bytes)
-                }));
+                return Some(a.with_vec(|v| f(bytes_of(v))));
             }
         )*};
     }
-    try_elem!(i8, bool, u16, i16, i32, f32, i64, f64);
+    try_elem!(i8, u16, i16, i32, f32, i64, f64);
     None
+}
+
+/// `width` 字节的本机字节序位形 → 零扩展的 u64。
+fn load_bits(src: &[u8]) -> u64 {
+    let mut b = [0u8; 8];
+    if cfg!(target_endian = "big") {
+        b[8 - src.len()..].copy_from_slice(src);
+        u64::from_be_bytes(b)
+    } else {
+        b[..src.len()].copy_from_slice(src);
+        u64::from_le_bytes(b)
+    }
+}
+
+/// u64 的低 `dst.len()` 字节按本机字节序写入 `dst`（截断）。
+fn store_bits(dst: &mut [u8], v: u64) {
+    let n = dst.len();
+    if cfg!(target_endian = "big") {
+        dst.copy_from_slice(&v.to_be_bytes()[8 - n..]);
+    } else {
+        dst.copy_from_slice(&v.to_le_bytes()[..n]);
+    }
+}
+
+/// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe 基本类型访问器族的
+/// 原生内存形态：读、写、CAS、getAndAdd 等统一经此）。值是本机字节序零扩展的位形；`op(旧)` 给出
+/// 新值则写入其低 `width` 字节，返回旧值，给 None 即只读。基本类型数组在数组存储写锁内完成（与
+/// 数组元素的直接读写同一把锁）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
+/// 未对齐地址的原子访问不作保证，未对齐时退为普通读写）。CAS 重试时 op 重新求值（须为纯函数）。
+pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
+    if base.0.is_jvm_null() {
+        use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering::SeqCst};
+        macro_rules! atomic {
+            ($a:ty, $t:ty) => {{
+                let p = offset as *mut $t;
+                if (p as usize) % std::mem::align_of::<$t>() == 0 {
+                    // SAFETY: 绝对地址由调用方经 allocateMemory（或 VM 承载的静态字）取得，按宽度对齐
+                    let a = unsafe { <$a>::from_ptr(p) };
+                    let mut cur = a.load(SeqCst);
+                    loop {
+                        let old = cur as u64;
+                        let Some(n) = op(old) else { return Ok(old) };
+                        match a.compare_exchange_weak(cur, n as $t, SeqCst, SeqCst) {
+                            Ok(_) => return Ok(old),
+                            Err(actual) => cur = actual,
+                        }
+                    }
+                }
+            }};
+        }
+        match width {
+            1 => atomic!(AtomicU8, u8),
+            2 => atomic!(AtomicU16, u16),
+            4 => atomic!(AtomicU32, u32),
+            8 => atomic!(AtomicU64, u64),
+            _ => {}
+        }
+        let mut b = [0u8; 8];
+        read(base, offset, &mut b[..width])?;
+        let old = load_bits(&b[..width]);
+        if let Some(n) = op(old) {
+            store_bits(&mut b[..width], n);
+            write(base, offset, &b[..width])?;
+        }
+        return Ok(old);
+    }
+    let start = usize::try_from(offset - ARRAY_BASE_OFFSET).unwrap_or(usize::MAX - 8);
+    with_array_bytes(base, |b| match b.get_mut(start..start + width) {
+        Some(slot) => {
+            let old = load_bits(slot);
+            if let Some(n) = op(old) {
+                store_bits(slot, n);
+            }
+            Ok(old)
+        }
+        None => Err(out_of_bounds()),
+    }).unwrap_or_else(|| Err(out_of_bounds()))?
 }
 
 fn out_of_bounds() -> JvmError {

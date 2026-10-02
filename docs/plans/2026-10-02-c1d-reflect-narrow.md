@@ -295,6 +295,28 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
   普通写入与 CAS 同一存储；未初始化类的静态方法句柄首次调用（`DirectMethodHandle.ensureInitialized` →
   `MethodHandle.updateForm` → `Unsafe.compareAndSetBoolean` 字节码路径）与同一句柄反复调用。
 
+**基本类型统一载体：数组元素 / 直接内存 / 实例字段同一读-改-写口径**（补上一条的残余）。
+
+- 载体 `jdk/internal/misc/unsafe__ext.rs::prim(o, offset, width, op)`：值以零扩展 u64 位形流转，`op(旧)` 给新值即写、
+  给 None 即只读，返回旧值。Unsafe 基本类型访问器全族（boolean / byte / short / char / int / float / long / double 的
+  get / put / CAS / compareAndExchange / getAndSet / getAndAdd / getAndBitwise*）与 VarHandle 字段族 `_field_exchange`
+  都只是对它的薄包装（宽度 + op），不按方法分支。按载体三路：
+  - 原生内存（null 基址的绝对地址、基本类型数组的 `arrayBaseOffset + i × arrayIndexScale`）→ `native_memory::update`：
+    数组在存储写锁内对字节视图读-改-写（boolean 数组写后规范为 0 / 1），直接内存对齐时经同宽原子 CAS 循环。
+    子字元素与按字对齐的 int 访问落在同一字节序列上，字外相邻元素不变（小端，与 HotSpot 同）；
+  - 静态字段 id → 声明类字段闭包按装箱值读写（位形 ↔ 装箱值换算）。静态存储的原子读-改-写由 b1 的
+    `_static_rmw`（c1d-b1 94f1edf3）承载，b1 合入后本臂改经它（子字静态字段 CAS 一并落在其上）；
+  - 实例字段 id → ObjectVTable 字视图 `__unsafe_word`（int / float 原始位 / 子字）或新增双字视图 `__unsafe_dword`
+    （long / double 原始位，`__PrimCell::__dword_update`），宽度小于视图的访问按掩码合成。
+- float / double 字段与 int / long 同一视图（原始位比较：-0.0 ≠ 0.0、NaN 与自身相同，同 JDK 位比较语义），VarHandle
+  浮点族不再存根。
+- `Thread.getNextThreadIdOffset` 返回 VM 静态 `AtomicI64` 的真实地址，`getAndAddLong(null, addr, 1)` 走直接内存原子路径；
+  原 getAndAdd 族按 (基址身份, offset) 键的旁路计数表删除（它与字段真实存储分离）。
+- 边界用例 `tests/e2e/48_refs/TestUnsafePrimitiveArray.java`（经 `sun.misc.Unsafe`，期望为 JDK 21 实测）：int / long 元素
+  CAS、getAndAdd、getAndSet；int 宽度按字访问 byte[] / short[]（CAS 只改该字覆盖的元素）；boolean / char / float /
+  double 元素读写；实例 float / double 字段经 Unsafe 读写、经 VarHandle 的 CAS / compareAndExchange / getAndAdd /
+  getAndSet。静态字段九种载体的 CAS 用例待 b1 合入后随静态臂一并提交。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
