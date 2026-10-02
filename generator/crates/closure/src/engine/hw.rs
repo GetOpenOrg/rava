@@ -63,8 +63,8 @@ impl<'a> Engine<'a> {
         if mh.fns.is_empty() {
             self.hw_base_fn(m, &cf, &key.name, &key.desc);
         }
-        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像）时不经 open 返回值交出
-        let modeled = reads || array_ret.is_some() || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks);
+        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类镜像）时不经 open 返回值交出
+        let modeled = reads || array_ret.is_some() || self.man.returns_receiver(&ks) || self.man.returns_mirror(&ks) || self.man.returns_superclass(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {

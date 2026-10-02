@@ -83,6 +83,33 @@ A、B 基于 28090062，均已过 `cargo build` 与生成器全部单元测试�
   `copyInto` / `getChild` / `asPrimitiveArray`（数组写入臂把解释器值池泛写进 `Node[]` 等数组所致；两用例不用流）。
   DC / ST 集合不变，与 4.3「只关 NOMHARR 不止血」一致——两者的膨胀在 T4 / b1 / T3 / T2。耗时差在同机噪声范围内。
 
+### 3.1 T6 getSuperclass 返回模型（分支 `c1d-t6`，基于 2c16454b）
+
+提交 d540606c：清单 `[facts.reflect] superclass_of_receiver = ["java/lang/Class.getSuperclass:()Ljava/lang/Class;"]`；
+`defs.rs` 新增 `MirrorOp { Of, Super }` 与 `RetModel::Super`（`RetModel::mirror_op` 统一类镜像 / 超类镜像两种按接收者变换的返回）；
+`mflows` 边带变换 `(dst, MirrorOp)`，`flow.rs` 推送与 `mflow` 按变换求值；`reflect.rs` 新增 `mirror_op` / `super_set`
+（类镜像 → 直接超类镜像；接口 / 根类为 null 不入结果；数组 → 根类；非镜像的 Class、类文件缺失 → 所指未知的 Class；open 仍 open）；
+`invoke.rs` `edge_ret` 按 `mirror_op` 走镜像流边；`methods.rs` 识别清单；`hw.rs` 超类镜像返回已建模、不经 open 返回值交出。
+没有类名特判；`getSuperclass` 的手写体仍是运行期实现，只是闭包里返回值按调用点求。
+
+实测（本机 `scripts/diag/c1d_measure.sh … emit`，基线 2c16454b → T6；耗时含机器负载波动）：
+
+| 用例 | 类数 | 方法数 | fold_props | 耗时 s | 闭包差异 |
+|---|---|---|---|---|---|
+| HelloWorld | 266 → 266 | 723 → 723 | 0 → 0 | 4 → 1 | 无 |
+| DeepCopy | 1823 → 1823 | 11102 → 11102 | 53 → 53 | 111 → 121 | `reflect.fields` +24（超类的 `serialVersionUID`） |
+| TestSerialDefaultSuid | 1828 → 1828 | 11100 → 11100 | 53 → 53 | 119 → 121 | 同上；`reflect.gaps` 13 → 11 |
+| TestSerialProxyForm | 1825 → 1825 | 11099 → 11100 | 53 → 53 | 113 → 120 | `TestSerialProxyForm$Base.readResolve` 与 `Base.<init>` 入反射面（getInheritableMethod 上溯得到）；`reflect.gaps` 11 → 9 |
+| TestReflectProbe | 1553 → 1553 | 9139 → 9139 | 53 → 53 | 15 → 15 | 无 |
+
+- 消失的两个缺口：`ObjectStreamClass.getInheritableMethod` / `getPrivateMethod` 的 `recv(open(java/lang/Class))`——
+  接收者值集不再因 `getSuperclass` 掺入 open(Class)。
+- `serialVersionUID` 字段 +24：`ObjectStreamClass` 沿超类链递归建描述符，超类镜像现为确定值，按名字段查找点到
+  `Number` / `Enum` / 各异常基类等超类的同名字段（JVM 语义如此），类数不变。
+- `class_init`：`unknown` 仍为 true（b3 处理）；`DirectMethodHandle.checkInitialized` 等 3 个调用点的已知目标 +141，
+  全部是闭包内已有类的超类（超类镜像进入 Class 值池），类数不变。
+- DeepCopy 基线已是 1823 类 / fold 53（非 §一 的 1640 / 42），属 T0 范畴，T6 不改变它。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交

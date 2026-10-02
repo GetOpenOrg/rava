@@ -41,6 +41,50 @@ impl<'a> Engine<'a> {
         k
     }
 
+    /// 镜像流边的变换：op 作用于值集 s
+    pub(super) fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
+        match op {
+            MirrorOp::Of => self.mirror_set(s),
+            MirrorOp::Super => self.super_set(s),
+        }
+    }
+
+    /// Class 值集中各类镜像所指类的直接超类镜像（`getSuperclass`）：接口与根类无超类（null，不入结果），
+    /// 数组的超类是根类；所指未知的 Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open。
+    /// 镜像只由类字面量与 `getClass` 产生，不指向基本类型
+    pub(super) fn super_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            let Some(&c) = self.mirrors.get(&x) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let name = self.names[c as usize].clone();
+            // None = 类文件缺失（所指未知）；Some(None) = 无超类（null）
+            let sup = if name.starts_with('[') {
+                Some(Some(OBJECT.to_string()))
+            } else {
+                self.h.class(&name).map(|cf| if cf.is_interface() { None } else { cf.super_name.clone() })
+            };
+            match sup {
+                Some(Some(sc)) => {
+                    let k = self.mirror(&sc);
+                    out.classes.insert(k);
+                }
+                Some(None) => {}
+                None => {
+                    out.classes.insert(class);
+                }
+            }
+        }
+        if !s.open.is_empty() {
+            out.open.insert(class);
+        }
+        out
+    }
+
     /// 值集中各值的类镜像；类型推不出（open、lambda 合成类、手写实现对象）为所指未知的 Class
     pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
         let mut out = TypeSet::default();

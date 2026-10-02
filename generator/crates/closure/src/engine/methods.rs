@@ -120,6 +120,8 @@ impl<'a> Engine<'a> {
         let ks = key.to_string();
         let ret_model = if self.man.returns_mirror(&ks) {
             RetModel::Mirror
+        } else if self.man.returns_superclass(&ks) {
+            RetModel::Super
         } else if self.man.returns_receiver(&ks) {
             RetModel::Receiver
         } else if let Some(src) = self.man.memory_read(&ks) {
