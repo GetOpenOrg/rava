@@ -1,6 +1,6 @@
 //! 编译阶段：`rava build` 的 compile 段与 `rava compile <scratch>` 共用。
 //!
-//! `rava compile <scratch> [--release] [--target-dir D] [--build-timeout SECS] [--runtime R]`：编译已由
+//! `rava compile <scratch> [--release] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
 //! `rava build --stop-after emit` 发射好的工作区（bin 名与重型判定输入读自 `build_status.json` 的 emit 段），
 //! 更新 `build_status.json` / `build_artifacts.json`。批量编排先并行发射、再逐个编译时用它——发射进程
 //! 不必常驻等待共享 target 的 cargo 文件锁。
@@ -21,6 +21,8 @@ pub struct CompileArgs {
     pub release: bool,
     pub target_dir: Option<PathBuf>,
     pub build_timeout: Option<u64>,
+    /// 保留中间产物（缺省链接成功后只留可执行文件）
+    pub keep_artifacts: bool,
 }
 
 /// 重型判定 → cargo build；进度与失败现场记入 `st`，返回可执行文件
@@ -33,7 +35,12 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
         release: c.release,
         timeout: c.build_timeout.map(Duration::from_secs),
     };
-    let exe = cargo::compile(out, &emit.bin, &heavy, &opts).map_err(|f| {
+    let r = cargo::compile(out, &emit.bin, &heavy, &opts);
+    // 链接成功只留可执行文件；失败的中间产物同样只是缓存，一并删除
+    if !c.keep_artifacts && out.join(cargo::ARTIFACTS_FILE).exists() {
+        crate::artifacts::prune_scratch(out, r.is_ok())?;
+    }
+    let exe = r.map_err(|f| {
         let msg = f.summary();
         st.failure = Some(f);
         msg
@@ -50,6 +57,7 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
     while let Some(a) = it.next() {
         match a.as_str() {
             "--release" => c.release = true,
+            "--keep-artifacts" => c.keep_artifacts = true,
             "--target-dir" | "--build-timeout" | "--runtime" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
                 match a.as_str() {
@@ -97,7 +105,8 @@ mod tests {
     fn parse_compile_args() {
         let (d, c, rt) = parse(&args("/s --release --target-dir /t --build-timeout 9 --runtime /r")).unwrap();
         assert_eq!(d, PathBuf::from("/s"));
-        assert!(c.release);
+        assert!(c.release && !c.keep_artifacts);
+        assert!(parse(&args("/s --keep-artifacts")).unwrap().1.keep_artifacts);
         assert_eq!(c.target_dir, Some(PathBuf::from("/t")));
         assert_eq!(c.build_timeout, Some(9));
         assert_eq!(rt, Some(PathBuf::from("/r")));
