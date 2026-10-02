@@ -339,7 +339,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
         Node::HR(..) => 13,
         Node::Esc => 14,
         Node::G(..) => 15,
-        Node::RP(_) | Node::RA(_) => 16,
+        Node::RP(_) | Node::RN(_) | Node::RA(_) => 16,
     }
 }
 

@@ -116,6 +116,7 @@ impl<'a> Engine<'a> {
             Node::Array => "array".into(),
             Node::Esc => "escape".into(),
             Node::RP(c) => format!("reflect-call 实参池 {}", reflect_call::channel_name(c)),
+            Node::RN(c) => format!("reflect-call 实参池（去冗余） {}", reflect_call::channel_name(c)),
             Node::RA(c) => format!("reflect-call 实参数组 {}", reflect_call::channel_name(c)),
             Node::HP(h, i) => format!("hub 实参{i} {}", self.hub_label(h)),
             Node::HR(h) => format!("hub 返回 {}", self.hub_label(h)),
@@ -297,7 +298,7 @@ impl<'a> Engine<'a> {
         }
         // 反射调用实参池诊断：`@rcall`——各通道实参池 / 实参数组的值集
         if pat == "@rcall" {
-            let mut v: Vec<Node> = self.graph.keys().filter(|n| matches!(n, Node::RA(_) | Node::RP(_))).copied().collect();
+            let mut v: Vec<Node> = self.graph.keys().filter(|n| matches!(n, Node::RA(_) | Node::RP(_) | Node::RN(_))).copied().collect();
             v.sort_by_key(|n| format!("{n:?}"));
             for n in v {
                 let s = self.graph.get(&n).cloned().unwrap_or_default();

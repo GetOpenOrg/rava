@@ -16,6 +16,9 @@
 //! 回调 `writeObject`）就是成员本身；容器对象各进按接收者克隆的上下文，同一成员被多个容器对象反射调用时各对象的
 //! 字段 / 数组互不汇合。池中所指未知（open）的接收者：可覆写的退回 VM 枢纽（[`HubSet::Vm`]，目标形参同样接实参池），
 //! 不可覆写的进成员本体。lambda / 手写实现对象不是字节码类，反射调用不在字节码层选中实现（同 VM 枢纽）。
+//!
+//! 去冗余：成员形参接 [`Node::RN`]（池中 open 已涵盖、只能经未知接收者视图读写的值不逐个列出）；可覆写成员退回 VM
+//! 枢纽后，枢纽按声明类成员集展开已覆盖逐接收者派发，不再重复派发。池收窄后两者都不触发，结果即逐值派发。
 
 use super::*;
 
@@ -323,11 +326,33 @@ impl<'a> Engine<'a> {
 
     /// 实参池新增值：经该通道调用的实例成员按新增接收者派发
     pub(super) fn rcall_pool_grown(&mut self, ch: u8, delta: &TypeSet) {
+        let lean = self.rcall_absorb(ch, delta);
+        if !lean.is_empty() {
+            self.add_to(Node::RN(ch), &lean);
+        }
         for i in 0..self.rcall_members.len() {
             if self.rcall_members[i].mask & rc_bit(ch) != 0 {
                 self.rcall_dispatch(i, delta);
             }
         }
+    }
+
+    /// 池增量 delta 去掉池中 open 已涵盖的值：x 属于池中某 open 类型，且 x 不是 lambda / 手写实现对象，抽象对象 / 数组
+    /// 分配点须已逃逸（未逃逸的只经字节码可见引用读写，open 视图碰不到它）。之后才逃逸的值已逐个列出，不受影响
+    fn rcall_absorb(&mut self, ch: u8, delta: &TypeSet) -> TypeSet {
+        let opens: Vec<u32> = self.graph.get(&Node::RP(ch)).map(|s| s.open.iter().collect()).unwrap_or_default();
+        if opens.is_empty() || delta.classes.is_empty() {
+            return delta.clone();
+        }
+        let mut keep = IdSet::default();
+        for x in delta.classes.iter() {
+            let synthetic = self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x);
+            let hidden = (self.objs.contains_key(&x) || self.arrays.contains_key(&x)) && !self.escaped.contains(&x);
+            if synthetic || hidden || !opens.iter().any(|&o| self.sub(x, o)) {
+                keep.insert(x);
+            }
+        }
+        TypeSet { classes: keep, open: delta.open.clone() }
     }
 
     /// 反射方法成员 key 经通道位集 mask 入链（重复入链时并入新通道）
@@ -399,7 +424,7 @@ impl<'a> Engine<'a> {
             }
             for (i, pt) in pts.iter().enumerate().skip(base) {
                 if let Some(pt) = pt {
-                    self.flow(Node::RP(ch), Node::P(t, i as u16), *pt);
+                    self.flow(Node::RN(ch), Node::P(t, i as u16), *pt);
                 }
             }
             if ch == RC_HANDLE && self.methods[t].rtype.is_some() {
@@ -414,6 +439,12 @@ impl<'a> Engine<'a> {
             let m = &self.rcall_members[i];
             (m.key.clone(), m.iface, m.virt, m.mask)
         };
+        // 已退回 VM 枢纽：枢纽按成员集展开到声明类的全部成员（同样按接收者克隆上下文、P0 = exact、形参接池），
+        // 逐接收者派发只剩枢纽不展开的未逃逸数组分配点；open 已由枢纽承接
+        let covered = virt && self.rcall_members[i].fallback;
+        if covered && !s.classes.iter().any(|x| self.arrays.contains_key(&x) && !self.escaped.contains(&x)) {
+            return;
+        }
         let owner = self.id(&key.owner);
         let via = Via::class("reflect", &key.owner);
         let opens: Vec<u32> = s.open.iter().filter(|&o| self.sub(o, owner) || self.sub(owner, o)).collect();
@@ -438,7 +469,8 @@ impl<'a> Engine<'a> {
             self.unresolved.insert(key.to_string());
             return;
         }
-        let xs: Vec<u32> = s.classes.iter().collect();
+        let covered = virt && self.rcall_members[i].fallback;
+        let xs: Vec<u32> = s.classes.iter().filter(|x| !covered || (self.arrays.contains_key(x) && !self.escaped.contains(x))).collect();
         for x in xs {
             if !self.sub(x, owner) || !self.rcall_members[i].done.insert(x) {
                 continue;
