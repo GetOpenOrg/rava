@@ -1,0 +1,13 @@
+bais-supported=true
+read1=1,2
+after-reset=1
+bis-supported=true
+bis-a=10,20
+bis-replay=10
+reset-ex=IOException
+sr-supported=true
+sr-replay=a
+br-line1=line1
+br-replay=line1
+nomark-supported=false
+nomark-ex=IOException

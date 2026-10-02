@@ -1,0 +1,6 @@
+hasNext=false
+findFirst-empty=true
+stream-count=0
+reload-ok=true
+by-loader=true
+typed-empty=false

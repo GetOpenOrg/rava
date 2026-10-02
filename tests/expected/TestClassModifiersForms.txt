@@ -1,0 +1,14 @@
+iface: interface=true abstract=true final=false static=true annotation=false enum=false record=false name=TestClassModifiersForms$Iface canonical=TestClassModifiersForms.Iface
+anno: interface=true abstract=true final=false static=true annotation=true enum=false record=false name=TestClassModifiersForms$Marker canonical=TestClassModifiersForms.Marker
+enum: interface=false abstract=false final=true static=true annotation=false enum=true record=false name=TestClassModifiersForms$Color canonical=TestClassModifiersForms.Color
+record: interface=false abstract=false final=true static=true annotation=false enum=false record=true name=TestClassModifiersForms$Point canonical=TestClassModifiersForms.Point
+abstract: interface=false abstract=true final=false static=true annotation=false enum=false record=false name=TestClassModifiersForms$AbstractBase canonical=TestClassModifiersForms.AbstractBase
+final: interface=false abstract=false final=true static=true annotation=false enum=false record=false name=TestClassModifiersForms$FinalLeaf canonical=TestClassModifiersForms.FinalLeaf
+inner: interface=false abstract=false final=false static=true annotation=false enum=false record=false name=TestClassModifiersForms$Inner canonical=TestClassModifiersForms.Inner
+arr-name=[Ljava.lang.String;
+arr-simple=String[]
+arr-canonical=java.lang.String[]
+deep-name=[[I
+int=int void=void
+anon-canonical-null=true
+anon-simple=
