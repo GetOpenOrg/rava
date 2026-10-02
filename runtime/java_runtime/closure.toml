@@ -198,6 +198,12 @@ classes = [
     # （`extends ClassLoader`）一经实例化即走此路径。jdk/ 前缀截断下 newInstance 被翻译而 <init> 留存根，
     # 运行期命中 panic。load / find 族（System.loadLibrary）不在该调用链上，仍为存根。
     "jdk/internal/loader/NativeLibraries",
+    # 载体线程本地变量族（纯 Java，0 个 ACC_NATIVE）：TerminatingThreadLocal 是 CarrierThreadLocal 子类，
+    # get / set 经 JavaLangAccess 落到 ThreadLocal 的载体线程表。消费方：sun/nio/fs/NativeBuffers 的线程本地
+    # 缓冲缓存（copyToNativeBuffer：realpath / readlink / mkdir 等以 NativeBuffer 传路径的调用）。jdk/ 前缀
+    # 截断下 NativeBuffers$1 的父构造器链留存根，运行期命中 panic（TestUnixFileNatives）。
+    "jdk/internal/misc/CarrierThreadLocal",
+    "jdk/internal/misc/TerminatingThreadLocal",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存

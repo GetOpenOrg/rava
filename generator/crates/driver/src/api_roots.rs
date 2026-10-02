@@ -68,7 +68,7 @@ mod tests {
             let m = cf.methods.iter().find(|m| m.name == r.name && m.desc == r.desc).unwrap();
             assert!(m.access & (acc::PUBLIC | acc::PROTECTED) != 0, "{r:?}");
         }
-        assert_eq!(api_roots(&cp, &man, &["jdk/internal/misc".to_string()], true).1, 0, "边界域包跳过");
+        assert_eq!(api_roots(&cp, &man, &["jdk/internal/access".to_string()], true).1, 0, "边界域包跳过");
         let (lang, _) = api_roots(&cp, &man, &["java/lang".to_string()], false);
         let vm: Vec<&MemberRef> = lang.iter().filter(|r| man.is_vm_boundary(&r.owner)).collect();
         assert!(!vm.is_empty(), "VM 耦合边界类照常纳入");
