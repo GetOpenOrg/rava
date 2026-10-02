@@ -69,8 +69,8 @@ pub fn emit_dispatch(d: &Dispatch, nodes: &Graph) -> Vec<Entry> {
         let node = nodes.node(bid);
         out.push(Entry::structure(format!("{arm_ind}{bid} => {{"), 1, Tag::Arm));
         let body_ind = format!("{arm_ind}{STEP}");
-        for s in &node.stmts {
-            out.push(Entry::stmt(&body_ind, s.clone()));
+        for (k, s) in node.stmts.iter().enumerate() {
+            out.push(Entry::stmt(&body_ind, s.clone()).at(node.stmt_pc(k)));
         }
         for line in next_pc_lines(node) {
             out.push(Entry::line(format!("{body_ind}{line}")));
@@ -145,6 +145,11 @@ impl TreeEmitter<'_> {
 
     // ── 输出 ──
 
+    /// 节点终结（条件 / switch 跳转）指令的偏移
+    fn term_pc(&self, id: NodeId) -> Option<u32> {
+        self.nodes.node(id).pcs.first().copied()
+    }
+
     fn jump(&mut self, keyword: &str, header: NodeId, ctx: &[Ctx]) -> String {
         // 最内层是本循环（且未隔着带标签块 / try 边界）→ 省略标签
         if ctx.last() == Some(&Ctx::Loop(header)) {
@@ -165,8 +170,9 @@ impl TreeEmitter<'_> {
         for it in seq {
             match it {
                 Item::Code { block, .. } => {
-                    for s in &self.nodes.node(*block).stmts {
-                        out.push(Entry::stmt(ind, s.clone()));
+                    let node = self.nodes.node(*block);
+                    for (k, s) in node.stmts.iter().enumerate() {
+                        out.push(Entry::stmt(ind, s.clone()).at(node.stmt_pc(k)));
                     }
                 }
                 Item::Decl(ids) => {
@@ -204,14 +210,16 @@ impl TreeEmitter<'_> {
                         Some(c) => (format!("while {} {{", render_cond(c)), Tag::Plain),
                         None => ("loop {".to_string(), Tag::Loop),
                     };
-                    out.push(Entry::structure(format!("{ind}{label}{head}"), 1, tag));
+                    let pc = l.cond_origin.and_then(|o| self.term_pc(o));
+                    out.push(Entry::structure(format!("{ind}{label}{head}"), 1, tag).at(pc));
                     out.append(&mut inner);
                     out.push(Entry::structure(format!("{ind}}}"), -1, Tag::Plain));
                 }
                 Item::If(i) => self.if_(i, ind, ctx, out, ""),
                 Item::Switch(s) => {
                     let key = &self.nodes.node(s.origin).key;
-                    out.push(Entry::structure(format!("{ind}match {key} {{"), 1, Tag::Plain));
+                    let pc = self.term_pc(s.origin);
+                    out.push(Entry::structure(format!("{ind}match {key} {{"), 1, Tag::Plain).at(pc));
                     for arm in &s.arms {
                         let pattern = match &arm.values {
                             None => "_".to_string(),
@@ -234,11 +242,12 @@ impl TreeEmitter<'_> {
         let else_sig = significant(&it.else_);
         if then_sig.is_empty() && else_sig.is_empty() {
             // 两臂皆空：条件只为副作用求值
-            out.push(Entry::stmt(ind, Stmt::raw(format!("let _ = {};", render_cond(&it.cond)))));
+            out.push(Entry::stmt(ind, Stmt::raw(format!("let _ = {};", render_cond(&it.cond)))).at(self.term_pc(it.origin)));
             return;
         }
         let (delta, tag) = if prefix.is_empty() { (1, Tag::Plain) } else { (0, Tag::Else) };
-        out.push(Entry::structure(format!("{ind}{prefix}if {} {{", render_cond(&it.cond)), delta, tag));
+        let head = Entry::structure(format!("{ind}{prefix}if {} {{", render_cond(&it.cond)), delta, tag);
+        out.push(head.at(self.term_pc(it.origin)));
         self.seq(&it.then, &format!("{ind}{STEP}"), ctx, out);
         if !else_sig.is_empty() {
             if let [Item::If(inner)] = else_sig.as_slice() {

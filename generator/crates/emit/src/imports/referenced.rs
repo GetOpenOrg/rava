@@ -70,6 +70,24 @@ const GETSTATIC: u8 = 0xb2;
 const PUTSTATIC: u8 = 0xb3;
 const INVOKESTATIC: u8 = 0xb8;
 
+/// 拼接 / ObjectMethods 调用点发射的清单分量处理入口（`[indy] concat_stringify` / `component_hash` /
+/// `component_equals`）：生成器在调用点静态调用它们，声明类与描述符类型须在作用域内
+fn indy_helper_refs(ctx: &EmitCtx<'_>, owner: &ClassInfo, bsm: u16, out: &mut BTreeSet<String>) {
+    let Some(b) = owner.class_file().bootstrap_methods.get(usize::from(bsm)) else { return };
+    let key = format!("{}.{}", b.handle.member.owner, b.handle.member.name);
+    let keys: &[&str] = match ctx.manifest.indy_kind(&key) {
+        Some(IndyKind::Concat) => &["concat_stringify"],
+        Some(IndyKind::ObjectMethods) => &["concat_stringify", "component_hash", "component_equals"],
+        _ => &[],
+    };
+    for k in keys {
+        if let Ok((o, _, d)) = ctx.manifest.indy_helper(k) {
+            out.insert(o.to_string());
+            add_desc_refs(d, out);
+        }
+    }
+}
+
 /// 单条指令贡献的引用
 fn scan_insn(ctx: &EmitCtx<'_>, owner: &ClassInfo, insn: &Insn, out: &mut BTreeSet<String>) {
     match &insn.operand {
@@ -89,6 +107,7 @@ fn scan_insn(ctx: &EmitCtx<'_>, owner: &ClassInfo, insn: &Insn, out: &mut BTreeS
             }
         }
         Operand::InvokeDynamic { bsm, .. } => {
+            indy_helper_refs(ctx, owner, *bsm, out);
             let Some(r) = indy_impl_ref(ctx, owner, *bsm) else { return };
             out.insert(r.owner.clone());
             add_desc_refs(&r.desc, out);

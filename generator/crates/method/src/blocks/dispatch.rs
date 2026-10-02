@@ -54,7 +54,8 @@ impl Blocks<'_, '_> {
                     extra.push(Stmt::raw(format!("{} = {};", text::expr(self.env, &var.expr), arm_value(self.env, v)?)));
                 }
             }
-            self.nodes.node_mut(nid).stmts.extend(extra);
+            let none = vec![None; extra.len()];
+            self.nodes.node_mut(nid).append_stmts(extra, none);
             self.consume(&node.pcs, JumpKind::Dispatch);
         }
 
@@ -64,14 +65,18 @@ impl Blocks<'_, '_> {
         for id in order {
             let node = self.nodes.node(id);
             let mut new_stmts = Vec::new();
-            for s in &node.stmts {
+            let mut new_pcs = Vec::new();
+            for (k, s) in node.stmts.iter().enumerate() {
+                let pc = node.stmt_pc(k);
                 // `let _ = e;` 在 Python 侧是原文语句（RawStmt），不参与提升
                 let Stmt::Let(l) = s else {
                     new_stmts.push(s.clone());
+                    new_pcs.push(pc);
                     continue;
                 };
                 if l.name.is_discard() {
                     new_stmts.push(s.clone());
+                    new_pcs.push(pc);
                     continue;
                 }
                 let mut ty_s = l.ty.as_ref().map(ir::render::render_type);
@@ -97,9 +102,11 @@ impl Blocks<'_, '_> {
                         value: v.clone(),
                         origin: VarOrigin::default(),
                     }));
+                    new_pcs.push(pc);
                 }
             }
-            self.nodes.node_mut(id).stmts = new_stmts;
+            let n = self.nodes.node_mut(id);
+            (n.stmts, n.stmt_pcs) = (new_stmts, new_pcs);
         }
         for (name, ty_s) in hoisted {
             let ann = ty_s.map(|t| format!(": {t}")).unwrap_or_default();

@@ -213,7 +213,7 @@ impl<'s, 'e> Blocks<'s, 'e> {
         let (start, end) = (blk.start_idx, blk.end_idx);
         self.sim.state.stack = node.entry_stack.clone();
         self.sim.state.locals = node.entry_locals.clone();
-        self.sim.state.stmts = Vec::new();
+        self.sim.take_stmts();
         let mut cond = None;
         let mut key = None;
         for i in start..end {
@@ -236,7 +236,7 @@ impl<'s, 'e> Blocks<'s, 'e> {
         if self.sim.state.underflow {
             return cfg_err(format!("操作数栈下溢（块 pc={start_pc}）"));
         }
-        let stmts = std::mem::take(&mut self.sim.state.stmts);
+        let (stmts, pcs) = self.sim.take_stmts();
         let n = self.nodes.node_mut(nid);
         if cond.is_some() {
             n.cond = cond;
@@ -245,6 +245,7 @@ impl<'s, 'e> Blocks<'s, 'e> {
             n.key = k;
         }
         n.stmts = stmts;
+        n.stmt_pcs = pcs.into_iter().map(Some).collect();
         n.exit_stack = self.sim.state.stack.clone();
         n.exit_locals = self.sim.state.locals.clone();
         n.processed = true;
@@ -269,7 +270,8 @@ impl<'s, 'e> Blocks<'s, 'e> {
         } else if n.target == n.fallthrough {
             // 两臂同一目标：条件只为副作用求值
             let n = self.nodes.node_mut(nid);
-            n.stmts.push(Stmt::raw(format!("let _ = {};", render_cond(&cond))));
+            let pc = n.pcs.first().copied();
+            n.push_stmt(Stmt::raw(format!("let _ = {};", render_cond(&cond))), pc);
             (n.kind, n.cond, n.fallthrough) = (Kind::Goto, None, None);
             n.pcs.clear();
             self.consume(&pcs, JumpKind::Structured);
