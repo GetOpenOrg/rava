@@ -44,6 +44,9 @@ pub struct NestMeta {
 pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
 type Names = &'static [&'static str];
+/// 生成文件行表：(scratch 相对路径, [(类 binary name, 方法名, 源文件)],
+/// [(Rust 行, 方法下标, Java 行)]——按 Rust 行升序；方法下标 `u32::MAX` = 块外，Java 行 0 = 方法内首个标记之前)
+pub type LineTable = (&'static str, &'static [(&'static str, &'static str, &'static str)], &'static [(u32, u32, u32)]);
 
 extern "Rust" {
     #[link_name = "__java_meta_CLASS_HIERARCHY"]
@@ -76,6 +79,8 @@ extern "Rust" {
     static VM_CONST_PROPERTIES: &'static [(&'static str, &'static str)];
     #[link_name = "__java_meta_VM_DYNAMIC_PROPERTIES"]
     static VM_DYNAMIC_PROPERTIES: &'static [&'static str];
+    #[link_name = "__java_meta_LINE_TABLES"]
+    static LINE_TABLES: &'static [LineTable];
 }
 
 // SAFETY（以下各函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
@@ -113,3 +118,5 @@ pub fn module_services() -> &'static [(&'static str, &'static str)] { unsafe { M
 pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe { VM_CONST_PROPERTIES } }
 /// VM 初始系统属性的动态键（由手写层取宿主值）：闭包事实 system_properties.dynamic。
 pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }
+/// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
+pub fn line_tables() -> &'static [LineTable] { unsafe { LINE_TABLES } }

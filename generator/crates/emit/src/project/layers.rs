@@ -173,6 +173,16 @@ fn mod_line(name: &str) -> String {
 impl BodyPlan {
     /// 各实现 crate 落盘：类文件、`body` 模块树（只声明不导出）、lib.rs、Cargo.toml；
     /// 清除本轮未写入的带生成标记的陈旧类文件（复用 scratch）
+    /// 实现层各类文件的 (落盘路径, 文本)
+    pub fn files(&self, out_dir: &Path) -> Vec<(PathBuf, &str)> {
+        let mut out = Vec::new();
+        for c in &self.crates {
+            let body_root = out_dir.join(&c.name).join("src").join("body");
+            out.extend(c.files.iter().map(|(rel, t)| (body_root.join(rel), t.as_str())));
+        }
+        out
+    }
+
     pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
         for c in &self.crates {
             let dir = out_dir.join(&c.name);

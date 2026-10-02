@@ -117,14 +117,22 @@
   表即可同时恢复方法名与行号，不依赖 Rust 符号。
 - 步骤（每步单独提交；S2 起以「剥去行标记后生成树逐字节不变」为验收，交服务器跑 gen_trees / compare_trees）：
   - S1 classfile：Code 属性解析 `LineNumberTable`（pc → 行），NormCode 透传。生成物不变。
-  - S2 sim / ir：新增行标记语句 `Stmt::Line(u32)`；sim 在发出语句前若当前指令所在 Java 行变化则先发标记
-    （`emit` / `fresh_let` / 直接入栈点统一走一个入口）。各遍历遇标记透明（`first/last` 类判断跳过标记）。
-    渲染为 `// line N` 尾注释并入下一行语句（不增行，生成代码可读性同时受益）。
-  - S3 emit：发射文件时按方法区段收集 (Rust 行, Java 行)，写入每个生成类的静态行表
-    （`__LINES: &[(u32 rust_line, u16 method_idx, u32 java_line)]` + 方法名表 + SourceFile），
-    以文件路径（crate 内相对路径）注册到全局表（linkme 式分布式切片不可用时由 mod.rs 汇总生成）。
-  - S4 运行时（throwable_impl.rs，VM 驱动类 ③）：帧按 `at` 的文件 + 行查表得 (类, 方法, 文件, 行)；查不到的帧
-    （运行时内部 / std）剔除；按 JVM 规则跳过 fillInStackTrace 与本异常类及其超类的 `<init>` 帧。
-  - S5 scratch profile：dev / release 均 `debug = "line-tables-only"`（行表需要调试行信息），确认 release 内联帧仍带 `at`。
+  - S2 sim / method：语句的来源偏移随语句流动，不进 IR 语句树（避免各遍历对标记做透明处理）：
+    `SimState.stmt_pcs` 与 `stmts` 等长，`push_stmt` 是唯一追加入口；`Node.stmt_pcs`（合成语句 None）经
+    `push_stmt` / `append_stmts` / `clear_stmts` 维护；`Entry.pc` 由树发射标注（语句 = 来源指令，if / while /
+    match 头 = 节点终结跳转指令）。渲染时（`method/src/lines.rs`）行变化处先出独立标记行，行级后处理
+    （尾 return 删除、补 Ok、构造器收尾、数组折叠）对其透明，方法体收尾并入其后第一条内容行行尾 `// line N`
+    （不增行）。验收：剥去 ` // line N` 后生成树与改前逐字节一致。
+  - S3 emit（`emit/src/project/line_tables.rs`）：拆层后、落盘的每个生成文件（声明层 / 实现层 / 用户类）扫描最终文本：
+    `java_class!` 块内 `#[java_method(name)]` 行起一个方法区段（`__init_on` 等紧随的辅助体归同一方法），行尾标记
+    给 (Rust 行, 方法下标, Java 行)，块结束行记「块外」。汇总写 `<scratch>/closure_input/line_tables.rs`
+    （同 closure_tables，内容不变不重写），java_meta 以 `__java_meta_LINE_TABLES` 导出，`meta::line_tables()` 读取。
+  - S4 运行时（throwable_impl.rs，VM 驱动类 ③）：帧按 `at` 的路径（各 `/` 边界后缀查表）+ 行取「Rust 行不大于该行」
+    的末项得 (类, 方法, SourceFile, Java 行)；查不到 / 块外 / 方法首个标记之前（宏生成的分派包装、`new` 序言）的帧剔除；
+    方法体内 Rust 闭包帧与紧随的同一 Java 方法外层帧合一；按 HotSpot 规则跳过 fillInStackTrace 帧与本异常类及其
+    超类（`meta::class_hierarchy`）的 `<init>` 帧；上限 1024 帧。
+  - S5 scratch profile：release 由 `strip = "symbols"` 改为 `debug = "line-tables-only"`（与 dev 同；剥离会连同行信息
+    一起去掉，栈帧无从恢复）。代价是 release 二进制带行表段，属 JVM 语义所需。
+  - 已知缺口：继承展开到子类块内的方法体按所在块的类报告（JVM 报声明类），待确认生成器是否有此形态后补。
 - 验收用例：PrintDebugStatement、ReflectionGetSource、TestCustomException（printStackTrace 形态）。
 - 量级：classfile / ir+sim / emit / 运行时 / profile 五步，main 已同意先行实施。
