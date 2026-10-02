@@ -147,3 +147,20 @@
   调用链上方法体的路径形 ldc 字符串按 `Class.resolveName` 规则（`/` 开头为绝对名，否则相对所在类的包；另按原样试
   `ClassLoader.getResource` 形态）解析，类路径上存在的非类文件即嵌入（`input/src/resources.rs`）。资源随读取代码进出
   闭包：不调 `Character.getName` 的程序不再嵌入它，currency.data 同理只在 Currency 数据读取在链上时嵌入。
+
+### 10.3 SequenceGenerator —— 再赋值的接口声明局部取接口载体
+
+- 现象（r2 抽查）：运行期 `ClassCastException: java/util/ArrayList$SubList cannot be cast to java/util/ArrayList`。
+- 根因：`List<Integer> s = new ArrayList<>(); … s = s.subList(..)`。存储管线把接口声明的局部收窄为首值具体类
+  `ArrayList<Object>`；后续存入 subList 结果命中同变量漂移，经 Object 边界按 `ArrayList` 重建 → 运行期 CCE。
+- 终态：方法体在 LVT 声明区间内另有引用存储（`SlotDecl.reassigned`，由字节码 astore 扫描得出）且声明类型为接口时，
+  首值经 `From` 上转到接口擦除载体（`List<Object>`），声明不收窄；只赋值一次的局部维持具体类收窄（可读性不变）。
+- 验收：SequenceGenerator；广谱回归建议 gen_trees / compare_trees（声明类型形态会变）。
+
+### 10.4 RecordPatternTest —— 同一擦除类的 instanceof 被静态折叠为 false
+
+- 现象：`genericInferenceTest` 的嵌套记录模式整段消失，少输出一行与一个空行。
+- 根因：静态 instanceof 判定只认「类型文本相等」或「严格子类型」；`Decorator<Decorator<ColoredPoint>> instanceof Decorator`
+  两者擦除基相同但文本不同（目标为 `Decorator<Object>`），落入「互不为子类型」分支被折叠为 false，整个 if 被删。
+- 修复：同一擦除类（非数组）与同型同判。
+- 验收：RecordPatternTest。
