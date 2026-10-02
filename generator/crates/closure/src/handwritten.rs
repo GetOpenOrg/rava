@@ -483,7 +483,7 @@ pub fn resolve_type(host: &str, t: &TypeRef) -> Vec<String> {
     let mut full = base;
     for m in &rest[..rest.len().saturating_sub(1)] {
         let m = m.strip_prefix("r#").unwrap_or(m);
-        if m != "implref" && m != "self" {
+        if m != "self" {
             full.push(m.to_string());
         }
     }

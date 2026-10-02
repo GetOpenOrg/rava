@@ -2,7 +2,7 @@
 //! provider 集合见 `providers_impl.rs` 模块说明。
 
 use crate::prelude::*;
-use super::provider_list::implref::ProviderList;
+use super::provider_list::ProviderList;
 use crate::java::security::Provider;
 use crate::java::util::ArrayList;
 use crate::java::util::List;

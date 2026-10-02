@@ -2,7 +2,7 @@
 //!
 //! 组装顺序：文件头 + 导入块插入位（第二阶段后由文件作用域记录填充）→ `java_class! { 类块头 /
 //! struct / impl { static 字段 · 方法块 · 继承成员插入位 } / 接口实现插入位 }` → 协变 upcast
-//! 插入位 → implref 稳定别名 → 接口 lambda 擦除 impl。
+//! 插入位 → 接口 lambda 擦除 impl。
 //! 方法块在步骤 (c)、vtable / 继承段在步骤 (d) 接入 [`gen_class_rs`] 的方法块表。
 
 pub mod attrs;
@@ -292,11 +292,6 @@ pub fn class_text(
     parts.extend(block.iter().map(|l| if l.is_empty() { String::new() } else { indent(l, "    ") }));
     parts.push("}".into());
     parts.push(INTERFACE_UPCASTS_SLOT.into());
-    parts.push(String::new());
-
-    let java_simple = ci.name().rsplit('/').next().unwrap_or(ci.name()).replace('$', "_");
-    parts.push("#[doc(hidden)]".into());
-    parts.push(format!("pub mod implref {{ pub use super::{sname} as {java_simple}; }}"));
     parts.push(String::new());
 
     if !iface_lambda_blocks.is_empty() {

@@ -71,7 +71,7 @@ impl DefaultFileSystemProvider {
     /// 以 theFileSystem 字段访问器直取（macOS/Linux provider 未声明包装方法，
     /// 字段为 UnixFileSystemProvider 的继承平铺成员，子类 wrapper 可直访）。
     #[jvm_boundary(upcalls = "sun/nio/fs/DefaultFileSystemProvider.instance:()Lsun/nio/fs/LinuxFileSystemProvider;")]
-    pub fn theFileSystem() -> Result<crate::java::nio::file::file_system::implref::FileSystem> {
+    pub fn theFileSystem() -> Result<crate::java::nio::file::file_system::FileSystem> {
         let provider = Self::instance()?;
         let fs = provider.__get_theFileSystem();
         Ok(Clone::clone(&fs).into())

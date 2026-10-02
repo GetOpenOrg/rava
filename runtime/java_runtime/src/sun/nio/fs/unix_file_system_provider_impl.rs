@@ -7,7 +7,7 @@
 
 use crate::prelude::*;
 use super::unix_file_system_provider::UnixFileSystemProvider;
-use super::unix_file_system::implref::UnixFileSystem;
+use super::unix_file_system::UnixFileSystem;
 use super::unix_channel_factory::UnixChannelFactory;
 use super::unix_exception::UnixException;
 use super::unix_file_attributes::UnixFileAttributes;
@@ -123,7 +123,7 @@ impl UnixFileSystemProvider {
     pub fn __impl_getFileSystem(
         &self,
         uri: URI,
-    ) -> Result<crate::java::nio::file::file_system::implref::FileSystem> {
+    ) -> Result<crate::java::nio::file::file_system::FileSystem> {
         self.checkUri(uri)?;
         Ok(Clone::clone(&self.__get_theFileSystem()).into())
     }

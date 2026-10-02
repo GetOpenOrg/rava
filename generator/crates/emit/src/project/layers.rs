@@ -4,7 +4,7 @@
 //! - 声明层：原文件原位（`java_runtime/src/…`），块首加 `#[rava_layer = "decl"]`；
 //! - 实现层：同一块文本加 `#[rava_layer = "body"]`，连同原文件头（allow 属性与 use 列表）
 //!   写进实现 crate `java_body_k/src/body/<同相对路径>`，另加一行 glob 导入声明层的本类模块。
-//!   块后的 `iface_upcasts!`、`implref`、反射字段闭包等属声明层，不进实现层。
+//!   块后的 `iface_upcasts!`、反射字段闭包等属声明层，不进实现层。
 //!
 //! 实现 crate 划分：类按 binary name 排序，按块文本字节贪心装箱（单箱上限
 //! [`BODY_CRATE_BYTES`]），划分只依赖闭包本身，同一闭包恒得同一划分（编译缓存可复用）。

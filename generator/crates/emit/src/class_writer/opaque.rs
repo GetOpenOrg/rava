@@ -40,7 +40,7 @@ pub fn opaque_supers(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     out
 }
 
-/// 不透明类文件文本：文件头 + 导入块插入位 + `java_class_opaque!` + implref 稳定别名
+/// 不透明类文件文本：文件头 + 导入块插入位 + `java_class_opaque!`
 pub fn opaque_text(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
@@ -68,10 +68,6 @@ pub fn opaque_text(
     parts.extend(super::head::opaque_metadata_lines(ctx, ci).into_iter().map(|l| format!("    {l}")));
     parts.push(format!("    pub struct {sname}{generics}{bound};"));
     parts.push("}".into());
-    parts.push(String::new());
-    let java_simple = ci.name().rsplit('/').next().unwrap_or(ci.name()).replace('$', "_");
-    parts.push("#[doc(hidden)]".into());
-    parts.push(format!("pub mod implref {{ pub use super::{sname} as {java_simple}; }}"));
     parts.push(String::new());
     ClassText { text: parts.join("\n"), methods: Vec::new() }
 }

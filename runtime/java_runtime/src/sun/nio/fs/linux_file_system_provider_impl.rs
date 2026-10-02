@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 use super::linux_file_system_provider::LinuxFileSystemProvider;
-use super::unix_file_system::implref::UnixFileSystem;
+use super::unix_file_system::UnixFileSystem;
 use crate::java::lang::String;
 use crate::jdk::internal::util::StaticProperty;
 
