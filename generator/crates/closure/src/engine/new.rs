@@ -66,6 +66,7 @@ impl<'a> Engine<'a> {
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
             containers: HashMap::default(),
+            dflt_alloc: HashSet::default(),
             factories: HashMap::default(),
             forwarders: HashMap::default(),
             inited: IndexMap::default(),

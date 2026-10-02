@@ -20,6 +20,7 @@ use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
 pub mod cfg;
+pub mod ints;
 mod lit;
 mod obj;
 #[cfg(test)]
@@ -59,6 +60,8 @@ pub enum V {
     /// long / double 的第二槽
     Hi,
     Int(i32),
+    /// int 族常量的小集合（≥ 2 个，见 [`ints`]）
+    Ints(Rc<[i32]>),
     /// 奇偶已知的 int（true = 奇）：数组下标奇偶敏感（键值交错数组等）
     Par(bool),
     /// 值未知、但恒等于入口处 int 族形参 i 的值（只经复制保持；参与运算 / 合流即为 Top）：判定形参是否选择分支
@@ -142,6 +145,7 @@ impl V {
     pub fn parity(&self) -> Option<bool> {
         match self {
             V::Int(x) => Some(x & 1 != 0),
+            V::Ints(s) => s.iter().all(|x| x & 1 == s[0] & 1).then(|| s[0] & 1 != 0),
             V::Par(p) => Some(*p),
             _ => None,
         }
@@ -237,6 +241,11 @@ pub trait Oracle {
     }
     /// 类型是否可能有实例（有已实例化的子类型）：catch 类型能否被抛出、instanceof 能否为真
     fn type_live(&self, ty: &str) -> bool;
+    /// 字段是否为字节码可见的 static final 字段：putstatic 只能在声明类的 `<clinit>` 中成功执行，
+    /// 同一帧内写入之后的 getstatic 必然读到写入值（中途的调用不可能再写它）
+    fn final_static(&self, _f: &MemberRef) -> bool {
+        false
+    }
     /// 形参 i（Class 类型）能否是类 cls 的类镜像：Some(false) = 值集已知且不含（乐观答复，值集增长时由引擎重分析，
     /// 见 [`Analysis::mirror_assumed`]）；None = 未知
     fn param_mirror(&self, _i: u16, _cls: &str) -> Option<bool> {
@@ -318,6 +327,8 @@ impl Analysis {
 struct State {
     locals: Vec<V>,
     stack: Vec<V>,
+    /// 本帧在全部路径上都已写入的 static final 字段及其值（见 [`Oracle::final_static`]）
+    finals: Vec<(MemberRef, V)>,
 }
 
 impl State {
@@ -326,6 +337,19 @@ impl State {
             return Err(());
         }
         let mut changed = false;
+        let before = self.finals.len();
+        self.finals.retain_mut(|(f, a)| match o.finals.iter().find(|(g, _)| g == f) {
+            Some((_, b)) => {
+                let j = a.join(b);
+                if j != *a {
+                    *a = j;
+                    changed = true;
+                }
+                true
+            }
+            None => false,
+        });
+        changed |= self.finals.len() != before;
         for (a, b) in self.locals.iter_mut().chain(self.stack.iter_mut()).zip(o.locals.iter().chain(o.stack.iter())) {
             let j = a.join(b);
             if j != *a {
@@ -650,7 +674,10 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let a = pop(s)?;
                 s.stack.push(match (a, b) {
                     (V::Int(a), V::Int(b)) => int_bin(opc, a, b).map_or(V::Top, V::Int),
-                    (a, b) => int_bin_parity(opc, &a, &b).map_or(V::Top, V::Par),
+                    (a, b) => match ints::map2(&a, &b, |x, y| int_bin(opc, x, y)) {
+                        Some(v) => v,
+                        None => int_bin_parity(opc, &a, &b).map_or(V::Top, V::Par),
+                    },
                 });
             }
             // long 二元（含移位：long, int）
@@ -747,7 +774,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let a = pop(s)?;
                 self.select(&a);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
-                let k = if let V::Int(a) = a { Some(cond(opc, a, 0)) } else { None };
+                let k = ints::decide(&a, &V::Int(0), |x, y| cond(opc, x, y));
                 return Ok(Flow::Cond(t, k));
             }
             0x9f..=0xa4 => {
@@ -756,10 +783,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 self.select(&a);
                 self.select(&b);
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
-                let k = match (a, b) {
-                    (V::Int(a), V::Int(b)) => Some(cond(opc, a, b)),
-                    _ => None,
-                };
+                let k = ints::decide(&a, &b, |x, y| cond(opc, x, y));
                 return Ok(Flow::Cond(t, k));
             }
             0xa5 | 0xa6 => {
@@ -788,9 +812,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 all.push(default);
                 all.sort();
                 all.dedup();
-                if let V::Int(k) = key {
-                    let t = cases.iter().find(|c| c.0 == k).map_or(default, |c| c.1);
-                    return Ok(Flow::Switch(vec![t]));
+                if let Some(ks) = ints::members(&key) {
+                    let mut ts: Vec<u32> = ks.iter().map(|k| cases.iter().find(|c| c.0 == *k).map_or(default, |c| c.1)).collect();
+                    ts.sort();
+                    ts.dedup();
+                    return Ok(Flow::Switch(ts));
                 }
                 return Ok(Flow::Switch(all));
             }
@@ -821,14 +847,20 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let mut recv = None;
                 match opc {
                     op::GETSTATIC => {
-                        let v = self.folded(opc, off, self.oracle.field(opc, f, None)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let own = s.finals.iter().find(|(g, _)| g == f).map(|(_, v)| v.clone());
+                        let v = own.or_else(|| self.folded(opc, off, self.oracle.field(opc, f, None))).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     op::PUTSTATIC => {
                         if ft.slots() == 2 {
                             pop(s)?;
                         }
-                        value = Some(pop(s)?);
+                        let v = pop(s)?;
+                        if self.oracle.final_static(f) {
+                            s.finals.retain(|(g, _)| g != f);
+                            s.finals.push((f.clone(), v.clone()));
+                        }
+                        value = Some(v);
                     }
                     op::GETFIELD => {
                         recv = Some(pop(s)?);
@@ -970,7 +1002,7 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
         return None;
     }
     locals.resize(max_locals as usize, V::Top);
-    Some(State { locals, stack: Vec::new() })
+    Some(State { locals, stack: Vec::new(), finals: Vec::new() })
 }
 
 fn conservative(code: &Code) -> Analysis {
@@ -1156,6 +1188,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
             let st = State {
                 locals: hl.clone(),
                 stack: vec![V::Ref { ty: Some(ty), nonnull: true, src: src1(Src::Catch(h.handler)), obj: None }],
+                finals: Vec::new(),
             };
             merge(&mut entry, &mut work, at(h.handler)?, &st)?;
         }

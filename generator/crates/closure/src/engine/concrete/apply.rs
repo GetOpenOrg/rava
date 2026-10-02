@@ -135,7 +135,7 @@ impl<'a> Engine<'a> {
         } else if x.arr {
             TypeSet::exact(self.array_site(m, off, &x.ty, false, via.clone()))
         } else {
-            self.instantiate(&x.ty, via.clone());
+            self.instantiate_type(&x.ty, via.clone());
             TypeSet::exact(self.id(&x.ty))
         };
         ids[i] = Some(s);
@@ -211,7 +211,7 @@ impl<'a> Engine<'a> {
             let via = Via::method("concrete", m, Some(off));
             match (&x.operand, x.opcode) {
                 (Operand::Class(c), op::NEW) => {
-                    self.instantiate(c, via.clone());
+                    self.instantiate_type(c, via.clone());
                     self.init(c, via);
                 }
                 (Operand::Class(c), op::ANEWARRAY) => self.touch_desc(&interp::array_of(c), &via),

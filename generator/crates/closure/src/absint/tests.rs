@@ -98,3 +98,67 @@ fn class_literal_eq_folds_by_param_mirrors() {
     let a = analyze("p/A", "(Lp/C;)V", true, &class_eq_code(), &Mirrors(None));
     assert_eq!(a.reachable, vec![true; 6]);
 }
+
+/// 桩 Oracle：形参 0 取整数集 {0, 256}；`p/A.F:I` 为 static final 字段
+struct Sets;
+
+impl Oracle for Sets {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        None
+    }
+    fn type_live(&self, _: &str) -> bool {
+        false
+    }
+    fn param(&self, i: u16) -> Option<V> {
+        (i == 0).then(|| V::Ints(Rc::from([0, 256].as_slice())))
+    }
+    fn final_static(&self, f: &MemberRef) -> bool {
+        f.owner == "p/A" && f.name == "F"
+    }
+}
+
+fn code_of(insns: Vec<(u32, u8, Operand)>, len: u32) -> Code {
+    let insns = insns.into_iter().map(|(offset, opcode, operand)| Insn { offset, opcode, operand }).collect();
+    Code { max_stack: 2, max_locals: 1, code_len: len, insns, exception_table: vec![] }
+}
+
+/// `(flags & 2) == 2`，flags ∈ {0, 256}：逐值运算后恒不等，相等分支不可达（Formatter$Flags.contains 形态）
+#[test]
+fn int_set_arithmetic_decides_branch() {
+    let code = code_of(
+        vec![
+            (0, 0x1a, Operand::None),         // iload_0
+            (1, 0x05, Operand::None),         // iconst_2
+            (2, 0x7e, Operand::None),         // iand
+            (3, 0x05, Operand::None),         // iconst_2
+            (4, 0xa0, Operand::Branch(8)),    // if_icmpne
+            (7, op::RETURN, Operand::None),
+            (8, op::RETURN, Operand::None),
+        ],
+        9,
+    );
+    let a = analyze("p/A", "(I)V", true, &code, &Sets);
+    assert_eq!(a.reachable, vec![true, true, true, true, true, false, true]);
+}
+
+/// 同一帧内写入 static final 字段之后的读取取写入值（`<clinit>` 里后续字段由前一字段派生的形态）
+#[test]
+fn final_static_read_after_put() {
+    let f = MemberRef { owner: "p/A".into(), name: "F".into(), desc: "I".into() };
+    let code = code_of(
+        vec![
+            (0, 0x06, Operand::None), // iconst_3
+            (1, op::PUTSTATIC, Operand::Field(f.clone())),
+            (4, op::GETSTATIC, Operand::Field(f)),
+            (7, 0x9a, Operand::Branch(11)), // ifne
+            (10, op::RETURN, Operand::None),
+            (11, op::RETURN, Operand::None),
+        ],
+        12,
+    );
+    let a = analyze("p/A", "()V", true, &code, &Sets);
+    assert_eq!(a.reachable, vec![true, true, true, true, false, true]);
+}

@@ -392,7 +392,15 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 抽象分配：类型入流图，实例字段缺省值并入字段值集
     pub(super) fn instantiate(&mut self, cls: &str, via: Via) {
+        self.instantiate_type(cls, via);
+        self.alloc_defaults(cls);
+    }
+
+    /// 类型入流图，不涉及字段初值：具体求值的对象（物化快照逐字段给出全部值，含缺省值；
+    /// 轨迹内分配的对象只经物化或其类的抽象初始化可见）
+    pub(super) fn instantiate_type(&mut self, cls: &str, via: Via) {
         if cut::edges_on() {
             let from = self.via_node(&via);
             cut::edge_plain(&from, &format!("A:{cls}"));

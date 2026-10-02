@@ -4,7 +4,7 @@ use super::*;
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
-/// 常量格上的值：缺席（⊥，尚无值）→ 单一常量 → Top
+/// 常量格上的值：缺席（⊥，尚无值）→ 常量（int 族可为小集合，见 `absint::ints`）→ Top
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PV {
     Const(V),
@@ -16,7 +16,7 @@ impl PV {
     /// 标签引用只在分析内部传递，不作为折叠常量导出）
     pub(super) fn of(v: &V) -> PV {
         match v {
-            V::Int(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
+            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
             V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
@@ -25,6 +25,10 @@ impl PV {
         match (a, b) {
             (None, x) => x.clone(),
             (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
+            // int 族常量：取有限并
+            (Some(PV::Const(x)), PV::Const(y)) if crate::absint::ints::members(x).is_some() && crate::absint::ints::members(y).is_some() => {
+                crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
+            }
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
             (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
                 j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
@@ -403,6 +407,11 @@ impl Oracle for Facts<'_, '_> {
         let r = self.ctx.rvals.borrow().get(t).cloned();
         self.ctx.dep(me, Dep::Ret(t.clone()));
         match r {
+            // 小集合：先按本调用点的常量实参求值，求不出时取集合
+            Some(PV::Const(v @ V::Ints(_))) => match eval() {
+                Ret::Unknown => Ret::Value(v),
+                x => x,
+            },
             Some(PV::Const(v)) => Ret::Value(v),
             Some(PV::Top) => eval(),
             None if self.ctx.noreturn.borrow().answer_never(t) => {
@@ -411,6 +420,9 @@ impl Oracle for Facts<'_, '_> {
             }
             None => eval(),
         }
+    }
+    fn final_static(&self, f: &MemberRef) -> bool {
+        self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 && !self.ctx.field_open(&fi))
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {

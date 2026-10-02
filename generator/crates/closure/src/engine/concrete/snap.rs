@@ -86,7 +86,7 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
                 Ok(MV::Obj(i))
             }
             Body::Inst(fs) => {
-                let i = self.push(o, ty, false);
+                let i = self.push(o, ty.clone(), false);
                 let fs = fs.clone();
                 let mut out = Vec::with_capacity(fs.len());
                 for (k, v) in fs {
@@ -95,6 +95,17 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
                     let Some(desc) = desc else { return fail(format!("字段缺失 {decl}.{name}")) };
                     let mv = self.value(v)?;
                     out.push((MemberRef { owner: decl.to_string(), name: name.to_string(), desc }, mv));
+                }
+                // 未写的实例字段取缺省值：物化对象逐字段给出全部值（类型不经抽象分配，缺省值不另行并入）
+                let mut cur = self.env.h().class(&ty);
+                while let Some(cf) = cur {
+                    for f in cf.fields.iter().filter(|f| !f.is_static()) {
+                        if !out.iter().any(|(k, _)| k.owner == cf.name && k.name == f.name) {
+                            let mv = self.value(CV::zero(&f.desc))?;
+                            out.push((MemberRef { owner: cf.name.clone(), name: f.name.clone(), desc: f.desc.clone() }, mv));
+                        }
+                    }
+                    cur = cf.super_name.as_deref().and_then(|s| self.env.h().class(s));
                 }
                 self.objs[i].fields = out;
                 Ok(MV::Obj(i))

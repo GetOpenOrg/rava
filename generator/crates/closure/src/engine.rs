@@ -239,6 +239,8 @@ pub struct Engine<'a> {
     obj_chain: HashMap<u32, Rc<str>>,
     /// 容器形态判定缓存（类型 id）
     containers: HashMap<u32, bool>,
+    /// 抽象分配过的类（类型 id）：其实例字段的缺省值可被观察到，已并入字段值集（见 `alloc_defaults`）
+    dflt_alloc: HashSet<u32>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
     /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
