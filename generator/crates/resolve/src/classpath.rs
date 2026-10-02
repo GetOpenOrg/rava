@@ -49,6 +49,8 @@ pub struct ClassPath {
     java_home: Option<PathBuf>,
     /// 档案下标 → 模块名（`module_of` 惰性填充）
     module_names: std::sync::OnceLock<Vec<Option<String>>>,
+    /// 覆盖档案（镜像改写类目录）的档案下标 → 所属模块名：目录本身无 module-info
+    overlay_modules: HashMap<usize, String>,
 }
 
 impl ClassPath {
@@ -61,6 +63,7 @@ impl ClassPath {
             failures: Mutex::new(Vec::new()),
             java_home: None,
             module_names: std::sync::OnceLock::new(),
+            overlay_modules: HashMap::new(),
         }
     }
 
@@ -96,7 +99,25 @@ impl ClassPath {
         for j in ordered {
             self.add(Origin::Jdk, &dir.join(j))?;
         }
+        // 镜像改写类（jlink 插件改写、与 jmod 字节不同者）：JVM 执行镜像里的版本，覆盖 jmod 中的同名类
+        for (module, d) in crate::image::rewritten_dirs(java_home) {
+            self.add_overlay(Origin::Jdk, &d, module)?;
+        }
         self.java_home = Some(java_home.to_path_buf());
+        Ok(())
+    }
+
+    /// 追加覆盖档案：其中的类取代已加入档案中的同名类；`module_of` 报告给定模块名
+    fn add_overlay(&mut self, origin: Origin, path: &Path, module: String) -> Result<(), classfile::Error> {
+        let a = Archive::open(path)?;
+        let idx = self.origins.len();
+        for n in a.class_names() {
+            self.index.insert(n, idx);
+        }
+        self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
+        self.origins.push(origin);
+        self.overlay_modules.insert(idx, module);
+        self.module_names = std::sync::OnceLock::new();
         Ok(())
     }
 
@@ -201,6 +222,9 @@ impl ClassPath {
     /// 各档案的 module-info 只解析一次
     pub fn module_of(&self, name: &str) -> Option<String> {
         let &i = self.index.get(name)?;
+        if let Some(m) = self.overlay_modules.get(&i) {
+            return Some(m.clone());
+        }
         let names = self.module_names.get_or_init(|| {
             let mut archives = lock(&self.archives);
             archives
