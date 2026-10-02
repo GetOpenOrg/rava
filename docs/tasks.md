@@ -97,13 +97,17 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 1e623cec 在 c1d-p0（已并入集成分支内容 fb9385b3，尚未合入集成分支）；抽查 c1da-b124e5ac 5/6：
-│   │     │       TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
-│   │     │       FileDispatcherImpl.init0 ✅；余 TestUnixFileNatives 缺 Linux native LinuxNativeDispatcher.init；
-│   │     │       后续项：precheck 按目标平台扫描 native 缺口（本机 macOS 看不到 Linux 专有 native）
-│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（c1d-p0 口径 86：Unsafe 44、VM 9、java/* 30、ClassLoaders 3）◀── a2
-│   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
-│   │     └─ ⏳ a5 OOB 关系型边界推理（偏移 / 长度关系、类不变式），HelloWorld 目标 ≤371；fullAddCount 仅记录（线程逃逸）
+│   │     ├─ 🔄 a2 1e623cec 在 c1d-p0；c1d-p0 5c6dd98f（已合 28090062）待抽查：LinuxNativeDispatcher 6 个 native（88c03270）、
+│   │     │       FS-C2 后闭包膨胀修复（字符串 switch 折叠，HelloWorld 2855 → 498 类，357f8549）、initLevel 引导段档位（0c4e47c6，
+│   │     │       修 saveProperties「Wrong init level」）；TestCharsetNamedStreams ✅、TestServiceLoaderLayers ✅（本机）
+│   │     ├─ ⏳ 后续项 precheck 按目标平台扫描：本机只扫宿主 JDK 的 jmod，看不到 Linux 专有 native。已做：precheck 清单落盘
+│   │     │       build_status.json emit.precheck、run_tests 失败详情附清单（8ed3a5e3）。待做：按目标平台 jmod 扫描
+│   │     │       （Linux jmod 拼的 hybrid JDK 跑 TestUnixFileNatives 闭包 >40 min 未完成，需先查语料膨胀）
+│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
+│   │     │       ClassLoader 6、BootLoader 5、Class 2、Module/ModuleLayer 9 归 boot layer）；拆为 U0–U3 / V / T / L1 / L2 / C / X1 / X2 / Z，
+│   │     │       见计划 §21 ◀── a2
+│   │     ├─ 🔄 a4 TestCharsetNamedStreams（自 c4-regfix 移交）：b124e5ac 已修，待服务器抽查
+│   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）

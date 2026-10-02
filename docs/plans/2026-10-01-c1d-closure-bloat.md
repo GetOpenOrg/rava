@@ -1100,3 +1100,107 @@ CAS 竞争分支（约 8）构成。
 - 冲突解法：vm_boundary 类的 `<clinit>` 缺省按字节码翻译，手写承载的改为在 `clinit_carried` 中正向登记，取代原来的 `translate_clinit`；`ClassLoader$ParallelLoaders` 加入 `translate_nested`。
 - 1e623cec 早已在 c1d-p0 的祖先中，a2 无需另行合入。
 - FS-C2（ClassLoaders 整类按字节码翻译）与本分支冲突时，后合入的一方按「整类翻译、不进 vm_boundary」解冲突。
+
+## 21. a3–a5 拆分（2026-10-02，c1d-p0 5c6dd98f）
+
+供多个子代理并行接手。每项可独立验收，验收以 HelloWorld `--stop-after emit` 的 `[raw-audit] vm_boundary_methods`
+与 `[vm-boundary-audit]` 明细为准（下文「降幅」均指该计数），外加所列 e2e（服务器跑，expected 取 JDK 21）。
+
+### 21.0 现状底数（合入 28090062 后实测）
+
+HelloWorld `vm_boundary_methods = 86`，构成与 §20.7 表不同（FS-C2 合入后的变化）：
+
+| 类 | 数 | 归属 |
+|---|---:|---|
+| `jdk/internal/misc/Unsafe` | 44 | a3-U1 / U2 / U3 |
+| `jdk/internal/misc/VM` | 10 | a3-V（FS-C2 新增 `initLevel`） |
+| `java/lang/VirtualThread` | 10 | a3-T |
+| `java/lang/ClassLoader` | 6 | a3-L2（只剩 6 个资源查找方法） |
+| `jdk/internal/loader/BootLoader` | 5 | a3-L1 |
+| `java/lang/Class` | 2 | `enumConstantDirectory` → a3-C；`getModule` → boot layer |
+| `java/lang/Module` + `ModuleLayer` | 9 | boot layer（`2026-10-02-boot-layer.md` §2.3），不在本拆分内 |
+
+- **ClassLoaders 3 个已经清零**：FS-C2（4a98f5e3）把 ClassLoaders 整类改为字节码翻译，`class_loaders_impl.rs` 已删。
+  FS-C2 §4.2 交给 C1d-a 的两条（`ServicesCatalog.getServicesCatalogOrNull` 过渡手写、JLA 手写里的
+  `createOrGetClassLoaderValueMap`）在 c1d-p0 中已随 1e623cec 删除（`runtime/` 中不存在），不需要另立子任务。
+  boot layer 计划 §1 表里的 `services_catalog_impl.rs` 也已不存在，接手时以代码为准。
+- **本拆分的范围是 86 − 9（Module / ModuleLayer）− 1（`Class.getModule`）= 76**，加上 HelloWorld 链外的 37 处
+  `#[jvm_boundary]`（§21.3），终态是 `vm_boundary_methods = 0`、`runtime/` 中 `#[jvm_boundary]` 为 0、宏删除。
+- `runtime/` 中 `#[jvm_boundary]` 共 135 处：`unsafe__impl.rs` 75、`virtual_thread_impl.rs` 10、`vm_impl.rs` 8、
+  `module_impl.rs` 7、`jce_security_impl.rs` 6、`invoker_bytecode_generator_impl.rs` 6、`class_loader_impl.rs` 6、
+  `boot_loader_impl.rs` 5、`module_layer_impl.rs` 2、`class_impl.rs` 2，其余 8 个文件各 1。
+  `unsafe__impl.rs` 的 75 处里约 31 个方法在 JDK 21 中本身就是 `ACC_NATIVE`（`getReference` / `compareAndSetInt` /
+  `park` / `allocateInstance` …），只是属性标错，不计入审计。
+
+### 21.1 子任务表
+
+「做法」三选一：**译**（删手写、按字节码翻译）、**① native**（`#[jvm_native]`，实现与 JNI 语义等价）、
+**③ 登记**（VM 注入状态 / VM 驱动行为，在清单登记类别，手写体落到状态访问点而不是 Java 方法）。
+
+| 编号 | 方法（HelloWorld 审计） | 文件 | 做法 | 依赖 / 冲突 | 降幅 |
+|---|---|---|---|---|---:|
+| **a3-U0** | `unsafe__impl.rs` 中 JDK 为 `ACC_NATIVE` 的约 31 个方法 | `unsafe__impl.rs` | 属性改为 `#[jvm_native]`；不改方法体 | 无依赖；**结构性改动，最先单独合入**，U1–U3 在其后开工 | 0（只改标注） |
+| **a3-U1** | 裸地址内存 15：`allocateMemory` / `reallocateMemory` / `freeMemory` / `setMemory`×2 / `copyMemory`×2 / `copySwapMemory`×2 / `getByte(J)` / `putByte(JB)` / `getInt(J)` / `putInt(JI)` / `getLong(J)` / `putLong(JJ)` | `unsafe__impl.rs` 内存段 | 译；① 落在内层 `allocateMemory0` / `reallocateMemory0` / `freeMemory0` / `setMemory0` / `copyMemory0` / `copySwapMemory0` 与 `getByte(Object,long)` 等 native | ◀ U0。与 U2 / U3 同文件不同段，文本冲突在合并时就地解决 | −15 |
+| **a3-U2** | 原子与内存序 20：`getAndAdd{Int,Long}` / `getAndBitwise{And,Or}Int` / `getAndBitwiseOrLong` / `getAndSet{Int,Reference}` / `get{Int,Reference}{Acquire,Opaque}` / `put{Int,Reference}{Opaque,Release}` / `weakCompareAndSet{Int,Reference}` / `loadFence` / `storeFence` / `storeStoreFence` | `unsafe__impl.rs` 原子段；`vm_intrinsics.toml` 的 `array_writes` / `memory_reads`；`closure/src/engine/hw_mem.rs`、`concrete/`（`cas_reference`） | 译；① 落在 `compareAndSet*` / `getReferenceVolatile` / `putReferenceVolatile` / 屏障 native。清单中按 Java 层成员登记的内存效果改指内层 native，分析器经字节码走到内层 | ◀ U0。与 U3 同改 `vm_intrinsics.toml`（不同节） | −20 |
+| **a3-U3** | 布局 / 反射 / 类初始化 9：`getUnsafe` / `objectFieldOffset`×2 / `staticFieldOffset` / `staticFieldBase` / `arrayIndexScale` / `ensureClassInitialized` / `shouldBeInitialized` / `allocateUninitializedArray`；另 `Unsafe` 移出 `clinit_carried` 与 `[vm_boundary].classes` | `unsafe__impl.rs` 布局段；`closure.toml`；`vm_intrinsics.toml` 的 `name_resolvers.offset`、`class_initializers`、`[vm_constants.injected_statics]`；`closure/src/engine/hw_offset.rs` | 译；① 落在 `objectFieldOffset1` / `staticFieldOffset0` / `staticFieldBase0` / `arrayIndexScale0` / `ensureClassInitialized0` / `shouldBeInitialized0`；`<clinit>` 的布局常量已由 §14.4 注入，`<clinit>` 改为按字节码翻译。符号偏移折叠（73de95c4）的识别点改到 `objectFieldOffset1` | ◀ U0；U1 / U2 合入后才能移出 `[vm_boundary]`（该步放 U3 最后一个提交） | −9 |
+| **a3-V** | VM 10：`initLevel` / `isBooted` / `isModuleSystemInited` / `isJavaLangInvokeInited` / `setJavaLangInvokeInited` / `shutdown` / `isShutdown` / `getSavedProperty` / `isSystemDomainLoader` / `latestUserDefinedLoader` | `vm_impl.rs`；`system_impl.rs`；`class_loader_impl.rs`（`__vm_init_phase3`）；`vm_intrinsics.toml` 的 `[facts.returns]`、`[vm_constants]`（`getSavedProperty` 恒 null 条目删除）、`[vm_state.field_hooks]` | 译全部 10 个。③ 落在字段：`VM.initLevel:I` 加读取钩子（阶段内报该阶段档位，其余时间为 4；写入经 `VM.initLevel(int)` 字节码，`SYSTEM_SHUTDOWN` 写入即停机标记），取代 0c4e47c6 的线程内档位覆盖与 `__vm_at_init_level`；`javaLangInvokeInited` 经 `injected_statics` 注入 true。`getSavedProperty` 改读 initPhase1 保存的快照（真值，不再恒 null）。`latestUserDefinedLoader` → ① `latestUserDefinedLoader0`（栈帧来源同 `getCallerClass`） | 与 boot layer 冲突：同改 `vm_impl.rs` / `system_impl.rs` / `class_loader_impl.rs` 与 `[boot_init]`。**排在 boot layer 第 1 步合入之后**，或与 boot layer 同一会话串行 | −10 |
+| **a3-T** | VirtualThread 10：`<init>` / `alive` / `isTerminated` / `joinNanos` / `park` / `parkNanos` / `run` / `start`×2 / `unpark`；另移出 `clinit_carried` | `virtual_thread_impl.rs`；`jdk/internal/vm/continuation_impl.rs`、`continuation_support_impl.rs`；`thread_impl.rs`；`closure.toml` | 译；③ 落在 `Continuation` 的 VM 驱动 native（`enterSpecial` / `doYield` / `pin` 等），每个 Continuation 由一条 OS 线程承载、mount / yield 以交接信号实现，调度器（`ForkJoinPool` 缺省调度器、`UNPARKER`）按字节码翻译 | **需用户确认**：现行「方案 A」（2026-09-24 用户拍板：虚拟线程直接映射平台线程，不建模 Continuation）与本做法冲突。确认前不开工。与 a3-V 无文件冲突 | −10 |
+| **a3-L1** | BootLoader 5：`getServicesCatalog` / `hasClassPath` / `loadClass(Module,String)` / `loadClassOrNull` / `loadLibrary`；另移出 `[vm_boundary].classes` | `boot_loader_impl.rs`（删除）；`closure.toml`；新 native：`NativeLibraries.findBuiltinLib` / `load` / `unload`、`BootLoader.getSystemPackageLocation`、`NativeImageBuffer.getNativeMap`、`ClassLoader.findBootstrapClass` | 译；① 落在上列 native：内建库按静态链接处理（`findBuiltinLib` 对内建库名返回库名，`load` 对内建库成功），引导类查找落到类宇宙表，jimage 资源按运行时镜像读取。`getServicesCatalog` 读 `SERVICES_CATALOG`，由 boot layer 的 `initServices` 填充 | `getServicesCatalog` ◀ boot layer 第 1 步（服务目录）；其余 4 个无依赖，可先做。与 a3-L2 冲突在 `ClassLoader` 对 `BootLoader` 的调用面 | −5 |
+| **a3-L2** | ClassLoader 6：`getResource` / `getResourceAsStream` / `getResources` / `getSystemResource` / `getSystemResourceAsStream` / `getSystemResources` | `class_loader_impl.rs`（只删这 6 个与对应 `__impl_*`；`__vm_init_phase3` 归 a3-V） | 译；路径为 `parent` → `BootLoader.findResource` → 内建加载器（FS-C2 已整类翻译）→ `URLClassPath`。无新增手写 | ◀ a3-L1。与 a3-V 同文件不同函数 | −6 |
+| **a3-C** | `Class.enumConstantDirectory` | `class_impl.rs` | 译（走 `getEnumConstantsShared` → 反射调用 `values()`，反射元数据表已有） | 与 boot layer 同文件（boot layer 删 `getModule` 两份手写）：不同函数，合并时就地解决 | −1 |
+
+### 21.2 各项验收用例（≤10）
+
+| 编号 | 用例 |
+|---|---|
+| a3-U0 | HelloWorld、TestAtomics、TestDirectBuffer（只验证「行为不变 + 审计数不变」） |
+| a3-U1 | TestDirectBuffer、TestByteArrayViewVarHandle、TestDefineClassRejects、TestUnixFileNatives、TestRandomAccessFile、HelloWorld；补边界用例：`ByteBuffer.allocateDirect` 的 `putLong` / `getLong` 跨页、`order(LITTLE_ENDIAN)` 交换拷贝 |
+| a3-U2 | TestAtomics、AtomicDemo、TestChmTransfer、TestParallelArrayCas、TestVolatilePrimitiveAccess、TestJucSync、TestCommonPool、TestCompletableFuture、HelloWorld（闭包类数不得上升） |
+| a3-U3 | HelloWorld（闭包类数与 `CHM.comparableClassFor` 具体求值组合数不得上升）、TestReflectProbe、TestConcurrentClinit、TestForNameInit、TestByteArrayViewVarHandle、DeepCopy、TestSerialDefaultSuid |
+| a3-V | HelloWorld、TestServiceLoaderLayers、TestShutdownHooks、TestSystemExitEnv、TestSystemPropsSpec、TestAppClassLoader、TestDirectBuffer（`maxDirectMemory` 经 `getSavedProperty` 取值）、TestMethodHandleDirect（`isJavaLangInvokeInited`）；补边界用例：`-XX:MaxDirectMemorySize` 缺省时 `VM.maxDirectMemory()` 等于 `Runtime.maxMemory()` 的可观察面 |
+| a3-T | TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock；补边界用例：虚拟线程 park / unpark 交错、`join(Duration)` 超时、`Thread.currentThread().isVirtual()` |
+| a3-L1 | TestAppClassLoader、TestServiceLoaderLayers、TestClassForName、TestCharsetNamedStreams、TestNetworkInterface（`loadLibrary("net")`）、TestSecureRandomApi |
+| a3-L2 | TestAppClassLoader、TestServiceLoaderLayers、TestParallelCapable、TestCharsetForName；补边界用例：`getSystemResource` 查不到返回 null、`getResources` 父子加载器都命中时的枚举次序（expected 取 JDK 21） |
+| a3-C | TestEnumBasic、TestEnumAdvanced、TestEnumSetMap、SwitchExpressions、TestIntegerCacheSpec |
+
+### 21.3 HelloWorld 链外的 `#[jvm_boundary]`（不计入 86，终态同样归零）
+
+| 编号 | 方法 | 文件 | 做法 | 验收 |
+|---|---|---|---|---|
+| **a3-X1** | 运行期类定义点：`InvokerBytecodeGenerator` 6（`generateCustomizedCode` / `generateLambdaFormInterpreterEntryPoint` / `lookupPregenerated` / `isStaticallyInvocable`×3）、`MethodAccessorGenerator.generateSerializationConstructor`、`ClassSpecializer$Factory.generateConcreteSpeciesCode`、`Proxy$Dyn` 的 VM 钩子 | 各自 `_impl.rs`；`vm_intrinsics.toml` 的运行模型替换节 | ② 运行模型替换：在清单登记类别，属性去掉；`isStaticallyInvocable` / `lookupPregenerated` 不定义类，逐个判定能否译（能译则译） | TestMethodHandleCombinators、TestMethodHandleDirect、TestBmhDynamicSpecies、TestDynamicProxy、DeepCopy、TestSerialProxyForm |
+| **a3-X2** | `JceSecurity` 6（`canUseProvider` / `isRestricted` / `getVerificationResult` / `getDefaultPolicy` / `getExemptPolicy` / `verifyExemptJar`）、`FileSystems.getDefault`、`CDS.initializeFromArchive`、`EventHelper.isLoggingSecurity`、`SecurityPropertyModificationEvent.<init>`、`GetInstance$Instance.toArray` | 各自 `_impl.rs`；`closure.toml`（`JceSecurity` / `FileSystems` / `InetAddress` / `SecurityManager` 移出 `[vm_boundary].classes` 与 `clinit_carried`） | 逐方法判定：可译则译（JCE 策略文件按运行时镜像 `conf/security/policy` 读取，签名校验按 JDK 自带 provider 走字节码）；`CDS.initializeFromArchive` 为 native → `#[jvm_native]`（无归档，no-op） | DataEncryptionStandard、TestCipherAlgorithmParameters、TestCipherDesModes、TestMessageDigestApi、TestSecureRandomApi、SecurityDemo、TestUnixFileNatives |
+| **a3-Z** | 收尾：删 `rava_macros::jvm_boundary`、`emit` 审计的 `HwAudit::VmBoundary` 分类、`closure/src/handwritten/hooks.rs` 中的属性解析；`[vm_boundary]` 只保留 ③ 状态声明（`classes` 清单删除或改名为状态声明） | `runtime/rava_macros/src/lib.rs`、`generator/crates/emit/src/{audit.rs,class_writer/methods.rs,ctx.rs}`、`generator/crates/input/src/boundary.rs`、`closure.toml` | — | ◀ 全部 a3 子任务与 boot layer 第 3 步；验收：生成器单测、HelloWorld 审计行不再含 `vm_boundary_methods`、9 例抽查 |
+
+### 21.4 a4
+
+a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`ModuleLayer` 移出 `clinit_carried`，CLV 非 null），
+本机 5c6dd98f 上 emit + 编译 + 运行与 expected 一致。只需服务器抽查确认，不再拆分。
+
+### 21.5 a5：OOB 关系型边界推理（§20.8 后续项 1）
+
+三步串行，前一步的单元测试是后一步的前提。目标 HelloWorld 正式口径 ≤371 类。
+
+| 编号 | 内容 | 文件 | 依赖 / 冲突 | 验收 |
+|---|---|---|---|---|
+| **a5-1** | 方法内差分约束 / 八边形域：变量取局部变量、`arraylength`、移位与加减常数；接在 absint 条件边上；方法摘要携带「返回值与形参的关系」（`newBytesFor(n)` → `length == n << 1`），跨调用传递 | 新模块 `generator/crates/closure/src/absint/relational/`（每文件 ≤600 行）；`absint.rs` 条件边入口 | 与 C1d-b 的 P2 守卫收窄同一入口（`absint` 条件边），开工前先同步集成分支 | 单元测试：`newBytesFor` 摘要、`checkBoundsOffCount` 在 `inflate` 调用点约束下不可满足；整数溢出路径保持可达 |
+| **a5-2** | 类不变量：候选由检查点前置条件反推（如 `this.count ≤ this.value.length`），由全部写点（构造器与所有 `putfield count` / `putfield value`）在路径约束下归纳验证，任一写点不保持即不成立 | `absint/relational/invariants.rs`；`engine/write_audit.rs`（写点来源） | ◀ a5-1 | 单元测试：`AbstractStringBuilder` 的 `count` / `value` 不变量成立；人为构造一处破坏写点时不成立 |
+| **a5-3** | 检查点判定：`Preconditions.check*` / `checkBoundsOffCount` 出错分支在调用点约束下不可满足则不入轨迹；按调用点判定，不改被调方法的抽象摘要 | `engine/invoke.rs`、`engine/flow.rs` 的调用点接边 | ◀ a5-1、a5-2 | HelloWorld 正式口径 ≤371 类、≤3 s；TestStringBuilder、TestStringBuilderOps、StringBuilderCharTest 通过；补边界用例：下标来自输入的 `sb.charAt(i)` 越界时异常消息与 JDK 一致（出错分支仍可达）；9 例抽查 |
+
+`fullAddCount`（CAS 竞争分支，约 +8 类）属线程逃逸分析，只记录不实施（§20.8 后续项 2）。
+
+### 21.6 并行编排
+
+```
+a3-U0 ──▶ a3-U1 ─┐
+       ├▶ a3-U2 ─┼─▶ a3-U3（末提交移出 [vm_boundary]）─┐
+       └─────────┘                                     │
+a3-L1（getServicesCatalog 除外）──▶ a3-L2 ─────────────┤
+a3-C ──────────────────────────────────────────────────┤
+a3-X1、a3-X2 ──────────────────────────────────────────┤
+boot layer 第 1 步 ──▶ a3-V、a3-L1 余下的 getServicesCatalog ──┤
+用户确认方案 ──▶ a3-T ─────────────────────────────────┤
+boot layer 第 3 步 ────────────────────────────────────┴─▶ a3-Z
+a5-1 ──▶ a5-2 ──▶ a5-3（与 a3 无文件冲突，可同时进行）
+```
+
+同时开工上限按全机锁与内存预算定：第一批可并行 a3-U0（合入后 U1 / U2 并行）、a3-L1、a3-C、a3-X1、a3-X2、a5-1。
