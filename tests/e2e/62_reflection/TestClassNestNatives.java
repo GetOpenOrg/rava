@@ -57,16 +57,16 @@ public class TestClassNestNatives {
         loader.sign(int.class, new Object[] {"ignored"});
         System.out.println("signers(int) = " + Arrays.toString(int.class.getSigners()));
 
-        // 应用类加载器首次设置断言状态时经 retrieveDirectives 取 VM 指令（无 -ea：全空、缺省关）
-        ClassLoader app = TestClassNestNatives.class.getClassLoader();
+        // 自定义加载器首次设置断言状态时经 retrieveDirectives 取 VM 指令（无 -ea：全空、缺省关）。
+        // 断言映射只影响该加载器此后定义的类；已有类（由应用 / 引导加载器定义）的状态不变
         System.out.println("assert(Inner) before = " + Inner.class.desiredAssertionStatus());
-        app.setPackageAssertionStatus("java.util", true);
+        loader.setPackageAssertionStatus("java.util", true);
         System.out.println("assert(Inner) after maps = " + Inner.class.desiredAssertionStatus());
-        app.setClassAssertionStatus(Shape.class.getName(), true);
+        loader.setClassAssertionStatus(Shape.class.getName(), true);
         System.out.println("assert(Shape) class on = " + Shape.class.desiredAssertionStatus());
-        app.setDefaultAssertionStatus(true);
+        loader.setDefaultAssertionStatus(true);
         System.out.println("assert(Inner) default on = " + Inner.class.desiredAssertionStatus());
-        app.clearAssertionStatus();
+        loader.clearAssertionStatus();
         System.out.println("assert(Shape) cleared = " + Shape.class.desiredAssertionStatus());
         System.out.println("assert(String) = " + String.class.desiredAssertionStatus());
     }

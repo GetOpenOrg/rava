@@ -15,6 +15,12 @@ use super::class_loader::ClassLoader;
 //     外部 provider 发现终止（TzdbZoneRulesProvider 已由 ZoneRulesProvider
 //     <clinit> 的默认分支直接注册，正是 JDK 对无发现环境的回退设计）。
 impl ClassLoader {
+    /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
+    #[jvm_native]
+    pub fn registerNatives() -> Result<()> {
+        Ok(())
+    }
+
     /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找已定义类，
     /// 找不到返回 null。原生镜像的类全集编译期定死、全部由引导形态承载（`Class.getClassLoader`
     /// 恒 null），故「引导加载器可见」即闭包内的类（与 `Class.forName0` 同一判定）。

@@ -84,6 +84,9 @@ pub struct Manifest {
     pub runtime_dir: PathBuf,
     boundary_pkgs: Vec<String>,
     vm_boundary: HashSet<String>,
+    /// `<clinit>` 由手写层承载的 VM 边界类（`[vm_boundary] clinit_carried`，含嵌套类）；其余 VM 边界类的
+    /// `<clinit>` 按字节码翻译
+    vm_clinit_carried: HashSet<String>,
     release: Vec<String>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
@@ -304,6 +307,7 @@ impl Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
             boundary_pkgs: strings(&closure, "boundary", "packages"),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
+            vm_clinit_carried: strings(&closure, "vm_boundary", "clinit_carried").into_iter().collect(),
             release,
             hw_dropped: Vec::new(),
             intrinsics,
@@ -396,6 +400,11 @@ impl Manifest {
     /// VM 耦合边界类（`[vm_boundary]`，含嵌套类）
     pub fn is_vm_boundary(&self, cls: &str) -> bool {
         self.vm_boundary.contains(cls.split('$').next().unwrap_or(cls))
+    }
+
+    /// VM 边界类的 `<clinit>` 由手写层承载（`[vm_boundary] clinit_carried`，按最外层类匹配）
+    pub fn is_vm_clinit_carried(&self, cls: &str) -> bool {
+        self.vm_clinit_carried.contains(cls.split('$').next().unwrap_or(cls))
     }
 
     /// VM 内建（手写承载、不分析 Java 体）
