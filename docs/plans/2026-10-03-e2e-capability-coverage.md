@@ -36,18 +36,31 @@
 
 **已覆盖（核查过，不重复建）**：动态代理（TestDynamicProxy）、charset 编解码（TestCharsetForName / TestStreamEncoderCharsets）、注解族含 @Repeatable（47_annotations）、并发与线程（34/60 目录）、构造器反射（TestCtorReflect）、反射按接收者分派（TestReflectInvokePerReceiver）。
 
-**新增 6 例**：
+**新增 3 例（java.base 反射族，零门槛立即写）**：
 
 | 测试 | 目录 | 覆盖语义 | 护住谁 |
 |---|---|---|---|
 | TestReflectStateWriteBack | 62_reflection | 反射 invoke 调实例方法写字段 → 直接读字段验证（@Before 同构、零依赖版） | **m5 缺陷（W0-4）的直接回归网** |
 | TestGenericSuperclassReflect | 62_reflection | getGenericSuperclass / getActualTypeArguments / getGenericInterfaces（参数化超类） | hamcrest TypeSafeMatcher 族、spring ResolvableType（#11） |
 | TestInvokeNullArgs | 62_reflection | invoke 的 null 参数数组 ≡ 空数组、InvocationTargetException 解包语义 | junit m3 修过的⑤⑥语义固化 |
-| TestDomXPath | 53_io_api | DOM 解析（内存 String）+ XPathExpression 编译/求值 + NodeList 遍历 | K4；mybatis XML 面（#10） |
-| TestSaxStreaming | 53_io_api | SAX 回调顺序（startElement/characters/endElement）+ ContentHandler 状态机 | K4 |
-| TestStaxCursor | 53_io_api | XMLStreamReader 事件序 + 属性/文本读取 | K4 |
 
-**明示不由 e2e 承担**：ServiceLoader SPI（单文件无法携带 META-INF/services 资源——由 #1 slf4j pilot 承担）；java.sql（等 C-SQL 立项走 jmods 语料）。
+**原计划的 XML 三例（DOM/XPath、SAX、StAX）转隶 [jmod 覆盖计划](../../java_rta_closure_wt/docs/plans/2026-10-03-jmod-coverage.md) 的 `71_xml` 用例集**（TestXmlDomParse / TestXmlSaxEvents / TestXmlStax / TestXmlXPath / TestXmlTransform）——模块级覆盖归 jmod 计划为唯一事实源，本计划不重复建；其闭包（~3000 类，com.sun.org.apache.xerces 全栈）恰是 mybatis XML 面（#10）更真实的压力面。写作可随本计划先行（第 0 步预审模式：源码+期望先行、不进基线），进基线等 jmod 第 2 步。
+
+**明示不由 e2e 承担**：ServiceLoader SPI 多 provider 面（单文件无法携带 META-INF/services 资源——由 #1 slf4j pilot 承担；**空 provider 路径已由 jmod 计划 73_jndi_script 三例补上**）；java.sql（由 jmod 计划 `67_sql` 承担，见 §一-B 联动）。
+
+### §二-B 与 jmod 覆盖计划的合流（2026-10-03 对齐）
+
+[jmod 覆盖计划](2026-10-03-jmod-coverage.md)（java.base 之外的 JDK 模块 e2e，64–74 目录）与本计划/pilot 矩阵的五处联动：
+
+| jmod 目录 | 服务的能力/pilot | 联动关系 |
+|---|---|---|
+| `67_sql`（java.sql + rowset，A 档） | **K7（C-SQL）** | java.sql 模块 e2e 全绿 = jmods 翻译 java.sql 的实证 → #9 H2 / #10 mybatis 的排期信号 |
+| `71_xml`（java.xml，B 档） | K4 + #10 mybatis XML 面 | 本计划 XML 三例并入其用例集（上文）；~3000 类闭包同时检验 C-C1D |
+| `72_http`（java.net.http 回环，B 档） | **K9（网络边界）** | 回环 + 同进程用例 = 网络语义的最小实证，K9 口径决策的实测输入；Retrofit/OkHttp 网络面 pilot 的地基 |
+| `66_logging`（java.logging，A 档） | #1 slf4j / W5 Logback | Handler/Formatter/Level 的 JDK 侧地基（注意 jmod 计划 §三.3：stdout-only 约束） |
+| `74_beans_geom`（java.beans，第 4 步） | #10 mybatis POJO 反射 / #12 spring-beans 属性编辑器 | Introspector / PropertyChangeSupport = getter/setter 反射标准件 |
+
+**目录编号分配（冲突消解，2026-10-03 议定）**：`63_junit` = JUnit 形态（junit 计划）；`64–74` = jmod 覆盖计划占用；**框架 pilot 的 e2e 形态目录从 `75_` 起**（75_slf4j、76_joda、77_jackson_core、78_lang3、79_io、80_servlet、81_jpa、82_ognl、83_h2、84_mybatis、85_spring_core、86_spring_beans、87_guava——等 H1 接线后逐波建）。
 
 ## 三、现在可以做的（全量清单，按可开工排序）
 
