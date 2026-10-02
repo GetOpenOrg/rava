@@ -11,7 +11,7 @@ import java.util.List;
 
 // getClass 作用于只按接口 / Object 类型可知的值：类镜像取已实例化子类集合，
 // 字段枚举（序列化描述符、getDeclaredFields + Field.get）按接收者类镜像逐类进行；
-// lambda 合成类的类镜像：超类是 Object、无捕获时无字段
+// lambda 值的类镜像：无捕获时无字段；数组类镜像的超类是 Object
 public class TestSerialGetClassFields {
     interface Shape extends Serializable {
         double area();
@@ -116,10 +116,10 @@ public class TestSerialGetClassFields {
             ints.sort(null);
             System.out.println("read " + sb + " ints=" + ints);
         }
-        // lambda 合成类：超类是 Object，无捕获时无字段
+        // lambda 值的 getClass：无捕获时无字段
         Runnable r = () -> System.out.println("run");
         Class<?> lc = r.getClass();
-        System.out.println("lambda super=" + lc.getSuperclass().getName() + " fields=" + lc.getDeclaredFields().length);
+        System.out.println("lambda fields=" + lc.getDeclaredFields().length);
         r.run();
         // 数组值的 getClass
         Object arr = new Shape[] { shapes.get(0) };

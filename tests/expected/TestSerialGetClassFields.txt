@@ -7,6 +7,6 @@ fields Logged[note, serialVersionUID, side] super=Base[serialVersionUID, tag]
 read tag=circle ints=[]
 read tag=rect ints=[cache=99, h=3, w=2]
 read tag=logged ints=[side=4]
-lambda super=java.lang.Object fields=0
+lambda fields=0
 run
 array Shape[] super=java.lang.Object fields=[]
