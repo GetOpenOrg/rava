@@ -30,6 +30,7 @@
 | E2 | `instr/src/invoke/special.rs`，`emit_call_result` | invokespecial 返回裸类型变量。这里**完全不做实例化**，Rust 返回类型只要是 Object 就套 `from_any` | `SoftReference.get → Reference__get_base::<T>`、`LocalDate.query → ChronoLocalDate_super_query` |
 | E3 | `instr/src/coerce.rs` `to_object` 的 `ObjectKind::Opaque` 臂，及其文本版 `method/src/coerce_text.rs` | 值的 Rust 类型不是基本类型 / 作用域类型形参 / 数组 / 注册表内类（`()` 也落到这里） | 本例 0 |
 | E4 | `instr/src/invoke/virtual_/args.rs:111` | 基本类型接收者调用根类声明的方法，生成 `Object::from_any(prim).m()` | 本例 0 |
+| E5 | `instr/src/sim/dynamic/lambda_body.rs:176`、`instr/src/sim/dynamic/boxing.rs:38` | 方法引用 / lambda 体结果装箱（②实施时补查到，例：DateTimeFormatterBuilder 中 `Map::get` 方法引用） | 验收集 1 处（第④步一并处理） |
 | — | `instr/src/invoke/special/ctor.rs:185`、`method/src/postprocess.rs:53` | 不发射 `from_any`，只是把它当作已知前缀做识别 / 改写 | 发射点清零后同步删去 |
 
 E1 / E2 背后有四个类型层缺口，按本例的落点归类：
