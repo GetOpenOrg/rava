@@ -97,8 +97,10 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 1e623cec 已在 c1d-p0、已合集成分支（fb9385b3）；抽查 8/10，待修 TestUnixFileNatives（FileDispatcherImpl.init0）
-│   │     │       与 TestCharsetNamedStreams（NPE）
+│   │     ├─ 🔄 a2 1e623cec 在 c1d-p0（已并入集成分支内容 fb9385b3，尚未合入集成分支）；抽查 c1da-b124e5ac 5/6：
+│   │     │       TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
+│   │     │       FileDispatcherImpl.init0 ✅；余 TestUnixFileNatives 缺 Linux native LinuxNativeDispatcher.init；
+│   │     │       后续项：precheck 按目标平台扫描 native 缺口（本机 macOS 看不到 Linux 专有 native）
 │   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（c1d-p0 口径 86：Unsafe 44、VM 9、java/* 30、ClassLoaders 3）◀── a2
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（偏移 / 长度关系、类不变式），HelloWorld 目标 ≤371；fullAddCount 仅记录（线程逃逸）
@@ -163,14 +165,14 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ### 二、关键路径
 
 ```
-C1d-a a1 ✅ ──▶ a2 1e623cec 验收 ──▶ a3 jvm_boundary 归零 ─────────┐
-C1d-b b1 序列化收窄 ───────────────────────────────────────────────┤
+C1d-a a1 ✅ ──▶ a2 1e623cec 验收（余 1 例）──▶ a3 jvm_boundary 归零 ─────────┐
+C1d-b b1′ writeObject 分派臂 / b1 序列化收窄 ───────────────────────┤
 C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
 native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
                └─▶ regress2 栈帧来源统一 ✅ be1b97be ─────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
 ```
 
-工期瓶颈是 C1d-a：具体求值器把正式闭包降到 ≤360 类之前，1e623cec 不能合入，C4 全量 e2e 也不能启动。
+工期瓶颈是 C1d-a a2：闭包规模已达标（正式 HelloWorld 423 类 / 2–3 s，余量转 a5），只剩 TestUnixFileNatives 验收；a2 合入前 boot layer 第 1 步起、regress2 遗留、a3 都不能启动，C4 全量 e2e 随之顺延。
 
 ---
 
@@ -180,7 +182,7 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 待修 TestUnixFileNatives / TestCharsetNamedStreams；之后 a3 审计数 86→0、a5 OOB 关系推理 |
+| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 5/6，余 TestUnixFileNatives（LinuxNativeDispatcher.init）；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
 | C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；在修 ArrayList.writeObject 分派臂；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |

@@ -1,5 +1,8 @@
 # 真实 native 缺口补齐（2026-10-02，分支 native-gaps）
 
+> 状态（2026-10-02）：✅ 已合入集成分支 417a6594（bdc4cd64）。已知失败的去向：TestClassNestNatives ✅ FS-C2（4a98f5e3）；
+> TestReflectProbe ✅ C1d-b b0（e90a592d）；TestUnixFileNatives ◀── C1d-a a2（余 LinuxNativeDispatcher.init）；TestModuleLayerDefine ◀── boot layer。
+
 来源：`docs/reports/gap-scan-api-java.lang-java.util.md` 的 native-missing 35 项、text 等 14 包旧报告（以
 `rava audit api` 重跑结果为准）、C6 预检 18 项。归类依据 `docs/reference/handwritten-boundary.md`：
 ① ACC_NATIVE；② 运行模型替换（运行期类定义点等）；③ VM 驱动行为的落地语义。
