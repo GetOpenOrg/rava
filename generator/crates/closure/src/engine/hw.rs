@@ -66,12 +66,13 @@ impl<'a> Engine<'a> {
         if mh.fns.is_empty() {
             self.hw_base_fn(m, &cf, &key.name, &key.desc);
         }
-        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类镜像）时不经 open 返回值交出
+        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类 / 元素类型镜像）时不经 open 返回值交出
         let modeled = reads
             || array_ret.is_some()
             || self.man.returns_receiver(&ks)
             || self.man.returns_mirror(&ks)
             || self.man.returns_superclass(&ks)
+            || self.man.returns_component_class(&ks)
             || self.man.returns_primitive_class(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
@@ -146,7 +147,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 基本类型（含 void）的类镜像：一个 Class 类型的抽象对象，九个基本类型类合一。不登记为类镜像——所指不是
-    /// 字节码类：类初始化无对象（跳过），成员查找与枚举、超类、引用比较照所指未知处理
+    /// 字节码类：类初始化无对象（跳过），超类为 null（[`Self::super_set`]），无 Java 字段（[`Self::class_values`]）
     pub(super) fn primitive_mirror(&mut self) -> u32 {
         if let Some(k) = self.prim_mirror {
             return k;

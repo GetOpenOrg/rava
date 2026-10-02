@@ -97,11 +97,13 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 1e623cec 在 c1d-p0（已并入集成分支内容 fb9385b3，尚未合入集成分支）；抽查 c1da-b124e5ac 5/6：
-│   │     │       TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
-│   │     │       FileDispatcherImpl.init0 ✅；余 TestUnixFileNatives 缺 Linux native LinuxNativeDispatcher.init；
+│   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
+│   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
+│   │     │       FileDispatcherImpl.init0 ✅；余 TestFileStoreMountLookup 重跑 c1da-f2bdcf6e-r3（jp2 排队中）；
 │   │     │       后续项：precheck 按目标平台扫描 native 缺口（本机 macOS 看不到 Linux 专有 native）
 │   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（c1d-p0 口径 86：Unsafe 44、VM 9、java/* 30、ClassLoaders 3）◀── a2
+│   │     │       a3-T 虚拟线程终态（2026-10-03 定，计划 2026-10-01-c1d-closure-bloat.md §21.7 / §21.8）：VirtualThread / ForkJoinPool 字节码翻译，
+│   │     │       仅 Continuation VM 方法手写为有栈协程（mmap 栈、aarch64 / x86_64 切换）；百万虚拟线程作业需服务器 vm.max_map_count 调高（待定）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（偏移 / 长度关系、类不变式），HelloWorld 目标 ≤371；fullAddCount 仅记录（线程逃逸）
 │   │
@@ -109,19 +111,24 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）
 │   │     ├─ 🔄 b1′ ArrayList.writeObject 分派臂：2026-10-02 交接拆分（c1d-pick 2c16454b，计划 §4.6；WIP 快照 c1d-pick-wip 63d90e86）
 │   │     │       T0 基线抽查 c1db-2c16454b → 并行 ✅ T6 getSuperclass 返回模型（7a0188e6）、✅ T5 MH→putReference 清单精确化（cc6b59e0）、
-│   │     │       ✅ T7 探针转正 --flows（1518612d）→ ✅ T4 未知 Class 字段枚举收窄（2311459e；余 2 处字段全开源头归 b1） → T3 反射回调按接收者克隆上下文 → T2 名字×镜像交叉（最后合）
+│   │     │       ✅ T7 探针转正 --flows（1518612d）→ ✅ T4 未知 Class 字段枚举收窄（2311459e；余 2 处字段全开源头归 b1） → 🔄 T3 反射回调按接收者克隆上下文（0baa7aa4 抽查 c1dt3-0baa7aa4 7/7；与 b1 在 hw_mem.rs 冲突，同步集成分支后重抽查再合；余 MH 按句柄路由、回收 6 s） → T2 名字×镜像交叉（最后合）
 │   │     │       验收：StockTrans / TestSerialDefaultSuid / TestSerialProxyForm 通过、fold_props ≥42、m3 golden
-│   │     ├─ 🔄 b1 序列化收窄：大值集来自未知接收者字段视图（Unsafe 读 ↔ setObjFieldValues 手写写入成环）
+│   │     ├─ 🔄 b1 序列化收窄：✅ S2 ReflectUtil 放行 / 静态 CAS（含子字宽）/ 返回模型收窄合入（c1d-b1 0d7dd2a5；StockTrans 1803→1794、DeepCopy 1804→1789）；余：DeepCopy 距 ≤1640 目标，归 T2
 │   │     │       验收：DeepCopy ≤1640 类、fold_props ≥42、StockTrans / TestSerialDefaultSuid 回调保留
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
 │   │     └─ 🔄 b3 任务 3：class_init.unknown 归 false——✅ 第一段合入 1721f701（aeff784b）：class_init 钩子、截断体同类调用登记（bool2byte）、
-│   │             跳过 Class#<synthetic>、子字字段 CAS（每字段 4 字节槽 + __unsafe_word）；余：基本类型数组元素 Unsafe 访问、S3 getCallerClass
+│   │             跳过 Class#<synthetic>、子字字段 CAS（每字段 4 字节槽 + __unsafe_word）；第二段 01c88c11 抽查 c1db3-01c88c11 10/10：
+│   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
+│   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
+│   │             与 b1 冲突（manifest.rs / var_handle_impl.rs / unsafe__impl.rs），同步集成分支后重抽查再合；
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、CallerSensitive 经 lambda / 方法引用 / MH、S5
 │   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
 │   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
-│   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；🔄 ② A+B 超接口 / 接口视图类型实参
+│   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；🔄 ② A+B 超接口 / 接口视图类型实参（b820c8aa，27 例 from_any 2–78→1–4；抽查 fa2-b820c8aa 9/10，StockTrans 为服务器 cargo 拉依赖失败，重跑 r2）；③ C+D 本地进行中
 │   │
 │   ├─ ✅ native-gaps（bdc4cd64，合入 417a6594）：sun/nio/fs native 21 个、loop_hoist 合流变量、栈帧按声明类归属（declared_by）
-│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2；TestModuleLayerDefine ◀── boot layer；
+│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2（c1d-p0 已修）；TestModuleLayerDefine ◀── boot layer；
+│   │     ThreadTest（FS-C2 A 4896b5a7 起 initSystemClassLoader 存根：静态字段钩子漏连边）◀── C1d-b b3（01c88c11 已修）；
 │   │     TestClassNestNatives ✅ FS-C2；TestReflectProbe ✅ C1d-b
 │   │
 │   ├─ ✅ FS-C2 应用类加载器（fs-c2 9c737f03，合入 4a98f5e3）：定义加载器读取钩子、ClassLoaders 整类字节码、initPhase3（scl + 上下文加载器）、
@@ -171,14 +178,14 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ### 二、关键路径
 
 ```
-C1d-a a1 ✅ ──▶ a2 1e623cec 验收（余 1 例）──▶ a3 jvm_boundary 归零 ─────────┐
+C1d-a a1 ✅ ──▶ a2 f2bdcf6e 验收（余 1 例）──▶ a3 jvm_boundary 归零 ─────────┐
 C1d-b b1′ writeObject 分派臂 / b1 序列化收窄 ───────────────────────┤
 C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
 native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
                └─▶ regress2 栈帧来源统一 ✅ be1b97be ─────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
 ```
 
-工期瓶颈是 C1d-a a2：闭包规模已达标（正式 HelloWorld 423 类 / 2–3 s，余量转 a5），只剩 TestUnixFileNatives 验收；a2 合入前 boot layer 第 1 步起、regress2 遗留、a3 都不能启动，C4 全量 e2e 随之顺延。
+工期瓶颈是 C1d-a a2：闭包规模已达标（正式 HelloWorld 423 类 / 2–3 s，余量转 a5），只剩 TestFileStoreMountLookup 重跑验收（TestUnixFileNatives 已过）；a2 合入前 boot layer 第 1 步起、regress2 遗留、a3 都不能启动，C4 全量 e2e 随之顺延。
 
 ---
 
@@ -188,8 +195,8 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 5/6，余 TestUnixFileNatives（LinuxNativeDispatcher.init）；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 / b3 / T3 进行中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 c1da-f2bdcf6e 7/8（StockTrans 基线），余 TestFileStoreMountLookup 重跑；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），b3 第二段 / T3 抽查全过、待同步集成分支解冲突后合入；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |
 | regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
