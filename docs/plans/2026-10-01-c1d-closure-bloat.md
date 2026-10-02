@@ -1197,6 +1197,7 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
     - **a5-4c jrt 协议**（`sun/net/www/protocol/jrt` 47：jimage 32、jrtfs 16）：同在 a5-4b 的 `JarLoader.getJarFile` → `URL.openConnection` 之下，a5-4b 剪掉后随之消失，不单独处理。
     - **a5-4d `Formatter` → `Pattern` → ICU 归一化**（`java/util/Formatter` 139，其中 `jdk/internal/icu` 65）：`System.<clinit>` → `ConcurrentHashMap.toString` → `StringBuilder.append` → `inflate` → `checkBoundsOffCount` 出错分支 → `Preconditions.outOfBoundsMessage` → `String.format`，即 a5-1..a5-3 的 OOB 检查点；不另立手段，a5-3 验收时同时核对该例 `Formatter` 子树消失。另 `Pattern.compile` → `normalize` 的 `CANON_EQ` 分支在常量 flags 下不可达，可由具体求值器按常量参数剪枝，归 a5-3 一并做。
     - 其余大包（`java/lang/invoke` 123、`sun/nio/cs` 108、`java/util/stream` 93、`java/util/concurrent` 87、`java/util/regex` 61、locale 56、logging 28）多数挂在上述子树下，a5-4a/b 完成后重测再定是否另立项。
+    - 与集成分支对照（2026-10-03，同机 macOS，集成分支 369a5392 的 rava 对 c1d-p0 b4f053e8 之后）：TestFileStoreMountLookup 1611 → 2912（+1317），TestDateTimeFormat 1476 → 2910（+1444）。增量就是上面几条扇出：集成分支仍有 `[boundary]` 前缀截断，`sun/`、`jdk/` 下的链在截断点停住；c1d-p0 去截断后，a5-4a / a5-4b 的过近似链全部展开。主要类别：JarVerifier 子树约 400、`com/sun/org` 113、`sun/security/ec` 84、`jdk/internal/icu` 60、jimage 32、logging 28。服务器 dyn-compare 报的 extra 2156 / 2254 以 JDK 实际装载为基准，口径不同，构成相同。去截断还暴露了一处真实缺口：`LocaleData` 改为按字节码取束后，要用 JRE（FALLBACK）族的束，已在 seeds.toml 按访问器补齐（d1b1b2ba，DTF +25 类，属必需）。
     - 目标：TestFileStoreMountLookup 闭包 ≤900 类、transpile ≤60 s；a5-4a / a5-4b 各补一个边界 e2e（`doPrivileged` 嵌套不同动作；`ServiceLoader.load` 在无 `-Xbootclasspath/a` 下的服务查找结果与 JDK 一致）。
 
 ### 21.6 并行编排

@@ -99,7 +99,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
 │   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
 │   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
-│   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup r4（ubuntu）运行期失败：MapMode 反射构造分派缺席，修复中
+│   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup 的 MapMode 反射构造分派缺席已修（构造器查找建模 22eb9e72，
+│   │     │       新增 TestJdkConstructorLookup）；c1da-2c478e2f 的 TestDateTimeFormat 回归（缺 JRE FormatData 束）已修（d1b1b2ba，新增 TestLocaleBundleFamilies）
 │   │     ├─ ⏳ 后续项 precheck 按目标平台扫描：本机只扫宿主 JDK 的 jmod，看不到 Linux 专有 native。已做：precheck 清单落盘
 │   │     │       build_status.json emit.precheck、run_tests 失败详情附清单（8ed3a5e3）。待做：按目标平台 jmod 扫描
 │   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
