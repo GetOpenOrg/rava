@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cfg::{analyze, build_dispatch, AuditStats, function_always_returns, simplify, structure, verify_tree, JumpLedger, NodeId, Succs};
 use classfile::extras::LocalVar;
-use classfile::{acc, Method};
-use input::NormCode;
+use classfile::{acc, Method, Operand};
+use input::{NInsn, NormCode};
 use instr::{Audit, InstrEnv, InstrLog};
 use sim::{SimConfig, SlotDecl, StackSim};
 use ty::ident::safe_ident;
@@ -94,8 +94,28 @@ fn try_region_stats(code: &NormCode, nodes: &Graph) -> (usize, usize) {
     (live.iter().filter(|n| n.is_try()).count(), declared.difference(&translated).count())
 }
 
+/// 方法体的引用存储（astore 族）：(槽, pc)。LVT 区间起于首次存储之后，区间内的存储即再赋值
+fn ref_stores(code: Option<&NormCode>) -> Vec<(u16, u32)> {
+    const ASTORE: u8 = 0x3a;
+    const ASTORE_0: u8 = 0x4b;
+    const ASTORE_3: u8 = 0x4e;
+    let Some(code) = code else { return Vec::new() };
+    code.insns
+        .iter()
+        .filter_map(|x| match x {
+            NInsn::Op(i) => match (i.opcode, &i.operand) {
+                (ASTORE, Operand::Local(s)) => Some((*s, i.offset)),
+                (ASTORE_0..=ASTORE_3, _) => Some((u16::from(i.opcode - ASTORE_0), i.offset)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// 局部变量声明表：泛型签名（非根类）优先，否则描述符（非根类、非路径形态）；按起点升序
-fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar]) -> BTreeMap<u16, Vec<SlotDecl>> {
+fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar], code: Option<&NormCode>) -> BTreeMap<u16, Vec<SlotDecl>> {
+    let stores = ref_stores(code);
     let ty_ctx = &env.ctx.ty;
     let usable = |t: &RsType| {
         let s = text::ty(env, t);
@@ -125,6 +145,10 @@ fn slot_decls(env: &InstrEnv, local_vars: &[LocalVar]) -> BTreeMap<u16, Vec<Slot
             from_sig,
             raw_sig: lv.signature.clone(),
             desc: lv.desc.clone(),
+            reassigned: {
+                let (start, end) = (u32::from(lv.start), u32::from(lv.start) + u32::from(lv.len));
+                stores.iter().any(|&(slot, pc)| slot == lv.slot && start <= pc && pc < end)
+            },
         });
     }
     for v in out.values_mut() {
@@ -207,7 +231,7 @@ fn new_sim<'e>(
         class_name: req.class.name().to_string(),
         class_type_params: env.tparams.clone(),
         local_names: local_names(req.local_vars),
-        slot_decls: slot_decls(env, req.local_vars),
+        slot_decls: slot_decls(env, req.local_vars, req.code),
         return_type: ret,
         is_constructor: m.name == "<init>",
         in_vtable_body: req.in_vtable_body,

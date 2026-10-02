@@ -53,6 +53,9 @@ pub struct SlotDecl {
     pub raw_sig: String,
     /// LVT 描述符
     pub desc: String,
+    /// 区间内另有引用存储（再赋值）：变量可能先后持有不同运行时类，静态类型以声明为准，
+    /// 不随首个值收窄为其具体类
+    pub reassigned: bool,
 }
 
 /// 模拟器配置（方法级只读输入）
