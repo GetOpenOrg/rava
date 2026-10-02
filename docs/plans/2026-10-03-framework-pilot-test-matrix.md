@@ -21,6 +21,8 @@
 
 **独立性**：每 pilot 的 jar / crate / 种子表 / golden / e2e 目录互不依赖，可独立增删、独立止损——不出现「测 A 必须先装 B」。**不建第二 runner**：golden 脚本只做 crate 验收，e2e 全部走 run_tests 形态接口。
 
+**手写边界原则对齐（CLAUDE.md §0/§1，2026-10-03 用户重申）**：矩阵内一切支撑件——servlet 容器件、JDBC fake 驱动、各 pilot 的 fixture——**一律走 Java 侧实现 + 管线翻译**（用户域测试代码，m5 跨 crate 回调模式的自然延伸），**不新增任何 runtime 手写层**；JDK 面（java.sql 等）从 jmods 翻译。性能或便利不是手写理由；新 pilot 若逼出运行期类定义等手写准入点，按 §1 三准入登记清单而非散写。
+
 ## 二、能力现状核查（2026-10-03 实测，矩阵的推导起点）
 
 | 能力 | 状态 | 证据 | 影响 |
@@ -29,7 +31,7 @@
 | 反射 L1/L2/L3 | ✅ | Method/Field/Constructor 元数据表 + invoke 分派（m3 验收）；跨 crate 扩表已做 | spring 切片 / MyBatis / picocli 的地基 |
 | ServiceLoader 静态目录 | ✅ | 2026-09-26 计划落地 | slf4j LoggerFactory 绑定、JDBC DriverManager SPI 同族 |
 | XML 栈（XPath/XSL/DOM） | ✅ 在闭包 | m1 发射集含 com/sun/org/apache/xpath 树（m1 的失败是拆 crate import 缺陷，非闭包缺口） | MyBatis 配置/映射解析面 |
-| **java.sql** | ❌ runtime 无此包 | `find runtime -path "*java/sql*"` 零命中 | **MyBatis 硬前置**：JDBC 层需立项（翻译 jmods java.sql 接口面 + 手写 fake Driver/Connection/ResultSet，或手写 java.sql 子集） |
+| **java.sql** | ❌ runtime 无此包 | `find runtime -path "*java/sql*"` 零命中 | **MyBatis 硬前置**：JDBC 层立项——**java.sql 接口面从 jmods 翻译（唯一路径，手写边界原则 §1）**；驱动侧 = Java fixture 实现 java.sql 接口（用户域 Java 代码经管线翻译）或真实纯 Java 驱动 jar（如 H2）翻译，**零 runtime 手写** |
 | 类路径扫描 / ClassLoader 资源枚举 | ❌ | 静态翻译模型边界 | spring-context 全量、Boot 自动装配的 gate |
 | 运行期字节码生成 | ❌ 本体排除 | byte-buddy / CGLIB / Mockito 在盘 jar 属此类 | Boot 的 AOP 代理、Mockito 不入矩阵 |
 | 真并发 / 抢占 | ◐ | 2026-09-26 real-multithreading 计划在列 | servlet async、guava ListenableFuture 的 gate |
@@ -52,7 +54,7 @@
 
 备选（在盘不占首波）：commons-text（2/6）、commons-csv（2/5）、picocli 4.7.7（3/6，注解反射 L1–L3 + 类型转换）、gson 流式面（2/4，排除反射 TypeAdapter 族）。
 
-### 梯队 2：spec API + 手写 harness（用户侧实现容器件 = m5 跨 crate 回调模式复用）
+### 梯队 2：spec API + 用户侧容器件（测试 main 实现接口、经管线翻译 = m5 跨 crate 回调模式复用——非 runtime 手写）
 
 | # | pilot | 类数量级 | 压测面 | mains | e2e | 前置 |
 |---|---|---:|---|---:|---:|---|
@@ -64,7 +66,7 @@
 | # | pilot | 类数量级 | 压测面 | mains | e2e | 前置 |
 |---|---|---:|---|---:|---:|---|
 | 8 | OGNL 3.x（pom 增） | ~350 | **Struts2 的灵魂**：表达式引擎——反射属性导航 / 方法调用 / 索引与投影 / 类型转换 / 静态成员访问，SpEL 同族能力但独立 jar 可单测（`Ognl.parseExpression` + `getValue` 对 POJO 求值即可 golden） | 3 | 8 | 无（L3 已有）；与 #9 互证反射深水面 |
-| 9 | mybatis 3.5.x（pom 增） | ~1300 | **Proxy$Dyn 分派保真**（MapperProxy 经 Method 元数据路由）、POJO getter/setter 反射、XML 配置/映射解析（XPath 栈）、动态 SQL（if/foreach/where）、TypeHandler 族、L1 缓存 | 5 | 10 | **java.sql 层立项拍板**（§六-4）；fake Driver 手写 |
+| 9 | mybatis 3.5.x（pom 增） | ~1300 | **Proxy$Dyn 分派保真**（MapperProxy 经 Method 元数据路由）、POJO getter/setter 反射、XML 配置/映射解析（XPath 栈）、动态 SQL（if/foreach/where）、TypeHandler 族、L1 缓存 | 5 | 10 | **java.sql 层立项拍板**（§六-4：jmods 翻译 + Java fixture 驱动，零 runtime 手写） |
 | 10 | spring-core 切片 6.x（pom 增） | 种子子集 | ResolvableType / MethodParameter（**泛型元数据反射 = hamcrest TypeSafeMatcher 同款能力的放大**）、AntPathMatcher、PropertyPlaceholderHelper、StreamUtils、MultiValueMap | 4 | 10 | L3 稳定（m3 已验）；版本基线拍板（§六-3） |
 | 11 | spring-beans 切片（后置） | 种子子集 | BeanUtils / 属性编辑器族（无 cglib 无容器的部分） | 2 | 6 | 10 号验收 |
 
@@ -82,7 +84,7 @@
 | 目标 | 入场判据 |
 |---|---|
 | spring-context IoC 全量 | 类路径扫描（ClassLoader 资源枚举）建模 + L3 全量稳定 + spring-beans 切片验收 |
-| **Spring Boot** | IoC 全量 + servlet 容器件手写成熟 + **运行期类生成替代协议决策**（launcher 嵌套 jar 类加载、自动装配、内嵌容器、AOP 代理）。与 Maven/Gradle/Mockito/Netty/byte-buddy 同列静态模型边界（roadmap「明确不早期碰」的正式化——北极星不是里程碑） |
+| **Spring Boot** | IoC 全量 + servlet 容器件（用户域 Java 实现 + 翻译路径）成熟 + **运行期类生成替代协议决策**（launcher 嵌套 jar 类加载、自动装配、内嵌容器、AOP 代理）。与 Maven/Gradle/Mockito/Netty/byte-buddy 同列静态模型边界（roadmap「明确不早期碰」的正式化——北极星不是里程碑） |
 | **hibernate-core 6.x** | JDBC 层落地 + #9 MyBatis ORM 面验收 + **翻译期子类合成立项**（实体懒加载代理：闭包内实体类静态已知，代理子类可由生成器翻译期合成——byte-buddy 运行期生成的静态替代，与 Mapper 代理合成同族能力）+ HQL/ANTLR 生成代码规模实测（~万级类闭包） |
 
 ### §三-A SSH 三件套覆盖核查（2026-10-03 增补）
@@ -131,21 +133,106 @@
 
 候选池全量 ≈ **+19 件 / ~39 mains / ~89 e2e**；主推 #1–#12 与候选池合并的理论全景 ≈ 31 crate / ~81 mains / ~192 e2e——**不建议全景一次排期**，按「波次滚动 + 压测面去重」消化。
 
-## 四、规模与排期
+## 四、依赖排序与排期（完整版：条件 → 任务 → 解锁）
 
-**合计近期（主推 #1–#12，含 SSH 增补 #7 JPA api + #8 OGNL）**：lib crate **12 个** / crate 验收 mains **≈42** / e2e 回归 **≈103**（junit 既有计划 10–20 另计；原 10 pilot 口径精确值 37/91，本文以逐行和为准）。备选池（struts2 切片 +~9 e2e、commons 家族 +~11 e2e）按需滚动。
+### 4.0 现状对齐（2026-10-03 fetch origin/main @ fe197231）
 
-| 波次 | 内容 | 规模 | 闸门 |
+- main 较本文初稿基线（2a3f4397）新增 12 提交，全部闭包分析器域：C1d-b1（返回模型收窄）+ C1d-b T3（**L3 反射分派按接收者、接口 `__reflect_dispatch`、错接收者 IAE**；StockTrans 分派 22949→1645）+ from_any ②；**T2 在途**。T3 对反射深水 pilot（#8/#9/#10）是直接利好。
+- **scripts-into-rava S1–S5 ✅（bb0b7736）**：Python 入口并入 rava（main.py 已删）、lib_pilot_golden.sh 已走 `rava build --lib`、**m3 编译错误 0**。S6–S8 在列：S6（dyn 并入 rava）◀── **C4 收官**（dyn_compare 冻结）→ S7（run_tests 拆 scripts/e2e/ 预留形态接口）→ S8（Python 归零）。
+- **JUnit 步骤 0 在 tasks.md 登记「可提前；m3 编译 0 ✅，运行期存根由 C1d-b b0 处理」**——初稿发现的 m1 E0433（拆 crate import 缺陷）：**2026-10-03 worktree 复跑核实 = m1 GOLDEN OK（fe197231）**，已被 S1–S5 / C1d-b 顺带修复，**F1 闸门清除**；m2–m5 复跑（W0-2）随即启动。
+- 全量 e2e 与重命令已走 **8 台服务器分发**（distribute_tests.py）；**T1 跨测试编译复用 ◇ Q3**（用户一次决策）= per-test 成本闸门的替代路径（与预构建缓存 C-CACHE 组合或二选一）。
+- 时序主链：阶段 C（闭包分析器）收官 → C4 → S6 → S7 → H1（e2e 形态接口）。**golden mains 不在这条链上**，W0 复跑与 W1 反射件可提前。
+
+### 4.1 依赖源记号（五类）
+
+| 类 | 记号与现状（2026-10-03） |
+|---|---|
+| 管线能力 C | C-L3 反射分派 ✅（T3 增强）· C-Proxy 动态代理 ✅（Proxy$Dyn）· C-SPI 静态目录 ✅ · C-XML ✅（闭包内）· **C-SQL java.sql ❌ 需立项** · C-MT 真并发 ◐（real-multithreading 待拍板）· C-NET 网络 IO 边界 ❌ · C-SCAN 类路径扫描 ❌ · C-SYN 翻译期子类合成 ❌（新能力立项）· C-C1D 闭包收窄 ◐（b1+T3 已合，T2 在途；e2e 成本闸门）· C-CACHE 预构建 lib crate 缓存 ❌（A 终态；替代/组合路径 T1-Q3） |
+| 修复闸门 F | F1 = m1 E0433（拆 crate import 缺陷）——**✅ 2026-10-03 复跑核实：m1 GOLDEN OK（fe197231），已被 S1–S5/C1d-b 顺带修复，清除** |
+| harness H | H1 = e2e 形态接口（S6+S7 合入 + form.toml + 63_junit 模板）；gated on C4 收官；只 gate e2e 目录，**不 gate golden mains** |
+| 前序验收 P | pilot green（golden mains 全绿；e2e 部分在 H1 前暂缓） |
+| 拍板 D | §六 1–7，关键位标注在各任务卡 |
+
+### 4.2 任务卡（波次内即实施序）
+
+**W0 闸门（唯一可立即开工组，F1 无外部依赖）**
+
+| 任务 | 依赖 | 验收判据 | 解锁 |
 |---|---|---|---|
-| **W0（在途）** | m1 E0433 修复（拆 crate import 生成缺陷）→ m1–m5 Rust 路径复跑绿 → e2e 接线（S6/S7，63_junit 模板定型） | 闸门 | **一切 lib 模式 pilot 的入场券** |
-| W1 | #1 slf4j → #2 joda → #3 jackson-core → #4 lang3 → #5 commons-io（一次一个，资源纪律） | 18 mains / 43 e2e | W0 绿 |
-| W2 | #6 servlet + #7 JPA api（同模式 spec-API 双件） | 6 / 14 | W0 绿；§六-2 |
-| W3 | #8 OGNL → #9 mybatis（JDBC 层立项先行）→ #10 spring-core 切片 → #11 spring-beans | 14 / 34 | §六-3/4 拍板 |
-| W4 | #12 guava 切片；备选（struts2 切片等）按需 | 4 / 12 | 闭包规模实测达标 |
+| W0-1 m1 复跑核实（E0433） | 最新 main（不等任何队列） | **✅ 2026-10-03 完成：GOLDEN OK（fe197231），缺陷已被 S1–S5/C1d-b 顺带修复** | W0-2 |
+| W0-2 m2–m5 复跑 | W0-1 ✅ | 5×GOLDEN OK（m1 ✅），golden 入库零 diff | **W1 全部、#8、#10、W5 池纯计算件**；步骤 A（W0-3）另等 H1 |
+| W0-3 e2e 形态接线（= junit 计划步骤 A：form.toml + 63_junit） | **H1**（◀ C4 收官）+ D-2 | 63_junit 首批 ≥10 例绿 + m1–m5 零回归 | 一切 e2e 目录放量（64_… 编号段） |
 
-**每 pilot 五步流程模板**：① `dep_scan.py` 透视（jdk-internal 扫描 = 准入红线；反射/线程/IO 面盘点）→ ② 种子表定稿（form.toml 数据）→ ③ golden mains 对账（lib_pilot 模式，golden 入库）→ ④ form.toml + e2e 目录（S6/S7 后）→ ⑤ tasks.md 登记。
+**W1 纯计算五连（依赖 W0-2；一次一个 pilot）**
 
-**资源纪律**：一次一个 pilot；golden mains 不受 per-test 成本约束（一 pilot 一 workspace）；e2e 放量等 C1d 收窄（大闭包 per-test 成本）与预构建缓存（A 终态）联动裁决；全量 e2e 归用户服务器。
+| 序 | 任务 | 依赖 | 验收（mains/e2e） | 解锁 |
+|---|---|---|---|---|
+| #1 | slf4j-api | W0-2 | 3 / 5 | Logback 软前置；SPI 静态目录 lib 场景实证 |
+| #2 | joda-time | W0-2 | 3 / 8 | — |
+| #3 | jackson-core | W0-2 | 4 / 10 | — |
+| #4 | commons-lang3 | W0-2 | 5 / 12 | P1 兑现 |
+| #5 | commons-io | W0-2 + **IO 边界现状复核**（半天前置） | 3 / 8 | PDFBox/POI 的 IO 面参考 |
+
+**W2 spec-API 双件（依赖 W0-2 + D-2；容器件模式 = m5 复用）**
+
+| 序 | 任务 | 依赖 | 验收 | 解锁 |
+|---|---|---|---|---|
+| #6 | jakarta.servlet-api | W0-2 + D-2 | 4 / 10（async 用例 gated C-MT） | **struts2 前置一** |
+| #7 | jakarta.persistence-api | W0-2 | 2 / 4 | hibernate API 面前置 |
+
+**W3 反射深水四件（依赖 W0-2）**
+
+| 序 | 任务 | 依赖 | 验收 | 解锁 |
+|---|---|---|---|---|
+| #8 | OGNL | W0-2（无别的，可插队 W1 后任意位） | 3 / 8 | **struts2 前置二**；表达式引擎族基座 |
+| #9 | mybatis | W0-2 + **C-SQL 落地**（立项 + fake Driver）+ D-4 | 5 / 10 | **Retrofit 最稳位**；**hibernate 前置一** |
+| #10 | spring-core 切片 | W0-2 + D-3 | 4 / 10 | spring-beans；泛型元数据实证反哺 hibernate 元模型 |
+| #11 | spring-beans 切片 | **P：#10 green** | 2 / 6 | **spring-context 前置一** |
+
+**W4 大闭包（依赖 C-C1D 收窄到位 = T2 收官后量成本）**
+
+| 序 | 任务 | 依赖 | 验收 | 解锁 |
+|---|---|---|---|---|
+| #12 | guava 切片 | C-C1D + 闭包规模实测（预估 2000+ 类） | 4 / 12 | eclipse-collections 同模式 |
+
+**W5 候选池滚动（依赖 W0-2；序 = 建议提拔序）**
+
+| 序 | 件 | 附加依赖 | 备注 |
+|---|---|---|---|
+| 1 | Jsoup | — | 纯计算顶级候选 |
+| 2 | Logback | P：#1 green（软） | 与 slf4j 闭环 |
+| 3 | Caffeine | — | 并发原语面（协作调度器下先行，C-MT 后补强） |
+| 4 | SnakeYAML / 5 typesafe config | — | 小而纯 |
+| 6 | Retrofit | P：#9 green（互证位） | fake Call 全离线 |
+| 7 | Fastjson2 流式 / 8 AssertJ | — | 反射面 gated；AssertJ 在盘 |
+| 插队 | 在盘顺手件（codec/math3/jexl3/beanutils/collections4/jakarta.mail…） | jexl3 建议 #8 后（同族互证） | 零取包成本 |
+
+**终点域解锁链（判据已在 §三终点表）**：spring-context ← C-SCAN + P(#10+#11) → SpringMVC →（+C-SYN）Boot AOP 半；hibernate ← C-SQL + P(#9) + C-SYN + ANTLR 规模实测；HikariCP ← C-SQL + C-MT；Disruptor/RxJava ← C-MT；OkHttp 网络面/Redis/httpclient ← C-NET；BouncyCastle ← JCA ✅ + 规模实测；ASM 特批元目标；Dubbo 系 ← C-NET + C-SCAN + 动态 SPI。
+
+### 4.3 条件达成 → 立即可做（速查表）
+
+| 条件达成 | 立即可做 |
+|---|---|
+| F1 核实通过（m1 绿） | W0-2（m2–m5 复跑） |
+| W0-2 全绿 | W1 五连、#8 OGNL、#10 spring-core 切片、W5 池全部纯计算件（Jsoup/Caffeine/SnakeYAML/typesafe/AssertJ/Fastjson2 流式/在盘顺手件） |
+| H1 就绪（C4 → S6 → S7 合入） | W0-3 接线 → 各 pilot e2e 目录逐波放量 |
+| D-2 拍板（servlet 代次） | #6、#7 |
+| C-SQL 落地（+ D-4） | #9 mybatis →（+C-MT）HikariCP、Quartz |
+| C-MT 落地 | servlet async 用例、Disruptor、RxJava 调度器面、Caffeine 补强 |
+| C-NET 决策 | OkHttp 网络面、Redis 客户端、httpclient 转正、jakarta.mail 发送面 |
+| C-SCAN 建模 + P(#10+#11) | spring-context 全量 → SpringMVC |
+| C-SYN 落地 + P(#9) + C-SQL | hibernate-core |
+| C-C1D 到位（T2 收官） | W4 guava、大闭包 e2e 放量成本复核（与 C-CACHE/T1-Q3 组合决策） |
+| P(#6 + #8) green | struts2-core 切片 |
+
+### 4.4 资源与纪律
+
+- **一次一个 pilot**；golden mains 一 pilot 一 workspace 不受 per-test 成本约束；e2e 逐例成本闸门 = C-C1D + C-CACHE/T1-Q3。
+- golden 先行、e2e 后置到 H1；全量 e2e 归 8 台服务器分发，本地定向 ≤10 例纪律不变。
+- 同层 pilot 零相互依赖、独立止损；组装件（struts2/Boot/hibernate）显式列前置，不与组成件抢位。
+- 每 pilot 五步流程模板：dep_scan 透视（jdk-internal 准入红线）→ 种子表定稿 → golden mains 对账 → form.toml + e2e 目录（H1 后）→ tasks.md 登记。
+
+**规模合计（主推 #1–#12）**：lib crate **12 个** / mains **≈42** / e2e **≈103**（junit 既有 10–20 另计）；候选池全量 ~19 件 / ~39 mains / ~89 e2e 按波次滚动提拔。
 
 ## 五、licensing 一句话
 
@@ -156,7 +243,7 @@ Apache-2.0 覆盖 servlet / mybatis / spring / guava / commons / jackson / eclip
 1. **总规模**：A 全矩阵（12 crate / ~42 mains / ~103 e2e）vs **B 首波五连（5 crate / ~18 mains / ~43 e2e，推荐）**后按波次滚动拍板。
 2. **servlet 代次**：jakarta 6.x（推荐，与终态 Spring 6/Boot 3 对齐）vs javax 4.0.1（Spring 5 代）。
 3. **Spring 基线**：6.x（推荐，jakarta 命名空间 + AOT 友好）vs 5.3（javax，反射面更老但社区存量最大）。
-4. **MyBatis JDBC 层**：java.sql 接口面从 jmods 翻译 + 手写 fake Driver/Connection/ResultSet（推荐，接口面大但语义薄）vs 手写 java.sql 最小子集（快但边界口径要自定）。
+4. **MyBatis JDBC 层**：java.sql 接口面**从 jmods 翻译**（唯一路径，手写边界原则 §1——接口面大但语义薄，翻译即合法）；驱动侧形态拍板 = **Java fixture 小驱动**（自写 java.sql 实现，用户域 Java 代码经管线翻译，推荐：面窄可控）vs **真实纯 Java 驱动 jar 翻译**（如 H2，顺带一个真实驱动 pilot，闭包更大）。
 5. **Boot 终点定位**：确认按 §三终点表以入场判据制挂远期（不降低终态目标，只排定可达顺序）。
 6. **SSH 增量纳入方式**（2026-10-03 追问）：推荐 OGNL（#8）+ JPA api（#7）进主推、struts2-core 切片与 hibernate-core 挂入场判据（§三-A）——如你要求 Struts2/Hibernate 更激进排期，需连带拍板「翻译期子类合成」新能力立项。
 7. **候选池提拔（W5+）**（2026-10-03 二次追问）：高优先候选八件（Jsoup/Logback/Caffeine/SnakeYAML/typesafe config/Retrofit/Fastjson2 流式/AssertJ）建议按此序滚动提拔，或在盘顺手件（零取包成本）插队；gated 维持件按 §三-B 各自判据，不随热度提前。
