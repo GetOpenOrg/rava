@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use ir::{LetStmt, Stmt, VarOrigin};
 
 use super::refs::{render_entries, RefCache};
-use super::{apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, VarsCtx};
+use super::if_emit::align_later;
+use super::slot_type::{all_alignable, merged_slot_type, widen_into_merged};
+use super::{apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, same_jvm_var, VarsCtx};
 use crate::entry::Entry;
 
 pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
@@ -59,16 +61,42 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
             Some(t) => leading_ws(t).to_string(),
             None => entries[loop_k].indent.clone(),
         };
-        let inner = let_of(&entries[decl_k]).expect("declared_at 只登记 let");
+        let first = entries[decl_k].clone();
+        let inner = let_of(&first).expect("declared_at 只登记 let");
+        // 循环体内同一 JVM 变量的其余 let（如 if / else 两臂各自的首存）一并降级，
+        // 否则后续 if 提升会为它们另立同名声明，遮蔽本声明
+        // loop_k 是 decl_k 之前最近的循环头；该循环在 decl_k 前已结束时只降级触发声明本身
+        let loop_end = (loop_k + 1..entries.len())
+            .find(|&k| depth[k] <= depth[loop_k])
+            .unwrap_or(entries.len())
+            .max(decl_k + 1);
+        let mut ty = hoisted_let_type(inner);
+        if !all_alignable(cx, entries, name, decl_k - 1, loop_end, ty.as_ref()) {
+            if let Ok(Some(m)) = merged_slot_type(cx, entries, name, decl_k - 1, loop_end) {
+                widen_into_merged(cx, entries, name, decl_k - 1, loop_end, &m);
+                ty = Some(m);
+            }
+        }
         let hoisted = LetStmt {
             name: inner.name.clone(),
-            ty: hoisted_let_type(inner),
+            ty: ty.clone(),
             mutable: true,
             value: None,
             origin: VarOrigin { value_ty: None, slot: inner.origin.slot, bind_off: inner.origin.bind_off },
         };
         insertions.push((loop_k, Entry::stmt(&indent, Stmt::Let(hoisted))));
-        demote_let(entries, decl_k);
+        for k in decl_k..loop_end {
+            let same = k == decl_k
+                || (let_of(&entries[k]).is_some_and(|l| l.name.as_str() == name)
+                    && same_jvm_var(cx, &first, &entries[k]) != Some(false));
+            if !same {
+                continue;
+            }
+            if let Some(h) = &ty {
+                align_later(cx, entries, k, h);
+            }
+            demote_let(entries, k);
+        }
     }
     apply_insertions(entries, insertions);
 }
