@@ -119,10 +119,11 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ boot layer：ModuleBootstrap.boot 引导期建层、System.bootLayer 按字节码读取、系统模块描述符承载（FS-H12）
 │   │     ◀── C1d-a a2（1e623cec 的 [boot_init] 与 jdk/ 去截断）、FS-C2　验收：TestModuleLayerDefine 原样通过
 │   │
-│   ├─ 🔄 regress2 续：栈帧来源统一（native-gaps 已合入）
+│   ├─ ✅ regress2 续：栈帧来源统一（frames-unify bf91f075，合入 be1b97be）：行表单一帧源、删符号解析、手写 native / Object 成帧、StackWalker 行号
+│   │     遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 <init> 不成帧 ◀── C1d-a a2
 │   │
 │   └─ ⏳ C4 收官：全量 e2e（JDK 21）⊇ 1029 例基线
-│         ◀── C1d-a（a1–a4）、C1d-b、FS-C2、boot layer、regress2 续 全部合入
+│         ◀── C1d-a（a1–a4）、C1d-b、FS-C2、boot layer 全部合入
 │
 ├─ 【近期】阶段 C 之后，依赖 C4 收官
 │   │
@@ -162,7 +163,7 @@ C1d-a a1 具体求值器 ──▶ a2 合入 1e623cec ──▶ a3 jvm_boundary 
 C1d-b b1 序列化收窄 ───────────────────────────────────────────────┤
 C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
 native-gaps ✅ ──▶ FS-C2 ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
-               └─▶ regress2 栈帧来源统一 ─────────────────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
+               └─▶ regress2 栈帧来源统一 ✅ be1b97be ─────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
 ```
 
 工期瓶颈是 C1d-a：具体求值器把正式闭包降到 ≤360 类之前，1e623cec 不能合入，C4 全量 e2e 也不能启动。
@@ -179,7 +180,7 @@ native-gaps ✅ ──▶ FS-C2 ──▶ boot layer（另需 C1d-a a2）──�
 | C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | c72bfd88（lib crate `pub(crate)` 成员发反射臂，修 m3 serialVersionUID）待合入，先修 ArrayList.writeObject 分派存根与 TestReflectProbe；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | 🔄 fs-c2 | `2026-10-02-fs-c2-app-classloader.md`；TestClassNestNatives 为已知失败 |
-| regress2 续 · 栈帧来源统一 | 🔄 | native-gaps 已合入，开始 |
+| regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
 | boot layer | ⏳ | ModuleBootstrap 引导建层；◀── C1d-a a2、FS-C2 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
