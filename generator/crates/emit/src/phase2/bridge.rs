@@ -112,7 +112,7 @@ pub struct BridgeMember<'c> {
 
 fn find_slot<'e>(em: &'e ClassEmission, name: &str, param_desc: &str, covariant_desc: Option<&str>) -> Option<&'e EmittedMethod> {
     match covariant_desc {
-        Some(d) => em.methods.iter().find(|m| m.name == name && m.descriptor == d),
+        Some(d) => em.slotted().find(|m| m.name == name && m.descriptor == d),
         None => em.find(name, param_desc),
     }
 }

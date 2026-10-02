@@ -33,6 +33,9 @@ pub struct EmittedMethod {
     pub is_abstract: bool,
     /// 本轮翻译出了方法体
     pub has_body: bool,
+    /// 共置手写提供体、声明以 `// [meta]` 注释行承载（手写 native 等非槽位方法）：只作继承成员的
+    /// 声明者（子类接收者经上转直调），不参与槽位 / 桥接 / 接口实现的定位
+    pub meta: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,6 +83,9 @@ fn res() -> &'static RecordRes {
     })
 }
 
+/// 手写体方法的签名注释行前缀（`class_writer::methods` 的 Handwritten 判定发射）
+const META_PREFIX: &str = "// [meta] ";
+
 /// 方法块 → 声明记录（非实例方法 / 无 `&self` 签名的块返回 None）
 fn parse_block(block: &str) -> Option<EmittedMethod> {
     let r = res();
@@ -88,7 +94,12 @@ fn parse_block(block: &str) -> Option<EmittedMethod> {
     if name.starts_with('<') || r.is_static.is_match(rest) {
         return None;
     }
-    let sig_line = block.split('\n').find(|l| l.trim_start().starts_with("pub fn "))?.trim();
+    let sig_line = block.split('\n').map(str::trim_start).find_map(|l| {
+        l.strip_prefix(META_PREFIX).filter(|r| r.starts_with("pub fn ")).map(|r| (r, true))
+            .or_else(|| l.starts_with("pub fn ").then_some((l, false)))
+    });
+    let (sig_line, meta) = sig_line?;
+    let sig_line = sig_line.trim();
     let fn_name = r.fn_name.captures(sig_line)?[1].to_string();
     if !sig_line.contains("&self") {
         return None;
@@ -110,7 +121,8 @@ fn parse_block(block: &str) -> Option<EmittedMethod> {
         vtable_name: get(&r.vtable_name),
         handwritten: r.handwritten.is_match(rest),
         is_abstract: r.is_abstract.is_match(rest),
-        has_body,
+        has_body: has_body && !meta,
+        meta,
     })
 }
 
@@ -122,7 +134,17 @@ pub fn record_methods(method_blocks: &[String]) -> Vec<EmittedMethod> {
 impl ClassEmission {
     /// 名字相同、描述符以 `param_desc` 为前缀的首条声明（返回类型不参与：协变）
     pub fn find(&self, name: &str, param_desc: &str) -> Option<&EmittedMethod> {
+        self.slotted().find(|m| m.name == name && m.descriptor.starts_with(param_desc))
+    }
+
+    /// 同 [`Self::find`]，含 `[meta]` 声明（继承成员的声明者定位）
+    pub fn find_declared(&self, name: &str, param_desc: &str) -> Option<&EmittedMethod> {
         self.methods.iter().find(|m| m.name == name && m.descriptor.starts_with(param_desc))
+    }
+
+    /// 文本中实际声明的实例方法（不含 `[meta]` 注释声明）
+    pub fn slotted(&self) -> impl Iterator<Item = &EmittedMethod> {
+        self.methods.iter().filter(|m| !m.meta)
     }
 }
 
@@ -140,5 +162,17 @@ mod tests {
         assert!(m[0].has_body);
         let stat = "#[java_method(name = \"f\", descriptor = \"()V\", is_static = true)]\npub fn f() -> Result<()>;";
         assert!(record_methods(&[stat.to_string()]).is_empty());
+    }
+
+    #[test]
+    fn records_meta_declaration() {
+        let block = "// [meta] #[java_native(name = \"ctx\", descriptor = \"()[Ljava/lang/Class;\", access = \"protected\", modifiers = \"native\", is_native    = true)]\n// [meta] pub fn ctx(&self) -> Result<JArray<Class>>;";
+        let m = record_methods(&[block.to_string()]);
+        assert_eq!(m.len(), 1);
+        assert!(m[0].meta && !m[0].has_body);
+        assert_eq!(m[0].signature, "pub fn ctx(&self) -> Result<JArray<Class>>");
+        let em = ClassEmission { methods: m, ..ClassEmission::default() };
+        assert!(em.find("ctx", "()").is_none());
+        assert!(em.find_declared("ctx", "()").is_some());
     }
 }

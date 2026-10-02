@@ -72,6 +72,8 @@ extern "Rust" {
     static NEST_MEMBERS: &'static [(&'static str, Names)];
     #[link_name = "__java_meta_CLASS_ACCESS_FLAGS"]
     static CLASS_ACCESS_FLAGS: &'static [(&'static str, i32)];
+    #[link_name = "__java_meta_CLASS_SOURCE_FILE"]
+    static CLASS_SOURCE_FILE: &'static [(&'static str, &'static str)];
     #[link_name = "__java_meta_RECORD_CLASSES"]
     static RECORD_CLASSES: Names;
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
@@ -111,6 +113,8 @@ pub fn permitted_subclasses() -> &'static [(&'static str, Names)] { unsafe { PER
 pub fn nest_members() -> &'static [(&'static str, Names)] { unsafe { NEST_MEMBERS } }
 /// 类 → 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内）。
 pub fn class_access_flags() -> &'static [(&'static str, i32)] { unsafe { CLASS_ACCESS_FLAGS } }
+/// 类 → SourceFile 属性值（无该属性的类不在表中）。
+pub fn class_source_file() -> &'static [(&'static str, &'static str)] { unsafe { CLASS_SOURCE_FILE } }
 /// record 类集。
 pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 /// record 类 → 分量（名、描述符、泛型签名）。

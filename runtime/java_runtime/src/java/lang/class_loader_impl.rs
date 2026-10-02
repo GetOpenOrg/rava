@@ -72,9 +72,9 @@ impl ClassLoader {
 
     /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
     #[jvm_boundary]
-    pub fn getResources(&self, name: String) -> Result<Object> {
+    pub fn getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
         let _ = name;
-        crate::java::util::Collections::emptyEnumeration().map(Into::into)
+        crate::java::util::Collections::emptyEnumeration()
     }
 
     /// static getSystemResource：委托实例形态（恒 null）。
@@ -99,8 +99,8 @@ impl ClassLoader {
 
     /// static getSystemResources：委托实例形态（恒空枚举）。
     #[jvm_boundary]
-    pub fn getSystemResources(name: String) -> Result<Object> {
-        crate::java::util::Collections::emptyEnumeration().map(Into::into)
+    pub fn getSystemResources(name: String) -> Result<crate::java::util::Enumeration<Object>> {
+        crate::java::util::Collections::emptyEnumeration()
     }
 }
 

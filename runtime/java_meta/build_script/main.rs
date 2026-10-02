@@ -43,7 +43,8 @@ fn main() {
     write_modifiers_table(&scan_class_modifiers(&meta_roots));
     write_record_table(&scan_record_classes(&meta_roots), &scan_record_components(&meta_roots));
     write_class_meta_table(&scan_clinit_classes(&meta_roots), &scan_class_attr(&meta_roots, "permitted_subclasses"),
-        &scan_class_attr(&meta_roots, "nest_members"), &scan_class_attr(&meta_roots, "class_access_flags"));
+        &scan_class_attr(&meta_roots, "nest_members"), &scan_class_attr(&meta_roots, "class_access_flags"),
+        &scan_class_attr(&meta_roots, "source"));
     write_nest_table(&scan_nest_meta(&meta_roots));
     write_interfaces_table(&scan_class_interfaces(&meta_roots));
     write_class_anno_table(&scan_class_annos(&meta_roots));

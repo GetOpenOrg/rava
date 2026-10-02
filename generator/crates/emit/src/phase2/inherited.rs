@@ -318,7 +318,7 @@ impl<'a> RecvPass<'a, '_> {
         let mut cur = self.recv_ci.super_class().to_string();
         let mut seen = BTreeSet::new();
         while !cur.is_empty() && cur != lang::OBJECT && reg.contains(&cur) && seen.insert(cur.clone()) {
-            if let Some(found) = self.ems.get(&cur).filter(|e| !e.handwritten).and_then(|e| e.find(mname, pdesc)) {
+            if let Some(found) = self.ems.get(&cur).filter(|e| !e.handwritten).and_then(|e| e.find_declared(mname, pdesc)) {
                 return Some((cur, found));
             }
             cur = reg.get(&cur).map(|c| c.super_class().to_string()).unwrap_or_default();
@@ -392,7 +392,7 @@ impl<'a> RecvPass<'a, '_> {
 
     fn want(&mut self, name: &str, pdesc: &str) {
         let recv_bin = self.recv.binary_name.as_str();
-        if let Some(own) = self.recv.find(name, pdesc) {
+        if let Some(own) = self.recv.find_declared(name, pdesc) {
             if !covariant_bridge_pending(self.ctx, self.recv_ci, recv_bin, own, name, pdesc) {
                 return;
             }

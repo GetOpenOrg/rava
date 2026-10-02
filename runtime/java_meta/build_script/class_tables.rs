@@ -444,7 +444,8 @@ fn push_name_lists(out: &mut String, table: &str, lists: &BTreeMap<String, Strin
 }
 
 pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
-                                     nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>) {
+                                     nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>,
+                                     source: &BTreeMap<String, String>) {
     let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
     let mut out = String::from(
         "// 由 build.rs 自动生成：类文件级元数据（VM 注入的类信息）。请勿手改。
@@ -452,6 +453,7 @@ pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTre
          // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
          // NEST_MEMBERS：嵌套宿主的 NestMembers 属性（nest_members 属性）——Class.getNestMembers0。
          // CLASS_ACCESS_FLAGS：类文件 access_flags 原值（class_access_flags 属性）——Class.getClassAccessFlagsRaw0。
+         // CLASS_SOURCE_FILE：SourceFile 属性（source 属性）——StackTraceElement.initStackTraceElement 的 fileName。
 
          #[export_name = \"__java_meta_CLINIT_CLASSES\"] pub static CLINIT_CLASSES: &[&str] = &[
 ",
@@ -467,6 +469,11 @@ pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, permitted: &BTre
         if let Ok(bits) = v.trim().parse::<i32>() {
             out.push_str(&format!("    ({:?}, {}),\n", cls, bits));
         }
+    }
+    out.push_str("];\n");
+    out.push_str("\n#[export_name = \"__java_meta_CLASS_SOURCE_FILE\"] pub static CLASS_SOURCE_FILE: &[(&str, &str)] = &[\n");
+    for (cls, file) in source {
+        out.push_str(&format!("    ({:?}, {:?}),\n", cls, file));
     }
     out.push_str("];\n");
     let path = Path::new(&out_dir).join("class_meta_table.rs");
