@@ -109,12 +109,12 @@ impl<'a> Engine<'a> {
                 let mut hit = false;
                 for c in &classes {
                     if let Some((decl, desc)) = self.field_by_name(c, name) {
-                        self.handle_field(MemberRef { owner: decl, name: name.to_string(), desc });
+                        self.open_field(MemberRef { owner: decl, name: name.to_string(), desc });
                         hit = true;
                     }
                 }
                 if !hit {
-                    self.handle_field_name(name);
+                    self.open_field_name(name);
                 }
             }
         }
@@ -152,7 +152,7 @@ impl<'a> Engine<'a> {
                 while let Some(cls) = cur {
                     let Some(cf) = self.h.class(&cls) else { break };
                     for f in &cf.fields {
-                        self.handle_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                        self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
                     }
                     cur = cf.super_name.clone();
                 }
@@ -417,7 +417,10 @@ impl<'a> Engine<'a> {
     fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
-        if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
+        // 调用方的内存效果已按清单逐调用点建模时，其手写体对内存访问成员的上调是同一语义的实现（VarHandle.set →
+        // Unsafe.putReference 等），不再以调用方值池为实参另建一份汇合的读写
+        let subsumed = self.memory_modeled(m) && self.memory_modeled(t);
+        if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
             self.rcall_site(m, off, t, recv_fs.as_deref(), a);
         }
@@ -438,7 +441,17 @@ impl<'a> Engine<'a> {
                 }
             } else if let RetModel::Read(src) = model {
                 let i = src + usize::from(!is_static);
-                let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(src).cloned().flatten() };
+                let fs = if subsumed {
+                    None
+                } else if !is_static && i == 0 {
+                    recv_fs.clone()
+                } else {
+                    a.get(src).cloned().flatten()
+                };
+                // 签名多态读取（VarHandle get 族）：静态字段句柄无 holder 坐标，另读按名打开的静态字段
+                if self.is_poly(t) && !subsumed {
+                    self.poly_read(res, rt);
+                }
                 if let Some(fs) = fs {
                     self.hw_read_site(m, off, t, i as u16, &fs, res, rt);
                 }

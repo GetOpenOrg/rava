@@ -84,9 +84,13 @@ fn audit_event(sink: MethodSink) -> BodyEvent {
     BodyEvent::Method { equiv, instanceof_folds, cfg: sink.cfg }
 }
 
-/// 指令层回调：SAM 合成对象构造路径
+/// 指令层回调：SAM 合成对象构造路径、lambda 隐藏类名
 struct Hooks<'c, 'a> {
     ctx: &'c EmitCtx<'a>,
+    /// 指令出处类（方法体字节码所属类，即 lambda 调用者类）
+    code_owner: &'c str,
+    /// 方法在出处类方法表中的下标
+    method_index: usize,
 }
 
 impl InstrHooks for Hooks<'_, '_> {
@@ -98,6 +102,13 @@ impl InstrHooks for Hooks<'_, '_> {
             return None;
         };
         Some(ir::Path::new(segs))
+    }
+
+    /// JVM 以调用者类命名 lambda 隐藏类（`Caller$$Lambda/0x<地址>`）；原生镜像以（方法下标, 指令偏移）
+    /// 代地址，同一调用点在各发射副本（继承展开 / vtable 体）中得同一身份，不同调用点互异
+    fn lambda_class_name(&self, pc: u32) -> Option<String> {
+        let site = (u64::try_from(self.method_index).unwrap_or(0) << 32) | u64::from(pc);
+        Some(format!("{}$$Lambda/0x{site:016x}", self.code_owner))
     }
 
     fn slot_pruned(&self, owner: &str, name: &str, desc: &str) -> bool {
@@ -119,7 +130,13 @@ fn effects_of(sink: &MethodSink) -> BodyEffects {
                 fx.requests.push((receiver.clone(), method.clone(), param_desc.clone()));
             }
             Effect::LambdaRef { class, method, rust_name } => fx.lambda_refs.push((class.clone(), method.clone(), rust_name.clone())),
-            Effect::SamSite { iface, sam_desc, class } => fx.sam_sites.push((iface.clone(), sam_desc.clone(), class.clone())),
+            Effect::SamSite { iface, sam_desc, class, hidden, interfaces } => fx.sam_sites.push(crate::body::SamSite {
+                iface: iface.clone(),
+                sam_desc: sam_desc.clone(),
+                class: class.clone(),
+                hidden: hidden.clone(),
+                interfaces: interfaces.clone(),
+            }),
             Effect::Audit(_) | Effect::InstanceofFold => {}
         }
     }
@@ -158,7 +175,7 @@ impl MethodBodyEmitter for MethodBodies {
         let lvs = local_vars(ctx, req, index);
         let ex = ctx.extras(req.declaring_class);
         let line_numbers = index.and_then(|i| ex.methods.get(i)).map_or(&[][..], |m| m.line_numbers.as_slice());
-        let hooks = Hooks { ctx };
+        let hooks = Hooks { ctx, code_owner: req.declaring_class, method_index: index.unwrap_or(0) };
         let ictx = InstrCtx::new(ctx.ty, ctx.manifest, &self.facts, &hooks, req.class.name()).with_code_owner(req.declaring_class);
         let env = InstrEnv::new(ictx, req.class_type_params);
         let mreq = MethodRequest {

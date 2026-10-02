@@ -358,6 +358,9 @@ pub struct Engine<'a> {
     /// 目标可能是任一按名打开的静态字段的写入值节点：签名多态写入调用点（静态字段句柄无 holder 坐标）、
     /// 以所指未知的类镜像为静态字段基址的按偏移写入
     poly_writes: Vec<Node>,
+    /// 来源可能是任一按名打开的静态字段的读取结果（结果节点, 返回类型）：签名多态读取调用点
+    /// （静态字段句柄没有 holder 坐标，与 `poly_writes` 对称）
+    poly_reads: Vec<(Node, u32)>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
     /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
@@ -428,9 +431,6 @@ pub struct Engine<'a> {
     pub class_init: class_init::ClassInitFacts,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
-    /// 经按名查找 / 字段枚举取得字段句柄的字段与（目标类推不出时的）字段名：方法句柄解释器读写口径（`hw_mem::Gate::Handle`）
-    handle_fields: HashSet<MemberRef>,
-    handle_names: HashSet<String>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
