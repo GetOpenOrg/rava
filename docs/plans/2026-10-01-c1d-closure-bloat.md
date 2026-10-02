@@ -862,3 +862,81 @@ worktree 处理：
 - `../java_rta_c1d_pick`：b957535c、20ef4fdc 合入集成分支后可删；c1d-serial-wip 由接手者另开 worktree。
 - `../java_rta_c1d_prec`、`../java_rta_c1d_p0`：P2/P3 接手者继续用，不删。
 - 已删：`java_rta_c1d_bis`、`/tmp/c1dbis`、`/tmp/c1dfix`。
+
+## 20. P2 / P3 接手实测与结论（2026-10-02，c1d-p0 a830222d 起）
+
+### 20.1 切除对照（HelloWorld，`rava closure --cut-file`，本机经 heavy_lock）
+
+| 标签 | 切除 | 类 | 代码类 | 方法 | 耗时 |
+|---|---|---:|---:|---:|---:|
+| f0 | OOB 消息 + PTI 校验 + getGenericInterfaces + fullAddCount | 319 | 224 | 1228 | 1 s |
+| g1 | OOB + PTI + getGenericInterfaces（fullAddCount 开） | 329 | 234 | 1329 | 1 s |
+| g2 | OOB + PTI + fullAddCount（getGenericInterfaces 开） | 3091 | 2634 | 18728 | 588 s |
+| h1 | f0 去掉 getGenericInterfaces，改切 `ClassScope.computeEnclosingScope` | 371 | 264 | 1495 | 1 s |
+
+切除文件形如（每行 `类.方法:描述符`）：
+
+```
+jdk/internal/util/Preconditions.outOfBoundsMessage:(Ljava/lang/String;Ljava/util/List;)Ljava/lang/String;
+sun/reflect/generics/reflectiveObjects/ParameterizedTypeImpl.validateConstructorArguments:()V
+java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;
+java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V
+```
+
+### 20.2 getGenericInterfaces 闸门：P2 关不掉，爆点在外层作用域查找
+
+- **Integer 键真实可达**：`TreeBin.putTreeVal` 的 key = {String, Integer}，Integer 来自
+  `ConcurrentHashMap.computeIfAbsent`（上下文 `CHM@2139:16`），即 `CoderResult$Cache` 的
+  `Map<Integer, CoderResult>`（字符集解码畸形长度缓存）。整数键在同一桶碰撞 8 次以上、表长 ≥64 时会树化，
+  健全分析排除不了。所以 §18.4 的「Comparable 键只有 String 时不可达」前提不成立，P2 单独关不掉这个闸门。
+- **区域从哪里重开**（g2 对 g1 的首达边界 + `reflect.gaps`）：
+  - getGenericInterfaces 子树本身只有约 156 个方法；
+  - 真正的爆点：`Reifier` 访问 `TypeVariableSignature` → `CoreReflectionFactory.findTypeVariable` →
+    `AbstractScope.lookup` → `getEnclosingScope` → `ClassScope.computeEnclosingScope` →
+    `Class.getEnclosingMethod` / `getEnclosingConstructor` → `getDeclaredMethods0` / `getDeclaredConstructors0`；
+  - 接收者是 `open(Class)`：签名串在抽象层未知，`makeNamedType` 走 `Class.forName(未知名)`，所得镜像未知，
+    于是反射缺口 `getDeclaredMethods0 <- open(Class)`，`Method.invoke` 对全部成员放开，区域重开。
+- h1 说明：只要外层作用域查找不放开未知镜像，泛型区域本身只加约 52 类（371 − 319）。
+- 终态做法（P3）：签名串、类型实参名、外层类 / 外层方法都是构建期 class 文件数据，按接收者镜像逐个**具体求值**
+  `getGenericInterfaces`；轨迹只含这些签名真正经过的解析 / 实化路径，`forName` 的名字是常量，不产生未知镜像。
+  接收者镜像集合取自 `comparableClassFor` 里 `getClass()` 的镜像值集（闭包内有限）。
+
+### 20.3 OOB 与 PTI 闸门的字节码事实（javap）
+
+- **OOB**：`Preconditions.outOfBoundsMessage` 的格式串全部是常量，只用 `%s`；
+  其中 `"Range [%s, %<s + %s) out of bounds for length %s"` 的 `%<s` 让 `Formatter.parse` 走
+  `FORMAT_SPECIFIER_PATTERN` 正则回退（`FormatSpecifier(String, Matcher)` 构造）。
+  `Formatter.parse(String)` 是静态方法：`indexOf` / `charAt` 循环，`Conversion.isValid(c)` 时
+  `new FormatSpecifier(char)`，否则走正则。`FormatSpecifier.print` 按字段 `c` 分支。
+  - 格式串经 `String.format(fmt, …)` → `Formatter.format(fmt, …)` → `format(l, fmt, …)` → `parse(fmt)` 透传。
+  - 现状的缺口：`taint_params` 只认 `PV::Const(Str|Null)` 为干净实参；透传（实参是调用方形参、
+    合流后 PV 为 Top）会把被调形参槽记为污染，形参字符串集（`pstrs.rs`）因此在透传链上失去完备性。
+    终态：污染沿子集边传播——实参全部来源是字面量或**未污染**的调用方形参槽时，被调槽保持干净；
+    调用方槽被污染时沿边传给后继。
+- **PTI**：构造器调用 `validateConstructorArguments`，@15 `if_icmpeq` 比较
+  `rawType.getTypeParameters().length` 与实参个数，错误分支 `String.format("…%s: %d formal argument(s) %d actual argument(s)", …)`，
+  `%d` 引入 locale / ResourceBundle / ServiceLoader 区域。
+  - 在具体求值的轨迹里，校验走成功路径（实参个数由签名决定），错误分支不进轨迹；
+  - 抽象可达的 PTI 构造（若有其它入口）仍按 §18.5 第 5 项做构建期签名校验。
+
+### 20.4 已知过近似（记录，不在本线处理）
+
+- `EnumSet.of(e)` 经 `getDeclaringClass` → `getSuperclass`，所得 Class 值 open，`class_init` 退化为未知（C1d-b）。
+- `CHM.comparableClassFor` 的 `getClass()` 结果含无所指的 `java/lang/Class` 与 `TreeBin`、
+  `ReentrantLock$NonfairSync` 的镜像：`TreeBin.<init>` 读 `Node.key` 字段是全体 CHM 共用的字段节点
+  （P0 = 15 类 + open(Unsafe) + open(Thread)）。具体求值按镜像逐个进行，这些镜像不实现 Comparable 时轨迹在
+  `instanceof` 处即返回 null，不影响结果；精度改进归容器上下文线。
+
+### 20.5 实施次序（取代 §18.9 中 P2 先行的安排）
+
+1. 形参字符串集的透传完备性（污染沿子集边传播），OOB 与 Formatter 入口的前置条件。
+2. `engine/concrete/`：确定性具体求值器（解释器 / 堆 / native 白名单，各 ≤600 行）。
+   - 入口：调用点实参全部可枚举（字面量、未污染形参槽的字符串集、类字面量 / 有限镜像集）。
+   - 轨迹上的方法入闭包，但不做抽象分析；结果对象图物化为类型流（实例化类型、字段值集、返回值集）。
+   - 失败（非白名单 native、写外部静态、步数超限）整次回退抽象调用边。
+   - native 白名单与内存缓存字段（镜像上的 `genericInfo` 等）在 `vm_intrinsics.toml` 新增节声明。
+3. 三个闸门依次接入：`Formatter.parse`（OOB）→ 按镜像求值 `getGenericInterfaces`（含 PTI 成功路径）→ 其余 PTI 入口的签名校验。
+4. P2 守卫收窄降为精度项（ResourceBundle 服务上界），不再是闸门前提。
+
+预算：f0 = 319；泛型区域按 h1 抽象形态 +52，具体轨迹应明显更少；Formatter `%s` 约 +40。
+≤360 是否可达取决于两段轨迹的实际规模，接入后实测记入本节。
