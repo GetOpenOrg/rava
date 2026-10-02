@@ -21,6 +21,14 @@ pub fn java_class_opaque(input: TokenStream) -> TokenStream {
     opaque::expand(input.into()).into()
 }
 
+/// `hidden_class! { #[binary_name = "C$$Lambda/0x.."] #[super_class = ..] #[interfaces = ..] .. }` —
+/// lambda 调用点隐藏类的元数据声明：只有属性，无 Rust 类型（实例由接口的 `I__Lambda` 合成对象
+/// 承载，运行时类名取自调用点）。属性由 java_meta 构建脚本扫描进反射元数据表，宏展开为空。
+#[proc_macro]
+pub fn hidden_class(_input: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
 /// `iface_upcasts! { impl<E> C<E> => I<Object>, J<Object> }` — 类实例 → 擦除接口载体视图的协变
 /// upcast；类型参数约束由宏补齐（与 `java_class!` 同源），生成侧只写裸参数名（T-1）。
 #[proc_macro]

@@ -1,6 +1,6 @@
 //! 引擎：类型流诊断中需要传播期信息的两类查询。
 //!
-//! **open 来源**（`--flows @openorig:<类型>|<节点子串>` / `@openinj:<类型>`）：open 值只有两种来历：
+//! **open 来源**（`--flows @openorig:[=]<类型>|<节点子串>` / `@openinj:<类型>`）：open 值只有两种来历：
 //! 直接注入（手写返回、未知值按声明类型、open 数组的元素读……）与沿流边传播。注入点在 `add_to` 处登记
 //! （[`Engine::open_inj`]），诊断沿流边反向走到注入点，回答「这个节点上的 open(T) 从哪些注入点来」。
 //!
@@ -232,12 +232,17 @@ impl Engine<'_> {
             return Some(v);
         }
         let (q, np) = pat.strip_prefix("@openorig:")?.split_once('|')?;
+        // `=类型`：只认该类型本身的 open（不含经声明类型收窄而来的子 / 超类型 open）
+        let (exact, q) = match q.strip_prefix('=') {
+            Some(q) => (true, q),
+            None => (false, q),
+        };
         let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };
         // 流边按声明类型收窄：open(Object) 经 Object[] 过滤成为 open(Object[])，沿途的 open 类型与目标有子类型关系即算同源
         let q_name = self.names[cid as usize].clone();
         let related = |o: u32| {
             let n = &self.names[o as usize];
-            o == cid || self.h.is_subtype(n, &q_name) || self.h.is_subtype(&q_name, n)
+            o == cid || !exact && (self.h.is_subtype(n, &q_name) || self.h.is_subtype(&q_name, n))
         };
         let has = |x: &Node| self.graph.get(x).is_some_and(|s| s.open.iter().any(related));
         let mut rev: HashMap<Node, Vec<Node>> = HashMap::default();
@@ -253,6 +258,7 @@ impl Engine<'_> {
         // 注入点 → 到起点的最短距离
         let mut hits: Vec<(Node, usize)> = Vec::new();
         let mut dist: HashMap<Node, usize> = seen.iter().map(|n| (*n, 0)).collect();
+        let mut next: HashMap<Node, Node> = HashMap::default();
         while let Some(n) = q.pop_front() {
             let d = dist[&n];
             if self.open_inj.get(&n).is_some_and(|ts| ts.iter().any(|&o| related(o))) {
@@ -261,11 +267,24 @@ impl Engine<'_> {
             for p in rev.get(&n).into_iter().flatten() {
                 if seen.insert(*p) {
                     dist.insert(*p, d + 1);
+                    next.insert(*p, n);
                     q.push_back(*p);
                 }
             }
         }
-        let mut out: Vec<String> = hits.iter().map(|(n, d)| format!("  [{d:3}] {}", self.node_str(*n))).collect();
+        // 每个注入点附到起点的一条最短路径（注入点 → … → 起点）
+        let mut out: Vec<String> = hits
+            .iter()
+            .map(|(n, d)| {
+                let mut path = vec![];
+                let mut cur = *n;
+                while let Some(&x) = next.get(&cur) {
+                    path.push(self.node_str(x));
+                    cur = x;
+                }
+                format!("  [{d:3}] {}\n        → {}", self.node_str(*n), path.join("\n        → "))
+            })
+            .collect();
         out.sort();
         out.insert(0, format!("  经 {} 个节点，注入点 {} 个", seen.len(), hits.len()));
         Some(out)

@@ -307,8 +307,8 @@ pub struct ProjectState {
     pub lambda_defs: BTreeMap<(String, String), BTreeSet<String>>,
     /// G-10 账本：本轮生成类
     pub generated_classes: BTreeSet<String>,
-    /// SAM 合成站点 (接口, SAM 描述符, 当前类)（插入序）
-    pub sam_sites: Vec<(String, String, String)>,
+    /// SAM 合成站点（插入序）
+    pub sam_sites: Vec<crate::body::SamSite>,
     /// FS-H0 手写覆盖审计（`raw_audit` 三类登记；发射序）
     pub hw_audit: Vec<(HwAudit, String)>,
     /// 方法体生成日志（审计事实 + 逐方法耗时；发射序）

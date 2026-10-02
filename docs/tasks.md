@@ -97,12 +97,11 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 1e623cec 在 c1d-p0；c1d-p0 5c6dd98f（已合 28090062）待抽查：LinuxNativeDispatcher 6 个 native（88c03270）、
-│   │     │       FS-C2 后闭包膨胀修复（字符串 switch 折叠，HelloWorld 2855 → 498 类，357f8549）、initLevel 引导段档位（0c4e47c6，
-│   │     │       修 saveProperties「Wrong init level」）；TestCharsetNamedStreams ✅、TestServiceLoaderLayers ✅（本机）
+│   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
+│   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
+│   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup r4（ubuntu）运行期失败：MapMode 反射构造分派缺席，修复中
 │   │     ├─ ⏳ 后续项 precheck 按目标平台扫描：本机只扫宿主 JDK 的 jmod，看不到 Linux 专有 native。已做：precheck 清单落盘
 │   │     │       build_status.json emit.precheck、run_tests 失败详情附清单（8ed3a5e3）。待做：按目标平台 jmod 扫描
-│   │     │       （Linux jmod 拼的 hybrid JDK 跑 TestUnixFileNatives 闭包 >40 min 未完成，需先查语料膨胀）
 │   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
 │   │     │       ClassLoader 6、BootLoader 5、Class 2、Module/ModuleLayer 9 归 boot layer）；拆为 U0–U3 / V / T / L1 / L2 / C / X1 / X2 / Z，
 │   │     │       见计划 §21（§21.7 各项验收数字；§21.8 a3-T 终态：VirtualThread / ForkJoinPool 字节码翻译 + Continuation 有栈协程，
@@ -114,22 +113,31 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       jimage 1、NativeLibraries 3、BootLoader 1、defineClass0 1）作为膨胀指纹；终态：pkcs11 / smartcardio / defineClass0
 │   │     │       13 个所在类不入闭包（不补手写），NativeLibraries / getSystemPackageLocation / getNativeMap 5 个归 a3-L1 ① native；
 │   │     │       计划 §21.5 a5-4，c1d-p0 合入后另开步骤
-│   │     ├─ 🔄 a4 TestCharsetNamedStreams（自 c4-regfix 移交）：b124e5ac 已修，待服务器抽查
+│   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）
 │   │     ├─ 🔄 b1′ ArrayList.writeObject 分派臂：2026-10-02 交接拆分（c1d-pick 2c16454b，计划 §4.6；WIP 快照 c1d-pick-wip 63d90e86）
 │   │     │       T0 基线抽查 c1db-2c16454b → 并行 ✅ T6 getSuperclass 返回模型（7a0188e6）、✅ T5 MH→putReference 清单精确化（cc6b59e0）、
-│   │     │       ✅ T7 探针转正 --flows（1518612d）→ 🔄 T4 未知 Class 字段枚举收窄 → T3 反射回调按接收者克隆上下文 → T2 名字×镜像交叉（最后合）
+│   │     │       ✅ T7 探针转正 --flows（1518612d）→ ✅ T4 未知 Class 字段枚举收窄（2311459e；余 2 处字段全开源头归 b1） → ✅ T3 反射回调按接收者克隆上下文（4c3a614e 合入，抽查 9/10；6 s 回收，StockTrans 分派 22949→1645；MH 按句柄路由实测上界 −1 类，不做） → 🔄 T2（c1d-t2：writeObject0 对象池 / 名字×镜像 / forName0 回退 / Serializable 有界镜像） 名字×镜像交叉（最后合）
 │   │     │       验收：StockTrans / TestSerialDefaultSuid / TestSerialProxyForm 通过、fold_props ≥42、m3 golden
-│   │     ├─ 🔄 b1 序列化收窄：大值集来自未知接收者字段视图（Unsafe 读 ↔ setObjFieldValues 手写写入成环）
+│   │     ├─ 🔄 b1 序列化收窄：✅ S2 ReflectUtil 放行 / 静态 CAS（含子字宽）/ 返回模型收窄合入（c1d-b1 0d7dd2a5；StockTrans 1803→1794、DeepCopy 1804→1789）；余：DeepCopy 距 ≤1640 目标，归 T2
 │   │     │       验收：DeepCopy ≤1640 类、fold_props ≥42、StockTrans / TestSerialDefaultSuid 回调保留
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
-│   │     └─ ⏳ b3 任务 3：class_init.unknown 归 false
+│   │     └─ 🔄 b3 任务 3：class_init.unknown 归 false——✅ 第一段合入 1721f701（aeff784b）：class_init 钩子、截断体同类调用登记（bool2byte）、
+│   │             跳过 Class#<synthetic>、子字字段 CAS（每字段 4 字节槽 + __unsafe_word）；第二段 01c88c11 抽查 c1db3-01c88c11 10/10：
+│   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
+│   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
+│   │             与 b1 冲突（manifest.rs / var_handle_impl.rs / unsafe__impl.rs），同步集成分支后重抽查再合；
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、CallerSensitive 经 lambda / 方法引用 / MH、S5
+│   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
+│   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
+│   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；✅ ② A+B 超接口 / 接口视图类型实参（b820c8aa 合入；27 例 from_any 2–78→1–4，闭包不变）；✅ ③ C+D 方法级类型变量 / super.m()（44b3a3b3 合入；27 例中 26 例 from_any=0，StockTrans 11→0）；🔄 ④ 余下发射点统一 Into<Object>、守护测试
 │   │
 │   ├─ ✅ native-gaps（bdc4cd64，合入 417a6594）：sun/nio/fs native 21 个、loop_hoist 合流变量、栈帧按声明类归属（declared_by）
-│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2；TestModuleLayerDefine ◀── boot layer；
+│   │     已知失败（集成分支原本即失败，不是回归）：TestUnixFileNatives ◀── C1d-a a2（c1d-p0 已修）；TestModuleLayerDefine ◀── boot layer；
+│   │     ThreadTest（FS-C2 A 4896b5a7 起 initSystemClassLoader 存根：静态字段钩子漏连边）◀── C1d-b b3（01c88c11 已修）；
 │   │     TestClassNestNatives ✅ FS-C2；TestReflectProbe ✅ C1d-b
 │   │
 │   ├─ ✅ FS-C2 应用类加载器（fs-c2 9c737f03，合入 4a98f5e3）：定义加载器读取钩子、ClassLoaders 整类字节码、initPhase3（scl + 上下文加载器）、
@@ -179,14 +187,14 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ### 二、关键路径
 
 ```
-C1d-a a1 ✅ ──▶ a2 1e623cec 验收（余 1 例）──▶ a3 jvm_boundary 归零 ─────────┐
+C1d-a a1 ✅ ──▶ a2 f2bdcf6e 验收（余 1 例）──▶ a3 jvm_boundary 归零 ─────────┐
 C1d-b b1′ writeObject 分派臂 / b1 序列化收窄 ───────────────────────┤
 C6 ✅ 3f9d4cc9 ──────────────────────────────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
 native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）───────────────┤        │
                └─▶ regress2 栈帧来源统一 ✅ be1b97be ─────────────────┘        └──▶ 优化线恢复（P8 / V / S7·T1 决策 / R1 / JDK 25）
 ```
 
-工期瓶颈是 C1d-a a2：闭包规模已达标（正式 HelloWorld 423 类 / 2–3 s，余量转 a5），只剩 TestUnixFileNatives 验收；a2 合入前 boot layer 第 1 步起、regress2 遗留、a3 都不能启动，C4 全量 e2e 随之顺延。
+工期瓶颈是 C1d-a a2：闭包规模已达标（正式 HelloWorld 423 类 / 2–3 s，余量转 a5），只剩 TestFileStoreMountLookup 重跑验收（TestUnixFileNatives 已过）；a2 合入前 boot layer 第 1 步起、regress2 遗留、a3 都不能启动，C4 全量 e2e 随之顺延。
 
 ---
 
@@ -196,8 +204,8 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 5/6，余 TestUnixFileNatives（LinuxNativeDispatcher.init）；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T5 / T6 / T7 已合入，T4 / b1 / b3 并行中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 c1da-f2bdcf6e 7/8（StockTrans 基线），余 TestFileStoreMountLookup 重跑；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），T3 已合入（4c3a614e），b3 第二段（setContextClassLoader 存根修复中）/ T2 进行中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |
 | regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |

@@ -124,7 +124,11 @@ impl Ctx<'_> {
             self.dep(m, Dep::Props);
         }
         // 反序列化只写它自己分配的对象（不经构造器），构造器建出的标签对象不受其影响：不看 `deser`
-        let open = fi.open || self.fopen_all.get() || self.fopen.borrow().contains(&fi.key) || self.fopen_names.borrow().contains(&fi.key.name);
+        let open = fi.open
+            || self.fopen_all.get()
+            || self.fopen.borrow().contains(&fi.key)
+            || self.fopen_names.borrow().contains(&fi.key.name)
+            || self.hw_written(&fi);
         if m.is_none() && !open {
             self.note_aux_read(&fi.key);
         }

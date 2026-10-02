@@ -94,7 +94,7 @@ impl Handwritten {
             };
             let mut raw = FileFns::default();
             scan_file(&file, &self.prelude, &mut raw);
-            close_transitive(&mut raw.fns, &raw.calls);
+            close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
             let mut hw = ClassHw { files: vec![path], ..Default::default() };
             defined_types(&file.items, &mut hw.types);
             hw.objects = objects::close(&raw);

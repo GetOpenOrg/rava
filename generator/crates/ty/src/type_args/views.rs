@@ -66,12 +66,33 @@ pub fn supertype_signature_args(ci: &ClassInfo) -> Vec<(String, Vec<String>)> {
 
 impl TyCtx<'_> {
     /// 类实现的全部接口（自身 + 祖先类 + 超接口闭包）及其在 recv 视角下的类型实参，
-    /// 广度优先、近者在前
+    /// 广度优先、近者在前；实参以 recv 自身形参名表达（见 [`Self::interface_views_with_args`]）
     pub fn implemented_interface_views(&self, recv: &ClassInfo) -> Vec<(String, Vec<RsType>)> {
+        self.interface_views_with_args(recv, None)
+    }
+
+    /// 同 [`Self::implemented_interface_views`]，`self_args` 为 recv 的实际类型实参时
+    /// 结果中的 recv 形参全部代入实参（个数不符 → 形参一律按根类，即原始类型擦除）
+    pub fn interface_views_with_args(
+        &self,
+        recv: &ClassInfo,
+        self_args: Option<&[RsType]>,
+    ) -> Vec<(String, Vec<RsType>)> {
         let anc_args: BTreeMap<String, Vec<RsType>> =
-            self.ancestor_type_args(recv, None).into_iter().collect();
+            self.ancestor_type_args(recv, self_args).into_iter().collect();
+        let own_mapping: BTreeMap<String, RsType> = match self_args {
+            Some(a) => {
+                let own = self.effective_class_type_params(recv);
+                let raw = a.len() != own.len();
+                own.iter()
+                    .enumerate()
+                    .map(|(i, p)| (p.clone(), if raw { RsType::Object } else { a[i].clone() }))
+                    .collect()
+            }
+            None => BTreeMap::new(),
+        };
         let mut queue: VecDeque<(&ClassInfo, BTreeMap<String, RsType>)> = VecDeque::new();
-        queue.push_back((recv, BTreeMap::new()));
+        queue.push_back((recv, own_mapping));
         let mut seen_cls = BTreeSet::from([recv.name().to_string()]);
         let mut cur = recv.super_class();
         while let Some(cur_ci) = self.reg.get(cur).filter(|_| !seen_cls.contains(cur)) {

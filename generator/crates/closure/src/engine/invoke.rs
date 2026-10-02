@@ -22,6 +22,7 @@ impl<'a> Engine<'a> {
     ///   取各调用点在该形参上的字符串常量（如按名构造 MemberName 的辅助方法），常量集增长时本站点重跑；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
     pub(super) fn reflective_writes(&mut self, m: usize, off: u32, mref: &MemberRef, opcode: u8, args: &[V]) {
+        self.rcall_conversion(m, off, mref, opcode, args);
         let class_param = parse_method(&mref.desc)
             .is_some_and(|md| md.params.iter().any(|p| matches!(p, FieldType::Object(c) if c == CLASS)));
         let class_recv = opcode != classfile::op::INVOKESTATIC && mref.owner == CLASS;
@@ -34,6 +35,8 @@ impl<'a> Engine<'a> {
             .collect();
         let k = self.mref_key(mref);
         if self.man.is_method_lookup(&k) {
+            // 查找结果经哪条反射调用通道调用（按查找结果的类型，见 `reflect_call.rs`）
+            let ch = self.rcall_lookup_channel(&mref.desc);
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 本调用点上的字面量名（常量实参 / 合流前的各字面量）；形参透传来的名字不在此列
             let mut site_names: BTreeSet<Rc<str>> = BTreeSet::new();
@@ -79,7 +82,7 @@ impl<'a> Engine<'a> {
             // 同名方法拉进反射面（如序列化辅助方法按形参取名、按形参取类）；拼段名同理只按常量类 / Class 形参定目标
             for name in &names {
                 for c in &classes {
-                    self.reflect_name(c, name);
+                    self.reflect_name(c, name, ch);
                 }
             }
             if class_recv && !site_names.is_empty() {
@@ -88,7 +91,7 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     for name in &site_names {
-                        self.reflect_name(&c, name);
+                        self.reflect_name(&c, name, ch);
                     }
                 }
             } else if class_recv && !names.is_empty() && classes.is_empty() {
@@ -96,7 +99,7 @@ impl<'a> Engine<'a> {
                 self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }
             for (c, name) in &per_class {
-                self.reflect_name(c, name);
+                self.reflect_name(c, name, ch);
             }
         }
         if class_param || class_recv {
@@ -120,13 +123,16 @@ impl<'a> Engine<'a> {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
         }
         if self.man.is_field_enumerator(&k) {
-            let cls = match args.first() {
-                Some(V::Class(c, _)) => Some(c.to_string()),
-                _ => None,
-            };
-            self.enumerate_fields(cls);
-            if let Some(recv) = args.first() {
-                self.enumerated_static_owners(m, off, &k, recv);
+            // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
+            let mut cs = BTreeSet::new();
+            let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            self.enumerated_static_owners(m, off, &cs);
+            for c in cs {
+                self.enumerate_fields(Some(c));
+            }
+            if unknown {
+                self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
+                self.enumerate_fields(None);
             }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
@@ -134,7 +140,7 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
+    /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
     pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
             if self.fenum_pending.insert(cls) {
@@ -427,12 +433,14 @@ impl<'a> Engine<'a> {
     fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
-        // 调用方自身是声明了内存效果的手写方法（`[facts.array_writes]` / `[facts.memory_reads]`）：其声明按调用方的
-        // 每个调用点给出完整读写效果，手写体内部对其它内存操作的调用（如 putReferenceOpaque 体内的 putReference）
-        // 是该声明的实现，不另按本调用点建模——否则经调用方形参汇合，偏移与对象跨调用点相乘
-        let delegated = self.declares_memory(m);
-        if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !delegated {
+        // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
+        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
+        // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
+        let modeled = |e: &Self, x: usize| e.declares_memory(x) || e.memory_modeled(x);
+        let subsumed = modeled(self, m) && modeled(self, t);
+        if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
+            self.rcall_site(m, off, t, recv_fs.as_deref(), a);
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             let model = self.methods[t].ret_model;
@@ -441,9 +449,7 @@ impl<'a> Engine<'a> {
                 for f in recv_fs.iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => {
-                            self.mirror_op_into(op, s, res);
-                        }
+                        Feed::S(s) => self.mirror_into(op, s, res),
                     }
                 }
             } else if model == RetModel::Receiver {
@@ -456,7 +462,17 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 let i = src + usize::from(!is_static);
-                let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(src).cloned().flatten() };
+                let fs = if subsumed {
+                    None
+                } else if !is_static && i == 0 {
+                    recv_fs.clone()
+                } else {
+                    a.get(src).cloned().flatten()
+                };
+                // 签名多态读取（VarHandle get 族）：静态字段句柄无 holder 坐标，另读按名打开的静态字段
+                if self.is_poly(t) && !subsumed {
+                    self.poly_read(res, rt);
+                }
                 if let Some(fs) = fs {
                     self.hw_read_site(m, off, t, i as u16, &fs, res, rt);
                 }

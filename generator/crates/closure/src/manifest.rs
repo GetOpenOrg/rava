@@ -133,11 +133,14 @@ pub struct Manifest {
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
+    primitive_class_returns: HashSet<String>,
+    component_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     class_initializers: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
+    method_to_handle: HashSet<String>,
     pub boot_init: Vec<String>,
     /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
     pub boot_calls: Vec<String>,
@@ -363,6 +366,8 @@ impl Manifest {
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
+            primitive_class_returns: reflect("primitive_class").into_iter().collect(),
+            component_returns: reflect("component_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -372,6 +377,7 @@ impl Manifest {
                 .map(|c| (c, LinkRoute::Handle))
                 .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
                 .collect(),
+            method_to_handle: reflect("method_to_handle").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
@@ -555,6 +561,16 @@ impl Manifest {
         self.superclass_returns.contains(member)
     }
 
+    /// 返回基本类型（含 void）的类镜像（`Class.getPrimitiveClass` 语义）：所指类不是字节码类，无初始化、无成员
+    pub fn returns_primitive_class(&self, member: &str) -> bool {
+        self.primitive_class_returns.contains(member)
+    }
+
+    /// 返回接收者镜像所指数组类的元素类型镜像（`getComponentType` 语义）
+    pub fn returns_component_class(&self, member: &str) -> bool {
+        self.component_returns.contains(member)
+    }
+
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象
     pub fn member_enumerator(&self, member: &str) -> Option<Members> {
         self.member_enumerators.get(member).copied()
@@ -568,6 +584,16 @@ impl Manifest {
     /// 按名查找方法（类 + 方法名常量点名反射目标）
     pub fn is_method_lookup(&self, member: &str) -> bool {
         self.method_lookups.contains(member)
+    }
+
+    /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）
+    pub fn is_method_to_handle(&self, member: &str) -> bool {
+        self.method_to_handle.contains(member)
+    }
+
+    /// 方法反射调用入口：是否是方法句柄解释器以外、按反射对象调用的入口由描述符判定（见引擎 `reflect_call.rs`）
+    pub fn method_invoker_keys(&self) -> impl Iterator<Item = &str> {
+        self.member_invokers.iter().filter(|(_, ks)| ks.contains(&Members::Methods)).map(|(k, _)| k.as_str())
     }
 
     /// 纯函数：null 实参 → false

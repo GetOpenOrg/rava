@@ -149,8 +149,18 @@ fn following_fn(lines: &[&str], i: usize) -> Option<FnSig> {
     None
 }
 
-/// 单个方法臂（unsupported → panic 存根臂；`<init>` 可附带 `<init_on>` 臂）
-fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, only: Option<&BTreeSet<String>>, arms: &mut Vec<String>) {
+/// 类型文本里的类型形参（整词）擦除为 Object：泛型接口的分派闭包挂在 `I<Object..>` 上
+fn erase_tparams(ty: &str, tps: &[String]) -> String {
+    let mut out = ty.to_string();
+    for tp in tps {
+        let r = Regex::new(&format!(r"\b{}\b", regex::escape(tp))).expect("类型形参正则");
+        out = r.replace_all(&out, "Object").into_owned();
+    }
+    out
+}
+
+/// 单个方法臂（unsupported → panic 存根臂；`<init>` 可附带 `<init_on>` 臂）。tps：擦除为 Object 的类型形参
+fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, tps: &[String], only: Option<&BTreeSet<String>>, arms: &mut Vec<String>) {
     let (Some(mname), Some(descriptor)) = (extract(attr, "name"), extract(attr, "descriptor")) else { return };
     if only.is_some_and(|o| !o.contains(mname)) {
         return;
@@ -159,14 +169,15 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
     let disp = format!("{rt}::reflect_dispatch");
     let is_static = flag(attr, "is_static");
     let rust_name = sig.rust_name.as_str();
-    let ret = sig.ret.as_deref().unwrap_or("()").trim();
+    let ret = erase_tparams(sig.ret.as_deref().unwrap_or("()").trim(), tps);
+    let ret = ret.as_str();
     let pdefs: Vec<(String, String)> = split_top_level_trimmed(&sig.params)
         .into_iter()
         .filter(|p| !matches!(p.as_str(), "&self" | "self" | "mut self" | "&mut self"))
         .map(|p| {
             let (n, t) = p.split_once(':').unwrap_or((p.as_str(), ""));
             let n = n.trim();
-            (n.strip_prefix("mut ").unwrap_or(n).trim().to_string(), t.trim().to_string())
+            (n.strip_prefix("mut ").unwrap_or(n).trim().to_string(), erase_tparams(t.trim(), tps))
         })
         .collect();
     let exprs: Vec<Option<String>> = pdefs.iter().enumerate().map(|(i, (_, t))| arg_expr(&disp, descriptor, i, t)).collect();
@@ -209,9 +220,13 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
     arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some((|| {{ {inner_body} }})()),"));
 }
 
-/// 类发射文本 → `__reflect_dispatch` 实现（无臂 / 泛型类 → None）。`only`：只发射这些方法名的臂
+/// 类发射文本 → `__reflect_dispatch` 实现（无臂 / 泛型类 → None）。`only`：只发射这些方法名的臂。
+/// 泛型接口的闭包挂在 `I<Object..>` 上：接口载体只是对象引用 + 接口视图，任意实例化同形，实参 / 返回按擦除接入；
+/// 臂经载体做接口调用，按接收者的实现选中（字节码类、lambda、手写实现对象同一路径）
 fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
-    if !class_tparams(ctx, class_bin).is_empty() {
+    let tps = class_tparams(ctx, class_bin);
+    let iface = ctx.ty.reg.get(class_bin).is_some_and(|c| c.is_interface());
+    if !tps.is_empty() && !iface {
         return None;
     }
     let short = ctx.declared(class_bin);
@@ -222,7 +237,7 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
             continue;
         }
         if let Some(sig) = following_fn(&lines, i) {
-            method_arms(class_bin, em, line, &sig, only, &mut arms);
+            method_arms(class_bin, em, line, &sig, &tps, only, &mut arms);
         }
     }
     if only.is_none_or(|o| o.contains("<init>")) && !em.text.contains("is_abstract       = true") {
@@ -239,7 +254,7 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
         "// ── L3 反射分派闭包（Method.invoke / Constructor.newInstance 的按名协议；".into(),
         "//    协议与上溯语义见 java_runtime::reflect_dispatch 头注）──".into(),
         "#[allow(unused_variables, unreachable_patterns)]".into(),
-        format!("impl {short} {{"),
+        if tps.is_empty() { format!("impl {short} {{") } else { format!("impl {short}<{}> {{", vec!["Object"; tps.len()].join(", ")) },
         "    pub fn __reflect_dispatch(".into(),
         "        name: &str, descriptor: &str,".into(),
         "        recv: Object, args: &JArray<Object>,".into(),
@@ -417,14 +432,15 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     }
     let targets: Vec<(&str, Option<&BTreeSet<String>>)> = targets
         .into_iter()
-        .filter(|(bin, _)| ems.get(*bin).is_some_and(|e| !e.handwritten) && ctx.ty.reg.get(bin).is_some_and(|c| !c.is_interface()))
+        .filter(|(bin, _)| ems.get(*bin).is_some_and(|e| !e.handwritten) && ctx.ty.reg.contains(bin))
         .collect();
     let mut methods: BTreeMap<String, String> = BTreeMap::new();
     per_class(ctx, ems, &targets, &mut methods, |ems, bin, only| {
         let em = &ems[bin];
         let text = emit_for(&ctx.scoped(&em.scope), bin, em, only)?;
         let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
-        let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),");
+        let tf = object_turbofish(ctx, bin);
+        let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}{tf}::__reflect_dispatch(n, d, r, a))),");
         Some((appended(&em.text, &text), line))
     });
     DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }

@@ -252,6 +252,15 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> { None }
 
+    /// Unsafe 实例字段 int 字视图协议（`getInt`/`putInt`/`compareAndSetInt` 等 int 访问器的
+    /// 实例字段形态）：按字段名对 int 及子字（boolean / byte / short / char）字段的共享单元执行
+    /// 字视图读-改-写（`__PrimCell::__word_update`），返回旧字。子字字段独占 4 字节对齐槽，
+    /// JDK 的子字 CAS（compareAndExchangeByte / Short：`getIntVolatile(o, offset & ~3)` +
+    /// `weakCompareAndSetInt`）经此落在该字段自身。java_class! 宏为含这些平铺非擦除字段的
+    /// 生成类生成臂（含继承字段）；未命中 → None。
+    #[doc(hidden)]
+    fn __unsafe_word(&self, _field: &str, _op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> { None }
+
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
     /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名对共享的引用存储单元
     /// 执行 `op`（读 / 写 / 读-改-写，见 [`__RefAccess`]）。引用字段（含擦除字段）的存储是
@@ -396,7 +405,7 @@ pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) ->
 /// `getClass().getName() + "@" + Integer.toHexString(hashCode())`，hashCode 走虚派发。
 #[allow(non_snake_case)]
 pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::String> {
-    let text = format!("{}@{:x}", this.__class_name().replace('/', "."), this.hashCode());
+    let text = format!("{}@{:x}", crate::meta::java_name(this.__class_name()), this.hashCode());
     Ok(crate::java::lang::String::from(text))
 }
 

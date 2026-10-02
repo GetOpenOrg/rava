@@ -1,0 +1,13 @@
+int primitive=true array=false super=null fields=0
+int primitive=true array=false super=null fields=0
+void primitive=true array=false super=null fields=0
+TYPE same: true true
+int[] -> int primitive=true array=false super=null fields=0 / true
+double[][] -> [D primitive=false array=true super=java.lang.Object fields=0 / true
+Other[] -> TestPrimitiveClassMirror$Other primitive=false array=false super=java.lang.Object fields=1 / true
+Point[] -> TestPrimitiveClassMirror$Point primitive=false array=false super=java.lang.Object fields=3 / true
+Point[][] -> [LTestPrimitiveClassMirror$Point; primitive=false array=true super=java.lang.Object fields=0 / true
+Point -> null / true
+elem fields: label,x,y
+elem is Point: true, int elem: true
+other: 1

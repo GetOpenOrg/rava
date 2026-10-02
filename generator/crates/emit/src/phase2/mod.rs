@@ -7,10 +7,12 @@
 //! 2. [`iface_impls::resolve_interface_inherited_members`]：接口接收者的超接口成员；
 //! 3. [`inherited::resolve_inherited_members`]：类接收者的继承成员（桥接优先）+ use 行；
 //! 4. [`sam_objects::synthesize`]：函数式接口合成对象（接口文件尾段）；
-//! 5. [`dispatch::synthesize`]：L3 反射分派 / 字段闭包（类文件尾段）与 main 登记行。
+//! 5. [`dispatch::synthesize`]：L3 反射分派 / 字段闭包（类文件尾段）与 main 登记行；
+//! 6. [`hidden_classes::declare`]：lambda 调用点的隐藏类声明（站点所在类文件尾段）。
 
 pub mod bridge;
 pub mod dispatch;
+pub mod hidden_classes;
 pub mod iface_impls;
 pub mod inherited;
 pub mod sam_objects;
@@ -107,6 +109,8 @@ pub fn finish(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems: &mut Emissions, 
     perf.mark("phase2.sam");
     let reg = dispatch::synthesize(ctx, ems);
     perf.mark("phase2.dispatch");
+    hidden_classes::declare(ctx, &state.sam_sites, ems)?;
+    perf.mark("phase2.hidden");
     Ok(reg)
 }
 

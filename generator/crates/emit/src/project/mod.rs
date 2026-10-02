@@ -51,6 +51,8 @@ pub struct ProjectReport {
     pub hw_audit: Vec<(HwAudit, String)>,
     /// 方法体生成日志（发射序）
     pub body_log: crate::body::BodyLog,
+    /// 可读层禁用形态计数（拆层前的类发射文本，每个方法体计一次）
+    pub readability: crate::audit::ReadabilityCounts,
     /// 分阶段耗时与逐类耗时
     pub perf: Perf,
 }
@@ -275,6 +277,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("classes");
     let disp = finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
+    let readability = crate::audit::readability_counts(ems.values().map(|em| em.text.as_str()));
     // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
     let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
     perf.crates = crate_stats(&ems, &body_plan, jdk.files.len());
@@ -313,6 +316,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         precheck,
         hw_audit: std::mem::take(&mut state.hw_audit),
         body_log: std::mem::take(&mut state.body_log),
+        readability,
         perf,
     })
 }

@@ -1,5 +1,6 @@
 //! 引擎：反射——类镜像与成员面。
 
+use super::reflect_call::{rc_bit, VmBind, RC_OBJ};
 use super::*;
 
 impl<'a> Engine<'a> {
@@ -41,41 +42,32 @@ impl<'a> Engine<'a> {
         k
     }
 
-    /// 值 x 的类镜像；类型推不出（lambda 合成类、手写实现对象）为所指未知的 Class
-    fn value_mirror(&mut self, x: u32) -> u32 {
-        if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-            self.id(CLASS)
-        } else {
-            let t = self.ty(x);
-            self.mirror_id(t)
-        }
-    }
-
-    /// open 值可取的对象：G 中 ⊂ o 的成员（同 `receivers` 的 open 展开口径；数组须已逃逸）
-    fn open_members(&mut self, o: u32) -> Vec<u32> {
-        let xs = self.g_of(o);
-        xs.iter().copied().filter(|x| !self.arrays.contains_key(x) || self.escaped.contains(x)).collect()
-    }
-
-    /// 镜像流边的变换：op 作用于值集 s，结果并入 dst
-    pub(super) fn mirror_op_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+    /// 镜像流边的变换：op 作用于值集 s
+    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
         match op {
-            MirrorOp::Of => self.mirrors_into(s, dst),
-            MirrorOp::Super => {
-                let k = self.super_set(s);
-                self.add_to(dst, &k);
-            }
+            MirrorOp::Of => self.mirror_set(s),
+            MirrorOp::Super => self.super_set(s),
+            MirrorOp::Component => self.component_set(s),
         }
     }
 
     /// Class 值集中各类镜像所指类的直接超类镜像（`getSuperclass`）：接口与根类无超类（null，不入结果），
-    /// 数组的超类是根类；所指未知的 Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open。
-    /// 镜像只由类字面量与 `getClass` 产生，不指向基本类型
+    /// 数组与非字节码类镜像的超类是根类，基本类型类镜像的超类为 null；所指未知的 Class（非镜像值、类文件缺失）给所指
+    /// 未知的 Class，open 仍为 open
     pub(super) fn super_set(&mut self, s: &TypeSet) -> TypeSet {
         let class = self.id(CLASS);
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
+            if Some(x) == self.synth_mirror {
+                let k = self.mirror(OBJECT);
+                out.classes.insert(k);
+                continue;
+            }
+            // 基本类型类的超类为 null（JLS §15.8.2 / Class.getSuperclass 规范）
+            if Some(x) == self.prim_mirror {
+                continue;
+            }
             let Some(&c) = self.mirrors.get(&x) else {
                 out.classes.insert(class);
                 continue;
@@ -104,36 +96,107 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// 值集 s 中各值的类镜像并入 dst。open(o) 按 G 中 ⊂ o 的成员展开并登记，G 增长时由
-    /// `reopen_mirrors` 补推新成员的镜像（闭世界：open 值只能是 G 中已分配的对象）
-    pub(super) fn mirrors_into(&mut self, s: &TypeSet, dst: Node) {
+    /// Class 值集中各数组类镜像的元素类型镜像（`getComponentType`，JVMS §4.3.2 描述符去一维）：引用 / 数组元素给其
+    /// 类镜像，基本类型元素给基本类型类镜像；非数组类、非字节码类与基本类型类镜像为 null（不入结果）；所指未知的
+    /// Class 给所指未知的 Class，open 仍为 open
+    fn component_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
         let mut out = TypeSet::default();
-        for x in s.classes.iter() {
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror {
+                continue;
+            }
+            let Some(&c) = self.mirrors.get(&x) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let name = self.names[c as usize].clone();
+            let Some(rest) = name.strip_prefix('[') else { continue };
+            let k = if rest.starts_with('[') {
+                self.mirror(rest)
+            } else if let Some(e) = rest.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
+                self.mirror(e)
+            } else {
+                self.primitive_mirror()
+            };
+            out.classes.insert(k);
+        }
+        if !s.open.is_empty() {
+            out.open.insert(class);
+        }
+        out
+    }
+
+    /// 值集中各值的类镜像（`getClass`）。open(T) 是「任意已实例化的 T 子类型」，其类镜像是 G 中 T 的子类型
+    /// （数组分配点须已逃逸，同虚调用接收者的 open 展开）各自的镜像；G 增长时由 [`Self::mirror_into`] 登记的
+    /// 结果节点补入（[`Self::mirror_reopen`]）。lambda 合成类、手写实现对象给非字节码类镜像（[`Self::synthetic_mirror`]）
+    pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
+        let mut out = TypeSet::default();
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
             let k = self.value_mirror(x);
             out.classes.insert(k);
         }
         for o in s.open.iter() {
-            if !self.open_mirrors.entry(o).or_default().insert(dst) {
-                continue;
-            }
-            for x in self.open_members(o) {
+            for &x in self.g_of(o).iter() {
+                if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+                    continue;
+                }
                 let k = self.value_mirror(x);
                 out.classes.insert(k);
             }
         }
-        self.add_to(dst, &out);
+        out
     }
 
-    /// G 新成员 / 新逃逸数组 x：登记过的 open 镜像展开补入 x 的镜像
-    pub(super) fn reopen_mirrors(&mut self, x: u32) {
-        if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+    /// 值 x 的类镜像：lambda / 手写实现对象的运行期类不是字节码类，为共用的非字节码类镜像
+    fn value_mirror(&mut self, x: u32) -> u32 {
+        if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
+            return self.synthetic_mirror();
+        }
+        let t = self.ty(x);
+        self.mirror_id(t)
+    }
+
+    /// 非字节码类（lambda 合成类、手写实现对象）的类镜像：一个 Class 类型的抽象对象（Class 实例字段按对象建模）。
+    /// 不登记为镜像——它不指向任何字节码类：成员查找与枚举照所指未知处理；类初始化跳过（无 `<clinit>`）；
+    /// 字段查找与字段枚举视为所指已知且无 Java 字段（合成类的捕获字段不经反射写入）；超类是根类
+    pub(super) fn synthetic_mirror(&mut self) -> u32 {
+        if let Some(k) = self.synth_mirror {
+            return k;
+        }
+        let class = self.id(CLASS);
+        let k = self.id(&format!("{CLASS}#<synthetic>"));
+        self.objs.insert(k, class);
+        self.synth_mirror = Some(k);
+        k
+    }
+
+    /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，
+    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像
+    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+        if op == MirrorOp::Of {
+            for o in s.open.iter() {
+                if self.mirror_open_seen.insert((o, dst)) {
+                    self.mirror_open.entry(o).or_default().push(dst);
+                }
+            }
+        }
+        let k = self.mirror_op(op, s);
+        self.add_to(dst, &k);
+    }
+
+    /// open 展开的取值面扩大（x 进入 G / 数组 x 逃逸）：`getClass(open T)`（x ⊂ T）的结果节点补入 x 的类镜像
+    pub(super) fn mirror_reopen(&mut self, x: u32) {
+        if self.mirror_open.is_empty() || (self.arrays.contains_key(&x) && !self.escaped.contains(&x)) {
             return;
         }
-        let os: Vec<u32> = self.open_mirrors.keys().copied().collect();
-        let mut dsts: BTreeSet<Node> = BTreeSet::new();
+        let os: Vec<u32> = self.mirror_open.keys().copied().collect();
+        let mut dsts: Vec<Node> = vec![];
         for o in os {
             if self.sub(x, o) {
-                dsts.extend(self.open_mirrors[&o].iter().copied());
+                dsts.extend(self.mirror_open[&o].iter().copied());
             }
         }
         if dsts.is_empty() {
@@ -174,18 +237,22 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 类 cls 的方法被按名 name 查找：方法反射调用可达时补入该名的方法
-    pub(super) fn reflect_name(&mut self, cls: &str, name: &str) {
+    /// 类 cls 的方法被按名 name 查找、查找结果经反射调用通道 ch 调用：方法反射调用可达时补入该名的方法
+    pub(super) fn reflect_name(&mut self, cls: &str, name: &str, ch: u8) {
         let c = self.id(cls);
-        if !self.reflect_names.entry(c).or_default().insert(name.to_string()) {
+        let e = self.reflect_names.entry(c).or_default().entry(name.to_string()).or_default();
+        if *e & rc_bit(ch) != 0 {
             return;
         }
+        *e |= rc_bit(ch);
         if self.invokable.contains(&Members::Methods) {
             self.expose(Members::Methods, c);
         }
     }
 
-    /// 类 c 的 k 类成员入链：VM 按反射对象调用，形参按声明类型 open（同 VM 入口）；构造器实例化其类
+    /// 类 c 的 k 类成员入链：方法经反射调用通道执行，形参与接收者取自通道的实参池（`reflect_call.rs`；
+    /// 枚举得到的方法为反射对象通道，按名查找到的按查找结果的类型定通道）；记录分量访问器与构造器另有调用面
+    /// （记录对象方法的引导模型 / 反射构造），VM 按反射对象调用，形参按声明类型 open（同 VM 入口）；构造器实例化其类
     pub(super) fn expose(&mut self, k: Members, c: u32) {
         let cls = self.names[c as usize].to_string();
         let Some(cf) = self.h.class(&cls) else { return };
@@ -202,7 +269,7 @@ impl<'a> Engine<'a> {
             .methods
             .iter()
             .filter(|mm| match k {
-                Members::Methods => !mm.name.starts_with('<') && (user || names.contains(&mm.name)),
+                Members::Methods => !mm.name.starts_with('<') && (user || names.contains_key(&mm.name)),
                 Members::Constructors => mm.name == "<init>" && user,
                 Members::RecordAccessors => comps.iter().any(|(n, d)| mm.name == *n && mm.desc == format!("(){d}")),
             })
@@ -217,11 +284,17 @@ impl<'a> Engine<'a> {
         }
         for (name, desc, virt) in picked {
             let key = MemberRef { owner: cls.clone(), name, desc };
+            if k == Members::Methods {
+                let mask = names.get(&key.name).copied().unwrap_or(0) | if user { rc_bit(RC_OBJ) } else { 0 };
+                self.reflect_members.insert((k, key.clone()));
+                self.rcall_member(key, cf.is_interface(), virt, mask);
+                continue;
+            }
             if !self.reflect_members.insert((k, key.clone())) {
                 continue;
             }
             if virt {
-                self.vm_dispatch(&key, cf.is_interface(), via.clone());
+                self.vm_dispatch(&key, cf.is_interface(), via.clone(), VmBind::Open);
             }
             let t = self.method(key, via.clone());
             self.open_params(t);

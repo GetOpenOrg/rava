@@ -81,13 +81,12 @@ impl Engine<'_> {
         self.link_owner(decl, routes);
     }
 
-    /// 字段枚举（Field 句柄数组）：接收者镜像所指类及其超类中声明静态字段的类按静态字段句柄处理；
-    /// 推不出所指类的镜像记为反射缺口
-    pub(super) fn enumerated_static_owners(&mut self, m: usize, off: u32, k: &str, recv: &V) {
-        let classes = self.mirror_classes(m, off, k, recv);
+    /// 字段枚举（Field 句柄数组）：接收者镜像所指类（classes）及其超类中声明静态字段的类按静态字段句柄处理；
+    /// 推不出所指类的镜像由调用方记为字段枚举缺口
+    pub(super) fn enumerated_static_owners(&mut self, m: usize, off: u32, classes: &BTreeSet<String>) {
         let via = Via::method("field-name", m, Some(off));
         for c in classes {
-            let mut cur = Some(c);
+            let mut cur = Some(c.clone());
             while let Some(cls) = cur {
                 let Some(cf) = self.h.class(&cls) else { break };
                 if cf.fields.iter().any(|f| f.access & acc::STATIC != 0 && f.constant_value.is_none()) {
@@ -118,6 +117,9 @@ impl Engine<'_> {
         for x in s.classes.iter() {
             match self.mirrors.get(&x) {
                 Some(&c) => out.push(self.names[c as usize].to_string()),
+                // 基本类型类镜像、非字节码类镜像（lambda 合成类 / 手写实现对象）所指类不是字节码类：
+                // 没有 `<clinit>` 与 Java 成员，不构成缺口
+                None if Some(x) == self.prim_mirror || Some(x) == self.synth_mirror => {}
                 None => {
                     complete = false;
                     if record_gaps {

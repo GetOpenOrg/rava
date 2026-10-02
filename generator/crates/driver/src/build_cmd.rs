@@ -305,15 +305,12 @@ fn write_scratch(
         println!("{line}");
     }
     if !j.o.full_precheck {
-        let crates: Vec<String> =
-            std::iter::once("java_runtime".to_string()).chain(j.libs.iter().map(|l| l.name.clone())).chain(["user".to_string()]).collect();
         let body = BodyAudit::from_log(&r.body_log);
         let a = AuditInputs {
             body: &body,
             hw: &r.hw_audit,
             fallback: &ctx.fallback,
-            out: j.out,
-            crates: &crates,
+            readability: &r.readability,
             prelude_disambiguated: names.prelude_disambiguated(),
             debug: j.o.debug,
         };

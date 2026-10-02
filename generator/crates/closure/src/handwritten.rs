@@ -112,6 +112,9 @@ pub struct FieldAccess {
     pub value: Option<TypeRef>,
     /// 接收者是本 fn 的 `self`（即被调 Java 方法的接收者；经同文件被调 fn 传递来的访问不算）
     pub on_self: bool,
+    /// 写入值是被调 Java 方法的接收者：本 fn 的 `self` 经保持身份的转换（`Clone::clone` / `.clone()` / 引用 / `Object::from`）
+    /// 写入；经同文件被调 fn 传递时，只在调用链全程以 `self` 为接收者（`self.f(…)`）时成立
+    pub value_self: bool,
     /// static 写访问器路径调用 `T::set_<字段>(v)`：`recv` 为 `T`；T 上无此字段时是同名的手写辅助函数，不算访问
     pub path: bool,
 }
@@ -332,7 +335,7 @@ impl Handwritten {
             hw.files.push(path);
         }
         hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
-        close_transitive(&mut raw.fns, &raw.calls);
+        close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
         hw.objects = objects::close(&raw);
         hw.rets = std::mem::take(&mut raw.rets);
         hw.fns = raw.fns;

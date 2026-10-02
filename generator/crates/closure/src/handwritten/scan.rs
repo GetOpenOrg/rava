@@ -12,6 +12,8 @@ use super::*;
 pub(super) struct RawFn {
     pub(super) info: FnInfo,
     pub(super) calls: HashSet<String>,
+    /// 不以 `self` 为接收者的调用 / 引用（见 [`BodyScan::nonself`]）
+    pub(super) nonself: HashSet<String>,
 }
 
 /// 手写实现对象的扫描原料（trait impl 与固有 impl 的 fn，未闭包）
@@ -27,6 +29,8 @@ pub(super) struct RawObject {
 pub(super) struct FileFns {
     pub(super) fns: HashMap<String, FnInfo>,
     pub(super) calls: HashMap<String, HashSet<String>>,
+    /// fn → 其中不以 `self` 为接收者调用 / 引用的名字（其余被调名只经 `self.f(…)` 调用）
+    pub(super) nonself: HashMap<String, HashSet<String>>,
     pub(super) objects: BTreeMap<String, RawObject>,
     /// 文件顶层 impl 块关联 fn 的返回类型（见 [`local_rets`]）
     pub(super) rets: LocalRets,
@@ -90,9 +94,10 @@ impl FileScan<'_> {
         }
         let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
         cs.visit_block(block);
-        for (field, write, recv, value, on_self, path) in cs.fields {
+        for (field, write, recv, value, on_self, path, value_self) in cs.fields {
             info.fields.push(FieldAccess {
                 on_self,
+                value_self,
                 path,
                 field,
                 write,
@@ -137,7 +142,7 @@ impl FileScan<'_> {
         ids.visit_block(block);
         ids.0.extend(info.opaque.iter().cloned());
         info.objects = ids.0.iter().filter_map(|i| self.object_ref(i)).collect();
-        let raw = RawFn { info, calls: b.calls };
+        let raw = RawFn { info, calls: b.calls, nonself: b.nonself };
         match &self.cur_obj {
             Some(o) => self.object_fns.push((o.clone(), name, raw)),
             None => self.fns.push((name, raw)),
@@ -303,6 +308,7 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     };
     fs.visit_file(file);
     for (name, raw) in fs.fns {
+        out.nonself.entry(name.clone()).or_default().extend(raw.nonself.iter().cloned());
         merge_fn(&mut out.fns, &mut out.calls, name, raw);
     }
     for (obj, name, raw) in fs.object_fns {
@@ -314,31 +320,43 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     }
 }
 
-/// 分配 / 构造沿同文件 fn 调用传递（被调 fn 名须在同类手写文件内）
-pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, HashSet<String>>) {
+/// 分配 / 构造沿同文件 fn 调用传递（被调 fn 名须在同类手写文件内）。
+/// 字段写入值是 `self`（[`FieldAccess::value_self`]）只沿全程 `self.f(…)` 的调用链保持：
+/// 按（fn, 链上的 self 是否仍是本 fn 的 self）遍历，经非 `self` 接收者到达的 fn 里该标记取消
+pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMap<String, HashSet<String>>, nonself: &HashMap<String, HashSet<String>>) {
     let names: Vec<String> = fns.keys().cloned().collect();
     let mut closed = Vec::new();
     for n in &names {
-        let mut seen: HashSet<&str> = HashSet::from([n.as_str()]);
-        let mut stack = vec![n.as_str()];
+        let mut seen: HashSet<(&str, bool)> = HashSet::from([(n.as_str(), true)]);
+        let mut done: HashSet<&str> = HashSet::new();
+        let mut stack = vec![(n.as_str(), true)];
         let (mut allocs, mut ctors, mut objects) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
         let (mut tcalls, mut opaque, mut fields) = (Vec::new(), HashSet::new(), Vec::new());
         let mut arr = false;
-        while let Some(x) = stack.pop() {
+        while let Some((x, keep)) = stack.pop() {
             if let Some(f) = fns.get(x) {
-                arr |= f.array_access;
-                allocs.extend(f.allocs.iter().cloned());
-                ctors.extend(f.ctors.iter().cloned());
-                tcalls.extend(f.calls.iter().cloned());
-                opaque.extend(f.opaque.iter().cloned());
-                objects.extend(f.objects.iter().cloned());
+                if done.insert(x) {
+                    arr |= f.array_access;
+                    allocs.extend(f.allocs.iter().cloned());
+                    ctors.extend(f.ctors.iter().cloned());
+                    tcalls.extend(f.calls.iter().cloned());
+                    opaque.extend(f.opaque.iter().cloned());
+                    objects.extend(f.objects.iter().cloned());
+                }
                 // 被调 fn 的 self 不一定是本方法的接收者
                 let own = x == n.as_str();
-                fields.extend(f.fields.iter().map(|fa| FieldAccess { on_self: fa.on_self && own, ..fa.clone() }));
+                for fa in &f.fields {
+                    let fa = FieldAccess { on_self: fa.on_self && own, value_self: fa.value_self && keep, ..fa.clone() };
+                    if !fields.contains(&fa) {
+                        fields.push(fa);
+                    }
+                }
             }
+            let ns = nonself.get(x);
             for c in calls.get(x).into_iter().flatten() {
-                if fns.contains_key(c) && seen.insert(c.as_str()) {
-                    stack.push(c.as_str());
+                let k = keep && !ns.is_some_and(|s| s.contains(c));
+                if fns.contains_key(c) && seen.insert((c.as_str(), k)) {
+                    stack.push((c.as_str(), k));
                 }
             }
         }
@@ -436,6 +454,33 @@ mod tests {
         assert_eq!(get(6), ("a", true, None));
         assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
         assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
+    }
+
+    #[test]
+    fn field_value_self() {
+        let src = r#"
+            impl Class {
+                pub fn fields(&self) -> Object {
+                    let f = Field::default();
+                    f.__set_clazz(Clone::clone(self));
+                    f.__set_type(self.__get_componentType());
+                    f.__set_root(Object::from(self.clone()));
+                    self.fill(f)
+                }
+                fn fill(&self, f: Field) -> Object { f.__set_owner(self.clone()); self.leaf(f) }
+                fn leaf(&self, f: Field) -> Object { f.__set_peer(&self); f }
+                pub fn other(&self, c: Class) -> Object { c.fill(Field::default()) }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut raw = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut raw);
+        close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
+        let vs = |f: &str| -> BTreeSet<(String, bool)> { raw.fns[f].fields.iter().filter(|fa| fa.write).map(|fa| (fa.field.clone(), fa.value_self)).collect() };
+        let own = BTreeSet::from([("clazz".into(), true), ("type".into(), false), ("root".into(), true), ("owner".into(), true), ("peer".into(), true)]);
+        assert_eq!(vs("fields"), own);
+        // 经非 self 接收者调用：被调 fn 的 self 不是本方法的接收者
+        assert_eq!(vs("other"), BTreeSet::from([("owner".into(), false), ("peer".into(), false)]));
     }
 
     #[test]

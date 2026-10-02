@@ -5,7 +5,8 @@
 //! 反射调用边在编译期不可知：`Method.invoke` 拿到的 (声明类, 方法名, 描述符)
 //! 运行时才能确定目标。协议 = **按类的分派闭包注册表**：
 //!
-//!   - codegen 为**用户树全部（非泛型）类**发射 per-class `__reflect_dispatch`
+//!   - codegen 为**用户树全部（非泛型）类与接口**（泛型接口挂在 `I<Object..>` 上）及常量反射引用面的
+//!     JDK 类 / 接口发射 per-class `__reflect_dispatch`
 //!    （共置类文件尾部，match (name, descriptor) 臂调本类 typed fn：static
 //!     直调 / 实例方法经 receiver 的 `try_cast::<Self>` 视图 / `<init>` 经
 //!     `Self::new(..)`——视图保留运行时 vtable，虚覆盖自动生效）；
@@ -14,7 +15,9 @@
 //!   - `reflect_invoke` 按名代调：static/构造器在声明类上直查；实例方法从
 //!     **receiver 运行时类**起沿直接父类表（CLASS_DIRECT_SUPER）上溯，首个
 //!     处理该 (name, descriptor) 的闭包胜出——最派生覆盖优先，与 JVM 虚分派
-//!     同序。
+//!     同序。运行时类链上无闭包承载时（lambda / 手写实现对象、实现类无本方法臂），接收者是
+//!     声明类型的实例 → 经声明类型的闭包调用（臂经接收者视图做虚 / 接口调用，按超类型判定，
+//!     不依赖运行时类名）。
 //!
 //! ## 为什么不合流 ObjectVTable 臂（评估文档 2026-09-22 的候选 (a)）
 //!
@@ -129,7 +132,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         && !is_static_descriptor(declaring_slash, name, descriptor);
     // static / 构造器：声明类直查；实例方法：receiver 运行类起沿直接父类上溯
     //（隐式 null 检查：实例方法的 null receiver → NPE，与 JVM invoke0 一致）
-    let mut cur = if is_virtual {
+    let cur = if is_virtual {
         if recv.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -137,37 +140,70 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     } else {
         declaring_slash.to_owned()
     };
+    // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
+    // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
+    let finish = |r: Result<Object>| {
+        if let Err(e) = &r {
+            if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
+                mark_target_thrown(e.thrown());
+            }
+        }
+        r
+    };
+    // 实例方法的接收者须是声明类型的实例（JVM invoke0：IllegalArgumentException
+    // "object is not an instance of declaring class"，属实参不符、不包装为 InvocationTargetException）。
+    // 实例判定以接收者视图为准，再按父类链复核（手写实现对象的视图可能不全）
+    if is_virtual && declaring_slash != "java/lang/Object" && !recv.0.is_instance_of(declaring_slash)
+        && !superclass_chain(&cur).iter().any(|c| c == declaring_slash) {
+        BAD_ARG.with(|b| b.set(true));
+        return Err(crate::error::JvmError::illegal_argument("object is not an instance of declaring class"));
+    }
+    let mut cur = cur;
     let mut hops = 0usize;
     loop {
         if let Some(f) = lookup(&cur) {
             if let Some(r) = f(name, descriptor, Clone::clone(&recv), args) {
-                // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
-                // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
-                if let Err(e) = &r {
-                    if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
-                        mark_target_thrown(e.thrown());
-                    }
-                }
-                return r;
+                return finish(r);
             }
         }
-        // 上溯：直接父类表（Class.getSuperclass 的公共查询面，java_meta 生成）；
-        // 无父类 / 表外（接口 / Object 上方）→ 终止
-        let zuper = crate::java::lang::Class::for_class(
-            crate::java::lang::String::from(cur.as_str()))
-            .getSuperclass()
-            .unwrap_or_default();
-        if Object::from(Clone::clone(&zuper)).0.is_jvm_null() {
-            break;
+        match superclass(&cur) {
+            Some(z) if hops < 256 => cur = z,
+            _ => break, // 无父类 / 表外（接口 / Object 上方）/ 防御环
         }
-        cur = format!("{}", zuper.__get_name()).replace('.', "/");
         hops += 1;
-        if hops > 256 {
-            break; // 防御环
+    }
+    // 运行时类链上无闭包承载（lambda / 手写实现对象不是字节码类；接口方法的实现类无本方法臂）：
+    // 接收者是声明类型的实例时，经声明类型的闭包做虚 / 接口调用——臂经接收者视图调用，按其实现选中
+    if is_virtual && recv.0.is_instance_of(declaring_slash) {
+        if let Some(r) = lookup(declaring_slash).and_then(|f| f(name, descriptor, Clone::clone(&recv), args)) {
+            return finish(r);
         }
     }
     panic!("stub: L3 反射分派未覆盖 {}.{}:{}（分派闭包缺席 / 方法未发射）",
            declaring_slash, name, descriptor)
+}
+
+/// 直接父类（Class.getSuperclass 的公共查询面，java_meta 生成）；无父类 / 表外 → None
+fn superclass(class_slash: &str) -> Option<String> {
+    let zuper = crate::java::lang::Class::for_class(crate::java::lang::String::from(class_slash))
+        .getSuperclass()
+        .unwrap_or_default();
+    if Object::from(Clone::clone(&zuper)).0.is_jvm_null() {
+        return None;
+    }
+    Some(format!("{}", zuper.__get_name()).replace('.', "/"))
+}
+
+/// class_slash 起的父类链（含自身）
+fn superclass_chain(class_slash: &str) -> Vec<String> {
+    let mut chain = vec![class_slash.to_owned()];
+    while chain.len() <= 256 {
+        match superclass(&chain[chain.len() - 1]) {
+            Some(z) => chain.push(z),
+            None => break,
+        }
+    }
+    chain
 }
 
 /// static 判定：经方法元数据表（Class.__declared_method_meta 的公共查询面）。
@@ -341,6 +377,12 @@ pub fn current_caller_sensitive() -> Option<&'static str> {
 
 // ── 静态字段偏移登记（Unsafe.staticFieldOffset / MethodHandleNatives.staticFieldOffset 共用）─────────────────
 
+/// 字段偏移槽宽：每个字段（实例 / 静态）独占一个 4 字节对齐槽，偏移 id 恒为 4 的倍数。
+/// JDK 的子字 CAS（compareAndExchangeByte / Short 等，字节码翻译）按 `offset & ~3` 取所在 int 字、
+/// 按小端 `shift = (offset & 3) << 3` 定位——槽对齐使字地址即字段自身偏移、shift = 0，int 字视图
+/// （`ObjectVTable::__unsafe_word`）的低位就是该字段，相邻字段不共字，字段之间无别名。
+pub const FIELD_SLOT: i64 = 4;
+
 pub const STATIC_FIELD_ID_BASE: i64 = 1 << 40;
 
 crate::__process_static! {
@@ -360,7 +402,8 @@ pub fn static_field_id(decl: std::string::String, name: std::string::String) -> 
     }
     let id = STATIC_FIELD_IDS.with(|m| {
         let mut m = m.borrow_mut();
-        let next = STATIC_FIELD_ID_BASE + m.len() as i64;
+        // 与实例字段同一槽宽（`FIELD_SLOT`）：子字 CAS 的 `offset & ~3` 落在字段自身
+        let next = STATIC_FIELD_ID_BASE + FIELD_SLOT * m.len() as i64;
         *m.entry(key.clone()).or_insert(next)
     });
     STATIC_FIELD_BY_ID.with(|m| { m.borrow_mut().insert(id, key); });

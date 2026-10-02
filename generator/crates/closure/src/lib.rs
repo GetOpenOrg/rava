@@ -209,6 +209,10 @@ impl Closure<'_> {
             "sysprops_unstable": e.sysprops_report(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
+            "field_enum_gaps": e.field_enum_gaps.len(),
+            "rcall": e.rcall_summary(),
+            "field_writer_live": e.field_handles().0,
+            "fields_open_all": e.field_handles().1,
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
             "elapsed_ms": self.elapsed_ms,
@@ -271,6 +275,7 @@ impl Closure<'_> {
                 "gaps": e.reflect_gaps,
                 "fields": e.reflect_fields.iter().map(|(c, n)| json!({"owner": c, "name": n})).collect::<Vec<_>>(),
                 "field_names": e.reflect_field_names,
+                "field_enum_gaps": e.field_enum_gaps,
             },
             "seeds": {
                 "annotation_enums": e.seeds.annotation_enums,
