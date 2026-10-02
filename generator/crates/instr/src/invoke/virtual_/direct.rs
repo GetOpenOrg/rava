@@ -9,12 +9,13 @@ use ty::RsType;
 
 use super::bare::boxed_text;
 use super::cs::CsCtx;
-use super::{erased_head, is_object, is_prim, raw, same_text, Site, O};
+use super::{erased_head, is_object, is_prim, raw, Site, O};
 use crate::build::{id, text, ty_text};
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
 use crate::hierarchy;
-use crate::invoke::{sig, CallRef};
+use crate::invoke::sig::{self, CallBind};
+use crate::invoke::CallRef;
 use crate::log::{Audit, InstrLog};
 use crate::owner;
 
@@ -234,18 +235,18 @@ pub(super) fn emit_call_result(
     let call_str = cs.build_call(env, rust_mname, &d.recv, &arg_str);
     // 类型变量返回判定按常量池类（Python 以常量池短名 `cls` 查）
     let erased_tv = || sig::erased_ret_is_type_var(&env.ctx, &orig.owner, mname, &d.call.desc);
-    match sig_ret {
-        Some(s) if is_object(env, rust_ret) && !is_object(env, &s) => {
+    match sig::bind_call_result(env, rust_ret, sig_ret, erased_tv) {
+        CallBind::Boxed(s) => {
             // 签名真实返回类型装箱（S-3.1）
             raw(sim, format!("let {v} = {};", boxed_text(env, &format!("{call_str}?"), &s)?))?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
-        Some(s) if !same_text(env, &s, rust_ret) && !is_prim(rust_ret) => {
+        CallBind::Precise(s) => {
             let node = call_node(env, cs, rust_mname, &d.recv, site)?;
             let_call(sim, v.clone(), node, &call_str)?;
             sim.push(Expr::Var(v), s);
         }
-        None if !is_prim(rust_ret) && !is_object(env, rust_ret) && env.ctx.ty.is_carrier(rust_ret) && erased_tv() => {
+        CallBind::Carrier => {
             // T-2：返回裸类型变量、描述符擦除为接口载体 → 经 Object 边界取回描述符载体
             raw(
                 sim,
@@ -253,12 +254,12 @@ pub(super) fn emit_call_result(
             )?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
-        None if is_object(env, rust_ret) && erased_tv() => {
-            // 返回裸类型变量且无法按接收者实例化：幂等装箱与 sim 记录的 Object 一致
+        CallBind::Opaque => {
+            // 返回裸类型变量且无法按接收者实例化：经 Object 边界装箱
             raw(sim, format!("let {v} = {O}::from_any({call_str}?);"))?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
-        _ => {
+        CallBind::Erased => {
             let node = call_node(env, cs, rust_mname, &d.recv, site)?;
             let_call(sim, v.clone(), node, &call_str)?;
             sim.push(Expr::Var(v), rust_ret.clone());

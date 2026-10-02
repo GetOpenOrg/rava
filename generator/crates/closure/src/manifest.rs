@@ -123,6 +123,7 @@ pub struct Manifest {
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
+    method_to_handle: HashSet<String>,
     pub boot_init: Vec<String>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
@@ -358,6 +359,7 @@ impl Manifest {
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
+            method_to_handle: reflect("method_to_handle").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
@@ -550,6 +552,16 @@ impl Manifest {
     /// 按名查找方法（类 + 方法名常量点名反射目标）
     pub fn is_method_lookup(&self, member: &str) -> bool {
         self.method_lookups.contains(member)
+    }
+
+    /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）
+    pub fn is_method_to_handle(&self, member: &str) -> bool {
+        self.method_to_handle.contains(member)
+    }
+
+    /// 方法反射调用入口：是否是方法句柄解释器以外、按反射对象调用的入口由描述符判定（见引擎 `reflect_call.rs`）
+    pub fn method_invoker_keys(&self) -> impl Iterator<Item = &str> {
+        self.member_invokers.iter().filter(|(_, ks)| ks.contains(&Members::Methods)).map(|(k, _)| k.as_str())
     }
 
     /// 纯函数：null 实参 → false
