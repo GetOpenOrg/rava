@@ -164,3 +164,19 @@
   两者擦除基相同但文本不同（目标为 `Decorator<Object>`），落入「互不为子类型」分支被折叠为 false，整个 if 被删。
 - 修复：同一擦除类（非数组）与同型同判。
 - 验收：RecordPatternTest。
+
+### 10.5 r2-a77f6dd2 其余失败归类
+
+- PrintDebugStatement / ReflectionGetSource：同 10.1（FS-E1，7fdabf63），a77f6dd2 早于该修复。与 native-gaps 07918da9 的
+  `vm_stack.rs` 是同一语义的两个帧源：后者按 Rust 符号名解析帧（声明类 + 方法表），行号恒 -1；FS-E1 按 (文件, 行) 查行表，
+  给出类 / 方法 / SourceFile / Java 行号，且不受内联与符号形态影响。终态只留一个帧源：`vm_stack::capture_java_frames`
+  改走行表（行表条目补方法描述符以对上 MethodMeta），`fillInStackTrace`、StackWalker、getCallerClass、
+  getClassContext 共用；符号解析整段删除。两线合入集成分支后由 regress2-b 实施。
+- TestRandomAccessFile（`JavaLangAccess.registerShutdownHook` 存根）、TestCharsetNamedStreams（StreamDecoder UTF-16 存根）：
+  均为过渡手写类（`java_lang_access_impl.rs` / `stream_decoder_impl.rs`）未实现的方法；c1d-prec 的 1e623cec 已删除二者、
+  改按字节码翻译 → 归 C1d，并入后在 c1d-prec 上复测。
+- StockTrans / TestSerialDefaultSuid（L3 反射分派缺 `ArrayList.writeObject`）：`ObjectStreamClass.getPrivateMethod(cl, "writeObject", ..)`
+  的 `cl` 来自 `obj.getClass()`，不是类常量，按名方法查找的事实只认常量所指类 → 分派闭包缺席。终态：类未知、名与形参
+  已知的查找 → 已实例化且声明该名 / 形参方法的类全部计入（序列化钩子 writeObject / readObject / readObjectNoData /
+  writeReplace / readResolve 由此进入）。闭包分析器 → 归 C1d。
+- UTF8EncodeDecode：同 10.2（404f56b7），待 fse1-404f56b7 结果。
