@@ -122,6 +122,8 @@ impl<'a> Engine<'a> {
             poly_writes: Vec::new(),
             open_statics: Vec::new(),
             mirror_writes: HashMap::default(),
+            offset_waits: HashMap::default(),
+            offset_read_waits: HashMap::default(),
             fwork: VecDeque::new(),
             xreaders: HashMap::default(),
             lookup_top: HashSet::default(),
