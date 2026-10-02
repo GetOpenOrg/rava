@@ -1,0 +1,26 @@
+@TestAnnoArrayMembers.L1({@TestAnnoArrayMembers.L2({@TestAnnoArrayMembers.L3({1, 2}), @TestAnnoArrayMembers.L3({})}), @TestAnnoArrayMembers.L2({}), @TestAnnoArrayMembers.L2({@TestAnnoArrayMembers.L3({9})})})
+l2 count=3
+  @TestAnnoArrayMembers.L2({@TestAnnoArrayMembers.L3({1, 2}), @TestAnnoArrayMembers.L3({})}) l3 count=2
+    @TestAnnoArrayMembers.L3({1, 2}) sum=3
+    @TestAnnoArrayMembers.L3({}) sum=0
+  @TestAnnoArrayMembers.L2({}) l3 count=0
+  @TestAnnoArrayMembers.L2({@TestAnnoArrayMembers.L3({9})}) l3 count=1
+    @TestAnnoArrayMembers.L3({9}) sum=9
+@TestAnnoArrayMembers.Ints({3, -4, 2147483647})
+@TestAnnoArrayMembers.Longs({5L, -9223372036854775808L})
+@TestAnnoArrayMembers.Doubles({1.5, -0.0, 0.0/0.0})
+@TestAnnoArrayMembers.Floats({2.5f, 1.0f/0.0f})
+@TestAnnoArrayMembers.Bools({true, false})
+@TestAnnoArrayMembers.Chars({'a', '\'', '\n'})
+@TestAnnoArrayMembers.Bytes({(byte)0x01, (byte)0x80})
+@TestAnnoArrayMembers.Shorts({7, -32768})
+@TestAnnoArrayMembers.Strs({"plain", "q\"t", "tab\t", ""})
+@TestAnnoArrayMembers.Colors({BLUE, RED}) first=2
+@TestAnnoArrayMembers.Types({TestAnnoArrayMembers.Marker.class, java.lang.String.class, int.class, java.lang.String[].class, TestAnnoArrayMembers.Color.class})
+types=[class TestAnnoArrayMembers$Marker, class java.lang.String, int, class [Ljava.lang.String;, class TestAnnoArrayMembers$Color]
+@TestAnnoArrayMembers.Ints({})
+@TestAnnoArrayMembers.Strs({})
+@TestAnnoArrayMembers.Colors({})
+@TestAnnoArrayMembers.Types({})
+@TestAnnoArrayMembers.L1({})
+equal=true differ=false

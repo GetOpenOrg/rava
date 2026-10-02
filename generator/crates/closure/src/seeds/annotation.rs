@@ -24,7 +24,7 @@ impl AnnoCfg {
     }
 }
 
-/// 收集结果（注解类型不含用户类；枚举 / Class 元素类型含用户类）
+/// 收集结果（注解类型与枚举 / Class 元素类型均含用户类）
 #[derive(Debug, Default)]
 pub struct AnnoSeeds {
     /// 注解类型（方法表 = 元素面，全部入链）
@@ -67,7 +67,6 @@ fn mounted(cf: &ClassFile) -> impl Iterator<Item = &Annotation> {
 }
 
 pub fn collect(cp: &ClassPath, users: &[std::sync::Arc<ClassFile>]) -> AnnoSeeds {
-    let user_names: HashSet<&str> = users.iter().map(|c| c.name.as_str()).collect();
     let mut pending: Vec<Annotation> = users.iter().flat_map(|c| mounted(c).cloned().collect::<Vec<_>>()).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = AnnoSeeds::default();
@@ -94,12 +93,12 @@ pub fn collect(cp: &ClassPath, users: &[std::sync::Arc<ClassFile>]) -> AnnoSeeds
                 value_types(d, &mut enums, &mut types, &mut nd);
                 pending.extend(nd);
             }
-            if !user_names.contains(t.as_str()) {
-                out.annos.insert(t);
-            }
+            // 用户注解类型同样只按可达入链：嵌套在注解属性体里的注解类型（`@Tree({@Branch({…})})` 的 Branch）
+            // 没有静态边，AnnotationParser 却要反射其方法表解析成员，与 JDK 注解类型一样补种
+            out.annos.insert(t);
         }
     }
-    // 枚举 / Class 元素类型含用户类：用户类同样只按可达入链，注解属性体里的引用没有静态边
+    // 枚举 / Class 元素类型同样含用户类：注解属性体里的引用没有静态边
     for e in enums {
         if seen.insert(e.clone()) && cp.contains(&e) {
             out.enums.insert(e);
