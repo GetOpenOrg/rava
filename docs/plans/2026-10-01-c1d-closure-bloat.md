@@ -739,3 +739,126 @@ DeepCopy 失败归因：序列化路径触发了 `ExceptionInInitializerError �
   - 按名取静态字段、所属类推不出时，扫描闭包内声明了该名静态字段的类。
 - 结论：不需要再改代码。命名维持 `mirror_init`（清单段位于 `[facts.reflect]`，语义是「按类镜像初始化」），旧计划文档里的 `class_init` 记载加注已被取代。
 
+
+## 19. 交接（2026-10-02）
+
+原执行者在此收尾，C1d 由多个新子代理接手。本节写明接手所需的现状；机制细节以 §18 为准，不再重复。
+
+### 19.1 分支、提交与集成分支的关系
+
+| 分支 / worktree | HEAD | 用途 | 与集成分支（rust-closure-analyzer）的关系 |
+|---|---|---|---|
+| `c1d-pick`（`../java_rta_c1d_pick`） | 20ef4fdc | 从 c1d 精度线挑出的、可独立合入的修复 | 基于 01b88d7d。依次为 f72d7dc9、6a1d5aac、f212e863、51f8109a、b957535c、20ef4fdc。集成分支已合到 51f8109a（15ac9d00）；**b957535c、20ef4fdc 待合**。20ef4fdc 的抽查（tag `c1d-20ef4fdc`：DeepCopy、HelloWorld、TestDynamicProxy、TestReflectInvokeShapes、TestBmhDynamicSpecies、TestEnumBasic）在服务器上，结果尚未取回 |
+| `c1d-serial-wip` | 17f7d04b | 序列化回调按名查找的半成品（§19.4） | 基于 c1d-pick 20ef4fdc。**不可合入** |
+| `c1d-prec`（`../java_rta_c1d_prec`） | aa829d0b | C1d 精度主线：删除过渡手写，闭包按调用链收窄 | 已合入集成分支 01b88d7d。其中 1e623cec 删除了过渡手写 `java_lang_access_impl.rs`、`stream_decoder_impl.rs`，修复 TestRandomAccessFile、TestCharsetNamedStreams。HelloWorld 闭包约 3092–3125 类，`--stop-after closure` 约 600 s。**P2/P3 落地、HelloWorld ≤360 前暂停抽查** |
+| `c1d-p0`（`../java_rta_c1d_p0`） | 本节提交 | 在 c1d-prec 上做 §18 分步 | aa829d0b 之后依次为 9604c5b7（P1：dyn_compare 归因穿过 vm_upcall 帧）、5ba54578（P0：BootLoader `<clinit>` 走 translate_clinit，native `setBootLoaderUnnamedModule0` 空实现）、bb9b1b70（§18.10 文档）、本节。慢和类数膨胀都继承自 c1d-prec，不是 P0 引入的。暂停抽查的条件同 c1d-prec |
+
+恢复抽查时（HelloWorld ≤360 之后），名单加上 TestRandomAccessFile、TestCharsetNamedStreams。名单只放直接相关的用例，一般不超过 10 例。
+
+### 19.2 三个入口闸门：现状与终态
+
+终态目标：HelloWorld 闭包总数 ≤360（代码类 ≤270），`--stop-after closure` 降到秒级。
+
+下面三个入口都是独立闸门：只要有一个开着，区域就会重开，结果约 3000 类，留一法测出来超过 5 min。三者**目前都开着，P2/P3 均未开工**。
+
+| 闸门 | 入口 | 现状 | 关掉它的步骤 |
+|---|---|---|---|
+| OOB 消息 | `Preconditions.outOfBoundsMessage` → `String.format` → Formatter 全部转换分支 | 开 | P3（§18.5 入口 1、2）：常量 kind 只走对应分支；所有格式串都是常量时，`FormatSpecifier.c` 的值集是有限集，`print` 的 switch 只留 `%s` |
+| PTI 校验 | `ParameterizedTypeImpl.validateConstructorArguments` 的错误分支（`String.format` `%d`） | 开 | P3（§18.5 入口 5）：对闭包内带签名的类做构建期校验，全部通过时错误分支死 |
+| getGenericInterfaces | `ConcurrentHashMap.comparableClassFor`（经 `treeifyBin` → `TreeBin.<init>`） | 开 | P2（§18.4）：`putVal` 的 key 参数值集沿 treeify 链传播，Comparable 键只有 String 时不可达；否则用 P3 求值器逐个求值 |
+
+P4（fullAddCount CAS 事实，§18.6）还关着第四个较小的入口。实施顺序见 §18.9。
+
+### 19.3 P2 / P3 的具体做法、关键文件和函数
+
+**P2 守卫收窄**
+- absint 在 `generator/crates/closure/src/absint.rs` 中：
+  - `cond(opc, a, b)`（约 467 行）是整数条件求值；
+  - `INSTANCEOF` 事件在约 927、996 行生成；
+  - 现在条件边上不收窄值集。
+- 做法：
+  1. 在 `ifeq/ifne/if_acmpeq/if_acmpne` 的真假后继上，给来源局部变量挂一个收窄后的值集。比较对象有三种：`getClass()==C.class` 的结果、`instanceof C` 的结果、`A.class.isAssignableFrom(c)` 的结果。
+  2. 在值集表示里给 open 镜像加上界字段。
+  3. `engine/services.rs` 的 `service_lookup` 在走未知回退（`unknown`）时，按上界只选 A 的子类型服务。
+  4. `engine/worklist.rs` 约 244 行已经按 `INSTANCEOF` 收集了类型，可以作为收窄的起点。
+- 方法参数值集要沿 `putVal → treeifyBin → TreeBin.<init> → comparableClassFor` 传到方法间；现有的参数值集在 `engine/flow.rs` 和 `engine/invoke.rs`。
+
+**P3 常量实参求值**
+- 新建 `engine/concrete/`，按约 600 行拆成三部分：
+  - 解释器：确定性逐条执行字节码；
+  - 堆：只容纳本次求值新建的对象；
+  - 白名单：可调用的 native 列表，放在 `vm_intrinsics.toml` 新增节里。
+- 求值的接入点：
+  - 在 `engine/invoke.rs` 的调用点处理中，实参全是常量时先试具体求值。
+  - 求值成功：只把轨迹上的方法、分支计入闭包，并把字段的具体值并入 F 节点值集（`engine/sets.rs` / `setstore.rs`）。
+  - 求值失败：整次回退到抽象解释。
+- 常量来源：
+  - 已有的 `param_strs`（`engine/pstrs.rs`）只收集字符串，需要扩成按调用点合并的常量值集（int/float/字符串），HashMap loadFactor 入口要用；
+  - `engine/consteval.rs`、`engine/fold.rs` 是现有常量折叠，可以复用。
+- PTI 校验：
+  - `input` crate 解析泛型签名；
+  - 在 engine 中逐类比对「参数化类型的实参个数 = 原始类的类型形参个数」。
+- 编码约束：不写 JDK 类名字面量。入口全部由清单或字节码形态识别。
+
+### 19.4 序列化回调按名查找（regress2 第 1 项：StockTrans、TestSerialDefaultSuid）
+
+终态要求：类未知、方法名和形参已知的反射查找（如 `ObjectStreamClass` 按名查 `writeObject`、`readObject`、`writeReplace` 等），只计入**已实例化且声明了该方法**的类，不按 CHA 全量拉入。
+
+c1d-pick 的现状：
+- b957535c 起，`engine/invoke.rs` 的 `reflective_writes` 只用站点名 `site_names`（`V::Str` 加 `a.lits()`）与接收者镜像求叉积。
+- 名字只来自形参、接收者又不是常量时，记缺口 `recv(param-name)`。
+- 因此这两例的回调没有被计入，运行时会命中存根。
+
+c1d-serial-wip 17f7d04b 的半成品：
+- 改动：
+  - `engine/method_lookup.rs` 新增 `open_name_lookup(name)` 和 `open_names_on(id, only)`。它们遍历 `self.g` 中已实例化的类及其超类链，对声明了该名字方法的类调用 `reflect_name`。
+  - `engine.rs` 新增字段 `open_lookup_names: BTreeSet<String>`。
+  - `on_g_grow` 对新实例化的类调用 `open_names_on(id, None)`。
+  - `invoke.rs` 中，`class_recv && classes.is_empty()` 时，不在 `site_names` 里的名字改为走 `open_name_lookup`，取代原来的缺口。
+- 实测：
+
+  | 用例 | 类数 | 说明 |
+  |---|---|---|
+  | DeepCopy | 1925 | c1d-pick 为 1640。fold_props 由正常降到 0，sysprops `all` = true，原因是 `privilegedGetProperties` 的常量合并失去属性表标记 |
+  | StockTrans | 1923 | |
+  | TestSerialDefaultSuid | 1930 | |
+
+  共暴露 221 个序列化回调，涉及 File、FilePermission、各异常类等。原因是「已实例化」这个集合太宽。
+- 收窄方案，二选一或组合：
+  1. 只对真正到达序列化写入点的类型计名：`ObjectStreamClass.lookup` / `writeObject0` 中 `obj.getClass()` 接收者的值集。这需要把站点的接收者镜像集合作为过滤条件传给 `open_name_lookup`，不再全局开名。
+  2. 按调用点的 `argTypes` 常量数组（`getDeclaredMethod(name, Class[])` 的形参类数组）过滤：签名不符的同名方法不计入。
+- 验收：
+  - DeepCopy ≤1715 且 fold_props 不回退；
+  - StockTrans、TestSerialDefaultSuid 通过；
+  - 生成器、闭包单测全过。
+
+### 19.5 native-gaps 移交的两处过近似（不手写，修闭包精度）
+
+- **linkToNative**：
+  - 进入路径：`Method.invoke` → `DirectMethodHandleAccessor$NativeAccessor.invoke@91` → `[signature] methodAccessorInvoker():MethodHandle` → `[reflect]` class MethodHandle → `linkToNative`。
+  - 签名里出现 MethodHandle 返回类型，反射模型就把 MethodHandle 全部成员视为反射可达。这是过近似。
+  - 终态：签名里的返回类型只引入类型本身，不暴露成员；成员暴露只来自按名查找。
+- **com/sun/media/sound 的 4 个 native**（DirectAudioDeviceProvider、PortMixerProvider 等）：
+  - 怀疑来自 ServiceLoader 服务类型不精确（未知回退选进了 sound 的 provider），与 P2 / P6（§18.8）是同一个问题。
+  - 服务器 trace 作业 `why-93e0f28e`（`rava audit api java/lang java/util --trace-class …`）的结果待取回，用来确认引入链。
+- native-gaps 一侧的记录：native-gaps 分支 `docs/plans/2026-10-02-native-gaps.md` §三。
+
+### 19.6 测量脚本与可删除的临时物
+
+所有脚本都必须经 `python3 /Users/yuwei/dev/workspace/heavy_lock.py` 运行。脚本在 `/tmp` 下，不在仓库里，接手者可以照抄。
+
+| 脚本 | 用法 |
+|---|---|
+| `/tmp/c1d_meas.sh <tag> <Test...>` | 先构建 c1d-pick worktree 的 rava，再对每个用例跑 `rava build <f> --stop-after emit --closure-json --clean`。把最新的 `build/*/closure_input/closure.json` 复制到 `/tmp/c1d_<tag>.<Test>.json`，并打印 classes / code / methods / fold_props / all。换分支时改脚本开头的 worktree 路径 |
+| `/tmp/c1d_ut.sh` | 构建后跑 workspace 测试（排除 driver）和 `driver --bins`，参数为 `--test-threads=1` |
+| `/tmp/c1dp0_time.sh` | 在 c1d-p0 和 c1d-prec 上计时 HelloWorld `--stop-after closure`。约 600 s，这类长测量应改为服务器作业 |
+| `/tmp/c1d_item1.py` | 生成 17f7d04b 改动的补丁脚本，已提交，可删 |
+
+可删除：
+- `/tmp/c1d_mw.*`、`/tmp/c1d_ser.*`、`/tmp/c1dfix_dbg.sh`、`/tmp/c1dfix_dbg.log`、`/tmp/c1dp0_*.log`、`/tmp/c1d_item1.py`；
+- 自有 target-dir：`/tmp/c1dpick`、`/tmp/c1dprec`、`/tmp/c1dp0`。
+
+worktree 处理：
+- `../java_rta_c1d_pick`：b957535c、20ef4fdc 合入集成分支后可删；c1d-serial-wip 由接手者另开 worktree。
+- `../java_rta_c1d_prec`、`../java_rta_c1d_p0`：P2/P3 接手者继续用，不删。
+- 已删：`java_rta_c1d_bis`、`/tmp/c1dbis`、`/tmp/c1dfix`。
