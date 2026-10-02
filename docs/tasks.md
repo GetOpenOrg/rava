@@ -102,7 +102,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     └─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
-│   │     ├─ 🔄 b0 m3 serialVersionUID 无字段闭包 c72bfd88（抽查 + m3 golden 作业进行中）
+│   │     ├─ 🔄 b0 m3 serialVersionUID 无字段闭包 c72bfd88（m3 golden 已跑完）；合入前须修 ArrayList.writeObject L3 分派存根
+│   │     │       （StockTrans / TestSerialDefaultSuid / TestSerialProxyForm）与 TestReflectProbe（Integer.MAX_VALUE 反射字段）
 │   │     ├─ 🔄 b1 序列化收窄：大值集来自未知接收者字段视图（Unsafe 读 ↔ setObjFieldValues 手写写入成环）
 │   │     │       验收：DeepCopy ≤1640 类、fold_props ≥42、StockTrans / TestSerialDefaultSuid 回调保留
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
@@ -175,7 +176,7 @@ native-gaps ✅ ──▶ FS-C2 ──▶ boot layer（另需 C1d-a a2）──�
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
 | C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | 具体求值器 engine/concrete/ 判定三道闸门；正式 HelloWorld ≈3091 类 / ≈600 s → ≤360 类、≤3 s；之后合入 1e623cec、139 个 `#[jvm_boundary]` 归零、TestCharsetNamedStreams |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | c72bfd88（lib crate `pub(crate)` 成员发反射臂，修 m3 serialVersionUID）抽查中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | c72bfd88（lib crate `pub(crate)` 成员发反射臂，修 m3 serialVersionUID）待合入，先修 ArrayList.writeObject 分派存根与 TestReflectProbe；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | 🔄 fs-c2 | `2026-10-02-fs-c2-app-classloader.md`；TestClassNestNatives 为已知失败 |
 | regress2 续 · 栈帧来源统一 | 🔄 | native-gaps 已合入，开始 |
