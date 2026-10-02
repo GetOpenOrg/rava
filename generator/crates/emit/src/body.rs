@@ -40,8 +40,19 @@ pub struct BodyEffects {
     pub requests: Vec<(String, String, String)>,
     /// invokedynamic 实现方法引用 (类, Java 方法名, Rust 名)
     pub lambda_refs: Vec<(String, String, String)>,
-    /// SAM 合成对象站点 (接口 binary, SAM 描述符, 当前类)
-    pub sam_sites: Vec<(String, String, String)>,
+    /// SAM 合成对象站点
+    pub sam_sites: Vec<SamSite>,
+}
+
+/// 一个 SAM 合成对象站点：samtype 接口、SAM 描述符、站点发射所在类，及该站点的 lambda 隐藏类
+/// （类名与直接超接口；超类恒为 Object）
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SamSite {
+    pub iface: String,
+    pub sam_desc: String,
+    pub class: String,
+    pub hidden: String,
+    pub interfaces: Vec<String>,
 }
 
 /// 方法体生成结果：完整函数文本（签名 + `{` 体 `}`）与登记事实

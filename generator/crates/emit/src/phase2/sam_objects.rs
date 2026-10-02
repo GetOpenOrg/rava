@@ -149,14 +149,14 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     let fn_ty = format!("__Shared<__DynFn!(({}) -> Result<{}>)>", eps.join(", "), eret);
     let mut l: Vec<String> = vec![
         "// ── A-5 函数式接口合成对象（LambdaMetafactory 产物的同构物）──".into(),
-        format!("// {iface} 的 lambda 实例：SAM 闭包为存储，实现本接口及超接口的"),
+        format!("// {iface} 的 lambda 实例：SAM 闭包与调用点隐藏类名为存储，实现本接口及超接口的"),
         "// __VTable（SAM 条目直调闭包、default 条目经载体 __default_<m> 体执行）；".into(),
-        "// __interface 查询对本接口及超接口闭包应答。".into(),
+        "// __interface 查询对本接口及超接口闭包应答；运行时类为调用点的隐藏类。".into(),
         "#[derive(Clone)]".into(),
-        format!("pub struct {lam}(pub {fn_ty});"),
+        format!("pub struct {lam}(pub {fn_ty}, pub &'static str);"),
         String::new(),
         format!("impl {lam} {{"),
-        format!("    pub fn new(f: {fn_ty}) -> Self {{ Self(f) }}"),
+        format!("    pub fn new(f: {fn_ty}, class: &'static str) -> Self {{ Self(f, class) }}"),
         "}".into(),
         String::new(),
     ];
@@ -166,9 +166,9 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     l.push(format!("impl ObjectVTable for {lam} {{"));
     l.push("    fn as_any(&self) -> &dyn std::any::Any { self }".into());
     l.push(format!("    fn __obj_str(&self) -> std::string::String {{ std::format!(\"{iface}::Lambda\") }}"));
-    l.push(format!("    fn __class_name(&self) -> &'static str {{ \"{iface}\" }}"));
+    l.push("    fn __class_name(&self) -> &'static str { self.1 }".into());
     l.push("    fn is_instance_of(&self, type_id: &str) -> bool {".into());
-    l.push(format!("        matches!(type_id, {})", pats.join(" | ")));
+    l.push(format!("        type_id == self.1 || matches!(type_id, {})", pats.join(" | ")));
     l.push("    }".into());
     l.push("    fn __interface(self: __Shared<Self>, slot: &mut dyn std::any::Any) {".into());
     let mut targets: Vec<(&str, String)> = Vec::new();

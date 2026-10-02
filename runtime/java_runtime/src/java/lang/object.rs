@@ -396,7 +396,7 @@ pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) ->
 /// `getClass().getName() + "@" + Integer.toHexString(hashCode())`，hashCode 走虚派发。
 #[allow(non_snake_case)]
 pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::String> {
-    let text = format!("{}@{:x}", this.__class_name().replace('/', "."), this.hashCode());
+    let text = format!("{}@{:x}", crate::meta::java_name(this.__class_name()), this.hashCode());
     Ok(crate::java::lang::String::from(text))
 }
 

@@ -39,6 +39,8 @@ pub(super) struct IndySite<'a> {
     pub desc: &'a str,
     /// 调用点的常量池下标（指令操作数携带）
     pub cp_index: u16,
+    /// 调用点指令偏移（JVM 每条 invokedynamic 指令各自链接：lambda 隐藏类身份按指令区分）
+    pub pc: u32,
     pub bsm: Option<&'a BootstrapMethod>,
 }
 
@@ -109,7 +111,7 @@ fn invokedynamic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &I
     let bm = env.ctx.class_file().and_then(|cf| cf.bootstrap_methods.get(usize::from(*bsm)));
     // 引导方法分类键 `类.方法`（[indy] 清单；type_switch 是 native 的细分，清单装载时已优先）
     let kind = bm.and_then(|b| env.ctx.rt.indy_kind(&format!("{}.{}", b.handle.member.owner, b.handle.member.name)));
-    let site = IndySite { name, desc, cp_index: *index, bsm: bm };
+    let site = IndySite { name, desc, cp_index: *index, pc: ins.offset, bsm: bm };
     match kind {
         Some(IndyKind::Concat) => concat::string_concat(env, sim, log, &site),
         Some(IndyKind::TypeSwitch) => type_switch::gen_type_switch(env, sim, &site, SwitchKind::Type),

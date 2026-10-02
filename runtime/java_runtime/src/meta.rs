@@ -86,6 +86,8 @@ extern "Rust" {
     static CLASS_ANNO: &'static [(&'static str, &'static [u8], &'static [(i32, CpVal)])];
     #[link_name = "__java_meta_CLINIT_CLASSES"]
     static CLINIT_CLASSES: Names;
+    #[link_name = "__java_meta_HIDDEN_CLASSES"]
+    static HIDDEN_CLASSES: Names;
     #[link_name = "__java_meta_PERMITTED_SUBCLASSES"]
     static PERMITTED_SUBCLASSES: &'static [(&'static str, Names)];
     #[link_name = "__java_meta_NEST_MEMBERS"]
@@ -133,6 +135,18 @@ pub fn class_interfaces() -> &'static [(&'static str, Names)] { unsafe { CLASS_I
 pub fn class_anno() -> &'static [(&'static str, &'static [u8], &'static [(i32, CpVal)])] { unsafe { CLASS_ANNO } }
 /// 含 <clinit> 的类集。
 pub fn clinit_classes() -> Names { unsafe { CLINIT_CLASSES } }
+/// 隐藏类集（lambda 调用点隐藏类，生成器 `hidden_class!` 声明，按名有序）。
+pub fn is_hidden_class(class: &str) -> bool {
+    unsafe { HIDDEN_CLASSES }.binary_search(&class).is_ok()
+}
+/// 内部名（`/` 分隔）→ Class.getName 形式：普通类全部 `/` 换 `.`；隐藏类只换调用者类部分，
+/// 保留 `/0x…` 后缀（JVM 隐藏类名 `p.C$$Lambda/0x…`）。
+pub fn java_name(class: &str) -> std::string::String {
+    match class.rsplit_once('/') {
+        Some((host, suffix)) if is_hidden_class(class) => format!("{}/{suffix}", host.replace('/', ".")),
+        _ => class.replace('/', "."),
+    }
+}
 /// sealed 类 → 许可子类型。
 pub fn permitted_subclasses() -> &'static [(&'static str, Names)] { unsafe { PERMITTED_SUBCLASSES } }
 /// 嵌套宿主 → NestMembers 属性所列成员。
