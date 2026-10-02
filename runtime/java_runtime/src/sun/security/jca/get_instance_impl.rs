@@ -7,9 +7,9 @@
 //! `new Instance(provider, impl)`——全部走翻译字节码。
 
 use crate::prelude::*;
-use super::get_instance::implref::GetInstance;
-use super::get_instance_instance::implref::GetInstance_Instance;
-use super::service_id::implref::ServiceId;
+use super::get_instance::GetInstance;
+use super::get_instance_instance::GetInstance_Instance;
+use super::service_id::ServiceId;
 use crate::java::security::Provider;
 use crate::java::security::Provider_Service;
 use crate::java::lang::Class;

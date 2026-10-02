@@ -5,8 +5,8 @@
 //! 优先序，provider 对象按需构造一次）。docs/plans/2026-09-28-jca-faithful-provider.md。
 
 use crate::prelude::*;
-use super::providers::implref::Providers;
-use super::provider_list::implref::ProviderList;
+use super::providers::Providers;
+use super::provider_list::ProviderList;
 use crate::java::security::Provider;
 
 impl Providers {

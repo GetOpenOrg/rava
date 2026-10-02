@@ -430,47 +430,65 @@ impl Handwritten {
 
     /// 类型路径 → binary name 候选（`Self` → 宿主类；单段按 use 表或同包；`_` 可能是 `$`）
     pub fn resolve_type(&self, host: &str, t: &TypeRef) -> Vec<String> {
-        let pkg: Vec<&str> = host.rsplit_once('/').map_or(vec![], |(p, _)| p.split('/').collect());
-        let segs = &t.0;
-        if segs.len() == 1 && segs[0] == "Self" {
-            return vec![host.to_string()];
-        }
-        let ty = segs.last().cloned().unwrap_or_default();
-        let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
-            // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
-            Some("super") => {
-                let k = segs.iter().take_while(|s| *s == "super").count();
-                (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
-            }
-            Some("crate") => (vec![], &segs[1..]),
-            _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
-            _ => (vec![], &segs[..]),
-        };
-        let snake = to_snake(&ty);
-        let mut full = base;
-        for m in &rest[..rest.len().saturating_sub(1)] {
-            let m = m.strip_prefix("r#").unwrap_or(m);
-            if m != "implref" && m != "self" {
-                full.push(m.to_string());
-            }
-        }
-        // 末段模块与类型同名：可能是类文件模块（`stream_decoder::StreamDecoder`），也可能是包
-        // （`charset::Charset`）——两种前缀都给出
-        let mut prefixes = vec![full.clone()];
-        if full.last() == Some(&snake) {
-            full.pop();
-            prefixes.insert(0, full);
-        }
-        let mut out = Vec::new();
-        for mut p in prefixes {
-            if p.is_empty() {
-                p = pkg.iter().map(|s| s.to_string()).collect();
-            }
-            let prefix = p.join("/");
-            out.extend(dollar_variants(&ty).into_iter().map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") }));
-        }
-        out
+        resolve_type(host, t)
     }
+}
+
+/// 手写文件的 use 表：本地名 → 完整路径段（解析失败为空）
+pub fn file_uses(content: &str) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    if let Ok(file) = syn::parse_file(content) {
+        for item in &file.items {
+            if let syn::Item::Use(u) = item {
+                collect_uses(&u.tree, &mut Vec::new(), &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// 类型路径 → binary name 候选（`host` 为手写文件的宿主类；见 [`Handwritten::resolve_type`]）
+pub fn resolve_type(host: &str, t: &TypeRef) -> Vec<String> {
+    let pkg: Vec<&str> = host.rsplit_once('/').map_or(vec![], |(p, _)| p.split('/').collect());
+    let segs = &t.0;
+    if segs.len() == 1 && segs[0] == "Self" {
+        return vec![host.to_string()];
+    }
+    let ty = segs.last().cloned().unwrap_or_default();
+    let (base, rest): (Vec<String>, &[String]) = match segs.first().map(String::as_str) {
+        // 共置手写是包模块的子模块：首个 `super` = 宿主包，其后每个 `super` 上溯一级
+        Some("super") => {
+            let k = segs.iter().take_while(|s| *s == "super").count();
+            (pkg[..pkg.len().saturating_sub(k - 1)].iter().map(|s| s.to_string()).collect(), &segs[k..])
+        }
+        Some("crate") => (vec![], &segs[1..]),
+        _ if segs.len() == 1 => (pkg.iter().map(|s| s.to_string()).collect(), &segs[..]),
+        _ => (vec![], &segs[..]),
+    };
+    let snake = to_snake(&ty);
+    let mut full = base;
+    for m in &rest[..rest.len().saturating_sub(1)] {
+        let m = m.strip_prefix("r#").unwrap_or(m);
+        if m != "self" {
+            full.push(m.to_string());
+        }
+    }
+    // 末段模块与类型同名：可能是类文件模块（`stream_decoder::StreamDecoder`），也可能是包
+    // （`charset::Charset`）——两种前缀都给出
+    let mut prefixes = vec![full.clone()];
+    if full.last() == Some(&snake) {
+        full.pop();
+        prefixes.insert(0, full);
+    }
+    let mut out = Vec::new();
+    for mut p in prefixes {
+        if p.is_empty() {
+            p = pkg.iter().map(|s| s.to_string()).collect();
+        }
+        let prefix = p.join("/");
+        out.extend(dollar_variants(&ty).into_iter().map(|v| if prefix.is_empty() { v } else { format!("{prefix}/{v}") }));
+    }
+    out
 }
 
 /// `A_B_C` 的 `_` ↔ `$` 组合（嵌套类的 Rust 名把 `$` 换成 `_`）；原名优先

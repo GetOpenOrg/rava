@@ -130,7 +130,7 @@ fn pop_ctor_args(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &
                     eff_all.as_ref().is_some_and(|eff| eff.contains(tp)) && !targs.map.as_ref().is_some_and(|m| m.contains_key(tp))
                 });
                 // 外部实例形参里还有未确定的内部类类型变量：其实例化由实参决定（Rust 从实参推断）
-                if open && e.ty.head_name(ctx.ty.names) == ob.head_name(ctx.ty.names) {
+                if open && e.ty.head_name(&ctx.ty) == ob.head_name(&ctx.ty) {
                     expected = e.ty.clone();
                 }
             }
@@ -270,7 +270,7 @@ fn ctor_call(env: &InstrEnv, raw_cls: &str, mangle_cls: &str, desc: &str, tparam
     let mut segs = class_segs(raw_cls, tf)?;
     segs.push(seg(&name)?);
     let path = Path::new(segs);
-    let binary = env.ctx.ty.names.binary_of(raw_cls).map_or_else(|| mangle_cls.to_string(), str::to_string);
+    let binary = env.ctx.ty.binary_of(raw_cls).unwrap_or_else(|| mangle_cls.to_string());
     let bin = if mangle_cls.contains('/') { mangle_cls.to_string() } else { binary };
     Ok((try_(call_path(path, nodes)), RsType::class(bin, tparams)))
 }

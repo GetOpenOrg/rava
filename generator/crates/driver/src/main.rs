@@ -2,12 +2,14 @@
 //! - `closure`：精确闭包分析（XTA + 抽象解释 + 手写层 syn 扫描），输出 closure.json / 溯源 / 报告
 //! - `build`：javac → 闭包 → 发射 scratch → cargo 编译 → 运行（`--stop-after` 截停）
 //! - `compile`：编译已发射的 scratch（`build --stop-after emit` 之后；批量编排的编译段，见 [`compile_cmd`]）
+//! - `prune`：运行完成后删除 scratch 登记的剩余编译产物（可执行文件，见 [`artifacts`]）
 //! - `emit`：既有 closure.json → 发射 scratch
 //! - `image-dirs`：镜像独有 / VM 支持类目录（`build` / `emit` 未给 `--image` 时的缺省来源），每行一个
 //! - `audit`：编译前缺口审计（api / corpus / native，报告写 docs/reports/，见 [`audit_cmd`]）
 //! - `jdk`：JDK 选择结果与来源 / 已安装列表（与 `build` 同一选择逻辑，见 [`resolve::jdk`]）
 
 mod api_roots;
+mod artifacts;
 mod audit_cmd;
 mod audit_report;
 mod build_cmd;
@@ -30,8 +32,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N] [--cut <类.方法:描述符[@偏移]>]… [--cut-file <文件>]… [--dump-edges <文件>]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--release] [--target-dir D] [--closure-cache D] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F]\n  \
-         rava compile <scratch> [--release] [--target-dir D] [--build-timeout 秒] [--runtime R]\n  \
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--release] [--target-dir D] [--keep-artifacts] [--closure-cache D] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F]\n  \
+         rava compile <scratch> [--release] [--target-dir D] [--build-timeout 秒] [--keep-artifacts] [--runtime R]\n  \
+         rava prune <scratch>…\n  \
          rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
          rava image-dirs [--jdk N | --java-home P] [--runtime R]\n  \
          rava jdk [--jdk N | --java-home P] [--runtime R] [--home-only | --json] | rava jdk --list\n  \
@@ -108,6 +111,7 @@ fn main() -> ExitCode {
         "build" => build_cmd::run_build(&args),
         "emit" => build_cmd::run_emit(&args),
         "compile" => compile_cmd::run_compile(&args),
+        "prune" => artifacts::run_prune(&args.rest),
         "image-dirs" => image_dirs(&args),
         "jdk" => jdk_cmd(&args),
         "audit" => audit_cmd::run(&args),

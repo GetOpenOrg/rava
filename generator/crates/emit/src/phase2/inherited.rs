@@ -10,7 +10,7 @@
 //! pub fn speak(&self) -> Result<i32> { Animal__speak_base(self) }
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use indexmap::IndexMap;
@@ -18,9 +18,9 @@ use ty::ClassInfo;
 
 use super::bridge::{bridge_override_member, covariant_bridge_pending};
 use super::sig::{param_mapping, param_part, result_inner, rust_type, sig_param_types, substitute_type_params};
-use super::uses::{class_use_path, imported_names, imports_for, type_arg_uses};
-use super::{anc_args, class_params, provided_methods, requests_by_recv, Emissions};
-use crate::class_writer::{INHERITED_IMPORTS_SLOT, INHERITED_MEMBERS_SLOT};
+use super::uses::claim_classes;
+use super::{class_params, provided_methods, render_args, requests_by_recv, substituted_classes, type_classes, Emissions};
+use crate::class_writer::INHERITED_MEMBERS_SLOT;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::{ClassEmission, EmittedMethod};
 use crate::lang;
@@ -36,14 +36,6 @@ fn is_prim(t: &str) -> bool {
 fn after_attr(decl: &str) -> &str {
     decl.split_once('\n').map_or("", |(_, r)| r)
 }
-
-/// 导入扫描的文本：签名 + 转发体；存根体的消息串（Java 二进制名）不参与导入扫描
-fn scan_text(decl: &str) -> &str {
-    let body = after_attr(decl);
-    body.find(STUB_BODY).map_or(body, |i| &body[..i])
-}
-
-const STUB_BODY: &str = " { __stub(\"stub: ";
 
 /// `pub fn <name>` 的名字
 fn fn_name(line: &str) -> Option<&str> {
@@ -67,7 +59,7 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
         let call = if args.is_empty() { "self".to_string() } else { format!("self, {}", args.join(", ")) };
         return format!("{owner_short}__{}_base{turbo}({call})", method.rust_name);
     }
-    let (ptypes, ret) = sig_param_types(&method.signature(ctx.ty.names));
+    let (ptypes, ret) = sig_param_types(&method.signature(&ctx.ty));
     let wrap = |a: &String, ty: &String| {
         if is_prim(ty) {
             a.clone()
@@ -80,7 +72,10 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
     let n = ptypes.len().min(args.len());
     let mut conv: Vec<String> = args.iter().zip(&ptypes).map(|(a, t)| wrap(a, t)).collect();
     conv.extend(args.drain(n..));
-    let mut call = format!("<Self as {owner_short}__VTable>::__as_{owner_short}(self).__impl_{}({})", method.rust_name, conv.join(", "));
+    // trait 名按本文件作用域（派生名登记）；`__as_<名>` 是宏按定义处名字生成的方法名
+    let vt = ctx.ty.derived(owner_bin, "__VTable");
+    let declared = ctx.declared(owner_bin);
+    let mut call = format!("<Self as {vt}>::__as_{declared}(self).__impl_{}({})", method.rust_name, conv.join(", "));
     if let Some(inner) = result_inner(&ret) {
         if !inner.is_empty() && !is_prim(inner) {
             call.push_str(if owner_args.is_empty() {
@@ -167,7 +162,7 @@ fn slot_erasure_entries(ctx: &EmitCtx<'_>, vt_bin: &str, method: &EmittedMethod,
     else {
         return Vec::new();
     };
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let vt_params = class_params(ctx, vt_ci);
     let es = ctx.ty.emitted_method_sig_types(vt_ci, vt_m, &vt_params);
     let slot_types: Vec<String> = es.params.iter().map(|t| t.render(names)).collect();
@@ -216,13 +211,18 @@ fn erasure_attr(entries: &[(Pos, String)], substituted: &str) -> String {
     entries.iter().map(|(p, _)| format!("@{p}")).collect::<Vec<_>>().join(";")
 }
 
-/// 祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）
-fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, recv_ci: &ClassInfo) -> String {
-    let anc = anc_args(ctx, recv_ci);
+/// 祖先方法声明 → 接收者类视角下的继承成员声明（声明 + 转发体）及签名引用的类
+fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, recv_ci: &ClassInfo) -> (String, Vec<String>) {
+    let anc_ty = ctx.ty.ancestor_type_args(recv_ci, None);
+    let owner_args_ty = anc_ty.iter().find(|(x, _)| x == owner_bin).map(|(_, a)| a.clone()).unwrap_or_default();
+    // 签名（代入后）+ 转发体 turbofish 里的声明类实参
+    let mut classes = substituted_classes(ctx, &method.sig, owner_bin, &owner_args_ty);
+    classes.extend(type_classes(owner_bin, &owner_args_ty).into_iter().skip(1));
+    let anc: Vec<(String, Vec<String>)> = anc_ty.iter().map(|(b, a)| (b.clone(), render_args(ctx, a))).collect();
     let get_args = |b: &str| anc.iter().find(|(x, _)| x == b).map(|(_, a)| a.clone()).unwrap_or_default();
     let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
     let owner_args = get_args(owner_bin);
-    let mut signature = substitute_type_params(&method.signature(ctx.ty.names), &param_mapping(&owner_params, &owner_args));
+    let mut signature = substitute_type_params(&method.signature(&ctx.ty), &param_mapping(&owner_params, &owner_args));
     let recv_name = ctx.ty.receiver_member_name(&method.name, &method.descriptor, recv_ci);
     if recv_name != method.rust_name {
         let old_head = format!("pub fn {}(", method.rust_name);
@@ -252,7 +252,7 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     }
     let mut erasure = slot_erasure_entries(ctx, &vt_bin, method, &signature);
     if erasure.is_empty() {
-        erasure = owner_erasure_entries(&method.signature(ctx.ty.names), &signature, &owner_params);
+        erasure = owner_erasure_entries(&method.signature(&ctx.ty), &signature, &owner_params);
     }
     let ev = erasure_attr(&erasure, &signature);
     if !ev.is_empty() {
@@ -260,14 +260,14 @@ fn member_declaration(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str
     }
     // 不占槽（未被派发到）的祖先方法：宏上转到声明者 wrapper 直接调用，无转发体
     if slotless {
-        return format!("#[java_method({})]\n{signature};", parts.join(", "));
+        return (format!("#[java_method({})]\n{signature};", parts.join(", ")), classes);
     }
     let body = if owner_slot_stub(ctx, method, owner_bin) {
         crate::precheck::stub_call("stub", &format!("{owner_bin}.{}:{}", method.name, method.descriptor))
     } else {
         forward_body(ctx, method, owner_bin, &owner_args)
     };
-    format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", "))
+    (format!("#[java_method({})]\n{signature} {{ {body} }}", parts.join(", ")), classes)
 }
 
 /// 接口方法声明 → 类接收者视角下的继承成员声明；返回 (声明文本, 本类视角的 Rust 方法名)
@@ -279,7 +279,7 @@ fn interface_member_declaration(
     recv_ci: &ClassInfo,
 ) -> (String, String) {
     let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
-    let mut signature = substitute_type_params(&method.signature(ctx.ty.names), &param_mapping(&owner_params, owner_args));
+    let mut signature = substitute_type_params(&method.signature(&ctx.ty), &param_mapping(&owner_params, owner_args));
     let local = ctx.ty.interface_member_local_name(recv_ci, &method.name, &method.descriptor);
     let mut parts = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
     if !method.access.is_empty() {
@@ -305,10 +305,7 @@ struct RecvPass<'a, 'c> {
     recv: &'a ClassEmission,
     recv_ci: &'c ClassInfo,
     taken: BTreeSet<String>,
-    imported: BTreeSet<String>,
-    arg_uses: BTreeMap<String, String>,
     members: Vec<String>,
-    imports: Vec<String>,
 }
 
 impl<'a> RecvPass<'a, '_> {
@@ -326,16 +323,12 @@ impl<'a> RecvPass<'a, '_> {
         None
     }
 
-    /// 转发体调用的 owner `__base` 自由函数的导入
+    /// 转发体调用的 owner `__base` 自由函数：登记为派生名（导入由作用域记录生成）
     fn base_fn_import(&mut self, owner_bin: &str, method: &EmittedMethod) {
         if method.handwritten || method.virtual_in.is_empty() || owner_slot_stub(self.ctx, method, owner_bin) {
             return;
         }
-        let base_short = format!("{}__{}_base", self.ctx.short(owner_bin), method.rust_name);
-        if self.imported.insert(base_short) {
-            let path = class_use_path(self.ctx, owner_bin, &self.recv.crate_prefix, Some(self.ems), &self.recv.crate_name);
-            self.imports.push(format!("use {path}__{}_base;", method.rust_name));
-        }
+        self.ctx.ty.derived(owner_bin, &format!("__{}_base", method.rust_name));
     }
 
     /// 桥接成员（成功返回 true；名字缺失 / 重名回落普通继承）
@@ -345,8 +338,7 @@ impl<'a> RecvPass<'a, '_> {
         let Some(fname) = fname.filter(|n| !self.taken.contains(n)) else { return false };
         self.taken.insert(fname);
         self.members.push(b.decl);
-        let u = imports_for(self.ctx, &b.sig_text, self.recv, self.recv, &mut self.imported, Some(&self.arg_uses), Some(self.ems));
-        self.imports.extend(u);
+        claim_classes(self.ctx, &b.classes, self.ems);
         let Some((rn, rp)) = b.real_want else { return true };
         if self.recv.find(&rn, &rp).is_some() {
             return true;
@@ -357,35 +349,27 @@ impl<'a> RecvPass<'a, '_> {
             return true;
         }
         self.taken.insert(real_recv_name);
-        let real_decl = member_declaration(self.ctx, real_m, &real_owner, self.recv_ci);
-        let owner_em = &self.ems[&real_owner];
-        let u = imports_for(self.ctx, scan_text(&real_decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), None);
+        let (real_decl, classes) = member_declaration(self.ctx, real_m, &real_owner, self.recv_ci);
+        claim_classes(self.ctx, &classes, self.ems);
         self.members.push(real_decl);
-        self.imports.extend(u);
         self.base_fn_import(&real_owner, real_m);
         true
     }
 
     /// 超类链无声明 → 接口方法（抽象类未实现的接口抽象方法 / 未注入本类的 default）
     fn interface_member(&mut self, name: &str, pdesc: &str) {
-        let names = self.ctx.ty.names;
-        for (iface_bin, iface_args) in self.ctx.ty.implemented_interface_views(self.recv_ci) {
+        for (iface_bin, iface_args_ty) in self.ctx.ty.implemented_interface_views(self.recv_ci) {
             let Some(iface) = self.ems.get(&iface_bin).filter(|e| !e.handwritten) else { continue };
             let Some(im) = iface.find(name, pdesc) else { continue };
-            let iface_args: Vec<String> = iface_args.iter().map(|t| t.render(names)).collect();
+            let iface_args = render_args(self.ctx, &iface_args_ty);
             let (decl, local) = interface_member_declaration(self.ctx, im, &iface_bin, &iface_args, self.recv_ci);
             if !self.taken.insert(local) {
                 break;
             }
-            let owner_ty = rust_type(&self.ctx.short(&iface_bin), &iface_args);
-            let scan = format!("{} {owner_ty}", after_attr(&decl));
+            let mut classes = substituted_classes(self.ctx, &im.sig, &iface_bin, &iface_args_ty);
+            classes.extend(type_classes(&iface_bin, &iface_args_ty));
             self.members.push(decl);
-            let mut uses = imports_for(self.ctx, &scan, iface, self.recv, &mut self.imported, None, Some(self.ems));
-            if self.imported.insert(self.ctx.short(&iface_bin)) {
-                let p = class_use_path(self.ctx, &iface_bin, &self.recv.crate_prefix, Some(self.ems), &self.recv.crate_name);
-                uses.push(format!("use {p};"));
-            }
-            self.imports.extend(uses);
+            claim_classes(self.ctx, &classes, self.ems);
             break;
         }
     }
@@ -408,35 +392,32 @@ impl<'a> RecvPass<'a, '_> {
         if !self.taken.insert(recv_name) {
             return;
         }
-        let decl = member_declaration(self.ctx, method, &owner_bin, self.recv_ci);
-        let owner_em = &self.ems[&owner_bin];
-        let u = imports_for(self.ctx, scan_text(&decl), owner_em, self.recv, &mut self.imported, Some(&self.arg_uses), Some(self.ems));
+        let (decl, classes) = member_declaration(self.ctx, method, &owner_bin, self.recv_ci);
+        claim_classes(self.ctx, &classes, self.ems);
         self.members.push(decl);
-        self.imports.extend(u);
         self.base_fn_import(&owner_bin, method);
     }
 }
 
-/// 单接收者的继承成员 (声明, use 行)；接收者不承载继承成员时 None。只读 `ems`
-fn recv_members(ctx: &EmitCtx<'_>, ems: &Emissions, recv_bin: &str, wanted: &BTreeSet<(String, String)>) -> Option<(Vec<String>, Vec<String>)> {
+/// 单接收者的继承成员声明（名字在接收者作用域认领）；接收者不承载继承成员时 None。只读 `ems`
+fn recv_members(ctx: &EmitCtx<'_>, ems: &Emissions, recv_bin: &str, wanted: &BTreeSet<(String, String)>) -> Option<Vec<String>> {
     let (Some(recv), Some(recv_ci)) = (ems.get(recv_bin), ctx.ty.reg.get(recv_bin)) else { return None };
     if recv.handwritten || !recv.text.contains(INHERITED_MEMBERS_SLOT) {
         return None;
     }
+    let sctx = ctx.scoped(&recv.scope);
+    let ctx = &sctx;
     let mut taken: BTreeSet<String> = recv.methods.iter().map(|m| m.rust_name.clone()).collect();
     taken.extend(provided_methods(ctx, recv_bin));
-    let mut imported = imported_names(&recv.text);
-    imported.insert(ctx.short(recv_bin));
-    let arg_uses = type_arg_uses(ctx, recv_ci, ems, &recv.crate_prefix, &recv.crate_name);
-    let mut pass = RecvPass { ctx, ems, recv, recv_ci, taken, imported, arg_uses, members: Vec::new(), imports: Vec::new() };
+    let mut pass = RecvPass { ctx, ems, recv, recv_ci, taken, members: Vec::new() };
     for (name, pdesc) in wanted {
         pass.want(name, pdesc);
     }
-    Some((pass.members, pass.imports))
+    Some(pass.members)
 }
 
-/// 填充单类的两个继承插入位
-fn fill_inherited(text: &str, decls: Option<&Vec<String>>, uses: Option<&Vec<String>>) -> String {
+/// 填充单类的继承成员插入位
+fn fill_inherited(text: &str, decls: Option<&Vec<String>>) -> String {
     let member_text = match decls.filter(|d| !d.is_empty()) {
         Some(decls) => {
             let body = decls.join("\n\n");
@@ -446,12 +427,10 @@ fn fill_inherited(text: &str, decls: Option<&Vec<String>>, uses: Option<&Vec<Str
         }
         None => String::new(),
     };
-    let use_text: String = uses.map(|v| v.iter().map(|l| format!("{l}\n")).collect()).unwrap_or_default();
-    let text = super::fill_slot(text, INHERITED_MEMBERS_SLOT, &member_text);
-    super::fill_slot(&text, INHERITED_IMPORTS_SLOT, &use_text)
+    super::fill_slot(text, INHERITED_MEMBERS_SLOT, &member_text)
 }
 
-/// 按登记的需求为各接收者类生成继承成员声明，并填充所有类文本的两个插入位。
+/// 按登记的需求为各接收者类生成继承成员声明，并填充所有类文本的继承成员插入位（导入行由各文件作用域记录生成）。
 ///
 /// 各接收者只读 `ems`（本阶段在全部生成完毕后才回写文本），按接收者并行，结果按需求登记序归并
 pub fn resolve_inherited_members(ctx: &EmitCtx<'_>, state: &ProjectState, ems: &mut Emissions) {
@@ -459,14 +438,12 @@ pub fn resolve_inherited_members(ctx: &EmitCtx<'_>, state: &ProjectState, ems: &
     let groups = requests_by_recv(state);
     let passes = crate::par::par_map(jobs, &groups, |(recv_bin, wanted)| recv_members(ctx, ems, recv_bin, wanted));
     let mut members: IndexMap<String, Vec<String>> = IndexMap::new();
-    let mut imports: IndexMap<String, Vec<String>> = IndexMap::new();
     for ((recv_bin, _), pass) in groups.into_iter().zip(passes) {
-        let Some((m, u)) = pass else { continue };
-        members.entry(recv_bin.clone()).or_default().extend(m);
-        imports.entry(recv_bin).or_default().extend(u);
+        let Some(m) = pass else { continue };
+        members.entry(recv_bin).or_default().extend(m);
     }
     let all: Vec<(&String, &ClassEmission)> = ems.iter().collect();
-    let texts = crate::par::par_map(jobs, &all, |(bin, em)| fill_inherited(&em.text, members.get(*bin), imports.get(*bin)));
+    let texts = crate::par::par_map(jobs, &all, |(bin, em)| fill_inherited(&em.text, members.get(*bin)));
     for (em, text) in ems.values_mut().zip(texts) {
         em.text = text;
     }

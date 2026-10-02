@@ -4,7 +4,7 @@
 //! 原生二进制无 SecurityManager（JEP 486）→ 空操作。消费方：MethodHandles.Lookup（MH-native）。
 
 use crate::prelude::*;
-use super::reflect_util::implref::ReflectUtil;
+use super::reflect_util::ReflectUtil;
 use crate::java::lang::Class;
 
 impl ReflectUtil {

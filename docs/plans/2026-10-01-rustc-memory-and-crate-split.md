@@ -466,7 +466,7 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 **生成器（Rust 生成器，`emit/src/project/layers.rs`）**
 - 第二阶段收尾之后、落盘之前拆分：JDK 生成类（非手写、非接口）的块首加 `#[rava_layer = "decl"]`，原位落盘。
-- 实现层文本 = 原文件头（allow 属性 + use 列表）+ `use java_runtime::<本类模块路径>::*;` + 同一块（`#[rava_layer = "body"]`）。块后的 `iface_upcasts!` / `implref` / 反射字段闭包属声明层，不进实现层。
+- 实现层文本 = 原文件头（allow 属性 + use 列表）+ `use java_runtime::<本类模块路径>::*;` + 同一块（`#[rava_layer = "body"]`）。块后的 `iface_upcasts!` / 反射字段闭包属声明层，不进实现层。
 - 装箱：类按 binary name 排序，均衡装箱。箱数 = max(⌈总字节 / `BODY_CRATE_BYTES`（5 MiB）⌉, 2)，每类按其字节中点落入的区间归箱。上限按 §7.6 的峰值目标实测校准，见 §7.7 S4 记录。
 - 实现 crate `java_body_k`：
   - `src/lib.rs` 是 allow 属性 + 私有 `use java_runtime::*;` + `mod body;`；

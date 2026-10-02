@@ -56,7 +56,7 @@ fn unify(env: &InstrEnv, sig_t: &RsType, arg_t: &RsType, nested: bool, tparams: 
     if s_args.is_empty() || a_args.is_empty() || s_args.len() != a_args.len() {
         return;
     }
-    if sig_t.head_name(env.ctx.ty.names) != arg_t.head_name(env.ctx.ty.names) {
+    if sig_t.head_name(&env.ctx.ty) != arg_t.head_name(&env.ctx.ty) {
         return;
     }
     for (s, a) in s_args.iter().zip(a_args) {

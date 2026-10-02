@@ -28,7 +28,7 @@ fn idents(s: &str) -> Vec<&str> {
 
 /// 解析结果中的类型名在调用方均可见（调用方类型形参 / 注册表短名 / 内建名）
 fn all_visible(env: &InstrEnv, t: &RsType, caller_tps: &[String]) -> bool {
-    let names = env.ctx.ty.names;
+    let names = &env.ctx.ty;
     idents(&ty_text(env, t)).into_iter().all(|n| {
         caller_tps.iter().any(|p| p == n) || names.is_registry_short(n) || BUILTIN.contains(&n) || PRIMITIVE_NAMES.contains(&n)
     })
@@ -155,8 +155,7 @@ pub fn resolve_static_field(env: &InstrEnv, cls: &str, raw_name: &str, desc: &st
     } else if reg.contains(&cls) {
         reg.get(&cls)
     } else {
-        let short = if cls.contains('/') { ctx.short(&cls) } else { cls.replace('$', "_") };
-        short_binary(ctx, &short).and_then(|b| reg.get(&b))
+        short_binary(ctx, &ctx.short(&cls)).and_then(|b| reg.get(&b))
     };
     let mut turbofish = Vec::new();
     let mut accessor = field_name.clone();

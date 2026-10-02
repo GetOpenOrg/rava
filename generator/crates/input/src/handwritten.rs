@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use closure::handwritten::{GENERATED_MARK, MODULE_SUFFIXES};
+use closure::handwritten::{file_uses, resolve_type, TypeRef, GENERATED_MARK, MODULE_SUFFIXES};
 use ty::Registry;
 
 use crate::par::par_map;
@@ -34,6 +34,8 @@ pub struct HwEntry {
     pub method_cores: BTreeMap<String, (String, String)>,
     /// 接口伴生实现的方法：rust fn 名 → (参数文本（不含接收者）, 返回类型文本)
     pub iface_method_sigs: BTreeMap<String, (String, String)>,
+    /// 伴生签名文本里的类名（按所在手写文件的 use 表解析）：文本中的名字 → binary
+    pub iface_sig_refs: BTreeMap<String, String>,
     /// 手写实现对象为该（非接口）类的 vtable trait 提供的 fn 名（`impl X__VTable for S`）：
     /// 这些槽由手写对象实现，发射层不得按分派结果裁剪
     pub class_vtable_fns: BTreeSet<String>,
@@ -212,6 +214,44 @@ fn vtable_sigs(content: &str) -> BTreeMap<String, BTreeMap<String, (String, Stri
     out
 }
 
+/// 签名文本里独立出现（不在 `::` 之后）、大写开头的标识符
+pub fn type_words(text: &str) -> impl Iterator<Item = &str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let Some(c) = rest.chars().next() else { break };
+        if !is_word(c) {
+            i += c.len_utf8();
+            continue;
+        }
+        let len = rest.find(|c: char| !is_word(c)).unwrap_or(rest.len());
+        let w = &rest[..len];
+        if w.starts_with(|c: char| c.is_ascii_uppercase()) && !text[..i].ends_with("::") {
+            out.push(w);
+        }
+        i += len;
+    }
+    out.into_iter()
+}
+
+/// 签名里出现、经文件 use 表导入的类型名 → 完整路径段
+fn sig_uses(content: &str, vtables: &BTreeMap<String, BTreeMap<String, (String, String)>>) -> BTreeMap<String, Vec<String>> {
+    if vtables.is_empty() {
+        return BTreeMap::new();
+    }
+    let uses = file_uses(content);
+    let mut out = BTreeMap::new();
+    for (params, ret) in vtables.values().flat_map(|m| m.values()) {
+        for w in type_words(params).chain(type_words(ret)) {
+            if let Some(segs) = uses.get(w) {
+                out.insert(w.to_string(), segs.clone());
+            }
+        }
+    }
+    out
+}
+
 fn is_word_str(s: &str) -> bool {
     s.chars().all(is_word)
 }
@@ -271,6 +311,8 @@ struct FileFacts {
     names: BTreeSet<String>,
     cores: Vec<(String, (String, String))>,
     vtables: BTreeMap<String, BTreeMap<String, (String, String)>>,
+    /// 签名里出现、经本文件 use 表导入的类型名 → 完整路径段
+    sig_uses: BTreeMap<String, Vec<String>>,
 }
 
 /// 读取并提取一个手写文件；非手写模块文件、不可读或含生成标记的文件返回 `None`
@@ -290,12 +332,15 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
     if content.contains(GENERATED_MARK) {
         return None;
     }
+    let vtables = vtable_sigs(&content);
+    let sig_uses = sig_uses(&content, &vtables);
     Some(FileFacts {
         class_binary,
         file_pkg: pkg.join("/"),
         names: pub_fns(&content),
         cores: method_cores(&content),
-        vtables: vtable_sigs(&content),
+        vtables,
+        sig_uses,
     })
 }
 
@@ -318,7 +363,14 @@ impl HandwrittenMap {
     }
 
     fn absorb(&mut self, f: FileFacts, reg: &Registry, idents: &BTreeMap<String, Vec<&str>>) {
-        let FileFacts { class_binary, file_pkg, names, cores, vtables } = f;
+        let FileFacts { class_binary, file_pkg, names, cores, vtables, sig_uses } = f;
+        let refs: BTreeMap<String, String> = sig_uses
+            .into_iter()
+            .filter_map(|(w, segs)| {
+                let hit = resolve_type(&class_binary, &TypeRef(segs)).into_iter().find(|c| reg.contains(c))?;
+                Some((w, hit))
+            })
+            .collect();
         if !names.is_empty() {
             self.classes.entry(class_binary.clone()).or_default().methods.extend(names);
         }
@@ -333,7 +385,15 @@ impl HandwrittenMap {
                 self.classes.entry(target.to_string()).or_default().class_vtable_fns.extend(methods.into_keys());
                 continue;
             }
-            self.classes.entry(target.to_string()).or_default().iface_method_sigs.extend(methods);
+            let e = self.classes.entry(target.to_string()).or_default();
+            for (params, ret) in methods.values() {
+                for w in type_words(params).chain(type_words(ret)) {
+                    if let Some(b) = refs.get(w) {
+                        e.iface_sig_refs.insert(w.to_string(), b.clone());
+                    }
+                }
+            }
+            e.iface_method_sigs.extend(methods);
         }
     }
 

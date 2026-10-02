@@ -54,7 +54,7 @@ impl TyCtx<'_> {
                             let (t, next) = self.parse_one_type(sig, i, type_params, None);
                             i = next;
                             if first.is_none()
-                                && t.render(self.names) != "Object"
+                                && t.render(self) != "Object"
                                 && !self.is_carrier(&t)
                             {
                                 if let (Some(bb), b'L') = (bound_binaries.as_deref_mut(), b[start])

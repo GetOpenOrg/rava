@@ -37,7 +37,7 @@ pub fn validate_field_type(ctx: &EmitCtx<'_>, text: &str, type_params: &[String]
         RUST_TOKENS.contains(&n)
             || BUILTIN_TYPES.contains(&n)
             || type_params.iter().any(|p| p == n)
-            || ctx.ty.names.is_registry_short(n)
+            || ctx.ty.is_registry_short(n)
     })
 }
 
@@ -48,7 +48,7 @@ pub fn resolve_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) -> RsTyp
     }
     let sig = f.signature.as_deref().unwrap_or("");
     if let Some(g) = ctx.ty.parse_field_type(sig, tps) {
-        if g != RsType::Object && validate_field_type(ctx, &g.render(ctx.ty.names), tps) {
+        if g != RsType::Object && validate_field_type(ctx, &g.render(&ctx.ty), tps) {
             return g;
         }
     }
@@ -68,7 +68,7 @@ fn resolve_anc_field_rust(
         .outer_ref_field_type(&f.name, &f.desc, anc_params)
         .or_else(|| ctx.ty.parse_field_type(sig, anc_params));
     if let Some(g) = g {
-        if g != RsType::Object && validate_field_type(ctx, &g.render(ctx.ty.names), anc_params) {
+        if g != RsType::Object && validate_field_type(ctx, &g.render(&ctx.ty), anc_params) {
             return match anc_map {
                 Some(m) if !m.is_empty() => g.substitute(&|n| m.get(n).cloned()),
                 _ => g,
@@ -93,7 +93,7 @@ pub struct SuperFields {
 pub fn flatten_super_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> SuperFields {
     let mut out = SuperFields::default();
     let anc_args: BTreeMap<String, Vec<RsType>> = ctx.ty.ancestor_type_args(ci, None).into_iter().collect();
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let mut declared = BTreeSet::new();
     for anc in superclass_chain(ctx, ci).into_iter().rev() {
         let params = ctx.ty.effective_class_type_params(anc);
@@ -137,7 +137,7 @@ pub fn struct_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], sup: &Sup
         }
         lines.push(format!("    {}", field_attr(f, ex.fields.get(i))));
         let vis = if java_vis { super::visibility::java_member_vis(f.access) } else { "pub" };
-        lines.push(format!("    {vis} {name}: {},", resolve_field_rust(ctx, f, tps).render(ctx.ty.names)));
+        lines.push(format!("    {vis} {name}: {},", resolve_field_rust(ctx, f, tps).render(&ctx.ty)));
     }
     lines
 }
@@ -167,7 +167,7 @@ fn idents(text: &str) -> Vec<&str> {
 
 /// static 字段的 Rust 类型文本（签名优先；引用类型形参 / 无效时回退描述符）
 fn static_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) -> String {
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let sig = f.signature.as_deref().unwrap_or("");
     let gs = ctx.ty.parse_field_type(sig, tps).map(|t| t.render(names)).filter(|g| {
         !g.is_empty()

@@ -6,7 +6,7 @@
 //! `__class_for_descriptor`），本类只做描述符文本的拼接与切分。
 
 use crate::prelude::*;
-use super::bytecode_descriptor::implref::BytecodeDescriptor;
+use super::bytecode_descriptor::BytecodeDescriptor;
 use crate::java::lang::{Class, ClassLoader};
 use crate::java::util::{ArrayList, List};
 

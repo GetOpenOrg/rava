@@ -210,6 +210,8 @@ pub(crate) struct ClassMeta {
     pub ancestor_type_args: HashMap<String, proc_macro2::TokenStream>,
     /// 每个祖先自己声明的字段列表：{ancestor_rust_name → [field_names]}。
     pub ancestor_fields_layout: HashMap<String, Vec<String>>,
+    /// 本文件以别名引用的祖先：{本地名 → 定义名}（`__as_<定义名>` 钩子名；类型名用本地名）
+    pub ancestor_hooks: HashMap<String, String>,
     pub all_supertypes: Vec<String>,
     /// 本类实现且在闭包内的接口载体 Rust 短名（A-4 批次 6）：wrapper 的类型驱动视图
     /// 探针（__view_into）为每个成员生成接口载体臂（数组协变 / try_checkcast 判定）。
@@ -264,6 +266,14 @@ impl ClassMeta {
                             .map(|x| x.to_owned())
                             .collect();
                         m.ancestor_fields_layout.insert(anc.to_owned(), fields);
+                    }
+                }
+            } else if path.is_ident("ancestor_hooks") {
+                let s = lit_str(attr)?;
+                // 格式：Local=Declared;Local2=Declared2
+                for seg in s.split(';').filter(|x| !x.is_empty()) {
+                    if let Some((local, declared)) = seg.split_once('=') {
+                        m.ancestor_hooks.insert(local.to_owned(), declared.to_owned());
                     }
                 }
             } else if path.is_ident("all_supertypes") {

@@ -6,7 +6,7 @@
 //! `CryptoAllPermission.INSTANCE`，密钥长度不设上限）。
 
 use crate::prelude::*;
-use super::jce_security::implref::JceSecurity;
+use super::jce_security::JceSecurity;
 use crate::java::security::Provider;
 use crate::java::lang::Exception;
 

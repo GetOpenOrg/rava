@@ -4,7 +4,7 @@
 //! `GetInstance.getServices(List<ServiceId>)`（见 `get_instance_impl.rs`）。
 
 use crate::prelude::*;
-use super::service_id::implref::ServiceId;
+use super::service_id::ServiceId;
 
 impl ServiceId {
     /// `<init>(String type, String algorithm)`。

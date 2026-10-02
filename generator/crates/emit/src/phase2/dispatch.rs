@@ -70,9 +70,9 @@ fn flag(window: &str, key: &str) -> bool {
     crate::scan::attr_true(window, key)
 }
 
-/// 类文本中 `pub struct Short<..>` 的类型形参表文本
-fn struct_generics<'t>(text: &'t str, short: &str) -> Option<&'t str> {
-    crate::scan::struct_generics(text, short)
+/// 类 struct 的类型形参（与类文件声明同源：`effective_class_type_params`）；非泛型 → 空
+fn class_tparams(ctx: &EmitCtx<'_>, bin: &str) -> Vec<String> {
+    ctx.ty.reg.get(bin).map(|ci| ctx.ty.effective_class_type_params(ci).to_vec()).unwrap_or_default()
 }
 
 fn runtime_prefix(em: &ClassEmission) -> &'static str {
@@ -209,10 +209,10 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, onl
 
 /// 类发射文本 → `__reflect_dispatch` 实现（无臂 / 泛型类 → None）。`only`：只发射这些方法名的臂
 fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
-    let short = ctx.short(class_bin);
-    if em.text.contains(&format!("pub struct {short}<")) {
+    if !class_tparams(ctx, class_bin).is_empty() {
         return None;
     }
+    let short = ctx.declared(class_bin);
     let lines: Vec<&str> = em.text.split('\n').collect();
     let mut arms = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -277,9 +277,9 @@ fn field_arms(class_bin: &str, em: &ClassEmission, attr: &str, decl: &regex::Cap
 
 /// 类发射文本 → `__reflect_field` 实现。泛型类闭包挂在 `X<Object..>` 上，实例字段不承载
 fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
-    let short = ctx.short(class_bin);
-    let gparams: Option<Vec<String>> =
-        struct_generics(&em.text, &short).map(|g| g.split(',').map(|p| p.split(':').next().unwrap_or("").trim().to_string()).collect());
+    let short = ctx.declared(class_bin);
+    let tps = class_tparams(ctx, class_bin);
+    let gparams: Option<Vec<String>> = (!tps.is_empty()).then_some(tps);
     let lines: Vec<&str> = em.text.split('\n').collect();
     let mut arms = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -317,9 +317,11 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
 }
 
 /// 泛型类的登记路径实参：每个类型形参取 Object
-fn object_turbofish(ctx: &EmitCtx<'_>, text: &str, bin: &str) -> String {
-    let Some(g) = struct_generics(text, &ctx.short(bin)) else { return String::new() };
-    let n = g.split(',').filter(|p| !p.trim().is_empty()).count();
+fn object_turbofish(ctx: &EmitCtx<'_>, bin: &str) -> String {
+    let n = class_tparams(ctx, bin).len();
+    if n == 0 {
+        return String::new();
+    }
     format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
 }
 
@@ -330,10 +332,11 @@ fn appended(text: &str, tail: &str) -> String {
 /// 字段闭包：(追加后的类文本, 登记行)；无臂 → None（不登记）。只读 `ems`
 fn field_closure(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str, only: Option<&BTreeSet<String>>) -> Option<(String, String)> {
     let em = ems.get(bin)?;
-    let text = emit_fields_for(ctx, bin, em, only)?;
+    // 闭包文本落在该类文件：引用名在其作用域认领；登记行在 main（全路径）
+    let text = emit_fields_for(&ctx.scoped(&em.scope), bin, em, only)?;
     let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
     let new = appended(&em.text, &text);
-    let tf = object_turbofish(ctx, &new, bin);
+    let tf = object_turbofish(ctx, bin);
     let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),");
     Some((new, line))
 }
@@ -407,7 +410,7 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     let mut methods: BTreeMap<String, String> = BTreeMap::new();
     per_class(ctx, ems, &targets, &mut methods, |ems, bin, only| {
         let em = &ems[bin];
-        let text = emit_for(ctx, bin, em, only)?;
+        let text = emit_for(&ctx.scoped(&em.scope), bin, em, only)?;
         let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
         let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),");
         Some((appended(&em.text, &text), line))
