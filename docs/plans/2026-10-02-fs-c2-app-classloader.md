@@ -242,9 +242,15 @@ B 步（删 `desiredAssertionStatus:()Z` 常量特判，独立提交）：
   `ArchivedClassLoaders.archive` → `ServicesCatalog` → `AbstractClassLoaderValue.map`。`[release]` 放行
   `sun/net/www/ParseUtil`、`AbstractClassLoaderValue`、`ClassLoaderValue`；手写 `class_loader_value_impl.rs`
   （构造替身）由字节码 `<init>` 取代，删除；JLA 手写补 `createOrGetClassLoaderValueMap`（转发加载器同名方法，
-  JDK `System$2` 同形）。`ServicesCatalog.getServicesCatalogOrNull` 的过渡手写由此可删（C1d 范围，本步不动）。
+  JDK `System$2` 同形）。
 - `ClassLoader` 手写的 `getResource` / `getResources` / `getResourceAsStream` 改为虚方法体 `__impl_*`：此前为
   非虚 `[meta]` 方法，自定义加载器覆盖（ServiceLoader 经上下文加载器查资源）不分派到子类。
 
 边界用例 `62_reflection/TestParallelCapable`（JDK 21 实测 expected）：直接子类登记成功、父类未登记的子类失败、
 已登记类的子类成功、系统 / 平台加载器已登记。TestAppClassLoader 闭包 1422 / 7708。
+
+交给 C1d-a 的两条（本步不动）：
+
+- `ServicesCatalog.getServicesCatalogOrNull` 的过渡手写：`ClassLoaderValue` 族放行后可删，改走字节码；
+- JLA 手写里补的 `createOrGetClassLoaderValueMap`：`SystemJavaLangAccess` 整体是过渡手写，C1d-a 删除并改为
+  `System$2` 的字节码翻译（c1d-p0 已合入 1e623cec）。合并冲突时以「删手写、走 `System$2`」为准，本补丁随之取消。
