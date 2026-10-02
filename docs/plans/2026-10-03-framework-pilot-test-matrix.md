@@ -1,7 +1,7 @@
 # 框架依赖包测试矩阵：Servlet / MyBatis / Spring 与热门库 pilot 阶梯
 
 > 日期：2026-10-03
-> 来源：用户命题「像 JUnit 测试一样，创建 Servlet、MyBatis、Spring、Spring Boot 相关测试，每一个都是独立的，再加一些热门框架依赖包——分析要做哪些测试、建多少」；同日追问「SSH 三件套是否覆盖」→ §三-A 增补核查（Struts/Hibernate 原未覆盖，已补增量行）。
+> 来源：用户命题「像 JUnit 测试一样，创建 Servlet、MyBatis、Spring、Spring Boot 相关测试，每一个都是独立的，再加一些热门框架依赖包——分析要做哪些测试、建多少」；同日追问「SSH 三件套是否覆盖」→ §三-A 增补核查（Struts/Hibernate 原未覆盖，已补增量行）；再追问「生态还有什么热门缺口」→ §三-B 全类目扫描与候选池。
 > 定位：[junit-crate-pilot](2026-09-23-junit-crate-pilot.md)（P0 已收官）与 [junit-crate-as-test-harness](2026-10-01-junit-crate-as-test-harness.md)（步骤 0 在途）的**扩展矩阵**——把 roadmap §四-3 的 P 阶梯展开为可派发的 pilot 清单，回答「哪些框架、多少测试、什么顺序、哪些 gated」。
 > 事实基线：2026-10-03 仓库实测（52 jar 盘点、Proxy$Dyn 落地核查、java.sql 缺席核查、main @ 2b2e1f26）。
 
@@ -95,6 +95,42 @@
 
 > 若「SSH」实指 **SSM**（Spring + SpringMVC + MyBatis）：MyBatis 已在 #9；SpringMVC（spring-web/webmvc）随 spring-context 同判据（请求映射反射 + 容器 + servlet 容器件）。
 
+### §三-B 生态缺口扫描与候选池（2026-10-03 二次追问「还有什么热门的没覆盖」）
+
+**扫描原则**：按**能力压力面去重**，不按热度堆砌——与既有 pilot 压测面重叠度高的件（如又一个 utils 聚合库对 lang3/guava 无新增压力面）降优先级；spec-API 模式（#6/#7）可无限复制但只挑有独立压力面的。
+
+**类别缺口表**：
+
+| 类别 | 已覆盖 | 缺口（代表件） | 评注 |
+|---|---|---|---|
+| HTML/XML | JDK XML 栈（闭包内，m1 实证） | **Jsoup**（HTML+CSS 选择器，热度顶级） | 纯计算，完美候选 |
+| 日志 | slf4j-api（API 侧，#1） | **Logback**（实现侧，slf4j 原配）、Log4j2 | 与 #1 组成完整日志栈闭环；log4j2 的 config-plugin 反射系统是备选压力面 |
+| 缓存 | guava cache（#12 切片内） | **Caffeine**（事实标准） | 并发原语压力面 |
+| 配置/YAML | —（commons-configuration2 在盘） | **SnakeYAML**、**typesafe config** | 小而纯计算，Boot 配置栈地基件 |
+| JSON | jackson-core #3、gson 流式（备选） | **Fastjson2**（中文生态国民级）、org.json | fastjson2 流式面先行，反射 ObjectReader/Writer gated |
+| 声明式 HTTP | httpclient（在盘，网络 gated） | **Retrofit**、**OkHttp** | Retrofit 可 **fake Call 全离线测** = Proxy$Dyn + 注解元数据的教科书消费者（与 #9 互证）；OkHttp 纯计算件（HttpUrl/Headers/Cookie）可先行、网络面 gated |
+| 响应式/并发 | —（real-multithreading 在列） | **RxJava**、**Disruptor**（LMAX 环形队列） | 调度器/真并发 gated；Disruptor 是线程模型的终极压力面 |
+| 测试 | junit4/hamcrest ✅、assertj（在盘） | TestNG、JUnit5 | junit 计划文档已注 JUnit5 Launcher 显著更大；assertj 进池（在盘） |
+| 工具聚合 | lang3/io/text/csv、guava | **Hutool**（中文生态）、vavr | 压测面与 lang3/guava 重叠度高——按切片低调排；vavr 函数式数据结构有独立面 |
+| 字节码 | byte-buddy（排除） | **ASM**（库本体） | **元目标**：库本体 = 纯字节码状态机可静态翻译，「用翻译器翻译字节码工具」；特批件不占常规波次 |
+| spec API | servlet #6、persistence #7 | **jakarta.validation**（Bean Validation）、**jakarta.el**（表达式语言）、json-p、websocket；mail/activation/transaction（在盘未用） | spec-API 模式复制；el 与 OGNL/SpEL 成语言引擎三连 |
+| 表达式引擎 | OGNL #8、SpEL（随 #10） | **commons-jexl3（在盘）**、MVEL、Aviator | jexl3 在盘顺手，与 OGNL 互证 |
+| 安全/密码 | commons-codec（在盘） | BouncyCastle、Tink | BC ~3000 类；**JCA 注册表已落地（2026-09-25）使其架构可达**，大备选 |
+| 连接池/DB 周边 | mybatis #9、HikariCP 家族 | **HikariCP**、dbcp2（在盘）、Jedis/Lettuce | HikariCP gated 真并发+JDBC；Redis 客户端 gated 网络 |
+| Office/PDF | — | PDFBox、POI/EasyExcel | 大件 IO 混合，中后期 |
+| 中文微服务 | — | Dubbo、RocketMQ、Nacos、ShardingSphere、Seata | 全家 gated（网络 + 类加载 + 动态 SPI），与 Boot 同列终点域 |
+
+**候选池（W5+ / 替换位，提拔哪批 = §六-7 拍板）**：
+
+| 档 | 件 | mains | e2e | 前置 |
+|---|---|---:|---:|---|
+| 高优先候选 | **Jsoup 3/8、Logback 3/8、Caffeine 3/6、SnakeYAML 2/6、typesafe config 2/4、Retrofit 3/6、Fastjson2 流式 2/5、AssertJ 2/5** | ~20 | ~48 | 多数无前置（W0 绿即可）；Retrofit 等 Proxy$Dyn 分派保真（与 #9 互证） |
+| 在盘顺手件 | commons-codec 2/4、math3 3/6（S-19 数值延伸）、jexl3 2/4、beanutils 2/4（L3）、collections4 2/5、jakarta.mail 2/4（MIME 纯计算面）、activation 1/2、transaction 1/2 | ~13 | ~29 | 无（jar 在盘） |
+| spec 增补 | jakarta.validation 2/4、jakarta.el 2/4、json-p 2/4 | 6 | 12 | 无（pom 增行） |
+| gated 维持 | HikariCP、RxJava、Disruptor、OkHttp 网络面、Redis 客户端、PDFBox/POI、BouncyCastle、Log4j2（与 Logback 择一）、Dubbo 系、Hutool/vavr（低重叠优先）、ASM（特批元目标） | — | — | 各自判据如上表 |
+
+候选池全量 ≈ **+19 件 / ~39 mains / ~89 e2e**；主推 #1–#12 与候选池合并的理论全景 ≈ 31 crate / ~81 mains / ~192 e2e——**不建议全景一次排期**，按「波次滚动 + 压测面去重」消化。
+
 ## 四、规模与排期
 
 **合计近期（主推 #1–#12，含 SSH 增补 #7 JPA api + #8 OGNL）**：lib crate **12 个** / crate 验收 mains **≈42** / e2e 回归 **≈103**（junit 既有计划 10–20 另计；原 10 pilot 口径精确值 37/91，本文以逐行和为准）。备选池（struts2 切片 +~9 e2e、commons 家族 +~11 e2e）按需滚动。
@@ -123,3 +159,4 @@ Apache-2.0 覆盖 servlet / mybatis / spring / guava / commons / jackson / eclip
 4. **MyBatis JDBC 层**：java.sql 接口面从 jmods 翻译 + 手写 fake Driver/Connection/ResultSet（推荐，接口面大但语义薄）vs 手写 java.sql 最小子集（快但边界口径要自定）。
 5. **Boot 终点定位**：确认按 §三终点表以入场判据制挂远期（不降低终态目标，只排定可达顺序）。
 6. **SSH 增量纳入方式**（2026-10-03 追问）：推荐 OGNL（#8）+ JPA api（#7）进主推、struts2-core 切片与 hibernate-core 挂入场判据（§三-A）——如你要求 Struts2/Hibernate 更激进排期，需连带拍板「翻译期子类合成」新能力立项。
+7. **候选池提拔（W5+）**（2026-10-03 二次追问）：高优先候选八件（Jsoup/Logback/Caffeine/SnakeYAML/typesafe config/Retrofit/Fastjson2 流式/AssertJ）建议按此序滚动提拔，或在盘顺手件（零取包成本）插队；gated 维持件按 §三-B 各自判据，不随热度提前。
