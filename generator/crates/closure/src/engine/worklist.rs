@@ -183,6 +183,7 @@ impl<'a> Engine<'a> {
             deps.extend(self.ctx.fdeps.borrow().get(&key).into_iter().flatten().copied());
             self.invalidate_all(Some(deps), Why::FieldOpen);
             self.open_static(&key);
+            self.offset_fields_opened(Some((&key.name, Some(&key))));
         }
     }
 
@@ -196,6 +197,7 @@ impl<'a> Engine<'a> {
             for k in hits {
                 self.open_static(&k);
             }
+            self.offset_fields_opened(Some((name, None)));
         }
     }
 
@@ -218,6 +220,7 @@ impl<'a> Engine<'a> {
             deps.extend(ctx.fdeps.borrow().get(k).into_iter().flatten().copied());
         }
         self.invalidate_all(Some(deps), Why::FieldsAll);
+        self.offset_fields_opened(None);
     }
 
     pub(super) fn process(&mut self, m: usize) {

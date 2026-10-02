@@ -127,9 +127,12 @@ pub struct Manifest {
     deserializers: HashSet<String>,
     serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
+    /// 方法句柄解释器（`[facts.handle_interpreters]`）：其手写体调用点上的字段写入成员只写 DMH 所指字段
+    handle_interpreters: Vec<String>,
     memory_reads: HashMap<String, (usize, Option<usize>)>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
+    superclass_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
@@ -355,9 +358,11 @@ impl Manifest {
             deserializers: field_writes("deserializers").into_iter().collect(),
             serializable_markers: field_writes("serializable_markers"),
             array_writes,
+            handle_interpreters: facts("handle_interpreters", "members"),
             memory_reads,
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
+            superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -476,6 +481,12 @@ impl Manifest {
         self.array_writes.get(member)
     }
 
+    /// 方法句柄解释器：手写体经 LambdaForm 调用的内存读写成员只作用于 DMH 所指字段（不读写数组元素）。
+    /// 按成员引用逐项比对，不格式化（手写调用点增长热路径，清单只有几项）
+    pub fn is_handle_interpreter(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.handle_interpreters.iter().any(|s| member_is(s, key))
+    }
+
     /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
     pub fn memory_read(&self, member: &str) -> Option<usize> {
         self.memory_reads.get(member).map(|x| x.0)
@@ -537,6 +548,11 @@ impl Manifest {
     /// 返回接收者的类镜像（`Object.getClass` 语义）
     pub fn returns_mirror(&self, member: &str) -> bool {
         self.mirror_returns.contains(member)
+    }
+
+    /// 返回接收者镜像所指类的直接超类镜像（`Class.getSuperclass` 语义：接口 / 根类 / 基本类型为 null，数组为根类）
+    pub fn returns_superclass(&self, member: &str) -> bool {
+        self.superclass_returns.contains(member)
     }
 
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象

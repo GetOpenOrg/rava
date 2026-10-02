@@ -126,10 +126,10 @@ impl FileScan<'_> {
             });
         }
         info.opaque = cs.opaque;
-        let mut ids = ArrayIdents(false);
+        let mut ids = ArrayIdents::default();
         ids.visit_signature(sig);
         ids.visit_block(block);
-        info.array_access = ids.0 || info.opaque.iter().any(|i| is_array_ident(i));
+        info.array_access = ids.writes(&info.opaque);
         for (ty, ctor) in b.ctors {
             info.ctors.insert((TypeRef(expand(self.uses, ty)), ctor));
         }
@@ -371,28 +371,38 @@ mod tests {
         SType::Named(TypeRef(p.iter().map(|s| s.to_string()).collect()))
     }
 
-    /// 只取基本元素数组视图的手写体不改写引用元素；引用 / 未写明元素类型的视图与宏内标识符保守计入
+    /// 只读视图与基本元素数组视图不改写引用元素；引用 / 未写明元素类型的视图上调用改写元素的方法、
+    /// Object 上的引用元素存取、宏内同时出现视图与改写方法名的保守计入
     #[test]
     fn ref_array_access() {
         let src = r#"
             impl P {
                 pub fn eq(&self, ob: Object) -> Result<bool> { Ok(to_u8(&self.__get_path()) == vec![]) }
-                pub fn prim(&self, ob: Object) { let a = ob.try_cast_array::<i32>("[I"); let b = JArray::<u16>::new(1); ob.array_store_byte(0, 1); }
-                pub fn refs(&self, ob: Object) { let a = ob.try_cast_array::<Object>("[Ljava/lang/Object;"); }
+                pub fn prim(&self, ob: Object) { let a = ob.try_cast_array::<i32>("[I"); let b = JArray::<u16>::new(1); b.set(0, 1); ob.array_store_byte(0, 1); }
+                pub fn refs(&self, ob: Object) { let a = ob.try_cast_array::<Object>("[Ljava/lang/Object;"); let x = a.get(0); }
+                pub fn refs_set(&self, ob: Object) { let a = ob.try_cast_array::<Object>("[Ljava/lang/Object;"); a.set(0, ob); }
                 pub fn bare(&self) { let a = JArray::from_vec(vec![]); }
                 pub fn store(&self, ob: Object) { ob.array_store_object(0, ob); }
-                pub fn generic<T>(&self, a: &JArray<T>) {}
+                pub fn generic<T>(&self, a: &JArray<T>) -> usize { a.len() }
+                pub fn generic_set<T>(&self, a: &JArray<T>, x: T) { a.set(0, x); }
+                pub fn slice(&self, a: JArray<Class>) { a.with_vec(|v| v.reverse()); }
                 pub fn nested(&self, a: &JArray<JArray<i8>>) {}
                 pub fn mac(&self) { m!(JArray<i8>); }
+                pub fn mac_set(&self, a: JArray<Object>) { m!(a.set(0, Object::default())); }
             }
             fn to_u8(a: &JArray<i8>) -> Vec<u8> { vec![] }
+            fn put(a: &JArray<Object>) { a.set(0, Object::default()); }
         "#;
         let file = syn::parse_file(src).expect("测试源码可解析");
         let mut out = FileFns::default();
         scan_file(&file, &HashMap::new(), &mut out);
         let acc = |f: &str| out.fns.get(f).map(|i| i.array_access).expect("fn 存在");
-        assert!(!acc("eq") && !acc("prim") && !acc("to_u8"));
-        assert!(acc("refs") && acc("bare") && acc("store") && acc("generic") && acc("nested") && acc("mac"));
+        for f in ["eq", "prim", "to_u8", "refs", "bare", "generic", "nested", "mac"] {
+            assert!(!acc(f), "{f} 不改写引用元素");
+        }
+        for f in ["refs_set", "store", "generic_set", "slice", "mac_set", "put"] {
+            assert!(acc(f), "{f} 改写引用元素");
+        }
     }
 
     #[test]

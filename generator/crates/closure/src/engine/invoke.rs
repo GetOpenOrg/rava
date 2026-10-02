@@ -137,7 +137,9 @@ impl<'a> Engine<'a> {
     /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
     pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
-            self.fenum_pending.insert(cls);
+            if self.fenum_pending.insert(cls) {
+                self.offset_reads_ready();
+            }
             return;
         }
         self.open_class_fields(cls);
@@ -434,13 +436,13 @@ impl<'a> Engine<'a> {
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             let model = self.methods[t].ret_model;
-            if model == RetModel::Mirror {
-                // 类镜像：结果 = 本调用点接收者各值的 Class 对象（逐调用点）
+            if let Some(op) = model.mirror_op() {
+                // 类镜像：结果 = 本调用点接收者各值的 Class 对象 / 各镜像所指类的超类镜像（逐调用点）
                 for f in recv_fs.iter().flatten() {
                     match f {
-                        Feed::N(n) => self.mflow(*n, res),
+                        Feed::N(n) => self.mflow(*n, res, op),
                         Feed::S(s) => {
-                            self.mirrors_into(s, res);
+                            self.mirror_op_into(op, s, res);
                         }
                     }
                 }

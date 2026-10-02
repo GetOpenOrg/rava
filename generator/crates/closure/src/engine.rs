@@ -353,6 +353,10 @@ pub struct Engine<'a> {
     open_statics: Vec<(usize, u32)>,
     /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
     mirror_writes: HashMap<u32, Vec<Node>>,
+    /// 目标字段尚未开放的实例字段偏移写入（字段 → (写入值节点, 字段节点, 字段类型, 口径)），字段按口径开放时接上
+    offset_waits: HashMap<usize, Vec<(Node, Node, u32, hw_mem::Gate)>>,
+    /// 字段偏移尚未取得的按偏移读取（字段 → (字段节点, 读取结果节点, 结果类型, 口径)），偏移按口径可得时接上
+    offset_read_waits: HashMap<usize, Vec<(Node, Node, u32, hw_mem::Gate)>>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
@@ -371,18 +375,19 @@ pub struct Engine<'a> {
     pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
-    /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
-    via_flow: bool,
+    /// 下一次 `add_to` 来自流边推送时为源节点序号，否则为 [`diag::NO_SRC`]（诊断：区分直接注入点、记录型查询的来源）
+    flow_src: u32,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
     open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
-    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
-    mflows: HashMap<Node, Vec<Node>>,
-    mflow_seen: HashSet<(Node, Node)>,
-    /// 镜像变换的 open 展开登记：open(o) → 收其镜像的节点；G 增长时 ⊂ o 的新成员的镜像补推到这些节点
+    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像（`getClass`）/ 各镜像所指类的超类镜像（`getSuperclass`）
+    /// 流入 dst（逐调用点）
+    mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
+    mflow_seen: HashSet<(Node, Node, MirrorOp)>,
+    /// 类镜像变换的 open 展开登记：open(o) → 收其镜像的节点；G 增长时 ⊂ o 的新成员的镜像补推到这些节点
     open_mirrors: HashMap<u32, BTreeSet<Node>>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
@@ -411,6 +416,8 @@ pub struct Engine<'a> {
     fwriter_live: bool,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
+    /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
+    probes: Option<Box<diag::Probes>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段

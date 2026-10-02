@@ -89,3 +89,11 @@ fn string_ops_parse() {
     assert_eq!(m.string_op("a/S.x:()I"), None);
     assert!(with_vm("[facts.string_ops]\n\"a/S.f:()I\" = \"upper\"\n").is_err());
 }
+
+#[test]
+fn handle_interpreters_parse() {
+    let m = with_vm("[facts.handle_interpreters]\nmembers = [\"a/H.run:([La/O;)La/O;\"]\n").unwrap();
+    let key = |n: &str| classfile::constant::MemberRef { owner: "a/H".into(), name: n.into(), desc: "([La/O;)La/O;".into() };
+    assert!(m.is_handle_interpreter(&key("run")));
+    assert!(!m.is_handle_interpreter(&key("other")));
+}

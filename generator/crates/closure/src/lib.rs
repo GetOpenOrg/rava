@@ -52,6 +52,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
     e.cuts = engine::cut::Cuts::parse(&input.diag.cuts);
+    e.arm_probes(&input.diag.flows);
     if input.diag.dump_edges.is_some() {
         engine::cut::edges_begin();
     }

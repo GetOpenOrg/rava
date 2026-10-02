@@ -325,6 +325,8 @@ serializable_markers = ["java/io/Serializable"]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
 # 分析器把 Class 值按所指类区分（类字面量、下列 mirror_of_receiver 的逐调用点接收者），以此求反射目标：
 #   mirror_of_receiver  返回接收者的类镜像（JLS §4.3.2 getClass）
+#   superclass_of_receiver  返回接收者镜像所指类的直接超类镜像（接口 / 根类为 null，数组为根类；所指未知仍未知），
+#                       逐调用点——getInheritableMethod 的上溯、Enum.getDeclaringClass 由此得到确定值集
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -336,6 +338,9 @@ serializable_markers = ["java/io/Serializable"]
 # （closure.json `reflect.gaps`），不做模糊扩展——缺口由清单补种。
 mirror_of_receiver = [
     "java/lang/Object.getClass:()Ljava/lang/Class;",
+]
+superclass_of_receiver = [
+    "java/lang/Class.getSuperclass:()Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
@@ -501,6 +506,27 @@ resets = [
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
 
+[facts.handle_interpreters]
+# 方法句柄解释器（MH-native，method_handle_ext.rs `interpret`）：手写体按 LambdaForm 执行句柄，实参以 Object 汇入值池。
+# LambdaForm 里的 Unsafe 引用读写成员只来自 DirectMethodHandle 的字段访问器
+# （DirectMethodHandle.preparedFieldLambdaForm：`UNSAFE.putReference(checkBase(obj), fieldOffset(mh), value)`，
+# 静态字段以 staticBase 类镜像为基址；数组元素句柄走 MethodHandleImpl$ArrayAccessor 字节码 / VarHandle，不经 Unsafe 成员；
+# jdk.internal.misc.Unsafe 不导出，用户代码取不到它的方法句柄）。分析器在这些方法的手写体调用点上把
+# [facts.array_writes] 的 fields 写入成员与 [facts.memory_reads] 的读取成员按「DMH 所指字段」接入：
+#   - 不写 / 不读数组元素（不经数组写入臂把值池泛写进值池里的各数组）；
+#   - 实例字段限于偏移可经字段句柄 / MemberName 取得的字段（按名查找、字段枚举放开、全部放开、字节码外写入的字段）；
+#     反序列化放开的字段不在此列——反序列化经 FieldReflector 自身的 Unsafe 调用点读写，不构造字段方法句柄；
+#   - 静态字段与类镜像基址同普通偏移读写（按名打开的静态字段）。
+members = [
+    "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.invoke:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.linkToStatic:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.linkToVirtual:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.linkToSpecial:([Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandle.linkToInterface:([Ljava/lang/Object;)Ljava/lang/Object;",
+]
+
 [facts.array_returns]
 # 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
 # 分析器把返回值建模为该方法的一个数组分配点、元素为所列类型的 open，替代 open(返回类型)——
@@ -512,7 +538,8 @@ resets = [
 
 [facts.memory_reads]
 # 手写方法的返回值按 VM 语义读自形参 src 所指对象（形参序号按描述符，0 起，不含接收者）：
-# 数组取其元素，对象取其引用实例字段（偏移只能指向这些位置）。分析器按调用点接入，替代手写返回的
+# 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
+# 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
 # Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值。
 # offset = 字段偏移形参：调用点上为符号偏移时只读所指字段（同 [facts.array_writes] 的 offset）

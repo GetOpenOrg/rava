@@ -63,6 +63,15 @@ pub enum Kind {
     Missing,
 }
 
+/// 流边上的类镜像变换（镜像流边 `mflow`）
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum MirrorOp {
+    /// 每个值的类镜像（`getClass`）
+    Of,
+    /// 每个类镜像所指类的直接超类镜像（`getSuperclass`）
+    Super,
+}
+
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RetModel {
@@ -70,10 +79,23 @@ pub(super) enum RetModel {
     Plain,
     /// 类镜像：本调用点接收者各值的 Class 对象
     Mirror,
+    /// 超类镜像：本调用点接收者各类镜像所指类的直接超类镜像
+    Super,
     /// 浅拷贝：本调用点的接收者
     Receiver,
     /// 按实参（序号，不含接收者）读内存
     Read(usize),
+}
+
+impl RetModel {
+    /// 结果按接收者经镜像变换给出时的变换
+    pub(super) fn mirror_op(self) -> Option<MirrorOp> {
+        match self {
+            RetModel::Mirror => Some(MirrorOp::Of),
+            RetModel::Super => Some(MirrorOp::Super),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

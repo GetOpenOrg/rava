@@ -26,7 +26,8 @@ impl<'a> Engine<'a> {
 
     /// 节点（序号）并入类型集；新增部分登记待沿流边推送。类型集存于所属代表（见 `scc.rs`）
     fn add_to_id(&mut self, i: u32, s: &TypeSet) {
-        let direct = !std::mem::take(&mut self.via_flow);
+        let src = std::mem::replace(&mut self.flow_src, diag::NO_SRC);
+        let direct = src == diag::NO_SRC;
         self.graph.adds[0] += 1;
         if s.is_empty() {
             return;
@@ -58,6 +59,9 @@ impl<'a> Engine<'a> {
         self.graph.adds[2] += (delta.classes.len() + delta.open.len()) as u64;
         if direct && !delta.open.is_empty() {
             self.open_inj.entry(n).or_default().extend(delta.open.iter());
+        }
+        if self.probes.is_some() {
+            self.probe_grown(i, r, src, &delta);
         }
         self.grown(r, &delta);
         // 只沿流边推送新增部分（差分传播）
@@ -140,6 +144,9 @@ impl<'a> Engine<'a> {
             return;
         }
         self.graph.edges_since += 1;
+        if self.probes.is_some() {
+            self.probe_edge(si, di, filter);
+        }
         if self.graph.set(rs).is_empty() {
             return;
         }
@@ -154,7 +161,7 @@ impl<'a> Engine<'a> {
         if objf || n < FILTER_MEMO_AT {
             let s = self.graph.set_rc(rs);
             let out = self.filter(&s, filter);
-            self.via_flow = true;
+            self.flow_src = si;
             self.add_to_id(di, &out);
             return;
         }
@@ -175,7 +182,7 @@ impl<'a> Engine<'a> {
                 out
             }
         };
-        self.via_flow = true;
+        self.flow_src = si;
         self.add_to_id(di, &out);
         let b = memo_bytes(&out);
         if self.graph.fmemo_bytes + b > FILTER_MEMO_BUDGET {
@@ -187,10 +194,10 @@ impl<'a> Engine<'a> {
         self.graph.fmemo.insert((rs, filter), (n, out));
     }
 
-    /// 沿一条出边推送增量 s；同一过滤类型只收窄一次（`narrowed`），Object 过滤直接推增量本身
-    fn push_edge(&mut self, dst: u32, f: u32, obj: Option<u32>, s: &TypeSet, narrowed: &mut Vec<(u32, TypeSet)>) {
+    /// 代表 src 沿一条出边推送增量 s；同一过滤类型只收窄一次（`narrowed`），Object 过滤直接推增量本身
+    fn push_edge(&mut self, src: u32, dst: u32, f: u32, obj: Option<u32>, s: &TypeSet, narrowed: &mut Vec<(u32, TypeSet)>) {
         if Some(f) == obj {
-            self.via_flow = true;
+            self.flow_src = src;
             self.add_to_id(dst, s);
             return;
         }
@@ -203,7 +210,7 @@ impl<'a> Engine<'a> {
             }
         };
         let out = std::mem::take(&mut narrowed[k].1);
-        self.via_flow = true;
+        self.flow_src = src;
         self.add_to_id(dst, &out);
         narrowed[k].1 = out;
     }
@@ -234,7 +241,7 @@ impl<'a> Engine<'a> {
                 let (dst, f) = self.graph.edges[ix][k];
                 let pk = sk + kind_ix(&self.graph.node(dst));
                 let grew = self.graph.adds[1];
-                self.push_edge(dst, f, obj, &s, &mut narrowed);
+                self.push_edge(i, dst, f, obj, &s, &mut narrowed);
                 let p = &mut self.graph.pushes[pk];
                 p[0] += 1;
                 p[1] += u64::from(self.graph.adds[1] != grew);
@@ -243,22 +250,22 @@ impl<'a> Engine<'a> {
             for m in ms {
                 let n = self.graph.node(m);
                 if let Some(ds) = self.mflows.get(&n).cloned() {
-                    for d in ds {
-                        self.mirrors_into(&s, d);
+                    for (d, op) in ds {
+                        self.mirror_op_into(op, &s, d);
                     }
                 }
             }
         }
     }
 
-    /// 镜像流边 src → dst；立即按当前集合推一次
-    pub(super) fn mflow(&mut self, src: Node, dst: Node) {
-        if !self.mflow_seen.insert((src, dst)) {
+    /// 镜像流边 src → dst（变换 op）；立即按当前集合推一次
+    pub(super) fn mflow(&mut self, src: Node, dst: Node, op: MirrorOp) {
+        if !self.mflow_seen.insert((src, dst, op)) {
             return;
         }
-        self.mflows.entry(src).or_default().push(dst);
+        self.mflows.entry(src).or_default().push((dst, op));
         let s = self.set_of(src);
-        self.mirrors_into(&s, dst);
+        self.mirror_op_into(op, &s, dst);
     }
 
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open

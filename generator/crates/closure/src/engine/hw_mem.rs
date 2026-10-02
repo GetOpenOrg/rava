@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// 按偏移读写的目标字段口径
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Gate {
+    /// 普通 Unsafe / VarHandle 调用点：偏移可经字节码外途径取得的字段（[`Engine::offset_exposed`]）
+    Offset,
+    /// 方法句柄解释器调用点（`[facts.handle_interpreters]`）：只作用于 DMH 所指字段——偏移可经字段句柄 /
+    /// MemberName 取得的字段，不含数组元素与只经反序列化放开的字段
+    Handle,
+}
+
 impl<'a> Engine<'a> {
     /// 手写方法的数组写入（arraycopy、Unsafe 引用写入等）按调用点建模：写入目标是本调用点实参里的数组，
     /// 写入值按 `hw_writes` 给出的来源（实参值 / 实参数组的元素 / 手写体产出）逐调用点接入。
@@ -114,11 +124,16 @@ impl<'a> Engine<'a> {
             }
             return;
         }
+        let gate = self.site_gate(s);
         if !delta.open.is_empty() {
             self.add_to(res, &TypeSet::open(rt));
         }
         for x in delta.classes.iter() {
             if self.arrays.contains_key(&x) {
+                // DMH 字段访问器的基址是对象 / 类镜像，不读数组元素
+                if gate == Gate::Handle {
+                    continue;
+                }
                 for p in PARITIES {
                     self.flow(Node::E(x, p), res, rt);
                 }
@@ -129,7 +144,7 @@ impl<'a> Engine<'a> {
             let class = self.id(CLASS);
             if let Some(&c) = self.mirrors.get(&x) {
                 for (fi, _) in self.static_ref_fields(c) {
-                    self.flow(Node::F(fi), res, rt);
+                    self.offset_read(Node::F(fi), res, fi, rt, gate);
                 }
             } else if x == class {
                 self.add_to(res, &TypeSet::open(rt));
@@ -141,7 +156,7 @@ impl<'a> Engine<'a> {
             };
             for (fi, tid) in self.ref_fields(cls).iter().copied() {
                 let n = if obj { self.obj_field(x, fi, tid) } else { Node::F(fi) };
-                self.flow(n, res, rt);
+                self.offset_read(n, res, fi, rt, gate);
             }
         }
     }
@@ -234,8 +249,10 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
-            if ws.get(i as usize).is_none_or(Option::is_none) {
-                continue;
+            // 写入目标：DMH 字段访问器经解释器的字段写入只落在对象 / 类镜像所指字段上，不写数组元素
+            match ws.get(i as usize) {
+                Some(Some(w)) if !(w.fields && self.site_gate(s) == Gate::Handle) => {}
+                _ => continue,
             }
             let t = self.arrays[&y];
             let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
@@ -244,6 +261,12 @@ impl<'a> Engine<'a> {
                 self.flow(Node::W(s, i), Node::E(y, p), cid);
             }
         }
+    }
+
+    /// 手写调用点 s 的读写口径：调用方是清单声明的方法句柄解释器时按 DMH 所指字段
+    fn site_gate(&self, s: u32) -> Gate {
+        let (m, _, _) = self.hw_sites[s as usize];
+        if self.man.is_handle_interpreter(&self.methods[m].key) { Gate::Handle } else { Gate::Offset }
     }
 
     fn is_poly(&self, t: usize) -> bool {
@@ -293,9 +316,103 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 实例字段 fi 可经偏移写入：实例字段偏移只能经按名取到的字段句柄 / MemberName（含方法句柄的字段访问器成员）、
+    /// 字段枚举或反序列化取得，这些来源同时决定字段不折叠（`field_open`）——两者是同一集合。
+    /// 方法句柄解释器（[`Gate::Handle`]）只写 DMH 所指字段：偏移须经字段句柄 / MemberName 取得，
+    /// 只经反序列化放开的字段不算（反序列化经 FieldReflector 自身的 Unsafe 调用点写入）。
+    /// 所属类推不出的字段按可写
+    fn offset_exposed(&self, fi: usize, gate: Gate) -> bool {
+        let Some((key, _)) = self.fields.get_index(fi) else { return true };
+        let deser = gate == Gate::Offset && self.ctx.deser.get();
+        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_open_under(&i, self.ctx.fopen_all.get(), deser))
+    }
+
+    /// 字段 fi 的偏移可经字节码外的途径取得、从而可按偏移读取：可按偏移写入的字段（[`Self::offset_exposed`]），
+    /// 加上已被字段枚举取到、但因字段句柄写入口未达而未放开的字段（枚举结果足以算偏移，读取不需要写入口）
+    fn offset_readable(&self, fi: usize, gate: Gate) -> bool {
+        if self.offset_exposed(fi, gate) || self.fenum_pending.contains(&None) {
+            return true;
+        }
+        let Some((key, _)) = self.fields.get_index(fi) else { return true };
+        self.fenum_pending.iter().flatten().any(|c| c == &key.owner || self.h.is_subtype(c, &key.owner))
+    }
+
+    /// 字段节点 n 经偏移读入结果节点 res：偏移尚不可得时挂起，可得时由 [`Self::offset_fields_opened`] 接上。
+    /// 与写入对称：按偏移读取只能落在偏移已取得的字段上，不是「读任意对象的任意字段」
+    fn offset_read(&mut self, n: Node, res: Node, fi: usize, tid: u32, gate: Gate) {
+        if self.offset_readable(fi, gate) {
+            self.flow(n, res, tid);
+            return;
+        }
+        let ws = self.offset_read_waits.entry(fi).or_default();
+        if !ws.contains(&(n, res, tid, gate)) {
+            ws.push((n, res, tid, gate));
+        }
+    }
+
+    /// 写入值 wn 经偏移写到对象字段节点 n：字段未开放时挂起，开放时由 [`Self::offset_fields_opened`] 接上
+    fn offset_write(&mut self, wn: Node, n: Node, fi: usize, tid: u32, gate: Gate) {
+        if self.offset_exposed(fi, gate) {
+            self.flow(wn, n, tid);
+            return;
+        }
+        let ws = self.offset_waits.entry(fi).or_default();
+        if !ws.contains(&(wn, n, tid, gate)) {
+            ws.push((wn, n, tid, gate));
+        }
+    }
+
+    /// 字段开放后：接上目标字段已开放的挂起偏移写入。only = 本次开放所及的字段（单个字段键 / 同名），
+    /// None = 全局开关打开，逐个复查
+    pub(super) fn offset_fields_opened(&mut self, only: Option<(&str, Option<&MemberRef>)>) {
+        self.offset_reads_ready();
+        if self.offset_waits.is_empty() {
+            return;
+        }
+        let ready: Vec<usize> = match only {
+            Some((_, Some(key))) => self.fields.get_index_of(key).filter(|fi| self.offset_waits.contains_key(fi)).into_iter().collect(),
+            Some((name, None)) => {
+                self.offset_waits.keys().copied().filter(|&fi| self.fields.get_index(fi).is_some_and(|(k, _)| k.name == name)).collect()
+            }
+            None => self.offset_waits.keys().copied().collect(),
+        };
+        // 普通口径是解释器口径的超集：普通口径未开放的字段两种挂起都不接
+        let ready: Vec<usize> = ready.into_iter().filter(|&fi| self.offset_exposed(fi, Gate::Offset)).collect();
+        for fi in ready {
+            let handle = self.offset_exposed(fi, Gate::Handle);
+            let ws = self.offset_waits.remove(&fi).unwrap_or_default();
+            let (go, stay): (Vec<_>, Vec<_>) = ws.into_iter().partition(|w| w.3 == Gate::Offset || handle);
+            if !stay.is_empty() {
+                self.offset_waits.insert(fi, stay);
+            }
+            for (wn, n, tid, _) in go {
+                self.flow(wn, n, tid);
+            }
+        }
+    }
+
+    /// 字段开放 / 字段枚举挂起后：接上偏移已可得的挂起读取
+    pub(super) fn offset_reads_ready(&mut self) {
+        if self.offset_read_waits.is_empty() {
+            return;
+        }
+        let ready: Vec<usize> = self.offset_read_waits.keys().copied().filter(|&fi| self.offset_readable(fi, Gate::Offset)).collect();
+        for fi in ready {
+            let handle = self.offset_readable(fi, Gate::Handle);
+            let ws = self.offset_read_waits.remove(&fi).unwrap_or_default();
+            let (go, stay): (Vec<_>, Vec<_>) = ws.into_iter().partition(|w| w.3 == Gate::Offset || handle);
+            if !stay.is_empty() {
+                self.offset_read_waits.insert(fi, stay);
+            }
+            for (n, res, tid, _) in go {
+                self.flow(n, res, tid);
+            }
+        }
+    }
+
     /// 调用点 s 的写入目标实参 i 新增对象：写入值接到对象的引用实例字段（与 `memory_read` 对称）。
     /// 抽象对象按对象分量接入；非抽象类 / open 目标接未知接收者写入节点，open 目标的子类字段不可枚举，
-    /// 写入值随之逃逸。类镜像是静态字段基址（staticFieldBase 返回声明类的类镜像）：写入所指类的静态引用字段；
+    /// 写入值随之逃逸。目标字段限于可经偏移写入的字段（[`Self::offset_exposed`]），不是「任意对象写任意字段」。类镜像是静态字段基址（staticFieldBase 返回声明类的类镜像）：写入所指类的静态引用字段；
     /// 所指未知的镜像、以及可能是类镜像的 open 目标（Class 的超类型）写入按名打开的静态引用字段——
     /// 静态字段偏移只能经按名取到的字段句柄 / MemberName 得到，按名打开已覆盖全部可写目标
     pub(super) fn hw_site_fields(&mut self, s: u32, i: u16, delta: &TypeSet) {
@@ -310,6 +427,7 @@ impl<'a> Engine<'a> {
             }
             return;
         }
+        let gate = self.site_gate(s);
         let obj = self.id(OBJECT);
         let class = self.id(CLASS);
         let xs: Vec<u32> = delta.classes.iter().filter(|x| !self.arrays.contains_key(x)).collect();
@@ -326,13 +444,13 @@ impl<'a> Engine<'a> {
             };
             for (fi, tid) in self.ref_fields(cls).iter().copied() {
                 let n = if is_obj { self.obj_field(x, fi, tid) } else { Node::U(fi) };
-                self.flow(wn, n, tid);
+                self.offset_write(wn, n, fi, tid, gate);
             }
         }
         let os: Vec<u32> = delta.open.iter().collect();
         for o in os {
             for (fi, tid) in self.ref_fields(o).iter().copied() {
-                self.flow(wn, Node::U(fi), tid);
+                self.offset_write(wn, Node::U(fi), fi, tid, gate);
             }
             if self.sub(class, o) {
                 self.poly_write(wn);

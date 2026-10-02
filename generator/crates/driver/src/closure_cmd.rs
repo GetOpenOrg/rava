@@ -1,7 +1,8 @@
 //! `rava closure <Test.java | 类目录>`：精确闭包分析（计划 docs/plans/2026-09-29-rust-closure-analyzer.md）。
 //!
 //! 选项：`--jdk N | --java-home P`、`--runtime <runtime/java_runtime>`、`--main <类>`、
-//! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--flows <方法标签片段>`（类型流诊断，可多次）、`--report <报告.md>`、
+//! `-o <closure.json>`、`--why <类 | 类.方法:描述符>`（可多次）、`--flows <方法标签片段 | @查询>`（类型流诊断，可多次；
+//! `@grow:` / `@trace:` / `@edge:` 为记录型，分析前登记、传播中记录，见 `closure/src/engine/diag.rs`）、`--report <报告.md>`、
 //! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
 //! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
@@ -55,7 +56,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from) })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new() })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -103,6 +104,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         cp.add(Origin::Image, Path::new(d)).map_err(|e| format!("{d}：{e}"))?;
     }
 
+    let flows = multi("--flows");
     let users = cp.names_of(Origin::User);
     let main = match args.opt("--main") {
         Some(m) => m.replace('.', "/"),
@@ -124,12 +126,11 @@ pub fn run(args: &Args) -> Result<(), String> {
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
-        diag: diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))?,
+        diag: closure::engine::Diag { flows: flows.iter().map(|f| f.to_string()).collect(), ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
     let whys = multi("--why");
-    let flows = multi("--flows");
     let need_engine = args.opt("--report").is_some() || !whys.is_empty() || !flows.is_empty();
     let cache = crate::closure_run::CacheOpts {
         dir: args.opt("--closure-cache").map(PathBuf::from),

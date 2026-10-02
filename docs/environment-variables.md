@@ -83,14 +83,38 @@ scratch 的 `build_status.json`（超时 / 信号 / 首错行 / 日志路径）�
 |---|---|
 | `<Test.java \| 类目录>` | 输入；`.java` 先经 javac 编译到临时目录 |
 | `-o closure.json` / `--report md` | 闭包结果 / 报告 |
-| `--why 类或方法` / `--flows 片段` | 入闭包的 provenance 链 / 类型流诊断（均可多次） |
+| `--why 类或方法` / `--flows 查询` | 入闭包的 provenance 链 / 类型流诊断（均可多次；查询形式见下表） |
 | `--lib jar` / `--image D` / `--root M` / `--seed-class C` / `--locale L` / `--release P` / `--release-bytecode P` | 转译接入与放行实测（均可多次） |
 | `--cut 类.方法:描述符[@偏移]` | 反事实切除（可多次）：不带偏移 = 方法体不处理（节点保留）；带偏移 = 该偏移处的调用 / 字段 / new 事件不执行。只宜切消费型节点（方法体、派发点），切构造器 / 写入点会让字段按初值折叠，结果非单调 |
 | `--cut-file F` | 切除条目文件（每行一条，空行与 `#` 注释跳过；条目多时用） |
 | `--dump-edges F` | 触发边转储：方法（`M:`）/ 类型提及（`C:`）/ 类初始化（`I:`）/ 分配（`A:`）/ 枢纽（`H:`）节点间的全部触发边，派发边第三列为接收者分配条件 |
 | `--flow-batch N` / `--hash-seed N` | 顺序无关检验：流传播批量（缺省 64，1 = 逐个排空）/ 内部表哈希初值（缺省 0） |
 
+`--flows` 查询形式（结果打印在 summary 之前，每个查询一段；不带 `@` 前缀即按方法标签片段查）：
+
+| 查询 | 回答 |
+|---|---|
+| `<方法标签片段>` | 匹配方法的形参 / 返回 / 站点 / 所分配数组元素节点的值集，及流入各节点的来源节点 |
+| `elem:<数组分配名片段>` | 数组元素节点的值集及来源 |
+| `@path:<节点子串>\|<类>`（`<类>` 可写 `open:<类型>`） | 该值从哪条路径流入节点：沿含该值的流边反向到最近引入点的最短路径 |
+| `@srcs:<类>` / `@opens:<类型>` | 含该类 / open(类型)、但无同值前驱的节点（引入点） |
+| `@openorig:<类型>\|<节点子串>` / `@openinj:<类型>` | 节点上 open 值的直接注入点 / 全部直接注入点 |
+| `@openstat` | 各 open 类型的节点数、引入点数、在实例化集上展开的类数（前 40） |
+| `@merge:<N>` | 值集 ≥ N 的节点中由小值集来源汇入最多类者（污染起始汇点，前 40） |
+| `@array` | 未知数组写入汇点的值集及来源 |
+| `@nullrecv` | 接收者恒为 null 的活虚调用点 |
+| `@callers:<方法子串>` / `@m:<序号>` | 无上下文方法本体的全部调用点 / 方法节点序号对应的方法 |
+| `@grow:<节点子串>` | **记录型**：匹配节点（含并入同一代表的成员）每次增长——`#序号 节点 ← 来源 +{新增}` |
+| `@trace:<类或分配名>` / `@trace:open:<类型>` | **记录型**：每个获得该值的节点及来源，按到达先后——`#序号 节点 ← 来源`（最快定位「值从哪进来」） |
+| `@edge:<节点子串>` | **记录型**：以匹配节点为目标新建的流边——`#序号 源 → 目标 [过滤类型] {建边时源集合}` |
+
+记录型查询由 `rava closure` 在分析前登记、传播中逐条记录：来源为流边源节点，或直接注入时的当前站点
+（`直接 方法@偏移`）；`#序号` 是全部记录型查询共用的到达次序。每条记录同时实时写 stderr（`[flows <查询>] #序号 …`），
+分析未结束（超时被杀）时仍可读到。不带记录型查询时不记录、无额外开销，闭包结果与是否登记无关。
+诊断脚本 `scripts/diag/c1d_closure_probe.sh` 把 stdout / stderr 分别落盘。
+
 ```bash
+rava closure tests/e2e/01_basics/HelloWorld.java --flows '@trace:java/lang/StringBuilder' --flows '@grow:P1 java/io/PrintStream.println'
 rava closure tests/e2e/01_basics/HelloWorld.java --cut 'java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;' -o /tmp/c.json
 rava build tests/e2e/01_basics/HelloWorld.java --stop-after emit --cut-file /tmp/cuts.txt --dump-edges /tmp/edges.tsv
 ```
