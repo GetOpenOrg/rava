@@ -132,7 +132,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         && !is_static_descriptor(declaring_slash, name, descriptor);
     // static / 构造器：声明类直查；实例方法：receiver 运行类起沿直接父类上溯
     //（隐式 null 检查：实例方法的 null receiver → NPE，与 JVM invoke0 一致）
-    let mut cur = if is_virtual {
+    let cur = if is_virtual {
         if recv.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -150,6 +150,15 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         }
         r
     };
+    // 实例方法的接收者须是声明类型的实例（JVM invoke0：IllegalArgumentException
+    // "object is not an instance of declaring class"，属实参不符、不包装为 InvocationTargetException）。
+    // 实例判定以接收者视图为准，再按父类链复核（手写实现对象的视图可能不全）
+    if is_virtual && declaring_slash != "java/lang/Object" && !recv.0.is_instance_of(declaring_slash)
+        && !superclass_chain(&cur).iter().any(|c| c == declaring_slash) {
+        BAD_ARG.with(|b| b.set(true));
+        return Err(crate::error::JvmError::illegal_argument("object is not an instance of declaring class"));
+    }
+    let mut cur = cur;
     let mut hops = 0usize;
     loop {
         if let Some(f) = lookup(&cur) {
@@ -157,20 +166,11 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
                 return finish(r);
             }
         }
-        // 上溯：直接父类表（Class.getSuperclass 的公共查询面，java_meta 生成）；
-        // 无父类 / 表外（接口 / Object 上方）→ 终止
-        let zuper = crate::java::lang::Class::for_class(
-            crate::java::lang::String::from(cur.as_str()))
-            .getSuperclass()
-            .unwrap_or_default();
-        if Object::from(Clone::clone(&zuper)).0.is_jvm_null() {
-            break;
+        match superclass(&cur) {
+            Some(z) if hops < 256 => cur = z,
+            _ => break, // 无父类 / 表外（接口 / Object 上方）/ 防御环
         }
-        cur = format!("{}", zuper.__get_name()).replace('.', "/");
         hops += 1;
-        if hops > 256 {
-            break; // 防御环
-        }
     }
     // 运行时类链上无闭包承载（lambda / 手写实现对象不是字节码类；接口方法的实现类无本方法臂）：
     // 接收者是声明类型的实例时，经声明类型的闭包做虚 / 接口调用——臂经接收者视图调用，按其实现选中
@@ -181,6 +181,29 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     }
     panic!("stub: L3 反射分派未覆盖 {}.{}:{}（分派闭包缺席 / 方法未发射）",
            declaring_slash, name, descriptor)
+}
+
+/// 直接父类（Class.getSuperclass 的公共查询面，java_meta 生成）；无父类 / 表外 → None
+fn superclass(class_slash: &str) -> Option<String> {
+    let zuper = crate::java::lang::Class::for_class(crate::java::lang::String::from(class_slash))
+        .getSuperclass()
+        .unwrap_or_default();
+    if Object::from(Clone::clone(&zuper)).0.is_jvm_null() {
+        return None;
+    }
+    Some(format!("{}", zuper.__get_name()).replace('.', "/"))
+}
+
+/// class_slash 起的父类链（含自身）
+fn superclass_chain(class_slash: &str) -> Vec<String> {
+    let mut chain = vec![class_slash.to_owned()];
+    while chain.len() <= 256 {
+        match superclass(&chain[chain.len() - 1]) {
+            Some(z) => chain.push(z),
+            None => break,
+        }
+    }
+    chain
 }
 
 /// static 判定：经方法元数据表（Class.__declared_method_meta 的公共查询面）。
