@@ -74,6 +74,8 @@ mod field_names;
 pub use concrete::ConcreteCfg;
 pub use field_names::NameResolver;
 mod indy_helpers;
+mod vm_state;
+pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
@@ -147,6 +149,8 @@ pub struct Manifest {
     pub names: NameFacts,
     /// 具体求值（`[concrete]`）
     pub concrete: ConcreteCfg,
+    /// VM 注入状态的落地（字段访问钩子、模块 → 加载器映射来源）
+    pub vm_state: VmState,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -365,6 +369,7 @@ impl Manifest {
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
             concrete: concrete::parse(vm.get("concrete"))?,
+            vm_state: VmState::from_toml(&vm)?,
         })
     }
 

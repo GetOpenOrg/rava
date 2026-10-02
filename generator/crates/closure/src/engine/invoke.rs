@@ -53,6 +53,7 @@ impl<'a> Engine<'a> {
                         site_names.extend(lits.iter().cloned());
                         names.extend(lits);
                         names.extend(self.param_strs(m, off, a));
+                        names.extend(self.field_strs(m, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
                         if targets.is_none() {
                             let mut ts = classes.clone();
@@ -115,6 +116,9 @@ impl<'a> Engine<'a> {
         }
         self.field_name_site(m, off, &k, opcode, args);
         self.mirror_init_site(m, off, mref, &k, opcode, args);
+        if (class_param || class_recv) && !self.man.is_method_lookup(&k) {
+            self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
+        }
         if self.man.is_field_enumerator(&k) {
             let cls = match args.first() {
                 Some(V::Class(c, _)) => Some(c.to_string()),

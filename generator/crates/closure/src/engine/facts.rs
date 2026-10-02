@@ -72,6 +72,8 @@ pub(super) struct Ctx<'a> {
     pub(super) guards: RefCell<super::memo::Guards>,
     /// 服务目录与 provider 执行线（见 `services.rs`）
     pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
+    /// 类的定义加载器表（字段钩子的接收者判定与镜像读取折叠，惰性建立）
+    pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -143,7 +145,7 @@ pub(super) struct FieldInfo {
     pub(super) key: MemberRef,
     pub(super) access: u16,
     pub(super) constant: Option<Const>,
-    /// 写入来源超出字节码（边界类 / 手写字段）
+    /// 写入来源超出字节码（边界类 / 手写字段 / VM 状态字段钩子）
     pub(super) open: bool,
     /// 声明类实现可序列化标记接口（反序列化可写该字段）
     pub(super) serializable: bool,
@@ -268,9 +270,11 @@ impl Ctx<'_> {
             let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
             // VM 注入的静态字段：运行期值由 VM 写入，字节码初值 / ConstantValue 均不代表运行期值
             let injected = self.man.is_injected_static(&key.owner, &key.name);
+            // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
             let open = injected
                 || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
-                || !self.hw.member(&key.owner, &key.name).fns.is_empty();
+                || !self.hw.member(&key.owner, &key.name).fns.is_empty()
+                || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
             let constant = if injected { None } else { fd.constant_value.clone() };
             let markers = self.man.serializable_markers();
             let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
@@ -450,6 +454,9 @@ impl Oracle for Facts<'_, '_> {
         self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 && !self.ctx.field_open(&fi))
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
+        if let Some(v) = self.ctx.mirror_hook_field(opcode, f, recv) {
+            return Some(v);
+        }
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
             return Some(v);
         }

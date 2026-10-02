@@ -293,6 +293,10 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
+            // 接收者钩子在有接收者值集时按值集判定（见下），其余访问点无条件接入
+            if !(instance_op(opcode) && recv.is_some()) {
+                self.field_hook(&decl, f, opcode, &via, res);
+            }
         }
         if first && (opcode == op::PUTSTATIC || opcode == op::PUTFIELD) {
             let fd = site.field();
@@ -300,12 +304,16 @@ impl<'a> Engine<'a> {
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
                 let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
                 self.field_put(&key, value.map_or(PV::Top, PV::of));
+                self.field_strs_put(&key, value);
             }
         }
         let Some(ft) = parse_field(&f.desc) else { return };
         let Some(tid) = self.ptype(&ft) else {
             // 手写字段访问器仍需沿其回调入链
             if first {
+                if instance_op(opcode) && recv.is_some() {
+                    self.field_hook(&decl, f, opcode, &via, res);
+                }
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
             }
             return;
@@ -321,6 +329,9 @@ impl<'a> Engine<'a> {
                 // 字节码站点重跑：只看新增的接收者值（过滤结果按值确定，已看过的值已接上）
                 let s = if fresh { self.recv_delta(m, off, s) } else { s };
                 let s = self.filter(&s, oid);
+                if self.recv_hook_needed(&decl, f, &s) {
+                    self.field_hook(&decl, f, opcode, &via, res);
+                }
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
             }
@@ -452,4 +463,8 @@ impl Engine<'_> {
             }
         }
     }
+}
+
+fn instance_op(opcode: u8) -> bool {
+    opcode == classfile::op::GETFIELD || opcode == classfile::op::PUTFIELD
 }

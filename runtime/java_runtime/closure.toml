@@ -60,9 +60,10 @@ classes = [
     # VM：引导阶段状态（initLevel / isBooted / isModuleSystemInited / isJavaLangInvokeInited）、停机标记、
     # 保存属性——HotSpot 由 initPhase1~3 与 create_vm 写入，原生二进制进入 main 即「引导完成」档位。
     "jdk/internal/misc/VM",
-    # 内建类加载器层级（boot / platform / app）与 boot 层服务：原生单二进制无动态类加载与本地库加载。
+    # 引导加载器的 boot 层服务（引导类的包 / 资源定位、本地库）：原生单二进制无动态类加载与本地库加载。
+    # 内建加载器层级 ClassLoaders（boot / platform / app）没有准入 ③ 方法，整类按字节码翻译（FS-C2，
+    # docs/plans/2026-10-02-fs-c2-app-classloader.md）：scl 由 initPhase3 引导段写入。
     "jdk/internal/loader/BootLoader",
-    "jdk/internal/loader/ClassLoaders",
 ]
 
 # VM 边界类的纯 Java 嵌套类：按字节码翻译（其余嵌套类随外层类归入边界）。
@@ -92,7 +93,6 @@ translate_nested = [
 # - InvokerBytecodeGenerator：运行期字节码生成器，句柄调用由原生解释器承载；
 # - FileSystems：默认文件系统持有者链（策略截断，见上）；
 # - Unsafe：数组布局与指针宽度静态字段属 VM 注入常量（vm_intrinsics.toml [vm_constants.injected_statics]）；
-# - ClassLoaders：内建类加载器层级由 VM 建立（FS-C2 整类改字节码翻译时移出）；
 # - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
 clinit_carried = [
     "java/lang/VirtualThread",
@@ -102,7 +102,6 @@ clinit_carried = [
     "java/lang/invoke/InvokerBytecodeGenerator",
     "java/nio/file/FileSystems",
     "jdk/internal/misc/Unsafe",
-    "jdk/internal/loader/ClassLoaders",
     "java/lang/Class",
     "java/lang/SecurityManager",
 ]

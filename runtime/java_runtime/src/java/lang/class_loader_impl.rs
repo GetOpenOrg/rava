@@ -1,19 +1,17 @@
 use crate::prelude::*;
 use super::class_loader::ClassLoader;
 
-// java.lang.ClassLoader 伴生：单二进制运行时的类加载器语义。
+// java.lang.ClassLoader 伴生。
 //
-// 产物是静态链接的 AOT 二进制——类全集编译期定死、无动态 classpath，系统
-// 类加载器的角色收敛为「API 契约的恒等对象 + 资源查空的枚举源」：
-//   - getSystemClassLoader 返回进程唯一实例（name "app"，与 JDK
-//     AppClassLoader 同名；构造不经 JDK 构造器链——ctor 的 parent 解析
-//     会回调 getSystemClassLoader 成环，按擦除字段协议直接组装）；
-//   - 模块资源（jmod 内数据文件，如 java/util/currency.data）由编译期嵌入表承载：
-//     getResourceAsStream 族返回其字节流（jdk_resources::module_resources）；
-//   - 其余资源族（getResource/getResources 及 static 形态）恒缺席——
-//     ServiceLoader 的 LazyClassPathLookupIterator 据此枚举为空，
-//     外部 provider 发现终止（TzdbZoneRulesProvider 已由 ZoneRulesProvider
-//     <clinit> 的默认分支直接注册，正是 JDK 对无发现环境的回退设计）。
+// 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent 一律走字节码
+// （ClassLoaders 整类翻译）。本文件只承载：
+//   - native 方法；
+//   - initPhase3 系统类加载器段的落地（`__vm_init_phase3`，准入第 ③ 类：HotSpot 在进入 main 前执行，
+//     原生二进制改为首次读写 `ClassLoader.scl` / `Thread.contextClassLoader` 时执行，见
+//     vm_intrinsics.toml `[vm_state.field_hooks]`）；
+//   - 运行期类定义点（第 ② 类）；
+//   - 资源族：模块资源（jmod 内数据文件）由编译期嵌入表承载，其余资源恒缺席——单二进制无
+//     classpath 资源，ServiceLoader 的 LazyClassPathLookupIterator 据此枚举为空。
 impl ClassLoader {
     /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
@@ -22,8 +20,9 @@ impl ClassLoader {
     }
 
     /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找已定义类，
-    /// 找不到返回 null。原生镜像的类全集编译期定死、全部由引导形态承载（`Class.getClassLoader`
-    /// 恒 null），故「引导加载器可见」即闭包内的类（与 `Class.forName0` 同一判定）。
+    /// 找不到返回 null。原生镜像的类全集编译期定死、类对象全部预先存在，故「引导加载器可见」即
+    /// 闭包内的类（与 `Class.forName0` 同一判定；定义加载器由镜像的 `classLoader` 钩子按
+    /// `defining_loader` 表给出，不影响可见性）。
     #[jvm_native]
     pub fn findBootstrapClass(name: String) -> Result<super::Class> {
         let slash = format!("{}", name).replace('.', "/");
@@ -41,44 +40,52 @@ impl ClassLoader {
         Ok(super::Class::default())
     }
 
-    /// 系统类加载器单例（JDK: ClassLoader.scl，initSystemClassLoader 填充）。
-    #[jvm_boundary]
-    pub fn getSystemClassLoader() -> Result<ClassLoader> {
-        crate::__process_static! {
-            static SCL: ClassLoader = build_system_class_loader();
+    /// initPhase3 的系统类加载器段（`System.initPhase3`）：
+    /// ```text
+    /// VM.initLevel(3);
+    /// ClassLoader scl = ClassLoader.initSystemClassLoader();
+    /// Thread.currentThread().setContextClassLoader(scl);   // 初始线程
+    /// VM.initLevel(4);
+    /// ```
+    /// 两步调用都走字节码（`initSystemClassLoader` 写 `scl`，`setContextClassLoader` 写初始线程的
+    /// 上下文加载器）。进程内只执行一次：其余线程在段执行期间读写钩子字段时于互斥上等待；段内
+    /// 本线程对钩子字段的读写（`putstatic scl`、`putfield contextClassLoader`）直接放行。
+    pub fn __vm_init_phase3() -> Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static DONE: AtomicBool = AtomicBool::new(false);
+        static RUNNING: parking_lot::ReentrantMutex<std::cell::Cell<bool>> =
+            parking_lot::const_reentrant_mutex(std::cell::Cell::new(false));
+        if DONE.load(Ordering::Acquire) {
+            return Ok(());
         }
-        Ok(SCL.with(Clone::clone))
-    }
-
-    /// static `getClassLoader(Class)`：类的定义加载器（`Class.forName(String)` 按调用方类
-    /// 取加载器）。与 `Class.getClassLoader` 同源（FS-C2 分层加载器落地前恒为 null，即
-    /// boot 形态）；forName0 不按加载器分派，结果与 JDK 一致。
-    #[jvm_boundary]
-    pub fn getClassLoader(caller: super::Class) -> Result<ClassLoader> {
-        if Object::from(Clone::clone(&caller)).0.is_jvm_null() {
-            return Ok(ClassLoader::default());
+        let guard = RUNNING.lock();
+        if DONE.load(Ordering::Acquire) || guard.get() {
+            return Ok(());
         }
-        caller.getClassLoader()
-    }
-
-    /// 父加载器（JDK 层级 app → platform → null）。app 单例的 parent 在
-    /// 组装时挂 platform；其余实例（platform/boot 身份对象）parent 为 null
-    ///（层级到顶，getParent 返回 null 的 JDK 语义）。
-    #[jvm_boundary]
-    pub fn getParent(&self) -> Result<ClassLoader> {
-        Ok(Clone::clone(&self.__get_parent()))
+        guard.set(true);
+        let r = crate::jdk::internal::misc::VM::__vm_in_init_level3(|| -> Result<()> {
+            let scl = ClassLoader::initSystemClassLoader()?;
+            super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)
+        });
+        guard.set(false);
+        if r.is_ok() {
+            DONE.store(true, Ordering::Release);
+        }
+        r
     }
 
     /// 单资源查询：单二进制无 classpath 资源 → 恒 null。
+    /// 三个实例资源方法为虚方法体（`__impl_`，声明在生成的宏块内经 vtable 分派）：自定义加载器的覆盖
+    /// （如 ServiceLoader 经上下文加载器调 `getResources`）按 Java 语义分派到子类。
     #[jvm_boundary]
-    pub fn getResource(&self, name: String) -> Result<crate::java::net::URL> {
+    pub fn __impl_getResource(&self, name: String) -> Result<crate::java::net::URL> {
         let _ = name;
         Ok(Default::default())
     }
 
     /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
     #[jvm_boundary]
-    pub fn getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
+    pub fn __impl_getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
         let _ = name;
         crate::java::util::Collections::emptyEnumeration()
     }
@@ -93,7 +100,7 @@ impl ClassLoader {
     /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
     ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
     #[jvm_boundary]
-    pub fn getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
+    pub fn __impl_getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
         module_resource_stream(name)
     }
 
@@ -283,16 +290,6 @@ impl ClassLoader {
         d.__set_deflt(false);
         Ok(d)
     }
-}
-
-/// 组装系统类加载器（不经 <init>——parent 解析与 scl 初始化成环）。
-fn build_system_class_loader() -> ClassLoader {
-    let mut scl = ClassLoader::default();
-    scl._init_not_null();
-    scl.__set_name(String::from("app"));
-    scl.__set_parent(crate::jdk::internal::loader::ClassLoaders::platformClassLoader()
-        .unwrap_or_default());
-    scl
 }
 
 /// 模块资源名 → 字节流（未命中 → null）。

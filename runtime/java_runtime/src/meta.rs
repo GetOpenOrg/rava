@@ -94,6 +94,8 @@ extern "Rust" {
     static CLASS_ACCESS_FLAGS: &'static [(&'static str, i32)];
     #[link_name = "__java_meta_CLASS_SOURCE_FILE"]
     static CLASS_SOURCE_FILE: &'static [(&'static str, &'static str)];
+    #[link_name = "__java_meta_CLASS_DEFINING_LOADER"]
+    static CLASS_DEFINING_LOADER: &'static [(&'static str, &'static str)];
     #[link_name = "__java_meta_RECORD_CLASSES"]
     static RECORD_CLASSES: Names;
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
@@ -139,6 +141,11 @@ pub fn nest_members() -> &'static [(&'static str, Names)] { unsafe { NEST_MEMBER
 pub fn class_access_flags() -> &'static [(&'static str, i32)] { unsafe { CLASS_ACCESS_FLAGS } }
 /// 类 → SourceFile 属性值（无该属性的类不在表中）。
 pub fn class_source_file() -> &'static [(&'static str, &'static str)] { unsafe { CLASS_SOURCE_FILE } }
+/// 类 → 定义加载器（`app` / `platform`；引导加载器的类不在表中），按类名有序。
+pub fn class_defining_loader(class: &str) -> Option<&'static str> {
+    let t = unsafe { CLASS_DEFINING_LOADER };
+    t.binary_search_by(|(c, _)| (*c).cmp(class)).ok().map(|i| t[i].1)
+}
 /// record 类集。
 pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }
 /// record 类 → 分量（名、描述符、泛型签名）。

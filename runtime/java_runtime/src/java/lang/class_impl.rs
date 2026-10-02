@@ -79,6 +79,33 @@ impl Class {
         CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
     }
 
+    /// VM 注入状态 `classLoader` 的落地（vm_intrinsics.toml `[vm_state.field_hooks]`，准入 ③）：HotSpot
+    /// `java_lang_Class::create_mirror` 建镜像时写入定义加载器；原生镜像在首次访问该字段前按定义加载器表
+    /// （java_meta `CLASS_DEFINING_LOADER`，生成器按类所在模块求出）填充。数组类取元素类的加载器，基本类型、
+    /// `void` 与引导加载器定义的类为 null。加载器对象取自 `ClassLoaders` 的字节码访问器（同一层级实例）。
+    pub fn __vm_defining_loader(&self) -> Result<&Self> {
+        if !Object::from(self.__get_classLoader()).0.is_jvm_null() {
+            return Ok(self);
+        }
+        let name = format!("{}", self.__get_name());
+        let elem = name.trim_start_matches('[');
+        let elem = if elem.len() < name.len() {
+            match elem.strip_prefix('L').and_then(|e| e.strip_suffix(';')) {
+                Some(e) => e,
+                None => return Ok(self),
+            }
+        } else {
+            elem
+        };
+        let loader = match crate::meta::class_defining_loader(&elem.replace('.', "/")) {
+            Some("app") => crate::jdk::internal::loader::ClassLoaders::appClassLoader()?,
+            Some("platform") => crate::jdk::internal::loader::ClassLoaders::platformClassLoader()?,
+            _ => return Ok(self),
+        };
+        self.__set_classLoader(loader);
+        Ok(self)
+    }
+
 
     /// native `Class.isArray()`：数组类判定。数组类的名字是 JVM 描述符形态
     /// （`[I`、`[Ljava.lang.String;`——for_class 的存储形态），首字符 `[`

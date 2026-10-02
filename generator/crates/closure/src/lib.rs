@@ -10,6 +10,7 @@ pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
+pub mod loaders;
 pub mod seeds;
 
 use std::collections::BTreeMap;
@@ -267,6 +268,8 @@ impl Closure<'_> {
             "reflect": {
                 "members": e.reflect_members.iter().map(|(k, m)| json!({"kind": members_str(*k), "member": m.to_string()})).collect::<Vec<_>>(),
                 "gaps": e.reflect_gaps,
+                "fields": e.reflect_fields.iter().map(|(c, n)| json!({"owner": c, "name": n})).collect::<Vec<_>>(),
+                "field_names": e.reflect_field_names,
             },
             "seeds": {
                 "annotation_enums": e.seeds.annotation_enums,

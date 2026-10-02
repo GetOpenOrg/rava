@@ -15,9 +15,9 @@ const MAX_DEPTH: u32 = 3;
 /// 被求值方法的指令数上限
 const MAX_INSNS: usize = 256;
 
-/// 可作为求值输入的常量实参
+/// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者）
 fn is_const(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(_))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(_) | V::Class(..))
 }
 
 /// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
@@ -45,6 +45,8 @@ pub(super) enum CArg {
     Null,
     Str(u32),
     SysProps,
+    /// 类字面量（所指类名取字面量序号）
+    Class(u32),
 }
 
 /// 记忆键：目标、各实参（非常量 = None）、起始深度
@@ -57,6 +59,7 @@ fn carg(v: &V) -> Option<CArg> {
         V::Null => Some(CArg::Null),
         V::Str(s) => Some(CArg::Str(crate::absint::lit_id(s))),
         v if is_sysprops_tag(v) => Some(CArg::SysProps),
+        V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
         _ => None,
     }
 }
@@ -184,6 +187,7 @@ mod tests {
         assert!(is_const(&V::Str(Rc::from("x"))));
         assert!(is_const(&V::Null));
         assert!(!is_const(&V::Top));
+        assert!(is_const(&V::Class(Rc::from("A"), 0)));
         assert!(!exportable(&V::Class(Rc::from("A"), 0)));
     }
 

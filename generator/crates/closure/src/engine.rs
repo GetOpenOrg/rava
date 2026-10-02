@@ -58,6 +58,7 @@ mod hw_inherit;
 mod hwobj;
 mod hwfield;
 mod vmhook;
+mod field_hooks;
 mod rtfn;
 mod vmrules;
 mod report;
@@ -75,6 +76,7 @@ mod class_lookup;
 mod sealed;
 mod nest;
 mod method_lookup;
+mod field_lookup;
 mod pstrs;
 mod share;
 mod new;
@@ -333,6 +335,9 @@ pub struct Engine<'a> {
     in_cwork: HashSet<u32>,
     /// 手写方法调用点（调用方, 偏移, 被调方法）→ 序号；数组写入按调用点建模
     hw_site_ids: HashMap<(usize, u32, usize), u32>,
+    /// 同一数组自拷贝的手写调用点（站点, 元素来源形参, 写入目标形参）：两实参是同一个入口形参值，
+    /// 运行期是同一数组，元素集不变，不在两者的各数组之间交叉接元素
+    hw_self_copies: HashSet<(u32, u16, u16)>,
     hw_sites: Vec<(usize, u32, usize)>,
     /// 读内存的手写调用点（`[facts.memory_reads]`）：站点 → (源实参序号（含接收者）, 结果节点, 返回类型)
     hw_reads: HashMap<u32, (u16, Node, u32)>,
@@ -392,6 +397,12 @@ pub struct Engine<'a> {
     named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
+    /// 按名查字段点到的字段（声明类, 名字），见 `field_lookup.rs`
+    pub reflect_fields: BTreeSet<(String, String)>,
+    /// 按名查字段目标类推不出时的字面量名（任意类的同名字段）
+    pub reflect_field_names: BTreeSet<String>,
+    /// String 字段各写入处的字符串常量（None = 有非常量写入）；名字经字段到达按名查找点时取用
+    field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）

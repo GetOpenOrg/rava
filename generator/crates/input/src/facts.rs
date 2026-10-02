@@ -163,6 +163,10 @@ pub struct ClosureFacts {
     /// 反射成员
     pub reflect_members: Vec<MemberRef>,
     pub reflect_gaps: Vec<String>,
+    /// 按名查字段点到的字段（声明类, 名字）
+    pub reflect_fields: Vec<(String, String)>,
+    /// 按名查字段目标类推不出时的字面量名
+    pub reflect_field_names: Vec<String>,
     pub seeds: SeedFacts,
     /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
     pub dispatched: Vec<MemberRef>,
@@ -257,6 +261,8 @@ impl ClosureFacts {
             folds,
             reflect_members: e.reflect_members.iter().map(|(_, m)| m.clone()).collect(),
             reflect_gaps: e.reflect_gaps.iter().cloned().collect(),
+            reflect_fields: e.reflect_fields.iter().cloned().collect(),
+            reflect_field_names: e.reflect_field_names.iter().cloned().collect(),
             seeds: SeedFacts {
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
                 mirror_inits: s.mirror_inits.iter().cloned().collect(),
@@ -311,6 +317,10 @@ impl ClosureFacts {
             out.reflect_members.push(parse_member_id(str_of(r, "member")?)?);
         }
         out.reflect_gaps = strings(reflect.get("gaps"))?;
+        for r in arr(reflect, "fields")? {
+            out.reflect_fields.push((str_of(r, "owner")?.to_string(), str_of(r, "name")?.to_string()));
+        }
+        out.reflect_field_names = strings(reflect.get("field_names"))?;
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
         }

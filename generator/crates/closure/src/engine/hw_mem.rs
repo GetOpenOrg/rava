@@ -19,6 +19,7 @@ impl<'a> Engine<'a> {
         let s = self.hw_site_id(m, off, t);
         self.site_restrict(s, m, off, oi);
         let base = usize::from(!self.methods[t].is_static);
+        self.note_self_copies(s, base, &ws);
         let obj = self.id(OBJECT);
         // 签名多态：实参按调用点描述符排布（VM 打包进 Object[]），引用实参一律按 Object 接入
         let poly = self.is_poly(t);
@@ -53,6 +54,25 @@ impl<'a> Engine<'a> {
         for i in watched {
             if let (Some(Some(pi)), Some(Some(fs))) = (ptypes.get(i), feeds.get(i)) {
                 self.feed(fs, Node::A(s, i as u16), *pi);
+            }
+        }
+    }
+
+    /// 元素来源与写入目标是同一个入口形参值的写入（`System.arraycopy(es, i + 1, es, i, n)` 等
+    /// 数组内搬移）：运行期两者是同一数组，写入不改变其元素集。只认未经合流的入口形参值——
+    /// 形参在方法执行期间恒指同一对象；调用点 / 字段读取来源在循环里可能是不同对象，不认
+    fn note_self_copies(&mut self, s: u32, base: usize, ws: &[Option<HwWrite>]) {
+        let Some(vals) = self.call_vals.clone() else { return };
+        let entry = |k: usize| match k.checked_sub(base).and_then(|k| vals.get(k)) {
+            Some(V::Ref { src, .. }) if src.len() == 1 && matches!(src[0], Src::Param(_)) => Some(src[0]),
+            _ => None,
+        };
+        for (j, w) in ws.iter().enumerate() {
+            let Some(w) = w else { continue };
+            for &i in &w.elements {
+                if i != j && entry(i).is_some() && entry(i) == entry(j) {
+                    self.hw_self_copies.insert((s, i as u16, j as u16));
+                }
             }
         }
     }
@@ -208,7 +228,7 @@ impl<'a> Engine<'a> {
         let obj = self.id(OBJECT);
         for &y in ys {
             for (j, w) in ws.iter().enumerate() {
-                if w.as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) {
+                if w.as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) && !self.hw_self_copies.contains(&(s, i, j as u16)) {
                     for p in PARITIES {
                         self.flow(Node::E(y, p), Node::W(s, j as u16), obj);
                     }

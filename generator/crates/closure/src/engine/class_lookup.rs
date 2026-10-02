@@ -164,6 +164,9 @@ impl<'a> Engine<'a> {
             return Some(vec![Part::Lit(s.clone())]);
         }
         let o = site_of(v)?;
+        if let Some(segs) = m.and_then(|m| self.indy_concat_segs(m, a, o)) {
+            return self.seg_parts(m, a, &segs, wild, depth);
+        }
         let names = &self.man.names;
         let Some(Event::Invoke { mref, args, .. }) = event_at(a, o, is_invoke) else {
             // 非调用结果（如直接读字段）：整体作为一段
@@ -203,8 +206,13 @@ impl<'a> Engine<'a> {
             break;
         }
         segs.reverse();
+        self.seg_parts(m, a, &segs, wild, depth)
+    }
+
+    /// 拼接各段的值 → 拼接段
+    fn seg_parts(&mut self, m: Option<usize>, a: &Analysis, segs: &[V], wild: bool, depth: u8) -> Option<Vec<Part>> {
         let mut parts = Vec::with_capacity(segs.len());
-        for s in &segs {
+        for s in segs {
             parts.push(match s {
                 V::Str(x) => Part::Lit(x.clone()),
                 V::Null => Part::Lit(Rc::from("null")),
@@ -218,6 +226,47 @@ impl<'a> Engine<'a> {
             });
         }
         Some(parts)
+    }
+
+    /// 站点 o 是方法 m 里的字符串拼接 indy（引导方法为清单 `[facts.indy]` 的 concat 类）时按配方拆出的各段值：
+    /// 配方取引导静态实参首项（`\u{1}` = 依次取动态实参、`\u{2}` = 依次取其后的静态常量，其余字符为字面量）；
+    /// 无配方的引导（各动态实参直接相接）逐个动态实参成段。静态常量非字符串时不拆
+    fn indy_concat_segs(&self, m: usize, a: &Analysis, o: u32) -> Option<Vec<V>> {
+        let Event::Indy { bsm, args, .. } = event_at(a, o, |e| matches!(e, Event::Indy { .. }))? else { return None };
+        let cf = self.h.class(&self.methods[m].key.owner)?;
+        let b = cf.bootstrap_methods.get(*bsm as usize)?;
+        let bkey = format!("{}.{}", b.handle.member.owner, b.handle.member.name);
+        if self.man.indy_kind(&bkey) != Some(IndyKind::Concat) {
+            return None;
+        }
+        let Some(Const::String(recipe)) = b.args.first() else {
+            return b.args.is_empty().then(|| args.clone());
+        };
+        let mut segs = vec![];
+        let mut lit = String::new();
+        let (mut dyn_i, mut const_i) = (0, 1);
+        let flush = |lit: &mut String, segs: &mut Vec<V>| {
+            if !lit.is_empty() {
+                segs.push(V::Str(Rc::from(std::mem::take(lit).as_str())));
+            }
+        };
+        for ch in recipe.chars() {
+            match ch {
+                '\u{1}' => {
+                    flush(&mut lit, &mut segs);
+                    segs.push(args.get(dyn_i)?.clone());
+                    dyn_i += 1;
+                }
+                '\u{2}' => {
+                    let Const::String(c) = b.args.get(const_i)? else { return None };
+                    lit.push_str(c);
+                    const_i += 1;
+                }
+                c => lit.push(c),
+            }
+        }
+        flush(&mut lit, &mut segs);
+        Some(segs)
     }
 
     /// 引用值段：封存静态字段（值映射读取 / 常量字符串数组元素，`sealed.rs`）→ 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）

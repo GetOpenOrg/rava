@@ -47,6 +47,8 @@ pub struct ClassPath {
     /// 解析失败的类（名字, 错误）：丢类必须可观测
     failures: Mutex<Vec<(String, String)>>,
     java_home: Option<PathBuf>,
+    /// 档案下标 → 模块名（`module_of` 惰性填充）
+    module_names: std::sync::OnceLock<Vec<Option<String>>>,
 }
 
 impl ClassPath {
@@ -58,6 +60,7 @@ impl ClassPath {
             cache: RwLock::new(HashMap::new()),
             failures: Mutex::new(Vec::new()),
             java_home: None,
+            module_names: std::sync::OnceLock::new(),
         }
     }
 
@@ -74,6 +77,7 @@ impl ClassPath {
         }
         self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
         self.origins.push(origin);
+        self.module_names = std::sync::OnceLock::new();
         Ok(())
     }
 
@@ -191,6 +195,23 @@ impl ClassPath {
             out.push(ArchiveView { origin: *origin, module, services });
         }
         out
+    }
+
+    /// 类所在档案的模块名（模块化档案：jmod / 模块化 jar；非模块档案与未知类 → None）。
+    /// 各档案的 module-info 只解析一次
+    pub fn module_of(&self, name: &str) -> Option<String> {
+        let &i = self.index.get(name)?;
+        let names = self.module_names.get_or_init(|| {
+            let mut archives = lock(&self.archives);
+            archives
+                .iter_mut()
+                .map(|a| match a.read_module_info() {
+                    Ok(Some(b)) => classfile::module::parse_module_info(&b).ok().flatten().map(|m| m.name),
+                    _ => None,
+                })
+                .collect()
+        });
+        names.get(i).cloned().flatten()
     }
 
     pub fn failures(&self) -> Vec<(String, String)> {

@@ -1,4 +1,5 @@
 //! 引擎：VM 钩子节点——类的手写文件里声明回调边、却不对应任何 Java 成员的 pub fn（见 `handwritten/hooks.rs`）。
+//! 清单 `[vm_state.field_hooks]` 登记的字段钩子除外：它们只在钩子字段的访问点入链（`bytecode.rs` `field_hook`）。
 //!
 //! 钩子由生成代码 / 宏在该类对象上直接调用（不经 Java 调用点），故在该类实例化（进 G）时作为入口建模：
 //! 每个钩子一个伪方法节点（接收者 = 该类对象，形参未知、经值池），手写体效果（回调 / 分配 / 字段）照常建模。
@@ -24,7 +25,11 @@ impl<'a> Engine<'a> {
             return;
         }
         let members = self.member_names(&cls);
-        for f in hwc.vm_hooks(|f| members.iter().any(|n| member_matches(f, n))) {
+        // 清单字段钩子（`[vm_state.field_hooks]`）经字段访问点入链（`field_hook`），不随类实例化进入
+        let field_hook = |f: &str| self.man.vm_state.field_hooks.values().any(|h| h.host == cls && h.func == f);
+        let hooks: Vec<String> =
+            hwc.vm_hooks(|f| members.iter().any(|n| member_matches(f, n))).into_iter().filter(|f| !field_hook(f)).collect();
+        for f in hooks {
             self.vm_hook_node(id, &cls, f);
         }
     }

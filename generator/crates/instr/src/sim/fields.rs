@@ -71,6 +71,30 @@ fn field_receiver_view(env: &InstrEnv, obj_e: Expr, obj_ty: RsType, owner: &str,
     (obj_e, obj_ty)
 }
 
+/// VM 状态字段（清单 `[vm_state.field_hooks]`）的接收者钩子：`recv.hook()?` 落地后再经访问器读写；
+/// 静态形态的钩子在访问前单独成句（见 [`static_hook`]）
+fn hooked_receiver(env: &InstrEnv, sim: &mut StackSim, owner: &str, f: &MemberRef, recv: Expr) -> InstrResult<Expr> {
+    match env.ctx.rt.vm_state.field_hook(owner, &f.name, &f.desc) {
+        Some(h) if h.receiver => Ok(try_(mcall(recv, &h.func, Vec::new())?)),
+        Some(_) => {
+            static_hook(env, sim, owner, f)?;
+            Ok(recv)
+        }
+        None => Ok(recv),
+    }
+}
+
+/// 静态形态的 VM 状态字段钩子：访问前调用 `Host::hook()?`（幂等，落地 VM 状态）
+fn static_hook(env: &InstrEnv, sim: &mut StackSim, owner: &str, f: &MemberRef) -> InstrResult<()> {
+    let Some(h) = env.ctx.rt.vm_state.field_hook(owner, &f.name, &f.desc).filter(|h| !h.receiver) else {
+        return Ok(());
+    };
+    let mut segs = class_segs(&env.ctx.short(&h.host), Vec::new())?;
+    segs.push(seg(&h.func)?);
+    sim.emit(expr_stmt(try_(call_path(Path::new(segs), Vec::new()))))?;
+    Ok(())
+}
+
 /// 存储值节点：未经转换时直接携带栈上节点，经转换的值为 Raw 叶子
 fn value_node(env: &InstrEnv, val: Expr, val_str: String) -> Expr {
     if text(env, &val) == val_str {
@@ -96,7 +120,8 @@ pub(crate) fn getfield(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> Ins
     let (obj_e, obj_ty) = field_receiver_view(env, obj_e, obj_ty, owner, &f.name);
     let (ftype, erased) = field_view(env, sim, &f.owner, &fname, ftype, Some(&obj_ty));
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    let mut get = mcall(null_checked(env, obj_e)?, &format!("__get_{slot}"), Vec::new())?;
+    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, obj_e)?)?;
+    let mut get = mcall(recv, &format!("__get_{slot}"), Vec::new())?;
     if erased {
         // 类型变量槽位按接收者实例化读出 Object：经 From<Object> 取回描述符上界视图
         get = crate::coerce::cast_node(get, ir_ty(env, &ftype)?, "", false, false);
@@ -147,7 +172,8 @@ fn putfield(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRe
     let sc = StoreCtx { obj_text: &obj_text, slot_is_type_var: slot_gsig.starts_with('T'), class_tps: &class_tps };
     let val_str = coerce_stored_value(env, log, &val.expr, &val.ty, &ftype, &sc)?;
     let slot = ctx.ty.instance_field_rust_name(owner, &fname);
-    let set = mcall(null_checked(env, obj_e)?, &format!("__set_{slot}"), vec![value_node(env, val.expr, val_str)])?;
+    let recv = hooked_receiver(env, sim, owner, f, null_checked(env, obj_e)?)?;
+    let set = mcall(recv, &format!("__set_{slot}"), vec![value_node(env, val.expr, val_str)])?;
     sim.emit(expr_stmt(set))?;
     Ok(())
 }
@@ -161,6 +187,7 @@ pub(crate) fn static_field_read(env: &InstrEnv, owner: &str, name: &str, desc: &
 }
 
 fn getstatic(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<()> {
+    static_hook(env, sim, &f.owner, f)?;
     let (e, t) = static_field_read(env, &f.owner, &f.name, &f.desc)?;
     sim.push(e, t);
     Ok(())
@@ -168,6 +195,7 @@ fn getstatic(env: &InstrEnv, sim: &mut StackSim, f: &MemberRef) -> InstrResult<(
 
 fn putstatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, f: &MemberRef) -> InstrResult<()> {
     let val = sim.pop()?;
+    static_hook(env, sim, &f.owner, f)?;
     // Java 引用赋值无 move 语义：源局部变量仍可被使用 → setter 实参包 Clone::clone 保活（E0382）
     let val_e = sim::exprs::clone_moved_var(val.expr, &val.ty)?;
     let sf = resolve_static_field(env, &f.owner, &f.name, &f.desc);
