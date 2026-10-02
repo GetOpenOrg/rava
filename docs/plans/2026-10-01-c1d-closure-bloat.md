@@ -738,6 +738,14 @@ DeepCopy 失败归因：序列化路径触发了 `ExceptionInInitializerError �
   - 运行期目标取按句柄 / 反射实际链接到的成员声明类（`linked_owners` × `live_routes`）；
   - 按名取静态字段、所属类推不出时，扫描闭包内声明了该名静态字段的类。
 - 结论：不需要再改代码。命名维持 `mirror_init`（清单段位于 `[facts.reflect]`，语义是「按类镜像初始化」），旧计划文档里的 `class_init` 记载加注已被取代。
+- **合入 be1b97be 时的复核（2026-10-02）：**
+  - 集成分支的 `class_init`（`engine/class_init.rs` 与 `[facts.class_init.initializers]`）由 1b841e40 引入（2026-10-01，早于合并基 01b88d7d），不属于 C6 / regress2 / native-gaps。
+  - 合并基之后集成分支只在该表加了一项：native-gaps 的 462ab7b0 登记了 `JavaLangAccess.getEnumConstantsShared`（修 TestStackWalkerFrames：`StackWalker.<clinit>` 的 `EnumSet.noneOf(Option.class)` 报「not an enum」）。
+  - 这一项修补的是集成分支上手写的 `java_lang_access_impl.rs`：手写体按名调用初始化钩子，但没有登记目标类。
+  - c1d 已在 1e623cec 删除这份手写，`JavaLangAccess` 由 `System$2` 按字节码翻译。链路是 `Class.getEnumConstantsShared` → `getMethod("values").invoke(null)` → `MethodHandleAccessorFactory.ensureClassInitialized`，由 `reflect_owner_initializers` 覆盖，因此不需要单列这一项。
+  - 同类的 native-gaps 修复 5bcc93ae（手写体 `T::__class_init()` 建模为类初始化）已随合并保留在 `engine/hw_infer.rs`。
+  - 覆盖关系：`class_initializers` + `handle_owner_initializers` / `reflect_owner_initializers` 覆盖了集成分支三项登记的全部初始化点。唯一的语义差异是集成分支在 `unknown` 时退回 `<clinit>` 全表，c1d 改为记为反射缺口（见上第 1 点）。
+  - 依赖用例：TestStackWalkerFrames、TestForNameInit（在 13265bd3 的抽查里），以及 TestStackWalkerLines、TestEnumSetMap、TestClassForName、TestMethodHandleDirect、TestVolatilePrimitiveAccess（下一轮补抽）。
 
 
 ## 19. 交接（2026-10-02）
@@ -961,6 +969,31 @@ java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V
   3. 删除 `rava_macros` 的 `jvm_boundary` 宏与分析器中的相关解析。
 - 修复中遇到的测试问题：JDK 能跑的合法 Java 测试一律不改；修复时补充覆盖边界情况的 e2e 用例，expected 取真 JDK 输出。
 - 次序：排在三个闸门关闭、HelloWorld 正式口径 ≤3 s 且 ≤360 类之后。
+
+**`vm_boundary_methods` 计数口径与 a3 范围（2026-10-02，c1d-p0 144a33a4）**
+
+- **为什么集成分支是 30、合并后是 86：口径不同，不是新增手写。**
+  - 集成分支的 `audit_override` 只审计公开 API 类（`!lang::in_public_api(n)` 时直接返回），`jdk/internal/*` 不计入。
+  - c1d 在 80c5c1df 中去掉了这道过滤，审计面改为全部 JDK 类。为了保持 `non_native_overrides=0`，1e623cec / 34d5989a 把 Unsafe、VM、BootLoader、ClassLoaders 登记进了 `[vm_boundary]`。
+  - 这 56 个方法的手写在集成分支上也存在，只是没有计数。两边 `java/*` 部分同为 30。
+- **HelloWorld 的 86 个按类分布：**
+
+  | 类 | 数 | 方法形态 | 准入落点（终态） |
+  |---|---:|---|---|
+  | `jdk/internal/misc/Unsafe` | 44 | 包在 native 外层的 Java 方法：CAS 循环、`*0` 内存访问的转发、`getUnsafe`、屏障、`objectFieldOffset` → `objectFieldOffset1` | 方法本身翻译；① 落在内层 native（`compareAndSet*` / `*0` / 屏障 native）。清单 `name_resolvers.offset`、`array_writes`、`memory_reads`、`class_initializers` 里登记的 Java 层成员改为指向内层 native（`ensureClassInitialized` → `ensureClassInitialized0`） |
+  | `jdk/internal/misc/VM` | 9 | 读写 `initLevel`、`savedProps`、`javaLangInvokeInited`；`latestUserDefinedLoader` 转发 `latestUserDefinedLoader0` | 方法本身翻译；③ 落在 VM 注入的状态（`initLevel = SYSTEM_BOOTED` 等，经 `[vm_constants.injected_statics]` 声明）与内层 native ①。现手写 `getSavedProperty` 恒返回 null，属于近似 |
+  | `java/lang/VirtualThread` | 10 | `start`、`run`、`park`、`unpark`、`joinNanos` 等 | 方法本身翻译；③ 落在 `Continuation` 的 VM 驱动 native（`enterSpecial` / `doYield`）与调度承载 |
+  | `java/lang/ClassLoader` | 9 | `getParent`、`getSystemClassLoader`、资源查找、`getClassLoader(Class)` | 方法本身翻译；③ 落在 `Class.classLoader` 注入字段，内建加载器层级随 ClassLoaders 整类翻译 |
+  | `java/lang/Module` | 7 | `isNamed`、`isExported`、`isOpen`、`canUse`、`getLayer` | 方法本身翻译；③ 落在启动模块图的注入输入。现手写是「单一未命名模块」近似 |
+  | `jdk/internal/loader/ClassLoaders` | 3 | 三个内建加载器的 getter | 整类按字节码翻译（与 FS-C2 同一终态） |
+  | `java/lang/Class` | 2 | `enumConstantDirectory`、`getModule` | 方法本身翻译；③ 落在 `Class.module` 注入字段 |
+  | `java/lang/ModuleLayer` | 2 | `boot`、`parents` | 方法本身翻译；③ 同 Module。现手写是空层近似 |
+
+  结论：这 86 个都不是 native，方法本身也都不属于准入三类；准入只发生在它们下层的 native（①）和 VM 注入状态（③）上。**86 个全部属于 a3 的归零范围**，终态 `vm_boundary_methods = 0`。
+- **a3 的归零口径以审计计数为准，不只看属性个数。**
+  - `runtime/` 里 `#[jvm_boundary]` 当前共 140 处，HelloWorld 链上命中的是上表 86 个。其余 54 处中，`InvokerBytecodeGenerator`（6）、`ClassSpecializer$Factory`、`MethodAccessorGenerator`、`Proxy$Dyn` 是运行期类定义点（② 运行模型替换），改为在清单中登记类别。
+  - `JceSecurity`（6）、`BootLoader`（5）、`FileSystems`、`CDS`、`EventHelper`、`SecurityPropertyModificationEvent`、`GetInstance$Instance` 逐个方法按规范判定：可翻译的翻译，native 用 `#[jvm_native]`。
+  - 完成后删除 `jvm_boundary` 宏与审计中的 `VmBoundary` 分类。`[vm_boundary]` 只保留 ③ 状态声明（注入字段 / `clinit_carried`），不再豁免方法。
 
 ### 20.8 具体求值接入后的正式口径实测与构成（2026-10-02，c1d-p0 73de95c4）
 
