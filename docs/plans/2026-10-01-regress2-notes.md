@@ -156,6 +156,10 @@
 - 终态：方法体在 LVT 声明区间内另有引用存储（`SlotDecl.reassigned`，由字节码 astore 扫描得出）且声明类型为接口时，
   首值经 `From` 上转到接口擦除载体（`List<Object>`），声明不收窄；只赋值一次的局部维持具体类收窄（可读性不变）。
 - 验收：SequenceGenerator；广谱回归建议 gen_trees / compare_trees（声明类型形态会变）。
+- 生成树对照（trees-b8f5ba28，验收集 27 例，raw-audit 不变）：差异仅一种形态——已声明为接口载体的局部被再赋新建
+  具体实例时，由 `<I<Object> as From<Object>>::from(Object::from(new C))` 变为 `<I<Object> as From<_>>::from(new C)`
+  （HashMap / TreeMap / EnumMap / AbstractMap 的 keySet / values 懒建、Pattern.groups、InternalLocaleBuilder 等），
+  经 iface_upcasts 直接上转，少一次 Object 往返，运行期视图相同。
 
 ### 10.4 RecordPatternTest —— 同一擦除类的 instanceof 被静态折叠为 false
 
