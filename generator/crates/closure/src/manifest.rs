@@ -110,6 +110,9 @@ pub struct Manifest {
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
     primitive_class_returns: HashSet<String>,
+    caller_class_returns: HashSet<String>,
+    /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
+    caller_sensitive: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
@@ -335,6 +338,8 @@ impl Manifest {
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
+            caller_class_returns: reflect("caller_class").into_iter().collect(),
+            caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -499,6 +504,17 @@ impl Manifest {
     /// 返回基本类型（含 void）的类镜像（`Class.getPrimitiveClass` 语义）：所指类不是字节码类，无初始化、无成员
     pub fn returns_primitive_class(&self, member: &str) -> bool {
         self.primitive_class_returns.contains(member)
+    }
+
+    /// 返回调用它的 @CallerSensitive 方法的调用者类镜像（`Reflection.getCallerClass` 语义）
+    pub fn returns_caller_class(&self, member: &str) -> bool {
+        self.caller_class_returns.contains(member)
+    }
+
+    /// 注解（字段描述符形态 `Lx/Y;`）是否为 @CallerSensitive 注解
+    pub fn is_caller_sensitive_annotation(&self, type_desc: &str) -> bool {
+        let bin = type_desc.strip_prefix('L').and_then(|s| s.strip_suffix(';')).unwrap_or(type_desc);
+        self.caller_sensitive.contains(bin)
     }
 
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象

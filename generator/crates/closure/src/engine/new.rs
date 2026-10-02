@@ -135,6 +135,7 @@ impl<'a> Engine<'a> {
             lambda_stack: HashSet::default(),
             mirrors: HashMap::default(),
             prim_mirror: None,
+            cs: Default::default(),
             mirror_of: Vec::new(),
             mflows: HashMap::default(),
             mflow_seen: HashSet::default(),

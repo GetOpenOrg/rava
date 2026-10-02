@@ -315,7 +315,25 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
 - 边界用例 `tests/e2e/48_refs/TestUnsafePrimitiveArray.java`（经 `sun.misc.Unsafe`，期望为 JDK 21 实测）：int / long 元素
   CAS、getAndAdd、getAndSet；int 宽度按字访问 byte[] / short[]（CAS 只改该字覆盖的元素）；boolean / char / float /
   double 元素读写；实例 float / double 字段经 Unsafe 读写、经 VarHandle 的 CAS / compareAndExchange / getAndAdd /
-  getAndSet。静态字段九种载体的 CAS 用例待 b1 合入后随静态臂一并提交。
+  getAndSet。静态字段（含子字）的原子读-改-写按协调归 b1。
+
+**S3：`Reflection.getCallerClass` 按 @CallerSensitive 调用者给值**（`engine/caller.rs`）。
+
+- 清单 `[facts.reflect] caller_class` 登记 `getCallerClass`，返回模型 `RetModel::Caller`：@CallerSensitive 方法 M 体内的
+  调用点结果取 M 的调用者节点 `S(M, CALLER)`，不经 `R(getCallerClass)` 汇合；非 CS 方法体内调用照旧取返回值节点。
+- 调用者节点按调用边增长（`edge` → `caller_edge`），压栈判据与生成器 `caller_sensitive_decl` 同一：边出自字节码调用指令
+  （`invoke` 期间置 `cs.site_wrapped`），且该指令的被调引用沿超类链解析到 CS 声明 → 并入调用方所在类镜像。其余进入 M 的边
+  （手写体、lambda / 方法引用经 SAM 转接、方法句柄、indy 辅助、虚调用汇点的后续补边）运行期不压栈，M 的调用者节点改跟
+  「全部 CS 调用边的调用方所在类镜像 ∪ 根类镜像」（运行期取外层栈顶，栈空时栈遍历 / 根类）。
+- 与 b1 的原生 Class 返回建模同一形态（清单登记的返回模型 + `RetModel` 变体，接在 `edge_ret`），谁先合入以谁为准。
+- 实测（`rava closure`；对照为清空 `caller_class` 的同一二进制）：`MethodHandles.lookup@0` 由 open(Class) 收窄为调用点
+  所在类镜像集（TestMethodHandleDirect：{TestMethodHandleDirect, ValueConversions}）；TestModuleLayerDefine
+  `class_init.unknown` true → false（`VarHandles.makeFieldHandle@442` 消失），类数不变（1829）；TestMethodHandleDirect /
+  TestReflectFieldMethod 剩 DMH 两点、MHAF@14（S2 / S4，属 b1）；HelloWorld / TestByteArrayViewVarHandle 不变。
+- class_init 跳过 `Class#<synthetic>`（非字节码类镜像，无 `<clinit>`）已在 1314a487 完成。
+- 边界用例 `tests/e2e/62_reflection/TestCallerSensitiveLookup.java`（期望为 JDK 21 实测）：静态方法、嵌套类实例方法、
+  接口 default 方法、经他类转调、静态初始化块内的 `lookup().lookupClass()`；lookup 后的 `findStaticVarHandle` /
+  `findStatic` 首次访问触发目标类 `<clinit>`。
 
 ## 四、交接（2026-10-02，C1d-b 停止）
 

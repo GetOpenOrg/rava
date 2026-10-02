@@ -85,6 +85,8 @@ pub(super) enum RetModel {
     Receiver,
     /// 按实参（序号，不含接收者）读内存
     Read(usize),
+    /// 调用者类镜像：调用方（@CallerSensitive 方法）各调用边上调用方所在类的镜像
+    Caller,
 }
 
 impl RetModel {

@@ -87,6 +87,7 @@ mod setstore;
 use setstore::SetStore;
 mod scc;
 mod levels;
+mod caller;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -129,6 +130,8 @@ const POOL: u32 = u32::MAX;
 const PROD: u32 = u32::MAX - 1;
 /// 站点键：清单声明元素类型的手写返回数组（`[facts.array_returns]`）的分配点
 const ARRAY_RET: u32 = u32::MAX - 2;
+/// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
+const CALLER: u32 = u32::MAX - 3;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -370,6 +373,8 @@ pub struct Engine<'a> {
     mirrors: HashMap<u32, u32>,
     /// 基本类型类镜像（[`Engine::primitive_mirror`]）：首次产生时登记
     prim_mirror: Option<u32>,
+    /// @CallerSensitive 调用者模型的状态（`caller.rs`）
+    cs: caller::CallerState,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像（`getClass`）/ 各镜像所指类的超类镜像（`getSuperclass`）
