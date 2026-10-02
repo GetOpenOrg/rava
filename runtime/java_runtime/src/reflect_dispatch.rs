@@ -341,6 +341,12 @@ pub fn current_caller_sensitive() -> Option<&'static str> {
 
 // ── 静态字段偏移登记（Unsafe.staticFieldOffset / MethodHandleNatives.staticFieldOffset 共用）─────────────────
 
+/// 字段偏移槽宽：每个字段（实例 / 静态）独占一个 4 字节对齐槽，偏移 id 恒为 4 的倍数。
+/// JDK 的子字 CAS（compareAndExchangeByte / Short 等，字节码翻译）按 `offset & ~3` 取所在 int 字、
+/// 按小端 `shift = (offset & 3) << 3` 定位——槽对齐使字地址即字段自身偏移、shift = 0，int 字视图
+/// （`ObjectVTable::__unsafe_word`）的低位就是该字段，相邻字段不共字，字段之间无别名。
+pub const FIELD_SLOT: i64 = 4;
+
 pub const STATIC_FIELD_ID_BASE: i64 = 1 << 40;
 
 crate::__process_static! {
@@ -360,7 +366,8 @@ pub fn static_field_id(decl: std::string::String, name: std::string::String) -> 
     }
     let id = STATIC_FIELD_IDS.with(|m| {
         let mut m = m.borrow_mut();
-        let next = STATIC_FIELD_ID_BASE + m.len() as i64;
+        // 与实例字段同一槽宽（`FIELD_SLOT`）：子字 CAS 的 `offset & ~3` 落在字段自身
+        let next = STATIC_FIELD_ID_BASE + FIELD_SLOT * m.len() as i64;
         *m.entry(key.clone()).or_insert(next)
     });
     STATIC_FIELD_BY_ID.with(|m| { m.borrow_mut().insert(id, key); });

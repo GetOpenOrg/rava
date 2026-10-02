@@ -271,6 +271,30 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
   `compareAndSetByte` / `compareAndExchangeByte`、`Policy.loadPolicyProvider`、`KeyStore.<init>` 等 49 个同类截断方法）。
   新增类都是已在闭包里的截断体运行期会执行到的同类方法所引用的类型。
 
+**抽查 c1db3-1314a487 揭出的运行时缺口：子字 CAS 经 int 字别名**（`TestMethodHandleDirect` / `TestReflectStaticFieldInit`
+运行期命中 `stub: jdk/internal/misc/Unsafe.getint:(Ljava/lang/Object;J) (offset=8 无字段闭包)`）。
+
+- 链条：`compareAndSetBoolean` → `compareAndSetByte` → `compareAndExchangeByte`（字节码）按 `offset & ~3` 取所在 int 字，
+  `getIntVolatile` + `weakCompareAndSetInt` 读-比-写。旧偏移模型的实例字段 id 从 1 起逐个加 1，int 访问器只认 int 字段
+  （`__unsafe_int_cell`），子字字段既无 int 视图，`offset & ~3` 也会落到相邻字段的 id 上。
+- 修法（取「每字段独占 4 字节槽」，对实例 / 静态、任意对象形状都成立，相邻字段不共字）：
+  - 偏移 id 恒为 4 的倍数（`reflect_dispatch::FIELD_SLOT`）：实例字段从 4 起步进 4，静态字段 `STATIC_FIELD_ID_BASE + 4·n`。
+    小端下 `offset & ~3` 就是字段自身偏移、`shift = 0`，字的低位即字段值，其余位是恒为 0 的填充；
+  - 新 ObjectVTable 协议 `__unsafe_word`（java_class! 宏为平铺非擦除的 int / boolean / byte / short / char 字段生成臂，
+    wrapper 先问静态类 inner、再委托 vtable）：在字段共享单元上原子地做字视图读-改-写（`__PrimCell::__word_update`，
+    字段值零扩展为字，写回取低位截断，boolean 取低字节非 0）；
+  - Unsafe 的 int 访问器全族（get / put / CAS / compareAndExchange / getAndSet / getAndBitwise* / getAndAdd、
+    acquire / opaque 变体）与子字 get / put 统一走字视图；静态字段经字段闭包按装箱值读写（只承载读与无条件写）；
+  - VarHandle 手写伴生的 CAS 族（`_field_exchange`）把 boolean / byte / short / char 与 int 一同走字视图（原先这四族直接存根）。
+- 不用手写 `compareAndSetBoolean` / `Byte` 绕开：JDK 子字 CAS 的字节码原样翻译执行，语义由偏移与字段模型承担。
+- 闭包侧无须改动：槽独占使 `offset & ~3` 读写的仍是偏移已暴露的那个字段，偏移暴露 / 字段开放（`field_open`）按字段计，
+  与按 int 读取还是按子字读取无关；基本类型读写不产生值流。
+- 残余（与 int 同一现状，不属子字）：静态字段 CAS 与基本类型数组元素的 Unsafe 访问仍无共享原子单元，命中报存根。
+- 边界用例 `tests/e2e/48_refs/TestSubwordFieldCas.java`（期望为 JDK 21 实测）：VarHandle 对相邻 boolean / byte /
+  short / char 字段的 CAS、compareAndExchange、getAndSet、getAndAdd、weakCompareAndSet 循环，相邻字段互不影响，
+  普通写入与 CAS 同一存储；未初始化类的静态方法句柄首次调用（`DirectMethodHandle.ensureInitialized` →
+  `MethodHandle.updateForm` → `Unsafe.compareAndSetBoolean` 字节码路径）与同一句柄反复调用。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
