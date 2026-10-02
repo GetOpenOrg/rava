@@ -77,10 +77,14 @@ pub(super) struct Ctx<'a> {
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
-    /// 不折叠的字段：手写写入、反射按名写入
+    /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
     pub(super) fopen: RefCell<HashSet<MemberRef>>,
-    /// 不折叠的字段名（手写写入 / 反射写入推不出所属类）
+    /// 偏移可得、不折叠的字段名（按名取得推不出所属类）
     pub(super) fopen_names: RefCell<HashSet<String>>,
+    /// 手写体写入的字段：只不折叠，偏移不因此可得（手写体按 Rust 字段直接写，不经偏移）
+    pub(super) fhw: RefCell<HashSet<MemberRef>>,
+    /// 手写体写入、推不出所属类的字段名：只不折叠
+    pub(super) fhw_names: RefCell<HashSet<String>>,
     /// 反射枚举式写入推不出所属类：全部字段不折叠
     pub(super) fopen_all: Cell<bool>,
     /// 反序列化可达：非 static、非 transient 字段不折叠
@@ -140,7 +144,8 @@ pub(super) struct FieldInfo {
     pub(super) key: MemberRef,
     pub(super) access: u16,
     pub(super) constant: Option<Const>,
-    /// 写入来源超出字节码（边界类 / 手写字段 / VM 状态字段钩子）
+    /// 写入来源超出字节码（边界类 / 根类 / 手写字段 / VM 状态字段钩子）：不折叠。这些写入都按 Rust 字段
+    /// 直接落地，不产出偏移，与偏移可得（[`Ctx::field_offset_under`]）无关
     pub(super) open: bool,
     /// 声明类实现可序列化标记接口（反序列化可写该字段）
     pub(super) serializable: bool,
@@ -279,10 +284,21 @@ impl Ctx<'_> {
         self.field_open_under(fi, self.fopen_all.get(), self.deser.get())
     }
 
-    /// 按给定的全局开关（全部放开 / 反序列化可达）判定字段是否不折叠
+    /// 按给定的全局开关（全部放开 / 反序列化可达）判定字段是否不折叠：偏移可得的字段（[`Self::field_offset_under`]）
+    /// 加上手写体写入的字段
     pub(super) fn field_open_under(&self, fi: &FieldInfo, all: bool, deser: bool) -> bool {
-        fi.open
-            || all
+        fi.open || self.field_offset_under(fi, all, deser) || self.hw_written(fi)
+    }
+
+    /// 字段被手写体写入（只不折叠，不使偏移可得）
+    pub(super) fn hw_written(&self, fi: &FieldInfo) -> bool {
+        self.fhw.borrow().contains(&fi.key) || self.fhw_names.borrow().contains(&fi.key.name)
+    }
+
+    /// 按给定的全局开关判定字段偏移可经字节码外途径取得（按名取得 / 字段枚举 / 反序列化），从而可按偏移读写。
+    /// 手写体写入与 [`FieldInfo::open`] 不算：手写 / VM 落地按 Rust 字段直接写入，不产出偏移
+    pub(super) fn field_offset_under(&self, fi: &FieldInfo, all: bool, deser: bool) -> bool {
+        all
             || self.fopen.borrow().contains(&fi.key)
             || self.fopen_names.borrow().contains(&fi.key.name)
             || deser && deser_writes(fi.access, fi.serializable)

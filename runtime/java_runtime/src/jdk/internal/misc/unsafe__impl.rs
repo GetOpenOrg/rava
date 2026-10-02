@@ -171,12 +171,15 @@ fn _word_access(o: &Object, offset: i64, what: &str, op: &mut dyn FnMut(i32) -> 
     Ok(old)
 }
 
-/// int 原子读-改-写（CAS / getAndSet / getAndBitwise* 族）：只走实例字段字视图；
-/// 无共享单元 → 如实报缺口。
-fn _word_rmw(o: &Object, offset: i64, what: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> i32 {
-    _instance_word(o, offset, op).unwrap_or_else(|| {
+/// int 原子读-改-写（CAS / getAndSet / getAndBitwise* 族）：静态 id 走静态存储（`_static_word_rmw`，子字静态字段
+/// 的 compareAndExchangeByte 等经 offset & ~3 落到字段自身槽后到此），实例字段走字视图；无共享单元 → 如实报缺口。
+fn _word_rmw(o: &Object, offset: i64, what: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> Result<i32> {
+    if let Some(r) = _static_word_rmw(offset, op) {
+        return r;
+    }
+    Ok(_instance_word(o, offset, op).unwrap_or_else(|| {
         panic!("stub: jdk/internal/misc/Unsafe.{} (实例字段 offset={} 无共享 int 字单元)", what, offset)
-    })
+    }))
 }
 
 /// 偏移 id → 实例引用字段读（VarHandle 引用族消费）：字段名经登记表反查后走
@@ -225,6 +228,39 @@ fn _static_ref_set(offset: i64, v: Object) -> Option<Result<()>> {
         .map(|_| ()))
 }
 
+/// 静态字段读-改-写的进程级互斥：静态存储经声明类字段闭包按名读写（无引用槽写锁 /
+/// 原子单元协议），读-比-写在本锁内完成，经偏移的静态 CAS / 交换彼此原子。
+static STATIC_RMW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 静态字段 id → 原子读-改-写（`f` 返回 Some 则写入新值），返回旧值（基本类型字段为装箱值）。
+/// 非静态 id → None。取锁前先读一次：首次访问触发的声明类初始化不在锁内运行
+/// （初始化体内的静态 CAS 不自锁）。
+fn _static_rmw(offset: i64, f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
+    let (decl, name) = _static_field_of(offset)?;
+    let field = |v: Option<Object>| crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), v)
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态字段读-改-写：{}.{} 无字段闭包", decl, name));
+    if let Err(e) = field(None) {
+        return Some(Err(e));
+    }
+    let _guard = STATIC_RMW_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    Some(field(None).and_then(|cur| {
+        match f(Clone::clone(&cur)) {
+            Some(nv) => field(Some(nv)).map(|_| cur),
+            None => Ok(cur),
+        }
+    }))
+}
+
+/// 静态 id → int 与子字静态字段的原子读-改-写（`_static_rmw` 的字视图形态）：装箱值零扩展为字（`_boxed_word`）
+/// 交给 op，新字按原装箱类型截断写回（`_word_boxed_like`），返回旧字。非静态 id → None。
+fn _static_word_rmw(offset: i64, op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<Result<i32>> {
+    _static_field_of(offset)?;
+    let mut g = |cur: Object| op(_boxed_word(&cur)?).map(|w| _word_boxed_like(&cur, w));
+    Some(_static_rmw(offset, &mut g)?.and_then(|old| {
+        _boxed_word(&old).ok_or_else(|| _bad("静态字段读-改-写（非 int / 子字值）"))
+    }))
+}
+
 /// 偏移 id → 实例引用字段的原子读-改-写（ObjectVTable::__unsafe_ref_update）：返回旧值；
 /// 未登记 / 无臂 → None。
 fn _instance_ref_update(o: &Object, offset: i64,
@@ -233,12 +269,15 @@ fn _instance_ref_update(o: &Object, offset: i64,
     o.0.__unsafe_ref_update(&field, f)
 }
 
-/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id，均在对应存储的写锁内
-/// 完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
+/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id、静态字段按静态 id，
+/// 均在对应存储的写锁内完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
 fn _ref_rmw(o: &Object, offset: i64, what: &str,
             f: &mut dyn FnMut(Object) -> Option<Object>) -> Result<Object> {
     if let Some(arr) = _erased_ref_array(o) {
         return arr.__update(_ref_array_index(offset), f);
+    }
+    if let Some(r) = _static_rmw(offset, f) {
+        return r;
     }
     match _instance_ref_update(o, offset, f) {
         Some(old) => Ok(old),
@@ -357,21 +396,36 @@ impl Unsafe {
         ))
     }
 
-    /// 偏移 id → 实例引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值；
+    /// 偏移 id → 引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值。
+    /// 静态 id（`$FieldStatic*` flavor）走声明类静态存储，实例 id 走引用原子协议；
     /// 未登记 / 运行时类无该引用字段 → None。
     pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
-                                  f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
-        _instance_ref_update(o, offset, f)
+                                  f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
+        if let Some(r) = _static_rmw(offset, f) {
+            return Some(r);
+        }
+        _instance_ref_update(o, offset, f).map(Ok)
     }
 
-    /// 偏移 id → 实例 long 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
-    pub(crate) fn __vh_long_update(&self, o: &Object, offset: i64, f: impl Fn(i64) -> i64) -> Option<i64> {
-        Some(_instance_long_cell(o, offset)?.__fetch_update(f))
+    /// 偏移 id → long 字段的原子读-改-写（`f` 返回新值），返回旧值：静态 id 经装箱走
+    /// 静态存储，实例 id 走共享 long 单元；无单元 → None。
+    pub(crate) fn __vh_long_update(&self, o: &Object, offset: i64, f: impl Fn(i64) -> i64) -> Option<Result<i64>> {
+        if _static_field_of(offset).is_some() {
+            let mut g = |cur: Object| crate::reflect_dispatch::unbox_i64(&cur).map(|c| Object::from(f(c)));
+            return _static_rmw(offset, &mut g).map(|r| r.map(|old| {
+                crate::reflect_dispatch::unbox_i64(&old).expect("静态 long 字段读出非 long 值")
+            }));
+        }
+        Some(Ok(_instance_long_cell(o, offset)?.__fetch_update(f)))
     }
 
-    /// 偏移 id → 实例 int 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
-    pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<i32> {
-        _instance_word(o, offset, &mut |c| Some(f(c)))
+    /// 偏移 id → int 与子字字段（boolean / byte / short / char）的原子读-改-写（`f` 作用于零扩展字，返回新字），
+    /// 返回旧字：静态 id 经装箱宽化 / 按原装箱类型截断走静态存储（`_static_word_rmw`），实例 id 走 int 字视图；无单元 → None。
+    pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<Result<i32>> {
+        if let Some(r) = _static_word_rmw(offset, &mut |c| Some(f(c))) {
+            return Some(r);
+        }
+        _instance_word(o, offset, &mut |c| Some(f(c))).map(Ok)
     }
 
     /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
@@ -558,7 +612,7 @@ impl Unsafe {
     /// int 的 CAS（`_instance_long_cell` 的 int 镜像路径）。
     #[jvm_boundary]
     pub fn compareAndSetInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<bool> {
-        Ok(_word_rmw(&o, offset, "compareAndSetInt:(Ljava/lang/Object;JII)Z", &mut |c| (c == expected).then_some(x)) == expected)
+        Ok(_word_rmw(&o, offset, "compareAndSetInt:(Ljava/lang/Object;JII)Z", &mut |c| (c == expected).then_some(x))? == expected)
     }
 
     /// `getAndBitwiseAndInt(Object o, long offset, int mask)`：实例字段 int 的
@@ -567,20 +621,20 @@ impl Unsafe {
     ///（CountDownLatch.countDown → releaseShared → signalNext）。
     #[jvm_boundary]
     pub fn getAndBitwiseAndInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
-        Ok(_word_rmw(&o, offset, "getAndBitwiseAndInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old & mask)))
+        _word_rmw(&o, offset, "getAndBitwiseAndInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old & mask))
     }
 
     /// `getAndBitwiseOrInt(Object o, long offset, int mask)`：按位或的读-改-写，
     /// 返回旧值（AQS `Node.setStatus` 族的对偶面；同 getAndBitwiseAndInt 取舍）。
     #[jvm_boundary]
     pub fn getAndBitwiseOrInt(&self, o: Object, offset: i64, mask: i32) -> Result<i32> {
-        Ok(_word_rmw(&o, offset, "getAndBitwiseOrInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old | mask)))
+        _word_rmw(&o, offset, "getAndBitwiseOrInt:(Ljava/lang/Object;JI)I", &mut |old| Some(old | mask))
     }
 
     /// `getAndSetInt(Object o, long offset, int x)`：原子交换，返回旧值。
     #[jvm_boundary]
     pub fn getAndSetInt(&self, o: Object, offset: i64, x: i32) -> Result<i32> {
-        Ok(_word_rmw(&o, offset, "getAndSetInt:(Ljava/lang/Object;JI)I", &mut |_| Some(x)))
+        _word_rmw(&o, offset, "getAndSetInt:(Ljava/lang/Object;JI)I", &mut |_| Some(x))
     }
 
     /// `putIntOpaque` / `putIntRelease`：访问序变体——原子单元 SeqCst 存取（#42）不弱于
@@ -623,7 +677,7 @@ impl Unsafe {
     ///（compareAndExchangeLong 的同族对偶）。native。
     #[jvm_boundary]
     pub fn compareAndExchangeInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<i32> {
-        Ok(_word_rmw(&o, offset, "compareAndExchangeInt:(Ljava/lang/Object;JII)I", &mut |c| (c == expected).then_some(x)))
+        _word_rmw(&o, offset, "compareAndExchangeInt:(Ljava/lang/Object;JII)I", &mut |c| (c == expected).then_some(x))
     }
 
     /// `getIntAcquire(o, offset)`：acquire 读——原子单元 SeqCst 读（#42）不弱于 volatile /

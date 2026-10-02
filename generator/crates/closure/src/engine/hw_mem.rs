@@ -98,7 +98,9 @@ impl<'a> Engine<'a> {
         if self.hw_reads.insert(s, (i, res, rt)).is_some() {
             return;
         }
-        let pt = self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or_else(|| self.id(OBJECT));
+        // 签名多态：源实参按调用点描述符排布，引用实参一律按 Object 接入（与写入侧同）
+        let obj = self.id(OBJECT);
+        let pt = if self.is_poly(t) { obj } else { self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or(obj) };
         let a = Node::A(s, i);
         let cur = self.set_of(a);
         if !cur.is_empty() {
@@ -252,7 +254,13 @@ impl<'a> Engine<'a> {
         if self.man.is_handle_interpreter(&self.methods[m].key) { Gate::Handle } else { Gate::Offset }
     }
 
-    fn is_poly(&self, t: usize) -> bool {
+    /// 手写方法的内存读写按清单（`[facts.array_writes]` / `[facts.memory_reads]`）逐调用点建模
+    pub(super) fn memory_modeled(&self, m: usize) -> bool {
+        let n = &self.methods[m];
+        matches!(n.kind, Kind::Handwritten(_)) && (matches!(n.ret_model, RetModel::Read(_)) || self.man.array_writes(&n.key.to_string()).is_some())
+    }
+
+    pub(super) fn is_poly(&self, t: usize) -> bool {
         let key = &self.methods[t].key;
         self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)
     }
@@ -265,6 +273,17 @@ impl<'a> Engine<'a> {
         self.poly_writes.push(wn);
         for (fi, tid) in self.open_statics.clone() {
             self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 签名多态读取调用点：静态字段句柄没有 holder 坐标，结果另接按名打开的静态引用字段（之后打开的由 `open_static` 接入）
+    pub(super) fn poly_read(&mut self, res: Node, rt: u32) {
+        if self.poly_reads.contains(&(res, rt)) {
+            return;
+        }
+        self.poly_reads.push((res, rt));
+        for (fi, _) in self.open_statics.clone() {
+            self.flow(Node::F(fi), res, rt);
         }
     }
 
@@ -297,17 +316,22 @@ impl<'a> Engine<'a> {
         for wn in self.poly_writes.iter().copied().chain(mws).collect::<Vec<_>>() {
             self.flow(wn, Node::U(fi), tid);
         }
+        for (res, rt) in self.poly_reads.clone() {
+            self.flow(Node::F(fi), res, rt);
+        }
     }
 
     /// 实例字段 fi 可经偏移写入：实例字段偏移只能经按名取到的字段句柄 / MemberName（含方法句柄的字段访问器成员）、
-    /// 字段枚举或反序列化取得，这些来源同时决定字段不折叠（`field_open`）——两者是同一集合。
+    /// 字段枚举或反序列化取得（[`Ctx::field_offset_under`]）。手写体写入、边界类 / VM 状态字段的字节码外写入
+    /// 按 Rust 字段直接落地、不产出偏移，只使字段不折叠，不在此列——否则 Unsafe / 句柄解释器的写入值会经这些字段
+    /// 的未知接收者视图汇成全程序一个大值集。
     /// 方法句柄解释器（[`Gate::Handle`]）只写 DMH 所指字段：偏移须经字段句柄 / MemberName 取得，
     /// 只经反序列化放开的字段不算（反序列化经 FieldReflector 自身的 Unsafe 调用点写入）。
     /// 所属类推不出的字段按可写
     fn offset_exposed(&self, fi: usize, gate: Gate) -> bool {
         let Some((key, _)) = self.fields.get_index(fi) else { return true };
         let deser = gate == Gate::Offset && self.ctx.deser.get();
-        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_open_under(&i, self.ctx.fopen_all.get(), deser))
+        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_offset_under(&i, self.ctx.fopen_all.get(), deser))
     }
 
     /// 字段 fi 的偏移可经字节码外的途径取得、从而可按偏移读取：可按偏移写入的字段（[`Self::offset_exposed`]），

@@ -122,6 +122,9 @@ impl<'a> Engine<'a> {
             RetModel::Mirror
         } else if self.man.returns_superclass(&ks) {
             RetModel::Super
+        } else if self.man.returns_component_class(&ks) {
+            RetModel::Component
+
         } else if self.man.returns_receiver(&ks) {
             RetModel::Receiver
         } else if let Some(src) = self.man.memory_read(&ks) {

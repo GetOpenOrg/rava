@@ -186,6 +186,12 @@ classes = [
     # 分支经 SecureRandom.getSeed 拉入整条 JCA 链（random_support_impl.rs）。
     "jdk/internal/util/random/RandomSupport",
 
+    # 反射访问检查工具（纯 Java，0 个 ACC_NATIVE）。ensureMemberAccess 转调 Reflection.ensureMemberAccess
+    # （jdk/internal/reflect 已放行）；checkPackageAccess 族在安全管理器恒 null 时为空操作。消费方：
+    # AtomicReferenceFieldUpdaterImpl / AtomicIntegerFieldUpdater 构造器的访问检查、MethodHandles.Lookup。
+    # sun/ 前缀截断下 ensureMemberAccess 按字节码翻译而体内被调方不入闭包，运行期命中存根（TestFieldHandleOffsets）。
+    "sun/reflect/misc/ReflectUtil",
+
     # 平台枚举（纯 Java；initOS 取 JDK 构建期常量 "linux"）。消费方：ProcessImpl.<clinit> 的 OS 字段
     # （initStreams / 启动模式按平台分支）。边界截断下 <clinit> 不发射，CURRENT_OS 恒 null → NPE。
     "jdk/internal/util/OperatingSystem",
