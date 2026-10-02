@@ -170,6 +170,10 @@ fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lin
     if !supers.is_empty() {
         lines.push(format!("#[all_superclasses  = \"{}\"]", supers.join(";")));
     }
+    let hooks = ancestor_hooks(ctx, ci);
+    if !hooks.is_empty() {
+        lines.push(format!("#[ancestor_hooks    = \"{}\"]", hooks.join(";")));
+    }
     let layout = ancestor_fields_layout(ctx, ci);
     if !layout.is_empty() {
         let parts: Vec<String> = layout.iter().map(|(n, fs)| format!("{n}:{}", fs.join(","))).collect();
@@ -217,6 +221,22 @@ pub fn all_superclasses(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     }
     chain.reverse();
     chain
+}
+
+/// 本文件以别名引用的祖先：`本地名=定义名`。祖先 vtable 的 `__as_<名>` 钩子按祖先定义名
+/// 声明，宏据此取钩子名（类型名仍用本地名）
+fn ancestor_hooks(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    let mut bins: Vec<String> = superclass_chain(ctx, ci).iter().map(|c| c.name().to_string()).collect();
+    let tail = bins.last().map_or(ci.super_class(), |b| ctx.class(b).map_or("", |c| c.super_class())).to_string();
+    if !tail.is_empty() && tail != OBJECT {
+        bins.push(tail);
+    }
+    bins.iter()
+        .filter_map(|b| {
+            let (local, declared) = (ctx.short(b), ctx.declared(b));
+            (local != declared).then(|| format!("{local}={declared}"))
+        })
+        .collect()
 }
 
 /// 超类链上的祖先类名（直接父类在前；止于根类 / 注册表外 / 环）

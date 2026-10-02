@@ -88,6 +88,11 @@ impl<'a> EmitCtx<'a> {
     pub fn short(&self, binary: &str) -> String {
         self.ty.short(binary)
     }
+
+    /// 类的定义名（类自己文件里的 struct 名；跨文件全路径末段）
+    pub fn declared(&self, binary: &str) -> String {
+        self.ty.global_names().declared(binary)
+    }
 }
 
 impl<'a> EmitShared<'a> {

@@ -198,20 +198,6 @@ pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>
     Ok(ClassPrep { visible, overrides })
 }
 
-/// 伴生契约签名（取自手写 impl 文本）里的类型名：按名字反查到类后在本文件作用域认领
-fn claim_supplement_names(ctx: &EmitCtx<'_>, blocks: &[String]) {
-    for b in blocks {
-        for w in b.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-            if !w.starts_with(|c: char| c.is_ascii_uppercase()) {
-                continue;
-            }
-            if let Some(bin) = ctx.ty.binary_of(w) {
-                ctx.short(&bin);
-            }
-        }
-    }
-}
-
 /// 生成单类文件文本（串行形态：前置 → 类体）
 pub fn gen_class_rs(
     ctx: &EmitCtx<'_>,
@@ -261,7 +247,7 @@ pub fn class_text(
         fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site)).into_iter().map(MethodBlock::plain).collect();
     let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, overrides)?;
     method_blocks.extend(mb.method_blocks);
-    let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
+    let iface_lambda_blocks = mb.iface_lambda_blocks;
     inherited_segments(ctx, state, bodies, ci, &tps, visible, overrides, &mut method_blocks)?;
     // 方法声明记录由各方法段生成点给出（与文本最终形态解耦）
     let methods: Vec<EmittedMethod> = method_blocks.iter().filter_map(|b| b.decl.clone()).collect();
@@ -322,6 +308,5 @@ pub fn class_text(
         parts.push(String::new());
     }
 
-    claim_supplement_names(ctx, &iface_supp_blocks);
     Ok(ClassText { text: parts.join("\n"), methods })
 }

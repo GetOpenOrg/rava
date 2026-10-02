@@ -1,6 +1,8 @@
 //! 文件名字作用域：一个生成文件内类型名的认领表。
 //!
-//! 文件里每个类的显示名都经本作用域取得：首次取名即认领，同一文件内此后恒用同一名字；
+//! 文件里每个类的显示名都经本作用域取得：首次取名即认领，同一文件内此后恒用同一名字。
+//! 本文件的类先认领自己的定义名，结构化引用集按 binary 序预认领，其余类在渲染时认领；
+//! 定义名已被别的类占用时取令牌作本地别名。
 //! 认领记录（binary → 显示名、派生名后缀）就是该文件的导入来源。作用域只在本文件内
 //! 生效，类在别的文件里叫什么与此无关。
 //!
@@ -10,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
-use crate::short_names::ShortNames;
+use crate::short_names::{qualify, ShortNames};
 
 /// 类型名来源：binary → 显示名，显示名 → binary
 pub trait Names {
@@ -115,14 +117,26 @@ impl NameScope {
         }
     }
 
-    /// binary 的显示名：已认领直接返回，否则认领
+    /// binary 的显示名：已认领直接返回；否则认领——定义名空闲取定义名，被占用取令牌
+    /// （导入时 `use path::定义名 as 令牌;`），令牌也被占用时取限定名
     pub fn claim(&self, global: &ShortNames, binary: &str) -> String {
         let mut st = self.lock();
         if let Some(n) = st.by_bin.get(binary) {
             return n.clone();
         }
-        let name = global.short(binary).into_owned();
-        st.by_name.entry(name.clone()).or_insert_with(|| binary.to_string());
+        let free = |n: &str| !st.by_name.contains_key(n);
+        let declared = global.declared(binary);
+        let name = if free(&declared) {
+            declared
+        } else {
+            let token = global.short(binary).into_owned();
+            if free(&token) {
+                token
+            } else {
+                qualify(binary)
+            }
+        };
+        st.by_name.insert(name.clone(), binary.to_string());
         st.by_bin.insert(binary.to_string(), name.clone());
         name
     }
@@ -155,5 +169,15 @@ mod tests {
         let claims: Vec<_> = st.claims().collect();
         assert_eq!(claims, vec![("p/A", "A"), ("q/B$C", "B_C"), ("q/D", "D")]);
         assert_eq!(st.derived().collect::<Vec<_>>(), vec![("q/D", "__VTable")]);
+    }
+
+    #[test]
+    fn taken_declared_name_gets_alias() {
+        let g = ShortNames::default();
+        let s = NameScope::new("p/Test", &g);
+        assert_eq!(s.claim(&g, "q/Test"), "q_Test");
+        assert_eq!(s.claim(&g, "r/Test"), "r_Test");
+        assert_eq!(s.lookup("Test").as_deref(), Some("p/Test"));
+        assert_eq!(s.lookup("q_Test").as_deref(), Some("q/Test"));
     }
 }

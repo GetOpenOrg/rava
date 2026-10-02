@@ -25,7 +25,7 @@ pub struct ImportSite<'s> {
 
 /// 类在定义处的 Rust 名（导入路径末段）
 fn declared(ctx: &EmitCtx<'_>, binary: &str) -> String {
-    ctx.ty.global_names().short(binary).into_owned()
+    ctx.declared(binary)
 }
 
 /// 继承链顶（无父类的根类）：`__base` 自由函数恒可导入

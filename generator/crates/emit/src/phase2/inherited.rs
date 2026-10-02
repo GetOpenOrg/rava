@@ -74,7 +74,7 @@ fn forward_body(ctx: &EmitCtx<'_>, method: &EmittedMethod, owner_bin: &str, owne
     conv.extend(args.drain(n..));
     // trait 名按本文件作用域（派生名登记）；`__as_<名>` 是宏按定义处名字生成的方法名
     let vt = ctx.ty.derived(owner_bin, "__VTable");
-    let declared = ctx.ty.global_names().short(owner_bin);
+    let declared = ctx.declared(owner_bin);
     let mut call = format!("<Self as {vt}>::__as_{declared}(self).__impl_{}({})", method.rust_name, conv.join(", "));
     if let Some(inner) = result_inner(&ret) {
         if !inner.is_empty() && !is_prim(inner) {

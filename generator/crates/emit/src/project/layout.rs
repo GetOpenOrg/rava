@@ -101,7 +101,7 @@ impl UserLayout {
                 parent = parent.join(p);
             }
             lay.mod_tree.entry(parent.clone()).or_default().insert(mod_name.clone());
-            lay.reexport.entry(parent).or_default().insert((mod_name.clone(), ctx.short(c)));
+            lay.reexport.entry(parent).or_default().insert((mod_name.clone(), ctx.declared(c)));
             lay.entries.insert(c.clone(), UserEntry { path, pkg_parts, mod_name });
         }
         lay

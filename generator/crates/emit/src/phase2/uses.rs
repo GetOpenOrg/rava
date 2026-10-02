@@ -23,7 +23,7 @@ pub fn class_use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, ems: 
 /// [`class_use_path`] 的核心：`target` 为目标类的 (crate 名, crate 前缀) 视图（None = 无发射记录）
 pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, target: Option<(&str, &str)>, recv_crate: &str) -> String {
     // 全路径末段 = 定义处的名字（不在调用方作用域认领）
-    let short = ctx.ty.global_names().short(binary);
+    let short = ctx.declared(binary);
     let segs: Vec<&str> = binary.split('/').collect();
     let pkg = segs[..segs.len() - 1]
         .iter()

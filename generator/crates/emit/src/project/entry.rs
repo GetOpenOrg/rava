@@ -31,7 +31,7 @@ fn jrt_path(ctx: &EmitCtx<'_>, bin: &str) -> String {
     let mut segs: Vec<&str> = bin.split('/').collect();
     segs.pop();
     parts.extend(segs.iter().map(|p| safe_pkg_part(p)));
-    parts.push(ctx.short(bin));
+    parts.push(ctx.declared(bin));
     parts.join("::")
 }
 
@@ -64,7 +64,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
         let mut p = vec!["crate".to_string()];
         p.extend(e.pkg_parts.iter().cloned());
         p.push(e.mod_name.clone());
-        p.push(ctx.short(c));
+        p.push(ctx.declared(c));
         out.push(format!(
             "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
             p.join("::"),
@@ -167,7 +167,7 @@ pub fn write_main(
     let Some((main_bin, main_e)) = user.entries.first() else {
         return Err(crate::error::EmitError::Input("无用户类：无法确定入口".into()));
     };
-    let main_short = ctx.short(main_bin);
+    let main_short = ctx.declared(main_bin);
     let use_path = if main_e.pkg_parts.is_empty() {
         format!("{}::{main_short}", main_e.mod_name)
     } else {

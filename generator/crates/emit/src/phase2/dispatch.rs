@@ -318,7 +318,7 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
 
 /// 泛型类的登记路径实参：每个类型形参取 Object
 fn object_turbofish(ctx: &EmitCtx<'_>, text: &str, bin: &str) -> String {
-    let Some(g) = struct_generics(text, &ctx.ty.global_names().short(bin)) else { return String::new() };
+    let Some(g) = struct_generics(text, &ctx.declared(bin)) else { return String::new() };
     let n = g.split(',').filter(|p| !p.trim().is_empty()).count();
     format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
 }

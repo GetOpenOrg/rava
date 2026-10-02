@@ -38,8 +38,6 @@ pub struct MethodBlocks {
     pub method_blocks: Vec<MethodBlock>,
     /// 接口载体擦除固有 impl 块（G-10 lambda 体 / 私有实例方法）
     pub iface_lambda_blocks: Vec<String>,
-    /// 接口伴生契约补发声明（同时在 `method_blocks` 中；独立成表供导入兜底扫描）
-    pub iface_supp_blocks: Vec<String>,
 }
 
 /// 待发射方法：本类声明 / 手写覆盖合成的祖先副本 / 祖先与接口方法的展开副本；
@@ -248,13 +246,38 @@ pub fn emit_method_blocks(
     if let Some(hw) = ctx.input.handwritten.get(ci.name()) {
         for name in &plan.iface_supplement {
             let Some((params, ret)) = hw.iface_method_sigs.get(name) else { continue };
+            let (params, ret) = (supp_names(ctx, hw, params), supp_names(ctx, hw, ret));
             let recv = if params.is_empty() { "&self".to_string() } else { format!("&self, {params}") };
             let supp = format!("{SUPP_NOTE}\npub fn {name}({recv}) -> {ret};");
-            out.method_blocks.push(MethodBlock::plain(supp.clone()));
-            out.iface_supp_blocks.push(supp);
+            out.method_blocks.push(MethodBlock::plain(supp));
         }
     }
     Ok(out)
+}
+
+/// 伴生签名文本里的类名换成本文件作用域的名字（按手写文件 use 表解析出的 binary 认领）
+fn supp_names(ctx: &EmitCtx<'_>, hw: &input::handwritten::HwEntry, text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let Some(c) = rest.chars().next() else { break };
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            i += c.len_utf8();
+            continue;
+        }
+        let len = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
+        let w = &rest[..len];
+        if let Some(b) = hw.iface_sig_refs.get(w).filter(|_| !text[..i].ends_with("::")) {
+            out.push_str(&text[last..i]);
+            out.push_str(&ctx.short(b));
+            last = i + len;
+        }
+        i += len;
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// `<clinit>` → `fn __clinit()`（类型存根 / VM 边界类 / 链外边界类不发，由判定层剔除）
