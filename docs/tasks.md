@@ -93,7 +93,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【当前】阶段 C 收官：闭包分析器（rust-closure-analyzer）── 用户 2026-10-01 决定先做完本阶段
 │   │
 │   ├─ 🔄 C6 后续（c6-generic-closure 4173cebd，2026-10-01-c4-regression-fixes.md）
-│   │     ├─ 🔄 TestAnnoNestedArray null_recv 违例（分析判恒空、运行期非空，属可靠性缺陷）
+│   │     ├─ 🔄 TestAnnoNestedArray null_recv 违例：已修 33080701（未入流图读取点用虚序号参与未建模派生），抽查中
 │   │     └─ 🔄 泛型辅助 fn 的闭包形参推断；hw_untyped_sites：chain 0 ✅，camel 62 条逐组说明
 │   │
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
