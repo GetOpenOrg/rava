@@ -40,9 +40,11 @@
 
 ## 二、栈遍历组（类 ③）
 
-帧源 `runtime/java_runtime/src/vm_stack.rs`：真实 Rust 栈 → Java 帧（符号 → 声明类 → java_meta 方法表对位，
-同一 Java 方法的派发包装 / `__impl_` 体归并为一帧，闭包帧不成帧）。Reflection.getCallerClass 的帧解析
-同迁于此。
+帧源 `runtime/java_runtime/src/vm_stack.rs`：真实 Rust 栈 → Java 帧。frames-unify 起改走发射层行表（帧位置 →
+(帧归属类, 方法名, 描述符) → java_meta 方法表），与 fillInStackTrace 同一来源；下文按符号解析的修复（`__impl_` /
+`__default_` 前缀、`X__inner` / `X__m_base`、派发入口规则、`MethodMeta.dispatched`）随符号解析整段删除，其语义由
+行表自然给出（方法体 token 保留原 span，宏生成的外壳不带行标记），见 regress2-notes §10.1a。Reflection.getCallerClass
+的帧解析同迁于此。
 
 - **SecurityManager.getClassContext**（`security_manager_impl.rs`）＝ `JVM_GetClassContext`：最上方的 Java 帧须是
   getClassContext 本身，否则抛 InternalError（消息同 HotSpot）；然后逐帧取持有类，排除 native 帧和安全栈遍历

@@ -16,27 +16,20 @@ fn _internal_error(msg: &str) -> JvmError {
     }
 }
 
-/// HotSpot `Method::is_ignored_by_security_stack_walk`。
-fn _ignored_by_security_walk(f: &crate::vm_stack::JavaFrame) -> bool {
-    (f.class == "java/lang/reflect/Method" && f.method.name == "invoke")
-        || f.class_extends("jdk/internal/reflect/MethodAccessorImpl")
-        || crate::anno_pool::has_annotation(&f.class, f.method.annotations, "Ljava/lang/invoke/LambdaForm$Compiled;")
-}
-
 impl SecurityManager {
     /// native `getClassContext()`：调用栈上各帧的持有类（自调用者起）。
     #[jvm_native]
     pub fn getClassContext(&self) -> Result<JArray<Class>> {
         let frames = crate::vm_stack::capture_java_frames();
-        // vframeStream 自 getClassContext 帧起（其上为本数据面自身的 Rust 帧，不成 Java 帧）
+        // vframeStream 自 getClassContext 帧起（本 native 方法的手写帧；其上为数据面自身的 Rust 帧，不成 Java 帧）
         let Some(start) = frames.iter()
             .position(|f| f.class == "java/lang/SecurityManager" && f.method.name == "getClassContext")
         else {
             return Err(_internal_error("JVM_GetClassContext must only be called from SecurityManager.getClassContext"));
         };
         let classes: Vec<Class> = frames[start..].iter()
-            .filter(|f| !f.is_native() && !_ignored_by_security_walk(f))
-            .map(|f| Class::for_class(String::from(f.class.as_str())))
+            .filter(|f| !f.is_native() && !f.is_ignored_by_security_stack_walk())
+            .map(|f| Class::for_class(String::from(f.class)))
             .collect();
         Ok(JArray::from(classes))
     }
