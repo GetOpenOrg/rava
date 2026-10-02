@@ -150,20 +150,41 @@ pub fn capture_java_frames() -> Vec<JavaFrame> {
             continue;
         }
         let Some(seg) = parsed.method.as_deref() else { continue };
-        let Some(method) = java_method_of(&parsed.class, seg) else { continue };
-        if !executes_body(&parsed.class, seg, method) {
+        let Some(row) = java_method_of(&parsed.class, seg) else { continue };
+        if !executes_body(&parsed.class, seg, row) {
             continue;
         }
-        let same = frames.last().is_some_and(|f| f.class == parsed.class && std::ptr::eq(f.method, method));
+        // 帧归属方法体的声明类（HotSpot 帧的 method holder）：注入本类的接口 default 体归声明接口；
+        // 继承转发行只是转发外壳（体在声明类的帧上执行），不成帧
+        let (class, method) = if !row.default_of.is_empty() {
+            (row.default_of.to_owned(), declared_row(row.default_of, row).unwrap_or(row))
+        } else if row.inherited {
+            continue;
+        } else {
+            (parsed.class, row)
+        };
+        // 类上虚方法的公开 `X::m` 只是 vtable 派发入口（方法体在 `__impl_m` / `X__m_base` / vtable impl）：
+        // 上一帧是另一类的同签名方法即派发落到了覆盖实现，入口本身不成帧
+        let dispatched_override = parsed.dispatch_entry && row.dispatched
+            && frames.last().is_some_and(|f| f.class != class && f.method.name == method.name && f.method.descriptor == method.descriptor);
+        if dispatched_override {
+            continue;
+        }
+        let same = frames.last().is_some_and(|f| f.class == class && std::ptr::eq(f.method, method));
         if same && !group.contains(&symbol) {
             group.push(symbol);
             continue;
         }
         group.clear();
         group.push(symbol);
-        frames.push(JavaFrame { class: parsed.class, method });
+        frames.push(JavaFrame { class, method });
     }
     frames
+}
+
+/// `class` 以 `row` 的 (名, 描述符) 声明的方法行。
+fn declared_row(class: &str, row: &MethodMeta) -> Option<&'static MethodMeta> {
+    methods_of(class)?.iter().find(|m| !m.inherited && m.name == row.name && m.descriptor == row.descriptor)
 }
 
 /// 该 Rust 符号是否执行 Java 方法体（HotSpot 帧只属于正在执行的方法）。abstract 方法没有方法体，其符号只是
@@ -224,7 +245,7 @@ fn java_method_of(class: &str, seg: &str) -> Option<&'static MethodMeta> {
     } else {
         // 最长的 Java 名前缀（Java 名可含 `_`，如 `lambda$main$0` → `lambda_main_0`）
         let mut best: Option<(&'static str, usize)> = None;
-        for m in methods.iter().filter(|m| !m.inherited) {
+        for m in methods.iter() {
             let mangled = m.name.replace('$', "_");
             let hit = seg == mangled || (seg.starts_with(mangled.as_str()) && seg.as_bytes().get(mangled.len()) == Some(&b'_'));
             if hit && best.map_or(true, |(_, l)| mangled.len() > l) {
@@ -234,7 +255,9 @@ fn java_method_of(class: &str, seg: &str) -> Option<&'static MethodMeta> {
         let (name, len) = best?;
         (name, seg.get(len + 1..).unwrap_or(""))
     };
-    let mut candidates = methods.iter().filter(|m| !m.inherited && m.name == java_name);
+    // 本类声明行在前，非本类声明行（继承转发 / 注入 default）在后
+    let mut candidates = methods.iter().filter(|m| !m.inherited && m.name == java_name)
+        .chain(methods.iter().filter(|m| m.inherited && m.name == java_name));
     let first = candidates.next()?;
     if suffix.is_empty() || descriptor_suffix(first.descriptor) == suffix {
         return Some(first);
@@ -291,6 +314,8 @@ fn descriptor_suffix(descriptor: &str) -> std::string::String {
 ///   抛 IllegalCallerException（TestAtomics 服务器侧 EIIE 根因）；
 /// - 从右向左跳过方法/函数段（小写或下划线开头、空段），首个大写开头段 = 类型段；
 /// - 类型段的 `_` 是内部类 `$` 分隔（Java 类名不含下划线，宏对嵌套类即此命名）；
+/// - 类型段的 `__` 之后是宏派发设施后缀：`X__inner`（存储类型）归 X，`X__m_base`（方法体自由函数）
+///   归 X 的方法 m；
 /// - 包段末段的「类文件 stem」（snake(类简单名)，如 atomic_reference / reflection /
 ///   method_handles）不是 Java 包——codegen 每类一文件，类型自身模块名恰是 stem，
 ///   归一化比较（去 `_`/`$` 后小写相等）命中即剥掉；不命中（非 java_runtime 形态）保留；
@@ -306,6 +331,8 @@ struct ParsedSymbol {
     class: std::string::String,
     method: Option<std::string::String>,
     closure: bool,
+    /// 类型上的固有方法 `X::m`（非 trait 限定、非宏派发设施、非 `__` 隐藏体）：虚方法的派发入口形态
+    dispatch_entry: bool,
 }
 
 fn parse_symbol(symbol: &str) -> Option<ParsedSymbol> {
@@ -352,8 +379,23 @@ fn parse_symbol(symbol: &str) -> Option<ParsedSymbol> {
     let tail = strip_generic_groups(symbol);
     let tail_segs: Vec<&str> = tail.split("::").filter(|s| !s.is_empty()).collect();
     let closure = tail_segs.iter().any(|s| s.starts_with("{closure"));
-    let method = tail_segs.iter().rev().find(|s| !s.starts_with('{')).map(|s| (*s).to_owned());
-    let type_name = segs[idx - 1].replace('_', "$");
+    let mut method = tail_segs.iter().rev().find(|s| !s.starts_with('{')).map(|s| (*s).to_owned());
+    // java_class! 的派发设施（宏命名 `<类>__<后缀>`）：`<类>__inner` 是对象存储类型，其 vtable impl
+    // 即该类的方法；`<类>__<方法>_base` 是方法体所在的自由函数（vtable-safe 覆盖体 / super 调用目标）
+    let dispatch_entry = !symbol.contains(" as ") && !symbol.contains("<impl ") && !segs[idx - 1].contains("__")
+        && method.as_deref().is_some_and(|m| !m.starts_with("__"));
+    let raw_type = match segs[idx - 1].split_once("__") {
+        Some((ty, "inner")) => ty,
+        Some((ty, rest)) => match rest.strip_suffix("_base") {
+            Some(m) if !m.is_empty() => {
+                method = Some(m.to_owned());
+                ty
+            }
+            _ => segs[idx - 1],
+        },
+        None => segs[idx - 1],
+    };
+    let type_name = raw_type.replace('_', "$");
     let mut pkg: Vec<std::string::String> = Vec::new();
     for seg in &segs[1..idx - 1] {
         if seg.is_empty() {
@@ -378,9 +420,9 @@ fn parse_symbol(symbol: &str) -> Option<ParsedSymbol> {
     }
     if pkg.is_empty() {
         // 无名包：只对用户 crate 成立（JDK 类恒在具名包）
-        return if in_runtime { None } else { Some(ParsedSymbol { class: type_name, method, closure }) };
+        return if in_runtime { None } else { Some(ParsedSymbol { class: type_name, method, closure, dispatch_entry }) };
     }
-    Some(ParsedSymbol { class: format!("{}/{}", pkg.join("/"), type_name), method, closure })
+    Some(ParsedSymbol { class: format!("{}/{}", pkg.join("/"), type_name), method, closure, dispatch_entry })
 }
 
 /// 跨模块 impl 形态 `mod::<impl Type<T>>::m` / `mod::<impl Trait for Type>::m`

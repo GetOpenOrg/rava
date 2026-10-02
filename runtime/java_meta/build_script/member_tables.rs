@@ -113,9 +113,14 @@ pub(crate) struct MethodMeta {
     annotation_default: Vec<u8>,
     /// Signature 属性（泛型签名，Method / Constructor.signature 数据源）；无则空串
     signature: String,
-    /// 继承成员行（`inherited_from`：超类型声明、展平到本类块供分派 / MethodHandle 解析）；
+    /// 继承成员行（`inherited_from`：超类型声明、展平到本类块供分派 / MethodHandle 解析；
+    /// `default_of`：注入本类的接口 default 方法体，声明者为该接口）；
     /// 不属本类声明面（getDeclaredMethods 过滤）。
     inherited: bool,
+    /// 注入本类的接口 default 方法体的声明接口（`default_of`）；本类声明 / 继承转发行为空串
+    default_of: String,
+    /// 经 vtable 派发（`virtual_in` 槽位）：类上公开的同名方法只是派发入口，方法体另有符号
+    dispatched: bool,
 }
 
 /// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
@@ -164,7 +169,11 @@ pub(crate) fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<Method
                 param_annotations: raw("raw_param_annotations"),
                 annotation_default: raw("raw_annotation_default"),
                 signature: extract_key(window, "generic_signature").unwrap_or_default(),
-                inherited: extract_key(window, "inherited_from").is_some(),
+                // 继承转发行与注入本类的接口 default 方法体（`default_of`）都不是本类声明
+                inherited: extract_key(window, "inherited_from").is_some()
+                    || extract_key(window, "default_of").is_some(),
+                default_of: extract_key(window, "default_of").unwrap_or_default(),
+                dispatched: extract_key(window, "virtual_in").is_some(),
             });
         }
     }
@@ -211,7 +220,7 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
             modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
             exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
             annotations: Vec::new(), param_annotations: Vec::new(), annotation_default: Vec::new(),
-            signature: String::new(), inherited: false,
+            signature: String::new(), inherited: false, default_of: String::new(), dispatched: false,
         });
     }
     methods
@@ -236,9 +245,9 @@ pub(crate) fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
         for m in methods {
             let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
             out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {} }},\n",
+                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {}, default_of: {:?}, dispatched: {} }},\n",
                 m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
-                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited,
+                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited, m.default_of, m.dispatched,
             ));
         }
         out.push_str("    ]),\n");

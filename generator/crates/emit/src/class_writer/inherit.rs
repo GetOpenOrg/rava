@@ -177,7 +177,8 @@ pub(super) fn interface_default_inheritance<'c>(
         let e = Emitted { method: Cow::Owned(adapted), owner: ici, index: method_index(ici, dm) };
         // 槽位归属：祖先类已经由（别的接口的）default 注入同一槽位时覆盖那一槽位（JVM 选最具体
         // default 的结果须经祖先 vtable 派发）；否则本类新开槽位
-        let extra = slot_extra(cx, &e.method, &rust);
+        let mut extra = slot_extra(cx, &e.method, &rust);
+        extra.default_of = ici.name().to_string();
         let in_cc = chain_all(ctx, ci) || ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
         let mut text = None;
         if in_cc {

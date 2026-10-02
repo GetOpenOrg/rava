@@ -50,6 +50,14 @@ fn java_method_name(line: &str) -> Option<&str> {
     rest.split_once('"').map(|(v, _)| v)
 }
 
+/// `#[java_method(...)]` 的 `default_of`（注入本类的接口 default 方法体的声明接口）
+fn default_owner(line: &str) -> Option<&str> {
+    let at = line.find("#[java_method(")?;
+    let rest = &line[at..];
+    let k = rest.find(" default_of = \"")? + " default_of = \"".len();
+    rest[k..].split_once('"').map(|(v, _)| v)
+}
+
 /// 行尾 ` // line N` 的 N
 fn line_mark(line: &str) -> Option<u32> {
     let (_, n) = line.rsplit_once(MARK)?;
@@ -90,7 +98,9 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
             source = v.to_string();
         }
         if let Some(name) = java_method_name(line) {
-            let entry = (class.clone(), name.to_string(), source.clone());
+            // 帧归属方法体的声明类：注入的接口 default 体归声明接口（HotSpot 帧的 method holder）
+            let owner = default_owner(line).unwrap_or(&class);
+            let entry = (owner.to_string(), name.to_string(), source.clone());
             let idx = match out.methods.iter().position(|m| *m == entry) {
                 Some(p) => p as u32,
                 None => {
@@ -185,5 +195,24 @@ mod tests {
         assert_eq!(t.rows, vec![(7, 0, 0), (9, 0, 7), (11, 0, 8), (13, 1, 0), (14, 1, 3), (16, NO_METHOD, 0)]);
         assert!(scan("x.rs", "fn main() {}\n").is_none());
         assert!(render(&[t]).contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"A.java\"), "));
+    }
+
+    #[test]
+    fn injected_default_body_belongs_to_interface() {
+        let text = [
+            "rava_macros::java_class! {",
+            "    #[binary_name       = \"p/C\"]",
+            "    #[source            = \"C.java\"]",
+            "    impl C {",
+            "        #[java_method(name = \"m\", descriptor = \"()V\", access = \"public\", virtual_in = \"C\", default_of = \"p/I$J\")]",
+            "        pub fn m(&self) -> Result<()> {",
+            "            g()?; // line 4",
+            "        }",
+            "    }",
+            "}",
+        ]
+        .join("\n");
+        let t = scan("user/src/c.rs", &text).expect("有标记");
+        assert_eq!(t.methods, vec![("p/I$J".to_string(), "m".to_string(), "C.java".to_string())]);
     }
 }

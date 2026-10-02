@@ -34,6 +34,10 @@ pub struct MethodMeta {
     /// Signature 属性（泛型签名）；无则空串
     pub signature:   &'static str,
     pub inherited:   bool,
+    /// 注入本类的接口 default 方法体的声明接口（binary name）；本类声明 / 继承转发行为空串
+    pub default_of:  &'static str,
+    /// 经 vtable 派发的虚方法（`virtual_in` 槽位）：类上公开的同名方法只是派发入口，方法体另有符号
+    pub dispatched:  bool,
 }
 
 /// 嵌套元数据（InnerClasses 本类条目 + EnclosingMethod）。

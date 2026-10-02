@@ -21,6 +21,7 @@ public class TestClassContextDispatch {
 
     interface WithDefault {
         default String viaDefault(Probe p) { return p.context(); }
+        default String traceTop() { return new Throwable().getStackTrace()[0].getClassName(); }
     }
 
     static class UsesDefault implements WithDefault {}
@@ -36,6 +37,25 @@ public class TestClassContextDispatch {
 
     static class Derived extends Base {
         String run(Probe p) { return p.context(); }
+    }
+
+    static class SuperCall extends Derived {
+        String run(Probe p) { return super.run(p); }
+    }
+
+    static class InheritsRun extends Derived {}
+
+    static class Concrete {
+        String hook(Probe p) { return "base"; }
+    }
+
+    static class Hooked extends Concrete {
+        String hook(Probe p) { return p.context(); }
+    }
+
+    static class Delegator extends Concrete {
+        final Concrete inner = new Hooked();
+        String hook(Probe p) { return inner.hook(p); }
     }
 
     interface Chain extends Action {}
@@ -55,6 +75,16 @@ public class TestClassContextDispatch {
         Base b = new Derived();
         System.out.println("abstract = " + b.run(p));
         System.out.println("template = " + b.template(p));
+        System.out.println("super call = " + new SuperCall().run(p));
+        InheritsRun ir = new InheritsRun();
+        System.out.println("inherited = " + ir.run(p));
+        Concrete hk = new Hooked();
+        System.out.println("concrete override = " + hk.hook(p));
+        Concrete dl = new Delegator();
+        System.out.println("delegation = " + dl.hook(p));
+        System.out.println("default via class = " + new UsesDefault().viaDefault(p));
+        System.out.println("declared in implementor = " + UsesDefault.class.getDeclaredMethods().length);
+        System.out.println("default trace top = " + new UsesDefault().traceTop());
         Chain c = new ChainImpl();
         System.out.println("sub-interface = " + c.act(p));
         Action l = q -> q.context();
