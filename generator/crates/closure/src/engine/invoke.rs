@@ -133,7 +133,9 @@ impl<'a> Engine<'a> {
     /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
     fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
-            self.fenum_pending.insert(cls);
+            if self.fenum_pending.insert(cls) {
+                self.offset_reads_ready();
+            }
             return;
         }
         match cls {

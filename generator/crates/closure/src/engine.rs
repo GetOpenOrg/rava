@@ -340,6 +340,10 @@ pub struct Engine<'a> {
     open_statics: Vec<(usize, u32)>,
     /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
     mirror_writes: HashMap<u32, Vec<Node>>,
+    /// 目标字段尚未开放的实例字段偏移写入（字段 → (写入值节点, 字段节点, 字段类型)），字段开放时接上
+    offset_waits: HashMap<usize, Vec<(Node, Node, u32)>>,
+    /// 字段偏移尚未取得的按偏移读取（字段 → (字段节点, 读取结果节点, 结果类型)），偏移可得时接上
+    offset_read_waits: HashMap<usize, Vec<(Node, Node, u32)>>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑

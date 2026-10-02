@@ -440,7 +440,8 @@ resets = [
 
 [facts.memory_reads]
 # 手写方法的返回值按 VM 语义读自形参 src 所指对象（形参序号按描述符，0 起，不含接收者）：
-# 数组取其元素，对象取其引用实例字段（偏移只能指向这些位置）。分析器按调用点接入，替代手写返回的
+# 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
+# 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
 # Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
