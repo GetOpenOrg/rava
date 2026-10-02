@@ -164,7 +164,8 @@ pub(super) fn gen_lambda(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog,
     for s in cap_stmts {
         sim.emit(raw_stmt(s))?;
     }
-    let body = super::lambda_body::closure_body(env, sim, &lam, &call)?;
+    let hidden = env.ctx.hooks.lambda_class_name(site.pc).unwrap_or_else(|| env.ctx.code_owner.to_string());
+    let body = super::lambda_body::closure_body(env, sim, &lam, &call, &hidden)?;
     let value = super::lambda_body::boxed_closure(env, log, site, &lam, body)?;
     let var = format!("__lam_{idx}");
     sim.emit(crate::build::let_typed(crate::build::id(&var)?, Some(sim::exprs::object_type()?), value))?;

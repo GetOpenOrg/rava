@@ -468,6 +468,42 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
 - 边界用例 `tests/e2e/34_concurrency/TestThreadContextLoaderInit.java`（期望为 JDK 21 实测）：只建线程、字节码不直接调用
   `setContextClassLoader`，读主线程与子线程的上下文加载器（非 null、相同、AppClassLoader）。
 
+**CallerSensitive 经方法引用 / lambda 的调用者类**（生成器 + 分析侧同步）。
+
+- JDK 21 语义：方法引用 `MethodHandles::lookup` / `m::invoke` / `Class::forName` 的 CS 调用由 lambda 隐藏类
+  `Host$$Lambda/0x…` 发出，调用者 = 该隐藏类（宿主的巢成员，访问宿主及其嵌套类 private 成员放行，访问他顶层类 private 抛
+  IAE，消息带隐藏类名）；lambda 体内的 CS 调用调用者 = 宿主类（体是宿主的 synthetic 方法，本就由字节码调用点压栈）。
+- 生成器：`invoke/bind.rs` 拆出 `caller_sensitive_wrap_as(…, caller)`；`sim/dynamic/lambda_body.rs::closure_body` 在实现方法
+  为 CS 声明时把转接体包成 `__caller_sensitive("<lambda 隐藏类名>", || …)`，隐藏类名取 `hooks.lambda_class_name(pc)`（与
+  lambda 对象登记的类名同源）。
+- 分析侧：`engine/lambda.rs::lambda_step` 在实现方法句柄解析到 CS 声明时置 `cs.lambda_site = (lambda 类 id, name, desc)`，
+  `engine/caller.rs::caller_edge` 对匹配的边以 lambda 类镜像为调用方并视为已压栈；`invoke()` 进出时保存 / 恢复该字段，
+  不串到嵌套调用。
+- 边界用例 `tests/e2e/62_reflection/TestCallerSensitiveMethodRef.java`（期望为 JDK 21 实测，IAE 消息中 `/0x…` 规范化）。
+
+**CallerSensitive 方法句柄路径：b3 与 T2 的边界**（BindCaller 改动前写定）。
+
+JDK 21 链条：`Lookup.findStatic/findVirtual/unreflect` → `getDirectMethodCommon` → `maybeBindCaller`（MemberName 带
+`MN_CALLER_SENSITIVE` 才进入；受限 lookup 抛 IAE）→ `MethodHandleImpl.bindCaller` → 有 `@CallerSensitiveAdapter`
+（同名、末尾追加 `Class` 参数）走适配器 + `insertArguments(lookupClass)`；无适配器（如 `Field.get`）走
+`bindCallerWithInjectedInvoker` → `makeInjectedInvoker(host)`（以 ASM 模板 `generateInvokerTemplate` 定义隐藏巢成员类
+`Host$$InjectedInvoker/0x…`）→ `findStatic(invoker, "invoke_V")`。反射 `Method.invoke` 无适配器的 CS 方法经
+`reflectiveInvoker` 取 `reflect_invoke_V`。
+
+- **b3（调用者语义）负责**：
+  - 运行期 `MethodHandleNatives.init` / `resolve` 为带 `@CallerSensitive` 的方法置 `MN_CALLER_SENSITIVE`（HotSpot 两处都置），
+    此后受限 lookup 的 IAE、适配器路由、`lookupClass` 作调用者均由字节码自然得出；
+  - 注入调用器的类定义点：`makeInjectedInvoker` 登记为 `class_definition` 内建——运行期按宿主登记 VM 定义的隐藏类
+    `Host$$InjectedInvoker/0x…`（超类 Object、巢主 = 宿主、加载器与包同宿主），其两个静态方法取支持类（`java_support`，
+    模板方法的 Java 源，字节码翻译）的实现，并以该隐藏类为调用者压栈；分析侧以清单事实给出「该定义点返回模板类镜像」，
+    使 `findStatic(invoker, "invoke_V")` / `reflect_invoke_V` 按名解析到支持类方法；
+  - `generateInvokerTemplate` 唯一消费方改由 VM 承载后登记为 `bytecode_generator` 内建（返回空模板），ASM 不再在
+    `BindCaller.<clinit>` 运行期执行；ASM 链出闭包是这一语义改动的结果，不是规模收窄手段。
+- **T2（闭包规模）负责**：`findStatic` / `bindCaller` → BindCaller 的可达性收窄（例如按解析到的成员是否含 CS 方法剪
+  `maybeBindCaller` 分支）。约束：b3 置标记后 `isCallerSensitive` 不得被折叠为常量 false；`makeInjectedInvoker` /
+  `generateInvokerTemplate` 两个内建的登记由 b3 持有，T2 不另设截断。
+- 落地顺序：注入调用器与标记同一步合入（只置标记会让无适配器的 CS 方法经 MH 在运行期走 ASM / defineClass）。
+
 **待查精度项：另一扇出源**（登记，不在本步做）。TestAppClassLoader / TestAtomics / TestZonedDateTime /
 TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后仍稳定在 1450–1520 类，截
 `initSystemClassLoader` 或 `getURLStreamHandler@68` 都只降 4 类。起点（TestAtomics，`rava closure --why`）：

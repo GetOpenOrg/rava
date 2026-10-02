@@ -12,7 +12,9 @@ impl<'a> Engine<'a> {
         self.call_vals = Some(Rc::from(pargs));
         let wrapped = self.ref_caller_sensitive(mref);
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
+        let lambda = self.cs.lambda_site.take();
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
         self.call_vals = None;
     }
