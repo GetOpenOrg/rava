@@ -45,12 +45,53 @@ factories = [
 tags = [
     "java/util/Locale.forLanguageTag:(Ljava/lang/String;)Ljava/util/Locale;",
 ]
+# 束族与 LocaleData 访问器一一对应：`LocaleData.getXxx` 按 `Type.get{Text,Util}ResourcesPackage() + ".Xxx"`
+# 取束，CLDR 适配器取 `.../cldr` 包、JRE（FALLBACK）适配器取上一级包；java.time 文本与 DateFormatSymbols
+# 经 FALLBACK 适配器补缺，JDK 同时装载两族（`-Xlog:class+load` 实测 DateTimeFormatter 用例装载
+# cldr/FormatData、FormatData、JavaTimeSupplementary 及其 _en）。族的触发成员取对应访问器，访问器不可达不付代码税
 bundles = [
     "sun/text/resources/cldr/FormatData",
+    "sun/text/resources/FormatData",
+    # JRE FormatData 是 ParallelListResourceBundle：LocaleResources.getJavaTimeFormatData 经
+    # LocaleData.setSupplementary 并入 JavaTimeSupplementary 族
+    { base = "sun/text/resources/JavaTimeSupplementary", triggers = [
+        "sun/util/resources/LocaleData.setSupplementary",
+    ] },
     # 货币名 / 符号（L-2）：族自带触发成员——只有货币符号查询触达时才入选，数字格式用例不付
     # CurrencyNames（ROOT 束约 300 种货币）的代码税
     { base = "sun/util/resources/cldr/CurrencyNames", triggers = [
         "sun/util/locale/provider/LocaleResources.getCurrencyName",
+        "sun/util/resources/LocaleData.getCurrencyNames",
+    ] },
+    { base = "sun/util/resources/CurrencyNames", triggers = [
+        "sun/util/resources/LocaleData.getCurrencyNames",
+    ] },
+    { base = "sun/util/resources/cldr/TimeZoneNames", triggers = [
+        "sun/util/resources/LocaleData.getTimeZoneNames",
+    ] },
+    { base = "sun/util/resources/TimeZoneNames", triggers = [
+        "sun/util/resources/LocaleData.getTimeZoneNames",
+    ] },
+    { base = "sun/util/resources/cldr/LocaleNames", triggers = [
+        "sun/util/resources/LocaleData.getLocaleNames",
+    ] },
+    { base = "sun/util/resources/LocaleNames", triggers = [
+        "sun/util/resources/LocaleData.getLocaleNames",
+    ] },
+    { base = "sun/util/resources/cldr/CalendarData", triggers = [
+        "sun/util/resources/LocaleData.getCalendarData",
+    ] },
+    { base = "sun/util/resources/CalendarData", triggers = [
+        "sun/util/resources/LocaleData.getCalendarData",
+    ] },
+    { base = "sun/text/resources/BreakIteratorInfo", triggers = [
+        "sun/util/resources/LocaleData.getBreakIteratorInfo",
+    ] },
+    { base = "sun/text/resources/BreakIteratorResources", triggers = [
+        "sun/util/resources/LocaleData.getBreakIteratorResources",
+    ] },
+    { base = "sun/text/resources/CollationData", triggers = [
+        "sun/util/resources/LocaleData.getCollationData",
     ] },
 ]
 triggers = [
@@ -58,6 +99,7 @@ triggers = [
     "sun/util/locale/provider/LocaleResources.getNumberPatterns",
     # DateFormatSymbols.initializeData → LocaleData.getDateFormatData（月名 / 星期名，FormatData 束）
     "sun/util/resources/LocaleData.getDateFormatData",
+    "sun/util/resources/LocaleData.getNumberFormatData",
 ]
 
 # ── JCA 服务注册（K-JCA，docs/plans/2026-09-25-jca-service-registry.md）────────────────────
