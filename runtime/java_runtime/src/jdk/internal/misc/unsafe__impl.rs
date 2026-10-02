@@ -249,13 +249,16 @@ impl Unsafe {
         crate::ensure_class_initialized(&format!("{}", c.__get_name()))
     }
 
-    /// `shouldBeInitialized(Class)`：类是否已初始化。惰性 `__class_init` 协议
-    /// 下「未初始化」只在首次主动使用前可观察——对查询方恒「已初始化」
-    /// （false）等价于把初始化时机推迟到真实首次使用（静态字段访问器入口自带
-    /// `__class_init` 触发）。
+    /// `shouldBeInitialized(Class)`：类尚未完成初始化（HotSpot `should_be_initialized`）。调用方据此决定是否
+    /// 立即初始化：VarHandles.makeFieldHandle 的静态字段分支在创建句柄时初始化声明类，DirectMethodHandle
+    /// 据此选带初始化屏障的形态。不能恒答「已初始化」——那会把创建句柄时的初始化推迟到首次访问，
+    /// `<clinit>` 的副作用顺序与 JVM 不同。只对登记了初始化钩子的类作答（与 `ensureClassInitialized` 同一张表）。
     #[jvm_boundary]
-    pub fn shouldBeInitialized(&self, _c: Class) -> Result<bool> {
-        Ok(false)
+    pub fn shouldBeInitialized(&self, c: Class) -> Result<bool> {
+        if crate::_is_jnull_ref(&c) {
+            return Err(crate::error::JvmError::null_pointer());
+        }
+        Ok(crate::class_needs_initialization(&format!("{}", c.__get_name())))
     }
 
     /// `allocateInstance(Class)`：分配实例、不运行构造器（MH `newInvokeSpecial` 的

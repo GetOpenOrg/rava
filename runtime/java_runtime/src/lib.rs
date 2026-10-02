@@ -507,6 +507,14 @@ pub fn ensure_class_initialized(binary_name: &str) -> Result<()> {
     }
 }
 
+/// 类是否尚待初始化（`Unsafe.shouldBeInitialized` 语义：未完成初始化——含初始化中、曾失败）。只对登记了
+/// 初始化钩子的类作答：未登记的类不会经 `ensure_class_initialized` 初始化，答「无须初始化」与之一致
+pub fn class_needs_initialization(binary_name: &str) -> bool {
+    let dotted = binary_name.replace('/', ".");
+    let hooked = CLASS_INIT_HOOKS.with(|h| h.borrow().contains_key(dotted.as_str()));
+    hooked && !gil::clinit_done(&dotted.replace('.', "/"))
+}
+
 /// prelude：生成代码用 `use java_runtime::prelude::*;` 引入所有必要符号。
 pub mod prelude {
     #![allow(unused_imports)]
