@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use super::scan::{close_transitive, scan_file, FileFns};
+use super::scan::{close_transitive, file_rets, scan_file, FileFns};
 use super::*;
 
 /// crate 根模块（`lib.rs`）的宿主名
@@ -133,10 +133,59 @@ impl Handwritten {
         None
     }
 
+    /// 模块路径调用 `super::m::f(…)` / `crate::a::m::f(…)` 的返回类型：目标是模块单元或共置手写文件的
+    /// 顶层自由 fn。返回 (解析返回类型用的宿主 = 目标文件模块路径, 返回类型全路径)；目标不存在 / 无此 fn → None
+    pub fn module_fn_ret(&self, host: &str, path: &[String], f: &str) -> Option<(String, Vec<String>)> {
+        let m = module_of(host, path, self.units().contains_key(host))?.join("/");
+        let key = (Vec::new(), f.to_string());
+        if let Some(u) = self.units().get(&m) {
+            return u.rets.get(&key).map(|r| (m.clone(), r.clone()));
+        }
+        if !SUFFIXES.iter().any(|s| m.ends_with(s.trim_end_matches(".rs"))) {
+            return None;
+        }
+        let cached = self.file_rets.borrow().get(&m).cloned();
+        let rets = match cached {
+            Some(r) => r,
+            None => {
+                let content = std::fs::read_to_string(self.src.join(format!("{m}.rs"))).unwrap_or_default();
+                let r = match syn::parse_file(&content) {
+                    Ok(file) if !content.contains(GENERATED_MARK) => file_rets(&file, &self.prelude),
+                    _ => Default::default(),
+                };
+                let r = Rc::new(r);
+                self.file_rets.borrow_mut().insert(m.clone(), r.clone());
+                r
+            }
+        };
+        rets.get(&key).map(|r| (m, r.clone()))
+    }
+
     /// 定义了 fn `f` 的单元（VM 规则按 fn 名定位运行时实现）
     pub fn units_with_fn(&self, f: &str) -> Vec<String> {
         self.units().iter().filter(|(_, u)| u.fns.contains_key(f)).map(|(h, _)| h.clone()).collect()
     }
+}
+
+/// 手写文件里模块路径（`f` 之前的段）→ 目标文件的模块路径段。基准是宿主文件所在模块：模块单元即其宿主名；
+/// 类的共置手写文件是包模块的子模块（`_impl` / `_ext` 两个文件，`self::` 不唯一 → None）。
+/// `crate::` 从根起；每个 `super` 上溯一级；其余首段（外部 crate、未经 use 展开的名字）→ None
+fn module_of(host: &str, path: &[String], is_unit: bool) -> Option<Vec<String>> {
+    let own: Vec<String> = if host == CRATE_ROOT { vec![] } else { host.split('/').map(str::to_string).collect() };
+    let (mut base, rest) = match path.first().map(String::as_str) {
+        Some("crate") => (vec![], &path[1..]),
+        Some("self") if is_unit => (own, &path[1..]),
+        Some("super") => {
+            let k = path.iter().take_while(|s| *s == "super").count();
+            // 文件模块（单元：own；类：包下的 `<snake>_impl`）上溯 k 级
+            let up = if is_unit { k } else { k - 1 };
+            let pkg_len = if is_unit { own.len() } else { own.len().checked_sub(1)? };
+            (own[..pkg_len.checked_sub(up)?].to_vec(), &path[k..])
+        }
+        _ => return None,
+    };
+    base.extend(rest.iter().map(|s| s.strip_prefix("r#").unwrap_or(s).to_string()));
+    (!base.is_empty()).then_some(base)
 }
 
 #[cfg(test)]
@@ -161,5 +210,20 @@ mod tests {
         let mut out = BTreeSet::new();
         defined_types(&file.items, &mut out);
         assert_eq!(out, BTreeSet::from(["A", "B", "C", "D"].map(String::from)));
+    }
+
+    #[test]
+    fn module_paths_relative_to_host_file() {
+        let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // 类的共置手写：首个 super = 包
+        assert_eq!(module_of("java/lang/ClassLoader", &p(&["super", "thread_impl"]), false), Some(p(&["java", "lang", "thread_impl"])));
+        assert_eq!(module_of("java/lang/ClassLoader", &p(&["super", "super", "util", "x_impl"]), false), Some(p(&["java", "util", "x_impl"])));
+        assert_eq!(module_of("java/lang/ClassLoader", &p(&["self", "x"]), false), None);
+        // 模块单元：super = 上一级模块
+        assert_eq!(module_of("java/lang/object", &p(&["super", "thread_impl"]), true), Some(p(&["java", "lang", "thread_impl"])));
+        assert_eq!(module_of("java/lang/object", &p(&["self", "inner"]), true), Some(p(&["java", "lang", "object", "inner"])));
+        assert_eq!(module_of("x/Y", &p(&["crate", "java", "lang", "thread_impl"]), false), Some(p(&["java", "lang", "thread_impl"])));
+        assert_eq!(module_of("x/Y", &p(&["std", "mem"]), false), None);
+        assert_eq!(module_of("Y", &p(&["super", "super", "m"]), false), None);
     }
 }

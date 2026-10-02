@@ -200,6 +200,8 @@ pub struct Handwritten {
     cache: RefCell<HashMap<String, Rc<ClassHw>>>,
     /// 模块单元（见 `units.rs`；首次使用时载入）
     units: RefCell<Option<Rc<BTreeMap<String, Rc<ClassHw>>>>>,
+    /// 共置手写文件的顶层 fn 返回类型（文件模块路径 → 返回表；模块路径调用 `super::x_impl::f` 首次解析时载入）
+    file_rets: RefCell<HashMap<String, Rc<stype::LocalRets>>>,
     abbrev: HashMap<String, String>,
     pub errors: RefCell<Vec<String>>,
 }
@@ -297,6 +299,7 @@ impl Handwritten {
             prelude,
             cache: RefCell::new(HashMap::new()),
             units: RefCell::new(None),
+            file_rets: RefCell::new(HashMap::new()),
             abbrev,
             errors: RefCell::new(Vec::new()),
         }

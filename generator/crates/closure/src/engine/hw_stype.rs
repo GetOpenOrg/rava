@@ -33,7 +33,10 @@ impl Engine<'_> {
     pub(super) fn stype_desc(&self, host: &str, s: &SType) -> Result<String, StypeBreak> {
         let (base, m, path) = match s {
             SType::Named(t) => return self.resolve_tref(host, t).map(|c| format!("L{c};")).ok_or_else(|| StypeBreak::Base(t.0.join("::"))),
-            SType::Ret(t, m) => (self.resolve_tref(host, t).map(|c| format!("L{c};")).ok_or_else(|| StypeBreak::Base(t.0.join("::")))?, m, true),
+            SType::Ret(t, m) => match self.resolve_tref(host, t) {
+                Some(c) => (format!("L{c};"), m, true),
+                None => return self.module_fn_desc(host, t, m),
+            },
             SType::Field(b, f) => {
                 let d = self.stype_desc(host, b)?;
                 let Some(c) = obj_class(&d) else { return Err(StypeBreak::Value(format!("{d} 上的 {f}"))) };
@@ -73,6 +76,13 @@ impl Engine<'_> {
             Some(None) => Err(StypeBreak::Value(format!("{c}.{m} 手写返回非 Java 类型"))),
             None => Err(StypeBreak::Gap(format!("{c}.{m} 无此方法"))),
         }
+    }
+
+    /// 模块路径上的自由 fn（`super::thread_impl::f`）的返回描述符：按目标文件中 fn 的声明返回类型解析；
+    /// 路径不是手写模块 / 无此 fn → 基底断开；返回类型不是 Java 类 → 值断开
+    fn module_fn_desc(&self, host: &str, t: &TypeRef, m: &str) -> Result<String, StypeBreak> {
+        let Some((at, r)) = self.hw.module_fn_ret(host, &t.0, m) else { return Err(StypeBreak::Base(t.0.join("::"))) };
+        self.resolve_tref(&at, &TypeRef(r)).map(|c| format!("L{c};")).ok_or_else(|| StypeBreak::Value(format!("{}::{m} 手写返回非 Java 类型", t.0.join("::"))))
     }
 
     /// 超类型（自类在前）共置手写文件与模块单元中 `impl 该类型` 块里名为 `m` 的 fn：
