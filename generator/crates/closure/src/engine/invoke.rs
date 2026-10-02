@@ -109,12 +109,12 @@ impl<'a> Engine<'a> {
                 let mut hit = false;
                 for c in &classes {
                     if let Some((decl, desc)) = self.field_by_name(c, name) {
-                        self.open_field(MemberRef { owner: decl, name: name.to_string(), desc });
+                        self.handle_field(MemberRef { owner: decl, name: name.to_string(), desc });
                         hit = true;
                     }
                 }
                 if !hit {
-                    self.open_field_name(name);
+                    self.handle_field_name(name);
                 }
             }
         }
@@ -152,7 +152,7 @@ impl<'a> Engine<'a> {
                 while let Some(cls) = cur {
                     let Some(cf) = self.h.class(&cls) else { break };
                     for f in &cf.fields {
-                        self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                        self.handle_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
                     }
                     cur = cf.super_name.clone();
                 }

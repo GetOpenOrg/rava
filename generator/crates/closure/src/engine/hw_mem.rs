@@ -301,13 +301,37 @@ impl<'a> Engine<'a> {
 
     /// 实例字段 fi 可经偏移写入：实例字段偏移只能经按名取到的字段句柄 / MemberName（含方法句柄的字段访问器成员）、
     /// 字段枚举或反序列化取得，这些来源同时决定字段不折叠（`field_open`）——两者是同一集合。
-    /// 方法句柄解释器（[`Gate::Handle`]）只写 DMH 所指字段：偏移须经字段句柄 / MemberName 取得，
-    /// 只经反序列化放开的字段不算（反序列化经 FieldReflector 自身的 Unsafe 调用点写入）。
+    /// 方法句柄解释器（[`Gate::Handle`]）只读写 DMH 所指字段：DMH 字段访问器只能由按名查找 / 字段枚举取得的
+    /// 字段构造（[`Self::handle_field`]、全部放开）。字节码外写入（手写层写入、VM 状态、边界类）使字段不折叠，
+    /// 但不产生字段句柄；只经反序列化放开的字段也不算（反序列化经 FieldReflector 自身的 Unsafe 调用点读写）。
     /// 所属类推不出的字段按可写
     fn offset_exposed(&self, fi: usize, gate: Gate) -> bool {
         let Some((key, _)) = self.fields.get_index(fi) else { return true };
-        let deser = gate == Gate::Offset && self.ctx.deser.get();
-        self.ctx.field_info(key).is_none_or(|i| self.ctx.field_open_under(&i, self.ctx.fopen_all.get(), deser))
+        let Some(info) = self.ctx.field_info(key) else { return true };
+        match gate {
+            Gate::Offset => self.ctx.field_open_under(&info, self.ctx.fopen_all.get(), self.ctx.deser.get()),
+            Gate::Handle => {
+                self.ctx.fopen_all.get() || self.handle_fields.contains(key) || self.handle_names.contains(&key.name)
+            }
+        }
+    }
+
+    /// 按名查找 / 字段枚举取得字段 key 的字段句柄：字段不折叠，解释器口径的挂起读写随之接上
+    pub(super) fn handle_field(&mut self, key: MemberRef) {
+        let fresh = self.handle_fields.insert(key.clone());
+        self.open_field(key.clone());
+        if fresh {
+            self.offset_fields_opened(Some((&key.name, Some(&key))));
+        }
+    }
+
+    /// 按名查找的目标类推不出：任意类的同名字段都可取得字段句柄
+    pub(super) fn handle_field_name(&mut self, name: &str) {
+        let fresh = self.handle_names.insert(name.to_string());
+        self.open_field_name(name);
+        if fresh {
+            self.offset_fields_opened(Some((name, None)));
+        }
     }
 
     /// 字段 fi 的偏移可经字节码外的途径取得、从而可按偏移读取：可按偏移写入的字段（[`Self::offset_exposed`]），

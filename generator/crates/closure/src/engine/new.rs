@@ -167,6 +167,8 @@ impl<'a> Engine<'a> {
             reflect_field_names: BTreeSet::new(),
             field_strs: HashMap::default(),
             hw_written: BTreeSet::new(),
+            handle_fields: HashSet::default(),
+            handle_names: HashSet::default(),
             fwriter_live: false,
             cuts: Default::default(),
             probes: None,

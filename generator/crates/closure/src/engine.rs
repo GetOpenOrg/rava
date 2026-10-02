@@ -426,6 +426,9 @@ pub struct Engine<'a> {
     pub class_init: class_init::ClassInitFacts,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
+    /// 经按名查找 / 字段枚举取得字段句柄的字段与（目标类推不出时的）字段名：方法句柄解释器读写口径（`hw_mem::Gate::Handle`）
+    handle_fields: HashSet<MemberRef>,
+    handle_names: HashSet<String>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
