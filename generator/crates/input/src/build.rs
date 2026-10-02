@@ -82,7 +82,9 @@ pub struct ReflectFacts {
     pub consts: BTreeMap<String, BTreeSet<String>>,
     /// 全成员反射的类
     pub all_members: BTreeSet<String>,
-    /// 调用链方法体内的标识符形字符串常量（反射字段名候选）
+    /// 类 → 按名查字段点到的字段名（闭包分析器按值流求得）
+    pub fields: BTreeMap<String, BTreeSet<String>>,
+    /// 按名查字段目标类推不出时的字面量名（任意类的同名字段）
     pub field_names: BTreeSet<String>,
 }
 
@@ -235,15 +237,6 @@ fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
     visited
 }
 
-/// Python `str.isidentifier` 近似：首字符字母或 `_`，其余字母数字或 `_`
-fn is_identifier(s: &str) -> bool {
-    let mut it = s.chars();
-    match it.next() {
-        Some(c) if c.is_alphabetic() || c == '_' => it.all(|c| c.is_alphanumeric() || c == '_'),
-        _ => false,
-    }
-}
-
 /// 调用链上方法体的 ldc 字符串常量：(所在类, 字符串)。未改写的方法体直接读原字节码，不复制成 NormCode
 fn visited_strings<'c>(
     closure: &'c [Arc<ClassFile>],
@@ -360,7 +353,7 @@ impl<'a> BuildInput<'a> {
         Ok(out)
     }
 
-    fn reflect(&self, strings: &BTreeSet<(&str, &str)>) -> ReflectFacts {
+    fn reflect(&self) -> ReflectFacts {
         let f = self.facts;
         let mut consts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for r in &f.reflect_members {
@@ -369,11 +362,15 @@ impl<'a> BuildInput<'a> {
         for (owner, names) in &f.seeds.reflect_names {
             consts.entry(owner.clone()).or_default().extend(names.iter().cloned());
         }
-        let field_names = strings.iter().map(|(_, s)| *s).filter(|s| is_identifier(s)).map(str::to_string).collect();
+        let mut fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (owner, name) in &f.reflect_fields {
+            fields.entry(owner.clone()).or_default().insert(name.clone());
+        }
         ReflectFacts {
             consts,
             all_members: f.seeds.reflect_all.clone(),
-            field_names,
+            fields,
+            field_names: f.reflect_field_names.iter().cloned().collect(),
         }
     }
 
@@ -397,7 +394,7 @@ impl<'a> BuildInput<'a> {
         let normalized = self.normalize(&registry)?;
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
-        let reflect = self.reflect(&strings);
+        let reflect = self.reflect();
         let module_resources = crate::resources::derive(self.cp, strings.iter().copied());
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
@@ -431,16 +428,3 @@ impl<'a> BuildInput<'a> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::is_identifier;
-
-    #[test]
-    fn identifier_approximation() {
-        assert!(is_identifier("value"));
-        assert!(is_identifier("_x1"));
-        assert!(!is_identifier("1x"));
-        assert!(!is_identifier("a-b"));
-        assert!(!is_identifier(""));
-    }
-}

@@ -72,6 +72,7 @@ mod class_lookup;
 mod sealed;
 mod nest;
 mod method_lookup;
+mod field_lookup;
 mod pstrs;
 mod share;
 mod new;
@@ -380,6 +381,12 @@ pub struct Engine<'a> {
     named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
+    /// 按名查字段点到的字段（声明类, 名字），见 `field_lookup.rs`
+    pub reflect_fields: BTreeSet<(String, String)>,
+    /// 按名查字段目标类推不出时的字面量名（任意类的同名字段）
+    pub reflect_field_names: BTreeSet<String>,
+    /// String 字段各写入处的字符串常量（None = 有非常量写入）；名字经字段到达按名查找点时取用
+    field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
     /// 类初始化事实（`[facts.class_init]`）
     pub class_init: class_init::ClassInitFacts,
     /// 反射成员面：（类别, 成员）

@@ -33,7 +33,7 @@ fn mentions(v: &V, n: u32) -> bool {
     matches!(v, V::Ref { src, .. } if src.contains(&Src::Site(n)))
 }
 
-fn is_field(e: &Event) -> bool {
+pub(super) fn is_field(e: &Event) -> bool {
     matches!(e, Event::Field { .. })
 }
 

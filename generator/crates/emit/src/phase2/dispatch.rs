@@ -386,7 +386,12 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
         }
         let ci = ctx.ty.reg.get(bin).expect("已校验存在");
         let only: Option<BTreeSet<String>> = (!reflect.all_members.contains(bin)).then(|| {
-            let named = ci.fields().iter().filter(|f| f.is_static() && reflect.field_names.contains(&f.name)).map(|f| f.name.clone());
+            let looked = reflect.fields.get(bin.as_str());
+            let named = ci
+                .fields()
+                .iter()
+                .filter(|f| f.is_static() && (looked.is_some_and(|s| s.contains(&f.name)) || reflect.field_names.contains(&f.name)))
+                .map(|f| f.name.clone());
             SERIAL_PROTOCOL_FIELDS.iter().map(|s| s.to_string()).chain(named).collect()
         });
         onlys.push((bin, only));
