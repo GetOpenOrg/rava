@@ -130,6 +130,11 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
                             SType::Ret(t, last.clone())
                         })
                     }
+                    // 模块路径上的自由 fn（`super::x_impl::f(…)` / `crate::m::f(…)`）：返回类型由分析器按
+                    // 定义它的共置手写文件 / 模块单元的声明换上
+                    Some((last, head)) if last.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_') => {
+                        Some(SType::Ret(TypeRef(head.to_vec()), last.clone()))
+                    }
                     _ => None,
                 }
             }

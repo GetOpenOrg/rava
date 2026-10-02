@@ -431,7 +431,7 @@ pub struct Engine<'a> {
     /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
     hw_read_names: BTreeMap<String, BTreeSet<Node>>,
     /// `包/蛇形名` → 类（手写 `use super::<类>_impl` 模块引用的反查；首次使用时建立）
-    snake_index: Option<HashMap<String, String>>,
+    snake_index: std::cell::OnceCell<HashMap<String, String>>,
     /// 清单种子状态与输出
     pub seeds: SeedState,
     /// 已触发的 VM 规则（位图，见 `vmrules.rs`）

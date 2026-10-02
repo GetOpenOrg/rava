@@ -451,6 +451,23 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
 - 边界用例 `tests/e2e/53_io_api/TestBuiltinUrlProtocol.java`（期望为 JDK 21 实测）：file / FILE / jar / jrt / 未知协议的 URL
   构造，字符串 switch，`hashCode` 常量（含 "Aa" / "BB" 碰撞），非 ASCII 的 `Character.toLowerCase`（É、İ）与越界 `charAt`。
 
+**抽查 c1db3-fab05aaf 两败：`Thread.setContextClassLoader` 存根**（ThreadTest / TestParallelCapable）。
+
+- 现象：运行期 initPhase3 段（字段钩子 `__vm_init_phase3`，`Thread.<init>@284` 读 `contextClassLoader` 触发）调到存根
+  `Thread.setContextClassLoader`。`--why`：`initSystemClassLoader ← [handwritten] __vm_init_phase3 ← [field] Thread.<init>@284`
+  在闭包，同一钩子体里的 `super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)` 不在。
+- 根因：手写扫描给接收者定静态类型时，路径调用只认「类型路径 `T::f()`」与「本文件自由 fn `f()`」，**模块路径上的自由 fn**
+  （`super::x_impl::f()` / `crate::m::f()`）推不出静态类型（`srecv = None`），其上的 Java 方法调用丢回调。01572ce6 之前
+  `setContextClassLoader` 经加载器链扇出另有字节码路径入闭包，掩盖了这个缺口；收窄后暴露。不是折叠剪错分支。
+- 修复：`handwritten/stype.rs` 对小写末段的模块路径调用记 `SType::Ret(模块路径, fn)`；`hw_stype.rs::colocated_fn_ret` 按路径
+  解析定义它的手写文件——共置手写模块（`…::<x>_impl` / `_ext`，经 `class_of_module` 反查宿主类）或模块单元（`unit_fn`）——取该
+  自由 fn 声明的返回类型；`rtfn.rs::hw_fn_target` 同样把共置手写模块路径上的 fn 调用接成手写 fn 节点（原只认模块单元）。
+  `class_of_module` 的蛇形名索引改 `OnceCell`，可在只读推断中使用。
+- 实测：ThreadTest / TestParallelCapable 闭包含 `setContextClassLoader`（`← [dispatch] __vm_init_phase3@0`），类数 346 / 336 不变；
+  本机编译通过。
+- 边界用例 `tests/e2e/34_concurrency/TestThreadContextLoaderInit.java`（期望为 JDK 21 实测）：只建线程、字节码不直接调用
+  `setContextClassLoader`，读主线程与子线程的上下文加载器（非 null、相同、AppClassLoader）。
+
 **待查精度项：另一扇出源**（登记，不在本步做）。TestAppClassLoader / TestAtomics / TestZonedDateTime /
 TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后仍稳定在 1450–1520 类，截
 `initSystemClassLoader` 或 `getURLStreamHandler@68` 都只降 4 类。起点（TestAtomics，`rava closure --why`）：

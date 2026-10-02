@@ -166,7 +166,7 @@ impl<'a> Engine<'a> {
             field_enum_gaps: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
-            snake_index: None,
+            snake_index: std::cell::OnceCell::new(),
             vm_rules_fired: 0,
             hw_static_reads: HashSet::default(),
             seeds: SeedState::default(),
