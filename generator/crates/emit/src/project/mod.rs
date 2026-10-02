@@ -7,6 +7,7 @@
 pub mod entry;
 pub mod fs;
 pub mod layers;
+mod line_tables;
 pub mod layout;
 pub mod lib_crates;
 pub mod mod_tree;
@@ -261,6 +262,11 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("mod_tree");
     libs.write_crates(ctx, &mut w, out_dir)?;
     body_plan.write_crates(ctx, &mut w, out_dir)?;
+    // FS-E1：落盘文本的 Java 行表（拆层后各文件的最终行号）
+    let body_files = body_plan.files(out_dir);
+    let mut final_files = files;
+    final_files.extend(body_files.iter().map(|(p, t)| (p.as_path(), *t)));
+    line_tables::write(&mut w, out_dir, &final_files)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;

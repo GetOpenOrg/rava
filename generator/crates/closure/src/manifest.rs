@@ -58,6 +58,8 @@ pub enum Members {
 
 mod sysprops;
 mod names;
+mod indy_helpers;
+pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
 
@@ -106,8 +108,8 @@ pub struct Manifest {
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
-    /// concat / record toString 引用实参的字符串化入口（`[indy] concat_stringify`，`类.方法:描述符`）
-    concat_stringify: Option<String>,
+    /// 拼接 / record ObjectMethods 调用点的分量处理入口（`[indy]`，见 `indy_helpers.rs`）
+    pub indy_helpers: IndyHelpers,
     /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
@@ -324,7 +326,11 @@ impl Manifest {
             boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
-            concat_stringify: vm.get("indy").and_then(|s| s.get("concat_stringify")).and_then(|v| v.as_str()).map(str::to_string),
+            indy_helpers: IndyHelpers::from_toml(
+                vm.get("indy"),
+                !strings(&vm, "indy", "concat").is_empty(),
+                !strings(&vm, "indy", "object_methods").is_empty(),
+            )?,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
@@ -491,11 +497,6 @@ impl Manifest {
         self.indy.get(bsm).copied()
     }
 
-    /// concat / record toString 引用实参的字符串化入口（`类.方法:描述符`；未配置 = 直接派发 toString）
-    pub fn concat_stringify(&self) -> Option<&str> {
-        self.concat_stringify.as_deref()
-    }
-
     /// 基本类型描述符字符的装箱类（`[boxing]`）
     pub fn boxed_class(&self, prim: u8) -> Option<&str> {
         self.boxing.get(&prim).map(String::as_str)
@@ -559,7 +560,7 @@ mod tests {
 
     #[test]
     fn indy_object_methods_refines_native_and_boxing() {
-        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
+        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\nconcat_stringify = \"a/S.v:(La/O;)La/S;\"\ncomponent_hash = \"a/U.h:(La/O;)I\"\ncomponent_equals = \"a/U.e:(La/O;La/O;)Z\"\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
         assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
         assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
         assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));

@@ -69,6 +69,12 @@
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
+| C6 · C4 基线回归修复（分支 c4-regfix） | 🔄 2026-10-02 | 622ea4b0 抽查 12/16；DateTest 存根已修（3b02f4c6，复跑中）；新增集成回归 `__null_recv(&this, …)` E0277（charset_encoder，源于 `instr/src/sim/abrupt.rs`）——终态修法：分析器不对 `this` 折叠 null_recv，发射按接收者真实 Rust 类型。c6 审计 union 937 行（chain 63 / camel 47 / lower 827） |
+| C1d · 闭包膨胀精度 | 🔄 2026-10-02 | b957535c：DeepCopy 1938 → 1718（根因 f72d7dc9 param_strs × 接收者镜像）；余 +3 来自 6a1d5aac 泛型签名 + 基线 `THIS_CLASS` 值集污染，修污染而非回退，目标 DeepCopy ≤ 1715 且 fold_props 不回退。c1d-p0（bb9b1b70）8/8 转译超时，待确认是否作废 |
+| regress2 · 第二轮基线回归 + FS-E1 | 🔄 2026-10-02 | FS-E1：59da6137 / a6a7c26e / 7fdabf63；UTF8EncodeDecode 资源推导 404f56b7。r2-a77f6dd2 待修：RecordPatternTest（缺 `x=42, y=42; color=RED`）、SequenceGenerator（SubList → ArrayList CCE）、PrintDebugStatement（打印 Rust 帧而非 Java 帧）、StockTrans |
+| scripts-rava · 脚本并入 rava | 🔄 2026-10-02 | 步 ① 910f2e48（TestAtomics `Object__hashCode_base` 回归已由 e35c0980 修）、② 8e85a133 删 implref、③ 缺省包标记 `_Simple` 进行中；生成树对照 + m3 golden 在分布式作业 |
+| native-gaps · native 缺口补齐 | 🔄 2026-10-02 | Class natives d749a9c8、栈遍历 07918da9；14 包旧报告余 3 项（getNamedCon / getMemberVMInfo / setContinuation）经 `--why` 确认不在调用链，不手写（0f8e885d）；linkToNative 与 sound 类属闭包过近似，移交 C1d。待 audit-d749a9c8 / ng-07918da9（89 例）结果定稿，笔记 `docs/plans/2026-10-02-native-gaps.md`（分支上） |
+| 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
 
 ---
 

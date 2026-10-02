@@ -241,7 +241,11 @@ fn instanceof(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, comment: &
     if obj_s == OBJECT {
         // 运行时多态：ObjectVTable 按运行时类的继承链判定
         runtime(sim, val.expr);
-    } else if obj_s == ty_text(env, &target) || is_subtype(&env.ctx, &obj_base, &tgt_base) {
+    } else if obj_s == ty_text(env, &target)
+        // 同一擦除类、仅类型实参不同（`D<D<C>>` 对 `D`）：与同型同判（数组擦除基名不含元素，不参与）
+        || (!comment.starts_with('[') && !matches!(val.ty, RsType::Array(_)) && ty_text(env, &obj_base) == ty_text(env, &tgt_base))
+        || is_subtype(&env.ctx, &obj_base, &tgt_base)
+    {
         sim.push(Expr::Lit(Lit::Bool(true)), bool_t);
     } else if is_subtype(&env.ctx, &tgt_base, &obj_base)
         || env.ctx.ty.carrier_type_for_ident(&obj_base).is_some()

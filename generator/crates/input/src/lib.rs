@@ -13,6 +13,7 @@ pub mod norm;
 mod par;
 pub mod plan;
 pub mod prune;
+mod resources;
 mod scan_text;
 
 #[cfg(test)]

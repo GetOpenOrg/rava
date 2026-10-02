@@ -137,6 +137,18 @@ impl StackSim<'_> {
         Ok(())
     }
 
+    /// 再赋值的接口声明变量存入非接口值（非 null）：接口擦除载体；否则 None
+    fn reassigned_iface_carrier(&self, c: &StoreCtx, hint: &RsType) -> Option<RsType> {
+        let env = self.env;
+        if !c.decl.as_ref().is_some_and(|d| d.reassigned) || is_null(&c.expr) || env.is_interface(&erase(&c.ty)) {
+            return None;
+        }
+        if !env.is_interface(&erase(hint)) {
+            return None;
+        }
+        env.carrier_type(hint).filter(|k| type_text(k, env) != type_text(&c.ty, env))
+    }
+
     /// 阶段 3：同一泛型类的不同实例化（经 Object 边界重建目标实例化）或类祖先上转
     fn refine_same_family_or_upcast(&mut self, c: &mut StoreCtx, hint: &RsType) -> SimResult<()> {
         let env = self.env;
@@ -147,6 +159,13 @@ impl StackSim<'_> {
                 c.force_let_ty = true;
             }
             c.ty = hint.clone();
+        } else if let Some(carrier) = self.reassigned_iface_carrier(c, hint) {
+            // 声明为接口且区间内再赋值：变量先后可持有不同运行时类（如 ArrayList 后接 subList 视图），
+            // 静态类型取接口擦除载体，不收窄为首个值的具体类
+            let src = clone_moved_var(c.expr.clone(), &c.ty)?;
+            c.expr = qualified_from(to_ir_type(&carrier, env)?, Type::Infer, src)?;
+            c.ty = carrier;
+            c.force_let_ty = true;
         } else if !env.is_interface(&erase(hint))
             && hint_base != ir::anchors::OBJECT
             && hint_base != "()"

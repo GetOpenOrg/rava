@@ -11,11 +11,10 @@ use ir::{ConcatPart, Expr, Lit};
 use sim::StackSim;
 use ty::RsType;
 
-use super::boxing::obj_text;
-use super::{numeric_const_text, raw_stmt, IndySite};
+use super::{numeric_const_text, IndySite};
 use crate::build::{text, ty_text};
 use crate::env::InstrEnv;
-use crate::error::InstrResult;
+use crate::error::{InstrError, InstrResult};
 use crate::invoke::static_call::gen_invokestatic;
 use crate::invoke::CallRef;
 use crate::log::InstrLog;
@@ -181,27 +180,21 @@ fn concat_arg(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, e: sim::St
         // String 实参（栈类型即 String）：按引用追加码元，null → "null" 由运行时承担
         _ if p == string_desc && have == ir::anchors::STRING => format!("&{}", paren(raw_s)),
         // 引用类型实参：Java 语义是 String.valueOf(x)（null → "null"，否则虚 toString 分派）。
-        // 发射对清单登记的字符串化入口的静态调用（由其字节码翻译），结果落临时变量
-        _ => match env.ctx.rt.concat_stringify() {
-            Some((owner, name, desc)) => {
-                sim.push(e.expr, e.ty);
-                gen_invokestatic(env, sim, log, &CallRef::with(owner, name, desc))?;
-                let r = sim.pop()?;
-                format!("&{}", paren(text(env, &r.expr)))
-            }
-            None => {
-                // 未登记入口：内联 null 判定 + toString（Object.toString 对 null 接收者按 invokevirtual 隐式判空抛 NPE）
-                let boxed = obj_text(env, &raw_s, &e.ty);
-                let sv = sim.fresh("_t")?;
-                let s = ir::anchors::STRING;
-                sim.emit(raw_stmt(format!(
-                    "let {}: {s} = {{ let __o = {boxed}; if _is_jnull(&__o) {{ {s}::from(\"null\") }} else {{ __o.toString()? }} }};",
-                    sv.as_str()
-                )))?;
-                format!("&{}", sv.as_str())
-            }
-        },
+        // 发射对清单登记的字符串化入口（`[indy] concat_stringify`）的静态调用，结果落临时变量
+        _ => {
+            sim.push(e.expr, e.ty);
+            let r = call_indy_helper(env, sim, log, "concat_stringify")?;
+            format!("&{}", paren(text(env, &r.expr)))
+        }
     })
+}
+
+/// 调用清单登记的 `[indy]` 分量处理入口（`key` = 清单键名）：实参已按序压栈，发射对它的静态调用
+/// （方法体由字节码翻译），弹出结果。清单是唯一真源，缺项报错
+pub(super) fn call_indy_helper(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, key: &str) -> InstrResult<sim::StackEntry> {
+    let (owner, name, desc) = env.ctx.rt.indy_helper(key).map_err(|e| InstrError::BadInsn(format!("清单缺 {key}：{e}")))?;
+    gen_invokestatic(env, sim, log, &CallRef::with(owner, name, desc))?;
+    Ok(sim.pop()?)
 }
 
 /// 拼接调用点：弹出动态实参，按配方生成 `String::from_owned(format!(..))`

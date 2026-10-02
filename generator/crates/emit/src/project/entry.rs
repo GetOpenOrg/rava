@@ -352,7 +352,7 @@ pub fn write_cargo_files(
     // 免除全部 unwind 清理路径（landing pad）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
-         opt-level = 3\nlto       = true\ncodegen-units = 1\nstrip     = \"symbols\"\npanic     = \"abort\"\n\n\
+         opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\n\n\
          [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n",
         members.join(", ")
     );

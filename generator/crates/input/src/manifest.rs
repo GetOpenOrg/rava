@@ -2,7 +2,7 @@
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
-//! - seeds.toml：`[jca]` 放行、`[module_resources]`、`[boot_init]`、`[data_bundle]` 载体；
+//! - seeds.toml：`[jca]` 放行、`[boot_init]`、`[data_bundle]` 载体；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
 //!
 //! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
@@ -55,8 +55,6 @@ pub struct RuntimeManifest {
     pub release: Vec<String>,
     /// K-JCA 放行：包前缀在前、类在后
     pub jca_release: Vec<String>,
-    /// 模块资源路径（jmod `classes/` 下相对路径）
-    pub module_resource_paths: Vec<String>,
     /// 引导初始化类
     pub boot_init_classes: Vec<String>,
     /// 纯数据资源束载体（`类.方法:描述符`）
@@ -67,8 +65,9 @@ pub struct RuntimeManifest {
     pub sigpoly_callsite_typed: BTreeSet<String>,
     /// 引导方法（`类.方法`）→ 分类
     pub indy_kinds: BTreeMap<String, IndyKind>,
-    /// concat / record toString 引用实参的字符串化入口（`[indy] concat_stringify`，`类.方法:描述符`）
-    pub concat_stringify: Option<String>,
+    /// `[indy]` 分量处理入口：`concat_stringify` / `component_hash` / `component_equals` → `类.方法:描述符`
+    /// （登记了 concat / object_methods 引导方法时必填，装载时校验）
+    pub indy_helpers: BTreeMap<String, String>,
     pub vm_constants: VmConstants,
 }
 
@@ -176,7 +175,6 @@ impl RuntimeManifest {
             vm_boundary_classes,
             release,
             jca_release,
-            module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
             boot_init_classes: classes(section(&seeds, "boot_init"), "classes", "boot_init")?,
             data_bundle_carriers: str_list(section(&seeds, "data_bundle"), "carriers", "data_bundle")?,
             intrinsic_members: intrinsics(&vm)?,
@@ -187,15 +185,7 @@ impl RuntimeManifest {
                 .into_iter()
                 .collect(),
             indy_kinds: indy_kinds(&vm)?,
-            concat_stringify: match section(&vm, "indy").and_then(|s| s.get("concat_stringify")) {
-                None => None,
-                Some(v) => Some(
-                    v.as_str()
-                        .filter(|m| split_member(m).is_some())
-                        .ok_or_else(|| InputError::Manifest(format!("indy.concat_stringify：应为 `类.方法:描述符`：{v}")))?
-                        .to_string(),
-                ),
-            },
+            indy_helpers: indy_helpers(&vm)?,
             vm_constants: VmConstants {
                 null_returns: str_list(vmc, "null_returns", "vm_constants")?.into_iter().collect(),
                 null_to_false: str_list(vmc, "null_to_false", "vm_constants")?.into_iter().collect(),
@@ -208,10 +198,41 @@ impl RuntimeManifest {
         self.indy_kinds.get(bsm).copied()
     }
 
-    /// 拼接引用实参的字符串化入口 `(类, 方法, 描述符)`；未配置 = 内联 null 判定 + toString
-    pub fn concat_stringify(&self) -> Option<(&str, &str, &str)> {
-        self.concat_stringify.as_deref().and_then(split_member)
+    /// `[indy]` 分量处理入口 `(类, 方法, 描述符)`；`key` 为清单键名。
+    /// 未登记 → 错误串（装载时已对已登记的引导类别校验必填，只在清单未登记对应引导时出现）
+    pub fn indy_helper(&self, key: &str) -> Result<(&str, &str, &str), String> {
+        self.indy_helpers
+            .get(key)
+            .and_then(|m| split_member(m))
+            .ok_or_else(|| format!("vm_intrinsics.toml [indy] 缺 {key}"))
     }
+}
+
+/// `[indy]` 分量处理入口：值须为 `类.方法:描述符`；登记了 concat（需 concat_stringify）或
+/// object_methods（需三项）引导方法而缺项时报错——清单是唯一真源，不做回落
+fn indy_helpers(vm: &Table) -> Result<BTreeMap<String, String>, InputError> {
+    let sec = section(vm, "indy");
+    let has = |kind: IndyKind| -> Result<bool, InputError> { Ok(!str_list(sec, kind.as_str(), "indy")?.is_empty()) };
+    let (concat, om) = (has(IndyKind::Concat)?, has(IndyKind::ObjectMethods)?);
+    let mut out = BTreeMap::new();
+    for (key, need) in [("concat_stringify", concat || om), ("component_hash", om), ("component_equals", om)] {
+        match sec.and_then(|s| s.get(key)) {
+            Some(v) => {
+                let m = v
+                    .as_str()
+                    .filter(|m| split_member(m).is_some())
+                    .ok_or_else(|| InputError::Manifest(format!("indy.{key}：应为 `类.方法:描述符`：{v}")))?;
+                out.insert(key.to_string(), m.to_string());
+            }
+            None if need => {
+                return Err(InputError::Manifest(format!(
+                    "vm_intrinsics.toml [indy] 缺 {key}（已登记的 concat / object_methods 引导方法需要它）"
+                )))
+            }
+            None => {}
+        }
+    }
+    Ok(out)
 }
 
 /// `类.方法:描述符` → `(类, 方法, 描述符)`
