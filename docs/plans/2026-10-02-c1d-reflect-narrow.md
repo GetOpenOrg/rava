@@ -334,6 +334,14 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
 - 边界用例 `tests/e2e/62_reflection/TestCallerSensitiveLookup.java`（期望为 JDK 21 实测）：静态方法、嵌套类实例方法、
   接口 default 方法、经他类转调、静态初始化块内的 `lookup().lookupClass()`；lookup 后的 `findStaticVarHandle` /
   `findStatic` 首次访问触发目标类 `<clinit>`。
+- 抽查 c1db3-212c9229 三败的修复：
+  - TestCallerSensitiveLookup：生成器压栈的调用处类改取字节码所属类（`code_owner`）。接口 default 方法体复制进实现类发射时，
+    JVM 栈帧所属仍是声明接口（JDK 21：`default: …$Probe`）。分析侧 `caller_edge` 取方法节点键的属主（即声明类），本就一致。
+  - TestUnsafePrimitiveArray：`sun/misc/Unsafe` 在 `sun/` 前缀截断下 `<clinit>` 不发射，`theUnsafe` 恒 null → NPE。
+    该类纯 Java（0 个 ACC_NATIVE，全部委托 jdk.internal.misc.Unsafe），按 `[release] classes` 放行。
+  - ThreadTest：非接收者字段钩子（`ClassLoader.scl` / `Thread.contextClassLoader` → `__vm_init_phase3`）在有接收者的实例字段
+    访问点只走 `recv_hook_needed`（只认接收者钩子），钩子体从闭包消失，`initSystemClassLoader` 成存根。改为只有接收者钩子
+    按值集判定，静态钩子在一切访问点无条件接入（`bytecode.rs::field` / `field_hooks.rs::recv_hook_field`）。
 
 ## 四、交接（2026-10-02，C1d-b 停止）
 
