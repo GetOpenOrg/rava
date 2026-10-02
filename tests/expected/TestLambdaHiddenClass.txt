@@ -50,6 +50,11 @@ nestHost=true package=[]
 isInstance=true notObjectClass=true
 forName=CNFE
 Marker.isAssignableFrom: true
+Marker.isInstance: true instanceof: true
+marker default: marker-default
+marker Object methods: true true true true
+plain lambda instanceof Marker: false
+plain lambda cast to Marker: CCE
 == serializable intersection
 super=java.lang.Object
 interfaces=[interface java.lang.Runnable, interface java.io.Serializable]
@@ -62,3 +67,5 @@ isInstance=true notObjectClass=true
 forName=CNFE
 Serializable.isAssignableFrom: true
 plain lambda Serializable.isAssignableFrom: false
+Serializable instanceof: serializable=true plain=false supplier=false
+plain lambda cast to Serializable: CCE

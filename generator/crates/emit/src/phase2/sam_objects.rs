@@ -16,7 +16,6 @@ use super::{class_params, Emissions};
 use crate::ctx::EmitCtx;
 use crate::emission::{ClassEmission, EmittedMethod};
 use crate::error::{EmitError, Result};
-use crate::lang;
 use crate::sam::{contract_methods, SamSpec};
 
 /// 接口 J 在宿主文件（接口 I 的文件）中的全限定类型路径
@@ -151,7 +150,7 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         "// ── A-5 函数式接口合成对象（LambdaMetafactory 产物的同构物）──".into(),
         format!("// {iface} 的 lambda 实例：SAM 闭包与调用点隐藏类名为存储，实现本接口及超接口的"),
         "// __VTable（SAM 条目直调闭包、default 条目经载体 __default_<m> 体执行）；".into(),
-        "// __interface 查询对本接口及超接口闭包应答；运行时类为调用点的隐藏类。".into(),
+        "// __interface 查询对本接口及超接口闭包应答；运行时类为调用点的隐藏类，实例判定按其超类型集合。".into(),
         "#[derive(Clone)]".into(),
         format!("pub struct {lam}(pub {fn_ty}, pub &'static str);"),
         String::new(),
@@ -160,16 +159,13 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         "}".into(),
         String::new(),
     ];
-    let mut patterns: BTreeSet<&str> = spec.closure.iter().map(String::as_str).collect();
-    patterns.extend([iface, lang::OBJECT, lang::SERIALIZABLE]);
-    let pats: Vec<String> = patterns.iter().map(|p| format!("\"{p}\"")).collect();
     l.push(format!("impl ObjectVTable for {lam} {{"));
     l.push("    fn as_any(&self) -> &dyn std::any::Any { self }".into());
     l.push(format!("    fn __obj_str(&self) -> std::string::String {{ std::format!(\"{iface}::Lambda\") }}"));
     l.push("    fn __class_name(&self) -> &'static str { self.1 }".into());
-    l.push("    fn is_instance_of(&self, type_id: &str) -> bool {".into());
-    l.push(format!("        type_id == self.1 || matches!(type_id, {})", pats.join(" | ")));
-    l.push("    }".into());
+    // 实例判定按站点隐藏类自己的超类型集合（hidden_class! 声明的 all_supertypes：Object + 函数式
+    // 接口 + 标记接口 / Serializable 及其超接口闭包），checkcast / instanceof / isInstance 同源
+    l.push("    fn is_instance_of(&self, type_id: &str) -> bool { __is_subtype_of(self.1, type_id) }".into());
     l.push("    fn __interface(self: __Shared<Self>, slot: &mut dyn std::any::Any) {".into());
     let mut targets: Vec<(&str, String)> = Vec::new();
     for jbin in &spec.closure {
@@ -210,7 +206,7 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     l.push("    fn try_from(obj: Object) -> Result<Self> {".into());
     l.push("        obj.try_checkcast::<Self>().ok_or_else(|| JvmError::class_cast(".into());
     l.push(format!("            std::format!(\"class {{}} cannot be cast to {dotted}\","));
-    l.push("                ObjectVTable::__class_name(&*obj.0).replace('/', \".\"))))".into());
+    l.push("                __java_name(ObjectVTable::__class_name(&*obj.0)))))".into());
     l.push("    }".into());
     l.push("}".into());
     Ok(l.join("\n"))

@@ -119,6 +119,15 @@ extern "Rust" {
 
 /// 类 → 全部超类型（含自身）。
 pub fn class_hierarchy() -> &'static [(&'static str, Names)] { unsafe { CLASS_HIERARCHY } }
+/// 类的全部超类型（含自身；层次表按名有序，二分查找）；表外类 → 空。
+pub fn supertypes(class: &str) -> Names {
+    let table = class_hierarchy();
+    table.binary_search_by(|(n, _)| (*n).cmp(class)).map_or(&[], |i| table[i].1)
+}
+/// `class` 的实例是否为 `of` 的实例（JVMS §6.5 checkcast / instanceof 的类型判定，按层次表）。
+pub fn is_subtype_of(class: &str, of: &str) -> bool {
+    supertypes(class).contains(&of)
+}
 /// 类 → 直接父类（接口缺席）。
 pub fn class_direct_super() -> &'static [(&'static str, &'static str)] { unsafe { CLASS_DIRECT_SUPER } }
 /// 类 → 声明字段（声明序 = slot）。

@@ -8,7 +8,11 @@ import java.util.function.Supplier;
 // Serializable、FINAL|SYNTHETIC、isHidden），同站点实例共享类、不同站点不同类。
 // 只断言确定性性质，不打印 `$$Lambda/0x…` 名字。
 public class TestLambdaHiddenClass {
-    interface Marker {}
+    interface Marker {
+        default String tag() {
+            return "marker-default";
+        }
+    }
 
     static Runnable fromSite() {
         return () -> {};
@@ -79,6 +83,19 @@ public class TestLambdaHiddenClass {
         Runnable marked = (Runnable & Marker) () -> {};
         describe("marker intersection", marked);
         System.out.println("Marker.isAssignableFrom: " + Marker.class.isAssignableFrom(marked.getClass()));
+        System.out.println("Marker.isInstance: " + Marker.class.isInstance(marked)
+                + " instanceof: " + (marked instanceof Marker));
+        Marker mk = (Marker) marked;
+        System.out.println("marker default: " + mk.tag());
+        System.out.println("marker Object methods: " + mk.equals(marked) + " " + (mk.hashCode() == marked.hashCode())
+                + " " + mk.toString().equals(marked.toString()) + " " + (mk.getClass() == marked.getClass()));
+        System.out.println("plain lambda instanceof Marker: " + (r1 instanceof Marker));
+        try {
+            Marker bad = (Marker) (Object) r1;
+            System.out.println("plain lambda cast to Marker: ok " + (bad != null));
+        } catch (ClassCastException e) {
+            System.out.println("plain lambda cast to Marker: CCE");
+        }
 
         Runnable ser = (Runnable & Serializable) () -> {};
         describe("serializable intersection", ser);
@@ -86,5 +103,14 @@ public class TestLambdaHiddenClass {
                 + Serializable.class.isAssignableFrom(ser.getClass()));
         System.out.println("plain lambda Serializable.isAssignableFrom: "
                 + Serializable.class.isAssignableFrom(r1.getClass()));
+        System.out.println("Serializable instanceof: serializable=" + (ser instanceof Serializable)
+                + " plain=" + (((Object) r1) instanceof Serializable)
+                + " supplier=" + (((Object) a) instanceof Serializable));
+        try {
+            Serializable bad = (Serializable) (Object) r1;
+            System.out.println("plain lambda cast to Serializable: ok " + (bad != null));
+        } catch (ClassCastException e) {
+            System.out.println("plain lambda cast to Serializable: CCE");
+        }
     }
 }
