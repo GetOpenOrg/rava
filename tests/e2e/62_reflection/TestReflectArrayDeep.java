@@ -27,9 +27,10 @@ public class TestReflectArrayDeep {
         System.out.println("ref-elem=" + Array.get(strs, 0)
                 + " typed=" + strs.getClass().getSimpleName());
 
-        // 多维：int[2][3]
+        // 多维：int[2][3]——外层数组元素初始为 null，须先建行再挂回
         Object grid = Array.newInstance(int[].class, 2);
-        Object row0 = Array.get(grid, 0);
+        Object row0 = Array.newInstance(int.class, 3);
+        Array.set(grid, 0, row0);
         System.out.println("row-type=" + row0.getClass().getSimpleName());
         Array.setInt(row0, 1, 9);
         System.out.println("grid-deep=" + ((int[][]) grid)[0][1]);
