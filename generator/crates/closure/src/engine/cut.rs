@@ -4,6 +4,7 @@
 //!   用于量化「切掉某条路径后闭包实际减少多少」。只宜切「消费型」节点（方法体、派发点）：切构造器 / 写入点会让
 //!   字段值集变空、按初值折叠为恒 null，结果非单调。
 //! - 触发边转储：方法 / 类 / 分配 / 枢纽节点被登记的每一条触发边（不止首次溯源），派发边带接收者分配条件。
+//! - 记录型类型流查询：`--flows` 里的 `@grow:` / `@trace:` / `@edge:` 须在分析前登记，传播中逐条记录（见 `diag.rs`）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -15,6 +16,8 @@ pub struct Diag {
     pub cuts: Vec<String>,
     /// 触发边转储文件（每行 `源\t目标\t条件`）
     pub dump_edges: Option<PathBuf>,
+    /// `--flows` 查询全文；其中记录型（`@grow:` / `@trace:` / `@edge:`）在分析前登记，其余在分析后求值
+    pub flows: Vec<String>,
 }
 
 #[derive(Default)]

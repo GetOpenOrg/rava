@@ -152,6 +152,7 @@ impl<'a> Engine<'a> {
             hw_written: BTreeSet::new(),
             fwriter_live: false,
             cuts: Default::default(),
+            probes: None,
             spret: Default::default(),
             fenum_pending: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
@@ -160,7 +161,7 @@ impl<'a> Engine<'a> {
             vm_rules_fired: 0,
             hw_static_reads: HashSet::default(),
             seeds: SeedState::default(),
-            via_flow: false,
+            flow_src: diag::NO_SRC,
             open_inj: HashMap::default(),
         }
     }
