@@ -3,7 +3,7 @@
 //! `initializers` 成员（`Unsafe.ensureClassInitialized` 等）由 VM 初始化以实参传入的类：`ldc` 类字面量不触发初始化
 //! （JVMS §5.5），初始化只发生在这次调用里，没有字节码层面的 `<clinit>` 调用边。调用点上 Class 实参值集里的类镜像
 //! 即被初始化的类（值集增长时站点重跑）：该类进入初始化层（`<clinit>` 入链），并按调用点记入输出，供生成器登记
-//! 初始化钩子。值集含所指未知的 Class（open / 非镜像值）时记 `unknown`——无法枚举，由生成器对闭包内全部带
+//! 初始化钩子。基本类型类镜像（[`Engine::primitive_mirror`]）与数组类没有初始化，跳过。值集含所指未知的 Class（open / 非镜像值）时记 `unknown`——无法枚举，由生成器对闭包内全部带
 //! `<clinit>` 的类登记钩子兜底。
 
 use super::*;
@@ -41,6 +41,8 @@ impl<'a> Engine<'a> {
                 for x in s.classes.iter() {
                     match self.mirrors.get(&x) {
                         Some(&c) => known.push(self.names[c as usize].to_string()),
+                        // 基本类型类没有初始化
+                        None if Some(x) == self.prim_mirror => {}
                         None => self.class_init.unknown = true,
                     }
                 }

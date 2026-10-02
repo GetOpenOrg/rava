@@ -70,6 +70,8 @@ pub(super) enum MirrorOp {
     Of,
     /// 每个类镜像所指类的直接超类镜像（`getSuperclass`）
     Super,
+    /// 每个数组类镜像的元素类型镜像（`getComponentType`）
+    Component,
 }
 
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
@@ -81,6 +83,8 @@ pub(super) enum RetModel {
     Mirror,
     /// 超类镜像：本调用点接收者各类镜像所指类的直接超类镜像
     Super,
+    /// 元素类型镜像：本调用点接收者各数组类镜像的元素类型镜像
+    Component,
     /// 浅拷贝：本调用点的接收者
     Receiver,
     /// 按实参（序号，不含接收者）读内存
@@ -93,6 +97,7 @@ impl RetModel {
         match self {
             RetModel::Mirror => Some(MirrorOp::Of),
             RetModel::Super => Some(MirrorOp::Super),
+            RetModel::Component => Some(MirrorOp::Component),
             _ => None,
         }
     }

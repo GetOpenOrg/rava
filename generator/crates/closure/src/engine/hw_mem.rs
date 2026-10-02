@@ -98,7 +98,9 @@ impl<'a> Engine<'a> {
         if self.hw_reads.insert(s, (i, res, rt)).is_some() {
             return;
         }
-        let pt = self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or_else(|| self.id(OBJECT));
+        // 签名多态：源实参按调用点描述符排布，引用实参一律按 Object 接入（与写入侧同）
+        let obj = self.id(OBJECT);
+        let pt = if self.is_poly(t) { obj } else { self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or(obj) };
         let a = Node::A(s, i);
         let cur = self.set_of(a);
         if !cur.is_empty() {
@@ -252,7 +254,13 @@ impl<'a> Engine<'a> {
         if self.man.is_handle_interpreter(&self.methods[m].key) { Gate::Handle } else { Gate::Offset }
     }
 
-    fn is_poly(&self, t: usize) -> bool {
+    /// 手写方法的内存读写按清单（`[facts.array_writes]` / `[facts.memory_reads]`）逐调用点建模
+    pub(super) fn memory_modeled(&self, m: usize) -> bool {
+        let n = &self.methods[m];
+        matches!(n.kind, Kind::Handwritten(_)) && (matches!(n.ret_model, RetModel::Read(_)) || self.man.array_writes(&n.key.to_string()).is_some())
+    }
+
+    pub(super) fn is_poly(&self, t: usize) -> bool {
         let key = &self.methods[t].key;
         self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)
     }
@@ -265,6 +273,17 @@ impl<'a> Engine<'a> {
         self.poly_writes.push(wn);
         for (fi, tid) in self.open_statics.clone() {
             self.flow(wn, Node::U(fi), tid);
+        }
+    }
+
+    /// 签名多态读取调用点：静态字段句柄没有 holder 坐标，结果另接按名打开的静态引用字段（之后打开的由 `open_static` 接入）
+    pub(super) fn poly_read(&mut self, res: Node, rt: u32) {
+        if self.poly_reads.contains(&(res, rt)) {
+            return;
+        }
+        self.poly_reads.push((res, rt));
+        for (fi, _) in self.open_statics.clone() {
+            self.flow(Node::F(fi), res, rt);
         }
     }
 
@@ -296,6 +315,9 @@ impl<'a> Engine<'a> {
         let mws = self.mirror_writes.get(&owner).cloned().unwrap_or_default();
         for wn in self.poly_writes.iter().copied().chain(mws).collect::<Vec<_>>() {
             self.flow(wn, Node::U(fi), tid);
+        }
+        for (res, rt) in self.poly_reads.clone() {
+            self.flow(Node::F(fi), res, rt);
         }
     }
 

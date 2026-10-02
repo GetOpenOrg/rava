@@ -336,6 +336,9 @@ pub struct Engine<'a> {
     /// 目标可能是任一按名打开的静态字段的写入值节点：签名多态写入调用点（静态字段句柄无 holder 坐标）、
     /// 以所指未知的类镜像为静态字段基址的按偏移写入
     poly_writes: Vec<Node>,
+    /// 来源可能是任一按名打开的静态字段的读取结果（结果节点, 返回类型）：签名多态读取调用点
+    /// （静态字段句柄没有 holder 坐标，与 `poly_writes` 对称）
+    poly_reads: Vec<(Node, u32)>,
     /// 按名打开（反射 / VarHandle / Unsafe 按名写入）的静态引用字段
     open_statics: Vec<(usize, u32)>,
     /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
@@ -368,6 +371,8 @@ pub struct Engine<'a> {
     open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
+    /// 基本类型类镜像（[`Engine::primitive_mirror`]）：首次产生时登记
+    prim_mirror: Option<u32>,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像（`getClass`）/ 各镜像所指类的超类镜像（`getSuperclass`）

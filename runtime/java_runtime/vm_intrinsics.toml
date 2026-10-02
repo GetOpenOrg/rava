@@ -263,6 +263,9 @@ serializable_markers = ["java/io/Serializable"]
 #   mirror_of_receiver  返回接收者的类镜像（JLS §4.3.2 getClass）
 #   superclass_of_receiver  返回接收者镜像所指类的直接超类镜像（接口 / 根类为 null，数组为根类；所指未知仍未知），
 #                       逐调用点——getInheritableMethod 的上溯、Enum.getDeclaringClass 由此得到确定值集
+#   component_of_receiver  返回接收者镜像所指数组类的元素类型镜像（JVMS §4.3.2，基本类型元素给基本类型类镜像；非数组为 null）
+#   primitive_class     返回基本类型（含 void）的类镜像（JLS §15.8.2 `int.class`、`Integer.TYPE`）：所指不是字节码类，
+#                       类初始化无对象（JVMS §5.5）、无成员可枚举；与类镜像区分，不使 class_init 记为所指未知
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -277,6 +280,13 @@ mirror_of_receiver = [
 ]
 superclass_of_receiver = [
     "java/lang/Class.getSuperclass:()Ljava/lang/Class;",
+]
+component_of_receiver = [
+    "java/lang/Class.getComponentType:()Ljava/lang/Class;",
+    "java/lang/Class.componentType:()Ljava/lang/Class;",
+]
+primitive_class = [
+    "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
@@ -476,6 +486,19 @@ members = [
 "jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
 "jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
 "jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+# VarHandle 引用读取访问模式（签名多态，var_handle_impl.rs `_field_read` / 数组元素读取；getAndSet / compareAndExchange
+# 返回旧值）：实参按调用点描述符排布，0 号是 holder（实例字段句柄）/ 数组（数组元素句柄）；静态字段句柄没有 holder 坐标，
+# 结果另接按名打开的静态引用字段（与 [facts.array_writes] 的 VarHandle 写入对称）
+"java/lang/invoke/VarHandle.get:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getVolatile:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getOpaque:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getAndSet:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getAndSetAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.getAndSetRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.compareAndExchange:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.compareAndExchangeAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+"java/lang/invoke/VarHandle.compareAndExchangeRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
 
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：
