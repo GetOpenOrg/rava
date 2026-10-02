@@ -1144,7 +1144,7 @@ HelloWorld `vm_boundary_methods = 86`，构成与 §20.7 表不同（FS-C2 合�
 | **a3-U2** | 原子与内存序 20：`getAndAdd{Int,Long}` / `getAndBitwise{And,Or}Int` / `getAndBitwiseOrLong` / `getAndSet{Int,Reference}` / `get{Int,Reference}{Acquire,Opaque}` / `put{Int,Reference}{Opaque,Release}` / `weakCompareAndSet{Int,Reference}` / `loadFence` / `storeFence` / `storeStoreFence` | `unsafe__impl.rs` 原子段；`vm_intrinsics.toml` 的 `array_writes` / `memory_reads`；`closure/src/engine/hw_mem.rs`、`concrete/`（`cas_reference`） | 译；① 落在 `compareAndSet*` / `getReferenceVolatile` / `putReferenceVolatile` / 屏障 native。清单中按 Java 层成员登记的内存效果改指内层 native，分析器经字节码走到内层 | ◀ U0。与 U3 同改 `vm_intrinsics.toml`（不同节） | −20 |
 | **a3-U3** | 布局 / 反射 / 类初始化 9：`getUnsafe` / `objectFieldOffset`×2 / `staticFieldOffset` / `staticFieldBase` / `arrayIndexScale` / `ensureClassInitialized` / `shouldBeInitialized` / `allocateUninitializedArray`；另 `Unsafe` 移出 `clinit_carried` 与 `[vm_boundary].classes` | `unsafe__impl.rs` 布局段；`closure.toml`；`vm_intrinsics.toml` 的 `name_resolvers.offset`、`class_initializers`、`[vm_constants.injected_statics]`；`closure/src/engine/hw_offset.rs` | 译；① 落在 `objectFieldOffset1` / `staticFieldOffset0` / `staticFieldBase0` / `arrayIndexScale0` / `ensureClassInitialized0` / `shouldBeInitialized0`；`<clinit>` 的布局常量已由 §14.4 注入，`<clinit>` 改为按字节码翻译。符号偏移折叠（73de95c4）的识别点改到 `objectFieldOffset1` | ◀ U0；U1 / U2 合入后才能移出 `[vm_boundary]`（该步放 U3 最后一个提交） | −9 |
 | **a3-V** | VM 10：`initLevel` / `isBooted` / `isModuleSystemInited` / `isJavaLangInvokeInited` / `setJavaLangInvokeInited` / `shutdown` / `isShutdown` / `getSavedProperty` / `isSystemDomainLoader` / `latestUserDefinedLoader` | `vm_impl.rs`；`system_impl.rs`；`class_loader_impl.rs`（`__vm_init_phase3`）；`vm_intrinsics.toml` 的 `[facts.returns]`、`[vm_constants]`（`getSavedProperty` 恒 null 条目删除）、`[vm_state.field_hooks]` | 译全部 10 个。③ 落在字段：`VM.initLevel:I` 加读取钩子（阶段内报该阶段档位，其余时间为 4；写入经 `VM.initLevel(int)` 字节码，`SYSTEM_SHUTDOWN` 写入即停机标记），取代 0c4e47c6 的线程内档位覆盖与 `__vm_at_init_level`；`javaLangInvokeInited` 经 `injected_statics` 注入 true。`getSavedProperty` 改读 initPhase1 保存的快照（真值，不再恒 null）。`latestUserDefinedLoader` → ① `latestUserDefinedLoader0`（栈帧来源同 `getCallerClass`） | 与 boot layer 冲突：同改 `vm_impl.rs` / `system_impl.rs` / `class_loader_impl.rs` 与 `[boot_init]`。**排在 boot layer 第 1 步合入之后**，或与 boot layer 同一会话串行 | −10 |
-| **a3-T** | VirtualThread 10：`<init>` / `alive` / `isTerminated` / `joinNanos` / `park` / `parkNanos` / `run` / `start`×2 / `unpark`；另移出 `clinit_carried` | `virtual_thread_impl.rs`；`jdk/internal/vm/continuation_impl.rs`、`continuation_support_impl.rs`；`thread_impl.rs`；`closure.toml` | 译；③ 落在 `Continuation` 的 VM 驱动 native（`enterSpecial` / `doYield` / `pin` 等），每个 Continuation 由一条 OS 线程承载、mount / yield 以交接信号实现，调度器（`ForkJoinPool` 缺省调度器、`UNPARKER`）按字节码翻译 | **需用户确认**：现行「方案 A」（2026-09-24 用户拍板：虚拟线程直接映射平台线程，不建模 Continuation）与本做法冲突。确认前不开工。与 a3-V 无文件冲突 | −10 |
+| **a3-T** | VirtualThread 10：`<init>` / `alive` / `isTerminated` / `joinNanos` / `park` / `parkNanos` / `run` / `start`×2 / `unpark`；另移出 `[vm_boundary].classes` 与 `clinit_carried` | `virtual_thread_impl.rs`；`jdk/internal/vm/continuation_impl.rs`、`continuation_support_impl.rs`；`thread_impl.rs`；`monitor.rs`；新 crate `runtime/rava_coro/`；`closure.toml` | 译 VirtualThread 与调度器（`ForkJoinPool` / `CarrierThread` / `UNPARKER`）；③ 只落在 `Continuation` 的 VM 方法（`enterSpecial` / `doYield` / `pin` / `unpin` / `isPinned0`），实现为有栈协程（2026-10-03 用户定终态，方案 A 作废）。细分 T1–T6 见 §21.8 | T1 → T2 → T4；T3 与 T2 并行、在 T4 前合入；T5 ◀ T1；T6 收尾。与 a3-V 无文件冲突 | −10 |
 | **a3-L1** | BootLoader 5：`getServicesCatalog` / `hasClassPath` / `loadClass(Module,String)` / `loadClassOrNull` / `loadLibrary`；另移出 `[vm_boundary].classes` | `boot_loader_impl.rs`（删除）；`closure.toml`；新 native：`NativeLibraries.findBuiltinLib` / `load` / `unload`、`BootLoader.getSystemPackageLocation`、`NativeImageBuffer.getNativeMap`、`ClassLoader.findBootstrapClass` | 译；① 落在上列 native：内建库按静态链接处理（`findBuiltinLib` 对内建库名返回库名，`load` 对内建库成功），引导类查找落到类宇宙表，jimage 资源按运行时镜像读取。`getServicesCatalog` 读 `SERVICES_CATALOG`，由 boot layer 的 `initServices` 填充 | `getServicesCatalog` ◀ boot layer 第 1 步（服务目录）；其余 4 个无依赖，可先做。与 a3-L2 冲突在 `ClassLoader` 对 `BootLoader` 的调用面 | −5 |
 | **a3-L2** | ClassLoader 6：`getResource` / `getResourceAsStream` / `getResources` / `getSystemResource` / `getSystemResourceAsStream` / `getSystemResources` | `class_loader_impl.rs`（只删这 6 个与对应 `__impl_*`；`__vm_init_phase3` 归 a3-V） | 译；路径为 `parent` → `BootLoader.findResource` → 内建加载器（FS-C2 已整类翻译）→ `URLClassPath`。无新增手写 | ◀ a3-L1。与 a3-V 同文件不同函数 | −6 |
 | **a3-C** | `Class.enumConstantDirectory` | `class_impl.rs` | 译（走 `getEnumConstantsShared` → 反射调用 `values()`，反射元数据表已有） | 与 boot layer 同文件（boot layer 删 `getModule` 两份手写）：不同函数，合并时就地解决 | −1 |
@@ -1158,7 +1158,7 @@ HelloWorld `vm_boundary_methods = 86`，构成与 §20.7 表不同（FS-C2 合�
 | a3-U2 | TestAtomics、AtomicDemo、TestChmTransfer、TestParallelArrayCas、TestVolatilePrimitiveAccess、TestJucSync、TestCommonPool、TestCompletableFuture、HelloWorld（闭包类数不得上升） |
 | a3-U3 | HelloWorld（闭包类数与 `CHM.comparableClassFor` 具体求值组合数不得上升）、TestReflectProbe、TestConcurrentClinit、TestForNameInit、TestByteArrayViewVarHandle、DeepCopy、TestSerialDefaultSuid |
 | a3-V | HelloWorld、TestServiceLoaderLayers、TestShutdownHooks、TestSystemExitEnv、TestSystemPropsSpec、TestAppClassLoader、TestDirectBuffer（`maxDirectMemory` 经 `getSavedProperty` 取值）、TestMethodHandleDirect（`isJavaLangInvokeInited`）；补边界用例：`-XX:MaxDirectMemorySize` 缺省时 `VM.maxDirectMemory()` 等于 `Runtime.maxMemory()` 的可观察面 |
-| a3-T | TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock；补边界用例：虚拟线程 park / unpark 交错、`join(Duration)` 超时、`Thread.currentThread().isVirtual()` |
+| a3-T | 分子任务列在 §21.8.4（合计不超过 10 个 e2e：TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized，加新增边界用例 3 个） |
 | a3-L1 | TestAppClassLoader、TestServiceLoaderLayers、TestClassForName、TestCharsetNamedStreams、TestNetworkInterface（`loadLibrary("net")`）、TestSecureRandomApi |
 | a3-L2 | TestAppClassLoader、TestServiceLoaderLayers、TestParallelCapable、TestCharsetForName；补边界用例：`getSystemResource` 查不到返回 null、`getResources` 父子加载器都命中时的枚举次序（expected 取 JDK 21） |
 | a3-C | TestEnumBasic、TestEnumAdvanced、TestEnumSetMap、SwitchExpressions、TestIntegerCacheSpec |
@@ -1189,7 +1189,7 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
 `fullAddCount`（CAS 竞争分支，约 +8 类）属线程逃逸分析，只记录不实施（§20.8 后续项 2）。
 
 **a5-4（精度待查，2026-10-03 登记）**：TestUnixFileNatives 闭包偏大——服务器 transpile 3m33s、二进制 391M（c1d-p0 b17a6496 前后的 a2 抽查）。该例只调文件系统 API，量级应与 HelloWorld + `sun.nio.fs` 相当；先用 `rava closure --why` / `--flows '@trace:<类>'` 找引入面最大的入口，再定收窄手段。目标：transpile ≤60 s、类数的引入链逐条可解释。
-  - 旁证（2026-10-03，Linux 目标 JDK 21.0.12 jmods 实测 `rava emit --full-precheck`，闭包 2961 类）：文件系统 native 补全后（UnixNativeDispatcher 49 个全承载、FileDispatcherImpl / UnixFileDispatcherImpl 的 transfer / map 补齐），闭包内仍缺 18 个 native，全部与文件 API 无关，是膨胀的指纹：`sun.security.pkcs11.Secmod` nss* 5 个、`sun.security.pkcs11.wrapper.PKCS11` 5 个、`sun.security.smartcardio.PCSC` / `PlatformPCSC` 2 个、`jdk.internal.jimage.NativeImageBuffer.getNativeMap`、`jdk.internal.loader.NativeLibraries` findBuiltinLib / load / unload、`BootLoader.getSystemPackageLocation`、`ClassLoader.defineClass0`。收窄判据之一：这 18 个从闭包消失（不补手写）；macOS 目标另有 `KeychainStore._scanKeychain`、`HostLocaleProviderAdapterImpl.getDefaultLocale` 两个同类指纹。
+  - 旁证（2026-10-03，Linux 目标 JDK 21.0.12 jmods 实测 `rava emit --full-precheck`，闭包 2961 类）：文件系统 native 补全后（UnixNativeDispatcher 49 个全承载、FileDispatcherImpl / UnixFileDispatcherImpl 的 transfer / map 补齐），闭包内仍缺 18 个 native，全部与文件 API 无关，是膨胀的指纹：`sun.security.pkcs11.Secmod` nss* 5 个、`sun.security.pkcs11.wrapper.PKCS11` 5 个、`sun.security.smartcardio.PCSC` / `PlatformPCSC` 2 个、`jdk.internal.jimage.NativeImageBuffer.getNativeMap`、`jdk.internal.loader.NativeLibraries` findBuiltinLib / load / unload、`BootLoader.getSystemPackageLocation`、`ClassLoader.defineClass0`。其中 `NativeLibraries` 3 个、`getSystemPackageLocation`、`getNativeMap` 共 5 个是 a3-L1 计划补的 ① native（BootLoader 译后真实需要），不算膨胀；收窄判据之一：其余 13 个（pkcs11 10、smartcardio 2、`defineClass0` 1）从闭包消失、不补手写（`defineClass0` 若查明真实可达，归 a3-X1 运行期类定义点处理）；macOS 目标另有 `KeychainStore._scanKeychain`、`HostLocaleProviderAdapterImpl.getDefaultLocale` 两个同类指纹。
 
 ### 21.6 并行编排
 
@@ -1201,9 +1201,131 @@ a3-L1（getServicesCatalog 除外）──▶ a3-L2 ─────────�
 a3-C ──────────────────────────────────────────────────┤
 a3-X1、a3-X2 ──────────────────────────────────────────┤
 boot layer 第 1 步 ──▶ a3-V、a3-L1 余下的 getServicesCatalog ──┤
-用户确认方案 ──▶ a3-T ─────────────────────────────────┤
+a3-T1 ─▶ a3-T2 ─▶ a3-T4 ─▶ a3-T6（T3 ∥ T2、T5 ◀ T1）──┤
 boot layer 第 3 步 ────────────────────────────────────┴─▶ a3-Z
 a5-1 ──▶ a5-2 ──▶ a5-3（与 a3 无文件冲突，可同时进行）
 ```
 
 同时开工上限按全机锁与内存预算定：第一批可并行 a3-U0（合入后 U1 / U2 并行）、a3-L1、a3-C、a3-X1、a3-X2、a5-1。
+
+### 21.7 a3 各子任务验收数字（2026-10-03，c1d-p0 f2bdcf6e 口径）
+
+底数：HelloWorld `vm_boundary_methods = 86`；`runtime/` 中 `#[jvm_boundary]` 135 处（分布见 §21.0，f2bdcf6e 复核不变）；
+HelloWorld `--stop-after emit` 闭包 498 类（b17a6496 合并同步实测）。各项的「前 → 后」按单独合入计（降幅可叠加），
+「闭包」一栏是 HelloWorld 闭包类数的上限，e2e 一栏是 §21.2 / §21.8.4 所列用例在服务器抽查的通过数。
+
+| 编号 | HelloWorld 审计（本类计数） | `#[jvm_boundary]`（文件内处数） | 其它数字 | 闭包 | e2e |
+|---|---|---|---|---|---|
+| a3-U0 | Unsafe 44 → 44（只改标注） | `unsafe__impl.rs` 75 → 44；`#[jvm_native]` +31 | 生成树逐字节不变（`scripts/compare_trees.sh` 差异 0 文件） | 498 | 3/3 |
+| a3-U1 | Unsafe −15（44 → 29） | `unsafe__impl.rs` −15 | 新增 native 6 个，全部 `ACC_NATIVE`；`non_native_overrides` 保持 0 | ≤498 | 6/6 + 边界 1 |
+| a3-U2 | Unsafe −20 | `unsafe__impl.rs` −20 | `vm_intrinsics.toml` 中按 Java 层原子成员登记的内存效果条目 → 0（全部改指内层 native） | ≤498 | 9/9 |
+| a3-U3 | Unsafe −9（U1–U3 全合后 0） | `unsafe__impl.rs` → 0 | `closure.toml` 中 `jdk/internal/misc/Unsafe` 出现次数 → 0；`CHM.comparableClassFor` 具体求值组合数不上升 | ≤498 | 7/7 |
+| a3-V | VM 10 → 0 | `vm_impl.rs` 8 → 0 | `[vm_constants]` 中 `getSavedProperty` 恒 null 条目 → 0；线程内档位覆盖 `__vm_at_init_level` 引用 → 0 | ≤498 | 8/8 + 边界 1 |
+| a3-T | VirtualThread 10 → 0 | `virtual_thread_impl.rs` 10 → 0 | 见 §21.8.4（T1–T6 各自的数字） | ≤498 | 见 §21.8.4 |
+| a3-L1 | BootLoader 5 → 0 | `boot_loader_impl.rs` 5 → 0（文件删除） | 新 native 6 个（`NativeLibraries` 3、`getSystemPackageLocation`、`getNativeMap`、`findBootstrapClass`）；`closure.toml` 中 `BootLoader` → 0 | ≤498 | 6/6 |
+| a3-L2 | ClassLoader 6 → 0 | `class_loader_impl.rs` 6 → 0 | 新增手写 0 | ≤498 | 4/4 + 边界 1 |
+| a3-C | Class 2 → 1（余 `getModule` 归 boot layer） | `class_impl.rs` 2 → 1 | 新增手写 0 | ≤498 | 5/5 |
+| a3-X1 | 链外（不计入 86） | `invoker_bytecode_generator_impl.rs` 6 → 0；`method_accessor_generator_impl.rs`、`class_specializer_factory_impl.rs`、`proxy_dyn_impl.rs` 各 1 → 0 | 运行模型替换登记条目 = 保留下来的手写方法数（逐个可对上） | ≤498 | 6/6 |
+| a3-X2 | 链外 | `jce_security_impl.rs` 6 → 0；`file_systems_impl.rs`、`cds_impl.rs`、`event_helper_impl.rs`、`security_property_modification_event_impl.rs`、`get_instance_instance_impl.rs` 各 1 → 0 | `closure.toml` 中 `JceSecurity` / `FileSystems` / `InetAddress` / `SecurityManager` → 0 | ≤498 | 7/7 |
+| a3-Z | `vm_boundary_methods` 行消失 | 全仓 0（其中 `module_impl.rs` 7、`module_layer_impl.rs` 2 由 boot layer 清零） | `rg jvm_boundary runtime/ generator/` → 0；生成器单测全过 | ≤498 | 9 例抽查 9/9 |
+
+合计：HelloWorld 审计 86 → 10（a3 全部）→ 0（boot layer 第 3 步之后，由 a3-Z 确认）；`#[jvm_boundary]` 135 → 9（a3 全部）→ 0。
+
+### 21.8 a3-T 虚拟线程：VirtualThread 字节码翻译 + Continuation 有栈协程（2026-10-03 用户定终态）
+
+**终态**：`VirtualThread`、缺省调度器 `ForkJoinPool`（含 `CarrierThread`、`ForkJoinWorkerThread`）、延时调度器 `UNPARKER`
+（`ScheduledThreadPoolExecutor`）全部按字节码翻译；手写只剩 `jdk.internal.vm.Continuation` 的 VM 方法（准入第③类：
+VM 驱动的执行流切换），实现为**有栈协程**。目标规模**百万级虚拟线程**。
+方案 A（2026-09-24：虚拟线程映射为平台线程、不建模 Continuation）**作废**；`virtual_thread_impl.rs` 的方案 A 注释与
+`continuation_support_impl.rs` 中「映射 OS 线程」的说明随 T4 删除改写。完成后 `vm_intrinsics.toml` 与 `closure.toml`
+中 `VirtualThread` 出现次数为 0，HelloWorld 审计的 VirtualThread 承载方法 10 → 0。
+
+#### 21.8.1 手写面（JDK 21 `Continuation` 的全部 native，共 6 个）
+
+| native | 语义（与 HotSpot 等价） |
+|---|---|
+| `registerNatives()` | no-op（已有） |
+| `enterSpecial(Continuation c, boolean isContinue, boolean isVirtualThread)` | `isContinue = false`：从栈池取一块栈，在新栈上以 `Continuation.enter(c, false)`（字节码翻译体，内部 `enter0` → `target.run()`，`finally` 置 `done`）为入口切入；`isContinue = true`：切回 `c` 上次 `doYield` 保存的上下文。两种情况都在 `c` 让出或执行完毕时返回；执行完毕时栈归还栈池 |
+| `doYield()` → `int` | 当前（最内层）已挂载的 Continuation 未被 pin：保存上下文、切回其 `enterSpecial` 调用点，日后被继续时返回 0；被 pin：不切换，直接返回 pin 原因码（2 CRITICAL_SECTION / 3 NATIVE / 4 MONITOR，与 `Continuation.pinnedReason` 的 tableswitch 一致），字节码随后走 `onPinned0` → `VirtualThread` 在载体上停泊 |
+| `pin()` / `unpin()` | 当前 Continuation 的临界区计数 +1 / −1；`unpin` 在计数为 0 时抛 `IllegalStateException`（与 HotSpot 一致）；不在 Continuation 内时为 no-op |
+| `isPinned0(ContinuationScope scope)` → `int` | 自最内层向外找第一个 `scope` 匹配的 Continuation，期间任一层被 pin 即返回其原因码，否则 0 |
+
+嵌套 Continuation 的作用域匹配、`yieldInfo`、`parent` 链、`mount` / `unmount` 簿记全部是 `Continuation` 的字节码，
+native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `setCurrentThread` / `scopedValueCache` /
+`setScopedValueCache` 已是 ① native（`thread_impl.rs`），按 §21.8.3 调整承载槽位。
+
+#### 21.8.2 栈与上下文切换（新 crate `runtime/rava_coro/`）
+
+- **独立 crate**：不依赖 `java_runtime`，可单独 `cargo test`（与 `rava_macros` 同样以绝对 path 依赖，不复制进 scratch）。
+  `java_runtime` 只经它的 `Stack` / `Context` / `switch` 三个入口使用。
+- **栈**：每个 Continuation 一块独立栈，`mmap` 保留 `RESERVE`（缺省 1 MiB，环境变量可调，见 `docs/environment-variables.md`
+  登记），底端一页 `PROT_NONE` 作 guard page，只按需提交。地址空间预算：10⁶ × (1 MiB + 1 页) ≈ 1 TiB，低于 x86_64 / aarch64
+  Linux 的 128 TiB 用户空间和 macOS arm64 的用户空间上限。**栈池**：执行完毕的栈归池复用，复用前对高水位以下
+  超过 `KEEP`（缺省 16 KiB）的部分 `madvise(MADV_DONTNEED)`（macOS `MADV_FREE`），池上限按载体数 × 64 计。
+- **Linux 映射数**：每块栈 2 个 VMA（guard + 可写），10⁶ 个需 `vm.max_map_count ≥ 2.1 × 10⁶`（缺省 65530）。
+  运行时在首次建栈时读 `/proc/sys/vm/max_map_count`；建栈 `mmap` / `mprotect` 失败按 JDK 平台线程耗尽的形态抛
+  `OutOfMemoryError`（消息同 JDK「unable to create native thread: possibly out of memory or process/resource limits reached」），
+  不静默降级。百万规模验收机须先调高该值（T6 记录配置）。
+- **上下文切换**：`global_asm!` 两份，按 `target_arch` 选择，其余平台编译期报错（不提供退化实现）：
+  - aarch64（AAPCS64）：保存 / 恢复 x19–x28、x29（FP）、x30（LR）、SP、d8–d15；
+  - x86_64（SysV）：保存 / 恢复 rbx、rbp、r12–r15、RSP、返回地址（RIP），以及 MXCSR 控制位与 x87 控制字。
+  切换函数是普通 `extern "C"` 调用，调用方保存寄存器由编译器处理。
+- **入口蹦床**：新栈的第一帧是蹦床，栈顶 16 字节对齐，帧链终止（aarch64 FP = 0、LR = 0；x86_64 RBP = 0，CFI 标
+  `.cfi_undefined rip`），保证回溯与栈遍历在蹦床处干净停止，不走进载体栈。
+
+#### 21.8.3 语义约束
+
+**pinned 判定**（`doYield` / `isPinned0` 的依据，每个 Continuation 一组计数，存于下文的执行上下文块）：
+
+| 原因 | 计数来源 |
+|---|---|
+| MONITOR（4） | `monitor.rs` 的 `enter` / `exit`（含 `synchronized` 方法与 `Object.wait` 期间仍持有的重入层数）在 Continuation 内执行时 ±1；持锁数 > 0 即 pinned。监视器所有者仍按 OS 线程 `ThreadId` 记录——持锁期间必然 pinned、不会换载体，所以所有者标识保持有效 |
+| NATIVE（3） | 栈上有 native 帧：`#[jvm_native]` 方法体经宏包裹进出 ±1（只计数、无其它开销）；类初始化协议执行 `<clinit>` 期间 ±1（HotSpot 由 VM 帧调用 `<clinit>`，同为 NATIVE） |
+| CRITICAL_SECTION（2） | `Continuation.pin()` / `unpin()` 计数 |
+
+判定次序与 HotSpot `is_pinned0` 相同：CRITICAL_SECTION → MONITOR → NATIVE，取第一个成立的。pinned 时 `VirtualThread` 的字节码在载体上停泊
+（`parkOnCarrierThread`），载体 OS 线程阻塞，与 JDK 21 行为一致。
+
+**与 GIL、thread_local 的交互**：
+
+- 运行时已无全局解释器锁（#42 并行后端，`gil.rs` 只保留 `blocking` / `safepoint` 钩子与 DestroyJavaVM 登记）。
+  载体是普通平台线程（`ForkJoinWorkerThread` 经 `Thread.start0` 派生），虚拟线程不计入 DestroyJavaVM 的非守护等待集
+  （`VirtualThread` 恒为守护，字节码已保证）。`blocking` / `safepoint` 不切换协程——协程只在 `doYield` 处让出。
+- **线程身份分两槽**：`thread_impl.rs` 的 `CURRENT` 拆为 `CARRIER`（OS 线程对应的平台 `Thread`，派生时设定，永不变）
+  和 `CURRENT`（`currentThread()` 返回值）。`currentCarrierThread()` 读 `CARRIER`；`setCurrentThread(t)` 只写 `CURRENT`。
+  挂载 / 卸载时由 `VirtualThread.mount` / `unmount` 的字节码调用 `setCurrentThread` 切换，native 不自行切换。
+- **ScopedValue**：绑定在 `Thread.scopedValueBindings` 字段（随 `Thread` 对象走，无需处理）；查找缓存
+  `SCOPED_VALUE_CACHE` 留在载体槽，由 `Continuation.run` 的字节码在挂载时 `setScopedValueCache(scopedValueCache)`、
+  卸载时取回并置 null。`findScopedValueBindings` 的「栈上无 runWith 帧」判定在虚拟线程上同样成立（绑定已经由字段承载）。
+- **执行级状态迁入执行上下文块**：凡生存期可能跨越一次调用（从而可能跨越 `doYield`、在另一载体上恢复）的线程局部状态，
+  不得直写 `thread_local!`，统一放进每个执行流一块的「执行上下文块」：平台线程一块，每个 Continuation 一块，
+  载体线程局部只存指向当前块的一个指针，由 `enterSpecial` / `doYield` 在切换时换指针。现有须迁入的：
+  `stack_stream_factory_abstract_stack_walker_impl.rs` 的 `ANCHORS` / `NEXT_ANCHOR`、`reflect_dispatch.rs` 的
+  `BAD_ARG` / `CS_CALLERS` / 逃逸异常表，以及上面的三个 pin 计数；`vm_impl.rs` 的 `BOOT_LEVEL` 由 a3-V 删除，不迁。
+  留在载体线程局部的只有 `CARRIER` / `CURRENT` / `SCOPED_VALUE_CACHE` 与这一个指针。
+- **TLS 地址缓存**：LLVM 视线程局部地址在函数内不变，可能跨 `doYield` 调用复用旧载体的地址。所有经执行上下文块
+  的访问走一个 `#[inline(never)]` 取指针函数，每次访问重新读取；`__process_static!` 宏的线程局部分支同样改走该入口。
+  守护：runtime 单元检查（与 `jdk_literal_lint` 同机制）统计 `runtime/` 中 `thread_local!` / `__process_static!` 线程局部
+  定义，只允许出现在执行上下文模块与 `thread_impl.rs` 的三个载体槽。
+
+**panic 跨栈传播**：生成工作区为 `panic = "abort"`，`create_java_vm` 的钩子打印默认信息后以退出码 101 退出——
+在协程栈上 panic 与平台线程同一出口，不发生跨栈 unwind。要求：①回溯在蹦床处终止（§21.8.2），stderr 与平台线程 panic
+同形；②蹦床对 unwind 形态（将来改 `panic = "unwind"` 时）同样正确：入口函数体包 `catch_unwind`，载荷存入执行上下文块，
+切回 `enterSpecial` 调用点后在载体栈上 `resume_unwind`，绝不让 unwind 穿过汇编帧。Java 异常走 `Result`，由
+`Continuation.enter0` / `VirtualThread.run` 的字节码处理，不经过 native。
+**栈溢出**：guard page 触发 SIGSEGV；载体线程装 `sigaltstack` 处理器，故障地址落在任一协程 guard page 内时输出与 Rust 平台线程
+相同的「thread '…' has overflowed its stack」并 abort，其余故障交还原处理器。
+
+#### 21.8.4 细分与验收
+
+| 编号 | 内容 | 文件 | 依赖 | 验收数字 |
+|---|---|---|---|---|
+| **a3-T1** | `rava_coro`：栈（mmap + guard + 栈池 + madvise 回收）、aarch64 / x86_64 切换汇编、入口蹦床、guard page 故障识别 | 新 crate `runtime/rava_coro/`（每文件 ≤600 行） | 无 | crate 单测：10⁶ 次往返切换正确且单次切换 ≤50 ns（release，本机 aarch64 与服务器 x86_64 各测一次）；10⁵ 个协程建 / 让出 / 完成后 RSS 回落到起点 +16 MiB 以内；callee-saved 寄存器（含 d8–d15、MXCSR）逐个被破坏后恢复的检查全过；guard page 命中的子进程测试（串行）退出码为 SIGABRT、stderr 含 overflowed |
+| **a3-T2** | `Continuation` 6 个 native、执行上下文块、三类 pin 计数（`monitor.rs`、`#[jvm_native]` 宏包裹、类初始化协议） | `jdk/internal/vm/continuation_impl.rs`；新执行上下文模块；`monitor.rs`；`gil.rs`（类初始化段）；`rava_macros` | ◀ T1 | `continuation_impl.rs` 中 `#[jvm_native]` 6、`#[jvm_boundary]` 0；`non_native_overrides` 0；边界用例 **TestContinuationPinned**（`synchronized` 内 park、`Continuation.pin` 期间 yield 走 onPinned、native 回调中 park 三种 pinned 情形，均正确完成）与 JDK 输出一致 |
+| **a3-T3** | 线程身份两槽、执行级状态迁入执行上下文块、TLS 访问入口、thread_local 守护检查 | `thread_impl.rs`、`stack_stream_factory_abstract_stack_walker_impl.rs`、`reflect_dispatch.rs`、`sync_model.rs` | 与 T2 并行，T4 前合入 | `thread_local!` 定义：runtime 中只余执行上下文模块 1 处 + `thread_impl.rs` 3 个载体槽，守护检查通过；TestStackWalkerFrames、TestReflectFieldMethod、TestThreadStates 3/3 |
+| **a3-T4** | 删方案 A：`VirtualThread` 10 个承载方法删除（只留 6 个 JVMTI / registerNatives `#[jvm_native]`）；`VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`；调度器按字节码翻译 | `virtual_thread_impl.rs`、`continuation_support_impl.rs`、`closure.toml` | ◀ T2、T3 | HelloWorld 审计 VirtualThread 10 → 0；`closure.toml` / `vm_intrinsics.toml` 中 `VirtualThread` 0 次；HelloWorld 闭包 ≤498 类且 `VirtualThread.<clinit>` 不在闭包内（`--trace-class` 确认）；e2e TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized 7/7；边界用例 **TestVirtualThreadCarrier**（让出后在另一载体恢复：`currentThread()` 身份、`ThreadLocal` / `InheritableThreadLocal` 值、`isVirtual()`、中断状态、`join(Duration)` 超时，输出与载体编号无关）与 JDK 一致 |
+| **a3-T5** | panic 与栈溢出：蹦床 `catch_unwind` / `resume_unwind`、回溯终止、`sigaltstack` 处理器 | `rava_coro`；`lib.rs`（`create_java_vm`） | ◀ T1 | 子进程测试（串行）：协程内 panic 退出码 101、stderr 与平台线程 panic 同形；协程内无限递归退出为 SIGABRT 且 stderr 含 overflowed；`panic = "unwind"` 构建下 crate 单测：协程内 panic 在载体上被 `catch_unwind` 捕获 1/1 |
+| **a3-T6** | 规模验收 | 边界用例 **TestVirtualThreadScale**（10⁵ 个虚拟线程各 `sleep` 后汇总，进入常规 e2e）；百万规模用例放 `tests/perf/`，服务器单独作业 | ◀ T4、T5 | TestVirtualThreadScale：10⁵ 全部完成、峰值 RSS ≤2 GiB、墙钟 ≤10 s；百万作业（`vm.max_map_count` 调到 2.2 × 10⁶）：10⁶ 个虚拟线程同时处于 `sleep` 停泊，全部完成，峰值 RSS ≤24 GiB（每个停泊线程已提交栈 ≤16 KiB + 堆对象），墙钟 ≤120 s；载体 OS 线程数 = `availableProcessors` + `UNPARKER` 1 条 |
+
+a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualThreadCarrier、TestVirtualThreadScale），expected 取 JDK 21，
+输出与平台、载体编号、调度次序无关。

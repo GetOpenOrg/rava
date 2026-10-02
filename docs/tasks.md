@@ -105,7 +105,15 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       （Linux jmod 拼的 hybrid JDK 跑 TestUnixFileNatives 闭包 >40 min 未完成，需先查语料膨胀）
 │   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
 │   │     │       ClassLoader 6、BootLoader 5、Class 2、Module/ModuleLayer 9 归 boot layer）；拆为 U0–U3 / V / T / L1 / L2 / C / X1 / X2 / Z，
-│   │     │       见计划 §21 ◀── a2
+│   │     │       见计划 §21（§21.7 各项验收数字；§21.8 a3-T 终态：VirtualThread / ForkJoinPool 字节码翻译 + Continuation 有栈协程，
+│   │     │       2026-10-03 用户定，方案 A 作废，细分 T1–T6，目标百万级虚拟线程）◀── a2
+│   │     ├─ ⏳ 生成器 bug：`hierarchy_overloaded_names` 只查超类链、不查接口——类自有 `m(String[])` 与接口继承的抽象 `m()` 同名时
+│   │     │       不 mangle，`this.m()` 解析到一参方法（E0061；`AbstractBasicFileAttributeView.readAttributes`，
+│   │     │       `Files.getAttribute(p, "unix:nlink")` 触发）。修生成器 + 补边界用例，c1d-p0 合入后另开步骤
+│   │     ├─ ⏳ a5-4 闭包膨胀：TestUnixFileNatives Linux 闭包剩余 18 个与文件 API 无关的缺失 native（pkcs11 10、smartcardio 2、
+│   │     │       jimage 1、NativeLibraries 3、BootLoader 1、defineClass0 1）作为膨胀指纹；终态：pkcs11 / smartcardio / defineClass0
+│   │     │       13 个所在类不入闭包（不补手写），NativeLibraries / getSystemPackageLocation / getNativeMap 5 个归 a3-L1 ① native；
+│   │     │       计划 §21.5 a5-4，c1d-p0 合入后另开步骤
 │   │     ├─ 🔄 a4 TestCharsetNamedStreams（自 c4-regfix 移交）：b124e5ac 已修，待服务器抽查
 │   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
