@@ -74,7 +74,7 @@ pub fn override_vtable_erasure(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method, vi
     let Some(owner) = owner else { return Vec::new() };
     let Some((decl_ci, owner_m)) = owner_slot_declaration(ctx, owner, m) else { return Vec::new() };
     let owner_params = ctx.ty.effective_class_type_params(decl_ci).to_vec();
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let anc = ctx.ty.emitted_method_sig_types(decl_ci, owner_m, &owner_params);
     let own_params = ctx.ty.effective_class_type_params(ci).to_vec();
     let own = ctx.ty.emitted_method_sig_types(ci, m, &own_params);

@@ -26,7 +26,7 @@ fn prim_kind(p: Prim) -> PrimKind {
 impl TyCtx<'_> {
     /// 名字（Rust 短名）→ 类引用：注册表短名反查（补 is_interface），否则占位
     fn class_by_short(&self, name: &str, args: Vec<JvmType>) -> JvmType {
-        match self.names.binary_of(name).and_then(|b| self.reg.get(b)) {
+        match self.binary_of(name).and_then(|b| self.reg.get(&b)) {
             Some(ci) => JvmType::class_with(ci.name(), args, ci.is_interface()),
             None => JvmType::class_with(name, args, false),
         }
@@ -39,10 +39,10 @@ impl TyCtx<'_> {
             RsType::Unit => JvmType::Primitive(PrimKind::Void),
             RsType::Object => JvmType::object_type(),
             RsType::Class { binary, args }
-                if args.is_empty() && tparams.contains(self.names.short(binary).as_ref()) =>
+                if args.is_empty() && tparams.contains(self.short(binary).as_str()) =>
             {
                 // 文本口径：无实参的头名是作用域内类型形参 → 类型变量（形参名遮蔽同名短类名）
-                JvmType::type_var(self.names.short(binary), None)
+                JvmType::type_var(self.short(binary), None)
             }
             RsType::Class { binary, args } => {
                 let args = args.iter().map(|a| self.from_rs_type(a, tparams)).collect();
@@ -53,7 +53,7 @@ impl TyCtx<'_> {
                 )
             }
             RsType::Bare { .. } => {
-                let head = t.head_name(self.names).unwrap_or_default();
+                let head = t.head_name(self).unwrap_or_default();
                 if tparams.contains(&head) {
                     JvmType::type_var(head, None)
                 } else {
@@ -70,7 +70,7 @@ impl TyCtx<'_> {
     /// 类型变量 → 名字；通配符 → `?`；null → 空串
     pub fn rust_head_name(&self, t: &JvmType) -> String {
         match t {
-            JvmType::Class { binary, .. } => self.names.short(binary).into_owned(),
+            JvmType::Class { binary, .. } => self.short(binary),
             JvmType::Array(_) => "JArray".to_string(),
             JvmType::Primitive(k) => k.rust_name().to_string(),
             JvmType::TypeVar { name, .. } => name.clone(),

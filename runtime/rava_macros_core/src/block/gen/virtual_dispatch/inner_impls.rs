@@ -375,7 +375,9 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
             // turbofish：vtable 非泛型后 __from_parts 的祖先形参不再经实参类型钉住
             // （非泛型祖先无实参，返回类型可钉住，直接调用）。
             let anc_ident = format_ident!("{}", anc_name);
-            let anc_hook = format_ident!("__as_{}", anc_name);
+            // 钩子按祖先定义名声明（本文件以别名引用祖先时两者不同）
+            let anc_declared = ctx.meta.ancestor_hooks.get(anc_name).unwrap_or(anc_name);
+            let anc_hook = format_ident!("__as_{}", anc_declared);
             let anc_from_parts: TokenStream2 = if anc_erased_args.is_empty() {
                 quote! { #anc_ident::__from_parts }
             } else {

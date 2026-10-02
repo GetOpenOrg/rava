@@ -6,11 +6,11 @@
 //! （档 A 落差记录：socket 通道族留档 B）。
 
 use crate::prelude::*;
-use super::streams::implref::Streams;
+use super::streams::Streams;
 use crate::java::io::InputStream;
 use crate::java::io::OutputStream;
 
-impl super::streams::implref::Streams {
+impl super::streams::Streams {
     /// `of(ReadableByteChannel)`：读通道 → InputStream。
     #[jvm_boundary]
     pub fn of_readablebytechannel(ch: Object) -> Result<InputStream> {

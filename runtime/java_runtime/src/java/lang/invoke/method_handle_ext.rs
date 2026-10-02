@@ -25,7 +25,7 @@
 //! （`reflect_dispatch::reflect_invoke`，与 `Method.invoke` 同一协议）按描述符拆装箱。
 
 use crate::prelude::*;
-use super::method_handle::implref::MethodHandle;
+use super::method_handle::MethodHandle;
 use super::{LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
 use crate::java::lang::Class;
 

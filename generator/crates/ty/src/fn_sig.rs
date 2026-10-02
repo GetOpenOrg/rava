@@ -4,7 +4,7 @@
 //! 文本只在 [`FnSig::render`] 出口按调用方给的命名产生。
 
 use crate::rs_type::RsType;
-use crate::short_names::ShortNames;
+use crate::name_scope::Names;
 
 /// 实例方法签名（形参不含 `self` 接收者；返回类型为 `Result<..>` 的内层）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +25,7 @@ impl Default for FnSig {
 
 impl FnSig {
     /// 签名行 `pub fn name(&self, a: T) -> Result<R>`（无方法体、形参不带 mut）
-    pub fn render(&self, names: &ShortNames) -> String {
+    pub fn render(&self, names: &dyn Names) -> String {
         let mut s = format!("pub fn {}(&self", self.name);
         for (n, t) in &self.params {
             s.push_str(", ");

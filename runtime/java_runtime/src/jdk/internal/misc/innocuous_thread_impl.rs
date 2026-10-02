@@ -9,7 +9,7 @@
 //! JDK 同形的线程名（`InnocuousThread-<n>`）。
 
 use crate::prelude::*;
-use super::innocuous_thread::implref::InnocuousThread;
+use super::innocuous_thread::InnocuousThread;
 use crate::java::lang::{Runnable, Thread, ThreadGroup};
 use std::sync::atomic::{AtomicI32, Ordering};
 

@@ -13,7 +13,7 @@
 //! 恒 true。整类截断 ASM 生成链。
 
 use crate::prelude::*;
-use super::invoker_bytecode_generator::implref::InvokerBytecodeGenerator;
+use super::invoker_bytecode_generator::InvokerBytecodeGenerator;
 use super::{LambdaForm, LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
 
 impl InvokerBytecodeGenerator {

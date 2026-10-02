@@ -21,12 +21,12 @@ fn is_runtime_short(short: &str) -> bool {
     short == simple(ty::consts::OBJECT)
 }
 
-/// 短类名是否已知（`_class_known`：注册表内或手写根类；`$` 与 `_` 等价比较）
+/// 短类名是否已知（`_class_known`：注册表内 binary、手写根类，或可反查到注册表的 Rust 名）
 pub fn class_known(ctx: &InstrCtx, cls_short: &str) -> bool {
     if ctx.reg().is_empty() || cls_short.is_empty() || is_runtime_short(cls_short) || ctx.reg().contains(cls_short) {
         return true;
     }
-    hierarchy::short_binary(ctx, &cls_short.replace('$', "_")).is_some()
+    hierarchy::short_binary(ctx, cls_short).is_some()
 }
 
 /// 根类同名重载（wait 族）的描述符后缀名：后缀名在手写根类 API 名面时采用
@@ -62,7 +62,7 @@ fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -
     }
     let mut target: Option<&ClassInfo> = reg.get(cls);
     if target.is_none() && !cls.contains('/') {
-        target = hierarchy::short_binary(ctx, &cls.replace('$', "_")).and_then(|b| reg.get(&b));
+        target = hierarchy::short_binary(ctx, cls).and_then(|b| reg.get(&b));
     }
     let Some(mut target) = target else {
         return Ok(mname.to_string());

@@ -185,7 +185,7 @@ impl<'a> EmitCtx<'a> {
     fn slot_return_is_object(&self, decl_ci: &ClassInfo, decl_m: &Method) -> bool {
         let params = self.ty.effective_class_type_params(decl_ci);
         let ret = self.ty.emitted_method_sig_types(decl_ci, decl_m, &params).ret;
-        let inner = ret.render(self.ty.names);
+        let inner = ret.render(&self.ty);
         if inner.is_empty() || inner == "Object" {
             return true;
         }

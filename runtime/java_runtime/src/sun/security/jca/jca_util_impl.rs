@@ -5,8 +5,8 @@
 //! NativePRNG）；此处同为进程内单例。
 
 use crate::prelude::*;
-use super::jca_util::implref::JCAUtil;
-use crate::java::security::secure_random::implref::SecureRandom;
+use super::jca_util::JCAUtil;
+use crate::java::security::secure_random::SecureRandom;
 
 crate::__process_static! {
     static DEF: crate::sync_model::__RefSlot<Option<SecureRandom>> = crate::sync_model::__RefSlot::new(None);

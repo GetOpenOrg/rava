@@ -35,7 +35,7 @@ fn objects(n: usize) -> String {
 /// 发射记录的方法 → (vtable 擦除条目签名（不含 `fn `）, 形参名, 条目形参类型)
 fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Option<(String, Vec<String>, Vec<String>)> {
     let tparams: BTreeSet<String> = class_params(ctx, jci).into_iter().collect();
-    let erased = erased_declaration(ctx.ty.names, m, &tparams)?;
+    let erased = erased_declaration(&ctx.ty, m, &tparams)?;
     let head = erased["fn ".len()..].to_string();
     let rest = &erased[erased.find('(')? + 1..erased.rfind(')')?];
     let parts = split_top_level_trimmed(rest);
@@ -46,7 +46,7 @@ fn entry_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod, jci: &ClassInfo) -> Opt
 
 /// 载体声明签名 → (形参类型（去 self）, 返回类型文本)
 fn declared_sig_parts(ctx: &EmitCtx<'_>, m: &EmittedMethod) -> Option<(Vec<String>, String)> {
-    let sig = &m.signature(ctx.ty.names);
+    let sig = &m.signature(&ctx.ty);
     if !sig.starts_with("pub fn ") || !sig.contains('(') {
         return None;
     }
@@ -73,8 +73,8 @@ fn is_carrier_type(ctx: &EmitCtx<'_>, ty: &str) -> bool {
     if head.is_empty() {
         return false;
     }
-    let Some(bin) = ctx.ty.names.binary_of(&head) else { return false };
-    ctx.ty.carrier_type(bin).is_some_and(|c| c.render(ctx.ty.names) == ty)
+    let Some(bin) = ctx.ty.binary_of(&head) else { return false };
+    ctx.ty.carrier_type(&bin).is_some_and(|c| c.render(&ctx.ty) == ty)
 }
 
 /// default 条目体：`<J<Object,..> as From<Object>>::from(..).__default_m(..)`
@@ -145,7 +145,8 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     let reg = ctx.ty.reg;
     let iface = spec.iface_bin.as_str();
     let lam = format!("{}__Lambda", ctx.short(iface));
-    let fn_ty = format!("__Shared<__DynFn!(({}) -> Result<{}>)>", spec.erased_params.join(", "), spec.erased_ret);
+    let (eps, eret) = spec.erased_sig(ctx);
+    let fn_ty = format!("__Shared<__DynFn!(({}) -> Result<{}>)>", eps.join(", "), eret);
     let mut l: Vec<String> = vec![
         "// ── A-5 函数式接口合成对象（LambdaMetafactory 产物的同构物）──".into(),
         format!("// {iface} 的 lambda 实例：SAM 闭包为存储，实现本接口及超接口的"),
@@ -222,7 +223,8 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> Result<()> {
         if host.handwritten {
             continue;
         }
-        let text = lambda_text(ctx, spec, host, ems)?;
+        // 合成对象文本落在宿主文件：引用名在宿主作用域认领
+        let text = lambda_text(&ctx.scoped(&host.scope), spec, host, ems)?;
         let em = ems.get_mut(iface).expect("已校验存在");
         em.text = format!("{}\n\n{text}\n", em.text.trim_end_matches('\n'));
     }
