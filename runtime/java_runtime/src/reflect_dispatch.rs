@@ -5,7 +5,8 @@
 //! 反射调用边在编译期不可知：`Method.invoke` 拿到的 (声明类, 方法名, 描述符)
 //! 运行时才能确定目标。协议 = **按类的分派闭包注册表**：
 //!
-//!   - codegen 为**用户树全部（非泛型）类**发射 per-class `__reflect_dispatch`
+//!   - codegen 为**用户树全部（非泛型）类与接口**（泛型接口挂在 `I<Object..>` 上）及常量反射引用面的
+//!     JDK 类 / 接口发射 per-class `__reflect_dispatch`
 //!    （共置类文件尾部，match (name, descriptor) 臂调本类 typed fn：static
 //!     直调 / 实例方法经 receiver 的 `try_cast::<Self>` 视图 / `<init>` 经
 //!     `Self::new(..)`——视图保留运行时 vtable，虚覆盖自动生效）；
@@ -14,7 +15,9 @@
 //!   - `reflect_invoke` 按名代调：static/构造器在声明类上直查；实例方法从
 //!     **receiver 运行时类**起沿直接父类表（CLASS_DIRECT_SUPER）上溯，首个
 //!     处理该 (name, descriptor) 的闭包胜出——最派生覆盖优先，与 JVM 虚分派
-//!     同序。
+//!     同序。运行时类链上无闭包承载时（lambda / 手写实现对象、实现类无本方法臂），接收者是
+//!     声明类型的实例 → 经声明类型的闭包调用（臂经接收者视图做虚 / 接口调用，按超类型判定，
+//!     不依赖运行时类名）。
 //!
 //! ## 为什么不合流 ObjectVTable 臂（评估文档 2026-09-22 的候选 (a)）
 //!
@@ -137,18 +140,21 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     } else {
         declaring_slash.to_owned()
     };
+    // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
+    // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
+    let finish = |r: Result<Object>| {
+        if let Err(e) = &r {
+            if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
+                mark_target_thrown(e.thrown());
+            }
+        }
+        r
+    };
     let mut hops = 0usize;
     loop {
         if let Some(f) = lookup(&cur) {
             if let Some(r) = f(name, descriptor, Clone::clone(&recv), args) {
-                // 目标方法体抛出（非分派臂实参 marshalling 失败）：登记为「目标抛出」，
-                // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
-                if let Err(e) = &r {
-                    if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
-                        mark_target_thrown(e.thrown());
-                    }
-                }
-                return r;
+                return finish(r);
             }
         }
         // 上溯：直接父类表（Class.getSuperclass 的公共查询面，java_meta 生成）；
@@ -164,6 +170,13 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         hops += 1;
         if hops > 256 {
             break; // 防御环
+        }
+    }
+    // 运行时类链上无闭包承载（lambda / 手写实现对象不是字节码类；接口方法的实现类无本方法臂）：
+    // 接收者是声明类型的实例时，经声明类型的闭包做虚 / 接口调用——臂经接收者视图调用，按其实现选中
+    if is_virtual && recv.0.is_instance_of(declaring_slash) {
+        if let Some(r) = lookup(declaring_slash).and_then(|f| f(name, descriptor, Clone::clone(&recv), args)) {
+            return finish(r);
         }
     }
     panic!("stub: L3 反射分派未覆盖 {}.{}:{}（分派闭包缺席 / 方法未发射）",
