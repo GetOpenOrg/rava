@@ -292,9 +292,17 @@ impl<'a> Engine<'a> {
         let Some(code) = cf.method(&key.name, &key.desc).filter(|x| !x.is_native()).and_then(|x| x.code.as_ref()) else { return };
         let mut descs: Vec<String> = Vec::new();
         let mut classes: Vec<String> = code.exception_table.iter().filter_map(|e| e.catch_type.clone()).collect();
+        let mut calls: Vec<(MemberRef, u32)> = Vec::new();
         for i in &code.insns {
             match &i.operand {
-                classfile::Operand::Field(r) | classfile::Operand::Method(r, _) => {
+                classfile::Operand::Method(r, _) => {
+                    classes.push(r.owner.clone());
+                    descs.push(r.desc.clone());
+                    if matches!(i.opcode, classfile::op::INVOKESTATIC | classfile::op::INVOKESPECIAL | classfile::op::INVOKEVIRTUAL) {
+                        calls.push((r.clone(), i.offset));
+                    }
+                }
+                classfile::Operand::Field(r) => {
                     classes.push(r.owner.clone());
                     descs.push(r.desc.clone());
                 }
@@ -317,6 +325,16 @@ impl<'a> Engine<'a> {
         }
         for d in descs {
             self.touch_desc(&d, via);
+        }
+        // 截断体运行期照字节码执行：体内调用的同属截断的方法（内部边界类上无手写承载、发射层翻译字节码）
+        // 同样会执行，登记为方法（它们自身仍按截断语义只触及引用类），否则发射层只给存根。手写承载的被调方
+        // 不登记：其实现恒在手写层、不会成为存根，登记会把其手写效果拉进闭包（截断语义下本不展开）
+        for (r, off) in calls {
+            let cut = r.owner == key.owner
+                && self.h.class(&r.owner).is_some_and(|c| c.method(&r.name, &r.desc).is_some_and(|x| self.ctx.boundary_cut(&c, x)));
+            if cut {
+                self.method(r, Via::method("truncated-call", m, Some(off)));
+            }
         }
     }
 

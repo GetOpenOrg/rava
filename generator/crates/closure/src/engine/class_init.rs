@@ -3,7 +3,8 @@
 //! `initializers` 成员（`Unsafe.ensureClassInitialized` 等）由 VM 初始化以实参传入的类：`ldc` 类字面量不触发初始化
 //! （JVMS §5.5），初始化只发生在这次调用里，没有字节码层面的 `<clinit>` 调用边。调用点上 Class 实参值集里的类镜像
 //! 即被初始化的类（值集增长时站点重跑）：该类进入初始化层（`<clinit>` 入链），并按调用点记入输出，供生成器登记
-//! 初始化钩子。基本类型类镜像（[`Engine::primitive_mirror`]）与数组类没有初始化，跳过。值集含所指未知的 Class（open / 非镜像值）时记 `unknown`——无法枚举，由生成器对闭包内全部带
+//! 初始化钩子。基本类型类镜像（[`Engine::primitive_mirror`]）、非字节码类镜像（[`Engine::synthetic_mirror`]）与数组类没有
+//! 初始化，跳过。值集含所指未知的 Class（open / 非镜像值）时记 `unknown`——无法枚举，由生成器对闭包内全部带
 //! `<clinit>` 的类登记钩子兜底。
 
 use super::*;
@@ -14,6 +15,8 @@ pub struct ClassInitFacts {
     pub sites: BTreeMap<String, BTreeSet<String>>,
     /// 出现过所指未知的 Class 实参
     pub unknown: bool,
+    /// 实参所指未知的调用点 → 成因（`open(类型)` / 非镜像值名 / `non-reference`），供 closure.json 诊断
+    pub unknown_sites: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl ClassInitFacts {
@@ -30,6 +33,7 @@ impl<'a> Engine<'a> {
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
         let Some(a) = args.get(skip + j) else { return };
         let mut known: Vec<String> = vec![];
+        let mut unknown: Vec<String> = vec![];
         match a {
             V::Class(c, _) => known.push(c.to_string()),
             V::Null => {}
@@ -37,19 +41,26 @@ impl<'a> Engine<'a> {
                 let class = self.id(CLASS);
                 let fs = self.feeds(m, a, class);
                 let s = self.value_set(&fs);
-                self.class_init.unknown |= !s.open.is_empty();
+                for o in s.open.iter() {
+                    unknown.push(format!("open({})", self.names[o as usize]));
+                }
                 for x in s.classes.iter() {
                     match self.mirrors.get(&x) {
                         Some(&c) => known.push(self.names[c as usize].to_string()),
-                        // 基本类型类没有初始化
-                        None if Some(x) == self.prim_mirror => {}
-                        None => self.class_init.unknown = true,
+                        // 基本类型类没有初始化；非字节码类镜像（lambda 合成类 / 手写实现对象，[`Engine::synthetic_mirror`]）
+                        // 所指类不是字节码类，没有 `<clinit>`，也就没有可登记的初始化钩子
+                        None if Some(x) == self.prim_mirror || Some(x) == self.synth_mirror => {}
+                        None => unknown.push(self.names[x as usize].to_string()),
                     }
                 }
             }
-            _ => self.class_init.unknown = true,
+            _ => unknown.push("non-reference".to_string()),
         }
         let site = format!("{}@{off}", self.methods[m].key);
+        if !unknown.is_empty() {
+            self.class_init.unknown = true;
+            self.class_init.unknown_sites.entry(site.clone()).or_default().extend(unknown);
+        }
         // 数组类没有初始化（JVMS §5.5）
         for c in known.into_iter().filter(|c| !c.starts_with('[')) {
             if !self.class_init.sites.get(&site).is_some_and(|s| s.contains(&c)) {

@@ -84,7 +84,14 @@ pub enum ClinitEnter {
 
 static CLINIT_OWNERS: Mutex<Vec<(&'static str, std::thread::ThreadId)>> = Mutex::new(Vec::new());
 static CLINIT_GEN: Mutex<u64> = Mutex::new(0);
+/// 已成功完成初始化的类（binary name，`/` 分隔）：`Unsafe.shouldBeInitialized` 的查询面（JVMS §5.5 状态「已初始化」）
+static CLINIT_DONE: Mutex<Option<std::collections::HashSet<&'static str>>> = Mutex::new(None);
 static CLINIT_CV: Condvar = Condvar::new();
+
+/// 类是否已成功完成初始化（binary name，`/` 分隔）
+pub fn clinit_done(class: &str) -> bool {
+    CLINIT_DONE.lock().as_ref().is_some_and(|s| s.contains(class))
+}
 
 /// 进入类初始化（`state` 为该类的状态单元）。非泛型：全部类共用一份实例。
 pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> ClinitEnter {
@@ -120,6 +127,9 @@ pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> Clin
 
 /// 结束类初始化：`ok` → 已完成（3），否则 erroneous（2）；唤醒等待者。
 pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>) {
+    if ok {
+        CLINIT_DONE.lock().get_or_insert_with(Default::default).insert(class);
+    }
     {
         let mut owners = CLINIT_OWNERS.lock();
         state.set(if ok { 3 } else { 2 });

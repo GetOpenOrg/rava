@@ -62,7 +62,7 @@ fn absorb_body(out: &mut FnInfo, g: &FnInfo) {
     out.ctors.extend(g.ctors.iter().cloned());
     out.calls.extend(g.calls.iter().cloned());
     out.opaque.extend(g.opaque.iter().cloned());
-    out.fields.extend(g.fields.iter().map(|fa| FieldAccess { on_self: false, ..fa.clone() }));
+    out.fields.extend(g.fields.iter().map(|fa| FieldAccess { on_self: false, value_self: false, ..fa.clone() }));
     out.array_access |= g.array_access;
     out.objects.extend(g.objects.iter().cloned());
 }
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(object_structs(&file), HashSet::from(["Adapter".to_string()]));
         let mut raw = FileFns::default();
         scan_file(&file, &HashMap::new(), &mut raw);
-        close_transitive(&mut raw.fns, &raw.calls);
+        close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
         let objs = close(&raw);
         let a = &objs["Adapter"];
         assert_eq!(
