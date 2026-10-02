@@ -23,18 +23,27 @@
 
 **手写边界原则对齐（CLAUDE.md §0/§1，2026-10-03 用户重申）**：矩阵内一切支撑件——servlet 容器件、JDBC fake 驱动、各 pilot 的 fixture——**一律走 Java 侧实现 + 管线翻译**（用户域测试代码，m5 跨 crate 回调模式的自然延伸），**不新增任何 runtime 手写层**；JDK 面（java.sql 等）从 jmods 翻译。性能或便利不是手写理由；新 pilot 若逼出运行期类定义等手写准入点，按 §1 三准入登记清单而非散写。
 
-## 二、能力现状核查（2026-10-03 实测，矩阵的推导起点）
+## 二、基础能力缺口全表（2026-10-03 对齐 fe197231；矩阵 = 本表的函数）
 
-| 能力 | 状态 | 证据 | 影响 |
-|---|---|---|---|
-| 动态代理 | ✅ **已落地** | `Proxy.newProxyInstance` → VM 支持类 `Proxy$Dyn` 承载全部代理实例（FS-R R4a，runtime/java_runtime/.../proxy_impl.rs），`isProxyClass`/`getInvocationHandler` 按字节码翻译 | **MyBatis 最大疑点被拆除**：MapperProxy 接口代理不需要运行期类定义；剩分派经 L3 Method 元数据的精度（junit m3 已有 L3） |
-| 反射 L1/L2/L3 | ✅ | Method/Field/Constructor 元数据表 + invoke 分派（m3 验收）；跨 crate 扩表已做 | spring 切片 / MyBatis / picocli 的地基 |
-| ServiceLoader 静态目录 | ✅ | 2026-09-26 计划落地 | slf4j LoggerFactory 绑定、JDBC DriverManager SPI 同族 |
-| XML 栈（XPath/XSL/DOM） | ✅ 在闭包 | m1 发射集含 com/sun/org/apache/xpath 树（m1 的失败是拆 crate import 缺陷，非闭包缺口） | MyBatis 配置/映射解析面 |
-| **java.sql** | ❌ runtime 无此包 | `find runtime -path "*java/sql*"` 零命中 | **MyBatis 硬前置**：JDBC 层立项——**java.sql 接口面从 jmods 翻译（唯一路径，手写边界原则 §1）**；驱动侧 = Java fixture 实现 java.sql 接口（用户域 Java 代码经管线翻译）或真实纯 Java 驱动 jar（如 H2）翻译，**零 runtime 手写** |
-| 类路径扫描 / ClassLoader 资源枚举 | ❌ | 静态翻译模型边界 | spring-context 全量、Boot 自动装配的 gate |
-| 运行期字节码生成 | ❌ 本体排除 | byte-buddy / CGLIB / Mockito 在盘 jar 属此类 | Boot 的 AOP 代理、Mockito 不入矩阵 |
-| 真并发 / 抢占 | ◐ | 2026-09-26 real-multithreading 计划在列 | servlet async、guava ListenableFuture 的 gate |
+> 用户命题「要满足这些测试，项目还要具备哪些基础能力」。✅ 已具备 = 矩阵地基不再立项；❌/◐ = 真正的立项项，括号内记号与 §4.1 依赖源对齐。运行期字节码生成本体（byte-buddy/CGLIB/Mockito/Netty）维持排除，其静态替代路径 = K11。
+
+| # | 基础能力 | 现状（证据） | 还要做什么（立项内容） | 服务的测试（gates） | 量级 / 决策前置 |
+|---|---|---|---|---|---|
+| K1 | 反射元数据与 L3 分派 | ✅ T3 增强：按接收者派发、接口 `__reflect_dispatch`、错接收者 IAE（StockTrans 分派 22949→1645）；跨 crate 元数据表已扩 | 无（随 pilot 用例扩审计线） | OGNL #8、mybatis #9、spring-core/beans #10/#11、beanutils、picocli、assertj | 已具备 |
+| K2 | 动态代理（接口面） | ✅ `Proxy.newProxyInstance` → `Proxy$Dyn` 承载（FS-R R4a）；`isProxyClass`/`getInvocationHandler` 按字节码翻译 | 无 | mybatis MapperProxy、Retrofit | 已具备 |
+| K3 | ServiceLoader 静态目录（C-SPI） | ✅ 2026-09-26 落地 | lib crate 场景一次实证（随 #1 slf4j 顺带完成） | slf4j 绑定、JDBC DriverManager（K7 内） | 已具备 |
+| K4 | XML 栈（DOM/XPath/XSL） | ✅ 闭包内（m1 发射集含 xpath 树实证） | 无 | mybatis XML、logback/struts2 配置、digester | 已具备 |
+| K5 | jar→lib crate 管线 | ✅ `rava build --lib`（S1–S5 后）；m1/m2 GOLDEN OK @ fe197231 复核 | 无 | 一切 pilot | 已具备 |
+| K6 | 数值/时区/编码 golden 口径 | ✅ DisableIntrinsic + locale/TZ 固定（run_tests golden flags） | 无 | math3、codec digest、jackson 数字、joda | 已具备 |
+| **K7** | **JDBC 面（java.sql/javax.sql）**（C-SQL） | ❌ runtime 无此包（find 零命中） | **立项**：接口面从 jmods 翻译（唯一路径，手写边界 §1）+ DriverManager SPI 接 K3 + 驱动侧 = Java fixture（用户域 Java 经翻译）或 H2 真驱动 jar 翻译，零 runtime 手写 | #9 mybatis、HikariCP（+K8）、Quartz、dbcp2/dbutils（在盘）、hibernate（前置之一） | 中；D-4 拍板（fixture vs H2） |
+| **K8** | **真并发线程模型**（C-MT） | ◐ 协作单线程调度（真超时不可达已入 compatibility.md） | **决策 + 立项**：线程模型终态（real-multithreading 计划在列）——单线程深化 vs 真并发 | servlet async、Disruptor、RxJava 调度器面、HikariCP、Caffeine 补强、guava ListenableFuture | 大；先拍板方向 |
+| **K9** | **网络 IO 边界**（C-NET） | ❌ 未立项 | socket/NIO 边界层立项 + 翻译域口径拍板（网络是否入翻译域） | OkHttp 网络面、httpclient/httpcore 转正（在盘）、Redis 客户端、jakarta.mail 发送面、Dubbo/RocketMQ/Nacos | 大；先决策口径 |
+| **K10** | **类路径扫描 / ClassLoader 资源枚举**（C-SCAN） | ❌ 未建模 | `ClassLoader.getResources` 等建模（K3 静态目录机制的自然扩展：把资源清单也静态化） | spring-context 全量、Boot 自动装配、Dubbo SPI | 中-大 |
+| **K11** | **翻译期子类合成（类代理）**（C-SYN） | ❌ 未立项 | **新能力**：闭包内已知类在生成期合成代理 / 懒加载子类——cglib/byte-buddy 的静态替代，与 K2（接口版）互补 | hibernate-core 懒加载、Spring AOP / Boot 半 | 大；独立立项 |
+| K12 | 闭包收窄到位（C-C1D） | ◐ T2 在途（b1+T3 已合：返回模型收窄、分派减量） | T2 收官 + 大闭包 pilot 成本实测 | 大闭包 pilot 的 e2e 放量（guava/lang3/mybatis/spring 切片）、W4 | 在途 |
+| **K13** | **跨测试编译复用 / 预构建缓存**（C-CACHE） | ❌ 无（每 scratch 现场发射编译） | 指纹键控**生成源缓存**先行；rlib 复用挂 java-runtime-core 版本化（R9）；或 T1 跨测试编译复用方案 | e2e 放量成本、W4、「依赖包就是包」终态 | 中；Q3 用户一次决策 |
+| K14 | e2e 形态接口（H1） | ⏳ S6+S7 既定队列（◀ C4 收官；dyn_compare 冻结中） | S6 dyn 并入 rava → S7 run_tests 拆 scripts/e2e/ + form.toml + 63_junit 模板 | 一切 e2e 目录（63_junit、64_… 段） | 既定队列 |
+| K15 | 确定性时钟源 | ◐ 待核 | 时钟注入 / 确定性沙箱复核（golden 可复现前提；roadmap「时钟/随机确定性沙箱」逼出能力） | Quartz 调度、Caffeine 过期用例、logback 时间戳 | 小（若已有注入机制）——需核 |
 
 **jar 资产盘点（52 个已在盘，`tests/lib_pilot/deps/target/pilot-libs/`）**：commons 全家（lang3/text/csv/io/codec/collections4/math3/beanutils/…）、guava 33.7.1、jackson 三件套（core/annotations/databind）、gson、httpclient/httpcore（4/5 两代）、joda-time、picocli、slf4j-api、eclipse-collections、assertj、byte-buddy（排除项，仅透视用）、junit/hamcrest。**不在盘**：servlet-api、mybatis、spring 全家、**OGNL、struts2、hibernate/jakarta.persistence-api（SSH 增补件，2026-10-03 核查零命中）**——pom 增行即可（fetch 脚本既有机制）。
 
