@@ -130,6 +130,7 @@ impl<'a> Engine<'a> {
             pending_types: BTreeMap::new(),
             lambda_stack: HashSet::default(),
             mirrors: HashMap::default(),
+            loaders: Default::default(),
             mirror_of: Vec::new(),
             mflows: HashMap::default(),
             mflow_seen: HashSet::default(),

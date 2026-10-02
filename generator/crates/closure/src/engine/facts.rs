@@ -138,7 +138,7 @@ pub(super) struct FieldInfo {
     pub(super) key: MemberRef,
     pub(super) access: u16,
     pub(super) constant: Option<Const>,
-    /// 写入来源超出字节码（边界类 / 手写字段）
+    /// 写入来源超出字节码（边界类 / 手写字段 / VM 状态字段钩子）
     pub(super) open: bool,
     /// 声明类实现可序列化标记接口（反序列化可写该字段）
     pub(super) serializable: bool,
@@ -293,7 +293,10 @@ impl Ctx<'_> {
         let fi = self.h.resolve_field(&f.owner, &f.name, &f.desc).map(|site| {
             let fd = site.field();
             let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-            let open = matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root) || !self.hw.member(&key.owner, &key.name).fns.is_empty();
+            // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
+            let open = matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+                || !self.hw.member(&key.owner, &key.name).fns.is_empty()
+                || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
             let markers = self.man.serializable_markers();
             let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
             Rc::new(FieldInfo { key, access: fd.access, constant: fd.constant_value.clone(), open, serializable })

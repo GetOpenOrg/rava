@@ -56,6 +56,7 @@ mod hw_infer;
 mod hw_inherit;
 mod hwobj;
 mod vmhook;
+mod field_hooks;
 mod rtfn;
 mod vmrules;
 mod hwfield;
@@ -359,6 +360,8 @@ pub struct Engine<'a> {
     open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
     mirrors: HashMap<u32, u32>,
+    /// 类的定义加载器表（字段钩子的接收者判定，惰性建立）
+    loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
     /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）

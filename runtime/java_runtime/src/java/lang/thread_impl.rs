@@ -58,6 +58,18 @@ crate::__process_static! {
     /// getAllStackTraces / ThreadGroup.activeCount / enumerate）。
     static LIVE_THREADS: crate::sync_model::__RefSlot<Vec<Thread>> =
         crate::sync_model::__RefSlot::new(Vec::new());
+    /// 初始线程（VM 创建的 main 线程对象，HotSpot `create_initial_thread`）。
+    static INITIAL_THREAD: crate::sync_model::__RefSlot<Option<Thread>> =
+        crate::sync_model::__RefSlot::new(None);
+}
+
+/// 初始线程对象：initPhase3 在其上设上下文类加载器。尚未构造时调用方即在初始线程上（其余 Java 线程都由
+/// 初始线程派生，派生时已经 currentThread 构造了它）。
+pub(crate) fn __vm_initial_thread() -> Result<Thread> {
+    if let Some(t) = INITIAL_THREAD.with(|m| m.borrow().as_ref().map(Clone::clone)) {
+        return Ok(t);
+    }
+    Thread::currentThread()
 }
 
 fn thread_identity(t: &Thread) -> usize {
@@ -186,6 +198,7 @@ impl Thread {
             return Ok(t);
         }
         let main = platform_main_thread();
+        INITIAL_THREAD.with(|m| *m.borrow_mut() = Some(Clone::clone(&main)));
         CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&main)));
         LIVE_THREADS.with(|v| v.borrow_mut().insert(0, Clone::clone(&main)));
         Ok(main)

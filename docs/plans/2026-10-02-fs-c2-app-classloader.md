@@ -73,10 +73,15 @@
 1. **定义加载器是 VM 注入状态，由清单声明、生成器追加。**
    - 镜像字段 `Class.classLoader` 在 HotSpot 中由 `java_lang_Class::create_mirror` 写入。原生镜像改为首次读取时按
      定义加载器表填充：
-     - `vm_intrinsics.toml [vm_state]` 声明该字段的读取钩子；
-     - 生成器把对它的 `getfield` 发射为共置手写的读取钩子；
-     - 闭包分析器把读取点连到钩子的手写体（`ClassLoaders.appClassLoader()` / `platformClassLoader()`）。
-       程序从不读取定义加载器时，加载器层级不进闭包。
+     - `vm_intrinsics.toml [vm_state.field_hooks]` 声明该字段的接收者钩子 `Class.__vm_defining_loader`
+       （`fn(&self) -> Result<&Self>`，`classLoader` 为空且类非引导定义时按表写入 `ClassLoaders.appClassLoader()` /
+       `platformClassLoader()` 的返回值）；
+     - 生成器把对它的 `getfield` / `putfield` 发射为 `recv.__nn()?.__vm_defining_loader()?.__get_classLoader()`；
+     - 闭包分析器按接收者值集接入钩子（`engine/field_hooks.rs`）：值集只含引导类镜像时钩子是空操作，不接入、
+       读结果为字段值集（null）；含应用 / 平台类镜像、所指未知的 Class 对象或 open 时才把访问点连到钩子手写体。
+       于是 `Throwable.class.desiredAssertionStatus()` 一类引导类镜像上的读取不带入加载器层级，程序读用户类 /
+       平台类的定义加载器时才带入。
+     - 清单字段钩子不作为类实例化时的 VM 钩子入口（`engine/vmhook.rs` 排除），只经访问点入链。
    - 定义加载器表由生成器给出：每个类块带 `defining_loader` 属性，java_meta 汇总成表。
      - 用户类与 lib crate 类为 app；
      - JDK 类按所在 jmod 的模块名查 JDK 自己的模块—加载器映射。映射取自 `ModuleLoaderMap$Modules.<clinit>` 的
@@ -102,18 +107,25 @@
         - 原生二进制没有 `-D` 注入，这个属性折叠为 null，自定义加载器分支不可达；
      3. `VM.initLevel(4)`。
 
-     原生二进制把这一段 VM 驱动的引导序列（准入 ③）放到**首次读取 `scl`** 时执行：
-     - 清单 `[vm_state.field_reads]` 为 `ClassLoader.scl` 声明读取钩子；
-     - 钩子在 `scl` 为空时，按上面的顺序执行 `initSystemClassLoader` 的字节码，然后返回字段值；
-     - 钩子带可重入互斥：`initSystemClassLoader` 内部读 `scl` 做递归检查，执行中的线程直接读到原值 null，
-       其余线程等待执行结束。
+     4. （同一段）`Thread.currentThread().setContextClassLoader(scl)`：初始线程（main）的上下文类加载器即系统类加载器。
 
-     程序从不读 `scl` 时，系统类加载器与加载器层级都不进闭包（HelloWorld 不增长）。
+     原生二进制把这一段 VM 驱动的引导序列（准入 ③）放到**首次读写 `ClassLoader.scl` 或 `Thread.contextClassLoader`**
+     时执行：
+     - 清单 `[vm_state.field_hooks]` 为这两个字段声明同一个静态钩子 `ClassLoader.__vm_init_phase3`，发射为访问前的
+       一条语句 `ClassLoader::__vm_init_phase3()?;`（getstatic / putstatic / getfield / putfield 同形）；
+     - 钩子按上面的顺序执行字节码：`initSystemClassLoader()` 写 `scl`，再对初始线程对象（`thread_impl.rs`
+       `__vm_initial_thread`，main 线程对象首次 `currentThread` 时登记）调 `setContextClassLoader(scl)`；
+     - 进程内只执行一次：钩子带可重入互斥与进行中标记，段内本线程对两个字段的读写（`initSystemClassLoader`
+       的递归检查读 `scl`、`putstatic scl`、`putfield contextClassLoader`）直接放行，其余线程在互斥上等待段结束。
+     - 新线程的上下文加载器由 `Thread` 构造器字节码 `contextClassLoader(parent)` 继承：读父线程字段前钩子先完成
+       引导，故任何线程都看到与 JDK 相同的继承结果；`ServiceLoader.load(Class)` 经 `getContextClassLoader` 取得
+       应用加载器。
+
+     程序从不访问这两个字段时，系统类加载器与加载器层级都不进闭包（HelloWorld 不增长）。
    - `VM.initLevel()` 是 VM 注入状态（准入 ③，与 `isBooted` 同源）：
      - 进入 `main` 时为 4（SYSTEM_BOOTED）；
-     - 只有上面的钩子在执行 `initSystemClassLoader` 期间把它置为 3。
-   - 主线程的上下文类加载器：initPhase3 还会调用 `Thread.currentThread().setContextClassLoader(scl)`。
-     这一项不在本任务内，记为遗留，见 §四。
+     - 只有执行上面引导段的线程在段内读到 3（线程局部标记，`VM::__vm_in_init_level3`）；其余线程此时在钩子
+       互斥上等待，读不到中间档。
 3. **`desiredAssertionStatus` 走 `Class` / `ClassLoader` 的字节码路径。**
    - 删除 `Class.desiredAssertionStatus:()Z` 常量特判。
    - VM 初值保留为 `desiredAssertionStatus0 = false`（`-ea` 未启用）与 `retrieveDirectives` 的空指令表（native）。
@@ -133,10 +145,13 @@
   - 用户类、嵌套类、数组类（取元素类的加载器）、基本类型与 `void.class`（null）、JDK 引导类（`String`）、平台类（如 `java.sql` 未入闭包时以 `java.net.http` 等替代）的 `getClassLoader()`；
   - `getSystemClassLoader()` 与用户类加载器同一性、`getParent()` 链长度与末端 null；
   - `desiredAssertionStatus()` 对用户类 / JDK 类的取值，`setClassAssertionStatus` / `setPackageAssertionStatus` / `setDefaultAssertionStatus` 之后新加载类的取值；
-  - `Class.forName(name, false, loader)` 按应用加载器查找用户类。
+  - `Class.forName(name, false, loader)` 按应用加载器查找用户类；
+  - 上下文类加载器：主线程 `getContextClassLoader()` 与 `getSystemClassLoader()` 是同一对象；新建线程继承上下文
+    加载器（含父线程改设后再建的线程）；`ServiceLoader.load(Class)` 按上下文加载器查找。
 - `vm_intrinsics.toml` 中 `desiredAssertionStatus` 常量条目：0。
 - raw-audit `non_native_overrides` = 0 保持。
-- 闭包规模：HelloWorld、TestStackWalkerFrames 不因本任务增长（不读定义加载器的用例不带入加载器层级）。
+- 闭包规模：HelloWorld 不因本任务增长（不读定义加载器 / 系统加载器的用例不带入加载器层级）。读取用户类加载器的
+  用例按 JDK 语义带入 `ClassLoaders.<clinit>` 的构造链（实测见 §四）。
 
 ## 四、实施记录与 C1d-a 合并取舍
 
@@ -145,15 +160,26 @@
 | 文件 | 改动 |
 |---|---|
 | `runtime/java_runtime/src/jdk/internal/loader/class_loaders_impl.rs` | 整个删除（`appClassLoader` / `platformClassLoader` / `bootLoader` 回字节码） |
-| `runtime/java_runtime/src/java/lang/class_loader_impl.rs` | 删 `getSystemClassLoader` / `getParent` / `getClassLoader(Class)` / `build_system_class_loader`；新增 `scl` 读取钩子 `__vm_system_loader` |
-| `runtime/java_runtime/src/java/lang/class_impl.rs` | 新增 `classLoader` 读取钩子 `__vm_defining_loader` |
-| `runtime/java_runtime/src/jdk/internal/misc/vm_impl.rs` | 新增 `initLevel()`（VM 引导阶段状态） |
+| `runtime/java_runtime/src/java/lang/class_loader_impl.rs` | 删 `getSystemClassLoader` / `getParent` / `getClassLoader(Class)` / `build_system_class_loader`；新增 initPhase3 引导段钩子 `__vm_init_phase3` |
+| `runtime/java_runtime/src/java/lang/class_impl.rs` | 新增 `classLoader` 接收者钩子 `__vm_defining_loader` |
+| `runtime/java_runtime/src/java/lang/thread_impl.rs` | 新增初始线程登记 `INITIAL_THREAD` 与 `__vm_initial_thread` |
+| `runtime/java_runtime/src/jdk/internal/misc/vm_impl.rs` | 新增 `initLevel()`（VM 引导阶段状态）与 `__vm_in_init_level3` |
 | `closure.toml` | `[release]` 加 `ClassLoaders` / `BuiltinClassLoader` / `URLClassPath` / `ArchivedClassLoaders`（C1d-a 合并时随 `[release]` 删除，并把 `ClassLoaders` 移出 `[vm_boundary]`） |
 | `vm_intrinsics.toml` | 新增 `[vm_state]`；删 `Class.desiredAssertionStatus:()Z` 常量条目（独立提交） |
 
 `vm_boundary_methods` 目标：`ClassLoader` 的 `getSystemClassLoader` / `getParent` / `getClassLoader` 三项移出，
 30 → 27。
 
-遗留：主线程上下文类加载器（initPhase3 的 `setContextClassLoader(scl)`）仍为 null，另立条目。
+生成器侧：`closure/src/manifest/vm_state.rs`（清单）、`closure/src/loaders.rs`（定义加载器表）、
+`closure/src/engine/field_hooks.rs`（访问点接入）、`instr/src/sim/fields.rs`（发射）、`emit` 类块 `defining_loader`
+属性、`java_meta` 的 `CLASS_DEFINING_LOADER` 表。
+
+闭包实测（A 步，`rava closure`，类 / 方法）：
+
+| 用例 | 前 | 后 | 说明 |
+|---|---|---|---|
+| HelloWorld | 268 / 723 | 266 / 723 | 不读加载器；删掉手写 ClassLoaders 后少 2 类 |
+| TestClassNestNatives | 366 / 1122 | 393 / 1258 | 读用户类加载器（`$Loader` 构造的父加载器） |
+| TestStackWalkerFrames | 422 / 1468 | 483 / 1965 | `StackTraceElement.computeFormat` 读用户帧类的加载器（JDK 据 BuiltinClassLoader 决定格式） |
 
 提交：（随实施补充。）

@@ -2,6 +2,11 @@ use crate::prelude::*;
 use super::vm::VM;
 use crate::java::lang::String;
 
+std::thread_local! {
+    /// 本线程正在执行 initPhase3 的系统类加载器段（见 `initLevel`）。
+    static IN_PHASE3: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// 停机标记（进程级）。
 static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -18,6 +23,23 @@ impl VM {
     #[jvm_boundary]
     pub fn pageAlignDirectMemory() -> Result<bool> {
         Ok(false)
+    }
+
+    /// 引导阶段 `initLevel()`（VM 注入状态，准入第 ③ 类；HotSpot 由 initPhase1~3 经 `initLevel(int)` 写入）。
+    /// 原生二进制进入 main 时为 SYSTEM_BOOTED（4）；只有执行 initPhase3 系统类加载器段的线程
+    /// （`ClassLoader::__vm_init_phase3`）在段内读到 SYSTEM_LOADER_INITIALIZING（3）——其余线程此时读 `scl`
+    /// 会在该段的互斥上等待结束，与 JVM「initPhase3 先于任何应用线程」的时序一致。
+    #[jvm_boundary]
+    pub fn initLevel() -> Result<i32> {
+        Ok(if IN_PHASE3.with(|f| f.get()) { 3 } else { 4 })
+    }
+
+    /// 在 initLevel == 3 下执行 `f`（initPhase3 的 `VM.initLevel(3)` … `VM.initLevel(4)` 区段，仅本线程可见）。
+    pub fn __vm_in_init_level3<R>(f: impl FnOnce() -> R) -> R {
+        IN_PHASE3.with(|x| x.set(true));
+        let r = f();
+        IN_PHASE3.with(|x| x.set(false));
+        r
     }
 
     /// 原生二进制进入 main 时运行时已完成初始化（对应 initLevel == SYSTEM_BOOTED）。

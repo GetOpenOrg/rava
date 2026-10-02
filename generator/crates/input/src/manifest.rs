@@ -3,7 +3,7 @@
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
 //! - seeds.toml：`[jca]` 放行、`[boot_init]`、`[data_bundle]` 载体；
-//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
+//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`、`[vm_state]`。
 //!
 //! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
 //! 内建条目须写 kind 与 reason）违反时返回 [`InputError::Manifest`]。
@@ -71,6 +71,8 @@ pub struct RuntimeManifest {
     /// （登记了 concat / object_methods 引导方法时必填，装载时校验）
     pub indy_helpers: BTreeMap<String, String>,
     pub vm_constants: VmConstants,
+    /// VM 注入状态的落地（`[vm_state]`：字段访问钩子、模块 → 加载器映射来源）
+    pub vm_state: closure::manifest::VmState,
 }
 
 fn load_toml(dir: &Path, name: &str) -> Result<Table, InputError> {
@@ -194,6 +196,7 @@ impl RuntimeManifest {
                 null_returns: str_list(vmc, "null_returns", "vm_constants")?.into_iter().collect(),
                 null_to_false: str_list(vmc, "null_to_false", "vm_constants")?.into_iter().collect(),
             },
+            vm_state: closure::manifest::VmState::from_toml(&vm).map_err(InputError::Manifest)?,
         })
     }
 
