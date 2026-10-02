@@ -44,7 +44,7 @@ fn resolve_method_owner<'c>(ctx: &EmitCtx<'c>, cls: &str, mname: &str, desc: &st
 }
 
 /// bridge 方法体里被桥接的真实方法：(声明类, 真实描述符)
-fn bridge_call_target<'c>(ctx: &EmitCtx<'c>, owner: &ClassInfo, bridge: &Method, mname: &str) -> Option<(&'c ClassInfo, String)> {
+pub(crate) fn bridge_call_target<'c>(ctx: &EmitCtx<'c>, owner: &ClassInfo, bridge: &Method, mname: &str) -> Option<(&'c ClassInfo, String)> {
     let code = ctx.input.code_ops(owner.name(), bridge)?;
     for insn in code.ops().rev() {
         let Operand::Method(r, _) = &insn.operand else { continue };

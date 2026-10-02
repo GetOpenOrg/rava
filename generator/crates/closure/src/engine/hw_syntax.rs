@@ -100,23 +100,6 @@ impl<'a> Engine<'a> {
             .find_map(|c| c.fields.iter().find(|f| f.name == name && f.is_static()).map(|f| (c.name.clone(), f.desc.clone())))
     }
 
-    /// 手写体接收者静态类型 → 类名（引用类型；推不出为 None）
-    pub(super) fn stype_class(&self, host: &str, s: &SType) -> Option<String> {
-        let of_desc = |d: &str| match parse_field(d)? {
-            FieldType::Object(c) => Some(c),
-            _ => None,
-        };
-        match s {
-            SType::Named(t) => self.resolve_tref(host, t),
-            SType::Field(b, f) => {
-                let c = self.stype_class(host, b)?;
-                of_desc(&self.field_by_name(&c, f)?.1)
-            }
-            SType::Ret(t, m) => self.rust_method_ret(&self.resolve_tref(host, t)?, m),
-            SType::Call(b, m) => self.rust_method_ret(&self.stype_class(host, b)?, m),
-        }
-    }
-
     /// 手写体字段访问器：写入值接进字段节点并登记「有手写写入」；读出值汇入值池。
     /// 接收者推不出 → 所有同名字段按 open 处理（安全回退）
     pub(super) fn hw_fields(&mut self, m: usize, host: &str, fields: &[FieldAccess]) {

@@ -19,6 +19,7 @@ use classfile::MemberRef;
 mod hooks;
 mod objects;
 mod scan;
+mod stype;
 mod syntax;
 mod type_refs;
 mod units;
@@ -49,11 +50,15 @@ const RUST_KEYWORDS: &[&str] = &[
     "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
-/// 回调目标（由手写体调用点推断）：方法或静态字段
+/// 生成类的类初始化入口名（`T::__class_init()`：JVMS §5.5 主动初始化 T）
+pub(crate) const CLASS_INIT_RUST: &str = "__class_init";
+
+/// 回调目标（由手写体调用点推断）：方法、静态字段或类初始化
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Upcall {
     Method(MemberRef),
     Field(MemberRef),
+    Init(String),
 }
 
 /// Rust 类型路径（分段）→ binary name 候选（由调用方按类路径验证存在）
@@ -149,6 +154,8 @@ pub struct ClassHw {
     pub objects: BTreeMap<String, HwObject>,
     /// 文件定义的类型名（只对模块单元填写：路径调用 `模块::T::f` 的定位）
     pub types: BTreeSet<String>,
+    /// 顶层 impl 块关联 fn 的返回类型：(impl self 类型全路径, fn 名) → 返回类型全路径（剥 `Result` / `Option`）
+    pub rets: stype::LocalRets,
 }
 
 /// 成员（Java 名）对应的手写体汇总
@@ -319,6 +326,7 @@ impl Handwritten {
         hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls);
         hw.objects = objects::close(&raw);
+        hw.rets = std::mem::take(&mut raw.rets);
         hw.fns = raw.fns;
         hw
     }

@@ -51,6 +51,7 @@ mod lambda_adapt;
 mod hw;
 mod hw_mem;
 mod hw_syntax;
+mod hw_stype;
 mod hw_infer;
 mod hw_inherit;
 mod hwobj;
