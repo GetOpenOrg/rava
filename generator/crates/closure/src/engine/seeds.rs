@@ -28,7 +28,8 @@ pub struct SeedState {
 
     /// 输出：注解枚举元素类型（类初始化钩子）
     pub annotation_enums: BTreeSet<String>,
-    /// 输出：按类镜像强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）
+    /// 输出：运行期按名强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）：按类镜像强制初始化
+    ///（`ensureClassInitialized(X.class)`）与按名取类（`Class.forName(名, true, …)`）的所指类
     pub mirror_inits: BTreeSet<String>,
     /// 按反射 / 方法句柄链接到的静态成员与构造器的声明类（按链接路径；成员声明类初始化点的运行期目标）
     pub(super) linked_owners: BTreeSet<(LinkRoute, String)>,
