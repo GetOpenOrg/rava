@@ -298,6 +298,17 @@ fn name_level_classes_emit_opaque() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 实例方法自身的 this 恒非 null：经手写边界拿到的编码器，CharsetEncoder 方法体里 this 上的虚调用
+/// 及其结果上的调用不折叠为 null_recv（不发 `__null_recv(&this, …)`）
+#[test]
+fn this_receiver_never_null_recv() {
+    let Some((_, out)) = build("NullRecvThis.java", "nullrecv-this", &[]) else { return };
+    let enc = std::fs::read_to_string(out.join("java_runtime/src/java/nio/charset/charset_encoder.rs")).unwrap();
+    let hits: Vec<&str> = enc.lines().filter(|l| l.contains("__null_recv(")).collect();
+    assert!(hits.is_empty(), "{hits:#?}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// 动态代理实现的接口（无静态实现类）：属主升 L2 照常发射，接口调用不导出 null_recv
 #[test]
 fn proxy_interface_owner_not_opaque() {
