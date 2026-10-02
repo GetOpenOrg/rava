@@ -6,7 +6,7 @@
 //! - 族需要槽 ⇔ 存在不在族根的有效声明者（某个实例化类选中了覆盖实现）；
 //! - 族根在需要槽的族内保留槽；覆盖者 C.m 保留槽 ⇔ C 或 C 的某个严格子类是有效声明者
 //!   （C 类型接收者上的调用须经 vtable 到达子类实现）；
-//! - 保留槽的有效覆盖者若不在分析器 `dispatched` 中，槽条目发 `__stub`（`slot_stub = "true"`），
+//! - 保留槽的有效覆盖者若不在分析器 `dispatched` 中（被派发的桥方法所桥接的真实方法算作已派发），槽条目发 `__stub`（`slot_stub = "true"`），
 //!   方法本身（super 调用 / 直接调用）照常翻译；
 //! - private 实例方法不占槽（JVMS §5.4.6：invokevirtual 只选中它本身）；
 //! - 不裁剪也不发存根（强制保留）：覆盖根类公开方法（ObjectVTable 桥）、手写参与（共置手写 / 伴生
@@ -27,6 +27,7 @@ use ty::ClassInfo;
 
 use crate::class_writer::hw_overrides::handwritten_inherited_overrides;
 use crate::ctx::EmitCtx;
+use crate::phase2::bridge::bridge_call_target;
 use crate::vtable::{param_part, same_slot};
 
 const INIT: &str = "<init>";
@@ -42,6 +43,9 @@ pub struct SlotPlan {
     effective: HashMap<FamKey, HashSet<String>>,
     /// 强制保留槽的族（synthetic 桥 / 手写参与）
     forced: HashSet<FamKey>,
+    /// 被派发的桥方法所桥接的真实方法 (声明类, 方法名, 真实描述符)：桥被省略、槽并入继承的
+    /// 真实实现时，派发到桥即派发到该实现
+    bridged: HashSet<(String, String, String)>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -118,6 +122,15 @@ impl<'a> EmitCtx<'a> {
                             plan.forced.insert(key);
                         }
                     }
+                }
+            }
+            for (cls, name, desc) in &self.input.dispatched {
+                let Some(ci) = reg.get(cls) else { continue };
+                let Some(b) = ci.methods().iter().find(|m| m.access & acc::BRIDGE != 0 && &m.name == name && &m.desc == desc) else {
+                    continue;
+                };
+                if let Some((owner, real)) = bridge_call_target(self, ci, b, name) {
+                    plan.bridged.insert((owner.name().to_string(), name.clone(), real));
                 }
             }
             plan
@@ -212,6 +225,7 @@ impl<'a> EmitCtx<'a> {
         if plan.forced.contains(&key) || !plan.effective.get(&key).is_some_and(|e| e.contains(ci.name())) {
             return false;
         }
-        !self.input.dispatched.contains(&(ci.name().to_string(), m.name.clone(), m.desc.clone()))
+        let member = (ci.name().to_string(), m.name.clone(), m.desc.clone());
+        !self.input.dispatched.contains(&member) && !plan.bridged.contains(&member)
     }
 }

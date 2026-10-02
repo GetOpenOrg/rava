@@ -22,6 +22,7 @@ impl Engine<'_> {
     ///   返回值按 open(返回类型) 建模，Rust 侧构造的对象（静态单例、`T::default()` 填表）不在 G 中，
     ///   open 展开为空集并不说明只可能是 null；
     /// - 手写调用点写回实参数组的元素来源；无字节码可分析（类缺失）的方法返回值；
+    /// - open 直接注入点：类型集不经流边并入，来源不可追溯；
     /// - 派生：以值流可能缺失的对象为基址 / 接收者的读取结果——数组元素（数组来自手写 / native，元素由
     ///   Rust 填入，流图里没有元素到读取点的边）、实例字段（Rust 侧构造的对象，字段由 Rust 写入）、
     ///   实例方法返回值（接收者不在 G 中，派发目标与其返回值都不在流图里）。
@@ -36,8 +37,11 @@ impl Engine<'_> {
             Node::R(m) => matches!(self.methods[m].kind, Kind::Missing | Kind::Handwritten(_)),
             _ => false,
         });
+        // open 直接注入点（`add_to` 登记的 `open_inj`）：值以类型集而非流边并入（open 实参 / 接收者的非虚调用、
+        // 未知值按声明类型……），其上游来源可能是未建模节点而流图里没有这条边——同样视为未建模来源
+        let injected = self.open_inj.keys().filter_map(|x| g.lookup(x));
         let mut marked = vec![false; n];
-        reach(&g.edges, |i| g.rep(i), &mut marked, roots);
+        reach(&g.edges, |i| g.rep(i), &mut marked, roots.chain(injected));
         // 派生读取点：(读取点代表, 基址 / 接收者值来源代表；None = 值未知)
         let loads: Vec<(u32, Option<Vec<u32>>)> = self
             .methods

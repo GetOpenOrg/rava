@@ -151,16 +151,6 @@ impl<'a> Engine<'a> {
         self.hwobj_made(m, host, mh);
         self.hw_fields(m, host, &mh.fields);
         self.hw_fn_calls(m, host, mh);
-        // 手写体显式类初始化 `T::__class_init()`（对应 ensureClassInitialized）：T 的 <clinit> 在调用链上
-        let inits: Vec<String> = mh
-            .calls
-            .iter()
-            .filter(|c| c.recv.is_none() && c.args.is_empty() && c.name == CLASS_INIT_RUST)
-            .filter_map(|c| c.path_ty.as_ref().and_then(|t| self.resolve_tref(host, t)))
-            .collect();
-        for c in inits {
-            self.init(&c, via.clone());
-        }
         let mut k = 0u32;
         // 手写体新建的对象（按类）：新建局部变量上的回调以它们为接收者
         let mut made: HashMap<String, Vec<u32>> = HashMap::default();
@@ -205,6 +195,7 @@ impl<'a> Engine<'a> {
         }
         for u in &self.hw_upcalls(host, mh) {
             match u {
+                Upcall::Init(c) => self.init(c, via.clone()),
                 Upcall::Field(f) => {
                     let f = f.clone();
                     if !self.hw_static_reads.insert((m, f.clone())) {
