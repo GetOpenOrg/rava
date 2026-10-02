@@ -137,6 +137,9 @@
 - 验收用例：PrintDebugStatement、ReflectionGetSource、TestCustomException（printStackTrace 形态）。
 - 量级：classfile / ir+sim / emit / 运行时 / profile 五步，main 已同意先行实施。
 
+- S2 生成树对照（s2-a6a7c26e，基线 59da6137）：剥去 `// line N` 后方法体文本逐字节不变；7 例的差异是个别文件换了
+  body crate（`layers.rs` 按文本字节数装箱，标记使文本变长，边界附近的文件可能换箱）。行表按落盘路径扫描，不受影响。
+
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
 - 现象（C6 抽查，ubuntu）：运行期 `InternalError`，`Caused by: NullPointerException`，dyn miss 0，未命中存根。
