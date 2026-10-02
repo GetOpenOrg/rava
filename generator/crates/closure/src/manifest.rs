@@ -87,7 +87,7 @@ pub enum Fact {
     Int(i32),
 }
 
-/// 字符串纯函数（[facts.string_ops]）：接收者与实参都是字符串常量时结果即常量
+/// 字符 / 字符串纯函数（[facts.string_ops]）：接收者与实参都是常量时结果即常量
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrOp {
     /// 忽略大小写相等（实参 null 为 false）
@@ -95,6 +95,12 @@ pub enum StrOp {
     /// UTF-16 长度
     Length,
     IsEmpty,
+    /// `s[0]*31^(n-1) + … + s[n-1]`（UTF-16 码元，int 回绕）；字符串 switch 的分派键
+    HashCode,
+    /// 下标处的 UTF-16 码元（越界不折叠：运行期抛异常）
+    CharAt,
+    /// 字符转小写（仅 ASCII 实参折叠；其余取决于 Unicode 数据表，不折叠）
+    CharToLowerCase,
 }
 
 pub struct Manifest {
@@ -214,7 +220,14 @@ impl Manifest {
                     Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
                     Some("length") => StrOp::Length,
                     Some("is_empty") => StrOp::IsEmpty,
-                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                    Some("hash_code") => StrOp::HashCode,
+                    Some("char_at") => StrOp::CharAt,
+                    Some("char_to_lower_case") => StrOp::CharToLowerCase,
+                    _ => {
+                        return Err(format!(
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case"
+                        ))
+                    }
                 };
                 string_ops.insert(k.clone(), op);
             }

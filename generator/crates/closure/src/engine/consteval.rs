@@ -204,5 +204,14 @@ mod tests {
         assert_eq!(string_op(StrOp::EqualsIgnoreCase, &[s("true"), V::Top]), None);
         assert_eq!(string_op(StrOp::Length, &[s("a😀")]), Some(V::Int(3)));
         assert_eq!(string_op(StrOp::IsEmpty, &[s("")]), Some(V::Int(1)));
+        // 与 Java String.hashCode 一致（字符串 switch 的键）："file".hashCode() = 3143036
+        assert_eq!(string_op(StrOp::HashCode, &[s("file")]), Some(V::Int(3143036)));
+        assert_eq!(string_op(StrOp::HashCode, &[s("")]), Some(V::Int(0)));
+        assert_eq!(string_op(StrOp::HashCode, &[s("sun.net.www.protocol.")]), Some(V::Int("sun.net.www.protocol.".encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)))));
+        assert_eq!(string_op(StrOp::CharAt, &[s("a😀"), V::Int(1)]), Some(V::Int(0xd83d)));
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(2)]), None);
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(-1)]), None);
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int('F' as i32)]), Some(V::Int('f' as i32)));
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(0xc9)]), None);
     }
 }
