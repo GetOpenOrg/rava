@@ -162,6 +162,29 @@ fn _static_ref_set(offset: i64, v: Object) -> Option<Result<()>> {
         .map(|_| ()))
 }
 
+/// 静态字段读-改-写的进程级互斥：静态存储经声明类字段闭包按名读写（无引用槽写锁 /
+/// 原子单元协议），读-比-写在本锁内完成，经偏移的静态 CAS / 交换彼此原子。
+static STATIC_RMW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 静态字段 id → 原子读-改-写（`f` 返回 Some 则写入新值），返回旧值（基本类型字段为装箱值）。
+/// 非静态 id → None。取锁前先读一次：首次访问触发的声明类初始化不在锁内运行
+/// （初始化体内的静态 CAS 不自锁）。
+fn _static_rmw(offset: i64, f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
+    let (decl, name) = _static_field_of(offset)?;
+    let field = |v: Option<Object>| crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), v)
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态字段读-改-写：{}.{} 无字段闭包", decl, name));
+    if let Err(e) = field(None) {
+        return Some(Err(e));
+    }
+    let _guard = STATIC_RMW_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    Some(field(None).and_then(|cur| {
+        match f(Clone::clone(&cur)) {
+            Some(nv) => field(Some(nv)).map(|_| cur),
+            None => Ok(cur),
+        }
+    }))
+}
+
 /// 偏移 id → 实例引用字段的原子读-改-写（ObjectVTable::__unsafe_ref_update）：返回旧值；
 /// 未登记 / 无臂 → None。
 fn _instance_ref_update(o: &Object, offset: i64,
@@ -170,12 +193,15 @@ fn _instance_ref_update(o: &Object, offset: i64,
     o.0.__unsafe_ref_update(&field, f)
 }
 
-/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id，均在对应存储的写锁内
-/// 完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
+/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id、静态字段按静态 id，
+/// 均在对应存储的写锁内完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
 fn _ref_rmw(o: &Object, offset: i64, what: &str,
             f: &mut dyn FnMut(Object) -> Option<Object>) -> Result<Object> {
     if let Some(arr) = _erased_ref_array(o) {
         return arr.__update(_ref_array_index(offset), f);
+    }
+    if let Some(r) = _static_rmw(offset, f) {
+        return r;
     }
     match _instance_ref_update(o, offset, f) {
         Some(old) => Ok(old),
@@ -291,21 +317,38 @@ impl Unsafe {
         ))
     }
 
-    /// 偏移 id → 实例引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值；
+    /// 偏移 id → 引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值。
+    /// 静态 id（`$FieldStatic*` flavor）走声明类静态存储，实例 id 走引用原子协议；
     /// 未登记 / 运行时类无该引用字段 → None。
     pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
-                                  f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
-        _instance_ref_update(o, offset, f)
+                                  f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
+        if let Some(r) = _static_rmw(offset, f) {
+            return Some(r);
+        }
+        _instance_ref_update(o, offset, f).map(Ok)
     }
 
-    /// 偏移 id → 实例 long 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
-    pub(crate) fn __vh_long_update(&self, o: &Object, offset: i64, f: impl Fn(i64) -> i64) -> Option<i64> {
-        Some(_instance_long_cell(o, offset)?.__fetch_update(f))
+    /// 偏移 id → long 字段的原子读-改-写（`f` 返回新值），返回旧值：静态 id 经装箱走
+    /// 静态存储，实例 id 走共享 long 单元；无单元 → None。
+    pub(crate) fn __vh_long_update(&self, o: &Object, offset: i64, f: impl Fn(i64) -> i64) -> Option<Result<i64>> {
+        if _static_field_of(offset).is_some() {
+            let mut g = |cur: Object| crate::reflect_dispatch::unbox_i64(&cur).map(|c| Object::from(f(c)));
+            return _static_rmw(offset, &mut g).map(|r| r.map(|old| {
+                crate::reflect_dispatch::unbox_i64(&old).expect("静态 long 字段读出非 long 值")
+            }));
+        }
+        Some(Ok(_instance_long_cell(o, offset)?.__fetch_update(f)))
     }
 
-    /// 偏移 id → 实例 int 字段的原子读-改-写（`f` 返回新值），返回旧值；无单元 → None。
-    pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<i32> {
-        Some(_instance_int_cell(o, offset)?.__fetch_update(f))
+    /// 偏移 id → int 字段的原子读-改-写（`__vh_long_update` 的 int 镜像）。
+    pub(crate) fn __vh_int_update(&self, o: &Object, offset: i64, f: impl Fn(i32) -> i32) -> Option<Result<i32>> {
+        if _static_field_of(offset).is_some() {
+            let mut g = |cur: Object| crate::reflect_dispatch::unbox_i32(&cur).map(|c| Object::from(f(c)));
+            return _static_rmw(offset, &mut g).map(|r| r.map(|old| {
+                crate::reflect_dispatch::unbox_i32(&old).expect("静态 int 字段读出非 int 值")
+            }));
+        }
+        Some(Ok(_instance_int_cell(o, offset)?.__fetch_update(f)))
     }
 
     /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
