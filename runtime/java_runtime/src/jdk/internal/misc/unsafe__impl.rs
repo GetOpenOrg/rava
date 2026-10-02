@@ -1217,17 +1217,11 @@ impl Unsafe {
     }
 }
 
-/// ACC_NATIVE（类 1）：翻译体 `arrayBaseOffset` / `throwException` 的 native 落点。
+/// ACC_NATIVE（类 1）：翻译体 `arrayBaseOffset` 的 native 落点（`throwException` 见 volatile 族之后）。
 impl Unsafe {
     /// native `arrayBaseOffset0(Class)`：与 `core_arrayBaseOffset` 同一常量（偏移解码自洽）。
     #[jvm_native]
     pub fn arrayBaseOffset0(&self, array_class: Class) -> Result<i32> {
         Ok(self.core_arrayBaseOffset(array_class)? as i32)
-    }
-
-    /// native `throwException(Throwable)`：不经检查地抛出该异常对象。
-    #[jvm_native]
-    pub fn throwException(&self, ee: crate::java::lang::Throwable) -> Result<()> {
-        Err(JvmError::from(ee))
     }
 }
