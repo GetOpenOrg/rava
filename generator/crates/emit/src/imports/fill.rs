@@ -28,9 +28,9 @@ fn declared(ctx: &EmitCtx<'_>, binary: &str) -> String {
     ctx.declared(binary)
 }
 
-/// 继承链顶（无父类的根类）：`__base` 自由函数恒可导入
+/// 继承链顶（无父类的根类；手写根类可不在注册表）：`__base` 自由函数恒可导入
 fn is_chain_root(ctx: &EmitCtx<'_>, binary: &str) -> bool {
-    ctx.ty.reg.get(binary).is_some_and(|c| c.super_class().is_empty())
+    ctx.ty.reg.get(binary).is_none_or(|c| c.super_class().is_empty())
 }
 
 /// 类定义所在模块路径（不含末段名）；不可导入 → None。`derived`：派生名（根类的 `__base`
