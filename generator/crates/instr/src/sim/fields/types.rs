@@ -155,8 +155,7 @@ pub fn resolve_static_field(env: &InstrEnv, cls: &str, raw_name: &str, desc: &st
     } else if reg.contains(&cls) {
         reg.get(&cls)
     } else {
-        let short = if cls.contains('/') { ctx.short(&cls) } else { cls.replace('$', "_") };
-        short_binary(ctx, &short).and_then(|b| reg.get(&b))
+        short_binary(ctx, &ctx.short(&cls)).and_then(|b| reg.get(&b))
     };
     let mut turbofish = Vec::new();
     let mut accessor = field_name.clone();

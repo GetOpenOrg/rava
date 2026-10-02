@@ -162,8 +162,7 @@ pub fn super_chain_to_class(ctx: &InstrCtx, current: &str, target: &str) -> usiz
     if ctx.reg().is_empty() || current.is_empty() || target.is_empty() {
         return 1;
     }
-    let short_of = |b: &str| if b.contains('/') { ctx.short(b) } else { b.replace('$', "_") };
-    let same = |b: &str| b == target || short_of(b) == target;
+    let same = |b: &str| b == target || ctx.short(b) == target;
     if same(current) {
         return 0;
     }

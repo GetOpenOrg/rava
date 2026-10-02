@@ -1,9 +1,12 @@
 //! 类的 Rust 名：定义名（declared）与全局令牌（token）。
 //!
 //! - **定义名**：类在自己文件里的 struct 名，只由类自身决定——简单名（`$` → `_`）；简单名是
-//!   Rust prelude 可见名（[`PRELUDE_CONFLICT_NAMES`]）时取限定名（`/`、`$` → `_`），
+//!   Rust prelude 可见名（[`PRELUDE_CONFLICT_NAMES`]）时取限定名，
 //!   `Object` / `String` 的本主除外（直映射即 prelude 名本身，同一实体）。
-//! - **令牌**：全局唯一的类名——同简单名组（≥2 个成员）的每个成员都取限定名，其余同定义名。
+//! - **限定名**：完整 binary（`/`、`$` → `_`）；无包类为 `_简单名`（与有包同名类的限定名、
+//!   与自身定义名都不同）。
+//! - **令牌**：全局唯一的类名——同简单名组（≥2 个成员，无包类同样入组）的每个成员都取
+//!   限定名，其余同定义名。
 //!   令牌用于无作用域的反查（显示名 → binary），并作为文件作用域里定义名被占用时的本地别名
 //!   （`use path::Simple as 令牌;`）。各文件里一个类叫什么由文件名字作用域（[`crate::NameScope`]）决定。
 
@@ -57,14 +60,19 @@ fn plain_short(binary: &str) -> String {
     last.replace('$', "_")
 }
 
-/// 限定名：完整 binary（`/`、`$` → `_`）
+/// 限定名：完整 binary（`/`、`$` → `_`）；无包类前缀 `_`
 pub fn qualify(binary: &str) -> String {
-    binary.replace(['/', '$'], "_")
+    let q = binary.replace(['/', '$'], "_");
+    if binary.contains('/') {
+        q
+    } else {
+        format!("_{q}")
+    }
 }
 
 /// 定义名是否取限定名：简单名与 prelude 名同名（本主除外）
 fn prelude_named(binary: &str) -> bool {
-    binary.contains('/') && !CANONICAL_OWNERS.contains(&binary) && PRELUDE_CONFLICT_NAMES.contains(&plain_short(binary).as_str())
+    !CANONICAL_OWNERS.contains(&binary) && PRELUDE_CONFLICT_NAMES.contains(&plain_short(binary).as_str())
 }
 
 /// 类的定义名（只由类自身决定）
@@ -81,7 +89,7 @@ impl ShortNames {
         let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for ci in reg.iter() {
             let b = ci.name();
-            if !b.contains('/') || CANONICAL_OWNERS.contains(&b) {
+            if CANONICAL_OWNERS.contains(&b) {
                 continue;
             }
             groups.entry(plain_short(b)).or_default().push(b);
@@ -151,5 +159,19 @@ impl ShortNames {
     /// 短名是否属于注册表内某个接口（`registry_iface_shorts`）
     pub fn is_iface_short(&self, short: &str) -> bool {
         self.iface_shorts.contains(short)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualified_names_by_package() {
+        assert_eq!(qualify("org/junit/Test"), "org_junit_Test");
+        assert_eq!(qualify("Test$Inner"), "_Test_Inner");
+        assert_eq!(declared("Test$Inner"), "Test_Inner");
+        assert_eq!(declared("p/Option"), "p_Option");
+        assert_eq!(declared("Option"), "_Option");
     }
 }
