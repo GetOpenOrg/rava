@@ -404,12 +404,12 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     };
     st.stage = Stage::Emit;
     print_perf(o.perf, &perf, &timings, Some(r.jdk_classes));
+    let emit = EmitSummary { bin: r.bin_name.clone(), jdk_classes: r.jdk_classes, precheck: r.precheck.clone() };
+    st.emit = Some(emit.clone());
     if o.full_precheck {
         return Ok(());
     }
     report(&r, out);
-    let emit = EmitSummary { bin: r.bin_name.clone(), jdk_classes: r.jdk_classes };
-    st.emit = Some(emit.clone());
     if o.stop_after == Stage::Emit {
         return Ok(());
     }

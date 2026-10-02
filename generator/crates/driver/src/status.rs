@@ -1,9 +1,11 @@
 //! `<scratch>/build_status.json`：`rava build` 本轮停在哪一阶段、是否成功、失败现场、所用 JDK 与重型判定。
-//! 批量驱动（run_tests）只读此文件判定构建结果，不解析 stdout。发射完成后另记 `emit` 段（bin 名、声明层类数），
-//! `rava compile <scratch>` 据此编译已发射的工作区；编译成功后记 `exe`（可执行文件路径）。
+//! 批量驱动（run_tests）只读此文件判定构建结果，不解析 stdout。发射完成后另记 `emit` 段（bin 名、声明层类数、
+//! 预检全量明细），`rava compile <scratch>` 据此编译已发射的工作区（预检明细原样保留）；编译成功后记 `exe`
+//! （可执行文件路径）。
 
 use std::path::{Path, PathBuf};
 
+use emit::precheck::Precheck;
 use resolve::jdk::JdkChoice;
 use serde_json::json;
 
@@ -18,6 +20,8 @@ pub struct EmitSummary {
     pub bin: String,
     /// 声明层 `java_runtime` 类数（重型判定输入）
     pub jdk_classes: usize,
+    /// 预检全量明细（可达却缺手写的 native / 可达的存根）：stdout 明细封顶，批量回传只带状态文件时据此看全量
+    pub precheck: Precheck,
 }
 
 impl EmitSummary {
@@ -28,7 +32,13 @@ impl EmitSummary {
         let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}：{e}", p.display()))?;
         let e = &v["emit"];
         match (e["bin"].as_str(), e["jdk_classes"].as_u64()) {
-            (Some(bin), Some(n)) => Ok((EmitSummary { bin: bin.to_string(), jdk_classes: n as usize }, v)),
+            (Some(bin), Some(n)) => {
+                let list = |k: &str| -> Vec<String> {
+                    e["precheck"][k].as_array().map_or_else(Vec::new, |a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                };
+                let precheck = Precheck { native_missing: list("native_missing"), boundary_stub: list("boundary_stub") };
+                Ok((EmitSummary { bin: bin.to_string(), jdk_classes: n as usize, precheck }, v))
+            }
             _ => Err(format!("{}：无发射结果（emit 段缺失，发射未完成）", p.display())),
         }
     }
@@ -67,7 +77,16 @@ impl BuildStatus {
                 "home": j.home, "major": j.major, "source": j.source.to_string(),
             })),
             "heavy": self.heavy.as_ref().map(Heavy::to_json),
-            "emit": self.emit.as_ref().map(|e| json!({ "bin": e.bin, "jdk_classes": e.jdk_classes })),
+            "emit": self.emit.as_ref().map(|e| json!({
+                "bin": e.bin,
+                "jdk_classes": e.jdk_classes,
+                "precheck": {
+                    "native_missing_count": e.precheck.native_missing.len(),
+                    "boundary_stub_count": e.precheck.boundary_stub.len(),
+                    "native_missing": e.precheck.native_missing,
+                    "boundary_stub": e.precheck.boundary_stub,
+                },
+            })),
             "exe": self.exe,
         })
     }
@@ -107,9 +126,13 @@ mod tests {
         let st = BuildStatus { stage: Stage::Emit, ..BuildStatus::default() };
         st.write(&d, None).unwrap();
         assert!(EmitSummary::read(&d).is_err(), "无 emit 段");
-        let e = EmitSummary { bin: "hello_world".into(), jdk_classes: 260 };
+        let precheck = Precheck { native_missing: vec!["p/A.n:()V".into()], boundary_stub: vec!["p/A.s:()V".into(), "p/B.t:()V".into()] };
+        let e = EmitSummary { bin: "hello_world".into(), jdk_classes: 260, precheck };
         BuildStatus { stage: Stage::Emit, emit: Some(e.clone()), ..BuildStatus::default() }.write(&d, None).unwrap();
-        assert_eq!(EmitSummary::read(&d).unwrap().0, e);
+        let (back, v) = EmitSummary::read(&d).unwrap();
+        assert_eq!(back, e);
+        assert_eq!(v["emit"]["precheck"]["native_missing_count"], 1);
+        assert_eq!(v["emit"]["precheck"]["boundary_stub_count"], 2);
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

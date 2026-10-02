@@ -114,4 +114,30 @@ mod tests {
         let many = Precheck { native_missing: vec!["x".into(), "y".into(), "z".into()], boundary_stub: vec![] };
         assert_eq!(many.lines(2).last().unwrap(), "[precheck] native-missing: … 其余 1 条");
     }
+
+    #[test]
+    fn over_default_limit_keeps_totals_and_reports_rest() {
+        // 45 个可达 native 缺口 + 1 个存根：首行总数恒为全量，明细封顶 DEFAULT_LIMIT，截断行报出其余条数
+        let n = DEFAULT_LIMIT + 5;
+        let mut body = String::from("rava_macros::java_class! {\n");
+        let mut visited = BTreeSet::new();
+        for i in 0..n {
+            let sig = format!("p/A.n{i:02}:()V");
+            body.push_str(&format!(" fn n{i:02}() {{ {} }}\n", stub_call("native", &sig)));
+            visited.insert(sig);
+        }
+        body.push_str(&format!(" fn s() {{ {} }}\n}}", stub_call("stub", "p/A.s:()V")));
+        visited.insert("p/A.s:()V".to_string());
+        let p = Precheck::scan(&[em("java_runtime", false, &body)], &visited);
+        assert_eq!(p.native_missing.len(), n);
+        let lines = p.lines(DEFAULT_LIMIT);
+        assert_eq!(lines[0], format!("[precheck] native-missing={n} boundary-stub=1"));
+        assert_eq!(lines.iter().filter(|l| l.starts_with("[precheck] native-missing: p/")).count(), DEFAULT_LIMIT);
+        assert_eq!(lines[DEFAULT_LIMIT + 1], "[precheck] native-missing: … 其余 5 条");
+        assert_eq!(lines.last().unwrap(), "[precheck] boundary-stub: p/A.s:()V");
+        // 不设限（--full-precheck）：全部列出、无截断行
+        let full = p.lines(usize::MAX);
+        assert_eq!(full.len(), 1 + n + 1);
+        assert!(!full.iter().any(|l| l.contains("其余")));
+    }
 }
