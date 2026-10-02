@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use syn::visit::Visit;
 
 use super::*;
+use super::generic_fns::*;
 use super::stype::*;
 
 pub(super) fn path_segs(p: &syn::Path) -> Vec<String> {
@@ -237,6 +238,10 @@ pub(super) struct CallScan<'a> {
     pub(super) opaque: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
+    /// 本文件带闭包形参的泛型辅助 fn（见 [`generic_fns`]）
+    pub(super) generics: &'a GenericFns,
+    /// 当前 impl 块 self 类型末段（`Self::f` 按 `<末段>::f` 查泛型辅助 fn）
+    pub(super) self_last: Option<String>,
 }
 
 pub(super) fn macro_idents(ts: proc_macro2::TokenStream, out: &mut HashSet<String>) {
@@ -277,6 +282,26 @@ fn formatted_args(args: &syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>)
 }
 
 impl CallScan<'_> {
+    /// 闭包形参：带类型注解的取注解类型（`|p: &UnixPath| …`），否则取调用点解出的类型（`known`，
+    /// 见 [`GenericSig::closure_arg_types`]），其余遮蔽同名变量
+    fn closure_with(&mut self, c: &syn::ExprClosure, known: &[Option<SType>]) {
+        let outer = (self.scope.clone(), self.fresh.clone());
+        for (k, input) in c.inputs.iter().enumerate() {
+            self.visit_pat(input);
+            let Some(pi) = bound_ident(input) else { continue };
+            let st = match input {
+                syn::Pat::Type(pt) => type_path(&pt.ty).map(|p| SType::Named(TypeRef(p))),
+                _ => known.get(k).cloned().flatten(),
+            };
+            if st.is_some() || matches!(input, syn::Pat::Type(_)) {
+                self.scope.insert(pi.ident.to_string(), st);
+            }
+        }
+        self.visit_return_type(&c.output);
+        self.visit_expr(&c.body);
+        (self.scope, self.fresh) = outer;
+    }
+
     /// 静态类型已知的值以 Display 输出：即其 `toString()` 虚调用
     fn display_call(&mut self, recv: Option<Vec<String>>, st: Option<SType>) {
         if st.is_some() {
@@ -333,6 +358,19 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let ty = (!head.is_empty()).then(|| head.to_vec());
                 self.calls.push((last.clone(), ty, None, args, None, None));
             }
+            // 本文件泛型辅助 fn：闭包实参的形参类型按其余实参解出
+            let key = segs.iter().map(|s| if s == "Self" { self.self_last.as_deref().unwrap_or(s) } else { s }).collect::<Vec<_>>().join("::");
+            if let Some(g) = self.generics.get(&key) {
+                let args: Vec<&syn::Expr> = c.args.iter().collect();
+                self.visit_expr(&c.func);
+                for (i, a) in args.iter().enumerate() {
+                    match (a, g.closure_arg_types(i, &args, &self.scope, self.locals)) {
+                        (syn::Expr::Closure(cl), Some(types)) => self.closure_with(cl, &types),
+                        _ => self.visit_expr(a),
+                    }
+                }
+                return;
+            }
         }
         syn::visit::visit_expr_call(self, c);
     }
@@ -362,19 +400,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
-    // 闭包形参：带类型注解的取注解类型（`|p: &UnixPath| …`），其余遮蔽同名变量
     fn visit_expr_closure(&mut self, c: &'ast syn::ExprClosure) {
-        let outer = (self.scope.clone(), self.fresh.clone());
-        for input in &c.inputs {
-            self.visit_pat(input);
-            if let (syn::Pat::Type(pt), Some(pi)) = (input, bound_ident(input)) {
-                let st = type_path(&pt.ty).map(|p| SType::Named(TypeRef(p)));
-                self.scope.insert(pi.ident.to_string(), st);
-            }
-        }
-        self.visit_return_type(&c.output);
-        self.visit_expr(&c.body);
-        (self.scope, self.fresh) = outer;
+        self.closure_with(c, &[]);
     }
 
     // for / while let / if let / match 分支的模式绑定只在其内有效；`for x in <容器>` 的 x 取容器元素类型

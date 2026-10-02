@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+mod generic_fns;
 mod hooks;
 mod objects;
 mod scan;
