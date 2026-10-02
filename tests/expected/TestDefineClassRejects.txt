@@ -1,0 +1,20 @@
+array : java.lang.ClassFormatError: Truncated class file
+noname: java.lang.ClassFormatError: Truncated class file
+direct: java.lang.ClassFormatError: Truncated class file
+array : java.lang.ClassFormatError: Incompatible magic value 16909060 in class file a/b/Foo
+noname: java.lang.ClassFormatError: Incompatible magic value 16909060 in class file <Unknown>
+direct: java.lang.ClassFormatError: Incompatible magic value 16909060 in class file a/b/Foo
+array : java.lang.UnsupportedClassVersionError: a/b/Foo has been compiled by a more recent version of the Java Runtime (class file version 66.0), this version of the Java Runtime only recognizes class file versions up to 65.0
+noname: java.lang.UnsupportedClassVersionError: <Unknown> has been compiled by a more recent version of the Java Runtime (class file version 66.0), this version of the Java Runtime only recognizes class file versions up to 65.0
+direct: java.lang.UnsupportedClassVersionError: a/b/Foo has been compiled by a more recent version of the Java Runtime (class file version 66.0), this version of the Java Runtime only recognizes class file versions up to 65.0
+array : java.lang.UnsupportedClassVersionError: a/b/Foo (class file version 44.0) was compiled with an invalid major version
+noname: java.lang.UnsupportedClassVersionError: <Unknown> (class file version 44.0) was compiled with an invalid major version
+direct: java.lang.UnsupportedClassVersionError: a/b/Foo (class file version 44.0) was compiled with an invalid major version
+array : java.lang.ClassFormatError: Truncated class file
+noname: java.lang.ClassFormatError: Truncated class file
+direct: java.lang.ClassFormatError: Truncated class file
+array : java.lang.ClassFormatError: Truncated class file
+noname: java.lang.ClassFormatError: Truncated class file
+direct: java.lang.ClassFormatError: Truncated class file
+bounds: java.lang.ArrayIndexOutOfBoundsException
+prohibited: java.lang.SecurityException: Prohibited package name: java.lang

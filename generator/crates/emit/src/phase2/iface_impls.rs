@@ -157,10 +157,10 @@ fn iface_decls(
     type_params: &BTreeSet<String>,
 ) -> Vec<String> {
     let recv_bin = recv.binary_name.as_str();
-    let own_names: BTreeSet<&str> = recv.methods.iter().map(|m| m.rust_name.as_str()).collect();
+    let own_names: BTreeSet<&str> = recv.slotted().map(|m| m.rust_name.as_str()).collect();
     let provided = provided_methods(ctx, recv_bin);
     let mut decls = Vec::new();
-    for im in &iface.methods {
+    for im in iface.slotted() {
         let Some(erased) = erased_declaration(&ctx.ty, im, type_params) else { continue };
         let mut pdesc = param_part(&im.descriptor).to_string();
         let own = recv.find(&im.name, &pdesc);
@@ -235,7 +235,7 @@ fn recv_impls(
             continue;
         }
         let iface_short = ctx.short(&iface_bin);
-        let marker = iface.methods.is_empty();
+        let marker = iface.slotted().next().is_none();
         let iface_params = class_params(ctx, iface_ci);
         let type_params: BTreeSet<String> = iface_params.iter().cloned().collect();
         let non_concrete = recv_abstract || recv_is_iface || marker;

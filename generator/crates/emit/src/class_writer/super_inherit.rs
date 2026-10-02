@@ -201,7 +201,8 @@ fn user_ancestor_block(
         return Ok(None); // 祖先自身的桥只承载接口槽位
     }
     let mangled = mangle_name(&ctx.manifest.ty, &vm.name, &vm.desc);
-    let mut extra = MethodAttrExtra { virtual_in: virt_in.clone(), ..Default::default() };
+    // 祖先方法体按本类重发射：方法仍由祖先声明（反射声明表、栈帧归属以祖先为准）
+    let mut extra = MethodAttrExtra { virtual_in: virt_in.clone(), declared_by: a.sci.name().to_string(), ..Default::default() };
     if vm_is_bridge && virt_in != ci.name() {
         let slot = ctx.slot_member_rust_name(vm, ci);
         if !slot.is_empty() && slot != mangled {

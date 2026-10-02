@@ -291,19 +291,6 @@ impl Unsafe {
         ))
     }
 
-    /// 偏移 id → 实例引用字段读（VarHandle 引用族 `get`/`getVolatile`/CAS 的
-    /// 读侧消费，非 Unsafe 的 Java 公开面）：经 `_instance_ref_get` 的登记表
-    /// 反查 + ObjectVTable 引用原子协议。
-    pub(crate) fn __vh_ref_get(&self, o: &Object, offset: i64) -> Option<Object> {
-        _instance_ref_get(o, offset)
-    }
-
-    /// 偏移 id → 实例引用字段写（VarHandle 引用族 `set`/`setVolatile`/CAS 的
-    /// 写侧消费）：命中写入 true，未登记 / 运行时类无该引用字段 → false。
-    pub(crate) fn __vh_ref_set(&self, o: &Object, offset: i64, v: Object) -> bool {
-        _instance_ref_set(o, offset, v)
-    }
-
     /// 偏移 id → 实例引用字段的原子读-改-写（VarHandle 引用族 CAS / 交换）：返回旧值；
     /// 未登记 / 运行时类无该引用字段 → None。
     pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
@@ -438,24 +425,18 @@ impl Unsafe {
         Ok(cell.__fetch_update(|old| old | mask))
     }
 
-    /// `getLongVolatile(Object o, long offset)`：实例字段 volatile 读。
+    /// `getLongVolatile(Object o, long offset)`：volatile 读——存储单元与 plain 同一（实例原子单元 /
+    /// 静态字段 / 原生内存），内存序见下方「基本类型 volatile 访问」节。
     #[jvm_boundary]
     pub fn getLongVolatile(&self, o: Object, offset: i64) -> Result<i64> {
-        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getLongVolatile:(Ljava/lang/Object;J)J (实例字段 offset={} 无共享 long 单元)", offset)
-        });
-        Ok(cell.get())
+        _volatile_load(|| self.getLong_obj_l(o, offset))
     }
 
-    /// `putLongVolatile(Object o, long offset, long x)`：实例字段 volatile 写。
+    /// `putLongVolatile(Object o, long offset, long x)`：volatile 写（单元与 plain 同一）。
     /// `AtomicLong.set` 等经此路径——写入对 `__get_value` 直读可见。
     #[jvm_boundary]
     pub fn putLongVolatile(&self, o: Object, offset: i64, x: i64) -> Result<()> {
-        let cell = _instance_long_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.putLongVolatile:(Ljava/lang/Object;JJ)V (实例字段 offset={} 无共享 long 单元)", offset)
-        });
-        cell.set(x);
-        Ok(())
+        _volatile_store(|| self.putLong_obj_l_l(o, offset, x))
     }
 
     /// `putLong(Object o, long offset, long x)`：实例字段 plain 写（与
@@ -622,13 +603,10 @@ impl Unsafe {
             &mut |cur| if cur == expected { x.take() } else { None })
     }
 
-    /// `getIntVolatile(Object o, long offset)`：实例字段 int volatile 读。
+    /// `getIntVolatile(Object o, long offset)`：int volatile 读（单元与 plain 同一）。
     #[jvm_boundary]
     pub fn getIntVolatile(&self, o: Object, offset: i64) -> Result<i32> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.getIntVolatile:(Ljava/lang/Object;J)I (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        Ok(cell.get())
+        _volatile_load(|| self.getInt_obj_l(o, offset))
     }
 
     /// `getIntOpaque(Object o, long offset)`：实例字段 int opaque 读
@@ -644,14 +622,10 @@ impl Unsafe {
         Ok(cell.get())
     }
 
-    /// `putIntVolatile(Object o, long offset, int x)`：实例字段 int volatile 写。
+    /// `putIntVolatile(Object o, long offset, int x)`：int volatile 写（单元与 plain 同一）。
     #[jvm_boundary]
     pub fn putIntVolatile(&self, o: Object, offset: i64, x: i32) -> Result<()> {
-        let cell = _instance_int_cell(&o, offset).unwrap_or_else(|| {
-            panic!("stub: jdk/internal/misc/Unsafe.putIntVolatile:(Ljava/lang/Object;JI)V (实例字段 offset={} 无共享 int 单元)", offset)
-        });
-        cell.set(x);
-        Ok(())
+        _volatile_store(|| self.putInt_obj_l_i(o, offset, x))
     }
 
     /// `getReferenceAcquire(Object o, long offset)`：引用元素数组按偏移读
@@ -1021,6 +995,108 @@ impl Unsafe {
             return crate::native_memory::write(&o, offset, &x.to_ne_bytes());
         }
         _field_put(&o, offset, Object::from(x), "Double")
+    }
+}
+
+// ── 基本类型 volatile 访问（native get/put{Boolean,Byte,Short,Char,Float,Double}Volatile）──────
+// HotSpot `MemoryAccess::get_volatile` / `put_volatile`（unsafe.cpp）：
+//   读：[IRIW 平台先 fence] load；acquire
+//   写：release；store；fence
+// 存储单元与 plain 形态同一（字段闭包 / 原生内存），内存序按 HotSpot 原样以栅栏落地：
+// 读前 SeqCst 栅栏（IRIW 保守取法）+ 读后 Acquire，写前 Release + 写后 SeqCst——
+// 与 Java volatile 的顺序一致性同解（全部 volatile 访问之间存在单一全序）。
+
+fn _volatile_load<T>(load: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::sync::atomic::{fence, Ordering};
+    fence(Ordering::SeqCst);
+    let v = load();
+    fence(Ordering::Acquire);
+    v
+}
+
+fn _volatile_store(store: impl FnOnce() -> Result<()>) -> Result<()> {
+    use std::sync::atomic::{fence, Ordering};
+    fence(Ordering::Release);
+    let r = store();
+    fence(Ordering::SeqCst);
+    r
+}
+
+impl Unsafe {
+    #[jvm_native]
+    pub fn getBooleanVolatile(&self, o: Object, offset: i64) -> Result<bool> {
+        _volatile_load(|| if crate::native_memory::is_raw(&o) {
+            Ok(crate::native_memory::read_ne::<1>(&o, offset)?[0] != 0)
+        } else {
+            self.getBoolean(o, offset)
+        })
+    }
+
+    #[jvm_native]
+    pub fn putBooleanVolatile(&self, o: Object, offset: i64, x: bool) -> Result<()> {
+        _volatile_store(|| if crate::native_memory::is_raw(&o) {
+            crate::native_memory::write(&o, offset, &[x as u8])
+        } else {
+            self.putBoolean(o, offset, x)
+        })
+    }
+
+    #[jvm_native]
+    pub fn getByteVolatile(&self, o: Object, offset: i64) -> Result<i8> {
+        _volatile_load(|| self.getByte_obj_l(o, offset))
+    }
+
+    #[jvm_native]
+    pub fn putByteVolatile(&self, o: Object, offset: i64, x: i8) -> Result<()> {
+        _volatile_store(|| self.putByte_obj_l_b(o, offset, x))
+    }
+
+    #[jvm_native]
+    pub fn getShortVolatile(&self, o: Object, offset: i64) -> Result<i16> {
+        _volatile_load(|| self.getShort_obj_l(o, offset))
+    }
+
+    #[jvm_native]
+    pub fn putShortVolatile(&self, o: Object, offset: i64, x: i16) -> Result<()> {
+        _volatile_store(|| self.putShort_obj_l_s(o, offset, x))
+    }
+
+    #[jvm_native]
+    pub fn getCharVolatile(&self, o: Object, offset: i64) -> Result<u16> {
+        _volatile_load(|| self.getChar_obj_l(o, offset))
+    }
+
+    #[jvm_native]
+    pub fn putCharVolatile(&self, o: Object, offset: i64, x: u16) -> Result<()> {
+        _volatile_store(|| self.putChar_obj_l_c(o, offset, x))
+    }
+
+    #[jvm_native]
+    pub fn getFloatVolatile(&self, o: Object, offset: i64) -> Result<f32> {
+        _volatile_load(|| self.getFloat_obj_l(o, offset))
+    }
+
+    #[jvm_native]
+    pub fn putFloatVolatile(&self, o: Object, offset: i64, x: f32) -> Result<()> {
+        _volatile_store(|| self.putFloat_obj_l_f(o, offset, x))
+    }
+
+    #[jvm_native]
+    pub fn getDoubleVolatile(&self, o: Object, offset: i64) -> Result<f64> {
+        _volatile_load(|| self.getDouble_obj_l(o, offset))
+    }
+
+    #[jvm_native]
+    pub fn putDoubleVolatile(&self, o: Object, offset: i64, x: f64) -> Result<()> {
+        _volatile_store(|| self.putDouble_obj_l_d(o, offset, x))
+    }
+
+    /// native `throwException(Throwable ee)`：原样抛出 ee（HotSpot `Unsafe_ThrowException`：
+    /// `THROW_OOP(JNIHandles::resolve(thr))`，不包装、不重填栈）；null → NullPointerException
+    /// （与 athrow 对 null 的 JVMS 语义同一载体 `JvmError::from`）。
+    #[jvm_native]
+    pub fn throwException(&self, ee: crate::java::lang::Throwable) -> Result<()> {
+        Err(crate::error::JvmError::from(ee))
     }
 }
 

@@ -1,0 +1,4 @@
+a[];b[transitive];c@2[static, transitive];java.base[];
+rejected: java.base has ACC_TRANSITIVE set
+rejected: java.base has ACC_STATIC_PHASE set
+lists = 60

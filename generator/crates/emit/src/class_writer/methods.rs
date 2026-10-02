@@ -371,7 +371,9 @@ fn member_block(
             if m.name != "<init>" {
                 meta.push(format!("// [meta] {};", st.sig.trim_end_matches(';')));
             }
-            return Ok(MethodBlock::plain(meta.join("\n")));
+            // 声明记录（meta）：子类接收者调用该继承方法时作为声明者（上转直调）
+            let decl = EmittedMethod::declared(&e.method, &plain, st.decl.as_ref(), false).map(|d| EmittedMethod { meta: true, ..d });
+            return Ok(MethodBlock { text: meta.join("\n"), decl });
         }
         Verdict::IfaceDefaultBody | Verdict::IfaceDecl => {
             if p.verdict == Verdict::IfaceDefaultBody {

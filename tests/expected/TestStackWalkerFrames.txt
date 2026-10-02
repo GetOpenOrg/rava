@@ -1,0 +1,12 @@
+chain = [TestStackWalkerFrames.ownFrames, TestStackWalkerFrames.level3, TestStackWalkerFrames.level2, TestStackWalkerFrames.level1, TestStackWalkerFrames.main]
+recurse depth = 41
+caller = TestStackWalkerFrames
+top = topMethod
+first frame class = TestStackWalkerFrames
+limit 2 = [main]
+skip 1 first = main
+no retain: No access to RETAIN_CLASS_REFERENCE
+plain getCallerClass: This stack walker does not have RETAIN_CLASS_REFERENCE access
+in lambda top = lambda$main$10
+ste = TestStackWalkerFrames#main native=false
+native? = false

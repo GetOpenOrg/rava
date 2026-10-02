@@ -64,6 +64,29 @@ classes = [
     "java/lang/invoke/InvokerBytecodeGenerator",
 ]
 
+# VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，
+# 其 <clinit> 按字节码翻译：纯 Java 静态状态（如 ClassLoader.nocerts、ClassLoader$ParallelLoaders.loaderTypes）
+# 不翻译就保持 null，按字节码执行的实例方法会在读它们时抛 NPE。
+# 列入须说明 <clinit> 的哪部分由 VM 模型替换：
+# - VirtualThread：调度器（ForkJoinPool / 延时调度器）——虚拟线程映射为 OS 线程；
+# - Module / ModuleLayer：CDS 归档模块图与引导层由 VM 构建；
+# - InetAddress：名字服务（resolver SPI、hosts、loadLibrary）由操作系统解析器承载；
+# - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
+# - InvokerBytecodeGenerator：运行期字节码生成器，句柄调用由原生解释器承载；
+# - FileSystems：默认文件系统持有者链（策略截断，见上）；
+# - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
+clinit_carried = [
+    "java/lang/VirtualThread",
+    "java/lang/Module",
+    "java/lang/ModuleLayer",
+    "java/net/InetAddress",
+    "javax/crypto/JceSecurity",
+    "java/lang/invoke/InvokerBytecodeGenerator",
+    "java/nio/file/FileSystems",
+    "java/lang/Class",
+    "java/lang/SecurityManager",
+]
+
 # ── 边界放行：内部边界前缀下按字节码翻译的纯 Java 类 / 包 ─────────────────────────────
 # JCA 服务实现族的放行在 seeds.toml [jca]（与服务种子同一消费面）。
 [release]
@@ -170,6 +193,17 @@ classes = [
     # DirectByteBuffer 的内存释放登记（Cleaner.create(this, new Deallocator(..))）。原生二进制无 GC，
     # 与 JDK 在引用不入队时同形：只在显式 clean() 时执行。
     "jdk/internal/ref/Cleaner",
+    # 类加载器的本地库表（纯 Java：构造器只登记 loader / caller 与空 ConcurrentHashMap）。消费方：
+    # VM 边界类 ClassLoader 的构造器按字节码调 NativeLibraries.newInstance(this)——用户自定义加载器
+    # （`extends ClassLoader`）一经实例化即走此路径。jdk/ 前缀截断下 newInstance 被翻译而 <init> 留存根，
+    # 运行期命中 panic。load / find 族（System.loadLibrary）不在该调用链上，仍为存根。
+    "jdk/internal/loader/NativeLibraries",
+    # 载体线程本地变量族（纯 Java，0 个 ACC_NATIVE）：TerminatingThreadLocal 是 CarrierThreadLocal 子类，
+    # get / set 经 JavaLangAccess 落到 ThreadLocal 的载体线程表。消费方：sun/nio/fs/NativeBuffers 的线程本地
+    # 缓冲缓存（copyToNativeBuffer：realpath / readlink / mkdir 等以 NativeBuffer 传路径的调用）。jdk/ 前缀
+    # 截断下 NativeBuffers$1 的父构造器链留存根，运行期命中 panic（TestUnixFileNatives）。
+    "jdk/internal/misc/CarrierThreadLocal",
+    "jdk/internal/misc/TerminatingThreadLocal",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存

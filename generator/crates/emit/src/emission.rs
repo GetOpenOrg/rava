@@ -35,6 +35,9 @@ pub struct EmittedMethod {
     pub is_abstract: bool,
     /// 本轮翻译出了方法体
     pub has_body: bool,
+    /// 共置手写提供体、声明以 `// [meta]` 注释行承载（手写 native 等非槽位方法）：只作继承成员的
+    /// 声明者（子类接收者经上转直调），不参与槽位 / 桥接 / 接口实现的定位
+    pub meta: bool,
 }
 
 impl EmittedMethod {
@@ -64,6 +67,7 @@ impl EmittedMethod {
             handwritten: extra.handwritten_body,
             is_abstract: m.is_abstract(),
             has_body,
+            meta: false,
         })
     }
 }
@@ -102,6 +106,30 @@ pub struct ClassEmission {
 impl ClassEmission {
     /// 名字相同、描述符以 `param_desc` 为前缀的首条声明（返回类型不参与：协变）
     pub fn find(&self, name: &str, param_desc: &str) -> Option<&EmittedMethod> {
+        self.slotted().find(|m| m.name == name && m.descriptor.starts_with(param_desc))
+    }
+
+    /// 同 [`Self::find`]，含 `[meta]` 声明（继承成员的声明者定位）
+    pub fn find_declared(&self, name: &str, param_desc: &str) -> Option<&EmittedMethod> {
         self.methods.iter().find(|m| m.name == name && m.descriptor.starts_with(param_desc))
+    }
+
+    /// 文本中实际声明的实例方法（不含 `[meta]` 注释声明）
+    pub fn slotted(&self) -> impl Iterator<Item = &EmittedMethod> {
+        self.methods.iter().filter(|m| !m.meta)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_declaration_only_found_as_declarer() {
+        let m = |name: &str, meta| EmittedMethod { name: name.into(), descriptor: "()V".into(), meta, ..EmittedMethod::default() };
+        let em = ClassEmission { methods: vec![m("a", false), m("ctx", true)], ..ClassEmission::default() };
+        assert!(em.find("ctx", "()").is_none());
+        assert!(em.find_declared("ctx", "()").is_some_and(|d| d.meta));
+        assert_eq!(em.slotted().count(), 1);
     }
 }

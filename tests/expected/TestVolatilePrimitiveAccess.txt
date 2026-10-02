@@ -1,0 +1,6 @@
+instance: true -7 31000 Q 1.5 -2.25
+plain view: true -7 31000 Q 1.5 -2.25
+static: true 120 -1 233 NaN 1.7976931348623157E308
+array: true/0/0/x/0.0/0.0 false/50/-1000/y/0.25/1.0E100 true/100/-2000/z/0.5/2.0E100
+plain array: true 100 -2000 z 0.5 2.0E100
+published: 42.0 R

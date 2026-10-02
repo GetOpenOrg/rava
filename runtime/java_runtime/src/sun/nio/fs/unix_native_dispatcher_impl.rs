@@ -279,7 +279,7 @@ impl UnixNativeDispatcher {
 }
 
 /// 当前线程 errno。
-fn errno() -> i32 {
+pub(super) fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
@@ -299,7 +299,7 @@ fn set_errno(v: i32) {
 }
 
 /// 系统调用返回 -1 且 errno == EINTR 时重试（JDK `RESTARTABLE` 宏）；其它失败返回 errno。
-fn restartable(mut call: impl FnMut() -> i32) -> std::result::Result<i32, i32> {
+pub(super) fn restartable(mut call: impl FnMut() -> i32) -> std::result::Result<i32, i32> {
     loop {
         let r = call();
         if r != -1 {
@@ -313,12 +313,12 @@ fn restartable(mut call: impl FnMut() -> i32) -> std::result::Result<i32, i32> {
 }
 
 /// errno → `UnixException`（JDK `throwUnixException`）。
-fn unix_exception(errno: i32) -> JvmError {
+pub(super) fn unix_exception(errno: i32) -> JvmError {
     JvmError::from(UnixException::new_i(errno).expect("UnixException 构造无失败面"))
 }
 
 /// stat 缓冲填充（UnixFileAttributes.st_* 字段）。
-fn fill_stat(attrs: &UnixFileAttributes, md: &std::fs::Metadata) {
+pub(super) fn fill_stat(attrs: &UnixFileAttributes, md: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
     attrs.__set_st_mode(md.mode() as i32);
     attrs.__set_st_ino(md.ino() as i64);

@@ -1,0 +1,30 @@
+mkdir = true
+mkdir again -> FileAlreadyExistsException
+mkdir no parent -> NoSuchFileException
+mkdirs = true
+copy = 20003 true
+copy exists -> FileAlreadyExistsException
+copy replace = short
+copy empty = 0
+copy dir = true
+readlink = d/a.txt
+is link = true
+symlink exists -> FileAlreadyExistsException
+readlink plain -> NotLinkException
+realpath = true true
+realpath dots = true
+realpath missing -> NoSuchFileException
+dangling exists = false, nofollow = true
+chmod = rw-r-----
+fchmod = rw-------
+chmod missing -> NoSuchFileException
+chown = true
+owner name = true
+lchown = true
+mtime = 1577934245123
+atime = 946684800000, mtime kept = 1577934245123
+link mtime = 946684800000, target mtime = 1577934245123
+epoch mtime = 0
+store = true true true true
+mount = true true
+cleaned = true

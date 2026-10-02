@@ -319,6 +319,13 @@ impl dyn ObjectVTable {
         self.__unsafe_ref_access(field, &mut __RefAccess::Set(Some(v))).is_some()
     }
 
+    /// int 按名写形态（`__unsafe_int_cell` 取单元再写）：命中写入返回 true；未命中 → false。
+    /// 手写层以字面量字段名调用时，闭包分析器据此得知该名字段被写入（不折叠其读取）。
+    #[doc(hidden)]
+    pub fn __unsafe_int_set(&self, field: &str, v: i32) -> bool {
+        self.__unsafe_int_cell(field).map(|c| c.set(v)).is_some()
+    }
+
     /// 引用原子协议读-改-写形态：命中 → `Some(旧值)`；未命中 → None。Unsafe / VarHandle 的
     /// compareAndSet / compareAndExchange / getAndSet 引用族经此真正原子。
     #[doc(hidden)]

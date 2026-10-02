@@ -23,7 +23,7 @@ fn is_let_of(entries: &[Entry], k: usize, name: &str) -> bool {
 }
 
 /// 待降级 let 的值侧对齐到 hoisted（形态不同、可对齐、非占位值时）
-fn align_later(cx: &VarsCtx, entries: &mut [Entry], k: usize, hoisted: &Type) {
+pub(super) fn align_later(cx: &VarsCtx, entries: &mut [Entry], k: usize, hoisted: &Type) {
     let hoisted_s = render_type(hoisted);
     let Some(l) = let_of_mut(&mut entries[k]) else { return };
     let Some(later_s) = hoisted_let_type(l).map(|t| render_type(&t)) else { return };

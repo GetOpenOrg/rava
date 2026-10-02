@@ -50,6 +50,14 @@ fn java_method_name(line: &str) -> Option<&str> {
     rest.split_once('"').map(|(v, _)| v)
 }
 
+/// `#[java_method(...)]` 的 `declared_by`（复制进本类的方法体的声明类型：接口 default / 未覆盖的超类虚方法）
+fn body_owner(line: &str) -> Option<&str> {
+    let at = line.find("#[java_method(")?;
+    let rest = &line[at..];
+    let k = rest.find(" declared_by = \"")? + " declared_by = \"".len();
+    rest[k..].split_once('"').map(|(v, _)| v)
+}
+
 /// 行尾 ` // line N` 的 N
 fn line_mark(line: &str) -> Option<u32> {
     let (_, n) = line.rsplit_once(MARK)?;
@@ -90,7 +98,10 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
             source = v.to_string();
         }
         if let Some(name) = java_method_name(line) {
-            let entry = (class.clone(), name.to_string(), source.clone());
+            // 帧归属方法体的声明类型：复制进本类的接口 default / 超类虚方法体归声明类型（HotSpot 帧的
+            // method holder）；源文件在 `write` 汇总时按声明类型校正
+            let owner = body_owner(line).unwrap_or(&class);
+            let entry = (owner.to_string(), name.to_string(), source.clone());
             let idx = match out.methods.iter().position(|m| *m == entry) {
                 Some(p) => p as u32,
                 None => {
@@ -108,6 +119,21 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
         }
     }
     (marks > 0).then_some(out)
+}
+
+/// 文件内各 `java_class!` / `java_interface!` 块的 (类 binary name, 源文件)
+fn class_sources(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut class: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(v) = attr_value(line, "binary_name") {
+            class = Some(v);
+        } else if let (Some(c), Some(v)) = (class, attr_value(line, "source")) {
+            out.push((c.to_string(), v.to_string()));
+            class = None;
+        }
+    }
+    out
 }
 
 /// 行表源文本（java_meta 的 lib.rs 以 `include!` 引入）
@@ -142,6 +168,16 @@ pub fn write(w: &mut Writer, out_dir: &Path, files: &[(&Path, &str)]) -> Result<
             scan(&rel, text)
         })
         .collect();
+    // 复制进他类的方法体（`declared_by`）可能来自另一源文件：源文件取声明类型自己的 `source`
+    let sources: std::collections::HashMap<String, String> =
+        files.iter().flat_map(|(_, text)| class_sources(text)).collect();
+    for t in &mut tables {
+        for (c, _, s) in &mut t.methods {
+            if let Some(own) = sources.get(c.as_str()) {
+                own.clone_into(s);
+            }
+        }
+    }
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
     w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&tables))
 }
@@ -185,5 +221,40 @@ mod tests {
         assert_eq!(t.rows, vec![(7, 0, 0), (9, 0, 7), (11, 0, 8), (13, 1, 0), (14, 1, 3), (16, NO_METHOD, 0)]);
         assert!(scan("x.rs", "fn main() {}\n").is_none());
         assert!(render(&[t]).contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"A.java\"), "));
+    }
+
+    #[test]
+    fn injected_default_body_belongs_to_interface() {
+        let text = [
+            "rava_macros::java_class! {",
+            "    #[binary_name       = \"p/C\"]",
+            "    #[source            = \"C.java\"]",
+            "    impl C {",
+            "        #[java_method(name = \"m\", descriptor = \"()V\", access = \"public\", virtual_in = \"C\", declared_by = \"p/I$J\")]",
+            "        pub fn m(&self) -> Result<()> {",
+            "            g()?; // line 4",
+            "        }",
+            "    }",
+            "}",
+        ]
+        .join("\n");
+        let t = scan("user/src/c.rs", &text).expect("有标记");
+        assert_eq!(t.methods, vec![("p/I$J".to_string(), "m".to_string(), "C.java".to_string())]);
+    }
+
+    #[test]
+    fn class_sources_pairs_blocks() {
+        let text = [
+            "rava_macros::java_class! {",
+            "    #[binary_name       = \"p/A\"]",
+            "    #[source            = \"A.java\"]",
+            "}",
+            "rava_macros::java_class! {",
+            "    #[binary_name       = \"p/B\"]",
+            "    #[source            = \"B.java\"]",
+            "}",
+        ]
+        .join("\n");
+        assert_eq!(class_sources(&text), vec![("p/A".into(), "A.java".into()), ("p/B".into(), "B.java".into())]);
     }
 }

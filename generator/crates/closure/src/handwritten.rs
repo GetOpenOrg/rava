@@ -44,6 +44,9 @@ const SET_PREFIX: &str = "__set_";
 const GET_PREFIX: &str = "__get_";
 /// java_class! 为 static 字段生成的写访问器前缀（`T::set_<字段>(v)`）
 const STATIC_SET_PREFIX: &str = "set_";
+/// ObjectVTable 的实例字段按名协议（object.rs）：首参为字段名字面量时即该名字段的读 / 写
+const BY_NAME_WRITES: &[&str] = &["__unsafe_ref_set", "__unsafe_ref_update", "__unsafe_int_set"];
+const BY_NAME_READS: &[&str] = &["__unsafe_ref_get", "__unsafe_int_cell", "__unsafe_long_cell", "__unsafe_bool_cell"];
 const RUST_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
     "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
