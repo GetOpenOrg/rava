@@ -154,8 +154,13 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     步骤 0 m1..m5 Rust 路径复跑 golden，清零回归（可提前；m3 编译 0 ✅，运行期存根由 C1d-b b0 处理）
 │   │      └─▶ 步骤 A：63_junit 形态接入 run_tests ◀── S7 ──▶ 步骤 B ──▶ 步骤 C
 │   │
-│   └─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
-│         （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
+│   ├─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
+│   │     （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
+│   │
+│   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md）
+│         第 0 步 A 档用例预审（rava audit，不进基线，可提前）
+│          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
+│               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
 │
 ├─ 【中期】优化线（用户 2026-10-01 决定暂停，C 阶段收官后恢复；精度 / 效率优化都要做）
 │   │
