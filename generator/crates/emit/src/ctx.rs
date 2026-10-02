@@ -54,6 +54,8 @@ pub struct EmitShared<'a> {
     sam: OnceLock<crate::sam::SamLedger>,
     instr_facts: OnceLock<instr::InstrFacts>,
     lib_crate_of: OnceLock<HashMap<String, String>>,
+    /// 内建加载器的模块映射（定义加载器属性，见 `closure::loaders`）
+    loaders: OnceLock<closure::loaders::DefiningLoaders>,
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
@@ -136,9 +138,16 @@ impl<'a> EmitShared<'a> {
             sam: OnceLock::new(),
             instr_facts: OnceLock::new(),
             lib_crate_of: OnceLock::new(),
+            loaders: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// 类的定义加载器（类块 `defining_loader` 属性；引导加载器 → None）
+    pub fn defining_loader(&self, cls: &str) -> Option<&'static str> {
+        let l = self.loaders.get_or_init(|| closure::loaders::DefiningLoaders::new(self.cp, self.manifest.vm_state.loader_map.as_ref()));
+        l.loader_of(self.cp, cls).attr()
     }
 
     /// 手写真源 `runtime/java_runtime/src`

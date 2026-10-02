@@ -108,6 +108,10 @@ fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     // 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内，含 ACC_SUPER / ACC_SYNTHETIC 等）：
     // Class.getClassAccessFlagsRaw0 的数据源（HotSpot JVM_GetClassAccessFlags 同源）
     lines.push(format!("#[class_access_flags = \"{}\"]", cf.access & 0x7FFF));
+    // 定义加载器（VM 建镜像时写入 Class.classLoader）：镜像的读取钩子按 java_meta 汇总表填充；引导加载器不写
+    if let Some(l) = ctx.defining_loader(&cf.name) {
+        lines.push(format!("#[defining_loader   = \"{l}\"]"));
+    }
     if ci.methods().iter().any(|m| m.name == "<clinit>") {
         lines.push("#[has_clinit        = true]".into());
     }

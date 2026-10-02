@@ -137,10 +137,11 @@ value_equals = [
 "java/lang/String.isEmpty:()Z" = "is_empty"
 
 [facts.returns]
-# 断言恒关（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false；javac 的
-# `$assertionsDisabled = !desiredAssertionStatus()` 由此成为常量，assert 语句体整片不可达
+# 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`
+# 本身走字节码：引导类镜像的 classLoader 为 null（分析器常量求值按定义加载器表给出）→ 落到本条 → 引导类
+# `$assertionsDisabled = !X.class.desiredAssertionStatus()` 折叠为常量，assert 体不入闭包；应用 / 平台类按
+# 加载器的断言表在运行期求值
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
-"java/lang/Class.desiredAssertionStatus:()Z" = false
 # 原生二进制进入 main 时运行时已完成引导（vm_impl.rs：isBooted / isModuleSystemInited /
 # isJavaLangInvokeInited 恒 true）；引导期分支（如 ReflectionFactory.config 的 DEFAULT_CONFIG）不可达
 "jdk/internal/misc/VM.isBooted:()Z" = true
@@ -494,6 +495,27 @@ concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/Stri
 # 清单是唯一真源：登记了 concat / object_methods 引导方法而缺这三项时装载报错
 component_hash = "java/util/Objects.hashCode:(Ljava/lang/Object;)I"
 component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Object;)Z"
+
+# ── VM 注入状态的落地（closure/src/manifest/vm_state.rs 读取）────────────────────────────
+# field_hooks：HotSpot 在建镜像 / 引导时写入、原生二进制改为首次访问时落地的字段。键为
+# `属主.字段名:描述符`；receiver = true 的钩子是属主上的接收者方法（`fn(&self) -> Result<&Self>`），
+# 发射为 `recv.hook()?.__get_x()`；否则为宿主类静态 fn，访问（读 / 写）前调用。手写体属
+# docs/reference/handwritten-boundary.md 准入第 ③ 类（VM 注入状态）。
+# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
+# - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
+#   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
+[vm_state.field_hooks]
+"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
+"java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
+"java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
+
+# loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
+# 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →
+# 平台加载器，其余 JDK 模块 → 应用加载器；用户类与库类为应用加载器。
+[vm_state.loader_map]
+class = "jdk/internal/module/ModuleLoaderMap$Modules"
+boot = "bootModules"
+platform = "platformModules"
 
 # ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
 # LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：

@@ -10,6 +10,7 @@ pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
+pub mod loaders;
 pub mod seeds;
 
 use std::collections::BTreeMap;

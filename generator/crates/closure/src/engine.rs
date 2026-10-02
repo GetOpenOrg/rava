@@ -56,6 +56,7 @@ mod hw_infer;
 mod hw_inherit;
 mod hwobj;
 mod vmhook;
+mod field_hooks;
 mod rtfn;
 mod vmrules;
 mod hwfield;
