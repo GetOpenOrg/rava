@@ -108,7 +108,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）
 │   │     ├─ 🔄 b1′ ArrayList.writeObject 分派臂：2026-10-02 交接拆分（c1d-pick 2c16454b，计划 §4.6；WIP 快照 c1d-pick-wip 63d90e86）
-│   │     │       T0 基线抽查 c1db-2c16454b → 并行 🔄 T6 getSuperclass 返回模型（c1d-t6）、🔄 T5 MH→putReference 清单精确化（c1d-t5）、
+│   │     │       T0 基线抽查 c1db-2c16454b → 并行 🔄 T6 getSuperclass 返回模型（c1d-t6）、✅ T5 MH→putReference 清单精确化（cc6b59e0）、
 │   │     │       🔄 T7 探针转正 --flows（c1d-t7）→ T4 未知 Class 字段枚举收窄 → T3 反射回调按接收者克隆上下文 → T2 名字×镜像交叉（最后合）
 │   │     │       验收：StockTrans / TestSerialDefaultSuid / TestSerialProxyForm 通过、fold_props ≥42、m3 golden
 │   │     ├─ 🔄 b1 序列化收窄：大值集来自未知接收者字段视图（Unsafe 读 ↔ setObjFieldValues 手写写入成环）
