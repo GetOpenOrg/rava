@@ -74,17 +74,11 @@ fn _is_walker_impl(class: &str) -> bool {
         || crate::vm_stack::direct_super(class) == Some(ABSTRACT_STACK_WALKER)
 }
 
-/// 按名写引用字段；字段缺失是协议断裂（生成类恒应答其引用字段）。
-fn _put_ref(target: &Object, field: &str, value: Object) {
-    if !target.0.__unsafe_ref_set(field, value) {
+/// 按名写入的命中检查；字段缺失是协议断裂（生成类恒应答其字段）。字段名须在调用点以字面量
+/// 给出：闭包分析器据此得知该名字段被手写层写入，其读取不按值集折叠。
+fn _ensure(written: bool, field: &str) {
+    if !written {
         panic!("stub: java/lang/StackStreamFactory$AbstractStackWalker 填帧：{} 字段无按名协议", field);
-    }
-}
-
-fn _put_int(target: &Object, field: &str, value: i32) {
-    match target.0.__unsafe_int_cell(field) {
-        Some(cell) => cell.set(value),
-        None => panic!("stub: java/lang/StackStreamFactory$AbstractStackWalker 填帧：{} 字段无按名协议", field),
     }
 }
 
@@ -93,11 +87,12 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     let Some(member) = info.0.__unsafe_ref_get("memberName") else {
         panic!("stub: java/lang/StackFrameInfo.memberName 无按名协议");
     };
-    _put_ref(&member, "clazz", Object::from(Class::for_class(String::from(frame.class.as_str()))));
-    _put_ref(&member, "name", Object::from(String::from(frame.method.name)));
-    _put_ref(&member, "type_", Object::from(String::from(frame.method.descriptor)));
-    _put_int(&member, "flags", frame.member_name_flags());
-    _put_int(&info, "bci", 0);
+    let clazz = Object::from(Class::for_class(String::from(frame.class.as_str())));
+    _ensure(member.0.__unsafe_ref_set("clazz", clazz), "clazz");
+    _ensure(member.0.__unsafe_ref_set("name", Object::from(String::from(frame.method.name))), "name");
+    _ensure(member.0.__unsafe_ref_set("type_", Object::from(String::from(frame.method.descriptor))), "type");
+    _ensure(member.0.__unsafe_int_set("flags", frame.member_name_flags()), "flags");
+    _ensure(info.0.__unsafe_int_set("bci", 0), "bci");
 }
 
 impl<R, T> StackStreamFactory_AbstractStackWalker<R, T>

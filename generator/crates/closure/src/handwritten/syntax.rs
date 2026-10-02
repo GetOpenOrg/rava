@@ -376,6 +376,16 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             let on_self = matches!(&*m.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
             self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false));
         }
+        // 按名协议 `o.0.__unsafe_ref_set("字段", v)`：接收者是擦除的 vtable 对象，只知字段名
+        let by_name = (BY_NAME_WRITES.contains(&name.as_str()), BY_NAME_READS.contains(&name.as_str()));
+        if by_name.0 || by_name.1 {
+            if let Some(syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(lit), .. })) = m.args.first() {
+                let f = lit.value();
+                let f = f.strip_suffix('_').filter(|k| RUST_KEYWORDS.contains(k)).map(str::to_string).unwrap_or(f);
+                let value = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| infer(a, self.locals))).flatten();
+                self.fields.push((f, by_name.0, None, value, false, false));
+            }
+        }
         let args = m.args.iter().map(|a| infer(a, self.locals)).collect();
         let fresh = match &*m.receiver {
             syn::Expr::Path(p) => p.path.get_ident().and_then(|i| self.fresh.get(&i.to_string()).cloned()),
