@@ -129,6 +129,13 @@ TestAnnoNestedArray 运行暴露 null_recv 健全性缺口：`first.annotationTy
 **不驻留流图**；未建模派生（`engine/unmodeled.rs`）只给驻留节点打标，空读取点的派生标记无处存放，下游以它为接收者
 的调用就按空集判了恒 null。修法：不驻留的读取点取虚序号（流图节点数之后、无出边）参与派生，`recv_unmodeled` 按虚序号查标记。
 
+TestAnnoNestedArray 第二层嵌套注解成员丢失（`@Branch({…})` 打印成 `@Branch()`）：注解种子收集（`seeds/annotation.rs`）
+把用户注解类型排除在补种之外，假定用户注解都有静态边。只出现在注解属性体里的嵌套用户注解（Branch / Leaf）没有静态边，
+方法表从未入链，Branch 仅以类型级不透明发射、Leaf 不入闭包；运行期 `AnnotationType.getInstance(Branch)` 成员表为空，
+AnnotationParser 按未知成员丢弃全部取值。修法：用户注解类型与 JDK 注解类型同等补种（仍只按挂载点传递可达入链，
+与枚举 / Class 元素类型口径一致）。边界用例 `TestAnnoArrayMembers`：三层嵌套逐层下钻、各层空数组、8 种基本类型数组、
+字符串（含转义 / 空串）、枚举、Class（用户类 / JDK 类 / 基本类型 / 数组类型）数组成员，expected 取 JDK 21.0.11 实测。
+
 ## 六、集成头 52bf5311 的日期 / 区域与 IO / 反射回归（C6 步骤 2 引起）
 
 逐个对照 59dbedc1 删掉的声明与对应调用点，三类失败都是「声明删了、推断没接上」，不是 regress2 的提交引起的：
