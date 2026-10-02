@@ -57,6 +57,32 @@
 
 A、B 基于 28090062，均已过 `cargo build` 与生成器全部单元测试；按停止指令未做 e2e / 闭包实测，接手第一步是测 B 的类数与耗时（T0）。
 
+**T5（分支 `c1d-t5`，提交 37a006ef，基于 2c16454b）**：方法句柄解释器的 Unsafe 读写按 DMH 所指字段接入。
+
+- 清单 `vm_intrinsics.toml [facts.handle_interpreters] members`：`MethodHandle.invokeBasic / invokeExact / invoke / linkToStatic / linkToVirtual / linkToSpecial / linkToInterface`
+  （手写体经 `method_handle_ext.rs interpret` 执行 LambdaForm）。依据：LambdaForm 里的 Unsafe 引用读写成员只来自
+  DirectMethodHandle 字段访问器（`preparedFieldLambdaForm`），基址是对象或静态字段基址类镜像；数组元素句柄走
+  `MethodHandleImpl$ArrayAccessor` 字节码 / VarHandle；`jdk.internal.misc.Unsafe` 不导出，用户取不到其方法句柄。
+- 引擎 `hw_mem.rs`：手写调用点按调用方取读写口径 `Gate`（`Offset` / `Handle`）。`Handle` 口径下
+  ① `hw_site_arrays` 的写入目标臂对 `fields` 写入成员不接数组元素（取代 `C1DR_NOMHARR`）；② `memory_read` 不读数组元素；
+  ③ 实例字段按 `offset_exposed(fi, Handle)` = `field_open_under(fopen_all, deser = false)`：只经反序列化放开的字段不算
+  （反序列化经 FieldReflector 自身的 Unsafe 调用点读写，不构造字段方法句柄）；挂起的偏移读写（`offset_waits` / `offset_read_waits`）
+  带口径，字段按口径开放时才接上。静态字段 / 类镜像基址与普通口径相同（按名打开的静态字段）。
+- `manifest.rs`：`is_handle_interpreter`（按成员引用比对，不格式化）与解析单测；生成器单元测试全过。
+- 本机 emit 实测（`rava build --stop-after emit --closure-json --clean`，基线 2c16454b → T5）：
+
+  | 用例 | 类数 | code 级 | 方法数 | fold_props | 耗时 |
+  |---|---|---|---|---|---|
+  | HelloWorld | 266 → 266 | 144 → 144 | 723 → 723 | 0 → 0 | 2 s → 4 s |
+  | TestMethodHandleDirect | 1546 → 1546 | 1141 → 1137 | 9114 → 9098 | 53 → 53 | 15 s → 15 s |
+  | TestReflectFieldMethod | 1559 → 1559 | 1155 → 1151 | 9257 → 9241 | 53 → 53 | 15 s → 13 s |
+  | DeepCopy | 1823 → 1823 | 1403 → 1403 | 11102 → 11102 | 53 → 53 | 112 s → 104 s |
+  | StockTrans | 1821 → 1821 | 1401 → 1401 | 11097 → 11097 | 53 → 53 | 116 s → 104 s |
+
+  MHD / RFM 少掉的 16 个方法全是原生流 `Node$OfInt / OfLong / OfDouble / OfPrimitive` 与 `Nodes$EmptyNode*` 的
+  `copyInto` / `getChild` / `asPrimitiveArray`（数组写入臂把解释器值池泛写进 `Node[]` 等数组所致；两用例不用流）。
+  DC / ST 集合不变，与 4.3「只关 NOMHARR 不止血」一致——两者的膨胀在 T4 / b1 / T3 / T2。耗时差在同机噪声范围内。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
