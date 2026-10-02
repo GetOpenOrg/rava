@@ -8,9 +8,9 @@
 use ir::{BinOp, CastExpr, CastMode, Expr, Type};
 use ty::{JvmType, PrimKind, RsType};
 
-use crate::build::{call, cast, mcall, paren, text};
+use crate::build::{cast, mcall, paren, text};
 use crate::env::InstrEnv;
-use crate::error::InstrResult;
+use crate::error::{InstrError, InstrResult};
 use crate::log::{Audit, InstrLog};
 
 /// 装箱分类（`_object_coercion_kind`）
@@ -18,23 +18,27 @@ use crate::log::{Audit, InstrLog};
 pub enum ObjectKind {
     /// JVM 基本类型（void 除外）：`.into()`
     Prim,
-    /// 作用域类型形参：`Into::<Object>::into(..)`
-    TypeVar,
     /// 数组 / 注册表内类 / 接口载体：`Object::from(..)`（对象身份保持）
     Ref,
-    /// 其余（无运行时类的值）：`Object::from_any(..)`
-    Opaque,
+    /// 类型形参与其余引用形态（Object 自身、注册表外类型）：`Into::<Object>::into(..)`，
+    /// 经 `From<T> for Object`（ObjectVTable 实现者）或自反 `From<Object>` 落定
+    Into,
+    /// void：没有值，流入 Object 槽位是生成器内部错误
+    Void,
 }
 
 pub fn object_kind(env: &InstrEnv, t: &RsType) -> ObjectKind {
     match env.ctx.ty.from_rs_type(t, &env.tparam_set()) {
-        JvmType::Primitive(PrimKind::Void) => ObjectKind::Opaque,
+        JvmType::Primitive(PrimKind::Void) => ObjectKind::Void,
         JvmType::Primitive(_) => ObjectKind::Prim,
-        JvmType::TypeVar { .. } => ObjectKind::TypeVar,
         JvmType::Array(_) => ObjectKind::Ref,
         JvmType::Class { binary, .. } if env.ctx.reg().contains(&binary) => ObjectKind::Ref,
-        _ => ObjectKind::Opaque,
+        _ => ObjectKind::Into,
     }
+}
+
+fn void_to_object(env: &InstrEnv, val: &str) -> InstrError {
+    InstrError::BadInsn(format!("void 值装箱为 Object（{}）：{val}", env.ctx.class_name))
 }
 
 /// 值 → Object 引用（`coerce_to_object_node`；Java 的隐式上转，对象身份保持）。
@@ -46,12 +50,32 @@ pub fn to_object(env: &InstrEnv, val: Expr, t: &RsType, clone: bool) -> InstrRes
         let recv = if text(env, &val).trim_start().starts_with('-') { paren(val) } else { val };
         return mcall(recv, "into", Vec::new());
     }
+    if kind == ObjectKind::Void {
+        return Err(void_to_object(env, &text(env, &val)));
+    }
     let src = if clone { sim::exprs::clone_ref(val)? } else { val };
     Ok(match kind {
-        ObjectKind::TypeVar => sim::exprs::into_call(sim::exprs::object_type()?, src)?,
         ObjectKind::Ref => sim::exprs::object_from(src)?,
-        _ => call(&[ir::anchors::OBJECT, "from_any"], vec![src])?,
+        _ => sim::exprs::into_call(sim::exprs::object_type()?, src)?,
     })
+}
+
+/// [`to_object`] 的文本入口（块级合并值、条件原子、lambda 体等按文本拼接的路径）
+pub fn to_object_text(env: &InstrEnv, val: &str, t: &RsType, clone: bool) -> InstrResult<String> {
+    let obj = ir::anchors::OBJECT;
+    match object_kind(env, t) {
+        // 负数字面量补外层括号：`-1i32.into()` 解析为 `-(1i32.into())`
+        ObjectKind::Prim if val.trim_start().starts_with('-') => Ok(format!("({val}).into()")),
+        ObjectKind::Prim => Ok(format!("{val}.into()")),
+        ObjectKind::Void => Err(void_to_object(env, val)),
+        kind => {
+            let src = if clone { format!("Clone::clone(&{val})") } else { val.to_string() };
+            Ok(match kind {
+                ObjectKind::Ref => format!("{obj}::from({src})"),
+                _ => format!("Into::<{obj}>::into({src})"),
+            })
+        }
+    }
 }
 
 /// checkcast / 跨实例化转换节点（`cast_node`）：`checked` → `try_cast::<T>("binary")?`；

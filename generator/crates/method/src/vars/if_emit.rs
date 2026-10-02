@@ -118,7 +118,7 @@ pub(super) fn emit(
         None
     };
     if let Some(m) = merged {
-        widen_into_merged(cx, entries, name, block_k, span_end, &m);
+        widen_into_merged(cx, entries, name, block_k, span_end, &m)?;
         hoisted_type = Some(m);
     }
     // 提升声明继承触发声明的 JVM 身份（槽位 / store 偏移）

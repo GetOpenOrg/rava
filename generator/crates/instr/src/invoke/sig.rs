@@ -233,8 +233,8 @@ pub enum CallBind {
     Precise(RsType),
     /// 签名返回裸类型变量、描述符擦除为接口载体且签名无法实例化：经 Object 边界取回载体
     Carrier,
-    /// 签名返回裸类型变量、描述符为 Object 且签名无法实例化：按 Object 边界装箱
-    Opaque,
+    /// 签名返回类级裸类型变量、描述符为 Object 且签名无法实例化：`Into::<Object>::into` 上转
+    TypeVar,
     /// 按描述符类型入栈
     Erased,
 }
@@ -249,7 +249,7 @@ pub fn bind_call_result(env: &InstrEnv, rust_ret: &RsType, sig_ret: Option<RsTyp
         Some(_) => CallBind::Erased,
         None if is_prim(rust_ret) => CallBind::Erased,
         None if !obj(rust_ret) && env.ctx.ty.is_carrier(rust_ret) && erased_tv() => CallBind::Carrier,
-        None if obj(rust_ret) && erased_tv() => CallBind::Opaque,
+        None if obj(rust_ret) && erased_tv() => CallBind::TypeVar,
         None => CallBind::Erased,
     }
 }

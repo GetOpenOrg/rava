@@ -104,7 +104,7 @@ fn enum_pred(env: &InstrEnv, obj_s: &str, cls: &str, name: &str) -> InstrResult<
         return Ok("false".to_string());
     }
     let (e, t) = static_field_read(env, cls, name, &format!("L{cls};"))?;
-    let konst = obj_text(env, &text(env, &e), &t);
+    let konst = obj_text(env, &text(env, &e), &t)?;
     Ok(format!("({obj_s}.is_instance_of(\"{cls}\") && {obj_s} == {konst})"))
 }
 
@@ -149,7 +149,7 @@ pub(super) fn gen_type_switch(env: &InstrEnv, sim: &mut StackSim, site: &IndySit
             sim.fresh_let("__ts_sel", sel.expr, &sel.ty)?
         }
     } else {
-        let coerced = obj_text(env, &text(env, &sel.expr), &sel.ty);
+        let coerced = obj_text(env, &text(env, &sel.expr), &sel.ty)?;
         sim.fresh_let("__ts_sel", Expr::raw(coerced), &RsType::Object)?
     };
     let obj_s = text(env, &obj_expr);

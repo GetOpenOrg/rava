@@ -254,9 +254,9 @@ pub(super) fn emit_call_result(
             )?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
-        CallBind::Opaque => {
-            // 返回裸类型变量且无法按接收者实例化：经 Object 边界装箱
-            raw(sim, format!("let {v} = {O}::from_any({call_str}?);"))?;
+        CallBind::TypeVar => {
+            // 返回类级裸类型变量且无法按接收者实例化：经 Object 边界上转
+            raw(sim, format!("let {v} = ::std::convert::Into::<{O}>::into({call_str}?);"))?;
             sim.push(Expr::Var(v), rust_ret.clone());
         }
         CallBind::Erased => {

@@ -1,7 +1,7 @@
 # 生成代码 `Object::from_any` 归零（2026-10-03，调查稿，待 c1d-lambda-class 合入后实施）
 
-> 状态：只做了调查，代码未改。终态：可读性审计 `from_any = 0`，覆盖全部生成 crate（`java_runtime`、`java_body_*`、lib crate、`user`），并在全量语料上成立。
-> 手写层（`*_impl.rs` / `object_ext.rs` 等无生成标记的文件）里的 `Object::from_any` 不在本计划范围内，审计本来也不统计它们。
+> 状态：①–④ 已实施（① ec714d98 合入；② b820c8aa 合入；③ 44b3a3b3；④ 见第六节）。终态：可读性审计 `from_any = 0`，覆盖全部生成 crate（`java_runtime`、`java_body_*`、lib crate、`user`），并在全量语料上成立。
+> 手写层（`*_impl.rs` / `object_ext.rs` 等无生成标记的文件）的 `Object::from_any` 审计不统计；④ 已逐处清点归属，见第六节。
 
 ## 一、现状实测（TestLambdaHiddenClass，c1d-lambda-class 6baa49ad）
 
@@ -102,7 +102,7 @@ E1 / E2 背后有四个类型层缺口，按本例的落点归类：
 | `generator/crates/instr/src/invoke/special/ctor.rs`、`generator/crates/method/src/postprocess.rs` | 删 `from_any` 识别项 |
 | `docs/plans/java-rust-translation-reference.md` | §16 状态更新 |
 
-`runtime/` 不改。`Object::from_any` 作为手写层 API 保留，生成代码不再引用它。
+`Object::from_any` 作为手写层 API 保留，生成代码不再引用它；`runtime/` 只清手写层中属于 Java 语义的一处（见第六节）。
 
 ## 五、影响面与验收
 
@@ -124,3 +124,27 @@ E1 / E2 背后有四个类型层缺口，按本例的落点归类：
   4. E3 / E4 + 清理。
 
   每步本机编译验收集，推两远端后抽查。
+
+## 六、实施记录（④）与手写层归属
+
+### 6.1 ④ 生成器改动
+
+- `instr/src/coerce.rs`：`ObjectKind` 收为 `Prim` / `Ref` / `Into` / `Void` 四类。原 `TypeVar` 与 `Opaque` 合并为 `Into`，一律发射 `Into::<Object>::into(..)`（`From<T> for Object` 覆盖 ObjectVTable 实现者，自反 `From<Object>` 覆盖 Object 自身）。新增 `to_object_text` 作为文本入口的唯一实现，`method/src/coerce_text.rs::to_object` 与 `sim/dynamic/boxing.rs::obj_text` 改为委托（原先三份平行实现）。
+- `Void`：void 值流入 Object 槽位返回 `InstrError::BadInsn`（方法体生成 Fatal），不再静默装箱。文本入口随之改为返回 `Result`（`unify_pair` / `acmp_operand` / `widen_into_merged` / `hoist_loop_vars` 透传）。
+- `invoke/sig.rs`：`CallBind::Opaque` 更名 `CallBind::TypeVar`（类级裸类型变量、签名无法实例化），direct / invokespecial 两处发射 `Into::<Object>::into(..)`。
+- `invoke/virtual_/args.rs`：基本类型接收者调用根类方法改为 `Object::from(prim).m()`（基本类型实现 ObjectVTable）。
+- `sim/dynamic/lambda_body.rs`：lambda / 方法引用一律经 samtype 的 SAM 合成对象（隐藏类身份）。samtype 不可合成（不在注册表 / 非函数式接口 / 预扫描漏登）改为生成器内部错误，删去「无类身份的裸闭包装箱」退化臂。JVM 对每个 lambda 调用点都定义实现 samtype 的隐藏类，该退化臂没有对应的 Java 语义；验收集 27 例命中 0 处。
+- 识别项：`special/ctor.rs::strip_boxing` 与 `method/src/postprocess.rs::ERASED_NEW_RE` 删去 `Object::from_any` 前缀。
+- 守护：`driver/tests/build_cli.rs::batch_trace_and_debug` 断言 `[readability-audit] from_any=0`（RecordSwitch 全闭包：用户类 + JDK 生成类 + `java_body_*`）；`record_and_switch_bootstraps_translate` 原有的用户类文本断言保留。
+
+### 6.2 手写层清点（`runtime/`，无生成标记的文件）
+
+| 位置 | 形态 | 归属 / 处理 |
+|------|------|-------------|
+| `sun/util/locale/provider/calendar_data_utility_impl.rs` `_names_map` | `let _ = Object::from_any(map.put(..)?)` | 属于 Java 语义层（丢弃 `Map.put` 返回值），且 `from_any` 本身多余。**已清零**，改为 `map.put(..)?;` |
+| `java/lang/throwable_impl.rs` `fillInStackTrace_i` | `Object::from_any(frames)` | **可读层外的 VM 实现细节**。`backtrace` 是 VM 注入的隐藏字段（handwritten-boundary 准入 ③：栈遍历），负载 `StackTraceFrames` 是没有 Java 类的 Rust 结构，只能以不透明载体存入 Object 槽位。`from_any` 正是这一承载原语，保留 |
+| `java/lang/object_ext.rs` `Object::from_any` | 定义本身 | 对象模型 API（不透明 Rust 负载 → Object，`JvmRef` 承载）。供上一行这类 VM 负载使用，生成代码不引用。保留 |
+| `rava_macros_core/src/block/gen/type_conversions.rs` | 宏展开 `impl Into<Object> for X { Object::from_any(self) }`（`binary_name` 为空的类） | 宏展开内部，不出现在方法体文本中，属于对象模型实现细节。保留 |
+
+结论：可读层（生成方法体 + 手写层中的 Java 语义代码）`from_any` = 0；剩余三处都是对象模型 / VM 负载的承载实现，归属如上。
+
