@@ -21,6 +21,8 @@
 | java/lang/StackTraceElement | initStackTraceElement | ③ | 见 §二 |
 | java/lang/invoke/MethodHandleNatives | expand | ① | 见 §二 |
 | com/sun/media/sound/DirectAudioDeviceProvider、PortMixerProvider | nGetNumDevices / nNew*Info | — | 不应在调用链上：移交 C1d（边见 §三） |
+| java/lang/invoke/MethodHandleNatives | getMemberVMInfo / getNamedCon | — | 只在 `assert` 体内调用，断言恒关后不可达；不手写（见 §三） |
+| java/lang/StackStreamFactory$AbstractStackWalker | setContinuation | — | 只在续体非 null 时调用，本模型续体恒 null；不手写（见 §三） |
 
 ## 二、栈遍历组（类 ③）
 
@@ -82,6 +84,23 @@
     nGetNumDevices 等 native。
   - 处理：这是闭包精度问题，不在调用链上，不手写，**移交 C1d**。
   - 证实方法：在服务器对 audit 入口跑 `--why com/sun/media/sound/DirectAudioDeviceProvider`。
+
+- 14 包旧报告（2026-09-29）里另外 3 项不手写：
+  - `MethodHandleNatives.getNamedCon:(I[Ljava/lang/Object;)I`：唯一调用者是 `verifyConstants`，只在
+    `MethodHandleNatives.<clinit>` 的 `assert(verifyConstants())` 里调用。
+  - `MethodHandleNatives.getMemberVMInfo:(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;`：唯一调用者是
+    `MemberName.vminfoIsConsistent`，只在 `MemberName$Factory.resolve` 的 `assert(m.vminfoIsConsistent())` 里调用。
+    HotSpot 的 product 构建中，getNamedCon 恒返回 0（`#ifndef PRODUCT`）。两者都是调试设施。
+  - `AbstractStackWalker.setContinuation:(J[Ljava/lang/Object;Ljdk/internal/vm/Continuation;)V`：只在
+    `getNextBatch` 的 `hasMoreContinuations()` 为真时调用，前提是 `continuation != null`。非 null 续体只来自
+    `Continuation.stackWalker`（`JLA.newStackWalkerInstance(.., innermost())`）。本模型把虚拟线程映射为 OS 线程，
+    续体从不挂载（`VirtualThread` 是 VM 边界类），所以 `continuation` 恒为 null。
+  - 实测：`vm_intrinsics.toml` 把 `Class.desiredAssertionStatus(0)` 定为常量 false（41dc1d6d 起），因此
+    `$assertionsDisabled` 折叠为真，assert 体整片不可达。当前分析器下：
+    - TestMethodHandleCombinators：`--why verifyConstants`、`--why vminfoIsConsistent` 都报「不在闭包内」；
+    - TestStackWalkerFrames：`--why` 三项都报「不在闭包内」。
+  - 旧报告出自折叠落地前后的旧分析器。以 audit-d749a9c8 的重跑结果为准：若这三项仍然出现，就是闭包精度
+    问题（断言常量或续体 null 未传到该入口），**移交 C1d**，不手写。
 
 ## 四、行数说明
 
