@@ -148,6 +148,53 @@ closure.json `class_init.unknown_sites` 输出；成因用 `rava closure --flows
 以上全部合入后再在 `class_init.rs` 验 `unknown = false`，并补边界 e2e（EnumSet.noneOf / VarHandle 静态字段 /
 `MethodHandles.lookup().findStaticGetter` 触发初始化，期望输出取 JDK 21）。本步没有改变行为，所以没有新增 e2e。
 
+**S5 / S4 实施（协调分工：S2 归 b1，S1 / S3 归 T4，b3 只做 S4 / S5，不改 hw_mem.rs / facts.rs / invoke.rs / reflect.rs）**
+
+- S5 写入值是接收者：`FieldAccess.value_self`——手写体写访问器的实参是 `self`，并经保持身份的转换
+  （`Clone::clone(self)`、`.clone()`、`Object::from`、引用、`?`）写入（`handwritten/syntax.rs` `is_self_value`）。
+  同文件 fn 传递时（`scan.rs` `close_transitive`），只在全程以 `self` 为接收者（`self.f(…)`）的调用链上保留。
+  以非 `self` 接收者调用或引用的名字记入 `BodyScan.nonself`，经它到达的 fn 里该标记取消。`hw_syntax.rs`
+  `hw_value` 对 `value_self` 写入取接收者形参 `P(m,0)`，不取值池。`getDeclaredFields0` / `getDeclaredConstructors0` /
+  `getRecordComponents0` 的 `__set_clazz(Clone::clone(self))` 因此只得到接收者值集，字段类型（`class_for_descriptor`）
+  不再混进 `clazz`。单元测试 `scan::field_value_self`。
+- S4 基本类型类：清单 `[facts.reflect] primitive_class`（`Class.getPrimitiveClass`）。返回值是一个 Class 类型的抽象对象
+  `Class#<primitive>`（九个基本类型类合一，`hw.rs` `primitive_mirror`），不再是 open(Class)。它不登记为类镜像
+  （所指不是字节码类：成员查找与枚举、超类、引用比较照所指未知处理）；`class_init.rs` 遇到它跳过（基本类型类
+  没有初始化，JVMS §5.5）。
+- S4 `for_class`（本步不做，理由如下）：runtime 里约 25 处调用，名字来自调用点各自的事实。
+  - 调用者栈帧（`reflection_impl` / `security_manager_impl`）属 S3。
+  - `getClass` / `getSuperclass` 的手写体已由 `mirror_of_receiver` / `superclass_of_receiver` 返回模型绕开，体内的
+    `for_class` 只进值池。
+  - 元数据表里的字段、参数、返回类型（`class_impl.rs` 的 `class_for_descriptor`）要按接收者镜像查表给值，属成员面
+    （T4 的 reflect.rs / field_lookup）。
+  - `forName` 与 species。
+  - 没有一条统一的「按字面类名给镜像」规则可用。实测 `for_class` 的非镜像 Class 只经 S2 的 `field?` 视图
+    （`assertionLock` 汇点）到达 class_init 调用点，S2 合入后再按剩余路径逐点建模。
+- 边界用例 `TestReflectStaticFieldInit`（期望输出为 JDK 21 实测），覆盖：
+  - `Field.getInt` / `Field.get` 静态字段：只初始化声明类，不初始化字段类型；
+  - `unreflectGetter` / `findStaticGetter` 延迟到调用时初始化；
+  - `findStaticVarHandle` 创建时初始化；
+  - 基本类型类：`int.class == Integer.TYPE`、`long.class == Field.getType()`、`void.class`、`double.class.getSuperclass() == null`。
+
+实测（`rava closure`，本步）：
+
+| 用例 | 类数 | 目标数 | 与上一步比 |
+|---|---|---|---|
+| HelloWorld | 266 | 0 | 不变 |
+| TestMethodHandleDirect | 1529 | 394 | 不变 |
+| TestReflectFieldMethod | 1542 | 395 | 不变 |
+| TestModuleLayerDefine | 1787 | 68 | 不变 |
+| DeepCopy | 1804 | 899 | 不变 |
+| TestReflectStaticFieldInit | 1579 | 395 | 新用例 |
+
+未知调用点集合不变。`@path` 复查 MHAF@14 的 open(Class)：原链 `getPrimitiveClass → getDeclaredFields0 值池 →
+field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
+- open(Class) 由调用方（S3 / T4）进入 `getDeclaredConstructors0` 的接收者 `P0`，经 `field? Constructor.clazz`
+  到 `assertionLock` 汇点；
+- 非镜像 Class 从 `__class_for_descriptor` 进 `assertionLock`。
+
+两条都汇到 S2 的 `field?` 视图。DMH 两点仍是 S3（`getDirectMethodCommon@127 → MemberName.<init>`）加 S2。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交

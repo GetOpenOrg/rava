@@ -152,10 +152,9 @@ impl<'a> Engine<'a> {
             let Some(tid) = tid else { continue };
             let fi = self.field_node(key);
             if fa.on_self && !self.methods[m].is_static {
-                let fs: Rc<[Feed]> = match (fa.write, self.hw_type(host, &fa.value)) {
+                let fs: Rc<[Feed]> = match (fa.write, self.hw_value(m, host, fa)) {
                     (false, _) => Rc::from([]),
-                    (true, Some(id)) => Rc::from([Feed::S(TypeSet::exact(id))]),
-                    (true, None) => Rc::from([Feed::N(pool)]),
+                    (true, f) => Rc::from([f]),
                 };
                 let recv = Node::P(m, 0);
                 self.self_fields.entry(recv).or_default().push((fi, tid, fa.write, fs, prod));
@@ -164,18 +163,27 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if fa.write {
-                let fs = match self.hw_type(host, &fa.value) {
-                    Some(id) => vec![Feed::S(TypeSet::exact(id))],
-                    None => vec![Feed::N(pool)],
-                };
+                let fs = vec![self.hw_value(m, host, fa)];
                 self.feed(&fs, Node::U(fi), tid);
                 // static 字段的手写写入值推不出类型：值未知，按字段声明类型的实例（open）
-                if fa.path && self.hw_type(host, &fa.value).is_none() {
+                if fa.path && matches!(fs[0], Feed::N(n) if n == pool) {
                     self.add_to(Node::U(fi), &TypeSet::open(tid));
                 }
             } else {
                 self.flow(Node::F(fi), prod, tid);
             }
+        }
+    }
+
+    /// 手写字段写入的值来源：写入值是被调 Java 方法的接收者 → 接收者参数节点（值即其确定值集，
+    /// 如 `__set_clazz(Clone::clone(self))` 的声明类镜像）；语法推得类型 → 该类型的确定实例；否则取自值池
+    fn hw_value(&mut self, m: usize, host: &str, fa: &FieldAccess) -> Feed {
+        if fa.value_self && !self.methods[m].is_static {
+            return Feed::N(Node::P(m, 0));
+        }
+        match self.hw_type(host, &fa.value) {
+            Some(id) => Feed::S(TypeSet::exact(id)),
+            None => Feed::N(Node::S(m, POOL)),
         }
     }
 
