@@ -475,6 +475,43 @@ ST rcall：派发 22949→1583，对象通道目标 6545→640。
   没有逐句柄身份；且 ST 的两个池都汇自 `U ClassLoader.assertionLock` 大 SCC（7471 类，句柄池经 VarHandle / Unsafe 读取的
   `prod` 进入，对象池另经 writeObject0 直接进入）。路由需要逐查找点的句柄身份（查找点上下文 + 组合子 bindTo / asType 传递），
   其收益在 b1 收窄 writeObject0、T4 / b1 清零字段枚举缺口之前不可测。
+
+#### 3.4.2 T3 收尾测量（合入 b1 后，4c3a614e；`rava closure` 无缓存，实验代码不提交）
+
+**字段枚举缺口（2 处，已测、收益 0 / −2，不单独改 flow.rs）**：`ObjectStreamClass.getDefaultSerialFields(Class)@1` 与
+`computeDefaultSUID(Class)@174` 的 `cl.getDeclaredFields()`，接收者值集 = 1261 个类镜像 + open(Class)，open 部分记缺口
+（`fwriter_live` 未达，效果是全部字段可按偏移读）。open(Class) 的 5 个真实注入源（`--flows @openorig`，DeepCopy；
+getClassDataLayout0 / `<init>` 的 getSuperclass 只是 open → open 传播）：
+
+1. `ObjectOutputStream.writeArray@509`：open `Object[]` 的元素读 → writeObject0 的 `instanceof Class` 臂 → writeClass → lookup；
+2. `ObjectStreamClass$FieldReflector.getObjFieldValues@74`：`Unsafe.getReference` 读到 Class 型字段；
+3. `Class.forName0` 返回（反序列化 resolveClass 按流中名字加载，静态不可知）；
+4. `DirectMethodHandleAccessor$NativeAccessor.invoke0` 返回；
+5. `MethodHandle.invokeExact` 返回。
+
+缺口不自持：去掉缺口后注入点仍是这 10 个。临时实验（类数，括号内为相对基线）：
+
+| 实验 | StockTrans | DeepCopy |
+|---|---|---|
+| 基线 4c3a614e | 1825 | 1820 |
+| A：两处 open 部分整个不枚举（不健全上界） | 1825（0） | 1820（0） |
+| C：已知镜像只枚举 Serializable 子类型（两方法开头的守卫），open 不枚举 | 1823（−2） | 1820（0） |
+| B：完全不做字段枚举（不健全上界） | 1819（−6；对象池 6168→2569） | 1820（0） |
+
+终态解法是 `K.class.isAssignableFrom(x)` 真分支把 x 的 Class 值集细化到 K 子类型镜像、open(Class) 变为以 K 为界的
+开放镜像（flow.rs 分支细化 + 新值种类），归入 T2（Serializable 收窄），届时 flow.rs 改动已获批准。
+
+**方法句柄按句柄路由（上界 −1，关闭）**：临时实验 H 让方法句柄通道完全不接形参池、不按池中接收者派发、返回不入池
+（比任何路由都窄的不健全上界）：
+
+| | StockTrans | DeepCopy |
+|---|---|---|
+| 基线 类数 / 对象池 / 句柄池 / 分析秒 | 1825 / 6168 / 6173 / 34 | 1820 / 1426 / 2021 / 18 |
+| H | 1824 / 6165 / 6168 / 31 | 1819 / 106 / 2011 / 20 |
+
+类数上界 −1 / −1（<10），时间差在噪声内；ST 两个池几乎不变——池由 writeObject0 对象池（assertionLock SCC）决定，
+不由句柄通道决定。结论：T3 不实施句柄路由，T3 关闭；剩余收益在 T2（writeObject0 对象池 = ArrayList.writeObject `this`
+收窄、名字 × 镜像交叉、forName0 回退、Serializable 有界镜像）。
 （2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
