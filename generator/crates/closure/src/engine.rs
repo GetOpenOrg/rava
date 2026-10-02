@@ -38,6 +38,8 @@ mod forward;
 mod ctxsel;
 mod classes;
 mod reflect;
+mod reflect_call;
+use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
 mod invoke;
@@ -272,6 +274,26 @@ pub struct Engine<'a> {
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
     vm_targets: HashSet<usize>,
+    /// VM 反射虚调用枢纽的目标接法：形参按声明类型 open 的枢纽（记录分量访问器等）、按反射调用实参池接形参的枢纽
+    /// （→ 反射成员序号）；已选中的目标（接法扩大时补接）
+    vm_open_hubs: HashSet<u32>,
+    vm_rcall_hubs: HashMap<u32, usize>,
+    vm_hub_targets: HashMap<u32, Vec<usize>>,
+    /// 反射调用（`reflect_call.rs`）：反射方法成员（按声明键）及其序号、各目标已接的实参池通道位集、
+    /// 方法 → 作为调用入口的通道（缓存）、已接入的入口调用点、已接值池的句柄入口、推不出所指方法的反射对象转成了
+    /// 方法句柄（清单 `method_to_handle`）、派发统计
+    rcall_members: Vec<RcallMember>,
+    rcall_ix: HashMap<MemberRef, usize>,
+    rcall_bound: HashMap<usize, u8>,
+    rcall_entries: HashMap<usize, Option<u8>>,
+    rcall_sites: HashSet<(usize, u32, usize)>,
+    rcall_pooled: HashSet<usize>,
+    rcall_m2h: bool,
+    /// 转成方法句柄的反射对象形参（方法键, 形参序号含接收者）；尚未登记的反射对象形参上的调用点实参（按被调方法键）
+    rcall_conv: HashSet<(String, u16)>,
+    rcall_conv_pending: HashMap<String, Vec<(usize, u16, V)>>,
+    rcall_conv_seen: HashSet<(usize, u32, u16)>,
+    rcall_stats: reflect_call::RcallStats,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
@@ -385,14 +407,16 @@ pub struct Engine<'a> {
     /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
     synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
-    enum_recv: HashMap<Node, (Members, usize)>,
-    rpending: Vec<(Members, usize, TypeSet)>,
+    /// 反射调用的实参池 / 实参数组节点同样登记于此（[`RHook`]：通道号代替方法序号）
+    enum_recv: HashMap<Node, (RHook, usize)>,
+    rpending: Vec<(RHook, usize, TypeSet)>,
     /// 已枚举（类别, 所指类）；有对应反射调用可达时成员入链
     enumerated: BTreeSet<(Members, u32)>,
     /// 可达的反射调用类别
     invokable: BTreeSet<Members>,
     /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）
-    reflect_names: HashMap<u32, BTreeSet<String>>,
+    /// → 经哪些反射调用通道调用（通道位集，见 `reflect_call.rs`）
+    reflect_names: HashMap<u32, BTreeMap<String, u8>>,
     /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
     named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举

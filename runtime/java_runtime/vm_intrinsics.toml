@@ -273,7 +273,8 @@ serializable_markers = ["java/io/Serializable"]
 #                       形参透传的名字不与接收者镜像相乘；接收者所指未知时记为反射缺口
 #   method_invokers / constructor_invokers    反射调用：调用反射对象所表示的方法 / 构造器
 #                       （NativeAccessor 直接按声明键分派；DirectMethodHandleAccessor 经 MethodHandle.invokeExact）
-# 被枚举（用户类）或被按名查找（任意类）、且有对应调用可达的成员入链（形参按声明类型 open，同 VM 入口）；接收者镜像推不出的枚举记为反射缺口
+# 被枚举（用户类）或被按名查找（任意类）、且有对应调用可达的成员入链（方法的形参与接收者取自调用通道的实参池，见 method_to_handle 下注；
+# 字段 / 构造器 / 记录访问器仍按声明类型 open，同 VM 入口）；接收者镜像推不出的枚举记为反射缺口
 # （closure.json `reflect.gaps`），不做模糊扩展——缺口由清单补种。
 mirror_of_receiver = [
     "java/lang/Object.getClass:()Ljava/lang/Class;",
@@ -308,6 +309,17 @@ method_lookups = [
     # 按名构造方法 MemberName：名字由手写 MethodHandleNatives.resolve 解析（DMH / Invokers 的 LambdaForm 具名函数，
     # 名字经 getNamedFunction 形参传入——分析器取各调用点在该形参上的字符串常量）
     "java/lang/invoke/MemberName.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V",
+]
+# method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
+#                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，
+#                     来自形参的回溯到调用点，来源不明时全部按反射对象查到的方法另接方法句柄通道的实参池（见下）
+# 反射方法的形参与接收者取自其调用通道的实参池：反射对象通道 = method_invokers 里带反射对象形参的入口（invoke0）
+# 调用点上的接收者与实参数组元素；方法句柄通道 = 签名多态入口（method_invokers / handle_interpreters）调用点上的
+# 接收者与全部实参、解释器值池、经该通道调用的成员的返回值。实例方法按池中接收者逐个选中实现、容器对象按接收者克隆上下文
+# （池中 open 的接收者退回 VM 枢纽；lambda / 手写对象接收者同 VM 枢纽不建链）。内存效果由 [facts.array_writes] / [facts.memory_reads]
+# 声明的成员经方法句柄通道调用时由解释器调用点按 DMH 所指字段建模，不接方法句柄通道的实参池
+method_to_handle = [
+    "java/lang/invoke/MemberName.<init>:(Ljava/lang/reflect/Method;Z)V",
 ]
 method_invokers = [
     "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
@@ -437,7 +449,8 @@ resets = [
 # jdk.internal.misc.Unsafe 不导出，用户代码取不到它的方法句柄）。分析器在这些方法的手写体调用点上把
 # [facts.array_writes] 的 fields 写入成员与 [facts.memory_reads] 的读取成员按「DMH 所指字段」接入：
 #   - 不写 / 不读数组元素（不经数组写入臂把值池泛写进值池里的各数组）；
-#   - 实例字段限于偏移可经字段句柄 / MemberName 取得的字段（按名查找、字段枚举放开、全部放开、字节码外写入的字段）；
+#   - 实例字段限于偏移可经字段句柄 / MemberName 取得的字段（按名查找、字段枚举放开、全部放开）；字节码外写入
+#     （手写层写入、VM 状态、边界类）只使字段不折叠，不产生字段句柄，不在此列；
 #     反序列化放开的字段不在此列——反序列化经 FieldReflector 自身的 Unsafe 调用点读写，不构造字段方法句柄；
 #   - 静态字段与类镜像基址同普通偏移读写（按名打开的静态字段）。
 members = [

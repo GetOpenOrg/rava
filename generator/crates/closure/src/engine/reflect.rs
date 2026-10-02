@@ -1,5 +1,6 @@
 //! 引擎：反射——类镜像与成员面。
 
+use super::reflect_call::{rc_bit, VmBind, RC_OBJ};
 use super::*;
 
 impl<'a> Engine<'a> {
@@ -236,18 +237,22 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 类 cls 的方法被按名 name 查找：方法反射调用可达时补入该名的方法
-    pub(super) fn reflect_name(&mut self, cls: &str, name: &str) {
+    /// 类 cls 的方法被按名 name 查找、查找结果经反射调用通道 ch 调用：方法反射调用可达时补入该名的方法
+    pub(super) fn reflect_name(&mut self, cls: &str, name: &str, ch: u8) {
         let c = self.id(cls);
-        if !self.reflect_names.entry(c).or_default().insert(name.to_string()) {
+        let e = self.reflect_names.entry(c).or_default().entry(name.to_string()).or_default();
+        if *e & rc_bit(ch) != 0 {
             return;
         }
+        *e |= rc_bit(ch);
         if self.invokable.contains(&Members::Methods) {
             self.expose(Members::Methods, c);
         }
     }
 
-    /// 类 c 的 k 类成员入链：VM 按反射对象调用，形参按声明类型 open（同 VM 入口）；构造器实例化其类
+    /// 类 c 的 k 类成员入链：方法经反射调用通道执行，形参与接收者取自通道的实参池（`reflect_call.rs`；
+    /// 枚举得到的方法为反射对象通道，按名查找到的按查找结果的类型定通道）；记录分量访问器与构造器另有调用面
+    /// （记录对象方法的引导模型 / 反射构造），VM 按反射对象调用，形参按声明类型 open（同 VM 入口）；构造器实例化其类
     pub(super) fn expose(&mut self, k: Members, c: u32) {
         let cls = self.names[c as usize].to_string();
         let Some(cf) = self.h.class(&cls) else { return };
@@ -264,7 +269,7 @@ impl<'a> Engine<'a> {
             .methods
             .iter()
             .filter(|mm| match k {
-                Members::Methods => !mm.name.starts_with('<') && (user || names.contains(&mm.name)),
+                Members::Methods => !mm.name.starts_with('<') && (user || names.contains_key(&mm.name)),
                 Members::Constructors => mm.name == "<init>" && user,
                 Members::RecordAccessors => comps.iter().any(|(n, d)| mm.name == *n && mm.desc == format!("(){d}")),
             })
@@ -279,11 +284,17 @@ impl<'a> Engine<'a> {
         }
         for (name, desc, virt) in picked {
             let key = MemberRef { owner: cls.clone(), name, desc };
+            if k == Members::Methods {
+                let mask = names.get(&key.name).copied().unwrap_or(0) | if user { rc_bit(RC_OBJ) } else { 0 };
+                self.reflect_members.insert((k, key.clone()));
+                self.rcall_member(key, cf.is_interface(), virt, mask);
+                continue;
+            }
             if !self.reflect_members.insert((k, key.clone())) {
                 continue;
             }
             if virt {
-                self.vm_dispatch(&key, cf.is_interface(), via.clone());
+                self.vm_dispatch(&key, cf.is_interface(), via.clone(), VmBind::Open);
             }
             let t = self.method(key, via.clone());
             self.open_params(t);

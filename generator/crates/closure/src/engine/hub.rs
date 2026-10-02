@@ -1,6 +1,7 @@
 //! 引擎：派发枢纽——精确接收者多时经集合枢纽派发。
 
 use super::pstrs::PSlot;
+use super::reflect_call::VmBind;
 use super::*;
 
 impl<'a> Engine<'a> {
@@ -250,10 +251,10 @@ impl<'a> Engine<'a> {
         let cx = self.recv_ctx(r);
         let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
         if self.vm_hubs.contains(&h) {
-            // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参 open；返回值由反射调用点按声明类型给出）
+            // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参按枢纽接法：实参池 / open；返回值由反射调用点给出）
             self.vm_targets.insert(t);
             self.add_to(Node::P(t, 0), &TypeSet::exact(r));
-            self.open_params(t);
+            self.vm_hub_target(h, t);
             return;
         }
         // 先并入形参常量，再判定是否按调用点建模（透传摘要依赖分析）
@@ -309,7 +310,8 @@ impl<'a> Engine<'a> {
 
     /// VM 按反射对象虚调用 key（声明类 cls 上的实例方法）：经 open(cls) 的 VM 枢纽派发到各接收者的选中实现，
     /// G 增长时增量展开（反射取到基类方法、以子类实例调用时执行的是子类覆写）
-    pub(super) fn vm_dispatch(&mut self, key: &MemberRef, iface: bool, via: Via) {
+    /// 目标形参按 bind 接（同一成员的枢纽共用，接法逐次并入，已选中的目标补接）
+    pub(super) fn vm_dispatch(&mut self, key: &MemberRef, iface: bool, via: Via, bind: VmBind) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
             self.unresolved.insert(key.to_string());
             return;
@@ -318,6 +320,7 @@ impl<'a> Engine<'a> {
         let owner = self.id(&key.owner);
         let before = self.hubs.len();
         let h = self.hub(key, iface, owner, HubSet::Vm(owner), None, &site, &md, via);
+        self.vm_hub_bind(h, bind);
         if (h as usize) < before {
             return;
         }

@@ -377,7 +377,142 @@ field? Field.clazz` 已断开。剩余两条链都在 S2 / S3 之后：
   普通写入与 CAS 同一存储；未初始化类的静态方法句柄首次调用（`DirectMethodHandle.ensureInitialized` →
   `MethodHandle.updateForm` → `Unsafe.compareAndSetBoolean` 字节码路径）与同一句柄反复调用。
 
-## 四、交接（2026-10-02，C1d-b 停止）
+### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
+
+- **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
+  反射对象通道 = `method_invokers` 里带反射对象形参的入口（invoke0）；方法句柄通道 = 签名多态入口（`method_invokers` /
+  `[facts.handle_interpreters]`）。入口调用点（`invoke.rs` `edge_ret` 在 `hw_site` 后一行 `rcall_site`）上声明为 Object 的
+  实参入 `RP`、Object[] 入 `RA`（数组增长时其元素节点并入 `RP`，open 数组按元素类型 open）；签名多态点的句柄与全部实参
+  入 `RP`。方法句柄通道另并入解释器值池 `S(t,POOL)`（绑定实参、LambdaForm 中间值的来源）与经该通道调用的成员返回值。
+- **按接收者派发**：方法类反射成员（`reflect.rs` `expose`）不再 `vm_dispatch + open_params`，改登记 `RcallMember`
+  （按名查找的通道掩码 `reflect_names: 名字 → 通道位`；用户类枚举出的方法走反射对象通道）。池增长经已有的
+  `enum_recv` 增长钩子（值类型泛化为 `RHook::{Enum, Pool, Array}`，**未改 flow.rs**）回到 worklist：可覆写方法按池中
+  每个接收者 `select` 实现、私有 / final 方法即成员本身，`method_ctx(k, recv_ctx(x))` 克隆上下文、`P0 = exact(x)`，
+  形参按声明类型接池（`rcall_bind`）。池中 open 接收者：虚成员退回 VM 枢纽一次（`VmBind::Rcall`，枢纽新目标同样接池，
+  `hub.rs` 两行），非虚成员把过滤后的 open 加入本体 P0；lambda / 手写对象接收者同基线 VM 枢纽不建链（计数）。
+  字段 / 构造器 / 记录访问器仍走 `VmBind::Open`。
+- **Method → 方法句柄转换按来源追踪**（清单 `[facts.reflect] method_to_handle`，`invoke.rs` `reflective_writes` 开头一行）：
+  `MemberName(Method)` 的实参来自常量名查找（`getDeclaredMethod` 等）的只把该方法点名到句柄通道；来自形参的回溯调用点；
+  来源不明才全局放开（`rcall_global_m2h`，所有反射对象成员另接句柄通道）。ST 中 `MemberName(Method)` 只经
+  `MethodHandleImpl.createFunction` 的常量名查找，`method_to_handle` 全程 false。
+- **内存效果成员不接句柄池**：`[facts.array_writes]` / `[facts.memory_reads]` 声明的成员（Unsafe 读写族，DMH 字段访问器经
+  名字查找暴露）经句柄通道调用时由解释器调用点按 DMH 所指字段建模（Gate::Handle）；首版把句柄池接到其形参，本体的按偏移
+  写入臂把池里每个对象的全部字段写脏（RP / MHD 多出 `Node$OfInt.copyInto` 等 16 个方法），改为不接后与基线一致。
+- 新边界用例 `62_reflection/TestReflectInvokePerReceiver`（接口默认方法 / 覆写按接收者选实现、私有容器方法两接收者各自
+  遍历、Object[] 实参、lambda 接收者经接口方法、unreflect 句柄、错接收者 IAE；期望为 JDK 21 输出）。闭包含全部回调
+  （`Shape.describe` / `Square.describe` / `Circle.name` / `Box.dump` / `Derived.who` 经 reflect 入链）。
+
+实测（本机 `rava closure`，基线 b202e842 → T3，同机先后跑）：
+
+| 用例 | 类数 | 方法数 | reflect.gaps | field_enum_gaps | 耗时 s |
+|---|---|---|---|---|---|
+| HelloWorld | 266 → 266 | 723 → 723 | 0 → 0 | 0 | 2 → 2 |
+| TestReflectProbe | 1536 → 1536 | 8949 → 8949 | 1 → 1 | 0 | 14 → 14 |
+| TestReflectFieldNames | 1536 → 1536 | 8954 → 8954 | 1 → 1 | 0 | 15 → 14 |
+| TestMethodHandleDirect | 1529 → 1529 | 8924 → 8924 | 1 → 1 | 0 | 14 → 14 |
+| StockTrans | 1803 → 1803 | 10924 → 10924 | 14 → 14 | 2 | 124 → 130 |
+| DeepCopy | 1804 → 1804 | 10916 → 10916 | 14 → 14 | 2 | 124 → 130 |
+| TestSerialDefaultSuid | 1809 → 1809 | 10914 → 10914 | 12 → 12 | 2 | 129 → 135 |
+| TestSerialProxyForm | 1806 → 1806 | 10914 → 10914 | 12 → 12 | 2 | 132 → 138 |
+
+rcall 统计（closure.json `summary.rcall`）：
+
+| 用例 | 对象通道成员 / 池 / open / 目标 | 句柄通道成员 / 池 / open / 目标 | 派发 | 枢纽退回 | open 接收者 | lambda/手写接收者 |
+|---|---|---|---|---|---|---|
+| StockTrans | 14 / 7471 / 344 / 6525 | 211 / 7471 / 344 / 235 | 23006 | 19 | 435 | 1137 |
+| DeepCopy | 17 / 7463 / 344 / 6419 | 211 / 7463 / 344 / 235 | 22771 | 29 | 413 | 1131 |
+| TestSerialDefaultSuid | 23 / 7478 / 344 / 6428 | 211 / 7478 / 344 / 235 | 22850 | 20 | 448 | 1137 |
+| TestSerialProxyForm | 11 / 7484 / 343 / 6419 | 211 / 7484 / 343 / 235 | 22840 | 18 | 429 | 1143 |
+| TestReflectInvokePerReceiver | 13 / 1755 / 85 / 18 | 206 / 1755 / 85 / 232 | 1228 | 23 | 153 | 1 |
+
+- **未达标项：`ArrayList.writeObject` 的 `this` 仍是全部 ArrayList 分配点**（现按分配点各一个上下文，P0 = exact，
+  另有 open(ArrayList) 经枢纽退回）。两条通道的池都是全程序值集（含 open(Object)），根因在池的来源，不在派发：
+  ① **句柄池 → 对象池**：`jdk.reflect.useNativeAccessorOnly=true`，每个 `Method.invoke` 都经
+  `DirectMethodHandleAccessor.invokeImpl` 的 `target.invokeExact(obj, args)` → 解释器 → `NativeAccessor.invoke`
+  （按名查找暴露的句柄成员，形参接句柄池）→ invoke0（对象通道入口），所以对象池 ⊇ 句柄池。句柄池的万能来自解释器值池
+  `prod`：Gate::Handle 读取的「偏移可经字段句柄 / MemberName 取得」字段含字节码外写入的 `Class.classData`、
+  `Throwable.backtrace`、`MemberName.type` 等（各带 120 类 + open(Object)），`@edge:prod MethodHandle.invokeBasic` 可见；
+  ② **writeObject0 大汇点**：`FieldReflector` 按未知偏移读出的值（SCC 代表 `U ClassLoader.assertionLock`）经
+  `writeObject0` → `invokeWriteObject` 进对象池——b1 范畴。
+- 终态方案（不在 T3 文件范围内，需 b1 / hw_mem 配合）：句柄通道按句柄对象路由——签名多态点的接收者句柄值集若全为已知
+  DMH / BMH 分配点，按其 MemberName 所指目标与 BMH 绑定字段逐句柄接实参（只对 open / 所指未知的句柄退回通道池）；
+  Gate::Handle 读取限于确有字段句柄（findGetter / unreflectGetter / VarHandle）可达的字段，不含仅字节码外写入的字段。
+  两者落地后 `NativeAccessor.invoke` 的实参即 `Method.invoke` 调用点实参，再加 b1 收窄 writeObject0，对象池即为
+  真正被反射调用的接收者集合，T3 的按接收者派发直接给出窄的 `writeObject` 上下文，无需再改本节代码。
+
+#### 3.4.1 T3 后续（合入 b3 1721f701 之后）
+
+- **L3 分派覆盖接口接收者**（347d360a）：用户树与 `reflect.consts` 的接口（含泛型接口，挂 `I<Object..>`、类型参数擦为
+  Object）发射并登记 `__reflect_dispatch`，臂经接口载体调用；`reflect_invoke` 在运行时类链无承载时（lambda / 手写实现
+  对象），接收者是声明类型的实例即经声明类型的闭包调用——按超类型判定，不依赖 lambda 的 `__class_name`。
+- **错接收者**（0baa7aa4）：实例方法先判接收者是否为声明类型实例（接收者视图 `is_instance_of`，再按父类链复核），否则
+  抛 `IllegalArgumentException("object is not an instance of declaring class")`、置实参不符标记直抛（同 JVM invoke0）。
+- **字段句柄门**（a4b10f7c，hw_mem 局部）：Gate::Handle 只放行经按名查找 / 字段枚举（及未知类枚举）登记的字段；字节码外
+  写入、VM 状态、边界类只令字段不可折叠。合入 b3 前反射小例 1536→1532 类；ST 不变——`fenum_pending` 含 None（2 个
+  字段枚举缺口）时全部字段可读，归 b1 / T4。合入 b1 后由 b1 的 `Ctx::field_offset_under`（字节码外写入改记
+  `fhw` / `fhw_names`，fopen 只来自查找 / 枚举）统一承载，语义等价，T3 的 handle_field 辅助已移除。
+- **实参池去冗余**（e57444ae）：成员形参改接 `Node::RN`——池增量中被池内某 open 类型涵盖、且只经未知接收者视图读写的值
+  （已逃逸的抽象对象 / 数组分配点、非抽象对象的类；lambda / 手写对象除外）不逐个列出；可覆写成员退回 VM 枢纽后，枢纽已按
+  声明类成员集展开（同样按接收者克隆上下文、P0 = exact、形参接池），不再逐接收者重复派发（只补枢纽不展开的未逃逸数组）。
+  池收窄后两者都不触发。T3 增加的耗时来自池的显式值集流入约 6500 个目标的形参（`HP->P` 推送 118M→247M），而非
+  克隆上下文（`method_contexts` 只多 ~190）。
+
+实测（本机 `rava closure`，同机交替跑；r0 = 集成分支 1721f701，m0 = 102bf43e，a2 = e57444ae）：
+
+| 用例 | r0 类 / 方法 / 耗时 ms | m0 | a2 |
+|---|---|---|---|
+| StockTrans | 1834 / 10990 / 121728 | 1834 / 10990 / 124232 | 1834 / 10990 / 119116、117107 |
+| DeepCopy | 1835 / 10982 / 117772 | 1835 / 10982 / 125437 | 1835 / 10982 / 118105、122136 |
+| TestReflectProbe | 1567 / 9004 | — | 1563 / 8944 |
+| TestReflectFieldNames | 1567 / 9009 | — | 1563 / 8949 |
+| TestMethodHandleDirect | 1560 / 8979 | — | 1556 / 8919 |
+| TestReflectInvokePerReceiver | 1567 / 9011 | — | 1563 / 8951（回调全在） |
+| HelloWorld | 278 / 727 | — | 278 / 727 |
+
+ST rcall：派发 22949→1583，对象通道目标 6545→640。
+
+- **句柄按句柄路由（未实施）**：当前句柄类不是容器形态（`classes.rs container()`），DMH / BMH / MemberName 是类级抽象对象，
+  没有逐句柄身份；且 ST 的两个池都汇自 `U ClassLoader.assertionLock` 大 SCC（7471 类，句柄池经 VarHandle / Unsafe 读取的
+  `prod` 进入，对象池另经 writeObject0 直接进入）。路由需要逐查找点的句柄身份（查找点上下文 + 组合子 bindTo / asType 传递），
+  其收益在 b1 收窄 writeObject0、T4 / b1 清零字段枚举缺口之前不可测。
+
+#### 3.4.2 T3 收尾测量（合入 b1 后，4c3a614e；`rava closure` 无缓存，实验代码不提交）
+
+**字段枚举缺口（2 处，已测、收益 0 / −2，不单独改 flow.rs）**：`ObjectStreamClass.getDefaultSerialFields(Class)@1` 与
+`computeDefaultSUID(Class)@174` 的 `cl.getDeclaredFields()`，接收者值集 = 1261 个类镜像 + open(Class)，open 部分记缺口
+（`fwriter_live` 未达，效果是全部字段可按偏移读）。open(Class) 的 5 个真实注入源（`--flows @openorig`，DeepCopy；
+getClassDataLayout0 / `<init>` 的 getSuperclass 只是 open → open 传播）：
+
+1. `ObjectOutputStream.writeArray@509`：open `Object[]` 的元素读 → writeObject0 的 `instanceof Class` 臂 → writeClass → lookup；
+2. `ObjectStreamClass$FieldReflector.getObjFieldValues@74`：`Unsafe.getReference` 读到 Class 型字段；
+3. `Class.forName0` 返回（反序列化 resolveClass 按流中名字加载，静态不可知）；
+4. `DirectMethodHandleAccessor$NativeAccessor.invoke0` 返回；
+5. `MethodHandle.invokeExact` 返回。
+
+缺口不自持：去掉缺口后注入点仍是这 10 个。临时实验（类数，括号内为相对基线）：
+
+| 实验 | StockTrans | DeepCopy |
+|---|---|---|
+| 基线 4c3a614e | 1825 | 1820 |
+| A：两处 open 部分整个不枚举（不健全上界） | 1825（0） | 1820（0） |
+| C：已知镜像只枚举 Serializable 子类型（两方法开头的守卫），open 不枚举 | 1823（−2） | 1820（0） |
+| B：完全不做字段枚举（不健全上界） | 1819（−6；对象池 6168→2569） | 1820（0） |
+
+终态解法是 `K.class.isAssignableFrom(x)` 真分支把 x 的 Class 值集细化到 K 子类型镜像、open(Class) 变为以 K 为界的
+开放镜像（flow.rs 分支细化 + 新值种类），归入 T2（Serializable 收窄），届时 flow.rs 改动已获批准。
+
+**方法句柄按句柄路由（上界 −1，关闭）**：临时实验 H 让方法句柄通道完全不接形参池、不按池中接收者派发、返回不入池
+（比任何路由都窄的不健全上界）：
+
+| | StockTrans | DeepCopy |
+|---|---|---|
+| 基线 类数 / 对象池 / 句柄池 / 分析秒 | 1825 / 6168 / 6173 / 34 | 1820 / 1426 / 2021 / 18 |
+| H | 1824 / 6165 / 6168 / 31 | 1819 / 106 / 2011 / 20 |
+
+类数上界 −1 / −1（<10），时间差在噪声内；ST 两个池几乎不变——池由 writeObject0 对象池（assertionLock SCC）决定，
+不由句柄通道决定。结论：T3 不实施句柄路由，T3 关闭；剩余收益在 T2（writeObject0 对象池 = ArrayList.writeObject `this`
+收窄、名字 × 镜像交叉、forName0 回退、Serializable 有界镜像）。
+（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
 

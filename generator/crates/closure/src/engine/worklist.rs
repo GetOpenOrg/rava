@@ -64,7 +64,12 @@ impl<'a> Engine<'a> {
             batch += 1;
             if let Some((k, e, s)) = self.rpending.pop() {
                 self.stat_enter(Phase::Enumerate);
-                self.enumerate(k, e, &s);
+                match k {
+                    RHook::Enum(k) => self.enumerate(k, e, &s),
+                    // 反射调用实参池 / 实参数组增长（e = 通道），见 `reflect_call.rs`
+                    RHook::Pool => self.rcall_pool_grown(e as u8, &s),
+                    RHook::Array => self.rcall_array_grown(e as u8, &s),
+                }
                 self.stat_leave();
                 continue;
             }
