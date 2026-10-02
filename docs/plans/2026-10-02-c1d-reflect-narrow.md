@@ -358,7 +358,41 @@ rcall 统计（closure.json `summary.rcall`）：
   两者落地后 `NativeAccessor.invoke` 的实参即 `Method.invoke` 调用点实参，再加 b1 收窄 writeObject0，对象池即为
   真正被反射调用的接收者集合，T3 的按接收者派发直接给出窄的 `writeObject` 上下文，无需再改本节代码。
 
-## 四、交接（2026-10-02，C1d-b 停止）
+#### 3.4.1 T3 后续（合入 b3 1721f701 之后）
+
+- **L3 分派覆盖接口接收者**（347d360a）：用户树与 `reflect.consts` 的接口（含泛型接口，挂 `I<Object..>`、类型参数擦为
+  Object）发射并登记 `__reflect_dispatch`，臂经接口载体调用；`reflect_invoke` 在运行时类链无承载时（lambda / 手写实现
+  对象），接收者是声明类型的实例即经声明类型的闭包调用——按超类型判定，不依赖 lambda 的 `__class_name`。
+- **错接收者**（0baa7aa4）：实例方法先判接收者是否为声明类型实例（接收者视图 `is_instance_of`，再按父类链复核），否则
+  抛 `IllegalArgumentException("object is not an instance of declaring class")`、置实参不符标记直抛（同 JVM invoke0）。
+- **字段句柄门**（a4b10f7c，hw_mem 局部）：Gate::Handle 只放行经按名查找 / 字段枚举（及未知类枚举）登记的字段；字节码外
+  写入、VM 状态、边界类只令字段不可折叠。合入 b3 前反射小例 1536→1532 类；ST 不变——`fenum_pending` 含 None（2 个
+  字段枚举缺口）时全部字段可读，归 b1 / T4。
+- **实参池去冗余**（e57444ae）：成员形参改接 `Node::RN`——池增量中被池内某 open 类型涵盖、且只经未知接收者视图读写的值
+  （已逃逸的抽象对象 / 数组分配点、非抽象对象的类；lambda / 手写对象除外）不逐个列出；可覆写成员退回 VM 枢纽后，枢纽已按
+  声明类成员集展开（同样按接收者克隆上下文、P0 = exact、形参接池），不再逐接收者重复派发（只补枢纽不展开的未逃逸数组）。
+  池收窄后两者都不触发。T3 增加的耗时来自池的显式值集流入约 6500 个目标的形参（`HP->P` 推送 118M→247M），而非
+  克隆上下文（`method_contexts` 只多 ~190）。
+
+实测（本机 `rava closure`，同机交替跑；r0 = 集成分支 1721f701，m0 = 102bf43e，a2 = e57444ae）：
+
+| 用例 | r0 类 / 方法 / 耗时 ms | m0 | a2 |
+|---|---|---|---|
+| StockTrans | 1834 / 10990 / 121728 | 1834 / 10990 / 124232 | 1834 / 10990 / 119116、117107 |
+| DeepCopy | 1835 / 10982 / 117772 | 1835 / 10982 / 125437 | 1835 / 10982 / 118105、122136 |
+| TestReflectProbe | 1567 / 9004 | — | 1563 / 8944 |
+| TestReflectFieldNames | 1567 / 9009 | — | 1563 / 8949 |
+| TestMethodHandleDirect | 1560 / 8979 | — | 1556 / 8919 |
+| TestReflectInvokePerReceiver | 1567 / 9011 | — | 1563 / 8951（回调全在） |
+| HelloWorld | 278 / 727 | — | 278 / 727 |
+
+ST rcall：派发 22949→1583，对象通道目标 6545→640。
+
+- **句柄按句柄路由（未实施）**：当前句柄类不是容器形态（`classes.rs container()`），DMH / BMH / MemberName 是类级抽象对象，
+  没有逐句柄身份；且 ST 的两个池都汇自 `U ClassLoader.assertionLock` 大 SCC（7471 类，句柄池经 VarHandle / Unsafe 读取的
+  `prod` 进入，对象池另经 writeObject0 直接进入）。路由需要逐查找点的句柄身份（查找点上下文 + 组合子 bindTo / asType 传递），
+  其收益在 b1 收窄 writeObject0、T4 / b1 清零字段枚举缺口之前不可测。
+（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
 
