@@ -224,10 +224,63 @@ pub fn lookup_method_sig_ret(
     ret::lookup(env, call, caller_class, caller_tparams, receiver_type)
 }
 
-/// 被调方法（沿超类 / 接口链）泛型签名返回类型是否为裸类型变量（`_erased_ret_is_type_var`）
+/// 调用结果相对描述符返回类型的落值方式（[`bind_call_result`]）
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallBind {
+    /// 描述符为 Object、签名给出具体类型：Rust 方法返回该类型，装箱后按描述符入栈
+    Boxed(RsType),
+    /// 签名类型与描述符类型不同（引用）：按签名类型入栈
+    Precise(RsType),
+    /// 签名返回裸类型变量、描述符擦除为接口载体且签名无法实例化：经 Object 边界取回载体
+    Carrier,
+    /// 签名返回裸类型变量、描述符为 Object 且签名无法实例化：按 Object 边界装箱
+    Opaque,
+    /// 按描述符类型入栈
+    Erased,
+}
+
+/// 被调方法签名返回类型（[`lookup_method_sig_ret`] 的结果）与描述符返回类型的对齐规则；
+/// direct / invokespecial 共用。`erased_tv` 仅在签名无法实例化时求值
+pub fn bind_call_result(env: &InstrEnv, rust_ret: &RsType, sig_ret: Option<RsType>, erased_tv: impl Fn() -> bool) -> CallBind {
+    let obj = |t: &RsType| ty_text(env, t) == ir::anchors::OBJECT;
+    match sig_ret {
+        Some(s) if obj(rust_ret) && !obj(&s) => CallBind::Boxed(s),
+        Some(s) if ty_text(env, &s) != ty_text(env, rust_ret) && !is_prim(rust_ret) => CallBind::Precise(s),
+        Some(_) => CallBind::Erased,
+        None if is_prim(rust_ret) => CallBind::Erased,
+        None if !obj(rust_ret) && env.ctx.ty.is_carrier(rust_ret) && erased_tv() => CallBind::Carrier,
+        None if obj(rust_ret) && erased_tv() => CallBind::Opaque,
+        None => CallBind::Erased,
+    }
+}
+
+/// 裸类型变量返回值的作用域
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeVarScope {
+    /// 类级形参：生成的 Rust 方法返回该泛型形参，调用点无法实例化时须装箱对齐 Object
+    Class,
+    /// 方法级形参（`<R> R m(..)`）：生成签名已擦除到上界，按描述符类型直接落值
+    Method,
+}
+
+/// 被调方法（沿超类 / 接口链）泛型签名返回类型是否为**类级**裸类型变量；
+/// 方法级类型变量的 Rust 返回类型即擦除后的上界，不需对齐
 pub fn erased_ret_is_type_var(ctx: &InstrCtx, cls: &str, mname: &str, full_desc: &str) -> bool {
+    erased_ret_type_var_scope(ctx, cls, mname, full_desc) == Some(TypeVarScope::Class)
+}
+
+/// 签名返回类型 `ret_sig` 是裸类型变量时，按方法签名 `sig` 的形参表判定其作用域
+pub fn ret_type_var_scope(sig: &str) -> Option<TypeVarScope> {
+    let (_, ret) = sig.rsplit_once(')')?;
+    let name = ret.strip_prefix('T')?.strip_suffix(';')?;
+    let method_level = ty::class_params::parse_class_type_params(sig).iter().any(|p| p == name);
+    Some(if method_level { TypeVarScope::Method } else { TypeVarScope::Class })
+}
+
+/// 被调方法（沿超类 / 接口链）泛型签名返回裸类型变量时的作用域（`_erased_ret_is_type_var`）
+pub fn erased_ret_type_var_scope(ctx: &InstrCtx, cls: &str, mname: &str, full_desc: &str) -> Option<TypeVarScope> {
     if cls.is_empty() || ctx.reg().is_empty() {
-        return false;
+        return None;
     }
     let start = if cls.contains('/') { cls.to_string() } else { resolve_cls(ctx, cls).unwrap_or_else(|| cls.to_string()) };
     let mut queue = VecDeque::from([start]);
@@ -240,15 +293,14 @@ pub fn erased_ret_is_type_var(ctx: &InstrCtx, cls: &str, mname: &str, full_desc:
             continue;
         };
         if let Some(m) = ci.methods().iter().find(|m| m.name == mname && m.desc == full_desc) {
-            let sig = ty::registry::method_signature(m);
-            return sig.rsplit_once(')').is_some_and(|(_, r)| r.starts_with('T'));
+            return ret_type_var_scope(ty::registry::method_signature(m));
         }
         if !ci.super_class().is_empty() {
             queue.push_back(ci.super_class().to_string());
         }
         queue.extend(ci.interfaces().iter().cloned());
     }
-    false
+    None
 }
 
 /// 静态类型 `actual` 沿超类链到祖先 `ancestor_bin` 的精确实例化（`_exact_ancestor_type`）
@@ -270,11 +322,25 @@ pub fn coerce_arg(env: &InstrEnv, sim: &StackSim, log: &mut InstrLog, e: Expr, a
 
 #[cfg(test)]
 mod tests {
-    use super::ident_tokens;
+    use super::{ident_tokens, ret_type_var_scope, TypeVarScope};
 
     #[test]
     fn tokens() {
         assert_eq!(ident_tokens("HashMap_Node<K, JArray<i32>>"), vec!["HashMap_Node", "K", "JArray", "i32"]);
         assert_eq!(ident_tokens("()"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn type_var_scope() {
+        // `<R> R query(TemporalQuery<R>)`：方法级
+        let q = "<R:Ljava/lang/Object;>(Ljava/time/temporal/TemporalQuery<TR;>;)TR;";
+        assert_eq!(ret_type_var_scope(q), Some(TypeVarScope::Method));
+        // `T get()`：类级
+        assert_eq!(ret_type_var_scope("()TT;"), Some(TypeVarScope::Class));
+        // 方法级形参与类级同名（遮蔽）仍按方法级
+        assert_eq!(ret_type_var_scope("<T:Ljava/lang/Comparable<-TT;>;>(TT;)TT;"), Some(TypeVarScope::Method));
+        // 其他形参名不影响类级判定；非类型变量返回
+        assert_eq!(ret_type_var_scope("<R:Ljava/lang/Object;>(TR;)TE;"), Some(TypeVarScope::Class));
+        assert_eq!(ret_type_var_scope("()Ljava/util/List<TE;>;"), None);
     }
 }

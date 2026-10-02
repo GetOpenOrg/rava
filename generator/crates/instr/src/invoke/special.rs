@@ -13,7 +13,7 @@ use ty::{ClassInfo, RsType};
 use crate::build::{seg, seg_g, text, ty_text};
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
-use crate::invoke::sig::{self, RecvView, TargMap};
+use crate::invoke::sig::{self, CallBind, RecvView, TargMap};
 use crate::invoke::CallRef;
 use crate::log::InstrLog;
 use crate::naming::mangle_if_overloaded;
@@ -100,21 +100,37 @@ fn pop_args_text(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call: &
     Ok(args)
 }
 
-/// 调用结果落 `let _tN`（`()` 返回 → 语句）；返回裸类型变量时幂等装箱对齐 sim 的 Object 记录
-fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, call_text: &str) -> InstrResult<()> {
-    let rust_ret = env.ctx.ty.jvm_to_rust(&call.ret);
+/// 调用结果落 `let _tN`（`()` 返回 → 语句）：返回类型按声明者 `sig_owner` 的签名在本类
+/// 自身类型（`this`）视角下实例化，与 direct 调用共用 [`sig::bind_call_result`] 对齐规则
+fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, sig_owner: &str, call_text: &str) -> InstrResult<()> {
+    let ctx = &env.ctx;
+    let rust_ret = ctx.ty.jvm_to_rust(&call.ret);
     if matches!(rust_ret, RsType::Unit) {
         sim.emit(Stmt::raw(format!("{call_text};")))?;
         return Ok(());
     }
+    let self_ty = ctx.reg().get(ctx.class_name).map(|ci| self_type(env, ci));
+    let sig_call = CallRef::with(sig_owner, &call.name, &call.desc);
+    let sig_ret = sig::lookup_method_sig_ret(env, &sig_call, Some(ctx.class_name), &sim.cfg.class_type_params, self_ty.as_ref())?;
+    let erased_tv = || sig::erased_ret_is_type_var(ctx, &call.owner, &call.name, &call.desc);
     let v = sim.fresh("_t")?;
-    let stmt = if matches!(rust_ret, RsType::Object) && sig::erased_ret_is_type_var(&env.ctx, &call.owner, &call.name, &call.desc) {
-        format!("let {v} = {}::from_any({call_text});", ir::anchors::OBJECT)
-    } else {
-        format!("let {v} = {call_text};")
+    let o = ir::anchors::OBJECT;
+    let r = ty_text(env, &rust_ret);
+    let (stmt, pushed) = match sig::bind_call_result(env, &rust_ret, sig_ret, erased_tv) {
+        CallBind::Boxed(s) => {
+            let boxed = crate::coerce::to_object(env, Expr::raw(call_text.to_string()), &s, true)?;
+            (format!("let {v} = {};", text(env, &boxed)), rust_ret)
+        }
+        CallBind::Precise(s) => (format!("let {v} = {call_text};"), s),
+        CallBind::Carrier => (
+            format!("let {v}: {r} = <{r} as ::std::convert::From<{o}>>::from(::std::convert::Into::<{o}>::into({call_text}));"),
+            rust_ret,
+        ),
+        CallBind::Opaque => (format!("let {v} = {o}::from_any({call_text});"), rust_ret),
+        CallBind::Erased => (format!("let {v} = {call_text};"), rust_ret),
     };
     sim.emit(Stmt::raw(stmt))?;
-    sim.push(Expr::Var(v), rust_ret);
+    sim.push(Expr::Var(v), pushed);
     Ok(())
 }
 
@@ -142,7 +158,7 @@ fn gen_super_method(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call
     let obj_e = text(env, &obj.expr);
     if let Some(iface_owner) = resolve_interface_special_target(reg, &call.owner, &call.name, &call.desc) {
         let member = ty::ident::safe_ident(&interface_special_member_name(ctx, &iface_owner, &call.name, &call.desc));
-        return emit_call_result(env, sim, call, &format!("{obj_e}.{member}({})?", args.join(", ")));
+        return emit_call_result(env, sim, call, &iface_owner, &format!("{obj_e}.{member}({})?", args.join(", ")));
     }
     let rust_m = ty::ident::safe_ident(&mangle_if_overloaded(ctx, &sp_owner, &call.name, Some(&call.desc))?);
     if ctx.hooks.slot_pruned(&sp_owner, &call.name, &call.desc) {
@@ -164,7 +180,7 @@ fn gen_super_method(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call
     // 首参是 vtable 引用：宏把字面 this/self 接收者重写为 `&*this.vtable`；其余按同一形态发射
     let recv_arg = if obj_e == "this" || obj_e == "self" { obj_e } else { format!("&*({obj_e}).vtable") };
     let all: Vec<String> = std::iter::once(recv_arg).chain(args).collect();
-    emit_call_result(env, sim, call, &format!("{base_fn}({})?", all.join(", ")))
+    emit_call_result(env, sim, call, &sp_owner, &format!("{base_fn}({})?", all.join(", ")))
 }
 
 /// 不占 vtable 槽的落点（无 `Owner__m_base`）：本类 / private → 接收者 wrapper 直接调用；
@@ -182,10 +198,10 @@ fn gen_slotless_special(
     let reg = ctx.reg();
     let joined = args.join(", ");
     let (Some(self_ci), Some(owner_ci)) = (reg.get(ctx.class_name), reg.get(sp_owner)) else {
-        return emit_call_result(env, sim, call, &format!("{obj_e}.{rust_m}({joined})?"));
+        return emit_call_result(env, sim, call, sp_owner, &format!("{obj_e}.{rust_m}({joined})?"));
     };
     if sp_owner == ctx.class_name {
-        return emit_call_result(env, sim, call, &format!("{obj_e}.{rust_m}({joined})?"));
+        return emit_call_result(env, sim, call, sp_owner, &format!("{obj_e}.{rust_m}({joined})?"));
     }
     let self_ty = self_type(env, self_ci);
     let owner_short = ctx.short(sp_owner);
@@ -199,5 +215,5 @@ fn gen_slotless_special(
     let text = format!(
         "<{owner_ty} as ::std::convert::From<{self_text}>>::from(::std::clone::Clone::clone({obj_e})).{rust_m}({joined})?"
     );
-    emit_call_result(env, sim, call, &text)
+    emit_call_result(env, sim, call, sp_owner, &text)
 }
