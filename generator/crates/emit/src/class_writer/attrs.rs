@@ -44,10 +44,14 @@ fn join_flags(flags: u16, table: &[(u16, &str)]) -> String {
         .join(" ")
 }
 
+/// 类修饰符串。private / protected 只出现在成员类的 InnerClasses 条目（类文件顶层 access 无此两位，
+/// protected 成员类顶层记为 public），故由本串承载；public 位由 `access` 属性承载
 pub fn class_modifiers_str(flags: u16) -> String {
     join_flags(
         flags,
         &[
+            (ACC_PRIVATE, "private"),
+            (ACC_PROTECTED, "protected"),
             (ACC_FINAL, "final"),
             (ACC_ABSTRACT, "abstract"),
             (ACC_INTERFACE, "interface"),
@@ -264,6 +268,7 @@ mod tests {
         assert_eq!(access_str(0x0011), "public");
         assert_eq!(access_str(0x0010), "package");
         assert_eq!(class_modifiers_str(0x0411 | ACC_STATIC), "final abstract static");
+        assert_eq!(class_modifiers_str(0x060A), "private abstract interface static");
         assert_eq!(method_modifiers_str(0x1041), "bridge synthetic");
     }
 

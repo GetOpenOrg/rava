@@ -116,7 +116,7 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
                     let name = std::mem::take(&mut current);
                     let is_object = name == "java/lang/Object";
                     result.insert(name,
-                        class_modifier_bits(is_public, has_super, is_object)
+                        class_modifier_bits(is_public && !member_restricted(&mods_str), has_super, is_object)
                             | modifier_bits(&mods_str));
                 }
                 current = name;
@@ -140,7 +140,7 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
         if !current.is_empty() && touched {
             let is_object = current == "java/lang/Object";
             result.insert(current,
-                class_modifier_bits(is_public, has_super, is_object)
+                class_modifier_bits(is_public && !member_restricted(&mods_str), has_super, is_object)
                     | modifier_bits(&mods_str));
         }
     }
@@ -149,6 +149,12 @@ pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
     // ReflectionFactory 据 ABSTRACT 位走 InstantiationException 访问器）
     result.entry("java/lang/Object".to_owned()).or_insert(0x0001);
     result
+}
+
+/// 成员类修饰符（InnerClasses 条目）为 private / protected：顶层 access 的 public 位不作数
+///（protected 成员类在类文件顶层记为 public）
+fn member_restricted(mods: &str) -> bool {
+    mods.split_whitespace().any(|t| t == "private" || t == "protected")
 }
 
 /// public 位 + 接口位（无父类且非 java/lang/Object → INTERFACE|ABSTRACT）。

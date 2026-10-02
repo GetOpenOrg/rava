@@ -29,13 +29,11 @@ fn rule(title: &str) -> String {
     format!("// ── {title} {}", "─".repeat(46))
 }
 
-/// 类修饰符来源合并：类文件 access 与 InnerClasses 自引用条目
+/// 类修饰符（HotSpot `InstanceKlass::compute_modifier_flags`）：有 InnerClasses 自引用条目时取该条目的
+/// inner_class_access_flags（含 private / protected / static，取代顶层 access），否则取类文件 access
 fn effective_class_flags(ci: &ClassInfo) -> u16 {
     let cf = ci.class_file();
-    cf.inner_classes
-        .iter()
-        .filter(|ic| ic.inner == cf.name)
-        .fold(cf.access, |acc, ic| acc | ic.access)
+    cf.inner_classes.iter().find(|ic| ic.inner == cf.name).map_or(cf.access, |ic| ic.access)
 }
 
 /// 生成类块头行
