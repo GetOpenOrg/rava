@@ -961,3 +961,65 @@ java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V
   3. 删除 `rava_macros` 的 `jvm_boundary` 宏与分析器中的相关解析。
 - 修复中遇到的测试问题：JDK 能跑的合法 Java 测试一律不改；修复时补充覆盖边界情况的 e2e 用例，expected 取真 JDK 输出。
 - 次序：排在三个闸门关闭、HelloWorld 正式口径 ≤3 s 且 ≤360 类之后。
+
+### 20.8 具体求值接入后的正式口径实测与构成（2026-10-02，c1d-p0 73de95c4）
+
+**已落地（按提交）**
+
+- 4a3e92a6：
+  - 闭世界镜像展开（`open_mirrors`）；
+  - VM 注入字面量（`allowSecurityManager = 1`）；
+  - 具体求值的实例入口；
+  - `getGenericInterfaces` 按镜像具体求值；
+  - `vm_singleton`；
+  - Unsafe 具体操作（`field_offset` / `cas_reference`）；
+  - `init_only` 稳定字段；
+  - 映像快照。
+- 7bb326d8：
+  - instanceof 收窄：成立一侧的局部变量以 instanceof 偏移为来源、按目标类型过滤，与 checkcast 同口径；
+  - 不变静态字段持有的映像对象按字段节点物化（`MV::Static`，如 `ClassRepository.NONE`）。
+  - 修掉的两类具体求值回退：「容器形态映像对象」与「接收者 Class 不是所指已知的类镜像」。
+- 73de95c4：符号字段偏移。
+  - `objectFieldOffset(类字面量, 名字常量)` 折叠为 `V::Offset`，经 static final 字段传递；
+  - Unsafe 引用读写调用点按偏移只触及所指字段（清单 `name_resolvers.offset` 与 `array_writes` / `memory_reads` 的 `offset`）；
+  - 声明了内存效果的手写方法，其体内对其它内存操作的调用（如 `putReferenceOpaque` 体内的 `putReference`）不另建模；
+  - 效果：`CHM.comparableClassFor` 的具体求值组合 3 → 2，`open(Thread)` / `open(Unsafe)` 不再污染 `Node.key`。
+
+**正式口径（不带 `--cut-file`）**
+
+- HelloWorld `rava closure`：423 类 / 305 代码类 / 1722 方法，2–3 s；
+- 全部具体求值成功、无回退：
+
+  | 调用点 | 组合 |
+  |---|---:|
+  | `Formatter.<clinit>@7` | 1 |
+  | `Formatter.format@11` | 7 |
+  | `HashMap.comparableClassFor@21` | 1 |
+  | `CHM.comparableClassFor@21` | 2 |
+
+**切除对照（同一提交）**
+
+| 切除 | 类 | 代码类 |
+|---|---:|---:|
+| 无（正式口径） | 423 | 305 |
+| OOB 消息（`outOfBoundsMessage`） | 371 | 265 |
+| `fullAddCount` | 415 | 297 |
+| `getGenericInterfaces` / PTI 校验（各自单切） | 423 | 305 |
+| OOB + `fullAddCount` | 362 | 256 |
+| 四项全切（f0） | 362 | 256 |
+
+- **GGI / PTI 闸门已关**：单切不变，与 OOB + `fullAddCount` 同切也不再减少——泛型区域只剩具体求值轨迹。
+- **OOB（+52～61）是调用链上的真实可达，不是过近似**：
+  - 用户代码 `StringBuilder.append(String)` → `inflateIfNeededFor` → `inflate` → `StringLatin1.inflate` →
+    `StringUTF16.checkBoundsOffCount` → `Preconditions` 出错分支 → `String.format`；
+  - 该链带入 Formatter、`FORMAT_SPECIFIER_PATTERN` 正则图、Locale / DecimalFormatSymbols 等；
+  - 要排除需证明 `dstOff + len ≤ dst.length >> 1`（`newBytesFor(value.length)` 与 `count` 的关系），属关系型数值推理；
+    或证明全程序 `String.coder` 恒为 LATIN1（构造器按运行期压缩结果写入），都不在本线能力内。
+  - 另一条入口 `CHM.toString`（`registerNatives` 手写体 `format!("{}", v)` 的 Object Display 分派、
+    `reflect_dispatch.unbox_*` 的 `__obj_str`）切掉只少 2 类，不改变结论。
+- **`fullAddCount`（+6～8）**：`addCount` 的 CAS 失败分支；单线程不会失败，但分析不建模线程，属健全保守。
+- **下限**：两项同切仍是 362（> 360）。§20.1 的 319 是 a830222d 时的口径，其后加入的健全性修复与具体求值轨迹
+  （Formatter 正则图、getGenericInterfaces 解析 / 实化路径）不随切除消失。
+
+**结论**：≤360 在现有分析能力下不可达。正式口径 423 / 305、≤3 s；超出部分由 OOB 真实调用链（约 52）与
+CAS 竞争分支（约 8）构成。
