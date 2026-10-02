@@ -90,7 +90,14 @@ pub(super) fn all_alignable(
 }
 
 /// 汇合类型为公共类祖先：各次存入按 `.into()` 上转；为根类：装箱上转
-pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str, start: usize, end: usize, merged: &Type) {
+pub(super) fn widen_into_merged(
+    cx: &VarsCtx,
+    entries: &mut [Entry],
+    name: &str,
+    start: usize,
+    end: usize,
+    merged: &Type,
+) -> MethodResult<()> {
     let merged_s = render_type(merged);
     let is_root = merged_s == OBJECT;
     for e in &mut entries[start + 1..end] {
@@ -111,7 +118,7 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
                 if null_to_default {
                     l.value = Some(default_value());
                 }
-                retarget_let(l, convert.as_deref(), merged, |v, r| widen_value(cx, v, r, is_root))
+                retarget_let(l, convert.as_deref(), merged, |v, r| widen_value(cx, v, r, is_root))?
             }
             Stmt::Assign(a) => {
                 if null_to_default {
@@ -119,13 +126,14 @@ pub(super) fn widen_into_merged(cx: &VarsCtx, entries: &mut [Entry], name: &str,
                 }
                 if let Some(rendered) = convert {
                     let v = std::mem::replace(&mut a.value, Expr::Lit(ir::Lit::Unit));
-                    a.value = widen_value(cx, v, &rendered, is_root);
+                    a.value = widen_value(cx, v, &rendered, is_root)?;
                 }
                 a.origin.value_ty = Some(merged.clone());
             }
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn default_value() -> Expr {
@@ -134,26 +142,32 @@ fn default_value() -> Expr {
 
 /// 同名 let 改指汇合类型：值类型与汇合类型不同（`convert` = 原类型文本）时按 `widen` 上转初值；
 /// 已是汇合类型的 let 保留原初值——随后降级为赋值时它就是这次存储本身
-fn retarget_let(l: &mut LetStmt, convert: Option<&str>, merged: &Type, widen: impl FnOnce(Expr, &str) -> Expr) {
+fn retarget_let(
+    l: &mut LetStmt,
+    convert: Option<&str>,
+    merged: &Type,
+    widen: impl FnOnce(Expr, &str) -> MethodResult<Expr>,
+) -> MethodResult<()> {
     if let Some(rendered) = convert {
         if let Some(v) = l.value.take() {
-            l.value = Some(widen(v, rendered));
+            l.value = Some(widen(v, rendered)?);
         }
     }
     if l.ty.is_some() {
         l.ty = Some(merged.clone());
     }
     l.origin.value_ty = Some(merged.clone());
+    Ok(())
 }
 
 /// 存入值上转到汇合类型：根类装箱，公共祖先 `.into()`（目标由汇合后的声明类型给出）
-fn widen_value(cx: &VarsCtx, v: Expr, rendered: &str, is_root: bool) -> Expr {
-    if is_root {
+fn widen_value(cx: &VarsCtx, v: Expr, rendered: &str, is_root: bool) -> MethodResult<Expr> {
+    Ok(if is_root {
         let rt = from_rust_text(cx.env, rendered).unwrap_or(RsType::Object);
-        Expr::raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false))
+        Expr::raw(to_object(cx.env, &text::expr(cx.env, &v), &rt, false)?)
     } else {
         Expr::Upcast { expr: Box::new(v), wrap: UpcastWrap::Auto }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -179,7 +193,7 @@ mod tests {
     fn same_type_let_keeps_value() {
         let merged = ir_type_of(OBJECT).unwrap();
         let mut l = let_of(OBJECT, "_t1");
-        retarget_let(&mut l, None, &merged, |_, _| panic!("同型不应上转"));
+        retarget_let(&mut l, None, &merged, |_, _| panic!("同型不应上转")).unwrap();
         assert_eq!(l.value, Some(Expr::Var(Ident::new("_t1").unwrap())));
         assert_eq!(l.ty, Some(merged.clone()));
         assert_eq!(l.origin.value_ty, Some(merged));
@@ -192,8 +206,9 @@ mod tests {
         retarget_let(&mut l, Some("Foo"), &merged, |v, r| {
             assert_eq!(r, "Foo");
             assert_eq!(v, Expr::Var(Ident::new("_t2").unwrap()));
-            Expr::raw("boxed")
-        });
+            Ok(Expr::raw("boxed"))
+        })
+        .unwrap();
         assert_eq!(l.value, Some(Expr::raw("boxed")));
         assert_eq!(l.ty, Some(merged));
     }

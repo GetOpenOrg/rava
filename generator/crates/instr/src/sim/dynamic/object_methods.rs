@@ -147,7 +147,7 @@ pub(super) fn gen_object_methods(env: &InstrEnv, sim: &mut StackSim, log: &mut I
                     text(env, &sim.fresh_let("__om_other", Expr::raw(format!("Clone::clone(&{t})")), &RsType::Object)?)
                 }
                 (e, t) => {
-                    let o = obj_text(env, &text(env, e), t);
+                    let o = obj_text(env, &text(env, e), t)?;
                     text(env, &sim.fresh_let("__om_other", Expr::raw(o), &RsType::Object)?)
                 }
             };

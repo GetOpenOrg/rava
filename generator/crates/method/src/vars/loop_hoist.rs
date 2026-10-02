@@ -9,8 +9,9 @@ use super::if_emit::align_later;
 use super::slot_type::{all_alignable, merged_slot_type, widen_into_merged};
 use super::{apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, same_jvm_var, VarsCtx};
 use crate::entry::Entry;
+use crate::error::MethodResult;
 
-pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
+pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) -> MethodResult<()> {
     // Pass 1：嵌套块内首次声明的变量及其位置
     let mut nesting = 0;
     let mut declared_at: BTreeMap<String, (usize, i32)> = BTreeMap::new();
@@ -29,7 +30,7 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
         }
     }
     if declared_at.is_empty() || loop_heads.is_empty() {
-        return;
+        return Ok(());
     }
     // Pass 2：作用域关闭后被引用（首个命中是另一 let 声明＝槽复用，不算）
     let rendered = render_entries(cx.env, entries);
@@ -73,7 +74,7 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
         let mut ty = hoisted_let_type(inner);
         if !all_alignable(cx, entries, name, decl_k - 1, loop_end, ty.as_ref()) {
             if let Ok(Some(m)) = merged_slot_type(cx, entries, name, decl_k - 1, loop_end) {
-                widen_into_merged(cx, entries, name, decl_k - 1, loop_end, &m);
+                widen_into_merged(cx, entries, name, decl_k - 1, loop_end, &m)?;
                 ty = Some(m);
             }
         }
@@ -99,4 +100,5 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) {
         }
     }
     apply_insertions(entries, insertions);
+    Ok(())
 }

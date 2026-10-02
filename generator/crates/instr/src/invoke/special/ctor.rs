@@ -182,7 +182,7 @@ fn ctor_tparams(env: &InstrEnv, sim: &StackSim, call: &CallRef, targs: &CtorTarg
 /// 形参是类型变量且 turbofish 实参已具体化：撤销实参向 Object 的上转，保留 `Clone::clone(&x)`
 fn strip_boxing(env: &InstrEnv, call: &CallRef, full_cls: &str, tparams: &[RsType], nodes: &mut [Expr]) {
     let o = ir::anchors::OBJECT;
-    let box_prefixes = [format!("{o}::from_any("), format!("{o}::from("), format!("Into::<{o}>::into(")];
+    let box_prefixes = [format!("{o}::from("), format!("Into::<{o}>::into(")];
     let ctx = &env.ctx;
     let Some(ci) = ctx.reg().get(full_cls) else {
         return;

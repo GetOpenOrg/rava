@@ -276,7 +276,7 @@ fn vars_passes(
 ) -> MethodResult<()> {
     analyze_mutation(entries);
     let cx = VarsCtx::new(env, predeclared, decls);
-    hoist_loop_vars(&cx, entries);
+    hoist_loop_vars(&cx, entries)?;
     for _ in 0..HOIST_ROUNDS {
         if !hoist_if_vars(&cx, entries)? {
             break;

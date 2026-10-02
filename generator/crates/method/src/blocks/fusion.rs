@@ -183,7 +183,7 @@ impl Blocks<'_, '_> {
             self.conds.insert(e.id, expr, truth);
             return Ok(e);
         }
-        let (tv, ev, ty) = unify_pair(self.env, arm_value(self.env, fall)?, &fall.ty, arm_value(self.env, jump)?, &jump.ty);
+        let (tv, ev, ty) = unify_pair(self.env, arm_value(self.env, fall)?, &fall.ty, arm_value(self.env, jump)?, &jump.ty)?;
         let fall_cond = render_cond(&jump_cond.negate());
         let expr = Expr::raw(format!("(if {fall_cond} {{ {tv} }} else {{ {ev} }})"));
         Ok(self.new_entry(expr, ty))
