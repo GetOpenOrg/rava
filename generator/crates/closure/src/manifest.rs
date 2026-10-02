@@ -80,6 +80,12 @@ pub enum StrOp {
     /// UTF-16 长度
     Length,
     IsEmpty,
+    /// 下标处的 UTF-16 单元（越界不求值：运行期抛 StringIndexOutOfBoundsException）
+    CharAt,
+    /// `String.hashCode` 规范值（UTF-16 单元上 `s[0]*31^(n-1) + … + s[n-1]`，int 回绕）
+    HashCode,
+    /// 单个 UTF-16 单元的小写映射（只求值 ASCII：非 ASCII 的 UnicodeData 映射不在此复刻）
+    CharToLowerCase,
 }
 
 pub struct Manifest {
@@ -110,6 +116,9 @@ pub struct Manifest {
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
     primitive_class_returns: HashSet<String>,
+    caller_class_returns: HashSet<String>,
+    /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
+    caller_sensitive: HashSet<String>,
     component_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
@@ -200,7 +209,14 @@ impl Manifest {
                     Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
                     Some("length") => StrOp::Length,
                     Some("is_empty") => StrOp::IsEmpty,
-                    _ => return Err(format!("vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty")),
+                    Some("char_at") => StrOp::CharAt,
+                    Some("hash_code") => StrOp::HashCode,
+                    Some("char_to_lower_case") => StrOp::CharToLowerCase,
+                    _ => {
+                        return Err(format!(
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / char_at / hash_code / char_to_lower_case"
+                        ))
+                    }
                 };
                 string_ops.insert(k.clone(), op);
             }
@@ -337,6 +353,8 @@ impl Manifest {
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
+            caller_class_returns: reflect("caller_class").into_iter().collect(),
+            caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             component_returns: reflect("component_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
@@ -503,6 +521,17 @@ impl Manifest {
     /// 返回基本类型（含 void）的类镜像（`Class.getPrimitiveClass` 语义）：所指类不是字节码类，无初始化、无成员
     pub fn returns_primitive_class(&self, member: &str) -> bool {
         self.primitive_class_returns.contains(member)
+    }
+
+    /// 返回调用它的 @CallerSensitive 方法的调用者类镜像（`Reflection.getCallerClass` 语义）
+    pub fn returns_caller_class(&self, member: &str) -> bool {
+        self.caller_class_returns.contains(member)
+    }
+
+    /// 注解（字段描述符形态 `Lx/Y;`）是否为 @CallerSensitive 注解
+    pub fn is_caller_sensitive_annotation(&self, type_desc: &str) -> bool {
+        let bin = type_desc.strip_prefix('L').and_then(|s| s.strip_suffix(';')).unwrap_or(type_desc);
+        self.caller_sensitive.contains(bin)
     }
 
     /// 返回接收者镜像所指数组类的元素类型镜像（`getComponentType` 语义）

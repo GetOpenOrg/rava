@@ -229,6 +229,10 @@ classes = [
     # 截断下 NativeBuffers$1 的父构造器链留存根，运行期命中 panic（TestUnixFileNatives）。
     "jdk/internal/misc/CarrierThreadLocal",
     "jdk/internal/misc/TerminatingThreadLocal",
+    # jdk.unsupported 的 Unsafe 门面（纯 Java，0 个 ACC_NATIVE：全部方法委托 jdk.internal.misc.Unsafe）。
+    # 消费方：经反射取 theUnsafe 的用户代码（Field.get(null) 触发 <clinit>）。sun/ 前缀截断下 <clinit>
+    # 不发射，theUnsafe / theInternalUnsafe / ARRAY_* 恒为缺省值，首个委托调用即 NPE（TestUnsafePrimitiveArray）。
+    "sun/misc/Unsafe",
 
     # gap 批次 4：BCP 47 语言标签与区域匹配（纯 Java）。Locale.forLanguageTag / toLanguageTag /
     # Builder / 扩展（u- / x-）/ LanguageRange / lookup / filter，以及 Locale 实例缓存

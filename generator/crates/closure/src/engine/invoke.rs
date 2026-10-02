@@ -10,7 +10,10 @@ impl<'a> Engine<'a> {
         self.class_init_site(m, off, opcode, mref, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
+        let wrapped = self.ref_caller_sensitive(mref);
+        let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.cs.site_wrapped = outer;
         self.call_vals = None;
     }
 
@@ -370,6 +373,7 @@ impl<'a> Engine<'a> {
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         self.dispatch.entry((m, off)).or_default().insert(t);
         self.callers.entry(t).or_default().insert(m);
+        self.caller_edge(m, t);
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
@@ -439,6 +443,8 @@ impl<'a> Engine<'a> {
                 if let Some(fs) = &recv_fs {
                     self.feed(fs, res, rt);
                 }
+            } else if model == RetModel::Caller {
+                self.caller_ret(m, t, res, rt);
             } else if let RetModel::Read(src) = model {
                 let i = src + usize::from(!is_static);
                 let fs = if subsumed {

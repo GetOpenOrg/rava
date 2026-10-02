@@ -325,7 +325,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
     match n {
         Node::P(..) => 0,
         Node::R(..) => 1,
-        Node::S(_, o) if *o == POOL || *o == PROD || *o == ARRAY_RET => 2,
+        Node::S(_, o) if *o == POOL || *o == PROD || *o == ARRAY_RET || *o == CALLER => 2,
         Node::S(_, o) if o & CATCH != 0 => 3,
         Node::S(..) => 4,
         Node::F(..) => 5,

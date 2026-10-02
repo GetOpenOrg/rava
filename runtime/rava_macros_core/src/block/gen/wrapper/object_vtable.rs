@@ -5,7 +5,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::Type;
 
-use super::super::super::util::{is_basic, type_is_bool, type_is_int, type_is_long, type_is_word};
+use super::super::super::util::{is_basic, type_is_bool, type_is_int, type_is_long, type_is_word, type_is_dword};
 use super::super::context::GenContext;
 use super::super::storage_hooks::hook_ident;
 
@@ -157,35 +157,29 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
         let long_cell_query = cell_query("__unsafe_long_cell", quote! { i64 }, has_prim(type_is_long));
         let int_cell_query = cell_query("__unsafe_int_cell", quote! { i32 }, has_prim(type_is_int));
         let bool_cell_query = cell_query("__unsafe_bool_cell", quote! { bool }, has_prim(type_is_bool));
-        // int 字视图：静态类 inner 先应答，未命中委托 vtable 对象（与 cell_query 同型）
-        let word_query = if has_prim(type_is_word) {
-            quote! {
-                fn __unsafe_word(
-                    &self,
-                    field: &str,
-                    op: &mut dyn FnMut(i32) -> ::std::option::Option<i32>,
-                ) -> ::std::option::Option<i32> {
-                    if let ::std::option::Option::Some(i) = #cells(&self.any) {
-                        if let __r @ ::std::option::Option::Some(_) =
-                            ObjectVTable::__unsafe_word(i, field, op)
-                        {
-                            return __r;
-                        }
+        // 字 / 双字视图：静态类 inner 先应答，未命中委托 vtable 对象（与 cell_query 同型）
+        let view_query = |method: &str, w_ty: TokenStream2, present: bool| -> TokenStream2 {
+            let method = format_ident!("{}", method);
+            let inner = present.then(|| quote! {
+                if let ::std::option::Option::Some(i) = #cells(&self.any) {
+                    if let __r @ ::std::option::Option::Some(_) = ObjectVTable::#method(i, field, op) {
+                        return __r;
                     }
-                    ObjectVTable::__unsafe_word(&*self.vtable, field, op)
                 }
-            }
-        } else {
+            });
             quote! {
-                fn __unsafe_word(
+                fn #method(
                     &self,
                     field: &str,
-                    op: &mut dyn FnMut(i32) -> ::std::option::Option<i32>,
-                ) -> ::std::option::Option<i32> {
-                    ObjectVTable::__unsafe_word(&*self.vtable, field, op)
+                    op: &mut dyn FnMut(#w_ty) -> ::std::option::Option<#w_ty>,
+                ) -> ::std::option::Option<#w_ty> {
+                    #inner
+                    ObjectVTable::#method(&*self.vtable, field, op)
                 }
             }
         };
+        let word_query = view_query("__unsafe_word", quote! { i32 }, has_prim(type_is_word));
+        let dword_query = view_query("__unsafe_dword", quote! { i64 }, has_prim(type_is_dword));
         let has_ref = flat_fields().any(|(n, _, basic)| ctx.is_erased(n) || !basic);
         let ref_access_inner = if has_ref {
             quote! {
@@ -303,6 +297,7 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #int_cell_query
                 #bool_cell_query
                 #word_query
+                #dword_query
                 fn __unsafe_ref_access(
                     &self, field: &str, op: &mut __RefAccess<'_>,
                 ) -> ::std::option::Option<Object> {

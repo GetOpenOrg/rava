@@ -158,5 +158,12 @@ mod tests {
         assert_eq!(string_op(StrOp::EqualsIgnoreCase, &[s("true"), V::Top]), None);
         assert_eq!(string_op(StrOp::Length, &[s("a😀")]), Some(V::Int(3)));
         assert_eq!(string_op(StrOp::IsEmpty, &[s("")]), Some(V::Int(1)));
+        assert_eq!(string_op(StrOp::CharAt, &[s("a😀b"), V::Int(3)]), Some(V::Int(98)));
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(2)]), None);
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(-1)]), None);
+        assert_eq!(string_op(StrOp::HashCode, &[s("file")]), Some(V::Int(3143036)));
+        assert_eq!(string_op(StrOp::HashCode, &[s("")]), Some(V::Int(0)));
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(70)]), Some(V::Int(102)));
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(0xC9)]), None);
     }
 }

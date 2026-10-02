@@ -110,6 +110,9 @@ impl<'a> Engine<'a> {
                     }
                     return java(&cls);
                 }
+                if let Some(cls) = self.colocated_module_class(host, &t.0) {
+                    return self.hw.class(&cls).fns.contains_key(&c.name).then(|| (cls, c.name.clone()));
+                }
                 self.hw.unit_fn(&self.abs_path(host, &t.0), &c.name).map(|h| (h, c.name.clone()))
             }
             (Some(_), _) => {
@@ -134,7 +137,7 @@ impl<'a> Engine<'a> {
 
     /// 宿主内的类型 / 模块路径 → `crate::…` 绝对路径：已是绝对路径原样；模块单元里的相对路径在单元模块下、
     /// `super::` 逐级上溯；类的共置手写文件是包模块的子模块，首个 `super` 即包
-    fn abs_path(&self, host: &str, segs: &[String]) -> Vec<String> {
+    pub(super) fn abs_path(&self, host: &str, segs: &[String]) -> Vec<String> {
         if segs.first().is_some_and(|s| s == "crate") {
             return segs.to_vec();
         }

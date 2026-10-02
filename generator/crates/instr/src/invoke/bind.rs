@@ -198,6 +198,9 @@ pub(crate) fn caller_sensitive_decl(env: &InstrEnv, owner_bin: &str, mname: &str
 
 /// @CallerSensitive 调用：`__caller_sensitive("调用处类", || call)`；其余 → None（原样）。
 ///
+/// 调用处类取字节码所属类（`code_owner`）：接口 default 方法体 / 未覆盖的超类方法体复制进实现类发射时，
+/// JVM 栈帧所属仍是声明该方法的类型（`getCallerClass` 返回声明者，不是接收者类）。
+///
 /// 例外：`getCallerClass` 自身（native 的 CS 方法）不包装——它返回的是「调用它的 CS 方法」
 /// 的调用方，即外层调用点已压入的栈顶；若在 CS 方法体内再压入所在类，`lookup()` 等会把
 /// lookup 类解析成 CS 方法所在类自己。Python 以声明类名后缀判定，这里以
@@ -207,5 +210,5 @@ pub fn caller_sensitive_wrap(env: &InstrEnv, call_text: &str, owner_bin: &str, m
     if !cs || (native && mname == "getCallerClass") {
         return None;
     }
-    Some(format!("__caller_sensitive(\"{}\", || {call_text})", env.ctx.class_name))
+    Some(format!("__caller_sensitive(\"{}\", || {call_text})", env.ctx.code_owner))
 }
