@@ -118,6 +118,49 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 按名查方法调用点的形参类型约束：`Class[]` 形参的实参值集里各数组的元素类镜像（值集增长时本站点重跑）。
+    /// 实参可为 null / 空数组时无形参的方法也可被查到。None = 无 `Class[]` 形参，或推不出（open 数组、
+    /// 元素含 open 或非镜像的 Class 值）
+    pub(super) fn lookup_param_sig(&mut self, m: usize, mref: &MemberRef, opcode: u8, args: &[V]) -> Option<ParamSig> {
+        let md = parse_method(&mref.desc)?;
+        let class_array = |p: &FieldType| matches!(p, FieldType::Array(e) if matches!(&**e, FieldType::Object(c) if c == CLASS));
+        let i = md.params.iter().position(class_array)?;
+        let v = args.get(usize::from(opcode != classfile::op::INVOKESTATIC) + i)?;
+        let mut sig = ParamSig::default();
+        match v {
+            V::Null => {
+                sig.empty = true;
+                return Some(sig);
+            }
+            V::Ref { nonnull, .. } => sig.empty = !nonnull,
+            _ => { eprintln!("SIGNONE notref {:?}", v); return None }
+        }
+        let obj = self.id(OBJECT);
+        let fs = self.feeds(m, v, obj);
+        let s = self.value_set(&fs);
+        if !s.open.is_empty() {
+            eprintln!("SIGNONE open {:?}", s.open.iter().take(5).map(|o| self.names[o as usize].to_string()).collect::<Vec<_>>());
+            return None;
+        }
+        for x in s.classes.iter() {
+            if !self.arrays.contains_key(&x) {
+                eprintln!("SIGNONE nonarray {}", self.names[x as usize]);
+                return None;
+            }
+            let es = self.value_set(&PARITIES.map(|p| Feed::N(Node::E(x, p))));
+            if !es.open.is_empty() {
+                { let n = self.names[x as usize].to_string(); let mk = n.rsplit_once('@').and_then(|(_, r)| r.split_once(':')).and_then(|(a, _)| a.parse::<usize>().ok()).map(|i| self.methods[i].key.to_string()); eprintln!("SIGNONE elemopen {n} {mk:?} ctx={}", self.methods[m].key); }
+                return None;
+            }
+            sig.empty |= es.classes.is_empty();
+            for e in es.classes.iter() {
+                let Some(&c) = self.mirrors.get(&e) else { eprintln!("SIGNONE nonmirror {} in {}", self.names[e as usize], self.names[x as usize]); return None };
+                sig.types.insert(self.names[c as usize].to_string());
+            }
+        }
+        Some(sig)
+    }
+
     /// 按名查方法调用点（方法 m）的名字实参 v 拆成的拼接段；None = 形状不符或无任何约束
     pub(super) fn method_name_parts(&mut self, m: usize, v: &V) -> Option<Vec<Part>> {
         // 拆段读本方法其它偏移的事件：登记为跨偏移读者（同 `class_lookup`）

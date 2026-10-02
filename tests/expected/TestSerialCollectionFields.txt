@@ -1,0 +1,13 @@
+items=[applex3, pearx5, null] size=3 ArrayList
+counts={alpha=1, beta=2, gamma=3} null->0 size=4
+log=[boot, start, stop] first=boot last=stop
+empty=[] isEmpty=true
+nested=[a, b]/LinkedList[c]
+missing=null
+shared same=true distinct from original=true
+items2=[pearx5, null, plumx7]
+alpha=11
+log2=[start, stop, again]
+sharedB=[x, y, z]
+top=[225, 256, 289, 324, 361] sum=2470
+byName={apple=applex3, pear=pearx5}

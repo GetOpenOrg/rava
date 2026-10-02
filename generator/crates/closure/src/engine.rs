@@ -38,6 +38,9 @@ mod forward;
 mod ctxsel;
 mod classes;
 mod reflect;
+mod reflect_call;
+use reflect_call::RcallMember;
+use reflect::ParamSig;
 mod flow;
 mod bytecode;
 mod invoke;
@@ -272,6 +275,19 @@ pub struct Engine<'a> {
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
     vm_targets: HashSet<usize>,
+    /// 反射调用（`reflect_call.rs`）：按接收者派发的实例成员（见 [`RcallMember`]）、已派发的（虚目标序号, 接收者值）、
+    /// 形参已接实参池的（方法, 通道）、实参池待处理增量（通道, 增量）、调用入口通道缓存（按方法）、
+    /// 已接入的入口调用点 (调用方, 偏移, 入口) → 序号、各调用点的通道、反射对象类型（`method_invokers` 声明的
+    /// 非 Object 引用形参类型）、已接入的（成员, 通道）
+    rcall_virt: Vec<RcallMember>,
+    rcall_done: HashSet<(usize, u32)>,
+    rcall_bound: HashSet<(usize, u8)>,
+    rcall_pending: Vec<(u8, TypeSet)>,
+    rcall_entry: HashMap<usize, Option<u8>>,
+    rcall_sites: HashMap<(usize, u32, usize), u32>,
+    rcall_chan: Vec<u8>,
+    rcall_obj_types: Option<Rc<HashSet<String>>>,
+    rcall_exposed: HashSet<(MemberRef, u8)>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
@@ -340,6 +356,10 @@ pub struct Engine<'a> {
     open_statics: Vec<(usize, u32)>,
     /// 以已知类镜像为静态字段基址的按偏移写入值节点（键 = 镜像所指类）：只接该类按名打开的静态引用字段
     mirror_writes: HashMap<u32, Vec<Node>>,
+    /// 目标字段尚未开放的实例字段偏移写入（字段 → (写入值节点, 字段节点, 字段类型)），字段开放时接上
+    offset_waits: HashMap<usize, Vec<(Node, Node, u32)>>,
+    /// 字段偏移尚未取得的按偏移读取（字段 → (字段节点, 读取结果节点, 结果类型)），偏移可得时接上
+    offset_read_waits: HashMap<usize, Vec<(Node, Node, u32)>>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
@@ -366,9 +386,10 @@ pub struct Engine<'a> {
     mirrors: HashMap<u32, u32>,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
-    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
-    mflows: HashMap<Node, Vec<Node>>,
-    mflow_seen: HashSet<(Node, Node)>,
+    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像（`getClass`）/ 镜像所指类的超类镜像（`getSuperclass`）
+    /// 流入 dst（逐调用点）
+    mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
+    mflow_seen: HashSet<(Node, Node, MirrorOp)>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
     rpending: Vec<(Members, usize, TypeSet)>,
@@ -376,8 +397,9 @@ pub struct Engine<'a> {
     enumerated: BTreeSet<(Members, u32)>,
     /// 可达的反射调用类别
     invokable: BTreeSet<Members>,
-    /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）
-    reflect_names: HashMap<u32, BTreeSet<String>>,
+    /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）→
+    /// 查找点的形参类型约束（None = 不约束）→ 反射调用通道位集
+    reflect_names: HashMap<u32, BTreeMap<String, BTreeMap<Option<ParamSig>, u8>>>,
     /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
     named_ctors: BTreeSet<u32>,
     /// 反射缺口：接收者镜像推不出的成员枚举

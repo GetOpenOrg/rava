@@ -106,6 +106,7 @@ pub struct Manifest {
     class_initializers: HashMap<String, usize>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
+    superclass_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
@@ -328,6 +329,7 @@ impl Manifest {
             class_initializers,
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
+            superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -478,6 +480,11 @@ impl Manifest {
         self.mirror_returns.contains(member)
     }
 
+    /// 返回接收者镜像所指类的直接超类镜像（`Class.getSuperclass` 语义：接口 / 根类 / 基本类型为 null，数组为根类）
+    pub fn returns_superclass(&self, member: &str) -> bool {
+        self.superclass_returns.contains(member)
+    }
+
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象
     pub fn member_enumerator(&self, member: &str) -> Option<Members> {
         self.member_enumerators.get(member).copied()
@@ -486,6 +493,11 @@ impl Manifest {
     /// 反射调用：调用哪类成员（Method / Constructor 对象所表示的成员）
     pub fn member_invoker(&self, member: &str) -> &[Members] {
         self.member_invokers.get(member).map_or(&[], |v| v.as_slice())
+    }
+
+    /// 方法反射调用入口（`method_invokers`）的成员键
+    pub fn method_invoker_keys(&self) -> impl Iterator<Item = &str> {
+        self.member_invokers.iter().filter(|(_, ks)| ks.contains(&Members::Methods)).map(|(k, _)| k.as_str())
     }
 
     /// 按名查找方法（类 + 方法名常量点名反射目标）

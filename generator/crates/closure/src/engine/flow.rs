@@ -2,6 +2,7 @@
 
 use super::stats::{kind_ix, KINDS};
 use super::*;
+thread_local! { static C1DR_SRC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 
 /// 新接边整集合收窄走记忆的源集合元素数下限
 const FILTER_MEMO_AT: usize = 64;
@@ -59,6 +60,24 @@ impl<'a> Engine<'a> {
         if direct && !delta.open.is_empty() {
             self.open_inj.entry(n).or_default().extend(delta.open.iter());
         }
+        // C1DR_GROW 临时诊断
+        if let Some(w) = std::env::var_os("C1DR_TRACECLS") {
+            if let Some(&cid) = self.ids.get(w.to_str().unwrap_or("")) {
+                if delta.classes.contains(&cid) {
+                    let src = C1DR_SRC.with(|c| c.get());
+                    let ss = if direct { format!("direct site={:?}", self.cur_site.map(|(m, o)| format!("{}@{o}", self.ctx_label(m)))) } else { self.node_str(self.graph.node(src)) };
+                    eprintln!("TRACE {} <- {ss}", self.node_str(n));
+                }
+            }
+        }
+        if let Some(w) = std::env::var_os("C1DR_GROW") {
+            let ns = self.node_str(n);
+            if ns.contains(w.to_str().unwrap_or("")) {
+                let src = C1DR_SRC.with(|c| c.get());
+                let ss = if direct { format!("direct site={:?}", self.cur_site.map(|(m, o)| format!("{}@{o}", self.ctx_label(m)))) } else { self.node_str(self.graph.node(src)) };
+                eprintln!("GROW {ns} <- {ss} +{{{}}}", self.set_str(&delta));
+            }
+        }
         self.grown(r, &delta);
         // 只沿流边推送新增部分（差分传播）
         self.queue_delta(r, &delta);
@@ -108,6 +127,12 @@ impl<'a> Engine<'a> {
                 self.memory_read(s, delta);
             }
         }
+        // 反射调用：入口实参并入实参池；实参池新增接收者逐个派发
+        match n {
+            Node::RA(s, _) => self.rcall_arg_grown(s, delta),
+            Node::RP(c) => self.rcall_pending.push((c, delta.clone())),
+            _ => {}
+        }
         if let Some(ws) = self.watch.get(&n) {
             for &w in ws {
                 if self.in_swork.insert(w) {
@@ -131,6 +156,12 @@ impl<'a> Engine<'a> {
     /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        if let Some(w) = std::env::var_os("C1DR_WATCH") {
+            if self.node_str(dst).contains(w.to_str().unwrap_or("")) {
+                let ss = self.graph.set(si).clone();
+                eprintln!("EDGE {} -> {} [{}] {{{}}}", self.node_str(src), self.node_str(dst), self.names[filter as usize], self.set_str(&ss));
+            }
+        }
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
         let objf = self.names[filter as usize].as_ref() == OBJECT;
         if rs == rd && objf {
@@ -139,6 +170,7 @@ impl<'a> Engine<'a> {
         if !self.graph.add_edge(rs, rd, filter) {
             return;
         }
+        C1DR_SRC.with(|c| c.set(si));
         self.graph.edges_since += 1;
         if self.graph.set(rs).is_empty() {
             return;
@@ -234,6 +266,7 @@ impl<'a> Engine<'a> {
                 let (dst, f) = self.graph.edges[ix][k];
                 let pk = sk + kind_ix(&self.graph.node(dst));
                 let grew = self.graph.adds[1];
+                C1DR_SRC.with(|c| c.set(i));
                 self.push_edge(dst, f, obj, &s, &mut narrowed);
                 let p = &mut self.graph.pushes[pk];
                 p[0] += 1;
@@ -243,8 +276,8 @@ impl<'a> Engine<'a> {
             for m in ms {
                 let n = self.graph.node(m);
                 if let Some(ds) = self.mflows.get(&n).cloned() {
-                    let k = self.mirror_set(&s);
-                    for d in ds {
+                    for (d, op) in ds {
+                        let k = self.mirror_op(op, &s);
                         self.add_to(d, &k);
                     }
                 }
@@ -252,15 +285,22 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 镜像流边 src → dst；立即按当前集合推一次
-    pub(super) fn mflow(&mut self, src: Node, dst: Node) {
-        if !self.mflow_seen.insert((src, dst)) {
+    /// 镜像流边 src → dst（变换 op）；立即按当前集合推一次
+    pub(super) fn mflow(&mut self, src: Node, dst: Node, op: MirrorOp) {
+        if !self.mflow_seen.insert((src, dst, op)) {
             return;
         }
-        self.mflows.entry(src).or_default().push(dst);
+        self.mflows.entry(src).or_default().push((dst, op));
         let s = self.set_of(src);
-        let k = self.mirror_set(&s);
+        let k = self.mirror_op(op, &s);
         self.add_to(dst, &k);
+    }
+
+    pub(super) fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
+        match op {
+            MirrorOp::Of => self.mirror_set(s),
+            MirrorOp::Super => self.super_set(s),
+        }
     }
 
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open

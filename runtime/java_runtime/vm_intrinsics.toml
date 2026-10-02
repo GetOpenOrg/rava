@@ -215,9 +215,10 @@ queries = [
 # 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
 # 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
 # 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
-# enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：两者都可达时，接收者是
-#   类字面量则只放开该类及其超类的字段，否则全部字段不折叠；只读句柄（取名字 / 修饰符 / 值，
-#   如 ObjectStreamClass.computeDefaultSUID）不放开任何字段
+# enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：两者都可达时，按调用点
+#   接收者 Class 值集里的类镜像逐类放开该类及其超类的字段，值集含所指未知的 Class 时全部字段不折叠；
+#   只读句柄（取名字 / 修饰符 / 值，如 ObjectStreamClass.computeDefaultSUID）不放开任何字段。
+#   放开的字段同时是实例字段偏移写入（Unsafe 引用写入、方法句柄字段访问器）的全部可写目标
 enumerators = [
     "java/lang/Class.getDeclaredFields:()[Ljava/lang/reflect/Field;",
     "java/lang/Class.getFields:()[Ljava/lang/reflect/Field;",
@@ -261,17 +262,21 @@ serializable_markers = ["java/io/Serializable"]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
 # 分析器把 Class 值按所指类区分（类字面量、下列 mirror_of_receiver 的逐调用点接收者），以此求反射目标：
 #   mirror_of_receiver  返回接收者的类镜像（JLS §4.3.2 getClass）
+#   superclass_of_receiver  返回接收者镜像所指类的直接超类镜像（接口 / 根类为 null，数组为根类），逐调用点
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
-#                       调用点上的方法名字面量另对 Class 接收者值集里的类镜像所指类点名（如 `this.getMethod("values")`）；
-#                       形参透传的名字不与接收者镜像相乘；接收者所指未知时记为反射缺口
+#                       调用点上的方法名（字面量与形参透传的各调用点常量）另对 Class 接收者值集里的类镜像所指类点名
+#                       （如 `this.getMethod("values")`、序列化回调查找）；接收者所指未知时记为反射缺口
 #   method_invokers / constructor_invokers    反射调用：调用反射对象所表示的方法 / 构造器
 #                       （NativeAccessor 直接按声明键分派；DirectMethodHandleAccessor 经 MethodHandle.invokeExact）
 # 被枚举（用户类）或被按名查找（任意类）、且有对应调用可达的成员入链（形参按声明类型 open，同 VM 入口）；接收者镜像推不出的枚举记为反射缺口
 # （closure.json `reflect.gaps`），不做模糊扩展——缺口由清单补种。
 mirror_of_receiver = [
     "java/lang/Object.getClass:()Ljava/lang/Class;",
+]
+superclass_of_receiver = [
+    "java/lang/Class.getSuperclass:()Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
@@ -440,7 +445,8 @@ resets = [
 
 [facts.memory_reads]
 # 手写方法的返回值按 VM 语义读自形参 src 所指对象（形参序号按描述符，0 起，不含接收者）：
-# 数组取其元素，对象取其引用实例字段（偏移只能指向这些位置）。分析器按调用点接入，替代手写返回的
+# 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
+# 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
 # Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }

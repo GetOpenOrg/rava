@@ -63,6 +63,15 @@ pub enum Kind {
     Missing,
 }
 
+/// 流边上的类镜像变换（`flow.rs` 镜像流边）
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum MirrorOp {
+    /// 每个值的类镜像（`getClass`）
+    Of,
+    /// 每个类镜像所指类的直接超类镜像（`getSuperclass`）
+    Super,
+}
+
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RetModel {
@@ -70,10 +79,23 @@ pub(super) enum RetModel {
     Plain,
     /// 类镜像：本调用点接收者各值的 Class 对象
     Mirror,
+    /// 超类镜像：本调用点接收者各类镜像所指类的直接超类镜像
+    Super,
     /// 浅拷贝：本调用点的接收者
     Receiver,
     /// 按实参（序号，不含接收者）读内存
     Read(usize),
+}
+
+impl RetModel {
+    /// 结果按接收者镜像变换给出时的变换
+    pub(super) fn mirror_op(self) -> Option<MirrorOp> {
+        match self {
+            RetModel::Mirror => Some(MirrorOp::Of),
+            RetModel::Super => Some(MirrorOp::Super),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -104,6 +126,11 @@ pub(super) enum Node {
     HR(u32),
     /// 字段汇集节点（`gathers` 序号）：同一字段、同一抽象对象集合的读取站点（或写入站点）共用（见 `gather.rs`）
     G(u32),
+    /// 反射调用实参池（按通道：反射对象 / 方法句柄）：该通道调用入口（`method_invokers`）的接收者 / 实参
+    /// （含实参数组的元素）汇入，再按声明类型流向经该通道查找的反射成员的形参（`reflect_call.rs`）
+    RP(u8),
+    /// 反射调用入口调用点（`rcall_sites` 序号）的第 i 个实参：新增值并入该调用点通道的 [`Node::RP`]，数组另并入其元素
+    RA(u32, u16),
     /// 逃逸汇点：流入非建模代码（手写体 / native 的值池、VM 回调的返回值、未知数组）的值。
     /// 抽象对象到达这里即「已逃逸」——只有它们可能以 open / 非抽象接收者的身份被读写
     Esc,

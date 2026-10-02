@@ -317,8 +317,8 @@ impl Ctx<'_> {
 }
 
 /// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
-pub(super) const KINDS: usize = 16;
-const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G"];
+pub(super) const KINDS: usize = 17;
+const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall"];
 
 #[inline]
 pub(super) fn kind_ix(n: &Node) -> usize {
@@ -339,6 +339,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
         Node::HR(..) => 13,
         Node::Esc => 14,
         Node::G(..) => 15,
+        Node::RP(_) | Node::RA(..) => 16,
     }
 }
 

@@ -217,8 +217,9 @@ pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>
         }
         Expr::MethodCall(m) if cast_target(m).is_some() => cast_target(m),
         Expr::MethodCall(m) => match m.method.to_string().as_str() {
-            // 无 turbofish 的转换：目标类型由上下文推出，此处取接收者的动态类型
-            "clone" | "try_cast" | "into" | "unwrap" | "expect" => infer(&m.receiver, locals, helpers),
+            // 无 turbofish 的转换：目标类型由上下文推出，此处取接收者的动态类型；
+            // `unwrap_or_default` 的缺省分支是 Java null（引用的 Default），不添类型
+            "clone" | "try_cast" | "into" | "unwrap" | "expect" | "unwrap_or_default" => infer(&m.receiver, locals, helpers),
             _ => None,
         },
         _ => None,
@@ -528,13 +529,20 @@ pub(super) fn ctor_type(e: &syn::Expr, helpers: &HashSet<String>) -> Option<Vec<
 
 /// 手写体取得数组视图的标识符：数组类型本身、协变视图、Object 上的数组存取 / 转换（宏内按标识符保守判定）
 pub(super) fn is_array_ident(s: &str) -> bool {
-    s == ARRAY_TYPE || s == "__view_into" || s == ARRAY_CAST || s.starts_with("array_store")
+    s == ARRAY_TYPE || s == "__view_into" || s == ARRAY_CAST || is_store_ident(s)
+}
+
+/// Object 上改写引用元素的数组存取（`array_store_object` 等；只存基本元素的除外）
+fn is_store_ident(s: &str) -> bool {
+    s.starts_with("array_store") && !PRIMITIVE_STORES.contains(&s)
 }
 
 const ARRAY_TYPE: &str = "JArray";
 const ARRAY_CAST: &str = "try_cast_array";
 /// 只存取基本类型元素的 Object 数组存取（不改写引用元素）
 const PRIMITIVE_STORES: &[&str] = &["array_store_byte"];
+/// 数组视图上改写元素的方法（`JArray::set` / `__update` / `with_vec` 取可变切片）。接收者类型推不出，按方法名保守计
+const ELEMENT_MUTATORS: &[&str] = &["set", "__update", "with_vec"];
 /// Java 基本类型在运行时里的 Rust 元素类型
 const PRIMITIVE_ELEMS: &[&str] = &["i8", "u16", "i16", "i32", "i64", "f32", "f64", "bool"];
 
@@ -550,15 +558,37 @@ fn primitive_elem(args: Option<&syn::AngleBracketedGenericArguments>) -> bool {
     }
 }
 
-/// 手写体是否取得引用元素数组的视图（可改写引用元素，数组写入建模的前提）。
+/// 宏内标识符（不解析的 token 流）是否可能改写引用元素：取得数组视图且出现改写元素的方法名 / 存取
+pub(super) fn opaque_array_writes(idents: &HashSet<String>) -> bool {
+    idents.iter().any(|i| is_store_ident(i))
+        || (idents.iter().any(|i| is_array_ident(i)) && idents.iter().any(|i| ELEMENT_MUTATORS.contains(&i.as_str())))
+}
+
+/// 手写体是否可能改写引用元素数组的元素（数组写入建模的前提）：取得引用元素数组视图、且调用了改写元素的
+/// 方法（[`ELEMENT_MUTATORS`]），或经 Object 的引用元素存取写入。只读视图（`get` / `len` / `to_vec`）不改写元素。
 /// 基本元素数组视图（`JArray<i8>` 等）的元素不携带类型，不计；元素类型未写明（裸 `JArray`、泛型、
 /// 宏内标识符）按引用保守计
-pub(super) struct ArrayIdents(pub(super) bool);
+#[derive(Default)]
+pub(super) struct ArrayIdents {
+    /// 取得引用元素数组视图
+    view: bool,
+    /// 调用了改写元素的方法
+    mutate: bool,
+    /// 经 Object 的引用元素存取写入
+    store: bool,
+}
+
+impl ArrayIdents {
+    pub(super) fn writes(&self) -> bool {
+        self.store || (self.view && self.mutate)
+    }
+}
 
 impl<'ast> Visit<'ast> for ArrayIdents {
     fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
         let s = i.to_string();
-        self.0 |= s != ARRAY_TYPE && s != ARRAY_CAST && is_array_ident(&s) && !PRIMITIVE_STORES.contains(&s.as_str());
+        self.store |= is_store_ident(&s);
+        self.view |= s == "__view_into";
     }
 
     fn visit_path_segment(&mut self, seg: &'ast syn::PathSegment) {
@@ -567,15 +597,16 @@ impl<'ast> Visit<'ast> for ArrayIdents {
                 syn::PathArguments::AngleBracketed(a) => Some(a),
                 _ => None,
             };
-            self.0 |= !primitive_elem(args);
+            self.view |= !primitive_elem(args);
         }
         syn::visit::visit_path_segment(self, seg);
     }
 
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
         if m.method == ARRAY_CAST {
-            self.0 |= !primitive_elem(m.turbofish.as_ref());
+            self.view |= !primitive_elem(m.turbofish.as_ref());
         }
+        self.mutate |= ELEMENT_MUTATORS.iter().any(|x| m.method == x);
         syn::visit::visit_expr_method_call(self, m);
     }
 }

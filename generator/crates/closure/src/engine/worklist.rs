@@ -51,6 +51,7 @@ impl<'a> Engine<'a> {
         self.flow(Node::Array, Node::Esc, obj);
         self.ctx.stats.borrow_mut().mark_rss("setup");
         let mut batch = 0usize;
+        let mut prog = 0u64;
         loop {
             // 流传播按批：连续处理若干方法 / 站点后再排空，各处的零碎增量在源头汇齐后一次推下去。
             // 不动点单调，先处理的单元读到的是较小的集合，增长后经读者登记重跑——终态集合与逐个排空相同
@@ -62,10 +63,22 @@ impl<'a> Engine<'a> {
                 self.stat_leave();
             }
             batch += 1;
+            // C1DR_PROG 临时诊断
+            if std::env::var_os("C1DR_PROG").is_some() {
+                let st = self.ctx.stats.borrow();
+                prog += 1;
+                if prog % 500000 == 0 {
+                    eprintln!("PROG classes={} methods={} sites={} lcalls={} fopen={} names={} all={} waits={} mw={} sw={} cw={}", self.classes.len(), self.methods.len(), st.site_reruns, st.lcall_reruns, self.ctx.fopen.borrow().len(), self.ctx.fopen_names.borrow().len(), self.ctx.fopen_all.get(), self.offset_waits.len(), self.mwork.len(), self.swork.len(), self.cwork.len());
+                }
+            }
             if let Some((k, e, s)) = self.rpending.pop() {
                 self.stat_enter(Phase::Enumerate);
                 self.enumerate(k, e, &s);
                 self.stat_leave();
+                continue;
+            }
+            if let Some((c, d)) = self.rcall_pending.pop() {
+                self.rcall_grown(c, &d);
                 continue;
             }
             // 先处理方法（图扩张），读者站点最后重跑：集合增长在两次重跑之间尽量合并
@@ -148,6 +161,7 @@ impl<'a> Engine<'a> {
             deps.extend(self.ctx.fdeps.borrow().get(&key).into_iter().flatten().copied());
             self.invalidate_all(Some(deps), Why::FieldOpen);
             self.open_static(&key);
+            self.offset_fields_opened(Some((&key.name, Some(&key))));
         }
     }
 
@@ -161,6 +175,7 @@ impl<'a> Engine<'a> {
             for k in hits {
                 self.open_static(&k);
             }
+            self.offset_fields_opened(Some((name, None)));
         }
     }
 
@@ -183,6 +198,7 @@ impl<'a> Engine<'a> {
             deps.extend(ctx.fdeps.borrow().get(k).into_iter().flatten().copied());
         }
         self.invalidate_all(Some(deps), Why::FieldsAll);
+        self.offset_fields_opened(None);
     }
 
     pub(super) fn process(&mut self, m: usize) {

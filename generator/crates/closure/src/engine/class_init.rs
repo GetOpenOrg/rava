@@ -14,6 +14,8 @@ pub struct ClassInitFacts {
     pub sites: BTreeMap<String, BTreeSet<String>>,
     /// 出现过所指未知的 Class 实参
     pub unknown: bool,
+    /// 诊断：实参所指未知的调用点与成因（`调用方成员@偏移 <- open(..)` / 非镜像值）
+    pub unknown_sites: BTreeSet<String>,
 }
 
 impl ClassInitFacts {
@@ -30,6 +32,7 @@ impl<'a> Engine<'a> {
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
         let Some(a) = args.get(skip + j) else { return };
         let mut known: Vec<String> = vec![];
+        let mut unknown: Vec<String> = vec![];
         match a {
             V::Class(c, _) => known.push(c.to_string()),
             V::Null => {}
@@ -37,17 +40,23 @@ impl<'a> Engine<'a> {
                 let class = self.id(CLASS);
                 let fs = self.feeds(m, a, class);
                 let s = self.value_set(&fs);
-                self.class_init.unknown |= !s.open.is_empty();
+                for o in s.open.iter() {
+                    unknown.push(format!("open({})", self.names[o as usize]));
+                }
                 for x in s.classes.iter() {
                     match self.mirrors.get(&x) {
                         Some(&c) => known.push(self.names[c as usize].to_string()),
-                        None => self.class_init.unknown = true,
+                        None => unknown.push(self.names[x as usize].to_string()),
                     }
                 }
             }
-            _ => self.class_init.unknown = true,
+            _ => unknown.push("non-reference".to_string()),
         }
         let site = format!("{}@{off}", self.methods[m].key);
+        for u in unknown {
+            self.class_init.unknown = true;
+            self.class_init.unknown_sites.insert(format!("{site} <- {u}"));
+        }
         // 数组类没有初始化（JVMS §5.5）
         for c in known.into_iter().filter(|c| !c.starts_with('[')) {
             if !self.class_init.sites.get(&site).is_some_and(|s| s.contains(&c)) {

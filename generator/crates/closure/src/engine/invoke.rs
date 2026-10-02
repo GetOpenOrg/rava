@@ -35,6 +35,9 @@ impl<'a> Engine<'a> {
             .collect();
         let k = self.mref_key(mref);
         if self.man.is_method_lookup(&k) {
+            let ch = self.rcall_lookup_channel(&mref.desc);
+            let sig = self.lookup_param_sig(m, mref, opcode, args);
+            let sig = sig.as_ref();
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 本调用点上的字面量名（常量实参 / 合流前的各字面量）；形参透传来的名字不在此列
             let mut site_names: BTreeSet<Rc<str>> = BTreeSet::new();
@@ -74,30 +77,30 @@ impl<'a> Engine<'a> {
                     _ => {}
                 }
             }
-            // 常量名的查找目标：Class 常量实参；本调用点的字面量名另对 Class 接收者值集里类镜像所指的类点名
-            // （如 `this.getMethod("values")`：接收者是流到该方法的类镜像）。
-            // 形参透传的名字不与接收者镜像相乘：名字与接收者各自来自全部调用点，交叉组合会把任意镜像类上的
-            // 同名方法拉进反射面（如序列化辅助方法按形参取名、按形参取类）；拼段名同理只按常量类 / Class 形参定目标
+            // 常量名的查找目标：Class 常量实参；名字（本调用点字面量与形参透传的各调用点常量）另对 Class
+            // 接收者值集里类镜像所指的类点名（如 `this.getMethod("values")`、序列化按形参取类取名的回调查找）。
+            // 接收者值集只含真正流到查找点的类镜像，按名只点到声明了该名的方法；拼段名只按常量类 / Class 形参定目标
+            if std::env::var_os("C1DR_PROG").is_some() && (names.iter().any(|n| &**n == "writeObject") || per_class.iter().any(|(_, n)| &**n == "writeObject")) {
+                let rm = args.first().map(|r| self.recv_mirrors(m, r)).unwrap_or_default();
+                eprintln!("LOOKUP {} @{off} {k} names={:?} classes={:?} recv={} sig={:?} per={:?}", self.ctx_label(m), names, classes, rm.len(), sig, per_class.len());
+            }
             for name in &names {
                 for c in &classes {
-                    self.reflect_name(c, name);
+                    self.reflect_name(c, name, ch, sig);
                 }
             }
-            if class_recv && !site_names.is_empty() {
+            if class_recv && !names.is_empty() {
                 for c in args.first().map(|r| self.recv_mirrors(m, r)).unwrap_or_default() {
                     if classes.contains(&c) {
                         continue;
                     }
-                    for name in &site_names {
-                        self.reflect_name(&c, name);
+                    for name in &names {
+                        self.reflect_name(&c, name, ch, sig);
                     }
                 }
-            } else if class_recv && !names.is_empty() && classes.is_empty() {
-                // 名字只经形参流入、接收者非常量：查找目标推不出，记为反射缺口
-                self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }
             for (c, name) in &per_class {
-                self.reflect_name(c, name);
+                self.reflect_name(c, name, ch, sig);
             }
         }
         if class_param || class_recv {
@@ -119,11 +122,23 @@ impl<'a> Engine<'a> {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
         }
         if self.man.is_field_enumerator(&k) {
-            let cls = match args.first() {
-                Some(V::Class(c, _)) => Some(c.to_string()),
-                _ => None,
-            };
-            self.enumerate_fields(cls);
+            // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开
+            let mut cs = BTreeSet::new();
+            let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            for c in cs {
+                self.enumerate_fields(Some(c));
+            }
+            if unknown {
+                // C1DR_ENUM 临时诊断
+                if std::env::var_os("C1DR_PROG").is_some() && !self.ctx.fopen_all.get() {
+                    let class = self.id(CLASS);
+                    let fs = args.first().map(|v| self.feeds(m, v, class));
+                    let s = fs.map(|f| self.value_set(&f));
+                    let d = s.map(|s| (s.classes.iter().take(10).map(|c| self.names[c as usize].to_string()).collect::<Vec<_>>(), s.open.iter().take(10).map(|c| self.names[c as usize].to_string()).collect::<Vec<_>>()));
+                    eprintln!("ENUM-ALL {} @{off} {k} arg={:?} set={:?}", self.ctx_label(m), args.first(), d);
+                }
+                self.enumerate_fields(None);
+            }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all(self.ctx.fopen_all.get(), false);
@@ -132,8 +147,13 @@ impl<'a> Engine<'a> {
 
     /// 字段枚举（cls = 接收者类字面量，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
     fn enumerate_fields(&mut self, cls: Option<String>) {
+        if std::env::var_os("C1DR_NOENUM").is_some() {
+            return;
+        }
         if !self.fwriter_live {
-            self.fenum_pending.insert(cls);
+            if self.fenum_pending.insert(cls) {
+                self.offset_reads_ready();
+            }
             return;
         }
         match cls {
@@ -165,6 +185,10 @@ impl<'a> Engine<'a> {
             if self.man.is_field_handle_bridge(&self.methods[c].key.to_string()) {
                 return;
             }
+        }
+        if std::env::var_os("C1DR_PROG").is_some() {
+            let f = if let From::Method(c) = via.from { self.ctx_label(c) } else { String::new() };
+            eprintln!("WRITER-LIVE {key} <- {f} {:?}", via);
         }
         self.field_writer_live();
     }
@@ -409,16 +433,17 @@ impl<'a> Engine<'a> {
         let base = usize::from(!is_static);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
+            self.rcall_site(m, off, t, a);
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             let model = self.methods[t].ret_model;
-            if model == RetModel::Mirror {
-                // 类镜像：结果 = 本调用点接收者各值的 Class 对象（逐调用点）
+            if let Some(op) = model.mirror_op() {
+                // 类镜像：结果 = 本调用点接收者各值的 Class 对象 / 各镜像所指类的超类镜像（逐调用点）
                 for f in recv_fs.iter().flatten() {
                     match f {
-                        Feed::N(n) => self.mflow(*n, res),
+                        Feed::N(n) => self.mflow(*n, res, op),
                         Feed::S(s) => {
-                            let k = self.mirror_set(s);
+                            let k = self.mirror_op(op, s);
                             self.add_to(res, &k);
                         }
                     }
