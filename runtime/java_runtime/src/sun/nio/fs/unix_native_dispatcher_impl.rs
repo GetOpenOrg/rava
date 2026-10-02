@@ -10,7 +10,10 @@ use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_exception::UnixException;
 use super::unix_file_attributes::UnixFileAttributes;
 
-/// UnixNativeDispatcher.SUPPORTS_BIRTHTIME（JDK 常量值；init 的能力位只报告本文件实际承载的面）。
+// UnixNativeDispatcher 的能力位（JDK 常量值；init 只报告本运行时实际承载的面）
+const SUPPORTS_FUTIMES: i32 = 1 << 2;
+const SUPPORTS_FUTIMENS: i32 = 1 << 3;
+const SUPPORTS_LUTIMES: i32 = 1 << 4;
 const SUPPORTS_BIRTHTIME: i32 = 1 << 16;
 
 pub(super) fn errno() -> i32 {
@@ -55,11 +58,15 @@ pub(super) fn restartable(mut f: impl FnMut() -> i32) -> std::result::Result<i32
 }
 
 impl UnixNativeDispatcher {
-    /// native `init()`：能力位图（HotSpot 按平台探测 openat / futimes / xattr / birthtime）。
-    /// 本运行时的 *at / futimes / xattr native 未承载，只报告 birthtime（macOS stat 提供）。
+    /// native `init()`：能力位图（libnio `UnixNativeDispatcher.c` 按平台探测 openat / futimes / futimens /
+    /// lutimes / xattr / birthtime）。futimes0 / futimens0 / lutimes0 已承载（libc 在 Linux 与 macOS 都提供），
+    /// 两平台同 JDK 报告 FUTIMES / FUTIMENS / LUTIMES——不报 LUTIMES 时，不跟随链接的 setTimes 退回
+    /// `openForAttributeAccess(false)`（O_NOFOLLOW 打开符号链接本身）得 ELOOP；birthtime 只有 macOS stat 提供；
+    /// *at 系列与 xattr 的 native 未承载，不报告（报告即把调用引到未实现的 native）。
     #[jvm_native]
     pub fn init() -> Result<i32> {
-        Ok(if cfg!(target_os = "macos") { SUPPORTS_BIRTHTIME } else { 0 })
+        let times = SUPPORTS_FUTIMES | SUPPORTS_FUTIMENS | SUPPORTS_LUTIMES;
+        Ok(if cfg!(target_os = "macos") { times | SUPPORTS_BIRTHTIME } else { times })
     }
 
     /// native `open0(long path, int flags, int mode)`：open(2)。

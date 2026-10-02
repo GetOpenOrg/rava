@@ -1188,6 +1188,8 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
 
 `fullAddCount`（CAS 竞争分支，约 +8 类）属线程逃逸分析，只记录不实施（§20.8 后续项 2）。
 
+**a5-4（精度待查，2026-10-03 登记）**：TestUnixFileNatives 闭包偏大——服务器 transpile 3m33s、二进制 391M（c1d-p0 b17a6496 前后的 a2 抽查）。该例只调文件系统 API，量级应与 HelloWorld + `sun.nio.fs` 相当；先用 `rava closure --why` / `--flows '@trace:<类>'` 找引入面最大的入口，再定收窄手段。目标：transpile ≤60 s、类数的引入链逐条可解释。
+
 ### 21.6 并行编排
 
 ```
