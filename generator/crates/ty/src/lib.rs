@@ -9,6 +9,7 @@
 pub mod carrier;
 pub mod class_params;
 pub mod consts;
+pub mod fn_sig;
 pub mod ident;
 pub mod jvm_type;
 pub mod manifest;
@@ -23,6 +24,7 @@ pub mod type_map;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use fn_sig::FnSig;
 pub use jvm_type::{HostPrim, JvmType, PrimKind, TypeParseError, WildKind};
 pub use manifest::Manifest;
 pub use registry::{ClassInfo, Registry};

@@ -15,6 +15,8 @@ pub struct FieldMeta {
     pub is_static:  bool,
     pub constant:   Option<i64>,
     pub annotations: &'static [u8],
+    /// Signature 属性（泛型签名）；无则空串
+    pub signature:  &'static str,
 }
 
 /// 单个声明方法的元数据；方法身份键是 (name, descriptor) 二元组（重载语义）。
@@ -29,6 +31,8 @@ pub struct MethodMeta {
     pub annotations: &'static [u8],
     pub param_annotations: &'static [u8],
     pub annotation_default: &'static [u8],
+    /// Signature 属性（泛型签名）；无则空串
+    pub signature:   &'static str,
     pub inherited:   bool,
 }
 

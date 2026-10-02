@@ -98,8 +98,8 @@ pub fn resolve_bridge_target<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, mname: &s
 pub struct BridgeMember<'c> {
     /// wrapper 成员名（槽位声明者名；纯接口桥接按接收者视角）
     pub member_name: String,
-    /// vtable 槽位声明类短名（纯接口桥接为空）
-    pub vt_short: String,
+    /// vtable 槽位声明类 binary（纯接口桥接为空）
+    pub vt_bin: String,
     /// 真实方法签名与调用名（接收者视角）
     pub real_sig: String,
     pub real_rust: String,
@@ -129,12 +129,12 @@ fn climb_slot<'e>(
 ) -> (String, &'e EmittedMethod) {
     let reg = ctx.ty.reg;
     let (mut slot_cur, mut slot_m) = (start.to_string(), found);
-    while !slot_m.virtual_in.is_empty() && slot_m.virtual_in != ctx.short(&slot_cur) {
+    while !slot_m.virtual_in.is_empty() && slot_m.virtual_in != slot_cur {
         let mut up = slot_cur.clone();
         let mut up_seen = BTreeSet::new();
         let mut nxt = None;
         while !up.is_empty() && up != lang::OBJECT && reg.contains(&up) && up_seen.insert(up.clone()) {
-            if ctx.short(&up) == slot_m.virtual_in {
+            if up == slot_m.virtual_in {
                 nxt = Some(up.clone());
                 break;
             }
@@ -198,28 +198,27 @@ pub fn resolve_bridge_member<'c>(
     }
 
     let (real_sig, real_rust, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
-        Some(m) => (m.signature.clone(), m.rust_name.clone(), None),
+        Some(m) => (m.signature(ctx.ty.names), m.rust_name.clone(), None),
         None => {
             let owner_em = ems.get(real_owner_ci.name()).filter(|e| !e.handwritten)?;
             let found = owner_em.find(name, &real_param)?;
             let owner_args = anc_args(ctx, recv_ci).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a);
             let mapping = param_mapping(&class_params(ctx, real_owner_ci), &owner_args.unwrap_or_default());
-            let sig = substitute_type_params(&found.signature, &mapping);
+            let sig = substitute_type_params(&found.signature(ctx.ty.names), &mapping);
             let rust = ctx.ty.receiver_member_name(&found.name, &found.descriptor, recv_ci);
             (sig, rust, Some((name.to_string(), real_param.clone())))
         }
     };
 
     let cov = covariant.then_some(bridge.desc.as_str());
-    let (mut vt_short, mut member_name, mut slot_bin) = (String::new(), String::new(), String::new());
+    let (mut vt_bin, mut member_name) = (String::new(), String::new());
     let mut cur = recv_ci.super_class().to_string();
     let mut seen = BTreeSet::new();
     while !cur.is_empty() && cur != lang::OBJECT && reg.contains(&cur) && seen.insert(cur.clone()) {
         if let Some(found) = ems.get(&cur).filter(|e| !e.handwritten).and_then(|e| find_slot(e, name, param_desc, cov)) {
             let (slot_cur, slot_m) = climb_slot(ctx, ems, &cur, found, name, param_desc, cov);
-            vt_short = ctx.short(&slot_cur);
             member_name = if slot_m.vtable_name.is_empty() { slot_m.rust_name.clone() } else { slot_m.vtable_name.clone() };
-            slot_bin = slot_cur;
+            vt_bin = slot_cur;
             break;
         }
         cur = reg.get(&cur).map(|c| c.super_class().to_string()).unwrap_or_default();
@@ -228,7 +227,7 @@ pub fn resolve_bridge_member<'c>(
         member_name = ctx.ty.interface_member_local_name(recv_ci, name, &bridge.desc);
     }
     let mut vtable_name = String::new();
-    if covariant && vt_short.is_empty() {
+    if covariant && vt_bin.is_empty() {
         return None;
     }
     if member_name == real_rust {
@@ -236,13 +235,13 @@ pub fn resolve_bridge_member<'c>(
             return None;
         }
         vtable_name = member_name;
-        let slot_ci = reg.get(&slot_bin)?;
+        let slot_ci = reg.get(&vt_bin)?;
         member_name = safe_ident(&interface_special_member_name(ctx, slot_ci, name, &bridge.desc));
         if member_name == real_rust {
             return None;
         }
     }
-    Some(BridgeMember { member_name, vt_short, real_sig, real_rust, real_want, bridge, vtable_name })
+    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_want, bridge, vtable_name })
 }
 
 /// 本类的协变返回覆盖已声明 (name, param_desc)，但同参异返回的 ACC_BRIDGE 桥承担的是另一个
@@ -261,7 +260,7 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
             .collect()
     };
     let mut bridges = bridges_of(recv_ci);
-    if !bridges.is_empty() && own.virtual_in == ctx.short(recv_bin) {
+    if !bridges.is_empty() && own.virtual_in == recv_bin {
         return true;
     }
     if bridges.is_empty() {
@@ -283,7 +282,7 @@ pub fn covariant_bridge_pending(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo, recv_bin
         while !cur.is_empty() && seen.insert(cur.clone()) {
             let Some(sci) = reg.get(&cur) else { break };
             if sci.methods().iter().any(|m| m.name == name && m.desc == desc && !m.is_static()) {
-                root = ctx.short(&cur);
+                root = cur.clone();
             }
             cur = sci.super_class().to_string();
         }
@@ -365,12 +364,12 @@ pub fn bridge_override_member(
     } else if bridge.access & acc::PROTECTED != 0 {
         parts.push("access = \"protected\"".into());
     }
-    if !r.vt_short.is_empty() {
-        parts.push(format!("virtual_in = \"{}\"", r.vt_short));
+    if !r.vt_bin.is_empty() {
+        parts.push(format!("virtual_in = \"{}\"", ctx.short(&r.vt_bin)));
         if !r.vtable_name.is_empty() {
             parts.push(format!("vtable_name = \"{}\"", r.vtable_name));
         }
-        let erasure = override_vtable_erasure(ctx, recv_ci, bridge, &r.vt_short);
+        let erasure = override_vtable_erasure(ctx, recv_ci, bridge, &r.vt_bin);
         if !erasure.is_empty() {
             parts.push(format!("vtable_erasure = \"{}\"", erasure.join(";")));
         }

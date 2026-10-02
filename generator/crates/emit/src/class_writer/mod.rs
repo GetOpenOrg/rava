@@ -24,6 +24,7 @@ use ty::ClassInfo;
 
 use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
+use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
 use crate::imports::refs::add_desc_refs;
 use crate::imports::{collect_referenced, plan_cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, CrossPlan, Prefix};
@@ -152,7 +153,7 @@ fn inherited_segments<'c>(
     tps: &[String],
     visible: &[&'c classfile::Method],
     overrides: &[hw_overrides::HwOverride<'c>],
-    out: &mut Vec<String>,
+    out: &mut Vec<MethodBlock>,
 ) -> Result<()> {
     let overloaded = ctx.ty.hierarchy_overloaded_names(ci);
     let cx = methods::Cx { ctx, ci, tps, overloaded: &overloaded };
@@ -168,7 +169,7 @@ fn inherited_segments<'c>(
 /// 单类发射结果：文件文本 + 实际输出的实例方法声明记录
 pub struct ClassText {
     pub text: String,
-    pub methods: Vec<crate::emission::EmittedMethod>,
+    pub methods: Vec<EmittedMethod>,
 }
 
 /// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、跨类导入规划
@@ -251,13 +252,15 @@ pub fn class_text(
 
     // G-10 账本：本类方法由本轮生成
     state.generated_classes.insert(ci.name().to_string());
-    let mut method_blocks = fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site));
+    let mut method_blocks: Vec<MethodBlock> =
+        fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site)).into_iter().map(MethodBlock::plain).collect();
     let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, overrides)?;
     method_blocks.extend(mb.method_blocks);
     let (iface_lambda_blocks, iface_supp_blocks) = (mb.iface_lambda_blocks, mb.iface_supp_blocks);
     inherited_segments(ctx, state, bodies, ci, &tps, visible, overrides, &mut method_blocks)?;
-    // 先按 `pub fn` 形态记录方法声明，再做可见性降级（记录与文本最终形态解耦）
-    let methods = crate::emission::record_methods(&method_blocks);
+    // 方法声明记录由各方法段生成点给出（与文本最终形态解耦）
+    let methods: Vec<EmittedMethod> = method_blocks.iter().filter_map(|b| b.decl.clone()).collect();
+    let mut method_blocks: Vec<String> = method_blocks.into_iter().map(|b| b.text).collect();
     if java_vis {
         visibility::downgrade_non_public_blocks(&mut method_blocks);
     }

@@ -174,7 +174,7 @@ impl MethodBodyEmitter for MethodBodies {
         log.events.push(audit_event(sink));
         log.timings.push((key.clone(), t0.elapsed()));
         match res {
-            Ok(text) => Ok(BodyOutput { text, effects }),
+            Ok(out) => Ok(BodyOutput { text: out.text, sig: out.sig, effects }),
             Err(MethodError::Cfg(msg)) if !self.strict => {
                 let text = format!("CfgError: {msg}");
                 log.events.push(BodyEvent::StubFallback { key, reason: text.clone(), site: req.site });
