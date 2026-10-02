@@ -343,3 +343,14 @@ fn locale_bundle_parent_not_null_recv() {
     assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == get_object), "getObject 不在闭包内");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// 被派发的桥方法所桥接的真实方法算作已派发：桥被省略、槽并入继承的真实实现时，
+/// 该继承槽条目照常转发，不发 `__stub`
+#[test]
+fn bridge_merged_inherited_slot_not_stubbed() {
+    let Some((_, out)) = build("BridgeMergedSlot.java", "bridge-slot", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("java_runtime/src/java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
+    let line = rs.lines().find(|l| l.contains("pub fn tryAdvance(")).expect("继承的 tryAdvance 转发");
+    assert!(!line.contains("__stub"), "{line}");
+    std::fs::remove_dir_all(&out).ok();
+}
