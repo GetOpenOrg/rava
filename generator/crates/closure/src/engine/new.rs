@@ -113,6 +113,7 @@ impl<'a> Engine<'a> {
             cwork: VecDeque::new(),
             in_cwork: HashSet::default(),
             hw_site_ids: HashMap::default(),
+            hw_self_copies: HashSet::default(),
             hw_sites: Vec::new(),
             hw_reads: HashMap::default(),
             ref_fields: HashMap::default(),

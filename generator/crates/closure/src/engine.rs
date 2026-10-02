@@ -322,6 +322,9 @@ pub struct Engine<'a> {
     in_cwork: HashSet<u32>,
     /// 手写方法调用点（调用方, 偏移, 被调方法）→ 序号；数组写入按调用点建模
     hw_site_ids: HashMap<(usize, u32, usize), u32>,
+    /// 同一数组自拷贝的手写调用点（站点, 元素来源形参, 写入目标形参）：两实参是同一个入口形参值，
+    /// 运行期是同一数组，元素集不变，不在两者的各数组之间交叉接元素
+    hw_self_copies: HashSet<(u32, u16, u16)>,
     hw_sites: Vec<(usize, u32, usize)>,
     /// 读内存的手写调用点（`[facts.memory_reads]`）：站点 → (源实参序号（含接收者）, 结果节点, 返回类型)
     hw_reads: HashMap<u32, (u16, Node, u32)>,
