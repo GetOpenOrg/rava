@@ -2,7 +2,7 @@
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
-//! - seeds.toml：`[jca]` 放行、`[module_resources]`、`[boot_init]`、`[data_bundle]` 载体；
+//! - seeds.toml：`[jca]` 放行、`[boot_init]`、`[data_bundle]` 载体；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`。
 //!
 //! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
@@ -55,8 +55,6 @@ pub struct RuntimeManifest {
     pub release: Vec<String>,
     /// K-JCA 放行：包前缀在前、类在后
     pub jca_release: Vec<String>,
-    /// 模块资源路径（jmod `classes/` 下相对路径）
-    pub module_resource_paths: Vec<String>,
     /// 引导初始化类
     pub boot_init_classes: Vec<String>,
     /// 纯数据资源束载体（`类.方法:描述符`）
@@ -177,7 +175,6 @@ impl RuntimeManifest {
             vm_boundary_classes,
             release,
             jca_release,
-            module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
             boot_init_classes: classes(section(&seeds, "boot_init"), "classes", "boot_init")?,
             data_bundle_carriers: str_list(section(&seeds, "data_bundle"), "carriers", "data_bundle")?,
             intrinsic_members: intrinsics(&vm)?,

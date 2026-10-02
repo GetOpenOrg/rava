@@ -136,3 +136,14 @@
   - 已知缺口：继承展开到子类块内的方法体按所在块的类报告（JVM 报声明类），待确认生成器是否有此形态后补。
 - 验收用例：PrintDebugStatement、ReflectionGetSource、TestCustomException（printStackTrace 形态）。
 - 量级：classfile / ir+sim / emit / 运行时 / profile 五步，main 已同意先行实施。
+
+### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
+
+- 现象（C6 抽查，ubuntu）：运行期 `InternalError`，`Caused by: NullPointerException`，dyn miss 0，未命中存根。
+- 根因（读码）：`Character.getName` → `CharacterName` 构造经 `getClass().getResourceAsStream("uniName.dat")` 读名称表；
+  模块资源只嵌入 seeds.toml `[module_resources]` 手登记的路径（仅 currency.data），`uniName.dat` 缺席 → 资源流为 null →
+  `InflaterInputStream(null)` NPE → 构造器包成 InternalError。
+- 终态：资源名本就是读取方法体里的 ldc 常量，由字节码推导，不再手登记（`[module_resources]` 删除）：
+  调用链上方法体的路径形 ldc 字符串按 `Class.resolveName` 规则（`/` 开头为绝对名，否则相对所在类的包；另按原样试
+  `ClassLoader.getResource` 形态）解析，类路径上存在的非类文件即嵌入（`input/src/resources.rs`）。资源随读取代码进出
+  闭包：不调 `Character.getName` 的程序不再嵌入它，currency.data 同理只在 Currency 数据读取在链上时嵌入。

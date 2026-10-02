@@ -167,12 +167,5 @@ classes = [
     "java/lang/reflect/AccessibleObject",
 ]
 
-# ── 模块资源（java.base 等 jmod 内的非类数据文件）─────────────────────────────────────
-# JDK 以 `Class.getResourceAsStream("/<路径>")` 读取的模块内数据文件。生成器从当前所用 JDK 的
-# jmod 提取（数据与所用 JDK 版本同源，生成物不提交）并以 include_bytes! 嵌入；运行时由 VM 边界类
-# ClassLoader 的资源查询承载（jdk_resources::module_resources）。
-[module_resources]
-paths = [
-    # Currency.<clinit>：ISO 4217 国家 → 货币表（L-2，docs/plans/2026-09-28-l2-currency-data.md）
-    "java/util/currency.data",
-]
+# ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导
+# （`generator/crates/input/src/resources.rs`），以 include_bytes! 嵌入，运行时由 ClassLoader 的资源查询承载。
