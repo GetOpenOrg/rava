@@ -261,6 +261,8 @@ serializable_markers = ["java/io/Serializable"]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
 # 分析器把 Class 值按所指类区分（类字面量、下列 mirror_of_receiver 的逐调用点接收者），以此求反射目标：
 #   mirror_of_receiver  返回接收者的类镜像（JLS §4.3.2 getClass）
+#   superclass_of_receiver  返回接收者镜像所指类的直接超类镜像（接口 / 根类为 null，数组为根类；所指未知仍未知），
+#                       逐调用点——getInheritableMethod 的上溯、Enum.getDeclaringClass 由此得到确定值集
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -272,6 +274,9 @@ serializable_markers = ["java/io/Serializable"]
 # （closure.json `reflect.gaps`），不做模糊扩展——缺口由清单补种。
 mirror_of_receiver = [
     "java/lang/Object.getClass:()Ljava/lang/Class;",
+]
+superclass_of_receiver = [
+    "java/lang/Class.getSuperclass:()Ljava/lang/Class;",
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",

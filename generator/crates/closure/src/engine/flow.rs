@@ -243,8 +243,8 @@ impl<'a> Engine<'a> {
             for m in ms {
                 let n = self.graph.node(m);
                 if let Some(ds) = self.mflows.get(&n).cloned() {
-                    let k = self.mirror_set(&s);
-                    for d in ds {
+                    for (d, op) in ds {
+                        let k = self.mirror_op(op, &s);
                         self.add_to(d, &k);
                     }
                 }
@@ -252,14 +252,14 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 镜像流边 src → dst；立即按当前集合推一次
-    pub(super) fn mflow(&mut self, src: Node, dst: Node) {
-        if !self.mflow_seen.insert((src, dst)) {
+    /// 镜像流边 src → dst（变换 op）；立即按当前集合推一次
+    pub(super) fn mflow(&mut self, src: Node, dst: Node, op: MirrorOp) {
+        if !self.mflow_seen.insert((src, dst, op)) {
             return;
         }
-        self.mflows.entry(src).or_default().push(dst);
+        self.mflows.entry(src).or_default().push((dst, op));
         let s = self.set_of(src);
-        let k = self.mirror_set(&s);
+        let k = self.mirror_op(op, &s);
         self.add_to(dst, &k);
     }
 

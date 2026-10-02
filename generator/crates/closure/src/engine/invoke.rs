@@ -414,13 +414,13 @@ impl<'a> Engine<'a> {
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             let model = self.methods[t].ret_model;
-            if model == RetModel::Mirror {
-                // 类镜像：结果 = 本调用点接收者各值的 Class 对象（逐调用点）
+            if let Some(op) = model.mirror_op() {
+                // 类镜像：结果 = 本调用点接收者各值的 Class 对象 / 各镜像所指类的超类镜像（逐调用点）
                 for f in recv_fs.iter().flatten() {
                     match f {
-                        Feed::N(n) => self.mflow(*n, res),
+                        Feed::N(n) => self.mflow(*n, res, op),
                         Feed::S(s) => {
-                            let k = self.mirror_set(s);
+                            let k = self.mirror_op(op, s);
                             self.add_to(res, &k);
                         }
                     }

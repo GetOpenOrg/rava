@@ -370,9 +370,10 @@ pub struct Engine<'a> {
     mirrors: HashMap<u32, u32>,
     /// 类型序号 → 其类镜像序号（`mirror` 的记忆，免逐值格式化镜像名）；未登记为 `u32::MAX`
     mirror_of: Vec<u32>,
-    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像流入 dst（`getClass` 逐调用点）
-    mflows: HashMap<Node, Vec<Node>>,
-    mflow_seen: HashSet<(Node, Node)>,
+    /// 流边上的镜像变换 src → dst：src 中每个值的类镜像（`getClass`）/ 各镜像所指类的超类镜像（`getSuperclass`）
+    /// 流入 dst（逐调用点）
+    mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
+    mflow_seen: HashSet<(Node, Node, MirrorOp)>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理
     enum_recv: HashMap<Node, (Members, usize)>,
     rpending: Vec<(Members, usize, TypeSet)>,
