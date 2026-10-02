@@ -51,14 +51,16 @@ fn attr_re() -> &'static Regex {
     re(r"#\[java_(?:method|native)\(", &R)
 }
 
+/// 方法签名行；lib crate 按 Java 可见性把 package / private 成员发为 `pub(crate)`，同样承载反射臂
 fn fn_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    re(r"^\s*pub fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*(.+?))?\s*[;{]", &R)
+    re(r"^\s*pub(?:\(crate\))?\s+fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*(.+?))?\s*[;{]", &R)
 }
 
+/// 字段声明行（可见性同 [`fn_re`]：lib crate 的私有 `serialVersionUID` 等为 `pub(crate)`）
 fn field_decl_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    re(r"^\s*pub\s+(?:(static)\s+|(const)\s+)?(\w+)\s*:\s*([^=;,]+?)\s*(?:=[^;]*)?[;,]\s*$", &R)
+    re(r"^\s*pub(?:\(crate\))?\s+(?:(static)\s+|(const)\s+)?(\w+)\s*:\s*([^=;,]+?)\s*(?:=[^;]*)?[;,]\s*$", &R)
 }
 
 /// 属性行里 `key = "value"`（`\bkey`）
@@ -416,4 +418,18 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
         Some((appended(&em.text, &text), line))
     });
     DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lib_crate_visibility_lines_match() {
+        assert!(field_decl_re().is_match("        pub(crate) const serialVersionUID: i64 = 1i64;"));
+        assert!(field_decl_re().is_match("    pub(crate) fRuns: i64,"));
+        assert!(field_decl_re().is_match("    pub static X: i32 = 0;"));
+        assert_eq!(&fn_re().captures("        pub(crate) fn writeObject(&self, mut s: ObjectOutputStream) -> Result<()> {").unwrap()[1], "writeObject");
+        assert_eq!(&fn_re().captures("    pub fn run(&self) -> Result<()> {").unwrap()[1], "run");
+    }
 }
