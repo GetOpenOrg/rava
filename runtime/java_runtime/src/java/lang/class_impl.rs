@@ -291,11 +291,14 @@ impl Class {
     /// native `Class.getSuperclass()`：直接父类的 Class 对象。
     ///
     /// 查询经 java_meta 从 `java_class!` 的 super_class 属性生成的直接父类表
-    /// （与 isAssignableFrom 的层次表同源）。Object 自身 / 接口 / 基本类型 /
-    /// 未登记类（闭包外、数组）→ null（JLS 对接口与 Object 返回 null 的语义）。
+    /// （与 isAssignableFrom 的层次表同源）。数组类 → Object（JLS §10.8）；
+    /// Object 自身 / 接口 / 基本类型 / 未登记类（闭包外）→ null。
     #[jvm_native]
     pub fn getSuperclass(&self) -> Result<Class> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
+        if name.starts_with('[') {
+            return Ok(Class::for_class(String::from("java/lang/Object")));
+        }
         match crate::meta::class_direct_super().iter().find(|(n, _)| *n == name) {
             // for_class 的缓存键是斜线形态（与 ldc 类字面量同一调用形态）——身份语义
             //（`zuper == Enum.class`）依赖同一缓存条目
