@@ -118,8 +118,14 @@ impl<'a> Engine<'a> {
                         self.feed(&fs, Node::S(m, off), cid);
                     }
                 }
-                Event::InstanceOf(c) => {
+                Event::InstanceOf(c, v) => {
                     self.touch(c, Level::Type, via("instanceof"));
+                    // 判定成立一侧的收窄值：输入中 ⊂ 目标类型的部分
+                    if let Some(v) = v {
+                        let cid = self.id(c);
+                        let fs = self.feeds(m, v, cid);
+                        self.feed(&fs, Node::S(m, off), cid);
+                    }
                 }
                 Event::Catch(ct) => {
                     let t = ct.clone().unwrap_or_else(|| THROWABLE.to_string());

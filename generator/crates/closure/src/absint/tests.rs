@@ -54,6 +54,29 @@ fn instanceof_live_type_keeps_both() {
     assert!(a.pending_types.is_empty());
 }
 
+/// instanceof 成立一侧：被测局部变量以 instanceof 偏移为来源、类型收窄为目标类型（throw 的值即收窄值）
+#[test]
+fn instanceof_narrows_taken_side() {
+    let a = analyze("p/A", "(Ljava/lang/Object;)V", true, &instanceof_code(), &Stub { live: vec!["p/X"] });
+    let input = a.events.iter().find_map(|(o, e)| match e {
+        Event::InstanceOf(c, Some(v)) if *o == 1 && c == "p/X" => Some(v.clone()),
+        _ => None,
+    });
+    assert!(matches!(input, Some(V::Ref { ref src, .. }) if src.as_ref() == [Src::Param(0)]));
+    let thrown = a.events.iter().find_map(|(o, e)| match e {
+        Event::Throw(v) if *o == 8 => Some(v.clone()),
+        _ => None,
+    });
+    match thrown {
+        Some(V::Ref { ty, nonnull, src, .. }) => {
+            assert_eq!(ty.as_deref(), Some("p/X"));
+            assert!(nonnull);
+            assert_eq!(src.as_ref(), [Src::Site(1)]);
+        }
+        other => panic!("收窄值 {other:?}"),
+    }
+}
+
 /// 桩 Oracle：形参 0 的类镜像值集（None = 未知）
 struct Mirrors(Option<Vec<&'static str>>);
 

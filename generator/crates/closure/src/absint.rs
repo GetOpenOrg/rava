@@ -22,6 +22,7 @@ use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 pub mod cfg;
 pub mod ints;
 mod lit;
+mod narrow;
 mod obj;
 #[cfg(test)]
 mod tests;
@@ -266,7 +267,8 @@ pub enum Event {
     Ldc(Const),
     /// 引用类型转换；非数组目标带输入值（结果以本偏移为来源，引擎按目标类型收窄）
     CheckCast(String, Option<V>),
-    InstanceOf(String),
+    /// 类型测试；非数组目标带输入值（判定成立一侧的收窄值以本偏移为来源，见 `narrow.rs`）
+    InstanceOf(String, Option<V>),
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
     Throw(V),
@@ -962,7 +964,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 // 目标类型（非数组）无已实例化子类型时恒为 false：值只可能是 null 或其它类型的对象
                 let dead = matches!(v, V::Ref { .. }) && !c.starts_with('[') && !self.oracle.type_live(c);
                 s.stack.push(if v == V::Null || dead { V::Int(0) } else { V::Top });
-                self.ev(off, Event::InstanceOf(c.clone()));
+                let input = (matches!(v, V::Ref { .. }) && !c.starts_with('[')).then_some(v);
+                self.ev(off, Event::InstanceOf(c.clone(), input));
             }
             0xc2 | 0xc3 => popn(s, 1)?,
             op::MULTIANEWARRAY => {
@@ -1025,7 +1028,7 @@ fn conservative(code: &Code) -> Analysis {
             (Operand::Class(c), op::NEW) => Some(Event::New(c.clone())),
             (Operand::Class(c), op::ANEWARRAY) => Some(Event::NewArray(format!("[L{c};"), false)),
             (Operand::Class(c), op::CHECKCAST) => Some(Event::CheckCast(c.clone(), None)),
-            (Operand::Class(c), op::INSTANCEOF) => Some(Event::InstanceOf(c.clone())),
+            (Operand::Class(c), op::INSTANCEOF) => Some(Event::InstanceOf(c.clone(), None)),
             (Operand::MultiANewArray(c, _), _) => Some(Event::NewArray(c.clone(), false)),
             (Operand::Ldc(c), _) => Some(Event::Ldc(c.clone())),
             (_, 0x32) => Some(Event::ArrayLoad { array: V::Top, index: V::Top }),
@@ -1147,14 +1150,24 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                         i += 1;
                     }
                     Flow::Cond(t, k) => {
+                        // instanceof 判定成立的一侧收窄被测局部变量
+                        let narrow = narrow::instanceof_narrow(insns, &leader, i, &st);
+                        let edge = |taken: bool| match &narrow {
+                            Some((slot, v, side)) if *side == taken => {
+                                let mut s2 = st.clone();
+                                s2.locals[*slot] = v.clone();
+                                s2
+                            }
+                            _ => st.clone(),
+                        };
                         if k != Some(false) {
-                            merge(&mut entry, &mut work, at(t)?, &st)?;
+                            merge(&mut entry, &mut work, at(t)?, &edge(true))?;
                         }
                         if k != Some(true) {
                             if i + 1 >= n {
                                 return None;
                             }
-                            merge(&mut entry, &mut work, i + 1, &st)?;
+                            merge(&mut entry, &mut work, i + 1, &edge(false))?;
                         }
                         break;
                     }

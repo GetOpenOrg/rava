@@ -69,6 +69,7 @@ impl<'a> Engine<'a> {
             }
         }
         // 结果对象图
+        let obj = self.id(OBJECT);
         let mut ids: Vec<Option<TypeSet>> = vec![None; o.objs.len()];
         for i in 0..o.objs.len() {
             self.mat_obj(m, off, &o.objs, i, &mut ids, &via);
@@ -80,8 +81,8 @@ impl<'a> Engine<'a> {
             } else if x.arr {
                 let id = me.classes.iter().next().expect("数组物化为分配点");
                 for (j, e) in x.elems.iter().enumerate() {
-                    if let Some(s) = self.mat_val(e, &ids, &via) {
-                        self.add_to(Node::E(id, (j % 2) as u8), &s);
+                    if let Some(f) = self.mat_val(e, &ids, &via) {
+                        self.feed(&[f], Node::E(id, (j % 2) as u8), obj);
                     }
                 }
             } else {
@@ -100,8 +101,8 @@ impl<'a> Engine<'a> {
         let mut rv: Option<PV> = None;
         for v in &o.rets {
             rv = Some(PV::join(rv.as_ref(), &pv_of(v)));
-            if let (Some(_), Some(s)) = (ret_ref, self.mat_val(v, &ids, &via)) {
-                self.add_to(Node::S(m, off), &s);
+            if let (Some(_), Some(f)) = (ret_ref, self.mat_val(v, &ids, &via)) {
+                self.feed(&[f], Node::S(m, off), obj);
             }
         }
         // 抛出的组合：调用点之后不可经此组合到达，返回常量格按值未知并入（保守）
@@ -141,8 +142,8 @@ impl<'a> Engine<'a> {
         ids[i] = Some(s);
     }
 
-    fn mat_val(&mut self, v: &MV, ids: &[Option<TypeSet>], via: &Via) -> Option<TypeSet> {
-        match v {
+    fn mat_val(&mut self, v: &MV, ids: &[Option<TypeSet>], via: &Via) -> Option<Feed> {
+        let s = match v {
             MV::Prim(_) => None,
             MV::Str => {
                 self.instantiate(STRING, via.clone());
@@ -160,7 +161,13 @@ impl<'a> Engine<'a> {
                 self.instantiate(t, via.clone());
                 Some(TypeSet::exact(self.id(t)))
             }
-        }
+            MV::Static(f) => {
+                self.init(&f.owner, via.clone());
+                let fi = self.field_node(f.clone());
+                return Some(Feed::N(Node::F(fi)));
+            }
+        };
+        s.map(Feed::S)
     }
 
     /// lambda 对象物化为调用点 m@off 名下的抽象 lambda（捕获来源取各次物化的并）
@@ -169,7 +176,7 @@ impl<'a> Engine<'a> {
         let Some(md) = parse_method(&l.desc) else { return };
         let mut cap: Args = Vec::with_capacity(md.params.len());
         for (p, v) in md.params.iter().zip(caps) {
-            let slot = self.ptype(p).map(|_| self.mat_val(v, ids, via).map(Feed::S).into_iter().collect::<Vec<_>>());
+            let slot = self.ptype(p).map(|_| self.mat_val(v, ids, via).into_iter().collect::<Vec<_>>());
             cap.push(slot);
         }
         let lid = self.id(name);
@@ -194,8 +201,9 @@ impl<'a> Engine<'a> {
             return;
         }
         let fi = self.field_node(f.clone());
-        if let Some(s) = self.mat_val(v, ids, via) {
-            self.add_to(Node::U(fi), &s);
+        if let Some(f) = self.mat_val(v, ids, via) {
+            let obj = self.id(OBJECT);
+            self.feed(&[f], Node::U(fi), obj);
         }
     }
 

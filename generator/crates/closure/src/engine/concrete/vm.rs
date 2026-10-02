@@ -225,6 +225,9 @@ pub(super) struct Vm {
     pub mirror_of: HashMap<u32, Rc<str>>,
     /// VM 持有的单例对象（操作 `vm_singleton`，按类型）
     pub singletons: HashMap<Rc<str>, u32>,
+    /// 映像实例对象 → 首个持有它的不变静态字段（类初始化写入的 final / 只在 `<clinit>` 写入的字段）：
+    /// 物化时以该静态字段的抽象值代表（抽象分析对 `<clinit>` 的建模给出同一对象）
+    pub image_roots: HashMap<u32, MemberRef>,
     ihash: HashMap<u32, i32>,
     pub steps: u64,
     /// 调用栈（调用方类查询）
@@ -259,6 +262,7 @@ impl Vm {
             mirrors: HashMap::default(),
             mirror_of: HashMap::default(),
             singletons: HashMap::default(),
+            image_roots: HashMap::default(),
             ihash: HashMap::default(),
             steps: 0,
             frames: Vec::new(),
@@ -435,6 +439,11 @@ impl Vm {
             }
             let old = self.statics.get(&fr.key).copied();
             self.undo.push((u32::MAX, fr.key, old));
+        }
+        if let (true, true, CV::R(o)) = (self.image > 0, fr.fin, v) {
+            if matches!(self.heap[o as usize].body, Body::Inst(_)) && self.heap[o as usize].epoch == 0 {
+                self.image_roots.entry(o).or_insert_with(|| fr.mref());
+            }
         }
         self.statics.insert(fr.key, v);
         Ok(())

@@ -40,7 +40,7 @@ fn event_values(e: &Event) -> Vec<&V> {
     match e {
         Event::Invoke { args, .. } | Event::Indy { args, .. } => args.iter().collect(),
         Event::Field { recv, value, .. } => recv.iter().chain(value.iter()).collect(),
-        Event::CheckCast(_, v) => v.iter().collect(),
+        Event::CheckCast(_, v) | Event::InstanceOf(_, v) => v.iter().collect(),
         Event::ArrayLoad { array, index } => vec![array, index],
         Event::ArrayStore { array, index, value } => vec![array, index, value],
         Event::Throw(v) | Event::Return(v) => vec![v],
