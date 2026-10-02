@@ -154,6 +154,30 @@ fn _static_ref_set(offset: i64, v: Object) -> Option<Result<()>> {
         .map(|_| ()))
 }
 
+/// 静态字段读-改-写的进程级互斥：静态存储经声明类字段闭包按名读写（无引用槽写锁 /
+/// 原子单元协议），读-比-写在本锁内完成，经偏移的静态 CAS / 交换彼此原子。
+static STATIC_RMW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 静态字段 id → 原子读-改-写（`f` 返回 Some 则写入新值），返回旧值（基本类型字段为装箱值）。
+/// 非静态 id → None。取锁前先读一次：首次访问触发的声明类初始化不在锁内运行
+/// （初始化体内的静态 CAS 不自锁）。引用族（`_ref_rmw`）与基本类型统一载体（`unsafe__ext::prim`
+/// 的静态臂，含子字宽）共用。
+pub(super) fn _static_rmw(offset: i64, f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
+    let (decl, name) = _static_field_of(offset)?;
+    let field = |v: Option<Object>| crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), v)
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态字段读-改-写：{}.{} 无字段闭包", decl, name));
+    if let Err(e) = field(None) {
+        return Some(Err(e));
+    }
+    let _guard = STATIC_RMW_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    Some(field(None).and_then(|cur| {
+        match f(Clone::clone(&cur)) {
+            Some(nv) => field(Some(nv)).map(|_| cur),
+            None => Ok(cur),
+        }
+    }))
+}
+
 /// 偏移 id → 实例引用字段的原子读-改-写（ObjectVTable::__unsafe_ref_update）：返回旧值；
 /// 未登记 / 无臂 → None。
 fn _instance_ref_update(o: &Object, offset: i64,
@@ -162,12 +186,15 @@ fn _instance_ref_update(o: &Object, offset: i64,
     o.0.__unsafe_ref_update(&field, f)
 }
 
-/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id，均在对应存储的写锁内
-/// 完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
+/// 引用 CAS 族的统一实现：引用元素数组按下标、实例字段按偏移 id、静态字段按静态 id，
+/// 均在对应存储的写锁内完成「读出 → 比较（引用相等）→ 条件写入」，返回旧值。
 fn _ref_rmw(o: &Object, offset: i64, what: &str,
             f: &mut dyn FnMut(Object) -> Option<Object>) -> Result<Object> {
     if let Some(arr) = _erased_ref_array(o) {
         return arr.__update(_ref_array_index(offset), f);
+    }
+    if let Some(r) = _static_rmw(offset, f) {
+        return r;
     }
     match _instance_ref_update(o, offset, f) {
         Some(old) => Ok(old),

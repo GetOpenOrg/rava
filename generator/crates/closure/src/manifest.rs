@@ -119,6 +119,7 @@ pub struct Manifest {
     caller_class_returns: HashSet<String>,
     /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
     caller_sensitive: HashSet<String>,
+    component_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
@@ -353,6 +354,7 @@ impl Manifest {
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
             caller_class_returns: reflect("caller_class").into_iter().collect(),
             caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
+            component_returns: reflect("component_of_receiver").into_iter().collect(),
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
@@ -528,6 +530,11 @@ impl Manifest {
     pub fn is_caller_sensitive_annotation(&self, type_desc: &str) -> bool {
         let bin = type_desc.strip_prefix('L').and_then(|s| s.strip_suffix(';')).unwrap_or(type_desc);
         self.caller_sensitive.contains(bin)
+    }
+
+    /// 返回接收者镜像所指数组类的元素类型镜像（`getComponentType` 语义）
+    pub fn returns_component_class(&self, member: &str) -> bool {
+        self.component_returns.contains(member)
     }
 
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象

@@ -46,12 +46,13 @@ impl<'a> Engine<'a> {
         match op {
             MirrorOp::Of => self.mirror_set(s),
             MirrorOp::Super => self.super_set(s),
+            MirrorOp::Component => self.component_set(s),
         }
     }
 
     /// Class 值集中各类镜像所指类的直接超类镜像（`getSuperclass`）：接口与根类无超类（null，不入结果），
-    /// 数组与非字节码类镜像的超类是根类；所指未知的 Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open。
-    /// 镜像只由类字面量与 `getClass` 产生，不指向基本类型
+    /// 数组与非字节码类镜像的超类是根类，基本类型类镜像的超类为 null；所指未知的 Class（非镜像值、类文件缺失）给所指
+    /// 未知的 Class，open 仍为 open
     pub(super) fn super_set(&mut self, s: &TypeSet) -> TypeSet {
         let class = self.id(CLASS);
         let mut out = TypeSet::default();
@@ -60,6 +61,10 @@ impl<'a> Engine<'a> {
             if Some(x) == self.synth_mirror {
                 let k = self.mirror(OBJECT);
                 out.classes.insert(k);
+                continue;
+            }
+            // 基本类型类的超类为 null（JLS §15.8.2 / Class.getSuperclass 规范）
+            if Some(x) == self.prim_mirror {
                 continue;
             }
             let Some(&c) = self.mirrors.get(&x) else {
@@ -83,6 +88,38 @@ impl<'a> Engine<'a> {
                     out.classes.insert(class);
                 }
             }
+        }
+        if !s.open.is_empty() {
+            out.open.insert(class);
+        }
+        out
+    }
+
+    /// Class 值集中各数组类镜像的元素类型镜像（`getComponentType`，JVMS §4.3.2 描述符去一维）：引用 / 数组元素给其
+    /// 类镜像，基本类型元素给基本类型类镜像；非数组类、非字节码类与基本类型类镜像为 null（不入结果）；所指未知的
+    /// Class 给所指未知的 Class，open 仍为 open
+    fn component_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror {
+                continue;
+            }
+            let Some(&c) = self.mirrors.get(&x) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let name = self.names[c as usize].clone();
+            let Some(rest) = name.strip_prefix('[') else { continue };
+            let k = if rest.starts_with('[') {
+                self.mirror(rest)
+            } else if let Some(e) = rest.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
+                self.mirror(e)
+            } else {
+                self.primitive_mirror()
+            };
+            out.classes.insert(k);
         }
         if !s.open.is_empty() {
             out.open.insert(class);

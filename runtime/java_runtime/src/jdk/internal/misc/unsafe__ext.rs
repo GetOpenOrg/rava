@@ -7,8 +7,8 @@
 //!   `native_memory::update` 的字节视图——数组在存储写锁内、直接内存经同宽原子指令；子字元素
 //!   与按字对齐的 int 访问（JDK compareAndExchangeByte / Short 的 `offset & ~3` 掩码路径）落在
 //!   同一字节序列上，相邻元素互不干扰；
-//! - 静态字段（staticFieldBase + staticFieldOffset 的不透明 id）：声明类字段闭包按装箱值
-//!   读-改-写（位形换算见 [`box_bits`]）；
+//! - 静态字段（staticFieldBase + staticFieldOffset 的不透明 id）：`unsafe__impl::_static_rmw`（声明类字段闭包
+//!   按装箱值、在静态读-改-写锁内原子完成；位形换算见 [`box_bits`]），与引用族静态臂同一载体；
 //! - 实例字段（objectFieldOffset 的不透明 id）：ObjectVTable 的字 / 双字视图
 //!   （`__unsafe_word` / `__unsafe_dword`，字段单元上的原子读-改-写）。
 //!
@@ -89,24 +89,18 @@ pub(super) fn prim(o: &Object, offset: i64, width: usize, what: &str,
         return crate::native_memory::update(o, offset, width, op);
     }
     let m = mask(width);
-    if let Some((decl, name)) = crate::reflect_dispatch::static_field_of(offset) {
+    {
         let mut op = masked(width, op);
         let mut boxed = |cur: Object| -> Option<Object> {
             let bits = box_bits(&cur)?;
             op(bits).map(|n| bits_boxed_like(&cur, n))
         };
-        // 静态存储的原子读-改-写由 b1 的 `_static_rmw`（c1d-b1 94f1edf3）承载，合入后本臂改经它；
-        // 此前经声明类字段闭包按装箱值读、写。
-        let field = |v: Option<Object>| crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), v)
-            .unwrap_or_else(|| panic!("stub: jdk/internal/misc/Unsafe.{} (静态字段 {}.{} 无字段闭包)", what, decl, name));
-        let old = field(None)?;
-        if let Some(nv) = boxed(Clone::clone(&old)) {
-            field(Some(nv))?;
+        if let Some(r) = super::unsafe__impl::_static_rmw(offset, &mut boxed) {
+            let bits = box_bits(&r?).ok_or_else(|| {
+                JvmError::illegal_argument(&format!("Unsafe.{}: static field value type mismatch", what))
+            })?;
+            return Ok(bits & m);
         }
-        let bits = box_bits(&old).ok_or_else(|| {
-            JvmError::illegal_argument(&format!("Unsafe.{}: static field value type mismatch", what))
-        })?;
-        return Ok(bits & m);
     }
     if let Some(field) = super::unsafe__impl::offset_field_name(offset) {
         let mut op = masked(width, op);
