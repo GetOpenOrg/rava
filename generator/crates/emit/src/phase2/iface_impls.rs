@@ -38,8 +38,9 @@ fn erase(ty: &str, type_params: &BTreeSet<String>) -> String {
 }
 
 /// 接口方法声明 → 擦除签名的 trait 方法声明（`fn m(&self, a: Object) -> Result<Object>`）
-pub fn erased_declaration(m: &EmittedMethod, type_params: &BTreeSet<String>) -> Option<String> {
-    let c = sig_re().captures(&m.signature)?;
+pub fn erased_declaration(names: &ty::ShortNames, m: &EmittedMethod, type_params: &BTreeSet<String>) -> Option<String> {
+    let sig = m.signature(names);
+    let c = sig_re().captures(&sig)?;
     let params = split_top_level_trimmed(&c[2]);
     if params.first().map(String::as_str) != Some("&self") {
         return None;
@@ -53,10 +54,11 @@ pub fn erased_declaration(m: &EmittedMethod, type_params: &BTreeSet<String>) -> 
 }
 
 /// 成员的返回类型与接口擦除声明的返回类型是同一泛型类的不同实例化
-fn result_reinstantiated(erased: &str, member: Option<&EmittedMethod>) -> bool {
+fn result_reinstantiated(names: &ty::ShortNames, erased: &str, member: Option<&EmittedMethod>) -> bool {
     let Some(member) = member else { return false };
     let wanted = format!("pub {erased}");
-    let (Some(e), Some(m)) = (sig_re().captures(&wanted), sig_re().captures(&member.signature)) else { return false };
+    let got_sig = member.signature(names);
+    let (Some(e), Some(m)) = (sig_re().captures(&wanted), sig_re().captures(&got_sig)) else { return false };
     let (want, got) = (e[3].trim(), m[3].trim());
     want.contains('<') && got.contains('<') && want != got && rust_type_head(want) == rust_type_head(got)
 }
@@ -152,7 +154,7 @@ fn iface_decls(
     let provided = provided_methods(ctx, recv_bin);
     let mut decls = Vec::new();
     for im in iface.slotted() {
-        let Some(erased) = erased_declaration(im, type_params) else { continue };
+        let Some(erased) = erased_declaration(ctx.ty.names, im, type_params) else { continue };
         let mut pdesc = param_part(&im.descriptor).to_string();
         let own = recv.find(&im.name, &pdesc);
         let mut located = None;
@@ -191,7 +193,7 @@ fn iface_decls(
         if target != im.rust_name {
             attr_parts.push(format!("target = \"{target}\""));
         }
-        if result_reinstantiated(&erased, own.or(located)) {
+        if result_reinstantiated(ctx.ty.names, &erased, own.or(located)) {
             attr_parts.push("result = \"checkcast\"".into());
         }
         let attr = if attr_parts.is_empty() { String::new() } else { format!("#[java_method({})]\n", attr_parts.join(", ")) };
@@ -398,7 +400,7 @@ fn iface_recv_member(
             return None;
         }
         let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
-        let signature = substitute_type_params(&method.signature, &param_mapping(&owner_params, owner_args));
+        let signature = substitute_type_params(&method.signature(ctx.ty.names), &param_mapping(&owner_params, owner_args));
         let owner_ty = rust_type(&ctx.short(owner_bin), owner_args);
         let mut attr = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
         if !method.access.is_empty() {

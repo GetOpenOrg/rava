@@ -30,6 +30,7 @@ impl<'a> Engine<'a> {
                 never: Default::default(),
                 objs: Default::default(),
                 psums: Default::default(),
+                preadonly: Default::default(),
                 punstable: Default::default(),
                 pdeps: Default::default(),
                 dep_log: Default::default(),

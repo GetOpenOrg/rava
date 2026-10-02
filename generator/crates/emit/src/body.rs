@@ -48,6 +48,8 @@ pub struct BodyEffects {
 #[derive(Debug, Clone, Default)]
 pub struct BodyOutput {
     pub text: String,
+    /// 实例方法的结构化签名（构造器 / 静态方法为 None）
+    pub sig: Option<ty::FnSig>,
     pub effects: BodyEffects,
 }
 

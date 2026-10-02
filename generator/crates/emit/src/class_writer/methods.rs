@@ -13,7 +13,7 @@ use input::plan::CLINIT_FN;
 use input::{MethodPlan, Role, Verdict};
 use ty::ident::safe_ident;
 use ty::type_map::mangle_name;
-use ty::ClassInfo;
+use ty::{ClassInfo, FnSig};
 
 use super::attrs::{method_attr, MethodAttrExtra};
 use super::hw_overrides::HwOverride;
@@ -21,6 +21,7 @@ use super::slot::override_vtable_erasure;
 use super::stub::{native_stub, Stub};
 use crate::body::{BodyError, BodyRequest, MethodBodyEmitter};
 use crate::ctx::{EmitCtx, HwAudit, ProjectState};
+use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::{EmitError, Result};
 use crate::lang;
 use crate::text::split_top_level;
@@ -34,7 +35,7 @@ const SUPP_NOTE: &str = "// 伴生契约声明（E0407）：手写 _impl 文件�
 #[derive(Debug, Default)]
 pub struct MethodBlocks {
     /// 宏块 impl 内的方法块（接续 static 字段块）
-    pub method_blocks: Vec<String>,
+    pub method_blocks: Vec<MethodBlock>,
     /// 接口载体擦除固有 impl 块（G-10 lambda 体 / 私有实例方法）
     pub iface_lambda_blocks: Vec<String>,
     /// 接口伴生契约补发声明（同时在 `method_blocks` 中；独立成表供导入兜底扫描）
@@ -68,6 +69,12 @@ pub(super) struct BodySpec<'s> {
     pub site: &'static str,
 }
 
+/// 翻译出的函数：完整文本 + 实例方法的结构化签名
+pub(super) struct FnText {
+    pub text: String,
+    pub sig: Option<FnSig>,
+}
+
 /// 单类方法段的共享参数
 pub(super) struct Cx<'a, 'c> {
     pub ctx: &'a EmitCtx<'c>,
@@ -79,7 +86,22 @@ pub(super) struct Cx<'a, 'c> {
 impl Cx<'_, '_> {
     pub fn attr(&self, e: &Emitted<'_>, extra: &MethodAttrExtra) -> String {
         let ex = self.ctx.extras(e.owner.name());
-        method_attr(&e.method, ex.methods.get(e.index), extra)
+        method_attr(&e.method, ex.methods.get(e.index), extra, self.ctx.ty.names)
+    }
+
+    /// 方法段：`{attr}\n{text}`，附定义侧声明记录
+    pub fn block(&self, e: &Emitted<'_>, extra: &MethodAttrExtra, text: String, sig: Option<&FnSig>, has_body: bool) -> MethodBlock {
+        let decl = EmittedMethod::declared(&e.method, extra, sig, has_body);
+        MethodBlock { text: format!("{}\n{text}", self.attr(e, extra)), decl }
+    }
+
+    /// 翻译出的方法体，失败退化为存根
+    pub fn body_block(&self, e: &Emitted<'_>, extra: &MethodAttrExtra, body: Option<FnText>, rust_name: &str, ctparams: &[String]) -> MethodBlock {
+        let f = body.unwrap_or_else(|| {
+            let st = self.stub(e, rust_name, ctparams);
+            FnText { text: st.text, sig: st.decl }
+        });
+        self.block(e, extra, f.text, f.sig.as_ref(), true)
     }
 
     pub fn stub(&self, e: &Emitted<'_>, rust_name: &str, ctparams: &[String]) -> Stub {
@@ -98,7 +120,7 @@ impl Cx<'_, '_> {
         rust_name: &str,
         in_vtable_body: bool,
         site: &'static str,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<FnText>> {
         let spec = BodySpec { ctparams, rust_name: Some(rust_name), in_vtable_body, view: None, site };
         self.body_with(state, bodies, e, &spec)
     }
@@ -110,7 +132,7 @@ impl Cx<'_, '_> {
         bodies: &dyn MethodBodyEmitter,
         e: &Emitted<'_>,
         spec: &BodySpec<'_>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<FnText>> {
         let req = BodyRequest {
             class: self.ci,
             method: &e.method,
@@ -125,7 +147,7 @@ impl Cx<'_, '_> {
         match bodies.emit_body(self.ctx, &req, &mut state.body_log) {
             Ok(out) => {
                 state.absorb(&out.effects);
-                Ok(Some(out.text))
+                Ok(Some(FnText { text: out.text, sig: out.sig }))
             }
             Err(BodyError::Fallback(_)) => Ok(None),
             Err(BodyError::Fatal(s)) => Err(EmitError::Body(s)),
@@ -217,7 +239,7 @@ pub fn emit_method_blocks(
                     Verdict::Bytecode => cx.body(state, bodies, &e, &erased, &rust, false, site)?,
                     _ => None,
                 };
-                out.iface_lambda_blocks.push(body.unwrap_or_else(|| cx.stub(&e, &rust, &erased).text));
+                out.iface_lambda_blocks.push(body.map_or_else(|| cx.stub(&e, &rust, &erased).text, |f| f.text));
                 cx.define(state, &e.method, &safe_ident(&rust));
             }
             Role::Member => out.method_blocks.push(member_block(&cx, state, bodies, &e, p)?),
@@ -228,7 +250,7 @@ pub fn emit_method_blocks(
             let Some((params, ret)) = hw.iface_method_sigs.get(name) else { continue };
             let recv = if params.is_empty() { "&self".to_string() } else { format!("&self, {params}") };
             let supp = format!("{SUPP_NOTE}\npub fn {name}({recv}) -> {ret};");
-            out.method_blocks.push(supp.clone());
+            out.method_blocks.push(MethodBlock::plain(supp.clone()));
             out.iface_supp_blocks.push(supp);
         }
     }
@@ -242,24 +264,24 @@ fn clinit_block(
     bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
-) -> Result<String> {
+) -> Result<MethodBlock> {
     let attr = cx.attr(e, &MethodAttrExtra::default());
     let body = match p.verdict {
         Verdict::Bytecode => cx.body(state, bodies, e, cx.tps, CLINIT_FN, false, "clinit")?,
         _ => None,
     };
-    let text = body.unwrap_or_else(|| {
+    let text = body.map(|f| f.text).unwrap_or_else(|| {
         let stub = crate::precheck::stub_call("stub", &format!("{}.<clinit>:()V", cx.ci.name()));
         format!("pub fn {CLINIT_FN}() -> Result<()> {{\n    {stub}\n}}")
     });
-    Ok(format!("{attr}\n{text}"))
+    Ok(MethodBlock::plain(format!("{attr}\n{text}")))
 }
 
 /// 类方法的槽位属性：槽位归属、槽位成员名解耦、槽位擦除名单
 pub(super) fn slot_extra(cx: &Cx<'_, '_>, m: &Method, rust_name: &str) -> MethodAttrExtra {
     let virtual_in = cx.ctx.resolve_virtual_slot(m, cx.ci);
     let mut extra = MethodAttrExtra { virtual_in, ..Default::default() };
-    if !extra.virtual_in.is_empty() && extra.virtual_in != cx.ctx.short(cx.ci.name()) {
+    if !extra.virtual_in.is_empty() && extra.virtual_in != cx.ci.name() {
         let slot_name = cx.ctx.slot_member_rust_name(m, cx.ci);
         if !slot_name.is_empty() && slot_name != rust_name {
             extra.vtable_name = slot_name;
@@ -302,7 +324,7 @@ fn member_block(
     bodies: &dyn MethodBodyEmitter,
     e: &Emitted<'_>,
     p: &MethodPlan,
-) -> Result<String> {
+) -> Result<MethodBlock> {
     let m: &Method = &e.method;
     let rust = p.rust_name.as_str();
     let fn_check = safe_ident(rust);
@@ -312,30 +334,32 @@ fn member_block(
     match p.verdict {
         Verdict::Handwritten => {
             cx.audit_override(state, m);
-            let sig = cx.stub(e, rust, cx.tps).sig;
-            let attr = cx.attr(e, &plain);
+            let st = cx.stub(e, rust, cx.tps);
             if iface_inst {
-                return Ok(format!("{attr}\n{sig};"));
+                return Ok(cx.block(e, &plain, format!("{};", st.sig), st.decl.as_ref(), false));
             }
             // 声明跳过（体在 _impl.rs）；元数据行与签名以注释承载（反射表 / 分派闭包协议）
+            let attr = cx.attr(e, &plain);
             let mut meta: Vec<String> = attr
                 .lines()
                 .filter(|l| l.contains("java_method(") || l.contains("java_native("))
                 .map(|l| format!("// [meta] {l}"))
                 .collect();
             if m.name != "<init>" {
-                meta.push(format!("// [meta] {};", sig.trim_end_matches(';')));
+                meta.push(format!("// [meta] {};", st.sig.trim_end_matches(';')));
             }
-            return Ok(meta.join("\n"));
+            // 声明记录（meta）：子类接收者调用该继承方法时作为声明者（上转直调）
+            let decl = EmittedMethod::declared(&e.method, &plain, st.decl.as_ref(), false).map(|d| EmittedMethod { meta: true, ..d });
+            return Ok(MethodBlock { text: meta.join("\n"), decl });
         }
         Verdict::IfaceDefaultBody | Verdict::IfaceDecl => {
-            let attr = cx.attr(e, &plain);
             if p.verdict == Verdict::IfaceDefaultBody {
-                if let Some(text) = cx.body(state, bodies, e, cx.tps, rust, false, "iface-default")? {
-                    return Ok(format!("{attr}\n{text}"));
+                if let Some(f) = cx.body(state, bodies, e, cx.tps, rust, false, "iface-default")? {
+                    return Ok(cx.block(e, &plain, f.text, f.sig.as_ref(), true));
                 }
             }
-            return Ok(format!("{attr}\n{};", cx.stub(e, rust, cx.tps).sig));
+            let st = cx.stub(e, rust, cx.tps);
+            return Ok(cx.block(e, &plain, format!("{};", st.sig), st.decl.as_ref(), false));
         }
         _ => {}
     }
@@ -344,22 +368,25 @@ fn member_block(
         Verdict::HandwrittenBody => {
             cx.audit_override(state, m);
             extra.handwritten_body = true;
-            Ok(format!("{}\n{};", cx.attr(e, &extra), cx.stub(e, rust, cx.tps).sig))
+            let st = cx.stub(e, rust, cx.tps);
+            Ok(cx.block(e, &extra, format!("{};", st.sig), st.decl.as_ref(), false))
         }
         Verdict::Core => {
             let hw = cx.ctx.input.handwritten.get(cx.ci.name());
             let Some((core, core_ret)) = hw.and_then(|h| h.method_cores.get(&fn_check)) else {
                 return Err(EmitError::Input(format!("伴生核心缺失：{}.{fn_check}", cx.ci.name())));
             };
-            let sig = cx.stub(e, rust, cx.tps).sig;
-            Ok(format!("{}\n{}", cx.attr(e, &extra), core_adapter(&sig, core, core_ret)))
+            let st = cx.stub(e, rust, cx.tps);
+            Ok(cx.block(e, &extra, core_adapter(&st.sig, core, core_ret), st.decl.as_ref(), true))
         }
         Verdict::Bytecode => {
             let body = cx.body(state, bodies, e, cx.tps, rust, !extra.virtual_in.is_empty(), "main")?;
-            let text = body.unwrap_or_else(|| cx.stub(e, rust, cx.tps).text);
-            Ok(format!("{}\n{text}", cx.attr(e, &extra)))
+            Ok(cx.body_block(e, &extra, body, rust, cx.tps))
         }
-        _ => Ok(format!("{}\n{}", cx.attr(e, &extra), cx.stub(e, rust, cx.tps).text)),
+        _ => {
+            let st = cx.stub(e, rust, cx.tps);
+            Ok(cx.block(e, &extra, st.text, st.decl.as_ref(), true))
+        }
     }
 }
 

@@ -150,6 +150,19 @@ pub struct SeedFacts {
     pub jca: Vec<JcaService>,
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     pub reflect_all: BTreeSet<String>,
+    /// 模块服务表：(服务, provider) 二元组，只含命名模块里的 provider（类路径 provider 经
+    /// META-INF/services 发现，不入引导服务目录），事实序（服务名序 → provider 声明序）
+    pub module_services: Vec<(String, String)>,
+}
+
+/// VM 初始系统属性表（分析器折叠属性读点所用的清单表 `[facts.system_properties]`）：
+/// 运行时 System.registerNatives 只写入这两类键，与折叠结论同源
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SysPropFacts {
+    /// 启动时的常量属性（键 → 值）
+    pub values: BTreeMap<String, String>,
+    /// 运行期取宿主值的键
+    pub dynamic: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -176,6 +189,7 @@ pub struct ClosureFacts {
     pub instantiated: Vec<String>,
     /// 手写体继承成员需求：`owner` 为接收者静态类型，方法声明在其超类型上（L1 编译期事实）
     pub hw_inherited: Vec<MemberRef>,
+    pub system_properties: SysPropFacts,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -277,6 +291,12 @@ impl ClosureFacts {
                     .collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
+                module_services: s
+                    .services
+                    .selected
+                    .iter()
+                    .flat_map(|(svc, ps)| ps.iter().filter(|p| p.module.is_some()).map(move |p| (svc.clone(), p.class.clone())))
+                    .collect(),
             },
             class_init: ClassInitFacts {
                 targets: e.class_init.targets().into_iter().map(String::from).collect(),
@@ -285,6 +305,10 @@ impl ClosureFacts {
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
             hw_inherited: e.hw_inherited_requests().into_iter().collect(),
+            system_properties: SysPropFacts {
+                values: e.sysprops().values().clone(),
+                dynamic: e.sysprops().dynamic().clone(),
+            },
         }
     }
 
@@ -332,6 +356,12 @@ impl ClosureFacts {
         out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         out.instantiated = strings(v.get("instantiated"))?;
         out.hw_inherited = strings(v.get("hw_inherited"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
+        let sp = v.get("system_properties").ok_or_else(|| missing("system_properties"))?;
+        for (k, val) in sp.get("values").and_then(Value::as_object).into_iter().flatten() {
+            let val = val.as_str().ok_or_else(|| InputError::Format(format!("system_properties.values.{k} 应为字符串")))?;
+            out.system_properties.values.insert(k.clone(), val.to_string());
+        }
+        out.system_properties.dynamic = strings(sp.get("dynamic"))?.into_iter().collect();
         Ok(out)
     }
 }
@@ -460,5 +490,13 @@ fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
         }
     }
     out.reflect_all = strings(s.get("reflect_all"))?.into_iter().collect();
+    for svc in s.get("services").and_then(Value::as_array).into_iter().flatten() {
+        let service = str_of(svc, "service")?;
+        for p in arr(svc, "providers")? {
+            if p.get("module").is_some_and(|m| !m.is_null()) {
+                out.module_services.push((service.to_string(), str_of(p, "class")?.to_string()));
+            }
+        }
+    }
     Ok(out)
 }

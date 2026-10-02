@@ -177,6 +177,7 @@ impl Class {
         m.__set_annotations(__anno_bytes(meta.annotations));
         m.__set_parameterAnnotations(__anno_bytes(meta.param_annotations));
         m.__set_annotationDefault(__anno_bytes(meta.annotation_default));
+        m.__set_signature(__signature(meta.signature));
         m
     }
 
@@ -316,6 +317,7 @@ impl Class {
                 f.__set_slot(slot as i32);
                 f.__set_type_(class_for_descriptor(meta.descriptor));
                 f.__set_annotations(__anno_bytes(meta.annotations));
+                f.__set_signature(__signature(meta.signature));
                 out.push(f);
             }
         }
@@ -347,6 +349,7 @@ impl Class {
                 c.__set_exceptionTypes(JArray::from(excs));
                 c.__set_annotations(__anno_bytes(meta.annotations));
                 c.__set_parameterAnnotations(__anno_bytes(meta.param_annotations));
+                c.__set_signature(__signature(meta.signature));
                 out.push(c);
             }
         }
@@ -529,7 +532,7 @@ impl Class {
             rc.__set_name(String::from(*n));
             rc.__set_type_(class_for_descriptor(d));
             rc.__set_accessor(self.__table_method_noargs(n)?);
-            rc.__set_signature(if g.is_empty() { String::default() } else { String::from(*g) });
+            rc.__set_signature(__signature(*g));
             out.push(rc);
         }
         Ok(JArray::from(out))
@@ -665,6 +668,12 @@ fn __anno_bytes(raw: &'static [u8]) -> JArray<i8> {
         return JArray::default();
     }
     JArray::from(raw.iter().map(|b| *b as i8).collect::<Vec<i8>>())
+}
+
+/// 元数据表的 Signature 属性 → 反射对象的 `signature` 字段（无 Signature 属性时为 null，
+/// 与 HotSpot `Reflection::new_method` / `new_field` / `new_constructor` 同义）。
+fn __signature(sig: &str) -> String {
+    if sig.is_empty() { String::default() } else { String::from(sig) }
 }
 
 

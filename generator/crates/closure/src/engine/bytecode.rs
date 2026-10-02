@@ -300,7 +300,7 @@ impl<'a> Engine<'a> {
         let Some(tid) = self.ptype(&ft) else {
             // 手写字段访问器仍需沿其回调入链
             if first {
-                self.field_handwritten(m, &decl, &f.name, &via, None);
+                self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
             }
             return;
         };
@@ -353,7 +353,7 @@ impl<'a> Engine<'a> {
                 self.flow(Node::F(fi), res, tid);
             }
             if first {
-                self.field_handwritten(m, &decl, &f.name, &via, Some((fi, tid)));
+                self.field_handwritten(&decl, &f.name, &f.desc, &via, Some((fi, tid)));
             }
         } else {
             for n in nodes {
@@ -363,14 +363,14 @@ impl<'a> Engine<'a> {
                 self.flow(Node::F(fi), res, tid);
             }
             if first {
-                self.field_handwritten(m, &decl, &f.name, &via, Some((fi, tid)));
+                self.field_handwritten(&decl, &f.name, &f.desc, &via, Some((fi, tid)));
             }
         }
     }
 
     /// 字段读：声明类是边界类（struct 与字段整体手写）或字段有手写访问器 → 按 open 处理（公开 API 类的
     /// 手写写入经 `__set_` 在 [`Self::hw_fields`] 精确接入）；手写访问器声明的回调入链
-    pub(super) fn field_handwritten(&mut self, m: usize, decl: &str, name: &str, via: &Via, node: Option<(usize, u32)>) {
+    pub(super) fn field_handwritten(&mut self, decl: &str, name: &str, fdesc: &str, via: &Via, node: Option<(usize, u32)>) {
         let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
         let mh = self.hw.member(decl, name);
         if let Some((fi, tid)) = node {
@@ -382,7 +382,8 @@ impl<'a> Engine<'a> {
         if mh.fns.is_empty() {
             return;
         }
-        self.apply_hw(m, decl, &mh, via);
+        // 访问器体按独立伪方法节点建模（回调实参取访问器自己的值池，不取读取方的）
+        self.hwfield_method(decl, name, fdesc, via.clone());
     }
 }
 

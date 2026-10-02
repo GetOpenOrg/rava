@@ -10,7 +10,7 @@ use input::NormCode;
 use instr::{Audit, InstrEnv, InstrLog};
 use sim::{SimConfig, SlotDecl, StackSim};
 use ty::ident::safe_ident;
-use ty::{ClassInfo, RsType};
+use ty::{ClassInfo, FnSig, RsType};
 
 use crate::blocks::{cfg_view, Blocks};
 use crate::emit::{emit_dispatch, emit_tree};
@@ -18,7 +18,7 @@ use crate::entry::{Entry, Item};
 use crate::error::{cfg_err, MethodError, MethodResult};
 use crate::fold_array::fold_array_literals;
 use crate::node::{Graph, Node};
-use crate::sig::{ctor_functions, is_main, local_names, params_with_slot, rust_fn_name, signature_line};
+use crate::sig::{ctor_functions, is_main, local_names, param_slot_names, params_text, rust_fn_name, signature_line};
 use crate::split_try::split_disjoint_try_ranges;
 use crate::unify::CondValues;
 use crate::vars::{analyze_mutation, hoist_if_vars, hoist_loop_vars, promote_undeclared_assigns, VarsCtx};
@@ -256,7 +256,7 @@ fn vars_passes(
 }
 
 /// 类 + 方法 → 完整 Rust 函数文本（见 crate 文档）
-pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mut MethodSink) -> MethodResult<String> {
+pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mut MethodSink) -> MethodResult<MethodText> {
     let m = req.method;
     if env.ctx.code_owner.is_empty() {
         // 字节码出处类决定常量池 / bootstrap 表的归属，调用方必须给出（无回退推断）
@@ -269,8 +269,14 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     let ret = text::ty(env, &sig.ret);
     let fn_name = rust_fn_name(env, m, req.overloaded, req.rust_name);
     let names = local_names(req.local_vars);
-    let params = params_with_slot(env, m, if is_static { 0 } else { 1 }, &sig.params, &names);
+    let pnames = param_slot_names(m, if is_static { 0 } else { 1 }, sig.params.len(), &names);
+    let params = params_text(env, &pnames, &sig.params);
     let sig_line = signature_line(m, &fn_name, &params, &ret);
+    let decl = (!is_ctor && !is_static && !is_main(m)).then(|| FnSig {
+        name: fn_name.clone(),
+        params: pnames.iter().cloned().zip(sig.params.iter().cloned()).collect(),
+        ret: sig.ret.clone(),
+    });
 
     let mut sim = new_sim(env, req, sig.params.clone(), sig.ret.clone())?;
     let predeclared: BTreeSet<String> = sim.state.locals.values().map(|l| l.name.as_str().to_string()).collect();
@@ -326,5 +332,12 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         }
         format!("{prefix}{sig_line} {{\n{body}\n}}")
     };
-    Ok(text)
+    Ok(MethodText { text, sig: decl })
+}
+
+/// 方法体生成产物：完整函数文本 + 实例方法的结构化签名（构造器 / 静态方法为 None）
+#[derive(Debug, Clone)]
+pub struct MethodText {
+    pub text: String,
+    pub sig: Option<FnSig>,
 }

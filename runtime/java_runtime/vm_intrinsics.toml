@@ -263,6 +263,8 @@ serializable_markers = ["java/io/Serializable"]
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
+#                       方法名常量另对 Class 接收者值集里的类镜像所指类点名（如 `this.getMethod("values")`）；
+#                       接收者所指未知时记为反射缺口
 #   method_invokers / constructor_invokers    反射调用：调用反射对象所表示的方法 / 构造器
 #                       （NativeAccessor 直接按声明键分派；DirectMethodHandleAccessor 经 MethodHandle.invokeExact）
 # 被枚举（用户类）或被按名查找（任意类）、且有对应调用可达的成员入链（形参按声明类型 open，同 VM 入口）；接收者镜像推不出的枚举记为反射缺口
@@ -477,6 +479,10 @@ enum_switch = [
 object_methods = [
     "java/lang/runtime/ObjectMethods.bootstrap",
 ]
+# concat / object_methods（record toString）引用实参的字符串化入口：两者对引用实参的语义即
+# String.valueOf(Object)（null → "null"，否则虚分派 toString；JLS §5.1.11）。
+# 生成器在拼接点发射对它的调用（由字节码翻译），分析器把各引用实参接入它的形参
+concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"
 
 # ── 基本类型的装箱类（闭包分析，generator `rava closure` 读取）─────────────────────────
 # LambdaMetafactory 在 SAM 与实现方法签名的基本类型 ↔ 引用类型位置上做装箱 / 拆箱适配：

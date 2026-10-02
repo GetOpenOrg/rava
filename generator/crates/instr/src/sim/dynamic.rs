@@ -111,10 +111,10 @@ fn invokedynamic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &I
     let kind = bm.and_then(|b| env.ctx.rt.indy_kind(&format!("{}.{}", b.handle.member.owner, b.handle.member.name)));
     let site = IndySite { name, desc, cp_index: *index, bsm: bm };
     match kind {
-        Some(IndyKind::Concat) => concat::string_concat(env, sim, &site),
+        Some(IndyKind::Concat) => concat::string_concat(env, sim, log, &site),
         Some(IndyKind::TypeSwitch) => type_switch::gen_type_switch(env, sim, &site, SwitchKind::Type),
         Some(IndyKind::EnumSwitch) => type_switch::gen_type_switch(env, sim, &site, SwitchKind::Enum),
-        Some(IndyKind::ObjectMethods) => object_methods::gen_object_methods(env, sim, &site),
+        Some(IndyKind::ObjectMethods) => object_methods::gen_object_methods(env, sim, log, &site),
         Some(IndyKind::Lambda) => lambda::gen_lambda(env, sim, log, &site),
         Some(IndyKind::Native) | None => bootstrap_stub(env, sim, &site),
     }

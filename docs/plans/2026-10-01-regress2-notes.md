@@ -52,9 +52,34 @@
 - 修法（`instr/src/sim/dynamic/concat.rs`）：引用实参按 String.valueOf 语义显式判空，null 给 "null"，否则 toString。
 - 验证：两例 `--closure-json` 单例与期望一致（e2e 跑批带 --closure-json）。
 
-## 6. 遗留（未修，已报告）：java_meta 系统属性 / 模块服务表依赖可选的 closure.json
+## 6. java_meta 系统属性 / 模块服务表依赖可选的 closure.json —— 已修
 
 - N2（b5291a03）起 closure.json 只在 `--closure-json` 时落盘、否则删除；C3 第 3 项（ea82aedd）的 java_meta 构建脚本从
   `closure_input/closure.json` 读系统属性表与模块服务表。缺省 `main.py` 不带该选项 → 表为空：
   `java.vm.specification.version` 等键在运行期为 null（TestSystemPropsSpec 缺省单跑 NPE）。e2e 跑批带 --closure-json，不受影响。
 - 终态：两张表进 ClosureFacts（from_closure / from_json 同源），由发射层恒写入 scratch，构建脚本不再读调试产物。
+
+## 7. 拼接 / record toString 引用实参改为调用 String.valueOf(Object)（5 的终态写法）
+
+- 5 的修法在生成代码里内联 `_is_jnull` 判空，可读层不对应 Java 语义。拼接（JLS §5.1.11）与 record toString
+  对引用实参的语义即 `String.valueOf(Object)`，终态直接发射对它的调用，方法体由 JDK 字节码翻译。
+- 清单：`vm_intrinsics.toml [indy] concat_stringify = "java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"`
+  （生成器 / 分析器不写类名）。
+- 分析器（`closure/src/engine/lambda.rs` `stringify`）：Concat 调用点的每个引用实参、ObjectMethods toString 的引用分量
+  汇合节点，经静态边接入该方法的形参（上下文选择同 invokestatic）；toString 派发由其字节码自然产生。未登记时回落为直接派发。
+- 生成器（`instr/src/sim/dynamic/concat.rs`）：引用实参压栈后走 `gen_invokestatic`，生成
+  `let _tN: String = String::valueOf_obj(..)?;`；String 静态类型的实参仍按引用直接追加（null 由运行时给 "null"）。
+- 验证：TestPropertiesDefaults / TestSystemPropsSpec / HelloWorld / TestRecord 单例与期望一致；四例闭包
+  classes / methods / instantiated 集合与改前完全相同（valueOf(Object) 原已在链上）。
+- 未动：record hashCode / equals 的引用分量仍内联 `_is_jnull`（语义为 Objects.hashCode / Objects.equals，可同法改写，另行处理）。
+
+## 8. 6 的实施：两张表随 ClosureFacts 由发射层写入
+
+- `input/src/facts.rs`：`ClosureFacts.system_properties`（`SysPropFacts { values, dynamic }`）与
+  `SeedFacts.module_services`（模块 provider 的 (服务, provider)，事实序）；from_closure 读引擎、from_json 读
+  closure.json 同名字段，两路同源（driver 冷算时的 `{:#?}` 一致性校验覆盖新字段）。经 `EmitInput` 交给发射层。
+- `emit/src/project/entry.rs` `write_closure_tables`：每次构建写 `<scratch>/closure_input/closure_tables.rs`
+  （内容相同不重写，保留 mtime，java_meta 不无谓重编）。java_meta 的 `lib.rs` 直接 `include!` 该文件；
+  构建脚本的 closure.json 解析（`build_script/closure_tables.rs`）删除。
+- 验证：TestSystemPropsSpec / TestPropertiesDefaults / HelloWorld 不带 `--closure-json` 经 `rava build` 单跑与期望一致
+  （scratch 中无 closure.json）；`cargo test --release -- --test-threads=1` 通过。
