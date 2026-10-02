@@ -1,6 +1,6 @@
 # FS-C2：应用类加载器非空与断言状态按加载器求值
 
-> 状态（2026-10-02）：🔄 实施中，分支 fs-c2（基于集成分支 229a253b），由原 native-gaps 子代理负责；完成后接着做 boot layer（另需 C1d-a a2）。
+> 状态（2026-10-02）：✅ 已合入集成分支 4a98f5e3（fs-c2 9c737f03），合并后抽查 int-e90a592d 10/10 通过。
 > 关联：[`2026-09-29-rust-closure-analyzer.md`](2026-09-29-rust-closure-analyzer.md) §六 C1d 行、
 > [`docs/reference/handwritten-boundary.md`](../reference/handwritten-boundary.md)（VM 注入状态属准入第 ③ 类）。
 
