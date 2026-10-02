@@ -20,6 +20,7 @@
 | java/lang/StackStreamFactory(+$AbstractStackWalker) | checkStackWalkModes / callStackWalk / fetchStackFrames | ③ | 见 §二 |
 | java/lang/StackTraceElement | initStackTraceElement | ③ | 见 §二 |
 | java/lang/invoke/MethodHandleNatives | expand | ① | 见 §二 |
+| jdk/internal/loader/NativeLibraries | `<init>`（有字节码，非 native） | — | ng-07918da9 抽查中，TestClassNestNatives / TestDefineClassRejects 命中存根。`--why` 证实它在调用链上：自定义加载器的构造器 → VM 边界类 ClassLoader.<init>(Void,String,ClassLoader)@54 → NativeLibraries.newInstance → <init>。原因是 `jdk/` 前缀截断：newInstance 判为 handwritten:boundary，不再往下展开，生成器照字节码翻了 newInstance，<init> 却只留存根。处理：在 closure.toml `[release].classes` 放行本类（纯 Java），之后 --why 判为 bytecode，两例本机编译通过。不手写 |
 | com/sun/media/sound/DirectAudioDeviceProvider、PortMixerProvider | nGetNumDevices / nNew*Info | — | 不应在调用链上：移交 C1d（边见 §三） |
 | java/lang/invoke/MethodHandleNatives | getMemberVMInfo / getNamedCon | — | 只在 `assert` 体内调用，断言恒关后不可达；不手写（见 §三） |
 | java/lang/StackStreamFactory$AbstractStackWalker | setContinuation | — | 只在续体非 null 时调用，本模型续体恒 null；不手写（见 §三） |
