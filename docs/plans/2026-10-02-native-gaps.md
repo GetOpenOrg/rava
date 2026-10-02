@@ -53,7 +53,7 @@
   - 形参以 `Into<Object>` 接收，不以类型名引用 StackFrameInfo。否则 getCallerClass 路径会被拉入生成范围。
 - **生成器修正（继承的手写非槽位方法）**：
   - 问题：手写 native 等非槽位方法在声明类中只以 `// [meta]` 注释行存在，原先不进 `ClassEmission.methods`。子类接收者调用继承来的这类方法（如 `Probe extends SecurityManager` 调用 `getClassContext()`）时，生成器找不到声明者，因此不发继承成员，编译报 E0599。
-  - 修正：`emission::record_methods` 改为也记录 `[meta]` 声明，并打上 `meta` 标记。继承成员解析时用 `find_declared` 把它当作声明者，按宏的「非虚继承：上转后直调」路径发射。
+  - 修正：`class_writer::methods` 的 Handwritten 判定，在发 `[meta]` 注释段时同时给出声明记录，并打上 `meta` 标记（`EmittedMethod.meta`）。继承成员解析时用 `find_declared` 把它当作声明者，按宏的「非虚继承：上转后直调」路径发射。
   - 不受影响的部分：槽位、桥接、接口实现的定位（`find` / `slotted`）仍然排除 `[meta]` 声明。
   - 连带修正：这次修正暴露出手写 `ClassLoader.getResources` / `getSystemResources` 的返回类型（Object）与声明（`Enumeration<Object>`）不一致，已对齐。
 - **MethodHandleNatives.expand**（`method_handle_natives_impl.rs`）＝ `expand_MemberName(suppress=0)`：
