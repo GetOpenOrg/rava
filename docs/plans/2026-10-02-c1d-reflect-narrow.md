@@ -155,6 +155,60 @@ A、B 基于 28090062，均已过 `cargo build` 与生成器全部单元测试�
 - COWAL 的实例化是合法的（`ServicesCatalog.addProviders@18`，经 `AccessibleObject.<clinit>` 的引导代码）；
   它进入 `writeObject0` 是经①的大汇点，不是经 open 值面实例化——由 b1 收窄。
 
+### 3.3 b1 序列化收窄：偏移可得与不折叠分离（分支 `c1d-b1`，基于 e6f01e2f，已同步 b202e842）
+
+提交 ea90532a（合并集成分支后见分支头）：
+
+- **偏移可得 ≠ 不折叠**（`facts.rs`）：不折叠（`field_open_under`）= `FieldInfo.open` ∪ 偏移可得 ∪ 手写体写入；
+  偏移可得（`field_offset_under`）只含按名取得（`fopen` / `fopen_names`）、字段枚举（`fopen_all`）、反序列化。
+  - S2：手写体写入另立 `fhw` / `fhw_names`（`hw_syntax.rs` `hw_open_field` / `hw_open_field_name`，读者失效同前，
+    不接按名打开的静态字段写入）；
+  - `FieldInfo.open`（边界类 / 根类 / 手写成员 / VM 状态字段钩子）同理只不折叠——这些字节码外写入都按 Rust 字段
+    直接落地，不产出偏移。此前边界类 `ClassLoader` 的全部字段因此可按偏移写，句柄解释器（invokeBasic / linkTo*）
+    与 `trySetObjectField` 的 Unsafe 写入经 `U ClassLoader.assertionLock` 等未知接收者视图把全程序值并进一个 SCC。
+- `hw_mem.rs` `offset_exposed` 改按 `field_offset_under`（Gate::Offset / Gate::Handle 两种口径不变）。
+- 边界用例 `59_method_handles/TestFieldHandleOffsets`：方法句柄字段访问器、VarHandle 实例 / 静态引用字段 CAS 与
+  getAndSet、AtomicReferenceFieldUpdater，与手写写入字段（Thread.name）/ 边界类（ClassLoader）读取并存；期望为 JDK 21 输出。
+- 试过并放弃：open 读写按 G 成员逐类沿已知字段闭合（`memory_read` / `hw_site_fields` 对 open(T) 取 `g_of(T)` 逐个接
+  F / U）。DC +7 类、耗时 +60%（F 并集给出确定值、写入接到 G 全部偏移可得字段），不收窄，不提交。
+
+实测（本机 `rava closure`，同机先后跑；int = 集成分支 b202e842，b1 = 本分支合并后）：
+
+| 用例 | 类数 int → b1 | 方法数 | class_init known | unknown_sites | field_enum_gaps | 耗时 s |
+|---|---|---|---|---|---|---|
+| HelloWorld | 266 → 266 | 723 → 723 | 0 → 0 | — | 0 | — |
+| StockTrans | 1803 → 1803 | 10924 → 10924（集合相同） | 1280 → 1280 | — | 2 → 2 | 127 → 106 |
+| DeepCopy | 1804 → 1804 | 10916 → 10916（集合相同） | 1278 → 1278 | — | 2 → 2 | 124 → 94 |
+| TestMethodHandleDirect | 1529 → 1525 | 8924 → 8864 | 1043 → 79 | — | 0 | 14 → 12 |
+| TestReflectFieldMethod | 1542 → 1538 | 9067 → 9007 | 1052 → 81 | — | 0 | 14 → 11 |
+| TestFieldHandleOffsets | 1570 → 1566 | 9078 → 9018 | 1082 → 77 | — | 0 | 15 → 11 |
+
+（e6f01e2f 上同口径：ST 107 → 84 s、DC 109 → 77 s，类 / 方法集合相同；MH 两例 class_init known 394 / 395 → 79 / 81。
+`unknown_sites` 在 c1d-b3 c718837c，未入集成分支，表中暂缺。）MH 三例少的 4 类 / 60 方法（`ArrayList$SubList$2`、
+`IntPipeline$1(+$1)`、`Streams$RangeIntSpliterator` 与 `Provider.merge` 一组）原经 ClassLoader 字段大汇点到达。
+
+**未达标项与结论**：
+
+- ST ≤ 1700 类：不在 b1 / T4 范围内。反事实（关掉 `enumerate_fields(None)`）ST 仍 1803 类——字段枚举缺口不贡献类，
+  只贡献约 16 s。ST 的 1803 类里 `sun/security/*` 约 90、`jdk/internal/loader` 28、`java/util/zip|jar` 35、
+  `sun/nio/fs` 31，来自 FS-C2（类加载器按字节码翻译）后 Formatter / Pattern → CharacterName →
+  `Class.getResourceAsStream` → URLClassPath / JarLoader / 签名校验链；原 DC ≤ 1640 目标早于 FS-C2，已失效。
+- field_enum_gaps = 0：缺口接收者的 open(Class) 注入点 93 个（`@openorig`），不止①②：
+  - ① `writeObject0` P1 的大值集（集成分支上 7246 值）现在的 SCC 代表是 `CHM.put` P1 / `VarHandle.compareAndSet`
+    与 `VarHandle.get` 的 prod、`Unsafe.getReferenceVolatile` 的 prod：VarHandle 引用读取不在 `[facts.memory_reads]`，
+    返回值取全局手写产出（所有 VarHandle 写入的并集），不按调用点读 holder 字段。终态：VarHandle get 族
+    （get / getVolatile / getAcquire / getOpaque / getAndSet* / compareAndExchange*）登记为按调用点读坐标 0 的
+    内存读取（签名多态按调用点描述符取实参；无 holder 坐标的静态字段句柄读按名打开的静态字段），需 `invoke.rs`
+    `edge_ret` 的 Read 分支支持「调用点无该实参」——属 invoke.rs，b1 未动。
+  - ② 原生返回 Class：`getPrimitiveClass`（`Byte.TYPE` 等基本类型镜像，按字面量名即可给确定镜像）、`getSuperclass` 的
+    原生返回、`getDeclaringClass0`、`getComponentType`、`getCallerClass`、`forName0` 等。终态：可按实参 / 接收者确定的
+    （getPrimitiveClass、getComponentType、getDeclaringClass0、getSuperclass）走返回模型给确定镜像；真正所指未知的
+    （forName0、getCallerClass、defineClass1/2、findLoadedClass0）在闭世界下只能指二进制里存在的类：
+    `forName` 结果 = 闭包里名字可被该调用点字符串值集命中的类（名字未知时 = 已实例化或已初始化的类镜像），序列化读侧
+    （`resolveClass`）再收窄到其中实现 Serializable 的类；字段枚举对这类镜像集逐类放开，而不是 `enumerate_fields(None)`。
+  - ③ `getSuperclass` / `getClassDataLayout0` 只传递①②。
+- ST < 120 s：集成分支 127 s → b1 106 s，已达标。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
