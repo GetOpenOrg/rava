@@ -185,7 +185,10 @@ NOENUM = `C1DR_NOENUM`，把 `enumerate_fields(None)` 整个跳过（不健全�
   - `C1DR_TRACECLS=<类或分配名>`：打印每个获得该值的节点及源节点（最快定位「值从哪进来」）；
   - `C1DR_WATCH`：打印指定边的建立；`SIGNONE`：ParamSig 推为 None 的查找点；`ENUM-ALL` / `WRITER-LIVE` / `LOOKUP`：字段枚举与写入口；
   - `C1DR_NOENUM` / `C1DR_NOMHARR`：隔离开关（不健全）。
-  T7 把 GROW / TRACECLS 做成正式 `--flows` 查询后删除这些探针。
+  T7 已转正（c1d-t7）：GROW → `--flows '@grow:<节点>'`、TRACECLS → `'@trace:<类或分配名>'`（另有 `'@trace:open:<类型>'`）、
+  WATCH → `'@edge:<节点>'`，记录型查询分析前登记、传播中记录并实时写 stderr（语法见 `docs/environment-variables.md`）；
+  `C1DR_*` 环境变量探针不移植，集成路径 0 处。PROG（进度）不属类型流查询、未移植；NOENUM / NOMHARR 为不健全隔离开关，
+  由 T4 / T5 取代；SIGNONE / ENUM-ALL / WRITER-LIVE / LOOKUP 随 T2 / T4 的实现另定。
 
 ### 4.6 拆分（可并行、独立验收）
 

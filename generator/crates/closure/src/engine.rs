@@ -362,8 +362,8 @@ pub struct Engine<'a> {
     pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
-    /// 下一次 `add_to` 来自流边推送（诊断：区分 open 的直接注入点）
-    via_flow: bool,
+    /// 下一次 `add_to` 来自流边推送时为源节点序号，否则为 [`diag::NO_SRC`]（诊断：区分直接注入点、记录型查询的来源）
+    flow_src: u32,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
     open_inj: HashMap<Node, BTreeSet<u32>>,
     /// 类镜像（Class 对象按所指类区分）：镜像 id → 所指类型 id。镜像的类型是 Class，不做克隆上下文
@@ -403,6 +403,8 @@ pub struct Engine<'a> {
     fwriter_live: bool,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
+    /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
+    probes: Option<Box<diag::Probes>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
