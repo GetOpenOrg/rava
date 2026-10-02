@@ -151,6 +151,9 @@ pub fn capture_java_frames() -> Vec<JavaFrame> {
         }
         let Some(seg) = parsed.method.as_deref() else { continue };
         let Some(method) = java_method_of(&parsed.class, seg) else { continue };
+        if !executes_body(&parsed.class, seg, method) {
+            continue;
+        }
         let same = frames.last().is_some_and(|f| f.class == parsed.class && std::ptr::eq(f.method, method));
         if same && !group.contains(&symbol) {
             group.push(symbol);
@@ -162,6 +165,22 @@ pub fn capture_java_frames() -> Vec<JavaFrame> {
     }
     frames
 }
+
+/// 该 Rust 符号是否执行 Java 方法体（HotSpot 帧只属于正在执行的方法）。abstract 方法没有方法体，其符号只是
+/// 派发入口；接口的实例方法（非 static / private）在接口载体上的同名符号是 vtable 派发入口，default 方法体
+/// 另在 `__default_<m>` 执行——两者都不成帧，帧落在实际执行的实现方法上。
+fn executes_body(class: &str, seg: &str, method: &MethodMeta) -> bool {
+    const ACC_PRIVATE: i32 = 0x2;
+    const ACC_INTERFACE: i32 = 0x200;
+    if method.is_abstract {
+        return false;
+    }
+    let dispatched = !method.is_static && method.modifiers & ACC_PRIVATE == 0 && !method.name.starts_with('<');
+    !(dispatched && class_access_flags(class) & ACC_INTERFACE != 0 && !seg.starts_with(DEFAULT_BODY_PREFIX))
+}
+
+/// 接口 default 方法体的 Rust 名前缀（java_class! 生成：`__default_<m>`）。
+const DEFAULT_BODY_PREFIX: &str = "__default_";
 
 /// 逐帧的 Java 声明类（解析不出为 None），不做方法对位与归并（getCallerClass 的帧组口径）。
 pub fn capture_frame_classes() -> Vec<Option<std::string::String>> {
@@ -195,7 +214,7 @@ fn methods_of(class: &str) -> Option<&'static [MethodMeta]> {
 /// `__clinit`；`__impl_` 前缀为派发包装后的方法体。同名重载按描述符后缀对位，对不上取首个。
 fn java_method_of(class: &str, seg: &str) -> Option<&'static MethodMeta> {
     let methods = methods_of(class)?;
-    let seg = seg.strip_prefix("__impl_").unwrap_or(seg);
+    let seg = seg.strip_prefix("__impl_").or_else(|| seg.strip_prefix(DEFAULT_BODY_PREFIX)).unwrap_or(seg);
     let (java_name, suffix): (&str, &str) = if seg == "__clinit" {
         ("<clinit>", "")
     } else if seg == "new" || seg.starts_with("__init") {

@@ -1,0 +1,7 @@
+interface = [TestClassContextDispatch$Probe, TestClassContextDispatch$Named, TestClassContextDispatch]
+default = [TestClassContextDispatch$Probe, TestClassContextDispatch$WithDefault, TestClassContextDispatch]
+override default = [TestClassContextDispatch$Probe, TestClassContextDispatch$OverridesDefault, TestClassContextDispatch]
+abstract = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch]
+template = [TestClassContextDispatch$Probe, TestClassContextDispatch$Derived, TestClassContextDispatch$Base, TestClassContextDispatch]
+sub-interface = [TestClassContextDispatch$Probe, TestClassContextDispatch$Named, TestClassContextDispatch$ChainImpl, TestClassContextDispatch]
+lambda = [TestClassContextDispatch$Probe, TestClassContextDispatch, TestClassContextDispatch]
