@@ -73,6 +73,11 @@ impl<'a> Engine<'a> {
         v
     }
 
+    /// 字段折叠状态：(按字段句柄写字段的入口可达, 全部字段不折叠)
+    pub fn field_handles(&self) -> (bool, bool) {
+        (self.fwriter_live, self.ctx.fopen_all.get())
+    }
+
     pub fn lambda_count(&self) -> usize {
         self.lambdas.len()
     }
