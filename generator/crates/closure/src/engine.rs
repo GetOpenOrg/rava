@@ -86,6 +86,7 @@ mod setstore;
 use setstore::SetStore;
 mod scc;
 mod levels;
+mod concrete;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -257,6 +258,8 @@ pub struct Engine<'a> {
     ptaint: HashSet<(usize, usize)>,
     /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
     pstr: pstrs::PStrs,
+    /// 具体求值（engine/concrete.rs）
+    concrete: concrete::Concrete,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,

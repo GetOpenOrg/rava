@@ -121,7 +121,7 @@ impl Engine<'_> {
 }
 
 /// 名字值的全部来源都是可取回的字面量或未污染的形参槽（其常量集即名字全集）
-fn names_known(srcs: &[Src], tainted: impl Fn(usize) -> bool) -> bool {
+pub(super) fn names_known(srcs: &[Src], tainted: impl Fn(usize) -> bool) -> bool {
     !srcs.is_empty()
         && srcs.iter().all(|s| match s {
             Src::Str(_) => true,

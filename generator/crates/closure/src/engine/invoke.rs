@@ -209,6 +209,9 @@ impl<'a> Engine<'a> {
         match opcode {
             op::INVOKESTATIC => {
                 self.init(&resolved.owner, via.clone());
+                if self.concrete_call(m, off, &resolved, &md, pargs) {
+                    return;
+                }
                 // 克隆上下文的选择见 `ctxsel.rs`
                 let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
                 let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });

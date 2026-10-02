@@ -67,7 +67,9 @@ pub enum LinkRoute {
 
 mod sysprops;
 mod names;
+mod concrete;
 mod field_names;
+pub use concrete::ConcreteCfg;
 pub use field_names::NameResolver;
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, SysProps};
@@ -135,6 +137,8 @@ pub struct Manifest {
     pub sysprops: SysProps,
     /// 按名取类与字符串拼接
     pub names: NameFacts,
+    /// 具体求值（`[concrete]`）
+    pub concrete: ConcreteCfg,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -345,6 +349,7 @@ impl Manifest {
             string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
+            concrete: concrete::parse(vm.get("concrete"))?,
         })
     }
 

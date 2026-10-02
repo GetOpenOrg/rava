@@ -556,3 +556,56 @@ I = "java/lang/Integer"
 J = "java/lang/Long"
 S = "java/lang/Short"
 Z = "java/lang/Boolean"
+
+# ── 确定性具体求值（闭包分析，generator `rava closure` 读取；engine/concrete）──────────────
+# 入口方法的调用点实参可枚举（字符串字面量 / 类镜像 / 整数 / null 且来源全部可取回）时，按实参逐组
+# 具体执行；轨迹上的方法只按执行过的指令入闭包，结果对象图物化为类型流。任一组合失败即回退抽象调用边。
+[concrete]
+# 入口（`类.方法:描述符`）
+entries = [
+    "java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;",
+]
+# 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入
+memo_fields = [
+    "java/lang/Class.genericInfo",
+    "java/lang/Class.reflectionData",
+    "java/lang/String.hash",
+    "java/lang/String.hashIsZero",
+]
+
+# 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
+[concrete.natives]
+"java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = "arraycopy"
+"java/lang/System.identityHashCode:(Ljava/lang/Object;)I" = "identity_hash"
+"java/lang/Object.getClass:()Ljava/lang/Class;" = "get_class"
+"java/lang/Object.hashCode:()I" = "identity_hash"
+"java/lang/Object.clone:()Ljava/lang/Object;" = "clone"
+"java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
+"java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"
+"java/lang/Class.isArray:()Z" = "class_is_array"
+"java/lang/Class.isPrimitive:()Z" = "class_is_primitive"
+"java/lang/Class.isInterface:()Z" = "class_is_interface"
+"java/lang/Class.getModifiers:()I" = "class_modifiers"
+"java/lang/Class.getSuperclass:()Ljava/lang/Class;" = "class_superclass"
+"java/lang/Class.getInterfaces0:()[Ljava/lang/Class;" = "class_interfaces"
+"java/lang/Class.getGenericSignature0:()Ljava/lang/String;" = "class_signature"
+"java/lang/Class.getDeclaringClass0:()Ljava/lang/Class;" = "class_declaring_class"
+"java/lang/Class.getEnclosingMethod0:()[Ljava/lang/Object;" = "class_enclosing_method"
+"java/lang/Class.isInstance:(Ljava/lang/Object;)Z" = "class_is_instance"
+"java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
+"java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
+"java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+"java/lang/String.intern:()Ljava/lang/String;" = "intern"
+"java/lang/Float.floatToRawIntBits:(F)I" = "float_to_raw_int_bits"
+"java/lang/Float.intBitsToFloat:(I)F" = "int_bits_to_float"
+"java/lang/Double.doubleToRawLongBits:(D)J" = "double_to_raw_long_bits"
+"java/lang/Double.longBitsToDouble:(J)D" = "long_bits_to_double"
+"jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
+"java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
+"java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+
+# VM 直接构造字符串字面量与类镜像时写入的字段（语义名 → `类.字段`）
+[concrete.vm_fields]
+string_value = "java/lang/String.value"
+string_coder = "java/lang/String.coder"
+component_type = "java/lang/Class.componentType"

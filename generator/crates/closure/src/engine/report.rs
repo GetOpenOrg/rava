@@ -12,7 +12,8 @@ impl<'a> Engine<'a> {
         let mut groups: IndexMap<&MemberRef, Vec<(usize, Option<Rc<Analysis>>)>> = IndexMap::default();
         for (i, mn) in self.methods.values().enumerate() {
             if mn.kind == Kind::Bytecode {
-                groups.entry(&mn.key).or_default().push((i, mn.analysis.clone()));
+                let a = if self.is_concrete(i) { self.concrete_analysis(&mn.key) } else { mn.analysis.clone() };
+                groups.entry(&mn.key).or_default().push((i, a));
             }
         }
         let um = self.unmodeled();
@@ -26,10 +27,17 @@ impl<'a> Engine<'a> {
             let Some(cf) = self.h.class(&key.owner) else { continue };
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
             let mut f = fold_of(key.to_string(), code, &all);
+            // 具体轨迹里抛出异常的调用：其后继不可达（活调用顺序落入死区），按不返回的调用点导出
+            let mut thrown: Vec<u32> = Vec::new();
+            if clones.iter().any(|&i| self.is_concrete(i)) {
+                let index: HashMap<u32, &classfile::Insn> = code.insns.iter().map(|x| (x.offset, x)).collect();
+                thrown = f.violations.iter().copied().filter(|pc| index.get(pc).is_some_and(|x| matches!(x.operand, classfile::Operand::Method(..)))).collect();
+                f.violations.retain(|pc| !thrown.contains(pc));
+            }
             self.init_reads(&key.owner, code, &mut f);
             self.dead_catches(code, &mut f);
             f.null_recv = self.null_recv(&clones, &um);
-            self.noreturn_calls(code, &all, &mut f);
+            self.noreturn_calls(code, &all, &thrown, &mut f);
             f.props = self.prop_folds(&f, &all);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {

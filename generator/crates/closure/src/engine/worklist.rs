@@ -221,6 +221,7 @@ impl<'a> Engine<'a> {
             return;
         }
         match self.methods[m].kind {
+            Kind::Bytecode if self.is_concrete(m) => self.process_concrete(m),
             Kind::Bytecode => self.process_bytecode(m),
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
             Kind::Handwritten(HWFIELD_KIND) => self.process_hwfield_method(m),
@@ -232,6 +233,9 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn analysis(&mut self, m: usize) -> Option<Rc<Analysis>> {
+        if self.is_concrete(m) {
+            return None;
+        }
         if let Some(a) = &self.methods[m].analysis {
             return Some(a.clone());
         }

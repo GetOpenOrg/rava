@@ -134,7 +134,7 @@ impl<'a> Engine<'a> {
             MNode { key: key.clone(), kind, via: via.clone(), is_static, ptypes, rtype, analysis: None, hw_fns: vec![], ctx, ret_model, returned: None, applied: None, aseq: 0, applied_seq: 0 },
         );
         self.mbase.entry(key.clone()).or_insert(idx);
-        if kind == Kind::Bytecode {
+        if kind == Kind::Bytecode && ctx != self.concrete.ctx {
             self.nr_created(&key);
         }
         // 调用链上的方法（含手写 / native / 抽象声明）都按本类的布局发射：至少 L2

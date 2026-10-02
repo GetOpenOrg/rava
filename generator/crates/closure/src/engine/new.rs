@@ -4,7 +4,7 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub fn new(h: &'a Hierarchy<'a>, cp: &'a ClassPath, man: &'a Manifest, hw: &'a Handwritten) -> Self {
-        Engine {
+        let mut e = Engine {
             ctx: Ctx {
                 h,
                 cp,
@@ -153,6 +153,9 @@ impl<'a> Engine<'a> {
             seeds: SeedState::default(),
             via_flow: false,
             open_inj: HashMap::default(),
-        }
+            concrete: Default::default(),
+        };
+        e.concrete_init();
+        e
     }
 }

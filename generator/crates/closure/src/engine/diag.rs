@@ -39,6 +39,9 @@ impl Engine<'_> {
         if pat == "@bynamesites" {
             return Some(self.byname_sites());
         }
+        if pat == "@concrete" {
+            return Some(self.concrete.diag.iter().map(|(k, v)| format!("  {k}：{v}")).collect());
+        }
         if pat == "@foldfields" {
             return Some(self.fold_fields());
         }

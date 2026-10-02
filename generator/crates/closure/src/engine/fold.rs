@@ -247,7 +247,7 @@ impl Engine<'_> {
     /// 目标有节点、全部节点已分析，且返回常量格缺席（没有任何克隆的分析含返回点）。
     /// 截断区间把 `f.null_recv` 也当作终点（接收者恒 null 的调用只会抛 NPE）；
     /// 须在 consts / null_recv 算出之后、prop_folds 之前调用
-    pub(super) fn noreturn_calls(&self, code: &classfile::Code, all: &[Rc<Analysis>], f: &mut Fold) {
+    pub(super) fn noreturn_calls(&self, code: &classfile::Code, all: &[Rc<Analysis>], thrown: &[u32], f: &mut Fold) {
         let reachable: Vec<bool> = (0..code.insns.len()).map(|i| all.iter().any(|a| a.reachable[i])).collect();
         let nr = self.ctx.noreturn.borrow();
         let rvals = self.ctx.rvals.borrow();
@@ -266,6 +266,9 @@ impl Engine<'_> {
                 stops.push(x.offset);
             }
         }
+        stops.extend_from_slice(thrown);
+        stops.sort_unstable();
+        stops.dedup();
         // null_recv 调用点的目标集为空，同样不会正常返回：一并作为截断终点（须先算出 f.null_recv）
         let mut ends: Vec<u32> = stops.iter().chain(&f.null_recv).copied().collect();
         ends.sort_unstable();
