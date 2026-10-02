@@ -120,6 +120,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     desiredAssertionStatus 特判删除；vm_boundary_methods 30→27；TestClassNestNatives ✅、TestAppClassLoader / TestParallelCapable
 │   │
 │   ├─ ⏳ boot layer：ModuleBootstrap.boot 引导期建层、System.bootLayer 按字节码读取、系统模块描述符承载（FS-H12）
+│   │     第 0 步 ✅ 27dfb419：镜像与 jmod 字节不同的类以镜像为准（java.base 5 类：SystemModulesMap + 4 个 MH $Holder），spot bl0-27dfb419 8/9（TestModuleLayerDefine 为原有失败）
 │   │     ◀── C1d-a a2（1e623cec 的 [boot_init] 与 jdk/ 去截断）、FS-C2　验收：TestModuleLayerDefine 原样通过
 │   │
 │   ├─ ✅ regress2 续：栈帧来源统一（frames-unify bf91f075，合入 be1b97be）：行表单一帧源、删符号解析、手写 native / Object 成帧、StackWalker 行号
@@ -184,7 +185,7 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |
 | regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
-| boot layer | ⏳ | ModuleBootstrap 引导建层；◀── C1d-a a2（FS-C2 ✅） |
+| boot layer | 🔄 第 0 步 ✅ 27dfb419 | ModuleBootstrap 引导建层；第 1 步起 ◀── C1d-a a2（FS-C2 ✅） |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
 
