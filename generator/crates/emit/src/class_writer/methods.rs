@@ -86,7 +86,7 @@ pub(super) struct Cx<'a, 'c> {
 impl Cx<'_, '_> {
     pub fn attr(&self, e: &Emitted<'_>, extra: &MethodAttrExtra) -> String {
         let ex = self.ctx.extras(e.owner.name());
-        method_attr(&e.method, ex.methods.get(e.index), extra, self.ctx.ty.names)
+        method_attr(&e.method, ex.methods.get(e.index), extra, &self.ctx.ty)
     }
 
     /// 方法段：`{attr}\n{text}`，附定义侧声明记录

@@ -15,7 +15,7 @@ use classfile::MemberRef;
 use closure::handwritten::Handwritten;
 use closure::manifest::Manifest;
 use emit::audit::{append_raw_sites, audit_lines, AuditInputs};
-use emit::ctx::{EmitCtx, EmitOptions};
+use emit::ctx::{EmitCtx, EmitOptions, EmitShared};
 use emit::method_bodies::{BodyAudit, MethodBodies};
 use emit::perf::{report_lines, Perf};
 use emit::precheck::DEFAULT_LIMIT;
@@ -274,9 +274,9 @@ pub(crate) fn with_emit_ctx<R>(
         debug: j.o.debug,
         jobs: j.o.emit_jobs,
     };
-    let ctx = EmitCtx::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
+    let shared = EmitShared::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");
-    f(&ctx, &names, perf)
+    f(&shared.view(), &names, perf)
 }
 
 /// EmitInput → overlay → 写 scratch → 预检 →（非 `--full-precheck`）审计行；另返回逐方法耗时（`--perf`）

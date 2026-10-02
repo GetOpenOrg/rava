@@ -206,7 +206,7 @@ pub fn all_superclasses(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     let resolved = ctx.ty.ancestor_type_args(ci, None);
     let mut chain: Vec<String> = resolved
         .iter()
-        .map(|(b, args)| with_args(&ctx.short(b), &render_arg_list(args, ctx.ty.names)))
+        .map(|(b, args)| with_args(&ctx.short(b), &render_arg_list(args, &ctx.ty)))
         .collect();
     let tail = match resolved.last() {
         Some((b, _)) => ctx.class(b).map_or("", |c| c.super_class()),

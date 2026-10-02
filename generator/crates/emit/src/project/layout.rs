@@ -107,21 +107,13 @@ impl UserLayout {
         lay
     }
 
-    /// 同 crate 兄弟类导入（`use crate::[pkg::]mod::Type;`）：`referenced` 为字节码引用集
-    /// （import_gen `collect_referenced(ci, None)`），另经 InnerClasses 补内部类 / 外部类 / 同级内部类
-    pub fn sibling_imports(&self, ctx: &EmitCtx<'_>, cls: &str, referenced: &BTreeSet<String>) -> Vec<String> {
-        let mut seen = BTreeSet::new();
-        let mut out = Vec::new();
+    /// 同 crate 兄弟类（结构化引用集的 user crate 部分）：`referenced` 为字节码引用集
+    /// （`collect_referenced(ci, None)`），另经 InnerClasses 补内部类 / 外部类 / 同级内部类
+    pub fn sibling_set(&self, ctx: &EmitCtx<'_>, cls: &str, referenced: &BTreeSet<String>) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
         let mut add = |name: &str| {
-            let Some(e) = self.entries.get(name) else { return };
-            if name == cls {
-                return;
-            }
-            let mut path = e.pkg_parts.clone();
-            path.push(e.mod_name.clone());
-            let line = format!("use crate::{}::{};", path.join("::"), ctx.short(name));
-            if seen.insert(line.clone()) {
-                out.push(line);
+            if name != cls && self.entries.contains_key(name) {
+                out.insert(name.to_string());
             }
         };
         for r in referenced {

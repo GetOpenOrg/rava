@@ -51,12 +51,12 @@ pub(crate) fn collect_idents(t: &RsType, ctx: &TyCtx<'_>, out: &mut Vec<(String,
         RsType::Prim(p) => out.push((p.rust_name().to_string(), false)),
         RsType::Unit => {}
         RsType::Object | RsType::Bare { .. } | RsType::Param(_) => {
-            if let Some(h) = t.head_name(ctx.names) {
+            if let Some(h) = t.head_name(ctx) {
                 out.push((h, false));
             }
         }
         RsType::Class { binary, args } => {
-            out.push((ctx.names.short(binary).into_owned(), !args.is_empty()));
+            out.push((ctx.short(binary), !args.is_empty()));
             for a in args {
                 collect_idents(a, ctx, out);
             }
@@ -77,7 +77,7 @@ impl TyCtx<'_> {
             if class_type_params.contains(name) || ALWAYS_RESOLVABLE.contains(&name.as_str()) {
                 return true;
             }
-            match self.names.binary_of(name).and_then(|b| self.reg.get(b)) {
+            match self.binary_of(name).and_then(|b| self.reg.get(&b)) {
                 None => false,
                 // 裸用泛型类（raw type）在 Rust 中缺实参 → 不可用
                 Some(ref_ci) => self.effective_class_type_params(ref_ci).is_empty() != *has_args,
@@ -335,7 +335,7 @@ impl TyCtx<'_> {
     ) -> BTreeMap<String, Vec<RsType>> {
         self.ancestor_type_args(ci, Some(recv_ty.type_args()))
             .into_iter()
-            .map(|(b, args)| (self.names.short(&b).into_owned(), args))
+            .map(|(b, args)| (self.short(&b), args))
             .collect()
     }
 }

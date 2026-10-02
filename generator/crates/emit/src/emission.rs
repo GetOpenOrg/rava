@@ -39,7 +39,7 @@ pub struct EmittedMethod {
 
 impl EmittedMethod {
     /// 签名行文本（按给定命名渲染）
-    pub fn signature(&self, names: &ty::ShortNames) -> String {
+    pub fn signature(&self, names: &dyn ty::Names) -> String {
         self.sig.render(names)
     }
 
@@ -95,6 +95,8 @@ pub struct ClassEmission {
     pub text: String,
     /// 实际输出的实例方法声明（发射序）
     pub methods: Vec<EmittedMethod>,
+    /// 本文件的名字作用域（第一阶段建立，第二阶段续用；导入块由其认领记录生成）
+    pub scope: std::sync::Arc<ty::NameScope>,
 }
 
 impl ClassEmission {

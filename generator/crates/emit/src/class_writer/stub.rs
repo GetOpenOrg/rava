@@ -119,7 +119,7 @@ pub fn native_stub(
     let args: Vec<String> = names
         .iter()
         .zip(&sig.params)
-        .map(|(n, t)| format!("{n}: {}", t.render(ctx.ty.names)))
+        .map(|(n, t)| format!("{n}: {}", t.render(&ctx.ty)))
         .collect();
     let args = args.join(", ");
     let ctor = ci.is_constructor(m);
@@ -131,7 +131,7 @@ pub fn native_stub(
     let ret_type = if ctor {
         "Result<Self>".to_string()
     } else {
-        format!("Result<{}>", sig.ret.render(ctx.ty.names))
+        format!("Result<{}>", sig.ret.render(&ctx.ty))
     };
     let fn_name = safe_ident(if rust_name.is_empty() { &m.name } else { rust_name });
     let body = stub_body(ci, m);

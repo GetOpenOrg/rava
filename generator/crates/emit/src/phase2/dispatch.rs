@@ -318,7 +318,7 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
 
 /// 泛型类的登记路径实参：每个类型形参取 Object
 fn object_turbofish(ctx: &EmitCtx<'_>, text: &str, bin: &str) -> String {
-    let Some(g) = struct_generics(text, &ctx.short(bin)) else { return String::new() };
+    let Some(g) = struct_generics(text, &ctx.ty.global_names().short(bin)) else { return String::new() };
     let n = g.split(',').filter(|p| !p.trim().is_empty()).count();
     format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
 }
@@ -330,7 +330,8 @@ fn appended(text: &str, tail: &str) -> String {
 /// 字段闭包：(追加后的类文本, 登记行)；无臂 → None（不登记）。只读 `ems`
 fn field_closure(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str, only: Option<&BTreeSet<String>>) -> Option<(String, String)> {
     let em = ems.get(bin)?;
-    let text = emit_fields_for(ctx, bin, em, only)?;
+    // 闭包文本落在该类文件：引用名在其作用域认领；登记行在 main（全路径）
+    let text = emit_fields_for(&ctx.scoped(&em.scope), bin, em, only)?;
     let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
     let new = appended(&em.text, &text);
     let tf = object_turbofish(ctx, &new, bin);
@@ -407,7 +408,7 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     let mut methods: BTreeMap<String, String> = BTreeMap::new();
     per_class(ctx, ems, &targets, &mut methods, |ems, bin, only| {
         let em = &ems[bin];
-        let text = emit_for(ctx, bin, em, only)?;
+        let text = emit_for(&ctx.scoped(&em.scope), bin, em, only)?;
         let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
         let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}::__reflect_dispatch(n, d, r, a))),");
         Some((appended(&em.text, &text), line))

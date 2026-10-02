@@ -40,13 +40,12 @@ pub fn opaque_supers(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     out
 }
 
-/// 不透明类文件文本：文件头 + 超类型导入 + `java_class_opaque!` + implref 稳定别名
+/// 不透明类文件文本：文件头 + 导入块插入位 + `java_class_opaque!` + implref 稳定别名
 pub fn opaque_text(
     ctx: &EmitCtx<'_>,
     state: &mut ProjectState,
     ci: &ClassInfo,
     site: &ClassSite<'_>,
-    cross_imports: Vec<String>,
 ) -> ClassText {
     state.generated_classes.insert(ci.name().to_string());
     let sname = struct_name(ctx, ci);
@@ -63,7 +62,7 @@ pub fn opaque_text(
         .collect();
     let bound = if supers.is_empty() { String::new() } else { format!(": {}", supers.join(", ")) };
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];
-    parts.extend(cross_imports);
+    parts.push(super::INHERITED_IMPORTS_SLOT.to_string());
     parts.push(String::new());
     parts.push("rava_macros::java_class_opaque! {".into());
     parts.extend(super::head::opaque_metadata_lines(ctx, ci).into_iter().map(|l| format!("    {l}")));

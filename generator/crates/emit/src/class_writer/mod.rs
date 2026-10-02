@@ -1,8 +1,8 @@
 //! 单类文件文本（← `emitter/class_writer._gen_class_rs`）。
 //!
-//! 组装顺序与 Python 一致：文件头 + cross_imports + 继承导入插入位 → `java_class! { 类块头 /
+//! 组装顺序：文件头 + 导入块插入位（第二阶段后由文件作用域记录填充）→ `java_class! { 类块头 /
 //! struct / impl { static 字段 · 方法块 · 继承成员插入位 } / 接口实现插入位 }` → 协变 upcast
-//! 插入位 → implref 稳定别名 → 接口 lambda 擦除 impl → 按文本补导的 use。
+//! 插入位 → implref 稳定别名 → 接口 lambda 擦除 impl。
 //! 方法块在步骤 (c)、vtable / 继承段在步骤 (d) 接入 [`gen_class_rs`] 的方法块表。
 
 pub mod attrs;
@@ -27,12 +27,12 @@ use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
 use crate::imports::refs::add_desc_refs;
-use crate::imports::{collect_referenced, cross_imports, supplementary_iface_imports, used_vtable_imports, CrateRoute, CrossInput, Prefix};
+use crate::imports::{claim_structural, collect_referenced, CrateRoute, CrossInput, ImportSite};
 use crate::lang;
-use crate::project::layout::JdkLayout;
+use crate::project::layout::{JdkLayout, UserLayout};
 use crate::text::indent;
 
-/// 继承成员 use 插入位（`inherited_gen.IMPORTS_SLOT`）
+/// 导入块插入位（第二阶段后由文件作用域记录填充）
 pub const INHERITED_IMPORTS_SLOT: &str = "//@@rava:inherited-imports@@";
 /// 继承成员声明插入位（`inherited_gen.MEMBERS_SLOT`）
 pub const INHERITED_MEMBERS_SLOT: &str = "//@@rava:inherited-members@@";
@@ -56,15 +56,15 @@ pub struct LibSite<'l> {
 pub struct ClassSite<'l> {
     /// java_runtime 布局（包路径 / 同名消歧 / 跳过包 / 生成集）
     pub jdk: &'l JdkLayout,
-    /// user crate 类：同 crate 兄弟类导入行；None = java_runtime / lib crate 内的类
-    pub user_sibling_imports: Option<Vec<String>>,
+    /// user crate 布局：本类属 user crate 时；None = java_runtime / lib crate 内的类
+    pub user: Option<&'l UserLayout>,
     /// lib 模式定向；None = 单 crate 发射（无 --lib）
     pub lib: Option<LibSite<'l>>,
 }
 
-impl ClassSite<'_> {
+impl<'l> ClassSite<'l> {
     fn is_user(&self) -> bool {
-        self.user_sibling_imports.is_some()
+        self.user.is_some()
     }
 
     /// lib crate 内的类：Java 可见性映射生效
@@ -81,16 +81,16 @@ impl ClassSite<'_> {
         }
     }
 
-    fn scan_prefix(&self) -> Prefix<'_> {
-        Prefix { base: self.prefix(), route: self.lib.map(|l| l.route) }
+    /// 导入定向参数
+    pub fn import_site(&self) -> ImportSite<'l> {
+        ImportSite { cross: self.cross_input(), user: self.user }
     }
 
-    /// cross_imports 参数（用户类在无 JDK 类时不导入生成类；lib 模式按生成集定向）
-    fn cross_input(&self) -> CrossInput<'_> {
+    /// 跨类引用参数（用户类在无 JDK 类时不导入生成类；lib 模式按生成集定向）
+    fn cross_input(&self) -> CrossInput<'l> {
         if let Some(l) = self.lib {
             return CrossInput {
                 generated: Some(l.generated),
-                sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
                 prefix: self.prefix(),
                 all_in_chain: self.is_user(),
                 route: Some(l.route),
@@ -99,7 +99,6 @@ impl ClassSite<'_> {
         let jdk_on = !self.is_user() || !self.jdk.files.is_empty();
         CrossInput {
             generated: jdk_on.then_some(&self.jdk.generated),
-            sibling_imports: self.user_sibling_imports.as_deref().unwrap_or(&[]),
             prefix: self.prefix(),
             all_in_chain: self.is_user(),
             route: None,
@@ -132,7 +131,7 @@ fn parent_rust(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
         .ancestor_type_args(ci, None)
         .into_iter()
         .find(|(n, _)| n == sup)
-        .map(|(_, a)| render_arg_list(&a, ctx.ty.names))
+        .map(|(_, a)| render_arg_list(&a, &ctx.ty))
         .unwrap_or_default();
     format!("{}{args}", ctx.short(sup))
 }
@@ -166,31 +165,51 @@ pub struct ClassText {
     pub methods: Vec<EmittedMethod>,
 }
 
-/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本、跨类导入行
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本
 pub struct ClassPrep<'c> {
     visible: Vec<&'c classfile::Method>,
     overrides: Vec<hw_overrides::HwOverride<'c>>,
-    cross: Vec<String>,
 }
 
-/// 前置事实：引用集（含手写覆盖副本的签名引用）→ 跨类导入行
+/// 前置事实：结构化引用集（含手写覆盖副本的签名引用、user crate 兄弟类）在本文件作用域
+/// 按 binary 序预认领（先于任何文本渲染）→ 派生名登记
 pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
+    // 引用集只是 binary 集合，在无作用域视图上求得，不产生认领
+    let plain = ctx.unscoped();
     if ctx.is_opaque(ci.name()) {
         // 不透明形态只引用全部传递超类型（upcast 目标）
-        let referenced: BTreeSet<String> = opaque::opaque_supers(ctx, ci).into_iter().collect();
-        let cross = cross_imports(ctx, ci, &cross, &referenced)?;
-        return Ok(ClassPrep { visible: Vec::new(), overrides: Vec::new(), cross });
+        let referenced: BTreeSet<String> = opaque::opaque_supers(&plain, ci).into_iter().collect();
+        claim_structural(ctx, ci, &cross, &referenced)?;
+        return Ok(ClassPrep { visible: Vec::new(), overrides: Vec::new() });
     }
-    let mut referenced = collect_referenced(ctx, ci, cross.generated);
+    let mut referenced = collect_referenced(&plain, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
-    let overrides = hw_overrides::handwritten_inherited_overrides(ctx, ci, &visible);
+    let overrides = hw_overrides::handwritten_inherited_overrides(&plain, ci, &visible);
     for o in &overrides {
         add_desc_refs(&o.method.desc, &mut referenced);
         add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
     }
-    let cross = cross_imports(ctx, ci, &cross, &referenced)?;
-    Ok(ClassPrep { visible, overrides, cross })
+    if let Some(user) = site.user {
+        // 用户类兄弟按未过滤引用集（生成集过滤只作用于 JDK 引用）
+        referenced.extend(user.sibling_set(&plain, ci.name(), &collect_referenced(&plain, ci, None)));
+    }
+    claim_structural(ctx, ci, &cross, &referenced)?;
+    Ok(ClassPrep { visible, overrides })
+}
+
+/// 伴生契约签名（取自手写 impl 文本）里的类型名：按名字反查到类后在本文件作用域认领
+fn claim_supplement_names(ctx: &EmitCtx<'_>, blocks: &[String]) {
+    for b in blocks {
+        for w in b.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            if !w.starts_with(|c: char| c.is_ascii_uppercase()) {
+                continue;
+            }
+            if let Some(bin) = ctx.ty.binary_of(w) {
+                ctx.short(&bin);
+            }
+        }
+    }
 }
 
 /// 生成单类文件文本（串行形态：前置 → 类体）
@@ -215,14 +234,12 @@ pub fn class_text(
     site: &ClassSite<'_>,
     prep: &ClassPrep<'_>,
 ) -> Result<ClassText> {
-    let cross_imports = prep.cross.clone();
     if ctx.is_opaque(ci.name()) {
-        return Ok(opaque::opaque_text(ctx, state, ci, site, cross_imports));
+        return Ok(opaque::opaque_text(ctx, state, ci, site));
     }
     let (visible, overrides) = (&prep.visible, &prep.overrides);
     let is_iface = ci.is_interface();
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];
-    parts.extend(cross_imports.iter().cloned());
     parts.push(INHERITED_IMPORTS_SLOT.to_string());
     parts.push(String::new());
 
@@ -305,10 +322,6 @@ pub fn class_text(
         parts.push(String::new());
     }
 
-    let scanned: Vec<String> = method_blocks.iter().chain(&iface_lambda_blocks).cloned().collect();
-    parts.extend(used_vtable_imports(ctx, &scanned, &cross_imports, &sname, site.scan_prefix()));
-    if !iface_supp_blocks.is_empty() {
-        parts.extend(supplementary_iface_imports(ctx, &iface_supp_blocks, &cross_imports, &sname, site.scan_prefix()));
-    }
+    claim_supplement_names(ctx, &iface_supp_blocks);
     Ok(ClassText { text: parts.join("\n"), methods })
 }

@@ -51,7 +51,7 @@ pub(super) fn emit_class_vtable_dispatch(
     let wargs = align_args(env, sim, log, call, site, view_sig.as_ref().map(|(p, _)| p.as_slice()))?;
     let barg_str = wargs.join(", ");
     // 接收者静态类型可能已带实参：turbofish 统一在裸基名上追加擦除实参
-    let base = cls_rust.head_name(env.ctx.ty.names).unwrap_or_default();
+    let base = cls_rust.head_name(&env.ctx.ty).unwrap_or_default();
     let n_tps = env.ctx.ty.effective_class_type_params(cls_ci).len();
     let erased_targs = if n_tps == 0 { String::new() } else { format!("::<{}>", vec![super::O; n_tps].join(", ")) };
     // invokevirtual 语义：null 接收者先抛 NullPointerException（`__nn()?`，与 getfield / putfield

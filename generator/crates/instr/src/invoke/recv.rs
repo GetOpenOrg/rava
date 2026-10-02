@@ -191,7 +191,7 @@ pub fn resolve_virtual_sig_params(env: &InstrEnv, sim: &mut StackSim, call: &Cal
         recv_ty = Some(sim.state.stack[pos].ty.clone());
     }
     let targ_map = recv_ty.as_ref().and_then(|t| receiver_type_arg_map(ctx, t, &call.owner));
-    let recv_base = recv_ty.as_ref().map_or(String::new(), |t| t.head_name(ctx.ty.names).unwrap_or_else(|| ty_text(env, t)));
+    let recv_base = recv_ty.as_ref().map_or(String::new(), |t| t.head_name(&ctx.ty).unwrap_or_else(|| ty_text(env, t)));
     let recv_bin = match recv_ty.as_ref().map(|t| jvm(ctx, t)) {
         Some(JvmType::Class { binary, .. }) if ctx.reg().contains(&binary) => binary,
         _ => String::new(),

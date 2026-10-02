@@ -3,7 +3,7 @@
 
 use classfile::extras::{AnnoConst, FieldExtras, MethodExtras};
 use classfile::{Const, Field, Method};
-use ty::ShortNames;
+use ty::Names;
 
 use crate::text::{hex, py_float_repr};
 
@@ -183,7 +183,7 @@ pub struct MethodAttrExtra {
 
 /// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）；
 /// `virtual_in` 按 `names` 渲染为槽位类 Rust 名
-pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtra, names: &ShortNames) -> String {
+pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtra, names: &dyn Names) -> String {
     let esc = |s: &str| s.replace('"', "\\\"");
     let tag = if m.is_native() { "java_native" } else { "java_method" };
     let mut parts = vec![format!("name = \"{}\"", esc(&m.name)), format!("descriptor = \"{}\"", esc(&m.desc))];

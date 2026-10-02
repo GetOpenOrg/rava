@@ -1,37 +1,12 @@
-//! 继承成员 / 接口实现引用类型的 use 行：按引用类 binary 生成路径（不读其它类的文件头）。
-
-use std::collections::BTreeSet;
+//! 继承成员 / 接口实现引用类型：在接收者作用域认领名字；跨文件引用路径按引用类 binary 生成。
 
 use ty::ident::is_rust_keyword;
 
 use super::Emissions;
 use crate::ctx::EmitCtx;
-use crate::emission::ClassEmission;
 use crate::text::to_snake;
 
 const JAVA_RUNTIME: &str = "java_runtime";
-
-/// use 行导入的末段名：`^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$` 的第 2 组。
-/// `(.+)` 贪婪且末段不含 `:`，唯一候选是最后一个 `::`
-fn use_name(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("use")?;
-    let ws = rest.chars().next().filter(|c| c.is_whitespace())?;
-    let p = line.rfind("::")?;
-    if p < 3 + ws.len_utf8() + 1 {
-        return None;
-    }
-    let tail = &line[p + 2..];
-    let semi = tail.find(';')?;
-    let (name, after) = (&tail[..semi], &tail[semi + 1..]);
-    let mut cs = name.chars();
-    let head_ok = cs.next().is_some_and(|c| c == '_' || c.is_ascii_alphabetic());
-    (head_ok && cs.all(|c| c == '_' || c.is_ascii_alphanumeric()) && after.chars().all(char::is_whitespace)).then_some(name)
-}
-
-/// 文件 use 行导入的末段名（`_USE_RE` 的 group 2），全文扫描
-pub fn imported_names(text: &str) -> BTreeSet<String> {
-    text.split('\n').filter_map(|l| use_name(l).map(str::to_string)).collect()
-}
 
 /// 类在 Rust 中的完整引用路径（不含 `use` 与 `;`）。
 ///
@@ -47,7 +22,8 @@ pub fn class_use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, ems: 
 
 /// [`class_use_path`] 的核心：`target` 为目标类的 (crate 名, crate 前缀) 视图（None = 无发射记录）
 pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, target: Option<(&str, &str)>, recv_crate: &str) -> String {
-    let short = ctx.short(binary);
+    // 全路径末段 = 定义处的名字（不在调用方作用域认领）
+    let short = ctx.ty.global_names().short(binary);
     let segs: Vec<&str> = binary.split('/').collect();
     let pkg = segs[..segs.len() - 1]
         .iter()
@@ -68,43 +44,13 @@ pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, crate_prefix: &str, target: Opt
     format!("{crate_prefix}::{pkg}::{short}")
 }
 
-/// 引用类（binary，按出现序）在接收者文件里的 use 行：只导入有发射记录的类；
-/// `already` 为接收者已导入的名字（随之更新）
-pub fn class_uses<S: AsRef<str>>(ctx: &EmitCtx<'_>, classes: &[S], recv: &ClassEmission, already: &mut BTreeSet<String>, ems: &Emissions) -> Vec<String> {
-    let mut out = Vec::new();
+/// 引用类（binary，按出现序）在接收者文件作用域认领名字：只认领有发射记录的类
+/// （导入行由作用域记录生成）
+pub fn claim_classes<S: AsRef<str>>(ctx: &EmitCtx<'_>, classes: &[S], ems: &Emissions) {
     for b in classes {
         let b = b.as_ref();
-        if !ems.contains_key(b) || !already.insert(ctx.short(b)) {
-            continue;
-        }
-        out.push(format!("use {};", class_use_path(ctx, b, &recv.crate_prefix, Some(ems), &recv.crate_name)));
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::use_name;
-
-    #[test]
-    fn use_name_matches_regex() {
-        let rx = regex::Regex::new(r"^use\s+(.+)::([A-Za-z_][A-Za-z0-9_]*);\s*$").unwrap();
-        for l in [
-            "use crate::java::lang::String;",
-            "use crate::java::lang::String;  ",
-            "use  a::B;",
-            "use a::B; x",
-            "use a:::B;",
-            "use ::B;",
-            "use  ::B;",
-            "use\u{3000}x::_B9;",
-            "usex::B;",
-            "use a::B::{C};",
-            "use a::1B;",
-            "use a::B;\u{a0}",
-            "  use a::B;",
-        ] {
-            assert_eq!(use_name(l), rx.captures(l).map(|c| c.get(2).unwrap().as_str()), "{l}");
+        if ems.contains_key(b) {
+            ctx.short(b);
         }
     }
 }

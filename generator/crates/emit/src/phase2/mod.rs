@@ -38,7 +38,7 @@ pub fn anc_args(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<(String, Vec<String>)>
 
 /// 类型实参表渲染为文本
 pub fn render_args(ctx: &EmitCtx<'_>, args: &[RsType]) -> Vec<String> {
-    args.iter().map(|t| t.render(ctx.ty.names)).collect()
+    args.iter().map(|t| t.render(&ctx.ty)).collect()
 }
 
 /// 祖先 `owner_bin` 的方法签名在接收者视角下引用的类（binary，渲染序）：owner 类型形参按
@@ -72,20 +72,6 @@ pub fn fill_slot(text: &str, slot: &str, repl: &str) -> String {
         } else {
             out.push_str(line);
         }
-    }
-    out
-}
-
-/// 在首个整行插入位之前插入 `ins`（插入位保留）
-pub fn insert_before_slot(text: &str, slot: &str, ins: &str) -> String {
-    let mut out = String::with_capacity(text.len() + ins.len());
-    let mut done = false;
-    for line in text.split_inclusive('\n') {
-        if !done && line.strip_suffix('\n').is_some_and(|l| l.trim_start_matches([' ', '\t']) == slot) {
-            out.push_str(ins);
-            done = true;
-        }
-        out.push_str(line);
     }
     out
 }
@@ -133,6 +119,5 @@ mod tests {
         let t = "a\n    //@@S@@\nb\n";
         assert_eq!(fill_slot(t, "//@@S@@", "X\n"), "a\nX\nb\n");
         assert_eq!(fill_slot(t, "//@@S@@", ""), "a\nb\n");
-        assert_eq!(insert_before_slot(t, "//@@S@@", "u\n"), "a\nu\n    //@@S@@\nb\n");
     }
 }

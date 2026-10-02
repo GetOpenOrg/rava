@@ -202,14 +202,14 @@ pub fn resolve_bridge_member<'c>(
     let (real_sig, real_rust, real_classes, real_want) = match recv.and_then(|r| r.find(name, &real_param)) {
         Some(m) => {
             let classes = m.sig.classes().into_iter().map(str::to_string).collect();
-            (m.signature(ctx.ty.names), m.rust_name.clone(), classes, None)
+            (m.signature(&ctx.ty), m.rust_name.clone(), classes, None)
         }
         None => {
             let owner_em = ems.get(real_owner_ci.name()).filter(|e| !e.handwritten)?;
             let found = owner_em.find(name, &real_param)?;
             let owner_args = anc_args(ctx, recv_ci).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a);
             let mapping = param_mapping(&class_params(ctx, real_owner_ci), &owner_args.unwrap_or_default());
-            let sig = substitute_type_params(&found.signature(ctx.ty.names), &mapping);
+            let sig = substitute_type_params(&found.signature(&ctx.ty), &mapping);
             let rust = ctx.ty.receiver_member_name(&found.name, &found.descriptor, recv_ci);
             let owner_args_ty = ctx.ty.ancestor_type_args(recv_ci, None).into_iter().find(|(b, _)| b == real_owner_ci.name()).map(|(_, a)| a).unwrap_or_default();
             let classes = substituted_classes(ctx, &found.sig, real_owner_ci.name(), &owner_args_ty);
@@ -320,7 +320,7 @@ pub fn bridge_override_member(
     ems: &Emissions,
 ) -> Option<BridgeDecl> {
     let r = resolve_bridge_member(ctx, recv_ci, name, param_desc, ems, Some(recv), true)?;
-    let names = ctx.ty.names;
+    let names = &ctx.ty;
     let bridge = r.bridge;
     let eff = class_params(ctx, recv_ci);
     let es = ctx.ty.emitted_method_sig_types(recv_ci, bridge, &eff);

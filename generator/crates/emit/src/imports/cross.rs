@@ -1,8 +1,8 @@
-//! 跨类导入（文件头 use 行）。
+//! 跨类引用的结构化登记与 crate 定向。
 //!
-//! 短名导入由本类的引用记录（`referenced`，binary 集合）逐个生成：生成集内、有包、非本类的
-//! 引用类按 binary 序各出一行 `use <crate>::<包>::<短名>;`，crate 前缀按归属定向。之后是
-//! 超类链 `__VTable` → `__base` 自由函数 → 用户类兄弟模块。各类只读自身引用记录，与发射序无关。
+//! 本类的引用集（`referenced`，binary 集合）在文件作用域按 binary 序预认领；超类链
+//! `__VTable` 与 `__base` 自由函数登记为派生名。各类只读自身引用记录，与发射序无关；
+//! 导入行由作用域记录统一生成（[`super::fill`]）。
 
 use std::collections::BTreeSet;
 
@@ -14,17 +14,14 @@ use instr::owner::{class_inherits_default_method, resolve_special_method_owner};
 use crate::ctx::EmitCtx;
 use crate::error::Result;
 use crate::lang;
-use crate::text::{safe_pkg_part, to_snake};
+use crate::text::safe_pkg_part;
 
 const INVOKESPECIAL: u8 = 0xb7;
-/// prelude 同名 newtype：不 use 导入（调用方走全路径）
-const PRELUDE_NEWTYPE_NAMES: [&str; 1] = ["JArray"];
 
 /// 本类所在 crate 的导入参数
 pub struct CrossInput<'s> {
     /// 本轮生成集；None = 本 crate 不导入生成类（无 JDK 类的用户 crate）
     pub generated: Option<&'s BTreeSet<String>>,
-    pub sibling_imports: &'s [String],
     /// `crate` / `java_runtime`
     pub prefix: &'s str,
     /// 调用链不约束（用户类）
@@ -61,7 +58,7 @@ impl<'s> CrateRoute<'s> {
 
     /// lib crate 只能引用自身 / java_runtime / 声明序在前的 lib crate（反向引用来自子类型收集，
     /// 导入即 E0433）；user crate 依赖全部 lib
-    fn reachable(&self, target: &str) -> bool {
+    pub(crate) fn reachable(&self, target: &str) -> bool {
         let pos = |n: &str| self.libs.iter().position(|(l, _)| l == n);
         match (self.current.and_then(pos), pos(target)) {
             (Some(c), Some(t)) => t <= c,
@@ -89,70 +86,24 @@ pub fn rust_pkg_of(bin: &str) -> Option<String> {
     Some(pkg.split('/').map(safe_pkg_part).collect::<Vec<_>>().join("::"))
 }
 
-struct Acc {
-    /// 本类已登记的导入键（`pkg::Simple` / `__VTable` / `__base` 键格式互不相交）
-    seen: BTreeSet<String>,
-    lines: Vec<String>,
-}
-
-/// 跨类导入行：引用记录（binary 序）的短名导入 → 超类链 `__VTable` → `__base` 自由函数 →
-/// 用户类兄弟模块
-pub fn cross_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, referenced: &BTreeSet<String>) -> Result<Vec<String>> {
-    let mut acc = Acc { seen: BTreeSet::new(), lines: Vec::new() };
-    let self_short = ctx.short(ci.name());
-    if let Some(generated) = inp.generated {
-        for full in referenced {
-            if full == ci.name() || !generated.contains(full) {
-                continue;
-            }
-            let Some(pkg) = rust_pkg_of(full) else { continue };
-            let target = inp.prefix_of(full);
-            if inp.route.is_some_and(|r| !r.reachable(target)) {
-                continue;
-            }
-            let simple = ctx.short(full);
-            // 与本类同短名的引用类（缺省包与有包同名）在 ①c 由文件作用域别名区分
-            if simple == self_short || PRELUDE_NEWTYPE_NAMES.contains(&simple.as_str()) {
-                continue;
-            }
-            let key = format!("{pkg}::{simple}");
-            if acc.seen.insert(key.clone()) {
-                acc.lines.push(format!("use {target}::{key};"));
-            }
-        }
-    }
-    finish(ctx, ci, inp, acc)
-}
-
-/// 超类链 `__VTable` → `__base` 自由函数 → 用户类兄弟模块
-fn finish(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, mut acc: Acc) -> Result<Vec<String>> {
+/// 结构化引用登记：引用集（binary 序）在本文件作用域预认领 → 超类链 `__VTable` → `__base`
+/// 自由函数（派生名登记）。导入行由作用域记录在第二阶段后统一生成（[`super::fill`]）
+pub fn claim_structural(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, referenced: &BTreeSet<String>) -> Result<()> {
+    ctx.ty.preclaim(referenced.iter().map(String::as_str));
     // 不透明类（L1）无 vtable 实现 / 方法体：不引祖先 vtable 与 `__base`
     if !ci.is_interface() && !ctx.is_opaque(ci.name()) {
-        vtable_imports(ctx, ci, inp, &mut acc);
-        base_fn_imports(ctx, ci, inp, &mut acc)?;
+        vtable_claims(ctx, ci, inp);
+        base_fn_claims(ctx, ci, inp)?;
     }
-    acc.lines.extend(inp.sibling_imports.iter().cloned());
-    Ok(acc.lines)
+    Ok(())
 }
 
-/// 超类链祖先的 `Ancestor__VTable` 导入（宏生成 `impl Ancestor__VTable for Self`）
-fn vtable_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc: &mut Acc) {
+/// 超类链祖先的 `Ancestor__VTable`（宏生成 `impl Ancestor__VTable for Self`）
+fn vtable_claims(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>) {
     let mut cur = ci.super_class();
     while !cur.is_empty() && cur != lang::OBJECT {
         if inp.generated.is_none_or(|g| g.contains(cur)) || !cur.contains('/') {
-            let (key, line) = match rust_pkg_of(cur) {
-                Some(pkg) => {
-                    let simple = ctx.short(cur);
-                    (format!("{pkg}::{simple}__VTable"), format!("use {}::{pkg}::{simple}__VTable;", inp.prefix_of(cur)))
-                }
-                None => {
-                    let (simple, m) = (cur.replace('$', "_"), to_snake(cur));
-                    (format!("crate::{m}::{simple}__VTable"), format!("use crate::{m}::{simple}__VTable;"))
-                }
-            };
-            if acc.seen.insert(key) {
-                acc.lines.push(line);
-            }
+            ctx.ty.derived(cur, "__VTable");
         }
         match ctx.ty.reg.get(cur) {
             Some(c) => cur = c.super_class(),
@@ -189,8 +140,8 @@ fn chain_top<'a>(ctx: &EmitCtx<'a>, ci: &'a ClassInfo) -> &'a str {
     top
 }
 
-/// `__base` 自由函数导入：调用链上方法体里的非 `<init>` invokespecial 落点
-fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc: &mut Acc) -> Result<()> {
+/// `__base` 自由函数登记：调用链上方法体里的非 `<init>` invokespecial 落点
+fn base_fn_claims(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>) -> Result<()> {
     let reg = ctx.ty.reg;
     for (owner, m) in base_scan_methods(ctx, ci) {
         if !inp.all_in_chain && !ctx.in_chain(owner, &m.name, &m.desc) {
@@ -213,8 +164,7 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
             if pruned == Some(true) {
                 continue;
             }
-            let is_jdk = orig.contains('/');
-            let (base_simple, base_mod) = if is_jdk {
+            if orig.contains('/') {
                 let is_root = orig == chain_top(ctx, ci) && orig != ci.name();
                 if !inp.generated.is_some_and(|g| g.contains(&orig)) && !is_root {
                     continue;
@@ -226,18 +176,11 @@ fn base_fn_imports(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>, acc:
                         continue;
                     }
                 }
-                (ctx.short(&orig), rust_pkg_of(&orig).unwrap_or_default())
-            } else {
-                (orig.replace('$', "_"), to_snake(&orig))
-            };
+            }
             // 与调用点（instr invokespecial `__base` 路由）同一命名函数、同一声明类实参
             let ictx = instr::InstrCtx::new(ctx.ty, ctx.manifest, ctx.instr_facts(), &instr::NoHooks, ci.name());
             let rust_m = safe_ident(&instr::naming::mangle_if_overloaded(&ictx, &orig, &r.name, Some(&r.desc)).map_err(|e| crate::error::EmitError::Body(e.to_string()))?);
-            let base_fn = format!("{base_simple}__{rust_m}_base");
-            if acc.seen.insert(format!("crate::{base_mod}::{base_fn}")) {
-                let bprefix = if is_jdk { inp.prefix_of(&orig) } else { "crate" };
-                acc.lines.push(format!("use {bprefix}::{base_mod}::{base_fn};"));
-            }
+            ctx.ty.derived(&orig, &format!("__{rust_m}_base"));
         }
     }
     Ok(())

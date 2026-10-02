@@ -28,7 +28,7 @@ impl TyCtx<'_> {
     /// 签名派生类型是否可直接用于发射签名：整体是类级形参，或所有类型名均为
     /// 内建 / 类级形参 / 注册表短名
     pub fn sig_type_valid(&self, t: &RsType, class_tparams: &[String]) -> bool {
-        if class_tparams.contains(&t.render(self.names)) {
+        if class_tparams.contains(&t.render(self)) {
             return true;
         }
         let mut idents = Vec::new();
@@ -36,14 +36,14 @@ impl TyCtx<'_> {
         idents.iter().all(|(name, _)| {
             SIG_TYPE_BUILTIN.contains(&name.as_str())
                 || class_tparams.contains(name)
-                || self.names.is_registry_short(name)
+                || self.is_registry_short(name)
         })
     }
 
     /// 类型头名是否为注册表内接口（方法签名中接口类型擦除为描述符形态）
     pub fn sig_type_is_iface(&self, t: &RsType) -> bool {
-        t.head_name(self.names)
-            .is_some_and(|h| self.names.is_iface_short(&h))
+        t.head_name(self)
+            .is_some_and(|h| self.is_iface_short(&h))
     }
 
     fn sig_type_usable(&self, t: &RsType, class_tparams: &[String]) -> bool {
@@ -138,7 +138,7 @@ impl TyCtx<'_> {
         let mut solved: BTreeMap<String, RsType> = BTreeMap::new();
         for (view_arg, declared_arg) in view.iter().zip(declared_args) {
             // 以渲染文本判定「实参就是形参名」（与 Python 串比较同口径）
-            let text = view_arg.render(self.names);
+            let text = view_arg.render(self);
             if params.contains(&text) {
                 solved.entry(text).or_insert(declared_arg);
             }
