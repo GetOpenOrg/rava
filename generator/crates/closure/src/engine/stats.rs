@@ -12,7 +12,7 @@ pub(super) enum Phase {
     Setup,
     /// 流边差分传播
     Flows,
-    /// 反射成员枚举
+    /// 反射成员枚举、反射调用实参池派发
     Enumerate,
     /// 方法处理（执行事件、手写体），不含抽象解释
     Process,
@@ -317,8 +317,8 @@ impl Ctx<'_> {
 }
 
 /// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
-pub(super) const KINDS: usize = 16;
-const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G"];
+pub(super) const KINDS: usize = 17;
+const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall"];
 
 #[inline]
 pub(super) fn kind_ix(n: &Node) -> usize {
@@ -339,6 +339,7 @@ pub(super) fn kind_ix(n: &Node) -> usize {
         Node::HR(..) => 13,
         Node::Esc => 14,
         Node::G(..) => 15,
+        Node::RP(_) | Node::RA(_) => 16,
     }
 }
 

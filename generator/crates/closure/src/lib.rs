@@ -204,6 +204,7 @@ impl Closure<'_> {
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
             "field_enum_gaps": e.field_enum_gaps.len(),
+            "rcall": e.rcall_summary(),
             "field_writer_live": e.field_handles().0,
             "fields_open_all": e.field_handles().1,
             "hw_written_fields": e.hw_written.len(),

@@ -23,6 +23,7 @@ impl<'a> Engine<'a> {
     ///   取各调用点在该形参上的字符串常量（如按名构造 MemberName 的辅助方法），常量集增长时本站点重跑；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
     pub(super) fn reflective_writes(&mut self, m: usize, off: u32, mref: &MemberRef, opcode: u8, args: &[V]) {
+        self.rcall_conversion(m, off, mref, opcode, args);
         let class_param = parse_method(&mref.desc)
             .is_some_and(|md| md.params.iter().any(|p| matches!(p, FieldType::Object(c) if c == CLASS)));
         let class_recv = opcode != classfile::op::INVOKESTATIC && mref.owner == CLASS;
@@ -35,6 +36,8 @@ impl<'a> Engine<'a> {
             .collect();
         let k = self.mref_key(mref);
         if self.man.is_method_lookup(&k) {
+            // 查找结果经哪条反射调用通道调用（按查找结果的类型，见 `reflect_call.rs`）
+            let ch = self.rcall_lookup_channel(&mref.desc);
             let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
             // 本调用点上的字面量名（常量实参 / 合流前的各字面量）；形参透传来的名字不在此列
             let mut site_names: BTreeSet<Rc<str>> = BTreeSet::new();
@@ -80,7 +83,7 @@ impl<'a> Engine<'a> {
             // 同名方法拉进反射面（如序列化辅助方法按形参取名、按形参取类）；拼段名同理只按常量类 / Class 形参定目标
             for name in &names {
                 for c in &classes {
-                    self.reflect_name(c, name);
+                    self.reflect_name(c, name, ch);
                 }
             }
             if class_recv && !site_names.is_empty() {
@@ -89,7 +92,7 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     for name in &site_names {
-                        self.reflect_name(&c, name);
+                        self.reflect_name(&c, name, ch);
                     }
                 }
             } else if class_recv && !names.is_empty() && classes.is_empty() {
@@ -97,7 +100,7 @@ impl<'a> Engine<'a> {
                 self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }
             for (c, name) in &per_class {
-                self.reflect_name(c, name);
+                self.reflect_name(c, name, ch);
             }
         }
         if class_param || class_recv {
@@ -416,6 +419,7 @@ impl<'a> Engine<'a> {
         let base = usize::from(!is_static);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
+            self.rcall_site(m, off, t, recv_fs.as_deref(), a);
         }
         if let (Some(rt), Some(res)) = (ret, res) {
             let model = self.methods[t].ret_model;

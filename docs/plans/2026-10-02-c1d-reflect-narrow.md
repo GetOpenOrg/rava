@@ -155,6 +155,69 @@ A、B 基于 28090062，均已过 `cargo build` 与生成器全部单元测试�
 - COWAL 的实例化是合法的（`ServicesCatalog.addProviders@18`，经 `AccessibleObject.<clinit>` 的引导代码）；
   它进入 `writeObject0` 是经①的大汇点，不是经 open 值面实例化——由 b1 收窄。
 
+### 3.3 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
+
+- **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
+  反射对象通道 = `method_invokers` 里带反射对象形参的入口（invoke0）；方法句柄通道 = 签名多态入口（`method_invokers` /
+  `[facts.handle_interpreters]`）。入口调用点（`invoke.rs` `edge_ret` 在 `hw_site` 后一行 `rcall_site`）上声明为 Object 的
+  实参入 `RP`、Object[] 入 `RA`（数组增长时其元素节点并入 `RP`，open 数组按元素类型 open）；签名多态点的句柄与全部实参
+  入 `RP`。方法句柄通道另并入解释器值池 `S(t,POOL)`（绑定实参、LambdaForm 中间值的来源）与经该通道调用的成员返回值。
+- **按接收者派发**：方法类反射成员（`reflect.rs` `expose`）不再 `vm_dispatch + open_params`，改登记 `RcallMember`
+  （按名查找的通道掩码 `reflect_names: 名字 → 通道位`；用户类枚举出的方法走反射对象通道）。池增长经已有的
+  `enum_recv` 增长钩子（值类型泛化为 `RHook::{Enum, Pool, Array}`，**未改 flow.rs**）回到 worklist：可覆写方法按池中
+  每个接收者 `select` 实现、私有 / final 方法即成员本身，`method_ctx(k, recv_ctx(x))` 克隆上下文、`P0 = exact(x)`，
+  形参按声明类型接池（`rcall_bind`）。池中 open 接收者：虚成员退回 VM 枢纽一次（`VmBind::Rcall`，枢纽新目标同样接池，
+  `hub.rs` 两行），非虚成员把过滤后的 open 加入本体 P0；lambda / 手写对象接收者同基线 VM 枢纽不建链（计数）。
+  字段 / 构造器 / 记录访问器仍走 `VmBind::Open`。
+- **Method → 方法句柄转换按来源追踪**（清单 `[facts.reflect] method_to_handle`，`invoke.rs` `reflective_writes` 开头一行）：
+  `MemberName(Method)` 的实参来自常量名查找（`getDeclaredMethod` 等）的只把该方法点名到句柄通道；来自形参的回溯调用点；
+  来源不明才全局放开（`rcall_global_m2h`，所有反射对象成员另接句柄通道）。ST 中 `MemberName(Method)` 只经
+  `MethodHandleImpl.createFunction` 的常量名查找，`method_to_handle` 全程 false。
+- **内存效果成员不接句柄池**：`[facts.array_writes]` / `[facts.memory_reads]` 声明的成员（Unsafe 读写族，DMH 字段访问器经
+  名字查找暴露）经句柄通道调用时由解释器调用点按 DMH 所指字段建模（Gate::Handle）；首版把句柄池接到其形参，本体的按偏移
+  写入臂把池里每个对象的全部字段写脏（RP / MHD 多出 `Node$OfInt.copyInto` 等 16 个方法），改为不接后与基线一致。
+- 新边界用例 `62_reflection/TestReflectInvokePerReceiver`（接口默认方法 / 覆写按接收者选实现、私有容器方法两接收者各自
+  遍历、Object[] 实参、lambda 接收者经接口方法、unreflect 句柄、错接收者 IAE；期望为 JDK 21 输出）。闭包含全部回调
+  （`Shape.describe` / `Square.describe` / `Circle.name` / `Box.dump` / `Derived.who` 经 reflect 入链）。
+
+实测（本机 `rava closure`，基线 b202e842 → T3，同机先后跑）：
+
+| 用例 | 类数 | 方法数 | reflect.gaps | field_enum_gaps | 耗时 s |
+|---|---|---|---|---|---|
+| HelloWorld | 266 → 266 | 723 → 723 | 0 → 0 | 0 | 2 → 2 |
+| TestReflectProbe | 1536 → 1536 | 8949 → 8949 | 1 → 1 | 0 | 14 → 14 |
+| TestReflectFieldNames | 1536 → 1536 | 8954 → 8954 | 1 → 1 | 0 | 15 → 14 |
+| TestMethodHandleDirect | 1529 → 1529 | 8924 → 8924 | 1 → 1 | 0 | 14 → 14 |
+| StockTrans | 1803 → 1803 | 10924 → 10924 | 14 → 14 | 2 | 124 → 130 |
+| DeepCopy | 1804 → 1804 | 10916 → 10916 | 14 → 14 | 2 | 124 → 130 |
+| TestSerialDefaultSuid | 1809 → 1809 | 10914 → 10914 | 12 → 12 | 2 | 129 → 135 |
+| TestSerialProxyForm | 1806 → 1806 | 10914 → 10914 | 12 → 12 | 2 | 132 → 138 |
+
+rcall 统计（closure.json `summary.rcall`）：
+
+| 用例 | 对象通道成员 / 池 / open / 目标 | 句柄通道成员 / 池 / open / 目标 | 派发 | 枢纽退回 | open 接收者 | lambda/手写接收者 |
+|---|---|---|---|---|---|---|
+| StockTrans | 14 / 7471 / 344 / 6525 | 211 / 7471 / 344 / 235 | 23006 | 19 | 435 | 1137 |
+| DeepCopy | 17 / 7463 / 344 / 6419 | 211 / 7463 / 344 / 235 | 22771 | 29 | 413 | 1131 |
+| TestSerialDefaultSuid | 23 / 7478 / 344 / 6428 | 211 / 7478 / 344 / 235 | 22850 | 20 | 448 | 1137 |
+| TestSerialProxyForm | 11 / 7484 / 343 / 6419 | 211 / 7484 / 343 / 235 | 22840 | 18 | 429 | 1143 |
+| TestReflectInvokePerReceiver | 13 / 1755 / 85 / 18 | 206 / 1755 / 85 / 232 | 1228 | 23 | 153 | 1 |
+
+- **未达标项：`ArrayList.writeObject` 的 `this` 仍是全部 ArrayList 分配点**（现按分配点各一个上下文，P0 = exact，
+  另有 open(ArrayList) 经枢纽退回）。两条通道的池都是全程序值集（含 open(Object)），根因在池的来源，不在派发：
+  ① **句柄池 → 对象池**：`jdk.reflect.useNativeAccessorOnly=true`，每个 `Method.invoke` 都经
+  `DirectMethodHandleAccessor.invokeImpl` 的 `target.invokeExact(obj, args)` → 解释器 → `NativeAccessor.invoke`
+  （按名查找暴露的句柄成员，形参接句柄池）→ invoke0（对象通道入口），所以对象池 ⊇ 句柄池。句柄池的万能来自解释器值池
+  `prod`：Gate::Handle 读取的「偏移可经字段句柄 / MemberName 取得」字段含字节码外写入的 `Class.classData`、
+  `Throwable.backtrace`、`MemberName.type` 等（各带 120 类 + open(Object)），`@edge:prod MethodHandle.invokeBasic` 可见；
+  ② **writeObject0 大汇点**：`FieldReflector` 按未知偏移读出的值（SCC 代表 `U ClassLoader.assertionLock`）经
+  `writeObject0` → `invokeWriteObject` 进对象池——b1 范畴。
+- 终态方案（不在 T3 文件范围内，需 b1 / hw_mem 配合）：句柄通道按句柄对象路由——签名多态点的接收者句柄值集若全为已知
+  DMH / BMH 分配点，按其 MemberName 所指目标与 BMH 绑定字段逐句柄接实参（只对 open / 所指未知的句柄退回通道池）；
+  Gate::Handle 读取限于确有字段句柄（findGetter / unreflectGetter / VarHandle）可达的字段，不含仅字节码外写入的字段。
+  两者落地后 `NativeAccessor.invoke` 的实参即 `Method.invoke` 调用点实参，再加 b1 收窄 writeObject0，对象池即为
+  真正被反射调用的接收者集合，T3 的按接收者派发直接给出窄的 `writeObject` 上下文，无需再改本节代码。
+
 ## 四、交接（2026-10-02，C1d-b 停止）
 
 ### 4.1 分支与提交
