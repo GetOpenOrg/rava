@@ -14,9 +14,9 @@
 //! 方法项带描述符（运行时据 (类, 方法名, 描述符) 取 `MethodMeta`）与宿主类（方法体复制进他类时
 //! 的所在类，`declared_by` 注入；同所在类时为空）——这是 `vm_stack` 栈帧的唯一来源。
 
-mod handwritten;
+pub(super) mod handwritten;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::fs::Writer;
 use crate::error::Result;
@@ -222,6 +222,7 @@ pub fn write(
     out_dir: &Path,
     files: &[(&Path, &str)],
     lnt: &dyn Fn(&str, &str, &str) -> Option<Vec<(u16, u16)>>,
+    root: &[(PathBuf, Vec<handwritten::HwMethod>)],
 ) -> Result<()> {
     let mut tables: Vec<FileLines> = files
         .iter()
@@ -240,6 +241,13 @@ pub fn write(
         let companion = dir.join(format!("{stem}_impl.rs"));
         let Ok(rel) = companion.strip_prefix(out_dir).map(|r| r.to_string_lossy().replace('\\', "/")) else { continue };
         if let Some(t) = std::fs::read_to_string(&companion).ok().and_then(|c| handwritten::companion_table(&rel, &c, &hws)) {
+            tables.push(t);
+        }
+    }
+    // 手写根类：登记来自其字节码（见 handwritten::root_methods），体在 overlay 落盘的根类手写文件
+    for (path, hws) in root {
+        let Ok(rel) = path.strip_prefix(out_dir).map(|r| r.to_string_lossy().replace('\\', "/")) else { continue };
+        if let Some(t) = std::fs::read_to_string(path).ok().and_then(|c| handwritten::companion_table(&rel, &c, hws)) {
             tables.push(t);
         }
     }

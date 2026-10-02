@@ -16,7 +16,7 @@ pub const LINE_NATIVE: u32 = u32::MAX;
 pub const LINE_UNKNOWN: u32 = u32::MAX - 1;
 
 /// 生成文件中登记为手写的方法
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HwMethod {
     /// 所在 `impl X` 块的 Rust 类型名
     pub self_ty: String,
@@ -101,12 +101,72 @@ pub fn collect(text: &str) -> Vec<HwMethod> {
     out
 }
 
-/// 伴生文件 `impl` 块中各 fn 的 (类型名, fn 名, 起始行, 结束行)
-fn companion_fns(text: &str) -> Vec<(String, String, u32, u32)> {
-    let Ok(file) = syn::parse_file(text) else { return Vec::new() };
+/// 手写根类（VM 契约手写，无 `java_class!` 生成文件）的登记：登记源是根类自身的字节码——
+/// 每个方法 `(名, 描述符, 是否 native, 是否可覆盖)` 对应 `invokespecial` 落点自由函数
+/// `<根类型>__<fn>_base`（根类实现本体），以及 `impl <根类型>` 中按调用侧命名规则得到的 fn
+/// （`rust_name`，与方法体生成器的根类重载命名同源）。可覆盖方法的 `impl` fn 是静态类型为
+/// 根类的虚调用入口（转 vtable 派发到覆盖体），与生成类的派发入口同样不成帧、不登记。
+/// 构造器 / 类初始化不登记（手写构造工厂不对应 Java `<init>` 帧，随 C1d-a 过渡类清理处理）。
+pub fn root_methods<'m>(
+    class: &str,
+    source: &str,
+    self_ty: &str,
+    methods: impl IntoIterator<Item = (&'m str, &'m str, bool, bool)>,
+    rust_name: &dyn Fn(&str, &str) -> String,
+) -> Vec<HwMethod> {
+    let mut out = Vec::new();
+    for (name, descriptor, native, overridable) in methods {
+        if name.starts_with('<') {
+            continue;
+        }
+        let method = Method::new(class, name, descriptor, source, class);
+        let f = rust_name(name, descriptor);
+        let base = format!("{self_ty}__{f}_base");
+        out.push(HwMethod { self_ty: String::new(), fn_name: base, method: method.clone(), native });
+        if !overridable {
+            out.push(HwMethod { self_ty: self_ty.to_string(), fn_name: f, method, native });
+        }
+    }
+    out
+}
+
+/// 伴生文件中的一个 fn
+struct CompanionFn {
+    /// `impl` 块的类型名（顶层自由函数为空）
+    ty: String,
+    name: String,
+    /// 起始行（含属性行：`#[jvm_native]` 插入的类初始化以属性位置为 span）
+    start: u32,
+    /// 接收者 null 检查序言之后的首行：invokevirtual 的隐式 null 检查属于调用侧
+    /// （JVM 在调用点抛 NPE，被调方法不成帧），序言区间与生成方法的派发外壳同样不成帧
+    body: Option<u32>,
+    end: u32,
+}
+
+/// 首条语句是否为接收者 null 检查 `if <recv>.is_jvm_null() { .. }`，是则给出其结束行
+fn null_check_end(block: &syn::Block) -> Option<u32> {
+    let Some(syn::Stmt::Expr(syn::Expr::If(i), _)) = block.stmts.first() else { return None };
+    let syn::Expr::MethodCall(call) = &*i.cond else { return None };
+    (call.method == "is_jvm_null" && i.else_branch.is_none()).then(|| i.then_branch.brace_token.span.close().end().line as u32)
+}
+
+fn companion_fn(ty: &str, attrs: &[syn::Attribute], sig: &syn::Signature, block: &syn::Block) -> CompanionFn {
     let line = |s: Span| s.start().line as u32;
+    let start = attrs.iter().map(|a| line(a.span())).chain([line(sig.span())]).min().unwrap_or(0);
+    let end = block.brace_token.span.close().end().line as u32;
+    let body = null_check_end(block).map(|l| l + 1);
+    CompanionFn { ty: ty.to_string(), name: sig.ident.to_string(), start, body, end }
+}
+
+/// 伴生文件中各 fn：`impl` 块的固有方法取块类型名，顶层自由函数类型名为空
+fn companion_fns(text: &str) -> Vec<CompanionFn> {
+    let Ok(file) = syn::parse_file(text) else { return Vec::new() };
     let mut out = Vec::new();
     for item in &file.items {
+        if let syn::Item::Fn(f) = item {
+            out.push(companion_fn("", &f.attrs, &f.sig, &f.block));
+            continue;
+        }
         let syn::Item::Impl(imp) = item else { continue };
         if imp.trait_.is_some() {
             continue;
@@ -114,10 +174,9 @@ fn companion_fns(text: &str) -> Vec<(String, String, u32, u32)> {
         let syn::Type::Path(p) = &*imp.self_ty else { continue };
         let Some(ty) = p.path.segments.last().map(|s| s.ident.to_string()) else { continue };
         for it in &imp.items {
-            let syn::ImplItem::Fn(f) = it else { continue };
-            let start = f.attrs.iter().map(|a| line(a.span())).chain([line(f.sig.span())]).min().unwrap_or(0);
-            let end = f.block.brace_token.span.close().end().line as u32;
-            out.push((ty.clone(), f.sig.ident.to_string(), start, end));
+            if let syn::ImplItem::Fn(f) = it {
+                out.push(companion_fn(&ty, &f.attrs, &f.sig, &f.block));
+            }
         }
     }
     out
@@ -126,9 +185,9 @@ fn companion_fns(text: &str) -> Vec<(String, String, u32, u32)> {
 /// 伴生文件的行表（无登记方法命中 → None）
 pub fn companion_table(rel: &str, text: &str, hws: &[HwMethod]) -> Option<FileLines> {
     let mut out = FileLines { rel: rel.to_string(), ..Default::default() };
-    let mut spans: Vec<(u32, u32, u32, u32)> = Vec::new();
-    for (ty, name, start, end) in companion_fns(text) {
-        let Some(hw) = hws.iter().find(|h| h.self_ty == ty && h.fn_name == name) else { continue };
+    let mut spans: Vec<(u32, Option<u32>, u32, u32, u32)> = Vec::new();
+    for f in companion_fns(text) {
+        let Some(hw) = hws.iter().find(|h| h.self_ty == f.ty && h.fn_name == f.name) else { continue };
         let idx = match out.methods.iter().position(|m| *m == hw.method) {
             Some(p) => p as u32,
             None => {
@@ -136,14 +195,18 @@ pub fn companion_table(rel: &str, text: &str, hws: &[HwMethod]) -> Option<FileLi
                 out.methods.len() as u32 - 1
             }
         };
-        spans.push((start, end, idx, if hw.native { LINE_NATIVE } else { LINE_UNKNOWN }));
+        spans.push((f.start, f.body, f.end, idx, if hw.native { LINE_NATIVE } else { LINE_UNKNOWN }));
     }
     if spans.is_empty() {
         return None;
     }
     spans.sort();
-    for (start, end, idx, java_line) in spans {
-        out.rows.push((start, idx, java_line));
+    for (start, body, end, idx, java_line) in spans {
+        match body {
+            // 序言（java 行 0）不成帧，与生成方法的派发外壳同一约定
+            Some(b) => out.rows.extend([(start, idx, 0), (b, idx, java_line)]),
+            None => out.rows.push((start, idx, java_line)),
+        }
         out.rows.push((end + 1, NO_METHOD, 0));
     }
     Some(out)
@@ -203,6 +266,35 @@ impl A {
         let t = companion_table("java_runtime/src/p/a_impl.rs", COMPANION, &hws).expect("命中");
         assert_eq!(t.methods.len(), 2);
         assert_eq!(t.rows, vec![(4, 0, LINE_NATIVE), (9, NO_METHOD, 0), (12, 1, LINE_UNKNOWN), (15, NO_METHOD, 0)]);
+    }
+
+    #[test]
+    fn root_methods_cover_impl_and_base_fns() {
+        let methods = [
+            ("<init>", "()V", false, false),
+            ("c", "()Ljava/lang/Object;", true, true),
+            ("w", "(J)V", false, false),
+        ];
+        let rust = |n: &str, d: &str| if d == "(J)V" { format!("{n}_l") } else { n.to_string() };
+        let hws = root_methods("p/R", "R.java", "R", methods, &rust);
+        let names: Vec<(&str, &str)> = hws.iter().map(|h| (h.self_ty.as_str(), h.fn_name.as_str())).collect();
+        assert_eq!(names, vec![("", "R__c_base"), ("", "R__w_l_base"), ("R", "w_l")]);
+        let text = "pub fn R__c_base(x: &X) -> Result<Object> {\n    todo()\n}\n\nimpl R {\n    pub fn w_l(&self) {}\n}\n";
+        let t = companion_table("java_runtime/src/p/r.rs", text, &hws).expect("命中");
+        assert_eq!(t.rows, vec![(1, 0, LINE_NATIVE), (4, NO_METHOD, 0), (6, 1, LINE_UNKNOWN), (7, NO_METHOD, 0)]);
+    }
+
+    #[test]
+    fn receiver_null_check_is_prologue() {
+        let hws = vec![HwMethod {
+            self_ty: "R".into(),
+            fn_name: "n".into(),
+            method: Method::new("p/R", "n", "()V", "R.java", "p/R"),
+            native: true,
+        }];
+        let text = "impl R {\n    pub fn n(&self) -> Result<()> {\n        if self.0.is_jvm_null() {\n            return Err(npe());\n        }\n        work()\n    }\n}\n";
+        let t = companion_table("java_runtime/src/p/r_impl.rs", text, &hws).expect("命中");
+        assert_eq!(t.rows, vec![(2, 0, 0), (6, 0, LINE_NATIVE), (8, NO_METHOD, 0)]);
     }
 
     #[test]

@@ -296,7 +296,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
-    line_tables::write(&mut w, out_dir, &final_files, &lnt)?;
+    line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
@@ -315,4 +315,23 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         body_log: std::mem::take(&mut state.body_log),
         perf,
     })
+}
+
+/// 手写根类的行表登记（根类无生成文件）：根类字节码的方法按调用侧根类命名规则对应 overlay
+/// 落盘的根类手写文件中的 fn（根类重载取描述符后缀名，前提是该名在手写 API 名面中；
+/// 规则与登记形态见 `line_tables::handwritten::root_methods`）
+fn root_line_registration(ctx: &EmitCtx<'_>, jrt_src: &Path) -> Vec<(PathBuf, Vec<line_tables::handwritten::HwMethod>)> {
+    let root = ty::consts::OBJECT;
+    let Some(cf) = ctx.cp.get(root) else { return Vec::new() };
+    let source = cf.source_file.clone().unwrap_or_default();
+    let rust_name = |name: &str, desc: &str| {
+        let mangled = ty::type_map::mangle_name(&ctx.manifest.ty, name, desc);
+        let chosen = if mangled != name && ctx.root_api().contains(&mangled) { mangled } else { name.to_string() };
+        ty::ident::safe_ident(&chosen)
+    };
+    // 可覆盖 = 实例、非 final、非 private（虚派发目标可被子类替换）
+    let overridable = |a: u16| a & (classfile::acc::STATIC | classfile::acc::FINAL | classfile::acc::PRIVATE) == 0;
+    let methods = cf.methods.iter().map(|m| (m.name.as_str(), m.desc.as_str(), m.is_native(), overridable(m.access)));
+    let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
+    crate::ctx::EmitShared::root_files(jrt_src).into_iter().map(|p| (p, hws.clone())).collect()
 }

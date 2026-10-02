@@ -225,7 +225,12 @@ fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
         crate::meta::LINE_UNKNOWN => -1,
         n => n as i32,
     };
-    let bci = if line > 0 { bci_of_line(class, name, descriptor, line as u16) } else { 0 };
+    // 手写体无 Java 行（-1）时 bci 取 -1：StackWalker 按 bci 定行同样得 -1，与 Throwable 栈一致
+    let bci = match line {
+        l if l > 0 => bci_of_line(class, name, descriptor, l as u16),
+        -1 => -1,
+        _ => 0,
+    };
     Some(JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line, bci })
 }
 

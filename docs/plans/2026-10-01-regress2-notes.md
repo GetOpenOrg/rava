@@ -156,9 +156,21 @@
   `X__m_base` 包装以调用点 span 落在块外或方法序言，不成帧，方法体 token 保留原 span 在实际执行帧上成帧。
 - 闭包帧一律不成帧（符号含 `{closure`）：原位闭包单行，外层帧同一行；延迟 lambda 代理闭包的位置是创建点，
   旧 Throwable 规则会在创建方法上多出一帧，现消除。
-- 已知缺口（终态目标 0）：手写根类 object.rs（无 `[meta]` 登记）的 native 与手写 `<init>`（过渡类）不成帧；
-  StackWalker 的 StackFrameInfo 行号仍为 -1 / -2（bci 无行映射，待 bci → 行号旁路）。
-- 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段，expected 为 JDK 21 实测）。
+- 手写根类成帧：根类无生成文件，登记源为根类自身字节码（`project::root_line_registration` →
+  `handwritten::root_methods`）：每个方法对应 `invokespecial` 落点 `<根>__<fn>_base`（根类实现本体，object.rs），
+  不可覆盖方法（final / private / static）另对应 `impl <根>` 固有 fn（object_impl.rs；可覆盖方法的固有 fn 是静态类型
+  为根类的虚调用入口，转 vtable 到覆盖体，与派发入口同样不登记）；fn 名按调用侧根类重载命名规则（与方法体生成器同源）。
+  伴生 fn 首条语句若为接收者 null 检查 `if <recv>.is_jvm_null() {..}`，该区间记 Java 行 0（序言，不成帧）：
+  invokevirtual 的隐式 null 检查在调用点抛 NPE，被调方法不入栈。clone / notify / notifyAll / getClass / wait 由此成帧。
+- StackWalker 行号与 Throwable 同源：行表另附各方法的 LineNumberTable（`__java_meta_LINE_NUMBERS`），帧的 bci 取
+  行表 Java 行的首个 start_pc（手写无行 → -1），`StackStreamFactory` 填 `StackFrameInfo.bci`，
+  `initStackTraceElement` 按 HotSpot `Method::line_number_from_bci` 由 bci 定行（native → -2）。
+- 过渡类手写 `<init>`（手写构造工厂不对应 Java `<init>` 帧）不成帧，只记录：随 C1d-a 删除过渡类手写后自然消失。
+  根类 `wait(J)` / `wait(JI)` 等有字节码的非 native 方法当前为手写体（帧行 -1，JDK 为 `wait0` native 帧 + `wait` 行号），
+  归手写边界收窄（字节码翻译后自然对齐），不属帧来源问题。
+- 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段）、
+  62_reflection/TestStackWalkerLines（直接 / 递归 / lambda / default / 继承 / 构造器 / clinit 帧的 StackWalker 行号）、
+  06_exceptions/TestObjectNativeFrames（Object.clone / notify / notifyAll native 帧），expected 均为 JDK 21 实测。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
