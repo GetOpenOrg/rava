@@ -45,7 +45,7 @@
 | K14 | e2e 形态接口（H1） | ⏳ S6+S7 既定队列（◀ C4 收官；dyn_compare 冻结中） | S6 dyn 并入 rava → S7 run_tests 拆 scripts/e2e/ + form.toml + 63_junit 模板 | 一切 e2e 目录（63_junit、64_… 段） | 既定队列 |
 | K15 | 确定性时钟源 | ◐ 待核 | 时钟注入 / 确定性沙箱复核（golden 可复现前提；roadmap「时钟/随机确定性沙箱」逼出能力） | Quartz 调度、Caffeine 过期用例、logback 时间戳 | 小（若已有注入机制）——需核 |
 
-**jar 资产盘点（52 个已在盘，`tests/lib_pilot/deps/target/pilot-libs/`）**：commons 全家（lang3/text/csv/io/codec/collections4/math3/beanutils/…）、guava 33.7.1、jackson 三件套（core/annotations/databind）、gson、httpclient/httpcore（4/5 两代）、joda-time、picocli、slf4j-api、eclipse-collections、assertj、byte-buddy（排除项，仅透视用）、junit/hamcrest。**不在盘**：servlet-api、mybatis、spring 全家、**OGNL、struts2、hibernate/jakarta.persistence-api（SSH 增补件）**、**H2（D-4 拍板件；注意盘上 `httpcore5-h2` 是 HTTP/2 协议件、非 H2 数据库）**——pom 增行即可（fetch 脚本既有机制）。
+**jar 资产盘点（2026-10-03 取包后 **92 个**在盘，`tests/lib_pilot/deps/target/pilot-libs/`）**：commons 全家、guava 33.7.1、jackson 三件套、gson、httpclient/httpcore（4/5 两代）、joda-time、picocli、eclipse-collections、assertj、junit/hamcrest + **新拉：servlet 6.1.0 / JPA 3.2.0 / hibernate 7.4.6 / struts2 7.4.0 / mybatis 3.5.19 / OGNL 3.4.14 / H2 2.5.252（字节码恰 21，双 JDK 兼容）/ spring-core+beans 6.2.19 / slf4j 2.0.20 / Logback 1.5.38 / Jsoup 1.23.2 / Caffeine 3.3.0 / SnakeYAML 2.7 / typesafe 1.4.9 / Fastjson2 2.0.65 / Retrofit 2.12.0 / TestNG 7.12.0**。版本决策表与字节码核查见 [e2e-capability-coverage §一](2026-10-03-e2e-capability-coverage.md)。目标 JDK = **21 与 25** 双跑（golden 先 21，JDK25 适配轮后 25 侧复跑）。
 
 ## 三、分梯队矩阵（核心表）
 
@@ -55,7 +55,7 @@
 
 | # | pilot | 类数量级 | 压测面（为什么值得做） | mains | e2e | 前置 |
 |---|---|---:|---|---:|---:|---|
-| 1 | slf4j-api 1.7.36 | ~80 | SPI 绑定（静态目录消费）、MDC（ThreadLocal）、`{}` 消息格式化纯计算 | 3 | 5 | 无 |
+| 1 | slf4j-api 2.0.20（2026-10-03 升线：logback 1.5 配对，压过旧传递 1.7.36） | ~130 | SPI 绑定（静态目录消费）、MDC（ThreadLocal）、`{}` 消息格式化纯计算 | 3 | 5 | 无 |
 | 2 | joda-time 2.14.4 | ~300 | 不可变对象族、历法纯计算、时区（tzdb 已内嵌的同源验证） | 3 | 8 | 无 |
 | 3 | jackson-core 2.22.3 | ~280 | 流式 JsonParser/Generator 往返、数字/编码边角、token 状态机 | 4 | 10 | 无 |
 | 4 | commons-lang3 3.20.0 | ~2900→种子子集 | **P1 既定**（roadmap）：StringUtils / 数值 / mutable / 时间格式化 | 5 | 12 | 无 |
@@ -95,7 +95,7 @@
 |---|---|
 | spring-context IoC 全量 | 类路径扫描（ClassLoader 资源枚举）建模 + L3 全量稳定 + spring-beans 切片验收 |
 | **Spring Boot** | IoC 全量 + servlet 容器件（用户域 Java 实现 + 翻译路径）成熟 + **运行期类生成替代协议决策**（launcher 嵌套 jar 类加载、自动装配、内嵌容器、AOP 代理）。与 Maven/Gradle/Mockito/Netty/byte-buddy 同列静态模型边界（roadmap「明确不早期碰」的正式化——北极星不是里程碑） |
-| **hibernate-core 6.x** | JDBC 层落地（#9 H2 可复用为驱动）+ #10 MyBatis ORM 面验收 + **翻译期子类合成立项**（实体懒加载代理：闭包内实体类静态已知，代理子类可由生成器翻译期合成——byte-buddy 运行期生成的静态替代，与 Mapper 代理合成同族能力）+ HQL/ANTLR 生成代码规模实测（~万级类闭包） |
+| **hibernate-core 7.4.x**（2026-10-03 版本落位：org.hibernate.orm 7.4.6 + JPA 3.2） | JDBC 层落地（#9 H2 可复用为驱动）+ #10 MyBatis ORM 面验收 + **翻译期子类合成立项**（实体懒加载代理：闭包内实体类静态已知，代理子类可由生成器翻译期合成——byte-buddy 运行期生成的静态替代，与 Mapper 代理合成同族能力）+ HQL/ANTLR 生成代码规模实测（~万级类闭包） |
 
 ### §三-A SSH 三件套覆盖核查（2026-10-03 增补）
 
