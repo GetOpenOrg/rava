@@ -2,6 +2,9 @@
 
 分支 regress2（基于 rust-closure-analyzer@f685c7b5）。复现与验证均单例运行。
 
+> 状态（2026-10-02）：§1–§9 ✅ 6c7eb831；§10.1a 栈帧来源统一 ✅ 已合入集成分支 be1b97be（frames-unify bf91f075）。
+> 遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 `<init>` 不成帧 ◀── C1d-a a2（过渡手写删除）。
+
 ## 1. TestForNameInit —— 已修
 
 - 现象：`Class.forName("[I").getName()` 处 null_recv 违约 panic。

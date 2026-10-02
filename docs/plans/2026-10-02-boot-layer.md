@@ -1,7 +1,9 @@
 # boot layer：引导模块层按字节码建立（FS-H12 模块部分）
 
-分支 `boot-layer`（基于集成分支 29e52b54）。代码依赖 C1d-a a2（1e623cec 的 `[boot_init]` 与 `jdk/` 去截断，现于 c1d-p0），
-a2 合入集成分支前只有本计划，不写代码。
+分支 `boot-layer`（基于集成分支 29e52b54）。代码依赖 C1d-a a2（1e623cec 的 `[boot_init]` 与 `jdk/` 去截断，现于 c1d-p0）。
+
+> 状态（2026-10-02）：第 0 步（语料规则，见第五节）✅ 已合入集成分支 27dfb419，抽查 bl0-27dfb419 8/9（TestModuleLayerDefine 为原有失败）；
+> 第 1 步起等 C1d-a a2 合入集成分支。
 
 ## 一、现状（2026-10-02 按代码与 JDK 21 字节码核实）
 
@@ -191,12 +193,15 @@ anchors = [
 - **栈回溯格式化**：`isHashedInJavaBase` 先无条件读 `ModuleLayer.boot()`。凡是格式化栈帧的程序都可达锚点，这与 JVM 语义一致，
   不做折叠。
 
-## 三、实施步骤（a2 合入集成分支后开始；每步 ≤40 分钟，单独提交）
+## 三、实施步骤（每步 ≤40 分钟，单独提交）
+
+第 0 步是语料来源规则的改变，影响所有测试，按「结构性改动单独先合」独立提交、独立抽查（MH / lambda / 反射），合入集成分支后
+后续步骤在它之上进行；它不依赖 C1d-a a2。第 1 步起依赖 a2（`[boot_init]`）。
 
 | 步 | 内容 | 验证 |
 |---|---|---|
-| 0 | 合并集成分支；`[[boot_init.phases]]` 清单形态、装载校验、分析器按锚点作根、发射；initPhase2 条目先登记、锚点留空 | 单元测试；HelloWorld 生成树逐字节不变 |
-| 1 | 语料规则（镜像改写类）；`SystemModules$*` 入链时 `java_runtime` 编译实测（rustc 峰值内存 / 耗时）；必要时做大方法拆分 | `gen_trees` / `compare_trees` 对照；MH 用例 |
+| 0 | 语料规则：镜像中与 jmod 字节不同的类以镜像为准（2.2 第 1 条），不夹带其他内容 | resolve 单测；生成对照（见第五节）；协调方抽查 MH / lambda / 反射 |
+| 1 | `[[boot_init.phases]]` 清单形态、装载校验、分析器按锚点作根、发射；initPhase2 条目登记，提交时锚点留空。本地临时填入锚点实测 TestCustomException / TestStackWalkerFrames / TestAppClassLoader 三例的增量（类 / 方法 / 转译耗时 / 编译耗时）与 `SystemModules$default` 的 rustc 峰值内存，写入附表 C；单例超过 300 类另立精度项；rustc 超限则做大方法通用拆分 | 单元测试；HelloWorld 生成树逐字节不变 |
 | 2 | `Class.module` 钩子与类块 `module` 属性；`findLoadedClass0` / `findBootstrapClass` 按定义加载器；`defineModule0` java.base 语义 | TestAppClassLoader / TestClassNestNatives |
 | 3 | 锚点启用；删 `module_layer_impl.rs`、`module_impl.rs` 的 7 个方法、`Class.getModule` 手写；移出 `[vm_boundary]` / `clinit_carried` | TestModuleLayerDefine 原样通过；新边界用例 TestBootLayer |
 | 4 | 服务目录走 `initServices`；删 `__boot_catalog` / `services_table` / `getServicesCatalogOrNull`；分析器 / 运行期引导层一致性单测 | TestCharsetForName、ServiceLoader 用例 |
@@ -219,6 +224,18 @@ anchors = [
 - 抽查清单（≤10）：TestModuleLayerDefine、TestBootLayer、TestAppClassLoader、TestClassNestNatives、TestStackWalkerFrames、
   TestCustomException、TestCharsetForName、一例 MH 组合子用例、HelloWorld、ReflectionGetSource。
 
+## 五、第 0 步实测（语料规则）
+
+- 求差方式：首次对某个 JDK 整体 `jimage extract`（JDK 21：28126 个类、2.8 s），与全部 jmod 逐字节比对，只保留差异类，
+  缓存 `rava/jimage/<指纹>/{only,rewritten}/<模块>` + `index.txt`（共 352 KB）；以后只读索引，不再打开 jmod。
+- JDK 21.0.11 全部 69 个模块中，镜像改写类恰为 1.4 表中 java.base 的 5 个；镜像独有类 18 个，与旧缓存一致。
+- 改写类装入 JDK 语料时来源角色仍为 JDK、`module_of` 仍报 java.base（resolve 单测守护，不含类名）。
+- 生成对照（同一 rava、切换改写类，`--stop-after emit`）：HelloWorld、LambdaBasic、TestMethodHandleDirect、
+  TestBmhDynamicSpecies、TestMethodHandleCombinators、TestReflectInvokeShapes、TestModuleLayerDefine、TestCustomException
+  八例闭包类 / 方法集合完全相同。`SystemModulesMap` 无一例入链（按需建层前不可达）。生成差异只在 4 个 `$Holder` 类的文件
+  （镜像版方法更多，均为调用链外存根），以及随之变化的分片 `use` 行 / `mod.rs`。
+- TestMethodHandleDirect 新语料编译通过，运行输出与 expected 一致。
+
 ## 附表 A：模块读取面可达性（实测）
 
 `rava build --stop-after emit` 后读 `closure.json`（本分支 29e52b54 + rava 新构建）：
@@ -234,7 +251,7 @@ anchors = [
 - HelloWorld 不可达任何锚点，按 2.1 的按需作根闭包不变，满足「不得增长」。
 - 打印异常栈的程序（`Throwable.printStackTrace` → `StackTraceElement.toString` → `computeFormat`）都可达
   `ModuleLayer.boot()`，会付出 initPhase2 代价。这是 JVM 语义（`isHashedInJavaBase` 无条件读引导层），不折叠。
-  增量在实施第 1 步实测并按包列出；如果单例增量超过 300 类，另立「栈帧格式化只读 java.base 层」的精度项，
+  增量（类 / 方法 / 转译耗时 / 编译耗时）在实施第 1 步实测并按包列出，写入附表 C；如果单例增量超过 300 类，另立「栈帧格式化只读 java.base 层」的精度项，
   在分析器值流里证明 `computeFormat` 只比较 java.base 的哈希，不在本计划内降低语义。
 
 ## 附录 B：TestBootLayer
@@ -341,3 +358,11 @@ int module = java.base
 String[][] module = java.base
 platform unnamed != user: true
 ```
+
+## 附表 C：按需建层的闭包增量（第 1 步实测后填写）
+
+| 用例 | 类 | 方法 | 转译耗时 | 编译耗时 |
+|---|---|---|---|---|
+| TestCustomException | | | | |
+| TestStackWalkerFrames | | | | |
+| TestAppClassLoader | | | | |
