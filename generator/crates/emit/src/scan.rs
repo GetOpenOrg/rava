@@ -39,17 +39,6 @@ pub fn attr_true(hay: &str, key: &str) -> bool {
     })
 }
 
-/// `pub struct {short}<([^>{]*)>` 的第 1 组
-pub fn struct_generics<'t>(text: &'t str, short: &str) -> Option<&'t str> {
-    let head = format!("pub struct {short}<");
-    let found = hits(text, &head).find_map(|i| {
-        let r = &text[i + head.len()..];
-        let e = r.find(['>', '{'])?;
-        r[e..].starts_with('>').then(|| &r[..e])
-    });
-    found
-}
-
 /// `\bfn {name}\s*\(` 是否匹配
 pub fn has_fn(text: &str, name: &str) -> bool {
     let head = format!("fn {name}");
@@ -85,9 +74,6 @@ mod tests {
                 let esc = regex::escape(key);
                 assert_eq!(attr_str(h, key), re_str(&format!(r#"\b{esc}\s*=\s*"([^"]*)""#), h), "{h} / {key}");
                 assert_eq!(attr_true(h, key), Regex::new(&format!(r"\b{esc}\s*=\s*true")).unwrap().is_match(h), "{h} / {key}");
-            }
-            for s in ["Foo", "Bar"] {
-                assert_eq!(struct_generics(h, s), re_str(&format!(r"pub struct {s}<([^>{{]*)>"), h), "{h} / {s}");
             }
             for n in ["newX", "__init_onX", "__init_onXY", "X"] {
                 assert_eq!(has_fn(h, n), Regex::new(&format!(r"\bfn {n}\s*\(")).unwrap().is_match(h), "{h} / {n}");
