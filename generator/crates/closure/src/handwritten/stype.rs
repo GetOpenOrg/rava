@@ -1,6 +1,6 @@
 //! 手写体表达式的静态类型（[`SType`]）：类型注解路径、容器元素类型、访问器 / 转型 / 方法链推导。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::syntax::*;
 use super::*;
@@ -105,12 +105,46 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
         },
         _ => None,
     };
-    direct.or_else(|| infer(e, locals).map(|t| SType::Named(TypeRef(t))))
+    direct.or_else(|| infer(e, locals, &HashSet::new()).map(|t| SType::Named(TypeRef(t))))
 }
 
 /// 构造器的 Rust 名形态：`new` / `new_<签名>`
 pub(super) fn is_ctor_name(name: &str) -> bool {
     name == CTOR_RUST || name.starts_with("new_")
+}
+
+/// 路径调用 `T::f(…)` 是 Java 构造器：构造器名形态，且不是本文件 impl 块声明的同名辅助 fn
+///（`helpers` 为 `<写出的类型路径>::<fn 名>`，见 [`local_helpers`]；`Self::new_format` 是辅助 fn，
+/// 返回值的动态类型不是 `Self`）
+pub(super) fn is_ctor_call(head: &[String], last: &str, helpers: &HashSet<String>) -> bool {
+    is_ctor_name(last) && !helpers.contains(&format!("{}::{last}", head.join("::")))
+}
+
+/// 本文件 impl 块中构造器名形态的辅助 fn：`<impl 类型末段>::<fn 名>`
+pub(super) fn local_helpers(file: &syn::File) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in &file.items {
+        let syn::Item::Impl(i) = item else { continue };
+        let Some(last) = type_path(&i.self_ty).and_then(|t| t.last().cloned()) else { continue };
+        for it in &i.items {
+            if let syn::ImplItem::Fn(f) = it {
+                let n = f.sig.ident.to_string();
+                if is_ctor_name(&n) {
+                    out.insert(format!("{last}::{n}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 某 impl 块内的辅助 fn 写法：文件级登记，加上 impl 类型自身的辅助 fn 的 `Self::<fn 名>` 写法
+pub(super) fn helpers_in(file: &HashSet<String>, self_ty: Option<&Vec<String>>) -> HashSet<String> {
+    let mut out = file.clone();
+    if let Some(prefix) = self_ty.and_then(|t| t.last()).map(|l| format!("{l}::")) {
+        out.extend(file.iter().filter_map(|h| h.strip_prefix(&prefix)).map(|n| format!("Self::{n}")));
+    }
+    out
 }
 
 pub(super) fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &Option<Vec<String>>) -> SType {

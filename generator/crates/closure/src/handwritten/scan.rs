@@ -43,6 +43,8 @@ pub(super) struct FileScan<'a> {
     pub(super) cur_obj: Option<String>,
     /// 本文件 impl 块关联 fn 的返回类型（见 [`local_rets`]）
     pub(super) rets: &'a LocalRets,
+    /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
+    pub(super) helpers: &'a HashSet<String>,
 }
 
 /// (impl self 类型全路径, fn 名) → 返回类型全路径
@@ -106,7 +108,8 @@ impl<'ast> Visit<'ast> for Idents {
 impl FileScan<'_> {
     fn add(&mut self, sig: &syn::Signature, is_pub: bool, block: &syn::Block) {
         let name = sig.ident.to_string();
-        let mut b = BodyScan::default();
+        let helpers = helpers_in(self.helpers, self.self_ty.as_ref());
+        let mut b = BodyScan { helpers: helpers.clone(), ..Default::default() };
         b.visit_block(block);
         let mut scope = HashMap::new();
         for a in &sig.inputs {
@@ -129,7 +132,7 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new() };
+        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers };
         cs.visit_block(block);
         for (field, write, recv, value, on_self, path) in cs.fields {
             info.fields.push(FieldAccess {
@@ -320,8 +323,10 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     us.visit_file(file);
     let local = super::objects::object_structs(file);
     let rets = local_rets(file, &us.0);
+    let helpers = local_helpers(file);
     let mut fs = FileScan {
         rets: &rets,
+        helpers: &helpers,
         uses: &us.0,
         local_objects: &local,
         fns: Vec::new(),
@@ -533,6 +538,10 @@ mod tests {
         let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
         assert_eq!(srecv("setMode"), Some(named(&["View"])));
         assert_eq!(srecv("show"), Some(named(&["Widget"])));
+        // 构造器名形态的本文件辅助 fn 不是构造：返回值动态类型推不出（不当成构造 Provider）
+        let recv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.recv.clone());
+        assert_eq!(recv("setMode"), Some(None));
+        assert_eq!(recv("show"), Some(Some(TypeRef(vec!["Widget".into()]))));
     }
 
     #[test]
