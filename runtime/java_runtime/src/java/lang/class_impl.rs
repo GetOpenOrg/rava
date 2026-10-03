@@ -219,24 +219,24 @@ impl Class {
         class_for_descriptor(desc)
     }
 
-    /// `Class.isAssignableFrom(Class)`：`X.isAssignableFrom(Y)` 即 Y 的类型闭包
-    /// 包含 X（含 X == Y）。超类型闭包由生成器在类字面量处静态推导
-    /// （父类链 + 全部接口，见 codegen ldc 类字面量的第二参数），随 `for_class`
-    /// 登记到线程内侧表；未登记的目标（闭包外类、数组、基本类型）仅同名相等。
+    /// native `Class.isAssignableFrom(Class)`：`X.isAssignableFrom(Y)` 即 Y 类型的值可赋给 X
+    /// （JVMS §6.5 checkcast / instanceof 的类型兼容规则）。基本类型类只与自身相容；
+    /// 引用类型（含数组：元素引用类型协变、基本元素须相同、多维逐层、数组可赋给
+    /// Object / Cloneable / Serializable）统一经 `__name_assignable` 判定（与 checkcast /
+    /// 反射数组组件标签同一真源）。null 实参 → NPE（JDK 同）。
     pub fn isAssignableFrom(&self, cls: Class) -> Result<bool> {
+        if Object::from(Clone::clone(&cls)).0.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
         let self_name = format!("{}", self.__get_name()).replace('.', "/");
         let cls_name = format!("{}", cls.__get_name()).replace('.', "/");
         if self_name == cls_name {
             return Ok(true);
         }
-        // cls 的超类型闭包（含自身）包含 self 即可赋值。层次表由 java_meta 从
-        // java_class! 的 all_supertypes 属性生成（class 元数据的唯一表达）；
-        // 未生成/接口载体的 cls 不在表中，退化为同名相等（与 JVM 语义的差异
-        // 仅影响"参数侧从未进入闭包"的场景）。
-        Ok(crate::meta::class_hierarchy().iter()
-            .find(|(n, _)| *n == cls_name)
-            .map(|(_, supers)| supers.iter().any(|s| *s == self_name))
-            .unwrap_or(false))
+        if self.isPrimitive()? || cls.isPrimitive()? {
+            return Ok(false);
+        }
+        Ok(Self::__name_assignable(&self_name, &cls_name))
     }
 
     /// 按 binary name（斜线形态；数组为描述符形态 `[I`、`[Ljava/lang/String;`）判定
