@@ -158,6 +158,10 @@ pub(crate) fn expand_interface(
             #default_method
             #(#keep_attrs)*
             pub #sig {
+                // invokeinterface 的接收者为 null：JVM 抛 NullPointerException（先于方法选择）
+                if ObjectVTable::is_jvm_null(&*self.__ref.0) {
+                    return Err(JvmError::null_pointer());
+                }
                 let mut __vt: ::std::option::Option<__Shared<dyn #vtable_ident>> = None;
                 ObjectVTable::__interface(__Shared::clone(&self.__ref.0), &mut __vt);
                 if let Some(__vt) = __vt {

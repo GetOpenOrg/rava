@@ -4,5 +4,7 @@ other:square | marked:square | else square | S
 other:tiny-square | marked:tiny-square | else tiny-square | S
 other:tri | unmarked:Tri | else tri | X:Tri
 else NPE
+tri shape tri big-circle -1
+npe-iface  npe-default  npe-virtual  npe-jdk-iface
 unmarked:String | unmarked:Integer
 CS3 | CS5 | X:7
