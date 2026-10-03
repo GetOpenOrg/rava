@@ -15,6 +15,11 @@ golden JVM 取自各服务器的系统 JDK（apt 自动升级，持续漂移）�
 
 - 选 21.0.11：它是现有 `tests/expected` 的生成版本，固定在这个版本，现有 golden 天然有效，**expected 改动量为 0**
   （本机实测：Temurin 21.0.11 跑 TestLocaleCurrency 与现有 expected 逐字节一致）。
+- **实测更正（2026-10-03 抽查 jdkpin-efc13cd0）**：TestLocaleCurrency 的 `CN¥` 并非 JDK 漂移。sg2 上参考构建
+  Temurin 21.0.11 与系统 apt 21.0.12.1 的 **JVM** 均输出 `¥`（`LANG=C.UTF-8`）；在参考构建下，转译产物仍输出 `CN¥` /
+  `CN¥ 9,999.50`（`[meta]` 显示 `jdk=jdk-21.0.11+10(参考构建)`）。因此这是转译侧的行为差异（Linux 服务器上
+  转译程序的 CNY 本地化符号取值与 JVM 不一致），归生成器 / 闭包修复，不归本方案。参考构建的价值不变：
+  语料各环节同源，排除 JDK 构建这一变量。
 - 不选「最新 GA」：换版本后只再生成 65_locale_data / 64_charsets_ext 不可靠——其他目录未验证，可能藏着漂移；
   要可靠就得全量再生成，代价大、收益为 0。
 
@@ -76,3 +81,7 @@ e2e 与作业命令导出 `RAVA_REFJDK_ROOT`；e2e 缺省 JDK（21）不再传 `
 | 1 | `tools/refjdk.toml` + `scripts/fetch_reference_jdk.sh`（下载 / 校验 / 解压 / 定位）+ 单测 | 完成 |
 | 2 | `run_tests.py`（含 expected 生成路径）与语料 shell 脚本切换到参考构建；不重新生成任何 expected（版本未变） | 完成 |
 | 3 | server_maintenance：服务器数据目录落位 + 检出后幂等确保 + `RAVA_REFJDK_ROOT` 注入（e2e / 抽查 / 作业） | 完成（`jdk-pin` 分支，待审查合并） |
+
+验证：抽查 jdkpin-efc13cd0 中，kr1 / kr2 / sg1 / sg2 / jp1 / jp2 / us1 落位 `/data/rava-jdk/jdk-21.0.11+10`，
+ubuntu 落位 `/mnt/d/workspace/rava-jdk/jdk-21.0.11+10`；kr1 `java -version` = Temurin 21.0.11+10。
+HelloWorld、TestDateTimeFormat 通过；TestLocaleCurrency 仍失败，原因见 §一「实测更正」，属转译侧问题。
