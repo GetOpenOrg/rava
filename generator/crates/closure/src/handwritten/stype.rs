@@ -194,6 +194,7 @@ pub(super) fn expand_s(uses: &HashMap<String, Vec<String>>, s: SType, self_ty: &
         SType::Ret(t, m) => SType::Ret(tr(t), m),
         SType::Field(b, f) => SType::Field(Box::new(expand_s(uses, *b, self_ty)), f),
         SType::Call(b, m) => SType::Call(Box::new(expand_s(uses, *b, self_ty)), m),
+        SType::Java(c) => SType::Java(c),
     }
 }
 

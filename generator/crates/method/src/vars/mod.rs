@@ -227,6 +227,10 @@ pub fn promote_undeclared_assigns(entries: &mut [Entry], predeclared: &BTreeSet<
             if e.delta() < 0 {
                 declared.retain(|_, d| *d <= nesting);
             }
+            // catch 绑定在 catch 体内已声明：体内对它的重新赋值是赋值而非新 let
+            if let Some(bind) = e.catch_binding() {
+                declared.insert(bind.to_string(), nesting);
+            }
             continue;
         }
         let promoted = match e.as_stmt() {

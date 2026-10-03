@@ -655,6 +655,74 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   测量集类 / 方法不变（TestMethodHandleStaticInit 方法 17000 → 17001、clinit 2541 → 2542）。
 - 待服务器 e2e：手写层 `class_impl.rs`（`__method_from_meta`）与 `method_handle_natives_impl.rs`（`init` 按名读 `clazz`）。
 
+**b3 余项①：手写体开放接收者 toString 扇出收窄**（基于 e97dcf02）。
+
+- 定位（HelloWorld `--dump-edges`）：`M:java/lang/Object.toString` 出 250 条 toString 边。根源不是 registerNatives 本身，
+  而是手写 `Object.toString`（`object_impl.rs`）体内 `self.0.__to_string()`：接收者推不出 → `open(Object)`，对全部逃逸对象
+  分派 toString；回调声明类经 `hw_exports` 再导出，值池对象全部逃逸。实验性去掉全部开放接收者 toString：HelloWorld 499 → 467，
+  StockTrans / DeepCopy 不变（其 Formatter 由 `Objects.checkIndex → Preconditions.outOfBoundsMessage → String.format` 合法可达）。
+- 实现两项（分析器不含类名，判定全按运行时入口的结构名）：
+  - **自身接收者分派**：手写扫描记 `TypedCall.on_self`（接收者是本 fn 的 `self` / `self.0`；经同文件被调 fn 传递来的、
+    `absorb_body` 并入的不算）。回调的全部方法调用点都是自身接收者时，接收者取 `P(m,0)` 的值集（登记读者，增长时重跑本方法），
+    不再取 `open(声明类)`；`hw_exports` 对这类回调不导出声明类（接收者已在建模代码手里，无须逃逸）。
+  - **类名守卫收窄**（`handwritten/guards.rs`）：`if R.__class_name() == "c"`、`R.is_instance_of("c") && …`、
+    `match R.__class_name() { "a" | "b" => … }` 区域内，`R` 以根类型出现的 toString 分派（`__obj_str` / `__to_string` /
+    Display）收窄为 `SType::Java(c)`（取 `c` 的 open 集）；`R` 重新绑定 / 赋值即失效。覆盖 `reflect_dispatch.rs` 的
+    `unbox_*` 与 `lib.rs` 的 `_ts_*_label_eq`。
+- 测量（`rava closure --image $(rava image-dirs)`）：
+
+| 用例 | 类 / 方法（e97dcf02 → 本步） |
+|---|---|
+| HelloWorld | 499 / 2062 → 467 / 1822 |
+| StockTrans | 3107 / 18814 不变 |
+| DeepCopy | 3102 / 18767 不变 |
+
+  HelloWorld 去掉的 32 类与实验一致：Short、Thread$State、Policy / Permissions 族、CHM / WeakHashMap / Hashtable 迭代器与视图、
+  DoubleToDecimal / FormattedFPDecimal、Wrapper、Debug 等（均只经 toString 覆盖进入）。
+- **测量口径排查（3107 vs 3070，非闭包非确定）**：曾观察到「并行跑 3107 / 3102、单独跑 3070 / 3065」，`--why` 对比两份结果
+  的前沿：多出的 37 类全部挂在三个 VM 支持类上——`BoundMethodHandle$Species_Dyn`（field-name ← `ClassSpecializer$Factory.linkCodeToSpeciesData`）、
+  `Proxy$Dyn`（hw-type ← `Proxy`）、`SerializationConstructorAccessorDyn`（hw-type ← `MethodAccessorGenerator`），其引用方两边都在，
+  其余（`Species_*` 镜像根、注解代理 `toStringImpl` → Long / DoublePipeline 链）都由它们展开。根因不在分析器：「单独跑」是在
+  zsh 交互命令里执行 `rava closure … $IMGS`，zsh 不对未加引号的变量分词，`--image A --image B` 作为**单个参数**传入，`rava closure`
+  静默忽略未知参数，镜像 / VM 支持目录全部丢失；bash 脚本里的并行跑法正常分词。同一参数下并行两份与顺序一份结果一致（3107 / 18814），
+  hash 种子、闭包缓存（未启用）、jimage / vmsupport 缓存（内容与时间戳未变）、临时目录（按 pid）均无关。
+- 修复（`driver/src/closure_cmd.rs`）：① 参数逐个校验，未知参数 / 多余位置参数 / 缺值一律报错（单测 `args_checked` 守护，含未分词的
+  镜像参数串）；② `--image` 缺省与 `rava build` 同源派生（`image_class_dirs(JDK, runtime/java_support)`），不带 `--image` 的
+  `rava closure` 与 `rava build` 的闭包输入一致（StockTrans 不带 `--image`：3107 / 18814）。此前文中以 `--why` 单独跑得到的
+  3070 / 3065 均为缺镜像口径，作废；c64ec205 等行的 3107 / 3102 为正确口径。
+
+**b3 余项②：URL$DefaultFactory 反射构造器扇出**——无剩余扇出可收。
+
+- `URL$DefaultFactory` 由 `URL.<clinit>`（`new DefaultFactory()`）进入，JDK 实际执行。反射臂（`Class.forName` +
+  `getDeclaredConstructor`）已由 S8 前的协议名 hashCode 常量分派剪掉：StockTrans 反射缺口里无 `createURLStreamHandler`。
+- StockTrans 中 `createURLStreamHandler` 留 file / jrt 两个常量臂（jar Handler 由 `URLClassPath.<init>` 直接 new）：协议名形参
+  在 `getURLStreamHandler` 被多条 URL 构造链汇合为 Top（ServiceLoader 资源查找产出 jrt / jar URL），jrt 臂对应 JDK 实际的模块资源
+  URL；`lookupViaProviders` 只带入 `URLStreamHandlerProvider` 的 layout 级类型。HelloWorld 只留 file 臂。
+
+**b3 收官**（同步集成分支 5d8c5cce 后的 005047ee，`rava closure`，`--image` 缺省派生，逐例顺序跑）：
+
+`class_init.unknown` 原有的 5 个未知调用点全部消去——EnumSet.getUniverse@4（S1，T4）、VarHandles.makeFieldHandle@442（S3）、
+DMH `checkInitialized@9` / `shouldBeInitialized@104`（S8，`handle_owner_initializers` 结构性消去）、MHAF.ensureClassInitialized@14
+（S7，`reflect_owner_initializers`）。现口径下「未知初始化」即 `class_initializers` / `Class.forName` 调用点的反射缺口，测量集全部为 0；
+剩余反射缺口均为构造器 / 方法枚举、ServiceLoader 与序列化查找（后者属 T2），不涉及类初始化。
+
+| 用例 | 类 / 方法 | 反射缺口 | 初始化缺口 |
+|---|---|---|---|
+| HelloWorld | 467 / 1822 | 0 | 0 |
+| TestEnumSetMap | 2900 / 16998 | 27 | 0 |
+| StockTrans | 3107 / 18814 | 46 | 0 |
+| DeepCopy | 3102 / 18767 | 44 | 0 |
+| TestMethodHandleDirect | 2904 / 17024 | 27 | 0 |
+| TestReflectFieldMethod | 2901 / 17072 | 27 | 0 |
+| TestReflectStaticFieldInit | 2904 / 17003 | 27 | 0 |
+| TestMethodHandleStaticInit | 2904 / 17001 | 27 | 0 |
+| TestByteArrayViewVarHandle | 2899 / 16988 | 27 | 0 |
+| TestModuleLayerDefine | 3055 / 18292 | 27 | 0 |
+| TestForNameComputedName | 2907 / 16999 | 27 | 0 |
+| TestDeclaringClassInit | 2905 / 16994 | 27 | 0 |
+
+StockTrans 运行期 `ArrayList.writeObject` 反射分派臂缺失是 T2 待合的既有基线（e97dcf02 与 6294755d 闭包逐项相同），不属 b3。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——

@@ -6,7 +6,7 @@ use sim::StackSim;
 use ty::type_map::parse_descriptor_return;
 use ty::RsType;
 
-use super::boxing::{box_prim_via_valueof, is_prim_text, obj_text};
+use super::boxing::{box_prim_via_valueof, is_prim_text, obj_text, unbox_return};
 use super::lambda::{rust_text, Lam};
 use super::lambda_args::CallArgs;
 use super::{raw, wrapper_of, IndySite};
@@ -47,12 +47,23 @@ fn iface_call(env: &InstrEnv, lam: &Lam, ci: &ty::ClassInfo, call: &CallArgs) ->
     ))
 }
 
-/// 返回值适配：SAM 返回 void → 丢弃实现方法返回值；SAM 返回擦除引用而实现方法返回具体
-/// 类型 → 装箱
+/// 返回值适配：SAM 返回 void → 丢弃实现方法返回值；SAM 返回基本类型而实现方法返回引用 →
+/// 拆箱（含拓宽）；SAM 返回擦除引用而实现方法返回具体类型 → 装箱
 fn adapt_return(env: &InstrEnv, lam: &Lam, body: String) -> InstrResult<String> {
     let impl_ret = if lam.is_ctor { format!("L{};", lam.impl_cls) } else { parse_descriptor_return(&lam.impl_desc).to_string() };
     if lam.sam_ret == "V" {
         return Ok(if impl_ret != "V" { format!("{body}?; Ok(())") } else { body });
+    }
+    if wrapper_of(&lam.sam_ret).is_some() && wrapper_of(&impl_ret).is_some() && impl_ret != lam.sam_ret {
+        // 基本 → 基本：JLS §5.1.2 拓宽（`mapToLong(String::length)`，length 返回 int）
+        let target = rust_text(env, &lam.sam_ret);
+        return Ok(format!("Ok(({body})? as {target})"));
+    }
+    if wrapper_of(&lam.sam_ret).is_some() && (impl_ret.starts_with('L') || impl_ret.starts_with('[')) {
+        // 实现方法返回引用、SAM 返回基本类型（`comparingInt(Item::price)`，price 返回 Integer）：拆箱
+        if let Some(unboxed) = unbox_return(env, &format!("({body})?"), &impl_ret, &lam.sam_ret)? {
+            return Ok(format!("Ok({unboxed})"));
+        }
     }
     let erased_sam = lam.is_erased_ref(env, &lam.sam_ret);
     if erased_sam && wrapper_of(&impl_ret).is_some() {
