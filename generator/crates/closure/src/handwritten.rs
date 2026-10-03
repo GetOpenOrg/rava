@@ -235,8 +235,14 @@ pub struct Handwritten {
 fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str, errors: &mut Vec<String>) -> BTreeSet<TypeRef> {
     let (pkg, simple) = cls.rsplit_once('/').unwrap_or(("", cls));
     let mut out = BTreeSet::new();
+    let stem = to_snake(simple);
     for suf in SUFFIXES.iter().chain([".rs"].iter()) {
-        let path = src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
+        // 类名以 Impl / Ext 结尾时 `<snake>.rs` 是同包类 X 的共置手写（`x_impl.rs`），不是本类的整体手写
+        // （发射层布局让出该路径，见 emit `companion_clash`）
+        if *suf == ".rs" && MODULE_SUFFIXES.iter().any(|x| stem.ends_with(x)) {
+            continue;
+        }
+        let path = src.join(pkg).join(format!("{stem}{suf}"));
         let Ok(content) = std::fs::read_to_string(&path) else { continue };
         match type_refs::scan(&content, prelude) {
             Ok(t) => out.extend(t),

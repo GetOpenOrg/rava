@@ -77,7 +77,8 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
   由分析器精度收敛解决，不以截断承载。
 
 残留的策略截断（仍在 `[vm_boundary]`、收录理由写明「策略截断」，终态 0）：`java/nio/file/FileSystems`、
-`java/net/InetAddress`、`javax/crypto/JceSecurity`。
+`javax/crypto/JceSecurity`（`java/net/InetAddress` 2026-10-03 移出：`<clinit>` 未翻译使静态 `impl` 为 null，
+`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
 
 规则：
 

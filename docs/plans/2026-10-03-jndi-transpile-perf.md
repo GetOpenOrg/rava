@@ -89,3 +89,52 @@
 3. open 枢纽去冗余：调用点 open 类型集里被其它 open 类型涵盖（子类型）的枢纽不再接入。
 4. 精确集合枢纽的父枢纽从「本调用点原枢纽」推广为同成员族内最大的子集枢纽，消除平行的大扇出枢纽。
 5. `hub_recv` 逐接收者克隆调用点表、`link_hub` 的 `special` 表收集排序。
+
+## 现状（2026-10-04 交接：jndi-perf 分支上的套接字 / 网络 native 支线）
+
+本支线起因是 TestSocketLoopbackPair main 线程 NPE，已停止，后续由协调方另派代理。分支上的提交按顺序如下：
+
+| 提交 | 内容 | 验证（本机，只做 emit + compile） |
+|---|---|---|
+| 88971251 | InetAddress 退出 VM 边界，`<clinit>` 改为翻译字节码（NPE 根因）；生成类与手写伴生同名时，生成文件加 `_t` 后缀 | 已抽查 |
+| e310dec2 | 套接字 native 层：Net / SocketDispatcher / UnixDispatcher / KQueue / EPoll / IOUtil / 套接字选项 / 名字服务；新增边界 e2e TestSocketErrorPaths | 抽查 jndiperf-e310dec2：1/6 |
+| da1e88fb | DefaultProxySelector `init` / `getSystemProxies`：macOS 走 CFNetwork（含 PAC 展开），Linux 走 GIO，回落到 GConf；新增边界 e2e TestSystemProxySelector | 本机 macOS 冒烟通过 |
+| 8e0fe281 | mod 树修正：叠层伴生 `x_impl_impl.rs` 只认生成宿主 `x_impl_t.rs`。修 HelloWorld E0432（e310dec2 引入） | HelloWorld 编译通过；新增单测 `stacked_companion_needs_generated_host` |
+| ea33ff1e | NativeLibraries 的 `findBuiltinLib` / `load` / `unload`：内建库返回库名，否则返回 null；`load` 登记进程句柄 −1 与 JNI 1.8 | TestSocketErrorPaths 编译通过 |
+| 36d728f3 | invokestatic：调用带 turbofish 时，形参里嵌套的被调类形参按 turbofish 实例化代换，修 `ExchangeImpl.createHttp1Exchange` 的 E0308 | ExchangeImpl 的 4 处错误清零 |
+
+**未完成**：TestHttpLoopbackSync / Async 仍有 2 处 E0308，位置是 `sun/net/httpserver/UnmodifiableHeaders` 的桥方法
+`replace(Object,Object)` 和 `replace(Object,Object,Object)`。
+- 现象：UnmodifiableHeaders 中这两个桥方法的 wrapper 声明形参为 `Object`。而 Headers 自身没有声明 `replace`，它从 `Map.replace` 默认方法继承这个槽；生成 Headers 时按 `declared_by = java/util/Map` 代换签名，`K` 变成 `String`，所以槽签名是 `key: String`。wrapper 拿 `Object` 实参去调这个槽，类型不符。
+- 根因：`TyCtx::method_sig_types`（`ty/src/sig_types/ctor.rs`）找覆盖链根声明时，只经 `ancestor_type_args` 走超类链。所以超类从接口继承的默认方法槽（Map → Headers）找不到根，子类桥方法只好按自身描述符擦除成 `Object`。
+- 候选修法：找根时把各祖先的超接口闭包也纳入，每个接口带上相对本类的实参映射，取最远的声明者。这样根的选择与 phase2 继承槽的 `declared_by` 同源，子类的覆盖 / 桥方法与槽签名一致。修完后需要再 emit + compile TestHttpLoopbackSync，并用 `compare_trees.sh` 对照验收集的生成树，确认变化只出现在这类桥方法上。
+
+**另派代理承接**：e310dec2 之后余下的 22 个 native-missing（DefaultProxySelector 已由 da1e88fb 补上）；修法 B。
+
+### 2026-10-04 续：TestJndiNoProvider 回归排查与 VarHandle getAndBitwise*
+
+**TestJndiNoProvider（抽查 jndiperf-06394403 报 `could not compile java_runtime (lib)`）本机未复现**，排查如下（均在 06394403 上）：
+
+| 检查 | 结果 |
+|---|---|
+| macOS JDK emit + `rava compile`（dev，全 workspace 含 user bin） | 通过（3624 JDK 类，9m15s） |
+| 同一 scratch `cargo check -p java_runtime --target x86_64-unknown-linux-gnu` | 通过 |
+| Linux JDK 模块 emit（`--java-home …/linuxjdk/hybrid`，3665 类，含 EPoll / LinuxSocketOptions / LinuxFileSystem）+ Linux 目标 `cargo check -p java_runtime` | 通过 |
+| 同上 + Linux 目标 `cargo build -p java_runtime`（`CARGO_INCREMENTAL=0`，含代码生成） | 通过 |
+
+- d314fda7..06394403 之间没有依赖变更（`Cargo.toml` / `build.rs` 未动）；闭包流传播批量为常量，同一 JDK 输入下闭包确定。
+- 只有 `could not compile … (lib)` 而无 `error[E…]` 诊断块，形态更像 rustc 进程被外部终止（`Caused by: … signal: 9 / 11`）或工具链差异，
+  而非生成代码类型错误；`failure_extract` 只收汇总行，`Caused by` 行不入摘要，日志清理后无法区分。
+- 结论：本分支不需要为此改生成器；**请协调方重跑 TestJndiNoProvider 并保留 `build/test_jndi_no_provider/logs/build.log` 全文**
+  （重点看 `Caused by` 行、`__RAVA_OOM_KILL__` 标记、服务器 `rustc --version`）。若确为 OOM，属规模问题（本分支 InetAddress 退出 VM 边界与
+  套接字 native 层让闭包增大），候选方案是按 `java_runtime` 声明层峰值调整服务器内存预留或继续拆分声明层，而非回退功能。
+
+**VarHandle.getAndBitwiseOr native 缺失（2f8ec056）**：
+- 根因：签名多态模型本身覆盖全部 access mode——生成器（`instr/src/sim/methods.rs::gen_signature_polymorphic`）把调用点实参装进
+  `Object[]`，落到 VarHandle 上 `ACC_NATIVE | ACC_VARARGS` 的声明方法，体在手写伴生 `var_handle_impl.rs`（类别①，与 getAndAdd 等同一机制，
+  `vm_intrinsics.toml` 只为引用写入 / 读取登记事实，基本类型位运算无需登记）。缺口只在手写伴生：get / set / CAS / getAndSet / getAndAdd 族已实现，
+  getAndBitwise{Or,And,Xor}{,Acquire,Release} 九个方法缺失。
+- 修法：九个方法整组补齐。字段经 Unsafe 统一载体 `__vh_prim_update` 一次读-改-写；数组元素在存储写锁内读-改-写；布尔 / 整数族支持，
+  引用 / 浮点族抛 UnsupportedOperationException。字节数组视图族（`VarHandleByteArrayAs*`）与 getAndAdd 一样暂不支持位运算（无消费方）。
+- 边界 e2e：`tests/e2e/48_refs/TestVarHandleBitwise.java`（实例 / 静态字段、int[] / long[] / boolean[]、子字字段互不影响、不支持族），
+  本机 emit + compile 通过，单跑输出与 JDK 一致；TestSocketErrorPaths emit + compile 通过、native_missing 不再含 VarHandle；HelloWorld 编译通过；generator 单测 386 通过 0 失败。

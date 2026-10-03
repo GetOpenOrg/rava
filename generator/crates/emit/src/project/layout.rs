@@ -36,13 +36,14 @@ impl JdkLayout {
                 parent = parent.join(p);
             }
         }
+        let runtime_src = ctx.runtime_src();
         let mut lay = JdkLayout::default();
         for c in classes {
             let parts = pkg_parts(c);
             let simple = c.rsplit('/').next().unwrap_or(c);
             let parent = parts.iter().fold(jrt_src.to_path_buf(), |d, p| d.join(p));
             let mut m = to_snake(simple);
-            if pkg_dirs.get(&parent).is_some_and(|s| s.contains(&m)) {
+            if pkg_dirs.get(&parent).is_some_and(|s| s.contains(&m)) || companion_clash(&runtime_src, &parts, &m) {
                 m.push_str("_t");
             }
             lay.files.insert(c.clone(), parent.join(format!("{m}.rs")));
@@ -50,6 +51,14 @@ impl JdkLayout {
         }
         lay
     }
+}
+
+/// 类名以 Impl / Ext 结尾时，snake 名与同包类 X 的共置手写 `x_impl.rs` / `x_ext.rs` 同名
+/// （`Inet6AddressImpl` ↔ `Inet6Address` 的 native 手写 `inet6_address_impl.rs`）：手写真源同路径
+/// 已有文件即为共置手写，生成类让出该路径（加 `_t` 后缀），否则生成文件被当作手写而不落盘
+fn companion_clash(runtime_src: &Path, parts: &[&str], stem: &str) -> bool {
+    (stem.ends_with("_impl") || stem.ends_with("_ext"))
+        && parts.iter().fold(runtime_src.to_path_buf(), |d, p| d.join(p)).join(format!("{stem}.rs")).is_file()
 }
 
 /// 用户类位置

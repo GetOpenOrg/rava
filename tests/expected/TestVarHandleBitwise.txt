@@ -1,0 +1,12 @@
+z: false true false -> false
+b: 15 -1 60 -> -61 guard=85
+s: 4660 -4661 -> -4661
+c: A a -> A
+i: 10 15 6 -7 -> -7
+l: 4294967295 -1 1085102592571150095 -> -8138269444283625713
+static: 6 7 -> 4
+int[]: 4 8 1 -> 0,2,7,247
+long[]: -1 5 -> 255,1099511627781
+boolean[]: false true -> true,false
+double: UnsupportedOperationException
+ref: UnsupportedOperationException

@@ -64,4 +64,11 @@ impl NativeThread {
         }
         Ok(())
     }
+
+    /// native `supportPendingSignals0()`：Linux 上发给未处于阻塞调用中的线程的信号会挂起到其进入
+    /// 阻塞调用时投递（libnio 同款：仅 Linux / AIX 为 true）。
+    #[jvm_native]
+    pub fn supportPendingSignals0() -> Result<bool> {
+        Ok(cfg!(target_os = "linux"))
+    }
 }

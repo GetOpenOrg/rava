@@ -277,14 +277,19 @@ fn companions(
         if children.contains(stem) {
             continue;
         }
-        if !(dir.join(format!("{base}.rs")).exists() || dir.join(format!("{base}_t.rs")).exists()) {
+        // 宿主以 _impl / _ext 结尾且不是本轮生成类时，`{base}.rs` 是另一个类的共置手写
+        // （`inet4_address_impl.rs` 属 Inet4Address），宿主只能是让出路径后的生成类 `{base}_t.rs`
+        let base_is_companion = (base.ends_with("_impl") || base.ends_with("_ext")) && !children.contains(base);
+        let host_present = dir.join(format!("{base}_t.rs")).exists()
+            || (!base_is_companion && dir.join(format!("{base}.rs")).exists());
+        if !host_present {
             continue;
         }
         if deps.is_some_and(|d| !d.satisfied(dir, base)) {
             continue;
         }
         mods.push(format!("mod {stem};"));
-        if !children.contains(base) {
+        if !children.contains(base) && !children.contains(&format!("{base}_t")) {
             extra_pub.insert(base.to_string());
         }
     }

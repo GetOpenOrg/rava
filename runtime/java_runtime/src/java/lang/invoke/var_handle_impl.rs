@@ -11,7 +11,7 @@
 //!     字节码的同一调用目标），存储即字段闭包的共享单元，写入对直接字段读取可见；
 //!   - Array 家族（*Array*）：见 `var_handle_ext.rs`。
 //!
-//! CAS 族（compareAndSet/weakCompareAndSet*/compareAndExchange*/getAndSet*/getAndAdd*）
+//! CAS 族（compareAndSet/weakCompareAndSet*/compareAndExchange*/getAndSet*/getAndAdd*/getAndBitwise*）
 //! 的读-比-写在字段存储单元内原子完成（引用槽写锁 / 基本类型槽经 Unsafe 统一载体：实例字段
 //! 字 / 双字视图、静态字段写锁）。
 
@@ -133,6 +133,23 @@ fn _field_exchange(c: _Carrier, holder: &Object, off: i64, expected: Option<&Obj
         _ => Some(vb),
     })?;
     Ok(_box(c, old))
+}
+
+/// 字段 getAndBitwise*：按位形在存储单元内一次读-改-写（与交换同一载体），返回旧值。
+fn _field_bitwise(c: _Carrier, holder: &Object, off: i64, op: _BitOp, mask: &Object) -> Result<Object> {
+    let mb = _bitwise_mask(c, op, mask)?;
+    let u = Unsafe::getUnsafe()?;
+    let old = u.__vh_prim_update(holder, off, _width(c), &mut |cur| Some(op.apply(cur, mb)))?;
+    Ok(_box(c, old))
+}
+
+/// getAndBitwise* 入口：args = [holder?, mask] / [array, index, mask]。
+fn _get_and_bitwise(vh: &VarHandle, args: &JArray<Object>, op: _BitOp) -> Result<Object> {
+    if _is_array_flavor(vh) {
+        return _array_get_and_bitwise(vh, args, op);
+    }
+    let (h, off, vi) = _field_coords(vh, args)?;
+    _field_bitwise(_carrier(vh), &h, off, op, &args.get(vi)?)
 }
 
 fn _field_cas(c: _Carrier, holder: &Object, off: i64, expected: &Object, new: &Object) -> Result<bool> {
@@ -296,5 +313,53 @@ impl VarHandle {
     /// native `getAndAddRelease(Object...)`：release 档位。
     pub fn getAndAddRelease(&self, args: JArray<Object>) -> Result<Object> {
         self.getAndAdd(args)
+    }
+
+    /// native `getAndBitwiseOr(Object...)`：原子按位或，返回旧值（布尔 / 整数族；
+    /// 引用 / 浮点族 UnsupportedOperationException）。
+    pub fn getAndBitwiseOr(&self, args: JArray<Object>) -> Result<Object> {
+        _get_and_bitwise(self, &args, _BitOp::Or)
+    }
+
+    /// native `getAndBitwiseOrAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseOr）。
+    pub fn getAndBitwiseOrAcquire(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseOr(args)
+    }
+
+    /// native `getAndBitwiseOrRelease(Object...)`：release 档位。
+    pub fn getAndBitwiseOrRelease(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseOr(args)
+    }
+
+    /// native `getAndBitwiseAnd(Object...)`：原子按位与，返回旧值（布尔 / 整数族；
+    /// 引用 / 浮点族 UnsupportedOperationException）。
+    pub fn getAndBitwiseAnd(&self, args: JArray<Object>) -> Result<Object> {
+        _get_and_bitwise(self, &args, _BitOp::And)
+    }
+
+    /// native `getAndBitwiseAndAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseAnd）。
+    pub fn getAndBitwiseAndAcquire(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseAnd(args)
+    }
+
+    /// native `getAndBitwiseAndRelease(Object...)`：release 档位。
+    pub fn getAndBitwiseAndRelease(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseAnd(args)
+    }
+
+    /// native `getAndBitwiseXor(Object...)`：原子按位异或，返回旧值（布尔 / 整数族；
+    /// 引用 / 浮点族 UnsupportedOperationException）。
+    pub fn getAndBitwiseXor(&self, args: JArray<Object>) -> Result<Object> {
+        _get_and_bitwise(self, &args, _BitOp::Xor)
+    }
+
+    /// native `getAndBitwiseXorAcquire(Object...)`：acquire 档位（单元内同 getAndBitwiseXor）。
+    pub fn getAndBitwiseXorAcquire(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseXor(args)
+    }
+
+    /// native `getAndBitwiseXorRelease(Object...)`：release 档位。
+    pub fn getAndBitwiseXorRelease(&self, args: JArray<Object>) -> Result<Object> {
+        self.getAndBitwiseXor(args)
     }
 }

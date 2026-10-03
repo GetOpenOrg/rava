@@ -192,6 +192,33 @@ fn companion_skipped_when_used_module_absent() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 叠层共置：`foo_impl.rs` 是类 Foo 的共置手写，`foo_impl_impl.rs` 是类 FooImpl 的共置手写（FooImpl
+/// 生成于让出路径后的 `foo_impl_t.rs`）。两个类都不在本轮时一律不声明——`foo_impl.rs` 不能被当作
+/// FooImpl 的宿主而以 `pub mod` 引入；FooImpl 在本轮（`foo_impl_t.rs`）时才声明 `foo_impl_impl`
+#[test]
+fn stacked_companion_needs_generated_host() {
+    let root = tmp("stacked");
+    let rt = runtime(&root);
+    put(&rt.join("src/java/net/foo_impl.rs"), "use super::foo::Foo;\nimpl Foo {}\n");
+    put(&rt.join("src/java/net/foo_impl_impl.rs"), "use super::FooImpl;\nimpl FooImpl {}\n");
+    let out = root.join("build").join("t");
+    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    let src = out.join("java_runtime/src");
+    let dir = src.join("java/net");
+    let gen = "rava_macros::java_class! {}\n";
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&dir.join("bar.rs"), gen).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
+    let m = read(&dir.join("mod.rs"));
+    assert!(!m.contains("foo_impl"), "Foo / FooImpl 均缺席 → 不声明：{m}");
+    let mut w = Writer::new(&out, &rt.join("src"));
+    w.write(&dir.join("foo_impl_t.rs"), gen).unwrap();
+    write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
+    let m = read(&dir.join("mod.rs"));
+    assert!(m.contains("mod foo_impl_impl;") && !m.contains("mod foo_impl;"), "仅 FooImpl 在 → 只声明其共置：{m}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// 复用 scratch 换测试：user crate 上轮的生成类文件与陈旧包目录清除，本轮写出与无标记文件保留
 #[test]
 fn user_crate_sweeps_previous_test() {

@@ -30,4 +30,28 @@ impl IOUtil {
     pub fn fdVal(fdo: FileDescriptor) -> Result<i32> {
         Ok(fdo.__get_fd())
     }
+
+    /// native `setfdVal(FileDescriptor, int)`：写入 fd 字段。
+    #[jvm_native]
+    pub fn setfdVal(fdo: FileDescriptor, value: i32) -> Result<()> {
+        fdo.__set_fd(value);
+        Ok(())
+    }
+
+    /// native `configureBlocking(FileDescriptor, boolean blocking)`：切换 O_NONBLOCK（标志未变不调用 F_SETFL）。
+    #[jvm_native]
+    pub fn configureBlocking(fdo: FileDescriptor, blocking: bool) -> Result<()> {
+        let fd = fdo.__get_fd();
+        // SAFETY: fcntl 只作用于 fd
+        let rc = unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            let new_flags = if blocking { flags & !libc::O_NONBLOCK } else { flags | libc::O_NONBLOCK };
+            if flags == new_flags { 0 } else { libc::fcntl(fd, libc::F_SETFL, new_flags) }
+        };
+        if rc < 0 {
+            let msg = String::from(crate::net_posix::last_error_message("Configure blocking failed"));
+            return Err(crate::java::io::IOException::new_str(msg).map(JvmError::from).unwrap_or_else(|e| e));
+        }
+        Ok(())
+    }
 }
