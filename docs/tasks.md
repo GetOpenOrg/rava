@@ -161,6 +161,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
 │         ✅【2026-10-03 完成，feat/junit-expected-redundancy d4efc8d6】63_junit expected 10/10（junit+hamcrest cp、JDK21 实跑、双跑确定性全过；顺修 3 处源码错误：assertTrue 静态导入缺失、遮蔽 helper、Sample 构造器非 public 致 initializationError）
 │         ✅【2026-10-03 完成，同分支】新增用例查重：133 例 ∩ 冗余候选 = 5、相似对交集 0，逐条论证全部保留（定向回归网/独有边界/算法族/jmod 档设计），无删除建议；报告 docs/reports/e2e-redundancy-newtests.md
+│         🔄【2026-10-03 用户侧子代理领取】6 例输出不符 expected 复核（TestClassCastSubclass / TestClassModuleFace / TestInvokeNullArgs / TestSetAccessibleBoundary / TestLocaleCurrency / TestSystemStableProps）：JDK 21 双跑对照，只按实测纠 expected，结论分 expected 错 / 生成器缺陷 / 依赖环境
+│         🔄【2026-10-03 用户侧子代理领取】抽查 e2enew-da8abee1 失败 69 例归因（运行 54〔存根 36〕/ 编译 8 / 输出 6 / 转译 1）：按模块、失败类型、A/B 档归并根因，报告入 docs/reports/，jmod-coverage §七 补实测列
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
