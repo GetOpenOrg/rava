@@ -1,0 +1,7 @@
+ArrayList [x] -> ArrayList [[]]
+TreeMap {k=1} -> TreeMap [{}]
+StringBuilder sb -> StringBuilder []
+Box Box(old) -> Box [Box(fresh-box)]
+map deque -> ArrayDeque [[]]
+map box -> Box [Box(fresh-box)]
+supplier -> LinkedList [[]] empty=true

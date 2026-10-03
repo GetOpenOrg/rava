@@ -252,7 +252,10 @@ impl<'a> Engine<'a> {
 
     /// 构造器查找（`[facts.reflect] constructor_lookups`）：Class 实参与 Class 接收者值集里类镜像所指的类，其构造器
     /// 成为反射构造目标（构造器没有按名形状，查找即点名该类的构造器；同按名取类解析到的类），反射构造可达时入链。
-    /// 数组类没有构造器；推不出所指类的镜像记为反射缺口
+    /// 只有值集齐全（全是推得出的镜像、无 open）时查找目标才确定、才点名；值集不齐全时运行期目标可以是值集之外的
+    /// 任意类，已知部分只是流不敏感合流带进来的镜像（如 `Objects.requireNonNull` 返回值），不比其余类更可信——
+    /// 此时同构造器枚举：所指类记为已枚举（用户类照常有分派臂），JDK 类不点名，查找点记为反射缺口。
+    /// 数组类没有构造器
     pub(super) fn constructor_lookup(&mut self, m: usize, off: u32, k: &str, mref: &MemberRef, opcode: u8, args: &[V]) {
         let Some(md) = parse_method(&mref.desc) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
@@ -265,13 +268,16 @@ impl<'a> Engine<'a> {
                 vals.push(a);
             }
         }
-        let mut classes: BTreeSet<String> = BTreeSet::new();
+        let mut classes: BTreeMap<String, bool> = BTreeMap::new();
         for v in vals {
-            classes.extend(self.mirror_classes(m, off, k, v));
+            let (cs, complete) = self.mirror_classes_of(m, off, k, v, true);
+            for c in cs {
+                *classes.entry(c).or_default() |= complete;
+            }
         }
-        for cls in classes.into_iter().filter(|c| !c.starts_with('[')) {
+        for (cls, complete) in classes.into_iter().filter(|(c, _)| !c.starts_with('[')) {
             let c = self.id(&cls);
-            let named = self.named_ctors.insert(c);
+            let named = complete && self.named_ctors.insert(c);
             let listed = self.enumerated.insert((Members::Constructors, c));
             if (named || listed) && self.invokable.contains(&Members::Constructors) {
                 self.expose(Members::Constructors, c);

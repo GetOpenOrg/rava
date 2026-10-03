@@ -1218,6 +1218,16 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
         - a5-4e：ICU 归一化入口。`StringLatin1.toLowerCase` 仅在语言为 tr / az / lt 时走 `toLowerCaseEx`；JDK 对该例装载 `jdk/internal/icu` 0 类，c1d-p0 为 83 类。
         - a5-4f：日志后端探测。JDK 装载 `jdk/internal/logger` 17 类、`java/util/logging` 0 类；c1d-p0 分别为 30 类、28 类。
         - 两项合计上界约 480。加上其他 342 中随 a5-4b、a5-4e、a5-4f 消失的部分，才可能接近 1640。各项完成后按本例重测再定。
+    - **c1d-p0 合入门槛（2026-10-03 用户决策：先收窄再合）**：DeepCopy、TestDateTimeFormat、TestFileStoreMountLookup 三例的闭包类数与分析时间均不高于当时集成分支（DeepCopy 约 1820 类 / 23 s；DTF 1476、FSML 1611 类，同机同口径）；终态目标不变（DeepCopy ≤1640、FSML ≤900）。实施顺序 a5-4b → a5-4e → a5-4f，不足再从余下 342 类中找源；每步小步提交、开新步前同步集成分支，达标后推送抽查。
+    - **逐步实测**（同机 macOS，`rava closure --jdk 21`，时间扣除全机锁等待）：
+
+      | 步骤 | DeepCopy | DTF | FSML |
+      |---|---|---|---|
+      | 集成分支（门槛） | 1820 / 23 s | 1476 | 1611 |
+      | c1d-p0 9acf7bc9 | 3139 / 3m03s | 2910 | 2912 |
+      | s1 构造器查找只在 Class 值集齐全时点名 | 3069 / 66 s | 2910 / 48 s | 2912 / 46 s |
+
+      - s1：22eb9e72 的构造器查找把值集里的全部镜像点名。DeepCopy 的序列化路径（`ObjectStreamClass.getExternalizableConstructor@5`、`canonicalRecordCtr`、`ReflectionFactory.newConstructorForSerialization@46`）上，Class 值集经流不敏感合流（`Objects.requireNonNull` 返回值等）带入约 2340 个镜像并含 open，结果暴露 3498 个 JDK 构造器（集成分支 8 个）。改为值集齐全才点名；不齐全时同构造器枚举，只给用户类分派臂，查找点记反射缺口。暴露构造器降为 105，DeepCopy 少 70 类，分析时间 3m03s → 66 s；DTF、FSML 不受影响。补边界用例 TestCtorLookupRuntimeClass（经容器 / Object 返回值 / lambda 流转后 `getClass().getDeclaredConstructor()`，JDK 类与用户类混合，值集齐全照常点名）。
 
 ### 21.6 并行编排
 
