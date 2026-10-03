@@ -204,8 +204,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │           └─ ✅ 参考 JDK 固定构建（jdk-pin 75a15d93 已合入；server_maintenance b595193）：Temurin 21.0.11+10，清单 tools/refjdk.toml（四平台 URL+sha256），scripts/fetch_reference_jdk.sh；本机 tools/refjdk/，服务器 /data/rava-jdk/（ubuntu /mnt/d/workspace/rava-jdk）；run_tests 缺省参考构建、缺失即报错，--jdk/--java-home 标「非参考构建」
 │              ⏳ 生成器缺陷（原误判为环境）：TestLocaleCurrency 转译产物在 Linux 输出 CN¥，JVM（21.0.11 与 21.0.12.1）均输出 ¥——locale/CLDR 取值经转译后不同，待归因（jdkpin-efc13cd0 sg2 复现）；🔄 用户侧 D（#10）归因中：JVM 侧取证完成（zh_CN 链 [zh_CN_#Hans, zh__#Hans, zh_CN, zh, root]、载 cldr/ext/CurrencyNames_zh / FormatData_zh），rava 侧闭包检查待做，报告 docs/reports/2026-10-03-locale-currency-cn.md
 │             ✅【2026-10-03 用户侧完成，c3ad4c4e 已合入】参考 JDK 全量 golden 核验（docs/reports/2026-10-03-refjdk-golden-verify.md）：1074 例构建差异 0、一致 1070（63_junit 带 cp 10/10）——固定 21.0.11 零重生成验收通过；TestLocaleCurrency 在一致集内，佐证生成器缺陷改判
-│                ⏳ 派生：TestVmPlatformNatives expected 含 libzip.so（Linux 生成），macOS 本机输出 .dylib——平台依赖，登记跨平台基线
-│                🔄【2026-10-03 用户侧领取】派生：ListMethods（getMethods 枚举序）、TestSocketLoopbackPair（半关闭竞速）JVM 侧输出非确定——语料自身缺陷，后者为第八轮新写，改为确定序形态（join 后统一打印）；前者按输出排序形态复核
+│                ✅（95962474 合入：改为 libzip-name-ok= 断言，期望输出与平台无关）派生：TestVmPlatformNatives expected 含 libzip.so（Linux 生成），macOS 本机输出 .dylib——平台依赖，登记跨平台基线
+│                ✅【2026-10-03 用户侧完成，95962474 合入；抽查 nondet-95962474 2/3】派生：ListMethods（getMethods 枚举序）、TestSocketLoopbackPair（半关闭竞速）JVM 侧输出非确定——语料自身缺陷，后者为第八轮新写，改为确定序形态（join 后统一打印）；前者按输出排序形态复核；⏳ 转译侧缺陷：TestSocketLoopbackPair 改写后 rava 产物启动即 main 线程 NullPointerException、无任何输出（jp1，参考 JDK 21.0.11），待归因（疑 readNBytes / 线程缓冲路径）
 │         ✅【2026-10-03 用户侧完成，ad62f2c1 已合入】「档案调用链」口径文档同步：handwritten-boundary 原则一、java-rust-translation-reference §8.4、environment-variables、java-bytecode-transpiler-design、compatibility 五处改为档案口径并加「当前仍单测试」现状注；[boundary] 过渡期表述、行为现状表与历史文档按原样保留
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
@@ -250,7 +250,7 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
 | C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 c1da-f2bdcf6e 7/8（StockTrans 基线），余 TestFileStoreMountLookup 重跑；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），T3 已合入（4c3a614e），b3 第二段与 CallerSensitive 续段已合入（84c92245、382cf3e1）/ b3 DMH 段已合入（3473d696）/ b3 扇出收窄、T2 进行中；新派 A gen-fixes（生成器独立缺陷合集，计划 docs/plans/2026-10-03-gen-fixes.md）、B a3t-vthread（VirtualThread 翻译 + Continuation 有栈协程）；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），T3 已合入（4c3a614e），b3 第二段与 CallerSensitive 续段已合入（84c92245、382cf3e1）/ b3 DMH 段已合入（3473d696）/ b3 扇出收窄、T2 进行中；新派 A gen-fixes（生成器独立缺陷合集，计划 docs/plans/2026-10-03-gen-fixes.md；第 1 步层次重载计入接口未实现成员 E0061 已合入 52cde496，抽查 6/6）、B a3t-vthread（VirtualThread 翻译 + Continuation 有栈协程）；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |
 | regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
