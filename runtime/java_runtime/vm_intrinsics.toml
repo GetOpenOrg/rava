@@ -306,6 +306,9 @@ component_of_receiver = [
     "java/lang/Class.getComponentType:()Ljava/lang/Class;",
     "java/lang/Class.componentType:()Ljava/lang/Class;",
 ]
+declaring_of_receiver = [
+    "java/lang/Class.getDeclaringClass0:()Ljava/lang/Class;",
+]
 primitive_class = [
     "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;",
 ]

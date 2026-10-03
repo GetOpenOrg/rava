@@ -109,6 +109,9 @@ pub struct FieldAccess {
     pub recv: Option<SType>,
     /// 写入值的动态类型（同 [`TypedCall`] 实参规则）
     pub value: Option<TypeRef>,
+    /// 写入值是本文件辅助 fn 的返回、该 fn 只收标量形参（Rust 基本类型 / `str`，见 `stype::scalar_arg_fns`）：
+    /// 返回值不可能是任何实参，只能来自被调 fn 的产出（分配、回调结果、静态读取），引擎取手写体产出而非值池
+    pub value_fresh: bool,
     /// 接收者是本 fn 的 `self`（即被调 Java 方法的接收者；经同文件被调 fn 传递来的访问不算）
     pub on_self: bool,
     /// 写入值是被调 Java 方法的接收者：本 fn 的 `self` 经保持身份的转换（`Clone::clone` / `.clone()` / 引用 / `Object::from`）

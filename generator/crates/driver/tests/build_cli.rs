@@ -8,17 +8,26 @@ use std::sync::Mutex;
 /// 同一进程内的 rava 子进程串行：每次 `rava build` 峰值约 4 GB，测试线程并行会叠加到耗尽内存
 static RAVA: Mutex<()> = Mutex::new(());
 
+/// 当前工作区的包目录：取运行期 `CARGO_MANIFEST_DIR`（cargo 按本次调用设置）。编译期 `env!` 在全机共享的
+/// CARGO_TARGET_DIR 下可能指向另一工作区——cargo 对路径包按工作区相对路径算 metadata，源码相同时不重编，
+/// 测试二进制里嵌的就是首次编译它的（可能已删除的）worktree
+fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 fn run_rava(cmd: &mut Command) -> Output {
     let _guard = RAVA.lock().unwrap_or_else(|e| e.into_inner());
     cmd.output().expect("启动 rava")
 }
 
 fn runtime_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_runtime")
+    let rt = manifest_dir().join("../../../runtime/java_runtime");
+    assert!(rt.join("closure.toml").is_file(), "手写运行时目录不存在：{}", rt.display());
+    rt
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    manifest_dir().join("tests/fixtures").join(name)
 }
 
 /// 一次 `rava build`：返回 (stdout, scratch 目录)；缺 JDK → None

@@ -271,8 +271,8 @@ pub(super) struct CallScan<'a> {
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     pub(super) fresh: HashMap<String, Vec<String>>,
     pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self)
-    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型)
+    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>)>,
     pub(super) opaque: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
@@ -369,7 +369,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             let value = m.args.first().and_then(|a| infer(a, self.locals, self.helpers));
             let on_self = is_self_path(&m.receiver);
             let value_self = write && m.args.first().is_some_and(is_self_value);
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self));
+            let value_st = m.args.first().filter(|_| write).and_then(|a| stype(a, &self.scope, self.locals));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self, value_st));
         }
         // 按名协议 `o.0.__unsafe_ref_set("字段", v)`：接收者是擦除的 vtable 对象，只知字段名
         let by_name = (BY_NAME_WRITES.contains(&name.as_str()), BY_NAME_READS.contains(&name.as_str()));
@@ -379,7 +380,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let f = java_field_name(&f).to_string();
                 let value = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| infer(a, self.locals, self.helpers))).flatten();
                 let value_self = by_name.0 && m.args.iter().nth(1).is_some_and(is_self_value);
-                self.fields.push((f, by_name.0, None, value, false, false, value_self));
+                let value_st = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| stype(a, &self.scope, self.locals))).flatten();
+                self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st));
             }
         }
         let args = m.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
@@ -402,7 +404,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                         let f = java_field_name(f);
                         let value = c.args.first().and_then(|a| infer(a, self.locals, self.helpers));
                         let value_self = c.args.first().is_some_and(is_self_value);
-                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self));
+                        let value_st = c.args.first().and_then(|a| stype(a, &self.scope, self.locals));
+                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self, value_st));
                     }
                 }
                 let args = c.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();

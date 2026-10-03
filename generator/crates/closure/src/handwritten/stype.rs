@@ -230,6 +230,47 @@ pub(super) fn local_rets(file: &syn::File, uses: &HashMap<String, Vec<String>>) 
     out
 }
 
+/// Rust 标量（基本类型与 `str`）：不承载 Java 引用的形参类型
+const RUST_SCALARS: &[&str] = &["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64", "bool", "char", "str"];
+
+/// 形参类型是 Rust 标量（可经引用 / 切片 / 数组）：值里不可能有 Java 引用
+fn is_scalar_type(t: &syn::Type) -> bool {
+    match t {
+        syn::Type::Reference(r) => is_scalar_type(&r.elem),
+        syn::Type::Slice(s) => is_scalar_type(&s.elem),
+        syn::Type::Array(a) => is_scalar_type(&a.elem),
+        syn::Type::Paren(p) => is_scalar_type(&p.elem),
+        syn::Type::Path(p) => p.qself.is_none() && p.path.get_ident().is_some_and(|i| RUST_SCALARS.contains(&i.to_string().as_str())),
+        _ => false,
+    }
+}
+
+/// 本文件只收标量形参的辅助 fn（顶层自由 fn 与 impl 块里无 `self` 的关联 fn；键同 [`LocalRets`]）：
+/// 其返回值不可能是任何实参，只能来自 fn 体的产出（分配、回调结果、静态读取）
+pub(super) fn scalar_arg_fns(file: &syn::File, uses: &HashMap<String, Vec<String>>) -> HashSet<(Vec<String>, String)> {
+    let scalar = |sig: &syn::Signature| sig.inputs.iter().all(|a| matches!(a, syn::FnArg::Typed(pt) if is_scalar_type(&pt.ty)));
+    let mut out = HashSet::new();
+    for item in &file.items {
+        match item {
+            syn::Item::Fn(f) if scalar(&f.sig) => {
+                out.insert((Vec::new(), f.sig.ident.to_string()));
+            }
+            syn::Item::Impl(i) => {
+                let Some(st) = type_path(&i.self_ty).map(|t| expand(uses, t)) else { continue };
+                for it in &i.items {
+                    if let syn::ImplItem::Fn(f) = it {
+                        if scalar(&f.sig) {
+                            out.insert((st.clone(), f.sig.ident.to_string()));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 返回类型路径：`Result<T>` / `Option<T>` 取 `T`
 fn ret_path(t: &syn::Type) -> Option<Vec<String>> {
     if let syn::Type::Path(p) = t {
