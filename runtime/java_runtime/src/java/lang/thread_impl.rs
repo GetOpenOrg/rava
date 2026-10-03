@@ -145,10 +145,10 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
 
 /// 执行线程体并做 JVM thread-exit 簿记（见模块注释「线程生命周期」）。
 fn run_java_thread(t: &Thread) {
-    // 虚分派（Thread__VTable::run）：子类覆盖（Worker.run）或 Thread.run 的
-    // Runnable task 入口都在此一跳生效——与 JVM 以 virtual Thread.start 调
-    // run() 同构。
-    let result = Thread__VTable::run(&*t.vtable);
+    // 虚调用 `run()`：子类覆盖（Worker.run）或 Thread.run 的 Runnable task 入口都在此一跳生效——
+    // 与 JVM 以 virtual Thread.start 调 run() 同构。走方法调用形态而非 vtable trait 完全限定路径：
+    // 档案内无覆盖者时 run 的槽位被裁剪（plain），trait 上不存在该方法，方法调用形态两种情况都成立。
+    let result = t.run();
     if let Err(e) = result {
         e.report_uncaught_in(&format!("{}", t.__get_name()));
     }
@@ -176,7 +176,7 @@ impl Thread {
     /// eetop 取非零（JVM 中为 native 线程句柄，仅以非零承载 alive 语义）。
     ///
     /// 新线程以 vtable 分派调用 `Thread.run()`——这条 runtime→Java 调用边不在任何字节码里，
-    /// 闭包分析沿 `spawn_java_thread` → `run_java_thread` 的手写体调用点（`Thread__VTable::run`）
+    /// 闭包分析沿 `spawn_java_thread` → `run_java_thread` 的手写体调用点（`t.run()`）
     /// 推断，run() 的方法体（Runnable task 的转发入口）照常翻译。
     #[jvm_native]
     pub fn start0(&self) -> Result<()> {

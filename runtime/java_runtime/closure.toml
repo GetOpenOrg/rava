@@ -17,11 +17,10 @@
 # （rava closure）同口径建模。不在调用链上的方法保持 panic!("stub: ...")。
 #
 # 引入动机：类初始化（JVMS §5.5）进入调用链后，<clinit> 的静态可达闭包会沿安全管理器 → 模块层
-# 引导 → 虚拟线程调度器一路展开到整个并发 / 模块 / 反射子系统，而这些路径在运行时永不执行。
+# 引导一路展开到整个模块 / 反射子系统，而这些路径在运行时永不执行。
 [vm_boundary]
 classes = [
     "java/lang/SecurityManager",
-    "java/lang/VirtualThread",
     "java/lang/ClassLoader",
     "java/lang/Module",
     "java/lang/ModuleLayer",
@@ -90,7 +89,6 @@ translate_nested = [
 # VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表、ModuleLayer 的空层与 CLV）
 # 不翻译就保持 null（ModuleLayer.CLV 为 null 时 ServiceLoader 的模块层查找即 NPE）。
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
-# - VirtualThread：调度器（ForkJoinPool / 延时调度器）——虚拟线程映射为 OS 线程；
 # - Module：CDS 归档模块图（ArchivedData）与无名 / everyone 模块由 VM 模型承载（module_impl.rs）；
 # - InetAddress：名字服务（resolver SPI、hosts、loadLibrary）由操作系统解析器承载；
 # - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
@@ -99,7 +97,6 @@ translate_nested = [
 # - Unsafe：数组布局与指针宽度静态字段属 VM 注入常量（vm_intrinsics.toml [vm_constants.injected_statics]）；
 # - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
 clinit_carried = [
-    "java/lang/VirtualThread",
     "java/lang/Module",
     "java/net/InetAddress",
     "javax/crypto/JceSecurity",
