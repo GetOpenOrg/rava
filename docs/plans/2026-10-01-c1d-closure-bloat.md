@@ -1199,6 +1199,25 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
     - 其余大包（`java/lang/invoke` 123、`sun/nio/cs` 108、`java/util/stream` 93、`java/util/concurrent` 87、`java/util/regex` 61、locale 56、logging 28）多数挂在上述子树下，a5-4a/b 完成后重测再定是否另立项。
     - 与集成分支对照（2026-10-03，同机 macOS，集成分支 369a5392 的 rava 对 c1d-p0 b4f053e8 之后）：TestFileStoreMountLookup 1611 → 2912（+1317），TestDateTimeFormat 1476 → 2910（+1444）。增量就是上面几条扇出：集成分支仍有 `[boundary]` 前缀截断，`sun/`、`jdk/` 下的链在截断点停住；c1d-p0 去截断后，a5-4a / a5-4b 的过近似链全部展开。主要类别：JarVerifier 子树约 400、`com/sun/org` 113、`sun/security/ec` 84、`jdk/internal/icu` 60、jimage 32、logging 28。服务器 dyn-compare 报的 extra 2156 / 2254 以 JDK 实际装载为基准，口径不同，构成相同。去截断还暴露了一处真实缺口：`LocaleData` 改为按字节码取束后，要用 JRE（FALLBACK）族的束，已在 seeds.toml 按访问器补齐（d1b1b2ba，DTF +25 类，属必需）。
     - 目标：TestFileStoreMountLookup 闭包 ≤900 类、transpile ≤60 s；a5-4a / a5-4b 各补一个边界 e2e（`doPrivileged` 嵌套不同动作；`ServiceLoader.load` 在无 `-Xbootclasspath/a` 下的服务查找结果与 JDK 一致）。
+    - DeepCopy 实测与回收估算（2026-10-03，同机 macOS，`rava closure`；c1d-p0 00f4a379 对集成分支 cc5bb175）：
+      - 闭包 3139 类、分析 3m03s；集成分支 1820 类、23 s；多 1329、少 10。JDK 实际装载 959 类：c1d-p0 覆盖 814，集成分支覆盖 710。目标 ≤1640，需净减约 1500。
+      - 多出的 1329 类按首次发现链归类（依次匹配，先命中先算）：
+
+        | 来源 | 类数 |
+        |---|---|
+        | a5-4b 引导类路径查找 / JarVerifier | 401 |
+        | ICU 归一化（`SocketPermission.init` → `String.toLowerCase` → `ConditionalSpecialCasing` → `Normalizer2`） | 248 |
+        | LoggerFinder / 日志后端探测（`ObjectInputFilter$Config.<clinit>` → `System.getLogger`） | 231 |
+        | `Formatter` | 58 |
+        | `ObjectStreamClass` SUID / Proxy | 39 |
+        | 其他（`sun/nio/cs` 40、`sun/util/resources` 21、`sun/reflect/generics/tree` 16 等） | 342 |
+
+      - **a5-4a 单独回收约 0 类。** 闭包里规模最大的 12 个特权动作，其分配点都在自身的合法路径上，而非经 `executePrivileged` 合流而来：`ICUBinary$1` 在 `getRequiredData`，`DetectBackend$1` 在 `<clinit>`，`ObjectStreamClass$1` 在 `getSerialVersionUID`，其余同理。RTA 下这些动作已实例化，`run` 照样可达；按调用点求接收者只会改变 via 归属，不改变类集合。前文「1092 类」是首次发现链的归属数，不是可回收数。a5-4a 降为精度 / 可解释性项，不计入收窄预算。
+      - **a5-4b 回收上界 401，下界约 160。** 上界是多出类中首次发现链经 `findMiscResource` / `JarLoader` / `initializeVerifier` / `LazyClassPathLookupIterator` 的部分；全闭包子树为 537，其中 136 类集成分支也有。下界是子树中所属包在子树外不出现的类，共 159，主要是 `sun/security/ec*`、XMLDSig、`sun/security/x509`、`java/util/zip`、jimage 解压器。JarVerifier、ec、XMLDSig 没有别的入口，预计接近上界。a5-4b 完成后约 2740 类，仍高于 1640。
+      - **达到 ≤1640 还需另立两项：**
+        - a5-4e：ICU 归一化入口。`StringLatin1.toLowerCase` 仅在语言为 tr / az / lt 时走 `toLowerCaseEx`；JDK 对该例装载 `jdk/internal/icu` 0 类，c1d-p0 为 83 类。
+        - a5-4f：日志后端探测。JDK 装载 `jdk/internal/logger` 17 类、`java/util/logging` 0 类；c1d-p0 分别为 30 类、28 类。
+        - 两项合计上界约 480。加上其他 342 中随 a5-4b、a5-4e、a5-4f 消失的部分，才可能接近 1640。各项完成后按本例重测再定。
 
 ### 21.6 并行编排
 

@@ -117,6 +117,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       引入链已归因（TestFileStoreMountLookup 2885 类 / r4 extra 2156）：a5-4a doPrivileged 动作合流（1092）、
 │   │     │       a5-4b 引导加载器类路径查找 → JarVerifier → Signature / pkcs11（684）、a5-4c jrt 随 b 消失、a5-4d Formatter → ICU 归 a5-3；
 │   │     │       目标该例 ≤900 类、transpile ≤60 s（计划 §21.5）
+│   │     │       DeepCopy 实测 3139 类（集成分支 1820，目标 ≤1640）：a5-4a 单独回收约 0（动作分配点均在合法路径，只改归属），
+│   │     │       a5-4b 回收 160..401；另立 a5-4e ICU 归一化入口（248）、a5-4f 日志后端探测（231）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
