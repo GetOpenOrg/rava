@@ -1580,3 +1580,31 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
 - 守护检查：生成器单测 `closure::handwritten::thread_local_lint`——`runtime/java_runtime/src` 中 `thread_local!` /
   `#[thread_local]` 只允许出现在 `exec_context.rs`（平台块与当前块指针）与 `java/lang/thread_impl.rs`（3 个载体槽）。
 - TestVirtualThread 生成 + 编译通过（2924 JDK 类，与 T2 同；方案 A 尚在，本步不改闭包）。
+
+**T4 删方案 A、虚拟线程接通 Continuation（2026-10-03）**
+- `virtual_thread_impl.rs` 只余 6 个 `#[jvm_native]`（registerNatives + 5 个 notifyJvmti*），10 个 `#[jvm_boundary]` 承载方法删除；
+  `VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`，三份清单中 `VirtualThread` 0 次。`VirtualThread` 全部方法、
+  `<clinit>` 的 `DEFAULT_SCHEDULER`（`ForkJoinPool` + `CarrierThread` 工厂）与 `UNPARKER`（`ScheduledThreadPoolExecutor`）按字节码翻译；
+  `ContinuationSupport.isSupported0` 为 true，`ThreadBuilders.newVirtualThread` 走 `VirtualThread`。生成器未改动。
+- 类数：HelloWorld 467 → 465（`VirtualThread` 只以布局入闭包——`Thread.yield` 的 instanceof；`<clinit>` 不在闭包内，静态字段
+  读写为 `stub:` 存根）；TestVirtualThread 2924 → 2946（+22：调度器 / 载体线程 / 延时调度器 / Continuation 链）。
+  TestVirtualThread 审计 `vm_boundary_methods` 94 → 84。以上为 8c79c524 基线上的对照；并入 74a8977e（JCA 注册补全等）后
+  HelloWorld 464、TestVirtualThread 3123、TestContinuationPinned 3118、TestVirtualThreadCarrier 3119，`non_native_overrides` 0。
+- **调用点推断核对**（`rava closure TestVirtualThread --why`）：`Continuation.enter:(Ljdk/internal/vm/Continuation;Z)V` 与
+  `StackChunk.<init>:()V` 的入闭包链首边均为 `[handwritten] Continuation.enterSpecial`（手写体调用点推断），其上
+  `Continuation.run@122` ← `VirtualThread.runContinuation@72` ← ForkJoinTask 分派；`VirtualThread.<clinit>` 经
+  `ThreadBuilders.newVirtualThread@6` 的 new 入闭包。
+- **`tail` 不被常量折叠**：字节码中 `tail` 的写只有 `postYieldCleanup` 置 null，非 null 值只来自手写体 `enterSpecial` 的
+  `__set_tail(StackChunk::new()?)`。生成的 `Continuation.isStarted` 为 `Ok(!this.__get_tail().is_jvm_null())`（读字段，未折为常量），
+  `run` 的 `isStarted()` 两个分支（`enterSpecial(this, false / true, ..)`）都保留；`isEmpty` 只在断言里用到，`$assertionsDisabled`
+  折叠后为存根，符合预期。
+- 边界 e2e（`60_real_threads`，expected 取 refjdk 21 两次一致的运行）：
+  - **TestContinuationPinned**：`synchronized` 内 sleep（载体不变）、park（`getState` = WAITING，unpark 后在原载体恢复）、
+    限时 sleep 被中断（TIMED_WAITING → InterruptedException、中断状态清除——走 `carrier.setInterrupt` 与载体侧清中断）、
+    parkNanos 超时；两个虚拟线程同时触发 `<clinit>`，其中 sleep（载体不变、后到者等初始化完成，值 42,42）；之后未被 pin 的
+    虚拟线程照常运行。
+  - **TestVirtualThreadCarrier**：16 个虚拟线程各 50 次 yield / parkNanos / sleep 交替，每次恢复后核对 `currentThread()` 身份、
+    `ThreadLocal` / `InheritableThreadLocal`、`isVirtual()`、名字；中断状态跨 yield 保持、park 遇中断立即返回、sleep 抛出并清除；
+    `join(Duration)` 对 park 中线程超时返回 false、unpark 后 true；虚拟父线程的 ITL 传给虚拟子线程；1 万个虚拟线程各让出一次全部完成。
+    输出与载体编号无关。
+  - 本机只做诊断性运行（非验收）：两例与 TestVirtualThread 输出均与 expected 一致。
