@@ -112,6 +112,10 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     if let Some(r) = crate::species_dyn::invoke(declaring_slash, name, descriptor, args) {
         return r;
     }
+    // @CallerSensitive 注入调用器（隐藏类）→ VM 支持类 InjectedInvokerDyn，以注入类为调用者
+    if let Some(r) = crate::injected_invoker::invoke(declaring_slash, name, descriptor, &recv, args) {
+        return r;
+    }
     let is_ctor = name == "<init>";
     // 手写根类 Object 无 codegen 分派闭包：其唯一构造器 `<init>()V`（build.rs
     // 方法表补行，JLS §4.3.2）在此直接承载——新建一个独立身份的 Object 实例

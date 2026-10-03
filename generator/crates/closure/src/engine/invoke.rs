@@ -12,7 +12,9 @@ impl<'a> Engine<'a> {
         self.call_vals = Some(Rc::from(pargs));
         let wrapped = self.ref_caller_sensitive(mref);
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
+        let lambda = self.cs.lambda_site.take();
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
         self.call_vals = None;
     }
@@ -101,6 +103,18 @@ impl<'a> Engine<'a> {
             } else if class_recv && !names.is_empty() && classes.is_empty() {
                 // 名字只经形参流入、接收者非常量：查找目标推不出，记为反射缺口
                 self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
+            }
+            // 本调用点的字面量名另对 Class 形参值集里类镜像所指的类点名（如 `findStatic(invokerClass, "invoke_V", …)`：
+            // 类取自字段 / 类定义点返回的镜像）。与接收者镜像同一口径：只乘本调用点字面量，不乘形参透传的名字
+            if class_param && !site_names.is_empty() {
+                for c in self.class_arg_mirrors(m, mref, opcode, args) {
+                    if classes.contains(&c) {
+                        continue;
+                    }
+                    for name in &site_names {
+                        self.reflect_name(&c, name, ch);
+                    }
+                }
             }
             for (c, name) in &per_class {
                 self.reflect_name(c, name, ch);

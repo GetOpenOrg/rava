@@ -103,7 +103,11 @@ fn bound_subclass_recv(env: &InstrEnv, lam: &Lam, ci: &ty::ClassInfo) -> bool {
 }
 
 /// 闭包体：`Impl::<..>::name(args)`（接口实例方法走载体分派），再做返回值适配
-pub(super) fn closure_body(env: &InstrEnv, sim: &StackSim, lam: &Lam, call: &CallArgs) -> InstrResult<String> {
+///
+/// 实现方法是 @CallerSensitive（方法引用 `MethodHandles::lookup`）：JVM 中调用它的是 lambda 隐藏类的
+/// SAM 方法，调用处类取隐藏类名 `hidden`（lambda 体 `() -> lookup()` 的实现方法是宿主类的合成方法，
+/// 其内调用点按所在类压栈，不经此处）
+pub(super) fn closure_body(env: &InstrEnv, sim: &StackSim, lam: &Lam, call: &CallArgs, hidden: &str) -> InstrResult<String> {
     let body = match lam.ci {
         Some(ci) if lam.is_instance && ci.is_interface() => iface_call(env, lam, ci, call)?,
         Some(ci) if bound_subclass_recv(env, lam, ci) => {
@@ -131,6 +135,8 @@ pub(super) fn closure_body(env: &InstrEnv, sim: &StackSim, lam: &Lam, call: &Cal
             format!("{}{tf}::{}({})", env.ctx.short(&lam.impl_cls), lam.impl_rust_name, args.join(", "))
         }
     };
+    let body = crate::invoke::bind::caller_sensitive_wrap_as(env, &body, &lam.impl_cls, &lam.impl_mname, &lam.impl_desc, hidden)
+        .unwrap_or(body);
     adapt_return(env, lam, body)
 }
 
