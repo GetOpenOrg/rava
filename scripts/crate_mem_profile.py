@@ -136,7 +136,8 @@ def run(argv):
         lines.append(f"| {r['crate']} | {s.get('files', '')} | {s.get('bytes', 0) / 1e6:.2f} | {s.get('gen_files', '')} "
                      f"| {r['wall_s']} | {r['peak_mb']} | {r['rc']} |")
     if a.passes and (out / "java_runtime.passes.log").exists():
-        lines += ["", "## java_runtime 阶段", "", "```", (out / "java_runtime.passes.log").read_text()[-20000:], "```"]
+        keep = [l for l in (out / "java_runtime.passes.log").read_text().splitlines() if not l.endswith("drop_ast")]
+        lines += ["", "## java_runtime 阶段", "", "```", *keep, "```"]
     (out / "report.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     return rc
