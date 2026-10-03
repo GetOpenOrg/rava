@@ -72,8 +72,8 @@ pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
         (StrOp::EqualsIgnoreCase, [V::Str(a), V::Str(b)]) if a.is_ascii() && b.is_ascii() => Some(V::Int(a.eq_ignore_ascii_case(b) as i32)),
         (StrOp::Length, [V::Str(a)]) => Some(V::Int(a.encode_utf16().count() as i32)),
         (StrOp::IsEmpty, [V::Str(a)]) => Some(V::Int(a.is_empty() as i32)),
-        (StrOp::CharAt, [V::Str(a), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|u| V::Int(i32::from(u))),
-        (StrOp::HashCode, [V::Str(a)]) => Some(V::Int(a.encode_utf16().fold(0i32, |h, u| h.wrapping_mul(31).wrapping_add(i32::from(u))))),
+        (StrOp::HashCode, [V::Str(a)]) => Some(V::Int(a.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c))))),
+        (StrOp::CharAt, [V::Str(a), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|c| V::Int(i32::from(c))),
         (StrOp::CharToLowerCase, [V::Int(c)]) => u8::try_from(*c).ok().filter(u8::is_ascii).map(|b| V::Int(i32::from(b.to_ascii_lowercase()))),
         _ => None,
     }

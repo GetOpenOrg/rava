@@ -303,7 +303,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
-    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &disp, &body_names)?;
+    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp, &body_names)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;

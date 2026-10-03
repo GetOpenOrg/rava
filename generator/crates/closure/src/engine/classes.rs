@@ -76,6 +76,9 @@ impl<'a> Engine<'a> {
 
     /// 类型集按过滤类型收窄
     pub(super) fn filter(&mut self, s: &TypeSet, t: u32) -> TypeSet {
+        if t & NOT_SUB != 0 {
+            return self.filter_not(s, t & !NOT_SUB);
+        }
         if self.names[t as usize].as_ref() == OBJECT {
             return s.clone();
         }
@@ -102,6 +105,29 @@ impl<'a> Engine<'a> {
             }
         }
         out
+    }
+
+    /// 类型集去掉 ⊂ t 的成员（instanceof 判定不成立一侧）。open(o)：o ⊂ t 时整锥去掉，否则保留——
+    /// 锥内 ⊂ t 的子类型在展开时仍可能出现，保守但不丢成员
+    fn filter_not(&mut self, s: &TypeSet, t: u32) -> TypeSet {
+        let mut out = TypeSet::default();
+        let kept: Vec<u32> = s.classes.iter().filter(|&x| !self.sub(x, t)).collect();
+        out.classes = IdSet::from_sorted(kept);
+        for o in &s.open {
+            if !self.sub(o, t) {
+                out.open.insert(o);
+            }
+        }
+        out
+    }
+
+    /// 流边过滤的显示名（不成立一侧记作 `!类型`）
+    pub(super) fn filter_label(&self, f: u32) -> String {
+        if f & NOT_SUB != 0 {
+            format!("!{}", self.names[(f & !NOT_SUB) as usize])
+        } else {
+            self.names[f as usize].to_string()
+        }
     }
 
     /// G 中 ⊂ t 的成员
@@ -199,6 +225,7 @@ impl<'a> Engine<'a> {
             if !self.class_patterns.is_empty() {
                 self.pattern_class_added(cls);
             }
+            self.service_class_entered(cls);
         }
         Some(cf)
     }
@@ -301,17 +328,9 @@ impl<'a> Engine<'a> {
         let Some(code) = cf.method(&key.name, &key.desc).filter(|x| !x.is_native()).and_then(|x| x.code.as_ref()) else { return };
         let mut descs: Vec<String> = Vec::new();
         let mut classes: Vec<String> = code.exception_table.iter().filter_map(|e| e.catch_type.clone()).collect();
-        let mut calls: Vec<(MemberRef, u32)> = Vec::new();
         for i in &code.insns {
             match &i.operand {
-                classfile::Operand::Method(r, _) => {
-                    classes.push(r.owner.clone());
-                    descs.push(r.desc.clone());
-                    if matches!(i.opcode, classfile::op::INVOKESTATIC | classfile::op::INVOKESPECIAL | classfile::op::INVOKEVIRTUAL) {
-                        calls.push((r.clone(), i.offset));
-                    }
-                }
-                classfile::Operand::Field(r) => {
+                classfile::Operand::Field(r) | classfile::Operand::Method(r, _) => {
                     classes.push(r.owner.clone());
                     descs.push(r.desc.clone());
                 }
@@ -334,16 +353,6 @@ impl<'a> Engine<'a> {
         }
         for d in descs {
             self.touch_desc(&d, via);
-        }
-        // 截断体运行期照字节码执行：体内调用的同属截断的方法（内部边界类上无手写承载、发射层翻译字节码）
-        // 同样会执行，登记为方法（它们自身仍按截断语义只触及引用类），否则发射层只给存根。手写承载的被调方
-        // 不登记：其实现恒在手写层、不会成为存根，登记会把其手写效果拉进闭包（截断语义下本不展开）
-        for (r, off) in calls {
-            let cut = r.owner == key.owner
-                && self.h.class(&r.owner).is_some_and(|c| c.method(&r.name, &r.desc).is_some_and(|x| self.ctx.boundary_cut(&c, x)));
-            if cut {
-                self.method(r, Via::method("truncated-call", m, Some(off)));
-            }
         }
     }
 
@@ -418,7 +427,15 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 抽象分配：类型入流图，实例字段缺省值并入字段值集
     pub(super) fn instantiate(&mut self, cls: &str, via: Via) {
+        self.instantiate_type(cls, via);
+        self.alloc_defaults(cls);
+    }
+
+    /// 类型入流图，不涉及字段初值：具体求值的对象（物化快照逐字段给出全部值，含缺省值；
+    /// 轨迹内分配的对象只经物化或其类的抽象初始化可见）
+    pub(super) fn instantiate_type(&mut self, cls: &str, via: Via) {
         if cut::edges_on() {
             let from = self.via_node(&via);
             cut::edge_plain(&from, &format!("A:{cls}"));

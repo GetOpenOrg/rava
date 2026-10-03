@@ -4,7 +4,7 @@ use super::*;
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
-/// 常量格上的值：缺席（⊥，尚无值）→ 单一常量 → Top
+/// 常量格上的值：缺席（⊥，尚无值）→ 常量（int 族可为小集合，见 `absint::ints`）→ Top
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PV {
     Const(V),
@@ -16,7 +16,7 @@ impl PV {
     /// 标签引用只在分析内部传递，不作为折叠常量导出）
     pub(super) fn of(v: &V) -> PV {
         match v {
-            V::Int(_) | V::Long(_) | V::Null | V::Str(_) => PV::Const(v.clone()),
+            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Str(_) | V::Offset(_) => PV::Const(v.clone()),
             V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
@@ -25,6 +25,10 @@ impl PV {
         match (a, b) {
             (None, x) => x.clone(),
             (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
+            // int 族常量：取有限并
+            (Some(PV::Const(x)), PV::Const(y)) if crate::absint::ints::members(x).is_some() && crate::absint::ints::members(y).is_some() => {
+                crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
+            }
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
             (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
                 j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
@@ -68,7 +72,6 @@ pub(super) struct Ctx<'a> {
     pub(super) guards: RefCell<super::memo::Guards>,
     /// 服务目录与 provider 执行线（见 `services.rs`）
     pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
-    pub(super) svc_lines: std::cell::OnceCell<BTreeSet<String>>,
     /// 类的定义加载器表（字段钩子的接收者判定与镜像读取折叠，惰性建立）
     pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 选择子形参缓存（见 `selector.rs`）
@@ -136,6 +139,8 @@ pub(super) struct CallInfo {
     pub(super) holder: bool,
     /// 清单属性读取锚点的读取形态
     pub(super) reader: Option<super::sysprops::PropSum>,
+    /// 按名取字段偏移的入口（`name_resolvers` 里 offset = true）
+    pub(super) offset: Option<crate::manifest::NameResolver>,
 }
 
 /// 字段引用解析结果
@@ -162,11 +167,6 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
 }
 
-/// fn 名是成员的伴生核心 `core_<Rust 名>`（mangle 名，或类内无重载时的裸名）
-fn is_core_of(f: &str, rust: Option<&str>, mangled: &str) -> bool {
-    f.strip_prefix("core_").is_some_and(|n| n == mangled || rust == Some(n))
-}
-
 pub(super) fn const_value(c: &Const) -> Option<V> {
     match c {
         Const::Int(v) => Some(V::Int(*v)),
@@ -180,13 +180,12 @@ impl Ctx<'_> {
     pub(super) fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
         let member = format!("{}.{}:{}", cf.name, m.name, m.desc);
         match self.domain(&cf.name) {
-            // 内部包边界：BFS 截断，整体手写（未手写的成员是 panic 存根，运行时不执行字节码）。
-            // VM 耦合边界（公开包，`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 /
-            // 共置手写体按精确名提供）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
+            // VM 契约边界（`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 / 共置手写体
+            // 按精确名提供 / 类初始化器）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
             // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
-            // 写入的字段）从分析中消失，成为漏报
+            // 写入的字段）从分析中消失，成为漏报。类初始化器由清单逐类决定（`translate_clinit`）
             Domain::Boundary => {
-                let hw = self.boundary_carried(cf, m, &member) || !self.man.is_vm_boundary(&cf.name);
+                let hw = self.boundary_carried(cf, m, &member);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
             }
             Domain::Root => return Kind::Handwritten("root"),
@@ -215,24 +214,6 @@ impl Ctx<'_> {
             || (m.name == "<clinit>" && (!self.man.is_vm_boundary(&cf.name) || self.man.is_vm_clinit_carried(&cf.name)))
             || self.man.is_intrinsic(member)
             || self.provided(cf, &m.name, &m.desc)
-    }
-
-    /// 边界截断方法：内部边界类上无手写承载的方法——发射层翻译其字节码，分析器不展开其体
-    /// （体内的被调方只在另有路径时入闭包）。动态对照按此把运行期执行到的截断体当翻译体归因
-    pub(super) fn boundary_cut(&self, cf: &ClassFile, m: &classfile::Method) -> bool {
-        self.domain(&cf.name) == Domain::Boundary
-            && !self.man.is_vm_boundary(&cf.name)
-            && !self.boundary_carried(cf, m, &format!("{}.{}:{}", cf.name, m.name, m.desc))
-            && !self.core_provided(cf, m)
-    }
-
-    /// 实例方法由伴生核心 `core_<Rust 名>` 承载（发射侧 `Verdict::Core` 同口径：适配转发到手写核心）
-    fn core_provided(&self, cf: &ClassFile, m: &classfile::Method) -> bool {
-        if m.is_static() || self.man.hw_dropped(&cf.name) {
-            return false;
-        }
-        let (rust, mangled) = self.rust_names(cf, &m.name, &m.desc);
-        self.hw.class(&cf.name).fns.keys().any(|f| is_core_of(f, rust.as_deref(), &mangled))
     }
 
     /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
@@ -265,14 +246,6 @@ impl Ctx<'_> {
         let d = match self.man.domain(cls, origin == Some(Origin::User)) {
             // 依赖库类（`--lib`）：库自身不属 JDK 边界，一律按字节码翻译
             Domain::Boundary if origin == Some(Origin::Lib) => Domain::Translate,
-            // 纯数据资源束：数据不是实现细节，即便位于边界前缀内也按字节码翻译
-            Domain::Boundary
-                if !self.man.is_vm_boundary(cls) && self.cp.get(cls).is_some_and(|cf| self.man.seeds.carriers.is_pure_data_bundle(self.cp, &cf)) =>
-            {
-                Domain::Translate
-            }
-            // 服务 provider 执行线：运行期经 ServiceLoader 按普通构造实例化，执行的是字节码
-            Domain::Boundary if !self.man.is_vm_boundary(cls) && self.on_provider_line(cls) => Domain::Translate,
             d => d,
         };
         self.domains.borrow_mut().insert(cls.to_string(), d);
@@ -311,13 +284,17 @@ impl Ctx<'_> {
         let fi = self.h.resolve_field(&f.owner, &f.name, &f.desc).map(|site| {
             let fd = site.field();
             let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
+            // VM 注入的静态字段：运行期值由 VM 写入，字节码初值 / ConstantValue 均不代表运行期值
+            let injected = self.man.is_injected_static(&key.owner, &key.name);
             // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
-            let open = matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+            let open = injected
+                || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
                 || !self.hw.member(&key.owner, &key.name).fns.is_empty()
                 || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
+            let constant = if injected { None } else { fd.constant_value.clone() };
             let markers = self.man.serializable_markers();
             let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
-            Rc::new(FieldInfo { key, access: fd.access, constant: fd.constant_value.clone(), open, serializable })
+            Rc::new(FieldInfo { key, access: fd.access, constant, open, serializable })
         });
         self.fields.borrow_mut().insert(f.clone(), fi.clone());
         fi
@@ -328,6 +305,10 @@ impl Ctx<'_> {
         let fi = self.field_info(f)?;
         if let Some(m) = m {
             self.dep(m, Dep::Field(fi.key.clone()));
+        }
+        // VM 注入的字面量值：字节码写入被 VM 值覆盖，读取恒为该值
+        if let Some(x) = self.man.injected_literal(&fi.key.owner, &fi.key.name) {
+            return Some(if fi.key.desc == "J" { V::Long(x) } else { V::Int(x as i32) });
         }
         if self.field_open(&fi) {
             return None;
@@ -367,6 +348,7 @@ impl Ctx<'_> {
             str_op,
             holder: self.man.sysprops.is_holder(&k),
             reader: self.reader_spec(&k),
+            offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
@@ -384,6 +366,20 @@ impl Ctx<'_> {
             || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
         let (o, n, d) = site.key();
         exact.then(|| (site.class.clone(), MemberRef { owner: o, name: n, desc: d }))
+    }
+
+    /// 按名取字段偏移的调用折叠为符号偏移：Class 实参是类字面量、名字是字符串常量，且该类自身声明了
+    /// 同名实例字段（VM 只查声明类本身，查不到即抛出）
+    pub(super) fn field_offset(&self, opcode: u8, r: crate::manifest::NameResolver, args: &[V]) -> Option<V> {
+        let base = usize::from(opcode != classfile::op::INVOKESTATIC);
+        let cls = match r.class {
+            Some(i) => args.get(i + base)?,
+            None => args.first()?,
+        };
+        let (V::Class(c, _), Some(V::Str(name))) = (cls, args.get(r.name + base)) else { return None };
+        let cf = self.h.class(c)?;
+        let fd = cf.fields.iter().find(|f| f.name == **name && !f.is_static())?;
+        Some(V::Offset(Rc::new(MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() })))
     }
 
     /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值
@@ -442,6 +438,9 @@ impl Oracle for Facts<'_, '_> {
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
         }
+        if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
+            return Ret::Value(v);
+        }
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
         }
@@ -453,6 +452,11 @@ impl Oracle for Facts<'_, '_> {
         let r = self.ctx.rvals.borrow().get(t).cloned();
         self.ctx.dep(me, Dep::Ret(t.clone()));
         match r {
+            // 小集合：先按本调用点的常量实参求值，求不出时取集合
+            Some(PV::Const(v @ V::Ints(_))) => match eval() {
+                Ret::Unknown => Ret::Value(v),
+                x => x,
+            },
             Some(PV::Const(v)) => Ret::Value(v),
             Some(PV::Top) => eval(),
             None if self.ctx.noreturn.borrow().answer_never(t) => {
@@ -461,6 +465,9 @@ impl Oracle for Facts<'_, '_> {
             }
             None => eval(),
         }
+    }
+    fn final_static(&self, f: &MemberRef) -> bool {
+        self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 && !self.ctx.field_open(&fi))
     }
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
         if let Some(v) = self.ctx.mirror_hook_field(opcode, f, recv) {
@@ -500,13 +507,5 @@ mod tests {
         assert!(!deser_writes(acc::PRIVATE, false));
         assert!(!deser_writes(acc::STATIC, true));
         assert!(!deser_writes(acc::TRANSIENT, true));
-    }
-
-    #[test]
-    fn core_name_matches_mangled_or_bare() {
-        assert!(is_core_of("core_len", Some("len"), "len__I"));
-        assert!(is_core_of("core_len__I", None, "len__I"));
-        assert!(!is_core_of("core_len", None, "len__I"));
-        assert!(!is_core_of("len", Some("len"), "len__I"));
     }
 }

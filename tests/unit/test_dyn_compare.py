@@ -14,9 +14,8 @@ import dyn_compare as dc
 
 
 def rules(**kw):
-    base = dict(boundary_packages=['jdk/internal/', 'sun/'],
-                vm_boundary={'java/lang/Thread'},
-                release=['sun/nio/cs/', 'jdk/internal/util/ArraysSupport'],
+    base = dict(vm_boundary={'java/lang/Thread', 'jdk/internal/misc/Unsafe'},
+                release=['java/lang/Thread$Builder'],
                 vm_upcalls=['java/lang/invoke/MethodHandleNatives'],
                 user={'Main'})
     base.update(kw)
@@ -28,16 +27,16 @@ class DomainTest(unittest.TestCase):
         r = rules()
         self.assertEqual(r.domain('Main'), 'user')
         self.assertEqual(r.domain('java/lang/Object'), 'root')
-        # 放行优先于边界包前缀
-        self.assertEqual(r.domain('sun/nio/cs/UTF_8'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupport'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupport$1'), 'translate')
-        self.assertEqual(r.domain('jdk/internal/util/ArraysSupportX'), 'boundary')
-        self.assertEqual(r.domain('sun/misc/Unsafe'), 'boundary')
+        # translate_nested 放行优先于 VM 边界类
+        self.assertEqual(r.domain('java/lang/Thread$Builder'), 'translate')
+        self.assertEqual(r.domain('java/lang/Thread$Builder$1'), 'translate')
         # VM 边界类连同嵌套类
         self.assertEqual(r.domain('java/lang/Thread$State'), 'boundary')
+        self.assertEqual(r.domain('jdk/internal/misc/Unsafe'), 'boundary')
+        # 其余一律翻译域（无包前缀截断）
         self.assertEqual(r.domain('java/util/ArrayList'), 'translate')
-        self.assertEqual(r.domain('com/foo/Bar'), 'boundary')
+        self.assertEqual(r.domain('sun/nio/cs/UTF_8'), 'translate')
+        self.assertEqual(r.domain('com/foo/Bar'), 'translate')
 
     def test_entry_matches(self):
         self.assertTrue(dc.entry_matches('a/b/', 'a/b/C'))
@@ -121,7 +120,7 @@ class AttributeTest(unittest.TestCase):
                                      ('java/util/H', 'n', '()V', 0), MAIN)), 'handwritten')
 
     def test_boundary_code(self):
-        self.assertEqual(self.cat(ev(('sun/misc/U', 'y', '()V', 0), MAIN)), 'boundary-code')
+        self.assertEqual(self.cat(ev(('jdk/internal/misc/Unsafe', 'y', '()V', 0), MAIN)), 'boundary-code')
 
     def test_vm_upcall(self):
         self.assertEqual(self.cat(ev(('java/lang/invoke/X', 'y', '()V', 0),
@@ -133,7 +132,7 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(self.cat(ev()), 'vm-entry')
 
     def test_boundary_dispatch(self):
-        sigs = dc.boundary_ref_sigs(['jdk/internal/access/JLA.get:(I)I', 'java/util/A.f:()V'],
+        sigs = dc.boundary_ref_sigs(['java/lang/Thread.get:(I)I', 'java/util/A.f:()V'],
                                     self.r)
         self.assertEqual(sigs, {'get:(I)I'})
         self.assertEqual(self.cat(ev(('java/lang/System$2', 'get', '(I)I', 1), MAIN), sigs),
@@ -156,6 +155,18 @@ class AttributeTest(unittest.TestCase):
         # 非模型调用点照旧
         self.assertEqual(dc.attribute(ev(('java/util/A', 'f', '()V', 2), MAIN), self.methods, self.r,
                                       frozenset(), {site: 'indy-model'}), (dc.MISS, None))
+
+    def test_indy_linkage_through_modeled_jdk_frames(self):
+        # 调用点正上方是 JVM 链接期上调（MethodHandleNatives.linkCallSite）：链接途经的已建模 JDK 帧
+        # （insertArguments → … → LambdaForm 编译 → asm）不算模型再次进入，整段归 indy 模型
+        site = 'java/util/A.f:()V@1'
+        e = ev(('jdk/internal/org/objectweb/asm/Frame', '<init>', '()V', 0),
+               ('java/lang/invoke/LambdaForm', 'compileToBytecode', '()V', 9),
+               ('java/util/A', 'f', '()V', 4),
+               ('java/lang/invoke/MethodHandleNatives', 'linkCallSite', '()V', 0),
+               ('java/util/A', 'f', '()V', 1), MAIN)
+        self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), {site: 'indy-model'}),
+                         ('indy-model', site))
 
     def test_sigpoly_model(self):
         # 签名多态调用点（MethodHandle.invoke）上方是 LambdaForm 调用器帧：跳到其上方首个已建模帧，
@@ -192,14 +203,14 @@ def closure():
 class CompareTest(unittest.TestCase):
     def test_compare_and_tag(self):
         xlog = XLOG + "[0.04s][info][class,load] java.util.Missed source: jrt:/java.base\n" \
-                      "[0.05s][info][class,load] sun.misc.Unsafe source: jrt:/java.base\n" \
+                      "[0.05s][info][class,load] jdk.internal.misc.Unsafe source: jrt:/java.base\n" \
                       "[0.06s][info][class,load] java.util.NoEvent source: jrt:/java.base\n"
         agent = ("L java/util/Missed main\nF Main main ([Ljava/lang/String;)V 9\n"
-                 "L sun/misc/Unsafe main\nF Main main ([Ljava/lang/String;)V 9\n")
+                 "L jdk/internal/misc/Unsafe main\nF Main main ([Ljava/lang/String;)V 9\n")
         res = dc.compare(closure(), xlog, agent, rules(), 'Main')
         self.assertEqual([m['class'] for m in res['miss']], ['java/util/Missed'])
         self.assertEqual([m['class'] for m in res['unattributed']], ['java/util/NoEvent'])
-        self.assertEqual([m['class'] for m in res['attributed']['boundary']], ['sun/misc/Unsafe'])
+        self.assertEqual([m['class'] for m in res['attributed']['boundary']], ['jdk/internal/misc/Unsafe'])
         ex = res['extra']
         self.assertEqual(ex['classes'], ['java/util/Orphan', 'java/util/Unused'])
         self.assertEqual(ex['unexplained'], ['java/util/Orphan'])
@@ -212,11 +223,10 @@ class CompareTest(unittest.TestCase):
 
 
 class MethodCompareTest(unittest.TestCase):
-    """方法粒度对照：翻译体（字节码 / 边界截断）调用的不在闭包内的方法 → mmiss"""
+    """方法粒度对照：翻译体（字节码方法）调用的不在闭包内的方法 → mmiss"""
 
     def closure(self):
         return {'methods': [{'id': 'p/A.f:()V', 'kind': 'bytecode'},
-                            {'id': 'q/Cut.<init>:()V', 'kind': 'handwritten:boundary', 'cut': True},
                             {'id': 'q/Hw.n:()V', 'kind': 'handwritten:boundary'},
                             {'id': 'p/A.g:()V', 'kind': 'bytecode'}]}
 
@@ -228,29 +238,26 @@ class MethodCompareTest(unittest.TestCase):
 
     def test_categories(self):
         E = dc.MethodEntry
-        entries = [E('q/Base.<init>:(I)V', ('q/Cut', '<init>', '()V', 3)),   # 截断体调用未入闭包的超类构造
-                   E('p/B.h:()V', ('p/A', 'f', '()V', 5)),                   # 字节码体调用未入闭包的方法
+        entries = [E('p/B.h:()V', ('p/A', 'f', '()V', 5)),                   # 字节码体调用未入闭包的方法
                    E('p/A.g:()V', ('p/A', 'f', '()V', 7)),                   # 已覆盖
                    E('p/X.y:()V', ('q/Hw', 'n', '()V', 1)),                  # 手写承载体内：不可比
                    E('p/L.z:()V', ('p/A', 'f', '()V', 9)),                   # indy 模型调用点
                    E('p/M.w:()V', None)]
         r = dc.compare_methods(self.closure(), entries, rules(), {'p/A.f:()V@9': 'indy-model'})
-        self.assertEqual([(m['method'], m['caller_cut']) for m in r['mmiss']],
-                         [('q/Base.<init>:(I)V', True), ('p/B.h:()V', False)])
+        self.assertEqual([m['method'] for m in r['mmiss']], ['p/B.h:()V'])
         self.assertEqual(r['by_category'], {'covered': 1, 'indy-model': 1,
                                             'untranslated-caller': 1, 'vm-entry': 1})
         tag = dc.summary_tag({'miss': [], 'unattributed': [], 'extra': {'count': 0, 'explained': 0},
                               'methods': r})
-        self.assertEqual(tag, 'dyn miss 0 / extra 0 prov 100% / mmiss 2 cut 1')
+        self.assertEqual(tag, 'dyn miss 0 / extra 0 prov 100% / mmiss 1')
 
 
 class ManifestTest(unittest.TestCase):
     def test_from_manifest_reads_toml(self):
         rules = dc.DomainRules.from_manifest({'Main'})
-        self.assertTrue(rules.boundary_packages)
-        self.assertTrue(all(p.endswith('/') for p in rules.boundary_packages))
         self.assertTrue(rules.vm_boundary and rules.release and rules.vm_upcalls)
         self.assertEqual(rules.domain('Main'), 'user')
+
 
 
 

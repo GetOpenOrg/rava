@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 pub enum Domain {
     /// 用户类：字节码翻译
     User,
-    /// 公开 API（java/、javax/）与放行条目：字节码翻译
+    /// JDK 类（VM 契约类之外）：字节码翻译
     Translate,
-    /// 内部边界 / VM 耦合边界 / 翻译域外：整体手写，BFS 截断
+    /// VM 契约边界类（closure.toml [vm_boundary]）：手写 + 按方法字节码
     Boundary,
     /// 根类（java/lang/Object）：手写 ObjectVTable
     Root,
@@ -43,6 +43,8 @@ pub struct ArrayWrite {
     pub fields: bool,
     /// 写入值取自调用点最后一个实参（签名多态方法：实参个数随调用点变化）
     pub last: bool,
+    /// 字段偏移形参：调用点上该实参是符号偏移（见 `NameResolver::offset`）时只写入所指字段
+    pub offset: Option<usize>,
 }
 
 /// 反射成员对象所表示的成员类别（`[facts.reflect]`）
@@ -56,8 +58,21 @@ pub enum Members {
     RecordAccessors,
 }
 
+/// 成员链接路径（成员声明类初始化点按路径接收声明类，`[facts.reflect] *_owner_initializers`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LinkRoute {
+    /// 方法句柄 / VarHandle（DirectMethodHandle、VarHandles 的链接）
+    Handle,
+    /// 核心反射（Method.invoke / Constructor.newInstance / Field 访问器工厂）
+    Reflect,
+}
+
 mod sysprops;
 mod names;
+mod concrete;
+mod field_names;
+pub use concrete::ConcreteCfg;
+pub use field_names::NameResolver;
 mod indy_helpers;
 mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
@@ -72,7 +87,7 @@ pub enum Fact {
     Int(i32),
 }
 
-/// 字符串纯函数（[facts.string_ops]）：接收者与实参都是字符串常量时结果即常量
+/// 字符 / 字符串纯函数（[facts.string_ops]）：接收者与实参都是常量时结果即常量
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrOp {
     /// 忽略大小写相等（实参 null 为 false）
@@ -80,22 +95,25 @@ pub enum StrOp {
     /// UTF-16 长度
     Length,
     IsEmpty,
-    /// 下标处的 UTF-16 单元（越界不求值：运行期抛 StringIndexOutOfBoundsException）
-    CharAt,
-    /// `String.hashCode` 规范值（UTF-16 单元上 `s[0]*31^(n-1) + … + s[n-1]`，int 回绕）
+    /// `s[0]*31^(n-1) + … + s[n-1]`（UTF-16 码元，int 回绕）；字符串 switch 的分派键
     HashCode,
-    /// 单个 UTF-16 单元的小写映射（只求值 ASCII：非 ASCII 的 UnicodeData 映射不在此复刻）
+    /// 下标处的 UTF-16 码元（越界不折叠：运行期抛异常）
+    CharAt,
+    /// 字符转小写（仅 ASCII 实参折叠；其余取决于 Unicode 数据表，不折叠）
     CharToLowerCase,
 }
 
 pub struct Manifest {
     pub runtime_dir: PathBuf,
-    boundary_pkgs: Vec<String>,
     vm_boundary: HashSet<String>,
     /// `<clinit>` 由手写层承载的 VM 边界类（`[vm_boundary] clinit_carried`，含嵌套类）；其余 VM 边界类的
     /// `<clinit>` 按字节码翻译
     vm_clinit_carried: HashSet<String>,
+    /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）与分析期追加的放行条目
     release: Vec<String>,
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]` 的键 `类.字段`）：运行期值由 VM 给出；
+    /// 取值是整数 / 布尔字面量时记其值（分析器按该值折叠）
+    injected_statics: HashMap<String, Option<i64>>,
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
@@ -105,13 +123,13 @@ pub struct Manifest {
     field_enumerators: HashSet<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
+    field_name_resolvers: HashMap<String, NameResolver>,
     deserializers: HashSet<String>,
     serializable_markers: Vec<String>,
     array_writes: HashMap<String, ArrayWrite>,
     /// 方法句柄解释器（`[facts.handle_interpreters]`）：其手写体调用点上的字段写入成员只写 DMH 所指字段
     handle_interpreters: Vec<String>,
-    memory_reads: HashMap<String, usize>,
-    class_initializers: HashMap<String, usize>,
+    memory_reads: HashMap<String, (usize, Option<usize>)>,
     array_returns: HashMap<String, Vec<String>>,
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
@@ -126,8 +144,13 @@ pub struct Manifest {
     member_enumerators: HashMap<String, Members>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
+    constructor_lookups: HashSet<String>,
+    class_initializers: HashSet<String>,
+    member_owner_initializers: HashMap<String, LinkRoute>,
     method_to_handle: HashSet<String>,
     pub boot_init: Vec<String>,
+    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
+    pub boot_calls: Vec<String>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
@@ -143,12 +166,13 @@ pub struct Manifest {
     pub sysprops: SysProps,
     /// 按名取类与字符串拼接
     pub names: NameFacts,
+    /// 具体求值（`[concrete]`）
+    pub concrete: ConcreteCfg,
     /// VM 注入状态的落地（字段访问钩子、模块 → 加载器映射来源）
     pub vm_state: VmState,
 }
 
 const OBJECT: &str = "java/lang/Object";
-const PUBLIC_API: [&str; 2] = ["java/", "javax/"];
 
 fn load(dir: &Path, name: &str) -> Result<toml::Table, String> {
     let p = dir.join(name);
@@ -173,10 +197,7 @@ impl Manifest {
         let seeds = load(runtime_dir, "seeds.toml")?;
         let vm = load(runtime_dir, "vm_intrinsics.toml")?;
 
-        let mut release = strings(&closure, "release", "packages");
-        release.extend(strings(&closure, "release", "classes"));
-        release.extend(strings(&seeds, "jca", "release_packages"));
-        release.extend(strings(&seeds, "jca", "release_classes"));
+        let release = strings(&closure, "vm_boundary", "translate_nested");
 
         let mut intrinsics = HashSet::new();
         if let Some(arr) = vm.get("intrinsic").and_then(|v| v.as_array()) {
@@ -212,12 +233,12 @@ impl Manifest {
                     Some("equals_ignore_case") => StrOp::EqualsIgnoreCase,
                     Some("length") => StrOp::Length,
                     Some("is_empty") => StrOp::IsEmpty,
-                    Some("char_at") => StrOp::CharAt,
                     Some("hash_code") => StrOp::HashCode,
+                    Some("char_at") => StrOp::CharAt,
                     Some("char_to_lower_case") => StrOp::CharToLowerCase,
                     _ => {
                         return Err(format!(
-                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / char_at / hash_code / char_to_lower_case"
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case"
                         ))
                     }
                 };
@@ -252,6 +273,7 @@ impl Manifest {
                         produced: e.get("produced").and_then(|x| x.as_bool()).unwrap_or(false),
                         fields: e.get("fields").and_then(|x| x.as_bool()).unwrap_or(false),
                         last: e.get("last").and_then(|x| x.as_bool()).unwrap_or(false),
+                        offset: e.get("offset").and_then(|x| x.as_integer()).map(|x| x as usize),
                     },
                 );
             }
@@ -263,17 +285,8 @@ impl Manifest {
                 let Some(src) = v.as_table().and_then(|e| e.get("src")).and_then(|x| x.as_integer()) else {
                     return Err(format!("vm_intrinsics.toml [facts.memory_reads]：{k} 须为 {{ src = 形参序号 }}"));
                 };
-                memory_reads.insert(k.clone(), src as usize);
-            }
-        }
-
-        let mut class_initializers = HashMap::new();
-        if let Some(t) = vm.get("facts").and_then(|s| s.get("class_init")).and_then(|s| s.get("initializers")).and_then(|v| v.as_table()) {
-            for (k, v) in t {
-                let Some(i) = v.as_integer().and_then(|x| usize::try_from(x).ok()) else {
-                    return Err(format!("vm_intrinsics.toml [facts.class_init.initializers]：{k} 须为 Class 形参序号"));
-                };
-                class_initializers.insert(k.clone(), i);
+                let offset = v.get("offset").and_then(|x| x.as_integer()).map(|x| x as usize);
+                memory_reads.insert(k.clone(), (src as usize, offset));
             }
         }
 
@@ -344,10 +357,15 @@ impl Manifest {
 
         Ok(Manifest {
             runtime_dir: runtime_dir.to_path_buf(),
-            boundary_pkgs: strings(&closure, "boundary", "packages"),
             vm_boundary: strings(&closure, "vm_boundary", "classes").into_iter().collect(),
             vm_clinit_carried: strings(&closure, "vm_boundary", "clinit_carried").into_iter().collect(),
             release,
+            injected_statics: vm
+                .get("vm_constants")
+                .and_then(|s| s.get("injected_statics"))
+                .and_then(|v| v.as_table())
+                .map(|t| t.iter().map(|(k, v)| (k.clone(), literal_value(v))).collect())
+                .unwrap_or_default(),
             hw_dropped: Vec::new(),
             intrinsics,
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
@@ -356,12 +374,12 @@ impl Manifest {
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
+            field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
             deserializers: field_writes("deserializers").into_iter().collect(),
             serializable_markers: field_writes("serializable_markers"),
             array_writes,
             handle_interpreters: facts("handle_interpreters", "members"),
             memory_reads,
-            class_initializers,
             array_returns,
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
@@ -374,8 +392,16 @@ impl Manifest {
             member_enumerators,
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
+            constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
+            class_initializers: reflect("class_initializers").into_iter().collect(),
+            member_owner_initializers: reflect("handle_owner_initializers")
+                .into_iter()
+                .map(|c| (c, LinkRoute::Handle))
+                .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
+                .collect(),
             method_to_handle: reflect("method_to_handle").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
+            boot_calls: strings(&seeds, "boot_init", "calls"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
             indy_helpers: IndyHelpers::from_toml(
@@ -388,6 +414,7 @@ impl Manifest {
             string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
+            concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,
         })
     }
@@ -432,17 +459,10 @@ impl Manifest {
         if self.released(cls) {
             return Domain::Translate;
         }
-        if self.boundary_pkgs.iter().any(|p| cls.starts_with(p.as_str())) {
-            return Domain::Boundary;
-        }
-        let outer = cls.split('$').next().unwrap_or(cls);
-        if self.vm_boundary.contains(outer) {
-            return Domain::Boundary;
-        }
-        if PUBLIC_API.iter().any(|p| cls.starts_with(p)) {
-            Domain::Translate
-        } else {
+        if self.is_vm_boundary(cls) {
             Domain::Boundary
+        } else {
+            Domain::Translate
         }
     }
 
@@ -454,6 +474,19 @@ impl Manifest {
     /// VM 边界类的 `<clinit>` 由手写层承载（`[vm_boundary] clinit_carried`，按最外层类匹配）
     pub fn is_vm_clinit_carried(&self, cls: &str) -> bool {
         self.vm_clinit_carried.contains(cls.split('$').next().unwrap_or(cls))
+    }
+
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：值不来自字节码，读取不折叠
+    pub fn is_injected_static(&self, owner: &str, name: &str) -> bool {
+        !self.injected_statics.is_empty() && self.injected_statics.contains_key(&format!("{owner}.{name}"))
+    }
+
+    /// VM 注入的静态字段的字面量取值（取值为整数 / 布尔字面量时）：读取恒为该值
+    pub fn injected_literal(&self, owner: &str, name: &str) -> Option<i64> {
+        if self.injected_statics.is_empty() {
+            return None;
+        }
+        self.injected_statics.get(&format!("{owner}.{name}")).copied().flatten()
     }
 
     /// VM 内建（手写承载、不分析 Java 体）
@@ -482,14 +515,14 @@ impl Manifest {
         self.handle_interpreters.iter().any(|s| member_is(s, key))
     }
 
-    /// 初始化以实参传入的类的方法（`[facts.class_init]`）：返回 Class 形参序号（按描述符，不含接收者）
-    pub fn class_initializer(&self, member: &str) -> Option<usize> {
-        self.class_initializers.get(member).copied()
-    }
-
     /// 手写方法的返回值读自形参 src 所指对象（数组元素 / 引用字段）：返回该形参序号（按描述符，不含接收者）
     pub fn memory_read(&self, member: &str) -> Option<usize> {
-        self.memory_reads.get(member).copied()
+        self.memory_reads.get(member).map(|x| x.0)
+    }
+
+    /// 读内存手写方法的字段偏移形参（序号不含接收者）：调用点上为符号偏移时只读所指字段
+    pub fn memory_read_offset(&self, member: &str) -> Option<usize> {
+        self.memory_reads.get(member).and_then(|x| x.1)
     }
 
     /// 手写方法返回新数组、VM 只写入所列类型的元素（`[facts.array_returns]`）：返回元素类型（binary name / 数组描述符）
@@ -511,6 +544,23 @@ impl Manifest {
     /// 句柄桥：在其内调用 handle_writers 不算写入入口（句柄只经 Field.set* 的访问器使用）
     pub fn is_field_handle_bridge(&self, member: &str) -> bool {
         self.field_handle_bridges.contains(member)
+    }
+
+    /// 按名取字段身份的入口（`[facts.field_writes.name_resolvers]`）
+    pub fn field_name_resolver(&self, member: &str) -> Option<NameResolver> {
+        self.field_name_resolvers.get(member).copied()
+    }
+
+    /// 按类镜像强制类初始化（`[facts.reflect] class_initializers`）：Class 实参所指类初始化
+    pub fn is_class_initializer(&self, member: &str) -> bool {
+        self.class_initializers.contains(member)
+    }
+
+    /// 调用方的 Class 实参恒为「经该路径正被链接 / 访问的静态成员或构造器的声明类」（`[facts.reflect]
+    /// handle_owner_initializers / reflect_owner_initializers`）：不按值集求目标，由「成员可达即声明类初始化」的
+    /// 结构不变量覆盖（engine/mirror_init.rs）
+    pub fn member_owner_route(&self, caller: &str) -> Option<LinkRoute> {
+        self.member_owner_initializers.get(caller).copied()
     }
 
     /// 反序列化入口（可达即非 static、非 transient 字段不折叠）
@@ -579,6 +629,11 @@ impl Manifest {
         self.method_lookups.contains(member)
     }
 
+    /// 查找构造器（Class 实参 / 接收者所指类的构造器成为反射构造目标）
+    pub fn is_constructor_lookup(&self, member: &str) -> bool {
+        self.constructor_lookups.contains(member)
+    }
+
     /// 反射对象（Method）转成方法句柄（`[facts.reflect] method_to_handle`）
     pub fn is_method_to_handle(&self, member: &str) -> bool {
         self.method_to_handle.contains(member)
@@ -627,78 +682,21 @@ fn entry_matches(entry: &str, cls: &str) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_vm(vm: &str) -> Result<Manifest, String> {
-        let dir = std::env::temp_dir().join(format!("rava-manifest-{}-{}", std::process::id(), vm.len()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("vm_intrinsics.toml"), vm).unwrap();
-        let r = Manifest::load(&dir);
-        std::fs::remove_dir_all(&dir).ok();
-        r
-    }
-
-    #[test]
-    fn array_returns_parse() {
-        let m = with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [\"a/C\", \"a/D\"] }\n").unwrap();
-        assert_eq!(m.array_return("a/B.f:()[Ljava/lang/Object;"), Some(&["a/C".to_string(), "a/D".to_string()][..]));
-        assert_eq!(m.array_return("a/B.g:()[Ljava/lang/Object;"), None);
-    }
-
-    #[test]
-    fn class_initializers_parse() {
-        let m = with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = 0\n").unwrap();
-        assert_eq!(m.class_initializer("a/U.ensure:(Ljava/lang/Class;)V"), Some(0));
-        assert_eq!(m.class_initializer("a/U.other:()V"), None);
-        assert!(with_vm("[facts.class_init.initializers]\n\"a/U.ensure:(Ljava/lang/Class;)V\" = -1\n").is_err());
-    }
-
-    #[test]
-    fn serializable_markers_parse() {
-        let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
-        assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
-        assert!(with_vm("").unwrap().serializable_markers().is_empty());
-    }
-
-    #[test]
-    fn array_returns_reject_non_array() {
-        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()Ljava/lang/Object;\" = { elements = [\"a/C\"] }\n").is_err());
-        assert!(with_vm("[facts.array_returns]\n\"a/B.f:()[Ljava/lang/Object;\" = { elements = [] }\n").is_err());
-    }
-
-    #[test]
-    fn indy_object_methods_refines_native_and_boxing() {
-        let m = with_vm("[indy]\nnative = [\"a/B.boot\", \"a/C.boot\"]\nobject_methods = [\"a/B.boot\"]\nconcat_stringify = \"a/S.v:(La/O;)La/S;\"\ncomponent_hash = \"a/U.h:(La/O;)I\"\ncomponent_equals = \"a/U.e:(La/O;La/O;)Z\"\n[boxing]\nI = \"a/BoxI\"\n").unwrap();
-        assert_eq!(m.indy_kind("a/B.boot"), Some(IndyKind::ObjectMethods));
-        assert_eq!(m.indy_kind("a/C.boot"), Some(IndyKind::Native));
-        assert_eq!(m.boxed_class(b'I'), Some("a/BoxI"));
-        assert_eq!(m.unboxed_prim("a/BoxI"), Some(b'I'));
-        assert_eq!(m.boxed_class(b'J'), None);
-    }
-
-    #[test]
-    fn handle_interpreters_parse() {
-        let m = with_vm("[facts.handle_interpreters]\nmembers = [\"a/H.run:([La/O;)La/O;\"]\n").unwrap();
-        let key = |n: &str| classfile::constant::MemberRef { owner: "a/H".into(), name: n.into(), desc: "([La/O;)La/O;".into() };
-        assert!(m.is_handle_interpreter(&key("run")));
-        assert!(!m.is_handle_interpreter(&key("other")));
-    }
-
-    #[test]
-    fn string_ops_parse() {
-        let m = with_vm("[facts.string_ops]\n\"a/S.eic:(La/S;)Z\" = \"equals_ignore_case\"\n\"a/S.len:()I\" = \"length\"\n").unwrap();
-        assert_eq!(m.string_op("a/S.eic:(La/S;)Z"), Some(StrOp::EqualsIgnoreCase));
-        assert_eq!(m.string_op("a/S.len:()I"), Some(StrOp::Length));
-        assert_eq!(m.string_op("a/S.x:()I"), None);
-        assert!(with_vm("[facts.string_ops]\n\"a/S.f:()I\" = \"upper\"\n").is_err());
-    }
-}
-
 /// `s` 是否恰为 `key` 的「类.名:描述符」形式（与 `MemberRef` 的 Display 同式，免分配）
 fn member_is(s: &str, key: &classfile::constant::MemberRef) -> bool {
     let rest = s.strip_prefix(key.owner.as_str()).and_then(|r| r.strip_prefix('.'));
     let rest = rest.and_then(|r| r.strip_prefix(key.name.as_str())).and_then(|r| r.strip_prefix(':'));
     rest == Some(key.desc.as_str())
+}
+
+#[cfg(test)]
+mod tests;
+
+/// 取值的字面量值：整数 / 布尔（取值表达式字符串不是字面量）
+fn literal_value(v: &toml::Value) -> Option<i64> {
+    match v {
+        toml::Value::Integer(n) => Some(*n),
+        toml::Value::Boolean(b) => Some(i64::from(*b)),
+        _ => None,
+    }
 }

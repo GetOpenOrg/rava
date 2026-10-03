@@ -199,7 +199,11 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
         let head = format!("{meta}\n// static field: {}:{}\n", sf.name, sf.desc);
         let cv = sf.constant_value.as_ref().map(constant_value_str).unwrap_or_default();
         let (cls, fnm, fd) = (ci.name(), &sf.name, &sf.desc);
-        if let Some(Const::StringUtf16(units)) = &sf.constant_value {
+        if let Some(expr) = ctx.manifest.vm_injected_statics.get(&format!("{cls}.{fnm}")) {
+            if !hw.is_some_and(|h| h.methods.contains(&fname)) {
+                blocks.push(injected_static_block(&head, &fname, &ty, expr));
+            }
+        } else if let Some(Const::StringUtf16(units)) = &sf.constant_value {
             blocks.push(format!("{head}pub const {fname}: {ty} = {};", utf16_const_literal(units)));
         } else if !cv.is_empty() {
             blocks.push(format!("{head}pub const {fname}: {ty} = {};", const_literal(&ty, &cv)));
@@ -228,6 +232,17 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
         }
     }
     blocks
+}
+
+/// VM 注入的静态字段（`[vm_constants.injected_statics]`）：访问器读清单给出的取值表达式
+/// （返回 i64 / bool，按字段类型做数值宽度转换）；字节码写入被 VM 值覆盖，setter 不落存储。
+fn injected_static_block(head: &str, fname: &str, ty: &str, expr: &str) -> String {
+    let cast = if ty == "bool" { String::new() } else { format!(" as {ty}") };
+    format!(
+        "{head}pub fn {fname}() -> Result<{ty}> {{\n    Ok({expr}{cast})\n}}\n\
+         // VM 注入值覆盖字节码写入（同 HotSpot 在 <clinit> 之后改写）\n\
+         pub fn set_{fname}(_v: {ty}) -> Result<()> {{\n    Ok(())\n}}"
+    )
 }
 
 /// ConstantValue 的 Rust 字面量
@@ -267,5 +282,16 @@ mod tests {
         assert_eq!(const_literal("f64", "-inf"), "f64::NEG_INFINITY");
         assert_eq!(const_literal("bool", "1"), "true");
         assert_eq!(const_literal("String", "a"), "String::from(\"a\")");
+    }
+
+    #[test]
+    fn injected_static_accessors() {
+        let b = injected_static_block("// h\n", "PAGE_SIZE", "i32", "crate::vm_constants::page_size()");
+        assert!(b.contains("pub fn PAGE_SIZE() -> Result<i32> {\n    Ok(crate::vm_constants::page_size() as i32)\n}"));
+        assert!(b.contains("pub fn set_PAGE_SIZE(_v: i32) -> Result<()> {\n    Ok(())\n}"));
+        let b = injected_static_block("", "BIG_ENDIAN", "bool", "crate::vm_constants::big_endian()");
+        assert!(b.contains("Ok(crate::vm_constants::big_endian())"));
+        let b = injected_static_block("", "allowSecurityManager", "i32", "1i64");
+        assert!(b.contains("Ok(1i64 as i32)"));
     }
 }

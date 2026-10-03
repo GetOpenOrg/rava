@@ -102,7 +102,7 @@ impl<'a> Engine<'a> {
             return None;
         };
         let Some(recv) = args.first() else { return Some(None) };
-        let Some(classes) = self.mirror_classes(f, recv) else { return Some(None) };
+        let Some(classes) = self.frame_mirror_classes(f, recv) else { return Some(None) };
         let mut out = BTreeSet::new();
         for c in classes {
             let name = if simple {
@@ -124,7 +124,7 @@ impl<'a> Engine<'a> {
     }
 
     /// Class 值所指的字节码类（内部名 / 数组描述符）：类字面量，或引擎帧里值集全是类镜像（值集增长时站点重跑）
-    fn mirror_classes(&mut self, f: &Frame, v: &V) -> Option<Vec<String>> {
+    fn frame_mirror_classes(&mut self, f: &Frame, v: &V) -> Option<Vec<String>> {
         let (f, v) = f.resolve(v);
         match &v {
             V::Class(c, _) => Some(vec![c.to_string()]),

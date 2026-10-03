@@ -97,15 +97,44 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
+│   │     ├─ ✅ a2 合入 62f46bb2（c1d-p0 b4669206，抽查 c1da-b4669206 9/9，含接口分派宏补 null 检查 + TestInstanceofElseDispatch；合并时 name_eval 同名私有函数改名 frame_mirror_classes）；
+│   │     │       🔄 续：initPhase2 膨胀用真实 --cut 定位 → 早退检查按分析期事实求值 → [[boot_init.phases]] → boot layer 步骤 2–5；闸门以档案规模计（基线 3609）
+│   │     │       原记录：代码 f2bdcf6e；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
 │   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
-│   │     │       FileDispatcherImpl.init0 ✅；余 TestFileStoreMountLookup 重跑 c1da-f2bdcf6e-r3（jp2 排队中）；
-│   │     │       后续项：precheck 按目标平台扫描 native 缺口（本机 macOS 看不到 Linux 专有 native）
-│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（c1d-p0 口径 86：Unsafe 44、VM 9、java/* 30、ClassLoaders 3）◀── a2
-│   │     │       a3-T 虚拟线程终态（2026-10-03 定，计划 2026-10-01-c1d-closure-bloat.md §21.7 / §21.8）：VirtualThread / ForkJoinPool 字节码翻译，
-│   │     │       仅 Continuation VM 方法手写为有栈协程（mmap 栈、aarch64 / x86_64 切换）；百万虚拟线程作业需服务器 vm.max_map_count 调高（待定）
+│   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup 的 MapMode 反射构造分派缺席已修（构造器查找建模 22eb9e72，
+│   │     │       新增 TestJdkConstructorLookup）；c1da-2c478e2f 的 TestDateTimeFormat 回归（缺 JRE FormatData 束）已修（d1b1b2ba，新增 TestLocaleBundleFamilies）
+│   │     ├─ ⏳ 后续项 precheck 按目标平台扫描：本机只扫宿主 JDK 的 jmod，看不到 Linux 专有 native。已做：precheck 清单落盘
+│   │     │       build_status.json emit.precheck、run_tests 失败详情附清单（8ed3a5e3）。待做：按目标平台 jmod 扫描
+│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
+│   │     │       ClassLoader 6、BootLoader 5、Class 2、Module/ModuleLayer 9 归 boot layer）；拆为 U0–U3 / V / T / L1 / L2 / C / X1 / X2 / Z，
+│   │     │       见计划 §21（§21.7 各项验收数字；§21.8 a3-T 终态：VirtualThread / ForkJoinPool 字节码翻译 + Continuation 有栈协程，
+│   │     │       2026-10-03 用户定，方案 A 作废，细分 T1–T6，目标百万级虚拟线程）◀── a2
+│   │     ├─ ⏳ 生成器 bug：`hierarchy_overloaded_names` 只查超类链、不查接口——类自有 `m(String[])` 与接口继承的抽象 `m()` 同名时
+│   │     │       不 mangle，`this.m()` 解析到一参方法（E0061；`AbstractBasicFileAttributeView.readAttributes`，
+│   │     │       `Files.getAttribute(p, "unix:nlink")` 触发）。修生成器 + 补边界用例，c1d-p0 合入后另开步骤
+│   │     ├─ ⏳ a5-4 闭包膨胀：TestUnixFileNatives Linux 闭包剩余 18 个与文件 API 无关的缺失 native（pkcs11 10、smartcardio 2、
+│   │     │       jimage 1、NativeLibraries 3、BootLoader 1、defineClass0 1）作为膨胀指纹；终态：pkcs11 / smartcardio / defineClass0
+│   │     │       13 个所在类不入闭包（不补手写），NativeLibraries / getSystemPackageLocation / getNativeMap 5 个归 a3-L1 ① native；
+│   │     │       计划 §21.5 a5-4，c1d-p0 合入后另开步骤
+│   │     │       引入链已归因（TestFileStoreMountLookup 2885 类 / r4 extra 2156）：a5-4a doPrivileged 动作合流（1092）、
+│   │     │       a5-4b 引导加载器类路径查找 → JarVerifier → Signature / pkcs11（684）、a5-4c jrt 随 b 消失、a5-4d Formatter → ICU 归 a5-3；
+│   │     │       目标该例 ≤900 类、transpile ≤60 s（计划 §21.5）
+│   │     │       DeepCopy 实测 3139 类（集成分支 1820，目标 ≤1640）：a5-4a 单独回收约 0（动作分配点均在合法路径，只改归属），
+│   │     │       a5-4b 回收 160..401；另立 a5-4e ICU 归一化入口（248）、a5-4f 日志后端探测（231）
+│   │     │       合入门槛（用户 10-03 定，先收窄再合）：DeepCopy / DTF / FSML 闭包类数与分析时间不高于集成分支
+│   │     │       （约 1820 类 / 23s、1476、1611），终态 DeepCopy ≤1640；顺序 a5-4b → a5-4e → a5-4f，不足再查余下 342
+│   │     │       s1 构造器查找只在 Class 值集齐全时点名：DeepCopy 3139→3069、3m03s→66s（暴露构造器 3498→105）
+│   │     │       s2 instanceof 否定分支收窄 + 钩子字段不按 open：DeepCopy 3065 / DTF 2884 / FSML 2886；首次发现子树重排后最大三支
+│   │     │       （getLoggerFromFinder 1163、toLowerCase→CLDR 783、URLClassPath$3→JarVerifier 493）均需值层面建模，原定手段不足，见 §21.5
+│   │     │       抽查 ① allocateInstance 抽象类 / 接口 → InstantiationException（db4f8a48）；② LocaleBundleFamilies：EnableNativeAccess 嵌套翻译 + 无扩展名 / 拼接模板资源（本地编译运行通过）
+│   │     │       ⏳ 暂不修（10-03 登记）macOS 专有：MacOSXFileSystemProvider 多级协变桥缺失，Linux 不受影响。
+│   │     │         最小复现：macOS 上 rava build tests/e2e/62_reflection/TestJdkConstructorLookup.java，运行时命中
+│   │     │         stub: sun/nio/fs/UnixFileSystemProvider.newFileSystem:(Ljava/lang/String;)Lsun/nio/fs/UnixFileSystem;
+│   │     │         该类文件里 newFileSystem(String) 有三个返回类型版本：MacOSXFileSystem 为本体，BsdFileSystem / UnixFileSystem
+│   │     │         为 javac 桥（Bsd 层的同形态是一体一桥，单级）；经 UnixFileSystemProvider 形参分派时落到存根，即 Unix 级桥没有接上
+│   │     │         （疑为同名同形参、仅返回类型不同的两级桥在发射 / 分派表合并时丢失）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
-│   │     └─ ⏳ a5 OOB 关系型边界推理（偏移 / 长度关系、类不变式），HelloWorld 目标 ≤371；fullAddCount 仅记录（线程逃逸）
+│   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）
@@ -121,7 +150,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
 │   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
 │   │             ✅ 第二段合入 b1983313（84c92245，抽查 c1db3-84c92245 10/10；含 setContextClassLoader 存根修复 + TestThreadContextLoaderInit）；
-│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；🔄 Class.forName 拼接类名字符串值流建模
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；✅ S7 Class.forName 拼接类名字符串值流建模（3553df09 合入，抽查 c1db3-3553df09 9/9：拼接各段可确定时折叠为常量串集合，新增 TestForNameComputedName）；🔄 DMH checkInitialized / shouldBeInitialized 未知站点归零
 │   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
 │   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
 │   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；✅ ② A+B 超接口 / 接口视图类型实参（b820c8aa 合入；27 例 from_any 2–78→1–4，闭包不变）；✅ ③ C+D 方法级类型变量 / super.m()（44b3a3b3 合入；27 例中 26 例 from_any=0，StockTrans 11→0）；✅ ④ 余下发射点统一 Object::from / Into<Object>、void 入 Object 改内部错误、from_any=0 守护测试（631bb78b 合入；27 例 + StockTrans / LambdaHiddenClass 全部 from_any=0，闭包不变）——**from_any 归零达成**
@@ -161,6 +190,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
 │         ✅【2026-10-03 完成，feat/junit-expected-redundancy d4efc8d6】63_junit expected 10/10（junit+hamcrest cp、JDK21 实跑、双跑确定性全过；顺修 3 处源码错误：assertTrue 静态导入缺失、遮蔽 helper、Sample 构造器非 public 致 initializationError）
 │         ✅【2026-10-03 完成，同分支】新增用例查重：133 例 ∩ 冗余候选 = 5、相似对交集 0，逐条论证全部保留（定向回归网/独有边界/算法族/jmod 档设计），无删除建议；报告 docs/reports/e2e-redundancy-newtests.md
+│         🔄【2026-10-03 用户侧子代理领取】6 例输出不符 expected 复核（TestClassCastSubclass / TestClassModuleFace / TestInvokeNullArgs / TestSetAccessibleBoundary / TestLocaleCurrency / TestSystemStableProps）：JDK 21 双跑对照，只按实测纠 expected，结论分 expected 错 / 生成器缺陷 / 依赖环境
+│         🔄【2026-10-03 用户侧子代理领取】抽查 e2enew-da8abee1 失败 69 例归因（运行 54〔存根 36〕/ 编译 8 / 输出 6 / 转译 1）：按模块、失败类型、A/B 档归并根因，报告入 docs/reports/，jmod-coverage §七 补实测列
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集

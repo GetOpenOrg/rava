@@ -63,7 +63,7 @@ impl ClassLoader {
             return Ok(());
         }
         guard.set(true);
-        let r = crate::jdk::internal::misc::VM::__vm_in_init_level3(|| -> Result<()> {
+        let r = crate::jdk::internal::misc::VM::__vm_at_init_level(3, || -> Result<()> {
             let scl = ClassLoader::initSystemClassLoader()?;
             super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)
         });

@@ -130,10 +130,10 @@ pub(super) fn stype(e: &syn::Expr, statics: &HashMap<String, Option<SType>>, loc
                             SType::Ret(t, last.clone())
                         })
                     }
-                    // 模块路径上的自由 fn（`super::x_impl::f(…)` / `crate::m::f(…)`）：返回类型由分析器按
-                    // 定义它的共置手写文件 / 模块单元的声明换上
-                    Some((last, head)) if last.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_') => {
-                        Some(SType::Ret(TypeRef(head.to_vec()), last.clone()))
+                    // 模块路径上的自由 fn `super::m::f(…)` / `crate::a::m::f(…)`：返回类型由引擎按目标文件的声明解析
+                    //（[`Handwritten::module_fn_ret`]）；动态类型推断得出的优先
+                    Some((last, head)) if is_module_path(head) && last.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_') => {
+                        infer(e, locals, &HashSet::new()).map(|t| SType::Named(TypeRef(t))).or_else(|| Some(SType::Ret(TypeRef(head.to_vec()), last.clone())))
                     }
                     _ => None,
                 }
@@ -230,6 +230,12 @@ pub(super) fn local_rets(file: &syn::File, uses: &HashMap<String, Vec<String>>) 
     out
 }
 
+/// 模块路径（`super::m` / `crate::a::m` / `self::m`）：首段是路径关键字、末段是小写模块名
+pub(super) fn is_module_path(p: &[String]) -> bool {
+    matches!(p.first().map(String::as_str), Some("super" | "crate" | "self"))
+        && p.last().is_some_and(|l| l.starts_with(|ch: char| ch.is_ascii_lowercase() || ch == '_'))
+}
+
 /// Rust 标量（基本类型与 `str`）：不承载 Java 引用的形参类型
 const RUST_SCALARS: &[&str] = &["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64", "bool", "char", "str"];
 
@@ -291,6 +297,7 @@ pub(super) fn local_ret(s: SType, rets: &LocalRets) -> Option<SType> {
         SType::Ret(t, m) => match rets.get(&(t.0.clone(), m.clone())).filter(|r| !r.is_empty()) {
             Some(r) => SType::Named(TypeRef(r.clone())),
             None if t.0.is_empty() => return None,
+            None if is_module_path(&t.0) => SType::Ret(t, m),
             None if is_ctor_name(&m) => SType::Named(t),
             None => SType::Ret(t, m),
         },
@@ -354,5 +361,30 @@ mod tests {
         let ty = vec!["Ctor".to_string()];
         assert_eq!(out.rets.get(&(ty.clone(), "rows".into())), Some(&vec![]));
         assert_eq!(out.rets.get(&(ty, "meta".into())), Some(&vec![]));
+    }
+
+    /// 模块路径上的自由 fn（`super::thread_impl::f()?`）记为以模块路径为宿主的返回，由引擎按目标文件声明解析；
+    /// 外部 crate 路径（`std::mem::take`）不记
+    #[test]
+    fn module_path_free_fn_returns() {
+        let src = r#"
+            impl Loader {
+                fn boot(scl: Loader) -> Result<()> {
+                    super::thread_impl::initial()?.setContext(scl)?;
+                    crate::java::lang::thread_impl::initial()?.start()?;
+                    std::mem::take(&mut v).push(1);
+                    Ok(())
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let cs = out.fns.remove("boot").map(|i| i.calls).unwrap_or_default();
+        let srecv = |n: &str| cs.iter().find(|c| c.name == n).and_then(|c| c.srecv.clone());
+        let ret = |p: &[&str]| Some(SType::Ret(TypeRef(p.iter().map(|s| s.to_string()).collect()), "initial".into()));
+        assert_eq!(srecv("setContext"), ret(&["super", "thread_impl"]));
+        assert_eq!(srecv("start"), ret(&["crate", "java", "lang", "thread_impl"]));
+        assert_eq!(srecv("push"), None);
     }
 }

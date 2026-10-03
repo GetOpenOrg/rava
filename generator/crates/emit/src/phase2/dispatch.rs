@@ -220,15 +220,12 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, tps
     arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some((|| {{ {inner_body} }})()),"));
 }
 
-/// 类发射文本 → `__reflect_dispatch` 实现（无臂 / 泛型类 → None）。`only`：只发射这些方法名的臂。
-/// 泛型接口的闭包挂在 `I<Object..>` 上：接口载体只是对象引用 + 接口视图，任意实例化同形，实参 / 返回按擦除接入；
-/// 臂经载体做接口调用，按接收者的实现选中（字节码类、lambda、手写实现对象同一路径）
+/// 类发射文本 → `__reflect_dispatch` 实现（无臂 → None）。`only`：只发射这些方法名的臂。
+/// 泛型类 / 泛型接口的闭包挂在 `X<Object..>` 上（与字段闭包、类初始化登记同一实例化）：
+/// 载体是对象引用 + 类型视图，任意实例化同形，实参 / 返回按擦除接入；构造臂产出 `X<Object..>`，
+/// 调用方按 checkcast 视图取用。接口臂经载体做接口调用，按接收者的实现选中
 fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
     let tps = class_tparams(ctx, class_bin);
-    let iface = ctx.ty.reg.get(class_bin).is_some_and(|c| c.is_interface());
-    if !tps.is_empty() && !iface {
-        return None;
-    }
     let short = ctx.declared(class_bin);
     let lines: Vec<&str> = em.text.split('\n').collect();
     let mut arms = Vec::new();
@@ -331,6 +328,11 @@ fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only:
     out.extend(arms);
     out.extend(["            _ => None,", "        }", "    }", "}"].map(String::from));
     Some(out.join("\n"))
+}
+
+/// 泛型类的登记路径实参（反射分派 / 类初始化钩子 / 引导初始化的按名登记共用）：无发射（手写类）→ 空
+pub fn registration_turbofish(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> String {
+    ems.get(bin).map(|_| object_turbofish(ctx, bin)).unwrap_or_default()
 }
 
 /// 泛型类的登记路径实参：每个类型形参取 Object

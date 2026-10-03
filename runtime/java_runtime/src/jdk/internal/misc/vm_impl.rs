@@ -3,42 +3,36 @@ use super::vm::VM;
 use crate::java::lang::String;
 
 std::thread_local! {
-    /// 本线程正在执行 initPhase3 的系统类加载器段（见 `initLevel`）。
-    static IN_PHASE3: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// 本线程正在执行的引导段所处的 initLevel（见 `initLevel`；None = 段外）。
+    static BOOT_LEVEL: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
 }
 
 /// 停机标记（进程级）。
 static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 impl VM {
-    /// 静态字段 directMemory：HotSpot initPhase1 的 `VM.saveProperties` 写入——未指定
-    /// `-XX:MaxDirectMemorySize` 时取 `Runtime.maxMemory()`（原生二进制无启动选项，恒取此值）。
-    /// 边界类 `<clinit>` 不发射，由手写层提供（VM 注入状态，准入第 ③ 类）。消费方：Bits.reserveMemory。
-    #[jvm_boundary]
-    pub fn directMemory() -> Result<i64> {
-        Ok(crate::posix::default_max_heap())
-    }
-
-    /// 静态字段 pageAlignDirectMemory：`-XX:+PageAlignDirectMemory`（`sun.nio.PageAlignDirectMemory`）缺省 false。
-    #[jvm_boundary]
-    pub fn pageAlignDirectMemory() -> Result<bool> {
-        Ok(false)
+    /// native `initialize()`：HotSpot 由 CDS 归档恢复 VM 类的静态字段（`JVM_InitializeFromArchive`）；
+    /// 原生二进制无 CDS 归档，静态字段即 `<clinit>` 的字节码结果 → no-op。
+    #[jvm_native]
+    pub fn initialize() -> Result<()> {
+        Ok(())
     }
 
     /// 引导阶段 `initLevel()`（VM 注入状态，准入第 ③ 类；HotSpot 由 initPhase1~3 经 `initLevel(int)` 写入）。
-    /// 原生二进制进入 main 时为 SYSTEM_BOOTED（4）；只有执行 initPhase3 系统类加载器段的线程
-    /// （`ClassLoader::__vm_init_phase3`）在段内读到 SYSTEM_LOADER_INITIALIZING（3）——其余线程此时读 `scl`
-    /// 会在该段的互斥上等待结束，与 JVM「initPhase3 先于任何应用线程」的时序一致。
+    /// 原生二进制进入 main 时为 SYSTEM_BOOTED（4）；只有正在执行引导段的线程在段内读到该段的档位：
+    /// initPhase1 的属性快照段（`System::registerNatives` → `VM.saveProperties`）为 0，initPhase3 的系统类
+    /// 加载器段（`ClassLoader::__vm_init_phase3`）为 SYSTEM_LOADER_INITIALIZING（3）——其余线程此时读
+    /// 对应状态会在该段的互斥上等待结束，与 JVM「引导段先于任何应用线程」的时序一致。
     #[jvm_boundary]
     pub fn initLevel() -> Result<i32> {
-        Ok(if IN_PHASE3.with(|f| f.get()) { 3 } else { 4 })
+        Ok(BOOT_LEVEL.with(|l| l.get()).unwrap_or(4))
     }
 
-    /// 在 initLevel == 3 下执行 `f`（initPhase3 的 `VM.initLevel(3)` … `VM.initLevel(4)` 区段，仅本线程可见）。
-    pub fn __vm_in_init_level3<R>(f: impl FnOnce() -> R) -> R {
-        IN_PHASE3.with(|x| x.set(true));
+    /// 在 initLevel == `level` 下执行引导段 `f`（仅本线程可见；嵌套时退出后恢复外层档位）。
+    pub fn __vm_at_init_level<R>(level: i32, f: impl FnOnce() -> R) -> R {
+        let outer = BOOT_LEVEL.with(|l| l.replace(Some(level)));
         let r = f();
-        IN_PHASE3.with(|x| x.set(false));
+        BOOT_LEVEL.with(|l| l.set(outer));
         r
     }
 

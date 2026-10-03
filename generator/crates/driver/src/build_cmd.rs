@@ -165,7 +165,7 @@ pub(crate) fn analyze<R: Send>(
     let seeds: Vec<&String> = seed_classes.iter().collect();
     let mut seed_members = seed_roots(cp, &roots, &seeds)?;
     if !o.api_packages.is_empty() {
-        let (api, n_cls) = api_roots(cp, &man, &o.api_packages, o.api_recursive);
+        let (api, n_cls) = api_roots(cp, &o.api_packages, o.api_recursive);
         println!(
             "[api] {}（{}子包）→ {n_cls} 个 public 类，{} 个入口方法",
             o.api_packages.join(", "),
@@ -401,12 +401,12 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     };
     st.stage = Stage::Emit;
     print_perf(o.perf, &perf, &timings, Some(r.jdk_classes));
+    let emit = EmitSummary { bin: r.bin_name.clone(), jdk_classes: r.jdk_classes, precheck: r.precheck.clone() };
+    st.emit = Some(emit.clone());
     if o.full_precheck {
         return Ok(());
     }
     report(&r, out);
-    let emit = EmitSummary { bin: r.bin_name.clone(), jdk_classes: r.jdk_classes };
-    st.emit = Some(emit.clone());
     if o.stop_after == Stage::Emit {
         return Ok(());
     }

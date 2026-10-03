@@ -7,7 +7,6 @@ impl<'a> Engine<'a> {
         self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
-        self.class_init_site(m, off, opcode, mref, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         let wrapped = self.ref_caller_sensitive(mref);
@@ -40,6 +39,9 @@ impl<'a> Engine<'a> {
             })
             .collect();
         let k = self.mref_key(mref);
+        if self.man.is_constructor_lookup(&k) {
+            self.constructor_lookup(m, off, &k, mref, opcode, args);
+        }
         if self.man.is_method_lookup(&k) {
             // 查找结果经哪条反射调用通道调用（按查找结果的类型，见 `reflect_call.rs`）
             let ch = self.rcall_lookup_channel(&mref.desc);
@@ -135,6 +137,8 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        self.field_name_site(m, off, &k, opcode, args);
+        self.mirror_init_site(m, off, mref, &k, opcode, args);
         if (class_param || class_recv) && !self.man.is_method_lookup(&k) {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
         }
@@ -142,6 +146,7 @@ impl<'a> Engine<'a> {
             // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
             let mut cs = BTreeSet::new();
             let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            self.enumerated_static_owners(m, off, &cs);
             for c in cs {
                 self.enumerate_fields(Some(c));
             }
@@ -156,13 +161,18 @@ impl<'a> Engine<'a> {
     }
 
     /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
-    fn enumerate_fields(&mut self, cls: Option<String>) {
+    pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
         if !self.fwriter_live {
             if self.fenum_pending.insert(cls) {
                 self.offset_reads_ready();
             }
             return;
         }
+        self.open_class_fields(cls);
+    }
+
+    /// 放开类（含超类）的全部字段；None = 全部字段不折叠
+    pub(super) fn open_class_fields(&mut self, cls: Option<String>) {
         match cls {
             Some(c) => {
                 let mut cur = Some(c);
@@ -242,6 +252,9 @@ impl<'a> Engine<'a> {
         match opcode {
             op::INVOKESTATIC => {
                 self.init(&resolved.owner, via.clone());
+                if self.concrete_call(m, off, &resolved, &md, None, pargs) {
+                    return;
+                }
                 // 克隆上下文的选择见 `ctxsel.rs`
                 let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
                 let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
@@ -270,6 +283,12 @@ impl<'a> Engine<'a> {
                         self.direct_virtual_sites.insert((m, off));
                     }
                     let r = recv_feeds(self);
+                    if !rm.is_static() && self.man.concrete.entries.contains(&*self.mref_key(&resolved)) {
+                        let s = self.value_set(&r);
+                        if self.concrete_call(m, off, &resolved, &md, Some(&s), pargs) {
+                            return;
+                        }
+                    }
                     self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
                     return;
                 }
@@ -394,7 +413,7 @@ impl<'a> Engine<'a> {
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
-        self.bind_params(t, base, ptypes.len());
+        self.bind_params(m, t, base, ptypes.len());
         if let Some(cv) = self.call_vals.clone() {
             let string = self.id(STRING);
             self.pstr_site(m, off, &cv, |j| pstrs::PSlot::M(t, base + j), |j| ptypes.get(base + j).copied().flatten() == Some(string));
@@ -439,9 +458,11 @@ impl<'a> Engine<'a> {
     fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
-        // 调用方的内存效果已按清单逐调用点建模时，其手写体对内存访问成员的上调是同一语义的实现（VarHandle.set →
-        // Unsafe.putReference 等），不再以调用方值池为实参另建一份汇合的读写
-        let subsumed = self.memory_modeled(m) && self.memory_modeled(t);
+        // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
+        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
+        // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
+        let modeled = |e: &Self, x: usize| e.declares_memory(x) || e.memory_modeled(x);
+        let subsumed = modeled(self, m) && modeled(self, t);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
             self.rcall_site(m, off, t, recv_fs.as_deref(), a);
@@ -494,9 +515,14 @@ impl<'a> Engine<'a> {
     }
 
     /// 形参常量：并入本调用点的实参值（非字节码调用点 = Top）；变化时被调方法失效
-    pub(super) fn bind_params(&mut self, t: usize, base: usize, n: usize) {
-        let vals: Option<Vec<PV>> = self.call_vals.as_ref().map(|vs| vs.iter().map(PV::of).collect());
-        self.bind_pvs(t, base, n, vals.as_deref());
+    pub(super) fn bind_params(&mut self, m: usize, t: usize, base: usize, n: usize) {
+        let cv = self.call_vals.clone();
+        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of).collect());
+        match &cv {
+            Some(vs) => self.taint_site(m, t, base, n, vs),
+            None => self.taint_params(t, base, n, None),
+        }
+        self.join_pvs(t, base, n, vals.as_deref());
     }
 
     /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
@@ -514,6 +540,11 @@ impl<'a> Engine<'a> {
         if vals.is_none() {
             self.pstr_top_m(t);
         }
+        self.taint_params(t, base, n, vals);
+        self.join_pvs(t, base, n, vals);
+    }
+
+    fn join_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {

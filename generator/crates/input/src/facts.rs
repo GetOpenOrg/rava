@@ -124,30 +124,12 @@ pub struct MethodFold {
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
 }
 
-/// 类初始化事实（VM 以实参传入的类初始化入口，如 `Unsafe.ensureClassInitialized`）
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ClassInitFacts {
-    /// 被初始化的类（各调用点并集，按类名排序）
-    pub targets: Vec<String>,
-    /// 存在 Class 实参值不定的调用点：任何带 `<clinit>` 的闭包类都可能经此初始化
-    pub unknown: bool,
-}
-
-/// JCA 服务四元组
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct JcaService {
-    pub ty: String,
-    pub algorithm: String,
-    pub imp: String,
-    pub provider: String,
-}
-
 /// 种子输出
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SeedFacts {
-    pub data_bundles: Vec<String>,
     pub annotation_enums: Vec<String>,
-    pub jca: Vec<JcaService>,
+    /// 按类镜像强制初始化的目标类（Unsafe.ensureClassInitialized 等；需初始化钩子）
+    pub mirror_inits: Vec<String>,
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     pub reflect_all: BTreeSet<String>,
     /// 模块服务表：(服务, provider) 二元组，只含命名模块里的 provider（类路径 provider 经
@@ -186,7 +168,6 @@ pub struct ClosureFacts {
     /// 按名查字段目标类推不出时的字面量名
     pub reflect_field_names: Vec<String>,
     pub seeds: SeedFacts,
-    pub class_init: ClassInitFacts,
     /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
     pub dispatched: Vec<MemberRef>,
     /// 已实例化的类（lambda / 手写实现对象 / 数组除外）
@@ -283,18 +264,8 @@ impl ClosureFacts {
             reflect_fields: e.reflect_fields.iter().cloned().collect(),
             reflect_field_names: e.reflect_field_names.iter().cloned().collect(),
             seeds: SeedFacts {
-                data_bundles: s.data_bundles.iter().cloned().collect(),
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
-                jca: s
-                    .jca
-                    .iter()
-                    .map(|j| JcaService {
-                        ty: j.ty.clone(),
-                        algorithm: j.algorithm.clone(),
-                        imp: j.imp.clone(),
-                        provider: j.provider.clone(),
-                    })
-                    .collect(),
+                mirror_inits: s.mirror_inits.iter().cloned().collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
                 module_services: s
@@ -303,10 +274,6 @@ impl ClosureFacts {
                     .iter()
                     .flat_map(|(svc, ps)| ps.iter().filter(|p| p.module.is_some()).map(move |p| (svc.clone(), p.class.clone())))
                     .collect(),
-            },
-            class_init: ClassInitFacts {
-                targets: e.class_init.targets().into_iter().map(String::from).collect(),
-                unknown: e.class_init.unknown,
             },
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
@@ -356,12 +323,6 @@ impl ClosureFacts {
         out.reflect_field_names = strings(reflect.get("field_names"))?;
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
-        }
-        if let Some(ci) = v.get("class_init") {
-            out.class_init = ClassInitFacts {
-                targets: strings(ci.get("targets"))?,
-                unknown: ci.get("unknown").and_then(Value::as_bool).unwrap_or(false),
-            };
         }
         out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         out.instantiated = strings(v.get("instantiated"))?;
@@ -482,18 +443,10 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
 
 fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
     let mut out = SeedFacts {
-        data_bundles: strings(s.get("data_bundles"))?,
         annotation_enums: strings(s.get("annotation_enums"))?,
+        mirror_inits: strings(s.get("mirror_inits"))?,
         ..SeedFacts::default()
     };
-    for j in s.get("jca").and_then(Value::as_array).into_iter().flatten() {
-        out.jca.push(JcaService {
-            ty: str_of(j, "type")?.to_string(),
-            algorithm: str_of(j, "algorithm")?.to_string(),
-            imp: str_of(j, "impl")?.to_string(),
-            provider: str_of(j, "provider")?.to_string(),
-        });
-    }
     if let Some(m) = s.get("reflect_names").and_then(Value::as_object) {
         for (owner, names) in m {
             out.reflect_names.insert(owner.clone(), strings(Some(names))?.into_iter().collect());

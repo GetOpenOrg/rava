@@ -122,6 +122,43 @@ null_to_false = [
     "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
 ]
 
+# VM 注入的静态字段（handwritten-boundary.md 类 ③）：HotSpot 在类初始化期间写入平台 / 对象布局常量，
+# 字节码里的初值（UnsafeConstants.<clinit> 的 0 / false）或初始化器（Unsafe.<clinit> 经 VM 原语
+# arrayBaseOffset0 / arrayIndexScale0 取值，Unsafe 为 VM 边界类、<clinit> 不翻译）不给出运行期值。
+# 条目 `类.字段` = 取值表达式（crate 根下路径，返回 i64 / bool；runtime/java_runtime/src/vm_constants.rs），
+# 或整数 / 布尔字面量（值与宿主无关的 VM 引导状态；分析器按该值折叠读取）。
+# 生成器把字段发为读取该表达式的访问器（按字段描述符做数值宽度转换；字节码对它的写入被 VM 值覆盖，
+# 同 HotSpot UnsafeConstantsFixup 在 <clinit> 后改写），分析器不按字节码值折叠其读取。
+[vm_constants.injected_statics]
+"jdk/internal/misc/UnsafeConstants.ADDRESS_SIZE0" = "vm_constants::address_size()"
+"jdk/internal/misc/UnsafeConstants.PAGE_SIZE" = "vm_constants::page_size()"
+"jdk/internal/misc/UnsafeConstants.BIG_ENDIAN" = "vm_constants::big_endian()"
+"jdk/internal/misc/UnsafeConstants.UNALIGNED_ACCESS" = "vm_constants::unaligned_access()"
+"jdk/internal/misc/UnsafeConstants.DATA_CACHE_LINE_FLUSH_SIZE" = "vm_constants::data_cache_line_flush_size()"
+"jdk/internal/misc/Unsafe.ADDRESS_SIZE" = "vm_constants::address_size()"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_INDEX_SCALE" = "vm_constants::array_index_scale('Z')"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_INDEX_SCALE" = "vm_constants::array_index_scale('B')"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_INDEX_SCALE" = "vm_constants::array_index_scale('S')"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_INDEX_SCALE" = "vm_constants::array_index_scale('C')"
+"jdk/internal/misc/Unsafe.ARRAY_INT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_INT_INDEX_SCALE" = "vm_constants::array_index_scale('I')"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_INDEX_SCALE" = "vm_constants::array_index_scale('J')"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_INDEX_SCALE" = "vm_constants::array_index_scale('F')"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_INDEX_SCALE" = "vm_constants::array_index_scale('D')"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_BASE_OFFSET" = "vm_constants::array_base_offset()"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_INDEX_SCALE" = "vm_constants::array_index_scale('L')"
+# 安全管理器档位：HotSpot 由 System.initPhase3（VM 驱动的引导入口，原生二进制不执行）按系统属性
+# java.security.manager 写入；原生二进制无 -D，属性缺席即 NEVER（= 1，JDK 21 缺省）：getSecurityManager
+# 恒 null、setSecurityManager 抛 UnsupportedOperationException，与 JVM 缺省配置一致
+"java/lang/System.allowSecurityManager" = 1
+
 # ── VM 事实（闭包分析的常量条件，generator `rava closure` 读取）─────────────────────────
 # 手写层承载的方法在原生二进制中返回恒定值；分析器据此做常量传播与死分支剪枝（计划
 # docs/plans/2026-09-29-rust-closure-analyzer.md §3.2）。值：null / 整数 / true / false。
@@ -139,17 +176,17 @@ value_equals = [
     "java/lang/String.equals:(Ljava/lang/Object;)Z",
 ]
 
-# 字符串纯函数：接收者与实参都是字符串常量（或实参 null）时结果即常量（JDK 规范语义）。
-# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty / char_at（越界不折叠）/
-# hash_code / char_to_lower_case（静态，只折叠 ASCII）
+# 字符 / 字符串纯函数：接收者与实参都是常量（或实参 null）时结果即常量（JDK 规范语义）。
+# 值：equals_ignore_case（实参 null 为 false）/ length（UTF-16 长度）/ is_empty /
+# hash_code（String.hashCode 规范公式；字符串 switch 的分派键）/ char_at（越界不折叠）/
+# char_to_lower_case（仅 ASCII 实参折叠）。用途：常量协议名等经字符串 switch、逐字符比较选分支时按值剪枝
+# （如 URL$DefaultFactory.createURLStreamHandler("file") 不走反射加载、URL.isOverrideable("file") 为 false）
 [facts.string_ops]
 "java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z" = "equals_ignore_case"
 "java/lang/String.length:()I" = "length"
 "java/lang/String.isEmpty:()Z" = "is_empty"
-# 下标处 UTF-16 单元 / 规范 hashCode / ASCII 小写：协议名等常量上的分支判定（URL.isOverrideable 的逐字符
-# 比较、URL$DefaultFactory 按协议名 switch 的 hashCode 分派）随之折叠，内建协议不走 providers / 反射路径
-"java/lang/String.charAt:(I)C" = "char_at"
 "java/lang/String.hashCode:()I" = "hash_code"
+"java/lang/String.charAt:(I)C" = "char_at"
 "java/lang/Character.toLowerCase:(C)C" = "char_to_lower_case"
 
 [facts.returns]
@@ -182,6 +219,7 @@ dynamic = [
     "java.home", "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
     "os.name", "os.arch", "os.version", "sun.arch.data.model", "sun.cpu.endian", "sun.io.unicode.encoding",
     "sun.boot.library.path", "native.encoding", "sun.jnu.encoding", "user.timezone",
+    "user.language", "user.country",
     # VersionProps.init（翻译的字节码，取值随语料 JDK）
     "java.version", "java.version.date", "java.runtime.version", "java.runtime.name", "java.vendor.version",
     "java.class.version", "java.specification.version", "java.specification.name", "java.specification.vendor",
@@ -273,6 +311,26 @@ deserializers = [
 ]
 serializable_markers = ["java/io/Serializable"]
 
+# name_resolvers：按名取字段身份的入口（名字 → 偏移 / setter / VarHandle / 更新器 / 字段句柄）。
+#   class = Class 实参形参序号（"receiver" = 接收者本身），name = 字段名形参序号（均不含接收者），
+#   handle = true 表示返回字段句柄（只经 handle_writers 写入）；offset = true 表示返回字段偏移（字段身份：
+#   类字面量 + 名字常量的调用折叠为符号偏移，供按偏移读写的手写调用点只触及该字段）。名字是常量时按上面的形状规则放开；
+#   名字取自形参时按各调用点的常量逐个放开；形参出现过非常量实参、或名字来自字段读 / 调用返回 / 拼接时，
+#   放开 class 所指类（类字面量）及其超类的全部字段，推不出类则全部字段不折叠；handle = true 的按字段枚举
+#   处理（句柄写入口可达才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
+#   写入能力（ClassSpecializer 的 resolveOrFail 取 species 字段的 getter，只读），不在此列
+[facts.field_writes.name_resolvers]
+"jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = { class = 0, name = 1, offset = true }
+"java/lang/invoke/MethodHandles$Lookup.findSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findStaticSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;" = { class = 0, name = 1 }
+"java/lang/invoke/MethodHandles$Lookup.findStaticVarHandle:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;" = { class = 0, name = 1 }
+"java/util/concurrent/atomic/AtomicReferenceFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicReferenceFieldUpdater;" = { class = 0, name = 2 }
+"java/util/concurrent/atomic/AtomicIntegerFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicIntegerFieldUpdater;" = { class = 0, name = 1 }
+"java/util/concurrent/atomic/AtomicLongFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicLongFieldUpdater;" = { class = 0, name = 1 }
+"java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+"java/lang/Class.getField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
 # 分析器把 Class 值按所指类区分（类字面量、下列 mirror_of_receiver 的逐调用点接收者），以此求反射目标：
@@ -336,6 +394,14 @@ method_lookups = [
     # 名字经 getNamedFunction 形参传入——分析器取各调用点在该形参上的字符串常量）
     "java/lang/invoke/MemberName.<init>:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V",
 ]
+# constructor_lookups  构造器查找：Class 实参 / Class 接收者值集里类镜像所指类的构造器成为反射构造目标（构造器没有
+#                     按名形状，查找即点名该类构造器）；方法句柄 newInvokeSpecial（DirectMethodHandle 先 allocateInstance
+#                     再调 <init>）与 Constructor.newInstance 都经 L3 分派闭包的 <alloc> / <init> 臂执行
+constructor_lookups = [
+    "java/lang/invoke/MethodHandles$Lookup.findConstructor:(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
+    "java/lang/Class.getConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.getDeclaredConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+]
 # method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
 #                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，
 #                     来自形参的回溯到调用点，来源不明时全部按反射对象查到的方法另接方法句柄通道的实参池（见下）
@@ -358,6 +424,27 @@ constructor_invokers = [
     "jdk/internal/reflect/NativeConstructorAccessorImpl.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;",
+]
+
+# 按类镜像强制类初始化：Class 实参所指类（类字面量 / 值集里的类镜像）按 JVMS §5.5 初始化，其 <clinit> 的写入
+# 计入字段值集（SharedSecrets 的 ensureClassInitialized(JarFile.class) 后读 JarFile.<clinit> 写入的访问器字段）。
+# JDK 内的按镜像初始化（Lookup.ensureInitialized、DirectMethodHandle / VarHandles 的静态成员句柄）都经此入口
+class_initializers = [
+    "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V",
+]
+# 成员声明类初始化点：下列方法里对 class_initializers 的调用，Class 实参恒为经该路径正被链接 / 访问的成员的声明类。
+# handle：DirectMethodHandle 的 getStatic / putStatic / invokeStatic / newInvokeSpecial 句柄、VarHandles 的静态字段句柄；
+# reflect：反射访问器工厂的 Method / Constructor / 静态 Field。分析器不按值集（MemberName.clazz 等跨全部成员的汇合）
+# 求目标：「静态方法 / 构造器可达、反射暴露的方法、按反射 / 句柄取得的静态字段 ⇒ 声明类初始化」的结构不变量已覆盖；
+# 运行期钩子目标取经同一路径链接到的成员声明类（该路径的初始化点可达时才登记）
+handle_owner_initializers = [
+    "java/lang/invoke/DirectMethodHandle.checkInitialized:(Ljava/lang/invoke/MemberName;)Z",
+    "java/lang/invoke/DirectMethodHandle.shouldBeInitialized:(Ljava/lang/invoke/MemberName;)Z",
+    "java/lang/invoke/VarHandles.makeFieldHandle:(Ljava/lang/invoke/MemberName;Ljava/lang/Class;Ljava/lang/Class;Z)Ljava/lang/invoke/VarHandle;",
+]
+reflect_owner_initializers = [
+    "jdk/internal/reflect/MethodHandleAccessorFactory.ensureClassInitialized:(Ljava/lang/Class;)V",
+    "jdk/internal/reflect/UnsafeFieldAccessorFactory.newFieldAccessor:(Ljava/lang/reflect/Field;Z)Ljdk/internal/reflect/FieldAccessor;",
 ]
 
 # 按名取类（静态方法，第 0 个实参是 `.` 分隔的类名，返回该类镜像）：名字是字符串常量，或「常量前缀 + 常量表取值」
@@ -447,6 +534,8 @@ resets = [
 #   produced  写入值含手写体自身产出的对象
 #   fields    dst 为对象（非数组）时写入值落在其引用实例字段上（按偏移写入，偏移只能指向这些位置）
 #   last      写入值取自调用点最后一个实参（签名多态方法，实参个数随调用点变化）
+#   offset    字段偏移形参：调用点上该实参是符号偏移（name_resolvers 里 offset = true 的入口以类字面量 +
+#             字段名常量取得，经 static final 字段传递）时只写入所指字段，否则按 fields 写全部引用字段
 # 未列出、且手写体取得引用元素数组视图（JArray<引用 / 泛型 / 未写明>、__view_into、try_cast_array::<引用>、
 # array_store_object，宏内按标识符计；JArray<i8> 等基本元素视图不计）的方法按保守规则：
 # 每个非接收者引用形参都可被写入，来源为其它形参、全部实参数组的元素与手写体产出。
@@ -455,14 +544,14 @@ resets = [
 "java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = { dst = 2, elements = [0] }
 # Unsafe 引用写入：o 为引用元素数组时写入元素（unsafe__impl.rs `_erased_ref_array` 臂），
 # 为对象时写入其引用字段（`__unsafe_ref_update` 按字段名匹配）
-"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
-"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
-"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
-"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2], fields = true }
-"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true }
-"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true }
-"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3], fields = true }
+"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3], fields = true, offset = 1 }
 # VarHandle 引用写入访问模式（签名多态，var_handle_impl.rs → `__unsafe_ref_update` / 数组元素写入）：
 # 形参序号按调用点实参；第 0 个坐标是 holder（实例字段 / 数组），写入值是最后一个实参（last）。
 # 静态字段句柄没有 holder 坐标：写入值另接到按名打开的静态字段（findStaticVarHandle 等）
@@ -519,21 +608,6 @@ members = [
     "java/lang/invoke/MethodHandle.linkToInterface:([Ljava/lang/Object;)Ljava/lang/Object;",
 ]
 
-[facts.class_init]
-# 类初始化事实（闭包分析，generator `rava closure` 读取；closure.json `class_init`）。所列方法由 VM 初始化以实参传入的类
-# （`ldc` 类字面量本身不触发初始化，JVMS §5.5）：分析器按调用点取 Class 实参值集里的类镜像，所指类进入初始化层（`<clinit>`
-# 入链）并记入输出；值为 Class 形参序号（按描述符，0 起，不含接收者）。
-# 准入：JDK 文档给出的初始化语义（Unsafe.ensureClassInitialized：「Ensures the given class has been initialized」）。
-# 生成器（C3）按 `class_init.targets` 登记初始化钩子，手写 ensureClassInitialized 按类名分派到钩子。
-[facts.class_init.initializers]
-"jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V" = 0
-"jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = 0
-# 枚举宇宙（EnumSet.getUniverse / EnumMap.getKeyUniverse 的消费面）：JDK 实现 System$2 → Class.getEnumConstantsShared
-# 反射调用目标类的静态方法 values()，按 JVMS §5.5（invokestatic）初始化该类。手写 getEnumConstantsShared
-# （java_lang_access_impl.rs）按名调初始化钩子后读常量目录；`EnumSet.noneOf(X.class)` 时 X 尚未初始化（ldc 不触发），
-# 无钩子则宇宙为空 → ClassCastException "not an enum"（StackWalker.<clinit> 的 noneOf(Option.class) 即此形）。
-"jdk/internal/access/JavaLangAccess.getEnumConstantsShared:(Ljava/lang/Class;)[Ljava/lang/Enum;" = 0
-
 [facts.array_returns]
 # 手写方法返回新分配的引用数组，VM 只写入所列类型的元素（闭包分析，generator `rava closure` 读取）。
 # 分析器把返回值建模为该方法的一个数组分配点、元素为所列类型的 open，替代 open(返回类型)——
@@ -548,13 +622,14 @@ members = [
 # 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
 # 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
-# Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值
-"jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
-"jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
-"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
-"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0 }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
-"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
+# Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值。
+# offset = 字段偏移形参：调用点上为符号偏移时只读所指字段（同 [facts.array_writes] 的 offset）
+"jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
+"jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
+"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
+"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
+"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
 # VarHandle 引用读取访问模式（签名多态，var_handle_impl.rs `_field_read` / 数组元素读取；getAndSet / compareAndExchange
 # 返回旧值）：实参按调用点描述符排布，0 号是 holder（实例字段句柄）/ 数组（数组元素句柄）；静态字段句柄没有 holder 坐标，
 # 结果另接按名打开的静态引用字段（与 [facts.array_writes] 的 VarHandle 写入对称）
@@ -649,3 +724,107 @@ I = "java/lang/Integer"
 J = "java/lang/Long"
 S = "java/lang/Short"
 Z = "java/lang/Boolean"
+
+# ── 确定性具体求值（闭包分析，generator `rava closure` 读取；engine/concrete）──────────────
+# 入口方法的调用点实参可枚举（字符串字面量 / 类镜像 / 整数 / null 且来源全部可取回）时，按实参逐组
+# 具体执行；轨迹上的方法只按执行过的指令入闭包，结果对象图物化为类型流。任一组合失败即回退抽象调用边。
+[concrete]
+# 入口（`类.方法:描述符`）
+entries = [
+    "java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;",
+    "java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern;",
+    # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
+    "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
+]
+# 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入
+memo_fields = [
+    "java/lang/Class.genericInfo",
+    "java/lang/Class.reflectionData",
+    "java/lang/String.hash",
+    "java/lang/String.hashIsZero",
+]
+# 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结；
+# 声明在这类类型上的静态字段所指映像数组同样冻结。
+# Pattern 的契约是「实例不可变、可多线程共享」：节点图与字符谓词在构造（compile）中建成，匹配状态全在 Matcher；
+# CharacterData 各子类的 Unicode 属性表、ASCII 的字符类别表、各装箱缓存（JLS §5.1.7 的规范化实例表）
+# 在类初始化中建成，之后只读
+stable_types = [
+    "java/lang/CharacterData",
+    "java/lang/Byte$ByteCache",
+    "java/lang/Character$CharacterCache",
+    "java/lang/Short$ShortCache",
+    "java/lang/Integer$IntegerCache",
+    "java/lang/Long$LongCache",
+    "java/util/regex/ASCII",
+    "java/util/regex/Pattern",
+    "java/util/regex/Pattern$Node",
+    "java/util/regex/Pattern$CharPredicate",
+]
+
+# 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
+# `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
+# `opaque`（只用于 `<clinit>`）：静态状态由 VM / 手写层承载的类，初始化不执行、其静态字段不可读（读即求值失败）
+[concrete.natives]
+"java/lang/System.arraycopy:(Ljava/lang/Object;ILjava/lang/Object;II)V" = "arraycopy"
+"java/lang/System.identityHashCode:(Ljava/lang/Object;)I" = "identity_hash"
+"java/lang/Object.<init>:()V" = "noop"
+"java/lang/Object.getClass:()Ljava/lang/Class;" = "get_class"
+"java/lang/Object.hashCode:()I" = "identity_hash"
+"java/lang/Object.clone:()Ljava/lang/Object;" = "clone"
+"java/lang/Class.<clinit>:()V" = "bytecode"
+"jdk/internal/misc/Unsafe.<clinit>:()V" = "opaque"
+# Unsafe 实例由 VM 持有（Unsafe.<clinit> 不执行）：取单例
+"jdk/internal/misc/Unsafe.getUnsafe:()Ljdk/internal/misc/Unsafe;" = "vm_singleton"
+"jdk/internal/misc/Unsafe.allocateUninitializedArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "bytecode"
+# 字段偏移即字段身份（unsafe__impl.rs objectFieldOffset_class_str 的不透明 id 同口径），按身份 CAS 实例引用字段
+"jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = "field_offset"
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "cas_reference"
+"java/lang/Class.registerNatives:()V" = "noop"
+"java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
+"java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"
+"java/lang/Class.isArray:()Z" = "class_is_array"
+"java/lang/Class.isPrimitive:()Z" = "class_is_primitive"
+"java/lang/Class.isInterface:()Z" = "class_is_interface"
+"java/lang/Class.getModifiers:()I" = "class_modifiers"
+"java/lang/Class.getSuperclass:()Ljava/lang/Class;" = "class_superclass"
+"java/lang/Class.getInterfaces0:()[Ljava/lang/Class;" = "class_interfaces"
+"java/lang/Class.getGenericSignature0:()Ljava/lang/String;" = "class_signature"
+"java/lang/Class.getDeclaringClass0:()Ljava/lang/Class;" = "class_declaring_class"
+"java/lang/Class.getEnclosingMethod0:()[Ljava/lang/Object;" = "class_enclosing_method"
+"java/lang/Class.isInstance:(Ljava/lang/Object;)Z" = "class_is_instance"
+"java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
+"java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
+"java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+# 原生二进制不携带 CDS 归档（cds_impl.rs / vm_impl.rs）：查询恒 false、归档恢复为空操作、转储种子恒 0
+"jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
+"jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
+"jdk/internal/misc/CDS.isSharingEnabled0:()Z" = "const:false"
+"jdk/internal/misc/CDS.initializeFromArchive:(Ljava/lang/Class;)V" = "noop"
+"jdk/internal/misc/CDS.getRandomSeedForDumping:()J" = "noop"
+"jdk/internal/misc/VM.initialize:()V" = "noop"
+# 求值器的 UTF16 字符串布局按小端码元（与目标平台一致，string_utf16_impl.rs）
+"java/lang/StringUTF16.isBigEndian:()Z" = "const:false"
+"java/lang/String.intern:()Ljava/lang/String;" = "intern"
+"java/lang/Float.floatToRawIntBits:(F)I" = "float_to_raw_int_bits"
+"java/lang/Float.intBitsToFloat:(I)F" = "int_bits_to_float"
+"java/lang/Double.doubleToRawLongBits:(D)J" = "double_to_raw_long_bits"
+"java/lang/Double.longBitsToDouble:(J)D" = "long_bits_to_double"
+"jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
+"java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
+"java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+
+# 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
+# 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
+[concrete.implicit]
+null = "java/lang/NullPointerException"
+index = "java/lang/ArrayIndexOutOfBoundsException"
+cast = "java/lang/ClassCastException"
+arith = "java/lang/ArithmeticException"
+store = "java/lang/ArrayStoreException"
+size = "java/lang/NegativeArraySizeException"
+
+# VM 直接构造字符串字面量与类镜像时写入的字段（语义名 → `类.字段`）
+[concrete.vm_fields]
+string_value = "java/lang/String.value"
+string_coder = "java/lang/String.coder"
+component_type = "java/lang/Class.componentType"

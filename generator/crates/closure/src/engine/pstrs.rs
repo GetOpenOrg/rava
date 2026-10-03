@@ -73,6 +73,25 @@ impl<'a> Engine<'a> {
         out
     }
 
+    /// 读过方法形参槽的按名查找站点（形参槽被污染时重跑，engine/field_names.rs）
+    pub(super) fn pstr_readers(&self, m: usize, i: usize) -> Vec<u32> {
+        self.pstr.sites.get(&(m, i)).into_iter().flatten().copied().collect()
+    }
+
+    /// 方法形参槽 (m, i) 的子集边后继中的方法形参槽（污染沿边传播，engine/field_names.rs）
+    pub(super) fn pstr_succ_methods(&self, m: usize, i: usize) -> Vec<(usize, usize)> {
+        self.pstr
+            .succ
+            .get(&PSlot::M(m, i))
+            .into_iter()
+            .flatten()
+            .filter_map(|s| match *s {
+                PSlot::M(t, j) => Some((t, j)),
+                PSlot::H(..) => None,
+            })
+            .collect()
+    }
+
     /// 常量并入槽 at，沿子集边传递（只传新增部分）
     fn pstr_add(&mut self, at: PSlot, strs: IdSet) {
         let mut work = vec![(at, strs)];

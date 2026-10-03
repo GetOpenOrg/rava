@@ -24,6 +24,7 @@ pub fn cp_entry(class_slash: &str, index: i32) -> Option<&'static CpVal> {
 
 /// RuntimeVisibleAnnotations 原始属性体中是否含类型描述符 `type_desc` 的注解（按类 `class_slash`
 /// 的稀疏常量池解析 type_index）。JVMS §4.7.16 结构遍历，只读类型、跳过元素值。
+/// 栈遍历（`vm_stack`）按此判定帧方法的 `@Hidden` / `@CallerSensitive`（HotSpot 方法标志的落地，VM 驱动行为）。
 pub fn has_annotation(class_slash: &str, raw: &[u8], type_desc: &str) -> bool {
     struct R<'a> { b: &'a [u8], i: usize }
     impl R<'_> {

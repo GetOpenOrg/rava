@@ -139,7 +139,7 @@ impl<'a> Engine<'a> {
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
-        let objf = self.names[filter as usize].as_ref() == OBJECT;
+        let objf = filter & NOT_SUB == 0 && self.names[filter as usize].as_ref() == OBJECT;
         if rs == rd && objf {
             return;
         }

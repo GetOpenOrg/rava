@@ -124,7 +124,7 @@ impl<'a> EmitShared<'a> {
             manifest,
             cp,
             planner: Planner::new(input, names, manifest, cp),
-            boundary: Boundary::new(manifest, cp),
+            boundary: Boundary::new(manifest),
             runtime_dir,
             macros_crate,
             seeds: SeedCfg::from_toml(&table),

@@ -25,9 +25,10 @@ seeds = [
 #   consts    该类的 static 自类型常量字段（getstatic）→ 沿 <clinit> 溯源到字符串字面量（语言, 地区, 变体）
 #   factories 实参全为字符串字面量的调用 → (语言, 地区, 变体)
 #   tags      实参为字符串字面量的 BCP 47 语言标签
-#   bundles   每个入选 locale 需要的资源束族（CLDR），候选类 <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>；
+#   bundles   每个入选 locale 需要的资源束族（CLDR），候选类 <包>/<基名>_<locale> 与 <包>/ext/<基名>_<locale>
+#             （类路径上存在者入链：无参构造器 + 反射分派面，按字节码翻译）；
 #             条目为字符串（受下方全局 triggers 控制）或 { base, triggers }（族自带触发成员）
-#   triggers  调用链触达该成员（手写边界的数据消费入口）才入选资源束——不消费本地化数据的程序
+#   triggers  调用链触达该成员（本地化数据的消费入口）才入选资源束——不消费本地化数据的程序
 #             不付束翻译的代码税
 [locale]
 consts = [
@@ -44,12 +45,53 @@ factories = [
 tags = [
     "java/util/Locale.forLanguageTag:(Ljava/lang/String;)Ljava/util/Locale;",
 ]
+# 束族与 LocaleData 访问器一一对应：`LocaleData.getXxx` 按 `Type.get{Text,Util}ResourcesPackage() + ".Xxx"`
+# 取束，CLDR 适配器取 `.../cldr` 包、JRE（FALLBACK）适配器取上一级包；java.time 文本与 DateFormatSymbols
+# 经 FALLBACK 适配器补缺，JDK 同时装载两族（`-Xlog:class+load` 实测 DateTimeFormatter 用例装载
+# cldr/FormatData、FormatData、JavaTimeSupplementary 及其 _en）。族的触发成员取对应访问器，访问器不可达不付代码税
 bundles = [
     "sun/text/resources/cldr/FormatData",
+    "sun/text/resources/FormatData",
+    # JRE FormatData 是 ParallelListResourceBundle：LocaleResources.getJavaTimeFormatData 经
+    # LocaleData.setSupplementary 并入 JavaTimeSupplementary 族
+    { base = "sun/text/resources/JavaTimeSupplementary", triggers = [
+        "sun/util/resources/LocaleData.setSupplementary",
+    ] },
     # 货币名 / 符号（L-2）：族自带触发成员——只有货币符号查询触达时才入选，数字格式用例不付
     # CurrencyNames（ROOT 束约 300 种货币）的代码税
     { base = "sun/util/resources/cldr/CurrencyNames", triggers = [
         "sun/util/locale/provider/LocaleResources.getCurrencyName",
+        "sun/util/resources/LocaleData.getCurrencyNames",
+    ] },
+    { base = "sun/util/resources/CurrencyNames", triggers = [
+        "sun/util/resources/LocaleData.getCurrencyNames",
+    ] },
+    { base = "sun/util/resources/cldr/TimeZoneNames", triggers = [
+        "sun/util/resources/LocaleData.getTimeZoneNames",
+    ] },
+    { base = "sun/util/resources/TimeZoneNames", triggers = [
+        "sun/util/resources/LocaleData.getTimeZoneNames",
+    ] },
+    { base = "sun/util/resources/cldr/LocaleNames", triggers = [
+        "sun/util/resources/LocaleData.getLocaleNames",
+    ] },
+    { base = "sun/util/resources/LocaleNames", triggers = [
+        "sun/util/resources/LocaleData.getLocaleNames",
+    ] },
+    { base = "sun/util/resources/cldr/CalendarData", triggers = [
+        "sun/util/resources/LocaleData.getCalendarData",
+    ] },
+    { base = "sun/util/resources/CalendarData", triggers = [
+        "sun/util/resources/LocaleData.getCalendarData",
+    ] },
+    { base = "sun/text/resources/BreakIteratorInfo", triggers = [
+        "sun/util/resources/LocaleData.getBreakIteratorInfo",
+    ] },
+    { base = "sun/text/resources/BreakIteratorResources", triggers = [
+        "sun/util/resources/LocaleData.getBreakIteratorResources",
+    ] },
+    { base = "sun/text/resources/CollationData", triggers = [
+        "sun/util/resources/LocaleData.getCollationData",
     ] },
 ]
 triggers = [
@@ -57,6 +99,7 @@ triggers = [
     "sun/util/locale/provider/LocaleResources.getNumberPatterns",
     # DateFormatSymbols.initializeData → LocaleData.getDateFormatData（月名 / 星期名，FormatData 束）
     "sun/util/resources/LocaleData.getDateFormatData",
+    "sun/util/resources/LocaleData.getNumberFormatData",
 ]
 
 # ── JCA 服务注册（K-JCA，docs/plans/2026-09-25-jca-service-registry.md）────────────────────
@@ -64,10 +107,7 @@ triggers = [
 #                    ldc 实现类名` 三连常量即一条服务，SunJCE.ps / SunEntries.add 同形态）；
 #                    provider = Provider 子类（JDK ProviderConfig 对内建 provider 直接 `new`：
 #                    服务查找时按需构造一次，服务描述 / 属性 / newInstance 全走翻译字节码）
-#   release_packages / release_classes
-#                    从边界前缀放行、按字节码翻译（算法实现是纯 Java 计算；形态同 closure.toml [release]）
-#                    列表序即 provider 优先序（JDK java.security 的 security.provider.N 次序：SUN 在先）
-#   triggers         调用链触达该成员（手写边界的服务查找入口）才补种服务实现类；候选算法名 =
+#   triggers         调用链触达该成员（JCA 服务查找入口）才补种服务实现类；候选算法名 =
 #                    用户类字符串常量 ∪ 链上 JDK 方法里 `<engine>.getInstance` 调用前的字符串实参
 #                    （sun.security.provider.SecureRandom 的 `MessageDigest.getInstance("SHA", "SUN")`）
 #   defaults         算法名由 JDK 运行期配置得出、不出现在任何字符串常量中的缺省服务：触发成员在
@@ -78,41 +118,6 @@ triggers = [
 providers = [
     { name = "SUN", class = "sun/security/provider/SunEntries", provider = "sun/security/provider/Sun" },
     { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE", provider = "com/sun/crypto/provider/SunJCE" },
-]
-release_packages = [
-    "com/sun/crypto/provider/",
-    "sun/security/provider/",
-]
-release_classes = [
-    # 服务描述层（纯 Java）：Provider（Properties 子类，服务表 + 旧式属性映射）及其嵌套类
-    # Service / ServiceKey / EngineDescription / UString。
-    "java/security/Provider",
-    # 随机源 engine 族（纯 Java）：缺省 PRNG 经 provider 列表取实现（NativePRNG）
-    "java/security/SecureRandom",
-    "java/security/SecureRandomSpi",
-    "java/security/SecureRandomParameters",
-    "java/security/InvalidParameterException",
-    "java/security/MessageDigest",
-    "java/security/MessageDigestSpi",
-    # sun/security/util/ 下的 ArrayUtil / SecurityProviderConstants / KnownOIDs 已由 closure.toml
-    # [release].packages 整包放行
-    # 安全异常族（纯数据载体；服务查找失败 / 摘要参数错误时由手写边界或翻译字节码构造）
-    "java/security/GeneralSecurityException",
-    "java/security/NoSuchAlgorithmException",
-    "java/security/NoSuchProviderException",
-    "java/security/DigestException",
-    "java/security/ProviderException",
-    "java/security/KeyException",
-    "java/security/InvalidKeyException",
-    "java/security/InvalidAlgorithmParameterException",
-    # 参数对象 engine 族（纯 Java）：Cipher.getParameters / init(mode, key, AlgorithmParameters)、
-    # AlgorithmParameters.getInstance。实例经 Security.getImpl（纯 Java：getSpiClass 按名取 SPI 类 +
-    # GetInstance）取得；Security.<clinit> 读 <java.home>/conf/security/java.security（jdk_resources 嵌入，
-    # Properties.load 按字节码解析）。Security.getProperty / setProperty 的手写伴生仍取手写。
-    "java/security/AlgorithmParameters",
-    "java/security/AlgorithmParametersSpi",
-    "java/security/Security",
-    "java/security/spec/InvalidParameterSpecException",
 ]
 defaults = [
     # SecureRandom 缺省 PRNG：SunEntries.DEF_SECURE_RANDOM_ALGO 由 securerandom.source（JDK 默认
@@ -145,17 +150,6 @@ population = [
 "java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
 "java/util/ServiceLoader.<init>:(Ljava/lang/Module;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
 
-# ── 纯数据资源束载体（L-1，docs/plans/2026-09-25-l1-cldr-locale-data.md）──────────────────
-# `载体类.载体方法:描述符`。子类若只声明构造器 / 类初始化器 / 该载体方法，且载体方法体只含常量
-# 装载与数组构造（无方法调用），即判定为「纯数据类」——即便位于内部包（sun/ 等），也照常翻译
-# 字节码（数据不是实现细节）。
-[data_bundle]
-carriers = [
-    "java/util/ListResourceBundle.getContents:()[[Ljava/lang/Object;",
-    # CLDR 货币名束（sun.util.resources.cldr[.ext].CurrencyNames*）的基类
-    "sun/util/resources/OpenListResourceBundle.getContents:()[[Ljava/lang/Object;",
-]
-
 # ── VM 引导期类初始化（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）───────────────
 # 生成项目 main 启动时按本表顺序初始化其中「在闭包内翻译在场」的类（runtime vm_boot_init）。
 # 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。
@@ -165,6 +159,14 @@ classes = [
     # 缓存 ReflectionFactory 单例；由 ReflectionFactory.<clinit> 反向触发时 GetReflectionFactoryAction
     # 重入读到 null。
     "java/lang/reflect/AccessibleObject",
+]
+# VM 启动期调用的静态方法（无参 `()V`，按序在 classes 之前执行）：HotSpot 由 initPhase1 在任何应用代码
+# 之前完成的全局登记。准入：VM 发起的启动入口（docs/reference/handwritten-boundary.md 准入 ③）——
+# 由闭包分析器作为根入链、生成项目 main 启动时调用（runtime vm_boot_init）。
+calls = [
+    # initPhase1 的 setJavaLangAccess()：SharedSecrets.setJavaLangAccess(new System$2)——JavaLangAccess
+    # 无惰性初始化路径（SharedSecrets.getJavaLangAccess 直接返回静态字段），缺席即 null。
+    "java/lang/System.setJavaLangAccess:()V",
 ]
 
 # ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导

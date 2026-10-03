@@ -120,8 +120,21 @@ impl<'a> Engine<'a> {
                         self.feed(&fs, Node::S(m, off), cid);
                     }
                 }
-                Event::InstanceOf(c) => {
+                Event::InstanceOf(c, v) => {
                     self.touch(c, Level::Type, via("instanceof"));
+                    // 判定成立一侧的收窄值：输入中 ⊂ 目标类型的部分
+                    if let Some(v) = v {
+                        let cid = self.id(c);
+                        let fs = self.feeds(m, v, cid);
+                        self.feed(&fs, Node::S(m, off), cid);
+                    }
+                }
+                Event::NotInstance(c, v) => {
+                    // 判定不成立一侧的收窄值：输入中 ⊄ 目标类型的部分（null 不入类型集）
+                    let cid = self.id(c);
+                    let obj = self.id(OBJECT);
+                    let fs = self.feeds(m, v, obj);
+                    self.feed(&fs, Node::S(m, off), NOT_SUB | cid);
                 }
                 Event::Catch(ct) => {
                     let t = ct.clone().unwrap_or_else(|| THROWABLE.to_string());
@@ -391,8 +404,11 @@ impl<'a> Engine<'a> {
         let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
         let mh = self.hw.member(decl, name);
         if let Some((fi, tid)) = node {
-            // 边界类字段，或值由手写访问器提供（如标准流 `System::out()`）：按 open 处理
-            if boundary || !mh.fns.is_empty() {
+            // 边界类字段，或值由手写访问器提供（如标准流 `System::out()`）：按 open 处理。清单字段钩子
+            // （`[vm_state.field_hooks]`，如 Class.classLoader 的定义加载器）的 VM 写入即钩子本身，读站点已
+            // 接钩子值池（`field_hook`），不再按 open 处理
+            let hooked = self.man.vm_state.field_hook(decl, name, fdesc).is_some();
+            if (boundary && !hooked) || !mh.fns.is_empty() {
                 self.add_to(Node::U(fi), &TypeSet::open(tid));
             }
         }

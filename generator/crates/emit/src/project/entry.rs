@@ -6,6 +6,8 @@ use std::path::Path;
 use super::fs::Writer;
 use super::layout::{JdkLayout, UserLayout};
 use crate::ctx::EmitCtx;
+use crate::phase2::dispatch::registration_turbofish;
+use crate::phase2::Emissions;
 use crate::error::Result;
 use crate::text::{safe_pkg_part, scratch_pkg_version, to_snake};
 
@@ -35,22 +37,13 @@ fn jrt_path(ctx: &EmitCtx<'_>, bin: &str) -> String {
     parts.join("::")
 }
 
-/// 泛型类静态路径的擦除 turbofish（`::<Object, ..>`；非泛型为空）：main 里的静态调用没有推断上下文（E0283）
-fn erased_turbofish(ctx: &EmitCtx<'_>, bin: &str) -> String {
-    let n = ctx.class(bin).map(|ci| ctx.ty.effective_class_type_params(ci).len()).unwrap_or(0);
-    if n == 0 {
-        return String::new();
-    }
-    format!("::<{}>", vec!["java_runtime::prelude::Object"; n].join(", "))
-}
-
 fn block(head: &str, lines: &[String], tail: &str) -> String {
     format!("{head}\n{}\n{tail}\n", lines.join("\n"))
 }
 
-/// 类初始化钩子（`ensure_class_initialized` 按名查表）：枚举形态 / 有 `<clinit>` 的用户类 +
-/// 注解枚举种子与分析器 class_init 目标（JDK）
-fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Vec<String> {
+/// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子与按镜像初始化目标（JDK）。
+/// 泛型类路径的类型实参按登记约定取 Object（钩子闭包无推断上下文，E0283）
+fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> Vec<String> {
     let mut out = Vec::new();
     for (c, e) in &user.entries {
         // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
@@ -68,32 +61,29 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout) -> Ve
         out.push(format!(
             "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
             p.join("::"),
-            erased_turbofish(ctx, c)
+            registration_turbofish(ctx, ems, c)
         ));
     }
-    // JDK 侧：注解枚举种子 + 分析器 class_init 事实（Unsafe.ensureClassInitialized 等按名初始化的
-    // 目标；`unknown` = 目标类不可定论 → 链上全部有 `<clinit>` 的类）。只登记本轮生成的类
-    let jdk_targets: std::collections::BTreeSet<&String> = ctx
-        .input
-        .annotation_enum_seeds
-        .iter()
-        .chain(&ctx.input.class_init_targets)
-        .filter(|c| jdk.generated.contains(*c) && !ctx.is_opaque(c))
-        .collect();
-    for c in jdk_targets {
+    // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`；
+    // 不透明（L1）类只有类型身份、不初始化，不登记
+    let mut seen = std::collections::BTreeSet::new();
+    for en in ctx.input.annotation_enum_seeds.iter().chain(&ctx.input.mirror_init_classes) {
+        if !jdk.generated.contains(en) || ctx.is_opaque(en) || !seen.insert(en) {
+            continue;
+        }
         out.push(format!(
-            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
-            jrt_path(ctx, c),
-            erased_turbofish(ctx, c)
+            "    (\"{en}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            jrt_path(ctx, en),
+            registration_turbofish(ctx, ems, en)
         ));
     }
     out
 }
 
 /// main 启动段（钩子登记全部段落）
-fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, disp: &DispatchReg) -> String {
+fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions, disp: &DispatchReg) -> String {
     let mut hb = String::new();
-    let hooks = class_init_hooks(ctx, user, jdk);
+    let hooks = class_init_hooks(ctx, user, jdk, ems);
     if !hooks.is_empty() {
         hb += &block("    java_runtime::register_class_init_hooks(&[", &hooks, "    ]);");
     }
@@ -103,48 +93,37 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, disp: &Disp
     if !disp.fields.is_empty() {
         hb += &block("    java_runtime::reflect_dispatch::register_field_dispatch(&[", &disp.fields, "    ]);");
     }
-    let obj_ctor = |path: String| format!("(|| Ok(java_runtime::java::lang::Object::from({path}::new()?)))");
-    if !ctx.input.data_bundle_seeds.is_empty() {
-        let lines: Vec<String> = ctx
-            .input
-            .data_bundle_seeds
-            .iter()
-            .map(|b| format!("        (\"{b}\", {} as java_runtime::data_bundles::BundleCtor),", obj_ctor(jrt_path(ctx, b))))
-            .collect();
-        hb += &block("    java_runtime::data_bundles::register_data_bundles(&[", &lines, "    ]);");
-    }
-    let jca = &ctx.input.jca_seeds;
-    if !jca.is_empty() {
-        let svc: Vec<String> = jca
-            .iter()
-            .map(|s| format!("        (\"{}\", \"{}\", \"{}\", \"{}\"),", s.ty, s.algorithm, s.imp, s.provider))
-            .collect();
-        let seeded: std::collections::BTreeSet<&str> = jca.iter().map(|s| s.provider.as_str()).collect();
-        // 清单序 = provider 优先序（JDK security.provider.N）
-        let provs: Vec<String> = ctx
-            .seeds
-            .jca
-            .providers
-            .iter()
-            .filter(|p| seeded.contains(p.0.as_str()))
-            .filter_map(|p| {
-                let pc = ctx.seeds.jca.provider_class(&p.0)?;
-                Some(format!("        (\"{}\", {} as java_runtime::jca::ProviderCtor),", p.0, obj_ctor(jrt_path(ctx, pc))))
+    // VM 引导期（HotSpot initPhase1 对应物，清单 seeds.toml [boot_init]）：先按序调用 calls 中
+    // 入链的静态方法（VM 发起的全局登记），再按序初始化 classes 中在闭包内翻译在场的类
+    let mut boot: Vec<String> = ctx
+        .manifest
+        .boot_init_calls
+        .iter()
+        .filter(|c| ctx.input.precheck_visited.contains(c.as_str()))
+        .filter_map(|c| {
+            let (cls, rest) = c.split_once('.')?;
+            let name = rest.split(':').next()?;
+            jdk.generated.contains(cls).then(|| {
+                format!(
+                    "        (\"{cls}.{name}\", {}::{} as fn() -> java_runtime::error::Result<()>),",
+                    jrt_path(ctx, cls),
+                    safe_pkg_part(name)
+                )
             })
-            .collect();
-        hb += &block("    java_runtime::jca::register_services(&[", &svc, "    ]);");
-        hb += &block("    java_runtime::jca::register_providers(&[", &provs, "    ]);");
-    }
-    let boot: Vec<String> = ctx
+        })
+        .collect();
+    boot.extend(ctx
         .manifest
         .boot_init_classes
         .iter()
         .filter(|b| jdk.generated.contains(*b))
         .map(|b| {
-            let path = format!("{}{}", jrt_path(ctx, b), erased_turbofish(ctx, b));
-            format!("        (\"{b}\", {path}::__class_init as fn() -> java_runtime::error::Result<()>),")
-        })
-        .collect();
+            format!(
+                "        (\"{b}\", {}{}::__class_init as fn() -> java_runtime::error::Result<()>),",
+                jrt_path(ctx, b),
+                registration_turbofish(ctx, ems, b)
+            )
+        }));
     if !boot.is_empty() {
         hb += &block("    java_runtime::vm_boot_init(&[", &boot, "    ]);");
     }
@@ -161,6 +140,7 @@ pub fn write_main(
     user_src: &Path,
     user: &UserLayout,
     jdk: &JdkLayout,
+    ems: &Emissions,
     disp: &DispatchReg,
     bodies: &[&str],
 ) -> Result<String> {
@@ -177,7 +157,7 @@ pub fn write_main(
     };
     let bin_name = to_snake(main_bin.rsplit('/').next().unwrap_or(main_bin));
     // 主类自身泛型：静态 main 的路径表达式无推断上下文（E0283），类型实参按擦除取 Object
-    let main_call = format!("{main_short}{}::main()", erased_turbofish(ctx, main_bin));
+    let main_call = format!("{main_short}{}::main()", registration_turbofish(ctx, ems, main_bin));
     let mut lines = vec![MAIN_ALLOW.to_string()];
     let top = user.mod_tree.get(user_src).into_iter().flatten();
     if ctx.opts.batch {
@@ -198,7 +178,7 @@ pub fn write_main(
     lines.push("fn main() {".into());
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
     lines.push("    java_runtime::create_java_vm();".into());
-    let hb = hook_block(ctx, user, jdk, disp);
+    let hb = hook_block(ctx, user, jdk, ems, disp);
     if !hb.is_empty() {
         lines.push(hb);
     }
