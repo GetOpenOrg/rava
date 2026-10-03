@@ -792,7 +792,7 @@ TestInheritance_Dog__speak_base(this)?   // 父类声明者的 base 函数（§5
 | `.borrow()` | 字段读 / 数组读 | 透明（宏重写字段访问；`Array::get` 隐藏数组读） | `java_class!` 宏 + `Array<T>` |
 | `.borrow_mut()` | 字段写 / 数组写 | 透明（宏重写；`Array::set` 隐藏数组写） | `java_class!` 宏 + `Array<T>` |
 | `.downcast::<T>()` | `(T) obj` 强制转型 | `T::from(obj)` 或类型推导 `obj.into()` | `java_class!` 宏生成 `impl From<Object> for T` |
-| `Object::from_any(v)` | 隐式向上转型（赋给 Object 引用） | `v.into()` | blanket `From<T> for Object`（R-1 已完成） |
+| `Object::from_any(v)` | 隐式向上转型（赋给 Object 引用） | `Object::from(v)` / `Into::<Object>::into(v)` / `v.into()` | blanket `From<T> for Object`（R-1）+ 生成器装箱分类（2026-10-03 归零） |
 | `Rc::new(RefCell::new(...))` | 数组/对象创建 | `Array::new(n)` / 构造器 | `Array<T>` + `java_class!` 构造器展开 |
 | `Rc<RefCell<Vec<T>>>` 类型标注 | `T[]` 数组类型 | `Array<T>` | `Array<T>` newtype（§7） |
 | `__get_xxx()` / `__set_xxx()` 直接调用 | 字段读写 | `self.xxx` / `self.xxx = v`（宏重写） | `java_class!` 宏 token 重写 |
@@ -866,7 +866,7 @@ let o: Object = Object::from_any(dog.clone());
 let o: Object = dog.into();   // blanket From<T> for Object，已可用
 ```
 
-codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.into()` 而非 `Object::from_any(...)`。
+codegen 侧（2026-10-03 已落实，`docs/plans/2026-10-03-from-any-zero.md`）：装箱分类统一在 `instr::coerce`——基本类型 `.into()`；数组 / 注册表内类 / 接口载体 `Object::from(..)`；类型形参与其余引用 `Into::<Object>::into(..)`；void 流入 Object 是生成器内部错误。返回裸类型变量的调用按签名实例化（声明者含超接口、接口视图代入接收者实参、invokespecial 以 `this` 视角实例化）。可读性审计 `from_any=0` 由 `driver/tests/build_cli.rs` 守护。手写层仅 VM 负载承载（`Throwable.backtrace`）与对象模型定义保留 `from_any`，归属见计划文档第六节。
 
 ### 16.3 当前状态
 
@@ -875,7 +875,7 @@ codegen 侧：`aastore` / `astore` 赋值给 Object 类型变量时，生成 `.i
 | `borrow()` / `borrow_mut()`（字段） | ✅ 已隐藏（`java_class!` 宏字段重写） |
 | `borrow()` / `borrow_mut()`（数组） | ⚠️ 待修复（`Array<T>` Step 2/3，见 §7） |
 | `downcast::<T>()` | ⚠️ 待修复（需 codegen 改 `checkcast` 生成 + 宏生成 `From<Object>`） |
-| `Object::from_any(v)` | ⚠️ 待修复（codegen 需改用 `.into()`，blanket impl 已就绪） |
+| `Object::from_any(v)` | ✅ 已完成（2026-10-03：生成层归零，审计守护） |
 | `Rc<RefCell<Vec<T>>>` 类型标注 | ⚠️ 待修复（`Array<T>` Step 1，见 §7） |
 
 ---

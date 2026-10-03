@@ -127,6 +127,8 @@ fn batch_trace_and_debug() {
     let rd = stdout.lines().find(|l| l.starts_with("[readability-audit] ")).unwrap();
     let keys: Vec<&str> = rd["[readability-audit] ".len()..].split(' ').map(|kv| kv.split('=').next().unwrap()).collect();
     assert_eq!(keys, ["from_any", "downcast", "downcast_ref", "rc_new", "borrow"], "{rd}");
+    // 可读层 from_any 归零守护：用户类与闭包内全部 JDK 生成类（含 java_body_* 实现层）计数为 0
+    assert!(rd.starts_with("[readability-audit] from_any=0 "), "生成层出现 Object::from_any：{rd}");
     let raw = stdout.lines().find(|l| l.starts_with("[raw-audit] ")).unwrap();
     assert!(raw.starts_with("[raw-audit] raw_expr=") && raw.contains(" raw_stmt=") && raw.contains(" non_native_overrides="), "{raw}");
     // 剖面行 `{n}\t{kind}\t{site}`，次数降序；总数与审计行一致

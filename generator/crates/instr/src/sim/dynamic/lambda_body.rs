@@ -35,7 +35,7 @@ fn iface_call(env: &InstrEnv, lam: &Lam, ci: &ty::ClassInfo, call: &CallArgs) ->
         let cap_t = &lam.cap_tys[0];
         let cap_ty = ty_text(env, cap_t);
         if ![ir::anchors::OBJECT, "()", "_"].contains(&cap_ty.as_str()) && !is_prim_text(&cap_ty) {
-            recv_src = obj_text(env, recv, cap_t);
+            recv_src = obj_text(env, recv, cap_t)?;
         }
     }
     let rest: Vec<&str> = all[1..].iter().map(|s| s.as_str()).collect();
@@ -60,7 +60,7 @@ fn adapt_return(env: &InstrEnv, lam: &Lam, body: String) -> InstrResult<String> 
         let tried = format!("{body}?");
         return Ok(match box_prim_via_valueof(env, &tried, &impl_ret)? {
             Some(boxed) => format!("Ok({boxed})"),
-            None => format!("Ok({})", obj_text(env, &tried, &env.ctx.ty.jvm_to_rust(&impl_ret))),
+            None => format!("Ok({})", obj_text(env, &tried, &env.ctx.ty.jvm_to_rust(&impl_ret))?),
         });
     }
     if erased_sam && impl_ret != "V" {
@@ -70,7 +70,7 @@ fn adapt_return(env: &InstrEnv, lam: &Lam, body: String) -> InstrResult<String> 
         if !lam.is_erased_ref(env, &impl_ret) || lam.has_generic_sig || is_carrier {
             // 按实现方法的返回类型装箱（S-3.1）：注册表类走 Object::from——对象身份、运行时类
             // 与接口 vtable 全部可达；返回是已铺设载体时 Object::from 解包 __ref 装箱
-            return Ok(format!("Ok({})", obj_text(env, &format!("{body}?"), &ret_t)));
+            return Ok(format!("Ok({})", obj_text(env, &format!("{body}?"), &ret_t)?));
         }
     }
     Ok(body)
@@ -140,9 +140,10 @@ pub(super) fn closure_body(env: &InstrEnv, sim: &StackSim, lam: &Lam, call: &Cal
     adapt_return(env, lam, body)
 }
 
-/// 闭包装箱为 Object：samtype 是可合成的函数式接口时经 SAM 合成对象
-/// （`Object::from(I__Lambda::new(__Shared::new(closure)))`，站点登记账本）；否则不透明装箱
-/// （`Object::from_any(__Shared::new(closure) as __Shared<__DynFn!(..)>)`）
+/// 闭包装箱为 Object：经 samtype 的 SAM 合成对象
+/// （`Object::from(I__Lambda::new(__Shared::new(closure), "<隐藏类名>"))`，站点登记账本）。
+/// JVM 为每个 lambda 调用点定义实现 samtype 的隐藏类，对象恒有类身份；samtype 不可合成
+/// （不在注册表 / 非函数式接口 / 预扫描漏登）是生成器内部错误，不退化为无类身份的裸闭包
 pub(super) fn boxed_closure(env: &InstrEnv, log: &mut InstrLog, site: &IndySite, lam: &Lam, body: String) -> InstrResult<Expr> {
     let obj = ir::anchors::OBJECT;
     let ptypes: Vec<String> = lam.sam_params.iter().map(|p| rust_text(env, p)).collect();
@@ -165,23 +166,20 @@ pub(super) fn boxed_closure(env: &InstrEnv, log: &mut InstrLog, site: &IndySite,
     };
     let ctor = if iface.is_empty() { None } else { env.ctx.hooks.sam_ctor_path(iface, env.ctx.class_name) };
     let hidden = ctor.as_ref().and_then(|_| env.ctx.hooks.lambda_class_name(site.pc));
-    Ok(match ctor.zip(hidden) {
-        Some((path, hidden)) => {
-            log.push(Effect::SamSite {
-                iface: iface.to_string(),
-                sam_desc: lam.sam_desc.clone(),
-                class: env.ctx.class_name.to_string(),
-                hidden: hidden.clone(),
-                interfaces: lambda_interfaces(env, site, iface),
-            });
-            sim::exprs::object_from(Expr::call(path, vec![raw(closure), raw(format!("{hidden:?}"))]))?
-        }
-        None => {
-            // Result 用裸名：user crate 里 crate::error 是 E0433，两边均经 prelude 引入
-            let fn_type = format!("__Shared<__DynFn!(({}) -> Result<{rtype}>)>", ptypes.join(", "));
-            raw(format!("{obj}::from_any({closure} as {fn_type})"))
-        }
-    })
+    let (Some(path), Some(hidden)) = (ctor, hidden) else {
+        return Err(InstrError::BadInsn(format!(
+            "lambda 调用点 {}@{} 的 samtype `{iface}` 无 SAM 合成对象",
+            env.ctx.class_name, site.pc
+        )));
+    };
+    log.push(Effect::SamSite {
+        iface: iface.to_string(),
+        sam_desc: lam.sam_desc.clone(),
+        class: env.ctx.class_name.to_string(),
+        hidden: hidden.clone(),
+        interfaces: lambda_interfaces(env, site, iface),
+    });
+    Ok(sim::exprs::object_from(Expr::call(path, vec![raw(closure), raw(format!("{hidden:?}"))]))?)
 }
 
 /// lambda 隐藏类的直接超接口（`InnerClassLambdaMetafactory` 同序）：samtype，altMetafactory 的

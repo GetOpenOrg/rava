@@ -126,7 +126,7 @@ fn emit_call_result(env: &InstrEnv, sim: &mut StackSim, call: &CallRef, sig_owne
             format!("let {v}: {r} = <{r} as ::std::convert::From<{o}>>::from(::std::convert::Into::<{o}>::into({call_text}));"),
             rust_ret,
         ),
-        CallBind::Opaque => (format!("let {v} = {o}::from_any({call_text});"), rust_ret),
+        CallBind::TypeVar => (format!("let {v} = ::std::convert::Into::<{o}>::into({call_text});"), rust_ret),
         CallBind::Erased => (format!("let {v} = {call_text};"), rust_ret),
     };
     sim.emit(Stmt::raw(stmt))?;

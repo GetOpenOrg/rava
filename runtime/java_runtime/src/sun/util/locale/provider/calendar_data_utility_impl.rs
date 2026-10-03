@@ -158,10 +158,10 @@ fn _names_map(lang: &str, field: i32, style: i32, javatime: bool)
     };
     let map = HashMap::<Object, Object>::new()?;
     for (name, value) in table {
-        let _ = Object::from_any(map.put(
+        map.put(
             Object::from(String::from(*name)),
             Object::from(Integer::new_i(*value)?),
-        )?);
+        )?;
     }
     Ok(<Map<Object, Object> as ::std::convert::From<_>>::from(Object::from(map)))
 }

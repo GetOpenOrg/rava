@@ -74,7 +74,7 @@ pub fn jump_condition(env: &InstrEnv, sim: &mut StackSim, conds: &CondValues, op
         let a = sim.pop()?;
         let (a_t, b_t) = (text::expr(env, &a.expr), text::expr(env, &b.expr));
         let (a_s, b_s) = if opc == IF_ACMPEQ || opc == IF_ACMPNE {
-            (acmp_operand(env, &a_t, &a.ty), acmp_operand(env, &b_t, &b.ty))
+            (acmp_operand(env, &a_t, &a.ty)?, acmp_operand(env, &b_t, &b.ty)?)
         } else {
             (icmp_operand(&a_t, &a.ty), icmp_operand(&b_t, &b.ty))
         };
@@ -144,11 +144,11 @@ fn erased_instance(t: &RsType, arity: usize) -> RsType {
 }
 
 /// 两个汇合值统一到同一 Rust 类型：返回 (tv, ev, ty)
-pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsType) -> (String, String, RsType) {
+pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsType) -> MethodResult<(String, String, RsType)> {
     let (ts, es) = (text::ty(env, ty), text::ty(env, ety));
     let (mut tv, mut ev, mut out) = (tv, ev, ty.clone());
     if ts == es {
-        return (tv, ev, out);
+        return Ok((tv, ev, out));
     }
     let tparams = &env.tparams;
     let is_tparam = |s: &str| tparams.iter().any(|p| p == s);
@@ -166,10 +166,10 @@ pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsT
         out = ety.clone();
     } else if es == OBJECT && !is_scalar(&ts) && ts != OBJECT && !is_tparam(&ts) {
         // 具体类型臂与擦除 Object 臂汇合：合并点按擦除 Object 落定，具体臂上转
-        tv = to_object(env, &tv, ty, false);
+        tv = to_object(env, &tv, ty, false)?;
         out = RsType::Object;
     } else if ts == OBJECT && !is_scalar(&es) && es != OBJECT && !is_tparam(&es) {
-        ev = to_object(env, &ev, ety, false);
+        ev = to_object(env, &ev, ety, false)?;
     } else if JVM_INT_FAMILY.contains(&ts.as_str()) && JVM_INT_FAMILY.contains(&es.as_str()) {
         // 两臂同属 JVM 计算类型 int：拓宽到 i32
         if ts != "i32" {
@@ -221,14 +221,14 @@ pub fn unify_pair(env: &InstrEnv, tv: String, ty: &RsType, ev: String, ety: &RsT
     } else if !is_scalar(&ts) && !is_scalar(&es) {
         // 无公共父类的引用类型：合并点为根类，两臂各自上转
         if ts != OBJECT {
-            tv = to_object(env, &tv, ty, false);
+            tv = to_object(env, &tv, ty, false)?;
         }
         if es != OBJECT {
-            ev = to_object(env, &ev, ety, false);
+            ev = to_object(env, &ev, ety, false)?;
         }
         out = RsType::Object;
     }
-    (tv, ev, out)
+    Ok((tv, ev, out))
 }
 
 const HOLE: &str = "\u{0}";
@@ -249,7 +249,7 @@ pub fn unify_values(env: &InstrEnv, entries: &[StackEntry]) -> MethodResult<(Vec
     let mut values = vec![arm_value(env, &entries[0])?];
     let mut ty = entries[0].ty.clone();
     for e in &entries[1..] {
-        let (hole, ev, nt) = unify_pair(env, HOLE.to_string(), &ty, arm_value(env, e)?, &e.ty);
+        let (hole, ev, nt) = unify_pair(env, HOLE.to_string(), &ty, arm_value(env, e)?, &e.ty)?;
         ty = nt;
         if hole != HOLE {
             // null 臂可直接成为任何引用类型，不套转换
