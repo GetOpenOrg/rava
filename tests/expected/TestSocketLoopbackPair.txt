@@ -1,0 +1,8 @@
+echo=ping
+after-half-close=33
+server-sees-eof=true
+closed-accept-ex=SocketException
+timeout-set=120
+read-timeout-ex=SocketTimeoutException
+alive-after-timeout=true
+tcp-nodelay=true
