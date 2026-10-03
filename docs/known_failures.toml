@@ -1,0 +1,37 @@
+# 已知失败清单（抽查 / 合入守护判定用）
+#
+# 用途：server_maintenance 的 rava/merge_daemon.py 与 rava/known_failures.py 读取本文件，
+# 判定抽查（spot）里的失败是否「已知」。失败用例的本地失败日志（test_results/spot/<tag>/error_logs/
+# <测试>_<服务器>_jdk<N>.log）包含某条同名条目的 signature 子串，才算已知；同名用例签名不符算新失败。
+# OOM / 超时 / 无结果 / infra 失败一律不算已知（日志里不会出现这些签名）。
+#
+# 条目字段：
+#   test       测试类名（与 tests/e2e 下文件名一致，不带 .java）
+#   signature  失败签名：错误摘要中的稳定子串（stub 消息、panic 消息、diff 行等；不含行号 / 耗时 / 进程号）
+#   owner      负责分支 / 任务
+#   since      登记日期（YYYY-MM-DD）
+#   note       说明（可选）
+#
+# 维护：修复合入后删除对应条目（与修复同一提交或紧随其后）；新增条目须写明负责分支。
+# 同一测试可有多条（不同签名），任一命中即为已知。
+
+[[known]]
+test = "StockTrans"
+signature = "stub: L3 反射分派未覆盖 java/util/ArrayList.<alloc>:()V"
+owner = "c1d-t2（C1d T2：writeObject0 对象池 / 名字×镜像 / forName0 回退）"
+since = "2026-10-03"
+note = "L3 反射分派闭包缺 ArrayList 分配入口；T2 合入后应通过"
+
+[[known]]
+test = "StockTrans"
+signature = "stub: L3 反射分派未覆盖 java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V"
+owner = "c1d-t2（C1d T2：writeObject0 对象池 / 名字×镜像 / forName0 回退）"
+since = "2026-10-03"
+note = "序列化回调 ArrayList.writeObject 未入反射分派闭包；T2 合入后应通过"
+
+[[known]]
+test = "TestLocaleCurrency"
+signature = "sym=[CN¥]"
+owner = "expected 基线（CLDR 随 JDK 21 小版本漂移，见 tasks.md e2e 失败复核）"
+since = "2026-10-03"
+note = "CNY 符号 expected 为 ¥，实际 CN¥；基线缺陷，非生成器问题"
