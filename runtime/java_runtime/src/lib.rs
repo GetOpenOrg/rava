@@ -5,6 +5,7 @@ pub mod sync_model;
 pub mod gil;
 pub mod reflect_dispatch;
 pub mod error;
+pub mod exec_context;
 pub mod java;
 pub mod jdk;
 pub mod jdk_resources;
