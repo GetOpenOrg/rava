@@ -11,7 +11,7 @@
 //! - 候选名只保留目标类上实际声明的方法：逐个方法名按拼接段匹配（字面量逐字、候选集任取其一、任意串任意长），
 //!   因此不做笛卡尔积；全部段都是任意串（无任何字面量 / 候选集）时推不出，按原样处理（不补方法名）。
 
-use super::class_lookup::{event_at, is_invoke, site_of, Part};
+use super::class_lookup::{event_at, is_invoke, site_of, Gap, Part};
 use super::name_eval::Frame;
 use super::*;
 
@@ -23,6 +23,8 @@ const ARETURN: u8 = 0xb0;
 const CTOR: &str = "<init>";
 /// 穿过辅助方法的最大层数
 const MAX_DEPTH: u8 = 2;
+/// 辅助方法调用的派发目标数 / 返回值支数上限：超出按推不出处理
+const MAX_TARGETS: usize = 8;
 
 /// 名字 s 是否能由拼接段拼出
 pub(super) fn parts_match(parts: &[Part], s: &str) -> bool {
@@ -31,15 +33,17 @@ pub(super) fn parts_match(parts: &[Part], s: &str) -> bool {
         Part::Lit(l) => s.strip_prefix(&**l).is_some_and(|t| parts_match(rest, t)),
         Part::Any(set) => set.iter().any(|l| s.strip_prefix(&**l).is_some_and(|t| parts_match(rest, t))),
         Part::Wild => s.char_indices().map(|(i, _)| i).chain([s.len()]).any(|i| parts_match(rest, &s[i..])),
+        Part::Alt(alts) => alts.iter().any(|alt| parts_match(&[alt.as_slice(), rest].concat(), s)),
     }
 }
 
-/// 拼接段是否有任何约束（非全是任意串）
-fn constrained(parts: &[Part]) -> bool {
+/// 拼接段是否有任何约束（非全是任意串）；多选须每一支都有约束
+pub(super) fn constrained(parts: &[Part]) -> bool {
     parts.iter().any(|p| match p {
         Part::Lit(l) => !l.is_empty(),
         Part::Any(_) => true,
         Part::Wild => false,
+        Part::Alt(alts) => alts.iter().all(|a| constrained(a)),
     })
 }
 
@@ -131,7 +135,7 @@ impl<'a> Engine<'a> {
         }
         let owner = self.methods[m].key.owner.clone();
         let f = Frame { m: Some(m), a: &a, owner: &owner, up: None };
-        let parts = self.name_parts(&f, v, true, 0)?;
+        let parts = self.name_parts(&f, v, Gap::Method, 0)?;
         constrained(&parts).then_some(parts)
     }
 
@@ -151,6 +155,59 @@ impl<'a> Engine<'a> {
             return None;
         }
         let (cf, t) = self.ctx.exact_target(*opcode, mref, *iface)?;
+        self.target_analysis(&cf, &t)
+    }
+
+    /// 站点 o 的调用的各目标及其独立分析：唯一目标，或虚调用按接收者值集逐个选出的实现（接收者须在引擎帧里
+    /// 有值集——本帧或经形参逐层上溯；值集含 open、lambda / 手写对象时推不出；值集增长时站点重跑）
+    fn callee_targets(&mut self, f: &Frame, o: u32, depth: u8) -> Option<Vec<(Rc<Analysis>, String)>> {
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        let Event::Invoke { opcode, mref, iface, args, .. } = event_at(f.a, o, is_invoke)? else { return None };
+        if !mref.desc.ends_with(&format!(")L{STRING};")) {
+            return None;
+        }
+        if let Some((cf, t)) = self.ctx.exact_target(*opcode, mref, *iface) {
+            return Some(vec![self.target_analysis(&cf, &t)?]);
+        }
+        if !matches!(*opcode, classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE) {
+            return None;
+        }
+        let site = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, *iface)?;
+        let (rf, rv) = f.resolve(args.first()?);
+        let m = rf.m?;
+        if !matches!(rv, V::Ref { .. }) {
+            return None;
+        }
+        let owner = self.id(&mref.owner);
+        let fs = self.feeds(m, &rv, owner);
+        let s = self.value_set(&fs);
+        if !s.open.is_empty() || s.classes.is_empty() {
+            return None;
+        }
+        let mut keys: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for x in s.classes.iter() {
+            if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
+                return None;
+            }
+            let t = self.ty(x);
+            let sel = self.h.select(&self.names[t as usize], &site)?;
+            keys.insert(sel.key());
+            if keys.len() > MAX_TARGETS {
+                return None;
+            }
+        }
+        let mut out = vec![];
+        for (o, n, d) in keys {
+            let cf = self.h.class(&o)?;
+            out.push(self.target_analysis(&cf, &MemberRef { owner: o, name: n, desc: d })?);
+        }
+        Some(out)
+    }
+
+    /// 目标方法 t（在类 cf 上声明）的独立分析与其所在类；无字节码或分析保守时为 None
+    fn target_analysis(&self, cf: &ClassFile, t: &MemberRef) -> Option<(Rc<Analysis>, String)> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
@@ -169,15 +226,20 @@ impl<'a> Engine<'a> {
         (!ca.conservative).then(|| (Rc::new(ca), t.owner.clone()))
     }
 
-    /// 辅助方法的唯一返回值（及其分析、所在类）
-    pub(super) fn callee_return(&self, a: &Analysis, o: u32, depth: u8) -> Option<(Rc<Analysis>, V, String)> {
-        let (ca, owner) = self.callee_analysis(a, o, depth)?;
-        let mut rets = ca.events.iter().filter_map(|(_, e)| match e {
-            Event::Return(v) => Some(v.clone()),
-            _ => None,
-        });
-        let v = rets.next()?;
-        rets.next().is_none().then_some((ca, v, owner))
+    /// 辅助方法各目标的全部返回值（及其分析、所在类）
+    pub(super) fn callee_returns(&mut self, f: &Frame, o: u32, depth: u8) -> Option<Vec<(Rc<Analysis>, V, String)>> {
+        let mut out = vec![];
+        for (ca, owner) in self.callee_targets(f, o, depth)? {
+            let rets: Vec<V> = ca.events.iter().filter_map(|(_, e)| match e {
+                Event::Return(v) => Some(v.clone()),
+                _ => None,
+            }).collect();
+            if rets.is_empty() {
+                return None;
+            }
+            out.extend(rets.into_iter().map(|v| (ca.clone(), v, owner.clone())));
+        }
+        (out.len() <= MAX_TARGETS).then_some(out)
     }
 
     /// 辅助方法的返回值全是字符串常量（可合流）时的候选：该方法字节码里的全部 ldc 字符串（超集）
@@ -276,6 +338,21 @@ mod tests {
         assert!(!parts_match(&parts, "boxType"));
         assert!(constrained(&parts));
         assert!(!constrained(&[Part::Wild, lit(""), Part::Wild]));
+    }
+
+    /// 多选（辅助方法的各返回值）：任一支匹配即可；展开成不含多选的候选模式，超出上限为 None
+    #[test]
+    fn alternatives_match_and_expand() {
+        use super::super::class_lookup::expand;
+        let alt = Part::Alt(vec![vec![lit("L")], vec![lit("I"), Part::Wild]]);
+        let parts = [alt.clone(), any(&["0", "1"])];
+        assert!(parts_match(&parts, "L0") && parts_match(&parts, "Ix1") && !parts_match(&parts, "J0"));
+        assert!(constrained(&parts));
+        assert!(!constrained(&[Part::Alt(vec![vec![lit("a")], vec![Part::Wild]])]));
+        let pats = expand(&[lit("p"), alt]).expect("未超上限");
+        assert_eq!(pats, vec![vec![lit("p"), lit("L")], vec![lit("p"), lit("I"), Part::Wild]]);
+        let wide = Part::Alt((0..9).map(|i| vec![lit(&i.to_string())]).collect());
+        assert!(expand(&[wide.clone(), wide]).is_none());
     }
 
     #[test]

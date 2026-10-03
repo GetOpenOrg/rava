@@ -88,6 +88,8 @@ pub struct TypedCall {
     pub fresh: Option<TypeRef>,
     /// 方法调用接收者的静态类型（语法推断；推断回调目标用）
     pub srecv: Option<SType>,
+    /// 各实参的字符串字面量值（见 `syntax::str_lit`；非字面量为 None）
+    pub lits: Vec<Option<String>>,
 }
 
 /// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型 /
@@ -120,6 +122,12 @@ pub struct FieldAccess {
     pub value_self: bool,
     /// static 写访问器路径调用 `T::set_<字段>(v)`：`recv` 为 `T`；T 上无此字段时是同名的手写辅助函数，不算访问
     pub path: bool,
+    /// 写入值取自按名读（`o.0.__unsafe_ref_get("f")`，经 unwrap / 转换 / `?` / 局部 let 传递）的字段名 `f`：
+    /// 值即读取接收者上该字段的内容（转换只约束类型，不产生新对象；语法推得的转换目标类型不作写入值）
+    pub value_src: Option<String>,
+    /// 按名读的接收者是本 fn 的形参：其序号（含接收者，即被调 Java 方法的形参序号）。经同文件被调 fn 传递来的访问不算；
+    /// None 时接收者未知，同名字段全部作来源
+    pub value_src_param: Option<u16>,
 }
 
 #[derive(Debug, Default, Clone)]

@@ -458,6 +458,19 @@ class_lookups = [
     "java/lang/Class.forName:(Ljava/lang/String;)Ljava/lang/Class;",
     "java/lang/Class.forName:(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
 ]
+# 名字里推不出的段记为任意串：含任意串的候选按闭包里的类名匹配（运行期按名只取得到生成范围内的类——VM 只登记
+# 生成的类，见 class_impl.rs `forName0` / `__is_known_class`），新类进入闭包时站点重跑；整条名字无任何字面量约束时
+# 仍按推不出处理。名字是辅助方法的返回值时，虚调用按接收者值集逐个选出实现，各返回值各成一支
+# 按名加载（不初始化，返回类镜像或 null）：解析同按名取类，结果只取镜像、不初始化（ClassSpecializer 按物种名
+# 加载预生成物种类）
+class_loads = [
+    "jdk/internal/loader/BootLoader.loadClassOrNull:(Ljava/lang/String;)Ljava/lang/Class;",
+]
+# 手写类镜像构造（`宿主类.fn 名`，第 0 个实参是 `/` 分隔的 binary name）：手写体里实参为字符串字面量的调用，
+# 结果即该字面量所指类的镜像（只取镜像、不初始化）；任一调用的实参不是字面量时，该手写成员按 fn 的一般返回值处理
+hw_mirror_by_name = [
+    "java/lang/Class.for_class",
+]
 # 类名取值：返回接收者镜像所指类的 binary name（`.` 分隔，数组为 `[L…;` 描述符形式）/ 简单名（InnerClasses 的
 # 内部名，匿名类为空串；数组为元素简单名加 `[]`）。按名取类的拼接段是这些调用的结果时，候选取接收者镜像值集
 # 所指各类的名字；接收者含 open / 非镜像 / 基本类型镜像时该段推不出
@@ -478,6 +491,7 @@ instantiators = [
 #   随后在其上的按名查找（method_lookups）点名支持类的成员
 [facts.reflect.defined_classes]
 "java/lang/invoke/MethodHandleImpl$BindCaller.makeInjectedInvoker:(Ljava/lang/Class;)Ljava/lang/Class;" = "java/lang/invoke/InjectedInvokerDyn"
+"java/lang/invoke/ClassSpecializer$Factory.generateConcreteSpeciesCode:(Ljava/lang/String;Ljava/lang/invoke/ClassSpecializer$SpeciesData;)Ljava/lang/Class;" = "java/lang/invoke/BoundMethodHandle$Species_Dyn"
 
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]

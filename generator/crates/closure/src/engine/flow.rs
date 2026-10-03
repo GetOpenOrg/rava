@@ -98,6 +98,9 @@ impl<'a> Engine<'a> {
         if self.self_fields.contains_key(&n) {
             self.self_field_objs(n, delta);
         }
+        if self.name_reads.contains_key(&n) {
+            self.name_read_objs(n, delta);
+        }
         if let Some(&(k, e)) = self.enum_recv.get(&n) {
             self.rpending.push((k, e, delta.clone()));
         }
@@ -348,6 +351,9 @@ impl<'a> Engine<'a> {
             }
             for p in self.hw_read_names.get(&key.name).cloned().unwrap_or_default() {
                 self.flow(Node::F(fi), p, tid);
+            }
+            for (p, t) in self.hw_copy_names.get(&key.name).cloned().unwrap_or_default() {
+                self.flow(Node::F(fi), p, t);
             }
             if self.ctx.fopen_names.borrow().contains(&key.name) {
                 self.open_static(&key);

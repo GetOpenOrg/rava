@@ -71,7 +71,8 @@ impl MethodHandleNatives {
             reference.0.__unsafe_ref_get(name).unwrap_or_else(|| stub(name))
         };
         let mods = reference.0.__unsafe_int_cell("modifiers").map(|c| c.get()).unwrap_or_else(|| stub("modifiers"));
-        let clazz: Class = ref_field("clazz").try_cast::<Class>("java/lang/Class")?;
+        // 声明类按名读字面量字段名：分析器据此把写入 MemberName.clazz 的值接为反射对象 clazz 字段的内容
+        let clazz: Class = reference.0.__unsafe_ref_get("clazz").unwrap_or_else(|| stub("clazz")).try_cast::<Class>("java/lang/Class")?;
         match reference.0.__class_name() {
             "java/lang/reflect/Constructor" => {
                 m.__set_clazz(clazz);
