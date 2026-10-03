@@ -649,6 +649,10 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   `getDeclaredConstructor ← open(Class)`、`ProxyGenerator.addProxyMethod`；新增 `MemberName.<init>(Class)`「按名查字段：目标类推不出、
   名字为拼接」——`getSimpleName` 现可拆段（`Part::Alt`），而目标 `type.getDeclaringClass()` 经 native `getDeclaringClass0` 为 open；
   该调用（`MemberName.init`）并非按名查字段，属 field_lookup「Class + String 形参」形状判定的假阳性，类数无影响，登记不做。
+- 抽查 c1db3-2eb389f1 8/9：TestMethodHandleStaticInit 运行期 `NoSuchFieldError: value`——`findStaticGetter` 是只读入口，
+  不在按名写字段的 `name_resolvers` 里，`GetterTarget` 只到 type 层（无 `<clinit>`、无字段、无反射字段臂）。修正：按名查字段
+  （`field_lookup`）查到的静态字段，声明类按静态字段句柄处理（`static_field_owner`：初始化 + 句柄 / 反射链接目标）。
+  测量集类 / 方法不变（TestMethodHandleStaticInit 方法 17000 → 17001、clinit 2541 → 2542）。
 - 待服务器 e2e：手写层 `class_impl.rs`（`__method_from_meta`）与 `method_handle_natives_impl.rs`（`init` 按名读 `clazz`）。
 
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）

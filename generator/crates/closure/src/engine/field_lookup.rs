@@ -7,6 +7,8 @@
 //!   同按名查方法）；
 //! - 目标类：名字实参之前的 Class 常量实参、Class 形参与接收者值集里类镜像所指的类（名字之后的 Class 是字段类型）；值集含所指未知的 Class（open、非镜像值）时
 //!   目标类推不出：字面量名按名字点名（任意类的同名字段），拼接名记为反射缺口。
+//! - 查到的静态字段：声明类按静态字段句柄处理（初始化并记为句柄 / 反射链接目标，`static_field_owner`），覆盖
+//!   `findStaticGetter` 等只读入口（按名写字段的 `name_resolvers` 只列写入口）。
 
 use super::class_lookup::{event_at, Part};
 use super::sealed::is_field;
@@ -47,17 +49,26 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
+        let mut found: Vec<(String, String)> = vec![];
         for c in &targets {
             for name in &names {
                 if let Some((decl, _)) = self.field_by_name(c, name) {
-                    self.reflect_fields.insert((decl, name.to_string()));
+                    found.push((decl, name.to_string()));
                 }
             }
             for parts in &patterns {
-                for (decl, name) in self.fields_matching(c, parts) {
-                    self.reflect_fields.insert((decl, name));
-                }
+                found.extend(self.fields_matching(c, parts));
             }
+        }
+        // 查到的静态字段经句柄 / 反射访问（getStatic / putStatic 句柄、Field.get / set）时声明类初始化
+        // （JVMS §5.5；findStaticGetter 这类只读入口不在按名写字段的 name_resolvers 里，由此覆盖）
+        let via = Via::method("field-name", m, Some(off));
+        for (decl, name) in found {
+            let is_static = self.h.class(&decl).is_some_and(|cf| cf.fields.iter().any(|f| f.name == name && f.is_static()));
+            if is_static {
+                self.static_field_owner(&decl, via.clone());
+            }
+            self.reflect_fields.insert((decl, name));
         }
         if unknown {
             self.reflect_field_names.extend(names.iter().map(|n| n.to_string()));
