@@ -7,23 +7,23 @@
 -  82 jars — java.lang.String
 -  81 jars — java.lang.Class
 -  79 jars — java.lang.StringBuilder
--  79 jars — java.util.Map
 -  79 jars — java.lang.System
--  78 jars — java.lang.Throwable
+-  79 jars — java.util.Map
 -  78 jars — java.util.Iterator
+-  78 jars — java.lang.Throwable
 -  77 jars — java.io.IOException
 -  76 jars — java.util.ArrayList
 -  76 jars — java.util.List
--  75 jars — java.lang.IllegalArgumentException
 -  75 jars — java.lang.IllegalStateException
--  74 jars — java.util.Set
+-  75 jars — java.lang.IllegalArgumentException
 -  74 jars — java.lang.Exception
+-  74 jars — java.util.Set
 -  73 jars — java.lang.Boolean
--  71 jars — java.lang.reflect
 -  71 jars — java.lang.Character
+-  71 jars — java.lang.reflect
 -  70 jars — java.lang.Integer
--  69 jars — java.util.Arrays
 -  69 jars — java.lang.RuntimeException
+-  69 jars — java.util.Arrays
 -  68 jars — java.util.Collections
 -  67 jars — java.util.HashMap
 -  66 jars — java.lang.invoke
@@ -566,10 +566,10 @@
 
 ## 四、缺口对照（默认产出；方法名级启发式）
 
-- ≥10 jar（核心共用层）：方法名 413，零命中 11，覆盖 97%
-- 5-9 jar（中层）：方法名 381，零命中 78，覆盖 79%
+- ≥10 jar（核心共用层）：方法名 413，零命中 10，覆盖 97%
+- 5-9 jar（中层）：方法名 381，零命中 71，覆盖 81%
 - 3-4 jar：方法名 456，零命中 269，覆盖 41%
-- 1-2 jar（长尾）：方法名 2925，零命中 2574，覆盖 12%
+- 1-2 jar（长尾）：方法名 2925，零命中 2572，覆盖 12%
 
 ### 4a. gated 归属（能力判据项，不由 e2e 追赶）
 
@@ -584,21 +584,14 @@
 - C-MT 锁真并发语义：3 个（java.util.concurrent.locks.ReadWriteLock.readLock, java.util.concurrent.locks.ReadWriteLock.writeLock, java.util.concurrent.locks.ReentrantLock.tryLock）
 - 安全管理器（JDK17+ 已弃用，检查面归域外）：3 个（java.lang.SecurityManager.checkPermission, java.lang.SecurityManager.checkSetFactory, java.lang.SecurityManager.checkPackageAccess）
 - 跨机默认 locale（期望文件不可入库）：1 个（java.util.Locale.getDefault）
+- indy 运行模型（record ObjectMethods 引导，运行模型域）：1 个（java.lang.runtime.ObjectMethods.bootstrap）
 - 跨机默认时区：1 个（java.time.ZoneId.systemDefault）
 - K10 资源枚举：1 个（java.lang.ClassLoader.getSystemResources）
 - K9 SSL 工厂：1 个（javax.net.ServerSocketFactory.createServerSocket）
 
 ### 4b. 可行动缺口（≥5 jar 且未归类——按 jar 数排序，供人工裁决补测）
 
--  22 jars — java.lang.Character.isUpperCase(I)Z
--   7 jars — java.util.Arrays.setAll([Ljava/lang/Object;Ljava/util/function/IntFunction;)V
--   7 jars — java.util.ListIterator.nextIndex()I
--   6 jars — java.io.ObjectInputStream.resolveClass(Ljava/io/ObjectStreamClass;)Ljava/lang/Class;
--   6 jars — java.lang.runtime.ObjectMethods.bootstrap(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/TypeDescriptor;Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/invoke/MethodHandle;)Ljava/lang/Object;
--   6 jars — java.util.ResourceBundle.getKeys()Ljava/util/Enumeration;
--   6 jars — javax.xml.transform.dom.DOMResult.getNode()Lorg/w3c/dom/Node;
--   5 jars — java.io.RandomAccessFile.getChannel()Ljava/nio/channels/FileChannel;
--   5 jars — java.lang.Throwable.setStackTrace([Ljava/lang/StackTraceElement;)V
+- （无——本轮阈值下无可行动缺口）
 
 ### 4c. 静态字段零命中
 
@@ -633,4 +626,4 @@
 -   2 jars — java.nio.file.StandardOpenOption.SYNCLjava/nio/file/StandardOpenOption;
 -   2 jars — java.time.temporal.ChronoUnit.MONTHSLjava/time/temporal/ChronoUnit;
 
-> 总结：gated 509 个；可行动缺口（≥5 jar）9 个；静态字段零命中 745 个。
+> 总结：gated 510 个；可行动缺口（≥5 jar）0 个；静态字段零命中 745 个。

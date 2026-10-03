@@ -69,6 +69,7 @@ GATED_RULES = [
                            "getImplClass", "getFunctionalInterfaceMethodSignature",
                            "getFunctionalInterfaceMethodName", "getFunctionalInterfaceClass",
                            "getCapturedArg"}, "indy 运行模型（闭包/字符串拼接引导，运行模型域）"),
+    ("java/lang/runtime", {"bootstrap"}, "indy 运行模型（record ObjectMethods 引导，运行模型域）"),
     ("java/util/Locale", {"getDefault", "setDefault"}, "跨机默认 locale（期望文件不可入库）"),
     ("java/util/TimeZone", {"getDefault"}, "跨机默认时区"),
     ("java/time/ZoneId", {"systemDefault"}, "跨机默认时区"),
