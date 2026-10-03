@@ -20,9 +20,14 @@ pub struct SeedState {
     /// 已产出束对象的（手写触发方法节点序号, 束族基名）
     locale_fed: StdSet<(usize, String)>,
     jca_services: Option<BTreeSet<Service>>,
+    /// 请求点上求得的算法键
     jca_algos: StdSet<String>,
+    /// 请求点算法名推不出的服务类型
+    jca_any: StdSet<String>,
     jca_aliases: StdMap<String, StdSet<String>>,
     jca_scanned: HashSet<usize>,
+    /// 服务请求点：(方法, 偏移, 服务类型)
+    jca_sites: Vec<(usize, u32, String)>,
     image_done: BTreeSet<String>,
     family_done: BTreeSet<String>,
 
@@ -161,28 +166,15 @@ impl<'a> Engine<'a> {
         }
         if self.seeds.jca_services.is_none() {
             self.seeds.jca_services = Some(jca::extract_services(cfg, self.cp));
-            self.seeds.jca_algos = jca::user_algorithms(&self.user_classes());
             self.seeds.jca_aliases = jca::alias_groups(cfg, self.cp);
         }
         let services = self.seeds.jca_services.take().unwrap_or_default();
-        let types: StdSet<&str> = services.iter().map(|s| s.ty.as_str()).collect();
-        // 可达 JDK 方法里 engine getInstance 调用的字符串实参（JDK 自身按名取服务）
-        for i in 0..self.methods.len() {
-            if !self.seeds.jca_scanned.insert(i) {
-                continue;
-            }
-            let key = &self.methods[i].key;
-            if self.cp.origin(&key.owner) == Some(Origin::User) {
-                continue;
-            }
-            let Some(cf) = self.cp.get(&key.owner) else { continue };
-            if let Some(code) = cf.method(&key.name, &key.desc).and_then(|m| m.code.as_ref()) {
-                jca::engine_call_strings(&code.insns, &types, &mut self.seeds.jca_algos);
-            }
-        }
+        self.jca_requests(&services);
         let forced: StdSet<(String, String)> = cfg.defaults.iter().filter(|(t, _, _)| reached.contains(t)).map(|(_, t, a)| (t.clone(), a.clone())).collect();
         let live: StdSet<String> = self.methods.values().map(|m| m.key.owner.rsplit('/').next().unwrap_or(&m.key.owner).to_string()).collect();
-        let picked: Vec<Service> = jca::select(&services, &self.seeds.jca_algos, &live, &self.seeds.jca_aliases, &forced)
+        let registered: StdSet<&str> = self.methods.values().map(|m| m.key.owner.as_str()).collect();
+        let providers: StdSet<String> = cfg.providers.iter().filter(|p| registered.contains(p.1.as_str())).map(|p| p.0.clone()).collect();
+        let picked: Vec<Service> = jca::select(&services, &self.seeds.jca_algos, &self.seeds.jca_any, &providers, &live, &self.seeds.jca_aliases, &forced)
             .into_iter()
             .filter(|s| !self.seeds.jca.contains(*s))
             .cloned()
@@ -207,6 +199,43 @@ impl<'a> Engine<'a> {
                 }
             }
             self.seeds.jca.insert(s);
+        }
+    }
+
+    /// 服务请求点的算法名：新可达方法登记请求点，每轮在请求点所在方法的当前分析里重求算法实参的全部名字
+    /// （集合只并不减；名字来源槽增长时请求点作为读者重跑，随后的补种轮再求）
+    fn jca_requests(&mut self, services: &BTreeSet<Service>) {
+        let types: StdSet<&str> = services.iter().map(|s| s.ty.as_str()).collect();
+        let string_desc = format!("L{STRING};");
+        for i in 0..self.methods.len() {
+            if !self.seeds.jca_scanned.insert(i) {
+                continue;
+            }
+            let key = &self.methods[i].key;
+            let Some(cf) = self.cp.get(&key.owner) else { continue };
+            if let Some(code) = cf.method(&key.name, &key.desc).and_then(|m| m.code.as_ref()) {
+                for (off, ty) in jca::request_sites(&code.insns, &types, &string_desc) {
+                    self.seeds.jca_sites.push((i, off, ty));
+                }
+            }
+        }
+        for (m, off, ty) in self.seeds.jca_sites.clone() {
+            if self.seeds.jca_any.contains(&ty) {
+                continue;
+            }
+            // 方法正待重分析 / 请求点在当前分析里不可达：本轮不计
+            let Some(a) = self.methods[m].analysis.clone() else { continue };
+            let Some(Event::Invoke { args, .. }) = class_lookup::event_at(&a, off, class_lookup::is_invoke) else { continue };
+            let Some(v) = args.first().cloned() else { continue };
+            let prev = self.cur_site.replace((m, off));
+            let keys = self.names_of(m, &v);
+            self.cur_site = prev;
+            match keys {
+                keyed::Keys::Any => {
+                    self.seeds.jca_any.insert(ty);
+                }
+                keyed::Keys::Set(names) => self.seeds.jca_algos.extend(names.iter().flat_map(|n| jca::algorithm_keys(n))),
+            }
         }
     }
 

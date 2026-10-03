@@ -36,16 +36,8 @@ const FILL_LIVE_STACK_FRAMES: i64 = 0x100;
 const STACK_WALKER: &str = "java/lang/StackWalker";
 const ABSTRACT_STACK_WALKER: &str = "java/lang/StackStreamFactory$AbstractStackWalker";
 
-/// 一条锚定的帧流：快照与下一个待检视帧的下标。
-struct Anchored {
-    frames: Vec<JavaFrame>,
-    cursor: usize,
-}
-
-thread_local! {
-    static ANCHORS: RefCell<HashMap<i64, Anchored>> = RefCell::new(HashMap::new());
-    static NEXT_ANCHOR: Cell<i64> = const { Cell::new(1) };
-}
+/// 锚定的帧流随执行流存放（执行上下文块，a3-T3）：遍历回调期间虚拟线程可能换载体。
+use crate::vm_stack::AnchoredWalk as Anchored;
 
 fn _internal_error(msg: &str) -> JvmError {
     match crate::java::lang::InternalError::new_str(String::from(msg)) {
@@ -153,14 +145,15 @@ where
         if end_index - start_index < 1 {
             return Err(_internal_error("stack walk: decode failed"));
         }
-        let anchor = NEXT_ANCHOR.with(|n| {
-            let a = n.get();
-            n.set(if a + 1 == -1 || a + 1 == 0 { 1 } else { a + 1 });
+        let st = crate::exec_context::state();
+        let anchor = {
+            let a = st.next_walk_anchor.get().max(1);
+            st.next_walk_anchor.set(if a + 1 == -1 || a + 1 == 0 { 1 } else { a + 1 });
             a
-        });
-        ANCHORS.with(|t| t.borrow_mut().insert(anchor, stream));
+        };
+        crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
         let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
-        ANCHORS.with(|t| t.borrow_mut().remove(&anchor));
+        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
         Ok(R::from(result?))
     }
 
@@ -169,7 +162,7 @@ where
     #[jvm_native]
     pub fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
-        let Some(mut stream) = ANCHORS.with(|t| t.borrow_mut().remove(&anchor)) else {
+        let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
             return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
         };
         let result = (|| {
@@ -186,7 +179,7 @@ where
             }
             Ok(end_index)
         })();
-        ANCHORS.with(|t| t.borrow_mut().insert(anchor, stream));
+        crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
         result
     }
 }

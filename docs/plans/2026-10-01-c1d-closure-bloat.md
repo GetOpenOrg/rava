@@ -1401,7 +1401,7 @@ native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `s
 | 原因 | 计数来源 |
 |---|---|
 | MONITOR（4） | `monitor.rs` 的 `enter` / `exit`（含 `synchronized` 方法与 `Object.wait` 期间仍持有的重入层数）在 Continuation 内执行时 ±1；持锁数 > 0 即 pinned。监视器所有者仍按 OS 线程 `ThreadId` 记录——持锁期间必然 pinned、不会换载体，所以所有者标识保持有效 |
-| NATIVE（3） | 栈上有 native 帧：`#[jvm_native]` 方法体经宏包裹进出 ±1（只计数、无其它开销）；类初始化协议执行 `<clinit>` 期间 ±1（HotSpot 由 VM 帧调用 `<clinit>`，同为 NATIVE） |
+| NATIVE（3） | 栈上有 native 帧：`#[jvm_native]` 方法体经宏包裹进出 ±1（只计数、无其它开销）；类初始化协议执行 `<clinit>` 期间 ±1（HotSpot 由 VM 帧调用 `<clinit>`，同为 NATIVE）。`#[jvm_native(unpinned)]` 豁免 HotSpot 不留 native 帧的入口：`Continuation` 自身的 5 个 VM 入口与方法句柄签名多态成员（`invokeBasic` / `invokeExact` / `invoke` / `linkTo*`，内建适配器直接跳转） |
 | CRITICAL_SECTION（2） | `Continuation.pin()` / `unpin()` 计数 |
 
 判定次序与 HotSpot `is_pinned0` 相同：CRITICAL_SECTION → MONITOR → NATIVE，取第一个成立的。pinned 时 `VirtualThread` 的字节码在载体上停泊
@@ -1444,9 +1444,9 @@ native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `s
 |---|---|---|---|---|
 | **a3-T1** | `rava_coro`：slab 栈（多栈预留 + 热 / 冷槽 + 空块释放）、软件栈界与切换时随执行流换出、条件硬件 guard、aarch64 / x86_64 切换汇编、入口蹦床、guard 故障识别 | 新 crate `runtime/rava_coro/`（每文件 ≤600 行） | 无 | crate 单测：10⁶ 次往返切换正确且单次切换 ≤50 ns（release，本机 aarch64 与服务器 x86_64 各测一次）；**缺省 `vm.max_map_count`（65530）下** 10⁵ 个协程同时挂起，映射增量 ≤256、slab 块 ≤256；全部完成后 RSS（Linux 计入 VmPTE 页表，macOS 物理足迹）回落到起点 +16 MiB 以内、slab 块 ≤1；callee-saved 寄存器（含 d8–d15、MXCSR）逐个被破坏后恢复的检查全过；软件栈界：带检查点的递归在栈界 ±1 页处判定耗尽、YellowZone 放开后可再用 32 KiB、栈界随 `switch` 换出换入；硬件 guard 启用时（macOS、Linux ≥ 6.13）子进程（串行）退出码为 SIGABRT、stderr 含 overflowed |
 | **a3-T1b** | Java 栈溢出语义：宏在返回 `Result` 的 Java 方法序言注入 `__stack_check()?`；`JvmError::stack_overflow`（YellowZone 内构造 `StackOverflowError`）；平台线程入口 `init_platform_thread`；`StackOverflowError` 经闭包 VM 规则 `stack-check` 入闭包 | `rava_macros_core`（`block/class_init.rs` 同位注入）、`error.rs`、`thread_impl.rs`、`closure/src/engine/vmrules.rs` | ◀ T1 | 平台线程与协程内无界递归都抛可捕获的 `StackOverflowError`，捕获后继续执行；e2e TestArraysDeepOps 通过；TestVirtualThreadCarrier 含虚拟线程内递归 SOE 捕获一项；release 下 roundtrip 切换仍 ≤50 ns |
-| **a3-T2** | `Continuation` 6 个 native、执行上下文块、三类 pin 计数（`monitor.rs`、`#[jvm_native]` 宏包裹、类初始化协议） | `jdk/internal/vm/continuation_impl.rs`；新执行上下文模块；`monitor.rs`；`gil.rs`（类初始化段）；`rava_macros` | ◀ T1 | `continuation_impl.rs` 中 `#[jvm_native]` 6、`#[jvm_boundary]` 0；`non_native_overrides` 0；边界用例 **TestContinuationPinned**（`synchronized` 内 park、`Continuation.pin` 期间 yield 走 onPinned、native 回调中 park 三种 pinned 情形，均正确完成）与 JDK 输出一致 |
+| **a3-T2** | `Continuation` 6 个 native、执行上下文块、三类 pin 计数（`monitor.rs`、`#[jvm_native]` 宏包裹、类初始化协议） | `jdk/internal/vm/continuation_impl.rs`；新执行上下文模块；`monitor.rs`；`gil.rs`（类初始化段）；`rava_macros` | ◀ T1 | `continuation_impl.rs` 中 `#[jvm_native]` 6、`#[jvm_boundary]` 0；`non_native_overrides` 0；抽查 HelloWorld、TestSynchronized、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool 与一个含 `<clinit>` 的例不回归（计数器挂在 monitor / native 包裹 / 类初始化上）。方案 A 在 T4 前仍在，虚拟线程不走 Continuation，pinned 的 e2e 随 T4 验收；CRITICAL_SECTION（`Continuation.pin` / `unpin`）按终态语义实现，**公开 API 不可达、无 e2e**：refjdk 21 java.base 字节码中 `Continuation.pin` / `unpin` 只出现在 `Continuation` 自身，而 rava 的 javac 固定 `--release 21`、与 `--add-exports` 互斥，用户代码无法直接调用 `jdk.internal.vm.Continuation`；正确性由 `rava_coro` 单测与代码审阅保证（2026-10-03 协调者同意改口径） |
 | **a3-T3** | 线程身份两槽、执行级状态迁入执行上下文块、TLS 访问入口、thread_local 守护检查 | `thread_impl.rs`、`stack_stream_factory_abstract_stack_walker_impl.rs`、`reflect_dispatch.rs`、`sync_model.rs` | 与 T2 并行，T4 前合入 | `thread_local!` 定义：runtime 中只余执行上下文模块 1 处 + `thread_impl.rs` 3 个载体槽，守护检查通过；TestStackWalkerFrames、TestReflectFieldMethod、TestThreadStates 3/3 |
-| **a3-T4** | 删方案 A：`VirtualThread` 10 个承载方法删除（只留 6 个 JVMTI / registerNatives `#[jvm_native]`）；`VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`；调度器按字节码翻译 | `virtual_thread_impl.rs`、`continuation_support_impl.rs`、`closure.toml` | ◀ T2、T3 | HelloWorld 审计 VirtualThread 10 → 0；`closure.toml` / `vm_intrinsics.toml` 中 `VirtualThread` 0 次；HelloWorld 闭包 ≤498 类且 `VirtualThread.<clinit>` 不在闭包内（`--trace-class` 确认）；e2e TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized 7/7；边界用例 **TestVirtualThreadCarrier**（让出后在另一载体恢复：`currentThread()` 身份、`ThreadLocal` / `InheritableThreadLocal` 值、`isVirtual()`、中断状态、`join(Duration)` 超时，输出与载体编号无关）与 JDK 一致 |
+| **a3-T4** | 删方案 A：`VirtualThread` 10 个承载方法删除（只留 6 个 JVMTI / registerNatives `#[jvm_native]`）；`VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`；调度器按字节码翻译 | `virtual_thread_impl.rs`、`continuation_support_impl.rs`、`closure.toml` | ◀ T2、T3 | HelloWorld 审计 VirtualThread 10 → 0；`closure.toml` / `vm_intrinsics.toml` 中 `VirtualThread` 0 次；HelloWorld 闭包 ≤498 类且 `VirtualThread.<clinit>` 不在闭包内（`--trace-class` 确认）；e2e TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized 7/7；边界用例 **TestContinuationPinned**（虚拟线程在 `synchronized` 内 sleep / park——MONITOR；在 `<clinit>` 内 sleep——NATIVE；两种情形均在载体上停泊并正确完成，expected 取参考 JDK 两次一致的运行）与 **TestVirtualThreadCarrier**（让出后在另一载体恢复：`currentThread()` 身份、`ThreadLocal` / `InheritableThreadLocal` 值、`isVirtual()`、中断状态、`join(Duration)` 超时，输出与载体编号无关）与 JDK 一致 |
 | **a3-T5** | panic 与栈溢出：蹦床 `catch_unwind` / `resume_unwind`、回溯终止、`sigaltstack` 处理器 | `rava_coro`；`lib.rs`（`create_java_vm`） | ◀ T1 | 子进程测试（串行）：协程内 panic 退出码 101、stderr 与平台线程 panic 同形；硬件 guard 启用时协程内无检查点无限递归退出为 SIGABRT 且 stderr 含 overflowed；`panic = "unwind"` 构建下 crate 单测：协程内 panic 在载体上被 `catch_unwind` 捕获 1/1 |
 | **a3-T6** | 规模验收 | 边界用例 **TestVirtualThreadScale**（10⁵ 个虚拟线程各 `sleep` 后汇总，进入常规 e2e）；百万规模用例放 `tests/perf/`，服务器单独作业 | ◀ T4、T5 | TestVirtualThreadScale：10⁵ 全部完成、峰值 RSS ≤2 GiB、墙钟 ≤10 s；百万作业（缺省内核参数，不调 sysctl）：10⁶ 个虚拟线程同时处于 `sleep` 停泊，全部完成，峰值 RSS ≤24 GiB（每个停泊线程已提交栈 ≤16 KiB + 堆对象），墙钟 ≤120 s；载体 OS 线程数 = `availableProcessors` + `UNPARKER` 1 条 |
 
@@ -1514,3 +1514,69 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   实例调用循环 101 → 114 ms（+13%）；dev fib 83 → 142 ms、循环 679 → 1083 ms（+60%）；CarmichaelPseudoprimes（dev，
   printf 为主）user 0.12 → 0.14 s。开销来自每个方法入口一次不内联的线程局部读 + 比较（检查本身 1.28 ns，`check_cost`）。
 - 残余：运行时手写代码无界递归审计（§21.8.2 残余风险）尚未做，列入 T1b 后续。
+
+**T1b-2 叶子方法省略入口栈检查（2026-10-03）**
+- 判定在生成器、只看字节码：`Code::is_leaf`（无 invokevirtual / invokespecial / invokestatic / invokeinterface /
+  invokedynamic）且字节码 ≤512 字节（`LEAF_MAX_CODE_LEN`：省掉检查后叶子帧落在检查点之间的 `SHADOW` 余量内，限长保证
+  该帧远小于 64 KiB）；手写体不计。生成器在 `#[java_method(..)]` 上标 `leaf = "true"`，宏 `entry_checks` 见标注只留
+  空接收者检查。无类名字面量。
+- **入口须唯一对应本体**（`leaf_entry`）：只对 static / private / 构造器 / `<clinit>` / final 方法、或承载类为 final 的方法
+  省略。可覆盖的虚方法即使本体是叶子也保留检查——其 wrapper 入口分派到子类非叶子覆盖体时，「基类叶子声明 + 子类递归
+  覆盖」构成的递归环上将没有任何检查点（`self.next()` 经基类 wrapper → vtable → 子类体 → 基类 wrapper …），无界递归直接
+  撞 guard / 越界。开放世界下不以「当前无覆盖」为据省略。接口载体分派的检查不变。
+- 单测：`rava_macros_core` `class_init::tests` 3 项（非叶子有检查、叶子只留空接收者检查、非 Result 无检查）；
+  生成器 `attrs::tests::leaf_body_from_bytecode`（5 种调用指令、长度上限）、`leaf_entry_requires_exact_target`（可覆盖虚方法
+  不省、final 类 / final / private / static 省、无体不省）。
+- 边界 e2e **TestLeafStackOverflow**（`49_exceptions_deep`）：static 叶子、private 叶子、final 类叶子 getter、基类叶子被子类递归
+  覆盖（经基类引用）、接口 default 叶子被实现类递归覆盖（经接口引用）五种递归各两轮，均抛可捕获的 `StackOverflowError`
+  且深度 >500，之后叶子方法正常调用；expected 取 refjdk 21。生成树中用户类标 `leaf` 的恰为 inc / bump / Box.get / Box.set，
+  `Node.next` 与 `Step.step` 未标。该例 JDK + 用户入口中标 `leaf` 的约 1620 个（占 `java_method` 标注约 9%）。
+- 调用基准（release，本机 aarch64，各 3 轮）：
+
+  | 配置 | fib(32) | 5×10⁷ 实例调用 |
+  |---|---|---|
+  | 检查全关（`__stack_check` 恒 Ok） | 9–10 ms | 101–104 ms |
+  | 检查全开（T1b） | 17–20 ms | 114–123 ms |
+  | T1b-2（`add` 为非 final 虚方法，保留检查） | 16–18 ms | 114 ms |
+  | T1b-2，`add` 改 `final`（`CallBenchFinal`） | 17–19 ms | 101–104 ms |
+
+  fib 递归体本身不是叶子，开销不变；叶子入口的开销归零（循环回到检查全关水平）。
+
+**T2 Continuation native 与 pin 计数（2026-10-03）**
+- 判定逻辑与运行时解耦：`rava_coro/src/pins.rs` 的 `Pins`（三类计数 + 外层链 + 作用域身份；`yield_reason` 同 HotSpot
+  `freeze_internal` 次序，`scope_reason` 同 `is_pinned0` 逐层规则；MONITOR 取载体上整条执行流链之和，对应
+  `held_monitor_count` 按线程计）。单测 `tests/pins.rs` 7 项：根执行流 pin 无操作、临界区计数与「pin underflow」、
+  三类原因次序、外层持锁 pin 住内层让出、作用域逐层查找、卸载后换载体重挂，以及在真实协程上「三种 pin 各不切换、
+  解除后让出并在载体上恢复」的往返——CRITICAL_SECTION 无 e2e 的正确性依据。
+- 执行上下文块：新模块 `java_runtime/src/exec_context.rs`（`ExecContext { pins }`，repr(C)；平台线程块与当前块指针是本模块
+  唯一的 `thread_local!`，取址函数 `current()` 不内联）。`mount` / `unmount` 由 `enterSpecial` 在切入前 / 切回后于同一载体上调用，
+  协程侧不碰线程局部。T3 迁入的执行级状态加在本块上。
+- 计数挂点：`monitor.rs` 的 `enter` / `exit` 与 `MonitorGuard`（成功进出才计）；`gil.rs` 的 `clinit_enter`（返回 `Run` 时）/
+  `clinit_exit`；`#[jvm_native]` 宏（`rava_macros/src/native_attr.rs`）在方法体首句插 `NativeFrame` 守卫，参数
+  `unpinned` 豁免（见 §21.8.3 表）。守卫缓存块地址：计数 > 0 期间执行流不换载体。
+- `continuation_impl.rs`：6 个 `#[jvm_native]`、0 个 `#[jvm_boundary]`。协程记录 `Coroutine`（repr(C)，首字段 `ExecContext`，
+  `doYield` 由当前块地址还原记录，不查表）按 Continuation 身份登记在 64 分片侧表、持有该 Continuation 一个引用——挂起的
+  协程栈上 `enter` 帧本就持有它（无追踪式回收的对象模型下自环本就不可回收），登记期间身份不会复用；执行完毕时在载体上
+  摘除、栈归池，`enter` 抛出的异常经记录带回、由 `enterSpecial` 继续抛出。`tail`：首次进入挂空 `StackChunk`，挂起期间
+  `sp = bottom + 1`，运行与完毕时 `sp = bottom`（满足 `finish` / `run` 的「空 ⇔ 完毕」断言）。建栈失败抛 `OutOfMemoryError`
+  （JDK 建线程失败同消息）。不在 Continuation 内调 `doYield`、继续未登记的 Continuation 属 VM 不变量破坏，panic。
+- 方案 A 仍在（T4 删除），本步 Continuation 不在虚拟线程路径上，相关字节码方法仍是档案外存根；T4 接通后核对
+  `enterSpecial` 手写体对 `Continuation.enter` / `StackChunk.<init>` 的调用点推断与 `tail` 字段读写不被常量折叠。
+
+**T3 线程身份两槽与执行级状态迁移（2026-10-03）**
+- 载体槽（`thread_impl.rs`，HotSpot `JavaThread` 的对应物）：`CURRENT`（`_vthread`，`currentThread` / `setCurrentThread`）、
+  `CARRIER`（`_threadObj`，`currentCarrierThread`；派生平台线程时两槽同设、终结时清空，主线程首次 `currentThread` 时同设）、
+  `SCOPED_VALUE_CACHE`（`_scopedValueCache`，由 `Continuation.run` 字节码在挂载 / 卸载时存取）。三槽只经 6 个 `#[inline(never)]`
+  存取函数访问（TLS 地址缓存，见 §21.8.3）。
+- 随执行流走的状态迁入执行上下文块 `ExecState`（`exec_context.rs`，`state()` 取当前块）：反射实参拆箱失败标记、
+  @CallerSensitive 调用者栈、反射目标逃逸异常（`reflect_dispatch.rs`）、StackWalker 锚定帧流（`AnchoredWalk`，
+  `stack_stream_factory_abstract_stack_walker_impl.rs`）、引导段 initLevel（`vm_impl.rs`）。这些状态跨 Java 调用存活，期间
+  执行流可能让出到别的载体、同一载体上也会穿插别的执行流。
+- 按载体键的 VM 设施改取 `currentCarrierThread`（HotSpot 挂在 `JavaThread` 上）：`Unsafe.park` 的许可、`monitor.rs` 的
+  `current_thread_identity`（park / 中断 / wait 的设施键）、`clear_current_interrupted`（VM 抛 InterruptedException 时清
+  `threadObj()` 的中断）、`enter_blocking_status`（阻塞时写 `threadObj()` 的 threadStatus）。与之配对的字节码侧：
+  `VirtualThread.unpark` 被 pin 时 `U.unpark(carrier)`、`interrupt` 时 `carrier.setInterrupt()`。监视器所有者按 OS 线程计
+  不变（持锁期间虚拟线程被 pin，不换载体）。
+- 守护检查：生成器单测 `closure::handwritten::thread_local_lint`——`runtime/java_runtime/src` 中 `thread_local!` /
+  `#[thread_local]` 只允许出现在 `exec_context.rs`（平台块与当前块指针）与 `java/lang/thread_impl.rs`（3 个载体槽）。
+- TestVirtualThread 生成 + 编译通过（2924 JDK 类，与 T2 同；方案 A 尚在，本步不改闭包）。

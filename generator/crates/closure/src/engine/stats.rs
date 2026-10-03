@@ -297,6 +297,10 @@ impl<'a> Engine<'a> {
             "edges_by_kind": self.edge_kinds(),
             "top_out_degree": self.top_degree(top, false),
             "top_in_degree": self.top_degree(top, true),
+            // 推送最多的源节点：[节点, 出队次数, 沿边推送次数, 有增量次数, 出度]
+            "top_push_sources": self.top_push_sources(top),
+            // 按源种类汇总：[种类, 出队过的节点数, 出队次数, 沿边推送次数, 有增量次数]
+            "push_src_by_kind": self.push_src_kinds(),
             "type_nodes": self.graph.len(),
             "top_contexts": by_ctx.iter().take(top).map(|&(m, c)| json!([self.ctx_label(m), c])).collect::<Vec<_>>(),
             "top_members": members.iter().take(top).map(|(k, (c, n))| json!([k, c, n])).collect::<Vec<_>>(),
@@ -317,8 +321,8 @@ impl Ctx<'_> {
 }
 
 /// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
-pub(super) const KINDS: usize = 17;
-const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall"];
+pub(super) const KINDS: usize = 19;
+const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall", "K", "NR"];
 
 #[inline]
 pub(super) fn kind_ix(n: &Node) -> usize {
@@ -340,6 +344,8 @@ pub(super) fn kind_ix(n: &Node) -> usize {
         Node::Esc => 14,
         Node::G(..) => 15,
         Node::RP(_) | Node::RN(_) | Node::RA(_) => 16,
+        Node::K(_) => 17,
+        Node::NR(_) => 18,
     }
 }
 
@@ -394,8 +400,44 @@ impl<'a> Engine<'a> {
             Node::F(f) | Node::U(f) => format!("{} {}", node_kind(n), self.fields.get_index(f).map(|x| x.0.to_string()).unwrap_or_default()),
             Node::O(o, f) => format!("O {} {}", self.names[o as usize], self.fields.get_index(f).map(|x| x.0.to_string()).unwrap_or_default()),
             Node::E(o, p) => format!("E{p} {}", self.names[o as usize]),
+            Node::HP(h, _) | Node::HR(h) => {
+                let hub = &self.hubs[h as usize];
+                let set = match hub.open {
+                    Some(o) => format!("open {}", self.names[o as usize]),
+                    None => format!("exact {}", hub.recvs.len()),
+                };
+                format!("{n:?} {:?} [{set}, 调用点 {}, 中转目标 {}, 父 {:?}]", hub.site, hub.links.len(), hub.plain.len(), hub.parent)
+            }
             other => format!("{other:?}"),
         }
+    }
+
+    fn push_src_kinds(&self) -> serde_json::Value {
+        let mut acc = [[0u64; 4]; KINDS];
+        for (i, p) in self.graph.push_src.iter().enumerate() {
+            if p[0] == 0 {
+                continue;
+            }
+            let a = &mut acc[kind_ix(self.graph.node_at(i as u32))];
+            a[0] += 1;
+            a[1] += p[0];
+            a[2] += p[1];
+            a[3] += p[2];
+        }
+        let mut v: Vec<(usize, [u64; 4])> = acc.into_iter().enumerate().filter(|x| x.1[0] > 0).collect();
+        v.sort_by(|a, b| b.1[2].cmp(&a.1[2]).then_with(|| a.0.cmp(&b.0)));
+        serde_json::json!(v.into_iter().map(|(k, a)| serde_json::json!([KIND_NAMES[k], a[0], a[1], a[2], a[3]])).collect::<Vec<_>>())
+    }
+
+    /// 沿边推送最多的源节点
+    fn top_push_sources(&self, top: usize) -> serde_json::Value {
+        let mut v: Vec<(u32, [u64; 3])> = self.graph.push_src.iter().enumerate().filter(|x| x.1[1] > 0).map(|(i, p)| (i as u32, *p)).collect();
+        v.sort_by(|a, b| b.1[1].cmp(&a.1[1]).then_with(|| a.0.cmp(&b.0)));
+        serde_json::json!(v
+            .into_iter()
+            .take(top)
+            .map(|(i, p)| serde_json::json!([self.node_label(self.graph.node_at(i)), p[0], p[1], p[2], self.graph.edges[i as usize].len()]))
+            .collect::<Vec<_>>())
     }
 
     /// 出度 / 入度最大的节点

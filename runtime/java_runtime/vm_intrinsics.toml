@@ -676,6 +676,14 @@ members = [
 "java/lang/invoke/VarHandle.compareAndExchangeAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
 "java/lang/invoke/VarHandle.compareAndExchangeRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0 }
 
+[facts.keyed_lookups]
+# 按键查找入口：返回对象（返回类型即键类）的键等于实参 key（按描述符 0 起，不含接收者）的值；fold_case = 不区分大小写比较。
+# ctors = 键类构造器 → 其键形参序号；键类子类经 super(..) / this(..) 链传给键类构造器，分析器按字节码追溯。
+# 分析器只让键可能匹配的服务对象类型流出调用点（engine/keyed.rs），各 ProviderService 子类的 newInstance 随之只按所请求的服务类型派发。
+# JCA：Provider.getService(type, algorithm) 只返回 type 相同的服务（Provider.putService 以 Service.type 建键；
+# 旧式条目的类型名经 getEngineName 规范大小写，按不区分大小写比较涵盖）。
+"java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;" = { key = 0, fold_case = true, ctors = { "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/Map;)V" = 1, "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;)V" = 1 } }
+
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：
 #   lambda  LambdaMetafactory：调用点产出实现 SAM 接口的合成类，SAM 调用分派到实现方法句柄

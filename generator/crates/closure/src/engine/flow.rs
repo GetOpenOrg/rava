@@ -95,6 +95,12 @@ impl<'a> Engine<'a> {
         if n == Node::Esc {
             self.escape(&delta.classes);
         }
+        if let Node::K(g) = n {
+            self.kgate_grown(g, delta);
+        }
+        if let Node::NR(r) = n {
+            self.name_write_objs(r, delta);
+        }
         if self.self_fields.contains_key(&n) {
             self.self_field_objs(n, delta);
         }
@@ -240,6 +246,7 @@ impl<'a> Engine<'a> {
             let ne = self.graph.edges[ix].len();
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
             let sk = kind_ix(&self.graph.node(i)) * KINDS;
+            let grew0 = self.graph.adds[1];
             for k in 0..ne {
                 let (dst, f) = self.graph.edges[ix][k];
                 let pk = sk + kind_ix(&self.graph.node(dst));
@@ -249,6 +256,10 @@ impl<'a> Engine<'a> {
                 p[0] += 1;
                 p[1] += u64::from(self.graph.adds[1] != grew);
             }
+            let ps = &mut self.graph.push_src[ix];
+            ps[0] += 1;
+            ps[1] += ne as u64;
+            ps[2] += self.graph.adds[1] - grew0;
             let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
             for m in ms {
                 let n = self.graph.node(m);

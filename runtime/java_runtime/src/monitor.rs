@@ -237,21 +237,25 @@ pub(crate) const STATE_IN_OBJECT_WAIT: i32 = 0x100;
 pub(crate) const STATE_PARKED: i32 = 0x200;
 pub(crate) const STATE_BLOCKED_ON_MONITOR_ENTER: i32 = 0x400;
 
-/// 当前线程对象的身份（park / 中断 / wait 的每线程设施键）。
+/// 当前载体线程对象的身份（park / 中断 / wait 的每线程设施键）。这些设施在 HotSpot 中挂在 `JavaThread`
+/// 上（Parker、中断事件、`threadObj()` 的中断字段与线程状态），虚拟线程挂载期间即其载体；虚拟线程自身的
+/// park / 中断由 `VirtualThread` 字节码承载，只在被 pin 时经 `parkOnCarrierThread` / `carrier.setInterrupt`
+/// 落到载体上（a3-T3）。
 pub(crate) fn current_thread_identity() -> Result<usize> {
-    Ok(Object::from(crate::java::lang::Thread::currentThread()?).0.__identity() as usize)
+    Ok(Object::from(crate::java::lang::Thread::currentCarrierThread()?).0.__identity() as usize)
 }
 
-/// 清除当前线程的中断状态（Java 字段）：VM 抛出 InterruptedException 时调用。
+/// 清除当前载体线程的中断状态（Java 字段）：VM 抛出 InterruptedException 时调用（HotSpot
+/// `JavaThread::is_interrupted(true)` 清 `threadObj()`；虚拟线程自身的中断由 `Object.wait` 等字节码清）。
 pub(crate) fn clear_current_interrupted() -> Result<()> {
-    crate::java::lang::Thread::currentThread()?.__set_interrupted(false);
+    crate::java::lang::Thread::currentCarrierThread()?.__set_interrupted(false);
     Ok(())
 }
 
-/// 当前线程进入阻塞：threadStatus 置 ALIVE | `bits`（`getState` 可观察，JVM 同编码）。
-/// 虚拟线程（holder 为 null）的状态由 VirtualThread.state 承载，此处静默。
+/// 当前载体线程进入阻塞：threadStatus 置 ALIVE | `bits`（`getState` 可观察，JVM 同编码；HotSpot 写
+/// `threadObj()` 的状态）。虚拟线程的状态由 VirtualThread.state 承载。
 pub(crate) fn enter_blocking_status(bits: i32) {
-    if let Ok(t) = crate::java::lang::Thread::currentThread() {
+    if let Ok(t) = crate::java::lang::Thread::currentCarrierThread() {
         let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | bits);
     }
 }
@@ -410,12 +414,15 @@ pub fn enter(identity: usize, is_null: bool) -> Result<()> {
         return Err(JvmError::null_pointer());
     }
     monitor_for(identity).enter();
+    crate::exec_context::monitor_entered();
     Ok(())
 }
 
 /// `monitorexit`：退出 `identity` 对象的监视器一层。
 pub fn exit(identity: usize) -> Result<()> {
-    monitor_for(identity).exit()
+    monitor_for(identity).exit()?;
+    crate::exec_context::monitor_exited();
+    Ok(())
 }
 
 /// `Object.wait(millis, nanos)`（wait() = wait(0,0)）。null 检查同上。
@@ -475,6 +482,7 @@ impl MonitorGuard {
         }
         let monitor = monitor_for(obj.0.__identity() as usize);
         monitor.enter();
+        crate::exec_context::monitor_entered();
         Ok(MonitorGuard { monitor: Some(monitor) })
     }
 }
@@ -482,7 +490,9 @@ impl MonitorGuard {
 impl Drop for MonitorGuard {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.take() {
-            let _ = monitor.exit();
+            if monitor.exit().is_ok() {
+                crate::exec_context::monitor_exited();
+            }
         }
     }
 }

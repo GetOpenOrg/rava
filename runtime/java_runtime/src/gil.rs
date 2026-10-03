@@ -105,6 +105,9 @@ pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> Clin
                 0 => {
                     state.set(1);
                     owners.push((class, me));
+                    // 执行 <clinit> 期间栈上视为有 native 帧（HotSpot 由 VM 帧调用 <clinit>，虚拟线程在其中
+                    // 让出判定为 NATIVE pinned，§21.8.3）；与 clinit_exit 在同一执行流上成对
+                    crate::exec_context::native_enter();
                     return ClinitEnter::Run;
                 }
                 2 => return ClinitEnter::Erroneous,
@@ -127,6 +130,7 @@ pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> Clin
 
 /// 结束类初始化：`ok` → 已完成（3），否则 erroneous（2）；唤醒等待者。
 pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>) {
+    crate::exec_context::native_exit();
     if ok {
         CLINIT_DONE.lock().get_or_insert_with(Default::default).insert(class);
     }

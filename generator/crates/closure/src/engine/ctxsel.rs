@@ -5,8 +5,9 @@
 //!
 //! - **接收者**（`recv_ctx`）：实例方法按接收者抽象对象克隆（对象敏感，容器对象各进其克隆）；非对象接收者进本体。
 //! - **静态调用**（`static_ctx`，按 `Call` 形态）：
-//!   1. 字节码 `invokestatic`：返回引用的辅助方法继承调用方上下文（返回值按容器对象分开）；返回基本类型 / void
-//!      的按本体共享；上下文无关的调用方调用新鲜工厂（`fresh_factory`）按调用点克隆。
+//!   1. 字节码 `invokestatic`：返回引用或有引用形参的辅助方法继承调用方上下文（返回值与经实参写入的字段 / 元素
+//!      按容器对象分开，如 `casTabAt(tab, i, null, node)` 只写进本容器的表）；只有基本类型形参与返回的
+//!      按本体共享；上下文无关的调用方调用新鲜工厂（`fresh_factory`）按调用点克隆。
 //!      选择子形参（`selector.rs`）上传常量时按调用点克隆、链尾接调用方上下文；否则调用方在上下文中则继承。
 //!   2. lambda 静态实现方法：继承 lambda 创建时的上下文。
 //!   3. 方法句柄常量（`MethodHandle` 静态引用）：本体。
@@ -20,8 +21,9 @@ use super::*;
 
 /// 静态调用的形态
 pub(super) enum Call<'x> {
-    /// 字节码 invokestatic：返回类型是否引用、实参（不含接收者）
-    Invoke { ret_ref: bool, args: &'x [V] },
+    /// 字节码 invokestatic：返回类型或形参是否含引用（可能经返回值 / 实参对象的字段与元素读写调用方上下文中的对象）、
+    /// 实参（不含接收者）
+    Invoke { heap: bool, args: &'x [V] },
     /// lambda 静态实现方法的 SAM 调用：lambda 创建时的上下文
     Lambda(u32),
     /// 方法句柄常量引用的静态方法
@@ -45,9 +47,9 @@ impl Engine<'_> {
     pub(super) fn static_ctx(&mut self, m: usize, off: u32, key: &MemberRef, call: Call) -> u32 {
         let caller = self.methods[m].ctx;
         let ctx = match call {
-            Call::Invoke { ret_ref, args } => {
+            Call::Invoke { heap, args } => {
                 let c = match caller {
-                    _ if !ret_ref => NOCTX,
+                    _ if !heap => NOCTX,
                     NOCTX if self.fresh_factory(key) => self.site_ctx(m, off),
                     c => c,
                 };

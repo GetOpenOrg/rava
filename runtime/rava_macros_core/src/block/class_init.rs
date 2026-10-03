@@ -19,7 +19,7 @@ use std::collections::HashSet;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Block, Ident, ReturnType, Signature, Type};
+use syn::{Attribute, Block, Ident, ReturnType, Signature, Type};
 
 use super::parse::StaticItem;
 use super::util::strip_meta_attrs;
@@ -45,8 +45,10 @@ pub(crate) fn is_init_trigger(sig: &Signature) -> bool {
 /// 方法入口检查，只对可传播异常（返回 `Result`）的方法生成：
 /// 1. 实例方法的空接收者检查（JVMS §6.5 invokevirtual / invokespecial / invokeinterface：
 ///    objectref 为 null 抛 NullPointerException，先于建帧）；
-/// 2. 栈界检查 `__stack_check()?`（建帧：栈耗尽抛 StackOverflowError，a3-T1b，计划 §21.8.2）。
-pub(crate) fn entry_checks(sig: &Signature) -> proc_macro2::TokenStream {
+/// 2. 栈界检查 `__stack_check()?`（建帧：栈耗尽抛 StackOverflowError，a3-T1b，计划 §21.8.2）；
+///    生成器从字节码判定为叶子的方法（`leaf = "true"`：无调用指令且足够短）省略——叶子帧之下
+///    不再有 Java 帧，无界递归必经其调用者的检查点，叶子帧本身落在 `SHADOW` 余量内（a3-T1b-2）。
+pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2::TokenStream {
     if !returns_result(sig) {
         return quote::quote! {};
     }
@@ -55,7 +57,15 @@ pub(crate) fn entry_checks(sig: &Signature) -> proc_macro2::TokenStream {
     } else {
         quote::quote! {}
     };
+    if is_leaf(attrs) {
+        return null_check;
+    }
     quote::quote! { #null_check __stack_check()?; }
+}
+
+/// 生成器标注的叶子方法（`#[java_method(.., leaf = "true")]`）
+pub(crate) fn is_leaf(attrs: &[Attribute]) -> bool {
+    super::util::attr_str(attrs, "leaf").as_deref() == Some("true")
 }
 
 /// 在方法体入口注入 `Self::__class_init()?;`。
@@ -230,5 +240,39 @@ pub(crate) fn constant_directory_registration(
             )> = ::std::vec![#(#entries),*];
             register_constant_directory(#dotted, __entries);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn method(src: &str) -> syn::ImplItemFn {
+        syn::parse_str(src).unwrap()
+    }
+
+    fn checks(src: &str) -> String {
+        let f = method(src);
+        entry_checks(&f.sig, &f.attrs).to_string()
+    }
+
+    #[test]
+    fn non_leaf_gets_stack_check() {
+        let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f() -> Result<i32> { Ok(1) }"#);
+        assert!(s.contains("__stack_check"), "{s}");
+    }
+
+    #[test]
+    fn leaf_omits_stack_check_keeps_null_check() {
+        let s = checks(r#"#[java_method(name = "g", descriptor = "()I", leaf = "true")] fn g(&self) -> Result<i32> { Ok(1) }"#);
+        assert!(!s.contains("__stack_check"), "{s}");
+        assert!(s.contains("null_pointer"), "{s}");
+        let s = checks(r#"#[java_method(name = "h", descriptor = "()I", leaf = "true")] fn h() -> Result<i32> { Ok(1) }"#);
+        assert!(s.is_empty(), "{s}");
+    }
+
+    #[test]
+    fn non_result_has_no_checks() {
+        assert!(checks(r#"fn k(&self) -> i32 { 1 }"#).is_empty());
     }
 }

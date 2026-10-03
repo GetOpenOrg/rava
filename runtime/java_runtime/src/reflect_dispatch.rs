@@ -148,7 +148,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     // 供 AccessorUtils.isIllegalArgument 的栈帧判定（见 mark_target_thrown）
     let finish = |r: Result<Object>| {
         if let Err(e) = &r {
-            if !BAD_ARG.with(|b| b.get()) && !is_platform_member(declaring_slash) {
+            if !crate::exec_context::state().bad_arg.get() && !is_platform_member(declaring_slash) {
                 mark_target_thrown(e.thrown());
             }
         }
@@ -159,7 +159,7 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
     // 实例判定以接收者视图为准，再按父类链复核（手写实现对象的视图可能不全）
     if is_virtual && declaring_slash != "java/lang/Object" && !recv.0.is_instance_of(declaring_slash)
         && !superclass_chain(&cur).iter().any(|c| c == declaring_slash) {
-        BAD_ARG.with(|b| b.set(true));
+        crate::exec_context::state().bad_arg.set(true);
         return Err(crate::error::JvmError::illegal_argument("object is not an instance of declaring class"));
     }
     let mut cur = cur;
@@ -221,21 +221,15 @@ fn is_static_descriptor(class_slash: &str, name: &str, descriptor: &str) -> bool
 
 // ── 实参/返回值的边界 marshalling（分派闭包发射侧共用）─────────────────────
 
-std::thread_local! {
-    /// 最近一次实参拆箱失败的标记：Method.invoke 据此区分「实参不符」（JDK 直接抛
-    /// IllegalArgumentException）与「目标方法抛出」（包装为 InvocationTargetException）。
-    static BAD_ARG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 /// 实参拆箱失败：置标记并返回 IllegalArgumentException（分派闭包的 marshalling 失败出口）。
 pub fn bad_arg() -> crate::error::JvmError {
-    BAD_ARG.with(|b| b.set(true));
+    crate::exec_context::state().bad_arg.set(true);
     crate::error::JvmError::illegal_argument("argument type mismatch")
 }
 
 /// 取出并清除实参失败标记（Method.invoke 在分派返回错误时调用）。
 pub fn take_bad_arg() -> bool {
-    BAD_ARG.with(|b| b.replace(false))
+    crate::exec_context::state().bad_arg.replace(false)
 }
 
 /// 装箱 Object → i32（两形态：站点装箱原生盒 Rc<i32> / 翻译 Integer 包装——
@@ -356,27 +350,23 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
 // 的方法处把「调用处所在类」显式压栈（`__caller_sensitive`），`getCallerClass` 优先读栈顶，
 // 与 JVM 语义逐点一致；栈空（手写运行时直接调用 caller-sensitive 方法）才回退帧解析。
 
-std::thread_local! {
-    static CS_CALLERS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 struct CallerFrameGuard;
 impl Drop for CallerFrameGuard {
     fn drop(&mut self) {
-        CS_CALLERS.with(|s| { s.borrow_mut().pop(); });
+        crate::exec_context::state().cs_callers.borrow_mut().pop();
     }
 }
 
 /// 以 `caller`（调用处所在类的 binary name）为 @CallerSensitive 调用者执行 `f`。
 pub fn __caller_sensitive<R>(caller: &'static str, f: impl FnOnce() -> R) -> R {
-    CS_CALLERS.with(|s| s.borrow_mut().push(caller));
+    crate::exec_context::state().cs_callers.borrow_mut().push(caller);
     let _guard = CallerFrameGuard;
     f()
 }
 
 /// 当前最内层 @CallerSensitive 调用的调用者类（生成器显式传入）；无 → None。
 pub fn current_caller_sensitive() -> Option<&'static str> {
-    CS_CALLERS.with(|s| s.borrow().last().copied())
+    crate::exec_context::state().cs_callers.borrow().last().copied()
 }
 
 // ── 静态字段偏移登记（Unsafe.staticFieldOffset / MethodHandleNatives.staticFieldOffset 共用）─────────────────
@@ -429,11 +419,6 @@ pub fn static_field_of(offset: i64) -> Option<(std::string::String, std::string:
 // InvocationTargetException。原生二进制无 Java 栈帧；L3 分派是「进入目标方法」的唯一入口，
 // 在此登记从目标方法体逃逸的异常身份，判定按「是否经目标逃逸」等价应答。
 
-std::thread_local! {
-    /// 最近从反射目标逃逸的异常（身份比较；有界，嵌套反射足够）。
-    static TARGET_THROWN: std::cell::RefCell<Vec<Object>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// 平台（java.base 等 JDK 模块）成员：AccessorUtils.isIllegalArgument 的栈帧规则自抛出点
 /// 向下，途经 java.base 帧继续、抵达访问器类判实参不符（IAE），遇非 java.base 帧（用户代码）
 /// 判目标抛出（ITE）。经平台成员逃逸的异常因此不登记——只有逃逸出用户成员才算目标抛出。
@@ -442,8 +427,8 @@ fn is_platform_member(declaring_slash: &str) -> bool {
 }
 
 fn mark_target_thrown(e: &Object) {
-    TARGET_THROWN.with(|v| {
-        let mut v = v.borrow_mut();
+    {
+        let mut v = crate::exec_context::state().target_thrown.borrow_mut();
         if v.iter().any(|x| x == e) {
             return;
         }
@@ -451,10 +436,10 @@ fn mark_target_thrown(e: &Object) {
             v.remove(0);
         }
         v.push(Clone::clone(e));
-    });
+    }
 }
 
 /// 异常 `e` 是否从反射目标方法体逃逸（AccessorUtils.isIllegalArgument 的 VM 应答）。
 pub fn thrown_by_target(e: &Object) -> bool {
-    TARGET_THROWN.with(|v| v.borrow().iter().any(|x| x == e))
+    crate::exec_context::state().target_thrown.borrow().iter().any(|x| x == e)
 }

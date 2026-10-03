@@ -152,8 +152,17 @@ impl<'a> Engine<'a> {
         }
         if self.man.is_field_enumerator(&k) {
             // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
+            // 放开与登记都幂等：只取值集中尚未处理的部分（站点重跑由值集增长驱动）
             let mut cs = BTreeSet::new();
-            let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            let unknown = match args.first() {
+                None => true,
+                Some(v) => {
+                    let mut seen = self.refl_seen.entry(m).or_default().remove(&off).unwrap_or_default();
+                    let u = self.class_values_new(m, v, &mut seen.fenum, &mut cs);
+                    self.refl_seen.entry(m).or_default().insert(off, seen);
+                    u
+                }
+            };
             self.enumerated_static_owners(m, off, &cs);
             // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开
             let serial = self.man.is_serial_enumerator(&self.methods[m].key.to_string());
@@ -207,7 +216,8 @@ impl<'a> Engine<'a> {
             a.push(f);
         }
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
-        let res = Some(Node::S(m, off));
+        // 按键查找入口的结果先经闸门（`keyed.rs`）
+        let res = Some(self.keyed_res(m, off, &resolved, pargs));
         let recv_feeds = |e: &mut Self| match recv_v {
             Some(v) => e.feeds(m, v, owner),
             None => vec![Feed::S(TypeSet::open(owner))],
@@ -219,8 +229,8 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
-                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
+                let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 // 按名加载（class_loads）同样解析，只取镜像不初始化
                 let key = self.mref_key(mref);
@@ -233,6 +243,9 @@ impl<'a> Engine<'a> {
                 }
             }
             op::INVOKESPECIAL => {
+                if resolved.name == "<init>" {
+                    self.keyed_ctor(m, &mref.owner, &mref.desc, recv_v, pargs);
+                }
                 let r = recv_feeds(self);
                 self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
             }
@@ -424,8 +437,7 @@ impl<'a> Engine<'a> {
         // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
         // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
         // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
-        let modeled = |e: &Self, x: usize| e.declares_memory(x) || e.memory_modeled(x);
-        let subsumed = modeled(self, m) && modeled(self, t);
+        let subsumed = self.declares_memory(m) && self.declares_memory(t);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
             self.rcall_site(m, off, t, recv_fs.as_deref(), a);

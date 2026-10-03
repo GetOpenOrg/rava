@@ -23,6 +23,7 @@ mod objects;
 mod scan;
 mod stype;
 mod syntax;
+mod thread_local_lint;
 mod type_refs;
 mod units;
 mod vm_writes;
@@ -133,6 +134,11 @@ pub struct FieldAccess {
     /// 按名读的接收者是本 fn 的形参：其序号（含接收者，即被调 Java 方法的形参序号）。经同文件被调 fn 传递来的访问不算；
     /// None 时接收者未知，同名字段全部作来源
     pub value_src_param: Option<u16>,
+    /// 按名写入（`o.0.__unsafe_ref_set("f", v)`）的接收者 `o` 本身取自按名读（`o = r.0.__unsafe_ref_get("g")`，经解包 / 转换 /
+    /// 局部 let 传递）的字段名 `g`：接收者即 `r` 上该字段的内容，引擎按其值集逐个类型解出被写字段（见 `engine/hw_name_write.rs`）
+    pub recv_src: Option<String>,
+    /// `recv_src` 按名读的接收者 `r` 是本 fn 的形参：其序号（含接收者）；None 时 `r` 未知，同名字段全部作来源
+    pub recv_src_param: Option<u16>,
 }
 
 #[derive(Debug, Default, Clone)]

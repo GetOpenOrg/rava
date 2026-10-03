@@ -15,6 +15,7 @@ impl<'a> Engine<'a> {
             }
         }
         self.hubs_grow(id);
+        self.keyed_g_grow(id);
         self.reopen(id);
         self.vm_hooks_on_alloc(id);
         self.serial_alloc_on_grow(id);

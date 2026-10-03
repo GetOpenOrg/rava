@@ -133,6 +133,8 @@ impl<'a> Engine<'a> {
             Node::E(x, p) => format!("elements[{}] {}", if p == 0 { "偶" } else { "奇" }, self.names[x as usize]),
             Node::Array => "array".into(),
             Node::Esc => "escape".into(),
+            Node::K(g) => format!("keyed-gate {}", self.kgate_label(g)),
+            Node::NR(r) => format!("by-name receivers {}", self.name_recv_label(r)),
             Node::RP(c) => format!("reflect-call 实参池 {}", reflect_call::channel_name(c)),
             Node::RN(c) => format!("reflect-call 实参池（去冗余） {}", reflect_call::channel_name(c)),
             Node::RA(c) => format!("reflect-call 实参数组 {}", reflect_call::channel_name(c)),
