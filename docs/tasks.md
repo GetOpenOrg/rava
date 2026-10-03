@@ -159,6 +159,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │
 │   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md）
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
+│         🔄【用户侧子代理领取 2026-10-03】63_junit 10 例 expected 补齐（真 JDK 21 输出、确认确定性，只动 tests/e2e/63_junit/）
+│         🔄【用户侧子代理领取 2026-10-03】新增 127 例查重（e2e_redundancy_scan.py，只出删除候选与论证，不直接删）
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
@@ -170,7 +172,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ◇ S7 统一对象句柄 + 每类静态描述符 ─┐
 │   ├─ ◇ T1 跨测试编译复用（2026-10-01-cross-test-compile-reuse.md）─┴─ Q3：方案定稿后由用户一次决策
 │   │     └─▶ T4 生成器只构建一次再分发（待服务器核实）
-│   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线）
+│   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线；8 台服务器 JDK 25 已就绪，env_setup --check-only 2026-10-03）
 │
 └─ 【远期】
     ├─ ◇ 线程模型终态：单线程协作调度深化，或改真并发（2026-09-26-real-multithreading.md）
