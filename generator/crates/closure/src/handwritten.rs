@@ -23,6 +23,7 @@ mod objects;
 mod scan;
 mod stype;
 mod syntax;
+mod thread_local_lint;
 mod type_refs;
 mod units;
 mod vm_writes;

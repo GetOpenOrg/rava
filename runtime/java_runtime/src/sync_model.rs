@@ -220,8 +220,8 @@ mod mt {
 
 /// 进程级存储：全进程一份，内容为线程安全单元（原子 / 读写锁）。
 ///
-/// 语义为「全进程一份」：运行时登记表、驻留表、类的静态字段与初始化状态等。真正按线程
-/// 区分的状态（当前线程、InternalLock 守卫、拆箱失败标记）直写 `thread_local!`。
+/// 语义为「全进程一份」：运行时登记表、驻留表、类的静态字段与初始化状态等。随执行流走的状态放
+/// 执行上下文块（`exec_context::ExecState`）；OS 线程局部存储只承载载体槽（`thread_impl.rs`）。
 ///
 /// 语法与 `thread_local!` 相同（`static NAME: T = const { e };` / `= e;`，可带属性与可见性），
 /// 访问面同 `LocalKey`：`with`，以及 `Cell` / `RefCell` 单元的 `get` / `set` / `take` /

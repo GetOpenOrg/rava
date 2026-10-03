@@ -2,11 +2,6 @@ use crate::prelude::*;
 use super::vm::VM;
 use crate::java::lang::String;
 
-std::thread_local! {
-    /// 本线程正在执行的引导段所处的 initLevel（见 `initLevel`；None = 段外）。
-    static BOOT_LEVEL: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
-}
-
 /// 停机标记（进程级）。
 static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -25,14 +20,14 @@ impl VM {
     /// 对应状态会在该段的互斥上等待结束，与 JVM「引导段先于任何应用线程」的时序一致。
     #[jvm_boundary]
     pub fn initLevel() -> Result<i32> {
-        Ok(BOOT_LEVEL.with(|l| l.get()).unwrap_or(4))
+        Ok(crate::exec_context::state().boot_level.get().unwrap_or(4))
     }
 
     /// 在 initLevel == `level` 下执行引导段 `f`（仅本线程可见；嵌套时退出后恢复外层档位）。
     pub fn __vm_at_init_level<R>(level: i32, f: impl FnOnce() -> R) -> R {
-        let outer = BOOT_LEVEL.with(|l| l.replace(Some(level)));
+        let outer = crate::exec_context::state().boot_level.replace(Some(level));
         let r = f();
-        BOOT_LEVEL.with(|l| l.set(outer));
+        crate::exec_context::state().boot_level.set(outer);
         r
     }
 

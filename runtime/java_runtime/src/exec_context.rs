@@ -13,7 +13,8 @@
 //! 一律经本模块不内联的取址函数访问，每次重新读取。块本身的地址在执行流存活期间不变，可以缓存。
 
 use rava_coro::pins::Pins;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ptr;
 
 pub use rava_coro::pins::{PINNED_CRITICAL_SECTION, PINNED_MONITOR, PINNED_NATIVE, PINNED_NONE};
@@ -22,13 +23,37 @@ pub use rava_coro::pins::{PINNED_CRITICAL_SECTION, PINNED_MONITOR, PINNED_NATIVE
 #[repr(C)]
 pub struct ExecContext {
     pins: Pins,
+    state: ExecState,
+}
+
+/// 随执行流走、不随载体走的运行时状态（a3-T3）：这些状态的生存期跨越 Java 调用（反射目标、栈遍历回调、
+/// 引导段），期间执行流可能让出并在另一载体上恢复，同一载体上也会有别的执行流穿插运行——放在载体线程局部会
+/// 串到别的执行流上。与载体绑定的状态（当前线程 / 载体线程对象、ScopedValue 缓存槽）在 `thread_impl.rs`。
+#[derive(Default)]
+pub struct ExecState {
+    /// 最近一次实参拆箱失败标记（`reflect_dispatch::bad_arg` / `take_bad_arg`）
+    pub(crate) bad_arg: Cell<bool>,
+    /// @CallerSensitive 调用者栈（`reflect_dispatch::__caller_sensitive`）
+    pub(crate) cs_callers: RefCell<Vec<&'static str>>,
+    /// 最近从反射目标逃逸的异常（`reflect_dispatch::thrown_by_target`）
+    pub(crate) target_thrown: RefCell<Vec<crate::Object>>,
+    /// StackWalker 锚定的帧流（`AbstractStackWalker.callStackWalk` / `fetchStackFrames`）
+    pub(crate) walk_anchors: RefCell<HashMap<i64, crate::vm_stack::AnchoredWalk>>,
+    pub(crate) next_walk_anchor: Cell<i64>,
+    /// 正在执行的引导段所处的 initLevel（`VM.initLevel`；None = 段外）
+    pub(crate) boot_level: Cell<Option<i32>>,
 }
 
 impl ExecContext {
+    /// 平台线程（OS 线程根执行流）的块
+    fn platform() -> ExecContext {
+        ExecContext { pins: Pins::platform(), state: ExecState::default() }
+    }
+
     /// Continuation 执行流的块：`scope` 为其 `ContinuationScope` 的身份。该 scope 由 Continuation 持有，
     /// Continuation 在执行流存活期间不会释放（协程栈上的 `enter` 帧持有它）
-    pub const fn with_scope(scope: usize) -> ExecContext {
-        ExecContext { pins: Pins::with_scope(scope) }
+    pub fn with_scope(scope: usize) -> ExecContext {
+        ExecContext { pins: Pins::with_scope(scope), state: ExecState::default() }
     }
 
     pub fn pins(&self) -> &Pins {
@@ -36,9 +61,16 @@ impl ExecContext {
     }
 }
 
+/// 当前执行流的执行级状态。块在执行流存活期间地址不变，引用可跨让出点持有（让出后在另一载体上恢复时
+/// 仍是同一执行流的块）；块内单元只由本执行流访问。
+pub fn state() -> &'static ExecState {
+    // SAFETY: 当前块在当前执行流存活期间存活（平台块随 OS 线程、协程块随 Continuation 登记）
+    unsafe { &(*current()).state }
+}
+
 std::thread_local! {
     /// 平台线程块（OS 线程的根执行流）
-    static PLATFORM: ExecContext = const { ExecContext { pins: Pins::platform() } };
+    static PLATFORM: ExecContext = ExecContext::platform();
     /// 当前执行流的块；null = 平台线程块
     static CURRENT: Cell<*const ExecContext> = const { Cell::new(ptr::null()) };
 }
