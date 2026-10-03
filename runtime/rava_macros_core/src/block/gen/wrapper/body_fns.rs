@@ -183,7 +183,6 @@ fn build(
     let output = &sig.output;
     let head = rename_ident(quote! { (#(#params),*) #output }, "Self", struct_ident, false);
     let body_fn = quote! {
-        #[doc(hidden)]
         #[allow(non_snake_case, unused_mut, unused_variables)]
         pub fn #fn_ident #head {
             #body

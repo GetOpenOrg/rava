@@ -108,7 +108,6 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
             || g.where_clause.as_ref().is_some_and(|w| !w.predicates.is_empty());
         let (impl_g, _, where_c) = g.split_for_impl();
         let item = quote! {
-            #[doc(hidden)]
             #[allow(non_snake_case, unused_variables)]
             pub fn #fn_name #impl_g (this: &dyn #vtable_trait_ident #(, #non_self_params)*) #ret #where_c {
                 #body

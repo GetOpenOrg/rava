@@ -176,7 +176,6 @@ pub(crate) fn expand_class_init(
         quote! {}
     };
     let member = quote! {
-        #[doc(hidden)]
         pub fn __class_init() -> Result<()> {
             let __state = #state.force();
             if __state.get() == 3 {

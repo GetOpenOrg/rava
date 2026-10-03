@@ -141,7 +141,6 @@ mod tests {
     #[test]
     fn split_keeps_signature_and_symbol_in_sync() {
         let item = quote! {
-            #[doc(hidden)]
             pub fn __jbm_A__m(this: &A, mut x: i32) -> Result<i32> { x += 1; Ok(x) }
         };
         let s = split_free_fn("p/A", &item).unwrap();

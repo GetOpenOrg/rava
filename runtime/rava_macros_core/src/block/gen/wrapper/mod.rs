@@ -38,11 +38,9 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         #[allow(non_camel_case_types)]
         pub struct #struct_ident #impl_g #where_c {
             // 部件对实现层 crate（存储层 impl 按部件构造本类视图）可见
-            #[doc(hidden)]
             pub vtable: __Shared<dyn #vtable_trait_ident>,
-            #[doc(hidden)]
             pub any: __AnyRef,
-            /// JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
+            // JVM null 标志：Default::default() = true（null），构造后调用 _init_not_null() = false
             pub _jvm_null: bool,
             #phantom_field
         }
@@ -52,7 +50,6 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     // 字段保持 crate 私有，经此构造入口完成。
     let wrapper_from_parts = quote! {
         impl #impl_g #struct_ident #ty_g #where_c {
-            #[doc(hidden)]
             pub fn __from_parts(
                 vtable: __Shared<dyn #vtable_trait_ident>,
                 any: __AnyRef,
@@ -61,12 +58,11 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 #struct_ident { vtable, any, _jvm_null: is_null, #phantom_init }
             }
 
-            /// invokevirtual 在 Object 接收者上的类 vtable 分派入口（§6 步骤 4）：
-            /// 运行时类是本类或其子类 → `Some(本实例化视图)`。vtable / 存储部件取自
-            /// 原对象（与 `From<Object>` 擦除路径同源——共享存储与对象标识，子类
-            /// vtable 经 supertrait 上转）；其余（闭包、无运行时类值）→ `None`，
-            /// 调用方回落闭包 SAM 分支。对任意类型实参成立（Java 泛型运行时擦除）。
-            #[doc(hidden)]
+            // invokevirtual 在 Object 接收者上的类 vtable 分派入口（§6 步骤 4）：
+            // 运行时类是本类或其子类 → `Some(本实例化视图)`。vtable / 存储部件取自
+            // 原对象（与 `From<Object>` 擦除路径同源——共享存储与对象标识，子类
+            // vtable 经 supertrait 上转）；其余（闭包、无运行时类值）→ `None`，
+            // 调用方回落闭包 SAM 分支。对任意类型实参成立（Java 泛型运行时擦除）。
             pub fn __virtual_view(obj: &Object) -> ::std::option::Option<Self> {
                 let mut __vt: ::std::option::Option<
                     __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;

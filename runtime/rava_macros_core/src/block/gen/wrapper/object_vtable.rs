@@ -213,8 +213,8 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                 }
                 fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
                 fn __identity(&self) -> *const () { self.vtable.__identity() }
-                /// 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。
-                /// `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
+                // 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。
+                // `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
                 fn __erased_inner(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     if let ::std::option::Option::Some(s) =
                         slot.downcast_mut::<::std::option::Option<__AnyRef>>()
@@ -223,10 +223,10 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     }
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
-                /// 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
-                /// 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
-                /// （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
-                /// 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
+                // 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
+                // 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
+                // （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
+                // 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
                 fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     '__answered: {
                     if let ::std::option::Option::Some(s) =

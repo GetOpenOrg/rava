@@ -112,7 +112,6 @@ pub(crate) fn expand_interface(
             let mut d_sig = without_param_mut(&f.sig);
             d_sig.ident = format_ident!("__default_{}", f.sig.ident);
             quote! {
-                #[doc(hidden)]
                 pub #d_sig #block
             }
         });
@@ -249,9 +248,9 @@ pub(crate) fn expand_interface(
         impl #impl_g #struct_ident #ty_g #where_c {
             pub const BINARY_NAME: &'static str = #binary_name;
 
-            /// null 探测与类 Wrapper 的固有方法同形（类型位置载体化后，null 检查
-            /// 发射面 `x.is_jvm_null()` 对载体与 wrapper 统一）：载体 null 即其底层
-            /// Object 引用是 null 单例。
+            // null 探测与类 Wrapper 的固有方法同形（类型位置载体化后，null 检查
+            // 发射面 `x.is_jvm_null()` 对载体与 wrapper 统一）：载体 null 即其底层
+            // Object 引用是 null 单例。
             pub fn is_jvm_null(&self) -> bool {
                 ObjectVTable::is_jvm_null(&*self.__ref.0)
             }

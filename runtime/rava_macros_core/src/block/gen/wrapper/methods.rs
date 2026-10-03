@@ -41,7 +41,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
 
     // _init_not_null：构造器完成后调用，将 _jvm_null 标志清零
     wrapper_methods.push(quote! {
-        #[doc(hidden)] #[inline]
+        #[inline]
         pub fn _init_not_null(&mut self) { self._jvm_null = false; }
     });
 
@@ -54,21 +54,21 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         let set = format_ident!("__set_{}", name);
         if ctx.is_erased(name) {
             quote! {
-                #[doc(hidden)] #[inline]
+                #[inline]
                 pub fn #get(&self) -> #ty {
                     __safepoint();
                     <#ty as ::std::convert::From<Object>>::from(self.vtable.#get())
                 }
-                #[doc(hidden)] #[inline]
+                #[inline]
                 pub fn #set(&self, v: #ty) {
                     self.vtable.#set(::std::convert::Into::<Object>::into(v));
                 }
             }
         } else {
             quote! {
-                #[doc(hidden)] #[inline]
+                #[inline]
                 pub fn #get(&self) -> #ty { __safepoint(); self.vtable.#get() }
-                #[doc(hidden)] #[inline]
+                #[inline]
                 pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
             }
         }
@@ -311,7 +311,7 @@ fn impl_method(
     let mname = &sig.ident;
     let mut impl_sig = sig.clone();
     impl_sig.ident = format_ident!("__impl_{}", mname);
-    let attrs = quote! { #(#keep_attrs)* #[doc(hidden)] };
+    let attrs = quote! { #(#keep_attrs)* };
     let Some(block) = &f.block else {
         let fz = functionize_moved(ctx, &attrs, &quote! { pub }, &impl_sig, mname, &quote! {})?;
         wrapper_methods.push(fz.shell);
