@@ -1235,6 +1235,65 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
         - 由此进入 `LoggerFinderLoader.<clinit>`（906 类）→ `SecurityConstants.<clinit>` → `SocketPermission.init` → `String.toLowerCase(Locale)`（783 类）→ `ConditionalSpecialCasing` → `BreakIterator.getWordInstance` → `LocaleProviderAdapter` → `CLDRLocaleProviderAdapter.<init>`（691 类）。a5-4e 原设想按 tr / az / lt 收窄，但 `StringUTF16.toLowerCase` 遇到 Σ（U+03A3）时不分语言都进 `ConditionalSpecialCasing`（FINAL_CASED 条件），按语言常量收窄剪不掉这条边。
         - `CLDRLocaleProviderAdapter.<init>` 的 `doPrivileged(PrivilegedExceptionAction)` 按全程序合流派发到 `URLClassPath$3.run`，下接 `JarLoader`、`JarVerifier`、`PKCS7`，共 493 类。`URLClassPath$3` 的分配点 `getLoader(URL)` 在合法路径上：`ServiceLoader.loadProvider` → `Class.forName(Module, String)` → `ClassLoader.loadClass(Module, String)` → `BuiltinClassLoader.findClassOnClassPathOrNull`，其中 `Module.loader` 被分析器视为 open。`getLoader(URL)` 按 URL 是否以 `/` 结尾在 FileLoader 与 JarLoader 之间选择；应用类路径是 `""` → cwd 目录，运行期只走 FileLoader，但静态不可判定。
         - 结论：三支都要靠值层面的建模才能剪掉，按原定的「常量 / 可达性」手段收窄不了。需要的能力有三项：① 布尔 / 引用返回值的过程间常量（isSystem）；② Module 字段按手写写入精确建模（边界类字段整体去掉 open，试验仅少 10 类，需与 ① 配合）；③ doPrivileged 按调用点派发（a5-4a，s2 后它挂着 493 类的归属，与 ① ② 合用才有回收）。按这条路线达到门槛需要新的设计，待定。
+    - **(a)(b)(c) 设计与实测上界（2026-10-03，c1d-p0 d2501802，DeepCopy s2 口径 3065 类）**。协调方定的顺序：先做 (a) 过程间返回值常量传播（对准 `LazyLoggers.getLogger` / `isSystem`），再做 (b) Module 字段精确建模，最后 (c) doPrivileged 按调用点派发。动工前先测了回收上界。结论：三项合计回收不足 300 类，达不到门槛，需要重定方向。
+      - **设计要点**（若仍实施，按此做）：
+        - (a)：方法返回值摘要扩到 boolean / int 常量、null、精确类型 / 常量对象（`Obj` 标签）。现有 `Oracle::invoke_result` 的导出值只有 Int / Long / Null / Str，具体求值只接受常量实参。扩展包括两部分：特权动作返回值经 `executePrivileged` 回传，`run` 的摘要按动作类精确时传回调用点；调用点用摘要裁条件边。
+        - (b)：边界类字段按手写写入点取值。`Class.getModule` 的手写单例 `THE_MODULE` 名为 null、loader 为 null，`unnamed_module()` 经 `__set_loader` 写系统加载器。由清单声明手写写入值，生成器 / 分析器据此给出字段值集，不再整体按 open。
+        - (c)：`AccessController.executePrivileged` 的 `action.run()` 按调用点的实参值集派发（上下文敏感一层）。
+      - **实测 1：用 `[facts.returns]` 模拟 (a)(b) 的理想结果**（临时改清单、只折返回值，实验后已还原）：
+        - 只给 `DefaultLoggerFinder.isSystem = true`：3065，回收 0。
+        - 再加 `BootstrapLogger.useLazyLoggers` / `useSurrogateLoggers`：3050。
+        - 再加 `Pattern.has = false`：3041。
+        - 再加 `ProviderConfig.getProvider = null`：3040。
+        - 原因：§21.5 s2 小结里的「1163 / 906 / 783 / 493」都是首次发现链的归属数，不是可回收数。闭包是多连通的，剪掉 `getLoggerFromFinder` 后，同一批类从别的入口照样可达。
+      - **实测 2：边沿精确切除模拟**。用 `rava closure --dump-edges` 导出 DeepCopy 全部 358521 条边，从根做可达性，删掉指定节点的出边后重算类数，结果与 `--cut` 等价。
+        - 单节点切除可回收类数：
+
+          | 节点 | 回收 |
+          |---|---|
+          | `AccessController.executePrivileged`（PrivilegedAction 变体） | 456 |
+          | `executePrivileged`（PrivilegedExceptionAction 变体） | 95 |
+          | `JarVerifier.processEntry` | 84 |
+          | `StandardCharsets.lookup` | 74 |
+          | `SunEC$ProviderService.newInstance` | 70 |
+          | `Init$1.run`（XMLDSig 初始化） | 64 |
+          | `PKCS7.<init>` | 62 |
+          | `ObjectInputStream.readObject` | 47 |
+          | `LazyLoggers.getLoggerFromFinder`（即 (a) 目标） | 3 |
+
+        - 按派发目标拆 `executePrivileged`：
+          - PA 变体：`SunEC$1.run` 72、Collator 提供者 lambda 18、`XMLDSigRI$2.run` 13、`ProviderConfig$3.run` 11、`Currency$1` 10、`LogManager$1` 9、`SunPCSC$1` 8，其余为个位数。
+          - PEA 变体：`Init$1.run` 64、`URLJarFile$1` 12、`SunPKCS11$1` 9、`URLClassPath$3` 9。
+          - 这些动作的分配点都在各自的合法路径上（如 `SunEC.<init>`、`Init.init`），RTA 下按调用点派发也照样可达。所以 (c) 的回收约为 0，与 §21.5 a5-4a 的结论一致。只有把整台 `executePrivileged` 删掉才有 456，而那不是正确的切除。
+        - jar 校验与 JCA 簇 12 个节点（`JarVerifier.processEntry`、`PKCS7.<init>`、`SunEC$ProviderService.newInstance`、`Init$1.run`、`SunPKCS11$1`、`SunPCSC$1` 等）一起切：回收 256 类，降到约 2809。
+        - 删掉全部 Object 方法（`equals` / `hashCode` / `toString`）的 hub 派发边：类数仍为 3065，说明还有冗余路径。
+        - 已知的旁路入口：
+          - `SecurityConstants`：经 `Sun.<init>` ← `ProviderList$3` ← `AbstractList.hashCode` ← `CopyOnWriteArrayList.hashCode` ← `ImmutableCollections$SetN.probe`，即合流元素上的 `Object.hashCode` 派发。
+          - ICU：经 `PreHashedMap.get` → `AVA.equals`。
+      - **toLowerCase → `ConditionalSpecialCasing`（Σ 路径）的论证：静态上确实可达，是正确的下限，不硬砍。**
+        - DeepCopy 闭包内调用 `String.toLowerCase(Locale)` 的方法有 26 个，另有 6 个调用无参 `toLowerCase()`。其中多数接收者不是编译期常量，例如：
+          - `URLUtil.urlNoFragString`（URL 的 host）；
+          - `MessageFormat.findKeyword`；
+          - `MimeTable.findViaFileExtension`；
+          - `SocketPermission.getCanonName`；
+          - `Provider.getEngineName`；
+          - `DNSName.constrains`。
+        - String 的 coder 由内容决定。接收者非常量时，UTF16 分支可达。
+        - `StringUTF16.toLowerCaseEx` 遇到 U+03A3 时，不分语言都调 `ConditionalSpecialCasing.toLowerCaseEx`（FINAL_CASED 条件），再走 `isFinalCased` → `BreakIterator.getWordInstance(locale)` → `LocaleProviderAdapter` → CLDR / ICU 断句。
+        - 可以按常量收窄的只有 Latin1 侧：`StringLatin1.toLowerCaseEx` 只在 lang 为 tr / az / lt 时进入，`URL.lowerCaseProtocol(Locale.ROOT)` 这类常量 Locale 调用点可以折掉。可是只要还有一个 UTF16 侧调用点可达，这条链就整体保留。
+        - 因此这条链的规模（首次发现归属约 783 类，多数与其他入口共有）应计入正确下限。JDK 实跑时 `jdk/internal/icu` 装载 0 类，是因为输入里没有 Σ，属于动态与静态口径的差别。
+        - 反过来说，只有当这些调用点本身因上游收窄（jar / JCA 簇）而不可达时，这条链才会随之消失。
+      - **任务 2（撤手写 `BootLoader.findResourceAsStream`）受阻**：
+        - 按字节码执行：rava 只有一个未命名模块，`Class.getModule` 的模块名、loader 都为 null。路径是 `Module.getResourceAsStream` → `BootLoader.findResourceAsStream(null, …)` → `BuiltinClassLoader.findResource(null)` → `findResourceOnClassPath`；引导 `ucp` 为 null（未设 `jdk.boot.class.path.append`），结果返回 null。TestLocaleBundleFamilies、TestNormalizerResourceForms 会因取不到 ICU / 断句资源而失败。
+        - 忠实的终态是命名模块加 jimage：`SystemModuleReader` → `ImageReader` → `NativeImageBuffer.getNativeMap`，这一个 native 是唯一的手写，嵌入数据由 `input/src/resources.rs` 生成。这就是 `docs/plans/2026-10-02-boot-layer.md` §1.7、§2.3 第 6 项的步骤 1–5，按该计划须等 c1d-p0 合入后才开工。
+        - 曾考虑把 boot append 指向由文件 native 供给的嵌入伪目录，但这属于过渡方案，而且会重新打开 `URLClassPath` / `JarLoader` 簇，与 a5-4b 冲突。不采用。
+        - 结论：该方法保留到 boot-layer 步骤 5 落地后再删（届时 `non_native_overrides` 回到 0），或由协调方决定把 boot-layer 步骤 1–5 提前并入本线。
+      - **建议的重定向**（按实测回收量排序，供协调方与用户核对门槛数值）：
+        1. JCA 提供者在分析期按配置求值（`ProviderConfig` / `ProviderList` 只展开实际加载的提供者），连同 jar 签名校验簇，上界约 256 类。
+        2. 容器 / 元素敏感的 Object 方法派发（`SetN.probe`、`PreHashedMap.get` 一类），用于消除上述旁路。
+        3. Locale 语言常量折叠（只作用于 Latin1 侧）。
+        4. a5-4b 引导 `ucp` 为 null，与 boot-layer 步骤 1–5 合并考虑。
+        - 即使已识别的簇全部回收，合计也只有约 256–550 类，DeepCopy 停在约 2500–2800，离 1820 的门槛仍远。门槛能否按「去截断后的正确下限」重新核定，需要协调方与用户拍板。
 
 ### 21.6 并行编排
 
