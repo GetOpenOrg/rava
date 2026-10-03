@@ -170,7 +170,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏸ 闭包分析效率 P8 余量、sites（optimization-directions §三.2）
 │   ├─ ⏸ 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）
 │   ├─ ◇ S7 统一对象句柄 + 每类静态描述符 ─┐
-│   ├─ ◇ T1 跨测试编译复用（2026-10-01-cross-test-compile-reuse.md）─┴─ Q3：方案定稿后由用户一次决策
+│   ├─ ✅ T1 跨测试编译复用决策（2026-10-01-cross-test-compile-reuse.md，99dc658f 实测：档案 3609 类，全量 ≈35→≤11 机时）—— 用户 2026-10-03 四项全采纳：档案化 + 分发层、CLAUDE.md 第 2 条改写（已改）、开放世界折叠、语料动态 / 生产静态链接；C1d / C4 收官后按 §5.3 实施
 │   │     └─▶ T4 生成器只构建一次再分发（待服务器核实）
 │   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线；8 台服务器 JDK 25 已就绪，env_setup --check-only 2026-10-03）
 │
