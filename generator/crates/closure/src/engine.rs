@@ -75,6 +75,7 @@ mod class_lookup;
 mod sealed;
 mod nest;
 mod method_lookup;
+mod lookup_pair;
 mod field_lookup;
 mod pstrs;
 mod share;
@@ -428,6 +429,8 @@ pub struct Engine<'a> {
     reflect_names: HashMap<u32, BTreeMap<String, u8>>,
     /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
     named_ctors: BTreeSet<u32>,
+    /// 按名查方法的包装方法（方法键 → 查找类形参 × 名字形参的配对），见 `lookup_pair.rs`
+    lwraps: HashMap<MemberRef, Vec<lookup_pair::LookupWrap>>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
     /// 按名查字段点到的字段（声明类, 名字），见 `field_lookup.rs`

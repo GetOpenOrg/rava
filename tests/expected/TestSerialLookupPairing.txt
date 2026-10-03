@@ -1,0 +1,7 @@
+hello rava
+bye jvm
+total=12
+bytes>0=true
+ArrayList 2
+alice=10(tag:alice)
+bob=20(tag:bob)

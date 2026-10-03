@@ -14,6 +14,7 @@ impl<'a> Engine<'a> {
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
         let lambda = self.cs.lambda_site.take();
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.lookup_wrap_call(m, off, args);
         self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
         self.call_vals = None;
@@ -100,7 +101,10 @@ impl<'a> Engine<'a> {
                         self.reflect_name(&c, name, ch);
                     }
                 }
-            } else if class_recv && !names.is_empty() && classes.is_empty() {
+            }
+            // 查找类与名字都来自本方法形参：登记为包装方法，各调用点按本点实参配对点名（`lookup_pair.rs`）
+            let wrapped = class_recv && classes.is_empty() && self.lookup_wraps(m, mref, opcode, args, ch);
+            if class_recv && !wrapped && !names.is_empty() && classes.is_empty() && site_names.is_empty() {
                 // 名字只经形参流入、接收者非常量：查找目标推不出，记为反射缺口
                 self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }

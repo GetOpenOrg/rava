@@ -112,19 +112,31 @@ fn closure_sets(java: &std::path::Path, seed: u64) -> Option<[std::collections::
 }
 
 /// 闭包与哈希顺序无关：同一程序换哈希种子，类 / 方法 / 反射成员集合完全一致
-/// （形参常量格的中间态不得留下不可撤回的反射登记）。用例取 e2e 的 StockTrans：序列化辅助方法按形参取名、
-/// 按形参取类，形参字符串常量曾随调用点接入先后在种子 0 / 1 间多出或缺少 `writeObject` 回调
+/// （形参常量格的中间态不得留下不可撤回的反射登记）。用例取 e2e 的序列化例：序列化辅助方法按形参取名、
+/// 按形参取类，形参字符串常量曾随调用点接入先后在种子 0 / 1 间多出或缺少 `writeObject` 回调；
+/// 包装方法按调用点配对点名后，各种子下序列化回调都进反射成员（运行期按名查到的回调不得是存根）
 #[test]
 fn closure_independent_of_hash_seed() {
-    let java = manifest_dir().join("../../../tests/e2e/23_algorithms/StockTrans.java");
-    let Some(base) = closure_sets(&java, 0) else { return };
-    assert!(!base[2].is_empty(), "反射成员为空");
-    for seed in [1, 2] {
-        let other = closure_sets(&java, seed).expect("同一 JDK");
-        for (i, what) in ["类", "方法", "反射成员"].iter().enumerate() {
-            let only_base: Vec<_> = base[i].difference(&other[i]).take(10).collect();
-            let only_other: Vec<_> = other[i].difference(&base[i]).take(10).collect();
-            assert!(only_base.is_empty() && only_other.is_empty(), "种子 0 与 {seed} 的{what}集合不同：{only_base:?} / {only_other:?}");
+    // （用例, 是否序列化 ArrayList）
+    const CASES: [(&str, bool); 5] = [
+        ("23_algorithms/StockTrans.java", true),
+        ("35_io/TestSerialDefaultSuid.java", true),
+        ("35_io/TestSerialProxyForm.java", true),
+        ("35_io/TestSerialUserGenericCallbacks.java", false),
+        ("35_io/TestSerialLookupPairing.java", true),
+    ];
+    const CALLBACK: &str = "java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V";
+    for (case, list) in CASES {
+        let java = manifest_dir().join("../../../tests/e2e").join(case);
+        let Some(base) = closure_sets(&java, 0) else { return };
+        assert!(!list || base[2].contains(CALLBACK), "{case} 种子 0 的反射成员缺 {CALLBACK}");
+        for seed in [1, 2] {
+            let other = closure_sets(&java, seed).expect("同一 JDK");
+            for (i, what) in ["类", "方法", "反射成员"].iter().enumerate() {
+                let only_base: Vec<_> = base[i].difference(&other[i]).take(10).collect();
+                let only_other: Vec<_> = other[i].difference(&base[i]).take(10).collect();
+                assert!(only_base.is_empty() && only_other.is_empty(), "{case} 种子 0 与 {seed} 的{what}集合不同：{only_base:?} / {only_other:?}");
+            }
         }
     }
 }
