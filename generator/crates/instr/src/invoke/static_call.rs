@@ -128,6 +128,28 @@ fn same_class_bindings(env: &InstrEnv, sim: &StackSim, call: &CallRef) -> TargMa
     }
 }
 
+/// 调用路径带 turbofish（`Cls::<..>::m`，非 `Self::m`）且无跨类实例化时，形参里嵌套出现的
+/// 被调类形参（`Exchange<T>`）按 turbofish 的实例化代换（[`static_call_turbofish`]：同类按实参
+/// 结构合一的绑定优先、其次调用者 impl 形参，否则 Object），与实参强转目标一致；
+/// 裸类型变量形参已由签名查找留空（按描述符擦除），不受影响
+fn instantiate_owner_params(env: &InstrEnv, sim: &StackSim, call: &CallRef, tbind: &TargMap, sig_params: Option<&mut Vec<Option<RsType>>>) {
+    let Some(sp) = sig_params else {
+        return;
+    };
+    let Some(ci) = env.ctx.reg().get(&call.owner) else {
+        return;
+    };
+    let tps = env.ctx.ty.effective_class_type_params(ci);
+    let tf = static_call_turbofish(&env.ctx, sim, &RsType::class(call.owner.clone(), Vec::new()), Some(tbind));
+    if tps.is_empty() || tf.len() != tps.len() {
+        return;
+    }
+    let map: TargMap = tps.iter().cloned().zip(tf).collect();
+    for t in sp.iter_mut().flatten() {
+        *t = t.substitute(&|n| map.get(n).cloned());
+    }
+}
+
 /// 弹出实参并按形参类型强转；同类静态泛型方法的裸类型变量形参按实参补绑定
 fn pop_args(
     env: &InstrEnv,
@@ -222,8 +244,11 @@ pub fn gen_invokestatic(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, 
         _ => None,
     };
     let caller_tps: &[String] = if targ_map.is_some() { &[] } else { &sim.cfg.class_type_params };
-    let sig_params = sig::lookup_method_sig_params(env, &call, caller_tps, RecvView { targ_map: targ_map.as_ref(), ..RecvView::default() })?;
+    let mut sig_params = sig::lookup_method_sig_params(env, &call, caller_tps, RecvView { targ_map: targ_map.as_ref(), ..RecvView::default() })?;
     let mut tbind = same_class_bindings(env, sim, &call);
+    if targ_map.is_none() && ctx.short(&call.owner) != ctx.class_name {
+        instantiate_owner_params(env, sim, &call, &tbind, sig_params.as_mut());
+    }
     let args = pop_args(env, sim, log, &call, sig_params.as_deref(), &mut tbind)?;
     let cls_short = ctx.short(&call.owner);
     if !class_known(ctx, &cls_short) {
