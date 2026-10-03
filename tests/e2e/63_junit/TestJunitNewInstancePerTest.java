@@ -20,7 +20,7 @@ public class TestJunitNewInstancePerTest {
 
         String subject;
 
-        Sample() {
+        public Sample() {
             constructed++;
         }
 
