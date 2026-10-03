@@ -516,10 +516,12 @@ impl<'a> Engine<'a> {
         let cv = self.call_vals.clone();
         let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of).collect());
         match &cv {
-            Some(vs) => self.taint_site(m, t, base, n, vs),
-            None => self.taint_params(t, base, n, None),
+            Some(vs) => {
+                self.taint_site(m, t, base, n, vs);
+                self.join_pvs(t, base, n, vals.as_deref());
+            }
+            None => self.bind_pvs(t, base, n, None),
         }
-        self.join_pvs(t, base, n, vals.as_deref());
     }
 
     /// 值来自本方法形参时，各调用点在该形参上的字符串常量；登记 (m, off) 为读者
