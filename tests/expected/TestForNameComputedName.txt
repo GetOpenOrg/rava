@@ -1,0 +1,18 @@
+loaded Plain (no clinit yet)
+clinit Plain
+tag Plain-ready
+array Elem[] component Elem (no clinit yet)
+clinit Elem
+tag Elem-ready
+array2 Elem[][] same-elem true
+clinit Eager
+eager Eager
+lazy Lazy (no clinit yet)
+clinit Lazy.Leaf
+leaf TestForNameComputedName$Lazy$Leaf
+clinit Lazy
+tag Lazy-ready
+clinit Built
+built Built
+clinit Passed
+passed Passed

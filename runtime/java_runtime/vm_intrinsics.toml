@@ -367,6 +367,15 @@ class_lookups = [
     "java/lang/Class.forName:(Ljava/lang/String;)Ljava/lang/Class;",
     "java/lang/Class.forName:(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
 ]
+# 类名取值：返回接收者镜像所指类的 binary name（`.` 分隔，数组为 `[L…;` 描述符形式）/ 简单名（InnerClasses 的
+# 内部名，匿名类为空串；数组为元素简单名加 `[]`）。按名取类的拼接段是这些调用的结果时，候选取接收者镜像值集
+# 所指各类的名字；接收者含 open / 非镜像 / 基本类型镜像时该段推不出
+name_of_receiver = [
+    "java/lang/Class.getName:()Ljava/lang/String;",
+]
+simple_name_of_receiver = [
+    "java/lang/Class.getSimpleName:()Ljava/lang/String;",
+]
 # 实例化：接收者镜像所指类的无参构造
 instantiators = [
     "java/lang/Class.newInstance:()Ljava/lang/Object;",
@@ -391,7 +400,8 @@ writers = ["put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 
 [facts.string_concat]
-# 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果
+# 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果。追加可是取结果前的独立语句
+# （`sb.append(a).append(b); … sb.toString()`）：每条追加语句在取结果前的每条路径上恰好执行一次、先后确定时按序拼接
 builders = [
     "java/lang/StringBuilder.<init>:()V",
     "java/lang/StringBuilder.<init>:(Ljava/lang/String;)V",
@@ -400,7 +410,7 @@ appends = [
     "java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(Ljava/lang/CharSequence;)Ljava/lang/StringBuilder;",
-    # 基本类型段：按名取类推不出；按名查方法记为任意串
+    # 基本类型段：常量实参按 String.valueOf 语义成字面量（char 取字符、boolean 取 true / false）；非常量按名取类推不出、按名查方法记为任意串
     "java/lang/StringBuilder.append:(C)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;",
     "java/lang/StringBuilder.append:(J)Ljava/lang/StringBuilder;",

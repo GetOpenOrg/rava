@@ -106,7 +106,10 @@ impl<'a> Engine<'a> {
         }
         let cv = self.call_vals.clone();
         if let Some(vs) = &cv {
-            self.pstr_site(m, vs, |j| PSlot::H(h, j));
+            let string = self.id(STRING);
+            self.pstr_site(m, off, vs, |j| PSlot::H(h, j), |j| ptypes.get(j).copied().flatten() == Some(string));
+        } else {
+            self.pstr_top_h(h);
         }
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);

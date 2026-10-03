@@ -72,6 +72,8 @@ mod mirror_eq;
 mod selector;
 mod noreturn;
 mod class_lookup;
+mod builder;
+mod name_eval;
 mod sealed;
 mod nest;
 mod method_lookup;

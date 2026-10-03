@@ -1,7 +1,8 @@
 //! absint：基本块控制流图（按指令偏移查询）。
 //!
 //! 用途：拼接链的构建器被复用时（循环体内先清空再追加），判断「追加点之前最近一次清空」是否在每条路径上
-//! 都成立——即从追加点出发、不经过任何清空点能否回到追加点（能 = 上一轮内容可能残留，拆段不成立）。
+//! 都成立——即从追加点出发、不经过任何清空点能否回到追加点（能 = 上一轮内容可能残留，拆段不成立）；
+//! 独立的追加语句在取结果前是否必经、不重复、先后确定（从清空点出发回避某追加点能否到达取结果点 / 另一追加点）。
 //! 异常边按保守处理：块被某 try 区间覆盖时，从块首即可进入其处理器（块内清空点之前也可能抛出）。
 
 
@@ -91,13 +92,24 @@ impl Cfg {
 
     /// 从偏移 p 之后出发，不经过 `clear` 中任一偏移能否再次到达 p
     pub fn recurs_avoiding(&self, p: u32, clear: &[u32]) -> bool {
-        let Some(bp) = self.block(p) else { return true };
-        let blocked_in = |b: usize, from: u32, to: u32| clear.iter().any(|&c| self.block(c) == Some(b) && c >= from && c < to);
+        self.reaches_avoiding(p, p, clear)
+    }
+
+    /// 从偏移 from 之后出发，不经过 `avoid` 中任一偏移能否到达偏移 to（from == to 即能否再次到达）。
+    /// 偏移不在任何块内时按能到达处理（保守）
+    pub fn reaches_avoiding(&self, from: u32, to: u32, avoid: &[u32]) -> bool {
+        let (Some(bf), Some(bt)) = (self.block(from), self.block(to)) else { return true };
+        // 块 b 内 [lo, hi) 之间有回避点
+        let blocked_in = |b: usize, lo: u32, hi: u32| avoid.iter().any(|&c| c >= lo && c < hi && self.block(c) == Some(b));
+        // 同块内顺序到达
+        if bf == bt && to > from && !blocked_in(bf, from + 1, to) {
+            return true;
+        }
         let mut seen = vec![false; self.starts.len()];
-        let mut work: Vec<usize> = self.handlers[bp].clone();
-        // p 所在块的剩余部分：其中有清空点则正常后继被挡住
-        if !clear.iter().any(|&c| self.block(c) == Some(bp) && c > p) {
-            work.extend(&self.succ[bp]);
+        let mut work: Vec<usize> = self.handlers[bf].clone();
+        // from 所在块的剩余部分：其中有回避点则正常后继被挡住
+        if !blocked_in(bf, from + 1, self.ends[bf] + 1) {
+            work.extend(&self.succ[bf]);
         }
         while let Some(b) = work.pop() {
             if std::mem::replace(&mut seen[b], true) {
@@ -105,8 +117,8 @@ impl Cfg {
             }
             work.extend(&self.handlers[b]);
             let start = self.starts[b];
-            // 块首到 p（p 在本块时）之间没有清空点：回到了 p
-            if b == bp && !blocked_in(b, start, p) {
+            // 块首到 to（to 在本块时）之间没有回避点：到达
+            if b == bt && !blocked_in(b, start, to) {
                 return true;
             }
             if blocked_in(b, start, self.ends[b] + 1) {
@@ -149,5 +161,18 @@ mod tests {
         assert!(!c.recurs_avoiding(8, &[0, 5]));
         // 追加不在循环内
         assert!(!c.recurs_avoiding(20, &[0]));
+    }
+
+    #[test]
+    fn reach_must_pass() {
+        let c = Cfg::build(&loop_code());
+        // 0 → 20 必经循环头 2，不必经循环体 8（头部判定可直接出口）
+        assert!(!c.reaches_avoiding(0, 20, &[2]));
+        assert!(c.reaches_avoiding(0, 20, &[8]));
+        // 同块内顺序到达；回避点在中间则挡住
+        assert!(c.reaches_avoiding(5, 8, &[]));
+        assert!(!c.reaches_avoiding(5, 11, &[8]));
+        // 循环体内 8 之后经回边再到 5：回避循环头则不能
+        assert!(c.reaches_avoiding(8, 5, &[]) && !c.reaches_avoiding(8, 5, &[2]));
     }
 }

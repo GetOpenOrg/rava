@@ -12,6 +12,7 @@
 //!   因此不做笛卡尔积；全部段都是任意串（无任何字面量 / 候选集）时推不出，按原样处理（不补方法名）。
 
 use super::class_lookup::{event_at, is_invoke, site_of, Part};
+use super::name_eval::Frame;
 use super::*;
 
 /// 平凡取值方法的指令形态：aload_0 / getfield / areturn
@@ -128,7 +129,9 @@ impl<'a> Engine<'a> {
         if a.conservative {
             return None;
         }
-        let parts = self.name_parts(Some(m), &a, v, true, 0)?;
+        let owner = self.methods[m].key.owner.clone();
+        let f = Frame { m: Some(m), a: &a, owner: &owner, up: None };
+        let parts = self.name_parts(&f, v, true, 0)?;
         constrained(&parts).then_some(parts)
     }
 
@@ -138,8 +141,8 @@ impl<'a> Engine<'a> {
         cf.methods.iter().filter(|mm| !mm.name.starts_with('<') && parts_match(parts, &mm.name)).map(|mm| Rc::from(mm.name.as_str())).collect()
     }
 
-    /// 站点 o 的调用有唯一目标且有字节码时，目标方法的独立分析（不绑定形参、不入引擎）；层数超限为 None
-    fn callee_analysis(&self, a: &Analysis, o: u32, depth: u8) -> Option<Rc<Analysis>> {
+    /// 站点 o 的调用有唯一目标且有字节码时，目标方法的独立分析（不绑定形参、不入引擎）与其所在类；层数超限为 None
+    fn callee_analysis(&self, a: &Analysis, o: u32, depth: u8) -> Option<(Rc<Analysis>, String)> {
         if depth >= MAX_DEPTH {
             return None;
         }
@@ -163,23 +166,23 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        (!ca.conservative).then(|| Rc::new(ca))
+        (!ca.conservative).then(|| (Rc::new(ca), t.owner.clone()))
     }
 
-    /// 辅助方法的唯一返回值（及其分析）
-    pub(super) fn callee_return(&self, a: &Analysis, o: u32, depth: u8) -> Option<(Rc<Analysis>, V)> {
-        let ca = self.callee_analysis(a, o, depth)?;
+    /// 辅助方法的唯一返回值（及其分析、所在类）
+    pub(super) fn callee_return(&self, a: &Analysis, o: u32, depth: u8) -> Option<(Rc<Analysis>, V, String)> {
+        let (ca, owner) = self.callee_analysis(a, o, depth)?;
         let mut rets = ca.events.iter().filter_map(|(_, e)| match e {
             Event::Return(v) => Some(v.clone()),
             _ => None,
         });
         let v = rets.next()?;
-        rets.next().is_none().then_some((ca, v))
+        rets.next().is_none().then_some((ca, v, owner))
     }
 
     /// 辅助方法的返回值全是字符串常量（可合流）时的候选：该方法字节码里的全部 ldc 字符串（超集）
     pub(super) fn callee_consts(&self, a: &Analysis, o: u32, depth: u8) -> Option<BTreeSet<Rc<str>>> {
-        let ca = self.callee_analysis(a, o, depth)?;
+        let (ca, _) = self.callee_analysis(a, o, depth)?;
         let mut any = false;
         for (_, e) in &ca.events {
             let Event::Return(v) = e else { continue };

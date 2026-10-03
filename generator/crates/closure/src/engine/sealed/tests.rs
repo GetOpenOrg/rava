@@ -1,7 +1,7 @@
 //! sealed 单测：合成字节码（虚构类名）上的值映射写入、常量数组写入与构建器链首判定。
 
 use super::*;
-use super::super::class_lookup::builder_head;
+use super::super::builder::builder_prefix;
 use crate::manifest::{NameFacts, ValueMaps};
 use classfile::{op, Code, Insn, Operand};
 
@@ -164,12 +164,52 @@ fn builder_loop(reset: bool) -> Code {
     ])
 }
 
-/// 循环内先清空再追加：链首成立并报告清空；不清空则上一轮内容残留，不成立
+/// 循环内先清空再追加：链首成立（此前无内容）；不清空则上一轮内容残留，不成立
 #[test]
-fn builder_head_requires_reset_in_loop() {
+fn builder_prefix_requires_reset_in_loop() {
     let f = builder_facts();
     let a = absint::analyze("a/H", "(Z)V", true, &builder_loop(true), &Plain);
-    assert_eq!(builder_head(&f, &a, 0, 20).map(|x| x.1), Some(true));
+    assert_eq!(builder_prefix(&f, &a, 0, 20).map(|x| x.len()), Some(0));
     let a = absint::analyze("a/H", "(Z)V", true, &builder_loop(false), &Plain);
-    assert!(builder_head(&f, &a, 0, 20).is_none());
+    assert!(builder_prefix(&f, &a, 0, 20).is_none());
+}
+
+/// 独立追加语句：`b = new B(); [if (z)] b.add("x"); b.add("y").add("z"); b.str();`
+fn builder_statements(cond: bool) -> Code {
+    let add = || Operand::Method(mref("a/B", "add", "(La/S;)La/B;"), false);
+    let guard = |o, op, operand| if cond { i(o, op, operand) } else { i(o, NOP, Operand::None) };
+    code(vec![
+        i(0, op::NEW, Operand::Class("a/B".into())),
+        i(3, DUP, Operand::None),
+        i(4, op::INVOKESPECIAL, Operand::Method(mref("a/B", "<init>", "()V"), false)),
+        i(7, ASTORE_1, Operand::None),
+        guard(8, ILOAD_0, Operand::None),
+        guard(9, IFEQ, Operand::Branch(18)),
+        i(12, ALOAD_1, Operand::None),
+        i(13, op::LDC, ldc("x")),
+        i(15, op::INVOKEVIRTUAL, add()),
+        i(17, POP, Operand::None),
+        i(18, ALOAD_1, Operand::None),
+        i(19, op::LDC, ldc("y")),
+        i(21, op::INVOKEVIRTUAL, add()),
+        i(24, op::LDC, ldc("z")),
+        i(26, op::INVOKEVIRTUAL, add()),
+        i(29, POP, Operand::None),
+        i(30, ALOAD_1, Operand::None),
+        i(31, op::INVOKEVIRTUAL, Operand::Method(mref("a/B", "str", "()La/S;"), false)),
+        i(34, POP, Operand::None),
+        i(35, op::RETURN, Operand::None),
+    ])
+}
+
+/// 每条追加语句在取结果前必经且先后确定：按序相接；可跳过（条件追加）时不成立
+#[test]
+fn builder_prefix_statements_in_order() {
+    let f = builder_facts();
+    let a = absint::analyze("a/H", "(Z)V", true, &builder_statements(false), &Plain);
+    let segs = builder_prefix(&f, &a, 0, 31).unwrap();
+    let lits: Vec<_> = segs.iter().map(|(v, _)| v.lits()).collect();
+    assert_eq!(lits, vec![vec![Rc::from("x")], vec![Rc::from("y")], vec![Rc::from("z")]]);
+    let a = absint::analyze("a/H", "(Z)V", true, &builder_statements(true), &Plain);
+    assert!(builder_prefix(&f, &a, 0, 31).is_none());
 }
