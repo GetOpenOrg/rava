@@ -284,7 +284,7 @@ fn companions(
             continue;
         }
         mods.push(format!("mod {stem};"));
-        if !children.contains(base) {
+        if !children.contains(base) && !children.contains(&format!("{base}_t")) {
             extra_pub.insert(base.to_string());
         }
     }
