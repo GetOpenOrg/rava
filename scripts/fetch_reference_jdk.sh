@@ -82,7 +82,7 @@ installed() {
 if installed; then echo "$HOME_DIR"; exit 0; fi
 if [ "$MODE" = check ]; then
     log "参考 JDK ${TAG}（${PLATFORM}）未就位：$HOME_DIR"
-    log "取包：$REPO/scripts/fetch_reference_jdk.sh${ROOT_FLAG}${RAVA_REFJDK_ROOT:+（RAVA_REFJDK_ROOT=$RAVA_REFJDK_ROOT）}"
+    log "取包：$REPO/scripts/fetch_reference_jdk.sh${ROOT_FLAG}${RAVA_REFJDK_ROOT:+（RAVA_REFJDK_ROOT=${RAVA_REFJDK_ROOT}）}"
     exit 1
 fi
 

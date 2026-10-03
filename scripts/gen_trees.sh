@@ -4,7 +4,8 @@
 #
 # 用法：scripts/gen_trees.sh <out_dir> [TestA TestB ...]
 #   不给测试名 → 默认验收集（窗口 3 的 23 例 + 流三例 + CompletableFuture）
-#   环境变量：REPO（转译用的仓库/worktree，默认本仓库）、JDK（默认 21）
+#   环境变量：REPO（转译用的仓库/worktree，默认本仓库）、JDK（缺省参考构建 tools/refjdk.toml；
+#   JDK=N 改用本机 JDK N，仅供实验，见 scripts/corpus_jdk.sh）
 set -u
 OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
 DEFAULT_SET="TestTernary TestShortCircuit TestControlFlow TestLabeledBreak TestDoWhile
@@ -18,12 +19,13 @@ REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 cd "$REPO"
 . "$REPO/scripts/rava_env.sh" "$REPO"
+. "$REPO/scripts/corpus_jdk.sh" "$REPO"
 for n in $TESTS; do
     f=$(find tests/e2e -name "$n.java" | head -1)
     [ -n "$f" ] || { echo "NOT-FOUND $n"; continue; }
     s=$(python3 -c "import re;print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])','_','$n').lower())")
     # 生成树对照含 closure.json（rava build 缺省不写）
-    "$RAVA" build "$f" --jdk "${JDK:-21}" --clean --stop-after emit --closure-json > "$OUT/$n.log" 2>&1 \
+    "$RAVA" build "$f" "${CORPUS_JDK_ARGS[@]}" --clean --stop-after emit --closure-json > "$OUT/$n.log" 2>&1 \
         || echo "TRANSPILE-FAIL $n"
     rm -rf "${OUT:?}/$n" && cp -r "build/$s" "$OUT/$n"
     echo "$(grep -h 'raw-audit\|fallback-audit' "$OUT/$n.log" | tr '\n' ' ') $n"

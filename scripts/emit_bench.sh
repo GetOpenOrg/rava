@@ -6,18 +6,18 @@
 # 每次记录 /usr/bin/time -l 的墙钟 / user / sys / 峰值 RSS 与 `[perf]` 分阶段行，产出对照表。
 #
 # 用法：scripts/emit_bench.sh <out_dir> [Test ...]   缺省 HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture
-# 环境变量：RAVA（二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省 21）、
+# 环境变量：RAVA（二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省参考构建 tools/refjdk.toml；JDK=N 改用本机 JDK N，仅供实验）、
 #           SKIP_BUILD=1（跳过 ①，复用 <out_dir>/<Test>/closure_input）、
 #           EMIT_ARGS（追加给 build / emit 的参数，如 `--emit-jobs 1` 测串行发射）
 # 同一时间只跑一个 rava 进程（串行），不跑 cargo。
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
 RAVA="${RAVA:-$REPO/build/analyzer-target/release/rava}"
-JDKV="${JDK:-21}"
 OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
 TESTS="${*:-HelloWorld Digester DeepCopy CollectorsDemo TestCompletableFuture}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
-HOME_J="$(/usr/libexec/java_home -v "$JDKV" 2>/dev/null || echo "${JAVA_HOME:?}")"
+. "$REPO/scripts/corpus_jdk.sh" "$REPO"
+HOME_J="$JAVA_HOME"
 # 镜像独有类 / VM 支持类目录由 rava 在未给 --image 时自行派生（resolve::image）
 COMMON="--java-home $HOME_J --runtime $REPO/runtime/java_runtime --perf ${EMIT_ARGS:-}"
 
