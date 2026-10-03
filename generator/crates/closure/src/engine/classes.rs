@@ -608,7 +608,7 @@ impl<'a> Engine<'a> {
 /// 接收者静态类型链上经字段 / 方法返回推得的各级节点（内层在前）；具名类型段已由类型路径覆盖，不列
 fn derived_nodes(s: &SType) -> Vec<&SType> {
     let mut out = match s {
-        SType::Named(_) => return Vec::new(),
+        SType::Named(_) | SType::Java(_) => return Vec::new(),
         SType::Field(b, _) | SType::Call(b, _) => derived_nodes(b),
         SType::Ret(..) => Vec::new(),
     };

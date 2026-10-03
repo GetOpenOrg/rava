@@ -43,6 +43,7 @@ impl Engine<'_> {
                 return self.field_by_name(c, f).map(|(_, fd)| fd).ok_or_else(|| StypeBreak::Gap(format!("{c}.{f} 无此字段")));
             }
             SType::Call(b, m) => (self.stype_desc(host, b)?, m, false),
+            SType::Java(c) => return self.cp.contains(c).then(|| format!("L{c};")).ok_or_else(|| StypeBreak::Base(c.clone())),
         };
         if let Some(elem) = base.strip_prefix('[') {
             // 数组值（`JArray`）的元素访问器
