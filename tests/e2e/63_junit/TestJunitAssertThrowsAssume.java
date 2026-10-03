@@ -4,6 +4,7 @@ import org.junit.runner.Result;
 import org.junit.runner.notification.Failure;
 
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeFalse;
 import static org.junit.Assume.assumeNoException;
 import static org.junit.Assume.assumeTrue;
@@ -58,9 +59,5 @@ public class TestJunitAssertThrowsAssume {
             System.out.println("failure " + f.getDescription().getMethodName()
                     + " :: " + f.getMessage());
         }
-    }
-
-    static void assertTrue(String m, boolean c) {
-        org.junit.Assert.assertTrue(m, c);
     }
 }

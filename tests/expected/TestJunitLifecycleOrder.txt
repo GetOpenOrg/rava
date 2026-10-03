@@ -1,0 +1,9 @@
+run=2 fail=0 ok=true
+beforeClass
+before:1
+test:second value=42
+after:1 value=42
+before:2
+test:first value=43
+after:2 value=43
+afterClass
