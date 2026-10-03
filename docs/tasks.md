@@ -123,6 +123,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       a5-4b 回收 160..401；另立 a5-4e ICU 归一化入口（248）、a5-4f 日志后端探测（231）
 │   │     │       合入门槛（用户 10-03 定，先收窄再合）：DeepCopy / DTF / FSML 闭包类数与分析时间不高于集成分支
 │   │     │       （约 1820 类 / 23s、1476、1611），终态 DeepCopy ≤1640；顺序 a5-4b → a5-4e → a5-4f，不足再查余下 342
+│   │     │       ⚠ 10-03 实况：62f46bb2 合入 b4669206 时连带 1e623cec 去截断进入集成分支，门槛被跨过（StockTrans 1841→3107、DeepCopy ≈3139）；
+│   │     │         不回退（回退即恢复 80 个过渡手写），改以收窄兑现：JCA / jar 签名簇（≈−377）→ 容器元素 Object 方法 → Latin-1 语言折叠（a5-4e）
 │   │     │       s1 构造器查找只在 Class 值集齐全时点名：DeepCopy 3139→3069、3m03s→66s（暴露构造器 3498→105）
 │   │     │       s2 instanceof 否定分支收窄 + 钩子字段不按 open：DeepCopy 3065 / DTF 2884 / FSML 2886；首次发现子树重排后最大三支
 │   │     │       （getLoggerFromFinder 1163、toLowerCase→CLDR 783、URLClassPath$3→JarVerifier 493）均需值层面建模，原定手段不足，见 §21.5
