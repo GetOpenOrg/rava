@@ -199,7 +199,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │           ├─ ⏳ R6 模块元数据（isNamed / getName / isExported）+ 强封装边界（2 例）、R7 系统资源装载 getSystemResourceAsStream / findBootstrapClassOrNull（3 例）◀── boot layer（C1d-a 步骤 2–5：命名模块 + jimage）
 │           ├─ ⏳ R8 beans finder 构造存根（3 例）、R9 charset / zipfs 提供者构造（5 例）◀── jmod 第 1 步前置
 │           ├─ ⏳ R10 Array.set native 准入、R12 E0308 三例、R13 http async 转译错误；数组协变 Object[].class.isAssignableFrom(Integer[].class)（TestClassCastSubclass）
-│           └─ ⏳ 环境：TestLocaleCurrency 的 golden 与服务器 JDK 21 构建 CLDR 不一致——终态是 golden 与转译所用 JDK 同一构建（测试源码不弱化），方案待用户定
+│           └─ 🔄 环境：TestLocaleCurrency 的 golden（本机 Homebrew 21.0.11）与服务器 apt openjdk-21（21.0.12.1，随系统升级漂移）CLDR 不一致——2026-10-03 用户定：语料参考 JDK 固定为 21.0.11（Temurin），仓库登记版本 / URL / sha256，服务器落数据目录 /data/jdk，本机 ~/.cache/rava/jdk；run_tests / 抽查 / 作业 / expected 生成同源（jdk-pin 进行中）
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
