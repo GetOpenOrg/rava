@@ -28,3 +28,6 @@ docs/reports/jdk-scan-*
 
 # 本地测试日志
 *.log
+
+# 语料参考 JDK 落位（tools/refjdk.toml，scripts/fetch_reference_jdk.sh）
+/tools/refjdk/

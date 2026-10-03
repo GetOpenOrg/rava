@@ -7,12 +7,11 @@
 #   scripts/closure_bench.sh --quick <out_dir>           只跑 HelloWorld Digester CollectorsDemo
 #   scripts/closure_bench.sh --diff <base_dir> <new_dir> 逐例集合对照 closure.json（剔除 via、elapsed_ms、perf；
 #                                                      列表按内容排序，顺序不计；差异逐节报告）
-# 环境变量：RAVA（分析器二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省 21）
+# 环境变量：RAVA（分析器二进制，缺省 build/analyzer-target/release/rava）、JDK（缺省参考构建 tools/refjdk.toml；JDK=N 改用本机 JDK N，仅供实验）
 # 同一时间只跑一个分析进程（串行）；输入类目录缓存在 build/perf_in/<Test>/classes。
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
 RAVA="${RAVA:-$REPO/build/analyzer-target/release/rava}"
-JDKV="${JDK:-21}"
 FOUR="HelloWorld Digester DeepCopy CollectorsDemo"
 ACCEPT="TestTernary TestShortCircuit TestControlFlow TestLabeledBreak TestDoWhile
 TestSwitchExpression TestSwitchString TestSwitchFallthrough TestNestedTry TestTryInLoop
@@ -93,7 +92,8 @@ if [ "${1:-}" = "--quick" ]; then shift; TESTS="HelloWorld Digester CollectorsDe
 OUT="${1:?用法: $0 <out_dir> [tests...]}"; shift
 [ -n "$TESTS" ] || TESTS="${*:-$FOUR $ACCEPT}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
-HOME_J="$(/usr/libexec/java_home -v "$JDKV" 2>/dev/null || echo "${JAVA_HOME:?}")"
+. "$REPO/scripts/corpus_jdk.sh" "$REPO"
+HOME_J="$JAVA_HOME"
 # 镜像独有类 / VM 支持类目录（与 rava build 缺省派生同一实现：resolve::image）
 IMAGES=$("$RAVA" image-dirs --java-home "$HOME_J" --runtime runtime/java_runtime | sed 's/^/--image /' | tr '\n' ' ')
 
@@ -113,7 +113,7 @@ for n in $TESTS; do
     # shellcheck disable=SC2086
     /usr/bin/time -l "$RAVA" closure "$cls" --java-home "$HOME_J" --runtime runtime/java_runtime \
         --main "$main" $IMAGES -o "$OUT/$n.json" > "$OUT/$n.summary" 2> "$OUT/$n.time" \
-        || { echo "FAIL $n（见 $OUT/$n.time）"; continue; }
+        || { echo "FAIL ${n}（见 $OUT/$n.time）"; continue; }
     row=$(python3 - "$OUT/$n.time" "$OUT/$n.json" "$n" <<'EOF'
 import json, re, sys
 t = open(sys.argv[1], encoding='utf-8', errors='replace').read()

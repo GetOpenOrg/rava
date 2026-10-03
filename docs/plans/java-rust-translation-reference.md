@@ -517,7 +517,7 @@ return Err(JvmError::from(IllegalArgumentException::new_str(String::from("msg"))
 
 ### 8.4 VM 抛出的异常
 
-JVMS 规定由指令自身抛出的异常同样是翻译出的异常类实例，构造器由 `vm_roots.txt` 保证进入调用链：
+JVMS 规定由指令自身抛出的异常同样是翻译出的异常类实例，构造器由 `vm_roots.txt` 保证进入档案调用链（档案口径见 CLAUDE.md 第 2 条；当前闭包分析器仍按单测试计算）：
 
 | 指令 | 条件 | 异常 | 可读层形式 |
 |------|------|------|-----------|
