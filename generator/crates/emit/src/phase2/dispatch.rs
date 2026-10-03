@@ -220,15 +220,13 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, tps
     arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some((|| {{ {inner_body} }})()),"));
 }
 
-/// 类发射文本 → `__reflect_dispatch` 实现（无臂 / 泛型类 → None）。`only`：只发射这些方法名的臂。
-/// 泛型接口的闭包挂在 `I<Object..>` 上：接口载体只是对象引用 + 接口视图，任意实例化同形，实参 / 返回按擦除接入；
-/// 臂经载体做接口调用，按接收者的实现选中（字节码类、lambda、手写实现对象同一路径）
+/// 类发射文本 → `__reflect_dispatch` 实现（无臂 → None）。`only`：只发射这些方法名的臂。
+/// 泛型类 / 接口的闭包挂在 `X<Object..>` 上，类型形参擦为 Object、实参 / 返回按擦除接入：接口载体只是对象引用 +
+/// 接口视图，臂经载体做接口调用，按接收者的实现选中（字节码类、lambda、手写实现对象同一路径）；泛型类的接收者经
+/// `try_cast::<X<Object..>>` 取擦除视图（共享存储与对象标识），任意实例化同一分派（如序列化按名回调泛型容器的
+/// `writeObject`）
 fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
     let tps = class_tparams(ctx, class_bin);
-    let iface = ctx.ty.reg.get(class_bin).is_some_and(|c| c.is_interface());
-    if !tps.is_empty() && !iface {
-        return None;
-    }
     let short = ctx.declared(class_bin);
     let lines: Vec<&str> = em.text.split('\n').collect();
     let mut arms = Vec::new();
