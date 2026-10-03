@@ -12,6 +12,8 @@
 //! 交出的对象可实现任意接口，这些接口在闭包里没有静态的实现类。这类对象只经未建模来源（手写 / VM
 //! 产出，`unmodeled.rs`）进入字节码值流，故：虚调用点的接收者可能来自未建模来源时，调用属主至少 L2
 //! （`promote_unmodeled_owners`，先于超类型闭合）。之后「属主为 L1 ⇒ 接收者恒 null」对全部调用点成立。
+//! 开放世界调用点（非用户方法里属主可被用户扩展，`open_world.rs`）不折叠为 null_recv，其属主同样至少 L2
+//! （`promote_open_owners`，先于超类型闭合）。
 //!
 //! 只改层级，不新增可达方法 / 类，在工作队列排空后一次完成。
 
@@ -45,6 +47,7 @@ impl Engine<'_> {
 
     pub(super) fn promote_layout(&mut self) {
         self.promote_unmodeled_owners();
+        self.promote_open_owners();
         let mut work: Vec<String> =
             self.classes.iter().filter(|(_, c)| c.level > Level::Type).map(|(n, _)| n.clone()).collect();
         while let Some(cls) = work.pop() {

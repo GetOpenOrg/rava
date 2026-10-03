@@ -11,6 +11,7 @@ pub mod engine;
 pub mod handwritten;
 pub mod manifest;
 pub mod loaders;
+pub mod profile;
 pub mod seeds;
 
 use std::collections::BTreeMap;

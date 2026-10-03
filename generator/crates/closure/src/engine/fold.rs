@@ -306,6 +306,10 @@ impl Engine<'_> {
                     // 定义类的对象）的调用点属主也已升 L2（`levels.rs`）——接收者只可能是 null
                     let opaque = self.classes.get(mref.owner.as_str()).is_some_and(|c| c.level == Level::Type);
                     let h = hit.entry(*pc).or_default();
+                    // 开放世界（`open_world.rs`）：属主可被用户扩展的非用户调用点不依赖本次的实例化集合
+                    if !*h && self.open_site(i, &mref.owner) {
+                        *h = true;
+                    }
                     if !*h && !opaque {
                         *h = self.site_has_recv(i, *pc) || args.first().is_none_or(|r| r.nonnull() == Some(true) || self.recv_unmodeled(i, r, um));
                     }
