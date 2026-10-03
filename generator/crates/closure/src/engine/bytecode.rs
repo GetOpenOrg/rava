@@ -11,6 +11,8 @@ impl<'a> Engine<'a> {
         if !same {
             self.sysprops_scan(m, &a);
             self.vm_rules_scan(m, &a);
+            // 按名取类读过本方法调用点实参的读者（形参名字）重跑
+            self.pstr_reanalyzed(m);
         }
         let owner = self.methods[m].key.owner.clone();
         let cf = self.h.class(&owner);

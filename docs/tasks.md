@@ -97,7 +97,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
+│   │     ├─ ✅ a2 合入 62f46bb2（c1d-p0 b4669206，抽查 c1da-b4669206 9/9，含接口分派宏补 null 检查 + TestInstanceofElseDispatch；合并时 name_eval 同名私有函数改名 frame_mirror_classes）；
+│   │     │       🔄 续：initPhase2 膨胀用真实 --cut 定位 → 早退检查按分析期事实求值 → [[boot_init.phases]] → boot layer 步骤 2–5；闸门以档案规模计（基线 3609）
+│   │     │       原记录：代码 f2bdcf6e；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
 │   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
 │   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup 的 MapMode 反射构造分派缺席已修（构造器查找建模 22eb9e72，
 │   │     │       新增 TestJdkConstructorLookup）；c1da-2c478e2f 的 TestDateTimeFormat 回归（缺 JRE FormatData 束）已修（d1b1b2ba，新增 TestLocaleBundleFamilies）
@@ -148,7 +150,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
 │   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
 │   │             ✅ 第二段合入 b1983313（84c92245，抽查 c1db3-84c92245 10/10；含 setContextClassLoader 存根修复 + TestThreadContextLoaderInit）；
-│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；🔄 Class.forName 拼接类名字符串值流建模
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；✅ S7 Class.forName 拼接类名字符串值流建模（3553df09 合入，抽查 c1db3-3553df09 9/9：拼接各段可确定时折叠为常量串集合，新增 TestForNameComputedName）；🔄 DMH checkInitialized / shouldBeInitialized 未知站点归零
 │   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
 │   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
 │   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；✅ ② A+B 超接口 / 接口视图类型实参（b820c8aa 合入；27 例 from_any 2–78→1–4，闭包不变）；✅ ③ C+D 方法级类型变量 / super.m()（44b3a3b3 合入；27 例中 26 例 from_any=0，StockTrans 11→0）；✅ ④ 余下发射点统一 Object::from / Into<Object>、void 入 Object 改内部错误、from_any=0 守护测试（631bb78b 合入；27 例 + StockTrans / LambdaHiddenClass 全部 from_any=0，闭包不变）——**from_any 归零达成**
@@ -188,6 +190,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
 │         ✅【2026-10-03 完成，feat/junit-expected-redundancy d4efc8d6】63_junit expected 10/10（junit+hamcrest cp、JDK21 实跑、双跑确定性全过；顺修 3 处源码错误：assertTrue 静态导入缺失、遮蔽 helper、Sample 构造器非 public 致 initializationError）
 │         ✅【2026-10-03 完成，同分支】新增用例查重：133 例 ∩ 冗余候选 = 5、相似对交集 0，逐条论证全部保留（定向回归网/独有边界/算法族/jmod 档设计），无删除建议；报告 docs/reports/e2e-redundancy-newtests.md
+│         🔄【2026-10-03 用户侧子代理领取】6 例输出不符 expected 复核（TestClassCastSubclass / TestClassModuleFace / TestInvokeNullArgs / TestSetAccessibleBoundary / TestLocaleCurrency / TestSystemStableProps）：JDK 21 双跑对照，只按实测纠 expected，结论分 expected 错 / 生成器缺陷 / 依赖环境
+│         🔄【2026-10-03 用户侧子代理领取】抽查 e2enew-da8abee1 失败 69 例归因（运行 54〔存根 36〕/ 编译 8 / 输出 6 / 转译 1）：按模块、失败类型、A/B 档归并根因，报告入 docs/reports/，jmod-coverage §七 补实测列
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集

@@ -7,7 +7,18 @@
 //!   常量集沿边传递（调用方形参上已有与日后新增的常量都会到达）；
 //! - 派发枢纽同样有形参槽：调用点实参并入枢纽槽，枢纽槽流向父枢纽槽与各目标的形参槽；
 //! - 方法形参槽增长时，读过该槽的按名查找站点入站点队列重跑（不在接边中途重入）。
+//!
+//! 按名取类另需形参上的**全部**名字（不止字面量）：
+//! - String 形参槽另记非常量实参的调用点（调用方, 偏移, 实参序号），求值时在调用方帧里按拼接段求出名字；
+//! - 有实参值未知的调用边（非字节码调用方、无调用点记录即被分析的入口、实参未知的枢纽接入）的方法 / 枢纽，
+//!   其形参槽推不出（与 `pvals` 的 Top 同口径，恒不撤）；
+//! - 读者沿子集边逆向遍历全部上游槽：任一推不出即整体推不出；字面量取起点槽（子集边已传递）；
+//!   上游槽变化（新常量、新流入边、新非常量实参、推不出）、非常量实参所在调用方重分析时读者重跑；
+//! - 递归传参成环（槽在求值栈上）或上游槽过多时推不出。
 
+use super::class_lookup::{event_at, is_invoke, MAX_NAMES};
+use super::name_eval::Frame;
+use super::sealed::flatten;
 use super::*;
 
 /// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）
@@ -24,6 +35,33 @@ pub(super) struct PStrs {
     succ: HashMap<PSlot, BTreeSet<PSlot>>,
     /// 读过方法形参槽的按名查找站点（偏移）
     sites: HashMap<(usize, usize), BTreeSet<u32>>,
+    /// 子集边的逆：槽 → 流入它的槽
+    pred: HashMap<PSlot, BTreeSet<PSlot>>,
+    /// 流入 String 形参槽的非常量实参：(调用方, 调用偏移, 实参序号（不含接收者）)
+    inputs: HashMap<PSlot, BTreeSet<(usize, u32, usize)>>,
+    /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
+    top_m: HashSet<usize>,
+    top_h: HashSet<u32>,
+    /// 读过槽（按名取类遍历到的上游槽）的站点
+    demand: HashMap<PSlot, BTreeSet<(usize, u32)>>,
+    /// 求值读过其调用点实参的调用方 → 读者站点
+    xdemand: HashMap<usize, BTreeSet<(usize, u32)>>,
+    /// 正在求值的起点槽
+    active: Vec<PSlot>,
+}
+
+/// 读者遍历的上游槽数上限：超出按推不出处理
+const MAX_SLOTS: usize = 256;
+/// 形参名字求值的嵌套层数上限（调用方实参又来自其形参……）
+const MAX_NEST: usize = 4;
+
+/// 实参值是否不全由字面量与形参透传构成（需在调用方帧里求值）
+fn computed(v: &V) -> bool {
+    match v {
+        V::Str(_) | V::Null => false,
+        V::Ref { src, .. } => src.is_empty() || src.iter().any(|s| !matches!(s, Src::Param(_) | Src::Str(_))),
+        _ => true,
+    }
 }
 
 impl<'a> Engine<'a> {
@@ -64,6 +102,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             set.union_with(&new);
+            self.pstr_wake(s);
             if let PSlot::M(t, i) = s {
                 for &off in self.pstr.sites.get(&(t, i)).into_iter().flatten() {
                     if self.in_swork.insert((t, off)) {
@@ -82,15 +121,20 @@ impl<'a> Engine<'a> {
         if from == to || !self.pstr.succ.entry(from).or_default().insert(to) {
             return;
         }
+        self.pstr.pred.entry(to).or_default().insert(from);
+        self.pstr_wake(to);
         let xs = self.pstr.sets.get(&from).cloned().unwrap_or_default();
         if !xs.is_empty() {
             self.pstr_add(to, xs);
         }
     }
 
-    /// 调用方 m 的调用点实参值 vals（不含接收者）流入槽 to(j)
-    pub(super) fn pstr_site(&mut self, m: usize, vals: &[V], to: impl Fn(usize) -> PSlot) {
+    /// 调用方 m 偏移 off 的调用点实参值 vals（不含接收者）流入槽 to(j)；string(j) = 槽 j 是 String 形参
+    pub(super) fn pstr_site(&mut self, m: usize, off: u32, vals: &[V], to: impl Fn(usize) -> PSlot, string: impl Fn(usize) -> bool) {
         for (j, v) in vals.iter().enumerate() {
+            if string(j) && computed(v) && self.pstr.inputs.entry(to(j)).or_default().insert((m, off, j)) {
+                self.pstr_wake(to(j));
+            }
             let lits = v.lit_ids();
             if !lits.is_empty() {
                 self.pstr_add(to(j), lits.into_iter().collect());
@@ -103,5 +147,102 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 读过槽 s 的按名取类站点入站点队列重跑
+    fn pstr_wake(&mut self, s: PSlot) {
+        let Some(ws) = self.pstr.demand.get(&s) else { return };
+        for &w in ws {
+            if self.in_swork.insert(w) {
+                self.swork.push_back(w);
+            }
+        }
+    }
+
+    /// 方法 t 有实参值未知的调用边（或无调用点记录即被分析）：形参槽推不出
+    pub(super) fn pstr_top_m(&mut self, t: usize) {
+        if self.pstr.top_m.insert(t) {
+            for i in 0..self.methods[t].ptypes.len() {
+                self.pstr_wake(PSlot::M(t, i));
+            }
+        }
+    }
+
+    /// 枢纽 h 有实参值未知的调用点接入：形参槽推不出
+    pub(super) fn pstr_top_h(&mut self, h: u32) {
+        if self.pstr.top_h.insert(h) {
+            for j in 0..self.hubs[h as usize].ptypes.len() {
+                self.pstr_wake(PSlot::H(h, j));
+            }
+        }
+    }
+
+    /// 调用方 m 重分析：读过其调用点实参的读者站点重跑
+    pub(super) fn pstr_reanalyzed(&mut self, m: usize) {
+        let Some(ws) = self.pstr.xdemand.get(&m) else { return };
+        for &w in ws {
+            if self.in_swork.insert(w) {
+                self.swork.push_back(w);
+            }
+        }
+    }
+
+    /// 方法 m 的 String 形参槽 i 上的全部名字（当前站点为读者）；None = 推不出
+    pub(super) fn param_names(&mut self, m: usize, i: usize, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        let reader = self.cur_site?;
+        let string = self.id(STRING);
+        let start = PSlot::M(m, i);
+        if self.methods[m].ptypes.get(i).copied().flatten() != Some(string) || self.pstr.active.contains(&start) || self.pstr.active.len() >= MAX_NEST {
+            return None;
+        }
+        let mut seen: HashSet<PSlot> = HashSet::default();
+        let mut stack = vec![start];
+        let mut inputs: BTreeSet<(usize, u32, usize)> = BTreeSet::new();
+        while let Some(s) = stack.pop() {
+            if !seen.insert(s) {
+                continue;
+            }
+            if seen.len() > MAX_SLOTS {
+                return None;
+            }
+            self.pstr.demand.entry(s).or_default().insert(reader);
+            let top = match s {
+                PSlot::M(t, _) => self.pstr.top_m.contains(&t),
+                PSlot::H(h, _) => self.pstr.top_h.contains(&h),
+            };
+            if top {
+                return None;
+            }
+            inputs.extend(self.pstr.inputs.get(&s).into_iter().flatten().copied());
+            stack.extend(self.pstr.pred.get(&s).into_iter().flatten().copied());
+        }
+        let mut out: BTreeSet<Rc<str>> = self.pstr.sets.get(&start).into_iter().flatten().map(crate::absint::lit_str).collect();
+        self.pstr.active.push(start);
+        let r = self.param_inputs(reader, &inputs, depth, &mut out);
+        self.pstr.active.pop();
+        r.map(|_| out)
+    }
+
+    /// 非常量实参在各自调用方帧里求出的名字并入 out
+    fn param_inputs(&mut self, reader: (usize, u32), inputs: &BTreeSet<(usize, u32, usize)>, depth: u8, out: &mut BTreeSet<Rc<str>>) -> Option<()> {
+        for &(cm, off, j) in inputs {
+            self.pstr.xdemand.entry(cm).or_default().insert(reader);
+            // 调用方正待重分析：重分析后重跑
+            let Some(ca) = self.methods[cm].analysis.clone() else { continue };
+            if ca.conservative {
+                return None;
+            }
+            // 调用点在当前分析里已不可达：不再流入
+            let Some(Event::Invoke { opcode, args, .. }) = event_at(&ca, off, is_invoke) else { continue };
+            let v = args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j)?.clone();
+            let owner = self.methods[cm].key.owner.clone();
+            let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
+            let parts = self.name_parts(&f, &v, false, depth)?;
+            out.extend(flatten(&parts)?);
+            if out.len() > MAX_NAMES {
+                return None;
+            }
+        }
+        Some(())
     }
 }

@@ -576,6 +576,43 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
 - 发现（不在本步）：`Class.forName` 的名字是拼接串（`"[L" + X.class.getName() + ";"`、`getName() + "$Inner"`）时，
   所指类不入闭包或其 `<clinit>` 不入链，`class_init.unknown` 兜底只覆盖已在链上的 `<clinit>`——属 T2 的 forName 名字求值。
 
+**S7 按名取类的字符串值流建模**（提交 8018c9e1 边界用例 / ba0a9b63 实现，基于 fd76553d）。修上条发现。
+
+- 边界用例 `tests/e2e/62_reflection/TestForNameComputedName.java`（期望为 JDK 21 实测，字面量版 TestDeclaringClassInit 不动）：
+  `"[L" + X.class.getName() + ";"` 数组、`getName() + "$Plain"` 嵌套类、`getSimpleName` 拼接、StringBuilder 语句式拼接、
+  跨方法传递的拼接名；`forName(name)` / `forName(name, true, …)` / `forName(name, false, …)` 三种初始化语义。
+- 实现（全部由清单事实驱动，分析器不含类名）：
+  - 拼接拆段统一（`engine/builder.rs`）：indy `makeConcatWithConstants` 按引导常量配方拆段、类型取自 indy 描述符；
+    StringBuilder 取结果链之外，链首之前的构造初始内容与独立追加语句（`b.append(x);` 结果丢弃）按控制流确定：
+    从 p 出发不经构造 / 清空回不到 p；每条语句从每个能到 p 的清空点出发必经、不经清空点不重复、两两先后确定
+    （`absint::cfg::reaches_avoiding`）；清空与带初始内容的构造并存时不拆；
+  - 基本类型段（`append(C/I/J/Z)`、indy 基本类型动态实参）按 `String.valueOf` 成字面量；
+  - 类镜像取名（`[facts.reflect] name_of_receiver` / `simple_name_of_receiver`，`engine/name_eval.rs`）：接收者是类字面量，
+    或引擎帧里值集全是字节码类镜像时取 binary name / 简单名（InnerClasses 本类项；数组为元素简单名加 `[]`）；
+    open / 非镜像 / 基本类型 / 合成镜像推不出，值集尚空为空集（增长时重跑）；
+  - 求值帧 `Frame`：辅助方法返回值在被调帧里递归拆段，被调形参（来源恰为 `Param(i)`）换成调用点第 i 个实参，逐层上溯；
+  - 跨方法传参（`pstrs.rs::param_names`）：String 形参槽沿子集边上溯，汇集各调用点的计算实参 `(调用方, 偏移, 序号)`，
+    在调用方帧里求值；槽所属方法 / 枢纽有实参未知的调用边（`bind_pvs(None)`、无 pvals 即分析、枢纽无实参值接入）即推不出；
+    槽增长、出现新输入、调用方重分析时读者站点重跑；上限 256 槽 / 嵌套 4 层，成环推不出；
+  - 推不出的段仍走 unknown 兜底（top），计入 unknown 站点数。
+- 验收：TestForNameComputedName 的 Plain / Elem（数组元素）/ Eager / Lazy / Lazy$Leaf / Built / Passed 七个目标类及其 `<clinit>`
+  全部入闭包；unknown 站点 3 → 2（MHAF@14 消去，余 DMH `checkInitialized@9` / `shouldBeInitialized@104`）。
+- 测量集（`rava closure --image $(rava image-dirs)`，对照 fd76553d 同机交替跑；类 / 方法与方法集合完全一致，仅 via 变化）：
+
+| 用例 | 类 / 方法 | 未知调用点 | 时间 ms（基线 → 本步） | 站点重跑（基线 → 本步） |
+|---|---|---|---|---|
+| HelloWorld | 264 / 592 | 0 | 130 → 125 | 813 → 813 |
+| StockTrans | 1841 / 10935 | 3 | 26336 → 26472（3 次均值，+0.5%） | 362499 → 369987 |
+| DeepCopy | 1836 / 10847 | 3 | 15516 → 15740（3 次均值，+1.4%） | 304560 → 314555 |
+| TestMethodHandleDirect | 1551 / 9063 | 2 | 7136 → 7287 | 246167 → 255749 |
+| TestReflectFieldMethod | 1564 / 9207 | 2 | 7188 → 7046 | 270367 → 270902 |
+| TestReflectStaticFieldInit | 1601 / 9251 | 2 | 7304 → 7332 | 274184 → 256270 |
+| TestEnumSetMap | 282 / 735 | 0 | 138 → 137 | 1072 → 1072 |
+
+  站点重跑的增减分布在 HashMap / ConcurrentHashMap 节点等通用字段读站点上（逐站点计数对照），新增读者站点本身只多约百次：
+  是发现顺序变化引起的调度效应，不是新求值的成本。佐证：实验性关掉镜像值集读取时 DeepCopy 重跑反降到 294411（低于基线），
+  TestReflectStaticFieldInit 本步重跑 −6.5%。另试过按名查方法 / 字段（wild）不读镜像值集，重跑不变（314902），未保留。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
