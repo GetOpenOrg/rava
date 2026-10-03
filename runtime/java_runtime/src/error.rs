@@ -160,6 +160,16 @@ impl JvmError {
         vm_throw(crate::java::lang::OutOfMemoryError::new_str(String::from(message)))
     }
 
+    /// 栈界检查判定耗尽（`__stack_check`）：在放开的余量区内构造 `StackOverflowError`（HotSpot 黄区同义）。
+    /// 构造途中再次耗尽即余量也不够——与 HotSpot 红区同样按致命错误终止。
+    pub fn stack_overflow() -> Self {
+        let Some(_yellow) = rava_coro::YellowZone::enter() else {
+            eprintln!("fatal error: stack overflow while constructing java.lang.StackOverflowError");
+            std::process::abort();
+        };
+        vm_throw(crate::java::lang::StackOverflowError::new())
+    }
+
     /// 类处于 erroneous 状态后的再次主动使用（JVMS §5.5 步骤 5）。
     pub fn no_class_def_found(binary_name: &str) -> Self {
         vm_throw(crate::java::lang::NoClassDefFoundError::new_str(String::from(

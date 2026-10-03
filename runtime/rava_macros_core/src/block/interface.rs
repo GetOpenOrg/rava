@@ -162,6 +162,8 @@ pub(crate) fn expand_interface(
                 if ObjectVTable::is_jvm_null(&*self.__ref.0) {
                     return Err(JvmError::null_pointer());
                 }
+                // 建帧：栈界检查（载体分派直达实现类的 vtable 体，不经 wrapper 入口，a3-T1b）
+                __stack_check()?;
                 let mut __vt: ::std::option::Option<__Shared<dyn #vtable_ident>> = None;
                 ObjectVTable::__interface(__Shared::clone(&self.__ref.0), &mut __vt);
                 if let Some(__vt) = __vt {
