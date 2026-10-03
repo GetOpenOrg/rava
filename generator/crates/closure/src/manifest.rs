@@ -104,6 +104,7 @@ pub struct Manifest {
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
     serial_enumerators: HashSet<String>,
+    static_offset_getters: Vec<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     deserializers: HashSet<String>,
@@ -356,6 +357,7 @@ impl Manifest {
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
+            static_offset_getters: field_writes("static_offset_getters"),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
@@ -508,6 +510,12 @@ impl Manifest {
     /// 按可序列化字段口径放开，不按全部字段
     pub fn is_serial_enumerator(&self, member: &str) -> bool {
         self.serial_enumerators.contains(member)
+    }
+
+    /// 静态字段基址 / 偏移的取法：可达前类镜像不作静态字段基址按偏移读取
+    /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
+    pub fn is_static_offset_getter(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.static_offset_getters.iter().any(|s| member_is(s, key))
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
@@ -668,6 +676,14 @@ mod tests {
         let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
         assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
         assert!(with_vm("").unwrap().serializable_markers().is_empty());
+    }
+
+    #[test]
+    fn static_offset_getters_parse() {
+        let m = with_vm("[facts.field_writes]\nstatic_offset_getters = [\"a/U.sfo:(La/F;)J\"]\n").unwrap();
+        let key = |name: &str, desc: &str| classfile::constant::MemberRef { owner: "a/U".into(), name: name.into(), desc: desc.into() };
+        assert!(m.is_static_offset_getter(&key("sfo", "(La/F;)J")));
+        assert!(!m.is_static_offset_getter(&key("sfo", "(La/G;)J")));
     }
 
     #[test]

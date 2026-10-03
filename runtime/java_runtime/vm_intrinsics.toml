@@ -280,6 +280,16 @@ serial_enumerators = [
     "java/io/ObjectStreamClass.getDefaultSerialFields:(Ljava/lang/Class;)[Ljava/io/ObjectStreamField;",
     "java/io/ObjectStreamClass.computeDefaultSUID:(Ljava/lang/Class;)J",
 ]
+# static_offset_getters：静态字段基址 / 偏移的全部取法（Field 版与 MemberName 版）。按偏移读的基址若是类镜像，
+#   只有这些取法之一可达时才作静态字段基址读所指类的静态字段——否则静态字段偏移无从取得，类镜像基址只读 Class 的实例字段
+static_offset_getters = [
+    "jdk/internal/misc/Unsafe.staticFieldBase:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
+    "jdk/internal/misc/Unsafe.staticFieldOffset:(Ljava/lang/reflect/Field;)J",
+    "sun/misc/Unsafe.staticFieldBase:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
+    "sun/misc/Unsafe.staticFieldOffset:(Ljava/lang/reflect/Field;)J",
+    "java/lang/invoke/MethodHandleNatives.staticFieldBase:(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;",
+    "java/lang/invoke/MethodHandleNatives.staticFieldOffset:(Ljava/lang/invoke/MemberName;)J",
+]
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；

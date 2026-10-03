@@ -141,6 +141,8 @@ impl<'a> Engine<'a> {
             mirror_writes: HashMap::default(),
             offset_waits: HashMap::default(),
             offset_read_waits: HashMap::default(),
+            static_offset_live: false,
+            static_base_waits: Vec::new(),
             fwork: VecDeque::new(),
             xreaders: HashMap::default(),
             lookup_top: HashSet::default(),
