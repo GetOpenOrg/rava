@@ -16,14 +16,22 @@
     python3 scripts/run_tests.py --update-expected       # 重新生成 expected/*.txt（并行，-j 控制并发）
     python3 scripts/run_tests.py --no-run                # 只生成 Rust，不执行对比（动态对照照常，不触发 cargo）
     python3 scripts/run_tests.py --no-dyn                # 关闭动态对照（JVM 类加载轨迹 vs 静态闭包，缺省开）
-    python3 scripts/run_tests.py --jdk 25                # 指定 JDK 主版本（javac/java/翻译语料同源）
+    python3 scripts/run_tests.py --jdk 25                # 实验：改用本机 JDK 25（非参考构建，结果标记）
+    python3 scripts/run_tests.py --java-home /path/jdk   # 实验：改用指定 JDK（非参考构建，结果标记）
+    python3 scripts/run_tests.py --show-jdk              # 只打印本次选中的 JDK 后退出（不跑测试）
     python3 scripts/run_tests.py --deny equiv            # 任一等价发射点非零 → 整体失败
     python3 scripts/run_tests.py --deny equiv::neg-array # 细粒度拒绝（对齐 rustc lint 模型）
     python3 scripts/run_tests.py --deny stub-hit         # run 失败的 stub 子族 → 整体失败
     python3 scripts/run_tests.py --deny fallback         # 任一静默兜底点非零 → 整体失败（K-6b 防线）
     python3 scripts/run_tests.py --deny equiv --deny stub-hit   # 可叠加
     python3 scripts/run_tests.py --keep-artifacts               # 保留生成物（缺省逐例删编译产物、PASS 删 scratch）
-    python3 scripts/run_tests.py --jdk 21 --prune-passed        # 只清理：通过清单测试的遗留生成物 + java_runtime 中间缓存
+    python3 scripts/run_tests.py --prune-passed                 # 只清理：通过清单测试的遗留生成物 + java_runtime 中间缓存
+
+语料 JDK（docs/plans/2026-10-03-reference-jdk-21.md）：
+    缺省使用参考构建 tools/refjdk.toml（scripts/fetch_reference_jdk.sh 取包，JDK 根目录
+    RAVA_REFJDK_ROOT 可覆盖）：javac / java / jmods / golden JVM / 动态对照全部同源。
+    参考构建未就位即报错并提示取包命令，不回退系统 JDK；环境 JAVA_HOME 不参与语料选择。
+    显式 --jdk N / --java-home P 仅供实验，[jdk] / [meta] 行标记「非参考构建」。
 
 工作区模型（见 docs/plans/2026-09-16-per-test-scratch-workspace.md）：
     build/<test>/   每测试独立 scratch（手写 overlay + 该测试的生成代码）
@@ -62,6 +70,10 @@ ROOT   = Path(__file__).parent.parent
 # rava 二进制：批次开头构建一次（_ensure_rava），逐例直接执行
 RAVA_TARGET = ROOT / "build" / "analyzer-target"
 RAVA = RAVA_TARGET / "release" / "rava"
+# 参考 JDK 取包 / 定位脚本（清单 tools/refjdk.toml；参考构建的定位只在该脚本实现）
+REFJDK_SCRIPT = Path(__file__).parent / "fetch_reference_jdk.sh"
+# 本次语料 JDK：参考构建时为清单 tag，显式 --jdk / --java-home 覆盖（实验）时为 None
+JDK_REFERENCE: "str | None" = None
 # 当前生效 JDK 的主版本（apply_jdk_choice 由 `rava jdk --json` 取得；None=未解析，不分版本层）
 JDK_MAJOR: "int | None" = None
 
@@ -131,18 +143,56 @@ def _ensure_rava() -> None:
         sys.exit(f"[rava] 生成器构建失败（{r.returncode}）")
 
 
-def apply_jdk_choice(major: 'int | None') -> None:
-    """JDK 选择（rava 内唯一实现，javac/java/翻译语料全部同源）：
-    --jdk > JAVA_HOME > .jdk-version > 最新已安装。选中结果写回 JAVA_HOME，子进程继承。"""
-    global JDK_MAJOR
-    cmd = [str(RAVA), "jdk", "--json"] + (["--jdk", str(major)] if major is not None else [])
-    r = subprocess.run(cmd, capture_output=True, text=True)
+def _refjdk(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([str(REFJDK_SCRIPT), *args], capture_output=True, text=True)
+
+
+def reference_jdk() -> tuple[Path, str]:
+    """参考构建的 (JAVA_HOME, tag)；未就位即退出并提示取包命令（语料不回退系统 JDK）。"""
+    r = _refjdk("--check")
+    if r.returncode != 0:
+        sys.exit(f"[jdk] 语料缺省使用参考 JDK（tools/refjdk.toml），当前未就位：\n{r.stderr.strip()}\n"
+                 f"[jdk] 实验可显式 --jdk N / --java-home P（结果标记为非参考构建）")
+    t = _refjdk("--tag")
+    return Path(r.stdout.strip()), t.stdout.strip()
+
+
+def corpus_jdk_request(major: 'int | None', java_home: 'str | None') -> tuple[list[str], 'str | None']:
+    """语料 JDK 请求 → (`rava jdk` 的选择参数, 参考构建 tag 或 None)。
+    缺省 = 参考构建（经 --java-home 注入，压过环境 JAVA_HOME）；显式 --jdk / --java-home = 实验覆盖。"""
+    if major is not None and java_home is not None:
+        sys.exit("--jdk 与 --java-home 互斥")
+    if major is not None:
+        return ["--jdk", str(major)], None
+    if java_home is not None:
+        return ["--java-home", java_home], None
+    home, tag = reference_jdk()
+    return ["--java-home", str(home)], tag
+
+
+def jdk_label() -> str:
+    """[jdk] / [meta] 行的参考标记。"""
+    return (f"参考构建 {JDK_REFERENCE}" if JDK_REFERENCE
+            else "非参考构建（显式覆盖，仅供实验；与 expected 生成 JDK 不同源）")
+
+
+def apply_jdk_choice(major: 'int | None', java_home: 'str | None' = None) -> None:
+    """语料 JDK 选择：缺省参考构建，显式 --jdk / --java-home 覆盖（实验）。解析与校验走
+    `rava jdk --json`（主版本 / jmods 校验同 rava build）；结果写回 JAVA_HOME，子进程继承——
+    javac / java / 翻译语料 / golden JVM / 动态对照全部同源。"""
+    global JDK_MAJOR, JDK_REFERENCE
+    sel, ref = corpus_jdk_request(major, java_home)
+    ambient = os.environ.get("JAVA_HOME")
+    r = subprocess.run([str(RAVA), "jdk", "--json", *sel], capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"[jdk] {r.stderr.strip() or 'rava jdk 失败'}")
     j = json.loads(r.stdout)
     os.environ["JAVA_HOME"] = j["home"]
     JDK_MAJOR = j.get("major")
-    print(f"[jdk] JAVA_HOME → {j['home']} (JDK {JDK_MAJOR or '?'}，来源：{j['source']})")
+    JDK_REFERENCE = ref
+    print(f"[jdk] JAVA_HOME → {j['home']} (JDK {JDK_MAJOR or '?'}，来源：{j['source']}；{jdk_label()})")
+    if ambient and ref and Path(ambient) != Path(j["home"]):
+        print(f"[jdk] 环境 JAVA_HOME={ambient} 不参与语料选择（实验请显式 --java-home）")
 
 
 def _run(cmd: list[str], cwd: Path, capture: bool = True,
@@ -476,7 +526,9 @@ def _print_env_header() -> None:
     _flag_vars = ("CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "CARGO_PROFILE_DEV_DEBUG")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
     _flags += f" options={' '.join(MAIN_FLAGS) or '(none)'}"
-    print(f"[meta] git {_git_desc()} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
+    _jdk = (f"jdk={JDK_REFERENCE}(参考构建)" if JDK_REFERENCE
+            else f"jdk={os.environ.get('JAVA_HOME', '?')}(非参考构建)")
+    print(f"[meta] git {_git_desc()} | {_jdk} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
 
 
 def _test_workspace(bin_name: str) -> Path:
@@ -1555,7 +1607,12 @@ def main():
     ap.add_argument("--jobs", "-j",      type=int, default=1, metavar="N",
                     help="并行测试数（默认 1 = 顺序模式；0 = CPU 核数）")
     ap.add_argument("--jdk",             type=int, default=None, metavar="N",
-                    help="指定 JDK 主版本（javac/java/翻译语料同源；默认 JAVA_HOME > .jdk-version）")
+                    help="实验：改用本机已安装的 JDK 主版本 N（非参考构建，输出标记）；"
+                         "缺省用参考构建 tools/refjdk.toml（未就位即报错，不回退）")
+    ap.add_argument("--java-home",       metavar="P", default=None,
+                    help="实验：改用指定 JDK home（非参考构建，输出标记；与 --jdk 互斥）")
+    ap.add_argument("--show-jdk",        action="store_true",
+                    help="只解析并打印本次语料 JDK（JAVA_HOME / 主版本 / 是否参考构建）后退出，不跑测试")
     ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
@@ -1611,7 +1668,10 @@ def main():
         PROFILE_DIR = "release"
 
     _ensure_rava()
-    apply_jdk_choice(args.jdk)
+    apply_jdk_choice(args.jdk, args.java_home)
+    if args.show_jdk:
+        print(os.environ["JAVA_HOME"])
+        sys.exit(0)
 
     if args.filter:
         # filter 去重保序——发现逻辑按文件去重不会重复执行，但起始行显示与语义应干净
