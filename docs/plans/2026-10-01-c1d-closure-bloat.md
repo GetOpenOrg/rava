@@ -1608,3 +1608,19 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
     `join(Duration)` 对 park 中线程超时返回 false、unpark 后 true；虚拟父线程的 ITL 传给虚拟子线程；1 万个虚拟线程各让出一次全部完成。
     输出与载体编号无关。
   - 本机只做诊断性运行（非验收）：两例与 TestVirtualThread 输出均与 expected 一致。
+
+**T5 panic 跨栈传播与栈溢出（2026-10-03）**
+
+- `rava_coro::catch_entry`（`catch_unwind` + `AssertUnwindSafe`）与 `PanicPayload`：协程入口函数体的统一包装。
+  `continuation_impl.rs` 的 `coroutine_entry` 用它包住 `Continuation.enter(c, false)`：`Err(JvmError)` 照旧存 `thrown`，
+  逃逸的 panic 载荷存入该 Continuation 的协程记录 `panicked`（与 `thrown` 同处，随记录切回载体）。`enterSpecial` 在
+  完成时摘除记录、栈归池之后 `resume_unwind`，unwind 只在载体栈上继续，不穿过蹦床汇编帧。生成工作区为 `panic = "abort"`
+  时钩子在协程栈上直接 `exit(101)`，`catch_entry` 不起作用、零成本。
+- 新 `rava_coro/tests/panic.rs`（子进程即本测试二进制以 `--ignored --exact child_*` 重入，串行）：
+  - 钩子与 `create_java_vm` 同形（默认钩子 + `exit(101)`），在同名线程上分别平台线程 panic、协程内 panic：退出码均 101，
+    stderr 归一（去行列、OS 线程号）后同为 `thread 'vm-worker' panicked at tests/panic.rs` + 消息行；
+  - `RUST_BACKTRACE=1` 下协程内 panic 的回溯含协程内帧、止于 `rava_coro::arch::aarch64::trampoline`，不含载体侧挂载帧；
+  - unwind 构建（crate 单测即 unwind）：协程内 panic 经 `catch_entry` 捕获、切回载体 `resume_unwind`，被载体的
+    `catch_unwind` 捕获 1/1，载荷消息不变。
+- 栈溢出：sigaltstack 处理器与 `guard_page_overflow_aborts`（子进程 SIGABRT、stderr 含 `has overflowed its stack`）
+  已在 T1 落地，本步复跑通过（本机 macOS 硬件 guard 启用；Linux < 6.13 无 `MADV_GUARD_INSTALL` 时跳过，由软件栈界拦截）。
