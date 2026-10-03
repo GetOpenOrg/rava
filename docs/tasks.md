@@ -201,7 +201,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │           ├─ ⏳ R10 Array.set native 准入、R12 E0308 三例、R13 http async 转译错误；数组协变 Object[].class.isAssignableFrom(Integer[].class)（TestClassCastSubclass）
 │           └─ ✅ 参考 JDK 固定构建（jdk-pin 75a15d93 已合入；server_maintenance b595193）：Temurin 21.0.11+10，清单 tools/refjdk.toml（四平台 URL+sha256），scripts/fetch_reference_jdk.sh；本机 tools/refjdk/，服务器 /data/rava-jdk/（ubuntu /mnt/d/workspace/rava-jdk）；run_tests 缺省参考构建、缺失即报错，--jdk/--java-home 标「非参考构建」
 │              ⏳ 生成器缺陷（原误判为环境）：TestLocaleCurrency 转译产物在 Linux 输出 CN¥，JVM（21.0.11 与 21.0.12.1）均输出 ¥——locale/CLDR 取值经转译后不同，待归因（jdkpin-efc13cd0 sg2 复现）
-│             🔄【2026-10-03 用户侧子代理领取，可开工】参考 JDK 全量 golden 核验：Temurin 21.0.11 对 e2e 全集 javac+java 双跑逐字比对 tests/expected（只出报告；取包 scripts/fetch_reference_jdk.sh）
+│             ✅【2026-10-03 用户侧完成，c3ad4c4e 已合入】参考 JDK 全量 golden 核验（docs/reports/2026-10-03-refjdk-golden-verify.md）：1074 例构建差异 0、一致 1070（63_junit 带 cp 10/10）——固定 21.0.11 零重生成验收通过；TestLocaleCurrency 在一致集内，佐证生成器缺陷改判
+│                ⏳ 派生：TestVmPlatformNatives expected 含 libzip.so（Linux 生成），macOS 本机输出 .dylib——平台依赖，登记跨平台基线
+│                ⏳ 派生：ListMethods（getMethods 枚举序）、TestSocketLoopbackPair（半关闭竞速）JVM 侧输出非确定——语料自身缺陷，后者为第八轮新写，改为确定序形态（join 后统一打印）；前者按输出排序形态复核
 │         ✅【2026-10-03 用户侧完成，ad62f2c1 已合入】「档案调用链」口径文档同步：handwritten-boundary 原则一、java-rust-translation-reference §8.4、environment-variables、java-bytecode-transpiler-design、compatibility 五处改为档案口径并加「当前仍单测试」现状注；[boundary] 过渡期表述、行为现状表与历史文档按原样保留
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
