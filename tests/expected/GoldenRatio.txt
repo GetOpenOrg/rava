@@ -1,3 +1,0 @@
-Final value of phi : 1.61803278688525
-Number of iterations : 14
-Error (approx) : -0.00000120186465

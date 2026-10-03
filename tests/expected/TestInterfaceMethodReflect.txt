@@ -1,0 +1,8 @@
+isDefault=true
+default-invoke=shape:sq
+static-invoke=const
+static-mod=true
+bridge-count=1 bridge-param=Object
+bridge-invoke=1
+anon-synthetic=false anon-name=true
+anon-super=true

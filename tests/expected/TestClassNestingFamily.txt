@@ -1,0 +1,12 @@
+member=true enclosing=TestClassNestingFamily
+local=true enclosing-method=true
+anon=true local-false=true enclosing-method=true
+declared-count=5
+sealed=true
+permitted=2 first=Circle
+circle-not-sealed=true
+record=true
+comp-count=2
+comp=x type=int accessor=x
+comp=label type=String accessor=label
+via-accessor=3

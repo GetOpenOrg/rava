@@ -1,4 +1,0 @@
-ok
-multi: bad arg
-multi: math error
-single: checked error

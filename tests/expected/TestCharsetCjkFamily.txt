@@ -1,0 +1,7 @@
+GB18030 bytes=8 roundtrip=true
+Big5 bytes=12 roundtrip=true
+Shift_JIS bytes=12 roundtrip=true
+EUC-JP bytes=12 roundtrip=true
+EUC-KR bytes=11 roundtrip=true
+gb18030-euro-bytes=2
+gb18030-euro-back=[€]

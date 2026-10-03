@@ -1,0 +1,13 @@
+empty-same=true
+empty-eq=true
+empty-size=000
+empty-map-ex=UnsupportedOperationException
+empty-set-ex=UnsupportedOperationException
+singleton-size=1 contains=true miss=false
+singletonMap={k=1}
+singleton-remove-ex=UnsupportedOperationException
+view=2 iter-has-a=true
+unmod-ex=UnsupportedOperationException
+sync=1/n size=2
+after-remove=1
+addall=[x, y, z]

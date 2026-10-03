@@ -1,9 +1,0 @@
-open: A
-using: A
-close: A
-after A
-open: B
-use: B
-close: B
-caught: body error
-done

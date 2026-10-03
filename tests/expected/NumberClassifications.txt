@@ -1,3 +1,0 @@
-Deficient: 15043
-Perfect: 4
-Abundant: 4953

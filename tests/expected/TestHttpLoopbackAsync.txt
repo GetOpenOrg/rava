@@ -1,0 +1,4 @@
+200&alpha|200&beta
+chain-first=alpha
+chain-second=beta
+async-404=404

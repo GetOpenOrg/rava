@@ -1,0 +1,10 @@
+natural-null-comparator=true
+sorted=a,b,c
+first=a last=c
+ci-order=alpha,Bravo
+ci-same-ref=true
+head=a size=1
+tail=b,c
+mid=a,b
+view-add-visible=true size=4
+desc-first=3 last=1

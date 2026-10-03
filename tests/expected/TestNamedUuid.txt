@@ -1,0 +1,11 @@
+v3=a07b8f88-3d6b-3ed8-997e-4729027ba2b7
+version=3 variant=2
+deterministic=true
+input-sensitive=true
+parse-roundtrip=true
+case-insensitive=true
+fixed-msb=0x0 lsb=0x1
+bad-form-ex=IllegalArgumentException
+bad-hex-ex=NumberFormatException
+random-v4=true
+clock-seq-var=true

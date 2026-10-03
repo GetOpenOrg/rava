@@ -1,0 +1,6 @@
+hmac-sha256=cbc2b709101018370cbb19b7d94ae78397ea71d1b0c522231c965df2cdd41dfd
+hmac-md5=6b66ab45bf335a0bad577af9305c246e
+split-eq=true
+deterministic=true
+key-sensitive=true
+len=32 algo=HmacSHA256

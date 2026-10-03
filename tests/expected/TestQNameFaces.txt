@@ -1,0 +1,7 @@
+local=root ns-empty=true prefix-default=ns1
+eq-ignores-prefix=true
+hash-eq=true
+neq=true
+to-string={urn:e2e}child
+value-of-roundtrip=true
+local-tostring=root

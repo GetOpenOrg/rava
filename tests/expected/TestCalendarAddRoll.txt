@@ -1,0 +1,9 @@
+add-day=2026-11-01
+add-month-neg=2025-12-31
+roll-day=2026-10-01
+roll-month=2026-01-31
+roll-neg=2026-12-15
+add-400d=2027-12-05
+feb-max=29
+feb28-max=28
+dow=7 week-of-year=44

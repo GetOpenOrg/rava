@@ -1,0 +1,7 @@
+count=3
+order=META-INF/MANIFEST.MF,res/a.txt,res/b.txt
+entry-attr=text/plain
+b-no-attrs=true
+main-ver=1.0
+manifest-entry-keys=1
+done=true

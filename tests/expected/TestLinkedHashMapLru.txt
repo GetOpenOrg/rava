@@ -1,0 +1,8 @@
+insertion=[a, b, c]
+after-get=[b, c, a]
+after-getOrDefault=[c, a, b]
+after-reput=[a, b, c]
+lru-keys=[k1, k3]
+k1-present=true
+k2-evicted=true
+iterate=k1k3

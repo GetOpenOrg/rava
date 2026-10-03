@@ -1,0 +1,7 @@
+iface-count=1 parameterized=true
+raw=java.util.Map$Entry
+owner-null=false
+field-type=java.util.Map$Entry<java.lang.String, java.lang.Long> parameterized=true
+field-owner=java.util.Map owner-is-map=true
+list-owner-null=true
+entry-args=java.lang.String,java.lang.Integer
