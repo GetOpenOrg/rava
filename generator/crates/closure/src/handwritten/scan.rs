@@ -480,6 +480,35 @@ mod tests {
         assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
     }
 
+    /// 写入值取自按名读：经 unwrap / 转换 / `?` / let 传递记来源字段名；接收者是形参时记其序号（含 self），
+    /// let 绑定的局部变量不是形参；调用实参上的字符串字面量逐个记录
+    #[test]
+    fn field_value_by_name() {
+        let src = r#"
+            impl Natives {
+                pub fn init(this: MemberName, reference: Object) -> Result<()> {
+                    let clazz: Class = reference.0.__unsafe_ref_get("clazz").unwrap_or_else(|| stub("clazz")).try_cast::<Class>("java/lang/Class")?;
+                    this.__set_clazz(clazz);
+                    let local = make();
+                    this.__set_name(local.0.__unsafe_ref_get("name").unwrap());
+                    this.__set_type(reference.__get_type());
+                    Class::for_class("java/lang/Object", 1);
+                    Ok(())
+                }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let info = &out.fns["init"];
+        let w = |f: &str| info.fields.iter().find(|fa| fa.write && fa.field == f).map(|fa| (fa.value_src.clone(), fa.value_src_param)).expect("写入存在");
+        assert_eq!(w("clazz"), (Some("clazz".into()), Some(1)));
+        assert_eq!(w("name"), (Some("name".into()), None));
+        assert_eq!(w("type"), (None, None));
+        let c = info.calls.iter().find(|c| c.name == "for_class").expect("调用存在");
+        assert_eq!(c.lits, vec![Some("java/lang/Object".to_string()), None]);
+    }
+
     #[test]
     fn field_value_self() {
         let src = r#"

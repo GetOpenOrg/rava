@@ -340,6 +340,21 @@ mod tests {
         assert!(!constrained(&[Part::Wild, lit(""), Part::Wild]));
     }
 
+    /// 多选（辅助方法的各返回值）：任一支匹配即可；展开成不含多选的候选模式，超出上限为 None
+    #[test]
+    fn alternatives_match_and_expand() {
+        use super::super::class_lookup::expand;
+        let alt = Part::Alt(vec![vec![lit("L")], vec![lit("I"), Part::Wild]]);
+        let parts = [alt.clone(), any(&["0", "1"])];
+        assert!(parts_match(&parts, "L0") && parts_match(&parts, "Ix1") && !parts_match(&parts, "J0"));
+        assert!(constrained(&parts));
+        assert!(!constrained(&[Part::Alt(vec![vec![lit("a")], vec![Part::Wild]])]));
+        let pats = expand(&[lit("p"), alt]).expect("未超上限");
+        assert_eq!(pats, vec![vec![lit("p"), lit("L")], vec![lit("p"), lit("I"), Part::Wild]]);
+        let wide = Part::Alt((0..9).map(|i| vec![lit(&i.to_string())]).collect());
+        assert!(expand(&[wide.clone(), wide]).is_none());
+    }
+
     #[test]
     fn empty_candidates_match_nothing() {
         let parts = [lit("box"), any(&[])];

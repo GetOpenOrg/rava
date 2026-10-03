@@ -5,7 +5,7 @@
 //! - 名字：String 形参上的字面量（含合流前的各字面量）、形参透传的各调用点常量、读自 String 字段时该字段各写入处的
 //!   常量（字段可被字节码外写入或有非常量写入时不给出）、拼接链 / 拼接 indy 拆出的段（按目标类上的字段名反向匹配，
 //!   同按名查方法）；
-//! - 目标类：Class 常量实参、Class 形参与接收者值集里类镜像所指的类；值集含所指未知的 Class（open、非镜像值）时
+//! - 目标类：名字实参之前的 Class 常量实参、Class 形参与接收者值集里类镜像所指的类（名字之后的 Class 是字段类型）；值集含所指未知的 Class（open、非镜像值）时
 //!   目标类推不出：字面量名按名字点名（任意类的同名字段），拼接名记为反射缺口。
 
 use super::class_lookup::{event_at, Part};
@@ -26,10 +26,15 @@ impl<'a> Engine<'a> {
                 unknown |= self.class_values(m, r, &mut targets);
             }
         }
+        // 目标类取名字实参之前的 Class 实参（JDK 按名查字段的签名约定「声明类, 名字, 字段类型」）：
+        // 名字之后的 Class 是字段类型（`findGetter(refc, name, type)`、`findStaticVarHandle(decl, name, type)`），
+        // 不是查找目标，其值集推不出不构成目标缺口
+        let mut named = false;
         for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
             match p {
-                FieldType::Object(c) if c == CLASS => unknown |= self.class_values(m, a, &mut targets),
+                FieldType::Object(c) if c == CLASS && !named => unknown |= self.class_values(m, a, &mut targets),
                 FieldType::Object(c) if c == absint::STRING => {
+                    named = true;
                     names.extend(a.lits());
                     if matches!(a, V::Ref { .. }) {
                         names.extend(self.param_strs(m, off, a));

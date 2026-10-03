@@ -145,6 +145,8 @@ mod tests {
             r#"
             [r]
             class_lookups = ["a/C.byName:(Ljava/lang/String;)La/C;"]
+            class_loads = ["a/L.load:(Ljava/lang/String;)Ljava/lang/Class;"]
+            hw_mirror_by_name = ["a/K.for_class"]
             instantiators = ["a/C.make:()Ljava/lang/Object;"]
             name_of_receiver = ["a/K.name:()Ljava/lang/String;"]
             simple_name_of_receiver = ["a/K.simple:()Ljava/lang/String;"]
@@ -167,6 +169,8 @@ mod tests {
         assert_eq!(f.table_bases("get:(Ljava/lang/Object;)Ljava/lang/Object;").collect::<Vec<_>>(), vec!["a/T"]);
         assert!(f.is_builder("a/B.<init>:()V") && f.is_append("a/B.add:(Ljava/lang/String;)La/B;") && f.is_result("a/B.str:()Ljava/lang/String;"));
         assert!(f.is_reset("a/B.clear:(I)V"));
+        assert!(f.is_class_load("a/L.load:(Ljava/lang/String;)Ljava/lang/Class;") && !f.is_class_load("a/C.byName:(Ljava/lang/String;)La/C;"));
+        assert!(f.is_hw_mirror("a/K", "for_class") && !f.is_hw_mirror("a/K", "new"));
         assert!(f.is_name_of("a/K.name:()Ljava/lang/String;") && !f.is_name_of("a/K.simple:()Ljava/lang/String;"));
         assert!(f.is_simple_name_of("a/K.simple:()Ljava/lang/String;"));
         let vm = f.value_maps();

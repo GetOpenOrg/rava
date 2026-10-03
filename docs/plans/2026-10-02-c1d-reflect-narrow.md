@@ -613,6 +613,44 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   是发现顺序变化引起的调度效应，不是新求值的成本。佐证：实验性关掉镜像值集读取时 DeepCopy 重跑反降到 294411（低于基线），
   TestReflectStaticFieldInit 本步重跑 −6.5%。另试过按名查方法 / 字段（wild）不读镜像值集，重跑不变（314902），未保留。
 
+**S8 DMH 未知站点：类镜像来源精确建模**（提交 9e775446 边界用例 / 6c9d9ae2 实现，基于 3553df09；ad09ed4a 同步集成分支 c64ec205）。
+
+- 边界用例 `tests/e2e/59_method_handles/TestMethodHandleStaticInit.java`（期望为 JDK 21 实测）：findStatic / findStaticGetter /
+  findStaticSetter / findConstructor / findStaticVarHandle 各自触发声明类 `<clinit>`，findVirtual / findGetter / 取句柄本身不触发，
+  嵌套类与 unreflect 路径对照。
+- 根因：DMH `checkInitialized@9` / `shouldBeInitialized@104` 读 `MemberName.clazz`（`getDeclaringClass`），值集含 open(Class) 与非镜像
+  `java/lang/Class`，来源有四：BootLoader 按名加载（名字段推不出）、`generateConcreteSpeciesCode` 定义的物种类、手写
+  `Class::for_class("…")` 构造的镜像，以及手写 `MethodHandleNatives.init` / `Class.__method_from_meta` 写 `clazz` 时的语法推断。
+- 实现（清单事实驱动，分析器不含类名）：
+  - `[facts.reflect] class_loads`：按名加载（不初始化），名字推不出的段记任意串（`Gap::Class`），候选按闭包类名模式匹配，
+    新类入闭包时站点重跑；辅助方法返回值按接收者值集逐目标拆段（`Part::Alt`，展开至多 64 个模式）；
+  - `defined_classes` 补 `generateConcreteSpeciesCode → BoundMethodHandle$Species_Dyn`；
+  - `hw_mirror_by_name`：手写镜像构造的各调用点实参全是字符串字面量时，产出即这些类的镜像（手写扫描记实参字面量 `TypedCall.lits`）；
+  - 手写字段写入值取自按名读（`o.0.__unsafe_ref_get("f")`，`FieldAccess.value_src` / `value_src_param`）：接收者是形参时按其值集
+    逐对象接到 f 字段（开放的 final 类型按具体类型），否则接全部名为 f 的字段；手写层 `MethodHandleNatives.init` 的声明类改为按名读
+    `clazz`、`__method_from_meta` 以接收者为声明类；
+  - 按名查字段的目标类只取名字实参之前的 Class（`findGetter(refc, name, type)` 的 type 是字段类型），消去该处假缺口。
+- 集成分支 C1d-a 已以 `handle_owner_initializers`（成员声明类初始化点不按值集求目标）结构性消去这两个站点、去除 `class_init`
+  报告节；本步改为以反射缺口（`reflect.gaps`）与类 / 方法数验收。
+- 测量集（`rava closure --image $(rava image-dirs)`，对照 c64ec205 同机交替跑）：
+
+| 用例 | 类 / 方法（c64ec205 → 本步） | 反射缺口（c64ec205 → 本步） | 时间 ms（单轮；两值者为交替复测两轮） |
+|---|---|---|---|
+| HelloWorld | 499 / 2062 不变 | 0 → 0 | 564 → 439 |
+| StockTrans | 3107 / 18829 → 3107 / 18830 | 49 → 48 | 99803 → 85144 |
+| DeepCopy | 3102 / 18767 不变 | 45 → 44 | 84162 → 70681 |
+| TestMethodHandleDirect | 2904 / 17024 不变 | 27 → 27 | 56324 → 54671 |
+| TestReflectFieldMethod | 2901 / 17072 不变 | 27 → 27 | 54072 → 63679 |
+| TestReflectStaticFieldInit | 2904 / 17003 不变 | 27 → 27 | 66073 / 52858 → 73789 / 53672 |
+| TestEnumSetMap | 2900 / 16998 不变 | 27 → 27 | 56013 → 61255 |
+| TestMethodHandleStaticInit | 2904 / 17000 不变 | 27 → 27 | 63748 / 52643 → 62218 / 53379 |
+
+  机器负载 4.4–4.7（并行代理），单次时间波动 ±20%，交替复测持平。缺口消去：`URL$DefaultFactory.createURLStreamHandler@169`
+  `getDeclaredConstructor ← open(Class)`、`ProxyGenerator.addProxyMethod`；新增 `MemberName.<init>(Class)`「按名查字段：目标类推不出、
+  名字为拼接」——`getSimpleName` 现可拆段（`Part::Alt`），而目标 `type.getDeclaringClass()` 经 native `getDeclaringClass0` 为 open；
+  该调用（`MemberName.init`）并非按名查字段，属 field_lookup「Class + String 形参」形状判定的假阳性，类数无影响，登记不做。
+- 待服务器 e2e：手写层 `class_impl.rs`（`__method_from_meta`）与 `method_handle_natives_impl.rs`（`init` 按名读 `clazz`）。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
