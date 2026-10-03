@@ -21,8 +21,8 @@ use classfile::Operand;
 pub(super) struct RmWrap {
     /// 已按包装方法处理（删除键交给调用点）的方法
     deferred: BTreeSet<MemberRef>,
-    /// 有非字节码调用点入口的方法
-    untracked: BTreeSet<MemberRef>,
+    /// 有非字节码调用点入口的方法（方法入口逐次查询，只做成员判定）
+    untracked: HashSet<MemberRef>,
 }
 
 /// 值恰为本方法某形参（实参序号含接收者）
@@ -162,7 +162,11 @@ impl Engine<'_> {
 
     /// 方法入口来自非字节码调用点：已按删除包装方法处理过的，键按推不出处理（`values` 全部不折叠）
     pub(super) fn remove_entry(&mut self, key: &MemberRef, tracked: bool) {
-        if tracked || !self.rmwrap.untracked.insert(key.clone()) || !self.rmwrap.deferred.contains(key) {
+        if tracked || self.rmwrap.untracked.contains(key) {
+            return;
+        }
+        self.rmwrap.untracked.insert(key.clone());
+        if !self.rmwrap.deferred.contains(key) {
             return;
         }
         let keys = self.man.sysprops.values().keys().map(|k| Some(k.clone())).collect();

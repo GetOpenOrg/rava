@@ -40,6 +40,8 @@ pub(super) struct FlowGraph {
     pub(super) fmemo_bytes: usize,
     /// 观测：`drain_flows` 按（源种类, 目标种类）的推送次数 / 其中有增量的次数（种类序号见 `stats.rs::kind_ix`）
     pub(super) pushes: Vec<[u64; 2]>,
+    /// 观测：按源节点（代表）出队推送次数 / 沿边推送次数 / 其中有增量的次数
+    pub(super) push_src: Vec<[u64; 3]>,
     /// 观测：收窄记忆命中 / 未命中 / 超预算清空次数
     pub(super) fmemo_stats: [u64; 3],
 }
@@ -106,6 +108,7 @@ impl FlowGraph {
         self.edges.push(Vec::new());
         self.delta.push(TypeSet::default());
         self.queued.push(false);
+        self.push_src.push([0; 3]);
         self.rep.push(i);
         i
     }

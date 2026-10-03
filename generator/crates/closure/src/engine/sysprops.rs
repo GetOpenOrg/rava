@@ -41,8 +41,8 @@ pub(super) struct PropSum {
 pub(super) struct SpRet {
     /// 返回值可能是属性表对象的方法
     methods: BTreeSet<MemberRef>,
-    /// 有非字节码调用点入口的方法
-    untracked: BTreeSet<MemberRef>,
+    /// 有非字节码调用点入口的方法（方法入口逐次查询，只做成员判定）
+    untracked: HashSet<MemberRef>,
     /// 目标不唯一的引用返回调用点（名字, 描述符）
     virt: BTreeSet<(String, String)>,
 }
@@ -438,9 +438,10 @@ impl Engine<'_> {
         let tracked = matches!(via.kind, "invoke" | "dispatch")
             && matches!(via.from, From::Method(c) if self.methods[c].kind == Kind::Bytecode);
         self.remove_entry(key, tracked);
-        if !key.desc.ends_with(';') || tracked || !self.spret.untracked.insert(key.clone()) {
+        if !key.desc.ends_with(';') || tracked || self.spret.untracked.contains(key) {
             return;
         }
+        self.spret.untracked.insert(key.clone());
         if self.spret.methods.contains(key) {
             let (k, kind) = (key.to_string(), via.kind);
             self.sysprops_unstable(vec![None], || format!("{k}：非字节码入口（{kind}）"));

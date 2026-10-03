@@ -271,12 +271,6 @@ impl<'a> Engine<'a> {
         if self.man.is_handle_interpreter(&self.methods[m].key) { Gate::Handle } else { Gate::Offset }
     }
 
-    /// 手写方法的内存读写按清单（`[facts.array_writes]` / `[facts.memory_reads]`）逐调用点建模
-    pub(super) fn memory_modeled(&self, m: usize) -> bool {
-        let n = &self.methods[m];
-        matches!(n.kind, Kind::Handwritten(_)) && (matches!(n.ret_model, RetModel::Read(_)) || self.man.array_writes(&n.key.to_string()).is_some())
-    }
-
     pub(super) fn is_poly(&self, t: usize) -> bool {
         let key = &self.methods[t].key;
         self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(resolve::is_signature_polymorphic)).unwrap_or(false)

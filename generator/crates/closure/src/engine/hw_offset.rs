@@ -75,11 +75,17 @@ impl<'a> Engine<'a> {
     }
 
     /// 方法是声明了内存效果（数组 / 字段写入或内存读取）的手写方法
-    pub(super) fn declares_memory(&self, m: usize) -> bool {
+    /// （返回值模型 `RetModel::Read` 即 `memory_read` 登记，按清单逐调用点建模的读写同在此列）
+    pub(super) fn declares_memory(&mut self, m: usize) -> bool {
         if !matches!(self.methods[m].kind, Kind::Handwritten(_)) {
             return false;
         }
+        if let Some(&d) = self.mem_decl.get(&m) {
+            return d;
+        }
         let k = self.methods[m].key.to_string();
-        self.man.array_writes(&k).is_some() || self.man.memory_read(&k).is_some()
+        let d = self.man.array_writes(&k).is_some() || self.man.memory_read(&k).is_some();
+        self.mem_decl.insert(m, d);
+        d
     }
 }
