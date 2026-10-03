@@ -645,7 +645,12 @@ profile.json ─┐
 
 - s1 下 `rava compile build/t1b/s1/HelloWorld` 编译通过，运行输出与 `tests/expected/HelloWorld.txt` 一致（用户行登记 + 两侧合并路径实跑）。
 - 守护测试 `driver/tests/archive_emit_cli.rs::archive_crates_identical_across_programs`（MinimalMain / NullView 同档案，档案 crate 逐字节相同、档案侧表无用户类、入口登记用户行）通过。
-- 生成器单元测试（`cargo test --release`，含 jdk_literal_lint / no_jdk_literals）423 项全过；`closure_cli::closure_independent_of_hash_seed` 失败于 TestSerialLookupPairing（种子 0 与 2 的 com/sun/crypto/provider/AESCipher* 类集不同），属闭包分析不确定性，1b 对闭包只增加 sam_types 输出，与本步无关，转 T2 serial 线排查。
+- 生成器单元测试（`cargo test --release`，含 jdk_literal_lint / no_jdk_literals / macro_fn_lint）426 项全过，含 `closure_cli::closure_independent_of_hash_seed`。
+- 哈希种子回归（已修）：`closure_independent_of_hash_seed` 一度失败于 TestSerialLookupPairing。种子 2 比种子 0 多出 com/sun/crypto/provider/AESCipher* 等 JCA 提供者、SubList、ProcessImpl 一线，3360 → 4132 类；集成分支 3541dc13 上该测试通过。
+  - 根因：java_meta 拆分时，`meta.rs` 的 20 个合并表访问器（class_hierarchy、class_fields 等）改由 `merged_table!` 在条目位置展开。闭包分析器按 syn 扫描手写文件的 `fn` 项建模块函数单元，宏展开出的 fn 对它不可见，手写层跨文件调用 `crate::meta::<访问器>()` 的 rt-fn 边因此静默丢失：调用方 POOL → meta 单元 → Esc 的流断开。
+  - 后果：断流后，`ProviderConfig.doLoadProvider` 返回值的流值在不同哈希迭代序下收敛到不同结果（种子 0 为 {SunPKCS11, open}，种子 2 经 `ProviderConfig.provider` 字段回灌为全部 7 个提供者），闭包随种子变化。
+  - 修复：访问器一律写成普通 fn，删去宏。两种子与基线（34001bde runtime）同为 3360 类。
+  - 守护：新增 `closure/src/handwritten/macro_fn_lint.rs`，禁止手写层条目位置的宏调用展开出自由函数；trait impl、static 等不受限。对旧 meta.rs 能报出全部 20 处。
 
 **失败路线**
 - 槽计划在作用域视图上惰性求值（OnceLock）：首个查询文件替所有文件认领类型名，JDK 文件的 import 随用户程序变化。已改为在无作用域视图上求值。

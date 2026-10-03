@@ -170,24 +170,16 @@ fn merged<T: Copy + 'static>(
     })
 }
 
-/// 合并表查询入口：`$archive` 为档案侧 extern 表，`$field` 为 [`UserMeta`] 同名字段，`$order` 为合并后排序
-macro_rules! merged_table {
-    ($(#[$doc:meta])* $vis:vis fn $name:ident -> $ty:ty = $archive:ident, $field:ident, $order:expr) => {
-        $(#[$doc])*
-        $vis fn $name() -> &'static [$ty] {
-            static CELL: std::sync::OnceLock<&'static [$ty]> = std::sync::OnceLock::new();
-            // SAFETY：符号由 java_meta 以完全相同的类型定义为不可变 static，初始化于编译期，读取无数据竞争
-            merged(&CELL, unsafe { $archive }, |m| m.$field, $order)
-        }
-    };
-}
-
+// 合并表查询入口一律写成普通 fn（不经 macro_rules! 生成）：闭包分析器按 syn 扫描手写模块函数，
+// 宏展开出的 fn 对其不可见，跨文件调用边会丢失（2026-10-04 种子不确定回归）。
 // SAFETY（以下直接读 extern 表的函数同）：符号由 java_meta 以完全相同的类型定义为不可变 static，
 // 初始化于编译期，读取无数据竞争。
 
-merged_table!(
-    /// 类 → 全部超类型（含自身）。
-    pub fn class_hierarchy -> (&'static str, Names) = CLASS_HIERARCHY, class_hierarchy, Some(|a, b| a.0.cmp(b.0)));
+/// 类 → 全部超类型（含自身）。
+pub fn class_hierarchy() -> &'static [(&'static str, Names)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, Names)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_HIERARCHY }, |m| m.class_hierarchy, Some(|a, b| a.0.cmp(b.0)))
+}
 /// 类的全部超类型（含自身；层次表按名有序，二分查找）；表外类 → 空。
 pub fn supertypes(class: &str) -> Names {
     let table = class_hierarchy();
@@ -197,32 +189,54 @@ pub fn supertypes(class: &str) -> Names {
 pub fn is_subtype_of(class: &str, of: &str) -> bool {
     supertypes(class).contains(&of)
 }
-merged_table!(
-    /// 类 → 直接父类（接口缺席）。
-    pub fn class_direct_super -> (&'static str, &'static str) = CLASS_DIRECT_SUPER, class_direct_super, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 声明字段（声明序 = slot）。
-    pub fn class_fields -> (&'static str, &'static [FieldMeta]) = CLASS_FIELDS, class_fields, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 声明方法（声明序 = slot）。
-    pub fn class_methods -> (&'static str, &'static [MethodMeta]) = CLASS_METHODS, class_methods, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → Modifier 位集。
-    pub fn class_modifiers -> (&'static str, i32) = CLASS_MODIFIERS, class_modifiers, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 嵌套元数据。
-    pub fn class_nest -> (&'static str, NestMeta) = CLASS_NEST, class_nest, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 直接超接口。
-    pub fn class_interfaces -> (&'static str, Names) = CLASS_INTERFACES, class_interfaces, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 类级注解原始字节 + 稀疏常量池。
-    pub fn class_anno -> (&'static str, &'static [u8], &'static [(i32, CpVal)]) = CLASS_ANNO, class_anno, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 含 <clinit> 的类集。
-    pub fn clinit_classes -> &'static str = CLINIT_CLASSES, clinit_classes, Some(|a, b| a.cmp(b)));
-merged_table!(fn hidden_classes -> &'static str = HIDDEN_CLASSES, hidden_classes, Some(|a, b| a.cmp(b)));
-merged_table!(fn class_defining_loader_table -> (&'static str, &'static str) = CLASS_DEFINING_LOADER, class_defining_loader, Some(|a, b| a.0.cmp(b.0)));
+/// 类 → 直接父类（接口缺席）。
+pub fn class_direct_super() -> &'static [(&'static str, &'static str)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_DIRECT_SUPER }, |m| m.class_direct_super, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 声明字段（声明序 = slot）。
+pub fn class_fields() -> &'static [(&'static str, &'static [FieldMeta])] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static [FieldMeta])]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_FIELDS }, |m| m.class_fields, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 声明方法（声明序 = slot）。
+pub fn class_methods() -> &'static [(&'static str, &'static [MethodMeta])] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static [MethodMeta])]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_METHODS }, |m| m.class_methods, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → Modifier 位集。
+pub fn class_modifiers() -> &'static [(&'static str, i32)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, i32)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_MODIFIERS }, |m| m.class_modifiers, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 嵌套元数据。
+pub fn class_nest() -> &'static [(&'static str, NestMeta)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, NestMeta)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_NEST }, |m| m.class_nest, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 直接超接口。
+pub fn class_interfaces() -> &'static [(&'static str, Names)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, Names)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_INTERFACES }, |m| m.class_interfaces, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 类级注解原始字节 + 稀疏常量池。
+pub fn class_anno() -> &'static [(&'static str, &'static [u8], &'static [(i32, CpVal)])] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static [u8], &'static [(i32, CpVal)])]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_ANNO }, |m| m.class_anno, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 含 <clinit> 的类集。
+pub fn clinit_classes() -> &'static [&'static str] {
+    static CELL: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLINIT_CLASSES }, |m| m.clinit_classes, Some(|a, b| a.cmp(b)))
+}
+fn hidden_classes() -> &'static [&'static str] {
+    static CELL: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { HIDDEN_CLASSES }, |m| m.hidden_classes, Some(|a, b| a.cmp(b)))
+}
+fn class_defining_loader_table() -> &'static [(&'static str, &'static str)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_DEFINING_LOADER }, |m| m.class_defining_loader, Some(|a, b| a.0.cmp(b.0)))
+}
 /// 隐藏类集：lambda 调用点隐藏类（生成器 `hidden_class!` 声明，按名有序）与运行期登记的
 /// @CallerSensitive 注入调用器（`injected_invoker`）。
 pub fn is_hidden_class(class: &str) -> bool {
@@ -236,18 +250,26 @@ pub fn java_name(class: &str) -> std::string::String {
         _ => class.replace('/', "."),
     }
 }
-merged_table!(
-    /// sealed 类 → 许可子类型。
-    pub fn permitted_subclasses -> (&'static str, Names) = PERMITTED_SUBCLASSES, permitted_subclasses, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 嵌套宿主 → NestMembers 属性所列成员。
-    pub fn nest_members -> (&'static str, Names) = NEST_MEMBERS, nest_members, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内）。
-    pub fn class_access_flags -> (&'static str, i32) = CLASS_ACCESS_FLAGS, class_access_flags, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 类 → SourceFile 属性值（无该属性的类不在表中）。
-    pub fn class_source_file -> (&'static str, &'static str) = CLASS_SOURCE_FILE, class_source_file, Some(|a, b| a.0.cmp(b.0)));
+/// sealed 类 → 许可子类型。
+pub fn permitted_subclasses() -> &'static [(&'static str, Names)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, Names)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { PERMITTED_SUBCLASSES }, |m| m.permitted_subclasses, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 嵌套宿主 → NestMembers 属性所列成员。
+pub fn nest_members() -> &'static [(&'static str, Names)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, Names)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { NEST_MEMBERS }, |m| m.nest_members, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 类文件 access_flags 原值（JVM_ACC_WRITTEN_FLAGS 掩码内）。
+pub fn class_access_flags() -> &'static [(&'static str, i32)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, i32)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_ACCESS_FLAGS }, |m| m.class_access_flags, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → SourceFile 属性值（无该属性的类不在表中）。
+pub fn class_source_file() -> &'static [(&'static str, &'static str)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { CLASS_SOURCE_FILE }, |m| m.class_source_file, Some(|a, b| a.0.cmp(b.0)))
+}
 /// 类 → 定义加载器（`app` / `platform`；引导加载器的类不在表中），按类名有序。
 /// 注入调用器（`injected_invoker`）取宿主的定义加载器（JDK 以宿主的 Lookup 定义该隐藏类）。
 pub fn class_defining_loader(class: &str) -> Option<&'static str> {
@@ -257,22 +279,32 @@ pub fn class_defining_loader(class: &str) -> Option<&'static str> {
         Err(_) => crate::injected_invoker::host_of(class).and_then(|h| class_defining_loader(&h)),
     }
 }
-merged_table!(
-    /// record 类集。
-    pub fn record_classes -> &'static str = RECORD_CLASSES, record_classes, Some(|a, b| a.cmp(b)));
-merged_table!(
-    /// record 类 → 分量（名、描述符、泛型签名）。
-    pub fn record_components -> (&'static str, &'static [(&'static str, &'static str, &'static str)]) = RECORD_COMPONENTS, record_components, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
-    pub fn module_services -> (&'static str, &'static str) = MODULE_SERVICES, module_services, None);
+/// record 类集。
+pub fn record_classes() -> &'static [&'static str] {
+    static CELL: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { RECORD_CLASSES }, |m| m.record_classes, Some(|a, b| a.cmp(b)))
+}
+/// record 类 → 分量（名、描述符、泛型签名）。
+pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { RECORD_COMPONENTS }, |m| m.record_components, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
+pub fn module_services() -> &'static [(&'static str, &'static str)] {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { MODULE_SERVICES }, |m| m.module_services, None)
+}
 /// VM 初始系统属性的常量键（键, 值）：闭包事实 system_properties.values，与分析器折叠同源。
 pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] { unsafe { VM_CONST_PROPERTIES } }
 /// VM 初始系统属性的动态键（由手写层取宿主值）：闭包事实 system_properties.dynamic。
 pub fn vm_dynamic_properties() -> &'static [&'static str] { unsafe { VM_DYNAMIC_PROPERTIES } }
-merged_table!(
-    /// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
-    pub fn line_tables -> LineTable = LINE_TABLES, line_tables, Some(|a, b| a.0.cmp(b.0)));
-merged_table!(
-    /// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
-    pub fn line_numbers -> LineNumbers = LINE_NUMBERS, line_numbers, Some(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2))));
+/// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
+pub fn line_tables() -> &'static [LineTable] {
+    static CELL: std::sync::OnceLock<&'static [LineTable]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { LINE_TABLES }, |m| m.line_tables, Some(|a, b| a.0.cmp(b.0)))
+}
+/// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
+pub fn line_numbers() -> &'static [LineNumbers] {
+    static CELL: std::sync::OnceLock<&'static [LineNumbers]> = std::sync::OnceLock::new();
+    merged(&CELL, unsafe { LINE_NUMBERS }, |m| m.line_numbers, Some(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2))))
+}
