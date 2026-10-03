@@ -37,8 +37,10 @@
 | TestLocaleCurrency | **依赖环境** | `¥→CN¥`、`¥9,999.50→CN¥ 9,999.50`——**CLDR 数据随 JDK 小版本漂移**（本机 21.0.11=¥，服务器 OpenJDK build=CN¥）。expected 单点生成不可移植；生成器无责（两侧数据源各自的 jmod 即如此）。建议后续把 CNY 符号断言从源码弱化或按 JDK build 分层（超出本任务范围，附于 §五 建议） |
 | TestSystemStableProps | **生成器缺陷** | `sys-stream-ex=NullPointerException`——`ClassLoader.getSystemResourceAsStream("java/lang/String.class")` 返回 null（系统资源流对 JDK 自身类不可用，与 ClassResourceStream 同族） |
 
-（本地当前 HEAD 复现验证后台进行中，结果出来后在提交信息补注——服务器跑的是 da8abee1，
-62_reflection 族的 3 例在更早的本地中断验证中已确认复现。）
+**本地当前 HEAD（6c0adc44）复现验证：5/5 全部复现，失败形态与服务器逐例一致**
+（diff 行数相同：ClassCastSubclass 2 行 / ModuleFace 8 行 / InvokeNullArgs 2 行 /
+SetAccessibleBoundary 2 行 / SystemStableProps 2 行）——五个生成器缺陷在 da8abee1
+之后的提交中均未修复，根因族定级有效。
 
 ## 三、根因族归并（13 族，按影响面排序）
 
