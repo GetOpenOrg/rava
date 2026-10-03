@@ -85,7 +85,7 @@ fn adapt_cap_arg(env: &InstrEnv, lam: &Lam, ci_idx: usize, cp: usize) -> InstrRe
             return Ok(Some(format!("<{carrier} as ::std::convert::From<_>>::from(Clone::clone(&{cap}))")));
         }
         if cap_ty != "()" && cap_ty != "_" && cap_ty != carrier {
-            return Ok(Some(format!("<{carrier} as ::std::convert::From<_>>::from({})", obj_text(env, cap, cap_t))));
+            return Ok(Some(format!("<{carrier} as ::std::convert::From<_>>::from({})", obj_text(env, cap, cap_t)?)));
         }
         return Ok(None);
     }
@@ -97,7 +97,7 @@ fn adapt_cap_arg(env: &InstrEnv, lam: &Lam, ci_idx: usize, cp: usize) -> InstrRe
         && !cap_ty.starts_with("Vec<")
         && !cap_ty.starts_with('&')
     {
-        return Ok(Some(obj_text(env, cap, cap_t)));
+        return Ok(Some(obj_text(env, cap, cap_t)?));
     }
     // 合成 lambda 方法的形参是擦除实例化（X<Object, Object>），捕获值是精确实例化：经 Object
     // 边界重新实例化。形参类型与定义侧同源：有泛型签名取签名，否则取描述符擦除形态

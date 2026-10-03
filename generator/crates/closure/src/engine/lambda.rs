@@ -72,7 +72,21 @@ impl<'a> Engine<'a> {
     }
 
     /// 调用 id（None = 非字节码调用方的临时调用，位于 `lcalls` 末尾，每次完整接边）
+    ///
+    /// 方法引用到 @CallerSensitive 方法（`MethodHandles::lookup`）：进入实现方法的边以 lambda 类为调用方
+    /// （生成器同判据以隐藏类名压栈）
     pub(super) fn lambda_step(&mut self, m: usize, off: u32, id: Option<u32>) {
+        let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
+        let lid = self.lcalls[at].call.0;
+        let k = self.lambdas[&lid].imh.member.clone();
+        let cs_site = self.ref_caller_sensitive(&k).then(|| (lid, k.name.to_string(), k.desc.to_string()));
+        let outer = std::mem::replace(&mut self.cs.lambda_site, cs_site);
+        self.lambda_connect(m, off, id);
+        self.cs.lambda_site = outer;
+    }
+
+    /// 按实现句柄种类接边（静态 / 构造 / 特殊 / 虚分派）
+    fn lambda_connect(&mut self, m: usize, off: u32, id: Option<u32>) {
         let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
         let (lid, a, ret, res) = self.lcalls[at].call.clone();
         let l = self.lambdas[&lid].clone();

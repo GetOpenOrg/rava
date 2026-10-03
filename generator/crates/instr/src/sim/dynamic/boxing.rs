@@ -8,7 +8,6 @@ use ty::RsType;
 
 use super::wrapper_of;
 use crate::build::ty_text;
-use crate::coerce::{object_kind, ObjectKind};
 use crate::env::InstrEnv;
 use crate::error::InstrResult;
 use crate::naming::mangle_if_overloaded;
@@ -22,21 +21,9 @@ pub(super) fn is_prim_text(t: &str) -> bool {
 }
 
 /// 值文本 → Object 引用文本（`_coerce_to_object(val_str, ty)`，clone = True）：
-/// 基本类型 `.into()`；类型形参 `Into::<Object>::into(..)`；数组 / 注册表内类 / 接口载体
-/// `Object::from(..)`；其余 `Object::from_any(..)`。叶子按原文承载（`this` 亦为 `&this`）
-pub(super) fn obj_text(env: &InstrEnv, val: &str, t: &RsType) -> String {
-    let obj = ir::anchors::OBJECT;
-    let kind = object_kind(env, t);
-    if kind == ObjectKind::Prim {
-        // 负数字面量补外层括号：`-1i32.into()` 解析为 `-(1i32.into())`
-        return if val.trim_start().starts_with('-') { format!("({val}).into()") } else { format!("{val}.into()") };
-    }
-    let src = format!("Clone::clone(&{val})");
-    match kind {
-        ObjectKind::TypeVar => format!("Into::<{obj}>::into({src})"),
-        ObjectKind::Ref => format!("{obj}::from({src})"),
-        _ => format!("{obj}::from_any({src})"),
-    }
+/// 分类与形态见 [`crate::coerce::to_object_text`]。叶子按原文承载（`this` 亦为 `&this`）
+pub(super) fn obj_text(env: &InstrEnv, val: &str, t: &RsType) -> InstrResult<String> {
+    crate::coerce::to_object_text(env, val, t, true)
 }
 
 /// 装箱类在注册表中的 (binary, Rust 类型文本)；类不在注册表 / 映射为 Object → None

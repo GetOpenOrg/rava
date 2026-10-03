@@ -21,6 +21,9 @@ impl<'a> Engine<'a> {
             } else if self.man.returns_primitive_class(&key.to_string()) {
                 let k = self.primitive_mirror();
                 self.add_to(Node::R(m), &TypeSet::exact(k));
+            } else if let Some(cls) = self.man.defined_class(&key.to_string()).map(str::to_string) {
+                let k = self.mirror(&cls);
+                self.add_to(Node::R(m), &TypeSet::exact(k));
             } else if !self.man.returns_receiver(&key.to_string()) && !reads {
                 self.add_to(Node::R(m), &TypeSet::open(rt));
             }
@@ -73,7 +76,8 @@ impl<'a> Engine<'a> {
             || self.man.returns_mirror(&ks)
             || self.man.returns_superclass(&ks)
             || self.man.returns_component_class(&ks)
-            || self.man.returns_primitive_class(&ks);
+            || self.man.returns_primitive_class(&ks)
+            || self.man.defined_class(&ks).is_some();
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {

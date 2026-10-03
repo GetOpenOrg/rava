@@ -306,6 +306,8 @@ impl Class {
             // for_class 的缓存键是斜线形态（与 ldc 类字面量同一调用形态）——身份语义
             //（`zuper == Enum.class`）依赖同一缓存条目
             Some((_, sup)) => Ok(Class::for_class(String::from(*sup))),
+            // @CallerSensitive 注入调用器（运行期登记的隐藏类）：超类 Object（JDK 模板同）
+            None if crate::injected_invoker::is_injected(&name) => Ok(Class::for_class(String::from("java/lang/Object"))),
             None => Ok(Class::default()),
         }
     }

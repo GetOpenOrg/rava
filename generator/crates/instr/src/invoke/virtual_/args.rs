@@ -104,11 +104,12 @@ pub(super) fn try_early_receiver_paths(
         let_push(env, sim, "_t", &format!("({obj_e} == {raw_arg})"), RsType::Prim(ty::Prim::Bool))?;
         return Ok(true);
     }
-    // 基本类型接收者调用根类声明的方法：装箱为 Object 后走根 vtable
+    // 基本类型接收者调用根类声明的方法：装箱为 Object 后走根 vtable（基本类型实现 ObjectVTable，
+    // 经 `From<T> for Object`）
     if is_prim(&site.obj_ty) && env.ctx.facts.root_virtual.contains(&(call.name.clone(), call.param_desc().to_string())) {
         let ret = env.ctx.ty.jvm_to_rust(&call.ret);
         let c = format!(
-            "{O}::from_any({obj_e}).{}({})?",
+            "{O}::from({obj_e}).{}({})?",
             ty::ident::safe_ident(mname),
             site.arg_str()
         );

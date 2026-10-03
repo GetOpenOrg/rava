@@ -50,7 +50,7 @@ pub fn normalize_this_clone(lines: &mut [String], this_is_owned: bool) {
 
 static ERASED_NEW_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"((?:Object::from_any|Object::from|Into::<Object>::into)\((?:Clone::clone\(&)?[A-Za-z_]\w*::<)([^()]*?)(>::)",
+        r"((?:Object::from|Into::<Object>::into)\((?:Clone::clone\(&)?[A-Za-z_]\w*::<)([^()]*?)(>::)",
     )
     .expect("ERASED_NEW_RE")
 });

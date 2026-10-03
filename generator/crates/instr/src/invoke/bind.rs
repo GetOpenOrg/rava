@@ -206,9 +206,22 @@ pub(crate) fn caller_sensitive_decl(env: &InstrEnv, owner_bin: &str, mname: &str
 /// lookup 类解析成 CS 方法所在类自己。Python 以声明类名后缀判定，这里以
 /// 「同名且声明为 native」判定（不写类名字面量）。
 pub fn caller_sensitive_wrap(env: &InstrEnv, call_text: &str, owner_bin: &str, mname: &str, desc: &str) -> Option<String> {
+    caller_sensitive_wrap_as(env, call_text, owner_bin, mname, desc, env.ctx.code_owner)
+}
+
+/// 同 [`caller_sensitive_wrap`]，调用处类显式给出：方法引用（`MethodHandles::lookup`）的实现方法由
+/// lambda 隐藏类的 SAM 方法调用，JVM 栈帧所属是隐藏类（`Host$$Lambda/0x…`），不是创建点所在类
+pub(crate) fn caller_sensitive_wrap_as(
+    env: &InstrEnv,
+    call_text: &str,
+    owner_bin: &str,
+    mname: &str,
+    desc: &str,
+    caller: &str,
+) -> Option<String> {
     let (cs, native) = caller_sensitive_decl(env, owner_bin, mname, desc);
     if !cs || (native && mname == "getCallerClass") {
         return None;
     }
-    Some(format!("__caller_sensitive(\"{}\", || {call_text})", env.ctx.code_owner))
+    Some(format!("__caller_sensitive(\"{caller}\", || {call_text})"))
 }

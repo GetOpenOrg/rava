@@ -6,8 +6,9 @@
 //! 镜像并入，M 体内的 `caller_class` 调用点结果取这个节点（逐方法，不经 `R(getCallerClass)` 汇合）。
 //!
 //! 压栈与否按生成器同一判据逐调用边判定：边出自字节码调用指令（[`Engine::invoke`] 期间），且该指令的被调引用
-//! 解析到 @CallerSensitive 声明（[`Engine::ref_caller_sensitive`]）。其余进入 M 的边不压栈——手写体调用、
-//! lambda / 方法引用经 SAM 调用转接、方法句柄调用、indy 辅助、虚调用汇点的后续补边（调用点不在当前指令内）：
+//! 解析到 @CallerSensitive 声明（[`Engine::ref_caller_sensitive`]）；或边是方法引用经 SAM 调用转接到
+//! @CallerSensitive 实现方法（生成器以 lambda 隐藏类名压栈，调用方所在类取 lambda 类，其镜像即
+//! `getClass()` 所得）。其余进入 M 的边不压栈——手写体调用、lambda 体合成方法经 SAM 转接（体内调用点自行压栈）、方法句柄调用、indy 辅助、虚调用汇点的后续补边（调用点不在当前指令内）：
 //! 运行期 `getCallerClass` 取外层压栈的栈顶，栈空时按栈遍历取调用方帧所在类、帧不可得时取根类。外层栈顶
 //! 只能来自某条压栈的 CS 调用边，于是这样的 M 的调用者节点取「全部 CS 调用边的调用方所在类镜像 ∪ 根类镜像」
 //! （`CallerState::all`，随新调用边单调增长）。非 CS 方法体内的 `caller_class` 调用（JVM 抛 InternalError）
@@ -26,6 +27,9 @@ pub(super) struct CallerState {
     pub(super) site_wrapped: bool,
     /// 被调引用（类, 名, 描述符）→ 是否解析到 @CallerSensitive 声明的记忆
     refs: HashMap<(String, String, String), bool>,
+    /// 当前 lambda SAM 调用转接的实现方法是 @CallerSensitive（方法引用）：(lambda 类序号, 实现方法名, 描述符)。
+    /// 生成器在 SAM 闭包体内以隐藏类名压栈，进入该实现方法的边取 lambda 类镜像；字节码调用指令内不生效
+    pub(super) lambda_site: Option<(u32, String, String)>,
 }
 
 impl<'a> Engine<'a> {
@@ -80,7 +84,14 @@ impl<'a> Engine<'a> {
             return;
         }
         let tb = self.caller_base(t);
-        let owner = self.methods[m].key.owner.clone();
+        let lambda = self.cs.lambda_site.as_ref().and_then(|(lid, n, d)| {
+            let k = &self.methods[t].key;
+            (k.name == *n && k.desc == *d).then_some(*lid)
+        });
+        let owner = match lambda {
+            Some(lid) => self.names[lid as usize].to_string(),
+            None => self.methods[m].key.owner.clone(),
+        };
         let s = TypeSet::exact(self.mirror(&owner));
         if self.cs.all.is_empty() {
             let root = self.mirror(OBJECT);
@@ -92,7 +103,7 @@ impl<'a> Engine<'a> {
                 self.add_to(Node::S(b, CALLER), &all);
             }
         }
-        if self.methods[m].kind == Kind::Bytecode && self.cs.site_wrapped {
+        if lambda.is_some() || (self.methods[m].kind == Kind::Bytecode && self.cs.site_wrapped) {
             self.add_to(Node::S(tb, CALLER), &s);
         } else if self.cs.unwrapped.insert(tb) {
             let all = self.cs.all.clone();
