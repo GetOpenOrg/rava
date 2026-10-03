@@ -20,21 +20,24 @@ public class TestSocketLoopbackPair {
                 1, InetAddress.getLoopbackAddress());
         int port = server.getLocalPort();
 
-        // 服务线程：接受 → 读 → 回显 → 半关闭
+        // 服务线程：接受 → 读 → 回显 → 半关闭；输出收集到缓冲，join 后统一打印
+        // （消除 worker/main 行序随线程竞速漂移——golden 双跑一致的先决条件）
+        final StringBuilder workerOut = new StringBuilder();
         Thread worker = new Thread(() -> {
             try (Socket s = server.accept()) {
                 InputStream in = s.getInputStream();
                 OutputStream out = s.getOutputStream();
-                byte[] buf = new byte[64];
-                int n = in.read(buf);
-                out.write(buf, 0, n);
-                out.write('!');
+                // 恰好读 4 字节再回：readNBytes 凑齐或 EOF 才返回，消除单次 read
+                // 只收到分片的竞速；回显 + '!' 一次写出，客户端同样 readNBytes(5) 收齐
+                byte[] got = in.readNBytes(4);
+                out.write((new String(got, StandardCharsets.UTF_8) + "!")
+                        .getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 s.shutdownOutput();               // 半关闭：写端结束，读端见 EOF
                 int tail = in.read();
-                System.out.println("server-sees-eof=" + (tail == -1));
+                workerOut.append("server-sees-eof=").append(tail == -1).append('\n');
             } catch (IOException e) {
-                System.out.println("server-ex=" + e.getClass().getSimpleName());
+                workerOut.append("server-ex=").append(e.getClass().getSimpleName()).append('\n');
             }
         });
         worker.start();
@@ -45,13 +48,15 @@ public class TestSocketLoopbackPair {
             out.flush();
 
             InputStream in = c.getInputStream();
-            byte[] echo = new byte[64];
-            int n = in.read(echo);
-            System.out.println("echo=" + new String(echo, 0, n, StandardCharsets.UTF_8));
-            System.out.println("after-half-close=" + in.read());   // -1：对端 shutdownOutput
+            // 恰好读 5 字节（ping + '!'）：readNBytes 凑齐或 EOF 才返回——echo=ping!
+            // 与 after-half-close=-1 由语义保证，不随到达时序变化
+            byte[] echo = in.readNBytes(5);
+            System.out.println("echo=" + new String(echo, StandardCharsets.UTF_8));
+            System.out.println("after-half-close=" + in.read());   // 语义保证 -1
             c.shutdownOutput();
         }
         worker.join();
+        System.out.print(workerOut);
         server.close();
 
         // 关闭后的 accept → SocketException
