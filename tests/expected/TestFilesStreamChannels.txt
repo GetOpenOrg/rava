@@ -1,0 +1,10 @@
+stream-read=stream-io
+reader-line=stream-io
+writer-roundtrip=buffered
+channel-size=9
+channel-head=stream
+glob-count=3
+dir-entry=sub
+abs-same-root=true
+fs-readonly=true
+done=true

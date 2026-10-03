@@ -69,7 +69,7 @@ public class TestFilesStreamChannels {
 
         // toAbsolutePath：同根校验（不打印路径本体）
         System.out.println("abs-same-root=" + f1.toAbsolutePath().startsWith(dir.toAbsolutePath()));
-        System.out.println("fs-readonly=" + !Files.getFileSystem(dir).isReadOnly());
+        System.out.println("fs-readonly=" + !dir.getFileSystem().isReadOnly());
 
         Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
             try {
