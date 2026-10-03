@@ -200,8 +200,9 @@ fn same_jvm_var(cx: &VarsCtx, a: &Entry, b: &Entry) -> Option<bool> {
 }
 
 /// 声明作用域外的读取条目是否属于另一个 JVM 变量（LVT 证据，与 [`same_jvm_var`] 同口径）：读取点
-/// pc 不在声明所属区间，而落在另一个同名区间内，且该区间在别的槽、声明类型不同、或两区间之间
-/// 该槽被异名区间换主。同一变量被 try 区段切开的多段区间不算。无证据 → false
+/// pc 不在声明所属区间，而落在另一个同名区间内，且该区间声明类型不同、或（同槽时）两区间之间
+/// 该槽被异名区间换主。别槽同名同类型不算（可合为同一 Rust 绑定），同一变量被 try 区段切开的
+/// 多段区间不算。无证据 → false
 fn read_is_other_var(cx: &VarsCtx, decl: &Entry, read: &Entry, name: &str) -> bool {
     let (Some((_, Some(slot), Some(off))), Some(pc)) = (var_identity(decl), read.pc) else {
         return false;
@@ -218,8 +219,13 @@ fn read_is_other_var(cx: &VarsCtx, decl: &Entry, read: &Entry, name: &str) -> bo
             if std::ptr::eq(o, own) || safe_name(&o.name) != name || !(o.start <= pc && pc < o.end) {
                 return false;
             }
-            if s != slot || r(o) != r(own) {
+            if r(o) != r(own) {
                 return true;
+            }
+            // 别槽同名同类型：Java 同名局部变量作用域互不重叠，合为同一个 Rust 绑定语义不变；
+            // 判为另一变量反而会让扫描在此止步、漏掉本声明后面真正的块外读取（EUC_TW 兄弟分支 byte2）
+            if s != slot {
+                return false;
             }
             let (lo, hi) = if own.end <= o.start { (own.end, o.start) } else { (o.end, own.start) };
             decls.iter().any(|d| safe_name(&d.name) != name && d.start < hi && d.end > lo)
