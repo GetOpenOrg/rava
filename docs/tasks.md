@@ -147,7 +147,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ 🔄 b1 序列化收窄：✅ S2 ReflectUtil 放行 / 静态 CAS（含子字宽）/ 返回模型收窄合入（c1d-b1 0d7dd2a5；StockTrans 1803→1794、DeepCopy 1804→1789）；余：DeepCopy 距 ≤1640 目标，归 T2
 │   │     │       验收：DeepCopy ≤1640 类、fold_props ≥42、StockTrans / TestSerialDefaultSuid 回调保留
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
-│   │     └─ 🔄 b3 任务 3：class_init.unknown 归 false——✅ 第一段合入 1721f701（aeff784b）：class_init 钩子、截断体同类调用登记（bool2byte）、
+│   │     └─ ✅ b3 任务 3（2026-10-03 收官，d46d9b06：12 例测量集类初始化缺口全 0，HelloWorld 467 / StockTrans 3107 / DeepCopy 3102 类）：class_init.unknown 归 false——✅ 第一段合入 1721f701（aeff784b）：class_init 钩子、截断体同类调用登记（bool2byte）、
 │   │             跳过 Class#<synthetic>、子字字段 CAS（每字段 4 字节槽 + __unsafe_word）；第二段 01c88c11 抽查 c1db3-01c88c11 10/10：
 │   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
 │   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
