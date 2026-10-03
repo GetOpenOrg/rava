@@ -9,8 +9,10 @@
 //!     持有线程对象监视器 `notifyAll`（唤醒 `join` 的 `while (isAlive()) wait(0)`）；
 //!   - 主线程 `main` 返回后等待全部非守护平台线程（`destroy_java_vm`）。
 //!
-//! 虚拟线程（`VirtualThread.start`）同样派生 OS 线程（线程模型方案 A：虚拟线程 =
-//! 平台线程，Continuation 不建模），不计入 DestroyJavaVM 的等待集（JVM 语义）。
+//! 虚拟线程由 `VirtualThread` 字节码在载体线程（ForkJoinPool 工作线程，即本层派生的平台线程）上
+//! 经 `Continuation` 挂载执行，不计入 DestroyJavaVM 的等待集（JVM 语义）。本层只承载
+//! `JavaThread` 的三个载体槽（当前线程 / 载体线程 / ScopedValue 缓存）与 `currentCarrierThread` /
+//! `setCurrentThread` 等 native。
 //!
 //! ## 时间
 //!
@@ -44,12 +46,47 @@ const JVMTI_RUNNABLE: i32 = 0x4;
 /// 仅保留虚拟地址，按需提交）。
 const JAVA_THREAD_STACK: usize = 256 << 20;
 
+// 载体槽（a3-T3）：HotSpot `JavaThread` 上与 OS 线程绑定的三个槽。虚拟线程挂载时由字节码
+// （`VirtualThread.mount` → `setCurrentThread`；`Continuation.run` 存取 ScopedValue 缓存）换入换出，
+// 随执行流走的状态在执行上下文块（`exec_context.rs`）。执行流可能在一次调用之后换到另一载体上继续，
+// 槽一律经下方不内联的存取函数访问（LLVM 视线程局部地址在函数内不变，内联后会跨让出点缓存旧载体的地址）。
 std::thread_local! {
-    /// 当前 OS 线程对应的 Java 线程对象（派生时设定；主线程首次 currentThread 时构造）。
+    /// 当前线程（`JavaThread::_vthread`）：平台线程即载体自身，虚拟线程挂载期间为该虚拟线程
     static CURRENT: RefCell<Option<Thread>> = const { RefCell::new(None) };
-    /// `Thread.scopedValueCache` / `setScopedValueCache`：每线程的 ScopedValue 查找缓存
-    /// （HotSpot 存于 JavaThread 的 _scopedValueCache 槽，天然按线程）。
+    /// 载体线程（`JavaThread::_threadObj`）：派生时设定；主线程首次取当前线程时构造
+    static CARRIER: RefCell<Option<Thread>> = const { RefCell::new(None) };
+    /// `Thread.scopedValueCache` / `setScopedValueCache`（`JavaThread::_scopedValueCache`）
     static SCOPED_VALUE_CACHE: RefCell<Option<JArray<Object>>> = const { RefCell::new(None) };
+}
+
+#[inline(never)]
+fn current_slot() -> Option<Thread> {
+    CURRENT.with(|c| c.borrow().as_ref().map(Clone::clone))
+}
+
+#[inline(never)]
+fn set_current_slot(t: Option<Thread>) {
+    CURRENT.with(|c| *c.borrow_mut() = t);
+}
+
+#[inline(never)]
+fn carrier_slot() -> Option<Thread> {
+    CARRIER.with(|c| c.borrow().as_ref().map(Clone::clone))
+}
+
+#[inline(never)]
+fn set_carrier_slot(t: Option<Thread>) {
+    CARRIER.with(|c| *c.borrow_mut() = t);
+}
+
+#[inline(never)]
+fn scoped_value_cache_slot() -> Option<JArray<Object>> {
+    SCOPED_VALUE_CACHE.with(|c| c.borrow().as_ref().map(Clone::clone))
+}
+
+#[inline(never)]
+fn set_scoped_value_cache_slot(cache: Option<JArray<Object>>) {
+    SCOPED_VALUE_CACHE.with(|c| *c.borrow_mut() = cache);
 }
 
 crate::__process_static! {
@@ -91,9 +128,11 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
             let t = handoff.0;
             // 本线程的软件栈界（StackOverflowError 判定）
             rava_coro::init_platform_thread();
-            CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
+            set_carrier_slot(Some(Clone::clone(&t)));
+            set_current_slot(Some(Clone::clone(&t)));
             run_java_thread(&t);
-            CURRENT.with(|c| c.borrow_mut().take());
+            set_current_slot(None);
+            set_carrier_slot(None);
             drop(t);
             crate::gil::note_terminated(daemon);
         });
@@ -196,12 +235,13 @@ impl Thread {
     /// Object，本文件的 holder 访问在任意闭包形态下可编译。
     #[jvm_native]
     pub fn currentThread() -> Result<Thread> {
-        if let Some(t) = CURRENT.with(|c| c.borrow().as_ref().map(Clone::clone)) {
+        if let Some(t) = current_slot() {
             return Ok(t);
         }
         let main = platform_main_thread();
         INITIAL_THREAD.with(|m| *m.borrow_mut() = Some(Clone::clone(&main)));
-        CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&main)));
+        set_carrier_slot(Some(Clone::clone(&main)));
+        set_current_slot(Some(Clone::clone(&main)));
         LIVE_THREADS.with(|v| v.borrow_mut().insert(0, Clone::clone(&main)));
         Ok(main)
     }
@@ -245,18 +285,23 @@ impl Thread {
         Ok(JArray::new_with(n, || JArray::new(0)))
     }
 
-    /// native `currentCarrierThread()`：当前载体线程。虚拟线程由独立 OS 线程承载（FS-T4），
-    /// 载体即当前线程对象本身。
+    /// native `currentCarrierThread()`：当前载体线程（`JavaThread::_threadObj`）。虚拟线程挂载期间
+    /// 与 `currentThread()` 不同；平台线程上两者相同。
     #[jvm_native]
     pub fn currentCarrierThread() -> Result<Thread> {
-        Thread::currentThread()
+        if let Some(t) = carrier_slot() {
+            return Ok(t);
+        }
+        // 主线程尚未构造：currentThread 构造并同时设两槽
+        Thread::currentThread()?;
+        Ok(carrier_slot().expect("currentThread 已设载体槽"))
     }
 
-    /// native `setCurrentThread(Thread)`：VirtualThread 挂载 / 卸载时切换本 OS 线程的
+    /// native `setCurrentThread(Thread)`：`this` 为载体，VirtualThread 挂载 / 卸载时切换本载体的
     /// 「当前线程」对象（HotSpot JavaThread::_vthread）。
     #[jvm_native]
     pub fn setCurrentThread(&self, thread: Thread) -> Result<()> {
-        CURRENT.with(|c| *c.borrow_mut() = Some(thread));
+        set_current_slot(Some(thread));
         Ok(())
     }
 
@@ -272,12 +317,12 @@ impl Thread {
     /// native `scopedValueCache()` / `setScopedValueCache(Object[])`：每线程缓存槽。
     #[jvm_native]
     pub fn scopedValueCache() -> Result<JArray<Object>> {
-        Ok(SCOPED_VALUE_CACHE.with(|c| c.borrow().as_ref().map(Clone::clone)).unwrap_or_default())
+        Ok(scoped_value_cache_slot().unwrap_or_default())
     }
 
     #[jvm_native]
     pub fn setScopedValueCache(cache: JArray<Object>) -> Result<()> {
-        SCOPED_VALUE_CACHE.with(|c| *c.borrow_mut() = if cache.is_jvm_null() { None } else { Some(cache) });
+        set_scoped_value_cache_slot(if cache.is_jvm_null() { None } else { Some(cache) });
         Ok(())
     }
 

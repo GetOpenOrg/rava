@@ -647,8 +647,9 @@ impl Unsafe {
     /// （parkBlocker）由上层 `putReferenceOpaque` 携带。
     #[jvm_boundary]
     pub fn park(&self, is_absolute: bool, time: i64) -> Result<()> {
-        let me = Object::from(crate::java::lang::Thread::currentThread()?);
-        crate::monitor::park(me.0.__identity() as usize, is_absolute, time);
+        // HotSpot Parker 挂在 JavaThread（载体）上：虚拟线程被 pin 时经 parkOnCarrierThread 在载体上停泊，
+        // VirtualThread.unpark 对应地 U.unpark(carrier)
+        crate::monitor::park(crate::monitor::current_thread_identity()?, is_absolute, time);
         Ok(())
     }
 

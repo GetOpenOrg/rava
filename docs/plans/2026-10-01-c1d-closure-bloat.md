@@ -1562,3 +1562,21 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   （JDK 建线程失败同消息）。不在 Continuation 内调 `doYield`、继续未登记的 Continuation 属 VM 不变量破坏，panic。
 - 方案 A 仍在（T4 删除），本步 Continuation 不在虚拟线程路径上，相关字节码方法仍是档案外存根；T4 接通后核对
   `enterSpecial` 手写体对 `Continuation.enter` / `StackChunk.<init>` 的调用点推断与 `tail` 字段读写不被常量折叠。
+
+**T3 线程身份两槽与执行级状态迁移（2026-10-03）**
+- 载体槽（`thread_impl.rs`，HotSpot `JavaThread` 的对应物）：`CURRENT`（`_vthread`，`currentThread` / `setCurrentThread`）、
+  `CARRIER`（`_threadObj`，`currentCarrierThread`；派生平台线程时两槽同设、终结时清空，主线程首次 `currentThread` 时同设）、
+  `SCOPED_VALUE_CACHE`（`_scopedValueCache`，由 `Continuation.run` 字节码在挂载 / 卸载时存取）。三槽只经 6 个 `#[inline(never)]`
+  存取函数访问（TLS 地址缓存，见 §21.8.3）。
+- 随执行流走的状态迁入执行上下文块 `ExecState`（`exec_context.rs`，`state()` 取当前块）：反射实参拆箱失败标记、
+  @CallerSensitive 调用者栈、反射目标逃逸异常（`reflect_dispatch.rs`）、StackWalker 锚定帧流（`AnchoredWalk`，
+  `stack_stream_factory_abstract_stack_walker_impl.rs`）、引导段 initLevel（`vm_impl.rs`）。这些状态跨 Java 调用存活，期间
+  执行流可能让出到别的载体、同一载体上也会穿插别的执行流。
+- 按载体键的 VM 设施改取 `currentCarrierThread`（HotSpot 挂在 `JavaThread` 上）：`Unsafe.park` 的许可、`monitor.rs` 的
+  `current_thread_identity`（park / 中断 / wait 的设施键）、`clear_current_interrupted`（VM 抛 InterruptedException 时清
+  `threadObj()` 的中断）、`enter_blocking_status`（阻塞时写 `threadObj()` 的 threadStatus）。与之配对的字节码侧：
+  `VirtualThread.unpark` 被 pin 时 `U.unpark(carrier)`、`interrupt` 时 `carrier.setInterrupt()`。监视器所有者按 OS 线程计
+  不变（持锁期间虚拟线程被 pin，不换载体）。
+- 守护检查：生成器单测 `closure::handwritten::thread_local_lint`——`runtime/java_runtime/src` 中 `thread_local!` /
+  `#[thread_local]` 只允许出现在 `exec_context.rs`（平台块与当前块指针）与 `java/lang/thread_impl.rs`（3 个载体槽）。
+- TestVirtualThread 生成 + 编译通过（2924 JDK 类，与 T2 同；方案 A 尚在，本步不改闭包）。

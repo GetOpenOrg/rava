@@ -20,6 +20,12 @@
 use crate::meta::MethodMeta;
 use std::collections::HashMap;
 
+/// StackWalker 锚定的一条帧流：快照与下一个待检视帧的下标（存于执行上下文块，`exec_context::ExecState`）。
+pub(crate) struct AnchoredWalk {
+    pub(crate) frames: Vec<JavaFrame>,
+    pub(crate) cursor: usize,
+}
+
 /// 一个 Java 帧：方法持有类（binary name，斜线形态）、方法元数据与源位置。
 #[derive(Clone)]
 pub struct JavaFrame {
