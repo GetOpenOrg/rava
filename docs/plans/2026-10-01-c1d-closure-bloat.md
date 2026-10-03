@@ -1504,8 +1504,9 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
 - 闭包：宏注入调用对分析器不可见，`StackOverflowError` 改由 VM 规则 `stack-check`（无条件，落到 `stack_overflow` 构造入口，
   与 `null-check` / `heap-exhausted` 同构）入闭包；原定「VM 抛出异常清单」路线弃用。单测：`vmrules` 规则存在、
   `closure_cli::stack_overflow_error_in_minimal_closure`（最小程序闭包含该类且经 stack-check）。
-- 闭包规模（实测）：HelloWorld 497 → 498、StockTrans 3105 → 3106、CarmichaelPseudoprimes 2898 → 2899——此前没有任何路径
-  抵达 `StackOverflowError`，各程序一律 +1 类。T4 的「HelloWorld ≤498」按含此类的口径复核。
+- 闭包规模（实测，JDK 类数）：合入 b3 前 HelloWorld 497 → 498、StockTrans 3105 → 3106、CarmichaelPseudoprimes 2898 → 2899；
+  合入 71d80723 后 HelloWorld 466 → 467（`--why` 确认唯一来路为 `stack-check`）、StockTrans 3106。此前没有任何路径抵达
+  `StackOverflowError`，各程序一律 +1 类。T4 的「HelloWorld ≤498」按含此类的口径复核。
 - 体积（本机 aarch64，dev = 语料缺省 profile）：HelloWorld 文件 44.75 → 45.21 MB（+1.0%），`__TEXT` 11.16 → 11.57 MB（+3.7%）；
   CarmichaelPseudoprimes（2899 类）文件 296.0 → 299.2 MB（+1.1%），`__TEXT` 80.97 → 84.15 MB（+3.9%）；release（调用基准，498 类）
   文件 17.25 → 17.73 MB（+2.7%），`__TEXT` 8.00 → 8.37 MB（+4.7%）。
