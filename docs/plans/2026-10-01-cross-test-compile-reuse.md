@@ -523,3 +523,70 @@
 2. CLAUDE.md 第 2 条按 §3.1 改写，判定单位从单个程序改为档案。
 3. 折叠语义采用开放世界（§3.3）：放弃 144 个折叠点，换取档案与用户代码无关。
 4. 语料模式档案用动态链接，生产模式用静态链接（§4.4）。
+
+## 六、实施现状
+
+### 6.1 第 1 步前半（1a）：多根开放世界分析（t1-profile，2026-10-04）
+
+**已完成**
+- 开放世界折叠（§3.3），`generator/crates/closure/src/engine/open_world.rs`：
+  - 非用户方法里的虚 / 接口调用点，属主可被用户扩展时，接收者集合为空也不判 `null_recv`；这样的属主至少提到 L2（`levels.rs` 的 `promote_open_owners`，via `layout-open-world`），照常发虚调用，被调方法不在调用链上时发精确存根；
+  - 可被用户扩展：接口；非 final 且有 public / protected 构造器的类；sealed 类型看许可子类；JDK 非公开类型不可扩展，依赖库（`--lib`）非公开类型按可扩展；数组不可扩展；找不到类文件按可扩展；
+  - 用户方法里的调用点不受影响；接入点只有 `fold.rs` 的 `null_recv` 一行、`levels.rs` 一行、`engine.rs` 一个 `mod`。
+- 档案并集，`closure::profile`（`profile.rs` / `profile/fold_join.rs` / `profile/digest.rs`）：
+  - 每个入口在自己的用户命名空间里单独分析（语料里不同测试有同名用户类），档案 = 各单例闭包非用户侧的并，**恰等于**并集，不是超集；
+  - 类：domain 须一致，层级取最高；方法：种类须一致；集合字段取并；系统属性表须一致；冲突即报错；
+  - 折叠逐方法在到达它的全部入口上取格的并：死区取交，活指令 NullRecv ⊔ NullRecv = NullRecv、NullRecv / NoReturn 混合 = NoReturn、同值常量保留、其余为不折叠；死处理器 / 死 catch 按 `input::norm` 规则逐条成立（并后的折叠对每个入口都成立）；
+  - 并运算可交换、可结合，与入口给出顺序无关；溯源（via / entry）取名字最小的入口，只作诊断。
+- `rava profile`（`driver/src/profile_cmd.rs`）：
+  - 入口：多个 `.java` / 类目录；`--entries <清单>`（每行一个入口，`#` 注释，行内可带 `--name` / `--main` / `--lib` / `--root` / `--seed-class` / `--locale`，相对路径按清单目录）；`--closure <closure.json>`（分发流程里已算好的单例闭包）；三者可混用，入口名须唯一；
+  - 输出：`-o profile.json`；`--entry-out DIR` 写各入口单例闭包 `<名>.closure.json`；可经 `--closure-cache` 命中逐例缓存；
+  - `--covers <profile.json> <closure.json>…`：判定档案是否覆盖各单例（并入后内容摘要不变），未覆盖退出码非零。
+- 单元测试：
+  - `closure::profile::tests`（12 例）：非用户侧并集、入口顺序无关、键稳定且与顺序无关、键对生成器 / runtime / JDK 主版本 / 归档 / 入口内容敏感（只改用户侧不变）、重名与 domain 冲突报错、折叠逐点并、常量不一致与未折叠入口、死 catch、覆盖与幂等、入口摘要顺序无关；
+  - `driver/tests/profile_cli.rs`：两入口档案类集合 = 单例非用户类之并；同一入口经已算闭包逆序给出、经清单逆序给出且改 `--flow-batch 1 --hash-seed 7`，键与内容摘要不变；`--covers` 两例均覆盖；
+  - 生成器全部单元测试通过（含 `jdk_literal_lint` / `no_jdk_literals`）。
+
+**档案键（实现与 §4.1 的差异）**
+- `P = H(档案格式, folds 版本, 生成器源码树, runtime 树, JDK 主版本, 非用户归档内容, 内容摘要)`；
+- 摘要用 128 位 `Fp`（`closure::cache::hash`），不是 sha256：生成器离线构建，没有密码学摘要 crate；只作缓存键，不抗恶意构造。分发层（第 3 步）若需跨信任域校验，在传输层另加 sha256；
+- 生成器源码树与 runtime 树按「相对路径 + 内容」取摘要（`driver/build.rs` 编入 `RAVA_GENERATOR_DIGEST`；runtime 跳过点文件与 `target/`），不用 git tree 哈希：未提交改动也会改变键，与工作区位置无关；
+- JDK 镜像摘要取类路径上全部非用户归档（jmods / 镜像目录 / 依赖库）的内容摘要；
+- 入口集合经内容摘要进入 P，入口输入摘要（源码 / 依赖库 / 选项）记在 `profile.inputs.entries`，不入 P，供「输入未变则跳过分析」用。
+
+**交给 1b 的接口**
+- `profile.json` 与 closure.json 同形，`input::ClosureFacts::from_json` 可直接读取：
+  - classes / methods 只含非用户侧，各条另带 `entry`（溯源入口）；instantiated / clinit / refs / dispatched / hw_inherited / missing / reflect / seeds 等集合字段为并集；folds（v2）为折叠的并；`system_properties` 同单例；
+  - 诊断字段（indy_models / sigpoly_sites / dispatch / hw_untyped_sites）不入档案；
+  - `summary`：classes、by_domain、by_level、methods、methods_by_kind、fold_methods；
+  - `profile` 段：`format`、`key`（P）、`content_digest`、`inputs{generator, runtime, jdk_major, archives, entries}`、`entries[{name, user_classes, classes, methods, elapsed_ms, peak_mem_mb}]`、`elapsed_ms`、`peak_mem_mb`。
+- 1b 的用法：
+  - JDK crate（`java_runtime` / `java_body_*` / JDK 部分 `java_meta`）只从 `profile.json` 生成，同一 P 下与用户程序无关；
+  - 用户 crate 从 `--entry-out` 的单例闭包取用户侧（domain = user 的类与方法及其折叠）生成，`java_meta` 的用户注册行进用户 crate；
+  - 单例的 JDK 侧事实是档案的子集（`--covers` 判定），不被覆盖时并入档案、P 随之改变。
+- 用户方法的折叠仍按单例（封闭世界）计算：用户 crate 按各自程序生成，不影响档案。
+
+### 6.2 实测（27 例验收集，`scripts/gen_trees.sh` 缺省集合，参考 JDK 21.0.11，本机经 heavy_lock，c1d-p0 基线 6825d639）
+
+| | 值 |
+|---|---:|
+| 档案类（非用户） | 3244（translate 3219、boundary 24、root 1；code 级 2806） |
+| 档案方法 | 19714（bytecode 19318、handwritten 387、abstract 9） |
+| 折叠方法 / null_recv / noreturn / 常量 | 1888 / 41 / 134 / 2072 |
+| 单例类中位 / 最大 | 469 / 3180 |
+| 单例方法中位 / 最大 | 1838 / 19394 |
+| 档案 = 单例非用户侧之并（类、方法逐项比对） | 相等 |
+| 分析总墙钟（27 例串行，含 javac） | 178.4 s；单例中位 0.38 s，最大 20.1 s |
+| 峰值 RSS | 2.0 GB（`/usr/bin/time -l` 2122 MB，由最大单例决定） |
+
+- 单例闭包呈两档：控制流 / 集合类的 18 例约 467–499 类，原子类、文件、Optional、流、时间、CompletableFuture 的 9 例约 3077–3180 类（`c1d-closure-bloat.md` §22 的 jar/URL 区域重开，约 3000 类）。所以 27 例的档案已有 3244 类、19714 方法。§1.6 的 28 例并集是 1625 类 / 9026 方法，§1.4 全集是 3609 类 / 20437 方法，单例中位 349 / 1063，都是区域重开之前的测量。差距来自闭包分析器现状，不来自档案或开放世界；§22 收窄落地后重测。
+- 开放世界的代价：用同一基线 6825d639、去掉开放世界的二进制，对 27 例逐例对照：
+  - 类、方法集合逐例 +0 / −0，并集 +0 / −0；
+  - 单例 JDK 侧 null_recv 折叠点：大档 11 例约 253 → 43，小档约 14 → 3（不再折叠的点照常发虚调用）；
+  - 层级变化：每例 0–4 个类（type → layout）；
+  - 与 §1.7「+0 类」的估计一致；本基线下方法也是 +0（§1.7 估计 +0.55%）。
+
+### 6.3 下一步（1b）
+- JDK crate 只依赖档案生成：发射层接受 `profile.json` 作为 JDK 侧事实，用户侧从单例闭包取，两者合成一次发射；
+- `java_meta` 拆为 JDK 表（进档案 crate）加用户注册行（生成进用户 crate、启动时注册）；
+- 验收：同一 P 下任意两个用户程序生成的 JDK crate 逐字节相同；全集通过集合与今天一致。
