@@ -347,6 +347,9 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.gather_last.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
+        if let Some(d) = self.refl_seen.get_mut(&m) {
+            d.retain(|o, _| !offs.contains(o));
+        }
         if let Some(d) = self.lambda_done.get_mut(&m) {
             for off in offs {
                 for (_, id) in d.remove(off).unwrap_or_default() {
@@ -363,6 +366,7 @@ impl<'a> Engine<'a> {
         self.hub_lsent.remove(&m);
         self.recv_done.remove(&m);
         self.gather_last.remove(&m);
+        self.refl_seen.remove(&m);
         for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
             for (_, id) in at {
                 self.lcalls[id as usize].live = false;

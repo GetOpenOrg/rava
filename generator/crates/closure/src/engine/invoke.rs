@@ -144,8 +144,17 @@ impl<'a> Engine<'a> {
         }
         if self.man.is_field_enumerator(&k) {
             // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
+            // 放开与登记都幂等：只取值集中尚未处理的部分（站点重跑由值集增长驱动）
             let mut cs = BTreeSet::new();
-            let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
+            let unknown = match args.first() {
+                None => true,
+                Some(v) => {
+                    let mut seen = self.refl_seen.entry(m).or_default().remove(&off).unwrap_or_default();
+                    let u = self.class_values_new(m, v, &mut seen.fenum, &mut cs);
+                    self.refl_seen.entry(m).or_default().insert(off, seen);
+                    u
+                }
+            };
             self.enumerated_static_owners(m, off, &cs);
             for c in cs {
                 self.enumerate_fields(Some(c));
@@ -461,8 +470,7 @@ impl<'a> Engine<'a> {
         // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
         // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
         // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
-        let modeled = |e: &Self, x: usize| e.declares_memory(x) || e.memory_modeled(x);
-        let subsumed = modeled(self, m) && modeled(self, t);
+        let subsumed = self.declares_memory(m) && self.declares_memory(t);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
             self.hw_site(m, off, t, recv_fs.as_deref(), a);
             self.rcall_site(m, off, t, recv_fs.as_deref(), a);
