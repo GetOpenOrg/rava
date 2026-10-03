@@ -87,6 +87,22 @@ pub struct SuperFields {
     pub reference: Vec<String>,
     /// 祖先按自身类型形参声明的字段（声明方已 Object 化）
     pub erased: Vec<String>,
+    /// Rust 名与 Java 名不同的继承字段：`声明类.Java 名=Rust 名`（宏属性 `field_slots`）
+    pub slots: Vec<String>,
+}
+
+/// `field_slots` 项：Rust 名与 Java 名不同时给出 `声明类.Java 名=Rust 名`
+fn field_slot(decl: &str, java: &str, rust: &str) -> Option<String> {
+    (java != rust).then(|| format!("{decl}.{java}={rust}"))
+}
+
+/// 本类实例字段中 Rust 名与 Java 名不同者（`field_slots` 的本类部分，继承部分见 [`SuperFields::slots`]）
+pub fn own_field_slots(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    ci.fields()
+        .iter()
+        .filter(|f| !f.is_static())
+        .filter_map(|f| field_slot(ci.name(), &f.name, &ctx.ty.instance_field_rust_name(ci.name(), &safe_ident(&f.name))))
+        .collect()
 }
 
 /// 继承链字段展平（祖先形参按 `ancestor_type_args` 代入）
@@ -107,6 +123,7 @@ pub fn flatten_super_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> SuperFields {
             if !declared.insert(name.clone()) {
                 continue;
             }
+            out.slots.extend(field_slot(anc.name(), &f.name, &name));
             let view = resolve_anc_field_rust(ctx, f, &params, Some(&anc_map)).render(names);
             // 恒等映射 = 不代入：声明方视角类型
             let declared_ty = resolve_anc_field_rust(ctx, f, &params, None).render(names);

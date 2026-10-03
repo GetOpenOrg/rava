@@ -304,6 +304,9 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     #ref_access_inner
                     ObjectVTable::__unsafe_ref_access(&*self.vtable, field, op)
                 }
+                fn __field_slot(&self, decl: &str, name: &str) -> ::std::option::Option<&'static str> {
+                    ObjectVTable::__field_slot(&*self.vtable, decl, name)
+                }
                 #to_string_fwd
                 #hash_code_fwd
             }

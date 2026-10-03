@@ -35,17 +35,3 @@ signature = "sym=[CN¥]"
 owner = "expected 基线（CLDR 随 JDK 21 小版本漂移，见 tasks.md e2e 失败复核）"
 since = "2026-10-03"
 note = "CNY 符号 expected 为 ¥，实际 CN¥；基线缺陷，非生成器问题"
-
-[[known]]
-test = "TestSocketErrorPaths"
-signature = "Unsafe.VarHandle 引用族读-改-写"
-owner = "jndi-perf 后续（Unsafe 引用 RMW 缺口 + bridge E0308）"
-since = "2026-10-04"
-note = "unsafe__impl.rs 引用字段 RMW 臂缺失（offset 无实例引用字段臂且非引用元素数组）"
-
-[[known]]
-test = "TestSocketLoopbackPair"
-signature = "Unsafe.VarHandle 引用族读-改-写"
-owner = "jndi-perf 后续（Unsafe 引用 RMW 缺口 + bridge E0308）"
-since = "2026-10-04"
-note = "同 TestSocketErrorPaths；集成分支此前即失败（native findBuiltinLib / NPE 等），jndi-perf 后推进到本缺口"

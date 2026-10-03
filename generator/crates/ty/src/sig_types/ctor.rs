@@ -1,6 +1,6 @@
 //! 构造器与覆盖方法的签名类型（`constructor_sig_types` / `method_sig_types`）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use classfile::insn::Operand;
 use classfile::{acc, Method};
@@ -192,8 +192,51 @@ impl TyCtx<'_> {
         recovered
     }
 
-    /// 方法在 Rust 侧的泛型签名类型。覆盖方法（超类链上同名同描述符的非私有实例声明）
-    /// 取**最远祖先**的声明，按祖先形参 → 本类视角实参替换
+    /// 超类链祖先经接口 default 继承的同名同描述符槽位：phase2 把未被类方法覆盖的 default 注入
+    /// 首个（最远）实现该接口的祖先类（`declared_by` = 接口）。返回（该祖先在 `chain` 中的深度,
+    /// (声明接口, default 方法, 接口在本类视角下的实参)）；本类自己引入的接口不算（本类声明即槽位）
+    fn ancestor_default_slot<'s>(
+        &'s self,
+        ci: &ClassInfo,
+        m: &Method,
+        chain: &[(String, Vec<RsType>)],
+    ) -> Option<(usize, (&'s ClassInfo, &'s Method, Vec<RsType>))> {
+        let is_default = |am: &Method| {
+            am.name == m.name
+                && am.desc == m.desc
+                && !am.is_abstract()
+                && !am.is_static()
+                && !am.is_synthetic()
+                && am.access & acc::PRIVATE == 0
+        };
+        let (depth, iface, dm) = chain.iter().enumerate().rev().find_map(|(depth, (anc_bin, _))| {
+            let anc = self.reg.get(anc_bin)?;
+            let mut queue: Vec<&str> = anc.interfaces().iter().map(String::as_str).collect();
+            let mut seen = BTreeSet::new();
+            while let Some(i) = queue.pop() {
+                if !seen.insert(i) {
+                    continue;
+                }
+                let Some(ici) = self.reg.get(i) else {
+                    continue;
+                };
+                if let Some(dm) = ici.methods().iter().find(|am| is_default(am)) {
+                    return Some((depth, ici, dm));
+                }
+                queue.extend(ici.interfaces().iter().map(String::as_str));
+            }
+            None
+        })?;
+        let args = self
+            .implemented_interface_views(ci)
+            .into_iter()
+            .find(|(b, _)| b == iface.name())
+            .map(|(_, a)| a)?;
+        Some((depth, (iface, dm, args)))
+    }
+
+    /// 方法在 Rust 侧的泛型签名类型。覆盖方法（超类链上同名同描述符的非私有实例声明，
+    /// 以及祖先类经接口 default 继承的槽位）取**最远祖先**的声明，按祖先形参 → 本类视角实参替换
     pub fn method_sig_types(
         &self,
         ci: &ClassInfo,
@@ -208,15 +251,24 @@ impl TyCtx<'_> {
         }
         let mut root: Option<(&ClassInfo, &Method, Vec<RsType>)> = None;
         if !self.reg.is_empty() && !m.is_static() && !ci.is_constructor(m) && !m.is_private() {
-            for (anc_bin, args) in self.ancestor_type_args(ci, None) {
-                let Some(anc) = self.reg.get(&anc_bin) else {
+            let chain = self.ancestor_type_args(ci, None);
+            let mut root_depth = None;
+            for (depth, (anc_bin, args)) in chain.iter().enumerate() {
+                let Some(anc) = self.reg.get(anc_bin) else {
                     break;
                 };
                 let hit = anc.methods().iter().find(|am| {
                     am.name == m.name && am.desc == m.desc && !am.is_static() && !am.is_private()
                 });
                 if let Some(am) = hit {
-                    root = Some((anc, am, args));
+                    root = Some((anc, am, args.clone()));
+                    root_depth = Some(depth);
+                }
+            }
+            // 祖先类经接口 default 承载的槽位比所有类声明更远时，以该 default 为根
+            if let Some((depth, slot)) = self.ancestor_default_slot(ci, m, &chain) {
+                if root_depth.is_none_or(|d| depth > d) {
+                    root = Some(slot);
                 }
             }
         }
