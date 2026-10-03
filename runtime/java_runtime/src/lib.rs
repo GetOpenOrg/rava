@@ -197,6 +197,8 @@ pub fn main_args() -> crate::array::JArray<crate::java::lang::String> {
 /// unwind 形态下主线程 panic 的退出码、stderr 文本一致，任何线程 panic 同一出口；
 /// `process::exit` 照常冲刷 Rust 标准输出。
 pub fn create_java_vm() {
+    // 主线程的软件栈界（StackOverflowError 判定，见 __stack_check）
+    rava_coro::init_platform_thread();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         default_hook(info);
@@ -293,6 +295,23 @@ pub fn __null_recv<T: Clone + Into<Object>>(recv: &T, callee: &'static str) -> e
         return error::JvmError::null_pointer();
     }
     panic!("null_recv 违约：{callee} 的接收者非 null（闭包分析判定恒为 null）")
+}
+
+/// 方法入口的栈界检查（宏在每个返回 `Result` 的 Java 方法入口注入 `__stack_check()?;`）：当前执行流
+/// （平台线程或虚拟线程的协程栈）的栈指针低于软件栈界即抛 `StackOverflowError`（§21.8.2「溢出检测」）。
+/// 快路径是一次不内联的栈界比较；构造异常在冷路径。
+#[inline(always)]
+pub fn __stack_check() -> error::Result<()> {
+    if rava_coro::stack_exhausted() {
+        return Err(__stack_overflow());
+    }
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn __stack_overflow() -> error::JvmError {
+    error::JvmError::stack_overflow()
 }
 
 /// 不返回的调用点之后（闭包分析 folds `noreturn_calls`：唯一目标没有任何返回路径）：
@@ -540,7 +559,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
-    pub use super::{__stub, __null_recv, __noreturn};
+    pub use super::{__stub, __null_recv, __noreturn, __stack_check};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
