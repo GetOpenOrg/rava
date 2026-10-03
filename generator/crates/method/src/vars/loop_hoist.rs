@@ -7,7 +7,9 @@ use ir::{LetStmt, Stmt, VarOrigin};
 use super::refs::{render_entries, RefCache};
 use super::if_emit::align_later;
 use super::slot_type::{all_alignable, merged_slot_type, widen_into_merged};
-use super::{apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, same_jvm_var, VarsCtx};
+use super::{
+    apply_insertions, demote_let, entry_nesting, hoisted_let_type, leading_ws, let_of, read_is_other_var, same_jvm_var, VarsCtx,
+};
 use crate::entry::Entry;
 use crate::error::MethodResult;
 
@@ -44,7 +46,8 @@ pub fn hoist_loop_vars(cx: &VarsCtx, entries: &mut Vec<Entry>) -> MethodResult<(
         for k2 in close..entries.len() {
             let (hit, is_let) = cache.refs(cx.env, entries, k2, &rendered[k2], name);
             if hit {
-                if !is_let {
+                // 读取点属于另一个 JVM 变量（LVT 区间证据，如循环内 return 分支里同槽复用的新变量）：不提升
+                if !is_let && !read_is_other_var(cx, &entries[decl_k], &entries[k2], name) {
                     to_hoist.insert(name);
                 }
                 break;

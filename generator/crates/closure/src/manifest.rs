@@ -123,6 +123,8 @@ pub struct Manifest {
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
+    serial_enumerators: HashSet<String>,
+    static_offset_getters: Vec<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     field_name_resolvers: HashMap<String, NameResolver>,
@@ -139,6 +141,8 @@ pub struct Manifest {
     primitive_class_returns: HashSet<String>,
     /// `[facts.reflect.defined_classes]`：VM 承载的运行期类定义点 → 承载所定义类成员的 VM 支持类
     defined_class_returns: HashMap<String, String>,
+    /// `[facts.reflect.serial_allocators]`：序列化构造器的生成点 → 分配目标 Class 形参序号（不含接收者）
+    serial_allocators: HashMap<String, usize>,
     caller_class_returns: HashSet<String>,
     /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
     caller_sensitive: HashSet<String>,
@@ -321,6 +325,16 @@ impl Manifest {
             }
         }
 
+        let mut serial_allocators = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("serial_allocators")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(i) = v.as_integer().filter(|i| *i >= 0) else {
+                    return Err(format!("vm_intrinsics.toml [facts.reflect.serial_allocators]：{k} 须为 Class 形参序号"));
+                };
+                serial_allocators.insert(k.clone(), i as usize);
+            }
+        }
+
         let field_writes = |key: &str| facts("field_writes", key);
         let reflect = |key: &str| facts("reflect", key);
         let mut member_enumerators = HashMap::new();
@@ -376,6 +390,8 @@ impl Manifest {
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
+            serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
+            static_offset_getters: field_writes("static_offset_getters"),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
@@ -390,6 +406,7 @@ impl Manifest {
             declaring_returns: reflect("declaring_of_receiver").into_iter().collect(),
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
             defined_class_returns,
+            serial_allocators,
             caller_class_returns: reflect("caller_class").into_iter().collect(),
             caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             component_returns: reflect("component_of_receiver").into_iter().collect(),
@@ -540,10 +557,33 @@ impl Manifest {
         self.field_enumerators.contains(member)
     }
 
+    /// 只对可序列化类调用字段枚举、只取其可序列化字段（非 static、非 transient）的调用方：接收者推不出时
+    /// 按可序列化字段口径放开，不按全部字段
+    pub fn is_serial_enumerator(&self, member: &str) -> bool {
+        self.serial_enumerators.contains(member)
+    }
+
+    /// 静态字段基址 / 偏移的取法：可达前类镜像不作静态字段基址按偏移读取
+    /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
+    pub fn is_static_offset_getter(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.static_offset_getters.iter().any(|s| member_is(s, key))
+    }
+
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
     /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
     pub fn is_field_handle_writer(&self, key: &classfile::constant::MemberRef) -> bool {
         self.field_handle_writers.iter().any(|s| member_is(s, key))
+    }
+
+    /// 字段句柄类型：字段枚举返回数组的分量类型、返回字段句柄（`handle = true`）的按名入口的返回类型
+    pub fn field_handle_types(&self) -> Vec<String> {
+        let ret = |s: &str| s.rsplit_once(')').map(|(_, r)| r.to_string()).unwrap_or_default();
+        let obj = |r: &str| r.strip_prefix('L').and_then(|c| c.strip_suffix(';')).map(str::to_string);
+        let mut out: Vec<String> = self.field_enumerators.iter().filter_map(|e| ret(e).strip_prefix('[').and_then(obj)).collect();
+        out.extend(self.field_name_resolvers.iter().filter(|(_, r)| r.handle).filter_map(|(k, _)| obj(&ret(k))));
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// 句柄桥：在其内调用 handle_writers 不算写入入口（句柄只经 Field.set* 的访问器使用）
@@ -632,6 +672,11 @@ impl Manifest {
     /// 按名查找方法（类 + 方法名常量点名反射目标）
     pub fn is_method_lookup(&self, member: &str) -> bool {
         self.method_lookups.contains(member)
+    }
+
+    /// 序列化构造器的生成点（`[facts.reflect] serial_allocators`）：返回分配目标的 Class 形参序号（不含接收者）
+    pub fn serial_allocator(&self, member: &str) -> Option<usize> {
+        self.serial_allocators.get(member).copied()
     }
 
     /// 查找构造器（Class 实参 / 接收者所指类的构造器成为反射构造目标）

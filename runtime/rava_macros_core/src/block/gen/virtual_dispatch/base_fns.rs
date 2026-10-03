@@ -10,7 +10,7 @@ use super::*;
 /// （base 的形参就是 `this`）。只剥这一确切语句，其余语句原样保留。
 pub(super) fn base_body(ctx: &GenContext, block: &syn::Block) -> syn::Block {
     let mut b = block.clone();
-    rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+    ctx.rewrite_vtable_body(&mut b);
     if let Some(first) = b.stmts.first() {
         // 去全部空白后比较（编译器记号流的文本化在 `;` 前不留空格，与 proc_macro2 回退实现不同）
         let fs: String = quote!(#first).to_string().split_whitespace().collect();

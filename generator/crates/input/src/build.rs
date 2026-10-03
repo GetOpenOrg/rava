@@ -75,6 +75,9 @@ pub struct BuildInput<'a> {
     pub jobs: usize,
 }
 
+/// 不经构造器分配的伪成员名（L3 分派闭包的 `<alloc>` 臂；`reflect_dispatch` 协议同名）
+pub const ALLOC_MEMBER: &str = "<alloc>";
+
 /// 反射面事实
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReflectFacts {
@@ -358,6 +361,9 @@ impl<'a> BuildInput<'a> {
         }
         for (owner, names) in &f.seeds.reflect_names {
             consts.entry(owner.clone()).or_default().extend(names.iter().cloned());
+        }
+        for c in &f.reflect_allocations {
+            consts.entry(c.clone()).or_default().insert(ALLOC_MEMBER.to_string());
         }
         let mut fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (owner, name) in &f.reflect_fields {

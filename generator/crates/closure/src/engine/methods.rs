@@ -81,6 +81,9 @@ impl<'a> Engine<'a> {
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
+        if !self.static_offset_live && self.man.is_static_offset_getter(&key) {
+            self.static_offset_reached();
+        }
         self.sysprops_entry(&key, &via);
         self.linked_member(&key, &via);
         if cut::edges_on() {

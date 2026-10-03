@@ -5,7 +5,7 @@
 //! 反射调用边在编译期不可知：`Method.invoke` 拿到的 (声明类, 方法名, 描述符)
 //! 运行时才能确定目标。协议 = **按类的分派闭包注册表**：
 //!
-//!   - codegen 为**用户树全部（非泛型）类与接口**（泛型接口挂在 `I<Object..>` 上）及常量反射引用面的
+//!   - codegen 为**用户树全部类与接口**（泛型类 / 接口挂在 `X<Object..>` 上）及常量反射引用面的
 //!     JDK 类 / 接口发射 per-class `__reflect_dispatch`
 //!    （共置类文件尾部，match (name, descriptor) 臂调本类 typed fn：static
 //!     直调 / 实例方法经 receiver 的 `try_cast::<Self>` 视图 / `<init>` 经

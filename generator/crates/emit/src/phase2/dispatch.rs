@@ -20,6 +20,7 @@ use super::Emissions;
 use crate::ctx::EmitCtx;
 use crate::emission::ClassEmission;
 use crate::project::entry::DispatchReg;
+use input::build::ALLOC_MEMBER;
 
 const JAVA_RUNTIME: &str = "java_runtime";
 
@@ -199,7 +200,8 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, tps
                 let on_args = format!("recv.try_cast::<Self>(\"{class_bin}\")?{}", if call.is_empty() { String::new() } else { format!(", {call}") });
                 b = format!("let __r = if {rt}::_is_jnull(&recv) {{ {call_expr} }} else {{ Self::{ctor}({on_args})? }}; {tail}");
             }
-            if descriptor == "()V" && only.is_none() {
+            // 序列化构造器在已分配实例上运行本类无参构造体（反射构造成员即有 `<init_on>` 臂）
+            if descriptor == "()V" {
                 arms.push(format!(
                     "        (\"<init_on>\", \"()V\") => Some((|| {{ Self::{ctor}(recv.try_cast::<Self>(\"{class_bin}\")?)?; Ok(Object::default()) }})()),"
                 ));
@@ -237,7 +239,7 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
             method_arms(class_bin, em, line, &sig, &tps, only, &mut arms);
         }
     }
-    if only.is_none_or(|o| o.contains("<init>")) && !em.text.contains("is_abstract       = true") {
+    if only.is_none_or(|o| o.contains("<init>") || o.contains(ALLOC_MEMBER)) && !em.text.contains("is_abstract       = true") {
         arms.push(
             "        (\"<alloc>\", \"()V\") => Some((|| { let mut __o = Self::default(); __o._init_not_null(); Ok(Object::from(__o)) })()),"
                 .into(),

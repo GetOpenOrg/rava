@@ -482,3 +482,40 @@ pub(crate) fn rewrite_dropped_params_in_inherited_body(
     }
     DroppedRewriter(dropped, erasure, conv).visit_block_mut(block);
 }
+
+/// vtable 侧方法体（`__inner` 上的 trait 实现 / `&dyn VTable` 接收者的 base 函数）中擦除字段
+/// 访问器的类型化还原：vtable 访问器签名已 Object 化（存储层擦除），而方法体按 wrapper 的
+/// 类型化访问器语义生成（字段读即 javac `getfield` + `checkcast` 的结果）。经本接收者
+/// （`this` / `self`）读写擦除字段处补同一边界转换：读 → `From<Object>` 还原为声明类型，
+/// 写 → `Into<Object>` 装箱，与 wrapper 委托边界逐字同义。`erased`：擦除字段名 → 本类视角
+/// 的声明类型。
+pub(crate) fn restore_erased_accessors(block: &mut Block, erased: &std::collections::HashMap<String, syn::Type>) {
+    struct Restorer<'a>(&'a std::collections::HashMap<String, syn::Type>);
+    impl VisitMut for Restorer<'_> {
+        fn visit_expr_mut(&mut self, expr: &mut Expr) {
+            visit_mut::visit_expr_mut(self, expr);
+            let Expr::MethodCall(mc) = expr else { return };
+            let recv_is_this = matches!(&*mc.receiver, Expr::Path(p)
+                if p.qself.is_none() && p.path.get_ident().map_or(false, |id| id == "this" || id == "self"));
+            if !recv_is_this {
+                return;
+            }
+            let m = mc.method.to_string();
+            if let Some(field) = m.strip_prefix("__get_") {
+                if let Some(ty) = self.0.get(field) {
+                    if mc.args.is_empty() {
+                        *expr = syn::parse_quote!(<#ty as ::std::convert::From<Object>>::from(#expr));
+                    }
+                }
+            } else if let Some(field) = m.strip_prefix("__set_") {
+                if self.0.contains_key(field) && mc.args.len() == 1 {
+                    let arg = &mut mc.args[0];
+                    *arg = syn::parse_quote!(::std::convert::Into::<Object>::into(#arg));
+                }
+            }
+        }
+    }
+    if !erased.is_empty() {
+        Restorer(erased).visit_block_mut(block);
+    }
+}

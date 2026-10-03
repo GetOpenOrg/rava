@@ -167,6 +167,8 @@ pub struct ClosureFacts {
     pub reflect_fields: Vec<(String, String)>,
     /// 按名查字段目标类推不出时的字面量名
     pub reflect_field_names: Vec<String>,
+    /// 不经构造器分配的类（序列化构造器的分配目标）：L3 分派闭包的 `<alloc>` 臂
+    pub reflect_allocations: Vec<String>,
     pub seeds: SeedFacts,
     /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
     pub dispatched: Vec<MemberRef>,
@@ -263,6 +265,7 @@ impl ClosureFacts {
             reflect_gaps: e.reflect_gaps.iter().cloned().collect(),
             reflect_fields: e.reflect_fields.iter().cloned().collect(),
             reflect_field_names: e.reflect_field_names.iter().cloned().collect(),
+            reflect_allocations: e.serial_allocs.iter().cloned().collect(),
             seeds: SeedFacts {
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
                 mirror_inits: s.mirror_inits.iter().cloned().collect(),
@@ -321,6 +324,7 @@ impl ClosureFacts {
             out.reflect_fields.push((str_of(r, "owner")?.to_string(), str_of(r, "name")?.to_string()));
         }
         out.reflect_field_names = strings(reflect.get("field_names"))?;
+        out.reflect_allocations = strings(reflect.get("allocations"))?;
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
         }

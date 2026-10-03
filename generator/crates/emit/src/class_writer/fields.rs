@@ -181,19 +181,14 @@ fn static_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) -> String {
 /// （共置手写覆盖 / 核心转发除外）；其余 → `pub static`（初值由 `<clinit>` 翻译写入）
 pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], type_only: bool) -> Vec<String> {
     let hw = ctx.input.handwritten.get(ci.name());
-    let method_names: BTreeSet<&str> = ci.methods().iter().map(|m| m.name.as_str()).collect();
     let ex = ctx.extras(ci.name());
     let mut blocks = Vec::new();
     for (i, sf) in ci.fields().iter().enumerate() {
         if !sf.is_static() {
             continue;
         }
-        // 与方法同名：先加 `_field` 后缀再转义（与访问端 instr `StaticField.accessor` 同口径）
-        let fname = if method_names.contains(sf.name.as_str()) {
-            safe_ident(&format!("{}_field", sf.name))
-        } else {
-            safe_ident(&sf.name)
-        };
+        // 与方法 / 其它 static 字段的访问器同名时加 `_field` 后缀（与访问端 instr `StaticField.accessor` 同口径）
+        let fname = ci.static_accessor(&sf.name);
         let ty = static_field_rust(ctx, sf, tps);
         let meta = field_attr(sf, ex.fields.get(i));
         let head = format!("{meta}\n// static field: {}:{}\n", sf.name, sf.desc);

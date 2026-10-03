@@ -69,6 +69,7 @@ mod report;
 mod diag;
 mod write_audit;
 mod field_names;
+mod field_handles;
 mod mirror_init;
 mod seeds;
 mod services;
@@ -82,6 +83,8 @@ mod name_eval;
 mod sealed;
 mod nest;
 mod method_lookup;
+mod lookup_pair;
+mod serial_alloc;
 mod field_lookup;
 mod pstrs;
 mod keyed;
@@ -398,6 +401,10 @@ pub struct Engine<'a> {
     offset_waits: HashMap<usize, Vec<(Node, Node, u32, hw_mem::Gate)>>,
     /// 字段偏移尚未取得的按偏移读取（字段 → (字段节点, 读取结果节点, 结果类型, 口径)），偏移按口径可得时接上
     offset_read_waits: HashMap<usize, Vec<(Node, Node, u32, hw_mem::Gate)>>,
+    /// 静态字段偏移的取法（清单 `static_offset_getters`）已可达：类镜像可作静态字段基址按偏移读取
+    static_offset_live: bool,
+    /// 静态字段偏移取法未达时挂起的类镜像基址读：(所指类, 结果节点, 结果类型, 口径)
+    static_base_waits: Vec<(u32, Node, u32, hw_mem::Gate)>,
     /// 待沿流边推送增量的节点序号
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
@@ -452,6 +459,10 @@ pub struct Engine<'a> {
     reflect_names: HashMap<u32, BTreeMap<String, u8>>,
     /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
     named_ctors: BTreeSet<u32>,
+    /// 构造器查找点（方法, 偏移）→（查找键, Class 实参与 Class 接收者的值）：点名与否在工作队列排空时按终态值集判定
+    ctor_lookups: BTreeMap<(usize, u32), (String, Vec<V>)>,
+    /// 按名查方法的包装方法（方法键 → 查找类形参 × 名字形参的配对），见 `lookup_pair.rs`
+    lwraps: HashMap<MemberRef, Vec<lookup_pair::LookupWrap>>,
     /// 反射缺口：接收者镜像推不出的成员枚举
     pub reflect_gaps: BTreeSet<String>,
     /// 按名查字段点到的字段（声明类, 名字），见 `field_lookup.rs`
@@ -462,10 +473,16 @@ pub struct Engine<'a> {
     field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
+    /// 序列化构造器生成点的分配候选（类型 id）：形参值集里镜像所指的可序列化具体类，见 `serial_alloc.rs`
+    salloc_cands: BTreeSet<u32>,
+    /// 序列化分配目标（候选 ∩ 已实例化）：L3 分派闭包发射 `<alloc>` 臂
+    pub serial_allocs: BTreeSet<String>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
     fwriter_live: bool,
+    /// 句柄写入口按保守口径可达的首个原因（诊断）
+    fwriter_cause: Option<String>,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
@@ -475,6 +492,13 @@ pub struct Engine<'a> {
     rmwrap: sysprops_write::RmWrap,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
     fenum_pending: BTreeSet<Option<String>>,
+    /// 可序列化字段口径的枚举（清单 `serial_enumerators`）：Some(类) = 该类及其超类的可序列化字段
+    /// （非 static、非 transient）偏移可得，None = 全部可序列化类的（接收者推不出）
+    fenum_serial: BTreeSet<Option<String>>,
+    /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
+    fh_marks: HashMap<u32, field_handles::EnumScope>,
+    /// 标记已流到句柄写入口的枚举口径
+    fh_released: BTreeSet<field_handles::EnumScope>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠
     pub field_enum_gaps: BTreeSet<String>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理

@@ -79,7 +79,8 @@ impl<'a> Engine<'a> {
         self.seed_jca(&reached);
         self.seed_image();
         self.seed_static_owner_names();
-        fed || self.methods.len() + self.g.len() + self.inited.len() != before
+        let named = self.seed_ctor_lookups();
+        fed || named || self.methods.len() + self.g.len() + self.inited.len() != before
     }
 
     fn seed_annotations(&mut self, reached: &HashSet<String>) {

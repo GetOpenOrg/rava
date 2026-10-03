@@ -199,6 +199,40 @@ fn same_jvm_var(cx: &VarsCtx, a: &Entry, b: &Entry) -> Option<bool> {
     Some(true)
 }
 
+/// 声明作用域外的读取条目是否属于另一个 JVM 变量（LVT 证据，与 [`same_jvm_var`] 同口径）：读取点
+/// pc 不在声明所属区间，而落在另一个同名区间内，且该区间声明类型不同、或（同槽时）两区间之间
+/// 该槽被异名区间换主。别槽同名同类型不算（可合为同一 Rust 绑定），同一变量被 try 区段切开的
+/// 多段区间不算。无证据 → false
+fn read_is_other_var(cx: &VarsCtx, decl: &Entry, read: &Entry, name: &str) -> bool {
+    let (Some((_, Some(slot), Some(off))), Some(pc)) = (var_identity(decl), read.pc) else {
+        return false;
+    };
+    let Some(own) = cx.slot_decls.get(&slot).and_then(|d| lvt_covering_entry(d, off, name)) else {
+        return false;
+    };
+    if own.start <= pc && pc < own.end {
+        return false;
+    }
+    let r = |d: &SlotDecl| d.ty.as_ref().map(|t| text::ty(cx.env, t));
+    cx.slot_decls.iter().any(|(&s, decls)| {
+        decls.iter().any(|o| {
+            if std::ptr::eq(o, own) || safe_name(&o.name) != name || !(o.start <= pc && pc < o.end) {
+                return false;
+            }
+            if r(o) != r(own) {
+                return true;
+            }
+            // 别槽同名同类型：Java 同名局部变量作用域互不重叠，合为同一个 Rust 绑定语义不变；
+            // 判为另一变量反而会让扫描在此止步、漏掉本声明后面真正的块外读取（EUC_TW 兄弟分支 byte2）
+            if s != slot {
+                return false;
+            }
+            let (lo, hi) = if own.end <= o.start { (own.end, o.start) } else { (o.end, own.start) };
+            decls.iter().any(|d| safe_name(&d.name) != name && d.start < hi && d.end > lo)
+        })
+    })
+}
+
 /// 被赋值的 let 标 `mut`（← `_analyze_mutation`；entries 只含直线语句）
 pub fn analyze_mutation(entries: &mut [Entry]) {
     let assigned: BTreeSet<String> = entries
@@ -219,23 +253,33 @@ pub fn analyze_mutation(entries: &mut [Entry]) {
 
 /// 当前词法作用域无对应 let 的赋值升为 `let mut`（类型由 Rust 推断）（← `_promote_undeclared_assigns`）
 pub fn promote_undeclared_assigns(entries: &mut [Entry], predeclared: &BTreeSet<String>) {
-    let mut declared: BTreeMap<String, i32> = BTreeMap::new();
+    // 名字 → 各层可见声明的深度栈（内层同名 let 遮蔽外层，块关闭后外层声明恢复可见）
+    let mut declared: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+    let declare = |declared: &mut BTreeMap<String, Vec<i32>>, name: &str, nesting: i32| {
+        let st = declared.entry(name.to_string()).or_default();
+        if st.last() != Some(&nesting) {
+            st.push(nesting);
+        }
+    };
     let mut nesting = 0i32;
     for e in entries.iter_mut() {
         if e.is_text() {
             nesting += e.delta();
             if e.delta() < 0 {
-                declared.retain(|_, d| *d <= nesting);
+                declared.retain(|_, st| {
+                    st.retain(|d| *d <= nesting);
+                    !st.is_empty()
+                });
             }
             // catch 绑定在 catch 体内已声明：体内对它的重新赋值是赋值而非新 let
             if let Some(bind) = e.catch_binding() {
-                declared.insert(bind.to_string(), nesting);
+                declare(&mut declared, bind, nesting);
             }
             continue;
         }
         let promoted = match e.as_stmt() {
             Some(Stmt::Let(l)) if !l.name.is_discard() => {
-                declared.insert(l.name.as_str().to_string(), nesting);
+                declare(&mut declared, l.name.as_str(), nesting);
                 None
             }
             Some(Stmt::Assign(a)) => match &a.target {
@@ -253,7 +297,7 @@ pub fn promote_undeclared_assigns(entries: &mut [Entry], predeclared: &BTreeSet<
             _ => None,
         };
         if let Some(l) = promoted {
-            declared.insert(l.name.as_str().to_string(), nesting);
+            declare(&mut declared, l.name.as_str(), nesting);
             e.item = Item::Stmt(Box::new(Stmt::Let(l)));
         }
     }

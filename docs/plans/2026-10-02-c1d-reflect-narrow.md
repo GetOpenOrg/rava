@@ -898,6 +898,11 @@ getClassDataLayout0 / `<init>` 的 getSuperclass 只是 open → open 传播）�
 5. **写入口变活 → fopen_all。** `CopyOnWriteArrayList.readObject → resetLock → Field.set`（WRITER-LIVE）使字段句柄写入口可达，
    挂起的 `enumerate_fields(None)` 生效为全部字段不折叠，随后 `System.getSecurityManager` 不再折叠为 null、
    `privilegedGetProperties` 的 `doPrivileged` 分支变活、fold_props 42 → 0，类数 2000+，StockTrans 超时。
+   **已解决（T2，`engine/field_handles.rs`）**：写入口不再按「调用边可达」全局变活。枚举 / 名字不可知的按名取句柄
+   在调用点给结果带来源标记（每个枚举口径一个标记对象），字节码写入口调用点按句柄实参值集里的标记只放开对应口径；
+   句柄实参含非建模代码产出的句柄（相关类型的 open）/ 取不到值、或写入口经非字节码调用点到达时才全部放开。
+   `resetLock` 按名字常量取到的句柄不再放开别处挂起的枚举：StockTrans `field_writer_live = false`、`fopen_all = false`，
+   3809 类 / 464 s → 3139 类 / 132 s（集成分支 3070 类 / 84 s，余差为调用点配对点名的序列化回调）。
 6. **COWAL 镜像从哪里进入 `getPrivateMethod` 接收者：未查完。** w21 显示它最早出现在
    `ClassSpecializer.findSpecies` 与 `CopyOnWriteArrayList.addAll` 的 `getClass` 调用点——即 COWAL 实例本身由
    open 值面（不是用户代码）实例化，再经第 2 条的环流到 `writeObject0`。这是 T4 的入口问题。
@@ -991,3 +996,124 @@ DC = DeepCopy（≤ 1640 类、fold_props ≥ 42），RP = TestReflectProbe，RF
 | `handwritten/{scan,syntax}.rs` | 数组写入判定 | 已入 A（A 另修宏内 `set` 的判定） |
 | `tests/e2e/35_io/TestSerialCollectionFields.java` + expected | JDK 集合作为可序列化字段的回调覆盖（ArrayList / HashMap / LinkedList、空 / 嵌套 / null / 共享引用） | expected 合入前须用 JDK 21 实跑复核；随 T2 合入 |
 
+
+## 五、现状 / 交接（2026-10-04，c1d-t2 收尾）
+
+### 5.1 分支与提交
+
+分支 `c1d-t2`（worktree `java_rta_c1d_t3`），头部 77287ebf（合入集成分支 74a8977e）。合入单位是整枝，关键提交：
+
+| 提交 | 内容 |
+|---|---|
+| 5a5f75da | 序列化字段枚举按可序列化字段收窄（`serial_enumerators` 只暴露可序列化、非 static、非 transient 字段） |
+| 2e1d3355 | 按名查方法的包装方法与调用点配对（`engine/lookup_pair.rs`）；多种子守护扩至序列化回调 |
+| e3e459d6 | 序列化构造器分配目标（`engine/serial_alloc.rs`：`<alloc>` / `<init_on>` 臂） |
+| e284893b | 字段句柄来源标记取代全局写入口变活；序列化分配边界例 |
+| 5846c417 | 撤回 07ac5735「字符串实参不进形参常量格」（见 5.3） |
+| 8d0eaee3 | 生成器编译错误修复（5.2）与构造器查找点名的种子无关化 |
+
+### 5.2 已查实的结论
+
+**StockTrans 的 `ArrayList.writeObject` 失败**（`stub: L3 反射分派未覆盖 java/util/ArrayList.writeObject`）：根因见 4.2。
+`ObjectStreamClass.getPrivateMethod(cl, "writeObject", …)` 的类与名字都经形参透传。e90a592d 只让调用点字面量与接收者镜像相乘。
+07ac5735 的做法让结果随哈希种子时有时无。**已修（2e1d3355）**：查找类与名字都来自形参的方法登记为包装方法，各调用点按本点名字字面量 × 本点类实参镜像值集点名，逐层上推，只增不减。
+`closure_independent_of_hash_seed` 对 StockTrans 与四个序列化例断言种子 0/1/2 集合一致，且 `ArrayList.writeObject` 在反射成员里。
+
+**`java/util/ArrayList.<alloc>:()V` 臂缺失**：反序列化经序列化构造器（`MethodAccessorGenerator.generateSerializationConstructor`）分配对象，不跑目标类自身构造器，L3 分派闭包没有 `<alloc>` 臂。
+**已修（e3e459d6）**：清单 `[facts.reflect] serial_allocators`。生成点上 Class 实参镜像所指的可序列化具体类 ∩ G 成为分配目标，首个不可序列化超类的 `()V` 构造器以 `<init_on>` 臂入链。
+
+**抽查 c1dt2-403b626b 的 8 例失败全是生成器编译错误。8d0eaee3 已修，本机 emit + compile 0 错误：**
+
+| 错误 | 涉及例 | 根因 | 修复 |
+|---|---|---|---|
+| E0599 `K.equals` | 7 例（StockTrans、DeepCopy、TestSerial* 五例） | `Hashtable.reconstitutionPut` 槽 6 有两段 LVT：循环内 `Entry<?,?>` 与循环后 `Entry<K,V>`。循环出口代码结构化在循环体内，loop_hoist 把后段变量提升成遮蔽外层的 let | `vars::read_is_other_var`：读点落在同名另一变量段（另槽 / 另类型 / 中间被改名占槽）时不按同一变量；`promote_undeclared_assigns` 按名记声明深度栈 |
+| E0592 `set_tab` | TestFieldHandleProvenance（jline `InfoCmp$Capability`） | 静态字段 `tab` 的 setter 与字段 `set_tab` 的 getter 撞名 | `ClassInfo::static_accessor`：撞名时取 `{name}_field` |
+| jline 三处 E0308 / E0599 / E0061 | TestFieldHandleProvenance | 引用合流拒接口公共类型，变量被定成 Object；接口 default 协变桥签名取错 | `common_ref_type_widening` 只拒 Object；桥按桥描述符定签名 |
+
+新边界例的期望输出都来自 JDK 21：TestStaticAccessorClash、TestSlotReuseLoopExit、TestCovariantDefaultBridge、TestInterfaceSubtypeMerge。
+
+**合入集成分支后新暴露的种子依赖（8d0eaee3 已修）**：`constructor_lookup` 只在 Class 值集齐全时点名，而齐全会随值集增长变成不齐全（非单调）。
+种子 1 下 `ObjectStreamClass.getExternalizableConstructor@5` 先看到暂时齐全的值集，点名了抽象类 `ObjectStreamException` 与 `CharacterCodingException`，进而经 `serial_alloc` 成为分配目标。
+修法：所指类即时记为已枚举（单调）；点名登记查找点，留到工作队列排空时（`seed_round` → `seed_ctor_lookups`）按当时值集判定。
+修后 TestSerialProxyForm 种子 0/1 方法集合一致（19865），与修前种子 0 相同。
+
+### 5.3 试过但失败的路线
+
+- **07ac5735「字符串实参不进形参常量格」（5846c417 撤回）**：本意是消除形参常量格中间态带来的种子依赖。但集成分支随后有了 String.hashCode / equals 折叠（357f8549），`URL$DefaultFactory.createURLStreamHandler` 的字符串 switch 要靠形参常量才能只取 file 臂。挡掉后 switch 不折叠，HelloWorld 涨到 2856 类 / 55 s，StockTrans 不收敛（内存涨到 62G）。种子无关由调用点配对保证，这条拦截已撤回。
+- **2e1d3355 单独拆出合入**：临时分支（2e1d3355 + 集成分支 + 5846c417）上 StockTrans 3832 类 / 290 s，种子守护差 `ObjectInputStream$1` 一类。它必须与 e284893b（单个按名 `Field.set` 会放开全部枚举字段）和 e3e459d6 一起合入。
+- **`serial_alloc` 候选改为「已实例化 ∩ 非抽象」**：分析后未采用。G 本身就是实例化集合；抽象类进 G 的根因是上面的构造器查找点名非单调，已在源头修复。
+
+### 5.4 关键实测（`rava closure`，本机，经 capped.sh）
+
+| 例 | 版本 | 类 | 方法 | 反射成员 | 耗时 |
+|---|---|---|---|---|---|
+| HelloWorld | 403b626b | 468 | 1822 | — | 5 s |
+| StockTrans | 集成分支（合 74a8977e 前） | 3108 | 18815 | 461 | ≈50 s |
+| StockTrans | 403b626b，种子 0 | 3175 | 19861 | 739 | 60–65 s |
+| StockTrans | 4b 实验 x1（未提交） | 3170 | 19668 | 739 | ≈70 s |
+| StockTrans | 4b 实验 x2（未提交） | 3168 | 19542 | 739 | ≈45 s |
+| DeepCopy | 403b626b | 3177 | 19880 | 750 | — |
+| TestSerialProxyForm | 8d0eaee3，种子 0 / 1 | 3180 / 3180 | 19865 / 19865 | 744 | 120–130 s |
+
+- 8d0eaee3 发射：StockTrans、DeepCopy、TestSerialAllocTargets 各 3174 个 JDK 类；TestFieldHandleProvenance 3603 个 JDK 类。
+- 种子：`closure_independent_of_hash_seed`（StockTrans 与四个序列化例，种子 0/1/2）在 77287ebf 上通过，全部单测（`--no-fail-fast --test-threads=1`）通过。
+- 批大小：本分支没有做 `--flow-batch` 交叉实测。A 报告的 flow-batch 7 vs 64 顺序依赖（3589 vs 3540 类）由 A 在 lookup_pair 之上推广修复。
+- 集成分支 74a8977e 的 JCA 修复让 StockTrans 3141→3283。下面的「≤3107」目标是该次合入前定的，接手时应先按合入后的基线重定目标。
+
+### 5.5 未完成项
+
+**4b Method / Constructor 成员对象化**：反射调用实参池现在是全局按通道合并（`reflect_call.rs` 的 `RP(ch)`）。终态是按 Method / Constructor 成员对象（查找结果）分池，成员只接自己被调用点的实参。
+两种近似实验（未提交）对 StockTrans 的回收上界是 **≤7 类 / 约 319 方法**（3175→3168 类，19861→19542 方法，反射成员不变）。收益很小，建议排在 getDefaultSerialFields 收窄之后，或与 A 的调用点配对推广合并做。
+- 切入点：`engine/reflect_call.rs`（`rcall_member` / `rcall_bind` / `rcall_dispatch`）、`engine/invoke.rs` 反射调用点（按名查方法分支归 A，不要动）。
+- 风险：Method 对象经集合 / 字段流转后来源不明时必须退回全局池，否则不健全；与 A 改 `lookup_pair.rs` 同文件冲突。
+
+**getDefaultSerialFields 未知接收者收窄**（原目标 StockTrans ≤3107，需按 74a8977e 后的基线重定）：5a5f75da 之后，`offset_readable` 对未知接收者放行**全部可序列化字段**的偏移读。
+`ObjectStreamClass.getDefaultSerialFields` / `computeDefaultSUID` 的接收者 Class 值集含 open，于是凡可序列化类的字段都变得可读。这部分值灌进 `writeObject0` 实参池，是 3108→3175 的主要来源。
+- 切入点：`engine/field_lookup.rs` / `engine/hw_mem.rs` 的 `offset_readable` 与 `fenum_serial` 登记。未知接收者的可读字段应限定为「实际被序列化的接收者集合」，也就是 `writeObject0` / `readObject0` 上 `obj.getClass()` 镜像所指的可序列化类、`serial_allocs` 与 `ObjectStreamClass.lookup` 实参镜像的并集，随这些集合增长逐类放开（单调）。
+- 风险：
+  - 「实际被序列化的集合」本身经字段值环（obj → 字段 → obj，4.2 第 2 条）增长，须保证只沿已放开类的字段闭合，否则回到全放开；
+  - 外部流里的类（只出现在数据里）同按名取类的未知名字，不在闭包内，属既有边界；
+  - 改动须保持 `closure_independent_of_hash_seed` 与 `param_string_constants_fold_switch` 通过；判定若依赖「齐全」之类非单调条件，应同 5.2 留到工作队列排空时做。
+
+### 5.6 抽查 c1dt2-24ce8a52 回归：`byte2` E0425（2026-10-04）
+
+**现象**：抽查 10 例过 2 例（HelloWorld、TestSlotReuseLoopExit）。DeepCopy、StockTrans、TestSerialDefaultSuid、TestSerialLookupPairing、TestSerialProxyForm、TestSerialAllocTargets、TestSerialUserGenericCallbacks 共 7 例在 java_runtime 编译时报 `error[E0425]: cannot find value byte2`。TestFieldHandleProvenance 只报 java_runtime 编译失败，服务器日志已清。
+
+**为什么本机不复现**：出错的方法是 `sun/nio/cs/EUC_TW$Decoder.decodeArrayLoop` / `decodeBufferLoop`。Linux 的 java.base 自带 EUC_TW、EUC_JP、Big5、GBK 等字符集（stdcs-linux），macOS 上这些类在 jdk.charsets 里，不进闭包。所以 macOS 下 DeepCopy 编译通过（3355 个 JDK 类），服务器失败。
+本机复现方法：取 Linux x64 参考 JDK（Temurin 21.0.11+10，sha256 与 `tools/refjdk.toml` 一致），组一个混合 JAVA_HOME：bin / conf 等用 macOS 参考 JDK，`jmods` 与 `lib/modules` 指向 Linux 包（`build/linuxjdk/hybrid`，不提交），再用 `rava build … --java-home <hybrid>` 构建。DeepCopy 这样得到 3403 个 JDK 类，其中含 EUC_TW。
+
+**根因（8d0eaee3 引入）**：EUC_TW 的 if 臂和 else 臂各声明一个 `int byte2`，分别在槽 11 和槽 10，类型相同。整个循环包在 try-finally 里，结构化后两臂里 `isLegalDB(byte2)` 的读取都落在各自声明块外的标签块里。
+8d0eaee3 的 `vars::read_is_other_var` 只要读点落在别槽的同名区间，就判为另一 JVM 变量。else 臂声明之后第一个命中的是 if 臂 byte2（槽 11）的读取，被判为另一变量后扫描止步，后面真正属于 else 臂 byte2 的块外读取没被看到，声明没有提升，于是 E0425。
+
+**修法（b949e4f6）**：Java 同名局部变量的作用域互不重叠，所以别槽、同名、同类型的两个变量合为同一个 Rust 绑定语义不变（8d0eaee3 之前就是这样）。现在只有两种情况算另一变量的证据：声明类型不同；或在同一槽内，两段区间之间被异名区间换过主。
+TestSlotReuseLoopExit（同槽、类型不同，即 8d0eaee3 原本要修的形态）判定不变。
+
+**边界用例**：`tests/e2e/01_basics/TestSlotReuseSiblingBranches.java` 照 EUC_TW.decodeArrayLoop 的形态写在用户层，期望输出来自 JDK 21。修复前本机就报同样的 E0425。
+
+**实测（本机，b949e4f6 的 rava，参考 JDK）**：
+- TestSlotReuseSiblingBranches、TestSlotReuseLoopExit：编译、运行通过，输出与期望一致；
+- DeepCopy（混合 Linux JDK，含 EUC_TW）：编译、运行通过，输出与期望一致；
+- TestFieldHandleProvenance：macOS 参考 JDK 与混合 Linux JDK（4223 个 JDK 类，含 EUC_TW）下都编译、运行通过，输出与期望一致。服务器上的 java_runtime 编译失败推断与 byte2 同源，但服务器日志已清，无法直接核对；
+- TestSerialAllocTargets（混合 Linux JDK）：编译、运行通过，输出与期望一致；
+- generator 单测：29 组，0 失败。
+
+### 5.7 抽查 c1dt2-a39d8474：TestFieldHandleProvenance 是 OOM，不是代码错误（2026-10-04）
+
+**结论**：抽查 c1dt2-24ce8a52（kr1）与 c1dt2-a39d8474（sg2）中，TestFieldHandleProvenance 的 `error: could not compile java_runtime (lib)` 都是 rustc 编译声明层 `java_runtime` 时被 cgroup OOM 杀掉。5.6 节「与 byte2 同源」的推断不成立。
+- 证据：本机 `server_maintenance/rava/test_results/spot/c1dt2-a39d8474/error_logs/TestFieldHandleProvenance_sg2_jdk21.log` 与 `c1dt2-24ce8a52/…_kr1_jdk21.log` 头部都是 `OOM: 超出内存上限被内核杀掉（limit=11891M / 11882M，peak 打满）` 与 `__RAVA_OOM_KILL__`。
+- `first_error` 取 stderr 中第一条以 `error` 开头的行。rustc 被信号杀掉时没有诊断输出，所以第一条就是 cargo 的 `could not compile`。更早的 c1dt2-403b626b（kr2）报的是另一个错误 `E0592 duplicate set_tab`，与本节无关。以后遇到这种「只有 could not compile、没有 error[E…]」的失败，先查 error_logs 头部的 OOM 标记。
+
+**本机排除项**（rava a39d8474，混合 Linux JDK `build/linuxjdk/hybrid`，`--clean` emit）：
+- TestFieldHandleProvenance：4223 个 JDK 类。`cargo check --target x86_64-unknown-linux-gnu` 0 错误，新 target 目录下复测也是 0 错误；`cargo build --target x86_64-unknown-linux-gnu -p java_runtime -p java_meta` 通过，java_runtime 源码 54 MB。
+- 大小写：rustc dep-info 里全部源文件路径都与磁盘上的实际大小写一致，排除「macOS 大小写不敏感、Linux 敏感」这类差异。
+- 闭包输入：生成器只从 JAVA_HOME 读 `release` 与 `lib/modules`，混合 JDK 的 `conf` 差异（例如 `java.security` 的 Apple provider）不进入闭包。
+- DeepCopy（3403 类）、HelloWorld（465 类）：Linux target `cargo check` 都是 0 错误。
+
+**规模对照**：峰值和闭包规模有关。TestFieldHandleProvenance 是 4223 类，比 DeepCopy 的 3403 类多 820 类，DeepCopy 在服务器上通过。
+- 这两例的类数都远高于 1700 类阈值，rava 已经自动用 `CARGO_BUILD_JOBS=1`，作业层也已设 `CARGO_INCREMENTAL=0` 与 line-tables-only。所以剩下的只有单个 rustc 编译声明层时的峰值。
+- 本机 macOS 的 `time -l` 最大 RSS（FHP 7.7 GB、DeepCopy 8.1 GB）把压缩内存排除在外，不能拿来和服务器的 cgroup 峰值比。
+
+**候选方案（终态方向，待定）**：
+1. 收窄闭包：查 TestFieldHandleProvenance 比 DeepCopy 多出的 820 类从哪条链进来，属于本计划的反射收窄线。
+2. 声明层瘦身 / 拆层：按 `2026-10-01-rustc-memory-and-crate-split.md` §7.4–7.5 收窄声明层样板，把存储层下沉到实现 crate，让单个 rustc 峰值与闭包规模脱钩。
+3. 环境侧：调服务器的 `mem_reserve_gb`。这只是缓解，而且要改服务器配置，须用户确认。

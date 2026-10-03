@@ -13,6 +13,7 @@ impl<'a> Engine<'a> {
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
         let lambda = self.cs.lambda_site.take();
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.lookup_wrap_call(m, off, args);
         self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
         self.call_vals = None;
@@ -22,7 +23,7 @@ impl<'a> Engine<'a> {
     /// - 同一调用里有字符串常量，且形参含 Class 或接收者是 Class：点名字段不折叠
     ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
     /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：句柄写入口（`handle_writers`）也可达时
-    ///   接收者类的全部字段不折叠，推不出时全部字段；
+    ///   接收者类的全部字段不折叠，推不出时全部字段（调用方是清单 `serial_enumerators` 时为可序列化字段）；
     /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；名字是本方法形参时
     ///   取各调用点在该形参上的字符串常量（如按名构造 MemberName 的辅助方法），常量集增长时本站点重跑；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
@@ -41,6 +42,9 @@ impl<'a> Engine<'a> {
         let k = self.mref_key(mref);
         if self.man.is_constructor_lookup(&k) {
             self.constructor_lookup(m, off, &k, mref, opcode, args);
+        }
+        if let Some(idx) = self.man.serial_allocator(&k) {
+            self.serial_alloc_site(m, off, &k, opcode, args, idx);
         }
         if self.man.is_method_lookup(&k) {
             // 查找结果经哪条反射调用通道调用（按查找结果的类型，见 `reflect_call.rs`）
@@ -102,7 +106,10 @@ impl<'a> Engine<'a> {
                         self.reflect_name(&c, name, ch);
                     }
                 }
-            } else if class_recv && !names.is_empty() && classes.is_empty() {
+            }
+            // 查找类与名字都来自本方法形参：登记为包装方法，各调用点按本点实参配对点名（`lookup_pair.rs`）
+            let wrapped = class_recv && classes.is_empty() && self.lookup_wraps(m, mref, opcode, args, ch);
+            if class_recv && !wrapped && !names.is_empty() && classes.is_empty() && site_names.is_empty() {
                 // 名字只经形参流入、接收者非常量：查找目标推不出，记为反射缺口
                 self.reflect_gaps.insert(format!("{} <- recv(param-name)", self.methods[m].key));
             }
@@ -138,6 +145,7 @@ impl<'a> Engine<'a> {
             }
         }
         self.field_name_site(m, off, &k, opcode, args);
+        self.handle_writer_site(m, mref, opcode, args);
         self.mirror_init_site(m, off, mref, &k, opcode, args);
         if (class_param || class_recv) && !self.man.is_method_lookup(&k) {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
@@ -156,72 +164,27 @@ impl<'a> Engine<'a> {
                 }
             };
             self.enumerated_static_owners(m, off, &cs);
-            for c in cs {
-                self.enumerate_fields(Some(c));
-            }
+            // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开
+            let serial = self.man.is_serial_enumerator(&self.methods[m].key.to_string());
+            let mut scopes: Vec<field_handles::EnumScope> = cs.into_iter().map(|c| (serial, Some(c))).collect();
             if unknown {
-                self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
-                self.enumerate_fields(None);
+                scopes.push((serial, None));
+                if !serial {
+                    self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
+                }
             }
+            for (_, c) in &scopes {
+                if serial {
+                    self.enumerate_serial_fields(c.clone());
+                } else {
+                    self.enumerate_fields(c.clone());
+                }
+            }
+            // 结果句柄带各口径的来源标记：流到句柄写入口时才放开（`field_handles.rs`）
+            self.mark_enumeration(m, off, &mref.desc, &scopes);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all(self.ctx.fopen_all.get(), false);
-        }
-    }
-
-    /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
-    pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
-        if !self.fwriter_live {
-            if self.fenum_pending.insert(cls) {
-                self.offset_reads_ready();
-            }
-            return;
-        }
-        self.open_class_fields(cls);
-    }
-
-    /// 放开类（含超类）的全部字段；None = 全部字段不折叠
-    pub(super) fn open_class_fields(&mut self, cls: Option<String>) {
-        match cls {
-            Some(c) => {
-                let mut cur = Some(c);
-                while let Some(cls) = cur {
-                    let Some(cf) = self.h.class(&cls) else { break };
-                    for f in &cf.fields {
-                        self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
-                    }
-                    cur = cf.super_name.clone();
-                }
-            }
-            None => {
-                if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all(false, self.ctx.deser.get());
-                }
-            }
-        }
-    }
-
-    /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
-    /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
-    pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
-        if !self.man.is_field_handle_writer(key) {
-            return;
-        }
-        if let From::Method(c) = via.from {
-            if self.man.is_field_handle_bridge(&self.methods[c].key.to_string()) {
-                return;
-            }
-        }
-        self.field_writer_live();
-    }
-
-    /// 按字段句柄写字段的入口可达：挂起的字段枚举生效
-    pub(super) fn field_writer_live(&mut self) {
-        if std::mem::replace(&mut self.fwriter_live, true) {
-            return;
-        }
-        for cls in std::mem::take(&mut self.fenum_pending) {
-            self.enumerate_fields(cls);
         }
     }
 

@@ -106,21 +106,7 @@ impl<'a> Engine<'a> {
         }
         let class = self.id(CLASS);
         let fs = self.feeds(m, recv, class);
-        let s = self.value_set(&fs);
-        let mut out = vec![];
-        for x in s.classes.iter() {
-            match self.mirrors.get(&x) {
-                Some(&c) => out.push(self.names[c as usize].to_string()),
-                None => {
-                    let what = self.names[x as usize].to_string();
-                    self.reflect_gaps.insert(format!("{} <- recv({what})", self.methods[m].key));
-                }
-            }
-        }
-        for o in &s.open {
-            self.reflect_gaps.insert(format!("{} <- recv(open({}))", self.methods[m].key, self.names[o as usize]));
-        }
-        out
+        self.feed_mirror_classes(m, &fs)
     }
 
     /// 按名查方法调用点（方法 m）的名字实参 v 拆成的拼接段；None = 形状不符或无任何约束

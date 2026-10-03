@@ -141,13 +141,11 @@ impl<'a> Engine<'a> {
                 }
                 continue;
             }
-            // 类镜像是静态字段基址（staticFieldBase）：读所指类的静态引用字段；所指未知按 open
-            // 类镜像：同时是静态字段基址（staticFieldBase），读所指类的静态引用字段（所指未知按 open）与 Class 的实例字段
+            // 类镜像：同时是静态字段基址（staticFieldBase），读所指类的静态引用字段（所指未知按 open）与 Class 的实例字段。
+            // 静态字段基址与偏移只能经清单 `static_offset_getters` 取得：取法未达时类镜像不作静态字段基址
             let class = self.id(CLASS);
             if let Some(&c) = self.mirrors.get(&x) {
-                for (fi, _) in self.static_ref_fields(c) {
-                    self.offset_read(Node::F(fi), res, fi, rt, gate);
-                }
+                self.static_base_read(c, res, rt, gate);
             } else if x == class {
                 self.add_to(res, &TypeSet::open(rt));
             }
@@ -160,6 +158,28 @@ impl<'a> Engine<'a> {
                 let n = if obj { self.obj_field(x, fi, tid) } else { Node::F(fi) };
                 self.offset_read(n, res, fi, rt, gate);
             }
+        }
+    }
+
+    /// 类镜像（所指类 c）作静态字段基址按偏移读：读 c 的静态引用字段（逐字段按偏移可得门控）；
+    /// 静态偏移取法未达时挂起，可达时由 [`Self::static_offset_reached`] 接上
+    fn static_base_read(&mut self, c: u32, res: Node, rt: u32, gate: Gate) {
+        if !self.static_offset_live {
+            self.static_base_waits.push((c, res, rt, gate));
+            return;
+        }
+        for (fi, _) in self.static_ref_fields(c) {
+            self.offset_read(Node::F(fi), res, fi, rt, gate);
+        }
+    }
+
+    /// 静态字段偏移的取法可达：挂起的类镜像基址读生效
+    pub(super) fn static_offset_reached(&mut self) {
+        if std::mem::replace(&mut self.static_offset_live, true) {
+            return;
+        }
+        for (c, res, rt, gate) in std::mem::take(&mut self.static_base_waits) {
+            self.static_base_read(c, res, rt, gate);
         }
     }
 
@@ -352,7 +372,14 @@ impl<'a> Engine<'a> {
             return true;
         }
         let Some((key, _)) = self.fields.get_index(fi) else { return true };
-        self.fenum_pending.iter().flatten().any(|c| c == &key.owner || self.h.is_subtype(c, &key.owner))
+        let covers = |cs: &BTreeSet<Option<String>>| cs.iter().flatten().any(|c| c == &key.owner || self.h.is_subtype(c, &key.owner));
+        if covers(&self.fenum_pending) {
+            return true;
+        }
+        // 序列化口径的枚举只放开可序列化字段（transient / static 字段偏移不经此可得）
+        !self.fenum_serial.is_empty()
+            && self.ctx.field_info(key).is_some_and(|i| Ctx::serial_field(&i))
+            && (self.fenum_serial.contains(&None) || covers(&self.fenum_serial))
     }
 
     /// 字段节点 n 经偏移读入结果节点 res：偏移尚不可得时挂起，可得时由 [`Self::offset_fields_opened`] 接上。

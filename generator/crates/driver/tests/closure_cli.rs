@@ -17,11 +17,16 @@ fn manifest_dir() -> PathBuf {
 
 /// 一次 `rava closure`：返回 (stdout, stderr)；缺 JDK → None
 fn closure(java: &str, extra: &[&str]) -> Option<(String, String)> {
+    closure_at(&manifest_dir().join("tests/fixtures").join(java), extra)
+}
+
+/// 同上，Java 源文件取给定路径
+fn closure_at(java: &std::path::Path, extra: &[&str]) -> Option<(String, String)> {
     let dir = manifest_dir();
     let _guard = RAVA.lock().unwrap_or_else(|e| e.into_inner());
     let o = Command::new(env!("CARGO_BIN_EXE_rava"))
         .arg("closure")
-        .arg(dir.join("tests/fixtures").join(java))
+        .arg(java)
         .args(["--jdk", "21", "--runtime"])
         .arg(dir.join("../../../runtime/java_runtime"))
         .args(extra)
@@ -83,6 +88,71 @@ fn no_recording_without_queries() {
     };
     assert!(!err.contains("[flows "), "未登记记录型查询却有记录：{err}");
     assert!(out.contains("FlowProbe.pass:(Ljava/lang/Object;)Ljava/lang/Object;"), "{out}");
+}
+
+/// 一次 `rava closure -o`：闭包 JSON 的类 / 方法 / 反射成员集合
+fn closure_sets(java: &std::path::Path, seed: u64) -> Option<[std::collections::BTreeSet<String>; 3]> {
+    // 测试并行运行：输出文件按进程内序号区分
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!("rava_closure_seed_{}_{n}_{seed}.json", std::process::id()));
+    let seed = seed.to_string();
+    closure_at(java, &["--hash-seed", &seed, "-o", out.to_str().unwrap()])?;
+    let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
+    let _ = std::fs::remove_file(&out);
+    let d: serde_json::Value = serde_json::from_str(&text).expect("闭包 JSON");
+    let strs = |v: &serde_json::Value, key: Option<&str>| -> std::collections::BTreeSet<String> {
+        v.as_array()
+            .expect("数组")
+            .iter()
+            .map(|x| match key {
+                Some(k) => x[k].as_str().expect("字符串字段").to_string(),
+                None => x.as_str().map(str::to_string).unwrap_or_else(|| x["name"].as_str().expect("类名").to_string()),
+            })
+            .collect()
+    };
+    Some([strs(&d["classes"], None), strs(&d["methods"], Some("id")), strs(&d["reflect"]["members"], Some("member"))])
+}
+
+/// 闭包与哈希顺序无关：同一程序换哈希种子，类 / 方法 / 反射成员集合完全一致
+/// （形参常量格的中间态不得留下不可撤回的反射登记）。用例取 e2e 的序列化例：序列化辅助方法按形参取名、
+/// 按形参取类，形参字符串常量曾随调用点接入先后在种子 0 / 1 间多出或缺少 `writeObject` 回调；
+/// 包装方法按调用点配对点名后，各种子下序列化回调都进反射成员（运行期按名查到的回调不得是存根）
+#[test]
+fn closure_independent_of_hash_seed() {
+    // （用例, 是否序列化 ArrayList）
+    const CASES: [(&str, bool); 5] = [
+        ("23_algorithms/StockTrans.java", true),
+        ("35_io/TestSerialDefaultSuid.java", true),
+        ("35_io/TestSerialProxyForm.java", true),
+        ("35_io/TestSerialUserGenericCallbacks.java", false),
+        ("35_io/TestSerialLookupPairing.java", true),
+    ];
+    const CALLBACK: &str = "java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V";
+    for (case, list) in CASES {
+        let java = manifest_dir().join("../../../tests/e2e").join(case);
+        let Some(base) = closure_sets(&java, 0) else { return };
+        assert!(!list || base[2].contains(CALLBACK), "{case} 种子 0 的反射成员缺 {CALLBACK}");
+        for seed in [1, 2] {
+            let other = closure_sets(&java, seed).expect("同一 JDK");
+            for (i, what) in ["类", "方法", "反射成员"].iter().enumerate() {
+                let only_base: Vec<_> = base[i].difference(&other[i]).take(10).collect();
+                let only_other: Vec<_> = other[i].difference(&base[i]).take(10).collect();
+                assert!(only_base.is_empty() && only_other.is_empty(), "{case} 种子 0 与 {seed} 的{what}集合不同：{only_base:?} / {only_other:?}");
+            }
+        }
+    }
+}
+
+/// 形参字符串常量进形参常量格：URL 构造器把协议名常量传给 URL$DefaultFactory.createURLStreamHandler，
+/// 其字符串 switch（String.hashCode / equals 折叠）只取 file 臂。形参字符串一律置 Top 时 switch 不折叠，
+/// 经 jrt 处理器、类路径 JarLoader、服务加载与反射池把 HelloWorld 闭包撑到约 2856 类（正常约 500 类）
+#[test]
+fn param_string_constants_fold_switch() {
+    let java = manifest_dir().join("../../../tests/e2e/01_basics/HelloWorld.java");
+    let Some([classes, ..]) = closure_sets(&java, 0) else { return };
+    assert!(!classes.contains("sun/net/www/protocol/jrt/Handler"), "URL 协议名 switch 未按形参常量折叠");
+    assert!(classes.len() < 1000, "HelloWorld 闭包 {} 类", classes.len());
 }
 
 /// HelloWorld 级程序：栈耗尽 VM 规则（stack-check）把 StackOverflowError 带入闭包（a3-T1b）
