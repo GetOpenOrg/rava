@@ -1443,7 +1443,7 @@ native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `s
 | 编号 | 内容 | 文件 | 依赖 | 验收数字 |
 |---|---|---|---|---|
 | **a3-T1** | `rava_coro`：slab 栈（多栈预留 + 热 / 冷槽 + 空块释放）、软件栈界与切换时随执行流换出、条件硬件 guard、aarch64 / x86_64 切换汇编、入口蹦床、guard 故障识别 | 新 crate `runtime/rava_coro/`（每文件 ≤600 行） | 无 | crate 单测：10⁶ 次往返切换正确且单次切换 ≤50 ns（release，本机 aarch64 与服务器 x86_64 各测一次）；**缺省 `vm.max_map_count`（65530）下** 10⁵ 个协程同时挂起，映射增量 ≤256、slab 块 ≤256；全部完成后 RSS（Linux 计入 VmPTE 页表，macOS 物理足迹）回落到起点 +16 MiB 以内、slab 块 ≤1；callee-saved 寄存器（含 d8–d15、MXCSR）逐个被破坏后恢复的检查全过；软件栈界：带检查点的递归在栈界 ±1 页处判定耗尽、YellowZone 放开后可再用 32 KiB、栈界随 `switch` 换出换入；硬件 guard 启用时（macOS、Linux ≥ 6.13）子进程（串行）退出码为 SIGABRT、stderr 含 overflowed |
-| **a3-T1b** | Java 栈溢出语义：宏在返回 `Result` 的 Java 方法序言注入 `__stack_check()?`；`JvmError::stack_overflow`（YellowZone 内构造 `StackOverflowError`）；平台线程入口 `init_platform_thread`；`StackOverflowError` 经 VM 抛出异常清单入闭包 | `rava_macros_core`（`block/class_init.rs` 同位注入）、`error.rs`、`thread_impl.rs`、`vm_intrinsics.toml` | ◀ T1 | 平台线程与协程内无界递归都抛可捕获的 `StackOverflowError`，捕获后继续执行；e2e TestArraysDeepOps 通过；TestVirtualThreadCarrier 含虚拟线程内递归 SOE 捕获一项；release 下 roundtrip 切换仍 ≤50 ns |
+| **a3-T1b** | Java 栈溢出语义：宏在返回 `Result` 的 Java 方法序言注入 `__stack_check()?`；`JvmError::stack_overflow`（YellowZone 内构造 `StackOverflowError`）；平台线程入口 `init_platform_thread`；`StackOverflowError` 经闭包 VM 规则 `stack-check` 入闭包 | `rava_macros_core`（`block/class_init.rs` 同位注入）、`error.rs`、`thread_impl.rs`、`closure/src/engine/vmrules.rs` | ◀ T1 | 平台线程与协程内无界递归都抛可捕获的 `StackOverflowError`，捕获后继续执行；e2e TestArraysDeepOps 通过；TestVirtualThreadCarrier 含虚拟线程内递归 SOE 捕获一项；release 下 roundtrip 切换仍 ≤50 ns |
 | **a3-T2** | `Continuation` 6 个 native、执行上下文块、三类 pin 计数（`monitor.rs`、`#[jvm_native]` 宏包裹、类初始化协议） | `jdk/internal/vm/continuation_impl.rs`；新执行上下文模块；`monitor.rs`；`gil.rs`（类初始化段）；`rava_macros` | ◀ T1 | `continuation_impl.rs` 中 `#[jvm_native]` 6、`#[jvm_boundary]` 0；`non_native_overrides` 0；边界用例 **TestContinuationPinned**（`synchronized` 内 park、`Continuation.pin` 期间 yield 走 onPinned、native 回调中 park 三种 pinned 情形，均正确完成）与 JDK 输出一致 |
 | **a3-T3** | 线程身份两槽、执行级状态迁入执行上下文块、TLS 访问入口、thread_local 守护检查 | `thread_impl.rs`、`stack_stream_factory_abstract_stack_walker_impl.rs`、`reflect_dispatch.rs`、`sync_model.rs` | 与 T2 并行，T4 前合入 | `thread_local!` 定义：runtime 中只余执行上下文模块 1 处 + `thread_impl.rs` 3 个载体槽，守护检查通过；TestStackWalkerFrames、TestReflectFieldMethod、TestThreadStates 3/3 |
 | **a3-T4** | 删方案 A：`VirtualThread` 10 个承载方法删除（只留 6 个 JVMTI / registerNatives `#[jvm_native]`）；`VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`；调度器按字节码翻译 | `virtual_thread_impl.rs`、`continuation_support_impl.rs`、`closure.toml` | ◀ T2、T3 | HelloWorld 审计 VirtualThread 10 → 0；`closure.toml` / `vm_intrinsics.toml` 中 `VirtualThread` 0 次；HelloWorld 闭包 ≤498 类且 `VirtualThread.<clinit>` 不在闭包内（`--trace-class` 确认）；e2e TestVirtualThread、TestVirtualClockPark、TestThreadStates、TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized 7/7；边界用例 **TestVirtualThreadCarrier**（让出后在另一载体恢复：`currentThread()` 身份、`ThreadLocal` / `InheritableThreadLocal` 值、`isVirtual()`、中断状态、`join(Duration)` 超时，输出与载体编号无关）与 JDK 一致 |
@@ -1493,3 +1493,24 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   峰值 1381 MiB、全部完成后 13.1 MiB（+7.7 MiB）；软件栈界在深度 2866、距可用区底 128 KiB 处判定耗尽；无 `MADV_GUARD_INSTALL`，
   guard 用例按预期跳过；callee-saved、跨线程 resume 通过。输出中旧口径「池 N 块」指热槽个数（`pooled_stacks`），与 slab 块数
   （`mapped_chunks`）不同：完成后余下的 1 个空块（16 槽）全部是热槽，热槽 16 个、slab 1 块，两者一致；测试输出已改为分别打印。
+
+**T1b Java 栈溢出语义（2026-10-03）**
+- 宏：`entry_checks`（原 `null_receiver_check`）在每个返回 `Result` 的方法入口依次注入空接收者检查与 `__stack_check()?`；
+  接口载体分派（直达实现类 vtable 体、不经 wrapper）同样注入。`__stack_check`（`lib.rs`，`#[inline(always)]`）调
+  `rava_coro::stack_exhausted()`，耗尽时走冷路径 `JvmError::stack_overflow`：`YellowZone::enter` 放开余量后构造
+  `StackOverflowError`；已在余量区内（构造途中再次耗尽）按 HotSpot 红区同义 abort。
+- 平台线程：`create_java_vm` 与 `spawn_java_thread` 入口调 `init_platform_thread`，栈界 = 栈底 + max(SHADOW, 栈大小 / 16) + YELLOW
+  （macOS `pthread_get_stackaddr_np`，Linux `pthread_getattr_np`）；协程栈界由 `switch` 携带（T1）。
+- 闭包：宏注入调用对分析器不可见，`StackOverflowError` 改由 VM 规则 `stack-check`（无条件，落到 `stack_overflow` 构造入口，
+  与 `null-check` / `heap-exhausted` 同构）入闭包；原定「VM 抛出异常清单」路线弃用。单测：`vmrules` 规则存在、
+  `closure_cli::stack_overflow_error_in_minimal_closure`（最小程序闭包含该类且经 stack-check）。
+- 闭包规模（实测，JDK 类数）：合入 b3 前 HelloWorld 497 → 498、StockTrans 3105 → 3106、CarmichaelPseudoprimes 2898 → 2899；
+  合入 71d80723 后 HelloWorld 466 → 467（`--why` 确认唯一来路为 `stack-check`）、StockTrans 3106。此前没有任何路径抵达
+  `StackOverflowError`，各程序一律 +1 类。T4 的「HelloWorld ≤498」按含此类的口径复核。
+- 体积（本机 aarch64，dev = 语料缺省 profile）：HelloWorld 文件 44.75 → 45.21 MB（+1.0%），`__TEXT` 11.16 → 11.57 MB（+3.7%）；
+  CarmichaelPseudoprimes（2899 类）文件 296.0 → 299.2 MB（+1.1%），`__TEXT` 80.97 → 84.15 MB（+3.9%）；release（调用基准，498 类）
+  文件 17.25 → 17.73 MB（+2.7%），`__TEXT` 8.00 → 8.37 MB（+4.7%）。
+- 耗时（同机中位数，release 5 轮、dev 3 轮；调用基准 = 递归 fib(32) + 5×10⁷ 次实例方法调用）：release fib 10 → 17 ms（+70%，约 1 ns / 调用）、
+  实例调用循环 101 → 114 ms（+13%）；dev fib 83 → 142 ms、循环 679 → 1083 ms（+60%）；CarmichaelPseudoprimes（dev，
+  printf 为主）user 0.12 → 0.14 s。开销来自每个方法入口一次不内联的线程局部读 + 比较（检查本身 1.28 ns，`check_cost`）。
+- 残余：运行时手写代码无界递归审计（§21.8.2 残余风险）尚未做，列入 T1b 后续。
