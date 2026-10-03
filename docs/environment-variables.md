@@ -131,7 +131,7 @@ rava audit native [--filter S…] [-j N]                # 同上，只取 handwr
 其余存根）的成员，与 build 的 `[precheck]` 同一归类（第二阶段收尾后、物理拆层前扫描）。发射只在内存进行，不写
 scratch；javac 产物落 `build/audit/` 下临时目录，用完即删。corpus / native 逐例起子进程（`rava audit test`，缺省
 `-j 2`，单例超时 30 分钟），任一例失败则报告照写、退出码非 0。另可带 `--jdk` / `--java-home` / `--runtime` /
-`--closure-cache`（缺省 `build/closure_cache`）。口径是静态可达（过近似），运行期是否执行用
+`--closure-cache`（缺省 `build/closure_cache`）。口径是静态可达（过近似；终态按档案口径——构建单元全体入口并集、闭包规模以档案衡量，当前实现仍按单测试逐例计算），运行期是否执行用
 `rava closure <Test.java> --why <方法>` 核对。
 
 ### 重型闭包的自动处理（无需配置）
