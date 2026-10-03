@@ -64,19 +64,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             // vtable 经 supertrait 上转）；其余（闭包、无运行时类值）→ `None`，
             // 调用方回落闭包 SAM 分支。对任意类型实参成立（Java 泛型运行时擦除）。
             pub fn __virtual_view(obj: &Object) -> ::std::option::Option<Self> {
-                let mut __vt: ::std::option::Option<
-                    __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;
-                ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
-                let __vt = __vt?;
-                let mut __store: ::std::option::Option<
-                    __AnyRef> = ::std::option::Option::None;
-                ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __store);
-                Some(#struct_ident {
-                    vtable: __vt,
-                    any: __store?,
-                    _jvm_null: false,
-                    #phantom_init
-                })
+                __erased_view(obj, Self::__from_parts)
             }
         }
     };

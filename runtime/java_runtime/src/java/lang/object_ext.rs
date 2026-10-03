@@ -431,3 +431,53 @@ impl Eq for Object {}
 fn checkcast_fail(obj: &Object, binary_name: &str) -> ! {
     panic!("ClassCastException: {} cannot be cast to {}", obj.0.__class_name(), binary_name)
 }
+
+/// 类 wrapper 的部件构造入口（`X::__from_parts`）：(vtable, 存储, null 标志) → 本类视图。
+pub type __PartsFn<W, V> = fn(crate::sync_model::__Shared<V>, crate::sync_model::__AnyRef, bool) -> W;
+
+/// 按精确存储类型还原部件的存储钩子（`__jb_X__from_any`）；不是本类存储时原样交还。
+pub type __FromAnyFn<V> = fn(crate::sync_model::__AnyRef)
+    -> std::result::Result<(crate::sync_model::__Shared<V>, crate::sync_model::__AnyRef), crate::sync_model::__AnyRef>;
+
+/// 运行时类是本类或其子类时，按原对象的 (vtable, 存储) 部件重建本类视图（共享存储与对象标识，
+/// 子类 vtable 经 supertrait 上转）；否则 `None`。宏生成的 `X::__virtual_view` 只转交到这里：
+/// 逻辑与具体类无关，按类只差 wrapper 与 vtable trait 两个类型（拆 crate §7.5.4 #2）。
+pub fn __erased_view<W, V: ?Sized + 'static>(obj: &Object, parts: __PartsFn<W, V>) -> Option<W> {
+    let mut vt: Option<crate::sync_model::__Shared<V>> = None;
+    ObjectVTable::__erased_vtable(Rc::clone(&obj.0), &mut vt);
+    let vt = vt?;
+    let mut store: Option<crate::sync_model::__AnyRef> = None;
+    ObjectVTable::__erased_inner(Rc::clone(&obj.0), &mut store);
+    Some(parts(vt, store?, false))
+}
+
+/// `From<Object> for X` 的全部逻辑（宏按类只生成一行转交，拆 crate §7.5.4 #2）。判定按序：
+///   1. null 通过任何 checkcast（JVMS §6.5），得到本类的 null 引用；
+///   2. 槽式视图：运行时类与目标实例化同族同参（含子类按超类实参映射的视图）；
+///   3. 运行时类是本类族（`is_instance_of`）→ 擦除路径：
+///      a. 子类值：wrapper 的 vtable 经超类 supertrait 上转 + 擦除存储，重建任意实例化视图；
+///      b. 祖先视图值：运行时存储就是本类存储（`Enum<E>` 装箱后按子类取回）→ 按精确存储还原；
+///   4. 其余 → checkcast 的 ClassCastException。
+pub fn __class_from_object<W, V>(obj: Object, binary_name: &str, parts: __PartsFn<W, V>,
+                                 from_any: __FromAnyFn<V>) -> W
+where W: std::any::Any + Clone + Default, V: ?Sized + 'static {
+    if obj.0.is_jvm_null() { return W::default(); }
+    let mut slot: Option<W> = None;
+    if obj.0.__view_into(Rc::new(()), &mut slot) {
+        if let Some(v) = slot { return v; }
+    }
+    if obj.0.is_instance_of(binary_name) {
+        let mut vt: Option<crate::sync_model::__Shared<V>> = None;
+        ObjectVTable::__erased_vtable(Rc::clone(&obj.0), &mut vt);
+        let mut erased: Option<crate::sync_model::__AnyRef> = None;
+        ObjectVTable::__erased_inner(Rc::clone(&obj.0), &mut erased);
+        if let Some(any) = erased {
+            if let Some(vt) = vt { return parts(vt, any, false); }
+            match from_any(any) {
+                Ok((vt, any)) => return parts(vt, any, false),
+                Err(other) => drop(other),
+            }
+        }
+    }
+    obj.checkcast::<W>(binary_name)
+}
