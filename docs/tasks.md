@@ -97,7 +97,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：GGI / PTI 闸门关闭，正式 HelloWorld ≈3091 类 / ≈600 s → 423 类 / 2–3 s
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
-│   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
+│   │     ├─ ✅ a2 合入 62f46bb2（c1d-p0 b4669206，抽查 c1da-b4669206 9/9，含接口分派宏补 null 检查 + TestInstanceofElseDispatch；合并时 name_eval 同名私有函数改名 frame_mirror_classes）；
+│   │     │       🔄 续：initPhase2 膨胀用真实 --cut 定位 → 早退检查按分析期事实求值 → [[boot_init.phases]] → boot layer 步骤 2–5；闸门以档案规模计（基线 3609）
+│   │     │       原记录：代码 f2bdcf6e；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
 │   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
 │   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup 的 MapMode 反射构造分派缺席已修（构造器查找建模 22eb9e72，
 │   │     │       新增 TestJdkConstructorLookup）；c1da-2c478e2f 的 TestDateTimeFormat 回归（缺 JRE FormatData 束）已修（d1b1b2ba，新增 TestLocaleBundleFamilies）
