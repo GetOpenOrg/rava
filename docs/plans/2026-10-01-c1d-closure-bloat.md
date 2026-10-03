@@ -1833,3 +1833,67 @@ TestBuiltinUrlProtocol 3078 不变。闸门本身正确，但 `URL.<init>` / `ge
 - `securerandom.source`：运行期安全属性（`java.security` 文件 + `Security.setProperty` 可改），分析器无法求值，
   `SeedGenerator$URLSeedGenerator.init` / `NativePRNG.getEgdUrl` 两处保持全分支；要降需对安全属性建模（清单声明缺省值不够，
   用户可在运行期改写），不在乙范围。
+
+### 22.11 URL host 逐对象精度设计（2026-10-04，c1d-urlhost，结论：前提不成立，按「卡住即停」停下报告）
+
+**目标（派发时的假设）**：让分析器对 `URL.host` 具备逐对象（分配点 / 构造点）精度，证明经 `openConnection` 打开的
+file URL 的 host 恒为 `""` / `localhost`，使 `file.Handler.openConnection:(URL,Proxy)` `@58..@119` 的 ftp 分支判死，
+再恢复 §22.10 的精确协议键求值而不把 `ftp.Handler` → `FtpURLConnection` → http 栈带进闭包。
+
+**拟定机制（未实施）**：
+1. 引擎现有两种逐对象手段都不够：`Obj::Fields` 标签（`construct.rs`）只记 final 实例字段，合流要求标签相等，跨方法经
+   形参 / 返回 / 字段常量格（`PV`）传递，不同对象一合流即 Top；容器抽象对象（`classes.rs::obj_at`）只区分类型流，
+   常量格 `fvals` / `rvals` 仍按字段键 / 方法键全局合流。
+2. 要判死 `@58`，需要同时具备：URL 按分配点区分（类型流与 `URL.handler` 的值都按对象）；字段常量格按 (抽象对象, 字段)
+   存储；`URL.getHost()` 的返回常量按接收者克隆存储并在调用点按接收者对象集合汇合；字符串常量的有限集格
+   （`""` 与 `"localhost"` 合流不得变 Top）；非 final 字段的写入逃逸判定（`URL.set(…)` 经 `URLStreamHandler.setURL`
+   改写 host，只能作用于该处理器自己的 URL，需要按接收者对象证明）。
+3. 判据全部按字节码结构，不列类名。
+
+**前提不成立（实测 + JDK 实证）**：即使上述机制全部到位，`@58` 在大档用例上也**不可判死**——存在 host 真正不可知的
+file URL 流到 `file.Handler.openConnection`：
+- 资源 URL 路径：`ClassLoader.getResource(name)` → `BuiltinClassLoader.findResource` → `findResourceOnClassPath` →
+  `URLClassPath$FileLoader.getResource` → `new URL(getBaseURL(), ParseUtil.encodePath(name, false))`。解析式构造器经
+  `file.Handler.parseURL` → `URLStreamHandler.parseURL`，spec 以 `//` 开头时 host 取自 spec。name 以 `//主机` + 基目录路径
+  开头时还能通过 FileLoader 的前缀检查（`url.getFile()` 以基目录开头），只要对应文件存在就返回这个 URL。
+- JDK 21 实证（`/tmp/uh_t/ResHost.java`，不入库）：`ClassLoader.getSystemResource("//evil.invalid" + 基目录 + "r.txt")`
+  返回 host 为 `evil.invalid` 的 file URL，`openConnection()` 得 `sun.net.www.protocol.ftp.FtpURLConnection`。
+- 这条链在 StockTrans 闭包内全程存活（基线实测：`ResourceBundle$Control$2.run` → `ClassLoader.getResource` →
+  `BuiltinClassLoader.findResourceOnClassPath` → `URLClassPath$FileLoader.getResource` → `file.Handler.parseURL` →
+  `URL.openConnection` → `file.Handler.openConnection(URL,Proxy)`，其 `dead_pcs` 只有 `[131,142)`）。资源名来自
+  `ResourceBundle.Control.toResourceName(bundleName)`（`.` 换 `/`，`..evil.x` 即 `//evil/x`）、`Class.getResourceAsStream`
+  （`resolveName` 只去掉一个前导 `/`）等，分析器求不出，也就证不了 spec 不以 `//` 开头。
+- 档案口径下更确定：语料档案是全体测试的并集，新边界用例 `TestFileUrlHost` 本身就含 host 为动态串的 file URL，
+  `@58` 在档案内必然存活；生产档案只要触及资源 URL + `openConnection`（ResourceBundle、ServiceLoader、
+  `Class.getResourceAsStream` 等，大档用例全都触及）同样存活。
+
+**结论**：按可靠（sound）口径，ftp 分支在这些程序里**真实可达**，`ftp.Handler` / `FtpURLConnection` 应当在协议精确时进入闭包。
+逐对象 host 精度只能惠及「没有任何解析式 file URL 流到 `openConnection`」的小程序，对 §22.6 的大档目标（StockTrans /
+DeepCopy −425）收益为 0，故未实施（避免为零收益引入 (对象, 字段) 常量格、按接收者克隆的返回常量、字符串集合格三项
+大改）。
+
+**附带发现：现闭包与 JDK 行为已有偏差**：协议名求不出时反射查找 `"sun.net.www.protocol." + p + ".Handler"` 只匹配闭包内
+已有的类，`ftp.Handler` 不在闭包内（StockTrans 3357 类、TestFileUrlHost 3078 类，二者 `protocol/ftp` / `FtpURL` /
+`protocol/http/` 均为 0），于是 host 非本地的 file URL 在 rava 上 `openConnection` 走 `@152` 的 catch → `IOException`，
+JDK 返回 `FtpURLConnection`。新边界用例 `tests/e2e/53_io_api/TestFileUrlHost.java`（expected 取 JDK 21，
+`-Duser.language=en` 下两次一致；只建连接对象、不联网）的 `ctor-remote` / `spec-remote` / `relative-remote` /
+`ctor-remote-dynamic` 四行在现闭包下预期失败，是这一偏差的回归哨兵；其余行（host 为 `""` / `localhost` / `LocalHost` /
+`~`、`file:` 串、`toURI().toURL()`、相对解析）预期通过。
+
+**关键实测数字**（`/tmp/uh_cl.sh`，本 worktree 34001bde 的 rava，jimage dd9c2c51d6dea9a9）：StockTrans 3357 类 / 20711 方法；
+TestFileUrlHost 3078 类 / 17758 方法；两者 `file.Handler.openConnection(URL,Proxy)` 的 `dead_pcs` 均为 `[131,142)`
+（只有 `proxy != null` 分支死），ftp / http 类 0。本步未改分析器，前后数字相同。
+
+**候选方案（待协调者定）**：
+1. **可靠口径，接受 ftp 进入**：恢复 §22.10 的精确协议键求值，`ftp.Handler` → `FtpURLConnection` → http 栈作为真实可达类
+   进入闭包；jar 侧的收益（键闸门剪掉 jar 分支）与 ftp/http 的增量相抵，需先实测净值，且须先解决 §22.10 记录的
+   300 s 超时（闭包规模膨胀）。
+2. **资源名精度**：对 `findResourceOnClassPath` 链上的资源名做「不以 `//` 开头」的前缀证明（拼接段模式 `pstrs` 已能
+   给出前缀常量）。只对名字有常量前缀的调用点成立；`ResourceBundle` / `Class.getResourceAsStream` 的名字来自用户串，
+   档案口径下仍不可证，收益有限。
+3. **定原则（§22.10 已提出）**：按键闸门的键求精确、反射类查找保持「只匹配闭包内已有类」的 Wild 口径。该口径本身就是
+   现状偏差的来源（ftp 永远不进），等于把 TestFileUrlHost 的四行定为已知不支持；本派发明确禁止此路线，需协调者重议。
+4. **jar 来源另走甲 / ucp**：class path 来源（甲，§22.2）与 `ucp` 合流（§22.4）不依赖协议名精度，可先做；但按 §22.1，
+   单堵 class path 来源只有 −4～−6，签名链要等协议处理器来源（乙）也堵住才兑现，乙在 1～3 定论前保持全分支。
+
+**下一步**：等协调者在 1 / 3 之间取舍（或先做 4）。本步交付：本节设计与反证、边界用例 TestFileUrlHost。

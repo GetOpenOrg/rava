@@ -1,0 +1,13 @@
+ctor-empty: host=[] local [plain file]
+ctor-localhost: host=[localhost] local [plain file]
+ctor-LOCALHOST: host=[LocalHost] local [plain file]
+ctor-tilde: host=[~] local [plain file]
+spec-plain: host=[] local [plain file]
+spec-authority-localhost: host=[localhost] local [plain file]
+to-url: host=[] local [plain file]
+relative-plain: host=[] local [plain file]
+ctor-remote: host=[127.0.0.1] -> ftp host=127.0.0.1 ref=null conn=FtpURLConnection
+spec-remote: host=[127.0.0.1] -> ftp host=127.0.0.1 ref=frag conn=FtpURLConnection
+relative-remote: host=[example.invalid] -> ftp host=example.invalid ref=null conn=FtpURLConnection
+ctor-remote-dynamic: host=[EXAMPLE.INVALID] -> ftp host=EXAMPLE.INVALID ref=null conn=FtpURLConnection
+same-file: true
