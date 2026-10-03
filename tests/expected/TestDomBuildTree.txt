@@ -1,0 +1,11 @@
+doc-elem=cfg
+root-owner-doc=true
+name-parent=cfg
+root-nodetype=1 text-type=3 doc-type=9
+ns-uri=urn:e2e ns-attr=1
+no-ns-attr=7
+children=2
+text=rava set-text=42
+pi-type=7 target=e2e-pi data=flag
+after-remove=1
+reparented=num

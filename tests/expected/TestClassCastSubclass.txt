@@ -1,0 +1,16 @@
+cast-hit=5
+cast-ex=ClassCastException
+asSubclass=Integer
+asSubclass-ex=ClassCastException
+num<-int=true
+int<-num=false
+prim-no-box=true
+arr-covariant=true
+arr-elem=true
+iface=true
+byname=true
+identity=true
+isInstance=true
+isInstance-null=true
+isInstance-arr=true
+isInstance-prim=true

@@ -1,0 +1,9 @@
+nulls-first=[null, null, apple, banana, cherry]
+nulls-last=[apple, banana, cherry, null, null]
+item null/1
+item c/1
+item a/2
+item b/2
+desc-first=2
+prices=[1, 1, 2, 2]
+null-elem-first=true

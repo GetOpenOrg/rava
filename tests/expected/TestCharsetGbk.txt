@@ -1,0 +1,6 @@
+enc-len=8 hex=D6D0CEC4B2E2CAD4
+roundtrip=true
+alias-cp936=true
+replace-len=2 head=0xFFFD
+ignore=[a]
+report-ex=MalformedInputException

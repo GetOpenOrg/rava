@@ -1,0 +1,10 @@
+find-return=T
+list-return=java.util.List<T> parameterized=true
+list-arg=T
+map-raw=Map
+nested=java.util.List<T> inner=T
+array-return=T[] gat=true
+component=T is-typevar=true
+batch-param=T[]
+sink-param=T[]
+sink-component=T

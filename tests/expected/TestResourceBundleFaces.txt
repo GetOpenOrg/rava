@@ -1,0 +1,12 @@
+keys=2
+greet=hello
+zh=你好
+contains=truefalse
+miss-ex=MissingResourceException key=[missing]
+object-type=Integer
+cast-ex=ClassCastException
+override=child-override
+fallback=fallback-desc
+fallback-type=Integer
+merged-keys=3
+bundle-ex=MissingResourceException

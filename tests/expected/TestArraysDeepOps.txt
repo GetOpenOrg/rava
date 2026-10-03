@@ -1,0 +1,13 @@
+shallow-ne=true
+deep-hash-eq=true
+deep-eq=true
+deep-ne=true
+null-eq=true
+null-vs=true
+one-null=true
+self-same=true
+self-cross-ex=StackOverflowError
+self-str=[[...]]
+str=[1, [2, 3], [x]]
+str-nested=[[[1], [2, 3]]]
+str-null=[null]

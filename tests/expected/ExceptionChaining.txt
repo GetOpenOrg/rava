@@ -1,3 +1,0 @@
-parsed: 100
-bad number: For input string: "NaN"
-done

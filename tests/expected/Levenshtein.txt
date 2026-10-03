@@ -1,3 +1,0 @@
-distance(kitten, sitting) = 3
-distance(saturday, sunday) = 3
-distance(rosettacode, raisethysword) = 8

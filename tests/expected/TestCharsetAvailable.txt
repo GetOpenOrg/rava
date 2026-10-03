@@ -1,0 +1,7 @@
+gbk=true
+gb18030=true
+big5=true
+shift_jis=true
+euc-jp=true
+euc-kr=true
+base-utf8=true

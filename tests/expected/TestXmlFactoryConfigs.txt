@@ -1,0 +1,7 @@
+sax-validating=true ns-aware=true xinclude=false
+sax-feat-ns=true
+dom-coalescing=true ignore-comments=true expand-entities=false
+dom-feat-query-ok=true
+comments-ignored=true
+resolver-not-needed=true
+sax-bare-parse=true

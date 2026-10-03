@@ -1,0 +1,8 @@
+natural-nonempty=true
+len=2
+top=FakeClass.fakeMethod:42
+file=Fake.java native=false
+defensive-copy=true
+empty-len=0
+eq=true hash-eq=true
+to-string=C.m(F.java:1)

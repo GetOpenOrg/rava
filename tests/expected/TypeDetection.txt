@@ -1,4 +1,0 @@
-'5' is an integer
-'7.5' is a double
-'d' is a character
-'true' is some other type

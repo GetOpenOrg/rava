@@ -1,0 +1,9 @@
+info-int=800
+parse-name=700
+parse-num=900
+parse-off=2147483647
+parse-ex=IllegalArgumentException
+loggable-config=true
+loggable-fine=false
+loggable-severe=true
+rec-level=INFO seq=7 tid=3 msg=[rec]

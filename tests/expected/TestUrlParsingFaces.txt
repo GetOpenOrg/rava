@@ -1,0 +1,14 @@
+protocol=https
+host=example.com
+port=8443 default-port=443
+path=/a/b
+query=q=1
+ref=frag
+external=https://example.com:8443/a/b?q=1#frag
+file=/a/b?q=1
+no-port=-1 backfill=80
+uri-to-url=/z
+file-scheme=file
+openstream=via-file-url
+eq=true hash-eq=true
+frag-independent=false

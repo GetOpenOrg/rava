@@ -1,0 +1,8 @@
+ct-len=31
+ct=9a5ca9307b465e1b98477e76affad41126438145cf400be360701c534fea80
+roundtrip=gcm-e2e-payload
+tampered-ex=AEADBadTagException
+midtweak-ex=AEADBadTagException
+aad-roundtrip=gcm-e2e-payload
+aad-miss-ex=AEADBadTagException
+ecb-roundtrip=gcm-e2e-payload

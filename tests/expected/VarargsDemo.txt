@@ -1,6 +1,0 @@
-6
-30
-a-b-c
-hello
-42
-true

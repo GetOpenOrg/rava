@@ -200,8 +200,111 @@
       <version>5.6.4</version>
     </dependency>
 
-    <!-- 反推荐（勿加）：mockito（Instrumentation agent）、spring（动态代理）、
-         netty（unsafe/NIO）、maven/gradle（类加载容器） -->
+    <!-- ═══ 框架矩阵增补（2026-10-03，docs/plans/2026-10-03-framework-pilot-test-matrix.md）═══
+         目标 JDK = 21 与 25 双跑（golden 先 21 生成，JDK25 适配轮后 25 侧复跑）。
+         版本策略两线：
+         · 追新（独立库，稳定线末版）：H2/mybatis/OGNL/Jsoup/Logback1.5/slf4j2.0/SnakeYAML/
+           typesafe/Caffeine/Fastjson2/Retrofit2.x/TestNG
+         · 钉代不追顶（代际对齐 > 最新）：servlet 6.1（6.2 尚 M）、Spring 6.2（不上 7.x 新代，
+           主流存量代）、persistence 3.2 + Hibernate 7.4（2026 主流代配对）、Retrofit 2.x（不上 3.x）、
+           struts 7.4（jakarta 6 代对齐，备选 intel 件）、junit4/hamcrest3 维持 P0 基线。 -->
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>6.1.0</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.persistence</groupId>
+      <artifactId>jakarta.persistence-api</artifactId>
+      <version>3.2.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.hibernate.orm</groupId>
+      <artifactId>hibernate-core</artifactId>
+      <version>7.4.6.Final</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.struts</groupId>
+      <artifactId>struts2-core</artifactId>
+      <version>7.4.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mybatis</groupId>
+      <artifactId>mybatis</artifactId>
+      <version>3.5.19</version>
+    </dependency>
+    <dependency>
+      <groupId>ognl</groupId>
+      <artifactId>ognl</artifactId>
+      <version>3.4.14</version>
+    </dependency>
+    <!-- D-4 拍板件（2026-10-03）：mybatis 的驱动基座，内存模式 jdbc:h2:mem: 零网络 -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.5.252</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-core</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-beans</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <!-- W5 候选池高优先件（2026-10-03 拉取；提拔序见矩阵 §六-7） -->
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>1.23.2</version>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>1.5.38</version>
+    </dependency>
+    <!-- 显式钉 2.0 线（logback 1.5 的配对线；压过传递的旧版 slf4j） -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>2.0.20</version>
+    </dependency>
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+      <version>2.7</version>
+    </dependency>
+    <dependency>
+      <groupId>com.typesafe</groupId>
+      <artifactId>config</artifactId>
+      <version>1.4.9</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+      <version>3.3.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.fastjson2</groupId>
+      <artifactId>fastjson2</artifactId>
+      <version>2.0.65</version>
+    </dependency>
+    <dependency>
+      <groupId>com.squareup.retrofit2</groupId>
+      <artifactId>retrofit</artifactId>
+      <version>2.12.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.testng</groupId>
+      <artifactId>testng</artifactId>
+      <version>7.12.0</version>
+    </dependency>
+
+    <!-- 反推荐（勿加，静态模型边界件）：mockito（Instrumentation agent）、netty（unsafe/NIO）、
+         maven/gradle（类加载容器）、byte-buddy/cglib（运行期字节码生成本体——其静态替代
+         见矩阵 K11 翻译期子类合成）。spring 已按切片入列（core/beans 6.2，非全量）。 -->
 
   </dependencies>
 

@@ -1,1 +1,0 @@
-The ray intersects the plane at (0.000000, -5.000000, 5.000000)
