@@ -1117,3 +1117,57 @@ TestSlotReuseLoopExit（同槽、类型不同，即 8d0eaee3 原本要修的形�
 1. 收窄闭包：查 TestFieldHandleProvenance 比 DeepCopy 多出的 820 类从哪条链进来，属于本计划的反射收窄线。
 2. 声明层瘦身 / 拆层：按 `2026-10-01-rustc-memory-and-crate-split.md` §7.4–7.5 收窄声明层样板，把存储层下沉到实现 crate，让单个 rustc 峰值与闭包规模脱钩。
 3. 环境侧：调服务器的 `mem_reserve_gb`。这只是缓解，而且要改服务器配置，须用户确认。
+
+## 六、现状：T2 余项 getDefaultSerialFields / computeDefaultSUID 接收者收窄（分支 `c1d-t2b`，基于 34001bde）
+
+### 6.1 新基线与目标（34001bde，`scripts/diag/c1d_measure.sh <tag> closure`，本机）
+
+| 例 | 类（有代码） | 方法 | fold_props | 耗时 |
+|---|---|---|---|---|
+| HelloWorld | 466 | 1813 | — | — |
+| StockTrans | 3357（2946） | 20711 | 81 | ≈40 s |
+| DeepCopy | 4131（3656） | 24953 | 109 | ≈110 s |
+
+旧目标「≤3107」已作废（74a8977e JCA 修复等合入后基线整体上移）。新目标按 `--cut` 上界定：
+StockTrans 剪掉 `getDefaultSerialFields` + `computeDefaultSUID` 两个方法体为 3347 类 / 20647 方法，即本步
+回收上界 **10 类 / 64 方法**；本步目标 StockTrans **≤3351 类**（回收接收者推不出导致的 6 个无关类），
+其余 4 个（`ObjectStreamClass$3/$4/$5`、`MemberSignature`）是 computeDefaultSUID 的合法内部类，不属可回收。
+
+### 6.2 已查实的结论
+
+- **可序列化字段偏移可读面现在贡献为 0**：四组实验（均未提交）StockTrans / DeepCopy 类数、方法数与基线逐一相同：
+  x1 `offset_readable` 对 `fenum_serial` 未知接收者不放行；x2 再把 `deser` 也排除；x3 整个跳过
+  `enumerate_serial_fields`；x4 = x2 + x3。5.5 节「3108→3175 主要来自可序列化字段可读」的归因已过时。
+- **接收者值集来源**：`getDefaultSerialFields` 形参 P0 = 2651 个类镜像 + open(Class)。来源是
+  `ObjectStreamClass.lookup` 的调用方，主要是 `writeObject0`@177/@210 的 `obj.getClass()`（open(Object) 的
+  getClass 给 G(Object) 全部镜像，2237 个）；`writeClass` / `initProxy` / `initNonProxy` / `getClassDataLayout0`
+  同。open(Object) 遍布全图（`@openstat`：53390 个节点含 Object，如 `Reference.get`），值集本身无法在本步收窄。
+- **`--cut` 上界（StockTrans）**：剪 `writeClass` 3351 / 20664；剪 gdsf + computeDefaultSUID 3347 / 20647；
+  剪 `defaultWriteFields` 3357 / 20632。
+- **多出的 6 类的真实链路**（`--why`）：`NativeMemorySegmentImpl`、`WrongThreadException` 等经
+  `[field-name] ObjectStreamClass.computeDefaultSUID@174` 进入——字段枚举的 `enumerated_static_owners`
+  把被枚举类（含非可序列化的接口 `java/lang/foreign/MemorySegment`）的静态字段声明类当作「按反射取得静态字段」
+  初始化，触发 `MemorySegment.<clinit>` 链；`GlobalSession`、`MemorySessionImpl$ResourceList`、
+  `ScopedMemoryAccess$ScopedAccessError`、`AttrCompare` 同源。
+- **序列化口径的枚举不取静态字段值**：gdsf 滤掉 static 字段，computeDefaultSUID 只读名字与修饰符；
+  `Class.getDeclaredFields` 本身不初始化类。按静态字段句柄初始化声明类对这两个调用方不成立。
+- **JDK 语义：computeDefaultSUID 会初始化可序列化的接收者**。HotSpot 的 native
+  `ObjectStreamClass.hasStaticInitializer` 用 JNI `GetStaticMethodID`，会初始化该类（及超类）。本机 JDK 21 栈：
+  `Lazy.<clinit>` ← `hasStaticInitializer` ← `computeDefaultSUID` ← `getSerialVersionUID` ← `writeNonProxy` ←
+  `writeClass`。rava 手写 `object_stream_class_impl.rs` 的 `hasStaticInitializer` 不初始化，闭包也未建模，
+  属既有语义缺口。它只对通过 `Serializable.class.isAssignableFrom(cl)` 的 cl 发生（computeDefaultSUID 首条判定）。
+
+### 6.3 失败路线
+
+- 收窄 `offset_readable` / `fenum_serial` 的可读面（x1–x4）：对类数、方法数零收益，见 6.2。
+
+### 6.4 下一步（本步）
+
+终态方案三件，缺一不健全：
+1. 序列化枚举调用方（`serial_enumerators`）不经 `enumerated_static_owners` 初始化静态字段声明类；
+2. `hasStaticInitializer` 登记为 `class_initializers`，手写 native 先初始化所指类再答复（与 HotSpot 一致）；
+3. 清单声明的类镜像子类型判定（`Class.isAssignableFrom`）收窄：`ldc K; aload k; invokevirtual; ifeq/ifne`
+   成立一侧把局部 k 的类镜像值集限为所指类 ⊂ K 者（open / 推不出 / 合成镜像保留，基本类型镜像去掉），
+   使第 2 条只初始化可序列化类，不重新引入 `MemorySegment` 链。
+
+配套边界用例 `tests/e2e/35_io/TestSerialEnumNoInit.java`。
