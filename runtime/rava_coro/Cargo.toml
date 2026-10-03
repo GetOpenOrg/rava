@@ -1,0 +1,15 @@
+[package]
+name = "rava_coro"
+version = "0.1.0"
+edition = "2021"
+description = "有栈协程原语：独立栈（mmap + guard page + 栈池）与 aarch64 / x86_64 上下文切换（a3-T，§21.8.2）"
+
+[lib]
+name = "rava_coro"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+debug = 1

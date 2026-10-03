@@ -1362,15 +1362,16 @@ native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `s
 
 - **独立 crate**：不依赖 `java_runtime`，可单独 `cargo test`（与 `rava_macros` 同样以绝对 path 依赖，不复制进 scratch）。
   `java_runtime` 只经它的 `Stack` / `Context` / `switch` 三个入口使用。
-- **栈**：每个 Continuation 一块独立栈，`mmap` 保留 `RESERVE`（缺省 1 MiB，环境变量可调，见 `docs/environment-variables.md`
-  登记），底端一页 `PROT_NONE` 作 guard page，只按需提交。地址空间预算：10⁶ × (1 MiB + 1 页) ≈ 1 TiB，低于 x86_64 / aarch64
+- **栈**：每个 Continuation 一块独立栈，`mmap` 保留 `RESERVE`（缺省 1 MiB，经 `rava_coro::stack::set_reserve` 调整；
+  项目不设自有环境变量，见 `docs/environment-variables.md`），底端一页 `PROT_NONE` 作 guard page，只按需提交。地址空间预算：10⁶ × (1 MiB + 1 页) ≈ 1 TiB，低于 x86_64 / aarch64
   Linux 的 128 TiB 用户空间和 macOS arm64 的用户空间上限。**栈池**：执行完毕的栈归池复用，复用前对高水位以下
-  超过 `KEEP`（缺省 16 KiB）的部分 `madvise(MADV_DONTNEED)`（macOS `MADV_FREE`），池上限按载体数 × 64 计。
+  超过 `KEEP`（缺省 16 KiB）的部分 `madvise(MADV_DONTNEED)`（macOS `MADV_FREE_REUSABLE`），池上限 512 块（池内常驻 ≤ 8 MiB，
+  与核数无关；见实施记录 T1）。
 - **Linux 映射数**：每块栈 2 个 VMA（guard + 可写），10⁶ 个需 `vm.max_map_count ≥ 2.1 × 10⁶`（缺省 65530）。
   运行时在首次建栈时读 `/proc/sys/vm/max_map_count`；建栈 `mmap` / `mprotect` 失败按 JDK 平台线程耗尽的形态抛
   `OutOfMemoryError`（消息同 JDK「unable to create native thread: possibly out of memory or process/resource limits reached」），
   不静默降级。百万规模验收机须先调高该值（T6 记录配置）。
-- **上下文切换**：`global_asm!` 两份，按 `target_arch` 选择，其余平台编译期报错（不提供退化实现）：
+- **上下文切换**：naked 函数（`#[unsafe(naked)]` + `naked_asm!`）两份，按 `target_arch` 选择，其余平台编译期报错（不提供退化实现）：
   - aarch64（AAPCS64）：保存 / 恢复 x19–x28、x29（FP）、x30（LR）、SP、d8–d15；
   - x86_64（SysV）：保存 / 恢复 rbx、rbp、r12–r15、RSP、返回地址（RIP），以及 MXCSR 控制位与 x87 控制字。
   切换函数是普通 `extern "C"` 调用，调用方保存寄存器由编译器处理。
@@ -1433,3 +1434,26 @@ native 只切换「最内层」一层。`Thread` 的 `currentCarrierThread` / `s
 
 a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualThreadCarrier、TestVirtualThreadScale），expected 取 JDK 21，
 输出与平台、载体编号、调度次序无关。
+
+#### 21.8.5 实施记录
+
+**T1 `rava_coro`（分支 a3t-vthread）**
+- 布局：`src/lib.rs`（`Context` / `switch` / `Entry`）、`src/stack.rs`（mmap 栈、栈池、`StackError`）、`src/guard.rs`
+  （guard page 故障识别）、`src/arch/{aarch64,x86_64}.rs`（切换与蹦床）；单测 `tests/{roundtrip,registers,rss,overflow}.rs`。
+  `java_runtime/Cargo.toml` 以 `path = "../rava_coro"` 依赖，overlay 与 `rava_macros` 同样改写为绝对路径（不复制进 scratch）。
+- 切换：`switch(save, load, arg) -> usize` 记录切出方的 guard 区间、装入切入方的，再进 naked `raw_switch`；
+  切入后把 `load.sp` 清零，二次恢复同一上下文即断言失败（防双重恢复）。aarch64 帧 160 B（x19–x30、d8–d15），
+  x86_64 帧 64 B（rbp、rbx、r12–r15、MXCSR、x87 CW、返回地址）；新栈初始帧在 x86_64 写入缺省 MXCSR 0x1F80 / CW 0x037F。
+- 蹦床：aarch64 `x29 = x30 = 0` + `.cfi_undefined x30`，x86_64 `rbp = 0` + `.cfi_undefined rip`；入口函数
+  `extern "C" fn(arg, data) -> !` 不返回（返回即 `brk` / `ud2`）。
+- guard page：进程级 SIGSEGV / SIGBUS 处理器（`SA_ONSTACK`，链接 std 原处理器）；`switch` 维护线程局部「当前栈 guard
+  区间」，故障地址落在区间内时按 std 同形输出 `thread '<名>' (<tid>) has overflowed its stack` + `fatal runtime error:
+  stack overflow, aborting` 后 abort；载体首次切入协程时补建 64 KiB sigaltstack（std 只给它创建的线程建）。
+- 栈池：原计划「核数 × 64」改为固定 512 块——池内每块至多常驻 KEEP，核数线性的上限在 64 核服务器上空闲常驻约 48 MiB，
+  超出 +16 MiB 验收；池只用于摊薄 mmap / mprotect，512 块足够每核 8 块周转。`set_pool_limit(0)` = 不池化。
+- 实测（本机 aarch64，macOS 16 KiB 页，release）：10⁶ 次往返 30.1 ms，单次切换 **15.1 ns**（≤50 ns）；10⁵ 协程各触碰
+  8 KiB 栈后挂起，物理足迹峰值 1621 MiB，全部完成后 3.5 → 17.1 MiB（+13.6 MiB，含池 512 块 × 16 KiB = 8 MiB；≤16 MiB）；
+  callee-saved 寄存器（x19–x29、d8–d15 / rbp、rbx、r12–r15、MXCSR、x87 CW）1000 轮双向哨兵检查 0 偏差；
+  guard page 子进程 SIGABRT、stderr 含 overflowed。x86_64 数字待服务器跑 crate 单测补录。
+- macOS 的 RSS 口径取 `proc_pid_rusage` 的 `ri_phys_footprint`：`resident_size` 把 `MADV_FREE_REUSABLE` 归还的页计到被
+  回收为止，不反映归还效果；Linux 取 `/proc/self/statm` 驻留页（`MADV_DONTNEED` 立即生效）。
