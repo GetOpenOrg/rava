@@ -1,0 +1,11 @@
+class back: true log=[Lazy.<clinit>;]
+lazy fields: tag:L suid0=true log=[Lazy.<clinit>;]
+shape desc: false log=[Lazy.<clinit>;]
+lazy names: [a] counter=3 log=[Lazy.<clinit>;]
+mixed: Mixed(7,1099511627776,2.5,x,true,str,3,3,42,[one, two],mixed,null) instances=1
+mixed fields: 10 suid0=true
+shape origin: shape log=[Lazy.<clinit>;Origin.make(shape);]
+custom: Custom(bob,90,-1)
+custom fields: score:J name:L suid=11
+thread desc: null
+not serializable: java.lang.Object

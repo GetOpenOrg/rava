@@ -1161,7 +1161,7 @@ StockTrans 剪掉 `getDefaultSerialFields` + `computeDefaultSUID` 两个方法�
 
 - 收窄 `offset_readable` / `fenum_serial` 的可读面（x1–x4）：对类数、方法数零收益，见 6.2。
 
-### 6.4 下一步（本步）
+### 6.4 本步设计（三件）
 
 终态方案三件，缺一不健全：
 1. 序列化枚举调用方（`serial_enumerators`）不经 `enumerated_static_owners` 初始化静态字段声明类；
@@ -1171,3 +1171,44 @@ StockTrans 剪掉 `getDefaultSerialFields` + `computeDefaultSUID` 两个方法�
    使第 2 条只初始化可序列化类，不重新引入 `MemorySegment` 链。
 
 配套边界用例 `tests/e2e/35_io/TestSerialEnumNoInit.java`。
+
+### 6.5 本步结果（2026-10-04）：只提交健全的两件，收窄未达成，止步
+
+**已提交（第 1、2 件 + 边界用例）**：`invoke.rs` 序列化枚举调用方跳过 `enumerated_static_owners`；
+`vm_intrinsics.toml` 把 `ObjectStreamClass.hasStaticInitializer` 登记为 `class_initializers`；手写
+`object_stream_class_impl.rs` 先 `ensure_class_initialized` 再答复（与 HotSpot 一致，修复既有语义缺口：此前 rava
+写出类对象不跑 `Lazy.<clinit>`，与 JDK 输出不一致）；`tests/e2e/35_io/TestSerialEnumNoInit.java` + 期望（JDK 21 跑出）。
+
+**实测**（`c1d_measure.sh <tag> closure`，本机）：
+
+| 档 | 内容 | StockTrans 类（有代码）/ 方法 | DeepCopy 类（有代码）/ 方法 |
+|---|---|---|---|
+| 基线 34001bde | — | 3357（2946）/ 20711 | 4131（3656）/ 24953 |
+| s1（未提交） | 只做第 1 件 | 3351（2922）/ 20664 | 4125（3633）/ 24906 |
+| **s3（本提交）** | 第 1 + 2 件 | 3357（2946）/ 20711 | 4131（3656）/ 24953 |
+| s2（未提交） | 第 1 + 2 + 3 件 | 3351 / 20664 | 3353（2924）/ 20683 ← 不健全，见下 |
+
+TestSerialEnumNoInit 3362 / 20719；HelloWorld 466 / 1813 不变。
+s1 单独达标但不健全：hasStaticInitializer 在 JDK 下初始化接收者，不建模则运行期初始化钩子缺失。
+第 2 件把 6 类链（`MemorySegment.<clinit>` 等）按 hasStaticInitializer 的实参值集（2651 镜像 + open）重新引入，
+所以 s3 = 基线：**语义修正、闭包零收益**。回收这 6 类依赖第 3 件。
+
+**第 3 件（类镜像子类型判定收窄）的失败与根因**：实现见 `build/t2b_mirrorsub_full.patch`（worktree 内，未入库；
+absint `narrow.rs::mirror_sub_narrow` + `Event::MirrorSub` + `MirrorOp::Sub` + 清单 `mirror_subtype_tests`）。
+s2 下 DeepCopy 掉 778 类（crypto / ssl / jline / Console / PolicyFile …），可疑。二分：逐个跳过各 K（Proxy、
+MethodAccessor、Throwable、Externalizable）均仍 3353；把收窄换成**恒等过滤**（不删任何镜像）仍是 3359 / 20730。
+结论：掉类不来自过滤，而来自**收窄侧的值换了来源**——成立一侧的局部值来源从 `Param(i)` / 原 `Site(o)` 改成
+`Site(aload 偏移)`。引擎里按来源上溯的求值（`name_eval::Frame::resolve` 的形参换实参、`class_lookup::segment_values`
+/ `mirror_name`、`lookup_pair::param_srcs`、`method_lookup`、`field_lookup::field_strs`、`reflect_call::rcall_conv_arg` 等）
+认不出 MirrorSub 站点，名字推不出 → 记缺口而不纳入类（例：`ObjectStreamClass.lookup` 收窄后的 cl 传给
+`new ObjectStreamClass(cl)`，构造器里按 cl 形参的成员查找失去上溯）。于是 reflect allocations 579→496、
+members 1233→840，经实例化级联到全图。**这是不健全的丢类，不是精度收益**，因此未提交。
+
+**候选方案（下一步，择一）**：
+1. **来源透明**：加 `fn unnarrow(a: &Analysis, v: &V) -> V`（单一来源是 MirrorSub 站点时换成其输入值，可多层），
+   在全部来源上溯入口（上列各处，以及现有只认 CheckCast 的 `sealed.rs:176` / `sysprops.rs:101` /
+   `class_lookup.rs:414`）统一先过它；验收：恒等过滤下 DeepCopy 必须回到 4131 / 24953，再开真过滤。
+2. **值上带收窄标记而不换来源**：`V::Ref` 保留原 `src`，另加收窄标记（如 `narrow: Option<(u32 site)>`），只有
+   `flow.rs::feeds` 按标记取 `Node::S(m, site)`，其余来源上溯不变。改动共享结构 `V`，需与 T1 / URL 代理协调。
+   方案 2 改动面更小、不会漏掉上溯入口，倾向方案 2。
+3. 4b（open(Object) 污染 `writeObject0` 的 getClass 池）仍是根本驱动，保留，不在本步。

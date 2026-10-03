@@ -163,9 +163,14 @@ impl<'a> Engine<'a> {
                     u
                 }
             };
-            self.enumerated_static_owners(m, off, &cs);
-            // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开
+            // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开。
+            // 它们不取静态字段的值（computeDefaultSUID 只读名字与修饰符，默认序列化字段滤掉 static），
+            // 枚举本身不初始化类（Class.getDeclaredFields 不触发 `<clinit>`），所以不按静态字段句柄初始化声明类；
+            // computeDefaultSUID 对可序列化类的初始化由 hasStaticInitializer（class_initializers）建模
             let serial = self.man.is_serial_enumerator(&self.methods[m].key.to_string());
+            if !serial {
+                self.enumerated_static_owners(m, off, &cs);
+            }
             let mut scopes: Vec<field_handles::EnumScope> = cs.into_iter().map(|c| (serial, Some(c))).collect();
             if unknown {
                 scopes.push((serial, None));
