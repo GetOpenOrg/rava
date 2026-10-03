@@ -1,4 +1,8 @@
 //! 引擎：手写体语法推断——类型引用解析、回调调用点与实参、字段访问器。
+//!
+//! 字段写入值取自按名读（`o.0.__unsafe_ref_get("f")`）时，写入目标接读取接收者上字段 f 的内容：接收者是形参时
+//! 按其值集逐个对象接入（抽象对象取对象字段，具体类型取该类型上的 f；开放的 final 类型同具体类型），推不出时接入
+//! 全部名为 f 的字段（含此后新增的，`hw_copy_names`）。
 
 use super::*;
 
@@ -182,6 +186,13 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if fa.write {
+                if let Some(src) = &fa.value_src {
+                    match fa.value_src_param.filter(|&k| self.methods[m].ptypes.get(k as usize).is_some_and(|t| t.is_some())) {
+                        Some(k) => self.name_read(Node::P(m, k), src, Node::U(fi), tid),
+                        None => self.hw_copy_by_name(src, Node::U(fi), tid),
+                    }
+                    continue;
+                }
                 let fs = vec![self.hw_value(m, host, fa)];
                 self.feed(&fs, Node::U(fi), tid);
                 // static 字段的手写写入值推不出类型：值未知，按字段声明类型的实例（open）
@@ -191,6 +202,69 @@ impl<'a> Engine<'a> {
             } else {
                 self.flow(Node::F(fi), prod, tid);
             }
+        }
+    }
+
+    /// 写入值取自接收者节点 `recv` 上按名读的字段 `src`：按接收者值集逐个接入（[`Self::name_read_objs`]）
+    fn name_read(&mut self, recv: Node, src: &str, to: Node, tid: u32) {
+        let reads = self.name_reads.entry(recv).or_default();
+        if reads.iter().any(|(f, n, t)| f == src && *n == to && *t == tid) {
+            return;
+        }
+        reads.push((src.to_string(), to, tid));
+        let cur = self.graph.get(&recv).cloned().unwrap_or_default();
+        self.name_read_objs(recv, &cur);
+    }
+
+    /// 按名读接收者值集新增 delta：抽象对象取其字段，其余对象取该类型（含超类）上同名字段的未知接收者视图；
+    /// 类型上无此字段的对象不贡献值（手写体对其按名读失败即 stub panic）。open(T)：T 为 final 时同 T 的对象；
+    /// 否则子类型也可能声明同名字段，同名字段全部作来源（同接收者未知的按名读）
+    pub(super) fn name_read_objs(&mut self, recv: Node, delta: &TypeSet) {
+        let Some(reads) = self.name_reads.get(&recv).cloned() else { return };
+        let class = self.id(CLASS);
+        let mut xs: Vec<(u32, Option<u32>)> = Vec::new();
+        let mut wide = false;
+        for x in delta.classes.iter().filter(|x| !self.arrays.contains_key(x)) {
+            xs.push(match (self.objs.get(&x), self.mirrors.contains_key(&x)) {
+                (Some(&c), _) => (c, Some(x)),
+                (None, true) => (class, None),
+                (None, false) => (x, None),
+            });
+        }
+        for o in delta.open.iter() {
+            let fin = self.h.class(&self.names[o as usize].clone()).is_some_and(|cf| cf.access & acc::FINAL != 0 && !cf.is_interface());
+            if fin {
+                xs.push((o, None));
+            } else {
+                wide = true;
+            }
+        }
+        for (src, to, tid) in reads {
+            for &(cls, obj) in &xs {
+                let hits: Vec<usize> = self.ref_fields(cls).iter().map(|&(fi, _)| fi).filter(|&fi| self.fields.get_index(fi).is_some_and(|(k, _)| k.name == src)).collect();
+                for fi in hits {
+                    let ftid = parse_field(&self.fields.get_index(fi).expect("字段序号来自同一表").0.desc).and_then(|t| self.ptype(&t));
+                    let n = match (obj, ftid) {
+                        (Some(o), Some(ft)) => self.obj_field(o, fi, ft),
+                        _ => Node::F(fi),
+                    };
+                    self.flow(n, to, tid);
+                }
+            }
+            if wide {
+                self.hw_copy_by_name(&src, to, tid);
+            }
+        }
+    }
+
+    /// 写入值取自按名读的字段 `src`：同名字段（含此后登记的）的内容按写入字段的类型 `tid` 接进 `to`
+    fn hw_copy_by_name(&mut self, src: &str, to: Node, tid: u32) {
+        if !self.hw_copy_names.entry(src.to_string()).or_default().insert((to, tid)) {
+            return;
+        }
+        let hit: Vec<usize> = self.fields.keys().enumerate().filter(|(_, k)| k.name == src).map(|(i, _)| i).collect();
+        for i in hit {
+            self.flow(Node::F(i), to, tid);
         }
     }
 

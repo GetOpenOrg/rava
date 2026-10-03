@@ -62,7 +62,7 @@ fn absorb_body(out: &mut FnInfo, g: &FnInfo) {
     out.ctors.extend(g.ctors.iter().cloned());
     out.calls.extend(g.calls.iter().cloned());
     out.opaque.extend(g.opaque.iter().cloned());
-    out.fields.extend(g.fields.iter().map(|fa| FieldAccess { on_self: false, value_self: false, ..fa.clone() }));
+    out.fields.extend(g.fields.iter().map(|fa| FieldAccess { on_self: false, value_self: false, value_src_param: None, ..fa.clone() }));
     out.array_access |= g.array_access;
     out.objects.extend(g.objects.iter().cloned());
 }

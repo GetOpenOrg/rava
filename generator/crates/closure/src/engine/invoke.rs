@@ -259,11 +259,14 @@ impl<'a> Engine<'a> {
                 let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
                 let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
-                let (named, top) = if self.man.names.is_class_lookup(&self.mref_key(mref)) { self.class_lookup(m, off, args) } else { (vec![], true) };
+                // 按名加载（class_loads）同样解析，只取镜像不初始化
+                let key = self.mref_key(mref);
+                let load = self.man.names.is_class_load(&key);
+                let (named, top) = if load || self.man.names.is_class_lookup(&key) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
-                    self.named_class(m, off, &c);
+                    self.named_class(m, off, &c, !load);
                 }
             }
             op::INVOKESPECIAL => {
