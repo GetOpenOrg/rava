@@ -7,6 +7,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// 当前工作区的包目录：取运行期 `CARGO_MANIFEST_DIR`（cargo 按本次调用设置）。编译期 `env!` 在全机共享的
+/// CARGO_TARGET_DIR 下可能指向另一工作区——cargo 对路径包按工作区相对路径算 metadata，源码相同时不重编，
+/// 测试二进制里嵌的就是首次编译它的（可能已删除的）worktree
+fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 /// lang.rs：语言锚点；tests.rs：`#[cfg(test)] mod tests;` 的外置测试模块
 const EXEMPT_FILES: [&str; 2] = ["lang.rs", "tests.rs"];
 const FORBIDDEN_PREFIXES: [&str; 6] = ["java/", "javax/", "jdk/", "sun/", "java.", "javax."];
@@ -71,7 +78,8 @@ fn violations(text: &str) -> Vec<(usize, String)> {
 
 #[test]
 fn no_jdk_class_literals_outside_lang() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src = manifest_dir().join("src");
+    assert!(src.is_dir(), "源码目录不存在：{}", src.display());
     let mut files = Vec::new();
     rs_files(&src, &mut files);
     assert!(!files.is_empty());
