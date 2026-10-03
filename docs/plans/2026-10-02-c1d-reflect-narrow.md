@@ -655,6 +655,43 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   测量集类 / 方法不变（TestMethodHandleStaticInit 方法 17000 → 17001、clinit 2541 → 2542）。
 - 待服务器 e2e：手写层 `class_impl.rs`（`__method_from_meta`）与 `method_handle_natives_impl.rs`（`init` 按名读 `clazz`）。
 
+**b3 余项①：手写体开放接收者 toString 扇出收窄**（基于 e97dcf02）。
+
+- 定位（HelloWorld `--dump-edges`）：`M:java/lang/Object.toString` 出 250 条 toString 边。根源不是 registerNatives 本身，
+  而是手写 `Object.toString`（`object_impl.rs`）体内 `self.0.__to_string()`：接收者推不出 → `open(Object)`，对全部逃逸对象
+  分派 toString；回调声明类经 `hw_exports` 再导出，值池对象全部逃逸。实验性去掉全部开放接收者 toString：HelloWorld 499 → 467，
+  StockTrans / DeepCopy 不变（其 Formatter 由 `Objects.checkIndex → Preconditions.outOfBoundsMessage → String.format` 合法可达）。
+- 实现两项（分析器不含类名，判定全按运行时入口的结构名）：
+  - **自身接收者分派**：手写扫描记 `TypedCall.on_self`（接收者是本 fn 的 `self` / `self.0`；经同文件被调 fn 传递来的、
+    `absorb_body` 并入的不算）。回调的全部方法调用点都是自身接收者时，接收者取 `P(m,0)` 的值集（登记读者，增长时重跑本方法），
+    不再取 `open(声明类)`；`hw_exports` 对这类回调不导出声明类（接收者已在建模代码手里，无须逃逸）。
+  - **类名守卫收窄**（`handwritten/guards.rs`）：`if R.__class_name() == "c"`、`R.is_instance_of("c") && …`、
+    `match R.__class_name() { "a" | "b" => … }` 区域内，`R` 以根类型出现的 toString 分派（`__obj_str` / `__to_string` /
+    Display）收窄为 `SType::Java(c)`（取 `c` 的 open 集）；`R` 重新绑定 / 赋值即失效。覆盖 `reflect_dispatch.rs` 的
+    `unbox_*` 与 `lib.rs` 的 `_ts_*_label_eq`。
+- 测量（`rava closure --image $(rava image-dirs)`，**顺序执行**）：
+
+| 用例 | 类 / 方法（e97dcf02 → 本步） |
+|---|---|
+| HelloWorld | 499 / 2062 → 467 / 1822 |
+| StockTrans | 3070 → 3070 / 18532 |
+| DeepCopy | 3065 → 3065 / 18485 |
+
+  HelloWorld 去掉的 32 类与实验一致：Short、Thread$State、Policy / Permissions 族、CHM / WeakHashMap / Hashtable 迭代器与视图、
+  DoubleToDecimal / FormattedFPDecimal、Wrapper、Debug 等（均只经 toString 覆盖进入）。
+- **测量口径注意**：同机**并行**起三个 `rava closure`（HelloWorld / StockTrans / DeepCopy 同时跑）时 StockTrans / DeepCopy 稳定得
+  3107 / 3102，顺序执行稳定得 3070 / 3065（多出 37 类：vmsupport 的 `Proxy$Dyn` / `Species_*` / `InjectedInvokerDyn` /
+  `SerializationConstructorAccessorDyn`、AnnotationInvocationHandler.toStringImpl 链等）。hash 种子、环境变量、临时目录（按 pid）
+  均已排除，原因未查明，登记待查；上表 c64ec205 等行的 3107 / 3102 疑为并行口径。
+
+**b3 余项②：URL$DefaultFactory 反射构造器扇出**——无剩余扇出可收。
+
+- `URL$DefaultFactory` 由 `URL.<clinit>`（`new DefaultFactory()`）进入，JDK 实际执行。反射臂（`Class.forName` +
+  `getDeclaredConstructor`）已由 S8 前的协议名 hashCode 常量分派剪掉：StockTrans 反射缺口里无 `createURLStreamHandler`。
+- StockTrans 中 `createURLStreamHandler` 留 file / jrt 两个常量臂（jar Handler 由 `URLClassPath.<init>` 直接 new）：协议名形参
+  在 `getURLStreamHandler` 被多条 URL 构造链汇合为 Top（ServiceLoader 资源查找产出 jrt / jar URL），jrt 臂对应 JDK 实际的模块资源
+  URL；`lookupViaProviders` 只带入 `URLStreamHandlerProvider` 的 layout 级类型。HelloWorld 只留 file 臂。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
