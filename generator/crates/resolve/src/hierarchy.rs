@@ -57,7 +57,12 @@ impl FieldSite {
 pub struct Hierarchy<'a> {
     pub cp: &'a ClassPath,
     supertypes: RefCell<HashMap<String, Rc<BTreeSet<String>>>>,
+    /// 虚方法选择的记忆：(已解析方法的声明类实例地址, 方法下标) → (声明类, 接收者类 → 选中方法)。
+    /// 类文件经类路径缓存唯一驻留；值里持有声明类，地址在记忆存续期间不会复用
+    selected: RefCell<SelectMemo>,
 }
+
+type SelectMemo = HashMap<(usize, usize), (Arc<ClassFile>, HashMap<String, Option<MethodSite>>)>;
 
 pub fn package_of(name: &str) -> &str {
     name.rfind('/').map_or("", |i| &name[..i])
@@ -70,7 +75,7 @@ pub fn is_signature_polymorphic(m: &Method) -> bool {
 
 impl<'a> Hierarchy<'a> {
     pub fn new(cp: &'a ClassPath) -> Self {
-        Hierarchy { cp, supertypes: RefCell::new(HashMap::new()) }
+        Hierarchy { cp, supertypes: RefCell::new(HashMap::new()), selected: RefCell::new(HashMap::new()) }
     }
 
     pub fn class(&self, name: &str) -> Option<Arc<ClassFile>> {
@@ -244,6 +249,19 @@ impl<'a> Hierarchy<'a> {
         if rm.is_private() || rm.is_static() || rm.is_init() {
             return Some(resolved.clone());
         }
+        let key = (Arc::as_ptr(&resolved.class) as usize, resolved.index);
+        if let Some(hit) = self.selected.borrow().get(&key).and_then(|(_, m)| m.get(receiver)) {
+            return hit.clone();
+        }
+        let out = self.select_uncached(receiver, resolved);
+        let mut memo = self.selected.borrow_mut();
+        let e = memo.entry(key).or_insert_with(|| (resolved.class.clone(), HashMap::new()));
+        e.1.insert(receiver.to_string(), out.clone());
+        out
+    }
+
+    fn select_uncached(&self, receiver: &str, resolved: &MethodSite) -> Option<MethodSite> {
+        let rm = resolved.method();
         let lookup_start = if receiver.starts_with('[') { OBJECT } else { receiver };
         for k in self.superclasses(lookup_start) {
             if let Some(i) = k.methods.iter().position(|m| m.name == rm.name && m.desc == rm.desc && !m.is_static()) {

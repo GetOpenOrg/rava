@@ -17,6 +17,7 @@ use std::rc::Rc;
 use classfile::MemberRef;
 
 mod generic_fns;
+mod guards;
 mod hooks;
 mod objects;
 mod scan;
@@ -90,6 +91,8 @@ pub struct TypedCall {
     pub srecv: Option<SType>,
     /// 各实参的字符串字面量值（见 `syntax::str_lit`；非字面量为 None）
     pub lits: Vec<Option<String>>,
+    /// 接收者是本 fn 的 `self` / `self.0`，即被调 Java 方法自身的接收者（经同文件被调 fn 传递来的调用不算）
+    pub on_self: bool,
 }
 
 /// 接收者的静态类型（语法推断）：具名类型 / `T::m(…)` 的返回类型 / `x.__get_f()` 的字段类型 /
@@ -100,6 +103,8 @@ pub enum SType {
     Ret(TypeRef, String),
     Field(Box<SType>, String),
     Call(Box<SType>, String),
+    /// Java binary name 给出的类型：类名判定守卫区域内的接收者（`v.0.__class_name() == "c"` 等，见 `guards.rs`）
+    Java(String),
 }
 
 /// 手写体里的字段访问器调用：`recv.__set_<字段>(v)` / `recv.__get_<字段>()`，及 static 字段写访问器

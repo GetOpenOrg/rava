@@ -4,7 +4,7 @@
 //! - 根 `lib.rs` 不在此复制：由 [`super::mod_tree::complete_lib_rs`] 写出（手写真源 + 顶层包补全）；
 //! - scratch 中 runtime/ 已删除的手写文件在 mod 树阶段清扫（[`super::mod_tree`] `sweep_stale`：
 //!   须在本轮写出之后判定，否则本轮生成的无标记文件会被先删后写）；
-//! - `build.rs` 原样复制；`Cargo.toml` 宏依赖改绝对路径、包版本唯一化；
+//! - `build.rs` 原样复制；`Cargo.toml` 兄弟 crate（`rava_macros` / `rava_coro`）依赖改绝对路径、包版本唯一化；
 //! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs；
 //! - `runtime/java_meta/`（反射元数据表 crate，全部手写、无生成文件）整体镜像到
 //!   `<scratch>/java_meta/`：包版本唯一化，scratch 中真源已无的文件删除。
@@ -59,8 +59,11 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     copy_if_changed(&runtime_dir.join("build.rs"), &jrt.join("build.rs"))?;
     let cargo_src = runtime_dir.join("Cargo.toml");
     let cargo = std::fs::read_to_string(&cargo_src).map_err(|e| io_err(&cargo_src.display().to_string(), e))?;
+    // runtime/ 下的兄弟 crate（rava_macros、rava_coro）不复制进 scratch，以绝对路径依赖（共享 target 缓存命中）
+    let siblings = macros_crate.parent().unwrap_or(Path::new(""));
     let cargo = cargo
         .replace("path = \"../rava_macros\"", &format!("path = \"{}\"", macros_crate.display()))
+        .replace("path = \"../rava_coro\"", &format!("path = \"{}\"", siblings.join("rava_coro").display()))
         .replace("version = \"0.1.0\"", &format!("version = \"{}\"", scratch_pkg_version(out_dir)));
     write_if_changed(&jrt.join("Cargo.toml"), &cargo)?;
     for pkg in ["java", "jdk", "sun"] {

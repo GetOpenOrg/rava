@@ -21,20 +21,17 @@ impl<'a> Engine<'a> {
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
         let mut names: BTreeSet<Rc<str>> = BTreeSet::new();
         let mut patterns: Vec<Vec<Part>> = vec![];
-        let mut targets: BTreeSet<String> = classes.iter().cloned().collect();
-        let mut unknown = false;
-        if class_recv {
-            if let Some(r) = args.first() {
-                unknown |= self.class_values(m, r, &mut targets);
-            }
-        }
-        // 目标类取名字实参之前的 Class 实参（JDK 按名查字段的签名约定「声明类, 名字, 字段类型」）：
+        // 目标类实参：接收者，与名字实参之前的 Class 实参（JDK 按名查字段的签名约定「声明类, 名字, 字段类型」）：
         // 名字之后的 Class 是字段类型（`findGetter(refc, name, type)`、`findStaticVarHandle(decl, name, type)`），
         // 不是查找目标，其值集推不出不构成目标缺口
+        let mut tvals: Vec<&V> = vec![];
+        if class_recv {
+            tvals.extend(args.first());
+        }
         let mut named = false;
         for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
             match p {
-                FieldType::Object(c) if c == CLASS && !named => unknown |= self.class_values(m, a, &mut targets),
+                FieldType::Object(c) if c == CLASS && !named => tvals.push(a),
                 FieldType::Object(c) if c == absint::STRING => {
                     named = true;
                     names.extend(a.lits());
@@ -49,6 +46,21 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
+        // 查找结果只依赖（目标类, 名字 / 拼接段），效果全部幂等累加：名字与拼接段同上次时只按新增的目标类值查，
+        // 否则整体重查（站点重跑由 Class 值集增长驱动，逐次全量换算类名是平方开销）
+        let mut seen = self.refl_seen.entry(m).or_default().remove(&off).unwrap_or_default();
+        let mut lk = match seen.lookup.take() {
+            Some(lk) if lk.names == names && lk.patterns == patterns => lk,
+            _ => LookupSeen { names: names.clone(), patterns: patterns.clone(), ..LookupSeen::default() },
+        };
+        let mut targets: BTreeSet<String> = classes.iter().cloned().collect();
+        let mut unknown = lk.unknown;
+        for v in tvals {
+            unknown |= self.class_values_new(m, v, &mut lk.vals, &mut targets);
+        }
+        lk.unknown = unknown;
+        seen.lookup = Some(lk);
+        self.refl_seen.entry(m).or_default().insert(off, seen);
         let mut found: Vec<(String, String)> = vec![];
         for c in &targets {
             for name in &names {
@@ -159,6 +171,28 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 同 [`Self::class_values`]，只取 v 的值集中不在 seen 里的部分（处理后并入 seen；常量每次给出），
+    /// 返回这部分是否含所指未知的 Class
+    pub(super) fn class_values_new(&mut self, m: usize, v: &V, seen: &mut TypeSet, out: &mut BTreeSet<String>) -> bool {
+        let V::Ref { .. } = v else { return self.class_values(m, v, out) };
+        let class = self.id(CLASS);
+        let fs = self.feeds(m, v, class);
+        let s = self.value_set(&fs);
+        let delta = TypeSet { classes: s.classes.minus(&seen.classes), open: s.open.minus(&seen.open) };
+        seen.add_all(&delta);
+        let mut unknown = !delta.open.is_empty();
+        for x in delta.classes.iter() {
+            match self.mirrors.get(&x) {
+                Some(&c) => {
+                    out.insert(self.names[c as usize].to_string());
+                }
+                None if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror => {}
+                None => unknown = true,
+            }
+        }
+        unknown
+    }
+
     /// 类 cls 及其超类型上声明的、名字能由拼接段拼出的字段 → (声明类, 名字)
     fn fields_matching(&self, cls: &str, parts: &[Part]) -> Vec<(String, String)> {
         let mut out = vec![];
@@ -174,4 +208,22 @@ impl<'a> Engine<'a> {
         }
         out
     }
+}
+
+/// 反射调用点已处理过的 Class 实参值（同一分析结果下成立，重分析按偏移作废）
+#[derive(Default)]
+pub(super) struct ReflSeen {
+    /// 字段枚举入口：接收者值集中已逐类放开的部分
+    pub(super) fenum: TypeSet,
+    /// 按名查字段
+    lookup: Option<LookupSeen>,
+}
+
+/// 按名查字段：已按（名字, 拼接段）查过的目标类值，及其中是否出现过所指未知的 Class
+#[derive(Default)]
+struct LookupSeen {
+    names: BTreeSet<Rc<str>>,
+    patterns: Vec<Vec<Part>>,
+    vals: TypeSet,
+    unknown: bool,
 }

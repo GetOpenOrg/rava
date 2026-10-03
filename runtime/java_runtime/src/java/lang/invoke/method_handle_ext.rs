@@ -280,10 +280,12 @@ fn invoke_unsafe(name: &str, argv: Vec<Object>) -> Result<Object> {
     }
 }
 
+// 签名多态成员（invokeBasic / invokeExact / invoke / linkTo*）标 `unpinned`：HotSpot 以方法句柄内建适配器
+// 直接跳转到目标，不在栈上留 native 帧，经它们调用的 Java 代码让出时不判定 NATIVE pinned（§21.8.3）。
 impl MethodHandle {
     /// native `invokeBasic(Object...)`：解释执行本句柄的 LambdaForm（无类型检查——
     /// 调用方保证基本类型形态一致，JDK 语义）。
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn invokeBasic(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
@@ -291,13 +293,13 @@ impl MethodHandle {
     /// native `invokeExact(Object...)`：无调用点类型的入口（翻译字节码内部调用）按 invokeBasic
     /// 执行。用户调用点经 codegen 发 `invokeExact__site`（清单 vm_intrinsics.toml [sigpoly]）；
     /// 闭包分析把 `__site` 伴生体并入本成员（签名多态成员的调用点落地语义）。
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn invokeExact(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
 
     /// native `invoke(Object...)`：同上（用户调用点经 `invoke__site`）。
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn invoke(&self, args: JArray<Object>) -> Result<Object> {
         interpret(Clone::clone(self), args.to_vec())
     }
@@ -326,22 +328,22 @@ impl MethodHandle {
         interpret(adapted, args.to_vec())
     }
 
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn linkToStatic(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn linkToVirtual(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn linkToSpecial(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }
 
-    #[jvm_native]
+    #[jvm_native(unpinned)]
     pub fn linkToInterface(args: JArray<Object>) -> Result<Object> {
         link_to(args.to_vec())
     }

@@ -107,7 +107,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             #vtable_trait_ident::#mname(&*self.vtable, #(#conv_args),*)
         };
         let dispatch = erased_call_ret_conv(sig, &ctx.type_param_names, call);
-        let null_check = class_init::null_receiver_check(sig);
+        let null_check = class_init::entry_checks(sig);
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
@@ -150,7 +150,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 #anc_vtable::#slot_name(&*self.vtable, #(#conv_args),*)
             };
             let dispatch = erased_call_ret_conv_with(sig, &ctx.type_param_names, &ov_erasure, call);
-            let null_check = class_init::null_receiver_check(sig);
+            let null_check = class_init::entry_checks(sig);
             wrapper_methods.push(quote! {
                 #(#keep_attrs)*
                 #[inline]
@@ -227,7 +227,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 }
             }
         };
-        let null_check = class_init::null_receiver_check(sig);
+        let null_check = class_init::entry_checks(sig);
         wrapper_methods.push(quote! {
             #(#keep_attrs)*
             #[inline]
@@ -242,7 +242,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
             let fz = functionize_moved(ctx, &quote! { #(#keep_attrs)* }, &quote! { #vis }, &f.sig,
-                                       &f.sig.ident, &class_init::null_receiver_check(&f.sig))?;
+                                       &f.sig.ident, &class_init::entry_checks(&f.sig))?;
             wrapper_methods.push(fz.shell);
             body_fns.push(fz.body_fn);
             continue;

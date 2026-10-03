@@ -94,7 +94,7 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, srcs: &b.srcs, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
+        let mut cs = CallScan { locals: &b.locals, srcs: &b.srcs, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()), narrow: HashMap::new() };
         cs.visit_block(block);
         // 形参名 → 序号（含接收者）；被 let 重新绑定的名字不算形参
         let params: Vec<Option<String>> = sig
@@ -130,7 +130,7 @@ impl FileScan<'_> {
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
-        for (mut name, mut ty, mut recv, mut args, fresh, mut srecv, mut lits) in cs.calls {
+        for (mut name, mut ty, mut recv, mut args, fresh, mut srecv, mut lits, on_self) in cs.calls {
             // vtable trait 的完全限定调用 `X__VTable::m(&*recv, …)`：首个实参是接收者，即 X 上的虚调用
             if recv.is_none() && !args.is_empty() {
                 if let Some(t) = ty.as_ref().map(|t| expand(self.uses, t.clone())).as_ref().and_then(|t| Some((t, t.last()?.strip_suffix(VTABLE_SUFFIX)?))).filter(|(_, s)| !s.is_empty()).map(|(t, s)| [&t[..t.len() - 1], &[s.to_string()]].concat()) {
@@ -154,6 +154,7 @@ impl FileScan<'_> {
                 fresh: tr(fresh),
                 srecv: srecv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 lits,
+                on_self,
             });
         }
         info.opaque = cs.opaque;
@@ -367,7 +368,9 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                     arr |= f.array_access;
                     allocs.extend(f.allocs.iter().cloned());
                     ctors.extend(f.ctors.iter().cloned());
-                    tcalls.extend(f.calls.iter().cloned());
+                    // 被调 fn 的 self 不一定是本方法的接收者
+                    let own = x == n.as_str();
+                    tcalls.extend(f.calls.iter().map(|c| TypedCall { on_self: c.on_self && own, ..c.clone() }));
                     opaque.extend(f.opaque.iter().cloned());
                     objects.extend(f.objects.iter().cloned());
                 }

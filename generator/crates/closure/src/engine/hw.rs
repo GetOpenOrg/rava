@@ -116,12 +116,22 @@ impl<'a> Engine<'a> {
         }
         for u in &self.hw_upcalls(host, mh) {
             if let Upcall::Method(u) = u {
-                if u.name != "<init>" {
+                // 接收者全为自身接收者的回调按 P(m,0) 分派，接收者已在建模代码手里，无须逃逸
+                if u.name != "<init>" && !Self::self_only(mh, &u.name, &u.desc, is_static) {
                     out.insert(self.id(&u.owner));
                 }
             }
         }
         out
+    }
+
+    /// 回调的各方法调用点接收者都是本方法自身的接收者（`self` / `self.0`）：实际接收者就是 P(m,0) 中的对象
+    pub(super) fn self_only(mh: &MemberHw, name: &str, desc: &str, is_static: bool) -> bool {
+        if is_static {
+            return false;
+        }
+        let n = parse_method(desc).map_or(0, |md| md.params.len());
+        Self::hw_sites(mh, |x| member_matches(&x.name, name), name, n).is_some_and(|v| v.iter().all(|c| c.on_self && c.fresh.is_none() && c.recv.is_some()))
     }
 
     /// 精确匹配（mangle 名 / 无重载裸名）优先，否则按名字前缀（安全过近似）
@@ -268,7 +278,12 @@ impl<'a> Engine<'a> {
                             None => typed = false,
                         }
                     }
-                    if !typed {
+                    if Self::self_only(mh, &u.name, &u.desc, self.methods[m].is_static) {
+                        // 自身接收者：读 P(m,0)（登记读者，接收者增长时重跑本方法）
+                        let prev = (self.cur_site.replace((m, 0)), self.cur_call.take());
+                        recv = self.value_set(&[Feed::N(Node::P(m, 0))]);
+                        (self.cur_site, self.cur_call) = prev;
+                    } else if !typed {
                         recv = TypeSet::open(owner);
                     }
                     if rm.is_static() || rm.is_private() {

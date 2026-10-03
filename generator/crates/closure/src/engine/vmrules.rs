@@ -43,6 +43,9 @@ const ARRAY_ACCESS: &[u8] = &[op::IALOAD];
 
 pub(super) const VM_RULES: &[VmRule] = &[
     VmRule { id: "vm-entry", basis: "JNI Invocation API CreateJavaVM / DestroyJavaVM；JLS §12.1 启动、§12.8 退出（shutdown 序列）", ops: &[], fns: &["create_java_vm", "destroy_java_vm"] },
+    // StackOverflowError：宏在每个生成方法入口注入 __stack_check（lib.rs），耗尽时经 JvmError::stack_overflow 构造；
+    // 注入调用对分析器不可见，规则落到构造入口（与 null_pointer / out_of_memory 同口径，a3-T1b）
+    VmRule { id: "stack-check", basis: "JVMS §2.5.2 / §2.5.6：方法调用入口 Java 虚拟机栈耗尽", ops: &[], fns: &["stack_overflow"] },
     // 线程未捕获异常的默认报告（输出异常描述）
     VmRule { id: "uncaught", basis: "JLS §11.3：未捕获异常终结线程，由默认未捕获异常处理报告", ops: &[], fns: &["report_uncaught_in"] },
     // NullPointerException
@@ -117,5 +120,24 @@ impl<'a> Engine<'a> {
                 self.fire_vm_rule(i);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 栈耗尽规则：无条件触发（任何方法调用入口都可能栈耗尽），落到 JvmError 构造入口
+    #[test]
+    fn stack_check_rule_is_unconditional() {
+        let r = VM_RULES.iter().find(|r| r.id == "stack-check").expect("缺 stack-check 规则");
+        assert!(r.ops.is_empty(), "stack-check 应为无条件规则");
+        assert_eq!(r.fns, &["stack_overflow"]);
+    }
+
+    /// 规则数不超出触发位图宽度
+    #[test]
+    fn rules_fit_fired_bitmap() {
+        assert!(VM_RULES.len() < 64);
     }
 }

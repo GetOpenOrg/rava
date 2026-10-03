@@ -259,18 +259,24 @@ fn macro_never_falls_through(mac: &syn::Macro) -> bool {
     }
 }
 
-/// 扫描循环体：是否存在绑定到**本层**循环的无标签 `break`。
+/// 扫描循环体：是否存在绑定到**本层**循环的 `break`——无标签且不在嵌套循环内，或带本循环
+/// 标签（任意嵌套深度，含已展开的内层 `java_try!` 里跳出外层循环的 `break 'l`）。
 /// 有 → 本循环可正常落出；没有 → `loop` 的 Rust 类型是 `!`（每个出口都是
 /// return / continue / 指向外层标签的 break），try 体以它结尾时不落出。
 /// 嵌套循环的无标签 break 绑定到嵌套循环自身，不计；闭包的控制流独立，不下钻。
-struct BreakScan {
+struct BreakScan<'a> {
     depth: usize,
+    label: Option<&'a Lifetime>,
     found: bool,
 }
 
-impl<'ast> syn::visit::Visit<'ast> for BreakScan {
+impl<'ast> syn::visit::Visit<'ast> for BreakScan<'_> {
     fn visit_expr_break(&mut self, b: &'ast syn::ExprBreak) {
-        if b.label.is_none() && self.depth == 0 {
+        let to_self = match &b.label {
+            None => self.depth == 0,
+            Some(l) => self.label.is_some_and(|own| own.ident == l.ident),
+        };
+        if to_self {
             self.found = true;
         }
         syn::visit::visit_expr_break(self, b);
@@ -303,7 +309,8 @@ fn expr_never_falls_through(e: &Expr) -> bool {
             // `loop` 含绑定本层的 break 才会落出；否则类型为 `!`（每条出口都是
             // return / continue / 跨层 break，生成代码的典型形态：
             // loop { if c { return Ok(v); } ...步进... }）
-            let mut scan = BreakScan { depth: 0, found: false };
+            let label = l.label.as_ref().map(|lb| &lb.name);
+            let mut scan = BreakScan { depth: 0, label, found: false };
             syn::visit::Visit::visit_block(&mut scan, &l.body);
             !scan.found
         }
@@ -561,6 +568,27 @@ mod tests {
         assert!(never_falls_through(&b.stmts));
         let b: Block = syn::parse_quote!({ noreturn_like("A.m:()V"); });
         assert!(!never_falls_through(&b.stmts));
+    }
+
+    #[test]
+    fn labeled_break_to_loop_falls_through() {
+        // 内层 try 已展开为标签块，其中 `break 'l0` 跳出本循环：循环可落出
+        let b: Block = syn::parse_quote!({
+            'l0: loop {
+                if i >= n { return Err(e); }
+                'java_try_9: { x = g()?; break 'l0; }
+                i += 1;
+            }
+        });
+        assert!(!never_falls_through(&b.stmts));
+        // 指向外层标签的 break 不使本循环落出
+        let b: Block = syn::parse_quote!({
+            'l1: loop {
+                if c { break 'l0; }
+                i += 1;
+            }
+        });
+        assert!(never_falls_through(&b.stmts));
     }
 
     #[test]

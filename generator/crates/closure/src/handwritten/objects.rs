@@ -60,7 +60,7 @@ fn close_object(o: &RawObject, file_fns: &HashMap<String, FnInfo>) -> HwObject {
 fn absorb_body(out: &mut FnInfo, g: &FnInfo) {
     out.allocs.extend(g.allocs.iter().cloned());
     out.ctors.extend(g.ctors.iter().cloned());
-    out.calls.extend(g.calls.iter().cloned());
+    out.calls.extend(g.calls.iter().map(|c| TypedCall { on_self: false, ..c.clone() }));
     out.opaque.extend(g.opaque.iter().cloned());
     out.fields.extend(g.fields.iter().map(|fa| FieldAccess { on_self: false, value_self: false, value_src_param: None, recv_src_param: None, ..fa.clone() }));
     out.array_access |= g.array_access;

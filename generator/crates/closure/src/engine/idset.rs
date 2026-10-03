@@ -360,9 +360,25 @@ impl<'a> IntoIterator for &'a IdSet {
 impl FromIterator<u32> for IdSet {
     fn from_iter<I: IntoIterator<Item = u32>>(it: I) -> Self {
         let mut v: Vec<u32> = it.into_iter().collect();
-        v.sort_unstable();
-        v.dedup();
-        IdSet::from_sorted(v)
+        if v.len() < DENSE_AT {
+            v.sort_unstable();
+            v.dedup();
+            return IdSet::from_sorted(v);
+        }
+        // 元素多：直接置位（免排序），去重后不足稠密阈值时退回有序向量（形态只由元素数决定）
+        let max = v.iter().copied().max().unwrap_or(0);
+        let words = vec![0u64; max as usize / 64 + 1];
+        let sum = vec![0u64; words.len() / 64 + 1];
+        let mut d = Dense { words, sum, n: 0 };
+        for x in v {
+            d.n += usize::from(d.set_bit(x));
+        }
+        let s = IdSet(Repr::Dense(Box::new(d)));
+        if s.len() >= DENSE_AT {
+            s
+        } else {
+            IdSet(Repr::Sparse(s.iter().collect()))
+        }
     }
 }
 

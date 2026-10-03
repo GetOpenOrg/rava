@@ -7,6 +7,7 @@ use syn::visit::Visit;
 use super::*;
 use super::generic_fns::*;
 use super::stype::*;
+use super::guards::*;
 
 pub(super) fn path_segs(p: &syn::Path) -> Vec<String> {
     p.segments.iter().map(|s| s.ident.to_string()).collect()
@@ -194,9 +195,12 @@ pub(super) fn bind<T: PartialEq>(env: &mut HashMap<String, Option<T>>, name: Str
     }
 }
 
+/// 方法接收者形参名
+const SELF_IDENT: &str = "self";
+
 /// 表达式是 `self` 本身
 pub(super) fn is_self_path(e: &syn::Expr) -> bool {
-    matches!(e, syn::Expr::Path(p) if p.path.is_ident("self"))
+    matches!(e, syn::Expr::Path(p) if p.path.is_ident(SELF_IDENT))
 }
 
 /// 表达式的值是 `self` 所指对象：`self` 经保持对象身份的转换（括号 / 引用 / `?` / `Clone::clone` /
@@ -277,7 +281,7 @@ pub(super) fn by_name_src(e: &syn::Expr, srcs: &HashMap<String, Option<NameSrc>>
         Expr::Try(t) => by_name_src(&t.expr, srcs),
         Expr::Path(p) => p.path.get_ident().and_then(|i| srcs.get(&i.to_string()).cloned().flatten()),
         Expr::MethodCall(m) if super::BY_NAME_READS.contains(&m.method.to_string().as_str()) => match m.args.first()? {
-            Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some((var_of(&m.receiver), java_field_name(&l.value()).to_string())),
+            Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some((guard_var(&m.receiver), java_field_name(&l.value()).to_string())),
             _ => None,
         },
         Expr::MethodCall(m) => {
@@ -291,17 +295,6 @@ pub(super) fn by_name_src(e: &syn::Expr, srcs: &HashMap<String, Option<NameSrc>>
 
 /// 按名读的值来源：（接收者变量名, 字段名）
 pub(super) type NameSrc = (Option<String>, String);
-
-/// 接收者表达式 `o` / `o.0` 的变量名
-fn var_of(e: &syn::Expr) -> Option<String> {
-    match e {
-        syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
-        syn::Expr::Field(f) if matches!(&f.member, syn::Member::Unnamed(i) if i.index == 0) => var_of(&f.base),
-        syn::Expr::Paren(p) => var_of(&p.expr),
-        syn::Expr::Reference(r) => var_of(&r.expr),
-        _ => None,
-    }
-}
 
 /// 实参的字符串字面量值：`"s"`、`String::from("s")` / `from("s")`、`"s".to_string()` / `"s".into()`（外层引用剥去）
 pub(super) fn str_lit(e: &syn::Expr) -> Option<String> {
@@ -333,8 +326,8 @@ pub(super) struct CallScan<'a> {
     pub(super) scope: HashMap<String, Option<SType>>,
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     pub(super) fresh: HashMap<String, Vec<String>>,
-    /// (名, 路径类型段, 接收者, 实参类型, fresh 接收者, 接收者静态类型, 实参字符串字面量)
-    pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>, Vec<Option<String>>)>,
+    /// (名, 路径类型段, 接收者, 实参类型, fresh 接收者, 接收者静态类型, 实参字符串字面量, 接收者是 `self` / `self.0`)
+    pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>, Vec<Option<String>>, bool)>,
     /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型, 写入值的按名读来源,
     /// 按名写入的接收者的按名读来源)
     pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>, Option<NameSrc>, Option<NameSrc>)>,
@@ -345,6 +338,8 @@ pub(super) struct CallScan<'a> {
     pub(super) generics: &'a GenericFns,
     /// 当前 impl 块 self 类型末段（`Self::f` 按 `<末段>::f` 查泛型辅助 fn）
     pub(super) self_last: Option<String>,
+    /// 类名判定守卫成立区域内的变量 → 其 Java 类（见 [`super::guards`]；重新绑定 / 赋值即移除）
+    pub(super) narrow: HashMap<String, Vec<String>>,
 }
 
 pub(super) fn macro_idents(ts: proc_macro2::TokenStream, out: &mut HashSet<String>) {
@@ -405,20 +400,59 @@ impl CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
-    /// 静态类型已知的值以 Display 输出：即其 `toString()` 虚调用
-    fn display_call(&mut self, recv: Option<Vec<String>>, st: Option<SType>) {
-        if st.is_some() {
-            self.calls.push((JAVA_TO_STRING.to_string(), None, Some(recv), vec![], None, st, vec![]));
+    /// 静态类型已知的值以 Display 输出：即其 `toString()` 虚调用（根类型 / 推不出时先按类名守卫收窄）
+    fn display_call(&mut self, recv: Option<Vec<String>>, var: Option<String>, st: Option<SType>) {
+        let on_self = var.as_deref() == Some(SELF_IDENT);
+        for st in self.to_string_types(var, st) {
+            self.calls.push((JAVA_TO_STRING.to_string(), None, Some(recv.clone()), vec![], None, Some(st), vec![], on_self));
         }
     }
+
+    /// 变量 `var` 上 `toString()` 分派的接收者静态类型：静态类型是根类型或推不出、且处在类名判定守卫区域内时
+    /// 取守卫给出的各类（[`super::guards`]），否则原样
+    fn to_string_types(&self, var: Option<String>, st: Option<SType>) -> Vec<SType> {
+        let root = match &st {
+            None => true,
+            Some(SType::Named(TypeRef(p))) => p.last().is_some_and(|l| l == OBJECT_RUST),
+            Some(_) => false,
+        };
+        match var.and_then(|v| self.narrow.get(&v)).filter(|_| root) {
+            Some(cs) => cs.iter().map(|c| SType::Java(c.clone())).collect(),
+            None => st.into_iter().collect(),
+        }
+    }
+
+    /// 在守卫 `gs`（变量 → 类）成立的区域内执行 `f`，之后恢复原收窄
+    fn narrowed(&mut self, gs: Vec<(String, Vec<String>)>, f: impl FnOnce(&mut Self)) {
+        if gs.is_empty() {
+            return f(self);
+        }
+        let saved = self.narrow.clone();
+        self.narrow.extend(gs);
+        f(self);
+        self.narrow = saved;
+    }
+}
+
+fn single(gs: Vec<(String, String)>) -> Vec<(String, Vec<String>)> {
+    gs.into_iter().map(|(v, c)| (v, vec![c])).collect()
 }
 
 impl<'ast> Visit<'ast> for CallScan<'_> {
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
         if let Some((_, java)) = ROOT_VTABLE_ALIASES.iter().find(|(r, _)| m.method == r).filter(|_| m.args.is_empty()) {
-            // 接收者静态类型推不出（`v.0` 等）→ 根类型（按 open 分派到全部覆盖）
-            let st = stype(&m.receiver, &self.scope, self.locals).or_else(|| Some(SType::Named(TypeRef(vec![OBJECT_RUST.to_string()]))));
-            self.calls.push((java.to_string(), None, Some(infer(&m.receiver, self.locals, self.helpers)), vec![], None, st, vec![]));
+            // 接收者静态类型推不出（`v.0` 等）→ 类名守卫收窄的类，否则根类型（按 open 分派到全部覆盖）
+            let st = stype(&m.receiver, &self.scope, self.locals);
+            let recv = infer(&m.receiver, self.locals, self.helpers);
+            let var = guard_var(&m.receiver);
+            let on_self = var.as_deref() == Some(SELF_IDENT);
+            let mut sts = self.to_string_types(var, st);
+            if sts.is_empty() {
+                sts.push(SType::Named(TypeRef(vec![OBJECT_RUST.to_string()])));
+            }
+            for st in sts {
+                self.calls.push((java.to_string(), None, Some(recv.clone()), vec![], None, Some(st), vec![], on_self));
+            }
             syn::visit::visit_expr_method_call(self, m);
             return;
         }
@@ -449,7 +483,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let value_st = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| stype(a, &self.scope, self.locals))).flatten();
                 let src = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| by_name_src(a, self.srcs))).flatten();
                 // 接收者本身取自按名读（`let m = o.0.__unsafe_ref_get("g")?; m.0.__unsafe_ref_set("f", v)`）：记其来源
-                let recv_src = var_of(&m.receiver).and_then(|v| self.srcs.get(&v).cloned().flatten());
+                let recv_src = guard_var(&m.receiver).and_then(|v| self.srcs.get(&v).cloned().flatten());
                 self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st, src, recv_src));
             }
         }
@@ -460,7 +494,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         };
         let srecv = stype(&m.receiver, &self.scope, self.locals);
         let lits = m.args.iter().map(str_lit).collect();
-        self.calls.push((name, None, Some(infer(&m.receiver, self.locals, self.helpers)), args, fresh, srecv, lits));
+        let on_self = guard_var(&m.receiver).as_deref() == Some(SELF_IDENT);
+        self.calls.push((name, None, Some(infer(&m.receiver, self.locals, self.helpers)), args, fresh, srecv, lits, on_self));
         syn::visit::visit_expr_method_call(self, m);
     }
 
@@ -482,7 +517,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let args = c.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
                 let ty = (!head.is_empty()).then(|| head.to_vec());
                 let lits = c.args.iter().map(str_lit).collect();
-                self.calls.push((last.clone(), ty, None, args, None, None, lits));
+                self.calls.push((last.clone(), ty, None, args, None, None, lits, false));
             }
             // 本文件泛型辅助 fn：闭包实参的形参类型按其余实参解出
             let key = segs.iter().map(|s| if s == "Self" { self.self_last.as_deref().unwrap_or(s) } else { s }).collect::<Vec<_>>().join("::");
@@ -510,11 +545,11 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             if let Some((explicit, captured)) = formatted_args(&args) {
                 for a in explicit {
                     let st = stype(a, &self.scope, self.locals);
-                    self.display_call(infer(a, self.locals, self.helpers), st);
+                    self.display_call(infer(a, self.locals, self.helpers), guard_var(a), st);
                 }
                 for n in captured {
                     let st = self.scope.get(&n).cloned().flatten();
-                    self.display_call(self.locals.get(&n).cloned().flatten(), st);
+                    self.display_call(self.locals.get(&n).cloned().flatten(), Some(n), st);
                 }
             }
         }
@@ -549,10 +584,32 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         (self.scope, self.fresh) = outer;
     }
 
+    // then 分支处在条件的类名守卫区域内
     fn visit_expr_if(&mut self, e: &'ast syn::ExprIf) {
         let outer = (self.scope.clone(), self.fresh.clone());
-        syn::visit::visit_expr_if(self, e);
+        self.visit_expr(&e.cond);
+        self.narrowed(single(cond_guards(&e.cond)), |s| s.visit_block(&e.then_branch));
+        if let Some((_, el)) = &e.else_branch {
+            self.visit_expr(el);
+        }
         (self.scope, self.fresh) = outer;
+    }
+
+    // `a && b`：b 处在 a 的类名守卫区域内
+    fn visit_expr_binary(&mut self, e: &'ast syn::ExprBinary) {
+        if !matches!(e.op, syn::BinOp::And(_)) {
+            return syn::visit::visit_expr_binary(self, e);
+        }
+        self.visit_expr(&e.left);
+        self.narrowed(single(cond_guards(&e.left)), |s| s.visit_expr(&e.right));
+    }
+
+    // 赋值使变量的类名守卫失效
+    fn visit_expr_assign(&mut self, e: &'ast syn::ExprAssign) {
+        syn::visit::visit_expr_assign(self, e);
+        if let Some(v) = guard_var(&e.left) {
+            self.narrow.remove(&v);
+        }
     }
 
     fn visit_arm(&mut self, a: &'ast syn::Arm) {
@@ -565,16 +622,21 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
     fn visit_expr_match(&mut self, e: &'ast syn::ExprMatch) {
         self.visit_expr(&e.expr);
         let st = stype(&e.expr, &self.scope, self.locals);
+        // `match R.__class_name() { "a" | "b" => … }`：字面量分支处在 R 为这些类的守卫区域内
+        let on = class_name_var(&e.expr);
         for a in &e.arms {
             let outer = (self.scope.clone(), self.fresh.clone());
             self.visit_pat(&a.pat);
             if let Some(pi) = bound_ident(&a.pat) {
                 self.scope.insert(pi.ident.to_string(), st.clone());
             }
-            if let Some((_, g)) = &a.guard {
-                self.visit_expr(g);
-            }
-            self.visit_expr(&a.body);
+            let gs = on.clone().zip(arm_lits(&a.pat)).into_iter().collect();
+            self.narrowed(gs, |s| {
+                if let Some((_, g)) = &a.guard {
+                    s.visit_expr(g);
+                }
+                s.visit_expr(&a.body);
+            });
             (self.scope, self.fresh) = outer;
         }
     }
@@ -616,6 +678,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
 
     // 模式绑定（闭包形参 / match / if let / for）遮蔽同名变量
     fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.narrow.remove(&p.ident.to_string());
         self.scope.insert(p.ident.to_string(), None);
         self.scope.remove(&elem_key(&p.ident.to_string()));
         self.fresh.remove(&p.ident.to_string());
