@@ -155,6 +155,18 @@ impl<'a> GenContext<'a> {
             || self.meta.superclass_erased_fields.contains(&name.to_string())
     }
 
+    /// vtable 侧方法体改写（`__inner` trait 实现 / base 函数）：字段访问改写 + 擦除字段
+    /// 访问器的类型化还原（见 `rewrite::restore_erased_accessors`）
+    pub(crate) fn rewrite_vtable_body(&self, block: &mut syn::Block) {
+        super::super::rewrite::rewrite_block(block, &self.basic_names, &self.ref_names);
+        let erased: HashMap<String, Type> = self.fields.iter()
+            .chain(self.meta.superclass_fields.iter())
+            .filter(|(n, _)| self.is_erased(n))
+            .map(|(n, t)| (n.to_string(), t.clone()))
+            .collect();
+        super::super::rewrite::restore_erased_accessors(block, &erased);
+    }
+
     pub(crate) fn inherited_is_basic(&self, name: &syn::Ident, ty: &syn::Type) -> bool {
         inherited_is_basic(&self.meta, name, ty)
     }

@@ -1,0 +1,13 @@
+Square(red, 3)
+4
+red/RED
+<red:3> <RED:3>
+true false
+outside RED red
+<RED:3>red! Square(red, 3) red!
+<RED:3>red! 3
+mid:mm mm!2/mm-x
+mid:leafy leafy!5/leafy-x leaf l
+44
+n=21 int=21
+a+b size=2

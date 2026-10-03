@@ -88,7 +88,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
                     let mut b = block.clone();
-                    rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+                    ctx.rewrite_vtable_body(&mut b);
                     own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
                 }
             }
@@ -188,7 +188,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                         }
                         Some(block) => {
                             let mut b = block.clone();
-                            rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+                            ctx.rewrite_vtable_body(&mut b);
                             if matches!(vtable_body_kind_gated(block, ctx.class_is_generic), VTableBodyKind::Safe) {
                                 // 体只一份：本条目是 base 函数的所有者时，覆盖体改为转发
                                 // （形参已按原签名类型化还原，base 函数收原签名形参）
@@ -419,7 +419,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     let sig = &f.sig;
                     let keep_attrs = strip_meta_attrs(&f.attrs);
                     let mut b = block.clone();
-                    rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+                    ctx.rewrite_vtable_body(&mut b);
                     own_accessor_impls.push(quote! { #(#keep_attrs)* #sig #b });
                 }
             }
@@ -455,7 +455,7 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
                     match &f.block {
                         Some(block) => {
                             let mut b = block.clone();
-                            rewrite_block(&mut b, &ctx.basic_names, &ctx.ref_names);
+                            ctx.rewrite_vtable_body(&mut b);
                             items.push(quote! { #(#keep_attrs)* #erased_item_sig #b });
                         }
                         None => {

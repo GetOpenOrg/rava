@@ -99,7 +99,7 @@ public class TestSerialUserGenericCallbacks {
 
         @Override
         public String toString() {
-            return "Square(" + String.valueOf(tag) + ", " + side + ")";
+            return "Square(" + tag + ", " + side + ")";
         }
     }
 

@@ -22,7 +22,7 @@ use super::super::interface::{erased_impl_call, erased_wrapper_call, expand_inte
 use super::super::moved::{has_body, is_safe};
 use super::super::parse::{split_type_name_args, FnItem};
 use super::super::rewrite::{
-    replace_clone_this_in_ok, rewrite_block, rewrite_dropped_params_in_inherited_body,
+    replace_clone_this_in_ok, rewrite_dropped_params_in_inherited_body,
     rewrite_vtable_calls_ufcs_for_base,
 };
 use super::super::util::{attr_str, is_basic, strip_meta_attrs};
