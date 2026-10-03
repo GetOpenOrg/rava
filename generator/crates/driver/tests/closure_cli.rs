@@ -92,7 +92,10 @@ fn no_recording_without_queries() {
 
 /// 一次 `rava closure -o`：闭包 JSON 的类 / 方法 / 反射成员集合
 fn closure_sets(java: &std::path::Path, seed: u64) -> Option<[std::collections::BTreeSet<String>; 3]> {
-    let out = std::env::temp_dir().join(format!("rava_closure_seed_{}_{seed}.json", std::process::id()));
+    // 测试并行运行：输出文件按进程内序号区分
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!("rava_closure_seed_{}_{n}_{seed}.json", std::process::id()));
     let seed = seed.to_string();
     closure_at(java, &["--hash-seed", &seed, "-o", out.to_str().unwrap()])?;
     let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
@@ -139,4 +142,15 @@ fn closure_independent_of_hash_seed() {
             }
         }
     }
+}
+
+/// 形参字符串常量进形参常量格：URL 构造器把协议名常量传给 URL$DefaultFactory.createURLStreamHandler，
+/// 其字符串 switch（String.hashCode / equals 折叠）只取 file 臂。形参字符串一律置 Top 时 switch 不折叠，
+/// 经 jrt 处理器、类路径 JarLoader、服务加载与反射池把 HelloWorld 闭包撑到约 2856 类（正常约 500 类）
+#[test]
+fn param_string_constants_fold_switch() {
+    let java = manifest_dir().join("../../../tests/e2e/01_basics/HelloWorld.java");
+    let Some([classes, ..]) = closure_sets(&java, 0) else { return };
+    assert!(!classes.contains("sun/net/www/protocol/jrt/Handler"), "URL 协议名 switch 未按形参常量折叠");
+    assert!(classes.len() < 1000, "HelloWorld 闭包 {} 类", classes.len());
 }

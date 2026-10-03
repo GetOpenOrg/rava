@@ -517,10 +517,6 @@ impl<'a> Engine<'a> {
                     (Some(vs), Some(j)) => vs.get(j).cloned().unwrap_or(PV::Top),
                     _ => PV::Top,
                 };
-                // 字符串实参不进形参常量格：按名查找的名字若取汇合格的中间态常量，后到的调用点把它抬为 Top 时
-                // 已登记的反射成员无法撤回，闭包随调用点接入先后而变。形参上的字符串一律经常量集（`pstrs.rs`，
-                // 只并不减）供按名查找取用
-                let v = if matches!(v, PV::Const(V::Str(_))) { PV::Top } else { v };
                 PV::join(cur.as_ref().and_then(|c| c.get(i)), &v)
             })
             .collect();

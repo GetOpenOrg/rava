@@ -3,7 +3,10 @@
 use super::*;
 
 fn with_vm(vm: &str) -> Result<Manifest, String> {
-    let dir = std::env::temp_dir().join(format!("rava-manifest-{}-{}", std::process::id(), vm.len()));
+    // 测试并行运行：目录名按进程内序号区分（按清单长度区分时，等长清单的测试互相覆盖）
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("rava-manifest-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("vm_intrinsics.toml"), vm).unwrap();
     let r = Manifest::load(&dir);
