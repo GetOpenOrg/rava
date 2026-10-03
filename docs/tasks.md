@@ -125,6 +125,12 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       s2 instanceof 否定分支收窄 + 钩子字段不按 open：DeepCopy 3065 / DTF 2884 / FSML 2886；首次发现子树重排后最大三支
 │   │     │       （getLoggerFromFinder 1163、toLowerCase→CLDR 783、URLClassPath$3→JarVerifier 493）均需值层面建模，原定手段不足，见 §21.5
 │   │     │       抽查 ① allocateInstance 抽象类 / 接口 → InstantiationException（db4f8a48）；② LocaleBundleFamilies：EnableNativeAccess 嵌套翻译 + 无扩展名 / 拼接模板资源（本地编译运行通过）
+│   │     │       ⏳ 暂不修（10-03 登记）macOS 专有：MacOSXFileSystemProvider 多级协变桥缺失，Linux 不受影响。
+│   │     │         最小复现：macOS 上 rava build tests/e2e/62_reflection/TestJdkConstructorLookup.java，运行时命中
+│   │     │         stub: sun/nio/fs/UnixFileSystemProvider.newFileSystem:(Ljava/lang/String;)Lsun/nio/fs/UnixFileSystem;
+│   │     │         该类文件里 newFileSystem(String) 有三个返回类型版本：MacOSXFileSystem 为本体，BsdFileSystem / UnixFileSystem
+│   │     │         为 javac 桥（Bsd 层的同形态是一体一桥，单级）；经 UnixFileSystemProvider 形参分派时落到存根，即 Unix 级桥没有接上
+│   │     │         （疑为同名同形参、仅返回类型不同的两级桥在发射 / 分派表合并时丢失）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
