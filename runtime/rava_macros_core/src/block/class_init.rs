@@ -52,15 +52,21 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
     if !returns_result(sig) {
         return quote::quote! {};
     }
-    let null_check = if sig.receiver().is_some() {
-        quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
-    } else {
-        quote::quote! {}
-    };
+    let has_recv = sig.receiver().is_some();
     if is_leaf(attrs) {
-        return null_check;
+        return if has_recv {
+            quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
+        } else {
+            quote::quote! {}
+        };
     }
-    quote::quote! { #null_check __stack_check()?; }
+    // 实例方法：两项合为一次 runtime 调用 `__enter`（次序同上：先空接收者、后栈界），
+    // 每个入口少一个分支块与一处 `?` 展开（声明层外壳数以万计，按条目计的前端内存随之下降）
+    if has_recv {
+        quote::quote! { __enter(self._jvm_null)?; }
+    } else {
+        quote::quote! { __stack_check()?; }
+    }
 }
 
 /// 生成器标注的叶子方法（`#[java_method(.., leaf = "true")]`）
@@ -260,6 +266,8 @@ mod tests {
     fn non_leaf_gets_stack_check() {
         let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f() -> Result<i32> { Ok(1) }"#);
         assert!(s.contains("__stack_check"), "{s}");
+        let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f(&self) -> Result<i32> { Ok(1) }"#);
+        assert!(s.contains("__enter (self . _jvm_null) ?"), "{s}");
     }
 
     #[test]

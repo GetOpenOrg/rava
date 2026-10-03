@@ -310,6 +310,22 @@ pub fn __stack_check() -> error::Result<()> {
     Ok(())
 }
 
+/// 实例方法入口（宏注入 `__enter(self._jvm_null)?;`）：空接收者抛 NullPointerException（JVMS §6.5
+/// invokevirtual / invokespecial / invokeinterface，先于建帧），否则做栈界检查（同 `__stack_check`）。
+#[inline(always)]
+pub fn __enter(is_null: bool) -> error::Result<()> {
+    if is_null {
+        return Err(__null_pointer());
+    }
+    __stack_check()
+}
+
+#[cold]
+#[inline(never)]
+fn __null_pointer() -> error::JvmError {
+    error::JvmError::null_pointer()
+}
+
 #[cold]
 #[inline(never)]
 fn __stack_overflow() -> error::JvmError {
@@ -561,7 +577,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
-    pub use super::{__stub, __null_recv, __noreturn, __stack_check};
+    pub use super::{__stub, __null_recv, __noreturn, __stack_check, __enter};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
