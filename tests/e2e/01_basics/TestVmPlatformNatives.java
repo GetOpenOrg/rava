@@ -16,8 +16,11 @@ public class TestVmPlatformNatives {
         System.out.println("max-positive=" + (rt.maxMemory() > 0));
         System.out.println("used-nonneg=" + (rt.totalMemory() - rt.freeMemory() >= 0));
 
-        // System.mapLibraryName
-        System.out.println(System.mapLibraryName("zip"));
+        // System.mapLibraryName：平台后缀断言（Linux .so / macOS .dylib），
+        // 不打印具体值——期望输出跨平台固定
+        String lib = System.mapLibraryName("zip");
+        System.out.println("libzip-name-ok=" + (lib.startsWith("libzip")
+                && (lib.endsWith(".so") || lib.endsWith(".dylib"))));
 
         // ProcessHandle：当前 pid 为正且存活，父进程存在
         ProcessHandle self = ProcessHandle.current();
