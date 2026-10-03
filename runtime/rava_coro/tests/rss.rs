@@ -101,11 +101,12 @@ fn rss_returns_after_hundred_thousand() {
     let end = rss();
     let mib = |b: usize| b as f64 / (1 << 20) as f64;
     eprintln!(
-        "[rava_coro] RSS 起点 {:.1} MiB，{N} 协程挂起峰值 {:.1} MiB，全部完成后 {:.1} MiB（池 {} 块）",
+        "[rava_coro] RSS 起点 {:.1} MiB，{N} 协程挂起峰值 {:.1} MiB，全部完成后 {:.1} MiB（热槽 {} 个，slab 余 {} 块）",
         mib(start),
         mib(peak),
         mib(end),
-        stack::pooled_stacks()
+        stack::pooled_stacks(),
+        stack::mapped_chunks()
     );
     assert_eq!(stack::live_stacks(), 0);
     assert!(stack::pooled_stacks() <= stack::pool_limit());

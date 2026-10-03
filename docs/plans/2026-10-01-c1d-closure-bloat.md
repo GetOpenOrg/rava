@@ -1487,6 +1487,9 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   Linux `pthread_getattr_np`）；`set_reserve` 只在首次建栈前生效、下限 256 KiB（`MIN_RESERVE`）。
 - 首版 slab 不释放块，macOS 实测 10⁵ 完成后物理足迹 +65 MiB：全为页表（1 MiB 间隔的栈每 32 MiB 一张 16 KiB L3 表，
   `madvise` 不回收）；Linux RSS 不计页表会掩盖这一项，故 Linux 口径改为 RSS + VmPTE，并加空块整块释放。
-- 实测（本机 aarch64 macOS，release）：单次切换 15.0 ns；10⁵ 协程挂起峰值 1624 MiB，全部完成后 4.2 → 11.8 MiB（+7.6 MiB）、
+- 实测（本机 aarch64 macOS，release）：单次切换 15.0 ns；10⁵ 协程挂起峰值 1624 MiB，全部完成后 4.2 → 11.8 MiB（+7.6 MiB）、热槽 16 个、
   slab 余 1 块；软件栈界在深度 2866（每帧约 300 B）、距可用区底 128 KiB 处判定耗尽；硬件 guard（mprotect）子进程 SIGABRT。
-  x86_64（Linux 6.8 无 `MADV_GUARD_INSTALL`，guard 用例跳过）待 kr1 复测。
+- kr1 复测（x86_64 Linux 6.8，4a1b008c）：单次切换 14.96 ns；10⁵ 挂起时映射数 37 → 38（slab 104 块），RSS + VmPTE 起点 5.4 MiB、
+  峰值 1381 MiB、全部完成后 13.1 MiB（+7.7 MiB）；软件栈界在深度 2866、距可用区底 128 KiB 处判定耗尽；无 `MADV_GUARD_INSTALL`，
+  guard 用例按预期跳过；callee-saved、跨线程 resume 通过。输出中旧口径「池 N 块」指热槽个数（`pooled_stacks`），与 slab 块数
+  （`mapped_chunks`）不同：完成后余下的 1 个空块（16 槽）全部是热槽，热槽 16 个、slab 1 块，两者一致；测试输出已改为分别打印。
