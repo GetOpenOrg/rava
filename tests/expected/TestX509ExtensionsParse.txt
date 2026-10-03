@@ -1,0 +1,92 @@
+ca subject=C=CN,O=Rava,CN=Rava Test CA
+ca version=3 serial=1001 sigalg=SHA256withECDSA pathlen=1
+ca critical=[2.5.29.15, 2.5.29.19, 2.5.29.30]
+ca noncritical=[2.5.29.14, 2.5.29.32, 2.5.29.33, 2.5.29.36, 2.5.29.54]
+ca ext 2.5.29.14 len=24
+ca ext 2.5.29.15 len=6
+ca ext 2.5.29.19 len=10
+ca ext 2.5.29.30 len=42
+ca ext 2.5.29.32 len=78
+ca ext 2.5.29.33 len=18
+ca ext 2.5.29.36 len=10
+ca ext 2.5.29.54 len=5
+ca self-verify ok
+leaf subject=C=CN,O=Rava,CN=www.example.com
+leaf issuer=C=CN,O=Rava,CN=Rava Test CA
+leaf pathlen=-1
+leaf keyUsage=100000000
+leaf eku=[1.3.6.1.5.5.7.3.1, 1.3.6.1.5.5.7.3.2]
+leaf san 2 www.example.com
+leaf san 7 10.0.0.1
+leaf san 1 a@example.com
+leaf ian 6 https://example.com/ca
+leaf critical=[2.5.29.15]
+leaf noncritical=[1.3.6.1.5.5.7.1.1, 2.16.840.1.113730.1.1, 2.5.29.14, 2.5.29.17, 2.5.29.18, 2.5.29.19, 2.5.29.31, 2.5.29.32, 2.5.29.35, 2.5.29.37, 2.5.29.46]
+leaf ext 1.3.6.1.5.5.7.1.1 len=82
+leaf ext 2.16.840.1.113730.1.1 len=6
+leaf ext 2.5.29.14 len=24
+leaf ext 2.5.29.15 len=6
+leaf ext 2.5.29.17 len=42
+leaf ext 2.5.29.18 len=28
+leaf ext 2.5.29.19 len=4
+leaf ext 2.5.29.31 len=38
+leaf ext 2.5.29.32 len=12
+leaf ext 2.5.29.35 len=26
+leaf ext 2.5.29.37 len=24
+leaf ext 2.5.29.46 len=41
+leaf verify ok
+crl issuer=C=CN,O=Rava,CN=Rava Test CA version=2
+crl noncritical=[2.5.29.20, 2.5.29.35]
+crl verify ok
+crl entry 3003 reason=KEY_COMPROMISE ordinal=1 hasExt=true
+crl entry 3004 reason=SUPERSEDED ordinal=4 hasExt=true
+crl entry 3005 reason=null ordinal=-1 hasExt=false
+leaf revoked=false
+ca| [
+ca| [
+ca| [1]: ObjectId: 2.5.29.19 Criticality=true
+ca| BasicConstraints:[
+ca| [2]: ObjectId: 2.5.29.32 Criticality=false
+ca| [CertificatePolicyId: [1.2.3.4.5]
+ca| [PolicyQualifierInfo: [
+ca| qualifierID: 1.3.6.1.5.5.7.2.1
+ca| qualifier: 0000: 16 17 68 74 74 70 73 3A   2F 2F 65 78 61 6D 70 6C  ..https://exampl
+ca| ], PolicyQualifierInfo: [
+ca| qualifierID: 1.3.6.1.5.5.7.2.2
+ca| qualifier: 0000: 30 0D 1A 0B 52 61 76 61   20 6E 6F 74 69 63 65     0...Rava notice
+ca| [3]: ObjectId: 2.5.29.15 Criticality=true
+ca| [4]: ObjectId: 2.5.29.30 Criticality=true
+ca| NameConstraints: [
+ca| [
+ca| GeneralName: DNSName: example.com
+ca| [
+ca| GeneralName: DNSName: bad.example.com
+ca| [5]: ObjectId: 2.5.29.36 Criticality=false
+ca| PolicyConstraints: [  Require: 0;	Inhibit: 1 ]
+ca| [6]: ObjectId: 2.5.29.33 Criticality=false
+ca| PolicyMappings [
+ca| [CertificatePolicyMap: [
+ca| IssuerDomain:CertificatePolicyId: [1.2.3.4.5]
+ca| SubjectDomain:CertificatePolicyId: [1.2.3.4.6]
+ca| [7]: ObjectId: 2.5.29.14 Criticality=false
+ca| [1]: ObjectId: 2.5.29.54 Criticality=false
+ca| Unparseable InhibitAnyPolicy extension due to
+ca| java.io.IOException: Criticality cannot be false for InhibitAnyPolicy
+leaf| Subject: C=CN, O=Rava, CN=www.example.com
+leaf| Certificate Extensions: 12
+leaf| accessLocation: URIName: https://ocsp.example.com
+leaf| accessLocation: URIName: https://example.com/ca.cer
+leaf| [URIName: https://example.com/ca.crl]
+leaf| ExtendedKeyUsages [
+leaf| [URIName: https://example.com/delta.crl]
+leaf| URIName: https://example.com/ca
+leaf| KeyUsage [
+leaf| NetscapeCertType [
+leaf| DNSName: www.example.com
+leaf| RFC822Name: a@example.com
+crl| CRL Entry Extensions: 1
+crl| Reason Code: KEY_COMPROMISE
+crl| CRL Entry Extensions: 1
+crl| Reason Code: SUPERSEDED
+crl| CRL Extensions: 2
+crl| CRL Number:     05

@@ -328,8 +328,9 @@ pub(super) struct CallScan<'a> {
     pub(super) fresh: HashMap<String, Vec<String>>,
     /// (名, 路径类型段, 接收者, 实参类型, fresh 接收者, 接收者静态类型, 实参字符串字面量, 接收者是 `self` / `self.0`)
     pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>, Vec<Option<String>>, bool)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型, 写入值的按名读来源)
-    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>, Option<NameSrc>)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型, 写入值的按名读来源,
+    /// 按名写入的接收者的按名读来源)
+    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>, Option<NameSrc>, Option<NameSrc>)>,
     pub(super) opaque: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
@@ -469,7 +470,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             let value_self = write && m.args.first().is_some_and(is_self_value);
             let value_st = m.args.first().filter(|_| write).and_then(|a| stype(a, &self.scope, self.locals));
             let src = m.args.first().filter(|_| write).and_then(|a| by_name_src(a, self.srcs));
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self, value_st, src));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self, value_st, src, None));
         }
         // 按名协议 `o.0.__unsafe_ref_set("字段", v)`：接收者是擦除的 vtable 对象，只知字段名
         let by_name = (BY_NAME_WRITES.contains(&name.as_str()), BY_NAME_READS.contains(&name.as_str()));
@@ -481,7 +482,9 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let value_self = by_name.0 && m.args.iter().nth(1).is_some_and(is_self_value);
                 let value_st = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| stype(a, &self.scope, self.locals))).flatten();
                 let src = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| by_name_src(a, self.srcs))).flatten();
-                self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st, src));
+                // 接收者本身取自按名读（`let m = o.0.__unsafe_ref_get("g")?; m.0.__unsafe_ref_set("f", v)`）：记其来源
+                let recv_src = guard_var(&m.receiver).and_then(|v| self.srcs.get(&v).cloned().flatten());
+                self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st, src, recv_src));
             }
         }
         let args = m.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
@@ -508,7 +511,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                         let value_self = c.args.first().is_some_and(is_self_value);
                         let value_st = c.args.first().and_then(|a| stype(a, &self.scope, self.locals));
                         let src = c.args.first().and_then(|a| by_name_src(a, self.srcs));
-                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self, value_st, src));
+                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self, value_st, src, None));
                     }
                 }
                 let args = c.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();

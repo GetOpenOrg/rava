@@ -15,17 +15,22 @@
 //! - 读者沿子集边逆向遍历全部上游槽：任一推不出即整体推不出；字面量取起点槽（子集边已传递）；
 //!   上游槽变化（新常量、新流入边、新非常量实参、推不出）、非常量实参所在调用方重分析时读者重跑；
 //! - 递归传参成环（槽在求值栈上）或上游槽过多时推不出。
+//!
+//! String 字段同样有槽（`PSlot::F`，按字段、不分接收者）：字节码写入的字面量并入、写入本方法形参时登记子集边
+//! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
+//! 读者不取槽。读取 String 字段的名字段由此取得全部写入名字（如按类型名查找服务时，类型名存于列表对象的字段）。
 
 use super::class_lookup::{event_at, is_invoke, Gap, MAX_NAMES};
 use super::name_eval::Frame;
-use super::sealed::flatten;
+use super::sealed::{flatten, is_field};
 use super::*;
 
-/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）
+/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）/ String 字段（字段节点序号）
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub(super) enum PSlot {
     M(usize, usize),
     H(u32, usize),
+    F(usize),
 }
 
 #[derive(Default)]
@@ -42,6 +47,8 @@ pub(super) struct PStrs {
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
     top_h: HashSet<u32>,
+    /// 有非常量写入的 String 字段：字段槽推不出
+    top_f: HashSet<usize>,
     /// 读过槽（按名取类遍历到的上游槽）的站点
     demand: HashMap<PSlot, BTreeSet<(usize, u32)>>,
     /// 求值读过其调用点实参的调用方 → 读者站点
@@ -87,7 +94,7 @@ impl<'a> Engine<'a> {
             .flatten()
             .filter_map(|s| match *s {
                 PSlot::M(t, j) => Some((t, j)),
-                PSlot::H(..) => None,
+                PSlot::H(..) | PSlot::F(_) => None,
             })
             .collect()
     }
@@ -187,12 +194,67 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 方法 m 中字节码写入 String 字段（字段节点 fi）的值 v（None = 值未知）并入字段槽
+    pub(super) fn pstr_field_put(&mut self, m: usize, fi: usize, v: Option<&V>) {
+        let slot = PSlot::F(fi);
+        match v {
+            Some(V::Null) => {}
+            Some(v) if !computed(v) => {
+                let lits = v.lit_ids();
+                if !lits.is_empty() {
+                    self.pstr_add(slot, lits.into_iter().collect());
+                }
+                for s in v.srcs().iter() {
+                    if let Src::Param(i) = s {
+                        self.pstr_edge(PSlot::M(m, *i as usize), slot);
+                    }
+                }
+            }
+            _ => {
+                if self.pstr.top_f.insert(fi) {
+                    self.pstr_wake(slot);
+                }
+            }
+        }
+    }
+
     /// 方法 m 的 String 形参槽 i 上的全部名字（当前站点为读者）；None = 推不出
     pub(super) fn param_names(&mut self, m: usize, i: usize, depth: u8) -> Option<BTreeSet<Rc<str>>> {
-        let reader = self.cur_site?;
         let string = self.id(STRING);
-        let start = PSlot::M(m, i);
-        if self.methods[m].ptypes.get(i).copied().flatten() != Some(string) || self.pstr.active.contains(&start) || self.pstr.active.len() >= MAX_NEST {
+        if self.methods[m].ptypes.get(i).copied().flatten() != Some(string) {
+            return None;
+        }
+        self.slot_names(PSlot::M(m, i), depth)
+    }
+
+    /// String 字段（字段节点 fi）各字节码写入的全部名字（当前站点为读者）；None = 推不出
+    pub(super) fn field_names(&mut self, fi: usize, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        self.slot_names(PSlot::F(fi), depth)
+    }
+
+    /// 名字段读自 String 字段（方法 m 中偏移 o 的 getfield / getstatic）时该字段各字节码写入的全部名字。
+    /// static final 字段由常量求值给出，不经字段槽；字段可经字节码外途径写入时推不出（字段转为不折叠时 m 失效重分析）
+    pub(super) fn read_field_names(&mut self, m: usize, a: &Analysis, o: u32, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        let Some(Event::Field { opcode, mref, .. }) = event_at(a, o, is_field) else { return None };
+        if !matches!(*opcode, classfile::op::GETFIELD | classfile::op::GETSTATIC) || mref.desc != format!("L{STRING};") {
+            return None;
+        }
+        let fi = self.ctx.field_info(mref)?;
+        if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
+            return None;
+        }
+        self.ctx.dep(m, Dep::Field(fi.key.clone()));
+        if self.ctx.field_open(&fi) {
+            return None;
+        }
+        let n = self.field_node(fi.key.clone());
+        self.field_names(n, depth)
+    }
+
+    /// 槽 start 上的全部名字：沿子集边逆向遍历上游槽，字面量取起点槽，非常量实参在调用方帧里求值
+    fn slot_names(&mut self, start: PSlot, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        let reader = self.cur_site?;
+        if self.pstr.active.contains(&start) || self.pstr.active.len() >= MAX_NEST {
             return None;
         }
         let mut seen: HashSet<PSlot> = HashSet::default();
@@ -209,6 +271,7 @@ impl<'a> Engine<'a> {
             let top = match s {
                 PSlot::M(t, _) => self.pstr.top_m.contains(&t),
                 PSlot::H(h, _) => self.pstr.top_h.contains(&h),
+                PSlot::F(fi) => self.pstr.top_f.contains(&fi),
             };
             if top {
                 return None;
