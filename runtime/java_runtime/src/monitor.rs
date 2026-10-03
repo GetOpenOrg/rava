@@ -410,12 +410,15 @@ pub fn enter(identity: usize, is_null: bool) -> Result<()> {
         return Err(JvmError::null_pointer());
     }
     monitor_for(identity).enter();
+    crate::exec_context::monitor_entered();
     Ok(())
 }
 
 /// `monitorexit`：退出 `identity` 对象的监视器一层。
 pub fn exit(identity: usize) -> Result<()> {
-    monitor_for(identity).exit()
+    monitor_for(identity).exit()?;
+    crate::exec_context::monitor_exited();
+    Ok(())
 }
 
 /// `Object.wait(millis, nanos)`（wait() = wait(0,0)）。null 检查同上。
@@ -475,6 +478,7 @@ impl MonitorGuard {
         }
         let monitor = monitor_for(obj.0.__identity() as usize);
         monitor.enter();
+        crate::exec_context::monitor_entered();
         Ok(MonitorGuard { monitor: Some(monitor) })
     }
 }
@@ -482,7 +486,9 @@ impl MonitorGuard {
 impl Drop for MonitorGuard {
     fn drop(&mut self) {
         if let Some(monitor) = self.monitor.take() {
-            let _ = monitor.exit();
+            if monitor.exit().is_ok() {
+                crate::exec_context::monitor_exited();
+            }
         }
     }
 }

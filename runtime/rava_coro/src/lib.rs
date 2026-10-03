@@ -6,7 +6,8 @@
 //! - [`Stack`]：独立栈（slab 预留多栈、按需提交、热 / 冷槽复用与 madvise 回收；映射数与存活栈数脱钩）；
 //! - [`Context`]：一个执行流被挂起时的上下文（保存的栈指针 + 栈界：软件栈界与硬件 guard 区间）；
 //! - [`switch`]：保存当前上下文、恢复另一个，并传递一个字；
-//! - [`stack_exhausted`] / [`YellowZone`] / [`init_platform_thread`]：软件栈界检查（Java `StackOverflowError`）。
+//! - [`stack_exhausted`] / [`YellowZone`] / [`init_platform_thread`]：软件栈界检查（Java `StackOverflowError`）；
+//! - [`pins::Pins`]：执行流的 pin 计数与判定（`doYield` / `isPinned0` 的依据）。
 //!
 //! 新栈由 [`Context::new`] 布置初始切换帧：第一次被 [`switch`] 切入时经入口蹦床调用
 //! `entry(arg, data)`；入口函数不得返回，执行完毕时切回某个已保存的上下文且不再被切入，
@@ -19,6 +20,7 @@
 mod arch;
 mod guard;
 mod limit;
+pub mod pins;
 pub mod stack;
 
 pub use limit::{init_platform_thread, limit_for, stack_exhausted, stack_limit, YellowZone, SHADOW, YELLOW};
