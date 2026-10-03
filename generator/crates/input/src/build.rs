@@ -113,6 +113,8 @@ pub struct EmitInput {
     pub instantiated: BTreeSet<String>,
     /// 手写体继承成员需求（分析器 `hw_inherited`）：接收者类须承载的祖先实例方法（接收者, 方法名, 描述符）
     pub hw_inherited: Vec<MethodKey>,
+    /// lambda 站点的函数式接口（分析器 `sam_types`；档案发射时 JDK 侧取档案）：`I__Lambda` 合成集
+    pub sam_types: BTreeSet<String>,
     /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
     pub module_services: Vec<(String, String)>,
     /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
@@ -416,6 +418,7 @@ impl<'a> BuildInput<'a> {
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
+            sam_types: f.sam_types.iter().cloned().collect(),
             module_services: f.seeds.module_services.clone(),
             system_properties: f.system_properties.clone(),
             module_resources,

@@ -388,10 +388,13 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     perf.mark("classpath");
     let java_files: Vec<PathBuf> = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
     let emit_too = o.stop_after >= Stage::Emit;
-    let emitted = analyze(&cp, rt, &user[0], o, &seed_classes, &cin.join("closure.json"), &mut perf, |facts, perf| {
+    let profile = o.profile.as_deref().map(|p| crate::profile_emit::load(p, rt, &home)).transpose()?;
+    let emitted = analyze(&cp, rt, &user[0], o, &seed_classes, &cin.join("closure.json"), &mut perf, |single, perf| {
         if !emit_too {
             return Ok(None);
         }
+        let mut composed = None;
+        let facts = crate::profile_emit::facts(profile.as_ref(), single, &mut composed)?;
         let job = EmitJob { cp: &cp, facts, rt, user: &user, java_files, home: &home, out, libs: &crates, o };
         emit_scratch(&job, perf).map(Some)
     })?;
@@ -438,7 +441,10 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let classes = abs(&o.emit_classes_dir());
     let text = std::fs::read_to_string(&cj).map_err(|e| format!("{}：{e}", cj.display()))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}：{e}", cj.display()))?;
-    let facts = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", cj.display()))?;
+    let single = ClosureFacts::from_json(&v).map_err(|e| format!("{}：{e}", cj.display()))?;
+    let profile = o.profile.as_deref().map(|p| crate::profile_emit::load(p, &rt, &home)).transpose()?;
+    let mut composed = None;
+    let facts = crate::profile_emit::facts(profile.as_ref(), &single, &mut composed)?;
     perf.mark("closure_json_load");
     if o.clean {
         if cj.starts_with(&out) || classes.starts_with(&out) {
@@ -450,7 +456,7 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
     let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
     perf.mark("classpath");
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
-    let job = EmitJob { cp: &cp, facts: &facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };
+    let job = EmitJob { cp: &cp, facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };
     let (r, timings) = emit_scratch(&job, &mut perf)?;
     if !o.full_precheck {
         report(&r, &out);

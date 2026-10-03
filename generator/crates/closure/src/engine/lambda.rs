@@ -414,3 +414,11 @@ mod tests {
         assert_eq!(m, vec!["a/Ser".to_string(), "a/M".to_string()]);
     }
 }
+
+impl Engine<'_> {
+    /// lambda 站点的函数式接口（samtype）集合：发射层据此为接口合成 `I__Lambda` 对象。
+    /// 档案按入口取并（含用户方法里的站点）——JDK 侧的合成对象集合只依赖档案
+    pub fn sam_types(&self) -> BTreeSet<String> {
+        self.lambdas.values().map(|l| l.iface.clone()).collect()
+    }
+}

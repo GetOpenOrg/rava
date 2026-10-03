@@ -4,6 +4,7 @@
 //! 反射分派；步骤 (d)）→ 落盘 → 包 mod 树 → lib.rs 补全 → 用户子包 mod.rs → main.rs →
 //! Cargo.toml / strict.txt / jdk_feature.txt。
 
+mod archive_side;
 pub mod entry;
 pub mod fs;
 pub mod layers;
@@ -164,8 +165,12 @@ fn emit_classes<'l>(
         (ct, delta, t.elapsed())
     });
     let mut ems = IndexMap::new();
-    for (((j, scope), (_, _, t_prep)), (ct, delta, t_text)) in work.iter().zip(texts) {
+    let mut held = Vec::new();
+    for (((j, scope), (_, _, t_prep)), (ct, mut delta, t_text)) in work.iter().zip(texts) {
         let ct = ct?;
+        if matches!(j.krate, JobCrate::User) {
+            archive_side::split_user_delta(ctx, &mut delta, &mut held);
+        }
         state.merge(delta);
         let (crate_prefix, crate_name, handwritten) = match j.krate {
             JobCrate::Jdk => ("crate", "java_runtime", w.is_handwritten(&j.path)),
@@ -185,6 +190,7 @@ fn emit_classes<'l>(
         perf.classes.push((j.binary.to_string(), *t_prep + t_text));
         ems.insert(j.binary.to_string(), em);
     }
+    archive_side::check_leaks(state, held);
     Ok(ems)
 }
 
@@ -248,6 +254,7 @@ pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitt
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     let mut perf = Perf::new();
     let mut state = ProjectState::default();
+    archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
@@ -267,10 +274,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");
     let mut state = ProjectState::default();
-    // 手写体的继承成员需求与生成方法体登记的同一账本（手写文件整体编译，与 fn 可达性无关）
-    for (recv, name, desc) in &ctx.input.hw_inherited {
-        state.inherited_requests.insert((recv.clone(), name.clone(), crate::vtable::param_part(desc).to_string()));
-    }
+    archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
