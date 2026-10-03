@@ -279,6 +279,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `__unsafe_ref_get / __unsafe_ref_set / __unsafe_ref_update` 调用。
     #[doc(hidden)]
     fn __unsafe_ref_access(&self, _field: &str, _op: &mut __RefAccess<'_>) -> Option<Object> { None }
+
+    /// Java 字段身份（声明类 binary name, 字段名）→ 上述按名协议的 Rust 字段名。Unsafe 实例字段偏移按
+    /// Java 字段身份登记（`objectFieldOffset`），而按名协议以 Rust 字段名分派；二者不同的字段（Rust 关键字
+    /// 加后缀如 `in` → `in_`、`$` 替换、遮蔽父类同名字段的子类字段加声明类后缀）由 java_class! 宏按
+    /// 生成器给出的 `field_slots` 为运行时类生成映射（含继承字段）；未列出 → None，两名相同。
+    #[doc(hidden)]
+    fn __field_slot(&self, _decl: &str, _name: &str) -> Option<&'static str> { None }
 }
 
 /// 引用原子协议的操作（[`ObjectVTable::__unsafe_ref_access`] 的入参）。

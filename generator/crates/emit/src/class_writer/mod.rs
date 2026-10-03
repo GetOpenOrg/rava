@@ -249,11 +249,13 @@ pub fn class_text(
     let parent = parent_rust(ctx, ci);
     let empty = BTreeSet::new();
     let impl_methods = ctx.input.handwritten.get(ci.name()).map_or(&empty, |h| &h.methods);
+    let field_slots: Vec<String> = sup.slots.iter().cloned().chain(fields::own_field_slots(ctx, ci)).collect();
     let head_in = head::HeadInput {
         superclass_rust: &parent,
         superclass_fields: &sup.fields,
         superclass_reference_fields: &sup.reference,
         superclass_erased_fields: &sup.erased,
+        field_slots: &field_slots,
         impl_methods: Some(impl_methods),
     };
     let mut block = head::block_head(ctx, ci, &head_in);

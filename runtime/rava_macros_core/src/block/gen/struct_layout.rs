@@ -337,6 +337,24 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         }
     };
 
+    // Unsafe 实例字段偏移的 Java 字段身份 → 按名协议的 Rust 字段名（只列二者不同的平铺字段；
+    // 未列出的字段两名相同，trait 默认 None 由调用方取 Java 名）
+    let inner_field_slot_query: TokenStream2 = if ctx.meta.field_slots.is_empty() {
+        quote! {}
+    } else {
+        let arms = ctx.meta.field_slots.iter().map(|(decl, java, rust)| {
+            quote! { (#decl, #java) => ::std::option::Option::Some(#rust), }
+        });
+        quote! {
+            fn __field_slot(&self, decl: &str, name: &str) -> ::std::option::Option<&'static str> {
+                match (decl, name) {
+                    #(#arms)*
+                    _ => ::std::option::Option::None,
+                }
+            }
+        }
+    };
+
     // Object.clone 的运行时类浅拷贝（C-1）：新 inner（新标识单元），每个字段新建存储
     // 单元、值按 Java 语义拷贝（基本类型 Cell 拷贝值；引用 / 擦除 RefCell 拷贝引用——
     // Box<T> 的 Clone 即 wrapper/Object 的引用克隆），再经本类 __as_Self 钩子包成运行时
@@ -408,6 +426,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #inner_word_query
                 #inner_dword_query
                 #inner_ref_access_query
+                #inner_field_slot_query
                 #to_string_inner_bridge
                 #inner_shallow_copy
             }

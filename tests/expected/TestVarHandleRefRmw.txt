@@ -1,0 +1,40 @@
+in cas(null->s1): true in=s1
+in cas(null->s2): false in=s1
+in getAndSet: s1 in=s3
+in get: s3
+in set: s4
+type cae(null->t): null type=t
+type cae(x->u): t type=t
+type getAndSetAcquire: t type=v
+match getAndUpdate: 10 -> 30
+match cae release: 30 match=m
+a$b getAndSetRelease: null a$b=dollar
+a$b weakCas: true a$b=d2
+plain getAndSet: null same=true
+fields: in=s4 type=v match=m a$b=d2
+shadow getAndSet base: base-x base.x=B1 derived.x=derived-x
+shadow getAndSet derived: derived-x base.x=B1 derived.x=D1
+shadow cae base(D1->B2): B1 base.x=B1
+shadow cae derived(D1->D2): D1 derived.x=D2
+shadow get: base=B1 derived=D2
+box getAndSet: null box=b1
+box cae(b1->b2): b1 box=b2
+box cae(zz->b3): b2 box=b2
+box cas(b2->null): true box=null
+counter getAndUpdate: 0 -> 5
+objs getAndSet[1]: null objs[1]=o1
+objs cae[1](o1->o2): o1 objs[1]=o2
+objs cas[2](x->y): false objs[2]=null
+objs update[0]: 1 -> 42
+strs getAndSet[0]: a strs[0]=A
+strs cae[2](c->C): c strs=A,b,C
+strs out of bounds: ArrayIndexOutOfBoundsException
+loop getAndAdd: 0 loop=7
+loop cas(7->9): true loop=9
+yield cae(0->123456789012): 0 yield=123456789012
+yield getAndSet: 123456789012 yield=-1
+updater cas(null->u1): true in=u1
+updater getAndSet: u1 in=u2
+updater getAndUpdate: u2 in=u2!
+updater accumulateAndGet: u2!?
+concurrent in=1000

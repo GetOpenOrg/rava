@@ -198,6 +198,10 @@ pub(crate) struct ClassMeta {
     /// 初始化序；codegen `init_interfaces` 属性）。
     pub init_interfaces: Vec<Type>,
     pub superclass_fields: Vec<(Ident, Type)>,
+    /// Rust 名与 Java 名不同的平铺实例字段（关键字加后缀、`$` 替换、遮蔽字段加声明类后缀；
+    /// 本类与继承字段）：(声明类 binary name, Java 字段名, Rust 字段名)。Unsafe 偏移按 Java 字段身份
+    /// 登记，经 `ObjectVTable::__field_slot` 还原为按名协议的 Rust 字段名
+    pub field_slots: Vec<(String, String, String)>,
     /// 祖先按类型变量声明、本类视角代入为基本类型的继承字段：存储与访问器按引用字段处理
     pub superclass_reference_fields: std::collections::HashSet<String>,
     /// 声明方（祖先）按自身类型形参声明、已被声明方宏 Object 化的继承字段（A-1 擦除
@@ -306,6 +310,16 @@ impl ClassMeta {
                 let s = lit_str(attr)?;
                 m.superclass_reference_fields =
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
+            } else if path.is_ident("field_slots") {
+                // `声明类.Java 名=Rust 名;...`（类 binary name 与字段名均不含 `.`）
+                let s = lit_str(attr)?;
+                for item in s.split(';').filter(|x| !x.is_empty()) {
+                    let (id, rust) = item.rsplit_once('=')
+                        .ok_or_else(|| syn::Error::new_spanned(attr, "field_slots 项形如 声明类.字段=Rust 名"))?;
+                    let (decl, java) = id.split_once('.')
+                        .ok_or_else(|| syn::Error::new_spanned(attr, "field_slots 项形如 声明类.字段=Rust 名"))?;
+                    m.field_slots.push((decl.to_owned(), java.to_owned(), rust.to_owned()));
+                }
             } else if path.is_ident("superclass_erased_fields") {
                 let s = lit_str(attr)?;
                 m.superclass_erased_fields =

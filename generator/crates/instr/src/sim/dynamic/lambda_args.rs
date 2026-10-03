@@ -59,6 +59,11 @@ fn adapt_sam_arg(env: &InstrEnv, lam: &Lam, si: usize, pi: usize) -> InstrResult
             return Ok(Some(format!("From::from({name})")));
         }
     }
+    if sd.len() == 1 && pd.len() == 1 && sd != pd && sd != "Z" && pd != "Z" {
+        // 基本类型拓宽（metafactory 允许的 widening：`AtomicLong::new` 适配 IntFunction，I → J）；
+        // Rust `as` 与 Java 拓宽同义（整数符号扩展、char 零扩展、整数 → 浮点就近舍入）
+        return Ok(Some(format!("({name} as {pd_rust})")));
+    }
     if sd.len() == 1 && pd_rust == ir::anchors::OBJECT {
         // SAM 实参是基本类型、实现方法形参是引用（metafactory 的装箱适配）
         return Ok(Some(format!("{name}.into()")));
