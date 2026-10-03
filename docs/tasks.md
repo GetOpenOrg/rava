@@ -158,7 +158,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
 │   │
 │   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md）
-│         第 0 步 A 档用例预审（rava audit，不进基线，可提前）
+│         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
+│         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
 │

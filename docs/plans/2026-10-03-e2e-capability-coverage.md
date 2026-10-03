@@ -44,7 +44,7 @@
 | TestGenericSuperclassReflect | 62_reflection | getGenericSuperclass / getActualTypeArguments / getGenericInterfaces（参数化超类） | hamcrest TypeSafeMatcher 族、spring ResolvableType（#11） |
 | TestInvokeNullArgs | 62_reflection | invoke 的 null 参数数组 ≡ 空数组、InvocationTargetException 解包语义 | junit m3 修过的⑤⑥语义固化 |
 
-**原计划的 XML 三例（DOM/XPath、SAX、StAX）转隶 [jmod 覆盖计划](../../java_rta_closure_wt/docs/plans/2026-10-03-jmod-coverage.md) 的 `71_xml` 用例集**（TestXmlDomParse / TestXmlSaxEvents / TestXmlStax / TestXmlXPath / TestXmlTransform）——模块级覆盖归 jmod 计划为唯一事实源，本计划不重复建；其闭包（~3000 类，com.sun.org.apache.xerces 全栈）恰是 mybatis XML 面（#10）更真实的压力面。写作可随本计划先行（第 0 步预审模式：源码+期望先行、不进基线），进基线等 jmod 第 2 步。
+**原计划的 XML 三例（DOM/XPath、SAX、StAX）转隶 [jmod 覆盖计划](2026-10-03-jmod-coverage.md) 的 `71_xml` 用例集**（TestXmlDomParse / TestXmlSaxEvents / TestXmlStax / TestXmlXPath / TestXmlTransform）——模块级覆盖归 jmod 计划为唯一事实源，本计划不重复建；其闭包（~3000 类，com.sun.org.apache.xerces 全栈）恰是 mybatis XML 面（#10）更真实的压力面。写作可随本计划先行（第 0 步预审模式：源码+期望先行、不进基线），进基线等 jmod 第 2 步。
 
 **明示不由 e2e 承担**：ServiceLoader SPI 多 provider 面（单文件无法携带 META-INF/services 资源——由 #1 slf4j pilot 承担；**空 provider 路径已由 jmod 计划 73_jndi_script 三例补上**）；java.sql（由 jmod 计划 `67_sql` 承担，见 §一-B 联动）。
 
