@@ -50,6 +50,8 @@ pub(super) struct FileScan<'a> {
     pub(super) cur_obj: Option<String>,
     /// 本文件 impl 块关联 fn 的返回类型（见 [`local_rets`]）
     pub(super) rets: &'a LocalRets,
+    /// 本文件只收标量形参的辅助 fn（见 [`scalar_arg_fns`]）
+    pub(super) scalar_fns: &'a HashSet<(Vec<String>, String)>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
     /// 本文件带闭包形参的泛型辅助 fn（见 [`generic_fns`]）
@@ -94,7 +96,7 @@ impl FileScan<'_> {
         }
         let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
         cs.visit_block(block);
-        for (field, write, recv, value, on_self, path, value_self) in cs.fields {
+        for (field, write, recv, value, on_self, path, value_self, value_st) in cs.fields {
             info.fields.push(FieldAccess {
                 on_self,
                 value_self,
@@ -103,6 +105,7 @@ impl FileScan<'_> {
                 write,
                 recv: recv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
+                value_fresh: value_st.map(|v| expand_s(self.uses, v, &self.self_ty)).is_some_and(|v| matches!(&v, SType::Ret(t, f) if self.scalar_fns.contains(&(t.0.clone(), f.clone())))),
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
@@ -287,8 +290,10 @@ pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>
     out.rets.extend(rets.iter().map(|(k, v)| (k.clone(), v.clone())));
     let helpers = local_helpers(file);
     let generics = generic_fns(file);
+    let scalar_fns = scalar_arg_fns(file, &us.0);
     let mut fs = FileScan {
         rets: &rets,
+        scalar_fns: &scalar_fns,
         helpers: &helpers,
         generics: &generics,
         uses: &us.0,
@@ -474,6 +479,31 @@ mod tests {
         assert_eq!(vs("fields"), own);
         // 经非 self 接收者调用：被调 fn 的 self 不是本方法的接收者
         assert_eq!(vs("other"), BTreeSet::from([("owner".into(), false), ("peer".into(), false)]));
+    }
+
+    /// 写入值是只收标量形参（含引用 / 切片 / 数组）的本文件辅助 fn 的返回 → 值来自产出；
+    /// 辅助 fn 收 Java 引用形参或带 `self`、或写入值是形参本身 → 仍取值池
+    #[test]
+    fn field_value_fresh() {
+        let src = r#"
+            impl Class {
+                pub fn for_class(&self, rest: &str, c: Class, o: Object) {
+                    c.__set_componentType(class_for_descriptor(rest));
+                    c.__set_a(Class::from_bytes(&[1u8]));
+                    c.__set_b(wrap(o.clone()));
+                    c.__set_d(self.helper(1));
+                    c.__set_e(o);
+                }
+                fn from_bytes(b: &[u8]) -> Class { todo!() }
+                fn helper(&self, n: i32) -> Class { todo!() }
+            }
+            fn class_for_descriptor(desc: &str) -> Class { todo!() }
+            fn wrap(o: Object) -> Class { todo!() }
+        "#;
+        let fs = fields_of(src, "for_class");
+        let fresh: BTreeSet<(String, bool)> = fs.iter().filter(|fa| fa.write).map(|fa| (fa.field.clone(), fa.value_fresh)).collect();
+        let want = BTreeSet::from([("componentType".into(), true), ("a".into(), true), ("b".into(), false), ("d".into(), false), ("e".into(), false)]);
+        assert_eq!(fresh, want);
     }
 
     #[test]

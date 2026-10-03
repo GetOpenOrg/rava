@@ -48,6 +48,7 @@ impl<'a> Engine<'a> {
             MirrorOp::Of => self.mirror_set(s),
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
+            MirrorOp::Declaring => self.declaring_set(s),
         }
     }
 
@@ -88,6 +89,41 @@ impl<'a> Engine<'a> {
                 None => {
                     out.classes.insert(class);
                 }
+            }
+        }
+        if !s.open.is_empty() {
+            out.open.insert(class);
+        }
+        out
+    }
+
+    /// Class 值集中各类镜像所指类的声明类镜像（`getDeclaringClass0`，JVMS §4.7.6：本类 InnerClasses 中以本类为
+    /// inner 的条目的 outer；顶层 / 局部 / 匿名类、数组、基本类型与非字节码类镜像为 null，不入结果）；所指未知的
+    /// Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open
+    fn declaring_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror {
+                continue;
+            }
+            let Some(&c) = self.mirrors.get(&x) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let name = self.names[c as usize].clone();
+            if name.starts_with('[') {
+                continue;
+            }
+            let Some(cf) = self.h.class(&name) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let outer = cf.inner_classes.iter().find(|ic| ic.inner == *name).and_then(|ic| ic.outer.clone());
+            if let Some(o) = outer {
+                let k = self.mirror(&o);
+                out.classes.insert(k);
             }
         }
         if !s.open.is_empty() {
