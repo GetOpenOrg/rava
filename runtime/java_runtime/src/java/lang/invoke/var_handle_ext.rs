@@ -89,6 +89,39 @@ pub(super) fn _add(c: _Carrier, cur: &Object, delta: &Object) -> Result<Object> 
     })
 }
 
+/// getAndBitwise* 的位运算。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum _BitOp { Or, And, Xor }
+
+impl _BitOp {
+    /// 访问模式名（UnsupportedOperationException 消息）。
+    pub(super) fn mode(self) -> &'static str {
+        match self {
+            _BitOp::Or => "getAndBitwiseOr",
+            _BitOp::And => "getAndBitwiseAnd",
+            _BitOp::Xor => "getAndBitwiseXor",
+        }
+    }
+
+    /// 位形上的运算：两侧位形都在本族宽度内（零扩展），结果亦然。
+    pub(super) fn apply(self, cur: u64, mask: u64) -> u64 {
+        match self {
+            _BitOp::Or => cur | mask,
+            _BitOp::And => cur & mask,
+            _BitOp::Xor => cur ^ mask,
+        }
+    }
+}
+
+/// getAndBitwise* 的掩码位形：布尔 / 整数族（byte/short/char/int/long）支持；
+/// 引用 / 浮点族无此操作（JDK：UnsupportedOperationException）。
+pub(super) fn _bitwise_mask(c: _Carrier, op: _BitOp, mask: &Object) -> Result<u64> {
+    if matches!(c, _Carrier::Ref | _Carrier::Float | _Carrier::Double) {
+        return Err(_unsupported(op.mode()));
+    }
+    _bits(c, mask).ok_or_else(|| _bad_arg("bad numeric value form"))
+}
+
 pub(super) fn _bad_arg(what: &str) -> JvmError {
     JvmError::illegal_argument(what)
 }
@@ -258,4 +291,11 @@ fn _view_set(vh: &VarHandle, args: &JArray<Object>) -> Option<Result<()>> {
         }
         Ok(())
     })())
+}
+
+/// 数组元素 getAndBitwise*：读-改-写在存储写锁内一次完成，返回旧值。
+pub(super) fn _array_get_and_bitwise(vh: &VarHandle, args: &JArray<Object>, op: _BitOp) -> Result<Object> {
+    let c = _carrier(vh);
+    let mb = _bitwise_mask(c, op, &args.get(2)?)?;
+    _array_rmw(c, &args.get(0)?, _arg_index(args, 1)?, &mut |cur| _bits(c, &cur).map(|b| _box(c, op.apply(b, mb))))
 }
