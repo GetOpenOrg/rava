@@ -699,6 +699,30 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   在 `getURLStreamHandler` 被多条 URL 构造链汇合为 Top（ServiceLoader 资源查找产出 jrt / jar URL），jrt 臂对应 JDK 实际的模块资源
   URL；`lookupViaProviders` 只带入 `URLStreamHandlerProvider` 的 layout 级类型。HelloWorld 只留 file 臂。
 
+**b3 收官**（同步集成分支 5d8c5cce 后的 005047ee，`rava closure`，`--image` 缺省派生，逐例顺序跑）：
+
+`class_init.unknown` 原有的 5 个未知调用点全部消去——EnumSet.getUniverse@4（S1，T4）、VarHandles.makeFieldHandle@442（S3）、
+DMH `checkInitialized@9` / `shouldBeInitialized@104`（S8，`handle_owner_initializers` 结构性消去）、MHAF.ensureClassInitialized@14
+（S7，`reflect_owner_initializers`）。现口径下「未知初始化」即 `class_initializers` / `Class.forName` 调用点的反射缺口，测量集全部为 0；
+剩余反射缺口均为构造器 / 方法枚举、ServiceLoader 与序列化查找（后者属 T2），不涉及类初始化。
+
+| 用例 | 类 / 方法 | 反射缺口 | 初始化缺口 |
+|---|---|---|---|
+| HelloWorld | 467 / 1822 | 0 | 0 |
+| TestEnumSetMap | 2900 / 16998 | 27 | 0 |
+| StockTrans | 3107 / 18814 | 46 | 0 |
+| DeepCopy | 3102 / 18767 | 44 | 0 |
+| TestMethodHandleDirect | 2904 / 17024 | 27 | 0 |
+| TestReflectFieldMethod | 2901 / 17072 | 27 | 0 |
+| TestReflectStaticFieldInit | 2904 / 17003 | 27 | 0 |
+| TestMethodHandleStaticInit | 2904 / 17001 | 27 | 0 |
+| TestByteArrayViewVarHandle | 2899 / 16988 | 27 | 0 |
+| TestModuleLayerDefine | 3055 / 18292 | 27 | 0 |
+| TestForNameComputedName | 2907 / 16999 | 27 | 0 |
+| TestDeclaringClassInit | 2905 / 16994 | 27 | 0 |
+
+StockTrans 运行期 `ArrayList.writeObject` 反射分派臂缺失是 T2 待合的既有基线（e97dcf02 与 6294755d 闭包逐项相同），不属 b3。
+
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 
 - **实参池**（新文件 `engine/reflect_call.rs`；`Node::RP(ch)` / `Node::RA(ch)`，stats 新增 `Rcall` 类）：两条通道——
