@@ -142,13 +142,19 @@ impl<'a> Engine<'a> {
             // 接收者 Class 值集里的类镜像逐类放开（值集增长时本站点重跑）；含所指未知的 Class 时全部放开，记为缺口
             let mut cs = BTreeSet::new();
             let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
-            for c in cs {
-                self.enumerate_fields(Some(c));
-            }
-            if unknown {
-                if self.man.is_serial_enumerator(&self.methods[m].key.to_string()) {
-                    self.enumerate_serial_fields();
-                } else {
+            // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开
+            if self.man.is_serial_enumerator(&self.methods[m].key.to_string()) {
+                for c in cs {
+                    self.enumerate_serial_fields(Some(c));
+                }
+                if unknown {
+                    self.enumerate_serial_fields(None);
+                }
+            } else {
+                for c in cs {
+                    self.enumerate_fields(Some(c));
+                }
+                if unknown {
                     self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
                     self.enumerate_fields(None);
                 }
@@ -186,14 +192,35 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 可序列化字段口径的枚举（清单 `serial_enumerators`）接收者推不出：可序列化类的非 static、非 transient 字段
-    /// 偏移可得（可按偏移读取）；句柄写入口可达时这些字段同反序列化的字段面不折叠
-    fn enumerate_serial_fields(&mut self) {
-        if !std::mem::replace(&mut self.fenum_serial, true) {
+    /// 可序列化字段口径的枚举（清单 `serial_enumerators`；cls = 接收者 Class 所指的类，None = 推不出）：
+    /// 该类及其超类（None = 全部可序列化类）的非 static、非 transient 字段偏移可得（可按偏移读取）；
+    /// 句柄写入口可达时这些字段不折叠（None 同反序列化的字段面）。transient / static 字段不经此放开
+    fn enumerate_serial_fields(&mut self, cls: Option<String>) {
+        if self.fenum_serial.insert(cls.clone()) {
             self.offset_reads_ready();
         }
-        if self.fwriter_live && !self.ctx.deser.replace(true) {
-            self.open_fields_all(self.ctx.fopen_all.get(), false);
+        if self.fwriter_live {
+            self.open_serial_fields(cls);
+        }
+    }
+
+    fn open_serial_fields(&mut self, cls: Option<String>) {
+        let Some(c) = cls else {
+            if !self.ctx.deser.replace(true) {
+                self.open_fields_all(self.ctx.fopen_all.get(), false);
+            }
+            return;
+        };
+        let mut cur = Some(c);
+        while let Some(cls) = cur {
+            let Some(cf) = self.h.class(&cls) else { break };
+            for f in &cf.fields {
+                let key = MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() };
+                if self.ctx.field_info(&key).is_some_and(|i| Ctx::serial_field(&i)) {
+                    self.open_field(key);
+                }
+            }
+            cur = cf.super_name.clone();
         }
     }
 
@@ -219,8 +246,8 @@ impl<'a> Engine<'a> {
         for cls in std::mem::take(&mut self.fenum_pending) {
             self.enumerate_fields(cls);
         }
-        if self.fenum_serial {
-            self.enumerate_serial_fields();
+        for cls in self.fenum_serial.clone() {
+            self.open_serial_fields(cls);
         }
     }
 

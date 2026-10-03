@@ -290,6 +290,11 @@ impl Ctx<'_> {
         fi.open || self.field_offset_under(fi, all, deser) || self.hw_written(fi)
     }
 
+    /// 可序列化字段：所属类可序列化、非 static、非 transient（默认序列化与反序列化按偏移读写的字段面）
+    pub(super) fn serial_field(fi: &FieldInfo) -> bool {
+        deser_writes(fi.access, fi.serializable)
+    }
+
     /// 字段被手写体写入（只不折叠，不使偏移可得）
     pub(super) fn hw_written(&self, fi: &FieldInfo) -> bool {
         self.fhw.borrow().contains(&fi.key) || self.fhw_names.borrow().contains(&fi.key.name)

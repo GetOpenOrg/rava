@@ -452,9 +452,9 @@ pub struct Engine<'a> {
     spret: sysprops::SpRet,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
     fenum_pending: BTreeSet<Option<String>>,
-    /// 可序列化字段口径的枚举（清单 `serial_enumerators`，接收者推不出）已发生：可序列化类的非 static、
-    /// 非 transient 字段偏移可得
-    fenum_serial: bool,
+    /// 可序列化字段口径的枚举（清单 `serial_enumerators`）：Some(类) = 该类及其超类的可序列化字段
+    /// （非 static、非 transient）偏移可得，None = 全部可序列化类的（接收者推不出）
+    fenum_serial: BTreeSet<Option<String>>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠
     pub field_enum_gaps: BTreeSet<String>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理

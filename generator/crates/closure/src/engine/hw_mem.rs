@@ -361,7 +361,14 @@ impl<'a> Engine<'a> {
             return true;
         }
         let Some((key, _)) = self.fields.get_index(fi) else { return true };
-        self.fenum_pending.iter().flatten().any(|c| c == &key.owner || self.h.is_subtype(c, &key.owner))
+        let covers = |cs: &BTreeSet<Option<String>>| cs.iter().flatten().any(|c| c == &key.owner || self.h.is_subtype(c, &key.owner));
+        if covers(&self.fenum_pending) {
+            return true;
+        }
+        // 序列化口径的枚举只放开可序列化字段（transient / static 字段偏移不经此可得）
+        !self.fenum_serial.is_empty()
+            && self.ctx.field_info(key).is_some_and(|i| Ctx::serial_field(&i))
+            && (self.fenum_serial.contains(&None) || covers(&self.fenum_serial))
     }
 
     /// 字段节点 n 经偏移读入结果节点 res：偏移尚不可得时挂起，可得时由 [`Self::offset_fields_opened`] 接上。

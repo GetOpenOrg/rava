@@ -179,7 +179,7 @@ impl<'a> Engine<'a> {
             probes: None,
             spret: Default::default(),
             fenum_pending: BTreeSet::new(),
-            fenum_serial: false,
+            fenum_serial: BTreeSet::new(),
             field_enum_gaps: BTreeSet::new(),
             hw_written_names: BTreeSet::new(),
             hw_read_names: BTreeMap::new(),
