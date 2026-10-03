@@ -14,6 +14,7 @@ pub mod monitor;
 pub mod native_memory;
 pub mod vm_stack;
 pub mod posix;
+pub mod net_posix;
 pub mod species_dyn;
 pub mod injected_invoker;
 pub mod zlib;

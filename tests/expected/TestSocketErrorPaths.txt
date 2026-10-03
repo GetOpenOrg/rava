@@ -1,0 +1,22 @@
+connect-refused=ConnectException: Connection refused
+bind-in-use=BindException: Address already in use
+remote-addr=127.0.0.1
+local-addr=127.0.0.1
+remote-port-match=true
+accepted-peer=127.0.0.1
+accepted-peer-port-match=true
+accepted-remote-sa=127.0.0.1
+first=a
+available=2
+rest=bc
+after-shutdown-input=-1
+input-shutdown=true
+linger-on=5
+linger-off=-1
+keepalive=true
+keepalive-off=false
+connected=true closed=false
+closed=true
+read-after-close=SocketException: Socket closed
+write-after-close=SocketException: Socket closed
+peer-closed-read=-1
