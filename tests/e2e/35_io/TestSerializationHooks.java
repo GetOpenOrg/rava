@@ -52,7 +52,8 @@ public class TestSerializationHooks {
         // 未知类名 → ClassNotFoundException（resolveClass 的异常通道）
         Recording ghost = new Recording(bytes) {
             @Override
-            protected Class<?> resolveClass(ObjectStreamClass desc) throws ClassNotFoundException {
+            protected Class<?> resolveClass(ObjectStreamClass desc)
+                    throws IOException, ClassNotFoundException {
                 if (desc.getName().endsWith("Payload")) {
                     throw new ClassNotFoundException("blocked:" + desc.getName());
                 }
@@ -70,7 +71,8 @@ public class TestSerializationHooks {
         // 但解析到自身合法；此处验证 resolveClass 返回值直接生效
         Recording alias = new Recording(bytes) {
             @Override
-            protected Class<?> resolveClass(ObjectStreamClass desc) throws ClassNotFoundException {
+            protected Class<?> resolveClass(ObjectStreamClass desc)
+                    throws IOException, ClassNotFoundException {
                 if (desc.getName().endsWith("Payload")) {
                     return Payload.class;   // 显式重定向到同一类
                 }

@@ -21,6 +21,10 @@ public class TestResourceBundleGetKeys {
     }
 
     static class Child extends ListResourceBundle {
+        Child(ResourceBundle parent) {
+            setParent(parent);   // protected 仅限自身实例（继承链内）调用
+        }
+
         @Override
         protected Object[][] getContents() {
             return new Object[][] {
@@ -47,8 +51,7 @@ public class TestResourceBundleGetKeys {
                 java.util.Collections.list(prb.getKeys())));
 
         // parent 链：子键 + 父键合并去重
-        Child child = new Child();
-        child.setParent(new Parent());
+        Child child = new Child(new Parent());
         System.out.println("merged=" + enumSorted(child));
         System.out.println("override-wins=" + child.getString("shared"));
     }
