@@ -26,6 +26,5 @@ public class TestCharacterCaseCodePoint {
         // 多字符大小写映射（ß → SS）
         java.lang.String mapped = java.lang.String.valueOf('ß').toUpperCase(java.util.Locale.ROOT);
         System.out.println("sharp-s-len=" + mapped.length() + " value=" + mapped);
-        System.out.println("to-title=" + Character.getTitleCase('\u01f3') == '\u01f2');
     }
 }

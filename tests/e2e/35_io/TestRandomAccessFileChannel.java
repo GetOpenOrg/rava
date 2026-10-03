@@ -44,9 +44,11 @@ public class TestRandomAccessFileChannel {
             // raf 便捷族
             raf.seek(0);
             System.out.println("read-byte=" + raf.read());
+            raf.seek(raf.length());               // 追加写入并记录锚点
+            long mark = raf.getFilePointer();
             raf.writeBoolean(true);
             raf.writeDouble(0.5);
-            raf.seek(6);
+            raf.seek(mark);
             System.out.println("bool=" + raf.readBoolean() + " dbl=" + raf.readDouble());
         }
 

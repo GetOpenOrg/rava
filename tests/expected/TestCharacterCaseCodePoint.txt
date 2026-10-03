@@ -1,0 +1,8 @@
+upper-basic=truetrue
+lower-basic=truetrue
+mixed=falsefalse
+supp-upper=true
+supp-lower=true
+to-upper-supp=10400
+to-lower-supp=10428
+sharp-s-len=2 value=SS
