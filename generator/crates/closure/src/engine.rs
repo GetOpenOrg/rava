@@ -32,6 +32,7 @@ mod facts;
 mod consteval;
 mod construct;
 mod sysprops;
+mod sysprops_write;
 mod fold;
 mod unmodeled;
 mod forward;
@@ -461,6 +462,7 @@ pub struct Engine<'a> {
     probes: Option<Box<diag::Probes>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
+    rmwrap: sysprops_write::RmWrap,
     /// 等待句柄写入口可达的字段枚举：Some(类) = 该类及其超类的字段，None = 全部字段
     fenum_pending: BTreeSet<Option<String>>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠

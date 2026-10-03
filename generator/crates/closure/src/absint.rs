@@ -905,7 +905,12 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     Ret::Unknown => None,
                 };
                 if let Some(ret) = &md.ret {
-                    let v = self.folded(opc, off, v).unwrap_or_else(|| value_of(ret, Src::Site(off)));
+                    // 返回常量格的非空引用不带类型：补上声明返回类型
+                    let v = match self.folded(opc, off, v) {
+                        Some(V::Ref { ty: None, nonnull, src, obj }) => V::Ref { ty: Some(ft_name(ret)), nonnull, src, obj },
+                        Some(v) => v,
+                        None => value_of(ret, Src::Site(off)),
+                    };
                     push_typed(&mut s.stack, ret, v);
                 }
             }
@@ -1161,13 +1166,20 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     Flow::Cond(t, k) => {
                         // instanceof 判定成立的一侧收窄被测局部变量
                         let narrow = narrow::instanceof_narrow(insns, &leader, i, &st);
-                        let edge = |taken: bool| match &narrow {
-                            Some(nw) => {
+                        // ifnull / ifnonnull 两侧收窄被测局部变量的可空性
+                        let nulls = narrow::null_narrow(insns, &leader, i, &st);
+                        let edge = |taken: bool| match (&narrow, &nulls) {
+                            (Some(nw), _) => {
                                 let mut s2 = st.clone();
                                 s2.locals[nw.slot] = nw.side(taken).clone();
                                 s2
                             }
-                            None => st.clone(),
+                            (None, Some((k, on_taken, on_next))) => {
+                                let mut s2 = st.clone();
+                                s2.locals[*k] = if taken { on_taken.clone() } else { on_next.clone() };
+                                s2
+                            }
+                            (None, None) => st.clone(),
                         };
                         if k != Some(false) {
                             merge(&mut entry, &mut work, at(t)?, &edge(true))?;
