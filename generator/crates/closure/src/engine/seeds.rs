@@ -26,11 +26,18 @@ pub struct SeedState {
     image_done: BTreeSet<String>,
     family_done: BTreeSet<String>,
 
-    /// 输出：纯数据资源束（发射层 register_data_bundles）
-    pub data_bundles: BTreeSet<String>,
     /// 输出：注解枚举元素类型（类初始化钩子）
     pub annotation_enums: BTreeSet<String>,
-    /// 输出：入选的 JCA 服务
+    /// 输出：运行期按名强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）：按类镜像强制初始化
+    ///（`ensureClassInitialized(X.class)`）与按名取类（`Class.forName(名, true, …)`）的所指类
+    pub mirror_inits: BTreeSet<String>,
+    /// 按反射 / 方法句柄链接到的静态成员与构造器的声明类（按链接路径；成员声明类初始化点的运行期目标）
+    pub(super) linked_owners: BTreeSet<(LinkRoute, String)>,
+    /// 已可达的成员声明类初始化点路径：该路径的 linked_owners 并入 mirror_inits
+    pub(super) live_routes: BTreeSet<LinkRoute>,
+    /// 所属类推不出的按名静态字段：名字 → 已扫描到的闭包类下标
+    pub(super) owner_names: BTreeMap<String, usize>,
+    /// 已入选的 JCA 服务（去重；实现类经反射分派面登记）
     pub jca: BTreeSet<Service>,
     /// 输出：按名登记的反射分派面（类 → 成员名）
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
@@ -66,6 +73,7 @@ impl<'a> Engine<'a> {
         let fed = self.seed_locale(&reached);
         self.seed_jca(&reached);
         self.seed_image();
+        self.seed_static_owner_names();
         fed || self.methods.len() + self.g.len() + self.inited.len() != before
     }
 
@@ -105,19 +113,17 @@ impl<'a> Engine<'a> {
             let locs = locale::collect(cfg, self.cp, &self.user_classes(), &self.seeds.locales);
             let mut total = 0;
             for base in &bases {
-                let names = locale::bundle_classes(&locs, std::slice::from_ref(base), self.cp, &self.man.seeds.carriers);
+                let names = locale::bundle_classes(&locs, std::slice::from_ref(base), self.cp);
                 total += names.len();
                 for b in names {
-                    let Some(cf) = self.cp.get(&b) else { continue };
+                    // 资源束由 ResourceBundle / LocaleData 按类名反射构造（Class.forName + newInstance）：
+                    // 无参构造器入链并登记反射分派面；内容方法经虚分派随实例化可达
                     self.instantiate(&b, Via::root("locale", &b));
                     self.init(&b, Via::root("locale", &b));
                     self.seed_method(MemberRef { owner: b.clone(), name: "<init>".into(), desc: "()V".into() }, "locale");
-                    if let Some((n, d)) = self.man.seeds.carriers.carrier_of(self.cp, &cf) {
-                        self.seed_method(MemberRef { owner: b.clone(), name: n, desc: d }, "locale");
-                    }
                     let id = self.id(&b);
                     self.seeds.locale_bundles.entry(base.clone()).or_default().insert(id);
-                    self.seeds.data_bundles.insert(b);
+                    self.seeds.reflect_names.entry(b).or_default().insert("<init>".into());
                 }
             }
             eprintln!("[closure] locale 种子：{} 个 locale → {} 个资源束（{}）", locs.len(), total, bases.join(", "));
@@ -191,7 +197,7 @@ impl<'a> Engine<'a> {
                 }
                 self.seeds.reflect_names.entry(s.imp.clone()).or_default().insert("<init>".into());
             }
-            // provider 对象由手写边界按需构造（ProviderConfig 对内建 provider 直接 new）
+            // provider 对象：ProviderConfig 对内建 provider 按字节码直接 new，其余经 ServiceLoader 反射构造
             if let Some(p) = self.man.seeds.jca.provider_class(&s.provider).map(String::from) {
                 if self.cp.contains(&p) {
                     self.instantiate(&p, Via::root("jca-provider", &p));

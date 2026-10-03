@@ -282,6 +282,13 @@ fn merge_fn(fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashS
     e.objects.extend(raw.info.objects);
 }
 
+/// 文件顶层 fn 的返回类型（use 表含 prelude；同 [`scan_file`] 记入 `rets` 的部分）
+pub(super) fn file_rets(file: &syn::File, prelude: &HashMap<String, Vec<String>>) -> LocalRets {
+    let mut us = UseScan(prelude.clone());
+    us.visit_file(file);
+    local_rets(file, &us.0)
+}
+
 pub(super) fn scan_file(file: &syn::File, prelude: &HashMap<String, Vec<String>>, out: &mut FileFns) {
     let mut us = UseScan(prelude.clone());
     us.visit_file(file);

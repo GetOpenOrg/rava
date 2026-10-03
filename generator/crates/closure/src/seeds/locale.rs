@@ -16,8 +16,6 @@ use classfile::insn::Operand;
 use classfile::{ClassFile, Const, Insn};
 use resolve::ClassPath;
 
-use super::data_bundle::Carriers;
-
 const INVOKESTATIC: u8 = 0xb8;
 const GETSTATIC: u8 = 0xb2;
 const PUTSTATIC: u8 = 0xb3;
@@ -322,8 +320,8 @@ pub fn collect(cfg: &LocaleCfg, cp: &ClassPath, users: &[std::sync::Arc<ClassFil
     found
 }
 
-/// 入选 locale（含父链）× 束族 → 可解析且通过纯数据判定的资源束类
-pub fn bundle_classes(locales: &BTreeSet<Locale>, bases: &[String], cp: &ClassPath, carriers: &Carriers) -> BTreeSet<String> {
+/// 入选 locale（含父链）× 束族 → 类路径上存在的资源束类
+pub fn bundle_classes(locales: &BTreeSet<Locale>, bases: &[String], cp: &ClassPath) -> BTreeSet<String> {
     let suffixes: BTreeSet<String> = locales.iter().flat_map(parent_chain).collect();
     let mut out = BTreeSet::new();
     for base in bases {
@@ -334,7 +332,7 @@ pub fn bundle_classes(locales: &BTreeSet<Locale>, bases: &[String], cp: &ClassPa
             names.push(format!("{pkg}/ext/{simple}_{s}"));
         }
         for n in names {
-            if cp.get(&n).is_some_and(|cf| carriers.is_pure_data_bundle(cp, &cf)) {
+            if cp.contains(&n) {
                 out.insert(n);
             }
         }

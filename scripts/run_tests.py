@@ -950,9 +950,23 @@ def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
                             if "panicked at" in ln or ln.startswith("stub:")), "")
         detail = (r.stdout or "") + (f"\n[panic] {first_panic}"
                                      f"（backtrace 全量 → {LOGS_DIR / f'{bin_name}.run.log'}）"
-                                     if first_panic else "")
+                                     if first_panic else "") + _precheck_summary(bin_name)
         return "error", detail
     return "ok", r.stdout
+
+
+def _precheck_summary(bin_name: str) -> str:
+    """发射期预检总数与全量缺口（读 scratch 的 build_status.json emit.precheck），随运行失败一并回传：
+    一次看到同类缺口全部，不必逐个撞 panic。无预检记录时为空。"""
+    st = _read_json(_test_workspace(bin_name) / "build_status.json")
+    pc = (st.get("emit") or {}).get("precheck")
+    if not pc:
+        return ""
+    natives = pc.get("native_missing") or []
+    stubs = pc.get("boundary_stub") or []
+    lines = [f"\n[precheck] native-missing={len(natives)} boundary-stub={len(stubs)}"]
+    lines += [f"[precheck] native-missing: {n}" for n in natives]
+    return "\n".join(lines)
 
 
 def _run_binary(class_name: str) -> tuple[bool, str]:

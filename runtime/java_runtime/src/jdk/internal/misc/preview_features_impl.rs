@@ -1,15 +1,12 @@
-//! `jdk.internal.misc.PreviewFeatures`（内部边界类）：预览特性开关。
-//!
-//! 原生二进制不启用预览特性（等价 JVM 缺省未带 `--enable-preview`）。
-//! 消费方：`Class.isUnnamedClass`（JEP 445，`getSimpleName` 链）。
+//! `jdk/internal/misc/PreviewFeatures` 的 ACC_NATIVE（类 1）。
 
 use crate::prelude::*;
 use super::preview_features::PreviewFeatures;
 
 impl PreviewFeatures {
-    /// static `isEnabled()`：预览特性恒关。
-    #[jvm_boundary]
-    pub fn isEnabled() -> Result<bool> {
+    /// native `isPreviewEnabled()`：HotSpot 返回 `--enable-preview` 开关；原生二进制按缺省启动 → false。
+    #[jvm_native]
+    pub fn isPreviewEnabled() -> Result<bool> {
         Ok(false)
     }
 }

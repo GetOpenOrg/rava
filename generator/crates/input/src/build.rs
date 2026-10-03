@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::{ClosureFacts, JcaService, SysPropFacts};
+use crate::facts::{ClosureFacts, SysPropFacts};
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -101,18 +101,15 @@ pub struct EmitInput {
     /// L1（名字级）类：只发不透明类型（`java_class_opaque!`），无字段 / 方法 / vtable
     pub opaque: BTreeSet<String>,
     pub reflect: ReflectFacts,
-    pub data_bundle_seeds: Vec<String>,
     pub annotation_enum_seeds: Vec<String>,
-    /// 按名初始化（`ensure_class_initialized`）可能命中的类：分析器 class_init 事实的目标；
-    /// 目标不可定论（`unknown`）→ 链上全部有 `<clinit>` 的类
-    pub class_init_targets: Vec<String>,
+    /// 按类镜像强制初始化的目标类（需类初始化钩子）
+    pub mirror_init_classes: Vec<String>,
     /// 经虚分派到达的实现（分析器 `dispatched`）：vtable 槽条目对未派发到的实现发存根（C3 第 5 项）
     pub dispatched: BTreeSet<MethodKey>,
     /// 已实例化的类（分析器 `instantiated`）：槽是否保留按实例化类实际选中的实现判定
     pub instantiated: BTreeSet<String>,
     /// 手写体继承成员需求（分析器 `hw_inherited`）：接收者类须承载的祖先实例方法（接收者, 方法名, 描述符）
     pub hw_inherited: Vec<MethodKey>,
-    pub jca_seeds: Vec<JcaService>,
     /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
     pub module_services: Vec<(String, String)>,
     /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
@@ -242,9 +239,9 @@ fn visited_strings<'c>(
     closure: &'c [Arc<ClassFile>],
     visited: &BTreeSet<MethodKey>,
     norm: &'c BTreeMap<MethodKey, NormCode>,
-) -> BTreeSet<(&'c str, &'c str)> {
+) -> crate::resources::Strings<'c> {
     let by_name: BTreeMap<&str, &ClassFile> = closure.iter().map(|c| (c.name.as_str(), &**c)).collect();
-    let mut out = BTreeSet::new();
+    let mut out = crate::resources::Strings::default();
     for k in visited {
         let Some(cf) = by_name.get(k.0.as_str()) else { continue };
         for m in cf.methods.iter().filter(|m| m.name == k.1 && m.desc == k.2) {
@@ -256,7 +253,7 @@ fn visited_strings<'c>(
                 })),
                 None => Box::new(code.insns.iter()),
             };
-            out.extend(ops.filter_map(ldc_string).map(|s| (cf.name.as_str(), s)));
+            out.add_method(cf.name.as_str(), ops.filter_map(ldc_string));
         }
     }
     out
@@ -395,7 +392,7 @@ impl<'a> BuildInput<'a> {
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
-        let module_resources = crate::resources::derive(self.cp, strings.iter().copied());
+        let module_resources = crate::resources::derive(self.cp, &strings);
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
@@ -408,13 +405,11 @@ impl<'a> BuildInput<'a> {
             visited,
             opaque,
             reflect,
-            data_bundle_seeds: f.seeds.data_bundles.clone(),
             annotation_enum_seeds: f.seeds.annotation_enums.clone(),
-            class_init_targets: if f.class_init.unknown { f.clinit.clone() } else { f.class_init.targets.clone() },
+            mirror_init_classes: f.seeds.mirror_inits.clone(),
             dispatched: f.dispatched.iter().map(key_of).collect(),
             instantiated: f.instantiated.iter().cloned().collect(),
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
-            jca_seeds: f.seeds.jca.clone(),
             module_services: f.seeds.module_services.clone(),
             system_properties: f.system_properties.clone(),
             module_resources,

@@ -24,7 +24,7 @@ use resolve::{ClassPath, Hierarchy, Origin};
 
 use crate::absint::{self, Analysis, Event, Obj, Oracle, Ret, Src, V};
 use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, ClassHw, FieldAccess, Handwritten, MemberHw, SType, TypeRef, TypedCall, Upcall};
-use crate::manifest::{Domain, Fact, IndyKind, Manifest, Members, PropValue};
+use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
 mod idset;
@@ -52,21 +52,24 @@ mod lambda;
 mod lambda_adapt;
 mod hw;
 mod hw_mem;
+mod hw_offset;
 mod hw_syntax;
 mod hw_stype;
 mod hw_infer;
 mod hw_inherit;
 mod hwobj;
+mod hwfield;
 mod vmhook;
 mod field_hooks;
 mod rtfn;
 mod vmrules;
-mod hwfield;
 mod report;
 mod diag;
+mod write_audit;
+mod field_names;
+mod mirror_init;
 mod seeds;
 mod services;
-mod class_init;
 mod memo;
 mod mirror_eq;
 mod selector;
@@ -86,11 +89,13 @@ mod worklist;
 pub use worklist::FLOW_BATCH;
 mod stats;
 mod graph;
+mod grow;
 pub mod cut;
 mod setstore;
 use setstore::SetStore;
 mod scc;
 mod levels;
+mod concrete;
 mod caller;
 
 use graph::FlowGraph;
@@ -128,6 +133,8 @@ const THROWABLE: &str = "java/lang/Throwable";
 const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
 /// 站点键：异常处理器入口
 const CATCH: u32 = 1 << 31;
+/// 流边过滤标记：只放行 ⊄ 过滤类型的成员（instanceof 判定不成立一侧，见 `classes.rs` `filter`）
+const NOT_SUB: u32 = 1 << 31;
 /// 站点键：手写方法的值池
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
@@ -246,6 +253,8 @@ pub struct Engine<'a> {
     obj_chain: HashMap<u32, Rc<str>>,
     /// 容器形态判定缓存（类型 id）
     containers: HashMap<u32, bool>,
+    /// 抽象分配过的类（类型 id）：其实例字段的缺省值可被观察到，已并入字段值集（见 `alloc_defaults`）
+    dflt_alloc: HashSet<u32>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
     /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
@@ -261,8 +270,12 @@ pub struct Engine<'a> {
     direct_virtual_sites: HashSet<(usize, u32)>,
     /// 形参常量（方法 → 按形参槽；缺席 = 尚无调用点）
     pvals: HashMap<usize, Vec<PV>>,
+    /// 出现过非字符串常量实参（或无调用点记录即进入）的形参槽：名字取自这些槽的按名取字段站点按保守回退处理
+    ptaint: HashSet<(usize, usize)>,
     /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
     pstr: pstrs::PStrs,
+    /// 具体求值（engine/concrete.rs）
+    concrete: concrete::Concrete,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
@@ -357,6 +370,8 @@ pub struct Engine<'a> {
     hw_sites: Vec<(usize, u32, usize)>,
     /// 读内存的手写调用点（`[facts.memory_reads]`）：站点 → (源实参序号（含接收者）, 结果节点, 返回类型)
     hw_reads: HashMap<u32, (u16, Node, u32)>,
+    /// 按偏移读写的手写调用点所触及的字段：站点 → 偏移实参所指字段节点（None = 偏移非符号常量，触及全部引用字段）
+    hw_offsets: HashMap<u32, Option<usize>>,
     /// 类（含超类）的引用实例字段节点（内存读取的对象分量）
     ref_fields: HashMap<u32, Rc<[(usize, u32)]>>,
     hw_writes: HashMap<usize, Rc<[Option<HwWrite>]>>,
@@ -434,8 +449,6 @@ pub struct Engine<'a> {
     pub reflect_field_names: BTreeSet<String>,
     /// String 字段各写入处的字符串常量（None = 有非常量写入）；名字经字段到达按名查找点时取用
     field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
-    /// 类初始化事实（`[facts.class_init]`）
-    pub class_init: class_init::ClassInitFacts,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
@@ -464,78 +477,4 @@ pub struct Engine<'a> {
     vm_rules_fired: u64,
     /// 手写体 static 字段读已接入的 (方法, 字段)：访问器手写体自引用时不重入
     hw_static_reads: HashSet<(usize, MemberRef)>,
-}
-
-impl<'a> Engine<'a> {
-    fn on_g_grow(&mut self, id: u32) {
-        let ts: Vec<u32> = self.g_sub.keys().copied().collect();
-        for t in ts {
-            if self.sub(id, t) {
-                // 有序插入
-                let v = self.g_sub.get_mut(&t).unwrap();
-                if let Err(i) = v.binary_search(&id) {
-                    v.insert(i, id);
-                }
-            }
-        }
-        self.hubs_grow(id);
-        self.reopen(id);
-        self.vm_hooks_on_alloc(id);
-        let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
-        for (m, tys) in pend {
-            let hit = tys.iter().any(|t| {
-                let tid = self.id(t);
-                self.sub(id, tid)
-            });
-            if hit {
-                self.pending_types.remove(&m);
-                let had = self.methods[m].analysis.take().is_some();
-                if had {
-                    self.nr_dropped(m);
-                }
-                self.ctx.stats.borrow_mut().invalidated(m, Why::Catch, had);
-                self.push_m(m);
-            }
-        }
-    }
-
-    /// open 展开的取值面扩大（G 增长 / 数组逃逸）：x 落在其 open 类型与接收者上界之下的方法与站点重跑
-    fn reopen(&mut self, x: u32) {
-        let keys: Vec<(u32, u32)> =
-            self.open_methods.keys().chain(self.open_sites.keys()).chain(self.open_calls.keys()).copied().collect();
-        let hit: HashSet<(u32, u32)> = keys.into_iter().filter(|&(o, owner)| self.sub(x, o) && self.sub(x, owner)).collect();
-        let mut open: BTreeSet<usize> = BTreeSet::new();
-        let mut sites: BTreeSet<(usize, u32)> = BTreeSet::new();
-        for (k, ms) in &self.open_methods {
-            if hit.contains(k) {
-                open.extend(ms.iter().copied());
-            }
-        }
-        for (k, ws) in &self.open_sites {
-            if hit.contains(k) {
-                sites.extend(ws.iter().copied());
-            }
-        }
-        let mut calls: BTreeSet<u32> = BTreeSet::new();
-        for (k, cs) in &self.open_calls {
-            if hit.contains(k) {
-                calls.extend(cs.iter().copied());
-            }
-        }
-        for c in calls {
-            if self.in_cwork.insert(c) {
-                self.cwork.push_back(c);
-            }
-        }
-        for m in open {
-            self.push_m(m);
-        }
-        for w in sites {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
-        }
-        self.mirror_reopen(x);
-    }
-
 }

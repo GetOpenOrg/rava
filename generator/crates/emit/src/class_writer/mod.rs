@@ -8,7 +8,6 @@
 pub mod attrs;
 pub mod fields;
 pub mod head;
-pub mod hw_overrides;
 pub(crate) mod inherit;
 pub mod methods;
 pub mod opaque;
@@ -26,7 +25,6 @@ use crate::body::MethodBodyEmitter;
 use crate::ctx::{EmitCtx, ProjectState};
 use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
-use crate::imports::refs::add_desc_refs;
 use crate::imports::{claim_structural, collect_referenced, CrateRoute, CrossInput, ImportSite};
 use crate::lang;
 use crate::project::layout::{JdkLayout, UserLayout};
@@ -145,16 +143,13 @@ fn inherited_segments<'c>(
     ci: &'c ClassInfo,
     tps: &[String],
     visible: &[&'c classfile::Method],
-    overrides: &[hw_overrides::HwOverride<'c>],
     out: &mut Vec<MethodBlock>,
 ) -> Result<()> {
     let overloaded = ctx.ty.hierarchy_overloaded_names(ci);
     let cx = methods::Cx { ctx, ci, tps, overloaded: &overloaded };
-    let mut all: Vec<&classfile::Method> = visible.to_vec();
-    all.extend(overrides.iter().map(|o| &o.method));
+    let all: Vec<&classfile::Method> = visible.to_vec();
     let translated = inherit::interface_default_inheritance(&cx, state, bodies, &all, out)?;
-    let mut sources: Vec<(&ClassInfo, &classfile::Method)> = visible.iter().map(|m| (ci, *m)).collect();
-    sources.extend(overrides.iter().map(|o| (o.owner, &o.method)));
+    let sources: Vec<(&ClassInfo, &classfile::Method)> = visible.iter().map(|m| (ci, *m)).collect();
     inherit::interface_special_members(&cx, state, bodies, &sources, translated, out)?;
     super_inherit::superclass_virtual_inheritance(&cx, state, bodies, &all, out)
 }
@@ -165,13 +160,12 @@ pub struct ClassText {
     pub methods: Vec<EmittedMethod>,
 }
 
-/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法、手写覆盖副本
+/// 单类发射的前置事实（与发射序无关，可并行求得）：非 synthetic 方法
 pub struct ClassPrep<'c> {
     visible: Vec<&'c classfile::Method>,
-    overrides: Vec<hw_overrides::HwOverride<'c>>,
 }
 
-/// 前置事实：结构化引用集（含手写覆盖副本的签名引用、user crate 兄弟类）在本文件作用域
+/// 前置事实：结构化引用集（含 user crate 兄弟类）在本文件作用域
 /// 按 binary 序预认领（先于任何文本渲染）→ 派生名登记
 pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>) -> Result<ClassPrep<'c>> {
     let cross = site.cross_input();
@@ -181,21 +175,16 @@ pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>
         // 不透明形态只引用全部传递超类型（upcast 目标）
         let referenced: BTreeSet<String> = opaque::opaque_supers(&plain, ci).into_iter().collect();
         claim_structural(ctx, ci, &cross, &referenced)?;
-        return Ok(ClassPrep { visible: Vec::new(), overrides: Vec::new() });
+        return Ok(ClassPrep { visible: Vec::new() });
     }
     let mut referenced = collect_referenced(&plain, ci, cross.generated);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
-    let overrides = hw_overrides::handwritten_inherited_overrides(&plain, ci, &visible);
-    for o in &overrides {
-        add_desc_refs(&o.method.desc, &mut referenced);
-        add_desc_refs(o.method.signature.as_deref().unwrap_or(""), &mut referenced);
-    }
     if let Some(user) = site.user {
         // 用户类兄弟按未过滤引用集（生成集过滤只作用于 JDK 引用）
         referenced.extend(user.sibling_set(&plain, ci.name(), &collect_referenced(&plain, ci, None)));
     }
     claim_structural(ctx, ci, &cross, &referenced)?;
-    Ok(ClassPrep { visible, overrides })
+    Ok(ClassPrep { visible })
 }
 
 /// 生成单类文件文本（串行形态：前置 → 类体）
@@ -223,7 +212,7 @@ pub fn class_text(
     if ctx.is_opaque(ci.name()) {
         return Ok(opaque::opaque_text(ctx, state, ci, site));
     }
-    let (visible, overrides) = (&prep.visible, &prep.overrides);
+    let visible = &prep.visible;
     let is_iface = ci.is_interface();
     let mut parts: Vec<String> = vec![FILE_ALLOW.to_string(), format!("use {}::prelude::*;", site.prefix())];
     parts.push(INHERITED_IMPORTS_SLOT.to_string());
@@ -245,10 +234,10 @@ pub fn class_text(
     state.generated_classes.insert(ci.name().to_string());
     let mut method_blocks: Vec<MethodBlock> =
         fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site)).into_iter().map(MethodBlock::plain).collect();
-    let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps, overrides)?;
+    let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps)?;
     method_blocks.extend(mb.method_blocks);
     let iface_lambda_blocks = mb.iface_lambda_blocks;
-    inherited_segments(ctx, state, bodies, ci, &tps, visible, overrides, &mut method_blocks)?;
+    inherited_segments(ctx, state, bodies, ci, &tps, visible, &mut method_blocks)?;
     // 方法声明记录由各方法段生成点给出（与文本最终形态解耦）
     let methods: Vec<EmittedMethod> = method_blocks.iter().filter_map(|b| b.decl.clone()).collect();
     let mut method_blocks: Vec<String> = method_blocks.into_iter().map(|b| b.text).collect();

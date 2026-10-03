@@ -1,7 +1,8 @@
 //! 引擎：服务目录事实（seeds.toml `[services]`，目录构造见 `seeds/services.rs`）。
 //!
 //! `lookups` 成员的调用点上，服务 Class 实参值集里的类镜像即被查找的服务（值集增长时站点重跑）；
-//! 值集含所指未知的 Class（open / 非镜像值）时按全部服务处理（健全回退，计入 `services_unknown`）。
+//! 值集含所指未知的 Class（open / 非镜像值）时，按闭包内的服务处理（计入 `services_unknown`）：原生程序里
+//! 只有闭包内的类有类镜像，所指未知的 Class 只能是其中之一；此后有目录服务类入闭包，站点重跑补选。
 //! 入选服务的 provider 按 JVM `ServiceLoader.loadProvider` 的构造途径入链：命名模块里声明了
 //! `public static provider()` 的取该方法，否则取公开无参构造器（实例化 + 类初始化）。
 //! 有模块 provider 入选时，清单 `population`（引导期装填模块服务目录的 JDK 方法）作根。
@@ -14,26 +15,16 @@ pub struct ServiceState {
     population_done: bool,
     /// 输出：被查找的服务 → 入选 provider（无 provider 的服务同样记录）
     pub selected: BTreeMap<String, Vec<Provider>>,
-    /// 输出：出现过所指未知的服务 Class 实参（按全部服务处理）
+    /// 输出：出现过所指未知的服务 Class 实参（按闭包内的服务处理）
     pub unknown: bool,
+    /// 服务 Class 实参所指未知的查找站点：目录服务类入闭包时重跑
+    unknown_sites: BTreeSet<(usize, u32)>,
 }
 
 impl Ctx<'_> {
     /// 服务目录（引导层模块 provides + 类路径 META-INF/services），首次使用时构造
     pub(super) fn service_catalog(&self) -> Rc<Catalog> {
         self.catalog.get_or_init(|| Rc::new(services::catalog(&self.cp.module_views()))).clone()
-    }
-
-    /// 类在 provider 执行线上（见 `Catalog::provider_lines`）：边界前缀内也按字节码分析，
-    /// 与发射层翻译其字节码的口径一致——否则构造链 / 继承方法体内的调用成为运行期存根
-    pub(super) fn on_provider_line(&self, cls: &str) -> bool {
-        self.svc_lines
-            .get_or_init(|| {
-                self.service_catalog().provider_lines(|c| {
-                    self.cp.get(c).map_or(vec![], |cf| cf.super_name.iter().chain(cf.interfaces.iter()).cloned().collect())
-                })
-            })
-            .contains(cls)
     }
 }
 
@@ -71,7 +62,8 @@ impl<'a> Engine<'a> {
         let mut picked: Vec<String> = known;
         if unknown {
             self.seeds.services.unknown = true;
-            picked.extend(catalog.by_service.keys().cloned());
+            self.seeds.services.unknown_sites.insert((m, off));
+            picked.extend(catalog.by_service.keys().filter(|s| self.classes.contains_key(s.as_str())).cloned());
         }
         for svc in picked {
             if self.seeds.services.selected.contains_key(&svc) {
@@ -93,6 +85,21 @@ impl<'a> Engine<'a> {
                 }
             }
             self.seeds.services.selected.insert(svc, providers);
+        }
+    }
+
+    /// 类入闭包：它是目录里的服务且有所指未知的查找站点时，站点重跑（补选该服务）
+    pub(super) fn service_class_entered(&mut self, cls: &str) {
+        if self.seeds.services.unknown_sites.is_empty() || self.seeds.services.selected.contains_key(cls) {
+            return;
+        }
+        if !self.service_catalog().by_service.contains_key(cls) {
+            return;
+        }
+        for w in self.seeds.services.unknown_sites.clone() {
+            if self.in_swork.insert(w) {
+                self.swork.push_back(w);
+            }
         }
     }
 

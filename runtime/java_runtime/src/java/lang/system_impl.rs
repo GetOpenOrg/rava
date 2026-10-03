@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use super::*;
-use crate::java::io::{BufferedOutputStream, FileDescriptor, FileOutputStream, PrintStream};
+use crate::java::io::{BufferedInputStream, BufferedOutputStream, FileDescriptor, FileInputStream, FileOutputStream, InputStream, PrintStream};
 use crate::sun::nio::cs::UTF_8;
 
 impl System {
@@ -21,6 +21,8 @@ impl System {
     /// 构造不经 JDK 构造器链（Properties.<init> → Hashtable 族种子在 sig_types 载体化
     /// 上有 codegen 域缺口），按擦除字段协议直接挂后备 ConcurrentHashMap
     /// （Properties.getProperty 消费 `map` 字段）。
+    ///
+    /// 属性表建成后与 initPhase1 同样交 `VM.saveProperties`（翻译的字节码）保存快照。
     #[jvm_native]
     pub fn registerNatives() -> Result<()> {
         use crate::java::util::concurrent::ConcurrentHashMap;
@@ -45,6 +47,13 @@ impl System {
                 store(k, &v)?;
             }
         }
+        // initPhase1 同序：保存属性快照（VM.saveProperties：directMemory / pageAlignDirectMemory /
+        // classFileMajorVersion 等按快照取值，未指定 -XX:MaxDirectMemorySize 时取 Runtime.maxMemory()）。
+        // saveProperties 只允许在 initLevel == 0 调用，本段即 initPhase1 的引导段
+        let snapshot: crate::java::util::Map<Object, Object> = Object::from(Clone::clone(&map)).try_cast("java/util/Map")?;
+        crate::jdk::internal::misc::VM::__vm_at_init_level(0, || {
+            crate::jdk::internal::misc::VM::saveProperties(snapshot)
+        })?;
         let mut p = crate::java::util::Properties::default();
         p._init_not_null();
         p.__set_map(map);
@@ -182,26 +191,29 @@ impl System {
         Ok(())
     }
 
-    /// native `setIn0(InputStream)`：System.setIn 的写入步（改写 static final 字段 in）。
+    /// System.in：HotSpot 在 initPhase1 经 native setIn0 写入的静态字段（`<clinit>` 只写 null），
+    /// 故与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
+    /// `BufferedInputStream(FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本；
+    /// 本函数只负责「native 写入静态字段」这一步（首次读取时建立，setIn0 改写）。
     #[jvm_native]
-    pub fn setIn0(input: crate::java::io::InputStream) -> Result<()> {
-        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
-        Ok(())
+    pub fn in_() -> Result<InputStream> {
+        if let Some(s) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
+            return Ok(s);
+        }
+        let fis = FileInputStream::new_filedescriptor(FileDescriptor::in_()?)?;
+        let bis: InputStream = BufferedInputStream::new_inputstream(fis.into())?.into();
+        Ok(STDIN.with(|s| {
+            let mut b = s.borrow_mut();
+            // 并发首次读取：先写入者胜出，保持单一流身份
+            Clone::clone(b.get_or_insert(bis))
+        }))
     }
 
-    /// System.in：HotSpot 在 initPhase1 经 native setIn0 写入的静态字段（字节码 `<clinit>` 只写 null），
-    /// 与 out / err 同样由手写层提供。对象图与 JDK initPhase1 一致：
-    /// `new BufferedInputStream(new FileInputStream(FileDescriptor.in))`，两个流类都是字节码翻译版本。
+    /// native `setIn0(InputStream)`：System.setIn 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
-    pub fn in_() -> Result<crate::java::io::InputStream> {
-        if let Some(is) = STDIN.with(|s| s.borrow().as_ref().map(Clone::clone)) {
-            return Ok(is);
-        }
-        let fdi = FileDescriptor::new_i(0)?;
-        let fis = crate::java::io::FileInputStream::new_filedescriptor(fdi)?;
-        let bis = crate::java::io::BufferedInputStream::new_inputstream(fis.into())?;
-        let is: crate::java::io::InputStream = bis.into();
-        Ok(STDIN.with(|s| Clone::clone(s.borrow_mut().get_or_insert(is))))
+    pub fn setIn0(input: InputStream) -> Result<()> {
+        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
+        Ok(())
     }
 
     /// native `mapLibraryName(String)`：平台本地库文件名（Linux `lib<name>.so`，
@@ -236,6 +248,9 @@ fn host_property(key: &str) -> Option<std::string::String> {
         "sun.boot.library.path" => format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME),
         // native / jnu 编码取宿主区域的 codeset（file.encoding 与标准流编码为常量键 UTF-8，JEP 400）
         "native.encoding" | "sun.jnu.encoding" => crate::posix::native_encoding(),
+        // 区域族（SystemProps.Raw：来自宿主区域环境变量）；国家缺席则不设
+        "user.language" => crate::posix::locale().0,
+        "user.country" => Some(crate::posix::locale().1).filter(|c| !c.is_empty())?,
         // TZ 环境变量存在才设（JDK initPhase1 同款条件），缺席留给 TimeZone/ZoneId 惰性解析
         "user.timezone" => std::env::var("TZ").ok().filter(|tz| !tz.is_empty())?,
         _ => return None,
@@ -265,8 +280,8 @@ crate::__process_static! {
     /// System.out / System.err 的当前流：首次读取时建标准流（fd 1 / 2），setOut0 / setErr0 改写。
     static STDOUT: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
     static STDERR: crate::sync_model::__RefSlot<Option<PrintStream>> = const { crate::sync_model::__RefSlot::new(None) };
-    /// System.in 的当前流：首次读取时建标准输入（fd 0），setIn0 改写。
-    static STDIN: crate::sync_model::__RefSlot<Option<crate::java::io::InputStream>> = const { crate::sync_model::__RefSlot::new(None) };
+    /// System.in 的当前流：首次读取时建标准输入流（fd 0），setIn0 改写。
+    static STDIN: crate::sync_model::__RefSlot<Option<InputStream>> = const { crate::sync_model::__RefSlot::new(None) };
 }
 
 fn std_stream(

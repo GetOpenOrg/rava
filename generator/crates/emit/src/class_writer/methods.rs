@@ -16,14 +16,12 @@ use ty::type_map::mangle_name;
 use ty::{ClassInfo, FnSig};
 
 use super::attrs::{method_attr, MethodAttrExtra};
-use super::hw_overrides::HwOverride;
 use super::slot::override_vtable_erasure;
 use super::stub::{native_stub, Stub};
 use crate::body::{BodyError, BodyRequest, MethodBodyEmitter};
 use crate::ctx::{EmitCtx, HwAudit, ProjectState};
 use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::{EmitError, Result};
-use crate::lang;
 use crate::text::split_top_level;
 
 const ACC_BRIDGE: u16 = 0x0040;
@@ -152,14 +150,15 @@ impl Cx<'_, '_> {
         }
     }
 
-    /// FS-H0 审计：公开 API 类的非 native 方法被手写覆盖（`_audit_override`）
+    /// FS-H0 审计：非 native 方法被手写覆盖（`_audit_override`）。审计面为全部 JDK 类；
+    /// VM 内建函数与 VM 契约边界类（`[vm_boundary]` 逐类清单）单独计数，其余即越界覆盖（终态 0）
     fn audit_override(&self, state: &mut ProjectState, m: &Method) {
         let n = self.ci.name();
-        if m.is_native() || m.is_abstract() || !lang::in_public_api(n) {
+        if m.is_native() || m.is_abstract() {
             return;
         }
         let member = format!("{n}.{}:{}", m.name, m.desc);
-        let kind = if self.ctx.boundary.is_boundary_class(n) || self.ctx.boundary.is_vm_boundary_class(n) {
+        let kind = if self.ctx.boundary.is_vm_boundary_class(n) {
             HwAudit::VmBoundary
         } else if self.ctx.manifest.intrinsic_members.contains(&member) {
             HwAudit::Intrinsic
@@ -178,11 +177,10 @@ impl Cx<'_, '_> {
     }
 }
 
-/// 待发射方法表：可见（非 synthetic）+ 手写覆盖副本 + 非桥接 synthetic（`<init>` / `<clinit>` 除外）
-fn emitted_methods<'c>(ci: &'c ClassInfo, overrides: &[HwOverride<'c>]) -> Vec<Emitted<'c>> {
+/// 待发射方法表：可见（非 synthetic）+ 非桥接 synthetic（`<init>` / `<clinit>` 除外）
+fn emitted_methods<'c>(ci: &'c ClassInfo) -> Vec<Emitted<'c>> {
     let own = |(i, m): (usize, &'c Method)| Emitted { method: Cow::Borrowed(m), owner: ci, index: i };
     let mut out: Vec<Emitted<'c>> = ci.methods().iter().enumerate().filter(|(_, m)| !m.is_synthetic()).map(own).collect();
-    out.extend(overrides.iter().map(|o| Emitted { method: Cow::Owned(o.method.clone()), owner: o.owner, index: o.index }));
     out.extend(
         ci.methods()
             .iter()
@@ -215,7 +213,6 @@ pub fn emit_method_blocks(
     bodies: &dyn MethodBodyEmitter,
     ci: &ClassInfo,
     tps: &[String],
-    overrides: &[HwOverride<'_>],
 ) -> Result<MethodBlocks> {
     let plan = ctx
         .planner
@@ -225,7 +222,7 @@ pub fn emit_method_blocks(
     let cx = Cx { ctx, ci, tps, overloaded: &overloaded };
     let mut out = MethodBlocks::default();
     let mut plans = plan.methods.iter().peekable();
-    for e in emitted_methods(ci, overrides) {
+    for e in emitted_methods(ci) {
         let Some(p) = plans.next_if(|p| p.name == e.method.name && p.desc == e.method.desc) else { continue };
         match p.role {
             Role::Clinit => out.method_blocks.push(clinit_block(&cx, state, bodies, &e, p)?),

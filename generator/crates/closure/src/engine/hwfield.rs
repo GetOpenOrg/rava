@@ -39,12 +39,12 @@ impl<'a> Engine<'a> {
                 rtype,
                 analysis: None,
                 applied: None,
-                aseq: 0,
-                applied_seq: 0,
                 returned: None,
                 hw_fns: Vec::new(),
                 ctx: NOCTX,
                 ret_model: RetModel::Plain,
+                aseq: 0,
+                applied_seq: 0,
             },
         );
         self.mbase.entry(key).or_insert(idx);

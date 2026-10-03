@@ -1,4 +1,4 @@
-//! `java.lang.StackStreamFactory` 的 native 层（类 ③：VM 栈遍历的落地语义）。
+//! `java/lang/StackStreamFactory` 的 ACC_NATIVE（类 1）。
 
 use crate::prelude::*;
 use super::stack_stream_factory::StackStreamFactory;

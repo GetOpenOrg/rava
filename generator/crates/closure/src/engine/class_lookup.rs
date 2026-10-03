@@ -46,7 +46,8 @@ fn event_values(e: &Event) -> Vec<&V> {
     match e {
         Event::Invoke { args, .. } | Event::Indy { args, .. } => args.iter().collect(),
         Event::Field { recv, value, .. } => recv.iter().chain(value.iter()).collect(),
-        Event::CheckCast(_, v) => v.iter().collect(),
+        Event::CheckCast(_, v) | Event::InstanceOf(_, v) => v.iter().collect(),
+        Event::NotInstance(_, v) => vec![v],
         Event::ArrayLoad { array, index } => vec![array, index],
         Event::ArrayStore { array, index, value } => vec![array, index, value],
         Event::Throw(v) | Event::Return(v) => vec![v],
@@ -403,6 +404,9 @@ impl<'a> Engine<'a> {
             self.touch(cls, Level::Type, Via::method("reflect", m, Some(off)));
             return;
         }
+        // 运行期按名取类（`Class.forName(名, true, …)`）经类初始化钩子触发 `<clinit>`：登记为钩子目标，
+        // 否则分析上已初始化的类在运行期不跑 `<clinit>`（如 SharedSecrets 惰性访问器所依赖的登记写入）
+        self.seeds.mirror_inits.insert(cls.to_string());
         self.init(cls, Via::method("reflect", m, Some(off)));
         let c = self.id(cls);
         if self.named_ctors.insert(c) && self.enumerated.contains(&(Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {

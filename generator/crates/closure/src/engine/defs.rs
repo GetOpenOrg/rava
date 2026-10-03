@@ -172,6 +172,8 @@ pub(super) struct HwWrite {
     pub(super) fields: bool,
     /// 写入值取自调用点最后一个实参（签名多态）
     pub(super) last: bool,
+    /// 字段偏移实参（序号含接收者）
+    pub(super) offset: Option<usize>,
 }
 
 /// 按声明形参位置的实参来源（基本类型为 None）

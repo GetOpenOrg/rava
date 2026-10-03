@@ -10,23 +10,6 @@ use std::collections::HashMap;
 
 
 impl Reflection {
-    /// `isCallerSensitive(Method)`：JDK 体为 `m.isAnnotationPresent(CallerSensitive.class)`（系统域加载器
-    /// 时）——经完整注解解析器（AnnotationParser + 动态代理）判定，令每个触达 Method.invoke 的闭包
-    /// 带上注解解析族。原生二进制全部类在系统域，判定等价于扫描该方法的原始注解字节
-    /// （anno_pool::has_annotation：类型索引经声明类的稀疏常量池比对 CallerSensitive 描述符）。
-    #[jvm_boundary]
-    pub fn isCallerSensitive(m: crate::java::lang::reflect::Method) -> Result<bool> {
-        let raw = m.__get_annotations();
-        if raw.is_jvm_null() {
-            return Ok(false);
-        }
-        let bytes: Vec<u8> = raw.to_vec().into_iter().map(|b| b as u8).collect();
-        let cls = format!("{}", m.__get_clazz().__get_name()).replace('.', "/");
-        Ok(crate::anno_pool::has_annotation(&cls, &bytes, "Ljdk/internal/reflect/CallerSensitive;"))
-    }
-
-
-
     /// native `getCallerClass()`：`@CallerSensitive`——返回「调用 getCallerClass
     /// 的方法」的调用者声明类（JDK javadoc：ignoring frames associated with
     /// java.lang.reflect.Method.invoke）。

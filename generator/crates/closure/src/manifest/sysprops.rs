@@ -97,6 +97,11 @@ impl SysProps {
         self.holders.contains(member)
     }
 
+    /// 返回类型（描述符）是持有成员的类型：返回值可能是属性表对象
+    pub fn holder_type(&self, ret: &str) -> bool {
+        self.holders.iter().any(|h| h.rsplit_once([':', ')']).is_some_and(|(_, d)| d == ret))
+    }
+
     pub fn reader(&self, member: &str) -> Option<PropRead> {
         self.readers.get(member).copied()
     }

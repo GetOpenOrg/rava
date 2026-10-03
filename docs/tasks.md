@@ -99,13 +99,40 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       （≤360 不可达：OOB 约 52 类为用户代码真实可达、fullAddCount 约 8 类为 CAS 竞争分支，放行转 a5）
 │   │     ├─ 🔄 a2 在 c1d-p0（代码 f2bdcf6e，文档头 79d31538，尚未合入集成分支）；抽查 c1da-f2bdcf6e 7/8（StockTrans 为已知基线）：
 │   │     │       TestUnixFileNatives ✅、TestCharsetNamedStreams ✅（ModuleLayer 移出 clinit_carried，新增 TestServiceLoaderLayers）、
-│   │     │       FileDispatcherImpl.init0 ✅；余 TestFileStoreMountLookup 重跑 c1da-f2bdcf6e-r3（jp2 排队中）；
-│   │     │       后续项：precheck 按目标平台扫描 native 缺口（本机 macOS 看不到 Linux 专有 native）
-│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（c1d-p0 口径 86：Unsafe 44、VM 9、java/* 30、ClassLoaders 3）◀── a2
-│   │     │       a3-T 虚拟线程终态（2026-10-03 定，计划 2026-10-01-c1d-closure-bloat.md §21.7 / §21.8）：VirtualThread / ForkJoinPool 字节码翻译，
-│   │     │       仅 Continuation VM 方法手写为有栈协程（mmap 栈、aarch64 / x86_64 切换）；百万虚拟线程作业需服务器 vm.max_map_count 调高（待定）
+│   │     │       FileDispatcherImpl.init0 ✅；TestFileStoreMountLookup 的 MapMode 反射构造分派缺席已修（构造器查找建模 22eb9e72，
+│   │     │       新增 TestJdkConstructorLookup）；c1da-2c478e2f 的 TestDateTimeFormat 回归（缺 JRE FormatData 束）已修（d1b1b2ba，新增 TestLocaleBundleFamilies）
+│   │     ├─ ⏳ 后续项 precheck 按目标平台扫描：本机只扫宿主 JDK 的 jmod，看不到 Linux 专有 native。已做：precheck 清单落盘
+│   │     │       build_status.json emit.precheck、run_tests 失败详情附清单（8ed3a5e3）。待做：按目标平台 jmod 扫描
+│   │     ├─ ⏳ a3 #[jvm_boundary] 归零，验收为审计数 vm_boundary_methods 归零（5c6dd98f 口径 86：Unsafe 44、VM 10、VirtualThread 10、
+│   │     │       ClassLoader 6、BootLoader 5、Class 2、Module/ModuleLayer 9 归 boot layer）；拆为 U0–U3 / V / T / L1 / L2 / C / X1 / X2 / Z，
+│   │     │       见计划 §21（§21.7 各项验收数字；§21.8 a3-T 终态：VirtualThread / ForkJoinPool 字节码翻译 + Continuation 有栈协程，
+│   │     │       2026-10-03 用户定，方案 A 作废，细分 T1–T6，目标百万级虚拟线程）◀── a2
+│   │     ├─ ⏳ 生成器 bug：`hierarchy_overloaded_names` 只查超类链、不查接口——类自有 `m(String[])` 与接口继承的抽象 `m()` 同名时
+│   │     │       不 mangle，`this.m()` 解析到一参方法（E0061；`AbstractBasicFileAttributeView.readAttributes`，
+│   │     │       `Files.getAttribute(p, "unix:nlink")` 触发）。修生成器 + 补边界用例，c1d-p0 合入后另开步骤
+│   │     ├─ ⏳ a5-4 闭包膨胀：TestUnixFileNatives Linux 闭包剩余 18 个与文件 API 无关的缺失 native（pkcs11 10、smartcardio 2、
+│   │     │       jimage 1、NativeLibraries 3、BootLoader 1、defineClass0 1）作为膨胀指纹；终态：pkcs11 / smartcardio / defineClass0
+│   │     │       13 个所在类不入闭包（不补手写），NativeLibraries / getSystemPackageLocation / getNativeMap 5 个归 a3-L1 ① native；
+│   │     │       计划 §21.5 a5-4，c1d-p0 合入后另开步骤
+│   │     │       引入链已归因（TestFileStoreMountLookup 2885 类 / r4 extra 2156）：a5-4a doPrivileged 动作合流（1092）、
+│   │     │       a5-4b 引导加载器类路径查找 → JarVerifier → Signature / pkcs11（684）、a5-4c jrt 随 b 消失、a5-4d Formatter → ICU 归 a5-3；
+│   │     │       目标该例 ≤900 类、transpile ≤60 s（计划 §21.5）
+│   │     │       DeepCopy 实测 3139 类（集成分支 1820，目标 ≤1640）：a5-4a 单独回收约 0（动作分配点均在合法路径，只改归属），
+│   │     │       a5-4b 回收 160..401；另立 a5-4e ICU 归一化入口（248）、a5-4f 日志后端探测（231）
+│   │     │       合入门槛（用户 10-03 定，先收窄再合）：DeepCopy / DTF / FSML 闭包类数与分析时间不高于集成分支
+│   │     │       （约 1820 类 / 23s、1476、1611），终态 DeepCopy ≤1640；顺序 a5-4b → a5-4e → a5-4f，不足再查余下 342
+│   │     │       s1 构造器查找只在 Class 值集齐全时点名：DeepCopy 3139→3069、3m03s→66s（暴露构造器 3498→105）
+│   │     │       s2 instanceof 否定分支收窄 + 钩子字段不按 open：DeepCopy 3065 / DTF 2884 / FSML 2886；首次发现子树重排后最大三支
+│   │     │       （getLoggerFromFinder 1163、toLowerCase→CLDR 783、URLClassPath$3→JarVerifier 493）均需值层面建模，原定手段不足，见 §21.5
+│   │     │       抽查 ① allocateInstance 抽象类 / 接口 → InstantiationException（db4f8a48）；② LocaleBundleFamilies：EnableNativeAccess 嵌套翻译 + 无扩展名 / 拼接模板资源（本地编译运行通过）
+│   │     │       ⏳ 暂不修（10-03 登记）macOS 专有：MacOSXFileSystemProvider 多级协变桥缺失，Linux 不受影响。
+│   │     │         最小复现：macOS 上 rava build tests/e2e/62_reflection/TestJdkConstructorLookup.java，运行时命中
+│   │     │         stub: sun/nio/fs/UnixFileSystemProvider.newFileSystem:(Ljava/lang/String;)Lsun/nio/fs/UnixFileSystem;
+│   │     │         该类文件里 newFileSystem(String) 有三个返回类型版本：MacOSXFileSystem 为本体，BsdFileSystem / UnixFileSystem
+│   │     │         为 javac 桥（Bsd 层的同形态是一体一桥，单级）；经 UnixFileSystemProvider 形参分派时落到存根，即 Unix 级桥没有接上
+│   │     │         （疑为同名同形参、仅返回类型不同的两级桥在发射 / 分派表合并时丢失）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
-│   │     └─ ⏳ a5 OOB 关系型边界推理（偏移 / 长度关系、类不变式），HelloWorld 目标 ≤371；fullAddCount 仅记录（线程逃逸）
+│   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md）
 │   │     ├─ ✅ b0 阶段合入 e90a592d（eb6571ba）：m3 serialVersionUID、同一数组自拷贝、反射字段按值流点名（TestReflectProbe ✅）

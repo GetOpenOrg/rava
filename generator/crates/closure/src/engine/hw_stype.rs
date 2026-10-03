@@ -35,8 +35,7 @@ impl Engine<'_> {
             SType::Named(t) => return self.resolve_tref(host, t).map(|c| format!("L{c};")).ok_or_else(|| StypeBreak::Base(t.0.join("::"))),
             SType::Ret(t, m) => match self.resolve_tref(host, t) {
                 Some(c) => (format!("L{c};"), m, true),
-                // 共置手写模块里的自由 fn（`super::x_impl::f()`）：取其声明的返回类型
-                None => return self.colocated_fn_ret(host, t, m).ok_or_else(|| StypeBreak::Base(t.0.join("::")))?,
+                None => return self.module_fn_desc(host, t, m),
             },
             SType::Field(b, f) => {
                 let d = self.stype_desc(host, b)?;
@@ -79,29 +78,11 @@ impl Engine<'_> {
         }
     }
 
-    /// 模块路径 `t` 上自由 fn `m` 的返回描述符：`t` 是共置手写模块（`super::x_impl`）取宿主类手写文件里的声明，
-    /// 否则取定义它的模块单元里的声明。外层 None = 无此 fn；内层 Err = 返回类型不是 Java 类
-    fn colocated_fn_ret(&self, host: &str, t: &TypeRef, m: &str) -> Option<Result<String, StypeBreak>> {
-        let (owner, hw) = match self.colocated_module_class(host, &t.0) {
-            Some(cls) => {
-                let hw = self.hw.class(&cls);
-                (cls, hw)
-            }
-            None => {
-                let unit = self.hw.unit_fn(&self.abs_path(host, &t.0), m)?;
-                let hw = self.hw.units().get(&unit)?.clone();
-                (unit, hw)
-            }
-        };
-        let cls = owner;
-        let r = hw.rets.get(&(Vec::new(), m.to_string()))?.clone();
-        Some(
-            (!r.is_empty())
-                .then(|| self.resolve_tref(&cls, &TypeRef(r)))
-                .flatten()
-                .map(|c| format!("L{c};"))
-                .ok_or_else(|| StypeBreak::Value(format!("{cls} 手写 fn {m} 返回非 Java 类型"))),
-        )
+    /// 模块路径上的自由 fn（`super::thread_impl::f`）的返回描述符：按目标文件中 fn 的声明返回类型解析；
+    /// 路径不是手写模块 / 无此 fn → 基底断开；返回类型不是 Java 类 → 值断开
+    fn module_fn_desc(&self, host: &str, t: &TypeRef, m: &str) -> Result<String, StypeBreak> {
+        let Some((at, r)) = self.hw.module_fn_ret(host, &t.0, m) else { return Err(StypeBreak::Base(t.0.join("::"))) };
+        self.resolve_tref(&at, &TypeRef(r)).map(|c| format!("L{c};")).ok_or_else(|| StypeBreak::Value(format!("{}::{m} 手写返回非 Java 类型", t.0.join("::"))))
     }
 
     /// 超类型（自类在前）共置手写文件与模块单元中 `impl 该类型` 块里名为 `m` 的 fn：

@@ -1,11 +1,11 @@
 //! 发射层读取的 runtime 清单。
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
-//! - closure.toml：`[boundary]` / `[vm_boundary]` / `[release]`；
-//! - seeds.toml：`[jca]` 放行、`[boot_init]`、`[data_bundle]` 载体；
-//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`、`[vm_state]`。
+//! - closure.toml：`[vm_boundary]`（含 `translate_nested` / `clinit_carried`）；
+//! - seeds.toml：`[module_resources]`、`[boot_init]`；
+//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）、`[vm_state]`。
 //!
-//! 文件缺失视为空表；格式约定（包条目以 `/` 结尾、类条目不以 `/` 结尾、
+//! 文件缺失视为空表；格式约定（类条目不以 `/` 结尾、
 //! 内建条目须写 kind 与 reason）违反时返回 [`InputError::Manifest`]。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,20 +47,20 @@ impl IndyKind {
 pub struct RuntimeManifest {
     /// 类型层 txt 清单（签名擦除接口 / 重载缩写）
     pub ty: ty::Manifest,
-    /// 内部边界包前缀（`/` 结尾）
-    pub boundary_packages: Vec<String>,
     /// VM 耦合边界类
     pub vm_boundary_classes: BTreeSet<String>,
-    /// `<clinit>` 由手写层承载的 VM 边界类（其余 VM 边界类的 `<clinit>` 按字节码翻译）
-    pub vm_clinit_carried: BTreeSet<String>,
-    /// 通用边界放行：包前缀在前、类在后
+    /// VM 边界类中按字节码翻译的嵌套类（`[vm_boundary] translate_nested`）
     pub release: Vec<String>,
-    /// K-JCA 放行：包前缀在前、类在后
-    pub jca_release: Vec<String>,
+    /// `<clinit>` 由手写层承载的 VM 边界类（`[vm_boundary] clinit_carried`；其余 VM 边界类的 `<clinit>` 按字节码翻译）
+    pub vm_clinit_carried: BTreeSet<String>,
+    /// VM 注入的静态字段（`[vm_constants.injected_statics]`）：`类.字段` → crate 根下取值表达式
+    pub vm_injected_statics: BTreeMap<String, String>,
+    /// 模块资源路径（jmod `classes/` 下相对路径）
+    pub module_resource_paths: Vec<String>,
     /// 引导初始化类
     pub boot_init_classes: Vec<String>,
-    /// 纯数据资源束载体（`类.方法:描述符`）
-    pub data_bundle_carriers: Vec<String>,
+    /// 引导期调用的静态方法（`类.方法:()V`）
+    pub boot_init_calls: Vec<String>,
     /// VM 内建成员
     pub intrinsic_members: BTreeSet<String>,
     pub caller_sensitive_annotations: BTreeSet<String>,
@@ -104,22 +104,41 @@ fn str_list(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>,
         .collect()
 }
 
-fn packages(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, InputError> {
-    let v = str_list(sec, key, where_)?;
-    if let Some(bad) = v.iter().find(|p| !p.ends_with('/')) {
-        return Err(InputError::Manifest(format!("{where_}.{key}：包条目须以 / 结尾：{bad}")));
-    }
-    Ok(v)
-}
-
 fn classes(sec: Option<&Table>, key: &str, where_: &str) -> Result<Vec<String>, InputError> {
     let v = str_list(sec, key, where_)?;
     if let Some(bad) = v.iter().find(|p| p.ends_with('/')) {
         return Err(InputError::Manifest(format!(
-            "{where_}.{key}：类条目不得以 / 结尾（包请写入 packages）：{bad}"
+            "{where_}.{key}：类条目不得以 / 结尾（清单只收逐类条目）：{bad}"
         )));
     }
     Ok(v)
+}
+
+/// `[vm_constants.injected_statics]`：`"类.字段" = "取值表达式"` 或字面量；结果为可直接发射的 Rust 表达式
+fn injected_statics(vmc: Option<&Table>) -> Result<BTreeMap<String, String>, InputError> {
+    let Some(t) = vmc.and_then(|s| s.get("injected_statics")) else {
+        return Ok(BTreeMap::new());
+    };
+    let t = t
+        .as_table()
+        .ok_or_else(|| InputError::Manifest("vm_constants.injected_statics：应为表".into()))?;
+    t.iter()
+        .map(|(k, v)| {
+            // 取值：crate 根下的取值表达式（字符串）或字面量（整数 / 布尔，分析器按值折叠）
+            let expr = match v {
+                Value::String(e) if !e.is_empty() => Some(format!("crate::{e}")),
+                Value::Integer(n) => Some(format!("{n}i64")),
+                Value::Boolean(b) => Some(b.to_string()),
+                _ => None,
+            };
+            match (k.split_once('.'), expr) {
+                (Some((c, f)), Some(e)) if !c.is_empty() && !f.is_empty() => Ok((k.clone(), e)),
+                _ => Err(InputError::Manifest(format!(
+                    "vm_constants.injected_statics：条目须为 \"类.字段\" = \"取值表达式\" / 字面量：{k}"
+                ))),
+            }
+        })
+        .collect()
 }
 
 fn intrinsics(vm: &Table) -> Result<BTreeSet<String>, InputError> {
@@ -166,23 +185,23 @@ impl RuntimeManifest {
 
         let vmb = section(&closure, "vm_boundary");
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
+        let release = classes(vmb, "translate_nested", "vm_boundary")?;
         let vm_clinit_carried: BTreeSet<String> = classes(vmb, "clinit_carried", "vm_boundary")?.into_iter().collect();
-        let rel = section(&closure, "release");
-        let mut release = packages(rel, "packages", "release")?;
-        release.extend(classes(rel, "classes", "release")?);
-        let jca = section(&seeds, "jca");
-        let mut jca_release = packages(jca, "release_packages", "jca")?;
-        jca_release.extend(classes(jca, "release_classes", "jca")?);
+        let boot = section(&seeds, "boot_init");
+        let boot_init_calls = str_list(boot, "calls", "boot_init")?;
+        if let Some(bad) = boot_init_calls.iter().find(|c| !c.ends_with(":()V") || !c.contains('.')) {
+            return Err(InputError::Manifest(format!("boot_init.calls：须为无参静态方法 `类.方法:()V`：{bad}")));
+        }
         let vmc = section(&vm, "vm_constants");
         Ok(RuntimeManifest {
             ty,
-            boundary_packages: packages(section(&closure, "boundary"), "packages", "boundary")?,
             vm_boundary_classes,
             vm_clinit_carried,
             release,
-            jca_release,
-            boot_init_classes: classes(section(&seeds, "boot_init"), "classes", "boot_init")?,
-            data_bundle_carriers: str_list(section(&seeds, "data_bundle"), "carriers", "data_bundle")?,
+            vm_injected_statics: injected_statics(vmc)?,
+            module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
+            boot_init_classes: classes(boot, "classes", "boot_init")?,
+            boot_init_calls,
             intrinsic_members: intrinsics(&vm)?,
             caller_sensitive_annotations: str_list(section(&vm, "caller_sensitive"), "annotations", "caller_sensitive")?
                 .into_iter()

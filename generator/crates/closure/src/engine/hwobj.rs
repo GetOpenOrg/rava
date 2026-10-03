@@ -165,6 +165,9 @@ impl<'a> Engine<'a> {
             let o = mn.ptypes.first().copied().flatten().and_then(|r| self.hwobjs.get(&r))?;
             return Some((o.host.clone(), self.hw.object_member(&o.host, &o.rust, &mn.hw_fns)));
         }
+        if mn.kind == Kind::Handwritten(HWFIELD_KIND) {
+            return Some((mn.key.owner.clone(), self.hw.member(&mn.key.owner, hwfield::field_of(&mn.key.name))));
+        }
         if mn.kind == Kind::Handwritten(VMHOOK_KIND) || mn.kind == Kind::Handwritten(RTFN_KIND) {
             return Some((mn.key.owner.clone(), self.hw.host(&mn.key.owner).fns_member(&mn.hw_fns)));
         }
