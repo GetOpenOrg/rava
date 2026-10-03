@@ -339,8 +339,8 @@ impl<'a> Engine<'a> {
         let (o, n, d) = site.key();
         let resolved = MemberRef { owner: o, name: n, desc: d };
         self.init(&resolved.owner, via.clone());
-        let ret_ref = parse_method(&resolved.desc).and_then(|md| md.ret).is_some_and(|r| r.is_reference());
-        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: vals });
+        let heap = parse_method(&resolved.desc).is_some_and(|md| md.ret.iter().chain(&md.params).any(|r| r.is_reference()));
+        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: vals });
         let t = self.method_ctx(resolved, ctx, via);
         self.edge(m, off, t, Recv::None, &fs, None, None);
     }

@@ -256,8 +256,8 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
-                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
+                let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 let (named, top) = if self.man.names.is_class_lookup(&self.mref_key(mref)) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
