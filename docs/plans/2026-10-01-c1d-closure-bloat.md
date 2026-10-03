@@ -1087,7 +1087,7 @@ CAS 竞争分支（约 8）构成。
    - 健全性：数值域只在整数不溢出的前提下使用。`newBytesFor` 自带溢出检查分支，溢出路径照常可达。
    - 用户下标（如 `list.get(i)`，`i` 来自输入）证不出时保持可达，属于正确行为。
    - 目标：HelloWorld 正式口径 ≤371 类（§20.8 切除 OOB 的实测值）。
-   - 再往下的目标在 a2（1e623cec 合入后的形态）实测之后定。
+   - 再往下的目标在 a2（1e623cec 合入后的形态）实测之后定（a2 已合入 62f46bb2，现状见 §22.9）。
 
 2. **`fullAddCount`：CAS 竞争分支，只记录，不实施。**
    - 属于线程模型范围：单线程下 CAS 不会失败，但只有分析能证明「该 CHM 实例在发布前 / 只被单线程触及」时，才能剪掉这条分支。这归线程逃逸分析，不在 C1d 范围内。
@@ -1580,3 +1580,130 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
 - 守护检查：生成器单测 `closure::handwritten::thread_local_lint`——`runtime/java_runtime/src` 中 `thread_local!` /
   `#[thread_local]` 只允许出现在 `exec_context.rs`（平台块与当前块指针）与 `java/lang/thread_impl.rs`（3 个载体槽）。
 - TestVirtualThread 生成 + 编译通过（2924 JDK 类，与 T2 同；方案 A 尚在，本步不改闭包）。
+
+## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
+
+C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
+没有未提交改动。下面是实测、来源分析、批准的方案与验收口径。
+
+### 22.1 `--cut` 实测（StockTrans，反事实切除，不是改动）
+
+同步前基线 3285 类（同步后复测 3286）。`F` = `java/net/URL$DefaultFactory.createURLStreamHandler:(Ljava/lang/String;)Ljava/net/URLStreamHandler;`，
+`R` = `jdk/internal/loader/URLClassPath$3.run:()Ljdk/internal/loader/URLClassPath$Loader;`。
+
+| 切除内容 | 类数 | 变化 |
+|---|---:|---:|
+| ① `R@97` / `R@139`（两处 `new JarLoader`） | 3281 | −4 |
+| ① 再加 `R@127`（`new Loader`） | 3279 | −6 |
+| ② 只切 `sun/net/www/protocol/jar/Handler.openConnection` | 3264 | −21 |
+| ① + ② | 2860 | −425 |
+| 直接切 `JarFile` 的三个校验入口 | 2916 | −369 |
+| 同步后复测 e1：`F@120` / `F@124`（`new jar.Handler`）+ `R@97` / `R@139` | 3283 | −3 |
+| e3：e1 再加 `F@176`（反射 `newInstance`） | 2860 | −426 |
+| e2：e3 再加 `R@127` | 2858 | −428 |
+| e4：只切 `F@176` + `R@97` / `R@139` / `R@127` | 3281 | −5 |
+
+- 签名校验链（PKCS7、SignerInfo、X509Key、AlgorithmId、SignatureFileVerifier、ManifestEntryVerifier、JarVerifier 等）
+  约 369～428 类，要**同时**堵住 class path 来源和协议处理器来源才会出闭包，单堵任一条几乎不降。
+- e1 / e3 说明 DefaultFactory 里**两条**分支都产出 jar `Handler`：`@120` 的 `new`，以及 `@136..@184` 按
+  `"sun.net.www.protocol." + protocol + ".Handler"` 反射加载（protocol 名字推不出时按前缀放开）。只剪常量分支不够。
+
+### 22.2 来源一：class path（甲）
+
+- `ClassLoaders.<clinit>` → `URLClassPath("")` → `toFileURL("")` 得到当前目录的 URL。末尾是否带 `/` 取决于运行期
+  `File.isDirectory()`，分析器推不出，`$3.run` 的 JarLoader 分支因此活着。
+- 另一条直连：`URLClassPath.<init>:(Ljava/lang/String;Z)V@185` 无条件 `jarHandler = new jar.Handler()`，经
+  `JarLoader.<init>` → `JarLoader.newURL` → `URL.<init>(String,String,int,String,URLStreamHandler)` 显式传入 handler，
+  写进 `URL.handler`（`--flows '@trace:sun/net/www/protocol/jar/Handler'` 第 1～23 条）。JarLoader 不可构造时这条随之断开。
+- JDK 语义：`java.class.path` 为 `""` 时唯一元素是当前目录；HotSpot 在 main 之前建好该 URL，取不到当前目录时启动失败
+  （`Properties init: Could not determine current working directory.`）。所以 app class path 恒为 `file:<cwd>/`，走 FileLoader。
+- **rava 与 JDK 的两处偏差**（甲要先对齐）：
+  1. `ClassLoaders.<clinit>` 的时机：rava 经 `ClassLoader.scl` / `Thread.contextClassLoader` 的字段钩子
+     `__vm_init_phase3` 首次访问时才跑（FS-C2，`docs/plans/2026-10-02-fs-c2-app-classloader.md`）。程序若在此之前删掉
+     自己的当前目录，URL 就不带 `/`，会建 JarLoader。终态：与 HotSpot initPhase 一致，至少在 main 之前建立。
+  2. `user.dir` 取不到：`runtime/java_runtime/src/java/lang/system_impl.rs:238` 回退为空串；JDK 是启动失败。终态：启动失败，消息同 HotSpot。
+- 对齐后由清单声明「启动目录是目录」，分析器沿路径值推出 URL 以 `/` 结尾。单独收益只有 −4～−6，要和乙一起才兑现。
+
+### 22.3 来源二：URL 协议处理器（乙）
+
+- `DefaultFactory.createURLStreamHandler(protocol)` 是 `defaultFactory` 单例上的接口调用，不按调用点区分；protocol 形参
+  按全部调用点汇合，`hashCode` 的 `lookupswitch`（`[facts.string_ops]` 已能对常量折叠）因此三支（file / jar / jrt）
+  加反射分支全活。`new URL("file", "", path)` 这种常量协议也一样。
+- `URL.handler` 是全局一个字段，`URL.handlers`（Hashtable 缓存）按协议取值也不分键。所有
+  `URL.openConnection / openStream` 都会派发到 `jar.Handler.openConnection` → `JarURLConnection` → `JarFile` 校验链。
+- 活的 URL 构造调用点（`/tmp/c1dj_callers.py` 列出，见 §22.7）：
+  - 常量协议：`ParseUtil.fileToEncodedURL@84`（`"file"`）、`file.Handler.openConnection@119`（`"ftp"`）；
+  - spec 有常量前缀：`JavaRuntimeURLConnection.toJrtURL@32`（`"jrt:/" + …`）；
+  - 以上下文 URL 解析（protocol / handler 取自 context 对象）：`FileLoader.getResource@13`、`Loader.findResource@13`、
+    `Loader.getResource@13`、`JarLoader.*`、`JarURLConnection.parseSpecs@90`；
+  - spec 来自属性或字段、前缀推不出：`NativePRNG.getEgdUrl@47`、`SeedGenerator$URLSeedGenerator.init@8`。spec 是安全属性
+    `securerandom.source`（缺省 `file:/dev/random`），后者会 `openStream`。乙之后它仍会让「推不出 → 全分支」成立，
+    要么对安全属性取值建模，要么 URL 按对象区分后只让这一个对象派发到 jar；这是 −425 之外剩余差距的首要候选。
+- 解析式构造器 `URL.<init>(URL,String,URLStreamHandler)` 在 `@386` 调 `getURLStreamHandler(this.protocol)`；protocol
+  由 `spec.substring(start, i)` 加 `lowerCaseProtocol` 得到（`@180..@204` 的逐字符扫描），或取 context 的 `protocol`。
+  名字求值（`pstrs` / `name_parts`）求不出这个值，需要在构造调用点上从 spec 的前缀常量 / 拼接段求协议。
+
+### 22.4 来源三：`BuiltinClassLoader.ucp` 合流
+
+- `BootLoader.findResources` → `ClassLoaders.bootLoader().findResources` → `ucp.findResources` → `URLClassPath$3.run`。
+  真实运行时 boot 的 `ucp` 为 null（`jdk.boot.class.path.append` 不存在，已折叠为 null），这条链是 `ucp` 字段把 boot 和 app
+  两个对象的值合在一起造成的。按对象（分配点）的字段精度修掉后，boot 侧 `ucp = null` 可见。
+- 注意 a3-L2 的联动：a3-L2 把 `ClassLoader.getResource*` 6 个手写方法改为按字节码翻译（经 `BuiltinClassLoader` → `URLClassPath`），
+  合入后 app 加载器的资源查找成为真实路径（FileLoader），本项的正确性论证要随之复核。
+
+### 22.5 批准的方案（协调者 2026-10-03 定，三步，全部终态做法，不加类名特判，事实写进 `runtime/java_runtime` 清单）
+
+1. **乙：URL 协议精度（先做）**
+   - 协议字符串按调用点流到 `getURLStreamHandler` 和 DefaultFactory 分支，常量协议只放行对应分支；
+   - `URL.handlers` 缓存表按协议键放行，扩展现有按键查找闸门（`engine/keyed.rs`、`[facts.keyed_lookups]`）；
+   - `URL(spec)` 等从字符串解析出协议的调用点要能求出协议（前缀常量 / 拼接串），求不出就退回全分支；
+   - `URL.handler` 字段按对象精度区分，不再全局合流。
+2. **甲：class path 事实（其后）**：先对齐 §22.2 的两处偏差，再由清单声明「启动目录是目录」，分析器推出 URL 以 `/` 结尾。
+3. **ucp（单独一步）**：按对象（分配点）的字段精度，见 §22.4。
+
+C1d-a 读代码后的设计备忘（供接手者参考，未实施，不是批准内容）：
+- 把 `URL.getURLStreamHandler:(Ljava/lang/String;)` 登记为按键查找入口，在**调用点**设闸门，可以一并覆盖缓存表、
+  factory 与 DefaultFactory 三条返回路径。处理器类自身的键没有构造器形参可取，可在清单中声明 JDK 的处理器命名约定
+  `sun/net/www/protocol/{协议}/Handler`（DefaultFactory 反射分支与 `lookupViaProperty` 本就按此命名）；不符合约定的处理器类
+  键为任意（放行）。`java.base` 不导出这些包，用户 factory 拿不到内建处理器对象，因此该事实成立。
+- 现有对象敏感只覆盖「容器形态」类（`engine/classes.rs` `container`）。URL 要按分配点区分，需要一个结构判据，例如
+  「实例字段的声明类型是某个按键查找入口的键类」。判据直接取自清单事实，不列类名。`ucp` 的 null / 非 null 需另找判据。
+- `@317` 处的协议是 `lowerCaseProtocol(param0)`：常量实参可经常量实参求值折叠（`consteval.rs`）；名字集合需要对每个名字
+  做一次常量实参求值。`@386` 处只能按对象取协议，见 §22.3。
+- 已有机制：选择子形参按调用点克隆（`engine/selector.rs`，目前只认 int 族静态形参）；分派转发方法按调用点克隆
+  （`engine/forward.rs`）；上下文选择集中在 `engine/ctxsel.rs`。
+
+### 22.6 验收口径
+
+- StockTrans、DeepCopy 接近 −425 的上限（≤2870 左右），并报告剩余差距的来源。
+- 真实可达场景按真实行为工作，各补一个边界 e2e，expected 取 refjdk：用户 `URLClassLoader(jar)`、`jar:` URL 的 `openStream`、
+  `new JarFile` 读条目，最好再加一个签名 jar 校验。
+- JCA 四例（TestEcSignVerify、TestMacHmacDigest、TestRsaSignVerify、TestX509ExtensionsParse）与 TestJcaIndirectDigest 的必需类不丢。
+- 按步小步提交：乙先、甲后、ucp 单独一步。每步推 origin + github、报完整哈希，由协调者发抽查。本机只编译 / 单测；
+  重命令走 `heavy_lock.py`，`CARGO_BUILD_JOBS=2`。
+
+### 22.7 测量脚本（项目结束后删）
+
+- `/tmp/c1dj_cl.sh <Test.java> <tag> [rava closure 额外参数...]`：首次把测试源 javac 到 `/tmp/c1dj_cls_<名>/`，再以本 worktree 的
+  `build/analyzer-target/release/rava closure` 加两个 `--image` 目录（jimage `dd9c2c51d6dea9a9/only/java.base`、vmsupport
+  `37564758565473ec/java.base`）跑闭包，产物 `/tmp/c1dj_<名>_<tag>.{json,log,err}`，打印类数 / 方法数 / 耗时。示例：
+  `python3 /Users/yuwei/dev/workspace/heavy_lock.py /tmp/c1dj_cl.sh tests/e2e/23_algorithms/StockTrans.java e2 --cut "$F@120" --cut "$R@97"`；
+  `--flows '@trace:<类>'` 的记录写在 `.err`。同一时间只跑一个闭包。
+- `/tmp/c1dj_callers.py <closure.json> <被调正则>`：对闭包内字节码方法 javap，列出不在 `dead_pcs` 内的活调用点。
+- `/tmp/c1dj_cls_StockTrans/`：StockTrans 的类文件。
+
+### 22.8 排队项与原 ② 的结论
+
+- **③ Latin-1 语言折叠**（a5-4e：`StringLatin1.toLowerCase` 只在语言为 tr / az / lt 时走 `toLowerCaseEx` → ICU）：排在本项之后。
+- **原 ②（容器元素的 Object 方法，即通用 open 值精度）**：结论是它不是 jar 链的独立来源，而是同一类精度问题。
+  §22.3 的 `URL.handler` 全局合流、§22.4 的 `ucp` 合流都属于「按对象（分配点）区分字段值」。jar/URL 项先按该判据做 URL
+  与 `ucp`；通用的容器元素 Object 方法另行立项，不并入本项。
+
+### 22.9 状态更正（对照 docs/tasks.md，2026-10-04）
+
+- **a2**：已合入（62f46bb2，c1d-p0 b4669206，抽查 9/9）。§20.8「再往下的目标在 a2 实测之后定」不再是待办；
+  a2 续项（initPhase2 膨胀定位 → `[[boot_init.phases]]` → boot layer 步骤 2–5）见 tasks.md。
+- **a3**：总体进行中，验收仍是审计数 `vm_boundary_methods` 归零（§21.7）。a3-T 由 a3t-vthread 推进：T1（rava_coro）、
+  T1b、T1b-2、T2、T3 已合入，T4（删方案 A + 接通 Continuation）进行中；其余子项状态以 tasks.md 为准。
+- **a5**：a5-1～a5-3（OOB 关系推理）未开工。a5-4 已做：s1 构造器查找、s2 instanceof 否定分支、JCA 请求点值流（51a4d8c5）。
+  a5-4b 即本节的 jar/URL 来源精度，转新代理；a5-4e 即 ③。
