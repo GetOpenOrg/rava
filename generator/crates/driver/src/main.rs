@@ -19,6 +19,7 @@ mod cargo;
 mod closure_cmd;
 mod closure_run;
 mod compile_cmd;
+mod profile_cmd;
 mod status;
 
 use std::path::PathBuf;
@@ -36,6 +37,7 @@ fn usage() -> ExitCode {
          rava compile <scratch> [--release] [--target-dir D] [--build-timeout 秒] [--keep-artifacts] [--runtime R]\n  \
          rava prune <scratch>…\n  \
          rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N]\n  \
+         rava profile [<A.java | 类目录>]… [--entries <清单>] [--closure <closure.json>]… [--jdk N | --java-home P] [--runtime R] [--image D]… [-o profile.json] [--entry-out DIR] [--closure-cache D] [--flow-batch N] [--hash-seed N] | rava profile --covers <profile.json> <closure.json>…
          rava image-dirs [--jdk N | --java-home P] [--runtime R]\n  \
          rava jdk [--jdk N | --java-home P] [--runtime R] [--home-only | --json] | rava jdk --list\n  \
          rava audit api <包>… [--recursive] | rava audit corpus|native [--filter S…] [-j N]（另可带 --jdk / --java-home / --runtime / --closure-cache）"
@@ -115,6 +117,7 @@ fn main() -> ExitCode {
         "image-dirs" => image_dirs(&args),
         "jdk" => jdk_cmd(&args),
         "audit" => audit_cmd::run(&args),
+        "profile" => profile_cmd::run(&args),
         _ => return usage(),
     };
     match r {
