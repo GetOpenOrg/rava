@@ -643,6 +643,10 @@ profile.json ─┐
 - s1（HelloWorld + ControlFlowTest）：档案 465 类、1809 方法、折叠方法 341；`rava profile` 1.56 s，峰值 223 MB。两程序的 `java_runtime`、`java_body_1..2`、`java_meta`、`closure_input/{meta,closure,line}_tables.rs` 逐字节相同（含包版本）。
 - s3（8 例：HelloWorld、TestBridgeMethod、LambdaBasic、TestCustomException、TestThreadJoin、TestInheritedMethod、HuffmanCode、ReflectionBasic）：档案 3080 类、17781 方法、折叠方法 1866；`rava profile` 34.7 s，峰值 1527 MB。在 java_meta 拆分之前测量，除包版本与 `line_tables.rs` 外，8 例 JDK 源码逐字节相同，无 `[archive-leak]`。
 
+- s1 下 `rava compile build/t1b/s1/HelloWorld` 编译通过，运行输出与 `tests/expected/HelloWorld.txt` 一致（用户行登记 + 两侧合并路径实跑）。
+- 守护测试 `driver/tests/archive_emit_cli.rs::archive_crates_identical_across_programs`（MinimalMain / NullView 同档案，档案 crate 逐字节相同、档案侧表无用户类、入口登记用户行）通过。
+- 生成器单元测试（`cargo test --release`，含 jdk_literal_lint / no_jdk_literals）423 项全过；`closure_cli::closure_independent_of_hash_seed` 失败于 TestSerialLookupPairing（种子 0 与 2 的 com/sun/crypto/provider/AESCipher* 类集不同），属闭包分析不确定性，1b 对闭包只增加 sam_types 输出，与本步无关，转 T2 serial 线排查。
+
 **失败路线**
 - 槽计划在作用域视图上惰性求值（OnceLock）：首个查询文件替所有文件认领类型名，JDK 文件的 import 随用户程序变化。已改为在无作用域视图上求值。
 
