@@ -1,0 +1,14 @@
+deepest->Inner inner->Outer
+outer->TestDeclaringClassInit
+after mirrors (no clinit yet)
+clinit Outer
+tag Outer-ready
+anon->null enclosing=TestDeclaringClassInit
+local->null enclosing=TestDeclaringClassInit
+array->null prim->null
+component Elem (no clinit yet)
+clinit Elem
+tag Elem-ready
+plain declaring TestDeclaringClassInit
+clinit Plain
+tag Plain-ready

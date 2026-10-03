@@ -302,11 +302,19 @@ mod tests {
         assert_eq!(f(&[]), "cbf29ce484222325");
     }
 
+    /// 当前工作区的包目录：取运行期 `CARGO_MANIFEST_DIR`（cargo 按本次调用设置）。编译期 `env!` 在全机共享的
+    /// CARGO_TARGET_DIR 下可能指向另一工作区——cargo 对路径包按工作区相对路径算 metadata，源码相同时不重编，
+    /// 测试二进制里嵌的就是首次编译它的（可能已删除的）worktree
+    fn manifest_dir() -> PathBuf {
+        std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    }
+
     /// 真 JDK：镜像独有类目录下有类文件，且都不在 jmod 里；VM 支持类目录非空
     #[test]
     fn real_jdk_image_and_support_dirs() {
         let Some(home) = crate::jdk::find_major(21) else { return };
-        let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/java_support");
+        let support = manifest_dir().join("../../../runtime/java_support");
+        assert!(support.is_dir(), "VM 支持类源码根不存在：{}", support.display());
         let dirs = image_class_dirs(&home, &support);
         let jmods = jmod_class_names(&home);
         let image = image_only_dirs(&home);

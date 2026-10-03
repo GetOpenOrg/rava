@@ -1,16 +1,23 @@
 //! `rava closure` 端到端：记录型 `--flows` 查询（`@grow:` / `@trace:` / `@edge:`）分析前登记、传播中记录，
 //! 结果随查询输出并实时写 stderr；不带记录型查询时不产生任何记录。找不到 JDK 21 时跳过。
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 
 /// 同一进程内的 rava 子进程串行（同 `build_cli.rs`）
 static RAVA: Mutex<()> = Mutex::new(());
 
+/// 当前工作区的包目录：取运行期 `CARGO_MANIFEST_DIR`（cargo 按本次调用设置）。编译期 `env!` 在全机共享的
+/// CARGO_TARGET_DIR 下可能指向另一工作区——cargo 对路径包按工作区相对路径算 metadata，源码相同时不重编，
+/// 测试二进制里嵌的就是首次编译它的（可能已删除的）worktree
+fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 /// 一次 `rava closure`：返回 (stdout, stderr)；缺 JDK → None
 fn closure(java: &str, extra: &[&str]) -> Option<(String, String)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = manifest_dir();
     let _guard = RAVA.lock().unwrap_or_else(|e| e.into_inner());
     let o = Command::new(env!("CARGO_BIN_EXE_rava"))
         .arg("closure")

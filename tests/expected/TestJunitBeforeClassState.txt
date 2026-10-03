@@ -1,0 +1,5 @@
+beforeClass
+reads:2
+sees:2
+final=2
+run=2 fail=0 ok=true

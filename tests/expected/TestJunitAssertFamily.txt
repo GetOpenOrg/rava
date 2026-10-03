@@ -1,0 +1,20 @@
+PASS assertTrue
+FAIL assertTrue-fail :: null
+FAIL assertTrue-msg :: 真值检查
+PASS assertFalse
+PASS assertEquals-int
+FAIL assertEquals-str-fail :: expected:<[expected-x]> but was:<[actual-y]>
+PASS assertEquals-double-delta
+FAIL assertEquals-double-delta-fail :: expected:<0.3> but was:<0.35>
+PASS assertEquals-array
+FAIL assertEquals-array-fail :: arrays first differed at element [0]; expected:<[a]> but was:<[b]>
+PASS assertNull
+FAIL assertNull-fail :: expected null, but was:<obj>
+PASS assertNotNull
+PASS assertSame
+FAIL assertSame-fail :: expected same:<java.lang.Object@4f023edb> was not:<java.lang.Object@3a71f4dd>
+PASS assertNotSame
+PASS assertNotEquals
+FAIL assertNotEquals-fail :: Values should be different. Actual: 1
+FAIL fail :: null
+FAIL fail-msg :: 手动失败

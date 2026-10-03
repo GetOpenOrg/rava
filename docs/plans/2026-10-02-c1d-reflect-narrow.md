@@ -223,10 +223,9 @@ A、B 基于 28090062，均已过 `cargo build` 与生成器全部单元测试�
 
 **剩余缺口归属与依赖顺序**（StockTrans / DeepCopy 各剩 2 个 field_enum_gaps，`ObjectStreamClass.cl` 的 open(Class)）：
 
-1. **S5（b3，先做）**：手写值池汇合。`Constructor.clazz` 经手写池、`Unsafe.compareAndSetReference` 的对象实参进池后
-   逃逸，把各处 Class 值汇成一片。`getDeclaringClass0` 按 InnerClasses 建模（`declaring_of_receiver`）已实现并测过：
-   外层类镜像（VarHandleInts 等）经 `Class$Atomic.casReflectionData` → `compareAndSetReference` 实参 → 手写池 → 逃逸
-   汇入 `MethodHandleAccessorFactory.ensureClassInitialized`，StockTrans +19 类，故未纳入；S5 消除池汇合后再接入。
+1. **S5（b3，已完成，见 §3.3 末「S5 收尾」）**：手写值池汇合。`getDeclaringClass0` 按 InnerClasses 建模
+   （`declaring_of_receiver`）初测 StockTrans +19 类；实际汇合点是 `Class.for_class` 的 `componentType` 写入经同文件
+   传递闭包取调用方值池（不是原先猜测的 CAS 路线），拆开后接入，类 / 方法集合与基线一致。
 2. **S3（b3）**：`getCallerClass` 按调用栈语义给调用方类镜像（与 b1 的 getCallerClass 口径对齐，由 S3 统一实现）。
 3. **T2（ObjectStreamClass 精度，最后）**：`writeObject0` P1 的大汇点与描述符缓存按类分离；在 1、2 之后，
    `forName0` 等真正所指未知的原生返回按「调用点字符串值集命中闭包类，名字未知时取已实例化 / 已初始化类镜像，
@@ -540,6 +539,42 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
   → `String.format` → `Formatter` / regex / locale 整片拉入（同 registerNatives toString 的形态，需按手写扫描的静态类型收窄）。
 - 同一用例里 `java/util/ServiceLoader` 仍经 `ParseUtil.fileToEncodedURL → URL.<init> → getURLStreamHandler@68
   lookupViaProviders` 进入：协议名形参常量在该用例被别的调用点汇合为 Top（待查是哪条 URL 构造链带入非常量协议）。
+
+**S5 收尾：拆手写字段写入的值池汇合，接入 `declaring_of_receiver`**（提交 1887eba4 / c8735a91）。
+
+- 根因（`--flows '@trace:java/lang/Class#<外层类>'` 逐跳追到）：`class_impl.rs` `for_class` 的
+  `c.__set_componentType(class_for_descriptor(rest))` 写入值推不出类型，`hw_value` 退回该 Java 成员的值池 `S(m, POOL)`。
+  值池含形参；同文件被调 fn 经扫描期传递闭包（`scan.rs` `close_transitive`）归到调用方 Java 成员，于是调用方全部 Class
+  实参（含 `getDeclaringClass0` 返回的外层类镜像）被写进 `Class.componentType`，再经 `getComponentType` 读出扩散到
+  `ensureClassInitialized` 等调用点。
+- 修法（`handwritten/stype.rs` `scalar_arg_fns`、`scan.rs`、`syntax.rs`、`engine/hw_syntax.rs`）：字段访问登记写入值的静态
+  类型；写入值是本文件**只收 Rust 标量形参**（整数 / 浮点 / bool / char / str，可经引用 / 切片 / 数组；不含 `self`）的自由
+  fn 或关联 fn 的返回 → `FieldAccess.value_fresh`，引擎取手写体产出 `S(m, PROD)`（分配、回调结果、静态读取）而非值池。
+  这类 fn 的返回不可能是任何 Java 实参，判定是语法上的、不按类名特判。单元测试 `scan::field_value_fresh`。
+- CAS 路线（`Unsafe.compareAndSetReference` 对象实参不进值池）实测零贡献、反增 1 方法（`ConcurrentHashMap$TreeNode.find`），
+  未保留：手写 CAS 体不对值做 Java 上调，值池进出由其形参类型与逃逸决定，与本缺口无关。
+- `declaring_of_receiver`（`vm_intrinsics.toml` `[facts.reflect]`，`RetModel::Declaring` / `MirrorOp::Declaring`）：
+  InnerClasses 里 inner == 本类的条目 → 外层类镜像；合成 / 基本类型 / 数组镜像 → null；类不可解析 → 普通 Class；open 保持 open。
+- 实测（`rava closure --image $(rava image-dirs)`，对照为本步前基线）：
+
+| 用例 | 类 / 方法 | class_init 目标 | gaps | 未知调用点 |
+|---|---|---|---|---|
+| HelloWorld | 264 / 592 不变 | 0 | 0 | 0 |
+| StockTrans | 1841 / 10935 不变（方法集相同） | 1312 → 1311 | 2 | 3 |
+| DeepCopy | 1836 / 10847 不变 | 1281 → 1283 | 2 | 3 |
+| TestMethodHandleDirect | 1551 / 9063 不变 | 79 → 80 | 0 | 2 |
+| TestReflectFieldMethod | 1564 / 9207 不变 | 81 → 83 | 0 | 2 |
+| TestReflectStaticFieldInit | 1601 / 9251 不变 | 83 → 85 | 0 | 2 |
+| TestEnumSetMap | 282 / 735 不变 | 2 | 0 | 0 |
+
+  只开 `declaring_of_receiver` 不拆汇合时 StockTrans 1860 类 / 目标 1377。目标小幅增减是外层类镜像按实建模的结果。
+  gaps（`ObjectStreamClass.cl`）与剩余未知调用点（DMH 两点、MHAF@14）不在本步：前者属 T2（序列化大值池），后者属 S6 /
+  S2 残余的 open(Class) 来源。另见 `Class.isHidden` 值池 → `is_hidden_class` → `injected_invoker.is_injected` 的逃逸，登记不做。
+- 边界用例 `tests/e2e/62_reflection/TestDeclaringClassInit.java`（期望为 JDK 21 实测）：多层成员类的 getDeclaringClass 链、
+  匿名 / 局部 / 数组 / 基本类型 → null 与 getEnclosingClass 对照；取镜像不初始化，经返回镜像反射读 static 字段才触发
+  外层类 `<clinit>`；数组镜像 `getComponentType` 后反射读字段初始化元素类；`forName(…, false, …)` 的成员类。
+- 发现（不在本步）：`Class.forName` 的名字是拼接串（`"[L" + X.class.getName() + ";"`、`getName() + "$Inner"`）时，
+  所指类不入闭包或其 `<clinit>` 不入链，`class_init.unknown` 兜底只覆盖已在链上的 `<clinit>`——属 T2 的 forName 名字求值。
 
 ### 3.4 T3 反射回调按接收者派发（分支 `c1d-t3`，基于 b202e842）
 

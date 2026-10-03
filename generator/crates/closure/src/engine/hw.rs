@@ -76,6 +76,7 @@ impl<'a> Engine<'a> {
             || self.man.returns_mirror(&ks)
             || self.man.returns_superclass(&ks)
             || self.man.returns_component_class(&ks)
+            || self.man.returns_declaring_class(&ks)
             || self.man.returns_primitive_class(&ks)
             || self.man.defined_class(&ks).is_some();
         let rt = self.methods[m].rtype.filter(|_| !modeled);

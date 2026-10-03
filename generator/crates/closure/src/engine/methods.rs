@@ -125,6 +125,8 @@ impl<'a> Engine<'a> {
             RetModel::Super
         } else if self.man.returns_component_class(&ks) {
             RetModel::Component
+        } else if self.man.returns_declaring_class(&ks) {
+            RetModel::Declaring
 
         } else if self.man.returns_receiver(&ks) {
             RetModel::Receiver

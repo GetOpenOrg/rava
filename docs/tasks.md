@@ -148,7 +148,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
 │   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
 │   │             ✅ 第二段合入 b1983313（84c92245，抽查 c1db3-84c92245 10/10；含 setContextClassLoader 存根修复 + TestThreadContextLoaderInit）；
-│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；🔄 S5 手写值池合并拆分
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；🔄 Class.forName 拼接类名字符串值流建模
 │   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
 │   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
 │   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；✅ ② A+B 超接口 / 接口视图类型实参（b820c8aa 合入；27 例 from_any 2–78→1–4，闭包不变）；✅ ③ C+D 方法级类型变量 / super.m()（44b3a3b3 合入；27 例中 26 例 from_any=0，StockTrans 11→0）；✅ ④ 余下发射点统一 Object::from / Into<Object>、void 入 Object 改内部错误、from_any=0 守护测试（631bb78b 合入；27 例 + StockTrans / LambdaHiddenClass 全部 from_any=0，闭包不变）——**from_any 归零达成**
@@ -186,6 +186,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │
 │   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md）
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
+│         ✅【2026-10-03 完成，feat/junit-expected-redundancy d4efc8d6】63_junit expected 10/10（junit+hamcrest cp、JDK21 实跑、双跑确定性全过；顺修 3 处源码错误：assertTrue 静态导入缺失、遮蔽 helper、Sample 构造器非 public 致 initializationError）
+│         ✅【2026-10-03 完成，同分支】新增用例查重：133 例 ∩ 冗余候选 = 5、相似对交集 0，逐条论证全部保留（定向回归网/独有边界/算法族/jmod 档设计），无删除建议；报告 docs/reports/e2e-redundancy-newtests.md
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
@@ -195,9 +197,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏸ 闭包分析效率 P8 余量、sites（optimization-directions §三.2）
 │   ├─ ⏸ 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）
 │   ├─ ◇ S7 统一对象句柄 + 每类静态描述符 ─┐
-│   ├─ ◇ T1 跨测试编译复用（2026-10-01-cross-test-compile-reuse.md）─┴─ Q3：方案定稿后由用户一次决策
+│   ├─ ✅ T1 跨测试编译复用决策（2026-10-01-cross-test-compile-reuse.md，99dc658f 实测：档案 3609 类，全量 ≈35→≤11 机时）—— 用户 2026-10-03 四项全采纳：档案化 + 分发层、CLAUDE.md 第 2 条改写（已改）、开放世界折叠、语料动态 / 生产静态链接；C1d / C4 收官后按 §5.3 实施
 │   │     └─▶ T4 生成器只构建一次再分发（待服务器核实）
-│   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线）
+│   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线；8 台服务器 JDK 25 已就绪，env_setup --check-only 2026-10-03）
 │
 └─ 【远期】
     ├─ ◇ 线程模型终态：单线程协作调度深化，或改真并发（2026-09-26-real-multithreading.md）
