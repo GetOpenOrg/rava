@@ -72,6 +72,9 @@ classes = [
 # Class.newInstance 的特权块（构造器 setAccessible(true)）。
 # ClassLoader$ParallelLoaders：静态 loaderTypes = newSetFromMap(WeakHashMap) 并登记 ClassLoader.class；
 # ClassLoader 构造器按字节码调 isRegistered，归入边界则 loaderTypes 为 null → NPE。
+# Module$EnableNativeAccess：静态 UNSAFE / FIELD_OFFSET（objectFieldOffset(Module.class, "enableNativeAccess")）
+# 为纯 Java 状态；BootLoader.<clinit> 按字节码经 JLA.addEnableNativeAccess → implAddEnableNativeAccess
+# → trySetEnableNativeAccess 对无名模块置位，随外层 Module 归入 clinit_carried 则 UNSAFE 为 null → NPE。
 translate_nested = [
     "java/lang/Class$ReflectionData",
     "java/lang/Class$EnclosingMethodInfo",
@@ -79,6 +82,7 @@ translate_nested = [
     "java/lang/Class$AnnotationData",
     "java/lang/Class$1",
     "java/lang/ClassLoader$ParallelLoaders",
+    "java/lang/Module$EnableNativeAccess",
 ]
 
 # VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，

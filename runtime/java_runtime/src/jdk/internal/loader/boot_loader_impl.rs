@@ -56,6 +56,27 @@ impl BootLoader {
         }
     }
 
+    /// `findResourceAsStream(String mn, String name)`：引导加载器的资源定位（closure.toml [vm_boundary]
+    /// BootLoader：引导类的包 / 资源定位）。HotSpot 下引导层的模块资源经 jimage 运行时镜像读出；原生单二进制
+    /// 的运行时镜像是编译期嵌入的模块资源（jdk_resources::module_resources，由调用链上的资源名推导），
+    /// 全部 JDK 类在同一镜像中，按资源名查找、与模块名无关。消费方：`Module.getResourceAsStream`
+    /// （`BreakIteratorResourceBundle` 读 `sun/text/resources/*BreakIteratorData`）、命名模块的
+    /// `Class.getResourceAsStream`。未命中 → null（JDK 同：资源不存在返回 null）。查找同系统加载器的
+    /// `ClassLoader.getSystemResourceAsStream`（class_loader_impl.rs）；字节流在本文件内构造，供手写体扫描识别分配。
+    #[jvm_boundary]
+    pub fn findResourceAsStream(_mn: String, name: String) -> Result<crate::java::io::InputStream> {
+        if name.is_jvm_null() {
+            return Err(JvmError::null_pointer());
+        }
+        let key = format!("{}", name);
+        let Some(bytes) = crate::jdk_resources::module_resources::lookup(&key) else {
+            return Ok(Default::default());
+        };
+        let arr = JArray::from(bytes.iter().map(|b| *b as i8).collect::<Vec<i8>>());
+        let stream = crate::java::io::ByteArrayInputStream::new_arr_b(arr)?;
+        Ok(<crate::java::io::InputStream as ::std::convert::From<Object>>::from(Object::from(stream)))
+    }
+
     /// native `getSystemPackageNames()`：boot 层已定义包名（Package.getPackages / ClassLoader
     /// .getPackages 的 boot 部分）。单二进制无模块层包登记——空数组（BootLoader.packages()
     /// 的其余部分由 Java 侧按已加载类补齐）。

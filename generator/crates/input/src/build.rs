@@ -239,9 +239,9 @@ fn visited_strings<'c>(
     closure: &'c [Arc<ClassFile>],
     visited: &BTreeSet<MethodKey>,
     norm: &'c BTreeMap<MethodKey, NormCode>,
-) -> BTreeSet<(&'c str, &'c str)> {
+) -> crate::resources::Strings<'c> {
     let by_name: BTreeMap<&str, &ClassFile> = closure.iter().map(|c| (c.name.as_str(), &**c)).collect();
-    let mut out = BTreeSet::new();
+    let mut out = crate::resources::Strings::default();
     for k in visited {
         let Some(cf) = by_name.get(k.0.as_str()) else { continue };
         for m in cf.methods.iter().filter(|m| m.name == k.1 && m.desc == k.2) {
@@ -253,7 +253,7 @@ fn visited_strings<'c>(
                 })),
                 None => Box::new(code.insns.iter()),
             };
-            out.extend(ops.filter_map(ldc_string).map(|s| (cf.name.as_str(), s)));
+            out.add_method(cf.name.as_str(), ops.filter_map(ldc_string));
         }
     }
     out
@@ -392,7 +392,7 @@ impl<'a> BuildInput<'a> {
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
-        let module_resources = crate::resources::derive(self.cp, strings.iter().copied());
+        let module_resources = crate::resources::derive(self.cp, &strings);
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
