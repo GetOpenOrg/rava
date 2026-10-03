@@ -195,15 +195,18 @@ impl<'a> Engine<'a> {
     }
 
     /// 手写字段写入的值来源：写入值是被调 Java 方法的接收者 → 接收者参数节点（值即其确定值集，
-    /// 如 `__set_clazz(Clone::clone(self))` 的声明类镜像）；语法推得类型 → 该类型的确定实例；否则取自值池
+    /// 如 `__set_clazz(Clone::clone(self))` 的声明类镜像）；语法推得类型 → 该类型的确定实例；只收标量形参的
+    /// 本文件辅助 fn 的返回 → 手写体产出；否则取自值池
     fn hw_value(&mut self, m: usize, host: &str, fa: &FieldAccess) -> Feed {
         if fa.value_self && !self.methods[m].is_static {
             return Feed::N(Node::P(m, 0));
         }
-        match self.hw_type(host, &fa.value) {
-            Some(id) => Feed::S(TypeSet::exact(id)),
-            None => Feed::N(Node::S(m, POOL)),
+        if let Some(id) = self.hw_type(host, &fa.value) {
+            return Feed::S(TypeSet::exact(id));
         }
+        // 写入值是本文件只收标量形参的辅助 fn 的返回（`__set_componentType(class_for_descriptor(rest))`）：
+        // 值只能来自手写体产出，不取值池——值池含形参，经同文件被调 fn 的传递闭包会把调用方的全部实参写进字段
+        Feed::N(Node::S(m, if fa.value_fresh { PROD } else { POOL }))
     }
 
     /// 手写体访问接收者自身字段：抽象对象接其字段节点，非抽象接收者（类本身 / open）经未知接收者视图
