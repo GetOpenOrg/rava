@@ -2,7 +2,7 @@ instant-close=true
 instant-nanos-ok=true
 max-positive=true
 used-nonneg=true
-libzip.so
+libzip-name-ok=true
 pid-positive=true
 alive=true
 has-parent=true
