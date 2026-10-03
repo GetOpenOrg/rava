@@ -199,8 +199,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │           ├─ ⏳ R6 模块元数据（isNamed / getName / isExported）+ 强封装边界（2 例）、R7 系统资源装载 getSystemResourceAsStream / findBootstrapClassOrNull（3 例）◀── boot layer（C1d-a 步骤 2–5：命名模块 + jimage）
 │           ├─ ⏳ R8 beans finder 构造存根（3 例）、R9 charset / zipfs 提供者构造（5 例）◀── jmod 第 1 步前置
 │           ├─ ⏳ R10 Array.set native 准入、R12 E0308 三例、R13 http async 转译错误；数组协变 Object[].class.isAssignableFrom(Integer[].class)（TestClassCastSubclass）
-│           └─ 🔄 环境：TestLocaleCurrency 的 golden（本机 Homebrew 21.0.11）与服务器 apt openjdk-21（21.0.12.1，随系统升级漂移）CLDR 不一致——2026-10-03 用户定：语料参考 JDK 固定为 21.0.11（Temurin），仓库登记版本 / URL / sha256，服务器落数据目录 /data/jdk，本机 ~/.cache/rava/jdk；run_tests / 抽查 / 作业 / expected 生成同源（jdk-pin 进行中）
-│             ⏳【2026-10-03 用户侧子代理领取】参考 JDK 全量 golden 核验：Temurin 21.0.11 对 e2e 全集 javac+java 双跑逐字比对 tests/expected（只出报告；jdk-pin 取包脚本与清单合入后开工）
+│           └─ ✅ 参考 JDK 固定构建（jdk-pin 75a15d93 已合入；server_maintenance b595193）：Temurin 21.0.11+10，清单 tools/refjdk.toml（四平台 URL+sha256），scripts/fetch_reference_jdk.sh；本机 tools/refjdk/，服务器 /data/rava-jdk/（ubuntu /mnt/d/workspace/rava-jdk）；run_tests 缺省参考构建、缺失即报错，--jdk/--java-home 标「非参考构建」
+│              ⏳ 生成器缺陷（原误判为环境）：TestLocaleCurrency 转译产物在 Linux 输出 CN¥，JVM（21.0.11 与 21.0.12.1）均输出 ¥——locale/CLDR 取值经转译后不同，待归因（jdkpin-efc13cd0 sg2 复现）
+│             🔄【2026-10-03 用户侧子代理领取，可开工】参考 JDK 全量 golden 核验：Temurin 21.0.11 对 e2e 全集 javac+java 双跑逐字比对 tests/expected（只出报告；取包 scripts/fetch_reference_jdk.sh）
 │         ✅【2026-10-03 用户侧完成，ad62f2c1 已合入】「档案调用链」口径文档同步：handwritten-boundary 原则一、java-rust-translation-reference §8.4、environment-variables、java-bytecode-transpiler-design、compatibility 五处改为档案口径并加「当前仍单测试」现状注；[boundary] 过渡期表述、行为现状表与历史文档按原样保留
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
