@@ -1,0 +1,3 @@
+run=6 fail=2 ignore=0
+failure throwsNothing :: expected java.lang.IllegalStateException to be thrown, but nothing was thrown
+failure throwsWrongType :: unexpected exception type thrown; expected:<java.lang.IllegalStateException> but was:<java.lang.IllegalArgumentException>
