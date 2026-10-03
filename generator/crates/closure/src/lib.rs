@@ -212,6 +212,8 @@ impl Closure<'_> {
             "field_enum_gaps": e.field_enum_gaps.len(),
             "rcall": e.rcall_summary(),
             "field_writer_live": e.field_handles().0,
+            "field_writer_cause": e.field_writer_cause(),
+            "field_handle_released": e.field_handle_released(),
             "fields_open_all": e.field_handles().1,
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,

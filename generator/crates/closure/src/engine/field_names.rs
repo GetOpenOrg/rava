@@ -68,7 +68,9 @@ impl Engine<'_> {
         }
         if !known {
             if r.handle {
-                self.enumerate_fields(cls);
+                // 句柄带本口径的来源标记：流到句柄写入口时才放开（`field_handles.rs`）
+                self.enumerate_fields(cls.clone());
+                self.mark_handle(m, off, k.split_once(':').map_or("", |x| x.1), (false, cls));
             } else {
                 self.open_class_fields(cls);
             }

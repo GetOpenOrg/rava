@@ -86,6 +86,15 @@ impl<'a> Engine<'a> {
         (self.fwriter_live, self.ctx.fopen_all.get())
     }
 
+    /// 标记已流到句柄写入口的枚举口径（`类` / `*` = 推不出；可序列化字段口径加 `:serial`）
+    pub fn field_writer_cause(&self) -> Option<&str> {
+        self.fwriter_cause.as_deref()
+    }
+
+    pub fn field_handle_released(&self) -> Vec<String> {
+        self.fh_released.iter().map(|(s, c)| format!("{}{}", c.as_deref().unwrap_or("*"), if *s { ":serial" } else { "" })).collect()
+    }
+
     pub fn lambda_count(&self) -> usize {
         self.lambdas.len()
     }

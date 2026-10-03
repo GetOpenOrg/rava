@@ -570,6 +570,17 @@ impl Manifest {
         self.field_handle_writers.iter().any(|s| member_is(s, key))
     }
 
+    /// 字段句柄类型：字段枚举返回数组的分量类型、返回字段句柄（`handle = true`）的按名入口的返回类型
+    pub fn field_handle_types(&self) -> Vec<String> {
+        let ret = |s: &str| s.rsplit_once(')').map(|(_, r)| r.to_string()).unwrap_or_default();
+        let obj = |r: &str| r.strip_prefix('L').and_then(|c| c.strip_suffix(';')).map(str::to_string);
+        let mut out: Vec<String> = self.field_enumerators.iter().filter_map(|e| ret(e).strip_prefix('[').and_then(obj)).collect();
+        out.extend(self.field_name_resolvers.iter().filter(|(_, r)| r.handle).filter_map(|(k, _)| obj(&ret(k))));
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// 句柄桥：在其内调用 handle_writers 不算写入入口（句柄只经 Field.set* 的访问器使用）
     pub fn is_field_handle_bridge(&self, member: &str) -> bool {
         self.field_handle_bridges.contains(member)

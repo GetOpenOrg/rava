@@ -830,6 +830,11 @@ getClassDataLayout0 / `<init>` 的 getSuperclass 只是 open → open 传播）�
 5. **写入口变活 → fopen_all。** `CopyOnWriteArrayList.readObject → resetLock → Field.set`（WRITER-LIVE）使字段句柄写入口可达，
    挂起的 `enumerate_fields(None)` 生效为全部字段不折叠，随后 `System.getSecurityManager` 不再折叠为 null、
    `privilegedGetProperties` 的 `doPrivileged` 分支变活、fold_props 42 → 0，类数 2000+，StockTrans 超时。
+   **已解决（T2，`engine/field_handles.rs`）**：写入口不再按「调用边可达」全局变活。枚举 / 名字不可知的按名取句柄
+   在调用点给结果带来源标记（每个枚举口径一个标记对象），字节码写入口调用点按句柄实参值集里的标记只放开对应口径；
+   句柄实参含非建模代码产出的句柄（相关类型的 open）/ 取不到值、或写入口经非字节码调用点到达时才全部放开。
+   `resetLock` 按名字常量取到的句柄不再放开别处挂起的枚举：StockTrans `field_writer_live = false`、`fopen_all = false`，
+   3809 类 / 464 s → 3139 类 / 132 s（集成分支 3070 类 / 84 s，余差为调用点配对点名的序列化回调）。
 6. **COWAL 镜像从哪里进入 `getPrivateMethod` 接收者：未查完。** w21 显示它最早出现在
    `ClassSpecializer.findSpecies` 与 `CopyOnWriteArrayList.addAll` 的 `getClass` 调用点——即 COWAL 实例本身由
    open 值面（不是用户代码）实例化，再经第 2 条的环流到 `writeObject0`。这是 T4 的入口问题。

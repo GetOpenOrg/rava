@@ -58,6 +58,17 @@ fn field_name_resolvers_and_class_initializers_parse() {
     assert_eq!(m.member_owner_route("a/U.init:(Ljava/lang/Class;)V"), None);
 }
 
+/// 字段句柄类型：枚举返回数组的分量类型 ∪ handle = true 的按名入口返回类型（非句柄入口不计）
+#[test]
+fn field_handle_types_from_enumerators_and_handle_resolvers() {
+    let m = with_vm(
+        "[facts.field_writes]\nenumerators = [\"a/C.all:()[La/H;\"]\n[facts.field_writes.name_resolvers]\n\"a/C.one:(Ljava/lang/String;)La/H;\" = { class = \"receiver\", name = 0, handle = true }\n\"a/C.alt:(Ljava/lang/String;)La/K;\" = { class = \"receiver\", name = 0, handle = true }\n\"a/U.off:(Ljava/lang/Class;Ljava/lang/String;)J\" = { class = 0, name = 1, offset = true }\n",
+    )
+    .unwrap();
+    assert_eq!(m.field_handle_types(), vec!["a/H".to_string(), "a/K".to_string()]);
+    assert!(with_vm("").unwrap().field_handle_types().is_empty());
+}
+
 /// 仓库清单：按名取字段的入口与按镜像初始化入口都已登记（写入来源审计的闭合项）
 #[test]
 fn repo_manifest_declares_write_sources() {

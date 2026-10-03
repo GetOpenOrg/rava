@@ -145,6 +145,7 @@ impl<'a> Engine<'a> {
             }
         }
         self.field_name_site(m, off, &k, opcode, args);
+        self.handle_writer_site(m, mref, opcode, args);
         self.mirror_init_site(m, off, mref, &k, opcode, args);
         if (class_param || class_recv) && !self.man.is_method_lookup(&k) {
             self.field_lookup(m, off, mref, opcode, args, &classes, class_recv);
@@ -155,116 +156,26 @@ impl<'a> Engine<'a> {
             let unknown = args.first().is_none_or(|v| self.class_values(m, v, &mut cs));
             self.enumerated_static_owners(m, off, &cs);
             // 序列化口径的调用方只用可序列化字段：已知的类与推不出的接收者都按可序列化字段放开
-            if self.man.is_serial_enumerator(&self.methods[m].key.to_string()) {
-                for c in cs {
-                    self.enumerate_serial_fields(Some(c));
-                }
-                if unknown {
-                    self.enumerate_serial_fields(None);
-                }
-            } else {
-                for c in cs {
-                    self.enumerate_fields(Some(c));
-                }
-                if unknown {
+            let serial = self.man.is_serial_enumerator(&self.methods[m].key.to_string());
+            let mut scopes: Vec<field_handles::EnumScope> = cs.into_iter().map(|c| (serial, Some(c))).collect();
+            if unknown {
+                scopes.push((serial, None));
+                if !serial {
                     self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
-                    self.enumerate_fields(None);
                 }
             }
+            for (_, c) in &scopes {
+                if serial {
+                    self.enumerate_serial_fields(c.clone());
+                } else {
+                    self.enumerate_fields(c.clone());
+                }
+            }
+            // 结果句柄带各口径的来源标记：流到句柄写入口时才放开（`field_handles.rs`）
+            self.mark_enumeration(m, off, &mref.desc, &scopes);
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all(self.ctx.fopen_all.get(), false);
-        }
-    }
-
-    /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口可达时放开，否则挂起到写入口可达
-    pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
-        if !self.fwriter_live {
-            if self.fenum_pending.insert(cls) {
-                self.offset_reads_ready();
-            }
-            return;
-        }
-        self.open_class_fields(cls);
-    }
-
-    /// 放开类（含超类）的全部字段；None = 全部字段不折叠
-    pub(super) fn open_class_fields(&mut self, cls: Option<String>) {
-        match cls {
-            Some(c) => {
-                let mut cur = Some(c);
-                while let Some(cls) = cur {
-                    let Some(cf) = self.h.class(&cls) else { break };
-                    for f in &cf.fields {
-                        self.open_field(MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() });
-                    }
-                    cur = cf.super_name.clone();
-                }
-            }
-            None => {
-                if !self.ctx.fopen_all.replace(true) {
-                    self.open_fields_all(false, self.ctx.deser.get());
-                }
-            }
-        }
-    }
-
-    /// 可序列化字段口径的枚举（清单 `serial_enumerators`；cls = 接收者 Class 所指的类，None = 推不出）：
-    /// 该类及其超类（None = 全部可序列化类）的非 static、非 transient 字段偏移可得（可按偏移读取）；
-    /// 句柄写入口可达时这些字段不折叠（None 同反序列化的字段面）。transient / static 字段不经此放开
-    fn enumerate_serial_fields(&mut self, cls: Option<String>) {
-        if self.fenum_serial.insert(cls.clone()) {
-            self.offset_reads_ready();
-        }
-        if self.fwriter_live {
-            self.open_serial_fields(cls);
-        }
-    }
-
-    fn open_serial_fields(&mut self, cls: Option<String>) {
-        let Some(c) = cls else {
-            if !self.ctx.deser.replace(true) {
-                self.open_fields_all(self.ctx.fopen_all.get(), false);
-            }
-            return;
-        };
-        let mut cur = Some(c);
-        while let Some(cls) = cur {
-            let Some(cf) = self.h.class(&cls) else { break };
-            for f in &cf.fields {
-                let key = MemberRef { owner: cls.clone(), name: f.name.clone(), desc: f.desc.clone() };
-                if self.ctx.field_info(&key).is_some_and(|i| Ctx::serial_field(&i)) {
-                    self.open_field(key);
-                }
-            }
-            cur = cf.super_name.clone();
-        }
-    }
-
-    /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
-    /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
-    pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
-        if !self.man.is_field_handle_writer(key) {
-            return;
-        }
-        if let From::Method(c) = via.from {
-            if self.man.is_field_handle_bridge(&self.methods[c].key.to_string()) {
-                return;
-            }
-        }
-        self.field_writer_live();
-    }
-
-    /// 按字段句柄写字段的入口可达：挂起的字段枚举生效
-    pub(super) fn field_writer_live(&mut self) {
-        if std::mem::replace(&mut self.fwriter_live, true) {
-            return;
-        }
-        for cls in std::mem::take(&mut self.fenum_pending) {
-            self.enumerate_fields(cls);
-        }
-        for cls in self.fenum_serial.clone() {
-            self.open_serial_fields(cls);
         }
     }
 

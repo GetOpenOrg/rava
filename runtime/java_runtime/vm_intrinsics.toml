@@ -273,9 +273,11 @@ queries = [
 # 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
 # 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
 # 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
-# enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：两者都可达时，接收者是
-#   类字面量则只放开该类及其超类的字段，否则全部字段不折叠；只读句柄（取名字 / 修饰符 / 值，
-#   如 ObjectStreamClass.computeDefaultSUID）不放开任何字段
+# enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：枚举结果带来源标记，标记随句柄
+#   沿字节码数据流传到 handle_writers 的句柄实参时，接收者是类字面量则只放开该类及其超类的字段，否则全部
+#   字段不折叠；只读句柄（取名字 / 修饰符 / 值，如 ObjectStreamClass.computeDefaultSUID）与按名字常量取到的
+#   句柄（已按名放开）不放开被枚举的字段。写入口的句柄实参取不到值 / 含非建模代码产出的句柄、或写入口经
+#   非字节码调用点（反射调用、lambda、手写体）到达时按全部枚举放开（engine/field_handles.rs）
 enumerators = [
     "java/lang/Class.getDeclaredFields:()[Ljava/lang/reflect/Field;",
     "java/lang/Class.getFields:()[Ljava/lang/reflect/Field;",
@@ -339,7 +341,7 @@ static_offset_getters = [
 #   类字面量 + 名字常量的调用折叠为符号偏移，供按偏移读写的手写调用点只触及该字段）。名字是常量时按上面的形状规则放开；
 #   名字取自形参时按各调用点的常量逐个放开；形参出现过非常量实参、或名字来自字段读 / 调用返回 / 拼接时，
 #   放开 class 所指类（类字面量）及其超类的全部字段，推不出类则全部字段不折叠；handle = true 的按字段枚举
-#   处理（句柄写入口可达才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
+#   处理（结果句柄带来源标记，流到句柄写入口才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
 #   写入能力（ClassSpecializer 的 resolveOrFail 取 species 字段的 getter，只读），不在此列
 [facts.field_writes.name_resolvers]
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = { class = 0, name = 1, offset = true }

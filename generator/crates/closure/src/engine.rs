@@ -68,6 +68,7 @@ mod report;
 mod diag;
 mod write_audit;
 mod field_names;
+mod field_handles;
 mod mirror_init;
 mod seeds;
 mod services;
@@ -470,6 +471,8 @@ pub struct Engine<'a> {
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达
     fwriter_live: bool,
+    /// 句柄写入口按保守口径可达的首个原因（诊断）
+    fwriter_cause: Option<String>,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
@@ -482,6 +485,10 @@ pub struct Engine<'a> {
     /// 可序列化字段口径的枚举（清单 `serial_enumerators`）：Some(类) = 该类及其超类的可序列化字段
     /// （非 static、非 transient）偏移可得，None = 全部可序列化类的（接收者推不出）
     fenum_serial: BTreeSet<Option<String>>,
+    /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
+    fh_marks: HashMap<u32, field_handles::EnumScope>,
+    /// 标记已流到句柄写入口的枚举口径
+    fh_released: BTreeSet<field_handles::EnumScope>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠
     pub field_enum_gaps: BTreeSet<String>,
     /// 手写层写入但接收者类型推不出的字段名：所有同名字段按有手写写入处理
