@@ -144,9 +144,10 @@ pub fn class_interfaces() -> &'static [(&'static str, Names)] { unsafe { CLASS_I
 pub fn class_anno() -> &'static [(&'static str, &'static [u8], &'static [(i32, CpVal)])] { unsafe { CLASS_ANNO } }
 /// 含 <clinit> 的类集。
 pub fn clinit_classes() -> Names { unsafe { CLINIT_CLASSES } }
-/// 隐藏类集（lambda 调用点隐藏类，生成器 `hidden_class!` 声明，按名有序）。
+/// 隐藏类集：lambda 调用点隐藏类（生成器 `hidden_class!` 声明，按名有序）与运行期登记的
+/// @CallerSensitive 注入调用器（`injected_invoker`）。
 pub fn is_hidden_class(class: &str) -> bool {
-    unsafe { HIDDEN_CLASSES }.binary_search(&class).is_ok()
+    unsafe { HIDDEN_CLASSES }.binary_search(&class).is_ok() || crate::injected_invoker::is_injected(class)
 }
 /// 内部名（`/` 分隔）→ Class.getName 形式：普通类全部 `/` 换 `.`；隐藏类只换调用者类部分，
 /// 保留 `/0x…` 后缀（JVM 隐藏类名 `p.C$$Lambda/0x…`）。
@@ -165,9 +166,13 @@ pub fn class_access_flags() -> &'static [(&'static str, i32)] { unsafe { CLASS_A
 /// 类 → SourceFile 属性值（无该属性的类不在表中）。
 pub fn class_source_file() -> &'static [(&'static str, &'static str)] { unsafe { CLASS_SOURCE_FILE } }
 /// 类 → 定义加载器（`app` / `platform`；引导加载器的类不在表中），按类名有序。
+/// 注入调用器（`injected_invoker`）取宿主的定义加载器（JDK 以宿主的 Lookup 定义该隐藏类）。
 pub fn class_defining_loader(class: &str) -> Option<&'static str> {
     let t = unsafe { CLASS_DEFINING_LOADER };
-    t.binary_search_by(|(c, _)| (*c).cmp(class)).ok().map(|i| t[i].1)
+    match t.binary_search_by(|(c, _)| (*c).cmp(class)) {
+        Ok(i) => Some(t[i].1),
+        Err(_) => crate::injected_invoker::host_of(class).and_then(|h| class_defining_loader(&h)),
+    }
 }
 /// record 类集。
 pub fn record_classes() -> Names { unsafe { RECORD_CLASSES } }

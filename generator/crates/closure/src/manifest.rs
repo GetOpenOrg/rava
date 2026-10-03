@@ -116,6 +116,8 @@ pub struct Manifest {
     mirror_returns: HashSet<String>,
     superclass_returns: HashSet<String>,
     primitive_class_returns: HashSet<String>,
+    /// `[facts.reflect.defined_classes]`：VM 承载的运行期类定义点 → 承载所定义类成员的 VM 支持类
+    defined_class_returns: HashMap<String, String>,
     caller_class_returns: HashSet<String>,
     /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
     caller_sensitive: HashSet<String>,
@@ -291,6 +293,16 @@ impl Manifest {
             }
         }
 
+        let mut defined_class_returns = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("defined_classes")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(c) = v.as_str() else {
+                    return Err(format!("vm_intrinsics.toml [facts.reflect.defined_classes]：{k} 须为 VM 支持类 binary name"));
+                };
+                defined_class_returns.insert(k.clone(), c.to_string());
+            }
+        }
+
         let field_writes = |key: &str| facts("field_writes", key);
         let reflect = |key: &str| facts("reflect", key);
         let mut member_enumerators = HashMap::new();
@@ -353,6 +365,7 @@ impl Manifest {
             mirror_returns: reflect("mirror_of_receiver").into_iter().collect(),
             superclass_returns: reflect("superclass_of_receiver").into_iter().collect(),
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
+            defined_class_returns,
             caller_class_returns: reflect("caller_class").into_iter().collect(),
             caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             component_returns: reflect("component_of_receiver").into_iter().collect(),
@@ -521,6 +534,11 @@ impl Manifest {
     /// 返回基本类型（含 void）的类镜像（`Class.getPrimitiveClass` 语义）：所指类不是字节码类，无初始化、无成员
     pub fn returns_primitive_class(&self, member: &str) -> bool {
         self.primitive_class_returns.contains(member)
+    }
+
+    /// VM 承载的运行期类定义点所返回类的成员承载类（VM 支持类）：返回值即其类镜像
+    pub fn defined_class(&self, member: &str) -> Option<&str> {
+        self.defined_class_returns.get(member).map(String::as_str)
     }
 
     /// 返回调用它的 @CallerSensitive 方法的调用者类镜像（`Reflection.getCallerClass` 语义）

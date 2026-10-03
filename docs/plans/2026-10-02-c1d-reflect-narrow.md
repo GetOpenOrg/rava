@@ -504,6 +504,30 @@ JDK 21 链条：`Lookup.findStatic/findVirtual/unreflect` → `getDirectMethodCo
   `generateInvokerTemplate` 两个内建的登记由 b3 持有，T2 不另设截断。
 - 落地顺序：注入调用器与标记同一步合入（只置标记会让无适配器的 CS 方法经 MH 在运行期走 ASM / defineClass）。
 
+**CallerSensitive 方法句柄路径：实施**（与上项边界一致，标记与注入调用器同一步）。
+
+- 标记：`method_handle_natives_impl.rs` 的 `init`（Method 分支读反射对象原始注解字节 `annotations`）与 `resolve_method`
+  （读类元数据行注解）以 `anno_pool::has_annotation(…, "Ljdk/internal/reflect/CallerSensitive;")` 置 `MN_CALLER_SENSITIVE`；
+  `resolve_method` 另对注入类上的成员取支持类声明（`injected_invoker::method_meta`）。
+- 注入调用器：VM 支持类 `runtime/java_support/java.base/java/lang/invoke/InjectedInvokerDyn.java`（`invoke_V` /
+  `reflect_invoke_V`，字节码翻译）；`runtime/java_runtime/src/injected_invoker.rs` 按宿主登记 `Host$$InjectedInvoker/0x…`
+  （JDK 命名规则：宿主隐藏时 `/` → `_`；同一宿主恒为同一类），元数据面：`meta::is_hidden_class`、`class_defining_loader`
+  （同宿主）、`Class.getSuperclass`（Object）；`reflect_dispatch::reflect_invoke` 对注入类的调用转到支持类并以注入类压栈。
+  `method_handle_impl_bind_caller_impl.rs`：`makeInjectedInvoker`（class_definition）、`generateInvokerTemplate`
+  （bytecode_generator，空模板），`vm_intrinsics.toml` 登记。
+- 分析侧：新清单事实 `[facts.reflect.defined_classes]`（类定义点 → 其返回的类镜像所指的类），`engine/hw.rs` 对登记的手写 /
+  内建方法以该类镜像为返回值；`engine/invoke.rs::reflective_writes` 对按名查方法点把「本调用点字面量名」另与 Class 形参值集
+  里的类镜像相乘（与接收者镜像同口径，形参透传的名字不乘），`findStatic(invokerClass, "invoke_V", …)` 因此解析到支持类方法。
+- 闭包实测（`rava closure`，类 / 方法）：HelloWorld 264/592、ThreadTest 346/1050 不变；TestMethodHandleDirect 1573→1551、
+  TestCallerSensitiveLookup 1611→1589、TestCallerSensitiveMethodRef 1576→1554、TestCallerSensitiveHandle 1589→1567。
+  差集（TestMethodHandleDirect）：出 ASM 写出链 19 类 + `Lookup$ClassDefiner/ClassFile/ClassOption`、`ClassFileDumper$1`，
+  入 `InjectedInvokerDyn`。注意 `rava closure` 不自动加镜像独有 / 支持类目录，须显式 `--image $(rava image-dirs)`
+  （`rava build` 自动加），否则支持类按不存在处理。
+- 边界用例 `tests/e2e/62_reflection/TestCallerSensitiveHandle.java`：MH 取 `lookup()` / `Method.invoke` / `Class.forName`
+  （适配器路径，调用者 = lookupClass）、`Field.get` 经 MH 与反射（注入调用器路径，访问宿主 / 嵌套类 private 放行、他顶层类
+  private 抛 IAE，消息带 `Host$$InjectedInvoker/0x…`，同一宿主两次同名）、`publicLookup` 取 CS 方法抛 IAE；期望为 JDK 21 实测，
+  `/0x…` 规范化。
+
 **待查精度项：另一扇出源**（登记，不在本步做）。TestAppClassLoader / TestAtomics / TestZonedDateTime /
 TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后仍稳定在 1450–1520 类，截
 `initSystemClassLoader` 或 `getURLStreamHandler@68` 都只降 4 类。起点（TestAtomics，`rava closure --why`）：

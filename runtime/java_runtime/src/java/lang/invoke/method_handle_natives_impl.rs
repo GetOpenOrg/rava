@@ -25,6 +25,19 @@ fn _internal_error(msg: &str) -> JvmError {
 const MN_IS_METHOD: i32 = 0x0001_0000;
 const MN_IS_CONSTRUCTOR: i32 = 0x0002_0000;
 const MN_IS_FIELD: i32 = 0x0004_0000;
+/// `@jdk.internal.reflect.CallerSensitive` 方法（HotSpot `init_method_MemberName` 与 resolve 同置）：
+/// `Lookup.findBoundCallerLookup` 据此拒绝受限 lookup，`maybeBindCaller` 据此经
+/// `MethodHandleImpl.bindCaller` 以 lookup 类为调用者（适配器或注入调用器）。
+const MN_CALLER_SENSITIVE: i32 = 0x0010_0000;
+
+/// 声明方法 (类, 名, 描述符) 带 @CallerSensitive → MN_CALLER_SENSITIVE，否则 0。
+fn caller_sensitive_bit(class_slash: &str, name: &str, descriptor: &str) -> i32 {
+    crate::meta::class_methods().iter()
+        .find(|(n, _)| *n == class_slash)
+        .and_then(|(_, ms)| ms.iter().find(|m| m.name == name && m.descriptor == descriptor))
+        .filter(|m| crate::anno_pool::has_annotation(class_slash, m.annotations, "Ljdk/internal/reflect/CallerSensitive;"))
+        .map_or(0, |_| MN_CALLER_SENSITIVE)
+}
 
 impl MethodHandleNatives {
     /// native `registerNatives()`：HotSpot 绑定 JNI 入口；原生二进制无此需要。
@@ -76,10 +89,17 @@ impl MethodHandleNatives {
                 };
                 let type_info: JArray<Object> =
                     JArray::from(vec![ref_field("returnType"), ref_field("parameterTypes")]);
+                // @CallerSensitive：反射对象的原始注解字节（Method.annotations，与 isCallerSensitive 同源）
+                let owner = format!("{}", clazz.__get_name()).replace('.', "/");
+                let cs = reference.0.__unsafe_ref_get("annotations")
+                    .filter(|a| !a.0.is_jvm_null())
+                    .map(|a| JArray::<i8>::from(a).to_vec().into_iter().map(|b| b as u8).collect::<Vec<u8>>())
+                    .filter(|raw| crate::anno_pool::has_annotation(&owner, raw, "Ljdk/internal/reflect/CallerSensitive;"))
+                    .map_or(0, |_| MN_CALLER_SENSITIVE);
                 m.__set_clazz(clazz);
                 m.__set_name(ref_field("name").try_cast::<String>("java/lang/String")?);
                 m.__set_type_(Object::from(type_info));
-                m.__set_flags(MN_IS_METHOD | (ref_kind << 24) | (mods & 0xFFFF));
+                m.__set_flags(MN_IS_METHOD | cs | (ref_kind << 24) | (mods & 0xFFFF));
             }
             "java/lang/reflect/Field" => {
                 let ref_kind = if mods & ACC_STATIC != 0 { 2 } else { 1 };
@@ -200,6 +220,10 @@ impl MethodHandleNatives {
             if let Some(meta) = crate::species_dyn::method_meta(&owner, &name, &descriptor) {
                 return Some(meta);
             }
+            // @CallerSensitive 注入调用器（运行期登记的隐藏类）→ VM 支持类的模板方法声明
+            if let Some(meta) = crate::injected_invoker::method_meta(&owner, &name, &descriptor) {
+                return Some(meta);
+            }
             if owner != "java/lang/invoke/MethodHandle" && owner != "java/lang/invoke/VarHandle" {
                 return None;
             }
@@ -213,7 +237,9 @@ impl MethodHandleNatives {
         };
         // 类别位保留构造时的 MN_IS_METHOD / MN_IS_CONSTRUCTOR
         let kind_bits = m.__get_flags() & (MN_IS_METHOD | MN_IS_CONSTRUCTOR);
-        m.__set_flags(kind_bits | ((ref_kind as i32) << 24) | (modifiers & 0xFFFF));
+        let owner = format!("{}", clazz.__get_name()).replace('.', "/");
+        let cs = caller_sensitive_bit(&owner, &name, &descriptor);
+        m.__set_flags(kind_bits | cs | ((ref_kind as i32) << 24) | (modifiers & 0xFFFF));
         Ok(m)
     }
 
