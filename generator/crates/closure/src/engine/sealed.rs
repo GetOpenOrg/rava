@@ -9,7 +9,7 @@
 //! 嵌套内的访问方法用不读事实的 Oracle 分析：结果只取决于字节码，与处理次序无关（字段为 private，嵌套外无字节码访问；
 //! 反射 / Unsafe 写 private static 字段不在建模范围，与常量折叠的前提相同）。任一条件不满足即不给出候选。
 
-use super::class_lookup::{event_at, is_invoke, site_of, uses, Part, MAX_NAMES};
+use super::class_lookup::{event_at, is_invoke, site_of, uses, Gap, Part, MAX_NAMES};
 use super::name_eval::Frame;
 use super::*;
 use classfile::op::{GETSTATIC, INVOKESTATIC, PUTSTATIC};
@@ -102,13 +102,27 @@ pub(super) fn array_writes(a: &Analysis, n: u32, f: &MemberRef) -> Option<Vec<(V
 pub(super) fn flatten(parts: &[Part]) -> Option<BTreeSet<Rc<str>>> {
     let mut names: Vec<String> = vec![String::new()];
     for p in parts {
-        names = match p {
-            Part::Lit(l) => names.into_iter().map(|n| n + l).collect(),
-            Part::Any(set) if names.len().saturating_mul(set.len()) <= MAX_NAMES => {
-                names.iter().flat_map(|n| set.iter().map(move |x| format!("{n}{x}"))).collect()
+        let alts;
+        let set = match p {
+            Part::Lit(l) => {
+                names.iter_mut().for_each(|n| n.push_str(l));
+                continue;
             }
-            _ => return None,
+            Part::Any(set) => set,
+            Part::Alt(a) => {
+                let mut u = BTreeSet::new();
+                for x in a {
+                    u.extend(flatten(x)?);
+                }
+                alts = u;
+                &alts
+            }
+            Part::Wild => return None,
         };
+        if names.len().saturating_mul(set.len()) > MAX_NAMES {
+            return None;
+        }
+        names = names.iter().flat_map(|n| set.iter().map(move |x| format!("{n}{x}"))).collect();
     }
     Some(names.into_iter().map(Rc::from).collect())
 }
@@ -225,7 +239,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let f = Frame { m: None, a: &accs[i].a, owner: &accs[i].owner, up: None };
-            let parts = self.name_parts(&f, &v, false, 0)?;
+            let parts = self.name_parts(&f, &v, Gap::Fail, 0)?;
             out.extend(flatten(&parts)?);
         }
         Some(out)

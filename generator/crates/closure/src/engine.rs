@@ -402,6 +402,8 @@ pub struct Engine<'a> {
     xreaders: HashMap<usize, BTreeSet<u32>>,
     /// 按名取类已推不出的调用点：恒按推不出处理（`class_lookup` 单调）
     lookup_top: HashSet<(usize, u32)>,
+    /// 按名取类调用点里含任意串的候选模式（只增不减）：新类进入闭包时按类名匹配，命中即重跑该站点
+    class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
     /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
@@ -486,6 +488,10 @@ pub struct Engine<'a> {
     pub hw_written_names: BTreeSet<String>,
     /// 手写层读取但接收者类型推不出的字段名 → 读出值汇入的值池：所有同名字段流入
     hw_read_names: BTreeMap<String, BTreeSet<Node>>,
+    /// 手写写入值取自按名读的字段名 → (写入目标, 目标类型)：同名字段登记时接上（[`Engine::field_node`]）
+    hw_copy_names: BTreeMap<String, BTreeSet<(Node, u32)>>,
+    /// 手写写入值取自形参上的按名读：接收者形参节点 → (字段名, 写入目标, 目标类型)；接收者值集增长时接入（[`Engine::name_read_objs`]）
+    name_reads: HashMap<Node, Vec<(String, Node, u32)>>,
     /// `包/蛇形名` → 类（手写 `use super::<类>_impl` 模块引用的反查；首次使用时建立）
     snake_index: std::cell::OnceCell<HashMap<String, String>>,
     /// 清单种子状态与输出
