@@ -455,8 +455,11 @@ constructor_invokers = [
 # 按类镜像强制类初始化：Class 实参所指类（类字面量 / 值集里的类镜像）按 JVMS §5.5 初始化，其 <clinit> 的写入
 # 计入字段值集（SharedSecrets 的 ensureClassInitialized(JarFile.class) 后读 JarFile.<clinit> 写入的访问器字段）。
 # JDK 内的按镜像初始化（Lookup.ensureInitialized、DirectMethodHandle / VarHandles 的静态成员句柄）都经此入口
+#   ObjectStreamClass.hasStaticInitializer（computeDefaultSUID 调用）：HotSpot 以 JNI GetStaticMethodID 查 `<clinit>`，
+#   查找前初始化该类（及超类），手写 native 同样先初始化再答复
 class_initializers = [
     "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V",
+    "java/io/ObjectStreamClass.hasStaticInitializer:(Ljava/lang/Class;)Z",
 ]
 # 成员声明类初始化点：下列方法里对 class_initializers 的调用，Class 实参恒为经该路径正被链接 / 访问的成员的声明类。
 # handle：DirectMethodHandle 的 getStatic / putStatic / invokeStatic / newInvokeSpecial 句柄、VarHandles 的静态字段句柄；
