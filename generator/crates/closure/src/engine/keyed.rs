@@ -150,7 +150,12 @@ impl<'a> Engine<'a> {
                 g
             }
         };
-        let keys = pargs.get(ki).map_or(Keys::Any, |v| self.names_of(m, v));
+        // 协议键站点：键是本方法某个 URL 串形参解析出的协议名（见 `keyed_scheme.rs`），不取键实参的写入名字
+        let site = self.mref_key(&self.methods[m].key.clone());
+        let keys = match spec.scheme_sites.get(&*site) {
+            Some(&j) => self.scheme_keys(m, j),
+            None => pargs.get(ki).map_or(Keys::Any, |v| self.names_of(m, v)),
+        };
         if self.keyed.gates[g as usize].keys.merge(keys) {
             self.kgate_recheck(g, None);
         }
@@ -183,6 +188,10 @@ impl<'a> Engine<'a> {
         if !self.under_key_class(xid) {
             return;
         }
+        if let Some(k) = self.pattern_keys(xid) {
+            self.class_keys_add(xid, k);
+            return;
+        }
         let this = matches!(recv, Some(V::Ref { src, .. }) if src.contains(&Src::Param(0)));
         if this && self.methods[m].key.name.as_str() == "<init>" {
             return;
@@ -198,8 +207,32 @@ impl<'a> Engine<'a> {
     /// 类 x 经字节码 `new` 以外的途径实例化：其对象的键任意
     pub(super) fn keyed_instantiated(&mut self, x: u32, kind: &str) {
         if kind != "new" && self.under_key_class(x) {
-            self.class_keys_add(x, Keys::Any);
+            let k = self.pattern_keys(x).unwrap_or(Keys::Any);
+            self.class_keys_add(x, k);
         }
+    }
+
+    /// 类名按清单命名约定（`class_pattern`）定出的键：x 落在登记了命名约定的键类之下且类名匹配时为该键，
+    /// 与实例化途径（字节码 `new` / 反射）无关；否则 None（按构造器追溯）
+    fn pattern_keys(&mut self, x: u32) -> Option<Keys> {
+        let man = self.man;
+        let name = self.names[x as usize].clone();
+        for member in man.keyed_lookups.members() {
+            let Some(spec) = man.keyed_lookups.get(member) else { continue };
+            if spec.class_pattern.is_none() {
+                continue;
+            }
+            let ret = member.split_once(':').and_then(|(_, d)| parse_method(d)).and_then(|md| md.ret);
+            let Some(FieldType::Object(c)) = ret else { continue };
+            let kc = self.id(&c);
+            if !self.sub(x, kc) {
+                continue;
+            }
+            if let Some(k) = spec.pattern_key(&name) {
+                return Some(Keys::Set([Rc::from(k.as_str())].into()));
+            }
+        }
+        None
     }
 
     fn class_keys_add(&mut self, x: u32, keys: Keys) {
@@ -381,6 +414,24 @@ mod tests {
         assert!(k.merge(Keys::Any));
         assert!(!k.merge(set(&["B"])));
         assert_eq!(k, Keys::Any);
+    }
+
+    #[test]
+    fn scheme_keys_release_matching_handlers_only() {
+        use super::super::class_lookup::Part;
+        use super::super::keyed_scheme::scheme_keys_of;
+        // 处理器类键（命名约定）与站点协议键：常量协议只放行同名处理器；协议推不出时任意键全部放行
+        let jar = set(&["jar"]);
+        let site = scheme_keys_of(&[vec![Part::Lit(Rc::from("file:")), Part::Wild]]);
+        assert_eq!(site, set(&["file"]));
+        assert!(!site.meets(&jar, false));
+        assert!(site.meets(&set(&["file"]), false));
+        let unknown = scheme_keys_of(&[vec![Part::Wild]]);
+        assert_eq!(unknown, Keys::Any);
+        assert!(unknown.meets(&jar, false));
+        // 不带协议的串不给键：不放行任何处理器
+        let rel = scheme_keys_of(&[vec![Part::Lit(Rc::from("dir/x.txt"))]]);
+        assert!(!rel.meets(&jar, false));
     }
 
     #[test]

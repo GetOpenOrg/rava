@@ -75,8 +75,14 @@ pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
         (StrOp::HashCode, [V::Str(a)]) => Some(V::Int(a.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c))))),
         (StrOp::CharAt, [V::Str(a), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|c| V::Int(i32::from(c))),
         (StrOp::CharToLowerCase, [V::Int(c)]) => u8::try_from(*c).ok().filter(u8::is_ascii).map(|b| V::Int(i32::from(b.to_ascii_lowercase()))),
+        (StrOp::ToLowerCase, [V::Str(a)] | [V::Str(a), _]) => ascii_lower(a).map(|l| V::Str(Rc::from(l.as_str()))),
         _ => None,
     }
+}
+
+/// 与语言无关的小写（`String.toLowerCase` 在 ASCII 且不含 `I` 的串上各语言结果相同）；其余 None
+pub(super) fn ascii_lower(s: &str) -> Option<String> {
+    (s.is_ascii() && !s.contains('I')).then(|| s.to_ascii_lowercase())
 }
 
 /// 返回值来源上溯到的调用偏移：类目标 checkcast 的结果换成其输入的来源（删除并返回原值的入口返回

@@ -207,6 +207,12 @@ mod tests {
         // 与 Java String.hashCode 一致（字符串 switch 的键）："file".hashCode() = 3143036
         assert_eq!(string_op(StrOp::HashCode, &[s("file")]), Some(V::Int(3143036)));
         assert_eq!(string_op(StrOp::HashCode, &[s("")]), Some(V::Int(0)));
+        // toLowerCase：ASCII 且不含 'I' 时与 locale 无关可折叠，其余（土耳其语 I 等）不折叠
+        assert_eq!(string_op(StrOp::ToLowerCase, &[s("JAR"), V::Top]), Some(s("jar")));
+        assert_eq!(string_op(StrOp::ToLowerCase, &[s("File")]), Some(s("file")));
+        assert_eq!(string_op(StrOp::ToLowerCase, &[s("FTP"), V::Null]), Some(s("ftp")));
+        assert_eq!(string_op(StrOp::ToLowerCase, &[s("JRTI")]), None);
+        assert_eq!(string_op(StrOp::ToLowerCase, &[s("é")]), None);
         assert_eq!(string_op(StrOp::HashCode, &[s("sun.net.www.protocol.")]), Some(V::Int("sun.net.www.protocol.".encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)))));
         assert_eq!(string_op(StrOp::CharAt, &[s("a😀"), V::Int(1)]), Some(V::Int(0xd83d)));
         assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(2)]), None);
