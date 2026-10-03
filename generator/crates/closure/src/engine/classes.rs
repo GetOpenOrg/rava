@@ -441,6 +441,7 @@ impl<'a> Engine<'a> {
             cut::edge_plain(&from, &format!("A:{cls}"));
         }
         let id = self.id(cls);
+        self.keyed_instantiated(id, via.kind);
         if !cls.starts_with('[') && self.touch(cls, Level::Alloc, via).is_none() {
             return;
         }

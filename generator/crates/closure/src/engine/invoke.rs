@@ -253,7 +253,8 @@ impl<'a> Engine<'a> {
             a.push(f);
         }
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
-        let res = Some(Node::S(m, off));
+        // 按键查找入口的结果先经闸门（`keyed.rs`）
+        let res = Some(self.keyed_res(m, off, &resolved, pargs));
         let recv_feeds = |e: &mut Self| match recv_v {
             Some(v) => e.feeds(m, v, owner),
             None => vec![Feed::S(TypeSet::open(owner))],
@@ -265,8 +266,8 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
-                let ret_ref = md.ret.as_ref().is_some_and(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { ret_ref, args: pargs });
+                let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 // 按名加载（class_loads）同样解析，只取镜像不初始化
                 let key = self.mref_key(mref);
@@ -279,6 +280,9 @@ impl<'a> Engine<'a> {
                 }
             }
             op::INVOKESPECIAL => {
+                if resolved.name == "<init>" {
+                    self.keyed_ctor(m, &mref.owner, &mref.desc, recv_v, pargs);
+                }
                 let r = recv_feeds(self);
                 self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
             }

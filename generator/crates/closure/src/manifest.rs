@@ -74,6 +74,8 @@ mod field_names;
 pub use concrete::ConcreteCfg;
 pub use field_names::NameResolver;
 mod indy_helpers;
+mod keyed;
+pub use keyed::{KeyedLookup, KeyedLookups};
 mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
@@ -156,6 +158,8 @@ pub struct Manifest {
     indy: HashMap<String, IndyKind>,
     /// 拼接 / record ObjectMethods 调用点的分量处理入口（`[indy]`，见 `indy_helpers.rs`）
     pub indy_helpers: IndyHelpers,
+    /// 按键查找入口（`[facts.keyed_lookups]`，见 `keyed.rs`）
+    pub keyed_lookups: KeyedLookups,
     /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
@@ -409,6 +413,7 @@ impl Manifest {
                 !strings(&vm, "indy", "concat").is_empty(),
                 !strings(&vm, "indy", "object_methods").is_empty(),
             )?,
+            keyed_lookups: KeyedLookups::from_toml(vm.get("facts").and_then(|s| s.get("keyed_lookups")))?,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,

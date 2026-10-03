@@ -14,6 +14,7 @@ const ILOAD_0: u8 = 0x1a;
 const ALOAD_0: u8 = 0x2a;
 const ALOAD_1: u8 = 0x2b;
 const ASTORE_1: u8 = 0x4c;
+const AALOAD: u8 = 0x32;
 const AASTORE: u8 = 0x53;
 const POP: u8 = 0x57;
 const DUP: u8 = 0x59;
@@ -121,11 +122,48 @@ fn array_code(param: bool) -> Code {
 #[test]
 fn array_writes_constants_only() {
     let a = run(&array_code(false));
-    let w = array_writes(&a, 1, &array_field()).unwrap();
+    let w = array_writes(&a, 1, Some(&array_field())).unwrap();
     assert_eq!(w.len(), 1);
     assert_eq!((w[0].0.clone(), w[0].1.as_ref()), (V::Int(0), "x"));
     let a = run(&array_code(true));
-    assert!(array_writes(&a, 1, &array_field()).is_none());
+    assert!(array_writes(&a, 1, Some(&array_field())).is_none());
+}
+
+/// 局部数组 `S[] xs = {"x", "y"}; xs[0]`；`escape` 时数组另作为实参传出
+fn local_array_code(escape: bool) -> Code {
+    let mut v = vec![
+        i(0, ICONST_2, Operand::None),
+        i(1, op::ANEWARRAY, Operand::Class("a/S".into())),
+        i(4, DUP, Operand::None),
+        i(5, ICONST_0, Operand::None),
+        i(6, op::LDC, ldc("x")),
+        i(8, AASTORE, Operand::None),
+        i(9, DUP, Operand::None),
+        i(10, ICONST_1, Operand::None),
+        i(11, op::LDC, ldc("y")),
+        i(13, AASTORE, Operand::None),
+        i(14, ASTORE_1, Operand::None),
+    ];
+    if escape {
+        v.push(i(15, ALOAD_1, Operand::None));
+        v.push(i(16, op::INVOKESTATIC, Operand::Method(mref("a/H", "f", "([La/S;)V"), false)));
+    }
+    v.push(i(19, ALOAD_1, Operand::None));
+    v.push(i(20, ICONST_0, Operand::None));
+    v.push(i(21, AALOAD, Operand::None));
+    v.push(i(22, POP, Operand::None));
+    v.push(i(23, op::RETURN, Operand::None));
+    code(v)
+}
+
+#[test]
+fn local_array_writes_require_no_escape() {
+    let a = run(&local_array_code(false));
+    let w = array_writes(&a, 1, None).unwrap();
+    let names: Vec<&str> = w.iter().map(|(_, s)| s.as_ref()).collect();
+    assert_eq!(names, ["x", "y"]);
+    let a = run(&local_array_code(true));
+    assert!(array_writes(&a, 1, None).is_none());
 }
 
 fn builder_facts() -> NameFacts {
