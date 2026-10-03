@@ -161,7 +161,7 @@ impl Engine<'_> {
                     "{} → {} [{}] {{{}}}",
                     self.node_str(self.graph.node(src)),
                     self.node_str(self.graph.node(dst)),
-                    self.names[filter as usize],
+                    self.filter_label(filter),
                     self.set_str(&s)
                 );
                 ps.record(k, line);

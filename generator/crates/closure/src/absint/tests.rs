@@ -77,6 +77,39 @@ fn instanceof_narrows_taken_side() {
     }
 }
 
+/// instanceof 不成立一侧：`if (!(o instanceof X)) throw (Throwable) o;`——被测局部变量以条件跳转偏移为来源，
+/// 该偏移发 NotInstance（输入为原值）；类型与非 null 性不变
+#[test]
+fn instanceof_narrows_else_side() {
+    let mut code = instanceof_code();
+    code.insns[2].opcode = 0x9a;
+    let a = analyze("p/A", "(Ljava/lang/Object;)V", true, &code, &Stub { live: vec!["p/X"] });
+    let input = a.events.iter().find_map(|(o, e)| match e {
+        Event::NotInstance(c, v) if *o == 4 && c == "p/X" => Some(v.clone()),
+        _ => None,
+    });
+    assert!(matches!(input, Some(V::Ref { ref src, .. }) if src.as_ref() == [Src::Param(0)]));
+    let thrown = a.events.iter().find_map(|(o, e)| match e {
+        Event::Throw(v) if *o == 8 => Some(v.clone()),
+        _ => None,
+    });
+    match thrown {
+        Some(V::Ref { ty, nonnull, src, .. }) => {
+            assert_eq!(ty.as_deref(), Some("java/lang/Object"));
+            assert!(!nonnull);
+            assert_eq!(src.as_ref(), [Src::Site(4)]);
+        }
+        other => panic!("收窄值 {other:?}"),
+    }
+}
+
+/// 目标类型无实例（判定恒 false）：只剩不成立一侧，照发 NotInstance
+#[test]
+fn instanceof_dead_type_still_has_else_side() {
+    let a = analyze("p/A", "(Ljava/lang/Object;)V", true, &instanceof_code(), &Stub { live: vec![] });
+    assert!(a.events.iter().any(|(o, e)| *o == 4 && matches!(e, Event::NotInstance(..))));
+}
+
 /// 桩 Oracle：形参 0 的类镜像值集（None = 未知）
 struct Mirrors(Option<Vec<&'static str>>);
 

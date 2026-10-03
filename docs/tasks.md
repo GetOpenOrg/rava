@@ -122,6 +122,9 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     │       合入门槛（用户 10-03 定，先收窄再合）：DeepCopy / DTF / FSML 闭包类数与分析时间不高于集成分支
 │   │     │       （约 1820 类 / 23s、1476、1611），终态 DeepCopy ≤1640；顺序 a5-4b → a5-4e → a5-4f，不足再查余下 342
 │   │     │       s1 构造器查找只在 Class 值集齐全时点名：DeepCopy 3139→3069、3m03s→66s（暴露构造器 3498→105）
+│   │     │       s2 instanceof 否定分支收窄 + 钩子字段不按 open：DeepCopy 3065 / DTF 2884 / FSML 2886；首次发现子树重排后最大三支
+│   │     │       （getLoggerFromFinder 1163、toLowerCase→CLDR 783、URLClassPath$3→JarVerifier 493）均需值层面建模，原定手段不足，见 §21.5
+│   │     │       抽查 ① allocateInstance 抽象类 / 接口 → InstantiationException（db4f8a48）；② LocaleBundleFamilies：EnableNativeAccess 嵌套翻译 + 无扩展名 / 拼接模板资源（本地编译运行通过）
 │   │     ├─ ⏳ a4 TestCharsetNamedStreams（自 c4-regfix 移交）◀── a2
 │   │     └─ ⏳ a5 OOB 关系型边界推理（a5-1 差分约束域 → a5-2 类不变量 → a5-3 检查点判定，计划 §21.5），HelloWorld 目标 ≤371；fullAddCount 仅记录
 │   │

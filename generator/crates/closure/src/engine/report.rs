@@ -157,7 +157,7 @@ impl<'a> Engine<'a> {
                     for (dst, f) in edges {
                         if *dst == n {
                             let s = self.graph.get(src).cloned().unwrap_or_default();
-                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
+                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.filter_label(*f), self.set_str(&s)));
                         }
                     }
                 }
@@ -353,7 +353,7 @@ impl<'a> Engine<'a> {
                     for (dst, f) in edges {
                         if *dst == n {
                             let s = self.graph.get(src).cloned().unwrap_or_default();
-                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.names[*f as usize], self.set_str(&s)));
+                            out.push(format!("    ← {} [{}] {{{}}}", self.node_str(*src), self.filter_label(*f), self.set_str(&s)));
                         }
                     }
                 }

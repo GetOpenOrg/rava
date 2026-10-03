@@ -131,6 +131,8 @@ const THROWABLE: &str = "java/lang/Throwable";
 const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
 /// 站点键：异常处理器入口
 const CATCH: u32 = 1 << 31;
+/// 流边过滤标记：只放行 ⊄ 过滤类型的成员（instanceof 判定不成立一侧，见 `classes.rs` `filter`）
+const NOT_SUB: u32 = 1 << 31;
 /// 站点键：手写方法的值池
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池

@@ -273,6 +273,9 @@ pub enum Event {
     CheckCast(String, Option<V>),
     /// 类型测试；非数组目标带输入值（判定成立一侧的收窄值以本偏移为来源，见 `narrow.rs`）
     InstanceOf(String, Option<V>),
+    /// `aload; instanceof C; ifeq/ifne` 判定不成立一侧的收窄值（发在条件跳转指令偏移，该偏移即其来源）：
+    /// 输入值中 ⊄ C 的部分（含 null），见 `narrow.rs`
+    NotInstance(String, V),
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
     Throw(V),
@@ -1159,12 +1162,12 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                         // instanceof 判定成立的一侧收窄被测局部变量
                         let narrow = narrow::instanceof_narrow(insns, &leader, i, &st);
                         let edge = |taken: bool| match &narrow {
-                            Some((slot, v, side)) if *side == taken => {
+                            Some(nw) => {
                                 let mut s2 = st.clone();
-                                s2.locals[*slot] = v.clone();
+                                s2.locals[nw.slot] = nw.side(taken).clone();
                                 s2
                             }
-                            _ => st.clone(),
+                            None => st.clone(),
                         };
                         if k != Some(false) {
                             merge(&mut entry, &mut work, at(t)?, &edge(true))?;
@@ -1228,6 +1231,15 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                 Flow::Next if i + 1 < n && !leader[i + 1] => {
                     i += 1;
                     continue;
+                }
+                // instanceof 判定不成立一侧可达：其收窄值的来源事件
+                Flow::Cond(_, k) => {
+                    if let Some(nw) = narrow::instanceof_narrow(insns, &leader, i, &st) {
+                        if k != Some(nw.taken) {
+                            interp.ev(nw.event.0, nw.event.1);
+                        }
+                    }
+                    break;
                 }
                 _ => break,
             }

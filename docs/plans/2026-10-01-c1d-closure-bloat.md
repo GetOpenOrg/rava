@@ -1226,8 +1226,15 @@ a4（TestCharsetNamedStreams，自 c4-regfix 移交）已由 b124e5ac 修复（`
       | 集成分支（门槛） | 1820 / 23 s | 1476 | 1611 |
       | c1d-p0 9acf7bc9 | 3139 / 3m03s | 2910 | 2912 |
       | s1 构造器查找只在 Class 值集齐全时点名 | 3069 / 66 s | 2910 / 48 s | 2912 / 46 s |
+      | s2 instanceof 否定分支收窄 + 钩子字段不按 open | 3065 / 75 s | 2884 / 53 s | 2886 / 52 s |
 
       - s1：22eb9e72 的构造器查找把值集里的全部镜像点名。DeepCopy 的序列化路径（`ObjectStreamClass.getExternalizableConstructor@5`、`canonicalRecordCtr`、`ReflectionFactory.newConstructorForSerialization@46`）上，Class 值集经流不敏感合流（`Objects.requireNonNull` 返回值等）带入约 2340 个镜像并含 open，结果暴露 3498 个 JDK 构造器（集成分支 8 个）。改为值集齐全才点名；不齐全时同构造器枚举，只给用户类分派臂，查找点记反射缺口。暴露构造器降为 105，DeepCopy 少 70 类，分析时间 3m03s → 66 s；DTF、FSML 不受影响。补边界用例 TestCtorLookupRuntimeClass（经容器 / Object 返回值 / lambda 流转后 `getClass().getDeclaredConstructor()`，JDK 类与用户类混合，值集齐全照常点名）。
+      - s2（a5-4b 第一步）：instanceof 的否定分支建模。分支站点以 if 指令偏移为节点，接「非该类型子类型」过滤边（`NOT_SUB` 过滤位：去掉是子类型的类，open(o) 只在 o 是子类型时去掉）。原先否定分支沿用原值，`Class.getResourceAsStream@44` 的 `!(cl instanceof BuiltinClassLoader)` 分支照样派发到 `BuiltinClassLoader.findResource`。另一处是 `Class.classLoader`：它登记了字段钩子（`__vm_defining_loader` 按定义加载器精确给出 App / Platform 加载器），但 Class 是边界类，读站点仍被加了 open(ClassLoader)。改为钩子字段不按 open 处理。DeepCopy 只少 4 类，DTF、FSML 各少 26 类。补边界用例 TestInstanceofElseDispatch（类 / 接口过滤、子类在否定侧排除、经父类实现接口、null 落入否定侧、链式 instanceof）。
+      - s2 之后重排 DeepCopy 的首次发现子树（`/tmp` 归属脚本，按经过节点计数），最大的几支如下，都不是 a5-4b/e/f 原先设想的单一入口：
+        - `ObjectInputFilter$Config.<clinit>` 共 1332 类，其中 `System.getLogger` 1163 类。`LazyLoggers.getLogger` 用 `DefaultLoggerFinder.isSystem(module)` 选懒日志器还是 `getLoggerFromFinder`。isSystem 的结果是特权动作返回的 Boolean，分析器不对布尔返回值做分支裁剪，`getLoggerFromFinder` 恒可达。运行期实际取懒日志器：`Class.getModule()` 的手写单例 loader 为 null。
+        - 由此进入 `LoggerFinderLoader.<clinit>`（906 类）→ `SecurityConstants.<clinit>` → `SocketPermission.init` → `String.toLowerCase(Locale)`（783 类）→ `ConditionalSpecialCasing` → `BreakIterator.getWordInstance` → `LocaleProviderAdapter` → `CLDRLocaleProviderAdapter.<init>`（691 类）。a5-4e 原设想按 tr / az / lt 收窄，但 `StringUTF16.toLowerCase` 遇到 Σ（U+03A3）时不分语言都进 `ConditionalSpecialCasing`（FINAL_CASED 条件），按语言常量收窄剪不掉这条边。
+        - `CLDRLocaleProviderAdapter.<init>` 的 `doPrivileged(PrivilegedExceptionAction)` 按全程序合流派发到 `URLClassPath$3.run`，下接 `JarLoader`、`JarVerifier`、`PKCS7`，共 493 类。`URLClassPath$3` 的分配点 `getLoader(URL)` 在合法路径上：`ServiceLoader.loadProvider` → `Class.forName(Module, String)` → `ClassLoader.loadClass(Module, String)` → `BuiltinClassLoader.findClassOnClassPathOrNull`，其中 `Module.loader` 被分析器视为 open。`getLoader(URL)` 按 URL 是否以 `/` 结尾在 FileLoader 与 JarLoader 之间选择；应用类路径是 `""` → cwd 目录，运行期只走 FileLoader，但静态不可判定。
+        - 结论：三支都要靠值层面的建模才能剪掉，按原定的「常量 / 可达性」手段收窄不了。需要的能力有三项：① 布尔 / 引用返回值的过程间常量（isSystem）；② Module 字段按手写写入精确建模（边界类字段整体去掉 open，试验仅少 10 类，需与 ① 配合）；③ doPrivileged 按调用点派发（a5-4a，s2 后它挂着 493 类的归属，与 ① ② 合用才有回收）。按这条路线达到门槛需要新的设计，待定。
 
 ### 21.6 并行编排
 

@@ -76,6 +76,9 @@ impl<'a> Engine<'a> {
 
     /// 类型集按过滤类型收窄
     pub(super) fn filter(&mut self, s: &TypeSet, t: u32) -> TypeSet {
+        if t & NOT_SUB != 0 {
+            return self.filter_not(s, t & !NOT_SUB);
+        }
         if self.names[t as usize].as_ref() == OBJECT {
             return s.clone();
         }
@@ -102,6 +105,29 @@ impl<'a> Engine<'a> {
             }
         }
         out
+    }
+
+    /// 类型集去掉 ⊂ t 的成员（instanceof 判定不成立一侧）。open(o)：o ⊂ t 时整锥去掉，否则保留——
+    /// 锥内 ⊂ t 的子类型在展开时仍可能出现，保守但不丢成员
+    fn filter_not(&mut self, s: &TypeSet, t: u32) -> TypeSet {
+        let mut out = TypeSet::default();
+        let kept: Vec<u32> = s.classes.iter().filter(|&x| !self.sub(x, t)).collect();
+        out.classes = IdSet::from_sorted(kept);
+        for o in &s.open {
+            if !self.sub(o, t) {
+                out.open.insert(o);
+            }
+        }
+        out
+    }
+
+    /// 流边过滤的显示名（不成立一侧记作 `!类型`）
+    pub(super) fn filter_label(&self, f: u32) -> String {
+        if f & NOT_SUB != 0 {
+            format!("!{}", self.names[(f & !NOT_SUB) as usize])
+        } else {
+            self.names[f as usize].to_string()
+        }
     }
 
     /// G 中 ⊂ t 的成员

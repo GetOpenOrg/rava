@@ -67,7 +67,7 @@ impl<'a> Engine<'a> {
         loop {
             let mut changed = false;
             for (off, e) in &a.events {
-                let (Event::CheckCast(_, Some(v)) | Event::InstanceOf(_, Some(v))) = e else { continue };
+                let (Event::CheckCast(_, Some(v)) | Event::InstanceOf(_, Some(v)) | Event::NotInstance(_, v)) = e else { continue };
                 let s = slots_of(v, &derived);
                 if s != 0 {
                     let cur = derived.entry(*off).or_default();
