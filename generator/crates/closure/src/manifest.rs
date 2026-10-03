@@ -78,7 +78,7 @@ mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
-pub use sysprops::{PropRead, PropValue, SysProps};
+pub use sysprops::{PropRead, PropValue, PropWrite, SysProps};
 
 /// 方法返回值事实（[vm_constants] / [facts]）
 #[derive(Debug, Clone, PartialEq)]

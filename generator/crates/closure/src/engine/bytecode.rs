@@ -222,7 +222,7 @@ impl<'a> Engine<'a> {
         let mut r: Option<PV> = None;
         for (_, e) in &a.events {
             if let Event::Return(v) = e {
-                r = Some(PV::join(r.as_ref(), &PV::of(v)));
+                r = Some(PV::join(r.as_ref(), &PV::of_ret(v)));
             }
         }
         let Some(r) = r else { return };

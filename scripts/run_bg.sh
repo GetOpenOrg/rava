@@ -3,7 +3,7 @@
 #
 # 用法：scripts/run_bg.sh <tag> <command...>
 #   输出 → build/logs/bg/<tag>.log，结束写 build/logs/bg/<tag>.done（exit=<码>）
-# 例：  scripts/run_bg.sh j21 python3 scripts/run_tests.py --jdk 21 --filter TestAtomics
+# 例：  scripts/run_bg.sh j21 python3 scripts/run_tests.py --filter TestAtomics
 #
 # 低内存环境（16G 机器上大闭包 rustc 峰值 ~14G 会被 OOM 杀）：
 #   CARGO_INCREMENTAL=0                      增量元数据双份内存是 OOM 压垮点

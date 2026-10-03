@@ -21,10 +21,23 @@ impl PV {
             _ => PV::Top,
         }
     }
+    /// 返回值 → 返回常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」（[`nonnull_ref`]）。
+    /// 只用于返回常量格：调用点据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法），
+    /// 形参 / 字段常量格不取它（那里的引用须保留来源）
+    pub(super) fn of_ret(v: &V) -> PV {
+        match v {
+            V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
+            _ => PV::of(v),
+        }
+    }
     pub(super) fn join(a: Option<&PV>, b: &PV) -> PV {
         match (a, b) {
             (None, x) => x.clone(),
             (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
+            // 非空引用与确定非空的引用（含带标签的）合流：仍是非空引用
+            (Some(PV::Const(x)), PV::Const(y)) if (is_nonnull_ref(x) || is_nonnull_ref(y)) && x.nonnull() == Some(true) && y.nonnull() == Some(true) => {
+                PV::Const(nonnull_ref())
+            }
             // int 族常量：取有限并
             (Some(PV::Const(x)), PV::Const(y)) if crate::absint::ints::members(x).is_some() && crate::absint::ints::members(y).is_some() => {
                 crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
@@ -43,6 +56,15 @@ impl PV {
             PV::Top => None,
         }
     }
+}
+
+/// 返回常量格的「非空引用」：值未知、类型未知（调用点按声明返回类型补上）、恒非 null
+pub(super) fn nonnull_ref() -> V {
+    V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None }
+}
+
+pub(super) fn is_nonnull_ref(v: &V) -> bool {
+    matches!(v, V::Ref { ty: None, nonnull: true, src, obj: None } if src.is_empty())
 }
 
 /// 字段初值（默认值）；float / double 不折叠
@@ -106,6 +128,8 @@ pub(super) struct Ctx<'a> {
     pub(super) psums: RefCell<HashMap<MemberRef, (Option<PropSum>, super::memo::Inputs)>>,
     /// 只读形参判定缓存：(方法, 形参序号) → 属性表对象经该形参传入时不逃逸
     pub(super) preadonly: RefCell<HashMap<(MemberRef, usize), (bool, super::memo::Inputs)>>,
+    /// 删除包装方法里作删除键的形参序号（`sysprops_write.rs`）
+    pub(super) pwsums: RefCell<HashMap<MemberRef, Rc<[usize]>>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
@@ -454,6 +478,11 @@ impl Oracle for Facts<'_, '_> {
         match r {
             // 小集合：先按本调用点的常量实参求值，求不出时取集合
             Some(PV::Const(v @ V::Ints(_))) => match eval() {
+                Ret::Unknown => Ret::Value(v),
+                x => x,
+            },
+            // 非空引用：先按本调用点的常量实参求值（可能得出字符串常量），求不出时取非空引用
+            Some(PV::Const(v)) if is_nonnull_ref(&v) => match eval() {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },

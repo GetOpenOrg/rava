@@ -9,7 +9,7 @@
 #   scripts/lib_pilot_golden.sh m5     # 跨 crate 分派链：user 类实现 lib 类型并被 lib 回调
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
-# 前置：JDK 21（JAVA_HOME 未设时自动发现）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
+# 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
 #（scripts/fetch_pilot_deps.sh --no-scan 导出；可经 PILOT_LIBS 覆盖）。
 # 流程：javac（-cp jars）→ java 真 jar 侧 golden → rava build --lib 转译 + 编译 →
 # 运行翻译侧产物 → diff 逐字对账。golden 文本随仓库存档于
@@ -21,10 +21,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
 [ -f "$LIBS/junit-4.13.2.jar" ] || { echo "缺 jar：先跑 scripts/fetch_pilot_deps.sh --no-scan（或设 PILOT_LIBS）" >&2; exit 2; }
 . "$REPO_ROOT/scripts/rava_env.sh" "$REPO_ROOT"
-# JDK 选择与 rava build / run_tests.py 同一实现（rava jdk）：JAVA_HOME >
-# .jdk-version（21）> 最新已安装；macOS brew / Linux /usr/lib/jvm 通吃
-JAVA_HOME="$("$RAVA" jdk --home-only)" || { echo "未找到可用 JDK，请设置 JAVA_HOME" >&2; exit 2; }
-export JAVA_HOME
+# 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
+. "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
 MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile]}"
 TRANSPILE=1
@@ -85,7 +83,7 @@ print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
 if [[ "$TRANSPILE" == 1 ]]; then
-    "$RAVA" build "tests/lib_pilot/$MAIN.java" --jdk 21 --clean "${LIB_ARGS[@]}" \
+    "$RAVA" build "tests/lib_pilot/$MAIN.java" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
         --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
         || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
 fi

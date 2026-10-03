@@ -1,0 +1,33 @@
+# 语料参考 JDK 固定构建（docs/plans/2026-10-03-reference-jdk-21.md）
+#
+# 语料（e2e 全集、抽查、作业、expected 生成）在所有机器上用同一个 JDK 构建：
+# javac / java / jmods / golden JVM 全部同源，CLDR 等随小版本漂移的数据两侧一致。
+# 21.0.11 = 现有 tests/expected 的生成版本（golden 无需重生成）。升级参考 JDK 是一次
+# 显式的基线事件：改本文件 + 全量重生成 expected + 双跑闸门，单独立项。
+#
+# 消费方：scripts/fetch_reference_jdk.sh（取包 / 校验 / 定位，唯一解析实现）；
+# scripts/run_tests.py 与语料 shell 脚本经它取 JAVA_HOME。生成器 crate 不读本文件。
+# 落位：<JDK 根>/<tag>/（JDK 根缺省为主检出的 tools/refjdk/，RAVA_REFJDK_ROOT 覆盖）。
+#
+# 格式约束（取包脚本以 awk 解析）：每行一个 key = "value"，平台段名为 [<os>-<arch>]。
+# 来源：Adoptium API /v3/assets/release_name/eclipse/<tag>（package.link / package.checksum）。
+
+tag = "jdk-21.0.11+10"
+version = "21.0.11"
+vendor = "Eclipse Temurin"
+
+[linux-x64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz"
+sha256 = "4b2220e232a97997b436ca6ab15cbf70171ecff52958a46159dfa5a8c44ca4de"
+
+[linux-aarch64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.11_10.tar.gz"
+sha256 = "8d498ec88e1c1989fab95c6784240ab92d011e29c54d20a3f9c324b13476f9ad"
+
+[macos-aarch64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.11_10.tar.gz"
+sha256 = "6ebcf221c9b41507b14c098e93c6ead6440b8d9bd154f8ec666c4c73abbdb201"
+
+[macos-x64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_mac_hotspot_21.0.11_10.tar.gz"
+sha256 = "34180eb03e6d207c388cce3da668f6cc7cd7508c185c24782fadac2c9c0e66f9"
