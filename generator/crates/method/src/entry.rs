@@ -98,6 +98,16 @@ impl Entry {
         }
     }
 
+    /// catch 衔接行 `} catch (bind: T…) {` / `} catch (bind) {` 绑定的变量名（格式见 `try_plan::catch_head`）
+    pub fn catch_binding(&self) -> Option<&str> {
+        let Item::Struct { text, tag: Tag::Catch, .. } = &self.item else {
+            return None;
+        };
+        let rest = &text[text.find("catch (")? + "catch (".len()..];
+        let end = rest.find([':', ')'])?;
+        Some(rest[..end].trim()).filter(|n| !n.is_empty())
+    }
+
     /// `} else {` / `} else if … {`（← `_is_else_line`）
     pub fn is_else_line(&self) -> bool {
         self.tag() == Some(Tag::Else)
@@ -126,4 +136,21 @@ impl Entry {
 /// 清理已删除条目（← `_drop_removed`）
 pub fn drop_removed(entries: &mut Vec<Entry>) {
     entries.retain(|e| e.item != Item::Removed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Entry, Tag};
+
+    #[test]
+    fn catch_binding_parses_head() {
+        let typed = Entry::structure("        } catch (e: Exception) {".into(), 0, Tag::Catch);
+        assert_eq!(typed.catch_binding(), Some("e"));
+        let multi = Entry::structure("    } catch (ex: A | B as Throwable) {".into(), 0, Tag::Catch);
+        assert_eq!(multi.catch_binding(), Some("ex"));
+        let any = Entry::structure("    } catch (t) {".into(), 0, Tag::Catch);
+        assert_eq!(any.catch_binding(), Some("t"));
+        let other = Entry::structure("    } else {".into(), 0, Tag::Else);
+        assert_eq!(other.catch_binding(), None);
+    }
 }

@@ -1,0 +1,25 @@
+get=-3,z,-5
+getLong(int[])=42
+getDouble(char[])=65.0
+getInt(byte[])=-5
+getInt(long[])=IllegalArgumentException:argument type mismatch
+getChar(int[])=IllegalArgumentException:argument type mismatch
+getInt(Integer[])=IllegalArgumentException:Argument is not an array of primitive type
+longs=9,5 doubles[1]=66.0
+setLong(int[])=IllegalArgumentException:argument type mismatch
+set(int[],Long)=IllegalArgumentException:argument type mismatch
+set(int[],null)=IllegalArgumentException:null
+set(int[],String)=IllegalArgumentException:argument type mismatch
+setBoolean(int[])=IllegalArgumentException:argument type mismatch
+flags[0]=true get=true
+objs=11,null
+set(Integer[],String)=IllegalArgumentException:array element type mismatch
+nums=3,2.5
+set(Number[],String)=IllegalArgumentException:array element type mismatch
+setInt(Number[])=IllegalArgumentException:Argument is not an array of primitive type
+get(null)=NullPointerException
+get(String)=IllegalArgumentException:Argument is not an array
+set(Integer)=IllegalArgumentException:Argument is not an array
+get(int[],3)=ArrayIndexOutOfBoundsException
+set(Integer[],-1)=ArrayIndexOutOfBoundsException
+setInt(int[],5)=ArrayIndexOutOfBoundsException

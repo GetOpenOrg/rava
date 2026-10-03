@@ -78,3 +78,60 @@ pub(super) fn box_prim_via_valueof(env: &InstrEnv, val: &str, prim_desc: &str) -
     let mname = ty::ident::safe_ident(&mangle_if_overloaded(&env.ctx, wci.name(), &m.name, Some(&m.desc))?);
     Ok(Some(format!("{}::from({wrapper_rust}::{mname}({val})?)", ir::anchors::OBJECT)))
 }
+
+/// 基本类型描述符字符的 Rust 标量文本（拓宽转换的 `as` 目标）
+fn prim_rust(prim_desc: &str) -> Option<&'static str> {
+    Some(match prim_desc {
+        "Z" => "bool",
+        "B" => "i8",
+        "C" => "u16",
+        "S" => "i16",
+        "I" => "i32",
+        "J" => "i64",
+        "F" => "f32",
+        "D" => "f64",
+        _ => return None,
+    })
+}
+
+/// 实现方法返回引用、SAM 返回基本类型时的返回值拆箱（LambdaMetafactory 的引用 → 基本适配，
+/// `MethodType` 规则：装箱类 → 拆箱后按 JLS §5.1.2 拓宽；其余引用 → 先转为目标装箱类再拆箱）。
+///
+/// `val` 是实现方法返回值文本（静态类型 `impl_ret`）。装箱类返回值优先取该类上直接返回目标基本
+/// 类型的 `xxxValue`（`Integer.longValue` 即拆箱 + i2l）；无此方法（`Character` → int）取本类型
+/// 拆箱后 `as` 拓宽。解析失败 → None（调用方保持原文，编译期 E0308 暴露）
+pub(super) fn unbox_return(env: &InstrEnv, val: &str, impl_ret: &str, sam_ret: &str) -> InstrResult<Option<String>> {
+    let Some(target_rust) = prim_rust(sam_ret) else {
+        return Ok(None);
+    };
+    let own_prim = ["Z", "B", "C", "S", "I", "J", "F", "D"]
+        .into_iter()
+        .find(|p| wrapper_of(p).is_some_and(|w| impl_ret == format!("L{w};")));
+    let Some(own_prim) = own_prim else {
+        // 非装箱类的引用（Object / Number / 擦除的类型变量）：转 Object 后按目标装箱类拆箱
+        let obj = obj_text(env, val, &env.ctx.ty.jvm_to_rust(impl_ret))?;
+        return unbox_object_arg(env, &obj, sam_ret);
+    };
+    let Some((wci, _)) = wrapper_class(env, own_prim) else {
+        return Ok(None);
+    };
+    let value_method = |prim: &str| {
+        wci.methods().iter().find(|m| {
+            !m.is_static()
+                && m.name.ends_with("Value")
+                && ty::type_map::parse_descriptor_params(&m.desc).is_empty()
+                && ty::type_map::parse_descriptor_return(&m.desc) == prim
+        })
+    };
+    let call = |m: &classfile::Method| -> InstrResult<String> {
+        let mname = ty::ident::safe_ident(&mangle_if_overloaded(&env.ctx, wci.name(), &m.name, Some(&m.desc))?);
+        Ok(format!("{val}.{mname}()?"))
+    };
+    if let Some(m) = value_method(sam_ret) {
+        return Ok(Some(call(m)?));
+    }
+    match value_method(own_prim) {
+        Some(m) if own_prim != sam_ret => Ok(Some(format!("({} as {target_rust})", call(m)?))),
+        _ => Ok(None),
+    }
+}
