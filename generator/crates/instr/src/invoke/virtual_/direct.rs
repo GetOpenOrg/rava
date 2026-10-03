@@ -115,14 +115,12 @@ pub(super) fn resolve_direct_call_sig(
         let bridged = owner::resolve_bridge_target(reg, ci_recv, mname, &jvm_desc);
         if let Some((b_bin, b_desc)) = &bridged {
             pdesc = owner::param_part(b_desc).to_string();
-            let b_iface = reg.get(b_bin).is_some_and(|c| c.is_interface());
-            if !b_iface {
-                // 返回类型 / 签名查找按被桥接的真实方法（与生成的 Rust 方法同源）
-                d.redesc(env, b_desc);
-                d.sig_owner = b_bin.clone();
-                if *b_bin != obj_jvm {
-                    d.sig_recv_ty = owner_view(env, ci_recv, &site.obj_ty, b_bin);
-                }
+            // 返回类型 / 签名查找按被桥接的真实方法（与生成的 Rust 方法同源）：bridge 与真实方法
+            // 同 Rust 名，接口默认方法的桥（`History.iterator()Iterator` → `ListIterator`）同样只生成真实方法
+            d.redesc(env, b_desc);
+            d.sig_owner = b_bin.clone();
+            if *b_bin != obj_jvm {
+                d.sig_recv_ty = owner_view(env, ci_recv, &site.obj_ty, b_bin);
             }
         }
         if bridged.as_ref().is_none_or(|(b, _)| *b != obj_jvm) {

@@ -170,6 +170,7 @@ impl<'a> Engine<'a> {
             enumerated: BTreeSet::new(),
             reflect_names: HashMap::default(),
             named_ctors: BTreeSet::new(),
+            ctor_lookups: BTreeMap::new(),
             invokable: BTreeSet::new(),
             lwraps: HashMap::default(),
             reflect_gaps: BTreeSet::new(),

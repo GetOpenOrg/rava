@@ -172,11 +172,8 @@ pub fn resolve_static_field(env: &InstrEnv, cls: &str, raw_name: &str, desc: &st
                 }
             }
         }
-        // 字段名与方法名冲突：emitter 生成 `name_field` 后缀
-        // （比较用 Java 原名：转义后的名字与方法原名不可比）
-        if ci.methods().iter().any(|m| m.name == raw_name) {
-            accessor = ty::ident::safe_ident(&format!("{raw_name}_field"));
-        }
+        // 访问器与方法 / 其它 static 字段的访问器同名：emitter 生成 `name_field` 后缀（同一口径）
+        accessor = ci.static_accessor(raw_name);
     }
     StaticField { class: cls, accessor, ty, turbofish }
 }

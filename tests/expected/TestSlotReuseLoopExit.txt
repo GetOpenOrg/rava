@@ -1,0 +1,4 @@
+count=5 probes=4
+duplicate c probes=6
+0:db
+1:eca

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::if_emit::{emit, outer};
 use super::refs::{refs, render_entries, RefCache};
-use super::{apply_insertions, entry_nesting, let_of, VarsCtx};
+use super::{apply_insertions, entry_nesting, let_of, read_is_other_var, VarsCtx};
 use crate::entry::Entry;
 use crate::error::MethodResult;
 
@@ -112,7 +112,8 @@ fn select(cx: &VarsCtx, entries: &[Entry], f: &Frame, cache: &RefCache, declared
             let mut ref_idx = None;
             for k2 in close..n {
                 if let Some(read) = read_at(cx, entries, f, Some(cache), k2, &name) {
-                    if read {
+                    // 读取点属于另一个 JVM 变量（LVT 区间证据）：不是本声明的块外读取
+                    if read && !read_is_other_var(cx, &entries[decl_k], &entries[k2], &name) {
                         found = true;
                         ref_idx = Some(k2);
                     }

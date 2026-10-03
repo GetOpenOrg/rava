@@ -291,34 +291,57 @@ impl<'a> Engine<'a> {
     /// 只有值集齐全（全是推得出的镜像、无 open）时查找目标才确定、才点名；值集不齐全时运行期目标可以是值集之外的
     /// 任意类，已知部分只是流不敏感合流带进来的镜像（如 `Objects.requireNonNull` 返回值），不比其余类更可信——
     /// 此时同构造器枚举：所指类记为已枚举（用户类照常有分派臂），JDK 类不点名，查找点记为反射缺口。
-    /// 数组类没有构造器
+    /// 「齐全」随值集增长可以变为不齐全（非单调）：所指类即时记为已枚举（单调），点名登记查找点、留到工作队列
+    /// 排空时按当时的值集判定（[`Self::seed_ctor_lookups`]），结果与处理顺序无关。数组类没有构造器
     pub(super) fn constructor_lookup(&mut self, m: usize, off: u32, k: &str, mref: &MemberRef, opcode: u8, args: &[V]) {
         let Some(md) = parse_method(&mref.desc) else { return };
         let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
-        let mut vals: Vec<&V> = vec![];
+        let mut vals: Vec<V> = vec![];
         if skip == 1 && mref.owner == CLASS {
-            vals.extend(args.first());
+            vals.extend(args.first().cloned());
         }
         for (p, a) in md.params.iter().zip(args.iter().skip(skip)) {
             if matches!(p, FieldType::Object(c) if c == CLASS) {
-                vals.push(a);
+                vals.push(a.clone());
             }
         }
-        let mut classes: BTreeMap<String, bool> = BTreeMap::new();
-        for v in vals {
-            let (cs, complete) = self.mirror_classes_of(m, off, k, v, true);
-            for c in cs {
-                *classes.entry(c).or_default() |= complete;
-            }
+        let mut classes: BTreeSet<String> = BTreeSet::new();
+        for v in &vals {
+            classes.extend(self.mirror_classes_of(m, off, k, v, true).0);
         }
-        for (cls, complete) in classes.into_iter().filter(|(c, _)| !c.starts_with('[')) {
+        self.ctor_lookups.insert((m, off), (k.to_string(), vals));
+        for cls in classes.into_iter().filter(|c| !c.starts_with('[')) {
             let c = self.id(&cls);
-            let named = complete && self.named_ctors.insert(c);
-            let listed = self.enumerated.insert((Members::Constructors, c));
-            if (named || listed) && self.invokable.contains(&Members::Constructors) {
+            if self.enumerated.insert((Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {
                 self.expose(Members::Constructors, c);
             }
         }
+    }
+
+    /// 补种：工作队列排空时，构造器查找点上值集齐全的 Class 值点名其所指类（先按当前值集求出全部判定再施加，
+    /// 施加带来的增长留给下一轮）；有新点名返回 true
+    pub(super) fn seed_ctor_lookups(&mut self) -> bool {
+        let sites: Vec<((usize, u32), (String, Vec<V>))> = self.ctor_lookups.iter().map(|(s, x)| (*s, x.clone())).collect();
+        let mut picked: BTreeSet<String> = BTreeSet::new();
+        for ((m, off), (k, vals)) in sites {
+            for v in &vals {
+                let (cs, complete) = self.mirror_classes_of(m, off, &k, v, false);
+                if complete {
+                    picked.extend(cs.into_iter().filter(|c| !c.starts_with('[')));
+                }
+            }
+        }
+        let mut grew = false;
+        for cls in picked {
+            let c = self.id(&cls);
+            if self.named_ctors.insert(c) {
+                grew = true;
+                if self.invokable.contains(&Members::Constructors) {
+                    self.expose(Members::Constructors, c);
+                }
+            }
+        }
+        grew
     }
 
     /// 类 c 的 k 类成员入链：方法经反射调用通道执行，形参与接收者取自通道的实参池（`reflect_call.rs`；

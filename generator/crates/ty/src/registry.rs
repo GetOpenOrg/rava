@@ -35,6 +35,24 @@ impl ClassInfo {
         ClassInfo { cf, signature }
     }
 
+    /// static 字段（Java 名 `raw`）在 Rust 侧的访问器名。`java_class!` 把 static 字段展开为 getter `NAME()` 与
+    /// setter `set_NAME(v)`，与方法、其它 static 字段的访问器同处一个 impl：getter 与方法同名、setter 与方法同名，
+    /// 或 getter 与另一 static 字段的 setter 同名（字段 `set_x` 与字段 `x`，如 jline 的终端能力枚举）时，访问器名
+    /// 加 `_field` 后缀。发射端（字段声明）与访问端（getstatic / putstatic）共用此口径
+    pub fn static_accessor(&self, raw: &str) -> String {
+        let base = crate::ident::safe_ident(raw);
+        let setter = format!("set_{raw}");
+        let method_clash = self.cf.methods.iter().any(|m| m.name == raw || m.name == setter);
+        let setter_clash = base
+            .strip_prefix("set_")
+            .is_some_and(|g| self.cf.fields.iter().any(|f| f.is_static() && f.name != raw && crate::ident::safe_ident(&f.name) == g));
+        if method_clash || setter_clash {
+            crate::ident::safe_ident(&format!("{raw}_field"))
+        } else {
+            base
+        }
+    }
+
     pub fn class_file(&self) -> &ClassFile {
         &self.cf
     }
@@ -168,5 +186,40 @@ impl Registry {
     /// 按插入序迭代（仅短名索引等依赖插入序的语义使用）
     pub fn iter_insertion(&self) -> impl Iterator<Item = &ClassInfo> {
         self.order.iter().filter_map(|n| self.classes.get(n))
+    }
+}
+
+#[cfg(test)]
+mod static_accessor_tests {
+    use std::sync::Arc;
+
+    use classfile::acc;
+
+    use super::ClassInfo;
+    use crate::testutil::{class, field, method};
+
+    /// 字段 `set_tab` 的 getter 与字段 `tab` 的 setter 同名、字段与方法同名时加 `_field` 后缀；其余照 Java 名
+    #[test]
+    fn static_accessor_avoids_clashes() {
+        let mut spec = class("p/Cap");
+        let st = acc::PUBLIC | acc::STATIC;
+        spec.cf.fields = vec![
+            field(st, "tab", "Lp/Cap;", None),
+            field(st, "set_tab", "Lp/Cap;", None),
+            field(st, "lines", "Lp/Cap;", None),
+            field(st, "mode", "I", None),
+            field(st, "flag", "I", None),
+            field(acc::PUBLIC, "set_inst", "I", None),
+            field(st, "inst", "I", None),
+        ];
+        spec.cf.methods = vec![method(st, "mode", "()I", None), method(st, "set_flag", "(I)V", None)];
+        let ci = ClassInfo::new(Arc::new(spec.cf));
+        assert_eq!(ci.static_accessor("tab"), "tab");
+        assert_eq!(ci.static_accessor("set_tab"), "set_tab_field");
+        assert_eq!(ci.static_accessor("lines"), "lines");
+        assert_eq!(ci.static_accessor("mode"), "mode_field");
+        assert_eq!(ci.static_accessor("flag"), "flag_field");
+        // 实例字段没有 static 访问器，不与 static 字段的 setter 冲突
+        assert_eq!(ci.static_accessor("inst"), "inst");
     }
 }

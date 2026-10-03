@@ -134,11 +134,12 @@ fn erased_generic(ctx: &InstrCtx, t: RsType) -> RsType {
     RsType::class(binary.to_string(), vec![RsType::Object; n])
 }
 
-/// 槽位 widening 的公共类祖先（`_common_ref_type_widening`）：基名走 [`common_ref_type`]；
-/// 接口 / 根类 / 无公共祖先 → None；双方实参（渲染文本）一致时保留实参，否则 None
+/// 槽位 widening 的公共祖先（`_common_ref_type_widening`）：基名走 [`common_ref_type`]——一方是
+/// 另一方子类型时取父类型（含接口：`ArrayList` ⊔ `List` = `List`），否则取公共类祖先；
+/// 根类 / 无公共祖先 → None；双方实参（渲染文本）一致时保留实参，否则 None
 pub fn common_ref_type_widening(ctx: &InstrCtx, a: &RsType, b: &RsType) -> Option<RsType> {
     let common = common_ref_type(ctx, &sim::erase(a), &sim::erase(b))?;
-    if matches!(common, RsType::Object) || is_interface(ctx, &common) {
+    if matches!(common, RsType::Object) {
         return None;
     }
     let (aa, ba) = (a.type_args(), b.type_args());

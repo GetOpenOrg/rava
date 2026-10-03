@@ -451,6 +451,8 @@ pub struct Engine<'a> {
     reflect_names: HashMap<u32, BTreeMap<String, u8>>,
     /// 按名取类（常量名解析）取到的类：其构造器随构造器枚举进入反射面
     named_ctors: BTreeSet<u32>,
+    /// 构造器查找点（方法, 偏移）→（查找键, Class 实参与 Class 接收者的值）：点名与否在工作队列排空时按终态值集判定
+    ctor_lookups: BTreeMap<(usize, u32), (String, Vec<V>)>,
     /// 按名查方法的包装方法（方法键 → 查找类形参 × 名字形参的配对），见 `lookup_pair.rs`
     lwraps: HashMap<MemberRef, Vec<lookup_pair::LookupWrap>>,
     /// 反射缺口：接收者镜像推不出的成员枚举
