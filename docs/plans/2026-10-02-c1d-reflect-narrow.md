@@ -669,20 +669,27 @@ TestCompletableFuture / TestDateTimeFormat / TestStreamCollectors 在上项后�
     `match R.__class_name() { "a" | "b" => … }` 区域内，`R` 以根类型出现的 toString 分派（`__obj_str` / `__to_string` /
     Display）收窄为 `SType::Java(c)`（取 `c` 的 open 集）；`R` 重新绑定 / 赋值即失效。覆盖 `reflect_dispatch.rs` 的
     `unbox_*` 与 `lib.rs` 的 `_ts_*_label_eq`。
-- 测量（`rava closure --image $(rava image-dirs)`，**顺序执行**）：
+- 测量（`rava closure --image $(rava image-dirs)`）：
 
 | 用例 | 类 / 方法（e97dcf02 → 本步） |
 |---|---|
 | HelloWorld | 499 / 2062 → 467 / 1822 |
-| StockTrans | 3070 → 3070 / 18532 |
-| DeepCopy | 3065 → 3065 / 18485 |
+| StockTrans | 3107 / 18814 不变 |
+| DeepCopy | 3102 / 18767 不变 |
 
   HelloWorld 去掉的 32 类与实验一致：Short、Thread$State、Policy / Permissions 族、CHM / WeakHashMap / Hashtable 迭代器与视图、
   DoubleToDecimal / FormattedFPDecimal、Wrapper、Debug 等（均只经 toString 覆盖进入）。
-- **测量口径注意**：同机**并行**起三个 `rava closure`（HelloWorld / StockTrans / DeepCopy 同时跑）时 StockTrans / DeepCopy 稳定得
-  3107 / 3102，顺序执行稳定得 3070 / 3065（多出 37 类：vmsupport 的 `Proxy$Dyn` / `Species_*` / `InjectedInvokerDyn` /
-  `SerializationConstructorAccessorDyn`、AnnotationInvocationHandler.toStringImpl 链等）。hash 种子、环境变量、临时目录（按 pid）
-  均已排除，原因未查明，登记待查；上表 c64ec205 等行的 3107 / 3102 疑为并行口径。
+- **测量口径排查（3107 vs 3070，非闭包非确定）**：曾观察到「并行跑 3107 / 3102、单独跑 3070 / 3065」，`--why` 对比两份结果
+  的前沿：多出的 37 类全部挂在三个 VM 支持类上——`BoundMethodHandle$Species_Dyn`（field-name ← `ClassSpecializer$Factory.linkCodeToSpeciesData`）、
+  `Proxy$Dyn`（hw-type ← `Proxy`）、`SerializationConstructorAccessorDyn`（hw-type ← `MethodAccessorGenerator`），其引用方两边都在，
+  其余（`Species_*` 镜像根、注解代理 `toStringImpl` → Long / DoublePipeline 链）都由它们展开。根因不在分析器：「单独跑」是在
+  zsh 交互命令里执行 `rava closure … $IMGS`，zsh 不对未加引号的变量分词，`--image A --image B` 作为**单个参数**传入，`rava closure`
+  静默忽略未知参数，镜像 / VM 支持目录全部丢失；bash 脚本里的并行跑法正常分词。同一参数下并行两份与顺序一份结果一致（3107 / 18814），
+  hash 种子、闭包缓存（未启用）、jimage / vmsupport 缓存（内容与时间戳未变）、临时目录（按 pid）均无关。
+- 修复（`driver/src/closure_cmd.rs`）：① 参数逐个校验，未知参数 / 多余位置参数 / 缺值一律报错（单测 `args_checked` 守护，含未分词的
+  镜像参数串）；② `--image` 缺省与 `rava build` 同源派生（`image_class_dirs(JDK, runtime/java_support)`），不带 `--image` 的
+  `rava closure` 与 `rava build` 的闭包输入一致（StockTrans 不带 `--image`：3107 / 18814）。此前文中以 `--why` 单独跑得到的
+  3070 / 3065 均为缺镜像口径，作废；c64ec205 等行的 3107 / 3102 为正确口径。
 
 **b3 余项②：URL$DefaultFactory 反射构造器扇出**——无剩余扇出可收。
 

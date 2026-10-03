@@ -5,13 +5,18 @@
 //! `@grow:` / `@trace:` / `@edge:` 为记录型，分析前登记、传播中记录，见 `closure/src/engine/diag.rs`）、`--report <报告.md>`、
 //! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
-//! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类）、
+//! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类；缺省与 `rava build` 同源派生，
+//! 见 [`crate::build_cmd::image_dirs`]）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
 //! `--locale <标签>`（locale 资源束种子）；
 //! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
 //! `--dump-edges <文件>`（触发边转储）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
+//!
+//! 参数逐个校验：未知参数、多余的位置参数一律报错。闭包结果取决于输入（类路径、镜像目录），静默忽略的参数会
+//! 让同一用例得出不同闭包——例如 zsh 不对未加引号的 `$IMGS` 分词，`--image A --image B` 作为单个参数传入时
+//! 镜像目录全部丢失，闭包少掉镜像独有 / VM 支持类。
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +28,32 @@ use resolve::{ClassPath, Hierarchy, Origin};
 use crate::Args;
 
 pub(crate) const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
+
+/// 带值选项（后随一个参数）
+const VALUE_OPTS: &[&str] = &[
+    "--jdk", "--java-home", "--runtime", "--main", "-o", "--why", "--flows", "--report", "--release", "--release-bytecode",
+    "--lib", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
+    "--hash-seed", "--closure-cache", "--closure-cache-max-mb",
+];
+/// 开关选项
+const FLAG_OPTS: &[&str] = &["--cold-cut"];
+
+/// 参数校验：恰一个位置参数（输入），其余都是已知选项（带值选项须有值）
+fn check_args(rest: &[String]) -> Result<(), String> {
+    let mut input = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        if VALUE_OPTS.contains(&a.as_str()) {
+            it.next().ok_or_else(|| format!("{a} 缺少值"))?;
+        } else if FLAG_OPTS.contains(&a.as_str()) {
+        } else if a.starts_with('-') {
+            return Err(format!("未知参数：{a:?}"));
+        } else if let Some(i) = input.replace(a) {
+            return Err(format!("多余的位置参数：{a:?}（输入已是 {i:?}）"));
+        }
+    }
+    input.map(|_| ()).ok_or_else(|| "缺少输入（.java 文件或类目录）".into())
+}
 
 fn runtime_dir(args: &Args) -> Result<PathBuf, String> {
     find_runtime_dir(args.opt("--runtime").map(PathBuf::from))
@@ -85,7 +116,8 @@ pub fn run(args: &Args) -> Result<(), String> {
     if let Some(s) = num("--hash-seed")? {
         closure::engine::set_hash_seed(s);
     }
-    let input = args.rest.first().filter(|a| !a.starts_with('-')).ok_or("缺少输入（.java 文件或类目录）")?;
+    check_args(&args.rest)?;
+    let input = args.rest.first().filter(|a| !a.starts_with('-')).ok_or("输入（.java 文件或类目录）须为第一个参数")?;
     let home = crate::java_home(args)?;
     let rt = runtime_dir(args)?;
     let classes = user_classes(Path::new(input), &home)?;
@@ -100,8 +132,10 @@ pub fn run(args: &Args) -> Result<(), String> {
         cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
     }
     cp.add_jdk(&home).map_err(|e| e.to_string())?;
-    for d in multi("--image") {
-        cp.add(Origin::Image, Path::new(d)).map_err(|e| format!("{d}：{e}"))?;
+    let images: Vec<PathBuf> = multi("--image").into_iter().map(PathBuf::from).collect();
+    let images = if images.is_empty() { resolve::image::image_class_dirs(&home, &crate::build_cmd::support_root(&rt)) } else { images };
+    for d in &images {
+        cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
 
     let flows = multi("--flows");
@@ -184,4 +218,23 @@ pub(crate) fn seed_roots(cp: &ClassPath, roots: &[&String], classes: &[&String])
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_args;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn args_checked() {
+        assert!(check_args(&v(&["A.java", "--image", "/i1", "--image", "/i2", "--cold-cut", "-o", "o.json"])).is_ok());
+        // 未分词的镜像参数串（zsh 未加引号的 $IMGS）不得静默忽略
+        assert!(check_args(&v(&["A.java", "--image /i1 --image /i2 "])).unwrap_err().contains("未知参数"));
+        assert!(check_args(&v(&["A.java", "B.java"])).unwrap_err().contains("多余的位置参数"));
+        assert!(check_args(&v(&["A.java", "--why"])).unwrap_err().contains("缺少值"));
+        assert!(check_args(&v(&["--why", "X"])).is_err());
+    }
 }
