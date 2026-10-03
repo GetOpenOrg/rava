@@ -158,7 +158,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 方法 m 中字符串值 v 的全部名字
-    fn names_of(&mut self, m: usize, v: &V) -> Keys {
+    pub(super) fn names_of(&mut self, m: usize, v: &V) -> Keys {
         match v {
             V::Str(s) => return Keys::Set([s.clone()].into()),
             V::Null => return Keys::default(),

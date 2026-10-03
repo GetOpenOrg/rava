@@ -78,9 +78,9 @@ pub(super) fn map_writes(a: &Analysis, n: u32, f: &MemberRef, maps: &crate::mani
     inited.then_some(vals)
 }
 
-/// 常量字符串数组写入：新建数组 n 的使用只有以其为数组的元素存储（值为字符串常量 / null）、元素读取、putstatic f；
-/// 返回（存入下标, 常量）
-pub(super) fn array_writes(a: &Analysis, n: u32, f: &MemberRef) -> Option<Vec<(V, Rc<str>)>> {
+/// 常量字符串数组写入：新建数组 n 的使用只有以其为数组的元素存储（值为字符串常量 / null）、元素读取、putstatic f
+/// （f 为 None：方法内局部数组，不逃出本方法）；返回（存入下标, 常量）
+pub(super) fn array_writes(a: &Analysis, n: u32, f: Option<&MemberRef>) -> Option<Vec<(V, Rc<str>)>> {
     event_at(a, n, |e| matches!(e, Event::NewArray(..)))?;
     let mut out = vec![];
     for (_, e, _) in uses(a, n) {
@@ -91,7 +91,7 @@ pub(super) fn array_writes(a: &Analysis, n: u32, f: &MemberRef) -> Option<Vec<(V
                 _ => return None,
             },
             Event::ArrayLoad { array, index } if site_of(array) == Some(n) && !mentions(index, n) => {}
-            Event::Field { opcode: PUTSTATIC, mref, value: Some(v), .. } if mref == f && site_of(v) == Some(n) => {}
+            Event::Field { opcode: PUTSTATIC, mref, value: Some(v), .. } if Some(mref) == f && site_of(v) == Some(n) => {}
             _ => return None,
         }
     }
@@ -170,7 +170,7 @@ impl<'a> Engine<'a> {
         Some(out)
     }
 
-    /// 按名取类拆段：值（可经一次 checkcast）是封存值映射字段的读取结果，或常量字符串数组字段的元素
+    /// 按名取类拆段：值（可经一次 checkcast）是封存值映射字段的读取结果，或常量字符串数组（字段 / 不逃出本方法的局部数组）的元素
     pub(super) fn sealed_segment(&mut self, a: &Analysis, v: &V) -> Option<BTreeSet<Rc<str>>> {
         let mut o = site_of(v)?;
         if let Some(Event::CheckCast(_, Some(inner))) = event_at(a, o, |e| matches!(e, Event::CheckCast(..))) {
@@ -186,6 +186,10 @@ impl<'a> Engine<'a> {
                 self.map_values(&f)
             }
             Event::ArrayLoad { array, index } => {
+                let n = site_of(array)?;
+                if event_at(a, n, |e| matches!(e, Event::NewArray(..))).is_some() {
+                    return Some(array_writes(a, n, None)?.into_iter().map(|(_, s)| s).collect());
+                }
                 let f = self.static_read(a, array)?;
                 if f.desc != format!("[L{};", absint::STRING) {
                     return None;
@@ -260,7 +264,7 @@ impl<'a> Engine<'a> {
                 if *w == V::Null {
                     continue;
                 }
-                for (index, s) in array_writes(&acc.a, site_of(w)?, f)? {
+                for (index, s) in array_writes(&acc.a, site_of(w)?, Some(f))? {
                     if parity.is_none() || index.parity().is_none() || index.parity() == parity {
                         out.insert(s);
                     }

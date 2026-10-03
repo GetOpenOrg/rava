@@ -106,10 +106,13 @@ triggers = [
 #   providers        name = provider 名；class = 注册类（全部方法字节码中 `ldc 类型; ldc 算法;
 #                    ldc 实现类名` 三连常量即一条服务，SunJCE.ps / SunEntries.add 同形态）；
 #                    provider = Provider 子类（JDK ProviderConfig 对内建 provider 直接 `new`：
-#                    服务查找时按需构造一次，服务描述 / 属性 / newInstance 全走翻译字节码）
-#   triggers         调用链触达该成员（JCA 服务查找入口）才补种服务实现类；候选算法名 =
-#                    用户类字符串常量 ∪ 链上 JDK 方法里 `<engine>.getInstance` 调用前的字符串实参
-#                    （sun.security.provider.SecureRandom 的 `MessageDigest.getInstance("SHA", "SUN")`）
+#                    服务查找时按需构造一次，服务描述 / 属性 / newInstance 全走翻译字节码）；注册类有成员
+#                    在调用链上（provider 已构造）其服务才计入。只登记经 Provider$Service.newInstance 按类名
+#                    反射构造实现类的 provider；自带 Service 子类按算法直接 `new` 的（SunEC / SunJGSS 等）走字节码
+#   triggers         调用链触达该成员（JCA 服务查找入口）才补种服务实现类；被请求的算法名 = 链上（用户与 JDK）
+#                    `<engine>.getInstance(算法, ..)` 调用点算法实参按值流求得的全部名字（字面量、形参 / String
+#                    字段槽：HmacCore 构造器把子类给的摘要算法名传给 MessageDigest.getInstance 即属此类）；
+#                    推不出的调用点使该服务类型全部算法入选
 #   defaults         算法名由 JDK 运行期配置得出、不出现在任何字符串常量中的缺省服务：触发成员在
 #                    调用链上即入选（`类型.算法`）
 #   alias_sources    算法同义名源（类初始化器中每个构造调用的字符串实参组 = 一组同义名）：用户写
@@ -118,6 +121,8 @@ triggers = [
 providers = [
     { name = "SUN", class = "sun/security/provider/SunEntries", provider = "sun/security/provider/Sun" },
     { name = "SunJCE", class = "com/sun/crypto/provider/SunJCE", provider = "com/sun/crypto/provider/SunJCE" },
+    { name = "SunRsaSign", class = "sun/security/rsa/SunRsaSignEntries", provider = "sun/security/rsa/SunRsaSign" },
+    { name = "SunJSSE", class = "sun/security/ssl/SunJSSE", provider = "sun/security/ssl/SunJSSE" },
 ]
 defaults = [
     # SecureRandom 缺省 PRNG：SunEntries.DEF_SECURE_RANDOM_ALGO 由 securerandom.source（JDK 默认
