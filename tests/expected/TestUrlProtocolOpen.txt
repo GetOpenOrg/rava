@@ -1,0 +1,9 @@
+jar: jar [hello from jar]
+jar-relative: jar [sibling entry]
+jar-missing: FileNotFoundException
+file: file [plain file]
+file-upper: file [plain file]
+file-parts: file [plain file]
+MalformedURLException: unknown protocol
+MalformedURLException: no protocol
+MalformedURLException: no protocol

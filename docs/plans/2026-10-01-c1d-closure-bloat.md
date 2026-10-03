@@ -1789,3 +1789,47 @@ C1d-a 读代码后的设计备忘（供接手者参考，未实施，不是批�
   T1b、T1b-2、T2、T3 已合入，T4（删方案 A + 接通 Continuation）、T5（panic 跨栈）与小闭包 E0782 修复待抽查合入，T6 转新代理（交接见 §21.8.5 末「a3-T 现状与交接」）；其余子项状态以 tasks.md 为准。
 - **a5**：a5-1～a5-3（OOB 关系推理）未开工。a5-4 已做：s1 构造器查找、s2 instanceof 否定分支、JCA 请求点值流（51a4d8c5）。
   a5-4b 即本节的 jar/URL 来源精度，转新代理；a5-4e 即 ③。
+
+### 22.10 乙 现状（2026-10-04，c1d-p0，按子代理时限停下报告）
+
+**已提交（闭包结果不变）**：
+- 清单：`[facts.keyed_lookups]` 新增 `URL.getURLStreamHandler:(Ljava/lang/String;)` 按键查找入口，`class_pattern =
+  "sun/net/www/protocol/{}/Handler"`（处理器类的键取自 JDK 命名约定，不符合约定的类键为任意），`scheme_sites` 声明
+  解析式构造器 `URL.<init>(URL,String,URLStreamHandler)` 在其中按 spec 形参（下标 1）解析出的协议作键；
+  `[facts.string_ops]` 新增 `String.toLowerCase(Locale)` → `to_lower_case`（只折叠不含 `I` 的 ASCII 串，避开语言相关折叠）。
+- 引擎：`manifest/keyed.rs`（`class_pattern` / `scheme_sites` / `pattern_key`）；`engine/keyed.rs` 调用点键改走
+  `scheme_keys`、处理器类键先查 `pattern_keys`；`engine/keyed_scheme.rs`（新）按 JDK `URL(spec)` 的协议识别规则从拼接段
+  候选模式求协议名，判定落进任意串段 / 非 ASCII / 超出组合上限时退回任意键；`engine/pstrs.rs` 抽出 `param_patterns`
+  （形参槽的拼接段候选模式）。
+- 单元测试：协议常量求值（`keyed_scheme::constant_specs` / `prefixes_before_wild` / `pattern_sets`）、按键放行
+  （`keyed::scheme_keys_release_matching_handlers_only`）、推不出时退回全分支（同上 + `pattern_sets`）、
+  `consteval::string_ops_on_constants` 的 toLowerCase 断言。
+- 边界 e2e：`tests/e2e/53_io_api/TestUrlProtocolOpen.java`（运行期建 jar 的 `jar:` URL `openStream` / 相对解析 / 缺条目、
+  `file:` 读取含大写协议与分段构造、未知协议与无协议的 `MalformedURLException`），expected 取 refjdk，两次一致。
+
+**实测**：StockTrans 3286 类 / 19584 方法、DeepCopy 3281 类 / 19545 方法，与基线相同；HelloWorld 468、
+TestBuiltinUrlProtocol 3078 不变。闸门本身正确，但 `URL.<init>` / `getURLStreamHandler` 仍按方法汇合全部调用点的协议，
+键集为全集，因此不降。
+
+**试过并撤下的两条路（均导致闭包爆炸、300 s 超时）**：
+1. 名字集合逐名常量实参求值（`@317` 处 `lowerCaseProtocol(p)` 对每个候选名求值）；
+2. URL 按分配点区分（`container` 判据扩成「实例字段声明类型是某按键查找入口的键类」），克隆内常量形参经 absint 折叠。
+
+**根因**：两条路都让协议名从「任意串段（Wild）」变成**精确字面量**，流进 DefaultFactory `@136..@184` 的反射
+`Class.forName("sun.net.www.protocol." + p + ".Handler")`。Wild 只匹配闭包内已有类；精确名会把类**命名入闭包**并初始化、
+暴露构造器。精确集里出现 `ftp`：来源是 `file.Handler.openConnection@119` 在 host 非空且非 `localhost` 时
+`new URL("ftp", host, …)`——JDK 语义下 host 不可知时确实可达。`ftp.Handler` → `FtpURLConnection` → `http` 栈整体进入，
+`drain_flows` / hubs 采样显示是闭包规模膨胀而非分析变慢。
+
+**接手方向（终态）**：
+- 需要 URL host 精度：证明经 `openConnection` 打开的 file URL 的 host 恒为 `""` / `localhost`（`ParseUtil.fileToEncodedURL`
+  等构造点 host 是常量，问题在 host 字段同样全局合流），才能让 `@119` 的 ftp 分支死掉；这与「URL 按对象精度」是同一件事，
+  宜和按对象字段精度一起做。
+- 或者先定一个原则：按键闸门的键求值与反射类查找的名字求值是否允许不同精度（键求精确、类查找保持 Wild 口径）。这是
+  协调者层面的取舍，未擅自实施。
+- 剩余 jar 路径（与乙无关）：`URLClassPath.<init>@185` `jarHandler` → `JarLoader` → `URL` 的 P5 构造器显式传 handler，
+  `@317` / `@386` 闸门看到的是 JarLoader 的 URL 对象（甲）；`FileLoader` / `Loader` 的 spec 来自 `ParseUtil.encodePath`，
+  求不出协议（退回全分支，正确）。
+- `securerandom.source`：运行期安全属性（`java.security` 文件 + `Security.setProperty` 可改），分析器无法求值，
+  `SeedGenerator$URLSeedGenerator.init` / `NativePRNG.getEgdUrl` 两处保持全分支；要降需对安全属性建模（清单声明缺省值不够，
+  用户可在运行期改写），不在乙范围。

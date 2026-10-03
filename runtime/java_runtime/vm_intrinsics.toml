@@ -188,6 +188,8 @@ value_equals = [
 "java/lang/String.hashCode:()I" = "hash_code"
 "java/lang/String.charAt:(I)C" = "char_at"
 "java/lang/Character.toLowerCase:(C)C" = "char_to_lower_case"
+# 按 locale 小写：只在 ASCII 且不含 `I` 的串上折叠（此时各 locale 结果相同，土耳其语等的 `I` 例外不出现）
+"java/lang/String.toLowerCase:(Ljava/util/Locale;)Ljava/lang/String;" = "to_lower_case"
 
 [facts.returns]
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`
@@ -683,6 +685,19 @@ members = [
 # JCA：Provider.getService(type, algorithm) 只返回 type 相同的服务（Provider.putService 以 Service.type 建键；
 # 旧式条目的类型名经 getEngineName 规范大小写，按不区分大小写比较涵盖）。
 "java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;" = { key = 0, fold_case = true, ctors = { "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/Map;)V" = 1, "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;)V" = 1 } }
+# class_pattern = 键类子类的类名命名约定（`{}` 为键，键中的 `.` 对应包分隔）：类名匹配的对象，其键由类名定出，
+# 与实例化途径无关；不匹配的子类按 ctors 追溯（未登记即任意键）。
+# scheme_sites = 协议键站点：该方法内本入口调用点的键不取键实参，而取方法第 j 个形参（按描述符 0 起，不含接收者）
+# 上 URL 串解析出的协议名（engine/keyed_scheme.rs）。
+# URL 协议处理器：getURLStreamHandler(protocol) 依次查缓存表 handlers（只以 protocol 为键 put 本方法求得的处理器）、
+# 应用工厂 / URLStreamHandlerProvider / java.protocol.handler.pkgs（应用类，java.base 不导出 sun.net.www.protocol，
+# 应用无法构造其中的处理器；pkgs 前缀取到的同样是 `<前缀>.<protocol>.Handler`）、内建工厂 URL$DefaultFactory
+# （file / jar / jrt 直接 new，其余按 "sun.net.www.protocol." + protocol + ".Handler" 反射构造）——
+# 返回的内建处理器都是 sun/net/www/protocol/<protocol>/Handler。
+# URL(URL context, String spec, URLStreamHandler handler) 的查找点读 this.protocol：只在 handler 实参为 null、且未沿用
+# context 的处理器（context.handler 恒非 null）时到达，此时 spec 必带协议且 protocol 即 spec 解析出的协议名；
+# spec 不带协议时要么沿用 context 处理器、要么抛 MalformedURLException("no protocol")，不按协议查找
+"java/net/URL.getURLStreamHandler:(Ljava/lang/String;)Ljava/net/URLStreamHandler;" = { key = 0, class_pattern = "sun/net/www/protocol/{}/Handler", scheme_sites = { "java/net/URL.<init>:(Ljava/net/URL;Ljava/lang/String;Ljava/net/URLStreamHandler;)V" = 1 } }
 
 # ── invokedynamic 引导方法分类（闭包分析，generator `rava closure` 读取）──────────────────
 # 生成器原生承载这些引导方法的链接语义，分析器不展开其 Java 体，按分类建模调用点：

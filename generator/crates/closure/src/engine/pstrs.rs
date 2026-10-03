@@ -20,7 +20,7 @@
 //! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
 //! 读者不取槽。读取 String 字段的名字段由此取得全部写入名字（如按类型名查找服务时，类型名存于列表对象的字段）。
 
-use super::class_lookup::{event_at, is_invoke, Gap, MAX_NAMES};
+use super::class_lookup::{event_at, expand, is_invoke, Gap, Part, MAX_NAMES};
 use super::name_eval::Frame;
 use super::sealed::{flatten, is_field};
 use super::*;
@@ -253,6 +253,32 @@ impl<'a> Engine<'a> {
 
     /// 槽 start 上的全部名字：沿子集边逆向遍历上游槽，字面量取起点槽，非常量实参在调用方帧里求值
     fn slot_names(&mut self, start: PSlot, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+        let (reader, inputs) = self.slot_upstream(start)?;
+        let mut out: BTreeSet<Rc<str>> = self.pstr.sets.get(&start).into_iter().flatten().map(crate::absint::lit_str).collect();
+        self.pstr.active.push(start);
+        let r = self.param_inputs(reader, &inputs, depth, &mut out);
+        self.pstr.active.pop();
+        r.map(|_| out)
+    }
+
+    /// 方法 m 的 String 形参槽 i 上的全部候选模式（推不出的段记为任意串，见 `class_lookup.rs::Gap::Class`；
+    /// 当前站点为读者）；None = 槽推不出或模式超出上限
+    pub(super) fn param_patterns(&mut self, m: usize, i: usize) -> Option<Vec<Vec<Part>>> {
+        let string = self.id(STRING);
+        if self.methods[m].ptypes.get(i).copied().flatten() != Some(string) {
+            return None;
+        }
+        let start = PSlot::M(m, i);
+        let (reader, inputs) = self.slot_upstream(start)?;
+        let mut out: Vec<Vec<Part>> = self.pstr.sets.get(&start).into_iter().flatten().map(|l| vec![Part::Lit(crate::absint::lit_str(l))]).collect();
+        self.pstr.active.push(start);
+        let r = self.input_patterns(reader, &inputs, &mut out);
+        self.pstr.active.pop();
+        r.map(|_| out)
+    }
+
+    /// 槽 start 的读者登记与上游遍历：返回读者站点与全部上游槽的非常量实参；任一上游槽推不出、成环或超限为 None
+    fn slot_upstream(&mut self, start: PSlot) -> Option<((usize, u32), BTreeSet<(usize, u32, usize)>)> {
         let reader = self.cur_site?;
         if self.pstr.active.contains(&start) || self.pstr.active.len() >= MAX_NEST {
             return None;
@@ -279,25 +305,41 @@ impl<'a> Engine<'a> {
             inputs.extend(self.pstr.inputs.get(&s).into_iter().flatten().copied());
             stack.extend(self.pstr.pred.get(&s).into_iter().flatten().copied());
         }
-        let mut out: BTreeSet<Rc<str>> = self.pstr.sets.get(&start).into_iter().flatten().map(crate::absint::lit_str).collect();
-        self.pstr.active.push(start);
-        let r = self.param_inputs(reader, &inputs, depth, &mut out);
-        self.pstr.active.pop();
-        r.map(|_| out)
+        Some((reader, inputs))
+    }
+
+    /// 非常量实参所在调用点的实参值与调用方帧数据；调用方待重分析 / 调用点已不可达为 Ok(None)，保守分析为 Err
+    fn input_value(&mut self, reader: (usize, u32), (cm, off, j): (usize, u32, usize)) -> Result<Option<(Rc<Analysis>, V)>, ()> {
+        self.pstr.xdemand.entry(cm).or_default().insert(reader);
+        let Some(ca) = self.methods[cm].analysis.clone() else { return Ok(None) };
+        if ca.conservative {
+            return Err(());
+        }
+        let Some(Event::Invoke { opcode, args, .. }) = event_at(&ca, off, is_invoke) else { return Ok(None) };
+        let v = args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j).ok_or(())?.clone();
+        Ok(Some((ca, v)))
+    }
+
+    /// 非常量实参在各自调用方帧里按 `Gap::Class` 拆段、展开成候选模式并入 out
+    fn input_patterns(&mut self, reader: (usize, u32), inputs: &BTreeSet<(usize, u32, usize)>, out: &mut Vec<Vec<Part>>) -> Option<()> {
+        for &inp in inputs {
+            let Some((ca, v)) = self.input_value(reader, inp).ok()? else { continue };
+            let owner = self.methods[inp.0].key.owner.clone();
+            let f = Frame { m: Some(inp.0), a: &ca, owner: &owner, up: None };
+            let parts = self.name_parts(&f, &v, Gap::Class, 0)?;
+            out.extend(expand(&parts)?);
+            if out.len() > MAX_NAMES {
+                return None;
+            }
+        }
+        Some(())
     }
 
     /// 非常量实参在各自调用方帧里求出的名字并入 out
     fn param_inputs(&mut self, reader: (usize, u32), inputs: &BTreeSet<(usize, u32, usize)>, depth: u8, out: &mut BTreeSet<Rc<str>>) -> Option<()> {
         for &(cm, off, j) in inputs {
-            self.pstr.xdemand.entry(cm).or_default().insert(reader);
-            // 调用方正待重分析：重分析后重跑
-            let Some(ca) = self.methods[cm].analysis.clone() else { continue };
-            if ca.conservative {
-                return None;
-            }
-            // 调用点在当前分析里已不可达：不再流入
-            let Some(Event::Invoke { opcode, args, .. }) = event_at(&ca, off, is_invoke) else { continue };
-            let v = args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j)?.clone();
+            // 调用方正待重分析（重分析后重跑）/ 调用点在当前分析里已不可达（不再流入）：跳过
+            let Some((ca, v)) = self.input_value(reader, (cm, off, j)).ok()? else { continue };
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
             let parts = self.name_parts(&f, &v, Gap::Fail, depth)?;

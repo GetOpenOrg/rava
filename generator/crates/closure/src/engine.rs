@@ -88,6 +88,7 @@ mod serial_alloc;
 mod field_lookup;
 mod pstrs;
 mod keyed;
+mod keyed_scheme;
 mod share;
 mod new;
 mod methods;

@@ -103,6 +103,9 @@ pub enum StrOp {
     CharAt,
     /// 字符转小写（仅 ASCII 实参折叠；其余取决于 Unicode 数据表，不折叠）
     CharToLowerCase,
+    /// 字符串转小写（`toLowerCase()` / `toLowerCase(Locale)`，不看语言实参）：仅接收者为 ASCII 且不含 `I` 时折叠——
+    /// 此时各语言结果相同（语言相关的规则只涉及 `I` 与非 ASCII 字符：tr / az 的 `I` → `ı`，lt 的带附加符号的 `I` / `J` / `Į`）
+    ToLowerCase,
 }
 
 pub struct Manifest {
@@ -244,9 +247,10 @@ impl Manifest {
                     Some("hash_code") => StrOp::HashCode,
                     Some("char_at") => StrOp::CharAt,
                     Some("char_to_lower_case") => StrOp::CharToLowerCase,
+                    Some("to_lower_case") => StrOp::ToLowerCase,
                     _ => {
                         return Err(format!(
-                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case"
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case / to_lower_case"
                         ))
                     }
                 };
