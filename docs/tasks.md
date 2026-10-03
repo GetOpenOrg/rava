@@ -152,7 +152,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │             基本类型数组元素 Unsafe 访问、S3 getCallerClass（CallerSensitive 记字节码所在类）、sun/misc/Unsafe 放行、静态字段钩子每次访问连边
 │   │             （修 ThreadTest）；01572ce6 协议名常量分支折叠收窄加载器链（ThreadTest 1445→346，新增 TestBuiltinUrlProtocol）；
 │   │             ✅ 第二段合入 b1983313（84c92245，抽查 c1db3-84c92245 10/10；含 setContextClassLoader 存根修复 + TestThreadContextLoaderInit）；
-│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；✅ S7 Class.forName 拼接类名字符串值流建模（3553df09 合入，抽查 c1db3-3553df09 9/9：拼接各段可确定时折叠为常量串集合，新增 TestForNameComputedName）；🔄 DMH checkInitialized / shouldBeInitialized 未知站点归零
+│   │             余：扇出收窄（registerNatives 开放接收者 toString、URL$DefaultFactory 反射构造器）、✅ CallerSensitive 经方法引用 / MH（382cf3e1 合入，抽查 10/10：MN_CALLER_SENSITIVE、BindCaller 注入调用器 InjectedInvokerDyn、Method.invoke 适配；方法句柄类用例闭包 −22）；✅ S5 手写值池合并拆分（fd76553d 合入，抽查 8/8：FieldAccess.value_fresh、getDeclaringClass0 按接收者、TestDeclaringClassInit；7 例测量集类 / 方法集合不变）；✅ S7 Class.forName 拼接类名字符串值流建模（3553df09 合入，抽查 c1db3-3553df09 9/9：拼接各段可确定时折叠为常量串集合，新增 TestForNameComputedName）；✅ DMH checkInitialized / shouldBeInitialized 未知站点归零（2eb9403a 合入 3473d696，抽查 c1db3-2eb9403a 9/9：DMH 未知点建模、按名查找静态字段初始化声明类、TestMethodHandleStaticInit；合并适配 875afe99）
 │   │     ├─ ✅ lambda 隐藏类（c1d-lambda-class 0060fa77，合入 94d2ff90）：每调用点 Host$$Lambda/0x… 隐藏类、超类 Object、接口 + 标记接口、
 │   │     │       isHidden / isSynthetic 按类元数据、实例判定按超类型集合；TestLambdaHiddenClass；from_any 归零（2026-10-03-from-any-zero.md）：
 │   │     │       ✅ ① 审计按类计数含 java_body_*（56506adb，合入 ec714d98；真实基线 2–78）；✅ ② A+B 超接口 / 接口视图类型实参（b820c8aa 合入；27 例 from_any 2–78→1–4，闭包不变）；✅ ③ C+D 方法级类型变量 / super.m()（44b3a3b3 合入；27 例中 26 例 from_any=0，StockTrans 11→0）；✅ ④ 余下发射点统一 Object::from / Into<Object>、void 入 Object 改内部错误、from_any=0 守护测试（631bb78b 合入；27 例 + StockTrans / LambdaHiddenClass 全部 from_any=0，闭包不变）——**from_any 归零达成**
@@ -202,7 +202,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │           ├─ ⏳ R8 beans finder 构造存根（3 例）、R9 charset / zipfs 提供者构造（5 例）◀── jmod 第 1 步前置
 │           ├─ ⏳ R10 Array.set native 准入、R12 E0308 三例、R13 http async 转译错误；数组协变 Object[].class.isAssignableFrom(Integer[].class)（TestClassCastSubclass）
 │           └─ ✅ 参考 JDK 固定构建（jdk-pin 75a15d93 已合入；server_maintenance b595193）：Temurin 21.0.11+10，清单 tools/refjdk.toml（四平台 URL+sha256），scripts/fetch_reference_jdk.sh；本机 tools/refjdk/，服务器 /data/rava-jdk/（ubuntu /mnt/d/workspace/rava-jdk）；run_tests 缺省参考构建、缺失即报错，--jdk/--java-home 标「非参考构建」
-│              ⏳ 生成器缺陷（原误判为环境）：TestLocaleCurrency 转译产物在 Linux 输出 CN¥，JVM（21.0.11 与 21.0.12.1）均输出 ¥——locale/CLDR 取值经转译后不同，待归因（jdkpin-efc13cd0 sg2 复现）
+│              ⏳ 生成器缺陷（原误判为环境）：TestLocaleCurrency 转译产物在 Linux 输出 CN¥，JVM（21.0.11 与 21.0.12.1）均输出 ¥——locale/CLDR 取值经转译后不同，待归因（jdkpin-efc13cd0 sg2 复现）；🔄 用户侧 D（#10）归因中：JVM 侧取证完成（zh_CN 链 [zh_CN_#Hans, zh__#Hans, zh_CN, zh, root]、载 cldr/ext/CurrencyNames_zh / FormatData_zh），rava 侧闭包检查待做，报告 docs/reports/2026-10-03-locale-currency-cn.md
 │             ✅【2026-10-03 用户侧完成，c3ad4c4e 已合入】参考 JDK 全量 golden 核验（docs/reports/2026-10-03-refjdk-golden-verify.md）：1074 例构建差异 0、一致 1070（63_junit 带 cp 10/10）——固定 21.0.11 零重生成验收通过；TestLocaleCurrency 在一致集内，佐证生成器缺陷改判
 │                ⏳ 派生：TestVmPlatformNatives expected 含 libzip.so（Linux 生成），macOS 本机输出 .dylib——平台依赖，登记跨平台基线
 │                🔄【2026-10-03 用户侧领取】派生：ListMethods（getMethods 枚举序）、TestSocketLoopbackPair（半关闭竞速）JVM 侧输出非确定——语料自身缺陷，后者为第八轮新写，改为确定序形态（join 后统一打印）；前者按输出排序形态复核
@@ -250,7 +250,7 @@ native-gaps ✅ ──▶ FS-C2 ✅ ──▶ boot layer（另需 C1d-a a2）─
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
 | C1d-a 去截断（c1d-p0） | 🔄 2026-10-02 | a1 ✅ 正式 HelloWorld 423 类 / 2–3 s；a2 抽查 c1da-f2bdcf6e 7/8（StockTrans 基线），余 TestFileStoreMountLookup 重跑；之后 a3 审计数 86→0、a5 OOB 关系推理；后续项 precheck 按目标平台扫描 |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），T3 已合入（4c3a614e），b3 第二段与 CallerSensitive 续段已合入（84c92245、382cf3e1）/ b3 S5、T2 进行中；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
+| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 阶段合入 e90a592d（TestReflectProbe ✅）；ArrayList.writeObject 分派臂已拆为 T2–T7（计划 §4.6），T4 / T5 / T6 / T7 已合入，b3 第一段已合入（1721f701），b1 已合入（0d7dd2a5），T3 已合入（4c3a614e），b3 第二段与 CallerSensitive 续段已合入（84c92245、382cf3e1）/ b3 DMH 段已合入（3473d696）/ b3 扇出收窄、T2 进行中；新派 A gen-fixes（生成器独立缺陷合集，计划 docs/plans/2026-10-03-gen-fixes.md）、B a3t-vthread（VirtualThread 翻译 + Continuation 有栈协程）；序列化收窄 WIP：大值集来自未知接收者字段视图，目标 DeepCopy ≤1640、fold_props ≥42 |
 | native-gaps · native 缺口补齐 | ✅ 417a6594 | 已知失败 TestUnixFileNatives（待 C1d-a）、TestModuleLayerDefine（待 boot layer）、TestClassNestNatives（待 FS-C2） |
 | FS-C2 应用类加载器 | ✅ 4a98f5e3 | TestClassNestNatives 通过；vm_boundary_methods 30→27；交接 C1d-a：ServicesCatalog / JLA 补丁随过渡手写删除 |
 | regress2 续 · 栈帧来源统一 | ✅ be1b97be | 遗留 Object.wait 帧行号、过渡 <init> 帧 ◀── C1d-a a2 |
