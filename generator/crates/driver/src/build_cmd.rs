@@ -273,6 +273,7 @@ pub(crate) fn with_emit_ctx<R>(
         batch: j.o.batch,
         debug: j.o.debug,
         jobs: j.o.emit_jobs,
+        archive: j.o.profile.is_some(),
     };
     let shared = EmitShared::new(&inp, &names, &manifest, j.cp, j.rt, opts).map_err(|e| e.to_string())?;
     perf.mark("names+ctx");

@@ -76,3 +76,67 @@ pub(super) fn check_leaks(state: &mut ProjectState, held: Vec<(String, String, S
     eprintln!("[archive-leak] 用户方法体对非用户接收者的继承成员需求未被档案侧覆盖：{} 项（{}）", leaks.len(), sample.join("；"));
     state.inherited_requests.extend(leaks);
 }
+
+/// 档案 crate 的包版本：`0.0.<摘要>`，摘要取全部档案 crate 目录（`crates`）的文件与 java_meta 引入的
+/// `closure_input/` 表文件（`included`）的内容（Cargo.toml 去掉版本行），按相对路径排序。
+///
+/// 共享 target 下同名同版本的路径包共用编译产物（cargo 的产物哈希不含路径）：单例模式以 scratch 路径
+/// 区分（`scratch_pkg_version`）；档案发射时同一内容才同版本，跨程序共享档案 crate 的产物且不会误用陈旧产物。
+pub(super) fn stamp_versions(
+    w: &mut super::fs::Writer,
+    out_dir: &std::path::Path,
+    crates: &[&str],
+    included: &[&str],
+) -> crate::error::Result<()> {
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    let mut files: Vec<std::path::PathBuf> = crates
+        .iter()
+        .flat_map(|d| super::fs::walk(&out_dir.join(d)))
+        .flat_map(|(dir, _, fs)| fs.into_iter().map(move |f| dir.join(f)))
+        .chain(included.iter().map(|f| out_dir.join(f)))
+        .collect();
+    files.sort();
+    {
+        for p in files {
+            let rel = p.strip_prefix(out_dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            let bytes = std::fs::read(&p).map_err(|e| crate::error::EmitError::Io(format!("{}：{e}", p.display())))?;
+            h.add(rel.as_bytes());
+            if rel.ends_with("/Cargo.toml") {
+                h.add(without_version(&String::from_utf8_lossy(&bytes)).as_bytes());
+            } else {
+                h.add(&bytes);
+            }
+        }
+    }
+    let version = format!("version = \"0.0.{}\"", h.0);
+    for d in crates {
+        let path = out_dir.join(d).join("Cargo.toml");
+        let text = std::fs::read_to_string(&path).map_err(|e| crate::error::EmitError::Io(format!("{}：{e}", path.display())))?;
+        let stamped: Vec<String> = text.lines().map(|l| if is_version_line(l) { version.clone() } else { l.to_string() }).collect();
+        w.write(&path, &(stamped.join("\n") + "\n"))?;
+    }
+    Ok(())
+}
+
+fn is_version_line(l: &str) -> bool {
+    l.starts_with("version = \"")
+}
+
+fn without_version(text: &str) -> String {
+    text.lines().filter(|l| !is_version_line(l)).collect::<Vec<_>>().join("\n")
+}
+
+/// FNV-1a 64（逐字节；与平台、进程无关）
+struct Fnv(u64);
+
+impl Fnv {
+    fn add(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 ^= u64::from(*b);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+        // 段分隔：防止相邻段拼接歧义
+        self.0 ^= 0xff;
+        self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+    }
+}

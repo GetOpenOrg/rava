@@ -590,3 +590,62 @@
 - JDK crate 只依赖档案生成：发射层接受 `profile.json` 作为 JDK 侧事实，用户侧从单例闭包取，两者合成一次发射；
 - `java_meta` 拆为 JDK 表（进档案 crate）加用户注册行（生成进用户 crate、启动时注册）；
 - 验收：同一 P 下任意两个用户程序生成的 JDK crate 逐字节相同；全集通过集合与今天一致。
+
+### 6.4 1b 设计（t1-1b，2026-10-04）
+
+**接口**
+- `rava build|emit <Main.java> --profile profile.json`：
+  - 读档案，校验键输入（生成器摘要、runtime 树摘要、JDK 主版本）与当前一致，不一致报错要求重新 `rava profile`；
+  - 本程序照常算单例闭包，`input::ClosureFacts::compose(profile, single)` 合成发射事实：非用户侧一律取档案，用户侧（属主为用户类的类、方法、折叠、集合项）取单例；
+  - 单例的非用户类 / 方法 / 调用点引用 / lambda 接口必须被档案覆盖，否则报错（先把本程序并入档案，P 随之改变）。
+- 档案新增集合 `sam_types`（lambda 站点的函数式接口，分析器 `Engine::sam_types`），单例 closure.json 同名字段。
+- 发射选项 `EmitOptions.archive`：档案 crate 的包版本取内容摘要。
+- 运行时：`java_runtime::meta::UserMeta` / `register_user(&'static UserMeta)`；查询入口返回档案侧表与用户侧行合并后的表。
+
+**数据流**
+```
+profile.json ─┐
+              ├─ compose ─ EmitInput ─ write_project ─┬─ 档案 crate：java_runtime / java_body_* / lib crate
+单例闭包 ─────┘                                      │    java_meta + closure_input/{meta,closure,line}_tables.rs
+                                                     └─ 用户 crate：user/src/*（类）+ rava_user_meta.rs（元数据行）
+                                                          main.rs 首句 register_user(&rava_user_meta::USER_META)
+```
+
+**改动点**
+- 合成与入口：`input/src/compose.rs`（新）、`input/src/facts.rs`（`sam_types`）、`driver/src/profile_emit.rs`（新，读档案并校验）、`driver/src/build_cmd.rs` / `build_opts.rs`（`--profile`）、`closure/src/profile.rs` 与 `closure/src/lib.rs`（`sam_types` 集合）。
+- 发射层只让档案事实决定档案 crate 的内容。逐项排查出的用户侧泄漏有四处：
+  1. vtable 槽裁剪（`emit/src/vtable_prune.rs`）：非用户类的槽按档案侧事实判定，并按开放世界假想用户子类，即可被用户扩展的类保留可能被覆盖的槽；槽计划与逐方法判定在无作用域视图上求值。原先在首个查询文件的作用域里求值，会把类型名认领进该文件的导入，导致 JDK 文件随用户程序多出 import。
+  2. `I__Lambda` 合成集（`emit/src/sam.rs`）：JDK 接口取档案 `sam_types`，用户站点只贡献用户接口。
+  3. 继承成员需求（`emit/src/project/archive_side.rs`，新）：档案侧需求只来自三类——手写体需求、`visited` 中属主未声明的实例方法、非用户类发射登记的需求。用户方法体对非用户接收者登记的需求不入账；未被档案侧覆盖时报 `[archive-leak]`，仍入账以保证本程序可编译。
+  4. 反射元数据与行表的两侧拆分，见下一条。
+- `java_meta` 拆分：
+  - 原 java_meta 构建脚本的扫描与渲染逻辑移到 runtime 侧普通库 `runtime/rava_meta_tables`，由发射层调用（与 `rava_macros_core` 同为生成器的 path 依赖）。它含手写根类 Object 的成员行，所以不放进生成器 crate（生成器 crate 不得有 JDK 类名字面量）。
+  - 档案侧：扫描 `java_runtime/src` 与 lib crate 的落盘文件，写 `closure_input/meta_tables.rs`，由 JDK `java_meta` 以 `include!` 引入，表 static 以 `__java_meta_<表名>` 导出。`java_meta` 不再有构建脚本，也不再扫描用户 crate。
+  - 用户侧：`project/meta_sides.rs`（新）扫描用户类的发射文本，渲染为 `const` 表，加上用户模块服务（服务或 provider 是用户类）和用户文件的栈帧行表，聚合成 `USER_META`，写入 `user/src/rava_user_meta.rs`。
+  - 栈帧行表（`project/line_tables`）按文件归属拆分：`user/` 下的文件进用户侧，其余进 `closure_input/line_tables.rs`。模块服务表同样拆分（`entry::write_closure_tables` 只写档案侧）。
+  - 运行时 `meta.rs`：每个查询入口经 `merged_table!` 合并两侧。首次查询时合并一次，按类名稳定排序（模块服务保持事实序：档案在前、用户在后）；未登记用户侧行时直接返回档案侧表。
+- 包版本（`archive_side::stamp_versions`）：
+  - 档案发射时，档案 crate（`java_runtime`、`java_meta`、`java_body_*`、lib crate）的版本统一取 `0.0.<FNV-1a 64>`。摘要覆盖这些 crate 目录的全部文件和 java_meta 引入的三个 `closure_input` 表文件，Cargo.toml 去掉版本行后计入。
+  - 同内容才同版本：共享 target 下跨程序复用档案 crate 产物，且不会误用陈旧产物。
+  - 单例模式仍取 scratch 路径（`scratch_pkg_version`）。
+
+**验收**
+- 同一 P 下任意两个程序发射，档案 crate 逐字节相同（含 Cargo.toml 与三个 `closure_input` 表文件）。守护测试：`driver/tests/archive_emit_cli.rs`。
+- 单例模式（无 `--profile`）的行为变化：
+  - 非用户类的槽裁剪改按开放世界；
+  - 档案侧继承成员需求由 `visited` 补种；
+  - 元数据改为两侧登记。
+  - 这三项由服务器 e2e 抽查确认无回归。
+
+### 6.5 1b 现状
+
+**已验证结论**
+- s1（HelloWorld + ControlFlowTest）：档案 465 类、1809 方法、折叠方法 341；`rava profile` 1.56 s，峰值 223 MB。两程序的 `java_runtime`、`java_body_1..2`、`java_meta`、`closure_input/{meta,closure,line}_tables.rs` 逐字节相同（含包版本）。
+- s3（8 例：HelloWorld、TestBridgeMethod、LambdaBasic、TestCustomException、TestThreadJoin、TestInheritedMethod、HuffmanCode、ReflectionBasic）：档案 3080 类、17781 方法、折叠方法 1866；`rava profile` 34.7 s，峰值 1527 MB。在 java_meta 拆分之前测量，除包版本与 `line_tables.rs` 外，8 例 JDK 源码逐字节相同，无 `[archive-leak]`。
+
+**失败路线**
+- 槽计划在作用域视图上惰性求值（OnceLock）：首个查询文件替所有文件认领类型名，JDK 文件的 import 随用户程序变化。已改为在无作用域视图上求值。
+
+**下一步**
+- 服务器 e2e 抽查（单例模式回归）。
+- 1c：`rava compile` 直接调用 rustc 链接档案产物（§4.4）。

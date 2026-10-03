@@ -101,6 +101,7 @@ dependencies = [
  "method",
  "proc-macro2",
  "rava_macros_core",
+ "rava_meta_tables",
  "regex",
  "regex-syntax",
  "resolve",
@@ -249,6 +250,10 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "rava_meta_tables"
+version = "0.1.0"
 
 [[package]]
 name = "regex"

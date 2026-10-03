@@ -22,10 +22,9 @@ pub(crate) struct FieldMeta {
 /// "private", modifiers = "static final", is_static = true))]`）。类上下文
 /// 与层次表同源（同块内 binary_name 在前）。声明顺序保留（Field.slot 语义）。
 /// 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
-pub(crate) fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMeta>> {
+pub(crate) fn scan_class_fields(texts: &[&str]) -> BTreeMap<String, Vec<FieldMeta>> {
     let mut result: BTreeMap<String, Vec<FieldMeta>> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -59,9 +58,9 @@ pub(crate) fn scan_class_fields(roots: &[&Path]) -> BTreeMap<String, Vec<FieldMe
     result
 }
 
-pub(crate) fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：字段元数据表（binary name → 声明字段序列，声明序 = slot）。
+        "// 由生成器（rava_meta_tables）生成：字段元数据表（binary name → 声明字段序列，声明序 = slot）。
          // 数据源：java_class! 块内 java_field 属性（字段声明元数据的唯一表达，规则四）。
          // 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
          // modifiers 为 java.lang.reflect.Modifier 位集；constant 为 ConstantValue 整数值。
@@ -86,10 +85,7 @@ pub(crate) fn write_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) {   
     }
     out.push_str("];
 ");
-    let path = Path::new(&out_dir).join("field_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 field_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// 单个声明方法的元数据（java_method / java_native 属性行的结构化形态）。
@@ -132,10 +128,9 @@ pub(crate) struct MethodMeta {
 /// 声明顺序保留（getDeclaredMethods0 的 slot 语义）。
 /// 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.
 /// resolve 的方法/构造器 kind（method_handle_natives_impl.rs）。
-pub(crate) fn scan_class_methods(roots: &[&Path]) -> BTreeMap<String, Vec<MethodMeta>> {
+pub(crate) fn scan_class_methods(texts: &[&str]) -> BTreeMap<String, Vec<MethodMeta>> {
     let mut result: BTreeMap<String, Vec<MethodMeta>> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -223,10 +218,9 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
     methods
 }
 
-pub(crate) fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：方法元数据表（binary name → 声明方法序列，声明序 = slot）。
+        "// 由生成器（rava_meta_tables）生成：方法元数据表（binary name → 声明方法序列，声明序 = slot）。
          // 数据源：java_class! 块内 java_method / java_native 属性（方法声明元数据的唯一表达）。
          // 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.resolve 的
          // 方法/构造器 kind（method_handle_natives_impl.rs）。方法身份键是 (name, descriptor)
@@ -251,8 +245,5 @@ pub(crate) fn write_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) {
     }
     out.push_str("];
 ");
-    let path = Path::new(&out_dir).join("method_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 method_table.rs 失败: {e}");
-    }
+    out
 }

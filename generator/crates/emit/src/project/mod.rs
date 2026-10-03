@@ -5,6 +5,7 @@
 //! Cargo.toml / strict.txt / jdk_feature.txt。
 
 mod archive_side;
+pub mod meta_sides;
 pub mod entry;
 pub mod fs;
 pub mod layers;
@@ -303,14 +304,23 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
-    line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
+    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
+    meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp, &body_names)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
+    let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
+    let archive_roots: Vec<&Path> = std::iter::once(jrt_src.as_path()).chain(lib_srcs.iter().map(PathBuf::as_path)).collect();
+    meta_sides::write_archive(&mut w, out_dir, &archive_roots)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
+    if ctx.opts.archive {
+        let crates: Vec<&str> = ["java_runtime", "java_meta"].into_iter().chain(body_names.iter().copied()).chain(lib_names.iter().copied()).collect();
+        let included = [meta_sides::META_TABLES, entry::CLOSURE_TABLES, line_tables::LINE_TABLES_PATH];
+        archive_side::stamp_versions(&mut w, out_dir, &crates, &included)?;
+    }
     perf.mark("entry");
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
