@@ -996,3 +996,81 @@ DC = DeepCopy（≤ 1640 类、fold_props ≥ 42），RP = TestReflectProbe，RF
 | `handwritten/{scan,syntax}.rs` | 数组写入判定 | 已入 A（A 另修宏内 `set` 的判定） |
 | `tests/e2e/35_io/TestSerialCollectionFields.java` + expected | JDK 集合作为可序列化字段的回调覆盖（ArrayList / HashMap / LinkedList、空 / 嵌套 / null / 共享引用） | expected 合入前须用 JDK 21 实跑复核；随 T2 合入 |
 
+
+## 五、现状 / 交接（2026-10-04，c1d-t2 收尾）
+
+### 5.1 分支与提交
+
+分支 `c1d-t2`（worktree `java_rta_c1d_t3`），头部 77287ebf（合入集成分支 74a8977e）。合入单位是整枝，关键提交：
+
+| 提交 | 内容 |
+|---|---|
+| 5a5f75da | 序列化字段枚举按可序列化字段收窄（`serial_enumerators` 只暴露可序列化、非 static、非 transient 字段） |
+| 2e1d3355 | 按名查方法的包装方法与调用点配对（`engine/lookup_pair.rs`）；多种子守护扩至序列化回调 |
+| e3e459d6 | 序列化构造器分配目标（`engine/serial_alloc.rs`：`<alloc>` / `<init_on>` 臂） |
+| e284893b | 字段句柄来源标记取代全局写入口变活；序列化分配边界例 |
+| 5846c417 | 撤回 07ac5735「字符串实参不进形参常量格」（见 5.3） |
+| 8d0eaee3 | 生成器编译错误修复（5.2）与构造器查找点名的种子无关化 |
+
+### 5.2 已查实的结论
+
+**StockTrans 的 `ArrayList.writeObject` 失败**（`stub: L3 反射分派未覆盖 java/util/ArrayList.writeObject`）：根因见 4.2。
+`ObjectStreamClass.getPrivateMethod(cl, "writeObject", …)` 的类与名字都经形参透传。e90a592d 只让调用点字面量与接收者镜像相乘。
+07ac5735 的做法让结果随哈希种子时有时无。**已修（2e1d3355）**：查找类与名字都来自形参的方法登记为包装方法，各调用点按本点名字字面量 × 本点类实参镜像值集点名，逐层上推，只增不减。
+`closure_independent_of_hash_seed` 对 StockTrans 与四个序列化例断言种子 0/1/2 集合一致，且 `ArrayList.writeObject` 在反射成员里。
+
+**`java/util/ArrayList.<alloc>:()V` 臂缺失**：反序列化经序列化构造器（`MethodAccessorGenerator.generateSerializationConstructor`）分配对象，不跑目标类自身构造器，L3 分派闭包没有 `<alloc>` 臂。
+**已修（e3e459d6）**：清单 `[facts.reflect] serial_allocators`。生成点上 Class 实参镜像所指的可序列化具体类 ∩ G 成为分配目标，首个不可序列化超类的 `()V` 构造器以 `<init_on>` 臂入链。
+
+**抽查 c1dt2-403b626b 的 8 例失败全是生成器编译错误。8d0eaee3 已修，本机 emit + compile 0 错误：**
+
+| 错误 | 涉及例 | 根因 | 修复 |
+|---|---|---|---|
+| E0599 `K.equals` | 7 例（StockTrans、DeepCopy、TestSerial* 五例） | `Hashtable.reconstitutionPut` 槽 6 有两段 LVT：循环内 `Entry<?,?>` 与循环后 `Entry<K,V>`。循环出口代码结构化在循环体内，loop_hoist 把后段变量提升成遮蔽外层的 let | `vars::read_is_other_var`：读点落在同名另一变量段（另槽 / 另类型 / 中间被改名占槽）时不按同一变量；`promote_undeclared_assigns` 按名记声明深度栈 |
+| E0592 `set_tab` | TestFieldHandleProvenance（jline `InfoCmp$Capability`） | 静态字段 `tab` 的 setter 与字段 `set_tab` 的 getter 撞名 | `ClassInfo::static_accessor`：撞名时取 `{name}_field` |
+| jline 三处 E0308 / E0599 / E0061 | TestFieldHandleProvenance | 引用合流拒接口公共类型，变量被定成 Object；接口 default 协变桥签名取错 | `common_ref_type_widening` 只拒 Object；桥按桥描述符定签名 |
+
+新边界例的期望输出都来自 JDK 21：TestStaticAccessorClash、TestSlotReuseLoopExit、TestCovariantDefaultBridge、TestInterfaceSubtypeMerge。
+
+**合入集成分支后新暴露的种子依赖（8d0eaee3 已修）**：`constructor_lookup` 只在 Class 值集齐全时点名，而齐全会随值集增长变成不齐全（非单调）。
+种子 1 下 `ObjectStreamClass.getExternalizableConstructor@5` 先看到暂时齐全的值集，点名了抽象类 `ObjectStreamException` 与 `CharacterCodingException`，进而经 `serial_alloc` 成为分配目标。
+修法：所指类即时记为已枚举（单调）；点名登记查找点，留到工作队列排空时（`seed_round` → `seed_ctor_lookups`）按当时值集判定。
+修后 TestSerialProxyForm 种子 0/1 方法集合一致（19865），与修前种子 0 相同。
+
+### 5.3 试过但失败的路线
+
+- **07ac5735「字符串实参不进形参常量格」（5846c417 撤回）**：本意是消除形参常量格中间态带来的种子依赖。但集成分支随后有了 String.hashCode / equals 折叠（357f8549），`URL$DefaultFactory.createURLStreamHandler` 的字符串 switch 要靠形参常量才能只取 file 臂。挡掉后 switch 不折叠，HelloWorld 涨到 2856 类 / 55 s，StockTrans 不收敛（内存涨到 62G）。种子无关由调用点配对保证，这条拦截已撤回。
+- **2e1d3355 单独拆出合入**：临时分支（2e1d3355 + 集成分支 + 5846c417）上 StockTrans 3832 类 / 290 s，种子守护差 `ObjectInputStream$1` 一类。它必须与 e284893b（单个按名 `Field.set` 会放开全部枚举字段）和 e3e459d6 一起合入。
+- **`serial_alloc` 候选改为「已实例化 ∩ 非抽象」**：分析后未采用。G 本身就是实例化集合；抽象类进 G 的根因是上面的构造器查找点名非单调，已在源头修复。
+
+### 5.4 关键实测（`rava closure`，本机，经 capped.sh）
+
+| 例 | 版本 | 类 | 方法 | 反射成员 | 耗时 |
+|---|---|---|---|---|---|
+| HelloWorld | 403b626b | 468 | 1822 | — | 5 s |
+| StockTrans | 集成分支（合 74a8977e 前） | 3108 | 18815 | 461 | ≈50 s |
+| StockTrans | 403b626b，种子 0 | 3175 | 19861 | 739 | 60–65 s |
+| StockTrans | 4b 实验 x1（未提交） | 3170 | 19668 | 739 | ≈70 s |
+| StockTrans | 4b 实验 x2（未提交） | 3168 | 19542 | 739 | ≈45 s |
+| DeepCopy | 403b626b | 3177 | 19880 | 750 | — |
+| TestSerialProxyForm | 8d0eaee3，种子 0 / 1 | 3180 / 3180 | 19865 / 19865 | 744 | 120–130 s |
+
+- 8d0eaee3 发射：StockTrans、DeepCopy、TestSerialAllocTargets 各 3174 个 JDK 类；TestFieldHandleProvenance 3603 个 JDK 类。
+- 种子：`closure_independent_of_hash_seed`（StockTrans 与四个序列化例，种子 0/1/2）在 77287ebf 上通过，全部单测（`--no-fail-fast --test-threads=1`）通过。
+- 批大小：本分支没有做 `--flow-batch` 交叉实测。A 报告的 flow-batch 7 vs 64 顺序依赖（3589 vs 3540 类）由 A 在 lookup_pair 之上推广修复。
+- 集成分支 74a8977e 的 JCA 修复让 StockTrans 3141→3283。下面的「≤3107」目标是该次合入前定的，接手时应先按合入后的基线重定目标。
+
+### 5.5 未完成项
+
+**4b Method / Constructor 成员对象化**：反射调用实参池现在是全局按通道合并（`reflect_call.rs` 的 `RP(ch)`）。终态是按 Method / Constructor 成员对象（查找结果）分池，成员只接自己被调用点的实参。
+两种近似实验（未提交）对 StockTrans 的回收上界是 **≤7 类 / 约 319 方法**（3175→3168 类，19861→19542 方法，反射成员不变）。收益很小，建议排在 getDefaultSerialFields 收窄之后，或与 A 的调用点配对推广合并做。
+- 切入点：`engine/reflect_call.rs`（`rcall_member` / `rcall_bind` / `rcall_dispatch`）、`engine/invoke.rs` 反射调用点（按名查方法分支归 A，不要动）。
+- 风险：Method 对象经集合 / 字段流转后来源不明时必须退回全局池，否则不健全；与 A 改 `lookup_pair.rs` 同文件冲突。
+
+**getDefaultSerialFields 未知接收者收窄**（原目标 StockTrans ≤3107，需按 74a8977e 后的基线重定）：5a5f75da 之后，`offset_readable` 对未知接收者放行**全部可序列化字段**的偏移读。
+`ObjectStreamClass.getDefaultSerialFields` / `computeDefaultSUID` 的接收者 Class 值集含 open，于是凡可序列化类的字段都变得可读。这部分值灌进 `writeObject0` 实参池，是 3108→3175 的主要来源。
+- 切入点：`engine/field_lookup.rs` / `engine/hw_mem.rs` 的 `offset_readable` 与 `fenum_serial` 登记。未知接收者的可读字段应限定为「实际被序列化的接收者集合」，也就是 `writeObject0` / `readObject0` 上 `obj.getClass()` 镜像所指的可序列化类、`serial_allocs` 与 `ObjectStreamClass.lookup` 实参镜像的并集，随这些集合增长逐类放开（单调）。
+- 风险：
+  - 「实际被序列化的集合」本身经字段值环（obj → 字段 → obj，4.2 第 2 条）增长，须保证只沿已放开类的字段闭合，否则回到全放开；
+  - 外部流里的类（只出现在数据里）同按名取类的未知名字，不在闭包内，属既有边界；
+  - 改动须保持 `closure_independent_of_hash_seed` 与 `param_string_constants_fold_switch` 通过；判定若依赖「齐全」之类非单调条件，应同 5.2 留到工作队列排空时做。
