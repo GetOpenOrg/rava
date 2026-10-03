@@ -257,12 +257,16 @@ queries = [
 "java/util/Properties.getProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { receiver = true, key = 1, default = 2 }
 "sun/security/action/GetPropertyAction.privilegedGetProperty:(Ljava/lang/String;)Ljava/lang/String;" = { key = 0 }
 "sun/security/action/GetPropertyAction.privilegedGetProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { key = 0, default = 1 }
+# 删除并返回原值：结果即该键的读取（启动时不存在、且从未写入的键为 null）
+"java/util/Properties.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { receiver = true, key = 1 }
 
-# 按键改写入口（接收者为系统属性表对象时只改写 key 实参所指的键）
+# 按键改写入口（接收者为系统属性表对象时只改写 key 实参所指的键）。remove = 删除：只可能改变启动时
+# 存在的键（values / dynamic），只被删除、从未写入的键仍读作不存在；删除键推不出时按拼接段匹配 values 键，
+# 拼接段也推不出则 values 全部不折叠（不波及启动时不存在的键）
 [facts.system_properties.writers]
 "java/util/Properties.setProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;" = { key = 1 }
 "java/util/Properties.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1 }
-"java/util/Properties.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1 }
+"java/util/Properties.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1, remove = true }
 
 [facts.field_writes]
 # 字段常量折叠的反射式写入来源（计划 C1c 第 1 步）。分析器按「全部写入来源」求字段值集，

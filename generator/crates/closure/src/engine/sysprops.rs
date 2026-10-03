@@ -79,6 +79,36 @@ pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
     }
 }
 
+/// 返回值来源上溯到的调用偏移：类目标 checkcast 的结果换成其输入的来源（删除并返回原值的入口返回
+/// Object，包装方法转型后返回）；来源不是调用点 / checkcast → None
+fn read_sites(a: &Analysis, srcs: &[Src]) -> Option<Vec<u32>> {
+    let mut out = Vec::new();
+    let mut work: Vec<Src> = srcs.to_vec();
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    while let Some(s) = work.pop() {
+        let Src::Site(o) = s else { return None };
+        if !seen.insert(o) {
+            continue;
+        }
+        let lo = a.events.partition_point(|x| x.0 < o);
+        let cast = a.events[lo..].iter().take_while(|x| x.0 == o).find_map(|(_, x)| match x {
+            Event::CheckCast(_, Some(inp)) => Some(inp),
+            _ => None,
+        });
+        match cast {
+            Some(inp) => {
+                let ss = inp.srcs();
+                if ss.is_empty() {
+                    return None;
+                }
+                work.extend(ss.iter().cloned());
+            }
+            None => out.push(o),
+        }
+    }
+    Some(out)
+}
+
 /// 值恰为本方法某形参（无其它来源）
 fn param_of(v: &V) -> Option<usize> {
     match &*v.srcs() {
@@ -206,10 +236,9 @@ impl Ctx<'_> {
             if srcs.is_empty() {
                 return None;
             }
-            for s in srcs.iter() {
-                let Src::Site(o) = s else { return None };
-                let lo = a.events.partition_point(|x| x.0 < *o);
-                let inv = a.events[lo..].iter().take_while(|x| x.0 == *o).find_map(|(_, x)| match x {
+            for o in read_sites(&a, &srcs)? {
+                let lo = a.events.partition_point(|x| x.0 < o);
+                let inv = a.events[lo..].iter().take_while(|x| x.0 == o).find_map(|(_, x)| match x {
                     Event::Invoke { opcode, mref, iface, args } => Some((*opcode, mref, *iface, args)),
                     _ => None,
                 });
@@ -342,11 +371,14 @@ impl Engine<'_> {
                             continue;
                         }
                         let w = self.man.sysprops.writer(&k).filter(|_| i == 0);
-                        keys.push(match w.and_then(|w| args.get(w)) {
-                            Some(V::Str(s)) => Some(s.to_string()),
-                            _ => None,
-                        });
+                        let key = w.map(|w| (w, args.get(w.key).cloned().unwrap_or(V::Top)));
+                        match key {
+                            Some((w, v)) if w.remove => keys.extend(self.removed_keys(m, a, &v)),
+                            Some((_, V::Str(s))) => keys.push(Some(s.to_string())),
+                            _ => keys.push(None),
+                        }
                     }
+                    keys.extend(self.remove_wrapper_call(m, a, *opcode, mref, *iface, args));
                 }
                 Event::Field { opcode, mref, value, .. } => {
                     let holder = match self.ctx.field_info(mref) {
@@ -400,12 +432,13 @@ impl Engine<'_> {
 
     /// 方法入口：非字节码调用点（手写 / 反射 / 方法句柄 / lambda / VM 根）拿不到带标签的返回值
     pub(super) fn sysprops_entry(&mut self, key: &MemberRef, via: &Via) {
-        if self.man.sysprops.is_empty() || !key.desc.ends_with(';') {
+        if self.man.sysprops.is_empty() {
             return;
         }
         let tracked = matches!(via.kind, "invoke" | "dispatch")
             && matches!(via.from, From::Method(c) if self.methods[c].kind == Kind::Bytecode);
-        if tracked || !self.spret.untracked.insert(key.clone()) {
+        self.remove_entry(key, tracked);
+        if !key.desc.ends_with(';') || tracked || !self.spret.untracked.insert(key.clone()) {
             return;
         }
         if self.spret.methods.contains(key) {
@@ -441,7 +474,7 @@ impl Engine<'_> {
     }
 
     /// 不折叠集合并入（None = 全部）；增长时依赖缓存清空、折叠过的方法失效
-    fn sysprops_unstable(&mut self, keys: Vec<Option<String>>, cause: impl FnOnce() -> String) {
+    pub(super) fn sysprops_unstable(&mut self, keys: Vec<Option<String>>, cause: impl FnOnce() -> String) {
         let grew = {
             let mut u = self.ctx.punstable.borrow_mut();
             let mut grew = false;
@@ -479,6 +512,7 @@ impl Engine<'_> {
         ctx.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
         ctx.cevals.borrow_mut().retain(|_, (_, inp)| keep(inp));
         ctx.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        // 删除包装方法的形参摘要只看字节码结构，与不折叠集合无关，不作废
         let mut deps: BTreeSet<usize> = std::mem::take(&mut *ctx.pdeps.borrow_mut());
         deps.extend(ctx.memo_consumers(ids));
         self.invalidate_all(Some(deps), Why::Sysprops);

@@ -128,6 +128,8 @@ pub(super) struct Ctx<'a> {
     pub(super) psums: RefCell<HashMap<MemberRef, (Option<PropSum>, super::memo::Inputs)>>,
     /// 只读形参判定缓存：(方法, 形参序号) → 属性表对象经该形参传入时不逃逸
     pub(super) preadonly: RefCell<HashMap<(MemberRef, usize), (bool, super::memo::Inputs)>>,
+    /// 删除包装方法里作删除键的形参序号（`sysprops_write.rs`）
+    pub(super) pwsums: RefCell<HashMap<MemberRef, Rc<[usize]>>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
