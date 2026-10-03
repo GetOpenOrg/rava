@@ -1,0 +1,6 @@
+read=hello-zipfs
+size=6
+isDir=true
+uri-read=hello-zipfs
+closed-ex=ClosedFileSystemException
+done=true

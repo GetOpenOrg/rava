@@ -1,0 +1,12 @@
+jbase-named=true
+jbase-name=java.base
+own-named=false
+own-name=null
+list-same-jbase=true
+own-same=true
+exported-lang=true
+exported-internal=true
+own-name-null=true
+own-exported-default=true
+can-read=true
+own-loader=true

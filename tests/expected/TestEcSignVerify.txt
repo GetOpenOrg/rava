@@ -1,0 +1,6 @@
+sig-len=72
+sig-head=30 46
+verify-true=true
+verify-tampered=false
+verify-wrong-data=false
+deterministic=true

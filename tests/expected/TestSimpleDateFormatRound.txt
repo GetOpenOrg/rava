@@ -1,0 +1,8 @@
+epoch-millis-pos=true
+roundtrip=2026-10-03 12:34:56
+dow=2026-10-03 Sat
+zone=2026-10-03 12:34 CST
+yy-back=261003
+strict-ex=ParseException at=10
+loose=2026-12-01
+bad-input-ex=ParseException

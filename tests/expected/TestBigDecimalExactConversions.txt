@@ -1,0 +1,15 @@
+int-exact=42
+long-exact=9223372036854775807
+bigint-exact=12345678901234567890
+frac-ex=ArithmeticException
+overflow-ex=ArithmeticException
+intvalue-trunc=2
+intvalue-neg=-2
+half-up=2.6
+half-even=2.6
+down=2.5
+up=2.6
+floor=-2.6
+ceiling=-2.5
+unnecessary-ex=ArithmeticException
+scale=3 stripped=1.23 plain=1000

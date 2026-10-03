@@ -1,0 +1,14 @@
+alg=L128X1024MixRandom
+alg=L128X128MixRandom
+alg=L128X256MixRandom
+alg=L32X64MixRandom
+alg=L64X1024MixRandom
+alg=L64X128MixRandom
+alg=L64X128StarStarRandom
+alg=L64X256MixRandom
+alg=Random
+alg=SecureRandom
+alg=SplittableRandom
+alg=Xoroshiro128PlusPlus
+alg=Xoshiro256PlusPlus
+lxm-group=LXM bits=192 equidist=2

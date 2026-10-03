@@ -1,0 +1,10 @@
+c0=truetruetrue
+del=true
+c1=true
+not-ctl=falsefalsefalse
+len=3 charAt1-hi=d834
+digit-f=f digit-0=0
+digit-oob=true radix-oob=true
+to-cp=1d11e
+nbsp-space=true nbsp-ws=false
+sp-both=truetrue

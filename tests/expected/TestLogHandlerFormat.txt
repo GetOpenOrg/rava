@@ -1,0 +1,2 @@
+INFO [pair a-b]WARNING [with-cause] thrown=IllegalStateExceptionINFO [filtered-out]SEVERE [passes-filter]filter-set=true
+level-parse=900

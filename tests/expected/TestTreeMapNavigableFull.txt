@@ -1,0 +1,11 @@
+first=a last=g
+desc-keys=[g, e, c, a]
+desc-sees-insert=true
+desc-first=g=7
+desc-keyset=5
+poll-first=a=1
+poll-last=g=7
+after-poll=[c, d, e]
+empty-poll=null
+empty-poll-null=true
+empty-first-ex=NoSuchElementException

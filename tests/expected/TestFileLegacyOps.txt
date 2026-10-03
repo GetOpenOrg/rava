@@ -1,0 +1,13 @@
+mkdirs=true
+isDir=true exists=true
+abs-absolute=true
+uri-scheme=file
+name=sub parent-end=false
+separator=/ path-sep=[:]
+list=alpha.txt,beta.log,sub
+dirs=1 first=sub
+logs=beta.log
+txt-count=1
+len-defined=true
+delete=true gone=true
+cleaned=true

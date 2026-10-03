@@ -1,0 +1,6 @@
+at root line=1 col=23 pub-null=true
+  by-uri=null
+at item line=2 col=27 pub-null=true
+  attr k uri=[urn:a] q=a:k type=CDATA
+  attr plain uri=[] q=plain type=CDATA
+  by-uri=null

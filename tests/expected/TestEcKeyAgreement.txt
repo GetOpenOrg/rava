@@ -1,0 +1,5 @@
+algo=EC
+format=X.509
+field-size=256
+secret-len=32
+both-eq=true

@@ -1,0 +1,7 @@
+mine=ok
+mine-set=changed
+accessible-flag=true
+jdk-open-ex=InaccessibleObjectException
+locked-read=1
+locked-set-ex=IllegalAccessException
+locked-still=1

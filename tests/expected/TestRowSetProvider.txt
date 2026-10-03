@@ -1,0 +1,8 @@
+created=true
+factory-same=true
+command=SELECT 1
+table=t
+next=false
+prev=false
+before-first=false
+rows=0

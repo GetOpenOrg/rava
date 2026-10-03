@@ -1,0 +1,10 @@
+cause-null=true
+cause=IllegalArgumentException root
+init-twice-ex=IllegalStateException
+self-cause-ex=IllegalArgumentException
+chain-depth2=root
+suppressed=2 first=s1
+twr-cause=body twr-suppressed=close-failed
+stack-nonempty=true top=TestThrowableChains
+refill-ok=true
+to-string=java.lang.Exception: wrapped

@@ -1,0 +1,10 @@
+static-overflow=true underflow=true neither-error=true
+malformed-is-error=true len=2
+unmappable-is-error=true
+loop-overflow=true not-error=true
+overflow-throws=BufferOverflowException
+loop-underflow=true
+underflow-throws=BufferUnderflowException
+flush-underflow=true
+unmappable-result=true len=1
+unmappable-throws=UnmappableCharacterException
