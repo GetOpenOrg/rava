@@ -190,8 +190,16 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │         用例已写入（feat/framework-pilot-matrix 4939f290 合入：64_–74_ 共 43 例，期望由 JDK 21 生成；71_xml 11 例）
 │         ✅【2026-10-03 完成，feat/junit-expected-redundancy d4efc8d6】63_junit expected 10/10（junit+hamcrest cp、JDK21 实跑、双跑确定性全过；顺修 3 处源码错误：assertTrue 静态导入缺失、遮蔽 helper、Sample 构造器非 public 致 initializationError）
 │         ✅【2026-10-03 完成，同分支】新增用例查重：133 例 ∩ 冗余候选 = 5、相似对交集 0，逐条论证全部保留（定向回归网/独有边界/算法族/jmod 档设计），无删除建议；报告 docs/reports/e2e-redundancy-newtests.md
-│         🔄【2026-10-03 用户侧子代理领取】6 例输出不符 expected 复核（TestClassCastSubclass / TestClassModuleFace / TestInvokeNullArgs / TestSetAccessibleBoundary / TestLocaleCurrency / TestSystemStableProps）：JDK 21 双跑对照，只按实测纠 expected，结论分 expected 错 / 生成器缺陷 / 依赖环境
-│         🔄【2026-10-03 用户侧子代理领取】抽查 e2enew-da8abee1 失败 69 例归因（运行 54〔存根 36〕/ 编译 8 / 输出 6 / 转译 1）：按模块、失败类型、A/B 档归并根因，报告入 docs/reports/，jmod-coverage §七 补实测列
+│         ✅【2026-10-03 用户侧完成，feat/e2e-failure-triage ffbebc0d】6 例输出不符 expected 复核：expected 纠正 0；生成器缺陷 5（本机 6c0adc44 复现 5/5）；环境 1（TestLocaleCurrency：CLDR 随 JDK 21 小版本漂移）
+│         ✅【2026-10-03 用户侧完成，同分支】e2enew-da8abee1 失败 69 例归因：13 根因族，报告 docs/reports/e2enew-da8abee1-triage.md，jmod §七 实测列已回填；派生条目：
+│           ├─ ⏳ R1 xml lambda 存根 SecuritySupport.lambda$getSystemProperty$0 可达性（10 例，71_xml）◀── jmod 第 1 步
+│           ├─ ⏳ R2 泛型反射 scope 构造器存根 + E0432（6 例）、R5 Method.invoke 实参数量 / 类型不符抛 IAE、R11 compareTo 桥分派闭包 ◀── 并入 T2 队列
+│           ├─ ⏳ R3 JCA ProviderList / GetInstance 存根（5 例）◀── C1d-a JCA 收窄线
+│           ├─ ⏳ R4 跨模块 import 断链 java.logging E0433（4 例）
+│           ├─ ⏳ R6 模块元数据（isNamed / getName / isExported）+ 强封装边界（2 例）、R7 系统资源装载 getSystemResourceAsStream / findBootstrapClassOrNull（3 例）◀── boot layer（C1d-a 步骤 2–5：命名模块 + jimage）
+│           ├─ ⏳ R8 beans finder 构造存根（3 例）、R9 charset / zipfs 提供者构造（5 例）◀── jmod 第 1 步前置
+│           ├─ ⏳ R10 Array.set native 准入、R12 E0308 三例、R13 http async 转译错误；数组协变 Object[].class.isAssignableFrom(Integer[].class)（TestClassCastSubclass）
+│           └─ ⏳ 环境：TestLocaleCurrency 的 golden 与服务器 JDK 21 构建 CLDR 不一致——终态是 golden 与转译所用 JDK 同一构建（测试源码不弱化），方案待用户定
 │         第 0 步 A 档用例预审（rava audit，登记闭包规模与缺口，可提前）
 │          └─▶ 第 1 步 A 档 7 模块（charsets / localedata / logging / sql / random / zipfs / crypto.ec）◀── C4 收官、boot layer、b3 CallerSensitive
 │               └─▶ 第 2 步 java.xml ──▶ 第 3 步 HTTP 回环 + 空提供者 ──▶ 第 4 步 beans / geom 子集
