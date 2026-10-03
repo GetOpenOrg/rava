@@ -244,7 +244,8 @@ impl<'a> Engine<'a> {
             a.push(f);
         }
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
-        let res = Some(Node::S(m, off));
+        // 按键查找入口的结果先经闸门（`keyed.rs`）
+        let res = Some(self.keyed_res(m, off, &resolved, pargs));
         let recv_feeds = |e: &mut Self| match recv_v {
             Some(v) => e.feeds(m, v, owner),
             None => vec![Feed::S(TypeSet::open(owner))],
@@ -270,6 +271,9 @@ impl<'a> Engine<'a> {
                 }
             }
             op::INVOKESPECIAL => {
+                if resolved.name == "<init>" {
+                    self.keyed_ctor(m, &mref.owner, &mref.desc, recv_v, pargs);
+                }
                 let r = recv_feeds(self);
                 self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
             }

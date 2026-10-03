@@ -95,6 +95,12 @@ impl<'a> Engine<'a> {
         if n == Node::Esc {
             self.escape(&delta.classes);
         }
+        if let Node::K(g) = n {
+            self.kgate_grown(g, delta);
+        }
+        if let Node::NR(r) = n {
+            self.name_write_objs(r, delta);
+        }
         if self.self_fields.contains_key(&n) {
             self.self_field_objs(n, delta);
         }

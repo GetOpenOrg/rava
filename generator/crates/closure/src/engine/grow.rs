@@ -15,6 +15,7 @@ impl<'a> Engine<'a> {
             }
         }
         self.hubs_grow(id);
+        self.keyed_g_grow(id);
         self.reopen(id);
         self.vm_hooks_on_alloc(id);
         let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();

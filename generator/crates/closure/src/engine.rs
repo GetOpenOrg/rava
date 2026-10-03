@@ -55,6 +55,7 @@ mod hw;
 mod hw_mem;
 mod hw_offset;
 mod hw_syntax;
+mod hw_name_write;
 mod hw_stype;
 mod hw_infer;
 mod hw_inherit;
@@ -83,6 +84,7 @@ mod nest;
 mod method_lookup;
 mod field_lookup;
 mod pstrs;
+mod keyed;
 mod share;
 mod new;
 mod methods;
@@ -235,6 +237,8 @@ pub struct Engine<'a> {
     /// G 按类型 t 的子集索引：t → G 中 ⊂ t 的成员（有序）。按查询到的 t 惰性建立，G 增长时增量维护，
     /// open 展开与 catch 存活判定因此与 |G| 无关
     g_sub: HashMap<u32, Vec<u32>>,
+    /// 按键查找闸门（见 `keyed.rs`）
+    keyed: keyed::KeyedState,
     lambdas: HashMap<u32, Lambda>,
     /// 手写实现对象（伪类型 id → 对象）
     hwobjs: HashMap<u32, HwObj>,
@@ -477,6 +481,8 @@ pub struct Engine<'a> {
     hw_copy_names: BTreeMap<String, BTreeSet<(Node, u32)>>,
     /// 手写写入值取自形参上的按名读：接收者形参节点 → (字段名, 写入目标, 目标类型)；接收者值集增长时接入（[`Engine::name_read_objs`]）
     name_reads: HashMap<Node, Vec<(String, Node, u32)>>,
+    /// 手写按名写入的接收者取自按名读：接收者汇集节点与其上登记的写入（[`Engine::name_write_objs`]）
+    name_recvs: hw_name_write::NameRecvs,
     /// `包/蛇形名` → 类（手写 `use super::<类>_impl` 模块引用的反查；首次使用时建立）
     snake_index: std::cell::OnceCell<HashMap<String, String>>,
     /// 清单种子状态与输出

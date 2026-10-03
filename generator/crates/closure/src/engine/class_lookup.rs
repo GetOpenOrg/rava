@@ -389,6 +389,9 @@ impl<'a> Engine<'a> {
         if let Some(set) = self.enum_field_values(a, v) {
             return Some(Part::Any(set));
         }
+        if let Some(set) = f.m.and_then(|m| self.read_field_names(m, a, o, depth)) {
+            return Some(Part::Any(set));
+        }
         if let Some(set) = self.callee_consts(a, o, depth) {
             return Some(Part::Any(set));
         }

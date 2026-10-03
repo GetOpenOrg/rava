@@ -109,9 +109,11 @@ impl FileScan<'_> {
             })
             .collect();
         let param_of = |v: &str| (!b.locals.contains_key(v)).then(|| params.iter().position(|p| p.as_deref() == Some(v)).map(|i| i as u16)).flatten();
-        for (field, write, recv, value, on_self, path, value_self, value_st, src) in cs.fields {
+        for (field, write, recv, value, on_self, path, value_self, value_st, src, rsrc) in cs.fields {
             let value_src_param = src.as_ref().and_then(|(v, _)| v.as_deref()).and_then(param_of);
             let value_src = src.map(|(_, f)| f);
+            let recv_src_param = rsrc.as_ref().and_then(|(v, _)| v.as_deref()).and_then(param_of);
+            let recv_src = rsrc.map(|(_, f)| f);
             info.fields.push(FieldAccess {
                 on_self,
                 value_self,
@@ -122,6 +124,8 @@ impl FileScan<'_> {
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
                 value_src,
                 value_src_param,
+                recv_src,
+                recv_src_param,
                 value_fresh: value_st.map(|v| expand_s(self.uses, v, &self.self_ty)).is_some_and(|v| matches!(&v, SType::Ret(t, f) if self.scalar_fns.contains(&(t.0.clone(), f.clone())))),
             });
         }
@@ -370,7 +374,7 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                 // 被调 fn 的 self 不一定是本方法的接收者
                 let own = x == n.as_str();
                 for fa in &f.fields {
-                    let fa = FieldAccess { on_self: fa.on_self && own, value_self: fa.value_self && keep, value_src_param: fa.value_src_param.filter(|_| own), ..fa.clone() };
+                    let fa = FieldAccess { on_self: fa.on_self && own, value_self: fa.value_self && keep, value_src_param: fa.value_src_param.filter(|_| own), recv_src_param: fa.recv_src_param.filter(|_| own), ..fa.clone() };
                     if !fields.contains(&fa) {
                         fields.push(fa);
                     }
@@ -478,6 +482,32 @@ mod tests {
         assert_eq!(get(6), ("a", true, None));
         assert_eq!(get(7), ("b", true, Some(named(&["Stream"]))));
         assert_eq!(get(8), ("c", false, Some(named(&["Stream"]))));
+    }
+
+    /// 按名写入的接收者取自按名读：记接收者的来源字段名；来源接收者是形参时记其序号，经同文件被调 fn 传递来的不记序号
+    #[test]
+    fn field_recv_by_name() {
+        let src = r#"
+            fn fill(info: Object, v: i32) {
+                let Some(member) = info.0.__unsafe_ref_get("memberName") else { panic!() };
+                member.0.__unsafe_ref_set("type_", Object::default());
+                member.0.__unsafe_int_set("flags", v);
+                info.0.__unsafe_int_set("bci", v);
+            }
+            impl Walker {
+                pub fn walk(this: Walker, info: Object) { fill(info, 1); }
+            }
+        "#;
+        let file = syn::parse_file(src).expect("测试源码可解析");
+        let mut out = FileFns::default();
+        scan_file(&file, &HashMap::new(), &mut out);
+        let r = |fn_name: &str, f: &str| {
+            let info = &out.fns[fn_name];
+            info.fields.iter().find(|fa| fa.write && fa.field == f).map(|fa| (fa.recv_src.clone(), fa.recv_src_param)).expect("写入存在")
+        };
+        assert_eq!(r("fill", "type"), (Some("memberName".into()), Some(0)));
+        assert_eq!(r("fill", "flags"), (Some("memberName".into()), Some(0)));
+        assert_eq!(r("fill", "bci"), (None, None));
     }
 
     /// 写入值取自按名读：经 unwrap / 转换 / `?` / let 传递记来源字段名；接收者是形参时记其序号（含 self），

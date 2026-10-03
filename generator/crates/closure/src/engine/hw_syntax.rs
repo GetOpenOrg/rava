@@ -106,7 +106,7 @@ impl<'a> Engine<'a> {
 
     /// 手写体写入字段：只不折叠、读者失效。与按名取得（`open_field`）分开——手写体按 Rust 字段直接写，
     /// 不产出偏移，字段不因此可按偏移读写，也不接按名打开的静态字段写入
-    fn hw_open_field(&mut self, key: &MemberRef) {
+    pub(super) fn hw_open_field(&mut self, key: &MemberRef) {
         if self.ctx.fhw.borrow_mut().insert(key.clone()) {
             let mut deps = self.ctx.ceval_drop_field(key);
             deps.extend(self.ctx.fdeps.borrow().get(key).into_iter().flatten().copied());
@@ -124,9 +124,8 @@ impl<'a> Engine<'a> {
     }
 
     /// 手写体字段访问器：写入值接进字段节点并登记「有手写写入」；读出值汇入值池。
-    /// 接收者推不出 → 所有同名字段按 open 处理（安全回退）
+    /// 接收者推不出 → 按名写入的接收者取自按名读时按其值集解出字段（`hw_name_write.rs`），否则所有同名字段按 open 处理（安全回退）
     pub(super) fn hw_fields(&mut self, m: usize, host: &str, fields: &[FieldAccess]) {
-        let pool = Node::S(m, POOL);
         let prod = Node::S(m, PROD);
         for fa in fields {
             let cls = fa.recv.as_ref().and_then(|r| self.stype_class(host, r));
@@ -136,33 +135,8 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let Some((decl, desc)) = site else {
-                if fa.write {
-                    self.hw_open_field_name(&fa.field);
-                }
-                let fresh = if fa.write {
-                    self.hw_written_names.insert(fa.field.clone())
-                } else {
-                    self.hw_read_names.entry(fa.field.clone()).or_default().insert(prod)
-                };
-                if !fresh {
-                    continue;
-                }
-                let hit: Vec<(usize, String)> = self
-                    .fields
-                    .keys()
-                    .enumerate()
-                    .filter(|(_, k)| k.name == fa.field)
-                    .map(|(i, k)| (i, k.desc.clone()))
-                    .collect();
-                for (i, d) in hit {
-                    let Some(tid) = parse_field(&d).and_then(|t| self.ptype(&t)) else { continue };
-                    if fa.write {
-                        // 写入值取自值池、只以 open 出现在读者处：须逃逸
-                        self.add_to(Node::U(i), &TypeSet::open(tid));
-                        self.flow(pool, Node::Esc, tid);
-                    } else {
-                        self.flow(Node::F(i), prod, tid);
-                    }
+                if !self.hw_name_write(m, host, fa) {
+                    self.hw_field_by_name(m, fa);
                 }
                 continue;
             };
@@ -186,17 +160,10 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if fa.write {
-                if let Some(src) = &fa.value_src {
-                    match fa.value_src_param.filter(|&k| self.methods[m].ptypes.get(k as usize).is_some_and(|t| t.is_some())) {
-                        Some(k) => self.name_read(Node::P(m, k), src, Node::U(fi), tid),
-                        None => self.hw_copy_by_name(src, Node::U(fi), tid),
-                    }
-                    continue;
-                }
-                let fs = vec![self.hw_value(m, host, fa)];
-                self.feed(&fs, Node::U(fi), tid);
+                let pooled = fa.value_src.is_none() && matches!(self.hw_value(m, host, fa), Feed::N(n) if n == Node::S(m, POOL));
+                self.hw_write_value(m, host, fa, Node::U(fi), tid);
                 // static 字段的手写写入值推不出类型：值未知，按字段声明类型的实例（open）
-                if fa.path && matches!(fs[0], Feed::N(n) if n == pool) {
+                if fa.path && pooled {
                     self.add_to(Node::U(fi), &TypeSet::open(tid));
                 }
             } else {
@@ -205,8 +172,55 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 手写写入的值接进写入目标 to（字段类型 tid）：值取自按名读时接读取接收者上该字段的内容，否则按 [`Self::hw_value`]
+    pub(super) fn hw_write_value(&mut self, m: usize, host: &str, fa: &FieldAccess, to: Node, tid: u32) {
+        if let Some(src) = &fa.value_src {
+            match fa.value_src_param.filter(|&k| self.methods[m].ptypes.get(k as usize).is_some_and(|t| t.is_some())) {
+                Some(k) => self.name_read(Node::P(m, k), src, to, tid),
+                None => self.hw_copy_by_name(src, to, tid),
+            }
+            return;
+        }
+        let fs = vec![self.hw_value(m, host, fa)];
+        self.feed(&fs, to, tid);
+    }
+
+    /// 接收者推不出的手写字段访问：所有同名字段（含此后登记的）——写入按 open 处理、值须逃逸，读出汇入产出
+    pub(super) fn hw_field_by_name(&mut self, m: usize, fa: &FieldAccess) {
+        let pool = Node::S(m, POOL);
+        let prod = Node::S(m, PROD);
+        if fa.write {
+            self.hw_open_field_name(&fa.field);
+        }
+        let fresh = if fa.write {
+            self.hw_written_names.insert(fa.field.clone())
+        } else {
+            self.hw_read_names.entry(fa.field.clone()).or_default().insert(prod)
+        };
+        if !fresh {
+            return;
+        }
+        let hit: Vec<(usize, String)> = self
+            .fields
+            .keys()
+            .enumerate()
+            .filter(|(_, k)| k.name == fa.field)
+            .map(|(i, k)| (i, k.desc.clone()))
+            .collect();
+        for (i, d) in hit {
+            let Some(tid) = parse_field(&d).and_then(|t| self.ptype(&t)) else { continue };
+            if fa.write {
+                // 写入值取自值池、只以 open 出现在读者处：须逃逸
+                self.add_to(Node::U(i), &TypeSet::open(tid));
+                self.flow(pool, Node::Esc, tid);
+            } else {
+                self.flow(Node::F(i), prod, tid);
+            }
+        }
+    }
+
     /// 写入值取自接收者节点 `recv` 上按名读的字段 `src`：按接收者值集逐个接入（[`Self::name_read_objs`]）
-    fn name_read(&mut self, recv: Node, src: &str, to: Node, tid: u32) {
+    pub(super) fn name_read(&mut self, recv: Node, src: &str, to: Node, tid: u32) {
         let reads = self.name_reads.entry(recv).or_default();
         if reads.iter().any(|(f, n, t)| f == src && *n == to && *t == tid) {
             return;
@@ -258,7 +272,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 写入值取自按名读的字段 `src`：同名字段（含此后登记的）的内容按写入字段的类型 `tid` 接进 `to`
-    fn hw_copy_by_name(&mut self, src: &str, to: Node, tid: u32) {
+    pub(super) fn hw_copy_by_name(&mut self, src: &str, to: Node, tid: u32) {
         if !self.hw_copy_names.entry(src.to_string()).or_default().insert((to, tid)) {
             return;
         }

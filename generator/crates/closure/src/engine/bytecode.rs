@@ -318,6 +318,10 @@ impl<'a> Engine<'a> {
                 let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
                 self.field_put(&key, value.map_or(PV::Top, PV::of));
                 self.field_strs_put(&key, value);
+                if key.desc == format!("L{};", absint::STRING) {
+                    let fi = self.field_node(key);
+                    self.pstr_field_put(m, fi, value);
+                }
             }
         }
         let Some(ft) = parse_field(&f.desc) else { return };
