@@ -322,6 +322,8 @@ pub struct Engine<'a> {
     pub refs: BTreeSet<String>,
     /// 成员引用的文本键（清单按文本查询；字节码事件反复查同一引用）及是否已记入 `refs`
     mref_keys: HashMap<MemberRef, (Rc<str>, bool)>,
+    /// 方法（序号）的键在清单 `[facts.array_writes]` / `[facts.memory_reads]` 中有登记（键不变，查一次）
+    mem_decl: HashMap<usize, bool>,
     /// 运行模型替换的 indy 调用点（`方法@偏移` → (引导方法, 类别)）
     pub indy_models: BTreeMap<String, (String, IndyKind)>,
     /// 签名多态调用点（`方法@偏移`，JVMS §2.9.3）：JVM 链接到 LambdaForm 调用器，发射层走手写 `__site` 伴生——
@@ -349,6 +351,8 @@ pub struct Engine<'a> {
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
     recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
+    /// 反射调用点（方法 → 偏移）已处理过的 Class 实参值（`field_lookup.rs::ReflSeen`）；同一分析结果下成立，与 `recv_done` 同口径作废
+    refl_seen: HashMap<usize, HashMap<u32, field_lookup::ReflSeen>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
