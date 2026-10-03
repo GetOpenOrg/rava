@@ -116,6 +116,7 @@ impl TyCtx<'_> {
                 }
                 anc = self.reg.get(a.super_class());
             }
+            self.add_unimplemented_interface_members(ci, &mut inherited);
             let union_len = |n: &str, ps: &BTreeSet<String>| {
                 inherited
                     .get(n)
@@ -146,6 +147,54 @@ impl TyCtx<'_> {
                 .insert(ci.name(), result.clone());
         }
         result
+    }
+
+    /// 接口（含超接口传递、祖先类实现的接口）上声明、而 ci 及其祖先类均未以同描述符
+    /// 实现的实例成员，并入继承参数段：类内 `this.m()` 可经 invokevirtual 指向这类只声明在
+    /// 接口上的成员，它与类自有的同名异参方法须按描述符区分（定义侧与调用侧同用本判定）。
+    /// 类链上已有同名同描述符方法（含泛型桥）的接口成员即由该实现承载，不另计参数段——
+    /// 桥方法的擦除描述符不制造重载。
+    fn add_unimplemented_interface_members(&self, ci: &ClassInfo, inherited: &mut ParamSets) {
+        let mut chain: Vec<&ClassInfo> = Vec::new();
+        let mut seen_cls = BTreeSet::new();
+        let mut cur = Some(ci);
+        while let Some(c) = cur.filter(|c| seen_cls.insert(c.name().to_string())) {
+            chain.push(c);
+            cur = self.reg.get(c.super_class());
+        }
+        let implemented = |name: &str, desc: &str| {
+            chain
+                .iter()
+                .any(|c| c.methods().iter().any(|m| m.name == name && m.desc == desc && !m.is_static()))
+        };
+        let mut queue: VecDeque<&str> = chain
+            .iter()
+            .flat_map(|c| c.interfaces().iter().map(String::as_str))
+            .collect();
+        let mut seen = BTreeSet::new();
+        while let Some(iname) = queue.pop_front() {
+            if !seen.insert(iname) {
+                continue;
+            }
+            let Some(ici) = self.reg.get(iname) else {
+                continue;
+            };
+            queue.extend(ici.interfaces().iter().map(String::as_str));
+            for m in ici.methods() {
+                if m.is_static()
+                    || m.is_synthetic()
+                    || m.is_private()
+                    || m.name.starts_with('<')
+                    || implemented(&m.name, &m.desc)
+                {
+                    continue;
+                }
+                inherited
+                    .entry(m.name.clone())
+                    .or_default()
+                    .insert(param_section(&m.desc));
+            }
+        }
     }
 
     /// 实例字段的 Rust 名：隐藏祖先同名字段的声明取 `<name>_<DeclaringClass>`

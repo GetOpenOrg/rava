@@ -12,6 +12,8 @@ parking_lot = "0.12"
 # POSIX 系统调用（access / statvfs / pathconf：std 无等价，FS-IO1 / IO2）
 libc = "0.2"
 rava_macros = { path = "../rava_macros" }
+# 有栈协程原语（Continuation 的 enterSpecial / doYield，a3-T §21.8.2）
+rava_coro = { path = "../rava_coro" }
 
 [lints.rust]
 # 生成代码的固有形态不做告警（括号防御性包裹 / 未触达存根 / JVM 槽位复用赋值 /

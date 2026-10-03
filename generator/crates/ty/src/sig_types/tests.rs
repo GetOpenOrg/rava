@@ -37,6 +37,40 @@ fn overloaded_names_inherit_and_static_rule() {
 }
 
 #[test]
+fn overloaded_names_count_unimplemented_interface_members() {
+    const ABSTRACT: u16 = 0x0400;
+    const SYNTHETIC: u16 = 0x1000;
+    let mut s = base_specs();
+    s.push(class("p/View").iface().method(method(PUBLIC | ABSTRACT, "read", "()Ljava/lang/String;", None)));
+    s.push(class("p/Named").iface().ifaces(&["p/View"]));
+    // 自有 read(String[]) 与接口抽象 read() 同名：直接接口与超接口传递两种形态都须 mangle
+    s.push(
+        class("p/AbsDirect")
+            .ifaces(&["p/View"])
+            .method(method(PUBLIC, "read", "([Ljava/lang/String;)Ljava/lang/String;", None)),
+    );
+    s.push(
+        class("p/AbsTransitive")
+            .ifaces(&["p/Named"])
+            .method(method(PUBLIC, "read", "([Ljava/lang/String;)Ljava/lang/String;", None)),
+    );
+    // 泛型桥：实现 compareTo(T) + 合成桥 compareTo(Object)，接口成员由桥承载，不制造重载
+    s.push(class("p/Cmp").iface().method(method(PUBLIC | ABSTRACT, "compareTo", &format!("(L{OBJECT};)I"), None)));
+    s.push(
+        class("p/Impl")
+            .ifaces(&["p/Cmp"])
+            .method(method(PUBLIC, "compareTo", "(Lp/Impl;)I", None))
+            .method(method(PUBLIC | SYNTHETIC, "compareTo", &format!("(L{OBJECT};)I"), None)),
+    );
+    let f = Fixture::new(s);
+    let x = f.ctx();
+    let names = |c: &str| f.reg.get(c).map(|ci| x.hierarchy_overloaded_names(ci));
+    assert!(names("p/AbsDirect").is_some_and(|n| n.contains("read")));
+    assert!(names("p/AbsTransitive").is_some_and(|n| n.contains("read")));
+    assert!(names("p/Impl").is_some_and(|n| !n.contains("compareTo")));
+}
+
+#[test]
 fn method_sig_types_uses_farthest_ancestor() {
     let mut s = base_specs();
     s.push(
