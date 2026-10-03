@@ -28,7 +28,7 @@ pub(crate) fn prepare_non_virtual_body(
     if class_init::is_init_trigger(sig) {
         class_init::inject_init_trigger(&mut b);
     }
-    let null_check = class_init::null_receiver_check(sig);
+    let null_check = class_init::entry_checks(sig);
     rewrite_block(&mut b, basic_names, ref_names);
     // 构造器 / 非虚方法同样运行在 wrapper 上下文（this: Wrapper 或 &Wrapper）：
     // super.method() 的 __base(this, ...) 需经 vtable 取得 &dyn AncestorVTable

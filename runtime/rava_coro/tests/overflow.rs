@@ -69,10 +69,11 @@ fn checked(n: u64, out: &mut (u64, usize, bool)) -> Result<u64, ()> {
     std::hint::black_box(&mut pad);
     if stack_exhausted() {
         let ok = {
-            let _y = YellowZone::enter();
+            let _y = YellowZone::enter().expect("首次进入余量区");
             let before = !stack_exhausted();
+            let nested = YellowZone::enter().is_none();
             std::hint::black_box(burn(YELLOW / 2));
-            before && !stack_exhausted()
+            before && nested && !stack_exhausted()
         };
         *out = (n, pad.as_ptr() as usize, ok && stack_exhausted());
         return Err(());
@@ -146,4 +147,19 @@ fn software_limit_detects_exhaustion() {
         (s.hit - s.lo) >> 10,
         if stack::hardware_guard() { "启用" } else { "未启用" }
     );
+}
+
+#[test]
+fn check_cost() {
+    rava_coro::init_platform_thread();
+    const N: u32 = 10_000_000;
+    let t = std::time::Instant::now();
+    let mut hits = 0u32;
+    for _ in 0..N {
+        hits += stack_exhausted() as u32;
+    }
+    let ns = t.elapsed().as_nanos() as f64 / N as f64;
+    assert_eq!(hits, 0);
+    eprintln!("[rava_coro] stack_exhausted 单次 {ns:.2} ns（{}）", std::env::consts::ARCH);
+    assert!(ns < 10.0);
 }

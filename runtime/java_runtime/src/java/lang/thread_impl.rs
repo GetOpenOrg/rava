@@ -89,6 +89,8 @@ pub(crate) fn spawn_java_thread(t: Thread, daemon: bool) -> Result<()> {
             // 以退出码 101 终止整个进程，与主线程 panic 同一出口
             let handoff = handoff; // 整体移入闭包（Handoff 承载跨线程移交），不按字段捕获
             let t = handoff.0;
+            // 本线程的软件栈界（StackOverflowError 判定）
+            rava_coro::init_platform_thread();
             CURRENT.with(|c| *c.borrow_mut() = Some(Clone::clone(&t)));
             run_java_thread(&t);
             CURRENT.with(|c| c.borrow_mut().take());

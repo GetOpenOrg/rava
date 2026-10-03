@@ -84,3 +84,13 @@ fn no_recording_without_queries() {
     assert!(!err.contains("[flows "), "未登记记录型查询却有记录：{err}");
     assert!(out.contains("FlowProbe.pass:(Ljava/lang/Object;)Ljava/lang/Object;"), "{out}");
 }
+
+/// HelloWorld 级程序：栈耗尽 VM 规则（stack-check）把 StackOverflowError 带入闭包（a3-T1b）
+#[test]
+fn stack_overflow_error_in_minimal_closure() {
+    let Some((out, _)) = closure("MinimalMain.java", &["--why", "java/lang/StackOverflowError"]) else {
+        return;
+    };
+    assert!(out.contains("java/lang/StackOverflowError（"), "{out}");
+    assert!(out.contains("[vm-rule] 根 stack-check"), "{out}");
+}

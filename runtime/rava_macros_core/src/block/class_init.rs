@@ -42,16 +42,20 @@ pub(crate) fn is_init_trigger(sig: &Signature) -> bool {
     sig.receiver().is_none() && sig.ident != CLINIT_FN && returns_result(sig)
 }
 
-/// 实例方法入口的空接收者检查（JVMS §6.5 invokevirtual / invokespecial / invokeinterface：
-/// objectref 为 null 抛 NullPointerException）。只对可传播异常的方法生成。
-pub(crate) fn null_receiver_check(sig: &Signature) -> proc_macro2::TokenStream {
-    if sig.receiver().is_some() && returns_result(sig) {
-        quote::quote! {
-            if self._jvm_null { return Err(JvmError::null_pointer()); }
-        }
+/// 方法入口检查，只对可传播异常（返回 `Result`）的方法生成：
+/// 1. 实例方法的空接收者检查（JVMS §6.5 invokevirtual / invokespecial / invokeinterface：
+///    objectref 为 null 抛 NullPointerException，先于建帧）；
+/// 2. 栈界检查 `__stack_check()?`（建帧：栈耗尽抛 StackOverflowError，a3-T1b，计划 §21.8.2）。
+pub(crate) fn entry_checks(sig: &Signature) -> proc_macro2::TokenStream {
+    if !returns_result(sig) {
+        return quote::quote! {};
+    }
+    let null_check = if sig.receiver().is_some() {
+        quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
     } else {
         quote::quote! {}
-    }
+    };
+    quote::quote! { #null_check __stack_check()?; }
 }
 
 /// 在方法体入口注入 `Self::__class_init()?;`。
