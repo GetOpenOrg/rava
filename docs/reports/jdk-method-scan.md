@@ -6,24 +6,24 @@
 -  90 jars — java.lang.Object
 -  82 jars — java.lang.String
 -  81 jars — java.lang.Class
--  79 jars — java.lang.System
 -  79 jars — java.lang.StringBuilder
 -  79 jars — java.util.Map
+-  79 jars — java.lang.System
 -  78 jars — java.lang.Throwable
 -  78 jars — java.util.Iterator
 -  77 jars — java.io.IOException
 -  76 jars — java.util.ArrayList
 -  76 jars — java.util.List
--  75 jars — java.lang.IllegalStateException
 -  75 jars — java.lang.IllegalArgumentException
--  74 jars — java.lang.Exception
+-  75 jars — java.lang.IllegalStateException
 -  74 jars — java.util.Set
+-  74 jars — java.lang.Exception
 -  73 jars — java.lang.Boolean
 -  71 jars — java.lang.Character
 -  71 jars — java.lang.reflect
 -  70 jars — java.lang.Integer
--  69 jars — java.lang.RuntimeException
 -  69 jars — java.util.Arrays
+-  69 jars — java.lang.RuntimeException
 -  68 jars — java.util.Collections
 -  67 jars — java.util.HashMap
 -  66 jars — java.lang.invoke
@@ -566,10 +566,10 @@
 
 ## 四、缺口对照（默认产出；方法名级启发式）
 
-- ≥10 jar（核心共用层）：方法名 413，零命中 14，覆盖 96%
-- 5-9 jar（中层）：方法名 381，零命中 116，覆盖 69%
-- 3-4 jar：方法名 456，零命中 271，覆盖 40%
-- 1-2 jar（长尾）：方法名 2925，零命中 2578，覆盖 11%
+- ≥10 jar（核心共用层）：方法名 413，零命中 10，覆盖 97%
+- 5-9 jar（中层）：方法名 381，零命中 78，覆盖 79%
+- 3-4 jar：方法名 456，零命中 269，覆盖 41%
+- 1-2 jar（长尾）：方法名 2925，零命中 2572，覆盖 12%
 
 ### 4a. gated 归属（能力判据项，不由 e2e 追赶）
 
@@ -577,6 +577,7 @@
 - K9 SSL（证书/握手不可单文件生成）：54 个（javax.net.ssl.SSLSocketFactory.createSocket, javax.net.ssl.SSLContext.getSocketFactory, javax.net.ssl.SSLSocket.setEnabledProtocols, javax.net.ssl.SSLSocket.getEnabledProtocols, javax.net.ssl.TrustManagerFactory.getTrustManagers, javax.net.ssl.SSLSocket.setEnabledCipherSuites…）
 - K9 socket 选项（SO_LINGER/缓冲/保活等）：28 个（java.net.Socket.getInetAddress, java.net.Socket.setReceiveBufferSize, java.net.Socket.setSendBufferSize, java.net.Socket.getRemoteSocketAddress, java.net.Socket.setKeepAlive, java.net.Socket.setSoLinger…）
 - indy 运行模型（闭包/字符串拼接引导，运行模型域）：12 个（java.lang.invoke.LambdaMetafactory.metafactory, java.lang.invoke.StringConcatFactory.makeConcatWithConstants, java.lang.invoke.SerializedLambda.getImplMethodName, java.lang.invoke.SerializedLambda.getImplMethodKind, java.lang.invoke.SerializedLambda.getFunctionalInterfaceClass, java.lang.invoke.SerializedLambda.getFunctionalInterfaceMethodName…）
+- K9 网络请求面：12 个（java.net.URL.openConnection, java.net.URLConnection.setUseCaches, java.net.HttpURLConnection.getResponseCode, java.net.URLConnection.setDoOutput, java.net.HttpURLConnection.setRequestMethod, java.net.URLConnection.setRequestProperty…）
 - K7 JDBC：9 个（javax.sql.ConnectionEventListener.connectionClosed, javax.sql.ConnectionEvent.getSource, javax.sql.PooledConnection.removeConnectionEventListener, javax.sql.ConnectionPoolDataSource.getPooledConnection, javax.sql.PooledConnection.addConnectionEventListener, javax.sql.DataSource.setLogWriter…）
 - C-MT 执行器/调度（时序不确定）：8 个（java.util.concurrent.Future.cancel, java.util.concurrent.ThreadFactory.newThread, java.util.concurrent.ExecutorService.shutdownNow, java.util.concurrent.ExecutorService.awaitTermination, java.util.concurrent.ScheduledExecutorService.scheduleAtFixedRate, java.util.concurrent.ScheduledExecutorService.schedule…）
 - K9 地址解析：5 个（java.net.InetAddress.getHostName, java.net.InetAddress.getLocalHost, java.net.InetAddress.getCanonicalHostName, java.net.InetAddress.getByAddress, java.net.InetAddress.getAllByName）
@@ -584,71 +585,23 @@
 - 安全管理器（JDK17+ 已弃用，检查面归域外）：3 个（java.lang.SecurityManager.checkPermission, java.lang.SecurityManager.checkSetFactory, java.lang.SecurityManager.checkPackageAccess）
 - 跨机默认 locale（期望文件不可入库）：1 个（java.util.Locale.getDefault）
 - 跨机默认时区：1 个（java.time.ZoneId.systemDefault）
-- K9 网络请求面：1 个（java.net.URL.openConnection）
 - K10 资源枚举：1 个（java.lang.ClassLoader.getSystemResources）
 - K9 SSL 工厂：1 个（javax.net.ServerSocketFactory.createServerSocket）
 
 ### 4b. 可行动缺口（≥5 jar 且未归类——按 jar 数排序，供人工裁决补测）
 
--  12 jars — java.lang.Character.isISOControl(C)Z
--  12 jars — java.net.URLConnection.setUseCaches(Z)V
--  11 jars — java.lang.StringBuilder.appendCodePoint(I)Ljava/lang/StringBuilder;
--  10 jars — java.lang.reflect.ParameterizedType.getOwnerType()Ljava/lang/reflect/Type;
--  10 jars — java.util.jar.JarFile.entries()Ljava/util/Enumeration;
--   9 jars — java.io.File.getCanonicalPath()Ljava/lang/String;
--   9 jars — java.lang.Byte.parseByte(Ljava/lang/String;)B
--   9 jars — java.lang.Short.parseShort(Ljava/lang/String;)S
--   9 jars — java.nio.charset.CoderResult.isError()Z
--   8 jars — java.io.File.getCanonicalFile()Ljava/io/File;
--   8 jars — java.io.File.lastModified()J
--   8 jars — java.io.StringWriter.getBuffer()Ljava/lang/StringBuffer;
--   8 jars — java.lang.Class.getProtectionDomain()Ljava/security/ProtectionDomain;
--   8 jars — java.nio.charset.CoderResult.throwException()V
--   8 jars — java.nio.charset.CoderResult.isOverflow()Z
--   8 jars — java.util.concurrent.ConcurrentHashMap.newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;
--   8 jars — javax.xml.namespace.QName.getLocalPart()Ljava/lang/String;
--   8 jars — javax.xml.parsers.SAXParserFactory.setValidating(Z)V
--   7 jars — java.lang.Character.forDigit(II)C
--   7 jars — java.lang.Package.getImplementationVersion()Ljava/lang/String;
--   7 jars — java.nio.charset.CoderResult.isUnderflow()Z
--   7 jars — java.text.ParsePosition.setIndex(I)V
 -   7 jars — java.util.Arrays.setAll([Ljava/lang/Object;Ljava/util/function/IntFunction;)V
 -   7 jars — java.util.ListIterator.nextIndex()I
--   7 jars — java.util.SortedSet.comparator()Ljava/util/Comparator;
--   7 jars — java.util.stream.Stream.findAny()Ljava/util/Optional;
--   6 jars — java.beans.IndexedPropertyDescriptor.getIndexedReadMethod()Ljava/lang/reflect/Method;
--   6 jars — java.beans.Introspector.decapitalize(Ljava/lang/String;)Ljava/lang/String;
--   6 jars — java.io.File.getAbsoluteFile()Ljava/io/File;
 -   6 jars — java.io.ObjectInputStream.resolveClass(Ljava/io/ObjectStreamClass;)Ljava/lang/Class;
 -   6 jars — java.lang.runtime.ObjectMethods.bootstrap(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/TypeDescriptor;Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/invoke/MethodHandle;)Ljava/lang/Object;
--   6 jars — java.net.HttpURLConnection.getResponseCode()I
--   6 jars — java.text.ParsePosition.getErrorIndex()I
 -   6 jars — java.util.ResourceBundle.getKeys()Ljava/util/Enumeration;
--   6 jars — javax.xml.parsers.DocumentBuilderFactory.setFeature(Ljava/lang/String;Z)V
 -   6 jars — javax.xml.transform.dom.DOMResult.getNode()Lorg/w3c/dom/Node;
--   5 jars — java.beans.BeanInfo.getMethodDescriptors()[Ljava/beans/MethodDescriptor;
--   5 jars — java.beans.IndexedPropertyDescriptor.getIndexedWriteMethod()Ljava/lang/reflect/Method;
--   5 jars — java.io.ByteArrayOutputStream.writeTo(Ljava/io/OutputStream;)V
--   5 jars — java.io.File.mkdir()Z
 -   5 jars — java.io.RandomAccessFile.getChannel()Ljava/nio/channels/FileChannel;
--   5 jars — java.lang.Character.toCodePoint(CC)I
--   5 jars — java.lang.Character.isSpaceChar(C)Z
 -   5 jars — java.lang.Throwable.setStackTrace([Ljava/lang/StackTraceElement;)V
--   5 jars — java.net.URLConnection.setDoOutput(Z)V
--   5 jars — java.util.function.BooleanSupplier.getAsBoolean()Z
--   5 jars — java.util.regex.Matcher.lookingAt()Z
--   5 jars — java.util.stream.Collectors.collectingAndThen(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;
--   5 jars — java.util.stream.Stream.mapToLong(Ljava/util/function/ToLongFunction;)Ljava/util/stream/LongStream;
--   5 jars — javax.xml.parsers.DocumentBuilder.setEntityResolver(Lorg/xml/sax/EntityResolver;)V
--   5 jars — org.w3c.dom.Element.getAttributes()Lorg/w3c/dom/NamedNodeMap;
--   5 jars — org.xml.sax.Attributes.getURI(I)Ljava/lang/String;
--   5 jars — org.xml.sax.ContentHandler.setDocumentLocator(Lorg/xml/sax/Locator;)V
 
 ### 4c. 静态字段零命中
 
--  17 jars — java.nio.charset.StandardCharsets.US_ASCIILjava/nio/charset/Charset;
 -  11 jars — java.nio.charset.StandardCharsets.UTF_16LELjava/nio/charset/Charset;
--  11 jars — java.lang.String.CASE_INSENSITIVE_ORDERLjava/util/Comparator;
 -  10 jars — java.nio.charset.StandardCharsets.UTF_16BELjava/nio/charset/Charset;
 -   8 jars — java.util.concurrent.TimeUnit.HOURSLjava/util/concurrent/TimeUnit;
 -   8 jars — java.util.logging.Level.FINESTLjava/util/logging/Level;
@@ -676,5 +629,7 @@
 -   2 jars — java.nio.file.StandardCopyOption.ATOMIC_MOVELjava/nio/file/StandardCopyOption;
 -   2 jars — javax.mail.Message$RecipientType.BCCLjavax/mail/Message$RecipientType;
 -   2 jars — java.nio.file.StandardOpenOption.DSYNCLjava/nio/file/StandardOpenOption;
+-   2 jars — java.nio.file.StandardOpenOption.SYNCLjava/nio/file/StandardOpenOption;
+-   2 jars — java.time.temporal.ChronoUnit.MONTHSLjava/time/temporal/ChronoUnit;
 
-> 总结：gated 498 个；可行动缺口（≥5 jar）53 个；静态字段零命中 744 个。
+> 总结：gated 509 个；可行动缺口（≥5 jar）8 个；静态字段零命中 738 个。
