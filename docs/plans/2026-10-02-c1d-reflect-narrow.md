@@ -1096,3 +1096,24 @@ TestSlotReuseLoopExit（同槽、类型不同，即 8d0eaee3 原本要修的形�
 - TestFieldHandleProvenance：macOS 参考 JDK 与混合 Linux JDK（4223 个 JDK 类，含 EUC_TW）下都编译、运行通过，输出与期望一致。服务器上的 java_runtime 编译失败推断与 byte2 同源，但服务器日志已清，无法直接核对；
 - TestSerialAllocTargets（混合 Linux JDK）：编译、运行通过，输出与期望一致；
 - generator 单测：29 组，0 失败。
+
+### 5.7 抽查 c1dt2-a39d8474：TestFieldHandleProvenance 是 OOM，不是代码错误（2026-10-04）
+
+**结论**：抽查 c1dt2-24ce8a52（kr1）与 c1dt2-a39d8474（sg2）中，TestFieldHandleProvenance 的 `error: could not compile java_runtime (lib)` 都是 rustc 编译声明层 `java_runtime` 时被 cgroup OOM 杀掉。5.6 节「与 byte2 同源」的推断不成立。
+- 证据：本机 `server_maintenance/rava/test_results/spot/c1dt2-a39d8474/error_logs/TestFieldHandleProvenance_sg2_jdk21.log` 与 `c1dt2-24ce8a52/…_kr1_jdk21.log` 头部都是 `OOM: 超出内存上限被内核杀掉（limit=11891M / 11882M，peak 打满）` 与 `__RAVA_OOM_KILL__`。
+- `first_error` 取 stderr 中第一条以 `error` 开头的行。rustc 被信号杀掉时没有诊断输出，所以第一条就是 cargo 的 `could not compile`。更早的 c1dt2-403b626b（kr2）报的是另一个错误 `E0592 duplicate set_tab`，与本节无关。以后遇到这种「只有 could not compile、没有 error[E…]」的失败，先查 error_logs 头部的 OOM 标记。
+
+**本机排除项**（rava a39d8474，混合 Linux JDK `build/linuxjdk/hybrid`，`--clean` emit）：
+- TestFieldHandleProvenance：4223 个 JDK 类。`cargo check --target x86_64-unknown-linux-gnu` 0 错误，新 target 目录下复测也是 0 错误；`cargo build --target x86_64-unknown-linux-gnu -p java_runtime -p java_meta` 通过，java_runtime 源码 54 MB。
+- 大小写：rustc dep-info 里全部源文件路径都与磁盘上的实际大小写一致，排除「macOS 大小写不敏感、Linux 敏感」这类差异。
+- 闭包输入：生成器只从 JAVA_HOME 读 `release` 与 `lib/modules`，混合 JDK 的 `conf` 差异（例如 `java.security` 的 Apple provider）不进入闭包。
+- DeepCopy（3403 类）、HelloWorld（465 类）：Linux target `cargo check` 都是 0 错误。
+
+**规模对照**：峰值和闭包规模有关。TestFieldHandleProvenance 是 4223 类，比 DeepCopy 的 3403 类多 820 类，DeepCopy 在服务器上通过。
+- 这两例的类数都远高于 1700 类阈值，rava 已经自动用 `CARGO_BUILD_JOBS=1`，作业层也已设 `CARGO_INCREMENTAL=0` 与 line-tables-only。所以剩下的只有单个 rustc 编译声明层时的峰值。
+- 本机 macOS 的 `time -l` 最大 RSS（FHP 7.7 GB、DeepCopy 8.1 GB）把压缩内存排除在外，不能拿来和服务器的 cgroup 峰值比。
+
+**候选方案（终态方向，待定）**：
+1. 收窄闭包：查 TestFieldHandleProvenance 比 DeepCopy 多出的 820 类从哪条链进来，属于本计划的反射收窄线。
+2. 声明层瘦身 / 拆层：按 `2026-10-01-rustc-memory-and-crate-split.md` §7.4–7.5 收窄声明层样板，把存储层下沉到实现 crate，让单个 rustc 峰值与闭包规模脱钩。
+3. 环境侧：调服务器的 `mem_reserve_gb`。这只是缓解，而且要改服务器配置，须用户确认。
