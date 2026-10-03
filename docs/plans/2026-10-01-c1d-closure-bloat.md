@@ -1624,3 +1624,41 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
     `catch_unwind` 捕获 1/1，载荷消息不变。
 - 栈溢出：sigaltstack 处理器与 `guard_page_overflow_aborts`（子进程 SIGABRT、stderr 含 `has overflowed its stack`）
   已在 T1 落地，本步复跑通过（本机 macOS 硬件 guard 启用；Linux < 6.13 无 `MADV_GUARD_INSTALL` 时跳过，由软件栈界拦截）。
+
+**T4 回归修复：小闭包 `Thread__VTable::run` E0782（2026-10-04）**
+
+- 现象：抽查 a3t-1e6933ee 中 HelloWorld、TestSleepParkClock、TestThreadStates、TestThreadInterrupt、TestVirtualClockPark
+  编译失败，`error[E0782]: expected a type, found a trait`，位置 `thread_impl.rs` 的 `run_java_thread`。与平台无关，
+  本机 HelloWorld emit + compile 即复现（T4 自验只覆盖了三个大闭包）。
+- 根因：`run_java_thread` 以 vtable trait 完全限定路径 `Thread__VTable::run(&*t.vtable)` 调 `run()`。方案 A 时期手写
+  VirtualThread 调 `spawn_java_thread`，任何闭包都经它推断出这条虚调用、保留 run 的槽位；T4 删方案 A 后，未启动
+  线程的程序档案里没有 `start0`，也没有 run 的覆盖者，run 槽位被裁剪（`rava_moved = "plain"`），trait 上无此方法，
+  而手写自由 fn 总是参与编译。
+- 修复（手写侧，不动生成器）：改为方法调用形态 `t.run()`。槽位保留时，固有方法是 wrapper，按 vtable 分派；槽位裁剪时，
+  档案内无覆盖者，plain 体就是正确目标。闭包推断照常沿该调用点。运行时中已无其他 `X__VTable::m(...)` 完全限定调用。
+- 核对：
+  - HelloWorld 编译通过，运行输出正确；
+  - TestThreadStates、TestThreadOverridesSpec、TestThreadJoin（`extends Thread` 覆盖 run，槽位为 wrapper）输出与
+    expected 一致；
+  - `cargo check --target x86_64-unknown-linux-gnu`（hello_world 工作区全体、rava_coro 含测试）通过；
+  - generator cargo test 0 失败。
+- 教训：手写自由 fn 不随档案裁剪，只能引用任何档案下都存在的符号。虚调用一律写成方法调用形态，不写 vtable trait
+  完全限定路径。自验须含小闭包（HelloWorld）。
+
+**a3-T 现状与交接（2026-10-04，原执行者收尾，T6 由新代理接手）**
+
+- 分支 a3t-vthread：
+  - T1、T1b、T1b-2、T2、T3 已合入集成分支；
+  - T4（1e6933ee）、T5（278c7319）与本修复待一次抽查后合入。
+  - 抽查名单：TestVirtualThread、TestContinuationPinned、TestVirtualThreadCarrier、TestVirtualClockPark、TestThreadStates、
+    TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized、TestThreadUncaught、DeepCopy、HelloWorld。
+- T6 未开始提交，草稿留在 worktree（未跟踪）：
+  - `tests/e2e/60_real_threads/TestVirtualThreadScale.java`：10⁵ 个虚拟线程各 `sleep(2000)`；起跑时若已有线程完成则计
+    lateStarts；输出 finished / sum / all sleeping at once / alive after join。
+  - `tests/expected/TestVirtualThreadScale.txt`：refjdk 两次一致（4 行：`finished: 100000`、`sum: 4999950000`、
+    `all sleeping at once: true`、`alive after join: 0`）；refjdk 墙钟 2.5 s、RSS 196 MB。
+  - 本机诊断（debug 构建，非验收）：输出正确但 `all sleeping at once: false`，墙钟 14.6 s，峰值 RSS 2.66 GB，均超 T6
+    指标（≤10 s、≤2 GiB）。起跑 10⁵ 个虚拟线程超过 2 s，每线程内存约 26 KB。
+  - 接手先做剖析：每线程开销的分布（协程栈已提交页、Continuation / VirtualThread / StackChunk 对象、调度队列）与
+    start 路径耗时，再按 §21.8.4 的 T6 行验收。百万作业放 `tests/perf/`，服务器单独跑。
+- 未完成的跟进：T1b 审计手写运行时代码中的无界递归。
