@@ -1,5 +1,5 @@
-echo=ping
-after-half-close=33
+echo=ping!
+after-half-close=-1
 server-sees-eof=true
 closed-accept-ex=SocketException
 timeout-set=120
