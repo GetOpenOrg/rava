@@ -1074,3 +1074,25 @@ DC = DeepCopy（≤ 1640 类、fold_props ≥ 42），RP = TestReflectProbe，RF
   - 「实际被序列化的集合」本身经字段值环（obj → 字段 → obj，4.2 第 2 条）增长，须保证只沿已放开类的字段闭合，否则回到全放开；
   - 外部流里的类（只出现在数据里）同按名取类的未知名字，不在闭包内，属既有边界；
   - 改动须保持 `closure_independent_of_hash_seed` 与 `param_string_constants_fold_switch` 通过；判定若依赖「齐全」之类非单调条件，应同 5.2 留到工作队列排空时做。
+
+### 5.6 抽查 c1dt2-24ce8a52 回归：`byte2` E0425（2026-10-04）
+
+**现象**：抽查 10 例过 2 例（HelloWorld、TestSlotReuseLoopExit）。DeepCopy、StockTrans、TestSerialDefaultSuid、TestSerialLookupPairing、TestSerialProxyForm、TestSerialAllocTargets、TestSerialUserGenericCallbacks 共 7 例在 java_runtime 编译时报 `error[E0425]: cannot find value byte2`。TestFieldHandleProvenance 只报 java_runtime 编译失败，服务器日志已清。
+
+**为什么本机不复现**：出错的方法是 `sun/nio/cs/EUC_TW$Decoder.decodeArrayLoop` / `decodeBufferLoop`。Linux 的 java.base 自带 EUC_TW、EUC_JP、Big5、GBK 等字符集（stdcs-linux），macOS 上这些类在 jdk.charsets 里，不进闭包。所以 macOS 下 DeepCopy 编译通过（3355 个 JDK 类），服务器失败。
+本机复现方法：取 Linux x64 参考 JDK（Temurin 21.0.11+10，sha256 与 `tools/refjdk.toml` 一致），组一个混合 JAVA_HOME：bin / conf 等用 macOS 参考 JDK，`jmods` 与 `lib/modules` 指向 Linux 包（`build/linuxjdk/hybrid`，不提交），再用 `rava build … --java-home <hybrid>` 构建。DeepCopy 这样得到 3403 个 JDK 类，其中含 EUC_TW。
+
+**根因（8d0eaee3 引入）**：EUC_TW 的 if 臂和 else 臂各声明一个 `int byte2`，分别在槽 11 和槽 10，类型相同。整个循环包在 try-finally 里，结构化后两臂里 `isLegalDB(byte2)` 的读取都落在各自声明块外的标签块里。
+8d0eaee3 的 `vars::read_is_other_var` 只要读点落在别槽的同名区间，就判为另一 JVM 变量。else 臂声明之后第一个命中的是 if 臂 byte2（槽 11）的读取，被判为另一变量后扫描止步，后面真正属于 else 臂 byte2 的块外读取没被看到，声明没有提升，于是 E0425。
+
+**修法（b949e4f6）**：Java 同名局部变量的作用域互不重叠，所以别槽、同名、同类型的两个变量合为同一个 Rust 绑定语义不变（8d0eaee3 之前就是这样）。现在只有两种情况算另一变量的证据：声明类型不同；或在同一槽内，两段区间之间被异名区间换过主。
+TestSlotReuseLoopExit（同槽、类型不同，即 8d0eaee3 原本要修的形态）判定不变。
+
+**边界用例**：`tests/e2e/01_basics/TestSlotReuseSiblingBranches.java` 照 EUC_TW.decodeArrayLoop 的形态写在用户层，期望输出来自 JDK 21。修复前本机就报同样的 E0425。
+
+**实测（本机，b949e4f6 的 rava，参考 JDK）**：
+- TestSlotReuseSiblingBranches、TestSlotReuseLoopExit：编译、运行通过，输出与期望一致；
+- DeepCopy（混合 Linux JDK，含 EUC_TW）：编译、运行通过，输出与期望一致；
+- TestFieldHandleProvenance：macOS 参考 JDK 与混合 Linux JDK（4223 个 JDK 类，含 EUC_TW）下都编译、运行通过，输出与期望一致。服务器上的 java_runtime 编译失败推断与 byte2 同源，但服务器日志已清，无法直接核对；
+- TestSerialAllocTargets（混合 Linux JDK）：编译、运行通过，输出与期望一致；
+- generator 单测：29 组，0 失败。
