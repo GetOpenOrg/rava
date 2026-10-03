@@ -272,6 +272,14 @@ deserializers = [
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
 serializable_markers = ["java/io/Serializable"]
+# serial_enumerators：只对可序列化类（serializable_markers 的子类型）调用上列 enumerators、只用其非 static、
+#   非 transient 字段（默认序列化字段按 static / transient 掩码过滤；computeDefaultSUID 只读名字与修饰符）的调用方。
+#   其枚举接收者推不出（类来自流中类名 / 对象的 getClass）时按可序列化字段口径放开（同 deserializers 的字段面），
+#   不按全部字段记枚举缺口
+serial_enumerators = [
+    "java/io/ObjectStreamClass.getDefaultSerialFields:(Ljava/lang/Class;)[Ljava/io/ObjectStreamField;",
+    "java/io/ObjectStreamClass.computeDefaultSUID:(Ljava/lang/Class;)J",
+]
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；

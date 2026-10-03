@@ -23,7 +23,7 @@ impl<'a> Engine<'a> {
     /// - 同一调用里有字符串常量，且形参含 Class 或接收者是 Class：点名字段不折叠
     ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
     /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：句柄写入口（`handle_writers`）也可达时
-    ///   接收者类的全部字段不折叠，推不出时全部字段；
+    ///   接收者类的全部字段不折叠，推不出时全部字段（调用方是清单 `serial_enumerators` 时为可序列化字段）；
     /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；名字是本方法形参时
     ///   取各调用点在该形参上的字符串常量（如按名构造 MemberName 的辅助方法），常量集增长时本站点重跑；
     /// - 清单 `deserializers` 可达：非 static、非 transient 字段全部不折叠
@@ -146,8 +146,12 @@ impl<'a> Engine<'a> {
                 self.enumerate_fields(Some(c));
             }
             if unknown {
-                self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
-                self.enumerate_fields(None);
+                if self.man.is_serial_enumerator(&self.methods[m].key.to_string()) {
+                    self.enumerate_serial_fields();
+                } else {
+                    self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
+                    self.enumerate_fields(None);
+                }
             }
         }
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
@@ -182,6 +186,17 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 可序列化字段口径的枚举（清单 `serial_enumerators`）接收者推不出：可序列化类的非 static、非 transient 字段
+    /// 偏移可得（可按偏移读取）；句柄写入口可达时这些字段同反序列化的字段面不折叠
+    fn enumerate_serial_fields(&mut self) {
+        if !std::mem::replace(&mut self.fenum_serial, true) {
+            self.offset_reads_ready();
+        }
+        if self.fwriter_live && !self.ctx.deser.replace(true) {
+            self.open_fields_all(self.ctx.fopen_all.get(), false);
+        }
+    }
+
     /// 调用边到达字段句柄写入口：调用者是句柄桥（取得的句柄只经 Field.set* 的访问器使用，
     /// 写入由 Field.set* 计入）时不算；每条边都判（首个调用者是桥不代表后续调用者也是）
     pub(super) fn handle_writer_edge(&mut self, key: &MemberRef, via: &Via) {
@@ -203,6 +218,9 @@ impl<'a> Engine<'a> {
         }
         for cls in std::mem::take(&mut self.fenum_pending) {
             self.enumerate_fields(cls);
+        }
+        if self.fenum_serial {
+            self.enumerate_serial_fields();
         }
     }
 

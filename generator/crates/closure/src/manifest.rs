@@ -103,6 +103,7 @@ pub struct Manifest {
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
+    serial_enumerators: HashSet<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     deserializers: HashSet<String>,
@@ -354,6 +355,7 @@ impl Manifest {
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
+            serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             deserializers: field_writes("deserializers").into_iter().collect(),
@@ -500,6 +502,12 @@ impl Manifest {
     /// 返回字段句柄数组的反射枚举（字段常量折叠的写入来源）
     pub fn is_field_enumerator(&self, member: &str) -> bool {
         self.field_enumerators.contains(member)
+    }
+
+    /// 只对可序列化类调用字段枚举、只取其可序列化字段（非 static、非 transient）的调用方：接收者推不出时
+    /// 按可序列化字段口径放开，不按全部字段
+    pub fn is_serial_enumerator(&self, member: &str) -> bool {
+        self.serial_enumerators.contains(member)
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
@@ -660,6 +668,13 @@ mod tests {
         let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
         assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
         assert!(with_vm("").unwrap().serializable_markers().is_empty());
+    }
+
+    #[test]
+    fn serial_enumerators_parse() {
+        let m = with_vm("[facts.field_writes]\nserial_enumerators = [\"a/S.f:(Ljava/lang/Class;)J\"]\n").unwrap();
+        assert!(m.is_serial_enumerator("a/S.f:(Ljava/lang/Class;)J"));
+        assert!(!m.is_serial_enumerator("a/S.g:()V"));
     }
 
     #[test]
