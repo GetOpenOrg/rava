@@ -274,9 +274,28 @@ impl Unsafe {
     /// 分配步：DirectMethodHandle.allocateInstance → 随后 invokeSpecial `<init>`）。
     /// 与序列化构造器的无构造分配同一协议——L3 分派闭包的 `<alloc>` 伪成员
     /// （字段置默认值 + 非空初始化，等价 JVM 的零初始化对象）。
+    /// 分配前按 HotSpot `Unsafe_AllocateInstance` → `check_valid_for_instantiation` 校验：基本类型 / 数组类抛无消息的
+    /// InstantiationException，接口、抽象类抛 InstantiationException（消息为类名），`Class` 本身抛 IllegalAccessException——不可实例化的类
+    /// 没有 `<alloc>` 臂，校验先于分派（如 `findConstructor(Number.class, ..)` 句柄调用）
     #[jvm_boundary]
     pub fn allocateInstance(&self, cls: Class) -> Result<Object> {
-        let binary = format!("{}", cls.__get_name()).replace('.', "/");
+        if crate::_is_jnull_ref(&cls) {
+            return Err(JvmError::null_pointer());
+        }
+        let dotted = format!("{}", cls.__get_name());
+        const ACC_INTERFACE: i32 = 0x0200;
+        const ACC_ABSTRACT: i32 = 0x0400;
+        // 基本类型 / 数组类镜像没有 InstanceKlass：HotSpot `allocate_instance` 抛无消息的 InstantiationException
+        if cls.isPrimitive()? || cls.isArray()? {
+            return Err(JvmError::from(crate::java::lang::InstantiationException::new()?));
+        }
+        if cls.getModifiers()? & (ACC_INTERFACE | ACC_ABSTRACT) != 0 {
+            return Err(JvmError::from(crate::java::lang::InstantiationException::new_str(String::from(dotted))?));
+        }
+        if dotted == "java.lang.Class" {
+            return Err(JvmError::from(crate::java::lang::IllegalAccessException::new_str(String::from(dotted))?));
+        }
+        let binary = dotted.replace('.', "/");
         let empty: crate::JArray<Object> = crate::JArray::from(Vec::<Object>::new());
         crate::reflect_dispatch::reflect_invoke(&binary, "<alloc>", "()V", Object::default(), &empty)
     }
