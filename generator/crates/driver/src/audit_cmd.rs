@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use closure::manifest::Manifest;
 use emit::method_bodies::MethodBodies;
 use emit::perf::Perf;
 use emit::precheck::Precheck;
@@ -247,8 +246,7 @@ fn run_api(a: &AuditArgs) -> Result<(), String> {
 fn api_counts(o: &BuildOpts, rt: &Path, entry_dir: &Path) -> Result<(usize, usize), String> {
     let home = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(&repo_root(rt)))?.home;
     let cp = class_path(entry_dir, &[], &home, &image_dirs(o, &home, rt))?;
-    let man = Manifest::load(rt)?;
-    let (roots, n_cls) = api_roots(&cp, &man, &o.api_packages, o.api_recursive);
+    let (roots, n_cls) = api_roots(&cp, &o.api_packages, o.api_recursive);
     Ok((n_cls, roots.len()))
 }
 

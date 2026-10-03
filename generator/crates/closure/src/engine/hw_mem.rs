@@ -18,10 +18,16 @@ impl<'a> Engine<'a> {
     /// 不经被调方法的形参汇合：arraycopy 等被全程序共享，汇合会把所有数组的元素并成同一个集合
     pub(super) fn hw_site(&mut self, m: usize, off: u32, t: usize, recv: Option<&[Feed]>, a: &[Option<Vec<Feed>>]) {
         let ws = self.hw_writes(t);
-        if ws.iter().all(Option::is_none) || self.hw_site_ids.contains_key(&(m, off, t)) {
+        if ws.iter().all(Option::is_none) {
+            return;
+        }
+        let oi = ws.iter().flatten().find_map(|w| w.offset);
+        if let Some(&s) = self.hw_site_ids.get(&(m, off, t)) {
+            self.site_restrict(s, m, off, oi);
             return;
         }
         let s = self.hw_site_id(m, off, t);
+        self.site_restrict(s, m, off, oi);
         let base = usize::from(!self.methods[t].is_static);
         self.note_self_copies(s, base, &ws);
         let obj = self.id(OBJECT);
@@ -95,9 +101,12 @@ impl<'a> Engine<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn hw_read_site(&mut self, m: usize, off: u32, t: usize, i: u16, fs: &[Feed], res: Node, rt: u32) {
         let s = self.hw_site_id(m, off, t);
+        let oi = self.man.memory_read_offset(&self.methods[t].key.to_string()).map(|x| x + usize::from(!self.methods[t].is_static));
         if self.hw_reads.insert(s, (i, res, rt)).is_some() {
+            self.site_restrict(s, m, off, oi);
             return;
         }
+        self.site_restrict(s, m, off, oi);
         // 签名多态：源实参按调用点描述符排布，引用实参一律按 Object 接入（与写入侧同）
         let obj = self.id(OBJECT);
         let pt = if self.is_poly(t) { obj } else { self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or(obj) };
@@ -111,6 +120,12 @@ impl<'a> Engine<'a> {
 
     pub(super) fn memory_read(&mut self, s: u32, delta: &TypeSet) {
         let (_, res, rt) = self.hw_reads[&s];
+        if let Some(f) = self.site_field(s) {
+            for n in self.site_field_nodes(f, delta, Node::F(f.0)) {
+                self.flow(n, res, rt);
+            }
+            return;
+        }
         let gate = self.site_gate(s);
         if !delta.open.is_empty() {
             self.add_to(res, &TypeSet::open(rt));
@@ -219,6 +234,7 @@ impl<'a> Engine<'a> {
                         produced: d.produced,
                         fields: d.fields,
                         last: d.last,
+                        offset: d.offset.map(|x| x + base),
                     })
                 })
                 .collect(),
@@ -232,6 +248,7 @@ impl<'a> Engine<'a> {
                             produced: true,
                             fields: false,
                             last: false,
+                            offset: None,
                         })
                     })
                     .collect()
@@ -455,6 +472,12 @@ impl<'a> Engine<'a> {
             return;
         }
         let wn = Node::W(s, i);
+        if let Some(f) = self.site_field(s) {
+            for n in self.site_field_nodes(f, delta, Node::U(f.0)) {
+                self.flow(wn, n, f.2);
+            }
+            return;
+        }
         let gate = self.site_gate(s);
         let obj = self.id(OBJECT);
         let class = self.id(CLASS);

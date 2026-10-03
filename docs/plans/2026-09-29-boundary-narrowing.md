@@ -663,6 +663,8 @@ TestCharsetForName 新增 12 类（`ExtendedCharsets`、`AbstractCharsetProvider
 结果：DeepCopy 类 / 方法 / 上下文 1623 / 10845 / 39770 → **1623 / 10806 / 37735**，耗时 45 s → 13 s，站点新增数组 5 477 256 → 39 403（剩余写入扇入是
 `System.arraycopy` 按清单语义的逐站点扇入，如 `Arrays.copyOf` 单上下文 2 714 个源数组，属上下文敏感度问题）；其余 8 例类 / 方法 / 上下文不变；9 例动态对照漏均为 0。
 
+> 2026-10-02 注：本项的 `[facts.class_init]` / `engine/class_init.rs` 已由 `[facts.reflect] class_initializers` + `engine/mirror_init.rs` 取代，见 `2026-10-01-c1d-closure-bloat.md` §18.10。
+
 **项 8 类初始化事实（`Unsafe.ensureClassInitialized` 等）**。原状：`ensureClassInitialized` 是整方法手写边界（空操作），分析器不建模其效果——
 `ldc X.class` 只让 X 进 type 层（JVMS §5.5 类字面量不触发初始化），X 的 `<clinit>` 不入链。例：DeepCopy `DirectMethodHandle.<clinit>@85`
 的 `DirectMethodHandle$Holder` 原为 type 层；`SharedSecrets.getJavaXxxAccess` 的「先 ensureClassInitialized(目标类) 再读静态字段」形状下，目标类
@@ -902,6 +904,74 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   `BootLoader.hasClassPath` 为手写，`LazyClassPathLookupIterator` 走空枚举）。因此 `mmiss` 暂作诊断输出、不作门槛；cut 调用方的条目
   是高信号子集，e2e 命中存根时先查它。耗时：methods 模式 HelloWorld + TestCharsetForName 两例（含闭包分析）合计 3.3 s。
 
+### 6.12 终态一次性删除（2026-09-30，分支 `c1d-final`）
+
+用户要求：「删除非 VM 契约部分时直接一次性删干净，然后再验证，不要一个包一个包处理。」
+所以 §6.8 包 7–9 以及包 1–6 暂留的过渡手写一并删除，逐包顺序不再执行。
+
+#### 6.12.1 提交
+
+| 提交 | 内容 |
+|---|---|
+| 1e623cec | 一次性删除：`runtime/` 删 8021 行，删除 82 个整文件；删 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]`、`jca.rs` / `data_bundles.rs` 注册表、`codegen/jca_services.py` / `data_bundle.py`；`[vm_boundary]` 改为逐类清单；新增 `[boot_init] calls`（`System.setJavaLangAccess`） |
+| d641abd3 | 闭包：属性表对象作为实参传给唯一字节码目标、且该形参只读时，不再算逃逸（`StaticProperty.<clinit>` → `getProperty(Properties,String)`）。修复后系统属性折叠重新生效（5 例 `fold_props` 均 > 0，不稳定键只剩 `user.timezone`） |
+| 4a1437d3 | 补齐入链的 `ACC_NATIVE`（类 1）：CDS / PreviewFeatures / ScopedMemoryAccess / Continuation / ContinuationSupport / StackStreamFactory / IOUtil / NativeThread / UnixFileDispatcherImpl / UnixNativeDispatcher 目录族 / Unsafe.arrayBaseOffset0、throwException |
+| 9a231b6b | 生成器修复删除后暴露的翻译缺口（Python 与 Rust 同步）：双向控制符转义；泛型祖先合流时补 `<Object..>`；static 字段与方法同名时统一加 `_field` 后缀；import 收集时祖先的隐藏字段不按名去重；同族重实例化的类型实参允许接口载体 |
+
+按包统计删除行数：sun/nio/fs 1790、sun/util/locale 1345、jdk/internal/util 1308、sun/nio/cs 864、
+jdk/internal/access 542、sun/nio/ch 370、jdk/internal/misc 341、sun/security/jca 264、jdk/internal/vm 154、
+jdk/internal/event 148，其余各包合计约 700。
+
+#### 6.12.2 保留的手写（按准入类别）
+
+- **① ACC_NATIVE**：各 `<x>_impl.rs` 中的 `#[jvm_native]`。
+- **② 运行模型替换**：
+  - `java/lang/invoke/InvokerBytecodeGenerator`（原生 LambdaForm 解释器）；
+  - `jdk/internal/loader/BootLoader`、`ClassLoaders`（内建类加载器层级）；
+  - `java/lang/ClassLoader` / `Module` / `ModuleLayer` / `Class` 的 VM 边界成员。
+- **③ VM 注入状态 / VM 驱动行为**：
+  - `jdk/internal/misc/Unsafe`：对象模型访问原语；
+  - `jdk/internal/misc/VM`：引导档位、保存属性；
+  - `java/lang/VirtualThread`；
+  - `java/lang/SecurityManager`。
+- **策略截断**（过渡，终态为 0，单独计数）：
+  - `java/nio/file/FileSystems`；
+  - `java/net/InetAddress`；
+  - `javax/crypto/JceSecurity`。
+
+HelloWorld 生成：`raw-audit vm_boundary_methods=98`，`non_native_overrides=0`。
+
+#### 6.12.3 闭包对照（`rava closure`，5 例）
+
+| 用例 | 基线 类 / 方法 | 终态 类 / 方法 | 终态耗时 / 峰值内存 |
+|---|---|---|---|
+| HelloWorld | 251 / 620 | 1589 / 9261 | 5.9 s / 1.1 GB |
+| FileIOTest | 293 / 795 | 1589 / 9278 | 8.3 s / 0.75 GB |
+| Digester | 1353 / 8056 | 2405 / 14809 | 44.9 s / 3.0 GB |
+| CollectorsDemo | 1155 / 7006 | 1590 / 9318 | 6.8 s / 1.1 GB |
+| DeepCopy | 1617 / 9706 | 2521 / 15767 | 342 s / 5.5 GB（基线 132 s / 4.0 GB） |
+
+HelloWorld 生成树：`cargo check` 0 错误；precheck 报 native-missing 7、boundary-stub 8。
+
+#### 6.12.4 精度收敛项与风险
+
+1. **共同底座约 1589 类。** 来自异常消息路径。`--why java/util/regex/Pattern` 的链为：
+   `HelloWorld.main → greet → UTF_8.<clinit> → UTF_8.<init> → Unicode.<init> → Charset.<init> → Charset.checkName → String.charAt → StringLatin1.charAt → String.checkIndex → Preconditions.checkIndex → outOfBoundsCheckIndex → outOfBounds → outOfBoundsMessage → String.format → Formatter.<clinit> → Pattern`。
+   - 这条路径静态可达。要剪掉它，需要下标区间推理（在 `i < s.length()` 守卫下判定越界分支不可达）。
+   - 在此之前，java/lang/invoke（1026 方法）、regex（358）、concurrent（337）、time / calendar 都会随格式化器进入闭包。
+2. **DeepCopy 分析 342 s / 5.5 GB。** 并入闭包性能计划（`2026-09-30-closure-analyzer-performance.md`）。
+3. **sun/reflect/generics 编译内存。** 不保留截断，靠分析器精度收敛解决（泛型签名解析只在反射查询 `getGenericXxx` 可达时入链）。
+4. **native 缺口。** 入链但未实现，命中时 panic 并报出精确描述符：
+   - `Class.setSigners`；`ClassLoader.defineClass0/1/2`；
+   - `StackStreamFactory$AbstractStackWalker.callStackWalk`、`StackTraceElement.initStackTraceElement`（logger 经 StackWalker 取调用者）；
+   - `MethodHandleNatives.expand`；`BootLoader.getSystemPackageLocation`；`Module` 的 *0 族；
+   - `JdkConsoleImpl.echo`；`NativeImageBuffer.getNativeMap`；`NativeLibraries.*`；`PortConfig.*`；
+   - `FileDispatcherImpl.transferTo0 / map0 / unmap0 / release0 / lock0`。
+5. **Unsafe 仍有非 native 手写**（@IntrinsicCandidate 包装族）。按规范应收窄为只保留 native；`unsafe__impl.rs` 约 1200 行，超过 600 行上限，需要拆分。
+6. **ProviderConfig 经 ServiceLoader 装载 provider。** JCA 注册表删除后由字节码翻译承载，需要由 Cipher / MessageDigest 用例抽查确认。
+
+#### 6.12.5 主干并行线的两例归因（rust-closure-analyzer，过渡期记录）
+
 **TestStreamEncoderCharsets：跨写入拆开的代理对输出 U+FFFD（归属：Rust 生成器，非闭包精度）**。主干 c7a9d7b4 同样失败（协调方对照）。
 闭包侧排查：`StreamEncoder` 的写入 / 关闭全部为手写（`stream_encoder_impl.rs::encode_units` 按 `haveLeftoverChar` / `leftoverChar` 跨写入
 配对），翻译体 `CharsetEncoder.encode` 的折叠（`dead_pcs [8,9]`、`replacement` null）不在本例执行路径上。决定性证据是 UTF-8 行：手写层对
@@ -949,6 +1019,8 @@ MH Combinators 37 / 20；MH Direct 36 / 19；TestCharsetForName 21 / 6。多数�
   （`open` / `close` / `stat` / `lstat` / `unlink` / `rmdir` / `access`）留作后续逐个改回字节码。
 - 边界截断体（`cut`）整体仍是分析与发射不一致的来源：各例 cut 数 HelloWorld 3、FileIOTest 4、CollectorsDemo 34、Digester 62、
   MH 59、DeepCopy 106、TestNetworkInterface 78。终态随 `[boundary]` 前缀清零消解；过渡期 e2e 命中存根先查 `mmiss … cut`。
+- C1d 合并注记（c1d-prec 合入 85d282b4 时补）：§6.12 已一次性删除 `[boundary]` 前缀，`cut` / `caller_cut` 不再产生，上面「边界截断体」
+  的分析只描述过渡期状态；`sun/nio/fs` 按字节码进入闭包，上面列出的 `UnixNativeDispatcher` native 缺口归入 §6.12.4 第 4 项的 native 缺口清单。
 
 **健全性 S3：`ResourceBundle.getObject@22` 被判 null_recv（emitter-c3 报，TestStreamAdvanced 生成代码违约 panic）**。
 `--flows "ResourceBundle.setParent"` / `@path:ResourceBundle.parent|…/FormatData`（修前）：`parent` 只在 `setParent` 写入，调用者是手写

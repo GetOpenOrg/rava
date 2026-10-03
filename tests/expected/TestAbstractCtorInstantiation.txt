@@ -1,0 +1,7 @@
+Number handle -> InstantiationException: java.lang.Number
+Shape handle -> InstantiationException: TestAbstractCtorInstantiation$Shape
+Shape reflect -> InstantiationException: null
+Shape ctor ran
+Square handle -> area 4.0
+Shape ctor ran
+Square reflect -> area 4.0

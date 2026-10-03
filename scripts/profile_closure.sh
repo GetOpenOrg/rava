@@ -5,13 +5,13 @@
 #
 # 用法：scripts/profile_closure.sh K/N <out_dir>
 #   分片与 run_tests.py --batch 同口径（tests/e2e 下 *.java 排序后均分，余量摊给前几片）
-#   环境变量：JDK（缺省 21）
+#   环境变量：JDK（缺省参考构建 tools/refjdk.toml；JDK=N 改用本机 JDK N，仅供实验）
 # 每例 scratch 用后即删，只留 json.gz；镜像目录（--image）由 rava build 缺省派生，与 rava closure 显式传参同源。
 set -u
 SHARD="${1:?用法: $0 K/N <out_dir>}"; OUT="${2:?用法: $0 K/N <out_dir>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO"
 . "$REPO/scripts/rava_env.sh" "$REPO"
-JDKV="${JDK:-21}"
+. "$REPO/scripts/corpus_jdk.sh" "$REPO"
 K="${SHARD%/*}"; N="${SHARD#*/}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 SCR="$REPO/build/profile_scratch_$K"
@@ -22,12 +22,12 @@ while IFS= read -r f; do ALL+=("$f"); done < <(find tests/e2e -name '*.java' | L
 TOTAL=${#ALL[@]}; Q=$((TOTAL / N)); R=$((TOTAL % N))
 START=$(( (K - 1) * Q + (K - 1 < R ? K - 1 : R) ))
 LEN=$(( Q + (K <= R ? 1 : 0) ))
-echo "[profile] JDK $JDKV 第 $K/$N 片：$LEN / $TOTAL 例"
+echo "[profile] JDK $JAVA_HOME 第 $K/$N 片：$LEN / $TOTAL 例"
 for f in "${ALL[@]:$START:$LEN}"; do
     n=$(basename "$f" .java)
     rm -rf "$SCR"
     t0=$(python3 -c 'import time;print(time.time())')
-    "$RAVA" build "$f" --jdk "$JDKV" --out "$SCR" --clean --stop-after closure --closure-json \
+    "$RAVA" build "$f" "${CORPUS_JDK_ARGS[@]}" --out "$SCR" --clean --stop-after closure --closure-json \
         > "$OUT/$n.log" 2>&1
     rc=$?
     dt=$(python3 -c "import time;print(f'{time.time()-$t0:.2f}')")

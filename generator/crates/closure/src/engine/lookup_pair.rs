@@ -116,7 +116,7 @@ impl<'a> Engine<'a> {
             let class = self.id(CLASS);
             let mut fs = self.feeds(m, &cv, class);
             fs.extend(w.extra.iter().map(|&n| Feed::N(n)));
-            for c in self.mirror_classes(m, &fs) {
+            for c in self.feed_mirror_classes(m, &fs) {
                 for n in &names {
                     self.reflect_name(&c, n, w.ch);
                 }
@@ -125,7 +125,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 值集 fs 中类镜像所指的类（读者登记同 `value_set`）；所指未知的值记为方法 m 的反射缺口
-    pub(super) fn mirror_classes(&mut self, m: usize, fs: &[Feed]) -> Vec<String> {
+    pub(super) fn feed_mirror_classes(&mut self, m: usize, fs: &[Feed]) -> Vec<String> {
         let s = self.value_set(fs);
         let mut out = vec![];
         for x in s.classes.iter() {

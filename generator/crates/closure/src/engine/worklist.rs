@@ -45,6 +45,16 @@ impl<'a> Engine<'a> {
         self.init(cls, Via::root(kind, cls));
     }
 
+    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
+    pub fn root_boot_call(&mut self, member: &str, kind: &'static str) {
+        match seeds::parse_member(member) {
+            Some(key) => self.root(key, kind),
+            None => {
+                self.unresolved.insert(member.to_string());
+            }
+        }
+    }
+
     pub fn run(&mut self) {
         // 写入未知数组的元素：数组可能由非建模代码持有
         let obj = self.id(OBJECT);
@@ -134,16 +144,41 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段写入值并入值集；变化时读者失效
+    /// 字段写入值并入值集；变化时读者失效。
+    ///
+    /// 静态字段的缺省值总可观察（初始化前 / 初始化中读）；实例字段的缺省值只在有对象处于该状态时并入：
+    /// 抽象分配（`alloc_defaults`）或物化快照中未写的字段。值集为空（尚无对象）时读者按缺省值读
     pub(super) fn field_put(&mut self, key: &MemberRef, v: PV) {
-        let cur = self.ctx.fvals.borrow().get(key).cloned().unwrap_or_else(|| default_pv(&key.desc));
-        let new = PV::join(Some(&cur), &v);
-        if new == cur {
+        let cur = self.ctx.fvals.borrow().get(key).cloned().or_else(|| self.is_static_key(key).then(|| default_pv(&key.desc)));
+        let new = PV::join(cur.as_ref(), &v);
+        if cur.as_ref() == Some(&new) {
             return;
         }
         self.ctx.fvals.borrow_mut().insert(key.clone(), new);
         let deps = self.ctx.fdeps.borrow().get(key).cloned();
         self.invalidate_all(deps, Why::FieldPut);
+    }
+
+    fn is_static_key(&self, key: &MemberRef) -> bool {
+        self.h.class(&key.owner).and_then(|c| c.field(&key.name, &key.desc).map(|f| f.is_static())).unwrap_or(true)
+    }
+
+    /// 类首次抽象分配：本类及超类的实例字段缺省值并入值集
+    pub(super) fn alloc_defaults(&mut self, cls: &str) {
+        let id = self.id(cls);
+        if cls.starts_with('[') || !self.dflt_alloc.insert(id) {
+            return;
+        }
+        let mut keys = Vec::new();
+        let mut cur = self.h.class(cls);
+        while let Some(cf) = cur {
+            keys.extend(cf.fields.iter().filter(|f| !f.is_static()).map(|f| MemberRef { owner: cf.name.clone(), name: f.name.clone(), desc: f.desc.clone() }));
+            cur = cf.super_name.as_deref().and_then(|s| self.h.class(s));
+        }
+        for k in keys {
+            let d = default_pv(&k.desc);
+            self.field_put(&k, d);
+        }
     }
 
     /// 字段的写入来源超出字节码：不折叠，读者失效
@@ -198,17 +233,21 @@ impl<'a> Engine<'a> {
             return;
         }
         match self.methods[m].kind {
+            Kind::Bytecode if self.is_concrete(m) => self.process_concrete(m),
             Kind::Bytecode => self.process_bytecode(m),
             Kind::Handwritten(HWOBJ_KIND) => self.process_hwobj_method(m),
+            Kind::Handwritten(HWFIELD_KIND) => self.process_hwfield_method(m),
             Kind::Handwritten(VMHOOK_KIND) => self.process_vm_hook(m),
             Kind::Handwritten(RTFN_KIND) => self.process_rt_fn(m),
-            Kind::Handwritten(HWFIELD_KIND) => self.process_hwfield_method(m),
             Kind::Handwritten(_) => self.process_handwritten(m),
             Kind::Abstract | Kind::Missing => {}
         }
     }
 
     pub(super) fn analysis(&mut self, m: usize) -> Option<Rc<Analysis>> {
+        if self.is_concrete(m) {
+            return None;
+        }
         if let Some(a) = &self.methods[m].analysis {
             return Some(a.clone());
         }
@@ -232,6 +271,10 @@ impl<'a> Engine<'a> {
         let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
         // 尚无调用点记录的入口（根 / 手写 / VM）：形参值未知，并固定为 Top 保证单调
         let n = self.methods[m].ptypes.len();
+        if !self.pvals.contains_key(&m) {
+            self.pstr_top_m(m);
+            self.taint_params(m, 0, n, None);
+        }
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let mirrors = self.param_mirror_sets(m);

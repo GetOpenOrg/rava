@@ -161,7 +161,7 @@ impl Engine<'_> {
                     "{} → {} [{}] {{{}}}",
                     self.node_str(self.graph.node(src)),
                     self.node_str(self.graph.node(dst)),
-                    self.names[filter as usize],
+                    self.filter_label(filter),
                     self.set_str(&s)
                 );
                 ps.record(k, line);
@@ -214,6 +214,15 @@ impl Engine<'_> {
         }
         if pat == "@nullrecv" {
             return Some(self.null_recv_sites());
+        }
+        if pat == "@bynamesites" {
+            return Some(self.byname_sites());
+        }
+        if pat == "@concrete" {
+            return Some(self.concrete.diag.iter().map(|(k, v)| format!("  {k}：{v}")).collect());
+        }
+        if pat == "@foldfields" {
+            return Some(self.fold_fields());
         }
         if let Some(q) = pat.strip_prefix("@openinj:") {
             let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };

@@ -3,7 +3,7 @@
 **版本** 0.2 · **日期** 2026-09-12 · **状态** 历史设计文档（早期可达性分析与 javap 解析阶段）
 
 > **2026-09-28 注**：本文记录项目起步期设计，文中的 `scripts/codegen/`、`javap.py`、`runtime.py` 等路径与机制均已被替代。
-> 现行架构见 [`README.md`](../README.md) 与 [`CLAUDE.md`](../CLAUDE.md)；生成器现为 Rust 实现 `rava build`（`generator/crates/`），调用链闭包由 `generator/crates/closure` 计算；Python 生成器已于 2026-10-01 删除。
+> 现行架构见 [`README.md`](../README.md) 与 [`CLAUDE.md`](../CLAUDE.md)；生成器现为 Rust 实现 `rava build`（`generator/crates/`），调用链闭包由 `generator/crates/closure` 计算（终态为档案口径：构建单元全体入口的调用链并集、开放世界下只对用户无法扩展的类型做实例化集合折叠、规模以档案衡量——e2e 全集 JDK 21 基线 3609 类；当前实现仍按单测试闭包）；Python 生成器已于 2026-10-01 删除。
 
 ---
 

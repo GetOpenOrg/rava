@@ -19,6 +19,9 @@ pub struct NameFacts {
     resets: HashSet<String>,
     /// 值映射：新建即空、写入入口按（键, 值）存入、读取入口只返回已存入的值或 null 的映射实现类
     value_maps: ValueMaps,
+    /// 返回接收者镜像所指类的 binary name（`.` 分隔，数组为描述符形式）/ 简单名：拼接段可由镜像值集确定
+    name_of: HashSet<String>,
+    simple_name_of: HashSet<String>,
 }
 
 /// `[facts.reflect.value_maps]`：`classes` 映射实现类；`writers` / `readers` 为写入 / 读取入口（`名字:描述符`）
@@ -60,6 +63,8 @@ impl NameFacts {
             appends: list(concat, "appends").into_iter().collect(),
             results: list(concat, "results").into_iter().collect(),
             resets: list(concat, "resets").into_iter().collect(),
+            name_of: list(reflect, "name_of_receiver").into_iter().collect(),
+            simple_name_of: list(reflect, "simple_name_of_receiver").into_iter().collect(),
             value_maps: {
                 let vm = reflect.and_then(|r| r.get("value_maps"));
                 ValueMaps {
@@ -100,6 +105,16 @@ impl NameFacts {
         self.resets.contains(member)
     }
 
+    /// 返回接收者镜像所指类的 binary name（`Class.getName` 语义）
+    pub fn is_name_of(&self, member: &str) -> bool {
+        self.name_of.contains(member)
+    }
+
+    /// 返回接收者镜像所指类的简单名（`Class.getSimpleName` 语义）
+    pub fn is_simple_name_of(&self, member: &str) -> bool {
+        self.simple_name_of.contains(member)
+    }
+
     pub fn value_maps(&self) -> &ValueMaps {
         &self.value_maps
     }
@@ -116,6 +131,8 @@ mod tests {
             [r]
             class_lookups = ["a/C.byName:(Ljava/lang/String;)La/C;"]
             instantiators = ["a/C.make:()Ljava/lang/Object;"]
+            name_of_receiver = ["a/K.name:()Ljava/lang/String;"]
+            simple_name_of_receiver = ["a/K.simple:()Ljava/lang/String;"]
             [r.constant_tables."a/T"]
             readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
             [r.value_maps]
@@ -135,6 +152,8 @@ mod tests {
         assert_eq!(f.table_bases("get:(Ljava/lang/Object;)Ljava/lang/Object;").collect::<Vec<_>>(), vec!["a/T"]);
         assert!(f.is_builder("a/B.<init>:()V") && f.is_append("a/B.add:(Ljava/lang/String;)La/B;") && f.is_result("a/B.str:()Ljava/lang/String;"));
         assert!(f.is_reset("a/B.clear:(I)V"));
+        assert!(f.is_name_of("a/K.name:()Ljava/lang/String;") && !f.is_name_of("a/K.simple:()Ljava/lang/String;"));
+        assert!(f.is_simple_name_of("a/K.simple:()Ljava/lang/String;"));
         let vm = f.value_maps();
         assert!(vm.classes.contains("a/M") && vm.writers.len() == 1 && vm.readers.contains("get:(La/K;)La/K;"));
         let bad: toml::Value = toml::from_str("[r.constant_tables.\"a/T\"]\nx = 1\n").unwrap();

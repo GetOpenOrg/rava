@@ -31,7 +31,9 @@
   - 栈底帧不在闭包（VM 自行启动的线程 / 入口）→ `vm-entry`；
   - 帧停在闭包 `indy_models` 列出的 invokedynamic 调用点（引导方法由运行模型替换：lambda / 字符串拼接 /
     record 方法 / native 引导），加载发生在该调用点的 JVM 链接期（解析引导方法句柄、执行引导方法）→
-    `indy-model`：原生程序不执行引导方法，这些类不属翻译程序；
+    `indy-model`：原生程序不执行引导方法，这些类不属翻译程序。调用点正上方是 `vm_upcall_classes` 的帧
+    即为链接期，整段归该模型——链接途经的 JDK 帧（`MethodHandles.insertArguments`、BMH species 等）
+    即便在闭包内也不按已建模帧继续上溯（否则 LambdaForm 编译加载的 asm 类会被误报为漏覆盖）；
   - 帧停在闭包 `sigpoly_sites` 列出的签名多态调用点（JVMS §2.9.3：JVM 链接到 LambdaForm 调用器执行，
     发射层由手写 `__site` 伴生承载，同属运行模型替换）→ 同 indy 规则跳到其上方首个已建模帧，
     其上全是模型外帧 → `sigpoly-model`；
@@ -40,9 +42,14 @@
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
 - 无加载事件（agent 盲区）→ `unattributed`。
 
+基准 JVM 与原生二进制同一配置：vm_intrinsics.toml `[facts.system_properties.values]`（原生二进制启动时
+`System.props` 的恒定取值，闭包按它折叠）逐项以 `-D` 传给基准 JVM——否则按属性选路的 JDK 代码（如
+`jdk.reflect.useNativeAccessorOnly` 决定反射走 native 访问器还是 MethodHandle 访问器）在两侧走不同分支，
+基准加载的类不代表原生二进制的执行。启动器自有的键（`java.class.path`：基准以 `-cp` 指定用户类目录）除外。
+
 方法粒度对照（`--methods`，agent 开 MethodEntry 事件）：类粒度对照对「已在闭包内的类上漏掉的方法」
 结构性失明，且边界域类整体按手写归因。方法粒度逐条检查程序期首次进入的方法：调用方是闭包内的翻译体
-（字节码方法，或闭包标 `cut` 的边界截断方法——发射层翻译其字节码而分析器不展开其体）而被调方不在闭包
+（字节码方法）而被调方不在闭包
 → **方法漏覆盖**（`mmiss`：原生程序上该调用落到 panic 存根）。调用方在 indy / 签名多态模型调用点、被调方类列在
 `vm_upcall_classes` 的不计；调用方是手写 / native / 不在闭包的不可比（执行路径由手写层决定）。
 
@@ -72,9 +79,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 AGENT_SRC = ROOT / "scripts" / "dyn_agent"
 MANIFEST_DIR = ROOT / "runtime" / "java_runtime"
-# 与 Manifest::domain 同口径：公开 API 前缀属翻译域，根类单列
-PUBLIC_API = ("java/", "javax/")
+# 与 Manifest::domain 同口径：根类单列
 ROOT_CLASS = "java/lang/Object"
+
+
+def load_manifest(name: str) -> dict:
+    """runtime/java_runtime 下的 TOML 清单直读（缺省路径不经 codegen）。"""
+    import tomllib
+    with open(MANIFEST_DIR / name, "rb") as f:
+        return tomllib.load(f)
+
 BYTECODE = "bytecode"
 
 # 程序期加载类的分类
@@ -96,7 +110,6 @@ def entry_matches(entry: str, cls: str) -> bool:
 @dataclass
 class DomainRules:
     """闭包域判定规则（数据来自 closure.toml / seeds.toml）。"""
-    boundary_packages: list[str]
     vm_boundary: set[str]
     release: list[str]
     vm_upcalls: list[str]
@@ -104,18 +117,12 @@ class DomainRules:
 
     @classmethod
     def from_manifest(cls, user: set[str]) -> "DomainRules":
-        """closure.toml / seeds.toml 直读（与闭包分析器 input::RuntimeManifest 同一口径：
-        放行 = [release] 包 + 类 ∪ seeds [jca] 放行包 + 类，包条目在前）"""
-        import tomllib
-        def load(name: str) -> dict:
-            with open(MANIFEST_DIR / name, "rb") as f:
-                return tomllib.load(f)
-        closure, jca = load("closure.toml"), load("seeds.toml").get("jca", {})
-        rel = closure.get("release", {})
-        return cls(boundary_packages=list(closure.get("boundary", {}).get("packages", [])),
-                   vm_boundary=set(closure.get("vm_boundary", {}).get("classes", [])),
-                   release=[*rel.get("packages", []), *rel.get("classes", []),
-                            *jca.get("release_packages", []), *jca.get("release_classes", [])],
+        """closure.toml 直读（与闭包分析器 input::RuntimeManifest 同一口径：C1d 终态无包前缀截断，
+        放行 = [vm_boundary] translate_nested，即 VM 契约边界类中按字节码翻译的嵌套类）"""
+        closure = load_manifest("closure.toml")
+        vm = closure.get("vm_boundary", {})
+        return cls(vm_boundary=set(vm.get("classes", [])),
+                   release=list(vm.get("translate_nested", [])),
                    vm_upcalls=list(closure.get("dynamic", {}).get("vm_upcall_classes", [])),
                    user=set(user))
 
@@ -126,11 +133,9 @@ class DomainRules:
             return "root"
         if any(entry_matches(r, cls) for r in self.release):
             return "translate"
-        if any(cls.startswith(p) for p in self.boundary_packages):
-            return BOUNDARY
         if cls.split("$", 1)[0] in self.vm_boundary:
             return BOUNDARY
-        return "translate" if cls.startswith(PUBLIC_API) else BOUNDARY
+        return "translate"
 
     def is_vm_upcall(self, cls: str) -> bool:
         return any(entry_matches(e, cls) for e in self.vm_upcalls)
@@ -218,9 +223,8 @@ def parse_methods(text: str) -> list[MethodEntry]:
 
 def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRules",
                     model_sites: Mapping[str, str]) -> dict:
-    """方法粒度对照：翻译体（字节码 / 边界截断）调用的、不在闭包内的方法 → 方法漏覆盖。"""
+    """方法粒度对照：翻译体（字节码方法）调用的、不在闭包内的方法 → 方法漏覆盖。"""
     kinds = {m["id"]: m.get("kind", "") for m in closure.get("methods", [])}
-    cut = {m["id"] for m in closure.get("methods", []) if m.get("cut")}
     cats: Counter = Counter()
     mmiss: list[dict] = []
     for e in entries:
@@ -232,7 +236,7 @@ def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRul
             cats["hidden"] += 1
             continue
         caller = _frame_id(e.caller)
-        if kinds.get(caller) != BYTECODE and caller not in cut:
+        if kinds.get(caller) != BYTECODE:
             cats["untranslated-caller"] += 1
             continue
         if e.callee in kinds:
@@ -244,7 +248,7 @@ def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRul
         if rules.is_vm_upcall(callee_cls):
             cats["vm-upcall"] += 1
             continue
-        mmiss.append({"method": e.callee, "caller": _frame_str(e.caller), "caller_cut": caller in cut})
+        mmiss.append({"method": e.callee, "caller": _frame_str(e.caller)})
     return {"entered": len(entries), "by_category": dict(sorted(cats.items())), "mmiss": mmiss}
 
 
@@ -301,7 +305,11 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
         if kind == BYTECODE:
             if (mc := model_sites.get(_frame_str(f))) is not None:
                 # 运行模型替换的 indy / 签名多态调用：其上方是 JVM 链接期 / 引导产物的执行帧。模型再次进入的已建模方法
-                # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载
+                # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载。
+                # 正上方是 JVM 链接期上调入口（`vm_upcall_classes`）→ 整段是该调用点的链接（解析引导方法、
+                # 执行引导方法、编译 LambdaForm），途经的 JDK 帧即便在闭包内也不是模型再次进入
+                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0]):
+                    return mc, _frame_str(f)
                 above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
                 if not above:
                     return mc, _frame_str(f)
@@ -526,7 +534,7 @@ def summary_tag(res: dict) -> str:
         tag += f" / unattr {len(res['unattributed'])}"
     if "methods" in res:
         mm = res["methods"]["mmiss"]
-        tag += f" / mmiss {len(mm)} cut {sum(1 for m in mm if m['caller_cut'])}"
+        tag += f" / mmiss {len(mm)}"
     return tag
 
 
@@ -553,7 +561,7 @@ def print_summary(per_test: dict[str, dict]) -> None:
             print(f"  [miss] {name}: {m['class']}  ← {m['frame'] or '全栈已建模（类引用边）'}")
     for name, v in sorted(ok.items()):
         for m in v.get("methods", {}).get("mmiss", []):
-            print(f"  [mmiss] {name}: {m['method']}  ← {m['caller']}" + ("（边界截断体）" if m["caller_cut"] else ""))
+            print(f"  [mmiss] {name}: {m['method']}  ← {m['caller']}")
     for name, v in sorted(ok.items()):
         for m in v["unattributed"]:
             print(f"  [unattr] {name}: {m['class']}")

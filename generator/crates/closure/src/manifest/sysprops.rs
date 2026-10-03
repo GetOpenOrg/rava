@@ -4,7 +4,8 @@
 //! 由宿主环境 / 语料 JDK 在启动期决定的键（不折叠）；两者之外的键启动时不存在（读取为 null——原生
 //! 二进制无 `-D` 注入机制）。锚点给出系统属性表对象从哪里来（`holders`：静态字段 / 返回它的方法）、
 //! 从哪里读（`readers`）、按键改写的入口（`writers`）、只读查询入口（`queries`：接收者为表对象时
-//! 既不改写表、结果也不持有表的引用）；实参序号含接收者。
+//! 既不改写表、结果也不持有表的引用）；实参序号含接收者。删除入口（`remove = true`）只可能改变
+//! 启动时存在的键：只被删除、从未写入的键保持「不存在」。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -14,6 +15,13 @@ pub struct PropRead {
     pub receiver: bool,
     pub key: usize,
     pub default: Option<usize>,
+}
+
+/// 按键改写入口：`key` = 键的实参序号；`remove` = 删除该键（启动时不存在的键删除后仍不存在）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PropWrite {
+    pub key: usize,
+    pub remove: bool,
 }
 
 /// 表中键的取值
@@ -32,8 +40,8 @@ pub struct SysProps {
     dynamic: BTreeSet<String>,
     holders: HashSet<String>,
     readers: HashMap<String, PropRead>,
-    /// 接收者为系统属性表对象时只改写一个键的入口：成员 → 键的实参序号
-    writers: HashMap<String, usize>,
+    /// 接收者为系统属性表对象时只改写一个键的入口
+    writers: HashMap<String, PropWrite>,
     /// 只读查询入口（接收者为系统属性表对象时不算逃逸）
     queries: HashSet<String>,
 }
@@ -67,8 +75,10 @@ impl SysProps {
             out.readers.insert(k.clone(), PropRead { receiver, key, default: idx(t, "default") });
         }
         for (k, v) in sec.get("writers").and_then(|v| v.as_table()).into_iter().flatten() {
-            let key = v.as_table().and_then(|t| idx(t, "key")).ok_or_else(|| err(k, "须为 { key = 序号 }"))?;
-            out.writers.insert(k.clone(), key);
+            let t = v.as_table().ok_or_else(|| err(k, "须为 { key = 序号, remove = 布尔 }"))?;
+            let key = idx(t, "key").ok_or_else(|| err(k, "缺 key"))?;
+            let remove = t.get("remove").and_then(|v| v.as_bool()).unwrap_or(false);
+            out.writers.insert(k.clone(), PropWrite { key, remove });
         }
         Ok(out)
     }
@@ -97,11 +107,16 @@ impl SysProps {
         self.holders.contains(member)
     }
 
+    /// 返回类型（描述符）是持有成员的类型：返回值可能是属性表对象
+    pub fn holder_type(&self, ret: &str) -> bool {
+        self.holders.iter().any(|h| h.rsplit_once([':', ')']).is_some_and(|(_, d)| d == ret))
+    }
+
     pub fn reader(&self, member: &str) -> Option<PropRead> {
         self.readers.get(member).copied()
     }
 
-    pub fn writer(&self, member: &str) -> Option<usize> {
+    pub fn writer(&self, member: &str) -> Option<PropWrite> {
         self.writers.get(member).copied()
     }
 
@@ -138,6 +153,7 @@ mod tests {
             "x/Q.get:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { key = 0, default = 1 }
             [s.writers]
             "x/P.set:(Ljava/lang/String;Ljava/lang/String;)V" = { key = 1 }
+            "x/P.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1, remove = true }
             "#,
         )
         .unwrap();
@@ -151,7 +167,8 @@ mod tests {
             Some(PropRead { receiver: false, key: 0, default: Some(1) })
         );
         assert!(p.is_query("x/P.names:()Ljava/util/Set;") && !p.is_query("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"));
-        assert_eq!(p.writer("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"), Some(1));
+        assert_eq!(p.writer("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"), Some(PropWrite { key: 1, remove: false }));
+        assert_eq!(p.writer("x/P.remove:(Ljava/lang/Object;)Ljava/lang/Object;"), Some(PropWrite { key: 1, remove: true }));
     }
 
     #[test]

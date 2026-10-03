@@ -102,8 +102,8 @@ impl<'a> Engine<'a> {
         self.apply_hw(m, &host, &mh, &via);
     }
 
-    /// 不进输出的伪方法节点：手写实现对象的方法、VM 钩子与手写字段访问器
+    /// 不进输出的伪方法节点：手写实现对象的方法、手写字段访问器与 VM 钩子
     pub(super) fn is_pseudo_method(&self, t: usize) -> bool {
-        matches!(self.methods[t].kind, Kind::Handwritten(HWOBJ_KIND) | Kind::Handwritten(VMHOOK_KIND) | Kind::Handwritten(RTFN_KIND) | Kind::Handwritten(HWFIELD_KIND))
+        matches!(self.methods[t].kind, Kind::Handwritten(HWOBJ_KIND | HWFIELD_KIND | VMHOOK_KIND | RTFN_KIND))
     }
 }

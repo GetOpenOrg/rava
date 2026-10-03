@@ -67,9 +67,15 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     for r in &input.seed_roots {
         e.root_seed(r.clone(), "seed");
     }
+    for n in hw.vm_field_writes() {
+        e.open_vm_field_write(&n);
+    }
     e.root_vm_rules();
     for c in &man.boot_init {
         e.root_init(c, "boot_init");
+    }
+    for m in &man.boot_calls {
+        e.root_boot_call(m, "boot_init");
     }
     e.run();
     if let Some(p) = &input.diag.dump_edges {
@@ -232,9 +238,6 @@ impl Closure<'_> {
                 if !m.hw_fns.is_empty() {
                     v["fns"] = json!(m.hw_fns);
                 }
-                if e.is_boundary_cut(&m.key) {
-                    v["cut"] = json!(true);
-                }
                 v
             })
             .collect();
@@ -267,12 +270,6 @@ impl Closure<'_> {
                 "values": e.sysprops().values(),
                 "dynamic": e.sysprops().dynamic(),
             },
-            "class_init": {
-                "targets": e.class_init.targets(),
-                "sites": e.class_init.sites.iter().map(|(s, cs)| json!({"site": s, "classes": cs})).collect::<Vec<_>>(),
-                "unknown": e.class_init.unknown,
-                "unknown_sites": e.class_init.unknown_sites.iter().map(|(s, cs)| json!({"site": s, "causes": cs})).collect::<Vec<_>>(),
-            },
             "reflect": {
                 "members": e.reflect_members.iter().map(|(k, m)| json!({"kind": members_str(*k), "member": m.to_string()})).collect::<Vec<_>>(),
                 "gaps": e.reflect_gaps,
@@ -281,9 +278,8 @@ impl Closure<'_> {
                 "field_enum_gaps": e.field_enum_gaps,
             },
             "seeds": {
-                "data_bundles": e.seeds.data_bundles,
                 "annotation_enums": e.seeds.annotation_enums,
-                "jca": e.seeds.jca.iter().map(|s| json!({"type": s.ty, "algorithm": s.algorithm, "impl": s.imp, "provider": s.provider})).collect::<Vec<_>>(),
+                "mirror_inits": e.seeds.mirror_inits,
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
                 "services": e.seeds.services.selected.iter().map(|(s, ps)| json!({

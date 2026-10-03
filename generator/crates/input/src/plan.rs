@@ -66,8 +66,6 @@ pub struct MethodPlan {
     pub rust_name: String,
     pub role: Role,
     pub verdict: Verdict,
-    /// 按祖先声明合成的手写覆盖（本类字节码未声明）
-    pub inherited_override: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +123,7 @@ impl<'a> Planner<'a> {
         Planner {
             input,
             ty: TyCtx::new(&input.registry, names, &manifest.ty),
-            boundary: Boundary::new(manifest, cp),
+            boundary: Boundary::new(manifest),
             root_keys: root_virtual_methods(cp),
             user: input.user_classes.iter().map(String::as_str).collect(),
         }
@@ -141,42 +139,6 @@ impl<'a> Planner<'a> {
         }
         let k: MethodKey = (cls.to_string(), m.name.clone(), m.desc.clone());
         self.input.visited.contains(&k)
-    }
-
-    /// 边界类手写覆盖继承虚方法：`__impl_<m>` 而本类未声明 m → 按祖先唯一声明合成（去 abstract）
-    fn inherited_overrides(&self, ci: &ClassInfo, hw: Option<&HwEntry>, visible: &[Method]) -> Vec<Method> {
-        let Some(hw) = hw else { return Vec::new() };
-        let n = ci.name();
-        if ci.is_interface() || n.starts_with("java/") || n.starts_with("javax/") {
-            return Vec::new();
-        }
-        let declared: BTreeSet<&str> = visible.iter().map(|m| m.name.as_str()).collect();
-        let wanted: BTreeSet<&str> = hw
-            .methods
-            .iter()
-            .filter_map(|x| x.strip_prefix(IMPL_PREFIX))
-            .filter(|x| !declared.contains(x))
-            .collect();
-        let mut out = Vec::new();
-        for name in wanted {
-            let mut found: Vec<&Method> = Vec::new();
-            let mut sup = ci.super_class();
-            while let Some(sci) = self.reg().get(sup).filter(|_| !sup.is_empty()) {
-                found.extend(sci.methods().iter().filter(|m| {
-                    m.name == name && !m.is_static() && !m.is_synthetic() && m.access & acc::PRIVATE == 0
-                }));
-                if !found.is_empty() {
-                    break;
-                }
-                sup = sci.super_class();
-            }
-            if let [m] = found.as_slice() {
-                let mut c = (*m).clone();
-                c.access &= !acc::ABSTRACT;
-                out.push(c);
-            }
-        }
-        out
     }
 
     /// `Iface.super.m()` 的方法体声明者（常量池类为 registry 接口时按广度遍历）
@@ -230,12 +192,10 @@ impl<'a> Planner<'a> {
         }
         let verdict = if self.in_chain(n, m) {
             Verdict::Bytecode
-        } else if self.boundary.is_boundary_class(n) {
-            return None;
         } else {
             Verdict::StubNotInChain
         };
-        Some(plan_of(m, CLINIT_FN.to_string(), Role::Clinit, verdict, false))
+        Some(plan_of(m, CLINIT_FN.to_string(), Role::Clinit, verdict))
     }
 
     fn chain_verdict(&self, ci: &ClassInfo, m: &Method) -> Verdict {
@@ -332,21 +292,16 @@ impl<'a> Planner<'a> {
         let hw = self.input.handwritten.get(cls);
         let is_iface = ci.is_interface();
         let type_only = !self.user.contains(cls) && !cf.methods.iter().any(|m| self.in_chain(cls, m));
-        let mut visible: Vec<Method> = cf.methods.iter().filter(|m| !m.is_synthetic()).cloned().collect();
-        let n_declared = visible.len();
-        let extra = self.inherited_overrides(ci, hw, &visible);
-        visible.extend(extra);
+        let visible: Vec<Method> = cf.methods.iter().filter(|m| !m.is_synthetic()).cloned().collect();
         let synthetic = cf
             .methods
             .iter()
             .filter(|m| m.is_synthetic() && m.access & acc::BRIDGE == 0 && m.name != "<init>" && m.name != "<clinit>");
-        let n_visible = visible.len();
         let emitted: Vec<Method> = visible.into_iter().chain(synthetic.cloned()).collect();
         let overloaded = self.ty.hierarchy_overloaded_names(ci);
         let mut used: BTreeMap<String, u32> = BTreeMap::new();
         let mut methods = Vec::new();
-        for (idx, m) in emitted.iter().enumerate() {
-            let inherited = idx >= n_declared && idx < n_visible;
+        for m in &emitted {
             if m.name == "<clinit>" {
                 methods.extend(self.clinit_plan(ci, m, type_only));
                 continue;
@@ -354,7 +309,7 @@ impl<'a> Planner<'a> {
             let iface_inst = is_iface && !m.is_static();
             if iface_inst && m.is_synthetic() && m.name.starts_with("lambda$") {
                 let v = self.chain_verdict(ci, m);
-                methods.push(plan_of(m, safe_ident(&m.name), Role::IfaceLambda, v, inherited));
+                methods.push(plan_of(m, safe_ident(&m.name), Role::IfaceLambda, v));
                 continue;
             }
             let root_keyed = self.root_keys.contains(&(m.name.clone(), param_part(&m.desc).to_string()));
@@ -363,7 +318,7 @@ impl<'a> Planner<'a> {
                 let base = self.member_rust_name(ci, m, &overloaded);
                 let rust = dedupe(&mut used, base);
                 let v = self.chain_verdict(ci, m);
-                methods.push(plan_of(m, rust, Role::IfacePrivate, v, inherited));
+                methods.push(plan_of(m, rust, Role::IfacePrivate, v));
                 continue;
             }
             if iface_inst && (m.is_synthetic() || private || root_keyed) {
@@ -372,7 +327,7 @@ impl<'a> Planner<'a> {
             let rust = dedupe(&mut used, self.member_rust_name(ci, m, &overloaded));
             let fn_name = safe_ident(&rust);
             let v = self.member_verdict(ci, m, &fn_name, hw);
-            methods.push(plan_of(m, rust, Role::Member, v, inherited));
+            methods.push(plan_of(m, rust, Role::Member, v));
         }
         let iface_supplement = self.iface_supplement(ci, hw, &used);
         Some(ClassPlan {
@@ -384,13 +339,12 @@ impl<'a> Planner<'a> {
     }
 }
 
-fn plan_of(m: &Method, rust_name: String, role: Role, verdict: Verdict, inherited_override: bool) -> MethodPlan {
+fn plan_of(m: &Method, rust_name: String, role: Role, verdict: Verdict) -> MethodPlan {
     MethodPlan {
         name: m.name.clone(),
         desc: m.desc.clone(),
         rust_name,
         role,
         verdict,
-        inherited_override,
     }
 }

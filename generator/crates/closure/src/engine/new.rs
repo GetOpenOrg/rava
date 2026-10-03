@@ -4,7 +4,7 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub fn new(h: &'a Hierarchy<'a>, cp: &'a ClassPath, man: &'a Manifest, hw: &'a Handwritten) -> Self {
-        Engine {
+        let mut e = Engine {
             ctx: Ctx {
                 h,
                 cp,
@@ -17,7 +17,6 @@ impl<'a> Engine<'a> {
                 guards: RefCell::new(memo::Guards::new()),
                 catalog: Default::default(),
                 loaders: Default::default(),
-                svc_lines: Default::default(),
                 selectors: Default::default(),
                 fvals: Default::default(),
                 rvals: Default::default(),
@@ -34,6 +33,7 @@ impl<'a> Engine<'a> {
                 objs: Default::default(),
                 psums: Default::default(),
                 preadonly: Default::default(),
+                pwsums: Default::default(),
                 punstable: Default::default(),
                 pdeps: Default::default(),
                 dep_log: Default::default(),
@@ -70,6 +70,7 @@ impl<'a> Engine<'a> {
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
             containers: HashMap::default(),
+            dflt_alloc: HashSet::default(),
             factories: HashMap::default(),
             forwarders: HashMap::default(),
             inited: IndexMap::default(),
@@ -77,6 +78,7 @@ impl<'a> Engine<'a> {
             recv_sites: HashSet::default(),
             direct_virtual_sites: HashSet::default(),
             pvals: HashMap::default(),
+            ptaint: HashSet::default(),
             pstr: Default::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
@@ -133,6 +135,7 @@ impl<'a> Engine<'a> {
             hw_self_copies: HashSet::default(),
             hw_sites: Vec::new(),
             hw_reads: HashMap::default(),
+            hw_offsets: HashMap::default(),
             ref_fields: HashMap::default(),
             hw_writes: HashMap::default(),
             poly_writes: Vec::new(),
@@ -169,7 +172,6 @@ impl<'a> Engine<'a> {
             invokable: BTreeSet::new(),
             lwraps: HashMap::default(),
             reflect_gaps: BTreeSet::new(),
-            class_init: Default::default(),
             reflect_members: BTreeSet::new(),
             reflect_fields: BTreeSet::new(),
             reflect_field_names: BTreeSet::new(),
@@ -179,6 +181,7 @@ impl<'a> Engine<'a> {
             cuts: Default::default(),
             probes: None,
             spret: Default::default(),
+            rmwrap: Default::default(),
             fenum_pending: BTreeSet::new(),
             fenum_serial: BTreeSet::new(),
             field_enum_gaps: BTreeSet::new(),
@@ -190,6 +193,9 @@ impl<'a> Engine<'a> {
             seeds: SeedState::default(),
             flow_src: diag::NO_SRC,
             open_inj: HashMap::default(),
-        }
+            concrete: Default::default(),
+        };
+        e.concrete_init();
+        e
     }
 }

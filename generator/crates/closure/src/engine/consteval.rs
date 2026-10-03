@@ -7,6 +7,7 @@
 //! 字段转为不折叠 / 系统属性转为不稳定时记忆作废、外层方法失效重算。
 
 use super::memo::Inputs;
+use crate::absint::ints;
 use super::*;
 
 /// 嵌套求值深度上限
@@ -17,6 +18,15 @@ const MAX_INSNS: usize = 256;
 /// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者）
 fn is_const(v: &V) -> bool {
     matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(_) | V::Class(..))
+}
+
+/// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
+fn bindable(v: &V) -> bool {
+    is_const(v) || is_sysprops_tag(v)
+}
+
+fn is_sysprops_tag(v: &V) -> bool {
+    v.obj().is_some_and(|o| **o == crate::absint::Obj::SysProps)
 }
 
 /// 可作为求值结果导出的常量
@@ -34,6 +44,7 @@ pub(super) enum CArg {
     Long(i64),
     Null,
     Str(u32),
+    SysProps,
     /// 类字面量（所指类名取字面量序号）
     Class(u32),
 }
@@ -47,6 +58,7 @@ fn carg(v: &V) -> Option<CArg> {
         V::Long(l) => Some(CArg::Long(*l)),
         V::Null => Some(CArg::Null),
         V::Str(s) => Some(CArg::Str(crate::absint::lit_id(s))),
+        v if is_sysprops_tag(v) => Some(CArg::SysProps),
         V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
         _ => None,
     }
@@ -55,7 +67,12 @@ fn carg(v: &V) -> Option<CArg> {
 impl Ctx<'_> {
     /// 调用 `t`（唯一字节码目标）在实参 `args`（含接收者）上的常量结果；me = 外层被分析的方法
     pub(super) fn const_eval(&self, me: Option<usize>, t: &MemberRef, args: &[V]) -> Option<V> {
-        if !args.iter().any(is_const) {
+        if args.iter().any(|a| matches!(a, V::Ints(_))) {
+            return self.const_eval_sets(me, t, args);
+        }
+        // 无常量实参时只求可能返回属性表对象的方法（如返回持有字段的包装方法）
+        let ret = t.desc.rsplit_once(')').map_or("", |x| x.1);
+        if !args.iter().any(is_const) && !self.man.sysprops.holder_type(ret) {
             return None;
         }
         // 记忆键带起始深度：嵌套求值的深度上限截断只取决于它
@@ -65,7 +82,7 @@ impl Ctx<'_> {
         let (v, inp) = match hit {
             Some(e) => e,
             None => {
-                let bound: Vec<Option<V>> = args.iter().map(|a| is_const(a).then(|| a.clone())).collect();
+                let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
                 let key = format!("{t}|{bound:?}");
                 let (e, clean) = self.const_eval_fresh(&key, t, bound)?;
                 if clean {
@@ -76,7 +93,35 @@ impl Ctx<'_> {
         };
         // 外层是方法体分析：登记输入依赖；嵌套于另一次辅助分析：输入并入外层记录
         self.memo_use(me, &inp);
+        if v.as_ref().is_some_and(is_sysprops_tag) {
+            self.note_props(me);
+        }
         v
+    }
+
+    /// 含整数集实参：逐个取值组合求值（组合数 ≤ `ints::MAX`），结果全部可知时取并
+    fn const_eval_sets(&self, me: Option<usize>, t: &MemberRef, args: &[V]) -> Option<V> {
+        let mut combos: Vec<Vec<V>> = vec![Vec::with_capacity(args.len())];
+        for a in args {
+            let vals = match a {
+                V::Ints(xs) => xs.iter().map(|x| V::Int(*x)).collect(),
+                _ => vec![a.clone()],
+            };
+            if combos.len() * vals.len() > ints::MAX {
+                return None;
+            }
+            combos = combos.into_iter().flat_map(|c| vals.iter().map(move |v| [c.clone(), vec![v.clone()]].concat())).collect();
+        }
+        let mut acc: Option<V> = None;
+        for c in &combos {
+            let v = self.const_eval(me, t, c)?;
+            acc = Some(match acc {
+                None => v,
+                Some(p) if p == v => p,
+                Some(p) => ints::union(&p, &v)?,
+            });
+        }
+        acc
     }
 
     /// 实际求值与是否可记忆（见 `memo.rs`）；None = 超出深度 / 递归中
@@ -104,6 +149,7 @@ impl Ctx<'_> {
         }
         let v = match r {
             Some(PV::Const(v)) if exportable(&v) => Some(v),
+            Some(PV::Const(v)) if is_sysprops_tag(&v) => Some(v.stripped()),
             _ => None,
         };
         Some(((v, inp), clean))
@@ -158,12 +204,14 @@ mod tests {
         assert_eq!(string_op(StrOp::EqualsIgnoreCase, &[s("true"), V::Top]), None);
         assert_eq!(string_op(StrOp::Length, &[s("a😀")]), Some(V::Int(3)));
         assert_eq!(string_op(StrOp::IsEmpty, &[s("")]), Some(V::Int(1)));
-        assert_eq!(string_op(StrOp::CharAt, &[s("a😀b"), V::Int(3)]), Some(V::Int(98)));
-        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(2)]), None);
-        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(-1)]), None);
+        // 与 Java String.hashCode 一致（字符串 switch 的键）："file".hashCode() = 3143036
         assert_eq!(string_op(StrOp::HashCode, &[s("file")]), Some(V::Int(3143036)));
         assert_eq!(string_op(StrOp::HashCode, &[s("")]), Some(V::Int(0)));
-        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(70)]), Some(V::Int(102)));
-        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(0xC9)]), None);
+        assert_eq!(string_op(StrOp::HashCode, &[s("sun.net.www.protocol.")]), Some(V::Int("sun.net.www.protocol.".encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)))));
+        assert_eq!(string_op(StrOp::CharAt, &[s("a😀"), V::Int(1)]), Some(V::Int(0xd83d)));
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(2)]), None);
+        assert_eq!(string_op(StrOp::CharAt, &[s("ab"), V::Int(-1)]), None);
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int('F' as i32)]), Some(V::Int('f' as i32)));
+        assert_eq!(string_op(StrOp::CharToLowerCase, &[V::Int(0xc9)]), None);
     }
 }

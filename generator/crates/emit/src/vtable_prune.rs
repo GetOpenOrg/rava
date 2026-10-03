@@ -25,7 +25,6 @@ use ty::ident::safe_ident;
 use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
-use crate::class_writer::hw_overrides::handwritten_inherited_overrides;
 use crate::ctx::EmitCtx;
 use crate::phase2::bridge::bridge_call_target;
 use crate::vtable::{param_part, same_slot};
@@ -109,16 +108,6 @@ impl<'a> EmitCtx<'a> {
                     // 桥：同类同名方法（真实方法）所在族一并保留
                     for x in ci.methods().iter().filter(|x| !x.is_static() && (x.name == b.name) && (bridge || std::ptr::eq(*x, b))) {
                         if let Some(key) = self.fam_key(x, ci) {
-                            plan.forced.insert(key);
-                        }
-                    }
-                }
-                // 手写覆盖的继承虚方法：与类发射同一来源（`handwritten_inherited_overrides`）合成的
-                // 覆盖声明照常占祖先槽，所在族一并保留
-                if has_hw {
-                    let visible: Vec<&Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
-                    for o in handwritten_inherited_overrides(self, ci, &visible) {
-                        if let Some(key) = self.fam_key(&o.method, ci) {
                             plan.forced.insert(key);
                         }
                     }
