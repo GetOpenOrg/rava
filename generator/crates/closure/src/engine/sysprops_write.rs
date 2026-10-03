@@ -10,7 +10,8 @@
 //!
 //! 写入（`remove = false`）仍按原规则：键为常量 → 该键不折叠，键推不出 → 全部不折叠。
 
-use super::class_lookup::Part;
+use super::class_lookup::Gap;
+use super::method_lookup::parts_match;
 use super::name_eval::Frame;
 use super::*;
 use classfile::Operand;
@@ -22,16 +23,6 @@ pub(super) struct RmWrap {
     deferred: BTreeSet<MemberRef>,
     /// 有非字节码调用点入口的方法
     untracked: BTreeSet<MemberRef>,
-}
-
-/// 拼接段是否匹配整个串
-fn parts_match(parts: &[Part], s: &str) -> bool {
-    let Some((p, rest)) = parts.split_first() else { return s.is_empty() };
-    match p {
-        Part::Lit(l) => s.strip_prefix(&**l).is_some_and(|r| parts_match(rest, r)),
-        Part::Any(set) => set.iter().any(|l| s.strip_prefix(&**l).is_some_and(|r| parts_match(rest, r))),
-        Part::Wild => (0..=s.len()).filter(|i| s.is_char_boundary(*i)).any(|i| parts_match(rest, &s[i..])),
-    }
 }
 
 /// 值恰为本方法某形参（实参序号含接收者）
@@ -145,7 +136,7 @@ impl Engine<'_> {
         } else {
             let owner = self.methods[m].key.owner.clone();
             let f = Frame { m: Some(m), a, owner: &owner, up: None };
-            self.name_parts(&f, v, true, 0)
+            self.name_parts(&f, v, Gap::Method, 0)
         };
         let values = self.man.sysprops.values().keys();
         match parts {
