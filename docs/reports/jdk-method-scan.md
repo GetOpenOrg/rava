@@ -19,8 +19,8 @@
 -  74 jars — java.util.Set
 -  74 jars — java.lang.Exception
 -  73 jars — java.lang.Boolean
--  71 jars — java.lang.Character
 -  71 jars — java.lang.reflect
+-  71 jars — java.lang.Character
 -  70 jars — java.lang.Integer
 -  69 jars — java.util.Arrays
 -  69 jars — java.lang.RuntimeException
@@ -566,10 +566,10 @@
 
 ## 四、缺口对照（默认产出；方法名级启发式）
 
-- ≥10 jar（核心共用层）：方法名 413，零命中 10，覆盖 97%
+- ≥10 jar（核心共用层）：方法名 413，零命中 11，覆盖 97%
 - 5-9 jar（中层）：方法名 381，零命中 78，覆盖 79%
 - 3-4 jar：方法名 456，零命中 269，覆盖 41%
-- 1-2 jar（长尾）：方法名 2925，零命中 2572，覆盖 12%
+- 1-2 jar（长尾）：方法名 2925，零命中 2574，覆盖 12%
 
 ### 4a. gated 归属（能力判据项，不由 e2e 追赶）
 
@@ -590,6 +590,7 @@
 
 ### 4b. 可行动缺口（≥5 jar 且未归类——按 jar 数排序，供人工裁决补测）
 
+-  22 jars — java.lang.Character.isUpperCase(I)Z
 -   7 jars — java.util.Arrays.setAll([Ljava/lang/Object;Ljava/util/function/IntFunction;)V
 -   7 jars — java.util.ListIterator.nextIndex()I
 -   6 jars — java.io.ObjectInputStream.resolveClass(Ljava/io/ObjectStreamClass;)Ljava/lang/Class;
@@ -632,4 +633,4 @@
 -   2 jars — java.nio.file.StandardOpenOption.SYNCLjava/nio/file/StandardOpenOption;
 -   2 jars — java.time.temporal.ChronoUnit.MONTHSLjava/time/temporal/ChronoUnit;
 
-> 总结：gated 509 个；可行动缺口（≥5 jar）8 个；静态字段零命中 738 个。
+> 总结：gated 509 个；可行动缺口（≥5 jar）9 个；静态字段零命中 745 个。
