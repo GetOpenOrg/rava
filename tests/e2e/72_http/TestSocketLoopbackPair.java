@@ -20,7 +20,9 @@ public class TestSocketLoopbackPair {
                 1, InetAddress.getLoopbackAddress());
         int port = server.getLocalPort();
 
-        // 服务线程：接受 → 读 → 回显 → 半关闭
+        // 服务线程：接受 → 读 → 回显 → 半关闭；输出收集到缓冲，join 后统一打印
+        // （消除 worker/main 行序随线程竞速漂移——golden 双跑一致的先决条件）
+        final StringBuilder workerOut = new StringBuilder();
         Thread worker = new Thread(() -> {
             try (Socket s = server.accept()) {
                 InputStream in = s.getInputStream();
@@ -32,9 +34,9 @@ public class TestSocketLoopbackPair {
                 out.flush();
                 s.shutdownOutput();               // 半关闭：写端结束，读端见 EOF
                 int tail = in.read();
-                System.out.println("server-sees-eof=" + (tail == -1));
+                workerOut.append("server-sees-eof=").append(tail == -1).append('\n');
             } catch (IOException e) {
-                System.out.println("server-ex=" + e.getClass().getSimpleName());
+                workerOut.append("server-ex=").append(e.getClass().getSimpleName()).append('\n');
             }
         });
         worker.start();
@@ -52,6 +54,7 @@ public class TestSocketLoopbackPair {
             c.shutdownOutput();
         }
         worker.join();
+        System.out.print(workerOut);
         server.close();
 
         // 关闭后的 accept → SocketException
