@@ -393,7 +393,8 @@ impl<'a> Engine<'a> {
         let base = usize::from(!is_static);
         self.bind_params(t, base, ptypes.len());
         if let Some(cv) = self.call_vals.clone() {
-            self.pstr_site(m, &cv, |j| pstrs::PSlot::M(t, base + j));
+            let string = self.id(STRING);
+            self.pstr_site(m, off, &cv, |j| pstrs::PSlot::M(t, base + j), |j| ptypes.get(base + j).copied().flatten() == Some(string));
         }
         let recv_fs = self.edge_this(t, recv);
         for (j, f) in a.iter().enumerate() {
@@ -507,6 +508,9 @@ impl<'a> Engine<'a> {
 
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        if vals.is_none() {
+            self.pstr_top_m(t);
+        }
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {

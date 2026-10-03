@@ -10,6 +10,7 @@
 //! 反射 / Unsafe 写 private static 字段不在建模范围，与常量折叠的前提相同）。任一条件不满足即不给出候选。
 
 use super::class_lookup::{event_at, is_invoke, site_of, uses, Part, MAX_NAMES};
+use super::name_eval::Frame;
 use super::*;
 use classfile::op::{GETSTATIC, INVOKESTATIC, PUTSTATIC};
 
@@ -45,6 +46,8 @@ fn no_ref_args(args: &[V]) -> bool {
 /// 字段 f 在一个访问方法里的读写：`reads` 为 getstatic 偏移，`writes` 为 putstatic 的写入值
 pub(super) struct Access {
     pub a: Analysis,
+    /// 访问方法所在类（取引导方法表）
+    pub owner: String,
     pub reads: Vec<u32>,
     pub writes: Vec<V>,
 }
@@ -96,7 +99,7 @@ pub(super) fn array_writes(a: &Analysis, n: u32, f: &MemberRef) -> Option<Vec<(V
 }
 
 /// 候选段拍平为字符串集（超出上限或含任意串时推不出）
-fn flatten(parts: &[Part]) -> Option<BTreeSet<Rc<str>>> {
+pub(super) fn flatten(parts: &[Part]) -> Option<BTreeSet<Rc<str>>> {
     let mut names: Vec<String> = vec![String::new()];
     for p in parts {
         names = match p {
@@ -134,7 +137,7 @@ impl<'a> Engine<'a> {
                 if a.conservative {
                     return None;
                 }
-                let mut acc = Access { a, reads: vec![], writes: vec![] };
+                let mut acc = Access { a, owner: cf.name.clone(), reads: vec![], writes: vec![] };
                 for i in &code.insns {
                     if !matches!(&i.operand, classfile::Operand::Field(r) if r == f) {
                         continue;
@@ -221,7 +224,8 @@ impl<'a> Engine<'a> {
             if v == V::Null {
                 continue;
             }
-            let parts = self.name_parts(None, &accs[i].a, &v, false, 0)?;
+            let f = Frame { m: None, a: &accs[i].a, owner: &accs[i].owner, up: None };
+            let parts = self.name_parts(&f, &v, false, 0)?;
             out.extend(flatten(&parts)?);
         }
         Some(out)
