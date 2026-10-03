@@ -16,7 +16,7 @@
 //!   上游槽变化（新常量、新流入边、新非常量实参、推不出）、非常量实参所在调用方重分析时读者重跑；
 //! - 递归传参成环（槽在求值栈上）或上游槽过多时推不出。
 
-use super::class_lookup::{event_at, is_invoke, MAX_NAMES};
+use super::class_lookup::{event_at, is_invoke, Gap, MAX_NAMES};
 use super::name_eval::Frame;
 use super::sealed::flatten;
 use super::*;
@@ -218,7 +218,7 @@ impl<'a> Engine<'a> {
             let v = args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j)?.clone();
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
-            let parts = self.name_parts(&f, &v, false, depth)?;
+            let parts = self.name_parts(&f, &v, Gap::Fail, depth)?;
             out.extend(flatten(&parts)?);
             if out.len() > MAX_NAMES {
                 return None;

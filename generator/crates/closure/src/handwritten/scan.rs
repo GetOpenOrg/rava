@@ -94,9 +94,24 @@ impl FileScan<'_> {
                 b.locals.insert(var.clone(), Some(ty.clone()));
             }
         }
-        let mut cs = CallScan { locals: &b.locals, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
+        let mut cs = CallScan { locals: &b.locals, srcs: &b.srcs, scope, fresh: HashMap::new(), calls: Vec::new(), fields: Vec::new(), opaque: HashSet::new(), helpers: &helpers, generics: self.generics, self_last: self.self_ty.as_ref().and_then(|t| t.last().cloned()) };
         cs.visit_block(block);
-        for (field, write, recv, value, on_self, path, value_self, value_st) in cs.fields {
+        // 形参名 → 序号（含接收者）；被 let 重新绑定的名字不算形参
+        let params: Vec<Option<String>> = sig
+            .inputs
+            .iter()
+            .map(|a| match a {
+                syn::FnArg::Receiver(_) => Some("self".to_string()),
+                syn::FnArg::Typed(pt) => match &*pt.pat {
+                    syn::Pat::Ident(pi) => Some(pi.ident.to_string()),
+                    _ => None,
+                },
+            })
+            .collect();
+        let param_of = |v: &str| (!b.locals.contains_key(v)).then(|| params.iter().position(|p| p.as_deref() == Some(v)).map(|i| i as u16)).flatten();
+        for (field, write, recv, value, on_self, path, value_self, value_st, src) in cs.fields {
+            let value_src_param = src.as_ref().and_then(|(v, _)| v.as_deref()).and_then(param_of);
+            let value_src = src.map(|(_, f)| f);
             info.fields.push(FieldAccess {
                 on_self,
                 value_self,
@@ -105,15 +120,18 @@ impl FileScan<'_> {
                 write,
                 recv: recv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
                 value: value.map(|v| TypeRef(expand(self.uses, v))),
+                value_src,
+                value_src_param,
                 value_fresh: value_st.map(|v| expand_s(self.uses, v, &self.self_ty)).is_some_and(|v| matches!(&v, SType::Ret(t, f) if self.scalar_fns.contains(&(t.0.clone(), f.clone())))),
             });
         }
         let tr = |t: Option<Vec<String>>| t.map(|t| TypeRef(expand(self.uses, t)));
-        for (mut name, mut ty, mut recv, mut args, fresh, mut srecv) in cs.calls {
+        for (mut name, mut ty, mut recv, mut args, fresh, mut srecv, mut lits) in cs.calls {
             // vtable trait 的完全限定调用 `X__VTable::m(&*recv, …)`：首个实参是接收者，即 X 上的虚调用
             if recv.is_none() && !args.is_empty() {
                 if let Some(t) = ty.as_ref().map(|t| expand(self.uses, t.clone())).as_ref().and_then(|t| Some((t, t.last()?.strip_suffix(VTABLE_SUFFIX)?))).filter(|(_, s)| !s.is_empty()).map(|(t, s)| [&t[..t.len() - 1], &[s.to_string()]].concat()) {
                     recv = Some(args.remove(0));
+                    lits.remove(0);
                     srecv = Some(SType::Named(TypeRef(t)));
                     ty = None;
                 }
@@ -131,6 +149,7 @@ impl FileScan<'_> {
                 args: args.into_iter().map(tr).collect(),
                 fresh: tr(fresh),
                 srecv: srecv.and_then(|r| local_ret(expand_s(self.uses, r, &self.self_ty), self.rets)),
+                lits,
             });
         }
         info.opaque = cs.opaque;
@@ -344,7 +363,7 @@ pub(super) fn close_transitive(fns: &mut HashMap<String, FnInfo>, calls: &HashMa
                 // 被调 fn 的 self 不一定是本方法的接收者
                 let own = x == n.as_str();
                 for fa in &f.fields {
-                    let fa = FieldAccess { on_self: fa.on_self && own, value_self: fa.value_self && keep, ..fa.clone() };
+                    let fa = FieldAccess { on_self: fa.on_self && own, value_self: fa.value_self && keep, value_src_param: fa.value_src_param.filter(|_| own), ..fa.clone() };
                     if !fields.contains(&fa) {
                         fields.push(fa);
                     }

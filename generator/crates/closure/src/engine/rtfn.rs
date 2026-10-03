@@ -59,20 +59,41 @@ impl<'a> Engine<'a> {
 
     /// 手写体（宿主 `host`）跨文件调用的手写 fn：建节点并接值池 / 产出
     pub(super) fn hw_fn_calls(&mut self, m: usize, host: &str, mh: &MemberHw) {
-        let mut targets: BTreeSet<(String, String)> = BTreeSet::new();
+        // 目标 → 按名构造类镜像时各调用的字面量类名（任一调用非字面量则为 None）
+        let mut targets: BTreeMap<(String, String), Option<BTreeSet<String>>> = BTreeMap::new();
         for c in &mh.calls {
             if let Some(t) = self.hw_fn_target(host, c) {
-                targets.insert(t);
+                let lit = self.man.names.is_hw_mirror(&t.0, &t.1).then(|| c.lits.first().cloned().flatten()).flatten();
+                let e = targets.entry(t).or_insert_with(|| Some(BTreeSet::new()));
+                match (e.as_mut(), lit) {
+                    (Some(s), Some(l)) => {
+                        s.insert(l);
+                    }
+                    _ => *e = None,
+                }
             }
         }
         let obj = self.id(OBJECT);
-        for (h, f) in targets {
+        for ((h, f), lits) in targets {
             if h == host {
                 continue;
             }
             let t = self.rt_fn_node(&h, &f, Via::method("hw-call", m, None));
             self.flow(Node::S(m, POOL), Node::S(t, POOL), obj);
-            self.flow(Node::S(t, PROD), Node::S(m, PROD), obj);
+            match lits {
+                // 实参全是字面量类名：结果即这些类的镜像，不接 fn 的一般返回值
+                Some(lits) => self.hw_literal_mirrors(m, &lits),
+                None => self.flow(Node::S(t, PROD), Node::S(m, PROD), obj),
+            }
+        }
+    }
+
+    /// 手写体按字面量类名构造的类镜像进入成员产出：只取镜像、不初始化（同 ldc 类常量）
+    fn hw_literal_mirrors(&mut self, m: usize, lits: &BTreeSet<String>) {
+        for cls in lits {
+            let k = self.mirror(cls);
+            self.add_to(Node::S(m, PROD), &TypeSet::exact(k));
+            self.touch(cls, Level::Type, Via::method("hw-mirror", m, None));
         }
     }
 

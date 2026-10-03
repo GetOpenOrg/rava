@@ -196,6 +196,9 @@ impl<'a> Engine<'a> {
                 self.touch(&up, Level::Type, Via::class("supertype", cls));
             }
             self.touch_hw_types(cls);
+            if !self.class_patterns.is_empty() {
+                self.pattern_class_added(cls);
+            }
         }
         Some(cf)
     }

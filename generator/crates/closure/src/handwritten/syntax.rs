@@ -70,7 +70,8 @@ pub(super) struct BodyScan {
     /// 至少一处不以 `self` 为接收者调用 / 引用的名字（`calls` 中其余名字只经 `self.f(…)` 调用，被调 fn 的 `self` 即本 fn 的 `self`）
     pub(super) nonself: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
-    pub(super) helpers: HashSet<String>,
+    pub(super) helpers: HashSet<String>,    /// let 绑定 → 按名读的字段名（见 [`by_name_src`]；重复绑定且不一致 → None）
+    pub(super) srcs: HashMap<String, Option<NameSrc>>,
 }
 
 impl<'ast> Visit<'ast> for BodyScan {
@@ -78,6 +79,8 @@ impl<'ast> Visit<'ast> for BodyScan {
         if let Some(pi) = bound_ident(&l.pat) {
             let t = l.init.as_ref().and_then(|i| infer(&i.expr, &self.locals, &self.helpers));
             bind(&mut self.locals, pi.ident.to_string(), t);
+            let src = l.init.as_ref().and_then(|i| by_name_src(&i.expr, &self.srcs));
+            bind(&mut self.srcs, pi.ident.to_string(), src);
             if pi.mutability.is_some() && matches!(strip_type(&l.pat), syn::Pat::Ident(_)) {
                 if let Some(init) = &l.init {
                     if let syn::Expr::Call(c) = &*init.expr {
@@ -263,16 +266,77 @@ pub(super) fn infer(e: &syn::Expr, locals: &HashMap<String, Option<Vec<String>>>
     }
 }
 
+/// 值取自按名读 `o.0.__unsafe_ref_get("f")` 时的（接收者变量, 字段名 `f`）：接收者是变量 `o` / `o.0` 时记其名；
+/// 经括号 / 引用 / `?` / 解包（`unwrap*` / `expect`）/ 转换（`try_cast` 等、`clone`、`into`）/ 局部 let 传递
+pub(super) fn by_name_src(e: &syn::Expr, srcs: &HashMap<String, Option<NameSrc>>) -> Option<NameSrc> {
+    use syn::Expr;
+    match e {
+        Expr::Paren(p) => by_name_src(&p.expr, srcs),
+        Expr::Group(g) => by_name_src(&g.expr, srcs),
+        Expr::Reference(r) => by_name_src(&r.expr, srcs),
+        Expr::Try(t) => by_name_src(&t.expr, srcs),
+        Expr::Path(p) => p.path.get_ident().and_then(|i| srcs.get(&i.to_string()).cloned().flatten()),
+        Expr::MethodCall(m) if super::BY_NAME_READS.contains(&m.method.to_string().as_str()) => match m.args.first()? {
+            Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some((var_of(&m.receiver), java_field_name(&l.value()).to_string())),
+            _ => None,
+        },
+        Expr::MethodCall(m) => {
+            let name = m.method.to_string();
+            let pass = CAST_METHODS.contains(&name.as_str()) || matches!(name.as_str(), "clone" | "into" | "unwrap" | "expect" | "unwrap_or_else" | "ok_or_else" | "ok_or");
+            pass.then(|| by_name_src(&m.receiver, srcs)).flatten()
+        }
+        _ => None,
+    }
+}
+
+/// 按名读的值来源：（接收者变量名, 字段名）
+pub(super) type NameSrc = (Option<String>, String);
+
+/// 接收者表达式 `o` / `o.0` 的变量名
+fn var_of(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()),
+        syn::Expr::Field(f) if matches!(&f.member, syn::Member::Unnamed(i) if i.index == 0) => var_of(&f.base),
+        syn::Expr::Paren(p) => var_of(&p.expr),
+        syn::Expr::Reference(r) => var_of(&r.expr),
+        _ => None,
+    }
+}
+
+/// 实参的字符串字面量值：`"s"`、`String::from("s")` / `from("s")`、`"s".to_string()` / `"s".into()`（外层引用剥去）
+pub(super) fn str_lit(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some(l.value()),
+        syn::Expr::Reference(r) => str_lit(&r.expr),
+        syn::Expr::Paren(p) => str_lit(&p.expr),
+        syn::Expr::Call(c) if c.args.len() == 1 => match &*c.func {
+            syn::Expr::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "from") => match c.args.first()? {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some(l.value()),
+                _ => None,
+            },
+            _ => None,
+        },
+        syn::Expr::MethodCall(m) if m.args.is_empty() && (m.method == "to_string" || m.method == "into") => match &*m.receiver {
+            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(l), .. }) => Some(l.value()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// 第二遍：按第一遍的 let 绑定推断调用点实参；按源码顺序维护静态类型作用域
 pub(super) struct CallScan<'a> {
     pub(super) locals: &'a HashMap<String, Option<Vec<String>>>,
+    /// let 绑定 → 按名读的字段名（[`BodyScan::srcs`]）
+    pub(super) srcs: &'a HashMap<String, Option<NameSrc>>,
     /// 形参 / self / let 绑定 → 静态类型（块作用域；其余模式绑定遮蔽为 None）
     pub(super) scope: HashMap<String, Option<SType>>,
     /// 不可变 let 绑定到构造调用 `T::new*(…)` 的局部变量 → `T`（块作用域，遮蔽即移除）
     pub(super) fresh: HashMap<String, Vec<String>>,
-    pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>)>,
-    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型)
-    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>)>,
+    /// (名, 路径类型段, 接收者, 实参类型, fresh 接收者, 接收者静态类型, 实参字符串字面量)
+    pub(super) calls: Vec<(String, Option<Vec<String>>, Option<Option<Vec<String>>>, Vec<Option<Vec<String>>>, Option<Vec<String>>, Option<SType>, Vec<Option<String>>)>,
+    /// (字段, 写, 接收者静态类型, 写入值类型, 接收者是 self, static 写访问器路径调用, 写入值是 self, 写入值静态类型, 写入值的按名读来源)
+    pub(super) fields: Vec<(String, bool, Option<SType>, Option<Vec<String>>, bool, bool, bool, Option<SType>, Option<NameSrc>)>,
     pub(super) opaque: HashSet<String>,
     /// 本文件构造器名形态的辅助 fn（见 [`local_helpers`]）
     pub(super) helpers: &'a HashSet<String>,
@@ -343,7 +407,7 @@ impl CallScan<'_> {
     /// 静态类型已知的值以 Display 输出：即其 `toString()` 虚调用
     fn display_call(&mut self, recv: Option<Vec<String>>, st: Option<SType>) {
         if st.is_some() {
-            self.calls.push((JAVA_TO_STRING.to_string(), None, Some(recv), vec![], None, st));
+            self.calls.push((JAVA_TO_STRING.to_string(), None, Some(recv), vec![], None, st, vec![]));
         }
     }
 }
@@ -353,7 +417,7 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
         if let Some((_, java)) = ROOT_VTABLE_ALIASES.iter().find(|(r, _)| m.method == r).filter(|_| m.args.is_empty()) {
             // 接收者静态类型推不出（`v.0` 等）→ 根类型（按 open 分派到全部覆盖）
             let st = stype(&m.receiver, &self.scope, self.locals).or_else(|| Some(SType::Named(TypeRef(vec![OBJECT_RUST.to_string()]))));
-            self.calls.push((java.to_string(), None, Some(infer(&m.receiver, self.locals, self.helpers)), vec![], None, st));
+            self.calls.push((java.to_string(), None, Some(infer(&m.receiver, self.locals, self.helpers)), vec![], None, st, vec![]));
             syn::visit::visit_expr_method_call(self, m);
             return;
         }
@@ -370,7 +434,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             let on_self = is_self_path(&m.receiver);
             let value_self = write && m.args.first().is_some_and(is_self_value);
             let value_st = m.args.first().filter(|_| write).and_then(|a| stype(a, &self.scope, self.locals));
-            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self, value_st));
+            let src = m.args.first().filter(|_| write).and_then(|a| by_name_src(a, self.srcs));
+            self.fields.push((f.to_string(), write, stype(&m.receiver, &self.scope, self.locals), value, on_self, false, value_self, value_st, src));
         }
         // 按名协议 `o.0.__unsafe_ref_set("字段", v)`：接收者是擦除的 vtable 对象，只知字段名
         let by_name = (BY_NAME_WRITES.contains(&name.as_str()), BY_NAME_READS.contains(&name.as_str()));
@@ -381,7 +446,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                 let value = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| infer(a, self.locals, self.helpers))).flatten();
                 let value_self = by_name.0 && m.args.iter().nth(1).is_some_and(is_self_value);
                 let value_st = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| stype(a, &self.scope, self.locals))).flatten();
-                self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st));
+                let src = by_name.0.then(|| m.args.iter().nth(1).and_then(|a| by_name_src(a, self.srcs))).flatten();
+                self.fields.push((f, by_name.0, None, value, false, false, value_self, value_st, src));
             }
         }
         let args = m.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
@@ -390,7 +456,8 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
             _ => None,
         };
         let srecv = stype(&m.receiver, &self.scope, self.locals);
-        self.calls.push((name, None, Some(infer(&m.receiver, self.locals, self.helpers)), args, fresh, srecv));
+        let lits = m.args.iter().map(str_lit).collect();
+        self.calls.push((name, None, Some(infer(&m.receiver, self.locals, self.helpers)), args, fresh, srecv, lits));
         syn::visit::visit_expr_method_call(self, m);
     }
 
@@ -405,12 +472,14 @@ impl<'ast> Visit<'ast> for CallScan<'_> {
                         let value = c.args.first().and_then(|a| infer(a, self.locals, self.helpers));
                         let value_self = c.args.first().is_some_and(is_self_value);
                         let value_st = c.args.first().and_then(|a| stype(a, &self.scope, self.locals));
-                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self, value_st));
+                        let src = c.args.first().and_then(|a| by_name_src(a, self.srcs));
+                        self.fields.push((f.to_string(), true, Some(SType::Named(TypeRef(head.to_vec()))), value, false, true, value_self, value_st, src));
                     }
                 }
                 let args = c.args.iter().map(|a| infer(a, self.locals, self.helpers)).collect();
                 let ty = (!head.is_empty()).then(|| head.to_vec());
-                self.calls.push((last.clone(), ty, None, args, None, None));
+                let lits = c.args.iter().map(str_lit).collect();
+                self.calls.push((last.clone(), ty, None, args, None, None, lits));
             }
             // 本文件泛型辅助 fn：闭包实参的形参类型按其余实参解出
             let key = segs.iter().map(|s| if s == "Self" { self.self_last.as_deref().unwrap_or(s) } else { s }).collect::<Vec<_>>().join("::");

@@ -17,6 +17,7 @@
 //! 解析成功的调用点结果只含这些类的镜像（不再流入所指未知的 Class），类随之初始化、其构造器进入反射面。
 
 use super::builder::{builder_prefix, seg_kind, Seg};
+use super::method_lookup::{constrained, parts_match};
 use super::name_eval::{prim_lit, Frame};
 use super::sealed::flatten;
 use super::*;
@@ -24,11 +25,55 @@ use super::*;
 /// 候选名数上限：超出按推不出处理
 pub(super) const MAX_NAMES: usize = 4096;
 
-/// 拼接段：字面量、候选集，或任意串（仅按名查方法：由目标类上的方法名反向匹配）
+/// 候选模式数上限（拼接段里的多选展开后）：超出按推不出处理
+const MAX_PATTERNS: usize = 64;
+
+/// 拼接段：字面量、候选集、任意串（由目标类上的方法名 / 生成范围内的类名反向匹配），或多选（辅助方法的各返回值 /
+/// 各派发目标，每一支是一串拼接段）
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Part {
     Lit(Rc<str>),
     Any(BTreeSet<Rc<str>>),
     Wild,
+    Alt(Vec<Vec<Part>>),
+}
+
+/// 推不出的段如何处理
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Gap {
+    /// 整体推不出（封存字段 / 形参名字的内部求值）；常量表读取的接收者含非常量表值时给出常量表部分并记 top
+    Fail,
+    /// 按名查方法：记为任意串；形参透传的名字不在此求（调用点字符串常量另行点名）
+    Method,
+    /// 按名取类：记为任意串（含任意串的候选按生成范围内的类名匹配）；常量表部分读取给出「常量表候选 | 任意串」
+    Class,
+}
+
+impl Gap {
+    fn wild(self) -> bool {
+        self != Gap::Fail
+    }
+}
+
+/// 拼接段展开成不含多选的候选模式；超出上限为 None
+pub(super) fn expand(parts: &[Part]) -> Option<Vec<Vec<Part>>> {
+    let mut out: Vec<Vec<Part>> = vec![vec![]];
+    for p in parts {
+        match p {
+            Part::Alt(alts) => {
+                let mut subs = vec![];
+                for a in alts {
+                    subs.extend(expand(a)?);
+                }
+                if out.len().saturating_mul(subs.len()) > MAX_PATTERNS {
+                    return None;
+                }
+                out = out.iter().flat_map(|o| subs.iter().map(move |s| o.iter().chain(s.iter()).cloned().collect())).collect();
+            }
+            p => out.iter_mut().for_each(|o| o.push(p.clone())),
+        }
+    }
+    Some(out)
 }
 
 pub(super) fn site_of(v: &V) -> Option<u32> {
@@ -104,22 +149,42 @@ impl<'a> Engine<'a> {
         }
         let owner = self.methods[m].key.owner.clone();
         let f = Frame { m: Some(m), a: &a, owner: &owner, up: None };
-        let parts = self.name_parts(&f, args.first()?, false, 0)?;
-        let mut names: Vec<String> = vec![String::new()];
-        for p in &parts {
-            names = match p {
-                Part::Lit(s) => names.into_iter().map(|n| n + s).collect(),
-                Part::Any(set) => {
-                    if names.len().saturating_mul(set.len()) > MAX_NAMES {
-                        return None;
-                    }
-                    names.iter().flat_map(|n| set.iter().map(move |s| format!("{n}{s}"))).collect()
+        let parts = self.name_parts(&f, args.first()?, Gap::Class, 0).unwrap_or_else(|| vec![Part::Wild]);
+        let mut names: Vec<String> = vec![];
+        let mut wild: Vec<Vec<Part>> = vec![];
+        for pat in expand(&parts)? {
+            if pat.iter().any(|p| matches!(p, Part::Wild)) {
+                if !constrained(&pat) {
+                    return None;
                 }
-                Part::Wild => return None,
-            };
+                wild.push(pat);
+                continue;
+            }
+            names.extend(flatten(&pat)?.iter().map(|n| n.to_string()));
+            if names.len() > MAX_NAMES {
+                return None;
+            }
         }
         let expect = self.expected_type(&a, off);
         let mut out: BTreeSet<String> = BTreeSet::new();
+        // 含任意串的候选：运行期按名只取得到生成范围内的类（VM 只登记生成的类），按闭包里的类名匹配。
+        // 站点的模式只增不减（各次求值的并集，结果单调）；新类进入闭包时由 `pattern_class_added` 重跑本站点
+        if !wild.is_empty() {
+            let pats = self.class_patterns.entry((m, off)).or_default();
+            for p in wild {
+                if !pats.contains(&p) {
+                    pats.push(p);
+                }
+            }
+        }
+        if let Some(pats) = self.class_patterns.get(&(m, off)) {
+            for cls in self.classes.keys() {
+                let dotted = cls.replace('/', ".");
+                if pats.iter().any(|p| parts_match(p, &dotted)) && expect.as_ref().is_none_or(|t| self.h.is_subtype(cls, t)) {
+                    out.insert(cls.clone());
+                }
+            }
+        }
         for n in names {
             let cls = n.replace('.', "/");
             // 数组类名（描述符形式）：元素类型可解析时取到数组类镜像；数组类不可实例化，有期望类型时不保留
@@ -135,33 +200,33 @@ impl<'a> Engine<'a> {
         Some(out.into_iter().collect())
     }
 
-    /// 名字值拆成拼接段；wild = 推不出的段记为任意串（否则整体推不出）
+    /// 名字值拆成拼接段；gap = 推不出的段的处理（见 [`Gap`]）
     /// f = 值所在的帧（引擎方法，或被调方法的独立分析——不读常量表与值集，形参换成调用方帧里的实参）；
     /// depth = 已穿过的辅助方法层数（名字由唯一目标的辅助方法拼出并返回时，进入其字节码继续拆）
-    pub(super) fn name_parts(&mut self, f: &Frame, v: &V, wild: bool, depth: u8) -> Option<Vec<Part>> {
+    pub(super) fn name_parts(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Vec<Part>> {
         let (f, v) = f.resolve(v);
         if let V::Str(s) = &v {
             return Some(vec![Part::Lit(s.clone())]);
         }
         let Some(o) = site_of(&v) else {
             // 引擎方法的形参：各调用点流入的名字（按名取类）
-            return self.segment_values(f, &v, wild, depth).map(|p| vec![p]);
+            return self.segment_values(f, &v, gap, depth).map(|p| vec![p]);
         };
         let a = f.a;
         if let Some(segs) = self.indy_concat_segs(f.owner, a, o) {
-            return self.seg_parts(f, &segs, wild, depth);
+            return self.seg_parts(f, &segs, gap, depth);
         }
         let Some(Event::Invoke { mref, args, .. }) = event_at(a, o, is_invoke) else {
             // 非调用结果（如直接读字段）：整体作为一段
-            return self.segment_values(f, &v, false, depth).map(|p| vec![p]);
+            return self.segment_values(f, &v, Gap::Fail, depth).map(|p| vec![p]);
         };
         if !self.man.names.is_result(&mref.to_string()) {
             if let Some(r) = self.mirror_name(f, o) {
                 return r.map(|set| vec![Part::Any(set)]);
             }
-            let (ca, rv, owner) = self.callee_return(a, o, depth)?;
-            let cf = Frame { m: None, a: &ca, owner: &owner, up: Some((f, args)) };
-            return self.name_parts(&cf, &rv, wild, depth + 1);
+            // 辅助方法（唯一目标，或按接收者值集派发的各目标）的各返回值：每个返回值一支
+            let mut alts = self.callee_alts(f, o, args, gap, depth)?;
+            return Some(if alts.len() == 1 { alts.pop()? } else { vec![Part::Alt(alts)] });
         }
         let names = &self.man.names;
         let mut segs: Vec<Seg> = vec![];
@@ -190,25 +255,40 @@ impl<'a> Engine<'a> {
             segs = prefix;
             break;
         }
-        self.seg_parts(f, &segs, wild, depth)
+        self.seg_parts(f, &segs, gap, depth)
+    }
+
+    /// 站点 o 的辅助方法调用（实参 args）的各返回值拆成的拼接段，每个返回值一支；推不出的支按 gap 记为任意串
+    fn callee_alts(&mut self, f: &Frame, o: u32, args: &[V], gap: Gap, depth: u8) -> Option<Vec<Vec<Part>>> {
+        let rets = self.callee_returns(f, o, depth)?;
+        let mut alts = Vec::with_capacity(rets.len());
+        for (ca, rv, owner) in &rets {
+            let cf = Frame { m: None, a: ca, owner, up: Some((f, args)) };
+            match self.name_parts(&cf, rv, gap, depth + 1) {
+                Some(p) => alts.push(p),
+                None if gap.wild() => alts.push(vec![Part::Wild]),
+                None => return None,
+            }
+        }
+        Some(alts)
     }
 
     /// 拼接各段的值 → 拼接段
-    fn seg_parts(&mut self, f: &Frame, segs: &[Seg], wild: bool, depth: u8) -> Option<Vec<Part>> {
+    fn seg_parts(&mut self, f: &Frame, segs: &[Seg], gap: Gap, depth: u8) -> Option<Vec<Part>> {
         let mut parts = Vec::with_capacity(segs.len());
         for (s, k) in segs {
             let (sf, s) = f.resolve(s);
             parts.push(match &s {
                 V::Str(x) => Part::Lit(x.clone()),
                 V::Null => Part::Lit(Rc::from("null")),
-                V::Ref { .. } => match self.segment_values(sf, &s, wild, depth) {
+                V::Ref { .. } => match self.segment_values(sf, &s, gap, depth) {
                     Some(p) => p,
-                    None if wild => Part::Wild,
+                    None if gap.wild() => Part::Wild,
                     None => return None,
                 },
                 _ => match prim_lit(&s, *k) {
                     Some(l) => Part::Lit(l),
-                    None if wild => Part::Wild,
+                    None if gap.wild() => Part::Wild,
                     None => return None,
                 },
             });
@@ -269,33 +349,37 @@ impl<'a> Engine<'a> {
 
     /// 引用值段：引擎方法形参（各调用点流入的名字）→ 类镜像取名 → 封存静态字段（值映射读取 / 常量字符串数组元素，`sealed.rs`）
     /// → 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
-    fn segment_values(&mut self, f: &Frame, v: &V, wild: bool, depth: u8) -> Option<Part> {
+    fn segment_values(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Part> {
         let a = f.a;
         if let (Some(m), None) = (f.m, site_of(v)) {
             // 按名查方法的形参名字由调用点的字符串常量另行点名（`param_strs`），这里只服务按名取类
             let [Src::Param(i)] = v.srcs()[..] else { return None };
-            return if wild { None } else { self.param_names(m, i as usize, depth).map(Part::Any) };
+            return if gap == Gap::Method { None } else { self.param_names(m, i as usize, depth).map(Part::Any) };
         }
         let o = site_of(v)?;
         if let Some(r) = self.mirror_name(f, o) {
             return match r {
                 Some(set) => Some(Part::Any(set)),
-                None => wild.then_some(Part::Wild),
+                None => gap.wild().then_some(Part::Wild),
             };
         }
         if let Some(set) = self.sealed_segment(a, v) {
             return Some(Part::Any(set));
         }
         if let Some((set, partial)) = f.m.and_then(|m| self.table_values(m, a, v)) {
-            // 接收者含非常量表值：按名查方法（wild）记为任意串；按名取类给出常量表部分并记 top
+            // 接收者含非常量表值：按名查方法记为任意串；按名取类给出「常量表候选 | 任意串」（候选类照常点名，
+            // 其余按生成范围内的类名匹配）；内部求值给出常量表部分并记 top
             if !partial {
                 return Some(Part::Any(set));
             }
-            if wild {
-                return Some(Part::Wild);
-            }
-            self.lookup_partial = true;
-            return Some(Part::Any(set));
+            return Some(match gap {
+                Gap::Method => Part::Wild,
+                Gap::Class => Part::Alt(vec![vec![Part::Any(set)], vec![Part::Wild]]),
+                Gap::Fail => {
+                    self.lookup_partial = true;
+                    Part::Any(set)
+                }
+            });
         }
         if let Some(set) = self.enum_field_values(a, v) {
             return Some(Part::Any(set));
@@ -303,15 +387,17 @@ impl<'a> Engine<'a> {
         if let Some(set) = self.callee_consts(a, o, depth) {
             return Some(Part::Any(set));
         }
-        // 辅助方法拼出的段：拍平成一个候选集（含任意串时整体记为任意串）
-        let (ca, rv, owner) = self.callee_return(a, o, depth)?;
+        // 辅助方法拼出的段：各返回值都能拍平时合成一个候选集，否则（含任意串）保留为多选
         let Some(Event::Invoke { args, .. }) = event_at(a, o, is_invoke) else { return None };
-        let cf = Frame { m: None, a: &ca, owner: &owner, up: Some((f, args)) };
-        let parts = self.name_parts(&cf, &rv, wild, depth + 1)?;
-        match flatten(&parts) {
-            Some(set) => Some(Part::Any(set)),
-            None => wild.then_some(Part::Wild),
+        let alts = self.callee_alts(f, o, args, gap, depth)?;
+        let mut set = BTreeSet::new();
+        for p in &alts {
+            match flatten(p) {
+                Some(s) => set.extend(s),
+                None => return gap.wild().then_some(Part::Alt(alts)),
+            }
         }
+        Some(Part::Any(set))
     }
 
     /// 常量表读取结果的候选字符串（可经一次 checkcast）与接收者是否含非常量表值；接收者尚无值时为空集
@@ -394,16 +480,30 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 新类进入闭包：按名取类站点里含任意串的候选模式能匹配该类名时重跑该站点
+    pub(super) fn pattern_class_added(&mut self, cls: &str) {
+        let dotted = cls.replace('/', ".");
+        let hits: Vec<(usize, u32)> = self.class_patterns.iter().filter(|(_, ps)| ps.iter().any(|p| parts_match(p, &dotted))).map(|(w, _)| *w).collect();
+        for w in hits {
+            if self.in_swork.insert(w) {
+                self.swork.push_back(w);
+            }
+        }
+    }
+
     /// 按名取到的类：其构造器进入反射面（类已被构造器枚举且反射构造可达时立即补入）；
-    /// 数组类只取镜像（同 ldc 数组类常量），不初始化元素类（JLS §12.4.1）
-    pub(super) fn named_class(&mut self, m: usize, off: u32, cls: &str) {
+    /// 数组类只取镜像（同 ldc 数组类常量），不初始化元素类（JLS §12.4.1）；按名加载（init = false）只取镜像、不初始化
+    pub(super) fn named_class(&mut self, m: usize, off: u32, cls: &str, init: bool) {
         let k = self.mirror(cls);
         self.add_to(Node::S(m, off), &TypeSet::exact(k));
-        if cls.starts_with('[') {
+        if cls.starts_with('[') || !init {
             self.touch(cls, Level::Type, Via::method("reflect", m, Some(off)));
-            return;
+            if cls.starts_with('[') {
+                return;
+            }
+        } else {
+            self.init(cls, Via::method("reflect", m, Some(off)));
         }
-        self.init(cls, Via::method("reflect", m, Some(off)));
         let c = self.id(cls);
         if self.named_ctors.insert(c) && self.enumerated.contains(&(Members::Constructors, c)) && self.invokable.contains(&Members::Constructors) {
             self.expose(Members::Constructors, c);

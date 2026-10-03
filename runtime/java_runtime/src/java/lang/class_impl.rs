@@ -177,7 +177,7 @@ impl Class {
             if meta.name == "<init>" || meta.name == "<clinit>" || meta.inherited {
                 continue;
             }
-            out.push(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
+            out.push(self.__method_from_meta(meta, slot as i32));
         }
         Ok(JArray::from(out))
     }
@@ -185,7 +185,8 @@ impl Class {
     /// 方法元数据行 → Method（查询即构造）。parameterTypes / returnType 从
     /// 描述符还原（class_for_descriptor 的数组形态：`[...` 直接 for_class），
     /// exceptionTypes 从 throws 子句列表还原。
-    fn __method_from_meta(clazz: Class, meta: &'static crate::meta::MethodMeta, slot: i32) -> crate::java::lang::reflect::Method {
+    /// 声明类即接收者本身（`clazz` = `self`，分析器据此把 Method.clazz 接为接收者镜像）。
+    fn __method_from_meta(&self, meta: &'static crate::meta::MethodMeta, slot: i32) -> crate::java::lang::reflect::Method {
         let params: Vec<Class> = descriptor_params(meta.descriptor)
             .into_iter()
             .map(|p| class_for_descriptor(&p))
@@ -197,7 +198,7 @@ impl Class {
             .collect();
         let mut m = crate::java::lang::reflect::Method::default();
         m._init_not_null();
-        m.__set_clazz(clazz);
+        m.__set_clazz(Clone::clone(self));
         m.__set_name(String::from(meta.name));
         m.__set_modifiers(meta.modifiers);
         m.__set_slot(slot);
@@ -894,7 +895,7 @@ impl Class {
         crate::java::lang::reflect::Method::__class_init()?;
         for (slot, meta) in self.__declared_method_rows().iter().enumerate() {
             if meta.name == name && meta.descriptor == descriptor && !meta.inherited {
-                return Ok(Self::__method_from_meta(Clone::clone(self), meta, slot as i32));
+                return Ok(self.__method_from_meta(meta, slot as i32));
             }
         }
         Ok(crate::java::lang::reflect::Method::default())
