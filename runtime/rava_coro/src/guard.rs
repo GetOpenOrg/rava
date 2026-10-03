@@ -1,4 +1,7 @@
-//! 协程栈溢出识别：载体线程上的 `SIGSEGV` / `SIGBUS` 处理器（运行在 `sigaltstack` 上）。
+//! 执行流的栈界：软件栈界（`LIMIT`，Java `StackOverflowError` 的判定依据）与硬件 guard 区间，
+//! 以及载体线程上的 `SIGSEGV` / `SIGBUS` 处理器（运行在 `sigaltstack` 上）。
+//!
+//! 两者都随执行流走：[`crate::switch`] 把当前值存入被挂起的 [`crate::Context`]、换上被恢复者的值。
 //!
 //! 故障地址落在当前线程正在运行的协程栈的 guard page 内时，输出与 Rust 平台线程栈溢出同形的
 //! 「thread '…' (tid) has overflowed its stack」并 abort；其余故障交还先前的处理器（通常是 std 的
@@ -8,9 +11,22 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Once;
 
+/// 一个执行流的栈界
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Bounds {
+    /// 硬件 guard 区间 `[lo, hi)`；(0, 0) = 无（平台线程自己的栈，或协程栈未启用硬件 guard）
+    pub guard: (usize, usize),
+    /// 软件栈界：栈指针低于此值即判定栈耗尽；0 = 不检查
+    pub limit: usize,
+}
+
+impl Bounds {
+    pub const NONE: Bounds = Bounds { guard: (0, 0), limit: 0 };
+}
+
 thread_local! {
-    /// 当前线程上正在运行的协程栈的 guard 区间；(0, 0) = 平台线程自己的栈
-    static CURRENT: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    /// 当前线程上正在运行的执行流的栈界
+    static CURRENT: Cell<Bounds> = const { Cell::new(Bounds::NONE) };
     /// 处理器读取的载体信息（名称 / OS 线程号），指向 `CARRIER` 中的值
     static INFO: Cell<*const CarrierInfo> = const { Cell::new(std::ptr::null()) };
     /// 本线程的备用信号栈与载体信息（首次切入协程时建立，线程退出时释放）
@@ -61,19 +77,29 @@ pub(crate) fn install() {
     });
 }
 
-/// 当前线程的 guard 区间（切换时存入被保存上下文）
+/// 当前执行流的栈界（切换时存入被保存上下文）
 #[inline]
-pub(crate) fn current() -> (usize, usize) {
+pub(crate) fn current() -> Bounds {
     CURRENT.with(|c| c.get())
 }
 
-/// 即将切入的执行流的 guard 区间；切入协程栈前确保本线程有备用信号栈与载体信息
+/// 换上即将切入的执行流的栈界；切入带硬件 guard 的协程栈前确保本线程有备用信号栈与载体信息
 #[inline]
-pub(crate) fn enter(guard: (usize, usize)) {
-    if guard.0 != 0 && INFO.with(|c| c.get().is_null()) {
+pub(crate) fn enter(b: Bounds) {
+    if b.guard.0 != 0 && INFO.with(|c| c.get().is_null()) {
         init_carrier();
     }
-    CURRENT.with(|c| c.set(guard));
+    CURRENT.with(|c| c.set(b));
+}
+
+/// 改写当前执行流的软件栈界
+#[inline]
+pub(crate) fn set_limit(limit: usize) {
+    CURRENT.with(|c| {
+        let mut b = c.get();
+        b.limit = limit;
+        c.set(b);
+    });
 }
 
 #[cold]
@@ -171,7 +197,7 @@ fn fmt_u64(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
 
 unsafe extern "C" fn on_fault(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     let addr = fault_addr(info);
-    let (lo, hi) = CURRENT.with(|c| c.get());
+    let (lo, hi) = CURRENT.with(|c| c.get()).guard;
     if addr != 0 && lo <= addr && addr < hi {
         let ci = INFO.with(|c| c.get());
         let (name, tid) = if ci.is_null() { ("<unknown>", 0) } else { (&*(*ci).name, (*ci).tid) };

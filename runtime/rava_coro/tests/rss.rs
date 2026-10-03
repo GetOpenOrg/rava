@@ -1,8 +1,9 @@
-//! 10⁵ 个协程建 / 让出 / 完成后 RSS 回落（验收：回到起点 +16 MiB 以内）
+//! 10⁵ 个协程同时挂起：映射数与存活数脱钩（Linux 缺省 `vm.max_map_count` 65530 下成立，映射增量 ≤ 256），
+//! 全部完成后 RSS 回落（验收：回到起点 +16 MiB 以内）
 
 use rava_coro::{stack, switch, Context, Stack};
 
-// macOS：取内核记账的物理足迹（phys_footprint）。resident_size 把 MADV_FREE_REUSABLE 归还的页
+// macOS：取内核记账的物理足迹（phys_footprint，含页表）。resident_size 把 MADV_FREE_REUSABLE 归还的页
 // 计到被回收为止，不反映归还效果；Linux 的 MADV_DONTNEED 立即生效，直接取 RSS。
 #[cfg(target_os = "macos")]
 fn rss() -> usize {
@@ -19,11 +20,18 @@ fn rss() -> usize {
     }
 }
 
+// Linux：RSS 加页表（VmPTE）。页表不计入 RSS，但 madvise 不回收页表，空块整块释放才回收；一并计入才能验证
 #[cfg(not(target_os = "macos"))]
 fn rss() -> usize {
     let s = std::fs::read_to_string("/proc/self/statm").unwrap();
     let pages: usize = s.split_whitespace().nth(1).unwrap().parse().unwrap();
-    pages * stack::page_size()
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let pte_kib: usize = status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmPTE:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap_or(0);
+    pages * stack::page_size() + (pte_kib << 10)
 }
 
 struct Co {
@@ -46,6 +54,11 @@ unsafe extern "C" fn body(arg: usize, data: *mut u8) -> ! {
     unreachable!();
 }
 
+/// 本进程映射数（Linux 读 /proc/self/maps；其它平台 None）
+fn map_count() -> Option<usize> {
+    std::fs::read_to_string("/proc/self/maps").ok().map(|s| s.lines().count())
+}
+
 #[test]
 fn rss_returns_after_hundred_thousand() {
     const N: usize = 100_000;
@@ -57,6 +70,7 @@ fn rss_returns_after_hundred_thousand() {
     // 测试自身的簿记（10⁵ 个 Co + 栈句柄）在测起点前一次分配并写满：起点 / 终点之差只反映栈
     let mut cos: Vec<Co> = (0..N).map(|_| Co { ctx: Context::empty(), back: Context::empty(), sum: 0 }).collect();
     let mut stacks: Vec<Option<Stack>> = (0..N).map(|_| None).collect();
+    let maps_start = map_count();
     let start = rss();
     for (i, (co, slot)) in cos.iter_mut().zip(stacks.iter_mut()).enumerate() {
         let st = Stack::new().unwrap();
@@ -68,7 +82,14 @@ fn rss_returns_after_hundred_thousand() {
         *slot = Some(st);
     }
     let peak = rss();
+    let maps_peak = map_count();
     assert_eq!(stack::live_stacks(), N);
+    // 10⁵ 栈约 100 块 slab
+    assert!(stack::mapped_chunks() <= 256, "slab 块数 {}", stack::mapped_chunks());
+    if let (Some(a), Some(b)) = (maps_start, maps_peak) {
+        eprintln!("[rava_coro] 映射数 {a} → {b}（{N} 协程挂起，slab {} 块）", stack::mapped_chunks());
+        assert!(b <= a + 256, "映射数随存活协程增长：{a} → {b}");
+    }
     for co in cos.iter_mut() {
         let p: *mut Co = co;
         unsafe { assert_eq!(switch(&mut (*p).back, &mut (*p).ctx, 0), 1) };
@@ -88,5 +109,7 @@ fn rss_returns_after_hundred_thousand() {
     );
     assert_eq!(stack::live_stacks(), 0);
     assert!(stack::pooled_stacks() <= stack::pool_limit());
+    // 全部空块只留一个作缓冲
+    assert!(stack::mapped_chunks() <= 1, "空块未释放：{} 块", stack::mapped_chunks());
     assert!(end <= start + (16 << 20), "RSS 未回落：{:.1} → {:.1} MiB", mib(start), mib(end));
 }
