@@ -173,6 +173,8 @@ impl<'a> Engine<'a> {
             lwraps: HashMap::default(),
             reflect_gaps: BTreeSet::new(),
             reflect_members: BTreeSet::new(),
+            salloc_cands: BTreeSet::new(),
+            serial_allocs: BTreeSet::new(),
             reflect_fields: BTreeSet::new(),
             reflect_field_names: BTreeSet::new(),
             field_strs: HashMap::default(),

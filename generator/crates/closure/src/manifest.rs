@@ -139,6 +139,8 @@ pub struct Manifest {
     primitive_class_returns: HashSet<String>,
     /// `[facts.reflect.defined_classes]`：VM 承载的运行期类定义点 → 承载所定义类成员的 VM 支持类
     defined_class_returns: HashMap<String, String>,
+    /// `[facts.reflect.serial_allocators]`：序列化构造器的生成点 → 分配目标 Class 形参序号（不含接收者）
+    serial_allocators: HashMap<String, usize>,
     caller_class_returns: HashSet<String>,
     /// `[caller_sensitive] annotations`：标注此注解的方法是 @CallerSensitive（binary name）
     caller_sensitive: HashSet<String>,
@@ -319,6 +321,16 @@ impl Manifest {
             }
         }
 
+        let mut serial_allocators = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("serial_allocators")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let Some(i) = v.as_integer().filter(|i| *i >= 0) else {
+                    return Err(format!("vm_intrinsics.toml [facts.reflect.serial_allocators]：{k} 须为 Class 形参序号"));
+                };
+                serial_allocators.insert(k.clone(), i as usize);
+            }
+        }
+
         let field_writes = |key: &str| facts("field_writes", key);
         let reflect = |key: &str| facts("reflect", key);
         let mut member_enumerators = HashMap::new();
@@ -390,6 +402,7 @@ impl Manifest {
             declaring_returns: reflect("declaring_of_receiver").into_iter().collect(),
             primitive_class_returns: reflect("primitive_class").into_iter().collect(),
             defined_class_returns,
+            serial_allocators,
             caller_class_returns: reflect("caller_class").into_iter().collect(),
             caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             component_returns: reflect("component_of_receiver").into_iter().collect(),
@@ -643,6 +656,11 @@ impl Manifest {
     /// 按名查找方法（类 + 方法名常量点名反射目标）
     pub fn is_method_lookup(&self, member: &str) -> bool {
         self.method_lookups.contains(member)
+    }
+
+    /// 序列化构造器的生成点（`[facts.reflect] serial_allocators`）：返回分配目标的 Class 形参序号（不含接收者）
+    pub fn serial_allocator(&self, member: &str) -> Option<usize> {
+        self.serial_allocators.get(member).copied()
     }
 
     /// 查找构造器（Class 实参 / 接收者所指类的构造器成为反射构造目标）

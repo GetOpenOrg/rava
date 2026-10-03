@@ -82,6 +82,7 @@ mod sealed;
 mod nest;
 mod method_lookup;
 mod lookup_pair;
+mod serial_alloc;
 mod field_lookup;
 mod pstrs;
 mod share;
@@ -459,6 +460,10 @@ pub struct Engine<'a> {
     field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
     /// 反射成员面：（类别, 成员）
     pub reflect_members: BTreeSet<(Members, MemberRef)>,
+    /// 序列化构造器生成点的分配候选（类型 id）：形参值集里镜像所指的可序列化具体类，见 `serial_alloc.rs`
+    salloc_cands: BTreeSet<u32>,
+    /// 序列化分配目标（候选 ∩ 已实例化）：L3 分派闭包发射 `<alloc>` 臂
+    pub serial_allocs: BTreeSet<String>,
     /// 手写层写入的字段（`__set_` 接收者类型已定位）
     pub hw_written: BTreeSet<MemberRef>,
     /// 按字段句柄写字段的入口已可达

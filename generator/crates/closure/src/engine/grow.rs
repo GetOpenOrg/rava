@@ -17,6 +17,7 @@ impl<'a> Engine<'a> {
         self.hubs_grow(id);
         self.reopen(id);
         self.vm_hooks_on_alloc(id);
+        self.serial_alloc_on_grow(id);
         let pend: Vec<(usize, Vec<String>)> = self.pending_types.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (m, tys) in pend {
             let hit = tys.iter().any(|t| {

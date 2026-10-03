@@ -497,6 +497,14 @@ instantiators = [
 [facts.reflect.defined_classes]
 "java/lang/invoke/MethodHandleImpl$BindCaller.makeInjectedInvoker:(Ljava/lang/Class;)Ljava/lang/Class;" = "java/lang/invoke/InjectedInvokerDyn"
 
+# 序列化构造器的生成点（VM 承载为 SerializationConstructorAccessorDyn）→ 分配目标 Class 形参序号（不含接收者）。
+# 反序列化不经目标类自身的构造器分配实例（L3 分派闭包的 <alloc> 臂），再在其上运行首个不可序列化超类的无参
+# 构造体（<init_on> 臂；与 ReflectionFactory.newConstructorForSerialization 的选择同一结构，可序列化按
+# [facts.field_writes] serializable_markers 判定）。分配目标 = 形参值集里镜像所指的可序列化具体类 ∩ 已实例化的类：
+# 流中的类由程序自身写出时已实例化；只出现在外部数据里的类同按名取类的未知名字，不在闭包内（值集含 open 时记反射缺口）
+[facts.reflect.serial_allocators]
+"jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(Ljava/lang/Class;[Ljava/lang/Class;ILjava/lang/Class;)Ljdk/internal/reflect/SerializationConstructorAccessorImpl;" = 0
+
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 

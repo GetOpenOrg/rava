@@ -112,3 +112,11 @@ fn serial_enumerators_parse() {
     assert!(m.is_serial_enumerator("a/S.f:(Ljava/lang/Class;)J"));
     assert!(!m.is_serial_enumerator("a/S.g:()V"));
 }
+
+#[test]
+fn serial_allocators_parse() {
+    let m = with_vm("[facts.reflect.serial_allocators]\n\"a/G.gen:(Ljava/lang/Class;)La/A;\" = 0\n").unwrap();
+    assert_eq!(m.serial_allocator("a/G.gen:(Ljava/lang/Class;)La/A;"), Some(0));
+    assert_eq!(m.serial_allocator("a/G.other:()V"), None);
+    assert!(with_vm("[facts.reflect.serial_allocators]\n\"a/G.gen:(Ljava/lang/Class;)La/A;\" = -1\n").is_err());
+}
