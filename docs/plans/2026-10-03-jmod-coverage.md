@@ -162,11 +162,79 @@
 
 ---
 
-## 七、预审记录（第 0 步填写）
+## 七、预审记录（第 0 步填写；实测列 2026-10-03 由 e2enew-da8abee1 spot 跑批回填，根因族编号见 docs/reports/e2enew-da8abee1-triage.md）
 
-| 用例 | 闭包类数 | native-missing | boundary-stub | 备注 |
+| 用例 | 闭包类数 | native-missing | boundary-stub | 备注（失败类型 / 根因族） |
 |---|---|---|---|---|
-| （待填） | | | | |
+| TestAesGcmRound | 940 |  |  | run error |
+| TestArraysDeepOps | 82 |  |  | run error |
+| TestStreamTerminalEdges | 101 |  |  | compile error |
+| TestFileCanonicalPaths | 1000 |  |  | run error |
+| TestFilesStreamChannels | 899 |  |  | run error |
+| TestJarDataStreams | 953 |  |  | run error |
+| TestJarEntryEnumeration | 848 |  |  | run error |
+| TestJarFileEntries | 829 |  |  | run error |
+| TestRandomAccessFileChannel | 965 |  |  | run error |
+| TestSimpleDateFormatRound | 840 |  |  | run error |
+| TestComparatorNullsFirst | 1035 |  |  | compile error |
+| TestNamedUuid | 1038 |  |  | run error |
+| TestResourceBundleFaces | 1619 |  |  | compile error / R4 |
+| TestStringGetCharsLegacy | 895 |  |  | run error |
+| TestSystemStableProps | 1059 |  |  | output mismatch |
+| TestCharsetEncoderFaces | 1039 |  |  | run error |
+| TestCoderResultFaces | 70 |  |  | run error |
+| TestPropertiesXmlRoundTrip | 905 |  |  | run error |
+| TestUriRawParts | 1029 |  |  | run error |
+| TestUrlParsingFaces | 904 |  |  | run error |
+| TestAnnoDeepAccess | 1038 |  |  | run error |
+| TestClassCastSubclass | 79 |  |  | output mismatch |
+| TestClassLoaderIdentity | 1088 |  |  | run error |
+| TestClassModuleFace | 80 |  |  | output mismatch |
+| TestClassNestingFamily | 1062 |  |  | run error |
+| TestClassResourceStream | 1015 |  |  | run error |
+| TestGenericSuperclassReflect | 49 |  |  | run error / R2 |
+| TestGenericTypeVariablesBounds | 97 |  |  | run error / R2 |
+| TestGenericTypesDeep | 97 |  |  | compile error / R2 |
+| TestInterfaceMethodReflect | 1130 |  |  | run error |
+| TestInvokeNullArgs | 1121 |  |  | output mismatch |
+| TestMemberModifiers | 1078 |  |  | run error |
+| TestOwnerTypeFaces | 49 |  |  | run error |
+| TestProtectionDomainFaces | 1147 |  |  | run error |
+| TestReflectArrayDeep | 75 |  |  | run error |
+| TestReflectOverloadResolution | 1113 |  |  | run error |
+| TestSetAccessibleBoundary | 1130 |  |  | output mismatch |
+| TestCharsetAvailable | 976 |  |  | run error / R9 |
+| TestCharsetCjkFamily | 1081 |  |  | run error / R9 |
+| TestCharsetGbk | 1040 |  |  | run error / R9 |
+| TestLocaleCurrency | 889 |  |  | output mismatch |
+| TestLocaleDateCjk | 903 |  |  | run error |
+| TestLogHandlerFormat | 1617 |  |  | compile error / R4 |
+| TestLogLevelFilter | 1595 |  |  | compile error / R4 |
+| TestLoggerHierarchy | 1629 |  |  | compile error / R4 |
+| TestRowSetProvider | 962 |  |  | run error |
+| TestZipFsReadWrite | 828 |  |  | run error / R9 |
+| TestZipFsWalk | 815 |  |  | run error / R9 |
+| TestEcKeyAgreement | 813 |  |  | run error / R3 |
+| TestEcSignVerify | 842 |  |  | run error / R3 |
+| TestMacHmacDigest | 837 |  |  | run error / R3 |
+| TestRsaSignVerify | 936 |  |  | run error / R3 |
+| TestDomBuildTree | 1002 |  |  | run error / R1 |
+| TestDomResultNode | 944 |  |  | run error / R1 |
+| TestSaxLocatorAttributes | 998 |  |  | run error / R1 |
+| TestSaxNamespaceCallbacks | 998 |  |  | run error / R1 |
+| TestXmlDomParse | 998 |  |  | run error / R1 |
+| TestXmlFactoryConfigs | 1006 |  |  | run error / R1 |
+| TestXmlSaxEvents | 965 |  |  | run error / R1 |
+| TestXmlStax | 1007 |  |  | run error / R1 |
+| TestXmlTransform | 818 |  |  | run error / R1 |
+| TestXmlXPath | 996 |  |  | run error / R1 |
+| TestHttpLoopbackAsync | ? |  |  | transpile error |
+| TestHttpLoopbackSync | 504 |  |  | run error |
+| TestSocketLoopbackPair | 1075 |  |  | run error |
+| TestJndiNoProvider | 1078 |  |  | compile error |
+| TestBeansIndexedProps | 1088 |  |  | run error / R8 |
+| TestBeansIntrospector | 1026 |  |  | run error / R8 |
+| TestBeansPropertyEditor | 71 |  |  | run error / R8 |
 
 ---
 
