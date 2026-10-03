@@ -6,6 +6,7 @@
 //! - [`Stack`]：独立栈（slab 预留多栈、按需提交、热 / 冷槽复用与 madvise 回收；映射数与存活栈数脱钩）；
 //! - [`Context`]：一个执行流被挂起时的上下文（保存的栈指针 + 栈界：软件栈界与硬件 guard 区间）；
 //! - [`switch`]：保存当前上下文、恢复另一个，并传递一个字；
+//! - [`catch_entry`]：入口函数体的 unwind 屏障（panic 载荷带回载体栈再继续传播）；
 //! - [`stack_exhausted`] / [`YellowZone`] / [`init_platform_thread`]：软件栈界检查（Java `StackOverflowError`）；
 //! - [`pins::Pins`]：执行流的 pin 计数与判定（`doYield` / `isPinned0` 的依据）。
 //!
@@ -27,7 +28,7 @@ pub use limit::{init_platform_thread, limit_for, stack_exhausted, stack_limit, Y
 pub use stack::{Stack, StackError};
 
 /// 入口函数：`arg` 为首次切入时 [`switch`] 传入的字，`data` 为 [`Context::new`] 给定的数据指针。
-/// 不得返回；也不得以 unwind 离开（`extern "C"` 边界上的 panic 会 abort）。
+/// 不得返回；也不得以 unwind 离开（`extern "C"` 边界上的 panic 会 abort）——函数体经 [`catch_entry`] 包住。
 pub type Entry = unsafe extern "C" fn(arg: usize, data: *mut u8) -> !;
 
 /// 一个挂起的执行流（`repr(C)`：首字段为保存的栈指针，汇编按此布局存取）
@@ -91,6 +92,19 @@ pub unsafe fn switch(save: *mut Context, load: *mut Context, arg: usize) -> usiz
     (*save).bounds = guard::current();
     guard::enter((*load).bounds);
     arch::raw_switch(&raw mut (*save).sp, target, arg)
+}
+
+/// 协程入口体内逃逸的 panic 载荷（unwind 形态下由 [`catch_entry`] 捕获）
+pub type PanicPayload = Box<dyn std::any::Any + Send + 'static>;
+
+/// 入口函数体的 unwind 屏障：在协程栈上执行 `body`，panic 以 unwind 离开时就地捕获并返回载荷。
+///
+/// unwind 绝不能穿过入口蹦床（汇编帧，无 unwind 表可走，且其上是另一执行流的栈）：入口函数以本函数
+/// 包住全部 Rust 代码，把载荷存入自己的记录、按正常完毕切回载体，由载体在自己的栈上
+/// `std::panic::resume_unwind` 继续传播。`panic = "abort"` 构建下 panic 在发生处终止进程（经 panic 钩子），
+/// 本函数退化为直接调用。
+pub fn catch_entry<R>(body: impl FnOnce() -> R) -> Result<R, PanicPayload> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(body))
 }
 
 /// 裸切换（不维护栈界与挂起标记），仅供寄存器保存检查等测试直接调用汇编

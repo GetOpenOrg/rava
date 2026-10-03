@@ -1581,6 +1581,88 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   `#[thread_local]` 只允许出现在 `exec_context.rs`（平台块与当前块指针）与 `java/lang/thread_impl.rs`（3 个载体槽）。
 - TestVirtualThread 生成 + 编译通过（2924 JDK 类，与 T2 同；方案 A 尚在，本步不改闭包）。
 
+**T4 删方案 A、虚拟线程接通 Continuation（2026-10-03）**
+- `virtual_thread_impl.rs` 只余 6 个 `#[jvm_native]`（registerNatives + 5 个 notifyJvmti*），10 个 `#[jvm_boundary]` 承载方法删除；
+  `VirtualThread` 移出 `[vm_boundary].classes` 与 `clinit_carried`，三份清单中 `VirtualThread` 0 次。`VirtualThread` 全部方法、
+  `<clinit>` 的 `DEFAULT_SCHEDULER`（`ForkJoinPool` + `CarrierThread` 工厂）与 `UNPARKER`（`ScheduledThreadPoolExecutor`）按字节码翻译；
+  `ContinuationSupport.isSupported0` 为 true，`ThreadBuilders.newVirtualThread` 走 `VirtualThread`。生成器未改动。
+- 类数：HelloWorld 467 → 465（`VirtualThread` 只以布局入闭包——`Thread.yield` 的 instanceof；`<clinit>` 不在闭包内，静态字段
+  读写为 `stub:` 存根）；TestVirtualThread 2924 → 2946（+22：调度器 / 载体线程 / 延时调度器 / Continuation 链）。
+  TestVirtualThread 审计 `vm_boundary_methods` 94 → 84。以上为 8c79c524 基线上的对照；并入 74a8977e（JCA 注册补全等）后
+  HelloWorld 464、TestVirtualThread 3123、TestContinuationPinned 3118、TestVirtualThreadCarrier 3119，`non_native_overrides` 0。
+- **调用点推断核对**（`rava closure TestVirtualThread --why`）：`Continuation.enter:(Ljdk/internal/vm/Continuation;Z)V` 与
+  `StackChunk.<init>:()V` 的入闭包链首边均为 `[handwritten] Continuation.enterSpecial`（手写体调用点推断），其上
+  `Continuation.run@122` ← `VirtualThread.runContinuation@72` ← ForkJoinTask 分派；`VirtualThread.<clinit>` 经
+  `ThreadBuilders.newVirtualThread@6` 的 new 入闭包。
+- **`tail` 不被常量折叠**：字节码中 `tail` 的写只有 `postYieldCleanup` 置 null，非 null 值只来自手写体 `enterSpecial` 的
+  `__set_tail(StackChunk::new()?)`。生成的 `Continuation.isStarted` 为 `Ok(!this.__get_tail().is_jvm_null())`（读字段，未折为常量），
+  `run` 的 `isStarted()` 两个分支（`enterSpecial(this, false / true, ..)`）都保留；`isEmpty` 只在断言里用到，`$assertionsDisabled`
+  折叠后为存根，符合预期。
+- 边界 e2e（`60_real_threads`，expected 取 refjdk 21 两次一致的运行）：
+  - **TestContinuationPinned**：`synchronized` 内 sleep（载体不变）、park（`getState` = WAITING，unpark 后在原载体恢复）、
+    限时 sleep 被中断（TIMED_WAITING → InterruptedException、中断状态清除——走 `carrier.setInterrupt` 与载体侧清中断）、
+    parkNanos 超时；两个虚拟线程同时触发 `<clinit>`，其中 sleep（载体不变、后到者等初始化完成，值 42,42）；之后未被 pin 的
+    虚拟线程照常运行。
+  - **TestVirtualThreadCarrier**：16 个虚拟线程各 50 次 yield / parkNanos / sleep 交替，每次恢复后核对 `currentThread()` 身份、
+    `ThreadLocal` / `InheritableThreadLocal`、`isVirtual()`、名字；中断状态跨 yield 保持、park 遇中断立即返回、sleep 抛出并清除；
+    `join(Duration)` 对 park 中线程超时返回 false、unpark 后 true；虚拟父线程的 ITL 传给虚拟子线程；1 万个虚拟线程各让出一次全部完成。
+    输出与载体编号无关。
+  - 本机只做诊断性运行（非验收）：两例与 TestVirtualThread 输出均与 expected 一致。
+
+**T5 panic 跨栈传播与栈溢出（2026-10-03）**
+
+- `rava_coro::catch_entry`（`catch_unwind` + `AssertUnwindSafe`）与 `PanicPayload`：协程入口函数体的统一包装。
+  `continuation_impl.rs` 的 `coroutine_entry` 用它包住 `Continuation.enter(c, false)`：`Err(JvmError)` 照旧存 `thrown`，
+  逃逸的 panic 载荷存入该 Continuation 的协程记录 `panicked`（与 `thrown` 同处，随记录切回载体）。`enterSpecial` 在
+  完成时摘除记录、栈归池之后 `resume_unwind`，unwind 只在载体栈上继续，不穿过蹦床汇编帧。生成工作区为 `panic = "abort"`
+  时钩子在协程栈上直接 `exit(101)`，`catch_entry` 不起作用、零成本。
+- 新 `rava_coro/tests/panic.rs`（子进程即本测试二进制以 `--ignored --exact child_*` 重入，串行）：
+  - 钩子与 `create_java_vm` 同形（默认钩子 + `exit(101)`），在同名线程上分别平台线程 panic、协程内 panic：退出码均 101，
+    stderr 归一（去行列、OS 线程号）后同为 `thread 'vm-worker' panicked at tests/panic.rs` + 消息行；
+  - `RUST_BACKTRACE=1` 下协程内 panic 的回溯含协程内帧、止于 `rava_coro::arch::aarch64::trampoline`，不含载体侧挂载帧；
+  - unwind 构建（crate 单测即 unwind）：协程内 panic 经 `catch_entry` 捕获、切回载体 `resume_unwind`，被载体的
+    `catch_unwind` 捕获 1/1，载荷消息不变。
+- 栈溢出：sigaltstack 处理器与 `guard_page_overflow_aborts`（子进程 SIGABRT、stderr 含 `has overflowed its stack`）
+  已在 T1 落地，本步复跑通过（本机 macOS 硬件 guard 启用；Linux < 6.13 无 `MADV_GUARD_INSTALL` 时跳过，由软件栈界拦截）。
+
+**T4 回归修复：小闭包 `Thread__VTable::run` E0782（2026-10-04）**
+
+- 现象：抽查 a3t-1e6933ee 中 HelloWorld、TestSleepParkClock、TestThreadStates、TestThreadInterrupt、TestVirtualClockPark
+  编译失败，`error[E0782]: expected a type, found a trait`，位置 `thread_impl.rs` 的 `run_java_thread`。与平台无关，
+  本机 HelloWorld emit + compile 即复现（T4 自验只覆盖了三个大闭包）。
+- 根因：`run_java_thread` 以 vtable trait 完全限定路径 `Thread__VTable::run(&*t.vtable)` 调 `run()`。方案 A 时期手写
+  VirtualThread 调 `spawn_java_thread`，任何闭包都经它推断出这条虚调用、保留 run 的槽位；T4 删方案 A 后，未启动
+  线程的程序档案里没有 `start0`，也没有 run 的覆盖者，run 槽位被裁剪（`rava_moved = "plain"`），trait 上无此方法，
+  而手写自由 fn 总是参与编译。
+- 修复（手写侧，不动生成器）：改为方法调用形态 `t.run()`。槽位保留时，固有方法是 wrapper，按 vtable 分派；槽位裁剪时，
+  档案内无覆盖者，plain 体就是正确目标。闭包推断照常沿该调用点。运行时中已无其他 `X__VTable::m(...)` 完全限定调用。
+- 核对：
+  - HelloWorld 编译通过，运行输出正确；
+  - TestThreadStates、TestThreadOverridesSpec、TestThreadJoin（`extends Thread` 覆盖 run，槽位为 wrapper）输出与
+    expected 一致；
+  - `cargo check --target x86_64-unknown-linux-gnu`（hello_world 工作区全体、rava_coro 含测试）通过；
+  - generator cargo test 0 失败。
+- 教训：手写自由 fn 不随档案裁剪，只能引用任何档案下都存在的符号。虚调用一律写成方法调用形态，不写 vtable trait
+  完全限定路径。自验须含小闭包（HelloWorld）。
+
+**a3-T 现状与交接（2026-10-04，原执行者收尾，T6 由新代理接手）**
+
+- 分支 a3t-vthread：
+  - T1、T1b、T1b-2、T2、T3 已合入集成分支；
+  - T4（1e6933ee）、T5（278c7319）与本修复待一次抽查后合入。
+  - 抽查名单：TestVirtualThread、TestContinuationPinned、TestVirtualThreadCarrier、TestVirtualClockPark、TestThreadStates、
+    TestThreadInterrupt、TestSleepParkClock、TestCommonPool、TestSynchronized、TestThreadUncaught、DeepCopy、HelloWorld。
+- T6 未开始提交，草稿留在 worktree（未跟踪）：
+  - `tests/e2e/60_real_threads/TestVirtualThreadScale.java`：10⁵ 个虚拟线程各 `sleep(2000)`；起跑时若已有线程完成则计
+    lateStarts；输出 finished / sum / all sleeping at once / alive after join。
+  - `tests/expected/TestVirtualThreadScale.txt`：refjdk 两次一致（4 行：`finished: 100000`、`sum: 4999950000`、
+    `all sleeping at once: true`、`alive after join: 0`）；refjdk 墙钟 2.5 s、RSS 196 MB。
+  - 本机诊断（debug 构建，非验收）：输出正确但 `all sleeping at once: false`，墙钟 14.6 s，峰值 RSS 2.66 GB，均超 T6
+    指标（≤10 s、≤2 GiB）。起跑 10⁵ 个虚拟线程超过 2 s，每线程内存约 26 KB。
+  - 接手先做剖析：每线程开销的分布（协程栈已提交页、Continuation / VirtualThread / StackChunk 对象、调度队列）与
+    start 路径耗时，再按 §21.8.4 的 T6 行验收。百万作业放 `tests/perf/`，服务器单独跑。
+- 未完成的跟进：T1b 审计手写运行时代码中的无界递归。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
@@ -1704,6 +1786,6 @@ C1d-a 读代码后的设计备忘（供接手者参考，未实施，不是批�
 - **a2**：已合入（62f46bb2，c1d-p0 b4669206，抽查 9/9）。§20.8「再往下的目标在 a2 实测之后定」不再是待办；
   a2 续项（initPhase2 膨胀定位 → `[[boot_init.phases]]` → boot layer 步骤 2–5）见 tasks.md。
 - **a3**：总体进行中，验收仍是审计数 `vm_boundary_methods` 归零（§21.7）。a3-T 由 a3t-vthread 推进：T1（rava_coro）、
-  T1b、T1b-2、T2、T3 已合入，T4（删方案 A + 接通 Continuation）进行中；其余子项状态以 tasks.md 为准。
+  T1b、T1b-2、T2、T3 已合入，T4（删方案 A + 接通 Continuation）、T5（panic 跨栈）与小闭包 E0782 修复待抽查合入，T6 转新代理（交接见 §21.8.5 末「a3-T 现状与交接」）；其余子项状态以 tasks.md 为准。
 - **a5**：a5-1～a5-3（OOB 关系推理）未开工。a5-4 已做：s1 构造器查找、s2 instanceof 否定分支、JCA 请求点值流（51a4d8c5）。
   a5-4b 即本节的 jar/URL 来源精度，转新代理；a5-4e 即 ③。

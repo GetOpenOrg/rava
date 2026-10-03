@@ -34,6 +34,8 @@ struct Coroutine {
     finished: bool,
     /// `Continuation.enter` 抛出的异常：切回载体后由 `enterSpecial` 继续抛出（HotSpot 中异常穿过 enterSpecial 帧）
     thrown: Option<JvmError>,
+    /// unwind 形态下入口体逃逸的 panic：切回载体后由 `enterSpecial` 在载体栈上继续 unwind（不穿过蹦床）
+    panicked: Option<rava_coro::PanicPayload>,
     stack: Option<Stack>,
 }
 
@@ -60,14 +62,13 @@ const STACK_EXHAUSTED: &str =
     "unable to create native thread: possibly out of memory or process/resource limits reached";
 
 /// 协程入口：执行 `Continuation.enter(c, false)`（字节码翻译体：`enter0` → `target.run()`，`finally` 置 `done`），
-/// 记下结果后切回载体，不再被切入
+/// 记下结果后切回载体，不再被切入。函数体经 `catch_entry` 包住：unwind 不得穿过蹦床（§21.8.3 panic 跨栈传播）
 unsafe extern "C" fn coroutine_entry(_arg: usize, data: *mut u8) -> ! {
     let co = data as *mut Coroutine;
-    {
-        let c = Clone::clone(&(*co).cont);
-        if let Err(e) = Continuation::enter(c, false) {
-            (*co).thrown = Some(e);
-        }
+    match rava_coro::catch_entry(|| Continuation::enter(Clone::clone(&(*co).cont), false)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => (*co).thrown = Some(e),
+        Err(payload) => (*co).panicked = Some(payload),
     }
     (*co).finished = true;
     let mut dead = Context::empty();
@@ -94,7 +95,8 @@ impl Continuation {
 
     /// native `enterSpecial(c, isContinue, isVirtualThread)`：`isContinue = false` 时取一块栈、以
     /// `Continuation.enter(c, false)` 为入口切入；`true` 时切回 `c` 上次 `doYield` 保存的上下文。
-    /// `c` 让出或执行完毕时返回；执行完毕时记录摘除、栈归池，`enter` 抛出的异常在此继续抛出。
+    /// `c` 让出或执行完毕时返回；执行完毕时记录摘除、栈归池，`enter` 抛出的异常在此继续抛出，入口体逃逸的
+    /// panic（unwind 形态）在此于载体栈上继续 unwind。
     /// `isVirtualThread` 只供 HotSpot 的 JVMTI 通知，这里不用。
     #[jvm_native(unpinned)]
     pub fn enterSpecial(c: Continuation, isContinue: bool, isVirtualThread: bool) -> Result<()> {
@@ -116,6 +118,7 @@ impl Continuation {
                 carrier: Context::empty(),
                 finished: false,
                 thrown: None,
+                panicked: None,
                 stack: None,
             });
             let raw: *mut Coroutine = &mut *boxed;
@@ -141,7 +144,11 @@ impl Continuation {
             panic!("rava: 执行完毕的 Continuation 不在侧表中");
         };
         let thrown = record.thrown.take();
+        let panicked = record.panicked.take();
         drop(record);
+        if let Some(payload) = panicked {
+            std::panic::resume_unwind(payload);
+        }
         match thrown {
             Some(e) => Err(e),
             None => Ok(()),
