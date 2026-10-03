@@ -43,6 +43,15 @@ pub struct Code {
     pub exception_table: Vec<ExceptionEntry>,
 }
 
+impl Code {
+    /// 叶子方法：方法体内没有任何调用指令（invokevirtual / invokespecial / invokestatic /
+    /// invokeinterface / invokedynamic）。叶子方法的帧之下不再有 Java 帧，栈界检查可省（a3-T1b-2）。
+    pub fn is_leaf(&self) -> bool {
+        use crate::insn::op::{INVOKEDYNAMIC, INVOKEVIRTUAL};
+        !self.insns.iter().any(|i| (INVOKEVIRTUAL..=INVOKEDYNAMIC).contains(&i.opcode))
+    }
+}
+
 /// 注解元素值（JVMS §4.7.16.1）
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElementValue {

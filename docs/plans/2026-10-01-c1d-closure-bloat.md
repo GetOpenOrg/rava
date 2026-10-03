@@ -1515,6 +1515,33 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
   printf 为主）user 0.12 → 0.14 s。开销来自每个方法入口一次不内联的线程局部读 + 比较（检查本身 1.28 ns，`check_cost`）。
 - 残余：运行时手写代码无界递归审计（§21.8.2 残余风险）尚未做，列入 T1b 后续。
 
+**T1b-2 叶子方法省略入口栈检查（2026-10-03）**
+- 判定在生成器、只看字节码：`Code::is_leaf`（无 invokevirtual / invokespecial / invokestatic / invokeinterface /
+  invokedynamic）且字节码 ≤512 字节（`LEAF_MAX_CODE_LEN`：省掉检查后叶子帧落在检查点之间的 `SHADOW` 余量内，限长保证
+  该帧远小于 64 KiB）；手写体不计。生成器在 `#[java_method(..)]` 上标 `leaf = "true"`，宏 `entry_checks` 见标注只留
+  空接收者检查。无类名字面量。
+- **入口须唯一对应本体**（`leaf_entry`）：只对 static / private / 构造器 / `<clinit>` / final 方法、或承载类为 final 的方法
+  省略。可覆盖的虚方法即使本体是叶子也保留检查——其 wrapper 入口分派到子类非叶子覆盖体时，「基类叶子声明 + 子类递归
+  覆盖」构成的递归环上将没有任何检查点（`self.next()` 经基类 wrapper → vtable → 子类体 → 基类 wrapper …），无界递归直接
+  撞 guard / 越界。开放世界下不以「当前无覆盖」为据省略。接口载体分派的检查不变。
+- 单测：`rava_macros_core` `class_init::tests` 3 项（非叶子有检查、叶子只留空接收者检查、非 Result 无检查）；
+  生成器 `attrs::tests::leaf_body_from_bytecode`（5 种调用指令、长度上限）、`leaf_entry_requires_exact_target`（可覆盖虚方法
+  不省、final 类 / final / private / static 省、无体不省）。
+- 边界 e2e **TestLeafStackOverflow**（`49_exceptions_deep`）：static 叶子、private 叶子、final 类叶子 getter、基类叶子被子类递归
+  覆盖（经基类引用）、接口 default 叶子被实现类递归覆盖（经接口引用）五种递归各两轮，均抛可捕获的 `StackOverflowError`
+  且深度 >500，之后叶子方法正常调用；expected 取 refjdk 21。生成树中用户类标 `leaf` 的恰为 inc / bump / Box.get / Box.set，
+  `Node.next` 与 `Step.step` 未标。该例 JDK + 用户入口中标 `leaf` 的约 1620 个（占 `java_method` 标注约 9%）。
+- 调用基准（release，本机 aarch64，各 3 轮）：
+
+  | 配置 | fib(32) | 5×10⁷ 实例调用 |
+  |---|---|---|
+  | 检查全关（`__stack_check` 恒 Ok） | 9–10 ms | 101–104 ms |
+  | 检查全开（T1b） | 17–20 ms | 114–123 ms |
+  | T1b-2（`add` 为非 final 虚方法，保留检查） | 16–18 ms | 114 ms |
+  | T1b-2，`add` 改 `final`（`CallBenchFinal`） | 17–19 ms | 101–104 ms |
+
+  fib 递归体本身不是叶子，开销不变；叶子入口的开销归零（循环回到检查全关水平）。
+
 **T2 Continuation native 与 pin 计数（2026-10-03）**
 - 判定逻辑与运行时解耦：`rava_coro/src/pins.rs` 的 `Pins`（三类计数 + 外层链 + 作用域身份；`yield_reason` 同 HotSpot
   `freeze_internal` 次序，`scope_reason` 同 `is_pinned0` 逐层规则；MONITOR 取载体上整条执行流链之和，对应

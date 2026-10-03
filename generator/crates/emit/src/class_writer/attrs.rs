@@ -186,6 +186,26 @@ pub struct MethodAttrExtra {
     /// 复制进本类的方法体的声明类型 binary（接口 default 体 / 未覆盖的用户超类虚方法体；空 = 本类
     /// 声明）：类文件里该方法不属于本类，反射声明表与栈帧归属都以声明类型为准
     pub declared_by: String,
+    /// 入口可省栈界检查（[`leaf_entry`]）
+    pub leaf: bool,
+}
+
+/// 叶子方法字节码长度上限：省掉入口栈界检查后，叶子帧落在检查点之间的 `SHADOW` 余量里，
+/// 限长保证该帧远小于余量（手写方法体不计叶子：手写代码的调用不可见）。
+const LEAF_MAX_CODE_LEN: u32 = 512;
+
+/// 字节码可判定的叶子方法体（无调用指令且足够短）
+fn is_leaf_body(code: &classfile::Code) -> bool {
+    code.code_len <= LEAF_MAX_CODE_LEN && code.is_leaf()
+}
+
+/// 方法入口可省栈界检查（a3-T1b-2，计划 §21.8.2）：经该入口执行的恰是本方法体且它是叶子。
+/// 可覆盖的虚方法不计——其 wrapper 入口可能分派到子类的非叶子覆盖体，省掉检查会让
+/// 「经叶子声明的虚调用」构成的递归环上没有检查点；入口唯一对应本体的只有 static / private /
+/// 构造器 / 类初始化 / final 方法，以及承载类为 final 的方法。
+pub fn leaf_entry(m: &Method, host_final: bool) -> bool {
+    let exact = m.is_static() || m.is_private() || m.is_init() || m.is_clinit() || m.is_final() || host_final;
+    exact && m.code.as_ref().is_some_and(is_leaf_body)
 }
 
 /// 方法元数据标注行（`#[java_method(...)]` / native 为 `#[native]\n#[java_native(...)]`）；
@@ -235,6 +255,9 @@ pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtr
     if extra.handwritten_body {
         parts.push("body = \"handwritten\"".into());
     }
+    if extra.leaf && !extra.handwritten_body {
+        parts.push("leaf = \"true\"".into());
+    }
     if !extra.declared_by.is_empty() {
         parts.push(format!("declared_by = \"{}\"", esc(&extra.declared_by)));
     }
@@ -268,6 +291,59 @@ pub fn method_attr(m: &Method, mx: Option<&MethodExtras>, extra: &MethodAttrExtr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn code(ops: &[u8], code_len: u32) -> classfile::Code {
+        let insns = ops
+            .iter()
+            .enumerate()
+            .map(|(i, &opcode)| classfile::Insn { offset: i as u32, opcode, operand: classfile::Operand::None })
+            .collect();
+        classfile::Code { max_stack: 2, max_locals: 2, code_len, insns, exception_table: vec![] }
+    }
+
+    #[test]
+    fn leaf_body_from_bytecode() {
+        use classfile::op;
+        // getfield + ireturn：叶子
+        assert!(is_leaf_body(&code(&[0x2a, op::GETFIELD, 0xac], 5)));
+        // 任一调用指令（含 invokedynamic）都不是叶子
+        for inv in [op::INVOKEVIRTUAL, op::INVOKESPECIAL, op::INVOKESTATIC, op::INVOKEINTERFACE, op::INVOKEDYNAMIC] {
+            assert!(!is_leaf_body(&code(&[0x2a, inv, 0xac], 5)), "opcode {inv:#x}");
+        }
+        // 超长的无调用方法体不计叶子（帧须落在 SHADOW 余量内）
+        assert!(!is_leaf_body(&code(&[0xac], LEAF_MAX_CODE_LEN + 1)));
+        assert!(is_leaf_body(&code(&[0xac], LEAF_MAX_CODE_LEN)));
+    }
+
+    #[test]
+    fn leaf_entry_requires_exact_target() {
+        use classfile::acc;
+        let m = |access: u16, name: &str, ops: &[u8]| Method {
+            access,
+            name: name.into(),
+            desc: "()I".into(),
+            signature: None,
+            code: Some(code(ops, 4)),
+            exceptions: vec![],
+            annotations: vec![],
+            annotation_default: None,
+            parameters: vec![],
+            synthetic_attr: false,
+        };
+        let leaf_ops = [0x2a, classfile::op::GETFIELD, 0xac];
+        // 可覆盖的虚方法：即使本体是叶子，入口也可能分派到非叶子覆盖体
+        assert!(!leaf_entry(&m(acc::PUBLIC, "get", &leaf_ops), false));
+        // 入口唯一对应本体
+        assert!(leaf_entry(&m(acc::PUBLIC, "get", &leaf_ops), true));
+        assert!(leaf_entry(&m(acc::PUBLIC | acc::FINAL, "get", &leaf_ops), false));
+        assert!(leaf_entry(&m(acc::PRIVATE, "get", &leaf_ops), false));
+        assert!(leaf_entry(&m(acc::STATIC, "get", &leaf_ops), false));
+        // 非叶子体 / 无体
+        assert!(!leaf_entry(&m(acc::STATIC, "get", &[classfile::op::INVOKESTATIC, 0xac]), false));
+        let mut abs = m(acc::PUBLIC | acc::FINAL, "get", &leaf_ops);
+        abs.code = None;
+        assert!(!leaf_entry(&abs, false));
+    }
 
     #[test]
     fn modifiers_and_access() {

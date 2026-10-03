@@ -15,7 +15,7 @@ use ty::ident::safe_ident;
 use ty::type_map::mangle_name;
 use ty::{ClassInfo, FnSig};
 
-use super::attrs::{method_attr, MethodAttrExtra};
+use super::attrs::{leaf_entry, method_attr, MethodAttrExtra};
 use super::slot::override_vtable_erasure;
 use super::stub::{native_stub, Stub};
 use crate::body::{BodyError, BodyRequest, MethodBodyEmitter};
@@ -82,7 +82,9 @@ pub(super) struct Cx<'a, 'c> {
 impl Cx<'_, '_> {
     pub fn attr(&self, e: &Emitted<'_>, extra: &MethodAttrExtra) -> String {
         let ex = self.ctx.extras(e.owner.name());
-        method_attr(&e.method, ex.methods.get(e.index), extra, &self.ctx.ty)
+        let host_final = self.ci.class_file().access & classfile::acc::FINAL != 0;
+        let extra = MethodAttrExtra { leaf: leaf_entry(&e.method, host_final), ..extra.clone() };
+        method_attr(&e.method, ex.methods.get(e.index), &extra, &self.ctx.ty)
     }
 
     /// 方法段：`{attr}\n{text}`，附定义侧声明记录
