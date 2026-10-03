@@ -2,6 +2,7 @@
 
 > rava **不设项目自有环境变量**（2026-09-28 清理：原 `RAVA_*` 共 14 个全部改为命令行参数、生成文件或标准变量）。
 > 新增开关一律做成命令行参数；需要传给 cargo 构建的内部数据写入 scratch 的生成文件，由 `build.rs` 读取。
+> 唯一的项目变量 `RAVA_REFJDK_ROOT` 属于语料编排层（脚本读取，rava 二进制不读），见第三节。
 
 ## 一、命令行选项
 
@@ -59,7 +60,9 @@ $RAVA jdk --json                                                       # 选中�
 
 | 选项 | 用途 |
 |---|---|
-| `--jdk N` | 同上 |
+| （缺省） | 语料 JDK = **参考构建**（`tools/refjdk.toml`，当前 Temurin `jdk-21.0.11+10`），经 `scripts/fetch_reference_jdk.sh --check` 定位、以 `rava jdk --java-home` 注入；javac / java / jmods / golden JVM（`--update-expected`）/ 动态对照全部同源。未就位即报错并提示取包命令，**不回退**系统 JDK；环境 `JAVA_HOME` 不参与选择 |
+| `--jdk N` / `--java-home P` | 实验覆盖（互斥）：改用本机 JDK N / 指定 JDK home。`[jdk]` 与 `[meta]` 行标记「非参考构建」，结果不与 expected 同源 |
+| `--show-jdk` | 只解析并打印本次语料 JDK 后退出（干跑，不跑测试） |
 | `--build-timeout SEC` | 单测试 cargo 构建超时，透传 `rava compile`（缺省由 rava 按重型判定：3000 / 600 秒） |
 | `--debug` / `--strict` | 透传给每个测试的 `rava build` |
 | `--deny SPEC` | 审计计数非零升级为整体失败（`equiv` / `fallback` / `stub-hit` 等，见 `--help`） |
@@ -75,7 +78,26 @@ scratch 的 `build_status.json`（超时 / 信号 / 首错行 / 日志路径）�
 每测试一次 java 运行（实测约 0.1 秒，相对 5–70 秒的转译可忽略），故缺省开启。agent 首次使用时以 `$CC`（缺省 `cc`）
 编译，按源码 + JDK 缓存于 `build/dyn_agent/`。单独运行：`python3 scripts/dyn_compare.py build/jdk21/<test> [-o out.json]`。
 
-启动时的 `[meta]` 行打印 `CARGO_INCREMENTAL`、`CARGO_BUILD_JOBS` 与透传选项，便于事后解读结果。
+启动时的 `[meta]` 行打印语料 JDK（`jdk=<tag>(参考构建)` 或 `jdk=<home>(非参考构建)`）、`CARGO_INCREMENTAL`、
+`CARGO_BUILD_JOBS` 与透传选项，便于事后解读结果。
+
+### `scripts/fetch_reference_jdk.sh`（语料参考 JDK 取包，方案 `docs/plans/2026-10-03-reference-jdk-21.md`）
+
+```bash
+scripts/fetch_reference_jdk.sh            # 确保当前平台的参考 JDK 就位（下载 + sha256 校验 + 解压，幂等），stdout 打印 JAVA_HOME
+scripts/fetch_reference_jdk.sh --check    # 只检查：就位打印 JAVA_HOME，否则退出码 1 并提示取包命令
+scripts/fetch_reference_jdk.sh --tag      # 清单 tag
+```
+
+| 选项 | 用途 |
+|---|---|
+| `--root DIR` | JDK 根目录（优先于 `RAVA_REFJDK_ROOT`；缺省主检出的 `tools/refjdk/`，git worktree 共用一份） |
+| `--platform P` | 清单平台段（`linux-x64` / `linux-aarch64` / `macos-aarch64` / `macos-x64`；缺省按 `uname` 判定） |
+
+落位 `<根>/<tag>/` 即 JAVA_HOME（macOS 包的 `Contents/Home` 提升为该目录），`.rava-refjdk` 记录 tag / 平台 / sha256，
+与清单不符即视为未就位。同一根目录多进程并发取包以 `<根>/.lock-<tag>` 互斥。语料 shell 脚本（`gen_trees.sh`、
+`seed_check.sh`、`profile_closure.sh`、`lib_pilot_golden.sh`、`closure_bench.sh`、`emit_bench.sh`）经
+`scripts/corpus_jdk.sh` 取同一参考构建，环境变量 `JDK=N` 为实验覆盖（标记非参考构建）。
 
 ### `rava closure`（闭包分析器，`generator/crates/driver/src/closure_cmd.rs`）
 
@@ -161,7 +183,9 @@ RUST_BACKTRACE=1 build/analyzer-target/release/rava build Foo.java
 | 变量 | 读取 / 设置方 | 说明 |
 |---|---|---|
 | `CC` | `dyn_compare.py` | 编译动态对照 JVMTI agent 的 C 编译器（缺省 `cc`；需要能找到 `$JAVA_HOME/include` 下的 jvmti.h） |
-| `JAVA_HOME` | rava（`resolve::jdk`）、各脚本 | JDK 位置。`run_tests.py` / shell 脚本经 `rava jdk` 选中后写回，javac / java / jmods 均经它取得 |
+| `JAVA_HOME` | rava（`resolve::jdk`）、各脚本 | JDK 位置。rava 直接调用时按 `resolve::jdk` 优先级参与选择；语料编排（`run_tests.py` / 语料 shell 脚本）不读环境值，选中参考构建（或显式覆盖）后写回，javac / java / jmods 均经它取得 |
+| `RAVA_REFJDK_ROOT` | `fetch_reference_jdk.sh`（经它：`run_tests.py`、`corpus_jdk.sh`） | 语料参考 JDK 根目录（缺省主检出的 `tools/refjdk/`）。服务器由分发脚本设为数据目录（如 `/data/rava-jdk`），抽查 / 作业的独立检出共用一份 |
+| `JDK` | 语料 shell 脚本（`corpus_jdk.sh`） | 设为主版本 N 时改用本机 JDK N（实验，非参考构建）；未设 = 参考构建 |
 | `CARGO_BUILD_JOBS` | 用户 / rava（`driver/src/cargo.rs`） | rustc 并行作业数，显式设置时优先于重型闭包自动判定 |
 | `RUST_BACKTRACE` | 生成程序 | 见第二节 |
 | `CARGO_TARGET_DIR` | rava 自动设置 | 共享编译缓存（`--target-dir`：`run_tests.py` 传 `build/jdk<N>/target`，缺省 `build/target`），无需手动设置 |
@@ -179,7 +203,10 @@ RUST_BACKTRACE=1 build/analyzer-target/release/rava build Foo.java
 # 服务器 / 16G 机器后台跑批（rava 自动单作业 + 自动放宽超时）
 scripts/run_bg.sh j21 python3 scripts/run_tests.py --filter TestCipherDesModes
 
-# JDK 25 全量
+# 取参考 JDK（新机器 / 清单换版本后一次）
+scripts/fetch_reference_jdk.sh
+
+# 实验：JDK 25 全量（非参考构建，输出标记）
 python3 scripts/run_tests.py --jdk 25 -j 4
 
 # 严格模式回归（兜底即失败）
@@ -193,7 +220,7 @@ RUST_BACKTRACE=full build/analyzer-target/release/rava build Foo.java
 
 | 旧变量 | 现在的做法 |
 |---|---|
-| `RAVA_JDK` | `--jdk N`（或 `JAVA_HOME` / `.jdk-version`） |
+| `RAVA_JDK` | `--jdk N`（或 `JAVA_HOME` / `.jdk-version`）；语料编排缺省参考构建 |
 | `RAVA_BUILD_TIMEOUT` | `--build-timeout SEC`（rava build / compile、`run_tests.py`）；重型闭包自动 3000 秒 |
 | `RAVA_HEAVY_CLASSES` | 阈值固定 1700；需要时显式设 `CARGO_BUILD_JOBS` |
 | `RAVA_STRICT` | `--strict` |
