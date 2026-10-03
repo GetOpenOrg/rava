@@ -1,0 +1,15 @@
+backed-set=a,b
+sync-set=true1
+usm-first=k
+usm-ex=UnsupportedOperationException
+empty-iter=false
+empty-enum=false
+vector=[a, b] cap-grow=true
+trimmed-cap=2
+element-at=a
+stack-peek=p pop=p empty=true
+ht-keys=2 entries=2
+ht-null-reject=true
+props-names=2
+collected-enum=mn
+absent-keep=1 value=1

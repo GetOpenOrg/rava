@@ -1,0 +1,13 @@
+file-sep=/
+path-sep=:
+line-sep-lf=true
+tmpdir-defined=true
+spec-v=21
+os-defined=true
+user-dir-defined=true
+props-size=true
+bool-hit=true miss=false
+int-hit=42 int-default=7 int-alt=42
+sys-stream=true head=CA
+set-get=x
+cleared=true
