@@ -344,4 +344,22 @@ mod tests {
     fn non_result_has_no_checks() {
         assert!(checks(r#"fn k(&self) -> i32 { 1 }"#).is_empty());
     }
+
+    fn statics_of(src: &str) -> String {
+        let (_, statics) = syn::parse::Parser::parse_str(super::super::parse::parse_impl_fns, src).unwrap();
+        statics_table(&statics).to_string()
+    }
+
+    #[test]
+    fn statics_table_only_reflected_fields() {
+        let s = statics_of(r#"
+            #[cfg_attr(any(), java_field(name = "serialVersionUID", descriptor = "J", access = "private", modifiers = "static final", is_static = true, constant_value = "1", reflect = true))]
+            // static field: serialVersionUID:J
+            pub const serialVersionUID: i64 = 1i64;
+            #[cfg_attr(any(), java_field(name = "hidden", descriptor = "I", is_static = true))]
+            pub static hidden: i32;
+        "#);
+        assert!(s.contains("\"serialVersionUID\""), "{s}");
+        assert!(!s.contains("\"hidden\""), "{s}");
+    }
 }

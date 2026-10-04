@@ -157,6 +157,14 @@ pub(crate) fn static_field(decl: &str, name: &str, value: Option<Object>) -> Opt
     Some(unsafe { (d.op)(d, value) })
 }
 
+/// 静态字段表缺口的诊断文本（按名访问未命中时报出）：声明类未登记 / 已登记表的项名。
+pub fn describe_static(decl: &str) -> std::string::String {
+    match STATICS.with(|s| s.borrow().get(decl).copied()) {
+        None => format!("{decl} 未登记静态字段表（共 {} 类登记）", STATICS.with(|s| s.borrow().len())),
+        Some(t) => format!("{decl} 静态字段表项 [{}]", t.iter().map(|d| d.java).collect::<Vec<_>>().join(", ")),
+    }
+}
+
 /// 实例字段：接收者是类对象且声明类在其运行时类的祖先链上、并声明了该字段 → 在该字段单元上
 /// 读写；声明类不在链上 → IllegalArgumentException（JDK 字段访问器的接收者类型检查）。
 /// null / 非类对象 / 无此字段 → None。
