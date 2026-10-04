@@ -291,11 +291,9 @@ pub(crate) fn expand_interface_impl(
         };
         quote! {
             #sig {
-                let __rc = __Shared::new(::std::clone::Clone::clone(self));
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
-                    vtable: __rc.clone() as __Shared<#erased_vt>,
-                    any: __rc as __AnyRef,
-                    _jvm_null: false,
+                    __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
+                                    |__i| __i as &#erased_vt),
                     #phantom_init
                 };
                 let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
@@ -402,11 +400,9 @@ pub(crate) fn erased_wrapper_call(
 ) -> TokenStream2 {
     let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
-        let __rc = __Shared::new(::std::clone::Clone::clone(self));
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            vtable: __rc.clone() as __Shared<dyn #vtable_trait_ident>,
-            any: __rc as __AnyRef,
-            _jvm_null: false,
+            __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
+                            |__i| __i as &dyn #vtable_trait_ident),
             #phantom_init
         };
         #call

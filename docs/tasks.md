@@ -179,6 +179,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │
 │   ├─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
 │   │     （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
+│   │     ├─ ✅ GraalVM 参照基线入库：报告 docs/reports/2026-10-04-graalvm-baseline.md、scripts/graalvm_bench.sh、release 终态 ≤ native 逐例阈值
+│   │     └─ 🔄 逐例耗时起点：抽查 timing-dbg-10795076（debug）、作业 timing-rel-10795076（release）；dist 2614a2b 写 timings_jdk21.tsv
 │   │
 │   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md；64_–74_ 共 43 例已入 4939f290；原节点见历史 §G）
 │         ├─ ✅ 63_junit expected 10/10、新增用例查重、6 例 expected 复核（d4efc8d6 / ffbebc0d）
@@ -212,7 +214,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     └─ ⏳ SCC 拆分（D8）◀── S7
 │   ├─ 🔄 S7 统一对象句柄 + 每类静态描述符（D7 批准取法 B；2026-10-04-s7-object-handle-descriptor.md）
 │   │     ├─ ✅ S7-0 / S7-1 s7-desc（b0166702）：抽查 16/16，合入 8c218a72（已推送）
-│   │     ├─ 🔄 S7-2 句柄 {h, vt} 与 null（s7-wrap 已派）
+│   │     ├─ ✅ S7-2a 类 wrapper 单字段句柄（合入 cfe37f90；TSDS 声明层 7597 MB）
+│   │     ├─ ⏳ S7-2b Object 直接持对象 / 删 blanket From / 接口 wrapper（待派）
 │   │     └─ ⏳ S7-3 … S7-5 ◀── S7-2
 │   ├─ 🔄 T1 跨测试编译复用（决策 ✅ 2026-10-03 四项全采纳，2026-10-01-cross-test-compile-reuse.md）
 │   │     ├─ ✅ T1-1a 档案化分析（90398dc8）、T1-1b 按档案生成 JDK crate（10cfb657）
@@ -295,7 +298,8 @@ regress2 遗留（◀── a2）───────────────�
 | T1-V12 方案 | ✅ a2fdfbca，合入 5c995939 | 第三方依赖分层（`docs/plans/2026-10-04-third-party-dependency-layering.md`）；7 项决策待用户确认；V12-0 模块归属修正（多版本 jar module-info、JDK 包遮蔽）可先做 |
 | S7 统一对象句柄 + 每类静态描述符 | 🔄 | D7 批准取法 B；计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` |
 | S7-0/S7-1 | ✅ b0166702，合入 8c218a72 | 描述符 / 子类型判定改读描述符，抽查 16/16；已推送，分支 s7-desc 已删 |
-| S7-2 | 🔄 s7-wrap 已派 | wrapper = {h, vt}、Default 不分配、删 `__Shared<dyn X__VTable>`、null 判 `is_none()` |
+| S7-2a | ✅ 707fde3c，合入 cfe37f90 | 类 wrapper 单字段 `__r`（句柄 + 视图指针）、Default 不分配、null 判 `is_none()`；服务器 HW 声明层 1408→1359 MB、TSDS 8192→7597 MB；抽查 16/16 + 13/13 |
+| S7-2b | ⏳ 待派 | `Object` 直接持对象、删 blanket `From`、null 改 `__typed_null`、约 68 处 downcast 审计；接口 / lambda wrapper 仍持 `__Shared<dyn I__VTable>` |
 | S7-3…S7-5 | ⏳ ◀── S7-2 | 见同计划 |
 | 二进制体积 | 🔄 | 用户 2026-10-04 交主会话推进；计划 `docs/plans/2026-10-04-binary-size.md`；HelloWorld release 14.4 MB → ≤3 MB |
 | BS-B1 | 🔄 binsize-meta 已派 | B0 基线重测 + 元数据按档案按类裁剪（反射不可达类 0 行、行表只覆盖翻译方法）+ 字符串池 / u32 编码 |

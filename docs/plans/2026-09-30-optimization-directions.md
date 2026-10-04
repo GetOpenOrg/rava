@@ -130,6 +130,8 @@
 
 终态：以上十二例（含 LynchBell）在 debug 构建下运行段都 ≤ 30 s，且输出与 JVM 一致。
 
+**外部参照终态（2026-10-04 用户采纳）**：十二例在 `rava build --release` 下的运行段 ≤ 同机 GraalVM native-image（无 PGO）的运行时间，例如 LynchBell ≤ 3.62 s、Factorion ≤ 1.59 s、FractionReduction ≤ 9.00 s。逐例阈值见 [`docs/reports/2026-10-04-graalvm-baseline.md`](../reports/2026-10-04-graalvm-baseline.md) §二，复现用 `scripts/graalvm_bench.sh`。上面 debug ≤ 30 s 的终态同时保留。起点基线是服务器作业 `timing-rel-10795076`（release）和抽查 `timing-dbg-10795076`（debug）记录的逐例耗时。
+
 ### 5. 测试流程效率（用户 2026-10-01）
 
 2026-10-01 分布式全量：1083 例、7 台服务器、约 5 h 墙钟、约 35 机时。按本地抽查比例（13 例：编译 7 m 08 s / 共 9 m 44 s）推算：cargo 编译约 70–75%，转译约 20%，超时空等约 1.5 机时（约 4%），运行约 3%。

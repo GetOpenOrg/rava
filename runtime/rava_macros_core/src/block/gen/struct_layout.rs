@@ -119,8 +119,8 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let iface_vtable_idents: Vec<Ident> = ctx.iface_impls.iter()
         .map(|ii| format_ident!("{}__VTable", ii.iface))
         .collect();
-    // 按值 `__Shared<Self>` 接收者的三个钩子（`__interface` / `__erased_inner` /
-    // `__erased_vtable`）一律显式覆盖，未移交的 self 经 `ObjectVTable` 擦除后释放：
+    // 按值 `__Shared<Self>` 接收者的钩子（`__interface`）显式覆盖，未移交的 self 经
+    // `ObjectVTable` 擦除后释放：
     // 引用计数减一的语义不变，而 `Arc<X__inner>` 的析构代码（Arc::drop → drop_slow →
     // Weak::drop）不再逐类单态化——全部类共用 `__Shared<dyn ObjectVTable>` 一份
     //（emitter-performance §5.5 N4）。
@@ -135,9 +135,6 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                     return;
                 }
             )*
-            #release_self
-        }
-        fn __erased_inner(self: __Shared<Self>, _slot: &mut dyn ::std::any::Any) {
             #release_self
         }
     };
@@ -162,8 +159,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     };
 
     // 擦除 vtable 查询（运行时类覆盖）：inner 即 vtable 对象（`impl *__VTable for
-    // __inner`），按调用方 slot 的（擦除）类 vtable 类型把自身填入——运行时类自身槽
-    // 直取 self；祖先类槽经 supertrait 上转。与上方 `__interface` 的接口查询同型，
+    // __inner`），按调用方 slot 的（擦除）类 vtable 类型把自身的视图指针填入（调用方与
+    // 持有本存储的句柄合成 `__Ref`，S7-2）——运行时类自身槽直取 self；祖先类槽经
+    // supertrait 上转。与上方 `__interface` 的接口查询同型，
     // 意义在于**按运行时类**应答（wrapper 侧的同名方法按静态类生成臂，祖先视图包装
     // 的「降回中间类」查询由此承接——中间型 catch/checkcast 的擦除重建路径）。
     let ancestor_vtable_idents: Vec<Ident> = ctx.meta.all_superclasses.iter()
@@ -171,24 +169,23 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         .map(|anc| format_ident!("{}__VTable", anc))
         .collect();
     let erased_vtable_query: TokenStream2 = quote! {
-        fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
+        fn __erased_vtable(&self, slot: &mut dyn ::std::any::Any) {
             if let ::std::option::Option::Some(s) =
-                slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
+                slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #vtable_trait_ident>>>()
             {
                 *s = ::std::option::Option::Some(
-                    self as __Shared<dyn #vtable_trait_ident>);
+                    ::std::ptr::NonNull::from(self as &dyn #vtable_trait_ident));
                 return;
             }
             #(
                 if let ::std::option::Option::Some(s) =
-                    slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
+                    slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #ancestor_vtable_idents>>>()
                 {
                     *s = ::std::option::Option::Some(
-                        self as __Shared<dyn #ancestor_vtable_idents>);
+                        ::std::ptr::NonNull::from(self as &dyn #ancestor_vtable_idents));
                     return;
                 }
             )*
-            #release_self
         }
     };
 
@@ -390,7 +387,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
     // （blanket From<T: ObjectVTable>），只有 wrapper 的 impl 知道类型实参；
-    // inner 的 Rc 可经 __erased_inner 取回（From<Object> 的擦除路径据此重建任意实例化视图）。
+    // From<Object> 的擦除路径经句柄所持 inner 的 `__erased_vtable` 重建任意实例化视图（S7-2）。
     // 代理载体（FS-R R4a）：手写层提供 `__vm_proxy_invoke` / `__vm_proxy_implements`
     // 的类——instanceof 另按实例的接口列表应答，接口载体分派回退经其转发。
     let is_proxy_carrier = ctx.meta.impl_methods.iter().any(|m| m == "__vm_proxy_invoke");

@@ -20,6 +20,7 @@ use super::super::super::rewrite::{
 };
 use super::super::super::util::{attr_str, strip_meta_attrs};
 use super::super::context::GenContext;
+use super::super::storage_hooks::hook_ident;
 use super::body_fns::{functionize, functionize_moved};
 
 /// 返回 (wrapper impl 段, 方法体函数化后的模块级体函数)
@@ -39,10 +40,14 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     // 方法体函数化后的模块级体函数（wrapper impl 块之后输出）
     let mut body_fns: Vec<TokenStream2> = Vec::new();
 
-    // _init_not_null：构造器完成后调用，将 _jvm_null 标志清零
+    // _init_not_null：构造器入口在 `Self::default()`（null 引用）上调用，分配本类存储——
+    // 对象身份在此建立一次（S7-2 起 null 不分配，分配点只在这里）
+    let alloc = hook_ident(ctx, "alloc");
     wrapper_methods.push(quote! {
         #[inline]
-        pub fn _init_not_null(&mut self) { self._jvm_null = false; }
+        pub fn _init_not_null(&mut self) {
+            if self.__r.is_none() { self.__r = #alloc(); }
+        }
     });
 
     // 字段访问器委托（own + 继承字段）。读取处是 GIL 安全点（`gil::safepoint`：自旋等待
@@ -57,19 +62,19 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 #[inline]
                 pub fn #get(&self) -> #ty {
                     __safepoint();
-                    <#ty as ::std::convert::From<Object>>::from(self.vtable.#get())
+                    <#ty as ::std::convert::From<Object>>::from(self.__r.vt().#get())
                 }
                 #[inline]
                 pub fn #set(&self, v: #ty) {
-                    self.vtable.#set(::std::convert::Into::<Object>::into(v));
+                    self.__r.vt().#set(::std::convert::Into::<Object>::into(v));
                 }
             }
         } else {
             quote! {
                 #[inline]
-                pub fn #get(&self) -> #ty { __safepoint(); self.vtable.#get() }
+                pub fn #get(&self) -> #ty { __safepoint(); self.__r.vt().#get() }
                 #[inline]
-                pub fn #set(&self, v: #ty) { self.vtable.#set(v); }
+                pub fn #set(&self, v: #ty) { self.__r.vt().#set(v); }
             }
         }
     };
@@ -91,8 +96,8 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         // NeedsWrapper 方法体（含 Clone::clone(this) 或 this.method() 调用）：
         // 直接放进 wrapper impl（this: &Wrapper）以保证 this 类型正确。
         // 同时：
-        // 1. 将 __base(this, ...) 改为 __base(&*this.vtable, ...)
-        // 2. 将 this.method(args) 改为 (&*this.vtable).method(args)，
+        // 1. 将 __base(this, ...) 改为 __base(this.__r.vt(), ...)
+        // 2. 将 this.method(args) 改为 this.__r.vt().method(args)，
         //    通过 vtable supertrait 链访问继承但未显式覆盖的虚方法。
         // 方法体落在隐藏的 `__impl_<method>`（不分派）；公开的同名方法统一经 vtable 分派，
         // 子类覆盖版本对「父类型 wrapper 上的调用」同样生效。
@@ -104,7 +109,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         // 此边界转换（形参装箱 / 返回值还原）
         let conv_args = erased_call_args(sig, &ctx.type_param_names);
         let call = quote! {
-            #vtable_trait_ident::#mname(&*self.vtable, #(#conv_args),*)
+            #vtable_trait_ident::#mname(self.__r.vt(), #(#conv_args),*)
         };
         let dispatch = erased_call_ret_conv(sig, &ctx.type_param_names, call);
         let null_check = class_init::forward_checks(sig);
@@ -147,7 +152,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             let ov_erasure = erasure_set_of(f, &ctx.type_param_names);
             let conv_args = erased_call_args_with(sig, &ctx.type_param_names, &ov_erasure);
             let call = quote! {
-                #anc_vtable::#slot_name(&*self.vtable, #(#conv_args),*)
+                #anc_vtable::#slot_name(self.__r.vt(), #(#conv_args),*)
             };
             let dispatch = erased_call_ret_conv_with(sig, &ctx.type_param_names, &ov_erasure, call);
             let null_check = class_init::forward_checks(sig);
@@ -194,7 +199,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 let erasure = erasure_set_of(f, &ctx.type_param_names);
                 let conv_args = erased_call_args_with(sig, &ctx.type_param_names, &erasure);
                 let call = quote! {
-                    <dyn #vtable_trait_ident as #vo_trait>::#slot_name(&*self.vtable, #(#conv_args),*)
+                    <dyn #vtable_trait_ident as #vo_trait>::#slot_name(self.__r.vt(), #(#conv_args),*)
                 };
                 erased_call_ret_conv_with(sig, &ctx.type_param_names, &erasure, call)
             }
