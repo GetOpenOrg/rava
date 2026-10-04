@@ -155,6 +155,7 @@ pub struct Manifest {
     method_lookups: HashSet<String>,
     constructor_lookups: HashSet<String>,
     class_initializers: HashSet<String>,
+    mirror_subtype_tests: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
     method_to_handle: HashSet<String>,
     pub boot_init: Vec<String>,
@@ -419,6 +420,7 @@ impl Manifest {
             method_lookups: reflect("method_lookups").into_iter().collect(),
             constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
             class_initializers: reflect("class_initializers").into_iter().collect(),
+            mirror_subtype_tests: reflect("mirror_subtype_tests").into_iter().collect(),
             member_owner_initializers: reflect("handle_owner_initializers")
                 .into_iter()
                 .map(|c| (c, LinkRoute::Handle))
@@ -603,6 +605,12 @@ impl Manifest {
     /// 按类镜像强制类初始化（`[facts.reflect] class_initializers`）：Class 实参所指类初始化
     pub fn is_class_initializer(&self, member: &str) -> bool {
         self.class_initializers.contains(member)
+    }
+
+    /// 类镜像子类型判定（`[facts.reflect] mirror_subtype_tests`）：接收者镜像所指类是实参镜像所指类的超类型时为真，
+    /// 条件分支上按此收窄实参（absint/narrow.rs）
+    pub fn is_mirror_subtype_test(&self, member: &str) -> bool {
+        self.mirror_subtype_tests.contains(member)
     }
 
     /// 调用方的 Class 实参恒为「经该路径正被链接 / 访问的静态成员或构造器的声明类」（`[facts.reflect]

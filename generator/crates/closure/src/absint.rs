@@ -256,6 +256,11 @@ pub trait Oracle {
     fn param_mirror(&self, _i: u16, _cls: &str) -> Option<bool> {
         None
     }
+    /// 是否为类镜像子类型判定（清单 `[facts.reflect] mirror_subtype_tests`，`K.isAssignableFrom(x)` 形态：
+    /// 接收者镜像所指类是实参镜像所指类的超类型时为真），见 `narrow.rs`
+    fn mirror_subtype_test(&self, _m: &MemberRef) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,6 +281,9 @@ pub enum Event {
     /// `aload; instanceof C; ifeq/ifne` 判定不成立一侧的收窄值（发在条件跳转指令偏移，该偏移即其来源）：
     /// 输入值中 ⊄ C 的部分（含 null），见 `narrow.rs`
     NotInstance(String, V),
+    /// `ldc K; aload; <类镜像子类型判定>; ifeq/ifne` 判定成立一侧的收窄值（发在条件跳转指令偏移，该偏移即其类型流节点）：
+    /// 输入值的类镜像中所指类 ⊂ K 者，见 `narrow.rs`
+    MirrorSub(String, V),
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
     Throw(V),
@@ -1165,7 +1173,8 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     }
                     Flow::Cond(t, k) => {
                         // instanceof 判定成立的一侧收窄被测局部变量
-                        let narrow = narrow::instanceof_narrow(insns, &leader, i, &st);
+                        let narrow = narrow::instanceof_narrow(insns, &leader, i, &st)
+                            .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)));
                         // ifnull / ifnonnull 两侧收窄被测局部变量的可空性
                         let nulls = narrow::null_narrow(insns, &leader, i, &st);
                         let edge = |taken: bool| match (&narrow, &nulls) {
@@ -1244,10 +1253,12 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     i += 1;
                     continue;
                 }
-                // instanceof 判定不成立一侧可达：其收窄值的来源事件
+                // 收窄值以事件给出的一侧可达（instanceof 不成立一侧、类镜像子类型判定成立一侧）：发其来源事件
                 Flow::Cond(_, k) => {
-                    if let Some(nw) = narrow::instanceof_narrow(insns, &leader, i, &st) {
-                        if k != Some(nw.taken) {
+                    let narrow = narrow::instanceof_narrow(insns, &leader, i, &st)
+                        .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)));
+                    if let Some(nw) = narrow {
+                        if k != Some(!nw.event_when) {
                             interp.ev(nw.event.0, nw.event.1);
                         }
                     }
