@@ -125,6 +125,13 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 | — | 每类 vtable 协议方法 | 归 S7-2 / S7-3 | 🔄 S7-2 进行中 |
 | — | 闭包多出 161 类（indy 67）、clinit 0.3 MB | 归闭包精度线（engine-order / C1d） | 🔄 |
 
+**B2 实施要点（binsize-b2）**
+- 摸底：现状不靠符号名成帧，而靠 DWARF 行号。`vm_stack::capture_java_frames` 用 `Backtrace::force_capture()` 的 Display 文本，取每个（含内联）帧的 `at 文件:行`，再查 B1 行表（Rust 文件 + 行 → 方法、Java 行）；符号名只用来滤掉闭包帧。运行时解析 DWARF：macOS 经符号表的调试映射读 target 下的 `.o`，Linux 读二进制内的 `.debug_*`。所以 strip 后栈全空，二进制离开构建机后行号也会丢。
+- 终态做法（对标 Go pclntab / GraalVM CodeInfo）：链接期把 DWARF 一次性预解析成「地址区间 → Java 帧序列」表，嵌进二进制；运行时用 `_Unwind_Backtrace` 取返回地址，按地址查表，不读 DWARF、符号表或 target 下的文件。
+  - 链接器包装 `rava-link`：rava compile 以 cargo `--config target.<host>.linker` 指定。先照常链一次（不 strip），取 DWARF 和内联链，套用旧成帧规则：闭包帧不成帧、块外与序言不成帧。对照发射层写出的旁路行表 `closure_input/frame_lines.json`，生成表对象。再带上表对象重链一次，表进 `__DATA,__rava_pcmap`（ELF 为 `rava_pcmap`），校验两次链接的锚点与 `__text` 一致。
+  - 二进制内的 `LINE_TABLES`（Rust 行表）删去，帧方法元数据改随地址表发射；`LINE_NUMBERS`（bci ↔ 行）保留。
+  - release 加 `strip = "symbols"`。strip 在 rustc 链接之后执行，不影响包装内读 DWARF；Linux 第一次链接时去掉 `--strip-*`。
+
 **与在途线的关系**
 - B1 改动的是表的内容与编码：`generator/crates/emit/src/project/meta_sides.rs`、`line_tables/`。
 - M2（按模块切 crate）在改同一目录的 crate 布局；M3 负责元数据表按模块归属。

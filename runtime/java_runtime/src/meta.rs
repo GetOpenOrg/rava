@@ -59,22 +59,11 @@ pub struct NestMeta {
 pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
 type Names = &'static [&'static str];
-/// 生成文件行表：(scratch 相对路径, [(帧归属类 binary name, 方法名, 描述符, 源文件, 标志字, 注解)],
-/// [(Rust 行, 方法下标, Java 行)]——按 Rust 行升序；方法下标 `u32::MAX` = 块外，Java 行 0 = 方法内首个
-/// 标记之前，[`LINE_NATIVE`] / [`LINE_UNKNOWN`] = 手写伴生方法体（native / 无行号）)
-pub type LineTable = (&'static str, &'static [LineMethod], &'static [(u32, u32, u32)]);
-/// 行表方法项 (帧归属类, 方法名, 描述符, 源文件, 标志字, RuntimeVisibleAnnotations 原始属性体)：
-/// 标志字 = Modifier 位集（低 16 位）| static << 16 | native << 17。帧方法元数据只来自此处，不读成员表
+/// 帧方法项 (帧归属类, 方法名, 描述符, 源文件, 标志字, RuntimeVisibleAnnotations 原始属性体)：
+/// 标志字 = Modifier 位集（低 16 位）| static << 16 | native << 17。帧方法元数据只来自地址表（`pc_map`），不读成员表
 pub type LineMethod = (&'static str, &'static str, &'static str, &'static str, u32, &'static [u8]);
 /// 帧方法的 LineNumberTable：(类, 方法名, 描述符, [(start_pc, 行)])，按 (类, 名, 描述符) 升序
 pub type LineNumbers = (&'static str, &'static str, &'static str, &'static [(u16, u16)]);
-/// 行表方法下标哨兵：块外 / 非 Java 方法
-pub const NO_METHOD: u32 = u32::MAX;
-/// 行表 Java 行哨兵：native 方法帧（`StackTraceElement.lineNumber = -2`）
-pub const LINE_NATIVE: u32 = u32::MAX;
-/// 行表 Java 行哨兵：无行号的手写方法帧（`-1`）
-pub const LINE_UNKNOWN: u32 = u32::MAX - 1;
-
 extern "Rust" {
     #[link_name = "__java_meta_META_POOL"]
     static META_POOL: &'static [u8];
@@ -122,8 +111,6 @@ extern "Rust" {
     static VM_CONST_PROPERTIES: &'static [u8];
     #[link_name = "__java_meta_VM_DYNAMIC_PROPERTIES"]
     static VM_DYNAMIC_PROPERTIES: &'static [u8];
-    #[link_name = "__java_meta_LINE_TABLES"]
-    static LINE_TABLES: &'static [u8];
     #[link_name = "__java_meta_LINE_NUMBERS"]
     static LINE_NUMBERS: &'static [u8];
 }
@@ -151,7 +138,6 @@ pub struct UserMeta {
     pub closure_pool: &'static [u8],
     pub module_services: &'static [u8],
     pub line_pool: &'static [u8],
-    pub line_tables: &'static [u8],
     pub line_numbers: &'static [u8],
 }
 
@@ -345,11 +331,6 @@ pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] {
 pub fn vm_dynamic_properties() -> &'static [&'static str] {
     static CELL: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
     CELL.get_or_init(|| meta_codec::names(archive_closure(unsafe { VM_DYNAMIC_PROPERTIES })))
-}
-/// Java 栈帧行表（FS-E1）：每个带行标记的生成文件一项，发射层扫描落盘文本写入。
-pub fn line_tables() -> &'static [LineTable] {
-    static CELL: std::sync::OnceLock<&'static [LineTable]> = std::sync::OnceLock::new();
-    merged(&CELL, || meta_codec::line_tables(archive_line(unsafe { LINE_TABLES })), |m| meta_codec::line_tables(user_line(m, m.line_tables)), Some(|a, b| a.0.cmp(b.0)))
 }
 /// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
 pub fn line_numbers() -> &'static [LineNumbers] {

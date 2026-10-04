@@ -9,7 +9,7 @@ pub mod meta_sides;
 pub mod entry;
 pub mod fs;
 pub mod layers;
-mod line_tables;
+pub mod line_tables;
 pub mod layout;
 pub mod lib_crates;
 pub mod mod_tree;

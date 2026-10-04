@@ -7,6 +7,12 @@ edition.workspace = true
 name = "rava"
 path = "src/main.rs"
 
+# 链接器包装：生成程序链接后据 DWARF 预解析地址 → Java 帧表并重链嵌入（二进制体积 B2，
+# docs/plans/2026-10-04-binary-size.md；运行时 java_runtime `pc_map`）
+[[bin]]
+name = "rava-link"
+path = "src/link_main.rs"
+
 [dependencies]
 classfile.workspace = true
 resolve.workspace = true
@@ -17,3 +23,9 @@ ir.workspace = true
 input.workspace = true
 ty.workspace = true
 mimalloc.workspace = true
+# rava-link：读链接产物的 DWARF（Mach-O 经调试映射读各目标文件）、写地址表目标文件
+rava_meta_tables = { path = "../../../runtime/rava_meta_tables" }
+addr2line = { version = "0.27", default-features = false, features = ["std", "rustc-demangle"] }
+gimli = { version = "0.34", default-features = false, features = ["read", "std"] }
+object = { version = "0.40", default-features = false, features = ["read", "write", "compression", "std"] }
+typed-arena = "2"
