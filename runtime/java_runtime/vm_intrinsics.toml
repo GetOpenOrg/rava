@@ -562,6 +562,26 @@ resets = [
     "java/lang/StringBuilder.setLength:(I)V",
 ]
 
+[facts.empty_collections]
+# 空的不可修改集合：工厂的返回值按 JDK 规范（List / Set / Map 的 `of()` javadoc：「Returns an unmodifiable … containing
+# zero elements」）不含元素、不可改写（改写方法抛 UnsupportedOperationException）。分析器给工厂结果打空集合标签，
+# 标签随返回值 / final 字段 / 构造摘要传播（与其它集合合流即丢）；接收者带标签时查询方法（名:描述符，与声明类无关）
+# 的结果按下表折叠。用途：ModuleBootstrap.boot2 等的早退检查（未给 -D 时的 `addModules.isEmpty()`、
+# `ModulePatcher.hasPatches()` / `patchIfNeeded` 的 `map.get`）
+factories = [
+    "java/util/List.of:()Ljava/util/List;",
+    "java/util/Set.of:()Ljava/util/Set;",
+    "java/util/Map.of:()Ljava/util/Map;",
+]
+
+[facts.empty_collections.queries]
+"isEmpty:()Z" = true
+"size:()I" = 0
+"contains:(Ljava/lang/Object;)Z" = false
+"containsKey:(Ljava/lang/Object;)Z" = false
+"containsValue:(Ljava/lang/Object;)Z" = false
+"get:(Ljava/lang/Object;)Ljava/lang/Object;" = "null"
+
 [facts.array_writes]
 # 手写方法对实参数组元素的写入（闭包分析，generator `rava closure` 读取）。分析器按调用点把写入值
 # 接到该调用点实参数组的元素上；形参序号按描述符（0 起，不含接收者）：

@@ -68,6 +68,8 @@ pub enum LinkRoute {
 }
 
 mod sysprops;
+mod empty;
+pub use empty::EmptyCollections;
 mod names;
 mod concrete;
 mod field_names;
@@ -175,6 +177,8 @@ pub struct Manifest {
     string_ops: HashMap<String, StrOp>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
+    /// 空的不可修改集合工厂与其上的查询结果（`[facts.empty_collections]`）
+    pub empty: EmptyCollections,
     /// 按名取类与字符串拼接
     pub names: NameFacts,
     /// 具体求值（`[concrete]`）
@@ -439,6 +443,7 @@ impl Manifest {
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
+            empty: EmptyCollections::from_toml(vm.get("facts").and_then(|s| s.get("empty_collections")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
             concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,

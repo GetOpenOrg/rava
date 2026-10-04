@@ -1887,3 +1887,51 @@ TestBuiltinUrlProtocol 3078 不变。闸门本身正确，但 `URL.<init>` / `ge
   直接取 `args`（走 `Facts.params` 同一通道，等同调用点常量实参），甲闸门由此死掉，不需要任何 JDK 名特判。
 - anchors 声明 phase 产生、运行期读取的 VM 状态字段；闭包对锚字段的读取视为「phase 已运行」，生成器在启动序列里按 phase
   顺序发出调用（步骤 3–5：发射启动调用、bootLayer 落地、`Class.module` 回填）。
+
+### 23.4 实施结果（F1 + F2，本机 `rava closure` 实测）
+
+- F1 实施时推广为「键值来源 = 调用结果站点**或形参**」：`finderFor(String)` 的键是形参，两调用点各传
+  `"jdk.module.upgrade.path"` / `"jdk.module.path"`（形参常量格只容一个常量），按 `Gap::Class` 取各调用点流入的名字
+  （pstrs）展开为候选模式；各模式结果相同（都不在表中 → null）才折叠。登记表 `Ctx::pkeys`（方法节点, 来源）→ 模式；
+  登记变化不在处理该方法中途失效，记入 `pkey_dirty`，由主循环顶部 `pkey_flush` 统一失效重算。
+- 新增折叠（HelloWorld initPhase2 根）：`decode@20`→null、死区 34..342；`addModules@24`→null、死区 36..132；
+  `finderFor@1`→null、死区 11..83；`ModulePatcher.<init>@5 isEmpty`→true、死区 23..126；`hasPatches@4`→true（`!` 后为 false）；
+  `patchIfNeeded@15 get`→null、死区 32..657；`boot2@15/110/120/175/185` 一并折叠。乙闸门的 patcher / finder 两路关闭。
+
+**initPhase2 根下剩余膨胀的前十出口**（新二进制，根 + PST 切；新增类沿首次发现链上溯，归属到第一个「常规闭包已有方法」的
+出边，即常规闭包里已有、在根下因事实变宽多出的出边；首次发现口径，非必要性口径）：
+
+| # | 出边（常规闭包已有方法@偏移） | 新增类 | 变宽原因 |
+|---:|---|---:|---|
+| 1 | `URL.lowerCaseProtocol@42`（折叠丢失） | 1038 | 常规闭包 `URL.<init>` 协议形参恒 `"file"`；根下 `URI.toURL` 传入未知协议 → `toLowerCase(ROOT)` → `ConditionalSpecialCasing` → ICU → `getResourceAsStream` → `URLClassPath$JarLoader` → `JarFile` |
+| 2 | `AccessController.executePrivileged@29`（折叠丢失） | 546 | 模块系统新实例化的 `PrivilegedAction` 使 `run` 分派变宽（`SystemModuleFinders$1` / `ModulePath.findAll` …） |
+| 3 | `String.valueOf@11`（`toString` 分派） | 411 | 新实例化类型（`ModuleDescriptor$Exports` 等）的 `toString` |
+| 4 | `Objects.equals@11`（`equals` 分派） | 306 | 同上，`equals` |
+| 5 | 根 `initPhase2` 直接带入 | 72 | `ModuleBootstrap` / `SystemModuleFinders` / `ModuleLayer` 本体 |
+| 6 | `ConcurrentHashMap.computeIfAbsent@115`（`Function.apply`） | 34 | `ImageReaderFactory$1` → `ImageReader.open` |
+| 7 | `AbstractCollection.toString@1` | 23 | 新集合元素类型 |
+| 8 | `ImmutableCollections$AbstractImmutableSet.equals@37` | 18 | 同上 |
+| 9 | `Pattern.compile@24`（折叠丢失） | 17 | 正则常量变宽 |
+| 10 | `Formatter$FormatSpecifier.print@136/@11`（折叠丢失） | 12 | 格式化实参类型变宽 |
+
+结论：F1/F2 关掉的是「早退分支」，剩余 ~2750 类绝大多数不是 boot2 的独立分支，而是 `SystemModuleFinders.ofSystem`
+（`boot2@257`）/ `newConfiguration`（`boot2@935`）真实执行时新增的实例化类型与非常量实参，使常规闭包已有方法的分派 / 形参常量
+变宽。分组 `--cut` 实验呈非单调（基线二进制「只开一组」：none 3271、patcher 3277、resolve 3279、cds / arch / post 3271、
+finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快路径后改走 `ofSystem` / `ModulePath`），故不以切点差值作路径
+代价。下一步（boot layer 步骤 2–5）的收敛手段：phase 实参（甲闸门）与锚字段（`bootLayer` / `Class.module` 由 phase 产生，
+其余方法读锚而不是重走 `ofSystem`），使分派变宽只发生在 phase 自身帧内；第 1 名的 URL 协议变宽另需 `URI.toURL` 协议来源
+事实（`jrt` 常量经 `URI` 字段流）。
+
+**验收对照**（`rava closure`，类数；base = 1fa483a4 构建，new = 本步；种子 0 / 1）：
+
+| 测试 | 常规 base（s0 / s1） | 常规 new（s0 / s1） | initPhase2 根 + PST 切 base（s0 / s1） | 同 new（s0 / s1） |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 | 469 / 469 | 3283 / 3283 | 3221 / 3221 |
+| StockTrans | 3386 / 3386 | 3384 / 3384 | 3470 / **4230** | 3468 / 3468 |
+| DeepCopy | 3388 / 3388 | 3386 / 3386 | 4232 / 4232 | 3469 / 3469 |
+| TestModuleLayerDefine | 3262 / **4205** | 3262 / 3262 | 3291 / 3291 | 3280 / 3280 |
+
+- new 在 8 组配置下两种子类集合逐名一致；相对 base 只减不增（常规闭包减 `ModuleLoaderMap` / `$Mapper`；根下减 2–763）。
+- base 有种子依赖（StockTrans 根 +760、TestModuleLayerDefine 常规 +943，JCA / jar 区域），new 下消失：属事实变窄后不再经过
+  顺序敏感的大门，**不是**顺序问题已修复，引擎顺序线另行跟踪。
+- 档案规模（≤ 3609）与 `--stop-after compile` 0 错误、多种子大例对照：服务器作业（见 tasks.md 行）。

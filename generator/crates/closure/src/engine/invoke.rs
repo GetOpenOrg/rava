@@ -7,6 +7,7 @@ impl<'a> Engine<'a> {
         self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
+        self.prop_key_site(m, off, opcode, mref, iface, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         let wrapped = self.ref_caller_sensitive(mref);

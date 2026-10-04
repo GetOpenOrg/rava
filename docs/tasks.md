@@ -268,7 +268,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a 去截断（c1d-p0） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
 | C1d-a-a1 | ✅ | 正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5） |
 | C1d-a-a2 | ✅ 62f46bb2 | b4669206 合入，抽查 c1da-b4669206 9/9 |
-| C1d-a-a2续 | 🔄 | initPhase2 膨胀用真实 `--cut` 定位 → 早退检查按分析期事实求值 → `[[boot_init.phases]]` → boot layer 步骤 2–5；闸门以档案规模计（基线 3609） |
+| C1d-a-a2续 | 🔄 | initPhase2 膨胀用真实 `--cut` 定位 → 早退检查按分析期事实求值 → `[[boot_init.phases]]` → boot layer 步骤 2–5；闸门以档案规模计（基线 3609）。第 1 小步（分支 c1d-a2c，方案 §23）：定位 + F1 拼接 / 形参键系统属性读、F2 空不可变集合事实，HelloWorld 根下 3283→3221、4 例两种子一致只减不增；档案规模与单例编译待服务器 |
 | C1d-a-a4 | ✅ b124e5ac | TestCharsetNamedStreams，抽查 c1da-f2bdcf6e 通过（计划 §21.4） |
 | C1d-a-JCA | ✅ 51a4d8c5 | JCA 种子修复（抽查 9/10 + 6/6）；代价 StockTrans 3141→3283，+134 来自 jar 签名校验路径 |
 | C1d-a-jar签名 | ⏳ | jar 签名校验路径收窄（4 个算法名不可定的请求点） |

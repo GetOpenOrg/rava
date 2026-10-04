@@ -134,3 +134,21 @@ fn serial_allocators_parse() {
     assert_eq!(m.serial_allocator("a/G.other:()V"), None);
     assert!(with_vm("[facts.reflect.serial_allocators]\n\"a/G.gen:(Ljava/lang/Class;)La/A;\" = -1\n").is_err());
 }
+
+#[test]
+fn empty_collections_parse() {
+    let m = with_vm(
+        "[facts.empty_collections]\nfactories = [\"a/L.of:()La/L;\"]\n[facts.empty_collections.queries]\n\"isEmpty:()Z\" = true\n\"size:()I\" = 0\n\"get:(Ljava/lang/Object;)Ljava/lang/Object;\" = \"null\"\n",
+    )
+    .unwrap();
+    assert!(m.empty.is_factory("a/L.of:()La/L;"));
+    assert!(!m.empty.is_factory("a/L.of:(Ljava/lang/Object;)La/L;"));
+    assert_eq!(m.empty.query("isEmpty", "()Z"), Some(&Fact::Int(1)));
+    assert_eq!(m.empty.query("size", "()I"), Some(&Fact::Int(0)));
+    assert_eq!(m.empty.query("get", "(Ljava/lang/Object;)Ljava/lang/Object;"), Some(&Fact::Null));
+    assert_eq!(m.empty.query("size", "()J"), None);
+    // 工厂须返回引用；查询键须为 名:描述符；值须为 null / 整数 / 布尔
+    assert!(with_vm("[facts.empty_collections]\nfactories = [\"a/L.n:()I\"]\n").is_err());
+    assert!(with_vm("[facts.empty_collections.queries]\n\"a/L.size:()I\" = 0\n").is_err());
+    assert!(with_vm("[facts.empty_collections.queries]\n\"size:()I\" = \"zero\"\n").is_err());
+}

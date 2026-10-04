@@ -130,6 +130,8 @@ pub(super) struct Ctx<'a> {
     pub(super) preadonly: RefCell<HashMap<(MemberRef, usize), (bool, super::memo::Inputs)>>,
     /// 删除包装方法里作删除键的形参序号（`sysprops_write.rs`）
     pub(super) pwsums: RefCell<HashMap<MemberRef, Rc<[usize]>>>,
+    /// 键为拼接值的属性读取点的候选模式：(方法节点, 键值来源站点)（`sysprops_key.rs`）
+    pub(super) pkeys: RefCell<HashMap<(usize, Src), super::sysprops_key::KeyPats>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）
@@ -165,6 +167,17 @@ pub(super) struct CallInfo {
     pub(super) reader: Option<super::sysprops::PropSum>,
     /// 按名取字段偏移的入口（`name_resolvers` 里 offset = true）
     pub(super) offset: Option<crate::manifest::NameResolver>,
+    /// 空的不可修改集合工厂的结果（带 `Obj::Empty` 标签的非空引用，`[facts.empty_collections] factories`）
+    pub(super) empty: Option<V>,
+    /// 接收者为空集合时的查询结果（`[facts.empty_collections] queries`）
+    pub(super) empty_query: Option<V>,
+}
+
+fn fact_value(f: &Fact) -> V {
+    match f {
+        Fact::Null => V::Null,
+        Fact::Int(i) => V::Int(*i),
+    }
 }
 
 /// 字段引用解析结果
@@ -358,10 +371,10 @@ impl Ctx<'_> {
             return c.2.clone();
         }
         let k = m.to_string();
-        let fact = self.man.return_fact(&k).map(|f| match f {
-            Fact::Null => V::Null,
-            Fact::Int(i) => V::Int(*i),
-        });
+        let fact = self.man.return_fact(&k).map(fact_value);
+        // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
+        let empty = self.man.empty.is_factory(&k).then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) });
+        let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
         let target = self
             .exact_target(opcode, m, iface)
             .filter(|(cf, t)| cf.method(&t.name, &t.desc).is_some_and(|tm| self.kind_of(cf, tm) == Kind::Bytecode))
@@ -378,6 +391,8 @@ impl Ctx<'_> {
             holder: self.man.sysprops.is_holder(&k),
             reader: self.reader_spec(&k),
             offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
+            empty,
+            empty_query,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
@@ -458,6 +473,11 @@ impl Ctx<'_> {
     }
 }
 
+/// 值带空集合标签（接收者为空的不可修改集合）
+fn is_empty_tag(v: Option<&V>) -> bool {
+    v.and_then(|v| v.obj()).is_some_and(|o| **o == crate::absint::Obj::Empty)
+}
+
 impl Oracle for Facts<'_, '_> {
     fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         let c = self.ctx.call_info(opcode, m, iface);
@@ -466,6 +486,12 @@ impl Oracle for Facts<'_, '_> {
         }
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
+        }
+        if let Some(v) = &c.empty {
+            return Ret::Value(v.clone());
+        }
+        if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
+            return Ret::Value(v.clone());
         }
         if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
             return Ret::Value(v);
@@ -541,5 +567,21 @@ mod tests {
         assert!(!deser_writes(acc::PRIVATE, false));
         assert!(!deser_writes(acc::STATIC, true));
         assert!(!deser_writes(acc::TRANSIENT, true));
+    }
+}
+
+#[cfg(test)]
+mod empty_tests {
+    use super::*;
+    use crate::absint::Obj;
+
+    #[test]
+    fn empty_tag_recognized_on_receiver() {
+        let e = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Empty)) };
+        let other = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None };
+        assert!(is_empty_tag(Some(&e)));
+        assert!(!is_empty_tag(Some(&other)));
+        assert!(!is_empty_tag(Some(&V::Null)));
+        assert!(!is_empty_tag(None));
     }
 }

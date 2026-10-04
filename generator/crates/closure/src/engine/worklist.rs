@@ -62,6 +62,7 @@ impl<'a> Engine<'a> {
         self.ctx.stats.borrow_mut().mark_rss("setup");
         let mut batch = 0usize;
         loop {
+            self.pkey_flush();
             // 流传播按批：连续处理若干方法 / 站点后再排空，各处的零碎增量在源头汇齐后一次推下去。
             // 不动点单调，先处理的单元读到的是较小的集合，增长后经读者登记重跑——终态集合与逐个排空相同
             let idle = self.mwork.is_empty() && self.swork.is_empty() && self.cwork.is_empty();

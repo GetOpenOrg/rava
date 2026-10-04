@@ -8,6 +8,8 @@
 //! - `SysProps`：清单声明的系统属性表对象（`[facts.system_properties]` 的持有锚点给出）
 //! - `MaybeSysProps`：可能是系统属性表对象（属性表与其它对象合流）：不按属性表读取折叠，
 //!   但它上面的改写 / 逃逸照样计入属性表的改写判定——属性表的别名不会因合流而从判定中消失
+//! - `Empty`：空的不可修改集合（清单 `[facts.empty_collections]` 的工厂结果）：按 JDK 规范不含元素、
+//!   不可改写，其上的查询（`isEmpty` / `size` / `get` …）按清单给出的值折叠
 //!
 //! 标签只随值传播：两个值合流时标签相同才保留（null 与对象合流保留对象标签，可空性另记）；
 //! 属性表（或可能的属性表）与其它值合流得 `MaybeSysProps`。
@@ -25,6 +27,7 @@ pub enum Obj {
     Fields(Vec<(MemberRef, V)>),
     SysProps,
     MaybeSysProps,
+    Empty,
 }
 
 impl Obj {
