@@ -1935,3 +1935,13 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
 - base 有种子依赖（StockTrans 根 +760、TestModuleLayerDefine 常规 +943，JCA / jar 区域），new 下消失：属事实变窄后不再经过
   顺序敏感的大门，**不是**顺序问题已修复，引擎顺序线另行跟踪。
 - 档案规模（≤ 3609）与 `--stop-after compile` 0 错误、多种子大例对照：服务器作业（见 tasks.md 行）。
+
+**服务器结果（dddf8b49）**：
+- 单例编译作业 `c1da-dddf8b49-compile`：HelloWorld（466 JDK + 1 用户类）与 TestModuleLayerDefine（3340 + 3）
+  `--stop-after compile` 均通过，0 错误。
+- 全量单测作业 `c1da-ut-dddf8b49`：唯一失败 `closure_independent_of_hash_seed`，cargo 停在该测试二进制。
+  失败内容（`c1da-ut2-dddf8b49` 单跑）：`TestSerialDefaultSuid` 种子 2 多出 JCA 区域（`com/sun/crypto/provider/AESCipher*` …）。
+  本机新二进制下该例与 StockTrans 种子 0 / 1 / 2 集合一致，未复现。
+  同一 JCA 大门在基线二进制本机就有种子依赖（StockTrans 根下种子 1 +760、TestModuleLayerDefine 常规种子 1 +943），
+  属引擎顺序线的既有问题；F1/F2 改变了事实到达顺序，触发它的用例 / 种子随之变化。
+- 其余单测（`--skip` 该测试 + `--no-fail-fast`）的作业 `c1da-ut2-dddf8b49` 01 尚在排队。
