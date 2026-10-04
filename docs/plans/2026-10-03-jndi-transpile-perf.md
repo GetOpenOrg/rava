@@ -370,3 +370,20 @@ DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 
 （`site_field_nodes` 已对二者同口径），去冗余随之与顺序无关，Unsafe 写入也不再撒到目标对象的全部引用字段。
 收窄覆盖后再复查剩余未收窄站点（FieldReflector 等）是否仍有同类差异。验收照旧：DeepCopy / StockTrans / TSLP（正常 + 探针）
 与 HTTP 种子 0 / 1 / 2 类 / 方法 / 反射集合一致。
+
+### 合并 21fc601b 后的生成器单元测试（8057d7ec，到时限的 WIP 状态）
+
+- closure / cfg / classfile / rava / archive_emit_cli 全过（148 + 5 + 7 + 27 + 1）。
+- `driver/tests/build_cli.rs` 有 2 例失败：`proxy_interface_owner_not_opaque`、`locale_bundle_parent_not_null_recv`。两例的报错相同，都是在发射阶段：
+  `XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z: CfgAuditError 结构树与活块集合不一致 tree=[0..7,9,10,12,13] live=[…,14]`。
+  cargo 在这一测试二进制失败后就停了，`closure_cli`（含 `closure_independent_of_hash_seed`）**本轮没有跑到**。
+- 触发点在折叠：本分支的档案对该方法给出 `dead_pcs [[166,168]]`，即形参 `complete` 恒为真，所以
+  `do { if (!scanDecls(complete)) {…; return false;} } while (complete); return true;` 尾部的 `return true` 不可达。
+  JDK 内唯一的调用方 `XMLDocumentScannerImpl` 传的是字面量 `true`，形参常量本身成立。规整后 163 处变为 pop + goto 87，
+  循环只能经内部 return 退出。
+- 结构化器在这种形态上漏掉一个活块（推测是 162 处的回边块）。按块号手工搭的同形图（15 块，含前置菱形与出口短路）
+  `verify_tree` 能过，没有复现。差别应在真实节点（try 组 / 规整后 pc 164 的合成 goto / has_stmts）上，需要用真实方法的
+  FlowNode 转储去对照。
+- 修法方向（终态）：这是结构化器的缺陷，修在 `cfg/src/structure.rs`。任何「只经内部 return 退出的循环」都必须把回边块放进结构树。
+  不应回退折叠，也不应收窄形参常量。主线没有出这个错，大概是集成分支在这里没有得出形参常量（形参值随本分支的单调化改动变得
+  更精确或换了来源），需要用 21fc601b 的 rava 对同一夹具跑 `--closure-json` 核对该方法的 folds。
