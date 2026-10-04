@@ -2,7 +2,7 @@
 # a3-T6 虚拟线程规模剖析（服务器作业用，Linux）：参考 JDK 两次运行 TestVirtualThreadScale 取 expected，
 # 转译 tests/perf/VirtualThreadScale 后按各模式采样内存时间线与耗时。产物在 build/vt6/。
 # 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
-# 环境：SKIP_JDK=1 跳过参考 JDK 运行；PERF=1 每模式另跑一次 perf record，报告写 build/vt6/<profile>_<mode>_perf*.txt
+# 环境：SKIP_JDK=1 跳过参考 JDK 运行；SAMPLE=1 每模式另跑一次进程内 CPU 采样（scripts/diag/sampler.c），报告写 build/vt6/<profile>_<mode>_prof.txt
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 PROFILE=${1:-dev}; N=${2:-100000}; shift 2 2>/dev/null || shift $#
@@ -43,15 +43,15 @@ for mode in $MODES; do
     > /dev/null 2> $OUT/${PROFILE}_${mode}_mem.err
   echo "== $PROFILE $mode rc=$? (memory)"
   grep -E '^phase|rss_timeline' $OUT/${PROFILE}_${mode}_mem.err
-  if [ -n "${PERF:-}" ]; then
-    P=$OUT/${PROFILE}_$mode
-    perf record -F 499 -g -o $P.data -- "$BIN" $N $ms $mode > /dev/null 2> $P.perf_rec.log
-    echo "== perf $mode rc=$? $(tail -2 $P.perf_rec.log | tr '\n' ' ')"
-    perf report -i $P.data --stdio --no-children --sort comm,sym --percent-limit 0.3 -g none 2>/dev/null | head -200 > ${P}_perf_self.txt
-    perf report -i $P.data --stdio --children --sort comm,sym --percent-limit 1.5 -g none 2>/dev/null | head -300 > ${P}_perf_incl.txt
-    perf report -i $P.data --stdio --no-children --sort sym --percent-limit 2 -g caller,0.5,callee,function,percent --max-stack 40 2>/dev/null | head -1500 > ${P}_perf_calls.txt
-    rm -f $P.data
-    head -60 ${P}_perf_self.txt
+  if [ -n "${SAMPLE:-}" ]; then
+    # 进程内 CPU 采样（服务器 perf_event_paranoid=4，perf 不可用）
+    [ -f $OUT/sampler.so ] || cc -O2 -shared -fPIC -o $OUT/sampler.so scripts/diag/sampler.c || exit 1
+    rm -f $OUT/${PROFILE}_${mode}_prof.*
+    SAMPLER_OUT=$OUT/${PROFILE}_${mode}_prof LD_PRELOAD=$PWD/$OUT/sampler.so "$BIN" $N $ms $mode > /dev/null 2> $OUT/${PROFILE}_${mode}_prof.err
+    echo "== sample $mode rc=$?"
+    S=$(ls $OUT/${PROFILE}_${mode}_prof.*.samples 2>/dev/null | head -1)
+    [ -n "$S" ] && python3 scripts/diag/sampler_report.py "$BIN" "$S" 50 > $OUT/${PROFILE}_${mode}_prof.txt && head -60 $OUT/${PROFILE}_${mode}_prof.txt
+    rm -f $OUT/${PROFILE}_${mode}_prof.*.samples
   fi
 done
 rm -rf $WS
