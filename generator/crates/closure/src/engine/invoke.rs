@@ -131,8 +131,17 @@ impl<'a> Engine<'a> {
             }
         }
         if class_param || class_recv {
-            for name in args.iter().flat_map(V::site_lits) {
-                let name = &name;
+            // 按名放开字段：字面量与常量格给出的名字，另取按来源给出的名字（形参上各调用点的字符串常量、字段写入的
+            // 字面量集）。形参常量窗口内的文本是终态形参字符串集的子集，后者在形参抬为 Top 后仍给出同样的名字
+            let mut fnames: BTreeSet<Rc<str>> = BTreeSet::new();
+            for a in args {
+                fnames.extend(a.lits());
+                if matches!(a, V::Ref { .. }) || a.derived_str() {
+                    fnames.extend(self.param_strs(m, off, a));
+                    fnames.extend(self.field_strs(m, a));
+                }
+            }
+            for name in &fnames {
                 let mut hit = false;
                 for c in &classes {
                     if let Some((decl, desc)) = self.field_by_name(c, name) {
