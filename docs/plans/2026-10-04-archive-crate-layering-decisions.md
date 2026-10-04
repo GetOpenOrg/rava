@@ -16,6 +16,8 @@
 | D3 | 档案 crate 命名 | 按 JDK jmod 模块名（`java.base` → `java_base`、`java.net.http` → `java_net_http`…），从 JDK 模块描述动态取得，生成器不写字面量 |
 | D4 | 引擎 ≤60 s 路线 | 先修闭包结果与遍历顺序无关（engine-order 线），再另起一步做逃逸对象上下文收拢（存入全局可达容器的对象折叠为单一无上下文池） |
 | D6 | 超阈值模块内部拆分的 crate 命名 | `<模块名>_decl`（声明层）+ `<模块名>_body_k`（实现层，k 为序号），如 `java_base_decl` / `java_base_body_k`；`java_base` 重导出声明、吸收实现层，用户代码不可见 |
+| D7 | S7（统一对象句柄 + 每类静态描述符） | 批准实施，取法 B（wrapper = {句柄, 类视图指针}，分派开销同现状）；按 S7-0~S7-5 逐步提交、逐步实测（方案 `2026-10-04-s7-object-handle-descriptor.md`） |
+| D8 | java.base 声明层按 SCC 拆 `java_base_decl_k` 的次序 | S7 之后再做：模块切分 M1/M2 → S7 → java.base 按类团拆分 |
 | D5 | URL 协议可靠口径 | 先做引擎提速，偏差暂时容忍（c1d-urlhost WIP 保留，提速达标后启用） |
 
 ## 二、设计结论（讨论中确立，实施时遵守）
