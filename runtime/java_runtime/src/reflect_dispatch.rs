@@ -187,6 +187,42 @@ pub fn reflect_invoke(declaring_slash: &str, name: &str, descriptor: &str,
            declaring_slash, name, descriptor)
 }
 
+/// native 反射调用入口（HotSpot `Reflection::invoke_method` / `invoke_constructor` 的对应物，供
+/// NativeAccessor / Native*AccessorImpl 的 invoke0 / newInstance0 使用）：先做 VM 的实参校验再按名分派。
+/// - 实例方法的 null 接收者 → NPE（先于实参校验，JVM 同序；VM 直抛，不包装）；
+/// - 实参个数须等于形参个数（null 实参数组视同 0 个）；
+/// - 引用形参的非 null 实参须是形参类型的实例。
+/// 不符 → IllegalArgumentException（置实参失败标记，不包装为 InvocationTargetException）。
+/// 基本类型形参的拆箱 / 拓宽由分派臂承担（失败同走 [`bad_arg`]）。
+pub fn native_invoke(declaring_slash: &str, name: &str, descriptor: &str,
+                     recv: Object, args: &JArray<Object>) -> Result<Object> {
+    if name != "<init>" && recv.0.is_jvm_null() && !is_static_descriptor(declaring_slash, name, descriptor) {
+        crate::exec_context::state().bad_arg.set(true);
+        return Err(crate::error::JvmError::null_pointer());
+    }
+    let params = crate::java::lang::Class::__descriptor_params(descriptor);
+    let argc = if args.is_jvm_null() { 0 } else { args.len()? as usize };
+    if argc != params.len() {
+        crate::exec_context::state().bad_arg.set(true);
+        return Err(crate::error::JvmError::illegal_argument(
+            &format!("wrong number of arguments: {argc} expected: {}", params.len())));
+    }
+    for (i, p) in params.iter().enumerate() {
+        let target = match p.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
+            Some(b) => b,
+            None if p.starts_with('[') => p.as_str(),
+            None => continue,
+        };
+        let a = args.get(i as i32)?;
+        if a.0.is_jvm_null() || target == "java/lang/Object" || a.0.is_instance_of(target)
+            || crate::java::lang::Class::__name_assignable(target, a.0.__class_name()) {
+            continue;
+        }
+        return Err(bad_arg());
+    }
+    reflect_invoke(declaring_slash, name, descriptor, recv, args)
+}
+
 /// 直接父类（Class.getSuperclass 的公共查询面，java_meta 生成）；无父类 / 表外 → None
 fn superclass(class_slash: &str) -> Option<String> {
     let zuper = crate::java::lang::Class::for_class(crate::java::lang::String::from(class_slash))

@@ -255,11 +255,28 @@ fn instanceof(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, comment: &
         // 装箱（保持运行时类）后按运行时判定
         let boxed = to_object(env, str_leaf(val.expr), &obj_base, true)?;
         runtime(sim, boxed);
+    } else if matches!(val.ty, RsType::Array(_)) && !array_kinds_disjoint(&val.ty, comment) {
+        // 数组源：数组协变（JLS §4.10.3）使静态元素类型只是上界（`Object[] v` 可承载
+        // `FieldTypeSignature[]`），非数组目标另有 Cloneable / Serializable 成立
+        // → 装箱（保持运行时数组类）后按运行时判定
+        let boxed = to_object(env, str_leaf(val.expr), &val.ty, true)?;
+        runtime(sim, boxed);
     } else {
         log.push(Effect::InstanceofFold);
         sim.push(Expr::Lit(Lit::Bool(false)), bool_t);
     }
     Ok(())
+}
+
+/// 数组源对数组目标是否静态互斥：两者类型已不相同，任一侧一维元素为基本类型
+/// （基本元素数组只与同描述符数组相容）→ 恒假
+fn array_kinds_disjoint(src: &RsType, target_bin: &str) -> bool {
+    let Some(tgt_elem) = target_bin.strip_prefix('[') else {
+        return false;
+    };
+    let src_prim = matches!(src, RsType::Array(e) if matches!(**e, RsType::Prim(_)));
+    let tgt_prim = !(tgt_elem.starts_with('L') || tgt_elem.starts_with('['));
+    src_prim || tgt_prim
 }
 
 /// `obj instanceof T` 在两者互不为子类型时是否仍可能为真（JLS §5.5）：一侧是接口、另一侧
