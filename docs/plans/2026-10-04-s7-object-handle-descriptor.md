@@ -75,7 +75,10 @@
   - 由此，`__unsafe_*` / `__field_slot` 改为 `impl dyn ObjectVTable` 上的非泛型固有方法，沿 `display` 查各类的 `fields`。
   - 浅拷贝改为 `Object__clone_base` 走描述符：先 `alloc`，再逐字段拷贝。基本单元按位拷贝；引用单元经该字段载体类型的 `__ref_field::<T>` 函数指针拷贝。
   - 宏里按类展开的 7 个方法全删；数组仍走 `__shallow_copy`。
-  - **S7-3b**：反射字段的实例字段臂改走描述符，静态字段另定。
+  - **S7-3b**：按名字段访问（Field.get/set、MH 字段句柄、Unsafe 静态字段）落运行时 `field_reflect`，生成器不再发射按类 `__reflect_field`（TestReflectFieldMethod 生成树 0 处）。
+    - 实例字段：沿接收者描述符 `display` 找声明类、按 Java 名找字段，在存储单元上读写（基本单元按种类装箱 / 拆箱，引用单元经 `__ref_field`）；声明类不在祖先链上 → IllegalArgumentException。泛型类实例字段随之可反射（原先跳过）。
+    - 静态字段：宏为类 / 接口展开关联常量 `X::__STATICS`（Java 名 + 既有 getter / setter 的擦除函数指针 + 按值类型实例化的 `__static_ref::<T>` / `__static_prim::<P>`）；经访问器读写，类初始化、安全点与手写访问器语义不变；常量无 setter → `final_field`。关联常量只在 main 登记处求值，未登记类不付代码生成代价。
+    - 登记沿用 `register_field_dispatch`（入参改为静态字段表），选择口径不变：用户树类全部，JDK / 库类限序列化协议名与按名反射名。
 
 ## 一、问题
 

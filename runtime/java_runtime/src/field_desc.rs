@@ -126,9 +126,11 @@ fn slot_at(base: *const (), idx: usize) -> *const () {
 /// `slot` 指向存活存储中的基本字段；`__PrimCell<_>` 为 `#[repr(transparent)]` 的 `AtomicU64`，
 /// 各实例化布局相同，按另一 `T` 解读只改变位形的读写方式。
 #[inline]
-unsafe fn prim<'a, T: __AtomicRepr>(slot: *const ()) -> &'a __Shared<__PrimCell<T>> {
+pub(crate) unsafe fn prim_at<'a, T: __AtomicRepr>(slot: *const ()) -> &'a __Shared<__PrimCell<T>> {
     unsafe { &*(slot as *const __Shared<__PrimCell<T>>) }
 }
+
+use prim_at as prim;
 
 /// `Object.clone` 的类对象浅拷贝：经描述符的 `alloc` 新建运行时类的默认存储（新标识），再沿
 /// `display` 逐字段拷贝——基本单元按位，引用单元拷引用（经该字段载体类型的 `__ref_field`）。
@@ -166,6 +168,22 @@ impl dyn ObjectVTable {
             class.fields.iter().position(|f| f.rust == rust)
                 .map(|i| (&class.fields[i], slot_at(base, class.field_base as usize + i)))
         })
+    }
+
+    /// Java 字段身份（声明类, 字段名）→ (种类, 字段地址)：声明类不在运行时类的祖先链上 →
+    /// `Some(Err(()))`；null / 非类对象 / 声明类无此字段 → None。
+    pub(crate) fn __instance_field(&self, decl: &str, name: &str)
+        -> Option<Result<(__FieldKind, *const ()), ()>> {
+        if self.is_jvm_null() {
+            return None;
+        }
+        let desc = self.__desc()?;
+        let Some(class) = desc.display.iter().find(|c| c.binary_name == decl) else {
+            return Some(Err(()));
+        };
+        let i = class.fields.iter().position(|f| f.java == name)?;
+        let base = self as *const dyn ObjectVTable as *const ();
+        Some(Ok((class.fields[i].kind, slot_at(base, class.field_base as usize + i))))
     }
 
     /// 按名单元协议：类型为 `T` 的基本字段的共享单元（与该对象全部视图的字段读写同一存储）。

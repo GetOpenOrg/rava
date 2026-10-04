@@ -22,7 +22,7 @@ use quote::{format_ident, quote};
 use syn::{Attribute, Block, Ident, ReturnType, Signature, Type};
 
 use super::parse::StaticItem;
-use super::util::strip_meta_attrs;
+use super::util::{is_basic, strip_meta_attrs};
 
 /// `<clinit>` 翻译函数在块内的固定名字。
 pub(crate) const CLINIT_FN: &str = "__clinit";
@@ -159,7 +159,58 @@ pub(crate) fn expand_statics(
             });
         }
     }
+    members.push(statics_table(statics));
     (storage, members)
+}
+
+/// `cfg_attr(any(), java_field(name = "..", ..))` 里的 Java 字段名（类发射文本的字段属性行）。
+fn java_field_name(attrs: &[Attribute]) -> Option<String> {
+    attrs.iter().filter(|a| a.path().is_ident("cfg_attr")).find_map(|a| {
+        let text = quote!(#a).to_string();
+        let rest = &text[text.find("java_field")?..];
+        let rest = &rest[rest.find("name")?..];
+        let rest = &rest[rest.find('"')? + 1..];
+        Some(rest[..rest.find('"')?].to_owned())
+    })
+}
+
+/// 静态字段表 `__STATICS`（S7-3b，按名字段访问的静态半边，见运行时 `field_reflect`）：每个 Java
+/// 静态字段记 Java 名、既有访问器（getter / setter，手写同名访问器同样适用）的擦除函数指针与按值
+/// 类型实例化的读写协议。关联常量只在被引用（main 的登记）时求值与代码生成，未登记的类不付代价。
+fn statics_table(statics: &[StaticItem]) -> TokenStream2 {
+    const PRIMS: [&str; 8] = ["bool", "i8", "i16", "u16", "i32", "f32", "i64", "f64"];
+    let entries = statics.iter().filter_map(|st| {
+        let java = java_field_name(&st.attrs)?;
+        let (name, ty) = (&st.name, &st.ty);
+        let op = if is_basic(ty) {
+            if !PRIMS.contains(&quote!(#ty).to_string().as_str()) {
+                return None;
+            }
+            quote! { __static_prim::<#ty> }
+        } else {
+            quote! { __static_ref::<#ty> }
+        };
+        let set = if st.const_value.is_some() {
+            quote! { ::std::option::Option::None }
+        } else {
+            let setter = format_ident!("set_{}", name);
+            quote! { ::std::option::Option::Some(unsafe {
+                ::core::mem::transmute::<fn(#ty) -> Result<()>, fn()>(Self::#setter)
+            }) }
+        };
+        Some(quote! {
+            __StaticFieldDesc {
+                java: #java,
+                get: unsafe { ::core::mem::transmute::<fn() -> Result<#ty>, fn()>(Self::#name) },
+                set: #set,
+                op: #op,
+            }
+        })
+    });
+    quote! {
+        #[doc(hidden)]
+        pub const __STATICS: &'static [__StaticFieldDesc] = &[#(#entries),*];
+    }
 }
 
 /// 生成 `__class_init()`。返回 (模块级状态项, impl 块成员)。

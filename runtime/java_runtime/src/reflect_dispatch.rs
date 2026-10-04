@@ -58,40 +58,27 @@ pub fn register_method_dispatch(dispatchers: &[(&str, ReflectDispatch)]) {
     });
 }
 
-/// 按名字段闭包：(字段名, 接收者, 写入值) → 处理结果。`value` None = 读（返回装箱值），
-/// Some(v) = 写（返回 null）。`None` = 本类未声明该字段。静态字段忽略接收者。
-pub type FieldDispatch =
-    Rc<crate::__DynFn!((&str, Object, Option<Object>) -> Option<Result<Object>>)>;
-
-crate::__process_static! {
-    static FIELD_DISPATCHERS: crate::sync_model::__RefSlot<HashMap<String, FieldDispatch>> =
-        crate::sync_model::__RefSlot::new(HashMap::new());
+/// 生成项目 main 启动时登记各声明类的静态字段表（`X::__STATICS`，见 `field_reflect`）。
+pub fn register_field_dispatch(tables: &[(&str, &'static [crate::field_reflect::__StaticFieldDesc])]) {
+    crate::field_reflect::register(tables);
 }
 
-/// 生成项目 main 启动时登记字段闭包（`register_method_dispatch` 的字段镜像）。
-pub fn register_field_dispatch(dispatchers: &[(&str, FieldDispatch)]) {
-    FIELD_DISPATCHERS.with(|d| {
-        let mut d = d.borrow_mut();
-        for (name, f) in dispatchers {
-            d.insert((*name).to_owned(), Clone::clone(f));
-        }
-    });
-}
-
-/// 按名字段访问（Field.get/set、MethodHandle 字段句柄共用）：在声明类的字段闭包上
-/// 直查（字段不参与虚分派，声明类即存储归属）。闭包缺席 / 字段未发射 → None，
-/// 由调用方回落既有协议或如实报缺口。
+/// 按名字段访问（Field.get/set、MH 字段句柄、Unsafe 静态字段共用）。字段不参与虚分派，声明类即
+/// 存储归属：静态字段查声明类登记的静态字段表；实例字段沿接收者运行时类描述符查声明类的字段表
+/// （`field_reflect`）。均未命中 → None，由调用方回落既有协议或如实报缺口。
 pub fn reflect_field(declaring_slash: &str, name: &str, recv: Object,
                      value: Option<Object>) -> Option<Result<Object>> {
     // BoundMethodHandle 动态物种的 key 形态字段（arg<T><i>，N11）
     if let Some(r) = crate::species_dyn::field(declaring_slash, name, &recv, &value) {
         return Some(r);
     }
-    let f = FIELD_DISPATCHERS.with(|d| d.borrow().get(declaring_slash).map(Clone::clone))?;
-    f(name, recv, value)
+    if let Some(r) = crate::field_reflect::static_field(declaring_slash, name, value.clone()) {
+        return Some(r);
+    }
+    crate::field_reflect::instance_field(declaring_slash, name, &recv, value)
 }
 
-/// 编译期常量字段的写入（字段闭包的常量写臂；Field.set 先按 final 修饰位拦截，
+/// 编译期常量字段的写入（静态字段表常量项的写入；Field.set 先按 final 修饰位拦截，
 /// 本出口只在绕过该检查的路径上可达）。
 pub fn final_field(name: &str) -> crate::error::JvmError {
     crate::error::JvmError::illegal_argument(&format!("Can not set final field {}", name))
