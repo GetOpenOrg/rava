@@ -304,6 +304,9 @@ A+B+C 之后无效推送已基本去掉，剩余耗时由**有效**工作量决�
 | 2 | 常量字面量化（Const 代入无来源） | `absint` 的 `V::Str`、`invoke.rs::reflective_writes`、`field_lookup.rs` | 形参常量（`pvals`）、返回常量、字段常量代入为 `V::Str` 后与 ldc 字面量无法区分，被当成站点字面量与接收者镜像集相乘；Const→Top 后已放开的反射成员不撤（上文「根因（已查实）」） | `V::Str` 带来源集（`Srcs`）：ldc 为 `Src::Str(lit_id)`；格值代入时改记读点来源（`Param(k)` / `Site(off)`），与悲观态下的 `Ref` 同源；同文本合流取来源并集；`PV` 存储形去掉来源。只有非派生字符串算站点字面量（`site_lits` / `derived_str`），派生字符串走形参字符串集逐调用点配对 |
 | 3 | 先到者决定（入口常量不并 Top） | `worklist.rs::open_params` | 反射 / VM / 种子入口只按声明类型 open 形参，不并入形参常量；「分析时尚无调用点记录才置 Top」的兜底只在该入口先到时生效。DeepCopy 中 `LDAPCertStore.<init>` 先经 `JdkLDAP$ProviderService.newInstance` 以 null 实参入链时 `pvals = Const(null)`，后到的反射构造器入口不抬 Top，`@22` 之后全被折死，`LDAPCertStoreParameters` / `URICertStoreParameters` 两类随种子出现 / 消失 | `open_params` 显式 `bind_pvs(t, 0, n, None)`；兜底只剩无实参值可言的入口（`<clinit>`、序列化分配的无参构造器、上下文克隆的 lambda 实现 / 具体求值节点） |
 
+另：按名放开字段（`reflective_writes` 的 Class 实参 / 接收者分支）对引用值与派生字符串另取形参字符串集
+（`param_strs`）与字段字面量集（`field_strs`）：修前只在形参常量窗口内按文本放开，形参抬为 Top 后同一来源不再给出名字。
+
 上限类判定（`MAX_SLOTS` 清输入、`MAX_NEST`、`MAX_NAMES`、`MAX_PATTERNS`、sealed 名字上限）同样是按当时规模截断，
 已加计数器（`summary.perf.cap_hits`，只列非零项）实测其在验收用例中是否触发，见下表。
 
@@ -318,6 +321,52 @@ A+B+C 之后无效推送已基本去掉，剩余耗时由**有效**工作量决�
 DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 31.0k）。增量（JCA 提供者实现、xerces / XMLDSig、SSL、
 反射访问器等约 1500 类）全部来自 `Provider$Service.getImplClass` 的 className 按名取类：修前该槽在瞬时窗口外恒为推不出、
 整槽丢名不加载；修后按已知名字加载。这些名字正是探针大种子（瞬时完备窗口）加载的那批，即修复非单调后恢复的类。
-基线独有 `java/lang/ref/FinalReference`（`ReferenceQueue.poll0` 的 instanceof 类型级引用）：修后该分支被折死，属折叠精度变化，非顺序问题。
+基线独有 `java/lang/ref/FinalReference`（`ReferenceQueue.poll0` 的 instanceof 类型级引用）：该分支是否可达取决于队列 `head` 的值集，
+而 `head` 的来源正是下文「未修：反射调用池去冗余与 open 目标写入」的顺序依赖，不能定性为纯折叠精度变化（早先结论更正）。
 
 代价：DeepCopy / StockTrans 冷闭包 34 s → 约 155 s（本机）。
+
+### 合并集成分支后的门禁（V9）
+
+- 2bd6f6bf 合入 3e739189（crate-split），0d392c7a 合入 21fc601b（M1 + S7）。
+- 集成分支 3e739189 上 `closure_independent_of_hash_seed` 的 TestSerialLookupPairing 差异（种子 1 多出 AESCipher 一族）：
+  入链点是 `Provider$Service.getImplClass @64` 的按名取类（closure JSON `via.kind = reflect`），即上表判定 1
+  （形参字符串槽上游有一路推不出时整槽丢名）。本分支上该槽照常产出已知名字，TSLP 种子 0 / 1 / 2 均含 AESCipher 一族
+  15 类（4934 类，三种子类集合相同）。S7 合入后差异消失只是手写层变化扰动了遍历顺序，判定 1 本身仍在集成分支上；
+  根因不在手写扫描器或宏，不需要补 macro_fn_lint 类守护。
+- HTTP（服务器，ca2488f0）：种子 0 冷闭包 1450 s（基线 c5741dfe 630 s），种子 1 / 2 在 12 GB 下 OOM——判定 1 修正后
+  JCA / SSL 提供者实现按名入链带来的规模增长，代价问题待评估。
+
+### 未修：反射调用池去冗余与 open 目标写入（剩余顺序依赖）
+
+现象：DeepCopy / StockTrans / TSLP 类集合已三种子一致，方法集合仍随运行在 0–13 个方法间摆动，全部经 `ReferenceQueue.poll` /
+`remove` 的结果可达：`LocaleResources$ResourceReference.getCacheKey`、`ResourceBundle$KeyElementReference.getCacheKey`、
+`Bundles$BundleReference.getCacheKey`、`FileCleanable.performCleanup` / `cleanupClose0`、`Provider.implPutIfAbsent` 等。
+另：引擎外的 std `HashMap`（RandomState：handwritten* / manifest* / seeds / jca / locale / services / `engine/seeds.rs` /
+`cut.rs` / `hw_inherit` / loaders）使同一 `--hash-seed` 的两次运行顺序也不同，复现需多跑几次。
+
+根因（`--flows '@path:…|open:java/lang/ref/Reference'` 与 `@grow` 查实）：
+
+1. 闭包内没有 `ReferenceQueue.enqueue`，`poll0` 的 `head = (rn == r) ? null : rn`（`rn = r.next`）是自环，`O(q, head)` 的初值只能来自外部。
+2. 好的运行里初值来自 `VarHandleReferences$FieldInstanceReadWrite.compareAndExchange @44 → Unsafe.compareAndExchangeReference`
+   的写入值（目标实参 = 方法句柄通道实参池），经 `hw_site_fields` 逐对象接到 `O(q, head)`（`head` 按名放开，偏移可写）。
+3. 目标实参来自 `Node::RN`（实参池去冗余视图，`reflect_call.rs::rcall_absorb`）：已逃逸对象 x 若属于池中某 open 类型 o 就不列出。
+   去冗余的前提是「open 视图与逐个列出结果一致」，但 `hw_site_fields` 对 open 目标只写 o 自身的引用字段（子类字段不可枚举），
+   逐个列出的 x 则写它的全部字段。q（`ReferenceQueue`）先于 `open(Object)` 入池就被列出、`head` 被写入；后于它入池就被涵盖、
+   `head` 不被写入——结果取决于入池先后。
+
+试过的两条修法（均正确但代价不可接受，已撤回）：
+
+- 去冗余只在 x 于 o 之外的引用字段都不可按偏移读写时才涵盖，字段之后放开时补列（单调）：`head` / `next` 等常用名按名放开，
+  绝大多数对象被列出，DeepCopy 冷闭包 > 10 min 未完成（修前约 3.5 min）。
+- open 目标写入另接全部已逃逸子类的引用字段（使 open 视图真正涵盖逐个列出）：Unsafe / 句柄解释器的大值集经 `U` 汇入全部
+  已放开字段，同样 > 10 min 未完成。
+
+### 交接 / 下一步
+
+终态方向：让「open 目标写入」与「去冗余」共用同一个等价定义，且不引入大值集。建议从写入点收窄入手——差异只出在偏移不是符号偏移的
+未收窄站点（`FieldInstanceReadWrite.*` 的偏移来自 VarHandle 对象的 `fieldOffset` 字段），按 VarHandle 对象的字段来源
+（字段句柄来源标记 `fh_marks` / `field_handles.rs`）把站点收窄到句柄所指字段：收窄站点上逐个列出与 open 涵盖结果相同
+（`site_field_nodes` 已对二者同口径），去冗余随之与顺序无关，Unsafe 写入也不再撒到目标对象的全部引用字段。
+收窄覆盖后再复查剩余未收窄站点（FieldReflector 等）是否仍有同类差异。验收照旧：DeepCopy / StockTrans / TSLP（正常 + 探针）
+与 HTTP 种子 0 / 1 / 2 类 / 方法 / 反射集合一致。
