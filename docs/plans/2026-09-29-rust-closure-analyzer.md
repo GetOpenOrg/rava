@@ -250,20 +250,80 @@ rava closure … --dynamic <jvm-class-load.log>    # 3.8 对照
 
 ## 六、实施阶段
 
-状态标记：✅ 已完成（附提交）· 🔄 进行中 · ⏳ 未开始。
+状态标记：✅ 已完成（附提交）· 🔄 进行中 · ⏳ 未开始 · ❌ 否决。一行一个任务：大任务行只写总体状态，拆出的子任务各占一行（编号 `<阶段>-<子项>`）。
 
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
-| C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 已完成（679cd5d3） |
-| C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 已完成（41dc1d6d；手写层 syn 扫描随本阶段落地） |
-| C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 已完成（8596056b） |
-| C1c | 手写层 `__set_` 识别 → 字段常量折叠（全写入来源）→ 容器对象按分配点区分 → 手写数组写入按调用点建模 → 流水线对象敏感 + 类型测试折叠 → 反射返回值；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | ✅ 已完成（1e09a9a4）：第 0 步 bfcb75d7、第 1 步 32a789c6、第 2 步、第 3 步（CPA 实测否决，改为手写数组写入模型）、第 3b 步、第 4 步 97b0393c（反射目标可靠性）、耗时（CollectorsDemo 28 s → 2.7 s） |
-| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`） | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | 🔄 进行中：第 1 步 ✅ 79480fa9（`--release` 34 前缀实测）；手写边界规范 ✅ 1c73648d（`docs/reference/handwritten-boundary.md`）；`--release-bytecode`（模拟删除手写）复测 ✅（计划 §6.6）；精度缺口 G3 ✅ 2208ddda（`[facts.array_returns]`）、G1 ✅ 69c2e14d（静态分派转发按调用点克隆，k = 1）、G2 实测否决（类集不变、耗时 ×6，改为 G2′ 收窄 open 引入点），复测与 8 个待重测前缀的去留建议见计划 §6.7；Unsafe / VarHandle 引用写入建模到对象字段与静态字段 ✅ feaa09a2（`[facts.array_writes]` 的 `fields` / `last`，修正 CompletableFuture 分派缺失）；精度线（计划 §6.9）：G2′ ✅ 02bf00ff / c731a473，系统属性折叠 ✅ c501c499 / bfae1dee，类镜像作静态字段基址 ✅ 0333ede2，按名取类（常量前缀 + 常量表）✅ f1d00887；精度二期 ✅ a6b4c6d5（边界收窄计划 §6.10）；精度三期（`closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader 服务目录事实、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实，见 `2026-09-30-optimization-directions.md`）9 项完成，TestCharsetForName 回归已修（98bc2e68，服务 provider 父类链按字节码分析；17fc2e7e 动态对照补方法粒度与 `cut` 标记），✅ 已合入 d8212bee（试合并 e2e 16 例 14 通过；TestStreamEncoderCharsets / TestNetworkInterface 主干同样失败，另行修复）；合入后续修 ✅（均已进 main）：VM 钩子规则 3bb4394a（手写文件中带回调边、不匹配类及超类型任何方法名的 pub fn 作为伪方法入口）、null_recv 未建模来源补全 6ced8de5 / 380bcf80（null_recv 3257 → 1570，无新增站点；数组属主的 invokevirtual 改非虚）、嵌套宿主边 f67d1de8（`engine/nest.rs`：解析到他类声明的 private 成员时双方 nest host 记为 Type 级），31 例动态对照翻译域漏覆盖全部 0；待：一次性删除全部非 VM 契约过渡手写（`c1d-final` 1e623cec，已并入 `c1d-prec`：删除后暴露缺口的修复进行中，另一会话的 VM 注入状态修复 dc9fd946 / d8a0b082 已经 b1ac5b7c 并入主干，由 `c1d-prec` 合并取舍；编译成本回到合理范围前不合入）；2026-10-02 拆为三线：**C1d-a**（`c1d-p0`）具体求值器 `engine/concrete/` 判定 OOB 消息、PTI 校验、getGenericInterfaces 三道闸门——正式 HelloWorld（无 `--cut-file`）现 ≈3091 类 / 闭包 ≈600 s，f0 切断 319 类 / 2 s，目标 ≤360 类且 ≤3 s，达标后合入 1e623cec，并把剩余 139 个 `#[jvm_boundary]`（19 文件）按准入类别登记归零、删除该宏及分析器解析；**C1d-b**（`c1d-pick`，20ef4fdc 已合入 4b73ea61）反射实参池分两通道收窄序列化闭包（DeepCopy ≤1640 类、fold_props ≥42），兼 m3 `serialVersionUID` 静态字段闭包；**native-gaps** 补 native 缺口（TestModuleLayerDefine、TestSecurityManagerContext 修复中）；regress2 ✅ 6c7eb831；FS-C2（应用类加载器）另立计划 `2026-10-02-fs-c2-app-classloader.md`。**2026-10-02 进展**：C1d-a a1 ✅ 正式 HelloWorld 423 类 / 2–3 s（≤360 不可达，余量转 a5 OOB 关系推理），a2 抽查 5/6 余 TestUnixFileNatives，之后 a3 `#[jvm_boundary]` 审计数 86→0；C1d-b b0 ✅ e90a592d，b1′ / b1 进行中；native-gaps ✅ 417a6594；FS-C2 ✅ 4a98f5e3；栈帧来源统一 ✅ be1b97be；boot layer 第 0 步 ✅ 27dfb419（计划 `2026-10-02-boot-layer.md`），第 1 步起 ◀── a2。待：全量语料重测（JDK 21，Python 生成器删除的判据，见 `2026-10-01-python-generator-deletion.md`） |
-| C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段 | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ✅ 已完成（分散落地，2026-09-30 核对）：syn 手写扫描（C1 / C1c 第 0 步，`closure::handwritten`；宏内调用点 8078f2b1）、补种（`closure::seeds`：注解 / locale / JCA / data bundle）、反射常量数据流（`engine/reflect.rs`，`[facts.reflect]`，反射缺口随 report 输出）、`[facts]` 各段；现行 upcalls 的 Python 机制已随 C4 删除 |
-| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量 | 生成器改动遵守原则 4（无类名字面量） | ✅ 在 Rust 生成器实施（2026-09-30 决策，见 `2026-09-30-rust-emitter.md`；Python 侧不再投入）。2026-10-01 派发 `emitter-c3`（起点 closure-prec3 98bc2e68，计划 `2026-10-01-emitter-c3.md`）：null_recv 抛 NPE、noreturn 终止控制流与死区间 0 翻译、consts 常量、class_init 事实、按 dispatch 发 vtable 槽、L1 不透明类型。前置已合入：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish（`emitter-final`，c7a9d7b4）。✅ 已合入（30df3e74，2026-10-01；单测全过、e2e 抽查 14 例全过、动态对照漏覆盖 0）：6 项全部实现——null_recv 抛 NPE、noreturn 终止控制流、运行时初始系统属性表与分析器折叠同源、class_init 事实、按 dispatch 保留 vtable 槽（手写继承覆盖所在槽族强制保留 8075b674）、L1 不透明类型（`java_class_opaque!`；分析器级别阶梯新增 L2 layout，01711d08；L1 静态类型访问 L2 属主成员时发射侧上转，96de08ea；经未建模来源进入值流的虚调用点属主升为 L2，修动态代理接口误判 null_recv，43d727a2）；不透明类不参与 S4 拆层，整类留在声明层。folds 的 Python 消费侧已合入（invoke 折叠保留调用，cad4a84c）；v2 按条目输出 `dead_catches`（Python 移植期差异 D2），Python 与 Rust `input` crate 两侧消费 ✅ b7f76452 |
-| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21）通过集合 ⊇ 冻结的 Python 基线；gap_scan precheck 无新增缺口 | 🔄 接入 ✅（`codegen/closure_input.py`，Rust 生成器由 `input` crate 消费，`rava build` 进程内直传见 `emitter-perf2`）；第五节 Python 机制删除 ✅（2026-09-30，`closure-c4-cleanup`，生成树逐字节一致）；Python 脚本并入 rava（`scripts-rava` ✅ bb0b7736：名字作用域统一、m3 编译错误归零）、逐例清理产物（`run-tests-prune` ✅ ad9e938d）；待：C1d-a / C1d-b / native-gaps / C6 后续合入后跑全量 e2e（JDK 21，基线 `2026-10-01-python-baseline-jdk21.txt` 1029 例；JDK 25 不设 Python 基线，2026-10-01 用户决定） |
-| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集） | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ 已完成：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`；实测见 §3.8.1 |
-| C6 | 手写层回调零声明（3.7.1）：辅助函数全局传递、内部 vtable 方法映射、sigpoly `__site` 体、宏展开、常量反射、JVMS 指令异常、VM 语义规则 | 手写层 `upcalls` 声明 = 0；`error.rs` `vm-upcalls` = 0；`upcalls` 属性参数及其解析机制删除；e2e 通过且动态对照漏覆盖 = 0；不纳入不必要的类（闭包可以缩小） | 🔄 `upcalls` 声明与解析机制已删（59dbedc1，实施笔记 `2026-10-01-c4-regression-fixes.md`）；`c4-regfix` ✅ 已合入 1ba0d9aa（null_recv E0277、`hw_untyped_sites` chain 归零、桥方法并入继承槽不再误发存根）；后续 `c6-generic-closure`（4173cebd）进行中：泛型辅助 fn 的闭包形参推断、TestAnnoNestedArray null_recv 违例（分析判恒空、运行期非空，属可靠性缺陷）修复 |
+| C0 | `classfile` + `resolve` crate：jmod 读取、完整解码、层次与 JVMS 解析；与 `codegen/classfile.py` 做解析结果 golden 对照 | JDK 21 / 25 的 java.base 全部类解析结果与 Python 逐字段一致 | ✅ 679cd5d3 |
+| C1 | `closure` 引擎：absint + cfg + xta + init + 异常；清单读取；provenance；手写层 syn 扫描随本阶段落地 | HelloWorld 能输出 closure.json；每个节点都有 via；`--why` 可用 | ✅ 41dc1d6d |
+| C1b | 值来源追踪：形参级 / 返回值级类型集（VTA 精度）替代方法级 XTA 集 | 7.1 未达标两项达标；动态对照翻译域漏覆盖 = 0 | ✅ 8596056b |
+| C1c | 精度改进总项，子项 C1c-0～C1c-5；closure.json 导出 `folds` | 7.3 所列 7 个用例达标；含 FileIOTest 的动态对照翻译域漏覆盖 = 0 | ✅ 1e09a9a4 |
+| C1c-0 | 手写层 `__set_` 识别 | 随 C1c | ✅ bfcb75d7 |
+| C1c-1 | 字段常量折叠（全写入来源） | 随 C1c | ✅ 32a789c6 |
+| C1c-2 | 容器对象按分配点区分 | 随 C1c | ✅ |
+| C1c-3 | 手写数组写入按调用点建模（原定 CPA，实测否决后改为此方案） | 随 C1c | ✅ |
+| C1c-3b | 流水线对象敏感 + 类型测试折叠 | 随 C1c | ✅ |
+| C1c-4 | 反射返回值（反射目标可靠性） | 随 C1c | ✅ 97b0393c |
+| C1c-5 | 分析耗时 | CollectorsDemo 28 s → 2.7 s | ✅ |
+| C1d | 边界收窄：手写只留 VM 契约层，其余按字节码翻译（见 6.1；独立计划 `docs/plans/2026-09-29-boundary-narrowing.md`）；子项见下，实时进度以 `docs/tasks.md` 为准 | 每个内部包边界前缀都有放行实测数据与去留结论；`[boundary]` 只剩 VM 契约类；放行包的手写代码删除清单经用户逐项确认 | 🔄 |
+| C1d-1 | `--release` 34 前缀放行实测 | 每前缀有实测数据 | ✅ 79480fa9 |
+| C1d-2 | 手写边界规范 `docs/reference/handwritten-boundary.md` | 用户确认 | ✅ 1c73648d |
+| C1d-3 | `--release-bytecode`（模拟删除手写）复测 | 计划 §6.6 | ✅ |
+| C1d-G3 | 精度缺口 G3：`[facts.array_returns]` | 计划 §6.7 | ✅ 2208ddda |
+| C1d-G1 | 精度缺口 G1：静态分派转发按调用点克隆（k = 1） | 计划 §6.7 | ✅ 69c2e14d |
+| C1d-G2 | 精度缺口 G2 | 实测类集不变、耗时 ×6 | ❌ 否决，改为 G2′ |
+| C1d-uw | Unsafe / VarHandle 引用写入建模到对象字段与静态字段（`[facts.array_writes]` 的 `fields` / `last`，修正 CompletableFuture 分派缺失） | — | ✅ feaa09a2 |
+| C1d-G2′ | 收窄 open 引入点（计划 §6.9） | — | ✅ 02bf00ff / c731a473 |
+| C1d-sp | 系统属性折叠（计划 §6.9） | — | ✅ c501c499 / bfae1dee |
+| C1d-cm | 类镜像作静态字段基址（计划 §6.9） | — | ✅ 0333ede2 |
+| C1d-fn | 按名取类（常量前缀 + 常量表）（计划 §6.9） | — | ✅ f1d00887 |
+| C1d-p2 | 精度二期（边界收窄计划 §6.10） | — | ✅ a6b4c6d5 |
+| C1d-p3 | 精度三期 `closure-prec3`：VarHandle 可达性收窄、G4–G6、ServiceLoader 服务目录事实、SystemJavaLangAccess、数组汇聚、选择子克隆、类初始化事实（`2026-09-30-optimization-directions.md`）；TestCharsetForName 回归修复 98bc2e68、动态对照方法粒度 17fc2e7e | 试合并 e2e 16 例 14 通过（余 2 例主干同样失败） | ✅ d8212bee |
+| C1d-hook | VM 钩子规则：手写文件中带回调边、不匹配类及超类型任何方法名的 pub fn 作为伪方法入口 | — | ✅ 3bb4394a |
+| C1d-nr | null_recv 未建模来源补全；数组属主的 invokevirtual 改非虚 | null_recv 3257 → 1570，无新增站点 | ✅ 6ced8de5 / 380bcf80 |
+| C1d-nest | 嵌套宿主边（`engine/nest.rs`：解析到他类声明的 private 成员时双方 nest host 记为 Type 级） | 31 例动态对照翻译域漏覆盖全部 0 | ✅ f67d1de8 |
+| C1d-final | 一次性删除全部非 VM 契约过渡手写（`c1d-final` 1e623cec，并入 `c1d-prec`；VM 注入状态修复 dc9fd946 / d8a0b082 经 b1ac5b7c 并入主干） | 编译成本回到合理范围后合入 | 🔄 |
+| C1d-a | 去截断（`c1d-p0`）：具体求值器 `engine/concrete/` 判定 OOB 消息、PTI 校验、getGenericInterfaces 三道闸门；剩余 `#[jvm_boundary]` 按准入类别登记归零并删除该宏及分析器解析 | 正式 HelloWorld ≤360 类且 ≤3 s（起点 ≈3091 类 / ≈600 s） | 🔄 |
+| C1d-a1 | 正式 HelloWorld 闭包收窄 | 423 类 / 2–3 s（≤360 不可达，余量转 a5 OOB 关系推理） | ✅ |
+| C1d-a2 | 抽查收尾 | 抽查 6/6 | 🔄 5/6，余 TestUnixFileNatives |
+| C1d-a3 | `#[jvm_boundary]` 归零 | 审计数 86 → 0 | ⏳ |
+| C1d-b | 反射与过近似收窄（`c1d-pick`）：反射实参池分两通道收窄序列化闭包，兼 m3 `serialVersionUID` 静态字段闭包 | DeepCopy ≤1640 类、fold_props ≥42 | 🔄 |
+| C1d-b-pick | 第一段 `c1d-pick` | — | ✅ 20ef4fdc（合入 4b73ea61） |
+| C1d-b0 | b0 | — | ✅ e90a592d |
+| C1d-b1 | b1′ / b1 序列化收窄 | DeepCopy ≤1640 类 | 🔄 |
+| C1d-ng | native-gaps：补 native 缺口（TestModuleLayerDefine、TestSecurityManagerContext） | — | ✅ 417a6594 |
+| C1d-rg2 | regress2 | — | ✅ 6c7eb831 |
+| C1d-fsc2 | FS-C2 应用类加载器（`2026-10-02-fs-c2-app-classloader.md`） | — | ✅ 4a98f5e3 |
+| C1d-sf | 栈帧来源统一 | — | ✅ be1b97be |
+| C1d-boot0 | boot layer 第 0 步（`2026-10-02-boot-layer.md`） | — | ✅ 27dfb419 |
+| C1d-boot | boot layer 第 1 步起 | TestModuleLayerDefine 原样通过 | ⏳ ◀── C1d-a2 |
+| C1d-full | 全量语料重测（JDK 21，Python 生成器删除的判据，见 `2026-10-01-python-generator-deletion.md`） | — | ⏳ |
+| C2 | `handwritten`（syn）+ seeds + reflect 数据流 + `[facts]` / `[reflect_sinks]` 清单段（分散落地，2026-09-30 核对；现行 upcalls 的 Python 机制已随 C4 删除） | 反射缺口清单可观测；手写层边与现行 upcalls 对照无缺失 | ✅ |
+| C2-1 | syn 手写扫描（`closure::handwritten`，C1 / C1c-0 落地；宏内调用点） | — | ✅ 8078f2b1 |
+| C2-2 | 补种（`closure::seeds`：注解 / locale / JCA / data bundle） | — | ✅ |
+| C2-3 | 反射常量数据流（`engine/reflect.rs`，`[facts.reflect]`，反射缺口随 report 输出） | — | ✅ |
+| C2-4 | `[facts]` 各段 | — | ✅ |
+| C3 | `levels` + `dispatch` / `folds`；发射层支持 L1 不透明类型、按 `dispatch` 发射 vtable 槽、折叠点发射常量。在 Rust 生成器实施（2026-09-30 决策，`2026-09-30-rust-emitter.md`；计划 `2026-10-01-emitter-c3.md`） | 生成器改动遵守原则 4（无类名字面量）；单测全过、e2e 抽查 14 例全过、动态对照漏覆盖 0 | ✅ 30df3e74 |
+| C3-0 | 前置 `emitter-final`：null 虚视图抛 NPE、栈序物化待求值条目、注册钩子 turbofish | — | ✅ c7a9d7b4 |
+| C3-1 | null_recv 抛 NPE | 随 C3 | ✅ 30df3e74 |
+| C3-2 | noreturn 终止控制流与死区间 0 翻译 | 随 C3 | ✅ 30df3e74 |
+| C3-3 | consts 常量：运行时初始系统属性表与分析器折叠同源 | 随 C3 | ✅ 30df3e74 |
+| C3-4 | class_init 事实 | 随 C3 | ✅ 30df3e74 |
+| C3-5 | 按 dispatch 保留 vtable 槽（手写继承覆盖所在槽族强制保留） | 随 C3 | ✅ 8075b674 |
+| C3-6 | L1 不透明类型 `java_class_opaque!`：级别阶梯新增 L2 layout（01711d08）；L1 静态类型访问 L2 属主成员时上转（96de08ea）；未建模来源虚调用点属主升 L2（43d727a2）；不透明类不参与 S4 拆层 | 随 C3 | ✅ 01711d08 / 96de08ea / 43d727a2 |
+| C3-7 | folds 的 Python 消费侧（invoke 折叠保留调用） | — | ✅ cad4a84c |
+| C3-8 | v2 按条目输出 `dead_catches`，Python 与 Rust `input` crate 两侧消费 | — | ✅ b7f76452 |
+| C4 | 接入：`transpile.py` 读 closure.json；删除第五节所列 Python 机制 | 全量 e2e（JDK 21）通过集合 ⊇ 冻结的 Python 基线；gap_scan precheck 无新增缺口 | 🔄 |
+| C4-1 | 接入（`codegen/closure_input.py`；Rust 生成器由 `input` crate 消费，`rava build` 进程内直传见 `emitter-perf2`） | — | ✅ |
+| C4-2 | 第五节 Python 机制删除（`closure-c4-cleanup`） | 生成树逐字节一致 | ✅ |
+| C4-3 | Python 脚本并入 rava（`scripts-rava`：名字作用域统一、m3 编译错误归零） | — | ✅ bb0b7736 |
+| C4-4 | 逐例清理产物（`run-tests-prune`） | — | ✅ ad9e938d |
+| C4-5 | 全量 e2e（JDK 21，基线 `2026-10-01-python-baseline-jdk21.txt` 1029 例；JDK 25 不设 Python 基线，2026-10-01 用户决定） | 通过集合 ⊇ 基线 | ⏳ ◀── C1d-a / C1d-b / C6 |
+| C5 | 3.8 动态对照纳入 `run_tests.py`（每个测试记录 JVM 加载集与静态闭包的差集）：`scripts/dyn_compare.py` + JVMTI agent `scripts/dyn_agent/load_trace.c`，run_tests 缺省开（`--no-dyn` 关），明细 `logs/dyn/<test>.json`，实测见 §3.8.1 | 翻译域漏覆盖 = 0；静态多出的类 100% 有 provenance 说明 | ✅ |
+| C6 | 手写层回调零声明（3.7.1）：辅助函数全局传递、内部 vtable 方法映射、sigpoly `__site` 体、宏展开、常量反射、JVMS 指令异常、VM 语义规则 | 手写层 `upcalls` 声明 = 0；`error.rs` `vm-upcalls` = 0；`upcalls` 属性参数及其解析机制删除；e2e 通过且动态对照漏覆盖 = 0；不纳入不必要的类（闭包可以缩小） | 🔄 |
+| C6-1 | `upcalls` 声明与解析机制删除（实施笔记 `2026-10-01-c4-regression-fixes.md`） | — | ✅ 59dbedc1 |
+| C6-2 | `c4-regfix`：null_recv E0277、`hw_untyped_sites` chain 归零、桥方法并入继承槽不再误发存根 | — | ✅ 1ba0d9aa |
+| C6-3 | `c6-generic-closure`：泛型辅助 fn 的闭包形参推断、TestAnnoNestedArray null_recv 违例修复、用户注解类型补种 | — | ✅ 7fdbfa8c（合入 3f9d4cc9） |
 
 各阶段独立 worktree、独立提交；C4 之前 Python 管线保持不变，Rust 分析器只做旁路输出与对照。
 
