@@ -65,12 +65,19 @@ SetAccessibleBoundary 2 行 / SystemStableProps 2 行）——五个生成器缺
 | R9 | **charset/zipfs 提供者构造存根** | `StandardCharsets$Classes.<init>` / `java/nio/file/FileSystem.<init>` | 5（charsets 3 + zipfs 2） | SPI 装载路径（A 档第 1 步依赖） |
 | R10 | **数组反射 native** | `java/lang/reflect/Array.set` native 存根 | 1（ReflectArrayDeep） | native 准入表 |
 | R11 | **L3 桥分派闭包缺席** | `Comparable.compareTo:(Object)` 分派未覆盖 | 1（InterfaceMethodReflect） | 闭包分析器分派 |
+
+> **R11 实施要点（refl-fix C 族，2026-10-05）**：根因不在闭包——桥方法（ACC_BRIDGE）不发射为 Rust 方法，方法元数据与分派臂里都没有它，`getMethod("compareTo", Object)` 落到 Comparable、`isBridge` 计数为 0。
+> 修法：类头发 `#[bridge_method(.., bridge_to = 真实描述符)]` 行（宏忽略），元数据扫描收为方法行（修饰符 bridge = 0x40，与已发射的协变桥 wrapper 同签名去重），分派按桥描述符键入真实方法臂。
+
 | R12 | **E0308 编译错**（三处不同面） | ComparatorNullsFirst / JndiNoProvider / StreamTerminalEdges | 3 | 生成器类型发射（record/泛型推断待抽查） |
 | R13 | **http async 转译错** | TestHttpLoopbackAsync transpile fail | 1 | 转译器（CompletableFuture 链待抽查） |
 
 未单列：AnnoDeepAccess / ProtectionDomainFaces（`Class$Holder.allPermDomain` 存根）/ 
 OverloadResolution 等 4 例杂项 run error，归入 R2/R3 邻域待逐例细看；
 LocaleDateCjk（run error）与 R-CLDR 环境相邻，待日志细读。
+
+> **ProtectionDomainFaces 实施要点（refl-fix C 族）**：`Class$Holder` 随外层 VM 边界类 Class 截断，allPermDomain 存根——纯 Java 静态状态，入 `translate_nested`；应用类的 `getProtectionDomain0` 按内建加载器定义类路径落地（ucp 首条目 CodeSource → `SecureClassLoader.getProtectionDomain`），codesource 非空与 JDK 一致。
+
 
 ## 四、jmod A/B 档结论（对应计划 §七 实测列）
 

@@ -580,11 +580,29 @@ impl Class {
 
 
 
-    /// native `getProtectionDomain0()`：原生二进制无代码源 / 类加载器保护域——null
-    /// （JDK 对 bootstrap 类同样返回 null，调用方回落 allPermDomain）。
+    /// native `getProtectionDomain0()`：HotSpot `JVM_GetProtectionDomain` 返回定义类时 defineClass 传入、
+    /// 写进镜像的保护域（VM 注入状态，准入 ③）。引导类、数组与基本类型为 null（调用方回落
+    /// `Class$Holder.allPermDomain`，JDK 同）。应用类加载器定义的类：原生二进制无运行期类定义，按 JDK
+    /// 内建加载器定义类的路径落地——`BuiltinClassLoader.defineClass(cn, Resource)` 以类路径条目 URL 建
+    /// 无签名者的 CodeSource，经 `SecureClassLoader.getProtectionDomain(cs)`（按代码源缓存，同源类共享
+    /// 同一保护域）取域；类路径条目即应用加载器 ucp 的首条目（initPhase3 按字节码建立，空
+    /// `java.class.path` 为当前目录，与 JDK 同口径）。其余加载器定义的类为 null（同引导类回落）。
     #[jvm_native]
     pub fn getProtectionDomain0(&self) -> Result<crate::java::security::ProtectionDomain> {
-        Ok(Default::default())
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        if crate::meta::class_defining_loader(&name) != Some("app") {
+            return Ok(Default::default());
+        }
+        let loader: crate::java::lang::ClassLoader = crate::jdk::internal::loader::ClassLoaders::appClassLoader()?;
+        let builtin: crate::jdk::internal::loader::BuiltinClassLoader =
+            <crate::jdk::internal::loader::BuiltinClassLoader as ::std::convert::From<Object>>::from(Object::from(Clone::clone(&loader)));
+        let ucp: crate::jdk::internal::loader::URLClassPath = builtin.__get_ucp();
+        let urls: JArray<crate::java::net::URL> = ucp.getURLs()?;
+        let url: crate::java::net::URL = if urls.len()? > 0 { urls.get(0)? } else { Default::default() };
+        let cs = crate::java::security::CodeSource::new_url_arr_codesigner(url, Default::default())?;
+        let secure: crate::java::security::SecureClassLoader =
+            <crate::java::security::SecureClassLoader as ::std::convert::From<Object>>::from(Object::from(loader));
+        secure.getProtectionDomain(cs)
     }
 
     /// native `getSigners()`：HotSpot `JVM_GetClassSigners`——基本类型或未经 setSigners 记录 → null
