@@ -217,9 +217,6 @@ pub(crate) struct ClassMeta {
     /// 本文件以别名引用的祖先：{本地名 → 定义名}（`__as_<定义名>` 钩子名；类型名用本地名）
     pub ancestor_hooks: HashMap<String, String>,
     pub all_supertypes: Vec<String>,
-    /// 本类实现且在闭包内的接口载体 Rust 短名（A-4 批次 6）：wrapper 的类型驱动视图
-    /// 探针（__view_into）为每个成员生成接口载体臂（数组协变 / try_checkcast 判定）。
-    pub iface_carrier_views: Vec<String>,
     pub is_interface: bool,
     /// toString() 所属 vtable 的 Rust 类名（本类或祖先）；None = 继承链上没有翻译出的 toString。
     pub to_string_vtable: Option<String>,
@@ -283,12 +280,6 @@ impl ClassMeta {
             } else if path.is_ident("all_supertypes") {
                 let s = lit_str(attr)?;
                 m.all_supertypes =
-                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
-            } else if path.is_ident("iface_carrier_views") {
-                let s = lit_str(attr)?;
-                // A-4 批次 6：本类实现且闭包内的接口载体 Rust 短名（codegen 侧已过滤
-                // 闭包外接口——无生成载体类型，臂引用将 E0433）
-                m.iface_carrier_views =
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("is_interface") {
                 m.is_interface = lit_bool(attr)?;

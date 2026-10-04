@@ -60,9 +60,20 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         self.__view_target().and_then(|__t| __t.__proxy_invoke(iface, name, desc, args))
     }
 
-    /// instanceof 运行时检查（java_class 宏从 all_supertypes 静态展开 matches! 模式）
+    /// instanceof 运行时检查：视图委托运行时类；生成类按本类描述符的超类型名单（本类、父类链、
+    /// 全部接口、`java/lang/Object`）判定（S7-1，不再按类展开 matches!）。代理载体另行覆盖。
     fn is_instance_of(&self, type_id: &str) -> bool {
-        self.__view_target().is_some_and(|__t| __t.is_instance_of(type_id))
+        match self.__view_target() {
+            Some(__t) => __t.is_instance_of(type_id),
+            None => self.__desc().is_some_and(|d| d.is_subtype_name(type_id)),
+        }
+    }
+
+    /// 运行时类的静态描述符（S7）：生成类返回本类 `X__DESC`；数组、基本类型装箱、
+    /// 手写非类对象没有类描述符 → None。wrapper / 视图经 `__view_target` 委托。
+    #[doc(hidden)]
+    fn __desc(&self) -> Option<&'static crate::class_desc::__ClassDesc> {
+        self.__view_target().and_then(|__t| __t.__desc())
     }
 
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
@@ -181,21 +192,15 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 默认（未实现任何接口的对象）不填 `slot`。
     #[doc(hidden)]
     fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
-    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）。
-    /// java_class! 宏对生成类自动 override；未捕获异常报告等 VM 级设施据此取得类名。
+    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）：视图委托运行时类，
+    /// 生成类取本类描述符（S7-1）；未捕获异常报告等 VM 级设施据此取得类名。
     fn __class_name(&self) -> &'static str {
         if let Some(__t) = self.__view_target() { return __t.__class_name(); }
-        "java/lang/Object"
+        match self.__desc() {
+            Some(d) => d.binary_name,
+            None => "java/lang/Object",
+        }
     }
-
-    /// 按运行时类重建 `type_id`（本类或任一祖先类的 binary name）类型的引用视图。
-    /// 对象常以静态类型（如 `Throwable`）流转，catch 需要按运行时类还原为 catch 声明类型。
-    /// `any` 是对象存储的 `crate::sync_model::__AnyRef`；wrapper 侧 override 传入自身存储并委托 vtable。
-    fn __view_as(
-        &self,
-        _any: crate::sync_model::__AnyRef,
-        _type_id: &str,
-    ) -> Option<Box<dyn std::any::Any>> { None }
 
     /// 对象标识（`==` / `!=` 引用比较的依据）：同一 Java 对象的所有引用视图（祖先类 wrapper、
     /// 接口载体、Object）返回同一值。java_class! 宏对生成类 override 为对象存储的标识单元。
@@ -228,13 +233,14 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __erased_vtable(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
 
-    /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），`slot` 是
-    /// 调用方（`From<Object> for JArray<T>`，知道目标元素类型 T）构造的 `Option<T>`。
-    /// 本钩子以「源元素类型的探针对象」view_into 该 slot——祖先名单静态生成（与元素值
-    /// 无关），填充成功 ⇔ T 是源元素类型自身或其祖先（JLS §4.10.3 数组子类型条件）。
+    /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），调用方
+    /// （`From<Object> for JArray<T>`，知道目标元素类型 T）给出 T 的 binary name `target_elem`
+    /// 与 `Option<T>` 的 `slot`。以「源元素类型的 null 探针」判定：探针是类 → 按其描述符的
+    /// 超类型名单（与元素值无关）；探针是数组 → view_into 该 slot（嵌套数组的 `Object[]` 上转）。
+    /// 成立 ⇔ T 是源元素类型自身或其超类型（JLS §4.10.3 数组子类型条件）。
     /// 非数组对象不响应（默认 false，checkcast 由其余钩子判定）。
     #[doc(hidden)]
-    fn __array_elem_assignable(&self, _slot: &mut dyn std::any::Any) -> bool { false }
+    fn __array_elem_assignable(&self, _target_elem: &str, _slot: &mut dyn std::any::Any) -> bool { false }
 
     /// 多维数组的元素级 checkcast 探针：receiver 是**目标**数组类型 `JArray<U>` 的 null 探针
     /// （`T::default()`），`candidate` 是源数组的一个元素。数组探针按 `try_array_view::<U>`
@@ -244,8 +250,9 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __array_accepts(&self, _candidate: &Object) -> bool { false }
 
-    /// checkcast 的类型驱动形式：`slot` 是 `Option<T>`，`T` 为本类或任一祖先类的 wrapper 类型时
-    /// 按运行时类重建该视图写入 `slot` 并返回 true（保留运行时类的覆盖实现）；否则返回 false。
+    /// 数组的类型驱动视图：`slot` 是 `Option<JArray<E>>` 等数组形态时按本数组重建该视图写入
+    /// `slot` 并返回 true；否则返回 false。类对象不响应——类目标的判定读描述符（S7-1），视图经
+    /// `From<Object>` 的擦除重建取得。
     fn __view_into(
         &self,
         _any: crate::sync_model::__AnyRef,

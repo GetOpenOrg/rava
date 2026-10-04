@@ -23,8 +23,10 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     // 8. BINARY_NAME 常量
     // ══════════════════════════════════════════════════════════════════════════
 
+    let class_desc = class_desc(ctx);
     let (binary_name_impl, inner_binary_name): (TokenStream2, TokenStream2) = if !binary_name.is_empty() {
         (quote! {
+            #class_desc
             impl #impl_g #struct_ident #ty_g #where_c {
                 pub const BINARY_NAME: &'static str = #binary_name;
             }
@@ -52,12 +54,12 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     //      视图（共享存储与对象标识）。子类值经超类 vtable supertrait 上转，任意实例化
     //      均可重建（`Enum::<Object>::from(枚举常量)` 即此形态）；
     //   3. 其余（运行时类不是本类族）→ checkcast 的 ClassCastException（既有语义）。
-    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`；按类只转交本类的部件构造入口
+    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`（读描述符）；按类只转交本类描述符、部件构造入口
     // 与存储钩子（拆 crate §7.5.4 #2）。
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             fn from(obj: #obj) -> Self {
-                __class_from_object(obj, #binary_name, Self::__from_parts, #from_any)
+                __class_from_object(obj, Self::__DESC, Self::__from_parts, #from_any)
             }
         }
     };
@@ -146,4 +148,51 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
         #into_object_impl
         #from_child_for_parent
     }, inner_binary_name)
+}
+
+/// 类静态描述符（S7-0，计划 §3.2）：模块级 `static X__DESC` + wrapper 固有常量 `X::__DESC`。
+///
+/// 祖先描述符经祖先 wrapper 的固有常量取得（`<Anc<Object, ..>>::__DESC`）：类型路径无需额外
+/// `use`，祖先形参取 Object（宏为所有形参注入的标准 bound 对 Object 恒成立）。固有常量而非
+/// trait：不引入 Java 命名空间之外的公开 trait（命名原则），名字带 `__` 前缀避开 Java 静态字段。
+/// 描述符必须是 `static`（地址即类标识，`is_subclass_of` 按地址比较）；const 内联会产生多份副本。
+fn class_desc(ctx: &GenContext) -> TokenStream2 {
+    let struct_ident = &ctx.struct_ident;
+    let impl_g = &ctx.impl_g;
+    let ty_g = &ctx.ty_g;
+    let where_c = &ctx.where_c;
+    let binary_name = &ctx.meta.binary_name;
+    let desc_ident = format_ident!("{}__DESC", struct_ident);
+    let ancestors: Vec<TokenStream2> = ctx.meta.all_superclasses.iter().map(|anc_name| {
+        let anc_ident = format_ident!("{}", anc_name);
+        let atag = ctx.meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
+        let arity = if atag.is_empty() { 0 } else { type_args_arity(&atag) };
+        if arity == 0 {
+            quote! { <#anc_ident>::__DESC }
+        } else {
+            let objs = vec![quote! { Object }; arity];
+            quote! { <#anc_ident<#(#objs),*>>::__DESC }
+        }
+    }).collect();
+    let depth = ancestors.len() as u16;
+    let mut supertypes: Vec<String> = if ctx.meta.all_supertypes.is_empty() {
+        vec![binary_name.clone()]
+    } else {
+        ctx.meta.all_supertypes.clone()
+    };
+    supertypes.sort();
+    supertypes.dedup();
+    quote! {
+        #[doc(hidden)]
+        pub static #desc_ident: __ClassDesc = __ClassDesc {
+            binary_name: #binary_name,
+            depth: #depth,
+            display: &[#(#ancestors,)* &#desc_ident],
+            supertypes: &[#(#supertypes),*],
+        };
+        impl #impl_g #struct_ident #ty_g #where_c {
+            #[doc(hidden)]
+            pub const __DESC: &'static __ClassDesc = &#desc_ident;
+        }
+    }
 }

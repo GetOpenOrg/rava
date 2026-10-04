@@ -367,7 +367,7 @@ fn expand_input(input: TryInput, target: LoopTarget) -> (TokenStream2, bool) {
             quote! { #( __thrown.is_instance_of(<#matched>::BINARY_NAME) )||* }
         };
         let bind_value = match &clause.declared {
-            Some(ty) => quote! { let mut #binding: #ty = __thrown.catch_as::<#ty>(<#ty>::BINARY_NAME); },
+            Some(ty) => quote! { let mut #binding: #ty = __thrown.catch_as::<#ty>(); },
             None => quote! { let mut #binding = __thrown.catch_any(); },
         };
         chain = quote! {

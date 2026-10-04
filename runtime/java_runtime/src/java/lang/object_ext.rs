@@ -85,22 +85,13 @@ impl Object {
         slot
     }
 
-    /// JVM checkcast：把引用还原为类 `T`（binary name 为 `binary_name`）的视图。
-    /// 运行时类就是 `T` → 直接取出；运行时类是 `T` 的子类 → 按运行时类重建 `T` 视图
-    /// （vtable upcast，保留运行时类的覆盖实现）；否则 ClassCastException。
-    #[jvm_ext]
-    pub fn checkcast<T: std::any::Any + Clone + 'static>(&self, binary_name: &str) -> T {
-        if let Some(same) = (self as &dyn std::any::Any).downcast_ref::<T>() {
-            return Clone::clone(same);
-        }
-        if let Some(same) = self.0.as_any().downcast_ref::<T>() {
-            return Clone::clone(same);
-        }
-        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
-        match self.0.__view_as(unused, binary_name).and_then(|boxed| boxed.downcast::<T>().ok()) {
-            Some(view) => *view,
-            None => checkcast_fail(self, binary_name),
-        }
+    /// checkcast 失败出口（`From<Object>` 的 panic 形态）：ClassCastException 进程级断言。
+    /// 非泛型冷路径，panic 与格式化代码全程序一份。
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    pub fn __checkcast_fail(&self, binary_name: &str) -> ! {
+        panic!("ClassCastException: {} cannot be cast to {}", self.0.__class_name(), binary_name)
     }
 
     /// checkcast 的可失败形态（A-3 / S-1）：判定失败返回 `Err(JvmError::class_cast)`
@@ -424,14 +415,6 @@ impl PartialEq for Object {
 }
 impl Eq for Object {}
 
-/// `Object::checkcast` 的失败出口：非泛型冷路径，panic 与格式化代码全程序一份，
-/// 不随 `checkcast::<T>` 的每个实例化重复展开。
-#[cold]
-#[inline(never)]
-fn checkcast_fail(obj: &Object, binary_name: &str) -> ! {
-    panic!("ClassCastException: {} cannot be cast to {}", obj.0.__class_name(), binary_name)
-}
-
 /// 类 wrapper 的部件构造入口（`X::__from_parts`）：(vtable, 存储, null 标志) → 本类视图。
 pub type __PartsFn<W, V> = fn(crate::sync_model::__Shared<V>, crate::sync_model::__AnyRef, bool) -> W;
 
@@ -453,20 +436,19 @@ pub fn __erased_view<W, V: ?Sized + 'static>(obj: &Object, parts: __PartsFn<W, V
 
 /// `From<Object> for X` 的全部逻辑（宏按类只生成一行转交，拆 crate §7.5.4 #2）。判定按序：
 ///   1. null 通过任何 checkcast（JVMS §6.5），得到本类的 null 引用；
-///   2. 槽式视图：运行时类与目标实例化同族同参（含子类按超类实参映射的视图）；
-///   3. 运行时类是本类族（`is_instance_of`）→ 擦除路径：
+///   2. 同实例化：持有的对象就是 `W` → 直接取回；
+///   3. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 擦除路径：
 ///      a. 子类值：wrapper 的 vtable 经超类 supertrait 上转 + 擦除存储，重建任意实例化视图；
 ///      b. 祖先视图值：运行时存储就是本类存储（`Enum<E>` 装箱后按子类取回）→ 按精确存储还原；
 ///   4. 其余 → checkcast 的 ClassCastException。
-pub fn __class_from_object<W, V>(obj: Object, binary_name: &str, parts: __PartsFn<W, V>,
-                                 from_any: __FromAnyFn<V>) -> W
+pub fn __class_from_object<W, V>(obj: Object, desc: &'static crate::class_desc::__ClassDesc,
+                                 parts: __PartsFn<W, V>, from_any: __FromAnyFn<V>) -> W
 where W: std::any::Any + Clone + Default, V: ?Sized + 'static {
     if obj.0.is_jvm_null() { return W::default(); }
-    let mut slot: Option<W> = None;
-    if obj.0.__view_into(Rc::new(()), &mut slot) {
-        if let Some(v) = slot { return v; }
+    if let Some(same) = obj.0.as_any().downcast_ref::<W>() {
+        return Clone::clone(same);
     }
-    if obj.0.is_instance_of(binary_name) {
+    if obj.0.__desc().is_some_and(|d| d.is_subclass_of(desc)) {
         let mut vt: Option<crate::sync_model::__Shared<V>> = None;
         ObjectVTable::__erased_vtable(Rc::clone(&obj.0), &mut vt);
         let mut erased: Option<crate::sync_model::__AnyRef> = None;
@@ -479,7 +461,7 @@ where W: std::any::Any + Clone + Default, V: ?Sized + 'static {
             }
         }
     }
-    obj.checkcast::<W>(binary_name)
+    obj.__checkcast_fail(desc.binary_name)
 }
 
 /// invokeinterface 载体分派的入口部分（宏生成的接口载体方法只转交到这里）：接收者为 null 时抛

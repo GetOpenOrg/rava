@@ -132,7 +132,7 @@ fn expand_inner(p: &OpaqueInput) -> syn::Result<TokenStream2> {
             // checkcast 语义（JVMS §6.5）：null 通过；非 null 须为本类型的子类型
             fn from(obj: Object) -> Self {
                 if !obj.0.is_jvm_null() && !obj.0.is_instance_of(#binary_name) {
-                    return obj.checkcast::<Self>(#binary_name);
+                    obj.__checkcast_fail(#binary_name);
                 }
                 Self { __ref: obj, __phantom: ::std::default::Default::default() }
             }
