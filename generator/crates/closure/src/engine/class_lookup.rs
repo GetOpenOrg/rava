@@ -138,14 +138,61 @@ impl<'a> Engine<'a> {
     /// 重分析时一并重跑（见 `bytecode.rs::process_bytecode`）
     pub(super) fn class_lookup(&mut self, m: usize, off: u32, args: &[V]) -> (Vec<String>, bool) {
         self.xreaders.entry(m).or_default().insert(off);
-        let sticky = self.lookup_top.contains(&(m, off));
-        self.lookup_partial = false;
-        let r = self.class_lookup_eval(m, off, args);
-        let top = sticky || r.is_none() || std::mem::take(&mut self.lookup_partial);
-        if top {
+        // 服务实现类的反射构造点：所指类由 JCA 规则按被请求的算法补种（实例化 + 构造器入链），站点本身按推不出处理，
+        // 不按类名字段的字符串集解析——与求值时机无关，恒为同一结果
+        if self.man.seeds.jca.instantiation_hosts.iter().any(|h| *h == self.methods[m].key.to_string()) {
             self.lookup_top.insert((m, off));
+            return (Vec::new(), true);
         }
-        (r.unwrap_or_default(), top)
+        let site = (m, off);
+        let trial = self.lookup_trial.remove(&site);
+        let sticky = self.lookup_top.contains(&site);
+        self.lookup_partial = false;
+        self.lookup_incomplete = false;
+        let r = self.class_lookup_eval(m, off, args);
+        let partial = std::mem::take(&mut self.lookup_partial);
+        if std::mem::take(&mut self.lookup_incomplete) {
+            self.lookup_unsure.insert(site);
+        }
+        let unsure = self.lookup_unsure.contains(&site);
+        let top = sticky || r.is_none() || partial || unsure;
+        if top {
+            self.lookup_top.insert(site);
+        }
+        let names = r.unwrap_or_default();
+        // 名字是字符串常量：结果与求值时机无关，直接解析
+        if matches!(args.first(), Some(V::Str(..))) || self.lookup_released.contains(&site) {
+            return (names, top);
+        }
+        // 未放行时名字推不出（某支无约束任意串 / 形参或字段名字集不完备）：不按已知名字加载，结果接所指未知的 Class
+        if unsure {
+            return (Vec::new(), true);
+        }
+        if names.is_empty() {
+            return (names, top);
+        }
+        // 名字齐全：只在排空时（不动点上）仍齐全才放行（`lookup_release`）。中途齐全、终态推不出的站点不加载，
+        // 结果因而与求值先后无关
+        if trial {
+            self.lookup_released.insert(site);
+            return (names, top);
+        }
+        self.lookup_pending.insert(site);
+        (Vec::new(), top)
+    }
+
+    /// 工作队列排空时放行挂起的按名取类站点：各站点重跑，求值仍齐全即解析名字（之后按单调口径照常求值）。
+    /// 返回是否有站点放行
+    pub(super) fn lookup_release(&mut self) -> bool {
+        let ready: Vec<(usize, u32)> =
+            std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_unsure.contains(w) && !self.lookup_released.contains(w)).collect();
+        for &w in &ready {
+            self.lookup_trial.insert(w);
+            if self.in_swork.insert(w) {
+                self.swork.push_back(w);
+            }
+        }
+        !ready.is_empty()
     }
 
     fn class_lookup_eval(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
@@ -162,7 +209,7 @@ impl<'a> Engine<'a> {
             if pat.iter().any(|p| matches!(p, Part::Wild)) {
                 // 无约束的任意串：该支推不出（记 top），其余支的已知名字照常解析——结果只并不减
                 if !constrained(&pat) {
-                    self.lookup_partial = true;
+                    self.lookup_incomplete = true;
                     continue;
                 }
                 wild.push(pat);
@@ -422,7 +469,7 @@ impl<'a> Engine<'a> {
             Gap::Method => Part::Wild,
             Gap::Class => Part::Alt(vec![vec![Part::Any(set)], vec![Part::Wild]]),
             Gap::Fail => {
-                self.lookup_partial = true;
+                self.lookup_incomplete = true;
                 Part::Any(set)
             }
         }

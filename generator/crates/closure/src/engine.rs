@@ -419,6 +419,18 @@ pub struct Engine<'a> {
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 本次按名取类求值中，名字推不出（某支无约束任意串，或形参 / 字段名字集不完备）
+    lookup_incomplete: bool,
+    /// 名字曾推不出的按名取类调用点（恒按推不出处理，未放行时不按已知名字加载）
+    lookup_unsure: HashSet<(usize, u32)>,
+    /// 名字齐全、等待排空时放行的按名取类调用点（有序：放行次序确定）
+    lookup_pending: BTreeSet<(usize, u32)>,
+    /// 本轮放行、待重跑求值的调用点
+    lookup_trial: HashSet<(usize, u32)>,
+    /// 已放行的调用点：按单调口径照常求值（推不出时仍给出已知名字）
+    lookup_released: HashSet<(usize, u32)>,
+    /// 字段名配对已处理的 (类, 名字)：类层次不变，按名打开只做一次
+    fpair_done: HashSet<(u32, Rc<str>)>,
     /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
     pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理

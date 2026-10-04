@@ -112,6 +112,10 @@ impl<'a> Engine<'a> {
                 if seeded {
                     continue;
                 }
+                // 名字齐全的按名取类站点在不动点上放行（`class_lookup.rs::lookup_release`）
+                if self.lookup_release() {
+                    continue;
+                }
                 // 收尾：得到过「不返回」答复的方法按值未知重算（定论判定见 `noreturn.rs`）
                 if self.nr_drain() {
                     continue;

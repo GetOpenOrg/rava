@@ -419,3 +419,59 @@ DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 
   按已知名字加载 JCA / SSL 提供者实现。这些是修复非单调后恢复的类，不是噪声，所以不能靠撤回判定 1 来提速。
   要做到「不慢于 main」，需要在保持集合不变的前提下给引擎提速，或者让提供者按名取类的精度提高
   （只取实际被请求的算法，不取整张提供者表），属于另立的工作项。本轮未做。
+
+### 2026-10-04 续：按名取类延后放行，闭包与哈希种子无关（engine-order，阶段 2 收尾）
+
+协调方更正：main（e519e22c）自身的 `closure_independent_of_hash_seed` 也会失败。TestSerialUserGenericCallbacks 在种子 0
+下 4167 类，种子 1 下 3391 类，差的是 JCA / SSL 提供者类。合入判据改为：① 本机 TestHttpLoopbackSync / TestJndiNoProvider
+的转译耗时和类数都不高于 main；② 该单测稳定通过。
+
+**根因**：非字面量的按名取类站点（`Class.forName(x)` 等）在分析中途可能「名字齐全」，到不动点时却变成推不出（某支变成
+无约束任意串，或者形参 / 字段名字集不完备）。旧口径在中途齐全时就按名加载，加载结果单调保留，所以闭包取决于求值先后，
+也就是取决于 HashMap 迭代顺序。种子 0 下 `Provider$Service.getImplClass` 在名字集还只含少量提供者时被求值并放行，
+之后整张提供者表都按名加载（+776 类）。
+
+**终态做法**（与 `seed_ctor_lookups` 同一思路，只在不动点上作判定）：
+
+1. **延后放行**（`engine/class_lookup.rs`、`worklist.rs`）：
+   - 名字是字符串常量的站点直接解析。
+   - 非字面量站点求值齐全时，先挂起（`lookup_pending`），返回空名字集。
+   - 工作队列排空时，`lookup_release` 把挂起站点重跑一次（`lookup_trial`）。仍齐全就放行（`lookup_released`），
+     之后按单调口径照常求值。
+   - 求值中出现无约束任意串，或 `Gap::Fail`，站点记为不确定（`lookup_unsure`，单调）。不确定站点永不按名加载，
+     结果接所指未知的 Class（top）。
+   - 空闲钩子顺序：`seed_round` → `lookup_release` → `nr_drain`。
+2. **JCA 服务实现类的反射构造点**（`seeds.toml [jca] instantiation_hosts`，`seeds/jca.rs`）：
+   `Provider$Service.getImplClass` 恒为 top，不按类名字段的字符串集解析。所指的类由 JCA 规则按被请求的算法补种。
+   这样提供者类不会因为这个站点被整表纳入。
+3. **字段名配对只取声明为 `String` 的形参**（`engine/invoke.rs` `reflective_writes`）：
+   - 修前，凡是带 `Class` 形参的调用，任意引用实参都被当成字段名。例如 `HashMap$TreeNode.find` / `putTreeVal` →
+     `compareComparables(Class, Object, Object)` 的映射键。
+   - 结果是映射键上的全部字符串常量都按名放开字段，包括 `config`。这会展开 `ReflectionFactory.config`，多纳入约 82 类：
+     `jdk/internal/reflect/Unsafe*FieldAccessor`、`VarHandle*` 等。
+   - 字段名配对登记为 `LookupWrap { field: true }`，在调用方经 `field_wrap_call` 按「类 × 名」配对。
+4. **配对去重**（`fpair_done`）：同一（类，名）只放开一次。修前 `TreeBin` / `TreeNode` 调用点上反复重放，单例 CPU 27 min 以上不收敛。
+
+**多种子结果**（`rava closure`，种子 0 / 1 / 2；类 / 方法 / 反射）：
+
+| 用例 | 种子 0 | 种子 1 | 种子 2 | 一致 |
+|---|---|---|---|---|
+| StockTrans | 3386 / 20860 / 831 | 同 | 同 | 是 |
+| DeepCopy | 3388 / 20879 / 842 | 同 | 同 | 是 |
+| TestSerialDefaultSuid | 3393 / 20873 / 846 | 同 | 同 | 是 |
+| TestSerialProxyForm | 3389 / 20863 / 836 | 同 | 同 | 是 |
+| TestSerialUserGenericCallbacks | 3391 / 20870 / 842 | 同 | 同 | 是 |
+| TestSerialLookupPairing | 3389 / 20864 / 840 | 同 | 同 | 是 |
+
+TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的值相同，没有多纳入提供者类。StockTrans 与 main 同为
+3386 类。单次闭包实耗约 40–45 s（不含锁排队）；main StockTrans 约 60 s。
+
+**集合变化**：
+- 相对 main，反射集少 3 项：`sun/net/www/protocol/{file,jar,jrt}/Handler.<init>`。
+  `URL$DefaultFactory.createURLStreamHandler` 的 forName 只在 default 分支上；file / jar / jrt 三个协议在 switch 各支里直接
+  `new`，仍在闭包内。
+- 协议名在不动点上是 top，所以该站点是不确定站点。main 只在中途窗口期按名加载过这三个名字，属于顺序依赖带入的类。
+- 其余不确定站点：`ObjectInputStream.resolveClass`、`FactoryFinder.getProviderClass`、ServiceLoader `nextProviderClass`、
+  `ResourceBundle`、`ClassWriter.getCommonSuperClass` 等。
+- 放行站点：`StandardCharsets.lookup`、`LocaleProviderAdapter.forType`、`ClassSpecializer` loadSpecies、
+  `CalendarSystem.forName`、`Security.getSpiClass`、`OIDMap$OIDInfo.getClazz` 等。

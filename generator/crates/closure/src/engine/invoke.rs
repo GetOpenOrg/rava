@@ -133,11 +133,31 @@ impl<'a> Engine<'a> {
         if class_param || class_recv {
             // 按名放开字段：字面量与常量格给出的名字，另取按来源给出的名字（形参上各调用点的字符串常量、字段写入的
             // 字面量集）。形参常量窗口内的文本是终态形参字符串集的子集，后者在形参抬为 Top 后仍给出同样的名字
+            // 类值（Class 接收者 / Class 形参）与名字都来自本方法形参时登记字段配对，形参名字不在此汇合放开，
+            // 由各调用点按本点实参配对点名（`lookup_pair.rs`）
+            let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
+            let mut cpos: Vec<usize> = if class_recv { vec![0] } else { vec![] };
+            // 名字位：声明为 String 的形参。Object 等其他引用形参不是字段名（如 `compareComparables(Class, Object, Object)`
+            // 的键），不取名字、不登记配对——否则映射键上流入的全部字符串常量都会按名放开字段
+            let mut spos: Vec<usize> = vec![];
+            if let Some(md) = parse_method(&mref.desc) {
+                cpos.extend(md.params.iter().enumerate().filter(|(_, p)| matches!(p, FieldType::Object(c) if c == CLASS)).map(|(i, _)| i + skip));
+                spos.extend(md.params.iter().enumerate().filter(|(_, p)| matches!(p, FieldType::Object(c) if c == STRING)).map(|(i, _)| i + skip));
+            }
             let mut fnames: BTreeSet<Rc<str>> = BTreeSet::new();
-            for a in args {
+            for (i, a) in args.iter().enumerate() {
+                if !spos.contains(&i) {
+                    continue;
+                }
                 fnames.extend(a.lits());
                 if matches!(a, V::Ref { .. }) || a.derived_str() {
-                    fnames.extend(self.param_strs(m, off, a));
+                    let mut paired = false;
+                    for &c in &cpos {
+                        paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
+                    }
+                    if !paired {
+                        fnames.extend(self.param_strs(m, off, a));
+                    }
                     fnames.extend(self.field_strs(m, a));
                 }
             }
