@@ -95,6 +95,44 @@ pub fn erase_boxed_ctor_type_args(lines: &mut [String]) {
     }
 }
 
+static TEMP_LET_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*let (?:mut )?(_t\d+)(?:: [^=]+)? = .*;(?:\s*// line \d+)?$").expect("TEMP_LET_RE"));
+
+/// 单用临时值按值移交（R1）：`let _tN = e;` 之后整个方法体只在紧随的下一条语句里以
+/// `Clone::clone(&_tN)` 出现一次时，改为直接移交 `_tN`，省一对引用计数增减。
+/// 下一条语句含闭包（`|`）或为循环头时不改（多次求值不能移交）；同名临时值在后文
+/// 重新绑定时出现次数大于 1，保守不改。
+pub fn move_single_use_temps(lines: &mut [String]) {
+    for i in 0..lines.len() {
+        let Some(name) = TEMP_LET_RE.captures(&lines[i]).map(|c| c[1].to_string()) else { continue };
+        let Some(j) = (i + 1..lines.len()).find(|&k| !crate::lines::is_mark(&lines[k]) && !strip(&lines[k]).is_empty())
+        else {
+            continue;
+        };
+        let head = strip(&lines[j]);
+        if lines[j].contains('|') || ["loop", "while ", "for ", "'"].iter().any(|k| head.starts_with(k)) {
+            continue;
+        }
+        let clone = format!("Clone::clone(&{name})");
+        if lines[j].matches(&clone).count() != 1 {
+            continue;
+        }
+        let uses: usize = lines[i + 1..].iter().map(|l| count_word(l, &name)).sum();
+        if uses == 1 {
+            lines[j] = lines[j].replacen(&clone, &name, 1);
+        }
+    }
+}
+
+/// 标识符 `w` 在 `l` 中以整词出现的次数
+fn count_word(l: &str, w: &str) -> usize {
+    l.match_indices(w)
+        .filter(|(at, _)| {
+            !is_w(l[..*at].chars().next_back()) && !is_w(l[at + w.len()..].chars().next())
+        })
+        .count()
+}
+
 static RETURN_OK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\s*)return Ok\((.+)\);").expect("RETURN_OK_RE"));
 
@@ -130,6 +168,29 @@ mod tests {
         let mut v = vec!["let x = Object::from(HashMap::<_, _>::new()?);".to_string()];
         erase_boxed_ctor_type_args(&mut v);
         assert_eq!(v[0], "let x = Object::from(HashMap::<Object, Object>::new()?);");
+    }
+
+    #[test]
+    fn single_use_temps() {
+        let mut v: Vec<String> = [
+            "    let _t0: String = String::valueOf_i(i)?; // line 11",
+            "    X::set_s(Clone::clone(&_t0))?;",
+            "    let _t1 = a()?;",
+            "    f(Clone::clone(&_t1))?;",
+            "    g(Clone::clone(&_t1))?;",
+            "    let _t2 = a()?;",
+            "    while h(Clone::clone(&_t2))? {",
+            "    let _t3 = a()?;",
+            "    k(Clone::clone(&_t3), Clone::clone(&_t30))?;",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        move_single_use_temps(&mut v);
+        assert_eq!(v[1], "    X::set_s(_t0)?;");
+        assert_eq!(v[3], "    f(Clone::clone(&_t1))?;");
+        assert_eq!(v[6], "    while h(Clone::clone(&_t2))? {");
+        assert_eq!(v[8], "    k(_t3, Clone::clone(&_t30))?;");
     }
 
     #[test]
