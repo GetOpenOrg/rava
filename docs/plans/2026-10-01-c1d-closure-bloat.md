@@ -1833,3 +1833,57 @@ TestBuiltinUrlProtocol 3078 不变。闸门本身正确，但 `URL.<init>` / `ge
 - `securerandom.source`：运行期安全属性（`java.security` 文件 + `Security.setProperty` 可改），分析器无法求值，
   `SeedGenerator$URLSeedGenerator.init` / `NativePRNG.getEgdUrl` 两处保持全分支；要降需对安全属性建模（清单声明缺省值不够，
   用户可在运行期改写），不在乙范围。
+
+## 23. a2 续：initPhase2 膨胀定位与早退检查按分析期事实求值（2026-10-05，分支 c1d-a2c）
+
+### 23.1 实测定位（HelloWorld，`rava closure --root java/lang/System.initPhase2:(ZZ)I`）
+
+基线 469 类 / 1813 方法；加 initPhase2 根后 3283 类 / 19423 方法（+2814，与 StockTrans 的 jar / URL / JCA / stream 区域重合）。
+顶层 `--cut` 结果：
+
+| 切点 | 类数 |
+|---|---:|
+| 无切点（initPhase2 根） | 3283 |
+| `initPhase2@0`（`ModuleBootstrap.boot`） | 3106 |
+| `initPhase2@16`（`logInitException`） | 3284 |
+| `boot@64`（`boot2`） | 3109 |
+| `initPhase2@0` + `@16` | 469 |
+
+两道独立闸门，任一单独打开都把 ~2600 类带进来：
+
+- **甲 `logInitException` 打印路径**：`printStackTrace` 实参在 HotSpot 缺省调用里恒为 `false`，分析期不知道。
+  链：`logInitException@50 printStackTrace(PrintStream)` → `getOurStackTrace` → `StackTraceElement.of` → `computeFormat` →
+  `StackTraceElement$HashedModules.<clinit>` → `Configuration.findModule` → `Collection.stream` → `StreamOpFlag.<clinit>` →
+  `EnumMap` → `Class.getEnumConstantsShared` → `Method.invoke` → 注解解析 → `Proxy$Dyn` → `AnnotationInvocationHandler.toStringImpl`
+  → `PlatformLogger` / `LoggerFinder` → `SecurityConstants.<clinit>` → `SocketPermission` → `toLowerCase` →
+  `ConditionalSpecialCasing` → ICU `Normalizer` → `getResourceAsStream` → `URLClassPath` → `JarFile`。
+- **乙 `boot` / `boot2` 早退检查未折叠**：
+  1. `ModulePatcher.patchIfNeeded@90` → `JarFile`（← `SystemModuleFinders.toModuleReference` ← `of@100` ← `boot2@240`）；
+  2. `ModulePatcher.<init>@90` indy → `Paths` / `FileSystems` / `ReferencePipeline`（← `initModulePatcher@16` ←
+     `ModuleBootstrap.<clinit>@28`）；
+  3. 解析分支 `boot2@416..872`：`Configuration.resolve` ← `limitFinder@12` ← `boot2@707` → `Resolver` → `ModulePath.readModule`
+     → `TempFileHelper` → `SecureRandom` → `sun/security/jca/Providers`。
+
+字节码事实（JDK 21）：`decode(prefix,sep,bool)` 键为 `prefix + 0` 的 StringBuilder 拼接，`@20 getAndRemoveProperty` 为 null 时
+返回 `Map.of()`；`addModules()` 键 `"jdk.module.addmods." + 0`，null 时返回 `Set.of()`；`ModulePatcher.<init>` 对空 map 置
+`this.map = Map.of()`；`hasPatches = !map.isEmpty()`；`patchIfNeeded = map.get(name)`。即乙的全部早退都落在
+「拼接键系统属性读为 null → 空不可变集合 → 空集合查询」这条事实链上。
+
+### 23.2 实施要点（终态，全部由清单 / 字节码给出事实）
+
+- **F2 空不可变集合**：absint 新增对象标记 `Obj::Empty`；`vm_intrinsics.toml [facts.empty_collections]` 声明工厂
+  （`List.of()` / `Set.of()` / `Map.of()`）与接收者为 Empty 时的查询结果（`isEmpty`→true、`size`→0、`get`→null、
+  `contains*`→false）；标记经 PV 的返回值 / 字段 / 构造摘要 / 静态 final 自然传播，`hasPatches`、`patchIfNeeded`、
+  `addModules.isEmpty()` 由此折叠。
+- **F1 拼接键系统属性读**：键为拼接值时按 `name_parts` 求候选模式（同 `sysprops_write::removed_keys`），无候选与声明键
+  （有值 / 动态 / 不稳定）相交则按缺省值（null）折叠；只读复用 class_lookup / pstrs，不改其实现。
+- **F4 initPhase2 实参**：`printStackTrace=false` 由下一步 `[[boot_init.phases]] args` 提供，本步不实施；测量时以
+  `--cut java/lang/System.logInitException…@50` 模拟。
+
+### 23.3 下一步接口设想（`[[boot_init.phases]]` / boot layer 步骤 2–5，本步不实施）
+
+- `seeds.toml [[boot_init.phases]]`：`call = "java/lang/System.initPhase2:(ZZ)I"`、`args = [false, false]`、
+  `anchors = ["java/lang/System.bootLayer", "java/lang/Class.module"]`。闭包把 phase 当作带常量实参的根：入口帧形参槽
+  直接取 `args`（走 `Facts.params` 同一通道，等同调用点常量实参），甲闸门由此死掉，不需要任何 JDK 名特判。
+- anchors 声明 phase 产生、运行期读取的 VM 状态字段；闭包对锚字段的读取视为「phase 已运行」，生成器在启动序列里按 phase
+  顺序发出调用（步骤 3–5：发射启动调用、bootLayer 落地、`Class.module` 回填）。
