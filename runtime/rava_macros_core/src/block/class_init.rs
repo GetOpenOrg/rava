@@ -52,15 +52,44 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
     if !returns_result(sig) {
         return quote::quote! {};
     }
-    let null_check = if sig.receiver().is_some() {
+    let has_recv = sig.receiver().is_some();
+    if is_leaf(attrs) {
+        return if has_recv {
+            quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
+        } else {
+            quote::quote! {}
+        };
+    }
+    // 实例方法：两项合为一次 runtime 调用 `__enter`（次序同上：先空接收者、后栈界），
+    // 每个入口少一个分支块与一处 `?` 展开（声明层外壳数以万计，按条目计的前端内存随之下降）
+    if has_recv {
+        quote::quote! { __enter(self._jvm_null)?; }
+    } else {
+        quote::quote! { __stack_check()?; }
+    }
+}
+
+/// 转发外壳（虚分派 / 继承转发）的入口检查：只做空接收者检查，不建帧。
+/// 外壳本身不是 Java 帧——分派到的目标方法体（`__jbm_*` 体函数）自带完整入口检查，
+/// 栈界检查在那里做一次；空接收者必须在外壳判（null 对象的 vtable 是缺省存储，分派后
+/// 目标看到的接收者不再带 null 标志；手写目标也不带检查）。形态同叶子方法的空检查
+pub(crate) fn forward_checks(sig: &Signature) -> proc_macro2::TokenStream {
+    if returns_result(sig) && sig.receiver().is_some() {
         quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
     } else {
         quote::quote! {}
-    };
-    if is_leaf(attrs) {
-        return null_check;
     }
-    quote::quote! { #null_check __stack_check()?; }
+}
+
+/// vtable-safe 方法体（`_base` 真实体，经 vtable 直连执行、不经 `__jbm_*`）的建帧检查：
+/// 只做栈界检查（`this` 是 `&dyn` 存储视图，无 null 标志——空接收者已在转发外壳判过），
+/// 叶子方法省略，规则同 [`entry_checks`]
+pub(crate) fn frame_check(sig: &Signature, attrs: &[Attribute]) -> proc_macro2::TokenStream {
+    if returns_result(sig) && !is_leaf(attrs) {
+        quote::quote! { __stack_check()?; }
+    } else {
+        quote::quote! {}
+    }
 }
 
 /// 生成器标注的叶子方法（`#[java_method(.., leaf = "true")]`）
@@ -170,28 +199,19 @@ pub(crate) fn expand_class_init(
         quote! {}
     };
     let member = quote! {
-        #[doc(hidden)]
         pub fn __class_init() -> Result<()> {
             let __state = #state.force();
             if __state.get() == 3 {
                 return Ok(());
             }
-            // JVMS §5.5：他线程初始化中则等待；同线程递归立即返回；失败后 NoClassDefFoundError
-            match __clinit_enter(#binary_name, __state) {
-                __ClinitEnter::Run => {}
-                __ClinitEnter::Done => return Ok(()),
-                __ClinitEnter::Erroneous => return Err(JvmError::no_class_def_found(#binary_name)),
-            }
-            let run = || -> Result<()> {
+            // 慢路径（JVMS §5.5 的等待 / 递归 / 失败协议）全程序一份，按类只给初始化体
+            __class_init_run(#binary_name, __state, &|| -> Result<()> {
                 #init_super
                 #(#init_ifaces)*
                 #register
                 #run_clinit
                 Ok(())
-            };
-            let result = run();
-            __clinit_exit(#binary_name, result.is_ok(), __state);
-            result.map_err(JvmError::in_initializer)
+            })
         }
     };
     (storage, member)
@@ -260,6 +280,8 @@ mod tests {
     fn non_leaf_gets_stack_check() {
         let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f() -> Result<i32> { Ok(1) }"#);
         assert!(s.contains("__stack_check"), "{s}");
+        let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f(&self) -> Result<i32> { Ok(1) }"#);
+        assert!(s.contains("__enter (self . _jvm_null) ?"), "{s}");
     }
 
     #[test]

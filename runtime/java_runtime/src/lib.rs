@@ -310,6 +310,22 @@ pub fn __stack_check() -> error::Result<()> {
     Ok(())
 }
 
+/// 实例方法入口（宏注入 `__enter(self._jvm_null)?;`）：空接收者抛 NullPointerException（JVMS §6.5
+/// invokevirtual / invokespecial / invokeinterface，先于建帧），否则做栈界检查（同 `__stack_check`）。
+#[inline(always)]
+pub fn __enter(is_null: bool) -> error::Result<()> {
+    if is_null {
+        return Err(__null_pointer());
+    }
+    __stack_check()
+}
+
+#[cold]
+#[inline(never)]
+fn __null_pointer() -> error::JvmError {
+    error::JvmError::null_pointer()
+}
+
 #[cold]
 #[inline(never)]
 fn __stack_overflow() -> error::JvmError {
@@ -545,6 +561,7 @@ pub mod prelude {
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::{__RefAccess, __ref_slot_access};
+    pub use super::java::lang::{__class_from_object, __erased_view, __iface_missing, __iface_vtable};
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__AnyRef, __PrimCell, __RefSlot, __Shared, __ThreadSafe};
@@ -554,14 +571,15 @@ pub mod prelude {
     pub use crate::proxy_dyn::__ProxyRet;
     pub use crate::meta::{is_subtype_of as __is_subtype_of, java_name as __java_name};
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
-                         clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
+                         clinit_enter as __clinit_enter, clinit_exit as __clinit_exit,
+                         class_init as __class_init_run};
     pub use super::_is_jnull;
     pub use super::_is_jnull_ref;
     pub use super::__NonNull;
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
-    pub use super::{__stub, __null_recv, __noreturn, __stack_check};
+    pub use super::{__stub, __null_recv, __noreturn, __stack_check, __enter};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;

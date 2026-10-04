@@ -108,7 +108,6 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
             || g.where_clause.as_ref().is_some_and(|w| !w.predicates.is_empty());
         let (impl_g, _, where_c) = g.split_for_impl();
         let item = quote! {
-            #[doc(hidden)]
             #[allow(non_snake_case, unused_variables)]
             pub fn #fn_name #impl_g (this: &dyn #vtable_trait_ident #(, #non_self_params)*) #ret #where_c {
                 #body
@@ -140,7 +139,8 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
                     replace_clone_this_in_ok(&mut b);
                     rewrite_vtable_calls_ufcs_for_base(&mut b, &ctx.vtable_define_names, &ctx.vtable_trait_ident);
                     let stmts = &b.stmts;
-                    quote! { #(#stmts)* }
+                    let frame = super::super::super::class_init::frame_check(sig, &f.attrs);
+                    quote! { #frame #(#stmts)* }
                 }
                 // 已下沉：声明层只取外壳（拆层只用签名），体在实现层
                 None => quote! {},
@@ -164,7 +164,8 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
                 Some(block) => {
                     let b = base_body(ctx, block);
                     let stmts = &b.stmts;
-                    quote! { #(#stmts)* }
+                    let frame = super::super::super::class_init::frame_check(sig, &f.attrs);
+                    quote! { #frame #(#stmts)* }
                 }
                 // 已下沉：声明层只取外壳
                 None => quote! {},

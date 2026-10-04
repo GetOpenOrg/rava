@@ -23,14 +23,12 @@ pub(crate) fn generate(ctx: &GenContext) -> Vec<TokenStream2> {
     let from_any = hook_ident(ctx, "from_any");
     vec![quote! {
         /// 分配一个默认存储，返回 (vtable, 存储) 部件（wrapper 的 Default 与浅拷贝共用）
-        #[doc(hidden)]
         pub fn #alloc() -> (__Shared<dyn #vtable_trait_ident>, __AnyRef) {
             let __rc = __Shared::new(<#inner_ident as ::std::default::Default>::default());
             (__Shared::clone(&__rc) as __Shared<dyn #vtable_trait_ident>, __rc as __AnyRef)
         }
     }, quote! {
         /// 存储恰是本类存储时，返回其 ObjectVTable 视图（按名字段协议的静态类应答方）
-        #[doc(hidden)]
         pub fn #cells(any: &__AnyRef) -> ::std::option::Option<&dyn ObjectVTable> {
             ::std::option::Option::map(
                 any.downcast_ref::<#inner_ident>(),
@@ -38,7 +36,6 @@ pub(crate) fn generate(ctx: &GenContext) -> Vec<TokenStream2> {
         }
     }, quote! {
         /// 存储恰是本类存储时还原 (vtable, 存储) 部件；否则原样交还
-        #[doc(hidden)]
         pub fn #from_any(
             any: __AnyRef,
         ) -> ::std::result::Result<(__Shared<dyn #vtable_trait_ident>, __AnyRef), __AnyRef> {

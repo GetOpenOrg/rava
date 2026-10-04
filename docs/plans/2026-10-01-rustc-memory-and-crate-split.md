@@ -7,6 +7,26 @@
 
 ---
 
+## 现状（crate-split 线，随提交更新；最近：2026-10-04）
+
+- **目标**：3 个 OOM 例（TestFieldHandleProvenance / TestJndiNoProvider / TestSerialDefaultSuid）在服务器单测 cgroup（约 11.88 GB）下编过，HelloWorld 墙钟不劣化。
+- **已确认**：
+  - 峰值全在声明 crate `java_runtime`（jobs=1 编译），其余 crate ≤ 4.0 GB（`java_meta`）/ ≤ 1.5 GB（各 `java_body_k`）。
+  - 峰值是前端逐阶段累积：宏展开 → 解析 → coherence → 类型检查 → **借用检查（最大单步，约 +3.3 GB）** → 单态化遍历（约 +0.8 GB）→ codegen（约 +0.45 GB）。驱动量是 fn 条目数与体量。
+  - §7.5.4 的换算式（0.72 GB + 0.048 GB/MB）在 3000+ 类规模失效，见 §7.7「2026-10-04 复测」。
+- **已否的路线**：V1 按父类链委托（TSDS A/B 峰值 +139 MB，展开体量反增：wrapper `__view_into` 的大头是接口载体臂，不是祖先臂）；每类死外壳消除（受 T1 开放世界档案约束）。
+- **达成**：
+  - ef600555，服务器单测 cgroup 11.88 GB 下三例全部编过：
+    - TSDS 8407 MB / 243 s；
+    - TJNP 9386 MB / 293 s；
+    - FHP 10495 MB / 332 s，余量 1.40 GB。
+  - c39591d1 时 FHP 的余量是 0.57 GB。
+  - HelloWorld 声明 crate 1470 MB / 28.3 s，全工作区 50.2 s（基线 58.3 s，未劣化）。
+  - 逐提交数见 §7.7「2026-10-04 复测」。
+- **切分轴**：先按 JDK 模块，超阈值的模块内再按体量（§7.5.5）。命名 `java_base_decl` / `java_base_body_k`。java.base 声明层能否再按 SCC 拆（V5）见 S7 方案 §9.5–9.6。
+- **下一步**：余量继续靠按 fn 条目削减：继承字段访问器按需生成（#4，约 1.35 万个 fn）、接口载体回退收敛、wrapper 按名字段协议查询合一；结构性终态是 S7（`docs/plans/2026-10-04-s7-object-handle-descriptor.md`）。
+---
+
 ## 一、问题
 
 - 生成代码全部落在一个 `java_runtime` crate 中。16G 机器上，单个 rustc 的峰值约 14G（N8 实测：`CARGO_BUILD_JOBS=2` 时约 1750 类的闭包就会被 OOM 杀）。
@@ -583,6 +603,8 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 #### 7.5.4 终态达标账（2026-10-01）
 
+> **切分轴已定（2026-10-04）：先按 JDK 模块，超阈值的模块内再按体量**。见 §7.5.5（与 t1-link 方案 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md` §4.8 对齐）。本账各项都是按类的宏展开削减，作用对象从整个 `java_runtime` 收窄为 `java_base_decl`，数值仍然有效。
+
 **度量与换算**
 - 数据源（emitter-s5 合并 c9d0a0ca 后同一生成器，nightly）：
   - Digester / HelloWorld 声明 crate 的 `-Z unpretty=expanded` 产物，按条目归类统计字节。工具是一次性脚本，未入库。
@@ -604,6 +626,7 @@ user                       用户类（声明 + 实现同 crate，full 模式）
   
   结论：峰值是前端各阶段按代码体量逐级累积出来的，不是单态化收集单独造成的。因此用「展开后体量」作主度量，size_est 作辅助度量。
 - 换算：§7.1 剥离实验的两点标定给出 峰值 ≈ 0.72 GB + 0.048 GB/MB × 展开体量。
+  - **2026-10-04 修订：本式在 3000+ 类规模失效**。TestSerialDefaultSuid 展开 148.74 MB 代入得 7.86 GB，实测约 11.0 GB。服务器两点重标定（HelloWorld 19.29 MB → 1.80 GB，TSDS 148.74 MB → 10.99 GB，同一提交 a7996092）得 峰值 ≈ 0.43 GB + 0.071 GB/MB；斜率变大来自借用检查与类型检查的按 fn 固定开销（TSDS 约 23.7 万个 fn）。详见 §7.7「2026-10-04 复测」。
   - 校验：56.5 MB 代入得 3.43 GB，实测 3.1–3.6 GB。
   - 由此 Digester ≤ 2 GB 要求展开体量 ≤ 26.7 MB，即从现状削去 ≥ 29.8 MB（−53%）。
   - 墙钟按 §7.1 HelloWorld 标定，约 0.59 s/MB。HelloWorld `cargo build` 关键路径是「声明 crate + 实现 / 用户 crate + 链接」，要 ≤ 12 s，声明 crate 约需 ≤ 6 s，即展开体量 ≤ 约 7 MB（−45%）。
@@ -637,13 +660,19 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 | # | 手段 | Digester Δ展开 | Δsize_est | Δ峰值 | HelloWorld Δ展开 | 状态 |
 |---|---|---:|---:|---:|---:|---|
-| 1 | V1 ObjectVTable 按父类链委托（§7.5.3） | −2.9 MB（三方法 3.8 MB，链函数回加约 0.9 MB） | −5 万 | −0.14 GB | −0.6 MB | 实施中 |
-| 2 | `From<Object>` / checkcast / new 按类收敛：统一走槽式 `__view_into` 的非泛型部件函数，按类只留一行 | −2.0 MB | −8 万（含 Box downcast / downcast_mut 按 T 的实例） | −0.10 GB | −0.4 MB | 待方案 |
-| 3 | 分层 `use` 表 | −2.5 MB | 0 | −0.06 GB | −0.2 MB | 待做 |
-| 4 | 字段访问器只为本类声明字段生成 | −0.8 MB | −0.5 万 | −0.04 GB | −0.2 MB | 等价性待论证 |
+| 1 | V1 ObjectVTable 按父类链委托（§7.5.3） | −2.9 MB（三方法 3.8 MB，链函数回加约 0.9 MB） | −5 万 | −0.14 GB | −0.6 MB | **已否**（2026-10-04：HW 展开 +0.18 MB，TSDS 峰值 +139 MB；见 §7.7 2026-10-04） |
+| 2 | `From<Object>` / checkcast / new 按类收敛：统一走槽式 `__view_into` 的非泛型部件函数，按类只留一行 | −2.0 MB | −8 万（含 Box downcast / downcast_mut 按 T 的实例） | −0.10 GB | −0.4 MB | **已做** 5095b68c（`__class_from_object` / `__erased_view` 非泛型骨架，按类一行） |
+| 3 | 分层 `use` 表 | −2.5 MB | 0 | −0.06 GB | −0.2 MB | **已做** 5218e1c5（声明层 use 按引用剪枝；TSDS 源码 42.82 → 33.80 MB，峰值 −345 MB） |
+| 4 | 字段访问器只为本类声明字段生成 | −0.8 MB | −0.5 万 | −0.04 GB | −0.2 MB | 待做（浅拷贝回退已于 c39591d1 删除，剩余消费方只有方法体 / 手写层的 `recv.__get_f()`，需按需生成） |
 | 5 | S6 泛型类擦除核心 | −1.9 MB（体移走，留外壳） | −6 万 | −0.09 GB | −0.3 MB | 待做 |
-| 6 | **外壳去一层**（本账新增）：声明层每个下沉体只留一条模块级 `extern "Rust"` 声明，可读层外壳与 vtable 缺省方法直接调用它；删掉中间的 `__jb_*` / `_base` 包装函数 | −5.5 MB（11.5 MB 中的约 48%），同时少 3.3 万个 fn 条目 | −1 万 | −0.26 GB | −1.6 MB | 待方案（形态改动，逐字段论证 ABI 与签名不变） |
-| 7 | 声明层生成条目去掉中文 doc 与 `doc(hidden)`（可读性说明改写在宏源码注释） | −3.0 MB | 0 | −0.07 GB | −0.7 MB | 待做 |
+| 6 | **外壳去一层**（本账新增）：声明层每个下沉体只留一条模块级 `extern "Rust"` 声明，可读层外壳与 vtable 缺省方法直接调用它；删掉中间的 `__jb_*` / `_base` 包装函数 | −5.5 MB（11.5 MB 中的约 48%），同时少 3.3 万个 fn 条目 | −1 万 | −0.26 GB | −1.6 MB | **已做** a7996092（TSDS 峰值 −761 MB，−6.5%） |
+| 7 | 声明层生成条目去掉中文 doc 与 `doc(hidden)`（可读性说明改写在宏源码注释） | −3.0 MB | 0 | −0.07 GB | −0.7 MB | **已做** ab813f99（峰值无可测变化） |
+| 8 | wrapper `impl ObjectVTable` 同形转发收敛到 `ObjectVTable` 缺省实现（`__view_target`），浅拷贝回退删除 | — | — | TSDS −897 MB | — | **已做** c39591d1 |
+| 9 | `__class_init` 状态机骨架、接口载体分派外壳收敛为非泛型 runtime 函数 | — | — | 见 §7.7 2026-10-04 | — | **已做** af3a9bc4 |
+| 10 | 方法入口 null 检查 + 栈检查合一为 `__enter` | — | — | TSDS −206 MB | — | **已做** d66e8e46 |
+| 11 | 入口检查随体进 `__jbm_*` 体函数，声明层外壳只剩一次转发调用 | — | — | 见 §7.7 2026-10-04 | — | **已做** 9e88cf83 |
+| 12 | 转发外壳（虚分派 / 继承转发）只做空接收者检查，栈界检查由目标体承担（vtable-safe `_base` 体补建帧检查） | — | — | 见 §7.7 2026-10-04 | — | **已做** d92d664f |
+| 13 | wrapper `__erased_vtable` 整体委托运行时类 inner（不再按静态类逐祖先展开臂） | −3.4 MB（TSDS） | — | 见 §7.7 2026-10-04 | — | **已做** ef600555 |
 | | **合计 1–7** | **−18.6 MB → 37.9 MB** | **−20.5 万** | **约 2.5–2.6 GB** | **−4.0 MB → 8.8 MB** | |
 
 **结论：1–7 合计达不到终态。**
@@ -687,6 +716,42 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 
 - 估算误差：换算式的残差约 ±0.2 GB，单次测量噪声 ±10%。所以每项做完都要实测，按实测值更新本账。
 - 跨测试编译复用另有方案（`docs/plans/2026-10-01-cross-test-compile-reuse.md`）。它决定 JDK 部分在单个测试里是否需要编译，与本账互补：本账压的是单个 crate 的峰值与墙钟。
+
+#### 7.5.5 切分轴：先按模块，超阈值的模块内再按体量（2026-10-04，与 t1-link §4.8 对齐）
+
+**定案**
+- 第一级按 JDK jmod 模块切，crate 名为模块名中的 `.` 换成 `_`，从 JDK 模块描述动态取。
+- 第二级只作用于超过体量阈值的模块，切成 `<m>_decl` + `<m>_body_1..N`。
+- 命名已经用户确认（2026-10-04）：
+  - java.base 内部为 `java_base_decl`（声明层）与 `java_base_body_k`（实现层，k 为序号）；
+  - 对外由 `java_base` 重导出声明层、吸收实现层；
+  - 其他超阈值模块同样派生为 `<模块名>_decl` / `<模块名>_body_k`。
+  - 实现今天仍是整档案的 `java_runtime` / `java_body_k`，改名随 t1-link M2 的模块切分一起做。本步没有引入任何新的 crate 名。
+- 第三级是 `java_base_decl` 按签名 SCC 拓扑分段为 `java_base_decl_k`（S7 方案 §九，V5）。实测结论：现状形态最大 SCC 占 java.base 的 74–84%，只能削约 24%；S7 后降到 22%，最大段 ≤ 1.6 GB。它仍是方案，未定。
+- 不新增其他切分轴。
+
+**与 t1-link §4.8 六个接口的对齐**
+
+| # | 接口 | crate-split 侧的定义 |
+|---|---|---|
+| 1 | 分区函数的输入 | `layers::split` 的候选集由「`crate_name == java_runtime` 的全部生成类」改为「某模块的生成类」，输出该模块的 `<m>_body_<k>` 类集合。分区规则不变：类按 binary name 排序，按块文本字节均衡装箱，箱数 = max(⌈模块体字节 / 5 MB⌉, 2)。规则只依赖该模块的类集合，所以同一档案恒得同一划分。 |
+| 2 | 拆层判据 | 判据是模块全部生成块文本字节 ≥ `BODY_CRATE_BYTES`（5 MB）时拆层，不到阈值的模块单 crate、完整展开（宏 `Full`：没有 `rava_layer`、没有 extern / `export_name` 对，已核对 `block/gen/layer.rs`）。s2 实测 java.base 75.9 MB，次大的 java.xml.crypto 1.92 MB，阈值落在 2–75 MB 之间任何位置结果都相同。`MIN_BODY_CRATES = 2` 只在拆层模块内生效。 |
+| 3 | crate 名与路径前缀 | 实现层今天是 crate 根 `use java_runtime::*;`，正文里的 `crate::java::…` 经它解析到声明层。改为：`<m>_body_k` 根 `use <m>_decl::*;`；跨模块路径由发射层 `site.prefix()` / `import_site()` 按被引用类所属模块给出 `<上游模块 crate>::`。 |
+| 4 | Cargo 依赖 | `<m>_body_k` 依赖 `<m>_decl` 与本模块实际引用的上游模块 crate。`layers::write_crates` 今天写死依赖 `java_runtime`，改为由模块依赖表生成。 |
+| 5 | 导入过滤 | `dispatch_subtype_refs` 按模块可读性过滤（R1）。#3 的声明层 `use` 剪枝（`layers::prune_uses`）只作用于被拆层模块的声明层文本，不覆盖单 crate 模块与实现层，所以 R1 必须在源头过滤。两者互补，剪枝保留。 |
+| 6 | 元数据与登记表 | 以 t1-link 为终态：取消整档案的 `java_meta` crate 与 `__java_meta_*` extern，表按模块进各模块 crate，经 `__rava_register_module()` 登记。§7.2 结构图中的 `java_meta` 层、S1 的设计、`BODY_CRATE_PREFIX` 的排除用途随之作废。 |
+
+**与模块轴冲突的现有实现**
+- 这些实现都早于本步，本步没有改动。由 t1-link M2「与 crate-split 合并」时一并改掉：
+  - `generator/crates/emit/src/project/layers.rs` 的 `split` 以整档案为分区域，crate 名用 `java_body_` 前缀加序号（接口 1 / 3）；
+  - 同一文件的 `write_crates` 写死依赖 `java_runtime`，实现层根写死 `use java_runtime::*`（接口 3 / 4）；
+  - §7.2 / S1 的 `java_meta` 整档案元数据 crate（接口 6）；
+  - `MIN_BODY_CRATES` 对整档案强制两箱（接口 2，改为只对拆层模块生效）。
+- 本步做的改动（#2、#3、#6–#13）都是 `java_class!` 按类展开的削减，与 crate 边界无关，与模块轴没有冲突：
+  - #6 / #11 的 extern 声明与 `__jbm_*` 体函数只在 `decl` / `body` 模式下成对出现；单 crate 模块走 `Full`，体函数是本地函数，没有 extern。链接符号 `__rava_<类>__<fn>_<指纹>` 按类二进制名唯一，只在拆层模块内部解析，不跨模块。
+  - #8 / #13 委托到 `ObjectVTable` 缺省实现（`__view_target` / `__erased_vtable`）。trait 在 `java_base_decl`，其他模块的类在本 crate 里 `impl ObjectVTable`，类型是本 crate 的，满足孤儿规则。
+  - #3 `prune_uses` 见接口 5，保留。
+- 对 OOM 三例的影响：今天的峰值是整个 `java_runtime` 的峰值。模块切分后，非 java.base 类离开峰值 crate（TSDS 约 9%：3150 类中 java.base 2857 类）。按每类约 2.6 MB 粗估，可再降约 0.7 GB，以 M2 实测为准。§7.6「声明 crate」一行的终态对象改为 `java_base_decl`（S7 后为其最大分段）。
 
 ### 7.6 量化目标
 
@@ -917,3 +982,62 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
     - S6 泛型类擦除核心；
     - 字段访问器。
   - 逐项测量仍按 §7.4。
+
+#### 2026-10-04 复测（crate-split 线，服务器）
+
+**测法**
+- 工具（已入库）：
+  - `scripts/crate_mem_profile.py run <scratch> <out> --passes`：按 crate 逐个 `cargo build`，记墙钟、峰值 RSS（`/usr/bin/time`）与声明 crate 的 `-Z time-passes`（`RUSTC_BOOTSTRAP=1`），输出 `report.md` 与 `<crate>.passes.log`。
+  - `scripts/expand_stats.py expand|stats`：声明 crate `-Z unpretty=expanded` 后按条目 / impl 内方法归类统计字节。
+- 服务器作业：`rava/distribute_tests.py --job cmpN-<例>-<提交> --cmd …`，单测 cgroup 上限约 11.88 GB（`oom limit=11891M`），同一作业只跑一例。
+- 峰值都是声明 crate `java_runtime` 的峰值（MB）；其余 crate：`java_meta` 3.6–4.0 GB，各 `java_body_k` 0.8–1.5 GB，不构成约束。
+
+**逐提交峰值**（MB；空格 = 未测）
+
+| 提交 | 内容 | TSDS | TJNP | FHP | HelloWorld |
+|---|---|---:|---:|---:|---:|
+| db105d7c | 基线（profiler 入库） | 11754 | | | 1919 / 37.8 s |
+| a7996092 | #6 外壳去一层 | 10993 | | | 1795 / 36.8 s |
+| d66e8e46 | #10 `__enter` | 10787 | 11940 OOM | 11919 OOM | |
+| ab813f99 + 5218e1c5 | #7 去 doc、#3 use 剪枝 | 10461 | | | |
+| 5095b68c | #2 From / checkcast 按类收敛 | 9993（墙钟 284 s） | 11130（编过） | 11952 OOM | |
+| 5095b68c + V1 | §7.5.3 按父类链委托 | 10132（否） | | | |
+| af3a9bc4 | #9 类初始化 / 接口载体分派收敛 | | | 11953 OOM（rc −9） | |
+| c39591d1 | #8 wrapper ObjectVTable 收敛到缺省实现 | **9096**（墙钟 277 s） | **10162**（墙钟 301 s） | **11317（编过，墙钟 353 s）** | |
+| 9e88cf83 | #11 入口检查进体函数 | | | | **1472 / 30.0 s**（总 51.9 s，基线 58.3 s） |
+| ef600555 | #11 + #12 转发外壳只空检查 + #13 `__erased_vtable` 整体委托 | **8407**（墙钟 243 s） | **9386**（墙钟 293 s） | **10495**（墙钟 332 s，余量 1.40 GB） | **1470 / 28.3 s**（总 50.2 s） |
+
+**阶段 RSS**（time-passes，阶段末 RSS，MB）
+
+| 阶段 | TSDS 5095b68c | TSDS c39591d1 | TSDS ef600555 | FHP af3a9bc4 | FHP c39591d1 | FHP ef600555 |
+|---|---:|---:|---:|---:|
+| 宏展开 | 2900 | 2604 | 2557 | 3618 | 3311 | 3251 |
+| coherence | | 3945 | 3753 | 5613 | 5143 | 4634 |
+| 类型检查 | 5567 | 4999 | 4722 | 7118 | 6495 | 5901 |
+| 借用检查 | 8849 | 7761 | 7061 | 11118 | 9982 | 8874 |
+| 单态化遍历 | 9749 | 8726 | 8029 | 12074 | 10899 | 10078 |
+| codegen | 10104 | 9078 | 8366 | 12299 后被杀 | 11329 | 10437 |
+
+- #12 + #13 的收益主要在借用检查（TSDS −700 MB，FHP −1108 MB）与 coherence（−192 / −509 MB）：转发外壳少了栈检查调用，wrapper `__erased_vtable` 少了逐祖先臂。
+
+- 规模：TSDS 3393 类（源码 33.8 MB），TJNP 3876 类（38.20 MB），FHP 4266 类（42.11 MB）。FHP 比 TSDS 多 26% 的类，峰值约按类数线性外推。
+- 借用检查是最大单步（+2.8–4.0 GB），其开销按 fn 条目计：TSDS 展开后约 23.7 万个 fn（a7996092），Java 方法外壳约 7.5 万个、wrapper ObjectVTable 方法约 4.5 万个、字段访问器约 2.5 万个。#8 一项删去 wrapper ObjectVTable 的 7 个同形转发方法（每类），TSDS 峰值 −897 MB，是本轮最大单项。
+
+**换算式**：§7.5.4 的 0.72 GB + 0.048 GB/MB 在 3000+ 类规模失效；两点重标定（a7996092：HW 19.29 MB → 1.80 GB，TSDS 148.74 MB → 10.99 GB）得 0.43 GB + 0.071 GB/MB。斜率来自按 fn 计的借用检查 / 类型检查固定开销，按 MB 换算只在 fn 平均体量不变时成立；后续账以实测为准。
+
+**V1 失败原因**：wrapper `__view_into` 的体量大头是接口载体臂（每个实现接口一臂），不是祖先臂；按父类链委托只削祖先臂，链函数本身每类新增一个 fn，净增。
+
+**TSDS 展开体量构成（9e88cf83，101.78 MB）**
+
+| 类别 | MB | 个数 |
+|---|---:|---:|
+| 固有 impl 的 Java 方法外壳 | 24.47 | 74,807 |
+| 其中：直连外壳（调 `__jbm_*`） | 4.71 | 22,294 |
+| 其中：虚分派外壳 | 5.30 | 17,254 |
+| 其中：上转转发（不占槽的祖先方法） | 4.13 | 11,782 |
+| 其中：接口载体分派 | 2.54 | 1,817 |
+| 其中：静态字段 get / set | 2.89 | 8,102 |
+| 字段访问器 `__get_*` / `__set_*` | 4.15 | 24,732 |
+| `impl ObjectVTable for`（wrapper，余 `__view_into` / `__erased_vtable` / `__view_as` / `__erased_inner` / `__unsafe_*` 等） | 15.40 | 2,506 个 impl |
+| extern 块 + 外部声明 | 14.13 | |
+| Clone / PartialEq / Debug / Default / From | 6.64 | 约 2.4 万 |

@@ -129,7 +129,6 @@ pub(crate) fn decl_digest(ctx: &GenContext) -> TokenStream2 {
     let h = fnv1a(&text);
     let name = digest_ident(ctx);
     quote! {
-        #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #name: u64 = #h;
     }

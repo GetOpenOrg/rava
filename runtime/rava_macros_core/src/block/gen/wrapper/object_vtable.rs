@@ -1,5 +1,5 @@
 //! §6 impl ObjectVTable for Wrapper（R-1 blanket From<T> 需要）：虚方法转发、擦除部件导出、
-//! 运行时类视图、浅拷贝、按名字段协议。
+//! 运行时类视图、按名字段协议（运行时类应答的查询经 `__view_target` 由缺省实现转交）。
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -11,13 +11,10 @@ use super::super::storage_hooks::hook_ident;
 
 pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     let struct_ident = &ctx.struct_ident;
-    let vtable_trait_ident = &ctx.vtable_trait_ident;
-    let alloc = hook_ident(ctx, "alloc");
     let cells = hook_ident(ctx, "cells");
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
     let where_c = &ctx.where_c;
-    let phantom_init = &ctx.phantom_init;
     let binary_name = &ctx.meta.binary_name;
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -25,29 +22,6 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     if !binary_name.is_empty() {
-        // toString 在 Java 恒为虚方法：wrapper 一律把字符串化经 vtable 分派到运行时类
-        // （祖先视图（From<Child> for Ancestor）的 wrapper 由此获得多态 toString——
-        // 如 Number 视图转发 Integer 的 toString；未覆盖类落到 __inner 的默认
-        // type_name，与既有输出一致。hashCode/equals 同此形态，本就无条件转发）。
-        let to_string_fwd: TokenStream2 = quote! {
-            fn __obj_str(&self) -> ::std::string::String {
-                ObjectVTable::__obj_str(&*self.vtable)
-            }
-            fn __to_string(&self) -> Result<::std::string::String> {
-                ObjectVTable::__to_string(&*self.vtable)
-            }
-        };
-        let hash_code_fwd: TokenStream2 = quote! {
-            fn hashCode(&self) -> i32 { ObjectVTable::hashCode(&*self.vtable) }
-            fn equals(&self, other: Object) -> Result<bool> {
-                ObjectVTable::equals(&*self.vtable, other)
-            }
-        };
-        // 擦除 vtable 导出的祖先槽位（类祖先的 vtable trait 名；vtable 非泛型，
-        // 超类链是其 supertrait —— 子类 vtable 可直接上转）
-        let ancestor_vtable_idents: Vec<syn::Ident> = ctx.meta.all_superclasses.iter()
-            .map(|anc_name| format_ident!("{}__VTable", anc_name))
-            .collect();
         // 运行时类视图（A-1 后落在 wrapper 侧：Object 直接持有 wrapper，类型实参只在
         // wrapper 的 impl 上下文可见）：按 binary name 重建本类 / 任一祖先类型的 wrapper。
         // 祖先视图 = 宏生成的 From<Self> for Ancestor（vtable trait upcasting，保持运行时类）。
@@ -110,17 +84,6 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                 }
             })
         })).collect();
-        // Object.clone() 的逐字段浅拷贝：新对象（新标识单元），每个字段新建存储单元，
-        // 值按 Java 语义拷贝（基本类型拷贝值，引用类型拷贝引用）。经 wrapper 访问器
-        // 完成拷贝（擦除字段的转换在访问器边界发生，与直连字段拷贝等价）。
-        let copy_stmts: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .chain(ctx.fields.iter())
-            .map(|(name, _)| {
-                let get = format_ident!("__get_{}", name);
-                let set = format_ident!("__set_{}", name);
-                quote! { __copy.#set(self.#get()); }
-            })
-            .collect();
         // 按名字段协议（Unsafe 实例字段 long / int / boolean 共享单元、引用槽访问）：
         // 字段名单与分派臂只在 inner 侧生成（inner 平铺持有全部继承字段）。wrapper 侧
         // 先问静态类 inner（any 能 downcast 为本类 inner 时），未命中（any 是运行时子类
@@ -143,7 +106,7 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                         || ObjectVTable::#method(&*self.vtable, field))
                 }
             } else {
-                quote! { ObjectVTable::#method(&*self.vtable, field) }
+                return quote! {};
             };
             quote! {
                 fn #method(
@@ -160,7 +123,10 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
         // 字 / 双字视图：静态类 inner 先应答，未命中委托 vtable 对象（与 cell_query 同型）
         let view_query = |method: &str, w_ty: TokenStream2, present: bool| -> TokenStream2 {
             let method = format_ident!("{}", method);
-            let inner = present.then(|| quote! {
+            if !present {
+                return quote! {};
+            }
+            let inner = Some(quote! {
                 if let ::std::option::Option::Some(i) = #cells(&self.any) {
                     if let __r @ ::std::option::Option::Some(_) = ObjectVTable::#method(i, field, op) {
                         return __r;
@@ -181,8 +147,10 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
         let word_query = view_query("__unsafe_word", quote! { i32 }, has_prim(type_is_word));
         let dword_query = view_query("__unsafe_dword", quote! { i64 }, has_prim(type_is_dword));
         let has_ref = flat_fields().any(|(n, _, basic)| ctx.is_erased(n) || !basic);
-        let ref_access_inner = if has_ref {
-            quote! {
+        let ref_access_query = has_ref.then(|| quote! {
+            fn __unsafe_ref_access(
+                &self, field: &str, op: &mut __RefAccess<'_>,
+            ) -> ::std::option::Option<Object> {
                 if let ::std::option::Option::Some(i) = #cells(&self.any) {
                     if let __r @ ::std::option::Option::Some(_) =
                         ObjectVTable::__unsafe_ref_access(i, field, op)
@@ -190,14 +158,16 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                         return __r;
                     }
                 }
+                ObjectVTable::__unsafe_ref_access(&*self.vtable, field, op)
             }
-        } else {
-            quote! {}
-        };
+        });
         quote! {
             impl #impl_g ObjectVTable for #struct_ident #ty_g #where_c {
-                fn is_instance_of(&self, type_id: &str) -> bool {
-                    self.vtable.is_instance_of(type_id)
+                // 运行时类应答的查询（身份 / 类名 / instanceof / hashCode / equals / toString /
+                // 浅拷贝 / 代理 / 按名字段协议的委托部分）由 ObjectVTable 缺省实现经此转交
+                // vtable 对象（= 运行时类 inner）
+                fn __view_target(&self) -> ::std::option::Option<&dyn ObjectVTable> {
+                    ::std::option::Option::Some(&*self.vtable)
                 }
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn is_jvm_null(&self) -> bool { self._jvm_null }
@@ -207,14 +177,8 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     ObjectVTable::__interface(__Shared::clone(&self.vtable), slot);
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
-                fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: ::std::vec::Vec<Object>)
-                    -> ::std::option::Option<Result<Object>> {
-                    self.vtable.__proxy_invoke(iface, name, desc, args)
-                }
-                fn __class_name(&self) -> &'static str { self.vtable.__class_name() }
-                fn __identity(&self) -> *const () { self.vtable.__identity() }
-                /// 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。
-                /// `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
+                // 擦除存储导出（A-1）：wrapper 持有的非泛型 `Rc<X__inner>`。
+                // `From<Object> for X<A>` 的擦除路径据此对任意类型实参重建视图。
                 fn __erased_inner(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
                     if let ::std::option::Option::Some(s) =
                         slot.downcast_mut::<::std::option::Option<__AnyRef>>()
@@ -223,39 +187,14 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     }
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
-                /// 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
-                /// 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
-                /// （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
-                /// 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
+                // 擦除 vtable 导出（A-1 部件形态）：整体委托 vtable 对象（= 运行时类 inner）。
+                // inner 按运行时类应答本类与全部祖先类槽位（struct_layout `erased_vtable_query`），
+                // 静态类 X 及其祖先都是运行时类的祖先，槽位集合是 inner 应答集合的子集，填入的
+                // 是同一对象——wrapper 侧不再按静态类逐祖先展开臂。供 `From<Object> for X<A>`
+                // 重建「运行时类是本类或其子类」的任意实例化视图，及中间型 catch_as 擦除重建。
                 fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
-                    '__answered: {
-                    if let ::std::option::Option::Some(s) =
-                        slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
-                    {
-                        *s = ::std::option::Option::Some(__Shared::clone(&self.vtable));
-                        break '__answered;
-                    }
-                    #(
-                        if let ::std::option::Option::Some(s) =
-                            slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
-                        {
-                            *s = ::std::option::Option::Some(
-                                __Shared::clone(&self.vtable)
-                                    as __Shared<dyn #ancestor_vtable_idents>);
-                            break '__answered;
-                        }
-                    )*
-                    // 静态类臂未命中 → 委托 vtable 对象（= 运行时类 inner）的擦除查询：
-                    // 祖先视图包装（如 Throwable 视图承载 IllegalStateException inner）对
-                    // 「运行时类自身/其祖先」槽位的请求由此应答——中间型（Throwable <
-                    // catch T < 运行时 R）catch_as 的擦除重建 Path A。vtable trait 链根部
-                    // 超 trait 即 ObjectVTable，上转恒可到达 inner 侧的覆盖。
                     ObjectVTable::__erased_vtable(
-                        __Shared::clone(&self.vtable)
-                            as __Shared<dyn ObjectVTable>,
-                        slot,
-                    );
-                    }
+                        __Shared::clone(&self.vtable) as __Shared<dyn ObjectVTable>, slot);
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
                 fn __view_as(
@@ -274,41 +213,12 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     #(#view_into_arms)*
                     false
                 }
-                fn __shallow_copy(&self) -> ::std::option::Option<Object> {
-                    // 运行时类优先（C-1）：vtable 即运行时类 inner，其浅拷贝保留子类字段与
-                    // 类名（静态基类视图 Point 承载 Deep 对象时得 Deep 副本）；未应答时
-                    // 回退按本（静态）类逐字段拷贝
-                    if let ::std::option::Option::Some(__o) = ObjectVTable::__shallow_copy(&*self.vtable) {
-                        return ::std::option::Option::Some(__o);
-                    }
-                    let (__vt, __any) = #alloc();
-                    // 类型标注：vtable 去形参后字面量的字段不再提及本类形参——全部字段
-                    // 为具体类型的类（E 无从钉住）会触发 E0283；以 Self 钉住
-                    let __copy: Self = #struct_ident {
-                        vtable: __vt,
-                        any: __any,
-                        _jvm_null: false,
-                        #phantom_init
-                    };
-                    #(#copy_stmts)*
-                    ::std::option::Option::Some(Object::from(__copy))
-                }
                 #long_cell_query
                 #int_cell_query
                 #bool_cell_query
                 #word_query
                 #dword_query
-                fn __unsafe_ref_access(
-                    &self, field: &str, op: &mut __RefAccess<'_>,
-                ) -> ::std::option::Option<Object> {
-                    #ref_access_inner
-                    ObjectVTable::__unsafe_ref_access(&*self.vtable, field, op)
-                }
-                fn __field_slot(&self, decl: &str, name: &str) -> ::std::option::Option<&'static str> {
-                    ObjectVTable::__field_slot(&*self.vtable, decl, name)
-                }
-                #to_string_fwd
-                #hash_code_fwd
+                #ref_access_query
             }
         }
     } else {

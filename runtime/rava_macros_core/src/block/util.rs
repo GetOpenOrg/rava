@@ -93,6 +93,9 @@ pub(crate) const META_ATTRS: &[&str] = &[
     "java_native",
     "jvm_native",
     "rava_moved",
+    // 文档属性（`///` 与 `#[doc(hidden)]`）只服务 rustdoc；生成源码里照常可读，展开后不再随方法逐个复制
+    // （拆 crate §7.5.4 #7）
+    "doc",
 ];
 
 pub(crate) fn strip_meta_attrs(attrs: &[Attribute]) -> Vec<&Attribute> {
