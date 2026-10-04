@@ -282,8 +282,8 @@ struct Parker {
 }
 
 fn parker_for(thread_identity: usize) -> Arc<Parker> {
-    static PARKERS: OnceLock<Mutex<HashMap<usize, Arc<Parker>>>> = OnceLock::new();
-    let mut table = PARKERS.get_or_init(|| Mutex::new(HashMap::new())).lock();
+    static PARKERS: IdentityTable<Arc<Parker>> = IdentityTable::new();
+    let mut table = PARKERS.shard(thread_identity);
     Clone::clone(table.entry(thread_identity).or_insert_with(|| Arc::new(Parker {
         state: Mutex::new(ParkState { permit: false, interrupted: false, waiting_on: None }),
         cv: Condvar::new(),
@@ -394,14 +394,55 @@ pub(crate) fn deadline_after(timeout: Duration) -> Instant {
 
 // ── 身份侧表 ─────────────────────────────────────────────────────────────────
 
-fn side_table() -> &'static Mutex<HashMap<usize, Arc<Monitor>>> {
-    static TABLE: OnceLock<Mutex<HashMap<usize, Arc<Monitor>>>> = OnceLock::new();
-    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+/// 身份键哈希：键是对象身份（存储单元地址，16 字节对齐），去掉对齐位后乘黄金比常数即可散开，
+/// 不需要 SipHash 的抗碰撞（键不受外部输入控制）。
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl std::hash::Hasher for IdentityHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.0 = ((n >> 4) as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
 }
+
+type IdentityMap<V> = HashMap<usize, V, std::hash::BuildHasherDefault<IdentityHasher>>;
+
+const TABLE_SHARDS: usize = 64;
+
+/// 按身份分片的侧表：各载体 / 平台线程对不同对象的监视器与 parker 查表互不争同一把锁
+/// （全局一把锁时，10⁵ 虚拟线程规模下载体的 `synchronized` 与 unpark 都串行在表锁上）。
+struct IdentityTable<V> {
+    shards: OnceLock<Vec<Mutex<IdentityMap<V>>>>,
+}
+
+impl<V> IdentityTable<V> {
+    const fn new() -> Self {
+        IdentityTable { shards: OnceLock::new() }
+    }
+
+    fn shard(&self, identity: usize) -> parking_lot::MutexGuard<'_, IdentityMap<V>> {
+        let shards = self.shards.get_or_init(|| {
+            (0..TABLE_SHARDS).map(|_| Mutex::new(IdentityMap::default())).collect()
+        });
+        // 取乘积高位选分片，与表内取低位定桶不相关
+        let h = ((identity >> 4) as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        shards[(h >> 58) as usize % TABLE_SHARDS].lock()
+    }
+}
+
+static MONITORS: IdentityTable<Arc<Monitor>> = IdentityTable::new();
 
 /// 按对象身份取（惰性创建）监视器。
 fn monitor_for(identity: usize) -> Arc<Monitor> {
-    let mut table = side_table().lock();
+    let mut table = MONITORS.shard(identity);
     Clone::clone(table.entry(identity).or_insert_with(|| Arc::new(Monitor::new())))
 }
 
@@ -443,7 +484,7 @@ pub fn wait_timeout(identity: usize, is_null: bool, millis: i64, nanos: i32) -> 
 
 /// `Thread.holdsLock(obj)`：当前线程是否持有 `identity` 对象的监视器。
 pub fn holds_lock(identity: usize) -> bool {
-    let table = side_table().lock();
+    let table = MONITORS.shard(identity);
     match table.get(&identity) {
         Some(m) => m.state.lock().owner == Some(std::thread::current().id()),
         None => false,
