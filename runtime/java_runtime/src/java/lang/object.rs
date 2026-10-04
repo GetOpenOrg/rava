@@ -15,36 +15,21 @@ pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing,
 /// 接口类型（`is_interface = true`）不生成 ObjectVTable impl，
 /// 其运行时实例通过 `JvmRef` 包装存储在 Object 中。
 pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
-    /// 视图的应答对象：类 wrapper（静态类型视图）返回其 vtable 对象（= 运行时类 inner），
-    /// 其余对象（inner、数组、基本类型盒、闭包载体）为 None。下列以「运行时类应答」为语义的
-    /// 查询（身份、类名、instanceof、hashCode / equals / toString、浅拷贝、代理、按名字段
-    /// 协议）的缺省实现先问应答对象，wrapper 因此不再逐类生成同形转发（§7.5.4 #8）。
-    #[doc(hidden)]
-    fn __view_target(&self) -> Option<&dyn ObjectVTable> { self.__handle().and_then(|h| h.target()) }
-
-    /// 类 wrapper 的对象句柄（S7-2）：wrapper 返回自身句柄（null wrapper 的句柄为空），
-    /// 其余对象 None。`__view_target` / `is_jvm_null` / `__interface` 的缺省实现由此委托。
-    #[doc(hidden)]
-    fn __handle(&self) -> Option<&crate::handle::__Handle> { None }
-
     /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
     fn hashCode(&self) -> i32 {
-        if let Some(__t) = self.__view_target() { return __t.hashCode(); }
         __identity_hash(self.__identity())
     }
 
     /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的类
     /// 即 `Object.equals` 本体——引用相等（`this == obj`，身份比较）。
     fn equals(&self, other: Object) -> crate::error::Result<bool> {
-        if let Some(__t) = self.__view_target() { return __t.equals(other); }
         Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity())
     }
 
     /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
     fn __obj_str(&self) -> std::string::String {
-        if let Some(__t) = self.__view_target() { return __t.__obj_str(); }
         std::any::type_name::<Self>().to_owned()
     }
 
@@ -52,7 +37,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 翻译体，toString 抛出的异常以 `Err` 传播（可被 catch）；未覆盖的类回落 `__obj_str`。
     /// `__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
     fn __to_string(&self) -> crate::error::Result<std::string::String> {
-        if let Some(__t) = self.__view_target() { return __t.__to_string(); }
         Ok(self.__obj_str())
     }
 
@@ -60,25 +44,22 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// （手写层提供 `__vm_proxy_invoke` 的类，宏据 impl_methods 识别）应答 `Some`——按
     /// (声明接口, 方法名, 描述符) 转发 InvocationHandler；其余对象 `None`（回落 default 体 /
     /// AbstractMethodError）。实参已按 JVM 装箱（基本类型 → 包装对象）。
-    fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>)
+    fn __proxy_invoke(&self, _iface: &str, _name: &str, _desc: &str, _args: Vec<Object>)
         -> Option<crate::error::Result<Object>> {
-        self.__view_target().and_then(|__t| __t.__proxy_invoke(iface, name, desc, args))
+        None
     }
 
-    /// instanceof 运行时检查：视图委托运行时类；生成类按本类描述符的超类型名单（本类、父类链、
+    /// instanceof 运行时检查：生成类按本类描述符的超类型名单（本类、父类链、
     /// 全部接口、`java/lang/Object`）判定（S7-1，不再按类展开 matches!）。代理载体另行覆盖。
     fn is_instance_of(&self, type_id: &str) -> bool {
-        match self.__view_target() {
-            Some(__t) => __t.is_instance_of(type_id),
-            None => self.__desc().is_some_and(|d| d.is_subtype_name(type_id)),
-        }
+        self.__desc().is_some_and(|d| d.is_subtype_name(type_id))
     }
 
     /// 运行时类的静态描述符（S7）：生成类返回本类 `X__DESC`；数组、基本类型装箱、
-    /// 手写非类对象没有类描述符 → None。wrapper / 视图经 `__view_target` 委托。
+    /// 手写非类对象没有类描述符 → None。
     #[doc(hidden)]
     fn __desc(&self) -> Option<&'static crate::class_desc::__ClassDesc> {
-        self.__view_target().and_then(|__t| __t.__desc())
+        None
     }
 
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
@@ -184,9 +165,9 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         crate::monitor::exit(self.__identity() as usize)
     }
 
-    /// JVM null 检查辅助：类 wrapper 的句柄为空即 null（`Default::default()`，构造器经
-    /// `_init_not_null` 分配存储）；基本类型 / 手写类默认 false（永不为 null）。
-    fn is_jvm_null(&self) -> bool { self.__handle().is_some_and(|h| h.is_none()) }
+    /// JVM null 检查辅助：Object 持有的是运行时类对象，只有 null 单例与类型化 null 应答 true
+    /// （类 wrapper 的 null 判定是其固有方法 `is_jvm_null`，S7-2b）。
+    fn is_jvm_null(&self) -> bool { false }
 
     /// 接口视图查询（invokeinterface 的运行时入口）：`slot` 是调用方提供的
     /// `Option<Rc<dyn I__VTable>>`（I 为被调用的 Java 接口）；对象的运行时类实现 I 时，
@@ -195,15 +176,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 按「擦除后的接口」选择——`slot` 的类型不含任何类型实参，与 JVM 的 itable 查找一致。
     /// `java_class!` 宏为每个类按其 `impl Iface for Class` 块生成实现；
     /// 默认（未实现任何接口的对象）不填 `slot`。
-    /// 类 wrapper 缺省委托句柄所持存储（运行时类）应答。
     #[doc(hidden)]
-    fn __interface(self: Rc<Self>, slot: &mut dyn std::any::Any) {
-        if let Some(h) = self.__handle() { h.interface(slot); }
-    }
-    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）：视图委托运行时类，
-    /// 生成类取本类描述符（S7-1）；未捕获异常报告等 VM 级设施据此取得类名。
+    fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+    /// 运行时类的 binary name（如 `java/lang/NullPointerException`）：生成类取本类描述符（S7-1）；未捕获异常报告等 VM 级设施据此取得类名。
     fn __class_name(&self) -> &'static str {
-        if let Some(__t) = self.__view_target() { return __t.__class_name(); }
         match self.__desc() {
             Some(d) => d.binary_name,
             None => "java/lang/Object",
@@ -214,7 +190,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 接口载体、Object）返回同一值。java_class! 宏对生成类 override 为对象存储的标识单元。
     #[doc(hidden)]
     fn __identity(&self) -> *const () {
-        if let Some(__t) = self.__view_target() { return __t.__identity(); }
         self as *const Self as *const ()
     }
 
@@ -261,7 +236,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
     /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
     fn __shallow_copy(&self) -> Option<Object> {
-        self.__view_target().and_then(|__t| __t.__shallow_copy())
+        None
     }
 
     /// Unsafe 实例字段 long 原子协议（`Unsafe.getLongVolatile`/`putLongVolatile`/
@@ -272,23 +247,23 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// Unsafe 经 Object 写入对直接字段读取（`__get_xxx`）可见，与 JVM 的字段
     /// 内存语义一致（Unsafe 与普通字段访问指向同一存储）。
     #[doc(hidden)]
-    fn __unsafe_long_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> {
-        self.__view_target().and_then(|__t| __t.__unsafe_long_cell(field))
+    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> {
+        None
     }
 
     /// Unsafe 实例字段 int 原子协议（`Unsafe.getInt`/`putInt`/`compareAndSetInt`/
     /// `getAndAddInt` 的实例字段形态）：`__unsafe_long_cell` 的 int 镜像，
     /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
     #[doc(hidden)]
-    fn __unsafe_int_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
-        self.__view_target().and_then(|__t| __t.__unsafe_int_cell(field))
+    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
+        None
     }
 
     /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像（平铺的非擦除
     /// boolean 字段，`Rc<Cell<bool>>` 共享单元）。消费方：VarHandle 字节数组视图的字节序位。
     #[doc(hidden)]
-    fn __unsafe_bool_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> {
-        self.__view_target().and_then(|__t| __t.__unsafe_bool_cell(field))
+    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> {
+        None
     }
 
     /// Unsafe 实例字段 int 字视图协议（`getInt`/`putInt`/`compareAndSetInt` 等 int 访问器的
@@ -298,16 +273,16 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `weakCompareAndSetInt`）经此落在该字段自身。java_class! 宏为含这些平铺非擦除字段的
     /// 生成类生成臂（含继承字段）；未命中 → None。
     #[doc(hidden)]
-    fn __unsafe_word(&self, field: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> {
-        self.__view_target().and_then(|__t| __t.__unsafe_word(field, op))
+    fn __unsafe_word(&self, _field: &str, _op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> {
+        None
     }
 
     /// Unsafe 实例字段双字视图协议（`__unsafe_word` 的 64 位镜像）：按字段名对 long / double
     /// 字段（double 以原始位）的共享单元执行读-改-写（`__PrimCell::__dword_update`），返回旧双字。
     /// 承载 Unsafe 的 long 访问器族与 JDK compareAndSetDouble（→ compareAndSetLong 原始位）。
     #[doc(hidden)]
-    fn __unsafe_dword(&self, field: &str, op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> {
-        self.__view_target().and_then(|__t| __t.__unsafe_dword(field, op))
+    fn __unsafe_dword(&self, _field: &str, _op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> {
+        None
     }
 
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
@@ -321,8 +296,8 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `op` 原样保留（调用方可转交他处应答）。经 `dyn ObjectVTable` 的
     /// `__unsafe_ref_get / __unsafe_ref_set / __unsafe_ref_update` 调用。
     #[doc(hidden)]
-    fn __unsafe_ref_access(&self, field: &str, op: &mut __RefAccess<'_>) -> Option<Object> {
-        self.__view_target().and_then(|__t| __t.__unsafe_ref_access(field, op))
+    fn __unsafe_ref_access(&self, _field: &str, _op: &mut __RefAccess<'_>) -> Option<Object> {
+        None
     }
 
     /// Java 字段身份（声明类 binary name, 字段名）→ 上述按名协议的 Rust 字段名。Unsafe 实例字段偏移按
@@ -330,8 +305,8 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 加后缀如 `in` → `in_`、`$` 替换、遮蔽父类同名字段的子类字段加声明类后缀）由 java_class! 宏按
     /// 生成器给出的 `field_slots` 为运行时类生成映射（含继承字段）；未列出 → None，两名相同。
     #[doc(hidden)]
-    fn __field_slot(&self, decl: &str, name: &str) -> Option<&'static str> {
-        self.__view_target().and_then(|__t| __t.__field_slot(decl, name))
+    fn __field_slot(&self, _decl: &str, _name: &str) -> Option<&'static str> {
+        None
     }
 }
 
@@ -455,10 +430,10 @@ pub fn Object__getClass_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
 }
 
 /// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：引用相等（`this == o`）。
-/// `this` 是实例体引用，`other` 的 Rc 数据指针指向同一实例体时为同一对象。
+/// 按对象标识比较（存储重建视图时共享标识单元，与 `==` 同源）。
 #[allow(non_snake_case)]
 pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) -> crate::error::Result<bool> {
-    Ok(std::ptr::eq(this as *const T as *const (), Rc::as_ptr(&other.0) as *const ()))
+    Ok(!other.0.is_jvm_null() && this.__identity() == other.0.__identity())
 }
 
 /// `super.toString()`（invokespecial java/lang/Object.toString）的落点：
@@ -518,6 +493,11 @@ impl __PrimBits for f32 { fn __bits(&self) -> u64 { __canon_f32_bits(*self) as u
 impl __PrimBits for f64 { fn __bits(&self) -> u64 { __canon_f64_bits(*self) } }
 fn __canon_f64_bits(v: f64) -> u64 { if v.is_nan() { 0x7ff8000000000000 } else { v.to_bits() } }
 fn __canon_f32_bits(v: f32) -> u32 { if v.is_nan() { 0x7fc00000 } else { v.to_bits() } }
+/// 基本类型值装入 Object（原生值盒，见上）：逐类型显式 `From`（S7-2b 删 blanket `From<T: ObjectVTable>`）
+macro_rules! impl_from_primitive {
+    ($($t:ty),*) => { $(impl From<$t> for Object { fn from(v: $t) -> Object { Object(Rc::new(v)) } })* };
+}
+impl_from_primitive!(i32, i64, bool, i8, i16, u16, f32, f64);
 impl_vtable_primitive!(i32, "java/lang/Integer", |v: i32| format!("{}", v), |v: i32| v);
 impl_vtable_primitive!(i64, "java/lang/Long", |v: i64| format!("{}", v),
     |v: i64| (v ^ ((v as u64) >> 32) as i64) as i32);
@@ -538,38 +518,69 @@ impl ObjectVTable for () {
     fn is_jvm_null(&self) -> bool { true }
 }
 
-/// 带静态类型的 null：接口载体（`java_class!` 接口块）的 null 值。与类 wrapper 的 null 探针
-/// （`_jvm_null` + 本类 vtable）同形——值语义仍是 Java null（`is_jvm_null`，身份即 null 单例，
-/// 与任意 null 引用相等），但 `__class_name` 报静态类型。数组以元素类型的 null 探针取元素类
-/// （`new I[0].getClass()` 为 `[LI;`、aastore 存储检查的元素类名、checkcast 的目标元素类），
+/// 带静态类型的 null：接口载体（`java_class!` 接口块）与类 wrapper 的 null 装入 Object 的形态。
+/// 值语义仍是 Java null（`is_jvm_null`，身份即 null 单例，与任意 null 引用相等），但
+/// `__class_name` 报静态类型；类 wrapper 的 null 另带本类描述符（`__desc` / `is_instance_of`
+/// 按静态类应答，与 S7-2b 前 null wrapper 装入 Object 的应答相同）。数组以元素类型的 null 探针
+/// 取元素类（`new I[0].getClass()` 为 `[LI;`、aastore 存储检查的元素类名、checkcast 的目标元素类），
 /// 接口元素数组据此得到 JVM 的数组类，而非退化为 `Object[]`。
-struct TypedNull(&'static str);
+struct TypedNull(&'static str, Option<&'static crate::class_desc::__ClassDesc>);
 
 impl ObjectVTable for TypedNull {
     fn __obj_str(&self) -> std::string::String { "null".to_owned() }
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn is_jvm_null(&self) -> bool { true }
     fn __class_name(&self) -> &'static str { self.0 }
+    fn __desc(&self) -> Option<&'static crate::class_desc::__ClassDesc> { self.1 }
     fn __identity(&self) -> *const () { Object::default().0.__identity() }
+}
+
+crate::__process_static! {
+    /// 类型化 null 的缓存：键为静态类 binary name（同名共享一个实例）
+    static TYPED_NULLS: crate::sync_model::__RefSlot<std::collections::HashMap<&'static str, Object>> =
+        crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
 impl Object {
     /// 静态类型为 `binary_name` 的 null（按名缓存，同名共享一个实例）。
     #[doc(hidden)]
     pub fn __typed_null(binary_name: &'static str) -> Object {
-        crate::__process_static! {
-            static TYPED_NULLS: crate::sync_model::__RefSlot<std::collections::HashMap<&'static str, Object>> =
-                crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
-        }
-        if let Some(n) = TYPED_NULLS.with(|m| m.borrow().get(binary_name).cloned()) {
-            return n;
-        }
-        let n = Object(Rc::new(TypedNull(binary_name)));
-        TYPED_NULLS.with(|m| Clone::clone(m.borrow_mut().entry(binary_name).or_insert(n)))
+        Self::__typed_null_of(binary_name, None)
     }
+
+    /// 类 wrapper 的 null 装入 Object（`From<X> for Object` 的 null 臂，S7-2b）：静态类型取自
+    /// 本类描述符。非泛型冷路径，全程序一份。
+    #[doc(hidden)]
+    #[inline(never)]
+    pub fn __typed_null_desc(desc: &'static crate::class_desc::__ClassDesc) -> Object {
+        Self::__typed_null_of(desc.binary_name, Some(desc))
+    }
+
+    fn __typed_null_of(binary_name: &'static str,
+                       desc: Option<&'static crate::class_desc::__ClassDesc>) -> Object {
+        if let Some(n) = TYPED_NULLS.with(|m| m.borrow().get(binary_name).cloned()) {
+            if n.0.__desc().is_some() || desc.is_none() {
+                return n;
+            }
+        }
+        // 同名的接口载体 null 与类 null 不会并存（类与接口不同名）；带描述符的覆盖无描述符的
+        let n = Object(Rc::new(TypedNull(binary_name, desc)));
+        TYPED_NULLS.with(|m| {
+            m.borrow_mut().insert(binary_name, Clone::clone(&n));
+        });
+        n
+    }
+
+    /// 存储（运行时类对象）装入 Object：句柄交出所持对象，或分配后直接装入（S7-2b）。
+    #[doc(hidden)]
+    #[inline]
+    pub fn __from_shared(rc: Rc<dyn ObjectVTable>) -> Object { Object(rc) }
 }
 
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
+impl<T: 'static + crate::sync_model::__ThreadSafe> From<Rc<crate::sync_model::__RefSlot<Vec<T>>>> for Object {
+    fn from(v: Rc<crate::sync_model::__RefSlot<Vec<T>>>) -> Object { Object(Rc::new(v)) }
+}
 impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> {
@@ -585,6 +596,9 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sy
 ///
 /// `downcast::<T>()` 会同时检查直接路径（T implements ObjectVTable）和 JvmRef 包装路径。
 pub struct JvmRef<T: 'static>(pub T);
+impl<T: 'static + crate::sync_model::__ThreadSafe> From<JvmRef<T>> for Object {
+    fn from(v: JvmRef<T>) -> Object { Object(Rc::new(v)) }
+}
 impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
     fn as_any(&self) -> &dyn std::any::Any { &self.0 }
     fn __obj_str(&self) -> std::string::String {
@@ -612,6 +626,11 @@ pub struct Object(pub Rc<dyn ObjectVTable>);
 /// `(void) obj` —— 丢弃引用；使 `()` 满足类型实参的 `From<Object>` 约束。
 impl From<Object> for () {
     fn from(_: Object) {}
+}
+
+/// `()` 装入 Object 即 Java null（使 `()` 满足类型实参的 `Into<Object>` 约束）。
+impl From<()> for Object {
+    fn from(_: ()) -> Object { Object::default() }
 }
 
 /// Java null 的唯一实例（S-3.2）：`Object::default()` 每次新建 `Rc::new(())` 时，

@@ -627,12 +627,13 @@ def _prune_passed(jdk_major: int | None) -> int:
             n_tests += 1
         for t in targets:
             _rm(t)
-    for pat in ("deps/*java_runtime-*", "build/java_runtime-*", ".fingerprint/java_runtime-*",
-                "incremental/java_runtime-*"):
+    # JDK 模块 crate（java_* / jdk_*：根声明层 / 实现层 / 门面 / 其余模块）与 java_meta
+    for pat in ("deps/*java_*-*", "deps/*jdk_*-*", "build/java_*-*", "build/jdk_*-*",
+                ".fingerprint/java_*-*", ".fingerprint/jdk_*-*", "incremental/java_*-*", "incremental/jdk_*-*"):
         for t in prof.glob(pat):
             _rm(t)
     print(f"[prune-passed] 通过清单 {len(passed)} 例（其中 {n_tests} 例有遗留生成物已清理）；"
-          f"java_runtime 中间产物已清；共释放 {freed / (1 << 30):.2f} GiB")
+          f"JDK 模块 crate 中间产物已清；共释放 {freed / (1 << 30):.2f} GiB")
     print(f"[prune-passed] 失败测试的 scratch / 可执行文件 / 日志保留；共享依赖缓存保留（{prof}）")
     return 0
 

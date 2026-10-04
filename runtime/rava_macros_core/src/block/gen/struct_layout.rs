@@ -359,8 +359,8 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
 
     // Object.clone 的运行时类浅拷贝（C-1）：新 inner（新标识单元），每个字段新建存储
     // 单元、值按 Java 语义拷贝（基本类型 Cell 拷贝值；引用 / 擦除 RefCell 拷贝引用——
-    // Box<T> 的 Clone 即 wrapper/Object 的引用克隆），再经本类 __as_Self 钩子包成运行时
-    // 类 wrapper。inner 即运行时类（vtable 方法体里的 `this`），类自带 clone 体内的
+    // Box<T> 的 Clone 即 wrapper/Object 的引用克隆），新存储直接装入 Object（S7-2b）。
+    // inner 即运行时类（vtable 方法体里的 `this`），类自带 clone 体内的
     // super.clone() 经此得到运行时类副本（子类字段 / 类名完整保留）。
     let shallow_copy_inits: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
         .map(|(name, ty)| (name, !ctx.is_erased(name) && ctx.inherited_is_basic(name, ty)))
@@ -379,15 +379,13 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #(#shallow_copy_inits)*
                 __identity: __Shared::new(()),
             };
-            ::std::option::Option::Some(Object::from(#vtable_trait_ident::#as_self_hook(&__c)))
+            ::std::option::Option::Some(Object::__from_shared(__Shared::new(__c)))
         }
     };
 
-    // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
-    // 逐字段浅拷贝（__shallow_copy）与擦除存储
-    // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
-    // （blanket From<T: ObjectVTable>），只有 wrapper 的 impl 知道类型实参；
-    // From<Object> 的擦除路径经句柄所持 inner 的 `__erased_vtable` 重建任意实例化视图（S7-2）。
+    // inner 即运行时类对象：Object 直接持有它（S7-2b），身份 / 类名 / instanceof / 桥接 /
+    // 浅拷贝 / 按名字段协议都由本 impl 应答；From<Object> 的擦除路径经 `__erased_vtable`
+    // 重建任意实例化视图（S7-2）。
     // 代理载体（FS-R R4a）：手写层提供 `__vm_proxy_invoke` / `__vm_proxy_implements`
     // 的类——instanceof 另按实例的接口列表应答，接口载体分派回退经其转发。
     let is_proxy_carrier = ctx.meta.impl_methods.iter().any(|m| m == "__vm_proxy_invoke");

@@ -19,8 +19,8 @@ use crate::error::{EmitError, Result};
 use crate::sam::{contract_methods, SamSpec};
 
 /// 接口 J 在宿主文件（接口 I 的文件）中的全限定类型路径
-fn quote_path(ctx: &EmitCtx<'_>, jbin: &str, host: &ClassEmission, ems: &Emissions) -> String {
-    class_use_path(ctx, jbin, &host.crate_prefix, Some(ems), &host.crate_name)
+fn quote_path(ctx: &EmitCtx<'_>, jbin: &str, host: &ClassEmission) -> String {
+    class_use_path(ctx, jbin, &host.crate_name)
 }
 
 fn objects(n: usize) -> String {
@@ -130,7 +130,7 @@ fn vtable_entries(
             let target = if !jm.is_abstract() { em_m.has_body.then_some((jbin, em_m)) } else { default_bodies.get(&key).copied() };
             let Some((kbin, em_k)) = target else { continue };
             let kci = reg.get(kbin).expect("default 声明接口在注册表");
-            let k_ty = format!("{}{}", quote_path(ctx, kbin, host, ems), objects(class_params(ctx, kci).len()));
+            let k_ty = format!("{}{}", quote_path(ctx, kbin, host), objects(class_params(ctx, kci).len()));
             let Some(b) = default_entry_body(ctx, em_k, kci, &k_ty, &args, &entry_tys) else { continue };
             b
         };
@@ -159,6 +159,9 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         "}".into(),
         String::new(),
     ];
+    // 装入 Object：Object 直接持有载体（S7-2b 删 blanket `From<T: ObjectVTable>` 后逐类型显式）
+    l.push(format!("impl From<{lam}> for Object {{ fn from(v: {lam}) -> Object {{ Object::__from_shared(__Shared::new(v)) }} }}"));
+    l.push(String::new());
     l.push(format!("impl ObjectVTable for {lam} {{"));
     l.push("    fn as_any(&self) -> &dyn std::any::Any { self }".into());
     l.push(format!("    fn __obj_str(&self) -> std::string::String {{ std::format!(\"{iface}::Lambda\") }}"));
@@ -173,7 +176,7 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         if contract_methods(ctx, jci).is_empty() {
             continue;
         }
-        let jpath = quote_path(ctx, jbin, host, ems);
+        let jpath = quote_path(ctx, jbin, host);
         l.push(format!(
             "        if let Some(s) = slot.downcast_mut::<Option<__Shared<dyn {jpath}__VTable>>>() {{ *s = Some(self); return; }}"
         ));

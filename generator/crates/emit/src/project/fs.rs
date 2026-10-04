@@ -10,23 +10,23 @@ pub const GEN_MARKER: &str = "rava_macros::java_class";
 
 /// scratch 写出器：记录本轮写出（或内容相同跳过）的路径
 pub struct Writer {
-    /// scratch 的 `java_runtime/src`
-    jrt_src: PathBuf,
+    /// scratch 的各 JDK 模块 crate 源码树（手写伴随文件可落入其中任一）
+    jdk_srcs: Vec<PathBuf>,
     /// 手写真源 `runtime/java_runtime/src`
     runtime_src: PathBuf,
     written: BTreeSet<PathBuf>,
 }
 
 impl Writer {
-    pub fn new(out_dir: &Path, runtime_src: &Path) -> Writer {
+    pub fn new(jdk_srcs: &[PathBuf], runtime_src: &Path) -> Writer {
         Writer {
-            jrt_src: out_dir.join("java_runtime").join("src"),
+            jdk_srcs: jdk_srcs.to_vec(),
             runtime_src: runtime_src.to_path_buf(),
             written: BTreeSet::new(),
         }
     }
 
-    /// `java_runtime/src/` 下的 .rs 在手写真源同相对路径存在（mod.rs / lib.rs 除外）
+    /// JDK 源码树下的 .rs 在手写真源同相对路径存在（mod.rs / lib.rs 除外）
     pub fn is_handwritten(&self, path: &Path) -> bool {
         if path.extension().is_none_or(|e| e != "rs") {
             return false;
@@ -35,10 +35,10 @@ impl Writer {
         if base == "mod.rs" || base == "lib.rs" {
             return false;
         }
-        match path.strip_prefix(&self.jrt_src) {
-            Ok(rel) => self.runtime_src.join(rel).exists(),
-            Err(_) => false,
-        }
+        self.jdk_srcs
+            .iter()
+            .find_map(|src| path.strip_prefix(src).ok())
+            .is_some_and(|rel| self.runtime_src.join(rel).exists())
     }
 
     /// 写文件：手写文件跳过；内容相同不重写（保留 mtime）

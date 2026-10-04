@@ -182,17 +182,12 @@ impl SamLedger {
         self.specs.get(iface)
     }
 
-    /// invokedynamic 站点的合成对象构造路径（全限定，免 import）：当前文件在 user crate →
-    /// JDK 接口用 `java_runtime::` 前缀，在 java_runtime crate → `crate::`；用户接口一律
-    /// 模块层路径 `crate::<mod>::<Short>`。None：该接口不可合成（站点回落闭包装箱）
+    /// invokedynamic 站点的合成对象构造路径（全限定，免 import）：接口与站点同 crate → `crate::`，
+    /// 否则接口所在 crate 名（[`use_path`]）；用户接口一律模块层路径 `crate::<mod>::<Short>`。
+    /// None：该接口不可合成（站点回落闭包装箱）
     pub fn site_ctor_path(&self, ctx: &EmitCtx<'_>, iface: &str, current_class: &str) -> Option<String> {
         self.specs.get(iface)?;
-        let recv_crate = ctx.lib_crate_of(current_class).unwrap_or(if ctx.is_user(current_class) { "user" } else { "java_runtime" });
-        let crate_prefix = if recv_crate == "java_runtime" { "crate" } else { "java_runtime" };
-        // 目标视图：注册表类的 emission 前缀（用户类 java_runtime / JDK crate）+ lib crate 归属
-        let target_prefix = if ctx.is_user(iface) { "java_runtime" } else { "crate" };
-        let target_crate = ctx.lib_crate_of(iface).unwrap_or("");
-        Some(format!("{}__Lambda::new", use_path(ctx, iface, crate_prefix, Some((target_crate, target_prefix)), recv_crate)))
+        Some(format!("{}__Lambda::new", use_path(ctx, iface, ctx.crate_of(current_class))))
     }
 
     /// 站点一致性断言（G-10 同款）：站点 samtype 描述符与预扫描 SAM 描述符恒等

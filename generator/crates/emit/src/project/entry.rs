@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::fs::Writer;
 use super::layout::{JdkLayout, UserLayout};
+use super::module_side::path_dep;
 use crate::ctx::EmitCtx;
 use crate::phase2::dispatch::registration_turbofish;
 use crate::phase2::Emissions;
@@ -27,9 +28,9 @@ pub fn user_mod_decl(parent: &Path, name: &str, vis: &str) -> String {
     format!("#[path = \"{target}\"]\n{vis}mod {name};")
 }
 
-/// JDK 类在 user crate 中的完整路径（`java_runtime::java::util::X`）
+/// JDK 类在 user crate 中的完整路径（`<模块 crate>::java::util::X`）
 fn jrt_path(ctx: &EmitCtx<'_>, bin: &str) -> String {
-    let mut parts = vec!["java_runtime".to_string()];
+    let mut parts = vec![ctx.crate_of(bin).to_string()];
     let mut segs: Vec<&str> = bin.split('/').collect();
     segs.pop();
     parts.extend(segs.iter().map(|p| safe_pkg_part(p)));
@@ -44,6 +45,7 @@ fn block(head: &str, lines: &[String], tail: &str) -> String {
 /// 类初始化钩子：枚举形态 / 有 `<clinit>` 的用户类 + 注解枚举种子与按镜像初始化目标（JDK）。
 /// 泛型类路径的类型实参按登记约定取 Object（钩子闭包无推断上下文，E0283）
 fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions) -> Vec<String> {
+    let rt = ctx.crates().root();
     let mut out = Vec::new();
     for (c, e) in &user.entries {
         // 不透明（L1）类只有类型身份、不初始化，没有 `__class_init`
@@ -59,7 +61,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
         p.push(e.mod_name.clone());
         p.push(ctx.declared(c));
         out.push(format!(
-            "    (\"{c}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            "    (\"{c}\", {rt}::sync_model::__Shared::new(|| {}{}::__class_init())),",
             p.join("::"),
             registration_turbofish(ctx, ems, c)
         ));
@@ -72,7 +74,7 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             continue;
         }
         out.push(format!(
-            "    (\"{en}\", java_runtime::sync_model::__Shared::new(|| {}{}::__class_init())),",
+            "    (\"{en}\", {rt}::sync_model::__Shared::new(|| {}{}::__class_init())),",
             jrt_path(ctx, en),
             registration_turbofish(ctx, ems, en)
         ));
@@ -82,16 +84,17 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
 
 /// main 启动段（钩子登记全部段落）
 fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emissions, disp: &DispatchReg) -> String {
+    let rt = ctx.crates().root();
     let mut hb = String::new();
     let hooks = class_init_hooks(ctx, user, jdk, ems);
     if !hooks.is_empty() {
-        hb += &block("    java_runtime::register_class_init_hooks(&[", &hooks, "    ]);");
+        hb += &block(&format!("    {rt}::register_class_init_hooks(&["), &hooks, "    ]);");
     }
     if !disp.methods.is_empty() {
-        hb += &block("    java_runtime::reflect_dispatch::register_method_dispatch(&[", &disp.methods, "    ]);");
+        hb += &block(&format!("    {rt}::reflect_dispatch::register_method_dispatch(&["), &disp.methods, "    ]);");
     }
     if !disp.fields.is_empty() {
-        hb += &block("    java_runtime::reflect_dispatch::register_field_dispatch(&[", &disp.fields, "    ]);");
+        hb += &block(&format!("    {rt}::reflect_dispatch::register_field_dispatch(&["), &disp.fields, "    ]);");
     }
     // VM 引导期（HotSpot initPhase1 对应物，清单 seeds.toml [boot_init]）：先按序调用 calls 中
     // 入链的静态方法（VM 发起的全局登记），再按序初始化 classes 中在闭包内翻译在场的类
@@ -105,7 +108,7 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
             let name = rest.split(':').next()?;
             jdk.generated.contains(cls).then(|| {
                 format!(
-                    "        (\"{cls}.{name}\", {}::{} as fn() -> java_runtime::error::Result<()>),",
+                    "        (\"{cls}.{name}\", {}::{} as fn() -> {rt}::error::Result<()>),",
                     jrt_path(ctx, cls),
                     safe_pkg_part(name)
                 )
@@ -119,13 +122,13 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
         .filter(|b| jdk.generated.contains(*b))
         .map(|b| {
             format!(
-                "        (\"{b}\", {}{}::__class_init as fn() -> java_runtime::error::Result<()>),",
+                "        (\"{b}\", {}{}::__class_init as fn() -> {rt}::error::Result<()>),",
                 jrt_path(ctx, b),
                 registration_turbofish(ctx, ems, b)
             )
         }));
     if !boot.is_empty() {
-        hb += &block("    java_runtime::vm_boot_init(&[", &boot, "    ]);");
+        hb += &block(&format!("    {rt}::vm_boot_init(&["), &boot, "    ]);");
     }
     hb
 }
@@ -142,8 +145,9 @@ pub fn write_main(
     jdk: &JdkLayout,
     ems: &Emissions,
     disp: &DispatchReg,
-    bodies: &[&str],
 ) -> Result<String> {
+    let crates = ctx.crates();
+    let rt = crates.root();
     let Some((main_bin, main_e)) = user.entries.first() else {
         return Err(crate::error::EmitError::Input("无用户类：无法确定入口".into()));
     };
@@ -170,7 +174,7 @@ pub fn write_main(
         lines.extend(top.map(|m| user_mod_decl(user_src, m, "")));
     }
     lines.push(format!("use {use_path};"));
-    // 反射元数据表 crate：java_runtime 以导出符号读取其表，此处把它纳入链接
+    // 反射元数据表 crate：运行时以导出符号读取其表，此处把它纳入链接
     lines.push("use java_meta as _;".into());
     // 用户类的反射元数据行（`meta_sides`）：启动时登记，与档案侧表合并查询
     let meta_mod = super::meta_sides::USER_META_MOD;
@@ -178,18 +182,19 @@ pub fn write_main(
         lines.push(format!("#[path = \"../{meta_mod}.rs\"]"));
     }
     lines.push(format!("mod {meta_mod};"));
-    // 实现层 crate：声明层外壳经导出符号调用其定义，此处把它们纳入链接
-    lines.extend(bodies.iter().map(|b| format!("use {b} as _;")));
+    // 全部模块 crate（根门面连带链接实现层：声明层外壳经导出符号调用其定义）；
+    // 只经反射 / 服务加载触达的模块也要纳入链接
+    lines.extend(crates.all().iter().map(|c| format!("use {} as _;", c.name)));
     lines.push(String::new());
     lines.push("fn main() {".into());
-    lines.push(format!("    java_runtime::meta::register_user(&{meta_mod}::USER_META);"));
+    lines.push(format!("    {rt}::meta::register_user(&{meta_mod}::USER_META);"));
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
-    lines.push("    java_runtime::create_java_vm();".into());
+    lines.push(format!("    {rt}::create_java_vm();"));
     let hb = hook_block(ctx, user, jdk, ems, disp);
     if !hb.is_empty() {
         lines.push(hb);
     }
-    lines.push(format!("    java_runtime::destroy_java_vm({main_call});"));
+    lines.push(format!("    {rt}::destroy_java_vm({main_call});"));
     lines.push("}".into());
     lines.push(String::new());
     let file = if ctx.opts.batch { user_src.join("bin").join(format!("{bin_name}.rs")) } else { user_src.join("main.rs") };
@@ -235,28 +240,33 @@ pub fn lints_section() -> Vec<String> {
     l
 }
 
-/// user/Cargo.toml 的依赖行：java_runtime、java_meta、宏 crate、全部 lib crate（声明序）、
-/// 全部实现层 crate
-fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str], bodies: &[&str]) -> Vec<String> {
-    let mut d = vec![
-        "java_runtime    = { path = \"../java_runtime\" }".to_string(),
-        "java_meta       = { path = \"../java_meta\" }".to_string(),
-        format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
-    ];
-    d.extend(libs.iter().map(|l| super::lib_crates::dep_line(l)));
-    d.extend(bodies.iter().map(|b| super::lib_crates::dep_line(b)));
+/// user crate 直接依赖的 crate 名：全部模块 crate（根为门面，链接者经它连带实现层）、java_meta
+fn linked_crates(ctx: &EmitCtx<'_>) -> Vec<String> {
+    let mut v: Vec<String> = ctx.crates().all().iter().map(|c| c.name.clone()).collect();
+    v.push(META_CRATE.to_string());
+    v
+}
+
+/// 反射元数据表 crate 名
+pub const META_CRATE: &str = "java_meta";
+
+/// user/Cargo.toml 的依赖行：全部模块 crate、java_meta、宏 crate、全部 lib crate（声明序）
+fn user_deps(ctx: &EmitCtx<'_>, libs: &[&str]) -> Vec<String> {
+    let mut d: Vec<String> = linked_crates(ctx).iter().map(|c| path_dep(c, c)).collect();
+    d.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
+    d.extend(libs.iter().map(|l| path_dep(l, l)));
     d
 }
 
 /// 批量模式：向 user/Cargo.toml 追加 `[[bin]]`（同名已在则跳过；插在 `[dependencies]` 前）；
 /// 文件缺席时先建最小清单
-fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name: &str, bodies: &[&str]) -> Result<()> {
+fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name: &str) -> Result<()> {
     let path = user_dir.join("Cargo.toml");
     let new_bin = format!("\n[[bin]]\nname = \"{bin_name}\"\npath = \"src/bin/{bin_name}.rs\"\n");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => {
-            // 实现层 crate 依赖补齐（清单先于拆层建立、或本轮装箱数增加）
-            let c = with_dep_lines(c, bodies);
+            // 模块 crate 依赖补齐（本轮闭包涉及的模块增加）
+            let c = with_dep_lines(c, &linked_crates(ctx));
             if c.contains(&format!("name = \"{bin_name}\"")) {
                 return w.write(&path, &c);
             }
@@ -271,7 +281,7 @@ fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name
                 String::new(),
                 "[dependencies]".into(),
             ];
-            base.extend(user_deps(ctx, &[], bodies));
+            base.extend(user_deps(ctx, &[]));
             base.push(String::new());
             base.join("\n")
         }
@@ -284,11 +294,11 @@ fn append_cargo_bin(ctx: &EmitCtx<'_>, w: &mut Writer, user_dir: &Path, bin_name
 }
 
 /// 清单缺席的依赖行插到 `[dependencies]` 段首
-fn with_dep_lines(content: String, crates: &[&str]) -> String {
+fn with_dep_lines(content: String, crates: &[String]) -> String {
     let missing: Vec<String> = crates
         .iter()
-        .filter(|c| !content.lines().any(|l| l.split_whitespace().next() == Some(**c)))
-        .map(|c| super::lib_crates::dep_line(c) + "\n")
+        .filter(|c| !content.lines().any(|l| l.split_whitespace().next() == Some(c.as_str())))
+        .map(|c| path_dep(c, c) + "\n")
         .collect();
     match content.find("[dependencies]\n") {
         Some(i) if !missing.is_empty() => {
@@ -305,7 +315,7 @@ pub fn write_cargo_files(
 ) -> Result<()> {
     let user_dir = out_dir.join("user");
     if ctx.opts.batch {
-        append_cargo_bin(ctx, w, &user_dir, bin_name, bodies)?;
+        append_cargo_bin(ctx, w, &user_dir, bin_name)?;
     } else {
         let mut l = vec![
             "[package]".to_string(),
@@ -319,16 +329,19 @@ pub fn write_cargo_files(
             String::new(),
             "[dependencies]".into(),
         ];
-        l.extend(user_deps(ctx, libs, bodies));
+        l.extend(user_deps(ctx, libs));
         l.push(String::new());
         l.extend(lints_section());
         w.write(&user_dir.join("Cargo.toml"), &l.join("\n"))?;
     }
-    let members: Vec<String> = ["java_runtime", "java_meta"]
-        .into_iter()
-        .chain(libs.iter().copied())
+    let crates = ctx.crates();
+    let decl = crates.decl();
+    let members: Vec<String> = std::iter::once(decl.as_str())
         .chain(bodies.iter().copied())
-        .chain(["user"])
+        .chain(crates.all().iter().map(|c| c.name.as_str()))
+        .chain([META_CRATE])
+        .chain(libs.iter().copied())
+        .chain([crate::ctx::USER_CRATE])
         .map(|m| format!("\"{m}\""))
         .collect();
     // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
@@ -344,7 +357,7 @@ pub fn write_cargo_files(
         members.join(", ")
     );
     w.write(&out_dir.join("Cargo.toml"), &root)?;
-    let jrt = out_dir.join("java_runtime");
+    let jrt = out_dir.join(&decl);
     w.write(&jrt.join("strict.txt"), if ctx.opts.strict { "1\n" } else { "0\n" })?;
     if let Some(v) = ctx.opts.jdk_major {
         w.write(&jrt.join("jdk_feature.txt"), &format!("{v}\n"))?;
@@ -377,8 +390,8 @@ pub const CLOSURE_TABLES: &str = "closure_input/closure_tables.rs";
 
 /// 闭包派生表：模块服务表（`__java_meta_MODULE_SERVICES`，BootLoader.getServicesCatalog 装填引导服务目录）
 /// 与 VM 初始系统属性表（`__java_meta_VM_CONST_PROPERTIES` / `__java_meta_VM_DYNAMIC_PROPERTIES`，
-/// System.registerNatives 写入）。java_runtime::meta 以同名 extern 声明读取；事实随闭包（即用户代码）变化，
-/// 放在 java_meta 才不连带重编 java_runtime。每次构建写入（内容相同不重写）
+/// System.registerNatives 写入）。运行时 meta 以同名 extern 声明读取；事实随闭包（即用户代码）变化，
+/// 放在 java_meta 才不连带重编运行时 crate。每次构建写入（内容相同不重写）
 pub fn write_closure_tables(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
     let input = &ctx.input;
     let mut src = String::from(

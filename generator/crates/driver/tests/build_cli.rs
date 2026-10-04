@@ -315,7 +315,7 @@ fn name_level_classes_emit_opaque() {
 #[test]
 fn this_receiver_never_null_recv() {
     let Some((_, out)) = build("NullRecvThis.java", "nullrecv-this", &[]) else { return };
-    let enc = std::fs::read_to_string(out.join("java_runtime/src/java/nio/charset/charset_encoder.rs")).unwrap();
+    let enc = std::fs::read_to_string(out.join("java_base_decl/src/java/nio/charset/charset_encoder.rs")).unwrap();
     let hits: Vec<&str> = enc.lines().filter(|l| l.contains("__null_recv(")).collect();
     assert!(hits.is_empty(), "{hits:#?}");
     std::fs::remove_dir_all(&out).ok();
@@ -360,7 +360,7 @@ fn locale_bundle_parent_not_null_recv() {
 #[test]
 fn bridge_merged_inherited_slot_not_stubbed() {
     let Some((_, out)) = build("BridgeMergedSlot.java", "bridge-slot", &[]) else { return };
-    let rs = std::fs::read_to_string(out.join("java_runtime/src/java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
+    let rs = std::fs::read_to_string(out.join("java_base_decl/src/java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
     let line = rs.lines().find(|l| l.contains("pub fn tryAdvance(")).expect("继承的 tryAdvance 转发");
     assert!(!line.contains("__stub"), "{line}");
     std::fs::remove_dir_all(&out).ok();

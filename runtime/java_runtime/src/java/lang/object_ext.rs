@@ -364,14 +364,6 @@ impl std::fmt::Debug for Object {
     }
 }
 
-// R-1: blanket impl — 所有 ObjectVTable 实现类型（含基本类型、生成类）均可转为 Object。
-// 替代原先为每个基本类型和每个生成类手写/宏生成的 Into<Object>。
-// Object = Rc<dyn ObjectVTable>；Rc<dyn ObjectVTable> 本身不实现 ObjectVTable，
-// 故与 std 的 From<T> for T 无冲突。
-impl<T: ObjectVTable + 'static> From<T> for Object {
-    fn from(val: T) -> Self { Object(crate::sync_model::__Shared::new(val)) }
-}
-
 // Java unboxing: Object 反向解包为基本类型
 impl From<Object> for i32   { fn from(o: Object) -> i32   { o.downcast::<i32>()   } }
 impl From<Object> for i64   { fn from(o: Object) -> i64   { o.downcast::<i64>()   } }
@@ -427,18 +419,14 @@ pub fn __erased_view<W, V: ?Sized + 'static>(obj: &Object, parts: __PartsFn<W, V
 
 /// `From<Object> for X` 的全部逻辑（宏按类只生成一行转交，拆 crate §7.5.4 #2）。判定按序：
 ///   1. null 通过任何 checkcast（JVMS §6.5），得到本类的 null 引用；
-///   2. 同实例化：持有的对象就是 `W` → 直接取回；
-///   3. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 擦除路径：句柄不变，
-///      由句柄所持存储取本类擦除 vtable 指针（子类 vtable 经超类 supertrait 上转），
-///      重建任意实例化视图（S7-2）；
-///   4. 其余 → checkcast 的 ClassCastException。
+///   2. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 以 Object 所持存储为句柄，
+///      取本类擦除 vtable 指针（子类 vtable 经超类 supertrait 上转），重建任意实例化视图
+///      （S7-2；S7-2b 起 Object 直接持有存储，不再有「持有对象即 W」的取回臂）；
+///   3. 其余 → checkcast 的 ClassCastException。
 pub fn __class_from_object<W, V>(obj: Object, desc: &'static crate::class_desc::__ClassDesc,
                                  parts: __PartsFn<W, V>) -> W
-where W: std::any::Any + Clone + Default, V: ?Sized + 'static {
+where W: Default, V: ?Sized + 'static {
     if obj.0.is_jvm_null() { return W::default(); }
-    if let Some(same) = obj.0.as_any().downcast_ref::<W>() {
-        return Clone::clone(same);
-    }
     if obj.0.__desc().is_some_and(|d| d.is_subclass_of(desc)) {
         if let Some(r) = crate::handle::__ref_from_object::<V>(&obj) {
             return parts(r);

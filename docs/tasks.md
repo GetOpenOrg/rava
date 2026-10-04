@@ -215,13 +215,14 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 S7 统一对象句柄 + 每类静态描述符（D7 批准取法 B；2026-10-04-s7-object-handle-descriptor.md）
 │   │     ├─ ✅ S7-0 / S7-1 s7-desc（b0166702）：抽查 16/16，合入 8c218a72（已推送）
 │   │     ├─ ✅ S7-2a 类 wrapper 单字段句柄（合入 cfe37f90；TSDS 声明层 7597 MB）
-│   │     ├─ ⏳ S7-2b Object 直接持对象 / 删 blanket From / 接口 wrapper（待派）
+│   │     ├─ ✅ S7-2b Object 直接持对象 / 删 blanket From（6a784b50 合入）
+│   │     ├─ ⏳ S7-2c 接口 / lambda 载体收为句柄（待派）
 │   │     └─ ⏳ S7-3 … S7-5 ◀── S7-2
 │   ├─ 🔄 T1 跨测试编译复用（决策 ✅ 2026-10-03 四项全采纳，2026-10-01-cross-test-compile-reuse.md）
 │   │     ├─ ✅ T1-1a 档案化分析（90398dc8）、T1-1b 按档案生成 JDK crate（10cfb657）
 │   │     ├─ ✅ T1-2 方案 t1-link（6aa69280，合入 53f32664；2026-10-04-t1-step2-direct-rustc-link.md）
 │   │     ├─ ✅ M1 jmod 模块映射与 import 过滤（module-m1 188d67ac）：抽查 12/12，合入 9d587416（已推送）
-│   │     ├─ 🔄 M2 按模块切 crate（module-m2 已派）──▶ M3 按模块登记
+│   │     ├─ ✅ M2 按模块切 crate（a62793fd 合入）──▶ M3 按模块登记
 │   │     ├─ ✅ V12 第三方依赖分层方案（a2fdfbca，合入 5c995939；7 项待用户决策）──▶ V12-0 模块归属修正
 │   │     ├─ ⏳ L2–L4（同计划）
 │   │     └─ ⏳ T4 生成器只构建一次再分发（待服务器核实）
@@ -288,18 +289,19 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-jndi | 🔄 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
-| T1 档案化（t1-profile） | 🔄 | 1a / 1b / 第 2 步方案 / M1 / V12 方案 ✅；M2 进行中，M3 |
+| T1 档案化（t1-profile） | 🔄 | 1a / 1b / 第 2 步方案 / M1 / V12 方案 / M2 ✅；M3 |
 | T1-1a | ✅ 90398dc8 | 多根开放世界分析 + 档案键 / 内容摘要 + rava profile（27 例档案 3244 类，抽查 10/10） |
 | T1-1b | ✅ 10cfb657 | 按档案生成 JDK crate、java_meta 拆 JDK 表 + 用户登记（抽查 14/14） |
 | T1-2 方案 | ✅ 6aa69280，合入 53f32664 | 直接 rustc 链接档案；语料模式 panic=unwind、生产 --release fat LTO、档案 crate 按 jmod 模块切分 |
 | T1-M1 | ✅ 188d67ac，合入 9d587416 | jmod 模块映射与 import 过滤，抽查 12/12；已推送，分支 module-m1 已删 |
-| T1-M2 | 🔄 module-m2 已派 | 按模块切 crate（计划 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`） |
+| T1-M2 | ✅ a62793fd | 按模块切 crate（计划 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`）。服务器声明层峰值 DeepCopy 8214→7618 MB、TestSerialDefaultSuid 8160→7572 MB，端到端 11:30→10:28、11:22→10:48，HelloWorld 持平（1389→1404 MB 噪声内）；抽查 13 过 / 5 败均为 main 既有。未做：第三方 SCC 合并（V12）、java_meta 按模块（M3）、build.rs 只留 java_base_decl |
 | T1-M3 | ⏳ ◀── M2 | 按模块登记（同计划） |
 | T1-V12 方案 | ✅ a2fdfbca，合入 5c995939 | 第三方依赖分层（`docs/plans/2026-10-04-third-party-dependency-layering.md`）；7 项决策待用户确认；V12-0 模块归属修正（多版本 jar module-info、JDK 包遮蔽）可先做 |
 | S7 统一对象句柄 + 每类静态描述符 | 🔄 | D7 批准取法 B；计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` |
 | S7-0/S7-1 | ✅ b0166702，合入 8c218a72 | 描述符 / 子类型判定改读描述符，抽查 16/16；已推送，分支 s7-desc 已删 |
 | S7-2a | ✅ 707fde3c，合入 cfe37f90 | 类 wrapper 单字段 `__r`（句柄 + 视图指针）、Default 不分配、null 判 `is_none()`；服务器 HW 声明层 1408→1359 MB、TSDS 8192→7597 MB；抽查 16/16 + 13/13 |
-| S7-2b | ⏳ 待派 | `Object` 直接持对象、删 blanket `From`、null 改 `__typed_null`、约 68 处 downcast 审计；接口 / lambda wrapper 仍持 `__Shared<dyn I__VTable>` |
+| S7-2b | ✅ 6a784b50 | `Object` 直接持对象、删 blanket `From` 改逐类 `From<X> for Object`、null 为带描述符的 typed null、downcast 审计 64 处修 3 处；服务器声明层峰值 HelloWorld 1359→1233 MB、TestSerialDefaultSuid 7597→6654 MB；抽查 16/16，与 M2 合并后 8/8 |
+| S7-2c | ⏳ 待派 | 接口载体（`__ref: Object` + `__iface_vtable`）与 lambda 载体（`__Shared<__DynFn>`）收为句柄，删 `__Shared<dyn I__VTable>`；手写 `from_any(wrapper)` 调用点逐个核查 |
 | S7-3…S7-5 | ⏳ ◀── S7-2 | 见同计划 |
 | 二进制体积 | 🔄 | 用户 2026-10-04 交主会话推进；计划 `docs/plans/2026-10-04-binary-size.md`；HelloWorld release 14.4 MB → ≤3 MB |
 | BS-B1 | 🔄 binsize-meta 已派 | B0 基线重测 + 元数据按档案按类裁剪（反射不可达类 0 行、行表只覆盖翻译方法）+ 字符串池 / u32 编码 |

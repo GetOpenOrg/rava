@@ -15,7 +15,8 @@ use crate::class_writer::LibSite;
 use crate::ctx::EmitCtx;
 use crate::error::Result;
 use crate::imports::CrateRoute;
-use crate::text::{safe_pkg_part, scratch_pkg_version, to_snake};
+use super::module_side::{lib_manifest, path_dep, root_decl_dep};
+use crate::text::{safe_pkg_part, to_snake};
 
 /// lib crate 的 lib.rs 属性行
 const LIB_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, \
@@ -93,28 +94,13 @@ impl LibPlan {
             let mut lib_rs = vec![LIB_ALLOW.to_string()];
             lib_rs.extend(tops.iter().map(|t| format!("pub mod {};", safe_pkg_part(t))));
             w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
-            let mut deps = vec![
-                "java_runtime    = { path = \"../java_runtime\" }".to_string(),
-                format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
-            ];
+            // JDK 依赖：根（以根名引入声明层）+ 全部非根模块 crate（库的 JDK 引用面不按模块细分）
+            let crates = ctx.crates();
+            let mut deps = vec![root_decl_dep(crates)];
+            deps.extend(crates.others().iter().map(|c| path_dep(&c.name, &c.name)));
+            deps.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
             deps.extend(self.routes[..i].iter().map(|(prev, _)| dep_line(prev)));
-            let mut l = vec![
-                "[package]".to_string(),
-                format!("name = \"{name}\""),
-                format!("version = \"{}\"", scratch_pkg_version(&dir)),
-                "edition = \"2021\"".into(),
-                String::new(),
-                "[lib]".into(),
-                format!("name = \"{name}\""),
-                "path = \"src/lib.rs\"".into(),
-                "crate-type = [\"lib\"]".into(),
-                String::new(),
-                "[dependencies]".into(),
-            ];
-            l.extend(deps);
-            l.push(String::new());
-            l.extend(super::entry::lints_section());
-            w.write(&dir.join("Cargo.toml"), &l.join("\n"))?;
+            w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, name, &deps))?;
         }
         Ok(())
     }
