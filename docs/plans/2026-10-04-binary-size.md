@@ -7,6 +7,30 @@
 
 剖析时的树早于 main d840bb83（S7-1 已删掉按类的 `is_instance_of` / `__view_into`）。B0 在当前 main 上重测，数字以重测为准。
 
+**B0 基线（main 10795076，`scripts/binsize.sh build/hello_world`）**
+
+测量方法：
+- `rava build tests/e2e/01_basics/HelloWorld.java --stop-after emit` 生成 scratch；
+- 经 heavy_lock 跑 `rava compile build/hello_world --release --keep-artifacts`（档位同上：opt=3、fat LTO、不 strip）；
+- 用 `scripts/binsize.sh <scratch>` 读取段 / 节大小（`size -m`）、元数据源码字节、表行数，以及元数据在二进制里的估算量。估算口径是「行数 × 结构体大小 + 去重字符串字节」；B1 编码改造后改由生成器写出的 `[meta-stats]` 精确计数。
+
+| 项 | B0 |
+|---|---:|
+| 二进制文件 | 15,137,696 B |
+| `__TEXT` 段 / 其中 `__text` / `__const` | 6,684,672 / 5,606,828 / 958,916 |
+| `__DATA_CONST` 段 / 其中 `__const` | 3,391,488 / 3,385,888 |
+| `__LINKEDIT` | 5,013,504 |
+| `meta_tables.rs` / `line_tables.rs` 源码 | 3,714,667 / 2,451,667 B |
+| 源码中 `CLASS_METHODS` / `CLASS_FIELDS` / `LINE_TABLES` / `LINE_NUMBERS` | 3,078,692 / 344,564 / 1,377,545 / 1,073,929 B |
+| `CLASS_METHODS` 行数 / 可达方法数 | 9,786 / 1,813 |
+| `CLASS_FIELDS` 行数 | 1,986 |
+| 行表方法项 / 行（其中 Java 行 0 的行） | 9,782 / 20,695（10,338） |
+| `LINE_NUMBERS` 项 / (pc, 行) 对 | 7,161 / 37,932 |
+| 四张大表在二进制中的估算量 | **3,506,260 B**（结构体 3,199,532 + 去重字符串 306,728）。与 `__DATA_CONST` 3.39 MB 吻合 |
+| 闭包反射数据 | `reflect.fields` 30（JDK 内部按名取字段偏移），members / gaps / field_names / allocations 均为 0 |
+
+B1 验收线：四张大表在二进制中的量 ≤ 350,626 B（B0 的 10%）。
+
 **流程与耗时**
 - 转译 1.19 s：闭包 469 类（翻译 458、boundary 9），可达方法 1813，实例化 225。
 - 发射 5 个 crate（java_runtime / java_meta / java_body_1 / java_body_2 / user），1087 个文件，约 20.9 万行。
@@ -74,7 +98,7 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 
 | 步 | 内容 | 验收 | 状态 |
 |---|---|---|---|
-| B0 | 在当前 main 上重测 HelloWorld / DeepCopy release 二进制的段构成（同一口径脚本化） | 基线数字写回本文 | 🔄 随 B1 |
+| B0 | 在当前 main 上重测 HelloWorld release 二进制的段构成（同一口径脚本化：`scripts/binsize.sh`） | 基线数字写回本文 | ✅ §一 B0 基线（binsize-meta） |
 | B1 | 元数据按档案、按类裁剪：反射成员表只为反射可达 / MH 可解析的类出行；行表只覆盖翻译方法；编码改为字符串池 + u32 索引 | 生成器单测通过；反射 / 栈 / MH 类 e2e 抽查通过；HelloWorld 元数据段下降到 B0 的 ≤10% | 🔄 binsize-meta 已派 |
 | B2 | 栈还原改为按地址查表（不依赖符号名），之后 release 加 `strip = "symbols"` | 打印栈类 e2e 输出不变；`__LINKEDIT` 降到 ≤0.5 MB | ⏳ ◀── B1 |
 | B3 | 体积档位评估：opt=s / z 在计算密集型 e2e（R1 超时用例等）上的性能对照 | 数据交用户决定是否提供体积档位 | ⏳ ◀── B2 |
