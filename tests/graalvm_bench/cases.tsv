@@ -1,0 +1,26 @@
+# GraalVM 参照基线用例清单（scripts/graalvm_bench.sh 读取）
+# 列：tests/e2e 下相对路径 <TAB> 类别（1=纯计算 2=反射/序列化/动态代理） <TAB> 额外 native-image 参数（- 表示无） <TAB> serialization-config 补注册类型（- 表示无，多个用逗号分隔）
+# 额外参数与补注册均为 tracing agent 盲区的实测补丁，见 docs/reports/2026-10-04-graalvm-baseline.md
+23_algorithms/LynchBell.java	1	-	-
+23_algorithms/Factorion.java	1	-	-
+23_algorithms/FWord.java	1	-	-
+23_algorithms/FibonacciMatrixExponentiation.java	1	-	-
+23_algorithms/IQPuzzle.java	1	-	-
+23_algorithms/FourIsTheNumberOfLetters.java	1	-	-
+23_algorithms/FractionReduction.java	1	-	-
+23_algorithms/PartitionInteger.java	1	-	-
+23_algorithms/PrimorialNumbers.java	1	-	-
+23_algorithms/RailwayCircuit.java	1	-	-
+23_algorithms/SelfNumbers.java	1	-	-
+23_algorithms/UnprimeableNumbers.java	1	-	-
+72_http/TestHttpLoopbackSync.java	2	-	-
+72_http/TestHttpLoopbackAsync.java	2	-	-
+73_jndi_script/TestJndiNoProvider.java	2	-	-
+23_algorithms/DeepCopy.java	2	-	-
+23_algorithms/StockTrans.java	2	-	-
+35_io/TestSerialDefaultSuid.java	2	-	-
+35_io/TestSerialLookupPairing.java	2	-	-
+35_io/TestSerialProxyForm.java	2	-	TestSerialProxyForm$Tally$Form
+62_reflection/TestFieldHandleProvenance.java	2	-	-
+53_io_api/TestUrlProtocolOpen.java	2	--enable-url-protocols=jar	-
+35_io/RecordsSerializationTest.java	2	-	-
