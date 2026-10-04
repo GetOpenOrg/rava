@@ -120,6 +120,11 @@ EXPECTED_GEN_TIMEOUT = 120
 DYN_COMPARE = True
 # 构建档位目录（debug/release）：--release 开关切换，bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
+# 用例级档位声明：源文件中独占一行的 `// rava-build-profile: dev-opt`（性能类测试——档案侧 crate
+# opt-level 1、用户 crate 0，见生成器 DEV_OPT_PROFILE）。只把缺省 dev 档抬到 dev-opt，--release 时不变
+DEV_OPT_DIR = "dev-opt"
+_PROFILE_DIRECTIVE_RE = re.compile(r"^\s*//\s*rava-build-profile:\s*(\S+)\s*$", re.MULTILINE)
+_DECLARED_PROFILE: dict[str, str] = {}   # bin 名 → 声明的档位目录（_discover 时登记）
 # 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
 LOGS_DIR = _versioned(OUT) / "logs"
 
@@ -204,7 +209,20 @@ def _discover(filter_str: list[str] | None) -> list[Path]:
     files = sorted(E2E.rglob("*.java"))
     if filter_str:
         files = [f for f in files if any(s in str(f) for s in filter_str)]
+    for f in files:
+        m = _PROFILE_DIRECTIVE_RE.search(f.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            if m.group(1) != DEV_OPT_DIR:
+                sys.exit(f"{f}：未知构建档位声明 {m.group(1)!r}（可选：{DEV_OPT_DIR}）")
+            _DECLARED_PROFILE[_to_bin_name(_class_name(f))] = m.group(1)
     return files
+
+
+def _profile_dir(bin_name: str) -> str:
+    """该例的构建档位目录：--release 优先，否则取用例声明（缺省 dev → debug）。"""
+    if PROFILE_DIR == "release":
+        return PROFILE_DIR
+    return _DECLARED_PROFILE.get(bin_name, PROFILE_DIR)
 
 
 def _apply_batch(files: list, batch: str | None) -> list:
@@ -285,7 +303,7 @@ def _pline(name_w: int, status: str, name, tail: str = "", aux: str = "",
 
 def _bin_size_mb(bin_name: str) -> str:
     """构建产物大小（闭包膨胀观测列；TestTernary JDK25 1611 类 30MB 的教训）。"""
-    p = SHARED_TARGET / PROFILE_DIR / bin_name
+    p = SHARED_TARGET / _profile_dir(bin_name) / bin_name
     try:
         return f"{p.stat().st_size / 1048576:.1f}M"
     except OSError:
@@ -642,8 +660,11 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
     """`rava compile <scratch>`（共享 target 缓存）。返回 (ok, 失败摘要)；结果读 build_status.json。
     缺省链接后 rava 即删本例中间产物（只留可执行文件），KEEP_ARTIFACTS 时透传 --keep-artifacts。"""
     cmd = [str(RAVA), "compile", str(out_dir), "--target-dir", str(SHARED_TARGET)]
-    if PROFILE_DIR == "release":
+    prof = _profile_dir(_to_bin_name(class_name))
+    if prof == "release":
         cmd.append("--release")
+    elif prof == DEV_OPT_DIR:
+        cmd.append("--dev-opt")
     if KEEP_ARTIFACTS:
         cmd.append("--keep-artifacts")
     if BUILD_TIMEOUT is not None:
@@ -866,7 +887,7 @@ RUN_SUBFAMILIES = ('stub-hit', 'native-hit', 's8-crash', 'runtime-panic')
 def _classify_run_failure(class_name: str) -> tuple[str, str]:
     """run 失败后直跑二进制抓 stderr 分类。返回 (子族, 摘要)；
     子族为空串表示无法分类（如重跑超时 / 无 panic 输出）。"""
-    bin_path = SHARED_TARGET / PROFILE_DIR / _to_bin_name(class_name)
+    bin_path = SHARED_TARGET / _profile_dir(_to_bin_name(class_name)) / _to_bin_name(class_name)
     if not bin_path.exists():
         return "", "binary missing on re-run"
     try:
@@ -985,7 +1006,7 @@ def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     - 信号死亡检测：returncode<0 为信号（-9=SIGKILL——服务器 OOM Killer，
       streams 悬案三天才破的直接原因），状态标 killed 并注明疑似 OOM。"""
     bin_name = _to_bin_name(class_name)
-    bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
+    bin_path = SHARED_TARGET / _profile_dir(bin_name) / bin_name
     try:
         r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout,
                            env=_fixed_env(RUST_BACKTRACE="1"))
@@ -1025,7 +1046,7 @@ def _precheck_summary(bin_name: str) -> str:
 def _run_binary(class_name: str) -> tuple[bool, str]:
     """直接执行已编译的 binary（共享 target 目录下，不经 cargo 避免锁竞争）。"""
     bin_name = _to_bin_name(class_name)
-    bin_path = SHARED_TARGET / PROFILE_DIR / bin_name
+    bin_path = SHARED_TARGET / _profile_dir(bin_name) / bin_name
     r = subprocess.run([str(bin_path)], capture_output=True, text=True, env=_fixed_env())
     return r.returncode == 0, r.stdout
 

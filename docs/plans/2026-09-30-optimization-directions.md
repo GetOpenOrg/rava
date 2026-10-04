@@ -191,6 +191,9 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 1. `9b74cb28` 独占临时值不再克隆：Java 调用结果（`?`）、静态字段读、字段 getter 作实参 / checkcast 源时直接移交（`Expr::is_owned_temp`）。LynchBell 生成树 `Clone::clone(&` 6292 → 5974。
 2. `e983141d` 单用临时值按值移交：`let _tN = e;` 后仅在紧随语句以 `Clone::clone(&_tN)` 出现一次时改为 `_tN`（循环头 / 闭包除外；同名重绑保守不改）。LynchBell 生成树 939 行受益。
 3. `9bdd3095` 删除本类 static 字段的丢弃读：`let _ = Own::f()?;`（值已折叠、只为类初始化副作用保留）在本类代码中恒为空操作（JVMS §5.5，本类代码执行时本类已初始化或正由当前线程初始化），整行删去；他类读取不动。LynchBell 生成树删二十余行（`String.coder()` 的 `COMPACT_STRINGS` 读、各类 `$assertionsDisabled` 读）。
+4. `79e4ccc4`（Q1(b)）本类静态方法 / 构造器 / `<clinit>` 内的本类 static 读写不再逐次查初始化状态：宏为每个 static 生成原始存取 `__si_<名>` / `__si_set_<名>`（只含安全点 + 存取），公开 getter / setter = `__class_init()?` + 原始存取；入口已注入 `Self::__class_init()?` 的方法体内，本类 `Own::f()` / `Own::set_f(v)` 改写为原始存取（闭包 / 嵌套项不改写；实例方法不改写——运行时手写可不经构造器造实例）。
+5. `b4b6ccd1`（Q4）栈界检查快路径内联：§21.8.3 不允许编译器线程局部取址跨挂起点缓存，故不直接 `#[inline]` 原函数，改为 Linux x86_64 / aarch64 每次现读线程指针（非 `pure` 内联汇编，`fs:[0]` / `tpidr_el0`）+ 静态 TLS 偏移取栈界；偏移在线程入口与载体切入时核对，任一线程不一致即永久退回 `#[inline(never)]` 慢路径；其他平台只走慢路径。
+6. （Q3）性能类测试构建档 `dev-opt`：生成的 workspace 增 `[profile.dev-opt]`（继承 dev，opt-level 1；`package.user` opt-level 0），`rava build / compile --dev-opt`（与 `--release` 互斥），e2e 用例以独占一行 `// rava-build-profile: dev-opt` 声明、`run_tests.py` 缺省档时按声明改走该档。dev 档保持 opt-level 0。档案 crate 跨测试共享缓存只付一次 opt 1 编译代价，用户 crate 每例重编保持 dev 速度。
 
 ### 5. 测试流程效率（用户 2026-10-01）
 

@@ -29,11 +29,40 @@ pub const BUILD_LOG: &str = "logs/build.log";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const HEAVY_TIMEOUT_SECS: u64 = 3000;
 
+/// cargo 构建档位：dev（缺省）/ dev-opt（性能类测试，档案侧 opt 1，见 [`emit::project::entry::DEV_OPT_PROFILE`]）/ release
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum BuildProfile {
+    #[default]
+    Dev,
+    DevOpt,
+    Release,
+}
+
+impl BuildProfile {
+    /// 命令行开关（`--dev-opt` / `--release`）→ 档位；两者互斥
+    pub fn from_flags(dev_opt: bool, release: bool) -> Result<BuildProfile, String> {
+        match (dev_opt, release) {
+            (true, true) => Err("--dev-opt 与 --release 互斥".into()),
+            (true, false) => Ok(BuildProfile::DevOpt),
+            (false, true) => Ok(BuildProfile::Release),
+            (false, false) => Ok(BuildProfile::Dev),
+        }
+    }
+
+    fn cargo_args(self) -> &'static [&'static str] {
+        match self {
+            BuildProfile::Dev => &[],
+            BuildProfile::DevOpt => &["--profile", emit::project::entry::DEV_OPT_PROFILE],
+            BuildProfile::Release => &["--release"],
+        }
+    }
+}
+
 /// 一次 cargo 编译的调用设置
 #[derive(Debug, Clone)]
 pub struct CargoOpts {
     pub target_dir: PathBuf,
-    pub release: bool,
+    pub profile: BuildProfile,
     /// None = 按重型判定取缺省
     pub timeout: Option<Duration>,
 }
@@ -173,8 +202,8 @@ pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<Pa
     let fail = |first_error: String| Failure { first_error, ..Failure::default() };
     std::fs::create_dir_all(log.parent().unwrap_or(out)).map_err(|e| fail(format!("{}：{e}", log.display())))?;
     let log_file = std::fs::File::create(&log).map_err(|e| fail(format!("{}：{e}", log.display())))?;
-    let profile: &[&str] = if c.release { &["--release"] } else { &[] };
-    println!("\n[build] cargo build {}--bin {bin}", if c.release { "--release " } else { "" });
+    let profile = c.profile.cargo_args();
+    println!("\n[build] cargo build {}--bin {bin}", profile.iter().map(|a| format!("{a} ")).collect::<String>());
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--bin", bin, "--message-format=json-render-diagnostics"])
         .args(profile)
