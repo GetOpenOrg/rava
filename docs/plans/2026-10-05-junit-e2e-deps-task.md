@@ -140,3 +140,11 @@
    - **锁定集 = [hamcrest-3.0, junit-4.13.2]（类路径序，m2–m5 golden 同序）**；J1 模块名验收 = 2/2 正确 +
      合成夹具 6 例（机制泛化性由夹具保证，不靠 jar 数量）。
 
+5. **J0.2 服务器 m1–m5 golden 基线：0/5，单根因**（作业 junit-j0-golden + junit-j0-m1diag / junit-j0-m2345diag，--ref main @ 6f93f1c6）：
+   - 先决全通：服务器 mvn 取包 ✓（92 jar 导出）、参考 JDK ✓（/data/rava-jdk/jdk-21.0.11+10）、JVM 侧 golden ✓（m1 23 行）；
+   - **五模式转译段全部同一失败**：`发射：方法体生成失败：com/sun/org/apache/xerces/internal/impl/XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z：
+     CfgAuditError: 结构树与活块集合不一致 tree=[0,1,2,3,4,5,6,7,9,10,12,13] live=[…,14]`——活块 14（RPO 可达）未入结构树；死块 8/11 剔除正确；
+   - **归因**：cfg 结构化自 P4a（ea0d4c12）后零改动，守恒不变量（cfg/src/audit.rs:114）为既有机制——回归来自**闭包输入侧**（fe197231 时 m1 GOLDEN OK / 闭包 1235 类；其后 C1d-T3 / from_any / M2 / S7-2b2c / B1 / b3 合并使该 xerces 方法新入 JDK 侧闭包，其 CFG 形态暴露结构化器既有缺口）。该方法为何入 m1 闭包（无 seed 整包 hamcrest → JDK 侧链路）J1 时顺带核对；
+   - **处置待裁定**：修复点 `generator/crates/cfg/`（结构化器补活块路径）——不在三个在途子代理改动面（§三冲突表），按 J4「生成器优先」属本任务范围，但引擎相邻，按开工约定报用户裁定：本任务修 vs 转 engine 队列；
+   - J0 结论：**J2 验收（m1–m5 5/5）被此单点阻塞**；J1（模块归属）与该缺陷正交、可先行。
+
