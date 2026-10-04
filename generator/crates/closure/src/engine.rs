@@ -300,6 +300,8 @@ pub struct Engine<'a> {
     gathers: Vec<(gather::Slot, u32, bool)>,
     gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
     gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
+    /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
+    hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）

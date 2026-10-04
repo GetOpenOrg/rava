@@ -77,9 +77,45 @@ impl Engine<'_> {
         }
     }
 
-    /// 站点累计对象（原有 ∪ objs）对应的汇集节点（槽位节点与汇集节点间按 f 过滤）；累计不足 `GATHER_MIN` 时 None（调用方逐对象接边）
+    /// 手写方法调用点 s 的第 i 个实参新增数组 ys（升序）：元素槽 p 的值以 Object 流到写入来源 ws（`W(s, j)`）。
+    /// 同一批数组被大量调用点（各克隆上下文里的 arraycopy 等）传入时经汇集节点共享
+    pub(super) fn gather_hw_elems(&mut self, s: u32, i: u16, p: u8, ys: &[u32], ws: &[Node]) {
+        let obj = self.id(OBJECT);
+        let key = (s, i, p);
+        let last = self.hw_gather_last.get(&key).cloned();
+        let (now, g) = self.gather_step(last, Slot::Elem(p), obj, ys, false);
+        if let Some(now) = now {
+            self.hw_gather_last.insert(key, now);
+        }
+        match g {
+            Some(g) => {
+                for &w in ws {
+                    self.flow(Node::G(g), w, obj);
+                }
+            }
+            None => {
+                for &y in ys {
+                    for &w in ws {
+                        self.flow(Node::E(y, p), w, obj);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 字节码站点 (m, off) 累计对象（原有 ∪ objs）对应的汇集节点；累计不足 `GATHER_MIN` 时 None（调用方逐对象接边）
     fn gather_node(&mut self, m: usize, off: u32, slot: Slot, f: u32, objs: &[u32], put: bool) -> Option<u32> {
         let last = self.gather_last.get(&m).and_then(|s| s.get(&(off, slot))).cloned();
+        let (now, g) = self.gather_step(last, slot, f, objs, put);
+        if let Some(now) = now {
+            self.gather_last.entry(m).or_default().insert((off, slot), now);
+        }
+        g
+    }
+
+    /// 站点原有记录 last（汇集节点, 累计对象）并入 objs（升序，可含已接过的）后的新记录（不变时 None）与汇集节点；
+    /// 槽位节点与汇集节点间按 f 过滤
+    fn gather_step(&mut self, last: Option<(u32, Rc<[u32]>)>, slot: Slot, f: u32, objs: &[u32], put: bool) -> (Option<(u32, Rc<[u32]>)>, Option<u32>) {
         let (g0, prev) = last.unwrap_or((NO_GATHER, Rc::from([])));
         // 两段均升序：归并
         let mut full: Vec<u32> = Vec::with_capacity(prev.len() + objs.len());
@@ -94,11 +130,10 @@ impl Engine<'_> {
         full.extend_from_slice(&objs[j..]);
         // 无新增对象：沿用原汇集节点（重跑的常态）
         if full.len() == prev.len() && g0 != NO_GATHER {
-            return Some(g0);
+            return (None, Some(g0));
         }
         if full.len() < GATHER_MIN {
-            self.gather_last.entry(m).or_default().insert((off, slot), (NO_GATHER, full.into()));
-            return None;
+            return (Some((NO_GATHER, full.into())), None);
         }
         let full: Rc<[u32]> = full.into();
         let g = match self.gather_ids.get(&(slot, put, full.clone())) {
@@ -128,7 +163,6 @@ impl Engine<'_> {
                 g
             }
         };
-        self.gather_last.entry(m).or_default().insert((off, slot), (g, full));
-        Some(g)
+        (Some((g, full)), Some(g))
     }
 }
