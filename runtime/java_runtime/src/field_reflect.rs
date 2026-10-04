@@ -31,6 +31,34 @@ pub struct __StaticFieldDesc {
     pub op: __StaticFieldFn,
 }
 
+impl __StaticFieldDesc {
+    /// 引用类型静态字段项（宏展开的 `__STATICS` 元素；访问器在此擦除，展开文本只写一次调用）。
+    pub const fn of_ref<T>(java: &'static str, get: fn() -> Result<T>, set: Option<fn(T) -> Result<()>>) -> Self
+    where T: From<Object>, Object: From<T>
+    {
+        // SAFETY: 擦除的指针只由同一 T 实例化的 `__static_ref::<T>` 还原
+        let get = unsafe { std::mem::transmute::<fn() -> Result<T>, fn()>(get) };
+        let set = match set {
+            Some(s) => Some(unsafe { std::mem::transmute::<fn(T) -> Result<()>, fn()>(s) }),
+            None => None,
+        };
+        Self { java, get, set, op: __static_ref::<T> }
+    }
+
+    /// 基本类型静态字段项（同 [`Self::of_ref`]，读写协议为 `__static_prim::<P>`）。
+    pub const fn of_prim<P>(java: &'static str, get: fn() -> Result<P>, set: Option<fn(P) -> Result<()>>) -> Self
+    where P: __ReflectPrim, Object: From<P>
+    {
+        // SAFETY: 同上
+        let get = unsafe { std::mem::transmute::<fn() -> Result<P>, fn()>(get) };
+        let set = match set {
+            Some(s) => Some(unsafe { std::mem::transmute::<fn(P) -> Result<()>, fn()>(s) }),
+            None => None,
+        };
+        Self { java, get, set, op: __static_prim::<P> }
+    }
+}
+
 /// 引用（含接口 / 数组）类型静态字段的读写。
 ///
 /// # Safety

@@ -75,6 +75,20 @@ pub struct __FieldDesc {
     pub kind: __FieldKind,
 }
 
+impl __FieldDesc {
+    /// 引用 / 擦除字段项（宏展开的描述符 `fields` 元素），单元协议按载体类型 `T` 实例化
+    pub const fn of_ref<T>(java: &'static str, rust: &'static str) -> Self
+    where T: Clone + From<Object>, Object: From<T>
+    {
+        Self { java, rust, kind: __FieldKind::Ref(__ref_field::<T>) }
+    }
+
+    /// 基本单元字段项
+    pub const fn of_prim(java: &'static str, rust: &'static str, kind: __FieldKind) -> Self {
+        Self { java, rust, kind }
+    }
+}
+
 /// 引用单元的协议实现，按字段载体类型 `T` 实例化（跨类共享）。擦除字段 `T = Object`。
 ///
 /// # Safety

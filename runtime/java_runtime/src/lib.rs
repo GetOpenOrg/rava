@@ -567,8 +567,8 @@ pub mod prelude {
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
-    pub use super::field_desc::{__FieldDesc, __FieldKind, __RefAccess, __ref_field};
-    pub use super::field_reflect::{__StaticFieldDesc, __static_prim, __static_ref};
+    pub use super::field_desc::{__FieldDesc, __FieldKind, __RefAccess};
+    pub use super::field_reflect::__StaticFieldDesc;
     pub use super::java::lang::{__class_from_object, __erased_view, __iface_missing};
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;

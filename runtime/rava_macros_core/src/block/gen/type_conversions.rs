@@ -207,25 +207,24 @@ fn field_descs(ctx: &GenContext) -> Vec<TokenStream2> {
         let java = ctx.meta.field_slots.iter()
             .find(|(decl, _, r)| decl == binary_name && *r == rust)
             .map_or(rust.as_str(), |(_, java, _)| java.as_str());
-        let kind = if ctx.is_erased(name) {
-            quote! { __FieldKind::Ref(__ref_field::<Object>) }
-        } else if is_basic(ty) {
-            let k = match quote!(#ty).to_string().as_str() {
-                "bool" => "Bool",
-                "i8" => "Byte",
-                "i16" => "Short",
-                "u16" => "Char",
-                "i32" => "Int",
-                "f32" => "Float",
-                "i64" => "Long",
-                "f64" => "Double",
-                _ => "Prim",
-            };
-            let k = format_ident!("{}", k);
-            quote! { __FieldKind::#k }
-        } else {
-            quote! { __FieldKind::Ref(__ref_field::<#ty>) }
+        if ctx.is_erased(name) {
+            return quote! { __FieldDesc::of_ref::<Object>(#java, #rust) };
+        }
+        if !is_basic(ty) {
+            return quote! { __FieldDesc::of_ref::<#ty>(#java, #rust) };
+        }
+        let k = match quote!(#ty).to_string().as_str() {
+            "bool" => "Bool",
+            "i8" => "Byte",
+            "i16" => "Short",
+            "u16" => "Char",
+            "i32" => "Int",
+            "f32" => "Float",
+            "i64" => "Long",
+            "f64" => "Double",
+            _ => "Prim",
         };
-        quote! { __FieldDesc { java: #java, rust: #rust, kind: #kind } }
+        let k = format_ident!("{}", k);
+        quote! { __FieldDesc::of_prim(#java, #rust, __FieldKind::#k) }
     }).collect()
 }

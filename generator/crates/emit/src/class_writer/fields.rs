@@ -152,7 +152,7 @@ pub fn struct_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], sup: &Sup
         if super_names.contains(name.as_str()) {
             continue;
         }
-        lines.push(format!("    {}", field_attr(f, ex.fields.get(i))));
+        lines.push(format!("    {}", field_attr(f, ex.fields.get(i), false)));
         let vis = if java_vis { super::visibility::java_member_vis(f.access) } else { "pub" };
         lines.push(format!("    {vis} {name}: {},", resolve_field_rust(ctx, f, tps).render(&ctx.ty)));
     }
@@ -207,7 +207,7 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
         // 与方法 / 其它 static 字段的访问器同名时加 `_field` 后缀（与访问端 instr `StaticField.accessor` 同口径）
         let fname = ci.static_accessor(&sf.name);
         let ty = static_field_rust(ctx, sf, tps);
-        let meta = field_attr(sf, ex.fields.get(i));
+        let meta = field_attr(sf, ex.fields.get(i), crate::phase2::dispatch::static_reflected(ctx, ci.name(), &sf.name));
         let head = format!("{meta}\n// static field: {}:{}\n", sf.name, sf.desc);
         let cv = sf.constant_value.as_ref().map(constant_value_str).unwrap_or_default();
         let (cls, fnm, fd) = (ci.name(), &sf.name, &sf.desc);

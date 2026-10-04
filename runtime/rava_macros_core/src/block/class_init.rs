@@ -163,49 +163,45 @@ pub(crate) fn expand_statics(
     (storage, members)
 }
 
-/// `cfg_attr(any(), java_field(name = "..", ..))` 里的 Java 字段名（类发射文本的字段属性行）。
-fn java_field_name(attrs: &[Attribute]) -> Option<String> {
+/// 带反射标记的静态字段的 Java 字段名：`cfg_attr(any(), java_field(name = "..", .., reflect = true))`
+/// （生成器只给档案内可经按名反射 / 序列化协议访问的静态字段打标记）。
+fn reflected_java_name(attrs: &[Attribute]) -> Option<String> {
     attrs.iter().filter(|a| a.path().is_ident("cfg_attr")).find_map(|a| {
         let text = quote!(#a).to_string();
         let rest = &text[text.find("java_field")?..];
+        if !rest.contains("reflect = true") {
+            return None;
+        }
         let rest = &rest[rest.find("name")?..];
         let rest = &rest[rest.find('"')? + 1..];
         Some(rest[..rest.find('"')?].to_owned())
     })
 }
 
-/// 静态字段表 `__STATICS`（S7-3b，按名字段访问的静态半边，见运行时 `field_reflect`）：每个 Java
-/// 静态字段记 Java 名、既有访问器（getter / setter，手写同名访问器同样适用）的擦除函数指针与按值
-/// 类型实例化的读写协议。关联常量只在被引用（main 的登记）时求值与代码生成，未登记的类不付代价。
+/// 静态字段表 `__STATICS`（S7-3b，按名字段访问的静态半边，见运行时 `field_reflect`）：每个带反射
+/// 标记的 Java 静态字段一项，经 `__StaticFieldDesc::of_prim / of_ref` 记 Java 名、既有访问器
+/// （getter / setter，手写同名访问器同样适用）与按值类型实例化的读写协议。关联常量只在被引用
+/// （main 的登记）时求值与代码生成。
 fn statics_table(statics: &[StaticItem]) -> TokenStream2 {
     const PRIMS: [&str; 8] = ["bool", "i8", "i16", "u16", "i32", "f32", "i64", "f64"];
     let entries = statics.iter().filter_map(|st| {
-        let java = java_field_name(&st.attrs)?;
+        let java = reflected_java_name(&st.attrs)?;
         let (name, ty) = (&st.name, &st.ty);
-        let op = if is_basic(ty) {
+        let ctor = if is_basic(ty) {
             if !PRIMS.contains(&quote!(#ty).to_string().as_str()) {
                 return None;
             }
-            quote! { __static_prim::<#ty> }
+            quote! { of_prim }
         } else {
-            quote! { __static_ref::<#ty> }
+            quote! { of_ref }
         };
         let set = if st.const_value.is_some() {
-            quote! { ::std::option::Option::None }
+            quote! { ::core::option::Option::None }
         } else {
             let setter = format_ident!("set_{}", name);
-            quote! { ::std::option::Option::Some(unsafe {
-                ::core::mem::transmute::<fn(#ty) -> Result<()>, fn()>(Self::#setter)
-            }) }
+            quote! { ::core::option::Option::Some(Self::#setter) }
         };
-        Some(quote! {
-            __StaticFieldDesc {
-                java: #java,
-                get: unsafe { ::core::mem::transmute::<fn() -> Result<#ty>, fn()>(Self::#name) },
-                set: #set,
-                op: #op,
-            }
-        })
+        Some(quote! { __StaticFieldDesc::#ctor::<#ty>(#java, Self::#name, #set) })
     });
     quote! {
         #[doc(hidden)]

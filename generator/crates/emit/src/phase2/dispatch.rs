@@ -281,6 +281,18 @@ fn statics_line(ctx: &EmitCtx<'_>, bin: &str) -> String {
     format!("    (\"{bin}\", {path}{tf}::__STATICS),")
 }
 
+/// 静态字段是否可经按名反射 / 序列化协议访问（档案口径）：用户树类与全成员反射类的全部静态字段，
+/// 其余类限序列化协议字段与按名查字段点到的名字。为真的字段在发射文本的字段属性上带
+/// `reflect = true`，宏只为带标记的字段展开 `__STATICS` 项；类有任一此类字段即登记。
+pub fn static_reflected(ctx: &EmitCtx<'_>, bin: &str, name: &str) -> bool {
+    let reflect = &ctx.input.reflect;
+    ctx.input.user_classes.iter().any(|u| u == bin)
+        || reflect.all_members.contains(bin)
+        || SERIAL_PROTOCOL_FIELDS.contains(&name)
+        || reflect.fields.get(bin).is_some_and(|s| s.contains(name))
+        || reflect.field_names.contains(name)
+}
+
 fn emittable(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> bool {
     ems.get(bin).is_some_and(|e| !e.handwritten) && ctx.ty.reg.contains(bin)
 }
@@ -318,14 +330,7 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
             continue;
         }
         let ci = ctx.ty.reg.get(bin).expect("已校验存在");
-        let open = user_bins.contains(bin.as_str()) || reflect.all_members.contains(bin);
-        let looked = reflect.fields.get(bin.as_str());
-        let wanted = ci.fields().iter().filter(|f| f.is_static()).any(|f| {
-            open || SERIAL_PROTOCOL_FIELDS.contains(&f.name.as_str())
-                || looked.is_some_and(|s| s.contains(&f.name))
-                || reflect.field_names.contains(&f.name)
-        });
-        if wanted {
+        if ci.fields().iter().any(|f| f.is_static() && static_reflected(ctx, bin, &f.name)) {
             fields.push(statics_line(ctx, bin));
         }
     }
