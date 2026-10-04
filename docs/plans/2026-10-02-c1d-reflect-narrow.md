@@ -1261,3 +1261,19 @@ members 1233→840，经实例化级联到全图。**这是不健全的丢类，
 
 6.5 失败处的对照（DeepCopy 曾掉 778 类）：DeepCopy 3388（2973）/ 20879 → 3382（2949）/ 20832，
 TestSerialEnumNoInit 3391 / 20868 → 3385 / 20821，集合差同上 6 类，无新增、无大面积丢类——来源不变后 6.5 的级联消失。
+
+### 7.4 4b 读码结论（未动代码）
+
+- 现状：反射对象通道只有一个全局实参池 `Node::RP(RC_OBJ)`，全部 `invoke0` 类调用点的接收者 / 实参并入，凡经该通道
+  入链的成员都按整池派发、形参接整池（`reflect_call.rs` `rcall_site` / `rcall_dispatch` / `rcall_bind`）。
+- Method 对象在流图里**没有身份**：按名查找（`invoke.rs` 方法查找分支，约 50–160 行）只登记 `reflect_names`，
+  返回值是普通 `Method` 类型值。序列化路径的 Method 存在 `ObjectStreamClass.writeObjectMethod` 等字段里，
+  经 `Method.invoke` → 访问器 → `invoke0` 才到调用点，按来源上溯在字段处即断。
+- 终态做法：Method / Constructor 成员对象化——查找点产出「成员伪类型」（同类镜像：伪 id → 成员序号），经字段 / 集合
+  照常流动；`invoke0` 调用点按 Method 实参值集里的成员伪 id 把接收者 / 实参接到**该成员自己的池** `RP(member)`，
+  open / 推不出的 Method 值仍接全局池（健全）。所需改动：`defs.rs`（节点 / 伪类型）、`invoke.rs` 方法查找分支
+  （产出伪 id）、`reflect_call.rs`（按成员分池）、`worklist.rs`（伪 id 增长钩子）、访问器字段流（`Method` →
+  `MethodAccessor` 包装，需清单声明访问器的成员绑定点，否则在访问器处退回全局池）。
+- 冲突：`invoke.rs` 方法查找分支与 `lookup_pair.rs` 是 engine-order 正在改的区段（`git diff 6f93f1c6 origin/engine-order`
+  在 invoke.rs 58 / 130 行两处 hunk），按约定须等其合入后再做。
+- 收益上界：5.5 的两种近似实验在旧基线上 ≤7 类 / 约 319 方法，相对现基线 20813 方法约 1.5%。
