@@ -141,9 +141,9 @@ pub(super) struct Stats {
 }
 
 /// 读者站点重跑的事件种类名（[`rerun_kind`] 的下标）
-pub(super) const RERUN_KINDS: [&str; 15] = [
+pub(super) const RERUN_KINDS: [&str; 16] = [
     "invoke", "indy", "new", "newarray", "field", "ldc", "checkcast", "instanceof", "notinstance", "aload", "astore", "throw",
-    "return", "catch", "const",
+    "return", "catch", "const", "mirrorsub",
 ];
 
 /// 事件种类下标（见 [`RERUN_KINDS`]）
@@ -165,6 +165,7 @@ pub(super) fn rerun_kind(e: &crate::absint::Event) -> usize {
         E::Return(_) => 12,
         E::Catch(_) => 13,
         E::Const { .. } => 14,
+        E::MirrorSub(..) => 15,
     }
 }
 
