@@ -95,6 +95,22 @@ pub fn erase_boxed_ctor_type_args(lines: &mut [String]) {
     }
 }
 
+/// 丢弃本类 static 字段读（R1）：`let _ = Own::f()?;` 只为类初始化副作用而留（值已被折叠或弃用），
+/// 而本类代码执行时本类必已初始化或正由当前线程初始化（JVMS §5.5：本类方法只能经
+/// invokestatic / new / 子类初始化进入），读取的初始化触发恒为空操作，整行删去。
+/// `own_statics` 为本类 static 字段访问器（`Own::f` 形态），他类读取不动。
+pub fn drop_own_static_discards(lines: &mut Vec<String>, own_statics: &std::collections::BTreeSet<String>) {
+    if own_statics.is_empty() {
+        return;
+    }
+    lines.retain(|l| {
+        let t = strip(l);
+        let t = t.split_once("; //").map_or(t, |(a, _)| a).trim_end_matches(';');
+        let Some(g) = t.strip_prefix("let _ = ").and_then(|r| r.strip_suffix("()?")) else { return true };
+        !own_statics.contains(g)
+    });
+}
+
 static TEMP_LET_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*let (?:mut )?(_t\d+)(?:: [^=]+)? = .*;(?:\s*// line \d+)?$").expect("TEMP_LET_RE"));
 
@@ -158,6 +174,19 @@ pub fn add_ok_return(lines: &mut Vec<String>, rust_ret: &str, always_returns: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_static_discards() {
+        let own: std::collections::BTreeSet<String> = ["String::COMPACT_STRINGS".to_string()].into();
+        let mut v = vec![
+            "    let _ = String::COMPACT_STRINGS()?; // line 4803".to_string(),
+            "    let _ = Other::COMPACT_STRINGS()?;".to_string(),
+            "    let _ = String::COMPACT_STRINGS()?;".to_string(),
+            "    let x = String::COMPACT_STRINGS()?;".to_string(),
+        ];
+        drop_own_static_discards(&mut v, &own);
+        assert_eq!(v, vec!["    let _ = Other::COMPACT_STRINGS()?;", "    let x = String::COMPACT_STRINGS()?;"]);
+    }
 
     #[test]
     fn erase_args() {

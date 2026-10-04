@@ -332,6 +332,7 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         .map(|f| format!("{own_short}::{}", safe_ident(&f.name)))
         .collect();
     let mut lines = fold_array_literals(lines, &static_getters);
+    pp::drop_own_static_discards(&mut lines, &static_getters);
     pp::move_single_use_temps(&mut lines);
 
     if is_ctor {
