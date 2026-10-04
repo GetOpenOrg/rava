@@ -112,3 +112,23 @@ fn dispatch_stmts() {
     assert!(text.contains("1 | 2 =>") && text.contains("__pc = 5;"), "{text}");
     assert_eq!(build_dispatch(0, &[3, 1, 0]).blocks, vec![0, 1, 3]);
 }
+
+/// 循环头无语句、续行臂只剩空回边块：while 形态规整后回边块仍留在结构树里
+#[test]
+fn while_guard_keeps_empty_latch() {
+    // 0: cond(c) → 2 else 1；1: exit；2（空回边块）: goto 0
+    let mut nodes = BTreeMap::from([
+        (0, node(0, Terminal::Cond { cond: Cond::atom(var("c")), target: 2, fallthrough: 1 })),
+        (1, node(3, Terminal::Goto { target: 3 })),
+        (2, node(6, Terminal::Goto { target: 0 })),
+        (3, node(9, Terminal::Exit)),
+    ]);
+    nodes.get_mut(&0).expect("n0").has_stmts = false;
+    nodes.get_mut(&2).expect("n2").has_stmts = false;
+    let succs: Succs = nodes.iter().map(|(k, n)| (*k, n.term.successors())).collect();
+    let flow = analyze(0, &succs);
+    let tree = simplify(structure(&mut nodes, &flow).expect("structure"));
+    let Item::Loop(l) = &tree[0] else { panic!("{tree:?}") };
+    assert_eq!(l.while_cond, Some(Cond::atom(var("c"))), "{tree:?}");
+    verify_tree(&tree, &nodes, &flow, &mut JumpLedger::new("T.m()V")).expect("verify_tree");
+}

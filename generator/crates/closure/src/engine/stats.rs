@@ -80,6 +80,29 @@ const WHYS: [(Why, &str); 11] = [
     (Why::Mirror, "mirror"),
 ];
 
+/// 名字求值的规模上限命中次数（按上限种类，见 [`CAP_NAMES`]）：超限按推不出处理，命中即该站点的结果
+/// 依赖图规模、可能随处理先后不同，验收用例应为 0
+pub(super) const CAP_NAMES: [&str; 6] = ["pstr_slots", "pstr_nest", "pstr_names", "lookup_names", "lookup_patterns", "sealed_names"];
+pub(super) const CAP_SLOTS: usize = 0;
+pub(super) const CAP_NEST: usize = 1;
+pub(super) const CAP_PNAMES: usize = 2;
+pub(super) const CAP_LNAMES: usize = 3;
+pub(super) const CAP_PATTERNS: usize = 4;
+pub(super) const CAP_SEALED: usize = 5;
+
+thread_local! {
+    static CAPS: std::cell::Cell<[u64; CAP_NAMES.len()]> = const { std::cell::Cell::new([0; CAP_NAMES.len()]) };
+}
+
+/// 登记一次规模上限命中（求值函数多为自由函数，计数放线程局部）
+pub(super) fn cap_hit(kind: usize) {
+    CAPS.with(|c| {
+        let mut v = c.get();
+        v[kind] += 1;
+        c.set(v);
+    });
+}
+
 pub(super) struct Stats {
     cur: Phase,
     since: Instant,
@@ -100,12 +123,49 @@ pub(super) struct Stats {
     /// 按入口状态复用共享摘要（免分析）的次数
     pub(super) shared: u64,
     pub(super) site_reruns: u64,
+    /// 读者站点重跑按事件种类：[次数, 耗时 ns（含其中的流传播）]（下标见 [`RERUN_KINDS`]）
+    pub(super) rerun_by_event: [[u64; 2]; RERUN_KINDS.len()],
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
     /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
     pub(super) ceval: [u64; 3],
     /// 各阶段结束时的峰值 RSS（MB）
     rss_marks: Vec<(&'static str, u64)>,
+    /// 按名取类延后放行：放行轮数 / 放行站点数（`class_lookup.rs::lookup_release`）
+    pub(super) releases: [u64; 2],
+    /// 引擎建立时刻与首次放行时刻：首次放行之后的耗时即延后放行引起的后续传播
+    born: Instant,
+    first_release: Option<Instant>,
+    /// 首次放行时的工作量快照：[分析次数, 站点重跑, lambda 重跑, 流边数, 集合并入次数]
+    pub(super) at_release: Option<[u64; 5]>,
+}
+
+/// 读者站点重跑的事件种类名（[`rerun_kind`] 的下标）
+pub(super) const RERUN_KINDS: [&str; 15] = [
+    "invoke", "indy", "new", "newarray", "field", "ldc", "checkcast", "instanceof", "notinstance", "aload", "astore", "throw",
+    "return", "catch", "const",
+];
+
+/// 事件种类下标（见 [`RERUN_KINDS`]）
+pub(super) fn rerun_kind(e: &crate::absint::Event) -> usize {
+    use crate::absint::Event as E;
+    match e {
+        E::Invoke { .. } => 0,
+        E::Indy { .. } => 1,
+        E::New(_) => 2,
+        E::NewArray(..) => 3,
+        E::Field { .. } => 4,
+        E::Ldc(_) => 5,
+        E::CheckCast(..) => 6,
+        E::InstanceOf(..) => 7,
+        E::NotInstance(..) => 8,
+        E::ArrayLoad { .. } => 9,
+        E::ArrayStore { .. } => 10,
+        E::Throw(_) => 11,
+        E::Return(_) => 12,
+        E::Catch(_) => 13,
+        E::Const { .. } => 14,
+    }
 }
 
 impl Default for Stats {
@@ -124,10 +184,15 @@ impl Default for Stats {
             reprocess: 0,
             shared: 0,
             site_reruns: 0,
+            rerun_by_event: Default::default(),
             lcall_reruns: 0,
             aux_analyses: 0,
             ceval: [0; 3],
             rss_marks: Vec::new(),
+            releases: [0; 2],
+            born: Instant::now(),
+            first_release: None,
+            at_release: None,
         }
     }
 }
@@ -199,6 +264,17 @@ impl Stats {
         self.acc[phase_index(self.cur)] += now - self.since;
         self.cur = self.stack.pop().unwrap_or(Phase::Setup);
         self.since = now;
+    }
+
+    /// 一轮按名取类放行（n = 放行站点数）
+    pub(super) fn released(&mut self, n: usize, edges: usize, adds: u64) {
+        self.releases[0] += 1;
+        self.releases[1] += n as u64;
+        if self.first_release.is_none() {
+            self.first_release = Some(Instant::now());
+            let analyses = self.per_method.iter().map(|&c| u64::from(c)).sum();
+            self.at_release = Some([analyses, self.site_reruns, self.lcall_reruns, edges as u64, adds]);
+        }
     }
 
     pub(super) fn mark_rss(&mut self, at: &'static str) {
@@ -274,11 +350,16 @@ impl<'a> Engine<'a> {
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
             "ceval_memo": s.ceval,
+            "cap_hits": CAPS.with(|c| CAP_NAMES.iter().zip(c.get()).filter(|(_, n)| *n > 0).map(|(k, n)| (k.to_string(), json!(n))).collect::<serde_json::Map<_, _>>()),
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,
             "shared_analyses": s.shared,
             "site_reruns": s.site_reruns,
+            "rerun_by_event": RERUN_KINDS.iter().zip(s.rerun_by_event).filter(|(_, c)| c[0] > 0).map(|(k, c)| json!([k, c[0], c[1] / 1_000_000])).collect::<Vec<_>>(),
+            // 按名取类延后放行：[轮数, 站点数, 首次放行时刻 ms, 首次放行后耗时 ms]
+            "lookup_releases": [s.releases[0], s.releases[1], s.first_release.map_or(0, |t| ms(t - s.born)), s.first_release.map_or(0, |t| ms(t.elapsed()))],
+            "at_first_release": s.at_release,
             "lcall_reruns": s.lcall_reruns,
             "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,

@@ -297,10 +297,12 @@ pub struct Engine<'a> {
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
     hub_family: HashMap<(MemberRef, bool), Vec<(u32, Rc<[u32]>)>>,
-    /// 字段汇集节点：序号 → (字段, 对象数, 写入向)；(字段, 写入向, 对象集合) → 序号；字节码字段站点 → (字段, 当前汇集节点, 累计对象)
-    gathers: Vec<(usize, u32, bool)>,
-    gather_ids: HashMap<(usize, bool, Rc<[u32]>), u32>,
-    gather_last: HashMap<usize, HashMap<u32, (usize, u32, Rc<[u32]>)>>,
+    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
+    gathers: Vec<(gather::Slot, u32, bool)>,
+    gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
+    gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
+    /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
+    hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
@@ -420,6 +422,20 @@ pub struct Engine<'a> {
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 服务实现类的反射构造点（清单 `[jca] instantiation_hosts`，构造时解析）：其中按名取类恒按推不出处理
+    lookup_hosts: HashSet<MemberRef>,
+    /// 本次按名取类求值中，名字推不出（某支无约束任意串，或形参 / 字段名字集不完备）
+    lookup_incomplete: bool,
+    /// 名字曾推不出的按名取类调用点（恒按推不出处理，未放行时不按已知名字加载）
+    lookup_unsure: HashSet<(usize, u32)>,
+    /// 名字齐全、等待排空时放行的按名取类调用点（有序：放行次序确定）
+    lookup_pending: BTreeSet<(usize, u32)>,
+    /// 本轮放行、待重跑求值的调用点
+    lookup_trial: HashSet<(usize, u32)>,
+    /// 已放行的调用点：按单调口径照常求值（推不出时仍给出已知名字）
+    lookup_released: HashSet<(usize, u32)>,
+    /// 字段名配对已处理的 (类, 名字)：类层次不变，按名打开只做一次
+    fpair_done: HashSet<(u32, Rc<str>)>,
     /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
     pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理

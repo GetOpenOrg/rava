@@ -42,8 +42,8 @@ mod tests {
 
     #[test]
     fn joined_literals_stay_recoverable() {
-        let a = V::Str(Rc::from("invoke"));
-        let b = V::Str(Rc::from("invokeExact"));
+        let a = V::lit(Rc::from("invoke"));
+        let b = V::lit(Rc::from("invokeExact"));
         let j = a.join(&b);
         assert!(matches!(j, V::Ref { .. }));
         let mut ls: Vec<String> = j.lits().iter().map(|s| s.to_string()).collect();

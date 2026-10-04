@@ -65,7 +65,7 @@ const MAX_NEST: usize = 4;
 /// 实参值是否不全由字面量与形参透传构成（需在调用方帧里求值）
 fn computed(v: &V) -> bool {
     match v {
-        V::Str(_) | V::Null => false,
+        V::Str(..) | V::Null => false,
         V::Ref { src, .. } => src.is_empty() || src.iter().any(|s| !matches!(s, Src::Param(_) | Src::Str(_))),
         _ => true,
     }
@@ -218,8 +218,8 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 方法 m 的 String 形参槽 i 上的全部名字（当前站点为读者）；None = 推不出
-    pub(super) fn param_names(&mut self, m: usize, i: usize, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+    /// 方法 m 的 String 形参槽 i 上的名字与是否推得出（当前站点为读者）；None = 非 String 形参 / 不在站点内
+    pub(super) fn param_names(&mut self, m: usize, i: usize, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
         let string = self.id(STRING);
         if self.methods[m].ptypes.get(i).copied().flatten() != Some(string) {
             return None;
@@ -227,14 +227,15 @@ impl<'a> Engine<'a> {
         self.slot_names(PSlot::M(m, i), depth)
     }
 
-    /// String 字段（字段节点 fi）各字节码写入的全部名字（当前站点为读者）；None = 推不出
-    pub(super) fn field_names(&mut self, fi: usize, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+    /// String 字段（字段节点 fi）各字节码写入的名字与是否推得出（当前站点为读者）
+    pub(super) fn field_names(&mut self, fi: usize, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
         self.slot_names(PSlot::F(fi), depth)
     }
 
     /// 名字段读自 String 字段（方法 m 中偏移 o 的 getfield / getstatic）时该字段各字节码写入的全部名字。
-    /// static final 字段由常量求值给出，不经字段槽；字段可经字节码外途径写入时推不出（字段转为不折叠时 m 失效重分析）
-    pub(super) fn read_field_names(&mut self, m: usize, a: &Analysis, o: u32, depth: u8) -> Option<BTreeSet<Rc<str>>> {
+    /// static final 字段由常量求值给出，不经字段槽；字段可经字节码外途径写入时推不出——仍给出字节码写入的名字，
+    /// 只标记推不出（字段转为不折叠时 m 失效重分析）
+    pub(super) fn read_field_names(&mut self, m: usize, a: &Analysis, o: u32, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
         let Some(Event::Field { opcode, mref, .. }) = event_at(a, o, is_field) else { return None };
         if !matches!(*opcode, classfile::op::GETFIELD | classfile::op::GETSTATIC) || mref.desc != format!("L{STRING};") {
             return None;
@@ -244,21 +245,23 @@ impl<'a> Engine<'a> {
             return None;
         }
         self.ctx.dep(m, Dep::Field(fi.key.clone()));
-        if self.ctx.field_open(&fi) {
-            return None;
-        }
-        let n = self.field_node(fi.key.clone());
-        self.field_names(n, depth)
+        let open = self.ctx.field_open(&fi);
+        let n = match self.fields.get_index_of(&fi.key) {
+            Some(n) => n,
+            None if open => return self.cur_site.map(|_| (BTreeSet::new(), false)),
+            None => self.field_node(fi.key.clone()),
+        };
+        self.field_names(n, depth).map(|(names, complete)| (names, complete && !open))
     }
 
     /// 槽 start 上的全部名字：沿子集边逆向遍历上游槽，字面量取起点槽，非常量实参在调用方帧里求值
-    fn slot_names(&mut self, start: PSlot, depth: u8) -> Option<BTreeSet<Rc<str>>> {
-        let (reader, inputs) = self.slot_upstream(start)?;
+    fn slot_names(&mut self, start: PSlot, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
+        let (reader, inputs, complete) = self.slot_upstream(start)?;
         let mut out: BTreeSet<Rc<str>> = self.pstr.sets.get(&start).into_iter().flatten().map(crate::absint::lit_str).collect();
         self.pstr.active.push(start);
-        let r = self.param_inputs(reader, &inputs, depth, &mut out);
+        let evaluated = self.param_inputs(reader, &inputs, depth, &mut out);
         self.pstr.active.pop();
-        r.map(|_| out)
+        Some((out, complete && evaluated))
     }
 
     /// 方法 m 的 String 形参槽 i 上的全部候选模式（推不出的段记为任意串，见 `class_lookup.rs::Gap::Class`；
@@ -269,7 +272,10 @@ impl<'a> Engine<'a> {
             return None;
         }
         let start = PSlot::M(m, i);
-        let (reader, inputs) = self.slot_upstream(start)?;
+        let (reader, inputs, complete) = self.slot_upstream(start)?;
+        if !complete {
+            return None;
+        }
         let mut out: Vec<Vec<Part>> = self.pstr.sets.get(&start).into_iter().flatten().map(|l| vec![Part::Lit(crate::absint::lit_str(l))]).collect();
         self.pstr.active.push(start);
         let r = self.input_patterns(reader, &inputs, &mut out);
@@ -277,21 +283,32 @@ impl<'a> Engine<'a> {
         r.map(|_| out)
     }
 
-    /// 槽 start 的读者登记与上游遍历：返回读者站点与全部上游槽的非常量实参；任一上游槽推不出、成环或超限为 None
-    fn slot_upstream(&mut self, start: PSlot) -> Option<((usize, u32), BTreeSet<(usize, u32, usize)>)> {
+    /// 槽 start 的读者登记与上游遍历：返回读者站点、全部上游槽的非常量实参与槽是否推得出（任一上游槽推不出、
+    /// 成环或超限即推不出）。推不出只作标记、不截断遍历：名字是状态的单调函数——上游槽转为推不出后，
+    /// 其更上游的字面量（已沿子集边到达起点槽）与非常量实参照样计入，结果只并不减，与求值先后无关。
+    /// 当前不在站点内（无读者可登记）为 None
+    fn slot_upstream(&mut self, start: PSlot) -> Option<((usize, u32), BTreeSet<(usize, u32, usize)>, bool)> {
         let reader = self.cur_site?;
+        let mut inputs: BTreeSet<(usize, u32, usize)> = BTreeSet::new();
         if self.pstr.active.contains(&start) || self.pstr.active.len() >= MAX_NEST {
-            return None;
+            if !self.pstr.active.contains(&start) {
+                stats::cap_hit(stats::CAP_NEST);
+            }
+            return Some((reader, inputs, false));
         }
+        let mut complete = true;
         let mut seen: HashSet<PSlot> = HashSet::default();
         let mut stack = vec![start];
-        let mut inputs: BTreeSet<(usize, u32, usize)> = BTreeSet::new();
         while let Some(s) = stack.pop() {
             if !seen.insert(s) {
                 continue;
             }
             if seen.len() > MAX_SLOTS {
-                return None;
+                stats::cap_hit(stats::CAP_SLOTS);
+                // 超限：遍历到的子集取决于图的形状，非常量实参一概不取（起点槽字面量已含全部上游字面量）
+                inputs.clear();
+                complete = false;
+                break;
             }
             self.pstr.demand.entry(s).or_default().insert(reader);
             let top = match s {
@@ -299,13 +316,11 @@ impl<'a> Engine<'a> {
                 PSlot::H(h, _) => self.pstr.top_h.contains(&h),
                 PSlot::F(fi) => self.pstr.top_f.contains(&fi),
             };
-            if top {
-                return None;
-            }
+            complete &= !top;
             inputs.extend(self.pstr.inputs.get(&s).into_iter().flatten().copied());
             stack.extend(self.pstr.pred.get(&s).into_iter().flatten().copied());
         }
-        Some((reader, inputs))
+        Some((reader, inputs, complete))
     }
 
     /// 非常量实参所在调用点的实参值与调用方帧数据；调用方待重分析 / 调用点已不可达为 Ok(None)，保守分析为 Err
@@ -329,25 +344,37 @@ impl<'a> Engine<'a> {
             let parts = self.name_parts(&f, &v, Gap::Class, 0)?;
             out.extend(expand(&parts)?);
             if out.len() > MAX_NAMES {
+                stats::cap_hit(stats::CAP_PNAMES);
                 return None;
             }
         }
         Some(())
     }
 
-    /// 非常量实参在各自调用方帧里求出的名字并入 out
-    fn param_inputs(&mut self, reader: (usize, u32), inputs: &BTreeSet<(usize, u32, usize)>, depth: u8, out: &mut BTreeSet<Rc<str>>) -> Option<()> {
+    /// 非常量实参在各自调用方帧里求出的名字并入 out；返回是否全部求出（求不出的实参只作标记，其余照常并入）
+    fn param_inputs(&mut self, reader: (usize, u32), inputs: &BTreeSet<(usize, u32, usize)>, depth: u8, out: &mut BTreeSet<Rc<str>>) -> bool {
+        let mut complete = true;
         for &(cm, off, j) in inputs {
             // 调用方正待重分析（重分析后重跑）/ 调用点在当前分析里已不可达（不再流入）：跳过
-            let Some((ca, v)) = self.input_value(reader, (cm, off, j)).ok()? else { continue };
+            let (ca, v) = match self.input_value(reader, (cm, off, j)) {
+                Ok(Some(x)) => x,
+                Ok(None) => continue,
+                Err(()) => {
+                    complete = false;
+                    continue;
+                }
+            };
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
-            let parts = self.name_parts(&f, &v, Gap::Fail, depth)?;
-            out.extend(flatten(&parts)?);
-            if out.len() > MAX_NAMES {
-                return None;
+            match self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten) {
+                Some(names) => out.extend(names),
+                None => complete = false,
             }
         }
-        Some(())
+        if out.len() > MAX_NAMES {
+            stats::cap_hit(stats::CAP_PNAMES);
+            return false;
+        }
+        complete
     }
 }

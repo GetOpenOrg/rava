@@ -84,7 +84,7 @@ fn map_code(leak: bool) -> Code {
 #[test]
 fn map_writes_collects_values() {
     let a = run(&map_code(false));
-    assert_eq!(map_writes(&a, 0, &map_field(), &maps()), Some(vec![V::Str("v".into())]));
+    assert_eq!(map_writes(&a, 0, &map_field(), &maps()), Some(vec![V::lit("v")]));
 }
 
 /// 映射对象被传出（可能被嵌套外写入）：不给候选；类不在清单内同样不给

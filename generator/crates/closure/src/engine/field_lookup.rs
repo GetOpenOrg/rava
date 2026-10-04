@@ -35,7 +35,8 @@ impl<'a> Engine<'a> {
                 FieldType::Object(c) if c == absint::STRING => {
                     named = true;
                     names.extend(a.lits());
-                    if matches!(a, V::Ref { .. }) {
+                    // 常量格给出的名字另按其来源求值（同常量格推不出时，见 `V::Str`）
+                    if matches!(a, V::Ref { .. }) || a.derived_str() {
                         names.extend(self.param_strs(m, off, a));
                         names.extend(self.field_strs(m, a));
                         if let Some(parts) = self.method_name_parts(m, a) {
@@ -97,7 +98,7 @@ impl<'a> Engine<'a> {
         }
         let add: Option<Vec<Rc<str>>> = match v {
             Some(V::Null) => Some(vec![]),
-            Some(V::Str(s)) => Some(vec![s.clone()]),
+            Some(V::Str(s, _)) => Some(vec![s.clone()]),
             Some(r @ V::Ref { src, .. }) if !src.is_empty() && src.iter().all(|s| matches!(s, Src::Str(_))) => Some(r.lits()),
             _ => None,
         };

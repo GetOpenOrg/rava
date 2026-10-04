@@ -17,7 +17,7 @@ const MAX_INSNS: usize = 256;
 
 /// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者）
 fn is_const(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(_) | V::Class(..))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..))
 }
 
 /// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
@@ -31,7 +31,7 @@ fn is_sysprops_tag(v: &V) -> bool {
 
 /// 可作为求值结果导出的常量
 fn exportable(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(_))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..))
 }
 
 /// 求值记忆：结果与求值的输入（见 `memo.rs`）
@@ -57,7 +57,7 @@ fn carg(v: &V) -> Option<CArg> {
         V::Int(i) => Some(CArg::Int(*i)),
         V::Long(l) => Some(CArg::Long(*l)),
         V::Null => Some(CArg::Null),
-        V::Str(s) => Some(CArg::Str(crate::absint::lit_id(s))),
+        V::Str(s, _) => Some(CArg::Str(crate::absint::lit_id(s))),
         v if is_sysprops_tag(v) => Some(CArg::SysProps),
         V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
         _ => None,
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn const_inputs() {
-        assert!(is_const(&V::Str(Rc::from("x"))));
+        assert!(is_const(&V::lit(Rc::from("x"))));
         assert!(is_const(&V::Null));
         assert!(!is_const(&V::Top));
         assert!(is_const(&V::Class(Rc::from("A"), 0)));
@@ -195,7 +195,7 @@ mod tests {
     fn string_ops_on_constants() {
         use super::super::sysprops::string_op;
         use crate::manifest::StrOp;
-        let s = |x: &str| V::Str(Rc::from(x));
+        let s = |x: &str| V::lit(Rc::from(x));
         // parseBoolean("false") = "true".equalsIgnoreCase("false")
         assert_eq!(string_op(StrOp::EqualsIgnoreCase, &[s("true"), s("false")]), Some(V::Int(0)));
         assert_eq!(string_op(StrOp::EqualsIgnoreCase, &[s("true"), s("TRUE")]), Some(V::Int(1)));

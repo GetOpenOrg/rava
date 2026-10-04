@@ -71,7 +71,12 @@ pub enum V {
     Null,
     /// 引用：静态类型（binary name 或数组描述符）+ 是否确定非空 + 来源集合 + 对象身份标签（见 [`Obj`]）
     Ref { ty: Option<Rc<str>>, nonnull: bool, src: Srcs, obj: Option<Rc<Obj>> },
-    Str(Rc<str>),
+    /// 字符串常量 + 来源集合：本方法 ldc 字面量的来源为 `Src::Str`（本点字面量）；常量格给出的值落到本方法
+    /// （形参 / 字段读 / 调用返回的常量）的来源为该读取点，即常量格推不出时同一值的来源；同值合流取来源并。
+    /// 值用于折叠；来源决定它是否算本点字面量（[`V::site_lits`]）及合流后的来源——
+    /// 常量格的中间态常量与其终态（Top，来源同上）给出同样的来源，引擎的点名与处理顺序无关。
+    /// 常量格存储形态（[`V::stripped`]）来源为空
+    Str(Rc<str>, Srcs),
     /// 类字面量（ldc class）：值是 Class 对象，携带所指类与 ldc 偏移（合流后以该偏移为来源，引擎在此处给出类镜像）
     Class(Rc<str>, u32),
     /// 符号字段偏移（long）：按名取得的实例字段偏移即字段身份（声明类上的字段键），只经复制 / 字段传递保持，
@@ -87,7 +92,7 @@ impl V {
     pub(crate) fn nonnull(&self) -> Option<bool> {
         match self {
             V::Null => Some(false),
-            V::Ref { nonnull: true, .. } | V::Str(_) | V::Class(..) => Some(true),
+            V::Ref { nonnull: true, .. } | V::Str(..) | V::Class(..) => Some(true),
             _ => None,
         }
     }
@@ -96,21 +101,21 @@ impl V {
     pub fn static_type(&self) -> Option<&str> {
         match self {
             V::Ref { ty, .. } => ty.as_deref(),
-            V::Str(_) => Some(STRING),
+            V::Str(..) => Some(STRING),
             V::Class(..) => Some(CLASS),
             _ => None,
         }
     }
 
     fn is_ref(&self) -> bool {
-        matches!(self, V::Null | V::Ref { .. } | V::Str(_) | V::Class(..))
+        matches!(self, V::Null | V::Ref { .. } | V::Str(..) | V::Class(..))
     }
 
     /// 引用值的来源集合（Null 无来源）
     pub fn srcs(&self) -> Srcs {
         match self {
             V::Ref { src, .. } => src.clone(),
-            V::Str(s) => src1(Src::Str(lit_id(s))),
+            V::Str(_, src) => src.clone(),
             V::Class(_, off) => src1(Src::Site(*off)),
             _ => Rc::from([].as_slice()),
         }
@@ -119,7 +124,7 @@ impl V {
     /// 值可能是的字符串字面量：字面量本身，或合流引用来源里的各个字面量
     pub fn lits(&self) -> Vec<Rc<str>> {
         match self {
-            V::Str(s) => vec![s.clone()],
+            V::Str(s, _) => vec![s.clone()],
             V::Ref { src, .. } => src
                 .iter()
                 .filter_map(|s| match *s {
@@ -131,10 +136,30 @@ impl V {
         }
     }
 
+    /// 本方法的字面量（ldc，或合流来源里的字面量）：不含常量格给出的值（见 [`V::Str`]）
+    pub fn site_lits(&self) -> Vec<Rc<str>> {
+        match self {
+            V::Str(..) if self.derived_str() => vec![],
+            _ => self.lits(),
+        }
+    }
+
+    /// 本方法的 ldc 字符串字面量（来源只有字面量本身）
+    pub fn lit(s: impl Into<Rc<str>>) -> V {
+        let s: Rc<str> = s.into();
+        let id = lit_id(&s);
+        V::Str(s, src1(Src::Str(id)))
+    }
+
+    /// 来源不全是本方法字面量的字符串常量（常量格给出的值，或与之同值合流）：按其来源处理，不算本点字面量
+    pub fn derived_str(&self) -> bool {
+        matches!(self, V::Str(_, src) if src.is_empty() || src.iter().any(|s| !matches!(s, Src::Str(_))))
+    }
+
     /// 同 [`V::lits`]，取字面量序号（见 `lit.rs`）
     pub fn lit_ids(&self) -> Vec<u32> {
         match self {
-            V::Str(s) => vec![lit_id(s)],
+            V::Str(s, _) => vec![lit_id(s)],
             V::Ref { src, .. } => src
                 .iter()
                 .filter_map(|s| match *s {
@@ -159,6 +184,11 @@ impl V {
     pub fn join(&self, o: &V) -> V {
         if self == o {
             return self.clone();
+        }
+        if let (V::Str(a, sa), V::Str(b, sb)) = (self, o) {
+            if a == b {
+                return V::Str(a.clone(), src_union(sa, sb));
+            }
         }
         if self.is_ref() && o.is_ref() {
             let (a, b) = (self.static_type(), o.static_type());
@@ -530,8 +560,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
         if let V::Ref { .. } = v {
             return Some(v.rebased(Src::Site(off)));
         }
-        self.ev(off, Event::Const { opcode, value: v.clone() });
-        Some(v)
+        self.ev(off, Event::Const { opcode, value: v.stripped() });
+        Some(v.rebased(Src::Site(off)))
     }
 
     /// 构造器返回：新建对象（`Uninit` 标签）的各份拷贝换成构造完成的标签（final 字段常量，推不出则无标签）
@@ -584,7 +614,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         s.stack.push(V::Top);
                         s.stack.push(V::Hi);
                     }
-                    Const::String(x) => s.stack.push(V::Str(Rc::from(x.as_str()))),
+                    Const::String(x) => s.stack.push(V::lit(Rc::from(x.as_str()))),
                     // 含孤立代理项：值不入常量格（格上字符串为 Rust 文本，无法无损表示），按非空 String 站点值
                     Const::StringUtf16(_) => s.stack.push(site_ref(STRING, true, off)),
                     Const::Class(x) => s.stack.push(V::Class(Rc::from(x.as_str()), off)),
@@ -964,7 +994,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let v = pop(s)?;
                 let (out, input) = match v {
                     V::Null => (V::Null, None),
-                    V::Str(_) | V::Class(..) => (v, None),
+                    V::Str(..) | V::Class(..) => (v, None),
                     // 数组目标：来源不变（数组类型不参与收窄）
                     V::Ref { nonnull, src, obj, .. } if c.starts_with('[') => (V::Ref { ty: Some(Rc::from(c.as_str())), nonnull, src, obj }, None),
                     // 类目标：结果以本偏移为来源，跨汇合点仍保留按来源的收窄

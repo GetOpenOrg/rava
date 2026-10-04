@@ -68,14 +68,14 @@ fn may_be_sysprops(v: &V) -> bool {
 pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
     use crate::manifest::StrOp;
     match (op, args) {
-        (StrOp::EqualsIgnoreCase, [V::Str(_), V::Null]) => Some(V::Int(0)),
-        (StrOp::EqualsIgnoreCase, [V::Str(a), V::Str(b)]) if a.is_ascii() && b.is_ascii() => Some(V::Int(a.eq_ignore_ascii_case(b) as i32)),
-        (StrOp::Length, [V::Str(a)]) => Some(V::Int(a.encode_utf16().count() as i32)),
-        (StrOp::IsEmpty, [V::Str(a)]) => Some(V::Int(a.is_empty() as i32)),
-        (StrOp::HashCode, [V::Str(a)]) => Some(V::Int(a.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c))))),
-        (StrOp::CharAt, [V::Str(a), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|c| V::Int(i32::from(c))),
+        (StrOp::EqualsIgnoreCase, [V::Str(..), V::Null]) => Some(V::Int(0)),
+        (StrOp::EqualsIgnoreCase, [V::Str(a, _), V::Str(b, _)]) if a.is_ascii() && b.is_ascii() => Some(V::Int(a.eq_ignore_ascii_case(b) as i32)),
+        (StrOp::Length, [V::Str(a, _)]) => Some(V::Int(a.encode_utf16().count() as i32)),
+        (StrOp::IsEmpty, [V::Str(a, _)]) => Some(V::Int(a.is_empty() as i32)),
+        (StrOp::HashCode, [V::Str(a, _)]) => Some(V::Int(a.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c))))),
+        (StrOp::CharAt, [V::Str(a, _), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|c| V::Int(i32::from(c))),
         (StrOp::CharToLowerCase, [V::Int(c)]) => u8::try_from(*c).ok().filter(u8::is_ascii).map(|b| V::Int(i32::from(b.to_ascii_lowercase()))),
-        (StrOp::ToLowerCase, [V::Str(a)] | [V::Str(a), _]) => ascii_lower(a).map(|l| V::Str(Rc::from(l.as_str()))),
+        (StrOp::ToLowerCase, [V::Str(a, _)] | [V::Str(a, _), _]) => ascii_lower(a).map(|l| V::lit(Rc::from(l.as_str()))),
         _ => None,
     }
 }
@@ -128,8 +128,8 @@ impl Ctx<'_> {
     pub(super) fn derived_result(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
         if c.value_eq {
             return match args {
-                [V::Str(a), V::Str(b)] => Some(Ret::Value(V::Int((a == b) as i32))),
-                [V::Str(_), V::Null] => Some(Ret::Value(V::Int(0))),
+                [V::Str(a, _), V::Str(b, _)] => Some(Ret::Value(V::Int((a == b) as i32))),
+                [V::Str(..), V::Null] => Some(Ret::Value(V::Int(0))),
                 _ => None,
             };
         }
@@ -143,7 +143,7 @@ impl Ctx<'_> {
             let ret = parse_method(&m.desc).and_then(|md| md.ret).map(|t| t.descriptor())?;
             return Some(Ret::Value(self.sysprops_ref(&ret)));
         }
-        if !args.iter().any(|a| matches!(a, V::Str(_))) {
+        if !args.iter().any(|a| matches!(a, V::Str(..))) {
             return None;
         }
         let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
@@ -180,7 +180,7 @@ impl Ctx<'_> {
         if spec.receiver && !args.first().is_some_and(is_sysprops) {
             return None;
         }
-        let V::Str(key) = args.get(spec.key)? else { return None };
+        let V::Str(key, _) = args.get(spec.key)? else { return None };
         self.note_props(me);
         {
             let u = self.punstable.borrow();
@@ -189,13 +189,13 @@ impl Ctx<'_> {
             }
         }
         let v = match self.man.sysprops.lookup(key) {
-            PropValue::Const(s) => V::Str(Rc::from(s)),
+            PropValue::Const(s) => V::lit(Rc::from(s)),
             PropValue::Dynamic => return None,
             PropValue::Absent => match &spec.default {
                 DefArg::None => V::Null,
                 DefArg::Const(v) => v.clone(),
                 DefArg::Param(i) => match args.get(*i)? {
-                    v @ (V::Str(_) | V::Null) => v.clone(),
+                    v @ (V::Str(..) | V::Null) => v.clone(),
                     _ => return None,
                 },
             },
@@ -270,7 +270,7 @@ impl Ctx<'_> {
             DefArg::None => DefArg::None,
             DefArg::Const(v) => DefArg::Const(v.clone()),
             DefArg::Param(i) => match args.get(*i)? {
-                v @ (V::Str(_) | V::Null) => DefArg::Const(v.clone()),
+                v @ (V::Str(..) | V::Null) => DefArg::Const(v.clone()),
                 v => DefArg::Param(param_of(v)?),
             },
         };
@@ -380,7 +380,7 @@ impl Engine<'_> {
                         let key = w.map(|w| (w, args.get(w.key).cloned().unwrap_or(V::Top)));
                         match key {
                             Some((w, v)) if w.remove => keys.extend(self.removed_keys(m, a, &v)),
-                            Some((_, V::Str(s))) => keys.push(Some(s.to_string())),
+                            Some((_, V::Str(s, _))) => keys.push(Some(s.to_string())),
                             _ => keys.push(None),
                         }
                     }

@@ -177,7 +177,7 @@ fn exportable(v: &V, ty: &str) -> bool {
     match v {
         V::Int(_) => matches!(ty, "Z" | "B" | "C" | "S" | "I"),
         V::Long(_) => ty == "J",
-        V::Str(_) => ty.strip_prefix('L').and_then(|t| t.strip_suffix(';')) == Some(crate::absint::STRING),
+        V::Str(..) => ty.strip_prefix('L').and_then(|t| t.strip_suffix(';')) == Some(crate::absint::STRING),
         V::Null => ty.starts_with('L') || ty.starts_with('['),
         _ => false,
     }
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn exportable_matches_slot_type() {
-        let s = V::Str(Rc::from("UTF-16BE"));
+        let s = V::lit(Rc::from("UTF-16BE"));
         let string_slot = format!("L{};", crate::absint::STRING);
         assert!(exportable(&s, &string_slot));
         // 经 Object 返回的字符串（声明为基类型的恒等返回）不导出

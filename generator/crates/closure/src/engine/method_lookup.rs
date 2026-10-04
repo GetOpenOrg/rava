@@ -236,7 +236,7 @@ impl<'a> Engine<'a> {
             let Event::Return(v) = e else { continue };
             any = true;
             let plain = match v {
-                V::Str(_) => true,
+                V::Str(..) => true,
                 V::Ref { src, .. } => !src.is_empty() && src.iter().all(|s| matches!(s, Src::Str(_))),
                 _ => false,
             };
