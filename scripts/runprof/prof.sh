@@ -11,8 +11,9 @@ mkdir -p build/runprof
 WS=$("$RAVA" build "$T" --stop-after emit 2>&1 | sed -n 's/.*→ \(.*\)（bin.*/\1/p' | tail -1)
 [ -n "$WS" ] || { echo "emit 失败"; exit 1; }
 REL=(); [ "$P" = release ] && REL=(--release)
-"$RAVA" compile "$WS" --target-dir build/runprof-target "${REL[@]}" > build/runprof/${SN}_${P}_compile.log 2>&1 || { tail -30 build/runprof/${SN}_${P}_compile.log; exit 1; }
-BIN=build/runprof-target/$P/$SN
+"$RAVA" compile "$WS" --target-dir "$PWD/build/runprof-target" "${REL[@]}" > build/runprof/${SN}_${P}_compile.log 2>&1 || { tail -30 build/runprof/${SN}_${P}_compile.log; exit 1; }
+BIN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['exe'])" "$WS/build_status.json")
+echo "bin $BIN"
 cc -O2 -shared -fPIC -o build/runprof/sampler.so scripts/runprof/sampler.c
 set +e
 RUNPROF_OUT=build/runprof/${SN}_${P}.raw LD_PRELOAD=$PWD/build/runprof/sampler.so timeout "$S" "$BIN" > build/runprof/${SN}_${P}.out
