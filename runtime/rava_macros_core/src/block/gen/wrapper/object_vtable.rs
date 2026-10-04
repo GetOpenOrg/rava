@@ -11,7 +11,6 @@ use super::super::storage_hooks::hook_ident;
 
 pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     let struct_ident = &ctx.struct_ident;
-    let vtable_trait_ident = &ctx.vtable_trait_ident;
     let cells = hook_ident(ctx, "cells");
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
@@ -23,11 +22,6 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     if !binary_name.is_empty() {
-        // 擦除 vtable 导出的祖先槽位（类祖先的 vtable trait 名；vtable 非泛型，
-        // 超类链是其 supertrait —— 子类 vtable 可直接上转）
-        let ancestor_vtable_idents: Vec<syn::Ident> = ctx.meta.all_superclasses.iter()
-            .map(|anc_name| format_ident!("{}__VTable", anc_name))
-            .collect();
         // 运行时类视图（A-1 后落在 wrapper 侧：Object 直接持有 wrapper，类型实参只在
         // wrapper 的 impl 上下文可见）：按 binary name 重建本类 / 任一祖先类型的 wrapper。
         // 祖先视图 = 宏生成的 From<Self> for Ancestor（vtable trait upcasting，保持运行时类）。
@@ -193,39 +187,14 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     }
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
-                // 擦除 vtable 导出（A-1 部件形态）：按调用方 slot 的（擦除）类 vtable
-                // 类型把自身 vtable 填入——自身槽位直取；祖先类槽位经 supertrait 上转
-                // （类 vtable trait 非泛型，与类型实参无关）。与 `__erased_inner` 配对，
-                // 供 `From<Object> for X<A>` 重建「运行时类是本类或其子类」的任意实例化视图。
+                // 擦除 vtable 导出（A-1 部件形态）：整体委托 vtable 对象（= 运行时类 inner）。
+                // inner 按运行时类应答本类与全部祖先类槽位（struct_layout `erased_vtable_query`），
+                // 静态类 X 及其祖先都是运行时类的祖先，槽位集合是 inner 应答集合的子集，填入的
+                // 是同一对象——wrapper 侧不再按静态类逐祖先展开臂。供 `From<Object> for X<A>`
+                // 重建「运行时类是本类或其子类」的任意实例化视图，及中间型 catch_as 擦除重建。
                 fn __erased_vtable(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
-                    '__answered: {
-                    if let ::std::option::Option::Some(s) =
-                        slot.downcast_mut::<::std::option::Option<__Shared<dyn #vtable_trait_ident>>>()
-                    {
-                        *s = ::std::option::Option::Some(__Shared::clone(&self.vtable));
-                        break '__answered;
-                    }
-                    #(
-                        if let ::std::option::Option::Some(s) =
-                            slot.downcast_mut::<::std::option::Option<__Shared<dyn #ancestor_vtable_idents>>>()
-                        {
-                            *s = ::std::option::Option::Some(
-                                __Shared::clone(&self.vtable)
-                                    as __Shared<dyn #ancestor_vtable_idents>);
-                            break '__answered;
-                        }
-                    )*
-                    // 静态类臂未命中 → 委托 vtable 对象（= 运行时类 inner）的擦除查询：
-                    // 祖先视图包装（如 Throwable 视图承载 IllegalStateException inner）对
-                    // 「运行时类自身/其祖先」槽位的请求由此应答——中间型（Throwable <
-                    // catch T < 运行时 R）catch_as 的擦除重建 Path A。vtable trait 链根部
-                    // 超 trait 即 ObjectVTable，上转恒可到达 inner 侧的覆盖。
                     ObjectVTable::__erased_vtable(
-                        __Shared::clone(&self.vtable)
-                            as __Shared<dyn ObjectVTable>,
-                        slot,
-                    );
-                    }
+                        __Shared::clone(&self.vtable) as __Shared<dyn ObjectVTable>, slot);
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
                 }
                 fn __view_as(

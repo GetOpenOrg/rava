@@ -3,6 +3,8 @@
 > 拆 crate 线（`docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.5.4）的结构性终态项。本文只是方案，**未实施**；实施须经主会话确认。
 > 测量数据见上述计划 §7.7「2026-10-04 复测」。
 
+> **body 切分轴待按模块重新论证**（2026-10-04 用户决策）：档案 crate 按 JDK jmod 模块名命名（`java.base` → `java_base` 等，从 JDK 模块描述动态取），T1 第 2 步方案（t1-link 分支 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`）正在论证「按模块切 crate」作为档案终态分层。`java_body_k` 的按体量均衡切分不再扩展，切分粒度与命名以该方案结论为准。
+
 ## 一、问题
 
 声明 crate（`java_runtime`）的 rustc 峰值随类数增长，而且增长快于线性：
