@@ -1687,7 +1687,31 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
 时写入相邻槽，平台主线程（8 MiB）上 10⁵ 量级亦溢出。HotSpot 的回收不递归，这是 rava 独有的崩溃面。终态做法：对象引用载体
 （`Object` / `__Handle` 的 `Drop`）在「本次释放的是最后一个强引用」时按执行流深度计数，深度超过阈值（如 32）即把该 `Arc` 移入
 本载体的待释放队列而不就地递归，最外层 drop 返回前循环清空队列——释放顺序变化不可观察（无终结器），栈深恒定。改动面是
-对象模型与宏生成的字段载体（S7-3 范围），已报协调者另行派发。
+对象模型与宏生成的字段载体（S7-3 范围），已报协调者另行派发（2026-10-05 协调者转给 S7-3 代理，作为其后续小步 S7-3x）。
+
+**pinned：TestContinuationPinned 的 `sync parkNanos: elapsed>=25ms` 偶发 false（2026-10-05，分支 vthread-t6）**
+
+- 复现（作业 vt6-probe-8e2f10f7 / 03，kr2，dev 构建）：顺序 300 次失败 9 次，8 进程并行 320 次失败 26 次；绝大多数是 1d
+  （pin 中 `parkNanos(30ms)` 提前返回），另有 1 次是 1c 在 60 s `sleep` 中途被观察到 `RUNNABLE`（同一机制：pin 中的停泊被虚假唤醒）。
+- 机制：pin 中的停泊落在载体的 park 许可上（`parkOnCarrierThread` → `U.park`，HotSpot 的 Parker 同样挂在载体 JavaThread 上）。
+  载体的许可同时被 ForkJoinPool 的唤醒协议使用：`signalWork` / `reactivate` 先写 `v.phase` 再看 `v.access == PARKED` 才
+  `unpark(owner)`，工作线程在 `access = PARKED` 之后、真正 park 之前若已看到 phase 变化就不 park——发信方仍会 unpark，留下一个多余许可；
+  `VirtualThread.unpark` 对 PINNED 线程的 `U.unpark(carrier)` 在被唤醒方已离开 park、尚未 `setState(RUNNING)` 时同理。多余许可留在载体上，
+  下一个在该载体上 pin 停泊的虚拟线程立即返回。`LockSupport.parkNanos` 的规范允许虚假返回，测试第 1d 段的断言并不受规范保证。
+- 对照（作业 vt6-race-91685ba3，诊断程序 `scripts/diag/PinnedRace.java` 循环 300 轮 1c+1d，顺序 1 进程 + 并行 8 进程，各 2700 轮）：
+
+  | | 1c 有中断（intr） | 1c 无中断（nointr，s 改为 pin 中 parkNanos 10 ms） |
+  |---|---|---|
+  | 参考 JDK 21.0.11（HotSpot） | 提前返回 9 / 2700（0.33%） | 3 / 2700（0.11%） |
+  | rava dev | 61 / 2700（2.3%），中途 RUNNABLE 5 | 36 / 2700（1.3%） |
+
+  提前返回全部发生在 n 与 s 同载体时；无中断时同样出现，说明多余许可不只来自中断路径。**参考 JDK 自身也会失败**，rava 只是频率高
+  约 7–10 倍：dev 构建（opt-level 0）的生成代码把上述两个窗口（工作线程 `access = PARKED` 到复位、被唤醒方 park 返回到置 RUNNING）
+  拉长了。
+- 结论：根因在 JDK 21 的设计（载体许可被调度器与 pin 停泊共用），不是 rava 运行时的偏差；monitor::park / unpark 的许可语义与
+  HotSpot Parker 一致，运行时没有可做的忠实修正——任何「吞掉多余许可」的改法都会丢掉调度器真实的唤醒。处置需用户裁定：
+  ① 测试第 1d 段按规范改成「循环 parkNanos 至截止时间」或放宽断言（违反「合法测试不改」，需用户批准）；② 维持现状，承认约 3% 的
+  偶发失败，随生成代码提速（R1 / 运行档位）下降。已报协调者。
 
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
