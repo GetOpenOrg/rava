@@ -10,6 +10,6 @@ pub mod referenced;
 pub mod fill;
 pub mod refs;
 
-pub use cross::{claim_structural, CrateRoute, CrossInput, Prefix};
+pub use cross::{claim_structural, CrateRoute, CrossInput};
 pub use fill::{import_lines, ImportSite};
 pub use referenced::collect_referenced;

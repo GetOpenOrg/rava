@@ -19,7 +19,7 @@ use emit::ctx::{EmitCtx, EmitOptions, EmitShared};
 use emit::method_bodies::{BodyAudit, MethodBodies};
 use emit::perf::{report_lines, Perf};
 use emit::precheck::DEFAULT_LIMIT;
-use emit::project::{prepare_scratch, write_project, ProjectReport};
+use emit::project::{prepare_scratch, write_project, JdkDirs, ProjectReport};
 use input::{BuildInput, ClosureFacts, LibCrate, RuntimeManifest};
 use resolve::{ClassPath, Hierarchy, Origin};
 use ty::short_names::ShortNames;
@@ -291,7 +291,7 @@ fn write_scratch(
     names: &ShortNames,
     perf: &mut Perf,
 ) -> Result<(ProjectReport, Vec<(String, std::time::Duration)>), String> {
-    prepare_scratch(j.out, j.rt, &ctx.macros_crate, false).map_err(|e| format!("overlay：{e}"))?;
+    prepare_scratch(j.out, j.rt, &ctx.macros_crate, &JdkDirs::of(ctx), false).map_err(|e| format!("overlay：{e}"))?;
     perf.mark("overlay");
     ir::raw_audit::reset();
     if j.o.raw_sites.is_some() {
@@ -493,7 +493,7 @@ mod tests {
         assert!(!out.exists());
         put(&out.join(CLOSURE_INPUT_DIR).join("classes/A.class"), "cafebabe");
         let macros = root.join("runtime/rava_macros");
-        prepare_scratch(&out, &rt, &macros, false).unwrap();
+        prepare_scratch(&out, &rt, &macros, &JdkDirs::single("java_runtime"), false).unwrap();
         assert!(out.join(CLOSURE_INPUT_DIR).join("classes/A.class").is_file());
         assert!(!out.join("java_runtime/src/lib.rs").exists(), "lib.rs 由 mod 树阶段写出");
         let cargo = std::fs::read_to_string(out.join("java_runtime/Cargo.toml")).unwrap();

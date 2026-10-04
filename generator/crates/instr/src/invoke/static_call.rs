@@ -45,9 +45,9 @@ fn resolve_owner(env: &InstrEnv, call: &mut CallRef) -> Vec<String> {
     if !reg.contains(&call.owner) || short_binary(ctx, &ctx.short(&call.owner)).as_deref() == Some(call.owner.as_str()) {
         return Vec::new();
     }
-    let krate = if ctx.class_name.contains('/') { "crate" } else { "java_runtime" };
+    let krate = ctx.hooks.crate_path(&call.owner, ctx.class_name).unwrap_or_else(|| "crate".to_string());
     let pkgs = call.owner.split('/').collect::<Vec<_>>();
-    let mut out = vec![krate.to_string()];
+    let mut out = vec![krate];
     for p in &pkgs[..pkgs.len().saturating_sub(1)] {
         out.push(if ty::ident::is_rust_keyword(p) { format!("r#{p}") } else { (*p).to_string() });
     }

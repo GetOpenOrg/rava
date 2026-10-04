@@ -12,6 +12,9 @@ use ty::{ClassInfo, NameScope, ShortNames, TyCtx};
 
 use crate::error::{EmitError, Result};
 
+/// 用户 crate 名
+pub const USER_CRATE: &str = "user";
+
 /// 发射选项
 #[derive(Debug, Clone, Default)]
 pub struct EmitOptions {
@@ -62,6 +65,8 @@ pub struct EmitShared<'a> {
     loaders: OnceLock<closure::loaders::DefiningLoaders>,
     /// 模块图：类 → 模块、requires 闭包（T1 第 2 步 M1，见 `resolve::modules`）
     modules: OnceLock<resolve::ModuleFacts>,
+    /// 按模块切分的 JDK crate 表（T1 第 2 步 M2，见 `module_crates`）
+    module_crates: OnceLock<crate::module_crates::ModuleCrates>,
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
@@ -147,6 +152,7 @@ impl<'a> EmitShared<'a> {
             lib_crate_of: OnceLock::new(),
             loaders: OnceLock::new(),
             modules: OnceLock::new(),
+            module_crates: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
         })
@@ -155,6 +161,40 @@ impl<'a> EmitShared<'a> {
     /// 模块图（首次查询时由类路径构建）
     pub fn modules(&self) -> resolve::ModuleGraph<'_> {
         self.modules.get_or_init(|| resolve::ModuleFacts::build(self.cp)).graph(self.cp)
+    }
+
+    /// 按模块切分的 JDK crate 表（首次查询时由模块图与本程序 JDK 类集构建）
+    pub fn crates(&self) -> &crate::module_crates::ModuleCrates {
+        self.module_crates.get_or_init(|| {
+            let g = self.modules();
+            crate::module_crates::ModuleCrates::build(&g, ty::consts::OBJECT, self.input.jdk_classes.iter().map(String::as_str))
+        })
+    }
+
+    /// 类所在 crate：lib crate → 其名；用户类 → `user`；JDK 类 → 其模块 crate
+    pub fn crate_of<'s>(&'s self, cls: &str) -> &'s str {
+        if let Some(l) = self.lib_crate_of(cls) {
+            return l;
+        }
+        if self.is_user(cls) {
+            return USER_CRATE;
+        }
+        self.crates().crate_of(cls)
+    }
+
+    /// crate `here` 中引用类 `target` 的路径首段（`target` 为空 = 运行时基础设施：JDK crate 内经
+    /// glob 写 `crate`，其余 crate 写根门面名）
+    pub fn crate_head<'s>(&'s self, target: &str, here: &str) -> &'s str {
+        let crates = self.crates();
+        if target.is_empty() {
+            return if crates.contains(here) { "crate" } else { crates.root() };
+        }
+        let t = self.crate_of(target);
+        if t == here {
+            "crate"
+        } else {
+            t
+        }
     }
 
     /// 类的定义加载器（类块 `defining_loader` 属性；引导加载器 → None）

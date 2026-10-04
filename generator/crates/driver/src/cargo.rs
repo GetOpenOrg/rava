@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 pub const HEAVY_CLASSES: usize = 1700;
 
 /// 峰值所在 crate（声明层）
-pub const PEAK_CRATE: &str = "java_runtime";
+pub const PEAK_CRATE: &str = "根模块声明层";
 
 pub const ARTIFACTS_FILE: &str = "build_artifacts.json";
 pub const BUILD_LOG: &str = "logs/build.log";
