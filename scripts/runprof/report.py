@@ -12,21 +12,33 @@ import sys
 def main() -> None:
     raw, exe = sys.argv[1], sys.argv[2]
     top = int(sys.argv[sys.argv.index("--top") + 1]) if "--top" in sys.argv else 60
-    base = 0
+    exe_real = __import__("os").path.realpath(exe)
+    base = None
     libs = []  # (lo, hi, name)
     samples = []
+    section = None
     for line in open(raw):
-        if line.startswith("base "):
-            base = int(line.split()[1], 16)
+        line = line.rstrip("\n")
+        if line in ("maps", "samples"):
+            section = line
             continue
-        if line.startswith("map "):
+        if section == "maps":
             parts = line.split()
-            lo, hi = (int(x, 16) for x in parts[1].split("-"))
-            libs.append((lo, hi, parts[-1].rsplit("/", 1)[-1] if len(parts) > 6 else "?"))
+            if len(parts) < 5:
+                continue
+            lo, hi = (int(x, 16) for x in parts[0].split("-"))
+            path = parts[5] if len(parts) > 5 else ""
+            if path and __import__("os").path.realpath(path) == exe_real:
+                if base is None:
+                    base = lo
+                continue
+            if "x" in parts[1]:
+                libs.append((lo, hi, path.rsplit("/", 1)[-1] or "anon"))
             continue
         addrs = [int(x, 16) for x in line.split()]
         if addrs:
             samples.append(addrs)
+    base = base or 0
 
     def lib_of(a):
         for lo, hi, n in libs:

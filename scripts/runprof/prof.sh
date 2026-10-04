@@ -16,12 +16,14 @@ BIN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['exe'])" "$
 echo "bin $BIN"
 cc -O2 -shared -fPIC -o build/runprof/sampler.so scripts/runprof/sampler.c
 set +e
-RUNPROF_OUT=build/runprof/${SN}_${P}.raw LD_PRELOAD=$PWD/build/runprof/sampler.so timeout "$S" "$BIN" > build/runprof/${SN}_${P}.out
+RUNPROF_OUT=build/runprof/${SN}_${P}.raw LD_PRELOAD=$PWD/build/runprof/sampler.so RUNPROF_MAX=$((S*1000)) timeout $((S*3)) "$BIN" > build/runprof/${SN}_${P}.out 2> build/runprof/${SN}_${P}.err
 echo "rc=$?" >> build/runprof/${SN}_${P}.out
 if [ "${RUNPROF_FULL:-0}" = 1 ]; then
   /usr/bin/time -f "%e s %M KB" -o build/runprof/${SN}_${P}.time timeout 600 "$BIN" > build/runprof/${SN}_${P}.full.out
 fi
 set -e
+touch build/runprof/${SN}_${P}.raw
 python3 scripts/runprof/report.py build/runprof/${SN}_${P}.raw "$BIN" > build/runprof/${SN}_${P}.txt
+{ echo "--- raw: $(wc -l < build/runprof/${SN}_${P}.raw) 行"; cat build/runprof/${SN}_${P}.err; } >> build/runprof/${SN}_${P}.txt
 rm -f build/runprof/${SN}_${P}.raw
 head -40 build/runprof/${SN}_${P}.txt
