@@ -7,7 +7,6 @@ use syn::Ident;
 
 use super::super::erasure::type_args_arity;
 use super::context::GenContext;
-use super::storage_hooks::hook_ident;
 
 /// 返回 (声明层转换项, 存储类型 `X__inner` 上的 BINARY_NAME 常量——随存储层进实现层)
 pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
@@ -17,7 +16,6 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     let ty_g = &ctx.ty_g;
     let where_c = &ctx.where_c;
     let binary_name = &ctx.meta.binary_name;
-    let from_any = hook_ident(ctx, "from_any");
 
     // ══════════════════════════════════════════════════════════════════════════
     // 8. BINARY_NAME 常量
@@ -49,17 +47,17 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     // A-1 存储层擦除：__inner 非泛型 → 同一泛型类的所有类型实例化共享同一存储形态。
     // `From<Object> for X<A>` 对任意 A 成立：
     //   1. 快路径：运行时类与目标实例化同族同参（含子类按超类实参映射的视图）→ slot 命中；
-    //   2. 擦除路径：运行时类是本类**或其子类**（Java 泛型运行时本就擦除）→ 经
-    //      `__erased_vtable` + `__erased_inner` 取回 (vtable, 存储) 部件，重建本实例化
-    //      视图（共享存储与对象标识）。子类值经超类 vtable supertrait 上转，任意实例化
+    //   2. 擦除路径：运行时类是本类**或其子类**（Java 泛型运行时本就擦除）→ 句柄不变，
+    //      经句柄所持存储的 `__erased_vtable` 取本类视图指针，重建本实例化视图（共享存储
+    //      与对象标识，S7-2）。子类值经超类 vtable supertrait 上转，任意实例化
     //      均可重建（`Enum::<Object>::from(枚举常量)` 即此形态）；
     //   3. 其余（运行时类不是本类族）→ checkcast 的 ClassCastException（既有语义）。
-    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`（读描述符）；按类只转交本类描述符、部件构造入口
-    // 与存储钩子（拆 crate §7.5.4 #2）。
+    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`（读描述符）；按类只转交本类描述符
+    // 与部件构造入口（拆 crate §7.5.4 #2）。
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             fn from(obj: #obj) -> Self {
-                __class_from_object(obj, Self::__DESC, Self::__from_parts, #from_any)
+                __class_from_object(obj, Self::__DESC, Self::__from_parts)
             }
         }
     };
@@ -93,10 +91,7 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
                     impl #impl_g From<#struct_ident #ty_g> for #anc_ident #where_c {
                         fn from(child: #struct_ident #ty_g) -> #anc_ident {
                             #anc_ident::__from_parts(
-                                child.vtable as __Shared<dyn #anc_vtable>,
-                                child.any,
-                                child._jvm_null,
-                            )
+                                child.__r.upcast(|__v| __v as &dyn #anc_vtable))
                         }
                     }
                 };
@@ -129,10 +124,7 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
                 {
                     fn from(child: #struct_ident #ty_g) -> #anc_ident #anc_ty_args {
                         #anc_ident::#anc_ty_args::__from_parts(
-                            child.vtable as __Shared<dyn #anc_vtable>,
-                            child.any,
-                            child._jvm_null,
-                        )
+                            child.__r.upcast(|__v| __v as &dyn #anc_vtable))
                     }
                 }
             }

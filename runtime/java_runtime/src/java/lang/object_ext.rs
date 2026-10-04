@@ -102,7 +102,7 @@ impl Object {
     ///      子类按超类实参映射的视图、数组同元素类型 / 协变视图）；
     ///   3. 类目标：运行时类是目标类族（`is_instance_of` 按静态超类型名单匹配，
     ///      含子类）→ `<T as From<Object>>` 的擦除路径（`__erased_vtable` +
-    ///      `__erased_inner` 部件重建，共享存储与对象标识，A-1）。
+    ///      句柄重建，共享存储与对象标识，S7-2）。
     /// 数组目标（binary_name 以 `[` 开头）走 `try_cast_array`：判定由元素类型
     /// 驱动（`array::try_array_view`），`T = JArray<E>` 整体在类型层取不出 E。
     #[jvm_ext]
@@ -415,50 +415,33 @@ impl PartialEq for Object {
 }
 impl Eq for Object {}
 
-/// 类 wrapper 的部件构造入口（`X::__from_parts`）：(vtable, 存储, null 标志) → 本类视图。
-pub type __PartsFn<W, V> = fn(crate::sync_model::__Shared<V>, crate::sync_model::__AnyRef, bool) -> W;
+/// 类 wrapper 的部件构造入口（`X::__from_parts`）：类型化引用 → 本类视图。
+pub type __PartsFn<W, V> = fn(crate::handle::__Ref<V>) -> W;
 
-/// 按精确存储类型还原部件的存储钩子（`__jb_X__from_any`）；不是本类存储时原样交还。
-pub type __FromAnyFn<V> = fn(crate::sync_model::__AnyRef)
-    -> std::result::Result<(crate::sync_model::__Shared<V>, crate::sync_model::__AnyRef), crate::sync_model::__AnyRef>;
-
-/// 运行时类是本类或其子类时，按原对象的 (vtable, 存储) 部件重建本类视图（共享存储与对象标识，
+/// 运行时类是本类或其子类时，按原对象的句柄重建本类视图（共享存储与对象标识，
 /// 子类 vtable 经 supertrait 上转）；否则 `None`。宏生成的 `X::__virtual_view` 只转交到这里：
 /// 逻辑与具体类无关，按类只差 wrapper 与 vtable trait 两个类型（拆 crate §7.5.4 #2）。
 pub fn __erased_view<W, V: ?Sized + 'static>(obj: &Object, parts: __PartsFn<W, V>) -> Option<W> {
-    let mut vt: Option<crate::sync_model::__Shared<V>> = None;
-    ObjectVTable::__erased_vtable(Rc::clone(&obj.0), &mut vt);
-    let vt = vt?;
-    let mut store: Option<crate::sync_model::__AnyRef> = None;
-    ObjectVTable::__erased_inner(Rc::clone(&obj.0), &mut store);
-    Some(parts(vt, store?, false))
+    crate::handle::__ref_from_object::<V>(obj).map(parts)
 }
 
 /// `From<Object> for X` 的全部逻辑（宏按类只生成一行转交，拆 crate §7.5.4 #2）。判定按序：
 ///   1. null 通过任何 checkcast（JVMS §6.5），得到本类的 null 引用；
 ///   2. 同实例化：持有的对象就是 `W` → 直接取回；
-///   3. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 擦除路径：
-///      a. 子类值：wrapper 的 vtable 经超类 supertrait 上转 + 擦除存储，重建任意实例化视图；
-///      b. 祖先视图值：运行时存储就是本类存储（`Enum<E>` 装箱后按子类取回）→ 按精确存储还原；
+///   3. 运行时类是本类或其子类（描述符 display 表 O(1)，S7-1）→ 擦除路径：句柄不变，
+///      由句柄所持存储取本类擦除 vtable 指针（子类 vtable 经超类 supertrait 上转），
+///      重建任意实例化视图（S7-2）；
 ///   4. 其余 → checkcast 的 ClassCastException。
 pub fn __class_from_object<W, V>(obj: Object, desc: &'static crate::class_desc::__ClassDesc,
-                                 parts: __PartsFn<W, V>, from_any: __FromAnyFn<V>) -> W
+                                 parts: __PartsFn<W, V>) -> W
 where W: std::any::Any + Clone + Default, V: ?Sized + 'static {
     if obj.0.is_jvm_null() { return W::default(); }
     if let Some(same) = obj.0.as_any().downcast_ref::<W>() {
         return Clone::clone(same);
     }
     if obj.0.__desc().is_some_and(|d| d.is_subclass_of(desc)) {
-        let mut vt: Option<crate::sync_model::__Shared<V>> = None;
-        ObjectVTable::__erased_vtable(Rc::clone(&obj.0), &mut vt);
-        let mut erased: Option<crate::sync_model::__AnyRef> = None;
-        ObjectVTable::__erased_inner(Rc::clone(&obj.0), &mut erased);
-        if let Some(any) = erased {
-            if let Some(vt) = vt { return parts(vt, any, false); }
-            match from_any(any) {
-                Ok((vt, any)) => return parts(vt, any, false),
-                Err(other) => drop(other),
-            }
+        if let Some(r) = crate::handle::__ref_from_object::<V>(&obj) {
+            return parts(r);
         }
     }
     obj.__checkcast_fail(desc.binary_name)
