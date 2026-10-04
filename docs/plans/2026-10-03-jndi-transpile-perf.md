@@ -138,3 +138,110 @@
   引用 / 浮点族抛 UnsupportedOperationException。字节数组视图族（`VarHandleByteArrayAs*`）与 getAndAdd 一样暂不支持位运算（无消费方）。
 - 边界 e2e：`tests/e2e/48_refs/TestVarHandleBitwise.java`（实例 / 静态字段、int[] / long[] / boolean[]、子字字段互不影响、不支持族），
   本机 emit + compile 通过，单跑输出与 JDK 一致；TestSocketErrorPaths emit + compile 通过、native_missing 不再含 VarHandle；HelloWorld 编译通过；generator 单测 386 通过 0 失败。
+
+## 现状（2026-10-04：http-perf 分支，TestHttpLoopbackSync / Async 转译超时）
+
+### 二分（服务器 `remote_rava emit --perf`，各点服务器不同，耗时只作量级参考）
+
+TestHttpLoopbackSync：
+
+| 提交 | 服务器 | emit jdk_classes | 闭包耗时 | 峰值内存 |
+|---|---|---|---|---|
+| 601b0e3b | sg1 | 3590 | 130 s | 3.0 GB |
+| 488b5811 | us1 | 3590 | 115 s | — |
+| 51a4d8c5（c1d-p0 JCA） | kr1 | 5404 | 433 s | 7.4 GB |
+| 6825d639 | jp2 | 5404 | 424 s | — |
+| 35c5f0ee | kr1 | 5465 | 707 s | 11 GB |
+| 90398dc8 | jp1 | 5465 | 738 s | — |
+| fca1643b | kr2 | 5465 | 743 s | — |
+| 3e0199ec | ubuntu | 5772 | 1110 s | 14.7 GB |
+
+DeepCopy（闭包类 / 方法）：601b0e3b 3153 / 18917 → 488b5811 同 → 51a4d8c5 3329 / 19688 → 35c5f0ee 3407 / 20871
+→ 90398dc8 / fca1643b 3407 → 3e0199ec / 3541dc13 3436 / 21020。无单次合入膨胀；协调方所说「4131」是另一口径
+（emit 计数），闭包口径未复现。
+
+### 根因
+
+- 规模跃升点是 51a4d8c5（c1d-p0 JCA：SunJSSE / SunRsaSign 注册）。HttpClientImpl 调 `SSLContext.getDefault()`，
+  JSSE / JCA 入闭包是正确的，**不是** URL 协议（c1d-urlhost）或序列化收窄（c1d-t2b）问题。
+- 耗时是引擎对规模的超线性：本机 3541dc13 闭包 5428 类 / 33929 方法，404 s、峰值 RSS 7.07 GB；
+  枢纽 119 719 个、（调用点, 枢纽）接入 11.0 M、单调用点最多 620 个枢纽；`S→HP` 推送 1.65 G 次；
+  `add_to_id` 3.69 G 次，其中有增量 102 M 次、插入元素 1.56 G；阶段 flows 163 s、sites 114 s、process 99 s。
+- 枢纽转储：`Object.equals` 族 1931 个大枢纽、424 个根（无父），其中 408 个根有更早的子集枢纽覆盖约 95% 接收者——
+  父枢纽只取「本调用点原枢纽」，同成员其它调用点上的大子集枢纽无法复用，形成平行大扇出。
+
+### 已做（集合保持，本分支提交）
+
+| 改动 | 位置 |
+|---|---|
+| A：精确集合枢纽按（成员, 接口调用）分族，族内按集合大小升序登记；新枢纽在族内找最大的已展开子集枢纽为父（最多试 16 个，至少不劣于本调用点原枢纽），只展开差集 | `engine/hub.rs`（`hub_parent` / `sorted_subset` / `sorted_minus`）、`engine.rs`（`hub_family`） |
+| B：同一值集里 `open(o)` 被另一 `open(p)`（`o ⊂ p`）涵盖时只接后者（G 中 ⊂ o 的接收者全在 ⊂ p 内，目标与结果相同） | `engine/invoke.rs::invoke_inner` |
+| C：枢纽 `recvs` 只存本枢纽自身展开的接收者，不再复制父枢纽的（父链由报告侧按链遍历）；枢纽记 `set` 供族内子集判定与标签 | `engine/defs.rs`、`hub.rs`、`report.rs`、`stats.rs` |
+
+本机 TestHttpLoopbackSync（同一 3541dc13 基线、串行冷闭包）：
+
+| | 基线 | A+B | A+B+C |
+|---|---|---|---|
+| 耗时 | 404 s（墙钟；争用下 sys 59 s） | 274 s | 285 s |
+| 峰值 RSS | 7.07 GB | 7.46 GB | 6.39 GB |
+| 枢纽 / 接入 / 单点最多 | 119 719 / 11.0 M / 620 | 64 501 / 2.15 M / 159 | 同左 |
+| `add_to_id` 调用 / 有增量 / 插入元素 | 3.69 G / 102 M / 1.56 G | 1.41 G / 102 M / 1.57 G | 同左 |
+| `S` 源推送 | 1.80 G | 280 M | 同左 |
+| 类 / 方法 | 5428 / 33929 | 相同 | 相同 |
+
+`closure_bench.sh --diff`：类集 / 方法集逐项相同；差异只在顺序噪声字段（folds、`reflect.gaps` 多 2 条
+`ObjectStreamClass.getPrivateMethod` recv 缺口、method_contexts、rcall 统计），与基线二进制仅改 `--flow-batch 1024`
+得到的差异同类（该对照 278 s，类 / 方法相同，folds / contexts / rcall 不同），属既有顺序依赖，非本改动引入。
+
+其它用例（同机串行，基线 → 本分支）：DeepCopy 39.4 s → 35.1 s、StockTrans 39.2 s → 32.8 s，类 / 方法 / folds 逐项相同，
+只差 `summary` 里的 method_contexts（±50）、context_objects（±1）、rcall 池计数（±1）这类顺序噪声；HelloWorld 闭包逐字节相同。
+
+### ≤60 s 目标评估
+
+A+B+C 之后无效推送已基本去掉，剩余耗时由**有效**工作量决定：1.56 G 次元素插入、221k 方法上下文（对象敏感
+`HEAP_DEPTH=2`）。集合保持的引擎改造在本机最多再压到约 150–200 s 量级，达不到 ≤60 s（本机约 33 s 对应服务器 60 s）。
+达标需要改变上下文 / 精度机制，属终态设计决策，需协调方定：
+1. 逃逸对象上下文收拢：存入全局可达容器（ConcurrentHashMap / 注册表）的对象，其堆上下文折叠为单一无上下文池，
+   不再按分配点 × 接收者上下文复制；预期上下文数与元素插入同比例下降。
+2. 值集稀疏表示的批量插入（按枢纽一次合并有序块）——只降常数。
+两者都可能改变 folds 等精度字段，需先完成下节的顺序无关性，才能用「类 / 方法集逐项相同」做验收。
+
+### 顺序无关性
+
+**保证（本分支 A / B / C）**：
+- A 的父枢纽选择依赖族内登记顺序，但只影响枢纽树形，不影响任何接收者的目标：子枢纽 = 父枢纽目标 ∪ 差集展开目标，
+  父枢纽本身对其集合完备（`expanded && pending.is_empty()` 才可选为父），所以每个调用点得到的目标集只取决于该点的接收者集。
+- B 是纯值集函数（同一值集内的子类型关系），与到达顺序无关；值集增长时 open 集合只增，被涵盖的 `open(o)` 的目标始终
+  ⊂ 涵盖者的目标，不存在「先接后撤」。
+- C 只改存储，报告侧按父链取并集，结果相同。
+- 以上三项均为单调更新（集合只增、链接只增），不引入新的顺序依赖。
+
+**既有非单调点**：
+1. 已查实：`pvals` Const 形参被当成站点字面量（见上文「根因（已查实）」），Const→Top 时已放开的反射成员不撤回。
+2. 1b 宏形式回归探针（a8c386e4，即 10cfb657^ 的 meta.rs 宏访问器形式），TestSerialLookupPairing：
+   seed 0 → 3360 类 / 20715 方法，seed 2 → 4132 类 / 24938 方法，seed 0 严格 ⊂ seed 2。
+   - seed 2 独有：com/sun/crypto（219 类）、jdk/internal/org/jline（150）、sun/security/ssl（81）、Process*、PolicyFile 等；
+     `reflect.members` 多 393 条（JCA 服务实现构造器），`reflect.allocations` 多 83 条，`gaps` 多 11 条（含
+     `PolicyFile.getInstance` 的 `Class.getConstructor`）。
+   - `--why javax/crypto/JceSecurity`（seed 2）：KeyFactory.nextSpi → Provider$Service.newInstance → 反射 getImplClass →
+     PolicySpiFile → PolicyFile → PKCS12 → Mac → JceSecurity，即服务实现类值集放大后不收回。
+   - folds 分歧：seed 0 把 `ServiceLoader.layer`、`ProviderList$PreferredList.getAll` 的 List 字段折成 null，seed 2 未折，
+     说明 seed 0 中这些字段从未写入非空，seed 2 中经过放大后的路径写入了。
+   - 已排除：keyed 门（`keyed.rs`）退化为 `Any` 的事件两种子完全相同（各 6 条，插桩比对），不是分歧点。
+   - 与协调方背景一致：`ProviderConfig.doLoadProvider` 返回值经 `ProviderConfig.provider` 字段回流；推断仍是
+     「瞬时更悲观的状态产生效果后不撤回」这一类（同非单调点 1 的模式），具体判定位置尚未定位。
+
+**修法（终态）**：所有「按当时状态一次性决定」的判定改为对其输入单调：
+- 站点字面量只认本方法 ldc 来源；形参来源的名字按调用点逐个配对（上文方案），输入增长时重跑。
+- 对 2：在探针上做逐阶段对照（seed 0 / 2 各转储每轮 `doLoadProvider` 返回值集、`ProviderConfig.provider` 字段值集、
+  `Provider$Service` 实现类值集），找出首个「seed 2 有、且其来源输入在 seed 0 终态中不存在」的值，即瞬时状态的产物；
+  将产生它的判定改为随输入重算（或只用单调格：Const 合流只升不降，且依赖 Const 的效果登记为该形参的读者，Top 时作废重放）。
+- 验收：DeepCopy / StockTrans / TestSerialLookupPairing / TestHttpLoopbackSync 在 seed 0/1/2 下类集 / 方法集相同，
+  扩展 `closure_cli::closure_independent_of_hash_seed`（慢，经 heavy_lock 跑）；探针（a8c386e4 宏形式）seed 差异消失。
+  该定位超出本步范围，按协调方指示先记于此、另行派步。
+
+### 下一步
+
+1. 顺序无关性（上节修法），完成后以唯一不动点作为新集合基准。
+2. 上下文收拢（≤60 s 的必要条件），需协调方确认精度口径。
+3. 测量：本分支提交上 `remote_rava emit` 两个 HTTP 测试（结果补记于此）。

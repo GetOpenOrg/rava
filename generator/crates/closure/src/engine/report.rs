@@ -114,7 +114,7 @@ impl<'a> Engine<'a> {
         let (o, n, d) = hub.site.key();
         match hub.open {
             Some(x) => format!("{o}.{n}:{d} on open({})", self.names[x as usize]),
-            None => format!("{o}.{n}:{d} on {} 个接收者", hub.recvs.len()),
+            None => format!("{o}.{n}:{d} on {} 个接收者", hub.set.as_ref().map_or(hub.recvs.len(), |s| s.len())),
         }
     }
 

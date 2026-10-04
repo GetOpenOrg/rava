@@ -86,6 +86,7 @@ impl<'a> Engine<'a> {
             hubs_by_open: BTreeMap::new(),
             hub_sites: BTreeMap::new(),
             hub_last: HashMap::default(),
+            hub_family: HashMap::default(),
             gathers: Vec::new(),
             gather_ids: HashMap::default(),
             gather_last: HashMap::default(),

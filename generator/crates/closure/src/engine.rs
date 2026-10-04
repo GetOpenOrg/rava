@@ -294,6 +294,8 @@ pub struct Engine<'a> {
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
+    /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
+    hub_family: HashMap<(MemberRef, bool), Vec<(u32, Rc<[u32]>)>>,
     /// 字段汇集节点：序号 → (字段, 对象数, 写入向)；(字段, 写入向, 对象集合) → 序号；字节码字段站点 → (字段, 当前汇集节点, 累计对象)
     gathers: Vec<(usize, u32, bool)>,
     gather_ids: HashMap<(usize, bool, Rc<[u32]>), u32>,
