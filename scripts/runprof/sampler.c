@@ -31,6 +31,7 @@ static void put(int fd, const char *s, size_t n) {
 }
 
 static void dump(void) {
+    if (__atomic_load_n(&ns, __ATOMIC_RELAXED) == 0) return; // 无样本的进程（如外层 timeout）不覆盖产物
     if (__atomic_exchange_n(&dumped, 1, __ATOMIC_ACQ_REL)) return;
     struct itimerval z; memset(&z, 0, sizeof z);
     setitimer(ITIMER_PROF, &z, NULL);
@@ -81,6 +82,12 @@ static void on_prof(int sig, siginfo_t *si, void *uc_) {
     nfr[i] = (unsigned char)k;
 }
 
+static void on_term(int sig) {
+    dump();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 __attribute__((constructor)) static void init(void) {
     void *warm[4];
     backtrace(warm, 4); // 预加载 libgcc 展开器，避免在 handler 内首次 dlopen
@@ -99,5 +106,6 @@ __attribute__((constructor)) static void init(void) {
     it.it_value = it.it_interval;
     setitimer(ITIMER_PROF, &it, NULL);
     atexit(dump);
+    signal(SIGTERM, on_term); // timeout 到期：先落盘再按原信号退出
     put(2, "[runprof] armed\n", 16);
 }
