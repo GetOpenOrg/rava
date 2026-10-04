@@ -279,4 +279,16 @@ impl Expr {
     pub fn is_var_named(&self, name: &str) -> bool {
         matches!(self, Expr::Var(v) if v.as_str() == name)
     }
+
+    /// 求值结果是否为调用方独占的临时值（R1）：Java 层调用（`?` 传播）、静态字段读
+    /// （`X::f()?`）、实例字段 getter（`recv.__get_f()`）都按值返回新的引用计数。
+    /// 对这类值再取 `Clone::clone(&..)` 只多一对引用计数增减，语义不变，可省。
+    pub fn is_owned_temp(&self) -> bool {
+        match self {
+            Expr::Try(_) | Expr::StaticField(_) => true,
+            Expr::Paren(inner) => inner.is_owned_temp(),
+            Expr::MethodCall { method, args, .. } => args.is_empty() && method.as_str().starts_with("__get_"),
+            _ => false,
+        }
+    }
 }
