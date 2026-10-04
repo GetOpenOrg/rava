@@ -137,6 +137,12 @@ impl<'a> Engine<'a> {
     /// 重分析时一并重跑（见 `bytecode.rs::process_bytecode`）
     pub(super) fn class_lookup(&mut self, m: usize, off: u32, args: &[V]) -> (Vec<String>, bool) {
         self.xreaders.entry(m).or_default().insert(off);
+        // 服务实现类的反射构造点：所指类由 JCA 规则按被请求的算法补种（实例化 + 构造器入链），站点本身按推不出处理，
+        // 不按类名字段的字符串集解析——与求值时机无关，恒为同一结果
+        if self.man.seeds.jca.instantiation_hosts.iter().any(|h| *h == self.methods[m].key.to_string()) {
+            self.lookup_top.insert((m, off));
+            return (Vec::new(), true);
+        }
         let sticky = self.lookup_top.contains(&(m, off));
         self.lookup_partial = false;
         let r = self.class_lookup_eval(m, off, args);
