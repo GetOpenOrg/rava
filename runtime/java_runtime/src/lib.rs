@@ -561,7 +561,7 @@ pub mod prelude {
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::{__RefAccess, __ref_slot_access};
-    pub use super::java::lang::{__class_from_object, __erased_view};
+    pub use super::java::lang::{__class_from_object, __erased_view, __iface_missing, __iface_vtable};
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__AnyRef, __PrimCell, __RefSlot, __Shared, __ThreadSafe};
@@ -571,7 +571,8 @@ pub mod prelude {
     pub use crate::proxy_dyn::__ProxyRet;
     pub use crate::meta::{is_subtype_of as __is_subtype_of, java_name as __java_name};
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
-                         clinit_enter as __clinit_enter, clinit_exit as __clinit_exit};
+                         clinit_enter as __clinit_enter, clinit_exit as __clinit_exit,
+                         class_init as __class_init_run};
     pub use super::_is_jnull;
     pub use super::_is_jnull_ref;
     pub use super::__NonNull;

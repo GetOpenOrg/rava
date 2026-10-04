@@ -181,22 +181,14 @@ pub(crate) fn expand_class_init(
             if __state.get() == 3 {
                 return Ok(());
             }
-            // JVMS §5.5：他线程初始化中则等待；同线程递归立即返回；失败后 NoClassDefFoundError
-            match __clinit_enter(#binary_name, __state) {
-                __ClinitEnter::Run => {}
-                __ClinitEnter::Done => return Ok(()),
-                __ClinitEnter::Erroneous => return Err(JvmError::no_class_def_found(#binary_name)),
-            }
-            let run = || -> Result<()> {
+            // 慢路径（JVMS §5.5 的等待 / 递归 / 失败协议）全程序一份，按类只给初始化体
+            __class_init_run(#binary_name, __state, &|| -> Result<()> {
                 #init_super
                 #(#init_ifaces)*
                 #register
                 #run_clinit
                 Ok(())
-            };
-            let result = run();
-            __clinit_exit(#binary_name, result.is_ok(), __state);
-            result.map_err(JvmError::in_initializer)
+            })
         }
     };
     (storage, member)

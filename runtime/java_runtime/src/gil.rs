@@ -149,3 +149,21 @@ pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>
 /// 把线程对象移交给新 OS 线程的载体（对象模型为 `Arc` + 线程安全单元，移交安全）。
 pub struct Handoff<T>(pub T);
 unsafe impl<T> Send for Handoff<T> {}
+
+/// 类初始化骨架的慢路径（JVMS §5.5）：他线程初始化中则等待、同线程递归立即返回、失败后
+/// NoClassDefFoundError；初始化体（父类 / 超接口初始化、常量目录登记、`<clinit>`）由调用方给出。
+/// 宏按类只生成快路径判定与一行转交，骨架全程序一份（拆 crate §7.5.4，S7-4 的类初始化部分）。
+pub fn class_init(
+    class: &'static str,
+    state: &'static __PrimCell<u8>,
+    body: &dyn Fn() -> crate::error::Result<()>,
+) -> crate::error::Result<()> {
+    match clinit_enter(class, state) {
+        ClinitEnter::Run => {}
+        ClinitEnter::Done => return Ok(()),
+        ClinitEnter::Erroneous => return Err(crate::error::JvmError::no_class_def_found(class)),
+    }
+    let result = body();
+    clinit_exit(class, result.is_ok(), state);
+    result.map_err(crate::error::JvmError::in_initializer)
+}
