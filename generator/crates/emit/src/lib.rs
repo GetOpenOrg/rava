@@ -29,6 +29,7 @@ pub mod fallback;
 pub mod imports;
 pub mod lang;
 pub mod method_bodies;
+pub mod module_audit;
 pub mod par;
 pub mod perf;
 pub mod phase2;

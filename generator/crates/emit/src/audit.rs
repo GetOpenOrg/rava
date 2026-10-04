@@ -9,7 +9,8 @@
 //! 6. `[raw-audit]`：Raw 逃生舱构造事件（`raw_expr` / `raw_stmt`，[`ir::raw_audit`]，终态 0）+ 手写审计三项
 //!    （FS-H0：越界覆盖 / VM 内建 / VM 边界方法，按成员去重）。生成器源码的静态卫生约束
 //!    由测试守护（生成器源码无 JDK 类名字面量、类型查询全部经类型层），不输出；
-//! 7. `[override-audit]` / `[vm-boundary-audit]`：非空时的逐成员明细。
+//! 7. `[override-audit]` / `[vm-boundary-audit]`：非空时的逐成员明细；
+//! 8. `[module-audit]`：发射类覆盖的模块数与模块可读性越界条数（[`crate::module_audit`]，终态越界 0）。
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -45,6 +46,8 @@ pub struct AuditInputs<'a> {
     pub readability: &'a ReadabilityCounts,
     /// 因 prelude 冲突限定改名的类（binary，已排序）
     pub prelude_disambiguated: &'a [String],
+    /// `[module-audit]` 行（[`crate::module_audit::ModuleAudit::lines`]）
+    pub module: Vec<String>,
     pub debug: bool,
 }
 
@@ -102,6 +105,7 @@ pub fn audit_lines(a: &AuditInputs<'_>) -> Vec<String> {
     if !vm.is_empty() {
         lines.push(format!("[vm-boundary-audit] {}", vm.into_iter().collect::<Vec<_>>().join(" ")));
     }
+    lines.extend(a.module.iter().cloned());
     lines
 }
 
@@ -139,6 +143,7 @@ mod tests {
             fallback: &fb,
             readability: &rd,
             prelude_disambiguated: &pd,
+            module: vec!["[module-audit] modules=0 out_of_reads=0".to_string()],
             debug: false,
         });
         let heads: Vec<&str> = lines.iter().map(|l| l.split(' ').next().unwrap()).collect();
@@ -151,7 +156,8 @@ mod tests {
                 "[fallback-audit]",
                 "[shortname-audit]",
                 "[raw-audit]",
-                "[override-audit]"
+                "[override-audit]",
+                "[module-audit]"
             ]
         );
         assert_eq!(lines[4], "[shortname-audit] prelude-disambig=1 (p/Option)");
