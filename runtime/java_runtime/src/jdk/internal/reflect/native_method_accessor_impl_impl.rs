@@ -28,7 +28,7 @@ impl NativeMethodAccessorImpl {
         let Some((cls, name, desc)) = m.__reflect_key() else {
             panic!("stub: NativeMethodAccessorImpl.invoke0 无声明键（非表构造的 Method）");
         };
-        crate::reflect_dispatch::reflect_invoke(&cls, &name, &desc, obj, &args)
+        crate::reflect_dispatch::native_invoke(&cls, &name, &desc, obj, &args)
             .map_err(__wrap_target_exception)
     }
 }

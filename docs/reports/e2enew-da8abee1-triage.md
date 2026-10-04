@@ -48,9 +48,17 @@ SetAccessibleBoundary 2 行 / SystemStableProps 2 行）——五个生成器缺
 |---|---|---|---:|---|
 | R1 | **xml 内部 lambda 存根** | `jdk/xml/internal/SecuritySupport.lambda$getSystemProperty$0` | **10**（71_xml 全部） | 闭包分析器（lambda 体可达性） |
 | R2 | **泛型反射 scope 构造存根** | `sun/reflect/generics/scope/AbstractScope.<init>` + E0432 | 6（GenericSuperclass/TypeVariables/TypesDeep/NestingFamily/MemberModifiers/OwnerType） | 手写/边界清单（构造器准入？） |
+
+> **R2 实施要点（refl-fix A 族，2026-10-05）**：scope 存根已随边界收窄消解，现症为 `Class.getGenericSignature0` 手写恒返回 null（旧「已知偏差」）——类级泛型签名缺席，getGenericSuperclass/Interfaces 退回 Class、getTypeParameters 为空（AIOOBE / Mismatch of count / NPE 同根）。
+> 修法：元数据新增类级表 `CLASS_SIGNATURE`（扫描已有的 `#[generic_signature]` 块属性，档案侧 + 用户侧同形），native 按表返回真实签名；消费方 sun/reflect/generics 走字节码翻译。
+
 | R3 | **JCA 服务查找存根** | `sun/security/jca/ProviderList.getServices` + `GetInstance.getServices` | 5（crypto_ec 4 + RsaSignVerify） | 手写/边界（ProviderList 是 VM 驱动域） |
 | R4 | **logging 模块 import 断链** | rustc E0433（找不到类型） | 4（logging 3 + ResourceBundleFaces） | 生成器 import（跨模块 jmod 类名解析） |
 | R5 | **反射 invoke 参数校验缺失** | 无 IAE 抛出（见 §二） | 1（InvokeNullArgs；属 R5 语义族） | 反射 L3 校验 |
+
+> **R5 实施要点（refl-fix B 族，2026-10-05）**：native invoke（Method / Constructor 两条 NativeAccessor）直通 `reflect_invoke`，缺 HotSpot `Reflection::invoke_method` 的前置校验——实例方法空接收者 NPE、实参个数 IAE、引用实参类型 IAE 均未抛，类型错的实参落进分派臂的 `From<Object>` 被静默转换或 panic（OverloadResolution 同根）。
+> 修法：`reflect_dispatch::native_invoke` 按描述符先校验（失败置 bad_arg，不包 InvocationTargetException），再进分派；四个 native accessor 统一改走它。
+
 | R6 | **模块元数据/强封装未建模** | 见 §二 ModuleFace/SetAccessible | 2 | 模块系统建模（boot layer 相邻） |
 | R7 | **系统资源装载** | getSystemResourceAsStream null / findBootstrapClassOrNull / ClassResourceStream | 3 | 资源装载通道（K10 前奏） |
 | R8 | **beans finder 构造存根** | `com/sun/beans/finder/InstanceFinder.<init>` | 3（beans 全部） | 边界/手写清单 |
