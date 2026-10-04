@@ -15,6 +15,7 @@
 | D2 | 生产模式（静态链接）LTO | 开发构建无 LTO；`--release` 用 fat LTO |
 | D3 | 档案 crate 命名 | 按 JDK jmod 模块名（`java.base` → `java_base`、`java.net.http` → `java_net_http`…），从 JDK 模块描述动态取得，生成器不写字面量 |
 | D4 | 引擎 ≤60 s 路线 | 先修闭包结果与遍历顺序无关（engine-order 线），再另起一步做逃逸对象上下文收拢（存入全局可达容器的对象折叠为单一无上下文池） |
+| D6 | 超阈值模块内部拆分的 crate 命名 | `<模块名>_decl`（声明层）+ `<模块名>_body_k`（实现层，k 为序号），如 `java_base_decl` / `java_base_body_k`；`java_base` 重导出声明、吸收实现层，用户代码不可见 |
 | D5 | URL 协议可靠口径 | 先做引擎提速，偏差暂时容忍（c1d-urlhost WIP 保留，提速达标后启用） |
 
 ## 二、设计结论（讨论中确立，实施时遵守）
