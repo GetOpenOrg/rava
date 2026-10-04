@@ -63,15 +63,12 @@ impl JvmError {
     /// （catch 类型名）成立后调用。
     ///
     /// 两条还原路径按序尝试：
-    ///   1. 快路径：持有的对象本身就是 T（多数直接抛出场景）
+    ///   1. 快路径：T 即 Object（类型擦除位置）
     ///   2. 擦除重建（A-1）：`From<Object> for X<A>` 任意 A 成立——运行时类是 T 或其子类
     ///      （描述符 display 判定），经擦除 vtable / 存储部件重建 T 视图：与运行时类同一对象、
     ///      vtable 经 supertrait 上转（祖先视图、以祖先 wrapper 形态流转后重抛均同）
     pub fn catch_as<T: std::any::Any + Clone + From<Object>>(&self) -> T {
         if let Some(same) = (&self.thrown as &dyn std::any::Any).downcast_ref::<T>() {
-            return Clone::clone(same);
-        }
-        if let Some(same) = self.thrown.0.as_any().downcast_ref::<T>() {
             return Clone::clone(same);
         }
         T::from(Clone::clone(&self.thrown))

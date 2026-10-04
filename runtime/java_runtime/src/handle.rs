@@ -30,10 +30,13 @@ impl __Handle {
     #[inline]
     pub fn target(&self) -> Option<&dyn ObjectVTable> { self.0.as_deref() }
 
-    /// 接口视图查询转交句柄所持存储（运行时类应答，见 `ObjectVTable::__interface`）；null 不填。
-    pub fn interface(&self, slot: &mut dyn std::any::Any) {
-        if let Some(rc) = &self.0 {
-            ObjectVTable::__interface(__Shared::clone(rc), slot);
+    /// 装入 Object（`From<X> for Object`，S7-2b）：Object 直接持有句柄所持存储（运行时类对象），
+    /// 不再包一层 wrapper；null → 带本类描述符的类型化 null（`__class_name` / `__desc` 报静态类）。
+    #[inline]
+    pub fn into_object(self, desc: &'static crate::class_desc::__ClassDesc) -> crate::java::lang::Object {
+        match self.0 {
+            Some(rc) => crate::java::lang::Object::__from_shared(rc),
+            None => crate::java::lang::Object::__typed_null_desc(desc),
         }
     }
 
@@ -100,6 +103,12 @@ impl<V: ?Sized> __Ref<V> {
     #[inline]
     pub fn handle(&self) -> &__Handle { &self.h }
 
+    /// 装入 Object（见 `__Handle::into_object`）。
+    #[inline]
+    pub fn into_object(self, desc: &'static crate::class_desc::__ClassDesc) -> crate::java::lang::Object {
+        self.h.into_object(desc)
+    }
+
     /// 本类视图（虚分派 / 字段访问入口）。null 接收者在入口检查已抛 NPE，
     /// 到这里仍为 null 只可能是不经 `Result` 的内部路径——冷路径 panic。
     #[inline]
@@ -128,16 +137,12 @@ fn __null_view() -> ! {
     panic!("NullPointerException: 在 null 引用上分派")
 }
 
-/// 按句柄目标重建 `V` 视图（`V = dyn X__VTable`）：目标的运行时类是 X 或其子类时 Some。
-/// `From<Object>` 擦除路径与 `__virtual_view` 共用；Object 持有 wrapper 时取其句柄，
-/// 持有存储本身时以该存储为句柄。
+/// 按 Object 所持存储重建 `V` 视图（`V = dyn X__VTable`）：运行时类是 X 或其子类时 Some。
+/// `From<Object>` 擦除路径与 `__virtual_view` 共用；Object 直接持有运行时类存储（S7-2b），
+/// 以它为句柄。
 pub fn __ref_from_object<V: ?Sized + 'static>(obj: &crate::java::lang::Object) -> Option<__Ref<V>> {
-    let h = match obj.0.__handle() {
-        Some(h) => h.clone(),
-        None => __Handle::new(__Shared::clone(&obj.0)),
-    };
     let mut slot: Option<NonNull<V>> = None;
-    h.target()?.__erased_vtable(&mut slot);
-    // SAFETY: `__erased_vtable` 在句柄目标自身上取视图指针
-    slot.map(|vt| unsafe { __Ref::from_raw(h, vt) })
+    obj.0.__erased_vtable(&mut slot);
+    // SAFETY: `__erased_vtable` 在 Object 所持存储自身上取视图指针，句柄持有同一存储
+    slot.map(|vt| unsafe { __Ref::from_raw(__Handle::new(__Shared::clone(&obj.0)), vt) })
 }

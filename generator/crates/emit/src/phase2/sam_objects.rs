@@ -159,6 +159,9 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         "}".into(),
         String::new(),
     ];
+    // 装入 Object：Object 直接持有载体（S7-2b 删 blanket `From<T: ObjectVTable>` 后逐类型显式）
+    l.push(format!("impl From<{lam}> for Object {{ fn from(v: {lam}) -> Object {{ Object::__from_shared(__Shared::new(v)) }} }}"));
+    l.push(String::new());
     l.push(format!("impl ObjectVTable for {lam} {{"));
     l.push("    fn as_any(&self) -> &dyn std::any::Any { self }".into());
     l.push(format!("    fn __obj_str(&self) -> std::string::String {{ std::format!(\"{iface}::Lambda\") }}"));

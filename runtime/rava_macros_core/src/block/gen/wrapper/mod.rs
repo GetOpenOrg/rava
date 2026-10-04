@@ -1,15 +1,15 @@
 //! Java 类型包装：wrapper struct（类型化引用 `__r` = 句柄 + 本类视图指针，S7-2）、
-//! Default/Clone/PartialEq/Debug、impl ObjectVTable for Wrapper（R-1 blanket From<T> 需要）、
+//! Default/Clone/PartialEq/Debug、`From<Wrapper> for Object`（S7-2b：Object 直接持有存储）、
 //! wrapper impl 块（字段访问器委托 + 虚方法委托 + 构造器 new/__init_on 双入口）。
 //!
 //! - 本文件：§5 wrapper struct 与基础 trait impl，并按固定顺序拼装各段
-//! - `object_vtable`：§6 impl ObjectVTable for Wrapper
+//! - `into_object`：§6 `From<Wrapper> for Object`
 //! - `methods`：§7 wrapper impl 块（访问器 / 虚方法委托 / 继承转发 / 构造器 / 静态与类初始化）
 //! - `body_fns`：方法体函数化（体移入模块级 `__jbm_<类>__<方法>`，wrapper 方法为外壳）
 
 mod body_fns;
 mod methods;
-mod object_vtable;
+mod into_object;
 
 pub(crate) use body_fns::functionize_applicable;
 
@@ -18,7 +18,7 @@ use quote::quote;
 
 use super::context::GenContext;
 
-/// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + impl ObjectVTable for Wrapper
+/// §5-§7 Wrapper struct + Default/Clone/PartialEq/Debug + `From<Wrapper> for Object`
 /// + wrapper impl 块；第二项为方法体函数（`__jbm_`，拆层时进实现层）。
 pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
     let struct_ident = &ctx.struct_ident;
@@ -59,6 +59,17 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             pub fn __virtual_view(obj: &Object) -> ::std::option::Option<Self> {
                 __erased_view(obj, Self::__from_parts)
             }
+
+            // Java null 判定（S7-2b：wrapper 不再实现 ObjectVTable，判空是固有方法；
+            // 与接口载体的同名固有方法同形）
+            #[inline]
+            pub fn is_jvm_null(&self) -> bool { self.__r.is_none() }
+
+            // getfield / putfield 接收者判空（`__NonNull` 对 wrapper 的固有同名入口）
+            #[inline]
+            pub fn __nn(&self) -> Result<&Self> {
+                if self.__r.is_none() { Err(JvmError::null_pointer()) } else { Ok(self) }
+            }
         }
     };
 
@@ -95,7 +106,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         }
     };
 
-    let obj_vtable_for_wrapper = object_vtable::generate(ctx);
+    let into_object = into_object::generate(ctx);
     let (wrapper_impl, body_fns) = methods::generate(ctx)?;
 
     Ok((quote! {
@@ -105,7 +116,7 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
         #wrapper_clone
         #wrapper_partialeq
         #wrapper_debug
-        #obj_vtable_for_wrapper
+        #into_object
         #wrapper_impl
     }, body_fns))
 }

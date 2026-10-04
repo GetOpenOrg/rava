@@ -37,9 +37,9 @@ impl String {
 
     /// Java 字符串的 UTF-16 码元（字符串转换语义：null 载体 → `"null"`，JLS §5.1.11）。
     /// null 载体的 value 为 JArray Repr::Null，直接解码会在 to_vec panic——先守卫再取值；
-    /// 判定走 vtable is_jvm_null()（S-3.1 统一入口）。
+    /// 判定走 wrapper 固有 is_jvm_null()（句柄为空）。
     pub fn units(&self) -> Vec<u16> {
-        if ObjectVTable::is_jvm_null(self) {
+        if self.is_jvm_null() {
             return "null".encode_utf16().collect();
         }
         let val = self.__get_value().to_vec();

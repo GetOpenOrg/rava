@@ -76,7 +76,7 @@ impl Throwable {
     /// `depth`（帧数）两字段后返回自身（`fillInStackTrace() == this` 的 Java 语义由 wrapper 保持）。
     #[jvm_native]
     pub fn fillInStackTrace_i(&self, _dummy: i32) -> Result<Throwable> {
-        let frames = capture_java_frames(ObjectVTable::__class_name(self));
+        let frames = capture_java_frames(Object::from(Clone::clone(self)).0.__class_name());
         self.__set_depth(frames.entries.len() as i32);
         self.__set_backtrace(Object::from_any(frames));
         Ok(Clone::clone(self))
