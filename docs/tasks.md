@@ -176,6 +176,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ JUnit 依赖包作为测试（2026-10-01-junit-crate-as-test-harness.md）
 │   │     步骤 0 m1..m5 Rust 路径复跑 golden，清零回归（可提前；m3 编译 0 ✅）
 │   │      └─▶ 步骤 A：63_junit 形态接入 run_tests ◀── S7 ──▶ 步骤 B ──▶ 步骤 C
+│   │     2026-10-05 用户提前开工、走 V12 终态：任务书 2026-10-05-junit-e2e-deps-task.md（J0 基线 → J1 = V12-0 → J2 = V12-1 删 --lib → J3 形态接线 → J4 10 例跑通；V12 决策 3 / 4 / 5 取 A）
 │   │
 │   ├─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
 │   │     （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
