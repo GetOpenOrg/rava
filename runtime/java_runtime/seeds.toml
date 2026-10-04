@@ -115,6 +115,9 @@ triggers = [
 #                    推不出的调用点使该服务类型全部算法入选
 #   defaults         算法名由 JDK 运行期配置得出、不出现在任何字符串常量中的缺省服务：触发成员在
 #                    调用链上即入选（`类型.算法`）
+#   instantiation_hosts  服务实现类的反射构造点（`类.名字:描述符`）：其中按名取类的所指类就是本规则补种的服务实现类，
+#                    站点按推不出处理、不按类名字段的字符串集解析——否则注册表里全部算法的实现类都按名入链
+#                    （JCA / SSL 提供者实现约千类），而被请求的算法才有可达证据
 #   alias_sources    算法同义名源（类初始化器中每个构造调用的字符串实参组 = 一组同义名）：用户写
 #                    别名（"SHA" / "SHA1"）时按标准名（"SHA-1"）入选服务
 [jca]
@@ -131,6 +134,9 @@ defaults = [
 ]
 alias_sources = [
     "sun/security/util/KnownOIDs",
+]
+instantiation_hosts = [
+    "java/security/Provider$Service.getImplClass:()Ljava/lang/Class;",
 ]
 triggers = [
     "sun/security/jca/GetInstance.getInstance",

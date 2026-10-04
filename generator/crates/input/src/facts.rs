@@ -204,7 +204,7 @@ fn fold_value_of(v: &V, ty: &str) -> FoldValue {
         V::Int(i) if ty == "Z" => FoldValue::Bool(*i != 0),
         V::Int(i) => FoldValue::Int(i64::from(*i)),
         V::Long(l) => FoldValue::Long(*l),
-        V::Str(s) => FoldValue::Str(s.to_string()),
+        V::Str(s, _) => FoldValue::Str(s.to_string()),
         _ => FoldValue::Null,
     }
 }

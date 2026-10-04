@@ -1,23 +1,19 @@
 //! 栈遍历数据面（运行时基础设施）：真实 Rust 栈 → Java 帧序列，全部栈帧消费方的唯一来源。
 //!
-//! HotSpot 的 vframeStream 逐帧给出 (Method*, bci)；原生二进制没有 Java 帧元数据，帧源为
-//! std::backtrace 的真实 Rust 栈（compatibility.md「栈回溯」边界）。每个 Rust 帧带
-//! `at <文件>:<行>`；发射层为每个生成文件与手写伴生文件写出行表（`meta::line_tables()`，
-//! 发射层 `project/line_tables`）：Rust 行 → (帧归属类, 方法名, 描述符, 源文件, 修饰位 / 注解, Java 行)。
-//! 据帧位置查表得 Java 帧；帧方法的修饰位与注解随行表方法项发射（[`FrameMethod`]），不读成员表。
+//! HotSpot 的 vframeStream 逐帧给出 (Method*, bci)；原生二进制的等价物是链接期预解析的地址表
+//!（[`crate::pc_map`]）：返回地址 → 该物理帧内联链上的 Java 帧（帧归属类, 方法元数据, Java 行）。
+//! 帧方法的修饰位与注解随地址表发射（[`FrameMethod`]），不读成员表。
 //! 消费方：Throwable.fillInStackTrace、Reflection.getCallerClass、SecurityManager.getClassContext、
 //! StackWalker（StackStreamFactory$AbstractStackWalker.callStackWalk / fetchStackFrames）。
 //!
-//! 成帧规则（行表即判据，不解析符号形态）：
+//! 成帧规则（链接器包装 `rava-link` 建表时执行，判据为发射层行表，不解析符号形态）：
 //! - 帧归属方法体的声明类（HotSpot 帧的 method holder）：复制进本类的接口 default / 超类虚方法体
 //!   归 `declared_by`；继承转发外壳无行标记，不成帧；
 //! - 宏生成的派发入口、vtable impl、`new` 分配外壳以调用点 span 落在块外或方法序言（Java 行 0），
 //!   不成帧——帧落在实际执行方法体的 Rust 帧上，直接递归每层一帧；
 //! - 手写方法体在伴生 `_impl.rs`，按生成文件的登记成帧（native 行号 -2，其余 -1）；
-//! - 闭包帧（符号含 `{closure`）不成帧：原位闭包（`__caller_sensitive`、`try_new_with`）与外层
+//! - 闭包帧（DWARF 函数名含 `{closure`）不成帧：原位闭包（`__caller_sensitive`、`try_new_with`）与外层
 //!   方法同一行，外层帧即该 Java 帧；延迟闭包（lambda 代理）的位置是创建点，不在执行栈上。
-
-use std::collections::HashMap;
 
 /// StackWalker 锚定的一条帧流：快照与下一个待检视帧的下标（存于执行上下文块，`exec_context::ExecState`）。
 pub(crate) struct AnchoredWalk {
@@ -178,65 +174,20 @@ pub fn direct_super(class: &str) -> Option<&'static str> {
     crate::meta::class_direct_super().iter().find(|(c, _)| *c == class).map(|(_, s)| *s)
 }
 
-/// 捕获当前线程的 Java 帧序列（自栈顶向下）。
+/// 捕获当前线程的 Java 帧序列（自栈顶向下）：返回地址逐个查地址表（`pc_map`），每个物理帧给出其内联链上
+/// 的 Java 帧（自内向外）。
 pub fn capture_java_frames() -> Vec<JavaFrame> {
-    let text = std::format!("{}", std::backtrace::Backtrace::force_capture());
-    rust_frames(&text)
+    let map = crate::pc_map::table();
+    crate::pc_map::return_addresses()
         .into_iter()
-        .filter(|(symbol, _)| !symbol.contains("{closure"))
-        .filter_map(|(_, at)| at.and_then(|(file, line)| frame_at(file, line)))
+        .flat_map(|pc| crate::pc_map::frames_at(pc).iter())
+        .map(|&(method, line)| java_frame(&map.methods[method as usize], line))
         .collect()
 }
 
-/// 回溯 Display 解析为 (符号, 文件, 行)：`   {index}: {symbol}` 行，可随
-/// `             at {file}:{line}:{col}` 行（缺省 = 未解析位置）。内联帧各自成行。
-fn rust_frames(text: &str) -> Vec<(&str, Option<(&str, u32)>)> {
-    let mut out = Vec::new();
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        let Some((index, symbol)) = line.trim_start().split_once(": ") else { continue };
-        if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
-            continue; // "note:" 等非帧行
-        }
-        let mut at = None;
-        if let Some(location) = lines.peek().and_then(|n| n.trim_start().strip_prefix("at ")) {
-            lines.next();
-            // `path/file.rs:{line}:{col}`：自右取列、行，余下为文件路径
-            let parts: Vec<&str> = location.rsplitn(3, ':').collect();
-            if let [_, ln, file] = parts[..] {
-                at = ln.parse::<u32>().ok().map(|ln| (file, ln));
-            }
-        }
-        out.push((symbol.trim(), at));
-    }
-    out
-}
-
-/// 行表索引：scratch 相对路径 → 行表（首次查表时建立）
-fn table_index() -> &'static HashMap<&'static str, &'static crate::meta::LineTable> {
-    static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static crate::meta::LineTable>> = std::sync::OnceLock::new();
-    INDEX.get_or_init(|| crate::meta::line_tables().iter().map(|t| (t.0, t)).collect())
-}
-
-/// 帧位置 → Java 帧。`file` 为回溯 `at` 行的路径（绝对、相对工作区或 `./` 前缀均可）：
-/// 依次取其各 `/` 边界后缀查行表；行取「Rust 行不大于该行」的最后一行表项。
-fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
-    let index = table_index();
-    let file = file.replace('\\', "/");
-    let mut rest = file.as_str();
-    let table = loop {
-        if let Some(t) = index.get(rest) {
-            break *t;
-        }
-        rest = &rest[rest.find('/')? + 1..];
-    };
-    let (_, methods, rows) = *table;
-    let at = rows.partition_point(|r| r.0 <= line).checked_sub(1)?;
-    let (_, idx, java_line) = rows[at];
-    if idx == crate::meta::NO_METHOD || java_line == 0 {
-        return None; // 块外 / 方法序言（宏生成的派发与分配外壳）
-    }
-    let (class, name, descriptor, source, flags, annotations) = methods[idx as usize];
+/// 地址表的帧项 → Java 帧
+fn java_frame(m: &crate::meta::LineMethod, line: i32) -> JavaFrame {
+    let &(class, name, descriptor, source, flags, annotations) = m;
     let method = FrameMethod {
         name,
         descriptor,
@@ -245,18 +196,13 @@ fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
         is_native: flags & (1 << 17) != 0,
         annotations,
     };
-    let line = match java_line {
-        crate::meta::LINE_NATIVE => -2,
-        crate::meta::LINE_UNKNOWN => -1,
-        n => n as i32,
-    };
     // 手写体无 Java 行（-1）时 bci 取 -1：StackWalker 按 bci 定行同样得 -1，与 Throwable 栈一致
     let bci = match line {
         l if l > 0 => bci_of_line(class, name, descriptor, l as u16),
         -1 => -1,
         _ => 0,
     };
-    Some(JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line, bci })
+    JavaFrame { class, method, source: (!source.is_empty()).then_some(source), line, bci }
 }
 
 /// 方法的 LineNumberTable（行表方法项；无表 → None）。描述符缺省时按 (类, 名) 唯一对位。

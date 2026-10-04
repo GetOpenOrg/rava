@@ -29,7 +29,7 @@ impl Engine<'_> {
         };
         let Some(v) = args.get(base + r.name) else { return };
         let (names, known) = match v {
-            V::Str(s) => (vec![s.clone()], true),
+            V::Str(s, _) => (vec![s.clone()], true),
             V::Null => return,
             _ => {
                 // 合流前的各字面量（Src::Str 可取回）与形参上流入的字符串常量
@@ -150,7 +150,7 @@ pub(super) fn names_known(srcs: &[Src], tainted: impl Fn(usize) -> bool) -> bool
 
 /// 形参槽上的实参不污染名字集：字符串常量（入常量集）或 null（取字段身份时抛异常，不指向任何字段）
 fn slot_clean(v: Option<&PV>) -> bool {
-    matches!(v, Some(PV::Const(V::Str(_) | V::Null)))
+    matches!(v, Some(PV::Const(V::Str(..) | V::Null)))
 }
 
 #[cfg(test)]
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn only_string_or_null_arguments_keep_slot_clean() {
-        assert!(slot_clean(Some(&PV::Const(V::Str(Rc::from("value"))))));
+        assert!(slot_clean(Some(&PV::Const(V::lit(Rc::from("value"))))));
         assert!(slot_clean(Some(&PV::Const(V::Null))));
         assert!(!slot_clean(Some(&PV::Const(V::Int(1)))));
         assert!(!slot_clean(Some(&PV::Top)));

@@ -452,10 +452,10 @@ impl Handwritten {
                 }
                 if b[j] == b'L' {
                     let Some(end) = params[j..].find(';').map(|e| e + j) else { break };
-                    parts.push(format!("arr_{}", self.short(&params[j + 1..end])));
+                    parts.push(format!("{}{}", "arr_".repeat(j - i), self.short(&params[j + 1..end])));
                     i = end + 1;
                 } else {
-                    parts.push(format!("arr_{}", prim(b[j]).unwrap_or("x")));
+                    parts.push(format!("{}{}", "arr_".repeat(j - i), prim(b[j]).unwrap_or("x")));
                     i = j + 1;
                 }
             } else {

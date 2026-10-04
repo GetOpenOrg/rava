@@ -185,7 +185,7 @@ impl<'a> Engine<'a> {
         }
         match v {
             V::Null => Some(vec![AK::Null]),
-            V::Str(s) => Some(vec![AK::Str(s.clone())]),
+            V::Str(s, _) => Some(vec![AK::Str(s.clone())]),
             V::Class(c, _) => Some(vec![AK::Mirror(c.clone())]),
             V::Ref { nonnull, .. } => {
                 let srcs = v.srcs();

@@ -121,8 +121,9 @@ fn closure_sets(java: &std::path::Path, seed: u64) -> Option<[std::collections::
 #[test]
 fn closure_independent_of_hash_seed() {
     // （用例, 是否序列化 ArrayList）
-    const CASES: [(&str, bool); 5] = [
+    const CASES: [(&str, bool); 6] = [
         ("23_algorithms/StockTrans.java", true),
+        ("23_algorithms/DeepCopy.java", false),
         ("35_io/TestSerialDefaultSuid.java", true),
         ("35_io/TestSerialProxyForm.java", true),
         ("35_io/TestSerialUserGenericCallbacks.java", false),
@@ -130,18 +131,33 @@ fn closure_independent_of_hash_seed() {
     ];
     const CALLBACK: &str = "java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V";
     for (case, list) in CASES {
-        let java = manifest_dir().join("../../../tests/e2e").join(case);
-        let Some(base) = closure_sets(&java, 0) else { return };
+        let Some(base) = seeds_agree(case) else { return };
         assert!(!list || base[2].contains(CALLBACK), "{case} 种子 0 的反射成员缺 {CALLBACK}");
-        for seed in [1, 2] {
-            let other = closure_sets(&java, seed).expect("同一 JDK");
-            for (i, what) in ["类", "方法", "反射成员"].iter().enumerate() {
-                let only_base: Vec<_> = base[i].difference(&other[i]).take(10).collect();
-                let only_other: Vec<_> = other[i].difference(&base[i]).take(10).collect();
-                assert!(only_base.is_empty() && only_other.is_empty(), "{case} 种子 0 与 {seed} 的{what}集合不同：{only_base:?} / {only_other:?}");
-            }
+    }
+}
+
+/// e2e 用例 case 在种子 0 / 1 / 2 下的闭包集合逐项相同；返回种子 0 的集合（缺 JDK → None）
+fn seeds_agree(case: &str) -> Option<[std::collections::BTreeSet<String>; 3]> {
+    let java = manifest_dir().join("../../../tests/e2e").join(case);
+    let base = closure_sets(&java, 0)?;
+    for seed in [1, 2] {
+        let other = closure_sets(&java, seed).expect("同一 JDK");
+        for (i, what) in ["类", "方法", "反射成员"].iter().enumerate() {
+            let only_base: Vec<_> = base[i].difference(&other[i]).take(10).collect();
+            let only_other: Vec<_> = other[i].difference(&base[i]).take(10).collect();
+            assert!(only_base.is_empty() && only_other.is_empty(), "{case} 种子 0 与 {seed} 的{what}集合不同：{only_base:?} / {only_other:?}");
         }
     }
+    Some(base)
+}
+
+/// 大用例的顺序无关性（单次闭包约 5 分钟 / 6 GB，缺省不跑）：
+/// `CARGO_BUILD_JOBS=2 python3 <heavy_lock.py> cargo test --release -p driver --test closure_cli -- --ignored`；
+/// 换运行期探针（访问器宏形态）见 `scripts/diag/probe_order.sh`
+#[test]
+#[ignore]
+fn closure_independent_of_hash_seed_large() {
+    seeds_agree("72_http/TestHttpLoopbackSync.java");
 }
 
 /// 形参字符串常量进形参常量格：URL 构造器把协议名常量传给 URL$DefaultFactory.createURLStreamHandler，

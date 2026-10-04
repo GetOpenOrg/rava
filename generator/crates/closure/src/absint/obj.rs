@@ -68,18 +68,20 @@ impl V {
         }
     }
 
-    /// 带对象标签的引用去掉来源（常量格存储形态：跨方法传递的只是类型 + 可空性 + 标签）
+    /// 带对象标签的引用 / 字符串常量去掉来源（常量格存储形态：跨方法传递的只是类型 + 可空性 + 标签）
     pub fn stripped(&self) -> V {
         match self {
             V::Ref { ty, nonnull, obj, .. } => V::Ref { ty: ty.clone(), nonnull: *nonnull, src: Rc::from([].as_slice()), obj: obj.clone() },
+            V::Str(t, _) => V::Str(t.clone(), Rc::from([].as_slice())),
             other => other.clone(),
         }
     }
 
-    /// 常量格给出的带标签引用落到本方法：来源换成读取点（字段读 / 调用返回 / 形参）
+    /// 常量格给出的带标签引用 / 字符串常量落到本方法：来源换成读取点（字段读 / 调用返回 / 形参）
     pub fn rebased(self, s: Src) -> V {
         match self {
             V::Ref { ty, nonnull, obj, .. } => V::Ref { ty, nonnull, src: Rc::from([s].as_slice()), obj },
+            V::Str(t, _) => V::Str(t, Rc::from([s].as_slice())),
             other => other,
         }
     }

@@ -189,6 +189,7 @@ RUST_BACKTRACE=1 build/analyzer-target/release/rava build Foo.java
 | `CARGO_BUILD_JOBS` | 用户 / rava（`driver/src/cargo.rs`） | rustc 并行作业数，显式设置时优先于重型闭包自动判定 |
 | `RUST_BACKTRACE` | 生成程序 | 见第二节 |
 | `CARGO_TARGET_DIR` | rava 自动设置 | 共享编译缓存（`--target-dir`：`run_tests.py` 传 `build/jdk<N>/target`，缺省 `build/target`），无需手动设置 |
+| `RAVA_FRAME_LINES` | rava compile 自动设置，链接器包装 `rava-link` 读取 | 旁路行表路径（`<scratch>/closure_input/frame_lines.json`），供链接期构建地址 → Java 帧表（二进制体积 B2）；内部通道，无需也不应手动设置 |
 | `CARGO_INCREMENTAL` | rava 自动设为 `0` | 关闭增量编译：宽闭包下增量元数据是 OOM 的主要诱因 |
 | `LANG` / `LC_ALL` | `run_bg.sh` 设为 `C.UTF-8`；`run_tests.py` 对 golden JVM 与被测二进制设 `LC_ALL=en_US.UTF-8` | 保证非 ASCII 输出一致；固定默认 locale（JVM 另加 `-Duser.language=en -Duser.country=US`，macOS 的 JVM 取系统偏好而非 LANG），golden 不随机器变化 |
 | `TZ` | `run_tests.py` 对 golden JVM 与被测二进制设为 `UTC` | 固定默认时区（JVM 另加 `-Duser.timezone=UTC`）；运行时按 JDK 语义取 TZ |

@@ -3,7 +3,7 @@
 //! 首次查询时解码为 [`crate::meta`] 的元素类型；`&'static str` / `&'static [u8]` 直接指向池内字节，
 //! 解码出的切片进程内常驻（每表一次）。各解码函数与发射层同名表的渲染函数字形一一对应。
 
-use crate::meta::{CpVal, FieldMeta, LineMethod, LineNumbers, LineTable, MethodMeta, NestMeta, LINE_NATIVE, LINE_UNKNOWN, NO_METHOD};
+use crate::meta::{CpVal, FieldMeta, LineMethod, LineNumbers, MethodMeta, NestMeta};
 
 type Names = &'static [&'static str];
 
@@ -192,28 +192,38 @@ pub fn record_components(r: Reader) -> &'static [(&'static str, &'static [(&'sta
     r.rows(|r| (r.str(), r.list(|r| (r.str(), r.str(), r.str()))))
 }
 
-/// LINE_TABLES 行：路径, [类, 方法名, 描述符, 源文件, 标志字, 注解],
-/// [Rust 行增量（zigzag）, 方法码（0 块外 / 下标 + 1）, Java 行码（0 native / 1 无行号 / 行 + 2）]
-pub fn line_tables(r: Reader) -> &'static [LineTable] {
-    r.rows(|r| {
-        let rel = r.str();
-        let methods: &'static [LineMethod] = r.list(|r| (r.str(), r.str(), r.str(), r.str(), r.u32(), r.bytes()));
-        let mut line = 0i32;
-        let rows = r.list(|r| {
-            line += r.i32();
-            let m = match r.u32() {
-                0 => NO_METHOD,
-                m => m - 1,
+/// 地址表（`pc_map`，字形见该模块文档）：池与流在映像的 `__rava_pcmap` 节内
+pub fn pc_map(pool: &'static [u8], stream: &'static [u8]) -> crate::pc_map::PcMap {
+    static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
+    let mut r = Reader::new(pool_index(&POOL, pool), stream);
+    let methods: &'static [LineMethod] = r.list(|r| (r.str(), r.str(), r.str(), r.str(), r.u32(), r.bytes()));
+    let lists = r.list(|r| {
+        r.list(|r| {
+            let method = r.u32();
+            let line = match r.u32() {
+                0 => crate::pc_map::LINE_NATIVE,
+                1 => crate::pc_map::LINE_UNKNOWN,
+                j => j as i32 - 2,
             };
-            let j = match r.u32() {
-                0 => LINE_NATIVE,
-                1 => LINE_UNKNOWN,
-                j => j - 2,
-            };
-            (line as u32, m, j)
-        });
-        (rel, methods, rows)
-    })
+            (method, line)
+        })
+    });
+    let mut start = 0i64;
+    let mut first = true;
+    let ranges = r.list(|r| {
+        if first {
+            start = r.i64();
+            first = false;
+        } else {
+            start += r.u64() as i64;
+        }
+        let list = match r.u32() {
+            0 => u32::MAX,
+            l => l - 1,
+        };
+        (start, list)
+    });
+    crate::pc_map::PcMap { methods, lists, ranges }
 }
 
 /// LINE_NUMBERS 行：类, 方法名, 描述符, [start_pc 增量, 行号增量]（均 zigzag）

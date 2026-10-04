@@ -242,9 +242,14 @@ fn pass_while(seq: &mut [Item]) {
         let is_guard = significant(&first.else_).is_empty()
             && matches!(then_sig[..], [Item::Break(b)] if *b == exit);
         if is_guard {
+            let Item::If(first) = l.body.remove(pos) else { unreachable!() };
             l.while_cond = Some(first.cond.negate());
             l.cond_origin = Some(first.origin);
-            l.body.remove(pos);
+            // 两臂里的无语句块（只是续行 / 出口的空落脚点，如回边块）不产生代码，但仍是活块：原位保留，
+            // 结构树才能「每个活块恰好出现一次」
+            let kept: Vec<Item> =
+                first.then.into_iter().chain(first.else_).filter(Item::is_insignificant).collect();
+            l.body.splice(pos..pos, kept);
         }
     }
 }
