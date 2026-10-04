@@ -43,7 +43,7 @@ for f in "$ci/meta_tables.rs" "$ci/line_tables.rs" "$ci/closure_tables.rs" "$scr
   [[ -f "$f" ]] && printf '%-24s %12d\n' "$(basename "$f")" "$(wc -c < "$f")"
 done
 
-echo "== per-table source bytes (meta_tables.rs / line_tables.rs)"
+echo "== per-table source bytes (meta_tables.rs / line_tables.rs, escaped literal text)"
 for f in "$ci/meta_tables.rs" "$ci/line_tables.rs"; do
   [[ -f "$f" ]] || continue
   # 以顶层 static / const 声明为界累计字节
@@ -55,35 +55,20 @@ for f in "$ci/meta_tables.rs" "$ci/line_tables.rs"; do
     END { if (name!="") printf "  %-28s %12d\n", name, bytes }' "$f" | sort -k2 -n -r | head -12
 done
 
-echo "== row counts"
-meta="$ci/meta_tables.rs"; lines="$ci/line_tables.rs"
-stats=$(grep -h '^// \[meta-stats\]' "$meta" "$lines" 2>/dev/null || true)
+echo "== metadata binary bytes"
+meta="$ci/meta_tables.rs"; lines="$ci/line_tables.rs"; user="$scratch/user/src/rava_user_meta.rs"
+stats=$(grep -h '^// \[meta-stats\]' "$meta" "$lines" "$ci/closure_tables.rs" 2>/dev/null || true)
 if [[ -n "$stats" ]]; then
-  echo "$stats" | sed 's#^// \[meta-stats\] ##'
-elif [[ -f "$meta" && -f "$lines" ]]; then
-  # 字面量形态的表（B1 之前）：按行数 × 结构体大小 + 去重字符串字节估算二进制中的元数据量
-  python3 - "$meta" "$lines" <<'EOF2'
-import re, sys
-meta, lines = open(sys.argv[1]).read(), open(sys.argv[2]).read()
-def section(text, name):
-    i = text.index(' ' + name + ':'); j = text.find('#[export_name', i + 10)
-    return text[i: j if j > 0 else len(text)]
-lits = lambda s: set(re.findall(r'"((?:[^"\\]|\\.)*)"', s))
-cm = section(meta, 'CLASS_METHODS'); cf = section(meta, 'CLASS_FIELDS')
-lt = section(lines, 'LINE_TABLES'); ln = section(lines, 'LINE_NUMBERS')
-mrows, frows = cm.count('MethodMeta {'), cf.count('FieldMeta {')
-blob = sum(len(re.findall(r'\d+', m)) for m in re.findall(r'annotations: &\[([^\]]*)\]|annotation_default: &\[([^\]]*)\]', cm) for m in m)
-lmeth = len(re.findall(r'\("[^"]*", "[^"]*", "[^"]*", "[^"]*", "[^"]*"\)', lt))
-lrows = len(re.findall(r'\(\d+, \d+, \d+\)', lt))
-lents, pairs = ln.count('\n    ("'), len(re.findall(r'\(\d+, \d+\)', ln))
-# MethodMeta 136 B、FieldMeta 88 B、行表方法项 5×&str 80 B、行 12 B、LineNumbers 项 64 B + 每对 4 B、外层行 32 / 48 B
-struct = (mrows * 136 + cm.count('", &[\n') * 32 + blob + frows * 88 + cf.count('", &[\n') * 32
-          + lt.count('\n    ("') * 48 + lmeth * 80 + lrows * 12 + lents * 64 + pairs * 4)
-strings = sum(len(x) for x in lits(cm) | lits(cf) | lits(lt) | lits(ln))
-print(f"class_methods_rows {mrows}\nclass_fields_rows {frows}\nline_methods {lmeth}\nline_rows {lrows}")
-print(f"line_numbers_entries {lents}\nline_number_pairs {pairs}")
-print(f"meta_bytes_est {struct + strings}  (struct {struct} + unique strings {strings})")
-EOF2
+  # 表是字符串池 + 字节流：发射层写出各表字节流 / 池的确切字节数（档案侧三文件 + 用户侧行）
+  for f in "$meta" "$lines" "$ci/closure_tables.rs" "$user"; do
+    [[ -f "$f" ]] || continue
+    grep -h '^// \[meta-stats\]' "$f" | awk -v file="$(basename "$f")" '{ printf "  %-22s %-24s %10d\n", file, $3, $4; t += $4 }
+      END { printf "  %-22s %-24s %10d\n", file, "(total)", t }'
+  done
+  cat "$meta" "$lines" "$ci/closure_tables.rs" "$user" 2>/dev/null | grep -h '^// \[meta-stats\]' \
+    | awk '{ t += $4 } END { printf "meta_bytes %d  (exact: pools + streams)\n", t }'
+else
+  echo "(no [meta-stats]: emit first)"
 fi
 if [[ -f "$ci/closure.json" ]]; then
   python3 - "$ci/closure.json" <<'EOF'

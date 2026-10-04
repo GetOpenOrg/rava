@@ -24,26 +24,14 @@ pub(crate) fn scan_class_hierarchy(texts: &[&str]) -> BTreeMap<String, String> {
     result
 }
 
-pub(crate) fn render_hierarchy_table(entries: &BTreeMap<String, String>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：类层次表（binary name → 全部超类型，含自身）。
-         // 数据源：java_class! 块的 all_supertypes 属性（class 元数据推导）。
-         // 消费方：Class.isAssignableFrom（class_impl.rs）。请勿手改。
-
-         #[export_name = \"__java_meta_CLASS_HIERARCHY\"] pub static CLASS_HIERARCHY: &[(&str, &[&str])] = &[
-",
-    );
+pub(crate) fn render_hierarchy_table(g: &mut Group, entries: &BTreeMap<String, String>) {
+    // CLASS_HIERARCHY 行：类, [超类型]（含自身）——Class.isAssignableFrom
+    let (s, p) = g.table("CLASS_HIERARCHY");
     for (name, supers) in entries {
-        let items: Vec<String> = supers.split(';')
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("{:?}", s))
-            .collect();
-        out.push_str(&format!("    ({:?}, &[{}]),
-", name, items.join(", ")));
+        s.str(p, name);
+        let items: Vec<&str> = supers.split(';').filter(|x| !x.is_empty()).collect();
+        s.strs(p, &items);
     }
-    out.push_str("];
-");
-    out
 }
 
 /// 类 → 直接父类（java_class! 块的 super_class 属性；接口无 super_class 属性）。
@@ -67,21 +55,26 @@ pub(crate) fn scan_direct_super(texts: &[&str]) -> BTreeMap<String, String> {
     result
 }
 
-pub(crate) fn render_direct_super_table(entries: &BTreeMap<String, String>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：类 → 直接父类表（binary name → super_class 属性）。
-         // 数据源：java_class! 块的 super_class 属性（接口无该属性，天然缺席）。
-         // 消费方：Class.getSuperclass（class_impl.rs）。请勿手改。
+pub(crate) fn render_direct_super_table(g: &mut Group, entries: &BTreeMap<String, String>) {
+    // CLASS_DIRECT_SUPER 行：类, 直接父类（接口缺席）——Class.getSuperclass
+    push_pairs(g, "CLASS_DIRECT_SUPER", entries);
+}
 
-         #[export_name = \"__java_meta_CLASS_DIRECT_SUPER\"] pub static CLASS_DIRECT_SUPER: &[(&str, &str)] = &[
-",
-    );
-    for (name, sup) in entries {
-        out.push_str(&format!("    ({:?}, {:?}),\n", name, sup));
+/// (类, 串) 行
+fn push_pairs(g: &mut Group, table: &str, entries: &BTreeMap<String, String>) {
+    let (s, p) = g.table(table);
+    for (k, v) in entries {
+        s.str(p, k);
+        s.str(p, v);
     }
-    out.push_str("];
-");
-    out
+}
+
+/// 串集行
+fn push_names(g: &mut Group, table: &str, names: &BTreeSet<String>) {
+    let (s, p) = g.table(table);
+    for n in names {
+        s.str(p, n);
+    }
 }
 
 /// 类 → java.lang.reflect.Modifier 位集（Class.getModifiers 的数据源）。
@@ -153,22 +146,13 @@ pub(crate) fn class_modifier_bits(is_public: bool, has_super_class: bool, is_obj
     bits
 }
 
-pub(crate) fn render_modifiers_table(entries: &BTreeMap<String, i32>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：类修饰符表（binary name → Modifier 位集）。
-         // 数据源：java_class! 块的 access / super_class 属性。接口（无 super_class，
-         // Object 除外）恒含 INTERFACE|ABSTRACT。final 位无属性源不发射。
-         // 消费方：Class.getModifiers（class_impl.rs）。请勿手改。
-
-         #[export_name = \"__java_meta_CLASS_MODIFIERS\"] pub static CLASS_MODIFIERS: &[(&str, i32)] = &[
-",
-    );
+pub(crate) fn render_modifiers_table(g: &mut Group, entries: &BTreeMap<String, i32>) {
+    // CLASS_MODIFIERS 行：类, Modifier 位集（接口恒含 INTERFACE|ABSTRACT）——Class.getModifiers
+    let (s, p) = g.table("CLASS_MODIFIERS");
     for (name, mods) in entries {
-        out.push_str(&format!("    ({:?}, {:#06x}),\n", name, mods));
+        s.str(p, name);
+        s.i32(*mods);
     }
-    out.push_str("];
-");
-    out
 }
 
 /// 嵌套元数据（FS-R R1）：类 → (外层类, 简单名, 本类 InnerClasses 条目在场, 封闭方法三元组)。
@@ -227,26 +211,22 @@ pub(crate) fn scan_nest_meta(texts: &[&str]) -> BTreeMap<String, NestMeta> {
     result
 }
 
-pub(crate) fn render_nest_table(entries: &BTreeMap<String, NestMeta>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：嵌套元数据表（InnerClasses 本类条目 + EnclosingMethod）。
-         // 消费方：Class.getDeclaringClass0 / getSimpleBinaryName0 / getEnclosingMethod0。请勿手改。
-
-
-         #[export_name = \"__java_meta_CLASS_NEST\"] pub static CLASS_NEST: &[(&str, NestMeta)] = &[
-",
-    );
+pub(crate) fn render_nest_table(g: &mut Group, entries: &BTreeMap<String, NestMeta>) {
+    // CLASS_NEST 行：类, 外层类, 简单名, 标志（bit0 本类条目在场 / bit1 有封闭方法）, [封闭方法 类, 名, 描述符],
+    // [成员类]——Class.getDeclaringClass0 / getSimpleBinaryName0 / getEnclosingMethod0
+    let (s, p) = g.table("CLASS_NEST");
     for (name, m) in entries {
-        let enc = match &m.enclosing {
-            Some((c, n, d)) => format!("Some(({:?}, {:?}, {:?}))", c, n, d),
-            None => "None".to_owned(),
-        };
-        out.push_str(&format!(
-            "    ({:?}, NestMeta {{ outer: {:?}, simple: {:?}, self_entry: {}, enclosing: {}, members: &{:?} }}),\n",
-            name, m.outer, m.simple, m.self_entry, enc, m.members));
+        s.str(p, name);
+        s.str(p, &m.outer);
+        s.str(p, &m.simple);
+        s.u32(m.self_entry as u32 | (m.enclosing.is_some() as u32) << 1);
+        if let Some((c, n, d)) = &m.enclosing {
+            s.str(p, c);
+            s.str(p, n);
+            s.str(p, d);
+        }
+        s.strs(p, &m.members);
     }
-    out.push_str("];\n");
-    out
 }
 
 /// 直接超接口表（class 文件 interfaces 项，声明序）：数据源 `interfaces` 属性。
@@ -274,18 +254,13 @@ pub(crate) fn scan_class_interfaces(texts: &[&str]) -> BTreeMap<String, Vec<Stri
     result
 }
 
-pub(crate) fn render_interfaces_table(entries: &BTreeMap<String, Vec<String>>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：直接超接口表（声明序）。消费方：Class.getInterfaces0。请勿手改。
-
-         #[export_name = \"__java_meta_CLASS_INTERFACES\"] pub static CLASS_INTERFACES: &[(&str, &[&str])] = &[
-",
-    );
+pub(crate) fn render_interfaces_table(g: &mut Group, entries: &BTreeMap<String, Vec<String>>) {
+    // CLASS_INTERFACES 行：类, [直接超接口]（声明序）——Class.getInterfaces0
+    let (s, p) = g.table("CLASS_INTERFACES");
     for (name, list) in entries {
-        out.push_str(&format!("    ({:?}, &{:?}),\n", name, list));
+        s.str(p, name);
+        s.strs(p, list);
     }
-    out.push_str("];\n");
-    out
 }
 
 /// record 类集（is_record 属性在场 = Record 属性在场，Class.isRecord 判据）。
@@ -331,33 +306,22 @@ pub(crate) fn scan_record_components(texts: &[&str]) -> BTreeMap<String, String>
     result
 }
 
-pub(crate) fn render_record_table(entries: &BTreeSet<String>, components: &BTreeMap<String, String>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：record 类集（binary name；Record 属性在场）。
-         // 数据源：java_class! 块的 is_record 属性（classfile 的 Record 属性判定）。
-         // 消费方：Class.isRecord（class_impl.rs）。请勿手改。
-
-         #[export_name = \"__java_meta_RECORD_CLASSES\"] pub static RECORD_CLASSES: &[&str] = &[
-",
-    );
-    for name in entries {
-        out.push_str(&format!("    {:?},\n", name));
-    }
-    out.push_str("];
-");
-    // 组件表：(record 类, [(名, 描述符, Signature)])——Class.getRecordComponents0 数据源
-    out.push_str("\n#[export_name = \"__java_meta_RECORD_COMPONENTS\"] pub static RECORD_COMPONENTS: &[(&str, &[(&str, &str, &str)])] = &[\n");
+pub(crate) fn render_record_table(g: &mut Group, entries: &BTreeSet<String>, components: &BTreeMap<String, String>) {
+    // RECORD_CLASSES 行：类（Record 属性在场）——Class.isRecord
+    push_names(g, "RECORD_CLASSES", entries);
+    // RECORD_COMPONENTS 行：record 类, [(名, 描述符, Signature)]——Class.getRecordComponents0
+    let (s, p) = g.table("RECORD_COMPONENTS");
     for (cls, spec) in components {
-        out.push_str(&format!("    ({:?}, &[", cls));
-        for comp in spec.split('|').filter(|c| !c.is_empty()) {
+        s.str(p, cls);
+        let comps: Vec<&str> = spec.split('|').filter(|c| !c.is_empty()).collect();
+        s.len(comps.len());
+        for comp in comps {
             let mut it = comp.splitn(3, ':');
-            let (n, d, g) = (it.next().unwrap_or(""), it.next().unwrap_or(""), it.next().unwrap_or(""));
-            out.push_str(&format!("({:?}, {:?}, {:?}), ", n, d, g));
+            for _ in 0..3 {
+                s.str(p, it.next().unwrap_or(""));
+            }
         }
-        out.push_str("]),\n");
     }
-    out.push_str("];\n");
-    out
 }
 
 /// 布尔类属性为 true 的类集：`has_clinit`（声明了 `<clinit>`）、`is_hidden`（lambda 调用点隐藏类，
@@ -404,64 +368,39 @@ pub(crate) fn scan_class_attr(texts: &[&str], key: &str) -> BTreeMap<String, Str
     result
 }
 
-/// 类 → 名单（`,` 分隔属性值）表的发射体。
-fn push_name_lists(out: &mut String, table: &str, lists: &BTreeMap<String, String>) {
-    out.push_str(&format!(
-        "\n#[export_name = \"__java_meta_{table}\"] pub static {table}: &[(&str, &[&str])] = &[\n"));
+/// 类 → 名单（`,` 分隔属性值）行
+fn push_name_lists(g: &mut Group, table: &str, lists: &BTreeMap<String, String>) {
+    let (s, p) = g.table(table);
     for (cls, list) in lists {
-        out.push_str(&format!("    ({:?}, &[", cls));
-        for sub in list.split(',').filter(|c| !c.is_empty()) {
-            out.push_str(&format!("{:?}, ", sub));
-        }
-        out.push_str("]),\n");
+        s.str(p, cls);
+        let items: Vec<&str> = list.split(',').filter(|c| !c.is_empty()).collect();
+        s.strs(p, &items);
     }
-    out.push_str("];\n");
 }
 
-pub(crate) fn render_class_meta_table(clinit: &BTreeSet<String>, hidden: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
-                                     nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>,
-                                     source: &BTreeMap<String, String>, loaders: &BTreeMap<String, String>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：类文件级元数据（VM 注入的类信息）。请勿手改。
-         // CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer。
-         // HIDDEN_CLASSES：lambda 调用点隐藏类（is_hidden 属性）——Class.isHidden / 镜像名 / forName 排除。
-         // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
-         // NEST_MEMBERS：嵌套宿主的 NestMembers 属性（nest_members 属性）——Class.getNestMembers0。
-         // CLASS_ACCESS_FLAGS：类文件 access_flags 原值（class_access_flags 属性）——Class.getClassAccessFlagsRaw0。
-         // CLASS_SOURCE_FILE：SourceFile 属性（source 属性）——StackTraceElement.initStackTraceElement 的 fileName。
-         // CLASS_DEFINING_LOADER：定义加载器（defining_loader 属性，app / platform；引导加载器的类不在表中，
-         // 按类名有序）——Class.classLoader 的读取钩子（VM 建镜像时写入的状态）。
-
-         #[export_name = \"__java_meta_CLINIT_CLASSES\"] pub static CLINIT_CLASSES: &[&str] = &[
-",
-    );
-    for name in clinit {
-        out.push_str(&format!("    {:?},\n", name));
-    }
-    out.push_str("];\n");
-    out.push_str("\n#[export_name = \"__java_meta_HIDDEN_CLASSES\"] pub static HIDDEN_CLASSES: &[&str] = &[\n");
-    for name in hidden {
-        out.push_str(&format!("    {:?},\n", name));
-    }
-    out.push_str("];\n");
-    push_name_lists(&mut out, "PERMITTED_SUBCLASSES", permitted);
-    push_name_lists(&mut out, "NEST_MEMBERS", nest_members);
-    out.push_str("\n#[export_name = \"__java_meta_CLASS_ACCESS_FLAGS\"] pub static CLASS_ACCESS_FLAGS: &[(&str, i32)] = &[\n");
+/// 类文件级元数据（VM 注入的类信息）：
+/// - CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer；
+/// - HIDDEN_CLASSES：lambda 调用点隐藏类（is_hidden 属性）——Class.isHidden / 镜像名 / forName 排除；
+/// - PERMITTED_SUBCLASSES：sealed 类的许可子类型——Class.getPermittedSubclasses0；
+/// - NEST_MEMBERS：嵌套宿主的 NestMembers 属性——Class.getNestMembers0；
+/// - CLASS_ACCESS_FLAGS：类文件 access_flags 原值——Class.getClassAccessFlagsRaw0；
+/// - CLASS_SOURCE_FILE：SourceFile 属性——StackTraceElement.initStackTraceElement 的 fileName；
+/// - CLASS_DEFINING_LOADER：定义加载器（app / platform；引导加载器的类不在表中）——Class.classLoader 的读取钩子。
+pub(crate) fn render_class_meta_table(g: &mut Group, clinit: &BTreeSet<String>, hidden: &BTreeSet<String>,
+                                     permitted: &BTreeMap<String, String>, nest_members: &BTreeMap<String, String>,
+                                     access: &BTreeMap<String, String>, source: &BTreeMap<String, String>,
+                                     loaders: &BTreeMap<String, String>) {
+    push_names(g, "CLINIT_CLASSES", clinit);
+    push_names(g, "HIDDEN_CLASSES", hidden);
+    push_name_lists(g, "PERMITTED_SUBCLASSES", permitted);
+    push_name_lists(g, "NEST_MEMBERS", nest_members);
+    let (s, p) = g.table("CLASS_ACCESS_FLAGS");
     for (cls, v) in access {
         if let Ok(bits) = v.trim().parse::<i32>() {
-            out.push_str(&format!("    ({:?}, {}),\n", cls, bits));
+            s.str(p, cls);
+            s.i32(bits);
         }
     }
-    out.push_str("];\n");
-    out.push_str("\n#[export_name = \"__java_meta_CLASS_SOURCE_FILE\"] pub static CLASS_SOURCE_FILE: &[(&str, &str)] = &[\n");
-    for (cls, file) in source {
-        out.push_str(&format!("    ({:?}, {:?}),\n", cls, file));
-    }
-    out.push_str("];\n");
-    out.push_str("\n#[export_name = \"__java_meta_CLASS_DEFINING_LOADER\"] pub static CLASS_DEFINING_LOADER: &[(&str, &str)] = &[\n");
-    for (cls, l) in loaders {
-        out.push_str(&format!("    ({:?}, {:?}),\n", cls, l));
-    }
-    out.push_str("];\n");
-    out
+    push_pairs(g, "CLASS_SOURCE_FILE", source);
+    push_pairs(g, "CLASS_DEFINING_LOADER", loaders);
 }

@@ -89,9 +89,10 @@ fn archive_crates_identical_across_programs() {
         assert!(tree.contains_key("java_meta/Cargo.toml") && tree.keys().any(|k| k.starts_with("java_body_")), "{:?}", tree.keys().take(5).collect::<Vec<_>>());
         // 档案侧表不含用户类；用户元数据行在用户 crate，入口登记
         let meta = String::from_utf8_lossy(&tree["closure_input/meta_tables.rs"]).to_string();
-        assert!(!meta.contains(&format!("\"{user_class}\"")), "档案侧表含用户类 {user_class}");
+        // 表是字符串池 + 字节流：类名以池项原文出现
+        assert!(!meta.contains(user_class), "档案侧表含用户类 {user_class}");
         let rows = std::fs::read_to_string(out.join("user/src/rava_user_meta.rs")).unwrap();
-        assert!(rows.contains(&format!("(\"{user_class}\", ")) && rows.contains("pub static USER_META"), "{rows}");
+        assert!(rows.contains(user_class) && rows.contains("pub static USER_META"), "{rows}");
         let main = std::fs::read_to_string(out.join("user/src/main.rs")).unwrap();
         assert!(main.contains("java_runtime::meta::register_user(&rava_user_meta::USER_META);"), "{main}");
         trees.push(tree);

@@ -242,37 +242,49 @@ pub type LineNumbers = std::collections::BTreeMap<(String, String, String), Vec<
 
 /// 行表源文本（java_meta 的 lib.rs 以 `include!` 引入）
 pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
-    let mut src = String::from(
-        "// 生成：Java 栈帧行表（FS-E1），由 java_meta 的 lib.rs 引入。\n\
-         // (scratch 相对路径, [(类, 方法, 描述符, 源文件, 标志字, 注解)], [(Rust 行, 方法下标, Java 行)])\n\n\
-         #[export_name = \"__java_meta_LINE_TABLES\"] pub static LINE_TABLES: \
-         &[(&str, &[(&str, &str, &str, &str, u32, &[u8])], &[(u32, u32, u32)])] = &[\n",
-    );
+    let mut g = rava_meta_tables::codec::Group::new("LINE_POOL");
+    // LINE_TABLES 行：scratch 相对路径, [方法项 类, 方法名, 描述符, 源文件, 标志字, 注解], [行]。
+    // 行 = Rust 行增量（zigzag，文件内自 0 起）, 方法码（0 = 块外，否则下标 + 1）, Java 行码（0 native / 1 无行号 / 行 + 2）
+    let (s, p) = g.table("LINE_TABLES");
     for t in tables {
-        src += &format!("    ({:?}, &[", t.rel);
+        s.str(p, &t.rel);
+        s.len(t.methods.len());
         for m in &t.methods {
-            let annotations = m.frame.as_ref().map_or(&[][..], |f| f.annotations.as_slice());
-            src += &format!("({:?}, {:?}, {:?}, {:?}, {:#x}, &{:?}), ", m.class, m.name, m.descriptor, m.source, m.flags(), annotations);
+            for v in [&m.class, &m.name, &m.descriptor, &m.source] {
+                s.str(p, v);
+            }
+            s.u32(m.flags());
+            s.bytes(p, m.frame.as_ref().map_or(&[][..], |f| f.annotations.as_slice()));
         }
-        src += "], &[";
-        for (r, m, j) in &t.rows {
-            src += &format!("({r}, {m}, {j}), ");
+        s.len(t.rows.len());
+        let mut last = 0i32;
+        for &(r, m, j) in &t.rows {
+            s.i32(r as i32 - last);
+            last = r as i32;
+            s.u32(if m == NO_METHOD { 0 } else { m + 1 });
+            s.u32(match j {
+                handwritten::LINE_NATIVE => 0,
+                handwritten::LINE_UNKNOWN => 1,
+                j => j + 2,
+            });
         }
-        src += "]),\n";
     }
-    src += "];\n\n\
-        // 帧方法的 LineNumberTable（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序\n\
-        #[export_name = \"__java_meta_LINE_NUMBERS\"] pub static LINE_NUMBERS: \
-        &[(&str, &str, &str, &[(u16, u16)])] = &[\n";
+    // LINE_NUMBERS 行：类, 方法名, 描述符, [start_pc 增量, 行号增量（zigzag）]——帧方法的 LineNumberTable
+    //（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序
+    let (s, p) = g.table("LINE_NUMBERS");
     for ((c, m, d), lnt) in numbers {
-        src += &format!("    ({c:?}, {m:?}, {d:?}, &[");
-        for (pc, line) in lnt {
-            src += &format!("({pc}, {line}), ");
+        s.str(p, c);
+        s.str(p, m);
+        s.str(p, d);
+        s.len(lnt.len());
+        let (mut pc0, mut line0) = (0i32, 0i32);
+        for &(pc, line) in lnt {
+            s.i32(pc as i32 - pc0);
+            s.i32(line as i32 - line0);
+            (pc0, line0) = (pc as i32, line as i32);
         }
-        src += "]),\n";
     }
-    src += "];\n";
-    src
+    format!("// 生成：Java 栈帧行表（FS-E1；字符串池 + 字节流，字形见发射层 line_tables::render）。\n\n{}", g.render())
 }
 
 /// 汇总：档案侧文件的行表写入 `<out_dir>/closure_input/line_tables.rs`，返回用户 crate 文件的行表源文本
@@ -393,8 +405,10 @@ mod tests {
         let mut numbers = LineNumbers::new();
         numbers.insert(("p/A".into(), "f".into(), "()V".into()), vec![(0, 7), (4, 8)]);
         let src = render(&[t], &numbers);
-        assert!(src.contains("(\"p/A\", \"f\", \"()V\", &[(0, 7), (4, 8), ]),"));
-        assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", 0x0, &[]), "));
+        // LINE_NUMBERS：3 个池下标 + 长度 + 2 对增量（各 1 字节）
+        assert!(src.contains("// [meta-stats] LINE_NUMBERS 8\n"), "{src}");
+        assert!(src.contains("pub static LINE_TABLES: &[u8] = b\""), "{src}");
+        assert!(src.contains("\\x0duser/src/a.rs\\x03p/A\\x01f\\x03()V\\x06A.java"), "{src}");
     }
 
     #[test]

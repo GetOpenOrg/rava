@@ -37,14 +37,11 @@ pub(super) fn write_archive(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, r
 /// 用户侧行：`files` 为用户 crate 的 (路径, 文本)，`lines` 为用户文件的行表源文本（`line_tables::write` 返回）
 pub(super) fn write_user(ctx: &EmitCtx<'_>, w: &mut Writer, user_src: &Path, files: &[(&Path, &str)], lines: &str) -> Result<()> {
     let texts: Vec<&str> = files.iter().filter(|(p, _)| p.starts_with(user_src)).map(|(_, t)| *t).collect();
-    let mut src = String::from("use java_runtime::meta::{CpVal, FieldMeta, MethodMeta, NestMeta};\n\n");
-    src += &rava_meta_tables::render(&texts, rava_meta_tables::Side::User);
-    src += "\n// 用户模块服务 (服务, provider)：闭包事实 seeds.module_services 中涉及用户类者，事实序\n";
-    src += "pub const MODULE_SERVICES: &[(&str, &str)] = &[\n";
-    for (s, p) in user_services(ctx) {
-        src += &format!("    ({s:?}, {p:?}),\n");
-    }
-    src += "];\n\n";
+    let mut src = rava_meta_tables::render(&texts, rava_meta_tables::Side::User);
+    src += "\n// 用户模块服务：闭包事实 seeds.module_services 中涉及用户类者，事实序\n";
+    let services: Vec<&(String, String)> = user_services(ctx).collect();
+    src += &rava_meta_tables::localize(&super::entry::closure_group(&services).render());
+    src += "\n";
     src += &rava_meta_tables::localize(lines);
     w.write(&user_src.join(format!("{USER_META_MOD}.rs")), &src)
 }

@@ -16,6 +16,7 @@
 
 mod anno_table;
 mod class_tables;
+pub mod codec;
 mod member_tables;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use anno_table::*;
 use class_tables::*;
+use codec::Group;
 use member_tables::*;
 pub use member_tables::{FrameIndex, FrameMeta};
 
@@ -47,6 +49,7 @@ pub enum Side<'a> {
 
 /// 用户侧聚合的字段（`java_runtime::meta::UserMeta` 字段名 ← 表名）
 const USER_FIELDS: &[(&str, &str)] = &[
+    ("meta_pool", "META_POOL"),
     ("class_hierarchy", "CLASS_HIERARCHY"),
     ("class_direct_super", "CLASS_DIRECT_SUPER"),
     ("class_fields", "CLASS_FIELDS"),
@@ -64,14 +67,17 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("class_defining_loader", "CLASS_DEFINING_LOADER"),
     ("record_classes", "RECORD_CLASSES"),
     ("record_components", "RECORD_COMPONENTS"),
-    // 以下三表由调用方（发射层）在同一文件内以同名 `const` 给出
+    // 以下由调用方（发射层）在同一文件内以同名 `const` 给出（闭包派生表组 / 行表组）
+    ("closure_pool", "CLOSURE_POOL"),
     ("module_services", "MODULE_SERVICES"),
+    ("line_pool", "LINE_POOL"),
     ("line_tables", "LINE_TABLES"),
     ("line_numbers", "LINE_NUMBERS"),
 ];
 
-/// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表。用户侧另需调用方在同一文件给出
-/// `MODULE_SERVICES` / `LINE_TABLES` / `LINE_NUMBERS` 三个 `const`（`USER_META` 引用之）
+/// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表（表组 `META_POOL`，编码见 [`codec`]）。
+/// 用户侧另需调用方在同一文件给出闭包派生表组（`CLOSURE_POOL` / `MODULE_SERVICES`）与行表组
+///（`LINE_POOL` / `LINE_TABLES` / `LINE_NUMBERS`）的 `const`（`USER_META` 引用之）
 pub fn render(texts: &[&str], side: Side) -> String {
     let mut methods = scan_class_methods(texts);
     let mut fields = scan_class_fields(texts);
@@ -80,26 +86,24 @@ pub fn render(texts: &[&str], side: Side) -> String {
         methods.retain(|c, _| keep.methods.contains(c));
         fields.retain(|c, _| keep.fields.contains(c));
     }
-    let parts = [
-        render_hierarchy_table(&scan_class_hierarchy(texts)),
-        render_direct_super_table(&scan_direct_super(texts)),
-        render_field_table(&fields),
-        render_method_table(&methods),
-        render_modifiers_table(&scan_class_modifiers(texts)),
-        render_record_table(&scan_record_classes(texts), &scan_record_components(texts)),
-        render_class_meta_table(&scan_flag_classes(texts, "has_clinit"), &scan_flag_classes(texts, "is_hidden"),
-            &scan_class_attr(texts, "permitted_subclasses"),
-            &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
-            &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader")),
-        render_nest_table(&scan_nest_meta(texts)),
-        render_interfaces_table(&scan_class_interfaces(texts)),
-        render_class_anno_table(&scan_class_annos(texts)),
-    ];
-    let mut out = String::from("// 生成：反射元数据表（rava_meta_tables）。请勿手改。\n\n");
-    for p in &parts {
-        out.push_str(p);
-        out.push('\n');
-    }
+    let mut g = Group::new("META_POOL");
+    render_hierarchy_table(&mut g, &scan_class_hierarchy(texts));
+    render_direct_super_table(&mut g, &scan_direct_super(texts));
+    render_field_table(&mut g, &fields);
+    render_method_table(&mut g, &methods);
+    render_modifiers_table(&mut g, &scan_class_modifiers(texts));
+    render_record_table(&mut g, &scan_record_classes(texts), &scan_record_components(texts));
+    render_class_meta_table(&mut g, &scan_flag_classes(texts, "has_clinit"), &scan_flag_classes(texts, "is_hidden"),
+        &scan_class_attr(texts, "permitted_subclasses"),
+        &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
+        &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader"));
+    render_nest_table(&mut g, &scan_nest_meta(texts));
+    render_interfaces_table(&mut g, &scan_class_interfaces(texts));
+    render_class_anno_table(&mut g, &scan_class_annos(texts));
+    let mut out = String::from(
+        "// 生成：反射元数据表（rava_meta_tables；字符串池 + 字节流，字形见各渲染函数）。请勿手改。\n\n",
+    );
+    out += &g.render();
     match side {
         Side::Archive(_) => out,
         Side::User => {
