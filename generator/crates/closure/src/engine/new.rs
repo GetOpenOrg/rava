@@ -193,6 +193,7 @@ impl<'a> Engine<'a> {
             rmwrap: Default::default(),
             fenum_pending: BTreeSet::new(),
             fenum_serial: BTreeSet::new(),
+            fenum_scopes: BTreeSet::new(),
             fh_marks: HashMap::default(),
             fh_released: BTreeSet::new(),
             field_enum_gaps: BTreeSet::new(),

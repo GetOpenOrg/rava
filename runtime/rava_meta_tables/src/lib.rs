@@ -25,13 +25,23 @@ use std::path::{Path, PathBuf};
 use anno_table::*;
 use class_tables::*;
 use member_tables::*;
+pub use member_tables::{FrameIndex, FrameMeta};
+
+/// 档案侧成员表保留整表的类（二进制体积 B1，`docs/plans/2026-10-04-binary-size.md`）：口径是闭包分析器的
+/// 反射事实（反射可达 / 方法句柄可解析 / 注解与序列化面，含超类型，`reflect.meta_methods` /
+/// `reflect.meta_fields`），集合外的类方法表 / 字段表 0 行（运行期视同「不声明成员」）
+#[derive(Debug, Clone, Copy)]
+pub struct Keep<'a> {
+    pub methods: &'a BTreeSet<String>,
+    pub fields: &'a BTreeSet<String>,
+}
 
 /// 表的归属侧
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    /// 档案侧：导出符号的 static
-    Archive,
-    /// 用户侧：`const` + `USER_META` 聚合
+#[derive(Debug, Clone, Copy)]
+pub enum Side<'a> {
+    /// 档案侧：导出符号的 static；成员表按 [`Keep`] 裁剪
+    Archive(Keep<'a>),
+    /// 用户侧：`const` + `USER_META` 聚合；成员表完整
     User,
 }
 
@@ -63,12 +73,17 @@ const USER_FIELDS: &[(&str, &str)] = &[
 /// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表。用户侧另需调用方在同一文件给出
 /// `MODULE_SERVICES` / `LINE_TABLES` / `LINE_NUMBERS` 三个 `const`（`USER_META` 引用之）
 pub fn render(texts: &[&str], side: Side) -> String {
-    let methods = scan_class_methods(texts);
-    let methods = if side == Side::Archive { with_object_ctor_row(methods) } else { methods };
+    let mut methods = scan_class_methods(texts);
+    let mut fields = scan_class_fields(texts);
+    if let Side::Archive(keep) = side {
+        methods = with_object_ctor_row(methods);
+        methods.retain(|c, _| keep.methods.contains(c));
+        fields.retain(|c, _| keep.fields.contains(c));
+    }
     let parts = [
         render_hierarchy_table(&scan_class_hierarchy(texts)),
         render_direct_super_table(&scan_direct_super(texts)),
-        render_field_table(&scan_class_fields(texts)),
+        render_field_table(&fields),
         render_method_table(&methods),
         render_modifiers_table(&scan_class_modifiers(texts)),
         render_record_table(&scan_record_classes(texts), &scan_record_components(texts)),
@@ -86,7 +101,7 @@ pub fn render(texts: &[&str], side: Side) -> String {
         out.push('\n');
     }
     match side {
-        Side::Archive => out,
+        Side::Archive(_) => out,
         Side::User => {
             let mut out = localize(&out);
             out.push_str("\n/// 用户类的反射元数据行：入口启动时登记（`java_runtime::meta::register_user`）\n");

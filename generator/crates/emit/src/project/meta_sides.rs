@@ -18,8 +18,9 @@ pub const USER_META_MOD: &str = "rava_user_meta";
 /// 档案侧反射元数据表文件（scratch 相对路径）：java_meta 的 `lib.rs` 以 `include!` 引入
 pub const META_TABLES: &str = "closure_input/meta_tables.rs";
 
-/// 档案侧表：扫描各 crate 根（`java_runtime/src` 与 lib crate 的 `src`）下的落盘 `.rs` 文件
-pub(super) fn write_archive(w: &mut Writer, out_dir: &Path, roots: &[&Path]) -> Result<()> {
+/// 档案侧表：扫描各 crate 根（`java_runtime/src` 与 lib crate 的 `src`）下的落盘 `.rs` 文件。
+/// 成员表按档案的反射事实裁剪（`ReflectFacts::meta_methods` / `meta_fields`，见 `rava_meta_tables::Keep`）
+pub(super) fn write_archive(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, roots: &[&Path]) -> Result<()> {
     let mut texts: Vec<String> = Vec::new();
     for root in roots {
         for p in rava_meta_tables::rs_files(root) {
@@ -28,7 +29,9 @@ pub(super) fn write_archive(w: &mut Writer, out_dir: &Path, roots: &[&Path]) -> 
         }
     }
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    w.write(&out_dir.join(META_TABLES), &rava_meta_tables::render(&refs, rava_meta_tables::Side::Archive))
+    let r = &ctx.input.reflect;
+    let keep = rava_meta_tables::Keep { methods: &r.meta_methods, fields: &r.meta_fields };
+    w.write(&out_dir.join(META_TABLES), &rava_meta_tables::render(&refs, rava_meta_tables::Side::Archive(keep)))
 }
 
 /// 用户侧行：`files` 为用户 crate 的 (路径, 文本)，`lines` 为用户文件的行表源文本（`line_tables::write` 返回）

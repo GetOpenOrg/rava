@@ -12,8 +12,9 @@
 //! `method = NO_METHOD`（块外的反射分派等辅助代码不对应 Java 帧）。手写方法体在共置伴生文件，
 //! 其行表项见 [`handwritten`]（Java 行取哨兵 [`handwritten::LINE_NATIVE`] / [`handwritten::LINE_UNKNOWN`]）。
 //!
-//! 方法项带描述符（运行时据 (类, 方法名, 描述符) 取 `MethodMeta`）与宿主类（方法体复制进他类时
-//! 的所在类，`declared_by` 注入；同所在类时为空）——这是 `vm_stack` 栈帧的唯一来源。
+//! 方法项带描述符与帧方法元数据（标志字 + 注解原始属性体）：元数据取帧归属类自身的方法属性行，方法体
+//! 复制进他类（`declared_by` 注入）而归属类无行时取宿主类的行——这是 `vm_stack` 栈帧的唯一来源，运行时
+//! 不读成员表（成员表按反射事实裁剪，见 `rava_meta_tables::Keep`）。
 
 pub(super) mod handwritten;
 
@@ -44,12 +45,19 @@ pub struct Method {
     pub source: String,
     /// 方法体所在类；与归属类相同时为空
     pub host: String,
+    /// 帧方法元数据（修饰位 / 注解；`write` 汇总时按归属类 → 宿主类取方法属性行）
+    pub frame: Option<rava_meta_tables::FrameMeta>,
 }
 
 impl Method {
     fn new(class: &str, name: &str, descriptor: &str, source: &str, host: &str) -> Self {
         let host = if host == class { String::new() } else { host.to_string() };
-        Method { class: class.into(), name: name.into(), descriptor: descriptor.into(), source: source.into(), host }
+        Method { class: class.into(), name: name.into(), descriptor: descriptor.into(), source: source.into(), host, frame: None }
+    }
+
+    /// 行表方法项的标志字：Modifier 位集（低 16 位）| static << 16 | native << 17（运行时 `meta::FrameMethod`）
+    fn flags(&self) -> u32 {
+        self.frame.as_ref().map_or(0, |f| (f.modifiers as u32 & 0xFFFF) | (f.is_static as u32) << 16 | (f.is_native as u32) << 17)
     }
 }
 
@@ -198,6 +206,22 @@ pub fn prune(t: &mut FileLines) {
     t.methods = methods;
 }
 
+/// 方法项取帧元数据；取不到的方法其行记 [`NO_METHOD`]（与运行期「无元数据不成帧」同义），由 [`prune`] 删去
+fn attach_frames(t: &mut FileLines, frames: &rava_meta_tables::FrameIndex) {
+    let mut dead = Vec::new();
+    for (i, m) in t.methods.iter_mut().enumerate() {
+        m.frame = frames.get(&m.class, &m.name, &m.descriptor, &m.host);
+        if m.frame.is_none() {
+            dead.push(i as u32);
+        }
+    }
+    for r in &mut t.rows {
+        if dead.contains(&r.1) {
+            r.1 = NO_METHOD;
+        }
+    }
+}
+
 /// 文件内各 `java_class!` / `java_interface!` 块的 (类 binary name, 源文件)
 fn class_sources(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -220,14 +244,15 @@ pub type LineNumbers = std::collections::BTreeMap<(String, String, String), Vec<
 pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
     let mut src = String::from(
         "// 生成：Java 栈帧行表（FS-E1），由 java_meta 的 lib.rs 引入。\n\
-         // (scratch 相对路径, [(类, 方法, 描述符, 源文件, 宿主类)], [(Rust 行, 方法下标, Java 行)])\n\n\
+         // (scratch 相对路径, [(类, 方法, 描述符, 源文件, 标志字, 注解)], [(Rust 行, 方法下标, Java 行)])\n\n\
          #[export_name = \"__java_meta_LINE_TABLES\"] pub static LINE_TABLES: \
-         &[(&str, &[(&str, &str, &str, &str, &str)], &[(u32, u32, u32)])] = &[\n",
+         &[(&str, &[(&str, &str, &str, &str, u32, &[u8])], &[(u32, u32, u32)])] = &[\n",
     );
     for t in tables {
         src += &format!("    ({:?}, &[", t.rel);
         for m in &t.methods {
-            src += &format!("({:?}, {:?}, {:?}, {:?}, {:?}), ", m.class, m.name, m.descriptor, m.source, m.host);
+            let annotations = m.frame.as_ref().map_or(&[][..], |f| f.annotations.as_slice());
+            src += &format!("({:?}, {:?}, {:?}, {:?}, {:#x}, &{:?}), ", m.class, m.name, m.descriptor, m.source, m.flags(), annotations);
         }
         src += "], &[";
         for (r, m, j) in &t.rows {
@@ -297,7 +322,11 @@ pub fn write(
             }
         }
     }
+    // 帧方法元数据随方法项发射（运行时不读成员表）；取不到元数据的方法不成帧
+    let texts: Vec<&str> = files.iter().map(|(_, t)| *t).collect();
+    let frames = rava_meta_tables::FrameIndex::new(&texts);
     for t in &mut tables {
+        attach_frames(t, &frames);
         prune(t);
     }
     tables.retain(|t| !t.rows.is_empty());
@@ -365,7 +394,7 @@ mod tests {
         numbers.insert(("p/A".into(), "f".into(), "()V".into()), vec![(0, 7), (4, 8)]);
         let src = render(&[t], &numbers);
         assert!(src.contains("(\"p/A\", \"f\", \"()V\", &[(0, 7), (4, 8), ]),"));
-        assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", \"\"), "));
+        assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", 0x0, &[]), "));
     }
 
     #[test]

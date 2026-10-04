@@ -56,12 +56,13 @@ pub struct NestMeta {
 pub enum CpVal { U(&'static str), W(&'static [u16]), I(i32), J(i64), F(f32), D(f64) }
 
 type Names = &'static [&'static str];
-/// 生成文件行表：(scratch 相对路径, [(帧归属类 binary name, 方法名, 描述符, 源文件, 宿主类（同归属类为空）)],
+/// 生成文件行表：(scratch 相对路径, [(帧归属类 binary name, 方法名, 描述符, 源文件, 标志字, 注解)],
 /// [(Rust 行, 方法下标, Java 行)]——按 Rust 行升序；方法下标 `u32::MAX` = 块外，Java 行 0 = 方法内首个
 /// 标记之前，[`LINE_NATIVE`] / [`LINE_UNKNOWN`] = 手写伴生方法体（native / 无行号）)
 pub type LineTable = (&'static str, &'static [LineMethod], &'static [(u32, u32, u32)]);
-/// 行表方法项 (帧归属类, 方法名, 描述符, 源文件, 宿主类)
-pub type LineMethod = (&'static str, &'static str, &'static str, &'static str, &'static str);
+/// 行表方法项 (帧归属类, 方法名, 描述符, 源文件, 标志字, RuntimeVisibleAnnotations 原始属性体)：
+/// 标志字 = Modifier 位集（低 16 位）| static << 16 | native << 17。帧方法元数据只来自此处，不读成员表
+pub type LineMethod = (&'static str, &'static str, &'static str, &'static str, u32, &'static [u8]);
 /// 帧方法的 LineNumberTable：(类, 方法名, 描述符, [(start_pc, 行)])，按 (类, 名, 描述符) 升序
 pub type LineNumbers = (&'static str, &'static str, &'static str, &'static [(u16, u16)]);
 /// 行表方法下标哨兵：块外 / 非 Java 方法

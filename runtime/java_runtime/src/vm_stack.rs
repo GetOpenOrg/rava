@@ -3,8 +3,8 @@
 //! HotSpot 的 vframeStream 逐帧给出 (Method*, bci)；原生二进制没有 Java 帧元数据，帧源为
 //! std::backtrace 的真实 Rust 栈（compatibility.md「栈回溯」边界）。每个 Rust 帧带
 //! `at <文件>:<行>`；发射层为每个生成文件与手写伴生文件写出行表（`meta::line_tables()`，
-//! 发射层 `project/line_tables`）：Rust 行 → (帧归属类, 方法名, 描述符, 源文件, 宿主类, Java 行)。
-//! 据帧位置查表得 Java 帧，(类, 名, 描述符) 对到 java_meta 方法表的 `MethodMeta`。
+//! 发射层 `project/line_tables`）：Rust 行 → (帧归属类, 方法名, 描述符, 源文件, 修饰位 / 注解, Java 行)。
+//! 据帧位置查表得 Java 帧；帧方法的修饰位与注解随行表方法项发射（[`FrameMethod`]），不读成员表。
 //! 消费方：Throwable.fillInStackTrace、Reflection.getCallerClass、SecurityManager.getClassContext、
 //! StackWalker（StackStreamFactory$AbstractStackWalker.callStackWalk / fetchStackFrames）。
 //!
@@ -17,7 +17,6 @@
 //! - 闭包帧（符号含 `{closure`）不成帧：原位闭包（`__caller_sensitive`、`try_new_with`）与外层
 //!   方法同一行，外层帧即该 Java 帧；延迟闭包（lambda 代理）的位置是创建点，不在执行栈上。
 
-use crate::meta::MethodMeta;
 use std::collections::HashMap;
 
 /// StackWalker 锚定的一条帧流：快照与下一个待检视帧的下标（存于执行上下文块，`exec_context::ExecState`）。
@@ -26,11 +25,24 @@ pub(crate) struct AnchoredWalk {
     pub(crate) cursor: usize,
 }
 
+/// 帧方法的元数据（行表方法项解码）：HotSpot 帧 Method* 上栈遍历消费方读取的部分
+#[derive(Clone, Copy)]
+pub struct FrameMethod {
+    pub name: &'static str,
+    pub descriptor: &'static str,
+    /// java.lang.reflect.Modifier 位集
+    pub modifiers: i32,
+    pub is_static: bool,
+    pub is_native: bool,
+    /// RuntimeVisibleAnnotations 原始属性体
+    pub annotations: &'static [u8],
+}
+
 /// 一个 Java 帧：方法持有类（binary name，斜线形态）、方法元数据与源位置。
 #[derive(Clone)]
 pub struct JavaFrame {
     pub class: &'static str,
-    pub method: &'static MethodMeta,
+    pub method: FrameMethod,
     /// SourceFile 属性；缺失为 None
     pub source: Option<&'static str>,
     /// Java 行号（LineNumberTable）；不可得 -1，native 方法 -2（`StackTraceElement` 约定）
@@ -224,8 +236,15 @@ fn frame_at(file: &str, line: u32) -> Option<JavaFrame> {
     if idx == crate::meta::NO_METHOD || java_line == 0 {
         return None; // 块外 / 方法序言（宏生成的派发与分配外壳）
     }
-    let (class, name, descriptor, source, host) = methods[idx as usize];
-    let method = method_meta(class, name, descriptor, host)?;
+    let (class, name, descriptor, source, flags, annotations) = methods[idx as usize];
+    let method = FrameMethod {
+        name,
+        descriptor,
+        modifiers: (flags & 0xFFFF) as i32,
+        is_static: flags & (1 << 16) != 0,
+        is_native: flags & (1 << 17) != 0,
+        annotations,
+    };
     let line = match java_line {
         crate::meta::LINE_NATIVE => -2,
         crate::meta::LINE_UNKNOWN => -1,
@@ -267,19 +286,4 @@ pub fn line_number_from_bci(class: &str, name: &str, descriptor: Option<&str>, b
     let Some(table) = line_number_table(class, name, descriptor) else { return -1 };
     let at = table.partition_point(|(pc, _)| (*pc as i32) <= bci);
     at.checked_sub(1).map_or(-1, |i| table[i].1 as i32)
-}
-
-/// 帧方法的元数据：归属类自身声明的行；方法体复制进他类（`declared_by`）而归属类无表项时取宿主类的行。
-fn method_meta(class: &str, name: &str, descriptor: &str, host: &str) -> Option<&'static MethodMeta> {
-    let find = |c: &str, own: bool| {
-        methods_of(c)?.iter().find(|m| (!own || !m.inherited) && m.name == name && m.descriptor == descriptor)
-    };
-    find(class, true).or_else(|| (!host.is_empty()).then(|| find(host, false)).flatten())
-}
-
-/// 声明类的方法表，按类名索引（首次使用时建表）。
-fn methods_of(class: &str) -> Option<&'static [MethodMeta]> {
-    static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static [MethodMeta]>> = std::sync::OnceLock::new();
-    INDEX.get_or_init(|| crate::meta::class_methods().iter().map(|(c, m)| (*c, *m)).collect())
-        .get(class).copied()
 }

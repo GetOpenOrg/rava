@@ -218,6 +218,34 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
     methods
 }
 
+/// 栈帧方法的元数据（`vm_stack` 帧的修饰位与注解）：随行表方法项发射，不依赖成员表
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameMeta {
+    pub modifiers: i32,
+    pub is_static: bool,
+    pub is_native: bool,
+    /// RuntimeVisibleAnnotations 原始属性体（`@Hidden` / `@CallerSensitive` / `@LambdaForm.Compiled` 判定）
+    pub annotations: Vec<u8>,
+}
+
+/// 帧方法元数据索引：全部生成文本的方法属性行（含手写根类 Object 的成员行）
+pub struct FrameIndex(BTreeMap<String, Vec<MethodMeta>>);
+
+impl FrameIndex {
+    pub fn new(texts: &[&str]) -> Self {
+        FrameIndex(with_object_ctor_row(scan_class_methods(texts)))
+    }
+
+    /// 帧归属类自身声明的行；方法体复制进他类（`declared_by`）而归属类无表项时取宿主类的行
+    pub fn get(&self, class: &str, name: &str, descriptor: &str, host: &str) -> Option<FrameMeta> {
+        let find = |c: &str, own: bool| {
+            self.0.get(c)?.iter().find(|m| (!own || !m.inherited) && m.name == name && m.descriptor == descriptor)
+        };
+        let m = find(class, true).or_else(|| (!host.is_empty()).then(|| find(host, false)).flatten())?;
+        Some(FrameMeta { modifiers: m.modifiers, is_static: m.is_static, is_native: m.is_native, annotations: m.annotations.clone() })
+    }
+}
+
 pub(crate) fn render_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) -> String {
     let mut out = String::from(
         "// 由生成器（rava_meta_tables）生成：方法元数据表（binary name → 声明方法序列，声明序 = slot）。

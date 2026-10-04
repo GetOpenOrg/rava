@@ -72,6 +72,8 @@ impl ClosureFacts {
             reflect_fields: sorted_union(&profile.reflect_fields, single.reflect_fields.iter().filter(|(o, _)| is_user(o)).cloned()),
             reflect_field_names: sorted_union(&profile.reflect_field_names, single.reflect_field_names.iter().cloned()),
             reflect_allocations: sorted_union(&profile.reflect_allocations, user_strs(&single.reflect_allocations)),
+            reflect_meta_methods: sorted_union(&profile.reflect_meta_methods, user_strs(&single.reflect_meta_methods)),
+            reflect_meta_fields: sorted_union(&profile.reflect_meta_fields, user_strs(&single.reflect_meta_fields)),
             seeds: SeedFacts {
                 annotation_enums: sorted_union(&p.annotation_enums, user_strs(&s.annotation_enums)),
                 mirror_inits: sorted_union(&p.mirror_inits, user_strs(&s.mirror_inits)),

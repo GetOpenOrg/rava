@@ -70,6 +70,8 @@ const SETS: &[(&str, bool)] = &[
     ("reflect.field_names", false),
     ("reflect.field_enum_gaps", true),
     ("reflect.allocations", true),
+    ("reflect.meta_methods", true),
+    ("reflect.meta_fields", true),
     ("seeds.annotation_enums", true),
     ("seeds.mirror_inits", true),
     ("seeds.reflect_all", true),
@@ -278,6 +280,8 @@ impl Acc {
                 "field_names": set("reflect.field_names"),
                 "field_enum_gaps": set("reflect.field_enum_gaps"),
                 "allocations": set("reflect.allocations"),
+                "meta_methods": set("reflect.meta_methods"),
+                "meta_fields": set("reflect.meta_fields"),
             },
             "seeds": {
                 "annotation_enums": set("seeds.annotation_enums"),

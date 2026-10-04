@@ -286,6 +286,8 @@ impl Closure<'_> {
                 "field_names": e.reflect_field_names,
                 "field_enum_gaps": e.field_enum_gaps,
                 "allocations": e.serial_allocs,
+                "meta_methods": e.meta_method_classes(),
+                "meta_fields": e.meta_field_classes(),
             },
             "seeds": {
                 "annotation_enums": e.seeds.annotation_enums,

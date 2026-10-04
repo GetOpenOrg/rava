@@ -314,7 +314,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let lib_names: Vec<&str> = libs.names().collect();
     let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
     let archive_roots: Vec<&Path> = std::iter::once(jrt_src.as_path()).chain(lib_srcs.iter().map(PathBuf::as_path)).collect();
-    meta_sides::write_archive(&mut w, out_dir, &archive_roots)?;
+    meta_sides::write_archive(ctx, &mut w, out_dir, &archive_roots)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
     if ctx.opts.archive {
         let crates: Vec<&str> = ["java_runtime", "java_meta"].into_iter().chain(body_names.iter().copied()).chain(lib_names.iter().copied()).collect();
