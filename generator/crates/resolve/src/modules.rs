@@ -109,6 +109,11 @@ impl<'a> ModuleGraph<'a> {
         }
     }
 
+    /// 包（`/` 分隔）所属的具名模块（JPMS：一个包只属于一个具名模块）；无归属 → None
+    pub fn package_module(&self, pkg: &str) -> Option<&'a str> {
+        self.f.package_owner.get(pkg).map(|(_, m)| m.as_str())
+    }
+
     pub fn node(&self, module: &str) -> Option<&'a ModuleNode> {
         self.f.nodes.get(module)
     }

@@ -15,14 +15,12 @@ use regex::Regex;
 use ty::type_map::parse_descriptor_params;
 
 use super::sig::split_top_level_trimmed;
-use super::uses::class_use_path;
+use super::uses::{class_use_path, use_path};
 use super::Emissions;
-use crate::ctx::EmitCtx;
+use crate::ctx::{EmitCtx, USER_CRATE};
 use crate::emission::ClassEmission;
 use crate::project::entry::DispatchReg;
 use input::build::ALLOC_MEMBER;
-
-const JAVA_RUNTIME: &str = "java_runtime";
 
 /// 基本类型 → (拆箱函数, 追加转换)
 const PRIM_UNBOX: [(&str, &str, &str); 8] = [
@@ -78,12 +76,9 @@ fn class_tparams(ctx: &EmitCtx<'_>, bin: &str) -> Vec<String> {
     ctx.ty.reg.get(bin).map(|ci| ctx.ty.effective_class_type_params(ci).to_vec()).unwrap_or_default()
 }
 
-fn runtime_prefix(em: &ClassEmission) -> &'static str {
-    if em.crate_name == JAVA_RUNTIME {
-        "crate"
-    } else {
-        JAVA_RUNTIME
-    }
+/// 类文件内引用运行时基础设施的路径首段（JDK crate 内 `crate`，其余 crate 根门面名）
+fn runtime_prefix(em: &ClassEmission) -> &str {
+    &em.crate_prefix
 }
 
 /// 描述符第 idx 个参数的二进制名（`L..;` / 数组原样；基本类型 None）
@@ -251,7 +246,7 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
     let mut out = vec![
         String::new(),
         "// ── L3 反射分派闭包（Method.invoke / Constructor.newInstance 的按名协议；".into(),
-        "//    协议与上溯语义见 java_runtime::reflect_dispatch 头注）──".into(),
+        "//    协议与上溯语义见运行时 reflect_dispatch 头注）──".into(),
         "#[allow(unused_variables, unreachable_patterns)]".into(),
         if tps.is_empty() { format!("impl {short} {{") } else { format!("impl {short}<{}> {{", vec!["Object"; tps.len()].join(", ")) },
         "    pub fn __reflect_dispatch(".into(),
@@ -343,7 +338,8 @@ fn object_turbofish(ctx: &EmitCtx<'_>, bin: &str) -> String {
     if n == 0 {
         return String::new();
     }
-    format!("::<{}>", vec!["java_runtime::java::lang::Object"; n].join(", "))
+    let object = use_path(ctx, ty::consts::OBJECT, USER_CRATE);
+    format!("::<{}>", vec![object.as_str(); n].join(", "))
 }
 
 fn appended(text: &str, tail: &str) -> String {
@@ -355,10 +351,11 @@ fn field_closure(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str, only: Option<&BT
     let em = ems.get(bin)?;
     // 闭包文本落在该类文件：引用名在其作用域认领；登记行在 main（全路径）
     let text = emit_fields_for(&ctx.scoped(&em.scope), bin, em, only)?;
-    let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
+    let path = class_use_path(ctx, bin, USER_CRATE);
     let new = appended(&em.text, &text);
     let tf = object_turbofish(ctx, bin);
-    let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),");
+    let rt = ctx.crates().root();
+    let line = format!("    (\"{bin}\", {rt}::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),");
     Some((new, line))
 }
 
@@ -437,9 +434,10 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     per_class(ctx, ems, &targets, &mut methods, |ems, bin, only| {
         let em = &ems[bin];
         let text = emit_for(&ctx.scoped(&em.scope), bin, em, only)?;
-        let path = class_use_path(ctx, bin, JAVA_RUNTIME, Some(ems), "user");
+        let path = class_use_path(ctx, bin, USER_CRATE);
         let tf = object_turbofish(ctx, bin);
-        let line = format!("    (\"{bin}\", java_runtime::sync_model::__Shared::new(|n, d, r, a| {path}{tf}::__reflect_dispatch(n, d, r, a))),");
+        let rt = ctx.crates().root();
+        let line = format!("    (\"{bin}\", {rt}::sync_model::__Shared::new(|n, d, r, a| {path}{tf}::__reflect_dispatch(n, d, r, a))),");
         Some((appended(&em.text, &text), line))
     });
     DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }

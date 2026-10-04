@@ -14,6 +14,7 @@ use instr::owner::{class_inherits_default_method, resolve_special_method_owner};
 use crate::ctx::EmitCtx;
 use crate::error::Result;
 use crate::lang;
+use crate::module_crates::ModuleCrates;
 use crate::text::safe_pkg_part;
 
 const INVOKESPECIAL: u8 = 0xb7;
@@ -22,23 +23,28 @@ const INVOKESPECIAL: u8 = 0xb7;
 pub struct CrossInput<'s> {
     /// 本轮生成集；None = 本 crate 不导入生成类（无 JDK 类的用户 crate）
     pub generated: Option<&'s BTreeSet<String>>,
-    /// `crate` / `java_runtime`
-    pub prefix: &'s str,
+    /// 本类所在 crate 名（模块 crate / lib crate / `user`）
+    pub here: &'s str,
+    /// JDK 模块 crate 表（JDK 类按模块定向）
+    pub crates: &'s ModuleCrates,
     /// 调用链不约束（用户类）
     pub all_in_chain: bool,
-    /// lib 模式（jar 输入）的按目标 crate 定向；None = 单 crate 前缀
+    /// lib 模式（jar 输入）的按目标 crate 定向；None = 无 lib crate
     pub route: Option<CrateRoute<'s>>,
 }
 
 impl<'s> CrossInput<'s> {
-    /// 引用类所用的 crate 前缀
+    /// 引用类所用的 crate 路径首段：lib 类按 lib 定向，JDK 类按模块 crate（同 crate → `crate`）
     pub fn prefix_of(&self, bin: &str) -> &'s str {
-        Prefix { base: self.prefix, route: self.route }.of(bin)
+        if let Some(t) = self.route.and_then(|r| r.target(bin)) {
+            return t;
+        }
+        ModuleCrates::head(self.here, self.crates.crate_of(bin))
     }
 }
 
-/// lib 模式的 crate 定向：引用类按归属 crate 导入（当前 lib → `crate`，其它 lib → 该 lib 名，
-/// 其余 → `java_runtime`）
+/// lib 模式的 crate 定向：引用类按归属 crate 导入（当前 lib → `crate`，其它 lib → 该 lib 名；
+/// 非 lib 类 → None，按 JDK 模块 crate 定向）
 #[derive(Clone, Copy)]
 pub struct CrateRoute<'s> {
     /// lib crate（声明序 = 依赖方向：后声明者依赖先声明者）→ 发射类集合
@@ -48,15 +54,15 @@ pub struct CrateRoute<'s> {
 }
 
 impl<'s> CrateRoute<'s> {
-    pub fn target(&self, bin: &str) -> &'s str {
+    pub fn target(&self, bin: &str) -> Option<&'s str> {
         match self.libs.iter().find(|(_, set)| set.contains(bin)) {
-            Some((n, _)) if Some(n.as_str()) == self.current => "crate",
-            Some((n, _)) => n.as_str(),
-            None => "java_runtime",
+            Some((n, _)) if Some(n.as_str()) == self.current => Some("crate"),
+            Some((n, _)) => Some(n.as_str()),
+            None => None,
         }
     }
 
-    /// lib crate 只能引用自身 / java_runtime / 声明序在前的 lib crate（反向引用来自子类型收集，
+    /// lib crate 只能引用自身 / JDK 模块 crate / 声明序在前的 lib crate（反向引用来自子类型收集，
     /// 导入即 E0433）；user crate 依赖全部 lib
     pub(crate) fn reachable(&self, target: &str) -> bool {
         let pos = |n: &str| self.libs.iter().position(|(l, _)| l == n);
@@ -64,19 +70,6 @@ impl<'s> CrateRoute<'s> {
             (Some(c), Some(t)) => t <= c,
             _ => true,
         }
-    }
-}
-
-/// 按文本补导（scan）的前缀：单 crate 前缀，或 lib 模式按目标 crate 定向
-#[derive(Clone, Copy)]
-pub struct Prefix<'s> {
-    pub base: &'s str,
-    pub route: Option<CrateRoute<'s>>,
-}
-
-impl<'s> Prefix<'s> {
-    pub fn of(&self, bin: &str) -> &'s str {
-        self.route.map_or(self.base, |r| r.target(bin))
     }
 }
 

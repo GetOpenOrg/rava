@@ -8,8 +8,7 @@ use indexmap::IndexMap;
 use crate::ctx::EmitCtx;
 use crate::text::{pkg_from_java, to_snake};
 
-
-/// java_runtime 侧布局
+/// JDK 侧布局（各模块 crate）
 #[derive(Debug, Default)]
 pub struct JdkLayout {
     /// 类 → 文件路径（闭包序）
@@ -25,12 +24,15 @@ fn pkg_parts(bin: &str) -> Vec<&str> {
 }
 
 impl JdkLayout {
-    pub fn build(ctx: &EmitCtx<'_>, jrt_src: &Path) -> JdkLayout {
+    /// 各 JDK 类落到其模块 crate 的源码树（[`ModuleCrates::src_dir`]）下按包路径的文件
+    pub fn build(ctx: &EmitCtx<'_>, out_dir: &Path) -> JdkLayout {
         let classes = &ctx.input.jdk_classes;
+        let crates = ctx.crates();
+        let src_of = |c: &str| crates.src_dir(out_dir, crates.crate_of(c));
         // 父目录 → 子包目录名（类名与子包同名 → `_t` 后缀）
         let mut pkg_dirs: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
         for c in classes {
-            let mut parent = jrt_src.to_path_buf();
+            let mut parent = src_of(c);
             for p in pkg_parts(c) {
                 pkg_dirs.entry(parent.clone()).or_default().insert(p.to_string());
                 parent = parent.join(p);
@@ -41,7 +43,7 @@ impl JdkLayout {
         for c in classes {
             let parts = pkg_parts(c);
             let simple = c.rsplit('/').next().unwrap_or(c);
-            let parent = parts.iter().fold(jrt_src.to_path_buf(), |d, p| d.join(p));
+            let parent = parts.iter().fold(src_of(c), |d, p| d.join(p));
             let mut m = to_snake(simple);
             if pkg_dirs.get(&parent).is_some_and(|s| s.contains(&m)) || companion_clash(&runtime_src, &parts, &m) {
                 m.push_str("_t");

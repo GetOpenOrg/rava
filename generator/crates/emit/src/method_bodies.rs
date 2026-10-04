@@ -119,6 +119,10 @@ impl InstrHooks for Hooks<'_, '_> {
     fn is_opaque(&self, cls: &str) -> bool {
         self.ctx.is_opaque(cls)
     }
+
+    fn crate_path(&self, target: &str, current: &str) -> Option<String> {
+        Some(self.ctx.crate_head(target, self.ctx.crate_of(current)).to_string())
+    }
 }
 
 /// 登记事实 → 发射层账本条目

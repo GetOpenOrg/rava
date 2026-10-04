@@ -1,14 +1,14 @@
 //! 物理拆层（docs/plans/2026-10-01-rustc-memory-and-crate-split.md §7.5 S4）。
 //!
 //! 第二阶段收尾之后、落盘之前，把 JDK 生成类（非手写、非接口）的 `java_class!` 块一分为二：
-//! - 声明层：原文件原位（`java_runtime/src/…`），块首加 `#[rava_layer = "decl"]`；
+//! - 声明层：原文件原位（`<根>_decl/src/…`），块首加 `#[rava_layer = "decl"]`；
 //! - 实现层：同一块文本加 `#[rava_layer = "body"]`，连同原文件头（allow 属性与 use 列表）
-//!   写进实现 crate `java_body_k/src/body/<同相对路径>`，另加一行 glob 导入声明层的本类模块。
+//!   写进实现 crate `<根>_body_k/src/body/<同相对路径>`，另加一行 glob 导入声明层的本类模块。
 //!   块后的 `iface_upcasts!`、反射字段闭包等属声明层，不进实现层。
 //!
 //! 实现 crate 划分：类按 binary name 排序，按块文本字节贪心装箱（单箱上限
 //! [`BODY_CRATE_BYTES`]），划分只依赖闭包本身，同一闭包恒得同一划分（编译缓存可复用）。
-//! 实现 crate 根 `use java_runtime::*;`（私有 glob）：类文件头的 `crate::java::…` /
+//! 实现 crate 根 `use <根>_decl::*;`（私有 glob）：类文件头的 `crate::java::…` /
 //! `crate::prelude` 路径经它解析到声明层；本 crate 的类模块挂在 `body` 子树下且 mod.rs 只声明
 //! 不再导出，不遮蔽 `crate::java`。
 
@@ -23,10 +23,7 @@ use super::fs::{has_marker, walk, Writer};
 use crate::ctx::EmitCtx;
 use crate::emission::ClassEmission;
 use crate::error::{io_err, EmitError, Result};
-use crate::text::scratch_pkg_version;
-
-/// 实现 crate 名前缀（`java_meta` 构建脚本扫描兄弟 crate 时据此排除实现层副本）
-pub const BODY_CRATE_PREFIX: &str = "java_body_";
+use super::module_side::{lib_manifest, path_dep};
 
 /// 单个实现 crate 的块文本字节上限（§7.6：单个实现 crate rustc 峰值 ≤ 1.5 GB）
 pub const BODY_CRATE_BYTES: usize = 5 << 20;
@@ -37,12 +34,16 @@ pub const MIN_BODY_CRATES: usize = 2;
 
 const BLOCK_OPEN: &str = "rava_macros::java_class! {\n";
 
-/// 实现 crate 的 lib.rs
-const BODY_LIB: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, \
-                        non_camel_case_types, non_upper_case_globals, static_mut_refs, unused_comparisons)]\n\
-                        // 声明层全部公开项（`crate::java::…` / `crate::prelude` 经此解析到 java_runtime）\n\
-                        use java_runtime::*;\n\
-                        mod body;\n";
+/// 实现 crate 的 lib.rs（`decl`：根模块声明层 crate 名）
+fn body_lib(decl: &str) -> String {
+    format!(
+        "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, \
+         non_camel_case_types, non_upper_case_globals, static_mut_refs, unused_comparisons)]\n\
+         // 声明层全部公开项（`crate::java::…` / `crate::prelude` 经此解析到声明层）\n\
+         use {decl}::*;\n\
+         mod body;\n"
+    )
+}
 
 /// 一个实现 crate：名字 + 类文件（相对 `src/body` 的路径 → 文本）
 #[derive(Debug, Default)]
@@ -78,7 +79,7 @@ fn module_path(rel: &Path) -> String {
 
 /// 一个类文本拆成 (声明层文本, 实现层文本)；块不存在时 Ok(None)。
 /// 声明层剥去下沉方法体（判定与宏同一份代码，`rava_macros_core::plan`）。
-pub fn split_text(text: &str, module: &str) -> std::result::Result<Option<(String, String)>, String> {
+pub fn split_text(text: &str, decl_crate: &str, module: &str) -> std::result::Result<Option<(String, String)>, String> {
     let Some(open) = text.find(BLOCK_OPEN) else { return Ok(None) };
     let start = open + BLOCK_OPEN.len();
     // 块以第 0 列的 `}` 行结束（块内各项至少缩进 4 列）
@@ -94,7 +95,7 @@ pub fn split_text(text: &str, module: &str) -> std::result::Result<Option<(Strin
         &text[inner_end..]
     );
     let body = format!(
-        "{}use java_runtime::{module}::*;\n\n{BLOCK_OPEN}    #[rava_layer = \"body\"]\n{}",
+        "{}use {decl_crate}::{module}::*;\n\n{BLOCK_OPEN}    #[rava_layer = \"body\"]\n{}",
         &text[..open],
         &text[start..close]
     );
@@ -138,18 +139,20 @@ fn prune_uses(header: &str, rest: &[&str]) -> String {
 }
 
 /// 改写 `ems` 中可拆类的文本为声明层，返回实现层装箱结果
-pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_src: &Path) -> Result<BodyPlan> {
+pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path) -> Result<BodyPlan> {
+    let crates = ctx.crates();
+    let decl = crates.decl();
     // 可拆类：(ems 下标, 相对路径)
     let mut cands: Vec<(usize, PathBuf)> = Vec::new();
     for (i, em) in ems.values().enumerate() {
-        if em.crate_name != "java_runtime" || em.handwritten {
+        if em.crate_name != crates.root() || em.handwritten {
             continue;
         }
         // 接口与不透明（L1）类不拆：后者只有类型身份（`java_class_opaque!`，无方法体 / 存储层），整类留声明层
         if ctx.class(&em.binary_name).is_none_or(|ci| ci.is_interface()) || ctx.is_opaque(&em.binary_name) {
             continue;
         }
-        let Ok(rel) = em.path.strip_prefix(jrt_src) else { continue };
+        let Ok(rel) = em.path.strip_prefix(decl_src) else { continue };
         cands.push((i, rel.to_path_buf()));
     }
     // 剥体计划要解析整块（与宏同一解析器），按类并行
@@ -157,7 +160,7 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
         let ems_ref = &*ems;
         crate::par::par_map(crate::par::resolve_jobs(ctx.opts.jobs), &cands, |(i, rel)| {
             let em = &ems_ref[*i];
-            split_text(&em.text, &module_path(rel)).map_err(|e| format!("{}：剥体计划失败：{e}", em.binary_name))
+            split_text(&em.text, &decl, &module_path(rel)).map_err(|e| format!("{}：剥体计划失败：{e}", em.binary_name))
         })
     };
     let mut bodies: Vec<(String, PathBuf, String)> = Vec::new();
@@ -173,7 +176,7 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, jrt_s
     let mut plan = BodyPlan::default();
     for ((_, rel, body), bin) in bodies.into_iter().zip(bins) {
         while plan.crates.len() <= bin {
-            let name = format!("{BODY_CRATE_PREFIX}{}", plan.crates.len() + 1);
+            let name = crates.body(plan.crates.len() + 1);
             plan.crates.push(BodyCrate { name, files: BTreeMap::new() });
         }
         plan.crates[bin].files.insert(rel, body);
@@ -243,26 +246,10 @@ impl BodyPlan {
                 let text: Vec<String> = children.iter().map(|m| mod_line(m)).collect();
                 w.write(&d.join("mod.rs"), &(text.join("\n") + "\n"))?;
             }
-            w.write(&src.join("lib.rs"), BODY_LIB)?;
-            let l = [
-                "[package]".to_string(),
-                format!("name = \"{}\"", c.name),
-                format!("version = \"{}\"", scratch_pkg_version(&dir)),
-                "edition = \"2021\"".into(),
-                String::new(),
-                "[lib]".into(),
-                format!("name = \"{}\"", c.name),
-                "path = \"src/lib.rs\"".into(),
-                "crate-type = [\"lib\"]".into(),
-                String::new(),
-                "[dependencies]".into(),
-                "java_runtime    = { path = \"../java_runtime\" }".into(),
-                format!("rava_macros = {{ path = \"{}\" }}", ctx.macros_crate.display()),
-                String::new(),
-            ];
-            let mut l = l.to_vec();
-            l.extend(super::entry::lints_section());
-            w.write(&dir.join("Cargo.toml"), &l.join("\n"))?;
+            let decl = ctx.crates().decl();
+            w.write(&src.join("lib.rs"), &body_lib(&decl))?;
+            let deps = [path_dep(&decl, &decl), format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display())];
+            w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, &c.name, &deps))?;
         }
         Ok(())
     }
@@ -291,14 +278,14 @@ mod tests {
     #[test]
     fn split_text_separates_layers() {
         let text = "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n";
-        let (decl, body) = split_text(text, "a::b").unwrap().unwrap();
+        let (decl, body) = split_text(text, "rt_decl", "a::b").unwrap().unwrap();
         assert_eq!(
             decl,
             "#![allow(x)]\nuse crate::prelude::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"decl\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n// tail\nrava_macros::iface_upcasts! { impl B => C }\n"
         );
         assert_eq!(
             body,
-            "#![allow(x)]\nuse crate::prelude::*;\n\nuse java_runtime::a::b::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"body\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n"
+            "#![allow(x)]\nuse crate::prelude::*;\n\nuse rt_decl::a::b::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"body\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n"
         );
         assert_eq!(module_path(Path::new("java/lang/ref/reference.rs")), "java::lang::r#ref::reference");
     }

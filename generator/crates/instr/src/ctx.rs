@@ -38,6 +38,11 @@ pub trait InstrHooks {
     fn is_opaque(&self, _cls: &str) -> bool {
         false
     }
+    /// 类 `current` 的代码引用类 `target` 时的 crate 路径首段（同 crate → `crate`，跨 crate → 目标
+    /// crate 名；`target` 为空 = 运行时基础设施所在 crate）。None → 单 crate 缺省（`crate`）
+    fn crate_path(&self, _target: &str, _current: &str) -> Option<String> {
+        None
+    }
 }
 
 /// 无合成对象的缺省回调（单元测试 / 不含 lambda 的调用方）
