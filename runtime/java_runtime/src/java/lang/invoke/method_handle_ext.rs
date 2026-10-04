@@ -66,6 +66,9 @@ fn site_type(site: &str) -> Result<MethodType> {
 
 /// 解释执行句柄 `mh` 的 LambdaForm，`args` 为不含句柄自身的实参。
 pub(crate) fn interpret(mh: MethodHandle, args: Vec<Object>) -> Result<Object> {
+    // 句柄组合的嵌套（invokeBasic → interpret → eval_function → interpret …）不经 Java 方法检查点，
+    // 深度由用户构造的组合子层数决定：每层在此判定栈界，耗尽抛 StackOverflowError（HotSpot 同）
+    crate::__stack_check()?;
     let form = mh.__get_form();
     let names = form.__get_names();
     let n = names.len()? as usize;
