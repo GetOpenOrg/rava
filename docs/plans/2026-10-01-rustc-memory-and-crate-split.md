@@ -1009,6 +1009,7 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
 | 86df0737 | S7 起点（同 ef600555 生成形态，HW 展开 14.46 MB / TSDS 103.37 MB） | 8540（墙钟 221 s） | | | 1448 / 27.0 s |
 | 8f515016 | S7-0 每类静态描述符 `__ClassDesc`（只增，HW 展开 +0.30 MB / TSDS +2.70 MB） | 8642（墙钟 249 s，jp1） | | | 1440 / 29.2 s |
 | a6a00c06 | S7-1 类型判定读描述符：删 `__view_as`、wrapper `__view_into` 类 / 祖先 / 接口载体臂、inner `is_instance_of` / `__class_name`（HW 展开 13.87 MB / TSDS 98.27 MB） | **8192**（墙钟 210 s） | | | **1408 / 25.4 s** |
+| 8bdcb04d | S7-2a 统一句柄：wrapper 单字段 `__r: __Ref<dyn X__VTable>`（句柄 + 视图指针），null 不分配，删 cells / from_any 钩子与 `__erased_inner`，wrapper ObjectVTable impl 缩为 4 个方法（本机 HW 展开 13.89 → 12.95 MB，其中 `impl ObjectVTable for` 0.80 → 0.31 MB；峰值本机不可分，待服务器） | 待测 | | | 待测 |
 
 **阶段 RSS**（time-passes，阶段末 RSS，MB）
 
