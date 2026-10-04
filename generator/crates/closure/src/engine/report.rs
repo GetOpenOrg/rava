@@ -326,6 +326,28 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 未收窄的按偏移写入站点诊断：`@hwopen`——写入目标实参含 open 的站点（目标 / 写入值规模与 open 类型）
+        if pat == "@hwopen" {
+            let mut v: Vec<String> = Vec::new();
+            for (s, &(m, off, t)) in self.hw_sites.iter().enumerate() {
+                let s = s as u32;
+                if self.hw_offsets.get(&s).copied().flatten().is_some() {
+                    continue;
+                }
+                let Some(ws) = self.hw_writes.get(&t) else { continue };
+                for (j, w) in ws.iter().enumerate() {
+                    if !w.as_ref().is_some_and(|w| w.fields) {
+                        continue;
+                    }
+                    let a = self.graph.get(&Node::A(s, j as u16)).cloned().unwrap_or_default();
+                    let wv = self.graph.get(&Node::W(s, j as u16)).cloned().unwrap_or_default();
+                    let opens: Vec<String> = a.open.iter().map(|o| self.names[o as usize].to_string()).collect();
+                    v.push(format!("  {}@{off} → {} 目标 |{}| open {:?} 写入 |{}|+{}", self.ctx_label(m), self.methods[t].key, a.classes.len(), opens, wv.classes.len(), wv.open.len()));
+                }
+            }
+            v.sort();
+            return v;
+        }
         if pat == "@array" {
             let s = self.graph.get(&Node::Array).cloned().unwrap_or_default();
             out.push(format!("  array = {{{}}}", self.set_str(&s)));

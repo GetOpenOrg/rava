@@ -132,13 +132,13 @@ pub fn descriptor_to_suffix(manifest: &Manifest, descriptor: &str) -> String {
                         } else {
                             body.to_lowercase()
                         };
-                        parts.push(format!("arr_{name}"));
+                        parts.push(format!("{}{name}", "arr_".repeat(j - i)));
                         i = end + 1;
                     }
                     None => i = j + 1,
                 },
                 Some(&p) => {
-                    parts.push(format!("arr_{}", prim_suffix(p).unwrap_or("x")));
+                    parts.push(format!("{}{}", "arr_".repeat(j - i), prim_suffix(p).unwrap_or("x")));
                     i = j + 1;
                 }
                 None => i += 1,
@@ -219,8 +219,11 @@ mod tests {
         assert_eq!(descriptor_to_suffix(&m, "(ITE;)V"), "i_e");
         assert_eq!(
             descriptor_to_suffix(&m, "(Ljava/lang/Object;[I[[Ljava/lang/String;)V"),
-            "obj_arr_i_arr_str"
+            "obj_arr_i_arr_arr_str"
         );
+        // 重载按完整数组维数区分：resize(String[][], int) 与 resize(String[][][], int)
+        assert_ne!(descriptor_to_suffix(&m, "([[Ljava/lang/String;I)V"), descriptor_to_suffix(&m, "([[[Ljava/lang/String;I)V"));
+        assert_eq!(descriptor_to_suffix(&m, "([[[Ljava/lang/String;[[I)V"), "arr_arr_arr_str_arr_arr_i");
         assert_eq!(
             descriptor_to_suffix(&m, "(Ljava/util/Map$Entry;[TT;)V"),
             "map_entry_arr_t"
