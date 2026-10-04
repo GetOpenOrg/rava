@@ -137,6 +137,8 @@ PYEOF
   local root; for root in "$REPO"/build/jdk*/; do
     [ -f "$root/target/$prof/$snake" ] || continue
     cp "$root/target/$prof/$snake" "$bin"
+    # 先按本例产物清单清共享 target 中的本例编译单元（--keep-artifacts 跳过了这一步），再删 scratch
+    "$REPO/build/analyzer-target/release/rava" prune "$root/$snake" > /dev/null
     rm -rf "$root/$snake" "$root/target/$prof/$snake" "$root/target/$prof/$snake.d"
   done
   if [ ! -x "$bin" ] || ! grep -q "PASS" "$log"; then
