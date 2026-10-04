@@ -71,6 +71,9 @@ translate_nested = [
     "java/lang/Class$Atomic",
     "java/lang/Class$AnnotationData",
     "java/lang/Class$1",
+    # Class$Holder：静态 allPermDomain = new ProtectionDomain(null, {AllPermission})，getProtectionDomain0 为
+    # null（引导类）时 Class.protectionDomain() 的回落值——纯 Java 静态状态。
+    "java/lang/Class$Holder",
     "java/lang/ClassLoader$ParallelLoaders",
     "java/lang/Module$EnableNativeAccess",
 ]

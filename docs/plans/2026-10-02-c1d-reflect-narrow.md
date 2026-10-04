@@ -1212,3 +1212,68 @@ members 1233→840，经实例化级联到全图。**这是不健全的丢类，
    `flow.rs::feeds` 按标记取 `Node::S(m, site)`，其余来源上溯不变。改动共享结构 `V`，需与 T1 / URL 代理协调。
    方案 2 改动面更小、不会漏掉上溯入口，倾向方案 2。
 3. 4b（open(Object) 污染 `writeObject0` 的 getClass 池）仍是根本驱动，保留，不在本步。
+
+## 七、T2 余项续：类镜像子类型判定收窄（分支 `c1d-b-t2`，基于 6f93f1c6）
+
+### 7.1 现基线与重定目标（6f93f1c6，JCA 收窄与 B1 合入后；`rava build --stop-after closure --closure-json` 逐例单跑，本机）
+
+| 例 | 类（有代码） | 方法 | fold_props |
+|---|---|---|---|
+| HelloWorld | 469（339） | 1813 | 15 |
+| StockTrans | 3386（2971） | 20860 | 84 |
+| TestSerialDefaultSuid | 3393（2976） | 20873 | 84 |
+
+6.1 的「≤3351」以 34001bde 为基线，已随 JCA / B1 等合入作废。按 6.2 / 6.5 的归因重定：
+- **computeDefaultSUID 部分**（第 3 件，hasStaticInitializer 实参只含可序列化类镜像）：回收 6.2 所列 6 类链，
+  StockTrans 目标 **≤3380 类 / ≤20813 方法**，TestSerialDefaultSuid **≤3387 / ≤20826**，HelloWorld 不变。
+- **getDefaultSerialFields 部分**：6.2 已查实可序列化字段可读面贡献为 0，其值集收窄依赖 4b（open(Object)
+  污染 `writeObject0` 的 getClass 池），本步不设独立类数目标。
+- StockTrans 已通过（抽查 t2b-e51a180c 15/15）：tasks.md「writeObject 反射臂待 T2 2e1d3355」一项已消解。
+
+### 7.2 设计：收窄标记不换来源（6.5 候选方案 2 的变体）
+
+6.5 失败的根因是收窄侧把值来源换成 `Site(aload)`，按来源上溯的求值认不出。本步**不改来源、不改 `V` 结构**：
+- absint：`ldc K; aload k; invokevirtual <清单 mirror_subtype_tests>; ifeq/ifne` 成立一侧，局部 k 的值保留原
+  `src`，只把对象标签置为 `Obj::MirrorSub(跳转偏移)`，并在跳转偏移发 `Event::MirrorSub(K, 原值)`。
+  `V::obj()` 不认 `MirrorSub`（与 `Uninit` 同），故标记不进常量格、不跨方法；合流两侧标记相同才保留（一侧 null 时保留）。
+- 引擎：`flow.rs::feeds` 遇带标记的值只取 `Node::S(m, 跳转偏移)`；`Event::MirrorSub` 以 `MirrorOp::Sub(K)` 把原值的
+  镜像流接到该节点，保留所指类 ⊂ K 的镜像（open、推不出所指类的合成镜像保留，基本类型镜像去掉）。
+  其余按来源上溯的求值（名字、成员查找、类查找）看到的来源与收窄前完全相同，不会再出现 6.5 的丢类。
+- 清单：`vm_intrinsics.toml [facts.reflect] mirror_subtype_tests = ["java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z"]`；
+  生成器里无类名。
+- 与 engine-order（未合入）的交叠：它改 `V::Str` 与 `stripped` / `rebased`，本步不碰这些行；`flow.rs` / `facts.rs` /
+  `bytecode.rs` 只是各加一处独立分支。
+
+### 7.3 结果（本机闭包测量，未编译）
+
+| 例 | 基线 类（有代码）/ 方法 | 本步 类（有代码）/ 方法 |
+|---|---|---|
+| HelloWorld | 469（339）/ 1813 | 469（339）/ 1813（集合逐一相同） |
+| StockTrans | 3386（2971）/ 20860 | **3380（2947）/ 20813** |
+| TestSerialDefaultSuid | 3393（2976）/ 20873 | **3387（2952）/ 20826** |
+
+集合差（StockTrans 与 TSDS 相同）：
+- 去掉 6 类：`NativeMemorySegmentImpl`、`GlobalSession`、`MemorySessionImpl$ResourceList`、`WrongThreadException`、
+  `ScopedMemoryAccess$ScopedAccessError`、`AttrCompare`（即 6.2 的 6 类链）；新增 0 类；方法只减 47、增 0。
+- 67 类降级（init / code → type / layout）：xml-security 的 `SignatureAlgorithmSpi` / `CanonicalizerSpi` 实现族、
+  `MemorySegment`、`MemorySessionImpl`、`JavaKeyStore`、`PKCS12KeyStore`、若干 `*Parameters` 接口等——均非可序列化，
+  此前只因 hasStaticInitializer 实参含全部镜像而被当作初始化。降级符合 JDK 语义（computeDefaultSUID 首条判定即排除）。
+
+6.5 失败处的对照（DeepCopy 曾掉 778 类）：DeepCopy 3388（2973）/ 20879 → 3382（2949）/ 20832，
+TestSerialEnumNoInit 3391 / 20868 → 3385 / 20821，集合差同上 6 类，无新增、无大面积丢类——来源不变后 6.5 的级联消失。
+
+### 7.4 4b 读码结论（未动代码）
+
+- 现状：反射对象通道只有一个全局实参池 `Node::RP(RC_OBJ)`，全部 `invoke0` 类调用点的接收者 / 实参并入，凡经该通道
+  入链的成员都按整池派发、形参接整池（`reflect_call.rs` `rcall_site` / `rcall_dispatch` / `rcall_bind`）。
+- Method 对象在流图里**没有身份**：按名查找（`invoke.rs` 方法查找分支，约 50–160 行）只登记 `reflect_names`，
+  返回值是普通 `Method` 类型值。序列化路径的 Method 存在 `ObjectStreamClass.writeObjectMethod` 等字段里，
+  经 `Method.invoke` → 访问器 → `invoke0` 才到调用点，按来源上溯在字段处即断。
+- 终态做法：Method / Constructor 成员对象化——查找点产出「成员伪类型」（同类镜像：伪 id → 成员序号），经字段 / 集合
+  照常流动；`invoke0` 调用点按 Method 实参值集里的成员伪 id 把接收者 / 实参接到**该成员自己的池** `RP(member)`，
+  open / 推不出的 Method 值仍接全局池（健全）。所需改动：`defs.rs`（节点 / 伪类型）、`invoke.rs` 方法查找分支
+  （产出伪 id）、`reflect_call.rs`（按成员分池）、`worklist.rs`（伪 id 增长钩子）、访问器字段流（`Method` →
+  `MethodAccessor` 包装，需清单声明访问器的成员绑定点，否则在访问器处退回全局池）。
+- 冲突：`invoke.rs` 方法查找分支与 `lookup_pair.rs` 是 engine-order 正在改的区段（`git diff 6f93f1c6 origin/engine-order`
+  在 invoke.rs 58 / 130 行两处 hunk），按约定须等其合入后再做。
+- 收益上界：5.5 的两种近似实验在旧基线上 ≤7 类 / 约 319 方法，相对现基线 20813 方法约 1.5%。

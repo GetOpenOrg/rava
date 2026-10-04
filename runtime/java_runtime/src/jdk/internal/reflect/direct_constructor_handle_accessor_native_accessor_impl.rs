@@ -26,7 +26,7 @@ impl DirectConstructorHandleAccessor_NativeAccessor {
         let Some((cls, desc)) = c.__reflect_key() else {
             panic!("stub: NativeAccessor.newInstance0 无声明键（非表构造的 Constructor）");
         };
-        crate::reflect_dispatch::reflect_invoke(&cls, "<init>", &desc, Object::default(), &args)
+        crate::reflect_dispatch::native_invoke(&cls, "<init>", &desc, Object::default(), &args)
             .map_err(__wrap_target_exception)
     }
 }

@@ -49,7 +49,25 @@ impl<'a> Engine<'a> {
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
+            MirrorOp::Sub(k) => self.sub_mirrors(s, k),
         }
+    }
+
+    /// Class 值集中所指类 ⊂ k 的类镜像（`K.class.isAssignableFrom(x)` 成立一侧）：所指类已知者按子类型判定取舍；
+    /// 基本类型类镜像所指不是引用类型（判定恒假）去掉；非字节码类镜像（lambda 合成类可实现任意接口）、所指未知的
+    /// Class 与 open 保留
+    fn sub_mirrors(&mut self, s: &TypeSet, k: u32) -> TypeSet {
+        let mut out = TypeSet { classes: IdSet::default(), open: s.open.clone() };
+        let xs: Vec<u32> = s.classes.iter().collect();
+        let kept: Vec<u32> = xs
+            .into_iter()
+            .filter(|&x| match self.mirrors.get(&x) {
+                Some(&c) => self.sub(c, k),
+                None => Some(x) != self.prim_mirror,
+            })
+            .collect();
+        out.classes = IdSet::from_sorted(kept);
+        out
     }
 
     /// Class 值集中各类镜像所指类的直接超类镜像（`getSuperclass`）：接口与根类无超类（null，不入结果），

@@ -1663,6 +1663,109 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
     start 路径耗时，再按 §21.8.4 的 T6 行验收。百万作业放 `tests/perf/`，服务器单独跑。
 - 未完成的跟进：T1b 审计手写运行时代码中的无界递归。
 
+**T1b 审计：手写运行时代码的无界递归（2026-10-05，分支 vthread-t6）**
+
+范围：`runtime/java_runtime/src`、`runtime/rava_coro/src`、`runtime/java_meta`、`runtime/rava_meta_tables`（运行期代码；
+`rava_macros*` 只在编译期执行，不在范围内）。方法：按函数体抽调用名建图，列出自调用与强连通分量（名字级，含同名不同函数的
+误报），逐个人工核对。判据：递归深度能否由程序（用户数据或用户构造的对象结构）推到无界，且两次递归之间不经过
+Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往返的递归（手写 → Java → 手写）每轮至少过一个检查点，
+由软件栈界兜住，只要求一轮的手写帧落在 SHADOW（64 KiB）内。
+
+| 位置 | 递归形态 | 深度上界 | 结论 |
+|---|---|---|---|
+| `java/lang/invoke/method_handle_ext.rs` `interpret` → `eval_function` → `interpret`（invokeBasic / invokeExact / invoke、resolvedHandle 分支） | LambdaForm 解释器按句柄组合层数递归，不经 Java 方法 | 用户构造的组合子层数（如循环里反复 `filterReturnValue`），**无界** | **已改**：`interpret` 入口判定栈界（`__stack_check()?`），耗尽抛 `StackOverflowError`，与 HotSpot 调深层句柄链同 |
+| Java 对象的 drop（编译器生成的 drop glue：`Arc<dyn ObjectVTable>` → 字段 `__Handle` → `Arc` …；`JvmError` 的 cause 链同） | 释放最后一个引用时沿引用链逐层 drop | 对象图中仅被前驱引用的链长（`LinkedList` 节点、单链表、长 cause 链），**无界** | **需改，越界**：属对象模型（`object.rs` / `handle.rs` 与宏生成的字段载体），见下「drop 链」 |
+| `java/lang/class_impl.rs` `for_class` ↔ `class_for_descriptor` | 数组类镜像按组件递归建 | 数组维数 ≤ 255（JVMS §4.4.1） | 有界 |
+| `java/lang/class_impl.rs` `__name_assignable`；`array.rs` `__view_into` / `__array_elem_assignable` / `is_instance_of` / `__shallow_copy`；`try_array_view` 环 | 数组协变判定按组件 / 视图源递归 | 维数 ≤ 255；协变视图只包一层（视图再取视图走同类型快路径） | 有界 |
+| `java/lang/reflect/array_impl.rs` `__multi_new` | 按维递归建多维数组 | 维数 ≤ 255（`newInstance` 先校验） | 有界 |
+| `anno_pool.rs` `skip_value` ↔ `skip_anno` | 注解元素值嵌套 | 类文件中的注解嵌套层数（javac 产出为源码嵌套层数，受属性长度限制） | 有界 |
+| `reflect_dispatch.rs` `reflect_invoke` → `injected_invoker::invoke` → `reflect_invoke` | 注入调用器转发到模板类 | 2 层（模板类不再是注入类） | 有界 |
+| `meta.rs` / `vm_stack.rs` / `monitor.rs` / `exec_context.rs` / `continuation_impl.rs` 等其余自调用 | 同名委托（`libc::…`、vtable 方法、`Pins::pin`）或循环实现（`class_extends` 上溯 64 层封顶） | — | 误报，无递归 |
+
+**drop 链（需改，未在本分支改）**：生成的对象是 `Arc` 计数，最后一个引用释放时由 drop glue 递归释放字段，深度等于只被前驱持有的
+引用链长。release 下每层约 2 帧、百字节量级，dev 更大；1 MiB 的协程栈上数千节点的链即越过 SHADOW，Linux < 6.13（无硬件 guard）
+时写入相邻槽，平台主线程（8 MiB）上 10⁵ 量级亦溢出。HotSpot 的回收不递归，这是 rava 独有的崩溃面。终态做法：对象引用载体
+（`Object` / `__Handle` 的 `Drop`）在「本次释放的是最后一个强引用」时按执行流深度计数，深度超过阈值（如 32）即把该 `Arc` 移入
+本载体的待释放队列而不就地递归，最外层 drop 返回前循环清空队列——释放顺序变化不可观察（无终结器），栈深恒定。改动面是
+对象模型与宏生成的字段载体（S7-3 范围），已报协调者另行派发（2026-10-05 协调者转给 S7-3 代理，作为其后续小步 S7-3x）。
+
+**pinned：TestContinuationPinned 的 `sync parkNanos: elapsed>=25ms` 偶发 false（2026-10-05，分支 vthread-t6）**
+
+- 复现（作业 vt6-probe-8e2f10f7 / 03，kr2，dev 构建）：顺序 300 次失败 9 次，8 进程并行 320 次失败 26 次；绝大多数是 1d
+  （pin 中 `parkNanos(30ms)` 提前返回），另有 1 次是 1c 在 60 s `sleep` 中途被观察到 `RUNNABLE`（同一机制：pin 中的停泊被虚假唤醒）。
+- 机制：pin 中的停泊落在载体的 park 许可上（`parkOnCarrierThread` → `U.park`，HotSpot 的 Parker 同样挂在载体 JavaThread 上）。
+  载体的许可同时被 ForkJoinPool 的唤醒协议使用：`signalWork` / `reactivate` 先写 `v.phase` 再看 `v.access == PARKED` 才
+  `unpark(owner)`，工作线程在 `access = PARKED` 之后、真正 park 之前若已看到 phase 变化就不 park——发信方仍会 unpark，留下一个多余许可；
+  `VirtualThread.unpark` 对 PINNED 线程的 `U.unpark(carrier)` 在被唤醒方已离开 park、尚未 `setState(RUNNING)` 时同理。多余许可留在载体上，
+  下一个在该载体上 pin 停泊的虚拟线程立即返回。`LockSupport.parkNanos` 的规范允许虚假返回，测试第 1d 段的断言并不受规范保证。
+- 对照（作业 vt6-race-91685ba3，诊断程序 `scripts/diag/PinnedRace.java` 循环 300 轮 1c+1d，顺序 1 进程 + 并行 8 进程，各 2700 轮）：
+
+  | | 1c 有中断（intr） | 1c 无中断（nointr，s 改为 pin 中 parkNanos 10 ms） |
+  |---|---|---|
+  | 参考 JDK 21.0.11（HotSpot） | 提前返回 9 / 2700（0.33%） | 3 / 2700（0.11%） |
+  | rava dev | 61 / 2700（2.3%），中途 RUNNABLE 5 | 36 / 2700（1.3%） |
+
+  提前返回全部发生在 n 与 s 同载体时；无中断时同样出现，说明多余许可不只来自中断路径。**参考 JDK 自身也会失败**，rava 只是频率高
+  约 7–10 倍：dev 构建（opt-level 0）的生成代码把上述两个窗口（工作线程 `access = PARKED` 到复位、被唤醒方 park 返回到置 RUNNING）
+  拉长了。
+- 结论：根因在 JDK 21 的设计（载体许可被调度器与 pin 停泊共用），不是 rava 运行时的偏差；monitor::park / unpark 的许可语义与
+  HotSpot Parker 一致，运行时没有可做的忠实修正——任何「吞掉多余许可」的改法都会丢掉调度器真实的唤醒。处置需用户裁定：
+  ① 测试第 1d 段按规范改成「循环 parkNanos 至截止时间」或放宽断言（违反「合法测试不改」，需用户批准）；② 维持现状，承认约 3% 的
+  偶发失败，随生成代码提速（R1 / 运行档位）下降。已报协调者。
+
+**T6 剖析：10⁵ 虚拟线程的每线程开销与 start 路径（2026-10-05，分支 vthread-t6）**
+
+- 口径：作业 vt6-prof-373114f1（jp2，x86_64 8 核 16 GB），dev 构建（opt-level 0、debug-assertions 开），`tests/perf/VirtualThreadScale.java`
+  n = 10⁵，`scripts/diag/vt6_probe.sh` 计时与内存分两次跑，第三次挂进程内采样器（`scripts/diag/sampler.c`）。采样器以 ITIMER_PROF
+  计时，内核节拍限制下实效约 250 Hz，多线程时同一时刻只挂一个待决信号，载体线程的样本偏少；主线程内部的占比可信，跨线程占比只作参考。
+- 计时与内存：
+
+  | 模式 | 建线程（主线程循环） | start | 全程墙钟 | user / sys | 峰值 RSS | 输出 |
+  |---|---|---|---|---|---|---|
+  | unstarted（只建不启） | 4.0–4.6 s（40–46 µs/个） | — | 7.7 s（含持有 3 s） | 3.7 / 0.4 s | 395 MiB（anon 314 MiB） | — |
+  | split（先全建，再全启；体内 park） | 4.6–4.9 s | 12.9–15.9 s（130–160 µs/个） | 27.3 s | 67 / 4.4 s | 1.78 GB（PTE 198 MiB） | 正确，all sleeping true |
+  | park（建与启同一循环） | 建 + 启 27.3 s | — | 36.5 s | — | 1.78 GB | 正确，true |
+  | sleep（验收形态，sleep 2 s） | 建 + 启 23.5–26.7 s | — | 32.9 s | 124 / 7.3 s | 1.38 GB | `all sleeping at once: false` |
+
+  split 的 start 每 1/10 进度约 0.85–1.3 s，基本线性；start50（+1.9 s）与 start100（+3.0 s）两处尖峰正对 `TrackingRootContainer`
+  的 CHM 在 49152 / 98304 项时扩容（`transfer` 由主线程单线程完成）。没有随存活数增长的退化。
+- 每线程内存（park 模式峰值，10⁵ 个同时停泊）：协程栈已提交约 10 KB/个（dev 帧大；热槽只留栈顶 16 KiB，冷槽整槽交还，生效正常）、
+  页表约 2 KB/个（1 MiB 跨度的槽各自占页表页）、堆对象约 5.5 KB/个（未启动时约 3.2 KB/个：VirtualThread、Continuation、
+  runContinuation lambda、Thread 字段与 FieldHolder 等）。合计约 17.8 KB/个，**峰值 1.78 GB 已在 2 GiB 内**，内存指标不是瓶颈。
+- 主线程 CPU 分布（split，5314 样本 ≈ 21 s CPU / 27 s 墙钟，主线程基本跑满）：
+
+  | 段 | 包含占比 |
+  |---|---|
+  | 建线程（`Thread.Builder.unstarted` → `VirtualThread.<init>`） | 13.6% |
+  | `VirtualThread.start` | 49.6% |
+  | 　其中 `TrackingRootContainer.onStart` → CHM keySet `add`（含扩容 `transfer` 18.9%） | 30.3% |
+  | 　其中 `submitRunContinuation` → `ForkJoinPool.execute`（poolSubmit / push / signalWork → 唤醒载体） | 约 17% |
+  | unpark 阶段（`VirtualThreads.unpark` → 再次 submit） | 26.6% |
+
+  横切的叶子成本（主线程包含占比）：Unsafe 数组元素访问经擦除视图（`unsafe__impl::_erased_ref_array`）8.3%；
+  `Object::__typed_null_of`（全局 `HashMap<&str, Object>` + SipHash，取类型化 null）6.4%；`String::from(&str)`（ldc 每次执行都
+  新建并查全局驻留表）5.7%，sleep 模式 11.6%；`unsafe__impl::offset_slot`（字段偏移 → HashMap 查表并克隆两个 String，再按名匹配）
+  4.8%；`monitor::unpark`（全局 `PARKERS` 互斥表 + SipHash）5.9%。协程本身（`enterSpecial`、`Stack::new`、`doYield`）在全部线程
+  前 160 名里都没有出现，低于约 1.5%。载体线程上 `ForkJoinPool.scan` 占全部样本 34%。
+- 结论：
+  - start 路径的耗时来自翻译出的 JDK 代码（CHM、ForkJoinPool、Thread 构造）在 opt-level 0 下的常数因子，加上几处运行时协议的
+    热点（ldc 驻留、类型化 null、Unsafe 偏移解码与数组视图、parker 侧表），**不是虚拟线程专属机制**，也没有随规模退化的算法问题。
+  - 要达到墙钟 ≤10 s，主线程每个虚拟线程（建 + 启 + 唤醒）的 CPU 须从约 210 µs 降到约 80 µs 以内（2.7 倍）。本代理边界内能动的只有
+    `monitor.rs` 的 parker 侧表（≤6%），远不够。
+  - 剩余杠杆都在他人边界：① dev 档位的 opt-level（`emit/src/project/entry.rs`，V12）——预计最大；② ldc 按调用点缓存驻留实例
+    （生成器，R1）；③ 类型化 null 改为按描述符静态缓存（`object.rs`，S7-3）；④ Unsafe 字段偏移解码与引用数组访问去掉逐次查表与
+    String 克隆（`unsafe__impl.rs`，S7-3「Unsafe 槽位」）。已报协调者裁定。
+- opt-level 杠杆实测（作业 vt6-opt1-4a983fe8，jp1，提交 4a983fe8，环境变量 `CARGO_PROFILE_DEV_OPT_LEVEL=1`
+  `CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false`，不改 entry.rs）：dev 构建 8:32、峰值 5.7 GiB，二进制 426 MiB。
+
+  | 模式 | opt 0（vt6-prof-373114f1） | opt 1 |
+  |---|---|---|
+  | split 墙钟 / 峰值 RSS | 27.3 s / 1.78 GB | 6.4 s / 0.98 GB（建 0.69 s、启 2.07 s、唤醒到 join 1.46 s；sleeping true） |
+  | sleep 墙钟 / 峰值 RSS | 32.9 s / 1.38 GB | 8.6 s / 1.43 GB（建 + 启 3.38 s；sleeping **false**） |
+
+  opt 1 下墙钟与内存都过线，剩 sleep 模式的 `all sleeping at once`：主线程建 + 启 10⁵ 个须在 2 s 睡眠窗口内完成（≤20 µs/VT），
+  实测约 34 µs/VT，还差 1.7 倍，需要杠杆 ②–④ 与 CHM / ForkJoinPool 常数继续压。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，

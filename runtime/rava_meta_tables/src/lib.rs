@@ -64,6 +64,7 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("nest_members", "NEST_MEMBERS"),
     ("class_access_flags", "CLASS_ACCESS_FLAGS"),
     ("class_source_file", "CLASS_SOURCE_FILE"),
+    ("class_signature", "CLASS_SIGNATURE"),
     ("class_defining_loader", "CLASS_DEFINING_LOADER"),
     ("record_classes", "RECORD_CLASSES"),
     ("record_components", "RECORD_COMPONENTS"),
@@ -97,6 +98,7 @@ pub fn render(texts: &[&str], side: Side) -> String {
         &scan_class_attr(texts, "permitted_subclasses"),
         &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
         &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader"));
+    render_class_signature_table(&mut g, &scan_class_attr(texts, "generic_signature"));
     render_nest_table(&mut g, &scan_nest_meta(texts));
     render_interfaces_table(&mut g, &scan_class_interfaces(texts));
     render_class_anno_table(&mut g, &scan_class_annos(texts));
@@ -208,6 +210,7 @@ fn modifier_bits(s: &str) -> i32 {
             // bridge=0x40、字段 transient=0x80/方法 varargs=0x80——
             // java.lang.reflect.Modifier 对方法读 varargs 位）
             "varargs"      => 0x0080,
+            "bridge"       => 0x0040,
             "native"       => 0x0100,
             // 类侧专有（java_class! 块 modifiers 属性，attrs._class_modifiers_str）：
             // 生成的接口块带 super_class=Object，class_modifier_bits 的「无父类即
