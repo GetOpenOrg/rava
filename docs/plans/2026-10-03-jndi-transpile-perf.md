@@ -549,3 +549,14 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
   `server_maintenance/rava/test_results/job/<tag>/0[2-5]/`，含 `sum_*.json`（闭包摘要含 perf）与 `time_*.txt`（`/usr/bin/time -v`）。
 - 已取得的一组（6d95f88a，jp1）：JNDI 引擎 381.5 s、类 3923、RSS 5.1 GB；HTTP 引擎 737.6 s、类 5490、RSS 8.9 GB。
   服务器 JDK 与本机不同，类数只能和同服务器的基线比。
+- dab2bc60 第一组（jp1，JNDI）：引擎 386.9 s、类 3923、RSS 5.3 GB。按事件种类拆开的站点重跑（`rerun_by_event`，耗时含事件处理，
+  不含之后排空的流传播）：
+  - invoke 98.0 万次，112.1 s，约占引擎总耗时 29%；
+  - field 102.8 万次，11.4 s；
+  - aload 6.7 万次，1.9 s；astore 5.0 万次，6.4 s。
+
+**未完成 / 下一步**：
+1. 服务器上基线与本分支各两次的计时还在 jp1 排队。判据 ①（不慢于 main）要等两组的中位数出来再定。
+2. 下一个热点是调用点重跑（平均每次约 114 µs）。`edge_recv` / 虚派发已经只看新增接收者，开销应该在每次重跑都要重算的
+   部分：`value_set` 并集、`filter`、`pstr_site`、`bind_params`、`edge_ret`。下一步是对重跑的调用点做分段采样，
+   把只依赖分析结果、不依赖接收者的部分记忆下来。
