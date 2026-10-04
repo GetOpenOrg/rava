@@ -371,19 +371,14 @@ DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 
 收窄覆盖后再复查剩余未收窄站点（FieldReflector 等）是否仍有同类差异。验收照旧：DeepCopy / StockTrans / TSLP（正常 + 探针）
 与 HTTP 种子 0 / 1 / 2 类 / 方法 / 反射集合一致。
 
-### 合并 21fc601b 后的生成器单元测试（8057d7ec，到时限的 WIP 状态）
+### 合并 21fc601b 后的生成器单元测试（到时限的 WIP 状态）
 
-- closure / cfg / classfile / rava / archive_emit_cli 全过（148 + 5 + 7 + 27 + 1）。
-- `driver/tests/build_cli.rs` 有 2 例失败：`proxy_interface_owner_not_opaque`、`locale_bundle_parent_not_null_recv`。两例的报错相同，都是在发射阶段：
-  `XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z: CfgAuditError 结构树与活块集合不一致 tree=[0..7,9,10,12,13] live=[…,14]`。
-  cargo 在这一测试二进制失败后就停了，`closure_cli`（含 `closure_independent_of_hash_seed`）**本轮没有跑到**。
-- 触发点在折叠：本分支的档案对该方法给出 `dead_pcs [[166,168]]`，即形参 `complete` 恒为真，所以
-  `do { if (!scanDecls(complete)) {…; return false;} } while (complete); return true;` 尾部的 `return true` 不可达。
-  JDK 内唯一的调用方 `XMLDocumentScannerImpl` 传的是字面量 `true`，形参常量本身成立。规整后 163 处变为 pop + goto 87，
-  循环只能经内部 return 退出。
-- 结构化器在这种形态上漏掉一个活块（推测是 162 处的回边块）。按块号手工搭的同形图（15 块，含前置菱形与出口短路）
-  `verify_tree` 能过，没有复现。差别应在真实节点（try 组 / 规整后 pc 164 的合成 goto / has_stmts）上，需要用真实方法的
-  FlowNode 转储去对照。
-- 修法方向（终态）：这是结构化器的缺陷，修在 `cfg/src/structure.rs`。任何「只经内部 return 退出的循环」都必须把回边块放进结构树。
-  不应回退折叠，也不应收窄形参常量。主线没有出这个错，大概是集成分支在这里没有得出形参常量（形参值随本分支的单调化改动变得
-  更精确或换了来源），需要用 21fc601b 的 rava 对同一夹具跑 `--closure-json` 核对该方法的 folds。
+- `cargo test --release --no-fail-fast` 全量结果：除下面两项外全部通过，包括 jdk_literal_lint、no_jdk_literals 与 closure 单元测试 148 例。
+- `driver/tests/build_cli.rs` 原有 2 例失败：`proxy_interface_owner_not_opaque` 和 `locale_bundle_parent_not_null_recv`。
+  - 报错在发射阶段：`XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z` 的 CfgAuditError「结构树与活块集合不一致」，live 比 tree 多出块 14。
+  - 触发点：本分支的档案给出 `dead_pcs [[166,168]]`，即形参 `complete` 恒为真。JDK 内唯一的调用方传的是字面量 `true`，这个折叠本身成立。
+  - 规整后，`do { if (!scanDecls(complete)) {…return false;} } while (complete)` 变成一个循环：循环头没有语句，跳转臂是空回边块 162（`iload_1; pop; goto 87`），出口臂则直接 break。
+  - 根因在结构化器 `cfg/src/simplify.rs::pass_while`：它把 `loop { if c { break } else { <空回边块> } }` 改写成 while 形态时，整条 if 都被删掉，臂里的空回边块跟着丢了。
+  - 修法：把两臂中的无语句块原位留在循环体内。新增单元测试 `while_guard_keeps_empty_latch`；修后 build_cli 14/14 通过。
+- `closure_cli::closure_independent_of_hash_seed` **仍失败**：StockTrans 种子 0 比种子 1 多出方法
+  `LocaleResources$ResourceReference.getCacheKey`。这正是上一节「未修：反射调用池去冗余与 open 目标写入」所述的剩余顺序依赖，按「交接 / 下一步」继续处理。
