@@ -1,6 +1,6 @@
 //! 模块描述符（`module-info.class` 的 `Module` / `ModuleResolution` 属性，JVMS §4.7.25）。
 //!
-//! 只取引导层解析与服务目录需要的部分：模块名、requires（含 static 标志）、无限定 exports 的有无、
+//! 只取引导层解析、服务目录与模块图需要的部分：模块名、requires（运行期 / static 分列）、无限定 exports 的有无、
 //! uses、provides，以及 `DO_NOT_RESOLVE_BY_DEFAULT`。类名为内部形式（`/` 分隔）。
 
 use crate::constant::{ConstantPool, CpEntry};
@@ -17,6 +17,8 @@ pub struct ModuleDecl {
     pub name: String,
     /// 运行期 requires（已去掉 `requires static`）
     pub requires: Vec<String>,
+    /// `requires static`：编译期依赖（运行期解析不跟随；代码可引用，计入模块可读性）
+    pub requires_static: Vec<String>,
     /// 至少有一个无限定 exports
     pub exports_api: bool,
     pub uses: Vec<String>,
@@ -89,6 +91,8 @@ fn module_attr(a: &mut Reader, pool: &ConstantPool) -> Result<ModuleDecl, Error>
         a.u2()?;
         if flags & REQUIRES_STATIC == 0 {
             m.requires.push(target);
+        } else {
+            m.requires_static.push(target);
         }
     }
     // exports 与 opens 同形：(包, 标志, to 列表)；只有 exports 的无限定形态计入 API
@@ -177,6 +181,7 @@ mod tests {
         let m = parse_module_info(&sample()).unwrap().unwrap();
         assert_eq!(m.name, "m");
         assert_eq!(m.requires, vec!["java.base".to_string()]);
+        assert_eq!(m.requires_static, vec!["x".to_string()]);
         assert!(m.exports_api);
         assert_eq!(m.uses, vec!["a/S".to_string()]);
         assert_eq!(m.provides, vec![("a/S".to_string(), vec!["a/Impl".to_string()])]);

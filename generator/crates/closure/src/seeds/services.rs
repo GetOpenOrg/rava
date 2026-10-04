@@ -135,6 +135,7 @@ mod tests {
         ModuleDecl {
             name: name.into(),
             requires: requires.iter().map(|s| s.to_string()).collect(),
+            requires_static: Vec::new(),
             exports_api: api,
             uses: uses.iter().map(|s| s.to_string()).collect(),
             provides: provides.iter().map(|(s, p)| (s.to_string(), vec![p.to_string()])).collect(),

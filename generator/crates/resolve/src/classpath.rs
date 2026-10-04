@@ -238,6 +238,26 @@ impl ClassPath {
         names.get(i).cloned().flatten()
     }
 
+    /// 类所在档案的下标（首个命中者；[`Self::module_views`] / [`Self::archives`] 同序）
+    pub fn archive_of(&self, name: &str) -> Option<usize> {
+        self.index.get(name).copied()
+    }
+
+    /// 全部已索引类：(binary name, 档案下标)，无序
+    pub fn indexed(&self) -> impl Iterator<Item = (&str, usize)> {
+        self.index.iter().map(|(n, &i)| (n.as_str(), i))
+    }
+
+    /// 覆盖档案（镜像改写类目录）登记的模块名
+    pub fn overlay_module(&self, idx: usize) -> Option<&str> {
+        self.overlay_modules.get(&idx).map(String::as_str)
+    }
+
+    /// 某个档案内的资源（非类文件）
+    pub fn resource_in(&self, idx: usize, path: &str) -> Option<Vec<u8>> {
+        lock(&self.archives).get_mut(idx)?.read_resource(path).ok().flatten()
+    }
+
     pub fn failures(&self) -> Vec<(String, String)> {
         lock(&self.failures).clone()
     }

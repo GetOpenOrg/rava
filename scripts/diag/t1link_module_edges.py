@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """T1 第 2 步诊断：按 JDK 模块统计档案生成代码的跨模块引用边。
 
-用法：t1link_module_edges.py <scratch> <out_dir> [--java-home DIR]
+用法：t1link_module_edges.py <scratch> <out_dir> [--java-home DIR] [--all-imports]
+
+- `--all-imports`：`use` 行的每个导入都计为引用（含正文未用的导入），用于核对 R1（导入行的反向 / 互不可达边）；
+  缺省只计正文中实际出现的名字。
 
 - 类 → 模块：`jimage list $JAVA_HOME/lib/modules`；模块依赖：`java --describe-module`（requires，
   java.base 隐含）。两者均从 JDK 动态取得。
@@ -75,6 +78,7 @@ def main():
     java_home = os.environ.get('JAVA_HOME')
     if '--java-home' in sys.argv:
         java_home = sys.argv[sys.argv.index('--java-home') + 1]
+    all_imports = '--all-imports' in sys.argv
     os.makedirs(out, exist_ok=True)
     cls2mod, req, reach = jdk_maps(java_home, out)
 
@@ -172,7 +176,7 @@ def main():
                 body = STR_RE.sub('""', '\n'.join(body_lines))
                 body = CMT_RE.sub('', body)
                 words = set(WORD_RE.findall(body))
-                refs = [b for n, b in imports.items() if n in words]
+                refs = [b for n, b in imports.items() if all_imports or n in words]
                 refs += [resolve(m.group(1)) for m in PATH_RE.finditer(body)]
                 for db in refs:
                     if not db:

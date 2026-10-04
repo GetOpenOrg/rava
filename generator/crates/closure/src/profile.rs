@@ -78,6 +78,8 @@ const SETS: &[(&str, bool)] = &[
 struct ClassRec {
     domain: String,
     level: String,
+    /// 所属模块（无名模块为 None）
+    module: Option<String>,
     via: Value,
     entry: String,
 }
@@ -103,6 +105,7 @@ struct Acc {
     services: BTreeMap<String, BTreeSet<(Option<String>, String)>>,
     services_unknown: bool,
     sysprops: Option<Value>,
+    modules: crate::modules_json::ModuleRows,
 }
 
 impl Acc {
@@ -120,13 +123,18 @@ impl Acc {
                 continue;
             }
             let rank = level_rank(level).ok_or_else(|| format!("类 {name} 的层级未知：{level}"))?;
+            let module = k.get("module").and_then(Value::as_str);
             match self.classes.get_mut(name) {
                 None => {
                     let via = k.get("via").cloned().unwrap_or(Value::Null);
-                    self.classes.insert(name.into(), ClassRec { domain: domain.into(), level: level.into(), via, entry: e.name.clone() });
+                    let rec = ClassRec { domain: domain.into(), level: level.into(), module: module.map(String::from), via, entry: e.name.clone() };
+                    self.classes.insert(name.into(), rec);
                 }
                 Some(r) if r.domain != domain => {
                     return Err(format!("类 {name} 的 domain 不一致：入口 {} 为 {}，入口 {} 为 {domain}", r.entry, r.domain, e.name));
+                }
+                Some(r) if r.module.as_deref() != module => {
+                    return Err(format!("类 {name} 的模块不一致：入口 {} 为 {:?}，入口 {} 为 {module:?}", r.entry, r.module, e.name));
                 }
                 Some(r) => {
                     if level_rank(&r.level) < Some(rank) {
@@ -135,6 +143,7 @@ impl Acc {
                 }
             }
         }
+        crate::modules_json::merge_rows(&mut self.modules, c.get("modules"), &e.name)?;
         let is_user = |s: &str| user.contains(owner_of(s));
         let folds: BTreeMap<&str, &Value> =
             arr(c, "folds")?.iter().map(|f| Ok((str_at(f, "method")?, f))).collect::<Result<_, String>>()?;
@@ -225,8 +234,15 @@ impl Acc {
         let classes: Vec<Value> = self
             .classes
             .iter()
-            .map(|(n, r)| json!({"name": n, "domain": r.domain, "level": r.level, "via": r.via, "entry": r.entry}))
+            .map(|(n, r)| {
+                let mut v = json!({"name": n, "domain": r.domain, "level": r.level, "via": r.via, "entry": r.entry});
+                if let Some(m) = &r.module {
+                    v["module"] = json!(m);
+                }
+                v
+            })
             .collect();
+        let modules = crate::modules_json::rows_json(&self.modules, &classes);
         let methods: Vec<Value> = self
             .methods
             .iter()
@@ -242,6 +258,7 @@ impl Acc {
         Ok(json!({
             "summary": summary,
             "classes": classes,
+            "modules": modules,
             "methods": methods,
             "instantiated": set("instantiated"),
             "clinit": set("clinit"),

@@ -234,6 +234,51 @@
 - 被用户「按 jmod 模块命名」的决定和本文的模块切分取代：模块 crate 自身就是 dylib，不再需要一个不对应 JDK 命名空间的自造顶层 crate。
 - 单例耗时与之相同：导出符号总量相同。
 
+### 2.5 M1 现状（module-m1 分支，2026-10-04）
+
+**已查实结论**
+
+- **类 → 模块归属规则**（`generator/crates/resolve/src/modules.rs`，`ModuleFacts::build` / `ModuleGraph::module_of`；模块名与依赖全部从类路径动态读取，生成器无模块名 / 类名字面量）：
+  1. JDK 档案（jmod / jimage）：取档案的 `module-info.class` 模块名；image 改写类沿用其所属模块的 overlay 名；
+  2. VM 支持类（`runtime/java_support/<module>`）：按目录名的 overlay 模块；
+  3. 不在任何档案里的类（lambda / 隐藏类 / image-only）：按包归属——包由「具名、非自动」档案中最早出现的那个模块拥有；
+  4. 用户类：无名模块；
+  5. 第三方 jar（`Lib`）：有 `module-info.class` 取其模块名；否则取 `MANIFEST.MF` 的 `Automatic-Module-Name`；否则按 JPMS `ModuleFinder` 规则由 jar 文件名派生（去版本号、非字母数字改 `.`、去首尾与重复的 `.`）。两种自动模块都标 `automatic`；
+  6. 可读性：本模块及其 requires（运行期 ∪ `requires static`）传递闭包；无名模块与自动模块读全部模块；具名模块不读无名模块。这是 JPMS readability 的上界（不区分 `requires transitive`），用于 crate 依赖与导入过滤，足够安全。
+  - 拓扑序（Kahn，同层名序；环按名序断开）即 M3 的 VM 登记序，`modules` 段按它输出。
+- **数据接口**（供 M2 / M3）：
+  - 生成器内：`EmitShared::modules() -> resolve::ModuleGraph`（`module_of` / `node` / `reads` / `class_reads` / `topo`），首次使用时由类路径构建并缓存；
+  - closure.json / profile.json：每个类条目带 `module`（无名模块不写），顶层 `modules` 段按拓扑序列出 `{name, automatic, classes, upstream}`（`upstream` 为完整 requires 闭包）；profile 合并时同名模块的行须一致，不一致报错（`closure/src/modules_json.rs`）；
+  - raw-audit 新增行 `[module-audit] modules=N out_of_reads=K`：逐个发射类检查其结构化引用集（即 `use` 行与正文名字的来源）是否都在本类模块的可读范围内，越界时列明细（`emit/src/module_audit.rs`）。M1 只报告不失败；M2 有了真实的 crate 依赖后改为越界即生成失败。
+- **R1 消除**：`dispatch_subtype_refs`（`emit/src/imports/referenced.rs`）只收本类模块可读的子类型。子类型集合只用于预认领导入，正文从不使用（`instr::hierarchy` 的子类型枚举无其他消费者），所以过滤不改变正文语义。
+- **正文唯一可见变化：短名认领**。被删的导入原先会与真实使用的类争短名。例如 `com.sun.security.sasl.Provider`（java.security.sasl，java.base 不可读）使 java.base 的 Provider 子类只能写作 `java_security_Provider`。删掉后改用短名 `Provider`，`ancestor_hooks` 中的 `Provider=Provider` 项随之省略。DeepCopy 中使用 `java_security_Provider` 别名的文件由 494 个降到 18 个（剩余文件所在模块确实可读另一个 `Provider`）。按 `java_security_Provider → Provider` 归一、去掉 `use` 行后，实现层每类文件逐字节相同（2,994 / 2,994），声明层只差 Cargo 版本号。实现层文件变小后，部分类在 `java_body_k` 分区间平移（如 `projective_point.rs` 从 9 号到 10 号）；分区由 M2 改为按模块切，这一变化与 M1 无关。
+
+**实测数字**
+
+| 用例 | `use` 行（基线 → M1） | 声明层 `java_runtime` 源码字节 | 全树 `.rs` 字节 | `[module-audit]` |
+|---|---|---|---|---|
+| HelloWorld | 17,226 → 17,226 | 5,622,468 → 5,622,468（不变：只有 java.base 一个模块，无可过滤项） | 不变 | modules=1 out_of_reads=0 |
+| DeepCopy | 281,178 → 276,790（−4,388） | 33,988,074 → 33,939,927（−48,147） | 130,989,508 → 130,693,266（−296,242，−0.23%） | modules=15 out_of_reads=0 |
+| TestSerialDefaultSuid | 281,417 → 277,029（−4,388） | 33,988,414 → 33,940,267（−48,147） | 131,038,928 → 130,742,686（−296,242） | modules=15 out_of_reads=0 |
+
+- 以上为单例模式（无 profile），参考 JDK 21.0.11+10。导入 `sun.security.pkcs11.ConfigurationException` 的文件由 264 个降到 5 个，剩下的都在 jdk.crypto.cryptoki 内。
+- s2 档案（6 入口，15 个模块，java.base 2,756 类）：profile 的 `modules` 段 15 行，拓扑序首行 java.base；三个程序的 `[module-audit]` 均为 `modules=15 out_of_reads=0`。
+- `t1link_module_edges.py`（s2，参考 JDK）：
+  - 只计正文：rev = 0、cross = 0（三个程序相同）；
+  - 加 `--all-imports`（本次新增，`use` 行的每个导入都计）：rev = 0、cross = 0，fwd 声明层 1,837、实现层 12,986。基线二进制同口径（s2 HelloWorld）：rev 3,458（声明层 265、实现层 3,193）、cross 365（35、330）。§2.3 的 6,419 / 665 按文件行计、不做类级去重，口径不同。只计正文时，M1 的 fwd / same 比基线略多（实现层 fwd 1,990 → 2,002）。原因是脚本不解析 `use … as 别名`，基线中 `java_security_Provider` 别名的引用没被计入；M1 改为短名后计入。实际引用没有增加。
+- 生成器单元测试全部通过，含 `jdk_literal_lint` / `no_jdk_class_literals_outside_lang` 与新增的 `resolve::modules` 四项。`closure_independent_of_hash_seed`（TestSerialLookupPairing 换种子类集不同）是集成分支上已有的失败，engine-order 代理正在修，与本改动无关（M1 不动闭包计算）。
+- 本机编译（`rava build --stop-after compile`，单例模式）：HelloWorld、TestBridgeMethod、InheritanceChain、ReflectionBasic、LambdaBasic、DeepCopy 全部通过。
+
+**失败路线**
+
+- `EmitShared` 里直接缓存 `OnceLock<ModuleGraph<'a>>`：`'a` 变为不变（invariant），emit 全线报 E0700 与 lifetime 错误。改为缓存自有数据 `ModuleFacts`，每次调用时以 `graph(cp)` 现建 `ModuleGraph<'_>` 视图（Copy，零成本）。
+
+**下一步**
+
+- M2：按 `modules` 段切模块 crate，crate 依赖取 `upstream ∩ 档案模块集`；`[module-audit] out_of_reads > 0` 改为生成失败。
+- M3：模块登记按 `modules` 段的拓扑序。
+- 第三方 jar 的 SCC 合并（§七）在 M2 处理；M1 已给出自动模块标记与「自动模块读全部」的规则，自动模块之间的环由 M2 合并为一个 crate。
+
 ## 三、终态设计
 
 ### 3.1 crate 布局：一个 JDK 模块一个模块 crate
@@ -437,7 +482,7 @@ rustc --crate-name <bin> --edition=2021 <scratch>/user/src/main.rs --crate-type 
 
 | # | 来源 | 实测规模（s2） | 消除手段 | 结果 |
 |---|---|---|---|---|
-| R1 | 生成器导入：`generator/crates/emit/src/imports/referenced.rs` 的 `dispatch_subtype_refs`，按方法调用 owner 收集全部 JDK 子类型并预认领为导入（如 Throwable → `sun.security.pkcs11.ConfigurationException`）；正文不使用 | 反向 6,419 条，互不可达 665 条（声明层 + 实现层，全部在 `use` 行） | 子类型集合按模块可读性过滤：只收本模块与上游模块的子类型。正文实测 0 条跨模块的子类型使用，过滤不改变生成正文 | 0 |
+| R1 | 生成器导入：`generator/crates/emit/src/imports/referenced.rs` 的 `dispatch_subtype_refs`，按方法调用 owner 收集全部 JDK 子类型并预认领为导入（如 Throwable → `sun.security.pkcs11.ConfigurationException`）；正文不使用 | 反向 6,419 条，互不可达 665 条（声明层 + 实现层，全部在 `use` 行） | 子类型集合按模块可读性过滤：只收本模块与上游模块的子类型。正文实测 0 条跨模块的子类型使用，过滤不改变生成正文 | 0（M1 已实施，实测见 §2.5） |
 | R2 | 档案元数据：声明层 `meta` 以 `extern` 读 `java_meta` 的 `__java_meta_*`（22 张表，含全部模块的行） | 22 个未定义符号 | 表按模块拆到各模块 crate，经 `__rava_register_module()` 登记；查询面合并已登记的切片（与 `register_user` 同一机制） | 0 |
 | R3 | 档案侧登记表（反射分派、类初始化钩子、VM 引导；今天在用户 `main.rs`，java_runtime 里没有反向链接边，但阻止「全局表放 java_base」） | 约 1,370 行 / 例（java.base 1,290，其余 70） | 每个模块的行进该模块 crate；用户 `main.rs` 按拓扑序调用 | 0 |
 | R4 | 声明层 ↔ 实现层 `export_name` 环 | 31,026 个 `__rava_*`：java.base 28,381，其余 2,645 | 非 java.base 模块单 crate，环消失；java.base 拆层，环闭合在 `java_base` 产物内，不跨模块 | 跨模块 0 |
@@ -527,4 +572,5 @@ cross-test §5.2 的「p50 ≤ 2 s、p99 ≤ 5 s、峰值 ≤ 1 GB」按上表�
 ## 八、交接
 
 - 实验目录：`build/t1link/`（s1 / s2 档案树、`target-*`、`out/`、`mod/`、`modtoy*/`），可随时删除。
-- 下一步：M1（可先行）→ M2（与 crate-split 合并）→ M3 → L2 → L3 → L4。
+- 下一步：M1（已完成，现状见 §2.5）→ M2（与 crate-split 合并）→ M3 → L2 → L3 → L4。
+- M1 实验目录：`build/m1/`（基线 / 新树、s2 档案、编译 scratch），可随时删除。
