@@ -16,6 +16,7 @@
 
 mod anno_table;
 mod class_tables;
+pub mod codec;
 mod member_tables;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,19 +25,31 @@ use std::path::{Path, PathBuf};
 
 use anno_table::*;
 use class_tables::*;
+use codec::Group;
 use member_tables::*;
+pub use member_tables::{FrameIndex, FrameMeta};
+
+/// 档案侧成员表保留整表的类（二进制体积 B1，`docs/plans/2026-10-04-binary-size.md`）：口径是闭包分析器的
+/// 反射事实（反射可达 / 方法句柄可解析 / 注解与序列化面，含超类型，`reflect.meta_methods` /
+/// `reflect.meta_fields`），集合外的类方法表 / 字段表 0 行（运行期视同「不声明成员」）
+#[derive(Debug, Clone, Copy)]
+pub struct Keep<'a> {
+    pub methods: &'a BTreeSet<String>,
+    pub fields: &'a BTreeSet<String>,
+}
 
 /// 表的归属侧
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    /// 档案侧：导出符号的 static
-    Archive,
-    /// 用户侧：`const` + `USER_META` 聚合
+#[derive(Debug, Clone, Copy)]
+pub enum Side<'a> {
+    /// 档案侧：导出符号的 static；成员表按 [`Keep`] 裁剪
+    Archive(Keep<'a>),
+    /// 用户侧：`const` + `USER_META` 聚合；成员表完整
     User,
 }
 
 /// 用户侧聚合的字段（运行时 `meta::UserMeta` 字段名 ← 表名）
 const USER_FIELDS: &[(&str, &str)] = &[
+    ("meta_pool", "META_POOL"),
     ("class_hierarchy", "CLASS_HIERARCHY"),
     ("class_direct_super", "CLASS_DIRECT_SUPER"),
     ("class_fields", "CLASS_FIELDS"),
@@ -54,39 +67,45 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("class_defining_loader", "CLASS_DEFINING_LOADER"),
     ("record_classes", "RECORD_CLASSES"),
     ("record_components", "RECORD_COMPONENTS"),
-    // 以下三表由调用方（发射层）在同一文件内以同名 `const` 给出
+    // 以下由调用方（发射层）在同一文件内以同名 `const` 给出（闭包派生表组 / 行表组）
+    ("closure_pool", "CLOSURE_POOL"),
     ("module_services", "MODULE_SERVICES"),
+    ("line_pool", "LINE_POOL"),
     ("line_tables", "LINE_TABLES"),
     ("line_numbers", "LINE_NUMBERS"),
 ];
 
-/// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表。用户侧另需调用方在同一文件给出
-/// `MODULE_SERVICES` / `LINE_TABLES` / `LINE_NUMBERS` 三个 `const`（`USER_META` 引用之）
+/// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表（表组 `META_POOL`，编码见 [`codec`]）。
+/// 用户侧另需调用方在同一文件给出闭包派生表组（`CLOSURE_POOL` / `MODULE_SERVICES`）与行表组
+///（`LINE_POOL` / `LINE_TABLES` / `LINE_NUMBERS`）的 `const`（`USER_META` 引用之）
 pub fn render(texts: &[&str], side: Side) -> String {
-    let methods = scan_class_methods(texts);
-    let methods = if side == Side::Archive { with_object_ctor_row(methods) } else { methods };
-    let parts = [
-        render_hierarchy_table(&scan_class_hierarchy(texts)),
-        render_direct_super_table(&scan_direct_super(texts)),
-        render_field_table(&scan_class_fields(texts)),
-        render_method_table(&methods),
-        render_modifiers_table(&scan_class_modifiers(texts)),
-        render_record_table(&scan_record_classes(texts), &scan_record_components(texts)),
-        render_class_meta_table(&scan_flag_classes(texts, "has_clinit"), &scan_flag_classes(texts, "is_hidden"),
-            &scan_class_attr(texts, "permitted_subclasses"),
-            &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
-            &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader")),
-        render_nest_table(&scan_nest_meta(texts)),
-        render_interfaces_table(&scan_class_interfaces(texts)),
-        render_class_anno_table(&scan_class_annos(texts)),
-    ];
-    let mut out = String::from("// 生成：反射元数据表（rava_meta_tables）。请勿手改。\n\n");
-    for p in &parts {
-        out.push_str(p);
-        out.push('\n');
+    let mut methods = scan_class_methods(texts);
+    let mut fields = scan_class_fields(texts);
+    if let Side::Archive(keep) = side {
+        methods = with_object_ctor_row(methods);
+        methods.retain(|c, _| keep.methods.contains(c));
+        fields.retain(|c, _| keep.fields.contains(c));
     }
+    let mut g = Group::new("META_POOL");
+    render_hierarchy_table(&mut g, &scan_class_hierarchy(texts));
+    render_direct_super_table(&mut g, &scan_direct_super(texts));
+    render_field_table(&mut g, &fields);
+    render_method_table(&mut g, &methods);
+    render_modifiers_table(&mut g, &scan_class_modifiers(texts));
+    render_record_table(&mut g, &scan_record_classes(texts), &scan_record_components(texts));
+    render_class_meta_table(&mut g, &scan_flag_classes(texts, "has_clinit"), &scan_flag_classes(texts, "is_hidden"),
+        &scan_class_attr(texts, "permitted_subclasses"),
+        &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
+        &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader"));
+    render_nest_table(&mut g, &scan_nest_meta(texts));
+    render_interfaces_table(&mut g, &scan_class_interfaces(texts));
+    render_class_anno_table(&mut g, &scan_class_annos(texts));
+    let mut out = String::from(
+        "// 生成：反射元数据表（rava_meta_tables；字符串池 + 字节流，字形见各渲染函数）。请勿手改。\n\n",
+    );
+    out += &g.render();
     match side {
-        Side::Archive => out,
+        Side::Archive(_) => out,
         Side::User => {
             let mut out = localize(&out);
             out.push_str("\n/// 用户类的反射元数据行：入口启动时登记（运行时 `meta::register_user`）\n");

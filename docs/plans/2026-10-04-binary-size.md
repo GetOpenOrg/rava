@@ -7,6 +7,49 @@
 
 剖析时的树早于 main d840bb83（S7-1 已删掉按类的 `is_instance_of` / `__view_into`）。B0 在当前 main 上重测，数字以重测为准。
 
+**B0 基线（main 10795076，`scripts/binsize.sh build/hello_world`）**
+
+测量方法：
+- `rava build tests/e2e/01_basics/HelloWorld.java --stop-after emit` 生成 scratch；
+- 经 heavy_lock 跑 `rava compile build/hello_world --release --keep-artifacts`（档位同上：opt=3、fat LTO、不 strip）；
+- 用 `scripts/binsize.sh <scratch>` 读取段 / 节大小（`size -m`）、元数据源码字节、表行数，以及元数据在二进制里的估算量。B0 的估算口径是「行数 × 结构体大小 + 去重字符串字节」；B1(c) 起改由生成器写出的 `[meta-stats]` 精确计数（估算器已删）。
+
+| 项 | B0 |
+|---|---:|
+| 二进制文件 | 15,137,696 B |
+| `__TEXT` 段 / 其中 `__text` / `__const` | 6,684,672 / 5,606,828 / 958,916 |
+| `__DATA_CONST` 段 / 其中 `__const` | 3,391,488 / 3,385,888 |
+| `__LINKEDIT` | 5,013,504 |
+| `meta_tables.rs` / `line_tables.rs` 源码 | 3,714,667 / 2,451,667 B |
+| 源码中 `CLASS_METHODS` / `CLASS_FIELDS` / `LINE_TABLES` / `LINE_NUMBERS` | 3,078,692 / 344,564 / 1,377,545 / 1,073,929 B |
+| `CLASS_METHODS` 行数 / 可达方法数 | 9,786 / 1,813 |
+| `CLASS_FIELDS` 行数 | 1,986 |
+| 行表方法项 / 行（其中 Java 行 0 的行） | 9,782 / 20,695（10,338） |
+| `LINE_NUMBERS` 项 / (pc, 行) 对 | 7,161 / 37,932 |
+| 四张大表在二进制中的估算量 | **3,506,260 B**（结构体 3,199,532 + 去重字符串 306,728）。与 `__DATA_CONST` 3.39 MB 吻合 |
+| 闭包反射数据 | `reflect.fields` 30（JDK 内部按名取字段偏移），members / gaps / field_names / allocations 均为 0 |
+
+B1 验收线：四张大表在二进制中的量 ≤ 350,626 B（B0 的 10%）。
+
+**B1 实测（binsize-meta，HelloWorld release，同一测量方法）**
+
+| 项 | B0 | B1(a) 行表只留翻译方法 | B1(b) 成员表按档案裁剪 | B1(c) 池 + 字节流编码 |
+|---|---:|---:|---:|---:|
+| 二进制文件 | 15,137,696 B | — | 12,291,456 B | **11,842,272 B** |
+| `__DATA_CONST,__const` | 3,385,888 | — | 1,073,288 | **648,744** |
+| `__TEXT,__text` | 5,606,828 | — | 5,599,852 | 5,612,980 |
+| `meta_tables.rs` / `line_tables.rs` 源码 | 3,714,667 / 2,451,667 | — / 733,149 | 326,123 / 754,798 | 125,888 / 501,999 |
+| `CLASS_METHODS` / `CLASS_FIELDS` 行 | 9,786 / 1,986 | 同 B0 | 0 / 192（17 类） | 同 B1(b) |
+| 行表方法项 / 行 | 9,782 / 20,695 | 2,265 / 12,622 | 同 B1(a) | 同 B1(a) |
+| 元数据在二进制中的量 | 3,506,260（估算） | 2,349,684（估算） | — | **255,720（`[meta-stats]` 精确）** |
+
+B1(c) 的 255,720 B 构成：反射元数据 66,536（池 47,972 + 各表流 18,564）、行表 187,659（池 83,187 + `LINE_TABLES` 71,761 + `LINE_NUMBERS` 32,711）、闭包派生表 952、用户侧 573。达到验收线（≤ 350,626 B，B0 的 7.3%），二进制里 `&str` 胖指针 0 个。
+
+- 裁剪口径（B1(b)）：闭包分析器输出 `reflect.meta_methods` / `reflect.meta_fields`（`generator/crates/closure/src/engine/meta_classes.rs`），档案模式按入口并集。方法表收成员枚举所指类、按名查方法 / 构造器的类、按名取类得到的类、反射成员面的声明类、补种点名类与整类放开类、注解类型、序列化分配目标；字段表收按名查字段的声明类（目标推不出时取声明该名字段的闭包类）、字段枚举与整类放开的类、可序列化字段枚举的类。两者都按超类型闭包。反射缺口不扩大集合。
+- 帧方法元数据（修饰符 / static / native / 注解）随行表方法项发射，栈遍历不再读成员表，所以成员表可以 0 行。
+- 编码（B1(c)）：分三组（反射元数据 / 闭包派生表 / 行表），每组一个去重池（项 = LEB128 长度 + 内容），每表一条字节流（LEB128，有符号先 zigzag，行表的 Rust 行、pc、行号存增量）。运行时首次查询时解码成原元素类型（`runtime/java_runtime/src/meta_codec.rs`），`meta::*` 查询 API 不变；裁剪与编码都不依赖 LTO。
+- 已知偏宽：用了反射枚举的程序里，`enumerated`（开放接收者的枚举类值集）约 2,138 类，`meta_methods` 约占闭包 85%；DeepCopy 的字段枚举作用域推不出，`meta_fields` 取全闭包。口径正确，收窄靠分析精度（枚举接收者的类值集），不是 B1 的范围。
+
 **流程与耗时**
 - 转译 1.19 s：闭包 469 类（翻译 458、boundary 9），可达方法 1813，实例化 225。
 - 发射 5 个 crate（java_runtime / java_meta / java_body_1 / java_body_2 / user），1087 个文件，约 20.9 万行。
@@ -65,7 +108,7 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 
 | 项 | 目标 |
 |---|---:|
-| 元数据表（`__DATA_CONST` 中反射表 + 行表） | 反射不可达类 0 行；行表只覆盖翻译方法，存根 0 行；编码为字符串池 + u32 索引，0 个 `&str` 胖指针 |
+| 元数据表（`__DATA_CONST` 中反射表 + 行表） | 反射不可达类 0 行；行表只覆盖翻译方法，存根 0 行；编码为字符串池 + 字节流（LEB128 下标），0 个 `&str` 胖指针 |
 | 每类 vtable 协议方法 | 0（随 S7-2 / S7-3） |
 | HelloWorld release 二进制（opt=3） | ≤ 3 MB（估算，B0 重测后修订） |
 | GraalVM 参照 23 例 release 二进制（opt=3） | 逐例 ≤ 同机 GraalVM native-image 缺省构建大小，即 5.9–33.1 MB（macOS arm64，`docs/reports/2026-10-04-graalvm-baseline.md` §二、§三）；起点：LynchBell 13.3 MB，原生 5.9 MB |
@@ -75,8 +118,8 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 
 | 步 | 内容 | 验收 | 状态 |
 |---|---|---|---|
-| B0 | 在当前 main 上重测 HelloWorld / DeepCopy release 二进制的段构成（同一口径脚本化） | 基线数字写回本文 | 🔄 随 B1 |
-| B1 | 元数据按档案、按类裁剪：反射成员表只为反射可达 / MH 可解析的类出行；行表只覆盖翻译方法；编码改为字符串池 + u32 索引 | 生成器单测通过；反射 / 栈 / MH 类 e2e 抽查通过；HelloWorld 元数据段下降到 B0 的 ≤10% | 🔄 binsize-meta 已派 |
+| B0 | 在当前 main 上重测 HelloWorld release 二进制的段构成（同一口径脚本化：`scripts/binsize.sh`） | 基线数字写回本文 | ✅ §一 B0 基线（binsize-meta） |
+| B1 | 元数据按档案、按类裁剪：反射成员表只为反射可达 / MH 可解析的类出行；行表只覆盖翻译方法；编码改为字符串池 + 字节流（LEB128 下标） | 生成器单测通过；反射 / 栈 / MH 类 e2e 抽查通过；HelloWorld 元数据段下降到 B0 的 ≤10% | 🔄 binsize-meta 已实现待抽查：HelloWorld 元数据 3,506,260 → 255,720 B（7.3%），二进制 15,137,696 → 11,842,272 B，`__DATA_CONST,__const` 3,385,888 → 648,744 B（§一 B1 实测） |
 | B2 | 栈还原改为按地址查表（不依赖符号名），之后 release 加 `strip = "symbols"` | 打印栈类 e2e 输出不变；`__LINKEDIT` 降到 ≤0.5 MB | ⏳ ◀── B1 |
 | B3 | 体积档位评估：opt=s / z 在计算密集型 e2e（R1 超时用例等）上的性能对照 | 数据交用户决定是否提供体积档位 | ⏳ ◀── B2 |
 | — | 每类 vtable 协议方法 | 归 S7-2 / S7-3 | 🔄 S7-2 进行中 |

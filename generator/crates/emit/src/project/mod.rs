@@ -337,7 +337,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let lib_names: Vec<&str> = libs.names().collect();
     let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
     let archive_roots: Vec<&Path> = jdk_srcs.iter().chain(lib_srcs.iter()).map(PathBuf::as_path).collect();
-    meta_sides::write_archive(&mut w, out_dir, &archive_roots)?;
+    meta_sides::write_archive(ctx, &mut w, out_dir, &archive_roots)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
     if ctx.opts.archive {
         let decl = crates.decl();

@@ -49,12 +49,23 @@ pub fn block_head(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>) -> Vec
 
 /// 不透明（L1）类的类级元数据行：类镜像仍是非 null 的 Class 对象，`getSimpleName` / `isMemberClass` /
 /// `getDeclaringClass` / `isRecord` / `isAssignableFrom` 等经 java_meta 表读这些属性（与实例层级无关）。
-/// 不含类初始化（L1 不初始化）与注解（注解类型不随 L1 类进入闭包）
+/// 不含类初始化（L1 不初始化）。类级注解（`getAnnotation` / `getAnnotations` 经 `getRawAnnotations` 读注解表）
+/// 同属类镜像元数据，两类 L1 照发：
+/// - 用户类：其注解类型由分析器的注解补种（遍历全部用户类）带入闭包（只作类字面量的注解持有类）；
+/// - 注解类型自身（用户与 JDK 同）：`AnnotationType` 经 `getRawClassAnnotations` 读其 `@Retention` /
+///   `@Inherited` 判定保留策略——缺行即退为 CLASS，方法 / 字段上该注解被解析器丢弃（如
+///   `Reflection.isCallerSensitive` 读不到 `@CallerSensitive`，反射调用 CS 方法不经注入调用器）。
+/// 其余 JDK L1 类的注解类型不随其进入闭包，不发
 pub fn opaque_metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
-    const SKIP: [&str; 3] = ["#[has_clinit", "#[raw_annotations", "#[anno_cpool"];
+    const ANNOS: [&str; 2] = ["#[raw_annotations", "#[anno_cpool"];
+    let keep_annos = ctx.is_user(ci.name()) || ci.class_file().access & super::attrs::ACC_ANNOTATION != 0;
     let mut lines: Vec<String> = metadata_lines(ctx, ci)
         .into_iter()
-        .filter(|l| l.starts_with("#[") && !SKIP.iter().any(|k| l.starts_with(k)))
+        .filter(|l| {
+            l.starts_with("#[")
+                && !l.starts_with("#[has_clinit")
+                && (keep_annos || !ANNOS.iter().any(|k| l.starts_with(k)))
+        })
         .collect();
     lines.push(format!("#[all_supertypes    = \"{}\"]", all_supertypes(ctx, ci).join(";")));
     lines

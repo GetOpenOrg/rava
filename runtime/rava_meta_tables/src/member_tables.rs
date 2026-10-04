@@ -58,34 +58,26 @@ pub(crate) fn scan_class_fields(texts: &[&str]) -> BTreeMap<String, Vec<FieldMet
     result
 }
 
-pub(crate) fn render_field_table(entries: &BTreeMap<String, Vec<FieldMeta>>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：字段元数据表（binary name → 声明字段序列，声明序 = slot）。
-         // 数据源：java_class! 块内 java_field 属性（字段声明元数据的唯一表达，规则四）。
-         // 消费方：Class.getDeclaredField / Field.get/set（class_impl.rs / field_impl.rs）。
-         // modifiers 为 java.lang.reflect.Modifier 位集；constant 为 ConstantValue 整数值。
-         // 请勿手改。
-
-
-         #[export_name = \"__java_meta_CLASS_FIELDS\"] pub static CLASS_FIELDS: &[(&str, &[FieldMeta])] = &[
-",
-    );
+pub(crate) fn render_field_table(g: &mut Group, entries: &BTreeMap<String, Vec<FieldMeta>>) {
+    // CLASS_FIELDS 行：类, [字段]（声明序 = slot）——Class.getDeclaredField / Field.get/set。
+    // 字段：名, 描述符, Modifier 位集, 标志（bit0 static / bit1 有 ConstantValue）, [常量], 注解, Signature
+    let (s, p) = g.table("CLASS_FIELDS");
     for (class, fields) in entries {
         if fields.is_empty() { continue; }
-        out.push_str(&format!("    ({:?}, &[\n", class));
+        s.str(p, class);
+        s.len(fields.len());
         for f in fields {
-            out.push_str(&format!(
-                "        FieldMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, constant: {}, annotations: &{:?}, signature: {:?} }},\n",
-                f.name, f.descriptor, f.modifiers, f.is_static,
-                match f.constant { Some(v) => format!("Some({}i64)", v), None => "None".to_owned() },
-                f.annotations, f.signature,
-            ));
+            s.str(p, &f.name);
+            s.str(p, &f.descriptor);
+            s.i32(f.modifiers);
+            s.u32(f.is_static as u32 | (f.constant.is_some() as u32) << 1);
+            if let Some(v) = f.constant {
+                s.i64(v);
+            }
+            s.bytes(p, &f.annotations);
+            s.str(p, &f.signature);
         }
-        out.push_str("    ]),\n");
     }
-    out.push_str("];
-");
-    out
 }
 
 /// 单个声明方法的元数据（java_method / java_native 属性行的结构化形态）。
@@ -218,32 +210,54 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
     methods
 }
 
-pub(crate) fn render_method_table(entries: &BTreeMap<String, Vec<MethodMeta>>) -> String {
-    let mut out = String::from(
-        "// 由生成器（rava_meta_tables）生成：方法元数据表（binary name → 声明方法序列，声明序 = slot）。
-         // 数据源：java_class! 块内 java_method / java_native 属性（方法声明元数据的唯一表达）。
-         // 消费方：Class.getDeclaredMethod（class_impl.rs）、MethodHandleNatives.resolve 的
-         // 方法/构造器 kind（method_handle_natives_impl.rs）。方法身份键是 (name, descriptor)
-         // 二元组（重载语义）。modifiers 为 java.lang.reflect.Modifier 位集。请勿手改。
+/// 栈帧方法的元数据（`vm_stack` 帧的修饰位与注解）：随行表方法项发射，不依赖成员表
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameMeta {
+    pub modifiers: i32,
+    pub is_static: bool,
+    pub is_native: bool,
+    /// RuntimeVisibleAnnotations 原始属性体（`@Hidden` / `@CallerSensitive` / `@LambdaForm.Compiled` 判定）
+    pub annotations: Vec<u8>,
+}
 
+/// 帧方法元数据索引：全部生成文本的方法属性行（含手写根类 Object 的成员行）
+pub struct FrameIndex(BTreeMap<String, Vec<MethodMeta>>);
 
-         #[export_name = \"__java_meta_CLASS_METHODS\"] pub static CLASS_METHODS: &[(&str, &[MethodMeta])] = &[
-         ",
-    );
+impl FrameIndex {
+    pub fn new(texts: &[&str]) -> Self {
+        FrameIndex(with_object_ctor_row(scan_class_methods(texts)))
+    }
+
+    /// 帧归属类自身声明的行；方法体复制进他类（`declared_by`）而归属类无表项时取宿主类的行
+    pub fn get(&self, class: &str, name: &str, descriptor: &str, host: &str) -> Option<FrameMeta> {
+        let find = |c: &str, own: bool| {
+            self.0.get(c)?.iter().find(|m| (!own || !m.inherited) && m.name == name && m.descriptor == descriptor)
+        };
+        let m = find(class, true).or_else(|| (!host.is_empty()).then(|| find(host, false)).flatten())?;
+        Some(FrameMeta { modifiers: m.modifiers, is_static: m.is_static, is_native: m.is_native, annotations: m.annotations.clone() })
+    }
+}
+
+pub(crate) fn render_method_table(g: &mut Group, entries: &BTreeMap<String, Vec<MethodMeta>>) {
+    // CLASS_METHODS 行：类, [方法]（声明序 = slot）——Class.getDeclaredMethod、MethodHandleNatives.resolve。
+    // 方法：名, 描述符, Modifier 位集, 标志（bit0 static / bit1 native / bit2 abstract / bit3 inherited）,
+    // [throws], 注解, 参数注解, AnnotationDefault, Signature, declared_by
+    let (s, p) = g.table("CLASS_METHODS");
     for (class, methods) in entries {
         if methods.is_empty() { continue; }
-        out.push_str(&format!("    ({:?}, &[\n", class));
+        s.str(p, class);
+        s.len(methods.len());
         for m in methods {
-            let excs: Vec<String> = m.exceptions.iter().map(|e| format!("{:?}", e)).collect();
-            out.push_str(&format!(
-                "        MethodMeta {{ name: {:?}, descriptor: {:?}, modifiers: {:#06x}, is_static: {}, is_native: {}, is_abstract: {}, exceptions: &[{}], annotations: &{:?}, param_annotations: &{:?}, annotation_default: &{:?}, signature: {:?}, inherited: {}, declared_by: {:?} }},\n",
-                m.name, m.descriptor, m.modifiers, m.is_static, m.is_native, m.is_abstract,
-                excs.join(", "), m.annotations, m.param_annotations, m.annotation_default, m.signature, m.inherited, m.declared_by,
-            ));
+            s.str(p, &m.name);
+            s.str(p, &m.descriptor);
+            s.i32(m.modifiers);
+            s.u32(m.is_static as u32 | (m.is_native as u32) << 1 | (m.is_abstract as u32) << 2 | (m.inherited as u32) << 3);
+            s.strs(p, &m.exceptions);
+            s.bytes(p, &m.annotations);
+            s.bytes(p, &m.param_annotations);
+            s.bytes(p, &m.annotation_default);
+            s.str(p, &m.signature);
+            s.str(p, &m.declared_by);
         }
-        out.push_str("    ]),\n");
     }
-    out.push_str("];
-");
-    out
 }

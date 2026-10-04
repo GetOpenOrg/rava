@@ -27,6 +27,7 @@ use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, 
 use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
+mod meta_classes;
 mod idset;
 mod facts;
 mod consteval;
@@ -499,6 +500,8 @@ pub struct Engine<'a> {
     /// 可序列化字段口径的枚举（清单 `serial_enumerators`）：Some(类) = 该类及其超类的可序列化字段
     /// （非 static、非 transient）偏移可得，None = 全部可序列化类的（接收者推不出）
     fenum_serial: BTreeSet<Option<String>>,
+    /// 读字段表的口径（元数据裁剪，`meta_classes.rs`）：字段枚举与按名放开整类字段的类（含超类）；None = 推不出
+    fenum_scopes: BTreeSet<Option<String>>,
     /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
     fh_marks: HashMap<u32, field_handles::EnumScope>,
     /// 标记已流到句柄写入口的枚举口径

@@ -56,7 +56,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 类可序列化（清单 `serializable_markers` 的子类型；清单未登记标记时一律视为可序列化）
-    fn class_serializable(&self, cls: &str) -> bool {
+    pub(super) fn class_serializable(&self, cls: &str) -> bool {
         let markers = self.man.serializable_markers();
         markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(cls, x))
     }

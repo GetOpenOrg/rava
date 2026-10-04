@@ -12,8 +12,9 @@
 //! `method = NO_METHOD`（块外的反射分派等辅助代码不对应 Java 帧）。手写方法体在共置伴生文件，
 //! 其行表项见 [`handwritten`]（Java 行取哨兵 [`handwritten::LINE_NATIVE`] / [`handwritten::LINE_UNKNOWN`]）。
 //!
-//! 方法项带描述符（运行时据 (类, 方法名, 描述符) 取 `MethodMeta`）与宿主类（方法体复制进他类时
-//! 的所在类，`declared_by` 注入；同所在类时为空）——这是 `vm_stack` 栈帧的唯一来源。
+//! 方法项带描述符与帧方法元数据（标志字 + 注解原始属性体）：元数据取帧归属类自身的方法属性行，方法体
+//! 复制进他类（`declared_by` 注入）而归属类无行时取宿主类的行——这是 `vm_stack` 栈帧的唯一来源，运行时
+//! 不读成员表（成员表按反射事实裁剪，见 `rava_meta_tables::Keep`）。
 
 pub(super) mod handwritten;
 
@@ -44,12 +45,19 @@ pub struct Method {
     pub source: String,
     /// 方法体所在类；与归属类相同时为空
     pub host: String,
+    /// 帧方法元数据（修饰位 / 注解；`write` 汇总时按归属类 → 宿主类取方法属性行）
+    pub frame: Option<rava_meta_tables::FrameMeta>,
 }
 
 impl Method {
     fn new(class: &str, name: &str, descriptor: &str, source: &str, host: &str) -> Self {
         let host = if host == class { String::new() } else { host.to_string() };
-        Method { class: class.into(), name: name.into(), descriptor: descriptor.into(), source: source.into(), host }
+        Method { class: class.into(), name: name.into(), descriptor: descriptor.into(), source: source.into(), host, frame: None }
+    }
+
+    /// 行表方法项的标志字：Modifier 位集（低 16 位）| static << 16 | native << 17（运行时 `meta::FrameMethod`）
+    fn flags(&self) -> u32 {
+        self.frame.as_ref().map_or(0, |f| (f.modifiers as u32 & 0xFFFF) | (f.is_static as u32) << 16 | (f.is_native as u32) << 17)
     }
 }
 
@@ -166,6 +174,54 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
     (marks > 0).then_some(out)
 }
 
+/// 行表瘦身（二进制体积 B1，`docs/plans/2026-10-04-binary-size.md`）：只留成帧所需的行，查表结果逐行不变。
+/// - Java 行 0（方法序言、无行标记的方法——存根与无 LineNumberTable 的方法体）与块外同样不成帧，统一记
+///   [`NO_METHOD`]；
+/// - 相邻同值（方法下标, Java 行）的行合并为首行，表首的 [`NO_METHOD`] 行删去（首行之前本就不成帧）；
+/// - 不再被任何行引用的方法项删去，下标按首次出现重排。行全部删去的文件由调用方丢弃。
+pub fn prune(t: &mut FileLines) {
+    let mut rows: Vec<(u32, u32, u32)> = Vec::with_capacity(t.rows.len());
+    for &(r, m, j) in &t.rows {
+        let (m, j) = if m == NO_METHOD || j == 0 { (NO_METHOD, 0) } else { (m, j) };
+        match rows.last() {
+            Some(&(_, pm, pj)) if pm == m && pj == j => {}
+            None if m == NO_METHOD => {}
+            _ => rows.push((r, m, j)),
+        }
+    }
+    let mut remap = vec![NO_METHOD; t.methods.len()];
+    let mut methods = Vec::new();
+    for row in &mut rows {
+        if row.1 == NO_METHOD {
+            continue;
+        }
+        let old = row.1 as usize;
+        if remap[old] == NO_METHOD {
+            remap[old] = methods.len() as u32;
+            methods.push(t.methods[old].clone());
+        }
+        row.1 = remap[old];
+    }
+    t.rows = rows;
+    t.methods = methods;
+}
+
+/// 方法项取帧元数据；取不到的方法其行记 [`NO_METHOD`]（与运行期「无元数据不成帧」同义），由 [`prune`] 删去
+fn attach_frames(t: &mut FileLines, frames: &rava_meta_tables::FrameIndex) {
+    let mut dead = Vec::new();
+    for (i, m) in t.methods.iter_mut().enumerate() {
+        m.frame = frames.get(&m.class, &m.name, &m.descriptor, &m.host);
+        if m.frame.is_none() {
+            dead.push(i as u32);
+        }
+    }
+    for r in &mut t.rows {
+        if dead.contains(&r.1) {
+            r.1 = NO_METHOD;
+        }
+    }
+}
+
 /// 文件内各 `java_class!` / `java_interface!` 块的 (类 binary name, 源文件)
 fn class_sources(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -186,36 +242,49 @@ pub type LineNumbers = std::collections::BTreeMap<(String, String, String), Vec<
 
 /// 行表源文本（java_meta 的 lib.rs 以 `include!` 引入）
 pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
-    let mut src = String::from(
-        "// 生成：Java 栈帧行表（FS-E1），由 java_meta 的 lib.rs 引入。\n\
-         // (scratch 相对路径, [(类, 方法, 描述符, 源文件, 宿主类)], [(Rust 行, 方法下标, Java 行)])\n\n\
-         #[export_name = \"__java_meta_LINE_TABLES\"] pub static LINE_TABLES: \
-         &[(&str, &[(&str, &str, &str, &str, &str)], &[(u32, u32, u32)])] = &[\n",
-    );
+    let mut g = rava_meta_tables::codec::Group::new("LINE_POOL");
+    // LINE_TABLES 行：scratch 相对路径, [方法项 类, 方法名, 描述符, 源文件, 标志字, 注解], [行]。
+    // 行 = Rust 行增量（zigzag，文件内自 0 起）, 方法码（0 = 块外，否则下标 + 1）, Java 行码（0 native / 1 无行号 / 行 + 2）
+    let (s, p) = g.table("LINE_TABLES");
     for t in tables {
-        src += &format!("    ({:?}, &[", t.rel);
+        s.str(p, &t.rel);
+        s.len(t.methods.len());
         for m in &t.methods {
-            src += &format!("({:?}, {:?}, {:?}, {:?}, {:?}), ", m.class, m.name, m.descriptor, m.source, m.host);
+            for v in [&m.class, &m.name, &m.descriptor, &m.source] {
+                s.str(p, v);
+            }
+            s.u32(m.flags());
+            s.bytes(p, m.frame.as_ref().map_or(&[][..], |f| f.annotations.as_slice()));
         }
-        src += "], &[";
-        for (r, m, j) in &t.rows {
-            src += &format!("({r}, {m}, {j}), ");
+        s.len(t.rows.len());
+        let mut last = 0i32;
+        for &(r, m, j) in &t.rows {
+            s.i32(r as i32 - last);
+            last = r as i32;
+            s.u32(if m == NO_METHOD { 0 } else { m + 1 });
+            s.u32(match j {
+                handwritten::LINE_NATIVE => 0,
+                handwritten::LINE_UNKNOWN => 1,
+                j => j + 2,
+            });
         }
-        src += "]),\n";
     }
-    src += "];\n\n\
-        // 帧方法的 LineNumberTable（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序\n\
-        #[export_name = \"__java_meta_LINE_NUMBERS\"] pub static LINE_NUMBERS: \
-        &[(&str, &str, &str, &[(u16, u16)])] = &[\n";
+    // LINE_NUMBERS 行：类, 方法名, 描述符, [start_pc 增量, 行号增量（zigzag）]——帧方法的 LineNumberTable
+    //（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序
+    let (s, p) = g.table("LINE_NUMBERS");
     for ((c, m, d), lnt) in numbers {
-        src += &format!("    ({c:?}, {m:?}, {d:?}, &[");
-        for (pc, line) in lnt {
-            src += &format!("({pc}, {line}), ");
+        s.str(p, c);
+        s.str(p, m);
+        s.str(p, d);
+        s.len(lnt.len());
+        let (mut pc0, mut line0) = (0i32, 0i32);
+        for &(pc, line) in lnt {
+            s.i32(pc as i32 - pc0);
+            s.i32(line as i32 - line0);
+            (pc0, line0) = (pc as i32, line as i32);
         }
-        src += "]),\n";
     }
-    src += "];\n";
-    src
+    format!("// 生成：Java 栈帧行表（FS-E1；字符串池 + 字节流，字形见发射层 line_tables::render）。\n\n{}", g.render())
 }
 
 /// 汇总：档案侧文件的行表写入 `<out_dir>/closure_input/line_tables.rs`，返回用户 crate 文件的行表源文本
@@ -265,6 +334,14 @@ pub fn write(
             }
         }
     }
+    // 帧方法元数据随方法项发射（运行时不读成员表）；取不到元数据的方法不成帧
+    let texts: Vec<&str> = files.iter().map(|(_, t)| *t).collect();
+    let frames = rava_meta_tables::FrameIndex::new(&texts);
+    for t in &mut tables {
+        attach_frames(t, &frames);
+        prune(t);
+    }
+    tables.retain(|t| !t.rows.is_empty());
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
     // 档案侧（JDK / lib crate 文件）进 java_meta；用户 crate 文件的行表随用户元数据行登记
     let (user, archive): (Vec<FileLines>, Vec<FileLines>) = tables.into_iter().partition(|t| t.rel.starts_with(USER_PREFIX));
@@ -328,8 +405,34 @@ mod tests {
         let mut numbers = LineNumbers::new();
         numbers.insert(("p/A".into(), "f".into(), "()V".into()), vec![(0, 7), (4, 8)]);
         let src = render(&[t], &numbers);
-        assert!(src.contains("(\"p/A\", \"f\", \"()V\", &[(0, 7), (4, 8), ]),"));
-        assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", \"\"), "));
+        // LINE_NUMBERS：3 个池下标 + 长度 + 2 对增量（各 1 字节）
+        assert!(src.contains("// [meta-stats] LINE_NUMBERS 8\n"), "{src}");
+        assert!(src.contains("pub static LINE_TABLES: &[u8] = b\""), "{src}");
+        assert!(src.contains("\\x0duser/src/a.rs\\x03p/A\\x01f\\x03()V\\x06A.java"), "{src}");
+    }
+
+    #[test]
+    fn prune_keeps_frame_rows_only() {
+        // 方法 0 无行标记（存根），方法 1 有两段同行标记，方法 2 在其后
+        let mut t = FileLines {
+            rel: "a.rs".into(),
+            methods: vec![
+                Method::new("p/A", "s", "()V", "A.java", "p/A"),
+                Method::new("p/A", "f", "()V", "A.java", "p/A"),
+                Method::new("p/A", "g", "()V", "A.java", "p/A"),
+            ],
+            rows: vec![(3, 0, 0), (7, 1, 0), (8, 1, 5), (9, 1, 5), (10, 1, 6), (12, 2, 0), (13, 2, 9), (15, NO_METHOD, 0)],
+        };
+        prune(&mut t);
+        assert_eq!(t.methods.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), vec!["f", "g"]);
+        assert_eq!(t.rows, vec![(8, 0, 5), (10, 0, 6), (12, NO_METHOD, 0), (13, 1, 9), (15, NO_METHOD, 0)]);
+        let mut stub_only = FileLines {
+            rel: "b.rs".into(),
+            methods: vec![Method::new("p/B", "s", "()V", "B.java", "p/B")],
+            rows: vec![(3, 0, 0), (6, NO_METHOD, 0)],
+        };
+        prune(&mut stub_only);
+        assert!(stub_only.rows.is_empty() && stub_only.methods.is_empty());
     }
 
     #[test]

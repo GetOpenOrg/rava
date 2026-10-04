@@ -9,7 +9,7 @@ name = "java_meta"
 path = "src/lib.rs"
 
 [dependencies]
-# 表元素类型（java_runtime::meta）；java_runtime 不反向依赖本 crate，以导出符号读取表
+# 表是字节流，不取 java_runtime 的类型；依赖保留以固定链接序（java_runtime 不反向依赖本 crate，以导出符号读取表）
 java_runtime = { path = "../java_runtime" }
 
 [lints.rust]

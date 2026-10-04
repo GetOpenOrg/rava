@@ -13,7 +13,8 @@ use crate::seeds::{annotation, locale};
 pub struct SeedState {
     /// `--locale` 显式给出的标签
     pub locales: Vec<String>,
-    anno_done: bool,
+    /// 注解解析入口已可达（补种已触发）
+    pub(super) anno_done: bool,
     locale_bases: BTreeSet<String>,
     /// 束族基名 → 该族入选的资源束（类型 id）
     locale_bundles: BTreeMap<String, BTreeSet<u32>>,
@@ -33,6 +34,8 @@ pub struct SeedState {
 
     /// 输出：注解枚举元素类型（类初始化钩子）
     pub annotation_enums: BTreeSet<String>,
+    /// 输出：注解类型（含元注解与嵌套注解）：AnnotationParser 经其方法表求元素面、动态代理按其方法表取 Method
+    pub annotation_types: BTreeSet<String>,
     /// 输出：运行期按名强制初始化的目标类（类初始化钩子；运行期按名同步触发 `<clinit>`）：按类镜像强制初始化
     ///（`ensureClassInitialized(X.class)`）与按名取类（`Class.forName(名, true, …)`）的所指类
     pub mirror_inits: BTreeSet<String>,
@@ -97,6 +100,7 @@ impl<'a> Engine<'a> {
         let found = annotation::collect(self.cp, &self.user_classes());
         for a in &found.annos {
             let Some(cf) = self.touch(a, Level::Type, Via::root("annotation", a)) else { continue };
+            self.seeds.annotation_types.insert(a.clone());
             for m in cf.methods.iter().filter(|m| !m.name.starts_with('<')) {
                 self.seed_method(MemberRef { owner: a.clone(), name: m.name.clone(), desc: m.desc.clone() }, "annotation");
             }

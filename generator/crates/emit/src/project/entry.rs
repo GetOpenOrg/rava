@@ -394,22 +394,31 @@ pub const CLOSURE_TABLES: &str = "closure_input/closure_tables.rs";
 /// 放在 java_meta 才不连带重编运行时 crate。每次构建写入（内容相同不重写）
 pub fn write_closure_tables(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
     let input = &ctx.input;
-    let mut src = String::from(
-        "// 生成：闭包派生表（模块服务表 / VM 初始系统属性表），由 java_meta 的 lib.rs 引入。\n\n\
-         #[export_name = \"__java_meta_MODULE_SERVICES\"] pub static MODULE_SERVICES: &[(&str, &str)] = &[\n",
-    );
     // 档案侧：涉及用户类的服务随用户元数据行登记（`meta_sides`）
-    for (s, p) in input.module_services.iter().filter(|(s, p)| !super::meta_sides::is_user_service(ctx, s, p)) {
-        src += &format!("    ({s:?}, {p:?}),\n");
-    }
-    src += "];\n#[export_name = \"__java_meta_VM_CONST_PROPERTIES\"] pub static VM_CONST_PROPERTIES: &[(&str, &str)] = &[\n";
+    let services: Vec<&(String, String)> =
+        input.module_services.iter().filter(|(s, p)| !super::meta_sides::is_user_service(ctx, s, p)).collect();
+    let mut g = closure_group(&services);
+    // VM_CONST_PROPERTIES 行：键, 值；VM_DYNAMIC_PROPERTIES 行：键
+    let (s, p) = g.table("VM_CONST_PROPERTIES");
     for (k, v) in &input.system_properties.values {
-        src += &format!("    ({k:?}, {v:?}),\n");
+        s.str(p, k);
+        s.str(p, v);
     }
-    src += "];\n#[export_name = \"__java_meta_VM_DYNAMIC_PROPERTIES\"] pub static VM_DYNAMIC_PROPERTIES: &[&str] = &[\n";
+    let (s, p) = g.table("VM_DYNAMIC_PROPERTIES");
     for k in &input.system_properties.dynamic {
-        src += &format!("    {k:?},\n");
+        s.str(p, k);
     }
-    src += "];\n";
+    let src = format!("// 生成：闭包派生表（模块服务表 / VM 初始系统属性表；字符串池 + 字节流），由 java_meta 的 lib.rs 引入。\n\n{}", g.render());
     w.write(&out_dir.join(CLOSURE_TABLES), &src)
+}
+
+/// 闭包派生表组（池 `CLOSURE_POOL`）起头：MODULE_SERVICES 行 = 服务, provider（事实序）
+pub(super) fn closure_group(services: &[&(String, String)]) -> rava_meta_tables::codec::Group {
+    let mut g = rava_meta_tables::codec::Group::new("CLOSURE_POOL");
+    let (s, p) = g.table("MODULE_SERVICES");
+    for (svc, prov) in services {
+        s.str(p, svc);
+        s.str(p, prov);
+    }
+    g
 }

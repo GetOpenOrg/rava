@@ -169,6 +169,10 @@ pub struct ClosureFacts {
     pub reflect_field_names: Vec<String>,
     /// 不经构造器分配的类（序列化构造器的分配目标）：L3 分派闭包的 `<alloc>` 臂
     pub reflect_allocations: Vec<String>,
+    /// 需要方法 / 构造器表的类（元数据裁剪口径，含超类型）
+    pub reflect_meta_methods: Vec<String>,
+    /// 需要字段表的类（元数据裁剪口径，含超类型）
+    pub reflect_meta_fields: Vec<String>,
     pub seeds: SeedFacts,
     /// 经虚分派到达的实现（全部活虚调用点目标之并 + VM 反射虚调用选中的实现）
     pub dispatched: Vec<MemberRef>,
@@ -268,6 +272,8 @@ impl ClosureFacts {
             reflect_fields: e.reflect_fields.iter().cloned().collect(),
             reflect_field_names: e.reflect_field_names.iter().cloned().collect(),
             reflect_allocations: e.serial_allocs.iter().cloned().collect(),
+            reflect_meta_methods: e.meta_method_classes().into_iter().collect(),
+            reflect_meta_fields: e.meta_field_classes().into_iter().collect(),
             seeds: SeedFacts {
                 annotation_enums: s.annotation_enums.iter().cloned().collect(),
                 mirror_inits: s.mirror_inits.iter().cloned().collect(),
@@ -328,6 +334,8 @@ impl ClosureFacts {
         }
         out.reflect_field_names = strings(reflect.get("field_names"))?;
         out.reflect_allocations = strings(reflect.get("allocations"))?;
+        out.reflect_meta_methods = strings(reflect.get("meta_methods"))?;
+        out.reflect_meta_fields = strings(reflect.get("meta_fields"))?;
         if let Some(s) = v.get("seeds") {
             out.seeds = parse_seeds(s)?;
         }

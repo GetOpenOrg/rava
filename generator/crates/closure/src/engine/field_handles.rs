@@ -22,6 +22,7 @@ impl<'a> Engine<'a> {
     /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口已按保守口径可达时放开，
     /// 否则挂起到标记流到写入口
     pub(super) fn enumerate_fields(&mut self, cls: Option<String>) {
+        self.fenum_scopes.insert(cls.clone());
         if !self.fwriter_live && !self.fh_released.contains(&(false, cls.clone())) {
             if self.fenum_pending.insert(cls) {
                 self.offset_reads_ready();
@@ -33,6 +34,7 @@ impl<'a> Engine<'a> {
 
     /// 放开类（含超类）的全部字段；None = 全部字段不折叠
     pub(super) fn open_class_fields(&mut self, cls: Option<String>) {
+        self.fenum_scopes.insert(cls.clone());
         match cls {
             Some(c) => {
                 let mut cur = Some(c);

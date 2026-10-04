@@ -12,6 +12,7 @@ pub mod java;
 pub mod jdk;
 pub mod jdk_resources;
 pub mod meta;
+mod meta_codec;
 pub mod monitor;
 pub mod native_memory;
 pub mod vm_stack;
