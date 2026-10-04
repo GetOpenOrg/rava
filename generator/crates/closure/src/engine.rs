@@ -107,6 +107,7 @@ mod levels;
 mod open_world;
 mod concrete;
 mod caller;
+mod boot_phases;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -344,6 +345,8 @@ pub struct Engine<'a> {
     pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
+    /// 已作根的引导阶段（`Manifest::boot_phases` 下标；锚点读取点出现时登记，不撤回）
+    phases_rooted: BTreeSet<usize>,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,

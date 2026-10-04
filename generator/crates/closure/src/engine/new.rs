@@ -116,6 +116,7 @@ impl<'a> Engine<'a> {
             indy_models: BTreeMap::new(),
             sigpoly_sites: BTreeSet::new(),
             cold_cut: false,
+            phases_rooted: BTreeSet::new(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),
             watch: HashMap::default(),
