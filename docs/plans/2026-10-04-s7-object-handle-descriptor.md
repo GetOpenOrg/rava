@@ -251,6 +251,10 @@ S7 下：
 - **S7-2 句柄与 null**：
   - wrapper 改为 `{ h, vt }`；`Default` 不再分配；
   - 删掉 `__Shared<dyn X__VTable>`；入口检查改为 `obj.is_none()`。
+  - 实施要点（2026-10-04，s7-wrap）：
+    - runtime 新增 `__Handle(Option<__Shared<dyn ObjectVTable>>)` 与 `__Ref<V>{ h, vt: Option<NonNull<V>> }`（vt 不持有，指向 h 所持对象）；wrapper 只剩 `__r: __Ref<dyn X__VTable>`，`Default` = `__Ref::NULL` 不分配，`_init_not_null` 才经 alloc 钩子分配。
+    - 删掉 `vtable` / `any` / `_jvm_null` 三字段与 `cells` / `from_any` 两个存储钩子、`__erased_inner`；上转 = `__r.upcast(|v| v as &dyn Anc__VTable)`，`From<Object>` 由句柄目标经 `__erased_vtable` 填 vt；wrapper 的 `impl ObjectVTable` 只剩 `__handle` / `as_any` / `__desc`，其余走 trait 缺省委托句柄目标。
+    - Object 仍是 `Rc<wrapper>`（S7-2a）；Object 直接持有内部对象、去掉 blanket `From` 另作 S7-2b，S7-2a 实测后再定。
 - **S7-3 浅拷贝 / 反射字段 / Unsafe 槽位走 `fields` 描述**：删掉按类的 `__shallow_copy` / `__reflect_field` / `__unsafe_*`。
 - **S7-4 类初始化骨架去按类展开**。
 - **S7-5 性能验收**（§4.3）与 3 个 OOM 例、Digester 实测；更新 §7.5.4 账。

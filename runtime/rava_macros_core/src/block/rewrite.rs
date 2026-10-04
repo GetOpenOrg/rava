@@ -208,7 +208,7 @@ pub(crate) fn rewrite_block(block: &mut Block, basic: &HashSet<String>, referenc
 }
 
 /// 在 wrapper 上下文中，将 `ClassName__method_base(this, ...)` 改写为
-/// `ClassName__method_base(&*this.vtable, ...)`。
+/// `ClassName__method_base(this.__r.vt(), ...)`。
 pub(crate) fn rewrite_base_calls_for_wrapper(block: &mut Block) {
     struct BaseCallRewriter;
     impl VisitMut for BaseCallRewriter {
@@ -230,7 +230,7 @@ pub(crate) fn rewrite_base_calls_for_wrapper(block: &mut Block) {
                             if p.path.get_ident().map_or(false, |id| id == "this" || id == "self"));
                         if is_this_or_self {
                             let old = first_arg.clone();
-                            *first_arg = syn::parse_quote!(&* #old .vtable);
+                            *first_arg = syn::parse_quote!(#old .__r.vt());
                         }
                     }
                 }
@@ -240,7 +240,7 @@ pub(crate) fn rewrite_base_calls_for_wrapper(block: &mut Block) {
     BaseCallRewriter.visit_block_mut(block);
 }
 
-/// wrapper 上虚分派（经 `this.vtable` 的继承方法）的边界转换规格（A-1 β'）：
+/// wrapper 上虚分派（经 `this.__r.vt()` 的继承方法）的边界转换规格（A-1 β'）：
 /// vtable 方法签名已 Object 化，wrapper 方法体的调用点在此装箱 / 还原。
 #[derive(Default)]
 pub(crate) struct VDispatchSig {
@@ -251,7 +251,7 @@ pub(crate) struct VDispatchSig {
 }
 
 /// 在 wrapper impl 的 NeedsWrapper body 中，将未在当前类自有方法集合里的 `this.method(args)`
-/// 改写为 `(&*this.vtable).method(args)`，并按 `VDispatchSig` 做擦除边界转换。
+/// 改写为 `this.__r.vt().method(args)`，并按 `VDispatchSig` 做擦除边界转换。
 /// `own_method_names`：当前类所有已声明方法名（VirtualDefine + VirtualOverride + NonVirtual）。
 pub(crate) fn rewrite_virtual_calls_for_wrapper(
     block: &mut Block,
@@ -271,7 +271,7 @@ pub(crate) fn rewrite_virtual_calls_for_wrapper(
                 if recv_is_this {
                     let mname = mc.method.to_string();
                     if !mname.starts_with("__") && !self.0.contains(&mname) {
-                        mc.receiver = Box::new(syn::parse_quote!(&*this.vtable));
+                        mc.receiver = Box::new(syn::parse_quote!(this.__r.vt()));
                         if let Some(sig) = self.1.get(&mname) {
                             for (i, arg) in mc.args.iter_mut().enumerate() {
                                 if *sig.box_args.get(i).unwrap_or(&false) {

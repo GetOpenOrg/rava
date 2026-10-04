@@ -55,7 +55,7 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
     let has_recv = sig.receiver().is_some();
     if is_leaf(attrs) {
         return if has_recv {
-            quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
+            quote::quote! { if self.__r.is_none() { return Err(JvmError::null_pointer()); } }
         } else {
             quote::quote! {}
         };
@@ -63,7 +63,7 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
     // 实例方法：两项合为一次 runtime 调用 `__enter`（次序同上：先空接收者、后栈界），
     // 每个入口少一个分支块与一处 `?` 展开（声明层外壳数以万计，按条目计的前端内存随之下降）
     if has_recv {
-        quote::quote! { __enter(self._jvm_null)?; }
+        quote::quote! { __enter(self.__r.is_none())?; }
     } else {
         quote::quote! { __stack_check()?; }
     }
@@ -71,11 +71,11 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
 
 /// 转发外壳（虚分派 / 继承转发）的入口检查：只做空接收者检查，不建帧。
 /// 外壳本身不是 Java 帧——分派到的目标方法体（`__jbm_*` 体函数）自带完整入口检查，
-/// 栈界检查在那里做一次；空接收者必须在外壳判（null 对象的 vtable 是缺省存储，分派后
+/// 栈界检查在那里做一次；空接收者必须在外壳判（null 引用无存储可分派，分派后
 /// 目标看到的接收者不再带 null 标志；手写目标也不带检查）。形态同叶子方法的空检查
 pub(crate) fn forward_checks(sig: &Signature) -> proc_macro2::TokenStream {
     if returns_result(sig) && sig.receiver().is_some() {
-        quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
+        quote::quote! { if self.__r.is_none() { return Err(JvmError::null_pointer()); } }
     } else {
         quote::quote! {}
     }
@@ -281,7 +281,7 @@ mod tests {
         let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f() -> Result<i32> { Ok(1) }"#);
         assert!(s.contains("__stack_check"), "{s}");
         let s = checks(r#"#[java_method(name = "f", descriptor = "()I")] fn f(&self) -> Result<i32> { Ok(1) }"#);
-        assert!(s.contains("__enter (self . _jvm_null) ?"), "{s}");
+        assert!(s.contains("__enter (self . __r . is_none ()) ?"), "{s}");
     }
 
     #[test]
