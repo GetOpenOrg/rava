@@ -6,7 +6,7 @@
 //! - 接收者 `&self` → 形参 `this: &X`：体首句 `let this = self;` 去掉（形参即 `this`），
 //!   其余 `self` 记号（非路径前缀 `self::`）改名为 `this`；
 //! - `Self` → `X`（非泛型类，二者是同一类型）。
-//! 外壳只做空接收者检查（原先位于体首）后按原实参顺序转发，返回值原样交回；
+//! 外壳按原实参顺序转发，返回值原样交回；入口检查（空接收者 / 栈界）在体函数首句；
 //! 求值顺序与副作用不变。
 //!
 //! 适用范围：非泛型类、方法自身无泛型形参、接收者为 `&self` 或无接收者、形参均为标识符
@@ -22,6 +22,10 @@ use super::super::context::GenContext;
 /// 体函数名：`__jbm_<类>__<方法>`（与存储钩子 `__jb_<类>__<用途>` 分开命名空间）
 pub(super) fn body_fn_ident(ctx: &GenContext, method: &Ident) -> Ident {
     format_ident!("__jbm_{}__{}", ctx.struct_ident, method)
+}
+
+fn this_ident() -> Ident {
+    format_ident!("this")
 }
 
 /// 函数化结果：模块级体函数 + wrapper 内的转发外壳
@@ -127,7 +131,7 @@ pub(crate) fn functionize_applicable(ctx: &GenContext, sig: &syn::Signature, stm
 
 /// 把一个已完成宏改写的 wrapper 方法（签名 + 体语句）拆成体函数 + 外壳；不适用时 None。
 /// `fn_name` 是 wrapper 上的方法名（外壳用），`body_name` 是体函数名后缀（方法名）。
-/// `prologue` 是外壳在转发前执行的语句（空接收者检查）。
+/// `prologue` 是入口检查语句（空接收者 / 栈界），落在体函数首句。
 pub(super) fn functionize(
     ctx: &GenContext,
     attrs: &TokenStream2,
@@ -139,8 +143,7 @@ pub(super) fn functionize(
 ) -> Option<Functionized> {
     let (has_recv, idents) = shape(ctx, sig)?;
     let body = body_tokens(has_recv, stmts)?;
-    let this_ident = format_ident!("this");
-    let body = if has_recv { rename_ident(body, "self", &this_ident, true) } else { body };
+    let body = if has_recv { rename_ident(body, "self", &this_ident(), true) } else { body };
     let body = rename_ident(body, "Self", &ctx.struct_ident, false);
     Some(build(ctx, attrs, vis, sig, body_name, body, prologue, has_recv, &idents))
 }
@@ -182,10 +185,14 @@ fn build(
     }).collect();
     let output = &sig.output;
     let head = rename_ident(quote! { (#(#params),*) #output }, "Self", struct_ident, false);
+    // 入口检查（空接收者 / 栈界）随体进体函数首句：体函数的唯一调用方是外壳，外壳在检查与
+    // 转发之间无其他求值，次序不变；外壳因此只剩一次调用（无 `?` 展开），声明层每个外壳的
+    // MIR 与借用检查量随之减小，检查的展开落在实现 crate
+    let prologue = if has_recv { rename_ident(prologue.clone(), "self", &this_ident(), true) } else { prologue.clone() };
     let body_fn = quote! {
-        #[doc(hidden)]
         #[allow(non_snake_case, unused_mut, unused_variables)]
         pub fn #fn_ident #head {
+            #prologue
             #body
         }
     };
@@ -202,7 +209,7 @@ fn build(
     let recv_arg = if has_recv { quote! { self, } } else { quote! {} };
     let shell = quote! {
         #attrs
-        #vis #shell_sig { #prologue #fn_ident(#recv_arg #(#idents),*) }
+        #vis #shell_sig { #fn_ident(#recv_arg #(#idents),*) }
     };
     Functionized { body_fn, shell }
 }

@@ -127,7 +127,6 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
     let needs_dyn_view = ctx.vtable_defines.iter().any(|f| has_body(f) && is_safe(ctx, f));
     let (dyn_view_decl, dyn_view_bound) = if needs_dyn_view {
         (quote! {
-            #[doc(hidden)]
             #[allow(non_camel_case_types)]
             pub trait #dyn_view_trait {
                 fn #dyn_view_hook(&self) -> &dyn #vtable_trait_ident;
@@ -145,7 +144,6 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
         #dyn_view_decl
         #[allow(non_camel_case_types)]
         pub trait #vtable_trait_ident: #vtable_supertrait #dyn_view_bound {
-            #[doc(hidden)]
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args;
             #(#vtable_abstract_methods)*
             #(#vtable_default_methods)*

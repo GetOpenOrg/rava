@@ -13,11 +13,9 @@ use super::storage_hooks::hook_ident;
 pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     let struct_ident = &ctx.struct_ident;
     let inner_ident = &ctx.inner_ident;
-    let vtable_trait_ident = &ctx.vtable_trait_ident;
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
     let where_c = &ctx.where_c;
-    let phantom_init = &ctx.phantom_init;
     let binary_name = &ctx.meta.binary_name;
     let from_any = hook_ident(ctx, "from_any");
 
@@ -54,50 +52,12 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     //      视图（共享存储与对象标识）。子类值经超类 vtable supertrait 上转，任意实例化
     //      均可重建（`Enum::<Object>::from(枚举常量)` 即此形态）；
     //   3. 其余（运行时类不是本类族）→ checkcast 的 ClassCastException（既有语义）。
+    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`；按类只转交本类的部件构造入口
+    // 与存储钩子（拆 crate §7.5.4 #2）。
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
-            // Java checkcast 语义：运行时类是本类或其子类均成立（子类对象按运行时类重建本类视图）
-            // null 通过任何 checkcast（JVMS §6.5 checkcast），得到本类的 null 引用
             fn from(obj: #obj) -> Self {
-                if obj.0.is_jvm_null() { return Self::default(); }
-                let mut __slot: ::std::option::Option<Self> = ::std::option::Option::None;
-                if obj.0.__view_into(__Shared::new(()), &mut __slot) {
-                    if let ::std::option::Option::Some(v) = __slot { return v; }
-                }
-                if obj.0.is_instance_of(#binary_name) {
-                    let mut __vt: ::std::option::Option<
-                        __Shared<dyn #vtable_trait_ident>> = ::std::option::Option::None;
-                    ObjectVTable::__erased_vtable(__Shared::clone(&obj.0), &mut __vt);
-                    let mut __erased: ::std::option::Option<
-                        __AnyRef> = ::std::option::Option::None;
-                    ObjectVTable::__erased_inner(__Shared::clone(&obj.0), &mut __erased);
-                    if let ::std::option::Option::Some(__any) = __erased {
-                        if let ::std::option::Option::Some(__vt) = __vt {
-                            // 部件路径 A（子类值）：wrapper 的 vtable 经超类 vtable supertrait
-                            // 上转 + 擦除存储，重建任意实例化视图
-                            return #struct_ident {
-                                vtable: __vt,
-                                any: __any,
-                                _jvm_null: false,
-                                #phantom_init
-                            };
-                        }
-                        // 部件路径 B（祖先视图值）：运行时 inner 就是本类 inner（如
-                        // `Enum<E>::from(枚举常量)` 装箱后按子类取回）→ 按精确 inner 还原
-                        match #from_any(__any) {
-                            ::std::result::Result::Ok((__vt, __any)) => {
-                                return #struct_ident {
-                                    vtable: __vt,
-                                    any: __any,
-                                    _jvm_null: false,
-                                    #phantom_init
-                                };
-                            }
-                            ::std::result::Result::Err(__other) => ::std::mem::drop(__other),
-                        }
-                    }
-                }
-                obj.checkcast::<Self>(#binary_name)
+                __class_from_object(obj, #binary_name, Self::__from_parts, #from_any)
             }
         }
     };

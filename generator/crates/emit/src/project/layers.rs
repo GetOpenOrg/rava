@@ -86,10 +86,11 @@ pub fn split_text(text: &str, module: &str) -> std::result::Result<Option<(Strin
     let inner_end = start + end + 1;
     let close = start + end + 3;
     let plan = decl_elisions(&text[start..inner_end])?;
+    let decl_block = elide(&text[start..inner_end], &plan);
     let decl = format!(
         "{}{BLOCK_OPEN}    #[rava_layer = \"decl\"]\n{}{}",
-        &text[..open],
-        elide(&text[start..inner_end], &plan),
+        prune_uses(&text[..open], &[&decl_block, &text[inner_end..]]),
+        decl_block,
         &text[inner_end..]
     );
     let body = format!(
@@ -98,6 +99,42 @@ pub fn split_text(text: &str, module: &str) -> std::result::Result<Option<(Strin
         &text[start..close]
     );
     Ok(Some((decl, body)))
+}
+
+/// 声明层文件头只留被本文件其余文本引用的单名 `use crate::…::名;`（拆 crate §7.5.4 #3）。
+///
+/// 剥体后，只被方法体引用的类型导入在声明层不再有引用者，却仍要逐条进名称解析；实现层文件头保留全部导入。
+/// 引用判定按词：本文件其余文本（块、块后宏，含属性字符串，`$` 视同 `_`）出现该名，或该名形如
+/// `<词>__…`（宏按类名派生的 vtable trait / base 函数等）且 `<词>` 出现，即保留；`__` 开头、glob、
+/// 花括号与路径重导出一律保留。只会多留、不会误删：宏派生的名字都由块内出现的类名拼出。
+fn prune_uses(header: &str, rest: &[&str]) -> String {
+    let mut words: BTreeSet<String> = BTreeSet::new();
+    let single = |line: &str| -> Option<String> {
+        let path = line.strip_prefix("use crate::")?.strip_suffix(';')?;
+        let name = path.rsplit("::").next()?;
+        (path.contains("::") && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .then(|| name.to_string())
+    };
+    let mut add_words = |s: &str| {
+        for w in s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()) {
+            words.insert(w.replace('$', "_"));
+        }
+    };
+    for line in header.lines().filter(|l| single(l.trim_end()).is_none()) {
+        add_words(line);
+    }
+    rest.iter().for_each(|s| add_words(s));
+    let keep = |name: &str| {
+        name.starts_with("__") || words.contains(name) || name.split_once("__").is_some_and(|(stem, _)| words.contains(stem))
+    };
+    let mut out = String::with_capacity(header.len());
+    for line in header.split_inclusive('\n') {
+        if single(line.trim_end()).is_some_and(|n| !keep(&n)) {
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 /// 改写 `ems` 中可拆类的文本为声明层，返回实现层装箱结果
@@ -264,6 +301,19 @@ mod tests {
             "#![allow(x)]\nuse crate::prelude::*;\n\nuse java_runtime::a::b::*;\n\nrava_macros::java_class! {\n    #[rava_layer = \"body\"]\n    #[binary_name = \"a/B\"]\n    pub struct B {}\n}\n"
         );
         assert_eq!(module_path(Path::new("java/lang/ref/reference.rs")), "java::lang::r#ref::reference");
+    }
+
+    #[test]
+    fn decl_uses_pruned_to_referenced() {
+        let header = "#![allow(x)]\nuse crate::prelude::*;\nuse crate::a::Used;\nuse crate::a::OnlyInBody;\n\
+                      use crate::a::Anc__VTable;\nuse crate::a::Outer_Inner;\nuse crate::a::__helper;\nuse crate::a::{X, Y};\n\n";
+        let block = "    #[superclass = \"Anc\"]\n    #[nest_members = \"a/Outer$Inner\"]\n    pub struct B {}\n    \
+                     impl B {\n        pub fn f(&self, u: Used) -> Result<()>;\n    }\n";
+        assert_eq!(
+            prune_uses(header, &[block, "}\n"]),
+            "#![allow(x)]\nuse crate::prelude::*;\nuse crate::a::Used;\nuse crate::a::Anc__VTable;\n\
+             use crate::a::Outer_Inner;\nuse crate::a::__helper;\nuse crate::a::{X, Y};\n\n"
+        );
     }
 
     #[test]

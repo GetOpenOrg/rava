@@ -112,7 +112,6 @@ pub(crate) fn expand_interface(
             let mut d_sig = without_param_mut(&f.sig);
             d_sig.ident = format_ident!("__default_{}", f.sig.ident);
             quote! {
-                #[doc(hidden)]
                 pub #d_sig #block
             }
         });
@@ -158,21 +157,14 @@ pub(crate) fn expand_interface(
             #default_method
             #(#keep_attrs)*
             pub #sig {
-                // invokeinterface 的接收者为 null：JVM 抛 NullPointerException（先于方法选择）
-                if ObjectVTable::is_jvm_null(&*self.__ref.0) {
-                    return Err(JvmError::null_pointer());
-                }
-                // 建帧：栈界检查（载体分派直达实现类的 vtable 体，不经 wrapper 入口，a3-T1b）
-                __stack_check()?;
-                let mut __vt: ::std::option::Option<__Shared<dyn #vtable_ident>> = None;
-                ObjectVTable::__interface(__Shared::clone(&self.__ref.0), &mut __vt);
-                if let Some(__vt) = __vt {
+                // null 接收者 NPE、建帧栈界检查与取接口 vtable 在 runtime 的 `__iface_vtable`
+                if let Some(__vt) = __iface_vtable::<dyn #vtable_ident>(&self.__ref)? {
                     return Ok(::std::convert::From::from(
                         <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
                 #proxy_fallback
                 #default_fallback
-                panic!("{} (receiver: {})", #missing_msg, ObjectVTable::__obj_str(&*self.__ref.0))
+                __iface_missing(&self.__ref, #missing_msg)
             }
         });
     }
@@ -249,9 +241,9 @@ pub(crate) fn expand_interface(
         impl #impl_g #struct_ident #ty_g #where_c {
             pub const BINARY_NAME: &'static str = #binary_name;
 
-            /// null 探测与类 Wrapper 的固有方法同形（类型位置载体化后，null 检查
-            /// 发射面 `x.is_jvm_null()` 对载体与 wrapper 统一）：载体 null 即其底层
-            /// Object 引用是 null 单例。
+            // null 探测与类 Wrapper 的固有方法同形（类型位置载体化后，null 检查
+            // 发射面 `x.is_jvm_null()` 对载体与 wrapper 统一）：载体 null 即其底层
+            // Object 引用是 null 单例。
             pub fn is_jvm_null(&self) -> bool {
                 ObjectVTable::is_jvm_null(&*self.__ref.0)
             }
