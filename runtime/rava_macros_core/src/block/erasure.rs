@@ -21,9 +21,12 @@ pub(crate) fn prepare_non_virtual_body(
     f: &FnItem,
     basic_names: &HashSet<String>,
     ref_names: &HashSet<String>,
+    own_statics: &class_init::OwnStatics,
 ) -> Option<(TokenStream2, syn::Block)> {
     let sig = &f.sig;
     let mut b = f.block.as_ref()?.clone();
+    // 本类初始化触发点之内的本类 static 访问免触发（先于注入：注入的触发语句本身不改写）
+    own_statics.rewrite_in(sig, &mut b);
     // static 方法 / 构造器入口是类初始化触发点（JVMS §5.5：invokestatic / new）
     if class_init::is_init_trigger(sig) {
         class_init::inject_init_trigger(&mut b);
@@ -43,11 +46,12 @@ pub(crate) fn expand_non_virtual_fn(
     binary_name: &str,
     basic_names: &HashSet<String>,
     ref_names: &HashSet<String>,
+    own_statics: &class_init::OwnStatics,
 ) -> TokenStream2 {
     let keep_attrs = strip_meta_attrs(&f.attrs);
     let vis = &f.vis;
     let sig = &f.sig;
-    match prepare_non_virtual_body(f, basic_names, ref_names) {
+    match prepare_non_virtual_body(f, basic_names, ref_names, own_statics) {
         Some((null_check, b)) => {
             let stmts = &b.stmts;
             quote! {

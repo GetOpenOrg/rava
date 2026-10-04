@@ -129,6 +129,7 @@ pub(crate) fn expand_statics(
         }
         let cell = format_ident!("__STATIC_{}_{}", struct_ident, name);
         let setter = format_ident!("set_{}", name);
+        let (raw_get, raw_set) = (raw_getter(name), raw_setter(name));
         storage.push(quote! {
             __process_static! {
                 #[allow(non_upper_case_globals)]
@@ -142,6 +143,14 @@ pub(crate) fn expand_statics(
                 #[allow(non_snake_case)]
                 #vis fn #name() -> Result<#ty> {
                     Self::__class_init()?;
+                    Self::#raw_get()
+                }
+            });
+            members.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                #[inline]
+                #vis fn #raw_get() -> Result<#ty> {
                     __safepoint();
                     let __v = ::std::clone::Clone::clone(&*#cell.force().borrow());
                     Ok(__v.unwrap_or_default())
@@ -153,6 +162,14 @@ pub(crate) fn expand_statics(
                 #[allow(non_snake_case)]
                 #vis fn #setter(v: #ty) -> Result<()> {
                     Self::__class_init()?;
+                    Self::#raw_set(v)
+                }
+            });
+            members.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                #[inline]
+                #vis fn #raw_set(v: #ty) -> Result<()> {
                     *#cell.force().borrow_mut() = ::std::option::Option::Some(v);
                     Ok(())
                 }
@@ -160,6 +177,91 @@ pub(crate) fn expand_statics(
         }
     }
     (storage, members)
+}
+
+/// 免初始化触发的 static 访问器名（`__si_NAME` / `__si_set_NAME`）：只供本类初始化触发点之内
+/// 的调用（见 [`OwnStatics`]）
+fn raw_getter(name: &Ident) -> Ident {
+    format_ident!("__si_{}", name)
+}
+
+fn raw_setter(name: &Ident) -> Ident {
+    format_ident!("__si_set_{}", name)
+}
+
+/// 本类有宏生成访问器的 static 字段（R1 Q1(b)）。
+///
+/// 本类的 static 方法 / 构造器 / `<clinit>` 体内，入口已触发（或正由本线程执行）本类初始化
+/// （JVMS §5.5：invokestatic / new 是触发点；初始化进行中的同线程访问立即返回），体内对本类
+/// static 字段的读写不必再经 `__class_init()`：调用点 `Own::f()` / `Self::f()` / `Own::set_f(v)`
+/// 改写为免触发访问器。闭包体不改写（可能在他线程、本类初始化完成前执行，须照常等待）。
+/// 实例方法不改写：运行时手写层可不经构造器造出实例，实例存在不保证本类已初始化。
+pub(crate) struct OwnStatics {
+    ident: Ident,
+    getters: HashSet<String>,
+    setters: HashSet<String>,
+}
+
+impl OwnStatics {
+    pub(crate) fn new(struct_ident: &Ident, statics: &[StaticItem], impl_methods: &HashSet<String>) -> Self {
+        let mut getters = HashSet::new();
+        let mut setters = HashSet::new();
+        for st in statics.iter().filter(|st| st.const_value.is_none()) {
+            let name = st.name.to_string();
+            if !impl_methods.contains(&name) {
+                getters.insert(name.clone());
+            }
+            if !impl_methods.contains(&format!("set_{name}")) {
+                setters.insert(name);
+            }
+        }
+        OwnStatics { ident: struct_ident.clone(), getters, setters }
+    }
+
+    /// 本类初始化触发点（static 方法 / 构造器）与 `<clinit>` 的体内改写本类 static 访问
+    pub(crate) fn rewrite_in(&self, sig: &Signature, block: &mut Block) {
+        if (self.getters.is_empty() && self.setters.is_empty())
+            || !(is_init_trigger(sig) || sig.ident == CLINIT_FN)
+        {
+            return;
+        }
+        syn::visit_mut::VisitMut::visit_block_mut(&mut OwnStaticRewriter(self), block);
+    }
+}
+
+struct OwnStaticRewriter<'a>(&'a OwnStatics);
+
+impl syn::visit_mut::VisitMut for OwnStaticRewriter<'_> {
+    fn visit_expr_closure_mut(&mut self, _: &mut syn::ExprClosure) {}
+
+    fn visit_item_mut(&mut self, _: &mut syn::Item) {}
+
+    fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
+        syn::visit_mut::visit_expr_call_mut(self, call);
+        let syn::Expr::Path(p) = &mut *call.func else { return };
+        if p.qself.is_some() || p.path.segments.len() != 2 {
+            return;
+        }
+        let owner = &p.path.segments[0];
+        if !owner.arguments.is_empty() || !(owner.ident == "Self" || owner.ident == self.0.ident) {
+            return;
+        }
+        let last = &p.path.segments[1];
+        if !last.arguments.is_empty() {
+            return;
+        }
+        let m = last.ident.to_string();
+        let raw = match call.args.len() {
+            0 if self.0.getters.contains(&m) => raw_getter(&last.ident),
+            1 => match m.strip_prefix("set_") {
+                Some(f) if self.0.setters.contains(f) => raw_setter(&format_ident!("{}", f)),
+                _ => return,
+            },
+            _ => return,
+        };
+        p.path.segments[0].ident = format_ident!("Self");
+        p.path.segments[1].ident = raw;
+    }
 }
 
 /// 生成 `__class_init()`。返回 (模块级状态项, impl 块成员)。
@@ -291,6 +393,28 @@ mod tests {
         assert!(s.contains("null_pointer"), "{s}");
         let s = checks(r#"#[java_method(name = "h", descriptor = "()I", leaf = "true")] fn h() -> Result<i32> { Ok(1) }"#);
         assert!(s.is_empty(), "{s}");
+    }
+
+    #[test]
+    fn own_static_rewrite_in_init_triggers_only() {
+        let st = |n: &str| StaticItem {
+            attrs: vec![], vis: syn::parse_quote!(pub), name: format_ident!("{}", n),
+            ty: syn::parse_quote!(i32), const_value: None,
+        };
+        let own = OwnStatics::new(&format_ident!("Foo"), &[st("a"), st("b")], &HashSet::from(["b".to_string()]));
+        let f = method("fn s() -> Result<()> { let x = Foo::a()?; Foo::set_a(x)?; Self::b()?; Bar::a()?; let c = || Foo::a(); Ok(()) }");
+        let mut b = f.block.clone();
+        own.rewrite_in(&f.sig, &mut b);
+        let s = quote!(#b).to_string();
+        assert!(s.contains("Self :: __si_a ()"), "{s}");
+        assert!(s.contains("Self :: __si_set_a (x)"), "{s}");
+        assert!(s.contains("Self :: b ()"), "{s}");
+        assert!(s.contains("Bar :: a ()"), "{s}");
+        assert!(s.contains("| | Foo :: a ()"), "{s}");
+        let f = method("fn i(&self) -> Result<()> { Foo::a()?; Ok(()) }");
+        let mut b = f.block.clone();
+        own.rewrite_in(&f.sig, &mut b);
+        assert!(quote!(#b).to_string().contains("Foo :: a ()"));
     }
 
     #[test]
