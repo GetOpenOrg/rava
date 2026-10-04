@@ -68,6 +68,7 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 | 元数据表（`__DATA_CONST` 中反射表 + 行表） | 反射不可达类 0 行；行表只覆盖翻译方法，存根 0 行；编码为字符串池 + u32 索引，0 个 `&str` 胖指针 |
 | 每类 vtable 协议方法 | 0（随 S7-2 / S7-3） |
 | HelloWorld release 二进制（opt=3） | ≤ 3 MB（估算，B0 重测后修订） |
+| GraalVM 参照 23 例 release 二进制（opt=3） | 逐例 ≤ 同机 GraalVM native-image 缺省构建大小，即 5.9–33.1 MB（macOS arm64，`docs/reports/2026-10-04-graalvm-baseline.md` §二、§三）；起点：LynchBell 13.3 MB，原生 5.9 MB |
 | 行为 | 反射、栈回溯、MH 解析输出不变（服务器抽查） |
 
 ## 四、步骤（每步单独提交、单独抽查）
