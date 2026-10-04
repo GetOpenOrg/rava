@@ -1010,6 +1010,7 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
 | 8f515016 | S7-0 每类静态描述符 `__ClassDesc`（只增，HW 展开 +0.30 MB / TSDS +2.70 MB） | 8642（墙钟 249 s，jp1） | | | 1440 / 29.2 s |
 | a6a00c06 | S7-1 类型判定读描述符：删 `__view_as`、wrapper `__view_into` 类 / 祖先 / 接口载体臂、inner `is_instance_of` / `__class_name`（HW 展开 13.87 MB / TSDS 98.27 MB） | **8192**（墙钟 210 s） | | | **1408 / 25.4 s** |
 | 8bdcb04d | S7-2a 统一句柄：wrapper 单字段 `__r: __Ref<dyn X__VTable>`（句柄 + 视图指针），null 不分配，删 cells / from_any 钩子与 `__erased_inner`，wrapper ObjectVTable impl 缩为 4 个方法（本机 HW 展开 13.89 → 12.95 MB，其中 `impl ObjectVTable for` 0.80 → 0.31 MB；服务器 jp2：TSDS 展开 98.27 → 90.19 MB） | **7597**（墙钟 204 s，jp2） | | | **1359 / 24.6 s** |
+| 9260ead7 | S7-2b Object 直接持有运行时类存储：删 blanket `From` 与全部 wrapper `impl ObjectVTable`（每类改一条 `From<X> for Object`，null → 带描述符的类型化 null）（本机 HW 展开 12.95 → 12.82 MB，其中 `impl ObjectVTable for` 0.31 → 0.02 MB，java_runtime 峰值 1252 MB；本机 TSDS 展开 88.30 MB，macOS 口径） | 待测（`s7m-9260ead7`） | | | 待测 |
 
 **阶段 RSS**（time-passes，阶段末 RSS，MB）
 
