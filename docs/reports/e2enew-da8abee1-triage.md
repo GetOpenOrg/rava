@@ -51,6 +51,7 @@ SetAccessibleBoundary 2 行 / SystemStableProps 2 行）——五个生成器缺
 
 > **R2 实施要点（refl-fix A 族，2026-10-05）**：scope 存根已随边界收窄消解，现症为 `Class.getGenericSignature0` 手写恒返回 null（旧「已知偏差」）——类级泛型签名缺席，getGenericSuperclass/Interfaces 退回 Class、getTypeParameters 为空（AIOOBE / Mismatch of count / NPE 同根）。
 > 修法：元数据新增类级表 `CLASS_SIGNATURE`（扫描已有的 `#[generic_signature]` 块属性，档案侧 + 用户侧同形），native 按表返回真实签名；消费方 sun/reflect/generics 走字节码翻译。
+> MemberModifiers 余项：`TypeVariableImpl.getBounds` 的 `value instanceof FieldTypeSignature[]`（静态类型 `Object[]`）被生成器编译期折叠为假——数组源未考虑协变，bounds 不被具化、clone 后转 `Type[]` 抛 CCE（toGenericString 吞异常成 `<CCE>`）。修法：数组源对引用元素数组 / 非数组目标改按运行时类判定，仅基本元素数组互斥才折叠（全档案 instanceof_fold 3→0）。
 
 | R3 | **JCA 服务查找存根** | `sun/security/jca/ProviderList.getServices` + `GetInstance.getServices` | 5（crypto_ec 4 + RsaSignVerify） | 手写/边界（ProviderList 是 VM 驱动域） |
 | R4 | **logging 模块 import 断链** | rustc E0433（找不到类型） | 4（logging 3 + ResourceBundleFaces） | 生成器 import（跨模块 jmod 类名解析） |
