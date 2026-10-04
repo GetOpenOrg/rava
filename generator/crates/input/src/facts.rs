@@ -167,6 +167,8 @@ pub struct ClosureFacts {
     pub reflect_fields: Vec<(String, String)>,
     /// 按名查字段目标类推不出时的字面量名
     pub reflect_field_names: Vec<String>,
+    /// 经字段枚举 / 静态字段句柄常量可按名读写的静态字段（声明类, 名字）
+    pub reflect_static_fields: Vec<(String, String)>,
     /// 不经构造器分配的类（序列化构造器的分配目标）：L3 分派闭包的 `<alloc>` 臂
     pub reflect_allocations: Vec<String>,
     /// 需要方法 / 构造器表的类（元数据裁剪口径，含超类型）
@@ -271,6 +273,7 @@ impl ClosureFacts {
             reflect_gaps: e.reflect_gaps.iter().cloned().collect(),
             reflect_fields: e.reflect_fields.iter().cloned().collect(),
             reflect_field_names: e.reflect_field_names.iter().cloned().collect(),
+            reflect_static_fields: e.static_field_handles().into_iter().collect(),
             reflect_allocations: e.serial_allocs.iter().cloned().collect(),
             reflect_meta_methods: e.meta_method_classes().into_iter().collect(),
             reflect_meta_fields: e.meta_field_classes().into_iter().collect(),
@@ -333,6 +336,9 @@ impl ClosureFacts {
             out.reflect_fields.push((str_of(r, "owner")?.to_string(), str_of(r, "name")?.to_string()));
         }
         out.reflect_field_names = strings(reflect.get("field_names"))?;
+        for r in arr(reflect, "static_fields")? {
+            out.reflect_static_fields.push((str_of(r, "owner")?.to_string(), str_of(r, "name")?.to_string()));
+        }
         out.reflect_allocations = strings(reflect.get("allocations"))?;
         out.reflect_meta_methods = strings(reflect.get("meta_methods"))?;
         out.reflect_meta_fields = strings(reflect.get("meta_fields"))?;

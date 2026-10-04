@@ -103,6 +103,7 @@ struct Acc {
     missing: BTreeMap<String, Value>,
     reflect_members: BTreeSet<(String, String)>,
     reflect_fields: BTreeSet<(String, String)>,
+    reflect_static_fields: BTreeSet<(String, String)>,
     reflect_names: BTreeMap<String, BTreeSet<String>>,
     services: BTreeMap<String, BTreeSet<(Option<String>, String)>>,
     services_unknown: bool,
@@ -195,6 +196,12 @@ impl Acc {
                 self.reflect_fields.insert((owner.into(), str_at(r, "name")?.into()));
             }
         }
+        for r in arr(reflect, "static_fields")? {
+            let owner = str_at(r, "owner")?;
+            if !is_user(owner) {
+                self.reflect_static_fields.insert((owner.into(), str_at(r, "name")?.into()));
+            }
+        }
         let seeds = c.get("seeds").ok_or("closure 缺字段：seeds")?;
         for (owner, names) in seeds.get("reflect_names").and_then(Value::as_object).into_iter().flatten() {
             if !is_user(owner) {
@@ -278,6 +285,7 @@ impl Acc {
                 "gaps": set("reflect.gaps"),
                 "fields": self.reflect_fields.iter().map(|(o, n)| json!({"owner": o, "name": n})).collect::<Vec<_>>(),
                 "field_names": set("reflect.field_names"),
+                "static_fields": self.reflect_static_fields.iter().map(|(o, n)| json!({"owner": o, "name": n})).collect::<Vec<_>>(),
                 "field_enum_gaps": set("reflect.field_enum_gaps"),
                 "allocations": set("reflect.allocations"),
                 "meta_methods": set("reflect.meta_methods"),

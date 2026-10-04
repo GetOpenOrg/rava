@@ -326,6 +326,12 @@ serial_enumerators = [
     "java/io/ObjectStreamClass.getDefaultSerialFields:(Ljava/lang/Class;)[Ljava/io/ObjectStreamField;",
     "java/io/ObjectStreamClass.computeDefaultSUID:(Ljava/lang/Class;)J",
 ]
+# instance_field_users：在其内按名 / 枚举取到的字段句柄只用于实例字段（按修饰符滤掉 static）的方法。其取法照常
+#   计入字段放开与元数据口径，但不使静态字段可经句柄按名访问（静态字段按名访问表 `__STATICS` 不计）。
+#   getDeclaredSerialFields 按 serialPersistentFields 的名字取 Field，只绑定非 static 的同类型字段
+instance_field_users = [
+    "java/io/ObjectStreamClass.getDeclaredSerialFields:(Ljava/lang/Class;)[Ljava/io/ObjectStreamField;",
+]
 # static_offset_getters：静态字段基址 / 偏移的全部取法（Field 版与 MemberName 版）。按偏移读的基址若是类镜像，
 #   只有这些取法之一可达时才作静态字段基址读所指类的静态字段——否则静态字段偏移无从取得，类镜像基址只读 Class 的实例字段
 static_offset_getters = [

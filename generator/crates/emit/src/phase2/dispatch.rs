@@ -35,9 +35,6 @@ const PRIM_UNBOX: [(&str, &str, &str); 8] = [
     ("u16", "unbox_char", ""),
 ];
 
-/// 序列化协议规定经反射读取的静态成员名（Java Object Serialization Specification §4.6）
-const SERIAL_PROTOCOL_FIELDS: [&str; 2] = ["serialPersistentFields", "serialVersionUID"];
-
 fn prim_unbox(ty: &str) -> Option<(&'static str, &'static str)> {
     PRIM_UNBOX.iter().find(|(t, _, _)| *t == ty).map(|(_, f, c)| (*f, *c))
 }
@@ -307,15 +304,16 @@ fn statics_line(ctx: &EmitCtx<'_>, bin: &str) -> String {
     format!("    (\"{bin}\", {path}{tf}::__STATICS),")
 }
 
-/// 静态字段是否可经按名反射 / 序列化协议访问（档案口径）：用户树类与全成员反射类的全部静态字段，
-/// 其余类限序列化协议字段与按名查字段点到的名字。为真的字段在发射文本的字段属性上带
-/// `reflect = true`，宏只为带标记的字段展开 `__STATICS` 项；类有任一此类字段即登记。
+/// 静态字段是否可在运行期按名访问（反射 `Field`、方法句柄 / VarHandle、Unsafe 静态偏移；档案口径）：用户树类与
+/// 全成员反射类的全部静态字段；其余类取闭包分析的可达事实——按名查字段点到的字段（含目标类推不出时的字面量名，
+/// 如序列化协议经 `getDeclaredField` 读取的成员）、字段枚举口径所指类的静态字段与静态字段句柄常量。为真的字段
+/// 在发射文本的字段属性上带 `reflect = true`，宏只为带标记的字段展开 `__STATICS` 项；类有任一此类字段即登记。
 pub fn static_reflected(ctx: &EmitCtx<'_>, bin: &str, name: &str) -> bool {
     let reflect = &ctx.input.reflect;
     ctx.input.user_classes.iter().any(|u| u == bin)
         || reflect.all_members.contains(bin)
-        || SERIAL_PROTOCOL_FIELDS.contains(&name)
         || reflect.fields.get(bin).is_some_and(|s| s.contains(name))
+        || reflect.static_fields.get(bin).is_some_and(|s| s.contains(name))
         || reflect.field_names.contains(name)
 }
 
@@ -341,7 +339,7 @@ fn per_class<'b>(
     }
 }
 
-/// 静态字段表登记（用户树类全部；JDK / 库类限序列化协议与按名反射的静态成员）+ 用户树类与常量
+/// 静态字段表登记（`static_reflected` 为真的静态字段所在类）+ 用户树类与常量
 /// 反射引用面 JDK 类的方法分派臂；返回 main 登记行（binary 序）。
 ///
 /// 方法分派闭包只由该类自己的文本推出，按类并行、按原序回写

@@ -127,6 +127,7 @@ pub struct Manifest {
     receiver_returns: HashSet<String>,
     field_enumerators: HashSet<String>,
     serial_enumerators: HashSet<String>,
+    instance_field_users: HashSet<String>,
     static_offset_getters: Vec<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
@@ -396,6 +397,7 @@ impl Manifest {
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
             field_enumerators: field_writes("enumerators").into_iter().collect(),
             serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
+            instance_field_users: field_writes("instance_field_users").into_iter().collect(),
             static_offset_getters: field_writes("static_offset_getters"),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
@@ -567,6 +569,12 @@ impl Manifest {
     /// 按可序列化字段口径放开，不按全部字段
     pub fn is_serial_enumerator(&self, member: &str) -> bool {
         self.serial_enumerators.contains(member)
+    }
+
+    /// 在其内按名 / 枚举取到的字段句柄只用于实例字段（按修饰符滤掉 static）的方法：其取法不使静态字段
+    /// 可经句柄按名访问（静态字段按名访问表不计）
+    pub fn is_instance_field_user(&self, member: &str) -> bool {
+        self.instance_field_users.contains(member)
     }
 
     /// 静态字段基址 / 偏移的取法：可达前类镜像不作静态字段基址按偏移读取

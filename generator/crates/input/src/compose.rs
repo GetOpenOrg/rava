@@ -71,6 +71,10 @@ impl ClosureFacts {
             reflect_gaps: sorted_union(&profile.reflect_gaps, user_strs(&single.reflect_gaps)),
             reflect_fields: sorted_union(&profile.reflect_fields, single.reflect_fields.iter().filter(|(o, _)| is_user(o)).cloned()),
             reflect_field_names: sorted_union(&profile.reflect_field_names, single.reflect_field_names.iter().cloned()),
+            reflect_static_fields: sorted_union(
+                &profile.reflect_static_fields,
+                single.reflect_static_fields.iter().filter(|(o, _)| is_user(o)).cloned(),
+            ),
             reflect_allocations: sorted_union(&profile.reflect_allocations, user_strs(&single.reflect_allocations)),
             reflect_meta_methods: sorted_union(&profile.reflect_meta_methods, user_strs(&single.reflect_meta_methods)),
             reflect_meta_fields: sorted_union(&profile.reflect_meta_fields, user_strs(&single.reflect_meta_fields)),

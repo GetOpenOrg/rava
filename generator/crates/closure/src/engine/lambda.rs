@@ -163,6 +163,7 @@ impl<'a> Engine<'a> {
                 if matches!(mh.kind, 2 | 4) {
                     if let Some(site) = self.h.resolve_field(&k.owner, &k.name, &k.desc) {
                         let decl = site.class.name.clone();
+                        self.static_mh_fields.insert((decl.clone(), k.name.clone()));
                         self.static_field_owner(&decl, via.clone());
                     }
                 }
