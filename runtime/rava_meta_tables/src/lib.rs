@@ -210,6 +210,7 @@ fn modifier_bits(s: &str) -> i32 {
             // bridge=0x40、字段 transient=0x80/方法 varargs=0x80——
             // java.lang.reflect.Modifier 对方法读 varargs 位）
             "varargs"      => 0x0080,
+            "bridge"       => 0x0040,
             "native"       => 0x0100,
             // 类侧专有（java_class! 块 modifiers 属性，attrs._class_modifiers_str）：
             // 生成的接口块带 super_class=Object，class_modifier_bits 的「无父类即

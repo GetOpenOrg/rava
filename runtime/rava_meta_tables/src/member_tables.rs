@@ -107,6 +107,8 @@ pub(crate) struct MethodMeta {
     inherited: bool,
     /// 复制进本类的方法体的声明类型（`declared_by`）；本类声明 / 继承转发行为空串
     declared_by: String,
+    /// 来自类头桥方法行（`#[bridge_method(..)]`，桥不发射为 Rust 方法）
+    from_bridge_line: bool,
 }
 
 /// 方法元数据扫描：java_class! 块内 java_method / java_native 属性行。
@@ -129,7 +131,11 @@ pub(crate) fn scan_class_methods(texts: &[&str]) -> BTreeMap<String, Vec<MethodM
             if let Some(name) = extract_attr_padded(trimmed, "binary_name") {
                 current = name;
             }
-            let Some(open) = trimmed.find("java_method(").or_else(|| trimmed.find("java_native(")) else { continue };
+            let Some(open) = trimmed
+                .find("java_method(")
+                .or_else(|| trimmed.find("java_native("))
+                .or_else(|| trimmed.find("#[bridge_method("))
+            else { continue };
             if current.is_empty() { continue; }
             let window = &trimmed[open..];
             let (Some(name), Some(descriptor)) =
@@ -158,8 +164,16 @@ pub(crate) fn scan_class_methods(texts: &[&str]) -> BTreeMap<String, Vec<MethodM
                 inherited: extract_key(window, "inherited_from").is_some()
                     || extract_key(window, "declared_by").is_some(),
                 declared_by: extract_key(window, "declared_by").unwrap_or_default(),
+                from_bridge_line: window.starts_with("#[bridge_method("),
             });
         }
+    }
+    // 桥方法行（类头 `#[bridge_method(..)]`）与已发射为 Rust 方法的同签名转发成员（协变桥
+    // wrapper 的 java_method 行）是同一声明成员：保留后者，去掉桥行
+    for rows in result.values_mut() {
+        let real: std::collections::BTreeSet<(String, String)> = rows.iter()
+            .filter(|m| !m.from_bridge_line).map(|m| (m.name.clone(), m.descriptor.clone())).collect();
+        rows.retain(|m| !m.from_bridge_line || !real.contains(&(m.name.clone(), m.descriptor.clone())));
     }
     result
 }
@@ -204,7 +218,7 @@ pub(crate) fn with_object_ctor_row(mut methods: BTreeMap<String, Vec<MethodMeta>
             modifiers: *mods, is_static: false, is_native: *native, is_abstract: false,
             exceptions: throws.iter().map(|e| (*e).to_owned()).collect(),
             annotations: Vec::new(), param_annotations: Vec::new(), annotation_default: Vec::new(),
-            signature: String::new(), inherited: false, declared_by: String::new(),
+            signature: String::new(), inherited: false, declared_by: String::new(), from_bridge_line: false,
         });
     }
     methods

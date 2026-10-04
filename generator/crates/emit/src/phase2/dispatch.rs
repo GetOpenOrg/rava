@@ -217,6 +217,31 @@ fn method_arms(class_bin: &str, em: &ClassEmission, attr: &str, sig: &FnSig, tps
     arms.push(format!("        (\"{mname}\", \"{descriptor}\") => Some((|| {{ {inner_body} }})()),"));
 }
 
+/// 桥方法臂（类头 `#[bridge_method(.., bridge_to = ..)]`）：桥不发射为 Rust 方法，按桥描述符键入
+/// 被桥接真实方法的臂（实参按真实形参类型接入，与桥体的 checkcast 同义）。同键已有臂（协变桥
+/// wrapper 已发射为方法）不重复；真实方法在祖先时无 `bridge_to`，分派沿接收者类链上溯
+fn bridge_arms(class_bin: &str, em: &ClassEmission, lines: &[&str], tps: &[String], only: Option<&BTreeSet<String>>, arms: &mut Vec<String>) {
+    let key = |n: &str, d: &str| format!("        (\"{n}\", \"{d}\") =>");
+    for line in lines.iter().filter(|l| l.trim_start().starts_with("#[bridge_method(")) {
+        let (Some(name), Some(desc), Some(to)) = (extract(line, "name"), extract(line, "descriptor"), extract(line, "bridge_to")) else {
+            continue;
+        };
+        if arms.iter().any(|a| a.starts_with(&key(name, desc))) {
+            continue;
+        }
+        let target = lines.iter().enumerate().find(|(_, l)| {
+            attr_re().is_match(l) && extract(l, "name") == Some(name) && extract(l, "descriptor") == Some(to)
+        });
+        let Some((i, attr)) = target else { continue };
+        let Some(sig) = following_fn(lines, i) else { continue };
+        let mut tmp = Vec::new();
+        method_arms(class_bin, em, attr, &sig, tps, only, &mut tmp);
+        if let Some(arm) = tmp.into_iter().find(|a| a.starts_with(&key(name, to))) {
+            arms.push(arm.replacen(&key(name, to), &key(name, desc), 1));
+        }
+    }
+}
+
 /// 类发射文本 → `__reflect_dispatch` 实现（无臂 → None）。`only`：只发射这些方法名的臂。
 /// 泛型类 / 泛型接口的闭包挂在 `X<Object..>` 上（与字段闭包、类初始化登记同一实例化）：
 /// 载体是对象引用 + 类型视图，任意实例化同形，实参 / 返回按擦除接入；构造臂产出 `X<Object..>`，
@@ -234,6 +259,7 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
             method_arms(class_bin, em, line, &sig, &tps, only, &mut arms);
         }
     }
+    bridge_arms(class_bin, em, &lines, &tps, only, &mut arms);
     if only.is_none_or(|o| o.contains("<init>") || o.contains(ALLOC_MEMBER)) && !em.text.contains("is_abstract       = true") {
         arms.push(
             "        (\"<alloc>\", \"()V\") => Some((|| { let mut __o = Self::default(); __o._init_not_null(); Ok(Object::from(__o)) })()),"
