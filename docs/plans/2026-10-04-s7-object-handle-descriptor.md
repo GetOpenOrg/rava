@@ -269,6 +269,10 @@ S7 下：
     - downcast 审计：`__class_from_object` / `catch_as` 删「持有对象即 W」快路径（恒不命中），`Object.equals` 的 String 快路径改按描述符；接口载体与 lambda 载体收敛到句柄另作 S7-2c。
     - 审计结果（runtime 64 处 `downcast*::<>`）：只有上述 3 处假定「Object 持有 wrapper」；其余目标为基本类型盒（`i32` / `u16` / `f64` …）、`JArray<_>`、`JvmRef` 载体内值、`Object` 自身、`StackTraceFrames` 等非 wrapper 存储与 `__interface` / `__view_into` 槽位，语义不变。`try_checkcast::<W>` 对类 wrapper 不再命中 as_any 臂，调用方（`try_cast`、数组逐元素兼容）均有描述符 / `is_instance_of` 后续臂兜底。
     - 手写层只两处在 wrapper 上调 trait 方法（`String::units` 的 `is_jvm_null`、`Throwable.fillInStackTrace` 的 `__class_name`），分别改固有方法与 `Object::from(..).0.__class_name()`。
+  - S7-2c 实施要点（2026-10-04，s7-2c）：
+    - 接口载体字段改 `__ref: __IfaceRef<dyn I__VTable>`（runtime 非泛型逻辑一份）：句柄仍是 `Object`（载体须 `Deref<Target = Object>`、null 带接口静态类型），另持接口视图指针 `vt: Option<NonNull<dyn I__VTable>>`，在 `From<Object>`（含 `iface_upcasts!` 上转）时求出一次；分派直接经 `vt`，不再每次 Rc 克隆 + 查询。`vt` 为 None 而句柄非 null 即「不实现本接口」（代理 / default 回退 / AbstractMethodError 路径不变）。
+    - `ObjectVTable::__interface(self: Rc<Self>, slot)` 改为 `__interface(&self, slot)`，slot 为 `Option<NonNull<dyn I__VTable>>`，与 `__erased_vtable` 同形；类存储与 lambda 合成对象（`I__Lambda`）的应答同改；`__Shared<dyn I__VTable>` 全部删除（runtime 只剩 `__Shared<dyn ObjectVTable>` 一份）。lambda 的闭包存储 `__Shared<__DynFn>` 是按擦除签名的闭包对象，不在本步。
+    - 手写层 `from_any` 审计：仅 `Throwable` 回溯帧（`StackTraceFrames`，非 wrapper）一处，形态不变。
 - **S7-3 浅拷贝 / 反射字段 / Unsafe 槽位走 `fields` 描述**：删掉按类的 `__shallow_copy` / `__reflect_field` / `__unsafe_*`。
 - **S7-4 类初始化骨架去按类展开**。
 - **S7-5 性能验收**（§4.3）与 3 个 OOM 例、Digester 实测；更新 §7.5.4 账。

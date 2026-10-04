@@ -3,7 +3,7 @@
 
 use crate::sync_model::__Shared as Rc;
 // 类视图重建的共用部件（定义在 object_ext，宏生成的 `From<Object>` / `__virtual_view` 转交到这里）
-pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __iface_vtable, __PartsFn};
+pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __PartsFn};
 
 /// JVM Object vtable：方法名与 java.lang.Object 字节码方法一一对应。
 ///
@@ -169,15 +169,16 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// （类 wrapper 的 null 判定是其固有方法 `is_jvm_null`，S7-2b）。
     fn is_jvm_null(&self) -> bool { false }
 
-    /// 接口视图查询（invokeinterface 的运行时入口）：`slot` 是调用方提供的
-    /// `Option<Rc<dyn I__VTable>>`（I 为被调用的 Java 接口）；对象的运行时类实现 I 时，
-    /// 把自身以该接口的擦除 vtable 形态填入 `slot`。
+    /// 接口视图查询（接口引用 `__IfaceRef` 建立时的运行时入口，S7-2c）：`slot` 是调用方提供的
+    /// `Option<NonNull<dyn I__VTable>>`（I 为目标 Java 接口）；对象的运行时类实现 I 时，
+    /// 把自身以该接口的擦除 vtable 形态的指针填入 `slot`（与 `__erased_vtable` 同形，
+    /// 调用方以持有本对象的 Object 为句柄，指针不持有）。
     ///
     /// 按「擦除后的接口」选择——`slot` 的类型不含任何类型实参，与 JVM 的 itable 查找一致。
     /// `java_class!` 宏为每个类按其 `impl Iface for Class` 块生成实现；
     /// 默认（未实现任何接口的对象）不填 `slot`。
     #[doc(hidden)]
-    fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+    fn __interface(&self, _slot: &mut dyn std::any::Any) {}
     /// 运行时类的 binary name（如 `java/lang/NullPointerException`）：生成类取本类描述符（S7-1）；未捕获异常报告等 VM 级设施据此取得类名。
     fn __class_name(&self) -> &'static str {
         match self.__desc() {

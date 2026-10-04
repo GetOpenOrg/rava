@@ -146,3 +146,65 @@ pub fn __ref_from_object<V: ?Sized + 'static>(obj: &crate::java::lang::Object) -
     // SAFETY: `__erased_vtable` 在 Object 所持存储自身上取视图指针，句柄持有同一存储
     slot.map(|vt| unsafe { __Ref::from_raw(__Handle::new(__Shared::clone(&obj.0)), vt) })
 }
+
+/// 接口引用（接口载体的唯一字段，S7-2c）：句柄是 `Object`（载体 `Deref<Target = Object>`，
+/// null 带接口静态类型），另持接口视图指针 `vt`（不持有，指向 `obj` 所持对象）——在
+/// `From<Object>` 时经 `ObjectVTable::__interface` 求出一次，invokeinterface 直接经它分派，
+/// 不再每次克隆引用、查询。`vt` 为 None 而 `obj` 非 null：运行时类不实现该接口
+/// （动态代理、只走 default 体的对象），分派落到代理 / default / AbstractMethodError 回退。
+pub struct __IfaceRef<V: ?Sized> {
+    obj: crate::java::lang::Object,
+    vt: Option<NonNull<V>>,
+}
+
+// `vt` 指向 `obj` 所持（Send + Sync）对象，借用期不超过 `obj`
+unsafe impl<V: ?Sized + Send + Sync> Send for __IfaceRef<V> {}
+unsafe impl<V: ?Sized + Send + Sync> Sync for __IfaceRef<V> {}
+
+impl<V: ?Sized> Clone for __IfaceRef<V> {
+    #[inline]
+    fn clone(&self) -> Self { __IfaceRef { obj: self.obj.clone(), vt: self.vt } }
+}
+
+impl<V: ?Sized> std::ops::Deref for __IfaceRef<V> {
+    type Target = crate::java::lang::Object;
+    #[inline]
+    fn deref(&self) -> &crate::java::lang::Object { &self.obj }
+}
+
+impl<V: ?Sized + 'static> __IfaceRef<V> {
+    /// 以 Object 建立接口引用：运行时类实现该接口时取得接口视图指针（`V = dyn I__VTable`）。
+    pub fn new(obj: crate::java::lang::Object) -> Self {
+        let mut slot: Option<NonNull<V>> = None;
+        obj.0.__interface(&mut slot);
+        __IfaceRef { obj, vt: slot }
+    }
+
+    /// 带接口静态类型的 null（不查询）。
+    #[inline]
+    pub fn null(obj: crate::java::lang::Object) -> Self { __IfaceRef { obj, vt: None } }
+
+    /// 交出句柄（`From<Iface> for Object`）。
+    #[inline]
+    pub fn into_object(self) -> crate::java::lang::Object { self.obj }
+
+    /// invokeinterface 载体分派的入口部分：接收者为 null 时抛 NullPointerException（先于方法
+    /// 选择），建帧做栈界检查，再交出接口视图；接收者不实现该接口时为 `None`。
+    #[inline]
+    pub fn enter(&self) -> crate::error::Result<Option<&V>> {
+        match self.vt {
+            Some(p) => {
+                crate::__stack_check()?;
+                // SAFETY: 不变式——vt 指向 obj 所持对象，obj 与 self 同寿
+                Ok(Some(unsafe { p.as_ref() }))
+            }
+            None => {
+                if self.obj.0.is_jvm_null() {
+                    return Err(crate::error::JvmError::null_pointer());
+                }
+                crate::__stack_check()?;
+                Ok(None)
+            }
+        }
+    }
+}

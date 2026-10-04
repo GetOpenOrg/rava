@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """声明 crate 宏展开体量分类（拆 crate 线 §7.5.4 达标账的度量工具）。
 
-  scripts/expand_stats.py expand <scratch> <out.rs>   # RUSTC_BOOTSTRAP=1 cargo rustc -p java_runtime --lib -- -Z unpretty=expanded
+  scripts/expand_stats.py expand <scratch> <out.rs> [crate]   # RUSTC_BOOTSTRAP=1 cargo rustc -p <crate> --lib -- -Z unpretty=expanded
+                                                               # crate 缺省 java_base_decl（M2 后的根模块声明层）
   scripts/expand_stats.py stats <expanded.rs> [--top N] # 按条目归类统计字节，输出 markdown
 
 归类按 rustc 美化输出的缩进结构：模块级条目（`mod` 直接子项）按种类归类；`impl` 块再按其中方法名归入
@@ -126,15 +127,15 @@ def stats(path, top):
     return "\n".join(out)
 
 
-def expand(scratch, out):
+def expand(scratch, out, crate="java_base_decl"):
     env = dict(os.environ, RUSTC_BOOTSTRAP="1")
     with open(out, "w") as f:
-        return subprocess.run(["cargo", "rustc", "-q", "-p", "java_runtime", "--lib", "--", "-Z", "unpretty=expanded"],
+        return subprocess.run(["cargo", "rustc", "-q", "-p", crate, "--lib", "--", "-Z", "unpretty=expanded"],
                               cwd=scratch, env=env, stdout=f).returncode
 
 
 if __name__ == "__main__":
     if sys.argv[1] == "expand":
-        sys.exit(expand(sys.argv[2], sys.argv[3]))
+        sys.exit(expand(*sys.argv[2:5]))
     top = int(sys.argv[sys.argv.index("--top") + 1]) if "--top" in sys.argv else 40
     print(stats(sys.argv[2], top))

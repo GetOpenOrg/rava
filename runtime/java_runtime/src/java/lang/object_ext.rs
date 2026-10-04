@@ -435,19 +435,6 @@ where W: Default, V: ?Sized + 'static {
     obj.__checkcast_fail(desc.binary_name)
 }
 
-/// invokeinterface 载体分派的入口部分（宏生成的接口载体方法只转交到这里）：接收者为 null 时抛
-/// NullPointerException（先于方法选择），建帧做栈界检查，再按接收者运行时类取接口 vtable
-/// （`V = dyn I__VTable`）；接收者不实现该接口（lambda / 代理 / 闭包）时为 `None`。
-pub fn __iface_vtable<V: ?Sized + 'static>(recv: &Object) -> crate::error::Result<Option<crate::sync_model::__Shared<V>>> {
-    if ObjectVTable::is_jvm_null(&*recv.0) {
-        return Err(crate::error::JvmError::null_pointer());
-    }
-    crate::__stack_check()?;
-    let mut vt: Option<crate::sync_model::__Shared<V>> = None;
-    ObjectVTable::__interface(Rc::clone(&recv.0), &mut vt);
-    Ok(vt)
-}
-
 /// 接口方法在接收者上无实现、无代理、无 default 体：AbstractMethodError（冷路径，全程序一份）
 #[cold]
 #[inline(never)]

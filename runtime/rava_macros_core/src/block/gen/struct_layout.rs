@@ -119,23 +119,23 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let iface_vtable_idents: Vec<Ident> = ctx.iface_impls.iter()
         .map(|ii| format_ident!("{}__VTable", ii.iface))
         .collect();
-    // 按值 `__Shared<Self>` 接收者的钩子（`__interface`）显式覆盖，未移交的 self 经
-    // `ObjectVTable` 擦除后释放：
-    // 引用计数减一的语义不变，而 `Arc<X__inner>` 的析构代码（Arc::drop → drop_slow →
-    // Weak::drop）不再逐类单态化——全部类共用 `__Shared<dyn ObjectVTable>` 一份
-    //（emitter-performance §5.5 N4）。
-    let release_self = quote! {
-        ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
-    };
-    let interface_query: TokenStream2 = quote! {
-        fn __interface(self: __Shared<Self>, slot: &mut dyn ::std::any::Any) {
-            #(
-                if let Some(s) = slot.downcast_mut::<::std::option::Option<__Shared<dyn #iface_vtable_idents>>>() {
-                    *s = Some(self);
-                    return;
-                }
-            )*
-            #release_self
+    // 接口视图指针填入（S7-2c，与下方 `__erased_vtable` 同形）：调用方（`__IfaceRef::new`）
+    // 以持有本存储的 Object 为句柄，指针不持有——不再按接口单态化 `__Shared<dyn I__VTable>`。
+    let interface_query: TokenStream2 = if iface_vtable_idents.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn __interface(&self, slot: &mut dyn ::std::any::Any) {
+                #(
+                    if let ::std::option::Option::Some(s) =
+                        slot.downcast_mut::<::std::option::Option<::std::ptr::NonNull<dyn #iface_vtable_idents>>>()
+                    {
+                        *s = ::std::option::Option::Some(
+                            ::std::ptr::NonNull::from(self as &dyn #iface_vtable_idents));
+                        return;
+                    }
+                )*
+            }
         }
     };
 
@@ -161,7 +161,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 擦除 vtable 查询（运行时类覆盖）：inner 即 vtable 对象（`impl *__VTable for
     // __inner`），按调用方 slot 的（擦除）类 vtable 类型把自身的视图指针填入（调用方与
     // 持有本存储的句柄合成 `__Ref`，S7-2）——运行时类自身槽直取 self；祖先类槽经
-    // supertrait 上转。与上方 `__interface` 的接口查询同型，
+    // supertrait 上转。与上方 `__interface` 的接口查询同形，
     // 意义在于**按运行时类**应答（wrapper 侧的同名方法按静态类生成臂，祖先视图包装
     // 的「降回中间类」查询由此承接——中间型 catch/checkcast 的擦除重建路径）。
     let ancestor_vtable_idents: Vec<Ident> = ctx.meta.all_superclasses.iter()
