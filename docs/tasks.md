@@ -217,7 +217,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【中期】优化线（用户 2026-10-01 决定暂停，C 阶段收官后恢复；精度 / 效率优化都要做）
 │   │
 │   ├─ ⏸ 闭包分析效率 P8 余量、sites（optimization-directions §三.2）
-│   ├─ 🔄 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）；2026-10-04 派 crate-split（声明层拆分，先服务器实测 OOM 三例再落 §7.5.4 收益最大项，S7 只出方案待批）；unsafe-rmw 合入 5f759708（字段槽按 Rust 名登记，Unsafe 引用 RMW 两例出已知失败清单）
+│   ├─ 🔄 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split；10-04 分层决策与待验证清单 V1–V12 见 docs/plans/2026-10-04-archive-crate-layering-decisions.md）；2026-10-04 派 crate-split（声明层拆分，先服务器实测 OOM 三例再落 §7.5.4 收益最大项，S7 只出方案待批）；unsafe-rmw 合入 5f759708（字段槽按 Rust 名登记，Unsafe 引用 RMW 两例出已知失败清单）
 │   ├─ ◇ S7 统一对象句柄 + 每类静态描述符 ─┐
 │   ├─ ✅ T1 跨测试编译复用决策（2026-10-01-cross-test-compile-reuse.md，99dc658f 实测：档案 3609 类，全量 ≈35→≤11 机时）—— 用户 2026-10-03 四项全采纳：档案化 + 分发层、CLAUDE.md 第 2 条改写（已改）、开放世界折叠、语料动态 / 生产静态链接；C1d / C4 收官后按 §5.3 实施
 │   │     └─▶ T4 生成器只构建一次再分发（待服务器核实）

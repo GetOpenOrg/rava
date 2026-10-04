@@ -16,20 +16,6 @@
 # 同一测试可有多条（不同签名），任一命中即为已知。
 
 [[known]]
-test = "StockTrans"
-signature = "stub: L3 反射分派未覆盖 java/util/ArrayList.<alloc>:()V"
-owner = "c1d-t2（C1d T2：writeObject0 对象池 / 名字×镜像 / forName0 回退）"
-since = "2026-10-03"
-note = "L3 反射分派闭包缺 ArrayList 分配入口；T2 合入后应通过"
-
-[[known]]
-test = "StockTrans"
-signature = "stub: L3 反射分派未覆盖 java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V"
-owner = "c1d-t2（C1d T2：writeObject0 对象池 / 名字×镜像 / forName0 回退）"
-since = "2026-10-03"
-note = "序列化回调 ArrayList.writeObject 未入反射分派闭包；T2 合入后应通过"
-
-[[known]]
 test = "TestLocaleCurrency"
 signature = "sym=[CN¥]"
 owner = "expected 基线（CLDR 随 JDK 21 小版本漂移，见 tasks.md e2e 失败复核）"
