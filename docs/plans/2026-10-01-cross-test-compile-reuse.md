@@ -661,4 +661,4 @@ profile.json ─┐
 
 ### 6.6 第 2 步（驱动直接 rustc 链接档案）
 
-方案与实测见 [`2026-10-04-t1-step2-direct-rustc-link.md`](2026-10-04-t1-step2-direct-rustc-link.md)：语料模式用门面 dylib `java_profile` 加 panic=unwind，档案侧登记表移出用户 `main.rs`。s2（3077 类）上单例 0.58–0.96 s、峰值 ≤ 0.51 GB，据此收紧 §5.2 目标。
+方案与实测见 [`2026-10-04-t1-step2-direct-rustc-link.md`](2026-10-04-t1-step2-direct-rustc-link.md)（2026-10-04 用户已答复决策点）：档案按 JDK 模块切 crate（以 jmod 模块名命名，s2 实测跨模块反向引用在正文中为 0），语料模式每模块一个 dylib 并用 panic=unwind，档案侧登记表归各模块 crate。s2（3077 类）上单例 0.58–0.96 s、峰值 ≤ 0.51 GB，据此收紧 §5.2 目标。
