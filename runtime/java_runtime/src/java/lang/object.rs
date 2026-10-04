@@ -235,148 +235,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     ) -> bool { false }
 
     /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
-    /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
+    /// 类对象不覆盖——按描述符的 `fields` 拷贝（`field_desc::__clone_fields`）；数组覆盖；
+    /// 无字段存储的值（装箱基本类型等）返回 None。
     fn __shallow_copy(&self) -> Option<Object> {
         None
-    }
-
-    /// Unsafe 实例字段 long 原子协议（`Unsafe.getLongVolatile`/`putLongVolatile`/
-    /// `compareAndSetLong`/`getAndAddLong` 的实例字段形态）：按字段名取共享的
-    /// long 字存储单元。java_class! 宏为每个含非擦除 `long` 字段的生成类按
-    /// 平铺字段名单生成臂（含继承字段）；其余（无该字段 / 数组 / 基本类型盒）
-    /// 返回 None。返回的 `Rc<Cell<i64>>` 与该对象全部 wrapper 视图共享——
-    /// Unsafe 经 Object 写入对直接字段读取（`__get_xxx`）可见，与 JVM 的字段
-    /// 内存语义一致（Unsafe 与普通字段访问指向同一存储）。
-    #[doc(hidden)]
-    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> {
-        None
-    }
-
-    /// Unsafe 实例字段 int 原子协议（`Unsafe.getInt`/`putInt`/`compareAndSetInt`/
-    /// `getAndAddInt` 的实例字段形态）：`__unsafe_long_cell` 的 int 镜像，
-    /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
-    #[doc(hidden)]
-    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
-        None
-    }
-
-    /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像（平铺的非擦除
-    /// boolean 字段，`Rc<Cell<bool>>` 共享单元）。消费方：VarHandle 字节数组视图的字节序位。
-    #[doc(hidden)]
-    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> {
-        None
-    }
-
-    /// Unsafe 实例字段 int 字视图协议（`getInt`/`putInt`/`compareAndSetInt` 等 int 访问器的
-    /// 实例字段形态）：按字段名对 int、float（原始位）及子字（boolean / byte / short / char）字段的共享单元执行
-    /// 字视图读-改-写（`__PrimCell::__word_update`），返回旧字。子字字段独占 4 字节对齐槽，
-    /// JDK 的子字 CAS（compareAndExchangeByte / Short：`getIntVolatile(o, offset & ~3)` +
-    /// `weakCompareAndSetInt`）经此落在该字段自身。java_class! 宏为含这些平铺非擦除字段的
-    /// 生成类生成臂（含继承字段）；未命中 → None。
-    #[doc(hidden)]
-    fn __unsafe_word(&self, _field: &str, _op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> {
-        None
-    }
-
-    /// Unsafe 实例字段双字视图协议（`__unsafe_word` 的 64 位镜像）：按字段名对 long / double
-    /// 字段（double 以原始位）的共享单元执行读-改-写（`__PrimCell::__dword_update`），返回旧双字。
-    /// 承载 Unsafe 的 long 访问器族与 JDK compareAndSetDouble（→ compareAndSetLong 原始位）。
-    #[doc(hidden)]
-    fn __unsafe_dword(&self, _field: &str, _op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> {
-        None
-    }
-
-    /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
-    /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名对共享的引用存储单元
-    /// 执行 `op`（读 / 写 / 读-改-写，见 [`__RefAccess`]）。引用字段（含擦除字段）的存储是
-    /// `Rc<RefCell<Option<Box<T>>>>`——载体类型随字段声明类型异构（`Box<Object>` /
-    /// `Box<Completion>` / ...），故由 java_class! 宏为每个含引用字段的生成类按平铺字段
-    /// 名单（含继承字段）生成「字段名 → 槽」的单一分派，槽上的操作由按载体类型实例化的
-    /// [`__ref_slot_access`] 承担（值在边界经 `From<Object>` / `Into<Object>` 转换，与字段
-    /// 访问器的边界协议一致）。命中 → `Some`（写形态的值为命中标记）；未命中 → None 且
-    /// `op` 原样保留（调用方可转交他处应答）。经 `dyn ObjectVTable` 的
-    /// `__unsafe_ref_get / __unsafe_ref_set / __unsafe_ref_update` 调用。
-    #[doc(hidden)]
-    fn __unsafe_ref_access(&self, _field: &str, _op: &mut __RefAccess<'_>) -> Option<Object> {
-        None
-    }
-
-    /// Java 字段身份（声明类 binary name, 字段名）→ 上述按名协议的 Rust 字段名。Unsafe 实例字段偏移按
-    /// Java 字段身份登记（`objectFieldOffset`），而按名协议以 Rust 字段名分派；二者不同的字段（Rust 关键字
-    /// 加后缀如 `in` → `in_`、`$` 替换、遮蔽父类同名字段的子类字段加声明类后缀）由 java_class! 宏按
-    /// 生成器给出的 `field_slots` 为运行时类生成映射（含继承字段）；未列出 → None，两名相同。
-    #[doc(hidden)]
-    fn __field_slot(&self, _decl: &str, _name: &str) -> Option<&'static str> {
-        None
-    }
-}
-
-/// 引用原子协议的操作（[`ObjectVTable::__unsafe_ref_access`] 的入参）。
-#[doc(hidden)]
-pub enum __RefAccess<'a> {
-    /// 读：可重入读锁内取当前值；`None`（未写入）与 `Some(Box<null>)` 均以 jvm-null 应答。
-    Get,
-    /// 写：命中时取走值写入（值经 `<T as From<Object>>::from` 还原声明类型视图，在取写锁
-    /// 之前完成——类型不符按 checkcast 语义处理）；未命中时值原样保留。
-    Set(Option<Object>),
-    /// 读-改-写：写锁内读出当前值 `cur`，`f(cur)` 返回 `Some(new)` 时写入，应答 `cur`。
-    Update(&'a mut dyn FnMut(Object) -> Option<Object>),
-}
-
-/// 引用槽上的协议操作：按字段载体类型 `T` 实例化（跨类共享同一实例），生成类的
-/// `__unsafe_ref_access` 只做字段名分派。擦除字段 `T = Object`，两向转换为恒等。
-#[doc(hidden)]
-#[inline(never)]
-pub fn __ref_slot_access<T>(slot: &crate::sync_model::__RefSlot<Option<Box<T>>>,
-                            op: &mut __RefAccess<'_>) -> Option<Object>
-where T: Clone + From<Object>, Object: From<T>
-{
-    match op {
-        __RefAccess::Get => Some(Option::unwrap_or_default(
-            slot.borrow().as_deref().map(|b| Object::from(Clone::clone(b))))),
-        __RefAccess::Set(v) => {
-            let v = Some(Box::new(<T as From<Object>>::from(v.take().unwrap_or_default())));
-            *slot.borrow_mut() = v;
-            Some(Object::default())
-        }
-        __RefAccess::Update(f) => {
-            let mut g = slot.borrow_mut();
-            let cur: Object = Option::unwrap_or_default(
-                g.as_deref().map(|b| Object::from(Clone::clone(b))));
-            if let Some(n) = f(Clone::clone(&cur)) {
-                *g = Some(Box::new(<T as From<Object>>::from(n)));
-            }
-            Some(cur)
-        }
-    }
-}
-
-impl dyn ObjectVTable {
-    /// 引用原子协议读形态：命中 → `Some(当前值)`；未命中（无该引用字段）→ None（调用方归 stub）。
-    #[doc(hidden)]
-    pub fn __unsafe_ref_get(&self, field: &str) -> Option<Object> {
-        self.__unsafe_ref_access(field, &mut __RefAccess::Get)
-    }
-
-    /// 引用原子协议写形态：命中写入返回 true；未命中 → false。
-    #[doc(hidden)]
-    pub fn __unsafe_ref_set(&self, field: &str, v: Object) -> bool {
-        self.__unsafe_ref_access(field, &mut __RefAccess::Set(Some(v))).is_some()
-    }
-
-    /// int 按名写形态（`__unsafe_int_cell` 取单元再写）：命中写入返回 true；未命中 → false。
-    /// 手写层以字面量字段名调用时，闭包分析器据此得知该名字段被写入（不折叠其读取）。
-    #[doc(hidden)]
-    pub fn __unsafe_int_set(&self, field: &str, v: i32) -> bool {
-        self.__unsafe_int_cell(field).map(|c| c.set(v)).is_some()
-    }
-
-    /// 引用原子协议读-改-写形态：命中 → `Some(旧值)`；未命中 → None。Unsafe / VarHandle 的
-    /// compareAndSet / compareAndExchange / getAndSet 引用族经此真正原子。
-    #[doc(hidden)]
-    pub fn __unsafe_ref_update(&self, field: &str,
-                               f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
-        self.__unsafe_ref_access(field, &mut __RefAccess::Update(f))
     }
 }
 
@@ -403,7 +265,14 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
     if !this.is_instance_of("java/lang/Cloneable") {
         return Err(crate::error::JvmError::clone_not_supported(this.__class_name()));
     }
-    match this.__shallow_copy() {
+    let copy = match this.__desc() {
+        // 类对象：按运行时类描述符逐字段拷贝（S7-3，非泛型）
+        Some(desc) if !this.is_jvm_null() =>
+            // SAFETY: 报出描述符的非 null 对象即该类的存储（`X__inner`，`#[repr(C)]` 细指针字段）
+            Some(unsafe { crate::field_desc::__clone_fields(this as *const T as *const (), desc) }),
+        _ => this.__shallow_copy(),
+    };
+    match copy {
         Some(copy) => Ok(copy),
         None => Err(crate::error::JvmError::clone_not_supported(this.__class_name())),
     }

@@ -25,64 +25,6 @@ pub(crate) fn is_basic(ty: &Type) -> bool {
     false
 }
 
-/// 字段类型是否为裸 `i64`（Java `long` 的非擦除形态）——Unsafe 实例字段
-/// long 原子协议（`__unsafe_long_cell`）的臂生成条件。
-pub(crate) fn type_is_long(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if tp.qself.is_none() && tp.path.segments.len() == 1 {
-            let seg = &tp.path.segments[0];
-            return seg.arguments.is_empty() && seg.ident == "i64";
-        }
-    }
-    false
-}
-
-/// 字段类型是否为裸 `bool`（Java `boolean` 的非擦除形态）——实例字段 boolean 按名协议
-/// （`__unsafe_bool_cell`）的臂生成条件。
-pub(crate) fn type_is_bool(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if tp.qself.is_none() && tp.path.segments.len() == 1 {
-            let seg = &tp.path.segments[0];
-            return seg.arguments.is_empty() && seg.ident == "bool";
-        }
-    }
-    false
-}
-
-/// 字段类型是否为裸 `i32`（Java `int` 的非擦除形态）——Unsafe 实例字段
-/// int 原子协议（`__unsafe_int_cell`）的臂生成条件。
-pub(crate) fn type_is_int(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if tp.qself.is_none() && tp.path.segments.len() == 1 {
-            let seg = &tp.path.segments[0];
-            return seg.arguments.is_empty() && seg.ident == "i32";
-        }
-    }
-    false
-}
-
-fn type_is_bare(ty: &Type, names: &[&str]) -> bool {
-    if let Type::Path(tp) = ty {
-        if tp.qself.is_none() && tp.path.segments.len() == 1 {
-            let seg = &tp.path.segments[0];
-            return seg.arguments.is_empty() && names.iter().any(|n| seg.ident == n);
-        }
-    }
-    false
-}
-
-/// 字段类型是否为 Unsafe int 字视图可承载的类型（Java `int` / `float` / `boolean` / `byte` /
-/// `short` / `char` 的非擦除形态）——`__unsafe_word` 的臂生成条件。
-pub(crate) fn type_is_word(ty: &Type) -> bool {
-    type_is_bare(ty, &["i32", "f32", "bool", "i8", "i16", "u16"])
-}
-
-/// 字段类型是否为 Unsafe 双字视图可承载的类型（Java `long` / `double` 的非擦除形态）——
-/// `__unsafe_dword` 的臂生成条件。
-pub(crate) fn type_is_dword(ty: &Type) -> bool {
-    type_is_bare(ty, &["i64", "f64"])
-}
-
 pub(crate) const META_ATTRS: &[&str] = &[
     "descriptor",
     "generic_signature",

@@ -11,9 +11,16 @@
 //!
 //! 接口没有类描述符：接口载体不是运行时类，接口判定按名字查 `supertypes`（闭包外接口没有
 //! Rust 类型，只能按名字表达）。
+//!
+//! 实例字段（S7-3）：存储 `X__inner` 是 `#[repr(C)]`，字段依次为继承字段（最深祖先在前）、自有
+//! 字段、标识单元，每个字段都是一个 `__Shared` 细指针——字段在存储里的下标即
+//! `field_base + 自有序号`。浅拷贝、Unsafe 按名字段协议沿 `display` 读各类的 `fields`，
+//! 不再按类展开方法（见 `field_desc.rs`）。
+
+use crate::field_desc::__FieldDesc;
+use crate::java::lang::Object;
 
 /// 一个 Java 类的静态描述符。地址即类标识（同一类恒为同一 `static`）。
-#[derive(Debug)]
 pub struct __ClassDesc {
     /// binary name（`java/lang/NullPointerException`）。
     pub binary_name: &'static str,
@@ -23,6 +30,23 @@ pub struct __ClassDesc {
     pub display: &'static [&'static __ClassDesc],
     /// 全部超类型的 binary name（含自身与 `java/lang/Object`），按字节序升序。
     pub supertypes: &'static [&'static str],
+    /// 本类自有实例字段（声明序，与存储布局一致）。
+    pub fields: &'static [__FieldDesc],
+    /// 继承实例字段数：本类第 i 个自有字段在存储里的下标是 `field_base + i`。
+    pub field_base: u16,
+    /// 新建本类的默认存储（全部字段取缺省值、新标识），装入 Object。
+    pub alloc: fn() -> Object,
+}
+
+impl std::fmt::Debug for __ClassDesc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("__ClassDesc")
+            .field("binary_name", &self.binary_name)
+            .field("depth", &self.depth)
+            .field("fields", &self.fields)
+            .field("field_base", &self.field_base)
+            .finish_non_exhaustive()
+    }
 }
 
 impl __ClassDesc {

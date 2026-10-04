@@ -6,7 +6,9 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use super::super::erasure::type_args_arity;
+use super::super::util::is_basic;
 use super::context::GenContext;
+use super::storage_hooks::hook_ident;
 
 /// 返回 (声明层转换项, 存储类型 `X__inner` 上的 BINARY_NAME 常量——随存储层进实现层)
 pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
@@ -174,6 +176,9 @@ fn class_desc(ctx: &GenContext) -> TokenStream2 {
     };
     supertypes.sort();
     supertypes.dedup();
+    let fields = field_descs(ctx);
+    let field_base = ctx.meta.superclass_fields.len() as u16;
+    let alloc = hook_ident(ctx, "alloc");
     quote! {
         #[doc(hidden)]
         pub static #desc_ident: __ClassDesc = __ClassDesc {
@@ -181,10 +186,46 @@ fn class_desc(ctx: &GenContext) -> TokenStream2 {
             depth: #depth,
             display: &[#(#ancestors,)* &#desc_ident],
             supertypes: &[#(#supertypes),*],
+            fields: &[#(#fields,)*],
+            field_base: #field_base,
+            alloc: || #alloc().into_object(&#desc_ident),
         };
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]
             pub const __DESC: &'static __ClassDesc = &#desc_ident;
         }
     }
+}
+
+/// 本类自有实例字段的描述（S7-3，与存储布局同序）：Java 名取 `field_slots` 中本类的映射（关键字
+/// 后缀 / `$` 替换 / 遮蔽后缀），缺省与 Rust 名相同；种类按存储形态——擦除字段与引用字段
+/// 带按载体类型实例化的单元协议（擦除载体为 Object），基本字段按 Rust 类型细分。
+fn field_descs(ctx: &GenContext) -> Vec<TokenStream2> {
+    let binary_name = &ctx.meta.binary_name;
+    ctx.fields.iter().map(|(name, ty)| {
+        let rust = name.to_string();
+        let java = ctx.meta.field_slots.iter()
+            .find(|(decl, _, r)| decl == binary_name && *r == rust)
+            .map_or(rust.as_str(), |(_, java, _)| java.as_str());
+        let kind = if ctx.is_erased(name) {
+            quote! { __FieldKind::Ref(__ref_field::<Object>) }
+        } else if is_basic(ty) {
+            let k = match quote!(#ty).to_string().as_str() {
+                "bool" => "Bool",
+                "i8" => "Byte",
+                "i16" => "Short",
+                "u16" => "Char",
+                "i32" => "Int",
+                "f32" => "Float",
+                "i64" => "Long",
+                "f64" => "Double",
+                _ => "Prim",
+            };
+            let k = format_ident!("{}", k);
+            quote! { __FieldKind::#k }
+        } else {
+            quote! { __FieldKind::Ref(__ref_field::<#ty>) }
+        };
+        quote! { __FieldDesc { java: #java, rust: #rust, kind: #kind } }
+    }).collect()
 }

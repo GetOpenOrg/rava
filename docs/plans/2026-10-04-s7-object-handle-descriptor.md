@@ -69,6 +69,13 @@
 
 - S7-2b（9260ead7，s7-2b 分支）已实施：本机 8 例 0 错 0 警、输出与期望一致；服务器同口径测量（作业 `s7m-9260ead7`）：声明层峰值 HelloWorld 1359 → 1233 MB、TSDS 7597 → 6654 MB；抽查 s7b-c971047f 16/16，与 M2 合并后 int-6a784b50 8/8，合入 6a784b50。
 - S7-2c（aa5910b5，s7-2c 分支）已实施：接口载体字段改 `__IfaceRef<dyn I__VTable>`，`__interface` 改为视图指针填充，`__Shared<dyn I__VTable>` 删净；本机 12 例 0 错 0 警、输出与期望一致。服务器同口径测量（作业 s7m-aa5910b5）：声明层峰值 HelloWorld 1233 → 1242 MB（持平）、TSDS 6654 → 6153 MB（−7.5%）；抽查 s7c-aa5910b5 20/20，合入 63bc9213。
+- S7-3（s7-3 分支）实施要点：
+  - **S7-3a**：`__ClassDesc` 增 `fields`（本类自有实例字段 `__FieldDesc { java, rust, kind }`）、`field_base`（继承字段数）、`alloc`（新建默认存储装入 Object）。
+  - `X__inner` 加 `#[repr(C)]`、`__PrimCell` 加 `#[repr(transparent)]`：每个字段都是一个 `__Shared` 细指针，字段 i 位于存储基址 + i 个指针宽。
+  - 由此，`__unsafe_*` / `__field_slot` 改为 `impl dyn ObjectVTable` 上的非泛型固有方法，沿 `display` 查各类的 `fields`。
+  - 浅拷贝改为 `Object__clone_base` 走描述符：先 `alloc`，再逐字段拷贝。基本单元按位拷贝；引用单元经该字段载体类型的 `__ref_field::<T>` 函数指针拷贝。
+  - 宏里按类展开的 7 个方法全删；数组仍走 `__shallow_copy`。
+  - **S7-3b**：反射字段的实例字段臂改走描述符，静态字段另定。
 
 ## 一、问题
 

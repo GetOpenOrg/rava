@@ -215,7 +215,7 @@ pub(super) fn emit_call_result(
     }
     let obj_ty = &site.obj_ty;
     if rust_mname == "clone" && !is_object(env, obj_ty) && *obj_ty != RsType::Unit && !chain_declares(env, obj_ty, mname) {
-        // 解析到根类 Object.clone（数组 / 类链无人声明）：Java 浅拷贝经 __shallow_copy 派发；
+        // 解析到根类 Object.clone（数组 / 类链无人声明）：Java 浅拷贝（类对象按描述符字段表，数组经 __shallow_copy）；
         // `this` 已是 &Self
         let src = if site.obj_e == "this" { "this".to_string() } else { format!("&{}", site.obj_e) };
         raw(sim, format!("let {v}: {O} = {O}__clone_base({src})?;"))?;

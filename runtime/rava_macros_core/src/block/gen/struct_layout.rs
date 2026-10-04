@@ -2,9 +2,9 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Ident, Type};
+use syn::Ident;
 
-use super::super::util::{is_basic, type_is_int, type_is_bool, type_is_long, type_is_word, type_is_dword};
+use super::super::util::is_basic;
 use super::context::GenContext;
 
 /// Inner struct（平铺字段：superclass_fields + own fields，非泛型——A-1 存储层擦除）
@@ -52,11 +52,17 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 对象标识单元：wrapper 钩子按值克隆 __inner 重建视图时随之共享，Default（新对象）各自新建
     inner_field_tokens.push(quote! { pub(crate) __identity: __Shared<()> });
 
+    // `repr(C)` + 每个字段一个 `__Shared` 细指针：第 i 个字段位于基址 + i 个指针宽，描述符的
+    // `fields` / `field_base` 据此定位字段（S7-3，`field_desc`）；断言守护该布局
+    let field_count = ctx.meta.superclass_fields.len() + ctx.fields.len();
     let inner_struct = quote! {
         #[derive(::core::clone::Clone, ::core::default::Default, ::core::cmp::PartialEq, ::core::fmt::Debug)]
+        #[repr(C)]
         pub(crate) struct #inner_ident {
             #(#inner_field_tokens,)*
         }
+        const _: () = ::core::assert!(::core::mem::offset_of!(#inner_ident, __identity)
+            == #field_count * ::core::mem::size_of::<usize>());
     };
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -189,202 +195,11 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         }
     };
 
-    // Unsafe 实例字段原子协议（运行时类应答）：inner 平铺持有全部继承字段且存储
-    // 即共享单元（Rc<Cell<i64/i32>>），按字段名直答。wrapper 侧的同名方法按静态
-    // 类生成臂（downcast 自身 inner）——静态基类视图（如 AQS 视图承载
-    // CountDownLatch$Sync inner）的请求臂不可达，由 wrapper 未命中后经 vtable
-    // 委托到本覆盖应答（与 `__erased_vtable` 的「inner 覆盖 + wrapper 委托」
-    // 同型）。臂只对非擦除的裸 i64/i32 平铺字段生成；字段不在名单 → 不生成方法，
-    // 落 object.rs 的 trait 默认 None（调用方归 stub）。
-    let inner_long_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-        .chain(ctx.fields.iter())
-        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_long(ty))
-        .map(|(name, _)| {
-            let field_str = name.to_string();
-            quote! {
-                #field_str => ::std::option::Option::Some(
-                    __Shared::clone(&self.#name)),
-            }
-        })
-        .collect();
-    let inner_int_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-        .chain(ctx.fields.iter())
-        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_int(ty))
-        .map(|(name, _)| {
-            let field_str = name.to_string();
-            quote! {
-                #field_str => ::std::option::Option::Some(
-                    __Shared::clone(&self.#name)),
-            }
-        })
-        .collect();
-    let inner_bool_cell_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-        .chain(ctx.fields.iter())
-        .filter(|(name, ty)| !ctx.is_erased(name) && type_is_bool(ty))
-        .map(|(name, _)| {
-            let field_str = name.to_string();
-            quote! {
-                #field_str => ::std::option::Option::Some(
-                    __Shared::clone(&self.#name)),
-            }
-        })
-        .collect();
-    let inner_bool_cell_query: TokenStream2 = if inner_bool_cell_arms.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn __unsafe_bool_cell(
-                &self,
-                field: &str,
-            ) -> ::std::option::Option<__Shared<__PrimCell<bool>>> {
-                match field {
-                    #(#inner_bool_cell_arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-    // Unsafe 字 / 双字视图（`__unsafe_word`：int、float 与子字字段；`__unsafe_dword`：long 与
-    // double 字段）：字段名 → 单元的视图读-改-写（`__PrimCell::__word_update` / `__dword_update`
-    // 按单元类型实例化）。
-    let view_query = |method: &str, update: &str, w_ty: TokenStream2, pred: fn(&Type) -> bool| -> TokenStream2 {
-        let method = format_ident!("{}", method);
-        let update = format_ident!("{}", update);
-        let arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-            .chain(ctx.fields.iter())
-            .filter(|(name, ty)| !ctx.is_erased(name) && pred(ty))
-            .map(|(name, _)| {
-                let field_str = name.to_string();
-                quote! { #field_str => ::std::option::Option::Some(self.#name.#update(op)), }
-            })
-            .collect();
-        if arms.is_empty() {
-            return quote! {};
-        }
-        quote! {
-            fn #method(
-                &self,
-                field: &str,
-                op: &mut dyn FnMut(#w_ty) -> ::std::option::Option<#w_ty>,
-            ) -> ::std::option::Option<#w_ty> {
-                match field {
-                    #(#arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-    let inner_word_query = view_query("__unsafe_word", "__word_update", quote! { i32 }, type_is_word);
-    let inner_dword_query = view_query("__unsafe_dword", "__dword_update", quote! { i64 }, type_is_dword);
-    let inner_long_cell_query: TokenStream2 = if inner_long_cell_arms.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn __unsafe_long_cell(
-                &self,
-                field: &str,
-            ) -> ::std::option::Option<__Shared<__PrimCell<i64>>> {
-                match field {
-                    #(#inner_long_cell_arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-    let inner_int_cell_query: TokenStream2 = if inner_int_cell_arms.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn __unsafe_int_cell(
-                &self,
-                field: &str,
-            ) -> ::std::option::Option<__Shared<__PrimCell<i32>>> {
-                match field {
-                    #(#inner_int_cell_arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-
-    // Unsafe/VarHandle 实例字段引用原子协议（运行时类应答）：引用字段（非基本，
-    // 含擦除字段——擦除载体本就是 `Rc<RefCell<Option<Box<Object>>>>`）按字段名
-    // 分派到槽，槽上的读 / 写 / 读-改-写由 runtime 的 `__ref_slot_access::<T>` 承担
-    // （按载体类型实例化、跨类共享；边界转换与字段访问器协议一致）。本类只生成
-    // 「字段名 → 槽」的单一 match。wrapper 侧同名方法先问静态类 inner、未命中委托
-    // vtable 对象——静态基类视图（如 Completion 视图承载 UniApply inner）由此落到
-    // 本覆盖应答（与 `__unsafe_long_cell` 的「inner 覆盖 + wrapper 委托」同型）。
-    // 字段不在名单 → 不生成方法，落 object.rs 的 trait 默认 None（调用方归 stub）。
-    let inner_ref_access_arms: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-        .filter(|(name, ty)| ctx.is_erased(name) || !ctx.inherited_is_basic(name, ty))
-        .chain(ctx.fields.iter()
-            .filter(|(name, ty)| ctx.is_erased(name) || !is_basic(ty)))
-        .map(|(name, _)| {
-            let field_str = name.to_string();
-            quote! { #field_str => __ref_slot_access(&*self.#name, op), }
-        })
-        .collect();
-    let inner_ref_access_query: TokenStream2 = if inner_ref_access_arms.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn __unsafe_ref_access(
-                &self, field: &str, op: &mut __RefAccess<'_>,
-            ) -> ::std::option::Option<Object> {
-                match field {
-                    #(#inner_ref_access_arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-
-    // Unsafe 实例字段偏移的 Java 字段身份 → 按名协议的 Rust 字段名（只列二者不同的平铺字段；
-    // 未列出的字段两名相同，trait 默认 None 由调用方取 Java 名）
-    let inner_field_slot_query: TokenStream2 = if ctx.meta.field_slots.is_empty() {
-        quote! {}
-    } else {
-        let arms = ctx.meta.field_slots.iter().map(|(decl, java, rust)| {
-            quote! { (#decl, #java) => ::std::option::Option::Some(#rust), }
-        });
-        quote! {
-            fn __field_slot(&self, decl: &str, name: &str) -> ::std::option::Option<&'static str> {
-                match (decl, name) {
-                    #(#arms)*
-                    _ => ::std::option::Option::None,
-                }
-            }
-        }
-    };
-
-    // Object.clone 的运行时类浅拷贝（C-1）：新 inner（新标识单元），每个字段新建存储
-    // 单元、值按 Java 语义拷贝（基本类型 Cell 拷贝值；引用 / 擦除 RefCell 拷贝引用——
-    // Box<T> 的 Clone 即 wrapper/Object 的引用克隆），新存储直接装入 Object（S7-2b）。
-    // inner 即运行时类（vtable 方法体里的 `this`），类自带 clone 体内的
-    // super.clone() 经此得到运行时类副本（子类字段 / 类名完整保留）。
-    let shallow_copy_inits: Vec<TokenStream2> = ctx.meta.superclass_fields.iter()
-        .map(|(name, ty)| (name, !ctx.is_erased(name) && ctx.inherited_is_basic(name, ty)))
-        .chain(ctx.fields.iter().map(|(name, ty)| (name, !ctx.is_erased(name) && is_basic(ty))))
-        .map(|(name, basic)| if basic {
-            quote! { #name: __Shared::new(__PrimCell::new(self.#name.get())), }
-        } else {
-            quote! { #name: __Shared::new(__RefSlot::new(self.#name.borrow().clone())), }
-        })
-        .collect();
     let as_self_hook = &ctx.as_self_hook;
     let vtable_trait_ident = &ctx.vtable_trait_ident;
-    let inner_shallow_copy: TokenStream2 = quote! {
-        fn __shallow_copy(&self) -> ::std::option::Option<Object> {
-            let __c = #inner_ident {
-                #(#shallow_copy_inits)*
-                __identity: __Shared::new(()),
-            };
-            ::std::option::Option::Some(Object::__from_shared(__Shared::new(__c)))
-        }
-    };
 
-    // inner 即运行时类对象：Object 直接持有它（S7-2b），身份 / 类名 / instanceof / 桥接 /
-    // 浅拷贝 / 按名字段协议都由本 impl 应答；From<Object> 的擦除路径经 `__erased_vtable`
+    // inner 即运行时类对象：Object 直接持有它（S7-2b），身份 / 类名 / instanceof / 桥接由本
+    // impl 应答（浅拷贝 / 按名字段协议读描述符的 `fields`，S7-3）；From<Object> 的擦除路径经 `__erased_vtable`
     // 重建任意实例化视图（S7-2）。
     // 代理载体（FS-R R4a）：手写层提供 `__vm_proxy_invoke` / `__vm_proxy_implements`
     // 的类——instanceof 另按实例的接口列表应答，接口载体分派回退经其转发。
@@ -425,15 +240,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #equals_inner_bridge
                 #interface_query
                 #erased_vtable_query
-                #inner_long_cell_query
-                #inner_int_cell_query
-                #inner_bool_cell_query
-                #inner_word_query
-                #inner_dword_query
-                #inner_ref_access_query
-                #inner_field_slot_query
                 #to_string_inner_bridge
-                #inner_shallow_copy
             }
         }
     } else {
