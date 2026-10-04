@@ -166,6 +166,21 @@ fn own_group(cmd: &mut Command) {
 #[cfg(not(unix))]
 fn own_group(_: &mut Command) {}
 
+/// 链接器包装 `rava-link`（与 rava 同目录）的 cargo 配置项：`target.<宿主三元组>.linker = "<路径>"`。
+/// 程序链接后由它据 DWARF 构建地址 → Java 帧表并嵌入（二进制体积 B2；旁路行表经 `RAVA_FRAME_LINES` 传入）
+fn link_config() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("rava 路径：{e}"))?;
+    let wrapper = exe.with_file_name(format!("rava-link{}", std::env::consts::EXE_SUFFIX));
+    if !wrapper.is_file() {
+        return Err(format!("缺少链接器包装 {}（与 rava 同一次构建产出）", wrapper.display()));
+    }
+    let out = Command::new("rustc").arg("-vV").output().map_err(|e| format!("rustc -vV：{e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let host = text.lines().find_map(|l| l.strip_prefix("host: ")).ok_or("rustc -vV 无 host 行")?;
+    let path = serde_json::to_string(&wrapper.to_string_lossy()).map_err(|e| e.to_string())?;
+    Ok(format!("target.{}.linker={path}", host.trim()))
+}
+
 /// `cargo build --bin <bin>`：成功返回可执行文件路径；产物清单与 rustc 全文落 scratch
 pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<PathBuf, Failure> {
     let timeout = c.timeout.unwrap_or_else(|| heavy.default_timeout());
@@ -174,10 +189,13 @@ pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<Pa
     std::fs::create_dir_all(log.parent().unwrap_or(out)).map_err(|e| fail(format!("{}：{e}", log.display())))?;
     let log_file = std::fs::File::create(&log).map_err(|e| fail(format!("{}：{e}", log.display())))?;
     let profile: &[&str] = if c.release { &["--release"] } else { &[] };
+    let linker = link_config().map_err(fail)?;
     println!("\n[build] cargo build {}--bin {bin}", if c.release { "--release " } else { "" });
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--bin", bin, "--message-format=json-render-diagnostics"])
         .args(profile)
+        .args(["--config", &linker])
+        .env("RAVA_FRAME_LINES", out.join(emit::project::line_tables::FRAME_LINES_PATH))
         .current_dir(out)
         .env("CARGO_TARGET_DIR", &c.target_dir)
         .env("CARGO_INCREMENTAL", "0")

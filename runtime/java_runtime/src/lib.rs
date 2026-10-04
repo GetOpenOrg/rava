@@ -18,6 +18,7 @@ mod meta_codec;
 pub mod monitor;
 pub mod native_memory;
 pub mod vm_stack;
+pub mod pc_map;
 pub mod posix;
 pub mod net_posix;
 pub mod species_dyn;
