@@ -382,3 +382,40 @@ DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 
   - 修法：把两臂中的无语句块原位留在循环体内。新增单元测试 `while_guard_keeps_empty_latch`；修后 build_cli 14/14 通过。
 - `closure_cli::closure_independent_of_hash_seed` **仍失败**：StockTrans 种子 0 比种子 1 多出方法
   `LocaleResources$ResourceReference.getCacheKey`。这正是上一节「未修：反射调用池去冗余与 open 目标写入」所述的剩余顺序依赖，按「交接 / 下一步」继续处理。
+
+### 2026-10-04 续：重载撞名修复与第三次 open 写入尝试（engine-order，阶段 2）
+
+- 5760b43a30eddbd4d11aba6694fad76fe0bb1e66：重载名修饰区分完整数组维数（`ty::type_map::descriptor_to_suffix` 与
+  `closure::handwritten::descriptor_suffix` 每维重复 `arr_`）。修前 `String[][]` 与 `String[][][]` 同为 `arr_str`，
+  `DTDGrammar.resize` 两重载声明去重为 `_1` 而调用点仍用原名，致 6 例 E0308（DeepCopy / StockTrans / TestUrlProtocolOpen /
+  TestSerialDefaultSuid / TestSerialLookupPairing / TestSerialProxyForm）。本机 StockTrans `--stop-after emit` 复核声明与调用点均为
+  `resize_arr_arr_str_i` / `resize_arr_arr_arr_str_i`。同提交加 `--flows '@hwopen'` 诊断：列出未收窄、写字段的 hw 站点的
+  目标规模、open 类型与写入规模。
+- `@hwopen`（DeepCopy 种子 0，终态）：未收窄且目标含 open 的站点 57 个。主要有三类：
+  - `VarHandleReferences$FieldInstanceReadWrite.*` 及 `Unsafe.*Acquire/Release/Plain` 转发：目标 186 + open（含 `Object`），写入 186+351 open；
+  - `ObjectStreamClass$FieldReflector.setObjFieldValues`：目标 6045，写入 7943+351 open；
+  - CLQ / LTQ / Striped64 的 VarHandle 调用点：目标 ≤ 6，规模小。
+- 第三次尝试（未提交，补丁留在本机 `build/logs/open_writes_wip.patch`）：open 目标 o 按 (o, 口径) 分组，接到 o 子类型声明的、
+  按口径可写的引用实例字段 `U(f)`，字段新登记或开放时补接（单调）。DeepCopy 种子 0 跑了 32 min 仍未完成（基线 172–214 s；
+  本机负载 12，但量级不可接受），已撤回。这与上文「失败路线」第二条本质相同：写入值经 `U(f) → F(f)` 汇入未知接收者读，代价不可接受。
+  按「同一问题两轮修复不过即停」，V9 剩余顺序依赖在此停下。
+- 终态方向不变，见上文「交接 / 下一步」，补两点：
+  1. 不能再从「open 写入扩到子类型字段」入手，必须先收窄偏移来源。`FieldInstanceReadWrite` 的偏移来自字段句柄，
+     口径应是「只经字段句柄 / MemberName 取得的字段」，与 `Gate::Handle` 同口径，不含反序列化放开的字段。可在清单里增设
+     一类「字段句柄访问器」成员，与 `handle_interpreters` 分开：后者还带值池语义，不宜混用。再按 `fh_marks` 收窄到句柄所指字段。
+  2. `Unsafe.*Acquire` 等转发方法的调用点是共享的，目标是各调用方的并集，需按调用方上下文克隆，或者把转发方法看作透明转发；
+     否则收窄效果会在转发点丢失。
+- 门禁现状：`closure_independent_of_hash_seed` 仍失败，StockTrans 种子 0 / 1 差 1 个方法
+  （`LocaleResources$ResourceReference.getCacheKey`）。其余生成器单元测试全过（t1.log：closure 148、build_cli 14/14 等）。
+- TestHttpLoopbackSync 转译超时排查（协调方抽查 order-5760b43a 在 jp2 上 10 min 超时；order-27e33897 上同样超时）。
+  本机经 heavy_lock 跑 `rava build … --stop-after emit`，两个独立 worktree 各自构建，负载相近：
+
+  | 提交 | 耗时（real） | JDK 类 | 峰值内存 |
+  |---|---|---|---|
+  | main e519e22c | 399 s | 5441 | 9.2 GB |
+  | engine-order 5760b43a | 995 s | 6420 | 15.6 GB |
+
+  确认是本分支变慢：多出 979 类，耗时 2.5 倍。来源与上文「集合变化」相同：判定 1 修正后，`Provider$Service.getImplClass`
+  按已知名字加载 JCA / SSL 提供者实现。这些是修复非单调后恢复的类，不是噪声，所以不能靠撤回判定 1 来提速。
+  要做到「不慢于 main」，需要在保持集合不变的前提下给引擎提速，或者让提供者按名取类的精度提高
+  （只取实际被请求的算法，不取整张提供者表），属于另立的工作项。本轮未做。
