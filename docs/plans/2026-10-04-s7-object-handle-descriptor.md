@@ -209,3 +209,90 @@ S7 下：
   - 但重载改名（K-6 `vtable_name` / `target`）在 `Deref` 方法解析下会产生歧义；而且只有 S7-2 把句柄统一之后，`Deref` 到祖先才是零成本的指针转换。
   - 所以要等 S7-2 落地后，再单独论证。
 - **不把 wrapper 改成纯 `__Handle`（方案 A）作为缺省**：A 有分派开销，见 §4.3。
+
+## 九、S7 后 java.base 声明层能否再拆成多个 crate（2026-10-04 论证，只写方案）
+
+背景：档案 crate 按 jmod 模块切分（用户已定），模块间依赖是 DAG，可以直接拆；但模块内部（主要是 java.base）类型互指成环，Rust crate 不能循环依赖。现状下 java.base 声明层只能是一个 crate，是整个构建的峰值下限。本节回答 S7 落地后这个下限能否再降。
+
+### 9.1 S7 后声明之间剩下的跨类引用
+
+| 引用 | 方向 | 成环？ |
+|---|---|---|
+| 继承链：`X__VTable: Super__VTable`，`__class_init` 先触发父类 | 子 → 父 | 否（继承无环） |
+| 接口实现：接口载体视图、`impl Iface__VTable for X__inner`（实现层） | 类 → 接口 | 否 |
+| 上转 `From<X> for Anc`、`From<Object> for X` / `From<X> for Object` | 子 → 祖先 / 根 | 否 |
+| 静态描述符互指：`super_` / `display` / `upcast` / `interfaces` / `iface_carriers` | 子 → 祖先 / 接口 | 否 |
+| 运行时类还原（catch 中间型、`__virtual_view`）：S7 后查描述符数据，不写类型 | — | 否 |
+| **方法签名里的具名类型**：可读层方法（含继承转发外壳）与 vtable trait 方法的形参 / 返回值、`__jbm_*` 外部声明 | 任意方向 | **是** |
+| **字段与 static 的类型**：访问器 `__get_f() -> T`、继承字段访问器、`static F: T` | 任意方向 | **是** |
+
+S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设施代码，**不去掉签名里的具名类型**（§3.3 可读层不变）。所以成环的来源只剩后两行。
+
+**实测**（`scripts/decl_scc.py`，读生成的声明文件建图；模块包清单取自参考 JDK 的 `java --describe-module java.base`，195 个包）：
+
+| 档案 | 类 / 接口 | 现状声明层全部引用：最大 SCC | S7 后（继承 + 签名 / 字段 / static 具名类型）：最大 SCC | 其中 java.base 子图 | 再把 vtable 签名擦除为句柄、只剩继承 / 接口 / 描述符：最大 SCC |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 430 | 326（75%） | 164（38%），次大 6 | 164（java.base 占 100%） | 1 |
+| Digester | 2856 | 2027（70%） | 481（16%），次大 22 | 459（java.base 占 90%） | 1 |
+| TestSerialDefaultSuid | 3150 | 2268（72%） | 548（17%），次大 22 | 514（java.base 占 90%） | 1 |
+
+- 最大 SCC 的成员按包：`java/lang`、`java/util`、`java/io`、`java/lang/invoke`、`java/security`、`sun/reflect/generics/tree`、`java/util/concurrent` 居前。根是 `Object ↔ String ↔ Class` 这类签名互指，再经 `Class` 的反射 / `invoke` 签名扩散。
+- 「现状全部引用」比「S7 签名」多出的边，主要是异常类型（`exceptions` 元数据的导入）与嵌套类 / static 初始化辅助类型；S7 后这些都成为描述符里的字符串或实现层引用。
+- 口径误差：统计按「每个声明文件一个类」，多类文件只计首类（TSDS 3150 / 3384）；继承转发外壳以声明文件里的 `pub fn` 行计入，已覆盖。
+
+### 9.2 孤儿规则对按继承 DAG 切分的约束
+
+孤儿规则：`impl Trait for Type` 必须在 trait 或 type 所在的 crate。S7 后每类要落的 impl 逐项看：
+
+- `From<X> for Anc`：`From` 是外部 trait，impl 必须在 X 或 Anc 的 crate。放在**子类 X 的 crate**，X 本来就依赖 Anc，**足够**。
+- `From<Object> for X`、`From<X> for Object`：放在 X 的 crate（Object 在根 crate）。
+- 下转（checkcast `Sub::from(anc)`）：S7 里统一是 `From<Object> for Sub` 加描述符判定，放在 Sub 的 crate，不需要祖先 crate 知道子类。
+- `impl ObjectVTable for X`（S7 后只剩转交）：trait 在根 crate，放在 X 的 crate。
+- `impl X__VTable for X__inner`、`impl Iface__VTable for X__inner`：都在实现层（`X__inner` 是本地类型）。
+- 接口 lambda 载体 `Iface__Lambda`：放在接口所在 crate。
+
+结论：**继承与转型类引用全部可以按「子在下游」放置，孤儿规则不构成额外约束**。真正的约束来自**固有 impl**：`impl X { pub fn m(..) -> T }` 必须和 `struct X` 在同一个 crate。签名里的 T 在哪个 crate，X 就依赖哪个 crate，所以签名 SCC 内的类必须同 crate。
+
+### 9.3 两种拆法与对可读层的影响
+
+**A（推荐）：可读层不变，按签名 SCC 拆。**
+- 固有方法、访问器、static 照旧是 `impl X { .. }`。`let animal: Animal = Dog::new(); animal.speak();` 一字不变。
+- crate 划分必须是签名图凝聚 DAG 的拓扑分层：
+  - 最大 SCC 单独成一个 crate（它含 `Object` / `String` / `Class`，位于底层）；
+  - 其余类（各自 SCC ≤ 22）按拓扑序切成 k 段，商图无环。
+- 生成器按档案自动求 SCC 与分层，不写类名。闭包变化只会挪动段边界，不需要手写规则。
+
+**B：方法面改为下游 trait，类型层只按继承 DAG 拆。**
+- 类型层只放 struct、描述符、vtable trait，再把 vtable 签名里的引用类型擦除为句柄（`#[repr(transparent)]` wrapper 与句柄同布局，边界零成本转换）。实测这一层的 SCC 为 1，可以任意按继承 DAG 拆。
+- 可读层方法改为每类一个方法 trait，定义并实现在下游 crate（trait 是本地类型，孤儿规则允许）。方法 trait 只引用类型层，彼此不依赖，也可以任意拆。
+- 调用写法 `animal.speak()` / `Dog::new()` 在文本上不变，但要求 trait 在作用域内（生成器管理 `use`）。有三个代价：
+  1. 每类新增一个生成器自造的 trait。这与 CLAUDE.md「代码生成命名原则」第 1 条冲突（Java 命名空间之外的自造 trait），须用户裁决。
+  2. 方法解析变成 trait 探测：同名方法（`toString` 等）有成千个 trait 提供，每个调用点的候选集合都很大。须按文件精确导入，否则实现层类型检查会退化。
+  3. 编译错误与 rustdoc 的可读性下降。
+- **不推荐**：拆分收益 A 已经拿到大半（见 9.4），B 的代价落在可读层与命名原则上。
+
+### 9.4 结论与峰值估算
+
+**估算口径**
+- 现状（c39591d1）两点线性：HelloWorld 472 类 1.47 GB，TSDS 3393 类 9.10 GB。得出每类约 2.6 MB，截距约 0.24 GB。
+- S7 后每类基础设施代码与 std 按类实例消失。按 §六 的目标（3400–3900 类 ≤ 6 GB），每类约 1.6 MB。
+- 拆分后每个下游 crate 另加上游元数据的解码开销：按每个被引用的上游类约 0.1 MB 计，上限约 0.3 GB。
+
+**按 A 拆**
+
+| 档案（java.base 类数） | 不拆（S7 单 crate） | 最大 SCC crate | 其余 k 段（每段峰值） | 最大单 crate 峰值 |
+|---|---:|---:|---:|---:|
+| HelloWorld（430） | 约 0.93 GB | 164 类，约 0.5 GB | 266 类合为 1 段，约 0.7 GB | **约 0.7 GB**（不拆约 0.93 GB，不拆更省墙钟） |
+| Digester（2586） | 约 4.4 GB | 459 类，约 1.0 GB | 2127 类分 3 段，每段约 710 类，约 1.6 GB | **约 1.6 GB** |
+| TSDS（2857） | 约 4.8 GB | 514 类，约 1.1 GB | 2343 类分 4 段，每段约 585 类，约 1.5 GB | **约 1.5 GB** |
+
+- java.base 声明层能拆。段数随档案规模取，规则是每段 ≤ 约 600–700 类。**下限由最大签名 SCC 决定**：在三个档案上是 164–514 类，约 0.5–1.1 GB。
+- 对 §7.6 目标：
+  - HelloWorld 声明 crate ≤ 1.2 GB：S7 单 crate 已满足，小档案不拆（拆分只会拉长关键路径）。
+  - Digester 声明 crate ≤ 2 GB：S7 + A 拆分后最大单 crate 约 1.6 GB，满足；只做 S7 不拆，约 4.4 GB，不满足。
+  - 3 个 OOM 例：最大单 crate 约 1.5–1.7 GB，远离 cgroup 上限。
+- 墙钟：分层 crate 之间是依赖链。cargo 按 rmeta 流水线化，下游可以在上游元数据产出后开工，但不能完全并行。段数要与 `CARGO_BUILD_JOBS` 和关键路径一起定，留到实施时实测，档案规模阈值从实测求得。
+- 前提与风险：
+  1. 估算依赖 S7 每类 1.6 MB 的目标值，必须在 S7-5 实测后回填。
+  2. 签名 SCC 的规模随档案增长（HelloWorld 164 → TSDS 514）。若生产档案远大于语料档案，下限随之上移；届时按 B 的类型层擦除再论证。
+  3. 段切分与 t1-link 方案的「按模块切 crate」同构：模块是第一层切分，模块内按签名 SCC 拓扑分层是第二层，两层都由数据驱动、不写类名。body / meta 层的切分轴同样以 t1-link 方案的结论为准。
