@@ -241,8 +241,14 @@ pub fn subtypes_ordered(ctx: &EmitCtx<'_>, root: &str) -> Vec<String> {
     all
 }
 
-/// 虚分派链 downcast 目标子类型（JDK 命名空间接收者只收 JDK 命名空间子类型）
-fn dispatch_subtype_refs(ctx: &EmitCtx<'_>, methods: &[ScanMethod<'_>], out: &mut BTreeSet<String>) {
+/// 虚分派链 downcast 目标子类型（JDK 命名空间接收者只收 JDK 命名空间子类型）。
+///
+/// 只收本类所在模块可读的子类型（本模块及其 requires 闭包，[`resolve::ModuleGraph::reads`]）：
+/// 下游模块的子类型不会出现在本类正文里，收进来只会形成反向 / 互不可达的模块边
+/// （T1 第 2 步 R1）；无名模块（用户类）读全部模块，不受影响
+fn dispatch_subtype_refs(ctx: &EmitCtx<'_>, ci: &ClassInfo, methods: &[ScanMethod<'_>], out: &mut BTreeSet<String>) {
+    let modules = ctx.modules();
+    let here = modules.module_of(ci.name());
     let mut owners: BTreeSet<&str> = BTreeSet::new();
     for s in methods {
         let Some(code) = ctx.input.code_ops(s.owner.name(), s.method) else { continue };
@@ -258,7 +264,7 @@ fn dispatch_subtype_refs(ctx: &EmitCtx<'_>, methods: &[ScanMethod<'_>], out: &mu
         let jdk = lang::in_jdk_namespace(owner);
         for sub in subtypes_ordered(ctx, owner) {
             let sub = strip_generic(&sub);
-            if !jdk || lang::in_jdk_namespace(sub) {
+            if (!jdk || lang::in_jdk_namespace(sub)) && modules.reads(here, modules.module_of(sub)) {
                 out.insert(sub.to_string());
             }
         }
@@ -295,7 +301,7 @@ pub fn collect_referenced(ctx: &EmitCtx<'_>, ci: &ClassInfo, generated: Option<&
         add_narrow_refs(&s.method.desc, &mut out);
         add_desc_refs(s.method.signature.as_deref().unwrap_or(""), &mut out);
     }
-    dispatch_subtype_refs(ctx, &methods, &mut out);
+    dispatch_subtype_refs(ctx, ci, &methods, &mut out);
     match generated {
         Some(g) => out.into_iter().filter(|c| g.contains(c)).collect(),
         None => out,

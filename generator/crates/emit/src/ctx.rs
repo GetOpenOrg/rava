@@ -48,6 +48,8 @@ pub struct EmitShared<'a> {
     pub opts: EmitOptions,
     /// 静默兜底审计（`[fallback-audit]`）
     pub fallback: crate::fallback::FallbackAudit,
+    /// 模块可读性审计（`[module-audit]`）
+    pub module_audit: crate::module_audit::ModuleAudit,
     extras: RwLock<HashMap<String, Arc<ClassExtras>>>,
     subtype_children: OnceLock<BTreeMap<String, Vec<String>>>,
     root_api: OnceLock<BTreeSet<String>>,
@@ -58,6 +60,8 @@ pub struct EmitShared<'a> {
     lib_crate_of: OnceLock<HashMap<String, String>>,
     /// 内建加载器的模块映射（定义加载器属性，见 `closure::loaders`）
     loaders: OnceLock<closure::loaders::DefiningLoaders>,
+    /// 模块图：类 → 模块、requires 闭包（T1 第 2 步 M1，见 `resolve::modules`）
+    modules: OnceLock<resolve::ModuleFacts>,
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
@@ -131,6 +135,7 @@ impl<'a> EmitShared<'a> {
             macros_crate,
             seeds: SeedCfg::from_toml(&table),
             fallback: crate::fallback::FallbackAudit::new(opts.debug),
+            module_audit: crate::module_audit::ModuleAudit::default(),
             opts,
             extras: RwLock::new(HashMap::new()),
             subtype_children: OnceLock::new(),
@@ -141,9 +146,15 @@ impl<'a> EmitShared<'a> {
             instr_facts: OnceLock::new(),
             lib_crate_of: OnceLock::new(),
             loaders: OnceLock::new(),
+            modules: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// 模块图（首次查询时由类路径构建）
+    pub fn modules(&self) -> resolve::ModuleGraph<'_> {
+        self.modules.get_or_init(|| resolve::ModuleFacts::build(self.cp)).graph(self.cp)
     }
 
     /// 类的定义加载器（类块 `defining_loader` 属性；引导加载器 → None）
@@ -326,6 +337,9 @@ pub enum HwAudit {
     Intrinsic,
     /// 越界覆盖
     Override,
+    /// 手写的 `impl .. X__VTable for ..`（S7：类的 vtable 一律由宏生成，终态 0，新增即回归）；
+    /// 成员为 `相对路径:行号`
+    VtableImpl,
 }
 
 impl ProjectState {

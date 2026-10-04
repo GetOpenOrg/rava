@@ -313,6 +313,7 @@ fn write_scratch(
             fallback: &ctx.fallback,
             readability: &r.readability,
             prelude_disambiguated: names.prelude_disambiguated(),
+            module: ctx.module_audit.lines(ctx, j.o.debug),
             debug: j.o.debug,
         };
         for line in audit_lines(&a) {

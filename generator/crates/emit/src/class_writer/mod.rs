@@ -178,6 +178,7 @@ pub fn class_prep<'c>(ctx: &EmitCtx<'c>, ci: &'c ClassInfo, site: &ClassSite<'_>
         return Ok(ClassPrep { visible: Vec::new() });
     }
     let mut referenced = collect_referenced(&plain, ci, cross.generated);
+    ctx.module_audit.check(&plain, ci, &referenced);
     let visible: Vec<&classfile::Method> = ci.methods().iter().filter(|m| !m.is_synthetic()).collect();
     if let Some(user) = site.user {
         // 用户类兄弟按未过滤引用集（生成集过滤只作用于 JDK 引用）

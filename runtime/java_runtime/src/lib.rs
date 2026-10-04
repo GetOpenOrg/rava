@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 pub mod anno_pool;
 pub mod array;
+pub mod class_desc;
 pub mod sync_model;
 pub mod gil;
 pub mod reflect_dispatch;
@@ -557,6 +558,7 @@ pub fn class_needs_initialization(binary_name: &str) -> bool {
 pub mod prelude {
     #![allow(unused_imports)]
     pub use super::array::JArray;
+    pub use super::class_desc::__ClassDesc;
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;

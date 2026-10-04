@@ -10,6 +10,7 @@ pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod manifest;
+pub mod modules_json;
 pub mod loaders;
 pub mod profile;
 pub mod seeds;
@@ -45,6 +46,8 @@ pub struct Input<'a> {
 
 pub struct Closure<'a> {
     pub engine: Engine<'a>,
+    /// 类路径（输出的模块事实取自它，见 [`modules_json`]）
+    pub cp: &'a ClassPath,
     pub elapsed_ms: u128,
 }
 
@@ -84,7 +87,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
         }
     }
-    Closure { engine: e, elapsed_ms: t0.elapsed().as_millis() }
+    Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis() }
 }
 
 /// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）
@@ -226,13 +229,14 @@ impl Closure<'_> {
 
     pub fn to_json(&self) -> Value {
         let e = &self.engine;
-        let classes: Vec<Value> = e
+        let mut classes: Vec<Value> = e
             .class_entries()
             .into_iter()
             .map(|(n, c)| {
                 json!({"name": n, "domain": domain_str(c.domain), "level": level_str(c.level), "via": self.via_json(&c.via)})
             })
             .collect();
+        let modules = modules_json::annotate(&resolve::ModuleFacts::build(self.cp).graph(self.cp), &mut classes);
         let methods: Vec<Value> = e
             .method_entries()
             .into_iter()
@@ -255,6 +259,7 @@ impl Closure<'_> {
         json!({
             "summary": self.summary_with(&fold_list),
             "classes": classes,
+            "modules": modules,
             "methods": methods,
             "instantiated": e.instantiated(),
             "clinit": e.clinit_list(),

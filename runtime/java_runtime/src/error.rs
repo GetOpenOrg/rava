@@ -59,34 +59,27 @@ impl JvmError {
         self.thrown.0.is_instance_of(binary_name)
     }
 
-    /// catch 绑定：按运行时类把异常对象还原为 catch 声明类型 `T`（其 binary name 为 `binary_name`）。
-    /// 仅在 `is_instance_of(binary_name)` 成立后调用。
+    /// catch 绑定：按运行时类把异常对象还原为 catch 声明类型 `T`。仅在 `is_instance_of`
+    /// （catch 类型名）成立后调用。
     ///
-    /// 三条还原路径按序尝试：
-    ///   1. 快路径：持有的 vtable 对象本身就是 T（多数直接抛出场景）
-    ///   2. `__view_as`：向上构祖先视图（catch 祖先类型、Object 流转后还原）
-    ///   3. 擦除重建（A-1）：`From<Object> for X<A>` 任意 A 成立——异常对象可能以
-    ///      祖先 wrapper 形态流转（try-with-resources 的 catch(Throwable) 重抛即此），
-    ///      向上视图无法降回子类，经擦除内存储按运行时类重建（is_instance_of 已验证）
-    pub fn catch_as<T: std::any::Any + Clone + From<Object>>(&self, binary_name: &str) -> T {
+    /// 两条还原路径按序尝试：
+    ///   1. 快路径：持有的对象本身就是 T（多数直接抛出场景）
+    ///   2. 擦除重建（A-1）：`From<Object> for X<A>` 任意 A 成立——运行时类是 T 或其子类
+    ///      （描述符 display 判定），经擦除 vtable / 存储部件重建 T 视图：与运行时类同一对象、
+    ///      vtable 经 supertrait 上转（祖先视图、以祖先 wrapper 形态流转后重抛均同）
+    pub fn catch_as<T: std::any::Any + Clone + From<Object>>(&self) -> T {
         if let Some(same) = (&self.thrown as &dyn std::any::Any).downcast_ref::<T>() {
             return Clone::clone(same);
         }
         if let Some(same) = self.thrown.0.as_any().downcast_ref::<T>() {
             return Clone::clone(same);
         }
-        let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
-        if let Some(v) = self.thrown.0.__view_as(unused, binary_name)
-            .and_then(|boxed| boxed.downcast::<T>().ok())
-        {
-            return *v;
-        }
         T::from(Clone::clone(&self.thrown))
     }
 
     /// catch-any 绑定（异常表 catch_type = 0）：athrow 操作数的静态类型即 Throwable。
     pub fn catch_any(&self) -> crate::java::lang::Throwable {
-        self.catch_as::<crate::java::lang::Throwable>(crate::java::lang::Throwable::BINARY_NAME)
+        self.catch_as::<crate::java::lang::Throwable>()
     }
 
     // ── VM 抛出的异常 ────────────────────────────────────────────────────────
@@ -182,7 +175,7 @@ impl JvmError {
         if cause.is_instance_of("java/lang/Error") {
             return cause;
         }
-        let throwable: Throwable = cause.catch_as::<Throwable>("java/lang/Throwable");
+        let throwable: Throwable = cause.catch_as::<Throwable>();
         vm_throw(crate::java::lang::ExceptionInInitializerError::new_throwable(throwable))
     }
 
@@ -192,7 +185,7 @@ impl JvmError {
     pub fn describe(&self) -> std::string::String {
         let class_name = self.class_name().replace('/', ".");
         let message = if self.is_instance_of("java/lang/Throwable") {
-            let throwable: Throwable = self.catch_as::<Throwable>("java/lang/Throwable");
+            let throwable: Throwable = self.catch_as::<Throwable>();
             match throwable.getMessage() {
                 Ok(m) if !m.is_jvm_null() => Some(format!("{}", m)),
                 _ => None,
@@ -218,7 +211,7 @@ impl JvmError {
         eprintln!("Exception in thread \"{}\" {}", thread, self.describe());
         // JVM printStackTrace 的 `Caused by:` 链（无栈帧行；cause == this 为未设置哨兵）
         if self.is_instance_of("java/lang/Throwable") {
-            let mut cur: Throwable = self.catch_as::<Throwable>("java/lang/Throwable");
+            let mut cur: Throwable = self.catch_as::<Throwable>();
             for _ in 0..16 {
                 let next = cur.__get_cause();
                 let next_obj = Object::from(Clone::clone(&next));

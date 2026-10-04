@@ -194,10 +194,6 @@ fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lin
     }
     let supertypes = all_supertypes(ctx, ci);
     lines.push(format!("#[all_supertypes    = \"{}\"]", supertypes.join(";")));
-    let views = iface_carrier_views(ctx, ci, &supertypes);
-    if !views.is_empty() {
-        lines.push(format!("#[iface_carrier_views = \"{}\"]", views.join(";")));
-    }
     let root_sigs = [
         ("to_string_vtable  ", "toString", format!("()L{STRING};")),
         ("hash_code_vtable  ", "hashCode", "()I".to_string()),
@@ -306,21 +302,6 @@ pub fn all_supertypes(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
         out.insert(n);
     }
     out.into_iter().collect()
-}
-
-/// 本类实现且在闭包内的接口的擦除载体类型（排序去重）
-fn iface_carrier_views(ctx: &EmitCtx<'_>, ci: &ClassInfo, supertypes: &[String]) -> Vec<String> {
-    let mut views = BTreeSet::new();
-    for st in supertypes {
-        if st == ci.name() {
-            continue;
-        }
-        let Some(ic) = ctx.class(st).filter(|c| c.is_interface()) else { continue };
-        let n = ctx.ty.effective_class_type_params(ic).len();
-        let args = if n > 0 { format!("<{}>", vec!["Object"; n].join(", ")) } else { String::new() };
-        views.insert(with_args(&ctx.short(st), &args));
-    }
-    views.into_iter().collect()
 }
 
 /// 类初始化随之初始化的超接口（有 default 方法且有 `<clinit>`；后序；泛型实参取 Object）
