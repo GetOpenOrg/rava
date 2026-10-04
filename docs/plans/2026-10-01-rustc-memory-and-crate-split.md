@@ -658,10 +658,11 @@ user                       用户类（声明 + 实现同 crate，full 模式）
 | 5 | S6 泛型类擦除核心 | −1.9 MB（体移走，留外壳） | −6 万 | −0.09 GB | −0.3 MB | 待做 |
 | 6 | **外壳去一层**（本账新增）：声明层每个下沉体只留一条模块级 `extern "Rust"` 声明，可读层外壳与 vtable 缺省方法直接调用它；删掉中间的 `__jb_*` / `_base` 包装函数 | −5.5 MB（11.5 MB 中的约 48%），同时少 3.3 万个 fn 条目 | −1 万 | −0.26 GB | −1.6 MB | **已做** a7996092（TSDS 峰值 −761 MB，−6.5%） |
 | 7 | 声明层生成条目去掉中文 doc 与 `doc(hidden)`（可读性说明改写在宏源码注释） | −3.0 MB | 0 | −0.07 GB | −0.7 MB | **已做** ab813f99（峰值无可测变化） |
-| 8 | wrapper `impl ObjectVTable` 同形转发收敛到 `ObjectVTable` 缺省实现（`__view_target`），浅拷贝回退删除 | — | — | 见 §7.7 2026-10-04 | — | **已做** c39591d1 |
+| 8 | wrapper `impl ObjectVTable` 同形转发收敛到 `ObjectVTable` 缺省实现（`__view_target`），浅拷贝回退删除 | — | — | TSDS −897 MB | — | **已做** c39591d1 |
 | 9 | `__class_init` 状态机骨架、接口载体分派外壳收敛为非泛型 runtime 函数 | — | — | 见 §7.7 2026-10-04 | — | **已做** af3a9bc4 |
 | 10 | 方法入口 null 检查 + 栈检查合一为 `__enter` | — | — | TSDS −206 MB | — | **已做** d66e8e46 |
 | 11 | 入口检查随体进 `__jbm_*` 体函数，声明层外壳只剩一次转发调用 | — | — | 见 §7.7 2026-10-04 | — | **已做** 9e88cf83 |
+| 12 | 转发外壳（虚分派 / 继承转发）只做空接收者检查，栈界检查由目标体承担（vtable-safe `_base` 体补建帧检查） | — | — | 见 §7.7 2026-10-04 | — | **已做**（本提交） |
 | | **合计 1–7** | **−18.6 MB → 37.9 MB** | **−20.5 万** | **约 2.5–2.6 GB** | **−4.0 MB → 8.8 MB** | |
 
 **结论：1–7 合计达不到终态。**
@@ -935,3 +936,59 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
     - S6 泛型类擦除核心；
     - 字段访问器。
   - 逐项测量仍按 §7.4。
+
+#### 2026-10-04 复测（crate-split 线，服务器）
+
+**测法**
+- 工具（已入库）：
+  - `scripts/crate_mem_profile.py run <scratch> <out> --passes`：按 crate 逐个 `cargo build`，记墙钟、峰值 RSS（`/usr/bin/time`）与声明 crate 的 `-Z time-passes`（`RUSTC_BOOTSTRAP=1`），输出 `report.md` 与 `<crate>.passes.log`。
+  - `scripts/expand_stats.py expand|stats`：声明 crate `-Z unpretty=expanded` 后按条目 / impl 内方法归类统计字节。
+- 服务器作业：`rava/distribute_tests.py --job cmpN-<例>-<提交> --cmd …`，单测 cgroup 上限约 11.88 GB（`oom limit=11891M`），同一作业只跑一例。
+- 峰值都是声明 crate `java_runtime` 的峰值（MB）；其余 crate：`java_meta` 3.6–4.0 GB，各 `java_body_k` 0.8–1.5 GB，不构成约束。
+
+**逐提交峰值**（MB；空格 = 未测）
+
+| 提交 | 内容 | TSDS | TJNP | FHP | HelloWorld |
+|---|---|---:|---:|---:|---:|
+| db105d7c | 基线（profiler 入库） | 11754 | | | 1919 / 37.8 s |
+| a7996092 | #6 外壳去一层 | 10993 | | | 1795 / 36.8 s |
+| d66e8e46 | #10 `__enter` | 10787 | 11940 OOM | 11919 OOM | |
+| ab813f99 + 5218e1c5 | #7 去 doc、#3 use 剪枝 | 10461 | | | |
+| 5095b68c | #2 From / checkcast 按类收敛 | 9993（墙钟 284 s） | 11130（编过） | 11952 OOM | |
+| 5095b68c + V1 | §7.5.3 按父类链委托 | 10132（否） | | | |
+| af3a9bc4 | #9 类初始化 / 接口载体分派收敛 | | | 11953 OOM（rc −9） | |
+| c39591d1 | #8 wrapper ObjectVTable 收敛到缺省实现 | **9096**（墙钟 277 s） | | | |
+| 9e88cf83 | #11 入口检查进体函数 | | | | **1472 / 30.0 s**（总 51.9 s，基线 58.3 s） |
+
+**阶段 RSS**（time-passes，阶段末 RSS，MB）
+
+| 阶段 | TSDS 5095b68c | TSDS c39591d1 | FHP af3a9bc4 |
+|---|---:|---:|---:|
+| 宏展开 | 2900 | 2604 | 3618 |
+| coherence | | 3945 | 5613 |
+| 类型检查 | 5567 | 4999 | 7118 |
+| 借用检查 | 8849 | 7761 | 11118 |
+| 单态化遍历 | 9749 | 8726 | 12074 |
+| codegen | 10104 | 9078 | 12299 后被杀 |
+
+- 规模：TSDS 3393 类（源码 33.8 MB），TJNP 3876 类（38.20 MB），FHP 4266 类（42.11 MB）。FHP 比 TSDS 多 26% 的类，峰值约按类数线性外推。
+- 借用检查是最大单步（+2.8–4.0 GB），其开销按 fn 条目计：TSDS 展开后约 23.7 万个 fn（a7996092），Java 方法外壳约 7.5 万个、wrapper ObjectVTable 方法约 4.5 万个、字段访问器约 2.5 万个。#8 一项删去 wrapper ObjectVTable 的 7 个同形转发方法（每类），TSDS 峰值 −897 MB，是本轮最大单项。
+
+**换算式**：§7.5.4 的 0.72 GB + 0.048 GB/MB 在 3000+ 类规模失效；两点重标定（a7996092：HW 19.29 MB → 1.80 GB，TSDS 148.74 MB → 10.99 GB）得 0.43 GB + 0.071 GB/MB。斜率来自按 fn 计的借用检查 / 类型检查固定开销，按 MB 换算只在 fn 平均体量不变时成立；后续账以实测为准。
+
+**V1 失败原因**：wrapper `__view_into` 的体量大头是接口载体臂（每个实现接口一臂），不是祖先臂；按父类链委托只削祖先臂，链函数本身每类新增一个 fn，净增。
+
+**TSDS 展开体量构成（9e88cf83，101.78 MB）**
+
+| 类别 | MB | 个数 |
+|---|---:|---:|
+| 固有 impl 的 Java 方法外壳 | 24.47 | 74,807 |
+| 其中：直连外壳（调 `__jbm_*`） | 4.71 | 22,294 |
+| 其中：虚分派外壳 | 5.30 | 17,254 |
+| 其中：上转转发（不占槽的祖先方法） | 4.13 | 11,782 |
+| 其中：接口载体分派 | 2.54 | 1,817 |
+| 其中：静态字段 get / set | 2.89 | 8,102 |
+| 字段访问器 `__get_*` / `__set_*` | 4.15 | 24,732 |
+| `impl ObjectVTable for`（wrapper，余 `__view_into` / `__erased_vtable` / `__view_as` / `__erased_inner` / `__unsafe_*` 等） | 15.40 | 2,506 个 impl |
+| extern 块 + 外部声明 | 14.13 | |
+| Clone / PartialEq / Debug / Default / From | 6.64 | 约 2.4 万 |

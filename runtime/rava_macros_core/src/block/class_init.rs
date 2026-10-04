@@ -69,6 +69,29 @@ pub(crate) fn entry_checks(sig: &Signature, attrs: &[Attribute]) -> proc_macro2:
     }
 }
 
+/// 转发外壳（虚分派 / 继承转发）的入口检查：只做空接收者检查，不建帧。
+/// 外壳本身不是 Java 帧——分派到的目标方法体（`__jbm_*` 体函数）自带完整入口检查，
+/// 栈界检查在那里做一次；空接收者必须在外壳判（null 对象的 vtable 是缺省存储，分派后
+/// 目标看到的接收者不再带 null 标志；手写目标也不带检查）。形态同叶子方法的空检查
+pub(crate) fn forward_checks(sig: &Signature) -> proc_macro2::TokenStream {
+    if returns_result(sig) && sig.receiver().is_some() {
+        quote::quote! { if self._jvm_null { return Err(JvmError::null_pointer()); } }
+    } else {
+        quote::quote! {}
+    }
+}
+
+/// vtable-safe 方法体（`_base` 真实体，经 vtable 直连执行、不经 `__jbm_*`）的建帧检查：
+/// 只做栈界检查（`this` 是 `&dyn` 存储视图，无 null 标志——空接收者已在转发外壳判过），
+/// 叶子方法省略，规则同 [`entry_checks`]
+pub(crate) fn frame_check(sig: &Signature, attrs: &[Attribute]) -> proc_macro2::TokenStream {
+    if returns_result(sig) && !is_leaf(attrs) {
+        quote::quote! { __stack_check()?; }
+    } else {
+        quote::quote! {}
+    }
+}
+
 /// 生成器标注的叶子方法（`#[java_method(.., leaf = "true")]`）
 pub(crate) fn is_leaf(attrs: &[Attribute]) -> bool {
     super::util::attr_str(attrs, "leaf").as_deref() == Some("true")

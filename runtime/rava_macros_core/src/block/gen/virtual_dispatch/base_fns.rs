@@ -139,7 +139,8 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
                     replace_clone_this_in_ok(&mut b);
                     rewrite_vtable_calls_ufcs_for_base(&mut b, &ctx.vtable_define_names, &ctx.vtable_trait_ident);
                     let stmts = &b.stmts;
-                    quote! { #(#stmts)* }
+                    let frame = super::super::super::class_init::frame_check(sig, &f.attrs);
+                    quote! { #frame #(#stmts)* }
                 }
                 // 已下沉：声明层只取外壳（拆层只用签名），体在实现层
                 None => quote! {},
@@ -163,7 +164,8 @@ pub(crate) fn base_fns(ctx: &GenContext) -> Vec<BaseFn> {
                 Some(block) => {
                     let b = base_body(ctx, block);
                     let stmts = &b.stmts;
-                    quote! { #(#stmts)* }
+                    let frame = super::super::super::class_init::frame_check(sig, &f.attrs);
+                    quote! { #frame #(#stmts)* }
                 }
                 // 已下沉：声明层只取外壳
                 None => quote! {},
