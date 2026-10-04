@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """声明层跨类引用图的强连通分量（S7 方案 §九「java.base 声明层能否再拆」的度量工具）。
 
-  scripts/decl_scc.py <scratch> [--module-pkgs <包名清单文件>]
+  scripts/decl_scc.py <scratch> [--module-pkgs <包名清单文件>] [--seg <每段类数上限>]
 
 读 <scratch>/java_runtime/src 下生成的声明文件（每个 java_class! / java_interface! 一类），按三种口径建图：
   all：现状声明层全部引用（文件的 use 列表，#3 剪枝后即实际引用）；
   sig：S7 后仍留在声明里的具名类型——继承 / 接口实现 + 方法签名、字段、static、继承字段中的类型；
   inh：再把 vtable 签名擦除为句柄后只剩继承 / 接口实现 / 描述符互指。
 输出各口径的最大 SCC；给出模块包清单（每行一个包名，如 `java --describe-module java.base` 的
-exports / contains / qualified exports）时另报该模块子图的最大 SCC。
+exports / contains / qualified exports）时另报该模块子图的最大 SCC；再给 --seg N 时，把模块子图按 SCC
+凝聚成 DAG，按拓扑序（被依赖者在前）切成每段 ≤ N 类的连续段（单个 SCC 超过 N 时独占一段），报段数与各段类数。
+模块子图另加伪节点 INFRA 代表手写基础设施（java_runtime/src 下无生成标记、非 `_impl.rs` 的文件）：
+全部类 → INFRA（Object / ObjectVTable / Result / GIL 等），INFRA → 手写基础设施正文引用到的类；
+`<x>_impl.rs`（手写固有方法，留声明层）的引用并入同目录 `<x>.rs` 的类。含 INFRA 的 SCC 即最底层 crate。
 """
 import os,re,sys,collections
 root=sys.argv[1]+'/java_runtime/src'
 PKGS=sys.argv[sys.argv.index('--module-pkgs')+1] if '--module-pkgs' in sys.argv else None
+SEG=int(sys.argv[sys.argv.index('--seg')+1]) if '--seg' in sys.argv else None
 BIN=re.compile(r'#\[binary_name\s*=\s*"([^"]+)"\]')
 SUP=re.compile(r'#\[super_class\s*=\s*"([^"]+)"\]')
 ALLS=re.compile(r'#\[all_supertypes\s*=\s*"([^"]*)"\]')
@@ -42,6 +47,28 @@ for dp,_,fs in os.walk(root):
         nodes[name]=dict(bin=b.group(1),sup=sup.group(1) if sup else None,
             alls=[x for x in (alls.group(1).split(';') if alls else []) if x],uses=uses,sig=sig)
 bin2id={v['bin']:k for k,v in nodes.items()}
+# 手写文件的引用：基础设施 → INFRA；`<x>_impl.rs` → 同目录 `<x>.rs` 的类
+file2node={}
+for dp,_,fs in os.walk(root):
+    for f in fs:
+        if f.endswith('.rs') and not f.endswith('_impl.rs'):
+            t=open(os.path.join(dp,f),encoding='utf-8',errors='ignore').read()
+            m=re.search(r'java_(?:class|interface)!\s*\{.*?^\s*pub (?:struct|trait) ([A-Za-z_][A-Za-z0-9_]*)',t,re.S|re.M)
+            if m and m.group(1) in nodes: file2node[os.path.join(dp,f)]=m.group(1)
+infra_refs=set(); impl_refs=collections.defaultdict(set)
+for dp,_,fs in os.walk(root):
+    for f in fs:
+        if not f.endswith('.rs'): continue
+        path=os.path.join(dp,f)
+        t=open(path,encoding='utf-8',errors='ignore').read()
+        if 'java_class!' in t or 'java_interface!' in t or 'java_class_opaque!' in t: continue
+        code=re.sub(r'//[^\n]*','',t)  # 注释与文档不计
+        code=re.sub(r'"(?:[^"\\]|\\.)*"','""',code)  # 字符串字面量不计
+        refs={x for x in IDENT.findall(code) if x in nodes}
+        if f.endswith('_impl.rs'):
+            owner=file2node.get(os.path.join(dp,f[:-len('_impl.rs')]+'.rs'))
+            if owner: impl_refs[owner]|=refs; continue
+        infra_refs|=refs
 def base(u):
     for suf in ('__VTable','__AsVTable','__Lambda'):
         if u.endswith(suf): return u[:-len(suf)]
@@ -58,6 +85,7 @@ def graph(kind):
         if kind=='inh': e=inh
         elif kind=='sig': e=inh|{x for x in v['sig'] if x in nodes}
         else: e=inh|{base(u) for u in v['uses'] if base(u) in nodes}
+        e|=impl_refs.get(n,set())
         e.discard(n); g[n]=e
     return g
 def sccs(g):
@@ -97,5 +125,22 @@ inbase={n for n,v in nodes.items() if v['bin'].rsplit('/',1)[0].replace('/','.')
 print(f"- 模块内类：{len(inbase)}（{len(inbase)*100//len(nodes)}%）")
 for kind in ('all','sig'):
     g=graph(kind); gb={n:{w for w in g[n] if w in inbase} for n in inbase}
-    cs=sorted(sccs(gb),key=len,reverse=True)
-    print(f"  - 模块子图 {kind}：最大 SCC {len(cs[0])}")
+    gb['INFRA']={w for w in infra_refs if w in inbase}
+    for n in inbase: gb[n].add('INFRA')
+    topo=sccs(gb)  # Tarjan 按逆拓扑序产出：每个 SCC 出现在它依赖的 SCC 之后
+    bottom=next(c for c in topo if 'INFRA' in c)
+    pre=0
+    for c in topo:
+        if 'INFRA' in c: break
+        pre+=len(c)
+    print(f"  - 模块子图 {kind}：INFRA 引用 {len(gb['INFRA'])} 类；含 INFRA 的 SCC {len(bottom)-1} 类（占模块 {(len(bottom)-1)*100//len(inbase)}%），拓扑序在其前 {pre} 类")
+    cs=sorted(topo,key=len,reverse=True)
+    print(f"  - 模块子图 {kind}：最大 SCC {len(cs[0])}（占模块 {len(cs[0])*100//len(inbase)}%）")
+    if SEG:
+        segs=[];cur=0
+        for c in topo:
+            c=[x for x in c if x!='INFRA']
+            if cur and cur+len(c)>SEG: segs.append(cur);cur=0
+            cur+=len(c)
+        if cur: segs.append(cur)
+        print(f"    - 按拓扑序切段（每段 ≤ {SEG} 类）：{len(segs)} 段，各段类数 {segs}")

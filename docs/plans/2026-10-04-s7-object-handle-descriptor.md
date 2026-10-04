@@ -3,7 +3,7 @@
 > 拆 crate 线（`docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.5.4）的结构性终态项。本文只是方案，**未实施**；实施须经主会话确认。
 > 测量数据见上述计划 §7.7「2026-10-04 复测」。
 
-> **body 切分轴待按模块重新论证**（2026-10-04 用户决策）：档案 crate 按 JDK jmod 模块名命名（`java.base` → `java_base` 等，从 JDK 模块描述动态取），T1 第 2 步方案（t1-link 分支 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`）正在论证「按模块切 crate」作为档案终态分层。`java_body_k` 的按体量均衡切分不再扩展，切分粒度与命名以该方案结论为准。
+> **切分轴已定（2026-10-04）：先按 JDK 模块，超阈值的模块内再按体量**（crate-split 计划 §7.5.5，与 t1-link 方案 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md` §4.8 对齐）。S7 作用于每个模块 crate 的声明层，峰值约束只在 `java_base_decl`。§九的按签名 SCC 分段是 `java_base_decl` 内部的第三级，仍是方案（V5）。
 
 ## 一、问题
 
@@ -210,7 +210,9 @@ S7 下：
   - 所以要等 S7-2 落地后，再单独论证。
 - **不把 wrapper 改成纯 `__Handle`（方案 A）作为缺省**：A 有分派开销，见 §4.3。
 
-## 九、S7 后 java.base 声明层能否再拆成多个 crate（2026-10-04 论证，只写方案）
+## 九、java.base 声明层能否再拆成多个 crate `java_base_decl_k`（V5；2026-10-04 论证，只写方案）
+
+> 本节覆盖两种形态：现状形态（不等 S7，§9.5）与 S7 后形态（§9.1–9.4）。最底层 crate 的规模以 §9.5 的 INFRA 口径为准：手写基础设施引用 `String` / `Class` / `Throwable` 等，必须与它们同 crate。§9.4 的估算已按此修正。
 
 背景：档案 crate 按 jmod 模块切分（用户已定），模块间依赖是 DAG，可以直接拆；但模块内部（主要是 java.base）类型互指成环，Rust crate 不能循环依赖。现状下 java.base 声明层只能是一个 crate，是整个构建的峰值下限。本节回答 S7 落地后这个下限能否再降。
 
@@ -278,21 +280,92 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 - S7 后每类基础设施代码与 std 按类实例消失。按 §六 的目标（3400–3900 类 ≤ 6 GB），每类约 1.6 MB。
 - 拆分后每个下游 crate 另加上游元数据的解码开销：按每个被引用的上游类约 0.1 MB 计，上限约 0.3 GB。
 
-**按 A 拆**
+**按 A 拆**（S7 后签名图，含 INFRA 约束，§9.5；段上限 650 类）
 
-| 档案（java.base 类数） | 不拆（S7 单 crate） | 最大 SCC crate | 其余 k 段（每段峰值） | 最大单 crate 峰值 |
-|---|---:|---:|---:|---:|
-| HelloWorld（430） | 约 0.93 GB | 164 类，约 0.5 GB | 266 类合为 1 段，约 0.7 GB | **约 0.7 GB**（不拆约 0.93 GB，不拆更省墙钟） |
-| Digester（2586） | 约 4.4 GB | 459 类，约 1.0 GB | 2127 类分 3 段，每段约 710 类，约 1.6 GB | **约 1.6 GB** |
-| TSDS（2857） | 约 4.8 GB | 514 类，约 1.1 GB | 2343 类分 4 段，每段约 585 类，约 1.5 GB | **约 1.5 GB** |
+| 档案（java.base 类数） | 不拆（S7 单 crate） | 最底层 crate（含 INFRA 的 SCC） | 切段（`decl_scc.py --seg 650`） | 最大单 crate 峰值 |
+|---|---:|---:|---|---:|
+| HelloWorld（430） | 约 0.93 GB | 254 类（59%），约 0.65 GB | 不拆（拆了只拉长关键路径） | **约 0.93 GB** |
+| Digester（2586） | 约 4.4 GB | 572 类（22%），约 1.16 GB | 4 段：650 / 650 / 650 / 636 | **约 1.3 GB**，加上游元数据 ≤ 1.6 GB |
+| TSDS（2857） | 约 4.8 GB | 634 类（22%），约 1.26 GB | 5 段：650 ×4 / 257 | **约 1.3 GB**，加上游元数据 ≤ 1.6 GB |
 
-- java.base 声明层能拆。段数随档案规模取，规则是每段 ≤ 约 600–700 类。**下限由最大签名 SCC 决定**：在三个档案上是 164–514 类，约 0.5–1.1 GB。
+- java.base 声明层能拆。段数随档案规模取，规则是每段 ≤ 约 650 类。**下限由含 INFRA 的签名 SCC 决定**：在三个档案上是 254–634 类，约 0.65–1.26 GB。
 - 对 §7.6 目标：
   - HelloWorld 声明 crate ≤ 1.2 GB：S7 单 crate 已满足，小档案不拆（拆分只会拉长关键路径）。
-  - Digester 声明 crate ≤ 2 GB：S7 + A 拆分后最大单 crate 约 1.6 GB，满足；只做 S7 不拆，约 4.4 GB，不满足。
+  - Digester 声明 crate ≤ 2 GB：S7 + A 拆分后最大单 crate ≤ 1.6 GB，满足；只做 S7 不拆，约 4.4 GB，不满足。
   - 3 个 OOM 例：最大单 crate 约 1.5–1.7 GB，远离 cgroup 上限。
 - 墙钟：分层 crate 之间是依赖链。cargo 按 rmeta 流水线化，下游可以在上游元数据产出后开工，但不能完全并行。段数要与 `CARGO_BUILD_JOBS` 和关键路径一起定，留到实施时实测，档案规模阈值从实测求得。
 - 前提与风险：
   1. 估算依赖 S7 每类 1.6 MB 的目标值，必须在 S7-5 实测后回填。
   2. 签名 SCC 的规模随档案增长（HelloWorld 164 → TSDS 514）。若生产档案远大于语料档案，下限随之上移；届时按 B 的类型层擦除再论证。
   3. 段切分与 t1-link 方案的「按模块切 crate」同构：模块是第一层切分，模块内按签名 SCC 拓扑分层是第二层，两层都由数据驱动、不写类名。body / meta 层的切分轴同样以 t1-link 方案的结论为准。
+
+### 9.5 现状形态（不等 S7）能否按 SCC 拆（V5 ①，2026-10-04 补测）
+
+**口径**
+- 现状声明层引用图 = 声明文件 `use` 列表（#3 剪枝后，即正文与宏属性实际引用的名字）加继承 / 接口实现。它覆盖字段类型、方法签名、From / checkcast、vtable trait、接口载体、异常元数据。
+- 宏按类展开引用到的外类名字都要经文件头 `use` 进作用域，所以这张图包括了宏展开产生的边。
+- 加一个伪节点 INFRA，代表手写基础设施（`object.rs` / `error.rs` / `array.rs` / `meta.rs` / `gil.rs` 等无生成标记、非 `_impl.rs` 的文件）：
+  - 全部类 → INFRA（`Object` / `ObjectVTable` / `Result` / GIL）；
+  - INFRA → 手写正文引用到的类（去掉注释与字符串后按名字匹配）。实测 61–71 类，含 `String`、`Class`、`Throwable` 和 VM 抛出的异常类。
+  - `<x>_impl.rs` 的引用并入类 x。
+- 含 INFRA 的 SCC 必须同 crate，就是最底层 crate。
+- 工具：`scripts/decl_scc.py <scratch> --module-pkgs <java.base 包清单> --seg 650`。
+
+**实测**（java.base 子图）
+
+| 档案 | java.base 类 | 现状：含 INFRA 的 SCC | 现状切段 | S7 后：含 INFRA 的 SCC | S7 后切段 |
+|---|---:|---:|---|---:|---|
+| HelloWorld | 430 | 365（84%） | 1 段 | 254（59%） | 1 段 |
+| Digester | 2586 | 1933（74%） | 3 段：1933 / 650 / 3 | 572（22%） | 4 段：650 / 650 / 650 / 636 |
+| TSDS | 2857 | 2187（76%） | 3 段：2187 / 650 / 20 | 634（22%） | 5 段：650 ×4 / 257 |
+
+不加 INFRA 时的最大 SCC：现状 326 / 1836 / 2027 类；S7 后 164 / 459 / 514 类（§9.1）。INFRA 把两种形态的底层都撑大了。
+
+**峰值估算**
+- 现状单价：ef600555 两点，HelloWorld 430 类 1.47 GB、TSDS 3150 类 8.41 GB，得每类约 2.55 MB，截距约 0.37 GB。
+- S7 单价：§9.4 口径，每类 1.6 MB，截距 0.24 GB。
+- 下游段另加上游元数据解码，≤ 0.3 GB。
+
+| 档案 | 现状不拆（java.base 声明层） | 现状按 SCC 拆：最大 crate | S7 不拆 | S7 + 按 SCC 拆：最大 crate | §7.6 目标 |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 约 1.47 GB | 约 1.30 GB（底层 365 类），省 0.17 GB 但多一级依赖链 | 约 0.93 GB | 不拆，约 0.93 GB | ≤ 1.2 GB |
+| Digester | 约 6.96 GB | 约 5.30 GB（底层 1933 类） | 约 4.4 GB | ≤ 1.6 GB | ≤ 2 GB |
+| TSDS | 约 7.66 GB | 约 5.95 GB（底层 2187 类） | 约 4.8 GB | ≤ 1.6 GB | — |
+
+**结论**
+- 现状最大 SCC 占 java.base 的 74–84%，**不是「远小于全体」**。现状形态按 SCC 拆只把最大 crate 削掉约 24%（Digester 6.96 → 5.30 GB），离 2 GB 仍远，HelloWorld 也达不到 1.2 GB。现状形态的声明层峰值下限就是底层 SCC：Digester 约 5.3 GB，TSDS 约 6.0 GB。**不满足 §7.6**。
+- 现状底层大的原因：
+  - wrapper 持有 `__Shared<dyn X__VTable>`，`From` / checkcast / 接口载体 / 运行时类还原的代码按类型写出；
+  - 异常元数据经 `use` 引入异常类。
+  
+  这些在 S7 后变成描述符数据，或者移进实现层（§9.1），所以底层 SCC 从 74–84% 降到 22%（HelloWorld 59%）。
+- 拆分机制（按 SCC 凝聚 DAG 拓扑切段、跨段路径前缀、门面 crate）在两种形态下完全相同，是终态机制，不是过渡形态。它可以先于 S7 落地（三个 OOM 例的峰值 crate 估计降约 1.7 GB），S7 落地后同一机制自动得到 ≤ 1.6 GB 的段。先后顺序由协调方定。§7.6 的达标只取决于 S7。
+
+### 9.6 孤儿规则与宏展开跨 crate 可见性（V5 ③）
+
+**孤儿规则**
+- §9.2 对 S7 形态的逐项结论适用于现状形态，现状多出来的 impl 也都落在子类 X 自己的 crate：
+  - `impl ObjectVTable for X`（wrapper）；
+  - `PartialEq` / `Clone` / `Debug` / `Default for X`；
+  - `From<X> for Anc`、`iface_upcasts!` 的 `From<X> for Iface`；
+  - `From<Object> for X`、`From<X> for Object`。
+- 泛型类的 `impl<A> From<X<A>> for Anc<A>`：`Anc<A>` 覆盖了 A，`X<A>` 是本地类型，满足 RFC 2451。
+- 唯一的硬约束仍是固有 impl：`impl X { .. }` 与 `struct X` 同 crate。手写 `<x>_impl.rs` 随类 x 进它的段，已计入图。
+
+**宏展开的可见性**
+- `java_class!` 生成的跨类项都是 `pub`：`__from_parts`、`__class_init`、`BINARY_NAME`、字段访问器、静态存储、vtable trait。唯一的 `pub(crate)` 是 `X__inner` 的字段，只在本类实现层使用，不跨类、不跨段。
+- 宏输出里的外类名字都不带路径，经文件头 `use` 解析，宏本身不写 `crate::` 绝对路径。（`generic_sig.rs` 的 `crate::error::Result` 只用于宏内部的类型分析，不进输出。）跨段因此只改文件头 `use` 的前缀，宏不需要改。
+
+**路径与门面**（这是约束，也是实施项）
+- 今天实现层靠 crate 根 `use java_runtime::*;` 让 `crate::java::…` 解析到声明层。多个声明段各有自己的 `java::lang` 等模块子树，这个技巧失效：
+  - 本段的 `java` 模块遮蔽 glob；
+  - 多个上游 glob 的同名模块互相冲突。
+- 所以生成器必须按被引用类所在的段写 crate 限定前缀：同段 `crate::`，跨段 `java_base_decl_<k>::`。这与 t1-link 接口 3（跨模块前缀按类所属模块给出）是同一机制，按「类 → crate」表统一给出。
+- 门面 crate `java_base` 给下游模块与用户提供单一路径。它生成一棵镜像模块树：每个包是显式的 `pub mod`，包内对拥有该包类的每个段写 `pub use java_base_decl_<k>::<包路径>::*;`。
+  - 显式模块遮蔽 glob，所以子模块名不冲突；
+  - 每个类只在一个段里，所以叶子项不冲突。
+
+**可读层（V5 ④）**
+- 方法体与调用点文本不变：`let animal: Animal = Dog::new(); animal.speak();`。
+- 变化只在文件头 `use` 的 crate 前缀，例如 `use java_base_decl_2::java::lang::Object;`；下游模块写 `use java_base::java::lang::Object;`。
+
