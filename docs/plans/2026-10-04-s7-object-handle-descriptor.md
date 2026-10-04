@@ -13,6 +13,15 @@
   - runtime 新增 `class_desc.rs`：`__ClassDesc { binary_name, depth, display, supertypes }`，方法 `super_desc` / `is_subclass_of`（`display[t.depth]` 同址，O(1)）/ `is_subtype_name`（有序名单二分）。`ObjectVTable::__desc()` 缺省经 `__view_target` 委托，非类对象（数组、装箱基本类型、TypedNull、手写非类对象）为 None。
   - 宏按类发射模块级 `#[doc(hidden)] pub static X__DESC` 与 wrapper 固有常量 `X::__DESC`（声明层）；`X__inner` 的 `__desc()` 返回 `<X<Object..>>::__DESC`（实现层）。祖先描述符写作 `<Anc<Object..>>::__DESC`：类型路径不需要新增 `use`，祖先形参取 Object（宏注入的标准 bound 对 Object 恒成立）。
   - 守护：`[raw-audit]` 行末新增 `handwritten_vtable_impls=N`（扫 `runtime/java_runtime/src` 不含生成标记的 `.rs`，正则 `impl .. __VTable .. for`；非零时另出 `[vtable-impl-audit]` 明细）；单测 `repo_runtime_has_no_handwritten_vtable_impls` 断言仓库手写层为 0。现状即 0。
+- **S7-1（类型判定读描述符，删按类判定代码）**：
+  - `is_instance_of` / `__class_name` 改为 `ObjectVTable` 缺省实现：视图委托运行时类，否则读 `__desc()`（`is_subtype_name` / `binary_name`）。`X__inner` 不再按类展开 `matches!` 名单与类名常量方法；只有代理载体覆盖 `is_instance_of`（描述符名单 ∨ `__vm_proxy_implements`）。
+  - 删 `__view_as`（trait 方法与 wrapper 实现）与 wrapper `__view_into` 的本类 / 祖先 / 接口载体臂（连同 `#[iface_carrier_views]` 属性、生成器发射与宏解析）。`__view_into` 只剩数组（`JArray`）响应，闭包分析器按数组视图处理它，不变。
+  - checkcast / 擦除重建：`__class_from_object(obj, Self::__DESC, ..)`——null → 缺省；运行时类恰为目标（`as_any` downcast）→ 克隆；`__desc().is_subclass_of(desc)`（display O(1)）→ 擦除重建；否则 `__checkcast_fail`。接口目标仍经 `try_cast` 的 `is_instance_of` 名字判定 + `From<Object>` 擦除路径。
+  - catch：`catch_as::<T>()` 去掉 binary name 参数与 `__view_as` 步，快路径 downcast 之后直接 `T::from`（同上擦除重建）。
+  - aastore / 数组协变：`erased_array_compatible` 与 aastore 退回 `is_instance_of(元素名)`；`__array_elem_assignable(target_elem, slot)` 对类探针读描述符名单，数组探针仍 `view_into`（嵌套数组上转）。
+  - 删除对象：手写 `checkcast<T>` 与自由函数 `checkcast_fail`（并入 `Object::__checkcast_fail`，冷路径）。
+  - **等价性（§五、V1 论证）**：被删的每条按类路径与读描述符路径给出同一判定集合——`matches!` 名单即 `all_supertypes`，描述符 `supertypes` 是同一名单排序去重；`__view_as` / 类臂 `__view_into` 的产物（同一对象、vtable 经 supertrait 上转、同一 `any`）与 `From<Object>` 擦除重建的产物逐部件相同；接口载体臂的产物与 `try_cast` 名字判定 + 擦除路径相同。7 例 cargo check 全过，未改 e2e 期望。
+- **`__Described` trait 与 wrapper 固有常量的取舍**：取固有常量 `X::__DESC`。判定逻辑全在 runtime 的非泛型函数里，只需在每类 `From<Object>` 调用点把本类描述符作为值传入（`Self::__DESC`），从不需要以 trait 约束泛型地取描述符；trait 会多一个 Java 命名空间外的公开 trait（命名原则禁止）并给每类多一个 impl 块。
 - **与 §3.2 的偏差（终态取舍，不是过渡）**：
   - **名字取 `__ClassDesc`**：`java.lang.constant.ClassDesc` 是 Java 类，生成文件显式 `use` 它时会遮蔽 prelude 通配引入（与 `__Shared` 同一约定）。
   - **wrapper 固有 `const __DESC`，不引入 `__Described` trait**：固有常量即可从类型路径取得任意类的描述符，不需要 trait 约束；不新增 Java 命名空间之外的 trait（命名原则）。名字带 `__` 前缀避开 Java 静态字段；与既有 `BINARY_NAME` 同一形态。
@@ -27,6 +36,15 @@
 |---|---:|---:|---:|
 | 86df0737（起点） | 14.49 MB | 1.48 MB | 1388 MB |
 | S7-0 | 14.79 MB（+0.30，描述符 static 与固有常量） | 1.48 MB | 1091 MB（本机峰值噪声大，以服务器为准） |
+| S7-1 | **13.89 MB**（−0.90 对 S7-0，−0.60 对起点） | **0.80 MB**（`__view_into` / `__view_as` / `is_instance_of` / `__class_name` 删净） | 1401 MB（同上，以服务器为准） |
+
+服务器（Linux，`crate_mem_profile.py` 同口径；作业 `s7m-<提交>`）：
+
+| 提交 | HelloWorld 展开 | HelloWorld 峰值 | TSDS 展开 | TSDS 峰值 |
+|---|---:|---:|---:|---:|
+| 86df0737（起点） | 14.46 MB | 1448 MB / 27.0 s | 103.37 MB | 待回 |
+| 8f515016（S7-0） | 14.76 MB | 1440 MB / 29.2 s | 106.07 MB | 待回 |
+| S7-1 | 待回 | 待回 | 待回 | 待回 |
 
 本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
 
@@ -36,7 +54,8 @@
 
 ### 下一步
 
-S7-1：`is_instance_of` / `__class_name` 改为读描述符的 trait 缺省、删 `__view_as`、`__class_from_object` 走 `is_subclass_of`、wrapper `__view_into` 类 / 祖先 / 接口载体臂改由名字判定 + 擦除重建取代。
+- 服务器测量回填 S7-1 行（作业 `s7m-<S7-1 提交>`）。
+- 抽查（分布式）通过后进 S7-2（统一句柄 `__Handle`、null 不分配、视图与上转收敛为句柄操作）。
 
 ## 一、问题
 

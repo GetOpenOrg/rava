@@ -50,11 +50,10 @@ struct CovariantView {
 /// aastore 存储检查（JLS §10.5 / JVMS §6.5 aastore）：值与源元素类型赋值兼容才能写入，
 /// 否则抛 `ArrayStoreException`。判定按序三条：
 ///   1. null 可存入任意引用元素数组；
-///   2. 值的 wrapper 静态祖先名单（`__view_into` 填 `Option<T>` slot）——覆盖以子类
-///      wrapper 或数组视图形态流转的值（多维数组的元素也是数组，视图经 Covariant
-///      委托到源数组判定）；
-///   3. 按运行时类名 `is_instance_of`——覆盖以祖先 wrapper 视图流转的子类值
-///      （如经 `Number` 视图流转的 `Integer`：wrapper 的 vtable 仍持运行时类）。
+///   2. 数组值的类型驱动视图（`__view_into` 填 `Option<T>` slot，T 为数组形态）——
+///      多维数组的元素也是数组，视图经 Covariant 委托到源数组判定；
+///   3. 按运行时类的超类型名单 `is_instance_of`（类值读描述符，S7-1）——覆盖本类、
+///      子类与实现接口的值，与值以何种静态 wrapper 视图流转无关。
 fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &str) -> bool {
     if v.0.is_jvm_null() {
         return true;
@@ -512,18 +511,21 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         try_array_view::<T>(candidate).is_some()
     }
 
-    fn __array_elem_assignable(&self, slot: &mut dyn std::any::Any) -> bool {
+    fn __array_elem_assignable(&self, target_elem: &str, slot: &mut dyn std::any::Any) -> bool {
         if Self::has_primitive_elements() {
             return false;
         }
         match &*self.0 {
-            Repr::Covariant(view) => view.origin.0.__array_elem_assignable(slot),
+            Repr::Covariant(view) => view.origin.0.__array_elem_assignable(target_elem, slot),
             Repr::Own(..) => {
                 let probe: Object = Into::<Object>::into(T::default());
+                if let Some(d) = probe.0.__desc() {
+                    return d.is_subtype_name(target_elem);
+                }
                 let unused: crate::sync_model::__AnyRef = Rc::new(());
                 probe.0.__view_into(unused, slot)
             }
-            Repr::Null => true,
+            Repr::Null => false,
         }
     }
 }
@@ -534,12 +536,11 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 /// 路径：`(String[]) objArr`，源静态元素类型是 T 的祖先形态）。空数组 /
 /// 全 null 恒兼容。
 ///
-/// 元素兼容按序两臂：`try_checkcast::<T>`（同类型 / 祖先 wrapper 视图 /
-/// 数组元素——`__view_into` 驱动，元素本身是数组（`JArray` 不实现
-/// `is_instance_of`）与数组协变视图只有此臂可判）；T 的 null 探针类名
-/// 非退化（`java/lang/Object`——T 自身是数组或接口别名时探针失义）时补
-/// `is_instance_of`（覆盖未经 javac 装箱、以原生值盒（`Rc<i32>` 带 Integer
-/// vtable）流入 Object 槽位的元素）。
+/// 元素兼容按序三臂：`try_checkcast::<T>`（同类型；数组元素——`__view_into`
+/// 驱动，元素本身是数组与数组协变视图由此臂与 `__array_accepts` 判定）；T 的
+/// null 探针类名非退化（`java/lang/Object`——T 是接口别名时探针失义）时按
+/// `is_instance_of`（类元素读描述符：本类、子类、实现接口；另覆盖未经 javac
+/// 装箱、以原生值盒（`Rc<i32>` 带 Integer vtable）流入 Object 槽位的元素）。
 pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'static>(obj: &Object) -> bool {
     let unused: crate::sync_model::__AnyRef = Rc::new(());
     let mut erased: Option<JArray<Object>> = None;
@@ -588,7 +589,8 @@ pub(crate) fn try_array_view<T: Clone + Default + From<Object> + Into<Object> + 
         };
     }
     let mut elem_slot: Option<T> = None;
-    if obj.0.__array_elem_assignable(&mut elem_slot) && elem_slot.is_some() {
+    let target_elem = Into::<Object>::into(T::default()).0.__class_name();
+    if obj.0.__array_elem_assignable(target_elem, &mut elem_slot) {
         return Some(erased_object_view(Clone::clone(obj)));
     }
     if !JArray::<T>::has_primitive_elements() && erased_array_compatible::<T>(obj) {

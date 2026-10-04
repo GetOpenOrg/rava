@@ -54,12 +54,12 @@ pub(crate) fn generate(ctx: &GenContext) -> (TokenStream2, TokenStream2) {
     //      视图（共享存储与对象标识）。子类值经超类 vtable supertrait 上转，任意实例化
     //      均可重建（`Enum::<Object>::from(枚举常量)` 即此形态）；
     //   3. 其余（运行时类不是本类族）→ checkcast 的 ClassCastException（既有语义）。
-    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`；按类只转交本类的部件构造入口
+    // 判定逻辑与具体类无关，全在 runtime 的 `__class_from_object`（读描述符）；按类只转交本类描述符、部件构造入口
     // 与存储钩子（拆 crate §7.5.4 #2）。
     let from_object_impl = quote! {
         impl #impl_g From<#obj> for #struct_ident #ty_g #where_c {
             fn from(obj: #obj) -> Self {
-                __class_from_object(obj, #binary_name, Self::__from_parts, #from_any)
+                __class_from_object(obj, Self::__DESC, Self::__from_parts, #from_any)
             }
         }
     };

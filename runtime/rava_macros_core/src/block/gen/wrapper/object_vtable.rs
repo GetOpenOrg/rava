@@ -1,5 +1,7 @@
 //! §6 impl ObjectVTable for Wrapper（R-1 blanket From<T> 需要）：虚方法转发、擦除部件导出、
-//! 运行时类视图、按名字段协议（运行时类应答的查询经 `__view_target` 由缺省实现转交）。
+//! 按名字段协议（运行时类应答的查询经 `__view_target` 由缺省实现转交）。类型判定与视图不在
+//! wrapper 上按类展开：instanceof / 类名读运行时类描述符，类目标视图经 `From<Object>` 的擦除
+//! 重建取得（S7-1）。
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -22,68 +24,6 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     if !binary_name.is_empty() {
-        // 运行时类视图（A-1 后落在 wrapper 侧：Object 直接持有 wrapper，类型实参只在
-        // wrapper 的 impl 上下文可见）：按 binary name 重建本类 / 任一祖先类型的 wrapper。
-        // 祖先视图 = 宏生成的 From<Self> for Ancestor（vtable trait upcasting，保持运行时类）。
-        // 异常对象以静态类型（如 Throwable）抛出后，catch 需要按运行时类还原为 catch 类型。
-        let view_as_arms: Vec<TokenStream2> = std::iter::once(quote! {
-            if type_id == #binary_name {
-                return ::std::option::Option::Some(
-                    ::std::boxed::Box::new(::std::clone::Clone::clone(self)));
-            }
-        }).chain(ctx.meta.all_superclasses.iter().map(|anc_name| {
-            let anc_ident = format_ident!("{}", anc_name);
-            let atag = ctx.meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
-            quote! {
-                if type_id == <#anc_ident #atag>::BINARY_NAME {
-                    let view: #anc_ident #atag = <#anc_ident #atag as ::std::convert::From<Self>>::from(
-                        ::std::clone::Clone::clone(self));
-                    return ::std::option::Option::Some(::std::boxed::Box::new(view));
-                }
-            }
-        })).collect();
-        // 同一组视图的类型驱动形式（`Object::downcast::<T>()`）：slot 为 `Option<本类/祖先 wrapper>` 时写入
-        let view_into_arms: Vec<TokenStream2> = std::iter::once(quote! {
-            if let ::std::option::Option::Some(s) =
-                slot.downcast_mut::<::std::option::Option<Self>>()
-            {
-                *s = ::std::option::Option::Some(::std::clone::Clone::clone(self));
-                return true;
-            }
-        }).chain(ctx.meta.all_superclasses.iter().map(|anc_name| {
-            let anc_ident = format_ident!("{}", anc_name);
-            let atag = ctx.meta.ancestor_type_args.get(anc_name).cloned().unwrap_or_default();
-            quote! {
-                if let ::std::option::Option::Some(s) =
-                    slot.downcast_mut::<::std::option::Option<#anc_ident #atag>>()
-                {
-                    *s = ::std::option::Option::Some(
-                        <#anc_ident #atag as ::std::convert::From<Self>>::from(
-                            ::std::clone::Clone::clone(self)));
-                    return true;
-                }
-            }
-        })).chain(ctx.meta.iface_carrier_views.iter().filter_map(|iface_ty| {
-            // A-4 批次 6：接口载体臂——JLS 4.10.3 的子类型关系含接口（数组协变与
-            // try_checkcast::<载体> 按此判定），祖先臂只覆盖父类链。成员清单由
-            // codegen 过滤并给出擦除载体形态（非泛型裸短名 / 泛型 `I<Object, ..>`，
-            // 闭包外接口无生成载体类型，不在此列）；填充走 From<Object> 的载体包装
-            // （非受检视图——对象身份保持，分派经运行时类 itable）。
-            // UFCS 必须显式：接口载体可能自带 Java `static from(..)` 工厂方法，
-            // `Iface::from(..)` 路径解析会被固有方法遮蔽（同 interface_gen upcast）。
-            let ty = syn::parse_str::<Type>(iface_ty).ok()?;
-            Some(quote! {
-                if let ::std::option::Option::Some(s) =
-                    slot.downcast_mut::<::std::option::Option<#ty>>()
-                {
-                    *s = ::std::option::Option::Some(
-                        <#ty as ::std::convert::From<Object>>::from(
-                            <Object as ::std::convert::From<Self>>::from(
-                                ::std::clone::Clone::clone(self))));
-                    return true;
-                }
-            })
-        })).collect();
         // 按名字段协议（Unsafe 实例字段 long / int / boolean 共享单元、引用槽访问）：
         // 字段名单与分派臂只在 inner 侧生成（inner 平铺持有全部继承字段）。wrapper 侧
         // 先问静态类 inner（any 能 downcast 为本类 inner 时），未命中（any 是运行时子类
@@ -196,22 +136,6 @@ pub(super) fn generate(ctx: &GenContext) -> TokenStream2 {
                     ObjectVTable::__erased_vtable(
                         __Shared::clone(&self.vtable) as __Shared<dyn ObjectVTable>, slot);
                     ::std::mem::drop::<__Shared<dyn ObjectVTable>>(self);
-                }
-                fn __view_as(
-                    &self,
-                    _any: __AnyRef,
-                    type_id: &str,
-                ) -> ::std::option::Option<::std::boxed::Box<dyn ::std::any::Any>> {
-                    #(#view_as_arms)*
-                    ::std::option::Option::None
-                }
-                fn __view_into(
-                    &self,
-                    _any: __AnyRef,
-                    slot: &mut dyn ::std::any::Any,
-                ) -> bool {
-                    #(#view_into_arms)*
-                    false
                 }
                 #long_cell_query
                 #int_cell_query

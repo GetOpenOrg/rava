@@ -76,12 +76,6 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
             }
         }
     };
-    let check_types: Vec<String> = if ctx.meta.all_supertypes.is_empty() {
-        vec![binary_name.clone()]
-    } else {
-        ctx.meta.all_supertypes.clone()
-    };
-    let patterns = check_types.iter().map(|s| quote! { #s });
 
     // 继承链上有翻译出（或手写体）的 hashCode()I / equals(Object)Z 时，根类的对应入口桥接到
     // 该虚方法（经所属 vtable 分派，子类覆盖自动生效）——与 toString 同一机制。
@@ -393,15 +387,22 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     };
 
     // A-1 存储层擦除后，inner 的 ObjectVTable impl 只承载「按擦除类」的判定与桥接：
-    // 视图重建（__view_as / __view_into）、逐字段浅拷贝（__shallow_copy）与擦除存储
+    // 逐字段浅拷贝（__shallow_copy）与擦除存储
     // 导出（__erased_state，已删除）都移到 wrapper 侧——Object 直接持有 wrapper
     // （blanket From<T: ObjectVTable>），只有 wrapper 的 impl 知道类型实参；
     // inner 的 Rc 可经 __erased_inner 取回（From<Object> 的擦除路径据此重建任意实例化视图）。
     // 代理载体（FS-R R4a）：手写层提供 `__vm_proxy_invoke` / `__vm_proxy_implements`
     // 的类——instanceof 另按实例的接口列表应答，接口载体分派回退经其转发。
     let is_proxy_carrier = ctx.meta.impl_methods.iter().any(|m| m == "__vm_proxy_invoke");
+    // instanceof / 类名读本类描述符（ObjectVTable 缺省实现，S7-1）；只有代理载体覆盖
+    // instanceof：描述符名单之外，再问代理实例运行期实现的接口
     let proxy_instance_check = if is_proxy_carrier {
-        quote! { || #vtable_trait_ident::#as_self_hook(self).__vm_proxy_implements(type_id) }
+        quote! {
+            fn is_instance_of(&self, type_id: &str) -> bool {
+                ::std::option::Option::is_some_and(ObjectVTable::__desc(self), |d| d.is_subtype_name(type_id))
+                    || #vtable_trait_ident::#as_self_hook(self).__vm_proxy_implements(type_id)
+            }
+        }
     } else {
         quote! {}
     };
@@ -418,12 +419,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     let obj_vtable_for_inner = if !binary_name.is_empty() {
         quote! {
             impl ObjectVTable for #inner_ident {
-                fn is_instance_of(&self, type_id: &str) -> bool {
-                    matches!(type_id, #(#patterns)|*) #proxy_instance_check
-                }
+                #proxy_instance_check
                 #proxy_invoke_hook
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
-                fn __class_name(&self) -> &'static str { #binary_name }
                 #desc_query
                 fn __identity(&self) -> *const () {
                     __Shared::as_ptr(&self.__identity) as *const ()
