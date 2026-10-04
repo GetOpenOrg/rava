@@ -55,4 +55,4 @@
 | V9 | 顺序无关性：DeepCopy、StockTrans、TestSerialLookupPairing（含宏访问器探针形态）、TestHttpLoopbackSync 种子 0/1/2 类集合与方法集合完全相同；`pvals` Const 字面量化修复 | engine-order | 多种子集合一致 |
 | V10 | 逃逸对象上下文收拢（V9 之后）：TestHttpLoopbackSync 服务器闭包 ≤ 60 s；闭包集合变化逐项论证 | 引擎后续步 | ≤ 60 s，HTTP 两例通过 |
 | V11 | 引擎达标后启用 URL 协议可靠口径（c1d-urlhost 9087cf1c），TestFileUrlHost 入集成分支 | URL 线 | 抽查通过 |
-| V12 | 第三方依赖分层与复用（键含库版本、按 artifact / 自动模块名切 crate、无 module-info 的 jar 归属）写入 T1 后续步骤方案 | 待派 | 方案经用户确认 |
+| V12 | 第三方依赖分层与复用（键含库版本、按 artifact / 自动模块名切 crate、无 module-info 的 jar 归属）写入 T1 后续步骤方案 | [`2026-10-04-third-party-dependency-layering.md`](2026-10-04-third-party-dependency-layering.md) | 方案经用户确认 |
