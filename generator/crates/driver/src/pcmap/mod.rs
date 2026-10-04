@@ -48,11 +48,14 @@ pub fn layout(exe: &object::File<'_>) -> Option<Layout> {
 pub struct Built {
     pub blob: Vec<u8>,
     pub stats: String,
+    /// 诊断转储（`RAVA_PCMAP_DUMP=<Java 方法名>`：映射到该方法的各段的符号与内联链），未开启为空
+    pub dump: String,
 }
 
 /// 由第一次链接的产物与旁路行表构建表
 pub fn build(exe: &object::File<'_>, exe_data: &[u8], lines: &FrameLines, anchor: u64) -> Result<Built, String> {
     let mut b = Builder::new(lines);
+    b.dump_method = std::env::var("RAVA_PCMAP_DUMP").ok().filter(|m| !m.is_empty());
     let walk = dwarf::walk(exe, exe_data, &mut b)?;
     let ranges = b.ranges();
     let mut pool = Pool::default();
@@ -104,7 +107,7 @@ pub fn build(exe: &object::File<'_>, exe_data: &[u8], lines: &FrameLines, anchor
         s.0.len(),
         blob.len()
     );
-    Ok(Built { blob, stats })
+    Ok(Built { blob, stats, dump: b.dump })
 }
 
 /// 行表对位与帧序列去重
@@ -121,6 +124,9 @@ struct Builder<'l> {
     /// (起点, 终点, 帧序列下标)
     pieces: Vec<(u64, u64, u32)>,
     scratch: Vec<(u32, u32)>,
+    dump_method: Option<String>,
+    pending: String,
+    dump: String,
 }
 
 impl<'l> Builder<'l> {
@@ -136,6 +142,9 @@ impl<'l> Builder<'l> {
             lists: Vec::new(),
             pieces: Vec::new(),
             scratch: Vec::new(),
+            dump_method: None,
+            pending: String::new(),
+            dump: String::new(),
         }
     }
 
@@ -240,8 +249,27 @@ impl dwarf::Sink for Builder<'_> {
             self.list_ids.insert(list.clone(), id);
             id
         };
+        if let Some(m) = &self.dump_method {
+            if list.iter().any(|&(i, _)| self.methods[i as usize].name == *m) {
+                use std::fmt::Write;
+                let _ = writeln!(self.dump, "{start:#x}+{len:#x} -> {:?}\n{}", list.iter().map(|&(i, c)| (&self.methods[i as usize].name, c)).collect::<Vec<_>>(), self.pending);
+            }
+        }
         self.scratch = list;
         self.pieces.push((start, start + len, id));
+    }
+
+    fn wants_names(&self) -> bool {
+        self.dump_method.is_some()
+    }
+
+    fn names(&mut self, symbol: &str, frames: &[(String, Option<(String, u32)>)]) {
+        use std::fmt::Write;
+        self.pending.clear();
+        let _ = writeln!(self.pending, "  sym {symbol}");
+        for (name, at) in frames {
+            let _ = writeln!(self.pending, "  fn {name} @ {at:?}");
+        }
     }
 }
 

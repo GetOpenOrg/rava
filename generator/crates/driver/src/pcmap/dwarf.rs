@@ -32,13 +32,19 @@ impl gimli::read::Relocate for &'_ RelocMap {
 /// 一段代码：可执行文件地址、长度、内联链（自内向外的 (DWARF 文件路径, 行)）
 pub trait Sink {
     fn piece(&mut self, start: u64, len: u64, frames: &[(&str, u32)]);
+    /// 诊断（`RAVA_PCMAP_DUMP`）：开启时 `piece` 之前给出本段内联链各帧的函数名（自内向外，含闭包帧）与所属符号
+    fn names(&mut self, _symbol: &str, _frames: &[(String, Option<(String, u32)>)]) {}
+    fn wants_names(&self) -> bool {
+        false
+    }
 }
 
 /// 一个函数：可执行文件地址、大小、在其 DWARF 上下文中的地址
-struct Func {
+struct Func<'n> {
     exe: u64,
     size: u64,
     obj: u64,
+    name: &'n [u8],
 }
 
 /// 遍历统计
@@ -59,7 +65,7 @@ pub fn walk(exe: &object::File<'_>, exe_data: &[u8], sink: &mut dyn Sink) -> Res
         let mut funcs: Vec<Func> = exe
             .symbols()
             .filter(|s| s.kind() == SymbolKind::Text && s.size() > 0 && s.is_definition())
-            .map(|s| Func { exe: s.address(), size: s.size(), obj: s.address() })
+            .map(|s| Func { exe: s.address(), size: s.size(), obj: s.address(), name: s.name_bytes().unwrap_or_default() })
             .collect();
         funcs.sort_by_key(|f| (f.exe, f.size));
         funcs.dedup_by_key(|f| f.exe);
@@ -127,7 +133,7 @@ fn walk_debug_map(exe: &object::File<'_>, sink: &mut dyn Sink, stats: &mut WalkS
             }
             let funcs: Vec<Func> = entries
                 .iter()
-                .filter_map(|e| addr.get(e.name()).map(|&a| Func { exe: e.address(), size: e.size(), obj: a }))
+                .filter_map(|e| addr.get(e.name()).map(|&a| Func { exe: e.address(), size: e.size(), obj: a, name: e.name() }))
                 .collect();
             walk_funcs(ctx, &funcs, sink, stats)
         })??;
@@ -174,10 +180,14 @@ fn with_context<R>(
 }
 
 /// 逐函数按行表分段，每段取内联链
-fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func], sink: &mut dyn Sink, stats: &mut WalkStats) -> Result<(), String> {
+fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func<'_>], sink: &mut dyn Sink, stats: &mut WalkStats) -> Result<(), String> {
     let mut frames: Vec<(&str, u32)> = Vec::new();
+    let mut named: Vec<(String, Option<(String, u32)>)> = Vec::new();
+    let dump = sink.wants_names();
     for f in funcs {
         stats.functions += 1;
+        // 物理帧（内联链最外层）另按链接符号判闭包：其 DWARF 函数名可能缺失或为不含 `{closure` 的形态
+        let symbol_closure = is_closure_symbol(f.name);
         let end = f.obj + f.size;
         let pieces = ctx.find_location_range(f.obj, end).map_err(|e| format!("DWARF 行表：{e}"))?;
         for (addr, len, _) in pieces {
@@ -188,21 +198,48 @@ fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func], sink: &mut d
             }
             stats.pieces += 1;
             frames.clear();
+            named.clear();
             let mut it = ctx.find_frames(lo).skip_all_loads().map_err(|e| format!("DWARF 内联链：{e}"))?;
+            // 最近迭代到的帧是否已成帧（迭代结束时即物理帧）
+            let mut last_pushed = false;
             while let Some(frame) = it.next().map_err(|e| format!("DWARF 内联链：{e}"))? {
+                last_pushed = false;
+                if dump {
+                    let name = frame.function.as_ref().and_then(|n| n.demangle().ok()).map_or_else(|| "?".into(), |d| d.into_owned());
+                    let at = frame.location.as_ref().and_then(|l| Some((l.file?.to_owned(), l.line?)));
+                    named.push((name, at));
+                }
                 if frame.function.as_ref().is_some_and(|n| is_closure(n)) {
                     continue;
                 }
                 if let Some(loc) = &frame.location {
                     if let (Some(file), Some(line)) = (loc.file, loc.line) {
                         frames.push((file, line));
+                        last_pushed = true;
                     }
                 }
+            }
+            if last_pushed && symbol_closure {
+                frames.pop();
+            }
+            if dump {
+                sink.names(&String::from_utf8_lossy(f.name), &named);
             }
             sink.piece(f.exe + (lo - f.obj), hi - lo, &frames);
         }
     }
     Ok(())
+}
+
+/// 链接符号是否为闭包函数（反修饰名含 `{closure`）
+fn is_closure_symbol(symbol: &[u8]) -> bool {
+    let Ok(raw) = std::str::from_utf8(symbol) else { return false };
+    // Mach-O 符号带前导下划线
+    let raw = raw.strip_prefix('_').filter(|r| r.starts_with("_ZN") || r.starts_with("_R")).unwrap_or(raw);
+    if !raw.contains("closure") && !raw.starts_with("_R") {
+        return false;
+    }
+    rustc_demangle::try_demangle(raw).is_ok_and(|d| format!("{d:#}").contains("{closure"))
 }
 
 /// 闭包函数（反修饰名含 `{closure`）：原位闭包与外层方法同一行，延迟闭包的位置是创建点，均不成帧
@@ -213,4 +250,18 @@ fn is_closure<R: gimli::Reader>(name: &addr2line::FunctionName<R>) -> bool {
         return false;
     }
     name.demangle().is_ok_and(|d| d.contains("{closure"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_closure_symbol;
+
+    #[test]
+    fn closure_symbols_by_demangled_name() {
+        let closure = "_ZN4user4walk28_$u7b$$u7b$closure$u7d$$u7d$17h0123456789abcdefE";
+        assert!(is_closure_symbol(closure.as_bytes()));
+        assert!(is_closure_symbol(format!("_{closure}").as_bytes()), "Mach-O 前导下划线");
+        assert!(!is_closure_symbol(b"_ZN4user4walk17h0123456789abcdefE"));
+        assert!(!is_closure_symbol(b"closure_helper"));
+    }
 }

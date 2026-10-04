@@ -102,6 +102,7 @@ dependencies = [
  "object",
  "rava_meta_tables",
  "resolve",
+ "rustc-demangle",
  "serde_json",
  "ty",
  "typed-arena",
