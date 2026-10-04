@@ -133,8 +133,12 @@ PYEOF
 )
   snake=$(bin_name_of "$name")
   bin="$dir/bin/${name}_$mode"
-  cp "$REPO/build/target/$prof/$snake" "$bin" 2> /dev/null
-  rm -rf "$REPO/build/$snake" "$REPO/build/target/$prof/$snake" "$REPO/build/target/$prof/$snake.d"
+  # run_tests.py 的输出根按 JDK 主版本分层：build/jdk<N>/{<snake>/, target/<prof>/<snake>}
+  local root; for root in "$REPO"/build/jdk*/; do
+    [ -f "$root/target/$prof/$snake" ] || continue
+    cp "$root/target/$prof/$snake" "$bin"
+    rm -rf "$root/$snake" "$root/target/$prof/$snake" "$root/target/$prof/$snake.d"
+  done
   if [ ! -x "$bin" ] || ! grep -q "PASS" "$log"; then
     echo "[$name] $mode: FAILED（见 ${log}）"
     row "$name" "$cat" "$mode" "$build" - - FAIL -; return
