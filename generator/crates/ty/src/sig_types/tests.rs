@@ -120,6 +120,54 @@ fn method_sig_types_uses_farthest_ancestor() {
     assert!(st.params.is_empty() && st.ret.is_none());
 }
 
+/// 父类经接口 default 继承的槽位（`Headers implements Map<String, List>` 未声明 `replace`）：子类桥方法
+/// `replace(Object, Object)` 以该 default 为根，按接口实参得 `(String, String) -> String`，与父类槽签名一致
+#[test]
+fn method_sig_types_roots_at_ancestor_inherited_default() {
+    const SYNTHETIC: u16 = 0x1000;
+    const BRIDGE: u16 = 0x0040;
+    let obj2 = format!("(L{OBJECT};L{OBJECT};)L{OBJECT};");
+    let mut s = base_specs();
+    s.push(
+        class("p/Dict")
+            .iface()
+            .sig(&format!("<K:L{OBJECT};V:L{OBJECT};>L{OBJECT};"))
+            .method(method(PUBLIC, "replace", &obj2, Some("(TK;TV;)TV;"))),
+    );
+    s.push(
+        class("p/Headers")
+            .ifaces(&["p/Dict"])
+            .sig(&format!("L{OBJECT};Lp/Dict<L{STRING};L{STRING};>;")),
+    );
+    s.push(
+        class("p/Unmod")
+            .sup("p/Headers")
+            .method(method(PUBLIC, "replace", &format!("(L{STRING};L{STRING};)L{STRING};"), None))
+            .method(method(PUBLIC | SYNTHETIC | BRIDGE, "replace", &obj2, None)),
+    );
+    // 本类自己引入接口时不改变：本类声明即槽位
+    s.push(
+        class("p/Own")
+            .ifaces(&["p/Dict"])
+            .sig(&format!("L{OBJECT};Lp/Dict<L{STRING};L{STRING};>;"))
+            .method(method(PUBLIC | SYNTHETIC | BRIDGE, "replace", &obj2, None)),
+    );
+    let f = Fixture::new(s);
+    let x = f.ctx();
+    let Some(unmod) = f.reg.get("p/Unmod") else {
+        panic!("fixture")
+    };
+    let string = RsType::class(STRING, vec![]);
+    let sig = x.method_sig_types(unmod, &unmod.methods()[1], &[]);
+    assert_eq!(sig.params, vec![string.clone(), string.clone()]);
+    assert_eq!(sig.ret, Some(string));
+    let Some(own) = f.reg.get("p/Own") else {
+        panic!("fixture")
+    };
+    let st = x.method_sig_types(own, &own.methods()[0], &[]);
+    assert!(st.params.is_empty() && st.ret.is_none());
+}
+
 #[test]
 fn local_class_inherits_enclosing_method_tparams() {
     let mut s = base_specs();

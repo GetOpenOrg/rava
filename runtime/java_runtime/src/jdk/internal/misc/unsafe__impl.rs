@@ -48,13 +48,14 @@ fn _ref_array_index(offset: i64) -> i32 {
 }
 
 crate::__process_static! {
-    /// 实例字段偏移登记表（线程本地）：正向 (声明类 binary name, 字段名) → id，
-    /// 反向 id → 字段名。`objectFieldOffset` 两重载共用；id 消费见基本类型统一载体
+    /// 实例字段偏移登记表（进程级）：正向 (声明类名, 字段名) → id，
+    /// 反向 id → (声明类 binary name, Java 字段名)。`objectFieldOffset` 两重载共用；id 消费见基本类型统一载体
     ///（`unsafe__ext::prim` 的实例字段臂）与引用访问器族。
     static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
         RefCell::new(HashMap::new());
     static FIELD_OFFSET_NEXT: RefCell<i64> = const { RefCell::new(FIELD_SLOT) };
-    static FIELD_OFFSET_BY_ID: RefCell<HashMap<i64, std::string::String>> = RefCell::new(HashMap::new());
+    static FIELD_OFFSET_BY_ID: RefCell<HashMap<i64, (std::string::String, std::string::String)>> =
+        RefCell::new(HashMap::new());
 }
 
 /// 实例字段偏移的不透明 id：键 = (声明类 binary name, 字段名)，同一字段恒等。
@@ -69,6 +70,7 @@ crate::__process_static! {
 fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::string::String) -> i64 {
     FIELD_OFFSETS.with(|offsets| {
         let mut offsets = offsets.borrow_mut();
+        let decl = clazz_name.replace('.', "/");
         let key = (clazz_name, Clone::clone(&field_name));
         if let Some(&id) = offsets.get(&key) {
             return id;
@@ -80,7 +82,7 @@ fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::str
         });
         offsets.insert(key, id);
         FIELD_OFFSET_BY_ID.with(|by_id| {
-            by_id.borrow_mut().insert(id, field_name);
+            by_id.borrow_mut().insert(id, (decl, field_name));
         });
         id
     })
@@ -96,10 +98,13 @@ fn field_of_offset(offset: i64) -> Option<(std::string::String, std::string::Str
     })
 }
 
-/// 偏移 id → 字段名（实例字段登记表的反查；静态字偏移 / 哨兵不在表内 → None）。
-/// 基本类型统一载体（`unsafe__ext`）的实例字段臂消费。
-pub(super) fn offset_field_name(offset: i64) -> Option<std::string::String> {
-    FIELD_OFFSET_BY_ID.with(|by_id| by_id.borrow().get(&offset).cloned())
+/// 偏移 id → 接收者 `o` 上按名协议的 Rust 字段名（实例字段登记表的反查；静态字段偏移 / 哨兵不在表内 → None）。
+/// 登记的是 Java 字段身份 (声明类, 字段名)，经运行时类的 `__field_slot` 还原为 Rust 字段名（关键字 /
+/// `$` / 遮蔽字段改名时二者不同，如 `Socket.in` → `in_`），未改名的字段两名相同。
+/// 引用族（`__unsafe_ref_*`）与基本类型统一载体（`unsafe__ext` 的字 / 双字视图臂）共用。
+pub(super) fn offset_slot(o: &Object, offset: i64) -> Option<std::string::String> {
+    let (decl, name) = FIELD_OFFSET_BY_ID.with(|by_id| by_id.borrow().get(&offset).cloned())?;
+    Some(o.0.__field_slot(&decl, &name).map_or(name, str::to_owned))
 }
 
 /// 偏移 id → 实例引用字段读（VarHandle 引用族消费）：字段名经登记表反查后走
@@ -108,14 +113,14 @@ pub(super) fn offset_field_name(offset: i64) -> Option<std::string::String> {
 /// Field 家族偏移恒出自 objectFieldOffset 登记表，两口径不混用。
 /// 未登记的 id 或运行时类无该引用字段 → None。
 fn _instance_ref_get(o: &Object, offset: i64) -> Option<Object> {
-    let field = offset_field_name(offset)?;
+    let field = offset_slot(o, offset)?;
     o.0.__unsafe_ref_get(&field)
 }
 
 /// 偏移 id → 实例引用字段写（`_instance_ref_get` 的镜像）：命中写入返回 true，
 /// 未登记 / 无臂 → false。
 fn _instance_ref_set(o: &Object, offset: i64, v: Object) -> bool {
-    match offset_field_name(offset) {
+    match offset_slot(o, offset) {
         Some(field) => o.0.__unsafe_ref_set(&field, v),
         None => false,
     }
@@ -176,7 +181,7 @@ pub(super) fn _static_rmw(offset: i64, f: &mut dyn FnMut(Object) -> Option<Objec
 /// 未登记 / 无臂 → None。
 fn _instance_ref_update(o: &Object, offset: i64,
                         f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Object> {
-    let field = offset_field_name(offset)?;
+    let field = offset_slot(o, offset)?;
     o.0.__unsafe_ref_update(&field, f)
 }
 

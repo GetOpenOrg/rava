@@ -139,6 +139,42 @@
 - 边界 e2e：`tests/e2e/48_refs/TestVarHandleBitwise.java`（实例 / 静态字段、int[] / long[] / boolean[]、子字字段互不影响、不支持族），
   本机 emit + compile 通过，单跑输出与 JDK 一致；TestSocketErrorPaths emit + compile 通过、native_missing 不再含 VarHandle；HelloWorld 编译通过；generator 单测 386 通过 0 失败。
 
+### 2026-10-04 续：Unsafe 引用 RMW 缺口与桥方法 E0308（分支 unsafe-rmw）
+
+**Unsafe / VarHandle 字段读-改-写落空（TestSocketErrorPaths / TestSocketLoopbackPair panic `unsafe__impl.rs:195`）**
+- 根因：偏移登记表记的是 **Java 字段名**，而对象的 by-name 协议（`__unsafe_ref_access` / `__unsafe_word` 等，java_class! 宏按扁平字段生成臂）
+  以 **Rust 字段名**为键。凡生成器改过名的字段都会落空：关键字（`Socket.in` → `in_`，JDK `Socket.getInputStream` 用
+  `IN.compareAndSet(this, null, in)`）、含 `$`（`this$0` → `this_0`）、遮蔽祖先同名字段（加 `_{SimpleClass}` 后缀）。
+  引用族与基本类型族同样受影响，不是「缺引用臂」。
+- 修法（生成器 + 宏，无类名特判）：
+  - 生成器在类块头发射 `#[field_slots = "decl.java=rust;…"]`，只列 Java 名与 Rust 名不同的实例字段（本类 + 扁平祖先，`class_writer/fields.rs`）。
+  - 宏据此生成 `ObjectVTable::__field_slot(decl, name) -> Option<&'static str>`（`struct_layout.rs`；包装层转发）。
+  - 偏移表改存（声明类, Java 名）；`unsafe__impl.rs::offset_slot` 经对象的 `__field_slot` 换成 Rust 名，引用族与基本类型族（`unsafe__ext.rs`）共用。
+    遮蔽字段按声明类区分，两字段互不影响。
+- 边界 e2e：`tests/e2e/48_refs/TestVarHandleRefRmw.java`，覆盖关键字 / `$` / 遮蔽字段、静态、`Object[]` / `String[]` 元素、关键字名基本类型字段、
+  AtomicReferenceFieldUpdater、两线程 CAS 计数。期望输出取自 JDK 21.0.11。本机 emit + compile 通过，单跑输出与 JDK 一致。
+- TestSocketErrorPaths：本机 emit + compile 通过，单跑输出与 expected 一致。`docs/known_failures.toml` 中两条登记已删除。
+
+**UnmodifiableHeaders 桥方法 E0308（TestHttpLoopbackSync / Async）**，两处根因：
+1. `TyCtx::method_sig_types`（`ty/src/sig_types/ctor.rs`）找覆盖链根时只走超类链。已补 `ancestor_default_slot`：沿超类链从最远处起，对每个祖先的超接口闭包做广度搜索，
+   找同名同描述符的 default；该祖先比所有类声明都远时，以这个 default 为根，实参取 `implemented_interface_views(ci)`，与 phase2 注入槽位的 `declared_by` 同源。
+   改后桥 wrapper 签名为 `(String, Object)`，与 Headers 槽位一致。单测 `method_sig_types_roots_at_ancestor_inherited_default`。
+2. `override_vtable_erasure`（`emit/class_writer/slot.rs`）在槽位由接口 default 继承而来时，按接口自身形参（K / V）判断 Object 化位置，误把 `String` 列入
+   `vtable_erasure`，覆盖条目擦成 Object，与 Headers 槽位的 `String` 不符。改为与 owner 发射同源：先用 `adapt_interface_method` 把接口形参代换成 owner 视角的实参，
+   再按 owner 自身形参判断。
+- 失败路线：只修 1 时，E0308 从 wrapper 调用处转移到 vtable 覆盖条目（仍 2 处）。
+- 两处修完后，java_runtime 编译通过，暴露 body crate 里下一处 E0308：`DnsClient` 中 `AtomicLong::new` 适配 `IntFunction`，
+  metafactory 的基本类型拓宽（I → J）未做，实参原样传给 `new_l(i64)`。`instr/sim/dynamic/lambda_args.rs::adapt_sam_arg` 补拓宽臂：
+  SAM 形参与实现形参都是基本类型、互不相同且非 boolean 时生成 `(x as T)`（Rust `as` 与 Java 拓宽同义）。
+
+**验证（本机，最终 rava）**：generator 单测 425 通过 0 失败（含 `jdk_literal_lint` / `no_jdk_literals`），rava_macros_core 单测 11 通过；
+TestVarHandleRefRmw emit + compile + 单跑与 JDK 一致；TestSocketErrorPaths 单跑与 expected 一致；TestHttpLoopbackSync emit + compile 通过（0 错误）。
+单跑 TestHttpLoopbackSync 时止于 `native: sun/nio/ch/IOUtil.makePipe:(Z)J`，属已另派的 native-missing 余项（修法 B），不在本分支。
+
+**下一步**：分布式抽查 TestSocketErrorPaths、TestSocketLoopbackPair、TestVarHandleRefRmw、TestVarHandleBitwise、TestByteArrayViewVarHandle、
+TestSubwordFieldCas、TestHttpLoopbackSync、TestHttpLoopbackAsync。slot.rs 的改动影响所有「子类覆盖祖先经接口 default 继承、且实参具体化的槽位」，
+抽查时应留意 Map / Collection 系子类。
+
 ## 现状（2026-10-04：http-perf 分支，TestHttpLoopbackSync / Async 转译超时）
 
 ### 二分（服务器 `remote_rava emit --perf`，各点服务器不同，耗时只作量级参考）

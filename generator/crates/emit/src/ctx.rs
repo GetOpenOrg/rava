@@ -27,6 +27,8 @@ pub struct EmitOptions {
     pub debug: bool,
     /// 逐类发射的并行度（0 = 可用核数；1 = 串行）。输出与并行度无关
     pub jobs: usize,
+    /// 档案发射（`--profile`）：档案 crate 的包版本取其源码树摘要（同内容共享编译产物），否则取 scratch 路径
+    pub archive: bool,
 }
 
 /// 发射共享上下文：输入事实 + 类型层 + 清单（全部只读；缓存经内部可变性）。

@@ -3,7 +3,8 @@
 //! 方法体语句行尾带 `// line N` 行标记（`method::lines`）；`java_class!` 宏保留方法体 token 的
 //! 原始位置，回溯帧的 `at <文件>:<行>` 即落盘文件的行。落盘前扫描每个生成文件的最终文本
 //! （拆层后的声明层 / 实现层各自扫描），得出该文件的行表，汇总写入
-//! `<scratch>/closure_input/line_tables.rs`，由 java_meta 以 `__java_meta_LINE_TABLES` 导出，
+//! `<scratch>/closure_input/line_tables.rs`（档案侧文件，由 java_meta 以 `__java_meta_LINE_TABLES` 导出）
+//! 与用户元数据行（用户 crate 文件，启动时登记，`project::user_meta`），
 //! 运行时 `fillInStackTrace` 据帧位置查表（`throwable_impl.rs`）。
 //!
 //! 行表行 `(rust_line, method, java_line)` 按 Rust 行升序：方法起点（`#[java_method]` 属性行）记
@@ -23,6 +24,8 @@ use crate::error::Result;
 
 /// 行表文件名（与 closure_tables.rs 同目录）
 pub const LINE_TABLES: &str = "line_tables.rs";
+/// 行表文件（scratch 相对路径）
+pub const LINE_TABLES_PATH: &str = "closure_input/line_tables.rs";
 
 /// 块外 / 非 Java 方法的方法下标
 const NO_METHOD: u32 = u32::MAX;
@@ -215,7 +218,8 @@ pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
     src
 }
 
-/// 汇总写入 `<out_dir>/closure_input/line_tables.rs`（`files` 为 (绝对路径, 最终文本)；`lnt` 给出
+/// 汇总：档案侧文件的行表写入 `<out_dir>/closure_input/line_tables.rs`，返回用户 crate 文件的行表源文本
+///（同 [`render`] 形态，由用户元数据行文件收录）。`files` 为 (绝对路径, 最终文本)；`lnt` 给出
 /// 方法 (类, 名, 描述符) 的 LineNumberTable，行表中出现的每个有 Java 行的方法各写一项）
 pub fn write(
     w: &mut Writer,
@@ -223,7 +227,7 @@ pub fn write(
     files: &[(&Path, &str)],
     lnt: &dyn Fn(&str, &str, &str) -> Option<Vec<(u16, u16)>>,
     root: &[(PathBuf, Vec<handwritten::HwMethod>)],
-) -> Result<()> {
+) -> Result<String> {
     let mut tables: Vec<FileLines> = files
         .iter()
         .filter_map(|(path, text)| {
@@ -262,6 +266,17 @@ pub fn write(
         }
     }
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
+    // 档案侧（JDK / lib crate 文件）进 java_meta；用户 crate 文件的行表随用户元数据行登记
+    let (user, archive): (Vec<FileLines>, Vec<FileLines>) = tables.into_iter().partition(|t| t.rel.starts_with(USER_PREFIX));
+    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&archive, &numbers_of(&archive, lnt)))?;
+    Ok(render(&user, &numbers_of(&user, lnt)))
+}
+
+/// 用户 crate 文件的 scratch 相对路径前缀
+const USER_PREFIX: &str = "user/";
+
+/// 行表中出现的每个有 Java 行的方法的 LineNumberTable
+fn numbers_of(tables: &[FileLines], lnt: &dyn Fn(&str, &str, &str) -> Option<Vec<(u16, u16)>>) -> LineNumbers {
     let mut numbers = LineNumbers::new();
     for m in tables.iter().flat_map(|t| &t.methods) {
         let key = (m.class.clone(), m.name.clone(), m.descriptor.clone());
@@ -272,7 +287,7 @@ pub fn write(
             numbers.insert(key, table);
         }
     }
-    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&tables, &numbers))
+    numbers
 }
 
 #[cfg(test)]

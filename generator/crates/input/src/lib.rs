@@ -6,6 +6,7 @@
 
 pub mod boundary;
 pub mod build;
+mod compose;
 pub mod facts;
 pub mod handwritten;
 pub mod manifest;

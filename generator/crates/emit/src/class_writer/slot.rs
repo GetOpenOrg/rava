@@ -8,6 +8,7 @@ use std::collections::{BTreeSet, VecDeque};
 use classfile::Method;
 use ty::ClassInfo;
 
+use super::inherit::adapt_interface_method;
 use crate::ctx::EmitCtx;
 use crate::text::contains_word;
 use crate::vtable::param_part;
@@ -73,9 +74,19 @@ pub fn override_vtable_erasure(ctx: &EmitCtx<'_>, ci: &ClassInfo, m: &Method, vi
     }
     let Some(owner) = owner else { return Vec::new() };
     let Some((decl_ci, owner_m)) = owner_slot_declaration(ctx, owner, m) else { return Vec::new() };
-    let owner_params = ctx.ty.effective_class_type_params(decl_ci).to_vec();
     let names = &ctx.ty;
-    let anc = ctx.ty.emitted_method_sig_types(decl_ci, owner_m, &owner_params);
+    // 槽位签名与声明祖先发射时同源：owner 自身声明 → 按 owner 形参；owner 经接口 default 继承
+    // （phase2 注入 owner，`declared_by` = 接口）→ 接口方法先按 owner 视角代换接口形参，再按 owner
+    // 形参发射，槽位只在 owner 自身的类型形参位置 Object 化
+    let owner_params = ctx.ty.effective_class_type_params(owner).to_vec();
+    let anc = if std::ptr::eq(decl_ci, owner) {
+        ctx.ty.emitted_method_sig_types(owner, owner_m, &owner_params)
+    } else {
+        match adapt_interface_method(ctx, owner, decl_ci.name(), owner_m) {
+            Ok((adapted, _)) => ctx.ty.emitted_method_sig_types(owner, &adapted, &owner_params),
+            Err(_) => ctx.ty.emitted_method_sig_types(owner, owner_m, &owner_params),
+        }
+    };
     let own_params = ctx.ty.effective_class_type_params(ci).to_vec();
     let own = ctx.ty.emitted_method_sig_types(ci, m, &own_params);
     let own_types: Vec<String> = own.params.iter().map(|t| t.render(names)).collect();

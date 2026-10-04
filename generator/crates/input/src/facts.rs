@@ -176,6 +176,8 @@ pub struct ClosureFacts {
     pub instantiated: Vec<String>,
     /// 手写体继承成员需求：`owner` 为接收者静态类型，方法声明在其超类型上（L1 编译期事实）
     pub hw_inherited: Vec<MemberRef>,
+    /// lambda 站点的函数式接口（samtype，分析器 `sam_types`）：发射层合成 `I__Lambda` 的接口集
+    pub sam_types: Vec<String>,
     pub system_properties: SysPropFacts,
 }
 
@@ -281,6 +283,7 @@ impl ClosureFacts {
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
             hw_inherited: e.hw_inherited_requests().into_iter().collect(),
+            sam_types: e.sam_types().into_iter().collect(),
             system_properties: SysPropFacts {
                 values: e.sysprops().values().clone(),
                 dynamic: e.sysprops().dynamic().clone(),
@@ -330,6 +333,7 @@ impl ClosureFacts {
         }
         out.dispatched = strings(v.get("dispatched"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         out.instantiated = strings(v.get("instantiated"))?;
+        out.sam_types = strings(v.get("sam_types"))?;
         out.hw_inherited = strings(v.get("hw_inherited"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         let sp = v.get("system_properties").ok_or_else(|| missing("system_properties"))?;
         for (k, val) in sp.get("values").and_then(Value::as_object).into_iter().flatten() {

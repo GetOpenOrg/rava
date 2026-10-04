@@ -267,6 +267,7 @@ impl Closure<'_> {
             "dispatched": e.dispatched(),
             "hw_inherited": e.hw_inherited_requests().iter().map(|r| r.to_string()).collect::<Vec<_>>(),
             "hw_untyped_sites": e.hw_untyped_sites(),
+            "sam_types": e.sam_types(),
             "folds_version": FOLDS_VERSION,
             "folds": folds,
             "system_properties": {

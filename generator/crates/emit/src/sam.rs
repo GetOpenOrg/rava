@@ -145,10 +145,13 @@ impl SamSpec {
 impl SamLedger {
     /// 预扫描会翻译出方法体的方法（用户类全量 + JDK 类调用链上方法）的 invokedynamic 站点：
     /// 函数式接口 = 调用点描述符的返回类型。调用链外 JDK 方法发 `panic!("stub: ..")` 存根，
-    /// 其站点不发射，分析器也不据此抬升接口级别（可能停在 L1 不透明形态），不得入账
+    /// 其站点不发射，分析器也不据此抬升接口级别（可能停在 L1 不透明形态），不得入账。
+    ///
+    /// 非用户接口另取分析器的 `sam_types`（档案发射时为档案的并，含各入口用户方法里的站点），
+    /// 用户站点只贡献用户接口：JDK 接口文件里的 `I__Lambda` 只依赖档案，与本程序无关
     pub fn prescan(ctx: &EmitCtx<'_>) -> SamLedger {
         let input = ctx.input;
-        let mut candidates = BTreeSet::new();
+        let mut candidates: BTreeSet<String> = input.sam_types.iter().filter(|i| !ctx.is_user(i)).cloned().collect();
         for cls in input.user_classes.iter().chain(&input.jdk_classes) {
             let Some(ci) = ctx.ty.reg.get(cls) else { continue };
             let user = ctx.is_user(cls);
@@ -157,7 +160,7 @@ impl SamLedger {
                 for insn in code.ops() {
                     let Operand::InvokeDynamic { desc, .. } = &insn.operand else { continue };
                     let rd = parse_descriptor_return(desc);
-                    if let Some(b) = rd.strip_prefix('L').and_then(|r| r.strip_suffix(';')) {
+                    if let Some(b) = rd.strip_prefix('L').and_then(|r| r.strip_suffix(';')).filter(|b| !user || ctx.is_user(b)) {
                         candidates.insert(b.to_string());
                     }
                 }

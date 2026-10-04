@@ -21,6 +21,8 @@ pub struct HeadInput<'s> {
     pub superclass_fields: &'s [(String, String)],
     pub superclass_reference_fields: &'s [String],
     pub superclass_erased_fields: &'s [String],
+    /// Rust 名与 Java 名不同的平铺实例字段（继承 + 本类）：`声明类.Java 名=Rust 名`
+    pub field_slots: &'s [String],
     /// 共置手写 impl 提供的方法名
     pub impl_methods: Option<&'s BTreeSet<String>>,
 }
@@ -170,6 +172,9 @@ fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lin
     }
     if !inp.superclass_erased_fields.is_empty() {
         lines.push(format!("#[superclass_erased_fields = \"{}\"]", inp.superclass_erased_fields.join(";")));
+    }
+    if !inp.field_slots.is_empty() {
+        lines.push(format!("#[field_slots       = \"{}\"]", inp.field_slots.join(";")));
     }
     if ci.is_interface() {
         return;
