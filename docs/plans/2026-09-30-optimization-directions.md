@@ -194,6 +194,10 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 4. `79e4ccc4`（Q1(b)）本类静态方法 / 构造器 / `<clinit>` 内的本类 static 读写不再逐次查初始化状态：宏为每个 static 生成原始存取 `__si_<名>` / `__si_set_<名>`（只含安全点 + 存取），公开 getter / setter = `__class_init()?` + 原始存取；入口已注入 `Self::__class_init()?` 的方法体内，本类 `Own::f()` / `Own::set_f(v)` 改写为原始存取（闭包 / 嵌套项不改写；实例方法不改写——运行时手写可不经构造器造实例）。
 5. `b4b6ccd1`（Q4）栈界检查快路径内联：§21.8.3 不允许编译器线程局部取址跨挂起点缓存，故不直接 `#[inline]` 原函数，改为 Linux x86_64 / aarch64 每次现读线程指针（非 `pure` 内联汇编，`fs:[0]` / `tpidr_el0`）+ 静态 TLS 偏移取栈界；偏移在线程入口与载体切入时核对，任一线程不一致即永久退回 `#[inline(never)]` 慢路径；其他平台只走慢路径。
 6. （Q3）性能类测试构建档 `dev-opt`：生成的 workspace 增 `[profile.dev-opt]`（继承 dev，opt-level 1；`package.user` opt-level 0），`rava build / compile --dev-opt`（与 `--release` 互斥），e2e 用例以独占一行 `// rava-build-profile: dev-opt` 声明、`run_tests.py` 缺省档时按声明改走该档。dev 档保持 opt-level 0。档案 crate 跨测试共享缓存只付一次 opt 1 编译代价，用户 crate 每例重编保持 dev 速度。
+7. `e9c8c5b9` 即上条 Q3 的提交。
+8. `bc517e9e` 引用型常量（字符串 / 类字面量 / 拼接结果 / null）视为独占临时值：作实参与 checkcast 源时不再包 `Clone::clone(&..)`（`Clone::clone(&String::from("ha"))` → `String::from("ha")`）。
+9. `a61f8dc0`（杠杆 ②）字符串常量逐调用点缓存：`java_class!` 展开时把方法体与 ConstantValue 初值中的 `String::from("…")` 改写为调用点私有 `OnceLock` 单元，首次经全局驻留表（按 `Vec<u16>` 哈希、持锁）取规范实例，此后只克隆同一实例（JVMS §5.4.3 常量池项解析一次）。不用 `get_or_init`（首次加载可能经类初始化重入同一调用点），并发 / 重入的各次加载取到同一驻留实例、先写入者留存。可读层源码不变。
+10. `1697a9a8`（杠杆 ④）Unsafe 偏移与数组视图免查表：实例字段偏移反查改为按 id 稠密下标（`id / FIELD_SLOT - 1`）直取进程常驻登记项，`offset_slot` 返回 `&'static str`（原先每次访问哈希查表 + 两次 `String` 克隆 + `to_owned`），`field_of_offset` 不再线性扫描；数组协变视图（`Node[]` 等经 `__view_into` 擦除为 `Object[]`，Unsafe / VarHandle 引用访问器、`array_load_object` / `array_store_object` 每次都构造）的元素访问改为按元素类型单态化的函数指针，构造开销由 4 个闭包 + 视图 + 元素名探针降为源句柄 + 视图两次分配，长度经源数组钩子；`__view_into` 等只透传的擦除句柄改用进程共用单元，不再逐次 `Arc::new(())`。
 
 ### 5. 测试流程效率（用户 2026-10-01）
 
