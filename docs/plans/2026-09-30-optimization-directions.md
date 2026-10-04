@@ -180,6 +180,8 @@ release 下 LynchBell 每次迭代约 1.7 µs，需提速约 40 倍；debug 需 
 | 栈界检查 | ≈ 4.5% | `rava_coro::stack_exhausted` 3.6%（不内联，TLS）、`__stack_check` 1.0% |
 | JDK 方法体本身 | 其余 | `StringLatin1.charAt` 5.2%、`String.isLatin1` 3.5%、`String.length`、`Integer.parseInt` 等 |
 
+LynchBell debug（同作业 kr1，10000 样本，含子调用口径）：`uniqueDigits` 83.6%，其中 `String.charAt` 56.4%。静态字段 getter 合计约 34%（`s` 13.9%、`SIOOBE_FORMATTER` 10.2%、`COMPACT_STRINGS` 9.9%），内部是 `__class_init` 8.7% 和 OnceLock `force` 8.4%；`__RefSlot` 读锁 `borrow` / `read_recursive` 20%；栈界检查 8.8%（`guard::current` TLS 6.2%）；`String.valueOf` 13.4%。debug 下 parking_lot 的 `try_lock_shared_fast` / `deadlock_acquire` / `checked_add` 等以 opt-level 0 编译，单把读锁展开成十余层调用。
+
 结论：前四类（约 52%）都是对象 / 静态 / 数组存储的同步形态（每字段一个 `Arc`、每次读写一把 `RwLock`、每次读出克隆一份引用计数），属 S7-3 区与运行时 `array.rs`；方法体翻译侧能直接消除的是多余的引用计数增减（已做两项）。存储形态改造已向主会话申请协调（2026-10-05）。
 
 **已做（本线范围内的方法体翻译）**：
