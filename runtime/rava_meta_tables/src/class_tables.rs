@@ -5,10 +5,9 @@ use super::*;
 /// 类层次表扫描：java_class! 块内的裸属性行（`#[binary_name = "..."]` 与
 /// `#[all_supertypes = "..."]` 各自独立成行，同一块内 binary_name 在前）。
 /// all_supertypes 以 ';' 分隔、含类自身（attrs._compute_all_supertypes）。
-pub(crate) fn scan_class_hierarchy(roots: &[&Path]) -> BTreeMap<String, String> {
+pub(crate) fn scan_class_hierarchy(texts: &[&str]) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -25,10 +24,9 @@ pub(crate) fn scan_class_hierarchy(roots: &[&Path]) -> BTreeMap<String, String> 
     result
 }
 
-pub(crate) fn write_hierarchy_table(entries: &BTreeMap<String, String>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_hierarchy_table(entries: &BTreeMap<String, String>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：类层次表（binary name → 全部超类型，含自身）。
+        "// 由生成器（rava_meta_tables）生成：类层次表（binary name → 全部超类型，含自身）。
          // 数据源：java_class! 块的 all_supertypes 属性（class 元数据推导）。
          // 消费方：Class.isAssignableFrom（class_impl.rs）。请勿手改。
 
@@ -45,18 +43,14 @@ pub(crate) fn write_hierarchy_table(entries: &BTreeMap<String, String>) {
     }
     out.push_str("];
 ");
-    let path = Path::new(&out_dir).join("hierarchy_table.rs");
-    if let Err(e) = fs::write(&path, out) {
-        eprintln!("build.rs: cannot write hierarchy table: {}", e);
-    }
+    out
 }
 
 /// 类 → 直接父类（java_class! 块的 super_class 属性；接口无 super_class 属性）。
 /// 消费方：Class.getSuperclass（class_impl.rs）。
-pub(crate) fn scan_direct_super(roots: &[&Path]) -> BTreeMap<String, String> {
+pub(crate) fn scan_direct_super(texts: &[&str]) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -73,10 +67,9 @@ pub(crate) fn scan_direct_super(roots: &[&Path]) -> BTreeMap<String, String> {
     result
 }
 
-pub(crate) fn write_direct_super_table(entries: &BTreeMap<String, String>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_direct_super_table(entries: &BTreeMap<String, String>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：类 → 直接父类表（binary name → super_class 属性）。
+        "// 由生成器（rava_meta_tables）生成：类 → 直接父类表（binary name → super_class 属性）。
          // 数据源：java_class! 块的 super_class 属性（接口无该属性，天然缺席）。
          // 消费方：Class.getSuperclass（class_impl.rs）。请勿手改。
 
@@ -88,20 +81,16 @@ pub(crate) fn write_direct_super_table(entries: &BTreeMap<String, String>) {
     }
     out.push_str("];
 ");
-    let path = Path::new(&out_dir).join("direct_super_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 direct_super_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// 类 → java.lang.reflect.Modifier 位集（Class.getModifiers 的数据源）。
 /// 类级属性扫描：`#[access` 含 public → PUBLIC(0x1)；无 super_class 属性 →
 /// 接口（INTERFACE|ABSTRACT，JVMS 语义：接口恒 abstract）——Object 除外
 ///（无父类但非接口）；final 位无类级属性源，不发射（无反射消费方依赖）。
-pub(crate) fn scan_class_modifiers(roots: &[&Path]) -> BTreeMap<String, i32> {
+pub(crate) fn scan_class_modifiers(texts: &[&str]) -> BTreeMap<String, i32> {
     let mut result: BTreeMap<String, i32> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         let mut is_public = false;
         let mut has_super = false;
@@ -164,10 +153,9 @@ pub(crate) fn class_modifier_bits(is_public: bool, has_super_class: bool, is_obj
     bits
 }
 
-pub(crate) fn write_modifiers_table(entries: &BTreeMap<String, i32>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_modifiers_table(entries: &BTreeMap<String, i32>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：类修饰符表（binary name → Modifier 位集）。
+        "// 由生成器（rava_meta_tables）生成：类修饰符表（binary name → Modifier 位集）。
          // 数据源：java_class! 块的 access / super_class 属性。接口（无 super_class，
          // Object 除外）恒含 INTERFACE|ABSTRACT。final 位无属性源不发射。
          // 消费方：Class.getModifiers（class_impl.rs）。请勿手改。
@@ -180,10 +168,7 @@ pub(crate) fn write_modifiers_table(entries: &BTreeMap<String, i32>) {
     }
     out.push_str("];
 ");
-    let path = Path::new(&out_dir).join("modifiers_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 modifiers_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// 嵌套元数据（FS-R R1）：类 → (外层类, 简单名, 本类 InnerClasses 条目在场, 封闭方法三元组)。
@@ -199,10 +184,9 @@ pub(crate) struct NestMeta {
     members: Vec<String>,
 }
 
-pub(crate) fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
+pub(crate) fn scan_nest_meta(texts: &[&str]) -> BTreeMap<String, NestMeta> {
     let mut result: BTreeMap<String, NestMeta> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -243,10 +227,9 @@ pub(crate) fn scan_nest_meta(roots: &[&Path]) -> BTreeMap<String, NestMeta> {
     result
 }
 
-pub(crate) fn write_nest_table(entries: &BTreeMap<String, NestMeta>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_nest_table(entries: &BTreeMap<String, NestMeta>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：嵌套元数据表（InnerClasses 本类条目 + EnclosingMethod）。
+        "// 由生成器（rava_meta_tables）生成：嵌套元数据表（InnerClasses 本类条目 + EnclosingMethod）。
          // 消费方：Class.getDeclaringClass0 / getSimpleBinaryName0 / getEnclosingMethod0。请勿手改。
 
 
@@ -263,18 +246,14 @@ pub(crate) fn write_nest_table(entries: &BTreeMap<String, NestMeta>) {
             name, m.outer, m.simple, m.self_entry, enc, m.members));
     }
     out.push_str("];\n");
-    let path = Path::new(&out_dir).join("nest_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 nest_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// 直接超接口表（class 文件 interfaces 项，声明序）：数据源 `interfaces` 属性。
 /// 消费方：Class.getInterfaces0（HotSpot 同源）。
-pub(crate) fn scan_class_interfaces(roots: &[&Path]) -> BTreeMap<String, Vec<String>> {
+pub(crate) fn scan_class_interfaces(texts: &[&str]) -> BTreeMap<String, Vec<String>> {
     let mut result: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -295,10 +274,9 @@ pub(crate) fn scan_class_interfaces(roots: &[&Path]) -> BTreeMap<String, Vec<Str
     result
 }
 
-pub(crate) fn write_interfaces_table(entries: &BTreeMap<String, Vec<String>>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_interfaces_table(entries: &BTreeMap<String, Vec<String>>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：直接超接口表（声明序）。消费方：Class.getInterfaces0。请勿手改。
+        "// 由生成器（rava_meta_tables）生成：直接超接口表（声明序）。消费方：Class.getInterfaces0。请勿手改。
 
          #[export_name = \"__java_meta_CLASS_INTERFACES\"] pub static CLASS_INTERFACES: &[(&str, &[&str])] = &[
 ",
@@ -307,17 +285,13 @@ pub(crate) fn write_interfaces_table(entries: &BTreeMap<String, Vec<String>>) {
         out.push_str(&format!("    ({:?}, &{:?}),\n", name, list));
     }
     out.push_str("];\n");
-    let path = Path::new(&out_dir).join("interfaces_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 interfaces_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// record 类集（is_record 属性在场 = Record 属性在场，Class.isRecord 判据）。
-pub(crate) fn scan_record_classes(roots: &[&Path]) -> BTreeSet<String> {
+pub(crate) fn scan_record_classes(texts: &[&str]) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -337,10 +311,9 @@ pub(crate) fn scan_record_classes(roots: &[&Path]) -> BTreeSet<String> {
 }
 
 /// record 组件表（record_components 属性：`名:描述符:Signature`，`|` 分隔，声明序）。
-pub(crate) fn scan_record_components(roots: &[&Path]) -> BTreeMap<String, String> {
+pub(crate) fn scan_record_components(texts: &[&str]) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -358,10 +331,9 @@ pub(crate) fn scan_record_components(roots: &[&Path]) -> BTreeMap<String, String
     result
 }
 
-pub(crate) fn write_record_table(entries: &BTreeSet<String>, components: &BTreeMap<String, String>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_record_table(entries: &BTreeSet<String>, components: &BTreeMap<String, String>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：record 类集（binary name；Record 属性在场）。
+        "// 由生成器（rava_meta_tables）生成：record 类集（binary name；Record 属性在场）。
          // 数据源：java_class! 块的 is_record 属性（classfile 的 Record 属性判定）。
          // 消费方：Class.isRecord（class_impl.rs）。请勿手改。
 
@@ -385,19 +357,15 @@ pub(crate) fn write_record_table(entries: &BTreeSet<String>, components: &BTreeM
         out.push_str("]),\n");
     }
     out.push_str("];\n");
-    let path = Path::new(&out_dir).join("record_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 record_table.rs 失败: {e}");
-    }
+    out
 }
 
 /// 布尔类属性为 true 的类集：`has_clinit`（声明了 `<clinit>`）、`is_hidden`（lambda 调用点隐藏类，
 /// `hidden_class!` 声明块）。
-pub(crate) fn scan_flag_classes(roots: &[&Path], key: &str) -> BTreeSet<String> {
+pub(crate) fn scan_flag_classes(texts: &[&str], key: &str) -> BTreeSet<String> {
     let tag = format!("#[{key}");
     let mut result = BTreeSet::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -416,10 +384,9 @@ pub(crate) fn scan_flag_classes(roots: &[&Path], key: &str) -> BTreeSet<String> 
 /// 类级字符串属性表：类 → 属性值（键须以 `#[` 前缀出现）。用于 permitted_subclasses（sealed 许可子类型，
 /// `,` 分隔，声明序）、nest_members（NestMembers 属性，`,` 分隔，声明序）、class_access_flags（类文件
 /// access_flags 原值，十进制）。
-pub(crate) fn scan_class_attr(roots: &[&Path], key: &str) -> BTreeMap<String, String> {
+pub(crate) fn scan_class_attr(texts: &[&str], key: &str) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -451,12 +418,11 @@ fn push_name_lists(out: &mut String, table: &str, lists: &BTreeMap<String, Strin
     out.push_str("];\n");
 }
 
-pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, hidden: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
+pub(crate) fn render_class_meta_table(clinit: &BTreeSet<String>, hidden: &BTreeSet<String>, permitted: &BTreeMap<String, String>,
                                      nest_members: &BTreeMap<String, String>, access: &BTreeMap<String, String>,
-                                     source: &BTreeMap<String, String>, loaders: &BTreeMap<String, String>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+                                     source: &BTreeMap<String, String>, loaders: &BTreeMap<String, String>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：类文件级元数据（VM 注入的类信息）。请勿手改。
+        "// 由生成器（rava_meta_tables）生成：类文件级元数据（VM 注入的类信息）。请勿手改。
          // CLINIT_CLASSES：声明了 <clinit> 的类（has_clinit 属性）——ObjectStreamClass.hasStaticInitializer。
          // HIDDEN_CLASSES：lambda 调用点隐藏类（is_hidden 属性）——Class.isHidden / 镜像名 / forName 排除。
          // PERMITTED_SUBCLASSES：sealed 类的许可子类型（permitted_subclasses 属性）——Class.getPermittedSubclasses0。
@@ -497,8 +463,5 @@ pub(crate) fn write_class_meta_table(clinit: &BTreeSet<String>, hidden: &BTreeSe
         out.push_str(&format!("    ({:?}, {:?}),\n", cls, l));
     }
     out.push_str("];\n");
-    let path = Path::new(&out_dir).join("class_meta_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 class_meta_table.rs 失败: {e}");
-    }
+    out
 }

@@ -5,10 +5,9 @@ use super::*;
 /// 类级注解原始字节 + 稀疏常量池（FS-R R4b）：数据源 `raw_annotations` / `anno_cpool`
 /// 类属性（classfile.encode_anno_cpool 编码）。消费方：Class.getRawAnnotations /
 /// ConstantPool natives（getUTF8At0 / getIntAt0 …，按原常量池索引）。
-pub(crate) fn scan_class_annos(roots: &[&Path]) -> BTreeMap<String, (Vec<u8>, String)> {
+pub(crate) fn scan_class_annos(texts: &[&str]) -> BTreeMap<String, (Vec<u8>, String)> {
     let mut result: BTreeMap<String, (Vec<u8>, String)> = BTreeMap::new();
-    for path in roots.iter().flat_map(|r| walk_rs_files(r)) {
-        let content = fs::read_to_string(&path).unwrap_or_default();
+    for content in texts.iter().copied() {
         let mut current = String::new();
         for line in content.lines() {
             let trimmed = line.trim();
@@ -30,10 +29,9 @@ pub(crate) fn scan_class_annos(roots: &[&Path]) -> BTreeMap<String, (Vec<u8>, St
     result
 }
 
-pub(crate) fn write_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String)>) {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else { return };
+pub(crate) fn render_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String)>) -> String {
     let mut out = String::from(
-        "// 由 build.rs 自动生成：类级注解原始字节 + 注解引用的稀疏常量池（FS-R R4b）。
+        "// 由生成器（rava_meta_tables）生成：类级注解原始字节 + 注解引用的稀疏常量池（FS-R R4b）。
          // 消费方：Class.getRawAnnotations、ConstantPool natives。请勿手改。
 
 
@@ -63,8 +61,5 @@ pub(crate) fn write_class_anno_table(entries: &BTreeMap<String, (Vec<u8>, String
         out.push_str(&format!("    ({:?}, &{:?}, &[{}]),\n", name, raw, ents.join(", ")));
     }
     out.push_str("];\n");
-    let path = Path::new(&out_dir).join("class_anno_table.rs");
-    if let Err(e) = fs::write(&path, &out) {
-        panic!("写 class_anno_table.rs 失败: {e}");
-    }
+    out
 }

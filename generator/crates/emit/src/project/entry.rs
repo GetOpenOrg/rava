@@ -172,10 +172,17 @@ pub fn write_main(
     lines.push(format!("use {use_path};"));
     // 反射元数据表 crate：java_runtime 以导出符号读取其表，此处把它纳入链接
     lines.push("use java_meta as _;".into());
+    // 用户类的反射元数据行（`meta_sides`）：启动时登记，与档案侧表合并查询
+    let meta_mod = super::meta_sides::USER_META_MOD;
+    if ctx.opts.batch {
+        lines.push(format!("#[path = \"../{meta_mod}.rs\"]"));
+    }
+    lines.push(format!("mod {meta_mod};"));
     // 实现层 crate：声明层外壳经导出符号调用其定义，此处把它们纳入链接
     lines.extend(bodies.iter().map(|b| format!("use {b} as _;")));
     lines.push(String::new());
     lines.push("fn main() {".into());
+    lines.push(format!("    java_runtime::meta::register_user(&{meta_mod}::USER_META);"));
     // 进程级终止约定（panic 钩子）先于一切登记就位：此后任何 panic 同一出口
     lines.push("    java_runtime::create_java_vm();".into());
     let hb = hook_block(ctx, user, jdk, ems, disp);
@@ -378,7 +385,8 @@ pub fn write_closure_tables(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -
         "// 生成：闭包派生表（模块服务表 / VM 初始系统属性表），由 java_meta 的 lib.rs 引入。\n\n\
          #[export_name = \"__java_meta_MODULE_SERVICES\"] pub static MODULE_SERVICES: &[(&str, &str)] = &[\n",
     );
-    for (s, p) in &input.module_services {
+    // 档案侧：涉及用户类的服务随用户元数据行登记（`meta_sides`）
+    for (s, p) in input.module_services.iter().filter(|(s, p)| !super::meta_sides::is_user_service(ctx, s, p)) {
         src += &format!("    ({s:?}, {p:?}),\n");
     }
     src += "];\n#[export_name = \"__java_meta_VM_CONST_PROPERTIES\"] pub static VM_CONST_PROPERTIES: &[(&str, &str)] = &[\n";

@@ -2,8 +2,7 @@
 name = "java_meta"
 version = "0.1.0"
 edition = "2021"
-# 构建脚本扫描整个 workspace 的 java_class! 属性造反射元数据表（按职责分模块，入口 build_script/main.rs）
-build = "build_script/main.rs"
+# 档案侧反射元数据表 crate：表源码由发射层渲染进 scratch 的 closure_input/（rava_meta_tables），本 crate 只承载数据
 
 [lib]
 name = "java_meta"

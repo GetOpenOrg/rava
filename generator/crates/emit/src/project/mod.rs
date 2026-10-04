@@ -4,6 +4,8 @@
 //! 反射分派；步骤 (d)）→ 落盘 → 包 mod 树 → lib.rs 补全 → 用户子包 mod.rs → main.rs →
 //! Cargo.toml / strict.txt / jdk_feature.txt。
 
+mod archive_side;
+pub mod meta_sides;
 pub mod entry;
 pub mod fs;
 pub mod layers;
@@ -164,8 +166,12 @@ fn emit_classes<'l>(
         (ct, delta, t.elapsed())
     });
     let mut ems = IndexMap::new();
-    for (((j, scope), (_, _, t_prep)), (ct, delta, t_text)) in work.iter().zip(texts) {
+    let mut held = Vec::new();
+    for (((j, scope), (_, _, t_prep)), (ct, mut delta, t_text)) in work.iter().zip(texts) {
         let ct = ct?;
+        if matches!(j.krate, JobCrate::User) {
+            archive_side::split_user_delta(ctx, &mut delta, &mut held);
+        }
         state.merge(delta);
         let (crate_prefix, crate_name, handwritten) = match j.krate {
             JobCrate::Jdk => ("crate", "java_runtime", w.is_handwritten(&j.path)),
@@ -185,6 +191,7 @@ fn emit_classes<'l>(
         perf.classes.push((j.binary.to_string(), *t_prep + t_text));
         ems.insert(j.binary.to_string(), em);
     }
+    archive_side::check_leaks(state, held);
     Ok(ems)
 }
 
@@ -248,6 +255,7 @@ pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitt
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     let mut perf = Perf::new();
     let mut state = ProjectState::default();
+    archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
@@ -267,10 +275,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");
     let mut state = ProjectState::default();
-    // 手写体的继承成员需求与生成方法体登记的同一账本（手写文件整体编译，与 fn 可达性无关）
-    for (recv, name, desc) in &ctx.input.hw_inherited {
-        state.inherited_requests.insert((recv.clone(), name.clone(), crate::vtable::param_part(desc).to_string()));
-    }
+    archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
@@ -299,14 +304,23 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
-    line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
+    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
+    meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp, &body_names)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
+    let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
+    let archive_roots: Vec<&Path> = std::iter::once(jrt_src.as_path()).chain(lib_srcs.iter().map(PathBuf::as_path)).collect();
+    meta_sides::write_archive(&mut w, out_dir, &archive_roots)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
+    if ctx.opts.archive {
+        let crates: Vec<&str> = ["java_runtime", "java_meta"].into_iter().chain(body_names.iter().copied()).chain(lib_names.iter().copied()).collect();
+        let included = [meta_sides::META_TABLES, entry::CLOSURE_TABLES, line_tables::LINE_TABLES_PATH];
+        archive_side::stamp_versions(&mut w, out_dir, &crates, &included)?;
+    }
     perf.mark("entry");
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),

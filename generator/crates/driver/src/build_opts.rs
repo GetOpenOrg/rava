@@ -7,10 +7,10 @@
 //!   [--keep-artifacts]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
-//!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N]`
+//!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N] [--profile profile.json]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE]
-//!   [--perf] [--emit-jobs N]`（`--java`：源文件，决定用户类包布局与入口序）
+//!   [--perf] [--emit-jobs N] [--profile profile.json]`（`--java`：源文件，决定用户类包布局与入口序）
 //!
 //! 选项语义见 docs/environment-variables.md。
 
@@ -153,9 +153,12 @@ pub struct BuildOpts {
     pub closure_cache: Option<PathBuf>,
     /// 缓存总量上限（MB；缺省 `closure::cache::DEFAULT_MAX_MB`）
     pub closure_cache_max_mb: Option<u64>,
+    /// 档案发射（T1 1b）：非用户侧事实取该 `profile.json`（`rava profile` 产物），用户侧取本程序单例闭包
+    pub profile: Option<PathBuf>,
 }
 
-const VALUED: [&str; 24] = [
+const VALUED: [&str; 25] = [
+    "--profile",
     "--stop-after",
     "--target-dir",
     "--build-timeout",
@@ -275,6 +278,7 @@ impl BuildOpts {
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
                 "--api-package" => o.api_packages.push(v.clone()),
                 "--closure-cache" => o.closure_cache = Some(PathBuf::from(v)),
+                "--profile" => o.profile = Some(PathBuf::from(v)),
                 "--closure-cache-max-mb" => {
                     o.closure_cache_max_mb = Some(v.parse().map_err(|_| format!("--closure-cache-max-mb 需为数字：{v}"))?)
                 }
