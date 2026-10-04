@@ -1663,6 +1663,32 @@ a3-T 合计新增 e2e 边界用例 3 个（TestContinuationPinned、TestVirtualT
     start 路径耗时，再按 §21.8.4 的 T6 行验收。百万作业放 `tests/perf/`，服务器单独跑。
 - 未完成的跟进：T1b 审计手写运行时代码中的无界递归。
 
+**T1b 审计：手写运行时代码的无界递归（2026-10-05，分支 vthread-t6）**
+
+范围：`runtime/java_runtime/src`、`runtime/rava_coro/src`、`runtime/java_meta`、`runtime/rava_meta_tables`（运行期代码；
+`rava_macros*` 只在编译期执行，不在范围内）。方法：按函数体抽调用名建图，列出自调用与强连通分量（名字级，含同名不同函数的
+误报），逐个人工核对。判据：递归深度能否由程序（用户数据或用户构造的对象结构）推到无界，且两次递归之间不经过
+Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往返的递归（手写 → Java → 手写）每轮至少过一个检查点，
+由软件栈界兜住，只要求一轮的手写帧落在 SHADOW（64 KiB）内。
+
+| 位置 | 递归形态 | 深度上界 | 结论 |
+|---|---|---|---|
+| `java/lang/invoke/method_handle_ext.rs` `interpret` → `eval_function` → `interpret`（invokeBasic / invokeExact / invoke、resolvedHandle 分支） | LambdaForm 解释器按句柄组合层数递归，不经 Java 方法 | 用户构造的组合子层数（如循环里反复 `filterReturnValue`），**无界** | **已改**：`interpret` 入口判定栈界（`__stack_check()?`），耗尽抛 `StackOverflowError`，与 HotSpot 调深层句柄链同 |
+| Java 对象的 drop（编译器生成的 drop glue：`Arc<dyn ObjectVTable>` → 字段 `__Handle` → `Arc` …；`JvmError` 的 cause 链同） | 释放最后一个引用时沿引用链逐层 drop | 对象图中仅被前驱引用的链长（`LinkedList` 节点、单链表、长 cause 链），**无界** | **需改，越界**：属对象模型（`object.rs` / `handle.rs` 与宏生成的字段载体），见下「drop 链」 |
+| `java/lang/class_impl.rs` `for_class` ↔ `class_for_descriptor` | 数组类镜像按组件递归建 | 数组维数 ≤ 255（JVMS §4.4.1） | 有界 |
+| `java/lang/class_impl.rs` `__name_assignable`；`array.rs` `__view_into` / `__array_elem_assignable` / `is_instance_of` / `__shallow_copy`；`try_array_view` 环 | 数组协变判定按组件 / 视图源递归 | 维数 ≤ 255；协变视图只包一层（视图再取视图走同类型快路径） | 有界 |
+| `java/lang/reflect/array_impl.rs` `__multi_new` | 按维递归建多维数组 | 维数 ≤ 255（`newInstance` 先校验） | 有界 |
+| `anno_pool.rs` `skip_value` ↔ `skip_anno` | 注解元素值嵌套 | 类文件中的注解嵌套层数（javac 产出为源码嵌套层数，受属性长度限制） | 有界 |
+| `reflect_dispatch.rs` `reflect_invoke` → `injected_invoker::invoke` → `reflect_invoke` | 注入调用器转发到模板类 | 2 层（模板类不再是注入类） | 有界 |
+| `meta.rs` / `vm_stack.rs` / `monitor.rs` / `exec_context.rs` / `continuation_impl.rs` 等其余自调用 | 同名委托（`libc::…`、vtable 方法、`Pins::pin`）或循环实现（`class_extends` 上溯 64 层封顶） | — | 误报，无递归 |
+
+**drop 链（需改，未在本分支改）**：生成的对象是 `Arc` 计数，最后一个引用释放时由 drop glue 递归释放字段，深度等于只被前驱持有的
+引用链长。release 下每层约 2 帧、百字节量级，dev 更大；1 MiB 的协程栈上数千节点的链即越过 SHADOW，Linux < 6.13（无硬件 guard）
+时写入相邻槽，平台主线程（8 MiB）上 10⁵ 量级亦溢出。HotSpot 的回收不递归，这是 rava 独有的崩溃面。终态做法：对象引用载体
+（`Object` / `__Handle` 的 `Drop`）在「本次释放的是最后一个强引用」时按执行流深度计数，深度超过阈值（如 32）即把该 `Arc` 移入
+本载体的待释放队列而不就地递归，最外层 drop 返回前循环清空队列——释放顺序变化不可观察（无终结器），栈深恒定。改动面是
+对象模型与宏生成的字段载体（S7-3 范围），已报协调者另行派发。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
