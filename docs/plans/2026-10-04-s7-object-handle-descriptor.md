@@ -40,6 +40,7 @@
 | d840bb83（S7-2 基点，含 S7-1） | 13.89 MB | 0.80 MB | 1167 / 1290 MB（两次采样） |
 | 8bdcb04d（S7-2a） | **12.95 MB**（−0.94 对基点） | **0.31 MB**（wrapper impl 只剩 `__handle` / `as_any` / `__interface` / `__desc`） | 1326 / 1268 MB（两次采样；本机噪声 ±150 MB，与基点不可分，以服务器为准） |
 | 9260ead7（S7-2b） | **12.82 MB**（−0.13 对 S7-2a） | **0.02 MB**（wrapper 不再实现；只剩 14 个手写 / 基本类型 / 数组 / 载体 impl） | 1252 MB（一次采样，同上） |
+| aa5910b5（S7-2c，M2 后 `java_base_decl`） | **12.80 MB**（同口径基点 dd10731c 12.82，−0.02） | 0.02 MB | 未测（服务器同口径待测） |
 
 服务器（Linux，`crate_mem_profile.py` 同口径；作业 `s7m-<提交>`）：
 
@@ -55,6 +56,7 @@
 - S7-2a 本机 HelloWorld 展开分项（对基点 d840bb83）：`impl ObjectVTable for` 0.80 → 0.31 MB（−0.49，cells / word / ref 查询与 `__erased_inner` 删除，改由 trait 缺省经句柄目标转交）；extern 块 1.52 → 1.36 MB（−0.16，cells / from_any 存储钩子删除，只留 alloc）；`impl From for` 0.34 → 0.31 MB（祖先上转改为 `__r.upcast`）。`impl <固有>` 不变（6.25 MB）：Java 方法外壳与字段访问器的数量不变，只是取视图由 `&*self.vtable` 改为 `self.__r.vt()`。
 - S7-2b 本机 HelloWorld 展开分项（对 S7-2a）：`impl ObjectVTable for` 0.31 → 0.02 MB（−0.29，约 370 个 wrapper impl 全删）；`impl From for` 0.31 → 0.38 MB（+0.07，每类一条 `From<X> for Object` 取代 blanket）；`impl <固有>` 6.25 → 6.32 MB（+0.07，wrapper 固有 `is_jvm_null` / `__nn`）。净 −0.13 MB；trait 求解面少了约 370 个 `ObjectVTable` 实现者，借用检查 / coherence 的收益以服务器峰值为准。
 - S7-2b 本机 TSDS 展开 88.30 MB（macOS cfg，与服务器 Linux 口径的 90.19 MB 不可直接相减）。
+- S7-2c 本机展开（M2 后声明层 crate 为 `java_base_decl`，基点 dd10731c 同口径重测）：HelloWorld 12.82 → 12.80 MB，TSDS 79.92 → 79.83 MB（−0.09）。展开文本只少了 inner `__interface` 的按值接收与未命中释放，载体多一个字段——收益不在展开体量，而在 std 单态化：每个被实现的接口原有一份 `Arc<dyn I__VTable>` 的 drop / `drop_slow` 与 `Option<Arc<dyn I__VTable>>` 槽实例，现全部消失（TSDS 声明层展开中 `__Shared<dyn` / `Arc<dyn ..__VTable>` 出现 319 → 280，剩余为 `dyn ObjectVTable`）；分派侧每次 invokeinterface 少一次引用计数增减与一次查询（视图指针在载体建立时求出）。峰值以服务器为准。
 - 收益小于 §四 的估计：删掉的是判定类方法（`__view_into` / `__view_as` / `is_instance_of` / `__class_name`），每类 fn 数只少 2–4 个；借用检查的大头（Java 方法外壳、字段访问器、其余 ObjectVTable 方法）要到 S7-2 统一句柄 / S7-3 字段描述才动。
 
 本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
@@ -66,7 +68,7 @@
 ### 下一步
 
 - S7-2b（9260ead7，s7-2b 分支）已实施：本机 8 例 0 错 0 警、输出与期望一致；抽查（分布式）与服务器同口径测量（作业 `s7m-9260ead7`，HelloWorld / TSDS）待主会话执行，结果补入上表与拆 crate 方案 §7.7。
-- S7-2c：接口载体与 lambda 载体仍持 `__Shared<dyn I__VTable>`（接口载体 `__ref: Object` + `__iface_vtable`，lambda 载体 `__Shared<__DynFn>`），收敛到句柄另作一步：载体字段改 `__Ref<dyn I__VTable>`，`__interface` 查询改为 `__erased_vtable` 同形的视图指针填充。
+- S7-2c（aa5910b5，s7-2c 分支）已实施：接口载体字段改 `__IfaceRef<dyn I__VTable>`，`__interface` 改为视图指针填充，`__Shared<dyn I__VTable>` 删净；本机 12 例 0 错 0 警、输出与期望一致。服务器同口径测量（HelloWorld / TSDS）与抽查待主会话执行。
 
 ## 一、问题
 
@@ -269,6 +271,10 @@ S7 下：
     - downcast 审计：`__class_from_object` / `catch_as` 删「持有对象即 W」快路径（恒不命中），`Object.equals` 的 String 快路径改按描述符；接口载体与 lambda 载体收敛到句柄另作 S7-2c。
     - 审计结果（runtime 64 处 `downcast*::<>`）：只有上述 3 处假定「Object 持有 wrapper」；其余目标为基本类型盒（`i32` / `u16` / `f64` …）、`JArray<_>`、`JvmRef` 载体内值、`Object` 自身、`StackTraceFrames` 等非 wrapper 存储与 `__interface` / `__view_into` 槽位，语义不变。`try_checkcast::<W>` 对类 wrapper 不再命中 as_any 臂，调用方（`try_cast`、数组逐元素兼容）均有描述符 / `is_instance_of` 后续臂兜底。
     - 手写层只两处在 wrapper 上调 trait 方法（`String::units` 的 `is_jvm_null`、`Throwable.fillInStackTrace` 的 `__class_name`），分别改固有方法与 `Object::from(..).0.__class_name()`。
+  - S7-2c 实施要点（2026-10-04，s7-2c）：
+    - 接口载体字段改 `__ref: __IfaceRef<dyn I__VTable>`（runtime 非泛型逻辑一份）：句柄仍是 `Object`（载体须 `Deref<Target = Object>`、null 带接口静态类型），另持接口视图指针 `vt: Option<NonNull<dyn I__VTable>>`，在 `From<Object>`（含 `iface_upcasts!` 上转）时求出一次；分派直接经 `vt`，不再每次 Rc 克隆 + 查询。`vt` 为 None 而句柄非 null 即「不实现本接口」（代理 / default 回退 / AbstractMethodError 路径不变）。
+    - `ObjectVTable::__interface(self: Rc<Self>, slot)` 改为 `__interface(&self, slot)`，slot 为 `Option<NonNull<dyn I__VTable>>`，与 `__erased_vtable` 同形；类存储与 lambda 合成对象（`I__Lambda`）的应答同改；`__Shared<dyn I__VTable>` 全部删除（runtime 只剩 `__Shared<dyn ObjectVTable>` 一份）。lambda 的闭包存储 `__Shared<__DynFn>` 是按擦除签名的闭包对象，不在本步。
+    - 手写层 `from_any` 审计：仅 `Throwable` 回溯帧（`StackTraceFrames`，非 wrapper）一处，形态不变。
 - **S7-3 浅拷贝 / 反射字段 / Unsafe 槽位走 `fields` 描述**：删掉按类的 `__shallow_copy` / `__reflect_field` / `__unsafe_*`。
 - **S7-4 类初始化骨架去按类展开**。
 - **S7-5 性能验收**（§4.3）与 3 个 OOM 例、Digester 实测；更新 §7.5.4 账。

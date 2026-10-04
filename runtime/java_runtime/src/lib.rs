@@ -560,12 +560,12 @@ pub mod prelude {
     #![allow(unused_imports)]
     pub use super::array::JArray;
     pub use super::class_desc::__ClassDesc;
-    pub use super::handle::{__Handle, __Ref};
+    pub use super::handle::{__Handle, __IfaceRef, __Ref};
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
     pub use super::java::lang::{__RefAccess, __ref_slot_access};
-    pub use super::java::lang::{__class_from_object, __erased_view, __iface_missing, __iface_vtable};
+    pub use super::java::lang::{__class_from_object, __erased_view, __iface_missing};
     pub use super::java::lang::Object__clone_base;
     pub use super::java::lang::String;
     pub use super::sync_model::{__AnyRef, __PrimCell, __RefSlot, __Shared, __ThreadSafe};

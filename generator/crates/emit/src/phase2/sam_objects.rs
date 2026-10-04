@@ -169,7 +169,8 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     // 实例判定按站点隐藏类自己的超类型集合（hidden_class! 声明的 all_supertypes：Object + 函数式
     // 接口 + 标记接口 / Serializable 及其超接口闭包），checkcast / instanceof / isInstance 同源
     l.push("    fn is_instance_of(&self, type_id: &str) -> bool { __is_subtype_of(self.1, type_id) }".into());
-    l.push("    fn __interface(self: __Shared<Self>, slot: &mut dyn std::any::Any) {".into());
+    // 接口视图指针填入（S7-2c，与 `__erased_vtable` 同形）：句柄是持有本对象的 Object，指针不持有
+    l.push("    fn __interface(&self, slot: &mut dyn std::any::Any) {".into());
     let mut targets: Vec<(&str, String)> = Vec::new();
     for jbin in &spec.closure {
         let Some(jci) = reg.get(jbin) else { continue };
@@ -178,7 +179,7 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
         }
         let jpath = quote_path(ctx, jbin, host);
         l.push(format!(
-            "        if let Some(s) = slot.downcast_mut::<Option<__Shared<dyn {jpath}__VTable>>>() {{ *s = Some(self); return; }}"
+            "        if let Some(s) = slot.downcast_mut::<Option<std::ptr::NonNull<dyn {jpath}__VTable>>>() {{ *s = Some(std::ptr::NonNull::from(self as &dyn {jpath}__VTable)); return; }}"
         ));
         targets.push((jbin, jpath));
     }

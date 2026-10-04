@@ -32,9 +32,10 @@ fn is_instance_decl(f: &FnItem) -> bool {
 /// - `Iface__VTable`：接口实例方法的**擦除签名** trait（无类型参数，对象安全）——
 ///   等价 JVM 的 itable：运行时只认擦除后的接口，不认类型实参。实现类的 `java_class!`
 ///   块按 `impl Iface for Class` 为其 `__inner` 生成实现。
-/// - 载体 `Iface<E>`：持有一个 `Object` 接口引用（与 `Object` 双向互转 +
-///   `Deref<Target = Object>`）。实例方法保持 Java 的泛型签名（`next() -> Result<E>`），
-///   内部经 `ObjectVTable::__interface` 取得对象的 `Iface__VTable` 视图后分派，
+/// - 载体 `Iface<E>`：持有一个接口引用 `__IfaceRef<dyn Iface__VTable>`（句柄 `Object` + 接口
+///   视图指针，与 `Object` 双向互转 + `Deref<Target = Object>`，S7-2c）。实例方法保持 Java 的
+///   泛型签名（`next() -> Result<E>`），经建立引用时由 `ObjectVTable::__interface` 求出的
+///   `Iface__VTable` 视图分派，
 ///   类型变量位置的实参 / 返回值在 `Object` 与 `E` 之间转换（等价 javac 插入的 checkcast）。
 ///   函数式接口的 lambda 实例是 A-5 合成对象（`Iface__Lambda`，sam_objects 生成），
 ///   实现 `Iface__VTable` 并经 `__interface` 应答——SAM 与 default 方法都走 vtable 分派。
@@ -82,7 +83,7 @@ pub(crate) fn expand_interface(
             #(#keep_attrs)*
             #[inline]
             pub #sig {
-                <#owner_ty as ::std::convert::From<Object>>::from(::std::clone::Clone::clone(&self.__ref))
+                <#owner_ty as ::std::convert::From<Object>>::from(::std::clone::Clone::clone(&*self.__ref))
                     .#mname(#(#args),*)
             }
         });
@@ -143,7 +144,7 @@ pub(crate) fn expand_interface(
         };
         let proxy_fallback = quote! {
             if let ::std::option::Option::Some(__pr) = ObjectVTable::__proxy_invoke(
-                &*self.__ref.0, #binary_name, #mname_str, #desc,
+                &*(*self.__ref).0, #binary_name, #mname_str, #desc,
                 ::std::vec![#(::std::convert::Into::<Object>::into(::std::clone::Clone::clone(&#args))),*]) {
                 let __pv: Object = __pr?;
                 return #proxy_ret;
@@ -157,10 +158,10 @@ pub(crate) fn expand_interface(
             #default_method
             #(#keep_attrs)*
             pub #sig {
-                // null 接收者 NPE、建帧栈界检查与取接口 vtable 在 runtime 的 `__iface_vtable`
-                if let Some(__vt) = __iface_vtable::<dyn #vtable_ident>(&self.__ref)? {
+                // null 接收者 NPE、建帧栈界检查与取接口视图在 runtime 的 `__IfaceRef::enter`
+                if let Some(__vt) = self.__ref.enter()? {
                     return Ok(::std::convert::From::from(
-                        <dyn #vtable_ident>::#mname(&*__vt #(, ::std::convert::Into::into(#args))*)?));
+                        <dyn #vtable_ident>::#mname(__vt #(, ::std::convert::Into::into(#args))*)?));
                 }
                 #proxy_fallback
                 #default_fallback
@@ -195,7 +196,7 @@ pub(crate) fn expand_interface(
 
         #[derive(::core::clone::Clone)]
         pub struct #struct_ident #impl_g #where_c {
-            __ref: Object,
+            __ref: __IfaceRef<dyn #vtable_ident>,
             __phantom: ( #( ::std::marker::PhantomData<fn() -> #type_params>, )* ),
         }
 
@@ -203,18 +204,18 @@ pub(crate) fn expand_interface(
         // 数组类、存储检查与 checkcast 目标元素类由此取得，值语义仍是 Java null
         impl #impl_g ::core::default::Default for #struct_ident #ty_g #where_c {
             fn default() -> Self {
-                Self { __ref: #null_ref, __phantom: ::std::default::Default::default() }
+                Self { __ref: __IfaceRef::null(#null_ref), __phantom: ::std::default::Default::default() }
             }
         }
 
         impl #impl_g From<Object> for #struct_ident #ty_g #where_c {
             fn from(obj: Object) -> Self {
-                Self { __ref: obj, __phantom: ::std::default::Default::default() }
+                Self { __ref: __IfaceRef::new(obj), __phantom: ::std::default::Default::default() }
             }
         }
 
         impl #impl_g From<#struct_ident #ty_g> for Object #where_c {
-            fn from(iface: #struct_ident #ty_g) -> Object { iface.__ref }
+            fn from(iface: #struct_ident #ty_g) -> Object { iface.__ref.into_object() }
         }
 
         // 载体进入类型位置（A-4 批次 3+：形参 / 返回 / 局部 / 字段）后，字段存储层
@@ -235,7 +236,7 @@ pub(crate) fn expand_interface(
 
         impl #impl_g ::std::ops::Deref for #struct_ident #ty_g #where_c {
             type Target = Object;
-            fn deref(&self) -> &Object { &self.__ref }
+            fn deref(&self) -> &Object { &*self.__ref }
         }
 
         impl #impl_g #struct_ident #ty_g #where_c {

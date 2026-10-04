@@ -5,7 +5,8 @@
 //!   - `ClassName__VTable` trait（虚方法分派接口，含 default impl）
 //!   - `ClassName__inner` 存储 struct（平铺字段，无 `_super` 嵌套）
 //!   - `impl AncestorVTable for ClassName__inner`（字段访问器 + 覆盖方法）
-//!   - `pub struct ClassName { vtable: Rc<dyn ClassName__VTable>, any: Rc<dyn Any> }`
+//!   - `pub struct ClassName { __r: __Ref<dyn ClassName__VTable> }`（句柄 + 本类视图指针，S7-2）
+//!   - 接口：载体 `pub struct Iface { __ref: __IfaceRef<dyn Iface__VTable> }`（Object 句柄 + 接口视图指针，S7-2c）
 //!   - `impl From<ClassName> for Object`（Object 直接持有存储，S7-2b）
 //!   - 字段访问器委托 + 虚方法委托 + 构造器（on wrapper）
 //!   - `ClassName__methodName_base` 自由函数（super() 调用路由）
