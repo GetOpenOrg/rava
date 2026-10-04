@@ -190,7 +190,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 
 1. `9b74cb28` 独占临时值不再克隆：Java 调用结果（`?`）、静态字段读、字段 getter 作实参 / checkcast 源时直接移交（`Expr::is_owned_temp`）。LynchBell 生成树 `Clone::clone(&` 6292 → 5974。
 2. `e983141d` 单用临时值按值移交：`let _tN = e;` 后仅在紧随语句以 `Clone::clone(&_tN)` 出现一次时改为 `_tN`（循环头 / 闭包除外；同名重绑保守不改）。LynchBell 生成树 939 行受益。
-3. `9bdd3095` 删除本类 static 字段的丢弃读：`let _ = Own::f()?;`（值已折叠、只为类初始化副作用保留）在本类代码中恒为空操作（JVMS §5.5，本类代码执行时本类已初始化或正由当前线程初始化），整行删去；他类读取不动。LynchBell 生成树删 30 行（`String.coder()` 的 `COMPACT_STRINGS` 读、各类 `$assertionsDisabled` 读）。
+3. `9bdd3095` 删除本类 static 字段的丢弃读：`let _ = Own::f()?;`（值已折叠、只为类初始化副作用保留）在本类代码中恒为空操作（JVMS §5.5，本类代码执行时本类已初始化或正由当前线程初始化），整行删去；他类读取不动。LynchBell 生成树删二十余行（`String.coder()` 的 `COMPACT_STRINGS` 读、各类 `$assertionsDisabled` 读）。
 
 ### 5. 测试流程效率（用户 2026-10-01）
 
