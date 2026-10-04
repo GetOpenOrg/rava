@@ -129,6 +129,13 @@ pub(super) struct Stats {
     pub(super) ceval: [u64; 3],
     /// 各阶段结束时的峰值 RSS（MB）
     rss_marks: Vec<(&'static str, u64)>,
+    /// 按名取类延后放行：放行轮数 / 放行站点数（`class_lookup.rs::lookup_release`）
+    pub(super) releases: [u64; 2],
+    /// 引擎建立时刻与首次放行时刻：首次放行之后的耗时即延后放行引起的后续传播
+    born: Instant,
+    first_release: Option<Instant>,
+    /// 首次放行时的工作量快照：[分析次数, 站点重跑, lambda 重跑, 流边数, 集合并入次数]
+    pub(super) at_release: Option<[u64; 5]>,
 }
 
 impl Default for Stats {
@@ -151,6 +158,10 @@ impl Default for Stats {
             aux_analyses: 0,
             ceval: [0; 3],
             rss_marks: Vec::new(),
+            releases: [0; 2],
+            born: Instant::now(),
+            first_release: None,
+            at_release: None,
         }
     }
 }
@@ -222,6 +233,17 @@ impl Stats {
         self.acc[phase_index(self.cur)] += now - self.since;
         self.cur = self.stack.pop().unwrap_or(Phase::Setup);
         self.since = now;
+    }
+
+    /// 一轮按名取类放行（n = 放行站点数）
+    pub(super) fn released(&mut self, n: usize, edges: usize, adds: u64) {
+        self.releases[0] += 1;
+        self.releases[1] += n as u64;
+        if self.first_release.is_none() {
+            self.first_release = Some(Instant::now());
+            let analyses = self.per_method.iter().map(|&c| u64::from(c)).sum();
+            self.at_release = Some([analyses, self.site_reruns, self.lcall_reruns, edges as u64, adds]);
+        }
     }
 
     pub(super) fn mark_rss(&mut self, at: &'static str) {
@@ -303,6 +325,9 @@ impl<'a> Engine<'a> {
             "reprocess_same_analysis": s.reprocess,
             "shared_analyses": s.shared,
             "site_reruns": s.site_reruns,
+            // 按名取类延后放行：[轮数, 站点数, 首次放行时刻 ms, 首次放行后耗时 ms]
+            "lookup_releases": [s.releases[0], s.releases[1], s.first_release.map_or(0, |t| ms(t - s.born)), s.first_release.map_or(0, |t| ms(t.elapsed()))],
+            "at_first_release": s.at_release,
             "lcall_reruns": s.lcall_reruns,
             "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,

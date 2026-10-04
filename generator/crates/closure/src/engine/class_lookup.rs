@@ -140,7 +140,7 @@ impl<'a> Engine<'a> {
         self.xreaders.entry(m).or_default().insert(off);
         // 服务实现类的反射构造点：所指类由 JCA 规则按被请求的算法补种（实例化 + 构造器入链），站点本身按推不出处理，
         // 不按类名字段的字符串集解析——与求值时机无关，恒为同一结果
-        if self.man.seeds.jca.instantiation_hosts.iter().any(|h| *h == self.methods[m].key.to_string()) {
+        if self.lookup_hosts.contains(&self.methods[m].key) {
             self.lookup_top.insert((m, off));
             return (Vec::new(), true);
         }
@@ -186,6 +186,10 @@ impl<'a> Engine<'a> {
     pub(super) fn lookup_release(&mut self) -> bool {
         let ready: Vec<(usize, u32)> =
             std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_unsure.contains(w) && !self.lookup_released.contains(w)).collect();
+        if !ready.is_empty() {
+            let (edges, adds) = (self.graph.edge_count, self.graph.adds[0]);
+            self.ctx.stats.borrow_mut().released(ready.len(), edges, adds);
+        }
         for &w in &ready {
             self.lookup_trial.insert(w);
             if self.in_swork.insert(w) {

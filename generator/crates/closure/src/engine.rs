@@ -419,6 +419,8 @@ pub struct Engine<'a> {
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 服务实现类的反射构造点（清单 `[jca] instantiation_hosts`，构造时解析）：其中按名取类恒按推不出处理
+    lookup_hosts: HashSet<MemberRef>,
     /// 本次按名取类求值中，名字推不出（某支无约束任意串，或形参 / 字段名字集不完备）
     lookup_incomplete: bool,
     /// 名字曾推不出的按名取类调用点（恒按推不出处理，未放行时不按已知名字加载）

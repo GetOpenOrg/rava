@@ -153,6 +153,7 @@ impl<'a> Engine<'a> {
             fwork: VecDeque::new(),
             xreaders: HashMap::default(),
             lookup_top: HashSet::default(),
+            lookup_hosts: man.seeds.jca.instantiation_hosts.iter().filter_map(|h| super::seeds::parse_member(h)).collect(),
             lookup_partial: false,
             lookup_incomplete: false,
             lookup_unsure: HashSet::default(),
