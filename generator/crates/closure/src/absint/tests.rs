@@ -264,3 +264,63 @@ fn symbolic_offset_flows_to_call_and_dies_in_arithmetic() {
     assert!(matches!(arg(5), Some(V::Offset(f)) if f.name == "next"));
     assert_eq!(arg(15), Some(V::Top));
 }
+
+/// 桩 Oracle：`p/M.isSub` 是类镜像子类型判定
+struct SubTests;
+
+impl Oracle for SubTests {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        None
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+    fn mirror_subtype_test(&self, m: &MemberRef) -> bool {
+        m.owner == "p/M" && m.name == "isSub"
+    }
+}
+
+/// `if (K.class.isSub(c)) g(c); h(c);`：成立一侧的 c 来源不变、带收窄标记（类型流取跳转偏移处的节点），
+/// 该偏移发 MirrorSub（输入为原值）；汇合后标记消失
+#[test]
+fn mirror_subtype_test_narrows_true_side() {
+    let test = MemberRef { owner: "p/M".into(), name: "isSub".into(), desc: "(Lp/M;)Z".into() };
+    let g = MemberRef { owner: "p/A".into(), name: "g".into(), desc: "(Lp/M;)V".into() };
+    let h = MemberRef { owner: "p/A".into(), name: "h".into(), desc: "(Lp/M;)V".into() };
+    let code = code_of(
+        vec![
+            (0, op::LDC, Operand::Ldc(Const::Class("p/K".into()))),
+            (2, ALOAD_0, Operand::None),
+            (3, op::INVOKEVIRTUAL, Operand::Method(test, false)),
+            (6, IFEQ, Operand::Branch(13)),
+            (9, ALOAD_0, Operand::None),
+            (10, op::INVOKESTATIC, Operand::Method(g, false)),
+            (13, ALOAD_0, Operand::None),
+            (14, op::INVOKESTATIC, Operand::Method(h, false)),
+            (17, op::RETURN, Operand::None),
+        ],
+        18,
+    );
+    let a = analyze("p/A", "(Lp/M;)V", true, &code, &SubTests);
+    let arg = |at: u32| {
+        a.events.iter().find_map(|(o, e)| match e {
+            Event::Invoke { args, .. } if *o == at => Some(args[0].clone()),
+            _ => None,
+        })
+    };
+    let narrowed = arg(10).expect("g 调用");
+    assert_eq!(narrowed.mirror_narrowed(), Some(6));
+    assert_eq!(narrowed.srcs().as_ref(), &[Src::Param(0)]);
+    assert!(narrowed.obj().is_none());
+    assert_eq!(arg(14).expect("h 调用").mirror_narrowed(), None);
+    let ev = a.events.iter().find_map(|(o, e)| match e {
+        Event::MirrorSub(c, v) if *o == 6 => Some((c.clone(), v.clone())),
+        _ => None,
+    });
+    let (c, v) = ev.expect("MirrorSub 事件");
+    assert_eq!(c, "p/K");
+    assert_eq!(v.mirror_narrowed(), None);
+}

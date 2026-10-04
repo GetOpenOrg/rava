@@ -74,6 +74,8 @@ pub(super) enum MirrorOp {
     Component,
     /// 每个类镜像所指成员类的声明类镜像（`getDeclaringClass0`）
     Declaring,
+    /// 所指类 ⊂ 该类型（类型 id）的类镜像（类镜像子类型判定成立一侧，见 `absint/narrow.rs`）
+    Sub(u32),
 }
 
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）

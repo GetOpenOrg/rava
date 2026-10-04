@@ -136,6 +136,17 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, v, obj);
                     self.feed(&fs, Node::S(m, off), NOT_SUB | cid);
                 }
+                Event::MirrorSub(c, v) => {
+                    // 类镜像子类型判定成立一侧的收窄值：输入值集中所指类 ⊂ c 的类镜像
+                    let (class, kid) = (self.id(CLASS), self.id(c));
+                    let dst = Node::S(m, off);
+                    for f in self.feeds(m, v, class) {
+                        match f {
+                            Feed::N(n) => self.mflow(n, dst, MirrorOp::Sub(kid)),
+                            Feed::S(s) => self.mirror_into(MirrorOp::Sub(kid), &s, dst),
+                        }
+                    }
+                }
                 Event::Catch(ct) => {
                     let t = ct.clone().unwrap_or_else(|| THROWABLE.to_string());
                     self.touch(&t, Level::Type, via("catch"));

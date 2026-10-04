@@ -518,6 +518,9 @@ impl Oracle for Facts<'_, '_> {
     fn param(&self, i: u16) -> Option<V> {
         self.params.get(i as usize).cloned().flatten()
     }
+    fn mirror_subtype_test(&self, m: &MemberRef) -> bool {
+        self.ctx.man.is_mirror_subtype_test(&m.to_string())
+    }
     fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
         self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
     }

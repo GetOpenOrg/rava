@@ -461,6 +461,11 @@ class_initializers = [
     "jdk/internal/misc/Unsafe.ensureClassInitialized:(Ljava/lang/Class;)V",
     "java/io/ObjectStreamClass.hasStaticInitializer:(Ljava/lang/Class;)Z",
 ]
+# 类镜像子类型判定：`K.class.isAssignableFrom(x)` 的条件分支成立一侧，x 的类镜像值集收窄为所指类 ⊂ K 者
+# （如 ObjectStreamClass.computeDefaultSUID 只对可序列化类走到 hasStaticInitializer 与字段枚举）
+mirror_subtype_tests = [
+    "java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z",
+]
 # 成员声明类初始化点：下列方法里对 class_initializers 的调用，Class 实参恒为经该路径正被链接 / 访问的成员的声明类。
 # handle：DirectMethodHandle 的 getStatic / putStatic / invokeStatic / newInvokeSpecial 句柄、VarHandles 的静态字段句柄；
 # reflect：反射访问器工厂的 Method / Constructor / 静态 Field。分析器不按值集（MemberName.clazz 等跨全部成员的汇合）
