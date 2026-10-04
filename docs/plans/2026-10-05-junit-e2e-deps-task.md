@@ -128,4 +128,15 @@
    含 fetch_pilot_deps 服务器 mvn 取包先决验证）——结果追加于下。
 3. **J0.3 期望复核**：10 例以参考 JDK（Temurin 21.0.11）+ 真 jar（junit 4.13.2 / hamcrest 3.0）javac+java 双跑，
    **10/10 双跑稳定且与 tests/expected/TestJunit*.txt 逐字一致**。
+4. **依赖锁定口径裁定（用户 2026-10-05）：按测试文件实际依赖锁包，非 pom 全集**——J1/J2 验收范围 = 锁定集，
+   不再按 52 或 92 口径全量核。锁定集推导（import 面 → 提供包 → jar，实测核对）：
+   - `63_junit` 10 例 import = `org.junit.{Assert,Assume,runner.JUnitCore,runner.Result,runner.notification.Failure,
+     Before,BeforeClass,After,AfterClass,Ignore,Test}` + `org.hamcrest.{MatcherAssert,Matcher,BaseMatcher,
+     Description,CoreMatchers.*}`；
+   - lib_pilot m1 仅 org.hamcrest.*；m2–m5 增加 org.junit.*；
+   - 提供方核对：`hamcrest-3.0.jar`（Automatic-Module-Name: **org.hamcrest**，含 org/hamcrest/，sha256 5d66b6a4…）、
+     `junit-4.13.2.jar`（Automatic-Module-Name: **junit**，含 org/junit/，sha256 8e495b63…）；
+     `hamcrest-core-3.0.jar` 为 1-class 搬迁壳，不入锁；
+   - **锁定集 = [hamcrest-3.0, junit-4.13.2]（类路径序，m2–m5 golden 同序）**；J1 模块名验收 = 2/2 正确 +
+     合成夹具 6 例（机制泛化性由夹具保证，不靠 jar 数量）。
 
