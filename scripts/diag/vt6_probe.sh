@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # a3-T6 虚拟线程规模剖析（服务器作业用，Linux）：参考 JDK 两次运行 TestVirtualThreadScale 取 expected，
 # 转译 tests/perf/VirtualThreadScale 后按各模式采样内存时间线与耗时。产物在 build/vt6/。
-# 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted）]
+# 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted split）]
 # 环境：SKIP_JDK=1 跳过参考 JDK 运行；PERF=1 每模式另跑一次 perf record，报告写 build/vt6/<profile>_<mode>_perf*.txt
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 PROFILE=${1:-dev}; N=${2:-100000}; shift 2 2>/dev/null || shift $#
-MODES=${*:-sleep park unstarted}
+MODES=${*:-sleep park unstarted split}
 OUT=build/vt6; mkdir -p $OUT
 JH=$(scripts/fetch_reference_jdk.sh) || exit 1
 echo "== host: $(uname -r) $(uname -m) cpus=$(nproc) mem=$(free -m | awk '/Mem:/{print $2}')MiB perf=$(command -v perf || echo none)"
@@ -33,11 +33,16 @@ echo "== bin $BIN $(stat -c %s "$BIN") B"
 
 for mode in $MODES; do
   ms=2000; [ $mode = unstarted ] && ms=3000
-  python3 scripts/diag/rss_timeline.py $OUT/${PROFILE}_$mode.tsv /usr/bin/time -v "$BIN" $N $ms $mode \
-    > $OUT/${PROFILE}_$mode.out 2> $OUT/${PROFILE}_$mode.err
-  echo "== $PROFILE $mode n=$N rc=$?"
+  # 计时：不带采样（smaps 读取持 mmap_lock，会拖慢被测进程）
+  /usr/bin/time -v "$BIN" $N $ms $mode > $OUT/${PROFILE}_$mode.out 2> $OUT/${PROFILE}_$mode.err
+  echo "== $PROFILE $mode n=$N rc=$? (timing)"
   cat $OUT/${PROFILE}_$mode.out
-  grep -E '^phase|rss_timeline|Elapsed|Maximum resident|context switches|User time|System time|Minor' $OUT/${PROFILE}_$mode.err
+  grep -E '^phase|Elapsed|Maximum resident|context switches|User time|System time|Minor' $OUT/${PROFILE}_$mode.err
+  # 内存分布：另跑一次带采样
+  python3 scripts/diag/rss_timeline.py $OUT/${PROFILE}_$mode.tsv "$BIN" $N $ms $mode \
+    > /dev/null 2> $OUT/${PROFILE}_${mode}_mem.err
+  echo "== $PROFILE $mode rc=$? (memory)"
+  grep -E '^phase|rss_timeline' $OUT/${PROFILE}_${mode}_mem.err
   if [ -n "${PERF:-}" ]; then
     P=$OUT/${PROFILE}_$mode
     perf record -F 499 -g -o $P.data -- "$BIN" $N $ms $mode > /dev/null 2> $P.perf_rec.log

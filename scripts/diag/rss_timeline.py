@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """进程内存时间线采样（Linux，a3-T6 规模剖析用）。
 
-用法：rss_timeline.py <out.tsv> <cmd...>
-每 100 ms 读一次被测进程（沿子进程链取最深后代）的 /proc/<pid>/status 与 /proc/<pid>/smaps，按映射分类汇总驻留：
+用法：rss_timeline.py [--smaps-every K] <out.tsv> <cmd...>
+每 100 ms 读一次被测进程（沿子进程链取最深后代）的 /proc/<pid>/status；每 K 次（缺省 10，即约 1 s）另读
+/proc/<pid>/smaps 按映射分类汇总驻留（smaps 逐页表遍历、持 mmap_lock，驻留大时单次可达数百 ms，会拖慢被测进程的
+mmap / mprotect——计时另跑一次不带采样）：
   stack —— 协程栈 slab（匿名映射，大小为槽跨度 1 MiB + 1 页 的整数倍且 ≥16 槽）；
   anon  —— 其余匿名映射（malloc 堆 / arena、平台线程栈等）；
   file  —— 文件映射（二进制代码与只读数据）。
@@ -19,10 +21,10 @@ STRIDE = (1 << 20) + PAGE
 MAP_RE = re.compile(r"^([0-9a-f]+)-([0-9a-f]+) \S+ \S+ \S+ (\d+)\s*(.*)$")
 
 
-def sample(pid: int) -> dict | None:
+def sample(pid: int, with_smaps: bool) -> dict | None:
     try:
         status = open(f"/proc/{pid}/status").read()
-        smaps = open(f"/proc/{pid}/smaps").read().splitlines()
+        smaps = open(f"/proc/{pid}/smaps").read().splitlines() if with_smaps else None
     except OSError:
         return None
     f = {}
@@ -30,6 +32,8 @@ def sample(pid: int) -> dict | None:
         k, _, v = line.partition(":")
         if k in ("VmRSS", "VmPTE", "Threads", "VmHWM"):
             f[k] = int(v.split()[0])
+    if smaps is None:
+        return f
     acc = {"stack": 0, "anon": 0, "file": 0, "stack_maps": 0, "maps": 0}
     kind = None
     for line in smaps:
@@ -65,7 +69,12 @@ def leaf(pid: int) -> int:
 
 
 def main() -> int:
-    out, cmd = sys.argv[1], sys.argv[2:]
+    args = sys.argv[1:]
+    every = 10
+    if args[0] == "--smaps-every":
+        every, args = int(args[1]), args[2:]
+    out, cmd = args[0], args[1:]
+    tick = 0
     p = subprocess.Popen(cmd)
     t_start = time.time()
     peak: dict[str, int] = {}
@@ -73,7 +82,8 @@ def main() -> int:
     with open(out, "w") as fo:
         fo.write("\t".join(cols) + "\n")
         while p.poll() is None:
-            s = sample(leaf(p.pid))
+            s = sample(leaf(p.pid), tick % every == 0)
+            tick += 1
             if s:
                 s["wall_ms"] = int(time.time() * 1000)
                 fo.write("\t".join(str(s.get(c, "")) for c in cols) + "\n")
