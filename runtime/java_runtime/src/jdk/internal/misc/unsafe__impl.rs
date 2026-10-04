@@ -142,14 +142,14 @@ fn _static_field_of(offset: i64) -> Option<(std::string::String, std::string::St
 fn _static_ref_get(offset: i64) -> Option<Result<Object>> {
     let (decl, name) = _static_field_of(offset)?;
     Some(crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), None)
-        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用读：{}.{} 无字段闭包", decl, name)))
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用读：{}.{} 无字段闭包（{}）", decl, name, crate::field_reflect::describe_static(&decl))))
 }
 
 /// 静态引用字段写（`_static_ref_get` 的镜像）。
 fn _static_ref_set(offset: i64, v: Object) -> Option<Result<()>> {
     let (decl, name) = _static_field_of(offset)?;
     Some(crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), Some(v))
-        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用写：{}.{} 无字段闭包", decl, name))
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态引用写：{}.{} 无字段闭包（{}）", decl, name, crate::field_reflect::describe_static(&decl)))
         .map(|_| ()))
 }
 
@@ -164,7 +164,7 @@ static STATIC_RMW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub(super) fn _static_rmw(offset: i64, f: &mut dyn FnMut(Object) -> Option<Object>) -> Option<Result<Object>> {
     let (decl, name) = _static_field_of(offset)?;
     let field = |v: Option<Object>| crate::reflect_dispatch::reflect_field(&decl, &name, Object::default(), v)
-        .unwrap_or_else(|| panic!("stub: Unsafe 静态字段读-改-写：{}.{} 无字段闭包", decl, name));
+        .unwrap_or_else(|| panic!("stub: Unsafe 静态字段读-改-写：{}.{} 无字段闭包（{}）", decl, name, crate::field_reflect::describe_static(&decl)));
     if let Err(e) = field(None) {
         return Some(Err(e));
     }

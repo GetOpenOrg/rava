@@ -165,7 +165,7 @@ impl<'a> Engine<'a> {
     /// 方法 m 中字符串值 v 的全部名字
     pub(super) fn names_of(&mut self, m: usize, v: &V) -> Keys {
         match v {
-            V::Str(s) => return Keys::Set([s.clone()].into()),
+            V::Str(s, _) => return Keys::Set([s.clone()].into()),
             V::Null => return Keys::default(),
             _ => {}
         }
@@ -286,7 +286,7 @@ impl<'a> Engine<'a> {
             let up = self.id(&mref.owner);
             let s = match self.ctor_key_slot(up, &mref.desc, depth + 1) {
                 KeySlot::Param(j) => match args.get(j + 1) {
-                    Some(V::Str(s)) => KeySlot::Lit(s.clone()),
+                    Some(V::Str(s, _)) => KeySlot::Lit(s.clone()),
                     Some(V::Ref { src, .. }) => match src[..] {
                         [Src::Param(k)] if k > 0 => KeySlot::Param(k as usize - 1),
                         _ => KeySlot::Unknown,

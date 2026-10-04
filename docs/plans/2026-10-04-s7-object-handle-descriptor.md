@@ -50,6 +50,8 @@
 | 8f515016（S7-0，jp1） | 14.76 MB | 1440 MB / 29.2 s | 106.07 MB | 8642 MB / 248.5 s |
 | a6a00c06（S7-1，ubuntu） | **13.87 MB** | **1408 MB / 25.4 s** | **98.27 MB** | **8192 MB / 209.5 s** |
 | 8bdcb04d（S7-2a，jp2） | **12.94 MB** | **1359 MB / 24.6 s** | **90.19 MB** | **7597 MB / 203.9 s** |
+| aa5910b5（S7-2c，jp2） | 12.80 MB | 1242 MB | 79.83 MB | 6153 MB / 155.7 s |
+| dc61397b（S7-3a+b+x，us1） | 13.83 MB | 1338 MB / 25.2 s | 87.78 MB | 6571 MB / 179.1 s |
 
 - S7-0 只增代码：TSDS 展开 +2.70 MB、峰值 +102 MB（3432 个描述符 static 与固有常量）。
 - S7-1 对起点：TSDS 展开 −5.10 MB（−4.9%）、峰值 −348 MB（−4.1%）、声明 crate 墙钟 −11.5 s；HelloWorld 展开 −0.59 MB、峰值 −40 MB。按 §7.7 余量换算，FHP（ef600555 10495 MB）预计约 10.1 GB，TJNP 约 9.0 GB。
@@ -57,6 +59,8 @@
 - S7-2b 本机 HelloWorld 展开分项（对 S7-2a）：`impl ObjectVTable for` 0.31 → 0.02 MB（−0.29，约 370 个 wrapper impl 全删）；`impl From for` 0.31 → 0.38 MB（+0.07，每类一条 `From<X> for Object` 取代 blanket）；`impl <固有>` 6.25 → 6.32 MB（+0.07，wrapper 固有 `is_jvm_null` / `__nn`）。净 −0.13 MB；trait 求解面少了约 370 个 `ObjectVTable` 实现者，借用检查 / coherence 的收益以服务器峰值为准。
 - S7-2b 本机 TSDS 展开 88.30 MB（macOS cfg，与服务器 Linux 口径的 90.19 MB 不可直接相减）。
 - S7-2c 本机展开（M2 后声明层 crate 为 `java_base_decl`，基点 dd10731c 同口径重测）：HelloWorld 12.82 → 12.80 MB，TSDS 79.92 → 79.83 MB（−0.09）。展开文本只少了 inner `__interface` 的按值接收与未命中释放，载体多一个字段——收益不在展开体量，而在 std 单态化：每个被实现的接口原有一份 `Arc<dyn I__VTable>` 的 drop / `drop_slow` 与 `Option<Arc<dyn I__VTable>>` 槽实例，现全部消失（TSDS 声明层展开中 `__Shared<dyn` / `Arc<dyn ..__VTable>` 出现 319 → 280，剩余为 `dyn ObjectVTable`）；分派侧每次 invokeinterface 少一次引用计数增减与一次查询（视图指针在载体建立时求出）。峰值以服务器为准。
+- S7-3 回退定位（dc61397b 对 S7-2c：HW 展开 +1.03 MB、峰值 +96 MB，TSDS 展开 +7.95 MB、峰值 +418 MB）。本机 HelloWorld 同口径分项（基点 main 6f93f1c6 12.81 MB → dc61397b 13.85 MB）：`impl <固有>` +0.75 MB，几乎全部是 `__STATICS`（435 个类、1184 项，0.81 MB：每项两次 `transmute` 的展开文本，且宏为全部类全部静态字段展开，而登记只用 97 个类）；`static` +0.27 MB（描述符 `fields` 0.21 MB 与 `alloc`）；删掉的 `__reflect_field` 只有 0.07 MB。
+- **S7-3c 收窄**：① 静态字段表只为档案内可按名访问的静态字段展开——生成器以登记同一判定（`dispatch::static_reflected`：用户树类 / 全成员反射类的全部静态字段，其余类限序列化协议名与按名查字段名）在字段属性上打 `reflect = true`，宏只为带标记的字段展开项；② 表项与 `fields` 项改为 const fn 构造（`__StaticFieldDesc::of_prim / of_ref::<T>(java, getter, setter)`、`__FieldDesc::of_ref::<T> / of_prim`），擦除与协议实例化收在运行时，展开文本每项一行。本机 HelloWorld 展开 13.85 → **12.98 MB**（对基点 +0.17 MB：`fields` 描述 + `alloc`，均为浅拷贝 / Unsafe / 反射的必需数据；`__STATICS` 103 项）。
 - 收益小于 §四 的估计：删掉的是判定类方法（`__view_into` / `__view_as` / `is_instance_of` / `__class_name`），每类 fn 数只少 2–4 个；借用检查的大头（Java 方法外壳、字段访问器、其余 ObjectVTable 方法）要到 S7-2 统一句柄 / S7-3 字段描述才动。
 
 本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
@@ -69,6 +73,17 @@
 
 - S7-2b（9260ead7，s7-2b 分支）已实施：本机 8 例 0 错 0 警、输出与期望一致；服务器同口径测量（作业 `s7m-9260ead7`）：声明层峰值 HelloWorld 1359 → 1233 MB、TSDS 7597 → 6654 MB；抽查 s7b-c971047f 16/16，与 M2 合并后 int-6a784b50 8/8，合入 6a784b50。
 - S7-2c（aa5910b5，s7-2c 分支）已实施：接口载体字段改 `__IfaceRef<dyn I__VTable>`，`__interface` 改为视图指针填充，`__Shared<dyn I__VTable>` 删净；本机 12 例 0 错 0 警、输出与期望一致。服务器同口径测量（作业 s7m-aa5910b5）：声明层峰值 HelloWorld 1233 → 1242 MB（持平）、TSDS 6654 → 6153 MB（−7.5%）；抽查 s7c-aa5910b5 20/20，合入 63bc9213。
+- S7-3（s7-3 分支）实施要点：
+  - **S7-3a**：`__ClassDesc` 增 `fields`（本类自有实例字段 `__FieldDesc { java, rust, kind }`）、`field_base`（继承字段数）、`alloc`（新建默认存储装入 Object）。
+  - `X__inner` 加 `#[repr(C)]`、`__PrimCell` 加 `#[repr(transparent)]`：每个字段都是一个 `__Shared` 细指针，字段 i 位于存储基址 + i 个指针宽。
+  - 由此，`__unsafe_*` / `__field_slot` 改为 `impl dyn ObjectVTable` 上的非泛型固有方法，沿 `display` 查各类的 `fields`。
+  - 浅拷贝改为 `Object__clone_base` 走描述符：先 `alloc`，再逐字段拷贝。基本单元按位拷贝；引用单元经该字段载体类型的 `__ref_field::<T>` 函数指针拷贝。
+  - 宏里按类展开的 7 个方法全删；数组仍走 `__shallow_copy`。
+  - **S7-3b**：按名字段访问（Field.get/set、MH 字段句柄、Unsafe 静态字段）落运行时 `field_reflect`，生成器不再发射按类 `__reflect_field`（TestReflectFieldMethod 生成树 0 处）。
+    - 实例字段：沿接收者描述符 `display` 找声明类、按 Java 名找字段，在存储单元上读写（基本单元按种类装箱 / 拆箱，引用单元经 `__ref_field`）；声明类不在祖先链上 → IllegalArgumentException。泛型类实例字段随之可反射（原先跳过）。
+    - 静态字段：宏为类 / 接口展开关联常量 `X::__STATICS`（Java 名 + 既有 getter / setter 的擦除函数指针 + 按值类型实例化的 `__static_ref::<T>` / `__static_prim::<P>`）；经访问器读写，类初始化、安全点与手写访问器语义不变；常量无 setter → `final_field`。关联常量只在 main 登记处求值，未登记类不付代码生成代价。
+    - 登记沿用 `register_field_dispatch`（入参改为静态字段表），选择口径不变：用户树类全部，JDK / 库类限序列化协议名与按名反射名。
+  - **S7-3x 对象释放不递归**（来源：T1b 审计，c1d-closure-bloat §21.8.5）：`__Handle` / `Object` 的 Drop 释放最后一个强引用时经 `handle::__release` 计深（线程局部深度），深度 ≥ 32 的对象移入线程本地待释放队列，由最外层释放循环清空——任意链长下释放栈深 ≤ 32 层 drop 帧；非最后强引用只减计数（快路径一次原子读）。`Object` 槽位为 pub 元组字段，Drop 内以 null 单例换出再释放。字段载体（wrapper → `__Ref` → `__Handle`、擦除字段 `Box<Object>`、接口载体 → `Object`、数组元素）都经这两处，宏无需改动。验证用例 `48_refs/TestLongChainRelease`（10⁶ 节点单链表 + 2×10⁵ 擦除字段链 / 数组链，主线程与虚拟线程各一次）。
 
 ## 一、问题
 

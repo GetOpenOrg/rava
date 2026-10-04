@@ -118,7 +118,7 @@ impl Ctx<'_> {
 impl Engine<'_> {
     /// 方法 m 里删除入口 / 删除包装方法调用的键值 v 使哪些键不折叠
     pub(super) fn removed_keys(&mut self, m: usize, a: &Analysis, v: &V) -> Vec<Option<String>> {
-        if let V::Str(s) = v {
+        if let V::Str(s, _) = v {
             return match self.man.sysprops.lookup(s) {
                 PropValue::Absent => vec![],
                 _ => vec![Some(s.to_string())],

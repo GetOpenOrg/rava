@@ -70,7 +70,9 @@ mod mt {
     }
 
     /// 基本类型字段单元：`Cell` 同名方法集，全部 SeqCst（volatile 语义，强于普通字段要求；
-    /// long / double 64 位原子读写，无 JLS §17.7 撕裂）。
+    /// long / double 64 位原子读写，无 JLS §17.7 撕裂）。`repr(transparent)`：各实例化布局相同，
+    /// 描述符驱动的浅拷贝按位拷贝任意基本单元（`field_desc`）。
+    #[repr(transparent)]
     pub struct __PrimCell<T: __AtomicRepr> {
         bits: AtomicU64,
         _t: PhantomData<T>,

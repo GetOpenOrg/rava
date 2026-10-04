@@ -51,7 +51,7 @@ impl Ctx<'_> {
             let v = match literal(p) {
                 Some(k) => {
                     let mut a = args.to_vec();
-                    a[spec.key] = V::Str(Rc::from(k.as_str()));
+                    a[spec.key] = V::lit(k.as_str());
                     let Some(Ret::Value(v)) = self.prop_read(Some(me), spec, &a) else { return None };
                     v
                 }
@@ -85,7 +85,7 @@ impl Ctx<'_> {
             DefArg::None => Some(V::Null),
             DefArg::Const(v) => Some(v.clone()),
             DefArg::Param(i) => match args.get(*i)? {
-                v @ (V::Str(_) | V::Null) => Some(v.clone()),
+                v @ (V::Str(..) | V::Null) => Some(v.clone()),
                 _ => None,
             },
         }

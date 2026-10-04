@@ -8,8 +8,12 @@ pub const FLOW_BATCH: usize = 64;
 impl<'a> Engine<'a> {
     // ── 主循环 ──────────────────────────────────────────────────────────────
 
-    /// 入口形参来自 VM / 手写层：按声明类型 open
+    /// 入口形参来自 VM / 手写层：按声明类型 open，形参常量并入 Top。
+    /// 常量必须在入口处显式并入：只靠「分析时尚无调用点记录即 Top」的兜底，先经字节码调用点（常量实参）
+    /// 入链、后经反射 / VM 入口的方法会保留先到的常量，结果随传播顺序变化
     pub(super) fn open_params(&mut self, t: usize) {
+        let n = self.methods[t].ptypes.len();
+        self.bind_pvs(t, 0, n, None);
         let pts = self.methods[t].ptypes.clone();
         for (i, pt) in pts.iter().enumerate() {
             if let Some(pt) = pt {
@@ -107,6 +111,10 @@ impl<'a> Engine<'a> {
                 let seeded = self.seed_round();
                 self.stat_leave();
                 if seeded {
+                    continue;
+                }
+                // 名字齐全的按名取类站点在不动点上放行（`class_lookup.rs::lookup_release`）
+                if self.lookup_release() {
                     continue;
                 }
                 // 收尾：得到过「不返回」答复的方法按值未知重算（定论判定见 `noreturn.rs`）
@@ -270,7 +278,8 @@ impl<'a> Engine<'a> {
             }
         }
         let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
-        // 尚无调用点记录的入口（根 / 手写 / VM）：形参值未知，并固定为 Top 保证单调
+        // 尚无调用点记录即被分析：只剩无形参值可言的入口（<clinit>、序列化分配的无参构造器、按上下文克隆的
+        // lambda 实现 / 具体求值节点，其各入口一律不带实参值），形参值未知，固定为 Top
         let n = self.methods[m].ptypes.len();
         if !self.pvals.contains_key(&m) {
             self.pstr_top_m(m);
@@ -346,7 +355,7 @@ impl<'a> Engine<'a> {
             d.retain(|o, _| !offs.contains(o));
         }
         if let Some(d) = self.gather_last.get_mut(&m) {
-            d.retain(|o, _| !offs.contains(o));
+            d.retain(|k, _| !offs.contains(&k.0));
         }
         if let Some(d) = self.refl_seen.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));

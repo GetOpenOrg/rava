@@ -207,7 +207,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             match v {
-                V::Null | V::Str(_) | V::Class(..) => {}
+                V::Null | V::Str(..) | V::Class(..) => {}
                 V::Ref { .. } => {
                     let tid = self.id(d);
                     let fs = self.feeds(m, v, tid);

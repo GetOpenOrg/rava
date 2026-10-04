@@ -5,6 +5,10 @@
 //! 只取汇合格的中间态常量又随调用点接入先后而变。终态口径：包装方法登记为「查找类形参 × 名字形参」，
 //! 各调用点按本点的名字实参（字面量）× 本点的类实参值集（类镜像）点名——结果只并不减，与处理顺序无关。
 //! 调用点的两个实参又来自其形参时，调用方同样登记为包装方法（逐层上推）。
+//!
+//! 按名放开字段（反射式字段写入：Class 实参 + 名字实参，如 `findVarHandle(Class, String, Class)` 与其内部的
+//! `MemberName` 构造）同一口径：类与名字都来自形参时登记字段配对，各调用点按本点的类值集 × 名字点名放开字段；
+//! 类值集含所指未知的 Class 时同名字段全部放开。否则形参名字汇合全部调用点、类推不出，只能按名放开全部同名字段。
 
 use super::*;
 
@@ -15,14 +19,16 @@ pub(super) struct LookupWrap {
     name: u16,
     /// 查找类在包装方法内的非形参来源（如沿 `getSuperclass` 上溯的结果），配对时并入调用点的类值集
     extra: Rc<[Node]>,
-    /// 查找结果的反射调用通道
+    /// 查找结果的反射调用通道（字段配对不用）
     ch: u8,
+    /// 字段配对（按名放开字段），否则为按名查方法
+    field: bool,
 }
 
 impl<'a> Engine<'a> {
     /// 方法 m 的按名查找点：查找类值 cv 与名字值 nv 都含本方法形参时登记 m 为包装方法；返回是否登记了配对
     /// （登记了的形参名字不再记为反射缺口：各调用点按配对点名）
-    pub(super) fn lookup_wrap_site(&mut self, m: usize, cv: &V, nv: &V, extra: &[Node], ch: u8) -> bool {
+    pub(super) fn lookup_wrap_site(&mut self, m: usize, cv: &V, nv: &V, extra: &[Node], ch: u8, field: bool) -> bool {
         let cps = param_srcs(cv);
         let nps = param_srcs(nv);
         if cps.is_empty() || nps.is_empty() {
@@ -46,7 +52,7 @@ impl<'a> Engine<'a> {
         let ws = self.lwraps.entry(key).or_default();
         for &cls in &cps {
             for &name in &nps {
-                match ws.iter_mut().find(|w| w.cls == cls && w.name == name && w.ch == ch) {
+                match ws.iter_mut().find(|w| w.cls == cls && w.name == name && w.ch == ch && w.field == field) {
                     Some(w) => {
                         if extra.iter().any(|n| !w.extra.contains(n)) {
                             let mut u: Vec<Node> = w.extra.iter().chain(extra.iter()).copied().collect();
@@ -57,7 +63,7 @@ impl<'a> Engine<'a> {
                         }
                     }
                     None => {
-                        ws.push(LookupWrap { cls, name, extra: extra.clone(), ch });
+                        ws.push(LookupWrap { cls, name, extra: extra.clone(), ch, field });
                         added = true;
                     }
                 }
@@ -83,7 +89,7 @@ impl<'a> Engine<'a> {
         let mut hit = false;
         for (p, nv) in md.params.iter().zip(args.iter().skip(skip)) {
             if matches!(p, FieldType::Object(c) if c == STRING) {
-                hit |= self.lookup_wrap_site(m, cv, nv, &[], ch);
+                hit |= self.lookup_wrap_site(m, cv, nv, &[], ch, false);
             }
         }
         hit
@@ -104,10 +110,14 @@ impl<'a> Engine<'a> {
         for w in ws {
             let (Some(cv), Some(nv)) = (args.get(w.cls as usize), args.get(w.name as usize)) else { continue };
             let (cv, nv) = (cv.clone(), nv.clone());
+            if w.field {
+                self.field_wrap_call(m, off, &cv, &nv, &w.extra);
+                continue;
+            }
             let mut names: BTreeSet<Rc<str>> = nv.lits().into_iter().collect();
             // 名字与类都来自本方法形参：本方法同样是包装方法（其调用点再配对）；
             // 只有名字来自形参时，类已在本点确定，名字取各调用点在该形参上的字符串常量
-            if !self.lookup_wrap_site(m, &cv, &nv, &w.extra, w.ch) {
+            if !self.lookup_wrap_site(m, &cv, &nv, &w.extra, w.ch, false) {
                 names.extend(self.param_strs(m, off, &nv));
             }
             if names.is_empty() {
@@ -120,6 +130,46 @@ impl<'a> Engine<'a> {
                 for n in &names {
                     self.reflect_name(&c, n, w.ch);
                 }
+            }
+        }
+    }
+
+    /// 字段配对的调用点（类值 cv、名字值 nv）：两者又都来自本方法形参时上推登记；否则名字取本点字面量
+    /// （与形参上各调用点的字符串常量、字段写入的字面量集），按类值集里类镜像所指的类点名放开字段。
+    /// 类值集尚空时等值到达（读者登记，增长时重跑）；含所指未知的值时同名字段全部放开
+    fn field_wrap_call(&mut self, m: usize, off: u32, cv: &V, nv: &V, extra: &Rc<[Node]>) {
+        let mut names: BTreeSet<Rc<str>> = nv.lits().into_iter().collect();
+        if !self.lookup_wrap_site(m, cv, nv, extra, 0, true) {
+            names.extend(self.param_strs(m, off, nv));
+        }
+        names.extend(self.field_strs(m, nv));
+        if names.is_empty() {
+            return;
+        }
+        let class = self.id(CLASS);
+        let mut fs = self.feeds(m, cv, class);
+        fs.extend(extra.iter().map(|&n| Feed::N(n)));
+        let s = self.value_set(&fs);
+        let mut classes: Vec<u32> = vec![];
+        let mut unknown = !s.open.is_empty();
+        for x in s.classes.iter() {
+            match self.mirrors.get(&x) {
+                Some(&c) => classes.push(c),
+                None => unknown = true,
+            }
+        }
+        for n in &names {
+            for &c in &classes {
+                if !self.fpair_done.insert((c, n.clone())) {
+                    continue;
+                }
+                let cn = self.names[c as usize].clone();
+                if let Some((decl, desc)) = self.field_by_name(&cn, n) {
+                    self.open_field(MemberRef { owner: decl, name: n.to_string(), desc });
+                }
+            }
+            if unknown {
+                self.open_field_name(n);
             }
         }
     }

@@ -21,6 +21,9 @@ ir.workspace = true
 # 拆层剥体：与 java_class! 宏同一份解析与判定（§7.5.2）
 rava_macros_core = { path = "../../../runtime/rava_macros_core", features = ["plan"] }
 rava_meta_tables = { path = "../../../runtime/rava_meta_tables" }
+# 旁路行表（closure_input/frame_lines.json）：rava-link 建地址表的输入
+serde.workspace = true
+serde_json.workspace = true
 # 手写伴生文件的方法区间（行表，span 行号）
 syn.workspace = true
 proc-macro2 = { workspace = true, features = ["span-locations"] }

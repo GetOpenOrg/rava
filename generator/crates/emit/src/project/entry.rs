@@ -377,10 +377,12 @@ pub fn write_cargo_files(
     // 两项只影响调试信息与编译缓存，不影响程序语义。
     // 两个 profile 都 panic = "abort"：Java 异常经 Result 传播，不依赖 unwind；panic 只来自存根 /
     // 运行时缺陷，由 create_java_vm 的钩子以退出码 101 终止（与 unwind 形态退出码、stderr 一致），
-    // 免除全部 unwind 清理路径（landing pad）
+    // 免除全部 unwind 清理路径（landing pad）。
+    // release 剥符号表（strip = "symbols"）：取栈按链接期地址表（driver `rava-link`，运行时
+    // `pc_map`），不读符号与 DWARF；行号表仍由 rava-link 在剥离前读取
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
-         opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\n\n\
+         opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\nstrip     = \"symbols\"\n\n\
          [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n",
         members.join(", ")
     );

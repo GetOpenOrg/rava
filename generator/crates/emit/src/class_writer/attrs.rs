@@ -141,8 +141,8 @@ pub fn anno_cpool_str(pool: &std::collections::BTreeMap<u16, AnnoConst>) -> Stri
         .join(";")
 }
 
-/// 字段属性行 `#[cfg_attr(any(), java_field(...))]`
-pub fn field_attr(f: &Field, fx: Option<&FieldExtras>) -> String {
+/// 字段属性行 `#[cfg_attr(any(), java_field(...))]`；`reflect`：静态字段可按名反射（宏据此展开 `__STATICS` 项）
+pub fn field_attr(f: &Field, fx: Option<&FieldExtras>, reflect: bool) -> String {
     let mut parts = vec![format!("name = \"{}\"", f.name), format!("descriptor = \"{}\"", f.desc)];
     if f.access != 0 {
         let a = access_str(f.access);
@@ -169,6 +169,9 @@ pub fn field_attr(f: &Field, fx: Option<&FieldExtras>) -> String {
     }
     if let Some(x) = fx.filter(|x| !x.raw_annotations.is_empty()) {
         parts.push(format!("raw_annotations = \"{}\"", hex(&x.raw_annotations)));
+    }
+    if reflect {
+        parts.push("reflect = true".into());
     }
     format!("#[cfg_attr(any(), java_field({}))]", parts.join(", "))
 }

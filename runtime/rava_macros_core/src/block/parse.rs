@@ -200,7 +200,7 @@ pub(crate) struct ClassMeta {
     pub superclass_fields: Vec<(Ident, Type)>,
     /// Rust 名与 Java 名不同的平铺实例字段（关键字加后缀、`$` 替换、遮蔽字段加声明类后缀；
     /// 本类与继承字段）：(声明类 binary name, Java 字段名, Rust 字段名)。Unsafe 偏移按 Java 字段身份
-    /// 登记，经 `ObjectVTable::__field_slot` 还原为按名协议的 Rust 字段名
+    /// 登记，经描述符 `fields`（`dyn ObjectVTable::__field_slot`）还原为按名协议的 Rust 字段名
     pub field_slots: Vec<(String, String, String)>,
     /// 祖先按类型变量声明、本类视角代入为基本类型的继承字段：存储与访问器按引用字段处理
     pub superclass_reference_fields: std::collections::HashSet<String>,

@@ -36,6 +36,11 @@ impl Pool {
         self.bytes.len()
     }
 
+    /// 池字节（链接期地址表 `rava-link` 直接嵌入目标文件）
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// 渲染为导出 static `<name>: &[u8]`
     pub fn render(&self, name: &str) -> String {
         render_bytes(name, &self.bytes)

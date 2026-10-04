@@ -262,15 +262,17 @@ impl<'a> Engine<'a> {
     pub(super) fn hw_site_arrays(&mut self, s: u32, i: u16, ys: &[u32]) {
         let (_, _, t) = self.hw_sites[s as usize];
         let ws = self.hw_writes(t);
-        let obj = self.id(OBJECT);
-        for &y in ys {
-            for (j, w) in ws.iter().enumerate() {
-                if w.as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) && !self.hw_self_copies.contains(&(s, i, j as u16)) {
-                    for p in PARITIES {
-                        self.flow(Node::E(y, p), Node::W(s, j as u16), obj);
-                    }
-                }
+        // 元素来源含 i 的写入目标：各数组元素经汇集节点流入（与逐数组接边同集合，见 `gather.rs`）
+        let targets: Vec<Node> = (0..ws.len())
+            .filter(|&j| ws[j].as_ref().is_some_and(|w| w.elements.contains(&(i as usize))) && !self.hw_self_copies.contains(&(s, i, j as u16)))
+            .map(|j| Node::W(s, j as u16))
+            .collect();
+        if !targets.is_empty() {
+            for p in PARITIES {
+                self.gather_hw_elems(s, i, p, ys, &targets);
             }
+        }
+        for &y in ys {
             // 写入目标：DMH 字段访问器经解释器的字段写入只落在对象 / 类镜像所指字段上，不写数组元素
             match ws.get(i as usize) {
                 Some(Some(w)) if !(w.fields && self.site_gate(s) == Gate::Handle) => {}

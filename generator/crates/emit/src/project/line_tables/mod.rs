@@ -1,11 +1,12 @@
 //! Java 栈帧行表（FS-E1 S3）：生成文件「Rust 行 → (类, 方法, 源文件, Java 行)」。
 //!
 //! 方法体语句行尾带 `// line N` 行标记（`method::lines`）；`java_class!` 宏保留方法体 token 的
-//! 原始位置，回溯帧的 `at <文件>:<行>` 即落盘文件的行。落盘前扫描每个生成文件的最终文本
-//! （拆层后的声明层 / 实现层各自扫描），得出该文件的行表，汇总写入
-//! `<scratch>/closure_input/line_tables.rs`（档案侧文件，由 java_meta 以 `__java_meta_LINE_TABLES` 导出）
-//! 与用户元数据行（用户 crate 文件，启动时登记，`project::user_meta`），
-//! 运行时 `fillInStackTrace` 据帧位置查表（`throwable_impl.rs`）。
+//! 原始位置，DWARF 行号即落盘文件的行。落盘前扫描每个生成文件的最终文本
+//! （拆层后的声明层 / 实现层各自扫描），得出该文件的行表，汇总写成旁路文件
+//! `<scratch>/closure_input/frame_lines.json`（[`FRAME_LINES_PATH`]），不进二进制：链接器包装 `rava-link`
+//! 链接后据它把 DWARF 的（文件, 行, 内联链）预解析为地址 → Java 帧表，嵌入二进制（运行时 `pc_map`，
+//! 二进制体积 B2）。二进制内只留帧方法的 LineNumberTable（`LINE_NUMBERS`，bci ↔ 行号）：档案侧进
+//! `<scratch>/closure_input/line_tables.rs`（java_meta 导出），用户侧随用户元数据行登记（`project::user_meta`）。
 //!
 //! 行表行 `(rust_line, method, java_line)` 按 Rust 行升序：方法起点（`#[java_method]` 属性行）记
 //! `java_line = 0`（方法内首个标记之前），`java_class!` 块结束行与手写方法的 `// [meta]` 行记
@@ -20,6 +21,8 @@ pub(super) mod handwritten;
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use super::fs::Writer;
 use crate::error::Result;
 
@@ -28,8 +31,43 @@ pub const LINE_TABLES: &str = "line_tables.rs";
 /// 行表文件（scratch 相对路径）
 pub const LINE_TABLES_PATH: &str = "closure_input/line_tables.rs";
 
+/// 旁路行表文件（scratch 相对路径）：`rava-link` 建地址表的输入
+pub const FRAME_LINES_PATH: &str = "closure_input/frame_lines.json";
+
 /// 块外 / 非 Java 方法的方法下标
-const NO_METHOD: u32 = u32::MAX;
+pub const NO_METHOD: u32 = u32::MAX;
+pub use handwritten::{LINE_NATIVE, LINE_UNKNOWN};
+
+/// 旁路行表（[`FRAME_LINES_PATH`] 的 JSON 形态）：全部带帧的生成文件与手写伴生文件
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct FrameLines {
+    pub files: Vec<FrameFile>,
+}
+
+/// 一个文件的行表（[`prune`] 之后）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FrameFile {
+    /// scratch 根下的相对路径（`/` 分隔）；DWARF 文件路径按 `/` 边界后缀对位
+    pub rel: String,
+    pub methods: Vec<FrameMethod>,
+    /// (Rust 行, 方法下标（[`NO_METHOD`] = 不成帧）, Java 行（[`LINE_NATIVE`] / [`LINE_UNKNOWN`] 为哨兵）)，
+    /// 按 Rust 行升序；查表取「Rust 行不大于该行」的最后一行
+    pub rows: Vec<(u32, u32, u32)>,
+}
+
+/// 帧方法项：运行时 `meta::LineMethod` 的来源
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FrameMethod {
+    /// 帧归属类（binary name）
+    pub class: String,
+    pub name: String,
+    pub descriptor: String,
+    pub source: String,
+    /// Modifier 位集（低 16 位）| static << 16 | native << 17
+    pub flags: u32,
+    /// RuntimeVisibleAnnotations 原始属性体
+    pub annotations: Vec<u8>,
+}
 
 const BLOCK_OPENS: [&str; 2] = ["rava_macros::java_class! {", "rava_macros::java_interface! {"];
 const MARK: &str = " // line ";
@@ -240,35 +278,9 @@ fn class_sources(text: &str) -> Vec<(String, String)> {
 /// 方法的 LineNumberTable：(类, 方法名, 描述符) → [(start_pc, 行)]（按 start_pc 升序）
 pub type LineNumbers = std::collections::BTreeMap<(String, String, String), Vec<(u16, u16)>>;
 
-/// 行表源文本（java_meta 的 lib.rs 以 `include!` 引入）
-pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
+/// 二进制内的行表组源文本（java_meta 的 lib.rs 以 `include!` 引入）：帧方法的 LineNumberTable
+pub fn render(numbers: &LineNumbers) -> String {
     let mut g = rava_meta_tables::codec::Group::new("LINE_POOL");
-    // LINE_TABLES 行：scratch 相对路径, [方法项 类, 方法名, 描述符, 源文件, 标志字, 注解], [行]。
-    // 行 = Rust 行增量（zigzag，文件内自 0 起）, 方法码（0 = 块外，否则下标 + 1）, Java 行码（0 native / 1 无行号 / 行 + 2）
-    let (s, p) = g.table("LINE_TABLES");
-    for t in tables {
-        s.str(p, &t.rel);
-        s.len(t.methods.len());
-        for m in &t.methods {
-            for v in [&m.class, &m.name, &m.descriptor, &m.source] {
-                s.str(p, v);
-            }
-            s.u32(m.flags());
-            s.bytes(p, m.frame.as_ref().map_or(&[][..], |f| f.annotations.as_slice()));
-        }
-        s.len(t.rows.len());
-        let mut last = 0i32;
-        for &(r, m, j) in &t.rows {
-            s.i32(r as i32 - last);
-            last = r as i32;
-            s.u32(if m == NO_METHOD { 0 } else { m + 1 });
-            s.u32(match j {
-                handwritten::LINE_NATIVE => 0,
-                handwritten::LINE_UNKNOWN => 1,
-                j => j + 2,
-            });
-        }
-    }
     // LINE_NUMBERS 行：类, 方法名, 描述符, [start_pc 增量, 行号增量（zigzag）]——帧方法的 LineNumberTable
     //（StackFrameInfo 的 bci → 行号，HotSpot `Method::line_number_from_bci`），按键升序
     let (s, p) = g.table("LINE_NUMBERS");
@@ -284,11 +296,35 @@ pub fn render(tables: &[FileLines], numbers: &LineNumbers) -> String {
             (pc0, line0) = (pc as i32, line as i32);
         }
     }
-    format!("// 生成：Java 栈帧行表（FS-E1；字符串池 + 字节流，字形见发射层 line_tables::render）。\n\n{}", g.render())
+    format!("// 生成：帧方法的 LineNumberTable（FS-E1；字符串池 + 字节流，字形见发射层 line_tables::render）。\n\n{}", g.render())
 }
 
-/// 汇总：档案侧文件的行表写入 `<out_dir>/closure_input/line_tables.rs`，返回用户 crate 文件的行表源文本
-///（同 [`render`] 形态，由用户元数据行文件收录）。`files` 为 (绝对路径, 最终文本)；`lnt` 给出
+/// 旁路行表的 JSON 文本
+pub fn frame_lines_json(tables: &[FileLines]) -> String {
+    let files = tables
+        .iter()
+        .map(|t| FrameFile {
+            rel: t.rel.clone(),
+            methods: t
+                .methods
+                .iter()
+                .map(|m| FrameMethod {
+                    class: m.class.clone(),
+                    name: m.name.clone(),
+                    descriptor: m.descriptor.clone(),
+                    source: m.source.clone(),
+                    flags: m.flags(),
+                    annotations: m.frame.as_ref().map_or_else(Vec::new, |f| f.annotations.clone()),
+                })
+                .collect(),
+            rows: t.rows.clone(),
+        })
+        .collect();
+    serde_json::to_string(&FrameLines { files }).expect("行表可序列化")
+}
+
+/// 汇总：全部文件的行表写入旁路文件 [`FRAME_LINES_PATH`]；档案侧方法的 LineNumberTable 写入
+/// `<out_dir>/closure_input/line_tables.rs`，返回用户侧的同形源文本（由用户元数据行文件收录）。`files` 为 (绝对路径, 最终文本)；`lnt` 给出
 /// 方法 (类, 名, 描述符) 的 LineNumberTable，行表中出现的每个有 Java 行的方法各写一项）
 pub fn write(
     w: &mut Writer,
@@ -343,10 +379,11 @@ pub fn write(
     }
     tables.retain(|t| !t.rows.is_empty());
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
-    // 档案侧（JDK / lib crate 文件）进 java_meta；用户 crate 文件的行表随用户元数据行登记
+    w.write(&out_dir.join(FRAME_LINES_PATH), &frame_lines_json(&tables))?;
+    // LineNumberTable：档案侧（JDK / lib crate 文件）进 java_meta；用户 crate 文件的随用户元数据行登记
     let (user, archive): (Vec<FileLines>, Vec<FileLines>) = tables.into_iter().partition(|t| t.rel.starts_with(USER_PREFIX));
-    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&archive, &numbers_of(&archive, lnt)))?;
-    Ok(render(&user, &numbers_of(&user, lnt)))
+    w.write(&out_dir.join("closure_input").join(LINE_TABLES), &render(&numbers_of(&archive, lnt)))?;
+    Ok(render(&numbers_of(&user, lnt)))
 }
 
 /// 用户 crate 文件的 scratch 相对路径前缀
@@ -404,11 +441,15 @@ mod tests {
         assert!(scan("x.rs", "fn main() {}\n").is_none());
         let mut numbers = LineNumbers::new();
         numbers.insert(("p/A".into(), "f".into(), "()V".into()), vec![(0, 7), (4, 8)]);
-        let src = render(&[t], &numbers);
+        let src = render(&numbers);
         // LINE_NUMBERS：3 个池下标 + 长度 + 2 对增量（各 1 字节）
         assert!(src.contains("// [meta-stats] LINE_NUMBERS 8\n"), "{src}");
-        assert!(src.contains("pub static LINE_TABLES: &[u8] = b\""), "{src}");
-        assert!(src.contains("\\x0duser/src/a.rs\\x03p/A\\x01f\\x03()V\\x06A.java"), "{src}");
+        assert!(!src.contains("LINE_TABLES"), "{src}");
+        let json = frame_lines_json(&[t]);
+        let back: FrameLines = serde_json::from_str(&json).expect("回读");
+        assert_eq!(back.files[0].rel, "user/src/a.rs");
+        assert_eq!(back.files[0].methods[0].name, "f");
+        assert_eq!(back.files[0].rows[1], (9, 0, 7));
     }
 
     #[test]

@@ -290,3 +290,273 @@ A+B+C 之后无效推送已基本去掉，剩余耗时由**有效**工作量决�
 | TestHttpLoopbackAsync | ubuntu | 607 s | 9.1 GB | 5467 | ubuntu 上 3e0199ec 为 1110 s / 14.7 GB |
 
 同一台 ubuntu 上闭包耗时降 45%、内存降 38%，但仍高于 600 s 上限。
+
+## 顺序无关性修复（2026-10-04，engine-order 分支）
+
+### 已确认结论
+
+单调要求：效果只增不撤，故每个判定须满足「乐观（瞬时）状态下的效果 ⊆ 悲观（终态）状态下的效果」。
+按此口径排查到三处判定，都已改正：
+
+| # | 类别 | 位置 | 现象 | 修法 |
+|---|---|---|---|---|
+| 1 | 提前截断（推不出即丢已知名字） | `pstrs.rs` 形参字符串槽 / `class_lookup.rs` 按名取类 | 槽的上游有一路推不出时整槽返回 None，已知名字一并丢弃；瞬时窗口里槽完备、按名加载了的类在终态（推不出）下不再加载，探针 TestSerialLookupPairing 随种子在 3360 / 4132 类之间摆动 | 「推不出」改为标志位（`lookup_partial`，只升不降），已知名字照常产出、另记缺口；`slot_upstream` / `slot_names` / `param_inputs` 返回完备标志，`partial_part` 按缺口映射不完备的输入 |
+| 2 | 常量字面量化（Const 代入无来源） | `absint` 的 `V::Str`、`invoke.rs::reflective_writes`、`field_lookup.rs` | 形参常量（`pvals`）、返回常量、字段常量代入为 `V::Str` 后与 ldc 字面量无法区分，被当成站点字面量与接收者镜像集相乘；Const→Top 后已放开的反射成员不撤（上文「根因（已查实）」） | `V::Str` 带来源集（`Srcs`）：ldc 为 `Src::Str(lit_id)`；格值代入时改记读点来源（`Param(k)` / `Site(off)`），与悲观态下的 `Ref` 同源；同文本合流取来源并集；`PV` 存储形去掉来源。只有非派生字符串算站点字面量（`site_lits` / `derived_str`），派生字符串走形参字符串集逐调用点配对 |
+| 3 | 先到者决定（入口常量不并 Top） | `worklist.rs::open_params` | 反射 / VM / 种子入口只按声明类型 open 形参，不并入形参常量；「分析时尚无调用点记录才置 Top」的兜底只在该入口先到时生效。DeepCopy 中 `LDAPCertStore.<init>` 先经 `JdkLDAP$ProviderService.newInstance` 以 null 实参入链时 `pvals = Const(null)`，后到的反射构造器入口不抬 Top，`@22` 之后全被折死，`LDAPCertStoreParameters` / `URICertStoreParameters` 两类随种子出现 / 消失 | `open_params` 显式 `bind_pvs(t, 0, n, None)`；兜底只剩无实参值可言的入口（`<clinit>`、序列化分配的无参构造器、上下文克隆的 lambda 实现 / 具体求值节点） |
+
+另：按名放开字段（`reflective_writes` 的 Class 实参 / 接收者分支）对引用值与派生字符串另取形参字符串集
+（`param_strs`）与字段字面量集（`field_strs`）：修前只在形参常量窗口内按文本放开，形参抬为 Top 后同一来源不再给出名字。
+
+上限类判定（`MAX_SLOTS` 清输入、`MAX_NEST`、`MAX_NAMES`、`MAX_PATTERNS`、sealed 名字上限）同样是按当时规模截断，
+已加计数器（`summary.perf.cap_hits`，只列非零项）实测其在验收用例中是否触发，见下表。
+
+### 失败路线
+
+- 单值来源 `Option<Src>`：同文本不同来源的字符串合流只能取 None（丢来源），HelloWorld 多出 32 类。改为来源集并集后消除。
+- 「不完备时不产出名字」：完备标志只升不降，完备窗口里产出的效果在终态（不完备）下没有对应效果，不单调；
+  唯一与判定 1 相容的单调选择是不完备时照常产出已知名字并记缺口。
+
+### 集合变化（相对 c5741dfe 正常形态）
+
+DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 31.0k）。增量（JCA 提供者实现、xerces / XMLDSig、SSL、
+反射访问器等约 1500 类）全部来自 `Provider$Service.getImplClass` 的 className 按名取类：修前该槽在瞬时窗口外恒为推不出、
+整槽丢名不加载；修后按已知名字加载。这些名字正是探针大种子（瞬时完备窗口）加载的那批，即修复非单调后恢复的类。
+基线独有 `java/lang/ref/FinalReference`（`ReferenceQueue.poll0` 的 instanceof 类型级引用）：该分支是否可达取决于队列 `head` 的值集，
+而 `head` 的来源正是下文「未修：反射调用池去冗余与 open 目标写入」的顺序依赖，不能定性为纯折叠精度变化（早先结论更正）。
+
+代价：DeepCopy / StockTrans 冷闭包 34 s → 约 155 s（本机）。
+
+### 合并集成分支后的门禁（V9）
+
+- 2bd6f6bf 合入 3e739189（crate-split），0d392c7a 合入 21fc601b（M1 + S7）。
+- 集成分支 3e739189 上 `closure_independent_of_hash_seed` 的 TestSerialLookupPairing 差异（种子 1 多出 AESCipher 一族）：
+  入链点是 `Provider$Service.getImplClass @64` 的按名取类（closure JSON `via.kind = reflect`），即上表判定 1
+  （形参字符串槽上游有一路推不出时整槽丢名）。本分支上该槽照常产出已知名字，TSLP 种子 0 / 1 / 2 均含 AESCipher 一族
+  15 类（4934 类，三种子类集合相同）。S7 合入后差异消失只是手写层变化扰动了遍历顺序，判定 1 本身仍在集成分支上；
+  根因不在手写扫描器或宏，不需要补 macro_fn_lint 类守护。
+- HTTP（服务器，ca2488f0）：种子 0 冷闭包 1450 s（基线 c5741dfe 630 s），种子 1 / 2 在 12 GB 下 OOM——判定 1 修正后
+  JCA / SSL 提供者实现按名入链带来的规模增长，代价问题待评估。
+
+### 未修：反射调用池去冗余与 open 目标写入（剩余顺序依赖）
+
+现象：DeepCopy / StockTrans / TSLP 类集合已三种子一致，方法集合仍随运行在 0–13 个方法间摆动，全部经 `ReferenceQueue.poll` /
+`remove` 的结果可达：`LocaleResources$ResourceReference.getCacheKey`、`ResourceBundle$KeyElementReference.getCacheKey`、
+`Bundles$BundleReference.getCacheKey`、`FileCleanable.performCleanup` / `cleanupClose0`、`Provider.implPutIfAbsent` 等。
+另：引擎外的 std `HashMap`（RandomState：handwritten* / manifest* / seeds / jca / locale / services / `engine/seeds.rs` /
+`cut.rs` / `hw_inherit` / loaders）使同一 `--hash-seed` 的两次运行顺序也不同，复现需多跑几次。
+
+根因（`--flows '@path:…|open:java/lang/ref/Reference'` 与 `@grow` 查实）：
+
+1. 闭包内没有 `ReferenceQueue.enqueue`，`poll0` 的 `head = (rn == r) ? null : rn`（`rn = r.next`）是自环，`O(q, head)` 的初值只能来自外部。
+2. 好的运行里初值来自 `VarHandleReferences$FieldInstanceReadWrite.compareAndExchange @44 → Unsafe.compareAndExchangeReference`
+   的写入值（目标实参 = 方法句柄通道实参池），经 `hw_site_fields` 逐对象接到 `O(q, head)`（`head` 按名放开，偏移可写）。
+3. 目标实参来自 `Node::RN`（实参池去冗余视图，`reflect_call.rs::rcall_absorb`）：已逃逸对象 x 若属于池中某 open 类型 o 就不列出。
+   去冗余的前提是「open 视图与逐个列出结果一致」，但 `hw_site_fields` 对 open 目标只写 o 自身的引用字段（子类字段不可枚举），
+   逐个列出的 x 则写它的全部字段。q（`ReferenceQueue`）先于 `open(Object)` 入池就被列出、`head` 被写入；后于它入池就被涵盖、
+   `head` 不被写入——结果取决于入池先后。
+
+试过的两条修法（均正确但代价不可接受，已撤回）：
+
+- 去冗余只在 x 于 o 之外的引用字段都不可按偏移读写时才涵盖，字段之后放开时补列（单调）：`head` / `next` 等常用名按名放开，
+  绝大多数对象被列出，DeepCopy 冷闭包 > 10 min 未完成（修前约 3.5 min）。
+- open 目标写入另接全部已逃逸子类的引用字段（使 open 视图真正涵盖逐个列出）：Unsafe / 句柄解释器的大值集经 `U` 汇入全部
+  已放开字段，同样 > 10 min 未完成。
+
+### 交接 / 下一步
+
+终态方向：让「open 目标写入」与「去冗余」共用同一个等价定义，且不引入大值集。建议从写入点收窄入手——差异只出在偏移不是符号偏移的
+未收窄站点（`FieldInstanceReadWrite.*` 的偏移来自 VarHandle 对象的 `fieldOffset` 字段），按 VarHandle 对象的字段来源
+（字段句柄来源标记 `fh_marks` / `field_handles.rs`）把站点收窄到句柄所指字段：收窄站点上逐个列出与 open 涵盖结果相同
+（`site_field_nodes` 已对二者同口径），去冗余随之与顺序无关，Unsafe 写入也不再撒到目标对象的全部引用字段。
+收窄覆盖后再复查剩余未收窄站点（FieldReflector 等）是否仍有同类差异。验收照旧：DeepCopy / StockTrans / TSLP（正常 + 探针）
+与 HTTP 种子 0 / 1 / 2 类 / 方法 / 反射集合一致。
+
+### 合并 21fc601b 后的生成器单元测试（到时限的 WIP 状态）
+
+- `cargo test --release --no-fail-fast` 全量结果：除下面两项外全部通过，包括 jdk_literal_lint、no_jdk_literals 与 closure 单元测试 148 例。
+- `driver/tests/build_cli.rs` 原有 2 例失败：`proxy_interface_owner_not_opaque` 和 `locale_bundle_parent_not_null_recv`。
+  - 报错在发射阶段：`XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z` 的 CfgAuditError「结构树与活块集合不一致」，live 比 tree 多出块 14。
+  - 触发点：本分支的档案给出 `dead_pcs [[166,168]]`，即形参 `complete` 恒为真。JDK 内唯一的调用方传的是字面量 `true`，这个折叠本身成立。
+  - 规整后，`do { if (!scanDecls(complete)) {…return false;} } while (complete)` 变成一个循环：循环头没有语句，跳转臂是空回边块 162（`iload_1; pop; goto 87`），出口臂则直接 break。
+  - 根因在结构化器 `cfg/src/simplify.rs::pass_while`：它把 `loop { if c { break } else { <空回边块> } }` 改写成 while 形态时，整条 if 都被删掉，臂里的空回边块跟着丢了。
+  - 修法：把两臂中的无语句块原位留在循环体内。新增单元测试 `while_guard_keeps_empty_latch`；修后 build_cli 14/14 通过。
+- `closure_cli::closure_independent_of_hash_seed` **仍失败**：StockTrans 种子 0 比种子 1 多出方法
+  `LocaleResources$ResourceReference.getCacheKey`。这正是上一节「未修：反射调用池去冗余与 open 目标写入」所述的剩余顺序依赖，按「交接 / 下一步」继续处理。
+
+### 2026-10-04 续：重载撞名修复与第三次 open 写入尝试（engine-order，阶段 2）
+
+- 5760b43a30eddbd4d11aba6694fad76fe0bb1e66：重载名修饰区分完整数组维数（`ty::type_map::descriptor_to_suffix` 与
+  `closure::handwritten::descriptor_suffix` 每维重复 `arr_`）。修前 `String[][]` 与 `String[][][]` 同为 `arr_str`，
+  `DTDGrammar.resize` 两重载声明去重为 `_1` 而调用点仍用原名，致 6 例 E0308（DeepCopy / StockTrans / TestUrlProtocolOpen /
+  TestSerialDefaultSuid / TestSerialLookupPairing / TestSerialProxyForm）。本机 StockTrans `--stop-after emit` 复核声明与调用点均为
+  `resize_arr_arr_str_i` / `resize_arr_arr_arr_str_i`。同提交加 `--flows '@hwopen'` 诊断：列出未收窄、写字段的 hw 站点的
+  目标规模、open 类型与写入规模。
+- `@hwopen`（DeepCopy 种子 0，终态）：未收窄且目标含 open 的站点 57 个。主要有三类：
+  - `VarHandleReferences$FieldInstanceReadWrite.*` 及 `Unsafe.*Acquire/Release/Plain` 转发：目标 186 + open（含 `Object`），写入 186+351 open；
+  - `ObjectStreamClass$FieldReflector.setObjFieldValues`：目标 6045，写入 7943+351 open；
+  - CLQ / LTQ / Striped64 的 VarHandle 调用点：目标 ≤ 6，规模小。
+- 第三次尝试（未提交，补丁留在本机 `build/logs/open_writes_wip.patch`）：open 目标 o 按 (o, 口径) 分组，接到 o 子类型声明的、
+  按口径可写的引用实例字段 `U(f)`，字段新登记或开放时补接（单调）。DeepCopy 种子 0 跑了 32 min 仍未完成（基线 172–214 s；
+  本机负载 12，但量级不可接受），已撤回。这与上文「失败路线」第二条本质相同：写入值经 `U(f) → F(f)` 汇入未知接收者读，代价不可接受。
+  按「同一问题两轮修复不过即停」，V9 剩余顺序依赖在此停下。
+- 终态方向不变，见上文「交接 / 下一步」，补两点：
+  1. 不能再从「open 写入扩到子类型字段」入手，必须先收窄偏移来源。`FieldInstanceReadWrite` 的偏移来自字段句柄，
+     口径应是「只经字段句柄 / MemberName 取得的字段」，与 `Gate::Handle` 同口径，不含反序列化放开的字段。可在清单里增设
+     一类「字段句柄访问器」成员，与 `handle_interpreters` 分开：后者还带值池语义，不宜混用。再按 `fh_marks` 收窄到句柄所指字段。
+  2. `Unsafe.*Acquire` 等转发方法的调用点是共享的，目标是各调用方的并集，需按调用方上下文克隆，或者把转发方法看作透明转发；
+     否则收窄效果会在转发点丢失。
+- 门禁现状：`closure_independent_of_hash_seed` 仍失败，StockTrans 种子 0 / 1 差 1 个方法
+  （`LocaleResources$ResourceReference.getCacheKey`）。其余生成器单元测试全过（t1.log：closure 148、build_cli 14/14 等）。
+- TestHttpLoopbackSync 转译超时排查（协调方抽查 order-5760b43a 在 jp2 上 10 min 超时；order-27e33897 上同样超时）。
+  本机经 heavy_lock 跑 `rava build … --stop-after emit`，两个独立 worktree 各自构建，负载相近：
+
+  | 提交 | 耗时（real） | JDK 类 | 峰值内存 |
+  |---|---|---|---|
+  | main e519e22c | 399 s | 5441 | 9.2 GB |
+  | engine-order 5760b43a | 995 s | 6420 | 15.6 GB |
+
+  确认是本分支变慢：多出 979 类，耗时 2.5 倍。来源与上文「集合变化」相同：判定 1 修正后，`Provider$Service.getImplClass`
+  按已知名字加载 JCA / SSL 提供者实现。这些是修复非单调后恢复的类，不是噪声，所以不能靠撤回判定 1 来提速。
+  要做到「不慢于 main」，需要在保持集合不变的前提下给引擎提速，或者让提供者按名取类的精度提高
+  （只取实际被请求的算法，不取整张提供者表），属于另立的工作项。本轮未做。
+
+### 2026-10-04 续：按名取类延后放行，闭包与哈希种子无关（engine-order，阶段 2 收尾）
+
+协调方更正：main（e519e22c）自身的 `closure_independent_of_hash_seed` 也会失败。TestSerialUserGenericCallbacks 在种子 0
+下 4167 类，种子 1 下 3391 类，差的是 JCA / SSL 提供者类。合入判据改为：① 本机 TestHttpLoopbackSync / TestJndiNoProvider
+的转译耗时和类数都不高于 main；② 该单测稳定通过。
+
+**根因**：非字面量的按名取类站点（`Class.forName(x)` 等）在分析中途可能「名字齐全」，到不动点时却变成推不出（某支变成
+无约束任意串，或者形参 / 字段名字集不完备）。旧口径在中途齐全时就按名加载，加载结果单调保留，所以闭包取决于求值先后，
+也就是取决于 HashMap 迭代顺序。种子 0 下 `Provider$Service.getImplClass` 在名字集还只含少量提供者时被求值并放行，
+之后整张提供者表都按名加载（+776 类）。
+
+**终态做法**（与 `seed_ctor_lookups` 同一思路，只在不动点上作判定）：
+
+1. **延后放行**（`engine/class_lookup.rs`、`worklist.rs`）：
+   - 名字是字符串常量的站点直接解析。
+   - 非字面量站点求值齐全时，先挂起（`lookup_pending`），返回空名字集。
+   - 工作队列排空时，`lookup_release` 把挂起站点重跑一次（`lookup_trial`）。仍齐全就放行（`lookup_released`），
+     之后按单调口径照常求值。
+   - 求值中出现无约束任意串，或 `Gap::Fail`，站点记为不确定（`lookup_unsure`，单调）。不确定站点永不按名加载，
+     结果接所指未知的 Class（top）。
+   - 空闲钩子顺序：`seed_round` → `lookup_release` → `nr_drain`。
+2. **JCA 服务实现类的反射构造点**（`seeds.toml [jca] instantiation_hosts`，`seeds/jca.rs`）：
+   `Provider$Service.getImplClass` 恒为 top，不按类名字段的字符串集解析。所指的类由 JCA 规则按被请求的算法补种。
+   这样提供者类不会因为这个站点被整表纳入。
+3. **字段名配对只取声明为 `String` 的形参**（`engine/invoke.rs` `reflective_writes`）：
+   - 修前，凡是带 `Class` 形参的调用，任意引用实参都被当成字段名。例如 `HashMap$TreeNode.find` / `putTreeVal` →
+     `compareComparables(Class, Object, Object)` 的映射键。
+   - 结果是映射键上的全部字符串常量都按名放开字段，包括 `config`。这会展开 `ReflectionFactory.config`，多纳入约 82 类：
+     `jdk/internal/reflect/Unsafe*FieldAccessor`、`VarHandle*` 等。
+   - 字段名配对登记为 `LookupWrap { field: true }`，在调用方经 `field_wrap_call` 按「类 × 名」配对。
+4. **配对去重**（`fpair_done`）：同一（类，名）只放开一次。修前 `TreeBin` / `TreeNode` 调用点上反复重放，单例 CPU 27 min 以上不收敛。
+
+**多种子结果**（`rava closure`，种子 0 / 1 / 2；类 / 方法 / 反射）：
+
+| 用例 | 种子 0 | 种子 1 | 种子 2 | 一致 |
+|---|---|---|---|---|
+| StockTrans | 3386 / 20860 / 831 | 同 | 同 | 是 |
+| DeepCopy | 3388 / 20879 / 842 | 同 | 同 | 是 |
+| TestSerialDefaultSuid | 3393 / 20873 / 846 | 同 | 同 | 是 |
+| TestSerialProxyForm | 3389 / 20863 / 836 | 同 | 同 | 是 |
+| TestSerialUserGenericCallbacks | 3391 / 20870 / 842 | 同 | 同 | 是 |
+| TestSerialLookupPairing | 3389 / 20864 / 840 | 同 | 同 | 是 |
+
+TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的值相同，没有多纳入提供者类。StockTrans 与 main 同为
+3386 类。单次闭包实耗约 40–45 s（不含锁排队）；main StockTrans 约 60 s。
+
+**集合变化**：
+- 相对 main，反射集少 3 项：`sun/net/www/protocol/{file,jar,jrt}/Handler.<init>`。
+  `URL$DefaultFactory.createURLStreamHandler` 的 forName 只在 default 分支上；file / jar / jrt 三个协议在 switch 各支里直接
+  `new`，仍在闭包内。
+- 协议名在不动点上是 top，所以该站点是不确定站点。main 只在中途窗口期按名加载过这三个名字，属于顺序依赖带入的类。
+- 其余不确定站点：`ObjectInputStream.resolveClass`、`FactoryFinder.getProviderClass`、ServiceLoader `nextProviderClass`、
+  `ResourceBundle`、`ClassWriter.getCommonSuperClass` 等。
+- 放行站点：`StandardCharsets.lookup`、`LocaleProviderAdapter.forType`、`ClassSpecializer` loadSpecies、
+  `CalendarSystem.forName`、`Security.getSpiClass`、`OIDMap$OIDInfo.getClazz` 等。
+
+**合入判据实测**（7426e583，已合并上游 dd10731c，发射器与 main 相同；本机经 heavy_lock 交替跑，main 二进制取自 dd10731c）：
+
+| 用例 | 指标 | main | engine-order | 结论 |
+|---|---|---|---|---|
+| TestJndiNoProvider | 闭包类 / 方法 / 反射 | 3841 / 24568 / 1617 | 3841 / 24556 / 1610 | 本分支是 main 的真子集 |
+| TestJndiNoProvider | `rava closure` real（user） | 184 s（160 s） | 281 s（212 s） | **慢约 33%（按 user 计）** |
+| TestJndiNoProvider | 发射 JDK 类 | 3839 | 3839 | 持平 |
+| TestHttpLoopbackSync | 闭包类 / 方法 / 反射 | 5443 / 33929 / 1739 | 5442 / 33923 / 1732 | 本分支是 main 的真子集 |
+| TestHttpLoopbackSync | `rava closure` real（user） | 293 s（280 s） | 342 s（331 s） | **慢约 17–18%** |
+| TestHttpLoopbackSync | 发射 JDK 类 | 5441 | 5440 | 少 1（`RSAKeyPairGenerator$PSS`） |
+
+- 发射全程：本分支 JNDI 231 s、HTTP 503 s。main 的同轮发射只要 7–9 s，是命中了 main 工作区已有的闭包 / 生成缓存，
+  不可比。合并上游前（发射器不同）的一轮：JNDI 261 s vs 230 s，HTTP 453 s vs 342 s。
+- 少掉的项全部来自中途窗口期按名加载：
+  - `sun/net/www/protocol/{file,jar,jrt}/Handler`、`java/util/logging/Handler`、asm `Handler` 的构造器，
+    都是 `*Handler` 名字的不确定站点；
+  - JCA 的 `RSAKeyPairGenerator$PSS`；
+  - 队列类的 `offer` / `poll`。
+- 判据 ② 满足：`closure_independent_of_hash_seed` 通过，6 例 × 3 种子闭包完全一致。
+- 判据 ① 只满足一半：类数不高于 main，但闭包耗时高于 main。StockTrans 一类序列化用例反而更快（约 40 s vs main 约 60 s）。
+
+**未解决与下一步**（交新代理）：
+1. 闭包耗时回到不高于 main。疑点：
+   - 每轮空闲放行后，挂起站点所在方法要重跑（`lookup_trial` 经 swork 重处理整个方法），放行轮数多时累积开销大。
+   - `class_lookup` 每次都对 `methods[m].key.to_string()` 与 `instantiation_hosts` 做字符串比较。应在构造时把清单
+     解析成方法号集合。
+   - `field_wrap_call` 的类 × 名笛卡尔积。`fpair_done` 只挡住了重复开放，枚举本身没有省掉。
+
+   建议先用 `--perf` / 采样定位 HTTP / JNDI 两例的热点，再按「只重跑站点、不重跑整方法」改放行路径。
+2. 服务器上 TestHttpLoopbackSync 在 main 上本身也是 10 min 转译超时（发射阶段为主）。要过超时线，需要另立的引擎 / 发射提速，
+   不属于本项。
+3. 上文 `@hwopen` 的 open 写入顺序依赖仍未根治，目前靠延后放行消除了它对单测的影响。终态方向见「交接 / 下一步」。
+
+### 2026-10-05：闭包耗时回到 main 以下（engine-order，阶段 3）
+
+实施要点（动手前记）：
+- 采样显示三个疑点都不是热点。真正的耗时在通用流传播：`add_to_id` 里的 `is_subset` 约占 24%；E→S 推送约占全部推送的一半，
+  有效的只有约 0.2%。原因是同一批数组分配点（如十几个 `Type[]`）的元素节点各自连到同样的数千个读站点，每次增量都在
+  「分配点 × 站点」条边上重复推送。
+- 改法：数组元素读站点仿字段汇集节点（`gather.rs`），按（元素槽, 分配点集合）共享 `G` 节点。元素节点以 Object 过滤流入
+  `G`，`G` 再按站点静态分量类型流到站点。过滤逐元素进行，到达的集合与逐分配点接边相同。
+- 清单查表 ② 顺手改成构造时解析的成员集合，放行轮次与首轮放行时刻记入 `--perf`。
+
+**profile 结论**（本机 JNDI，`sample` 与 `--perf` 计数）：
+- 疑点 ①②③ 都不在热点上：放行只重跑挂起站点本身，不重跑整方法；清单字符串比较与类 × 名配对在采样里都不到 1%。
+- 热点在流传播。`add_to_id` 的 `is_subset` 约占 24%。E→S 推送 8.35 亿次，其中有效的 167 万次。最重的源是十几个
+  `[Ljava/lang/reflect/Type;` 分配点的元素节点：每个出度 3212，各弹出 587 次。
+- 延后放行的后续传播：共 2 轮放行、59 个站点，首轮放行之后的耗时约占引擎总耗时的 44%。
+  - 放行的类：charset、locale 适配器、BMH species、rmi stub、OID 扩展等。
+  - 这一段的站点重跑约 84 万次。全程站点重跑 213 万次，main 是 142 万次。
+
+**改动与工作量对比**（本机 JNDI，同一机器）：
+
+| 指标 | main dd10731c | 阶段 2（e435ace5） | 汇集节点后（6d95f88a） |
+|---|---|---|---|
+| 闭包类 | 3841 | 3841 | 3841 |
+| E 源推送次数 | 8.0 亿 | 9.2 亿 | 2.3 亿 |
+| 集合并入调用（adds[0]） | 14.1 亿 | 16.7 亿 | 9.8 亿 |
+| 流边 | 2059 万 | 1861 万 | 1184 万 |
+| 峰值 RSS | 5060 MB | 4116 MB | 2455 MB |
+| 引擎耗时（单次，机器有负载） | 168 s | 236 s | 194 s |
+
+本机 user CPU：main 168 s，本分支 166 s。上表本分支那次 sys 时间 25 s，属于机器内存压力。按用户 2026-10-05 的新口径，
+计时改到服务器（jp1）上交替跑，见下节。
+
+**第二处汇集**（dab2bc60）：手写方法调用点（arraycopy 等）的实参数组元素流向写入来源 `W` 时，也按（调用点, 实参, 元素槽）
+记录累计数组，并经同一批数组共享的 `G` 节点接入。本机 E→W 推送 8400 万次，其中有效的约 25 万次。
+
+**服务器计时**（jp1，按 2026-10-05 新口径；基线与本分支两个作业交替排队，各跑 JNDI / HTTP 两次）：
+- 作业 `eo-dd10731c-base`（main 基线）与 `eo-dab2bc60-hwgather`（本分支）。结果在
+  `server_maintenance/rava/test_results/job/<tag>/0[2-5]/`，含 `sum_*.json`（闭包摘要含 perf）与 `time_*.txt`（`/usr/bin/time -v`）。
+- 已取得的一组（6d95f88a，jp1）：JNDI 引擎 381.5 s、类 3923、RSS 5.1 GB；HTTP 引擎 737.6 s、类 5490、RSS 8.9 GB。
+  服务器 JDK 与本机不同，类数只能和同服务器的基线比。
+- dab2bc60 第一组（jp1，JNDI）：引擎 386.9 s、类 3923、RSS 5.3 GB。按事件种类拆开的站点重跑（`rerun_by_event`，耗时含事件处理，
+  不含之后排空的流传播）：
+  - invoke 98.0 万次，112.1 s，约占引擎总耗时 29%；
+  - field 102.8 万次，11.4 s；
+  - aload 6.7 万次，1.9 s；astore 5.0 万次，6.4 s。
+
+**未完成 / 下一步**：
+1. 服务器上基线与本分支各两次的计时还在 jp1 排队。判据 ①（不慢于 main）要等两组的中位数出来再定。
+2. 下一个热点是调用点重跑（平均每次约 114 µs）。`edge_recv` / 虚派发已经只看新增接收者，开销应该在每次重跑都要重算的
+   部分：`value_set` 并集、`filter`、`pstr_site`、`bind_params`、`edge_ret`。下一步是对重跑的调用点做分段采样，
+   把只依赖分析结果、不依赖接收者的部分记忆下来。

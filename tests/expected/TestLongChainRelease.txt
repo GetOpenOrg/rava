@@ -1,0 +1,4 @@
+main nodes=15499985500000 holders=200000 arrays=200000
+virtual nodes=15499985500000 holders=200000 arrays=200000
+kept head=999999
+done
