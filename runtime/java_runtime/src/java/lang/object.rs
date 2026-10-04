@@ -3,7 +3,7 @@
 
 use crate::sync_model::__Shared as Rc;
 // 类视图重建的共用部件（定义在 object_ext，宏生成的 `From<Object>` / `__virtual_view` 转交到这里）
-pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __iface_vtable, __FromAnyFn, __PartsFn};
+pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __iface_vtable, __PartsFn};
 
 /// JVM Object vtable：方法名与 java.lang.Object 字节码方法一一对应。
 ///
@@ -20,7 +20,12 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 查询（身份、类名、instanceof、hashCode / equals / toString、浅拷贝、代理、按名字段
     /// 协议）的缺省实现先问应答对象，wrapper 因此不再逐类生成同形转发（§7.5.4 #8）。
     #[doc(hidden)]
-    fn __view_target(&self) -> Option<&dyn ObjectVTable> { None }
+    fn __view_target(&self) -> Option<&dyn ObjectVTable> { self.__handle().and_then(|h| h.target()) }
+
+    /// 类 wrapper 的对象句柄（S7-2）：wrapper 返回自身句柄（null wrapper 的句柄为空），
+    /// 其余对象 None。`__view_target` / `is_jvm_null` / `__interface` 的缺省实现由此委托。
+    #[doc(hidden)]
+    fn __handle(&self) -> Option<&crate::handle::__Handle> { None }
 
     /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
@@ -179,9 +184,9 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         crate::monitor::exit(self.__identity() as usize)
     }
 
-    /// JVM null 检查辅助：Default::default() 代表 null，构造后设为 false。
-    /// java_class! 宏对生成类自动 override；基本类型 / 手写类默认 false（永不为 null）。
-    fn is_jvm_null(&self) -> bool { false }
+    /// JVM null 检查辅助：类 wrapper 的句柄为空即 null（`Default::default()`，构造器经
+    /// `_init_not_null` 分配存储）；基本类型 / 手写类默认 false（永不为 null）。
+    fn is_jvm_null(&self) -> bool { self.__handle().is_some_and(|h| h.is_none()) }
 
     /// 接口视图查询（invokeinterface 的运行时入口）：`slot` 是调用方提供的
     /// `Option<Rc<dyn I__VTable>>`（I 为被调用的 Java 接口）；对象的运行时类实现 I 时，
@@ -190,8 +195,11 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 按「擦除后的接口」选择——`slot` 的类型不含任何类型实参，与 JVM 的 itable 查找一致。
     /// `java_class!` 宏为每个类按其 `impl Iface for Class` 块生成实现；
     /// 默认（未实现任何接口的对象）不填 `slot`。
+    /// 类 wrapper 缺省委托句柄所持存储（运行时类）应答。
     #[doc(hidden)]
-    fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+    fn __interface(self: Rc<Self>, slot: &mut dyn std::any::Any) {
+        if let Some(h) = self.__handle() { h.interface(slot); }
+    }
     /// 运行时类的 binary name（如 `java/lang/NullPointerException`）：视图委托运行时类，
     /// 生成类取本类描述符（S7-1）；未捕获异常报告等 VM 级设施据此取得类名。
     fn __class_name(&self) -> &'static str {
@@ -216,22 +224,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     #[doc(hidden)]
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { None }
 
-    /// 擦除存储导出（A-1 存储层擦除）：`slot` 是 `Option<crate::sync_model::__AnyRef>`，类 wrapper 填入
-    /// 自身持有的非泛型 `Rc<X__inner>`（其 TypeId 与类型实参无关）。`From<Object> for X<A>`
-    /// 的擦除路径据此对任意类型实参重建视图（Java 泛型运行时本就擦除）。
-    /// 其余对象（基本类型、闭包等）不填 `slot`。
+    /// 擦除视图导出（S7-2）：`slot` 是调用方（`From<Object> for X<A>` / `X::__virtual_view`，
+    /// 知道目标类 X）构造的 `Option<NonNull<dyn X__VTable>>`。运行时类是 X 或 X 的子类时，
+    /// 生成类的存储把自身以 X 的擦除 vtable 形态的指针填入（类 vtable trait 非泛型、超类链是其
+    /// supertrait —— 子类 vtable 直接上转）；调用方与句柄合成 `__Ref`，对任意类型实参成立。
+    /// 其余对象（基本类型、闭包、接口载体、wrapper 本身等）不填 `slot`。
     #[doc(hidden)]
-    fn __erased_inner(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
-
-    /// 擦除 vtable 导出（A-1 部件形态，与 `__erased_inner` 配对）：`slot` 是调用方
-    /// （`From<Object> for X<A>`，知道目标类 X）构造的 `Option<Rc<dyn X__VTable>>`。
-    /// 对象的运行时类是 X 或 X 的子类时，把自身 vtable 以 X 的擦除 vtable 形态填入
-    /// （类 vtable trait 非泛型、超类链是其 supertrait —— 子类 vtable 直接上转）。
-    /// 与 `__erased_inner` 导出的存储合成 `X<A>` 的任意实例化视图——「运行时类是本类
-    /// 子类 + 目标实例化非精确实参」的重建（如 `Enum::<Object>::from(枚举常量)`）。
-    /// 其余对象（基本类型、闭包、接口载体等）不填 `slot`。
-    #[doc(hidden)]
-    fn __erased_vtable(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
+    fn __erased_vtable(&self, _slot: &mut dyn std::any::Any) {}
 
     /// 数组协变的元素赋值兼容探针（S-4）：receiver 是引用元素数组（JArray），调用方
     /// （`From<Object> for JArray<T>`，知道目标元素类型 T）给出 T 的 binary name `target_elem`

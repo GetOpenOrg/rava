@@ -106,6 +106,11 @@ Java 开发者看到的是业务逻辑；Rust 工具链看到的是完整的内�
 
 **目前没有任何方案同时满足：继续写 Java + 全依赖支持 + 生成可读代码 + 语义等价 + 原生二进制。**
 
+**与 GraalVM Native Image 的实测对标**（2026-10-04，23 例，见 [`docs/reports/2026-10-04-graalvm-baseline.md`](../reports/2026-10-04-graalvm-baseline.md)）：
+- 构建耗时：native-image 单例 23–72 s；rava 目前单例转译加编译 7–10 min。终态目标是生产模式 `rava build --release` 单例端到端 ≤ 同机 native-image 构建耗时。
+- 运行性能：12 例纯计算负载上，native-image（无 PGO）比 JVM 慢 1.2–5.3 倍。终态目标是 rava release 运行 ≤ native-image（逐例阈值见报告 §二）。
+- 免配置：native-image 依赖 tracing agent 生成反射 / 序列化配置，实测有两类盲区要人工补：静态初始化中的序列化构造器，以及 `jar:` URL 协议开关。rava 用静态闭包分析，不需要 agent 和配置文件，这两例长期留在验收集里，作为差异化能力的回归守护。
+
 ---
 
 ## 历史类比

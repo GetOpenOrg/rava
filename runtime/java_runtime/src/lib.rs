@@ -2,6 +2,7 @@
 pub mod anno_pool;
 pub mod array;
 pub mod class_desc;
+pub mod handle;
 pub mod sync_model;
 pub mod gil;
 pub mod reflect_dispatch;
@@ -311,7 +312,7 @@ pub fn __stack_check() -> error::Result<()> {
     Ok(())
 }
 
-/// 实例方法入口（宏注入 `__enter(self._jvm_null)?;`）：空接收者抛 NullPointerException（JVMS §6.5
+/// 实例方法入口（宏注入 `__enter(self.__r.is_none())?;`）：空接收者抛 NullPointerException（JVMS §6.5
 /// invokevirtual / invokespecial / invokeinterface，先于建帧），否则做栈界检查（同 `__stack_check`）。
 #[inline(always)]
 pub fn __enter(is_null: bool) -> error::Result<()> {
@@ -559,6 +560,7 @@ pub mod prelude {
     #![allow(unused_imports)]
     pub use super::array::JArray;
     pub use super::class_desc::__ClassDesc;
+    pub use super::handle::{__Handle, __Ref};
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;

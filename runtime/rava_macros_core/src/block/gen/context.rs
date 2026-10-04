@@ -137,7 +137,7 @@ pub(crate) struct GenContext<'a> {
     pub(crate) own_method_names: HashSet<String>,
     /// 仅 VirtualDefine 方法名，§11 base fn 安全检查用
     pub(crate) vtable_define_names: HashSet<String>,
-    /// wrapper 方法体经 `this.vtable` 分派的继承虚方法边界规格（A-1 β'）
+    /// wrapper 方法体经 `this.__r.vt()` 分派的继承虚方法边界规格（A-1 β'）
     pub(crate) vdispatch: HashMap<String, VDispatchSig>,
 
     // ── 其余输入 ──────────────────────────────────────────────
@@ -291,7 +291,7 @@ impl<'a> GenContext<'a> {
         let vtable_define_names: HashSet<String> = vtable_defines.iter()
             .map(|f| f.sig.ident.to_string())
             .collect();
-        // wrapper 方法体经 `this.vtable` 分派的继承虚方法边界规格（A-1 β'）：
+        // wrapper 方法体经 `this.__r.vt()` 分派的继承虚方法边界规格（A-1 β'）：
         // vtable 方法签名已 Object 化 → 调用点按「提及本类形参 / 命中 vtable_erasure 名集」装箱，
         // 返回值 null 容忍还原
         let vdispatch: HashMap<String, VDispatchSig> = inherited.iter()
