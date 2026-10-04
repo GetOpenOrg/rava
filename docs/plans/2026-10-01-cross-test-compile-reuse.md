@@ -658,3 +658,7 @@ profile.json ─┐
 **下一步**
 - 服务器 e2e 抽查（单例模式回归）。
 - 1c：`rava compile` 直接调用 rustc 链接档案产物（§4.4）。
+
+### 6.6 第 2 步（驱动直接 rustc 链接档案）
+
+方案与实测见 [`2026-10-04-t1-step2-direct-rustc-link.md`](2026-10-04-t1-step2-direct-rustc-link.md)（2026-10-04 用户已答复决策点）：档案按 JDK 模块切 crate（以 jmod 模块名命名，s2 实测跨模块反向引用在正文中为 0），语料模式每模块一个 dylib 并用 panic=unwind，档案侧登记表归各模块 crate。s2（3077 类）上单例 0.58–0.96 s、峰值 ≤ 0.51 GB，据此收紧 §5.2 目标。
