@@ -32,11 +32,6 @@ impl gimli::read::Relocate for &'_ RelocMap {
 /// 一段代码：可执行文件地址、长度、内联链（自内向外的 (DWARF 文件路径, 行)）
 pub trait Sink {
     fn piece(&mut self, start: u64, len: u64, frames: &[(&str, u32)]);
-    /// 诊断（`RAVA_PCMAP_DUMP`）：开启时 `piece` 之前给出本段内联链各帧的函数名（自内向外，含闭包帧）与所属符号
-    fn names(&mut self, _symbol: &str, _frames: &[(String, Option<(String, u32)>)]) {}
-    fn wants_names(&self) -> bool {
-        false
-    }
 }
 
 /// 一个函数：可执行文件地址、大小、在其 DWARF 上下文中的地址
@@ -182,8 +177,6 @@ fn with_context<R>(
 /// 逐函数按行表分段，每段取内联链
 fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func<'_>], sink: &mut dyn Sink, stats: &mut WalkStats) -> Result<(), String> {
     let mut frames: Vec<(&str, u32)> = Vec::new();
-    let mut named: Vec<(String, Option<(String, u32)>)> = Vec::new();
-    let dump = sink.wants_names();
     for f in funcs {
         stats.functions += 1;
         // 物理帧（内联链最外层）另按链接符号判闭包：其 DWARF 函数名可能缺失或为不含 `{closure` 的形态
@@ -198,17 +191,11 @@ fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func<'_>], sink: &m
             }
             stats.pieces += 1;
             frames.clear();
-            named.clear();
             let mut it = ctx.find_frames(lo).skip_all_loads().map_err(|e| format!("DWARF 内联链：{e}"))?;
             // 最近迭代到的帧是否已成帧（迭代结束时即物理帧）
             let mut last_pushed = false;
             while let Some(frame) = it.next().map_err(|e| format!("DWARF 内联链：{e}"))? {
                 last_pushed = false;
-                if dump {
-                    let name = frame.function.as_ref().and_then(|n| n.demangle().ok()).map_or_else(|| "?".into(), |d| d.into_owned());
-                    let at = frame.location.as_ref().and_then(|l| Some((l.file?.to_owned(), l.line?)));
-                    named.push((name, at));
-                }
                 if frame.function.as_ref().is_some_and(|n| is_closure(n)) {
                     continue;
                 }
@@ -221,9 +208,6 @@ fn walk_funcs(ctx: &addr2line::Context<Reader<'_>>, funcs: &[Func<'_>], sink: &m
             }
             if last_pushed && symbol_closure {
                 frames.pop();
-            }
-            if dump {
-                sink.names(&String::from_utf8_lossy(f.name), &named);
             }
             sink.piece(f.exe + (lo - f.obj), hi - lo, &frames);
         }

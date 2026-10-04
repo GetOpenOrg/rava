@@ -5,8 +5,7 @@
 //! 3. 有锚点（Java 程序）→ 读 DWARF 与旁路行表（环境变量 `RAVA_FRAME_LINES`，缺失即报错）构建地址表，
 //!    写表目标文件，原参数加该目标文件再链接一次；核对两次链接的锚点地址与代码节不变（表内地址有效）。
 //!
-//! 真实链接器为 `cc`（与 rustc 缺省一致）。统计行写 `<scratch>/logs/pcmap.log`；诊断：
-//! `RAVA_PCMAP_DUMP=<Java 方法名>` 把映射到该方法的各段（符号、含闭包帧的内联链）写 `<scratch>/logs/pcmap_dump.txt`。
+//! 真实链接器为 `cc`（与 rustc 缺省一致）。统计行写 `<scratch>/logs/pcmap.log`。
 //! release 的 `strip = "symbols"`：macOS 由 rustc 在链接器返回后执行 strip，ELF 传给链接器（第 1 步去掉、第二次链接生效）。
 
 mod pcmap;
@@ -90,10 +89,7 @@ fn run(linker: &OsStr, args: &[OsString]) -> Result<ExitCode, String> {
         return Err(format!("两次链接布局不一致（{before:?} → {after:?}），地址表失效"));
     }
     let line = format!("{} {} | {:.2}s\n", output.display(), built.stats, start.elapsed().as_secs_f64());
-    log(&sidecar, "pcmap.log", &line);
-    if !built.dump.is_empty() {
-        log(&sidecar, "pcmap_dump.txt", &built.dump);
-    }
+    log(&sidecar, &line);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -104,13 +100,13 @@ fn text_range(exe: &object::File<'_>) -> Option<(u64, u64)> {
         .map(|s| (s.address(), s.size()))
 }
 
-/// 统计行 / 诊断转储追加到 `<scratch>/logs/<name>`（旁路行表在 `<scratch>/closure_input/`）
-fn log(sidecar: &Path, name: &str, line: &str) {
+/// 统计行追加到 `<scratch>/logs/pcmap.log`（旁路行表在 `<scratch>/closure_input/`）
+fn log(sidecar: &Path, line: &str) {
     use std::io::Write;
     let Some(scratch) = sidecar.parent().and_then(Path::parent) else { return };
     let dir = scratch.join("logs");
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(name)) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("pcmap.log")) {
         let _ = f.write_all(line.as_bytes());
     }
 }
