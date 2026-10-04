@@ -1006,9 +1006,9 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
 | c39591d1 | #8 wrapper ObjectVTable 收敛到缺省实现 | **9096**（墙钟 277 s） | **10162**（墙钟 301 s） | **11317（编过，墙钟 353 s）** | |
 | 9e88cf83 | #11 入口检查进体函数 | | | | **1472 / 30.0 s**（总 51.9 s，基线 58.3 s） |
 | ef600555 | #11 + #12 转发外壳只空检查 + #13 `__erased_vtable` 整体委托 | **8407**（墙钟 243 s） | **9386**（墙钟 293 s） | **10495**（墙钟 332 s，余量 1.40 GB） | **1470 / 28.3 s**（总 50.2 s） |
-| 86df0737 | S7 起点（同 ef600555 生成形态，HW 展开 14.46 MB / TSDS 103.37 MB） | 待回 | | | 1448 / 27.0 s |
-| 8f515016 | S7-0 每类静态描述符 `__ClassDesc`（只增，HW 展开 +0.30 MB / TSDS +2.70 MB） | 待回 | | | 1440 / 29.2 s |
-| S7-1 | 类型判定读描述符：删 `__view_as`、wrapper `__view_into` 类 / 祖先 / 接口载体臂、inner `is_instance_of` / `__class_name`（本机 HW 展开 14.79 → 13.89 MB） | 待回 | | | 待回 |
+| 86df0737 | S7 起点（同 ef600555 生成形态，HW 展开 14.46 MB / TSDS 103.37 MB） | 8540（墙钟 221 s） | | | 1448 / 27.0 s |
+| 8f515016 | S7-0 每类静态描述符 `__ClassDesc`（只增，HW 展开 +0.30 MB / TSDS +2.70 MB） | 8642（墙钟 249 s，jp1） | | | 1440 / 29.2 s |
+| a6a00c06 | S7-1 类型判定读描述符：删 `__view_as`、wrapper `__view_into` 类 / 祖先 / 接口载体臂、inner `is_instance_of` / `__class_name`（HW 展开 13.87 MB / TSDS 98.27 MB） | **8192**（墙钟 210 s） | | | **1408 / 25.4 s** |
 
 **阶段 RSS**（time-passes，阶段末 RSS，MB）
 
