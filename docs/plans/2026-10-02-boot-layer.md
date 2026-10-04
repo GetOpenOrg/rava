@@ -363,6 +363,10 @@ platform unnamed != user: true
 
 | 用例 | 类 | 方法 | 转译耗时 | 编译耗时 |
 |---|---|---|---|---|
-| TestCustomException | | | | |
-| TestStackWalkerFrames | | | | |
-| TestAppClassLoader | | | | |
+| TestCustomException | 480 → 3193（+2713） | 1867 → 18618 | 1 s → 18 s（`rava closure`） | 未测（超 300 类，锚点不启用） |
+| TestStackWalkerFrames | 3108 → 3257（+149） | 17934 → 19283 | — | 未测 |
+| TestAppClassLoader | 3108 → 3257（+149） | 17891 → 19236 | — | 未测 |
+
+实测于 c1d-a2c b47568ec，本地临时 runtime（锚点 `System.bootLayer`，`ModuleLayer` 移出 vm_boundary）。TestCustomException
+超过 300 类，按第 1 步规则另立精度项（URL / URI 协议事实 + 分派变宽限于 phase 帧），第 2–5 步以其为前置；
+二分与路径见 `2026-10-01-c1d-closure-bloat.md` §23.5。`SystemModules$default` 的 rustc 峰值内存未测。
