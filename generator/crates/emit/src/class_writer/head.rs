@@ -10,7 +10,7 @@ use ty::ident::safe_ident;
 use ty::rs_type::render_arg_list;
 use ty::ClassInfo;
 
-use super::attrs::{access_str, anno_cpool_str, class_modifiers_str, q};
+use super::attrs::{access_str, anno_cpool_str, class_modifiers_str, method_modifiers_str, q};
 use crate::ctx::EmitCtx;
 use crate::text::hex;
 
@@ -64,6 +64,7 @@ pub fn opaque_metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
         .filter(|l| {
             l.starts_with("#[")
                 && !l.starts_with("#[has_clinit")
+                && !l.starts_with("#[bridge_method")
                 && (keep_annos || !ANNOS.iter().any(|k| l.starts_with(k)))
         })
         .collect();
@@ -154,6 +155,7 @@ fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
         let (n, d) = em.as_ref().map_or(("", ""), |(n, d)| (n.as_str(), d.as_str()));
         lines.push(format!("#[enclosing_method  = \"{}:{}:{}\"]", q(ec), q(n), q(d)));
     }
+    lines.extend(bridge_lines(ctx, ci));
     if !ex.raw_annotations.is_empty() {
         lines.push(format!("#[raw_annotations   = \"{}\"]", hex(&ex.raw_annotations)));
     }
@@ -161,6 +163,31 @@ fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
         lines.push(format!("#[anno_cpool        = \"{}\"]", anno_cpool_str(&ex.anno_cpool)));
     }
     lines
+}
+
+/// 桥方法（ACC_BRIDGE）的反射面行：桥不发射为 Rust 方法（由接口 impl / 协变转发承载），但它是类的
+/// 声明成员——`getDeclaredMethods` / `isBridge` / `getMethod(name, 擦除形参)` 须可见，`Method.invoke`
+/// 须转发到被桥接的真实方法。`bridge_to` 为本类内被桥接方法的描述符（真实方法在祖先时缺省，
+/// 反射分派沿接收者类链上溯）。宏忽略此属性；消费方为元数据表扫描与 L3 分派臂
+fn bridge_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
+    let mut out = Vec::new();
+    for m in ci.methods().iter().filter(|m| m.access & super::attrs::ACC_VOLATILE != 0) { // 方法侧 0x0040 即 ACC_BRIDGE
+        let mut parts = vec![format!("name = \"{}\"", q(&m.name)), format!("descriptor = \"{}\"", q(&m.desc))];
+        let a = access_str(m.access);
+        if a != "package" {
+            parts.push(format!("access = \"{a}\""));
+        }
+        parts.push(format!("modifiers = \"{}\"", method_modifiers_str(m.access)));
+        if !m.exceptions.is_empty() {
+            parts.push(format!("exceptions = \"{}\"", q(&m.exceptions.join(","))));
+        }
+        let target = crate::phase2::bridge::bridge_call_target(ctx, ci, m, &m.name);
+        if let Some((_, desc)) = target.filter(|(owner, d)| owner.name() == ci.name() && *d != m.desc) {
+            parts.push(format!("bridge_to = \"{}\"", q(&desc)));
+        }
+        out.push(format!("#[bridge_method({})]", parts.join(", ")));
+    }
+    out
 }
 
 fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lines: &mut Vec<String>) {

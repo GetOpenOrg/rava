@@ -48,21 +48,36 @@ SetAccessibleBoundary 2 行 / SystemStableProps 2 行）——五个生成器缺
 |---|---|---|---:|---|
 | R1 | **xml 内部 lambda 存根** | `jdk/xml/internal/SecuritySupport.lambda$getSystemProperty$0` | **10**（71_xml 全部） | 闭包分析器（lambda 体可达性） |
 | R2 | **泛型反射 scope 构造存根** | `sun/reflect/generics/scope/AbstractScope.<init>` + E0432 | 6（GenericSuperclass/TypeVariables/TypesDeep/NestingFamily/MemberModifiers/OwnerType） | 手写/边界清单（构造器准入？） |
+
+> **R2 实施要点（refl-fix A 族，2026-10-05）**：scope 存根已随边界收窄消解，现症为 `Class.getGenericSignature0` 手写恒返回 null（旧「已知偏差」）——类级泛型签名缺席，getGenericSuperclass/Interfaces 退回 Class、getTypeParameters 为空（AIOOBE / Mismatch of count / NPE 同根）。
+> 修法：元数据新增类级表 `CLASS_SIGNATURE`（扫描已有的 `#[generic_signature]` 块属性，档案侧 + 用户侧同形），native 按表返回真实签名；消费方 sun/reflect/generics 走字节码翻译。
+
 | R3 | **JCA 服务查找存根** | `sun/security/jca/ProviderList.getServices` + `GetInstance.getServices` | 5（crypto_ec 4 + RsaSignVerify） | 手写/边界（ProviderList 是 VM 驱动域） |
 | R4 | **logging 模块 import 断链** | rustc E0433（找不到类型） | 4（logging 3 + ResourceBundleFaces） | 生成器 import（跨模块 jmod 类名解析） |
 | R5 | **反射 invoke 参数校验缺失** | 无 IAE 抛出（见 §二） | 1（InvokeNullArgs；属 R5 语义族） | 反射 L3 校验 |
+
+> **R5 实施要点（refl-fix B 族，2026-10-05）**：native invoke（Method / Constructor 两条 NativeAccessor）直通 `reflect_invoke`，缺 HotSpot `Reflection::invoke_method` 的前置校验——实例方法空接收者 NPE、实参个数 IAE、引用实参类型 IAE 均未抛，类型错的实参落进分派臂的 `From<Object>` 被静默转换或 panic（OverloadResolution 同根）。
+> 修法：`reflect_dispatch::native_invoke` 按描述符先校验（失败置 bad_arg，不包 InvocationTargetException），再进分派；四个 native accessor 统一改走它。
+
 | R6 | **模块元数据/强封装未建模** | 见 §二 ModuleFace/SetAccessible | 2 | 模块系统建模（boot layer 相邻） |
 | R7 | **系统资源装载** | getSystemResourceAsStream null / findBootstrapClassOrNull / ClassResourceStream | 3 | 资源装载通道（K10 前奏） |
 | R8 | **beans finder 构造存根** | `com/sun/beans/finder/InstanceFinder.<init>` | 3（beans 全部） | 边界/手写清单 |
 | R9 | **charset/zipfs 提供者构造存根** | `StandardCharsets$Classes.<init>` / `java/nio/file/FileSystem.<init>` | 5（charsets 3 + zipfs 2） | SPI 装载路径（A 档第 1 步依赖） |
 | R10 | **数组反射 native** | `java/lang/reflect/Array.set` native 存根 | 1（ReflectArrayDeep） | native 准入表 |
 | R11 | **L3 桥分派闭包缺席** | `Comparable.compareTo:(Object)` 分派未覆盖 | 1（InterfaceMethodReflect） | 闭包分析器分派 |
+
+> **R11 实施要点（refl-fix C 族，2026-10-05）**：根因不在闭包——桥方法（ACC_BRIDGE）不发射为 Rust 方法，方法元数据与分派臂里都没有它，`getMethod("compareTo", Object)` 落到 Comparable、`isBridge` 计数为 0。
+> 修法：类头发 `#[bridge_method(.., bridge_to = 真实描述符)]` 行（宏忽略），元数据扫描收为方法行（修饰符 bridge = 0x40，与已发射的协变桥 wrapper 同签名去重），分派按桥描述符键入真实方法臂。
+
 | R12 | **E0308 编译错**（三处不同面） | ComparatorNullsFirst / JndiNoProvider / StreamTerminalEdges | 3 | 生成器类型发射（record/泛型推断待抽查） |
 | R13 | **http async 转译错** | TestHttpLoopbackAsync transpile fail | 1 | 转译器（CompletableFuture 链待抽查） |
 
 未单列：AnnoDeepAccess / ProtectionDomainFaces（`Class$Holder.allPermDomain` 存根）/ 
 OverloadResolution 等 4 例杂项 run error，归入 R2/R3 邻域待逐例细看；
 LocaleDateCjk（run error）与 R-CLDR 环境相邻，待日志细读。
+
+> **ProtectionDomainFaces 实施要点（refl-fix C 族）**：`Class$Holder` 随外层 VM 边界类 Class 截断，allPermDomain 存根——纯 Java 静态状态，入 `translate_nested`；应用类的 `getProtectionDomain0` 按内建加载器定义类路径落地（ucp 首条目 CodeSource → `SecureClassLoader.getProtectionDomain`），codesource 非空与 JDK 一致。
+
 
 ## 四、jmod A/B 档结论（对应计划 §七 实测列）
 
