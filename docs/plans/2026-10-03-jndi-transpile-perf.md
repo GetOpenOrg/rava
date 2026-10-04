@@ -475,3 +475,36 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
   `ResourceBundle`、`ClassWriter.getCommonSuperClass` 等。
 - 放行站点：`StandardCharsets.lookup`、`LocaleProviderAdapter.forType`、`ClassSpecializer` loadSpecies、
   `CalendarSystem.forName`、`Security.getSpiClass`、`OIDMap$OIDInfo.getClazz` 等。
+
+**合入判据实测**（7426e583，已合并上游 dd10731c，发射器与 main 相同；本机经 heavy_lock 交替跑，main 二进制取自 dd10731c）：
+
+| 用例 | 指标 | main | engine-order | 结论 |
+|---|---|---|---|---|
+| TestJndiNoProvider | 闭包类 / 方法 / 反射 | 3841 / 24568 / 1617 | 3841 / 24556 / 1610 | 本分支是 main 的真子集 |
+| TestJndiNoProvider | `rava closure` real（user） | 184 s（160 s） | 281 s（212 s） | **慢约 33%（按 user 计）** |
+| TestJndiNoProvider | 发射 JDK 类 | 3839 | 3839 | 持平 |
+| TestHttpLoopbackSync | 闭包类 / 方法 / 反射 | 5443 / 33929 / 1739 | 5442 / 33923 / 1732 | 本分支是 main 的真子集 |
+| TestHttpLoopbackSync | `rava closure` real（user） | 293 s（280 s） | 342 s（331 s） | **慢约 17–18%** |
+| TestHttpLoopbackSync | 发射 JDK 类 | 5441 | 5440 | 少 1（`RSAKeyPairGenerator$PSS`） |
+
+- 发射全程：本分支 JNDI 231 s、HTTP 503 s。main 的同轮发射只要 7–9 s，是命中了 main 工作区已有的闭包 / 生成缓存，
+  不可比。合并上游前（发射器不同）的一轮：JNDI 261 s vs 230 s，HTTP 453 s vs 342 s。
+- 少掉的项全部来自中途窗口期按名加载：
+  - `sun/net/www/protocol/{file,jar,jrt}/Handler`、`java/util/logging/Handler`、asm `Handler` 的构造器，
+    都是 `*Handler` 名字的不确定站点；
+  - JCA 的 `RSAKeyPairGenerator$PSS`；
+  - 队列类的 `offer` / `poll`。
+- 判据 ② 满足：`closure_independent_of_hash_seed` 通过，6 例 × 3 种子闭包完全一致。
+- 判据 ① 只满足一半：类数不高于 main，但闭包耗时高于 main。StockTrans 一类序列化用例反而更快（约 40 s vs main 约 60 s）。
+
+**未解决与下一步**（交新代理）：
+1. 闭包耗时回到不高于 main。疑点：
+   - 每轮空闲放行后，挂起站点所在方法要重跑（`lookup_trial` 经 swork 重处理整个方法），放行轮数多时累积开销大。
+   - `class_lookup` 每次都对 `methods[m].key.to_string()` 与 `instantiation_hosts` 做字符串比较。应在构造时把清单
+     解析成方法号集合。
+   - `field_wrap_call` 的类 × 名笛卡尔积。`fpair_done` 只挡住了重复开放，枚举本身没有省掉。
+
+   建议先用 `--perf` / 采样定位 HTTP / JNDI 两例的热点，再按「只重跑站点、不重跑整方法」改放行路径。
+2. 服务器上 TestHttpLoopbackSync 在 main 上本身也是 10 min 转译超时（发射阶段为主）。要过超时线，需要另立的引擎 / 发射提速，
+   不属于本项。
+3. 上文 `@hwopen` 的 open 写入顺序依赖仍未根治，目前靠延后放行消除了它对单测的影响。终态方向见「交接 / 下一步」。
