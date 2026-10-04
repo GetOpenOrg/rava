@@ -132,6 +132,50 @@
 
 **外部参照终态（2026-10-04 用户采纳）**：十二例在 `rava build --release` 下的运行段 ≤ 同机 GraalVM native-image（无 PGO）的运行时间，例如 LynchBell ≤ 3.62 s、Factorion ≤ 1.59 s、FractionReduction ≤ 9.00 s。逐例阈值见 [`docs/reports/2026-10-04-graalvm-baseline.md`](../reports/2026-10-04-graalvm-baseline.md) §二，复现用 `scripts/graalvm_bench.sh`。上面 debug ≤ 30 s 的终态同时保留。起点基线是服务器作业 `timing-rel-10795076`（release）和抽查 `timing-dbg-10795076`（debug）记录的逐例耗时。
 
+#### R1 实施记录（2026-10-05 起，分支 `r1-perf`）
+
+**起点**（服务器 Linux x86；release 取作业 `timing-rel-10795076`，debug 取抽查 `timing-dbg-10795076`，GraalVM 取 `gvm-linux-bd52b537`；单位秒）：
+
+| 用例 | rava release 运行段 | rava debug 运行段 | GVM Linux ni | 阈值（报告 §二） |
+|---|---|---|---|---|
+| LynchBell | 147.3（复跑 141.6 / 150.6） | > 300 | 失败（JVM 1.59） | 3.62 |
+| Factorion | 54.5 | > 300 | 1.74 | 1.59 |
+| FWord | 编译失败（OOM，11.9 GB） | > 300 | 1.60 | 1.37 |
+| FibonacciMatrixExponentiation | 编译失败（OOM） | > 300 | 8.87 | 6.16 |
+| IQPuzzle | 编译失败 | > 300 | 4.86 | 3.98 |
+| FourIsTheNumberOfLetters | 编译失败 | > 300 | 3.18 | 2.77 |
+| FractionReduction | 编译失败 | > 300 | 12.75 | 9.00 |
+| PartitionInteger | 运行 OOM-kill（1m34s，峰值 19.8 GB） | > 300 | 0.85 | 1.36 |
+| PrimorialNumbers | 编译失败 | > 300 | 失败（JVM 3.93） | 3.74 |
+| RailwayCircuit | 编译失败 | > 300 | 失败（JVM 0.81） | 1.88 |
+| SelfNumbers | 84.5 | > 300 | 2.54 | 2.27 |
+| UnprimeableNumbers | 编译失败 | > 300 | 4.10 | 4.60 |
+
+release 下 LynchBell 每次迭代约 1.7 µs，需提速约 40 倍；debug 需 10 倍以上。release 编译失败的 9 例属 release 构建资源问题（fat LTO 单 codegen-unit 峰值内存），不在本线的方法体翻译范围内，另记。
+
+**剖析手段**：服务器 `perf` 存在但 `perf_event_paranoid=4`，无特权不可用（作业 `r1p-prof-rel-6f93f1c6` 产出空数据）；不改系统参数，改用 `scripts/runprof/`（LD_PRELOAD 的 SIGPROF 采样器 + addr2line 符号化，`prof.sh <Test> release|debug 秒数`）。
+
+**热点分类（代码通读，LynchBell 一次 `s.charAt(l)` 的 release 路径）**：
+
+| 类别 | 现形态 | 每次 `charAt` 的次数 | 归属 |
+|---|---|---|---|
+| 静态字段读 | `X::f()?` = 类初始化检查（OnceLock + 原子读）+ `__RefSlot<Option<T>>` 读锁 + 克隆；基本类型静态（`COMPACT_STRINGS`）同样走读锁 | 3（`s`、`COMPACT_STRINGS`、`SIOOBE_FORMATTER`） | 静态存储形态：S7-3 区 |
+| 实例字段读 | wrapper `__get_f()` → `vt()` 动态调用 → 每字段一个 `Arc<RwLock<Option<Box<T>>>>` 读锁 + 克隆；基本类型字段 `Arc<AtomicU64>` SeqCst | 2–3（`value` ×2、`coder`） | 对象存储与访问器形态：S7-3 区 |
+| 数组访问 | `JArray` = `Arc<Repr>`，`get` / `set` / `len` 每次取 `RwLock` 读锁 | 2（`len`、`get`） | 运行时 `array.rs` |
+| 引用计数 | 实参 / 临时值 `Clone::clone(&..)`：调用结果、getter 结果也再克隆一次 | 3–4 对原子增减 | 方法体翻译（本线） |
+| 类初始化检查 | 每个静态方法入口 `Self::__class_init()?`，静态字段 getter 内再查一次 | 4（`StringLatin1.charAt`、`String.checkIndex`、`Preconditions.checkIndex` 及 getter） | 宏 `class_init.rs`：S7-3 同文件 |
+| 栈界检查 | 非叶子方法入口 `__stack_check()` → `rava_coro::stack_exhausted()`（`#[inline(never)]`，TLS） | 4 | T6 区 |
+| 虚 / 接口分派 | final 类（String）实例方法仍经 wrapper → 下沉体函数；字段访问经 `dyn` vtable | 每次字段读 1 | S7-3 区（访问器） |
+| 字符串构造 | `String.valueOf(int)`：`byte[]` + String 对象，对象每字段一个 Arc 分配（约 9 次分配） | 每次迭代 1 组 | 对象存储形态：S7-3 区 |
+| 异常 / 溢出 | `checkIndex` 走完整 `Preconditions` 字节码；整数运算 `wrapping_*` 无额外开销 | — | 不需改 |
+
+剖析数据到达后按自耗 / 含子调用比例修订本表。
+
+**已做（本线范围内的方法体翻译）**：
+
+1. `9b74cb28` 独占临时值不再克隆：Java 调用结果（`?`）、静态字段读、字段 getter 作实参 / checkcast 源时直接移交（`Expr::is_owned_temp`）。LynchBell 生成树 `Clone::clone(&` 6292 → 5974。
+2. `e983141d` 单用临时值按值移交：`let _tN = e;` 后仅在紧随语句以 `Clone::clone(&_tN)` 出现一次时改为 `_tN`（循环头 / 闭包除外；同名重绑保守不改）。LynchBell 生成树 939 行受益。
+
 ### 5. 测试流程效率（用户 2026-10-01）
 
 2026-10-01 分布式全量：1083 例、7 台服务器、约 5 h 墙钟、约 35 机时。按本地抽查比例（13 例：编译 7 m 08 s / 共 9 m 44 s）推算：cargo 编译约 70–75%，转译约 20%，超时空等约 1.5 机时（约 4%），运行约 3%。
