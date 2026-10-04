@@ -141,8 +141,11 @@ impl<'a> Engine<'a> {
             Node::HP(h, i) => format!("hub 实参{i} {}", self.hub_label(h)),
             Node::HR(h) => format!("hub 返回 {}", self.hub_label(h)),
             Node::G(g) => {
-                let (fi, n, put) = self.gathers[g as usize];
-                format!("field {} {} {n} objects", self.field_label(fi), if put { "into" } else { "of" })
+                let (slot, n, put) = self.gathers[g as usize];
+                match slot {
+                    gather::Slot::Field(fi) => format!("field {} {} {n} objects", self.field_label(fi), if put { "into" } else { "of" }),
+                    gather::Slot::Elem(p) => format!("elements[{}] of {n} arrays", if p == 0 { "偶" } else { "奇" }),
+                }
             }
             Node::A(s, i) | Node::W(s, i) => {
                 let (m, off, t) = self.hw_sites[s as usize];

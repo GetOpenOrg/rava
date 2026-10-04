@@ -354,7 +354,7 @@ impl<'a> Engine<'a> {
             d.retain(|o, _| !offs.contains(o));
         }
         if let Some(d) = self.gather_last.get_mut(&m) {
-            d.retain(|o, _| !offs.contains(o));
+            d.retain(|k, _| !offs.contains(&k.0));
         }
         if let Some(d) = self.refl_seen.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));

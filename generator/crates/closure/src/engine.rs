@@ -296,10 +296,10 @@ pub struct Engine<'a> {
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
     hub_family: HashMap<(MemberRef, bool), Vec<(u32, Rc<[u32]>)>>,
-    /// 字段汇集节点：序号 → (字段, 对象数, 写入向)；(字段, 写入向, 对象集合) → 序号；字节码字段站点 → (字段, 当前汇集节点, 累计对象)
-    gathers: Vec<(usize, u32, bool)>,
-    gather_ids: HashMap<(usize, bool, Rc<[u32]>), u32>,
-    gather_last: HashMap<usize, HashMap<u32, (usize, u32, Rc<[u32]>)>>,
+    /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
+    gathers: Vec<(gather::Slot, u32, bool)>,
+    gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
+    gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）

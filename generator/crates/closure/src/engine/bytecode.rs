@@ -159,13 +159,14 @@ impl<'a> Engine<'a> {
                     let fs = self.feeds(m, array, aid);
                     let s = self.value_set(&fs);
                     let mut add = TypeSet::default();
-                    for x in &s.classes {
-                        if self.arrays.contains_key(&x) {
-                            for p in slots(index) {
-                                self.flow(Node::E(x, p), Node::S(m, off), tid);
-                            }
-                        } else {
-                            add.open.insert(tid);
+                    let xs: Vec<u32> = s.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
+                    if xs.len() < s.classes.len() {
+                        add.open.insert(tid);
+                    }
+                    // 分配点多时经汇集节点汇集（与逐分配点接边同集合，见 `gather.rs`）
+                    if !xs.is_empty() {
+                        for p in slots(index) {
+                            self.gather_elems(m, off, p, tid, &xs, Node::S(m, off));
                         }
                     }
                     // open 数组（手写层 / VM 产出）的元素同样 open
