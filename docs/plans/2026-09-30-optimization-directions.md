@@ -169,7 +169,18 @@ release 下 LynchBell 每次迭代约 1.7 µs，需提速约 40 倍；debug 需 
 | 字符串构造 | `String.valueOf(int)`：`byte[]` + String 对象，对象每字段一个 Arc 分配（约 9 次分配） | 每次迭代 1 组 | 对象存储形态：S7-3 区 |
 | 异常 / 溢出 | `checkIndex` 走完整 `Preconditions` 字节码；整数运算 `wrapping_*` 无额外开销 | — | 不需改 |
 
-剖析数据到达后按自耗 / 含子调用比例修订本表。
+**剖析实测**（作业 `r1p-prof5-2ac19d8c`，Factorion release，jp1，250 Hz 采样 10000 个样本，自耗按类归并）：
+
+| 类别 | 自耗占比 | 主要符号 |
+|---|---|---|
+| 分配 / 释放 | ≈ 24% | libc（malloc / free）15.4%、`Arc::drop_slow` 3.4%、drop_glue 3.9%、alloc / dealloc |
+| 实例字段访问器 | ≈ 10% | `__get_buf` 6.6%（RwLock 读 + Arc 克隆）、`__get_coder` / `__get_value` / `__set_*` / `__as_*` |
+| 数组访问 | ≈ 10% | `JArray::get` 4.4%、`set` 3.0%、`arraycopy` 2.2%（RwLock） |
+| 静态字段读 + 类初始化检查 | ≈ 7.5% | `__class_init` 3.4%、`SIOOBE_FORMATTER` 3.2%、`DigitOnes` / `DigitTens` |
+| 栈界检查 | ≈ 4.5% | `rava_coro::stack_exhausted` 3.6%（不内联，TLS）、`__stack_check` 1.0% |
+| JDK 方法体本身 | 其余 | `StringLatin1.charAt` 5.2%、`String.isLatin1` 3.5%、`String.length`、`Integer.parseInt` 等 |
+
+结论：前四类（约 52%）都是对象 / 静态 / 数组存储的同步形态（每字段一个 `Arc`、每次读写一把 `RwLock`、每次读出克隆一份引用计数），属 S7-3 区与运行时 `array.rs`；方法体翻译侧能直接消除的是多余的引用计数增减（已做两项）。存储形态改造已向主会话申请协调（2026-10-05）。
 
 **已做（本线范围内的方法体翻译）**：
 
