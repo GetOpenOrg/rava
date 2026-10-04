@@ -1755,6 +1755,16 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
   - 剩余杠杆都在他人边界：① dev 档位的 opt-level（`emit/src/project/entry.rs`，V12）——预计最大；② ldc 按调用点缓存驻留实例
     （生成器，R1）；③ 类型化 null 改为按描述符静态缓存（`object.rs`，S7-3）；④ Unsafe 字段偏移解码与引用数组访问去掉逐次查表与
     String 克隆（`unsafe__impl.rs`，S7-3「Unsafe 槽位」）。已报协调者裁定。
+- opt-level 杠杆实测（作业 vt6-opt1-4a983fe8，jp1，提交 4a983fe8，环境变量 `CARGO_PROFILE_DEV_OPT_LEVEL=1`
+  `CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false`，不改 entry.rs）：dev 构建 8:32、峰值 5.7 GiB，二进制 426 MiB。
+
+  | 模式 | opt 0（vt6-prof-373114f1） | opt 1 |
+  |---|---|---|
+  | split 墙钟 / 峰值 RSS | 27.3 s / 1.78 GB | 6.4 s / 0.98 GB（建 0.69 s、启 2.07 s、唤醒到 join 1.46 s；sleeping true） |
+  | sleep 墙钟 / 峰值 RSS | 32.9 s / 1.38 GB | 8.6 s / 1.43 GB（建 + 启 3.38 s；sleeping **false**） |
+
+  opt 1 下墙钟与内存都过线，剩 sleep 模式的 `all sleeping at once`：主线程建 + 启 10⁵ 个须在 2 s 睡眠窗口内完成（≤20 µs/VT），
+  实测约 34 µs/VT，还差 1.7 倍，需要杠杆 ②–④ 与 CHM / ForkJoinPool 常数继续压。
 
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
