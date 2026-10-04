@@ -493,6 +493,18 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
 #[derive(Clone)]
 pub struct Object(pub Rc<dyn ObjectVTable>);
 
+/// 释放：最后一个强引用经 `handle::__release` 计深释放（S7-3x 非递归释放），槽位换成 null 单例。
+impl Drop for Object {
+    #[inline]
+    fn drop(&mut self) {
+        if Rc::strong_count(&self.0) != 1 {
+            return;
+        }
+        let null = Clone::clone(&Object::default().0);
+        crate::handle::__release(std::mem::replace(&mut self.0, null));
+    }
+}
+
 /// `(void) obj` —— 丢弃引用；使 `()` 满足类型实参的 `From<Object>` 约束。
 impl From<Object> for () {
     fn from(_: Object) {}

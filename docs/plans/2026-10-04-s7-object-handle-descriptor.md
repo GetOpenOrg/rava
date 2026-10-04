@@ -79,6 +79,7 @@
     - 实例字段：沿接收者描述符 `display` 找声明类、按 Java 名找字段，在存储单元上读写（基本单元按种类装箱 / 拆箱，引用单元经 `__ref_field`）；声明类不在祖先链上 → IllegalArgumentException。泛型类实例字段随之可反射（原先跳过）。
     - 静态字段：宏为类 / 接口展开关联常量 `X::__STATICS`（Java 名 + 既有 getter / setter 的擦除函数指针 + 按值类型实例化的 `__static_ref::<T>` / `__static_prim::<P>`）；经访问器读写，类初始化、安全点与手写访问器语义不变；常量无 setter → `final_field`。关联常量只在 main 登记处求值，未登记类不付代码生成代价。
     - 登记沿用 `register_field_dispatch`（入参改为静态字段表），选择口径不变：用户树类全部，JDK / 库类限序列化协议名与按名反射名。
+  - **S7-3x 对象释放不递归**（来源：T1b 审计，c1d-closure-bloat §21.8.5）：`__Handle` / `Object` 的 Drop 释放最后一个强引用时经 `handle::__release` 计深（线程局部深度），深度 ≥ 32 的对象移入线程本地待释放队列，由最外层释放循环清空——任意链长下释放栈深 ≤ 32 层 drop 帧；非最后强引用只减计数（快路径一次原子读）。`Object` 槽位为 pub 元组字段，Drop 内以 null 单例换出再释放。字段载体（wrapper → `__Ref` → `__Handle`、擦除字段 `Box<Object>`、接口载体 → `Object`、数组元素）都经这两处，宏无需改动。验证用例 `48_refs/TestLongChainRelease`（10⁶ 节点单链表 + 2×10⁵ 擦除字段链 / 数组链，主线程与虚拟线程各一次）。
 
 ## 一、问题
 

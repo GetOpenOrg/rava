@@ -10,6 +10,7 @@
 
 use crate::java::lang::ObjectVTable;
 use crate::sync_model::__Shared;
+use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
 
 /// 对象句柄：持有对象（运行时类的存储）或为 null。
@@ -33,8 +34,8 @@ impl __Handle {
     /// 装入 Object（`From<X> for Object`，S7-2b）：Object 直接持有句柄所持存储（运行时类对象），
     /// 不再包一层 wrapper；null → 带本类描述符的类型化 null（`__class_name` / `__desc` 报静态类）。
     #[inline]
-    pub fn into_object(self, desc: &'static crate::class_desc::__ClassDesc) -> crate::java::lang::Object {
-        match self.0 {
+    pub fn into_object(mut self, desc: &'static crate::class_desc::__ClassDesc) -> crate::java::lang::Object {
+        match self.0.take() {
             Some(rc) => crate::java::lang::Object::__from_shared(rc),
             None => crate::java::lang::Object::__typed_null_desc(desc),
         }
@@ -56,6 +57,60 @@ impl __Handle {
             None => "null".to_owned(),
         }
     }
+}
+
+impl Drop for __Handle {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some(rc) = self.0.take() {
+            __release(rc);
+        }
+    }
+}
+
+// ── 非递归释放（S7-3x）────────────────────────────────────────────────────────
+//
+// 释放对象的最后一个强引用会经 drop glue 释放其字段，字段又持有对象：Arc → 字段单元 → 句柄 →
+// Arc …，朴素递归的栈深等于引用链长（长链表节点、cause 链），协程栈（1 MiB）与主线程都会溢出。
+// 句柄与 Object 释放最后一个强引用时经此计深：深度未超阈值就地释放；超阈值把该对象移入线程本地
+// 待释放队列，由最外层释放循环清空——任意链长下释放栈深有界（阈值 × 单层 drop 帧）。
+// 释放中不会让出（drop glue 不执行 Java 代码），载体线程的线程局部即当前栈的状态。
+
+/// 就地释放的最大嵌套深度（超出的对象入待释放队列）
+const RELEASE_MAX_DEPTH: u32 = 32;
+
+std::thread_local! {
+    static RELEASE_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static RELEASE_PENDING: RefCell<Vec<__Shared<dyn ObjectVTable>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// 释放一个对象引用（`__Handle` / `Object` 的 Drop）：非最后一个强引用只减计数；最后一个按深度
+/// 就地释放或入队，最外层释放清空队列。线程局部已销毁（线程退出期）时就地释放。
+#[inline]
+pub(crate) fn __release(rc: __Shared<dyn ObjectVTable>) {
+    if __Shared::strong_count(&rc) != 1 {
+        return;
+    }
+    release_last(rc);
+}
+
+#[inline(never)]
+fn release_last(rc: __Shared<dyn ObjectVTable>) {
+    let Ok(depth) = RELEASE_DEPTH.try_with(Cell::get) else { return };
+    if depth >= RELEASE_MAX_DEPTH {
+        // 线程局部不可用时闭包随 try_with 丢弃，rc 就地释放
+        let _ = RELEASE_PENDING.try_with(move |q| q.borrow_mut().push(rc));
+        return;
+    }
+    RELEASE_DEPTH.set(depth + 1);
+    drop(rc);
+    if depth == 0 {
+        // 最外层：逐个释放队列中的对象（其字段再次超深的入队，循环至空）
+        while let Some(next) = RELEASE_PENDING.with(|q| q.borrow_mut().pop()) {
+            drop(next);
+        }
+    }
+    RELEASE_DEPTH.set(depth);
 }
 
 /// 类型化引用：句柄 + 本类视图指针。`vt` 恒指向 `h` 所持对象（或二者同为空），
