@@ -2100,9 +2100,18 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
 **结论**：单例增量 2713 类 > 300，按引导层计划第 1 步规则另立精度项，锚点不启用；引导层第 2–5 步（含
 `BootLoader.getSystemPackageLocation`、命名 java.base、强封装、非空 boot layer）以该精度项为前置。精度项两条线：
 
-1. URL / URI 协议事实：`toModuleReference` 建 URI 时 scheme 为常量 `"jrt"`，经 `URI.scheme` 字段流到 `URI.toURL` →
-   `URL.<init>` 协议形参。`lowerCaseProtocol` 先比 `jrt` / `file` / `jar` 再 `toLowerCase(Locale.ROOT)`，只要协议
-   形参的值集合是已知常量集合（字段值事实，按写入点并集），该分支即折叠；`toLowerCaseEx` 另只在 tr / az / lt 语言下
-   可达，`Locale.ROOT` 的 language 字段事实（常量 `""`）可作第二道折叠。
+1. URL / URI 协议事实。真实入口是 `boot2@64 BootLoader.loadModule` → `BuiltinClassLoader$LoadedModule.<init>@57`
+   → `createURL(mref.location())` → `URI.toURL` → `URL.of(uri, null)`。`URL.of` 两支：
+   - `handler == null && scheme.equals("jrt") && !uri.isOpaque() && uri.getRawFragment() == null` → `@136 new URL("jrt", host, port, file, null)`；
+   - 否则 `@251 new URL(null, uri.toString(), handler)`（按规格串解析，`@188 lowerCaseProtocol(子串)` 的协议不可静态求出）。
+
+   `toModuleReference` 以 `JavaNetUriAccess.create("jrt", "/"+name)`（私有构造只写 `scheme` / `path`）建 URI，故
+   系统模块的 URI 走第一支；要关掉第二支须**按分配点**的对象字段事实（该 URI 的 `scheme` = `"jrt"`、`path` 非空、
+   `fragment` 未写），按字段不分接收者的槽（`PSlot::F`）不够——程序里其他 URI 由解析构造写同名字段。
+   第一支之后 `@36 lowerCaseProtocol(protocol)` 的协议形参在 5 参构造上汇合 `"file"`（`ParseUtil.fileToEncodedURL`）
+   与 `"jrt"`，单常量格即 Top；需把选择子形参（`selector.rs`，现只认 int 族）推广到「入口值作 `equals` 接收者、
+   实参为字面量」的 String 形参，并让构造方法按分配点接收者克隆，常量才能逐调用点到达 `lowerCaseProtocol`。
+   `toLowerCase(ROOT)` 内的 `toLowerCaseEx` 依赖字符串内容（σ / 代理对 / İ），不能靠 `Locale.ROOT` 语言事实单独关掉。
+   三件（分配点字段事实、String 选择子、构造方法接收者克隆）合起来才关掉第 1 名出口，属独立精度项，工作量不在本线。
 2. 分派变宽限制在 phase 帧：锚点启用后其余方法读 `bootLayer` 而不重走 `ofSystem`；新实例化类型的 `toString` /
    `equals` / `PrivilegedAction.run` 分派只在实际有调用者的接收者集合上展开（与 §23.4 第 2–4 名同一机制）。
