@@ -2,7 +2,7 @@
 """进程内存时间线采样（Linux，a3-T6 规模剖析用）。
 
 用法：rss_timeline.py <out.tsv> <cmd...>
-每 100 ms 读一次 /proc/<pid>/status 与 /proc/<pid>/smaps，按映射分类汇总驻留：
+每 100 ms 读一次被测进程（沿子进程链取最深后代）的 /proc/<pid>/status 与 /proc/<pid>/smaps，按映射分类汇总驻留：
   stack —— 协程栈 slab（匿名映射，大小为槽跨度 1 MiB + 1 页 的整数倍且 ≥16 槽）；
   anon  —— 其余匿名映射（malloc 堆 / arena、平台线程栈等）；
   file  —— 文件映射（二进制代码与只读数据）。
@@ -52,6 +52,18 @@ def sample(pid: int) -> dict | None:
     return f
 
 
+def leaf(pid: int) -> int:
+    """沿 /proc 子进程链下行到最深的后代（命令可能经 /usr/bin/time 等包装器启动）。"""
+    while True:
+        try:
+            kids = open(f"/proc/{pid}/task/{pid}/children").read().split()
+        except OSError:
+            return pid
+        if not kids:
+            return pid
+        pid = int(kids[0])
+
+
 def main() -> int:
     out, cmd = sys.argv[1], sys.argv[2:]
     p = subprocess.Popen(cmd)
@@ -61,7 +73,7 @@ def main() -> int:
     with open(out, "w") as fo:
         fo.write("\t".join(cols) + "\n")
         while p.poll() is None:
-            s = sample(p.pid)
+            s = sample(leaf(p.pid))
             if s:
                 s["wall_ms"] = int(time.time() * 1000)
                 fo.write("\t".join(str(s.get(c, "")) for c in cols) + "\n")

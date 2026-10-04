@@ -2,15 +2,16 @@
 # a3-T6 虚拟线程规模剖析（服务器作业用，Linux）：参考 JDK 两次运行 TestVirtualThreadScale 取 expected，
 # 转译 tests/perf/VirtualThreadScale 后按各模式采样内存时间线与耗时。产物在 build/vt6/。
 # 用法：scripts/diag/vt6_probe.sh <dev|release> [n=100000] [模式...（缺省 sleep park unstarted）]
+# 环境：SKIP_JDK=1 跳过参考 JDK 运行；PERF=1 每模式另跑一次 perf record，报告写 build/vt6/<profile>_<mode>_perf*.txt
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 PROFILE=${1:-dev}; N=${2:-100000}; shift 2 2>/dev/null || shift $#
 MODES=${*:-sleep park unstarted}
 OUT=build/vt6; mkdir -p $OUT
 JH=$(scripts/fetch_reference_jdk.sh) || exit 1
-echo "== host: $(uname -r) cpus=$(nproc) mem=$(free -m | awk '/Mem:/{print $2}')MiB perf=$(command -v perf || echo none)"
+echo "== host: $(uname -r) $(uname -m) cpus=$(nproc) mem=$(free -m | awk '/Mem:/{print $2}')MiB perf=$(command -v perf || echo none)"
 
-if [ "$PROFILE" = dev ]; then
+if [ "$PROFILE" = dev ] && [ -z "${SKIP_JDK:-}" ]; then
   for k in 1 2; do
     /usr/bin/time -v "$JH/bin/java" tests/e2e/60_real_threads/TestVirtualThreadScale.java > $OUT/jdk$k.txt 2> $OUT/jdk$k.time
     echo "== jdk run $k: $(grep -E 'Elapsed|Maximum resident' $OUT/jdk$k.time | tr -s ' ' | tr '\n' ' ')"
@@ -37,5 +38,15 @@ for mode in $MODES; do
   echo "== $PROFILE $mode n=$N rc=$?"
   cat $OUT/${PROFILE}_$mode.out
   grep -E '^phase|rss_timeline|Elapsed|Maximum resident|context switches|User time|System time|Minor' $OUT/${PROFILE}_$mode.err
+  if [ -n "${PERF:-}" ]; then
+    P=$OUT/${PROFILE}_$mode
+    perf record -F 499 -g -o $P.data -- "$BIN" $N $ms $mode > /dev/null 2> $P.perf_rec.log
+    echo "== perf $mode rc=$? $(tail -2 $P.perf_rec.log | tr '\n' ' ')"
+    perf report -i $P.data --stdio --no-children --sort comm,sym --percent-limit 0.3 -g none 2>/dev/null | head -200 > ${P}_perf_self.txt
+    perf report -i $P.data --stdio --children --sort comm,sym --percent-limit 1.5 -g none 2>/dev/null | head -300 > ${P}_perf_incl.txt
+    perf report -i $P.data --stdio --no-children --sort sym --percent-limit 2 -g caller,0.5,callee,function,percent --max-stack 40 2>/dev/null | head -1500 > ${P}_perf_calls.txt
+    rm -f $P.data
+    head -60 ${P}_perf_self.txt
+  fi
 done
 rm -rf $WS

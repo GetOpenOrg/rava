@@ -1,0 +1,4 @@
+finished: 100000
+sum: 4999950000
+all sleeping at once: true
+alive after join: 0
