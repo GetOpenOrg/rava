@@ -65,6 +65,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         self.__view_target().is_some_and(|__t| __t.is_instance_of(type_id))
     }
 
+    /// 运行时类的静态描述符（S7）：生成类返回本类 `X__DESC`；数组、基本类型装箱、
+    /// 手写非类对象没有类描述符 → None。wrapper / 视图经 `__view_target` 委托。
+    #[doc(hidden)]
+    fn __desc(&self) -> Option<&'static crate::class_desc::__ClassDesc> {
+        self.__view_target().and_then(|__t| __t.__desc())
+    }
+
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
     fn as_any(&self) -> &dyn std::any::Any;
 

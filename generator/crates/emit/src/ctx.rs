@@ -326,6 +326,9 @@ pub enum HwAudit {
     Intrinsic,
     /// 越界覆盖
     Override,
+    /// 手写的 `impl .. X__VTable for ..`（S7：类的 vtable 一律由宏生成，终态 0，新增即回归）；
+    /// 成员为 `相对路径:行号`
+    VtableImpl,
 }
 
 impl ProjectState {

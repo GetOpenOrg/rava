@@ -322,6 +322,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         archive_side::stamp_versions(&mut w, out_dir, &crates, &included)?;
     }
     perf.mark("entry");
+    state.hw_audit.extend(crate::audit::handwritten_vtable_impls(&runtime_src).into_iter().map(|m| (HwAudit::VtableImpl, m)));
     Ok(ProjectReport {
         jdk_classes: jdk.files.len(),
         user_classes: user.entries.len(),

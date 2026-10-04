@@ -64,6 +64,18 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // ══════════════════════════════════════════════════════════════════════════
 
     let binary_name = &ctx.meta.binary_name;
+    // 运行时类的静态描述符（S7-0）：wrapper 擦除实例化上的固有常量（声明层发射）
+    let desc_query: TokenStream2 = if binary_name.is_empty() {
+        quote! {}
+    } else {
+        let struct_ident = &ctx.struct_ident;
+        let erased = &ctx.erased_ty_args;
+        quote! {
+            fn __desc(&self) -> ::std::option::Option<&'static __ClassDesc> {
+                ::std::option::Option::Some(<#struct_ident #erased>::__DESC)
+            }
+        }
+    };
     let check_types: Vec<String> = if ctx.meta.all_supertypes.is_empty() {
         vec![binary_name.clone()]
     } else {
@@ -412,6 +424,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 #proxy_invoke_hook
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 fn __class_name(&self) -> &'static str { #binary_name }
+                #desc_query
                 fn __identity(&self) -> *const () {
                     __Shared::as_ptr(&self.__identity) as *const ()
                 }

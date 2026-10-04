@@ -1,9 +1,42 @@
 # S7：统一对象句柄 + 每类静态描述符（方案，2026-10-04）
 
-> 拆 crate 线（`docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.5.4）的结构性终态项。本文只是方案，**未实施**；实施须经主会话确认。
+> 拆 crate 线（`docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.5.4）的结构性终态项。用户 2026-10-04 批准（D7，取法 B）；S7-0 / S7-1 在 s7-desc 分支实施，进度见下文「现状」。
 > 测量数据见上述计划 §7.7「2026-10-04 复测」。
 
 > **切分轴已定（2026-10-04）：先按 JDK 模块，超阈值的模块内再按体量**（crate-split 计划 §7.5.5，与 t1-link 方案 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md` §4.8 对齐）。S7 作用于每个模块 crate 的声明层，峰值约束只在 `java_base_decl`。§九的按签名 SCC 分段是 `java_base_decl` 内部的第三级，仍是方案（V5）。
+
+## 现状（实施记录，s7-desc 分支，随提交同步）
+
+### 已验证结论
+
+- **S7-0（描述符生成 + 守护）**：
+  - runtime 新增 `class_desc.rs`：`__ClassDesc { binary_name, depth, display, supertypes }`，方法 `super_desc` / `is_subclass_of`（`display[t.depth]` 同址，O(1)）/ `is_subtype_name`（有序名单二分）。`ObjectVTable::__desc()` 缺省经 `__view_target` 委托，非类对象（数组、装箱基本类型、TypedNull、手写非类对象）为 None。
+  - 宏按类发射模块级 `#[doc(hidden)] pub static X__DESC` 与 wrapper 固有常量 `X::__DESC`（声明层）；`X__inner` 的 `__desc()` 返回 `<X<Object..>>::__DESC`（实现层）。祖先描述符写作 `<Anc<Object..>>::__DESC`：类型路径不需要新增 `use`，祖先形参取 Object（宏注入的标准 bound 对 Object 恒成立）。
+  - 守护：`[raw-audit]` 行末新增 `handwritten_vtable_impls=N`（扫 `runtime/java_runtime/src` 不含生成标记的 `.rs`，正则 `impl .. __VTable .. for`；非零时另出 `[vtable-impl-audit]` 明细）；单测 `repo_runtime_has_no_handwritten_vtable_impls` 断言仓库手写层为 0。现状即 0。
+- **与 §3.2 的偏差（终态取舍，不是过渡）**：
+  - **名字取 `__ClassDesc`**：`java.lang.constant.ClassDesc` 是 Java 类，生成文件显式 `use` 它时会遮蔽 prelude 通配引入（与 `__Shared` 同一约定）。
+  - **wrapper 固有 `const __DESC`，不引入 `__Described` trait**：固有常量即可从类型路径取得任意类的描述符，不需要 trait 约束；不新增 Java 命名空间之外的 trait（命名原则）。名字带 `__` 前缀避开 Java 静态字段；与既有 `BINARY_NAME` 同一形态。
+  - **描述符必须是 `static`**：地址即类标识（`is_subclass_of` 按地址比较），`const` 内联会在各使用点产生副本。
+  - **接口按名字表达（`supertypes`），不是 `&[&ClassDesc]`**：闭包外接口没有 Rust 类型，接口载体也不是运行时类，没有类描述符；`supertypes` 即现有 `all_supertypes`（本类、父类链、闭包内外全部接口、`java/lang/Object`），判定集合与现有 `is_instance_of` 的 `matches!` 名单逐项相同。
+  - **`super_` 不单存**：由 `display[depth-1]` 给出（`super_desc()`）。
+  - **`upcast` / `iface_carriers` / `fields` / `alloc` / `clinit` 留给 S7-2..S7-4**：它们依赖统一句柄（S7-2）或字段描述（S7-3）、类初始化骨架（S7-4），S7-0/1 用不到。
+
+### 实测（本机 macOS，HelloWorld；峰值为 `scripts/crate_mem_profile.py` 的 `java_runtime` rustc ru_maxrss）
+
+| 提交 | 声明 crate 展开 | `impl ObjectVTable for` | java_runtime 峰值 |
+|---|---:|---:|---:|
+| 86df0737（起点） | 14.49 MB | 1.48 MB | 1388 MB |
+| S7-0 | 14.79 MB（+0.30，描述符 static 与固有常量） | 1.48 MB | 1091 MB（本机峰值噪声大，以服务器为准） |
+
+本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
+
+### 失败的方案与原因
+
+（暂无）
+
+### 下一步
+
+S7-1：`is_instance_of` / `__class_name` 改为读描述符的 trait 缺省、删 `__view_as`、`__class_from_object` 走 `is_subclass_of`、wrapper `__view_into` 类 / 祖先 / 接口载体臂改由名字判定 + 擦除重建取代。
 
 ## 一、问题
 
