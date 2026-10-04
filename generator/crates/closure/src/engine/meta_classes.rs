@@ -6,7 +6,10 @@
 //! 沿超类链的查找仍然正确落到声明类——集合按超类型闭包）。
 //!
 //! 方法表口径：成员枚举所指类、按名查方法 / 构造器的类、按名取类得到的类（构造器）、反射成员面的
-//! 声明类、补种点名类与整类放开类、注解类型（元素面）、序列化分配目标。
+//! 声明类、补种点名类与整类放开类、注解类型（元素面）、序列化分配目标。注解解析入口可达时，闭包内全部注解类型
+//! （`ACC_ANNOTATION`，含 JDK 侧：方法 / 字段 / 类上的 JDK 注解同样在运行期解析，如反射调用判调用者敏感读方法注解，
+//! 元注解 `@Retention` 决定其保留策略）都有方法表：AnnotationParser 经注解类型的方法表求元素面，动态代理按接口
+//! 方法表（含超接口 `Annotation`）取 Method。
 //! 字段表口径：按名查字段的声明类、按名查字段目标推不出时声明该名字段的闭包类、字段枚举与整类放开
 //! 字段的类、可序列化字段枚举的类（推不出时取全部可序列化闭包类）、补种整类放开类。
 //!
@@ -15,7 +18,7 @@
 
 use std::collections::BTreeSet;
 
-use super::Engine;
+use super::*;
 
 impl Engine<'_> {
     /// 需要方法 / 构造器表的闭包类（含超类型）
@@ -29,6 +32,9 @@ impl Engine<'_> {
         out.extend(self.seeds.reflect_names.keys().cloned());
         out.extend(self.seeds.reflect_all.iter().cloned());
         out.extend(self.seeds.annotation_types.iter().cloned());
+        if self.seeds.anno_done {
+            out.extend(self.annotation_classes());
+        }
         out.extend(self.serial_allocs.iter().cloned());
         self.close_supertypes(out)
     }
@@ -55,6 +61,15 @@ impl Engine<'_> {
             }
         }
         self.close_supertypes(out)
+    }
+
+    /// 闭包内的注解类型
+    fn annotation_classes(&self) -> Vec<String> {
+        self.classes
+            .keys()
+            .filter(|c| self.h.class(c).is_some_and(|cf| cf.access & acc::ANNOTATION != 0))
+            .cloned()
+            .collect()
     }
 
     /// 超类型闭包，限于闭包类（数组 / 未入闭包的类无表）

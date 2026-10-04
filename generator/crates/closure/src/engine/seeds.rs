@@ -13,7 +13,8 @@ use crate::seeds::{annotation, locale};
 pub struct SeedState {
     /// `--locale` 显式给出的标签
     pub locales: Vec<String>,
-    anno_done: bool,
+    /// 注解解析入口已可达（补种已触发）
+    pub(super) anno_done: bool,
     locale_bases: BTreeSet<String>,
     /// 束族基名 → 该族入选的资源束（类型 id）
     locale_bundles: BTreeMap<String, BTreeSet<u32>>,
