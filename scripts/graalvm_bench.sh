@@ -14,9 +14,10 @@
 #     RUN_TIMEOUT / BUILD_TIMEOUT  运行 / 构建超时秒数（缺省 300 / 900）
 #     OUT              输出目录（缺省 build/graalvm_bench）
 #     HEAVY_LOCK       rava 模式外包的全机锁命令前缀（如 "python3 ../heavy_lock.py"；缺省不包）
-#   输出：$OUT/<用例>/（产物与日志）、$OUT/results.tsv（长表：一行一个 用例 × 条件）
+#   输出：$OUT/<用例>/（产物与日志）、$OUT/results.tsv（长表：一行一个 用例 × 条件；
+#         bin_bytes 为可执行文件字节数，JVM 条件记 -）
 #
-# 每例流程：javac → JVM 输出作为对照基准 → 逐条件构建计时 + 运行计时（中位数）→ 与 JVM 输出逐字对照
+# 每例流程：javac → JVM 输出作为对照基准 → 逐条件构建计时 + 运行计时（中位数）+ 二进制大小 → 与 JVM 输出逐字对照
 # 报告与结论：docs/reports/2026-10-04-graalvm-baseline.md
 
 set -u
@@ -36,7 +37,7 @@ TSV="$OUT/results.tsv"
 HOST="$(uname -s)-$(uname -m)-$(hostname -s 2>/dev/null || hostname)"
 
 mkdir -p "$OUT"
-[ -f "$TSV" ] || printf 'host\tname\tcategory\tmode\tbuild_secs\trun_secs\texit\toutput_match\n' > "$TSV"
+[ -f "$TSV" ] || printf 'host\tname\tcategory\tmode\tbuild_secs\trun_secs\texit\toutput_match\tbin_bytes\n' > "$TSV"
 
 # 单次计时：bash 内建 time（不依赖 /usr/bin/time），real 秒数写入 $2
 timed_run() { # $1=timeout_secs $2=timer_file rest=cmd
@@ -74,9 +75,11 @@ json.dump(cfg, open(p, "w"), indent=2)
 PYEOF
 }
 
-row() { # name cat mode build run exit match
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$HOST" "$@" >> "$TSV"
+row() { # name cat mode build run exit match bin_bytes
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$HOST" "$@" >> "$TSV"
 }
+
+bytes_of() { [ -f "$1" ] && wc -c < "$1" | tr -d ' ' || echo -; }
 
 match_of() { diff -q "$1" "$2" > /dev/null 2>&1 && echo SAME || echo DIFF; }
 
@@ -87,7 +90,7 @@ bench_jvm() { # name cat dir mode gcflag
   local name=$1 cat=$2 dir=$3 mode=$4 gc=$5 real
   real=$(median_run "$dir/$mode.time" "$dir/$mode.out" java $gc -cp "$dir/classes" "$name")
   echo "[$name] $mode: run ${real}s (exit=$LAST_RC)"
-  row "$name" "$cat" "$mode" - "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")"
+  row "$name" "$cat" "$mode" - "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")" -
 }
 
 bench_ni() { # name cat dir mode ni_args...
@@ -98,7 +101,7 @@ bench_ni() { # name cat dir mode ni_args...
     ni-pgo)
       if ! native-image "${args[@]}" --pgo-instrument -o "$dir/bin/${name}_inst" "$name" > "$dir/$mode.inst.log" 2>&1 \
          || ! (cd "$dir" && rm -f default.iprof && timeout -k 10 "$RUN_TIMEOUT" "bin/${name}_inst" > /dev/null 2>&1); then
-        echo "[$name] $mode: instrument FAILED"; row "$name" "$cat" "$mode" INSTRUMENT_FAIL - - -; return
+        echo "[$name] $mode: instrument FAILED"; row "$name" "$cat" "$mode" INSTRUMENT_FAIL - - - -; return
       fi
       args+=(--pgo="$dir/default.iprof") ;;
   esac
@@ -106,18 +109,19 @@ bench_ni() { # name cat dir mode ni_args...
   rc=$?; build=$(cat "$dir/$mode.build.time")
   if [ $rc -ne 0 ]; then
     echo "[$name] $mode: BUILD FAILED (rc=$rc)"; tail -3 "$dir/$mode.build.log"
-    row "$name" "$cat" "$mode" BUILD_FAIL - "$rc" -; return
+    row "$name" "$cat" "$mode" BUILD_FAIL - "$rc" - -; return
   fi
   real=$(median_run "$dir/$mode.time" "$dir/$mode.out" "$bin")
-  echo "[$name] $mode: build ${build}s, run ${real}s (exit=$LAST_RC)"
-  row "$name" "$cat" "$mode" "$build" "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")"
+  echo "[$name] $mode: build ${build}s, run ${real}s, bin $(bytes_of "$bin") B (exit=$LAST_RC)"
+  row "$name" "$cat" "$mode" "$build" "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")" "$(bytes_of "$bin")"
 }
 
 bench_rava() { # name cat dir mode src_rel
-  local name=$1 cat=$2 dir=$3 mode=$4 src=$5 prof=debug flag=() log elapsed build real bin
+  local name=$1 cat=$2 dir=$3 mode=$4 src=$5 prof=debug flag=() log elapsed build real bin snake
   [ "$mode" = rava-release ] && { prof=release; flag=(--release); }
   log="$dir/$mode.log"
-  (cd "$REPO" && $HEAVY_LOCK python3 scripts/run_tests.py -j 1 "${flag[@]}" --filter "/$name.java") > "$log" 2>&1
+  # --keep-artifacts：保住可执行文件供重复计时与量体积；取走后删本例 scratch
+  (cd "$REPO" && $HEAVY_LOCK python3 scripts/run_tests.py -j 1 --keep-artifacts "${flag[@]}" --filter "/$name.java") > "$log" 2>&1
   # Elapsed: 13m59.7s  (transpile 6m51.4s, build 7m07.2s, run 0.59s)
   elapsed=$(grep -E '^Elapsed: .*\(transpile' "$log" | tail -1)
   build=$(python3 - "$elapsed" <<'PYEOF'
@@ -127,14 +131,17 @@ secs = [int(m or 0) * 60 + float(s) for m, s in d]
 print(f"{secs[1] + secs[2]:.2f}" if len(secs) >= 4 else "-")
 PYEOF
 )
-  bin="$REPO/build/target/$prof/$(bin_name_of "$name")"
+  snake=$(bin_name_of "$name")
+  bin="$dir/bin/${name}_$mode"
+  cp "$REPO/build/target/$prof/$snake" "$bin" 2> /dev/null
+  rm -rf "$REPO/build/$snake" "$REPO/build/target/$prof/$snake" "$REPO/build/target/$prof/$snake.d"
   if [ ! -x "$bin" ] || ! grep -q "PASS" "$log"; then
-    echo "[$name] $mode: FAILED（见 $log）"
-    row "$name" "$cat" "$mode" "$build" - - FAIL; return
+    echo "[$name] $mode: FAILED（见 ${log}）"
+    row "$name" "$cat" "$mode" "$build" - - FAIL -; return
   fi
   real=$(median_run "$dir/$mode.time" "$dir/$mode.out" "$bin")
-  echo "[$name] $mode: transpile+build ${build}s, run ${real}s (exit=$LAST_RC)"
-  row "$name" "$cat" "$mode" "$build" "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")"
+  echo "[$name] $mode: transpile+build ${build}s, run ${real}s, bin $(bytes_of "$bin") B (exit=$LAST_RC)"
+  row "$name" "$cat" "$mode" "$build" "$real" "$LAST_RC" "$(match_of "$dir/ref.out" "$dir/$mode.out")" "$(bytes_of "$bin")"
 }
 
 bench_one() { # $1=src_rel $2=category $3=extra_ni_args $4=serialization_extra
@@ -146,7 +153,7 @@ bench_one() { # $1=src_rel $2=category $3=extra_ni_args $4=serialization_extra
 
   if ! javac -encoding UTF-8 -d "$dir/classes" "$REPO/tests/e2e/$src" 2> "$dir/javac.log"; then
     echo "[$name] javac FAILED"; head -5 "$dir/javac.log"
-    row "$name" "$cat" javac COMPILE_FAIL - - -; return
+    row "$name" "$cat" javac COMPILE_FAIL - - - -; return
   fi
   # 对照基准：JVM 一次运行的输出
   timeout -k 10 "$RUN_TIMEOUT" java -cp "$dir/classes" "$name" > "$dir/ref.out" 2> /dev/null
