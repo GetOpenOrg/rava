@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-WS_PREFIXES = ("java_runtime", "java_meta", "java_body_", "user")
+WS_PREFIXES = ("java_", "jdk_", "user")  # JDK 模块 crate（含根声明层 / 实现层 / 门面）、java_meta、user
 
 
 def crate_name(args):
@@ -53,7 +53,7 @@ def wrap(argv):
         os.execvp(rustc, [rustc, *args])
     out_dir = Path(os.environ["PROFILE_DIR"])
     env = dict(os.environ)
-    passes = os.environ.get("PROFILE_PASSES") == "1" and name == "java_runtime"
+    passes = os.environ.get("PROFILE_PASSES") == "1" and name.endswith("_decl")
     if passes:
         args = [*args, "-Z", "time-passes"]
         env["RUSTC_BOOTSTRAP"] = "1"

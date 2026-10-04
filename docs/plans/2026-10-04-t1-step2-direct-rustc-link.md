@@ -279,6 +279,56 @@
 - M3：模块登记按 `modules` 段的拓扑序。
 - 第三方 jar 的 SCC 合并（§七）在 M2 处理；M1 已给出自动模块标记与「自动模块读全部」的规则，自动模块之间的环由 M2 合并为一个 crate。
 
+### 2.6 M2 现状（module-m2 分支，2026-10-04）
+
+**实施要点**
+- `EmitShared::crates()`（`emit/src/module_crates.rs`）由 `ModuleGraph` 现建「类 → 模块 crate」表：crate 名 = 模块名 `.`/`-`→`_`；根模块 = 根类所在模块；无模块的 JDK 类归根模块；crate 序 = 模块拓扑序；依赖 = `upstream ∩ 本程序模块集`（非根恒依赖根）。生成器无模块名字面量。
+- scratch 布局：根模块固定拆层 = 声明层 `<根>_decl`（overlay 的运行时 crate 改包名，含 build.rs / strict.txt / jdk_feature.txt / 根模块类声明）+ 实现层 `<根>_body_k`（头部 `use <根>_decl::<包>::*;`）+ 门面 `<根>`（`pub use <根>_decl::*;` + `use <根>_body_k as _;`）。其余模块各一个完整 crate（Full 模式不拆层），lib.rs = 属性 + `use <根>::*;` + `pub mod <顶层包>;`。
+- 依赖：非根模块 crate、`java_meta`、库 crate 都以根名**改名依赖声明层**（`<根> = { package = "<根>_decl", ... }`，`java_meta` 为 `java_runtime = { package = ... }`），编译不等实现层；只有链接者 user crate 依赖门面与全部模块 crate，`main.rs` 写 `use <每个模块 crate> as _;` 并经 `<根>::meta::register_user` / `<根>::create_java_vm` 进入。
+- 路径定向按 crate：Java 类路径同 crate 写 `crate::`、跨 crate 写目标 crate 名；基础设施（prelude / error / meta / sync_model …）在 JDK crate 内一律 `crate::…`（非根 crate 经 lib.rs 的根 glob 解析），user / 库 crate 写根名。手写伴随文件按包所属模块落到对应 crate。
+- `[module-audit] out_of_reads > 0` 改为生成失败（`EmitError::Assert`，附越界明细）。
+- `java_meta` 只做最小修正（依赖指向根声明层、扫描全部 JDK 源码树 + 库源码树）；按模块拆元数据与登记留给 M3。
+
+**实测（本机 macOS，`CARGO_BUILD_JOBS=2`，`rava build --stop-after compile --clean`，`/usr/bin/time -l` 含 javac / 闭包 / 发射 / cargo）**
+| 用例 | JDK 类 / 模块 | crate 数 | wall | 峰值 RSS（max resident） |
+|---|---|---|---|---|
+| HelloWorld | 467 / 1 | 6（decl、body_1–2、门面、java_meta、user） | 73.3 s | 1.30 GB |
+| DeepCopy | 3384 / 15 | 28（decl、body_1–10、门面、14 个模块 crate、java_meta、user） | 678.4 s | 2.47 GB |
+| TestSerialDefaultSuid | 3384 / 15 | 28（同上） | 829.0 s | 3.21 GB |
+
+模块 crate 源码规模（DeepCopy；debug rlib 取自单独 `CARGO_TARGET_DIR` 重建）：
+
+| crate | 文件 | 源码 | debug rlib |
+|---|---|---|---|
+| java_base_decl | 3154 | 30.2 MB | 562.5 MB |
+| java_base_body_k（10 个） | 221–332 / 个 | 5.07–5.13 MB / 个 | — |
+| java_logging | 31 | 517 KB | 19.1 MB |
+| java_naming | 3 | 53 KB | 1.6 MB |
+| java_security_jgss | 16 | 203 KB | 7.2 MB |
+| java_security_sasl | 9 | 84 KB | 4.4 MB |
+| java_smartcardio | 10 | 120 KB | 5.0 MB |
+| java_xml_crypto | 136 | 1586 KB | 49.2 MB |
+| java_xml | 11 | 152 KB | 4.4 MB |
+| jdk_charsets | 2 | 57 KB | 1.5 MB |
+| jdk_crypto_cryptoki | 29 | 637 KB | 14.5 MB |
+| jdk_crypto_ec | 87 | 1014 KB | 33.7 MB |
+| jdk_localedata | 4 | 45 KB | 1.3 MB |
+| jdk_random | 10 | 355 KB | 5.4 MB |
+| jdk_security_jgss | 5 | 58 KB | 1.9 MB |
+| jdk_zipfs | 2 | 33 KB | 0.6 MB |
+| user | 5 | 729 KB | — |
+
+符号（`nm`，DeepCopy 的 14 个非根模块 crate）：均不定义 `__rava_*`（Full 模式无自拆层）；未定义的 `__rava_*` 全部指向 java.base 类（去重 2–101 个 / crate，最多 jdk_crypto_ec 101），来源是内联外壳与接口 `_base` 默认实现，方向一律下游 → 上游，无一指向本 crate 自身类或其他非根模块。`[module-audit] modules=15 out_of_reads=0`。
+
+单元测试 `(cd generator && cargo test --release)` 438 通过 / 0 失败。
+
+**已知遗留（M3 及后续）**
+- `native_status.toml` 与 `jdk_ge_25` cfg 由声明层 build.rs 产生，只作用于声明层 crate；非根模块 crate 无 build.rs（三例编译通过，未用到）；若非根模块类出现 cfg 分支，需为模块 crate 生成 build.rs。
+- 「重」判定（拆实现层的阈值）仍以全部 JDK 类计数；非根模块当前都在 Full 阈值以下，未实现非根模块的拆层。
+- 诊断脚本 `decl_scc.py` / `expand_stats.py` / `rustc_profile.sh` 仍假定单 crate `java_runtime`，未改。
+- 第三方 jar 的自动模块 SCC 合并（§2.5 末条）未做：库 crate 仍按原 lib 分组发射，只把依赖改为根声明层 + 全部非根模块 crate；归 V12（`2026-10-04-third-party-dependency-layering.md`）。
+- `java_meta` 仍是全局单 crate，依赖根声明层；元数据按模块拆分与 `__java_meta_*` 归属见 M3。
+
 ## 三、终态设计
 
 ### 3.1 crate 布局：一个 JDK 模块一个模块 crate

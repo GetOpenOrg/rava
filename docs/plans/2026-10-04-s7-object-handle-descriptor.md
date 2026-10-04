@@ -39,6 +39,7 @@
 | S7-1 | **13.89 MB**（−0.90 对 S7-0，−0.60 对起点） | **0.80 MB**（`__view_into` / `__view_as` / `is_instance_of` / `__class_name` 删净） | 1401 MB（同上，以服务器为准） |
 | d840bb83（S7-2 基点，含 S7-1） | 13.89 MB | 0.80 MB | 1167 / 1290 MB（两次采样） |
 | 8bdcb04d（S7-2a） | **12.95 MB**（−0.94 对基点） | **0.31 MB**（wrapper impl 只剩 `__handle` / `as_any` / `__interface` / `__desc`） | 1326 / 1268 MB（两次采样；本机噪声 ±150 MB，与基点不可分，以服务器为准） |
+| 9260ead7（S7-2b） | **12.82 MB**（−0.13 对 S7-2a） | **0.02 MB**（wrapper 不再实现；只剩 14 个手写 / 基本类型 / 数组 / 载体 impl） | 1252 MB（一次采样，同上） |
 
 服务器（Linux，`crate_mem_profile.py` 同口径；作业 `s7m-<提交>`）：
 
@@ -52,6 +53,8 @@
 - S7-0 只增代码：TSDS 展开 +2.70 MB、峰值 +102 MB（3432 个描述符 static 与固有常量）。
 - S7-1 对起点：TSDS 展开 −5.10 MB（−4.9%）、峰值 −348 MB（−4.1%）、声明 crate 墙钟 −11.5 s；HelloWorld 展开 −0.59 MB、峰值 −40 MB。按 §7.7 余量换算，FHP（ef600555 10495 MB）预计约 10.1 GB，TJNP 约 9.0 GB。
 - S7-2a 本机 HelloWorld 展开分项（对基点 d840bb83）：`impl ObjectVTable for` 0.80 → 0.31 MB（−0.49，cells / word / ref 查询与 `__erased_inner` 删除，改由 trait 缺省经句柄目标转交）；extern 块 1.52 → 1.36 MB（−0.16，cells / from_any 存储钩子删除，只留 alloc）；`impl From for` 0.34 → 0.31 MB（祖先上转改为 `__r.upcast`）。`impl <固有>` 不变（6.25 MB）：Java 方法外壳与字段访问器的数量不变，只是取视图由 `&*self.vtable` 改为 `self.__r.vt()`。
+- S7-2b 本机 HelloWorld 展开分项（对 S7-2a）：`impl ObjectVTable for` 0.31 → 0.02 MB（−0.29，约 370 个 wrapper impl 全删）；`impl From for` 0.31 → 0.38 MB（+0.07，每类一条 `From<X> for Object` 取代 blanket）；`impl <固有>` 6.25 → 6.32 MB（+0.07，wrapper 固有 `is_jvm_null` / `__nn`）。净 −0.13 MB；trait 求解面少了约 370 个 `ObjectVTable` 实现者，借用检查 / coherence 的收益以服务器峰值为准。
+- S7-2b 本机 TSDS 展开 88.30 MB（macOS cfg，与服务器 Linux 口径的 90.19 MB 不可直接相减）。
 - 收益小于 §四 的估计：删掉的是判定类方法（`__view_into` / `__view_as` / `is_instance_of` / `__class_name`），每类 fn 数只少 2–4 个；借用检查的大头（Java 方法外壳、字段访问器、其余 ObjectVTable 方法）要到 S7-2 统一句柄 / S7-3 字段描述才动。
 
 本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
@@ -62,8 +65,8 @@
 
 ### 下一步
 
-- S7-2a（8bdcb04d）已在 s7-wrap 分支实施：抽查（分布式）与服务器同口径测量（作业 `s7m-8bdcb04d`，HelloWorld / TSDS）待主会话执行，结果补入上表与拆 crate 方案 §7.7。
-- S7-2b（Object 直接持有内部对象、去 blanket `From`、null → `__typed_null`、约 68 处 downcast 审计）按 S7-2a 服务器实测再定；接口载体与 lambda 载体仍持 `__Shared<dyn I__VTable>`，收敛到句柄随 S7-2b / 接口载体线处理。
+- S7-2b（9260ead7，s7-2b 分支）已实施：本机 8 例 0 错 0 警、输出与期望一致；抽查（分布式）与服务器同口径测量（作业 `s7m-9260ead7`，HelloWorld / TSDS）待主会话执行，结果补入上表与拆 crate 方案 §7.7。
+- S7-2c：接口载体与 lambda 载体仍持 `__Shared<dyn I__VTable>`（接口载体 `__ref: Object` + `__iface_vtable`，lambda 载体 `__Shared<__DynFn>`），收敛到句柄另作一步：载体字段改 `__Ref<dyn I__VTable>`，`__interface` 查询改为 `__erased_vtable` 同形的视图指针填充。
 
 ## 一、问题
 
@@ -260,6 +263,12 @@ S7 下：
     - runtime 新增 `__Handle(Option<__Shared<dyn ObjectVTable>>)` 与 `__Ref<V>{ h, vt: Option<NonNull<V>> }`（vt 不持有，指向 h 所持对象）；wrapper 只剩 `__r: __Ref<dyn X__VTable>`，`Default` = `__Ref::NULL` 不分配，`_init_not_null` 才经 alloc 钩子分配。
     - 删掉 `vtable` / `any` / `_jvm_null` 三字段与 `cells` / `from_any` 两个存储钩子、`__erased_inner`；上转 = `__r.upcast(|v| v as &dyn Anc__VTable)`，`From<Object>` 由句柄目标经 `__erased_vtable` 填 vt；wrapper 的 `impl ObjectVTable` 只剩 `__handle` / `as_any` / `__desc`，其余走 trait 缺省委托句柄目标。
     - Object 仍是 `Rc<wrapper>`（S7-2a）；Object 直接持有内部对象、去掉 blanket `From` 另作 S7-2b，S7-2a 实测后再定。
+  - S7-2b 实施要点（2026-10-04，s7-2b）：
+    - wrapper 不再实现 `ObjectVTable`：按类只生成 `impl From<X> for Object`（一行转交非泛型 `__Handle::into_object(desc)`：非 null 直接交出句柄所持存储，null → 按描述符的类型化 null，`__desc` / `__class_name` / `is_instance_of` 报静态类，与原 null wrapper 同答）；`is_jvm_null` 改为 wrapper 固有方法。
+    - 删 blanket `From<T: ObjectVTable> for Object`，基本类型盒、数组、`JvmRef`、lambda 载体逐类型显式 `From`；`ObjectVTable::__handle` / `__view_target` 及各缺省方法的转交臂删除（Object 只持运行时类对象，不再有「视图对象」）。
+    - downcast 审计：`__class_from_object` / `catch_as` 删「持有对象即 W」快路径（恒不命中），`Object.equals` 的 String 快路径改按描述符；接口载体与 lambda 载体收敛到句柄另作 S7-2c。
+    - 审计结果（runtime 64 处 `downcast*::<>`）：只有上述 3 处假定「Object 持有 wrapper」；其余目标为基本类型盒（`i32` / `u16` / `f64` …）、`JArray<_>`、`JvmRef` 载体内值、`Object` 自身、`StackTraceFrames` 等非 wrapper 存储与 `__interface` / `__view_into` 槽位，语义不变。`try_checkcast::<W>` 对类 wrapper 不再命中 as_any 臂，调用方（`try_cast`、数组逐元素兼容）均有描述符 / `is_instance_of` 后续臂兜底。
+    - 手写层只两处在 wrapper 上调 trait 方法（`String::units` 的 `is_jvm_null`、`Throwable.fillInStackTrace` 的 `__class_name`），分别改固有方法与 `Object::from(..).0.__class_name()`。
 - **S7-3 浅拷贝 / 反射字段 / Unsafe 槽位走 `fields` 描述**：删掉按类的 `__shallow_copy` / `__reflect_field` / `__unsafe_*`。
 - **S7-4 类初始化骨架去按类展开**。
 - **S7-5 性能验收**（§4.3）与 3 个 OOM 例、Digester 实测；更新 §7.5.4 账。

@@ -312,7 +312,7 @@ pub(crate) fn expand_interface_impl(
 /// （`X<Object, ...>`）执行 `__impl_<m>`。条目签名是擦除形态（提及类型形参处一律
 /// `Object`），`__impl_<m>` 在擦除 wrapper 上的形态是 objectize(签名)——两者的差异
 /// 只出现在「嵌套提及」（`JArray<E>` / `Foo<E>`）：实参经 `From<Object>` 还原、返回值
-/// 经 blanket `From<T: ObjectVTable> for Object` 装箱。
+/// 经 `From<X> for Object` 装箱。
 pub(crate) fn erased_impl_call(
     sig: &syn::Signature,
     impl_name: &Ident,

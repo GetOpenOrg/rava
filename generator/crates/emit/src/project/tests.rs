@@ -4,7 +4,12 @@ use std::path::{Path, PathBuf};
 
 use super::fs::Writer;
 use super::mod_tree::{complete_lib_rs, sweep_user_crate, write_mod_tree};
-use super::overlay::prepare_scratch;
+use super::overlay::{prepare_scratch, JdkDirs};
+
+/// 单 crate 目录表（声明层目录 = java_runtime，与改造前同一落位）
+fn single() -> JdkDirs {
+    JdkDirs::single("java_runtime")
+}
 
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("rava_emit_{tag}_{}", std::process::id()));
@@ -50,7 +55,7 @@ fn overlay_copies_rewrites_and_prunes() {
     // 上轮遗留：已从 runtime/ 删除的手写文件 + 生成文件
     put(&out.join("java_runtime/src/java/lang/gone.rs"), "// 旧手写\n");
     put(&out.join("java_runtime/src/java/lang/string.rs"), "rava_macros::java_class! {}\n");
-    prepare_scratch(&out, &rt, &macros, false).unwrap();
+    prepare_scratch(&out, &rt, &macros, &single(), false).unwrap();
     let src = out.join("java_runtime/src");
     assert_eq!(read(&src.join("java/lang/object.rs")), "// 手写\n");
     assert!(src.join("java/lang/gone.rs").exists(), "陈旧手写文件留待 mod 树阶段清扫");
@@ -69,12 +74,12 @@ fn overlay_copies_rewrites_and_prunes() {
     assert!(!read(&meta.join("Cargo.toml")).contains("0.1.0"));
     put(&meta.join("build_script/gone.rs"), "// 旧\n");
     put(&meta.join("old_dir/gone.rs"), "// 旧\n");
-    prepare_scratch(&out, &rt, &macros, false).unwrap();
+    prepare_scratch(&out, &rt, &macros, &single(), false).unwrap();
     assert!(!meta.join("build_script/gone.rs").exists());
     assert!(!meta.join("old_dir").exists());
     assert!(meta.join("build_script/main.rs").exists());
     assert!(meta.join("src/lib.rs").exists());
-    prepare_scratch(&out, &rt, &macros, true).unwrap();
+    prepare_scratch(&out, &rt, &macros, &single(), true).unwrap();
     assert!(!src.join("java/lang/string.rs").exists(), "--clean 清空");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -84,8 +89,8 @@ fn writer_never_overwrites_handwritten() {
     let root = tmp("writer");
     let rt = runtime(&root);
     let out = root.join("build").join("t");
-    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
-    let mut w = Writer::new(&out, &rt.join("src"));
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     let obj = out.join("java_runtime/src/java/lang/object.rs");
     assert!(w.is_handwritten(&obj));
     w.write(&obj, "rava_macros::java_class! {}\n").unwrap();
@@ -100,9 +105,9 @@ fn mod_tree_declares_disk_contents() {
     let root = tmp("modtree");
     let rt = runtime(&root);
     let out = root.join("build").join("t");
-    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
     let src = out.join("java_runtime/src");
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("java/lang/string.rs"), "rava_macros::java_class! {}\n").unwrap();
     w.write(&src.join("java/lang/r#ref/reference.rs"), "x").unwrap();
     w.write(&src.join("java/util/stream/collectors_collector_impl.rs"), "rava_macros::java_class! {}\n").unwrap();
@@ -153,8 +158,8 @@ fn mod_tree_prunes_stale_package_dirs() {
     put(&src.join("javax/mod.rs"), "pub mod crypto;\n");
     put(&src.join("jdk_resources/sub/mod.rs"), "// 手写子树\n");
     put(&src.join("java/nio/mod.rs"), "pub mod buffer;\n");
-    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
-    let mut w = Writer::new(&out, &rt.join("src"));
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("java/lang/module.rs"), "rava_macros::java_class! {}\n").unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/lang/module").exists(), "陈旧包目录删除（与 module.rs 并存即 E0761）");
@@ -176,15 +181,15 @@ fn companion_skipped_when_used_module_absent() {
          impl Natives { pub fn f(x: MemberName) {} }\n",
     );
     let out = root.join("build").join("t");
-    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
     let src = out.join("java_runtime/src");
     let dir = src.join("java/lang/invoke");
     let gen = "rava_macros::java_class! {}\n";
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!read(&dir.join("mod.rs")).contains("mod natives_impl;"), "依赖模块缺席 → 不声明");
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     w.write(&dir.join("member_name.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
@@ -202,16 +207,16 @@ fn stacked_companion_needs_generated_host() {
     put(&rt.join("src/java/net/foo_impl.rs"), "use super::foo::Foo;\nimpl Foo {}\n");
     put(&rt.join("src/java/net/foo_impl_impl.rs"), "use super::FooImpl;\nimpl FooImpl {}\n");
     let out = root.join("build").join("t");
-    prepare_scratch(&out, &rt, &root.join("m"), false).unwrap();
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
     let src = out.join("java_runtime/src");
     let dir = src.join("java/net");
     let gen = "rava_macros::java_class! {}\n";
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("bar.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     let m = read(&dir.join("mod.rs"));
     assert!(!m.contains("foo_impl"), "Foo / FooImpl 均缺席 → 不声明：{m}");
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("foo_impl_t.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     let m = read(&dir.join("mod.rs"));
@@ -236,7 +241,7 @@ fn user_crate_sweeps_previous_test() {
     put(&src.join("org/x/gone.rs"), gen);
     put(&src.join("notes.rs"), "// 非生成\n");
     // 本轮写出
-    let mut w = Writer::new(&out, &rt.join("src"));
+    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("digester.rs"), gen).unwrap();
     w.write(&src.join("org/x/y.rs"), gen).unwrap();
     w.write(&src.join("org/x/mod.rs"), "pub mod y;\n").unwrap();

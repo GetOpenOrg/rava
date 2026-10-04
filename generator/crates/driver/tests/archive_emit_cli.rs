@@ -1,6 +1,6 @@
 //! 档案发射端到端（T1 档案化 1b，计划 `docs/plans/2026-10-01-cross-test-compile-reuse.md` §6.4）：
 //! 两个用户程序建同一档案 P，各自 `rava build --profile P --stop-after emit`：
-//! - 档案 crate（`java_runtime` / `java_body_*` / `java_meta` 与其引入的 `closure_input/*.rs` 表）逐字节相同，
+//! - 档案 crate（模块 crate / 根声明层 `<根>_decl` 与实现层 `<根>_body_*` / `java_meta` 与其引入的 `closure_input/*.rs` 表）逐字节相同，
 //!   包版本取内容摘要（不含 scratch 路径）；
 //! - 用户元数据行生成在用户 crate（`rava_user_meta.rs`），入口启动时登记；档案侧表不含用户类。
 //! 找不到 JDK 21 时跳过。
@@ -53,7 +53,8 @@ fn archive_tree(scratch: &Path) -> BTreeMap<String, Vec<u8>> {
         .unwrap()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == "java_runtime" || n == "java_meta" || n.starts_with("java_body_")))
+        // 档案 crate = user 以外的全部 crate（模块 crate、根声明层 / 实现层 / 门面、java_meta）
+        .filter(|p| p.join("Cargo.toml").is_file() && p.file_name().is_some_and(|n| n != "user"))
         .collect();
     for f in ["meta_tables.rs", "closure_tables.rs", "line_tables.rs"] {
         stack.push(scratch.join("closure_input").join(f));
@@ -86,7 +87,7 @@ fn archive_crates_identical_across_programs() {
         let log = rava("build", &[&s(java), "--profile", &s(&p), "--stop-after", "emit", "--clean", "--out", &s(&out)]).unwrap();
         assert!(!log.contains("[archive-leak]"), "{log}");
         let tree = archive_tree(&out);
-        assert!(tree.contains_key("java_meta/Cargo.toml") && tree.keys().any(|k| k.starts_with("java_body_")), "{:?}", tree.keys().take(5).collect::<Vec<_>>());
+        assert!(tree.contains_key("java_meta/Cargo.toml") && tree.keys().any(|k| k.contains("_body_")), "{:?}", tree.keys().take(5).collect::<Vec<_>>());
         // 档案侧表不含用户类；用户元数据行在用户 crate，入口登记
         let meta = String::from_utf8_lossy(&tree["closure_input/meta_tables.rs"]).to_string();
         // 表是字符串池 + 字节流：类名以池项原文出现
@@ -94,7 +95,7 @@ fn archive_crates_identical_across_programs() {
         let rows = std::fs::read_to_string(out.join("user/src/rava_user_meta.rs")).unwrap();
         assert!(rows.contains(user_class) && rows.contains("pub static USER_META"), "{rows}");
         let main = std::fs::read_to_string(out.join("user/src/main.rs")).unwrap();
-        assert!(main.contains("java_runtime::meta::register_user(&rava_user_meta::USER_META);"), "{main}");
+        assert!(main.contains("java_base::meta::register_user(&rava_user_meta::USER_META);"), "{main}");
         trees.push(tree);
     }
     let (t1, t2) = (&trees[0], &trees[1]);

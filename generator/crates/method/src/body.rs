@@ -362,7 +362,8 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
         ctor_functions(&prefix, &fn_name, &params, &body)
     } else {
         if let Some(args) = main_args {
-            body = format!("    let mut {args}: JArray<{}> = java_runtime::main_args();\n{body}", ir::anchors::STRING);
+            let rt = env.ctx.hooks.crate_path("", class_name).unwrap_or_else(|| "crate".to_string());
+            body = format!("    let mut {args}: JArray<{}> = {rt}::main_args();\n{body}", ir::anchors::STRING);
         }
         format!("{prefix}{sig_line} {{\n{body}\n}}")
     };

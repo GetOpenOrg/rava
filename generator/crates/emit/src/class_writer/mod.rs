@@ -27,6 +27,7 @@ use crate::emission::{EmittedMethod, MethodBlock};
 use crate::error::Result;
 use crate::imports::{claim_structural, collect_referenced, CrateRoute, CrossInput, ImportSite};
 use crate::lang;
+use crate::module_crates::ModuleCrates;
 use crate::project::layout::{JdkLayout, UserLayout};
 use crate::text::indent;
 
@@ -52,12 +53,16 @@ pub struct LibSite<'l> {
 
 /// 类所在 crate 的发射参数
 pub struct ClassSite<'l> {
-    /// java_runtime 布局（包路径 / 同名消歧 / 跳过包 / 生成集）
+    /// JDK 布局（包路径 / 同名消歧 / 跳过包 / 生成集）
     pub jdk: &'l JdkLayout,
-    /// user crate 布局：本类属 user crate 时；None = java_runtime / lib crate 内的类
+    /// user crate 布局：本类属 user crate 时；None = JDK 模块 crate / lib crate 内的类
     pub user: Option<&'l UserLayout>,
     /// lib 模式定向；None = 单 crate 发射（无 --lib）
     pub lib: Option<LibSite<'l>>,
+    /// 本类所在 crate 名
+    pub here: &'l str,
+    /// JDK 模块 crate 表
+    pub crates: &'l ModuleCrates,
 }
 
 impl<'l> ClassSite<'l> {
@@ -70,10 +75,11 @@ impl<'l> ClassSite<'l> {
         self.lib.is_some_and(|l| l.route.current.is_some())
     }
 
-    /// 引用 crate 外类型的前缀（lib 模式按目标 crate 定向前的缺省值）
-    pub fn prefix(&self) -> &'static str {
-        if self.is_user() || self.lib.is_some() {
-            "java_runtime"
+    /// 引用运行时基础设施（prelude / error …）的路径首段：JDK 模块 crate 内 `crate`（非根 crate 经
+    /// lib.rs 的根门面 glob 解析），user / lib crate 写根门面名
+    pub fn prefix(&self) -> &'l str {
+        if self.is_user() || self.in_lib_crate() {
+            self.crates.root()
         } else {
             "crate"
         }
@@ -89,7 +95,8 @@ impl<'l> ClassSite<'l> {
         if let Some(l) = self.lib {
             return CrossInput {
                 generated: Some(l.generated),
-                prefix: self.prefix(),
+                here: self.here,
+                crates: self.crates,
                 all_in_chain: self.is_user(),
                 route: Some(l.route),
             };
@@ -97,7 +104,8 @@ impl<'l> ClassSite<'l> {
         let jdk_on = !self.is_user() || !self.jdk.files.is_empty();
         CrossInput {
             generated: jdk_on.then_some(&self.jdk.generated),
-            prefix: self.prefix(),
+            here: self.here,
+            crates: self.crates,
             all_in_chain: self.is_user(),
             route: None,
         }

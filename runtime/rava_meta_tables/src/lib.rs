@@ -4,8 +4,8 @@
 //! - [`Side::Archive`]：档案侧（`java_runtime` 声明层 + lib crate）的表，每个表 static 以
 //!   `__java_meta_<表名>` 符号导出（JDK `java_meta` crate 承载），java_runtime::meta 以同名 extern 声明读取；
 //!   含手写根类 Object 的成员行；
-//! - [`Side::User`]：用户 crate 的表，渲染为同名 `const`，并聚合为 `USER_META: java_runtime::meta::UserMeta`，
-//!   入口启动时 `java_runtime::meta::register_user(&USER_META)` 登记，与档案侧表合并查询。
+//! - [`Side::User`]：用户 crate 的表，渲染为同名 `const`，并聚合为 `USER_META: UserMeta`（运行时 `meta::UserMeta`，
+//!   由调用方导入），入口启动时 `meta::register_user(&USER_META)` 登记，与档案侧表合并查询。
 //!
 //! 同一档案下档案侧文本与用户程序无关，表源码逐字节相同。
 //!
@@ -47,7 +47,7 @@ pub enum Side<'a> {
     User,
 }
 
-/// 用户侧聚合的字段（`java_runtime::meta::UserMeta` 字段名 ← 表名）
+/// 用户侧聚合的字段（运行时 `meta::UserMeta` 字段名 ← 表名）
 const USER_FIELDS: &[(&str, &str)] = &[
     ("meta_pool", "META_POOL"),
     ("class_hierarchy", "CLASS_HIERARCHY"),
@@ -108,8 +108,8 @@ pub fn render(texts: &[&str], side: Side) -> String {
         Side::Archive(_) => out,
         Side::User => {
             let mut out = localize(&out);
-            out.push_str("\n/// 用户类的反射元数据行：入口启动时登记（`java_runtime::meta::register_user`）\n");
-            out.push_str("pub static USER_META: java_runtime::meta::UserMeta = java_runtime::meta::UserMeta {\n");
+            out.push_str("\n/// 用户类的反射元数据行：入口启动时登记（运行时 `meta::register_user`）\n");
+            out.push_str("pub static USER_META: UserMeta = UserMeta {\n");
             for (field, table) in USER_FIELDS {
                 out.push_str(&format!("    {field}: {table},\n"));
             }

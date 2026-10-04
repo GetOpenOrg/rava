@@ -13,6 +13,7 @@ mod line_tables;
 pub mod layout;
 pub mod lib_crates;
 pub mod mod_tree;
+pub mod module_side;
 pub mod overlay;
 #[cfg(test)]
 mod tests;
@@ -24,11 +25,12 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use ty::{ClassInfo, NameScope};
 
-pub use overlay::prepare_scratch;
+pub use overlay::{prepare_scratch, JdkDirs};
 
 use crate::body::MethodBodyEmitter;
 use crate::class_writer::{class_prep, class_text, ClassSite, INHERITED_IMPORTS_SLOT};
-use crate::ctx::{EmitCtx, HwAudit, ProjectState};
+use crate::ctx::{EmitCtx, HwAudit, ProjectState, USER_CRATE};
+use crate::module_crates::ModuleCrates;
 use crate::emission::ClassEmission;
 use crate::error::Result;
 use crate::imports::import_lines;
@@ -64,12 +66,15 @@ struct Layouts<'l> {
     jdk: &'l JdkLayout,
     libs: &'l LibPlan,
     user: &'l UserLayout,
+    /// JDK 模块 crate 表
+    crates: &'l ModuleCrates,
 }
 
 /// 待发射类所属 crate
 #[derive(Clone, Copy)]
 enum JobCrate<'c> {
-    Jdk,
+    /// JDK 模块 crate（crate 名）
+    Jdk(&'c str),
     Lib(&'c str),
     User,
 }
@@ -84,21 +89,24 @@ struct ClassJob<'c> {
 
 /// 类所在 crate 的发射参数
 fn site_for<'l>(lay: &Layouts<'l>, krate: JobCrate<'l>) -> ClassSite<'l> {
-    let jdk = lay.jdk;
+    let (jdk, crates) = (lay.jdk, lay.crates);
     match krate {
-        JobCrate::Jdk => ClassSite { jdk, user: None, lib: None },
-        JobCrate::Lib(lib) => ClassSite { jdk, user: None, lib: lay.libs.site(Some(lib)) },
-        JobCrate::User => ClassSite { jdk, user: Some(lay.user), lib: lay.libs.site(None) },
+        JobCrate::Jdk(here) => ClassSite { jdk, user: None, lib: None, here, crates },
+        JobCrate::Lib(lib) => ClassSite { jdk, user: None, lib: lay.libs.site(Some(lib)), here: lib, crates },
+        JobCrate::User => ClassSite { jdk, user: Some(lay.user), lib: lay.libs.site(None), here: USER_CRATE, crates },
     }
 }
 
 /// 发射记录所属 crate
 fn crate_of<'l>(lay: &Layouts<'l>, em: &ClassEmission) -> JobCrate<'l> {
-    match em.crate_name.as_str() {
-        "java_runtime" => JobCrate::Jdk,
-        "user" => JobCrate::User,
-        n => lay.libs.names().find(|l| *l == n).map_or(JobCrate::Jdk, JobCrate::Lib),
+    let n = em.crate_name.as_str();
+    if n == USER_CRATE {
+        return JobCrate::User;
     }
+    if let Some(l) = lay.libs.names().find(|l| *l == n) {
+        return JobCrate::Lib(l);
+    }
+    JobCrate::Jdk(lay.crates.all().iter().find(|c| c.name == n).map_or(lay.crates.root(), |c| c.name.as_str()))
 }
 
 /// 各文件导入块：文件作用域的认领记录（第一、二阶段全部文本生成完毕后）→ 导入插入位
@@ -131,7 +139,7 @@ fn emit_classes<'l>(
     let mut jobs: Vec<ClassJob<'l>> = Vec::new();
     for (c, path) in &jdk.files {
         if let Some(ci) = ctx.class(c) {
-            jobs.push(ClassJob { binary: c, ci, path: path.clone(), krate: JobCrate::Jdk });
+            jobs.push(ClassJob { binary: c, ci, path: path.clone(), krate: JobCrate::Jdk(lay.crates.crate_of(c)) });
         }
     }
     for (lib, files) in &lay.libs.files {
@@ -173,10 +181,11 @@ fn emit_classes<'l>(
             archive_side::split_user_delta(ctx, &mut delta, &mut held);
         }
         state.merge(delta);
+        let root = lay.crates.root();
         let (crate_prefix, crate_name, handwritten) = match j.krate {
-            JobCrate::Jdk => ("crate", "java_runtime", w.is_handwritten(&j.path)),
-            JobCrate::Lib(lib) => ("java_runtime", lib, false),
-            JobCrate::User => ("java_runtime", "user", false),
+            JobCrate::Jdk(here) => ("crate", here, w.is_handwritten(&j.path)),
+            JobCrate::Lib(lib) => (root, lib, false),
+            JobCrate::User => (root, USER_CRATE, false),
         };
         let em = ClassEmission {
             binary_name: j.binary.to_string(),
@@ -224,9 +233,11 @@ fn finish_phase2(
     Ok(disp)
 }
 
-/// 拆层后各 crate 规模：java_runtime（类数取 JDK 布局，与重型判定同源）→ lib（名字序）→
-/// 实现层 java_body_k → user
-fn crate_stats(ems: &IndexMap<String, ClassEmission>, body: &layers::BodyPlan, jdk_classes: usize) -> Vec<CrateStat> {
+/// 拆层后各 crate 规模：根声明层（类数取根模块布局，与重型判定同源）→ 其余模块 crate 与 lib（名字序）→
+/// 实现层 `<根>_body_k` → user
+fn crate_stats(
+    ems: &IndexMap<String, ClassEmission>, body: &layers::BodyPlan, crates: &ModuleCrates, root_classes: usize,
+) -> Vec<CrateStat> {
     let mut by_crate: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for em in ems.values() {
         let e = by_crate.entry(em.crate_name.as_str()).or_default();
@@ -236,27 +247,27 @@ fn crate_stats(ems: &IndexMap<String, ClassEmission>, body: &layers::BodyPlan, j
         }
     }
     let stat = |name: &str, classes: usize, bytes: usize| CrateStat { name: name.to_string(), classes, bytes };
-    let jrt = by_crate.remove("java_runtime").unwrap_or_default();
-    let user = by_crate.remove("user");
-    let mut out = vec![stat("java_runtime", jdk_classes, jrt.1)];
+    let decl = by_crate.remove(crates.root()).unwrap_or_default();
+    let user = by_crate.remove(USER_CRATE);
+    let mut out = vec![stat(&crates.decl(), root_classes, decl.1)];
     out.extend(by_crate.iter().map(|(n, (c, b))| stat(n, *c, *b)));
     out.extend(body.crates.iter().map(|c| stat(&c.name, c.files.len(), c.files.values().map(String::len).sum())));
-    out.extend(user.map(|(c, b)| stat("user", c, b)));
+    out.extend(user.map(|(c, b)| stat(USER_CRATE, c, b)));
     out
 }
 
 /// 只发射、不落盘的缺口预检（`rava audit` 用）：布局 → 逐类发射 → 第二阶段收尾 → [`Precheck`]。
 /// `out_dir` 只用于推导目标路径（判定手写真源同路径覆盖），不创建、不写入
 pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<Precheck> {
-    let jrt_src = out_dir.join("java_runtime").join("src");
-    let w = Writer::new(out_dir, &ctx.runtime_src());
-    let jdk = JdkLayout::build(ctx, &jrt_src);
+    let crates = ctx.crates();
+    let w = Writer::new(&crates.src_dirs(out_dir), &ctx.runtime_src());
+    let jdk = JdkLayout::build(ctx, out_dir);
     let user = UserLayout::build(ctx, &out_dir.join("user").join("src"));
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     let mut perf = Perf::new();
     let mut state = ProjectState::default();
     archive_side::seed_requests(ctx, &mut state);
-    let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
+    let lay = Layouts { jdk: &jdk, libs: &libs, user: &user, crates };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
     finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
@@ -265,35 +276,46 @@ pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitt
 
 /// 发射完整 scratch workspace（overlay 需先完成：mod 树按磁盘实际内容重建）
 pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<ProjectReport> {
-    let jrt_src = out_dir.join("java_runtime").join("src");
-    let user_src = out_dir.join("user").join("src");
+    let crates = ctx.crates();
+    let jdk_srcs = crates.src_dirs(out_dir);
+    let decl_src = crates.src_dir(out_dir, crates.root());
+    let user_src = out_dir.join(USER_CRATE).join("src");
     let runtime_src = ctx.runtime_src();
     let mut perf = Perf::new();
-    let mut w = Writer::new(out_dir, &runtime_src);
-    let jdk = JdkLayout::build(ctx, &jrt_src);
+    let mut w = Writer::new(&jdk_srcs, &runtime_src);
+    let jdk = JdkLayout::build(ctx, out_dir);
     let user = UserLayout::build(ctx, &user_src);
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");
     let mut state = ProjectState::default();
     archive_side::seed_requests(ctx, &mut state);
-    let lay = Layouts { jdk: &jdk, libs: &libs, user: &user };
+    let lay = Layouts { jdk: &jdk, libs: &libs, user: &user, crates };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
     state.check_lambda_ledger()?;
     perf.mark("classes");
     let disp = finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
+    // 模块可读性越界 = 模块 crate 依赖环 / 缺依赖（按模块切 crate 后不可编译）：生成期即报错
+    if ctx.module_audit.breaches() > 0 {
+        let detail = ctx.module_audit.lines(ctx, true).join("\n");
+        return Err(crate::error::EmitError::Assert(format!("模块可读性越界，模块 crate 依赖不成立：\n{detail}")));
+    }
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     let readability = crate::audit::readability_counts(ems.values().map(|em| em.text.as_str()));
-    // S4 物理拆层：JDK 生成类分声明层（原位）与实现层（java_body_k）
-    let body_plan = layers::split(ctx, &mut ems, &jrt_src)?;
-    perf.crates = crate_stats(&ems, &body_plan, jdk.files.len());
+    // S4 物理拆层：根模块生成类分声明层（原位）与实现层（`<根>_body_k`）；其余模块 crate 不拆
+    let body_plan = layers::split(ctx, &mut ems, &decl_src)?;
+    let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();
+    perf.crates = crate_stats(&ems, &body_plan, crates, root_classes);
     perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
-    entry::write_module_resources(ctx, &mut w, &jrt_src)?;
+    entry::write_module_resources(ctx, &mut w, &decl_src)?;
     entry::write_closure_tables(ctx, &mut w, out_dir)?;
     perf.mark("write");
-    mod_tree::write_mod_tree(&jrt_src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
+    for src in &jdk_srcs {
+        mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
+    }
     perf.mark("mod_tree");
+    module_side::write_module_crates(ctx, &mut w, out_dir)?;
     libs.write_crates(ctx, &mut w, out_dir)?;
     body_plan.write_crates(ctx, &mut w, out_dir)?;
     // FS-E1：落盘文本的 Java 行表（拆层后各文件的最终行号）
@@ -304,22 +326,29 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
-    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &jrt_src))?;
+    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &decl_src))?;
     meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
-    mod_tree::complete_lib_rs(&jrt_src, &runtime_src, &mut w)?;
+    mod_tree::complete_lib_rs(&decl_src, &runtime_src, &mut w)?;
+    module_side::write_facade(&mut w, out_dir, crates, &body_names)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
-    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp, &body_names)?;
+    let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
     let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
-    let archive_roots: Vec<&Path> = std::iter::once(jrt_src.as_path()).chain(lib_srcs.iter().map(PathBuf::as_path)).collect();
+    let archive_roots: Vec<&Path> = jdk_srcs.iter().chain(lib_srcs.iter()).map(PathBuf::as_path).collect();
     meta_sides::write_archive(ctx, &mut w, out_dir, &archive_roots)?;
     entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
     if ctx.opts.archive {
-        let crates: Vec<&str> = ["java_runtime", "java_meta"].into_iter().chain(body_names.iter().copied()).chain(lib_names.iter().copied()).collect();
+        let decl = crates.decl();
+        let stamped: Vec<&str> = std::iter::once(decl.as_str())
+            .chain(crates.all().iter().map(|c| c.name.as_str()))
+            .chain([entry::META_CRATE])
+            .chain(body_names.iter().copied())
+            .chain(lib_names.iter().copied())
+            .collect();
         let included = [meta_sides::META_TABLES, entry::CLOSURE_TABLES, line_tables::LINE_TABLES_PATH];
-        archive_side::stamp_versions(&mut w, out_dir, &crates, &included)?;
+        archive_side::stamp_versions(&mut w, out_dir, &stamped, &included)?;
     }
     perf.mark("entry");
     state.hw_audit.extend(crate::audit::handwritten_vtable_impls(&runtime_src).into_iter().map(|m| (HwAudit::VtableImpl, m)));
@@ -339,7 +368,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
 /// 手写根类的行表登记（根类无生成文件）：根类字节码的方法按调用侧根类命名规则对应 overlay
 /// 落盘的根类手写文件中的 fn（根类重载取描述符后缀名，前提是该名在手写 API 名面中；
 /// 规则与登记形态见 `line_tables::handwritten::root_methods`）
-fn root_line_registration(ctx: &EmitCtx<'_>, jrt_src: &Path) -> Vec<(PathBuf, Vec<line_tables::handwritten::HwMethod>)> {
+fn root_line_registration(ctx: &EmitCtx<'_>, decl_src: &Path) -> Vec<(PathBuf, Vec<line_tables::handwritten::HwMethod>)> {
     let root = ty::consts::OBJECT;
     let Some(cf) = ctx.cp.get(root) else { return Vec::new() };
     let source = cf.source_file.clone().unwrap_or_default();
@@ -352,5 +381,5 @@ fn root_line_registration(ctx: &EmitCtx<'_>, jrt_src: &Path) -> Vec<(PathBuf, Ve
     let overridable = |a: u16| a & (classfile::acc::STATIC | classfile::acc::FINAL | classfile::acc::PRIVATE) == 0;
     let methods = cf.methods.iter().map(|m| (m.name.as_str(), m.desc.as_str(), m.is_native(), overridable(m.access)));
     let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
-    crate::ctx::EmitShared::root_files(jrt_src).into_iter().map(|p| (p, hws.clone())).collect()
+    crate::ctx::EmitShared::root_files(decl_src).into_iter().map(|p| (p, hws.clone())).collect()
 }

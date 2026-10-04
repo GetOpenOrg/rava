@@ -46,7 +46,8 @@ impl Precheck {
         let (mut natives, mut stubs) = (BTreeSet::new(), BTreeSet::new());
         let texts = emissions
             .into_iter()
-            .filter(|e| e.crate_name == "java_runtime" && !e.handwritten)
+            // JDK 类（模块 crate 内，路径首段 `crate`）的生成文件
+            .filter(|e| e.crate_prefix == "crate" && !e.handwritten)
             .filter(|e| e.text.contains(GEN_MARKER) && (e.text.contains(STUB_FN) || e.text.contains("panic!(\"")));
         for e in texts {
             for c in PANIC_STUB.captures_iter(&e.text) {
@@ -84,7 +85,8 @@ mod tests {
 
     fn em(crate_name: &str, handwritten: bool, text: &str) -> ClassEmission {
         let binary_name = "p/A".into();
-        ClassEmission { binary_name, crate_name: crate_name.into(), handwritten, text: text.into(), ..ClassEmission::default() }
+        let crate_prefix = if crate_name == "user" { "rt" } else { "crate" }.into();
+        ClassEmission { binary_name, crate_name: crate_name.into(), crate_prefix, handwritten, text: text.into(), ..ClassEmission::default() }
     }
 
     #[test]
