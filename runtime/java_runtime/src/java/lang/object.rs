@@ -15,19 +15,31 @@ pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing,
 /// 接口类型（`is_interface = true`）不生成 ObjectVTable impl，
 /// 其运行时实例通过 `JvmRef` 包装存储在 Object 中。
 pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
+    /// 视图的应答对象：类 wrapper（静态类型视图）返回其 vtable 对象（= 运行时类 inner），
+    /// 其余对象（inner、数组、基本类型盒、闭包载体）为 None。下列以「运行时类应答」为语义的
+    /// 查询（身份、类名、instanceof、hashCode / equals / toString、浅拷贝、代理、按名字段
+    /// 协议）的缺省实现先问应答对象，wrapper 因此不再逐类生成同形转发（§7.5.4 #8）。
+    #[doc(hidden)]
+    fn __view_target(&self) -> Option<&dyn ObjectVTable> { None }
+
     /// java.lang.Object.hashCode()I 默认实现：身份哈希（实例体地址）——与
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
-    fn hashCode(&self) -> i32 { __identity_hash(self.__identity()) }
+    fn hashCode(&self) -> i32 {
+        if let Some(__t) = self.__view_target() { return __t.hashCode(); }
+        __identity_hash(self.__identity())
+    }
 
     /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的类
     /// 即 `Object.equals` 本体——引用相等（`this == obj`，身份比较）。
     fn equals(&self, other: Object) -> crate::error::Result<bool> {
+        if let Some(__t) = self.__view_target() { return __t.equals(other); }
         Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity())
     }
 
     /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
     fn __obj_str(&self) -> std::string::String {
+        if let Some(__t) = self.__view_target() { return __t.__obj_str(); }
         std::any::type_name::<Self>().to_owned()
     }
 
@@ -35,6 +47,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 翻译体，toString 抛出的异常以 `Err` 传播（可被 catch）；未覆盖的类回落 `__obj_str`。
     /// `__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
     fn __to_string(&self) -> crate::error::Result<std::string::String> {
+        if let Some(__t) = self.__view_target() { return __t.__to_string(); }
         Ok(self.__obj_str())
     }
 
@@ -42,11 +55,15 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// （手写层提供 `__vm_proxy_invoke` 的类，宏据 impl_methods 识别）应答 `Some`——按
     /// (声明接口, 方法名, 描述符) 转发 InvocationHandler；其余对象 `None`（回落 default 体 /
     /// AbstractMethodError）。实参已按 JVM 装箱（基本类型 → 包装对象）。
-    fn __proxy_invoke(&self, _iface: &str, _name: &str, _desc: &str, _args: Vec<Object>)
-        -> Option<crate::error::Result<Object>> { None }
+    fn __proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>)
+        -> Option<crate::error::Result<Object>> {
+        self.__view_target().and_then(|__t| __t.__proxy_invoke(iface, name, desc, args))
+    }
 
     /// instanceof 运行时检查（java_class 宏从 all_supertypes 静态展开 matches! 模式）
-    fn is_instance_of(&self, _type_id: &str) -> bool { false }
+    fn is_instance_of(&self, type_id: &str) -> bool {
+        self.__view_target().is_some_and(|__t| __t.is_instance_of(type_id))
+    }
 
     /// 向下转型辅助：返回 self 作为 &dyn Any（供 Object::downcast 使用）
     fn as_any(&self) -> &dyn std::any::Any;
@@ -166,7 +183,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     fn __interface(self: Rc<Self>, _slot: &mut dyn std::any::Any) {}
     /// 运行时类的 binary name（如 `java/lang/NullPointerException`）。
     /// java_class! 宏对生成类自动 override；未捕获异常报告等 VM 级设施据此取得类名。
-    fn __class_name(&self) -> &'static str { "java/lang/Object" }
+    fn __class_name(&self) -> &'static str {
+        if let Some(__t) = self.__view_target() { return __t.__class_name(); }
+        "java/lang/Object"
+    }
 
     /// 按运行时类重建 `type_id`（本类或任一祖先类的 binary name）类型的引用视图。
     /// 对象常以静态类型（如 `Throwable`）流转，catch 需要按运行时类还原为 catch 声明类型。
@@ -180,7 +200,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// 对象标识（`==` / `!=` 引用比较的依据）：同一 Java 对象的所有引用视图（祖先类 wrapper、
     /// 接口载体、Object）返回同一值。java_class! 宏对生成类 override 为对象存储的标识单元。
     #[doc(hidden)]
-    fn __identity(&self) -> *const () { self as *const Self as *const () }
+    fn __identity(&self) -> *const () {
+        if let Some(__t) = self.__view_target() { return __t.__identity(); }
+        self as *const Self as *const ()
+    }
 
     /// 以 Object 流转的数组（`Object::array_length`，S-2.2）：本运行时类是数组 → 长度；
     /// 非数组 → None。JArray 与数组载体（Rc<RefCell<Vec<T>>>）override；元素类型对长度
@@ -231,7 +254,9 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 
     /// `Object.clone()` 的 native 语义：新建同运行时类的对象，逐字段拷贝（浅拷贝）。
     /// java_class! 宏对生成类自动 override；无字段存储的值（装箱基本类型等）返回 None。
-    fn __shallow_copy(&self) -> Option<Object> { None }
+    fn __shallow_copy(&self) -> Option<Object> {
+        self.__view_target().and_then(|__t| __t.__shallow_copy())
+    }
 
     /// Unsafe 实例字段 long 原子协议（`Unsafe.getLongVolatile`/`putLongVolatile`/
     /// `compareAndSetLong`/`getAndAddLong` 的实例字段形态）：按字段名取共享的
@@ -241,18 +266,24 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// Unsafe 经 Object 写入对直接字段读取（`__get_xxx`）可见，与 JVM 的字段
     /// 内存语义一致（Unsafe 与普通字段访问指向同一存储）。
     #[doc(hidden)]
-    fn __unsafe_long_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> { None }
+    fn __unsafe_long_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i64>>> {
+        self.__view_target().and_then(|__t| __t.__unsafe_long_cell(field))
+    }
 
     /// Unsafe 实例字段 int 原子协议（`Unsafe.getInt`/`putInt`/`compareAndSetInt`/
     /// `getAndAddInt` 的实例字段形态）：`__unsafe_long_cell` 的 int 镜像，
     /// 按字段名取共享的 int 存储单元（`Rc<Cell<i32>>`）。
     #[doc(hidden)]
-    fn __unsafe_int_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> { None }
+    fn __unsafe_int_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<i32>>> {
+        self.__view_target().and_then(|__t| __t.__unsafe_int_cell(field))
+    }
 
     /// 实例字段 boolean 按名协议：`__unsafe_int_cell` 的 boolean 镜像（平铺的非擦除
     /// boolean 字段，`Rc<Cell<bool>>` 共享单元）。消费方：VarHandle 字节数组视图的字节序位。
     #[doc(hidden)]
-    fn __unsafe_bool_cell(&self, _field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> { None }
+    fn __unsafe_bool_cell(&self, field: &str) -> Option<Rc<crate::sync_model::__PrimCell<bool>>> {
+        self.__view_target().and_then(|__t| __t.__unsafe_bool_cell(field))
+    }
 
     /// Unsafe 实例字段 int 字视图协议（`getInt`/`putInt`/`compareAndSetInt` 等 int 访问器的
     /// 实例字段形态）：按字段名对 int、float（原始位）及子字（boolean / byte / short / char）字段的共享单元执行
@@ -261,13 +292,17 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `weakCompareAndSetInt`）经此落在该字段自身。java_class! 宏为含这些平铺非擦除字段的
     /// 生成类生成臂（含继承字段）；未命中 → None。
     #[doc(hidden)]
-    fn __unsafe_word(&self, _field: &str, _op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> { None }
+    fn __unsafe_word(&self, field: &str, op: &mut dyn FnMut(i32) -> Option<i32>) -> Option<i32> {
+        self.__view_target().and_then(|__t| __t.__unsafe_word(field, op))
+    }
 
     /// Unsafe 实例字段双字视图协议（`__unsafe_word` 的 64 位镜像）：按字段名对 long / double
     /// 字段（double 以原始位）的共享单元执行读-改-写（`__PrimCell::__dword_update`），返回旧双字。
     /// 承载 Unsafe 的 long 访问器族与 JDK compareAndSetDouble（→ compareAndSetLong 原始位）。
     #[doc(hidden)]
-    fn __unsafe_dword(&self, _field: &str, _op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> { None }
+    fn __unsafe_dword(&self, field: &str, op: &mut dyn FnMut(i64) -> Option<i64>) -> Option<i64> {
+        self.__view_target().and_then(|__t| __t.__unsafe_dword(field, op))
+    }
 
     /// Unsafe/VarHandle 实例字段**引用**原子协议（引用族的
     /// `get/set/compareAndSet/getAndSet` 等实例字段形态）：按字段名对共享的引用存储单元
@@ -280,14 +315,18 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `op` 原样保留（调用方可转交他处应答）。经 `dyn ObjectVTable` 的
     /// `__unsafe_ref_get / __unsafe_ref_set / __unsafe_ref_update` 调用。
     #[doc(hidden)]
-    fn __unsafe_ref_access(&self, _field: &str, _op: &mut __RefAccess<'_>) -> Option<Object> { None }
+    fn __unsafe_ref_access(&self, field: &str, op: &mut __RefAccess<'_>) -> Option<Object> {
+        self.__view_target().and_then(|__t| __t.__unsafe_ref_access(field, op))
+    }
 
     /// Java 字段身份（声明类 binary name, 字段名）→ 上述按名协议的 Rust 字段名。Unsafe 实例字段偏移按
     /// Java 字段身份登记（`objectFieldOffset`），而按名协议以 Rust 字段名分派；二者不同的字段（Rust 关键字
     /// 加后缀如 `in` → `in_`、`$` 替换、遮蔽父类同名字段的子类字段加声明类后缀）由 java_class! 宏按
     /// 生成器给出的 `field_slots` 为运行时类生成映射（含继承字段）；未列出 → None，两名相同。
     #[doc(hidden)]
-    fn __field_slot(&self, _decl: &str, _name: &str) -> Option<&'static str> { None }
+    fn __field_slot(&self, decl: &str, name: &str) -> Option<&'static str> {
+        self.__view_target().and_then(|__t| __t.__field_slot(decl, name))
+    }
 }
 
 /// 引用原子协议的操作（[`ObjectVTable::__unsafe_ref_access`] 的入参）。
