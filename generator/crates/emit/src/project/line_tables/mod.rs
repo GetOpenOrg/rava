@@ -166,6 +166,38 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
     (marks > 0).then_some(out)
 }
 
+/// 行表瘦身（二进制体积 B1，`docs/plans/2026-10-04-binary-size.md`）：只留成帧所需的行，查表结果逐行不变。
+/// - Java 行 0（方法序言、无行标记的方法——存根与无 LineNumberTable 的方法体）与块外同样不成帧，统一记
+///   [`NO_METHOD`]；
+/// - 相邻同值（方法下标, Java 行）的行合并为首行，表首的 [`NO_METHOD`] 行删去（首行之前本就不成帧）；
+/// - 不再被任何行引用的方法项删去，下标按首次出现重排。行全部删去的文件由调用方丢弃。
+pub fn prune(t: &mut FileLines) {
+    let mut rows: Vec<(u32, u32, u32)> = Vec::with_capacity(t.rows.len());
+    for &(r, m, j) in &t.rows {
+        let (m, j) = if m == NO_METHOD || j == 0 { (NO_METHOD, 0) } else { (m, j) };
+        match rows.last() {
+            Some(&(_, pm, pj)) if pm == m && pj == j => {}
+            None if m == NO_METHOD => {}
+            _ => rows.push((r, m, j)),
+        }
+    }
+    let mut remap = vec![NO_METHOD; t.methods.len()];
+    let mut methods = Vec::new();
+    for row in &mut rows {
+        if row.1 == NO_METHOD {
+            continue;
+        }
+        let old = row.1 as usize;
+        if remap[old] == NO_METHOD {
+            remap[old] = methods.len() as u32;
+            methods.push(t.methods[old].clone());
+        }
+        row.1 = remap[old];
+    }
+    t.rows = rows;
+    t.methods = methods;
+}
+
 /// 文件内各 `java_class!` / `java_interface!` 块的 (类 binary name, 源文件)
 fn class_sources(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -265,6 +297,10 @@ pub fn write(
             }
         }
     }
+    for t in &mut tables {
+        prune(t);
+    }
+    tables.retain(|t| !t.rows.is_empty());
     tables.sort_by(|a, b| a.rel.cmp(&b.rel));
     // 档案侧（JDK / lib crate 文件）进 java_meta；用户 crate 文件的行表随用户元数据行登记
     let (user, archive): (Vec<FileLines>, Vec<FileLines>) = tables.into_iter().partition(|t| t.rel.starts_with(USER_PREFIX));
@@ -330,6 +366,30 @@ mod tests {
         let src = render(&[t], &numbers);
         assert!(src.contains("(\"p/A\", \"f\", \"()V\", &[(0, 7), (4, 8), ]),"));
         assert!(src.contains("(\"user/src/a.rs\", &[(\"p/A\", \"f\", \"()V\", \"A.java\", \"\"), "));
+    }
+
+    #[test]
+    fn prune_keeps_frame_rows_only() {
+        // 方法 0 无行标记（存根），方法 1 有两段同行标记，方法 2 在其后
+        let mut t = FileLines {
+            rel: "a.rs".into(),
+            methods: vec![
+                Method::new("p/A", "s", "()V", "A.java", "p/A"),
+                Method::new("p/A", "f", "()V", "A.java", "p/A"),
+                Method::new("p/A", "g", "()V", "A.java", "p/A"),
+            ],
+            rows: vec![(3, 0, 0), (7, 1, 0), (8, 1, 5), (9, 1, 5), (10, 1, 6), (12, 2, 0), (13, 2, 9), (15, NO_METHOD, 0)],
+        };
+        prune(&mut t);
+        assert_eq!(t.methods.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), vec!["f", "g"]);
+        assert_eq!(t.rows, vec![(8, 0, 5), (10, 0, 6), (12, NO_METHOD, 0), (13, 1, 9), (15, NO_METHOD, 0)]);
+        let mut stub_only = FileLines {
+            rel: "b.rs".into(),
+            methods: vec![Method::new("p/B", "s", "()V", "B.java", "p/B")],
+            rows: vec![(3, 0, 0), (6, NO_METHOD, 0)],
+        };
+        prune(&mut stub_only);
+        assert!(stub_only.rows.is_empty() && stub_only.methods.is_empty());
     }
 
     #[test]
