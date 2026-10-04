@@ -123,6 +123,8 @@ pub(super) struct Stats {
     /// 按入口状态复用共享摘要（免分析）的次数
     pub(super) shared: u64,
     pub(super) site_reruns: u64,
+    /// 读者站点重跑按事件种类：[次数, 耗时 ns（含其中的流传播）]（下标见 [`RERUN_KINDS`]）
+    pub(super) rerun_by_event: [[u64; 2]; RERUN_KINDS.len()],
     pub(super) lcall_reruns: u64,
     pub(super) aux_analyses: u64,
     /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
@@ -136,6 +138,34 @@ pub(super) struct Stats {
     first_release: Option<Instant>,
     /// 首次放行时的工作量快照：[分析次数, 站点重跑, lambda 重跑, 流边数, 集合并入次数]
     pub(super) at_release: Option<[u64; 5]>,
+}
+
+/// 读者站点重跑的事件种类名（[`rerun_kind`] 的下标）
+pub(super) const RERUN_KINDS: [&str; 15] = [
+    "invoke", "indy", "new", "newarray", "field", "ldc", "checkcast", "instanceof", "notinstance", "aload", "astore", "throw",
+    "return", "catch", "const",
+];
+
+/// 事件种类下标（见 [`RERUN_KINDS`]）
+pub(super) fn rerun_kind(e: &crate::absint::Event) -> usize {
+    use crate::absint::Event as E;
+    match e {
+        E::Invoke { .. } => 0,
+        E::Indy { .. } => 1,
+        E::New(_) => 2,
+        E::NewArray(..) => 3,
+        E::Field { .. } => 4,
+        E::Ldc(_) => 5,
+        E::CheckCast(..) => 6,
+        E::InstanceOf(..) => 7,
+        E::NotInstance(..) => 8,
+        E::ArrayLoad { .. } => 9,
+        E::ArrayStore { .. } => 10,
+        E::Throw(_) => 11,
+        E::Return(_) => 12,
+        E::Catch(_) => 13,
+        E::Const { .. } => 14,
+    }
 }
 
 impl Default for Stats {
@@ -154,6 +184,7 @@ impl Default for Stats {
             reprocess: 0,
             shared: 0,
             site_reruns: 0,
+            rerun_by_event: Default::default(),
             lcall_reruns: 0,
             aux_analyses: 0,
             ceval: [0; 3],
@@ -325,6 +356,7 @@ impl<'a> Engine<'a> {
             "reprocess_same_analysis": s.reprocess,
             "shared_analyses": s.shared,
             "site_reruns": s.site_reruns,
+            "rerun_by_event": RERUN_KINDS.iter().zip(s.rerun_by_event).filter(|(_, c)| c[0] > 0).map(|(k, c)| json!([k, c[0], c[1] / 1_000_000])).collect::<Vec<_>>(),
             // 按名取类延后放行：[轮数, 站点数, 首次放行时刻 ms, 首次放行后耗时 ms]
             "lookup_releases": [s.releases[0], s.releases[1], s.first_release.map_or(0, |t| ms(t - s.born)), s.first_release.map_or(0, |t| ms(t.elapsed()))],
             "at_first_release": s.at_release,
