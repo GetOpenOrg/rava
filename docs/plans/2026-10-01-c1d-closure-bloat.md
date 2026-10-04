@@ -1713,6 +1713,49 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
   ① 测试第 1d 段按规范改成「循环 parkNanos 至截止时间」或放宽断言（违反「合法测试不改」，需用户批准）；② 维持现状，承认约 3% 的
   偶发失败，随生成代码提速（R1 / 运行档位）下降。已报协调者。
 
+**T6 剖析：10⁵ 虚拟线程的每线程开销与 start 路径（2026-10-05，分支 vthread-t6）**
+
+- 口径：作业 vt6-prof-373114f1（jp2，x86_64 8 核 16 GB），dev 构建（opt-level 0、debug-assertions 开），`tests/perf/VirtualThreadScale.java`
+  n = 10⁵，`scripts/diag/vt6_probe.sh` 计时与内存分两次跑，第三次挂进程内采样器（`scripts/diag/sampler.c`）。采样器以 ITIMER_PROF
+  计时，内核节拍限制下实效约 250 Hz，多线程时同一时刻只挂一个待决信号，载体线程的样本偏少；主线程内部的占比可信，跨线程占比只作参考。
+- 计时与内存：
+
+  | 模式 | 建线程（主线程循环） | start | 全程墙钟 | user / sys | 峰值 RSS | 输出 |
+  |---|---|---|---|---|---|---|
+  | unstarted（只建不启） | 4.0–4.6 s（40–46 µs/个） | — | 7.7 s（含持有 3 s） | 3.7 / 0.4 s | 395 MiB（anon 314 MiB） | — |
+  | split（先全建，再全启；体内 park） | 4.6–4.9 s | 12.9–15.9 s（130–160 µs/个） | 27.3 s | 67 / 4.4 s | 1.78 GB（PTE 198 MiB） | 正确，all sleeping true |
+  | park（建与启同一循环） | 建 + 启 27.3 s | — | 36.5 s | — | 1.78 GB | 正确，true |
+  | sleep（验收形态，sleep 2 s） | 建 + 启 23.5–26.7 s | — | 32.9 s | 124 / 7.3 s | 1.38 GB | `all sleeping at once: false` |
+
+  split 的 start 每 1/10 进度约 0.85–1.3 s，基本线性；start50（+1.9 s）与 start100（+3.0 s）两处尖峰正对 `TrackingRootContainer`
+  的 CHM 在 49152 / 98304 项时扩容（`transfer` 由主线程单线程完成）。没有随存活数增长的退化。
+- 每线程内存（park 模式峰值，10⁵ 个同时停泊）：协程栈已提交约 10 KB/个（dev 帧大；热槽只留栈顶 16 KiB，冷槽整槽交还，生效正常）、
+  页表约 2 KB/个（1 MiB 跨度的槽各自占页表页）、堆对象约 5.5 KB/个（未启动时约 3.2 KB/个：VirtualThread、Continuation、
+  runContinuation lambda、Thread 字段与 FieldHolder 等）。合计约 17.8 KB/个，**峰值 1.78 GB 已在 2 GiB 内**，内存指标不是瓶颈。
+- 主线程 CPU 分布（split，5314 样本 ≈ 21 s CPU / 27 s 墙钟，主线程基本跑满）：
+
+  | 段 | 包含占比 |
+  |---|---|
+  | 建线程（`Thread.Builder.unstarted` → `VirtualThread.<init>`） | 13.6% |
+  | `VirtualThread.start` | 49.6% |
+  | 　其中 `TrackingRootContainer.onStart` → CHM keySet `add`（含扩容 `transfer` 18.9%） | 30.3% |
+  | 　其中 `submitRunContinuation` → `ForkJoinPool.execute`（poolSubmit / push / signalWork → 唤醒载体） | 约 17% |
+  | unpark 阶段（`VirtualThreads.unpark` → 再次 submit） | 26.6% |
+
+  横切的叶子成本（主线程包含占比）：Unsafe 数组元素访问经擦除视图（`unsafe__impl::_erased_ref_array`）8.3%；
+  `Object::__typed_null_of`（全局 `HashMap<&str, Object>` + SipHash，取类型化 null）6.4%；`String::from(&str)`（ldc 每次执行都
+  新建并查全局驻留表）5.7%，sleep 模式 11.6%；`unsafe__impl::offset_slot`（字段偏移 → HashMap 查表并克隆两个 String，再按名匹配）
+  4.8%；`monitor::unpark`（全局 `PARKERS` 互斥表 + SipHash）5.9%。协程本身（`enterSpecial`、`Stack::new`、`doYield`）在全部线程
+  前 160 名里都没有出现，低于约 1.5%。载体线程上 `ForkJoinPool.scan` 占全部样本 34%。
+- 结论：
+  - start 路径的耗时来自翻译出的 JDK 代码（CHM、ForkJoinPool、Thread 构造）在 opt-level 0 下的常数因子，加上几处运行时协议的
+    热点（ldc 驻留、类型化 null、Unsafe 偏移解码与数组视图、parker 侧表），**不是虚拟线程专属机制**，也没有随规模退化的算法问题。
+  - 要达到墙钟 ≤10 s，主线程每个虚拟线程（建 + 启 + 唤醒）的 CPU 须从约 210 µs 降到约 80 µs 以内（2.7 倍）。本代理边界内能动的只有
+    `monitor.rs` 的 parker 侧表（≤6%），远不够。
+  - 剩余杠杆都在他人边界：① dev 档位的 opt-level（`emit/src/project/entry.rs`，V12）——预计最大；② ldc 按调用点缓存驻留实例
+    （生成器，R1）；③ 类型化 null 改为按描述符静态缓存（`object.rs`，S7-3）；④ Unsafe 字段偏移解码与引用数组访问去掉逐次查表与
+    String 克隆（`unsafe__impl.rs`，S7-3「Unsafe 槽位」）。已报协调者裁定。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
