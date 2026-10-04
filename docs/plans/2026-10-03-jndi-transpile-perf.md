@@ -254,3 +254,34 @@ A+B+C 之后无效推送已基本去掉，剩余耗时由**有效**工作量决�
 | TestHttpLoopbackAsync | ubuntu | 607 s | 9.1 GB | 5467 | ubuntu 上 3e0199ec 为 1110 s / 14.7 GB |
 
 同一台 ubuntu 上闭包耗时降 45%、内存降 38%，但仍高于 600 s 上限。
+
+## 顺序无关性修复（2026-10-04，engine-order 分支）
+
+### 已确认结论
+
+单调要求：效果只增不撤，故每个判定须满足「乐观（瞬时）状态下的效果 ⊆ 悲观（终态）状态下的效果」。
+按此口径排查到三处判定，都已改正：
+
+| # | 类别 | 位置 | 现象 | 修法 |
+|---|---|---|---|---|
+| 1 | 提前截断（推不出即丢已知名字） | `pstrs.rs` 形参字符串槽 / `class_lookup.rs` 按名取类 | 槽的上游有一路推不出时整槽返回 None，已知名字一并丢弃；瞬时窗口里槽完备、按名加载了的类在终态（推不出）下不再加载，探针 TestSerialLookupPairing 随种子在 3360 / 4132 类之间摆动 | 「推不出」改为标志位（`lookup_partial`，只升不降），已知名字照常产出、另记缺口；`slot_upstream` / `slot_names` / `param_inputs` 返回完备标志，`partial_part` 按缺口映射不完备的输入 |
+| 2 | 常量字面量化（Const 代入无来源） | `absint` 的 `V::Str`、`invoke.rs::reflective_writes`、`field_lookup.rs` | 形参常量（`pvals`）、返回常量、字段常量代入为 `V::Str` 后与 ldc 字面量无法区分，被当成站点字面量与接收者镜像集相乘；Const→Top 后已放开的反射成员不撤（上文「根因（已查实）」） | `V::Str` 带来源集（`Srcs`）：ldc 为 `Src::Str(lit_id)`；格值代入时改记读点来源（`Param(k)` / `Site(off)`），与悲观态下的 `Ref` 同源；同文本合流取来源并集；`PV` 存储形去掉来源。只有非派生字符串算站点字面量（`site_lits` / `derived_str`），派生字符串走形参字符串集逐调用点配对 |
+| 3 | 先到者决定（入口常量不并 Top） | `worklist.rs::open_params` | 反射 / VM / 种子入口只按声明类型 open 形参，不并入形参常量；「分析时尚无调用点记录才置 Top」的兜底只在该入口先到时生效。DeepCopy 中 `LDAPCertStore.<init>` 先经 `JdkLDAP$ProviderService.newInstance` 以 null 实参入链时 `pvals = Const(null)`，后到的反射构造器入口不抬 Top，`@22` 之后全被折死，`LDAPCertStoreParameters` / `URICertStoreParameters` 两类随种子出现 / 消失 | `open_params` 显式 `bind_pvs(t, 0, n, None)`；兜底只剩无实参值可言的入口（`<clinit>`、序列化分配的无参构造器、上下文克隆的 lambda 实现 / 具体求值节点） |
+
+上限类判定（`MAX_SLOTS` 清输入、`MAX_NEST`、`MAX_NAMES`、`MAX_PATTERNS`、sealed 名字上限）同样是按当时规模截断，
+已加计数器（`summary.perf.cap_hits`，只列非零项）实测其在验收用例中是否触发，见下表。
+
+### 失败路线
+
+- 单值来源 `Option<Src>`：同文本不同来源的字符串合流只能取 None（丢来源），HelloWorld 多出 32 类。改为来源集并集后消除。
+- 「不完备时不产出名字」：完备标志只升不降，完备窗口里产出的效果在终态（不完备）下没有对应效果，不单调；
+  唯一与判定 1 相容的单调选择是不完备时照常产出已知名字并记缺口。
+
+### 集合变化（相对 c5741dfe 正常形态）
+
+DeepCopy 3388 → 4911 类，StockTrans 3386 → 4907 类（方法约 20.9k → 31.0k）。增量（JCA 提供者实现、xerces / XMLDSig、SSL、
+反射访问器等约 1500 类）全部来自 `Provider$Service.getImplClass` 的 className 按名取类：修前该槽在瞬时窗口外恒为推不出、
+整槽丢名不加载；修后按已知名字加载。这些名字正是探针大种子（瞬时完备窗口）加载的那批，即修复非单调后恢复的类。
+基线独有 `java/lang/ref/FinalReference`（`ReferenceQueue.poll0` 的 instanceof 类型级引用）：修后该分支被折死，属折叠精度变化，非顺序问题。
+
+代价：DeepCopy / StockTrans 冷闭包 34 s → 约 155 s（本机）。

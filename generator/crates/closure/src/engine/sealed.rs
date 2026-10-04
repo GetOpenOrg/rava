@@ -40,7 +40,7 @@ pub(super) fn is_field(e: &Event) -> bool {
 
 /// 实参（不含接收者）都不是引用值：构造不带入内容
 fn no_ref_args(args: &[V]) -> bool {
-    args.iter().skip(1).all(|x| !matches!(x, V::Ref { .. } | V::Str(_) | V::Class(..) | V::Null))
+    args.iter().skip(1).all(|x| !matches!(x, V::Ref { .. } | V::Str(..) | V::Class(..) | V::Null))
 }
 
 /// 字段 f 在一个访问方法里的读写：`reads` 为 getstatic 偏移，`writes` 为 putstatic 的写入值
@@ -86,7 +86,7 @@ pub(super) fn array_writes(a: &Analysis, n: u32, f: Option<&MemberRef>) -> Optio
     for (_, e, _) in uses(a, n) {
         match e {
             Event::ArrayStore { array, index, value } if site_of(array) == Some(n) && !mentions(index, n) && !mentions(value, n) => match value {
-                V::Str(s) => out.push((index.clone(), s.clone())),
+                V::Str(s, _) => out.push((index.clone(), s.clone())),
                 V::Null => {}
                 _ => return None,
             },
@@ -120,6 +120,7 @@ pub(super) fn flatten(parts: &[Part]) -> Option<BTreeSet<Rc<str>>> {
             Part::Wild => return None,
         };
         if names.len().saturating_mul(set.len()) > MAX_NAMES {
+            super::stats::cap_hit(super::stats::CAP_SEALED);
             return None;
         }
         names = names.iter().flat_map(|n| set.iter().map(move |x| format!("{n}{x}"))).collect();

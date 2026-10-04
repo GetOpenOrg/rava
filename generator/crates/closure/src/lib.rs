@@ -96,7 +96,7 @@ fn const_json(v: &V, ty: &str) -> Value {
         V::Int(i) if ty == "Z" => json!(*i != 0),
         V::Int(i) => json!(i),
         V::Long(l) => json!(l.to_string()),
-        V::Str(s) => json!(s.as_ref()),
+        V::Str(s, _) => json!(s.as_ref()),
         _ => Value::Null,
     }
 }

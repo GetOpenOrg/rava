@@ -224,7 +224,7 @@ impl<'a> Engine<'a> {
         for (j, p) in md.params.iter().enumerate() {
             match p {
                 FieldType::Object(c) if c == STRING => match args.get(base + j) {
-                    Some(V::Str(s)) => name = Some(s.clone()),
+                    Some(V::Str(s, _)) => name = Some(s.clone()),
                     _ => return false,
                 },
                 FieldType::Object(c) if c == CLASS => unknown |= args.get(base + j).is_none_or(|v| self.class_values(m, v, &mut classes)),

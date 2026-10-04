@@ -70,6 +70,7 @@ pub(super) fn expand(parts: &[Part]) -> Option<Vec<Vec<Part>>> {
                     subs.extend(expand(a)?);
                 }
                 if out.len().saturating_mul(subs.len()) > MAX_PATTERNS {
+                    super::stats::cap_hit(super::stats::CAP_PATTERNS);
                     return None;
                 }
                 out = out.iter().flat_map(|o| subs.iter().map(move |s| o.iter().chain(s.iter()).cloned().collect())).collect();
@@ -159,14 +160,17 @@ impl<'a> Engine<'a> {
         let mut wild: Vec<Vec<Part>> = vec![];
         for pat in expand(&parts)? {
             if pat.iter().any(|p| matches!(p, Part::Wild)) {
+                // 无约束的任意串：该支推不出（记 top），其余支的已知名字照常解析——结果只并不减
                 if !constrained(&pat) {
-                    return None;
+                    self.lookup_partial = true;
+                    continue;
                 }
                 wild.push(pat);
                 continue;
             }
             names.extend(flatten(&pat)?.iter().map(|n| n.to_string()));
             if names.len() > MAX_NAMES {
+                super::stats::cap_hit(super::stats::CAP_LNAMES);
                 return None;
             }
         }
@@ -210,7 +214,7 @@ impl<'a> Engine<'a> {
     /// depth = 已穿过的辅助方法层数（名字由唯一目标的辅助方法拼出并返回时，进入其字节码继续拆）
     pub(super) fn name_parts(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Vec<Part>> {
         let (f, v) = f.resolve(v);
-        if let V::Str(s) = &v {
+        if let V::Str(s, _) = &v {
             return Some(vec![Part::Lit(s.clone())]);
         }
         let Some(o) = site_of(&v) else {
@@ -284,7 +288,7 @@ impl<'a> Engine<'a> {
         for (s, k) in segs {
             let (sf, s) = f.resolve(s);
             parts.push(match &s {
-                V::Str(x) => Part::Lit(x.clone()),
+                V::Str(x, _) => Part::Lit(x.clone()),
                 V::Null => Part::Lit(Rc::from("null")),
                 V::Ref { .. } => match self.segment_values(sf, &s, gap, depth) {
                     Some(p) => p,
@@ -330,7 +334,7 @@ impl<'a> Engine<'a> {
         let (mut dyn_i, mut const_i) = (0, 1);
         let flush = |lit: &mut String, segs: &mut Vec<Seg>| {
             if !lit.is_empty() {
-                segs.push((V::Str(Rc::from(std::mem::take(lit).as_str())), b'L'));
+                segs.push((V::lit(Rc::from(std::mem::take(lit).as_str())), b'L'));
             }
         };
         for ch in recipe.chars() {
@@ -359,7 +363,7 @@ impl<'a> Engine<'a> {
         if let (Some(m), None) = (f.m, site_of(v)) {
             // 按名查方法的形参名字由调用点的字符串常量另行点名（`param_strs`），这里只服务按名取类
             let [Src::Param(i)] = v.srcs()[..] else { return None };
-            return if gap == Gap::Method { None } else { self.param_names(m, i as usize, depth).map(Part::Any) };
+            return if gap == Gap::Method { None } else { self.param_names(m, i as usize, depth).map(|(set, complete)| self.partial_part(set, complete, gap)) };
         }
         let o = site_of(v)?;
         if let Some(r) = self.mirror_name(f, o) {
@@ -389,8 +393,8 @@ impl<'a> Engine<'a> {
         if let Some(set) = self.enum_field_values(a, v) {
             return Some(Part::Any(set));
         }
-        if let Some(set) = f.m.and_then(|m| self.read_field_names(m, a, o, depth)) {
-            return Some(Part::Any(set));
+        if let Some((set, complete)) = f.m.and_then(|m| self.read_field_names(m, a, o, depth)) {
+            return Some(self.partial_part(set, complete, gap));
         }
         if let Some(set) = self.callee_consts(a, o, depth) {
             return Some(Part::Any(set));
@@ -406,6 +410,22 @@ impl<'a> Engine<'a> {
             }
         }
         Some(Part::Any(set))
+    }
+
+    /// 槽求值结果（名字集, 是否推得出）→ 拼接段。推不出时不丢弃已知名字（否则结果取决于求值发生在推不出之前
+    /// 还是之后）：按名查方法记为任意串；按名取类给出「已知名字 | 任意串」；内部求值给出已知名字并记 top
+    fn partial_part(&mut self, set: BTreeSet<Rc<str>>, complete: bool, gap: Gap) -> Part {
+        if complete {
+            return Part::Any(set);
+        }
+        match gap {
+            Gap::Method => Part::Wild,
+            Gap::Class => Part::Alt(vec![vec![Part::Any(set)], vec![Part::Wild]]),
+            Gap::Fail => {
+                self.lookup_partial = true;
+                Part::Any(set)
+            }
+        }
     }
 
     /// 常量表读取结果的候选字符串（可经一次 checkcast）与接收者是否含非常量表值；接收者尚无值时为空集

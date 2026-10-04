@@ -59,7 +59,7 @@ impl Engine<'_> {
                         continue;
                     }
                     let Some(v) = args.get(base + i) else { continue };
-                    if matches!(v, V::Str(_) | V::Null) {
+                    if matches!(v, V::Str(..) | V::Null) {
                         continue;
                     }
                     let from_param = v.srcs().iter().any(|s| matches!(s, Src::Param(_)));

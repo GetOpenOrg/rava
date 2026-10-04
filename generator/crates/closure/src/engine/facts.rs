@@ -16,7 +16,8 @@ impl PV {
     /// 标签引用只在分析内部传递，不作为折叠常量导出）
     pub(super) fn of(v: &V) -> PV {
         match v {
-            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Str(_) | V::Offset(_) => PV::Const(v.clone()),
+            V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Offset(_) => PV::Const(v.clone()),
+            V::Str(..) => PV::Const(v.stripped()),
             V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
@@ -195,7 +196,7 @@ pub(super) fn const_value(c: &Const) -> Option<V> {
     match c {
         Const::Int(v) => Some(V::Int(*v)),
         Const::Long(v) => Some(V::Long(*v)),
-        Const::String(s) => Some(V::Str(Rc::from(s.as_str()))),
+        Const::String(s) => Some(V::lit(Rc::from(s.as_str()))),
         _ => None,
     }
 }
@@ -405,7 +406,7 @@ impl Ctx<'_> {
             Some(i) => args.get(i + base)?,
             None => args.first()?,
         };
-        let (V::Class(c, _), Some(V::Str(name))) = (cls, args.get(r.name + base)) else { return None };
+        let (V::Class(c, _), Some(V::Str(name, _))) = (cls, args.get(r.name + base)) else { return None };
         let cf = self.h.class(c)?;
         let fd = cf.fields.iter().find(|f| f.name == **name && !f.is_static())?;
         Some(V::Offset(Rc::new(MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() })))

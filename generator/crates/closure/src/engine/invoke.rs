@@ -58,15 +58,16 @@ impl<'a> Engine<'a> {
             let mut targets: Option<Vec<String>> = None;
             for a in args {
                 match a {
-                    V::Str(name) => {
+                    V::Str(name, _) if !a.derived_str() => {
                         names.insert(name.clone());
                         site_names.insert(name.clone());
                     }
-                    V::Ref { .. } => {
+                    // 常量格给出的名字（形参 / 字段 / 返回常量）按其来源处理，同常量格推不出时：
+                    // 不算本点字面量，不与接收者镜像相乘（中间态常量与终态给出同样的点名，见 `V::Str`）
+                    V::Ref { .. } | V::Str(..) => {
                         // 合流前的各字面量（如按条件二选一的名字）与形参上流入的字符串常量
-                        let lits = a.lits();
-                        site_names.extend(lits.iter().cloned());
-                        names.extend(lits);
+                        site_names.extend(a.site_lits());
+                        names.extend(a.lits());
                         names.extend(self.param_strs(m, off, a));
                         names.extend(self.field_strs(m, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
@@ -130,7 +131,7 @@ impl<'a> Engine<'a> {
             }
         }
         if class_param || class_recv {
-            for name in args.iter().flat_map(V::lits) {
+            for name in args.iter().flat_map(V::site_lits) {
                 let name = &name;
                 let mut hit = false;
                 for c in &classes {

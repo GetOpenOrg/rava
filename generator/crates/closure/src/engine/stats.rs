@@ -80,6 +80,29 @@ const WHYS: [(Why, &str); 11] = [
     (Why::Mirror, "mirror"),
 ];
 
+/// 名字求值的规模上限命中次数（按上限种类，见 [`CAP_NAMES`]）：超限按推不出处理，命中即该站点的结果
+/// 依赖图规模、可能随处理先后不同，验收用例应为 0
+pub(super) const CAP_NAMES: [&str; 6] = ["pstr_slots", "pstr_nest", "pstr_names", "lookup_names", "lookup_patterns", "sealed_names"];
+pub(super) const CAP_SLOTS: usize = 0;
+pub(super) const CAP_NEST: usize = 1;
+pub(super) const CAP_PNAMES: usize = 2;
+pub(super) const CAP_LNAMES: usize = 3;
+pub(super) const CAP_PATTERNS: usize = 4;
+pub(super) const CAP_SEALED: usize = 5;
+
+thread_local! {
+    static CAPS: std::cell::Cell<[u64; CAP_NAMES.len()]> = const { std::cell::Cell::new([0; CAP_NAMES.len()]) };
+}
+
+/// 登记一次规模上限命中（求值函数多为自由函数，计数放线程局部）
+pub(super) fn cap_hit(kind: usize) {
+    CAPS.with(|c| {
+        let mut v = c.get();
+        v[kind] += 1;
+        c.set(v);
+    });
+}
+
 pub(super) struct Stats {
     cur: Phase,
     since: Instant,
@@ -274,6 +297,7 @@ impl<'a> Engine<'a> {
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
             "ceval_memo": s.ceval,
+            "cap_hits": CAPS.with(|c| CAP_NAMES.iter().zip(c.get()).filter(|(_, n)| *n > 0).map(|(k, n)| (k.to_string(), json!(n))).collect::<serde_json::Map<_, _>>()),
             "reasons": reasons,
             "reapply_callee_summary": s.reapply,
             "reprocess_same_analysis": s.reprocess,

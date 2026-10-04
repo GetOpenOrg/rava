@@ -285,7 +285,7 @@ impl<'a> Engine<'a> {
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open
     pub(super) fn feeds(&mut self, m: usize, v: &V, decl: u32) -> Vec<Feed> {
         match v {
-            V::Str(_) => vec![Feed::S(TypeSet::exact(self.id(STRING)))],
+            V::Str(..) => vec![Feed::S(TypeSet::exact(self.id(STRING)))],
             V::Class(c, _) => {
                 let k = self.mirror(c);
                 vec![Feed::S(TypeSet::exact(k))]
