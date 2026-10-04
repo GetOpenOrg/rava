@@ -3,7 +3,9 @@
 //!   按运行时解码字形（`java_runtime::meta_codec::class_anno`）解回，与类文件逐字节一致。注解持有类只作类字面量
 //!  （L1 不透明类），覆盖数组元素值与嵌套注解数组；
 //! - 成员表裁剪口径：反射调用调用者敏感方法（`Method.invoke(Field.get)`）读私有静态字段时，字段声明类有字段表，
-//!   运行期注解解析（判调用者敏感读方法注解、元注解定保留策略、动态代理取接口方法）涉及的注解类型有方法表。
+//!   运行期注解解析（判调用者敏感读方法注解、元注解定保留策略、动态代理取接口方法）涉及的注解类型有方法表；
+//!   不透明（L1）的 JDK 注解类型 `@CallerSensitive` 照发类级注解行（`@Retention(RUNTIME)`），否则保留策略退为 CLASS、
+//!   `Reflection.isCallerSensitive` 判假，反射调用不经注入调用器（调用者错报为宿主类）。
 //! 找不到 JDK 21 时跳过。
 
 use std::collections::BTreeMap;
@@ -136,7 +138,12 @@ fn pool_items(p: &[u8]) -> Vec<Vec<u8>> {
 
 /// 用户元数据表 CLASS_ANNO 解码：类 → (注解原始字节, 稀疏常量池)
 fn user_class_annos(scratch: &Path) -> BTreeMap<String, (Vec<u8>, BTreeMap<u16, AnnoConst>)> {
-    let src = std::fs::read_to_string(scratch.join("user/src/rava_user_meta.rs")).expect("读用户元数据表");
+    class_anno_rows(&scratch.join("user/src/rava_user_meta.rs"))
+}
+
+/// 元数据表源文件（用户侧 / 档案侧同一字形）的 CLASS_ANNO 解码
+fn class_anno_rows(table_src: &Path) -> BTreeMap<String, (Vec<u8>, BTreeMap<u16, AnnoConst>)> {
+    let src = std::fs::read_to_string(table_src).expect("读元数据表");
     let pool = pool_items(&byte_literal(&src, "META_POOL"));
     let table = byte_literal(&src, "CLASS_ANNO");
     let mut r = Reader { pool: &pool, b: &table, at: 0 };
@@ -228,4 +235,22 @@ fn reflective_private_static_field_member_tables() {
     ] {
         assert!(methods.iter().any(|m| m == c), "方法表缺 {c}");
     }
+}
+
+/// 不透明（L1）JDK 注解类型照发类级注解：档案元数据表 CLASS_ANNO 有 `@CallerSensitive` 行，
+/// 其元注解 `@Retention(RUNTIME)` 可解（AnnotationType 据此定保留策略）
+#[test]
+fn opaque_jdk_annotation_type_keeps_retention_row() {
+    let out = std::env::temp_dir().join(format!("rava-meta-cs-emit-{}", std::process::id()));
+    let java = manifest_dir().join("tests/fixtures/ReflectCsField.java");
+    if rava("build", &java, &["--stop-after", "emit", "--clean", "--out", &s(&out)]).is_none() {
+        return;
+    }
+    let rows = class_anno_rows(&out.join("closure_input/meta_tables.rs"));
+    let _ = std::fs::remove_dir_all(&out);
+    let cs = "jdk/internal/reflect/CallerSensitive";
+    let (raw, cp) = rows.get(cs).unwrap_or_else(|| panic!("CLASS_ANNO 缺 {cs}：{:?}", rows.keys().collect::<Vec<_>>()));
+    assert!(!raw.is_empty(), "{cs} 类级注解原始字节为空");
+    let strs = utf8s(cp);
+    assert!(strs.contains(&"Ljava/lang/annotation/Retention;") && strs.contains(&"RUNTIME"), "{cs} 缺 @Retention(RUNTIME)：{cp:?}");
 }
