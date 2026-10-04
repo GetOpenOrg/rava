@@ -404,7 +404,7 @@ impl<'a> Engine<'a> {
                 let hub = &self.hubs[h as usize];
                 let set = match hub.open {
                     Some(o) => format!("open {}", self.names[o as usize]),
-                    None => format!("exact {}", hub.recvs.len()),
+                    None => format!("exact {}", hub.set.as_ref().map_or(0, |s| s.len())),
                 };
                 format!("{n:?} {:?} [{set}, 调用点 {}, 中转目标 {}, 父 {:?}]", hub.site, hub.links.len(), hub.plain.len(), hub.parent)
             }

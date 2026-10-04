@@ -17,18 +17,15 @@ impl<'a> Engine<'a> {
         let h = self.hubs.len() as u32;
         let ptypes = md.params.iter().map(|p| self.ptype(p)).collect();
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
-        let (open, pending, parent) = match &key.2 {
-            HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None),
+        let (open, pending, parent, set) = match &key.2 {
+            HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None, None),
             HubSet::Exact(rs) => {
-                let parent = parent.filter(|&p| {
-                    let ph = &self.hubs[p as usize];
-                    ph.open.is_none() && ph.recvs.iter().all(|x| rs.binary_search(x).is_ok())
-                });
-                let pending = match parent {
-                    Some(p) => rs.iter().copied().filter(|x| !self.hubs[p as usize].recvs.contains(x)).collect(),
+                let parent = self.hub_parent(&key.0, iface, rs, parent);
+                let pending = match parent.and_then(|p| self.hubs[p as usize].set.clone()) {
+                    Some(ps) => sorted_minus(rs, &ps),
                     None => rs.to_vec(),
                 };
-                (None, pending, parent)
+                (None, pending, parent, Some(rs.clone()))
             }
         };
         let (lambdas, special) = parent.map(|p| (self.hubs[p as usize].lambdas.clone(), self.hubs[p as usize].special.clone())).unwrap_or_default();
@@ -37,6 +34,7 @@ impl<'a> Engine<'a> {
             owner,
             open,
             parent,
+            set,
             ptypes,
             ret,
             vals: None,
@@ -51,6 +49,11 @@ impl<'a> Engine<'a> {
             link_seq: 0,
             edged: HashSet::default(),
         });
+        if let HubSet::Exact(rs) = &key.2 {
+            let fam = self.hub_family.entry((key.0.clone(), iface)).or_default();
+            let at = fam.partition_point(|x| x.1.len() <= rs.len());
+            fam.insert(at, (h, rs.clone()));
+        }
         self.hub_ids.insert(key, h);
         if let Some(o) = open {
             self.hubs_by_open.entry(o).or_default().push(h);
@@ -70,10 +73,39 @@ impl<'a> Engine<'a> {
                 self.flow(Node::HR(p), Node::HR(h), rt);
             }
             cut::edge_plain(&format!("H:{h}"), &format!("H:{p}"));
-            let rs = self.hubs[p as usize].recvs.clone();
-            self.hubs[h as usize].recvs.extend(rs);
         }
         h
+    }
+
+    /// 精确集合枢纽 rs 的父枢纽：同族（调用成员与接口标志相同）已展开的精确集合枢纽中、集合为 rs 子集的最大者
+    /// （调用点原枢纽 last 也是候选）。父枢纽承接其集合部分，新枢纽只展开差集：同一成员在大体相同的接收者集合上
+    /// 派发的各调用点（不同上下文的同一调用点、汇自同一值池的各调用点）共用已展开的部分，不各自展开全集。
+    /// 目标、实参与返回值的汇合与无父时相同（见 [`Hub`]）。族内按大小降序试探，未命中的试探次数有上限
+    fn hub_parent(&self, mref: &MemberRef, iface: bool, rs: &[u32], last: Option<u32>) -> Option<u32> {
+        const TRIES: usize = 16;
+        let usable = |p: u32| {
+            let ph = &self.hubs[p as usize];
+            ph.open.is_none() && ph.expanded && ph.pending.is_empty()
+        };
+        let set = |p: u32| self.hubs[p as usize].set.as_deref();
+        let best = last.filter(|&p| set(p).is_some_and(|ps| sorted_subset(ps.iter().copied(), rs)));
+        let best_len = best.and_then(set).map_or(0, <[u32]>::len);
+        let Some(fam) = self.hub_family.get(&(mref.clone(), iface)) else { return best };
+        let end = fam.partition_point(|x| x.1.len() <= rs.len());
+        let mut tries = 0;
+        for (p, ps) in fam[..end].iter().rev() {
+            if ps.len() <= best_len || tries >= TRIES {
+                break;
+            }
+            if !usable(*p) {
+                continue;
+            }
+            tries += 1;
+            if sorted_subset(ps.iter().copied(), rs) {
+                return Some(*p);
+            }
+        }
+        best
     }
 
     /// 调用点接入枢纽：实参汇入 `HP`，`HR` 流向结果；逐调用点派发的接收者对本调用点派发
@@ -331,4 +363,31 @@ impl<'a> Engine<'a> {
         self.hubs[h as usize].vals = Some(vec![PV::Top; md.params.len()]);
         self.hub_expand(h);
     }
+}
+
+/// 升序序列 a 是否为升序切片 b 的子集（逐个前移，首个缺失即否）
+fn sorted_subset(a: impl Iterator<Item = u32>, b: &[u32]) -> bool {
+    let mut j = 0;
+    for x in a {
+        match b[j..].binary_search(&x) {
+            Ok(k) => j += k + 1,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// 升序切片之差 a \ b
+fn sorted_minus(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut j = 0;
+    let mut out = Vec::with_capacity(a.len().saturating_sub(b.len()));
+    for &x in a {
+        while j < b.len() && b[j] < x {
+            j += 1;
+        }
+        if j >= b.len() || b[j] != x {
+            out.push(x);
+        }
+    }
+    out
 }

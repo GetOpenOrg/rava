@@ -221,13 +221,15 @@ pub(super) struct Hub {
     /// open 类型（open 枢纽）
     pub(super) open: Option<u32>,
     pub(super) parent: Option<u32>,
+    /// 精确集合枢纽的接收者集合（升序，与枢纽键共享）；父枢纽承接其中的子集部分
+    pub(super) set: Option<Rc<[u32]>>,
     /// 实参声明类型（不含接收者）与返回类型
     pub(super) ptypes: Vec<Option<u32>>,
     pub(super) ret: Option<u32>,
     /// 各调用点实参常量的汇合（None = 尚无调用点；首个调用点接入后才展开接收者）
     pub(super) vals: Option<Vec<PV>>,
     pub(super) via: Via,
-    /// 待展开（精确集合）/ 已展开的接收者
+    /// 待展开（精确集合）/ 本枢纽展开的接收者（不含父枢纽承接的）
     pub(super) expanded: bool,
     pub(super) pending: Vec<u32>,
     pub(super) recvs: BTreeSet<u32>,

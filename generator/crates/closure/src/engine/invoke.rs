@@ -296,7 +296,12 @@ impl<'a> Engine<'a> {
                     };
                     self.link_hub(h, m, off, &a, res);
                 }
-                for o in s.open.iter() {
+                // open(o) 的接收者（G 中 ⊂ o 者）被同一值集里另一 open 超类型的枢纽涵盖：只接后者，目标与结果相同
+                let opens: Vec<u32> = s.open.iter().collect();
+                for &o in &opens {
+                    if opens.iter().any(|&p| p != o && self.sub(o, p)) {
+                        continue;
+                    }
                     let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                 }
