@@ -85,10 +85,15 @@ public class TestContinuationPinned {
         System.out.println("sync sleep: interrupted=" + flags[0] + " stillInterrupted=" + flags[1]);
 
         // 1d. synchronized 内限时 parkNanos 超时返回
+        // parkNanos 按规范允许提前（虚假）返回，故循环 park 直到 deadline
         Thread n = Thread.ofVirtual().start(() -> {
             synchronized (LOCK) {
                 long t0 = System.nanoTime();
-                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(30));
+                long deadline = t0 + TimeUnit.MILLISECONDS.toNanos(30);
+                long now;
+                while ((now = System.nanoTime()) < deadline) {
+                    LockSupport.parkNanos(deadline - now);
+                }
                 flags[0] = System.nanoTime() - t0 >= TimeUnit.MILLISECONDS.toNanos(25);
             }
         });
