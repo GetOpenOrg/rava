@@ -1944,4 +1944,4 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
   本机新二进制下该例与 StockTrans 种子 0 / 1 / 2 集合一致，未复现。
   同一 JCA 大门在基线二进制本机就有种子依赖（StockTrans 根下种子 1 +760、TestModuleLayerDefine 常规种子 1 +943），
   属引擎顺序线的既有问题；F1/F2 改变了事实到达顺序，触发它的用例 / 种子随之变化。
-- 其余单测（`--skip` 该测试 + `--no-fail-fast`）的作业 `c1da-ut2-dddf8b49` 01 尚在排队。
+- 其余单测（`--skip` 该测试 + `--no-fail-fast`，含 rava_macros_core）：作业 `c1da-ut2-dddf8b49` 01 全部通过（rc=0）。
