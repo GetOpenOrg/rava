@@ -70,9 +70,9 @@ pub fn opaque_metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
         .collect();
     if ctx.is_user(ci.name()) {
         // 用户类的声明字段面照发（惰性属性行，只供元数据表扫描）：类字面量上的
-        // getDeclaredField / getGenericType 不以实例化为前提；L1 无存储，字段值不可达
+        // getDeclaredField / getGenericType 不以实例化为前提；L1 无存储，字段值不可达（不带反射标记）
         let ex = ctx.extras(ci.name());
-        lines.extend(ci.fields().iter().enumerate().map(|(i, f)| super::attrs::field_attr(f, ex.fields.get(i))));
+        lines.extend(ci.fields().iter().enumerate().map(|(i, f)| super::attrs::field_attr(f, ex.fields.get(i), false)));
     }
     lines.push(format!("#[all_supertypes    = \"{}\"]", all_supertypes(ctx, ci).join(";")));
     lines
