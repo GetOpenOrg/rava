@@ -182,6 +182,8 @@ release 下 LynchBell 每次迭代约 1.7 µs，需提速约 40 倍；debug 需 
 
 LynchBell debug（同作业 kr1，10000 样本，含子调用口径）：`uniqueDigits` 83.6%，其中 `String.charAt` 56.4%。静态字段 getter 合计约 34%（`s` 13.9%、`SIOOBE_FORMATTER` 10.2%、`COMPACT_STRINGS` 9.9%），内部是 `__class_init` 8.7% 和 OnceLock `force` 8.4%；`__RefSlot` 读锁 `borrow` / `read_recursive` 20%；栈界检查 8.8%（`guard::current` TLS 6.2%）；`String.valueOf` 13.4%。debug 下 parking_lot 的 `try_lock_shared_fast` / `deadlock_acquire` / `checked_add` 等以 opt-level 0 编译，单把读锁展开成十余层调用。
 
+LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s` 9.9%、`SIOOBE_FORMATTER` 5.4%、`__class_init` 3.3%、`DigitTens` / `DigitOnes` 3.1%，合计约 22%；`__get_buf` 8.7%、`__get_value` / `__get_coder` 等字段访问器约 10%；`JArray::get` / `set` 9.3%；`Result` 的 `?`（`Try::branch`，result.rs:2176-2177）7.4%，几乎全部来自 `main` 循环（Throwable 结果按值搬运）；`stack_exhausted` + `__stack_check` 3.1%；`try_lock_shared_fast` 2.4%。含子调用：`uniqueDigits` 44.9%，其中 `String.charAt` 38.3%（`checkIndex` 7.2%、`isLatin1` 5.3%）；`Integer.toString` 19.7%。
+
 结论：前四类（约 52%）都是对象 / 静态 / 数组存储的同步形态（每字段一个 `Arc`、每次读写一把 `RwLock`、每次读出克隆一份引用计数），属 S7-3 区与运行时 `array.rs`；方法体翻译侧能直接消除的是多余的引用计数增减（已做两项）。存储形态改造已向主会话申请协调（2026-10-05）。
 
 **已做（本线范围内的方法体翻译）**：
