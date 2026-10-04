@@ -443,14 +443,16 @@ impl Class {
     /// native `getInterfaces0()`：直接超接口（class 文件 interfaces 项，声明序）。数组类 →
     /// Cloneable / Serializable（JLS §10.8）；基本类型类 / 无接口 → 空数组。
     #[jvm_native]
-    /// native `getGenericSignature0()`：类的泛型签名（Signature 属性）。**已知偏差**：暂返回 null
-    /// ——签名的消费方 `sun/reflect/generics`（ClassRepository 解析器 / 反射类型对象）尚未放行
-    /// （随 C1d 边界收窄处理），返回真实签名会落到其存根上。null 即「无泛型签名」：
-    /// getGenericInterfaces / getGenericSuperclass 退回原始类型，HashMap.comparableClassFor
-    /// 返回 null（树化桶改用 tieBreakOrder 比较，查找结果不变）。
+    /// native `getGenericSignature0()`：类的泛型签名（Signature 属性，JVM_GetClassSignature 同形）；
+    /// 无该属性 / 数组 / 基本类型 → null。数据源为 java_meta 的 CLASS_SIGNATURE 表，
+    /// 解析由 sun/reflect/generics（ClassRepository）的字节码翻译承担。
     #[jvm_native]
     pub fn getGenericSignature0(&self) -> Result<String> {
-        Ok(String::default())
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        Ok(match crate::meta::class_signature(&name) {
+            Some(sig) => String::from(sig),
+            None => String::default(),
+        })
     }
 
     /// native `getPermittedSubclasses0()`：sealed 类 / 接口的许可子类型（PermittedSubclasses 属性，
@@ -653,26 +655,33 @@ fn class_for_descriptor(desc: &str) -> Class {
 /// 当前参数）。消费方：getDeclaredMethod 的参数配对（重载语义：JDK 查询
 /// 不含返回类型）与 Method.parameterTypes 还原。
 fn descriptor_params(descriptor: &str) -> Vec<std::string::String> {
-    let Some(open) = descriptor.find('(') else { return Vec::new() };
-    let Some(close) = descriptor[open..].find(')').map(|i| i + open) else { return Vec::new() };
-    let body = &descriptor[open + 1..close];
-    let mut out = Vec::new();
-    let mut cur = std::string::String::new();
-    for ch in body.chars() {
-        cur.push(ch);
-        if cur.trim_start_matches('[').starts_with('L') {
-            // 类描述符（含对象数组 `[Ljava/lang/String;`）：累积到 ';' 闭合
-            if ch == ';' { out.push(std::mem::take(&mut cur)); }
-            continue;
+    Class::__descriptor_params(descriptor)
+}
+
+impl Class {
+    /// 方法描述符的逐参数描述符序列（见 [`descriptor_params`]；反射调用的实参校验共用）
+    pub fn __descriptor_params(descriptor: &str) -> Vec<std::string::String> {
+        let Some(open) = descriptor.find('(') else { return Vec::new() };
+        let Some(close) = descriptor[open..].find(')').map(|i| i + open) else { return Vec::new() };
+        let body = &descriptor[open + 1..close];
+        let mut out = Vec::new();
+        let mut cur = std::string::String::new();
+        for ch in body.chars() {
+            cur.push(ch);
+            if cur.trim_start_matches('[').starts_with('L') {
+                // 类描述符（含对象数组 `[Ljava/lang/String;`）：累积到 ';' 闭合
+                if ch == ';' { out.push(std::mem::take(&mut cur)); }
+                continue;
+            }
+            if ch == '[' {
+                // 数组前缀：归当前参数继续累积（[[I / [Ljava/lang/String; 均整体）
+                continue;
+            }
+            // 基本类型字符（Z B C S I J F D）自成一段
+            out.push(std::mem::take(&mut cur));
         }
-        if ch == '[' {
-            // 数组前缀：归当前参数继续累积（[[I / [Ljava/lang/String; 均整体）
-            continue;
-        }
-        // 基本类型字符（Z B C S I J F D）自成一段
-        out.push(std::mem::take(&mut cur));
+        out
     }
-    out
 }
 
 /// 反射族内部：直接父类表查询（L3 分派协议的上溯数据面，

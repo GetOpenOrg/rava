@@ -404,3 +404,10 @@ pub(crate) fn render_class_meta_table(g: &mut Group, clinit: &BTreeSet<String>, 
     push_pairs(g, "CLASS_SOURCE_FILE", source);
     push_pairs(g, "CLASS_DEFINING_LOADER", loaders);
 }
+
+/// CLASS_SIGNATURE：类级 Signature 属性（泛型签名，JVMS §4.7.9.1）——Class.getGenericSignature0 的数据源
+///（getTypeParameters / getGenericSuperclass / getGenericInterfaces 经 sun/reflect/generics 解析）。
+/// 无该属性的类不在表中（native 返回 null）。
+pub(crate) fn render_class_signature_table(g: &mut Group, signatures: &BTreeMap<String, String>) {
+    push_pairs(g, "CLASS_SIGNATURE", signatures);
+}

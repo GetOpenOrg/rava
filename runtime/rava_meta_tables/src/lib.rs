@@ -64,6 +64,7 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("nest_members", "NEST_MEMBERS"),
     ("class_access_flags", "CLASS_ACCESS_FLAGS"),
     ("class_source_file", "CLASS_SOURCE_FILE"),
+    ("class_signature", "CLASS_SIGNATURE"),
     ("class_defining_loader", "CLASS_DEFINING_LOADER"),
     ("record_classes", "RECORD_CLASSES"),
     ("record_components", "RECORD_COMPONENTS"),
@@ -97,6 +98,7 @@ pub fn render(texts: &[&str], side: Side) -> String {
         &scan_class_attr(texts, "permitted_subclasses"),
         &scan_class_attr(texts, "nest_members"), &scan_class_attr(texts, "class_access_flags"),
         &scan_class_attr(texts, "source"), &scan_class_attr(texts, "defining_loader"));
+    render_class_signature_table(&mut g, &scan_class_attr(texts, "generic_signature"));
     render_nest_table(&mut g, &scan_nest_meta(texts));
     render_interfaces_table(&mut g, &scan_class_interfaces(texts));
     render_class_anno_table(&mut g, &scan_class_annos(texts));

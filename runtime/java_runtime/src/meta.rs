@@ -110,6 +110,8 @@ extern "Rust" {
     static CLASS_ACCESS_FLAGS: &'static [u8];
     #[link_name = "__java_meta_CLASS_SOURCE_FILE"]
     static CLASS_SOURCE_FILE: &'static [u8];
+    #[link_name = "__java_meta_CLASS_SIGNATURE"]
+    static CLASS_SIGNATURE: &'static [u8];
     #[link_name = "__java_meta_CLASS_DEFINING_LOADER"]
     static CLASS_DEFINING_LOADER: &'static [u8];
     #[link_name = "__java_meta_RECORD_CLASSES"]
@@ -145,6 +147,7 @@ pub struct UserMeta {
     pub nest_members: &'static [u8],
     pub class_access_flags: &'static [u8],
     pub class_source_file: &'static [u8],
+    pub class_signature: &'static [u8],
     pub class_defining_loader: &'static [u8],
     pub record_classes: &'static [u8],
     pub record_components: &'static [u8],
@@ -311,6 +314,12 @@ pub fn class_access_flags() -> &'static [(&'static str, i32)] {
 pub fn class_source_file() -> &'static [(&'static str, &'static str)] {
     static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
     merged(&CELL, || meta_codec::pairs(archive_meta(unsafe { CLASS_SOURCE_FILE })), |m| meta_codec::pairs(user_meta(m, m.class_source_file)), Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → 类级 Signature 属性（泛型签名；无该属性的类不在表中）。
+pub fn class_signature(class: &str) -> Option<&'static str> {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    let t = merged(&CELL, || meta_codec::pairs(archive_meta(unsafe { CLASS_SIGNATURE })), |m| meta_codec::pairs(user_meta(m, m.class_signature)), Some(|a, b| a.0.cmp(b.0)));
+    t.binary_search_by(|(c, _)| (*c).cmp(class)).ok().map(|i| t[i].1)
 }
 /// 类 → 定义加载器（`app` / `platform`；引导加载器的类不在表中），按类名有序。
 /// 注入调用器（`injected_invoker`）取宿主的定义加载器（JDK 以宿主的 Lookup 定义该隐藏类）。
