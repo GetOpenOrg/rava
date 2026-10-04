@@ -75,6 +75,25 @@ std::thread_local! {
     static CURRENT: Cell<*const ExecContext> = const { Cell::new(ptr::null()) };
 }
 
+/// 对象释放的载体槽（S7-3x，见 `handle::__release`）：释放深度与待释放队列。释放（Drop 链）中途没有
+/// 让出点，一次最外层释放总在同一载体上开始并清空队列，所以与载体绑定而不随执行流。
+pub(crate) struct ReleaseSlot {
+    pub(crate) depth: Cell<u32>,
+    pub(crate) pending: RefCell<Vec<crate::sync_model::__Shared<dyn crate::java::lang::ObjectVTable>>>,
+}
+
+std::thread_local! {
+    static RELEASE: ReleaseSlot = const {
+        ReleaseSlot { depth: Cell::new(0), pending: RefCell::new(Vec::new()) }
+    };
+}
+
+/// 访问本载体的释放槽（不内联）；线程局部已销毁（线程退出期）→ None，`f` 随之丢弃。
+#[inline(never)]
+pub(crate) fn release_slot<R>(f: impl FnOnce(&ReleaseSlot) -> R) -> Option<R> {
+    RELEASE.try_with(f).ok()
+}
+
 /// 当前执行流的块（每次重新读取线程局部，不内联）
 #[inline(never)]
 pub fn current() -> *const ExecContext {

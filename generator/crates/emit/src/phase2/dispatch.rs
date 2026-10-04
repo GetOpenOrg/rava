@@ -2,10 +2,11 @@
 //!
 //! 为用户树类（及 JDK / 库类的常量反射引用面）在类文件尾部追加
 //! `__reflect_dispatch(name, descriptor, recv, args)`（Method.invoke / Constructor.newInstance
-//! 的按名协议）与 `__reflect_field(name, recv, value)`（Field.get/set 与 MH 字段句柄），
-//! 并产出 main 启动时的登记行（[`DispatchReg`]）。协议见 `java_runtime::reflect_dispatch` 头注。
+//! 的按名协议），并产出 main 启动时的登记行（[`DispatchReg`]）：方法分派闭包，及声明类的静态
+//! 字段表 `X::__STATICS`（宏展开；Field.get/set 与 MH 字段句柄的按名协议由运行时 `field_reflect`
+//! 按描述符承载，S7-3b）。协议见 `java_runtime::reflect_dispatch` 头注。
 //!
-//! 数据源：类发射文本的 `java_method` / `java_native` / `java_field` 属性行及其后的声明行
+//! 数据源：类发射文本的 `java_method` / `java_native` 属性行及其后的声明行
 //! （与 build.rs 方法表扫描同一属性协议——零二次推导）。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,12 +55,6 @@ fn attr_re() -> &'static Regex {
 fn fn_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     re(r"^\s*pub(?:\(crate\))?\s+fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*(.+?))?\s*[;{]", &R)
-}
-
-/// 字段声明行（可见性同 [`fn_re`]：lib crate 的私有 `serialVersionUID` 等为 `pub(crate)`）
-fn field_decl_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    re(r"^\s*pub(?:\(crate\))?\s+(?:(static)\s+|(const)\s+)?(\w+)\s*:\s*([^=;,]+?)\s*(?:=[^;]*)?[;,]\s*$", &R)
 }
 
 /// 属性行里 `key = "value"`（`\bkey`）
@@ -286,73 +281,6 @@ fn emit_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option
     Some(out.join("\n"))
 }
 
-/// 单个字段臂（读 + 写 / 常量只读）
-fn field_arms(class_bin: &str, em: &ClassEmission, attr: &str, decl: &regex::Captures<'_>, generic: bool, arms: &mut Vec<String>) {
-    let Some(fname) = extract(attr, "name") else { return };
-    let (is_const, rname, rty) = (decl.get(2).is_some(), &decl[3], decl[4].trim());
-    let is_static = decl.get(1).is_some() || is_const || flag(attr, "is_static");
-    if generic && !is_static {
-        return;
-    }
-    let disp = format!("{}::reflect_dispatch", runtime_prefix(em));
-    let this = format!("recv.try_cast::<Self>(\"{class_bin}\")?");
-    let read = if is_static { format!("Object::from(Self::{rname}()?)") } else { format!("Object::from({this}.__get_{rname}())") };
-    let unbox = match prim_unbox(rty) {
-        Some((f, cast)) => format!("({disp}::{f}(&v).ok_or_else({disp}::bad_arg)?{cast})"),
-        None if rty == "Object" => "v".into(),
-        None => format!("<{rty} as ::std::convert::From<Object>>::from(v)"),
-    };
-    arms.push(format!("            (\"{fname}\", None) => Some((|| {{ Ok({read}) }})()),"));
-    arms.push(if is_const {
-        format!("            (\"{fname}\", Some(_)) => Some(Err({disp}::final_field(\"{fname}\"))),")
-    } else if is_static {
-        format!("            (\"{fname}\", Some(v)) => Some((|| {{ Self::set_{rname}({unbox})?; Ok(Object::default()) }})()),")
-    } else {
-        format!("            (\"{fname}\", Some(v)) => Some((|| {{ {this}.__set_{rname}({unbox}); Ok(Object::default()) }})()),")
-    });
-}
-
-/// 类发射文本 → `__reflect_field` 实现。泛型类闭包挂在 `X<Object..>` 上，实例字段不承载
-fn emit_fields_for(ctx: &EmitCtx<'_>, class_bin: &str, em: &ClassEmission, only: Option<&BTreeSet<String>>) -> Option<String> {
-    let short = ctx.declared(class_bin);
-    let tps = class_tparams(ctx, class_bin);
-    let gparams: Option<Vec<String>> = (!tps.is_empty()).then_some(tps);
-    let lines: Vec<&str> = em.text.split('\n').collect();
-    let mut arms = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        if !line.contains("java_field(") {
-            continue;
-        }
-        let (Some(fname), Some(_)) = (extract(line, "name"), extract(line, "descriptor")) else { continue };
-        if only.is_some_and(|o| !o.contains(fname)) {
-            continue;
-        }
-        let decl_line = lines[i + 1..lines.len().min(i + 4)].iter().find(|l| !l.trim().starts_with("//"));
-        let Some(decl) = decl_line.and_then(|l| field_decl_re().captures(l)) else { continue };
-        field_arms(class_bin, em, line, &decl, gparams.is_some(), &mut arms);
-    }
-    if arms.is_empty() {
-        return None;
-    }
-    let head = match &gparams {
-        Some(g) => format!("impl {short}<{}> {{", vec!["Object"; g.len()].join(", ")),
-        None => format!("impl {short} {{"),
-    };
-    let mut out = vec![
-        String::new(),
-        "// ── L3 反射字段闭包（Field.get/set 与 MH 字段句柄的按名协议）──".into(),
-        "#[allow(unused_variables, unreachable_patterns, unused_mut)]".into(),
-        head,
-        "    pub fn __reflect_field(".into(),
-        "        name: &str, recv: Object, value: Option<Object>,".into(),
-        "    ) -> Option<Result<Object>> {".into(),
-        "        match (name, value) {".into(),
-    ];
-    out.extend(arms);
-    out.extend(["            _ => None,", "        }", "    }", "}"].map(String::from));
-    Some(out.join("\n"))
-}
-
 /// 泛型类的登记路径实参（反射分派 / 类初始化钩子 / 引导初始化的按名登记共用）：无发射（手写类）→ 空
 pub fn registration_turbofish(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> String {
     ems.get(bin).map(|_| object_turbofish(ctx, bin)).unwrap_or_default()
@@ -372,17 +300,23 @@ fn appended(text: &str, tail: &str) -> String {
     format!("{}\n{tail}\n", text.trim_end_matches('\n'))
 }
 
-/// 字段闭包：(追加后的类文本, 登记行)；无臂 → None（不登记）。只读 `ems`
-fn field_closure(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str, only: Option<&BTreeSet<String>>) -> Option<(String, String)> {
-    let em = ems.get(bin)?;
-    // 闭包文本落在该类文件：引用名在其作用域认领；登记行在 main（全路径）
-    let text = emit_fields_for(&ctx.scoped(&em.scope), bin, em, only)?;
+/// 静态字段表登记行：`X::__STATICS`（宏展开的关联常量，见运行时 `field_reflect`）
+fn statics_line(ctx: &EmitCtx<'_>, bin: &str) -> String {
     let path = class_use_path(ctx, bin, USER_CRATE);
-    let new = appended(&em.text, &text);
     let tf = object_turbofish(ctx, bin);
-    let rt = ctx.crates().root();
-    let line = format!("    (\"{bin}\", {rt}::sync_model::__Shared::new(|n, r, v| {path}{tf}::__reflect_field(n, r, v))),");
-    Some((new, line))
+    format!("    (\"{bin}\", {path}{tf}::__STATICS),")
+}
+
+/// 静态字段是否可经按名反射 / 序列化协议访问（档案口径）：用户树类与全成员反射类的全部静态字段，
+/// 其余类限序列化协议字段与按名查字段点到的名字。为真的字段在发射文本的字段属性上带
+/// `reflect = true`，宏只为带标记的字段展开 `__STATICS` 项；类有任一此类字段即登记。
+pub fn static_reflected(ctx: &EmitCtx<'_>, bin: &str, name: &str) -> bool {
+    let reflect = &ctx.input.reflect;
+    ctx.input.user_classes.iter().any(|u| u == bin)
+        || reflect.all_members.contains(bin)
+        || SERIAL_PROTOCOL_FIELDS.contains(&name)
+        || reflect.fields.get(bin).is_some_and(|s| s.contains(name))
+        || reflect.field_names.contains(name)
 }
 
 fn emittable(ctx: &EmitCtx<'_>, ems: &Emissions, bin: &str) -> bool {
@@ -407,47 +341,25 @@ fn per_class<'b>(
     }
 }
 
-/// 用户树类的分派 / 字段闭包 + 序列化协议 / 按名反射的 JDK 字段闭包 + 常量反射引用面的
-/// JDK 方法臂；返回 main 登记行（binary 序）。
+/// 静态字段表登记（用户树类全部；JDK / 库类限序列化协议与按名反射的静态成员）+ 用户树类与常量
+/// 反射引用面 JDK 类的方法分派臂；返回 main 登记行（binary 序）。
 ///
-/// 每类的闭包只由该类自己的文本推出，三轮各自按类并行、按原序回写：字段闭包（用户类）→
-/// 字段闭包（其余类，不含上一轮已登记者）→ 方法分派（读取字段闭包追加后的文本）
+/// 方法分派闭包只由该类自己的文本推出，按类并行、按原序回写
 pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
     let reflect = &ctx.input.reflect;
     let user_bins: BTreeSet<&str> = ctx.input.user_classes.iter().map(String::as_str).collect();
-    let mut fields: BTreeMap<String, String> = BTreeMap::new();
-    let users: Vec<(&str, Option<&BTreeSet<String>>)> =
-        user_bins.iter().filter(|b| emittable(ctx, ems, b)).map(|b| (*b, None)).collect();
-    per_class(ctx, ems, &users, &mut fields, |ems, bin, only| field_closure(ctx, ems, bin, only));
-    let mut all: Vec<String> = ems.keys().cloned().collect();
+    let mut fields: Vec<String> = Vec::new();
+    let mut all: Vec<&String> = ems.keys().collect();
     all.sort();
-    let mut onlys: Vec<(&str, Option<BTreeSet<String>>)> = Vec::new();
-    for bin in &all {
-        if user_bins.contains(bin.as_str()) || fields.contains_key(bin) || !emittable(ctx, ems, bin) {
+    for bin in all {
+        if !emittable(ctx, ems, bin) {
             continue;
         }
         let ci = ctx.ty.reg.get(bin).expect("已校验存在");
-        let only: Option<BTreeSet<String>> = (!reflect.all_members.contains(bin)).then(|| {
-            let looked = reflect.fields.get(bin.as_str());
-            let named = ci
-                .fields()
-                .iter()
-                .filter(|f| f.is_static() && (looked.is_some_and(|s| s.contains(&f.name)) || reflect.field_names.contains(&f.name)))
-                .map(|f| f.name.clone());
-            SERIAL_PROTOCOL_FIELDS.iter().map(|s| s.to_string()).chain(named).collect()
-        });
-        onlys.push((bin, only));
-    }
-    let jdk: Vec<(&str, Option<&BTreeSet<String>>)> = onlys.iter().map(|(b, o)| (*b, o.as_ref())).collect();
-    per_class(ctx, ems, &jdk, &mut fields, |ems, bin, only| {
-        if let Some(o) = only {
-            let text = &ems[bin].text;
-            if !o.iter().any(|n| text.contains(&format!("name = \"{n}\""))) {
-                return None;
-            }
+        if ci.fields().iter().any(|f| f.is_static() && static_reflected(ctx, bin, &f.name)) {
+            fields.push(statics_line(ctx, bin));
         }
-        field_closure(ctx, ems, bin, only)
-    });
+    }
     let mut targets: BTreeMap<&str, Option<&BTreeSet<String>>> = user_bins.iter().map(|b| (*b, None)).collect();
     for (b, names) in &reflect.consts {
         targets.entry(b.as_str()).or_insert(Some(names));
@@ -466,7 +378,7 @@ pub fn synthesize(ctx: &EmitCtx<'_>, ems: &mut Emissions) -> DispatchReg {
         let line = format!("    (\"{bin}\", {rt}::sync_model::__Shared::new(|n, d, r, a| {path}{tf}::__reflect_dispatch(n, d, r, a))),");
         Some((appended(&em.text, &text), line))
     });
-    DispatchReg { methods: methods.into_values().collect(), fields: fields.into_values().collect() }
+    DispatchReg { methods: methods.into_values().collect(), fields }
 }
 
 #[cfg(test)]
@@ -475,9 +387,6 @@ mod tests {
 
     #[test]
     fn lib_crate_visibility_lines_match() {
-        assert!(field_decl_re().is_match("        pub(crate) const serialVersionUID: i64 = 1i64;"));
-        assert!(field_decl_re().is_match("    pub(crate) fRuns: i64,"));
-        assert!(field_decl_re().is_match("    pub static X: i32 = 0;"));
         assert_eq!(&fn_re().captures("        pub(crate) fn writeObject(&self, mut s: ObjectOutputStream) -> Result<()> {").unwrap()[1], "writeObject");
         assert_eq!(&fn_re().captures("    pub fn run(&self) -> Result<()> {").unwrap()[1], "run");
     }
