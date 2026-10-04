@@ -85,7 +85,7 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
-## 🌳 任务依赖树（2026-10-04，集成分支 rust-closure-analyzer 本地 21fc601b，未推送）
+## 🌳 任务依赖树（2026-10-04，集成分支 rust-closure-analyzer 21fc601b，已推送；main 已快进到 21fc601b）
 
 > 图例：✅ 已完成　🔄 进行中　⏳ 已立项待启　⏸ 按用户决定暂停　◇ 待用户决策
 > `A ──▶ B` 表示 A 是 B 的前置。同一层内无箭头相连的任务互不依赖，可以并行。
@@ -115,14 +115,11 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ✅ run-tests-prune：逐例清理产物、rava prune（ad9e938d）
 │   └─ ✅ 测试分发：全部 e2e 与重命令作业走 8 台服务器（server_maintenance/rava/distribute_tests.py）
 │
-├─ 【推送阻塞】集成分支本地已合 crate-split / module-m1 / s7-desc，未推送
-│   └─ 🔄 engine-order 闭包结果与哈希顺序无关（V9，ca2488f0）：门禁 closure_independent_of_hash_seed 在 TestSerialLookupPairing 失败
-│
 ├─ 【当前】阶段 C 收官：闭包分析器（rust-closure-analyzer）── 用户 2026-10-01 决定先做完本阶段
 │   │
 │   ├─ 🔄 闭包引擎提速（用户 2026-10-04 定先做）
 │   │     ├─ ✅ http-perf A/B/C（c5741dfe，合入 a068b87a）：TestHttpLoopbackSync 本机 404→285 s、服务器 630 s
-│   │     ├─ 🔄 engine-order（V9）── 见【推送阻塞】
+│   │     ├─ 🔄 engine-order 闭包结果与哈希顺序无关（V9，ca2488f0）：追 3e739189 上 TestSerialLookupPairing 种子差异根因
 │   │     ├─ ⏳ 逃逸对象上下文收拢（V10）：TestHttpLoopbackSync 服务器闭包 ≤60 s ◀── engine-order
 │   │     └─ ⏳ URL 协议可靠口径（c1d-urlhost 9087cf1c）◀── 引擎提速达标
 │   │
@@ -211,16 +208,16 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏸ 闭包分析效率 P8 余量、sites（optimization-directions §三.2）
 │   ├─ 🔄 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）
 │   │     ├─ ✅ unsafe-rmw 合入 5f759708
-│   │     ├─ ✅ crate-split 声明层拆分（db45a65c）：抽查 14/14，本地合入 3e739189，待推送 ◀── engine-order
+│   │     ├─ ✅ crate-split 声明层拆分（db45a65c）：抽查 14/14，合入 3e739189（已推送）
 │   │     └─ ⏳ SCC 拆分（D8）◀── S7
 │   ├─ 🔄 S7 统一对象句柄 + 每类静态描述符（D7 批准取法 B；2026-10-04-s7-object-handle-descriptor.md）
-│   │     ├─ ✅ S7-0 / S7-1 s7-desc（b0166702）：抽查 16/16，本地合入 8c218a72，待推送
-│   │     └─ ⏳ S7-2 … S7-5
+│   │     ├─ ✅ S7-0 / S7-1 s7-desc（b0166702）：抽查 16/16，合入 8c218a72（已推送）
+│   │     └─ ⏳ S7-2 … S7-5（S7-2 待派）
 │   ├─ 🔄 T1 跨测试编译复用（决策 ✅ 2026-10-03 四项全采纳，2026-10-01-cross-test-compile-reuse.md）
 │   │     ├─ ✅ T1-1a 档案化分析（90398dc8）、T1-1b 按档案生成 JDK crate（10cfb657）
 │   │     ├─ ✅ T1-2 方案 t1-link（6aa69280，合入 53f32664；2026-10-04-t1-step2-direct-rustc-link.md）
-│   │     ├─ ✅ M1 jmod 模块映射与 import 过滤（module-m1 188d67ac）：抽查 12/12，本地合入 9d587416，待推送
-│   │     ├─ ⏳ M2 按模块切 crate ──▶ M3 按模块登记
+│   │     ├─ ✅ M1 jmod 模块映射与 import 过滤（module-m1 188d67ac）：抽查 12/12，合入 9d587416（已推送）
+│   │     ├─ ⏳ M2 按模块切 crate（待派）──▶ M3 按模块登记
 │   │     ├─ ⏳ L2–L4（同计划）
 │   │     └─ ⏳ T4 生成器只构建一次再分发（待服务器核实）
 │   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线；8 台服务器 JDK 25 已就绪，env_setup --check-only 2026-10-03）
@@ -237,14 +234,14 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ### 二、关键路径
 
 ```
-engine-order（V9）──▶ 推送集成分支（crate-split / module-m1 / s7-desc）──▶ V10 ──▶ URL 可靠口径
+engine-order（V9）──▶ V10 ──▶ URL 可靠口径
 C1d-a a2 ✅ ──▶ a2 续 / a3 jvm_boundary 归零 / a5-4 收窄 ──────────┐
 C1d-b b1′ T2 余项 / b1 序列化收窄 ─────────────────────────────┤
 boot layer 第 1 步起（◀── a2 续）─────────────────────────────┼──▶ C4 全量 e2e ──▶ S6 ──▶ S7 ──▶ JUnit A ──▶ B/C ──▶ 真实项目 pilot ──▶ 产品化
 regress2 遗留（◀── a2）───────────────────────────────────────┘        └──▶ 优化线（P8 / V / S7·T1 / R1 / JDK 25）
 ```
 
-当前阻塞：engine-order 门禁失败阻塞集成分支推送；C4 的前置剩 C1d-a（a2 续 / a3 / a5-4）、C1d-b（T2 余项 / b1）、boot layer 第 1 步起。2026-10-02 版说明见历史 §I。
+当前：crate-split / M1 / S7-0·1 已推送，种子门禁在 21fc601b 上通过；C4 的前置剩 C1d-a（a2 续 / a3 / a5-4）、C1d-b（T2 余项 / b1）、boot layer 第 1 步起。2026-10-02 版说明见历史 §I。
 
 ---
 
@@ -254,10 +251,10 @@ regress2 遗留（◀── a2）───────────────�
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| engine-order 闭包结果与哈希顺序无关（V9） | 🔄 ca2488f0 | 集成分支门禁 `closure_independent_of_hash_seed` 在 TestSerialLookupPairing 失败（种子 1 多出 com/sun/crypto/provider/AESCipher 一族），由该线修复；**推送集成分支的阻塞项** |
+| engine-order 闭包结果与哈希顺序无关（V9） | 🔄 ca2488f0 | 种子门禁在 21fc601b 上已通过，不再阻塞推送；3e739189 上暴露的 TestSerialLookupPairing 种子差异（种子 1 多出 com/sun/crypto/provider/AESCipher 一族）按 V9 潜伏问题继续追根因 |
 | 逃逸对象上下文收拢（V10） | ⏳ ◀── engine-order | TestHttpLoopbackSync 服务器闭包 ≤60 s，HTTP 两例通过，闭包集合变化逐项论证 |
 | URL 协议可靠口径 | ⏳ c1d-urlhost 9087cf1c ◀── 引擎提速达标 | 证 file URL host 为 "" / localhost 以杀 ftp 分支；引擎提速期间口径偏差暂容忍 |
-| crate-split 声明层拆分 | ✅ db45a65c，本地合入 3e739189 | 抽查 14/14；待种子门禁（engine-order）修复后推送 |
+| crate-split 声明层拆分 | ✅ db45a65c，合入 3e739189 | 抽查 14/14；已推送 |
 | C1d-a 去截断（c1d-p0） | 🔄 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
 | C1d-a-a1 | ✅ | 正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5） |
 | C1d-a-a2 | ✅ 62f46bb2 | b4669206 合入，抽查 c1da-b4669206 9/9 |
@@ -282,16 +279,16 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-jndi | 🔄 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
-| T1 档案化（t1-profile） | 🔄 | 1a / 1b / 第 2 步方案 ✅；M1 本地合入待推送；下一步 M2 / M3 |
+| T1 档案化（t1-profile） | 🔄 | 1a / 1b / 第 2 步方案 / M1 ✅；下一步 M2（待派）、M3 |
 | T1-1a | ✅ 90398dc8 | 多根开放世界分析 + 档案键 / 内容摘要 + rava profile（27 例档案 3244 类，抽查 10/10） |
 | T1-1b | ✅ 10cfb657 | 按档案生成 JDK crate、java_meta 拆 JDK 表 + 用户登记（抽查 14/14） |
 | T1-2 方案 | ✅ 6aa69280，合入 53f32664 | 直接 rustc 链接档案；语料模式 panic=unwind、生产 --release fat LTO、档案 crate 按 jmod 模块切分 |
-| T1-M1 | ✅ 188d67ac，本地合入 9d587416 | jmod 模块映射与 import 过滤，抽查 12/12；待推送 |
-| T1-M2 | ⏳ | 按模块切 crate（计划 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`） |
+| T1-M1 | ✅ 188d67ac，合入 9d587416 | jmod 模块映射与 import 过滤，抽查 12/12；已推送，分支 module-m1 已删 |
+| T1-M2 | ⏳ 待派 | 按模块切 crate（计划 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md`） |
 | T1-M3 | ⏳ ◀── M2 | 按模块登记（同计划） |
 | S7 统一对象句柄 + 每类静态描述符 | 🔄 | D7 批准取法 B；计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` |
-| S7-0/S7-1 | ✅ b0166702，本地合入 8c218a72 | 描述符 / 子类型判定改读描述符，抽查 16/16；待推送 |
-| S7-2…S7-5 | ⏳ | 见同计划 |
+| S7-0/S7-1 | ✅ b0166702，合入 8c218a72 | 描述符 / 子类型判定改读描述符，抽查 16/16；已推送，分支 s7-desc 已删 |
+| S7-2…S7-5 | ⏳ S7-2 待派 | 见同计划 |
 | boot layer | 🔄 第 0 步 ✅ 27dfb419 | ModuleBootstrap 引导建层；第 1 步起 ◀── C1d-a a2 续（FS-C2 ✅）；验收 TestModuleLayerDefine |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
