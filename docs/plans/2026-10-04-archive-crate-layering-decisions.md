@@ -46,7 +46,7 @@
 | V2 | 按模块切分能否消除 31,048 个未定义符号循环；语料模式每模块一个 dylib 还是一个 dylib 含多模块，对逐例链接（导出符号量）与档案构建峰值（现 3.48 GB）的影响 | t1-link | 实测数字 |
 | V3 | body 切分轴由「体量均衡」改为模块，与 crate-split 的接口 | crate-split + t1-link | 方案一致 |
 | V4 | 按现规模重测 OOM 三例（TestFieldHandleProvenance、TestJndiNoProvider、TestSerialDefaultSuid）各 crate 峰值与构成，更新 §7.5.4 达标账 | crate-split | 三例服务器编过；HelloWorld 墙钟不变差 |
-| V5 | S7 后 `java.base` 声明层能否按剩余引用图（继承 DAG + 具名签名）的强连通分量再拆；孤儿规则约束；可读层（`let animal: Animal = Dog::new()`）不受损 | crate-split（S7 方案） | HelloWorld / Digester 档案上实测 SCC 规模、各 crate 峰值估算；不能拆则给出声明层下限 |
+| V5 | `java.base` 声明层能否拆成多个 crate（`java_base_decl_k`）：①现状声明层引用图（字段类型、方法签名、From / checkcast、vtable trait、继承 / 接口实现）的强连通分量规模，不改形态能否按 SCC 凝聚 DAG 切分；②S7 后剩余引用图（继承 DAG + 具名签名 + 描述符互指）的 SCC 规模；③孤儿规则约束（impl 归属）、宏展开跨 crate 可见性；④可读层（`let animal: Animal = Dog::new()`）不受损 | crate-split（S7 方案） | HelloWorld / Digester 档案上实测两种形态的最大 SCC 类数与占比、可切出的 crate 数与各自峰值估算；不能拆则给出声明层峰值下限及能否满足 §7.6 |
 | V6 | §7.6 目标：声明层 Digester ≤ 2 GB、HelloWorld ≤ 1.2 GB；每实现 crate ≤ 1.5 GB；HelloWorld `cargo build` ≤ 12 s；只改用户类时 JDK 重编 0 | crate-split | 实测 |
 | V7 | Linux 侧 dylib：rpath `$ORIGIN`、rust-lld 链接、`readelf` 依赖条目、unwind 下 panic 退出码仍为 101 | t1-link 实施期 | 服务器实测 |
 | V8 | 档案侧登记表（每个 main.rs 约 1370 行）移入档案模块 crate 后用户 main.rs 档案登记行 = 0 | t1-link L1 | 逐例峰值 ≤ 0.8 GB、p50 ≤ 1 s、p99 ≤ 3 s |
