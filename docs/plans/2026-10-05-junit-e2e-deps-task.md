@@ -118,4 +118,14 @@
 
 ## 七、实施记录
 
-（J0 回归清单、各步提交哈希、抽查结果按步追加）
+### J0 基线（2026-10-05，分支 junit-deps）
+
+1. **J0.1 jar 清点**：当前 main（6f93f1c6）的 pom 取包实测 **92 个 jar**（非本文与 V12 基线表所写 52——52 为
+   3e4410a3 框架矩阵增补（+40 jar，2026-10-03 合入）前的旧集口径）。`META-INF/versions/` 实测 **class 3130 /
+   目录 185 / 其他 3**（V12 表的 3,078 为旧 52 集快照）。**待用户裁定 J1 验收口径**：建议按现集 **92/92**（52 的严格
+   超集，不损失范围），本文按裁定值执行。
+2. **J0.2 服务器 m1–m5 golden 基线**：作业 `junit-j0-golden`（distribute_tests --job，--ref main @ 6f93f1c6，
+   含 fetch_pilot_deps 服务器 mvn 取包先决验证）——结果追加于下。
+3. **J0.3 期望复核**：10 例以参考 JDK（Temurin 21.0.11）+ 真 jar（junit 4.13.2 / hamcrest 3.0）javac+java 双跑，
+   **10/10 双跑稳定且与 tests/expected/TestJunit*.txt 逐字一致**。
+
