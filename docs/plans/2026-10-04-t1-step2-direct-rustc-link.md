@@ -1,6 +1,7 @@
 # T1 第 2 步：驱动直接调用 rustc 链接档案（方案 + 最小实测）
 
 > 状态（2026-10-04）：方案与本机最小实测完成；用户已答复三个决策点（§七），本文已按答复修订，档案按 JDK 模块切分 crate。
+> 实施进度（2026-10-04 晚）：M1 ✅ 合入 9d587416（抽查 12/12）；M2 ✅ 合入 a62793fd（抽查 13 过 / 5 败均为 main 既有；服务器声明层峰值 DeepCopy 8214→7618 MB、TSDS 8160→7572 MB）；M3 ⏳。
 > 未改生成器 / 驱动 / runtime 主线逻辑。
 > 上游：[`2026-10-01-cross-test-compile-reuse.md`](2026-10-01-cross-test-compile-reuse.md) §4.4、§5.3 第 2 步、§6（1a / 1b）；
 > crate 分层：[`2026-10-01-rustc-memory-and-crate-split.md`](2026-10-01-rustc-memory-and-crate-split.md) §7。

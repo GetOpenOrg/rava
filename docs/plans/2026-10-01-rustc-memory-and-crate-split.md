@@ -1010,8 +1010,8 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
 | 8f515016 | S7-0 每类静态描述符 `__ClassDesc`（只增，HW 展开 +0.30 MB / TSDS +2.70 MB） | 8642（墙钟 249 s，jp1） | | | 1440 / 29.2 s |
 | a6a00c06 | S7-1 类型判定读描述符：删 `__view_as`、wrapper `__view_into` 类 / 祖先 / 接口载体臂、inner `is_instance_of` / `__class_name`（HW 展开 13.87 MB / TSDS 98.27 MB） | **8192**（墙钟 210 s） | | | **1408 / 25.4 s** |
 | 8bdcb04d | S7-2a 统一句柄：wrapper 单字段 `__r: __Ref<dyn X__VTable>`（句柄 + 视图指针），null 不分配，删 cells / from_any 钩子与 `__erased_inner`，wrapper ObjectVTable impl 缩为 4 个方法（本机 HW 展开 13.89 → 12.95 MB，其中 `impl ObjectVTable for` 0.80 → 0.31 MB；服务器 jp2：TSDS 展开 98.27 → 90.19 MB） | **7597**（墙钟 204 s，jp2） | | | **1359 / 24.6 s** |
-| 9260ead7 | S7-2b Object 直接持有运行时类存储：删 blanket `From` 与全部 wrapper `impl ObjectVTable`（每类改一条 `From<X> for Object`，null → 带描述符的类型化 null）（本机 HW 展开 12.95 → 12.82 MB，其中 `impl ObjectVTable for` 0.31 → 0.02 MB，java_runtime 峰值 1252 MB；本机 TSDS 展开 88.30 MB，macOS 口径） | 待测（`s7m-9260ead7`） | | | 待测 |
-| aa5910b5 | S7-2c 接口载体收敛到句柄：载体字段 `__IfaceRef<dyn I__VTable>`（Object 句柄 + 接口视图指针，建立时求出一次），`__interface` 改视图指针填充，删 `__Shared<dyn I__VTable>`（本机 M2 后 `java_base_decl` 展开：HW 12.82 → 12.80 MB，TSDS 79.92 → 79.83 MB，基点 dd10731c 同口径；收益在 std 按接口单态化与分派引用计数，不在展开体量） | 待测（`s7m-aa5910b5`） | | | 待测 |
+| 9260ead7 | S7-2b Object 直接持有运行时类存储：删 blanket `From` 与全部 wrapper `impl ObjectVTable`（每类改一条 `From<X> for Object`，null → 带描述符的类型化 null）（本机 HW 展开 12.95 → 12.82 MB，其中 `impl ObjectVTable for` 0.31 → 0.02 MB，java_runtime 峰值 1252 MB；本机 TSDS 展开 88.30 MB，macOS 口径） | **6654**（墙钟 182 s，jp1） | | | **1233 / 23.8 s** |
+| aa5910b5 | S7-2c 接口载体收敛到句柄：载体字段 `__IfaceRef<dyn I__VTable>`（Object 句柄 + 接口视图指针，建立时求出一次），`__interface` 改视图指针填充，删 `__Shared<dyn I__VTable>`（本机 M2 后 `java_base_decl` 展开：HW 12.82 → 12.80 MB，TSDS 79.92 → 79.83 MB，基点 dd10731c 同口径；收益在 std 按接口单态化与分派引用计数，不在展开体量） | **6153**（墙钟 156 s，jp2；M2 后声明层 crate 为 `java_base_decl`） | | | **1242 / 22.7 s** |
 
 **阶段 RSS**（time-passes，阶段末 RSS，MB）
 

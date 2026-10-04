@@ -119,7 +119,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │
 │   ├─ 🔄 闭包引擎提速（用户 2026-10-04 定先做）
 │   │     ├─ ✅ http-perf A/B/C（c5741dfe，合入 a068b87a）：TestHttpLoopbackSync 本机 404→285 s、服务器 630 s
-│   │     ├─ 🔄 engine-order 闭包结果与哈希顺序无关（V9，ca2488f0）：追 3e739189 上 TestSerialLookupPairing 种子差异根因
+│   │     ├─ 🔄 engine-order 闭包结果与哈希顺序无关（V9，e435ace5）：种子 0/1/2 一致、类数 ≤ main ✅；第三阶段把 JNDI / HTTP 闭包耗时（+33% / +17%）压回 main 以下
 │   │     ├─ ⏳ 逃逸对象上下文收拢（V10）：TestHttpLoopbackSync 服务器闭包 ≤60 s ◀── engine-order
 │   │     └─ ⏳ URL 协议可靠口径（c1d-urlhost 9087cf1c）◀── 引擎提速达标
 │   │
@@ -180,7 +180,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ R1 运行性能：超时用例（标杆 LynchBell 等 12 例）不改测试、不放宽时限
 │   │     （2026-09-30-optimization-directions.md §三.4）◀── C4 收官后排期
 │   │     ├─ ✅ GraalVM 参照基线入库：报告 docs/reports/2026-10-04-graalvm-baseline.md、scripts/graalvm_bench.sh、release 终态 ≤ native 逐例阈值
-│   │     └─ 🔄 逐例耗时起点：抽查 timing-dbg-10795076（debug）、作业 timing-rel-10795076（release）；dist 2614a2b 写 timings_jdk21.tsv
+│   │     └─ 🔄 逐例耗时起点：服务器 timing-dbg / timing-rel-10795076 与 Linux GraalVM gvm-linux-bd52b537 已完成待汇总；本机 mac rava-release 跑批进行中（运行 / 构建 / 二进制三项），汇总后写报告 §六
 │   │
 │   └─ ⏳ e2e 扩展到 java.base 之外的 JDK 模块（2026-10-03-jmod-coverage.md；64_–74_ 共 43 例已入 4939f290；原节点见历史 §G）
 │         ├─ ✅ 63_junit expected 10/10、新增用例查重、6 例 expected 复核（d4efc8d6 / ffbebc0d）
@@ -227,7 +227,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ⏳ L2–L4（同计划）
 │   │     └─ ⏳ T4 生成器只构建一次再分发（待服务器核实）
 │   ├─ 🔄 二进制体积（2026-10-04 用户交主会话推进；2026-10-04-binary-size.md；HelloWorld 14.4 MB → ≤3 MB）
-│   │     ├─ 🔄 B0 基线重测 + B1 元数据按档案按类裁剪、字符串池编码（binsize-meta 已派）
+│   │     ├─ ✅ B0 基线重测 + B1 元数据按档案按类裁剪、字符串池编码（2682139c）
 │   │     ├─ ⏳ B2 栈还原按地址查表 + strip=symbols ◀── B1
 │   │     └─ ⏳ B3 体积档位评估（opt=s / z 性能对照，交用户决定）◀── B2
 │   └─ ⏳ JDK 25 适配轮 ◀── C4 收官（JDK 25 不设 Python 基线；8 台服务器 JDK 25 已就绪，env_setup --check-only 2026-10-03）
@@ -251,7 +251,7 @@ boot layer 第 1 步起（◀── a2 续）───────────�
 regress2 遗留（◀── a2）───────────────────────────────────────┘        └──▶ 优化线（P8 / V / S7·T1 / R1 / JDK 25）
 ```
 
-当前：crate-split / M1 / S7-0·1 已推送，种子门禁在 21fc601b 上通过；C4 的前置剩 C1d-a（a2 续 / a3 / a5-4）、C1d-b（T2 余项 / b1）、boot layer 第 1 步起。2026-10-02 版说明见历史 §I。
+当前（2026-10-04 晚）：M2 / S7-2a·2b·2c / B1 已合入 main；在途 engine-order 第三阶段（闭包耗时）、C1d-a a2 续、B2；C4 的前置剩 C1d-a（a2 续 / a3 / a5-4）、C1d-b（T2 余项 / b1）、boot layer 第 1 步起。2026-10-02 版说明见历史 §I。
 
 ---
 
@@ -261,11 +261,11 @@ regress2 遗留（◀── a2）───────────────�
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| engine-order 闭包结果与哈希顺序无关（V9） | 🔄 ca2488f0 | 种子门禁在 21fc601b 上已通过，不再阻塞推送；3e739189 上暴露的 TestSerialLookupPairing 种子差异（种子 1 多出 com/sun/crypto/provider/AESCipher 一族）按 V9 潜伏问题继续追根因 |
+| engine-order 闭包结果与哈希顺序无关（V9） | 🔄 e435ace5（修复本体 7426e583） | 非字面量 `Class.forName` 收敛后再判、名集完整才加载；`Provider$Service.getImplClass` 由 seeds.toml 声明不按名加载；字段名配对只认 String 形参。6 例种子 0/1/2 闭包完全一致（TestSerialUserGenericCallbacks 恒 3391，main 种子 0 为 4167），`closure_independent_of_hash_seed` 稳定；类数 JNDI 3841→3841、HTTP 5443→5442。未达标：`rava closure` 耗时 JNDI 184→281 s、HTTP 293→342 s，第三阶段 profile 后压回 main 以下再合入；抽查 order-e435ace5 进行中 |
 | 逃逸对象上下文收拢（V10） | ⏳ ◀── engine-order | TestHttpLoopbackSync 服务器闭包 ≤60 s，HTTP 两例通过，闭包集合变化逐项论证 |
-| URL 协议可靠口径 | ⏳ c1d-urlhost 9087cf1c ◀── 引擎提速达标 | 证 file URL host 为 "" / localhost 以杀 ftp 分支；引擎提速期间口径偏差暂容忍 |
+| URL 协议可靠口径 | ⏳ c1d-urlhost 9087cf1c（本地 worktree 已删，分支保留在 origin / github） ◀── 引擎提速达标 | 证 file URL host 为 "" / localhost 以杀 ftp 分支；引擎提速期间口径偏差暂容忍 |
 | crate-split 声明层拆分 | ✅ db45a65c，合入 3e739189 | 抽查 14/14；已推送 |
-| C1d-a 去截断（c1d-p0） | 🔄 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
+| C1d-a 去截断（c1d-p0） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
 | C1d-a-a1 | ✅ | 正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5） |
 | C1d-a-a2 | ✅ 62f46bb2 | b4669206 合入，抽查 c1da-b4669206 9/9 |
 | C1d-a-a2续 | 🔄 | initPhase2 膨胀用真实 `--cut` 定位 → 早退检查按分析期事实求值 → `[[boot_init.phases]]` → boot layer 步骤 2–5；闸门以档案规模计（基线 3609） |
@@ -278,17 +278,17 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
 | C1d-a-a3 | ⏳ ◀── a2 | `#[jvm_boundary]` 归零，审计数 86→0；拆分与验收见计划 §21 / §21.7 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
-| a3-T 虚拟线程终态（a3t-vthread） | 🔄 T1–T5 ✅ a78cccef | VirtualThread 字节码翻译 + Continuation 有栈协程；交接见计划 §21.8.5 |
+| a3-T 虚拟线程终态（a3t-vthread） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· T1–T5 ✅ a78cccef | VirtualThread 字节码翻译 + Continuation 有栈协程；交接见计划 §21.8.5 |
 | a3-T-T6 | ⏳ | 规模指标：10 万虚拟线程 ≤10 s / ≤2 GiB（现 14.6 s / 2.66 GB，草稿未提交） |
 | a3-T-T1b审计 | ⏳ | 手写运行时无界递归审计（T1b 栈检查注入 65b6ecb3、T1b-2 叶方法豁免 40193ed3 已合入） |
 | a3-T-pinned | ⏳ | TestContinuationPinned parkNanos 早返偶发需查 |
-| C1d-b 反射收窄（c1d-pick） | 🔄 2026-10-02 | b0 / T3–T7 / T2 / b3 已合入；余 T2 余项、b1、b2；过程见历史 §E / §J |
-| C1d-b-b1′ | 🔄 | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
+| C1d-b 反射收窄（c1d-pick） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-02 | b0 / T3–T7 / T2 / b3 已合入；余 T2 余项、b1、b2；过程见历史 §E / §J |
+| C1d-b-b1′ | ⏸ 未派（2026-10-04 优化线优先期间暂停）· | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
 | C1d-b-T2余 | ⏳ 待派新代理 | getDefaultSerialFields 收窄、4b；StockTrans 目标按 JCA 后基线重定（计划 5.7）；StockTrans 既有失败 writeObject 反射臂待 T2 2e1d3355 |
-| C1d-b-b1 | 🔄 S2 ✅ 0d7dd2a5 | 序列化收窄：目标 DeepCopy ≤1640、fold_props ≥42；大值集来自未知接收者字段视图 |
+| C1d-b-b1 | ⏸ 未派（2026-10-04 优化线优先期间暂停）· S2 ✅ 0d7dd2a5 | 序列化收窄：目标 DeepCopy ≤1640、fold_props ≥42；大值集来自未知接收者字段视图 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
-| C1d-b-jndi | 🔄 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
+| C1d-b-jndi | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
 | T1 档案化（t1-profile） | 🔄 | 1a / 1b / 第 2 步方案 / M1 / V12 方案 / M2 ✅；M3 |
 | T1-1a | ✅ 90398dc8 | 多根开放世界分析 + 档案键 / 内容摘要 + rava profile（27 例档案 3244 类，抽查 10/10） |
 | T1-1b | ✅ 10cfb657 | 按档案生成 JDK crate、java_meta 拆 JDK 表 + 用户登记（抽查 14/14） |
@@ -304,7 +304,7 @@ regress2 遗留（◀── a2）───────────────�
 | S7-2c | ✅ 63bc9213 | 接口载体改持 `__IfaceRef<dyn I__VTable>`（Object 句柄 + 构造时一次算定的接口视图指针；不用 `__Ref` 因载体须 Deref 到 Object 且 null 带接口静态类型），`__interface` 改 `&self` 填视图槽与 `__erased_vtable` 同形，删 `__iface_vtable` 与全部 `__Shared<dyn I__VTable>`；lambda 闭包存储 `__Shared<__DynFn>` 按擦除签名而非接口，保留；手写层 `from_any` 仅 Throwable 栈帧一处，无需改。服务器声明层峰值 TSDS 6654→6153 MB（−7.5%）、HelloWorld 1233→1242 MB 持平；展开体量 12.78 / 80.63 MB 基本不变；抽查 20/20 |
 | S7-3…S7-5 | ⏳ ◀── S7-2 | 见同计划 |
 | 二进制体积 | 🔄 | 用户 2026-10-04 交主会话推进；计划 `docs/plans/2026-10-04-binary-size.md`；HelloWorld release 14.4 MB → ≤3 MB |
-| BS-B1 | 🔄 binsize-meta 已派 | B0 基线重测 + 元数据按档案按类裁剪（反射不可达类 0 行、行表只覆盖翻译方法）+ 字符串池 / u32 编码 |
+| BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
 | BS-B2 | ⏳ ◀── B1 | 栈还原按地址查表，release 加 strip=symbols |
 | BS-B3 | ⏳ ◀── B2 | opt=s / z 体积档位性能对照，交用户决定 |
 | boot layer | 🔄 第 0 步 ✅ 27dfb419 | ModuleBootstrap 引导建层；第 1 步起 ◀── C1d-a a2 续（FS-C2 ✅）；验收 TestModuleLayerDefine |

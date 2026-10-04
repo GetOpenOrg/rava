@@ -128,11 +128,17 @@ runtime/                            # 提交到 git：手写代码唯一真源
 └── rava_macros/                    # proc-macro crate（java_class! 块级宏）
 
 build/                              # gitignore：每测试一次性 scratch
-├── target/                         # 共享编译缓存（CARGO_TARGET_DIR）
-└── <test_name>/                    # 每测试独立工作区
-    ├── Cargo.toml                  # workspace 根（emitter 生成）
-    ├── java_runtime/src/           # runtime/ 手写 overlay + 该测试生成的 JDK 类
-    └── user/src/                   # 该测试的用户类翻译
+├── analyzer-target/                # rava 二进制
+└── jdk<N>/                         # 按参考 JDK 主版本分根（jdk21 / jdk25）
+    ├── target/                     # 共享编译缓存（CARGO_TARGET_DIR）
+    └── <test_snake>/               # 每测试独立工作区
+        ├── Cargo.toml              # workspace 根（emitter 生成）
+        ├── java_base_decl/src/     # runtime/ 手写 overlay + 生成的 java.base 声明层
+        ├── java_base_body_<k>/     # java.base 方法体（按规模切分）
+        ├── java_base/              # java.base 门面 crate
+        ├── <jmod 模块>/            # 其他 JDK 模块各一 crate（java_xml、jdk_zipfs …，按 jmod 命名）
+        ├── java_meta/              # 反射 / 注解 / 行表元数据
+        └── user/src/               # 该测试的用户类翻译
 ```
 
 **规则**：
