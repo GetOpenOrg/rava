@@ -33,20 +33,6 @@ enum Repr<T> {
     Null,
 }
 
-/// 以任意引用元素静态类型观察某个引用元素数组（存储擦除：边界是 Object）。
-#[derive(Clone)]
-struct CovariantView {
-    origin: Object,
-    len: Rc<crate::__DynFn!(() -> i32)>,
-    get: Rc<crate::__DynFn!((i32) -> crate::error::Result<Object>)>,
-    set: Rc<crate::__DynFn!((i32, Object) -> crate::error::Result<()>)>,
-    /// 元素原子读-改-写：委托源数组的 `__update`，在源存储写锁内完成「读 → 判定 → 写」
-    /// （Unsafe / VarHandle 数组元素 CAS 经擦除协变视图到达：ForkJoinPool.WorkQueue 的
-    /// `ForkJoinTask[]`、ConcurrentHashMap 的 `Node[]`）。读后写两步在并行后端会丢更新 /
-    /// 重复取任务。
-    update: Rc<crate::__DynFn!((i32, &mut dyn FnMut(Object) -> Option<Object>) -> crate::error::Result<Object>)>,
-}
-
 /// aastore 存储检查（JLS §10.5 / JVMS §6.5 aastore）：值与源元素类型赋值兼容才能写入，
 /// 否则抛 `ArrayStoreException`。判定按序三条：
 ///   1. null 可存入任意引用元素数组；
@@ -59,7 +45,7 @@ fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &s
         return true;
     }
     let mut slot: Option<T> = None;
-    let unused: crate::sync_model::__AnyRef = Rc::new(());
+    let unused = crate::sync_model::__unused_any();
     if v.0.__view_into(unused, &mut slot) && slot.is_some() {
         return true;
     }
@@ -191,7 +177,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 }
                 Ok(data[i as usize].clone())
             }
-            Repr::Covariant(view) => Ok(T::from((view.get)(i)?)),
+            Repr::Covariant(view) => Ok(T::from((view.get)(&view.origin, i)?)),
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
@@ -213,7 +199,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 Ok(cur)
             }
             Repr::Covariant(view) => {
-                let old = (view.update)(i, &mut |cur: Object| f(T::from(cur)).map(Into::into))?;
+                let old = (view.update)(&view.origin, i, &mut |cur: Object| f(T::from(cur)).map(Into::into))?;
                 Ok(T::from(old))
             }
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
@@ -240,7 +226,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 data[i as usize] = v;
                 Ok(())
             }
-            Repr::Covariant(view) => (view.set)(i, v.into()),
+            Repr::Covariant(view) => (view.set)(&view.origin, i, v.into()),
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
@@ -270,8 +256,8 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     pub fn to_vec(&self) -> Vec<T> {
         match &*self.0 {
             Repr::Own(cells, _) => cells.borrow().clone(),
-            Repr::Covariant(view) => (0..(view.len)())
-                .map(|i| T::from((view.get)(i).expect("index within length")))
+            Repr::Covariant(view) => (0..view.len())
+                .map(|i| T::from((view.get)(&view.origin, i).expect("index within length")))
                 .collect(),
             Repr::Null => panic!("NullPointerException: 对 null 数组做批量读取"),
         }
@@ -282,7 +268,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     pub fn len(&self) -> crate::error::Result<i32> {
         match &*self.0 {
             Repr::Own(cells, _) => Ok(cells.borrow().len() as i32),
-            Repr::Covariant(view) => Ok((view.len)()),
+            Repr::Covariant(view) => Ok(view.len()),
             Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
@@ -290,50 +276,6 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 辅助谓词（非字节码语义）：null 视为无元素。
     pub fn is_empty(&self) -> bool {
         self.len().unwrap_or(0) == 0
-    }
-
-    /// 本数组的 Object 元素视图（协变上转）。已是视图的直接沿用其源。
-    /// null 引用不会到达（__view_into 对 null 只回填 null，不构造视图）。
-    fn covariant_view(&self) -> CovariantView {
-        match &*self.0 {
-            Repr::Covariant(view) => Clone::clone(view),
-            Repr::Own(..) => {
-                let (for_len, for_get, for_set, for_update) =
-                    (Clone::clone(self), Clone::clone(self), Clone::clone(self), Clone::clone(self));
-                // 存储检查的元素类型名：源元素类型的 null 探针经 vtable 取 binary name
-                //（名单与元素值无关，null 探针等价于任意元素）
-                let elem_name = Into::<Object>::into(T::default()).0.__class_name();
-                CovariantView {
-                    origin: Object::from(Clone::clone(self)),
-                    len: Rc::new(move || for_len.len().expect("covariant view of non-null array")),
-                    get: Rc::new(move |i| Ok(for_get.get(i)?.into())),
-                    set: Rc::new(move |i, v| {
-                        if !aastore_storable::<T>(&v, elem_name) {
-                            return Err(crate::error::JvmError::array_store(v.0.__class_name()));
-                        }
-                        for_set.set(i, T::from(v))
-                    }),
-                    update: Rc::new(move |i, f| {
-                        // 存储检查在写锁内对候选新值执行（CAS 的新值同样是 aastore）；
-                        // 检查失败时不写入，错误在锁外抛出
-                        let mut store_err: Option<Object> = None;
-                        let old = for_update.__update(i, &mut |cur: T| {
-                            let n = f(cur.into())?;
-                            if !aastore_storable::<T>(&n, elem_name) {
-                                store_err = Some(n);
-                                return None;
-                            }
-                            Some(T::from(n))
-                        })?;
-                        if let Some(v) = store_err {
-                            return Err(crate::error::JvmError::array_store(v.0.__class_name()));
-                        }
-                        Ok(old.into())
-                    }),
-                }
-            }
-            Repr::Null => panic!("NullPointerException: 构造 null 数组的协变视图"),
-        }
     }
 }
 
@@ -499,7 +441,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         }
         if let Some(erased) = slot.downcast_mut::<Option<JArray<Object>>>() {
             if !Self::has_primitive_elements() {
-                *erased = Some(JArray(Rc::new(Repr::Covariant(self.covariant_view()))));
+                *erased = Some(JArray(Rc::new(Repr::Covariant(covariant_view(self)))));
                 return true;
             }
         }
@@ -526,7 +468,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 if let Some(d) = probe.0.__desc() {
                     return d.is_subtype_name(target_elem);
                 }
-                let unused: crate::sync_model::__AnyRef = Rc::new(());
+                let unused = crate::sync_model::__unused_any();
                 probe.0.__view_into(unused, slot)
             }
             Repr::Null => false,
@@ -546,7 +488,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 /// `is_instance_of`（类元素读描述符：本类、子类、实现接口；另覆盖未经 javac
 /// 装箱、以原生值盒（`Rc<i32>` 带 Integer vtable）流入 Object 槽位的元素）。
 pub(crate) fn erased_array_compatible<T: Clone + Default + Into<Object> + 'static>(obj: &Object) -> bool {
-    let unused: crate::sync_model::__AnyRef = Rc::new(());
+    let unused = crate::sync_model::__unused_any();
     let mut erased: Option<JArray<Object>> = None;
     obj.0.__view_into(unused, &mut erased);
     if let Some(view) = erased {
@@ -624,31 +566,118 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     }
 }
 
+// ── 数组协变视图（JLS §4.10.3）：引用元素数组以祖先元素静态类型流转时的擦除视图 ──
+
+/// 以任意引用元素静态类型观察某个引用元素数组（存储擦除：边界是 Object）。
+///
+/// 元素访问按源数组形态单态化为函数指针（不捕获状态，源数组即 `origin`），构造视图只分配
+/// 源数组的 Object 句柄与视图本身：Unsafe / VarHandle 引用访问器、aaload / aastore 的 Object
+/// 形态每次经 `__view_into` 取视图，视图构造在这些路径的热循环上。长度经 `origin` 的数组长度钩子。
+#[derive(Clone)]
+struct CovariantView {
+    origin: Object,
+    get: fn(&Object, i32) -> crate::error::Result<Object>,
+    set: fn(&Object, i32, Object) -> crate::error::Result<()>,
+    /// 元素原子读-改-写：委托源数组的 `__update`，在源存储写锁内完成「读 → 判定 → 写」
+    /// （Unsafe / VarHandle 数组元素 CAS 经擦除协变视图到达：ForkJoinPool.WorkQueue 的
+    /// `ForkJoinTask[]`、ConcurrentHashMap 的 `Node[]`）。读后写两步在并行后端会丢更新 /
+    /// 重复取任务。
+    update: fn(&Object, i32, &mut dyn FnMut(Object) -> Option<Object>) -> crate::error::Result<Object>,
+}
+
+impl CovariantView {
+    fn len(&self) -> i32 {
+        self.origin.0.__array_len()
+            .expect("covariant view origin is an array")
+            .expect("covariant view of non-null array")
+    }
+}
+
+/// 数组 `a` 的 Object 元素视图（协变上转）。已是视图的直接沿用其源。
+/// null 引用不会到达（__view_into 对 null 只回填 null，不构造视图）。
+fn covariant_view<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
+    a: &JArray<T>,
+) -> CovariantView {
+    match &*a.0 {
+        Repr::Covariant(view) => Clone::clone(view),
+        Repr::Own(..) => CovariantView {
+            origin: Object::from(Clone::clone(a)),
+            get: own_view_get::<T>,
+            set: own_view_set::<T>,
+            update: own_view_update::<T>,
+        },
+        Repr::Null => panic!("NullPointerException: 构造 null 数组的协变视图"),
+    }
+}
+
 /// 源数组的 Object 级协变视图：元素访问经 Object 的数组 API（array_length /
 /// array_load_object / array_store_object）转发到源数组——读出在 `JArray<T>::get`
 /// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
 /// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
 fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
-    let (for_len, for_get, for_set, for_update) =
-        (Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin), Clone::clone(&origin));
     JArray(Rc::new(Repr::Covariant(CovariantView {
-        len: Rc::new(move || {
-            for_len.array_length().expect("covariant view of non-null array")
-        }),
-        get: Rc::new(move |i| for_get.array_load_object(i)),
-        set: Rc::new(move |i, v| for_set.array_store_object(i, v)),
+        origin,
+        get: |o, i| o.array_load_object(i),
+        set: |o, i, v| o.array_store_object(i, v),
         // 原子读-改-写：源数组的 Object 元素视图（`__view_into` → 源 Own 存储的协变视图，
         // 其 update 在源存储写锁内完成）
-        update: Rc::new(move |i, f| {
-            let unused: crate::sync_model::__AnyRef = Rc::new(());
+        update: |o, i, f| {
+            let unused = crate::sync_model::__unused_any();
             let mut slot: Option<JArray<Object>> = None;
-            for_update.0.__view_into(unused, &mut slot);
+            o.0.__view_into(unused, &mut slot);
             match slot {
                 Some(view) => view.__update(i, f),
                 None => Err(crate::error::JvmError::class_cast(format!(
-                    "{} 不是引用元素数组", for_update.0.__class_name()))),
+                    "{} 不是引用元素数组", o.0.__class_name()))),
             }
-        }),
-        origin,
+        },
     })))
+}
+
+// ── 自有存储源数组的协变视图元素访问（`covariant_view` 按元素类型 T 单态化的函数指针）──
+
+/// 视图源：`covariant_view` 以 `Object::from(JArray<T>)` 构造 `origin`，运行时形态恒为 `JArray<T>`。
+fn own_source<T: 'static>(origin: &Object) -> &JArray<T> {
+    origin.0.as_any().downcast_ref::<JArray<T>>().expect("covariant view origin is JArray<T>")
+}
+
+/// 存储检查的元素类型名：源元素类型的 null 探针经 vtable 取 binary name
+///（名单与元素值无关，null 探针等价于任意元素）
+fn own_elem_name<T: Default + Into<Object>>() -> &'static str {
+    Into::<Object>::into(T::default()).0.__class_name()
+}
+
+fn own_view_get<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
+    origin: &Object, i: i32,
+) -> crate::error::Result<Object> {
+    Ok(own_source::<T>(origin).get(i)?.into())
+}
+
+fn own_view_set<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
+    origin: &Object, i: i32, v: Object,
+) -> crate::error::Result<()> {
+    if !aastore_storable::<T>(&v, own_elem_name::<T>()) {
+        return Err(crate::error::JvmError::array_store(v.0.__class_name()));
+    }
+    own_source::<T>(origin).set(i, T::from(v))
+}
+
+fn own_view_update<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
+    origin: &Object, i: i32, f: &mut dyn FnMut(Object) -> Option<Object>,
+) -> crate::error::Result<Object> {
+    // 存储检查在写锁内对候选新值执行（CAS 的新值同样是 aastore）；
+    // 检查失败时不写入，错误在锁外抛出
+    let mut store_err: Option<Object> = None;
+    let old = own_source::<T>(origin).__update(i, &mut |cur: T| {
+        let n = f(cur.into())?;
+        if !aastore_storable::<T>(&n, own_elem_name::<T>()) {
+            store_err = Some(n);
+            return None;
+        }
+        Some(T::from(n))
+    })?;
+    if let Some(v) = store_err {
+        return Err(crate::error::JvmError::array_store(v.0.__class_name()));
+    }
+    Ok(old.into())
 }

@@ -105,9 +105,9 @@ pub(super) fn prim(o: &Object, offset: i64, width: usize, what: &str,
     if let Some(field) = super::unsafe__impl::offset_slot(o, offset) {
         let mut op = masked(width, op);
         let old = if width == 8 {
-            o.0.__unsafe_dword(&field, &mut |c| op(c as u64).map(|n| n as i64)).map(|c| c as u64)
+            o.0.__unsafe_dword(field, &mut |c| op(c as u64).map(|n| n as i64)).map(|c| c as u64)
         } else {
-            o.0.__unsafe_word(&field, &mut |c| op(c as u32 as u64).map(|n| n as u32 as i32)).map(|c| c as u32 as u64)
+            o.0.__unsafe_word(field, &mut |c| op(c as u32 as u64).map(|n| n as u32 as i32)).map(|c| c as u32 as u64)
         };
         if let Some(old) = old {
             return Ok(old & m);

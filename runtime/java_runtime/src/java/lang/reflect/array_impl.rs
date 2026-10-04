@@ -136,7 +136,7 @@ fn elems_of(array: &Object) -> Result<Elems> {
         };
     }
     prim_kind!(bool => b'Z', i8 => b'B', u16 => b'C', i16 => b'S', i32 => b'I', i64 => b'J', f32 => b'F', f64 => b'D');
-    let unused: crate::sync_model::__AnyRef = crate::sync_model::__Shared::new(());
+    let unused = crate::sync_model::__unused_any();
     let mut view: Option<JArray<Object>> = None;
     array.0.__view_into(unused, &mut view);
     match view {

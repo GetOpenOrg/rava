@@ -32,6 +32,13 @@ pub type __Shared<T> = std::sync::Arc<T>;
 /// 对象存储的类型擦除句柄（wrapper 的 `any` 字段、擦除视图导出）：`Arc<dyn Any + Send + Sync>`
 /// （`downcast` 同名可用）。
 pub type __AnyRef = std::sync::Arc<dyn std::any::Any + Send + Sync>;
+
+/// 不承载存储的擦除句柄（`__view_into` 等只透传、不读取 `any` 的探针调用）：进程内共用一个单元，
+/// 调用点只增引用计数，不逐次分配。
+pub fn __unused_any() -> __AnyRef {
+    static UNUSED: std::sync::OnceLock<__AnyRef> = std::sync::OnceLock::new();
+    UNUSED.get_or_init(|| std::sync::Arc::new(())).clone()
+}
 pub use self::mt::{__AtomicRepr, __PrimCell, __RefSlot};
 
 mod mt {
