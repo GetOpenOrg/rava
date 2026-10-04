@@ -10,7 +10,7 @@
 
 use crate::java::lang::ObjectVTable;
 use crate::sync_model::__Shared;
-use std::cell::{Cell, RefCell};
+use crate::exec_context::release_slot;
 use std::ptr::NonNull;
 
 /// 对象句柄：持有对象（运行时类的存储）或为 null。
@@ -79,11 +79,6 @@ impl Drop for __Handle {
 /// 就地释放的最大嵌套深度（超出的对象入待释放队列）
 const RELEASE_MAX_DEPTH: u32 = 32;
 
-std::thread_local! {
-    static RELEASE_DEPTH: Cell<u32> = const { Cell::new(0) };
-    static RELEASE_PENDING: RefCell<Vec<__Shared<dyn ObjectVTable>>> = const { RefCell::new(Vec::new()) };
-}
-
 /// 释放一个对象引用（`__Handle` / `Object` 的 Drop）：非最后一个强引用只减计数；最后一个按深度
 /// 就地释放或入队，最外层释放清空队列。线程局部已销毁（线程退出期）时就地释放。
 #[inline]
@@ -96,21 +91,21 @@ pub(crate) fn __release(rc: __Shared<dyn ObjectVTable>) {
 
 #[inline(never)]
 fn release_last(rc: __Shared<dyn ObjectVTable>) {
-    let Ok(depth) = RELEASE_DEPTH.try_with(Cell::get) else { return };
+    // 释放槽不可用（线程退出期）时 rc 随闭包丢弃，就地释放
+    let Some(depth) = release_slot(|s| s.depth.get()) else { return };
     if depth >= RELEASE_MAX_DEPTH {
-        // 线程局部不可用时闭包随 try_with 丢弃，rc 就地释放
-        let _ = RELEASE_PENDING.try_with(move |q| q.borrow_mut().push(rc));
+        release_slot(move |s| s.pending.borrow_mut().push(rc));
         return;
     }
-    RELEASE_DEPTH.set(depth + 1);
+    release_slot(|s| s.depth.set(depth + 1));
     drop(rc);
     if depth == 0 {
         // 最外层：逐个释放队列中的对象（其字段再次超深的入队，循环至空）
-        while let Some(next) = RELEASE_PENDING.with(|q| q.borrow_mut().pop()) {
+        while let Some(Some(next)) = release_slot(|s| s.pending.borrow_mut().pop()) {
             drop(next);
         }
     }
-    RELEASE_DEPTH.set(depth);
+    release_slot(|s| s.depth.set(depth));
 }
 
 /// 类型化引用：句柄 + 本类视图指针。`vt` 恒指向 `h` 所持对象（或二者同为空），
