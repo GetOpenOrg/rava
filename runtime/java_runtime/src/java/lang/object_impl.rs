@@ -56,10 +56,10 @@ impl Object {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        let s1 = self.0.as_any().downcast_ref::<JvmString>();
-        let s2 = other.0.as_any().downcast_ref::<JvmString>();
-        if let (Some(a), Some(b)) = (s1, s2) {
-            return Ok(format!("{}", a) == format!("{}", b));
+        // String 是 final：运行时类即 String ⇔ 描述符同址（S7-2b：Object 持有存储，按描述符识别）
+        let is_str = |o: &Object| o.0.__desc().is_some_and(|d| std::ptr::eq(d, JvmString::__DESC));
+        if is_str(self) && is_str(&other) {
+            return Ok(format!("{}", JvmString::from(self.clone())) == format!("{}", JvmString::from(other)));
         }
         self.0.equals(other)
     }

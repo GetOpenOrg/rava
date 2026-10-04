@@ -6,7 +6,7 @@
 //!   - `ClassName__inner` 存储 struct（平铺字段，无 `_super` 嵌套）
 //!   - `impl AncestorVTable for ClassName__inner`（字段访问器 + 覆盖方法）
 //!   - `pub struct ClassName { vtable: Rc<dyn ClassName__VTable>, any: Rc<dyn Any> }`
-//!   - `impl ObjectVTable for ClassName`（委托到 vtable，R-1 blanket 需要）
+//!   - `impl From<ClassName> for Object`（Object 直接持有存储，S7-2b）
 //!   - 字段访问器委托 + 虚方法委托 + 构造器（on wrapper）
 //!   - `ClassName__methodName_base` 自由函数（super() 调用路由）
 //!   - `From<ClassName> for DirectParent`（vtable trait upcasting）

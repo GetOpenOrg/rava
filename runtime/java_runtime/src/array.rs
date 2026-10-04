@@ -378,6 +378,10 @@ impl JArray<Object> {
 }
 
 /// Java 数组是对象：可直接装入 Object（`Object o = arr;`）。
+impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> From<JArray<T>> for Object {
+    fn from(a: JArray<T>) -> Object { Object::__from_shared(Rc::new(a)) }
+}
+
 /// null 数组装入后经 vtable 的 is_jvm_null 呈现 Java null 语义。
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> crate::java::lang::ObjectVTable for JArray<T> {
     fn as_any(&self) -> &dyn std::any::Any { self }

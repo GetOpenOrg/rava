@@ -260,6 +260,10 @@ S7 下：
     - runtime 新增 `__Handle(Option<__Shared<dyn ObjectVTable>>)` 与 `__Ref<V>{ h, vt: Option<NonNull<V>> }`（vt 不持有，指向 h 所持对象）；wrapper 只剩 `__r: __Ref<dyn X__VTable>`，`Default` = `__Ref::NULL` 不分配，`_init_not_null` 才经 alloc 钩子分配。
     - 删掉 `vtable` / `any` / `_jvm_null` 三字段与 `cells` / `from_any` 两个存储钩子、`__erased_inner`；上转 = `__r.upcast(|v| v as &dyn Anc__VTable)`，`From<Object>` 由句柄目标经 `__erased_vtable` 填 vt；wrapper 的 `impl ObjectVTable` 只剩 `__handle` / `as_any` / `__desc`，其余走 trait 缺省委托句柄目标。
     - Object 仍是 `Rc<wrapper>`（S7-2a）；Object 直接持有内部对象、去掉 blanket `From` 另作 S7-2b，S7-2a 实测后再定。
+  - S7-2b 实施要点（2026-10-04，s7-2b）：
+    - wrapper 不再实现 `ObjectVTable`：按类只生成 `impl From<X> for Object`（一行转交非泛型 `__Handle::into_object(desc)`：非 null 直接交出句柄所持存储，null → 按描述符的类型化 null，`__desc` / `__class_name` / `is_instance_of` 报静态类，与原 null wrapper 同答）；`is_jvm_null` 改为 wrapper 固有方法。
+    - 删 blanket `From<T: ObjectVTable> for Object`，基本类型盒、数组、`JvmRef`、lambda 载体逐类型显式 `From`；`ObjectVTable::__handle` / `__view_target` 及各缺省方法的转交臂删除（Object 只持运行时类对象，不再有「视图对象」）。
+    - downcast 审计：`__class_from_object` / `catch_as` 删「持有对象即 W」快路径（恒不命中），`Object.equals` 的 String 快路径改按描述符；接口载体与 lambda 载体收敛到句柄另作 S7-2c。
 - **S7-3 浅拷贝 / 反射字段 / Unsafe 槽位走 `fields` 描述**：删掉按类的 `__shallow_copy` / `__reflect_field` / `__unsafe_*`。
 - **S7-4 类初始化骨架去按类展开**。
 - **S7-5 性能验收**（§4.3）与 3 个 OOM 例、Digester 实测；更新 §7.5.4 账。
