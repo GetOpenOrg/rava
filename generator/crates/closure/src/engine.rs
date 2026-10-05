@@ -42,6 +42,7 @@ mod ctxsel;
 mod classes;
 mod reflect;
 mod reflect_call;
+mod reflect_call_pool;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -331,6 +332,10 @@ pub struct Engine<'a> {
     rcall_conv_pending: HashMap<String, Vec<(usize, u16, V)>>,
     rcall_conv_seen: HashSet<(usize, u32, u16)>,
     rcall_stats: reflect_call::RcallStats,
+    /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
+    rcall_rn_pending: [IdSet; 2],
+    /// 有待定接收者的反射方法成员（序号）
+    rcall_wait_members: Vec<usize>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知

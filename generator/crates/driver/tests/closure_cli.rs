@@ -121,13 +121,15 @@ fn closure_sets(java: &std::path::Path, seed: u64) -> Option<[std::collections::
 #[test]
 fn closure_independent_of_hash_seed() {
     // （用例, 是否序列化 ArrayList）
-    const CASES: [(&str, bool); 6] = [
+    const CASES: [(&str, bool); 7] = [
         ("23_algorithms/StockTrans.java", true),
         ("23_algorithms/DeepCopy.java", false),
         ("35_io/TestSerialDefaultSuid.java", true),
         ("35_io/TestSerialProxyForm.java", true),
         ("35_io/TestSerialUserGenericCallbacks.java", false),
         ("35_io/TestSerialLookupPairing.java", true),
+        // V9：反射调用实参池去冗余（RN 涵盖判定）与透传摘要的过时边曾使 JNDI 闭包随种子差 20 个方法
+        ("73_jndi_script/TestJndiNoProvider.java", false),
     ];
     const CALLBACK: &str = "java/util/ArrayList.writeObject:(Ljava/io/ObjectOutputStream;)V";
     for (case, list) in CASES {
