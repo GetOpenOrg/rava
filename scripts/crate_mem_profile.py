@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-WS_PREFIXES = ("java_", "jdk_", "user")  # JDK 模块 crate（含根声明层 / 实现层 / 门面）、java_meta、user
+WS_PREFIXES = ("java_", "jdk_", "user")  # JDK 模块 crate（含根声明层 / 实现层 / 门面）、java_meta、user（含 user:<bin>）
 
 
 def crate_name(args):
@@ -49,6 +49,10 @@ def rss_mb(pid):
 def wrap(argv):
     rustc, args = argv[0], argv[1:]
     name = crate_name(args)
+    # 用户 crate 的 bin 目标以测试名为 crate 名（release 下即 fat LTO 全程序链接），按包名识别并记为 user:<bin>
+    pkg = os.environ.get("CARGO_PKG_NAME", "")
+    if pkg == "user" and name and name != "user":
+        name = f"user:{name}"
     tracked = os.environ.get("PROFILE_CRATES", "").split()
     if not name or not (name in tracked or name.startswith(WS_PREFIXES)):
         os.execvp(rustc, [rustc, *args])
