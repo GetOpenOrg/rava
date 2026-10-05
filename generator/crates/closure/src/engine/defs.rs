@@ -76,6 +76,8 @@ pub(super) enum MirrorOp {
     Declaring,
     /// 所指类 ⊂ 该类型（类型 id）的类镜像（类镜像子类型判定成立一侧，见 `absint/narrow.rs`）
     Sub(u32),
+    /// 每个类镜像所指类型的新数组（`Array.newInstance`）：调用点（方法, 偏移）上按元素类型区分的数组分配点
+    ArrayOf(u32, u32),
 }
 
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
@@ -95,6 +97,8 @@ pub(super) enum RetModel {
     Receiver,
     /// 按实参（序号，不含接收者）读内存
     Read(usize),
+    /// 按实参（序号，不含接收者）所指元素类型新分配的数组（元素全为 null）
+    NewArray(usize),
     /// 调用者类镜像：调用方（@CallerSensitive 方法）各调用边上调用方所在类的镜像
     Caller,
 }

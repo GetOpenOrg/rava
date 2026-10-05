@@ -157,6 +157,8 @@ const PROD: u32 = u32::MAX - 1;
 const ARRAY_RET: u32 = u32::MAX - 2;
 /// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
 const CALLER: u32 = u32::MAX - 3;
+/// 数组类型的维数上限（JVMS §4.4.1；反射分配更高维数组抛 IllegalArgumentException）
+const MAX_ARRAY_DIMS: usize = 255;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -480,6 +482,9 @@ pub struct Engine<'a> {
     /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
     mirror_open: BTreeMap<u32, Vec<Node>>,
     mirror_open_seen: HashSet<(u32, Node)>,
+    /// 元素类型实参出现所指未知的类镜像（open / 非镜像 Class / 非字节码类镜像）的反射数组分配调用点 (方法, 偏移)：
+    /// 结果已含 open(Object)，此后不再逐类型建分配点（open(Object) 涵盖任意数组）
+    array_of_open: HashSet<(usize, u32)>,
     /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
     synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理

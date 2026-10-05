@@ -50,7 +50,42 @@ impl<'a> Engine<'a> {
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
             MirrorOp::Sub(k) => self.sub_mirrors(s, k),
+            MirrorOp::ArrayOf(m, off) => self.array_of_set(m as usize, off, s),
         }
+    }
+
+    /// Class 值集中各类镜像所指类型的新数组（`Array.newInstance(c, n)`，元素为缺省值 null）：调用点 (m, off) 上
+    /// 按数组类型区分的分配点，元素只来自其后的写入。基本类型类镜像给各基本类型数组（void 抛异常，无结果）；
+    /// 维数已达上限的数组类镜像抛异常（JVMS §4.4.1 数组至多 255 维；Array.newInstance 同），无结果。
+    /// 所指未知的 Class（open、非镜像值、非字节码类镜像）给 open(Object)，该调用点此后不再逐类型建分配点
+    fn array_of_set(&mut self, m: usize, off: u32, s: &TypeSet) -> TypeSet {
+        let obj = self.id(OBJECT);
+        let unknown = !s.open.is_empty()
+            || s.classes.iter().any(|x| Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x)));
+        if unknown {
+            self.array_of_open.insert((m, off));
+        }
+        if self.array_of_open.contains(&(m, off)) {
+            return TypeSet::open(obj);
+        }
+        let mut out = TypeSet::default();
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            let ts: Vec<String> = if Some(x) == self.prim_mirror {
+                b"ZCFDBSIJ".iter().map(|&c| format!("[{}", c as char)).collect()
+            } else {
+                let name = &self.names[self.mirrors[&x] as usize];
+                if name.bytes().take_while(|&b| b == b'[').count() >= MAX_ARRAY_DIMS {
+                    continue;
+                }
+                vec![if name.starts_with('[') { format!("[{name}") } else { format!("[L{name};") }]
+            };
+            for t in ts {
+                let id = self.array_site(m, off, &t, false, Via::method("reflect-newarray", m, Some(off)));
+                out.classes.insert(id);
+            }
+        }
+        out
     }
 
     /// Class 值集中所指类 ⊂ k 的类镜像（`K.class.isAssignableFrom(x)` 成立一侧）：所指类已知者按子类型判定取舍；

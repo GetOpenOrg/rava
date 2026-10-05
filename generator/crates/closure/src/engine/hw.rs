@@ -79,7 +79,8 @@ impl<'a> Engine<'a> {
             || self.man.returns_component_class(&ks)
             || self.man.returns_declaring_class(&ks)
             || self.man.returns_primitive_class(&ks)
-            || self.man.defined_class(&ks).is_some();
+            || self.man.defined_class(&ks).is_some()
+            || self.man.array_allocator(&ks).is_some();
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {
