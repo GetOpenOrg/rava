@@ -33,7 +33,7 @@ impl<'a> Engine<'a> {
         let src = std::mem::replace(&mut self.flow_src, diag::NO_SRC);
         let direct = src == diag::NO_SRC;
         self.graph.adds[0] += 1;
-        if s.is_empty() {
+        if s.is_empty() || self.node_cut(i) {
             return;
         }
         // 无增量快速返回（流边推送的绝大多数）：不取节点、不查暂存。暂存中的空数组元素节点
@@ -70,6 +70,20 @@ impl<'a> Engine<'a> {
         self.grown(r, &delta);
         // 只沿流边推送新增部分（差分传播）
         self.queue_delta(r, &delta);
+    }
+
+    /// 诊断节点切除（`--cut @node:<标签子串>`）：该节点不接收值
+    fn node_cut(&mut self, i: u32) -> bool {
+        if self.cuts.nodes.is_empty() {
+            return false;
+        }
+        if let Some(&b) = self.cut_nodes.get(&i) {
+            return b;
+        }
+        let l = self.node_str(self.graph.node(i));
+        let b = self.cuts.nodes.iter().any(|q| l.contains(q.as_str()));
+        self.cut_nodes.insert(i, b);
+        b
     }
 
     /// 代表 r 登记待推增量
@@ -166,6 +180,9 @@ impl<'a> Engine<'a> {
     /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        if self.node_cut(di) {
+            return;
+        }
         self.tau_check_flow(di, filter);
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
         let objf = filter & NOT_SUB == 0 && self.names[filter as usize].as_ref() == OBJECT;

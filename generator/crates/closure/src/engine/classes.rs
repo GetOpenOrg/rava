@@ -149,7 +149,7 @@ impl<'a> Engine<'a> {
                 exact.push(x);
             }
         }
-        if s.open.is_empty() {
+        if s.open.is_empty() || self.cuts.no_open_recv {
             return exact;
         }
         let mut out = IdSet::from_sorted(exact);
