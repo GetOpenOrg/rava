@@ -110,7 +110,7 @@ mod hvn_diag;
 mod tau;
 mod levels;
 mod open_world;
-mod concrete;
+pub mod concrete;
 mod caller;
 mod boot_phases;
 

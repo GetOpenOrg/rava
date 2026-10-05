@@ -8,7 +8,7 @@ use classfile::{Insn, Operand};
 use super::vm::*;
 use super::*;
 
-enum Next {
+pub(super) enum Next {
     Fall,
     Jump(u32),
     Ret(Option<CV>),
@@ -58,6 +58,9 @@ impl Vm {
     pub(super) fn call(&mut self, env: &Env, site: &MethodSite, args: Vec<CV>) -> R<Option<CV>> {
         let info = self.info(env, site);
         if let Some(op) = &info.op {
+            if self.boot && !op.starts_with("set_static:") && op != "noop" && args.iter().any(|&a| self.is_placeholder(a)) {
+                return defer(format!("延迟值参与求值：残差调用的结果传给 native {}", info.key));
+            }
             return super::natives::call(self, env, op, &info, args);
         }
         if !info.bytecode {
@@ -99,7 +102,7 @@ impl Vm {
         let mut ix = 0usize;
         loop {
             self.steps += 1;
-            if self.steps > STEP_LIMIT {
+            if self.steps > self.step_limit {
                 return fail("步数超限");
             }
             let Some(insn) = code.insns.get(ix) else { return fail("越过方法末尾") };
@@ -107,7 +110,12 @@ impl Vm {
                 hits[ix] = true;
             }
             let r = match self.step(env, info, insn, locals, &mut stack) {
-                Err(Flow::Implicit(k)) => self.implicit(env, k).and_then(|o| Err(Flow::Throw(o))),
+                Err(Flow::Implicit(k)) => {
+                    if self.boot {
+                        self.throw_frames = Some(self.frames.iter().map(|f| f.to_string()).chain([format!("隐式异常 {k} @ {}", insn.offset)]).collect());
+                    }
+                    self.implicit(env, k).and_then(|o| Err(Flow::Throw(o)))
+                }
                 r => r,
             };
             match r {
@@ -127,7 +135,13 @@ impl Vm {
                     ix = *info.index.get(&h.handler).map_or_else(|| fail("处理器非指令边界"), Ok)?;
                 }
                 // 失败位置：最内层的方法与偏移（外层不再追加）
-                Err(Flow::Fail(w)) if !w.contains(" @ ") => return fail(format!("{w} @ {}@{}", info.key, insn.offset)),
+                Err(Flow::Fail(w)) if !w.contains(" @ ") => {
+                    if self.boot && self.fail_frames.is_none() {
+                        self.fail_frames = Some(self.frames.iter().map(|f| f.to_string()).collect());
+                    }
+                    return fail(format!("{w} @ {}@{}", info.key, insn.offset));
+                }
+                Err(Flow::Defer(w)) if !w.contains(" @ ") => return defer(format!("{w} @ {}@{}", info.key, insn.offset)),
                 Err(f) => return Err(f),
             }
         }
@@ -141,7 +155,7 @@ impl Vm {
         env.h().is_subtype(ty, c)
     }
 
-    fn step(&mut self, env: &Env, info: &Rc<MInfo>, insn: &Insn, locals: &mut [CV], st: &mut Vec<CV>) -> R<Next> {
+    pub(super) fn step(&mut self, env: &Env, info: &Rc<MInfo>, insn: &Insn, locals: &mut [CV], st: &mut Vec<CV>) -> R<Next> {
         macro_rules! pop {
             () => {
                 st.pop().map_or_else(|| fail("操作数栈下溢"), Ok)?
@@ -217,7 +231,10 @@ impl Vm {
                     }
                     _ => v,
                 };
-                let arr = self.arr_mut(a)?;
+                if self.boot {
+                    self.boot_elem_write(a, i.max(0) as usize)?;
+                }
+                let arr = self.arr_store(a)?;
                 let slot = arr.get_mut(i as usize).filter(|_| i >= 0).map_or_else(|| implicit("index"), Ok)?;
                 *slot = v;
             }
@@ -280,8 +297,12 @@ impl Vm {
             0xa3 => cmp_branch!(|a, b| a > b),
             0xa4 => cmp_branch!(|a, b| a <= b),
             0xa5 | 0xa6 => {
-                let b = pop!().r()?;
-                let a = pop!().r()?;
+                let (b, a) = (pop!(), pop!());
+                if self.boot {
+                    self.check_identity(a)?;
+                    self.check_identity(b)?;
+                }
+                let (b, a) = (b.r()?, a.r()?);
                 return Ok(if (a == b) == (op == 0xa5) { Next::Jump(target(insn)) } else { Next::Fall });
             }
             0xa7 | 0xc8 => return Ok(Next::Jump(target(insn))),
@@ -332,14 +353,32 @@ impl Vm {
             }
             0xbe => {
                 // 数组长度不可变：映像数组同样可取
-                let a = pop!().obj()?;
+                let a = pop!();
+                if self.boot {
+                    self.check_identity(a)?;
+                }
+                let a = a.obj()?;
                 let Body::Arr(v) = &self.heap[a as usize].body else { return fail("期望数组") };
                 st.push(CV::I(v.len() as i32));
             }
-            0xbf => return Err(Flow::Throw(pop!().obj()?)),
+            0xbf => {
+                let v = pop!();
+                if self.boot {
+                    self.check_identity(v)?;
+                }
+                return Err(Flow::Throw(v.obj()?));
+            }
             0xc0 | 0xc1 => {
                 let Operand::Class(c) = &insn.operand else { return fail("checkcast 操作数") };
                 let v = pop!();
+                // 占位对象的运行期类型是其声明类型的子类型：声明类型可赋给 c 时 checkcast 必过，
+                // 已知非空时 instanceof 为真；其余即延迟值参与求值
+                if self.boot && self.is_placeholder(v) {
+                    let o = v.obj()?;
+                    if !self.instance_of(env, &self.ty(o), o, c) || (op == 0xc1 && !self.bj.nonnull.contains(&o)) {
+                        self.check_identity(v)?;
+                    }
+                }
                 let is = match v.r()? {
                     None => None,
                     Some(o) => Some(self.instance_of(env, &self.ty(o), o, c)),
@@ -354,7 +393,11 @@ impl Vm {
                 }
             }
             0xc2 | 0xc3 => {
-                pop!().obj()?;
+                let v = pop!();
+                if self.boot {
+                    self.check_identity(v)?;
+                }
+                v.obj()?;
             }
             0xc5 => {
                 let Operand::MultiANewArray(c, dims) = &insn.operand else { return fail("multianewarray 操作数") };
@@ -365,7 +408,11 @@ impl Vm {
                 st.push(CV::R(a));
             }
             0xc6 | 0xc7 => {
-                let v = pop!().r()?;
+                let v = pop!();
+                if self.boot && !matches!(v, CV::R(o) if self.bj.nonnull.contains(&o)) {
+                    self.check_identity(v)?;
+                }
+                let v = v.r()?;
                 return Ok(if v.is_none() == (op == 0xc6) { Next::Jump(target(insn)) } else { Next::Fall });
             }
             _ => return fail(format!("不支持的指令 {}", insn.name())),

@@ -49,6 +49,9 @@ pub struct Closure<'a> {
     /// 类路径（输出的模块事实取自它，见 [`modules_json`]）
     pub cp: &'a ClassPath,
     pub elapsed_ms: u128,
+    /// 构建期引导映像（`[concrete.boot]` 未配置或类路径无 JDK 时为 None）与求值耗时
+    pub boot_image: Option<engine::concrete::boot_image::BootImage>,
+    pub boot_ms: u128,
 }
 
 /// 运行分析。`h` / `man` / `hw` 由调用方持有（引擎借用）
@@ -81,13 +84,20 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     for m in &man.boot_calls {
         e.root_boot_call(m, "boot_init");
     }
+    // 构建期引导映像（计划 2026-10-05-boot-image-evaluator）：与用户程序无关，先于闭包分析求值
+    let tb = std::time::Instant::now();
+    let boot_image = e.boot_image();
+    let boot_ms = tb.elapsed().as_millis();
+    if let Some(b) = boot_image.as_ref().filter(|b| !b.ok) {
+        eprintln!("[closure] 引导映像求值失败：{}", b.json["error"].as_str().unwrap_or("?"));
+    }
     e.run();
     if let Some(p) = &input.diag.dump_edges {
         if let Err(err) = engine::cut::edges_finish(p) {
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
         }
     }
-    Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis() }
+    Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis(), boot_image, boot_ms }
 }
 
 /// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）
@@ -189,6 +199,10 @@ impl Closure<'_> {
             .values()
             .filter(|c| c.level == Level::Code && matches!(c.domain, Domain::Translate))
             .count();
+        let mut perf = e.perf_json(20);
+        if let Some(o) = perf.as_object_mut() {
+            o.insert("boot_image_ms".into(), json!(self.boot_ms as u64));
+        }
         json!({
             "classes": e.classes.len(),
             "classes_by_level": by_level,
@@ -221,9 +235,10 @@ impl Closure<'_> {
             "fields_open_all": e.field_handles().1,
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
+            "boot_image": self.boot_image.as_ref().map(|b| &b.json),
             "elapsed_ms": self.elapsed_ms,
             // 性能观测（计时 / 内存 / 重分析分布）：不属于分析结果，对照输出时与 elapsed_ms 一并剔除
-            "perf": e.perf_json(20),
+            "perf": perf,
         })
     }
 
