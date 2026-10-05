@@ -2165,3 +2165,98 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
 | `java.util.stream` | `FileOutputStream.<clinit>` → `SharedSecrets.ensureClassInitialized #@210:10` → `Lookup.ensureInitialized@19` → `StringBuilder.append(Object)`（实例汇合点，未克隆）→ `String.valueOf(Object) #@515:2` → `ModuleDescriptor$Exports.toString` → `ModuleDescriptor.toString(Set,String)` → `Collection.stream` | `ensureInitialized` 只在访问检查失败时拼异常消息 | G2 实例汇合点（`append(Object)`）：§6.7 实测按调用点克隆不分开；需按实参值集（而非形参汇合）分派 `toString` |
 
 结论：第一处随宿主正确可达；其余两处分属容器元素类型、实例汇合点两类精度项，均与引导层本身无关；锚点启用仍以它们为前置。
+## 24. V9：闭包随哈希种子变化——反射调用池去冗余与透传过时边（2026-10-05，分支 v9-rcall）
+
+**症状**：基线 2602f409 上 TestJndiNoProvider 种子 0 = 24492 方法、种子 1/2 = 24470。多出的 20 个方法是两组：
+`ObjectStreamClass.getReflector@78` 带入的 Provider / Properties / Hashtable / Collections 各 Map / ImmutableMap /
+ReferencedKeyMap 的 `putIfAbsent`，以及 XMLParserImpl 带入的 ArrayDeque / LinkedList / LBQ / LTQ / SynchronousQueue /
+DelayedWorkQueue 的 `offer` / `poll`。
+
+**两处依赖求值次序的判定**（终态都与次序无关，取精确一侧，不靠放宽到 open）：
+
+1. 反射调用实参池的去冗余视图 RN（`reflect_call.rs::rcall_absorb`，e57444ae）。值 x 被池中 open 涵盖的条件（非合成、
+   已逃逸、属于某 open）随分析只增不减，但原实现在值入池时判定：x 先到就逐个列出、open 先到就略去。两种结果的下游
+   效果不等价——未收窄的按偏移写入对逐个列出的对象写其全部引用字段，对 open 目标只写 open 类型自身的字段。
+   现在：此刻已涵盖的永久略去，其余挂起，到工作队列排空（单调部分的不动点）时由 `rcall_release` 定夺（与
+   `lookup_release` 同口径，排在 `seed_round` 之前）。可覆写成员的接收者同理：是否已退回 VM 枢纽（枢纽展开覆盖
+   逐接收者派发）也在排空时判定。实现拆到 `engine/reflect_call_pool.rs`。
+2. 透传摘要的过时边（`invoke.rs::edge_ret`，主因）。被调方的透传摘要（返回值只来自形参）随分析推进会在「透传」与
+   「经 R 汇合」之间转换，调用方按新摘要重接，但已接的透传边不撤回。原透传边只按调用点返回类型过滤（Object），
+   不按被调形参声明类型过滤：种子 0 下 `SocketPermissionCollection.lambda$add$0` 一度是透传，`Map.merge@32`
+   （`BiFunction.apply`）的结果因此接上 `@12 Map.get` 的巨集合（反序列化来的 open(Object)），经 `Map.put` →
+   `WeakHashMap.put` / `remove` → `ClassValueMap.removeEntry@8` 的 checkcast 注入 open(ClassValue$Entry)，再经
+   `FieldReflector.setObjFieldValues` / VarHandle CAS 把巨集合写进 `ClassValue$Entry.value`，`ClassValue.get` 的
+   返回随之变宽。种子 1 下该 lambda 从未是透传，结果只经 R（{SocketPermission, open(SocketPermission)}）。
+   修法：透传边按被调形参声明类型收窄（与 P → R 汇合路径同一口径；形参类型不是调用点返回类型子类型时取后者）。
+   优化性分析下活代码只增不减，早先透传的形参在终态仍经 return 流入 R，过时的透传边因而被 R 涵盖，结果与次序无关。
+
+**结果**（本机 `rava closure`，种子 0/1/2）：TestJndiNoProvider 三种子类 3820 / 方法 24470 / 反射成员 1610，
+集合逐项一致（取精确一侧）。`closure_independent_of_hash_seed` 增加 TestJndiNoProvider。
+
+**诊断方法备忘**：`@trace:open:<类型>` 记录首达来源，沿来源反向追链即可定位；本例最后一跳靠
+`@edge:<节点>` 看到 `@12 → @32 [Object]` 这条不应存在的边（实参直连结果 = 透传边）。
+
+## 25. a2 续收口：锚点启用的代价口径与前置（2026-10-05，分支 c1d-boot，基于 8bb25e10）
+
+任务 1（早退检查按分析期事实求值，F1 / F2）与任务 2（`[[boot_init.phases]]` 清单化，6666c19b，锚点留空）已在
+§23 / §23.5 合入，本节只记 boot layer 步骤 2–5 能否开工的实测。本节未改代码。
+
+### 25.1 两个口径分开看
+
+本地临时 runtime：两个锚点 `System.bootLayer` + `Class.module`；`ModuleLayer` 移出 `[vm_boundary]`；删掉
+`module_layer_impl.rs` 与两处 `Class.getModule` 手写。档案并集取服务器作业 c1db-prof-2574ead5（1084 例，Linux）：
+**7886 类 / 51370 方法**。任务书写的基线 3609 是更早的口径，下文统一以 7886 为准。
+
+| 口径 | 现状 | 锚点启用 | 说明 |
+|---|---|---|---|
+| 档案并集（类） | 7886 | 增量约 +20 | TestCustomException / HelloWorld 的锚点闭包不在并集里的类分别只有 36 / 33 个：16 个是 `jdk/internal/module` 引导类（Builder、ArchivedBootLayer、SystemModuleFinders 族等），这是建层本身需要的；8 个 `sun/nio/fs` 和 apple/* 是本机 macOS 与服务器 Linux 的差别；其余是测试自己的类 |
+| 单例闭包 HelloWorld | 469 类 / 1.2 s | 3190 类 / 18611 方法 / 17 s，峰值 1.5 GB | 只开 `bootLayer` 锚点时 HelloWorld 不作根。加上 `Class.module` 后，作根路径为 `System.<clinit>` → `FileOutputStream.<clinit>` → `SharedSecrets.getJavaIOFileDescriptorAccess` → `ensureClassInitialized` → `Lookup.ensureInitialized` → `VerifyAccess.isClassAccessible@59` → `getModule`，于是全部 1084 例都作根 |
+| 单例闭包 TestCustomException | 480 | 3193 | 同上 |
+
+结论：按档案并集看，锚点几乎不增加规模（+20 类，都是引导层本身必需）。但生产构建按单个项目算闭包，HelloWorld 会变成原来的
+**6.8 倍**，二进制体积跟着放大，这违反「正确且最小」。所以第 2–5 步的终态（删手写、锚点启用）在单例膨胀消除之前
+**不开工**。
+
+### 25.2 HelloWorld 多出的 2721 类按首次离开模块代码的出口分类
+
+方法：沿每个新增类的首达链（`via`）反向找第一个模块代码帧（`jdk/internal/module`、`java/lang/module`、`Module`、`ModuleLayer`、
+`initPhase2`），记下它的下一跳。首达链不带克隆上下文，所以下表只用于排序，不用于逐例归因（§23.6）。
+
+| 类数 | 出口 | 所属精度项 |
+|---|---|---|
+| 1852 | 首达链上没有模块代码：建层后原本折叠的分支变为可达（`Class.getResourceAsStream@75` 命名模块分支 → `BuiltinClassLoader.findResourceAsStream` → `URLClassPath` jar 加载器 → `Files.createTempFile` → `SecureRandom` → JCA；ICU、ResourceBundle、ForkJoinPool 等） | `Class.classLoader` 接收者汇合：`getResourceAsStream` 的 `this` 不分镜像，boot 类读 classLoader 不能折成 null。与 §23.6 第 4 条服务查找同属一类：汇合点的形参或接收者需要按值集求值 |
+| 约 370 | `ModuleDescriptor.toString` → `Collection.stream` / `ReferencePipeline.collect` | G2 实例汇合点（`String.valueOf(Object)` / `StringBuilder.append(Object)`，§23.7 第 3 行） |
+| 约 250 | `ModuleDescriptor$Version.compareTokens` 读 `List<Object>` 元素后调 `toString`（`Instant` / `Date` / `X509CRLImpl` / `PKCS7` …） | 容器元素类型（§23.7 第 2 行） |
+| 45 | 建层直接需要的类（`LayerInstantiationException` 等） | 不是缺陷 |
+| 其余约 200 | `SystemModuleReader.read` → jimage `ImageReader`；`Module.getPackages` → `BootLoader.packages`；`boot2` → `BootLoader.loadModule` 等 | 第 5 步（jimage 嵌入数据）落地后按真实路径重测 |
+
+### 25.3 具体求值（a1 引擎）执行 initPhase2：不可行
+
+用临时探针（未提交）把阶段入口交给 `engine/concrete` 求值，实参为清单常量 `(false, false)`，判断能否「只登记实际执行的指令」。
+在进入 `boot2` 之前就失败了，失败原因按顺序如下：
+- `System.<clinit>`：`registerNatives` 没有具体语义；
+- `ModuleBootstrap$Counters.<clinit>`：读可变静态字段 `System.props`（由 VM 的 initPhase1 填充）；
+- `ModuleBootstrap.<clinit>`：读 `SharedSecrets.javaLangAccess`（由 `System.setJavaLangAccess` 引导步骤写入）；
+- `Reference.<clinit>`：类初始化写入它类静态字段 `SharedSecrets.javaLangRefAccess`；
+- `ArraysSupport.<clinit>`：读 VM 注入的 `UnsafeConstants.BIG_ENDIAN`。
+
+求值器的语义是「无副作用、可撤销的调用点求值」，而引导阶段要求另一套语义：
+1. 先有 initPhase1 与 `[boot_init]` 步骤之后的 VM 初始堆（系统属性表、SharedSecrets 各访问器、注入常量）；
+2. 阶段的写入是永久的初始状态，不撤销；
+3. 结果对象图（Configuration、各个 Module、包表）要作为程序初始状态物化给抽象分析。
+
+这相当于一个构建期引导映像求值器，不属于 a1 引擎的扩展范围。如果要走这条路，需要另立任务。
+
+### 25.4 第 2–5 步的前置（按影响排序）
+
+1. `getResourceAsStream` 一类 `Class` 实例方法：`this.classLoader`、`this.module` 按接收者镜像值集求值（1852 类）。
+   同一机制还能把 `VerifyAccess.isModuleAccessible` 的 `refc.getModule() == lookupModule` 在同一模块内折成 true。
+2. 容器元素类型（`Version` 记号表只有 String / Integer）。在途：「C1d 剖面并集与容器元素精度」线。
+3. G2 实例汇合点按实参值集分派 `toString`。在途：V10「逃逸对象上下文收拢」线。
+4. 以上合入后用同一临时 runtime 重测 HelloWorld，判据为单例 ≤ 469 + 100 类（真实 JVM `-Xshare:off` 下 HelloWorld 共加载
+   556 类，其中模块相关 38 类）。达标后按 boot-layer.md 第 2–3 步实施。
+
+TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 在 main 上失败（`getSystemPackageLocation`
+native 缺失、`String.class.getModule()` 不是命名的 java.base），三者都依赖引导层，随第 2–3 步一起解决。不单独补手写近似：
+`PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
+仍然会抛 `InternalError("java.base not loaded")`。

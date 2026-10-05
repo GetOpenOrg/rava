@@ -27,7 +27,7 @@ pub(crate) fn generate(ctx: &GenContext) -> Vec<TokenStream2> {
         /// 分配一个默认存储，返回其本类引用（构造器的 `_init_not_null` 调用；S7-2 起 null 不分配）
         pub fn #alloc() -> __Ref<dyn #vtable_trait_ident> {
             __Ref::new(
-                __Shared::new(<#inner_ident as ::std::default::Default>::default()),
+                __Obj::new(<#inner_ident as ::std::default::Default>::default()),
                 |__i| __i as &dyn #vtable_trait_ident)
         }
     }, quote! {
