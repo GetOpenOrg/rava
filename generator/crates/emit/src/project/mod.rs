@@ -6,6 +6,7 @@
 
 mod archive_side;
 pub mod meta_sides;
+pub mod decl_segments;
 pub mod entry;
 pub mod fs;
 pub mod layers;
