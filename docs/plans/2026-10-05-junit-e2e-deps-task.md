@@ -164,4 +164,20 @@
    - spot `cfgfix-264e73ee`（按目录抽样）：AbstractShape ✓ / ABCProblem ✗（regex
      `Pattern$CharPredicate.union` 存根命中——main 既有失败族，与本修复无关）；`--tests` 指定例
      未被 spot 模式采纳，三例指定抽查另发作业 `cfgfix-3spot-264e73ee`（结果回填）。
+7. **A 族修复合入后（2026-10-05 晚）**：
+   - A 族（E0432 Proxy_Dyn）修复 `d7f482e1`：伴生依赖判定大写段三类判定（手写层 pub item 全集 /
+     snake 名探测 scratch / 目录+同名 .rs 保守在场）。本机 m1 golden：5008 错→0。
+   - 服务器复验 `cfgfix2-golden-d7f482e1`（10314222 + A 修复 + JDK 21）：**m1/m2 GOLDEN OK**；
+     m3–m5 运行期同 panic：`Unsafe 静态字段读-改-写：Result$SerializedForm.serialVersionUID
+     无字段闭包（静态字段表项 []）`。
+   - B/C 族 5×E0308 定性为**环境假象**：本机 shell `JAVA_HOME=graalvm-25` 压过语料 pin
+     （`resolve/src/jdk.rs` 优先级缺陷），JDK 25 语料 vs JDK 21 手写层的字段 J→I 错配；JDK 21
+     重发后自消。已修 `a4acb1a5`：pin 高于 JAVA_HOME（主版本不符忽略并打印、一致用其 home、
+     无 pin 照常），单测三分支覆盖。
+   - **m3–m5 blocker 定性（2026-10-05 晚，主会话裁定）：S7-3c 已修缺陷未同步**——`statics_table`
+     的反射标记判断原来用 to_string 子串匹配恒不命中（b259fdb1 修复，已在集成分支 00fe97ce）。
+     junit-deps 已合并 origin/rust-closure-analyzer@85a56289（含修复），m3–m5 golden 复测中
+     （作业 junit-m345-aftermerge）。
+   - d7f482e1 的已知回归：`emit::project::tests::companion_skipped_when_used_module_absent`
+     失败（缺失小写段判在场 vs 注释不一致 + 夹具 Class 判缺席）——主会话已另派代理修，本任务不动。
 
