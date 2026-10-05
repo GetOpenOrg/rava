@@ -114,6 +114,11 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
     build.rs 的 native 状态表都把辅助文件并入宿主的「手写单元」——单元文本 = 宿主 + 辅助文件按路径序拼接（剥去上述
     声明行），语义等同拆分前的单文件，拆分是纯搬移、分析结果不变；行表按单元内逐文件成表。
   - 守护：`layout::tests::runtime_helpers_follow_convention` 检查真源全部辅助文件的书写约定与宿主声明。
+  - 现有辅助目录（2026-10-05 拆分，纯搬移）：`array/{vtable,view}.rs`、`java/lang/class_impl/{attrs,members,nest}.rs`、
+    `jdk/internal/misc/unsafe__impl/{access,primitive,memory}.rs`。
+- **scratch 与真源同步**：overlay 把本轮落盘的手写文件记入 scratch 根 `.rava_overlay`；复用 scratch 时上轮清单中
+  本轮未落盘、且无生成标记的文件删除、空目录移除（runtime/ 中删除 / 改名的文件与辅助目录、非 `.rs` 资源、手写
+  `mod.rs`、改定向到别的模块 crate 的目录都覆盖）；带生成标记的文件从不因此删除。
 
 ## 六、登记与审计
 
