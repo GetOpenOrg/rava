@@ -7,6 +7,7 @@
 //!
 //! 任何元素访问都经原子指令或单元锁，不存在非原子的并发访问（无数据竞争 UB）。
 
+use super::*;
 use std::cell::UnsafeCell;
 use std::mem::{size_of, ManuallyDrop};
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -96,7 +97,7 @@ pub(super) fn to_bits<T>(v: T) -> u64 {
 impl<T: 'static> Store<T> {
     /// 由元素向量建存储：基本元素原地转为槽切片（同一分配），引用元素逐个装入单元
     pub(super) fn from_vec(v: Vec<T>) -> Self {
-        if super::JArray::<T>::has_primitive_elements() {
+        if JArray::<T>::has_primitive_elements() {
             let raw = Box::into_raw(v.into_boxed_slice()) as *mut [PrimSlot<T>];
             // SAFETY: PrimSlot<T> 是 T 的 repr(transparent) 包装
             Store::Prim(unsafe { Box::from_raw(raw) })

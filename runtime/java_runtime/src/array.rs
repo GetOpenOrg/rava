@@ -10,7 +10,7 @@ use vtable::*;
 mod view;
 use view::*;
 mod store;
-use store::Store;
+use store::*;
 
 /// Java 数组。Clone 共享底层存储（Java 数组是引用类型，赋值不复制内容）。
 ///
