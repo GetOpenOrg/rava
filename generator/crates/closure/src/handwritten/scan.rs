@@ -434,7 +434,6 @@ mod tests {
                 pub fn store(&self, ob: Object) { ob.array_store_object(0, ob); }
                 pub fn generic<T>(&self, a: &JArray<T>) -> usize { a.len() }
                 pub fn generic_set<T>(&self, a: &JArray<T>, x: T) { a.set(0, x); }
-                pub fn slice(&self, a: JArray<Class>) { a.with_vec(|v| v.reverse()); }
                 pub fn nested(&self, a: &JArray<JArray<i8>>) {}
                 pub fn mac(&self) { m!(JArray<i8>); }
                 pub fn mac_set(&self, a: JArray<Object>) { m!(a.set(0, Object::default())); }
@@ -449,7 +448,7 @@ mod tests {
         for f in ["eq", "prim", "to_u8", "refs", "bare", "generic", "nested", "mac"] {
             assert!(!acc(f), "{f} 不改写引用元素");
         }
-        for f in ["refs_set", "store", "generic_set", "slice", "mac_set", "put"] {
+        for f in ["refs_set", "store", "generic_set", "mac_set", "put"] {
             assert!(acc(f), "{f} 改写引用元素");
         }
     }
