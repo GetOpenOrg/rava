@@ -165,15 +165,23 @@ impl Ctx<'_> {
         self.ceval_drop(|inp| inp.reads.iter().any(|r| r.name == name))
     }
 
+    /// 字段转为不折叠：输入含该字段的记忆全部作废（`<clinit>` 常量、构造器对象、属性摘要、只读判定与常量实参求值），
+    /// 返回取用者。只作废求值记忆而留下其余记忆时，旧答复要等到下一次不折叠集合增长（`sysprops.rs`）才刷新，
+    /// 终态取决于两者的先后（D1）
     pub(super) fn ceval_drop(&self, mut stale: impl FnMut(&Inputs) -> bool) -> BTreeSet<usize> {
         let mut ids = Vec::new();
-        self.cevals.borrow_mut().retain(|_, (_, inp)| {
+        let mut keep = |inp: &Inputs| {
             let s = stale(inp);
             if s {
                 ids.push(inp.id);
             }
             !s
-        });
+        };
+        self.cevals.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        self.consts.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        self.objs.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        self.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        self.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
         self.memo_consumers(ids)
     }
 }
