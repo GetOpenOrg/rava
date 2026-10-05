@@ -37,7 +37,7 @@ pub fn select_entries(o: &BuildOpts) -> Result<Vec<LibEntry>, String> {
         .iter()
         .map(|j| LibEntry {
             path: j.path.clone(),
-            meta: LibMeta { coordinate: j.coordinate.clone(), module: j.module.clone() },
+            meta: LibMeta { coordinate: j.coordinate.clone(), module: j.module.clone(), sha256: Some(j.sha256.clone()) },
         })
         .collect())
 }

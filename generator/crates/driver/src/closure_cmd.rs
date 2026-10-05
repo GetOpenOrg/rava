@@ -138,7 +138,11 @@ pub fn run(args: &Args) -> Result<(), String> {
                 .iter()
                 .map(|j| crate::build_libs::LibEntry {
                     path: j.path.clone(),
-                    meta: resolve::classpath::LibMeta { coordinate: j.coordinate.clone(), module: j.module.clone() },
+                    meta: resolve::classpath::LibMeta {
+                        coordinate: j.coordinate.clone(),
+                        module: j.module.clone(),
+                        sha256: Some(j.sha256.clone()),
+                    },
                 })
                 .collect()
         }

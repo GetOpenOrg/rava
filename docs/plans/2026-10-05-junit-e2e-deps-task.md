@@ -243,4 +243,26 @@
      完整 golden（意外复验 5/5），树落默认 build/ 致对照空跑；本轮修正取 `build/*_main`
      并剥编译产物）。
 
+11. **J2a 后续与 J2b = profile.json 增量与 lib_runtime（2026-10-06 凌晨，本条目所在提交）**：
+    - **锁条目名修正**（j2a-golden 首轮暴露）：junit / hamcrest 等 5 个 jar 不带 pom.properties，
+      条目名回退文件名 stem 致 `--cp hamcrest,junit` 报「不在依赖锁中」。坐标真源改
+      `mvn dependency:list -DoutputAbsoluteArtifactFilename`（剥行尾 module 注记、version 取
+      倒数第三段兼容 classifier），jar 内 pom.properties 只作回退——92/92 条全有坐标。
+    - **profile.json §4.2 增量**：`PROFILE_FORMAT 1→2`；modules[] 行在档案层富化
+      kind/crate/jars[{path=文件名, sha256, coordinate}]/release（`profile::build` 合并后统一做，
+      逐入口 closure.json 模块行保持最小面——缓存兼容；富化字段入内容摘要剔除面，
+      `--covers` 重并两侧一致；jar 绝对路径不进 P，身份经 `profile.inputs.deps_lock`
+      （锁摘要，含 sha256 与序）**入 P**）；entries[] 增 classpath（锁条目名）与 launch；
+      EntryClosure 增 cp/launch。
+    - **`--launch` 入库**：rava profile 顶层选项，记 profile.entries[].launch（本步只入库传递，
+      启动语义随 V12 模块路径模式验收）。
+    - **runtime/lib_runtime/**（V12 §3.6）：`closure::lib_runtime` 读取器——模块目录
+      manifest.toml `versions = "[a,b)"`（下含上不含、开界省略；单串或数组，数组展开多段、
+      命中多段报错），版本比较数值段感知（4.13.2 > 4.9）；`select(module, version)` 命中
+      唯一性校验。骨架 `runtime/lib_runtime/junit/`（versions="[4,)"，seeds.toml 由 J4 填
+      @Test 发现路径补种）。清单摘要进该库 K(c) 属 V12-3，本步读取器就位。
+    - 验证：closure 160+2 用例绿（含区间/多命中/坏格式夹具）；driver 全套绿（profile_cli 的
+      `--covers` 断言经内容摘要剔除面修正后通过）。全量 gate 见提交说明（唯一失败仍为
+      第 7 条已知回归）。
+
 

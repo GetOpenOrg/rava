@@ -261,6 +261,11 @@ impl<'a> ModuleGraph<'a> {
         self.f.nodes.get(module)
     }
 
+    /// 来源类路径（模块 jar 的锁元数据查询用）
+    pub fn classpath(&self) -> &'a ClassPath {
+        self.cp
+    }
+
     /// 同一包归属的多个模块（按名序）；交由 crate 计划做分量合并
     pub fn split_packages(&self) -> &'a BTreeMap<String, BTreeSet<String>> {
         &self.f.split_packages

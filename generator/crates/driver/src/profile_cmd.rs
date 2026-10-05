@@ -39,7 +39,7 @@ use crate::Args;
 const GENERATOR_DIGEST: &str = env!("RAVA_GENERATOR_DIGEST");
 
 const VALUE_OPTS: &[&str] = &[
-    "--deps", "--entries", "--closure", "--jdk", "--java-home", "--runtime", "--image", "-o", "--entry-out", "--closure-cache",
+    "--deps", "--entries", "--launch", "--closure", "--jdk", "--java-home", "--runtime", "--image", "-o", "--entry-out", "--closure-cache",
     "--closure-cache-max-mb", "--flow-batch", "--hash-seed", "--covers",
 ];
 
@@ -143,6 +143,8 @@ struct Env {
     home: PathBuf,
     /// 依赖锁（`--deps`；库输入唯一来源）
     deps: Option<DepsLock>,
+    /// 启动选项（`--launch`；记入 profile.entries[].launch，本步入库传递）
+    launch: Option<String>,
     rt: PathBuf,
     images: Vec<PathBuf>,
     cache: crate::closure_run::CacheOpts,
@@ -158,7 +160,11 @@ impl Env {
             .iter()
             .map(|j| LibEntry {
                 path: j.path.clone(),
-                meta: resolve::classpath::LibMeta { coordinate: j.coordinate.clone(), module: j.module.clone() },
+                meta: resolve::classpath::LibMeta {
+                    coordinate: j.coordinate.clone(),
+                    module: j.module.clone(),
+                    sha256: Some(j.sha256.clone()),
+                },
             })
             .collect())
     }
@@ -256,7 +262,8 @@ fn env_of(args: &Args) -> Result<Env, String> {
     let cache = crate::closure_run::CacheOpts { dir: args.opt("--closure-cache").map(PathBuf::from), max_mb: num("--closure-cache-max-mb")? };
     let work = std::env::temp_dir().join(format!("rava-profile-{}", std::process::id()));
     let deps = args.opt("--deps").map(|d| DepsLock::load(Path::new(&d))).transpose()?;
-    Ok(Env { home, deps, rt, images, cache, flow_batch: num("--flow-batch")?.map(|n| n as usize), work })
+    let launch = args.opt("--launch");
+    Ok(Env { home, deps, launch, rt, images, cache, flow_batch: num("--flow-batch")?.map(|n| n as usize), work })
 }
 
 pub fn run(args: &Args) -> Result<(), String> {
@@ -293,26 +300,32 @@ pub fn run(args: &Args) -> Result<(), String> {
         let entry_jars: Vec<PathBuf> = env.lib_entries(&s.cp)?.iter().map(|l| l.path.clone()).collect();
         digests.push((s.name.clone(), s.digest(&entry_jars)?));
         lib_jars.extend(entry_jars);
-        entries.push(EntryClosure { name: s.name.clone(), closure: v });
+        entries.push(EntryClosure { name: s.name.clone(), closure: v, cp: s.cp.clone(), launch: env.launch.clone() });
     }
     let _ = std::fs::remove_dir_all(&env.work);
     for p in &closure_files {
         let v = read_json(p)?;
         digests.push((closure_name(p), profile::files_digest(&[("closure".into(), p.clone())])?));
-        entries.push(EntryClosure { name: closure_name(p), closure: v });
+        entries.push(EntryClosure { name: closure_name(p), closure: v, cp: Vec::new(), launch: None });
     }
     lib_jars.sort();
     lib_jars.dedup();
     let cp = env.jdk_path(&lib_jars)?;
     let archives: Vec<(Origin, PathBuf)> = cp.archives();
+    let deps_lock = match args.opt("--deps") {
+        Some(d) => profile::files_digest(&[("deps.lock.toml".into(), PathBuf::from(d))])?,
+        None => String::new(),
+    };
     let inputs = KeyInputs {
         generator: GENERATOR_DIGEST.into(),
         runtime: profile::runtime_digest(env.rt.parent().unwrap_or(&env.rt))?,
         jdk_major: resolve::jdk::release_major(&env.home).ok_or_else(|| format!("读不出 JDK 主版本：{}/release", env.home.display()))?,
         archives: profile::archives_digest(&archives)?,
         entries: profile::entries_digest(&digests),
+        deps_lock,
     };
-    let mut v = profile::build(&entries, &|id: &str| handler_pcs(&cp, id), &inputs)?;
+    let facts = resolve::ModuleFacts::build(&cp);
+    let mut v = profile::build(&entries, &|id: &str| handler_pcs(&cp, id), &inputs, Some((&facts, &cp)))?;
     let elapsed = t0.elapsed().as_millis() as u64;
     let peak = closure::engine::peak_mem_mb();
     v["profile"]["elapsed_ms"] = elapsed.into();
@@ -344,7 +357,7 @@ fn covers(env: &Env, profile_path: &Path, closures: &[PathBuf]) -> Result<(), St
     let cp = env.jdk_path(&[])?;
     let mut all = true;
     for c in closures {
-        let e = EntryClosure { name: closure_name(c), closure: read_json(c)? };
+        let e = EntryClosure { name: closure_name(c), closure: read_json(c)?, cp: Vec::new(), launch: None };
         let ok = profile::covers(&p, &e, &|id: &str| handler_pcs(&cp, id))?;
         all &= ok;
         println!("{} {}", if ok { "covered" } else { "not-covered" }, c.display());
