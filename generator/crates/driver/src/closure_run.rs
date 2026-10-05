@@ -45,7 +45,7 @@ pub fn analyze<'a>(
     });
     let key_ms = t0.elapsed().as_millis();
     // 触发边转储是冷算的副产物：要转储时不读缓存
-    let need_engine = need_engine || input.diag.dump_edges.is_some();
+    let need_engine = need_engine || input.diag.dump_edges.is_some() || input.diag.site_prof;
     if let (Some((s, k)), false) = (&slot, need_engine) {
         match s.load(k) {
             Load::Hit(Entry { diag, closure: mut v }) => {

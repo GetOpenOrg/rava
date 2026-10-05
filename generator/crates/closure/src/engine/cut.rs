@@ -18,6 +18,8 @@ pub struct Diag {
     pub dump_edges: Option<PathBuf>,
     /// `--flows` 查询全文；其中记录型（`@grow:` / `@trace:` / `@edge:`）在分析前登记，其余在分析后求值
     pub flows: Vec<String>,
+    /// `--site-prof`：读者站点重跑剖析（`site_prof.rs`，结果进 `summary.perf.site_prof`）
+    pub site_prof: bool,
 }
 
 #[derive(Default)]

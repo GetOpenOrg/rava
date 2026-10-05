@@ -1,4 +1,4 @@
-//! 引擎：读者站点重跑剖析（V12，只读诊断，只进 `summary.perf.site_prof`，不影响分析结果）。
+//! 引擎：读者站点重跑剖析（V12，只读诊断，`rava closure --site-prof` 开启，只进 `summary.perf.site_prof`，不影响分析结果）。
 //!
 //! - 触发源：站点入 `swork` 时记下首个触发（增长的节点种类，或 open 重展开 / 名字槽 / 放行等非节点来源），
 //!   入队期间的后续触发计为合并；
@@ -63,6 +63,8 @@ pub(super) struct SiteProf {
     trig: HashMap<(usize, u32), Trig>,
     /// 按触发源：入队次数 / 已在队中被合并次数
     pushes: BTreeMap<u8, [u64; 2]>,
+    /// 剖析开关（`rava closure --site-prof`；缺省关闭，关闭时各钩子空操作）
+    pub(super) enabled: bool,
     /// 当前重跑（剖析开着时）
     on: bool,
     cur: Option<Trig>,
@@ -86,6 +88,11 @@ pub(super) struct SiteProf {
 type Snap = [u64; 6];
 
 impl<'a> Engine<'a> {
+    /// 开关读者站点重跑剖析（`--site-prof`）
+    pub fn set_site_prof(&mut self, on: bool) {
+        self.ctx.stats.borrow_mut().sprof.enabled = on;
+    }
+
     /// 站点入队（剖析记首个触发源）
     pub(super) fn push_site(&mut self, w: (usize, u32), src: u8, node: Option<Node>) {
         let new = self.in_swork.insert(w);
@@ -109,6 +116,9 @@ impl<'a> Engine<'a> {
 
     /// 读者站点重跑开始：取出触发源，开计时
     pub(super) fn prof_begin(&mut self, w: (usize, u32)) -> Snap {
+        if !self.ctx.stats.borrow().sprof.enabled {
+            return Snap::default();
+        }
         let snap = self.prof_snap();
         let mut st = self.ctx.stats.borrow_mut();
         let p = &mut st.sprof;
@@ -123,6 +133,9 @@ impl<'a> Engine<'a> {
 
     /// 一个事件重跑结束（同一偏移多个事件各记一次）
     pub(super) fn prof_event(&mut self, kind: usize, before: Snap, ns: u64) -> Snap {
+        if !self.ctx.stats.borrow().sprof.on {
+            return before;
+        }
         let after = self.prof_snap();
         let mask = before.iter().zip(&after).enumerate().fold(0u8, |m, (i, (a, b))| if a != b { m | (1 << i) } else { m });
         let mut st = self.ctx.stats.borrow_mut();
@@ -190,6 +203,9 @@ impl<'a> Engine<'a> {
 
     /// 虚调用版本未命中：本次接收者与上次记录的对照
     pub(super) fn prof_vmiss(&self, m: usize, off: u32, recv: &[u32]) {
+        if !self.ctx.stats.borrow().sprof.on {
+            return;
+        }
         let old = self.recv_fp.get(&m).and_then(|d| d.get(&off)).and_then(|r| r.recv_list());
         let new = match old {
             Some(o) => recv.iter().filter(|x| o.binary_search(x).is_err()).count(),
@@ -210,6 +226,9 @@ impl<'a> Engine<'a> {
         use serde_json::json;
         let st = self.ctx.stats.borrow();
         let p = &st.sprof;
+        if !p.enabled {
+            return serde_json::Value::Null;
+        }
         let trig_name = |s: u8| -> String {
             if s == u8::MAX {
                 "?".into()
@@ -273,6 +292,9 @@ impl<'a> Engine<'a> {
 
 impl SiteProf {
     pub(super) fn note_push(&mut self, w: (usize, u32), src: u8, node: Option<Node>, new: bool) {
+        if !self.enabled {
+            return;
+        }
         self.pushes.entry(src).or_default()[usize::from(!new)] += 1;
         if new {
             self.trig.insert(w, Trig { src, node });

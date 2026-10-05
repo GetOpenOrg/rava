@@ -62,6 +62,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.seeds.locales = input.locales.clone();
     e.cold_cut = input.cold_cut;
+    e.set_site_prof(input.diag.site_prof);
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
         e.flow_batch = n;
     }
