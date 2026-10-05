@@ -2160,8 +2160,8 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
 
 | 出口 | 上下文链（摘要） | 真实 JVM | 对应精度项 |
 |---|---|---|---|
-| `ServiceLoader$ModuleServicesLookupIterator`（及 JCA 路） | `sun/nio/fs/Util.<clinit>@5` → `Charset.forName #@13536:5` → `lookup` → `lookup2@48` → `lookupExtendedCharset@8` → `ExtendedProviderHolder.<clinit>` → `ServiceLoader.iterator` | 字符集名取 `sun.jnu.encoding`，标准字符集，`lookup2` 在标准提供者处命中，不触发扩展提供者 | 3（字符串值集：系统属性值 → 标准字符集名集合，`lookup2` 按值集折叠） |
+| `ServiceLoader$ModuleServicesLookupIterator`（及 JCA 路） | `sun/nio/fs/Util.<clinit>@5` → `Charset.forName #@13536:5` → `lookup` → `lookup2@48` → `lookupExtendedCharset@8` → `ExtendedProviderHolder.<clinit>` → `ServiceLoader.iterator` | 字符集名取 `sun.jnu.encoding`（宿主区域 codeset，`[facts.system_properties] dynamic`，运行时 `posix::native_encoding`）；本机为标准字符集故不触发扩展提供者，但宿主为扩展字符集（如 EUC-JP）时真实可达 | 非精度缺陷：开放宿主下该路正确可达；收窄只能来自「扩展字符集提供者」本身按服务类型的选择（已按调用点服务类型选） |
 | `SecureRandom` 的方法体 | `boot2@240` → `SystemModuleFinder.<init>` → `Set.of` → `Set12.<init>@9` 分派 `ModuleReferenceImpl.equals` → `Objects.equals #@8078:22` → `ModuleDescriptor.equals` → `Objects.equals #@8082:151` → `Version.equals` → `compareTokens@105` 对 `List<Object>` 元素 `toString` | `Version` 的记号只有 `String` / `Integer` | 容器元素类型：`compareTokens` 读出的元素是 open(Object)，全部活类型的 `toString` 入链（`Objects.equals` 已按调用点克隆，但汇合发生在元素读出处） |
 | `java.util.stream` | `FileOutputStream.<clinit>` → `SharedSecrets.ensureClassInitialized #@210:10` → `Lookup.ensureInitialized@19` → `StringBuilder.append(Object)`（实例汇合点，未克隆）→ `String.valueOf(Object) #@515:2` → `ModuleDescriptor$Exports.toString` → `ModuleDescriptor.toString(Set,String)` → `Collection.stream` | `ensureInitialized` 只在访问检查失败时拼异常消息 | G2 实例汇合点（`append(Object)`）：§6.7 实测按调用点克隆不分开；需按实参值集（而非形参汇合）分派 `toString` |
 
-结论：三处出口分属精度项 3、容器元素类型、实例汇合点三类，均与引导层本身无关；锚点启用仍以这些精度项为前置。
+结论：第一处随宿主正确可达；其余两处分属容器元素类型、实例汇合点两类精度项，均与引导层本身无关；锚点启用仍以它们为前置。
