@@ -10,7 +10,7 @@
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
 //! `--locale <标签>`（locale 资源束种子）；
 //! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
-//! `--dump-edges <文件>`（触发边转储）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
+//! `--dump-edges <文件>`（触发边转储）、`--site-prof`（读者站点重跑剖析，进 `summary.perf.site_prof`）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
 //! 引导映像：`--boot-report <报告.md>`（写构建期引导映像审计报告；求值失败即命令失败，`rava audit boot` 用）。
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
@@ -37,7 +37,7 @@ const VALUE_OPTS: &[&str] = &[
     "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
-const FLAG_OPTS: &[&str] = &["--cold-cut"];
+const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof"];
 
 /// 参数校验：恰一个位置参数（输入），其余都是已知选项（带值选项须有值）
 fn check_args(rest: &[String]) -> Result<(), String> {
@@ -88,7 +88,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new() })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -164,7 +164,10 @@ pub fn run(args: &Args) -> Result<(), String> {
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
-        diag: closure::engine::Diag { flows: flows.iter().map(|f| f.to_string()).collect(), ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
+        diag: closure::engine::Diag {
+            flows: flows.iter().map(|f| f.to_string()).collect(),
+            site_prof: args.rest.iter().any(|a| a == "--site-prof"),
+            ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };

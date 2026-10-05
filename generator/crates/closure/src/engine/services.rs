@@ -97,9 +97,7 @@ impl<'a> Engine<'a> {
             return;
         }
         for w in self.seeds.services.unknown_sites.clone() {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+            self.push_site(w, site_prof::TRIG_SERVICES, None);
         }
     }
 

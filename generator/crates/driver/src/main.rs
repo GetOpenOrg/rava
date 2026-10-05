@@ -33,7 +33,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N] [--cut <类.方法:描述符[@偏移]>]… [--cut-file <文件>]… [--dump-edges <文件>]\n  \
+        "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N] [--cut <类.方法:描述符[@偏移]>]… [--cut-file <文件>]… [--dump-edges <文件>] [--site-prof]\n  \
          rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--release | --dev-opt] [--target-dir D] [--keep-artifacts] [--closure-cache D] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F] [--profile profile.json]\n  \
          rava compile <scratch> [--release | --dev-opt] [--target-dir D] [--build-timeout 秒] [--keep-artifacts] [--runtime R]\n  \
          rava prune <scratch>…\n  \

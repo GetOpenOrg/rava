@@ -140,6 +140,8 @@ pub(super) struct Stats {
     first_release: Option<Instant>,
     /// 首次放行时的工作量快照：[分析次数, 站点重跑, lambda 重跑, 流边数, 集合并入次数]
     pub(super) at_release: Option<[u64; 5]>,
+    /// 读者站点重跑剖析（V12，`site_prof.rs`）
+    pub(super) sprof: super::site_prof::SiteProf,
 }
 
 /// 读者站点重跑的事件种类名（[`rerun_kind`] 的下标）
@@ -197,6 +199,7 @@ impl Default for Stats {
             born: Instant::now(),
             first_release: None,
             at_release: None,
+            sprof: Default::default(),
         }
     }
 }
@@ -320,6 +323,7 @@ impl<'a> Engine<'a> {
     /// `summary.perf`：分阶段自耗时、峰值内存、重分析分布与失效原因
     pub fn perf_json(&self, top: usize) -> serde_json::Value {
         use serde_json::json;
+        let sprof = self.site_prof_json();
         let s = self.ctx.stats.borrow();
         let ms = |d: Duration| d.as_millis() as u64;
         let phases: serde_json::Map<String, serde_json::Value> =
@@ -366,6 +370,7 @@ impl<'a> Engine<'a> {
             "at_first_release": s.at_release,
             "lcall_reruns": s.lcall_reruns,
             "recv_fp": s.recv_fp,
+            "site_prof": sprof,
             "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
@@ -409,7 +414,7 @@ impl Ctx<'_> {
 
 /// 节点种类数与序号（推送计数用；与 `node_kind` 同序）
 pub(super) const KINDS: usize = 19;
-const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall", "K", "NR"];
+pub(super) const KIND_NAMES: [&str; KINDS] = ["P", "R", "Spool", "Scatch", "S", "F", "U", "O", "E", "Array", "A", "W", "HP", "HR", "Esc", "G", "Rcall", "K", "NR"];
 
 #[inline]
 pub(super) fn kind_ix(n: &Node) -> usize {

@@ -168,6 +168,7 @@ impl<'a> Engine<'a> {
     pub(super) fn push_m(&mut self, m: usize) {
         if self.in_mwork.insert(m) {
             self.mwork.push_back(m);
+            self.ctx.stats.borrow_mut().sprof.mpush += 1;
         }
     }
 }
