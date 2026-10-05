@@ -51,7 +51,7 @@ impl<'a> Engine<'a> {
                     V::Ref { .. } | V::Str(..) => {
                         // 合流前的各字面量（如按条件二选一的名字）与形参上流入的字符串常量
                         site_names.extend(a.site_lits());
-                        names.extend(a.lits());
+                        names.extend(a.site_lits());
                         names.extend(self.param_strs(m, off, a));
                         names.extend(self.field_strs(m, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
@@ -133,7 +133,9 @@ impl<'a> Engine<'a> {
                 if !spos.contains(&i) {
                     continue;
                 }
-                fnames.extend(a.lits());
+                // 常量格给出的名字（`V::derived_str`）按来源取：形参（配对或各调用点常量）、字段写入字面量集、
+                // 辅助方法返回常量。中间态常量若当字面量按名放开，形参配对后的终态不再给出该名，放开不撤回（D1）
+                fnames.extend(a.site_lits());
                 if matches!(a, V::Ref { .. }) || a.derived_str() {
                     let mut paired = false;
                     for &c in &cpos {
@@ -143,6 +145,7 @@ impl<'a> Engine<'a> {
                         fnames.extend(self.param_strs(m, off, a));
                     }
                     fnames.extend(self.field_strs(m, a));
+                    fnames.extend(self.site_strs(m, a));
                 }
             }
             for name in &fnames {
