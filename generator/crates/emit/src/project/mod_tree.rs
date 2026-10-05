@@ -41,7 +41,7 @@ impl CompanionDeps {
 
     /// 一条路径引用（`super::…` / `crate::…`）指向的模块文件是否在场。
     /// 逐段下行：目录 → 进入；`<seg>.rs` / `<seg>_t.rs` → 在场；crate 根层的名字属 lib.rs
-    /// 基础设施、大写段是 glob 再导出的类型 → 不再判定；包目录下缺席的小写段 → 缺席
+    /// 基础设施 → 不再判定。包目录下的其余段按 [`Self::item_present`] 精确判定
     fn path_present(&self, dir: &Path, segs: &[String]) -> bool {
         let (mut cur, rest) = match segs.first().map(String::as_str) {
             Some("crate") => (self.src_root.clone(), &segs[1..]),
@@ -68,28 +68,28 @@ impl CompanionDeps {
             if cur == self.src_root {
                 return true;
             }
-            if seg.starts_with(|c: char| c.is_ascii_uppercase()) {
-                // 大写段三类：手写层 pub item（overlay 全量复制，永不缺席）；
-                // 生成类（文件名 = snake 化类名，本轮可能未生成）按 snake 名探测 scratch；
-                // 「目录 + 同名 .rs」并存（array/ 与 array.rs）时类型可能在 .rs 模块体里，
-                // 保守在场。三者皆不满足才是依赖缺失——companion 不声明，方法回落存根
-                if self.hw_items.contains(seg) {
-                    return true;
-                }
-                let snake = to_snake(seg);
-                if cur.join(format!("{snake}.rs")).is_file()
-                    || cur.join(format!("{snake}_t.rs")).is_file()
-                    || cur.join(&snake).is_dir()
-                {
-                    return true;
-                }
-                return cur.with_extension("rs").is_file();
-            }
-            // 其余段（小写模块名 / `__` 前缀内部类型）：不以「文件即模块」形态存在，
-            // 视为在场——缺席只由前述显式探测判
-            return true;
+            return self.item_present(&cur, seg);
         }
         true
+    }
+
+    /// 包目录 `cur` 下既非子目录、也非同名模块文件的段 `seg`（glob 再导出的条目名）是否在场：
+    /// - 手写层顶层 pub item（类型 / 函数 / 常量 / pub mod，overlay 全量复制）→ 在场；
+    /// - `_` 前缀：宏展开生成的内部条目（`__Xxx`），不以文件形态存在 → 在场；
+    /// - 大写段：生成类按 snake 化文件名（`Proxy_Dyn` → `proxy_dyn.rs`）或同名目录探测 scratch；
+    /// - 「目录 + 同名 .rs」并存（`array/` 与 `array.rs`）：条目可能在 .rs 模块体里 → 在场；
+    /// - 其余（如 `member_name` 而 `member_name.rs` 本轮未生成）→ 缺席：companion 不声明，方法回落存根
+    fn item_present(&self, cur: &Path, seg: &str) -> bool {
+        if self.hw_items.contains(seg) || seg.starts_with('_') {
+            return true;
+        }
+        if seg.starts_with(|c: char| c.is_ascii_uppercase()) {
+            let snake = to_snake(seg);
+            if cur.join(format!("{snake}.rs")).is_file() || cur.join(format!("{snake}_t.rs")).is_file() || cur.join(&snake).is_dir() {
+                return true;
+            }
+        }
+        cur.with_extension("rs").is_file()
     }
 
     /// `dir/<base>_impl.rs`（或 `_ext.rs`）的全部路径引用在场
