@@ -238,13 +238,22 @@ fn pass_while(seq: &mut [Item]) {
         // 首个有效项（Decl 计入）
         let Some(pos) = l.body.iter().position(|b| !b.is_insignificant()) else { continue };
         let Item::If(first) = &l.body[pos] else { continue };
-        let then_sig = significant(&first.then);
-        let is_guard = significant(&first.else_).is_empty()
-            && matches!(then_sig[..], [Item::Break(b)] if *b == exit);
+        // 守卫的全量形态：then 臂恰为一个 Break（无隐藏空块），else 臂只剩身份承载项
+        // ——空 Code / Decl 对可读性不可见，但携带块号与跳转账目，守恒不变量
+        // （verify_tree）要求每个活块在树中恰出现一次，移除守卫时必须保留
+        let identity_only = first
+            .else_
+            .iter()
+            .all(|e| matches!(e, Item::Code { .. } | Item::Decl(_)));
+        let is_guard = matches!(&first.then[..], [Item::Break(b)] if *b == exit)
+            && significant(&first.else_).is_empty()
+            && identity_only;
         if is_guard {
-            l.while_cond = Some(first.cond.negate());
-            l.cond_origin = Some(first.origin);
-            l.body.remove(pos);
+            let taken = std::mem::replace(&mut l.body[pos], Item::Decl(Vec::new()));
+            let Item::If(mut fi) = taken else { unreachable!("上面已匹配为 If") };
+            l.while_cond = Some(fi.cond.negate());
+            l.cond_origin = Some(fi.origin);
+            l.body.splice(pos..=pos, std::mem::take(&mut fi.else_));
         }
     }
 }
