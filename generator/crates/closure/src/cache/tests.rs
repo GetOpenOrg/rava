@@ -56,7 +56,7 @@ fn base() -> Case {
 }
 
 fn key_of(c: &Case, user: &Path, jar: &Path, rt: &Path) -> String {
-    let mut cp = ClassPath::new();
+    let mut cp = ClassPath::new(21);
     cp.add(c.user_origin, user).unwrap();
     cp.add(Origin::Jdk, jar).unwrap();
     let input = Input {

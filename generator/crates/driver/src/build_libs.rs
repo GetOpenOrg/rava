@@ -20,14 +20,14 @@ pub struct Libs {
     pub jars: Vec<PathBuf>,
 }
 
-pub fn load(specs: &[LibSpec]) -> Result<Libs, String> {
+pub fn load(specs: &[LibSpec], release: u32) -> Result<Libs, String> {
     let mut out = Libs::default();
     for s in specs {
         if !s.jar.is_file() {
             return Err(format!("--lib jar 不存在：{}", s.jar.display()));
         }
         let jar = std::path::absolute(&s.jar).unwrap_or_else(|_| s.jar.clone());
-        let lc = LibCrate::from_jar(&s.name, &jar, s.seeds.is_none()).map_err(|e| e.to_string())?;
+        let lc = LibCrate::from_jar(&s.name, &jar, s.seeds.is_none(), release).map_err(|e| e.to_string())?;
         if lc.jar_classes.is_empty() {
             return Err(format!("jar 中未找到类条目：{}", jar.display()));
         }
@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn missing_jar_is_error() {
         let spec = LibSpec { name: "x".into(), jar: PathBuf::from("/nonexistent/x.jar"), seeds: None };
-        assert_eq!(load(&[spec]).unwrap_err(), "--lib jar 不存在：/nonexistent/x.jar");
-        assert!(load(&[]).unwrap().crates.is_empty());
+        assert_eq!(load(&[spec], 21).unwrap_err(), "--lib jar 不存在：/nonexistent/x.jar");
+        assert!(load(&[], 21).unwrap().crates.is_empty());
     }
 }

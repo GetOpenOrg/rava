@@ -96,7 +96,7 @@ fn scan(o: &BuildOpts, tag: &str) -> Result<Gaps, String> {
 
 fn scan_in(o: &BuildOpts, rt: &Path, home: &Path, tmp: &Path) -> Result<Gaps, String> {
     let classes = tmp.join("classes");
-    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs, resolve::jdk::major_of(home).unwrap_or(0))?;
     javac(home, &o.inputs, &jars, &classes)?;
     let cp = class_path(&classes, &jars, home, &image_dirs(o, home, rt))?;
     let user = user_order(&cp, &o.inputs, o.main.as_deref())?;

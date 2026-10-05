@@ -24,9 +24,13 @@ LIBS="${PILOT_LIBS:-$REPO_ROOT/tests/lib_pilot/deps/target/pilot-libs}"
 # 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
 . "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile|--emit-only]}"
 TRANSPILE=1
+EMIT_ONLY=0
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
+# --emit-only：只做转译（--stop-after emit）即退，scratch 供 scripts/compare_trees.sh 对照；
+# scratch 根可用 SCRATCH_ROOT 覆盖（缺省 $REPO_ROOT/build），双提交树对比时两轮各给不同根
+[[ "${2:-}" == "--emit-only" ]] && EMIT_ONLY=1
 
 cd "$REPO_ROOT/tests/lib_pilot"
 mkdir -p golden
@@ -77,7 +81,7 @@ echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
 echo "== [2/3] 转译 + 编译 + 运行（翻译 crate）=="
 cd "$REPO_ROOT"
-SCRATCH="$REPO_ROOT/build/$(python3 - "$MAIN" <<'PY'
+SCRATCH="${SCRATCH_ROOT:-$REPO_ROOT/build}/$(python3 - "$MAIN" <<'PY'
 import re, sys
 print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
@@ -86,6 +90,10 @@ if [[ "$TRANSPILE" == 1 ]]; then
     "$RAVA" build "tests/lib_pilot/$MAIN.java" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
         --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
         || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
+fi
+if [[ "$EMIT_ONLY" == 1 ]]; then
+    echo "emit-only：$SCRATCH"
+    exit 0
 fi
 "$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
