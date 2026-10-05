@@ -17,22 +17,22 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 2. Inner struct（平铺字段：superclass_fields + own ctx.fields）—— 非泛型（A-1 存储层擦除）
     // ══════════════════════════════════════════════════════════════════════════
 
-    let erased_ref_cell: TokenStream2 =
-        quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<Object>>>> };
+    // 字段单元内联于存储（与对象同一分配）：基本字段 `__PrimCell<T>`（普通字段 relaxed、volatile
+    // 字段 SeqCst，由访问器选择），引用字段 `__RefField<Option<T>>`（`None` = 从未写入）。
+    // 擦除字段以 Object 存储（声明类型提及类型形参；JVM 字段存储按描述符擦除）。
+    // 存储只由分配钩子建立在 `__Shared` 中，wrapper 重建钩子经 `__Ref::from_storage` 共享
+    // 同一存储（不复制），对象标识即存储地址。
+    let erased_ref_cell: TokenStream2 = quote! { __RefField<::std::option::Option<Object>> };
     let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
 
-    // 继承字段（平铺，不再有 _super）
-    // 用 Rc<Cell<T>> / Rc<RefCell<...>> 而非裸 Cell/RefCell，保证 NeedsWrapper clone
-    // 时共享同一个 Cell，mutations 对原始 inner struct 可见（否则 clone 是值拷贝，
-    // __set_xxx 修改的是孤立副本，调用方看不到变化）。
-    // 擦除字段以 Object 存储（声明类型提及类型形参；JVM 字段存储按描述符擦除）。
+    // 继承字段（平铺，最深祖先在前）
     for (name, ty) in &ctx.meta.superclass_fields {
         let cell_ty = if ctx.is_erased(name) {
             erased_ref_cell.clone()
         } else if ctx.inherited_is_basic(name, ty) {
-            quote! { __Shared<__PrimCell<#ty>> }
+            quote! { __PrimCell<#ty> }
         } else {
-            quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<#ty>>>> }
+            quote! { __RefField<::std::option::Option<#ty>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
@@ -42,27 +42,19 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         let cell_ty = if ctx.is_erased(name) {
             erased_ref_cell.clone()
         } else if is_basic(ty) {
-            quote! { __Shared<__PrimCell<#ty>> }
+            quote! { __PrimCell<#ty> }
         } else {
-            quote! { __Shared<__RefSlot<::std::option::Option<::std::boxed::Box<#ty>>>> }
+            quote! { __RefField<::std::option::Option<#ty>> }
         };
         inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
     }
 
-    // 对象标识单元：wrapper 钩子按值克隆 __inner 重建视图时随之共享，Default（新对象）各自新建
-    inner_field_tokens.push(quote! { pub(crate) __identity: __Shared<()> });
-
-    // `repr(C)` + 每个字段一个 `__Shared` 细指针：第 i 个字段位于基址 + i 个指针宽，描述符的
-    // `fields` / `field_base` 据此定位字段（S7-3，`field_desc`）；断言守护该布局
-    let field_count = ctx.meta.superclass_fields.len() + ctx.fields.len();
+    // 字段在存储中的位置由分配钩子旁的偏移表给出（`storage_hooks`，描述符 `offsets`，S7-3）
     let inner_struct = quote! {
-        #[derive(::core::clone::Clone, ::core::default::Default, ::core::cmp::PartialEq, ::core::fmt::Debug)]
-        #[repr(C)]
+        #[derive(::core::default::Default, ::core::fmt::Debug)]
         pub(crate) struct #inner_ident {
             #(#inner_field_tokens,)*
         }
-        const _: () = ::core::assert!(::core::mem::offset_of!(#inner_ident, __identity)
-            == #field_count * ::core::mem::size_of::<usize>());
     };
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -234,7 +226,7 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 fn as_any(&self) -> &dyn ::std::any::Any { self }
                 #desc_query
                 fn __identity(&self) -> *const () {
-                    __Shared::as_ptr(&self.__identity) as *const ()
+                    self as *const Self as *const ()
                 }
                 #hash_code_inner_bridge
                 #equals_inner_bridge

@@ -87,6 +87,8 @@ pub struct SuperFields {
     pub reference: Vec<String>,
     /// 祖先按自身类型形参声明的字段（声明方已 Object 化）
     pub erased: Vec<String>,
+    /// 祖先声明为 volatile 的字段（存储访问器取顺序一致原子序，普通字段取 relaxed）
+    pub volatile: Vec<String>,
     /// Rust 名与 Java 名不同的继承字段：`声明类.Java 名=Rust 名`（宏属性 `field_slots`）
     pub slots: Vec<String>,
 }
@@ -132,6 +134,9 @@ pub fn flatten_super_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> SuperFields {
             }
             if params.iter().any(|p| contains_word(&declared_ty, p)) {
                 out.erased.push(name.clone());
+            }
+            if f.access & super::attrs::ACC_VOLATILE != 0 {
+                out.volatile.push(name.clone());
             }
             out.fields.push((name, view));
         }

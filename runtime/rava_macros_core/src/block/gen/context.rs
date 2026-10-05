@@ -111,6 +111,8 @@ pub(crate) struct GenContext<'a> {
 
     // ── 字段 ──────────────────────────────────────────────────
     pub(crate) fields: &'a [(Ident, Type)],
+    /// 声明为 volatile 的自有实例字段
+    pub(crate) volatile_own: &'a HashSet<String>,
     /// 值类型字段名（供 Rewriter 使用）
     pub(crate) basic_names: HashSet<String>,
     /// 引用类型字段名（供 Rewriter 使用）
@@ -153,6 +155,12 @@ impl<'a> GenContext<'a> {
         self.erased_own.contains(&name.to_string())
             || self.erased_super.contains(&name.to_string())
             || self.meta.superclass_erased_fields.contains(&name.to_string())
+    }
+
+    /// volatile 实例字段（自有 + 继承）：存储访问器取顺序一致原子序，普通字段取 relaxed
+    pub(crate) fn is_volatile(&self, name: &syn::Ident) -> bool {
+        let n = name.to_string();
+        self.volatile_own.contains(&n) || self.meta.superclass_volatile_fields.contains(&n)
     }
 
     /// vtable 侧方法体改写（`__inner` trait 实现 / base 函数）：字段访问改写 + 擦除字段
@@ -340,6 +348,7 @@ impl<'a> GenContext<'a> {
             erased_ty_args,
             meta,
             fields: &input.fields,
+            volatile_own: &input.volatile_fields,
             basic_names,
             ref_names,
             erased_own,

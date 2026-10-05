@@ -6,7 +6,8 @@
 //!   - `fn __clinit() -> Result<()>`   `<clinit>` 字节码的翻译
 //!
 //! 宏把它们展开为：
-//!   - 进程级存储（`__process_static!`，单线程后端即 `thread_local!` + `RefCell<Option<T>>`，无 `static mut` / unsafe）
+//!   - 进程级无锁存储：常量初始化的普通 `static`——基本类型 `__PrimCell<T>`（原子），引用类型
+//!     `__RefField<Option<T>>`（内联自旋单元），无 `OnceLock` 惰性层、无 `static mut`
 //!   - `NAME()` / `set_NAME(v)` 访问器：入口先触发 `__class_init()`
 //!   - `__class_init()`：状态机保证 `<clinit>` 恰好执行一次；初始化进行中的同线程递归
 //!     访问立即返回（JVMS §5.5 步骤 3）；先初始化父类（步骤 7）；`<clinit>` 抛异常后类
@@ -22,7 +23,12 @@ use quote::{format_ident, quote};
 use syn::{Attribute, Block, Ident, ReturnType, Signature, Type};
 
 use super::parse::StaticItem;
-use super::util::{is_basic, strip_meta_attrs};
+use super::util::{is_basic, java_field_is_volatile, strip_meta_attrs};
+
+/// 可放入原子基本单元的 static 字段类型（JVM 基本类型的 Rust 映射；`__AtomicRepr` 实现集）
+fn is_atomic_prim(ty: &Type) -> bool {
+    is_basic(ty) && !matches!(quote!(#ty).to_string().as_str(), "i128" | "u128")
+}
 
 /// `<clinit>` 翻译函数在块内的固定名字。
 pub(crate) const CLINIT_FN: &str = "__clinit";
@@ -130,12 +136,27 @@ pub(crate) fn expand_statics(
         let cell = format_ident!("__STATIC_{}_{}", struct_ident, name);
         let setter = format_ident!("set_{}", name);
         let (raw_get, raw_set) = (raw_getter(name), raw_setter(name));
+        // 无锁静态单元（R1 Q1(a)）：常量初始化的普通 `static`，不经 `OnceLock`。
+        // 基本类型为原子单元（普通字段 relaxed、volatile 为 SeqCst）；引用类型为内联自旋单元
+        // （读写经获取 / 释放序）。`<clinit>` 写入与读者之间的 happens-before 由初始化状态的
+        // 发布（`clinit_exit`）/ 观察（`__class_init` 快路径）给出（JLS §12.4.2）
+        let (cell_ty, load, store) = if is_atomic_prim(ty) {
+            let (load, store) = if java_field_is_volatile(&st.attrs) {
+                (quote! { #cell.get() }, quote! { #cell.set(v) })
+            } else {
+                (quote! { #cell.get_plain() }, quote! { #cell.set_plain(v) })
+            };
+            (quote! { __PrimCell<#ty> = __PrimCell::zeroed() }, load, store)
+        } else {
+            (
+                quote! { __RefField<::std::option::Option<#ty>> = __RefField::new(::std::option::Option::None) },
+                quote! { #cell.get_or_default() },
+                quote! { #cell.set(::std::option::Option::Some(v)) },
+            )
+        };
         storage.push(quote! {
-            __process_static! {
-                #[allow(non_upper_case_globals)]
-                static #cell: __RefSlot<::std::option::Option<#ty>> =
-                    const { __RefSlot::new(::std::option::Option::None) };
-            }
+            #[allow(non_upper_case_globals)]
+            static #cell: #cell_ty;
         });
         if !getter_handwritten {
             members.push(quote! {
@@ -152,8 +173,7 @@ pub(crate) fn expand_statics(
                 #[inline]
                 #vis fn #raw_get() -> Result<#ty> {
                     __safepoint();
-                    let __v = ::std::clone::Clone::clone(&*#cell.force().borrow());
-                    Ok(__v.unwrap_or_default())
+                    Ok(#load)
                 }
             });
         }
@@ -170,7 +190,7 @@ pub(crate) fn expand_statics(
                 #[allow(non_snake_case)]
                 #[inline]
                 #vis fn #raw_set(v: #ty) -> Result<()> {
-                    *#cell.force().borrow_mut() = ::std::option::Option::Some(v);
+                    #store;
                     Ok(())
                 }
             });
@@ -331,10 +351,8 @@ pub(crate) fn expand_class_init(
 ) -> (TokenStream2, TokenStream2) {
     let state = format_ident!("__CLINIT_STATE_{}", struct_ident);
     let storage = quote! {
-        __process_static! {
-            #[allow(non_upper_case_globals)]
-            static #state: __PrimCell<u8> = const { __PrimCell::new(0) };
-        }
+        #[allow(non_upper_case_globals)]
+        static #state: __PrimCell<u8> = __PrimCell::zeroed();
     };
     let init_super = superclass.map(|sup| quote! { <#sup>::__class_init()?; });
     // JVMS §5.5 步骤 7：父类之后、本类 `<clinit>` 之前，初始化带 default 方法的超接口
@@ -349,7 +367,7 @@ pub(crate) fn expand_class_init(
     };
     let member = quote! {
         pub fn __class_init() -> Result<()> {
-            let __state = #state.force();
+            let __state = &#state;
             if __state.get() == 3 {
                 return Ok(());
             }
