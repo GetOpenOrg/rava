@@ -2260,3 +2260,61 @@ TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 在 
 native 缺失、`String.class.getModule()` 不是命名的 java.base），三者都依赖引导层，随第 2–3 步一起解决。不单独补手写近似：
 `PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
 仍然会抛 `InternalError("java.base not loaded")`。
+
+## 26. 前置第 1 项：`Class` 实例方法按接收者镜像求 `classLoader` / `module`（2026-10-05，分支 c1d-clsfact）
+
+提交 69d1c73d（基于集成分支 85a56289）。事实来源只有 `.class` / jmod 与 `runtime/java_runtime` 清单：定义加载器取
+`[vm_state.field_hooks]` 的接收者钩子与 `[vm_state.loader_map]`，模块归属取类路径来源（User / Lib = 无名模块）。生成器 crate
+不出现类名。
+
+### 26.1 改动
+
+| 层 | 改动 |
+|---|---|
+| 流图（`bytecode.rs` field） | 类镜像上读接收者钩子字段（`receiver = true`）时，镜像不再计入「其余接收者」，所以不接全局字段节点 `F`。值只来自钩子：应用 / 平台类镜像接钩子值池，引导类镜像恒为 null。此前一个镜像读到的是全部镜像的值并集（`getResourceAsStream@44` 在 boot 类上读到 AppClassLoader / PlatformClassLoader） |
+| 抽象解释（`absint.rs`） | 新增 `Oracle::param_mirror_field`。接收者只来自一个 Class 形参（通常是 `this`），且形参镜像值集全是引导类时，`this.classLoader` 折为 null。这是乐观答复，复用 `mirror_watch`，以哨兵 `HOOK_FIELD` 登记；值集新增非引导类镜像、所指未知的 Class 对象或 open 时重分析（`mirror_eq.rs::may_hook`） |
+| 引导阶段锚点（`boot_phases.rs`） | 实例字段锚点（`Class.module`）按接收者值集判定：值集只含用户类 / 库类镜像时不作根（boot-layer.md 2.1 的规则此前没有实现） |
+| 单测 | `absint::receiver_hook_field_folds_by_param_mirrors`、`mirror_eq::hook_answer_invalidates_on_non_boot_mirror` |
+
+`this.module` 没有做逐镜像的值折叠。现行 runtime 里 `Class.module` 从不写入，`getModule` 是手写；`Module.isNamed` 等也是手写
+（`Module` 在 `[vm_boundary]`）。命名 / 无名模块的区分要等 boot-layer 第 2 步加上 `Class.__vm_module` 接收者钩子、
+`Module` 回到字节码之后才有可读的值。到那时，流图这一侧已经按接收者钩子字段统一处理，不需要再改：钩子值池按镜像接入，不经 `F`。
+同一机制在 `module` 上缺的只有「引导类镜像 → java.base 模块对象」这一条值，需要有按模块名区分的抽象对象。
+
+### 26.2 验收
+
+| 口径 | 前（85a56289） | 后（69d1c73d） | 说明 |
+|---|---|---|---|
+| HelloWorld，无锚点 | 469 类 / 1813 方法 | 469 / 1813，集合逐项相同 | 只收窄：流图少接 `F` 边，折叠只去分支，锚点只少作根，三处都单调 |
+| HelloWorld，§25 临时 runtime（两锚点） | 3190 / 18611 | 3190 / 18611，集合逐项相同 | 折叠确实生效：`Class.getResourceAsStream` 的 `@44` / `@108` 折为 null，死区 `[60,103]`、`[121,127]`（命名模块走 BuiltinClassLoader 的分支和 `cl.getResourceAsStream`） |
+
+**锚点口径没有下降**。§25.2 估的「约 1852 类」是首达链归因，不是必经路径。反事实切除（`--cut`，同一临时 runtime）：
+
+| 切除 | 类数 |
+|---|---|
+| 无 | 3190 |
+| `Class.getResourceAsStream` 整个方法体 / `@75` / `@75 @83 @95 @123` / `ClassLoader.getSystemResourceAsStream` | 均为 3190 |
+| `SecureRandom.<init>()V` | 3179 |
+| `ICUBinary.getRequiredData` | 3187 |
+| `ClassLoaders.<clinit>` | 3164 |
+| `ModuleBootstrap.boot2` 整个方法体 | 427 |
+| `boot2@352`（`BootLoader.loadModule`）/ `@363`（`defineModule`） | 3249 / 3249（切写入点不单调，见 §7） |
+| `boot2@896` / `@747 @815`（流水线） | 3190 / 3190 |
+| `boot2@194 @228 @240`（系统模块） | 3893（不单调） |
+
+膨胀全部在 `boot2` 之内，但切除 `boot2` 内任何单个出口都不能消除它，说明这是共享汇点饱和，不是某一条路径。`--flows @merge:300`
+的前几项：`System.arraycopy` P0 汇入 2604 类、P2 汇入 1679 类，`StringBuilder.append(Object)` P1 汇入 1210 类，escape 1026 类，
+`Formatter.format` 实参数组 871 类，`Unsafe.putReferenceRelease` / `compareAndSetReference` 769 / 725 类，`ComparableTimSort` /
+`Arrays.mergeSort` 约 480 类。`@openstat`：`Object` 在 21852 个节点上展开，引入点以 `Reference.get`（WeakHashMap$Entry、
+LocaleResources$ResourceReference）与 `HashMap$Node.getKey` 为首。建层代码一旦把模块系统的类型送进这些汇点，任何读出汇点的
+虚调用都会对全部类型分派，于是 JCA / ICU / XMLDSig / locale 全部可达。
+
+### 26.3 离判据还差多少
+
+判据：锚点口径 HelloWorld ≤ 569 类（469 + 100；真实 JVM `-Xshare:off` 加载 556 类）。本项完成后仍是 3190 类，**还差 2621 类**。
+这一项在锚点口径上没有贡献；它的作用是去掉 `Class` 接收者汇合本身的不精确（汇点饱和消除后，这里就不会再成为新的出口）。
+剩余前置按实测重新排序：
+1. 共享汇点：`System.arraycopy` 的形参、`append(Object)` / `String.valueOf(Object)`、`Unsafe` 引用 CAS / release 写，以及
+   `Reference.get` / `HashMap$Node.getKey` 的 Object 引入。这些属于 V10（逃逸对象上下文收拢）和 c1d-elem（容器元素类型）两条线。
+2. 两线合入后，用同一临时 runtime（`seeds.toml` 两锚点、`ModuleLayer` 移出 `[vm_boundary]`、删 `module_layer_impl.rs` 与两处
+   `Class.getModule` 手写）重测 HelloWorld，并重复本节的 `boot2` 切除和 `@merge` 测量；若还有残余，再按出口逐项立项。

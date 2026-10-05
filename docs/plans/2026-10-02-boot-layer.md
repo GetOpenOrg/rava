@@ -378,5 +378,9 @@ HelloWorld 经 `FileOutputStream.<clinit>` → `SharedSecrets.ensureClassInitial
 都是 `jdk/internal/module` 引导类。所以档案规模不是瓶颈，瓶颈是生产构建的单例规模。
 
 第 2–5 步暂不开工，前置条件见 c1d §25.4：`Class` 实例方法按接收者镜像求 `classLoader` / `module`、容器元素类型、实例汇合点。
-三项合入后重测，判据为 HelloWorld ≤ 569 类。具体求值器执行 initPhase2 的尝试在 `System.<clinit>` / SharedSecrets / `System.props`
+三项合入后重测，判据为 HelloWorld ≤ 569 类。
+
+**2026-10-05 第 1 项合入（c1d-clsfact 69d1c73d，c1d §26）**：`classLoader` 按镜像求值、`Class.module` 锚点按接收者值集判定（2.1 的规则落地）。
+锚点口径 HelloWorld 仍为 3190 类：切除 `boot2` 整体降到 427，但切除其中任何单个出口都降不下来。膨胀来自共享汇点饱和
+（`System.arraycopy`、`append(Object)`、Unsafe 引用写），由第 2、3 项承担。具体求值器执行 initPhase2 的尝试在 `System.<clinit>` / SharedSecrets / `System.props`
 处失败，因为那需要构建期引导映像语义（§25.3），不在本线范围内。

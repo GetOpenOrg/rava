@@ -309,7 +309,7 @@ regress2 遗留（◀── a2）───────────────�
 | BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
 | BS-B2 | ⏳ ◀── B1 | 栈还原按地址查表，release 加 strip=symbols |
 | BS-B3 | ⏳ ◀── B2 | opt=s / z 体积档位性能对照，交用户决定 |
-| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值、容器元素类型、实例汇合点（c1d §25.4，判据 HelloWorld ≤569 类）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
+| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值（✅ c1d-clsfact 69d1c73d，c1d §26：classLoader 逐镜像、`Class.module` 锚点按接收者；锚点口径 HelloWorld 仍为 3190，膨胀是 `boot2` 内共享汇点饱和，`arraycopy` / `append(Object)` / Unsafe 引用写）、容器元素类型、实例汇合点（c1d §25.4 / §26.3，判据 HelloWorld ≤569 类，差 2621）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
