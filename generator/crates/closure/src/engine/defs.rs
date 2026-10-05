@@ -238,9 +238,11 @@ pub(super) struct Hub {
     /// 经枢纽中转的目标
     pub(super) plain: BTreeSet<usize>,
     /// 逐调用点派发的 lambda / 手写实现对象接收者（含父枢纽的）
-    pub(super) lambdas: Vec<u32>,
+    /// 子枢纽建立时与父枢纽共享，自身展开追加时才复制（写时复制）
+    pub(super) lambdas: Rc<Vec<u32>>,
     /// 按调用点建模的目标 → 其接收者（含父枢纽的）：逐调用点接边，同目标的接收者合成一条
-    pub(super) special: BTreeMap<usize, Vec<u32>>,
+    /// 各接收者表与父枢纽共享、写时复制：重放时同一张表即祖先已全部送达
+    pub(super) special: BTreeMap<usize, Rc<Vec<u32>>>,
     /// 调用点（方法, 偏移）→ 接入记录（重接入时换新记录）
     pub(super) links: BTreeMap<(usize, u32), Rc<Link>>,
     /// 接入记录序号分配

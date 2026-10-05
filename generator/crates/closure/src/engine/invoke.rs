@@ -134,11 +134,12 @@ impl<'a> Engine<'a> {
                         // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
                         let exact = TypeSet { classes: since.s.classes, open: IdSet::default() };
                         let fresh = self.receivers(m, &exact, owner);
+                        let old = since.prev.as_ref().map_or(0, |p| p.len());
                         let recv: Rc<[u32]> = match since.prev {
                             Some(prev) => merge_sorted(&prev, &fresh).into(),
                             None => fresh.into(),
                         };
-                        self.prof_vmiss(m, off, &recv);
+                        self.prof_vmiss(recv.len(), recv.len() - old);
                         (recv, Some(since.s.open))
                     }
                 };

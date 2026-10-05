@@ -210,22 +210,15 @@ impl<'a> Engine<'a> {
     }
 
     /// 虚调用版本未命中：本次接收者与上次记录的对照
-    pub(super) fn prof_vmiss(&self, m: usize, off: u32, recv: &[u32]) {
-        if !self.ctx.stats.borrow().sprof.on {
-            return;
-        }
-        let old = self.recv_fp.get(&m).and_then(|d| d.get(&off)).and_then(|r| r.recv_list());
-        let new = match old {
-            Some(o) => recv.iter().filter(|x| o.binary_search(x).is_err()).count(),
-            None => recv.len(),
-        };
+    /// 虚调用值集未命中：本次接收者数与其中相对上次新增的个数（新增由增量合并直接得出，O(1)）
+    pub(super) fn prof_vmiss(&self, total: usize, new: usize) {
         let mut st = self.ctx.stats.borrow_mut();
         let p = &mut st.sprof;
         if !p.on {
             return;
         }
         p.vmiss[0] += 1;
-        p.vmiss[1] += recv.len() as u64;
+        p.vmiss[1] += total as u64;
         p.vmiss[2] += new as u64;
         p.vmiss[3] += u64::from(new == 0);
     }
