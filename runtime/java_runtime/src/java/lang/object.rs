@@ -506,6 +506,17 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
     }
 }
 
+/// Object 所持指针上的 null 判定（`obj.0.is_jvm_null()`）：Java null 恰为不计数的静态哨兵
+/// （`JVM_NULL`、类 / 接口类型化 null、`__ArrayNull<T>`），堆对象恒非 null——只测指针标记位，
+/// 不经 vtable。固有方法先于 `ObjectVTable::is_jvm_null` 解析；vtable 的应答与之一致。
+impl __Obj<dyn ObjectVTable> {
+    #[inline]
+    pub fn is_jvm_null(&self) -> bool {
+        debug_assert_eq!(self.is_static(), (**self).is_jvm_null(), "null 与静态哨兵不一致");
+        self.is_static()
+    }
+}
+
 /// `Object` — 所有 Java 类的运行时表示。
 ///
 /// 内部结构：`__Obj<dyn ObjectVTable>`（引用计数指针，null 为不计数的静态哨兵，见 `obj_ref`）

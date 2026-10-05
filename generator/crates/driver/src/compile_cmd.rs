@@ -1,6 +1,6 @@
 //! 编译阶段：`rava build` 的 compile 段与 `rava compile <scratch>` 共用。
 //!
-//! `rava compile <scratch> [--release | --dev-opt] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
+//! `rava compile <scratch> [--release | --release-small | --dev-opt] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
 //! `rava build --stop-after emit` 发射好的工作区（bin 名与重型判定输入读自 `build_status.json` 的 emit 段），
 //! 更新 `build_status.json` / `build_artifacts.json`。批量编排先并行发射、再逐个编译时用它——发射进程
 //! 不必常驻等待共享 target 的 cargo 文件锁。
@@ -53,12 +53,14 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
     let mut scratch = None;
     let mut c = CompileArgs::default();
     let mut runtime = None;
-    let (mut dev_opt, mut release) = (false, false);
+    let mut profiles = Vec::new();
     let mut it = rest.iter();
     while let Some(a) = it.next() {
+        if let Some(p) = BuildProfile::of_flag(a) {
+            profiles.push(p);
+            continue;
+        }
         match a.as_str() {
-            "--release" => release = true,
-            "--dev-opt" => dev_opt = true,
             "--keep-artifacts" => c.keep_artifacts = true,
             "--target-dir" | "--build-timeout" | "--runtime" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
@@ -73,7 +75,7 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
             s => return Err(format!("多余参数：{s}")),
         }
     }
-    c.profile = BuildProfile::from_flags(dev_opt, release)?;
+    c.profile = BuildProfile::from_flags(&profiles)?;
     Ok((scratch.ok_or("缺少 scratch 工作区目录")?, c, runtime))
 }
 
@@ -111,6 +113,8 @@ mod tests {
         assert!(c.profile == BuildProfile::Release && !c.keep_artifacts);
         assert_eq!(parse(&args("/s --dev-opt")).unwrap().1.profile, BuildProfile::DevOpt);
         assert!(parse(&args("/s --dev-opt --release")).is_err(), "档位互斥");
+        assert_eq!(parse(&args("/s --release-small")).unwrap().1.profile, BuildProfile::ReleaseSmall);
+        assert!(parse(&args("/s --release --release-small")).is_err(), "档位互斥");
         assert!(parse(&args("/s --keep-artifacts")).unwrap().1.keep_artifacts);
         assert_eq!(c.target_dir, Some(PathBuf::from("/t")));
         assert_eq!(c.build_timeout, Some(9));

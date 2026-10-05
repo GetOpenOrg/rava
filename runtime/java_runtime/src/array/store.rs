@@ -1,4 +1,4 @@
-//! JArray 的元素存储：无锁（宿主 array.rs 的私有辅助模块）
+//! JArray 的元素存取：无锁（宿主 array.rs 的私有辅助模块）
 //!
 //! - 基本元素：元素本身就是同宽原子单元（`AtomicU8/16/32/64::from_ptr`），普通读写为 relaxed
 //!   （JMM 对普通数组元素不要求互斥与顺序；同步动作的获取 / 释放序给出 happens-before），原子
@@ -14,16 +14,18 @@ use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::sync_model::__RefField;
 
-/// 基本元素槽：只经同宽原子指令访问（`repr(transparent)`：`Box<[T]>` 可原地转为槽切片）
+/// 基本元素槽：只经同宽原子指令访问（`repr(transparent)`：元素区可按 T 写入、按槽读取）
 #[repr(transparent)]
 pub(super) struct PrimSlot<T>(UnsafeCell<T>);
 
 // 槽只经原子指令访问
 unsafe impl<T: Send> Sync for PrimSlot<T> {}
 
-pub(super) enum Store<T> {
-    Prim(Box<[PrimSlot<T>]>),
-    Ref(Box<[__RefField<T>]>),
+/// 数组对象的元素区（紧随 `__ArrayObj`，见 obj.rs）
+#[derive(Clone, Copy)]
+pub(super) enum Store<'a, T> {
+    Prim(&'a [PrimSlot<T>]),
+    Ref(&'a [__RefField<T>]),
 }
 
 /// 按元素宽度选同宽原子类型执行 `$body`（`$a` 绑定为该原子的引用，`$u` 为其无符号整型）
@@ -94,18 +96,7 @@ pub(super) fn to_bits<T>(v: T) -> u64 {
     }
 }
 
-impl<T: 'static> Store<T> {
-    /// 由元素向量建存储：基本元素原地转为槽切片（同一分配），引用元素逐个装入单元
-    pub(super) fn from_vec(v: Vec<T>) -> Self {
-        if JArray::<T>::has_primitive_elements() {
-            let raw = Box::into_raw(v.into_boxed_slice()) as *mut [PrimSlot<T>];
-            // SAFETY: PrimSlot<T> 是 T 的 repr(transparent) 包装
-            Store::Prim(unsafe { Box::from_raw(raw) })
-        } else {
-            Store::Ref(v.into_iter().map(__RefField::new).collect())
-        }
-    }
-
+impl<T: 'static> Store<'_, T> {
     #[inline]
     pub(super) fn len(&self) -> usize {
         match self {
@@ -194,16 +185,16 @@ fn elem_bytes(bits: u64, n: usize) -> [u8; 8] {
 /// 跨元素的字节读-改-写互斥（按数组存储地址分条）：只在一次访问跨越多个元素时使用
 static STRIPES: [parking_lot::Mutex<()>; 16] = [const { parking_lot::const_mutex(()) }; 16];
 
-impl<T: 'static> Store<T> {
-    fn prim_slots(&self) -> Option<&[PrimSlot<T>]> {
-        match self {
+impl<'a, T: 'static> Store<'a, T> {
+    fn prim_slots(&self) -> Option<&'a [PrimSlot<T>]> {
+        match *self {
             Store::Prim(s) => Some(s),
             Store::Ref(_) => None,
         }
     }
 
     /// 字节区间 `[start, start + n)` 落在存储内时，返回覆盖它的元素下标区间
-    fn covering(&self, start: usize, n: usize) -> Option<(&[PrimSlot<T>], usize, usize)> {
+    fn covering(&self, start: usize, n: usize) -> Option<(&'a [PrimSlot<T>], usize, usize)> {
         let slots = self.prim_slots()?;
         let w = size_of::<T>();
         let end = start.checked_add(n)?;
