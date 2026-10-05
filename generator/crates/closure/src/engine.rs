@@ -106,6 +106,7 @@ pub mod cut;
 mod setstore;
 use setstore::SetStore;
 mod scc;
+mod hvn_diag;
 mod levels;
 mod open_world;
 mod concrete;

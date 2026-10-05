@@ -21,6 +21,9 @@ impl<'a> Engine<'a> {
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
         let i = self.graph.id(n);
+        if !s.is_empty() {
+            self.graph.injected[i as usize] = true;
+        }
         self.add_to_id(i, s);
     }
 
