@@ -15,7 +15,7 @@ impl Object {
         if let Some(obj) = any_val.downcast_ref::<Object>() {
             return obj.clone();
         }
-        Object(crate::sync_model::__Shared::new(JvmRef(v)))
+        Object::__alloc(JvmRef(v))
     }
 
     /// instanceof 运行时检查：委托给 ObjectVTable::is_instance_of（Arch-2）
@@ -236,7 +236,7 @@ impl Object {
         }
         macro_rules! try_prim_load {
             ($t:ty) => {
-                if let Some(arr) = self.0.as_any().downcast_ref::<JArray<$t>>() {
+                if let Some(arr) = self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$t>>() {
                     return arr.get(idx).map(|v| Object::from(v));
                 }
             };
@@ -259,7 +259,7 @@ impl Object {
         }
         macro_rules! try_prim_store {
             ($t:ty) => {
-                if let Some(arr) = self.0.as_any().downcast_ref::<JArray<$t>>() {
+                if let Some(arr) = self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$t>>() {
                     if let Some(v) = val.0.as_any().downcast_ref::<$t>() {
                         return arr.set(idx, Clone::clone(v));
                     }
@@ -280,7 +280,7 @@ macro_rules! array_elem_exact {
         #[jvm_ext]
         pub fn $load(&self, idx: i32) -> Result<$stack> {
             self.array_npe_check()?;
-            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+            match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$elem>>() {
                 Some(arr) => arr.get(idx),
                 None => Err(self.array_type_mismatch(concat!($desc, "aload"), concat!(" ", $desc, "[]"))),
             }
@@ -288,7 +288,7 @@ macro_rules! array_elem_exact {
         #[jvm_ext]
         pub fn $store(&self, idx: i32, val: $stack) -> Result<()> {
             self.array_npe_check()?;
-            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+            match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$elem>>() {
                 Some(arr) => arr.set(idx, val),
                 None => Err(self.array_type_mismatch(concat!($desc, "astore"), concat!(" ", $desc, "[]"))),
             }
@@ -303,7 +303,7 @@ macro_rules! array_elem_narrow {
         #[jvm_ext]
         pub fn $load(&self, idx: i32) -> Result<i32> {
             self.array_npe_check()?;
-            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+            match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$elem>>() {
                 Some(arr) => arr.get(idx).map(|v| v as i32),
                 None => Err(self.array_type_mismatch(concat!($desc, "aload"), concat!(" ", $desc, "[]"))),
             }
@@ -311,7 +311,7 @@ macro_rules! array_elem_narrow {
         #[jvm_ext]
         pub fn $store(&self, idx: i32, val: i32) -> Result<()> {
             self.array_npe_check()?;
-            match self.0.as_any().downcast_ref::<JArray<$elem>>() {
+            match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<$elem>>() {
                 Some(arr) => arr.set(idx, val as $elem),
                 None => Err(self.array_type_mismatch(concat!($desc, "astore"), concat!(" ", $desc, "[]"))),
             }
@@ -331,10 +331,10 @@ impl Object {
     #[jvm_ext]
     pub fn array_load_byte(&self, idx: i32) -> Result<i32> {
         self.array_npe_check()?;
-        if let Some(arr) = self.0.as_any().downcast_ref::<JArray<bool>>() {
+        if let Some(arr) = self.0.as_any().downcast_ref::<crate::array::__ArrayObj<bool>>() {
             return arr.get(idx).map(|v| v as i32);
         }
-        match self.0.as_any().downcast_ref::<JArray<i8>>() {
+        match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<i8>>() {
             Some(arr) => arr.get(idx).map(|v| v as i32),
             None => Err(self.array_type_mismatch("baload", " byte[] 或 boolean[]")),
         }
@@ -342,10 +342,10 @@ impl Object {
     #[jvm_ext]
     pub fn array_store_byte(&self, idx: i32, val: i32) -> Result<()> {
         self.array_npe_check()?;
-        if let Some(arr) = self.0.as_any().downcast_ref::<JArray<bool>>() {
+        if let Some(arr) = self.0.as_any().downcast_ref::<crate::array::__ArrayObj<bool>>() {
             return arr.set(idx, val != 0);
         }
-        match self.0.as_any().downcast_ref::<JArray<i8>>() {
+        match self.0.as_any().downcast_ref::<crate::array::__ArrayObj<i8>>() {
             Some(arr) => arr.set(idx, val as i8),
             None => Err(self.array_type_mismatch("bastore", " byte[] 或 boolean[]")),
         }

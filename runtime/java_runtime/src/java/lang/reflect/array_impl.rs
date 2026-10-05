@@ -132,7 +132,7 @@ fn elems_of(array: &Object) -> Result<Elems> {
     let any = array.0.as_any();
     macro_rules! prim_kind {
         ($($t:ty => $k:literal),*) => {
-            $(if any.downcast_ref::<JArray<$t>>().is_some() { return Ok(Elems::Prim($k)); })*
+            $(if any.downcast_ref::<crate::array::__ArrayObj<$t>>().is_some() { return Ok(Elems::Prim($k)); })*
         };
     }
     prim_kind!(bool => b'Z', i8 => b'B', u16 => b'C', i16 => b'S', i32 => b'I', i64 => b'J', f32 => b'F', f64 => b'D');
@@ -153,7 +153,7 @@ fn prim_get(array: &Object, kind: u8, index: i32) -> Result<Prim> {
     let any = array.0.as_any();
     macro_rules! read {
         ($t:ty, $k:ident) => {
-            match any.downcast_ref::<JArray<$t>>() {
+            match any.downcast_ref::<crate::array::__ArrayObj<$t>>() {
                 Some(a) => Prim::$k(a.get(index)?),
                 None => return Err(type_mismatch()),
             }
@@ -176,7 +176,7 @@ fn prim_set(array: &Object, kind: u8, index: i32, v: Prim) -> Result<()> {
     let any = array.0.as_any();
     macro_rules! write {
         ($t:ty, $k:ident) => {
-            match (any.downcast_ref::<JArray<$t>>(), v.widen(kind)) {
+            match (any.downcast_ref::<crate::array::__ArrayObj<$t>>(), v.widen(kind)) {
                 (Some(a), Some(Prim::$k(x))) => a.set(index, x),
                 _ => Err(type_mismatch()),
             }

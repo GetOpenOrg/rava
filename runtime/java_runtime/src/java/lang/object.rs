@@ -1,7 +1,8 @@
 //! java.lang.Object — 所有 Java 类的根类型
-//! struct 定义永久手写（Rc<dyn ObjectVTable> 是 Rust-specific，无法从字节码生成）
+//! struct 定义永久手写（`__Obj<dyn ObjectVTable>` 是 Rust-specific，无法从字节码生成）
 
 use crate::sync_model::__Shared as Rc;
+use crate::obj_ref::__Obj;
 // 类视图重建的共用部件（定义在 object_ext，宏生成的 `From<Object>` / `__virtual_view` 转交到这里）
 pub use super::object_ext::{__class_from_object, __erased_view, __iface_missing, __PartsFn};
 
@@ -365,7 +366,7 @@ fn __canon_f64_bits(v: f64) -> u64 { if v.is_nan() { 0x7ff8000000000000 } else {
 fn __canon_f32_bits(v: f32) -> u32 { if v.is_nan() { 0x7fc00000 } else { v.to_bits() } }
 /// 基本类型值装入 Object（原生值盒，见上）：逐类型显式 `From`（S7-2b 删 blanket `From<T: ObjectVTable>`）
 macro_rules! impl_from_primitive {
-    ($($t:ty),*) => { $(impl From<$t> for Object { fn from(v: $t) -> Object { Object(Rc::new(v)) } })* };
+    ($($t:ty),*) => { $(impl From<$t> for Object { fn from(v: $t) -> Object { Object::__alloc(v) } })* };
 }
 impl_from_primitive!(i32, i64, bool, i8, i16, u16, f32, f64);
 impl_vtable_primitive!(i32, "java/lang/Integer", |v: i32| format!("{}", v), |v: i32| v);
@@ -381,28 +382,35 @@ impl_vtable_primitive!(f32, "java/lang/Float", crate::java_fmt_f32,
 impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt_f64,
     |v: f64| { let b = __canon_f64_bits(v); (b ^ (b >> 32)) as i32 });
 
-/// null/default 值：存储 () 表示 Java null
-impl ObjectVTable for () {
-    fn __obj_str(&self) -> std::string::String { "null".to_owned() }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn is_jvm_null(&self) -> bool { true }
-}
+/// Java null 的静态哨兵（不计数，见 `obj_ref`）：`Object::default()` 与无静态类型的 null 共用这一个值。
+static JVM_NULL: __TypedNull = __TypedNull::new("java/lang/Object", None);
 
 /// 带静态类型的 null：接口载体（`java_class!` 接口块）与类 wrapper 的 null 装入 Object 的形态。
-/// 值语义仍是 Java null（`is_jvm_null`，身份即 null 单例，与任意 null 引用相等），但
+/// 值语义仍是 Java null（`is_jvm_null`，身份即 null 哨兵，与任意 null 引用相等），但
 /// `__class_name` 报静态类型；类 wrapper 的 null 另带本类描述符（`__desc` / `is_instance_of`
 /// 按静态类应答，与 S7-2b 前 null wrapper 装入 Object 的应答相同）。数组以元素类型的 null 探针
 /// 取元素类（`new I[0].getClass()` 为 `[LI;`、aastore 存储检查的元素类名、checkcast 的目标元素类），
 /// 接口元素数组据此得到 JVM 的数组类，而非退化为 `Object[]`。
-struct TypedNull(&'static str, Option<&'static crate::class_desc::__ClassDesc>);
+///
+/// 每个静态类型一个 `'static` 值（类与接口由 `java_class!` 生成 `static`），以不计数的哨兵装入
+/// Object：克隆 / 释放 null 不触碰任何共享计数。
+#[doc(hidden)]
+pub struct __TypedNull(&'static str, Option<&'static crate::class_desc::__ClassDesc>);
 
-impl ObjectVTable for TypedNull {
+impl __TypedNull {
+    #[doc(hidden)]
+    pub const fn new(binary_name: &'static str, desc: Option<&'static crate::class_desc::__ClassDesc>) -> Self {
+        __TypedNull(binary_name, desc)
+    }
+}
+
+impl ObjectVTable for __TypedNull {
     fn __obj_str(&self) -> std::string::String { "null".to_owned() }
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn is_jvm_null(&self) -> bool { true }
     fn __class_name(&self) -> &'static str { self.0 }
     fn __desc(&self) -> Option<&'static crate::class_desc::__ClassDesc> { self.1 }
-    fn __identity(&self) -> *const () { Object::default().0.__identity() }
+    fn __identity(&self) -> *const () { &raw const JVM_NULL as *const () }
 }
 
 crate::__process_static! {
@@ -419,17 +427,18 @@ impl Object {
     }
 
     /// 类 wrapper 的 null 装入 Object（`From<X> for Object` 的 null 臂，S7-2b）：静态类型取自
-    /// 本类描述符，取该类的类型化 null 单例（描述符的 `typed_null`）。
+    /// 本类描述符，取该类的类型化 null 哨兵（描述符的 `typed_null`）。
     #[doc(hidden)]
     #[inline]
     pub fn __typed_null_desc(desc: &'static crate::class_desc::__ClassDesc) -> Object {
-        (desc.typed_null)()
+        Object::__from_static(desc.typed_null)
     }
 
-    /// 新建带本类描述符的类型化 null（描述符 `typed_null` 单例的构造，每类只执行一次）。
+    /// 静态值以不计数的哨兵装入 Object（类型化 null）。
     #[doc(hidden)]
-    pub fn __new_typed_null(desc: &'static crate::class_desc::__ClassDesc) -> Object {
-        Object(Rc::new(TypedNull(desc.binary_name, Some(desc))))
+    #[inline]
+    pub fn __from_static(value: &'static __TypedNull) -> Object {
+        Object(__Obj::from_static(value as &'static dyn ObjectVTable))
     }
 
     fn __typed_null_of(binary_name: &'static str,
@@ -439,23 +448,31 @@ impl Object {
                 return n;
             }
         }
+        // 运行期按名建立的类型化 null：每名一个泄漏的 'static 值（名字集合有界：静态类型名）。
         // 同名的接口载体 null 与类 null 不会并存（类与接口不同名）；带描述符的覆盖无描述符的
-        let n = Object(Rc::new(TypedNull(binary_name, desc)));
+        let n = Object::__from_static(Box::leak(Box::new(__TypedNull(binary_name, desc))));
         TYPED_NULLS.with(|m| {
             m.borrow_mut().insert(binary_name, Clone::clone(&n));
         });
         n
     }
 
+    /// 新分配一个运行时对象并装入 Object（基本类型盒、`new Object()`、lambda 对象等非类存储）。
+    #[doc(hidden)]
+    #[inline]
+    pub fn __alloc<T: ObjectVTable>(value: T) -> Object {
+        Object(__Obj::new(value).map_ptr(|p| p as *mut dyn ObjectVTable))
+    }
+
     /// 存储（运行时类对象）装入 Object：句柄交出所持对象，或分配后直接装入（S7-2b）。
     #[doc(hidden)]
     #[inline]
-    pub fn __from_shared(rc: Rc<dyn ObjectVTable>) -> Object { Object(rc) }
+    pub fn __from_shared(rc: __Obj<dyn ObjectVTable>) -> Object { Object(rc) }
 }
 
 /// 数组类型（Rc<RefCell<Vec<T>>>）自动装入 Object
 impl<T: 'static + crate::sync_model::__ThreadSafe> From<Rc<crate::sync_model::__RefSlot<Vec<T>>>> for Object {
-    fn from(v: Rc<crate::sync_model::__RefSlot<Vec<T>>>) -> Object { Object(Rc::new(v)) }
+    fn from(v: Rc<crate::sync_model::__RefSlot<Vec<T>>>) -> Object { Object::__alloc(v) }
 }
 impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sync_model::__RefSlot<Vec<T>>> {
     fn as_any(&self) -> &dyn std::any::Any { self }
@@ -473,7 +490,7 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for Rc<crate::sy
 /// `downcast::<T>()` 会同时检查直接路径（T implements ObjectVTable）和 JvmRef 包装路径。
 pub struct JvmRef<T: 'static>(pub T);
 impl<T: 'static + crate::sync_model::__ThreadSafe> From<JvmRef<T>> for Object {
-    fn from(v: JvmRef<T>) -> Object { Object(Rc::new(v)) }
+    fn from(v: JvmRef<T>) -> Object { Object::__alloc(v) }
 }
 impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
     fn as_any(&self) -> &dyn std::any::Any { &self.0 }
@@ -489,24 +506,35 @@ impl<T: 'static + crate::sync_model::__ThreadSafe> ObjectVTable for JvmRef<T> {
     }
 }
 
+/// Object 所持指针上的 null 判定（`obj.0.is_jvm_null()`）：Java null 恰为不计数的静态哨兵
+/// （`JVM_NULL`、类 / 接口类型化 null、`__ArrayNull<T>`），堆对象恒非 null——只测指针标记位，
+/// 不经 vtable。固有方法先于 `ObjectVTable::is_jvm_null` 解析；vtable 的应答与之一致。
+impl __Obj<dyn ObjectVTable> {
+    #[inline]
+    pub fn is_jvm_null(&self) -> bool {
+        debug_assert_eq!(self.is_static(), (**self).is_jvm_null(), "null 与静态哨兵不一致");
+        self.is_static()
+    }
+}
+
 /// `Object` — 所有 Java 类的运行时表示。
 ///
-/// 内部结构：`Rc<dyn ObjectVTable>`
+/// 内部结构：`__Obj<dyn ObjectVTable>`（引用计数指针，null 为不计数的静态哨兵，见 `obj_ref`）
 ///   - 具体类通过 `java_class` 宏的 `impl ObjectVTable` 直接存储
 ///   - 基本类型通过 primitive ObjectVTable impl 直接存储
 ///   - 泛型参数/接口类型通过 `JvmRef<T>` 包装存储
 ///   - 通过 `as_any()` + `downcast_ref` 实现类型还原
 #[derive(Clone)]
-pub struct Object(pub Rc<dyn ObjectVTable>);
+pub struct Object(pub __Obj<dyn ObjectVTable>);
 
-/// 释放：最后一个强引用经 `handle::__release` 计深释放（S7-3x 非递归释放），槽位换成 null 单例。
+/// 释放：最后一个强引用经 `handle::__release` 计深释放（S7-3x 非递归释放），槽位换成 null 哨兵（不计数）。
 impl Drop for Object {
     #[inline]
     fn drop(&mut self) {
-        if Rc::strong_count(&self.0) != 1 {
+        if !self.0.is_unique() {
             return;
         }
-        let null = Clone::clone(&Object::default().0);
+        let null = __Obj::from_static(&JVM_NULL as &'static dyn ObjectVTable);
         crate::handle::__release(std::mem::replace(&mut self.0, null));
     }
 }
@@ -521,17 +549,12 @@ impl From<()> for Object {
     fn from(_: ()) -> Object { Object::default() }
 }
 
-/// Java null 的唯一实例（S-3.2）：`Object::default()` 每次新建 `Rc::new(())` 时，
-/// 两个 null 的 `__identity()` 不同，凡按身份比较的路径（`Object__equals_base` 的指针
-/// 相等、协变视图的 `identity` 等）会把 null 误判为互不相等。null 用 thread_local
-/// singleton 后所有 null 共享同一 `Rc` 指针，身份比较与 `PartialEq` 的 null 短路
-///（object_ext.rs，先于本 singleton 存在的第二道防线）语义一致。
+/// Java null 的唯一实例（S-3.2）：所有无静态类型的 null 共享 `JVM_NULL` 哨兵，按身份比较的路径
+/// （`Object__equals_base` 的指针相等、协变视图的 `identity` 等）与 `PartialEq` 的 null 短路
+/// （object_ext.rs）语义一致。哨兵不计数：取 null 不读写任何共享状态。
 impl Default for Object {
+    #[inline]
     fn default() -> Self {
-        crate::__process_static! {
-            static JVM_NULL: Object = Object(Rc::new(()));
-        }
-        JVM_NULL.with(|null| null.clone())
+        Object::__from_static(&JVM_NULL)
     }
 }
-

@@ -183,11 +183,11 @@ pub(crate) fn expand_interface(
     let null_ref = if binary_name.is_empty() {
         quote! { <Object as ::std::default::Default>::default() }
     } else {
-        // 本接口的类型化 null 进程内只建一次（杠杆 ③）：载体缺省值（null 局部量 / 字段读出
-        // 未写入的接口槽）不再逐次按名查全局表
+        // 本接口的类型化 null 是一个 `static` 哨兵（不计数）：载体缺省值（null 局部量 / 字段读出
+        // 未写入的接口槽）不查表、不分配、不触碰引用计数
         quote! {{
-            static __TYPED_NULL: ::std::sync::OnceLock<Object> = ::std::sync::OnceLock::new();
-            ::std::clone::Clone::clone(__TYPED_NULL.get_or_init(|| Object::__typed_null(#binary_name)))
+            static __TYPED_NULL: __TypedNull = __TypedNull::new(#binary_name, None);
+            Object::__from_static(&__TYPED_NULL)
         }}
     };
 
