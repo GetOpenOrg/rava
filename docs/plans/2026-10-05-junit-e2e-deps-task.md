@@ -220,3 +220,27 @@
    第 7 条的定性（S7-3c 未同步）完全成立：合并即愈，`--lib` 老入口下 J0 基线闭环。
    J2 切 `--deps` 新入口后须再次 5/5（J2 验收项）。
 
+10. **J2a = V12-1 依赖锁与入口类路径（2026-10-06 凌晨，本条目所在提交；J2b=profile.json 增量与
+    runtime/lib_runtime 另行提交）**：
+   - `driver/src/deps_lock.rs`（新）：`deps.lock.toml` 读取与校验（条目名 = 坐标 artifactId /
+     文件名 stem，须唯一；sha256 必填、jar 在位）；`select` 子集**取锁序**（入口给出序不影响
+     类路径 → `P` 不随入口序变化）。
+   - `scripts/fetch_pilot_deps.sh`：取包后生成 `tests/lib_pilot/deps/target/deps.lock.toml`
+     （92 条：release=参考 JDK 主版本、坐标取 jar 内 pom.properties（75 条有）、sha256）。
+   - 命令面（`--lib` 删除，出现即报指点错误）：`rava build`/`rava closure`/`rava profile`/
+     `rava audit` 墇改 `--deps <锁> --cp <条目名>[,…] [--launch <启动选项>] [--seed-class FQN[,…]]`；
+     种子不再挂库声明（`:seed=` 退出），整包翻译以 `--seed-class` 显式给出。
+   - lib crate 装配：`build_libs::from_lock`——crate 名 = jar 模块的 crate 名（J1 模块图：
+     hamcrest → `org_hamcrest`、junit → `junit`），序 = 锁序；`LibCrate` 去 wholesale 字段
+     （发射集 = 闭包触达；整包经显式种子覆盖达成）。
+   - `lib_pilot_golden.sh` 切 `--deps/--cp/--seed-class`（m1 = hamcrest 全类种子；m2–m5 在此
+     之上加 junit 种子，序与原 `:seed=` 一致）。
+   - 验证：driver 29+4 用例绿（含改写后的 `lib_crate_and_precheck_only` 端到端锁流用例：
+     jar → 锁 → `--cp greet` → crate 名 greet、跨 crate 可见性、user 依赖行不变）；
+     generator 全量 gate：全绿，唯一失败仍为已知回归 `companion_skipped_when_used_module_absent`
+     （第 7 条，他代理在修）。服务器作业：`j2a-golden`（新入口 m1–m5 5/5，结果回填）、
+     `j1-trees2`（J1 vs J0 逐字节对照——首轮 `j1-trees` 因 J0 旧脚本不识 `--emit-only` 走了
+     完整 golden（意外复验 5/5），树落默认 build/ 致对照空跑；本轮修正取 `build/*_main`
+     并剥编译产物）。
+
+

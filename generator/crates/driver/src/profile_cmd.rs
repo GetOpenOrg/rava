@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! rava profile [<A.java | 类目录>]… [--entries <清单>] [--closure <closure.json>]…
-//!              [--jdk N | --java-home P] [--runtime R] [--image D]… [-o profile.json] [--entry-out DIR]
+//!              [--deps deps.lock.toml] [--jdk N | --java-home P] [--runtime R] [--image D]… [-o profile.json] [--entry-out DIR]
 //!              [--closure-cache D] [--closure-cache-max-mb N] [--flow-batch N] [--hash-seed N]
 //! rava profile --covers <profile.json> <closure.json>… [--jdk N | --java-home P] [--runtime R] [--image D]…
 //! ```
@@ -11,7 +11,7 @@
 //! 入口三种来源，可混用：
 //! - 位置参数：每个 `.java` 文件或类目录各成一个入口（名 = 文件主名 / 目录名）；
 //! - `--entries <清单>`：每行一个入口，`#` 起注释；行内为一个或多个 `.java` / 类目录，另可带
-//!   `--name N`、`--main 类`、`--lib NAME=JAR[:seed=…]`、`--root 类.方法:描述符`、`--seed-class 类`、`--locale L`；
+//!   `--name N`、`--main 类`、`--cp 锁条目名[,…]`、`--root 类.方法:描述符`、`--seed-class 类`、`--locale L`；
 //!   相对路径按清单所在目录解析；
 //! - `--closure <closure.json>`：已算好的单例闭包（分发流程中各测试的产物，名 = 文件主名去掉 `.closure`）。
 //!
@@ -30,15 +30,16 @@ use closure::profile::{self, EntryClosure, KeyInputs};
 use resolve::{ClassPath, Hierarchy, Origin};
 use serde_json::Value;
 
-use crate::build_opts::LibSpec;
+use crate::build_libs::LibEntry;
 use crate::closure_cmd::{seed_roots, MAIN};
+use crate::deps_lock::DepsLock;
 use crate::Args;
 
 /// 生成器源码树摘要（`build.rs`）
 const GENERATOR_DIGEST: &str = env!("RAVA_GENERATOR_DIGEST");
 
 const VALUE_OPTS: &[&str] = &[
-    "--entries", "--closure", "--jdk", "--java-home", "--runtime", "--image", "-o", "--entry-out", "--closure-cache",
+    "--deps", "--entries", "--closure", "--jdk", "--java-home", "--runtime", "--image", "-o", "--entry-out", "--closure-cache",
     "--closure-cache-max-mb", "--flow-batch", "--hash-seed", "--covers",
 ];
 
@@ -48,7 +49,8 @@ struct EntrySpec {
     name: String,
     inputs: Vec<PathBuf>,
     main: Option<String>,
-    libs: Vec<String>,
+    /// 入口类路径：依赖锁条目名（实际顺序取锁序）
+    cp: Vec<String>,
     roots: Vec<String>,
     seed_classes: Vec<String>,
     locales: Vec<String>,
@@ -59,12 +61,11 @@ impl EntrySpec {
         EntrySpec { name: default_name(p), inputs: vec![p.to_path_buf()], ..EntrySpec::default() }
     }
 
-    /// 入口输入摘要：源文件 / 类目录 / 依赖库内容 + 选项
-    fn digest(&self) -> Result<String, String> {
+    /// 入口输入摘要：源文件 / 类目录 / 依赖库内容 + 选项。`jars`：该入口类路径上的锁 jar（锁序）
+    fn digest(&self, jars: &[PathBuf]) -> Result<String, String> {
         let mut parts: Vec<(String, PathBuf)> = self.inputs.iter().map(|p| (format!("input {}", base(p)), p.clone())).collect();
-        for l in &self.libs {
-            let spec = LibSpec::parse(l)?;
-            parts.push((format!("lib {}={} {:?}", spec.name, base(&spec.jar), spec.seeds), spec.jar.clone()));
+        for j in jars {
+            parts.push((format!("cp {}", base(j)), j.clone()));
         }
         let opts = format!("main={:?} roots={:?} seeds={:?} locales={:?}", self.main, self.roots, self.seed_classes, self.locales);
         parts.push((opts, PathBuf::new()));
@@ -100,12 +101,9 @@ fn parse_entries(text: &str, dir: &Path) -> Result<Vec<EntrySpec>, String> {
             match t {
                 "--name" => name = Some(val()?),
                 "--main" => e.main = Some(val()?.replace('.', "/")),
-                "--lib" => {
+                "--cp" => {
                     let raw = val()?;
-                    let mut spec = LibSpec::parse(&raw)?;
-                    spec.jar = dir.join(&spec.jar);
-                    let seeds = raw.split_once(":seed=").map(|(_, s)| format!(":seed={s}")).unwrap_or_default();
-                    e.libs.push(format!("{}={}{seeds}", spec.name, spec.jar.display()));
+                    e.cp.extend(raw.split(',').map(str::trim).filter(|n| !n.is_empty()).map(String::from));
                 }
                 "--root" => e.roots.push(val()?),
                 "--seed-class" => e.seed_classes.push(val()?),
@@ -143,6 +141,8 @@ fn positional(args: &Args) -> Result<Vec<PathBuf>, String> {
 /// 共享环境：JDK、runtime、镜像目录
 struct Env {
     home: PathBuf,
+    /// 依赖锁（`--deps`；库输入唯一来源）
+    deps: Option<DepsLock>,
     rt: PathBuf,
     images: Vec<PathBuf>,
     cache: crate::closure_run::CacheOpts,
@@ -151,6 +151,18 @@ struct Env {
 }
 
 impl Env {
+    /// 入口类路径条目（锁序）：`--cp` 条目名 → 锁条目 + 元数据
+    fn lib_entries(&self, names: &[String]) -> Result<Vec<LibEntry>, String> {
+        let Some(lock) = &self.deps else { return Ok(Vec::new()) };
+        Ok(lock.select(names)?
+            .iter()
+            .map(|j| LibEntry {
+                path: j.path.clone(),
+                meta: resolve::classpath::LibMeta { coordinate: j.coordinate.clone(), module: j.module.clone() },
+            })
+            .collect())
+    }
+
     /// 非用户类路径（JDK + 镜像 + 给定依赖库）：异常表查询与归档摘要。
     /// 与 [`crate::build_cmd::class_path`] 同样做 JDK 包遮蔽与模块图硬校验
     fn jdk_path(&self, jars: &[PathBuf]) -> Result<ClassPath, String> {
@@ -170,26 +182,25 @@ impl Env {
 
     /// 一个入口的单例闭包（独立的 javac 输出、类路径、引擎）
     fn analyze(&self, e: &EntrySpec) -> Result<Value, String> {
-        let specs: Vec<LibSpec> = e.libs.iter().map(|l| LibSpec::parse(l)).collect::<Result<_, _>>()?;
-        let libs = crate::build_libs::load(&specs, resolve::jdk::major_of(&self.home).unwrap_or(0))?;
+        let libs = self.lib_entries(&e.cp)?;
+        let jars: Vec<PathBuf> = libs.iter().map(|l| l.path.clone()).collect();
         let java: Vec<PathBuf> = e.inputs.iter().filter(|p| p.is_file()).cloned().collect();
         let dirs: Vec<&PathBuf> = e.inputs.iter().filter(|p| p.is_dir()).collect();
         let classes = match (java.is_empty(), dirs.as_slice()) {
             (true, [d]) => (*d).clone(),
             (false, []) => {
                 let out = self.work.join(&e.name);
-                crate::build_cmd::javac(&self.home, &java, &libs.jars, &out)?;
+                crate::build_cmd::javac(&self.home, &java, &jars, &out)?;
                 out
             }
             _ => return Err(format!("入口 {}：输入须为若干 .java 文件或恰一个类目录", e.name)),
         };
-        let cp = crate::build_cmd::class_path(&classes, &libs.jars, &self.home, &self.images)?;
+        let cp = crate::build_cmd::class_path(&classes, &libs, &self.home, &self.images)?;
         let main = crate::build_cmd::user_order(&cp, &java, e.main.as_deref())?.remove(0);
         let man = Manifest::load(&self.rt)?;
         let hw = Handwritten::new(&self.rt);
         let h = Hierarchy::new(&cp);
-        let mut seeds: Vec<&String> = e.seed_classes.iter().collect();
-        seeds.extend(libs.seed_classes.iter());
+        let seeds: Vec<&String> = e.seed_classes.iter().collect();
         let input = closure::Input {
             cp: &cp,
             runtime_dir: &self.rt,
@@ -244,7 +255,8 @@ fn env_of(args: &Args) -> Result<Env, String> {
     let images = if images.is_empty() { resolve::image::image_class_dirs(&home, &crate::build_cmd::support_root(&rt)) } else { images };
     let cache = crate::closure_run::CacheOpts { dir: args.opt("--closure-cache").map(PathBuf::from), max_mb: num("--closure-cache-max-mb")? };
     let work = std::env::temp_dir().join(format!("rava-profile-{}", std::process::id()));
-    Ok(Env { home, rt, images, cache, flow_batch: num("--flow-batch")?.map(|n| n as usize), work })
+    let deps = args.opt("--deps").map(|d| DepsLock::load(Path::new(&d))).transpose()?;
+    Ok(Env { home, deps, rt, images, cache, flow_batch: num("--flow-batch")?.map(|n| n as usize), work })
 }
 
 pub fn run(args: &Args) -> Result<(), String> {
@@ -278,10 +290,9 @@ pub fn run(args: &Args) -> Result<(), String> {
         if let Some(d) = &entry_out {
             write_json(&d.join(format!("{}.closure.json", s.name)), &v)?;
         }
-        digests.push((s.name.clone(), s.digest()?));
-        for l in &s.libs {
-            lib_jars.push(LibSpec::parse(l)?.jar);
-        }
+        let entry_jars: Vec<PathBuf> = env.lib_entries(&s.cp)?.iter().map(|l| l.path.clone()).collect();
+        digests.push((s.name.clone(), s.digest(&entry_jars)?));
+        lib_jars.extend(entry_jars);
         entries.push(EntryClosure { name: s.name.clone(), closure: v });
     }
     let _ = std::fs::remove_dir_all(&env.work);
@@ -351,7 +362,7 @@ mod tests {
 
     #[test]
     fn entries_file_lines() {
-        let text = "# 注释\nA.java\n\n sub/B.java sub/BHelper.java --name B2 --main p.B --locale zh-CN  # 行尾注释\nclasses/ --root p.C.run:()V --lib L=lib/l.jar:seed=p.X\n";
+        let text = "# 注释\nA.java\n\n sub/B.java sub/BHelper.java --name B2 --main p.B --locale zh-CN  # 行尾注释\nclasses/ --root p.C.run:()V --cp junit,hamcrest\n";
         let es = parse_entries(text, Path::new("/d")).unwrap();
         assert_eq!(es.len(), 3);
         assert_eq!(es[0], EntrySpec { name: "A".into(), inputs: vec!["/d/A.java".into()], ..EntrySpec::default() });
@@ -360,7 +371,7 @@ mod tests {
         assert_eq!(es[1].main.as_deref(), Some("p/B"));
         assert_eq!(es[1].locales, ["zh-CN"]);
         assert_eq!(es[2].roots, ["p.C.run:()V"]);
-        assert_eq!(es[2].libs, ["L=/d/lib/l.jar:seed=p.X"]);
+        assert_eq!(es[2].cp, ["junit", "hamcrest"]);
         assert!(parse_entries("--name X\n", Path::new("/d")).is_err());
         assert!(parse_entries("A.java --bogus\n", Path::new("/d")).is_err());
     }

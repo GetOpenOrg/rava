@@ -104,6 +104,7 @@ dependencies = [
  "resolve",
  "rustc-demangle",
  "serde_json",
+ "toml",
  "ty",
  "typed-arena",
 ]

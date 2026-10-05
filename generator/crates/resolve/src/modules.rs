@@ -220,6 +220,11 @@ impl ModuleFacts {
     pub fn graph<'a>(&'a self, cp: &'a ClassPath) -> ModuleGraph<'a> {
         ModuleGraph { cp, f: self }
     }
+
+    /// 档案下标的模块名（档案级归属；无名 → None）
+    pub fn archive_module(&self, idx: usize) -> Option<&str> {
+        self.archive_module.get(idx).and_then(Option::as_deref)
+    }
 }
 
 /// 驱动侧类路径组装后的模块图硬校验（`shadow_jdk_owned_packages` 之后调用）：

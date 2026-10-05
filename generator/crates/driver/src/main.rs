@@ -19,6 +19,7 @@ mod cargo;
 mod closure_cmd;
 mod closure_run;
 mod compile_cmd;
+mod deps_lock;
 mod profile_cmd;
 mod profile_emit;
 mod status;
