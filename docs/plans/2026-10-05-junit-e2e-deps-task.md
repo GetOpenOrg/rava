@@ -118,4 +118,33 @@
 
 ## 七、实施记录
 
-（J0 回归清单、各步提交哈希、抽查结果按步追加）
+### J0 基线（2026-10-05，分支 junit-deps）
+
+1. **J0.1 jar 清点**：当前 main（6f93f1c6）的 pom 取包实测 **92 个 jar**（非本文与 V12 基线表所写 52——52 为
+   3e4410a3 框架矩阵增补（+40 jar，2026-10-03 合入）前的旧集口径）。`META-INF/versions/` 实测 **class 3130 /
+   目录 185 / 其他 3**（V12 表的 3,078 为旧 52 集快照）。**待用户裁定 J1 验收口径**：建议按现集 **92/92**（52 的严格
+   超集，不损失范围），本文按裁定值执行。
+2. **J0.2 服务器 m1–m5 golden 基线**：作业 `junit-j0-golden`（distribute_tests --job，--ref main @ 6f93f1c6，
+   含 fetch_pilot_deps 服务器 mvn 取包先决验证）——结果追加于下。
+3. **J0.3 期望复核**：10 例以参考 JDK（Temurin 21.0.11）+ 真 jar（junit 4.13.2 / hamcrest 3.0）javac+java 双跑，
+   **10/10 双跑稳定且与 tests/expected/TestJunit*.txt 逐字一致**。
+4. **依赖锁定口径裁定（用户 2026-10-05）：按测试文件实际依赖锁包，非 pom 全集**——J1/J2 验收范围 = 锁定集，
+   不再按 52 或 92 口径全量核。锁定集推导（import 面 → 提供包 → jar，实测核对）：
+   - `63_junit` 10 例 import = `org.junit.{Assert,Assume,runner.JUnitCore,runner.Result,runner.notification.Failure,
+     Before,BeforeClass,After,AfterClass,Ignore,Test}` + `org.hamcrest.{MatcherAssert,Matcher,BaseMatcher,
+     Description,CoreMatchers.*}`；
+   - lib_pilot m1 仅 org.hamcrest.*；m2–m5 增加 org.junit.*；
+   - 提供方核对：`hamcrest-3.0.jar`（Automatic-Module-Name: **org.hamcrest**，含 org/hamcrest/，sha256 5d66b6a4…）、
+     `junit-4.13.2.jar`（Automatic-Module-Name: **junit**，含 org/junit/，sha256 8e495b63…）；
+     `hamcrest-core-3.0.jar` 为 1-class 搬迁壳，不入锁；
+   - **锁定集 = [hamcrest-3.0, junit-4.13.2]（类路径序，m2–m5 golden 同序）**；J1 模块名验收 = 2/2 正确 +
+     合成夹具 6 例（机制泛化性由夹具保证，不靠 jar 数量）。
+
+5. **J0.2 服务器 m1–m5 golden 基线：0/5，单根因**（作业 junit-j0-golden + junit-j0-m1diag / junit-j0-m2345diag，--ref main @ 6f93f1c6）：
+   - 先决全通：服务器 mvn 取包 ✓（92 jar 导出）、参考 JDK ✓（/data/rava-jdk/jdk-21.0.11+10）、JVM 侧 golden ✓（m1 23 行）；
+   - **五模式转译段全部同一失败**：`发射：方法体生成失败：com/sun/org/apache/xerces/internal/impl/XMLDTDScannerImpl.scanDTDInternalSubset:(ZZZ)Z：
+     CfgAuditError: 结构树与活块集合不一致 tree=[0,1,2,3,4,5,6,7,9,10,12,13] live=[…,14]`——活块 14（RPO 可达）未入结构树；死块 8/11 剔除正确；
+   - **归因**：cfg 结构化自 P4a（ea0d4c12）后零改动，守恒不变量（cfg/src/audit.rs:114）为既有机制——回归来自**闭包输入侧**（fe197231 时 m1 GOLDEN OK / 闭包 1235 类；其后 C1d-T3 / from_any / M2 / S7-2b2c / B1 / b3 合并使该 xerces 方法新入 JDK 侧闭包，其 CFG 形态暴露结构化器既有缺口）。该方法为何入 m1 闭包（无 seed 整包 hamcrest → JDK 侧链路）J1 时顺带核对；
+   - **处置待裁定**：修复点 `generator/crates/cfg/`（结构化器补活块路径）——不在三个在途子代理改动面（§三冲突表），按 J4「生成器优先」属本任务范围，但引擎相邻，按开工约定报用户裁定：本任务修 vs 转 engine 队列；
+   - J0 结论：**J2 验收（m1–m5 5/5）被此单点阻塞**；J1（模块归属）与该缺陷正交、可先行。
+

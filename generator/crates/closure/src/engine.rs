@@ -34,6 +34,7 @@ mod consteval;
 mod construct;
 mod sysprops;
 mod sysprops_write;
+mod sysprops_key;
 mod fold;
 mod unmodeled;
 mod forward;
@@ -106,6 +107,7 @@ mod levels;
 mod open_world;
 mod concrete;
 mod caller;
+mod boot_phases;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -345,6 +347,8 @@ pub struct Engine<'a> {
     pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
+    /// 已作根的引导阶段（`Manifest::boot_phases` 下标；锚点读取点出现时登记，不撤回）
+    phases_rooted: BTreeSet<usize>,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,
@@ -416,6 +420,8 @@ pub struct Engine<'a> {
     fwork: VecDeque<u32>,
     /// 跨偏移读者：求值读本方法其它偏移事件的站点（方法 → 偏移；按名查找），重分析时一并重跑
     xreaders: HashMap<usize, BTreeSet<u32>>,
+    /// 拼接键读取点的候选模式有变化、待失效重算的方法（处理完当前单元后统一失效，见 `sysprops_key.rs`）
+    pkey_dirty: BTreeSet<usize>,
     /// 按名取类已推不出的调用点：恒按推不出处理（`class_lookup` 单调）
     lookup_top: HashSet<(usize, u32)>,
     /// 按名取类调用点里含任意串的候选模式（只增不减）：新类进入闭包时按类名匹配，命中即重跑该站点

@@ -167,6 +167,12 @@ impl<'a> GenContext<'a> {
         super::super::rewrite::restore_erased_accessors(block, &erased);
     }
 
+    /// 本类 static 字段的免触发访问改写表（见 `class_init::OwnStatics`）
+    pub(crate) fn own_statics(&self) -> super::super::class_init::OwnStatics {
+        let impl_methods: HashSet<String> = self.meta.impl_methods.iter().cloned().collect();
+        super::super::class_init::OwnStatics::new(&self.struct_ident, self.statics, &impl_methods)
+    }
+
     pub(crate) fn inherited_is_basic(&self, name: &syn::Ident, ty: &syn::Type) -> bool {
         inherited_is_basic(&self.meta, name, ty)
     }

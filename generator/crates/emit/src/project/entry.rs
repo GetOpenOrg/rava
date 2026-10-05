@@ -6,7 +6,7 @@ use std::path::Path;
 use super::fs::Writer;
 use super::layout::{JdkLayout, UserLayout};
 use super::module_side::path_dep;
-use crate::ctx::EmitCtx;
+use crate::ctx::{EmitCtx, USER_CRATE};
 use crate::phase2::dispatch::registration_turbofish;
 use crate::phase2::Emissions;
 use crate::error::Result;
@@ -127,11 +127,43 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
                 registration_turbofish(ctx, ems, b)
             )
         }));
+    // VM 引导阶段（HotSpot call_initPhase2 / 3，清单 [[boot_init.phases]]）：锚点可达而入链的阶段，以清单
+    // 常量实参在引导类初始化之后按序调用；返回整数的阶段非 0 即启动失败（HotSpot vm_exit_during_initialization，
+    // 阶段自己先打印原因），退出码 1
+    boot.extend(ctx.manifest.boot_phases.iter().filter(|(c, _)| ctx.input.precheck_visited.contains(c.as_str())).filter_map(
+        |(c, args)| {
+            let (cls, rest) = c.split_once('.')?;
+            let (name, desc) = rest.split_once(':')?;
+            let (params, ret) = desc.strip_prefix('(')?.split_once(')')?;
+            if !jdk.generated.contains(cls) {
+                return None;
+            }
+            let lits: Vec<String> = params
+                .bytes()
+                .zip(args)
+                .map(|(t, a)| match t {
+                    b'Z' => (*a != 0).to_string(),
+                    _ => a.to_string(),
+                })
+                .collect();
+            let call = format!("{}::{}({})?", jrt_path(ctx, cls), safe_pkg_part(name), lits.join(", "));
+            let body = if ret == "V" {
+                format!("{call}; Ok(())")
+            } else {
+                format!("if {call} != 0 {{ ::std::process::exit(1) }} Ok(())")
+            };
+            Some(format!("        (\"{cls}.{name}\", (|| {{ {body} }}) as fn() -> {rt}::error::Result<()>),"))
+        },
+    ));
     if !boot.is_empty() {
         hb += &block(&format!("    {rt}::vm_boot_init(&["), &boot, "    ]);");
     }
     hb
 }
+
+/// 性能类测试的构建档位（cargo 自定义 profile，产物在 `<target>/dev-opt/`）：dev 语义、档案侧 crate opt-level 1、
+/// 用户 crate opt-level 0。档案 crate 跨测试共享编译缓存，只付一次优化代价；用户 crate 每例重编、保持 dev 编译速度
+pub const DEV_OPT_PROFILE: &str = "dev-opt";
 
 const MAIN_ALLOW: &str =
     "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]";
@@ -341,13 +373,15 @@ pub fn write_cargo_files(
         .chain(crates.all().iter().map(|c| c.name.as_str()))
         .chain([META_CRATE])
         .chain(libs.iter().copied())
-        .chain([crate::ctx::USER_CRATE])
+        .chain([USER_CRATE])
         .map(|m| format!("\"{m}\""))
         .collect();
     // dev 构建：只保留行号表（回溯仍带文件行号；完整调试信息使大闭包 rustc 峰值内存翻倍、
     // 编译耗时约 +20%），关闭增量（scratch 每轮重生成，增量元数据只占内存与磁盘）。
     // 两项只影响调试信息与编译缓存，不影响程序语义。
-    // 两个 profile 都 panic = "abort"：Java 异常经 Result 传播，不依赖 unwind；panic 只来自存根 /
+    // dev-opt 档（性能类测试，见 DEV_OPT_PROFILE）：继承 dev，档案侧 crate 与第三方依赖 opt-level 1，
+    // 用户 crate 保持 0——语义检查（溢出 / debug 断言）与 dev 相同，只换优化级
+    // 各 profile 都 panic = "abort"：Java 异常经 Result 传播，不依赖 unwind；panic 只来自存根 /
     // 运行时缺陷，由 create_java_vm 的钩子以退出码 101 终止（与 unwind 形态退出码、stderr 一致），
     // 免除全部 unwind 清理路径（landing pad）。
     // release 剥符号表（strip = "symbols"）：取栈按链接期地址表（driver `rava-link`，运行时
@@ -355,7 +389,9 @@ pub fn write_cargo_files(
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
          opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\nstrip     = \"symbols\"\n\n\
-         [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n",
+         [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n\n\
+         [profile.{DEV_OPT_PROFILE}]\ninherits = \"dev\"\nopt-level = 1\n\n\
+         [profile.{DEV_OPT_PROFILE}.package.{USER_CRATE}]\nopt-level = 0\n",
         members.join(", ")
     );
     w.write(&out_dir.join("Cargo.toml"), &root)?;

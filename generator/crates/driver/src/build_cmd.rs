@@ -416,7 +416,7 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         return Ok(());
     }
     let c = CompileArgs {
-        release: o.release,
+        profile: o.build_profile,
         target_dir: o.target_dir.clone(),
         build_timeout: o.build_timeout,
         keep_artifacts: o.keep_artifacts,

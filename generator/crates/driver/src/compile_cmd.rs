@@ -1,6 +1,6 @@
 //! 编译阶段：`rava build` 的 compile 段与 `rava compile <scratch>` 共用。
 //!
-//! `rava compile <scratch> [--release] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
+//! `rava compile <scratch> [--release | --dev-opt] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
 //! `rava build --stop-after emit` 发射好的工作区（bin 名与重型判定输入读自 `build_status.json` 的 emit 段），
 //! 更新 `build_status.json` / `build_artifacts.json`。批量编排先并行发射、再逐个编译时用它——发射进程
 //! 不必常驻等待共享 target 的 cargo 文件锁。
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::build_cmd::repo_root;
 use crate::build_opts::Stage;
-use crate::cargo::{self, CargoOpts, Heavy};
+use crate::cargo::{self, BuildProfile, CargoOpts, Heavy};
 use crate::closure_cmd::find_runtime_dir;
 use crate::status::{BuildStatus, EmitSummary, STATUS_FILE};
 use crate::Args;
@@ -18,7 +18,7 @@ use crate::Args;
 /// 编译设置（命令行原样）
 #[derive(Debug, Default, Clone)]
 pub struct CompileArgs {
-    pub release: bool,
+    pub profile: BuildProfile,
     pub target_dir: Option<PathBuf>,
     pub build_timeout: Option<u64>,
     /// 保留中间产物（缺省链接成功后只留可执行文件）
@@ -32,7 +32,7 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
     st.heavy = Some(heavy.clone());
     let opts = CargoOpts {
         target_dir: c.target_dir.clone().unwrap_or_else(|| repo.join("build").join("target")),
-        release: c.release,
+        profile: c.profile,
         timeout: c.build_timeout.map(Duration::from_secs),
     };
     let r = cargo::compile(out, &emit.bin, &heavy, &opts);
@@ -53,10 +53,12 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
     let mut scratch = None;
     let mut c = CompileArgs::default();
     let mut runtime = None;
+    let (mut dev_opt, mut release) = (false, false);
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--release" => c.release = true,
+            "--release" => release = true,
+            "--dev-opt" => dev_opt = true,
             "--keep-artifacts" => c.keep_artifacts = true,
             "--target-dir" | "--build-timeout" | "--runtime" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
@@ -71,6 +73,7 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
             s => return Err(format!("多余参数：{s}")),
         }
     }
+    c.profile = BuildProfile::from_flags(dev_opt, release)?;
     Ok((scratch.ok_or("缺少 scratch 工作区目录")?, c, runtime))
 }
 
@@ -105,7 +108,9 @@ mod tests {
     fn parse_compile_args() {
         let (d, c, rt) = parse(&args("/s --release --target-dir /t --build-timeout 9 --runtime /r")).unwrap();
         assert_eq!(d, PathBuf::from("/s"));
-        assert!(c.release && !c.keep_artifacts);
+        assert!(c.profile == BuildProfile::Release && !c.keep_artifacts);
+        assert_eq!(parse(&args("/s --dev-opt")).unwrap().1.profile, BuildProfile::DevOpt);
+        assert!(parse(&args("/s --dev-opt --release")).is_err(), "档位互斥");
         assert!(parse(&args("/s --keep-artifacts")).unwrap().1.keep_artifacts);
         assert_eq!(c.target_dir, Some(PathBuf::from("/t")));
         assert_eq!(c.build_timeout, Some(9));

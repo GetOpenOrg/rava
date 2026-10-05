@@ -17,6 +17,7 @@
 //! 不折叠集合只增不减；增长时清掉依赖它的缓存（static final 常量、构造器摘要、读取摘要），
 //! 折叠过属性读取 / 字段读取的方法失效重算——单调不动点上的折叠只来自最终仍稳定的键。
 
+use super::sysprops_key::key_src;
 use super::*;
 
 /// 缺省值来源
@@ -143,11 +144,17 @@ impl Ctx<'_> {
             let ret = parse_method(&m.desc).and_then(|md| md.ret).map(|t| t.descriptor())?;
             return Some(Ret::Value(self.sysprops_ref(&ret)));
         }
-        if !args.iter().any(|a| matches!(a, V::Str(..))) {
+        // 键为拼接值：只在该方法有登记的候选模式时求（`sysprops_key.rs`）
+        let patterned = me.is_some_and(|me| args.iter().any(|a| key_src(a).is_some_and(|o| self.pkeys.borrow().contains_key(&(me, o)))));
+        if !patterned && !args.iter().any(|a| matches!(a, V::Str(..))) {
             return None;
         }
         let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
-        self.prop_read(me, &spec, args)
+        match args.get(spec.key)? {
+            V::Str(..) => self.prop_read(me, &spec, args),
+            _ if patterned => self.prop_read_patterns(me, &spec, args),
+            _ => None,
+        }
     }
 
     /// 清单属性读取锚点（成员键）的读取形态
@@ -176,7 +183,7 @@ impl Ctx<'_> {
     }
 
     /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）
-    fn prop_read(&self, me: Option<usize>, spec: &PropSum, args: &[V]) -> Option<Ret> {
+    pub(super) fn prop_read(&self, me: Option<usize>, spec: &PropSum, args: &[V]) -> Option<Ret> {
         if spec.receiver && !args.first().is_some_and(is_sysprops) {
             return None;
         }

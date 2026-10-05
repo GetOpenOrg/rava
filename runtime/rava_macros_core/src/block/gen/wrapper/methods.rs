@@ -241,6 +241,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     }
 
     // Constructor / NonVirtual 方法（保持原 body，走 Rewriter）
+    let own_statics = ctx.own_statics();
     for f in &ctx.non_virtual {
         if f.moved.is_some() {
             // 已下沉：外壳只取签名，空接收者检查同 prepare_non_virtual_body
@@ -252,7 +253,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
             body_fns.push(fz.body_fn);
             continue;
         }
-        let fz = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names).and_then(|(null_check, b)| {
+        let fz = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names, &own_statics).and_then(|(null_check, b)| {
             let keep_attrs = strip_meta_attrs(&f.attrs);
             let vis = &f.vis;
             functionize(ctx, &quote! { #(#keep_attrs)* }, &quote! { #vis }, &f.sig, &f.sig.ident,
@@ -264,7 +265,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 body_fns.push(fz.body_fn);
             }
             None => wrapper_methods.push(
-                expand_non_virtual_fn(f, &ctx.meta.binary_name, &ctx.basic_names, &ctx.ref_names)),
+                expand_non_virtual_fn(f, &ctx.meta.binary_name, &ctx.basic_names, &ctx.ref_names, &own_statics)),
         }
     }
 

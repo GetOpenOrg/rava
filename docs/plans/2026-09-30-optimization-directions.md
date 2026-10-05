@@ -132,6 +132,73 @@
 
 **外部参照终态（2026-10-04 用户采纳）**：十二例在 `rava build --release` 下的运行段 ≤ 同机 GraalVM native-image（无 PGO）的运行时间，例如 LynchBell ≤ 3.62 s、Factorion ≤ 1.59 s、FractionReduction ≤ 9.00 s。逐例阈值见 [`docs/reports/2026-10-04-graalvm-baseline.md`](../reports/2026-10-04-graalvm-baseline.md) §二，复现用 `scripts/graalvm_bench.sh`。上面 debug ≤ 30 s 的终态同时保留。起点基线是服务器作业 `timing-rel-10795076`（release）和抽查 `timing-dbg-10795076`（debug）记录的逐例耗时。
 
+#### R1 实施记录（2026-10-05 起，分支 `r1-perf`）
+
+**起点**（服务器 Linux x86；release 取作业 `timing-rel-10795076`，debug 取抽查 `timing-dbg-10795076`，GraalVM 取 `gvm-linux-bd52b537`；单位秒）：
+
+| 用例 | rava release 运行段 | rava debug 运行段 | GVM Linux ni | 阈值（报告 §二） |
+|---|---|---|---|---|
+| LynchBell | 147.3（复跑 141.6 / 150.6） | > 300 | 失败（JVM 1.59） | 3.62 |
+| Factorion | 54.5 | > 300 | 1.74 | 1.59 |
+| FWord | 编译失败（OOM，11.9 GB） | > 300 | 1.60 | 1.37 |
+| FibonacciMatrixExponentiation | 编译失败（OOM） | > 300 | 8.87 | 6.16 |
+| IQPuzzle | 编译失败 | > 300 | 4.86 | 3.98 |
+| FourIsTheNumberOfLetters | 编译失败 | > 300 | 3.18 | 2.77 |
+| FractionReduction | 编译失败 | > 300 | 12.75 | 9.00 |
+| PartitionInteger | 运行 OOM-kill（1m34s，峰值 19.8 GB） | > 300 | 0.85 | 1.36 |
+| PrimorialNumbers | 编译失败 | > 300 | 失败（JVM 3.93） | 3.74 |
+| RailwayCircuit | 编译失败 | > 300 | 失败（JVM 0.81） | 1.88 |
+| SelfNumbers | 84.5 | > 300 | 2.54 | 2.27 |
+| UnprimeableNumbers | 编译失败 | > 300 | 4.10 | 4.60 |
+
+release 下 LynchBell 每次迭代约 1.7 µs，需提速约 40 倍；debug 需 10 倍以上。release 编译失败的 9 例属 release 构建资源问题（fat LTO 单 codegen-unit 峰值内存），不在本线的方法体翻译范围内，另记。
+
+**剖析手段**：服务器 `perf` 存在但 `perf_event_paranoid=4`，无特权不可用（作业 `r1p-prof-rel-6f93f1c6` 产出空数据）；不改系统参数，改用 `scripts/runprof/`（LD_PRELOAD 的 SIGPROF 采样器 + addr2line 符号化，`prof.sh <Test> release|debug 秒数`）。
+
+**热点分类（代码通读，LynchBell 一次 `s.charAt(l)` 的 release 路径）**：
+
+| 类别 | 现形态 | 每次 `charAt` 的次数 | 归属 |
+|---|---|---|---|
+| 静态字段读 | `X::f()?` = 类初始化检查（OnceLock + 原子读）+ `__RefSlot<Option<T>>` 读锁 + 克隆；基本类型静态（`COMPACT_STRINGS`）同样走读锁 | 3（`s`、`COMPACT_STRINGS`、`SIOOBE_FORMATTER`） | 静态存储形态：S7-3 区 |
+| 实例字段读 | wrapper `__get_f()` → `vt()` 动态调用 → 每字段一个 `Arc<RwLock<Option<Box<T>>>>` 读锁 + 克隆；基本类型字段 `Arc<AtomicU64>` SeqCst | 2–3（`value` ×2、`coder`） | 对象存储与访问器形态：S7-3 区 |
+| 数组访问 | `JArray` = `Arc<Repr>`，`get` / `set` / `len` 每次取 `RwLock` 读锁 | 2（`len`、`get`） | 运行时 `array.rs` |
+| 引用计数 | 实参 / 临时值 `Clone::clone(&..)`：调用结果、getter 结果也再克隆一次 | 3–4 对原子增减 | 方法体翻译（本线） |
+| 类初始化检查 | 每个静态方法入口 `Self::__class_init()?`，静态字段 getter 内再查一次 | 4（`StringLatin1.charAt`、`String.checkIndex`、`Preconditions.checkIndex` 及 getter） | 宏 `class_init.rs`：S7-3 同文件 |
+| 栈界检查 | 非叶子方法入口 `__stack_check()` → `rava_coro::stack_exhausted()`（`#[inline(never)]`，TLS） | 4 | T6 区 |
+| 虚 / 接口分派 | final 类（String）实例方法仍经 wrapper → 下沉体函数；字段访问经 `dyn` vtable | 每次字段读 1 | S7-3 区（访问器） |
+| 字符串构造 | `String.valueOf(int)`：`byte[]` + String 对象，对象每字段一个 Arc 分配（约 9 次分配） | 每次迭代 1 组 | 对象存储形态：S7-3 区 |
+| 异常 / 溢出 | `checkIndex` 走完整 `Preconditions` 字节码；整数运算 `wrapping_*` 无额外开销 | — | 不需改 |
+
+**剖析实测**（作业 `r1p-prof5-2ac19d8c`，Factorion release，jp1，250 Hz 采样 10000 个样本，自耗按类归并）：
+
+| 类别 | 自耗占比 | 主要符号 |
+|---|---|---|
+| 分配 / 释放 | ≈ 24% | libc（malloc / free）15.4%、`Arc::drop_slow` 3.4%、drop_glue 3.9%、alloc / dealloc |
+| 实例字段访问器 | ≈ 10% | `__get_buf` 6.6%（RwLock 读 + Arc 克隆）、`__get_coder` / `__get_value` / `__set_*` / `__as_*` |
+| 数组访问 | ≈ 10% | `JArray::get` 4.4%、`set` 3.0%、`arraycopy` 2.2%（RwLock） |
+| 静态字段读 + 类初始化检查 | ≈ 7.5% | `__class_init` 3.4%、`SIOOBE_FORMATTER` 3.2%、`DigitOnes` / `DigitTens` |
+| 栈界检查 | ≈ 4.5% | `rava_coro::stack_exhausted` 3.6%（不内联，TLS）、`__stack_check` 1.0% |
+| JDK 方法体本身 | 其余 | `StringLatin1.charAt` 5.2%、`String.isLatin1` 3.5%、`String.length`、`Integer.parseInt` 等 |
+
+LynchBell debug（同作业 kr1，10000 样本，含子调用口径）：`uniqueDigits` 83.6%，其中 `String.charAt` 56.4%。静态字段 getter 合计约 34%（`s` 13.9%、`SIOOBE_FORMATTER` 10.2%、`COMPACT_STRINGS` 9.9%），内部是 `__class_init` 8.7% 和 OnceLock `force` 8.4%；`__RefSlot` 读锁 `borrow` / `read_recursive` 20%；栈界检查 8.8%（`guard::current` TLS 6.2%）；`String.valueOf` 13.4%。debug 下 parking_lot 的 `try_lock_shared_fast` / `deadlock_acquire` / `checked_add` 等以 opt-level 0 编译，单把读锁展开成十余层调用。
+
+LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s` 9.9%、`SIOOBE_FORMATTER` 5.4%、`__class_init` 3.3%、`DigitTens` / `DigitOnes` 3.1%，合计约 22%；`__get_buf` 8.7%、`__get_value` / `__get_coder` 等字段访问器约 10%；`JArray::get` / `set` 9.3%；`Result` 的 `?`（`Try::branch`，result.rs:2176-2177）7.4%，几乎全部来自 `main` 循环（Throwable 结果按值搬运）；`stack_exhausted` + `__stack_check` 3.1%；`try_lock_shared_fast` 2.4%。含子调用：`uniqueDigits` 44.9%，其中 `String.charAt` 38.3%（`checkIndex` 7.2%、`isLatin1` 5.3%）；`Integer.toString` 19.7%。
+
+结论：前四类（约 52%）都是对象 / 静态 / 数组存储的同步形态（每字段一个 `Arc`、每次读写一把 `RwLock`、每次读出克隆一份引用计数），属 S7-3 区与运行时 `array.rs`；方法体翻译侧能直接消除的是多余的引用计数增减（已做两项）。存储形态改造已向主会话申请协调（2026-10-05）。
+
+**已做（本线范围内的方法体翻译）**：
+
+1. `9b74cb28` 独占临时值不再克隆：Java 调用结果（`?`）、静态字段读、字段 getter 作实参 / checkcast 源时直接移交（`Expr::is_owned_temp`）。LynchBell 生成树 `Clone::clone(&` 6292 → 5974。
+2. `e983141d` 单用临时值按值移交：`let _tN = e;` 后仅在紧随语句以 `Clone::clone(&_tN)` 出现一次时改为 `_tN`（循环头 / 闭包除外；同名重绑保守不改）。LynchBell 生成树 939 行受益。
+3. `9bdd3095` 删除本类 static 字段的丢弃读：`let _ = Own::f()?;`（值已折叠、只为类初始化副作用保留）在本类代码中恒为空操作（JVMS §5.5，本类代码执行时本类已初始化或正由当前线程初始化），整行删去；他类读取不动。LynchBell 生成树删二十余行（`String.coder()` 的 `COMPACT_STRINGS` 读、各类 `$assertionsDisabled` 读）。
+4. `79e4ccc4`（Q1(b)）本类静态方法 / 构造器 / `<clinit>` 内的本类 static 读写不再逐次查初始化状态：宏为每个 static 生成原始存取 `__si_<名>` / `__si_set_<名>`（只含安全点 + 存取），公开 getter / setter = `__class_init()?` + 原始存取；入口已注入 `Self::__class_init()?` 的方法体内，本类 `Own::f()` / `Own::set_f(v)` 改写为原始存取（闭包 / 嵌套项不改写；实例方法不改写——运行时手写可不经构造器造实例）。
+5. `b4b6ccd1`（Q4）栈界检查快路径内联：§21.8.3 不允许编译器线程局部取址跨挂起点缓存，故不直接 `#[inline]` 原函数，改为 Linux x86_64 / aarch64 每次现读线程指针（非 `pure` 内联汇编，`fs:[0]` / `tpidr_el0`）+ 静态 TLS 偏移取栈界；偏移在线程入口与载体切入时核对，任一线程不一致即永久退回 `#[inline(never)]` 慢路径；其他平台只走慢路径。
+6. （Q3）性能类测试构建档 `dev-opt`：生成的 workspace 增 `[profile.dev-opt]`（继承 dev，opt-level 1；`package.user` opt-level 0），`rava build / compile --dev-opt`（与 `--release` 互斥），e2e 用例以独占一行 `// rava-build-profile: dev-opt` 声明、`run_tests.py` 缺省档时按声明改走该档。dev 档保持 opt-level 0。档案 crate 跨测试共享缓存只付一次 opt 1 编译代价，用户 crate 每例重编保持 dev 速度。
+7. `e9c8c5b9` 即上条 Q3 的提交。
+8. `bc517e9e` 引用型常量（字符串 / 类字面量 / 拼接结果 / null）视为独占临时值：作实参与 checkcast 源时不再包 `Clone::clone(&..)`（`Clone::clone(&String::from("ha"))` → `String::from("ha")`）。
+9. `a61f8dc0`（杠杆 ②）字符串常量逐调用点缓存：`java_class!` 展开时把方法体与 ConstantValue 初值中的 `String::from("…")` 改写为调用点私有 `OnceLock` 单元，首次经全局驻留表（按 `Vec<u16>` 哈希、持锁）取规范实例，此后只克隆同一实例（JVMS §5.4.3 常量池项解析一次）。不用 `get_or_init`（首次加载可能经类初始化重入同一调用点），并发 / 重入的各次加载取到同一驻留实例、先写入者留存。可读层源码不变。
+10. `1697a9a8`（杠杆 ④）Unsafe 偏移与数组视图免查表：实例字段偏移反查改为按 id 稠密下标（`id / FIELD_SLOT - 1`）直取进程常驻登记项，`offset_slot` 返回 `&'static str`（原先每次访问哈希查表 + 两次 `String` 克隆 + `to_owned`），`field_of_offset` 不再线性扫描；数组协变视图（`Node[]` 等经 `__view_into` 擦除为 `Object[]`，Unsafe / VarHandle 引用访问器、`array_load_object` / `array_store_object` 每次都构造）的元素访问改为按元素类型单态化的函数指针，构造开销由 4 个闭包 + 视图 + 元素名探针降为源句柄 + 视图两次分配，长度经源数组钩子；`__view_into` 等只透传的擦除句柄改用进程共用单元，不再逐次 `Arc::new(())`。
+
 ### 5. 测试流程效率（用户 2026-10-01）
 
 2026-10-01 分布式全量：1083 例、7 台服务器、约 5 h 墙钟、约 35 机时。按本地抽查比例（13 例：编译 7 m 08 s / 共 9 m 44 s）推算：cargo 编译约 70–75%，转译约 20%，超时空等约 1.5 机时（约 4%），运行约 3%。
