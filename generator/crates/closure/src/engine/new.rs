@@ -184,6 +184,7 @@ impl<'a> Engine<'a> {
             mirror_open_seen: HashSet::default(),
             array_of: HashMap::default(),
             array_of_pending: BTreeSet::new(),
+            refl_arrays: HashSet::default(),
             synth_mirror: None,
             enum_recv: HashMap::default(),
             rpending: Vec::new(),

@@ -142,6 +142,7 @@ impl<'a> Engine<'a> {
             };
             for t in ts {
                 let id = self.array_site(m, off, &t, false, Via::method("reflect-newarray", m, Some(off)));
+                self.refl_arrays.insert(id);
                 out.classes.insert(id);
             }
         }

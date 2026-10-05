@@ -79,6 +79,9 @@ impl<'a> Engine<'a> {
         if t & NOT_SUB != 0 {
             return self.filter_not(s, t & !NOT_SUB);
         }
+        if t & OPEN_EXACT != 0 {
+            return self.filter_open_exact(s, t & !OPEN_EXACT);
+        }
         if self.names[t as usize].as_ref() == OBJECT {
             return s.clone();
         }
@@ -121,10 +124,36 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// 流边过滤的显示名（不成立一侧记作 `!类型`）
+    /// 反射数组分配点元素写入的收窄：确定类型 ⊂ t 者保留；open(o) 只在 o ⊂ t 时保留，不收窄出新的 open(t)。
+    ///
+    /// 反射分配（`Array.newInstance` 等）的分量类型来自运行期 Class 值。共享上下文里分量类型集是各调用方之和，
+    /// 一个调用方会收到别的调用方所要类型的数组（`Arrays.copyOf(T[], int)` 经 `original.getClass()`）。这些数组的元素写入
+    /// 若把 open(Object) 收窄成 open(分量)，就会凭空造出「任意分量类型的未知对象」，经元素读出不再经过 checkcast 而
+    /// 直接派发（如 open(ClassValue$Entry) 进入 ClassValueMap 的 WeakHashMap 值）。改前这些调用点的结果是 open(Object)，
+    /// 按逃逸数组展开，同样不含这种 open；此处沿用该口径：open 的收窄只发生在读出后的 checkcast 处
+    fn filter_open_exact(&mut self, s: &TypeSet, t: u32) -> TypeSet {
+        let mut out = TypeSet::default();
+        let kept: Vec<u32> = s.classes.iter().filter(|&x| self.sub(x, t)).collect();
+        out.classes = IdSet::from_sorted(kept);
+        for o in &s.open {
+            if self.sub(o, t) {
+                out.open.insert(o);
+            }
+        }
+        out
+    }
+
+    /// 写入数组分配点 x 元素的流边过滤（分量类型 c）：反射数组分配点按 [`OPEN_EXACT`] 口径，其余按分量类型收窄
+    pub(super) fn elem_filter(&self, x: u32, c: u32) -> u32 {
+        if self.refl_arrays.contains(&x) { OPEN_EXACT | c } else { c }
+    }
+
+    /// 流边过滤的显示名（不成立一侧记作 `!类型`，反射数组元素写入记作 `=类型`）
     pub(super) fn filter_label(&self, f: u32) -> String {
         if f & NOT_SUB != 0 {
             format!("!{}", self.names[(f & !NOT_SUB) as usize])
+        } else if f & OPEN_EXACT != 0 {
+            format!("={}", self.names[(f & !OPEN_EXACT) as usize])
         } else {
             self.names[f as usize].to_string()
         }

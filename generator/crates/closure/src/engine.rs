@@ -149,6 +149,9 @@ const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
 const CATCH: u32 = 1 << 31;
 /// 流边过滤标记：只放行 ⊄ 过滤类型的成员（instanceof 判定不成立一侧，见 `classes.rs` `filter`）
 const NOT_SUB: u32 = 1 << 31;
+/// 流边过滤标记：写入反射数组分配点的元素——确定类型按 ⊂ 过滤类型取舍，open(o) 只在 o ⊂ 过滤类型时原样保留，
+/// 不收窄出新的 open（见 `classes.rs` `filter_open_exact`）
+const OPEN_EXACT: u32 = 1 << 30;
 /// 站点键：手写方法的值池
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
@@ -486,6 +489,9 @@ pub struct Engine<'a> {
     array_of: HashMap<(usize, u32), ArrayOfSite>,
     /// 尚未放行的反射数组分配调用点：到工作队列排空时由 `reflect.rs::array_of_release` 定夺
     array_of_pending: BTreeSet<(usize, u32)>,
+    /// 反射数组分配调用点建出的数组分配点（`reflect.rs::array_sites`）：写入其元素时按 [`OPEN_EXACT`] 口径过滤
+    /// （[`Self::elem_filter`]）
+    refl_arrays: HashSet<u32>,
     /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
     synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理

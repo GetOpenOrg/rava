@@ -281,8 +281,9 @@ impl<'a> Engine<'a> {
             let t = self.arrays[&y];
             let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
             let cid = self.id(&c);
+            let f = self.elem_filter(y, cid);
             for p in PARITIES {
-                self.flow(Node::W(s, i), Node::E(y, p), cid);
+                self.flow(Node::W(s, i), Node::E(y, p), f);
             }
         }
     }

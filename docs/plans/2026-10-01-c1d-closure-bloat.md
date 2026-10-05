@@ -2403,3 +2403,35 @@ open(Object)，于是 `ArrayList.grow` 之后的 `elementData` 成了任意对�
    - 单测作业带 `--job-timeout 7200`。
    - 抽查（补 TestReflectArrayDeep、TestJndiNoProvider）。
    - 档案 24 片，与 c1de-profb 同口径基线一起重跑。
+
+### 27.2 恢复：反射数组分配点元素写入不收窄 open（2026-10-05，分支 c1d-elem，合入 300389ce 后）
+
+**根因补充**：§27.1 第 2 点只写了 hw arraycopy。只在 hw 写入上改口径（`hw_site_arrays`）后，TestJndiNoProvider 仍多 32 个方法。
+用 `@trace:open:java/lang/ClassValue$Entry` 复查，open(ClassValue$Entry) 还经字节码 aastore 进来：
+- 写入点是 `ArrayList.add(int, Object)` 的 P2，写进 `[Ljava/lang/ClassValue$Entry;@…:2` 的元素。
+- 机制：共享上下文中，`Arrays.copyOf(T[], int)` 的 newType 取 `original.getClass()`，镜像集是各调用方之和。
+  因此 `ArrayList.elementData` 会收到别的调用方所要分量类型的数组。
+- 对这些数组的任何元素写入（hw 搬移或字节码 aastore），只要按分量类型过滤，open(Object) 就会被收窄成 open(C)。
+
+**终态口径**（不动点上的单调判定，与写入路径无关）：
+- 反射数组分配调用点建出的分配点登记在 `refl_arrays`。
+- 写入其元素的流边带 `OPEN_EXACT` 标记。`classes.rs::filter_open_exact` 的规则：
+  - 确定类型 ⊂ 分量类型的保留；
+  - open(o) 只在 o ⊂ 分量类型时原样保留，不收窄出新的 open(分量)。
+- 统一入口是 `elem_filter(x, c)`，用于字节码 aastore（`bytecode.rs`）和 hw 写入（`hw_mem.rs`）。
+- 逃逸数组从 `Node::Array` 回灌元素的边仍按分量类型收窄。开放世界里外部代码写入逃逸数组的未知对象，必须读得到。
+- 这与改前的语义一致：改前这些调用点返回 open(Object)，元素读出后由 checkcast 收窄；分配点本身不带凭空收窄出的 open。
+- 该过滤是集合上的逐元素判定，满足单调性，与工作表顺序无关。
+- `OPEN_EXACT` 边不参与 Object 流的 SCC 合并（`flow.rs` 的 objf 判定）。
+
+**本机验收**（二进制为 c1d-elem 工作树 HEAD 加本改动）：
+
+| 项 | 结果 |
+|---|---|
+| TestJndiNoProvider 种子 0 / 1 / 2 | 均为 3820 类 / 24470 方法，三者相同；与 781eeec2 的类、方法集**完全相同**（+0 / −0），§27.1 的 +32 方法已消除 |
+| TestModuleLayerDefine 种子 0 / 1 | 3084 类 / 18853 方法，与 c146f5c8 相同；比 781eeec2（3264 / 19219）少 180 类、366 方法，无新增 |
+| `closure_cli::reflect_new_array_element_precision` | 通过（68 s） |
+| `cargo test -p closure` | 160 通过 |
+
+注：本机 `CARGO_TARGET_DIR` 指向多个工作树共享的目录。`cargo test` 用的 `CARGO_BIN_EXE_rava` 可能是别的工作树产出的二进制
+（首次运行时该用例误报失败）。本机跑 driver 集成测试时须显式设 `CARGO_TARGET_DIR=../build/analyzer-target`。
