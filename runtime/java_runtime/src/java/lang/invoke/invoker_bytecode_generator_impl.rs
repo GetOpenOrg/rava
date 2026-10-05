@@ -1,5 +1,5 @@
-//! `java/lang/invoke/InvokerBytecodeGenerator` 手写伴生：VM 边界类（closure.toml [vm_boundary]），
-//! MH-native（docs/plans/2026-09-26-mh-native.md §二-2）。
+//! `java/lang/invoke/InvokerBytecodeGenerator` 手写伴生：类 2 运行模型替换（vm_intrinsics.toml
+//! [[intrinsic]] class_definition 登记），MH-native（docs/plans/2026-09-26-mh-native.md §二-2）。
 //!
 //! JDK 在 `LambdaForm.compileToBytecode` / `prepare` 里经本类把 LambdaForm 编译成隐藏类字节码
 //!（ASM 生成 + `Lookup.defineHiddenClass`）。原生二进制不能在运行期定义类；句柄调用由
@@ -9,46 +9,25 @@
 //! → MethodHandle.<init> → prepare），createFormsFor 缓存写回之前重入自身 → 无限递归
 //!（RecordsSerializationTest 栈溢出）。故编译 / 解释入口返回**解释入口 MemberName**：
 //! `LambdaForm.interpretWithArguments` 按调用类型的未解析引用（等价 HotSpot 的
-//! `interpret_<sig>` 解释入口，执行仍由原生解释器承载）。静态可调用性判定（仅断言消费）
-//! 恒 true。整类截断 ASM 生成链。
+//! `interpret_<sig>` 解释入口，执行仍由原生解释器承载）。只手写这两个类定义点；
+//! `lookupPregenerated` / `isStaticallyInvocable` 按字节码翻译（唯一调用面是上述生成链与
+//! 引导类 assert，后者经 `$assertionsDisabled` 折叠不入闭包，a3-X1）。
 
 use crate::prelude::*;
 use super::invoker_bytecode_generator::InvokerBytecodeGenerator;
-use super::{LambdaForm, LambdaForm_Name, LambdaForm_NamedFunction, MemberName, MethodType};
+use super::{LambdaForm, MemberName, MethodType};
 
 impl InvokerBytecodeGenerator {
     /// `generateCustomizedCode(LambdaForm, MethodType)`：不生成字节码 → 解释入口 vmentry。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn generateCustomizedCode(_form: LambdaForm, invokerType: MethodType) -> Result<MemberName> {
         interpreter_entry(invokerType)
     }
 
     /// `generateLambdaFormInterpreterEntryPoint(MethodType)`：解释入口由原生解释器承载。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn generateLambdaFormInterpreterEntryPoint(mt: MethodType) -> Result<MemberName> {
         interpreter_entry(mt)
-    }
-
-    /// `lookupPregenerated(LambdaForm, MethodType)`：预生成 Holder 入口同样不经 vmentry → null。
-    #[jvm_boundary]
-    pub fn lookupPregenerated(_form: LambdaForm, _invokerType: MethodType) -> Result<MemberName> {
-        Ok(MemberName::default())
-    }
-
-    /// `isStaticallyInvocable(NamedFunction...)`：仅断言消费（解释器对全部成员可调）→ true。
-    #[jvm_boundary]
-    pub fn isStaticallyInvocable_arr_lambdaform_namedfunction(_functions: JArray<LambdaForm_NamedFunction>) -> Result<bool> {
-        Ok(true)
-    }
-
-    #[jvm_boundary]
-    pub fn isStaticallyInvocable_lambdaform_name(_name: LambdaForm_Name) -> Result<bool> {
-        Ok(true)
-    }
-
-    #[jvm_boundary]
-    pub fn isStaticallyInvocable_membername(_member: MemberName) -> Result<bool> {
-        Ok(true)
     }
 }
 

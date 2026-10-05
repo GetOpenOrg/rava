@@ -61,26 +61,6 @@ kind = "class_definition"
 reason = "生成解释入口隐藏类 → 解释入口"
 
 [[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.lookupPregenerated:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;"
-kind = "class_definition"
-reason = "查 jlink 预生成 LambdaForm Holder 类（运行期按名加载）→ null，走解释"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:([Ljava/lang/invoke/LambdaForm$NamedFunction;)Z"
-kind = "bytecode_generator"
-reason = "「生成的字节码能否直接 invokestatic 成员」；生成链截断后仅断言消费，解释器对全部成员可调 → 恒 true"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/LambdaForm$Name;)Z"
-kind = "bytecode_generator"
-reason = "同上"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/MemberName;)Z"
-kind = "bytecode_generator"
-reason = "同上"
-
-[[intrinsic]]
 member = "jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z"
 kind = "stack_frame"
 reason = "栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）"
@@ -124,7 +104,7 @@ null_to_false = [
 
 # VM 注入的静态字段（handwritten-boundary.md 类 ③）：HotSpot 在类初始化期间写入平台 / 对象布局常量，
 # 字节码里的初值（UnsafeConstants.<clinit> 的 0 / false）或初始化器（Unsafe.<clinit> 经 VM 原语
-# arrayBaseOffset0 / arrayIndexScale0 取值，Unsafe 为 VM 边界类、<clinit> 不翻译）不给出运行期值。
+# arrayBaseOffset0 / arrayIndexScale0 取值，分析器求不出）不给出运行期值。
 # 条目 `类.字段` = 取值表达式（crate 根下路径，返回 i64 / bool；runtime/java_runtime/src/vm_constants.rs），
 # 或整数 / 布尔字面量（值与宿主无关的 VM 引导状态；分析器按该值折叠读取）。
 # 生成器把字段发为读取该表达式的访问器（按字段描述符做数值宽度转换；字节码对它的写入被 VM 值覆盖，
@@ -614,11 +594,7 @@ factories = [
 # 为对象时写入其引用字段（`__unsafe_ref_update` 按字段名匹配）
 "jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3], fields = true, offset = 1 }
 # VarHandle 引用写入访问模式（签名多态，var_handle_impl.rs → `__unsafe_ref_update` / 数组元素写入）：
 # 形参序号按调用点实参；第 0 个坐标是 holder（实例字段 / 数组），写入值是最后一个实参（last）。
@@ -641,8 +617,6 @@ factories = [
 # 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
-"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
-"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invoke:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
@@ -690,13 +664,10 @@ members = [
 # 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
 # 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
-# Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值。
+# Unsafe 引用读取（unsafe__impl.rs，只列 native；opaque / acquire / getAndSet 等访问序变体按字节码翻译，经这些 native）；compareAndExchange 返回旧值。
 # offset = 字段偏移形参：调用点上为符号偏移时只读所指字段（同 [facts.array_writes] 的 offset）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
 # VarHandle 引用读取访问模式（签名多态，var_handle_impl.rs `_field_read` / 数组元素读取；getAndSet / compareAndExchange
 # 返回旧值）：实参按调用点描述符排布，0 号是 holder（实例字段句柄）/ 数组（数组元素句柄）；静态字段句柄没有 holder 坐标，
@@ -863,11 +834,11 @@ stable_types = [
 "java/lang/Object.hashCode:()I" = "identity_hash"
 "java/lang/Object.clone:()Ljava/lang/Object;" = "clone"
 "java/lang/Class.<clinit>:()V" = "bytecode"
+# Unsafe.<clinit> 的静态状态是 VM 注入的布局常量（经 native 取值，[vm_constants.injected_statics]）与无状态单例：
+# 具体求值不执行，单例由 getUnsafe 直接给出
 "jdk/internal/misc/Unsafe.<clinit>:()V" = "opaque"
-# Unsafe 实例由 VM 持有（Unsafe.<clinit> 不执行）：取单例
 "jdk/internal/misc/Unsafe.getUnsafe:()Ljdk/internal/misc/Unsafe;" = "vm_singleton"
-"jdk/internal/misc/Unsafe.allocateUninitializedArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "bytecode"
-# 字段偏移即字段身份（unsafe__impl.rs objectFieldOffset_class_str 的不透明 id 同口径），按身份 CAS 实例引用字段
+# 字段偏移即字段身份（unsafe__impl.rs objectFieldOffset1 的不透明 id 同口径），按身份 CAS 实例引用字段
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = "field_offset"
 "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "cas_reference"
 "java/lang/Class.registerNatives:()V" = "noop"

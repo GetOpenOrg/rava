@@ -9,62 +9,62 @@ use super::*;
 // 读写的序列化字段）走 ObjectVTable 字 / 双字视图。
 
 impl Unsafe {
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getBoolean(&self, o: Object, offset: i64) -> Result<bool> {
         Ok(_ext::get(&o, offset, 1, "getBoolean:(Ljava/lang/Object;J)Z")? != 0)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putBoolean(&self, o: Object, offset: i64, x: bool) -> Result<()> {
         _ext::put(&o, offset, 1, "putBoolean:(Ljava/lang/Object;JZ)V", x as u64)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getByte_obj_l(&self, o: Object, offset: i64) -> Result<i8> {
         Ok(_ext::get(&o, offset, 1, "getByte:(Ljava/lang/Object;J)B")? as u8 as i8)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putByte_obj_l_b(&self, o: Object, offset: i64, x: i8) -> Result<()> {
         _ext::put(&o, offset, 1, "putByte:(Ljava/lang/Object;JB)V", x as u8 as u64)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getShort_obj_l(&self, o: Object, offset: i64) -> Result<i16> {
         Ok(_ext::get(&o, offset, 2, "getShort:(Ljava/lang/Object;J)S")? as u16 as i16)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putShort_obj_l_s(&self, o: Object, offset: i64, x: i16) -> Result<()> {
         _ext::put(&o, offset, 2, "putShort:(Ljava/lang/Object;JS)V", x as u16 as u64)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getChar_obj_l(&self, o: Object, offset: i64) -> Result<u16> {
         Ok(_ext::get(&o, offset, 2, "getChar:(Ljava/lang/Object;J)C")? as u16)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putChar_obj_l_c(&self, o: Object, offset: i64, x: u16) -> Result<()> {
         _ext::put(&o, offset, 2, "putChar:(Ljava/lang/Object;JC)V", x as u64)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getFloat_obj_l(&self, o: Object, offset: i64) -> Result<f32> {
         Ok(f32::from_bits(_ext::get(&o, offset, 4, "getFloat:(Ljava/lang/Object;J)F")? as u32))
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putFloat_obj_l_f(&self, o: Object, offset: i64, x: f32) -> Result<()> {
         _ext::put(&o, offset, 4, "putFloat:(Ljava/lang/Object;JF)V", x.to_bits() as u64)
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getDouble_obj_l(&self, o: Object, offset: i64) -> Result<f64> {
         Ok(f64::from_bits(_ext::get(&o, offset, 8, "getDouble:(Ljava/lang/Object;J)D")?))
     }
 
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putDouble_obj_l_d(&self, o: Object, offset: i64, x: f64) -> Result<()> {
         _ext::put(&o, offset, 8, "putDouble:(Ljava/lang/Object;JD)V", x.to_bits())
     }

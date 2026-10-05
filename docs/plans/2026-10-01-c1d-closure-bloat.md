@@ -1776,6 +1776,78 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
     预期失败，不阻塞 a3-T6 合入。a3-T6 本身的交付止于：monitor 侧表分片（4a983fe8）、剖析结论与 opt-level 实测、
     TestContinuationPinned 第 1d 段按规范改写。
 
+### 21.9 a3 实施记录（2026-10-05，分支 c1d-a3）
+
+口径：HelloWorld `--stop-after emit` 审计；闭包类数为本机 `rava closure` 实测，前后在同一提交上只差该子项的改动（反向应用补丁取底数）。
+HelloWorld emit JDK 类数全程 467，各子项均未增加。
+
+| 子项 | 提交 | HelloWorld `vm_boundary_methods` | 闭包类数（前 → 后） | 说明 |
+|---|---|---|---|---|
+| U0 | 33283267 | 77 → 77 | — | Unsafe 中 JDK 为 `ACC_NATIVE` 的 33 个方法属性改 `#[jvm_native]`，只改标注（审计按 ACC_NATIVE 标志计数，故不变） |
+| U1 | 62372b34 | 77 → 62 | TestDirectBuffer 524 → 524（字节码方法 +13） | 原始内存 15 个公开包装按字节码翻译，手写只留 `ACC_NATIVE` 的 `*0` 族；新增边界用例 TestDirectBufferPaging（跨页 putLong / getLong、两种字节序交换拷贝、分配清零，expected 取 JDK 21） |
+| U2 | ab0f5fcc | 62 → 42 | TestAtomics 3114、TestCompletableFuture 3119、TestDirectBuffer 524，均不变 | 原子 / 访问序变体 17 个与栅栏 3 个按字节码翻译；`vm_intrinsics.toml` 中按 Java 层原子成员登记的 `array_writes` / `memory_reads` 条目（9 行）删除，内存效果由内层 native 的既有登记承担 |
+| U3 | f91c7b90 | 42 → 33 | HelloWorld JDK 467、TestAtomics 3114、TestDirectBuffer 524，均不变 | 布局 / 偏移 / 类初始化包装 10 个与 `<clinit>` 按字节码翻译；补 native 落点 `registerNatives`、`objectFieldOffset0/1`、`staticFieldOffset0`、`staticFieldBase0`、`arrayIndexScale0`、`ensureClassInitialized0`、`shouldBeInitialized0`，`arrayBaseOffset0` 改独立实现。Unsafe 移出 `[vm_boundary]` 与 `clinit_carried`，unsafe 系 `#[jvm_boundary]` 归零 |
+| L1 | 3e15de4b | 33 → 29 | TestDirectBuffer 524 → 534、GZIPTest 517 → 527；ServiceLoader / AppClassLoader / ZipFs 用例不变 | BootLoader `loadLibrary` / `hasClassPath` / `loadClass` / `loadClassOrNull` 按字节码翻译。+10 类是 JDK 本地库装载路径本身（`NativeLibraries$LibraryPaths` / `$NativeLibraryContext` / `$CountedLock` / `$Unloader` 等），属字节码取代截断的必要部分；落到既有 native `findBuiltinLib` / `load` 与 `findBootstrapClass` |
+| X1 | 95826e8f、44889a8b | 链外 | TestMethodHandleCombinators 3106、TestBmhDynamicSpecies 3102、TestDynamicProxy 3105、DeepCopy 3382、TestSerialProxyForm 3383，均不变 | `InvokerBytecodeGenerator` 只手写两个类定义点；`isStaticallyInvocable`×3 与 `lookupPregenerated` 删手写并撤 `[[intrinsic]]` 登记（调用面只有截断的生成链与引导类 assert，后者经 `$assertionsDisabled` 折叠）。IBG 移出 `[vm_boundary]` 与 `clinit_carried`（`<clinit>` 按字节码翻译，方法 +3）。已登记 `class_definition` 的手写属性改 `#[jvm_native]`（与 `makeInjectedInvoker` 同口径）；`Proxy$Dyn.__vm_proxy_invoke` 是 VM 钩子，去掉属性 |
+| X2 一 | 22528eeb | 链外 | — | `CDS.initializeFromArchive` 是 `ACC_NATIVE`，属性改 `#[jvm_native]` |
+| X2 二 | e336f8ef | 链外 | TestUnixFileNatives 3127 → 3119；TestFilesApi / FileIODemo 3102 → 3095 | `FileSystems.getDefault` 按字节码翻译，删 `file_systems_impl.rs`，FileSystems 移出 `[vm_boundary]` 与 `clinit_carried`。`getDefaultProvider` 的系统属性分支经属性事实折叠，不展开反射链。手写返回的一般 `FileSystem` 值曾让 jrtfs 实现入闭包；翻译后取精确值，净减 7–8 类 |
+
+`#[jvm_boundary]` 全仓 123 → 33：vm_impl 8、module_impl 7、class_loader_impl 6、jce_security_impl 6、boot_loader_impl 2、module_layer_impl 2、class_impl 1、class_impl/members 1。
+
+**调用点事实不随被调方改成字节码而迁移**：`name_resolvers.offset` 折叠（`facts.rs::field_offset`）、`class_initializers`、
+`static_offset_getters`、`class_loads` 都按成员在调用点或可达时生效，与被调方是手写还是字节码无关。所以这些事实仍登记在公开包装上。
+内层 native 只拿到形参，挂在那里永远不会触发，§21.1 U3 行「识别点改到 `objectFieldOffset1`」不需要。
+U3 之后，emit `class_writer/methods.rs` 的 `core_` 适配已无运行时用户，由 Z 一并删除。
+
+**未完成项的阻塞（实测判定）**
+
+- **a3-C（`Class.enumConstantDirectory`）阻塞于反射调用精度。** 翻译后经 `getEnumConstantsShared` 走
+  `getMethod("values").invoke(null)`，TestEnumBasic 闭包 472 → 3103。每个枚举生成的 `valueOf(String)` 都调
+  `Enum.valueOf`，所以凡是用到枚举 `valueOf` 的程序都会多出约 2600 类。EnumSet / EnumMap 用例（`getUniverse`）已在承担同一代价（3103）。
+  前置：「已知类上已知名的静态无参方法的反射调用」按直接调用建边，不展开 `Method.invoke` 的访问器 / 句柄体系，
+  归 C1d 精度项。前置完成后 a3-C 直接删手写（已验证 `constant_directory_entries` 可随之删除）。
+- **a3-L2（ClassLoader 资源 6）与 L1 余项（`findResourceAsStream`、`getServicesCatalog`）阻塞于 boot layer 第 2–3 步。**
+  翻译路径 `BootLoader.findResource` → `BuiltinClassLoader.findResource` 依赖 `packageToModule` / `nameToModule`
+  与系统模块读取器（jimage）。TestClassResourceStream 要求 `getSystemResource("java/lang/String.class")` 非 null、
+  模块资源（currency.data 等）可读，引导层未建时翻译即回归。
+- **SecurityManager 移出 `[vm_boundary]` / `clinit_carried` 阻塞于 boot layer。** 手写只有 native `getClassContext`，
+  但 `<clinit>` 调 `ModuleLayer.boot()` → `addNonExportedPackages` 遍历层内模块描述符，依赖 Module / ModuleLayer 回到字节码。
+- **a3-V（VM 10）需要先做设计决定。** 翻译后 `initLevel()` 读静态字段，现行的线程内档位覆盖
+  （`__vm_at_init_level`：saveProperties 段为 0、惰性 initPhase3 段为 3）无法用单一字段表达。终态两条路：
+  ① 字段读取钩子带返回值（生成器新能力：`[vm_state.field_hooks]` 现只在访问前调用钩子，不改读出值）；
+  ② 启动序列按 HotSpot 改为急切执行（initLevel 1 → 2 → 3 → 4），但 initPhase3 的 `initSystemClassLoader` 会进入所有闭包。
+  `[facts.returns]` 中 isBooted / isModuleSystemInited / isJavaLangInvokeInited 按成员登记，翻译后照常生效，不影响闭包。
+- **X2 余项 JceSecurity 6 需要嵌入 java.home 的 NIO 虚拟层。** 翻译后 `<clinit>` 经 `Files.isDirectory` / `isReadable` /
+  `newDirectoryStream("{default,exempt}_*.policy")` / `Files.newInputStream` 读取 `${java.home}/conf/security/policy/<crypto.policy>`。
+  伪 java.home（`jdk_resources`）现只接入 `FileInputStream.open0`。终态做法是在 `UnixNativeDispatcher` 的
+  `stat0` / `lstat0` / `access0` / `opendir0` / `readdir0` / `closedir` / `open0` 与文件分派器 read / size / close 上接入嵌入树，
+  并嵌入 JDK 的 `conf/security/policy/{unlimited,limited}` 文件。`getVerificationResult` 对引导类 provider 走
+  `ProviderVerifier`（codeBase 为 null），不展开 JAR 签名校验栈。单独立项，验收见 §21.3 X2 行。
+- Module 7 / ModuleLayer 2 / `Class.getModule` 归 boot layer 第 2–3 步；Z 在全部完成后进行。
+
+审计余量：HelloWorld `vm_boundary_methods` 29 = VM 10、Module 7、ClassLoader 6、BootLoader 2、ModuleLayer 2、Class 2。
+
+**a3x2 验证后的两项修正（2026-10-05）**
+
+- **TestCharsetNamedStreams：`ServiceConfigurationError: Provider sun.nio.cs.ext.ExtendedCharsets not found`（005282bf）。**
+  L1 把 BootLoader.loadClass 改为字节码翻译后，`ServiceLoader.loadProvider` → `Class.forName(Module, String)` 按
+  `module.getClassLoader()` 分派。原手写 `Class.getModule` 对所有类都返回同一个无名模块，其加载器为 null，于是
+  走 `BootLoader.loadClassOrNull` → `findBootstrapClass`。平台加载器定义的类在这里按定义加载器表返回 null。
+  修正后 `getModule` 对非引导加载器定义的类返回其定义加载器的 `getUnnamedModule()`，保持
+  `getModule().getClassLoader() == getClassLoader()`，provider 经 `ClassLoader.loadClass(Module, String)` 的
+  `findLoadedClass` 命中。
+- **closure_independent_of_hash_seed：TestSerialLookupPairing 种子 0 比种子 1 多 `FinalReference`（780ba97d，生成器）。**
+  - **触发点：** `Lookup.findVarHandle` 内的 `resolveOrFail(byte, Class, String, Class)` 调用点（反射式字段写入的形状规则）。
+    若只有点名 `"head"` 的调用方先接入，名字形参在常量格上是 `"head"`，而类形参已合流为非常量。原实现先把这个
+    常量名并入点名、再试配对；类不是字面量，于是按名放开全部 `head` 字段，且放开不撤回。
+  - **后果：** `ReferenceQueue.head` 不再折叠，`poll` / `poll0` 的非空分支存活，`instanceof FinalReference` 生效。
+  - **为何与顺序有关：** 终态下名字形参抬为非常量、登记字段配对，不再按名放开，所以结果取决于调用点接入的先后。
+  - **修正：** 本方法字面量总放开；常量格给出的名字只在未登记配对时放开。
+  - **验证：** Linux 参考 JDK 下种子 0 / 1 / 2 的类 / 方法 / 反射成员集合一致。a3 合入前的运行时 3393 类，
+    a3 当前运行时 3386 类，均不含 `FinalReference`。
+  - **为何在 a3 出现：** a3 合并集成分支（d7315af6）后调用点接入次序改变，缺陷才暴露。clsfact 分支同样失败，
+    同属这一生成器缺陷。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
