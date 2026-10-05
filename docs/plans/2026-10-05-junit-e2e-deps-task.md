@@ -212,8 +212,13 @@
    - **J1 树对照回填（2026-10-06 凌晨）**：作业 `j1-trees2`（jp1）——全部 .rs 正文与资源
      逐字节相同、raw-audit 一致；**五个 scratch 各恰 3 行 closure.json 差异**（疑似 J1 包归属
      语义预期的库模块标注，非正文回归；mv 撞上前次尝试残留目录致链路部分短路，计数仍有效）。
-     3 行内容取证：`j1-diffm1b` 在 kr1 遭 infra 死亡（「远端进程已死且无 done」），已重派
-     `j1-diffm1c`，结果落地后在此补记最终口径。
+     **终局定性（2026-10-06 晨，本机受控对照）**：服务器两轮取证均遭 infra 死亡，改本机
+     heavy_lock 取证——63005c6b vs f294a0a4、**同一 `--lib` 参数**、emit-only 各一轮：
+     `compare_trees` **= 0 差异**（含计时剔除后的 closure.json）、裸 diff 正文 0 差异、
+     raw-audit 一致——**J1 验收「m1 生成正文与 J0 逐字节相同」成立**。j1-trees2 的五目录
+     各 3 行差异由此定性：其两侧实为「J2a 新入口（crate 名 org_hamcrest 等）vs J0 老入口
+     （crate 名 hamcrest）」——J2 预期的入口面差异，非 J1 回归；m2–m5 与 m1 同码路径，
+     3 行齐一性与之相符。
 
 12. **J2a 验收与 J2b（2026-10-06 凌晨，2174812a）**：
    - `j2a-golden2`（kr1，a67c33c2）：**新入口 `--deps/--cp/--seed-class` 下 m1–m5 5/5
