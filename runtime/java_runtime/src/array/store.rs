@@ -28,17 +28,19 @@ pub(super) enum Store<'a, T> {
     Ref(&'a [__RefField<T>]),
 }
 
-/// 按元素宽度选同宽原子类型执行 `$body`（`$a` 绑定为该原子的引用，`$u` 为其无符号整型）
+/// 按元素宽度选同宽原子类型执行 `$body`（`$a` 绑定为该原子的引用，`$u` 为其无符号整型）。
+/// 槽地址直接按原子类型取引用（与 `Atomic*::from_ptr` 同一前提），不经 std 方法：元素存取链
+/// 标 `#[inline(always)]`，在 opt-level 0 的调用方 crate 里也展开成少量指令（见 obj.rs 快路径）。
 macro_rules! with_atomic {
     ($slot:expr, |$a:ident, $u:ident| $body:expr) => {{
         let p = $slot.0.get();
         // SAFETY: 基本元素类型的宽度与对齐等于同宽原子类型（64 位目标），槽只经原子指令访问
         unsafe {
             match size_of::<T>() {
-                1 => { type $u = u8; let $a = AtomicU8::from_ptr(p as *mut u8); $body }
-                2 => { type $u = u16; let $a = AtomicU16::from_ptr(p as *mut u16); $body }
-                4 => { type $u = u32; let $a = AtomicU32::from_ptr(p as *mut u32); $body }
-                _ => { type $u = u64; let $a = AtomicU64::from_ptr(p as *mut u64); $body }
+                1 => { type $u = u8; let $a = &*(p as *const AtomicU8); $body }
+                2 => { type $u = u16; let $a = &*(p as *const AtomicU16); $body }
+                4 => { type $u = u32; let $a = &*(p as *const AtomicU32); $body }
+                _ => { type $u = u64; let $a = &*(p as *const AtomicU64); $body }
             }
         }
     }};
@@ -46,12 +48,12 @@ macro_rules! with_atomic {
 
 impl<T> PrimSlot<T> {
     /// 元素位形（零扩展到 u64）
-    #[inline]
+    #[inline(always)]
     pub(super) fn load_bits(&self, ord: Ordering) -> u64 {
         with_atomic!(self, |a, U| a.load(ord) as u64)
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn store_bits(&self, bits: u64, ord: Ordering) {
         with_atomic!(self, |a, U| a.store(bits as U, ord))
     }
@@ -67,7 +69,7 @@ impl<T> PrimSlot<T> {
 }
 
 /// 位形 → 元素值（低 `size_of::<T>()` 字节）
-#[inline]
+#[inline(always)]
 pub(super) fn from_bits<T>(bits: u64) -> T {
     // SAFETY: T 为基本元素类型，位形来自同类型元素（或经规范化的 boolean 字节）
     unsafe {
@@ -81,17 +83,17 @@ pub(super) fn from_bits<T>(bits: u64) -> T {
 }
 
 /// 元素值 → 位形（零扩展）
-#[inline]
+#[inline(always)]
 pub(super) fn to_bits<T>(v: T) -> u64 {
     let v = ManuallyDrop::new(v);
     let p = &*v as *const T;
-    // SAFETY: 同 from_bits
+    // SAFETY: T 为基本元素类型，按同宽无符号整型读出（基本整型可按值复制，不经 ptr::read）
     unsafe {
         match size_of::<T>() {
-            1 => std::ptr::read(p as *const u8) as u64,
-            2 => std::ptr::read(p as *const u16) as u64,
-            4 => std::ptr::read(p as *const u32) as u64,
-            _ => std::ptr::read(p as *const u64),
+            1 => *(p as *const u8) as u64,
+            2 => *(p as *const u16) as u64,
+            4 => *(p as *const u32) as u64,
+            _ => *(p as *const u64),
         }
     }
 }

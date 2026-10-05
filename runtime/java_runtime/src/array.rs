@@ -54,7 +54,13 @@ fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &s
 }
 
 impl<T> Clone for JArray<T> {
-    fn clone(&self) -> Self { JArray(self.0.clone()) }
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        JArray(match &self.0 {
+            Some(o) => Some(o.clone()),
+            None => None,
+        })
+    }
 }
 
 impl<T> std::fmt::Debug for JArray<T> {
@@ -94,9 +100,12 @@ impl<T: 'static> JArray<T> {
     }
 
     /// 非 null 数组的数组对象；null 抛 NullPointerException（JVMS §6.5 *aload / *astore / arraylength）
-    #[inline]
+    #[inline(always)]
     fn obj(&self) -> crate::error::Result<&__ArrayObj<T>> {
-        self.0.as_deref().ok_or_else(crate::error::JvmError::null_pointer)
+        match &self.0 {
+            Some(o) => Ok(o),
+            None => Err(crate::error::JvmError::null_pointer()),
+        }
     }
 
     /// 非 null 数组的存取形态
@@ -189,7 +198,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 读取下标 i 的元素（对应 Java iaload/aaload 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）；
     /// null 引用抛 `NullPointerException`。
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
         self.obj()?.get(i)
     }
@@ -204,7 +213,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 写入下标 i 的元素（对应 Java iastore/aastore 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *astore）；
     /// null 引用抛 `NullPointerException`。
-    #[inline]
+    #[inline(always)]
     pub fn set(&self, i: i32, v: T) -> crate::error::Result<()> {
         self.obj()?.set(i, v)
     }
@@ -219,7 +228,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
 
     /// 数组长度（对应 Java arraylength 字节码）。null 引用抛 NullPointerException
     /// （JVMS §6.5 arraylength：objectref 为 null 时抛 NPE）。
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> crate::error::Result<i32> {
         Ok(self.obj()?.len())
     }

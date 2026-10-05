@@ -101,18 +101,18 @@ impl<T: ?Sized> __Obj<T> {
     }
 
     /// 是否为静态哨兵（null / 类型化 null）
-    #[inline]
+    #[inline(always)]
     pub fn is_static(&self) -> bool {
         self.ptr.as_ptr() as *const () as usize & STATIC_TAG != 0
     }
 
     /// 值地址（去掉标记位）
-    #[inline]
+    #[inline(always)]
     pub fn as_ptr(&self) -> *const T {
         self.ptr.as_ptr().map_addr(|a| a & !STATIC_TAG)
     }
 
-    #[inline]
+    #[inline(always)]
     fn header(&self) -> &Header {
         // SAFETY: 只对堆对象调用；头在值地址前 HEAD 字节
         unsafe { &*((self.ptr.as_ptr() as *const u8).sub(HEAD) as *const Header) }
@@ -154,7 +154,7 @@ impl<T: ?Sized> __Obj<T> {
         __Obj { ptr: unsafe { NonNull::new_unchecked(q) }, _owns: PhantomData }
     }
 
-    #[inline]
+    #[inline(always)]
     fn inc(&self) {
         if self.is_static() {
             return;
@@ -203,7 +203,7 @@ impl<T: ?Sized> Drop for __Obj<T> {
 
 impl<T: ?Sized> std::ops::Deref for __Obj<T> {
     type Target = T;
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &T {
         // SAFETY: 堆对象存活至最后一个引用释放；静态哨兵为 'static
         unsafe { &*self.as_ptr() }

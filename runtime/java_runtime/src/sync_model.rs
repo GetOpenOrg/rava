@@ -55,27 +55,27 @@ mod mt {
     macro_rules! int_repr {
         ($($t:ty),*) => {$(
             impl __AtomicRepr for $t {
-                #[inline] fn __to_bits(self) -> u64 { self as u64 }
-                #[inline] fn __from_bits(b: u64) -> Self { b as $t }
+                #[inline(always)] fn __to_bits(self) -> u64 { self as u64 }
+                #[inline(always)] fn __from_bits(b: u64) -> Self { b as $t }
             }
         )*};
     }
     int_repr!(i8, u8, i16, u16, i32, u32, i64, u64, isize, usize);
     impl __AtomicRepr for bool {
-        #[inline] fn __to_bits(self) -> u64 { self as u64 }
-        #[inline] fn __from_bits(b: u64) -> Self { b != 0 }
+        #[inline(always)] fn __to_bits(self) -> u64 { self as u64 }
+        #[inline(always)] fn __from_bits(b: u64) -> Self { b != 0 }
     }
     impl __AtomicRepr for f32 {
-        #[inline] fn __to_bits(self) -> u64 { self.to_bits() as u64 }
-        #[inline] fn __from_bits(b: u64) -> Self { f32::from_bits(b as u32) }
+        #[inline(always)] fn __to_bits(self) -> u64 { self.to_bits() as u64 }
+        #[inline(always)] fn __from_bits(b: u64) -> Self { f32::from_bits(b as u32) }
     }
     impl __AtomicRepr for f64 {
-        #[inline] fn __to_bits(self) -> u64 { self.to_bits() }
-        #[inline] fn __from_bits(b: u64) -> Self { f64::from_bits(b) }
+        #[inline(always)] fn __to_bits(self) -> u64 { self.to_bits() }
+        #[inline(always)] fn __from_bits(b: u64) -> Self { f64::from_bits(b) }
     }
     impl __AtomicRepr for char {
-        #[inline] fn __to_bits(self) -> u64 { self as u64 }
-        #[inline] fn __from_bits(b: u64) -> Self { char::from_u32(b as u32).unwrap_or('\0') }
+        #[inline(always)] fn __to_bits(self) -> u64 { self as u64 }
+        #[inline(always)] fn __from_bits(b: u64) -> Self { char::from_u32(b as u32).unwrap_or('\0') }
     }
 
     /// 基本类型字段单元：`Cell` 同名方法集为 SeqCst（volatile 语义；long / double 64 位原子读写，
@@ -94,10 +94,10 @@ mod mt {
         /// 全零位形（各基本类型的 JVM 缺省值）：常量求值可用（静态字段单元）
         #[inline]
         pub const fn zeroed() -> Self { __PrimCell { bits: AtomicU64::new(0), _t: PhantomData } }
-        #[inline]
+        #[inline(always)]
         pub fn get(&self) -> T { T::__from_bits(self.bits.load(SeqCst)) }
         /// 普通（非 volatile）字段读：relaxed
-        #[inline]
+        #[inline(always)]
         pub fn get_plain(&self) -> T { T::__from_bits(self.bits.load(Relaxed)) }
         /// 普通（非 volatile）字段写：relaxed
         #[inline]
@@ -201,7 +201,7 @@ mod mt {
 
     struct FieldGuard<'a>(&'a AtomicBool);
     impl Drop for FieldGuard<'_> {
-        #[inline]
+        #[inline(always)]
         fn drop(&mut self) { self.0.store(false, Release) }
     }
 
@@ -209,7 +209,7 @@ mod mt {
         #[inline]
         pub const fn new(v: T) -> Self { __RefField { locked: AtomicBool::new(false), val: UnsafeCell::new(v) } }
 
-        #[inline]
+        #[inline(always)]
         fn lock(&self) -> FieldGuard<'_> {
             if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_err() {
                 self.lock_slow();
@@ -244,10 +244,13 @@ mod mt {
             f(unsafe { &mut *self.val.get() })
         }
 
-        /// 读：锁内克隆。
-        #[inline]
+        /// 读：锁内克隆。不经 `with` 的闭包：读路径（静态 / 实例引用字段 getter、引用数组元素）
+        /// 标 `#[inline(always)]`，opt-level 0 的调用方 crate 里只剩加锁 CAS、克隆与解锁。
+        #[inline(always)]
         pub fn get(&self) -> T where T: Clone {
-            self.with(|v| v.clone())
+            let _g = self.lock();
+            // SAFETY: 持锁独占
+            unsafe { (*self.val.get()).clone() }
         }
 
         /// 写：锁内交换，旧值在锁外释放。
@@ -275,9 +278,20 @@ mod mt {
 
     impl<T> __RefField<Option<T>> {
         /// 引用字段读（存储 `None` = 从未写入，按声明类型的缺省值应答）。
-        #[inline]
+        #[inline(always)]
         pub fn get_or_default(&self) -> T where T: Clone + Default {
-            self.get().unwrap_or_default()
+            let v = {
+                let _g = self.lock();
+                // SAFETY: 持锁独占
+                match unsafe { &*self.val.get() } {
+                    Some(v) => Some(v.clone()),
+                    None => None,
+                }
+            };
+            match v {
+                Some(v) => v,
+                None => T::default(),
+            }
         }
     }
 
