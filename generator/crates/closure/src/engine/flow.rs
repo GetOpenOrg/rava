@@ -382,8 +382,9 @@ impl<'a> Engine<'a> {
         if let Some(fi) = self.fields.get_index_of(&key) {
             return fi;
         }
-        let (fi, _) = self.fields.insert_full(key.clone(), ());
-        if let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)) {
+        let ftid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
+        let (fi, _) = self.fields.insert_full(key.clone(), ftid);
+        if let Some(tid) = ftid {
             self.flow(Node::U(fi), Node::F(fi), tid);
             if self.hw_written_names.contains(&key.name) {
                 self.add_to(Node::U(fi), &TypeSet::open(tid));

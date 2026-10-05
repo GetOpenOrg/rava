@@ -2,7 +2,8 @@
 //!
 //! 节点 Y 的**封闭类型** τ(Y)：Y 的每一个输入都已按 τ(Y) 收窄——形参节点 `P(t, i)` 的全部入边都按被调
 //! 声明类型过滤（`invoke.rs::edge`、`hub.rs`、`reflect_call.rs`），直接注入的值（接收者、open(声明类型)）
-//! 也属于该类型。于是 Y 的值集 s 满足 filter(s, f) = s 对一切 τ(Y) ⊑ f 成立（类 / open 的收窄逐项保持，
+//! 也属于该类型。同理：返回值 `R` 按返回类型汇入、字段节点 `F` / `U` / `O` 按字段声明类型写入、
+//! 枢纽 `HP` / `HR` 按枢纽的实参 / 返回声明类型中转，都以声明类型为封闭类型。于是 Y 的值集 s 满足 filter(s, f) = s 对一切 τ(Y) ⊑ f 成立（类 / open 的收窄逐项保持，
 //! 见 `classes.rs::open_narrow`）：出边 Y → X（过滤 f，τ(Y) ⊑ f）在任何时刻都与 Object 边推送相同的值，
 //! 称为**恒等边**。只经 Object 边与恒等边构成的强连通分量在不动点处类型集必然相等（沿环每条边目标 ⊇ 源），
 //! 可与 Object 环一样合并（`scc.rs`）。
@@ -20,6 +21,10 @@ impl<'a> Engine<'a> {
         }
         match self.graph.node(i) {
             Node::P(t, k) => self.methods[t].ptypes.get(k as usize).copied().flatten(),
+            Node::R(t) => self.methods[t].rtype,
+            Node::F(f) | Node::U(f) | Node::O(_, f) => self.fields.get_index(f).and_then(|x| *x.1),
+            Node::HP(h, j) => self.hubs.get(h as usize).and_then(|x| x.ptypes.get(j as usize).copied().flatten()),
+            Node::HR(h) => self.hubs.get(h as usize).and_then(|x| x.ret),
             _ => None,
         }
     }

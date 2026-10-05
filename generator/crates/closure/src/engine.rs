@@ -241,7 +241,8 @@ pub struct Engine<'a> {
     pub methods: IndexMap<(MemberRef, u32), MNode>,
     /// 成员 → 首个方法节点（输出按成员去重）
     mbase: HashMap<MemberRef, usize>,
-    fields: IndexMap<MemberRef, ()>,
+    /// 字段 → 声明类型（引用；V11 封闭类型用）
+    fields: IndexMap<MemberRef, Option<u32>>,
     /// 类型流图：节点类型集 / 流边 / 待推增量（节点驻留为序号）
     graph: FlowGraph,
 
