@@ -10,6 +10,8 @@ for T in "$@"; do
   N=$(basename "$T" .java)
   WS=$("$RAVA" build "$T" --stop-after emit 2>&1 | sed -n 's/.*→ \(.*\)（bin.*/\1/p' | tail -1)
   [ -n "$WS" ] || { echo "$N emit 失败"; continue; }
+  # 生成器缺省不写用户 crate 覆盖（10-05 起全部 crate opt 1），对照时补上该段
+  grep -q "profile.dev-opt.package.user" "$WS/Cargo.toml" || printf '\n[profile.dev-opt.package.user]\nopt-level = 1\n' >> "$WS/Cargo.toml"
   for lvl in 0 1; do
     sed -i "/\[profile.dev-opt.package.user\]/{n;s/opt-level = .*/opt-level = $lvl/}" "$WS/Cargo.toml"
     grep -A1 "package.user" "$WS/Cargo.toml" | tr '\n' ' '; echo

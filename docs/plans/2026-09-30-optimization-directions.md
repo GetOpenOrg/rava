@@ -194,6 +194,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 4. `79e4ccc4`（Q1(b)）本类静态方法 / 构造器 / `<clinit>` 内的本类 static 读写不再逐次查初始化状态：宏为每个 static 生成原始存取 `__si_<名>` / `__si_set_<名>`（只含安全点 + 存取），公开 getter / setter = `__class_init()?` + 原始存取；入口已注入 `Self::__class_init()?` 的方法体内，本类 `Own::f()` / `Own::set_f(v)` 改写为原始存取（闭包 / 嵌套项不改写；实例方法不改写——运行时手写可不经构造器造实例）。
 5. `b4b6ccd1`（Q4）栈界检查快路径内联：§21.8.3 不允许编译器线程局部取址跨挂起点缓存，故不直接 `#[inline]` 原函数，改为 Linux x86_64 / aarch64 每次现读线程指针（非 `pure` 内联汇编，`fs:[0]` / `tpidr_el0`）+ 静态 TLS 偏移取栈界；偏移在线程入口与载体切入时核对，任一线程不一致即永久退回 `#[inline(never)]` 慢路径；其他平台只走慢路径。
 6. （Q3）性能类测试构建档 `dev-opt`：生成的 workspace 增 `[profile.dev-opt]`（继承 dev，opt-level 1；`package.user` opt-level 0），`rava build / compile --dev-opt`（与 `--release` 互斥），e2e 用例以独占一行 `// rava-build-profile: dev-opt` 声明、`run_tests.py` 缺省档时按声明改走该档。dev 档保持 opt-level 0。档案 crate 跨测试共享缓存只付一次 opt 1 编译代价，用户 crate 每例重编保持 dev 速度。
+   - **10-05 用户改判**：`package.user` 的 opt-level 0 覆盖取消，dev-opt 档全部 crate opt-level 1（`91337dc9`）。依据 `r1n-uopt-d5ef6f58`（kr1，同一 scratch 只改用户 crate 档位）：SelfNumbers 运行 268.8 → 23.5 s，FibonacciMatrixExponentiation 214.3 → 214.9 s，TestVirtualThreadScale 6.71 → 6.14 s；构建 427–435 s 两档持平，二进制持平（opt 1 小约 0.5 MB）。原理由「用户 crate 每例重编保持 dev 速度」不成立：用户 crate 只有几个类，opt 1 增量在秒级；而 opt 0 下运行时 `#[inline]` 泛型存取在用户 crate 内单态化后逐层成调用，见下文 SelfNumbers 剖析。
 7. `e9c8c5b9` 即上条 Q3 的提交。
 8. `bc517e9e` 引用型常量（字符串 / 类字面量 / 拼接结果 / null）视为独占临时值：作实参与 checkcast 源时不再包 `Clone::clone(&..)`（`Clone::clone(&String::from("ha"))` → `String::from("ha")`）。
 9. `a61f8dc0`（杠杆 ②）字符串常量逐调用点缓存：`java_class!` 展开时把方法体与 ConstantValue 初值中的 `String::from("…")` 改写为调用点私有 `OnceLock` 单元，首次经全局驻留表（按 `Vec<u16>` 哈希、持锁）取规范实例，此后只克隆同一实例（JVMS §5.4.3 常量池项解析一次）。不用 `get_or_init`（首次加载可能经类初始化重入同一调用点），并发 / 重入的各次加载取到同一驻留实例、先写入者留存。可读层源码不变。
@@ -269,7 +270,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 - `r1n-sn-5f87b295`（sg2，SelfNumbers dev-opt）：与同机基线 153.1 s、`dbe90052` 291.6 s 对照。
 - `r1n-time4-5f87b295`（sg2）：其余 4 例 dev-opt。
 - `r1n-time-5f87b295`（kr1，5 例 dev-opt）：与 kr1 上 `d5ef6f58` 用户 opt 0 的 268.8 s 对照。
-- `r1n-uoptvt-5f87b295`（sg1）：TestVirtualThreadScale 与 SelfNumbers 在用户 crate opt 0 / 1 下对照，并打印输出。`r1n-uopt-d5ef6f58` 里 TestVirtualThreadScale 的 opt 0 / 1 输出 md5 不同，要据此判断差异来自时序（`all sleeping at once` 取决于 10⁵ 个虚拟线程能否在 2 s 内全部起跑），还是 opt 1 下行为不同。
+- TestVirtualThreadScale 在 `r1n-uopt-d5ef6f58` 中 opt 0 / 1 输出 md5 不同（`aa2a1714` / `e2b802a5`），已核实只是时序差：按测试的四行输出逐一重算，`finished: 100000`、`sum: 4999950000`、`alive after join: 0` 两档相同，只有 `all sleeping at once` 不同——opt 0 为 `false`（md5 `aa2a1714`），opt 1 为 `true`（md5 `e2b802a5`，与 JDK 期望一致）。该行取决于 10⁵ 个虚拟线程能否在第一个线程 2 s 睡醒前全部起跑；opt 0 下创建约 42 µs/个，合计超过 2 s。`r1n-uoptvt-5f87b295`（sg1）会打印两档原文作旁证。
 
 **前后对照**（`d28fd72e` 为 r1-next 之前，sg2，作业 `r1s-time2-d28fd72e`；`dbe90052` 为第 16–18 条之后，sg2，作业 `r1n-time-dbe90052`；运行段，dev-opt）：
 
@@ -286,7 +287,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 - FibonacciMatrixExponentiation 慢 28%。同例在 kr1 的 `d5ef6f58` 上为 214 s，在 sg2 的基线 `2602f409` 上为 245.1 s，单次样本，待 `r1n-time4-5f87b295` 复核。
 - 原定的「前」作业 `r1n-time-6a3c051e` 在 sg2 排队约 1.5 小时未启动，已撤下，让位给 `r1n-sn-5f87b295`。
 
-**待决**（交主会话 / 用户）：dev-opt 档用户 crate 的 opt-level 由 0 改为 1。上文第 6 条 Q3 定为 0，理由是「用户 crate 每例重编保持 dev 速度」；上表实测构建耗时与二进制持平，SelfNumbers 运行段降为 1/11。运行时侧（第 20 条）只能压缩运行时自身的调用层，用户方法体里的 `?`、`wrapping_add`、引用计数增减等在 opt-level 0 下仍逐个是调用。改用 opt-level 1 是一行档位配置（生成的 workspace `Cargo.toml`），不涉及生成器逻辑。
+**已决**（10-05 用户采纳，`91337dc9`，见第 6 条）：dev-opt 档用户 crate 的 opt-level 由 0 改为 1。上文第 6 条 Q3 定为 0，理由是「用户 crate 每例重编保持 dev 速度」；上表实测构建耗时与二进制持平，SelfNumbers 运行段降为 1/11。运行时侧（第 20 条）只能压缩运行时自身的调用层，用户方法体里的 `?`、`wrapping_add`、引用计数增减等在 opt-level 0 下仍逐个是调用。改动是去掉生成的 workspace `Cargo.toml` 里的 `[profile.dev-opt.package.user]` 段，不涉及翻译逻辑。第 20 条的运行时侧修复照常保留，作为 opt 0 依赖库层面的收益记录。
 
 **TestVirtualThreadScale 剖析**（`r1n-vtprof2-dbe90052`，kr1，8 核；运行 6.23 s，折合约 42 µs/VT，目标 ≤ 20 µs）：
 
