@@ -2152,3 +2152,16 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
   3. 字段 / 形参字符串值集（在 `PV` 单常量之外取小集合，同 `V::Ints`），使 `"jrt".equals(uri.getScheme())`、
      `lowerCaseProtocol` 按值集折叠；
   4. 服务目录查找的提供者集合按调用点服务类型收窄（`ExtendedProviderHolder` 只取 `CharsetProvider` 提供者）。
+
+### 23.7 带上下文的出口归因（2026-10-05，ea3e9770；`--why` 逐节点标克隆上下文）
+
+精度项 1 的第一步：`--why` 溯源链每个方法节点按「成员 #上下文」标出（`ctx_label`），链沿节点自身首达边走，同一成员的
+不同克隆可辨。用它重看锚点闭包（TestCustomException，临时锚点 runtime）三处出口，归因如下：
+
+| 出口 | 上下文链（摘要） | 真实 JVM | 对应精度项 |
+|---|---|---|---|
+| `ServiceLoader$ModuleServicesLookupIterator`（及 JCA 路） | `sun/nio/fs/Util.<clinit>@5` → `Charset.forName #@13536:5` → `lookup` → `lookup2@48` → `lookupExtendedCharset@8` → `ExtendedProviderHolder.<clinit>` → `ServiceLoader.iterator` | 字符集名取 `sun.jnu.encoding`，标准字符集，`lookup2` 在标准提供者处命中，不触发扩展提供者 | 3（字符串值集：系统属性值 → 标准字符集名集合，`lookup2` 按值集折叠） |
+| `SecureRandom` 的方法体 | `boot2@240` → `SystemModuleFinder.<init>` → `Set.of` → `Set12.<init>@9` 分派 `ModuleReferenceImpl.equals` → `Objects.equals #@8078:22` → `ModuleDescriptor.equals` → `Objects.equals #@8082:151` → `Version.equals` → `compareTokens@105` 对 `List<Object>` 元素 `toString` | `Version` 的记号只有 `String` / `Integer` | 容器元素类型：`compareTokens` 读出的元素是 open(Object)，全部活类型的 `toString` 入链（`Objects.equals` 已按调用点克隆，但汇合发生在元素读出处） |
+| `java.util.stream` | `FileOutputStream.<clinit>` → `SharedSecrets.ensureClassInitialized #@210:10` → `Lookup.ensureInitialized@19` → `StringBuilder.append(Object)`（实例汇合点，未克隆）→ `String.valueOf(Object) #@515:2` → `ModuleDescriptor$Exports.toString` → `ModuleDescriptor.toString(Set,String)` → `Collection.stream` | `ensureInitialized` 只在访问检查失败时拼异常消息 | G2 实例汇合点（`append(Object)`）：§6.7 实测按调用点克隆不分开；需按实参值集（而非形参汇合）分派 `toString` |
+
+结论：三处出口分属精度项 3、容器元素类型、实例汇合点三类，均与引导层本身无关；锚点启用仍以这些精度项为前置。
