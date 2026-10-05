@@ -2125,3 +2125,30 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
    三件（分配点字段事实、String 选择子、构造方法接收者克隆）合起来才关掉第 1 名出口，属独立精度项，工作量不在本线。
 2. 分派变宽限制在 phase 帧：锚点启用后其余方法读 `bootLayer` 而不重走 `ofSystem`；新实例化类型的 `toString` /
    `equals` / `PrivilegedAction.run` 分派只在实际有调用者的接收者集合上展开（与 §23.4 第 2–4 名同一机制）。
+
+### 23.6 锚点膨胀的进一步分解（2026-10-05，c1d-a2c 2602f409 同步后，临时锚点 runtime 重建）
+
+- 对照真实 JVM：`java -Xshare:off -Xlog:class+load`（无 CDS、无归档引导层，boot2 全程执行）TestCustomException 共加载
+  **588** 类；锚点闭包 3193 类，其中不在「常规闭包 ∪ 真实加载」内的 **2526** 类（真实加载里锚点闭包缺 82 类，均为
+  VM 内部 / 引导期类）。即引导层本身真实所需约 +100 类，其余是精度问题。
+- 真实 JVM 下 `LoadedModule.<init>` 以 `"jrt".equals(uri.getScheme())` 跳过 `createURL`（系统模块 URI 恒为 jrt），
+  不加载 jrt / jar URL 处理器、ICU、JCA、java.util.stream；`URI.scheme` 由 `JavaNetUriAccess.create("jrt", …)` 写入。
+- 多路径：单切 `LoadedModule.<init>@48 createURL`、或同时切 `lowerCaseProtocol@42` / `executePrivileged@29` /
+  `String.valueOf@11` / `Objects.equals@11` 四点，类数 3193 → 3193 / 3070。切掉 @48 后同一区域改由下列两路进入：
+  - `ServiceLoader$ModuleServicesLookupIterator`（引导层非空后服务目录有模块提供者）→ `Class.forName(Module, …)` →
+    `BuiltinClassLoader.findClassInModuleOrNull` → `defineClass` → `LoadedModule.codeSourceURL@22`（惰性 `createURL`，
+    对 jrt 也建 URL）→ `URL.of`；
+  - `ServiceLoader$LazyClassPathLookupIterator` → `BootLoader.findResources` → `findMiscResource` → jar URL →
+    `URLJarFile` → `Files.createTempFile` → `SecureRandom` → JCA。
+  两路的入口都是 `Charset$ExtendedProviderHolder`（真实 JVM 只在 `Charset.forName` 未知字符集时触发）。
+- 首次发现链（`via`）不带上下文：`doPrivileged` / `String.valueOf` 按调用点克隆，但报告中的分派边与方法首达边
+  都记在成员上，链里出现的「`AccessibleObject.<clinit>` → `executePrivileged` → `ExtendedProviderHolder$1.run`」、
+  「`main@27`（实参 String, int）→ `String.valueOf(Object)` → `ModuleDescriptor$Exports.toString`」都是不同克隆的边拼接，
+  不能作为出口归因。精度项开工前需先给 `--why` / `methods.via` 带上上下文（克隆键），否则出口排名不可信。
+- 精度项的工作分解（终态，均不按类名）：
+  1. 归因工具：`via` / 分派报告带克隆上下文，按上下文给出出口；
+  2. 实例字段的确定赋值：类的全部可达构造器在 `this` 逃逸前无条件写入的字段，缺省值不并入 `fvals`（现状为首次抽象分配
+     即并入缺省值，`URI.scheme` 恒为 null ∪ "jrt" = Top）；
+  3. 字段 / 形参字符串值集（在 `PV` 单常量之外取小集合，同 `V::Ints`），使 `"jrt".equals(uri.getScheme())`、
+     `lowerCaseProtocol` 按值集折叠；
+  4. 服务目录查找的提供者集合按调用点服务类型收窄（`ExtendedProviderHolder` 只取 `CharsetProvider` 提供者）。
