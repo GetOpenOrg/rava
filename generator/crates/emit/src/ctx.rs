@@ -265,13 +265,17 @@ impl<'a> EmitShared<'a> {
         })
     }
 
-    /// 手写根类的源文件 `<src>/<包>/<stem>{_impl,_ext,}.rs`（`src` 为 runtime 真源或 scratch overlay）
+    /// 手写根类的源文件 `<src>/<包>/<stem>{_impl,_ext,}.rs` 及各自私有辅助目录内的文件（手写单元，
+    /// 见 `closure::handwritten::layout`；`src` 为 runtime 真源或 scratch overlay）
     pub fn root_files(src: &Path) -> Vec<PathBuf> {
         let root = ty::consts::OBJECT;
         let (pkg, simple) = root.rsplit_once('/').unwrap_or(("", root));
         let dir = pkg.split('/').fold(src.to_path_buf(), |d, p| d.join(p));
         let stem = crate::text::to_snake(simple);
-        ["_impl", "_ext", ""].iter().map(|suffix| dir.join(format!("{stem}{suffix}.rs"))).collect()
+        ["_impl", "_ext", ""]
+            .iter()
+            .flat_map(|suffix| closure::handwritten::layout::unit_files(src, &dir.join(format!("{stem}{suffix}.rs"))))
+            .collect()
     }
 
     /// 根类的 public 实例方法键 {(名, 参数描述符部分)}（从 JDK 字节码解析；

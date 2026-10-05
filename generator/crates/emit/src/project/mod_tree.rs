@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use closure::handwritten::HwTypeRefs;
+use closure::handwritten::{layout, HwTypeRefs};
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
@@ -144,9 +144,10 @@ fn scan_tree(listing: &Listing, src_root: &Path, handwritten_src: Option<&Path>,
             continue;
         }
         let rel = dir.strip_prefix(src_root).unwrap_or(Path::new(""));
-        // 手写模块目录（runtime/ 真源提供 mod.rs）：模块结构由手写 mod.rs 自行声明
+        // 手写模块目录（runtime/ 真源提供 mod.rs）与手写文件的私有辅助目录（见 `closure::handwritten::layout`）：
+        // 模块结构由手写文件自行声明
         if let Some(hw) = handwritten_src {
-            if !rel.as_os_str().is_empty() && hw.join(rel).join("mod.rs").is_file() {
+            if !rel.as_os_str().is_empty() && (hw.join(rel).join("mod.rs").is_file() || layout::is_helper_dir(hw, &hw.join(rel))) {
                 skip_under.push(dir.clone());
                 continue;
             }
@@ -192,7 +193,7 @@ fn scan_tree(listing: &Listing, src_root: &Path, handwritten_src: Option<&Path>,
 /// 全部离开闭包后，上轮生成的 mod.rs 仍声明已删除模块（E0583），且目录与同名类文件并存
 /// （E0761，`java/lang/module/` 与 `java/lang/module.rs`）。不在本轮 mod 树中的子包目录删除其
 /// mod.rs 与空目录（目录内只剩本轮无宿主的共置手写时同样无可声明模块，保留文件）。
-/// 保留：手写模块目录（runtime/ 真源提供 mod.rs）整棵子树；java_runtime 手写 lib.rs 直接声明的
+/// 保留：手写模块目录（runtime/ 真源提供 mod.rs）与私有辅助目录整棵子树；java_runtime 手写 lib.rs 直接声明的
 /// 顶层目录（其余顶层包由 [`complete_lib_rs`] 按磁盘补声明，目录删除即不再声明）；lib crate
 /// （`handwritten_src` 为 None）的全部顶层目录
 fn prune_stale_pkg_dirs(
@@ -212,6 +213,7 @@ fn prune_stale_pkg_dirs(
         let Some(hw) = handwritten_src else { return false };
         let rel = d.strip_prefix(src_root).unwrap_or(Path::new(""));
         rel.ancestors().any(|a| !a.as_os_str().is_empty() && hw.join(a).join("mod.rs").is_file())
+            || layout::helper_root(hw, &hw.join(rel)).is_some()
     };
     // 自底向上：子目录先于父目录处理，删空的子目录让父目录也可能变空
     for (dir, _, files) in listing.iter().rev() {

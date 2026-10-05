@@ -19,6 +19,7 @@ use classfile::MemberRef;
 mod generic_fns;
 mod guards;
 mod hooks;
+pub mod layout;
 mod objects;
 mod scan;
 mod stype;
@@ -244,7 +245,7 @@ fn class_type_refs(src: &Path, prelude: &HashMap<String, Vec<String>>, cls: &str
             continue;
         }
         let path = src.join(pkg).join(format!("{stem}{suf}"));
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = layout::read_unit(src, &path) else { continue };
         match type_refs::scan(&content, prelude) {
             Ok(t) => out.extend(t),
             Err(e) => errors.push(format!("{}：{e}", path.display())),
@@ -352,7 +353,7 @@ impl Handwritten {
         let mut raw = FileFns::default();
         for suf in SUFFIXES {
             let path = self.src.join(pkg).join(format!("{}{suf}", to_snake(simple)));
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(content) = layout::read_unit(&self.src, &path) else { continue };
             // 自动生成的类文件碰巧以 _impl.rs 结尾（类名含 Impl / Ext）：生成类文件恒含限定宏调用
             if content.contains(GENERATED_MARK) {
                 continue;
@@ -361,7 +362,7 @@ impl Handwritten {
                 Ok(file) => scan_file(&file, &self.prelude, &mut raw),
                 Err(e) => self.errors.borrow_mut().push(format!("{}：{e}", path.display())),
             }
-            hw.files.push(path);
+            hw.files.extend(layout::unit_files(&self.src, &path));
         }
         hw.type_refs = class_type_refs(&self.src, &self.prelude, cls, &mut self.errors.borrow_mut());
         close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);

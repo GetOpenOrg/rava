@@ -1,7 +1,8 @@
 //! 共置手写文件扫描。
 //!
 //! 遍历 `src/**/*_impl.rs` / `*_ext.rs`（目录与文件名排序，与 `os.walk` 同序：先本目录文件、
-//! 后子目录），按文本形态提取：
+//! 后子目录；文本取手写单元合并文本，私有辅助目录内的文件并入宿主，见 `closure::handwritten::layout`），
+//! 按文本形态提取：
 //! - `pub fn` 名（手写提供的方法，发射层跳过对应翻译）；
 //! - 伴生核心 `fn core_<名>`（名 → (核心 fn 名, 返回类型文本)）；
 //! - `impl <X>__VTable for T { … }` 块内的接口方法签名（登记到接口 X 的条目）。
@@ -12,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use closure::handwritten::{file_uses, resolve_type, TypeRef, GENERATED_MARK, MODULE_SUFFIXES};
+use closure::handwritten::{file_uses, layout, resolve_type, TypeRef, GENERATED_MARK, MODULE_SUFFIXES};
 use ty::Registry;
 
 use crate::par::par_map;
@@ -317,6 +318,10 @@ struct FileFacts {
 
 /// 读取并提取一个手写文件；非手写模块文件、不可读或含生成标记的文件返回 `None`
 fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> Option<FileFacts> {
+    // 私有辅助目录内的文件并入宿主单元（随宿主读取），自身不单独提取
+    if layout::helper_root(src_dir, path).is_some() {
+        return None;
+    }
     let fname = path.file_name().and_then(|f| f.to_str())?;
     let base = MODULE_SUFFIXES.iter().find_map(|s| fname.strip_suffix(&format!("{s}.rs")))?;
     let rel = path.parent().unwrap_or(src_dir).strip_prefix(src_dir).ok()?;
@@ -328,7 +333,7 @@ fn file_facts(src_dir: &Path, path: &Path, snake: &BTreeMap<String, String>) -> 
         None => head_binary_name(&path.with_file_name(format!("{base}.rs")))
             .unwrap_or_else(|| with_pkg(base.split('_').map(capitalize).collect())),
     };
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = layout::read_unit(src_dir, path).ok()?;
     if content.contains(GENERATED_MARK) {
         return None;
     }

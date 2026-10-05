@@ -285,6 +285,9 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut perf = Perf::new();
     let mut w = Writer::new(&jdk_srcs, &runtime_src);
     let jdk = JdkLayout::build(ctx, out_dir);
+    if let Some((cls, dir)) = jdk.helper_clash(ctx, out_dir) {
+        return Err(crate::error::EmitError::Assert(format!("类 {cls} 的包目录与手写私有辅助目录 {} 冲突", dir.display())));
+    }
     let user = UserLayout::build(ctx, &user_src);
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
     perf.mark("layout");

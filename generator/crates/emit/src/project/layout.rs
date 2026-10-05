@@ -55,6 +55,20 @@ impl JdkLayout {
     }
 }
 
+impl JdkLayout {
+    /// 落入手写私有辅助目录（`closure::handwritten::layout`）的类：辅助目录不是包，Java 包段与宿主文件名
+    /// 撞名即约定被破坏（手写文件名须改），返回首个冲突的类与目录
+    pub fn helper_clash(&self, ctx: &EmitCtx<'_>, out_dir: &Path) -> Option<(String, PathBuf)> {
+        let crates = ctx.crates();
+        let runtime_src = ctx.runtime_src();
+        self.files.iter().find_map(|(c, path)| {
+            let rel = path.parent()?.strip_prefix(crates.src_dir(out_dir, crates.crate_of(c))).ok()?;
+            let dir = closure::handwritten::layout::helper_root(&runtime_src, &runtime_src.join(rel))?;
+            Some((c.clone(), dir))
+        })
+    }
+}
+
 /// 类名以 Impl / Ext 结尾时，snake 名与同包类 X 的共置手写 `x_impl.rs` / `x_ext.rs` 同名
 /// （`Inet6AddressImpl` ↔ `Inet6Address` 的 native 手写 `inet6_address_impl.rs`）：手写真源同路径
 /// 已有文件即为共置手写，生成类让出该路径（加 `_t` 后缀），否则生成文件被当作手写而不落盘
