@@ -434,6 +434,7 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         profile: o.build_profile,
         target_dir: o.target_dir.clone(),
         build_timeout: o.build_timeout,
+        build_mem_mb: o.build_mem_mb,
         keep_artifacts: o.keep_artifacts,
     };
     let exe = compile_stage(out, repo, &emit, &c, st)?;

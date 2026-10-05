@@ -1,7 +1,7 @@
 //! 内存感知的 cargo 并行作业数（二进制体积 B4，docs/plans/2026-10-04-binary-size.md §六）。
 //!
 //! 终态规则（每次 `rava compile` / `rava build` 编译段执行一次，不是失败后的重试）：
-//! 1. 可用内存 A：[`crate::mem_probe::probe`]（`RAVA_BUILD_MEM_MB` > min(系统可用, 各级 cgroup 余量)）。
+//! 1. 可用内存 A：命令行 `--build-mem-mb` 显式给定，否则 [`crate::mem_probe::probe`]（min(系统可用, 各级 cgroup 余量)）。
 //! 2. 预算 B = A × [`BUDGET_PCT`]%（留 15% 余量给页缓存、cargo、链接器与估计误差）。
 //! 3. 逐 crate 估计 rustc 峰值 E(c) = 基数 + 斜率 × 该 crate 源码 MB（`src/**.rs` 字节；系数按档位，见
 //!    [`Model::of`]，取自服务器逐 crate 实测的上包络）。可执行文件所在的 user crate 在 LTO 档位下
@@ -171,8 +171,13 @@ pub fn plan(sizes: &[(String, u64)], bin_crate: &str, model: Model, probe: Optio
 
 /// 规则全程：探测可用内存、扫描工作区 crate 体量、按档位系数定作业数。
 /// 可执行文件所在 crate 为发射层的用户 crate
-pub fn decide(scratch: &Path, profile: BuildProfile) -> MemPlan {
-    plan(&crate_sizes(scratch), emit::ctx::USER_CRATE, Model::of(profile), crate::mem_probe::probe(), job_cap())
+/// `given_mb`：`--build-mem-mb` 显式给定的可用内存（代替探测）
+pub fn decide(scratch: &Path, profile: BuildProfile, given_mb: Option<u64>) -> MemPlan {
+    let probe = match given_mb {
+        Some(mb) => Some(MemProbe { avail_mb: mb, source: "--build-mem-mb".into() }),
+        None => crate::mem_probe::probe(),
+    };
+    plan(&crate_sizes(scratch), emit::ctx::USER_CRATE, Model::of(profile), probe, job_cap())
 }
 
 /// 作业数上限：调用方 CARGO_BUILD_JOBS（正整数）否则 CPU 核数

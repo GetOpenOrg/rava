@@ -1,7 +1,7 @@
 //! 构建可用内存探测（内存感知作业数的输入，规则见 [`crate::mem_budget`]）。
 //!
 //! 可用内存 = min(系统可用, 本进程所在各级 cgroup 的余量)：
-//! - 显式给定：环境变量 `RAVA_BUILD_MEM_MB`（MB，整数）优先于探测；
+//! - 显式给定可用内存走命令行 `--build-mem-mb`（[`crate::mem_budget::decide`]），不经本模块；
 //! - Linux：`/proc/meminfo` 的 `MemAvailable`；cgroup v2 自本进程 cgroup 逐级上行到根，每级有
 //!   `memory.max` 上限时取 上限 − (memory.current − inactive_file)（不活跃文件页可回收，不算占用）；
 //!   cgroup v1 取 memory 层级的 limit_in_bytes − (usage_in_bytes − total_inactive_file)；
@@ -10,9 +10,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// 显式给定可用内存（MB）的环境变量
-pub const MEM_ENV: &str = "RAVA_BUILD_MEM_MB";
 
 /// 探测结果
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,9 +23,6 @@ pub struct MemProbe {
 const MB: u64 = 1024 * 1024;
 
 pub fn probe() -> Option<MemProbe> {
-    if let Some(v) = std::env::var(MEM_ENV).ok().and_then(|v| v.trim().parse::<u64>().ok()) {
-        return Some(MemProbe { avail_mb: v, source: MEM_ENV.to_string() });
-    }
     let mut best: Option<MemProbe> = None;
     let mut take = |mb: u64, source: String| {
         if best.as_ref().is_none_or(|b| mb < b.avail_mb) {

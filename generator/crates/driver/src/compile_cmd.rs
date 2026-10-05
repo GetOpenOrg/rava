@@ -1,6 +1,6 @@
 //! 编译阶段：`rava build` 的 compile 段与 `rava compile <scratch>` 共用。
 //!
-//! `rava compile <scratch> [--release | --release-max | --release-small | --dev-opt] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
+//! `rava compile <scratch> [--release | --release-max | --release-small | --dev-opt] [--target-dir D] [--build-timeout SECS] [--build-mem-mb MB] [--keep-artifacts] [--runtime R]`：编译已由
 //! `rava build --stop-after emit` 发射好的工作区（bin 名与重型判定输入读自 `build_status.json` 的 emit 段），
 //! 更新 `build_status.json` / `build_artifacts.json`。批量编排先并行发射、再逐个编译时用它——发射进程
 //! 不必常驻等待共享 target 的 cargo 文件锁。
@@ -21,6 +21,8 @@ pub struct CompileArgs {
     pub profile: BuildProfile,
     pub target_dir: Option<PathBuf>,
     pub build_timeout: Option<u64>,
+    /// 编译可用内存（MB，`--build-mem-mb`）：给定时代替探测
+    pub build_mem_mb: Option<u64>,
     /// 保留中间产物（缺省链接成功后只留可执行文件）
     pub keep_artifacts: bool,
 }
@@ -30,7 +32,7 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
     st.stage = Stage::Compile;
     let heavy = Heavy::decide(emit.jdk_classes);
     st.heavy = Some(heavy.clone());
-    let mem = crate::mem_budget::decide(out, c.profile);
+    let mem = crate::mem_budget::decide(out, c.profile, c.build_mem_mb);
     st.mem = Some(mem.clone());
     let opts = CargoOpts {
         target_dir: c.target_dir.clone().unwrap_or_else(|| repo.join("build").join("target")),
@@ -64,11 +66,12 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
         }
         match a.as_str() {
             "--keep-artifacts" => c.keep_artifacts = true,
-            "--target-dir" | "--build-timeout" | "--runtime" => {
+            "--target-dir" | "--build-timeout" | "--build-mem-mb" | "--runtime" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
                 match a.as_str() {
                     "--target-dir" => c.target_dir = Some(PathBuf::from(v)),
                     "--runtime" => runtime = Some(PathBuf::from(v)),
+                    "--build-mem-mb" => c.build_mem_mb = Some(v.parse().map_err(|_| format!("--build-mem-mb 需为 MB 数：{v}"))?),
                     _ => c.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?),
                 }
             }
@@ -118,6 +121,7 @@ mod tests {
         assert_eq!(parse(&args("/s --release-small")).unwrap().1.profile, BuildProfile::ReleaseSmall);
         assert!(parse(&args("/s --release --release-small")).is_err(), "档位互斥");
         assert_eq!(parse(&args("/s --release-max")).unwrap().1.profile, BuildProfile::ReleaseMax);
+        assert_eq!(parse(&args("/s --build-mem-mb 9000")).unwrap().1.build_mem_mb, Some(9000));
         assert!(parse(&args("/s --keep-artifacts")).unwrap().1.keep_artifacts);
         assert_eq!(c.target_dir, Some(PathBuf::from("/t")));
         assert_eq!(c.build_timeout, Some(9));
