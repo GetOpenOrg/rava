@@ -225,45 +225,6 @@ impl Unsafe {
         Ok(())
     }
 
-    /// 进程内唯一的 Unsafe 实例（对应静态字段 theUnsafe）。
-    #[jvm_boundary]
-    pub fn getUnsafe() -> Result<Unsafe> {
-        crate::__process_static! {
-            static THE_UNSAFE: Unsafe = {
-                let mut u = Unsafe::default();
-                u._init_not_null();
-                u
-            };
-        }
-        Ok(THE_UNSAFE.with(Clone::clone))
-    }
-
-    /// `ensureClassInitialized(Class)`：确保类初始化完成（HotSpot 走 VM 类初始化）。
-    /// JDK 以此运行目标类 `<clinit>` 的副作用（`SharedSecrets.javaUtilJarAccess()`：初始化 JarFile 以登记
-    /// 访问器字段），惰性协议推迟到「首次主动使用」会丢失该副作用，故按名同步触发：闭包把按镜像初始化的
-    /// 目标类导出为初始化钩子（closure.json `seeds.mirror_inits`），未登记的类（数组 / 基本类型 / 无
-    /// `<clinit>`）no-op。
-    #[jvm_boundary]
-    pub fn ensureClassInitialized(&self, c: Class) -> Result<()> {
-        if c.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let name = format!("{}", c.__get_name());
-        crate::ensure_class_initialized(&name)
-    }
-
-    /// `shouldBeInitialized(Class)`：类尚未完成初始化（HotSpot `should_be_initialized`）。调用方据此决定是否
-    /// 立即初始化：VarHandles.makeFieldHandle 的静态字段分支在创建句柄时初始化声明类，DirectMethodHandle
-    /// 据此选带初始化屏障的形态。不能恒答「已初始化」——那会把创建句柄时的初始化推迟到首次访问，
-    /// `<clinit>` 的副作用顺序与 JVM 不同。只对登记了初始化钩子的类作答（与 `ensureClassInitialized` 同一张表）。
-    #[jvm_boundary]
-    pub fn shouldBeInitialized(&self, c: Class) -> Result<bool> {
-        if crate::_is_jnull_ref(&c) {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        Ok(crate::class_needs_initialization(&format!("{}", c.__get_name())))
-    }
-
     /// `allocateInstance(Class)`：分配实例、不运行构造器（MH `newInvokeSpecial` 的
     /// 分配步：DirectMethodHandle.allocateInstance → 随后 invokeSpecial `<init>`）。
     /// 与序列化构造器的无构造分配同一协议——L3 分派闭包的 `<alloc>` 伪成员
@@ -295,27 +256,6 @@ impl Unsafe {
     }
 
 
-    /// 字段偏移量：HotSpot 返回对象布局的真实偏移；原生二进制没有 C 布局对象，
-    /// 字段经名字访问，偏移量只作不透明标识使用（AtomicLong 等把它存进 long 字段
-    /// 再传回 compareAndSwapLong——恒等即可）。按 (声明类名, 字段名) 分配稳定的
-    /// 不透明 id（线程内递增），同一字段恒等——与 `objectFieldOffset(Field)`
-    /// 共用同一登记表（JDK 两重载对同一字段同值）。
-    #[jvm_boundary]
-    pub fn objectFieldOffset_class_str(&self, c: Class, name: String) -> Result<i64> {
-        Ok(_object_field_offset_id(format!("{}", c.__get_name()), format!("{}", name)))
-    }
-
-    /// `objectFieldOffset(Field)`：实例字段偏移。Field 按不透明身份协作协议处理
-    /// （并行任务深化 Field 内部表示，此处只消费其 (声明类, 字段名) 身份），
-    /// 与 (Class, String) 重载经同一登记表对同一字段返回同一不透明 id。
-    #[jvm_boundary]
-    pub fn objectFieldOffset_field(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
-        Ok(_object_field_offset_id(
-            format!("{}", f.__get_clazz().__get_name()),
-            format!("{}", f.__get_name()),
-        ))
-    }
-
     /// 引用槽的原子读-改-写（VarHandle 引用族 CAS / 交换）：与 Unsafe 引用 CAS 族同一载体分派
     ///（引用元素数组 / 静态字段 / 实例字段），返回旧值。
     pub(crate) fn __vh_ref_update(&self, o: &Object, offset: i64,
@@ -329,54 +269,76 @@ impl Unsafe {
                                    f: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
         _ext::prim(o, offset, width, "VarHandle 基本类型族读-改-写", f)
     }
-
-    /// `arrayBaseOffset(Class)` 的实现核心（`core_` 约定）：数组存储里首个
-    /// 元素前的头部长度。HotSpot 64 位（压缩 oops）对所有数组类返回 16；原生
-    /// 二进制无 C 布局，该值与访问器族的偏移解码共用常量（自洽即可，不进可
-    /// 观察输出）。null 类按 JDK 抛 NPE。
-    ///
-    /// 返回宽度按 JDK 25 形态书写（long）：该方法签名随 JDK 演化（javap：
-    /// jdk.internal.misc.Unsafe.arrayBaseOffset JDK21 `()I` → JDK25 `()J`，
-    /// 消费方 CHM.ABASE 字段同步 I→J），伴生不再以 Java 名直接暴露（避免与
-    /// 生成侧模型签名同名相撞 E0592）；生成侧 class_writer 检出 `core_` 核
-    /// 心后按**当前模型宽度**发适配声明转发本核心（转发体经 `this.` 调用
-    /// ——宏据 NeedsWrapper 分类落到 wrapper 上下文，核心即在 wrapper 上；宽度差经显式
-    /// `as` 还原），调用
-    /// 面（含 putstatic 值侧）恒为模型类型——两版模型下编译面归零。
-    #[jvm_boundary]
-    pub fn core_arrayBaseOffset(&self, arrayClass: Class) -> Result<i64> {
-        if Object::from(Clone::clone(&arrayClass)).0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let name = format!("{}", arrayClass.__get_name());
-        if _array_index_scale_by_name(&name).is_none() {
-            // JDK 语义：非数组类的返回值未定义（HotSpot 走 assert/崩溃）
-            panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset:(Ljava/lang/Class;)J (非数组类 {})", name);
-        }
-        Ok(ARRAY_BASE_OFFSET)
-    }
-
-    /// `arrayIndexScale(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按
-    /// 元素类型给出（引用元素为压缩指针 4）；消费方（CHM 的 ASHIFT 等）据此
-    /// 构造偏移，访问器族用同一组常量反解下标。null 类按 JDK 抛 NPE。
-    #[jvm_boundary]
-    pub fn arrayIndexScale(&self, arrayClass: Class) -> Result<i32> {
-        if Object::from(Clone::clone(&arrayClass)).0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let name = format!("{}", arrayClass.__get_name());
-        match _array_index_scale_by_name(&name) {
-            Some(scale) => Ok(scale as i32),
-            None => panic!("stub: jdk/internal/misc/Unsafe.arrayIndexScale:(Ljava/lang/Class;)I (非数组类 {})", name),
-        }
-    }
 }
 
-/// ACC_NATIVE（类 1）：翻译体 `arrayBaseOffset` 的 native 落点（`throwException` 见 volatile 族之后）。
+/// ACC_NATIVE（类 1）：布局 / 字段偏移 / 类初始化的 native 落点。公开包装（getUnsafe、objectFieldOffset×2、
+/// arrayBaseOffset、arrayIndexScale、ensureClassInitialized、shouldBeInitialized 的判空转发）与 `<clinit>`
+///（theUnsafe 单例与 ARRAY_* 常量；常量读取另经 [vm_constants.injected_statics] 取 VM 值）按 JDK 字节码翻译（a3-U3）。
 impl Unsafe {
-    /// native `arrayBaseOffset0(Class)`：与 `core_arrayBaseOffset` 同一常量（偏移解码自洽）。
+    /// native `registerNatives()`：HotSpot 登记 JNI 入口；原生二进制按名链接 → no-op。
+    #[jvm_native]
+    pub fn registerNatives() -> Result<()> {
+        Ok(())
+    }
+
+    /// native `objectFieldOffset1(Class, String)`：字段偏移量。HotSpot 返回对象布局的真实偏移；原生二进制
+    /// 没有 C 布局对象，字段经名字访问，偏移量只作不透明标识使用（AtomicLong 等把它存进 long 字段再传回
+    /// compareAndSetLong——恒等即可）。按 (声明类名, 字段名) 分配稳定的不透明 id，同一字段恒等——与
+    /// `objectFieldOffset0(Field)` 共用同一登记表（JDK 两重载对同一字段同值）。
+    #[jvm_native]
+    pub fn objectFieldOffset1(&self, c: Class, name: String) -> Result<i64> {
+        Ok(_object_field_offset_id(format!("{}", c.__get_name()), format!("{}", name)))
+    }
+
+    /// native `objectFieldOffset0(Field)`：实例字段偏移，只消费 Field 的 (声明类, 字段名) 身份，
+    /// 与 (Class, String) 形态经同一登记表对同一字段返回同一不透明 id。
+    #[jvm_native]
+    pub fn objectFieldOffset0(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
+        Ok(_object_field_offset_id(
+            format!("{}", f.__get_clazz().__get_name()),
+            format!("{}", f.__get_name()),
+        ))
+    }
+
+    /// native `arrayBaseOffset0(Class)`：数组存储里首个元素前的头部长度。HotSpot 64 位（压缩 oops）对所有
+    /// 数组类返回 16；原生二进制无 C 布局，该值与访问器族的偏移解码共用常量（自洽即可，不进可观察输出）。
     #[jvm_native]
     pub fn arrayBaseOffset0(&self, array_class: Class) -> Result<i32> {
-        Ok(self.core_arrayBaseOffset(array_class)? as i32)
+        let name = format!("{}", array_class.__get_name());
+        if _array_index_scale_by_name(&name).is_none() {
+            // JDK 语义：非数组类的返回值未定义（HotSpot 走 assert/崩溃）
+            panic!("stub: jdk/internal/misc/Unsafe.arrayBaseOffset0:(Ljava/lang/Class;)I (非数组类 {})", name);
+        }
+        Ok(ARRAY_BASE_OFFSET as i32)
+    }
+
+    /// native `arrayIndexScale0(Class)`：数组元素的寻址 stride（字节）。HotSpot 语义按元素类型给出（引用元素
+    /// 为压缩指针 4）；消费方（CHM 的 ASHIFT 等）据此构造偏移，访问器族用同一组常量反解下标。
+    #[jvm_native]
+    pub fn arrayIndexScale0(&self, array_class: Class) -> Result<i32> {
+        let name = format!("{}", array_class.__get_name());
+        match _array_index_scale_by_name(&name) {
+            Some(scale) => Ok(scale as i32),
+            None => panic!("stub: jdk/internal/misc/Unsafe.arrayIndexScale0:(Ljava/lang/Class;)I (非数组类 {})", name),
+        }
+    }
+
+    /// native `ensureClassInitialized0(Class)`：确保类初始化完成（HotSpot 走 VM 类初始化）。JDK 以此运行目标类
+    /// `<clinit>` 的副作用（`SharedSecrets.javaUtilJarAccess()`：初始化 JarFile 以登记访问器字段），惰性协议
+    /// 推迟到「首次主动使用」会丢失该副作用，故按名同步触发：闭包把按镜像初始化的目标类导出为初始化钩子
+    ///（closure.json `seeds.mirror_inits`），未登记的类（数组 / 基本类型 / 无 `<clinit>`）no-op。
+    #[jvm_native]
+    pub fn ensureClassInitialized0(&self, c: Class) -> Result<()> {
+        crate::ensure_class_initialized(&format!("{}", c.__get_name()))
+    }
+
+    /// native `shouldBeInitialized0(Class)`：类尚未完成初始化（HotSpot `should_be_initialized`）。调用方据此
+    /// 决定是否立即初始化：VarHandles.makeFieldHandle 的静态字段分支在创建句柄时初始化声明类，
+    /// DirectMethodHandle 据此选带初始化屏障的形态。不能恒答「已初始化」——那会把创建句柄时的初始化推迟到
+    /// 首次访问，`<clinit>` 的副作用顺序与 JVM 不同。只对登记了初始化钩子的类作答（与
+    /// `ensureClassInitialized0` 同一张表）。
+    #[jvm_native]
+    pub fn shouldBeInitialized0(&self, c: Class) -> Result<bool> {
+        Ok(crate::class_needs_initialization(&format!("{}", c.__get_name())))
     }
 }

@@ -305,6 +305,6 @@ impl MethodHandleNatives {
     #[jvm_native]
     pub fn objectFieldOffset(m: MemberName) -> Result<i64> {
         crate::jdk::internal::misc::Unsafe::getUnsafe()?
-            .objectFieldOffset_class_str(Clone::clone(&m.__get_clazz()), Clone::clone(&m.__get_name()))
+            .objectFieldOffset1(Clone::clone(&m.__get_clazz()), Clone::clone(&m.__get_name()))
     }
 }

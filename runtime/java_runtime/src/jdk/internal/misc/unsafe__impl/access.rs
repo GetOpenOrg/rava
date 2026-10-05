@@ -189,45 +189,21 @@ impl Unsafe {
         Ok(old == expected)
     }
 
-    /// `staticFieldBase(Field)`：静态字存储基址。JDK 返回镜像 Class 对应的
-    /// 基址对象；此处返回声明类对象装箱（身份稳定——`for_class` 按名缓存）。访问器按
-    /// 偏移（静态字段 id）路由到声明类的静态存储，基址只作非 null 载体。
-    #[jvm_boundary]
-    pub fn staticFieldBase(&self, f: crate::java::lang::reflect::Field) -> Result<Object> {
-        Ok(Object::from(f.__get_clazz()))
-    }
-
-    /// `staticFieldOffset(Field)`：静态字偏移量。无原始内存布局，偏移是按
-    /// (声明类, 字段名) 登记的稳定不透明 id（同一字段恒同一 id，JDK 语义），取值区间
-    /// 与 objectFieldOffset 的实例字段 id 不相交（`reflect_dispatch::STATIC_FIELD_ID_BASE` 起）：引用访问器
-    /// 据此把 (staticFieldBase, 偏移) 路由到声明类的静态存储（引用族 `_static_ref_get/set` /
-    /// `_ref_rmw`，基本类型族 `unsafe__ext::prim`，均经字段闭包）。
-    #[jvm_boundary]
-    pub fn staticFieldOffset(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
+    /// native `staticFieldOffset0(Field)`：静态字段偏移。无原始内存布局，偏移是按 (声明类, 字段名) 登记的
+    /// 稳定不透明 id（同一字段恒同一 id，JDK 语义），取值区间与 objectFieldOffset 的实例字段 id 不相交
+    ///（`reflect_dispatch::STATIC_FIELD_ID_BASE` 起）：引用访问器据此把 (staticFieldBase, 偏移) 路由到声明类的
+    /// 静态存储（引用族 `_static_ref_get/set` / `_ref_rmw`，基本类型族 `unsafe__ext::prim`，均经字段闭包）。
+    /// 公开包装 `staticFieldOffset(Field)`（判空）按 JDK 字节码翻译。
+    #[jvm_native]
+    pub fn staticFieldOffset0(&self, f: crate::java::lang::reflect::Field) -> Result<i64> {
         let decl = format!("{}", f.__get_clazz().__get_name()).replace('.', "/");
         let name = format!("{}", f.__get_name());
         Ok(_static_field_id(decl, name))
     }
 
-    /// 分配基本类型数组。Rust 侧不存在未初始化内存的可观察差异，元素一律零值
-    /// （JDK 规格允许实现返回已清零的数组）。
-    #[jvm_boundary]
-    pub fn __impl_allocateUninitializedArray(&self, componentType: Class, length: i32) -> Result<Object> {
-        if length < 0 {
-            return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(String::from("Negative length"))?));
-        }
-        let n = length;
-        let name = format!("{}", componentType.__get_name());
-        Ok(match name.as_str() {
-            "byte" => Object::from(JArray::<i8>::new(n)),
-            "boolean" => Object::from(JArray::<bool>::new(n)),
-            "short" => Object::from(JArray::<i16>::new(n)),
-            "char" => Object::from(JArray::<u16>::new(n)),
-            "int" => Object::from(JArray::<i32>::new(n)),
-            "long" => Object::from(JArray::<i64>::new(n)),
-            "float" => Object::from(JArray::<f32>::new(n)),
-            "double" => Object::from(JArray::<f64>::new(n)),
-            _ => return Err(JvmError::from(crate::java::lang::IllegalArgumentException::new_str(String::from("Component type is not primitive"))?)),
-        })
+    /// native `staticFieldBase0(Field)`：静态字段基址——声明类的类镜像（HotSpot 同为 mirror）。
+    #[jvm_native]
+    pub fn staticFieldBase0(&self, f: crate::java::lang::reflect::Field) -> Result<Object> {
+        Ok(Object::from(f.__get_clazz()))
     }
 }
