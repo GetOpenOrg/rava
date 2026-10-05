@@ -1,8 +1,6 @@
 // Java 数组类型封装：可读层包装
-// get/set/len 隐藏 borrow_mut()，让生成代码保持 Java 语义可读性
-// 调用方只需 array.get(i)、array.set(i, v)、array.len()，无需接触 RefCell API
+// 调用方只需 array.get(i)、array.set(i, v)、array.len()；元素存储无锁（见 array/store.rs）
 
-use crate::sync_model::__RefSlot as RefCell;
 use crate::sync_model::__Shared as Rc;
 
 use crate::java::lang::Object;
@@ -11,6 +9,8 @@ mod vtable;
 use vtable::*;
 mod view;
 use view::*;
+mod store;
+use store::Store;
 
 /// Java 数组。Clone 共享底层存储（Java 数组是引用类型，赋值不复制内容）。
 ///
@@ -20,12 +20,12 @@ use view::*;
 /// 元素类型做存储检查，对应 aastore，失败抛 `ArrayStoreException`），对象标识与源
 /// 数组相同；还原为源类型（`(Integer[]) na`）取回源数组本身。
 ///
-/// Null（S-3.1）：数组引用可为 null（未初始化的静态字段、`long[] a = null`）。
-/// `Repr::Null` 与 `JArray::new(0)`（真实存在的空数组）严格区分：null 上的
+/// Null（S-3.1）：数组引用可为 null（未初始化的静态字段、`long[] a = null`），表示为无存储
+/// （`None`，不分配）。null 与 `JArray::new(0)`（真实存在的空数组）严格区分：null 上的
 /// get/set/len 抛 NullPointerException（JVMS §6.5 arraylength/*aload/*astore），
 /// `is_jvm_null()` 为 true；null 装入 Object 后以 vtable 的 is_jvm_null 呈现 null 语义
 /// （null 通过任意 checkcast、与任何非 null 引用不等）。
-pub struct JArray<T>(Rc<Repr<T>>);
+pub struct JArray<T>(Option<Rc<Repr<T>>>);
 
 enum Repr<T> {
     /// 自有存储。第二域为反射创建数组的组件类型标签（FS-R6）：
@@ -33,9 +33,8 @@ enum Repr<T> {
     /// 标签记录运行时组件类型的 binary name（`java/lang/String`、`[I`），
     /// 使 getClass / instanceof / checkcast / aastore 检查按 JVM 的真实数组类判定。
     /// 静态类型数组（newarray / anewarray 翻译）元素类型即载体类型，恒为 None。
-    Own(RefCell<Vec<T>>, Option<Rc<str>>),
+    Own(Store<T>, Option<Rc<str>>),
     Covariant(CovariantView),
-    Null,
 }
 
 /// aastore 存储检查（JLS §10.5 / JVMS §6.5 aastore）：值与源元素类型赋值兼容才能写入，
@@ -58,44 +57,54 @@ fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &s
 }
 
 impl<T> Clone for JArray<T> {
-    fn clone(&self) -> Self { JArray(Rc::clone(&self.0)) }
+    fn clone(&self) -> Self { JArray(self.0.clone()) }
 }
 
 impl<T> std::fmt::Debug for JArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "JArray@{:p}", Rc::as_ptr(&self.0))
+        match &self.0 {
+            Some(r) => write!(f, "JArray@{:p}", Rc::as_ptr(r)),
+            None => f.write_str("JArray(null)"),
+        }
     }
 }
 
 /// Java 数组引用的默认值是 null（局部变量 / 未初始化字段 / 静态字段单元格的
 /// `.unwrap_or_default()`），与 `new T[0]`（真实空数组）不同。
 impl<T: 'static> Default for JArray<T> {
-    fn default() -> Self { JArray(Rc::new(Repr::Null)) }
+    fn default() -> Self { JArray(None) }
 }
 
 impl<T: 'static> PartialEq for JArray<T> {
     fn eq(&self, other: &Self) -> bool {
-        match (&*self.0, &*other.0) {
-            // null == null（Java 引用比较）；null 与任何真实数组不等
-            (Repr::Null, Repr::Null) => true,
-            (Repr::Null, _) | (_, Repr::Null) => false,
-            _ => self.identity() == other.identity(),
-        }
+        // null == null（Java 引用比较）；null 与任何真实数组不等（null 的标识为空指针）
+        self.identity() == other.identity()
     }
 }
 
 impl<T: 'static> JArray<T> {
     fn identity(&self) -> *const () {
-        match &*self.0 {
-            Repr::Own(..) => Rc::as_ptr(&self.0) as *const (),
-            Repr::Covariant(view) => view.origin.0.__identity(),
-            Repr::Null => std::ptr::null(),
+        match self.0.as_deref() {
+            Some(Repr::Own(..)) => self.0.as_ref().map_or(std::ptr::null(), |r| Rc::as_ptr(r) as *const ()),
+            Some(Repr::Covariant(view)) => view.origin.0.__identity(),
+            None => std::ptr::null(),
         }
     }
 
     /// 本引用是否为 Java null（ifnull/ifnonnull 的接收者）。
+    #[inline]
     pub fn is_jvm_null(&self) -> bool {
-        matches!(&*self.0, Repr::Null)
+        self.0.is_none()
+    }
+
+    /// 非 null 数组的存储形态；null 抛 NullPointerException（JVMS §6.5 *aload / *astore / arraylength）
+    #[inline]
+    fn repr(&self) -> crate::error::Result<&Repr<T>> {
+        self.0.as_deref().ok_or_else(crate::error::JvmError::null_pointer)
+    }
+
+    fn own(repr: Repr<T>) -> Self {
+        JArray(Some(Rc::new(repr)))
     }
 
     fn has_primitive_elements() -> bool {
@@ -172,51 +181,35 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 读取下标 i 的元素（对应 Java iaload/aaload 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *aload）；
     /// null 引用抛 `NullPointerException`。
+    #[inline]
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
         crate::gil::safepoint(); // 安全点钩子（并行后端为空）
-        match &*self.0 {
-            Repr::Own(cells, _) => {
-                let data = cells.borrow();
-                if i < 0 || i as usize >= data.len() {
-                    return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
-                }
-                Ok(data[i as usize].clone())
-            }
+        match self.repr()? {
+            Repr::Own(store, _) => store.get(i),
             Repr::Covariant(view) => Ok(T::from((view.get)(&view.origin, i)?)),
-            Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
 
-    /// 元素的原子读-改-写（Unsafe / VarHandle 数组元素 CAS 族）：在元素存储的写锁内读出
-    /// `cur`，`f(cur)` 返回 `Some(new)` 时写入，返回 `cur`。协变视图经 `update` 闭包委托
-    /// 源数组的 `__update`，同样在源存储写锁内完成（并行后端原子）。
+    /// 元素的原子读-改-写（Unsafe / VarHandle 数组元素 CAS 族）：基本元素为元素原子单元上的
+    /// CAS 循环（重试时 `f` 重新求值），引用元素在元素单元锁内读出 `cur`、`f(cur)` 给 `Some(new)`
+    /// 时写入；返回 `cur`。协变视图经 `update` 闭包委托源数组的 `__update`。
     pub fn __update(&self, i: i32, f: &mut dyn FnMut(T) -> Option<T>) -> crate::error::Result<T> {
-        match &*self.0 {
-            Repr::Own(cells, _) => {
-                let mut data = cells.borrow_mut();
-                if i < 0 || i as usize >= data.len() {
-                    return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
-                }
-                let cur = data[i as usize].clone();
-                if let Some(n) = f(cur.clone()) {
-                    data[i as usize] = n;
-                }
-                Ok(cur)
-            }
+        match self.repr()? {
+            Repr::Own(store, _) => store.update(i, f),
             Repr::Covariant(view) => {
                 let old = (view.update)(&view.origin, i, &mut |cur: Object| f(T::from(cur)).map(Into::into))?;
                 Ok(T::from(old))
             }
-            Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
 
     /// 写入下标 i 的元素（对应 Java iastore/aastore 等）。
     /// 越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5 *astore）；
     /// null 引用抛 `NullPointerException`。
+    #[inline]
     pub fn set(&self, i: i32, v: T) -> crate::error::Result<()> {
-        match &*self.0 {
-            Repr::Own(cells, tag) => {
+        match self.repr()? {
+            Repr::Own(store, tag) => {
                 if let Some(tag) = tag {
                     // 反射创建数组的 aastore 存储检查（JVMS §6.5 aastore）
                     let o: Object = Clone::clone(&v).into();
@@ -224,57 +217,30 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                         return Err(crate::error::JvmError::array_store(o.0.__class_name()));
                     }
                 }
-                let mut data = cells.borrow_mut();
-                if i < 0 || i as usize >= data.len() {
-                    return Err(crate::error::JvmError::array_index_out_of_bounds(i, data.len() as i32));
-                }
-                data[i as usize] = v;
-                Ok(())
+                store.set(i, v)
             }
             Repr::Covariant(view) => (view.set)(&view.origin, i, v.into()),
-            Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
 
-    /// 元素快照（手写 VM 层批量读取用，不经过逐元素边界检查）
-    /// 手写 native 的就地整段访问（Own 形态直取底层 Vec）。回调内多元素读写
-    /// 免逐元素 Result；返回回调返回值。null 接收者抛 NPE；协变视图（元素类型
-    /// 擦除）无原生切片可取——调用方（DecimalDigits 等接收 new byte[] 直造数组
-    /// 的 native）当前不触达，触达时再经逐 get/set 适配。
-    pub fn with_vec<R>(
-        &self, f: impl FnOnce(&mut [T]) -> R,
-    ) -> crate::error::Result<R> {
-        match &*self.0 {
-            Repr::Own(cells, _) => {
-                let mut data = cells.borrow_mut();
-                Ok(f(&mut data))
-            }
-            Repr::Covariant(_) => {
-                let e = crate::java::lang::UnsupportedOperationException::new_str(
-                    crate::java::lang::String::from("JArray::with_vec on covariant view"));
-                Err(crate::error::JvmError::from(e?))
-            }
-            Repr::Null => Err(crate::error::JvmError::null_pointer()),
-        }
-    }
-
+    /// 元素快照（手写 VM 层批量读取用，逐元素读）
     pub fn to_vec(&self) -> Vec<T> {
-        match &*self.0 {
-            Repr::Own(cells, _) => cells.borrow().clone(),
-            Repr::Covariant(view) => (0..view.len())
+        match self.0.as_deref() {
+            Some(Repr::Own(store, _)) => store.to_vec(),
+            Some(Repr::Covariant(view)) => (0..view.len())
                 .map(|i| T::from((view.get)(&view.origin, i).expect("index within length")))
                 .collect(),
-            Repr::Null => panic!("NullPointerException: 对 null 数组做批量读取"),
+            None => panic!("NullPointerException: 对 null 数组做批量读取"),
         }
     }
 
     /// 数组长度（对应 Java arraylength 字节码）。null 引用抛 NullPointerException
     /// （JVMS §6.5 arraylength：objectref 为 null 时抛 NPE）。
+    #[inline]
     pub fn len(&self) -> crate::error::Result<i32> {
-        match &*self.0 {
-            Repr::Own(cells, _) => Ok(cells.borrow().len() as i32),
+        match self.repr()? {
+            Repr::Own(store, _) => Ok(store.len() as i32),
             Repr::Covariant(view) => Ok(view.len()),
-            Repr::Null => Err(crate::error::JvmError::null_pointer()),
         }
     }
 
@@ -284,10 +250,31 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     }
 }
 
-impl<T> From<Vec<T>> for JArray<T> {
+impl<T: 'static> JArray<T> {
+    /// 基本元素数组的本机字节视图读（`native_memory` 的堆寻址；逐元素原子读）。
+    /// 非基本元素数组 / 视图 / null / 越界返回 false。
+    pub(crate) fn __read_bytes(&self, start: usize, dst: &mut [u8]) -> bool {
+        matches!(self.0.as_deref(), Some(Repr::Own(store, _)) if store.read_bytes(start, dst))
+    }
+
+    /// 基本元素数组的本机字节视图写（部分覆盖的元素按位形 CAS 合并）。失败条件同 `__read_bytes`。
+    pub(crate) fn __write_bytes(&self, start: usize, src: &[u8]) -> bool {
+        matches!(self.0.as_deref(), Some(Repr::Own(store, _)) if store.write_bytes(start, src))
+    }
+
+    /// 基本元素数组字节视图上 `width` 字节值的原子读-改-写（见 `Store::update_bytes`）。
+    pub(crate) fn __update_bytes(&self, start: usize, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Option<u64> {
+        match self.0.as_deref() {
+            Some(Repr::Own(store, _)) => store.update_bytes(start, width, op),
+            _ => None,
+        }
+    }
+}
+
+impl<T: 'static> From<Vec<T>> for JArray<T> {
     /// 从 Vec<T> 构造，用于字面量数组初始化（对应 Java 数组初始化器）
     fn from(v: Vec<T>) -> Self {
-        JArray(Rc::new(Repr::Own(RefCell::new(v), None)))
+        JArray::own(Repr::Own(Store::from_vec(v), None))
     }
 }
 
@@ -305,13 +292,13 @@ impl JArray<Object> {
     /// + 组件类型标签（binary name，斜线形态：`java/lang/String`、`[I`）。元素初值 null。
     pub fn __new_component_tagged(len: i32, component: &str) -> Self {
         let tag: Option<Rc<str>> = if component == "java/lang/Object" { None } else { Some(Rc::from(component)) };
-        JArray(Rc::new(Repr::Own(RefCell::new(vec![Object::default(); len.max(0) as usize]), tag)))
+        JArray::own(Repr::Own(Store::from_vec(vec![Object::default(); len.max(0) as usize]), tag))
     }
 
     /// 组件类型标签（仅反射创建的引用数组；静态类型数组与视图为 None）。
     pub(crate) fn __component_tag(&self) -> Option<std::string::String> {
-        match &*self.0 {
-            Repr::Own(_, Some(tag)) => Some(tag.to_string()),
+        match self.0.as_deref() {
+            Some(Repr::Own(_, Some(tag))) => Some(tag.to_string()),
             _ => None,
         }
     }

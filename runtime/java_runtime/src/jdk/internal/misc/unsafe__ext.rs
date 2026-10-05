@@ -4,7 +4,7 @@
 //! 每次访问是「(基址, 偏移) 处 `width` 字节值的读-改-写」：值以零扩展的 u64 位形流转，
 //! `op(旧)` 给新值即写入、给 None 即只读，返回旧值。按载体分派到同一存储的三种视图：
 //! - 原生内存（基址 null 的绝对地址 / 基本类型数组，`arrayBaseOffset + i × arrayIndexScale`）：
-//!   `native_memory::update` 的字节视图——数组在存储写锁内、直接内存经同宽原子指令；子字元素
+//!   `native_memory::update` 的字节视图——数组经元素原子单元、直接内存经同宽原子指令；子字元素
 //!   与按字对齐的 int 访问（JDK compareAndExchangeByte / Short 的 `offset & ~3` 掩码路径）落在
 //!   同一字节序列上，相邻元素互不干扰；
 //! - 静态字段（staticFieldBase + staticFieldOffset 的不透明 id）：`unsafe__impl::_static_rmw`（声明类字段闭包
