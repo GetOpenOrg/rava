@@ -1,0 +1,333 @@
+# 构建期引导映像求值器（boot image evaluator）终态方案
+
+> 2026-10-05，分支 `boot-image`（基于 rust-closure-analyzer 0192bf20）。本文只含设计与可行性探针实测；探针代码在本分支单独提交，不合入集成分支。
+> 上游：c1d §25.3（a1 引擎执行 initPhase2 不可行，需另立构建期引导映像求值器）、boundary-narrowing §6.11 项 3（`build_time_init`，2026-10-01 用户决策归 C3）、
+> boot-layer.md 第 2–5 步、c1d §21.9（a3 余项）。
+
+## 0. 结论
+
+1. **可行，探针已在构建期跑完 HotSpot 的全部三个引导阶段。** 探针用的是 `engine/concrete` 同一个解释器的引导模式，输入是 macOS JDK 21.0.11 的 java.base 字节码，例子为 HelloWorld：
+   - 次序：VM 预初始化 9 类和 3 个 VM 构造对象，然后 `initPhase1`、`initPhase2(false,false)`、`initPhase3`；
+   - 规模：共 **1,609,459 条指令、10,805 个堆对象（映像可达 8,356 个）、274 个已初始化类、约 130–150 ms**；
+   - 结果：`initPhase2` 返回 0；结束时 `VM.initLevel = 4`、`ClassLoader.scl = AppClassLoader`、`System.bootLayer = ModuleLayer`；
+   - VM 模块表：62 个模块、771 个包；
+   - 三次运行输出逐字节相同。
+2. **求值器复用具体引擎，不另写解释器。** 引导模式与 a1 的调用点求值模式只在 5 处语义上分叉（§3.1），全部 native 语义由清单 `[concrete.boot]` 驱动，生成器里没有类名特判。
+3. **映像物化为档案的初始状态。** 映像只取决于（JDK 版本、目标平台、清单），与用户程序无关，所以每个档案键只物化一份：
+   - 语料模式下映像随 `java_base` 档案动态链接；
+   - 生产模式下随档案静态链接，并按档案闭包裁剪到可达部分。
+4. **抽象分析从映像出发。** 引导阶段的代码不再进闭包，Resolver、Configuration、ModuleDescriptor 等都不入链，映像中的静态字段以具体对象作为初始值集：
+   - §25 的 2721 类膨胀里，约 865 类来自对引导代码的抽象分析，这部分直接消失；
+   - 余下 1852 类要靠「Class 接收者逐镜像求值」（在途）才能消除，映像给它提供了每个镜像准确的 `module` / `classLoader`；
+   - HelloWorld 的上界估计为 **469 + 71 = 540 类**，低于 569 的目标（§3.4）。
+5. **需要新增宿主相关值的污点与运行期重算。** 探针发现 `ConcurrentHashMap.NCPU`、`Striped64.NCPU`、`VM.directMemory` 由 `availableProcessors` / `maxMemory` 直接派生。探针把它们按副作用延迟、读成 0，这是**错误值**。终态做法：
+   - 给值带污点，污点值写入的静态字段生成「启动重算切片」；
+   - 在污点上做控制流分支时，该类改为运行期初始化（§3.2）。
+6. **a3 三问**（§4）：
+   - **initLevel**：第三条路成立。映像里 `VM.initLevel = 4` 是实测值，`initLevel()` 按字节码读映像字段，`#[jvm_boundary]` 中 VM 的 10 个都可以删；前提见 §4.1。
+   - **包 / 模块表**：映像可以物化 7 张表（§4.2），覆盖 L2、BootLoader、SecurityManager、Module、ModuleLayer 和 `Class.getModule`。
+   - **JceSecurity**：读取结果可以物化，前提是 java.home 的只读文件树作为构建期输入（§4.3）。
+
+## 1. 现状
+
+### 1.1 三个引导阶段在 rava 中的落地
+
+| HotSpot 阶段 | rava 现状 | 位置 |
+|---|---|---|
+| `Threads::initialize_java_lang_classes`：String、System、Class、ThreadGroup、Thread、Module、UnsafeConstants、Method、Finalizer，以及 `create_initial_thread_group` / `create_initial_thread` | 不存在。运行期各类惰性初始化，主线程由手写层构造 | runtime `thread_impl.rs` 等 |
+| `initPhase1`：属性表、`VM.saveProperties`、`setJavaLangAccess`、stdin/out/err、`Terminator.setup`、`VM.initLevel(1)` | 手写的 `System.registerNatives` 承担其中的属性表、saveProperties 段和 `out` / `err` / `in`；`setJavaLangAccess` 由 `[boot_init] calls` 在 main 前调用 | `system_impl.rs`、`seeds.toml [boot_init]` |
+| `initPhase2`：`ModuleBootstrap.boot()`，建引导层 | `[[boot_init.phases]]` 已经清单化，锚点留空，所以不入链、不执行；Module、ModuleLayer、`Class.getModule` 由手写近似 | `seeds.toml`、`module_impl.rs`、`module_layer_impl.rs` |
+| `initPhase3`：安全管理器、`initSystemClassLoader`、`setContextClassLoader`、`VM.initLevel(4)` | FS-C2 在 `ClassLoader.scl` / `Thread.contextClassLoader` 首次读时由字段钩子 `__vm_init_phase3` 惰性执行 | `class_loader_impl.rs` |
+| `VM.initLevel()` | 手写读取模型 `__vm_at_init_level`：saveProperties 段为 0，惰性 initPhase3 段为 3，其余时间为 4 | `vm_impl.rs`（`#[jvm_boundary]`） |
+
+### 1.2 VM 常量与属性的来源
+
+- **VM 注入常量**：`UnsafeConstants`（ADDRESS_SIZE、PAGE_SIZE、BIG_ENDIAN、UNALIGNED_ACCESS、DATA_CACHE_LINE_FLUSH_SIZE）以及 Unsafe 的 `ARRAY_*_BASE_OFFSET` / `INDEX_SCALE`。
+  它们登记在 `vm_intrinsics.toml` 的 VM 常量段，由生成器写入；分析期以事实形式折叠。
+- **系统属性**有两类来源：
+  - VM 属性：`java.home`、`java.vm.*`、`sun.boot.library.path` 等；
+  - 平台属性：`SystemProps$Raw` 的 39 个下标，即 `os.*`、`user.*`、`file.encoding`、`sun.jnu.encoding`、`line.separator` 等。
+
+  运行期由 `system_impl.rs::host_property` 取宿主值；分析期的 `system_properties` 事实只折叠与宿主无关的键。
+- **seeds.toml `[boot_init]`**：`calls` 是 VM 启动期调用的无参静态方法，`classes` 是需要提前初始化的类，`phases` 是带锚点的引导阶段。它们都是**运行期**执行的根：分析器把它们作为根入链，生成的 main 在启动时按序调用。
+
+### 1.3 具体引擎（a1，`engine/concrete`）
+
+具体引擎原本的语义是「无副作用、可撤销的调用点求值」：
+- 堆按纪元（epoch）划分，纪元 0 是 `<clinit>` 映像；
+- 可变静态字段不可读，跨类写静态字段失败；
+- 手写方法按 native 处理，op 名来自 `[concrete.natives]`。
+
+c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNatives`、`System.props`、`SharedSecrets`、它类静态写入、`UnsafeConstants`。这几处正是引导模式需要分叉的语义。
+
+## 2. 业界参照与取舍
+
+| | GraalVM Native Image | Leyden / CDS 归档堆（JDK 21 full module graph） | rava 终态取法 |
+|---|---|---|---|
+| 构建期执行什么 | 显式或推断为「构建期初始化」的类的 `<clinit>`；JDK 自身大部分类缺省在构建期初始化 | dump 时跑一遍真实启动，归档一组**白名单**静态字段的对象图：`ArchivedModuleGraph`、`ArchivedBootLayer`、`ArchivedClassLoaders`、Integer 缓存等，其余类在运行期照常初始化 | **按 VM 引导阶段整体执行**（HotSpot 预初始化 → initPhase1 → initPhase2 → initPhase3），类集不按白名单划，由「是否碰到宿主相关值」自动判定 |
+| 宿主相关值 | 不允许进映像堆（Random、Thread、FileDescriptor 等），违者构建失败；`--initialize-at-run-time` 与字段 `@RecomputeFieldValue` 替换 | 只归档对宿主不敏感的子图；`CDS.getRandomSeedForDumping` 为 SALT 提供确定种子，dump 期属性受控 | 污点追踪（§3.2）：污点值不进映像，碰到污点分支的类自动转为运行期初始化，直接派生的字段生成重算切片；全部记录在审计报告里 |
+| 运行期衔接 | 映像堆在 `.data` 段，零拷贝；类初始化状态随映像 | 映射归档区；`CDS.initializeFromArchive`、`defineArchivedModules` 等 native 把归档对象接回静态字段 | 映像是档案 crate 的初始状态（§3.3）；运行期不再执行引导阶段，只执行延迟清单 |
+| 对静态分析的作用 | 分析从映像堆出发，映像对象是已知常量 | 不参与 | 同 GraalVM：抽象分析的初始值集来自映像 |
+| 代价 | 正确性依赖构建期初始化策略，配置面大 | 只覆盖白名单，对闭包规模无帮助 | 求值器要实现引导期 native 全集，需要清单维护；污点规则必须健全 |
+
+**取法：GraalVM 式的「执行到底 + 映像即分析初始状态」，宿主边界用 CDS 式的「JDK 自带确定化钩子」。** 理由：
+1. 本方案的首要收益是闭包缩小。CDS 白名单式归档不改变分析的输入，对 §25 没有帮助。
+2. CDS 的 `ArchivedModuleGraph` 等路径要求 `CDS.isDumpingStaticArchive` 等 VM 状态为真，会走 JDK 为归档准备的分支。rava 按缺省分支执行（归档开关为假），与 `-Xshare:off` 的 JVM 行为一致，不引入第二条路径。
+3. JDK 已有的确定化钩子（`getRandomSeedForDumping`）直接复用，不另造。
+
+## 3. 终态架构
+
+### 3.1 求值器语义：复用具体引擎的引导模式
+
+**不新写解释器。** 引导模式与 a1 共用以下部分：
+- 指令解释、对象模型、字符串驻留与镜像；
+- 字段键、Unsafe 偏移模型和 native 分派。
+
+两者只在以下 5 处分叉（探针已全部实现，开关为 `Vm.boot`）：
+
+| # | a1 调用点求值 | 引导模式 |
+|---|---|---|
+| 1 | 只有 `<clinit>` 期分配进纪元 0 | 全部分配都永久（纪元 0），不撤销 |
+| 2 | 可变静态字段不可读（值可能被运行期改写） | 可读：引导阶段就是运行期的开头，次序与 HotSpot 相同 |
+| 3 | 不允许跨类 `putstatic` | 允许（`setJavaLangAccess`、`Reference.<clinit>` 写 SharedSecrets 等） |
+| 4 | 手写方法一律作为不透明 native | 有字节码就执行字节码，只有 `ACC_NATIVE` 和清单登记的 VM 方法走 native；与运行期是否手写无关，引导阶段按 JDK 语义执行 |
+| 5 | 失败即放弃该调用点 | 失败分两类：碰到**延迟值**时，该类转为运行期初始化并级联；其他失败（缺 native 语义、不支持的指令）则构建失败并报出栈，不静默降级 |
+
+**堆模型**
+- 对象只按字段键存储，没有地址；Unsafe 偏移等于字段身份。
+- 数组偏移为 `16 + i × scale`，与清单中的 `ARRAY_*_BASE_OFFSET` 一致。
+- `byte[]` 支持多字节组合读写，用于 `ArraysSupport`、`StringUTF16`、`ByteArray`。
+- 子字的 CAS（`compareAndExchangeByte` / `Short`）在 JDK 字节码里做字对齐地址运算。对象模型没有物理布局，所以这两个方法由清单覆盖为按元素操作（探针 `unsafe_cax:B` / `S`）。这是**求值器内部的布局约定**，不进入运行期。
+- VM 单元（`vm_cell:<name>`）承载 native 地址上的计数器，例如 `ThreadIdentifiers` 的 next id。物化时作为对应 native 的初始状态。
+
+**native 全由清单驱动**：`[concrete.boot]` 包含：
+- `natives`：引导期 op 表，优先于 `[concrete.natives]`；
+- `statics`：VM 注入的静态字段；
+- `vm_props` / `platform_props`：属性；
+- `init`：VM 预初始化类，按 HotSpot 次序；
+- `objects`：VM 构造的对象（初始线程组 / 线程）；
+- `calls`：阶段入口。
+
+探针新增 op 21 种（`defer`、`defer_value`、`defer_call`、`vm_record`、`vm_cell`、`unsafe_get` / `put` / `cas` / `cax`、`props:*`、`set_static:*` 等）。op 的语义是通用的，类名只出现在清单里，生成器与闭包分析器 crate 中没有 JDK 字面量。探针新增的 Rust 代码已按此检查：`mirror_module` 用「首个 `defineModule0` 即基础模块」这一 VM 规定，不写包名。
+
+### 3.2 构建期 / 运行期边界
+
+**宿主相关输入分类**（都作为清单登记的延迟源，求值器本身不认识它们）：
+
+| 类别 | 例子（探针实际命中的加 ✓） | 处理 |
+|---|---|---|
+| 平台属性中的宿主值 | `os.version` ✓、`user.dir` / `user.home` / `user.name`、`java.io.tmpdir`、`file.encoding` 的宿主取值 | `defer_value`：返回延迟字符串，内容数组标为延迟 |
+| 影响控制流、但必须在构建期定值的属性 | `sun.jnu.encoding` ✓（initPhase1 中 `Charset.isSupported` 分支）、`stdout/stderr.encoding` ✓、`line.separator` | **钉值**（用户决策 U1），与原生二进制「无 `-D`」的定位一致 |
+| 时间 / 熵 | `nanoTime`（ImmutableCollections SALT）✓、`currentTimeMillis`、`/dev/urandom` | SALT 由 JDK 钩子 `CDS.getRandomSeedForDumping` 给固定种子 ✓；其余时间和熵为延迟值 |
+| 机器资源 | `availableProcessors` ✓、`maxMemory` ✓ | 延迟值并带污点（终态，见下）；探针按 `defer` 读成 0 是**错误简化** |
+| 文件系统 | `canonicalize0` / `getBooleanAttributes0` ✓（空 class path 即 cwd） | 宿主路径：延迟值。`URLClassPath.toFileURL` ✓ 为 `defer_call`，构建期得到占位对象、运行期重放。java.home 只读树是构建期输入，按 §4.3 处理 |
+| 线程 / 进程副作用 | `Thread.start0` ✓（Reference Handler）、`setPriority0` ✓、`Terminator.setup` ✓、`VM.initializeOSEnvironment` ✓、`FileDescriptor.getAppend` ✓ | `defer`：记入**启动重放序列**，运行期按构建期次序执行 |
+
+**延迟值的传播（终态）**
+1. **污点值**：求值器值域 `CV` 加一个污点位，算术、比较、存储都会传播污点。探针只做到「延迟字符串的内容数组」这一层，终态扩展到标量。
+2. **直接派生的静态字段可以重算**：污点值沿无分支的数据流写入静态字段时，求值器记下派生表达式。例如：
+   - `NCPU = Runtime.availableProcessors()`；
+   - `directMemory = Runtime.maxMemory()`（`VM.saveProperties` 中是先按非污点属性分支、再直接赋值）。
+
+   该字段物化为「启动重算槽」，启动重放序列按次序重新求值这些表达式。所在类仍属构建期初始化，实例照常进映像。
+3. **在污点上分支、或把污点写入对象图的类转为运行期初始化**：
+   - 该类的 `<clinit>` 在运行期执行；
+   - 构建期读取该类静态字段的其他 `<clinit>` 级联转为运行期，探针已实现并报出连带链；
+   - 映像中不得存在依赖该类静态状态的对象（违者构建失败）。
+
+   探针实测级联：`OSVersion`（os.version）→ `ClassLoaderHelper` → `NativeLibraries`，共 3 类。
+4. **占位对象**（`defer_call` 的返回值）只允许存入字段，不允许读取它的内容；运行期重放时回填该字段。探针中的 `URLClassPath.toFileURL("")` 就是这样处理的，app class path 的 URL 在运行期建。
+
+**判定是全自动的**：清单只登记源（哪些 native / 属性 / 静态字段宿主相关），哪些类在构建期初始化由求值结果决定。每次构建输出审计表，包含延迟源命中、运行期初始化类及其连带链、重算槽和重放序列。
+
+### 3.3 物化：映像作为档案的初始状态
+
+**映像的键**：（JDK 版本与平台、`vm_intrinsics.toml [concrete.boot]` 的内容摘要、钉值属性）。引导阶段不执行用户代码，`java.class.path` 在原生二进制中固定，所以映像与用户程序无关。
+- **语料模式**：每个档案键一份映像，随 `java_base` 档案 dylib 链接，全部测试共享。
+- **生产模式**：同一份映像随档案静态链接，按「闭包可达静态字段的传递闭包」裁剪（§3.4 的联合不动点）。探针中全映像有 418 个静态字段、8,356 个可达对象、87,479 个槽位；裁剪后的规模在第 3 步实测。
+
+**形态**
+- 映像生成为一个 crate 段（`java_base` 档案内的 `boot_image` 模块），内容是：
+  - 每个对象的（类 id，按 S7 每类静态描述符排列的字段槽位表）；
+  - 数组元素表；
+  - 静态字段初值表；
+  - 驻留字符串表（1,280 个）；
+  - 镜像表：87 个类，字段 `module` / `classLoader` / `componentType` 等引用映像对象；
+  - VM 表：模块 / 包 / 读写导出，以及 VM 单元；
+  - **身份哈希**：87 个映像对象在构建期取过 identityHashCode，并作为 HashMap / IdentityHashMap 桶位的依据。物化时必须原样带上，运行期 `identityHashCode` 对映像对象返回构建期的值。
+- **装载方式**由 S7 句柄形态决定（用户决策 U4）：
+  - 甲：启动时按表批量建对象，成本是一次线性扫描。按每对象约 50 ns 估算，8k 对象约 0.4 ms；
+  - 乙：句柄为 arena 下标且映像区不参与引用计数时，映像直接作为 arena 前缀的静态数据，零拷贝。终态取乙，前提是 S7 句柄允许「永久区」。
+- **与 java_meta 的关系**：java_meta 继续承载类元数据（反射成员表、注解、行表）。映像只按类 id 引用镜像，不复制元数据。反射缓存（`Class.reflectionData` 的 SoftReference）如果在引导期被填充，其中的 Method / Field 对象由构建期的 `getDeclaredMethods0` 产出，成员次序与 java_meta 同源，两者由一致性单测守护。
+- **运行期启动序列**：
+  1. 装载映像；
+  2. 把映像中的初始线程绑定到 OS 主线程；
+  3. 按次序执行重算槽和重放序列（start0、Terminator.setup 等）；
+  4. 进入 main。
+
+  `[boot_init]` 的 `calls` / `classes` / `phases` 和 FS-C2 的 `__vm_init_phase3` 钩子都由映像取代后删除。
+
+### 3.4 抽象分析从映像出发
+
+- **初始状态**：映像中每个静态字段的抽象值是其具体对象集合，抽象对象就是映像对象本身（分配点 `image:#n`，字段敏感）。镜像的 `module` / `classLoader` 都是精确值。
+- **入口**：只有 main 和种子。引导阶段方法不再作根，因为它们已在构建期执行完。映像对象上的方法只在运行期代码对它们调用时才可达。
+- **裁剪**：闭包不动点与映像可达性一起求，只物化从「闭包内被读取的静态字段」可达的映像对象。
+- **对 §25 的效果**（HelloWorld 锚点启用后多出 2721 类，按 §25.2 的出口分类）：
+
+| §25.2 出口 | 类数 | 有映像后 |
+|---|---:|---|
+| `ModuleDescriptor.toString` → stream | 约 370 | 引导代码不入链，**0** |
+| `Version.compareTokens` 读 `List<Object>` | 约 250 | 同上，**0** |
+| 其余（`SystemModuleReader.read`、`BootLoader.packages`、`boot2` → `loadModule` 等） | 约 200 | 引导期执行的部分为 0；运行期读模块内容的路径按真实需要入链（第 5 步 jimage） |
+| 建层直接需要的类 | 45 | 0（建层在构建期完成） |
+| 建层后原本折叠的分支变为可达（`getResourceAsStream` 命名模块分支等） | 1852 | 映像使每个 boot 镜像的 `module` 成为精确的命名模块。这条分支对**确实调用 `getResourceAsStream` 的程序**本来就可达，与 JVM 一致；HelloWorld 不调用，膨胀来自接收者值集不分镜像。要靠在途的「Class 接收者 classLoader / module 逐类求值」消除，映像为它提供具体值 |
+
+- **上界实测**：映像可达对象有 150 个非数组类型，全部在 274 个已初始化类之内，其中 71 个不在现有 HelloWorld 闭包（469 类）里（java/lang/reflect 21 个，主要是 `AccessFlag` 枚举的 18 个常量类；jdk/internal/module 11 个；java/lang/module 11 个；java/lang/ref 6 个……）。
+  - 即使不做联合裁剪，HelloWorld 也有 **469 + 71 = 540 ≤ 569**。
+  - 只有已初始化、没有实例、静态字段也不被闭包读取的类不进闭包，所以 274 − 150 = 124 个类只算初始化状态位，不带代码。
+  - 联合裁剪后，71 个中 `AccessFlag` 一类（只有 `ModuleDescriptor` 构建期使用）预计出闭包，第 3 步实测。
+
+### 3.5 与其他线的关系
+
+- **a3 `#[jvm_boundary]` 归零**（全仓 33 个属性；HelloWorld 审计口径 29 个方法）：VM（审计 10 个）经 §4.1 删除；Module 7、ModuleLayer 2、Class 2、ClassLoader 6、BootLoader 2 经 §4.2 删除；JceSecurity 6 经 §4.3 删除。归零后只剩 `ACC_NATIVE`（准入 ①）。
+- **boot-layer 第 2–5 步**：
+  - 第 2 步的 `Class.module` 钩子不再需要，映像直接带上镜像字段，HotSpot `create_mirror` 的修补在求值器里完成，探针已实现；
+  - 第 3 步的锚点机制由映像取代（`[[boot_init.phases]]` 删除）；
+  - 第 4 步的 `initServices` 在构建期执行，`ServicesCatalog` 进映像；
+  - 第 5 步的 jimage 读取器仍然需要，因为运行期模块资源读取要用；但 `SystemModules$default` 等大方法只在构建期执行，**不再需要翻译和编译**，boot-layer 2.2 第 2 条的大方法拆分随之不必做。
+- **虚拟线程**：映像中不允许出现已挂载帧的 `Continuation`，也不允许出现已启动的线程。
+  - `VirtualThread` 的 `DEFAULT_SCHEDULER` 依赖 `availableProcessors`，在污点上分支，按 §3.2 第 3 条自动转为运行期初始化。
+  - 有栈协程方案（10-03 定）不受影响。
+- **反射元数据**：见 §3.3。映像引用镜像时只用类 id，java_meta 不变。注解解析结果如果在引导期被缓存（`AnnotationType`），同样只能来自构建期执行字节码的结果。
+- **C3 `build_time_init`**（2026-10-01 决策）：本方案是它的超集，即「无宿主副作用的 `<clinit>` 在构建期执行，对象图成为快照事实」。按用户程序可达性对非引导类（Formatter 的常量正则等）做构建期初始化，用的是同一个求值器和映像格式，属第 6 步。
+
+### 3.6 确定性
+
+1. **种子**：SALT32L 来自 `CDS.getRandomSeedForDumping`，由清单给定固定值；除此之外引导阶段的熵源全部是延迟值。
+2. **身份哈希**：按分配序确定性生成（`0x1000 + n × 7919`），并且物化。运行期对映像对象返回同值，保证构建期建好的哈希表桶位在运行期仍然有效。
+3. **求值次序**：单线程顺序解释，与分析器的 HashMap 迭代无关。探针连续运行 3 次，输出 md5 相同（步数、对象数、表、延迟清单）。终态验收加 `--hash-seed 0 / 12345` 与 `--flow-batch 1 / 64` 的组合矩阵，要求映像字节相同。
+4. **平台**：映像键含平台。macOS 与 Linux 的 `sun.nio.fs` 实现类不同，各自产出映像；语料构建以服务器 Linux 为准。
+
+## 4. 消费方需求（a3 余项，c1d §21.9，9ea1e102）
+
+### 4.1 `VM.initLevel`（VM 10 个）
+
+**第三条路成立。**
+- 构建期执行 initPhase1–3，运行期从映像中的 level 4 状态开始，`initLevel()` 按字节码读 `VM.initLevel` 静态字段。探针实测映像值为 `I(4)`。
+- a3 的两条路都不需要了：
+  - 路①（字段读取钩子带返回值）：线程内档位覆盖只在「惰性执行引导段」时才需要。映像下不存在运行期的引导段，档位就是单一字段，与 HotSpot 完全一致。
+  - 路②（急切启动序列）：闭包代价来自把 `initSystemClassLoader` 作为运行期根。映像下它在构建期执行，运行期闭包只含被 main 可达代码实际调用的加载器方法。
+- `isBooted`、`isModuleSystemInited`、`isJavaLangInvokeInited` 在映像下都是读字段，可以删掉 `[facts.returns]` 中对应的事实。分析器从映像值直接得到常量，`initLevel` 为 4 时 `isBooted` 恒为真。
+
+**前提**
+1. 第 1–3 步完成：求值器引导模式、污点与重算、映像物化和装载。
+2. 引导阶段中**所有**被手写替代的方法在求值器里都有字节码或 native 语义。探针已覆盖 HelloWorld 路径。
+3. VM 10 个手写里的非读档位方法（`shutdown`、`isShutdown`、`getSavedProperty`、`latestUserDefinedLoader`、`isSystemDomainLoader`）回到字节码。它们读写的都是 initPhase1 填好的静态字段（`savedProps` 等），映像中已有。`latestUserDefinedLoader` 是 `ACC_NATIVE`，保留。
+
+### 4.2 包 → 模块表与 jimage 相关项
+
+映像可以物化下列表，表中的方法读这些表时全按字节码执行：
+
+| # | 表（Java 层位置） | 探针实测 | 解锁的方法 |
+|---|---|---|---|
+| T1 | 各 `Module` 对象：`name`、`descriptor`、`loader`、`layer`、`reads`、`openPackages` / `exportedPackages` | 62 个模块 | Module 7、`Class.getModule` 2 |
+| T2 | `ModuleLayer`（`System.bootLayer`、`nameToModule`、`cf`）与 `Configuration` | `bootLayer = ModuleLayer` | ModuleLayer 2；SecurityManager `<clinit>` 的 `ModuleLayer.boot()` 与 `addNonExportedPackages`，SecurityManager 随之移出 `[vm_boundary]` / `clinit_carried` |
+| T3 | `BuiltinClassLoader.packageToModule`（静态 CHM）、各加载器的 `nameToModule` / `moduleToReader` | 771 个包 | ClassLoader 资源 6（L2）、BootLoader 2（`findResourceAsStream`、`getServicesCatalog`） |
+| T4 | 各加载器的 `ServicesCatalog`（`initServices` 构建期执行） | 随 T1 | `getServicesCatalog`，删 `__boot_catalog` 和 `services_table` |
+| T5 | VM 模块表：`defineModule0` / `addReads0` / `addExports0` / `addExportsToAll0` / `setBootLoaderUnnamedModule0` | 62 / 150 / 273 / 226 / 1 | 运行期 native `addReads0` 等的初始状态；`Class.forName(Module,…)` 的模块可见性 |
+| T6 | 镜像 `Class.module`（HotSpot java.base 修补与 `create_mirror`） | 87 个镜像，按包表填写 | `Class.getModule` 不再手写 |
+| T7 | `ClassLoaders` 三个内置加载器及其 `URLClassPath`（app class path 中的 URL 是 `defer_call` 占位，运行期回填） | `scl = AppClassLoader` | FS-C2 字段钩子删除 |
+
+**jimage 读取器仍需要（boot-layer 第 5 步）**：模块**资源内容**（`currency.data`、`.class` 字节等）在运行期按需读取，映像只物化表和 `ModuleReference`，不嵌入资源字节。`SystemModuleReader` 本身是 T3 中的对象，在构建期建好；它的 `read` 方法在运行期翻译执行，并落到嵌入数据上的 `getNativeMap`。
+
+### 4.3 JceSecurity（6 个）
+
+**可以物化，但它不是引导阶段的内容**：HelloWorld 的 initPhase1–3 不初始化 JceSecurity。它属于用户程序可达时的构建期类初始化（C3 `build_time_init`，第 6 步），用同一个求值器。核对 JDK 21 的 `JceSecurity.<clinit>`：
+- 它只建 CHM / IdentityHashMap / ReferenceQueue / WeakHashMap、`new URL("http://null.oracle.com/")`，再经 `JceSecurity$1` 调 `setupJurisdictionPolicies`；
+- 后者读 `Security.getProperty("crypto.policy")`，`Security.<clinit>` 读 `${java.home}/conf/security/java.security`；
+- 然后 NIO `isDirectory` / `newDirectoryStream("{default,exempt}_*.policy")` / `newInputStream`，解析出 `CryptoPermissions`；
+- 没有 SecureRandom，也没有其他宿主熵。
+
+**前提**
+1. **java.home 只读树是构建期输入，不是宿主状态**。原生二进制的 java.home 是嵌入的伪树（`jdk_resources`），内容来自参考 JDK 发行版，与运行机器无关。
+   - 求值器的 `UnixNativeDispatcher`（`stat0` / `lstat0` / `access0` / `opendir0` / `readdir0` / `closedir` / `open0`）和文件分派器的 read / size / close native，在清单里登记为「读嵌入树」；
+   - 嵌入树的路径前缀等于钉值的 `java.home`；
+   - 落在嵌入树以外的路径是宿主文件系统，按延迟值处理（该类转为运行期初始化）。
+
+   运行期的同一组 native 读同一棵树（a3 X2 余项的终态做法），两侧一致。
+2. 运行期不能改写 `java.security` 或 policy。原生二进制没有 `-Djava.security.properties`，与钉值属性同一口径（U1）。
+3. `JceSecurity` 的 `verificationResults` / `verifyingProviders` 在构建期为空，可以进映像；`queue` 是 ReferenceQueue，在映像中为空队列，可以物化。
+
+物化后，`JceSecurity` 的 6 个手写全部删除；`setupJurisdictionPolicies` 与 NIO 目录遍历代码不进运行期闭包（**如果**程序不在运行期再次调用它们）。
+
+## 5. 探针实测（分支 boot-image，HelloWorld，本机 macOS JDK 21.0.11）
+
+### 5.1 规模（累计值）
+
+| 阶段 | 指令步数 | 堆对象 | 已初始化类 | 驻留字符串 | 镜像 | 耗时 |
+|---|---:|---:|---:|---:|---:|---:|
+| VM 预初始化（9 类 + 3 个 VM 对象） | 2,065 | 100 | 62 | — | — | — |
+| `initPhase1` | 85,110 | 1,088 | 200 | 170 | 72 | 76–95 ms |
+| `initPhase2(false,false)` → 0 | 1,608,125 | 10,775 | 273 | 1,278 | 86 | 129–153 ms |
+| `initPhase3` | 1,609,459 | 10,805 | 274 | 1,280 | 87 | 129–153 ms |
+
+- 映像可达：对象 8,356 个，槽位 87,479 个，静态字段 418 个，非数组类型 150 个；已取身份哈希的 87 个对象全部在映像中。
+- 堆类型最多的几种：`[B` 1,675、String 1,476、`HashMap$Node` 1,012、`CHM$Node` 911、`SetN$SetNIterator` 554（垃圾，不可达）。
+- VM 表：`defineModule0` 62（包 771）、`addReads0` 150、`addExports0` 273、`addExportsToAll0` 226、`setBootLoaderUnnamedModule0` 1；VM 单元 `next_thread_id = 1`。
+- 结束状态：`VM.initLevel = 4`、`ClassLoader.scl = AppClassLoader`、`System.bootLayer = ModuleLayer`、`System.out = PrintStream`、`System.allowSecurityManager = 1`。
+- 内存约 100 MB RSS，指令吞吐约 1,200 万步/s。
+
+### 5.2 卡点目录（按碰到的次序）
+
+| # | 卡点 | 探针处理 | 终态 |
+|---|---|---|---|
+| B1 | `sun.jnu.encoding` 决定 initPhase1 的 `Charset.isSupported` 分支 | 钉 UTF-8 | 钉值属性（U1） |
+| B2 | ImmutableCollections SALT 取 `nanoTime` | `CDS.getRandomSeedForDumping` 给固定种子 | 同左（U2） |
+| B3 | 初始线程组 / 线程须在 initPhase1 前由 VM 构造，当前线程在构造器之前就已设定 | 清单 `objects` 与 `current_thread` | 同左，运行期绑定 OS 主线程 |
+| B4 | Finalizer 启动 | `isFinalizationEnabled = false` | 与运行期共享同一常量 |
+| B5 | 线程 id 计数器是 native 地址（`getNextThreadIdOffset`） | VM 单元 | 物化为 native 初值 |
+| B6 | macOS 的 `os.version` → OSVersion → ClassLoaderHelper → NativeLibraries | 级联转为运行期初始化（3 类） | 同左；Linux 映像无此链 |
+| B7 | 空 `java.class.path` 即 cwd，`canonicalize0` / `user.dir` 是宿主值 | `toFileURL` 为 `defer_call` 占位 | 同左（U3） |
+| B8 | `Thread.start0`（Reference Handler）、`setPriority0` | `defer` | 启动重放序列 |
+| B9 | 子字 CAS 做字对齐地址运算 | 求值器布局覆盖 `unsafe_cax:B` / `S` | 同左 |
+| B10 | 模块系统的 VM 表 | `vm_record` 计数 | 物化 T5（§4.2） |
+| B11 | `maxMemory` / `availableProcessors` / `getAppend` / `Terminator.setup` / `initializeOSEnvironment` | `defer`（返回 0） | **前两项是值不是副作用**：`CHM.NCPU`、`Striped64.NCPU`、`Exchanger.NCPU`、`VM.directMemory` 直接派生，必须走污点与重算槽（§3.2），否则映像值错误；后三项是重放序列 |
+| B12 | `Object.class.getModule()` 为 null，`Module.defineModules@564` 抛 NPE | `defineModule0` 登记包 → 模块，已有与新建镜像按包填写 `Class.module`；基本类型取首个定义的模块 | 同左（HotSpot `define_javabase_module` 语义） |
+
+除此之外，探针在 initPhase1–3 中**没有**碰到缺字节码或缺 native 的失败。引导期清单共 128 条 native 登记（其中 35 条 noop，即 registerNatives / initIDs 等；Unsafe 读写与 CAS 54 条），详见 `vm_intrinsics.toml [concrete.boot]`。
+
+## 6. 分步计划（每步单独提交，验收数字为硬门槛）
+
+| 步 | 内容 | 验收 |
+|---|---|---|
+| 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
+| 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 3（macOS）/ 0（Linux，第 1 步实测后锁定） |
+| 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
+| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 |
+| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
+| 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
+
+## 7. 风险
+
+1. **污点规则的健全性**：如果漏标一个宿主源，宿主值会被烘进二进制，跨机器行为就会出错。缓解：
+   - 延迟源清单由审计守护：`ACC_NATIVE` 方法在引导期被调用而没有登记 op 时构建失败，没有缺省 op；
+   - 加跨平台对照单测：同一份字节码在 Linux 与 macOS 上的映像差异只允许出现在平台属性键上。
+2. **引导期 native 面的维护量**：JDK 升版时 `initPhase*` 调用的 native 会变（25 的 `ThreadIdentifiers`、`ScopedValue` 等）。
+   失败即构建失败、报出栈，所以不会静默出错；代价是升版时需要补清单。
+3. **映像与运行期手写层的不一致**：映像中的对象布局由字节码字段决定。运行期的手写 struct（过渡类）如果字段不同，装载就会出错。S7 和「struct 一律由字节码生成」（规范 §1）是前提，第 3 步之前须核对引导映像类型中有无手写 struct。
+4. **生产模式映像裁剪与闭包的联合不动点**：映像可达集依赖闭包读取哪些静态字段，闭包又依赖映像值集，两者需要单调。抽象值只增不减，所以单调成立；实施时要用顺序矩阵验收。
+5. **身份哈希物化**：运行期 `identityHashCode` 需要区分映像对象和新对象。如果 S7 句柄不能廉价地判定「映像区」，就要每个对象多一个字。
+6. **macOS 与 Linux 的映像分叉**：本机探针用 macOS 类，服务器语料用 Linux 类。验收以 Linux 为准，本机只做小例子。
+
+## 8. 需用户决策
+
+| # | 事项 | 选项 | 建议 |
+|---|---|---|---|
+| U0 | 是否立项（C3 `build_time_init` 已定归 C3，本方案把它扩为 VM 引导阶段整体执行，并取代 boot-layer 第 2–3 步的锚点机制） | 立项并作为 a3 余项、boot-layer 第 2–5 步的前置 / 维持 boot-layer 原方案 | 立项：一个机制解决 a3 余项全部 33 个 `#[jvm_boundary]`、锚点膨胀和 `SystemModules$default` 的大方法编译 |
+| U1 | 控制流敏感属性的钉值：`sun.jnu.encoding`、`stdout/stderr.encoding`、`file.encoding`、`line.separator`、`java.home`（伪树前缀） | 钉值（原生二进制无 `-D`）/ 运行期取宿主值（相关类全部转为运行期初始化，initPhase1 的 Charset 分支随之在运行期执行） | 钉 UTF-8 / `\n` / 伪树 |
+| U2 | 固定 SALT 种子（经 `CDS.getRandomSeedForDumping`）：Set.of / Map.of 的迭代次序在同一二进制的每次运行中都固定，JVM 则每次随机（无 CDS 时） | 固定 / 运行期随机（ImmutableCollections 转为运行期初始化，引导映像中大量 `Set.of` 对象将无法物化，方案基本不成立） | 固定（与 CDS dump 的 JDK 自身做法一致） |
+| U3 | 空 class path（cwd）的 app class path URL | 运行期重放 `toFileURL`（与 JVM 一致）/ 固定为空（原生二进制没有类路径） | 运行期重放 |
+| U4 | 映像装载形态 | 甲：启动时批量建对象（约 0.4 ms）/ 乙：arena 永久区零拷贝（依赖 S7 句柄设计） | 终态取乙；S7 未定前先实施甲作为装载层，不影响映像格式 |
+| U5 | 映像所在的档案层 | 放在 `java_base` 档案内 / 独立 `boot_image` crate | `java_base` 内（引用的类全属 java.base） |
+| U6 | 实施次序与在途精度线 | 先做映像，再测 §25.2 的 1852 类 / 先等「Class 接收者逐镜像求值」 | 并行：两者正交，第 3 步验收时合测 |
