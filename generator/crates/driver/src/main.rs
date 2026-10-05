@@ -19,6 +19,8 @@ mod cargo;
 mod closure_cmd;
 mod closure_run;
 mod compile_cmd;
+mod mem_budget;
+mod mem_probe;
 mod profile_cmd;
 mod profile_emit;
 mod status;

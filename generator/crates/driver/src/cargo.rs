@@ -3,8 +3,9 @@
 //! - 环境：共享 `CARGO_TARGET_DIR`（缺省 `<repo>/build/target`，`--target-dir` 覆盖）、`CARGO_INCREMENTAL=0`（scratch 每轮重生成源文件，
 //!   增量命中趋零，而宽闭包 crate 上增量元数据的双份内存是 OOM 的压垮点）。调试信息级别由生成的
 //!   workspace `[profile.dev]` 决定。
-//! - 重型判定按**最大单 crate**：S4 拆层后实现层按体积均衡装箱（每箱峰值有界），峰值在声明层
-//!   `java_runtime`，其生成类数达到阈值即单作业编译；调用方显式设置 `CARGO_BUILD_JOBS` 时尊重调用方。
+//! - 并行作业数由内存感知规则决定（[`crate::mem_budget`]：可用内存 × 85% 容纳最大的 J 个 crate 的峰值估计），
+//!   每次编译都显式设置 `CARGO_BUILD_JOBS`；调用方设置的 `CARGO_BUILD_JOBS` 作为上限。
+//! - 重型判定（声明层生成类数达阈值）只决定缺省编译超时。
 //! - 产物清单 `<scratch>/build_artifacts.json`：本工作区 manifest 下的 compiler-artifact / build-script-executed
 //!   （通过测试的产物清理只读它）；rustc 全文落 `<scratch>/logs/build.log`。
 
@@ -15,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-/// 声明层生成类数阈值：16G 机器上 `CARGO_BUILD_JOBS=2` 时约 1750 类闭包即被 OOM 杀
-/// （2026-09-28 实测，拆层前口径）；达到阈值的工作区单作业编译
+use crate::mem_budget::MemPlan;
+
+/// 声明层生成类数阈值：达到阈值的工作区编译墙钟数倍于普通工作区，缺省超时取 [`HEAVY_TIMEOUT_SECS`]
 pub const HEAVY_CLASSES: usize = 1700;
 
 /// 峰值所在 crate（声明层）
@@ -30,25 +32,29 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const HEAVY_TIMEOUT_SECS: u64 = 3000;
 
 /// cargo 构建档位：dev（缺省）/ dev-opt（性能类测试，档案侧 opt 1，见 [`emit::project::entry::DEV_OPT_PROFILE`]）/
-/// release（opt 3 + fat LTO + strip）/ release-small（继承 release，opt "s"，见 [`emit::project::entry::RELEASE_SMALL_PROFILE`]）
+/// release（内存受限的缺省发布档，见 [`emit::project::entry::write_cargo_files`]）/
+/// release-max（大机器打包档：opt 3 + fat LTO + codegen-units 1，见 [`emit::project::entry::RELEASE_MAX_PROFILE`]）/
+/// release-small（继承 release-max，opt "s"，见 [`emit::project::entry::RELEASE_SMALL_PROFILE`]）
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum BuildProfile {
     #[default]
     Dev,
     DevOpt,
     Release,
+    ReleaseMax,
     ReleaseSmall,
 }
 
 impl BuildProfile {
     /// 档位命令行开关（dev 无开关）
-    pub const FLAGS: [&'static str; 3] = ["--dev-opt", "--release", "--release-small"];
+    pub const FLAGS: [&'static str; 4] = ["--dev-opt", "--release", "--release-max", "--release-small"];
 
     /// 档位开关 → 档位；非档位开关为 None
     pub fn of_flag(flag: &str) -> Option<BuildProfile> {
         match flag {
             "--dev-opt" => Some(BuildProfile::DevOpt),
             "--release" => Some(BuildProfile::Release),
+            "--release-max" => Some(BuildProfile::ReleaseMax),
             "--release-small" => Some(BuildProfile::ReleaseSmall),
             _ => None,
         }
@@ -68,6 +74,7 @@ impl BuildProfile {
             BuildProfile::Dev => &[],
             BuildProfile::DevOpt => &["--profile", emit::project::entry::DEV_OPT_PROFILE],
             BuildProfile::Release => &["--release"],
+            BuildProfile::ReleaseMax => &["--profile", emit::project::entry::RELEASE_MAX_PROFILE],
             BuildProfile::ReleaseSmall => &["--profile", emit::project::entry::RELEASE_SMALL_PROFILE],
         }
     }
@@ -82,25 +89,18 @@ pub struct CargoOpts {
     pub timeout: Option<Duration>,
 }
 
-/// 重型判定结果
+/// 重型判定结果（只决定缺省超时；作业数见 [`crate::mem_budget`]）
 #[derive(Debug, Clone)]
 pub struct Heavy {
     pub classes: usize,
-    /// 本次强制的作业数（None = 不干预）
-    pub jobs: Option<u32>,
 }
 
 impl Heavy {
     pub fn decide(peak_classes: usize) -> Heavy {
-        Heavy::decide_with(peak_classes, std::env::var_os("CARGO_BUILD_JOBS").is_some())
+        Heavy { classes: peak_classes }
     }
 
-    fn decide_with(peak_classes: usize, caller_jobs: bool) -> Heavy {
-        let forced = peak_classes >= HEAVY_CLASSES && !caller_jobs;
-        Heavy { classes: peak_classes, jobs: forced.then_some(1) }
-    }
-
-    /// 规模达阈值（不论作业数是否由调用方指定）
+    /// 规模达阈值
     pub fn is_heavy(&self) -> bool {
         self.classes >= HEAVY_CLASSES
     }
@@ -110,7 +110,7 @@ impl Heavy {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "crate": PEAK_CRATE, "classes": self.classes, "jobs": self.jobs })
+        json!({ "crate": PEAK_CRATE, "classes": self.classes, "heavy": self.is_heavy() })
     }
 }
 
@@ -226,7 +226,7 @@ fn link_config() -> Result<String, String> {
 }
 
 /// `cargo build --bin <bin>`：成功返回可执行文件路径；产物清单与 rustc 全文落 scratch
-pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<PathBuf, Failure> {
+pub fn compile(out: &Path, bin: &str, heavy: &Heavy, mem: &MemPlan, c: &CargoOpts) -> Result<PathBuf, Failure> {
     let timeout = c.timeout.unwrap_or_else(|| heavy.default_timeout());
     let log = out.join(BUILD_LOG);
     let fail = |first_error: String| Failure { first_error, ..Failure::default() };
@@ -245,10 +245,11 @@ pub fn compile(out: &Path, bin: &str, heavy: &Heavy, c: &CargoOpts) -> Result<Pa
         .env("CARGO_INCREMENTAL", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log_file));
-    if let Some(j) = heavy.jobs {
-        println!("[cargo-env] 声明层 {PEAK_CRATE} 生成类 {} ≥ {HEAVY_CLASSES}：CARGO_BUILD_JOBS={j}（内存上限）", heavy.classes);
-        cmd.env("CARGO_BUILD_JOBS", j.to_string());
+    println!("[cargo-env] CARGO_BUILD_JOBS={}（{}）", mem.jobs, mem.summary());
+    if mem.over {
+        println!("[cargo-env] 警告：单个 rustc 峰值估计超出内存预算，本档位可能在本机 OOM；改用 --release（内存受限缺省档）或更大内存的机器");
     }
+    cmd.env("CARGO_BUILD_JOBS", mem.jobs.to_string());
     // 超时要连同 rustc 子进程一起终止：独立进程组（交互 Ctrl-C 只终止 rava；cargo 随 stdout 管道断开退出）
     own_group(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| fail(format!("cargo：{e}")))?;
@@ -323,10 +324,9 @@ mod tests {
 
     #[test]
     fn heavy_threshold() {
-        assert_eq!(Heavy::decide_with(HEAVY_CLASSES, false).jobs, Some(1));
-        assert_eq!(Heavy::decide_with(HEAVY_CLASSES - 1, false).jobs, None);
-        assert_eq!(Heavy::decide_with(HEAVY_CLASSES * 2, true).jobs, None, "调用方显式设置时不干预");
-        assert_eq!(Heavy::decide_with(HEAVY_CLASSES * 2, true).default_timeout(), Duration::from_secs(HEAVY_TIMEOUT_SECS));
-        assert_eq!(Heavy::decide_with(1, false).default_timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        assert!(Heavy::decide(HEAVY_CLASSES).is_heavy());
+        assert!(!Heavy::decide(HEAVY_CLASSES - 1).is_heavy());
+        assert_eq!(Heavy::decide(HEAVY_CLASSES * 2).default_timeout(), Duration::from_secs(HEAVY_TIMEOUT_SECS));
+        assert_eq!(Heavy::decide(1).default_timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
     }
 }

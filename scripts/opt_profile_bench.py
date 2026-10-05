@@ -41,6 +41,7 @@ def _cand(opt: str, lto: str, cgu: int) -> tuple:
 
 # 档位名 → (rava 开关, 覆盖 release 档的环境变量)。lto "false" 即 cargo 缺省：只做 crate 内 thin-local LTO
 CANDIDATES = {
+    "dev": ("", {}),
     "release": ("--release", {}),
     "release-small": ("--release-small", {}),
     "release-max": ("--release-max", {}),
@@ -202,7 +203,7 @@ def bench(test: str, profiles: list, reps: int, out: str, run_timeout: float) ->
         tdir = ROOT / "build" / "b3t" / f"{name}_{p}"
         shutil.rmtree(tdir, ignore_errors=True)
         flag, over = CANDIDATES[p]
-        cmd = [str(RAVA), "compile", str(scratch), flag, "--target-dir", str(tdir), "--build-timeout", "5400"]
+        cmd = [str(RAVA), "compile", str(scratch), *([flag] if flag else []), "--target-dir", str(tdir), "--build-timeout", "5400"]
         log = Path(f"{out}_{name}_{p}_build.log")
         crates = Path(f"{out}_{name}_{p}_crates.jsonl").resolve()
         crates.write_text("")
@@ -212,7 +213,8 @@ def bench(test: str, profiles: list, reps: int, out: str, run_timeout: float) ->
         rc, secs, tree, cg = sampled([sys.executable, "-c", PEAK_WRAP, *cmd], log, env)
         st = json.loads((scratch / "build_status.json").read_text())
         r = {"build_s": round(secs, 1), "build_rc": rc, "build_peak_mb": peak_mb(log), "build_tree_peak_mb": tree,
-             "build_cgroup_peak_mb": cg, "cargo_jobs": (st.get("heavy") or {}).get("jobs") or os.environ.get("CARGO_BUILD_JOBS"),
+             "build_cgroup_peak_mb": cg, "cargo_jobs": (st.get("mem") or {}).get("jobs") or os.environ.get("CARGO_BUILD_JOBS"),
+             "mem_plan": st.get("mem"),
              "env": over, "runs": [], "match": None}
         if rc == 0 and st.get("exe"):
             exe = bins / f"{name}.{p}"

@@ -118,13 +118,15 @@ MAIN_FLAGS: list[str] = []
 EXPECTED_GEN_TIMEOUT = 120
 # 动态对照（C5）：缺省开，--no-dyn 关闭；每测试一次原始 Java 程序运行，相对转译耗时可忽略
 DYN_COMPARE = True
-# 构建档位目录（debug/release/release-small）：--release / --release-small 开关切换，bin 路径与 build 命令统一读它
+# 构建档位目录（debug/release/release-max/release-small）：--release / --release-max / --release-small 开关切换，
+# bin 路径与 build 命令统一读它
 PROFILE_DIR = "debug"
 # 用例级档位声明：源文件中独占一行的 `// rava-build-profile: dev-opt`（性能类测试——档案侧 crate
 # opt-level 1、用户 crate 0，见生成器 DEV_OPT_PROFILE）。只把缺省 dev 档抬到 dev-opt，--release 时不变
 DEV_OPT_DIR = "dev-opt"
-# release 系档位目录 → rava compile 开关（release-small：继承 release，opt-level "s"，见生成器 RELEASE_SMALL_PROFILE）
-RELEASE_DIRS = {"release": "--release", "release-small": "--release-small"}
+# release 系档位目录 → rava compile 开关（release：内存受限缺省档；release-max：大机器打包档 opt 3 + fat LTO；
+# release-small：继承 release-max，opt-level "s"。见生成器 RELEASE_MAX_PROFILE / RELEASE_SMALL_PROFILE）
+RELEASE_DIRS = {"release": "--release", "release-max": "--release-max", "release-small": "--release-small"}
 _PROFILE_DIRECTIVE_RE = re.compile(r"^\s*//\s*rava-build-profile:\s*(\S+)\s*$", re.MULTILINE)
 _DECLARED_PROFILE: dict[str, str] = {}   # bin 名 → 声明的档位目录（_discover 时登记）
 # 失败现场日志目录：rustc 完整输出 / 运行期 panic+backtrace 落盘，行式输出只留摘要
@@ -221,7 +223,7 @@ def _discover(filter_str: list[str] | None) -> list[Path]:
 
 
 def _profile_dir(bin_name: str) -> str:
-    """该例的构建档位目录：--release / --release-small 优先，否则取用例声明（缺省 dev → debug）。"""
+    """该例的构建档位目录：--release / --release-max / --release-small 优先，否则取用例声明（缺省 dev → debug）。"""
     if PROFILE_DIR in RELEASE_DIRS:
         return PROFILE_DIR
     return _DECLARED_PROFILE.get(bin_name, PROFILE_DIR)
@@ -1637,8 +1639,9 @@ def main():
                     help="实验：改用指定 JDK home（非参考构建，输出标记；与 --jdk 互斥）")
     ap.add_argument("--show-jdk",        action="store_true",
                     help="只解析并打印本次语料 JDK（JAVA_HOME / 主版本 / 是否参考构建）后退出，不跑测试")
-    ap.add_argument("--release",         action="store_true", help="release 档位构建运行（LTO 慢编译/快运行；默认 dev）")
-    ap.add_argument("--release-small",   action="store_true", help="release-small 体积档（继承 release，opt-level \"s\"）")
+    ap.add_argument("--release",         action="store_true", help="release 档位构建运行（opt 3 + thin LTO，内存受限缺省发布档；默认 dev）")
+    ap.add_argument("--release-max",     action="store_true", help="release-max 大机器打包档（opt 3 + fat LTO + codegen-units 1）")
+    ap.add_argument("--release-small",   action="store_true", help="release-small 体积档（继承 release-max，opt-level \"s\"）")
     ap.add_argument("--failed",          action="store_true", help="只运行失败清单（默认 build/failed_tests.txt）里的测试；跑到且 PASS 自动出列")
     ap.add_argument("--skip-failed",     action="store_true", help="跳过失败清单内的已知失败（干净面快速迭代；被跳过的不进出清单）")
     ap.add_argument("--record-passed",   action="store_true",
@@ -1689,10 +1692,12 @@ def main():
             OUT = ROOT / OUT
 
     global PROFILE_DIR
-    if args.release and args.release_small:
-        ap.error("--release 与 --release-small 互斥")
+    if args.release + args.release_max + args.release_small > 1:
+        ap.error("--release / --release-max / --release-small 互斥")
     if args.release:
         PROFILE_DIR = "release"
+    elif args.release_max:
+        PROFILE_DIR = "release-max"
     elif args.release_small:
         PROFILE_DIR = "release-small"
 

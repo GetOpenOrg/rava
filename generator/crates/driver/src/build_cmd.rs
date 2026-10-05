@@ -357,7 +357,7 @@ fn print_perf(on: bool, perf: &Perf, methods: &[(String, std::time::Duration)], 
     }
     if let Some(n) = jdk_classes {
         let h = cargo::Heavy::decide(n);
-        let verdict = h.jobs.map_or_else(|| "不干预作业数".to_string(), |j| format!("强制 {j} 作业"));
+        let verdict = format!("缺省编译超时 {} s", h.default_timeout().as_secs());
         println!("[perf] 重型判定：{} {n} 类（阈值 {}）→ {verdict}", cargo::PEAK_CRATE, cargo::HEAVY_CLASSES);
     }
 }

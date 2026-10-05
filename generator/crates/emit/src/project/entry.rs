@@ -166,8 +166,13 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
 /// 用户 crate 若取 opt 0，运行时的 `#[inline]` 泛型存取在用户 crate 内单态化后逐层成调用（SelfNumbers 慢 11 倍）
 pub const DEV_OPT_PROFILE: &str = "dev-opt";
 
-/// 可选体积档（cargo 自定义 profile，产物在 `<target>/release-small/`）：继承 release（fat LTO、codegen-units 1、
-/// strip），只把 opt-level 换成 "s"。档位取舍见 docs/plans/2026-10-04-binary-size.md §B3
+/// 大机器打包档（cargo 自定义 profile，产物在 `<target>/release-max/`）：继承 release，opt 3 + fat LTO +
+/// codegen-units 1。全程序单模块优化，大闭包单个 rustc 峰值 14–16 GB；缺省 release 以内存为硬约束，
+/// 不取此组合。档位取舍见 docs/plans/2026-10-04-binary-size.md §六（B4）
+pub const RELEASE_MAX_PROFILE: &str = "release-max";
+
+/// 可选体积档（cargo 自定义 profile，产物在 `<target>/release-small/`）：继承 release-max（fat LTO、
+/// codegen-units 1、strip），只把 opt-level 换成 "s"。档位取舍见 docs/plans/2026-10-04-binary-size.md §B3
 pub const RELEASE_SMALL_PROFILE: &str = "release-small";
 
 const MAIN_ALLOW: &str =
@@ -393,11 +398,16 @@ pub fn write_cargo_files(
     // 免除全部 unwind 清理路径（landing pad）。
     // release 剥符号表（strip = "symbols"）：取栈按链接期地址表（driver `rava-link`，运行时
     // `pc_map`），不读符号与 DWARF；行号表仍由 rava-link 在剥离前读取。
-    // release-small 档（见 RELEASE_SMALL_PROFILE）：继承 release，opt-level "s"（不设 "z" 档，用户 10-05 定）
+    // release 是缺省发布档，以构建内存为硬约束（16 GB 机器 cgroup 上限内全部标杆用例可构建，
+    // 用户 10-06 定）：opt 3 + thin LTO + codegen-units 1——跨 crate 优化分模块并行进行，
+    // 单个 rustc 峰值随最大 crate 而非全程序增长；并行作业数另由内存感知规则限定（driver mem_budget）。
+    // release-max 档（见 RELEASE_MAX_PROFILE）：大机器打包，opt 3 + fat LTO + codegen-units 1。
+    // release-small 档（见 RELEASE_SMALL_PROFILE）：继承 release-max，opt-level "s"（不设 "z" 档，用户 10-05 定）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
-         opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\nstrip     = \"symbols\"\n\n\
-         [profile.{RELEASE_SMALL_PROFILE}]\ninherits = \"release\"\nopt-level = \"s\"\n\n\
+         opt-level = 3\nlto       = \"thin\"\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\nstrip     = \"symbols\"\n\n\
+         [profile.{RELEASE_MAX_PROFILE}]\ninherits = \"release\"\nlto = true\ncodegen-units = 1\n\n\
+         [profile.{RELEASE_SMALL_PROFILE}]\ninherits = \"{RELEASE_MAX_PROFILE}\"\nopt-level = \"s\"\n\n\
          [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n\n\
          [profile.{DEV_OPT_PROFILE}]\ninherits = \"dev\"\nopt-level = 1\n",
         members.join(", ")
