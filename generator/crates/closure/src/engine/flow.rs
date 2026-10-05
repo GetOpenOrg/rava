@@ -1,6 +1,6 @@
 //! 引擎：类型流——节点类型集、流边、实参来源、字段节点与逃逸。
 
-use super::stats::{kind_ix, KINDS};
+use super::stats::KINDS;
 use super::*;
 
 /// 新接边整集合收窄走记忆的源集合元素数下限
@@ -81,13 +81,31 @@ impl<'a> Engine<'a> {
     /// 代表 r 的类型集新增 delta：逐成员触发节点钩子（逃逸、自身字段、成员枚举、手写调用点实参、读者重跑）
     pub(super) fn grown(&mut self, r: u32, delta: &TypeSet) {
         match self.graph.members.get(&r) {
-            None => self.node_grown(self.graph.node(r), delta),
+            None => {
+                if self.graph.hooked(r) {
+                    self.node_grown(self.graph.node(r), delta);
+                }
+            }
             Some(ms) => {
-                let ms = ms.clone();
+                let ms: Vec<u32> = ms.iter().copied().filter(|&m| self.graph.hooked(m)).collect();
                 for m in ms {
                     self.node_grown(self.graph.node(m), delta);
                 }
             }
+        }
+    }
+
+    /// 当前读者单元（lambda 调用 / 站点）登记为节点 n 的读者
+    pub(super) fn watch_node(&mut self, n: Node) {
+        let new = if let Some(c) = self.cur_call {
+            self.call_watch.entry(n).or_default().insert(c)
+        } else if let Some(w) = self.cur_site {
+            self.watch.entry(n).or_default().insert(w)
+        } else {
+            false
+        };
+        if new {
+            self.graph.mark_hooked(n);
         }
     }
 
@@ -245,11 +263,11 @@ impl<'a> Engine<'a> {
             // 边表只增不改，环合并只在两次出队之间）；同一过滤类型只收窄一次，Object 过滤直接推增量本身
             let ne = self.graph.edges[ix].len();
             let mut narrowed: Vec<(u32, TypeSet)> = Vec::new();
-            let sk = kind_ix(&self.graph.node(i)) * KINDS;
+            let sk = self.graph.kind(i) * KINDS;
             let grew0 = self.graph.adds[1];
             for k in 0..ne {
                 let (dst, f) = self.graph.edges[ix][k];
-                let pk = sk + kind_ix(&self.graph.node(dst));
+                let pk = sk + self.graph.kind(dst);
                 let grew = self.graph.adds[1];
                 self.push_edge(i, dst, f, obj, &s, &mut narrowed);
                 let p = &mut self.graph.pushes[pk];
@@ -260,6 +278,9 @@ impl<'a> Engine<'a> {
             ps[0] += 1;
             ps[1] += ne as u64;
             ps[2] += self.graph.adds[1] - grew0;
+            if !self.graph.has_mirror_src(i) {
+                continue;
+            }
             let ms = self.graph.members.get(&i).cloned().unwrap_or_else(|| vec![i]);
             for m in ms {
                 let n = self.graph.node(m);
@@ -278,6 +299,8 @@ impl<'a> Engine<'a> {
             return;
         }
         self.mflows.entry(src).or_default().push((dst, op));
+        let si = self.graph.id(src);
+        self.graph.mark_mirror_src(si);
         let s = self.set_of(src);
         self.mirror_into(op, &s, dst);
     }
@@ -329,11 +352,7 @@ impl<'a> Engine<'a> {
         for f in fs {
             match f {
                 Feed::N(n) => {
-                    if let Some(c) = self.cur_call {
-                        self.call_watch.entry(*n).or_default().insert(c);
-                    } else if let Some(w) = self.cur_site {
-                        self.watch.entry(*n).or_default().insert(w);
-                    }
+                    self.watch_node(*n);
                     if let Some(s) = self.graph.get(n) {
                         out.add_all(s);
                     }
