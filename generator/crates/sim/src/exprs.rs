@@ -35,8 +35,11 @@ pub fn default_value() -> SimResult<Expr> {
     call2(DEFAULT, Vec::new(), "default", Vec::new())
 }
 
-/// `Clone::clone(&v)`
+/// `Clone::clone(&v)`；`v` 已是独占临时值（[`Expr::is_owned_temp`]）时原样返回
 pub fn clone_ref(e: Expr) -> SimResult<Expr> {
+    if e.is_owned_temp() {
+        return Ok(e);
+    }
     call2(CLONE, Vec::new(), "clone", vec![Expr::reference(e)])
 }
 

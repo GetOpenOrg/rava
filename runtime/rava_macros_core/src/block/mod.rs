@@ -27,6 +27,7 @@ mod erasure;
 mod gen;
 mod generic_sig;
 mod interface;
+mod ldc;
 mod moved;
 #[cfg(feature = "plan")]
 pub mod plan;
@@ -47,7 +48,10 @@ use parse::ClassInput;
 
 pub fn expand(input: TokenStream2) -> TokenStream2 {
     match syn::parse2::<ClassInput>(input) {
-        Ok(v) => expand_inner(v),
+        Ok(mut v) => {
+            ldc::cache_literals(&mut v);
+            expand_inner(v)
+        }
         Err(e) => e.to_compile_error(),
     }
 }

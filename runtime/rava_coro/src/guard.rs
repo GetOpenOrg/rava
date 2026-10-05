@@ -83,6 +83,12 @@ pub(crate) fn current() -> Bounds {
     CURRENT.with(|c| c.get())
 }
 
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+/// 本线程栈界槽（`Cell<Bounds>`）的地址，并暴露其来源供快路径按地址读取（[`crate::limit`]）
+pub(crate) fn current_slot_addr() -> usize {
+    CURRENT.with(|c| c.as_ptr().expose_provenance())
+}
+
 /// 换上即将切入的执行流的栈界；切入带硬件 guard 的协程栈前确保本线程有备用信号栈与载体信息
 #[inline]
 pub(crate) fn enter(b: Bounds) {
@@ -90,6 +96,7 @@ pub(crate) fn enter(b: Bounds) {
         init_carrier();
     }
     CURRENT.with(|c| c.set(b));
+    crate::limit::check_tls_offset();
 }
 
 /// 改写当前执行流的软件栈界

@@ -57,9 +57,11 @@ pub(crate) fn expand_interface(
         .collect();
     let type_param_names: HashSet<String> = type_params.iter().map(|i| i.to_string()).collect();
     let no_fields: HashSet<String> = HashSet::new();
+    let impl_methods: HashSet<String> = meta.impl_methods.iter().cloned().collect();
+    let own_statics = class_init::OwnStatics::new(struct_ident, statics, &impl_methods);
     let static_members: Vec<TokenStream2> = fns.iter()
         .filter(|f| !is_instance_decl(f))
-        .map(|f| expand_non_virtual_fn(f, &meta.binary_name, &no_fields, &no_fields))
+        .map(|f| expand_non_virtual_fn(f, &meta.binary_name, &no_fields, &no_fields, &own_statics))
         .collect();
     let binary_name = &meta.binary_name;
     let vtable_ident = format_ident!("{}__VTable", struct_ident);
@@ -170,7 +172,6 @@ pub(crate) fn expand_interface(
         });
     }
 
-    let impl_methods: HashSet<String> = meta.impl_methods.iter().cloned().collect();
     let (static_storage, static_accessors) =
         class_init::expand_statics(struct_ident, statics, &impl_methods);
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);

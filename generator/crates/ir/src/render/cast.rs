@@ -38,6 +38,8 @@ impl Renderer<'_> {
     fn write_clone_src(&self, out: &mut String, e: &Expr) {
         if e.is_var_named("this") {
             out.push_str("Clone::clone(this)");
+        } else if e.is_owned_temp() {
+            self.write_expr(out, e);
         } else {
             out.push_str("Clone::clone(&");
             self.write_expr(out, e);

@@ -3,7 +3,7 @@
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
 //!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
-//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release] [--target-dir D]
+//!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release | --dev-opt] [--target-dir D]
 //!   [--keep-artifacts]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
@@ -129,8 +129,8 @@ pub struct BuildOpts {
     pub stop_after: Stage,
     /// cargo build 超时（秒；超时终止整个 cargo 进程组；缺省按重型判定，见 `cargo::Heavy::default_timeout`）
     pub build_timeout: Option<u64>,
-    /// cargo build --release
-    pub release: bool,
+    /// cargo 构建档位（`--release` / `--dev-opt`，缺省 dev）
+    pub build_profile: crate::cargo::BuildProfile,
     /// 保留本例编译产物（缺省链接后删中间产物、运行后删可执行文件，见 [`crate::artifacts`]）
     pub keep_artifacts: bool,
     /// 共享编译缓存（CARGO_TARGET_DIR；缺省 `<仓库>/build/target`）
@@ -184,7 +184,7 @@ const VALUED: [&str; 25] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 10] = [
+const FLAGS: [&str; 11] = [
     "--clean",
     "--strict",
     "--batch",
@@ -194,11 +194,13 @@ const FLAGS: [&str; 10] = [
     "--perf",
     "--closure-json",
     "--release",
+    "--dev-opt",
     "--keep-artifacts",
 ];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 20] = [
+const BUILD_ONLY: [&str; 21] = [
     "--release",
+    "--dev-opt",
     "--keep-artifacts",
     "--target-dir",
     "--closure-cache",
@@ -225,6 +227,7 @@ const EMIT_ONLY: [&str; 2] = ["--classes", "--java"];
 impl BuildOpts {
     pub fn parse(mode: Mode, rest: &[String]) -> Result<BuildOpts, String> {
         let mut o = BuildOpts::default();
+        let (mut dev_opt, mut release) = (false, false);
         let mut it = rest.iter();
         while let Some(a) = it.next() {
             if !a.starts_with('-') {
@@ -247,7 +250,8 @@ impl BuildOpts {
                     "--api-recursive" => o.api_recursive = true,
                     "--perf" => o.perf = true,
                     "--closure-json" => o.closure_json = true,
-                    "--release" => o.release = true,
+                    "--release" => release = true,
+                    "--dev-opt" => dev_opt = true,
                     "--keep-artifacts" => o.keep_artifacts = true,
                     _ => o.strict = true,
                 }
@@ -285,6 +289,7 @@ impl BuildOpts {
                 _ => o.roots.push(v.clone()),
             }
         }
+        o.build_profile = crate::cargo::BuildProfile::from_flags(dev_opt, release)?;
         o.validate(mode)?;
         Ok(o)
     }
@@ -479,8 +484,12 @@ mod tests {
         assert_eq!(o.closure_cache_max_mb, Some(64));
         assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache-max-mb 64")).is_ok(), "缓存目录有缺省");
         let o = BuildOpts::parse(Mode::Build, &args("E.java --release --target-dir /t")).unwrap();
-        assert!(o.release);
+        assert_eq!(o.build_profile, crate::cargo::BuildProfile::Release);
         assert_eq!(o.target_dir.as_deref(), Some(Path::new("/t")));
+        let o = BuildOpts::parse(Mode::Build, &args("E.java --dev-opt")).unwrap();
+        assert_eq!(o.build_profile, crate::cargo::BuildProfile::DevOpt);
+        assert!(BuildOpts::parse(Mode::Build, &args("E.java --dev-opt --release")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --dev-opt")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --release")).is_err());
         assert!(BuildOpts::parse(Mode::Build, &args("E.java --closure-cache /c --closure-cache-max-mb x")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --closure-cache /c")).is_err());

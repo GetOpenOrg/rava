@@ -98,7 +98,7 @@ pub(crate) fn moved_fact(ctx: &GenContext, f: &FnItem) -> Option<Moved> {
             functionize_applicable(ctx, &impl_sig, &b.stmts).then_some(Moved::Wrapper)
         }
         MethodKind::Constructor | MethodKind::NonVirtual => {
-            let (_, b) = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names)?;
+            let (_, b) = prepare_non_virtual_body(f, &ctx.basic_names, &ctx.ref_names, &ctx.own_statics())?;
             functionize_applicable(ctx, &f.sig, &b.stmts).then_some(Moved::Plain)
         }
     }

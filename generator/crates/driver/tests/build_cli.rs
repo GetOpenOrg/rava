@@ -200,7 +200,8 @@ fn try_finally_return_temp_kept_in_every_arm() {
     // 终态语义与臂的字面形态无关（case 标签可能因选择子值域与 default 合臂）：
     // 返回值类型已是汇合类型（Object）的 case 1 臂，取值后紧接着存入暂存槽
     let a1 = body.iter().position(|l| l.contains("let _t1: Object = Self::a()?;")).expect("case 1 取返回值");
-    assert_eq!(body[a1 + 1].trim(), "local_1 = Clone::clone(&_t1);", "{}", body.join("\n"));
+    // 单用临时值按值移交（R1）：`_t1` 之后不再使用，存储直接移交
+    assert_eq!(body[a1 + 1].trim(), "local_1 = _t1;", "{}", body.join("\n"));
     assert_eq!(body.iter().filter(|l| l.trim_start().starts_with("local_1 = ")).count(), 3, "三个臂都存储返回值");
     std::fs::remove_dir_all(&out).ok();
 }
