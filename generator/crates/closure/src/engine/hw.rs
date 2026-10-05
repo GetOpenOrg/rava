@@ -35,6 +35,7 @@ impl<'a> Engine<'a> {
         if let Some(k) = self.man.member_enumerator(&ks) {
             let n = Node::P(m, 0);
             if self.enum_recv.insert(n, (RHook::Enum(k), m)).is_none() {
+                self.graph.mark_hooked(n);
                 let s = self.set_of(n);
                 self.rpending.push((RHook::Enum(k), m, s));
             }

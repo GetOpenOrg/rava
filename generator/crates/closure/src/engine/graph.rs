@@ -10,6 +10,12 @@ use super::*;
 pub(super) struct FlowGraph {
     ids: HashMap<Node, u32>,
     nodes: Vec<Node>,
+    /// 节点种类序号（`stats.rs::kind_ix`）：推送计数的热路径只读这一字节，不取整个节点
+    kinds: Vec<u8>,
+    /// 代表的成员中有镜像流边源（`flow.rs::mflow`）：出队时才逐成员查镜像流边
+    mirror_src: Vec<bool>,
+    /// 节点登记过增长钩子（`flow.rs::node_grown` 所查的各表，或种类本身带钩子）：未登记的成员增长时不逐表查找
+    hooked: Vec<bool>,
     /// 节点类型集（空 = 尚无值），按内容驻留共享（`setstore.rs`）
     pub(super) sets: SetStore,
     /// 出边（目标序号, 过滤类型 id），按接边顺序
@@ -104,6 +110,9 @@ impl FlowGraph {
         let i = self.nodes.len() as u32;
         self.ids.insert(n, i);
         self.nodes.push(n);
+        self.kinds.push(super::stats::kind_ix(&n) as u8);
+        self.mirror_src.push(false);
+        self.hooked.push(matches!(n, Node::Esc | Node::K(_) | Node::NR(_) | Node::A(..)));
         self.sets.push_empty();
         self.edges.push(Vec::new());
         self.delta.push(TypeSet::default());
@@ -127,6 +136,7 @@ impl FlowGraph {
     }
     /// 把代表 b 并入代表 a（调用方负责类型集 / 增量 / 出边的合并）
     pub(super) fn union_into(&mut self, a: u32, b: u32) {
+        self.mirror_src[a as usize] |= self.mirror_src[b as usize];
         let mb = self.members.remove(&b).unwrap_or_else(|| vec![b]);
         for &x in &mb {
             self.rep[x as usize] = a;
@@ -134,6 +144,30 @@ impl FlowGraph {
         let ma = self.members.entry(a).or_insert_with(|| vec![a]);
         ma.extend(mb);
         ma.sort_unstable();
+    }
+    /// 节点种类序号（同 `stats.rs::kind_ix`）
+    #[inline]
+    pub(super) fn kind(&self, i: u32) -> usize {
+        usize::from(self.kinds[i as usize])
+    }
+    /// 登记节点 i 为镜像流边源（标记在其代表上）
+    pub(super) fn mark_mirror_src(&mut self, i: u32) {
+        let r = self.rep(i) as usize;
+        self.mirror_src[r] = true;
+    }
+    /// 节点 n 登记了增长钩子（驻留后标记；标记只增不撤，多标只多查表）
+    pub(super) fn mark_hooked(&mut self, n: Node) {
+        let i = self.id(n) as usize;
+        self.hooked[i] = true;
+    }
+    #[inline]
+    pub(super) fn hooked(&self, i: u32) -> bool {
+        self.hooked[i as usize]
+    }
+    /// 代表 r 的成员中有镜像流边源
+    #[inline]
+    pub(super) fn has_mirror_src(&self, r: u32) -> bool {
+        self.mirror_src[r as usize]
     }
     #[inline]
     pub(super) fn node(&self, i: u32) -> Node {

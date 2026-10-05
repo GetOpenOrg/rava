@@ -169,6 +169,9 @@ impl<'a> Engine<'a> {
         }
         for (ms, d) in fire {
             for m in ms {
+                if !self.graph.hooked(m) {
+                    continue;
+                }
                 let n = self.graph.node(m);
                 self.node_grown(n, &d);
             }

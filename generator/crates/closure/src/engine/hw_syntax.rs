@@ -155,6 +155,7 @@ impl<'a> Engine<'a> {
                 };
                 let recv = Node::P(m, 0);
                 self.self_fields.entry(recv).or_default().push((fi, tid, fa.write, fs, prod));
+                self.graph.mark_hooked(recv);
                 let cur = self.graph.get(&recv).cloned().unwrap_or_default();
                 self.self_field_objs(recv, &cur);
                 continue;
@@ -226,6 +227,7 @@ impl<'a> Engine<'a> {
             return;
         }
         reads.push((src.to_string(), to, tid));
+        self.graph.mark_hooked(recv);
         let cur = self.graph.get(&recv).cloned().unwrap_or_default();
         self.name_read_objs(recv, &cur);
     }

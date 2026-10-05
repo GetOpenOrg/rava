@@ -337,6 +337,7 @@ impl<'a> Engine<'a> {
         for (i, c) in &a.mirror_assumed {
             let cid = self.id(c);
             self.mirror_watch.entry(Node::P(m, *i)).or_default().insert((m, cid));
+            self.graph.mark_hooked(Node::P(m, *i));
         }
         self.methods[m].analysis = Some(a.clone());
         self.methods[m].aseq = self.methods[m].aseq.wrapping_add(1);

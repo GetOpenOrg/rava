@@ -302,6 +302,7 @@ impl<'a> Engine<'a> {
     fn rcall_hooks(&mut self, ch: u8) {
         for (n, k) in [(Node::RP(ch), RHook::Pool), (Node::RA(ch), RHook::Array)] {
             if self.enum_recv.insert(n, (k, ch as usize)).is_none() {
+                self.graph.mark_hooked(n);
                 let s = self.set_of(n);
                 if !s.is_empty() {
                     self.rpending.push((k, ch as usize, s));

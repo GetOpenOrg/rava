@@ -29,11 +29,7 @@ impl<'a> Engine<'a> {
         for f in fs {
             match f {
                 Feed::N(n) => {
-                    if let Some(c) = self.cur_call {
-                        self.call_watch.entry(*n).or_default().insert(c);
-                    } else if let Some(w) = self.cur_site {
-                        self.watch.entry(*n).or_default().insert(w);
-                    }
+                    self.watch_node(*n);
                     n.hash(&mut h);
                     ver += self.graph.get(n).map_or(0, |s| s.classes.len() + s.open.len());
                 }
