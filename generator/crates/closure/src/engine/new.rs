@@ -128,6 +128,7 @@ impl<'a> Engine<'a> {
             hub_linked: HashMap::default(),
             hub_lsent: HashMap::default(),
             recv_done: HashMap::default(),
+            recv_fp: HashMap::default(),
             refl_seen: HashMap::default(),
             lambda_done: HashMap::default(),
             lcalls: Vec::new(),

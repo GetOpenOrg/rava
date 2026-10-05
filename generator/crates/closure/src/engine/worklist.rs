@@ -354,6 +354,9 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.recv_done.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
+        if let Some(d) = self.recv_fp.get_mut(&m) {
+            d.retain(|o, _| !offs.contains(o));
+        }
         if let Some(d) = self.gather_last.get_mut(&m) {
             d.retain(|k, _| !offs.contains(&k.0));
         }
@@ -375,6 +378,7 @@ impl<'a> Engine<'a> {
         self.hub_linked.remove(&m);
         self.hub_lsent.remove(&m);
         self.recv_done.remove(&m);
+        self.recv_fp.remove(&m);
         self.gather_last.remove(&m);
         self.refl_seen.remove(&m);
         for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {

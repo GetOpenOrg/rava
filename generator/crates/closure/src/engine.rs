@@ -46,7 +46,9 @@ use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
 mod invoke;
+mod reflect_writes;
 mod hub;
+mod recv_fp;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -369,6 +371,8 @@ pub struct Engine<'a> {
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
     recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
+    /// 调用点接收者值集的版本记忆：方法 → 偏移 → 版本与接收者判定（`recv_fp.rs`，同 `recv_done` 作废）
+    recv_fp: HashMap<usize, HashMap<u32, recv_fp::RecvFp>>,
     /// 反射调用点（方法 → 偏移）已处理过的 Class 实参值（`field_lookup.rs::ReflSeen`）；同一分析结果下成立，与 `recv_done` 同口径作废
     refl_seen: HashMap<usize, HashMap<u32, field_lookup::ReflSeen>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
