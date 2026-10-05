@@ -169,7 +169,18 @@ impl<'a> Planner<'a> {
         let Some(code) = self.input.code(ci.name(), m) else {
             return true;
         };
-        let own: BTreeSet<(&str, &str)> = ci.methods().iter().map(|x| (x.name.as_str(), x.desc.as_str())).collect();
+        // 可能以 this 为接收者的虚调用所属类型：本接口、其传递超接口与根超类（接口的 super_class）。
+        // 其余所有者（PrintStream / StringBuilder / 其他接口……）的虚调用接收者不是 this，按普通调用翻译；
+        // this 类所有者上的调用只放行接口层次内声明的实例方法（超接口成员经载体继承成员转发），
+        // 只在根超类上声明的方法（载体无对应成员）保持保守拒绝
+        let this_like = self.iface_self_types(ci);
+        let root = ci.super_class();
+        let own: BTreeSet<(&str, &str)> = this_like
+            .iter()
+            .filter(|t| t.as_str() != root)
+            .filter_map(|t| self.reg().get(t))
+            .flat_map(|c| c.methods().iter().filter(|x| !x.is_static()).map(|x| (x.name.as_str(), x.desc.as_str())))
+            .collect();
         let refs = code.insns.iter().filter_map(NInsn::insn).filter_map(|i| match &i.operand {
             Operand::Method(r, _) => Some((i.opcode, r)),
             _ => None,
@@ -178,11 +189,29 @@ impl<'a> Planner<'a> {
             if opc == op::INVOKESPECIAL && self.iface_special_target(&r.owner, &r.name, &r.desc) {
                 return false;
             }
-            if matches!(opc, op::INVOKEVIRTUAL | op::INVOKEINTERFACE) && !own.contains(&(r.name.as_str(), r.desc.as_str())) {
+            if matches!(opc, op::INVOKEVIRTUAL | op::INVOKEINTERFACE)
+                && this_like.contains(r.owner.as_str())
+                && !own.contains(&(r.name.as_str(), r.desc.as_str()))
+            {
                 return false;
             }
         }
         true
+    }
+
+    /// 接口自身、传递超接口与根超类
+    fn iface_self_types(&self, ci: &ClassInfo) -> BTreeSet<String> {
+        let mut out = BTreeSet::from([ci.super_class().to_string()]);
+        let mut queue = VecDeque::from([ci.name().to_string()]);
+        while let Some(cur) = queue.pop_front() {
+            if !out.insert(cur.clone()) {
+                continue;
+            }
+            if let Some(c) = self.reg().get(&cur) {
+                queue.extend(c.interfaces().iter().cloned());
+            }
+        }
+        out
     }
 
     fn clinit_plan(&self, ci: &ClassInfo, m: &Method, type_only: bool) -> Option<MethodPlan> {
