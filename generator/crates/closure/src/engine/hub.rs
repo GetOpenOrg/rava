@@ -126,6 +126,7 @@ impl<'a> Engine<'a> {
         if cut::edges_on() {
             cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("H:{h}"));
         }
+        self.prof_seg(site_prof::SEG_LINK_FEED);
         let hub = &self.hubs[h as usize];
         let (ptypes, ret) = (hub.ptypes.clone(), hub.ret);
         for (j, f) in a.iter().enumerate() {
@@ -136,6 +137,7 @@ impl<'a> Engine<'a> {
         if let (Some(rt), Some(res)) = (ret, res) {
             self.flow(Node::HR(h), res, rt);
         }
+        self.prof_seg(site_prof::SEG_LINK_VALS);
         let cv = self.call_vals.clone();
         if let Some(vs) = &cv {
             let string = self.id(STRING);
@@ -145,6 +147,7 @@ impl<'a> Engine<'a> {
         }
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);
+        self.prof_seg(site_prof::SEG_LINK_REPLAY);
         let hub = &mut self.hubs[h as usize];
         let id = hub.link_seq;
         hub.link_seq += 1;
@@ -166,6 +169,7 @@ impl<'a> Engine<'a> {
             self.hubs[h as usize].edged.insert((id, t));
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
+        self.prof_seg(site_prof::SEG_LINK_EXPAND);
         self.hub_expand(h);
     }
 

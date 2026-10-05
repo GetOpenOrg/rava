@@ -47,7 +47,15 @@ pub(super) const SEG_LINK: usize = 5;
 pub(super) const SEG_EDGE_RECV: usize = 6;
 pub(super) const SEG_STATIC: usize = 7;
 pub(super) const SEG_POST: usize = 8;
-const SEG_NAMES: [&str; 9] = ["pre_hooks", "args_feeds", "recv_set", "dispatch_one", "hub_get", "link_hub", "edge_recv", "static_edge", "post_hooks"];
+/// 枢纽接入的细分：实参汇入 / 名字槽与常量并入 / lambda 与按调用点目标重放 / 展开
+pub(super) const SEG_LINK_FEED: usize = 9;
+pub(super) const SEG_LINK_VALS: usize = 10;
+pub(super) const SEG_LINK_REPLAY: usize = 11;
+pub(super) const SEG_LINK_EXPAND: usize = 12;
+const SEG_NAMES: [&str; 13] = [
+    "pre_hooks", "args_feeds", "recv_set", "dispatch_one", "hub_get", "link_hub", "edge_recv", "static_edge", "post_hooks",
+    "link_feed", "link_vals", "link_replay", "link_expand",
+];
 
 /// 产出掩码位
 const PROD_NAMES: [&str; 6] = ["edges", "grow", "methods", "targets", "hubs", "mpush"];
