@@ -626,3 +626,59 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
 - V9：`rcall_absorb` 与种子相关，由 v9-rcall 分支在修。
 - V10：逃逸对象上下文收拢，V9 合入后开新阶段做，精度口径见上。
 - `--flow-batch` 改成与顺序无关后再评估。
+
+### 2026-10-05：V10 逃逸对象上下文收拢（v10-escape，f1b50ef6）——精度不达标，停下上报
+
+**做法**（`engine/collapse.rs`）：
+- 容器对象 x 逃逸后，按分配点组（对象名链首段 `类@方法:偏移`）映射到收拢上下文 `类@方法:偏移#*`。
+  - 收拢上下文的分配点链只取 x 链的首段，所以子分配与调用点上下文的命名不变。
+- `method_ctx` 按规范上下文建克隆，同组逃逸对象的方法克隆合一。
+- 逃逸前已按 x 建出的克隆 t 改作收拢克隆 tc 的别名，以保证顺序无关：
+  - `P(t)→P(tc)`、`R(tc)→R(t)`；
+  - 形参常量、字符串槽与污染并入 tc；
+  - 透传摘要按 tc 判定。
+- 本机 closure 单测 159/0。
+
+**观测**：
+- 前置诊断提交 10877e0a 给 `summary.perf.ctx_groups` 加了按分配点分组的上下文规模统计。
+- 基线 JNDI 推送 2.98 亿次，其中逃逸占比 ≥80% 的组占 73%。
+  - 主要是 `HashMap$TreeNode`、`ConcurrentHashMap$TreeNode/TreeBin`、`HashMap` 各分配点组。
+  - 每组 100–170 个上下文，几乎全部逃逸。
+
+**实测**：
+- 基线是 `v10-prof-10877e0a`，新版是 `v10-c1-f1b50ef6`。两边服务器不同，耗时只作量级参考。
+- 集合对比用 `cj_*.json.gz`，逐节比较，不含 via。
+
+| 用例 | 类 | 方法 | 反射 | 推送 | 方法克隆 | 墙钟 / RSS |
+|---|---|---|---|---|---|---|
+| JNDI | 3865 = 3865 | 24624 → **24638（+14）** | 19058 = | 2.98 亿 → 1.46 亿 | 136154 → 116200 | 263 s / 4.3 GB（sg2）→ 168 s / 3.2 GB（kr1） |
+| DeepCopy | 3430 = | 20960 = | 8509 = | 6127 万 → 5571 万 | 96061 → 92070 | 90 s → 86 s |
+| HTTP | 作业 `v10-c1-f1b50ef6/02` 排队中 | | | | | 基线 753 s / 9.0 GB（jp1，推送 9.65 亿） |
+
+**JNDI 多出的 14 个方法**：都是收拢合并了同分配点组不同对象的形参 / 返回值所致，属于精度损失，不是等价变化。
+- `XMLParserImpl.getDocumentBuilder` / `repoolDocumentBuilder` 的 `Queue` 实参。
+  - 基线只有 `ArrayBlockingQueue`。
+  - 收拢后混入 `ArrayDeque`、`LinkedList`、`LinkedBlockingQueue`、`LinkedTransferQueue`、`SynchronousQueue`、`DelayedWorkQueue` 的 poll / offer。
+  - 原因：同分配点组（如 `Collections$SynchronizedMap`、`WeakHashMap`）的不同 map 共用一个克隆，取值合并。
+- `Collections$SetFromMap.clear@4` 多了 `IdentityHashMap.clear`。
+- `IntegerPolynomial.reduceHigh` 的 `this.reduceIn` 多了 P256 / P384 / P521。
+- `dispatch` 另有约 190 个站点目标集变大，都是同一机制。
+
+**结论**：
+- 按分配点收拢逃逸对象的克隆，本质上会合并「同一分配点、不同外层容器」的对象各自经已知接收者写入的字段内容。
+  - 逃逸只说明字段含 `U(f)`，不说明各对象字段相同。
+  - 所以这种收拢在设计上就有损，违反「方法与反射只减不增」的口径，不纳入集成分支。
+- 即使接受这点损失，JNDI 推送也只减半。HTTP 要从 753 s 降到 60 s，需要 12 倍以上，单靠收拢达不到。
+- 可选的无损方向留给协调方决策（未实施）：
+  - 离线变量替换 / 哈希值编号（HVN 类）合并等价节点，压缩推送扇出。基线推送与有效推送之比约 30:1，冗余主要在扇出。
+  - 逃逸对象字段内容拆成公共的 `U(f)` 部分与对象专有部分，公共部分只在一个共享克隆里传播一次。
+    - 流分析对输入可分配，可以论证无损；
+    - 但 `this` 身份决定下游上下文选择，需要专门设计。
+
+**TestJndiNoProvider E0308**（`version_helper.rs:361`）：**不是 V9 引入的**。
+- 作业 `v10-jndi2-10877e0a` 在同一服务器上分别以 V9 前的 10314222 和含 V9 的 10877e0a 发射。
+- 两版 `VersionHelper.lambda$getResources$5` 生成代码逐字节相同：
+  - `_merged2: Object`；
+  - 一支 `_merged2 = _t0` 不转换，`_t0` 来自 VM 承载方法 `ClassLoader::getSystemResources`，手写返回 `Enumeration<Object>`；
+  - 另一支 `Object::from(_t1)`。
+- 判断是发射器合流（`method/src/blocks/merge.rs` / `unify.rs`）把 VM 承载方法的返回值当成 `Object`，所以没有补转换。与闭包无关，按要求不在本分支修。
