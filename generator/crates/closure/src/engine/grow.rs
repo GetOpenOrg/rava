@@ -40,6 +40,9 @@ impl<'a> Engine<'a> {
     /// open 展开的取值面扩大（G 增长 / 数组逃逸）：x 落在其 open 类型与接收者上界之下的方法与站点重跑
     pub(super) fn reopen(&mut self, x: u32) {
         self.mirror_reopen(x);
+        if self.cuts.no_reopen {
+            return;
+        }
         let keys: Vec<(u32, u32)> =
             self.open_methods.keys().chain(self.open_sites.keys()).chain(self.open_calls.keys()).copied().collect();
         let hit: HashSet<(u32, u32)> = keys.into_iter().filter(|&(o, owner)| self.sub(x, o) && self.sub(x, owner)).collect();

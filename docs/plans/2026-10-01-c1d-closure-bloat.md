@@ -2260,3 +2260,123 @@ TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 在 
 native 缺失、`String.class.getModule()` 不是命名的 java.base），三者都依赖引导层，随第 2–3 步一起解决。不单独补手写近似：
 `PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
 仍然会抛 `InternalError("java.base not loaded")`。
+
+## 28. 共享汇点精度：逐汇点分解与反事实实测（2026-10-05，分支 c1d-sink，基于 0192bf20）
+
+> 编号说明：c1d-clsfact 线占 §26，c1d-elem 线占 §26（档案并集）/ §27（容器元素精度），本节取 §28，合并时按合入顺序重排。
+
+任务书依据 c1d-clsfact §26 的判断：锚点启用后 HelloWorld 469 → 3190 类，主因是 `ModuleBootstrap.boot2` 链上的共享汇点
+（`arraycopy`、`append(Object)`、逃逸汇点、`Formatter.format`、Unsafe CAS / release）把值汇合后再分发。目标 ≤ 569 类，且必须无损。
+本节先量化每个汇点，结论是**这个判断不成立**：汇点合计只占 8 类；膨胀主体来自分析期未知运行期值下、按静态语义本来就可达的链。
+测点统一为 HelloWorld，JDK 21，本机 macOS。锚点口径 runtime 同 §25.1（3190 类 / 18611 方法）；无锚点口径为 469 类 / 1813 方法。
+
+### 28.1 诊断工具（仅诊断，缺省关闭；`--cut` 条目，结果不健全）
+
+| 条目 / 查询 | 作用 |
+|---|---|
+| `--cut @node:<标签子串>` | 标签含该子串的类型流节点不接收任何值（流入边不建、直接注入忽略），用于量化单个汇点 |
+| `--cut @noopenhub` / `@noreopen` / `@noopenrecv` | 分别关掉 open 接收者枢纽展开、G 增长重跑 open 展开、字节码调用点 open 接收者展开 |
+| `--cut @edgeoff` | 触发边转储里的方法源带调用偏移（`M:方法@偏移`），离线按终态死区剔除过期边 |
+| `--flows @fopen:<子串>` | 字段不折叠的来源：全局开关、deser、按名 / 按键 / 手写写入中匹配的项 |
+| `--flows @in:<节点标签>` | 节点的直接前驱，按标签前缀分组计数（前 60） |
+| `--flows @svcunk` | 服务 Class 实参所指未知的查找站点 |
+
+### 28.2 逐汇点切除
+
+每次切掉一个汇点节点（`@node:`，该节点不再接收任何值，下游全部失去经它到达的值）：
+
+| 实验 | 类 | 方法 |
+|---|---|---|
+| 锚点基线 | 3190 | 18611 |
+| 单个汇点切除（arraycopy 目的数组 / `append(Object)` 形参 / 逃逸汇点 / `Formatter.format` 实参数组 / Unsafe CAS·release 值形参，逐个） | 3187–3190 | — |
+| 上述汇点全部切除 | 3182 | 18398 |
+| 全部汇点 + 三项 open 展开全部关闭 | 2432 | 12592 |
+| 无锚点 + 全部汇点切除 | 469 | 1805 |
+
+全局字段节点 `field java/util/ImmutableCollections$Set12.e0` 是最大的汇合点（613 个数组分配点、293 个抽象对象、多种 open
+类型），单独切除它同样没有效果。结论：**§26 的汇点归因不成立**，单个或全部汇点精确化至多减 8 类。
+
+切除不单调：部分前缀切除反而增大（例如切掉某个 boot2 内层调用点后得 3881 类，切 `Objects.equals` 形参得 3231 类）。
+原因是被切节点值集变空后，下游读者按初值折叠的分支翻转，可达面反而变大（§7 已记）。所以切除数只用于定位，不作逐项相加。
+
+### 28.3 open 派发的反事实
+
+| 实验 | 类 | 方法 |
+|---|---|---|
+| `@noopenhub` | 2619 | 14349 |
+| `@noreopen` | 3190 | — |
+| `@noopenrecv` | 3165 | — |
+| `@noopenhub` + `@noopenrecv` | 2561 | 13687 |
+| 无锚点 + 两者 | 461 | — |
+
+即使完全不展开 open 接收者（不健全上界），仍有 2561 − 469 ≈ 2090 类，约 80% 的增量来自精确类型流本身，不来自 open 派发。
+
+### 28.4 boot2 二分
+
+按 `ModuleBootstrap.boot2` 的存活调用点做前缀切除（切掉偏移 ≥ x 的全部调用）：
+
+- 切 ≥ 240：437 类；切 ≥ 292：3181 类。
+- 跳变集中在 `boot2@240` 的 `SystemModuleFinders.of(SystemModules)` 及 264–285 段（建系统模块查找器、`Configuration` 解析）。
+  更细的内层切除不单调，不再细分。
+
+即：一旦系统模块图建起来（引导层存在），后续模块描述、读取器、资源定位全部按静态语义可达。
+
+### 28.5 新增 2721 类按家族分解
+
+方法：沿每个新增类的首达链，取最外层的「地标」帧归类（排除 `AccessController.executePrivileged` 这类透传帧）。
+首达链不带克隆上下文，只用于排序（同 §23.6）。
+
+| 家族 | 类数 | 典型链 |
+|---|---|---|
+| Charset 扩展 provider | 719 | `sun/nio/fs/Util.<clinit>` → `Charset.forName(sun.jnu.encoding)` → `lookupExtendedCharset` → `ServiceLoader` → `URLClassPath` → `JarVerifier` → `Signature` → JCA |
+| toString 分派 | 445 | `ModuleDescriptor.toString` / `Version` 记号、`StringBuilder.append(Object)` 的多态接收者 |
+| 类加载器 | 359 | `BuiltinClassLoader.findResource*` → `URLClassPath` jar 加载器 |
+| equals 分派 | 289 | 集合元素 `equals` 的多态接收者 |
+| 文件系统 | 222 | `FileSystems` / jrt / zipfs provider |
+| 根其余 | 123 | — |
+| JCA 补种 | 101 | seeds.toml JCA 段随 `Provider` 入链触发 |
+| URL | 94 | `URL` / `URLStreamHandlerProvider` |
+| security | 74 | `SecureRandom`、`Policy` |
+| regex | 74 | `Pattern` 节点类 |
+
+这些链按静态语义都是**正确**的：`sun.jnu.encoding`、`file.encoding`、`java.security` 配置、模块路径等运行期值在分析期未知，
+`Charset.forName(未知名)` 必须覆盖全部扩展字符集，`ServiceLoader` 必须覆盖候选 provider。要无损地剪掉它们，只能让分析期知道这些值。
+
+### 28.6 可无损回收的两项（实测上界）
+
+1. **过期可达（stale reach）**：传播过程中常量 / 折叠事实非单调地先 Top 后收窄（例如字段在写入者入链前按 Top 处理），
+   期间被访问的调用点在终态已被判死（如 `ClassFileDumper.<init>@52 → validateDumpDir` 落在终态死区 [51,56]），但可达是单调的、
+   不会撤回。离线实测（`--cut @edgeoff --dump-edges` 后按终态 `dead_pcs` / `noreturn_dead_pcs` 剔除过期边，从根重扫）：
+   锚点 3189 → 3153 类、18589 → 18327 方法（约 −36 类 / −262 方法）；无锚点 −5 方法、类数不变。
+   终态做法：引擎在不动点后做一次「终态回收」，按终态折叠剔除死区出边，从全部根重算方法 / 类 / 初始化 / 反射面，
+   输出只取重算后的集合。前提是触发边覆盖全部入链原因：目前转储只覆盖方法 / 类 / 分配 / 枢纽四类，无锚点口径下重扫
+   只得 1049 / 1813 方法（根种类、补种、VM 规则、反射面未入转储），需先补齐成完整的入链边表。
+2. **服务查找的有界未知镜像**：锚点口径下 `seeds.services_unknown = true`，选中目录里已在闭包中的 25 个服务。
+   唯一的未知站点是 `ServiceLoader.load(Class,ClassLoader,Module)@7`，调用者是 `ResourceBundle.getServiceLoader@35`，
+   服务 Class 来自 `ResourceBundle$3.run` 的 `Class.forName(this.val$providerName, …)`：名字经匿名类捕获字段传入，按名取类解析不到，
+   结果为 open `Class`；随后 `ResourceBundleProvider.class.isAssignableFrom(c)` 的成立分支只对已知镜像收窄（`sub_mirrors` 保留 open）。
+   精确做法：引入「所指未知但 ⊂ K 的类镜像」值（isAssignableFrom 成立分支把 open / 非镜像 Class 收窄为它），服务查找只选
+   ⊂ K 的目录服务。临时探针（只选 `ResourceBundleProvider` 子类型的服务）实测：锚点 3190 → 3171 类（−19），无锚点不变。
+   代价：引擎里有十余处按「`x == Class` 即所指未知 / 抽象对象即已知无静态字段」区分的站点（`hw_mem` 静态基址读、
+   `hw_offset`、`hw_syntax`、`field_lookup`、`mirror_init`、`mirror_eq` 等），新值种类必须在每处都按「所指未知」处理，
+   否则 Unsafe 静态基址读会漏掉 open（不健全）。
+
+两项合计约 −55 类，HelloWorld 锚点口径约 3135，离 569 仍差约 2570。
+
+### 28.7 结论与差距
+
+- **≤ 569 在「无损」约束下不可达，阻塞点不是共享汇点**。增量的主体（§28.5 前五个家族约 2030 类）是分析期未知的运行期值
+  （系统属性、安全配置、系统模块图）下按静态语义必须保留的链。
+- 把它们剪掉的终态路线只有一条：让这些值在构建期确定——即「构建期引导镜像求值器」（§25.3，已单独立项）：执行
+  initPhase1 / 引导步骤 / initPhase2，把系统属性表、SharedSecrets 访问器、引导层模块图物化为程序初始状态，分析从该初始堆出发。
+  届时 `Charset.forName(sun.jnu.encoding)` 等按常量折叠，模块图按实际内容求值。
+- §25.4 的三项前置（`Class` 接收者 classLoader / module 逐类求值、容器元素类型、G2 汇合点按实参分派）仍然有效，
+  它们对应 §28.5 的「类加载器」「toString / equals 分派」家族（约 1090 类），在途于各自分支；合入后用同一 runtime 复测。
+- 本分支只提交诊断工具与本节，不改引擎语义；§28.6 两项排在上述前置之后按序实施。
+
+### 28.8 待用户决策
+
+1. 锚点启用（boot layer 第 2–5 步）是否以「构建期引导镜像求值器」为前置：不做求值器，单例 HelloWorld 最好约 3135 − 1090 ≈ 2000 类级别。
+2. 生产构建是否允许声明「封闭类路径 / 固定系统属性」（如 `file.encoding`、`sun.jnu.encoding` 取构建机或清单值）：
+   这是对运行环境的假设，不是无损精度，但能直接折叠 Charset / 安全配置家族（约 800 类）。
+3. §28.6 两项（约 −55 类）是否在前置合入前先做：收益小（约 1.7%），第 1 项需先补全触发边表。

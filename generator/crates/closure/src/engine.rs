@@ -524,6 +524,8 @@ pub struct Engine<'a> {
     fwriter_cause: Option<String>,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
+    /// 节点切除（`@node:`）的逐节点判定记忆
+    cut_nodes: HashMap<u32, bool>,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
     probes: Option<Box<diag::Probes>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）

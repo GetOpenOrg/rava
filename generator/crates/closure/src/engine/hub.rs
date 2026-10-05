@@ -206,6 +206,9 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn hub_expand(&mut self, h: u32) {
+        if self.cuts.no_open_hub && self.hubs[h as usize].open.is_some() {
+            return;
+        }
         let hub = &mut self.hubs[h as usize];
         if std::mem::replace(&mut hub.expanded, true) {
             return;

@@ -203,6 +203,7 @@ impl<'a> Engine<'a> {
             fwriter_live: false,
             fwriter_cause: None,
             cuts: Default::default(),
+            cut_nodes: Default::default(),
             probes: None,
             spret: Default::default(),
             rmwrap: Default::default(),
