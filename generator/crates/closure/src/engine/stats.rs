@@ -370,6 +370,7 @@ impl<'a> Engine<'a> {
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）
             "scc": self.graph.scc_stats,
+            "tau": self.graph.tau_stats,
             // 新接边收窄记忆：命中 / 未命中（flow.rs）
             "fmemo": self.graph.fmemo_stats,
             // 类型集驻留：写入 / 写后共享已有内容 / 表清理次数，及不同内容份数（setstore.rs）

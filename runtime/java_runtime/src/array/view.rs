@@ -35,14 +35,23 @@ pub(super) fn covariant_view<T: Clone + Default + From<Object> + Into<Object> + 
     a: &JArray<T>,
 ) -> CovariantView {
     match a.0.as_deref() {
-        Some(Repr::Covariant(view)) => Clone::clone(view),
-        Some(Repr::Own(..)) => CovariantView {
-            origin: Object::from(Clone::clone(a)),
+        Some(o) => covariant_view_of(o),
+        None => panic!("NullPointerException: 构造 null 数组的协变视图"),
+    }
+}
+
+/// 数组对象 `a` 的 Object 元素视图（见 `covariant_view`）
+pub(super) fn covariant_view_of<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
+    a: &__ArrayObj<T>,
+) -> CovariantView {
+    match &a.repr {
+        Repr::Covariant(view) => Clone::clone(view),
+        Repr::Own { .. } => CovariantView {
+            origin: Object::from(a.handle()),
             get: own_view_get::<T>,
             set: own_view_set::<T>,
             update: own_view_update::<T>,
         },
-        None => panic!("NullPointerException: 构造 null 数组的协变视图"),
     }
 }
 
@@ -51,7 +60,7 @@ pub(super) fn covariant_view<T: Clone + Default + From<Object> + Into<Object> + 
 /// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
 /// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
 pub(super) fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
-    JArray::own(Repr::Covariant(CovariantView {
+    JArray::covariant(CovariantView {
         origin,
         get: |o, i| o.array_load_object(i),
         set: |o, i, v| o.array_store_object(i, v),
@@ -67,14 +76,14 @@ pub(super) fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
                     "{} 不是引用元素数组", o.0.__class_name()))),
             }
         },
-    }))
+    })
 }
 
 // ── 自有存储源数组的协变视图元素访问（`covariant_view` 按元素类型 T 单态化的函数指针）──
 
-/// 视图源：`covariant_view` 以 `Object::from(JArray<T>)` 构造 `origin`，运行时形态恒为 `JArray<T>`。
-fn own_source<T: 'static>(origin: &Object) -> &JArray<T> {
-    origin.0.as_any().downcast_ref::<JArray<T>>().expect("covariant view origin is JArray<T>")
+/// 视图源：`covariant_view` 以 `Object::from(JArray<T>)` 构造 `origin`，运行时形态恒为 `__ArrayObj<T>`。
+fn own_source<T: 'static>(origin: &Object) -> &__ArrayObj<T> {
+    origin.0.as_any().downcast_ref::<__ArrayObj<T>>().expect("covariant view origin is __ArrayObj<T>")
 }
 
 /// 存储检查的元素类型名：源元素类型的 null 探针经 vtable 取 binary name

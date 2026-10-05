@@ -24,7 +24,10 @@ pub struct Archive {
 }
 
 impl Archive {
-    pub fn open(path: &Path) -> Result<Self, Error> {
+    /// `release`：多版本 jar（清单 `Multi-Release: true`）中 `META-INF/versions/N/`（N ≤ release，
+    /// 取最大 N）的条目覆盖基础条目——对类、资源与 `module-info.class` 同样适用；
+    /// `META-INF/versions/` 下的路径不以任何形态进入类索引；非多版本 jar 的版本化条目完全不可见
+    pub fn open(path: &Path, release: u32) -> Result<Self, Error> {
         if path.is_dir() {
             return Ok(Archive {
                 path: path.to_path_buf(),
@@ -38,14 +41,28 @@ impl Archive {
         let file = File::open(path).map_err(io)?;
         let prefix = if path.extension().is_some_and(|e| e == "jmod") { "classes/" } else { "" };
         // jmod 的 4 字节头位于 zip 数据之前：zip 读取按中央目录自动识别前置数据偏移
-        let zip = zip::ZipArchive::new(BufReader::new(file))
+        let mut zip = zip::ZipArchive::new(BufReader::new(file))
             .map_err(|e| Error::Io(path.display().to_string(), e.to_string()))?;
         let mut index = HashMap::new();
         let mut resources = HashMap::new();
         let mut module_info = None;
+        let mut versioned: HashMap<String, (u32, usize)> = HashMap::new();
         for i in 0..zip.len() {
             let Some(name) = zip.name_for_index(i) else { continue };
             let Some(rest) = name.strip_prefix(prefix) else { continue };
+            if let Some(v) = rest.strip_prefix(VERSIONS_DIR) {
+                // 版本化条目：首段须为 ≥ 9 的整数且 ≤ release，取最大 N；N 超界或格式非法则不可见
+                let Some((n, tail)) = v.split_once('/') else { continue };
+                let Ok(n) = n.parse::<u32>() else { continue };
+                if n < 9 || n > release || tail.is_empty() {
+                    continue;
+                }
+                let e = versioned.entry(tail.to_string()).or_insert((n, i));
+                if n > e.0 {
+                    *e = (n, i);
+                }
+                continue;
+            }
             if rest == "module-info.class" {
                 module_info = Some(i);
             } else if let Some(bin) = rest.strip_suffix(".class") {
@@ -54,6 +71,19 @@ impl Archive {
                 }
             } else if !rest.ends_with('/') {
                 resources.insert(rest.to_string(), i);
+            }
+        }
+        if !versioned.is_empty() && is_multi_release(&mut zip, &resources, path)? {
+            for (rest, (_, i)) in versioned {
+                if rest == "module-info.class" {
+                    module_info = Some(i);
+                } else if let Some(bin) = rest.strip_suffix(".class") {
+                    if !bin.ends_with("module-info") {
+                        index.insert(bin.to_string(), i);
+                    }
+                } else if !rest.ends_with('/') {
+                    resources.insert(rest, i);
+                }
             }
         }
         Ok(Archive { path: path.to_path_buf(), kind: Kind::Zip(zip), index, resources, module_info })
@@ -157,6 +187,125 @@ fn read_entry(zip: &mut zip::ZipArchive<BufReader<File>>, i: usize, path: &Path)
     let mut buf = Vec::with_capacity(f.size() as usize);
     f.read_to_end(&mut buf).map_err(|e| err(e.to_string()))?;
     Ok(buf)
+}
+
+const VERSIONS_DIR: &str = "META-INF/versions/";
+pub const MANIFEST_PATH: &str = "META-INF/MANIFEST.MF";
+const MULTI_RELEASE_ATTR: &str = "Multi-Release";
+
+/// 清单主段的属性值（续行以单个空格起首；主段以首个空行结束）
+pub fn manifest_attr(text: &str, key: &str) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for ln in text.lines() {
+        let ln = ln.trim_end_matches('\r');
+        if ln.is_empty() {
+            break;
+        }
+        match (ln.strip_prefix(' '), lines.last_mut()) {
+            (Some(cont), Some(last)) => last.push_str(cont),
+            _ => lines.push(ln.to_string()),
+        }
+    }
+    lines.iter().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim().eq_ignore_ascii_case(key)).then(|| v.trim().to_string()).filter(|v| !v.is_empty())
+    })
+}
+
+/// 多版本 jar 判定：清单 `Multi-Release: true`（大小写不敏感）
+fn is_multi_release(
+    zip: &mut zip::ZipArchive<BufReader<File>>,
+    resources: &HashMap<String, usize>,
+    path: &Path,
+) -> Result<bool, Error> {
+    let Some(&i) = resources.get(MANIFEST_PATH) else { return Ok(false) };
+    let text = read_entry(zip, i, path)?;
+    let text = String::from_utf8_lossy(&text);
+    Ok(manifest_attr(&text, MULTI_RELEASE_ATTR).is_some_and(|v| v.eq_ignore_ascii_case("true")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// 在临时目录写一个多版本 jar 夹具；返回其路径
+    fn mr_jar(tag: &str, manifest: Option<&str>, entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rava_archive_test_{}_{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(format!("{tag}.jar"));
+        let f = File::create(&p).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opt: zip::write::SimpleFileOptions = Default::default();
+        if let Some(m) = manifest {
+            w.start_file(MANIFEST_PATH, opt).unwrap();
+            w.write_all(m.as_bytes()).unwrap();
+        }
+        for (name, data) in entries {
+            w.start_file(name.to_string(), opt).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap();
+        p
+    }
+
+    /// 多版本 jar：versions/11 的类与 versions/9 的 module-info 覆盖基础条目；
+    /// META-INF/versions 路径不入索引；release 低于版本号时版本化条目不可见
+    #[test]
+    fn multi_release_view() {
+        let mi = crate::module::tests::sample();
+        let p = mr_jar(
+            "mrv",
+            Some("Manifest-Version: 1.0\nMulti-Release: true\n"),
+            &[
+                ("p/Base.class", &[1u8]),
+                ("p/Old.class", &[1u8]),
+                ("META-INF/versions/9/module-info.class", &mi),
+                ("META-INF/versions/11/p/Base.class", &[2u8]),
+                ("META-INF/versions/17/q/New.class", &[3u8]),
+                ("META-INF/versions/8/p/Hidden.class", &[4u8]),
+                ("META-INF/versions/abc/p/Bad.class", &[5u8]),
+            ],
+        );
+        let mut a = Archive::open(&p, 21).unwrap();
+        assert_eq!(a.class_names(), vec!["p/Base".to_string(), "p/Old".to_string(), "q/New".to_string()]);
+        assert!(a.class_names().iter().all(|n| !n.starts_with("META-INF")));
+        assert_eq!(a.read_class("p/Base").unwrap().unwrap(), vec![2u8]); // 11 覆盖基础条目
+        assert!(a.read_resource("p/Old.class").unwrap().is_none()); // 类不走资源表
+        assert!(a.read_module_info().unwrap().is_some()); // versions/9 的描述符
+        // release 10：11 / 17 的条目不可见，9 的描述符仍生效
+        let mut a = Archive::open(&p, 10).unwrap();
+        assert_eq!(a.class_names(), vec!["p/Base".to_string(), "p/Old".to_string()]);
+        assert_eq!(a.read_class("p/Base").unwrap().unwrap(), vec![1u8]);
+        assert!(a.read_module_info().unwrap().is_some());
+        // 非 release 视角的关闭面（release 8）：全部版本化条目不可见
+        let mut a = Archive::open(&p, 8).unwrap();
+        assert_eq!(a.class_names(), vec!["p/Base".to_string(), "p/Old".to_string()]);
+        assert!(a.read_module_info().unwrap().is_none());
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// 清单没有 Multi-Release 属性时，版本化条目对任何 release 都不可见（与 JVM 一致）
+    #[test]
+    fn versioned_entries_need_manifest_flag() {
+        let p = mr_jar(
+            "mrn",
+            Some("Manifest-Version: 1.0\n"),
+            &[("p/Base.class", &[1u8]), ("META-INF/versions/11/p/Base.class", &[2u8])],
+        );
+        let mut a = Archive::open(&p, 21).unwrap();
+        assert_eq!(a.read_class("p/Base").unwrap().unwrap(), vec![1u8]);
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// manifest_attr：主段续行拼接、主段外（Name: 段）不取值
+    #[test]
+    fn manifest_attr_main_section() {
+        let mf = "Manifest-Version: 1.0\r\nAutomatic-Module-Name: org.ex\r\n ample.lib\r\n\r\nName: x\r\nAutomatic-Module-Name: no\r\n";
+        assert_eq!(manifest_attr(mf, "Automatic-Module-Name").as_deref(), Some("org.example.lib"));
+        assert_eq!(manifest_attr("Name: x\n", "Automatic-Module-Name"), None);
+        assert_eq!(manifest_attr("Manifest-Version: 1.0\n", "Multi-Release"), None);
+    }
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {

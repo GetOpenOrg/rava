@@ -386,6 +386,11 @@ impl<'a> Engine<'a> {
             return out;
         }
         // 未收窄的按偏移写入站点诊断：`@hwopen`——写入目标实参含 open 的站点（目标 / 写入值规模与 open 类型）
+        if pat == "@hvn" {
+            let mut v = self.hvn_report();
+            v.extend(self.tau_report());
+            return v;
+        }
         if pat == "@hwopen" {
             let mut v: Vec<String> = Vec::new();
             for (s, &(m, off, t)) in self.hw_sites.iter().enumerate() {

@@ -21,6 +21,10 @@ pub struct ModuleDecl {
     pub requires_static: Vec<String>,
     /// 至少有一个无限定 exports
     pub exports_api: bool,
+    /// exports：(包（内部形式，`/` 分隔）, 目标模块；空 = 无限定)。访问判定用
+    pub exports: Vec<(String, Vec<String>)>,
+    /// opens：同 exports 形
+    pub opens: Vec<(String, Vec<String>)>,
     pub uses: Vec<String>,
     /// (服务接口, 按声明序的实现类)
     pub provides: Vec<(String, Vec<String>)>,
@@ -95,15 +99,26 @@ fn module_attr(a: &mut Reader, pool: &ConstantPool) -> Result<ModuleDecl, Error>
             m.requires_static.push(target);
         }
     }
-    // exports 与 opens 同形：(包, 标志, to 列表)；只有 exports 的无限定形态计入 API
+    // exports 与 opens 同形：(包, 标志, to 列表)；exports 的无限定形态计入 API
     for kind in 0..2 {
         for _ in 0..a.u2()? {
-            a.u2()?;
-            a.u2()?;
+            let pkg = match pool.get(a.u2()?)? {
+                CpEntry::Package(n) => pool.utf8(*n)?.to_string(),
+                _ => return Err(Error::BadIndex(0)),
+            };
+            a.u2()?; // flags
             let n_to = a.u2()?;
-            a.skip(2 * n_to as usize)?;
-            if kind == 0 && n_to == 0 {
-                m.exports_api = true;
+            let mut to = Vec::with_capacity(n_to as usize);
+            for _ in 0..n_to {
+                to.push(module_name(pool, a.u2()?)?);
+            }
+            if kind == 0 {
+                if n_to == 0 {
+                    m.exports_api = true;
+                }
+                m.exports.push((pkg, to));
+            } else {
+                m.opens.push((pkg, to));
             }
         }
     }
@@ -123,14 +138,14 @@ fn module_attr(a: &mut Reader, pool: &ConstantPool) -> Result<ModuleDecl, Error>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 手工组装的最小 module-info：常量池 1 Utf8"Module" 2 Utf8"m" 3 Module#2 4 Utf8"a/S" 5 Class#4
     /// 6 Utf8"a/Impl" 7 Class#6 8 Utf8"java.base" 9 Module#8 10 Utf8"x" 11 Module#10
-    /// 12 Utf8"a" 13 Package#12 14 Utf8"ModuleResolution"
-    fn sample() -> Vec<u8> {
-        let mut b: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 53, 0, 15];
+    /// 12 Utf8"a" 13 Package#12 14 Utf8"ModuleResolution" 15 Utf8"b" 16 Package#15
+    pub(crate) fn sample() -> Vec<u8> {
+        let mut b: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 53, 0, 17];
         let utf = |b: &mut Vec<u8>, s: &str| {
             b.push(1);
             b.extend((s.len() as u16).to_be_bytes());
@@ -154,14 +169,16 @@ mod tests {
         utf(&mut b, "a");
         refc(&mut b, 20, 12);
         utf(&mut b, "ModuleResolution");
+        utf(&mut b, "b");
+        refc(&mut b, 20, 15);
         // access this super interfaces fields methods
         b.extend([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         b.extend(2u16.to_be_bytes());
         let body: Vec<u16> = vec![
             3, 0, 0, // name flags version
             2, 9, 0x8000, 0, 11, REQUIRES_STATIC, 0, // requires java.base（mandated）、requires static x
-            1, 13, 0, 0, // exports a（无限定）
-            0, // opens
+            2, 13, 0, 0, 16, 0, 1, 11, // exports a（无限定）、exports b to x
+            1, 13, 0, 1, 11, // opens a to x
             1, 5, // uses a/S
             1, 5, 1, 7, // provides a/S with a/Impl
         ];
@@ -183,6 +200,8 @@ mod tests {
         assert_eq!(m.requires, vec!["java.base".to_string()]);
         assert_eq!(m.requires_static, vec!["x".to_string()]);
         assert!(m.exports_api);
+        assert_eq!(m.exports, vec![("a".to_string(), vec![]), ("b".to_string(), vec!["x".to_string()])]);
+        assert_eq!(m.opens, vec![("a".to_string(), vec!["x".to_string()])]);
         assert_eq!(m.uses, vec!["a/S".to_string()]);
         assert_eq!(m.provides, vec![("a/S".to_string(), vec!["a/Impl".to_string()])]);
         assert!(m.do_not_resolve_by_default);

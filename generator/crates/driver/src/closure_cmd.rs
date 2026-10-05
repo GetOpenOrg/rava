@@ -125,8 +125,9 @@ pub fn run(args: &Args) -> Result<(), String> {
     let multi = |flag: &str| -> Vec<&String> {
         args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
     };
-    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类
-    let mut cp = ClassPath::new();
+    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类；随后 JDK 包遮蔽 + 模块图硬校验
+    let release = resolve::jdk::major_of(&home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
+    let mut cp = ClassPath::new(release);
     cp.add(Origin::User, &classes).map_err(|e| e.to_string())?;
     for jar in multi("--lib") {
         cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
@@ -137,6 +138,8 @@ pub fn run(args: &Args) -> Result<(), String> {
     for d in &images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
+    cp.shadow_jdk_owned_packages();
+    resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
 
     let flows = multi("--flows");
     let users = cp.names_of(Origin::User);
