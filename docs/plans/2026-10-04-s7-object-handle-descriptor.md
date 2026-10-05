@@ -68,8 +68,9 @@
   - `static_reflected` = 用户树类 ∪ 全成员反射类 ∪ 按名查字段 (类, 名) ∪ 目标类不明的按名字段名（已含 serialVersionUID / serialPersistentFields）∪ `static_fields`。
   - 精度：名字不可知的按名取字段，口径改为 Class 值集所指的类（值集齐全时），不再一律推不出。清单 `[facts.field_writes] instance_field_users` 登记取到的句柄只用于实例字段的取法（`ObjectStreamClass.getDeclaredSerialFields` 按修饰符滤掉 static），这类取法不计入静态口径。它原是 StockTrans 中唯一推不出的口径，未排除时表项为闭包全部静态字段。
   - 本机 StockTrans：表项 14747 → **996**，登记类 1553 → **494**，闭包类 / 方法集合不变；HelloWorld 表项 103 → **0**（无按名访问）。
+  - **真正根因（s73d-1150fc04 sg1 抽查 StockTrans 仍失败后定位）**：宏 `statics_table` 判定字段是否带 `java_field(..., reflect = true)` 标记时，按属性 `to_string()` 的子串匹配。单测走 proc_macro2 回退实现，字符串化形态与匹配串一致；真实编译走编译器后端，空白形态不同，匹配全部落空，自 9b3b4bb7 起**所有类的 `__STATICS` 在实际构建中均为空**（与闭包事实、JDK 版本无关；本机与服务器 emit 一致）。修复：按语法树解析 `cfg_attr` → `java_field` 的名值对（`syn::Meta` / `MetaNameValue`），基本类型判定改为路径标识符比较。以 `rustc -Zunpretty=expanded` 走真实后端展开核对：StockTrans 用户类表含 `of_prim::<i64>("serialVersionUID", …)`。审计：rava_macros_core 其余 `to_string()` 用法为去空白比较或同后端字符串互比，无同类依赖空白形态的语义判定。1150fc04 的事实与精度改造保留有效。
   - 运行时诊断：未命中时 panic 消息附带声明类表的登记状态与表项名（`field_reflect::describe_static`）。宏单测 `statics_table_only_reflected_fields` 守护「只为带标记的字段生成表项」。
-- S7-3c 对 main 基点（服务器同机 ubuntu 同口径，s7m-6f93f1c6 / s7m-9b3b4bb7）：HelloWorld 展开 +0.16 MB、峰值 +62 MB；TSDS 展开 +1.18 MB、峰值 +356 MB。S7-3 相对 dc61397b 的回退（TSDS 峰值 +418 MB 中）已收回大部分展开体量（87.78 → 81.83 MB），剩余展开差主要是 `fields` 描述与 `alloc`；峰值差 356 MB 仍偏大，需在 1150fc04 后（表项再收窄，TSDS 静态表应接近 HelloWorld 的 0 项口径）复测再定是否追查。
+- S7-3c 对 main 基点（服务器同机 ubuntu 同口径，s7m-6f93f1c6 / s7m-9b3b4bb7）：HelloWorld 展开 +0.16 MB、峰值 +62 MB；TSDS 展开 +1.18 MB、峰值 +356 MB。S7-3 相对 dc61397b 的回退（TSDS 峰值 +418 MB 中）已收回大部分展开体量（87.78 → 81.83 MB），剩余展开差主要是 `fields` 描述与 `alloc`；峰值差 356 MB 仍偏大，需在 1150fc04 后（表项再收窄，TSDS 静态表应接近 HelloWorld 的 0 项口径）复测再定是否追查。注：该组差值测于静态表实际为空期间（见上条根因），根因修复后需复测。
 - 收益小于 §四 的估计：删掉的是判定类方法（`__view_into` / `__view_as` / `is_instance_of` / `__class_name`），每类 fn 数只少 2–4 个；借用检查的大头（Java 方法外壳、字段访问器、其余 ObjectVTable 方法）要到 S7-2 统一句柄 / S7-3 字段描述才动。
 
 本机展开体量与 §六 的 19.29 MB（服务器 Linux，a7996092）口径不同：本机 cfg 只展开 macOS 分支，且起点已含 #6 后的缩减；前后对照只看同口径差值。
