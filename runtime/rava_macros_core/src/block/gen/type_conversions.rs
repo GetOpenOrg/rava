@@ -179,6 +179,7 @@ fn class_desc(ctx: &GenContext) -> TokenStream2 {
     let fields = field_descs(ctx);
     let field_base = ctx.meta.superclass_fields.len() as u16;
     let alloc = hook_ident(ctx, "alloc");
+    let offsets = hook_ident(ctx, "offsets");
     quote! {
         #[doc(hidden)]
         pub static #desc_ident: __ClassDesc = __ClassDesc {
@@ -189,6 +190,7 @@ fn class_desc(ctx: &GenContext) -> TokenStream2 {
             fields: &[#(#fields,)*],
             field_base: #field_base,
             alloc: || #alloc().into_object(&#desc_ident),
+            offsets: || #offsets(),
         };
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]

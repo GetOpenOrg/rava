@@ -50,6 +50,21 @@ pub(crate) fn strip_meta_attrs(attrs: &[Attribute]) -> Vec<&Attribute> {
         .collect()
 }
 
+/// 字段属性 `cfg_attr(any(), java_field(.., modifiers = ".. volatile .."))` 声明 volatile
+pub(crate) fn java_field_is_volatile(attrs: &[Attribute]) -> bool {
+    attrs.iter().filter(|a| a.path().is_ident("cfg_attr")).any(|a| {
+        let text = quote::quote!(#a).to_string();
+        text.find("java_field").is_some_and(|at| {
+            let rest = &text[at..];
+            rest.find("modifiers").is_some_and(|m| {
+                let rest = &rest[m..];
+                let rest = rest.find('"').map_or("", |q| &rest[q + 1..]);
+                rest.find('"').is_some_and(|e| rest[..e].split_whitespace().any(|w| w == "volatile"))
+            })
+        })
+    })
+}
+
 pub(crate) fn attr_str(attrs: &[Attribute], name: &str) -> Option<String> {
     for a in attrs {
         if a.path().is_ident(name) {

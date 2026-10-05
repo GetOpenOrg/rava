@@ -294,8 +294,8 @@ pub(crate) fn expand_interface_impl(
         quote! {
             #sig {
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
-                    __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                                    |__i| __i as &#erased_vt),
+                    __r: unsafe { __Ref::from_storage(self,
+                                    |__i| __i as &#erased_vt) },
                     #phantom_init
                 };
                 let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
@@ -403,8 +403,8 @@ pub(crate) fn erased_wrapper_call(
     let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                            |__i| __i as &dyn #vtable_trait_ident),
+            __r: unsafe { __Ref::from_storage(self,
+                            |__i| __i as &dyn #vtable_trait_ident) },
             #phantom_init
         };
         #call

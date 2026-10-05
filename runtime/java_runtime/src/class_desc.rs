@@ -12,10 +12,10 @@
 //! 接口没有类描述符：接口载体不是运行时类，接口判定按名字查 `supertypes`（闭包外接口没有
 //! Rust 类型，只能按名字表达）。
 //!
-//! 实例字段（S7-3）：存储 `X__inner` 是 `#[repr(C)]`，字段依次为继承字段（最深祖先在前）、自有
-//! 字段、标识单元，每个字段都是一个 `__Shared` 细指针——字段在存储里的下标即
-//! `field_base + 自有序号`。浅拷贝、Unsafe 按名字段协议沿 `display` 读各类的 `fields`，
-//! 不再按类展开方法（见 `field_desc.rs`）。
+//! 实例字段（S7-3）：存储 `X__inner` 内联平铺全部实例字段单元（继承字段在前、自有字段在后），
+//! 字段的平铺下标即 `field_base + 自有序号`，运行时类的 `offsets()` 按平铺下标给出字段在存储中的
+//! 字节偏移。浅拷贝、Unsafe 按名字段协议沿 `display` 读各类的 `fields`，不再按类展开方法
+//! （见 `field_desc.rs`）。
 
 use crate::field_desc::__FieldDesc;
 use crate::java::lang::Object;
@@ -32,10 +32,12 @@ pub struct __ClassDesc {
     pub supertypes: &'static [&'static str],
     /// 本类自有实例字段（声明序，与存储布局一致）。
     pub fields: &'static [__FieldDesc],
-    /// 继承实例字段数：本类第 i 个自有字段在存储里的下标是 `field_base + i`。
+    /// 继承实例字段数：本类第 i 个自有字段的平铺下标是 `field_base + i`。
     pub field_base: u16,
     /// 新建本类的默认存储（全部字段取缺省值、新标识），装入 Object。
     pub alloc: fn() -> Object,
+    /// 本类存储中平铺实例字段（按平铺下标）的字节偏移（实现层导出的偏移表）。
+    pub offsets: fn() -> &'static [u32],
 }
 
 impl std::fmt::Debug for __ClassDesc {
