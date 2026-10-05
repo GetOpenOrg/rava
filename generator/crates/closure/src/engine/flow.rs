@@ -144,10 +144,13 @@ impl<'a> Engine<'a> {
             }
         }
         if let Some(ws) = self.watch.get(&n) {
+            let src = stats::kind_ix(&n) as u8;
             for &w in ws {
-                if self.in_swork.insert(w) {
+                let new = self.in_swork.insert(w);
+                if new {
                     self.swork.push_back(w);
                 }
+                self.ctx.stats.borrow_mut().sprof.note_push(w, src, Some(n), new);
             }
         }
         if self.mirror_watch.contains_key(&n) {

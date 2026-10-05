@@ -192,9 +192,7 @@ impl<'a> Engine<'a> {
         }
         for &w in &ready {
             self.lookup_trial.insert(w);
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+            self.push_site(w, site_prof::TRIG_RELEASE, None);
         }
         !ready.is_empty()
     }
@@ -564,9 +562,7 @@ impl<'a> Engine<'a> {
         let dotted = cls.replace('/', ".");
         let hits: Vec<(usize, u32)> = self.class_patterns.iter().filter(|(_, ps)| ps.iter().any(|p| parts_match(p, &dotted))).map(|(w, _)| *w).collect();
         for w in hits {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+            self.push_site(w, site_prof::TRIG_PATTERN, None);
         }
     }
 

@@ -21,6 +21,13 @@ pub(super) struct RecvFp {
     recv: Option<(Rc<[u32]>, Rc<[u32]>)>,
 }
 
+impl RecvFp {
+    /// 虚调用上次的精确接收者（升序；剖析用）
+    pub(super) fn recv_list(&self) -> Option<&[u32]> {
+        self.recv.as_ref().map(|r| &r.0[..])
+    }
+}
+
 impl<'a> Engine<'a> {
     /// 来源列表的（身份哈希, 元素数之和）；同时按 `value_set` 口径登记当前站点 / lambda 调用为来源节点的读者
     pub(super) fn feeds_version(&mut self, fs: &[Feed]) -> (u64, usize) {

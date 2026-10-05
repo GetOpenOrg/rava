@@ -75,13 +75,20 @@ impl<'a> Engine<'a> {
         }
         let cf = self.h.class(&self.methods[m].key.owner);
         let lo = a.events.partition_point(|e| e.0 < off);
+        let mut snap = self.prof_begin((m, off));
         for (o, e) in a.events[lo..].iter().take_while(|e| e.0 == off) {
             let t0 = std::time::Instant::now();
             self.event(m, *o, e, &cf);
-            let c = &mut self.ctx.stats.borrow_mut().rerun_by_event[super::stats::rerun_kind(e)];
-            c[0] += 1;
-            c[1] += t0.elapsed().as_nanos() as u64;
+            let ns = t0.elapsed().as_nanos() as u64;
+            let k = super::stats::rerun_kind(e);
+            {
+                let c = &mut self.ctx.stats.borrow_mut().rerun_by_event[k];
+                c[0] += 1;
+                c[1] += ns;
+            }
+            snap = self.prof_event(k, snap, ns);
         }
+        self.prof_end();
     }
 
     pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {

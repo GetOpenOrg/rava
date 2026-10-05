@@ -70,9 +70,7 @@ impl<'a> Engine<'a> {
             self.push_m(m);
         }
         for w in sites {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+            self.push_site(w, site_prof::TRIG_REOPEN, None);
         }
     }
 
