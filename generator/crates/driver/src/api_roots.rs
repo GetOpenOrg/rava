@@ -56,7 +56,7 @@ mod tests {
         // 运行期 CARGO_MANIFEST_DIR：共享 CARGO_TARGET_DIR 下编译期路径可能是另一（已删除的）工作区
         let rt = std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into()).join("../../../runtime/java_runtime");
         assert!(rt.join("closure.toml").is_file(), "手写运行时目录不存在：{}", rt.display());
-        let mut cp = ClassPath::new();
+        let mut cp = ClassPath::new(21);
         cp.add_jdk(&home).unwrap();
         let man = Manifest::load(&rt).unwrap();
         let (roots, n_cls) = api_roots(&cp, &["java.util.function".to_string()], false);

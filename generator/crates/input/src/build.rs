@@ -44,9 +44,9 @@ pub struct LibCrate {
 }
 
 impl LibCrate {
-    /// 从 jar 档案枚举类
-    pub fn from_jar(name: &str, jar: &Path, wholesale: bool) -> Result<LibCrate, InputError> {
-        let a = classfile::archive::Archive::open(jar).map_err(|e| InputError::Io(format!("{}：{e}", jar.display())))?;
+    /// 从 jar 档案枚举类（`release`：多版本 jar 视图）
+    pub fn from_jar(name: &str, jar: &Path, wholesale: bool, release: u32) -> Result<LibCrate, InputError> {
+        let a = classfile::archive::Archive::open(jar, release).map_err(|e| InputError::Io(format!("{}：{e}", jar.display())))?;
         let jar_classes = a
             .class_names()
             .into_iter()

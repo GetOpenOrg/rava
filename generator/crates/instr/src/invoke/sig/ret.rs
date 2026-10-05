@@ -110,10 +110,98 @@ pub(super) fn lookup(
     if !used.is_empty() {
         return Ok(resolve_type_vars(env, sig_ret, ci, &callee_tparams, &used, (caller_class, caller_tparams), receiver_type));
     }
-    if handwritten_boundary_method(ctx, &cls_bin, &call.name, &call.desc)?
-        && matches!(jvm(ctx, &sig_ret), JvmType::Class { is_interface: true, .. })
-    {
-        return Ok(Some(RsType::Object));
+    if handwritten_boundary_method(ctx, &cls_bin, &call.name, &call.desc)? {
+        // 手写边界方法的 Rust 签名契约即发射签名（[meta] 声明行同源）：接口位置按描述符形态
+        // （`Enumeration<Object>` 等载体），不是签名实参化类型，也不是根类 Object——
+        // 否则调用结果的栈类型与 Rust 值类型不一致，汇合点会漏掉向合流类型的转换
+        return Ok(Some(ctx.ty.emitted_method_sig_types(ci, m, &callee_tparams).ret));
     }
     Ok(Some(sig_ret))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use classfile::{acc, ClassFile, Method};
+    use input::RuntimeManifest;
+    use ty::{Registry, RsType, ShortNames, TyCtx};
+
+    use super::lookup;
+    use crate::ctx::{InstrCtx, InstrFacts, NoHooks};
+    use crate::env::InstrEnv;
+    use crate::invoke::CallRef;
+
+    /// 返回参数化接口的描述符 / 签名（`Lp/Seq<Lp/Loc;>`）
+    const DESC: &str = "()Lp/Seq;";
+    const SIG: &str = "()Lp/Seq<Lp/Loc;>;";
+
+    fn method(access: u16, name: &str) -> Method {
+        Method {
+            access,
+            name: name.to_string(),
+            desc: DESC.to_string(),
+            signature: Some(SIG.to_string()),
+            code: None,
+            exceptions: vec![],
+            annotations: vec![],
+            annotation_default: None,
+            parameters: vec![],
+            synthetic_attr: false,
+        }
+    }
+
+    fn class(name: &str, iface: bool, signature: Option<&str>, methods: Vec<Method>) -> Arc<ClassFile> {
+        Arc::new(ClassFile {
+            minor: 0,
+            major: 65,
+            access: acc::PUBLIC | if iface { acc::INTERFACE | acc::ABSTRACT } else { 0 },
+            name: name.to_string(),
+            super_name: (name != ty::consts::OBJECT).then(|| ty::consts::OBJECT.to_string()),
+            interfaces: vec![],
+            fields: vec![],
+            methods,
+            signature: signature.map(str::to_string),
+            source_file: None,
+            bootstrap_methods: vec![],
+            inner_classes: vec![],
+            enclosing_method: None,
+            nest_host: None,
+            nest_members: vec![],
+            permitted_subclasses: vec![],
+            record_components: None,
+            annotations: vec![],
+        })
+    }
+
+    /// 手写边界方法的调用结果类型取发射签名（接口位置为描述符形态载体），
+    /// 不得回退根类 Object——否则汇合点按 Object 合流、手写臂漏掉转换（E0308）
+    #[test]
+    fn handwritten_iface_return_follows_emitted_signature() {
+        let rt_src = std::env::temp_dir().join(format!("rava_ret_hw_{}", std::process::id()));
+        std::fs::create_dir_all(rt_src.join("p")).unwrap();
+        std::fs::write(rt_src.join("p/host_impl.rs"), "impl Host {\n    pub fn sysResources() -> Result<Seq<Object>> { todo() }\n}\n").unwrap();
+
+        let static_pub = acc::PUBLIC | acc::STATIC;
+        let mut reg = Registry::new();
+        for c in [
+            class(ty::consts::OBJECT, false, None, vec![]),
+            class("p/Seq", true, Some("<E:Ljava/lang/Object;>Ljava/lang/Object;"), vec![]),
+            class("p/Loc", false, None, vec![]),
+            class("p/Host", false, None, vec![method(static_pub, "sysResources")]),
+        ] {
+            reg.insert(c);
+        }
+        let names = ShortNames::build(&reg);
+        let rt = RuntimeManifest::default();
+        let facts = InstrFacts::build(&reg, None, &rt_src);
+        let tctx = TyCtx::new(&reg, &names, &rt.ty);
+        let env = InstrEnv::new(InstrCtx::new(tctx, &rt, &facts, &NoHooks, "p/Caller"), &[]);
+
+        let erased = env.ctx.ty.jvm_to_rust("Lp/Seq;");
+        assert_ne!(erased, RsType::Object);
+        let hw = lookup(&env, &CallRef::with("p/Host", "sysResources", DESC), Some("p/Caller"), &[], None).unwrap();
+        assert_eq!(hw, Some(erased));
+        let _ = std::fs::remove_dir_all(&rt_src);
+    }
 }

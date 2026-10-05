@@ -9,9 +9,13 @@
 //! 每组实参先冷后热各求值一次（内存缓存字段先写后读），轨迹取并；求值后撤销对映像的缓存写入。
 
 mod apply;
+mod boot;
+mod boot_cfg;
+pub mod boot_image;
 mod indy;
 mod init;
 mod interp;
+mod journal;
 mod members;
 mod natives;
 mod snap;
@@ -261,6 +265,7 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
         Ok(()) => Ok(out),
         Err(Flow::Fail(w)) => Err(w),
         Err(Flow::Throw(_) | Flow::Implicit(_)) => Err("实参构造抛出异常".into()),
+        Err(Flow::Defer(w)) => Err(w),
     }
 }
 

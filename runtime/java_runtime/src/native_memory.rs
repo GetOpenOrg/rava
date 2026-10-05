@@ -31,7 +31,7 @@ pub fn free(address: i64) {
     unsafe { libc::free(address as *mut libc::c_void) }
 }
 
-/// 基本类型数组 `o` 按元素类型取 `JArray<T>`，对其求 `$e`（`$a` 绑定为数组引用）；非基本类型
+/// 基本类型数组 `o` 按元素类型取数组对象 `__ArrayObj<T>`，对其求 `$e`（`$a` 绑定为数组引用）；非基本类型
 /// 数组为 None。数组字节视图的访问全部经元素原子单元（见 array/store.rs），不持锁、无数据竞争。
 macro_rules! with_prim_array {
     ($o:expr, |$a:ident| $e:expr) => {{
@@ -42,7 +42,7 @@ macro_rules! with_prim_array {
         let mut r = None;
         $(
             if r.is_none() {
-                if let Some($a) = $any.downcast_ref::<JArray<$t>>() {
+                if let Some($a) = $any.downcast_ref::<crate::array::__ArrayObj<$t>>() {
                     r = Some($e);
                 }
             }
@@ -76,7 +76,7 @@ pub(crate) fn store_bits(dst: &mut [u8], v: u64) {
 /// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe 基本类型访问器族的
 /// 原生内存形态：读、写、CAS、getAndAdd 等统一经此）。值是本机字节序零扩展的位形；`op(旧)` 给出
 /// 新值则写入其低 `width` 字节，返回旧值，给 None 即只读。基本类型数组经元素原子单元（区间在单个元素
-/// 内为该元素的 CAS，跨元素见 `JArray::__update_bytes`）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
+/// 内为该元素的 CAS，跨元素见 `__ArrayObj::__update_bytes`）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
 /// 未对齐地址的原子访问不作保证，未对齐时退为普通读写）。CAS 重试时 op 重新求值（须为纯函数）。
 pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
     if base.0.is_jvm_null() {

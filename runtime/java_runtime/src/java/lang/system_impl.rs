@@ -74,10 +74,10 @@ impl System {
         macro_rules! try_copy {
             ($t:ty) => {
                 if let (Some(s), Some(d)) = (
-                    src.0.as_any().downcast_ref::<JArray<$t>>(),
+                    src.0.as_any().downcast_ref::<crate::array::__ArrayObj<$t>>(),
                     dest.try_checkcast::<JArray<$t>>(),
                 ) {
-                    let backward = s == &d && dest_pos > src_pos;
+                    let backward = s.identity() == d.identity() && dest_pos > src_pos;
                     let range: Box<dyn Iterator<Item = i32>> = if backward {
                         Box::new((0..length).rev())
                     } else {

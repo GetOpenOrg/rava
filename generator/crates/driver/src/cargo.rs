@@ -29,23 +29,37 @@ pub const BUILD_LOG: &str = "logs/build.log";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const HEAVY_TIMEOUT_SECS: u64 = 3000;
 
-/// cargo 构建档位：dev（缺省）/ dev-opt（性能类测试，档案侧 opt 1，见 [`emit::project::entry::DEV_OPT_PROFILE`]）/ release
+/// cargo 构建档位：dev（缺省）/ dev-opt（性能类测试，档案侧 opt 1，见 [`emit::project::entry::DEV_OPT_PROFILE`]）/
+/// release（opt 3 + fat LTO + strip）/ release-small（继承 release，opt "s"，见 [`emit::project::entry::RELEASE_SMALL_PROFILE`]）
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum BuildProfile {
     #[default]
     Dev,
     DevOpt,
     Release,
+    ReleaseSmall,
 }
 
 impl BuildProfile {
-    /// 命令行开关（`--dev-opt` / `--release`）→ 档位；两者互斥
-    pub fn from_flags(dev_opt: bool, release: bool) -> Result<BuildProfile, String> {
-        match (dev_opt, release) {
-            (true, true) => Err("--dev-opt 与 --release 互斥".into()),
-            (true, false) => Ok(BuildProfile::DevOpt),
-            (false, true) => Ok(BuildProfile::Release),
-            (false, false) => Ok(BuildProfile::Dev),
+    /// 档位命令行开关（dev 无开关）
+    pub const FLAGS: [&'static str; 3] = ["--dev-opt", "--release", "--release-small"];
+
+    /// 档位开关 → 档位；非档位开关为 None
+    pub fn of_flag(flag: &str) -> Option<BuildProfile> {
+        match flag {
+            "--dev-opt" => Some(BuildProfile::DevOpt),
+            "--release" => Some(BuildProfile::Release),
+            "--release-small" => Some(BuildProfile::ReleaseSmall),
+            _ => None,
+        }
+    }
+
+    /// 命令行出现的档位开关 → 档位；至多一个（缺省 dev）
+    pub fn from_flags(seen: &[BuildProfile]) -> Result<BuildProfile, String> {
+        match seen {
+            [] => Ok(BuildProfile::Dev),
+            [p] => Ok(*p),
+            _ => Err(format!("档位开关互斥（{} 至多取一）", Self::FLAGS.join(" / "))),
         }
     }
 
@@ -54,6 +68,7 @@ impl BuildProfile {
             BuildProfile::Dev => &[],
             BuildProfile::DevOpt => &["--profile", emit::project::entry::DEV_OPT_PROFILE],
             BuildProfile::Release => &["--release"],
+            BuildProfile::ReleaseSmall => &["--profile", emit::project::entry::RELEASE_SMALL_PROFILE],
         }
     }
 }

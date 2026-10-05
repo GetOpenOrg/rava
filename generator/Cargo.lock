@@ -358,6 +358,8 @@ name = "resolve"
 version = "0.1.0"
 dependencies = [
  "classfile",
+ "ty",
+ "zip",
 ]
 
 [[package]]

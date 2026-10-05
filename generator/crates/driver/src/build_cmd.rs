@@ -72,9 +72,11 @@ pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: 
     Ok(())
 }
 
-/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
+/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）。
+/// 全部加入后做 JDK 包遮蔽与模块图硬校验（build / audit / profile 三流程共用此装配点）
 pub(crate) fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
-    let mut cp = ClassPath::new();
+    let release = resolve::jdk::major_of(home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
+    let mut cp = ClassPath::new(release);
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
     for j in jars {
         cp.add(Origin::Lib, j).map_err(|e| format!("{}：{e}", j.display()))?;
@@ -83,7 +85,20 @@ pub(crate) fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images:
     for d in images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
+    cp.shadow_jdk_owned_packages();
+    resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
+    print_classpath_diag(&cp);
     Ok(cp)
+}
+
+/// 类路径装配的可观测项：JDK 包遮蔽与跨档案重复类
+fn print_classpath_diag(cp: &ClassPath) {
+    if let Some(s) = cp.shadowed().first() {
+        eprintln!("[classpath] JDK 包遮蔽 {} 个类（如 {} ← 模块 {}）", cp.shadowed().len(), s.class, s.owner);
+    }
+    if let Some(d) = cp.duplicates().first() {
+        eprintln!("[classpath] 跨档案重复类 {} 个（如 {}：{} 胜出 {}）", cp.duplicates().len(), d.class, d.winner.display(), d.loser.display());
+    }
 }
 
 /// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
@@ -378,7 +393,7 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     let home = jdk.home;
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
-    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs, jdk.major.unwrap_or(0))?;
     javac(&home, &o.inputs, &jars, &classes)?;
     perf.mark("javac");
     if o.stop_after == Stage::Javac {

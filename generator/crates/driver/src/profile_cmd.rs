@@ -151,9 +151,11 @@ struct Env {
 }
 
 impl Env {
-    /// 非用户类路径（JDK + 镜像 + 给定依赖库）：异常表查询与归档摘要
+    /// 非用户类路径（JDK + 镜像 + 给定依赖库）：异常表查询与归档摘要。
+    /// 与 [`crate::build_cmd::class_path`] 同样做 JDK 包遮蔽与模块图硬校验
     fn jdk_path(&self, jars: &[PathBuf]) -> Result<ClassPath, String> {
-        let mut cp = ClassPath::new();
+        let release = resolve::jdk::major_of(&self.home).ok_or(format!("{}：无法识别 JDK 主版本", self.home.display()))?;
+        let mut cp = ClassPath::new(release);
         for j in jars {
             cp.add(Origin::Lib, j).map_err(|e| format!("{}：{e}", j.display()))?;
         }
@@ -161,13 +163,15 @@ impl Env {
         for d in &self.images {
             cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
         }
+        cp.shadow_jdk_owned_packages();
+        resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
         Ok(cp)
     }
 
     /// 一个入口的单例闭包（独立的 javac 输出、类路径、引擎）
     fn analyze(&self, e: &EntrySpec) -> Result<Value, String> {
         let specs: Vec<LibSpec> = e.libs.iter().map(|l| LibSpec::parse(l)).collect::<Result<_, _>>()?;
-        let libs = crate::build_libs::load(&specs)?;
+        let libs = crate::build_libs::load(&specs, resolve::jdk::major_of(&self.home).unwrap_or(0))?;
         let java: Vec<PathBuf> = e.inputs.iter().filter(|p| p.is_file()).cloned().collect();
         let dirs: Vec<&PathBuf> = e.inputs.iter().filter(|p| p.is_dir()).collect();
         let classes = match (java.is_empty(), dirs.as_slice()) {

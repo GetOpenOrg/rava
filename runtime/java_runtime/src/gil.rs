@@ -24,7 +24,7 @@ pub fn blocking<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// 安全点（字段 / 数组元素读取、监视器操作处的生成代码调用点）：并行后端无需让出。
-#[inline]
+#[inline(always)]
 pub fn safepoint() {}
 
 /// `Thread.yield`：让出当前 OS 线程时间片。

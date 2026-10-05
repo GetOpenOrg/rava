@@ -3,8 +3,10 @@
 //! 选择优先级（多 JDK 并存时不随系统缺省 java 或「最新已安装」漂移）：
 //! 1. 显式 `--jdk N`（找不到精确主版本即报错，不取近似版本：语料与 javac 必须同源）
 //! 2. 显式 `--java-home P`
-//! 3. 已设置且有效（含 jmods/）的 `JAVA_HOME`
-//! 4. 仓库根 `.jdk-version` 固定的主版本（语料基线版本）
+//! 3. 仓库根 `.jdk-version` 固定的主版本（语料基线版本，语料的唯一真源）——与
+//!    `JAVA_HOME` 的主版本一致时采用 `JAVA_HOME` 指定的 home；不一致时忽略
+//!    `JAVA_HOME`（开发机 shell 环境变量不干扰语料）并按 pin 选，打印被忽略的版本
+//! 4. 无 pin 时（如生产构建的用户项目）：已设置且有效（含 jmods/）的 `JAVA_HOME`
 //! 5. 已安装的最新版
 //!
 //! 扫描面：brew Cellar（`HOMEBREW_PREFIX`、`/opt/homebrew`、`/usr/local`；`openjdk@NN` 与裸 `openjdk`）、
@@ -169,11 +171,26 @@ pub fn choose(jdk: Option<u32>, java_home: Option<&Path>, repo: Option<&Path>) -
         }
         return Ok(JdkChoice { major: major_of(h), home: h.to_path_buf(), source: JdkSource::JavaHomeFlag });
     }
-    if let Some(h) = std::env::var_os("JAVA_HOME").map(PathBuf::from).filter(|h| !h.as_os_str().is_empty() && is_jdk(h)) {
-        return Ok(JdkChoice { major: major_of(&h), home: h, source: JdkSource::JavaHomeEnv });
-    }
+    let env_home = std::env::var_os("JAVA_HOME").map(PathBuf::from)
+        .filter(|h| !h.as_os_str().is_empty() && is_jdk(h));
     if let Some(m) = repo.and_then(pinned_major) {
+        // pin 是语料的唯一真源：JAVA_HOME 主版本与 pin 一致时采用其 home（保留
+        // 同版本的发行版选择权），不一致时忽略 JAVA_HOME（开发机 shell 环境变量
+        // 不干扰语料）——语料与 javac 必须同源
+        if let Some(h) = env_home {
+            if major_of(&h) == Some(m) {
+                return Ok(JdkChoice { major: Some(m), home: h, source: JdkSource::JavaHomeEnv });
+            }
+            eprintln!(
+                "[jdk] JAVA_HOME {}（主版本 {}）与语料 pin {m} 不符，已忽略，按 .jdk-version 选择",
+                h.display(),
+                major_of(&h).map(|v| v.to_string()).unwrap_or_else(|| "未知".into())
+            );
+        }
         return need(m, JdkSource::Pinned);
+    }
+    if let Some(h) = env_home {
+        return Ok(JdkChoice { major: major_of(&h), home: h, source: JdkSource::JavaHomeEnv });
     }
     let (m, home) = installed_jdks().pop().ok_or("未找到任何已安装的 JDK（含 jmods/），请安装 JDK 21 或设置 JAVA_HOME")?;
     Ok(JdkChoice { major: Some(m), home, source: JdkSource::Latest })
@@ -216,3 +233,52 @@ mod tests {
         }
     }
 }
+
+    #[test]
+    fn choose_pin_wins_over_mismatched_java_home() {
+        // 裁决规则（2026-10-05）：pin 是语料唯一真源。JAVA_HOME 主版本与 pin 不符 → 忽略
+        // JAVA_HOME 按 pin 选；一致 → 采用 JAVA_HOME 的 home；无 pin → JAVA_HOME 照常生效。
+        // 隔离测试环境：清掉可能存在的真实 JAVA_HOME / pin，构造临时仓库与假安装表。
+        let tmp = std::env::temp_dir().join(format!("rava_jdk_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let pin_repo = tmp.join("pinned");
+        std::fs::create_dir_all(&pin_repo).unwrap();
+        std::fs::write(pin_repo.join(PIN_FILE), "21\n").unwrap();
+
+        // 伪 JDK home：release 文件声明主版本，jmods/ 目录满足 is_jdk
+        let fake = |major: u32| -> PathBuf {
+            let d = tmp.join(format!("jdk{major}"));
+            std::fs::create_dir_all(d.join("jmods")).unwrap();
+            std::fs::write(d.join("release"), format!("JAVA_VERSION=\"{major}\"\n")).unwrap();
+            d
+        };
+        let j25 = fake(25);
+
+        // 不符：JAVA_HOME=25 + pin=21 → 按 pin 选 21（不取 25 的 home）
+        unsafe { std::env::set_var("JAVA_HOME", &j25) };
+        let r = choose(None, None, Some(&pin_repo));
+        assert!(r.is_ok(), "pin 21 应能选出（本机有 21 或回退发现）: {r:?}");
+        if let Ok(c) = r {
+            assert_eq!(c.major, Some(21), "pin 优先于主版本不符的 JAVA_HOME");
+            assert_ne!(c.home, j25, "不符的 JAVA_HOME home 不被采用");
+        }
+
+        // 一致：JAVA_HOME 指向假 21 → 采用该 home（保留同版本发行版选择权）
+        let j21 = fake(21);
+        unsafe { std::env::set_var("JAVA_HOME", &j21) };
+        let c = choose(None, None, Some(&pin_repo)).expect("一致时应选出");
+        assert_eq!(c.home, j21, "主版本一致时采用 JAVA_HOME 的 home");
+        assert!(matches!(c.source, JdkSource::JavaHomeEnv));
+
+        // 无 pin：JAVA_HOME 照常生效（重新指向 25 的假 home）
+        unsafe { std::env::set_var("JAVA_HOME", &j25) };
+        let no_pin = tmp.join("nopin");
+        std::fs::create_dir_all(&no_pin).unwrap();
+        let c = choose(None, None, Some(&no_pin)).expect("无 pin 时 JAVA_HOME 生效");
+        assert_eq!(c.home, j25, "无 pin 时 JAVA_HOME（25 假 home）照常生效");
+
+        unsafe { std::env::remove_var("JAVA_HOME") };
+        let _ = std::fs::remove_dir_all(&tmp);
+    }

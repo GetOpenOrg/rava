@@ -796,9 +796,11 @@ entries = [
     # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
     "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
 ]
-# 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入
+# 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入。
+# 引导求值中缓存写入不记日志（撤回时保留：重算得同一值，不算运行期改写）
 memo_fields = [
     "java/lang/Class.genericInfo",
+    "java/lang/Class.packageName",
     "java/lang/Class.reflectionData",
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
@@ -859,6 +861,7 @@ stable_types = [
 "jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
 "jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
 "jdk/internal/misc/CDS.isSharingEnabled0:()Z" = "const:false"
+"jdk/internal/misc/CDS.getCDSConfigStatus:()I" = "const:0"
 "jdk/internal/misc/CDS.initializeFromArchive:(Ljava/lang/Class;)V" = "noop"
 "jdk/internal/misc/CDS.getRandomSeedForDumping:()J" = "noop"
 "jdk/internal/misc/VM.initialize:()V" = "noop"
@@ -888,3 +891,240 @@ size = "java/lang/NegativeArraySizeException"
 string_value = "java/lang/String.value"
 string_coder = "java/lang/String.coder"
 component_type = "java/lang/Class.componentType"
+reference_referent = "java/lang/ref/Reference.referent"
+class_module = "java/lang/Class.module"
+
+# ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
+# 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image
+# 与 `rava audit boot`。值：`@deferred` = 宿主相关（运行期取宿主值；构建期读其内容即「延迟值参与求值」，
+# 所在根帧调用 / 区段残差化或所在类转为运行期初始化）；`@null` = null；`@jdk_feature` = 参考 JDK 特性版本号。
+# 用户决策 U1（2026-10-05）：sun.jnu.encoding、stdout/stderr.encoding、file.encoding（JDK 25 为 native.encoding）、
+# line.separator、java.home 不钉值，一律延迟。
+[concrete.boot]
+calls = [
+    ["java/lang/System.initPhase1:()V"],
+    ["java/lang/System.initPhase2:(ZZ)I", 0, 0],
+    ["java/lang/System.initPhase3:()V"],
+]
+# HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
+init = [
+    "java/lang/String", "java/lang/System", "java/lang/Class", "java/lang/ThreadGroup", "java/lang/Thread",
+    "java/lang/Module", "jdk/internal/misc/UnsafeConstants", "java/lang/reflect/Method", "java/lang/ref/Finalizer",
+]
+# create_initial_thread_group / create_initial_thread：system 组、main 组、main 线程
+objects = [
+    ["java/lang/ThreadGroup", "()V"],
+    ["java/lang/ThreadGroup", "(Ljava/lang/ThreadGroup;Ljava/lang/String;)V", "@0", "str:main"],
+    ["java/lang/Thread", "(Ljava/lang/ThreadGroup;Ljava/lang/String;)V", "@1", "str:main"],
+]
+current_thread = 2
+vm_props = [
+    ["java.home", "@deferred"],
+    ["sun.boot.library.path", "@deferred"],
+    ["java.library.path", ""],
+    ["java.class.path", ""],
+    ["java.vm.specification.name", "Java Virtual Machine Specification"],
+    ["java.vm.specification.vendor", "Oracle Corporation"],
+    ["java.vm.specification.version", "@jdk_feature"],
+    ["java.vm.name", "rava native runtime"],
+    ["java.vm.vendor", "rava"],
+    ["java.vm.version", "@jdk_feature"],
+    ["java.vm.info", "native image"],
+    ["jdk.debug", "release"],
+    ["jdk.reflect.useNativeAccessorOnly", "true"],
+]
+
+# SystemProps$Raw.platformProperties：名 = 下标常量 `_<名>_NDX` 的名（下标取参考 JDK 的类文件，21 / 25 不同）；
+# 未列出的名为 null。目标平台 Linux：分隔符、字长、字节序为平台常量，其余宿主值延迟
+[concrete.boot.platform_props]
+file_separator = "/"
+path_separator = ":"
+sun_arch_data_model = "64"
+sun_cpu_endian = "little"
+sun_io_unicode_encoding = "UnicodeLittle"
+# U1：编码与行分隔符运行期取宿主值
+file_encoding = "@deferred"
+native_encoding = "@deferred"
+sun_jnu_encoding = "@deferred"
+stdout_encoding = "@deferred"
+stderr_encoding = "@deferred"
+stdin_encoding = "@deferred"
+line_separator = "@deferred"
+# 宿主环境
+format_language = "@deferred"
+java_io_tmpdir = "@deferred"
+os_arch = "@deferred"
+os_name = "@deferred"
+os_version = "@deferred"
+user_dir = "@deferred"
+user_home = "@deferred"
+user_name = "@deferred"
+
+[concrete.boot.natives]
+"java/lang/System.registerNatives:()V" = "noop"
+"jdk/internal/util/SystemProps$Raw.vmProperties:()[Ljava/lang/String;" = "props:vm"
+"jdk/internal/util/SystemProps$Raw.platformProperties:()[Ljava/lang/String;" = "props:platform"
+"java/lang/System.setIn0:(Ljava/io/InputStream;)V" = "set_static:java/lang/System.in"
+"java/lang/System.setOut0:(Ljava/io/PrintStream;)V" = "set_static:java/lang/System.out"
+"java/lang/System.setErr0:(Ljava/io/PrintStream;)V" = "set_static:java/lang/System.err"
+"java/lang/Terminator.setup:()V" = "defer"
+"jdk/internal/misc/VM.initializeOSEnvironment:()V" = "defer"
+"java/io/FileDescriptor.initIDs:()V" = "noop"
+"java/io/FileDescriptor.getHandle:(I)J" = "const:-1"
+"java/io/FileDescriptor.getAppend:(I)Z" = "host_scalar"
+"java/io/FileInputStream.initIDs:()V" = "noop"
+"java/io/FileOutputStream.initIDs:()V" = "noop"
+# 初始线程：HotSpot create_initial_thread 在 initPhase1 前构造（`objects` 中的 VM 构造对象）
+"java/lang/Thread.currentThread:()Ljava/lang/Thread;" = "boot_current_thread"
+"java/lang/Thread.currentCarrierThread:()Ljava/lang/Thread;" = "boot_current_thread"
+"java/security/AccessController.getStackAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
+"java/security/AccessController.getInheritedAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
+# 线程 id 计数器：原生地址（thread_impl.rs NEXT_THREAD_ID）→ VM 单元
+"java/lang/Thread.getNextThreadIdOffset:()J" = "vm_cell:next_thread_id"
+"java/lang/ref/Reference.refersTo0:(Ljava/lang/Object;)Z" = "refers_to"
+"java/lang/ref/PhantomReference.refersTo0:(Ljava/lang/Object;)Z" = "refers_to"
+"java/lang/ref/Reference.clear0:()V" = "clear_referent"
+# 线程启动是运行期副作用：镜像里的线程对象在运行期启动
+"java/lang/Thread.start0:()V" = "defer"
+"java/lang/Thread.setPriority0:(I)V" = "defer"
+"jdk/internal/reflect/Reflection.getClassAccessFlags:(Ljava/lang/Class;)I" = "class_access_flags"
+"jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = "unsafe_ensure_init"
+"jdk/internal/misc/Unsafe.shouldBeInitialized0:(Ljava/lang/Class;)Z" = "unsafe_should_be_init"
+# 文件系统查询：宿主相关
+"java/io/UnixFileSystem.canonicalize0:(Ljava/lang/String;)Ljava/lang/String;" = "defer_value"
+# 空类路径元素 = 当前目录（宿主相关）：URL 由运行期重放 toFileURL 得到（U3）；登记为非空（当前目录不可规范化时
+# toFileURL 返回 null，映像按非空处理，见计划 §8）
+"jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;" = "defer_call"
+"java/io/UnixFileSystem.getBooleanAttributes0:(Ljava/io/File;)I" = "defer_value"
+# 构建期单线程：监视器通知为空操作
+"java/lang/Object.notifyAll:()V" = "noop"
+"java/lang/Object.notify:()V" = "noop"
+# 模块系统的 VM 侧状态（包 → 模块、导出、读边）：构建期登记，物化为运行期表
+"jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0:(Ljava/lang/Module;)V" = "vm_record"
+"java/lang/Module.defineModule0:(Ljava/lang/Module;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V" = "vm_record"
+"java/lang/Module.addReads0:(Ljava/lang/Module;Ljava/lang/Module;)V" = "vm_record"
+"java/lang/Module.addExports0:(Ljava/lang/Module;Ljava/lang/String;Ljava/lang/Module;)V" = "vm_record"
+"java/lang/Module.addExportsToAll0:(Ljava/lang/Module;Ljava/lang/String;)V" = "vm_record"
+"java/lang/Module.addExportsToAllUnnamed0:(Ljava/lang/Module;Ljava/lang/String;)V" = "vm_record"
+"java/io/FileOutputStream.writeBytes:([BIIZ)V" = "boot_write"
+# 终结化恒禁用（finalizer_impl.rs）
+"java/lang/ref/Finalizer.isFinalizationEnabled:()Z" = "const:false"
+# 归档转储的随机种子（JDK 为 CDS 转储预留的确定化入口：ImmutableCollections.SALT32L 不取 nanoTime）
+"jdk/internal/misc/CDS.getRandomSeedForDumping:()J" = "const:2611923443488327891"
+# JNI 绑定 / 字段 id 缓存（HotSpot 语义为空操作）
+"java/io/RandomAccessFile.registerNatives:()V" = "noop"
+"java/io/RandomAccessFile.initIDs:()V" = "noop"
+"java/io/UnixFileSystem.registerNatives:()V" = "noop"
+"java/io/UnixFileSystem.initIDs:()V" = "noop"
+"java/lang/ClassLoader.registerNatives:()V" = "noop"
+"java/lang/ClassLoader.initIDs:()V" = "noop"
+"java/lang/invoke/MethodHandleNatives.registerNatives:()V" = "noop"
+"java/lang/invoke/MethodHandleNatives.initIDs:()V" = "noop"
+"java/lang/Thread.registerNatives:()V" = "noop"
+"java/lang/Thread.initIDs:()V" = "noop"
+"java/lang/VirtualThread.registerNatives:()V" = "noop"
+"java/lang/VirtualThread.initIDs:()V" = "noop"
+"java/util/zip/Inflater.registerNatives:()V" = "noop"
+"java/util/zip/Inflater.initIDs:()V" = "noop"
+"jdk/internal/misc/ScopedMemoryAccess.registerNatives:()V" = "noop"
+"jdk/internal/misc/ScopedMemoryAccess.initIDs:()V" = "noop"
+"jdk/internal/misc/Unsafe.registerNatives:()V" = "noop"
+"jdk/internal/misc/Unsafe.initIDs:()V" = "noop"
+"jdk/internal/perf/Perf.registerNatives:()V" = "noop"
+"jdk/internal/perf/Perf.initIDs:()V" = "noop"
+"jdk/internal/vm/Continuation.registerNatives:()V" = "noop"
+"jdk/internal/vm/Continuation.initIDs:()V" = "noop"
+"sun/nio/ch/IOUtil.registerNatives:()V" = "noop"
+"sun/nio/ch/IOUtil.initIDs:()V" = "noop"
+"sun/nio/ch/Net.registerNatives:()V" = "noop"
+"sun/nio/ch/Net.initIDs:()V" = "noop"
+"jdk/internal/misc/Unsafe.<clinit>:()V" = "opaque"
+"java/lang/Runtime.maxMemory:()J" = "host_scalar"
+"java/lang/Runtime.availableProcessors:()I" = "host_scalar"
+"jdk/internal/misc/Unsafe.arrayBaseOffset0:(Ljava/lang/Class;)I" = "const:16"
+"jdk/internal/misc/Unsafe.arrayIndexScale0:(Ljava/lang/Class;)I" = "array_index_scale"
+# Unsafe 内存原语：偏移即字段身份 / 数组基址 + 下标 × stride（engine/concrete/unsafe_ops.rs）
+"jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = "unsafe_get:L"
+"jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = "unsafe_put:L"
+"jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = "unsafe_get:L"
+"jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = "unsafe_put:L"
+"jdk/internal/misc/Unsafe.getInt:(Ljava/lang/Object;J)I" = "unsafe_get:I"
+"jdk/internal/misc/Unsafe.putInt:(Ljava/lang/Object;JI)V" = "unsafe_put:I"
+"jdk/internal/misc/Unsafe.getIntVolatile:(Ljava/lang/Object;J)I" = "unsafe_get:I"
+"jdk/internal/misc/Unsafe.putIntVolatile:(Ljava/lang/Object;JI)V" = "unsafe_put:I"
+"jdk/internal/misc/Unsafe.getLong:(Ljava/lang/Object;J)J" = "unsafe_get:J"
+"jdk/internal/misc/Unsafe.putLong:(Ljava/lang/Object;JJ)V" = "unsafe_put:J"
+"jdk/internal/misc/Unsafe.getLongVolatile:(Ljava/lang/Object;J)J" = "unsafe_get:J"
+"jdk/internal/misc/Unsafe.putLongVolatile:(Ljava/lang/Object;JJ)V" = "unsafe_put:J"
+"jdk/internal/misc/Unsafe.getBoolean:(Ljava/lang/Object;J)Z" = "unsafe_get:Z"
+"jdk/internal/misc/Unsafe.putBoolean:(Ljava/lang/Object;JZ)V" = "unsafe_put:Z"
+"jdk/internal/misc/Unsafe.getBooleanVolatile:(Ljava/lang/Object;J)Z" = "unsafe_get:Z"
+"jdk/internal/misc/Unsafe.putBooleanVolatile:(Ljava/lang/Object;JZ)V" = "unsafe_put:Z"
+"jdk/internal/misc/Unsafe.getByte:(Ljava/lang/Object;J)B" = "unsafe_get:B"
+"jdk/internal/misc/Unsafe.putByte:(Ljava/lang/Object;JB)V" = "unsafe_put:B"
+"jdk/internal/misc/Unsafe.getByteVolatile:(Ljava/lang/Object;J)B" = "unsafe_get:B"
+"jdk/internal/misc/Unsafe.putByteVolatile:(Ljava/lang/Object;JB)V" = "unsafe_put:B"
+"jdk/internal/misc/Unsafe.getShort:(Ljava/lang/Object;J)S" = "unsafe_get:S"
+"jdk/internal/misc/Unsafe.putShort:(Ljava/lang/Object;JS)V" = "unsafe_put:S"
+"jdk/internal/misc/Unsafe.getShortVolatile:(Ljava/lang/Object;J)S" = "unsafe_get:S"
+"jdk/internal/misc/Unsafe.putShortVolatile:(Ljava/lang/Object;JS)V" = "unsafe_put:S"
+"jdk/internal/misc/Unsafe.getChar:(Ljava/lang/Object;J)C" = "unsafe_get:C"
+"jdk/internal/misc/Unsafe.putChar:(Ljava/lang/Object;JC)V" = "unsafe_put:C"
+"jdk/internal/misc/Unsafe.getCharVolatile:(Ljava/lang/Object;J)C" = "unsafe_get:C"
+"jdk/internal/misc/Unsafe.putCharVolatile:(Ljava/lang/Object;JC)V" = "unsafe_put:C"
+"jdk/internal/misc/Unsafe.getFloat:(Ljava/lang/Object;J)F" = "unsafe_get:F"
+"jdk/internal/misc/Unsafe.putFloat:(Ljava/lang/Object;JF)V" = "unsafe_put:F"
+"jdk/internal/misc/Unsafe.getFloatVolatile:(Ljava/lang/Object;J)F" = "unsafe_get:F"
+"jdk/internal/misc/Unsafe.putFloatVolatile:(Ljava/lang/Object;JF)V" = "unsafe_put:F"
+"jdk/internal/misc/Unsafe.getDouble:(Ljava/lang/Object;J)D" = "unsafe_get:D"
+"jdk/internal/misc/Unsafe.putDouble:(Ljava/lang/Object;JD)V" = "unsafe_put:D"
+"jdk/internal/misc/Unsafe.getDoubleVolatile:(Ljava/lang/Object;J)D" = "unsafe_get:D"
+"jdk/internal/misc/Unsafe.putDoubleVolatile:(Ljava/lang/Object;JD)V" = "unsafe_put:D"
+"jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "unsafe_cas:L"
+"jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = "unsafe_cax:L"
+"jdk/internal/misc/Unsafe.compareAndSetInt:(Ljava/lang/Object;JII)Z" = "unsafe_cas:I"
+"jdk/internal/misc/Unsafe.compareAndExchangeInt:(Ljava/lang/Object;JII)I" = "unsafe_cax:I"
+"jdk/internal/misc/Unsafe.compareAndSetLong:(Ljava/lang/Object;JJJ)Z" = "unsafe_cas:J"
+"jdk/internal/misc/Unsafe.compareAndExchangeLong:(Ljava/lang/Object;JJJ)J" = "unsafe_cax:J"
+# 子字宽 CAS 的 JDK 字节码按字对齐地址运算实现；求值器的偏移是字段身份，直接按字段 CAS
+"jdk/internal/misc/Unsafe.compareAndSetBoolean:(Ljava/lang/Object;JZZ)Z" = "unsafe_cas:Z"
+"jdk/internal/misc/Unsafe.compareAndExchangeBoolean:(Ljava/lang/Object;JZZ)Z" = "unsafe_cax:Z"
+"jdk/internal/misc/Unsafe.compareAndSetByte:(Ljava/lang/Object;JBB)Z" = "unsafe_cas:B"
+"jdk/internal/misc/Unsafe.compareAndExchangeByte:(Ljava/lang/Object;JBB)B" = "unsafe_cax:B"
+"jdk/internal/misc/Unsafe.compareAndSetShort:(Ljava/lang/Object;JSS)Z" = "unsafe_cas:S"
+"jdk/internal/misc/Unsafe.compareAndExchangeShort:(Ljava/lang/Object;JSS)S" = "unsafe_cax:S"
+"jdk/internal/misc/Unsafe.compareAndSetChar:(Ljava/lang/Object;JCC)Z" = "unsafe_cas:C"
+"jdk/internal/misc/Unsafe.compareAndExchangeChar:(Ljava/lang/Object;JCC)C" = "unsafe_cax:C"
+"jdk/internal/misc/Unsafe.compareAndSetFloat:(Ljava/lang/Object;JFF)Z" = "unsafe_cas:F"
+"jdk/internal/misc/Unsafe.compareAndExchangeFloat:(Ljava/lang/Object;JFF)F" = "unsafe_cax:F"
+"jdk/internal/misc/Unsafe.compareAndSetDouble:(Ljava/lang/Object;JDD)Z" = "unsafe_cas:D"
+"jdk/internal/misc/Unsafe.compareAndExchangeDouble:(Ljava/lang/Object;JDD)D" = "unsafe_cax:D"
+"jdk/internal/misc/Unsafe.fullFence:()V" = "noop"
+"jdk/internal/misc/Unsafe.loadFence:()V" = "noop"
+"jdk/internal/misc/Unsafe.storeFence:()V" = "noop"
+
+[concrete.boot.statics]
+"jdk/internal/misc/UnsafeConstants.ADDRESS_SIZE0" = "8"
+"jdk/internal/misc/UnsafeConstants.PAGE_SIZE" = "@deferred"
+"jdk/internal/misc/UnsafeConstants.BIG_ENDIAN" = "0"
+"jdk/internal/misc/UnsafeConstants.UNALIGNED_ACCESS" = "1"
+"jdk/internal/misc/UnsafeConstants.DATA_CACHE_LINE_FLUSH_SIZE" = "0"
+"jdk/internal/misc/Unsafe.ADDRESS_SIZE" = "8"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_BOOLEAN_INDEX_SCALE" = "1"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_BYTE_INDEX_SCALE" = "1"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_SHORT_INDEX_SCALE" = "2"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_CHAR_INDEX_SCALE" = "2"
+"jdk/internal/misc/Unsafe.ARRAY_INT_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_INT_INDEX_SCALE" = "4"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_LONG_INDEX_SCALE" = "8"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_FLOAT_INDEX_SCALE" = "4"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_DOUBLE_INDEX_SCALE" = "8"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_BASE_OFFSET" = "16"
+"jdk/internal/misc/Unsafe.ARRAY_OBJECT_INDEX_SCALE" = "4"

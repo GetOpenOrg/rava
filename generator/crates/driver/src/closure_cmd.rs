@@ -12,6 +12,7 @@
 //! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
 //! `--dump-edges <文件>`（触发边转储）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
+//! 引导映像：`--boot-report <报告.md>`（写构建期引导映像审计报告；求值失败即命令失败，`rava audit boot` 用）。
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 //!
 //! 参数逐个校验：未知参数、多余的位置参数一律报错。闭包结果取决于输入（类路径、镜像目录），静默忽略的参数会
@@ -33,7 +34,7 @@ pub(crate) const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
 const VALUE_OPTS: &[&str] = &[
     "--jdk", "--java-home", "--runtime", "--main", "-o", "--why", "--flows", "--report", "--release", "--release-bytecode",
     "--lib", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
-    "--hash-seed", "--closure-cache", "--closure-cache-max-mb",
+    "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
 const FLAG_OPTS: &[&str] = &["--cold-cut"];
@@ -125,8 +126,9 @@ pub fn run(args: &Args) -> Result<(), String> {
     let multi = |flag: &str| -> Vec<&String> {
         args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
     };
-    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类
-    let mut cp = ClassPath::new();
+    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类；随后 JDK 包遮蔽 + 模块图硬校验
+    let release = resolve::jdk::major_of(&home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
+    let mut cp = ClassPath::new(release);
     cp.add(Origin::User, &classes).map_err(|e| e.to_string())?;
     for jar in multi("--lib") {
         cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
@@ -137,6 +139,8 @@ pub fn run(args: &Args) -> Result<(), String> {
     for d in &images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
+    cp.shadow_jdk_owned_packages();
+    resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
 
     let flows = multi("--flows");
     let users = cp.names_of(Origin::User);
@@ -165,7 +169,8 @@ pub fn run(args: &Args) -> Result<(), String> {
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
     let whys = multi("--why");
-    let need_engine = args.opt("--report").is_some() || !whys.is_empty() || !flows.is_empty();
+    let boot_report = args.opt("--boot-report");
+    let need_engine = args.opt("--report").is_some() || boot_report.is_some() || !whys.is_empty() || !flows.is_empty();
     let cache = crate::closure_run::CacheOpts {
         dir: args.opt("--closure-cache").map(PathBuf::from),
         max_mb: num("--closure-cache-max-mb")?,
@@ -183,6 +188,23 @@ pub fn run(args: &Args) -> Result<(), String> {
     if let Some(r) = args.opt("--report") {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
+    if let Some(r) = &boot_report {
+        let b = c.boot_image.as_ref().ok_or("引导映像未求值（清单无 [concrete.boot] calls 或类路径无引导阶段方法）")?;
+        if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
+        }
+        let outside = |v: &[String]| -> Vec<String> { v.iter().filter(|t| !c.engine.classes.contains_key(t.as_str())).map(|t| format!("`{t}`")).collect() };
+        let (ti, ri) = (outside(&b.types), outside(&b.runtime_classes));
+        let md = format!("{}
+## 闭包
+
+- 入口 `{main}`：闭包 {} 类；引导映像求值 {} ms
+- 映像类型 {} 个，不在闭包 {} 个：{}
+- 运行期部分入口类 {} 个，不在闭包 {} 个：{}
+", b.report, c.engine.classes.len(), c.boot_ms, b.types.len(), ti.len(), ti.join(" "), b.runtime_classes.len(), ri.len(), ri.join(" "));
+        std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))?;
+        eprintln!("[boot] 报告 {r}：{}，摘要 {}", if b.ok { "通过" } else { "失败" }, b.digest);
+    }
     for w in whys {
         for line in c.why(w) {
             println!("{line}");
@@ -196,6 +218,9 @@ pub fn run(args: &Args) -> Result<(), String> {
         println!();
     }
     println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
+    if boot_report.is_some() && c.boot_image.as_ref().is_some_and(|b| !b.ok) {
+        return Err("引导映像求值失败（见报告）".into());
+    }
     Ok(())
 }
 
