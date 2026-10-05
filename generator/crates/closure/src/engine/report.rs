@@ -402,8 +402,8 @@ impl<'a> Engine<'a> {
         self.methods[i].key.to_string()
     }
 
-    /// 带克隆上下文的方法标签（诊断用）
-    pub(super) fn ctx_label(&self, i: usize) -> String {
+    /// 带克隆上下文的方法标签（诊断用：`--why` 溯源链逐节点标出克隆上下文）
+    pub(crate) fn ctx_label(&self, i: usize) -> String {
         match self.methods[i].ctx {
             NOCTX => self.method_label(i),
             c => format!("{} #{}", self.method_label(i), self.names[c as usize]),

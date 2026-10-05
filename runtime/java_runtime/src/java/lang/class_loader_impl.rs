@@ -19,25 +19,43 @@ impl ClassLoader {
         Ok(())
     }
 
-    /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找已定义类，
-    /// 找不到返回 null。原生镜像的类全集编译期定死、类对象全部预先存在，故「引导加载器可见」即
-    /// 闭包内的类（与 `Class.forName0` 同一判定；定义加载器由镜像的 `classLoader` 钩子按
-    /// `defining_loader` 表给出，不影响可见性）。
+    /// native `findBootstrapClass(String name)`：引导加载器按 binary name（点分）查找它定义的类，
+    /// 找不到返回 null。原生镜像的类全集编译期定死、类对象全部预先存在；某类由谁定义按生成器写入的
+    /// `defining_loader` 表（`meta::class_defining_loader`：无表项 = 引导加载器）。只有引导加载器定义的
+    /// 类在此可见——应用 / 平台加载器的类由各自的 `findLoadedClass0` 命中（与 HotSpot 的
+    /// SystemDictionary 按 (加载器, 类名) 登记一致）。
     #[jvm_native]
     pub fn findBootstrapClass(name: String) -> Result<super::Class> {
         let slash = format!("{}", name).replace('.', "/");
-        if slash.starts_with('[') || !super::Class::__is_known_class(&slash) {
+        if slash.starts_with('[')
+            || !super::Class::__is_known_class(&slash)
+            || crate::meta::class_defining_loader(&slash).is_some()
+        {
             return Ok(super::Class::default());
         }
         Ok(super::Class::for_class(String::from(slash.as_str())))
     }
 
-    /// native `findLoadedClass0(String name)`：本加载器作为初始加载器记录过的类。原生镜像中
-    /// 全部类由引导形态定义，非引导加载器从未成为任何类的初始加载器 → 恒 null
-    /// （`loadClass` 随即委派父加载器 / findBootstrapClassOrNull，与 JDK 委派模型一致）。
+    /// native `findLoadedClass0(String name)`：本加载器作为定义加载器登记过的类。原生镜像中类对象
+    /// 预先存在，「已由某内建加载器定义」即 `defining_loader` 表项（app / platform）所指加载器是本加载器；
+    /// 其余加载器（自定义加载器、引导形态的类）不命中 → null，`loadClass` 随即按委派模型继续。
+    /// 于是 `BuiltinClassLoader.loadClassOrNull` 对闭包内的类在 `findLoadedClass` 一步命中，不进入
+    /// `findClassInModuleOrNull → defineClass`（引导层方案 §2.3 第 5 项）。
     #[jvm_native]
-    pub fn findLoadedClass0(&self, _name: String) -> Result<super::Class> {
-        Ok(super::Class::default())
+    pub fn findLoadedClass0(&self, name: String) -> Result<super::Class> {
+        let slash = format!("{}", name).replace('.', "/");
+        if slash.starts_with('[') || !super::Class::__is_known_class(&slash) {
+            return Ok(super::Class::default());
+        }
+        let defined_here = match crate::meta::class_defining_loader(&slash) {
+            Some("app") => crate::jdk::internal::loader::ClassLoaders::appClassLoader()? == *self,
+            Some("platform") => crate::jdk::internal::loader::ClassLoaders::platformClassLoader()? == *self,
+            _ => false,
+        };
+        if !defined_here {
+            return Ok(super::Class::default());
+        }
+        Ok(super::Class::for_class(String::from(slash.as_str())))
     }
 
     /// initPhase3 的系统类加载器段（`System.initPhase3`）：

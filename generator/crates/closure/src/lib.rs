@@ -310,8 +310,10 @@ impl Closure<'_> {
         match &v.from {
             From::Root(s) => (format!("[{}] 根 {s}", v.kind), None),
             From::Method(i) => {
+                // 方法节点按 (成员, 克隆上下文) 区分，溯源链沿节点自身的首达边走：标出上下文，
+                // 同一成员的不同克隆在链上可辨（出口归因按上下文，见 c1d 计划 §23.6 精度项 1）
                 let m = &e.methods[*i];
-                (format!("[{}] {}{off}", v.kind, m.key), Some(m.via.clone()))
+                (format!("[{}] {}{off}", v.kind, e.ctx_label(*i)), Some(m.via.clone()))
             }
             From::Class(c) => {
                 let next = e.classes.get(c).map(|n| n.via.clone());
