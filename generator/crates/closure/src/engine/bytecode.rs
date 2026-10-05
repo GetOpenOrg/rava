@@ -459,9 +459,8 @@ impl Engine<'_> {
         let mut new = Vec::new();
         let mut i = 0;
         for &x in xs {
-            while i < v.len() && v[i] < x {
-                i += 1;
-            }
+            // 已登记表远大于本批时逐个前移是 O(|表|)：二分跳到首个 ≥ x 处
+            i += v[i..].partition_point(|&y| y < x);
             if i == v.len() || v[i] != x {
                 new.push(x);
             }

@@ -118,18 +118,28 @@ impl<'a> Engine<'a> {
                 // 接收者值集未变（`recv_fp.rs`）时沿用上次的接收者判定与 open 枢纽
                 let fp = (self.methods[m].kind == Kind::Bytecode).then(|| self.feeds_version(&r));
                 let cached = fp.and_then(|v| self.recv_fp_hit(m, off, v)).flatten();
+                let mut seen = None;
                 let (recv, opens): (Rc<[u32]>, Option<IdSet>) = match &cached {
                     Some((recv, _)) => {
                         self.prof_path(site_prof::PATH_VFP_HIT);
                         (recv.clone(), None)
                     }
                     None => {
-                        let s = self.value_set(&r);
+                        // 值集确有增长：精确部分只取新增（`recv_fp.rs::value_since`）
+                        let since = match fp {
+                            Some(v) => self.value_since(m, off, &r, v.0, true),
+                            None => recv_fp::Since { s: self.value_set(&r), prev: None, seen: None },
+                        };
+                        seen = since.seen;
                         // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
-                        let exact = TypeSet { classes: s.classes, open: IdSet::default() };
-                        let recv: Rc<[u32]> = self.receivers(m, &exact, owner).into();
+                        let exact = TypeSet { classes: since.s.classes, open: IdSet::default() };
+                        let fresh = self.receivers(m, &exact, owner);
+                        let recv: Rc<[u32]> = match since.prev {
+                            Some(prev) => merge_sorted(&prev, &fresh).into(),
+                            None => fresh.into(),
+                        };
                         self.prof_vmiss(m, off, &recv);
-                        (recv, Some(s.open))
+                        (recv, Some(since.s.open))
                     }
                 };
                 if recv.len() < HUB_MIN {
@@ -177,7 +187,7 @@ impl<'a> Engine<'a> {
                     hubs.push(h);
                 }
                 if let Some(v) = fp {
-                    self.recv_fp_store(m, off, v, Some((recv, hubs.into())));
+                    self.recv_fp_store(m, off, v, Some((recv, hubs.into())), seen);
                 }
             }
         }
@@ -244,12 +254,13 @@ impl<'a> Engine<'a> {
         if fp.is_some_and(|v| self.recv_fp_hit(m, off, v).is_some()) {
             return;
         }
-        let s = self.value_set(&fs);
         let s = if let Some(v) = fp {
-            self.recv_fp_store(m, off, v, None);
-            self.recv_delta(m, off, s)
+            // 值集确有增长：只取新增（已见部分都已登记进 `recv_done`，见 `recv_fp.rs::value_since`）
+            let since = self.value_since(m, off, &fs, v.0, false);
+            self.recv_fp_store(m, off, v, None, since.seen);
+            self.recv_delta(m, off, since.s)
         } else {
-            s
+            self.value_set(&fs)
         };
         let s = self.filter(&s, owner);
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
@@ -442,6 +453,27 @@ impl<'a> Engine<'a> {
 }
 
 /// 调用描述中的属主是数组类型（`[` 开头的描述符形式）
+/// 两个不相交的升序序列归并为升序
+fn merge_sorted(a: &[u32], b: &[u32]) -> Vec<u32> {
+    if b.is_empty() {
+        return a.to_vec();
+    }
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] < b[j] {
+            out.push(a[i]);
+            i += 1;
+        } else {
+            out.push(b[j]);
+            j += 1;
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
+}
+
 fn is_array_type(owner: &str) -> bool {
     owner.starts_with('[')
 }
