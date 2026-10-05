@@ -39,9 +39,8 @@ classes = [
     # false（Cipher 据此取 CryptoAllPermission，JDK 默认安装的可观测行为一致）。
     "javax/crypto/JceSecurity",
 
-    # MH-native（docs/plans/2026-09-26-mh-native.md）：LambdaForm 运行期字节码生成器。原生二进制
-    # 不能定义隐藏类；句柄调用由原生 LambdaForm 解释器承载，编译入口返回解释入口（vm_intrinsics.toml）。
-    "java/lang/invoke/InvokerBytecodeGenerator",
+    # （InvokerBytecodeGenerator 已移出：类定义点按 [[intrinsic]] class_definition 逐方法登记，其余成员与
+    # <clinit> 按字节码翻译，a3-X1）
 
     # ── C1d 终态：内部包的 VM 契约类（准入 ③ VM 注入状态 / VM 驱动行为，② 类加载模型）──────────────
     # （Unsafe 已移出：手写只剩 ACC_NATIVE，公开包装与 <clinit> 按字节码翻译，a3-U0~U3）
@@ -83,13 +82,11 @@ translate_nested = [
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
 # - Module：CDS 归档模块图（ArchivedData）与无名 / everyone 模块由 VM 模型承载（module_impl.rs）；
 # - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
-# - InvokerBytecodeGenerator：运行期字节码生成器，句柄调用由原生解释器承载；
 # - FileSystems：默认文件系统持有者链（策略截断，见上）；
 # - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
 clinit_carried = [
     "java/lang/Module",
     "javax/crypto/JceSecurity",
-    "java/lang/invoke/InvokerBytecodeGenerator",
     "java/nio/file/FileSystems",
     "java/lang/Class",
     "java/lang/SecurityManager",
