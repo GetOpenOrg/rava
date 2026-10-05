@@ -371,3 +371,12 @@ platform unnamed != user: true
 实测于 c1d-a2c b47568ec，本地临时 runtime（锚点 `System.bootLayer`，`ModuleLayer` 移出 vm_boundary）。TestCustomException
 超过 300 类，按第 1 步规则另立精度项（URL / URI 协议事实 + 分派变宽限于 phase 帧），第 2–5 步以其为前置；
 二分与路径见 `2026-10-01-c1d-closure-bloat.md` §23.5。`SystemModules$default` 的 rustc 峰值内存未测。
+
+**2026-10-05 补测（c1d-boot 8bb25e10，详见 c1d 文档 §25）**：锚点加上 `Class.module`、删掉两处 `Class.getModule` 手写之后，
+HelloWorld 经 `FileOutputStream.<clinit>` → `SharedSecrets.ensureClassInitialized` → `VerifyAccess.isClassAccessible` 读到
+`Class.module`，从而作根，单例闭包 469 → 3190 类。全部用例都会这样作根。档案并集（服务器 1084 例，7886 类）只增加约 20 类，
+都是 `jdk/internal/module` 引导类。所以档案规模不是瓶颈，瓶颈是生产构建的单例规模。
+
+第 2–5 步暂不开工，前置条件见 c1d §25.4：`Class` 实例方法按接收者镜像求 `classLoader` / `module`、容器元素类型、实例汇合点。
+三项合入后重测，判据为 HelloWorld ≤ 569 类。具体求值器执行 initPhase2 的尝试在 `System.<clinit>` / SharedSecrets / `System.props`
+处失败，因为那需要构建期引导映像语义（§25.3），不在本线范围内。
