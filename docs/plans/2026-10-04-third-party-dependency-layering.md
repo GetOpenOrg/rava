@@ -271,15 +271,18 @@ user（bin）
 
 ### 3.6 库专属的手写与种子
 
+> 2026-10-06 用户改判：第三方库不设专属补种清单。`runtime/` 下只允许出现第三方库的 `ACC_NATIVE` 手写；纯 Java 库在 `runtime/` 下的专属文件数为 0。
+
 - **手写边界不变**（CLAUDE.md 第 1 条）：库的 `ACC_NATIVE` 方法（例如 commons-daemon 的 JNI、JNA 绑定）按第 ① 类准入手写。没有其他准入理由。
-- **位置**：`runtime/lib_runtime/<模块名>/`，与 `runtime/java_runtime/` 对称：
-  - `closure.toml` / `seeds.toml` 只写本库的边界、补种与手写登记；
+- **位置**：`runtime/lib_runtime/<模块名>/` 只为含 `ACC_NATIVE` 手写的库建立，与 `runtime/java_runtime/` 对称：
   - `src/<pkg>/<x>_impl.rs` 在生成时 overlay 进该库 crate，与 `<x>.rs` 共置（第 3 条）；
-  - 清单按模块名匹配，带 `versions = "[a,b)"` 区间，命中多个区间时报错。
+  - 清单 `manifest.toml` 按模块名匹配，带 `versions = "[a,b)"` 区间，命中多个区间时报错；只登记手写方法及其准入类别，**不含补种、不含边界截断**。
+  - 纯 Java 库（如 junit、hamcrest、gson、jackson）不建目录。
 - **种子**：库的可达性只由入口决定。`--lib … :seed=` 一类的整包或子集种子退出构建单元语义。
-  - 反射、注解驱动的入口（例如 JUnit 发现 `@Test` 时由框架反射调用用户方法，gson / jackson 按字段反射）由分析器的反射建模与 `seeds.toml` 补种覆盖；
-  - crate 验收（lib_pilot golden）需要整包翻译时，在验收的构建单元里以 `--seed-class` 入口显式给出。
-- 库专属清单的摘要只进入该库的 `K`，改动不波及 JDK。
+  - 反射、注解驱动的入口，由闭包分析器的**通用**反射与注解建模从字节码推出，不靠清单补种。例如 JUnit 发现 `@Test` 后由框架反射调用用户方法，gson / jackson 按字段反射。建模的流程是：类常量或 `Class` 值 → `getMethods` / `getDeclaredMethods` / `getDeclaredFields` → 按 `getAnnotation` / `isAnnotationPresent` / 修饰符过滤 → `Method.invoke` / `Constructor.newInstance` / `Field.get` / `Field.set`。分析器里不写库名、注解名（第 4 条同理推广到第三方库）。
+  - 分析器建模覆盖不了的反射入口，记为分析器缺口，修分析器；不以补种绕过。
+  - crate 验收（lib_pilot golden）需要整包翻译时，在验收的构建单元里以 `--seed-class` 入口显式给出。这是验收入口，不是库清单。
+- 库专属手写清单的摘要只进入该库的 `K`，改动不波及 JDK。
 
 ## 四、与现有实现的接口（问题 6）
 
@@ -366,6 +369,7 @@ user（bin）
    - B：按 (模块, jar sha256) 给库类分命名空间，多个版本并存于一个档案。它要求分析器把库类像用户类一样按入口隔离，并入时再按实例合并，复杂度高，收益只在语料。
 5. **库专属手写与清单的位置**
    - A（推荐）：`runtime/lib_runtime/<模块名>/`（清单 + `<x>_impl.rs`，带版本区间），只进该库的 `K`。
+   - **2026-10-06 用户定：采纳 A 的位置，但范围收窄为只放 `ACC_NATIVE` 手写与其登记；不设库专属补种，反射 / 注解入口走分析器通用建模（§3.6）。**
    - B：并入 `runtime/java_runtime/` 的三份清单。改动会让全部 JDK crate 的键失效。
 6. **生产模式的远端共享缓存**
    - A（推荐）：逐 crate 内容寻址的 store 本机缺省开启，远端 store（团队共享）为可选配置，协议沿用 cross-test §4 的分块校验。
