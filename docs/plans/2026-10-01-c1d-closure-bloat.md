@@ -2380,3 +2380,31 @@ native 缺失、`String.class.getModule()` 不是命名的 java.base），三者
 2. 生产构建是否允许声明「封闭类路径 / 固定系统属性」（如 `file.encoding`、`sun.jnu.encoding` 取构建机或清单值）：
    这是对运行环境的假设，不是无损精度，但能直接折叠 Charset / 安全配置家族（约 800 类）。
 3. §28.6 两项（约 −55 类）是否在前置合入前先做：收益小（约 1.7%），第 1 项需先补全触发边表。
+
+### 28.9 暂停记录与恢复入口（2026-10-05，按协调者要求暂停，c1d-sink 582cab3e 之后）
+
+**已完成**：§28.1–28.8 的分解与结论；诊断工具已提交（582cab3e，不改引擎语义）。本机已验证：无锚点 HelloWorld 仍为 469 / 1813；
+closure 单测 159 通过；`@edgeoff` 转储与旧格式排序后逐行一致。
+
+**在途作业（已按 PID 停掉调度进程；服务器上无残留进程，flock 锁随进程释放）**：
+
+| tag | 内容 | 停止时状态 |
+|---|---|---|
+| sink-ut-582cab3e | 全量单测（generator + rava_macros_core） | 未跑完（服务器被占，反复让出），无结果 |
+| sink-prof-582cab3e | 档案作业 24 片（同 c1de-prof-956db0b4 口径） | 第 01 / 02 / 03 / 05 / 09 片完成且 rc=0，其余 19 片未跑 |
+| sink-sp-582cab3e | 抽查 6 例 | TestCustomException / Fibonacci / ArrayListDemo 通过；HelloWorld / ComprehensiveTest / BubbleSort 未出结果 |
+
+服务器上留有这三个作业的检出目录（`/data/rava-spot-job-sink-{ut,prof}-582cab3e`、`/data/rava-spot-sink-sp-582cab3e`，
+ubuntu 上为 `/mnt/d/workspace/java_rta-spot-job-sink-*`），没有删除。恢复时可以复用，也可以按数据目录规则清掉。
+
+**未完成项（按顺序）**：
+1. 以 582cab3e（或恢复时的分支头）重发 sink-ut 全量单测作业。
+2. 重发档案作业。基线取 c1de-profb-8bb25e10：8bb25e10 → 0192bf20 没有代码差别，可以直接比较。逐例核对类 / 方法 / 反射集合
+   相等（本分支不改语义，判据是完全一致）。
+3. 抽查补齐：HelloWorld、ComprehensiveTest、BubbleSort。
+4. 按 §28.8 的用户决策推进：先做 §25.4 前置三项的合入复测；§28.6 两项（终态回收需要先补全触发边表；有界未知镜像要逐处处理
+   「所指未知」的站点）是否先做，等用户决定。
+5. 与并行线的合并风险：
+   - c1d-elem：只在本文档末尾追加时冲突，重排节号即可；
+   - v11-vn：`flow.rs::flow()` 首行相邻插入（`tau_check_flow` 与 `node_cut`）冲突，两行都保留即可；
+   - 其余文件自动合并。
