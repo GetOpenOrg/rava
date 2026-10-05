@@ -120,8 +120,8 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 |---|---|---|---|
 | B0 | 在当前 main 上重测 HelloWorld release 二进制的段构成（同一口径脚本化：`scripts/binsize.sh`） | 基线数字写回本文 | ✅ §一 B0 基线（binsize-meta） |
 | B1 | 元数据按档案、按类裁剪：反射成员表只为反射可达 / MH 可解析的类出行；行表只覆盖翻译方法；编码改为字符串池 + 字节流（LEB128 下标） | 生成器单测通过；反射 / 栈 / MH 类 e2e 抽查通过；HelloWorld 元数据段下降到 B0 的 ≤10% | ✅ 2682139c（抽查 18/18）：HelloWorld 元数据 3,506,260 → 255,720 B（7.3%），二进制 15,137,696 → 11,842,272 B，`__DATA_CONST,__const` 3,385,888 → 648,744 B（§一 B1 实测） |
-| B2 | 栈还原改为按地址查表（不依赖符号名），之后 release 加 `strip = "symbols"` | 打印栈类 e2e 输出不变；`__LINKEDIT` 降到 ≤0.5 MB | ⏳ ◀── B1 |
-| B3 | 体积档位评估：opt=s / z 在计算密集型 e2e（R1 超时用例等）上的性能对照 | 数据交用户决定是否提供体积档位 | ⏳ ◀── B2 |
+| B2 | 栈还原改为按地址查表（不依赖符号名），之后 release 加 `strip = "symbols"` | 打印栈类 e2e 输出不变；`__LINKEDIT` 降到 ≤0.5 MB | ✅ 8f5ad0c5（合并 6f9b189b）：release 验证 b2-8f5ad0c5-rel1 5/5 rc=0（ubuntu），HelloWorld release 7,410,488 B |
+| B3 | 体积档位评估：可选 `release-small`（opt "s"，不设 "z"）与缺省 release（opt 3）对照，三测点 + 构建峰值内存；改判规则：s 运行慢 <5% 且二进制小 >15% 则 s 转缺省 | 数据与结论写本文 §五 | ✅ 38c17d97（合并 5bc31469）：按规则维持 opt 3 缺省（LynchBell / Factorion 运行 +13%）；16 GB 机器上 opt 3 构建大闭包用例 OOM，作为缺省档约束交用户决定（§五） |
 | — | 每类 vtable 协议方法 | 归 S7-2 / S7-3 | 🔄 S7-2 进行中 |
 | — | 闭包多出 161 类（indy 67）、clinit 0.3 MB | 归闭包精度线（engine-order / C1d） | 🔄 |
 
@@ -131,6 +131,55 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
   - 链接器包装 `rava-link`：rava compile 以 cargo `--config target.<host>.linker` 指定。先照常链一次（不 strip），取 DWARF 和内联链，套用旧成帧规则：闭包帧不成帧、块外与序言不成帧。对照发射层写出的旁路行表 `closure_input/frame_lines.json`，生成表对象。再带上表对象重链一次，表进 `__DATA,__rava_pcmap`（ELF 为 `rava_pcmap`），校验两次链接的锚点与 `__text` 一致。
   - 二进制内的 `LINE_TABLES`（Rust 行表）删去，帧方法元数据改随地址表发射；`LINE_NUMBERS`（bci ↔ 行）保留。
   - release 加 `strip = "symbols"`。strip 在 rustc 链接之后执行，不影响包装内读 DWARF；Linux 第一次链接时去掉 `--strip-*`。
+
+## 五、B3 体积档位对照（2026-10-05）
+
+**实现（binsize-b3 38c17d97，合并 5bc31469）**
+- 发射层根 `Cargo.toml` 增加 `[profile.release-small]`：`inherits = "release"`、`opt-level = "s"`。缺省 release 不变：opt 3 + fat LTO + codegen-units 1 + `strip = "symbols"`。按用户 10-05 定，不设 "z" 档。
+- `rava build` / `rava compile` 增加 `--release-small`，与 `--dev-opt` / `--release` 三者互斥；`scripts/run_tests.py --release-small` 产物在 `target/release-small/`。
+- 对照脚本 `scripts/opt_profile_bench.py`：每例转译一次；各档在独立 target 目录冷编译（依赖一并重编，构建耗时可比）；交替轮转运行取中位数，输出与 `tests/expected` 逐字节核对。记四项：运行中位数、构建耗时、二进制大小（另记 `.text`），以及构建峰值内存（单个 rustc 进程的最大常驻集）。
+
+**实测一：ubuntu（x86_64，8 核，24 GB），作业 b3-bench2-b064f315**
+- 小用例每档运行 11 次，计算用例 5 次。输出全部一致。
+- 增减为 s 相对 opt 3。
+
+| 用例 | 运行中位数 opt 3 → s | 构建耗时 opt 3 → s | 构建峰值内存 opt 3 → s | 二进制 opt 3 → s |
+|---|---|---|---|---|
+| HelloWorld | 0.003 → 0.003 s（0%） | 139.7 → 104.9 s（−24.9%） | 1,835 → 1,368 MB | 7,619,968 → 6,152,768 B（−19.3%） |
+| ExceptionPropagation | 0.042 → 0.048 s（+14%，毫秒级，单次 0.028–0.067 s 噪声大） | 1,201.2 → 826.7 s（−31.2%） | **14,480** → 9,251 MB | 79,878,320 → 62,487,672 B（−21.8%） |
+| TestStackTraceOps | 0.009 → 0.009 s（0%） | 142.3 → 107.3 s（−24.6%） | 1,855 → 1,380 MB | 7,693,192 → 6,217,168 B（−19.2%） |
+| LynchBell | 120.90 → 136.95 s（**+13.3%**） | 141.4 → 106.2 s（−24.9%） | 1,832 → 1,369 MB | 7,618,296 → 6,160,664 B（−19.1%） |
+| Factorion | 34.78 → 39.37 s（**+13.2%**） | 140.2 → 105.3 s（−24.9%） | 1,827 → 1,369 MB | 7,629,168 → 6,163,424 B（−19.2%） |
+| DeepCopy / PrimorialNumbers / SelfNumbers | 作业在途（ubuntu 排队），结果出后补入 | | | |
+
+**实测二：16 GB 机器（ARM，8 核，16 GB；作业 cgroup 上限 11,891 MB），作业 b3-mem16-b064f315**
+- 每档运行 1 次，只看构建可行性与峰值内存。
+- 后四例 opt 3 都在 fat LTO 阶段被 OOM 杀；s 档全部构建成功、输出一致。
+
+| 用例 | opt 3 | s |
+|---|---|---|
+| HelloWorld | ✅ 138.2 s，峰值 1,843 MB，7,619,944 B，运行 0.003 s | ✅ 105.5 s，峰值 1,372 MB，6,152,736 B，运行 0.003 s |
+| TestStackTraceOps | ✅ 143.5 s，峰值 1,860 MB，7,693,208 B | ✅ 110.1 s，峰值 1,386 MB，6,217,184 B |
+| LynchBell | ✅ 143.2 s，峰值 1,840 MB，运行 63.6 s | ✅ 109.8 s，峰值 1,373 MB，运行 89.3 s（**+40.4%**） |
+| Factorion | ✅ 142.8 s，峰值 1,840 MB，运行 25.4 s | ✅ 109.0 s，峰值 1,372 MB，运行 31.2 s（**+22.5%**） |
+| ExceptionPropagation | 💥 OOM（1,118 s 时达上限） | ✅ 837 s，峰值 9,260 MB，62,487,720 B，运行 0.039 s |
+| DeepCopy | 💥 OOM（1,307 s） | ✅ 983 s，峰值 10,358 MB，70,773,960 B，运行 0.059 s |
+| PrimorialNumbers | 💥 OOM（1,127 s） | ✅ 831 s，峰值 9,244 MB，62,250,568 B，运行 42.3 s |
+| SelfNumbers | 💥 OOM（1,141 s） | ✅ 865 s，峰值 9,241 MB，62,243,440 B，运行 19.6 s |
+
+前一轮作业 b3-bench-38c17d97 在 kr2 上已出现同样现象：ExceptionPropagation opt 3 构建被 OOM 杀，s 档构建成功。
+
+**判读**
+- 体积：s 档二进制比 opt 3 小 19.1–21.8%，`.text` 小 33–35%，超过 15% 门槛。
+- 运行：计算密集用例 s 档变慢 13%（x86_64），ARM 上变慢 22–40%，远超 5% 门槛。启动级用例无差别。
+- 按 5%/15% 规则：**不改判**，缺省 release 维持 opt 3，`release-small` 作为可选体积档保留。
+- 构建：s 档构建耗时少 25–31%，构建峰值内存少 25–36%。
+- 16 GB 约束：大闭包用例（二进制 60–80 MB 级，ExceptionPropagation 等 4 例）在 opt 3 + fat LTO 下，单个 rustc 进程峰值 14.5 GB（x86_64 实测），16 GB 机器构建不出来。s 档峰值 9.2–10.4 GB，16 GB 机器可构建。
+- 待用户决定：上述 16 GB 约束是否改变缺省档位。规则本身判 opt 3。可选做法有三种：
+  - 维持 opt 3，构建机要求 ≥24 GB；
+  - 缺省改 s，opt 3 作为可选性能档；
+  - 按闭包规模分档。
+- HelloWorld 体积目标（≤3 MB）：opt 3 为 7.62 MB，s 档为 6.15 MB，都未达标。剩余差距在闭包规模与 vtable 协议方法（§四 末两行），不在优化档位。
 
 **与在途线的关系**
 - B1 改动的是表的内容与编码：`generator/crates/emit/src/project/meta_sides.rs`、`line_tables/`。
