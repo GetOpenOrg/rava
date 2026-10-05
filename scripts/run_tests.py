@@ -105,12 +105,14 @@ def fmt_dur(sec: float) -> str:
 
 
 # —— 四段超时各自独立常量，勿共用（各阶段正常耗时与病态形态不同）——
-# 运行段（cargo run）超时（秒）
+# 运行段（cargo run）超时（秒；--run-timeout 覆盖）
 RUN_TIMEOUT = 300
-# 转译段（rava build --stop-after emit：闭包分析 + 代码生成）超时（秒）
+# 转译段（rava build --stop-after emit：闭包分析 + 代码生成）超时（秒；--transpile-timeout 覆盖）
 TRANSPILE_TIMEOUT = 600
-# 构建段（rava compile）超时：--build-timeout 显式值透传；未给时由 rava 按重型判定取缺省
+# 构建段（rava compile）超时：--build-timeout 显式秒数透传；未给时由 rava 按重型判定取缺省，
+# --build-timeout-scale K 透传为缺省值的 K 倍（两者互斥）
 BUILD_TIMEOUT: "int | None" = None
+BUILD_TIMEOUT_SCALE: "int | None" = None
 # 透传给 rava build 的转译选项（--debug / --strict / --closure-json）
 MAIN_FLAGS: list[str] = []
 # 期望生成（--update-expected）的 java 参照运行超时（秒）：golden 语料应为秒级程序，
@@ -546,6 +548,9 @@ def _print_env_header() -> None:
     _flag_vars = ("CARGO_INCREMENTAL", "CARGO_BUILD_JOBS", "CARGO_PROFILE_DEV_DEBUG")
     _flags = " ".join(f"{k}={os.environ.get(k, '(unset)')}" for k in _flag_vars)
     _flags += f" options={' '.join(MAIN_FLAGS) or '(none)'}"
+    _build_to = (f"{BUILD_TIMEOUT}s" if BUILD_TIMEOUT is not None
+                 else f"缺省×{BUILD_TIMEOUT_SCALE}" if BUILD_TIMEOUT_SCALE is not None else "缺省")
+    _flags += f" timeout=transpile {TRANSPILE_TIMEOUT}s/build {_build_to}/run {RUN_TIMEOUT}s"
     _jdk = (f"jdk={JDK_REFERENCE}(参考构建)" if JDK_REFERENCE
             else f"jdk={os.environ.get('JAVA_HOME', '?')}(非参考构建)")
     print(f"[meta] git {_git_desc()} | {_jdk} | profile={PROFILE_DIR} | {_flags} | out={OUT}")
@@ -671,6 +676,8 @@ def _cargo_build(class_name: str, out_dir: Path) -> tuple[bool, str]:
         cmd.append("--keep-artifacts")
     if BUILD_TIMEOUT is not None:
         cmd += ["--build-timeout", str(BUILD_TIMEOUT)]
+    elif BUILD_TIMEOUT_SCALE is not None:
+        cmd += ["--build-timeout-scale", str(BUILD_TIMEOUT_SCALE)]
     r = _run(cmd, cwd=ROOT)
     st = _read_json(out_dir / "build_status.json")
     if st.get("ok") and st.get("stage") == "compile" and r.returncode == 0:
@@ -997,7 +1004,7 @@ def _apply_deny(deny: list[str],
     return 1 if failed else 0
 
 
-def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
+def _run_bin(class_name: str, timeout: "int | None" = None) -> tuple[str, str]:
     """直接执行 binary。返回 (状态, stdout)：状态 ∈ ok / timeout / error / killed。
 
     可观测性三件（hashCodeOfUnsigned 三轮反查的教训）：
@@ -1010,7 +1017,8 @@ def _run_bin(class_name: str, timeout: int = RUN_TIMEOUT) -> tuple[str, str]:
     bin_name = _to_bin_name(class_name)
     bin_path = SHARED_TARGET / _profile_dir(bin_name) / bin_name
     try:
-        r = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=timeout,
+        r = subprocess.run([str(bin_path)], capture_output=True, text=True,
+                           timeout=RUN_TIMEOUT if timeout is None else timeout,
                            env=_fixed_env(RUST_BACKTRACE="1"))
     except subprocess.TimeoutExpired:
         return "timeout", ""
@@ -1621,7 +1629,7 @@ def run_tests(filter_str: list[str] | None, no_run: bool, update_expected: bool,
 
 
 def main():
-    global OUT, SHARED_TARGET
+    global OUT, SHARED_TARGET, TRANSPILE_TIMEOUT, RUN_TIMEOUT
     ap = argparse.ArgumentParser(description="rava 端到端测试框架")
     ap.add_argument("--filter",          metavar="STR", nargs="+", help="只测试路径中包含任意指定字符串的文件（可传多个）")
     ap.add_argument("--no-run",          action="store_true", help="只生成 Rust，不执行对比（仅顺序模式）")
@@ -1662,6 +1670,12 @@ def main():
                          "stub-hit = run 失败的 stub 子族（二进制 stderr 含 `stub: `）")
     ap.add_argument("--build-timeout",   type=int, default=None, metavar="SEC",
                     help="单测试 cargo 构建超时秒数（透传 rava compile；缺省由 rava 按重型判定取值）")
+    ap.add_argument("--build-timeout-scale", type=int, default=None, metavar="K",
+                    help="构建超时取 rava 缺省值（按重型判定）的 K 倍（透传 rava compile；与 --build-timeout 互斥）")
+    ap.add_argument("--transpile-timeout", type=int, default=TRANSPILE_TIMEOUT, metavar="SEC",
+                    help=f"单测试转译段（闭包 + 发射）超时秒数（缺省 {TRANSPILE_TIMEOUT}）")
+    ap.add_argument("--run-timeout",     type=int, default=RUN_TIMEOUT, metavar="SEC",
+                    help=f"单测试运行段超时秒数（含失败分类重跑；缺省 {RUN_TIMEOUT}）")
     ap.add_argument("--debug",           action="store_true", help="透传 rava build --debug（转译诊断明细）")
     ap.add_argument("--strict",          action="store_true",
                     help="透传 rava build --strict（兜底硬失败 + 缺手写 native 编译报错）")
@@ -1669,9 +1683,18 @@ def main():
                     help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
     args = ap.parse_args()
 
-    global BUILD_TIMEOUT, MAIN_FLAGS, DYN_COMPARE
+    global BUILD_TIMEOUT, BUILD_TIMEOUT_SCALE, MAIN_FLAGS, DYN_COMPARE
     DYN_COMPARE = not args.no_dyn
+    if args.build_timeout is not None and args.build_timeout_scale is not None:
+        ap.error("--build-timeout 与 --build-timeout-scale 互斥")
+    for name in ("build_timeout", "build_timeout_scale", "transpile_timeout", "run_timeout"):
+        v = getattr(args, name)
+        if v is not None and v < 1:
+            ap.error(f"--{name.replace('_', '-')} 须为正整数：{v}")
     BUILD_TIMEOUT = args.build_timeout
+    BUILD_TIMEOUT_SCALE = args.build_timeout_scale
+    TRANSPILE_TIMEOUT = args.transpile_timeout
+    RUN_TIMEOUT = args.run_timeout
     MAIN_FLAGS = [f for f, on in (("--debug", args.debug), ("--strict", args.strict)) if on]
     # 动态对照读 closure_input/closure.json：rava build 缺省不写，开对照时要求写出
     if DYN_COMPARE:
