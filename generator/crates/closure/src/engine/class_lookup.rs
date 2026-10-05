@@ -81,6 +81,16 @@ pub(super) fn expand(parts: &[Part]) -> Option<Vec<Vec<Part>>> {
     Some(out)
 }
 
+/// 常量格给出的字符串常量（[`V::derived_str`]）按其来源处理，与常量格推不出时（同来源的引用值）同口径：
+/// 拆段只认本方法字面量的文本。常量格的中间态常量（如形参只有一个调用点时）若当字面量拆段，抬为 Top 后
+/// 已产出的点名 / 缺口不撤回，结果随处理顺序变化（D1）
+pub(super) fn by_source(v: V) -> V {
+    if !v.derived_str() {
+        return v;
+    }
+    V::Ref { ty: Some(Rc::from(STRING)), nonnull: true, src: v.srcs(), obj: None }
+}
+
 pub(super) fn site_of(v: &V) -> Option<u32> {
     match v {
         V::Ref { src, .. } if src.len() == 1 => match src[0] {
@@ -263,6 +273,7 @@ impl<'a> Engine<'a> {
     /// depth = 已穿过的辅助方法层数（名字由唯一目标的辅助方法拼出并返回时，进入其字节码继续拆）
     pub(super) fn name_parts(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Vec<Part>> {
         let (f, v) = f.resolve(v);
+        let v = by_source(v);
         if let V::Str(s, _) = &v {
             return Some(vec![Part::Lit(s.clone())]);
         }
@@ -336,6 +347,7 @@ impl<'a> Engine<'a> {
         let mut parts = Vec::with_capacity(segs.len());
         for (s, k) in segs {
             let (sf, s) = f.resolve(s);
+            let s = by_source(s);
             parts.push(match &s {
                 V::Str(x, _) => Part::Lit(x.clone()),
                 V::Null => Part::Lit(Rc::from("null")),

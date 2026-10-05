@@ -153,6 +153,99 @@ fn seeds_agree(case: &str) -> Option<[std::collections::BTreeSet<String>; 3]> {
     Some(base)
 }
 
+/// 一次 `rava closure -o`（附加参数 extra）的规范化闭包 JSON：去掉 `via` 与 `summary`，数组按规范文本排序
+fn closure_doc(java: &std::path::Path, extra: &[&str]) -> Option<serde_json::Value> {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!("rava_closure_order_{}_{n}.json", std::process::id()));
+    let mut args = extra.to_vec();
+    args.extend(["-o", out.to_str().unwrap()]);
+    closure_at(java, &args)?;
+    let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
+    let _ = std::fs::remove_file(&out);
+    let mut d: serde_json::Value = serde_json::from_str(&text).expect("闭包 JSON");
+    d.as_object_mut().expect("对象").remove("summary");
+    Some(norm_doc(d))
+}
+
+fn norm_doc(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => Value::Object(m.into_iter().filter(|(k, _)| k != "via").map(|(k, x)| (k, norm_doc(x))).collect()),
+        Value::Array(xs) => {
+            let mut xs: Vec<Value> = xs.into_iter().map(norm_doc).collect();
+            xs.sort_by_cached_key(|x| x.to_string());
+            Value::Array(xs)
+        }
+        x => x,
+    }
+}
+
+/// 两份规范化闭包 JSON 逐键（reflect 等再下一层）对照，返回差异键与示例
+fn doc_diffs(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
+    let flat = |d: &serde_json::Value| -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut out = std::collections::BTreeMap::new();
+        for (k, v) in d.as_object().expect("对象") {
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k2, v2) in m {
+                        out.insert(format!("{k}.{k2}"), elems(v2));
+                    }
+                }
+                _ => {
+                    out.insert(k.clone(), elems(v));
+                }
+            }
+        }
+        out
+    };
+    fn elems(v: &serde_json::Value) -> Vec<String> {
+        match v {
+            serde_json::Value::Array(xs) => xs.iter().map(|x| x.to_string()).collect(),
+            x => vec![x.to_string()],
+        }
+    }
+    let (fa, fb) = (flat(a), flat(b));
+    let keys: std::collections::BTreeSet<&String> = fa.keys().chain(fb.keys()).collect();
+    let mut out = vec![];
+    for k in keys {
+        let empty = vec![];
+        let (xa, xb) = (fa.get(k).unwrap_or(&empty), fb.get(k).unwrap_or(&empty));
+        if xa != xb {
+            let only_a: Vec<_> = xa.iter().filter(|x| !xb.contains(x)).take(3).collect();
+            let only_b: Vec<_> = xb.iter().filter(|x| !xa.contains(x)).take(3).collect();
+            out.push(format!("{k}：仅基准 {only_a:?} / 仅本例 {only_b:?}"));
+        }
+    }
+    out
+}
+
+/// D1：闭包与处理顺序无关——流传播批量（`--flow-batch`）× 哈希种子（`--hash-seed`）的各组合下闭包 JSON
+/// （类、方法含 kind / 截断标记、反射成员与缺口、折叠等全部键，via 除外）逐项相同。
+/// HelloWorld 跑全矩阵；DeepCopy（按名查方法 / 反射调用池 / 形参常量格窗口的回归例）跑对角组合
+#[test]
+fn closure_independent_of_order() {
+    const BATCHES: [&str; 5] = ["1", "7", "64", "512", "4096"];
+    const SEEDS: [&str; 4] = ["0", "1", "2", "12345"];
+    let e2e = manifest_dir().join("../../../tests/e2e");
+    let hello = e2e.join("01_basics/HelloWorld.java");
+    let Some(base) = closure_doc(&hello, &[]) else { return };
+    for b in BATCHES {
+        for s in SEEDS {
+            let cur = closure_doc(&hello, &["--flow-batch", b, "--hash-seed", s]).expect("同一 JDK");
+            let d = doc_diffs(&base, &cur);
+            assert!(d.is_empty(), "HelloWorld batch {b} seed {s} 与缺省不同：\n{}", d.join("\n"));
+        }
+    }
+    let deep = e2e.join("23_algorithms/DeepCopy.java");
+    let base = closure_doc(&deep, &[]).expect("同一 JDK");
+    for (b, s) in [("1", "1"), ("7", "2"), ("512", "12345"), ("4096", "0")] {
+        let cur = closure_doc(&deep, &["--flow-batch", b, "--hash-seed", s]).expect("同一 JDK");
+        let d = doc_diffs(&base, &cur);
+        assert!(d.is_empty(), "DeepCopy batch {b} seed {s} 与缺省不同：\n{}", d.join("\n"));
+    }
+}
+
 /// 大用例的顺序无关性（单次闭包约 5 分钟 / 6 GB，缺省不跑）：
 /// `CARGO_BUILD_JOBS=2 python3 <heavy_lock.py> cargo test --release -p driver --test closure_cli -- --ignored`；
 /// 换运行期探针（访问器宏形态）见 `scripts/diag/probe_order.sh`
