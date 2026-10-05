@@ -271,6 +271,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 - `r1n-time4-5f87b295`（sg2）：其余 4 例 dev-opt。
 - `r1n-time-5f87b295`（kr1，5 例 dev-opt）：与 kr1 上 `d5ef6f58` 用户 opt 0 的 268.8 s 对照。
 - TestVirtualThreadScale 在 `r1n-uopt-d5ef6f58` 中 opt 0 / 1 输出 md5 不同（`aa2a1714` / `e2b802a5`），已核实只是时序差：按测试的四行输出逐一重算，`finished: 100000`、`sum: 4999950000`、`alive after join: 0` 两档相同，只有 `all sleeping at once` 不同——opt 0 为 `false`（md5 `aa2a1714`），opt 1 为 `true`（md5 `e2b802a5`，与 JDK 期望一致）。该行取决于 10⁵ 个虚拟线程能否在第一个线程 2 s 睡醒前全部起跑；opt 0 下创建约 42 µs/个，合计超过 2 s。`r1n-uoptvt-5f87b295`（sg1）会打印两档原文作旁证。
+- 抽查 `r1n-sp-5f87b295` 的 2 例失败都不是本线回归：TestVarHandleArray 是抽查名单写错，库内无此用例（日志为 `No test files found`）；TestMultiArray 是 ubuntu 上 cargo 拉取 crates-io 索引超时（`failed to get libc … transfer too slow`），未进入编译。复核 `r1n-sp2-204f8cbe`（TestMultiArray 与真实覆盖数组 VarHandle 的 TestVarHandleRefRmw / TestVarHandleBitwise / TestVolatilePrimitiveAccess）：TestVarHandleRefRmw 已通过，其余在途；`r1n-sp-204f8cbe` 中 SelfNumbers 已通过。
 
 **前后对照**（`d28fd72e` 为 r1-next 之前，sg2，作业 `r1s-time2-d28fd72e`；`dbe90052` 为第 16–18 条之后，sg2，作业 `r1n-time-dbe90052`；运行段，dev-opt）：
 
@@ -284,7 +285,7 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 
 - 二进制 421 MB → 345 MB（−18%）。
 - 构建 8 m 45 s–9 m 05 s → 7 m 30 s 左右（−15%）。
-- FibonacciMatrixExponentiation 慢 28%。同例在 kr1 的 `d5ef6f58` 上为 214 s，在 sg2 的基线 `2602f409` 上为 245.1 s，单次样本，待 `r1n-time4-5f87b295` 复核。
+- FibonacciMatrixExponentiation 慢 28%。同例在 kr1 的 `d5ef6f58` 上为 214 s，在 sg2 的基线 `2602f409` 上为 245.1 s，单次样本，待 `r1n-time4-5f87b295` 复核。复核结果（`r1n-time4-5f87b295`，sg2，`5f87b295`，用户 crate 仍为 opt 0）：运行 121.6 s（构建 8 m 53 s、二进制 364.9 MB），低于 `d28fd72e` 的 172.5 s 与基线 245.1 s，第 20 条运行时侧修复后不再变慢。其余 3 例与 SelfNumbers 的同机计时（`r1n-time4` / `r1n-sn` / `r1n-time-5f87b295`）在本线 6 h 时限内未跑完，交主会话收取。
 - 原定的「前」作业 `r1n-time-6a3c051e` 在 sg2 排队约 1.5 小时未启动，已撤下，让位给 `r1n-sn-5f87b295`。
 
 **已决**（10-05 用户采纳，`91337dc9`，见第 6 条）：dev-opt 档用户 crate 的 opt-level 由 0 改为 1。上文第 6 条 Q3 定为 0，理由是「用户 crate 每例重编保持 dev 速度」；上表实测构建耗时与二进制持平，SelfNumbers 运行段降为 1/11。运行时侧（第 20 条）只能压缩运行时自身的调用层，用户方法体里的 `?`、`wrapping_add`、引用计数增减等在 opt-level 0 下仍逐个是调用。改动是去掉生成的 workspace `Cargo.toml` 里的 `[profile.dev-opt.package.user]` 段，不涉及翻译逻辑。第 20 条的运行时侧修复照常保留，作为 opt 0 依赖库层面的收益记录。
