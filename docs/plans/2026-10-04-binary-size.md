@@ -186,3 +186,62 @@ HelloWorld 不是计算密集型，运行耗时差异属噪声。
 - B1 改动的是表的内容与编码：`generator/crates/emit/src/project/meta_sides.rs`、`line_tables/`。
 - M2（按模块切 crate）在改同一目录的 crate 布局；M3 负责元数据表按模块归属。
 - B1 不动 crate 布局；M2 合入后同步一次。M3 实施时沿用 B1 的编码。
+
+## 六、B4 内存安全的缺省构建档（2026-10-06，暂停记录 + 恢复入口）
+
+**用户决定（10-06）**：「运行效率和二进制大小的问题先放一边，要确保在我现有资源条件下能够编译通过，特别是在内存不足的时候。后面我会使用性能更好的机器来进行打包编译，但是开发的时候要资源友好一些。」
+
+**终态目标**
+- 缺省 release 以内存为硬约束：B3 八例在 16 GB 机器（作业 cgroup 上限 11,891 MB）上 0 OOM，构建进程树峰值 ≤ 上限 85%（10,107 MB）；满足者中取运行最快，体积作次序。
+- opt 3 + fat LTO + cgu 1 移入 `--release-max`（大机器打包档）。
+- 内存感知作业数：rava 构建时读可用内存，据此定 cargo 并行作业数，作业叠加不得 OOM（终态规则，非失败重试）。
+
+**状态：暂停（10-06 用户定 C4 全量正确性优先，非正确性线让出服务器）。** 分支 build-memsafe，head 见提交记录。
+
+### 6.1 已实现（build-memsafe，未合入）
+
+- be06b815：`scripts/opt_profile_bench.py` 候选档（以 `CARGO_PROFILE_RELEASE_*` 环境覆写 release）：`o3-fat`、`o3-thin`、`o3-thin16`、`o3-local16`（`lto = false` 即 crate 内 thin-local）、`o2-thin`、`s-fat`，及 `release` / `release-small` / `release-max` / `dev`。增记构建进程树常驻集峰值（0.5 s 采样）、cgroup `memory.current` 峰值、逐 crate rustc 峰值（`RUSTC_WRAPPER=scripts/crate_mem_profile.py`，`b4_<例>_<档>_crates.jsonl`）与各 crate 源码量（`b4_<例>_src.json`）。
+- 16d5ef4a / ec937f6a：
+  - 发射层根 `Cargo.toml`：`[profile.release]` 暂定 opt 3 + **thin LTO** + cgu 1（待 6.3 定档）；`[profile.release-max]` = `inherits release` + `lto = true` + cgu 1；`release-small` 改继承 `release-max`（opt "s" + fat，与 B3 实测一致）。
+  - `rava build` / `rava compile` 增 `--release-max`（四档互斥），`scripts/run_tests.py --release-max`（产物 `target/release-max/`）。
+  - 内存感知作业数（`generator/crates/driver/src/mem_probe.rs`、`mem_budget.rs`）：可用内存 A = `--build-mem-mb` 或 min(MemAvailable, 各级 cgroup v2/v1 余量（不活跃文件页不计占用）, macOS vm_stat)；预算 B = 85% A；逐 crate 估计 E = 基数 + 斜率 × 源码 MB，LTO 档位下 user crate 另按全工作区源码估全程序链接；J = 「最大的 J 个 E 之和 ≤ B」的最大 J，上限为调用方 `CARGO_BUILD_JOBS` 否则核数；单进程估计超 B 时 J = 1 并告警；探测不到时 J = 上限。决定写入 `build_status.json` 的 `mem` 字段并打印 `[cargo-env]`。旧「重型闭包 ≥1700 类 → jobs 1」规则删除，`Heavy` 只余超时判定。
+  - 系数目前为**暂定值**（`Model::of`），待 6.3 校准。
+
+### 6.2 候选实测（作业 b4-mem16-be06b815，16 GB ARM，cargo jobs 4，每档运行 1 次）
+
+结果目录 `server_maintenance/rava/test_results/job/b4-mem16-be06b815/0N/b4_*`。小闭包四例（总源码约 11.3 MB）全部构建成功、输出一致：
+
+| 用例 | 档位 | 构建 s | 单 rustc 峰值 MB | 进程树峰值 MB | cgroup 峰值 MB | 二进制 B | 运行 s |
+|---|---|---|---|---|---|---|---|
+| HelloWorld | o3-thin | 109.9 | 1,595 | 2,870 | 3,260 | 8,550,424 | 0.003 |
+| | o3-thin16 | 85.8 | 1,380 | 2,117 | 2,393 | 8,793,104 | 0.004 |
+| | o3-local16 | 78.9 | 1,402 | 2,727 | 2,986 | 8,876,984 | 0.004 |
+| | s-fat | 113.2 | 1,376 | 2,602 | 3,013 | 6,301,712 | 0.003 |
+| TestStackTraceOps | o3-thin | 110.2 | 1,554 | 2,930 | 3,322 | 8,627,680 | 0.006 |
+| | o3-thin16 | 89.3 | 1,387 | 2,136 | 2,412 | 8,874,816 | 0.006 |
+| | o3-local16 | 80.5 | 1,420 | 2,739 | 2,993 | 8,976,144 | 0.006 |
+| | s-fat | 113.9 | 1,386 | 2,644 | 3,056 | 6,366,096 | 0.006 |
+| LynchBell | o3-thin | 106.9 | 1,588 | 2,915 | 3,290 | 8,543,880 | 70.7 |
+| | o3-thin16 | 86.4 | 1,368 | 2,031 | 2,342 | 8,815,624 | 65.1 |
+| | o3-local16 | 78.1 | 1,397 | 2,698 | 2,947 | 8,910,272 | 88.1 |
+| | s-fat | 111.5 | 1,375 | 2,613 | 3,010 | 6,309,696 | 88.1 |
+| Factorion | o3-thin | 110.5 | 1,574 | 2,805 | 2,651 | 8,559,176 | 26.1 |
+| | o3-thin16 | 87.4 | 1,380 | 2,139 | 1,863 | 8,808,312 | 27.7 |
+| | o3-local16 | 80.1 | 1,421 | 2,700 | 2,418 | 8,890,288 | 33.4 |
+| | s-fat | 112.5 | 1,374 | 2,591 | 2,454 | 6,313,024 | 29.1 |
+
+逐 crate 峰值（HelloWorld）：java_base_decl 5.4 MB 源码 → 1.38–1.54 GB；body crate 约 3 MB → 0.85–1.1 GB；user crate（全程序链接）o3-thin 1,595 / thin16 505 / local16 266 / s-fat 1,341 MB。
+
+**初步判读（单次运行，需 ubuntu 多次中位数确认）**：小闭包下四档构建内存都远低于上限；运行上 o3-thin / o3-thin16 明显快于 o3-local16 与 s-fat（LynchBell 65–71 s 对 88 s，Factorion 26–28 s 对 29–33 s）。
+
+**在途 / 未完成**（暂停时）：
+- 大闭包四例（ExceptionPropagation job 01 jp1、DeepCopy 02 jp2、PrimorialNumbers 03 kr1、SelfNumbers 04 kr2）仍在跑，按协调要求跑完不再续发；结果落同一目录 `01`–`04`。这四例才是定档关键（B3 fat LTO 单 rustc 14.5–15.7 GB）。
+- ubuntu 多次中位数作业 b4-bench-be06b815（o3-thin / o3-thin16 / o3-local16）一直排队未执行，已按 PID 停止。
+
+### 6.3 恢复入口
+
+1. 读取 b4-mem16-be06b815 的 `01`–`04`：`b4_*.json`（进程树 / cgroup 峰值、运行、体积）与 `*_crates.jsonl`。若某档 OOM 或进程树峰值 > 10,107 MB 则淘汰。
+2. 在 ubuntu 重发多次中位数作业（同 b4-bench 命令，候选为 6.2 及大例存活者），记运行 / 构建耗时 / 构建峰值 / 体积四项。
+3. 定缺省 `[profile.release]`（发射层 `generator/crates/emit/src/project/entry.rs`），以逐 crate 数据校准 `mem_budget.rs` 的 `Model::of` 系数（含 dev 档；dev 需补测以覆盖旧重型规则）。
+4. 16 GB 机器验收作业：`--profiles release`（内存感知作业数）8/8 构建成功且输出一致；服务器跑全量单测 rc=0（含 JDK 字面量 lint）。
+5. 更新 `docs/environment-variables.md`（`--release-max`、`--build-mem-mb`、内存感知作业数一节替换「重型闭包的自动处理」、`CARGO_BUILD_JOBS` 改为上限、`build_status.json` 的 `mem`）、CLAUDE.md 选项列表、`docs/tasks.md` BS-B4 行，并补本节定档结论。
