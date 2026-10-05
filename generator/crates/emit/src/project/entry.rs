@@ -341,9 +341,10 @@ fn with_dep_lines(content: String, crates: &[String]) -> String {
     }
 }
 
-/// user/Cargo.toml（批量模式为追加 `[[bin]]`）、根 Cargo.toml、strict.txt、jdk_feature.txt
+/// user/Cargo.toml（批量模式为追加 `[[bin]]`）、根 Cargo.toml、strict.txt、jdk_feature.txt。
+/// `decl_uppers`：根声明层的上层段 crate（链序，不分段时为空）
 pub fn write_cargo_files(
-    ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str, libs: &[&str], bodies: &[&str],
+    ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, bin_name: &str, libs: &[&str], bodies: &[&str], decl_uppers: &[&str],
 ) -> Result<()> {
     let user_dir = out_dir.join("user");
     if ctx.opts.batch {
@@ -369,6 +370,7 @@ pub fn write_cargo_files(
     let crates = ctx.crates();
     let decl = crates.decl();
     let members: Vec<String> = std::iter::once(decl.as_str())
+        .chain(decl_uppers.iter().copied())
         .chain(bodies.iter().copied())
         .chain(crates.all().iter().map(|c| c.name.as_str()))
         .chain([META_CRATE])

@@ -7,6 +7,7 @@
 mod archive_side;
 pub mod meta_sides;
 pub mod decl_segments;
+pub mod decl_side;
 pub mod entry;
 pub mod fs;
 pub mod layers;
@@ -234,13 +235,20 @@ fn finish_phase2(
     Ok(disp)
 }
 
-/// 拆层后各 crate 规模：根声明层（类数取根模块布局，与重型判定同源）→ 其余模块 crate 与 lib（名字序）→
-/// 实现层 `<根>_body_k` → user
+/// 拆层后各 crate 规模：根声明层底段（类数取根模块布局减上层段，与重型判定同源）→ 声明层上层段 →
+/// 其余模块 crate 与 lib（名字序）→ 实现层 `<根>_body_k` → user
 fn crate_stats(
     ems: &IndexMap<String, ClassEmission>, body: &layers::BodyPlan, crates: &ModuleCrates, root_classes: usize,
+    seg_srcs: &[PathBuf],
 ) -> Vec<CrateStat> {
     let mut by_crate: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut by_seg: Vec<(usize, usize)> = vec![(0, 0); seg_srcs.len()];
     for em in ems.values() {
+        if let Some(s) = seg_srcs.iter().position(|s| em.path.starts_with(s)) {
+            by_seg[s].0 += 1;
+            by_seg[s].1 += em.text.len();
+            continue;
+        }
         let e = by_crate.entry(em.crate_name.as_str()).or_default();
         e.0 += 1;
         if !em.handwritten {
@@ -250,7 +258,9 @@ fn crate_stats(
     let stat = |name: &str, classes: usize, bytes: usize| CrateStat { name: name.to_string(), classes, bytes };
     let decl = by_crate.remove(crates.root()).unwrap_or_default();
     let user = by_crate.remove(USER_CRATE);
-    let mut out = vec![stat(&crates.decl(), root_classes, decl.1)];
+    let moved: usize = by_seg.iter().map(|s| s.0).sum();
+    let mut out = vec![stat(&crates.decl(), root_classes.saturating_sub(moved), decl.1)];
+    out.extend(by_seg.iter().enumerate().map(|(j, (c, b))| stat(&crates.decl_segment(j + 1), *c, *b)));
     out.extend(by_crate.iter().map(|(n, (c, b))| stat(n, *c, *b)));
     out.extend(body.crates.iter().map(|c| stat(&c.name, c.files.len(), c.files.values().map(String::len).sum())));
     out.extend(user.map(|(c, b)| stat(USER_CRATE, c, b)));
@@ -307,8 +317,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let readability = crate::audit::readability_counts(ems.values().map(|em| em.text.as_str()));
     // S4 物理拆层：根模块生成类分声明层（原位）与实现层（`<根>_body_k`）；其余模块 crate 不拆
     let body_plan = layers::split(ctx, &mut ems, &decl_src)?;
+    // D8：声明层按签名 SCC 分段（上层段类改落 `<根>_decl_<j>`）
+    let segs = decl_side::segment(ctx, &mut ems, &decl_src, out_dir);
     let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();
-    perf.crates = crate_stats(&ems, &body_plan, crates, root_classes);
+    perf.crates = crate_stats(&ems, &body_plan, crates, root_classes, &segs.upper_srcs(out_dir));
     perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
@@ -318,10 +330,11 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
+    segs.write_crates(ctx, &mut w, out_dir, &decl_src)?;
     perf.mark("mod_tree");
-    module_side::write_module_crates(ctx, &mut w, out_dir)?;
-    libs.write_crates(ctx, &mut w, out_dir)?;
-    body_plan.write_crates(ctx, &mut w, out_dir)?;
+    module_side::write_module_crates(ctx, &mut w, out_dir, segs.top())?;
+    libs.write_crates(ctx, &mut w, out_dir, segs.top())?;
+    body_plan.write_crates(ctx, &mut w, out_dir, segs.top())?;
     // FS-E1：落盘文本的 Java 行表（拆层后各文件的最终行号）
     let body_files = body_plan.files(out_dir);
     let mut final_files = files;
@@ -334,18 +347,21 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&decl_src, &runtime_src, &mut w)?;
-    module_side::write_facade(&mut w, out_dir, crates, &body_names)?;
+    module_side::write_facade(&mut w, out_dir, crates, segs.top(), &body_names)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;
     let lib_names: Vec<&str> = libs.names().collect();
     let lib_srcs: Vec<PathBuf> = lib_names.iter().map(|n| out_dir.join(n).join("src")).collect();
-    let archive_roots: Vec<&Path> = jdk_srcs.iter().chain(lib_srcs.iter()).map(PathBuf::as_path).collect();
+    let seg_srcs = segs.upper_srcs(out_dir);
+    let archive_roots: Vec<&Path> = jdk_srcs.iter().chain(&seg_srcs).chain(lib_srcs.iter()).map(PathBuf::as_path).collect();
     meta_sides::write_archive(ctx, &mut w, out_dir, &archive_roots)?;
-    entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names)?;
+    let seg_names: Vec<&str> = segs.uppers().collect();
+    entry::write_cargo_files(ctx, &mut w, out_dir, &bin, &lib_names, &body_names, &seg_names)?;
     if ctx.opts.archive {
         let decl = crates.decl();
         let stamped: Vec<&str> = std::iter::once(decl.as_str())
+            .chain(seg_names.iter().copied())
             .chain(crates.all().iter().map(|c| c.name.as_str()))
             .chain([entry::META_CRATE])
             .chain(body_names.iter().copied())

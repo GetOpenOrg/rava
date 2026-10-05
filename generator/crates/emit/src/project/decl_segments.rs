@@ -46,6 +46,7 @@ impl DeclGraph {
         let n = nodes.len();
         let mut by_path: HashMap<(&str, &str), usize> = HashMap::new();
         let mut by_ident: HashMap<&str, Vec<usize>> = HashMap::new();
+        let by_key: HashMap<&str, usize> = nodes.iter().enumerate().map(|(i, nd)| (nd.key, i)).collect();
         for (i, nd) in nodes.iter().enumerate() {
             by_path.insert((nd.pkg.as_str(), nd.ident.as_str()), i);
             by_ident.entry(nd.ident.as_str()).or_default().push(i);
@@ -55,6 +56,12 @@ impl DeclGraph {
             edges[i].insert(n);
             for path in crate_paths(nd.text) {
                 if let Some(j) = resolve(&path, &by_path).filter(|&j| j != i) {
+                    edges[i].insert(j);
+                }
+            }
+            // 宏属性里的 binary name（`super_class` / `all_supertypes` / `virtual_in` 等）：宏展开按它生成路径
+            for lit in string_literals(nd.text) {
+                for j in lit.split(';').filter_map(|b| by_key.get(b).copied()).filter(|&j| j != i) {
                     edges[i].insert(j);
                 }
             }
@@ -335,6 +342,33 @@ fn matching_brace(text: &str, open: usize) -> usize {
     text.len().saturating_sub(1).max(open)
 }
 
+/// 文本中含 `/` 的字符串字面量内容（binary name 形态的候选）
+fn string_literals(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(p) = rest.find('"') {
+        let body = &rest[p + 1..];
+        let mut end = None;
+        let mut esc = false;
+        for (i, c) in body.char_indices() {
+            match c {
+                '\\' if !esc => esc = true,
+                '"' if !esc => {
+                    end = Some(i);
+                    break;
+                }
+                _ => esc = false,
+            }
+        }
+        let Some(e) = end else { break };
+        if body[..e].contains('/') {
+            out.push(&body[..e]);
+        }
+        rest = &body[e + 1..];
+    }
+    out
+}
+
 /// 手写文本中的标识符（去行注释、块注释与字符串字面量）
 pub fn idents(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -420,6 +454,18 @@ mod tests {
         let t = "// Foo\nlet a: Bar = \"Baz \\\" Qux\"; /* Zed */ x1";
         let got: Vec<String> = idents(t).into_iter().collect();
         assert_eq!(got, vec!["Bar", "a", "let", "x1"]);
+    }
+
+    #[test]
+    fn attribute_binary_names_are_edges() {
+        let nodes = vec![
+            node("a/A", "a", "A", ""),
+            node("a/B", "a", "B", "#[super_class = \"a/A\"] #[all_supertypes = \"a/C;x/Y\"]"),
+            node("a/C", "a", "C", ""),
+        ];
+        let g = DeclGraph::build(&nodes, &[], &[]);
+        assert_eq!(g.edges[1], vec![0, 2, 3]);
+        assert_eq!(string_literals("f(\"a\\\"/b\", \"c\") \"d/e\""), vec!["a\\\"/b", "d/e"]);
     }
 
     #[test]
