@@ -331,3 +331,15 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 | U4 | 映像装载形态 | 甲：启动时批量建对象（约 0.4 ms）/ 乙：arena 永久区零拷贝（依赖 S7 句柄设计） | 终态取乙；S7 未定前先实施甲作为装载层，不影响映像格式 |
 | U5 | 映像所在的档案层 | 放在 `java_base` 档案内 / 独立 `boot_image` crate | `java_base` 内（引用的类全属 java.base） |
 | U6 | 实施次序与在途精度线 | 先做映像，再测 §25.2 的 1852 类 / 先等「Class 接收者逐镜像求值」 | 并行：两者正交，第 3 步验收时合测 |
+
+### 8.1 用户决策（2026-10-05）
+
+| # | 决定 |
+|---|---|
+| U0 | 立项：作为 a3 余项与 boot-layer 第 2–5 步的前置，取代第 2–3 步的锚点机制 |
+| U1 | **运行期取宿主值**（不钉值）：`sun.jnu.encoding`、`stdout/stderr.encoding`、`file.encoding`、`line.separator`、`java.home` 的读取方按延迟值处理，相关类转运行期初始化，initPhase1 的 Charset 分支在运行期执行；须实测连带转运行期的类集合及其对映像规模、HelloWorld 闭包（目标 ≤569）的影响 |
+| U2 | 固定 SALT 种子（经 `CDS.getRandomSeedForDumping`），与 CDS dump 一致 |
+| U3 | 按建议：运行期重放 `toFileURL` |
+| U4 | **直接做 arena 永久区零拷贝**（终态），不经启动期批量建对象的过渡形态；依赖的 S7 句柄设计作为本线前置一并定稿 |
+| U5 | 按建议：映像放在 `java_base` 档案内 |
+| U6 | 按建议：与「Class 接收者逐镜像求值」并行，第 3 步验收时合测 |
