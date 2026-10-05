@@ -61,26 +61,6 @@ kind = "class_definition"
 reason = "生成解释入口隐藏类 → 解释入口"
 
 [[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.lookupPregenerated:(Ljava/lang/invoke/LambdaForm;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MemberName;"
-kind = "class_definition"
-reason = "查 jlink 预生成 LambdaForm Holder 类（运行期按名加载）→ null，走解释"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:([Ljava/lang/invoke/LambdaForm$NamedFunction;)Z"
-kind = "bytecode_generator"
-reason = "「生成的字节码能否直接 invokestatic 成员」；生成链截断后仅断言消费，解释器对全部成员可调 → 恒 true"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/LambdaForm$Name;)Z"
-kind = "bytecode_generator"
-reason = "同上"
-
-[[intrinsic]]
-member = "java/lang/invoke/InvokerBytecodeGenerator.isStaticallyInvocable:(Ljava/lang/invoke/MemberName;)Z"
-kind = "bytecode_generator"
-reason = "同上"
-
-[[intrinsic]]
 member = "jdk/internal/reflect/AccessorUtils.isIllegalArgument:(Ljava/lang/Class;Ljava/lang/RuntimeException;)Z"
 kind = "stack_frame"
 reason = "栈帧规则「途经 java.base 帧继续、遇用户帧判目标抛出」由 L3 分派登记等价（reflect_dispatch::thrown_by_target：仅经用户成员逃逸者登记）"

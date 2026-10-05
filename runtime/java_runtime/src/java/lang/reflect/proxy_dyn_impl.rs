@@ -83,8 +83,8 @@ impl Proxy_Dyn {
         })
     }
 
-    /// 接口方法调用（接口载体分派回退点）：转入 `dispatch(Method, Object[])`。
-    #[jvm_boundary]
+    /// 接口方法调用（接口载体分派回退点）：转入 `dispatch(Method, Object[])`。VM 钩子（非 Java 成员，
+    /// 类 2：动态代理由 VM 支持类 Proxy$Dyn 承载，登记见 vm_intrinsics.toml Proxy.newProxyInstance）。
     pub fn __vm_proxy_invoke(&self, iface: &str, name: &str, desc: &str, args: Vec<Object>) -> Result<Object> {
         let m = proxy_method(iface, name, desc)?;
         let kinds = param_kinds(desc);
