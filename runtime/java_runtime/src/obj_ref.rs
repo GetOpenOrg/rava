@@ -47,7 +47,7 @@ impl<T> __Obj<T> {
     #[inline]
     pub fn new(value: T) -> __Obj<T> {
         // SAFETY: 尾随 0 个元素，初始化闭包写入值
-        unsafe { Self::alloc_with(0, |p| p.write(value)) }
+        unsafe { Self::alloc_with(0, false, |p| p.write(value)) }
     }
 
     /// 分配值之后紧随 `trailing` 字节的对象（数组元素）：`init` 收到值地址，负责写入值与尾随元素。
@@ -57,16 +57,26 @@ impl<T> __Obj<T> {
     /// `size_of::<T>()` 须满足元素对齐（元素对齐 ≤ 16 且整除 `size_of::<T>()` 对齐后的位置）。
     #[inline]
     pub unsafe fn new_trailing(trailing: usize, init: impl FnOnce(*mut T)) -> __Obj<T> {
-        unsafe { Self::alloc_with(trailing, init) }
+        unsafe { Self::alloc_with(trailing, false, init) }
+    }
+
+    /// 同 [`Self::new_trailing`]，但尾随区预先清零（`alloc_zeroed`：大块直接取自零页，不逐元素写入）。
+    /// `init` 只需写入值；全零位形即元素的合法初值时使用（基本类型数组的 Java 默认值）。
+    ///
+    /// # Safety
+    /// 同 [`Self::new_trailing`]；另须全零位形是尾随元素的合法值。
+    #[inline]
+    pub unsafe fn new_trailing_zeroed(trailing: usize, init: impl FnOnce(*mut T)) -> __Obj<T> {
+        unsafe { Self::alloc_with(trailing, true, init) }
     }
 
     #[inline]
-    unsafe fn alloc_with(trailing: usize, init: impl FnOnce(*mut T)) -> __Obj<T> {
+    unsafe fn alloc_with(trailing: usize, zeroed: bool, init: impl FnOnce(*mut T)) -> __Obj<T> {
         const { assert!(std::mem::align_of::<T>() <= ALIGN, "对象值的对齐超过 16") };
         let size = (HEAD + std::mem::size_of::<T>() + trailing).next_multiple_of(ALIGN);
         let layout = Layout::from_size_align(size, ALIGN).expect("对象大小溢出");
         // SAFETY: size ≥ HEAD > 0
-        let base = unsafe { std::alloc::alloc(layout) };
+        let base = unsafe { if zeroed { std::alloc::alloc_zeroed(layout) } else { std::alloc::alloc(layout) } };
         if base.is_null() {
             std::alloc::handle_alloc_error(layout);
         }

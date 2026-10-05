@@ -70,6 +70,24 @@ impl<T: 'static> __ArrayObj<T> {
         }
     }
 
+    /// 元素取默认值的自有元素数组（newarray / anewarray）：基本元素的 Java 默认值（0 / false / +0.0）
+    /// 位形全零，分配时清零即完成初始化，不逐元素写入；引用元素逐个写入默认值（类型化 null）。
+    pub(super) fn own_default(len: usize) -> __Obj<Self>
+    where
+        T: Default,
+    {
+        if !JArray::<T>::has_primitive_elements() {
+            return Self::own(len, None, std::iter::repeat_with(T::default));
+        }
+        let bytes = len.checked_mul(size_of::<PrimSlot<T>>()).expect("数组大小溢出");
+        // SAFETY: 基本元素类型的默认值位形全零；值在初始化闭包内写入
+        unsafe {
+            __Obj::new_trailing_zeroed(bytes, |p: *mut Self| {
+                p.write(__ArrayObj { repr: Repr::Own { len, prim: true, tag: None }, _cell: UnsafeCell::new(()), _elem: PhantomData });
+            })
+        }
+    }
+
     /// 协变视图数组（无元素）
     pub(super) fn covariant(view: CovariantView) -> __Obj<Self> {
         __Obj::new(__ArrayObj { repr: Repr::Covariant(view), _cell: UnsafeCell::new(()), _elem: PhantomData })

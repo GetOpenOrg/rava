@@ -147,8 +147,7 @@ impl<T: Clone + Default + 'static> JArray<T> {
     /// （newarray/anewarray 字节码翻译）必须走 [`Self::try_new`]——负长度抛
     /// `NegativeArraySizeException`（JVMS §6.5，Err 形态可被 java_try 捕获）。
     pub fn new(len: i32) -> Self {
-        let len = len.max(0) as usize;
-        JArray::own(len, None, std::iter::repeat_with(T::default))
+        JArray(Some(__ArrayObj::own_default(len.max(0) as usize)))
     }
 
     /// `newarray`/`anewarray` 的可失败创建：负长度抛 `NegativeArraySizeException`
@@ -157,7 +156,7 @@ impl<T: Clone + Default + 'static> JArray<T> {
         if len < 0 {
             return Err(crate::error::JvmError::negative_array_size(len));
         }
-        Ok(JArray::own(len as usize, None, std::iter::repeat_with(T::default)))
+        Ok(JArray(Some(__ArrayObj::own_default(len as usize))))
     }
 
     /// 创建长度为 len 的数组，每个元素由 init 独立构造（对应 Java multianewarray：
