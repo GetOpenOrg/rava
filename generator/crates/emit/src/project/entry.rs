@@ -165,6 +165,10 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
 /// 用户 crate opt-level 0。档案 crate 跨测试共享编译缓存，只付一次优化代价；用户 crate 每例重编、保持 dev 编译速度
 pub const DEV_OPT_PROFILE: &str = "dev-opt";
 
+/// 可选体积档（cargo 自定义 profile，产物在 `<target>/release-small/`）：继承 release（fat LTO、codegen-units 1、
+/// strip），只把 opt-level 换成 "s"。档位取舍见 docs/plans/2026-10-04-binary-size.md §B3
+pub const RELEASE_SMALL_PROFILE: &str = "release-small";
+
 const MAIN_ALLOW: &str =
     "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types)]";
 
@@ -387,10 +391,12 @@ pub fn write_cargo_files(
     // 运行时缺陷，由 create_java_vm 的钩子以退出码 101 终止（与 unwind 形态退出码、stderr 一致），
     // 免除全部 unwind 清理路径（landing pad）。
     // release 剥符号表（strip = "symbols"）：取栈按链接期地址表（driver `rava-link`，运行时
-    // `pc_map`），不读符号与 DWARF；行号表仍由 rava-link 在剥离前读取
+    // `pc_map`），不读符号与 DWARF；行号表仍由 rava-link 在剥离前读取。
+    // release-small 档（见 RELEASE_SMALL_PROFILE）：继承 release，opt-level "s"（不设 "z" 档，用户 10-05 定）
     let root = format!(
         "[workspace]\nmembers = [{}]\nresolver = \"2\"\n\n[profile.release]\n\
          opt-level = 3\nlto       = true\ncodegen-units = 1\ndebug     = \"line-tables-only\"\npanic     = \"abort\"\nstrip     = \"symbols\"\n\n\
+         [profile.{RELEASE_SMALL_PROFILE}]\ninherits = \"release\"\nopt-level = \"s\"\n\n\
          [profile.dev]\ndebug = \"line-tables-only\"\nincremental = false\npanic = \"abort\"\n\n\
          [profile.{DEV_OPT_PROFILE}]\ninherits = \"dev\"\nopt-level = 1\n\n\
          [profile.{DEV_OPT_PROFILE}.package.{USER_CRATE}]\nopt-level = 0\n",
