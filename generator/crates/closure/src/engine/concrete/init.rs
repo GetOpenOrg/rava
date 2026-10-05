@@ -73,6 +73,7 @@ impl Vm {
                 let why = w.split(" @ ").next().unwrap_or(&w).to_string();
                 self.bj.rt_attempts.push((key.clone(), why.clone()));
                 self.bj.recs.push(super::journal::Rec::RuntimeInit { class: key.clone(), why });
+                self.war_capture(m.rl());
                 self.init.insert(key, Init::Done);
                 Ok(())
             }

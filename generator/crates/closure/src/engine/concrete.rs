@@ -12,6 +12,7 @@ mod apply;
 mod boot;
 mod boot_cfg;
 pub mod boot_image;
+mod boot_slots;
 mod indy;
 mod init;
 mod interp;
@@ -20,8 +21,11 @@ mod members;
 mod natives;
 mod snap;
 mod stable;
+mod taint;
+mod taint_fork;
 mod unsafe_ops;
 mod vm;
+mod war;
 
 use resolve::MethodSite;
 

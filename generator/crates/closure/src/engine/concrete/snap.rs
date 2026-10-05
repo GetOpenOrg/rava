@@ -51,7 +51,8 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
             CV::I(x) => return Ok(MV::Prim(Put::Int(x))),
             CV::J(x) => return Ok(MV::Prim(Put::Long(x))),
             CV::N => return Ok(MV::Prim(Put::Null)),
-            CV::F(_) | CV::D(_) => return Ok(MV::Prim(Put::Other)),
+            // 污点值只在引导求值中出现，物化为「未知非常量」
+            CV::F(_) | CV::D(_) | CV::T(..) => return Ok(MV::Prim(Put::Other)),
         };
         if let Some(&i) = self.seen.get(&o) {
             return Ok(MV::Obj(i));

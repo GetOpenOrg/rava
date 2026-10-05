@@ -178,11 +178,13 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: None });
             Ok(None)
         }
-        // 宿主标量（机器资源 / 描述符状态）：构建期取零值，调用点登记待第 2 步的污点与重算槽（计划 §3.2）
-        "host_scalar" => {
+        // 宿主标量（机器资源 / 描述符状态）：返回污点值（`host_scalar:<下界>:<上界>`，计划 §3.2），
+        // 写入映像的位置物化为启动重算槽（concrete/taint.rs）
+        h if h == "host_scalar" || h.starts_with("host_scalar:") => {
             let caller = vm.frames.last().map_or_else(String::new, |f| f.to_string());
             vm.bj.host_scalars.insert((info.key.to_string(), caller));
-            ret(CV::zero(desc.rsplit(')').next().unwrap_or("I")))
+            let r = desc.rsplit(')').next().unwrap_or("I");
+            ret(vm.tsrc(&info.key.to_string(), args.clone(), r, h)?)
         }
         "boot_current_thread" => match env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i)) {
             Some(&o) => ret(CV::R(o)),

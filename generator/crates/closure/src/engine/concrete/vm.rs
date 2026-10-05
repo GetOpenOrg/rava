@@ -24,21 +24,26 @@ pub(super) enum CV {
     D(f64),
     N,
     R(u32),
+    /// 引导求值的污点标量（宿主标量及其派生值）：表达式表下标（`bj.taint`）、类型（`b'I'` / `b'J'`）。
+    /// 构建期只知其区间；写入映像的位置物化为启动重算槽（concrete/taint.rs）
+    T(u32, u8),
 }
 
 impl CV {
     pub(super) fn wide(self) -> bool {
-        matches!(self, CV::J(_) | CV::D(_))
+        matches!(self, CV::J(_) | CV::D(_) | CV::T(_, b'J'))
     }
     pub(super) fn i(self) -> R<i32> {
         match self {
             CV::I(v) => Ok(v),
+            CV::T(..) => defer("延迟值参与求值：宿主标量（污点）取具体值"),
             v => fail(format!("期望 int：{v:?}")),
         }
     }
     pub(super) fn j(self) -> R<i64> {
         match self {
             CV::J(v) => Ok(v),
+            CV::T(..) => defer("延迟值参与求值：宿主标量（污点）取具体值"),
             v => fail(format!("期望 long：{v:?}")),
         }
     }
@@ -342,6 +347,7 @@ impl Vm {
     pub(super) fn arr(&self, o: u32) -> R<&Vec<CV>> {
         if self.boot {
             self.boot_arr_check(o)?;
+            self.war_read(super::war::Loc::A(o));
         }
         match &self.heap[o as usize].body {
             Body::Arr(_) if self.heap[o as usize].epoch == 0 && self.image == 0 && !self.frozen.contains(&o) => {

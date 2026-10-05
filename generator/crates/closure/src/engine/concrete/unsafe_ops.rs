@@ -61,6 +61,9 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> Option<R<Op
                 let wide = matches!(k, "J" | "D");
                 let (exp, x) = if wide { (arg(3)?, arg(4)?) } else { (arg(3)?, arg(4)?) };
                 let cur = mem_get(vm, env, o, off, k)?;
+                if cur != exp && (matches!(cur, CV::T(..)) || matches!(exp, CV::T(..))) {
+                    return defer("延迟值参与求值：宿主标量（污点）参与 CAS 比较");
+                }
                 let hit = cur == exp;
                 if hit {
                     mem_put(vm, env, o, off, k, x)?;
@@ -105,6 +108,7 @@ fn bits(v: CV) -> R<i64> {
         CV::J(x) => x,
         CV::F(x) => i64::from(x.to_bits()),
         CV::D(x) => x.to_bits() as i64,
+        CV::T(..) => return defer("延迟值参与求值：宿主标量（污点）按位写入"),
         _ => return fail("非数值"),
     })
 }
@@ -138,6 +142,7 @@ fn mem_get(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str) -> R<CV> {
         if vm.bj.dirty_cells.contains(&i) {
             return defer(format!("延迟值参与求值：运行期重放会改写的 VM 单元 {}", vm.cells[i].0));
         }
+        vm.war_read(super::war::Loc::C(i as u32));
         return Ok(of_bits(k, vm.cells[i].1));
     }
     let o = o.obj()?;
@@ -168,8 +173,10 @@ fn mem_get(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str) -> R<CV> {
 fn mem_put(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str, v: CV) -> R<()> {
     if let Some(i) = cell(vm, o, off)? {
         let old = vm.cells[i].1;
+        let b = bits(v)?;
         vm.jlog(super::journal::JEnt::Cell(i, old));
-        vm.cells[i].1 = bits(v)?;
+        vm.war_write(super::war::Loc::C(i as u32));
+        vm.cells[i].1 = b;
         return Ok(());
     }
     let o = o.obj()?;
