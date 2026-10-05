@@ -213,7 +213,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 生成器 / 下游编译成本：V1–V7、S 系列余项（emitter-performance、rustc-memory-and-crate-split）
 │   │     ├─ ✅ unsafe-rmw 合入 5f759708
 │   │     ├─ ✅ crate-split 声明层拆分（db45a65c）：抽查 14/14，合入 3e739189（已推送）
-│   │     └─ ⏳ SCC 拆分（D8）◀── S7
+│   │     └─ 🔄 SCC 拆分（D8）与 S7-4 并行，实施中：b51f9531 / b093069f 已合入；9 个 release OOM 例声明层 ≤ 8.1 GB，余下 OOM 是用户 bin 的 fat LTO 全程序链接（计划 S7 §9.7）
 │   ├─ 🔄 S7 统一对象句柄 + 每类静态描述符（D7 批准取法 B；2026-10-04-s7-object-handle-descriptor.md）
 │   │     ├─ ✅ S7-0 / S7-1 s7-desc（b0166702）：抽查 16/16，合入 8c218a72（已推送）
 │   │     ├─ ✅ S7-2a 类 wrapper 单字段句柄（合入 cfe37f90；TSDS 声明层 7597 MB）
@@ -267,6 +267,7 @@ regress2 遗留（◀── a2）───────────────�
 | 逃逸对象上下文收拢（V10） | ⏳ ◀── engine-order | TestHttpLoopbackSync 服务器闭包 ≤60 s，HTTP 两例通过，闭包集合变化逐项论证 |
 | URL 协议可靠口径 | ⏳ c1d-urlhost 9087cf1c（本地 worktree 已删，分支保留在 origin / github） ◀── 引擎提速达标 | 证 file URL host 为 "" / localhost 以杀 ftp 分支；引擎提速期间口径偏差暂容忍 |
 | crate-split 声明层拆分 | ✅ db45a65c，合入 3e739189 | 抽查 14/14；已推送 |
+| D8 声明层按签名 SCC 分段 | 🔄 与 S7-4 并行，实施中：b51f9531（合入 2602f409）、b093069f（合入 10314222） | 镜像链多 crate、上限 650 类/段；release 9 例底段 7.9–8.1 GB、上段约 1.27 GB（原约 11.9 GB OOM）；单测 scc-ut-b093069f rc=0；9 例 rava compile 仍 rc=1：OOM 是用户 bin 的 release fat LTO + cgu=1 链接（scc-rel4 定位），不在声明层；ubuntu 前后对照 FWord 声明层 9618→7909 MB（见 S7 计划 §9.7）；≤1.3 GB/crate 依赖 S7 |
 | C1d-a 去截断（c1d-p0） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
 | C1d-a-a1 | ✅ | 正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5） |
 | C1d-a-a2 | ✅ 62f46bb2 | b4669206 合入，抽查 c1da-b4669206 9/9 |
