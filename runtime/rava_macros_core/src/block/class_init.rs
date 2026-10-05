@@ -203,15 +203,27 @@ pub(crate) fn expand_statics(
 /// 带反射标记的静态字段的 Java 字段名：`cfg_attr(any(), java_field(name = "..", .., reflect = true))`
 /// （生成器只给档案内可经按名反射 / 序列化协议访问的静态字段打标记）。
 fn reflected_java_name(attrs: &[Attribute]) -> Option<String> {
+    use syn::punctuated::Punctuated;
+    use syn::{Expr, ExprLit, Lit, Meta, MetaNameValue, Token};
+    // 按语法树解析属性实参：属性的字符串化形态随 proc_macro 后端（编译器 / 回退实现）不同，不作判据
     attrs.iter().filter(|a| a.path().is_ident("cfg_attr")).find_map(|a| {
-        let text = quote!(#a).to_string();
-        let rest = &text[text.find("java_field")?..];
-        if !rest.contains("reflect = true") {
-            return None;
-        }
-        let rest = &rest[rest.find("name")?..];
-        let rest = &rest[rest.find('"')? + 1..];
-        Some(rest[..rest.find('"')?].to_owned())
+        let metas = a.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated).ok()?;
+        metas.iter().find_map(|m| {
+            let Meta::List(list) = m else { return None };
+            if !list.path.is_ident("java_field") {
+                return None;
+            }
+            let pairs = list.parse_args_with(Punctuated::<MetaNameValue, Token![,]>::parse_terminated).ok()?;
+            let (mut name, mut reflect) = (None, false);
+            for nv in &pairs {
+                match &nv.value {
+                    Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) if nv.path.is_ident("name") => name = Some(s.value()),
+                    Expr::Lit(ExprLit { lit: Lit::Bool(b), .. }) if nv.path.is_ident("reflect") => reflect = b.value,
+                    _ => {}
+                }
+            }
+            name.filter(|_| reflect)
+        })
     })
 }
 
@@ -225,7 +237,8 @@ fn statics_table(statics: &[StaticItem]) -> TokenStream2 {
         let java = reflected_java_name(&st.attrs)?;
         let (name, ty) = (&st.name, &st.ty);
         let ctor = if is_basic(ty) {
-            if !PRIMS.contains(&quote!(#ty).to_string().as_str()) {
+            let Type::Path(tp) = ty else { return None };
+            if !tp.path.get_ident().is_some_and(|i| PRIMS.contains(&i.to_string().as_str())) {
                 return None;
             }
             quote! { of_prim }
