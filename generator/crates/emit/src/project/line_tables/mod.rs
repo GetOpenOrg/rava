@@ -340,7 +340,8 @@ pub fn write(
             scan(&rel, text)
         })
         .collect();
-    // 手写方法：生成文件登记、体在同目录伴生 `<stem>_impl.rs`（overlay 已落盘）
+    // 手写方法：生成文件登记、体在同目录伴生 `<stem>_impl.rs` 的手写单元（宿主 + 私有辅助目录内的文件，
+    // 逐文件成表；overlay 已落盘）
     for (path, text) in files {
         let hws = handwritten::collect(text);
         let (Some(stem), Some(dir)) = (path.file_stem().and_then(|s| s.to_str()), path.parent()) else { continue };
@@ -348,9 +349,12 @@ pub fn write(
             continue;
         }
         let companion = dir.join(format!("{stem}_impl.rs"));
-        let Ok(rel) = companion.strip_prefix(out_dir).map(|r| r.to_string_lossy().replace('\\', "/")) else { continue };
-        if let Some(t) = std::fs::read_to_string(&companion).ok().and_then(|c| handwritten::companion_table(&rel, &c, &hws)) {
-            tables.push(t);
+        let Some(crate_src) = crate_src_of(out_dir, &companion) else { continue };
+        for f in closure::handwritten::layout::unit_files(&crate_src, &companion) {
+            let Ok(rel) = f.strip_prefix(out_dir).map(|r| r.to_string_lossy().replace('\\', "/")) else { continue };
+            if let Some(t) = std::fs::read_to_string(&f).ok().and_then(|c| handwritten::companion_table(&rel, &c, &hws)) {
+                tables.push(t);
+            }
         }
     }
     // 手写根类：登记来自其字节码（见 handwritten::root_methods），体在 overlay 落盘的根类手写文件
@@ -402,6 +406,12 @@ fn numbers_of(tables: &[FileLines], lnt: &dyn Fn(&str, &str, &str) -> Option<Vec
         }
     }
     numbers
+}
+
+/// scratch 文件所在 crate 的源码根 `<out_dir>/<crate>/src`
+fn crate_src_of(out_dir: &Path, file: &Path) -> Option<PathBuf> {
+    let first = file.strip_prefix(out_dir).ok()?.components().next()?;
+    Some(out_dir.join(first).join("src"))
 }
 
 #[cfg(test)]

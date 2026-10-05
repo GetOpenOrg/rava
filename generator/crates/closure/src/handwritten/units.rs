@@ -44,8 +44,12 @@ fn defined_types(items: &[syn::Item], out: &mut BTreeSet<String>) {
     }
 }
 
-/// 源文件 → 模块单元宿主名（共置手写文件与生成文件不是单元）
+/// 源文件 → 模块单元宿主名（共置手写文件与生成文件不是单元；私有辅助目录内的文件并入其宿主，
+/// 自身不是单元，见 [`layout`]）
 fn unit_host(src: &Path, path: &Path) -> Option<String> {
+    if layout::helper_root(src, path).is_some() {
+        return None;
+    }
     let rel = path.strip_prefix(src).ok()?.to_str()?.replace('\\', "/");
     if SUFFIXES.iter().any(|s| rel.ends_with(s)) {
         return None;
@@ -81,7 +85,7 @@ impl Handwritten {
         let mut out = BTreeMap::new();
         for path in files {
             let Some(host) = unit_host(&self.src, &path) else { continue };
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(content) = layout::read_unit(&self.src, &path) else { continue };
             if content.contains(GENERATED_MARK) {
                 continue;
             }
@@ -95,7 +99,7 @@ impl Handwritten {
             let mut raw = FileFns::default();
             scan_file(&file, &self.prelude, &mut raw);
             close_transitive(&mut raw.fns, &raw.calls, &raw.nonself);
-            let mut hw = ClassHw { files: vec![path], ..Default::default() };
+            let mut hw = ClassHw { files: layout::unit_files(&self.src, &path), ..Default::default() };
             defined_types(&file.items, &mut hw.types);
             hw.objects = objects::close(&raw);
             hw.rets = std::mem::take(&mut raw.rets);
@@ -148,7 +152,7 @@ impl Handwritten {
         let rets = match cached {
             Some(r) => r,
             None => {
-                let content = std::fs::read_to_string(self.src.join(format!("{m}.rs"))).unwrap_or_default();
+                let content = layout::read_unit(&self.src, &self.src.join(format!("{m}.rs"))).unwrap_or_default();
                 let r = match syn::parse_file(&content) {
                     Ok(file) if !content.contains(GENERATED_MARK) => file_rets(&file, &self.prelude),
                     _ => Default::default(),

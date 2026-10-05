@@ -99,6 +99,26 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
   只写 `impl X { ... }` 块，由生成的 `mod.rs` 自然包含。
 - 禁止 `/// @field name: Type` 注释注入与 `#[path = "..."] mod _impl;` 远程引用。
 - 手写文件靠「无 `rava_macros::java_class` 生成标记」识别，codegen 不覆盖。
+- **私有辅助子模块目录**（超大手写文件按职责拆分的唯一形态，频繁修改的手写文件保持 ≤~600 行）：手写文件
+  `<stem>.rs` 可拥有同名目录 `<stem>/`（Rust 非 mod.rs 子模块布局），整棵子树是宿主的私有模块树，**不是 Java 包**。
+  - 宿主仅限两类：共置手写文件（`<x>_impl.rs` / `<x>_ext.rs`，辅助目录名以 `_impl` / `_ext` 结尾）与 crate 根下的
+    基础设施模块文件（`lib.rs` 除外，如 `array.rs` → `array/`）。识别规则：目录旁有同名宿主文件且宿主属上两类。
+    JDK 包段不以 `_impl` / `_ext` 结尾、crate 根基础设施名不是 JDK 顶层包名，二者不可能与 Java 包目录重合；
+    发射期仍检查（类的包目录落入辅助目录即报错）。
+  - 书写约定：宿主声明子模块恰为 `mod <name>;` 与 `use <name>::*;` 两行；辅助文件以 `use super::*;` 取得宿主的
+    名字空间，不写其他 `super::` / `self::` 相对路径，不写内层属性 `#![…]`（`//!` 文件说明允许）；供宿主调用的项
+    用 `pub(super)`（`pub fn` 是手写方法的登记口径，只用于 `impl X` 块内的 Java 方法）。
+  - 统一识别（`generator/crates/closure/src/handwritten/layout.rs` 为唯一实现，`runtime/java_runtime/build.rs`
+    同口径）：overlay 按宿主所在包把辅助目录定向到宿主的模块 crate；生成 mod.rs 不进入辅助目录（与手写 mod.rs
+    目录同样保留整棵子树）；闭包分析器、手写事实扫描（`pub fn` 登记、raw-audit 手写审计）、方法体层的手写探测、
+    build.rs 的 native 状态表都把辅助文件并入宿主的「手写单元」——单元文本 = 宿主 + 辅助文件按路径序拼接（剥去上述
+    声明行），语义等同拆分前的单文件，拆分是纯搬移、分析结果不变；行表按单元内逐文件成表。
+  - 守护：`layout::tests::runtime_helpers_follow_convention` 检查真源全部辅助文件的书写约定与宿主声明。
+  - 现有辅助目录（2026-10-05 拆分，纯搬移）：`array/{vtable,view}.rs`、`java/lang/class_impl/{attrs,members,nest}.rs`、
+    `jdk/internal/misc/unsafe__impl/{access,primitive,memory}.rs`。
+- **scratch 与真源同步**：overlay 把本轮落盘的手写文件记入 scratch 根 `.rava_overlay`；复用 scratch 时上轮清单中
+  本轮未落盘、且无生成标记的文件删除、空目录移除（runtime/ 中删除 / 改名的文件与辅助目录、非 `.rs` 资源、手写
+  `mod.rs`、改定向到别的模块 crate 的目录都覆盖）；带生成标记的文件从不因此删除。
 
 ## 六、登记与审计
 
