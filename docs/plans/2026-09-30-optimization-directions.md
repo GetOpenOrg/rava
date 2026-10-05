@@ -205,6 +205,27 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 12. `28fd9be7`（Q1(a)）静态字段无锁：`__process_static!`（`OnceLock` + 读写锁单元）改为常量初始化的普通 `static`——基本类型 `__PrimCell::zeroed()`（`static volatile` 走 SeqCst，其余 Relaxed），引用类型 `__RefField<Option<T>>`；类初始化状态改为 `static __PrimCell<u8>`，已初始化快路径为一次原子读（`<clinit>` 写入对其他线程的可见性由状态发布的 SeqCst 写 / 读建立）。
 13. `e63547cc`（Q2）数组无锁：`JArray<T>(Option<Arc<Repr<T>>>)`，null 数组为 `None` 不分配；`Store<T>` 基本元素为同宽原子单元（`AtomicU8/16/32/64::from_ptr`，get / set Relaxed，读改写 CAS SeqCst），引用元素逐元素 `__RefField` 内联；Unsafe / 原生内存按字节视图读写逐元素拼接（部分覆盖元素用 CAS 合并，单元素内的读改写为该元素 CAS，跨元素读改写取 16 路条带锁），bool 元素归一为 0 / 1。`RwLock<Vec<T>>` 与 `with_vec` 全部去除。
 14. `31ebfe21`（杠杆 ③）类型化 null 每类单例：`Object::__typed_null_desc` 原先每次在 `RwLock<HashMap>`（`TYPED_NULLS`）下按名查表，现 `__ClassDesc` 增 `typed_null: fn() -> Object`，由生成的每类 `OnceLock` 承载（描述符本身仍是可 `const` 引用的常量，不加内部可变性）；接口载体的 `Default`（null 局部量 / 未写入接口槽）同样每接口一份 `OnceLock`。
+15. `d28fd72e` `array/store.rs` 按手写层辅助目录约定书写（`use super::*;`、宿主 `use store::*;`，不写其他 `super::` 路径；`runtime_helpers_follow_convention` 守护）。11–15 经 gate-ec6cbe11 合入集成分支（`10314222`）。
+
+**验证**：抽查 `r1s-spot-31ebfe21`（16 例，跑完 10 例时停止，gate 已覆盖）：通过 8 例（HelloWorld、DeepCopy、TestConcurrentClinit、TestReflectEnumOps、TestClassCastSubclass、ReflectionAPI、ConcurrentMapDemo 等）；失败 3 例都不是本线回归——LynchBell / Factorion 是 debug 档运行超时（> 300 s，起点 `10795076`、`e983141d` 两轮抽查同样超时），StockTrans 是 S7-3c `serialVersionUID 无字段闭包` 存根（集成抽查 `int-a04e67a0`、`s73d-1150fc04` 同样失败，另线修复中）。单测 `r1s-ut-31ebfe21` 的 closure 单测 1 例失败（辅助目录约定，即第 15 条），修后由 gate 覆盖。
+
+**计时**（作业 `r1s-time2-d28fd72e`，sg2，`d28fd72e`；作业 60 min 超时，只跑完改造后的前 5 例，同机基线段未跑）：
+
+| 用例 | 档 | 构建 | 运行 | 二进制 | 参照 |
+|---|---|---|---|---|---|
+| LynchBell | release | 2 m 22.7 s | 66.5 s | 7.2 MB | 起点 147.3 s；`1697a9a8` 116.4 s（不同作业） |
+| Factorion | release | 2 m 20.2 s | 28.8 s | 7.2 MB | 起点 54.5 s；`1697a9a8` 42.1 s（不同作业） |
+| TestVirtualThreadScale | dev-opt | 9 m 05 s | 7.41 s | 428.1 MB | 折合 (7.41 − 2) s / 1e5 ≈ 54 µs/VT，**未达 ≤ 20 µs 目标** |
+| SelfNumbers | dev-opt | 8 m 55 s | 207.9 s | 421.4 MB | 起点 release 84.5 s（档不同，不可直接比） |
+| FibonacciMatrixExponentiation | dev-opt | 8 m 45 s | 172.5 s | 421.4 MB | 起点 release 编译失败 |
+
+同机前后对照：基线作业 `r1s-timebase-2602f409`（sg2，`2602f409`，与上表同 5 例同档，作业超时 5400 s）在途，由主会话接手判读。判读口径：同一服务器两段的运行段之比；release 两例（D8 合入前只计这两例）以运行段为准，dev-opt 例与 VT/µs 只作同机前后比较，不与 release 起点比。IQPuzzle、FourIsTheNumberOfLetters、PrimorialNumbers、RailwayCircuit、UnprimeableNumbers 五例的 dev-opt 前后对照没跑（作业超时）。
+
+**余项**：
+- TestVirtualThreadScale 约 54 µs/VT，离 ≤ 20 µs 还差约 2.7 倍。要先拿到同机基线判断存储改造的贡献，再剖析虚拟线程创建 / 挂起 / 调度路径（Continuation 栈分配、载体队列、`Thread` 对象构造）。
+- `Object` 的 null 是全局 `JVM_NULL` 单例（`Rc` 克隆即原子增减），多线程下引用计数争用；类型化 null 单例同理。终态做法：null 用不带引用计数的哨兵表示（`Option` 化或静态无计数指针）。
+- Object 装箱与数组仍是 `Rc<dyn ObjectVTable>` → wrapper `Arc` → 存储三层分配。终态做法：装箱直接持有存储句柄，合并为单一分配。
+- 闭包分析器 `handwritten/syntax.rs` 的 `ELEMENT_MUTATORS` 还列着已删除的 `with_vec`（保守名单，无害）；同 crate 下次改动时删去。
 
 ### 5. 测试流程效率（用户 2026-10-01）
 
