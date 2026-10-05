@@ -114,6 +114,7 @@ mod boot_phases;
 
 use graph::FlowGraph;
 use share::Dep;
+use mirror_eq::HOOK_FIELD;
 use ctxsel::Call;
 use stats::{Phase, Why};
 pub use cut::Diag;
