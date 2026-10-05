@@ -893,3 +893,43 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
 - afe5cb58：`--site-prof` 开关（剖析缺省关闭）。
 - dd758138：增量取值 + 两项纯计算优化。
 - 7ae20bf6：剖析细分枢纽接入。
+- f4b8ac7d：枢纽接入重放去整表复制（见下）；虚调用未命中剖析计数改 O(1)。
+
+### HTTP 剖析（`v12-prof2-7ae20bf6/01`，sg1，开 `--site-prof`，含 dd758138 增量）
+
+- 墙钟 14:44，峰值 RSS 9.83 GB；阶段：sites 339 s、flows 284 s、process 195 s、lcalls 36 s。
+- 读者站点重跑 329 万次，invoke 165 万次 291 s（有产出的 190 s）；触发源仍几乎全是节点增长（S 217 万、P 112 万）。
+- 路径：虚调用未命中建新精确枢纽 80 万次 197 s；非虚 47.9 万次 48.7 s。
+- 总推送 10.96 亿。
+
+| 段（invoke 内） | 无产出 ms | 有产出 ms |
+|---|---|---|
+| recv_set（含剖析自身的二分对照，见下） | 41241 | 58994 |
+| link_replay（枢纽接入时重放 lambda / special 接收者） | 10008 | 33841 |
+| link_expand | 2269 | 17154 |
+| edge_recv | 14743 | 22604 |
+| pre_hooks | 7496 | 5816 |
+| hub_get | 1813 | 5278 |
+| link_feed | 61 | 2550 |
+| link_vals | 99 | 997 |
+
+- 虚调用未命中 97.1 万次，平均每次接收者 4975 个、新增约 102 个；新增为 0 的 12.2 万次。
+- **订正**：首轮与本轮剖析中 recv_set 段都含 `prof_vmiss` 对每个接收者在上次列表里二分查找的开销（O(n log n)，只在剖析时发生），
+  不剖析时这一段实际远小于表中数字。成对实测（下）显示增量取值本身对墙钟几乎无影响，即「取全集 + 逐元素判定」并不是
+  不剖析时的主成本。f4b8ac7d 把该计数改为由增量归并直接得出（O(1)）。
+
+### 枢纽接入重放去整表复制（f4b8ac7d）
+
+剖析显示 link_replay 约 44 s：每建一个新精确枢纽，要整表复制父枢纽的 lambda 表与 special 表，接入时再整表复制一次，
+并对 special 的每个目标沿祖先链找最近已接入祖先、逐项比较。成本是 O(祖先已累积表长)，与本次新增无关。
+
+- `Hub.lambdas` 与 `special` 的各表改为 `Rc` 共享、写时复制（`hub_recv` 追加时 `Rc::make_mut`）。子枢纽建立、接入重放时只复制指针。
+- `link_hub` 每次只找一次本调用点已接入的最近祖先 a。
+  - lambda 表与 a 的 lambda 表相同的前缀直接跳过；
+  - special 各目标若与 a 共享同一张表（`Rc::ptr_eq`），直接判定已送达。
+- **无损**：不变式「(off, x) ∈ hub_linked[m] ⇒ x 当前 lambda 表中每个 r 都有 (off, r) ∈ hub_lsent[m]」恒成立：
+  - x 接入 (m, off) 时的重放把当时整张表登记进 hub_lsent（跳过的前缀按归纳已登记）；
+  - 之后 x 追加的 lambda 由 `hub_recv` 对 `links` 中每个字节码调用点逐个登记（`links` 在接入时写入，不随作废删除，只会多送）；
+  - hub_linked 与 hub_lsent 只在 `reset_offsets` / `reset_sites` 中同时作废。
+  所以跳过的前缀在原实现里也全部命中「已登记 → continue」；special 同表即逐项相等，原比较结果为真。派发序列逐项不变。
+
