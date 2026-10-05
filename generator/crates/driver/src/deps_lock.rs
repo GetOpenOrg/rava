@@ -16,6 +16,8 @@ pub struct LockJar {
     pub coordinate: Option<String>,
     /// jar 路径（load 后为绝对路径）
     pub path: PathBuf,
+    /// jar 身份（V12 §3.2：坐标只作索引与诊断；profile.json modules[].jars 与 V12-3 的 K(c) 消费）
+    #[allow(dead_code)]
     pub sha256: String,
     /// 显式模块名（模块命名兜底链的最后一环之前）
     pub module: Option<String>,
@@ -23,6 +25,8 @@ pub struct LockJar {
 
 #[derive(Debug, Clone)]
 pub struct DepsLock {
+    /// 目标 release（profile.json modules[].release 与多版本视图一致性校验消费）
+    #[allow(dead_code)]
     pub release: u32,
     /// 类路径序（锁内声明序即构建单元输入的一部分）
     pub jars: Vec<LockJar>,
