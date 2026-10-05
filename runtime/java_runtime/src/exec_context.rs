@@ -79,7 +79,7 @@ std::thread_local! {
 /// 让出点，一次最外层释放总在同一载体上开始并清空队列，所以与载体绑定而不随执行流。
 pub(crate) struct ReleaseSlot {
     pub(crate) depth: Cell<u32>,
-    pub(crate) pending: RefCell<Vec<crate::sync_model::__Shared<dyn crate::java::lang::ObjectVTable>>>,
+    pub(crate) pending: RefCell<Vec<crate::obj_ref::__Obj<dyn crate::java::lang::ObjectVTable>>>,
 }
 
 std::thread_local! {

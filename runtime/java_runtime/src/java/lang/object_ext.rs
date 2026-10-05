@@ -15,7 +15,7 @@ impl Object {
         if let Some(obj) = any_val.downcast_ref::<Object>() {
             return obj.clone();
         }
-        Object(crate::sync_model::__Shared::new(JvmRef(v)))
+        Object::__alloc(JvmRef(v))
     }
 
     /// instanceof 运行时检查：委托给 ObjectVTable::is_instance_of（Arch-2）

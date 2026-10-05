@@ -313,7 +313,7 @@ impl JArray<Object> {
 
 /// Java 数组是对象：可直接装入 Object（`Object o = arr;`）。
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> From<JArray<T>> for Object {
-    fn from(a: JArray<T>) -> Object { Object::__from_shared(Rc::new(a)) }
+    fn from(a: JArray<T>) -> Object { Object::__alloc(a) }
 }
 
 /// 擦除数组的逐元素兼容判定（`From<Object> for JArray<T>` 的擦除还原臂，
