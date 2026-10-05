@@ -1,28 +1,28 @@
 //! 统一对象句柄（S7-2，docs/plans/2026-10-04-s7-object-handle-descriptor.md §3.1 方案 B）。
 //!
 //! 类 wrapper 只有一个字段 `__r: __Ref<dyn X__VTable>`：
-//! - `__Handle`：对象的唯一持有者 `Option<__Shared<dyn ObjectVTable>>`，`None` 即 Java null——
+//! - `__Handle`：对象的唯一持有者 `Option<__Obj<dyn ObjectVTable>>`，`None` 即 Java null——
 //!   null 不再分配一份缺省存储（`Default` 零分配）；
 //! - `vt`：指向句柄所持对象的本类视图指针（不持有），虚分派直接经它取 `&dyn X__VTable`，
-//!   开销与原 `__Shared<dyn X__VTable>` 相同（§4.3）；上转只换指针（trait upcasting），不动句柄。
+//!   开销与原 `Arc<dyn X__VTable>` 相同（§4.3）；上转只换指针（trait upcasting），不动句柄。
 //!
 //! 名字带 `__` 前缀：不是 Java 类型，只出现在生成器封装层，不进入可读方法体。
 
 use crate::java::lang::ObjectVTable;
-use crate::sync_model::__Shared;
+use crate::obj_ref::__Obj;
 use crate::exec_context::release_slot;
 use std::ptr::NonNull;
 
 /// 对象句柄：持有对象（运行时类的存储）或为 null。
 #[derive(Clone, Default)]
-pub struct __Handle(Option<__Shared<dyn ObjectVTable>>);
+pub struct __Handle(Option<__Obj<dyn ObjectVTable>>);
 
 impl __Handle {
     /// null 句柄。
     pub const NULL: __Handle = __Handle(None);
 
     #[inline]
-    pub fn new(rc: __Shared<dyn ObjectVTable>) -> Self { __Handle(Some(rc)) }
+    pub fn new(rc: __Obj<dyn ObjectVTable>) -> Self { __Handle(Some(rc)) }
 
     #[inline]
     pub fn is_none(&self) -> bool { self.0.is_none() }
@@ -82,15 +82,15 @@ const RELEASE_MAX_DEPTH: u32 = 32;
 /// 释放一个对象引用（`__Handle` / `Object` 的 Drop）：非最后一个强引用只减计数；最后一个按深度
 /// 就地释放或入队，最外层释放清空队列。线程局部已销毁（线程退出期）时就地释放。
 #[inline]
-pub(crate) fn __release(rc: __Shared<dyn ObjectVTable>) {
-    if __Shared::strong_count(&rc) != 1 {
+pub(crate) fn __release(rc: __Obj<dyn ObjectVTable>) {
+    if !rc.is_unique() {
         return;
     }
     release_last(rc);
 }
 
 #[inline(never)]
-fn release_last(rc: __Shared<dyn ObjectVTable>) {
+fn release_last(rc: __Obj<dyn ObjectVTable>) {
     // 释放槽不可用（线程退出期）时 rc 随闭包丢弃，就地释放
     let Some(depth) = release_slot(|s| s.depth.get()) else { return };
     if depth >= RELEASE_MAX_DEPTH {
@@ -135,25 +135,20 @@ impl<V: ?Sized> __Ref<V> {
 
     /// 以新存储建立引用：`view` 给出存储的本类视图（`|i| i as &dyn X__VTable`）。
     #[inline]
-    pub fn new<T: ObjectVTable>(rc: __Shared<T>, view: impl for<'a> FnOnce(&'a T) -> &'a V) -> Self {
+    pub fn new<T: ObjectVTable>(rc: __Obj<T>, view: impl for<'a> FnOnce(&'a T) -> &'a V) -> Self {
         let vt = NonNull::from(view(&*rc));
-        __Ref { h: __Handle::new(rc), vt: Some(vt) }
+        __Ref { h: __Handle::new(rc.map_ptr(|p| p as *mut dyn ObjectVTable)), vt: Some(vt) }
     }
 
     /// 以存储自身建立引用（`impl X__VTable for X__inner` 的 wrapper 重建钩子）：存储位于分配钩子
-    /// 建立的 `__Shared<T>` 中，引用计数加一即得同一对象的句柄——不复制存储，对象标识即存储地址。
+    /// 建立的 `__Obj<T>` 中，引用计数加一即得同一对象的句柄——不复制存储，对象标识即存储地址。
     ///
     /// # Safety
-    /// `this` 必须是某个以 `T` 分配的 `__Shared<T>` 所持的值。
+    /// `this` 必须是某个以 `T` 分配的 `__Obj<T>` 所持的值。
     #[inline]
     pub unsafe fn from_storage<T: ObjectVTable>(this: &T, view: impl for<'a> FnOnce(&'a T) -> &'a V) -> Self {
-        let p = this as *const T;
-        // SAFETY: 调用方保证 p 来自 `__Shared::<T>`；先加计数，再收回一个强引用
-        let rc = unsafe {
-            __Shared::increment_strong_count(p);
-            __Shared::from_raw(p)
-        };
-        Self::new(rc, view)
+        // SAFETY: 调用方保证 this 是堆对象的值
+        Self::new(unsafe { __Obj::from_value(this) }, view)
     }
 
     /// 由句柄与其所持对象上取得的视图指针合成（`__erased_vtable` 填入的指针）。
@@ -210,7 +205,7 @@ pub fn __ref_from_object<V: ?Sized + 'static>(obj: &crate::java::lang::Object) -
     let mut slot: Option<NonNull<V>> = None;
     obj.0.__erased_vtable(&mut slot);
     // SAFETY: `__erased_vtable` 在 Object 所持存储自身上取视图指针，句柄持有同一存储
-    slot.map(|vt| unsafe { __Ref::from_raw(__Handle::new(__Shared::clone(&obj.0)), vt) })
+    slot.map(|vt| unsafe { __Ref::from_raw(__Handle::new(Clone::clone(&obj.0)), vt) })
 }
 
 /// 接口引用（接口载体的唯一字段，S7-2c）：句柄是 `Object`（载体 `Deref<Target = Object>`，
