@@ -191,6 +191,10 @@ fn class_desc(ctx: &GenContext) -> TokenStream2 {
             field_base: #field_base,
             alloc: || #alloc().into_object(&#desc_ident),
             offsets: || #offsets(),
+            typed_null: || {
+                static __TYPED_NULL: ::std::sync::OnceLock<Object> = ::std::sync::OnceLock::new();
+                ::std::clone::Clone::clone(__TYPED_NULL.get_or_init(|| Object::__new_typed_null(&#desc_ident)))
+            },
         };
         impl #impl_g #struct_ident #ty_g #where_c {
             #[doc(hidden)]

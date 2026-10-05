@@ -38,6 +38,9 @@ pub struct __ClassDesc {
     pub alloc: fn() -> Object,
     /// 本类存储中平铺实例字段（按平铺下标）的字节偏移（实现层导出的偏移表）。
     pub offsets: fn() -> &'static [u32],
+    /// 本类静态类型的 null 装入 Object（类型化 null）：每类一个进程内单例（实现层的
+    /// `OnceLock`，描述符本身保持常量可引用），类 wrapper 的 null 装箱不查全局表。
+    pub typed_null: fn() -> crate::java::lang::Object,
 }
 
 impl std::fmt::Debug for __ClassDesc {
