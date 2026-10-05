@@ -3,23 +3,29 @@
 //! - `runtime/java_runtime/src/**` → 各模块 crate 的 `src/**`（按包所属模块，根模块 → 声明层 crate；见 [`JdkDirs`]；
 //!   内容相同跳过，保留 mtime）；
 //! - 根 `lib.rs` 不在此复制：由 [`super::mod_tree::complete_lib_rs`] 写出（手写真源 + 顶层包补全）；
-//! - scratch 中 runtime/ 已删除的手写文件在 mod 树阶段清扫（[`super::mod_tree`] `sweep_stale`：
-//!   须在本轮写出之后判定，否则本轮生成的无标记文件会被先删后写）；
+//! - 与 runtime/ 同步（runtime/ 是唯一真源）：本轮落盘的手写文件清单记入 scratch 根的 [`LEDGER`]；
+//!   上轮清单中本轮不再落盘的路径（runtime/ 中删除 / 改名、目录改定向到别的 crate）若无生成标记即删除，
+//!   删后空目录自底向上移除——覆盖 `.rs` 之外的资源文件与手写 `mod.rs`；有生成标记的文件从不删除。
+//!   mod 树阶段另有兜底清扫（[`super::mod_tree`] `sweep_stale`：无清单的旧 scratch 中 runtime/ 已无的
+//!   无标记 `.rs`）；
 //! - `build.rs` 原样复制进声明层；`Cargo.toml` 包名改为声明层 crate 名，兄弟 crate（`rava_macros` / `rava_coro`）依赖改绝对路径、包版本唯一化；
 //! - `java/ jdk/ sun/` 顶层目录兜底占位 mod.rs；
 //! - `runtime/java_meta/`（反射元数据表 crate，全部手写、无生成文件）整体镜像到
 //!   `<scratch>/java_meta/`：包版本唯一化、运行时依赖改指声明层，scratch 中真源已无的文件删除。
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 
 use closure::handwritten::layout::helper_root;
 
-use super::fs::walk;
+use super::fs::{has_marker, walk};
 use crate::ctx::EmitShared;
 use crate::error::{io_err, Result};
 use crate::module_crates::crate_name;
 use crate::text::scratch_pkg_version;
+
+/// overlay 清单文件（scratch 根下）：上轮落盘的手写文件路径（相对 scratch 根，`/` 分隔，每行一条）
+pub const LEDGER: &str = ".rava_overlay";
 
 const EMPTY_PKG_MOD: &str = "// 空包模块（overlay）：本包无生成类时 lib.rs 的\n\
 // `pub mod` 声明仍需可解析；有生成类时被 codegen 覆写。\n";
@@ -56,6 +62,13 @@ impl JdkDirs {
     /// 全部落入一个 crate（无模块图）
     pub fn single(decl: &str) -> JdkDirs {
         JdkDirs { decl: decl.to_string(), dirs: BTreeMap::new() }
+    }
+
+    /// 显式目录表（单元测试：手写目录改定向到别的 crate）
+    #[cfg(test)]
+    pub(super) fn with_dirs(decl: &str, dirs: &[(&str, Option<&str>)]) -> JdkDirs {
+        let dirs = dirs.iter().map(|(d, t)| (d.to_string(), t.map(str::to_string))).collect();
+        JdkDirs { decl: decl.to_string(), dirs }
     }
 
     /// 由模块 crate 表与模块图：各手写目录按包归属定向
@@ -102,6 +115,7 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     let rt_src = runtime_dir.join("src");
     let decl = out_dir.join(&dirs.decl);
     let decl_src = decl.join("src");
+    let mut placed = BTreeSet::new();
     for (dir, _, files) in walk(&rt_src) {
         let rel = dir.strip_prefix(&rt_src).unwrap_or(Path::new(""));
         let Some(target) = dirs.target(&rel.to_string_lossy().replace('\\', "/")) else { continue };
@@ -113,8 +127,10 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
                 continue;
             }
             copy_if_changed(&dir.join(&f), &dst_dir.join(&f))?;
+            placed.insert(Path::new(target).join("src").join(rel).join(&f).to_string_lossy().replace('\\', "/"));
         }
     }
+    sync_ledger(out_dir, &placed)?;
     copy_if_changed(&runtime_dir.join("build.rs"), &decl.join("build.rs"))?;
     let cargo_src = runtime_dir.join("Cargo.toml");
     let cargo = std::fs::read_to_string(&cargo_src).map_err(|e| io_err(&cargo_src.display().to_string(), e))?;
@@ -135,6 +151,44 @@ pub fn prepare_scratch(out_dir: &Path, runtime_dir: &Path, macros_crate: &Path, 
     }
     let meta_src = runtime_dir.parent().unwrap_or(Path::new("")).join("java_meta");
     mirror_meta_crate(&meta_src, &out_dir.join("java_meta"), &scratch_pkg_version(out_dir), &dirs.decl)
+}
+
+/// 按 overlay 清单与 runtime/ 同步：上轮清单中本轮未落盘、且无生成标记的文件删除（其后空目录自底向上
+/// 移除，止于 scratch 根），再写本轮清单。清单条目须是 scratch 内的相对路径（含 `..` / 绝对路径的行忽略）
+fn sync_ledger(out_dir: &Path, placed: &BTreeSet<String>) -> Result<()> {
+    let ledger = out_dir.join(LEDGER);
+    let previous = std::fs::read_to_string(&ledger).unwrap_or_default();
+    let mut emptied: Vec<PathBuf> = Vec::new();
+    for rel in previous.lines().map(str::trim).filter(|l| !l.is_empty() && !placed.contains(*l)) {
+        let rel_path = Path::new(rel);
+        if !rel_path.components().all(|c| matches!(c, Component::Normal(_))) {
+            continue;
+        }
+        let p = out_dir.join(rel_path);
+        // 不可读（已不存在）或带生成标记（同路径已由生成器接管）→ 不动
+        if p.is_file() && has_marker(&p) == Some(false) {
+            std::fs::remove_file(&p).map_err(|e| io_err(&p.display().to_string(), e))?;
+            emptied.extend(p.parent().map(Path::to_path_buf));
+        }
+    }
+    for start in emptied {
+        let mut d = start;
+        while d != out_dir && d.starts_with(out_dir) {
+            let empty = std::fs::read_dir(&d).map(|mut it| it.next().is_none()).unwrap_or(false);
+            if !empty {
+                break;
+            }
+            std::fs::remove_dir(&d).map_err(|e| io_err(&d.display().to_string(), e))?;
+            d.pop();
+        }
+    }
+    let mut text = String::new();
+    for rel in placed {
+        text.push_str(rel);
+        text.push('\n');
+    }
+    std::fs::create_dir_all(out_dir).map_err(|e| io_err(&out_dir.display().to_string(), e))?;
+    write_if_changed(&ledger, &text)
 }
 
 /// 手写真源 `Cargo.toml` 的 `[package]` / `[lib]` 名改为声明层 crate 名

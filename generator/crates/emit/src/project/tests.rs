@@ -171,6 +171,46 @@ fn mod_tree_prunes_stale_package_dirs() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 复用 scratch：overlay 按清单与 runtime/ 同步——runtime/ 中删除 / 改名的手写文件与私有辅助目录、
+/// 非 `.rs` 资源、改定向到别的 crate 的手写目录，其上轮落盘文件删除、空目录移除；
+/// 同路径已由生成器接管（带生成标记）的文件与清单外文件保留
+#[test]
+fn overlay_ledger_syncs_with_runtime() {
+    let root = tmp("ledger");
+    let rt = runtime(&root);
+    let macros = root.join("runtime").join("rava_macros");
+    put(&rt.join("src/java/lang/class_impl.rs"), "mod members;\nuse members::*;\n");
+    put(&rt.join("src/java/lang/class_impl/members.rs"), "use super::*;\n");
+    put(&rt.join("src/jdk_resources/locale.properties"), "k=v\n");
+    put(&rt.join("src/java/nio/buffer_impl.rs"), "// 手写\n");
+    put(&rt.join("src/java/util/zip/crc_impl.rs"), "// 手写\n");
+    let out = root.join("build").join("t");
+    let dirs = |zip: &str| JdkDirs::with_dirs("java_runtime", &[("java/util/zip", Some(zip))]);
+    prepare_scratch(&out, &rt, &macros, &dirs("java_runtime"), false).unwrap();
+    let src = out.join("java_runtime/src");
+    assert!(src.join("java/lang/class_impl/members.rs").is_file() && src.join("jdk_resources/locale.properties").is_file());
+    assert!(src.join("java/util/zip/crc_impl.rs").is_file());
+    // runtime/ 改动：辅助目录并回宿主、宿主改名、资源删除、手写文件删除（同路径改由生成器写出）、目录改定向
+    std::fs::remove_dir_all(rt.join("src/java/lang/class_impl")).unwrap();
+    std::fs::rename(rt.join("src/java/lang/class_impl.rs"), rt.join("src/java/lang/klass_impl.rs")).unwrap();
+    std::fs::remove_file(rt.join("src/jdk_resources/locale.properties")).unwrap();
+    std::fs::remove_file(rt.join("src/java/nio/buffer_impl.rs")).unwrap();
+    put(&src.join("java/nio/buffer_impl.rs"), "rava_macros::java_class! {}\n");
+    put(&src.join("java/lang/notes.txt"), "清单外\n");
+    prepare_scratch(&out, &rt, &macros, &dirs("java_base_zip"), false).unwrap();
+    assert!(!src.join("java/lang/class_impl.rs").exists() && !src.join("java/lang/class_impl").exists(), "改名 / 删除的手写文件与辅助目录清除");
+    assert!(src.join("java/lang/klass_impl.rs").is_file());
+    assert!(!src.join("jdk_resources/locale.properties").exists() && src.join("jdk_resources/mod.rs").is_file(), "非 .rs 资源同步");
+    assert_eq!(read(&src.join("java/nio/buffer_impl.rs")), "rava_macros::java_class! {}\n", "带生成标记不删");
+    assert!(src.join("java/lang/notes.txt").is_file(), "清单外文件不动");
+    assert!(!src.join("java/util").exists(), "改定向：原 crate 的落盘文件删除、空目录移除");
+    assert!(out.join("java_base_zip/src/java/util/zip/crc_impl.rs").is_file());
+    assert!(src.join("java/lang/object.rs").is_file() && src.join("java/lang/object_impl.rs").is_file());
+    let ledger = read(&out.join(super::overlay::LEDGER));
+    assert!(ledger.contains("java_base_zip/src/java/util/zip/crc_impl.rs\n") && !ledger.contains("class_impl"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn companion_skipped_when_used_module_absent() {
     let root = tmp("companion");
