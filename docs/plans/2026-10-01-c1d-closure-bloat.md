@@ -1827,6 +1827,27 @@ U3 之后，emit `class_writer/methods.rs` 的 `core_` 适配已无运行时用�
 
 审计余量：HelloWorld `vm_boundary_methods` 29 = VM 10、Module 7、ClassLoader 6、BootLoader 2、ModuleLayer 2、Class 2。
 
+**a3x2 验证后的两项修正（2026-10-05）**
+
+- **TestCharsetNamedStreams：`ServiceConfigurationError: Provider sun.nio.cs.ext.ExtendedCharsets not found`（005282bf）。**
+  L1 把 BootLoader.loadClass 改为字节码翻译后，`ServiceLoader.loadProvider` → `Class.forName(Module, String)` 按
+  `module.getClassLoader()` 分派。原手写 `Class.getModule` 对所有类都返回同一个无名模块，其加载器为 null，于是
+  走 `BootLoader.loadClassOrNull` → `findBootstrapClass`。平台加载器定义的类在这里按定义加载器表返回 null。
+  修正后 `getModule` 对非引导加载器定义的类返回其定义加载器的 `getUnnamedModule()`，保持
+  `getModule().getClassLoader() == getClassLoader()`，provider 经 `ClassLoader.loadClass(Module, String)` 的
+  `findLoadedClass` 命中。
+- **closure_independent_of_hash_seed：TestSerialLookupPairing 种子 0 比种子 1 多 `FinalReference`（780ba97d，生成器）。**
+  - **触发点：** `Lookup.findVarHandle` 内的 `resolveOrFail(byte, Class, String, Class)` 调用点（反射式字段写入的形状规则）。
+    若只有点名 `"head"` 的调用方先接入，名字形参在常量格上是 `"head"`，而类形参已合流为非常量。原实现先把这个
+    常量名并入点名、再试配对；类不是字面量，于是按名放开全部 `head` 字段，且放开不撤回。
+  - **后果：** `ReferenceQueue.head` 不再折叠，`poll` / `poll0` 的非空分支存活，`instanceof FinalReference` 生效。
+  - **为何与顺序有关：** 终态下名字形参抬为非常量、登记字段配对，不再按名放开，所以结果取决于调用点接入的先后。
+  - **修正：** 本方法字面量总放开；常量格给出的名字只在未登记配对时放开。
+  - **验证：** Linux 参考 JDK 下种子 0 / 1 / 2 的类 / 方法 / 反射成员集合一致。a3 合入前的运行时 3393 类，
+    a3 当前运行时 3386 类，均不含 `FinalReference`。
+  - **为何在 a3 出现：** a3 合并集成分支（d7315af6）后调用点接入次序改变，缺陷才暴露。clsfact 分支同样失败，
+    同属这一生成器缺陷。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
