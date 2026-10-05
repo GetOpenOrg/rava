@@ -89,14 +89,12 @@ fn gen_signature_polymorphic(
         let e = sim.pop()?;
         let mut t = e.ty;
         let mut s = text(env, &e.expr);
-        // 子 int 基本类型（C/S/B/Z）在栈上是 int：按调用点描述符收窄后再装箱
-        // （Object[] 元素的装箱类型与 Java 自动装箱一致）
-        if matches!(p.as_str(), "C" | "S" | "B" | "Z") {
-            let p_ty = ty.jvm_to_rust(p);
-            if ty_text(env, &p_ty) != ty_text(env, &t) {
-                s = if p == "Z" { format!("({s} != 0)") } else { format!("({s} as {})", ty_text(env, &p_ty)) };
-                t = p_ty;
-            }
+        // 基本类型实参按调用点描述符的形参类型规整后再装箱（Object[] 元素的装箱类型与 Java
+        // 自动装箱一致）：JVM 栈上 Z/B/C/S/I 同为 int，栈值的 Rust 类型可与形参不同（如 `b ? 1 : 0`
+        // 折叠为 bool 而形参是 I）——收窄 / 加宽到形参类型
+        if let Some(cast) = primitive_cast(p, &ty_text(env, &t), &s) {
+            s = cast;
+            t = ty.jvm_to_rust(p);
         }
         let item = if ty_text(env, &t) == ir::anchors::OBJECT {
             if s == "this" { "Clone::clone(this)".to_string() } else { format!("Clone::clone(&{s})") }
@@ -159,6 +157,24 @@ fn gen_signature_polymorphic(
     from_object_push(env, sim, target, &text(env, &r.expr))
 }
 
+/// 基本类型栈值 → 描述符形参基本类型的 Rust 转换表达式；形参非基本类型、栈值非基本类型
+/// 或二者已一致 → None。数值间走 `as`（int → byte / short / char 的截断即 JVM i2b / i2s / i2c），
+/// 数值 → boolean 取 `!= 0`，boolean → 数值先到 i32（JVM 栈上 boolean 即 int 0 / 1）
+fn primitive_cast(p: &str, t_text: &str, s: &str) -> Option<String> {
+    let &[c] = p.as_bytes() else { return None };
+    let target = ty::Prim::from_desc(c)?.rust_name();
+    const PRIMS: [&str; 8] = ["bool", "i8", "i16", "u16", "i32", "i64", "f32", "f64"];
+    if !PRIMS.contains(&t_text) || t_text == target {
+        return None;
+    }
+    Some(match (t_text, target) {
+        (_, "bool") => format!("({s} != 0 as {t_text})"),
+        ("bool", "i32") => format!("({s} as i32)"),
+        ("bool", _) => format!("({s} as i32 as {target})"),
+        _ => format!("({s} as {target})"),
+    })
+}
+
 /// invokeinterface 的目标是接口上带体的 default 方法（粗口径：只查常量池接口自身声明）
 fn iface_default_init_gap(env: &InstrEnv, call: &CallRef) -> bool {
     env.ctx
@@ -166,4 +182,28 @@ fn iface_default_init_gap(env: &InstrEnv, call: &CallRef) -> bool {
         .get(&call.owner)
         .filter(|ci| ci.is_interface())
         .is_some_and(|ci| ci.methods().iter().any(|m| m.name == call.name && m.desc == call.desc && !m.is_abstract()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::primitive_cast;
+
+    #[test]
+    fn primitive_cast_covers_all_primitive_pairs() {
+        assert_eq!(primitive_cast("I", "bool", "b").as_deref(), Some("(b as i32)"));
+        assert_eq!(primitive_cast("J", "bool", "b").as_deref(), Some("(b as i32 as i64)"));
+        assert_eq!(primitive_cast("Z", "i32", "x").as_deref(), Some("(x != 0 as i32)"));
+        assert_eq!(primitive_cast("B", "i32", "x").as_deref(), Some("(x as i8)"));
+        assert_eq!(primitive_cast("C", "i32", "x").as_deref(), Some("(x as u16)"));
+        assert_eq!(primitive_cast("I", "i32", "x"), None);
+        assert_eq!(primitive_cast("Ljava/lang/Object;", "i32", "x"), None);
+        assert_eq!(primitive_cast("I", "Object", "x"), None);
+        let prims = ["Z", "B", "C", "S", "I", "J", "F", "D"];
+        let rust = ["bool", "i8", "u16", "i16", "i32", "i64", "f32", "f64"];
+        for (i, p) in prims.iter().enumerate() {
+            for (j, t) in rust.iter().enumerate() {
+                assert_eq!(primitive_cast(p, t, "v").is_some(), i != j, "{p} <- {t}");
+            }
+        }
+    }
 }
