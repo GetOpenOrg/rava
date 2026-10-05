@@ -253,6 +253,21 @@ pub(super) struct Hub {
     pub(super) edged: HashSet<(u32, usize)>,
 }
 
+/// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
+/// 定夺，与值到达的先后无关：不动点上元素类型实参仍无所指未知的 Class 才放行逐类型建分配点，
+/// 否则结果为 open(Object)、不建分配点（`reflect.rs::array_of_into`）
+#[derive(Default)]
+pub(super) struct ArrayOfSite {
+    /// 已到达的所指已知类镜像（字节码类 / 基本类型）
+    pub(super) mirrors: BTreeSet<u32>,
+    /// 结果节点
+    pub(super) dsts: Vec<Node>,
+    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含 open(Object)
+    pub(super) open: bool,
+    /// 已放行：所指已知的类镜像逐类型建分配点
+    pub(super) released: bool,
+}
+
 /// 调用点接入枢纽的记录：实参来源、结果节点、实参值
 pub(super) struct Link {
     pub(super) id: u32,

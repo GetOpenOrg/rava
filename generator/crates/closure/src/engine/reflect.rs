@@ -50,27 +50,87 @@ impl<'a> Engine<'a> {
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
             MirrorOp::Sub(k) => self.sub_mirrors(s, k),
-            MirrorOp::ArrayOf(m, off) => self.array_of_set(m as usize, off, s),
+            MirrorOp::ArrayOf(..) => unreachable!("反射数组分配只经 mirror_into"),
         }
     }
 
-    /// Class 值集中各类镜像所指类型的新数组（`Array.newInstance(c, n)`，元素为缺省值 null）：调用点 (m, off) 上
-    /// 按数组类型区分的分配点，元素只来自其后的写入。基本类型类镜像给各基本类型数组（void 抛异常，无结果）；
-    /// 维数已达上限的数组类镜像抛异常（JVMS §4.4.1 数组至多 255 维；Array.newInstance 同），无结果。
-    /// 所指未知的 Class（open、非镜像值、非字节码类镜像）给 open(Object)，该调用点此后不再逐类型建分配点
-    fn array_of_set(&mut self, m: usize, off: u32, s: &TypeSet) -> TypeSet {
-        let obj = self.id(OBJECT);
+    /// 反射数组分配调用点 (m, off) 的元素类型实参 s 流入、结果节点 dst（`Array.newInstance(c, n)`，元素为缺省值 null）。
+    /// 结果按调用点在不动点上的状态取（与值到达的先后无关，同 `class_lookup.rs::lookup_release`）：
+    /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含 open(Object)（涵盖任意数组）；
+    ///   放行前出现的，该调用点不再放行、不建分配点；
+    /// - 放行前其余到达只记下，到工作队列排空时仍无所指未知者放行（[`Self::array_of_release`]）；
+    /// - 放行后所指已知的类镜像逐类型建分配点（[`Self::array_sites`]），元素只来自其后的写入。
+    ///
+    /// 放行后的结果是实参集的单调函数，放行判定只在不动点上做，故终态与工作队列次序无关
+    fn array_of_into(&mut self, m: usize, off: u32, s: &TypeSet, dst: Node) {
+        let key = (m, off);
         let unknown = !s.open.is_empty()
             || s.classes.iter().any(|x| Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x)));
-        if unknown {
-            self.array_of_open.insert((m, off));
+        let known: Vec<u32> = s.classes.iter().filter(|&x| Some(x) == self.prim_mirror || self.mirrors.contains_key(&x)).collect();
+        let st = self.array_of.entry(key).or_default();
+        let new_dst = !st.dsts.contains(&dst);
+        if new_dst {
+            st.dsts.push(dst);
         }
-        if self.array_of_open.contains(&(m, off)) {
-            return TypeSet::open(obj);
+        let fresh: Vec<u32> = known.into_iter().filter(|&x| st.mirrors.insert(x)).collect();
+        let to_open: Vec<Node> = if unknown && !st.open {
+            st.open = true;
+            st.dsts.clone()
+        } else if st.open && new_dst {
+            vec![dst]
+        } else {
+            vec![]
+        };
+        let (released, open) = (st.released, st.open);
+        let all: Vec<u32> = if released && new_dst { st.mirrors.iter().copied().collect() } else { vec![] };
+        let dsts = st.dsts.clone();
+        if !to_open.is_empty() {
+            let o = TypeSet::open(self.id(OBJECT));
+            for d in to_open {
+                self.add_to(d, &o);
+            }
         }
+        if !released {
+            if !open {
+                self.array_of_pending.insert(key);
+            }
+            return;
+        }
+        let k = self.array_sites(m, off, &fresh);
+        for d in dsts {
+            self.add_to(d, &k);
+        }
+        if new_dst {
+            let k = self.array_sites(m, off, &all);
+            self.add_to(dst, &k);
+        }
+    }
+
+    /// 工作队列排空时放行挂起的反射数组分配调用点：不动点上实参仍无所指未知的 Class 者，已到达的类镜像逐类型建分配点、
+    /// 接入结果节点（此后按 [`Self::array_of_into`] 的单调口径照常求值）。返回是否有调用点放行
+    pub(super) fn array_of_release(&mut self) -> bool {
+        let ready: Vec<(usize, u32)> = std::mem::take(&mut self.array_of_pending)
+            .into_iter()
+            .filter(|k| self.array_of.get(k).is_some_and(|st| !st.open && !st.released))
+            .collect();
+        for &(m, off) in &ready {
+            let st = self.array_of.get_mut(&(m, off)).expect("挂起的调用点有状态");
+            st.released = true;
+            let xs: Vec<u32> = st.mirrors.iter().copied().collect();
+            let dsts = st.dsts.clone();
+            let k = self.array_sites(m, off, &xs);
+            for d in dsts {
+                self.add_to(d, &k);
+            }
+        }
+        !ready.is_empty()
+    }
+
+    /// 调用点 (m, off) 上类镜像 xs 所指类型的数组分配点：基本类型类镜像给各基本类型数组（void 抛异常，无结果）；
+    /// 维数已达上限的数组类镜像抛异常（JVMS §4.4.1 数组至多 255 维；Array.newInstance 同），无结果
+    fn array_sites(&mut self, m: usize, off: u32, xs: &[u32]) -> TypeSet {
         let mut out = TypeSet::default();
-        let xs: Vec<u32> = s.classes.iter().collect();
-        for x in xs {
+        for &x in xs {
             let ts: Vec<String> = if Some(x) == self.prim_mirror {
                 b"ZCFDBSIJ".iter().map(|&c| format!("[{}", c as char)).collect()
             } else {
@@ -265,6 +325,10 @@ impl<'a> Engine<'a> {
     /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，
     /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像
     pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+        if let MirrorOp::ArrayOf(m, off) = op {
+            self.array_of_into(m as usize, off, s, dst);
+            return;
+        }
         if op == MirrorOp::Of {
             for o in s.open.iter() {
                 if self.mirror_open_seen.insert((o, dst)) {

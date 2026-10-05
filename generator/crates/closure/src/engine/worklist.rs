@@ -121,6 +121,10 @@ impl<'a> Engine<'a> {
                 if self.lookup_release() {
                     continue;
                 }
+                // 反射数组分配调用点在不动点上放行逐类型分配点（`reflect.rs::array_of_release`）
+                if self.array_of_release() {
+                    continue;
+                }
                 // 收尾：得到过「不返回」答复的方法按值未知重算（定论判定见 `noreturn.rs`）
                 if self.nr_drain() {
                     continue;
