@@ -291,7 +291,7 @@ impl Unsafe {
     /// 分配前按 HotSpot `Unsafe_AllocateInstance` → `check_valid_for_instantiation` 校验：基本类型 / 数组类抛无消息的
     /// InstantiationException，接口、抽象类抛 InstantiationException（消息为类名），`Class` 本身抛 IllegalAccessException——不可实例化的类
     /// 没有 `<alloc>` 臂，校验先于分派（如 `findConstructor(Number.class, ..)` 句柄调用）
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn allocateInstance(&self, cls: Class) -> Result<Object> {
         if crate::_is_jnull_ref(&cls) {
             return Err(JvmError::null_pointer());

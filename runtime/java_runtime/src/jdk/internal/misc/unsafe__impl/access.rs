@@ -6,7 +6,7 @@ impl Unsafe {
     /// `compareAndSetLong(Object o, long offset, long expected, long x)`：long 槽的 CAS——
     /// 统一载体（`unsafe__ext`）在该槽的存储上原子完成读-比-写：实例字段双字视图 / 静态字段
     /// 写锁 / 基本类型数组与直接内存的字节视图。JDK compareAndSetDouble 以原始位经此。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndSetLong(&self, o: Object, offset: i64, expected: i64, x: i64) -> Result<bool> {
         Ok(_ext::cas(&o, offset, 8, "compareAndSetLong:(Ljava/lang/Object;JJJ)Z", expected as u64, x as u64)? == expected as u64)
     }
@@ -15,7 +15,7 @@ impl Unsafe {
     /// 当前值；等于 expected 即交换成功）。读-比-写经统一载体原子完成（与
     /// compareAndSetLong 同一存储单元）。消费方：JDK25 ForkJoinPool.compareAndExchangeCtl
     ///（signalWork 的 ctl 状态字）。native。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndExchangeLong(&self, o: Object, offset: i64, expected: i64, x: i64) -> Result<i64> {
         Ok(_ext::cas(&o, offset, 8, "compareAndExchangeLong:(Ljava/lang/Object;JJJ)J", expected as u64, x as u64)? as i64)
     }
@@ -29,14 +29,14 @@ impl Unsafe {
 
     /// `getLongVolatile(Object o, long offset)`：volatile 读——存储单元与 plain 同一（实例原子单元 /
     /// 静态字段 / 原生内存），内存序见下方「基本类型 volatile 访问」节。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getLongVolatile(&self, o: Object, offset: i64) -> Result<i64> {
         _volatile_load(|| self.getLong_obj_l(o, offset))
     }
 
     /// `putLongVolatile(Object o, long offset, long x)`：volatile 写（单元与 plain 同一）。
     /// `AtomicLong.set` 等经此路径——写入对 `__get_value` 直读可见。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putLongVolatile(&self, o: Object, offset: i64, x: i64) -> Result<()> {
         _volatile_store(|| self.putLong_obj_l_l(o, offset, x))
     }
@@ -44,7 +44,7 @@ impl Unsafe {
     /// `putLong(Object o, long offset, long x)`：实例字段 plain 写（与
     /// putLongVolatile 同一存储单元；原子单元，plain 写不弱于 volatile 写）。
     /// 消费方：`ThreadLocalRandom.localInit` 对 Thread.threadLocalRandomSeed。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putLong_obj_l_l(&self, o: Object, offset: i64, x: i64) -> Result<()> {
         _ext::put(&o, offset, 8, "putLong:(Ljava/lang/Object;JJ)V", x as u64)
     }
@@ -53,20 +53,20 @@ impl Unsafe {
     /// getLongVolatile 同一存储单元）。
     /// 消费方：`ThreadLocalRandom.nextSeed` 对 Thread.threadLocalRandomSeed
     /// （读改写种子的读半边；localInit 的写半边是 putLong_obj_l_l）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getLong_obj_l(&self, o: Object, offset: i64) -> Result<i64> {
         Ok(_ext::get(&o, offset, 8, "getLong:(Ljava/lang/Object;J)J")? as i64)
     }
 
     /// `getInt(Object o, long offset)`：实例字段 int 读（plain 形态）。
     /// 消费方：`ThreadLocalRandom.current` 对 Thread.threadLocalRandomProbe。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getInt_obj_l(&self, o: Object, offset: i64) -> Result<i32> {
         Ok(_ext::get(&o, offset, 4, "getInt:(Ljava/lang/Object;J)I")? as u32 as i32)
     }
 
     /// `putInt(Object o, long offset, int x)`：实例字段 int 写（plain 形态）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putInt_obj_l_i(&self, o: Object, offset: i64, x: i32) -> Result<()> {
         _ext::put(&o, offset, 4, "putInt:(Ljava/lang/Object;JI)V", x as u32 as u64)
     }
@@ -74,7 +74,7 @@ impl Unsafe {
     /// `compareAndSetInt(Object o, long offset, int expected, int x)`：int 槽的 CAS（统一载体，
     /// compareAndSetLong 的 32 位镜像）。JDK compareAndSetFloat 以原始位、子字 CAS
     ///（compareAndExchangeByte / Short）以 `offset & ~3` 的字经此。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndSetInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<bool> {
         Ok(_ext::cas(&o, offset, 4, "compareAndSetInt:(Ljava/lang/Object;JII)Z", expected as u32 as u64, x as u32 as u64)? == expected as u32 as u64)
     }
@@ -139,7 +139,7 @@ impl Unsafe {
 
     /// `compareAndExchangeInt(o, offset, expected, x)`：int 形态的见证值 CAS
     ///（compareAndExchangeLong 的同族对偶）。native。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndExchangeInt(&self, o: Object, offset: i64, expected: i32, x: i32) -> Result<i32> {
         Ok(_ext::cas(&o, offset, 4, "compareAndExchangeInt:(Ljava/lang/Object;JII)I", expected as u32 as u64, x as u32 as u64)? as u32 as i32)
     }
@@ -154,7 +154,7 @@ impl Unsafe {
     /// `compareAndExchangeReference(o, offset, expected, x)`：引用见证值 CAS——
     /// 数组槽位 / 实例字段两臂与 compareAndSetReference 同一载体分派，比较按
     /// Java `==`（对象身份）。消费方：JDK25 ForkJoinTask 的 aux 等待链。native。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndExchangeReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<Object> {
         let mut x = Some(x);
         _ref_rmw(&o, offset,
@@ -163,7 +163,7 @@ impl Unsafe {
     }
 
     /// `getIntVolatile(Object o, long offset)`：int volatile 读（单元与 plain 同一）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getIntVolatile(&self, o: Object, offset: i64) -> Result<i32> {
         _volatile_load(|| self.getInt_obj_l(o, offset))
     }
@@ -179,7 +179,7 @@ impl Unsafe {
     }
 
     /// `putIntVolatile(Object o, long offset, int x)`：int volatile 写（单元与 plain 同一）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putIntVolatile(&self, o: Object, offset: i64, x: i32) -> Result<()> {
         _volatile_store(|| self.putInt_obj_l_i(o, offset, x))
     }
@@ -213,7 +213,7 @@ impl Unsafe {
     // ClassSpecializer 的 speciesData 槽等。
 
     /// `getReference(Object o, long offset)`：引用读（plain）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getReference(&self, o: Object, offset: i64) -> Result<Object> {
         if let Some(r) = _static_ref_get(offset) {
             return r;
@@ -228,7 +228,7 @@ impl Unsafe {
     }
 
     /// `putReference(Object o, long offset, Object x)`：引用写（plain）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putReference(&self, o: Object, offset: i64, x: Object) -> Result<()> {
         if let Some(r) = _static_ref_set(offset, Clone::clone(&x)) {
             return r;
@@ -243,13 +243,13 @@ impl Unsafe {
     }
 
     /// `getReferenceVolatile(Object o, long offset)`：引用 volatile 读。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn getReferenceVolatile(&self, o: Object, offset: i64) -> Result<Object> {
         self.getReference(o, offset)
     }
 
     /// `putReferenceVolatile(Object o, long offset, Object x)`：引用 volatile 写。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn putReferenceVolatile(&self, o: Object, offset: i64, x: Object) -> Result<()> {
         self.putReference(o, offset, x)
     }
@@ -271,7 +271,7 @@ impl Unsafe {
     /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座（permit 语义的
     /// 阻塞驻留，`monitor::park`）。许可按当前线程对象身份登记。blocker 字段
     /// （parkBlocker）由上层 `putReferenceOpaque` 携带。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn park(&self, is_absolute: bool, time: i64) -> Result<()> {
         // HotSpot Parker 挂在 JavaThread（载体）上：虚拟线程被 pin 时经 parkOnCarrierThread 在载体上停泊，
         // VirtualThread.unpark 对应地 U.unpark(carrier)
@@ -281,7 +281,7 @@ impl Unsafe {
 
     /// `unpark(Object thread)`：LockSupport.unpark 的 VM 底座——授予目标线程许可并唤醒。
     /// null 线程静默（HotSpot Unsafe_Unpark 同判定）。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn unpark(&self, thread: Object) -> Result<()> {
         if !thread.0.is_jvm_null() {
             crate::monitor::unpark(thread.0.__identity() as usize);
@@ -312,7 +312,7 @@ impl Unsafe {
     /// 反解；实例字段（BufferedInputStream.close 的 buf 清空）走登记表反查
     /// + 引用原子协议。比较按 Java `==`（对象身份，`PartialEq for Object`）；
     /// 读-比-写在存储写锁内完成（`_ref_rmw`），并行后端下真正原子。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn compareAndSetReference(&self, o: Object, offset: i64, expected: Object, x: Object) -> Result<bool> {
         let mut x = Some(x);
         let old = _ref_rmw(&o, offset,
