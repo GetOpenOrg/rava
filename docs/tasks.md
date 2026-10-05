@@ -126,7 +126,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-a 去截断（c1d-p0，2026-10-01-c1d-closure-bloat.md；原节点见历史 §D）
 │   │     ├─ ✅ a1 具体求值器 engine/concrete/：正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5）
 │   │     ├─ ✅ a2 合入 62f46bb2（b4669206，抽查 9/9）
-│   │     ├─ 🔄 a2 续：initPhase2 膨胀定位 → 早退检查按分析期事实求值 → [[boot_init.phases]] → boot layer 步骤 2–5
+│   │     ├─ ✅ a2 续：早退检查按分析期事实求值（F1/F2）、[[boot_init.phases]]（6666c19b，锚点留空）；锚点代价实测见 c1d §25（档案 +约 20 类，单例 HelloWorld 469→3190）
 │   │     ├─ ✅ a4 TestCharsetNamedStreams（b124e5ac，抽查 c1da-f2bdcf6e 通过）
 │   │     ├─ ✅ JCA 请求点值流 / 种子修复（51a4d8c5）：StockTrans 3283 / DeepCopy 3278 类
 │   │     ├─ ⏳ jar 签名校验路径收窄（JCA 后 +134 类的来源）
@@ -160,7 +160,8 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │
 │   ├─ 🔄 boot layer：ModuleBootstrap.boot 引导期建层、System.bootLayer 按字节码读取、系统模块描述符承载（FS-H12）
 │   │     ├─ ✅ 第 0 步 27dfb419：镜像与 jmod 字节不同的类以镜像为准
-│   │     └─ ⏳ 第 1 步起 ◀── C1d-a a2 续；验收 TestModuleLayerDefine 原样通过
+│   │     ├─ ✅ 第 1 步：[[boot_init.phases]] 清单与按锚点作根（6666c19b）
+│   │     └─ ⏳ 第 2–5 步 ◀── Class 实例方法按接收者镜像求 classLoader/module、容器元素类型、实例汇合点（c1d §25.4，判据 HelloWorld ≤569 类）；验收 TestModuleLayerDefine 原样通过
 │   │
 │   ├─ ⏳ regress2 遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 <init> 不成帧 ◀── C1d-a a2
 │   │
@@ -269,7 +270,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a 去截断（c1d-p0） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-03 | 闭包闸门 P2/P3；StockTrans 3283 / DeepCopy 3278 类，目标 DeepCopy ≤1640；子项见下，过程见历史 §D / §J |
 | C1d-a-a1 | ✅ | 正式 HelloWorld 423 类 / 2–3 s（≤360 余量转 a5） |
 | C1d-a-a2 | ✅ 62f46bb2 | b4669206 合入，抽查 c1da-b4669206 9/9 |
-| C1d-a-a2续 | 🔄 | initPhase2 膨胀用真实 `--cut` 定位 → 早退检查按分析期事实求值 → `[[boot_init.phases]]` → boot layer 步骤 2–5；闸门以档案规模计（基线 3609）。第 1 小步（分支 c1d-a2c，方案 §23）：定位 + F1 拼接 / 形参键系统属性读、F2 空不可变集合事实，HelloWorld 根下 3283→3221、4 例两种子一致只减不增；档案规模与单例编译待服务器 |
+| C1d-a-a2续 | ✅ | 早退检查按分析期事实求值（F1 / F2，§23）、`[[boot_init.phases]]` 清单与按锚点作根（6666c19b，锚点留空）。锚点代价实测（c1d §25，分支 c1d-boot）：档案并集 7886 类只增加约 20 个 `jdk/internal/module` 类，但 `Class.module` 锚点使所有用例都作根，单例 HelloWorld 469→3190；具体求值器执行 initPhase2 不可行（§25.3）。boot layer 第 2–5 步转为依赖 §25.4 的三项精度 |
 | C1d-a-a4 | ✅ b124e5ac | TestCharsetNamedStreams，抽查 c1da-f2bdcf6e 通过（计划 §21.4） |
 | C1d-a-JCA | ✅ 51a4d8c5 | JCA 种子修复（抽查 9/10 + 6/6）；代价 StockTrans 3141→3283，+134 来自 jar 签名校验路径 |
 | C1d-a-jar签名 | ⏳ | jar 签名校验路径收窄（4 个算法名不可定的请求点） |
@@ -308,7 +309,7 @@ regress2 遗留（◀── a2）───────────────�
 | BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
 | BS-B2 | ⏳ ◀── B1 | 栈还原按地址查表，release 加 strip=symbols |
 | BS-B3 | ⏳ ◀── B2 | opt=s / z 体积档位性能对照，交用户决定 |
-| boot layer | 🔄 第 0 步 ✅ 27dfb419 | ModuleBootstrap 引导建层；第 1 步起 ◀── C1d-a a2 续（FS-C2 ✅）；验收 TestModuleLayerDefine |
+| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值、容器元素类型、实例汇合点（c1d §25.4，判据 HelloWorld ≤569 类）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |
