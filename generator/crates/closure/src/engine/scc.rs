@@ -1,6 +1,6 @@
 //! 引擎：类型流图的环合并。
 //!
-//! 只经 Object 过滤边（恒等推送）构成的强连通分量，不动点处各节点类型集必然相等：沿环每条边
+//! 只经 Object 过滤边与类型恒等边（`tau.rs`，恒等推送）构成的强连通分量，不动点处各节点类型集必然相等：沿环每条边
 //! 都要求目标 ⊇ 源。合并为一个代表后，类型集、出边、待推增量只存一份，环内推送消失——
 //! 手写调用点数组读写（`E→W→E`，见 `hw_mem.rs`）把逃逸数组与各站点写入槽连成的大环
 //! 是 DeepCopy 类用例流图的主体（计划 2026-09-30-closure-analyzer-performance.md §4.5）。
@@ -33,8 +33,22 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Tarjan（迭代）求 Object 边子图上的非平凡强连通分量（各分量成员升序，分量按最小成员升序）
-    fn object_sccs(&self, obj: u32) -> Vec<Vec<u32>> {
+    /// 各可合并代表出边的恒等标记（Object 边或类型恒等边，见 `tau.rs`），按出边表下标
+    fn ident_marks(&mut self, obj: u32) -> Vec<Vec<bool>> {
+        let n = self.graph.node_count();
+        let mut out: Vec<Vec<bool>> = vec![Vec::new(); n];
+        for v in 0..n as u32 {
+            if self.graph.edges[v as usize].is_empty() || !self.scc_eligible(v) {
+                continue;
+            }
+            let fs: Vec<u32> = self.graph.edges[v as usize].iter().map(|&(_, f)| f).collect();
+            out[v as usize] = fs.into_iter().map(|f| self.ident_edge(v, f, obj)).collect();
+        }
+        out
+    }
+
+    /// Tarjan（迭代）求恒等边子图上的非平凡强连通分量（各分量成员升序，分量按最小成员升序）
+    fn object_sccs(&self, ident: &[Vec<bool>]) -> Vec<Vec<u32>> {
         let n = self.graph.node_count();
         const UNSEEN: u32 = u32::MAX;
         let mut index = vec![UNSEEN; n];
@@ -56,9 +70,9 @@ impl<'a> Engine<'a> {
             call.push((v0, 0));
             while let Some(&(v, ei)) = call.last() {
                 let vi = v as usize;
-                if let Some(&(t, f)) = self.graph.edges[vi].get(ei) {
+                if let Some(&(t, _)) = self.graph.edges[vi].get(ei) {
                     call.last_mut().expect("非空").1 += 1;
-                    if f != obj {
+                    if !ident[vi][ei] {
                         continue;
                     }
                     let w = self.graph.rep(t);
@@ -108,7 +122,17 @@ impl<'a> Engine<'a> {
         self.graph.edges_since = 0;
         self.graph.scc_stats[0] += 1;
         let obj = self.id(OBJECT);
-        let comps = self.object_sccs(obj);
+        let ident = self.ident_marks(obj);
+        let comps = self.object_sccs(&ident);
+        // 观测：分量内含非 Object 恒等边的分量数
+        for c in &comps {
+            let inner = |t: u32| c.binary_search(&self.graph.rep(t)).is_ok();
+            let typed = c.iter().any(|&v| self.graph.edges[v as usize].iter().zip(&ident[v as usize]).any(|(&(t, f), &k)| k && f != obj && inner(t)));
+            if typed {
+                self.graph.tau_stats[2] += 1;
+            }
+        }
+        drop(ident);
         if comps.is_empty() {
             self.graph.scc_stats[2] += t0.elapsed().as_millis() as u64;
             return;
@@ -140,6 +164,7 @@ impl<'a> Engine<'a> {
             }
             self.graph.put_own(a, u);
             self.graph.edges[a as usize] = edges;
+            self.refresh_rep_taus(a);
             self.graph.scc_stats[1] += (comp.len() - 1) as u64;
             if !pend.is_empty() {
                 push.push((a, pend));
@@ -155,13 +180,16 @@ impl<'a> Engine<'a> {
             let es = std::mem::take(&mut self.graph.edges[s]);
             let s32 = s as u32;
             seen.clear();
-            let kept: Vec<(u32, u32)> = es
-                .into_iter()
-                .filter_map(|(t, f)| {
-                    let r = self.graph.rep(t);
-                    (!(r == s32 && f == obj) && seen.insert((r, f))).then_some((r, f))
-                })
-                .collect();
+            let mut kept: Vec<(u32, u32)> = Vec::with_capacity(es.len());
+            for (t, f) in es {
+                let r = self.graph.rep(t);
+                if r == s32 && self.ident_edge(s32, f, obj) {
+                    continue;
+                }
+                if seen.insert((r, f)) {
+                    kept.push((r, f));
+                }
+            }
             self.graph.set_edges(s32, kept);
         }
         for (a, d) in push {

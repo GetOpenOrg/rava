@@ -21,6 +21,10 @@ impl<'a> Engine<'a> {
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
         let i = self.graph.id(n);
+        if !s.is_empty() {
+            self.graph.injected[i as usize] = true;
+            self.tau_check_add(i, s);
+        }
         self.add_to_id(i, s);
     }
 
@@ -162,9 +166,10 @@ impl<'a> Engine<'a> {
     /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        self.tau_check_flow(di, filter);
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
         let objf = filter & NOT_SUB == 0 && self.names[filter as usize].as_ref() == OBJECT;
-        if rs == rd && objf {
+        if rs == rd && (objf || self.ident_edge(rs, filter, u32::MAX)) {
             return;
         }
         if !self.graph.add_edge(rs, rd, filter) {
@@ -377,8 +382,9 @@ impl<'a> Engine<'a> {
         if let Some(fi) = self.fields.get_index_of(&key) {
             return fi;
         }
-        let (fi, _) = self.fields.insert_full(key.clone(), ());
-        if let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)) {
+        let ftid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
+        let (fi, _) = self.fields.insert_full(key.clone(), ftid);
+        if let Some(tid) = ftid {
             self.flow(Node::U(fi), Node::F(fi), tid);
             if self.hw_written_names.contains(&key.name) {
                 self.add_to(Node::U(fi), &TypeSet::open(tid));

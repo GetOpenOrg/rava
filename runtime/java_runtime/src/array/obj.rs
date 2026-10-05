@@ -8,6 +8,7 @@ use super::*;
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
+use std::sync::atomic::Ordering;
 
 use crate::obj_ref::{__trailing, __Obj};
 use crate::sync_model::__RefField;
@@ -66,6 +67,24 @@ impl<T: 'static> __ArrayObj<T> {
                     n += 1;
                 }
                 assert_eq!(n, len, "数组元素个数与长度不符");
+            })
+        }
+    }
+
+    /// 元素取默认值的自有元素数组（newarray / anewarray）：基本元素的 Java 默认值（0 / false / +0.0）
+    /// 位形全零，分配时清零即完成初始化，不逐元素写入；引用元素逐个写入默认值（类型化 null）。
+    pub(super) fn own_default(len: usize) -> __Obj<Self>
+    where
+        T: Default,
+    {
+        if !JArray::<T>::has_primitive_elements() {
+            return Self::own(len, None, std::iter::repeat_with(T::default));
+        }
+        let bytes = len.checked_mul(size_of::<PrimSlot<T>>()).expect("数组大小溢出");
+        // SAFETY: 基本元素类型的默认值位形全零；值在初始化闭包内写入
+        unsafe {
+            __Obj::new_trailing_zeroed(bytes, |p: *mut Self| {
+                p.write(__ArrayObj { repr: Repr::Own { len, prim: true, tag: None }, _cell: UnsafeCell::new(()), _elem: PhantomData });
             })
         }
     }
@@ -154,9 +173,30 @@ impl<T: 'static> __ArrayObj<T> {
 // ── 元素存取（JArray 与 Object 的数组访问转发到这里）──
 
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> __ArrayObj<T> {
-    #[inline]
+    /// 读（*aload）。自有基本元素数组走快路径：界检 + 槽的同宽原子读，全程 `#[inline(always)]`
+    /// 与整数地址运算，opt-level 0 的调用方（dev-opt 档的用户 crate）也不逐层调用存取链。
+    #[inline(always)]
     pub fn get(&self, i: i32) -> crate::error::Result<T> {
         crate::gil::safepoint(); // 安全点钩子（并行后端为空）
+        if let Repr::Own { len, prim: true, .. } = self.repr {
+            return Ok(from_bits(self.prim_slot(i, len)?.load_bits(Ordering::Relaxed)));
+        }
+        self.get_general(i)
+    }
+
+    /// 自有基本元素数组下标 `i` 的槽；越界抛 `ArrayIndexOutOfBoundsException`（JVMS §6.5）
+    #[inline(always)]
+    fn prim_slot(&self, i: i32, len: usize) -> crate::error::Result<&PrimSlot<T>> {
+        if i < 0 || i as usize >= len {
+            return Err(crate::error::JvmError::array_index_out_of_bounds(i, len as i32));
+        }
+        // 元素区紧随值（`own` / `own_default` 分配）；整数地址运算，不经 std 指针方法
+        let addr = self as *const Self as usize + size_of::<Self>() + i as usize * size_of::<PrimSlot<T>>();
+        // SAFETY: 下标在界内，槽已初始化，随数组对象存活
+        Ok(unsafe { &*(addr as *const PrimSlot<T>) })
+    }
+
+    fn get_general(&self, i: i32) -> crate::error::Result<T> {
         match self.form() {
             Form::Own(store, _) => store.get(i),
             Form::Covariant(view) => Ok(T::from((view.get)(&view.origin, i)?)),
@@ -173,8 +213,17 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         }
     }
 
-    #[inline]
+    /// 写（*astore）。自有基本元素数组走快路径（同 `get`）。
+    #[inline(always)]
     pub fn set(&self, i: i32, v: T) -> crate::error::Result<()> {
+        if let Repr::Own { len, prim: true, .. } = self.repr {
+            self.prim_slot(i, len)?.store_bits(to_bits(v), Ordering::Relaxed);
+            return Ok(());
+        }
+        self.set_general(i, v)
+    }
+
+    fn set_general(&self, i: i32, v: T) -> crate::error::Result<()> {
         match self.form() {
             Form::Own(store, tag) => {
                 if let Some(tag) = tag {
@@ -199,8 +248,11 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> i32 {
+        if let Repr::Own { len, .. } = self.repr {
+            return len as i32;
+        }
         match self.form() {
             Form::Own(store, _) => store.len() as i32,
             Form::Covariant(view) => view.len(),

@@ -217,7 +217,7 @@ fn companion_skipped_when_used_module_absent() {
     let rt = runtime(&root);
     put(
         &rt.join("src/java/lang/invoke/natives_impl.rs"),
-        "use crate::prelude::*;\nuse crate::java::lang::Class;\nuse super::member_name::MemberName;\n\
+        "use crate::prelude::*;\nuse super::member_name::MemberName;\n\
          impl Natives { pub fn f(x: MemberName) {} }\n",
     );
     let out = root.join("build").join("t");
@@ -234,6 +234,50 @@ fn companion_skipped_when_used_module_absent() {
     w.write(&dir.join("member_name.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(read(&dir.join("mod.rs")).ends_with("mod natives_impl;\n"), "依赖齐 → 声明");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 包路径下非模块文件段的在场判定（d7f482e1 场景）：手写 pub item（类型 / pub mod）恒在场；
+/// 大写生成类按 snake 化文件名探测（`Proxy_Dyn` → `proxy_dyn.rs`）；「目录 + 同名 .rs」并存时条目
+/// 可能在 .rs 模块体里；其余缺席（`super::member_name` 而无 member_name.rs）
+#[test]
+fn companion_item_segments_probed_precisely() {
+    let root = tmp("companion_items");
+    let rt = runtime(&root);
+    put(&rt.join("src/p/hw_ext.rs"), "pub struct HwType;\npub mod hw_mod { pub struct G; }\n");
+    // 路径引用只记到首个大写段：小写段恒为中间的模块段
+    put(
+        &rt.join("src/p/a_impl.rs"),
+        "use crate::p::HwType;\nuse crate::p::hw_mod::G;\nuse super::Proxy_Dyn;\n\
+         use super::arr::inner::Helper;\nuse crate::p::__Hidden;\n\
+         impl A { pub fn f(_a: HwType, _b: Proxy_Dyn, _c: __Hidden, _g: G, _h: Helper) {} }\n",
+    );
+    put(&rt.join("src/p/b_impl.rs"), "use super::missing_mod::Thing;\nimpl B { pub fn f(_t: Thing) {} }\n");
+    put(&rt.join("src/p/c_impl.rs"), "use super::Absent_Gen;\nimpl C { pub fn f(_t: Absent_Gen) {} }\n");
+    let out = root.join("build").join("t");
+    prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
+    let src = out.join("java_runtime/src");
+    let dir = src.join("p");
+    let gen = "rava_macros::java_class! {}\n";
+    let write = |extra: &[&str]| {
+        let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+        for f in ["a.rs", "b.rs", "c.rs"].iter().chain(extra) {
+            w.write(&dir.join(f), gen).unwrap();
+        }
+        write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
+        read(&dir.join("mod.rs"))
+    };
+    // arr/ 与 arr.rs 并存（inner 在 arr.rs 模块体里）；Proxy_Dyn 未生成 → a_impl 缺依赖
+    let m = write(&["arr.rs", "arr/x.rs"]);
+    assert!(!m.contains("mod a_impl;"), "snake 生成类缺席 → 不声明：{m}");
+    let m = write(&["arr.rs", "arr/x.rs", "proxy_dyn.rs"]);
+    assert!(m.contains("mod a_impl;"), "手写 item / snake 生成类 / 目录+同名 .rs / `__` 内部条目均在场 → 声明：{m}");
+    assert!(!m.contains("mod b_impl;"), "缺席的小写段 → 不声明：{m}");
+    assert!(!m.contains("mod c_impl;"), "缺席的大写段 → 不声明：{m}");
+    // 仅有 arr/ 目录、无 arr.rs：inner 无处承载 → a_impl 不声明
+    std::fs::remove_file(dir.join("arr.rs")).unwrap();
+    let m = write(&["arr/x.rs", "proxy_dyn.rs"]);
+    assert!(!m.contains("mod a_impl;"), "目录无同名 .rs 时小写模块段缺席：{m}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
