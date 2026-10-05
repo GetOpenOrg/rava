@@ -183,7 +183,12 @@ pub(crate) fn expand_interface(
     let null_ref = if binary_name.is_empty() {
         quote! { <Object as ::std::default::Default>::default() }
     } else {
-        quote! { Object::__typed_null(#binary_name) }
+        // 本接口的类型化 null 进程内只建一次（杠杆 ③）：载体缺省值（null 局部量 / 字段读出
+        // 未写入的接口槽）不再逐次按名查全局表
+        quote! {{
+            static __TYPED_NULL: ::std::sync::OnceLock<Object> = ::std::sync::OnceLock::new();
+            ::std::clone::Clone::clone(__TYPED_NULL.get_or_init(|| Object::__typed_null(#binary_name)))
+        }}
     };
 
     quote! {
@@ -294,8 +299,8 @@ pub(crate) fn expand_interface_impl(
         quote! {
             #sig {
                 let __wrapper: #struct_ident #erased_ty_args = #struct_ident {
-                    __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                                    |__i| __i as &#erased_vt),
+                    __r: unsafe { __Ref::from_storage(self,
+                                    |__i| __i as &#erased_vt) },
                     #phantom_init
                 };
                 let __result = __wrapper.#target(#(::std::convert::From::from(#args)),*)?;
@@ -403,8 +408,8 @@ pub(crate) fn erased_wrapper_call(
     let call = erased_impl_call(sig, impl_name, type_param_names, erasure);
     quote! {
         let __w: #struct_ident #erased_ty_args = #struct_ident {
-            __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                            |__i| __i as &dyn #vtable_trait_ident),
+            __r: unsafe { __Ref::from_storage(self,
+                            |__i| __i as &dyn #vtable_trait_ident) },
             #phantom_init
         };
         #call

@@ -44,27 +44,23 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         let set = format_ident!("__set_{}", name);
         if ctx.is_erased(name) {
             quote! {
-                fn #get(&self) -> Object {
-                    self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
-                }
-                fn #set(&self, v: Object) {
-                    *self.#name.borrow_mut() = ::std::option::Option::Some(
-                        ::std::boxed::Box::new(v));
-                }
+                fn #get(&self) -> Object { self.#name.get_or_default() }
+                fn #set(&self, v: Object) { self.#name.set(::std::option::Option::Some(v)); }
             }
-        } else if basic {
+        } else if basic && ctx.is_volatile(name) {
             quote! {
                 fn #get(&self) -> #ty { self.#name.get() }
                 fn #set(&self, v: #ty) { self.#name.set(v); }
             }
+        } else if basic {
+            quote! {
+                fn #get(&self) -> #ty { self.#name.get_plain() }
+                fn #set(&self, v: #ty) { self.#name.set_plain(v); }
+            }
         } else {
             quote! {
-                fn #get(&self) -> #ty {
-                    self.#name.borrow().as_deref().map(Clone::clone).unwrap_or_default()
-                }
-                fn #set(&self, v: #ty) {
-                    *self.#name.borrow_mut() = Some(::std::boxed::Box::new(v));
-                }
+                fn #get(&self) -> #ty { self.#name.get_or_default() }
+                fn #set(&self, v: #ty) { self.#name.set(::std::option::Option::Some(v)); }
             }
         }
     };
@@ -96,8 +92,8 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 #struct_ident {
-                    __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                                    |__i| __i as &dyn #vtable_trait_ident),
+                    __r: unsafe { __Ref::from_storage(self,
+                                    |__i| __i as &dyn #vtable_trait_ident) },
                     #phantom_init
                 }
             }
@@ -383,8 +379,8 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
             };
             items.push(quote! {
                 fn #anc_hook(&self) -> #anc_ident #anc_erased_args {
-                    #anc_from_parts(__Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                                               |__i| __i as &dyn #anc_vtable_ident))
+                    #anc_from_parts(unsafe { __Ref::from_storage(self,
+                                               |__i| __i as &dyn #anc_vtable_ident) })
                 }
             });
 
@@ -421,8 +417,8 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
         own_accessor_impls.push(quote! {
             fn #as_self_hook(&self) -> #struct_ident #erased_ty_args {
                 #struct_ident {
-                    __r: __Ref::new(__Shared::new(::std::clone::Clone::clone(self)),
-                                    |__i| __i as &dyn #vtable_trait_ident),
+                    __r: unsafe { __Ref::from_storage(self,
+                                    |__i| __i as &dyn #vtable_trait_ident) },
                     #phantom_init
                 }
             }

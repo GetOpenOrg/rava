@@ -19,14 +19,14 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
         // 协变视图：`String[]` 以 `Object[]` 形态流转时 getClass 仍是
         // `[Ljava.lang.String;`——委托源数组取运行时元素类型。
-        if let Repr::Covariant(view) = &*self.0 {
+        if let Some(Repr::Covariant(view)) = self.0.as_deref() {
             return view.origin.0.getClass();
         }
         if let Some(d) = Self::primitive_elem_descriptor() {
             return Ok(crate::java::lang::Class::for_class(
                 crate::java::lang::String::from(format!("[{}", d).as_str())));
         }
-        if let Repr::Own(_, Some(tag)) = &*self.0 {
+        if let Some(Repr::Own(_, Some(tag))) = self.0.as_deref() {
             let binary = if tag.starts_with('[') { format!("[{}", tag) } else { format!("[L{};", tag) };
             return Ok(crate::java::lang::Class::for_class(
                 crate::java::lang::String::from(binary.as_str())));
@@ -61,10 +61,10 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         //   - 同描述符成立；目标 "[Ljava/lang/Object;" 按数组协变恒成立
         //（JLS §4.10.4：任意引用元素数组是 Object[] 的子类型——基本元素
         //     数组不是，故只在引用元素分支放行）。
-        if matches!(&*self.0, Repr::Null) {
+        if self.is_jvm_null() {
             return true;
         }
-        if let Repr::Covariant(view) = &*self.0 {
+        if let Some(Repr::Covariant(view)) = self.0.as_deref() {
             return view.origin.0.is_instance_of(type_id);
         }
         if let Some(d) = Self::primitive_elem_descriptor() {
@@ -87,13 +87,12 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     /// 当前元素类型重建；协变视图委托源数组（克隆保持运行时元素类型，Java 的
     /// clone 不改变数组的具体类型）。
     fn __shallow_copy(&self) -> Option<Object> {
-        match &*self.0 {
-            Repr::Own(cells, tag) => {
-                let data = cells.borrow();
-                Some(Object::from(JArray(Rc::new(Repr::Own(RefCell::new(data.clone()), tag.clone())))))
+        match self.0.as_deref() {
+            Some(Repr::Own(store, tag)) => {
+                Some(Object::from(JArray::own(Repr::Own(Store::from_vec(store.to_vec()), tag.clone()))))
             }
-            Repr::Covariant(view) => view.origin.0.__shallow_copy(),
-            Repr::Null => Some(Object::from(Clone::clone(self))),
+            Some(Repr::Covariant(view)) => view.origin.0.__shallow_copy(),
+            None => Some(Object::from(Clone::clone(self))),
         }
     }
 
@@ -106,7 +105,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
             *same = Some(Clone::clone(self));
             return true;
         }
-        if matches!(&*self.0, Repr::Null) {
+        if self.is_jvm_null() {
             // null 通过任意数组类型的 checkcast：以目标形态的 null 还原
             if let Some(erased) = slot.downcast_mut::<Option<JArray<Object>>>() {
                 *erased = Some(JArray::default());
@@ -114,12 +113,12 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
             }
             return false;
         }
-        if let Repr::Covariant(view) = &*self.0 {
+        if let Some(Repr::Covariant(view)) = self.0.as_deref() {
             return view.origin.0.__view_into(any, slot);
         }
         if let Some(erased) = slot.downcast_mut::<Option<JArray<Object>>>() {
             if !Self::has_primitive_elements() {
-                *erased = Some(JArray(Rc::new(Repr::Covariant(covariant_view(self)))));
+                *erased = Some(JArray::own(Repr::Covariant(covariant_view(self))));
                 return true;
             }
         }
@@ -139,9 +138,9 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
         if Self::has_primitive_elements() {
             return false;
         }
-        match &*self.0 {
-            Repr::Covariant(view) => view.origin.0.__array_elem_assignable(target_elem, slot),
-            Repr::Own(..) => {
+        match self.0.as_deref() {
+            Some(Repr::Covariant(view)) => view.origin.0.__array_elem_assignable(target_elem, slot),
+            Some(Repr::Own(..)) => {
                 let probe: Object = Into::<Object>::into(T::default());
                 if let Some(d) = probe.0.__desc() {
                     return d.is_subtype_name(target_elem);
@@ -149,7 +148,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
                 let unused = crate::sync_model::__unused_any();
                 probe.0.__view_into(unused, slot)
             }
-            Repr::Null => false,
+            None => false,
         }
     }
 }

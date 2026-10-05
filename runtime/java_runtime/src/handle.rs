@@ -140,6 +140,22 @@ impl<V: ?Sized> __Ref<V> {
         __Ref { h: __Handle::new(rc), vt: Some(vt) }
     }
 
+    /// 以存储自身建立引用（`impl X__VTable for X__inner` 的 wrapper 重建钩子）：存储位于分配钩子
+    /// 建立的 `__Shared<T>` 中，引用计数加一即得同一对象的句柄——不复制存储，对象标识即存储地址。
+    ///
+    /// # Safety
+    /// `this` 必须是某个以 `T` 分配的 `__Shared<T>` 所持的值。
+    #[inline]
+    pub unsafe fn from_storage<T: ObjectVTable>(this: &T, view: impl for<'a> FnOnce(&'a T) -> &'a V) -> Self {
+        let p = this as *const T;
+        // SAFETY: 调用方保证 p 来自 `__Shared::<T>`；先加计数，再收回一个强引用
+        let rc = unsafe {
+            __Shared::increment_strong_count(p);
+            __Shared::from_raw(p)
+        };
+        Self::new(rc, view)
+    }
+
     /// 由句柄与其所持对象上取得的视图指针合成（`__erased_vtable` 填入的指针）。
     ///
     /// # Safety

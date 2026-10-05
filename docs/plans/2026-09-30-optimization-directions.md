@@ -199,6 +199,13 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 9. `a61f8dc0`（杠杆 ②）字符串常量逐调用点缓存：`java_class!` 展开时把方法体与 ConstantValue 初值中的 `String::from("…")` 改写为调用点私有 `OnceLock` 单元，首次经全局驻留表（按 `Vec<u16>` 哈希、持锁）取规范实例，此后只克隆同一实例（JVMS §5.4.3 常量池项解析一次）。不用 `get_or_init`（首次加载可能经类初始化重入同一调用点），并发 / 重入的各次加载取到同一驻留实例、先写入者留存。可读层源码不变。
 10. `1697a9a8`（杠杆 ④）Unsafe 偏移与数组视图免查表：实例字段偏移反查改为按 id 稠密下标（`id / FIELD_SLOT - 1`）直取进程常驻登记项，`offset_slot` 返回 `&'static str`（原先每次访问哈希查表 + 两次 `String` 克隆 + `to_owned`），`field_of_offset` 不再线性扫描；数组协变视图（`Node[]` 等经 `__view_into` 擦除为 `Object[]`，Unsafe / VarHandle 引用访问器、`array_load_object` / `array_store_object` 每次都构造）的元素访问改为按元素类型单态化的函数指针，构造开销由 4 个闭包 + 视图 + 元素名探针降为源句柄 + 视图两次分配，长度经源数组钩子；`__view_into` 等只透传的擦除句柄改用进程共用单元，不再逐次 `Arc::new(())`。
 
+**存储形态改造（分支 `r1-storage`，主会话协调后由本线承担）**：JMM 口径——普通字段只要求无撕裂、无数据竞争 UB（Relaxed 原子），volatile 字段 SeqCst，final 字段由构造完成后的发布（`Arc` 移交 / 类初始化状态发布）给出 happens-before；只用 `Atomic*`、原子指针与内联单一分配，不引入每字段锁。
+
+11. `a58120d4` 对象字段内联单一分配：基本字段 `__PrimCell`（`AtomicU64` 位存储，普通字段 `get_plain` / `set_plain` 即 Relaxed、volatile SeqCst，祖先 volatile 经 `superclass_volatile_fields` 传递），引用字段 `__RefField<T>`（`AtomicBool` 自旋 + `UnsafeCell`，临界区只做克隆 / 替换，旧值在锁外释放）；去掉每字段 `Arc<RwLock<Option<Box<T>>>>`。wrapper 重建钩子经 `__Ref::from_storage` 共享同一存储（不再整份克隆），对象标识即存储地址；`__ClassDesc.offsets`（实现层 `offset_of!` 导出）供按名协议、反射、Unsafe 偏移、VarHandle、序列化与浅拷贝按偏移定位，手写层访问形态不变。
+12. `28fd9be7`（Q1(a)）静态字段无锁：`__process_static!`（`OnceLock` + 读写锁单元）改为常量初始化的普通 `static`——基本类型 `__PrimCell::zeroed()`（`static volatile` 走 SeqCst，其余 Relaxed），引用类型 `__RefField<Option<T>>`；类初始化状态改为 `static __PrimCell<u8>`，已初始化快路径为一次原子读（`<clinit>` 写入对其他线程的可见性由状态发布的 SeqCst 写 / 读建立）。
+13. `e63547cc`（Q2）数组无锁：`JArray<T>(Option<Arc<Repr<T>>>)`，null 数组为 `None` 不分配；`Store<T>` 基本元素为同宽原子单元（`AtomicU8/16/32/64::from_ptr`，get / set Relaxed，读改写 CAS SeqCst），引用元素逐元素 `__RefField` 内联；Unsafe / 原生内存按字节视图读写逐元素拼接（部分覆盖元素用 CAS 合并，单元素内的读改写为该元素 CAS，跨元素读改写取 16 路条带锁），bool 元素归一为 0 / 1。`RwLock<Vec<T>>` 与 `with_vec` 全部去除。
+14. `31ebfe21`（杠杆 ③）类型化 null 每类单例：`Object::__typed_null_desc` 原先每次在 `RwLock<HashMap>`（`TYPED_NULLS`）下按名查表，现 `__ClassDesc` 增 `typed_null: fn() -> Object`，由生成的每类 `OnceLock` 承载（描述符本身仍是可 `const` 引用的常量，不加内部可变性）；接口载体的 `Default`（null 局部量 / 未写入接口槽）同样每接口一份 `OnceLock`。
+
 ### 5. 测试流程效率（用户 2026-10-01）
 
 2026-10-01 分布式全量：1083 例、7 台服务器、约 5 h 墙钟、约 35 机时。按本地抽查比例（13 例：编译 7 m 08 s / 共 9 m 44 s）推算：cargo 编译约 70–75%，转译约 20%，超时空等约 1.5 机时（约 4%），运行约 3%。

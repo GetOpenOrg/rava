@@ -9,6 +9,7 @@
 //! | `__Shared<T>` | `Arc<T>` |
 //! | `__PrimCell<T>` | 原子单元（SeqCst，64 位位形；long/double 无撕裂） |
 //! | `__RefSlot<T>` | 读写锁（`borrow` = 可重入读、`borrow_mut` = 写） |
+//! | `__RefField<T>` | 引用字段内联单元：字节自旋锁 + 值（临界区只做克隆 / 交换） |
 //! | `__process_static!` | 全局 `OnceLock` 单元 |
 //! | `__ThreadSafe` | `Send + Sync` |
 //! | `__DynFn!` | `dyn Fn(..) -> R + Send + Sync` |
@@ -39,11 +40,12 @@ pub fn __unused_any() -> __AnyRef {
     static UNUSED: std::sync::OnceLock<__AnyRef> = std::sync::OnceLock::new();
     UNUSED.get_or_init(|| std::sync::Arc::new(())).clone()
 }
-pub use self::mt::{__AtomicRepr, __PrimCell, __RefSlot};
+pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot};
 
 mod mt {
+    use std::cell::UnsafeCell;
     use std::marker::PhantomData;
-    use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::{Acquire, Relaxed, Release, SeqCst}};
 
     /// 可放入原子单元的基本类型：与 u64 位形互转（JVM 基本类型 + 运行时计数用整型）。
     pub trait __AtomicRepr: Copy {
@@ -76,9 +78,10 @@ mod mt {
         #[inline] fn __from_bits(b: u64) -> Self { char::from_u32(b as u32).unwrap_or('\0') }
     }
 
-    /// 基本类型字段单元：`Cell` 同名方法集，全部 SeqCst（volatile 语义，强于普通字段要求；
-    /// long / double 64 位原子读写，无 JLS §17.7 撕裂）。`repr(transparent)`：各实例化布局相同，
-    /// 描述符驱动的浅拷贝按位拷贝任意基本单元（`field_desc`）。
+    /// 基本类型字段单元：`Cell` 同名方法集为 SeqCst（volatile 语义；long / double 64 位原子读写，
+    /// 无 JLS §17.7 撕裂）；`get_plain` / `set_plain` 为 relaxed（普通字段：JMM 不要求互斥与
+    /// 顺序，同步动作的获取 / 释放序给出 happens-before，无数据竞争 UB）。`repr(transparent)`：
+    /// 各实例化布局相同，描述符驱动的浅拷贝按位拷贝任意基本单元（`field_desc`）。
     #[repr(transparent)]
     pub struct __PrimCell<T: __AtomicRepr> {
         bits: AtomicU64,
@@ -88,8 +91,17 @@ mod mt {
     impl<T: __AtomicRepr> __PrimCell<T> {
         #[inline]
         pub fn new(v: T) -> Self { __PrimCell { bits: AtomicU64::new(v.__to_bits()), _t: PhantomData } }
+        /// 全零位形（各基本类型的 JVM 缺省值）：常量求值可用（静态字段单元）
+        #[inline]
+        pub const fn zeroed() -> Self { __PrimCell { bits: AtomicU64::new(0), _t: PhantomData } }
         #[inline]
         pub fn get(&self) -> T { T::__from_bits(self.bits.load(SeqCst)) }
+        /// 普通（非 volatile）字段读：relaxed
+        #[inline]
+        pub fn get_plain(&self) -> T { T::__from_bits(self.bits.load(Relaxed)) }
+        /// 普通（非 volatile）字段写：relaxed
+        #[inline]
+        pub fn set_plain(&self, v: T) { self.bits.store(v.__to_bits(), Relaxed) }
         #[inline]
         pub fn set(&self, v: T) { self.bits.store(v.__to_bits(), SeqCst) }
         #[inline]
@@ -173,6 +185,111 @@ mod mt {
         }
     }
 
+    /// 引用字段内联单元：字节自旋锁 + 值，与对象存储同一分配（不再每字段一个 `Arc` + 读写锁）。
+    ///
+    /// 临界区只做值的克隆（引用计数加一）或交换，不执行 Java 代码、不让出，旧值在锁外释放；
+    /// 不对外暴露守卫，同线程不会重入。读写都经获取 / 释放序，引用发布随之携带被引对象的
+    /// 构造写入（final 字段语义）。`const fn new`：静态字段单元可常量初始化。
+    pub struct __RefField<T> {
+        locked: AtomicBool,
+        val: UnsafeCell<T>,
+    }
+
+    // 值只在锁内访问
+    unsafe impl<T: Send> Send for __RefField<T> {}
+    unsafe impl<T: Send + Sync> Sync for __RefField<T> {}
+
+    struct FieldGuard<'a>(&'a AtomicBool);
+    impl Drop for FieldGuard<'_> {
+        #[inline]
+        fn drop(&mut self) { self.0.store(false, Release) }
+    }
+
+    impl<T> __RefField<T> {
+        #[inline]
+        pub const fn new(v: T) -> Self { __RefField { locked: AtomicBool::new(false), val: UnsafeCell::new(v) } }
+
+        #[inline]
+        fn lock(&self) -> FieldGuard<'_> {
+            if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_err() {
+                self.lock_slow();
+            }
+            FieldGuard(&self.locked)
+        }
+
+        #[cold]
+        #[inline(never)]
+        fn lock_slow(&self) {
+            let mut spins = 0u32;
+            loop {
+                while self.locked.load(Relaxed) {
+                    if spins < 64 {
+                        spins += 1;
+                        std::hint::spin_loop();
+                    } else {
+                        std::thread::yield_now();
+                    }
+                }
+                if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() {
+                    return;
+                }
+            }
+        }
+
+        /// 锁内对值执行 `f`（`f` 不得访问同一单元）。
+        #[inline]
+        pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            let _g = self.lock();
+            // SAFETY: 持锁独占
+            f(unsafe { &mut *self.val.get() })
+        }
+
+        /// 读：锁内克隆。
+        #[inline]
+        pub fn get(&self) -> T where T: Clone {
+            self.with(|v| v.clone())
+        }
+
+        /// 写：锁内交换，旧值在锁外释放。
+        #[inline]
+        pub fn set(&self, v: T) {
+            drop(self.replace(v));
+        }
+
+        #[inline]
+        pub fn replace(&self, v: T) -> T {
+            self.with(|cur| std::mem::replace(cur, v))
+        }
+
+        #[inline]
+        pub fn take(&self) -> T where T: Default {
+            self.replace(T::default())
+        }
+
+        #[inline]
+        pub fn into_inner(self) -> T { self.val.into_inner() }
+
+        #[inline]
+        pub fn get_mut(&mut self) -> &mut T { self.val.get_mut() }
+    }
+
+    impl<T> __RefField<Option<T>> {
+        /// 引用字段读（存储 `None` = 从未写入，按声明类型的缺省值应答）。
+        #[inline]
+        pub fn get_or_default(&self) -> T where T: Clone + Default {
+            self.get().unwrap_or_default()
+        }
+    }
+
+    impl<T: Default> Default for __RefField<T> {
+        fn default() -> Self { Self::new(T::default()) }
+    }
+    // 不在锁内格式化值（值的 Debug 可能执行 Java toString，回到本单元）
+    impl<T> std::fmt::Debug for __RefField<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RefField { .. }")
+        }
+    }
     /// 引用字段 / 可变槽：`RefCell` 同名方法集的读写锁。`borrow` 为可重入读（同线程嵌套读
     /// 不死锁），`borrow_mut` 为写。同线程读后写与 `RefCell` 的 panic 同属违例形态。
     pub struct __RefSlot<T> {

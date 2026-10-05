@@ -264,6 +264,7 @@ pub fn class_text(
         superclass_fields: &sup.fields,
         superclass_reference_fields: &sup.reference,
         superclass_erased_fields: &sup.erased,
+        superclass_volatile_fields: &sup.volatile,
         field_slots: &field_slots,
         impl_methods: Some(impl_methods),
     };

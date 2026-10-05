@@ -132,3 +132,36 @@ fn while_guard_keeps_empty_latch() {
     assert_eq!(l.while_cond, Some(Cond::atom(var("c"))), "{tree:?}");
     verify_tree(&tree, &nodes, &flow, &mut JumpLedger::new("T.m()V")).expect("verify_tree");
 }
+
+/// 回归夹具：XMLDTDScannerImpl.scanDTDInternalSubset 的 CFG 形态（J0 发现，块图实测）。
+/// 循环 L6={6,14}：头 6 的 Cond 跳转臂指向空块 14，14 只含回边。六个块为空块（1/3/6/7/10/14，
+/// 与实测 stmts=0 一致）——simplify 把空 Code 视为可忽略项后尾上下文计算丢失块 14。
+#[test]
+fn loop_cond_target_empty_backedge_block_kept() {
+    let mut nodes = BTreeMap::new();
+    let mut put = |id: NodeId, pc: u32, term: Terminal, stmts: bool| {
+        nodes.insert(
+            id,
+            FlowNode { start_pc: pc, term, has_stmts: stmts, has_decls: false, ctx: BTreeSet::new(), jump_pcs: vec![] },
+        );
+    };
+    put(0, 0, Terminal::Cond { cond: Cond::atom(var("c0")), target: 6, fallthrough: 1 }, true);
+    put(1, 32, Terminal::Cond { cond: Cond::atom(var("c1")), target: 3, fallthrough: 2 }, false);
+    put(2, 39, Terminal::Goto { target: 3 }, true);
+    put(3, 58, Terminal::Cond { cond: Cond::atom(var("c3")), target: 5, fallthrough: 4 }, false);
+    put(4, 65, Terminal::Goto { target: 5 }, true);
+    put(5, 82, Terminal::Goto { target: 6 }, true);
+    put(6, 87, Terminal::Cond { cond: Cond::atom(var("c6")), target: 14, fallthrough: 7 }, false);
+    put(7, 95, Terminal::Cond { cond: Cond::atom(var("c7")), target: 10, fallthrough: 9 }, false);
+    put(9, 106, Terminal::Goto { target: 10 }, true);
+    put(10, 116, Terminal::Cond { cond: Cond::atom(var("c10")), target: 13, fallthrough: 12 }, false);
+    put(12, 127, Terminal::Goto { target: 13 }, true);
+    put(13, 135, Terminal::Exit, true);
+    put(14, 162, Terminal::Goto { target: 6 }, false);
+    let succs: Succs = nodes.iter().map(|(k, n)| (*k, n.term.successors())).collect();
+    let flow = analyze(0, &succs);
+    assert!(flow.reducible, "夹具须可归约");
+    let tree = simplify(structure(&mut nodes, &flow).expect("structure"));
+    let mut ledger = JumpLedger::default();
+    verify_tree(&tree, &nodes, &flow, &mut ledger).expect("活块 14 须保留在结构树中");
+}
