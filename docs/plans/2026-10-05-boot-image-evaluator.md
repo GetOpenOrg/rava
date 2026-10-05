@@ -347,6 +347,45 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
   - 第 3 步抽象分析从映像出发，引导代码不再入链，实际值应低于这个上界。
 - **第 2 步验收锁定**：运行期初始化类 Linux ≤ 1、macOS ≤ 2，只减不增。
 
+### 5.4 第 2 步实测与暂停记录（分支 `boot-image-s2` 3d808e77，2026-10-06 暂停）
+
+**暂停原因**：用户 10-06 定 C4 全量正确性优先，全量期间集成分支冻结语义改动，本线让出服务器。服务器作业未派发，无在途作业。
+
+**已完成（3d808e77）**：
+- 污点值 `CV::T`（`concrete/taint.rs`）：宿主源（清单 op `host_scalar:<下界>:<上界>`，缺省为返回类型全域，boolean 为 0..1）产生带区间的表达式；整数算术、移位、位运算、`lcmp`、窄化与扩宽按 i128 区间传播，溢出取全域，单点区间直接定值；除数区间含 0、浮点转换、其他具体取值仍按第 1 步残差化。清单改为 `availableProcessors` / `maxMemory` 取 `host_scalar:1:max`，`getAppend` 保持 `host_scalar`。
+- 污点上的分支（`concrete/taint_fork.rs`）：区间可判定就按判定走；不可判定时，两侧各自无副作用地执行到直接后支配点（每侧 ≤ 4096 步，嵌套 ≤ 8 层），各侧细化分支操作数的区间，合并时不同的整数值成为选择表达式。路径中有调用、写入、分配或抛出时，撤回后按第 1 步残差化。
+- 启动重算槽、污点审计、级联链与重放序列（`concrete/boot_slots.rs`）：
+  - 重算槽：映像中持有污点的静态字段、实例字段和数组元素，按构建期写入次序列出；
+  - 污点审计：重算槽与重放输入之外的污点为 0；重算表达式的实参不能是占位对象，否则构建失败；
+  - 运行期初始化级联链：由原因串回溯上游类；
+  - 启动重放序列：先重算槽，再按构建期次序执行残差记录。
+  - 以上都写进报告和 JSON 的 `step2` 字段。
+- U8 读后写审计（`concrete/war.rs`）：
+  - 写入时刻：每次写入推进逻辑时钟，按位置（静态字段、实例字段、数组、VM 单元）记录；撤回时一并恢复。
+  - 读集：读日志挂在日志标记上。残差调用、残差区段和运行期初始化登记时，捕获标记以来的读集。
+  - 判定：读集中的位置若在登记之后被写过，构建失败。
+
+**本机 macOS JDK 21 实测**（HelloWorld 档案键，`rava audit boot --jdk 21`）：
+
+| 项 | 门槛 | 实测 |
+|---|---|---|
+| 结论 / initPhase1–3 | 通过 | 通过（摘要 `f1e75fdf4f1dfa83727395409ee0e89d`；第 1 步为 `f819f982…`，变化来自污点值入摘要） |
+| 映像中污点值（重算槽与重放输入之外） | 0 | 0；不可独立重算 0；宿主标量取零值 0 |
+| 重算槽 | `NCPU` / `directMemory` 等 | 5 个：`ConcurrentHashMap.NCPU`、`VM.directMemory`，以及 `FileDescriptor.in/out/err.append`（同一字段的 3 个实例槽） |
+| 运行期初始化类 | macOS ≤ 2 | 2（`StaticProperty`、`NativeLibraries`），没有新增 |
+| U8 交集 | 0 | 0（6 个残差，读集 156 个位置） |
+| 求值耗时 | ≤ 0.5 s | 130 ms |
+
+- 污点分支：HelloWorld 引导期间判定 0 次、合并 0 次。`NCPU` 只在扩容（`transfer`）和争用（`fullAddCount`）时参与分支，引导期间没有走到。合并路径只有单元测试 `decide_and_narrow` 覆盖区间判定和细化，两侧合并还没有实际例子。
+- 与 §3.2 的偏差：§3.2 写的是「宿主值写入对象图即运行期初始化」。本步改为实例字段进重算槽（`FileDescriptor.append`），所以 `FileDescriptor` 仍在构建期初始化，运行期初始化数没有增加。污点分支也是在构建期合并，不转为运行期初始化。
+
+**在途 / 未做（恢复入口）**：
+1. 本机单测：`CARGO_BUILD_JOBS=2 python3 heavy_lock.py cargo test --release -p closure --manifest-path generator/Cargo.toml --target-dir build/analyzer-target taint`。`decide_and_narrow` 还没跑过。
+2. 服务器验收：Linux JDK 21 / 25 的 audit 加 `--hash-seed` × `--flow-batch` 4 组合摘要矩阵，作业命令同第 1 步 jp2，标签 `bimg2-aud-<sha>`；Linux 门槛：运行期初始化 ≤ 1，RSS ≤ 300 MB（JDK 25 第 1 步为 281 MB，本步新增读日志与写入时刻表，需要实测）。
+3. 服务器全量单测：`bimg2-ut-<sha>`，带 `--job-timeout 7200`。
+4. 验收数字写回本节，并在 §6 第 2 步行补实测列。
+5. 待定事项：重算槽是否把同一字段的多实例槽（`FileDescriptor.append` × 3）在 §6 中计为「4 个字段」口径，拟写 U10 请用户确认。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
