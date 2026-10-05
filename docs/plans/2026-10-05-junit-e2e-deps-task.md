@@ -147,4 +147,21 @@
    - **归因**：cfg 结构化自 P4a（ea0d4c12）后零改动，守恒不变量（cfg/src/audit.rs:114）为既有机制——回归来自**闭包输入侧**（fe197231 时 m1 GOLDEN OK / 闭包 1235 类；其后 C1d-T3 / from_any / M2 / S7-2b2c / B1 / b3 合并使该 xerces 方法新入 JDK 侧闭包，其 CFG 形态暴露结构化器既有缺口）。该方法为何入 m1 闭包（无 seed 整包 hamcrest → JDK 侧链路）J1 时顺带核对；
    - **处置待裁定**：修复点 `generator/crates/cfg/`（结构化器补活块路径）——不在三个在途子代理改动面（§三冲突表），按 J4「生成器优先」属本任务范围，但引擎相邻，按开工约定报用户裁定：本任务修 vs 转 engine 队列；
    - J0 结论：**J2 验收（m1–m5 5/5）被此单点阻塞**；J1（模块归属）与该缺陷正交、可先行。
+6. **cfg 修复与下一层暴露（2026-10-05，264e73ee）**：
+   - **修复**：根因在 `simplify.rs pass_while` 守卫转换——`loop{if!c{break}else{空块}}` 规整 `while c{}` 时
+     `body.remove` 连 else 臂身份项（空 Code 块，携带块号与跳转账目）整删，守恒不变量失败。终态修法：守卫判定
+     收紧为全量形态（then 恰一个 Break、else 只余 Code/Decl）+ 移除守卫时 else 身份项拼接回循环体；
+     scanDTDInternalSubset 的 CFG 形态（15 块六空块 do-while 续环）入 cfg 单测回归夹具。
+   - **修复验证**：cfg 单测 6/6、generator workspace 12 crate 291 项全绿、本机 emit 复现转绿
+     （5423 类）、服务器 m1–m5 **转译段全过**（CfgAuditError 清零）、xerces 生成文件零编译错误。
+   - **下一层（新暴露，非 cfg 回归）**：m1–m5 全部推进到编译段后挂 `java_base_decl`（声明层 crate）6 错——
+     E0432 `proxy_impl.rs use super::Proxy_Dyn` 断链（**手写层对生成类的引用在闭包裁剪后未随裁**——hamcrest
+     闭包无动态代理使用，Proxy_Dyn 不在生成集）+ 5×E0308（`compound_element.rs` 泛型 `<E>` vs `<Object>`、
+     `stack_stream_factory_{abstract_stack_walker,caller_class_finder,live_stack_info_traverser}` 族参数类型）。
+     系 M2 模块切分 + B1 档案裁剪后 `--lib` 多 crate 形态**首次编译**暴露的装配/泛型发射缺陷；
+     普通 e2e（spot AbstractShape ✓）不撞（闭包组合不同）。**归属待裁定**：E0432 正对 decl-scc 声明层
+     分段域、E0308 族在 emit 泛型发射（B2 相邻）——报协调会话。
+   - spot `cfgfix-264e73ee`（按目录抽样）：AbstractShape ✓ / ABCProblem ✗（regex
+     `Pattern$CharPredicate.union` 存根命中——main 既有失败族，与本修复无关）；`--tests` 指定例
+     未被 spot 模式采纳，三例指定抽查另发作业 `cfgfix-3spot-264e73ee`（结果回填）。
 
