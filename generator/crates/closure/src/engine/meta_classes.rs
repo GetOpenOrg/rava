@@ -63,6 +63,25 @@ impl Engine<'_> {
         self.close_supertypes(out)
     }
 
+    /// 运行期可经反射 Field / 方法句柄按名读写的静态字段中，按名查字段（`reflect_fields` / `reflect_field_names`）
+    /// 以外的来源：可取到静态字段句柄的枚举口径（`fenum_static`）所指类及其超类型声明的全部静态字段（推不出
+    /// 所指类时为闭包全部类），与静态字段句柄常量解析到的字段。可序列化字段口径与清单 `instance_field_users`
+    /// 内取到的句柄只用于实例字段，不计入。发射层据此（并上按名查字段事实）只为这些静态字段生成按名访问
+    /// 表项（`__STATICS`）
+    pub fn static_field_handles(&self) -> BTreeSet<(String, String)> {
+        let mut out = self.static_mh_fields.clone();
+        let classes: BTreeSet<String> = if self.fenum_static.contains(&None) {
+            self.classes.keys().cloned().collect()
+        } else {
+            self.close_supertypes(self.fenum_static.iter().flatten().cloned().collect())
+        };
+        for c in &classes {
+            let Some(cf) = self.h.class(c) else { continue };
+            out.extend(cf.fields.iter().filter(|f| f.is_static()).map(|f| (c.clone(), f.name.clone())));
+        }
+        out
+    }
+
     /// 闭包内的注解类型
     fn annotation_classes(&self) -> Vec<String> {
         self.classes

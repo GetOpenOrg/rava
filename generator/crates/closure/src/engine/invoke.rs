@@ -208,10 +208,14 @@ impl<'a> Engine<'a> {
                     self.field_enum_gaps.insert(format!("{}@{off}", self.methods[m].key));
                 }
             }
+            let statics = !serial && !self.man.is_instance_field_user(&self.methods[m].key.to_string());
             for (_, c) in &scopes {
                 if serial {
                     self.enumerate_serial_fields(c.clone());
                 } else {
+                    if statics {
+                        self.fenum_static.insert(c.clone());
+                    }
                     self.enumerate_fields(c.clone());
                 }
             }

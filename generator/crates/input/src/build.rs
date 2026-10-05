@@ -89,6 +89,8 @@ pub struct ReflectFacts {
     pub fields: BTreeMap<String, BTreeSet<String>>,
     /// 按名查字段目标类推不出时的字面量名（任意类的同名字段）
     pub field_names: BTreeSet<String>,
+    /// 类 → 经字段枚举 / 静态字段句柄常量可按名读写的静态字段名
+    pub static_fields: BTreeMap<String, BTreeSet<String>>,
     /// 档案侧方法 / 构造器表保留整表的类（其余类 0 行；用户侧不裁剪）
     pub meta_methods: BTreeSet<String>,
     /// 档案侧字段表保留整表的类
@@ -375,11 +377,16 @@ impl<'a> BuildInput<'a> {
         for (owner, name) in &f.reflect_fields {
             fields.entry(owner.clone()).or_default().insert(name.clone());
         }
+        let mut static_fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (owner, name) in &f.reflect_static_fields {
+            static_fields.entry(owner.clone()).or_default().insert(name.clone());
+        }
         ReflectFacts {
             consts,
             all_members: f.seeds.reflect_all.clone(),
             fields,
             field_names: f.reflect_field_names.iter().cloned().collect(),
+            static_fields,
             meta_methods: f.reflect_meta_methods.iter().cloned().collect(),
             meta_fields: f.reflect_meta_fields.iter().cloned().collect(),
         }

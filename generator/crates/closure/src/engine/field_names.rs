@@ -67,12 +67,28 @@ impl Engine<'_> {
             }
         }
         if !known {
-            if r.handle {
-                // 句柄带本口径的来源标记：流到句柄写入口时才放开（`field_handles.rs`）
-                self.enumerate_fields(cls.clone());
-                self.mark_handle(m, off, k.split_once(':').map_or("", |x| x.1), (false, cls));
-            } else {
-                self.open_class_fields(cls);
+            // 名字不可知时的口径：类是字面量取该类；否则取 Class 值集所指的类（值集增长时本站点重跑），
+            // 值集不齐全（含 open / 推不出的镜像）或无 Class 实参时推不出
+            let scopes: Vec<Option<String>> = match (&cls, &cls_arg) {
+                (Some(_), _) => vec![cls.clone()],
+                (None, Some(a)) => match self.mirror_classes_of(m, off, k, a, false) {
+                    (classes, true) => classes.into_iter().map(Some).collect(),
+                    (_, false) => vec![None],
+                },
+                (None, None) => vec![None],
+            };
+            let statics = !self.man.is_instance_field_user(&self.methods[m].key.to_string());
+            for scope in scopes {
+                if statics {
+                    self.fenum_static.insert(scope.clone());
+                }
+                if r.handle {
+                    // 句柄带本口径的来源标记：流到句柄写入口时才放开（`field_handles.rs`）
+                    self.enumerate_fields(scope.clone());
+                    self.mark_handle(m, off, k.split_once(':').map_or("", |x| x.1), (false, scope));
+                } else {
+                    self.open_class_fields(scope);
+                }
             }
         }
     }

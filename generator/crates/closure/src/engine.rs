@@ -490,6 +490,9 @@ pub struct Engine<'a> {
     pub reflect_fields: BTreeSet<(String, String)>,
     /// 按名查字段目标类推不出时的字面量名（任意类的同名字段）
     pub reflect_field_names: BTreeSet<String>,
+    /// 静态字段句柄常量（ldc / 引导实参的 getStatic / putStatic 方法句柄）解析到的静态字段（声明类, 名字），
+    /// 运行期经句柄按名读写；见 `meta_classes.rs` 的 `static_field_handles`
+    static_mh_fields: BTreeSet<(String, String)>,
     /// String 字段各写入处的字符串常量（None = 有非常量写入）；名字经字段到达按名查找点时取用
     field_strs: HashMap<MemberRef, Option<BTreeSet<Rc<str>>>>,
     /// 反射成员面：（类别, 成员）
@@ -518,6 +521,9 @@ pub struct Engine<'a> {
     fenum_serial: BTreeSet<Option<String>>,
     /// 读字段表的口径（元数据裁剪，`meta_classes.rs`）：字段枚举与按名放开整类字段的类（含超类）；None = 推不出
     fenum_scopes: BTreeSet<Option<String>>,
+    /// `fenum_scopes` 中取到的句柄可用于静态字段的口径（静态字段按名访问表，`static_field_handles`）：
+    /// 不含可序列化字段口径与清单 `instance_field_users` 内的取法
+    fenum_static: BTreeSet<Option<String>>,
     /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
     fh_marks: HashMap<u32, field_handles::EnumScope>,
     /// 标记已流到句柄写入口的枚举口径

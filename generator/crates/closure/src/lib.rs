@@ -284,6 +284,7 @@ impl Closure<'_> {
                 "gaps": e.reflect_gaps,
                 "fields": e.reflect_fields.iter().map(|(c, n)| json!({"owner": c, "name": n})).collect::<Vec<_>>(),
                 "field_names": e.reflect_field_names,
+                "static_fields": e.static_field_handles().iter().map(|(c, n)| json!({"owner": c, "name": n})).collect::<Vec<_>>(),
                 "field_enum_gaps": e.field_enum_gaps,
                 "allocations": e.serial_allocs,
                 "meta_methods": e.meta_method_classes(),

@@ -128,6 +128,13 @@ fn serial_enumerators_parse() {
 }
 
 #[test]
+fn instance_field_users_parse() {
+    let m = with_vm("[facts.field_writes]\ninstance_field_users = [\"a/S.f:(Ljava/lang/Class;)V\"]\n").unwrap();
+    assert!(m.is_instance_field_user("a/S.f:(Ljava/lang/Class;)V"));
+    assert!(!m.is_instance_field_user("a/S.g:()V"));
+}
+
+#[test]
 fn serial_allocators_parse() {
     let m = with_vm("[facts.reflect.serial_allocators]\n\"a/G.gen:(Ljava/lang/Class;)La/A;\" = 0\n").unwrap();
     assert_eq!(m.serial_allocator("a/G.gen:(Ljava/lang/Class;)La/A;"), Some(0));
