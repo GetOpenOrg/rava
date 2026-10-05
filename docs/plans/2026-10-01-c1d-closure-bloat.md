@@ -1946,3 +1946,182 @@ TestBuiltinUrlProtocol 3078 不变。闸门本身正确，但 `URL.<init>` / `ge
 - `securerandom.source`：运行期安全属性（`java.security` 文件 + `Security.setProperty` 可改），分析器无法求值，
   `SeedGenerator$URLSeedGenerator.init` / `NativePRNG.getEgdUrl` 两处保持全分支；要降需对安全属性建模（清单声明缺省值不够，
   用户可在运行期改写），不在乙范围。
+
+## 23. a2 续：initPhase2 膨胀定位与早退检查按分析期事实求值（2026-10-05，分支 c1d-a2c）
+
+### 23.1 实测定位（HelloWorld，`rava closure --root java/lang/System.initPhase2:(ZZ)I`）
+
+基线 469 类 / 1813 方法；加 initPhase2 根后 3283 类 / 19423 方法（+2814，与 StockTrans 的 jar / URL / JCA / stream 区域重合）。
+顶层 `--cut` 结果：
+
+| 切点 | 类数 |
+|---|---:|
+| 无切点（initPhase2 根） | 3283 |
+| `initPhase2@0`（`ModuleBootstrap.boot`） | 3106 |
+| `initPhase2@16`（`logInitException`） | 3284 |
+| `boot@64`（`boot2`） | 3109 |
+| `initPhase2@0` + `@16` | 469 |
+
+两道独立闸门，任一单独打开都把 ~2600 类带进来：
+
+- **甲 `logInitException` 打印路径**：`printStackTrace` 实参在 HotSpot 缺省调用里恒为 `false`，分析期不知道。
+  链：`logInitException@50 printStackTrace(PrintStream)` → `getOurStackTrace` → `StackTraceElement.of` → `computeFormat` →
+  `StackTraceElement$HashedModules.<clinit>` → `Configuration.findModule` → `Collection.stream` → `StreamOpFlag.<clinit>` →
+  `EnumMap` → `Class.getEnumConstantsShared` → `Method.invoke` → 注解解析 → `Proxy$Dyn` → `AnnotationInvocationHandler.toStringImpl`
+  → `PlatformLogger` / `LoggerFinder` → `SecurityConstants.<clinit>` → `SocketPermission` → `toLowerCase` →
+  `ConditionalSpecialCasing` → ICU `Normalizer` → `getResourceAsStream` → `URLClassPath` → `JarFile`。
+- **乙 `boot` / `boot2` 早退检查未折叠**：
+  1. `ModulePatcher.patchIfNeeded@90` → `JarFile`（← `SystemModuleFinders.toModuleReference` ← `of@100` ← `boot2@240`）；
+  2. `ModulePatcher.<init>@90` indy → `Paths` / `FileSystems` / `ReferencePipeline`（← `initModulePatcher@16` ←
+     `ModuleBootstrap.<clinit>@28`）；
+  3. 解析分支 `boot2@416..872`：`Configuration.resolve` ← `limitFinder@12` ← `boot2@707` → `Resolver` → `ModulePath.readModule`
+     → `TempFileHelper` → `SecureRandom` → `sun/security/jca/Providers`。
+
+字节码事实（JDK 21）：`decode(prefix,sep,bool)` 键为 `prefix + 0` 的 StringBuilder 拼接，`@20 getAndRemoveProperty` 为 null 时
+返回 `Map.of()`；`addModules()` 键 `"jdk.module.addmods." + 0`，null 时返回 `Set.of()`；`ModulePatcher.<init>` 对空 map 置
+`this.map = Map.of()`；`hasPatches = !map.isEmpty()`；`patchIfNeeded = map.get(name)`。即乙的全部早退都落在
+「拼接键系统属性读为 null → 空不可变集合 → 空集合查询」这条事实链上。
+
+### 23.2 实施要点（终态，全部由清单 / 字节码给出事实）
+
+- **F2 空不可变集合**：absint 新增对象标记 `Obj::Empty`；`vm_intrinsics.toml [facts.empty_collections]` 声明工厂
+  （`List.of()` / `Set.of()` / `Map.of()`）与接收者为 Empty 时的查询结果（`isEmpty`→true、`size`→0、`get`→null、
+  `contains*`→false）；标记经 PV 的返回值 / 字段 / 构造摘要 / 静态 final 自然传播，`hasPatches`、`patchIfNeeded`、
+  `addModules.isEmpty()` 由此折叠。
+- **F1 拼接键系统属性读**：键为拼接值时按 `name_parts` 求候选模式（同 `sysprops_write::removed_keys`），无候选与声明键
+  （有值 / 动态 / 不稳定）相交则按缺省值（null）折叠；只读复用 class_lookup / pstrs，不改其实现。
+- **F4 initPhase2 实参**：`printStackTrace=false` 由下一步 `[[boot_init.phases]] args` 提供，本步不实施；测量时以
+  `--cut java/lang/System.logInitException…@50` 模拟。
+
+### 23.3 下一步接口设想（`[[boot_init.phases]]` / boot layer 步骤 2–5，本步不实施）
+
+- `seeds.toml [[boot_init.phases]]`：`call = "java/lang/System.initPhase2:(ZZ)I"`、`args = [false, false]`、
+  `anchors = ["java/lang/System.bootLayer", "java/lang/Class.module"]`。闭包把 phase 当作带常量实参的根：入口帧形参槽
+  直接取 `args`（走 `Facts.params` 同一通道，等同调用点常量实参），甲闸门由此死掉，不需要任何 JDK 名特判。
+- anchors 声明 phase 产生、运行期读取的 VM 状态字段；闭包对锚字段的读取视为「phase 已运行」，生成器在启动序列里按 phase
+  顺序发出调用（步骤 3–5：发射启动调用、bootLayer 落地、`Class.module` 回填）。
+
+### 23.4 实施结果（F1 + F2，本机 `rava closure` 实测）
+
+- F1 实施时推广为「键值来源 = 调用结果站点**或形参**」：`finderFor(String)` 的键是形参，两调用点各传
+  `"jdk.module.upgrade.path"` / `"jdk.module.path"`（形参常量格只容一个常量），按 `Gap::Class` 取各调用点流入的名字
+  （pstrs）展开为候选模式；各模式结果相同（都不在表中 → null）才折叠。登记表 `Ctx::pkeys`（方法节点, 来源）→ 模式；
+  登记变化不在处理该方法中途失效，记入 `pkey_dirty`，由主循环顶部 `pkey_flush` 统一失效重算。
+- 新增折叠（HelloWorld initPhase2 根）：`decode@20`→null、死区 34..342；`addModules@24`→null、死区 36..132；
+  `finderFor@1`→null、死区 11..83；`ModulePatcher.<init>@5 isEmpty`→true、死区 23..126；`hasPatches@4`→true（`!` 后为 false）；
+  `patchIfNeeded@15 get`→null、死区 32..657；`boot2@15/110/120/175/185` 一并折叠。乙闸门的 patcher / finder 两路关闭。
+
+**initPhase2 根下剩余膨胀的前十出口**（新二进制，根 + PST 切；新增类沿首次发现链上溯，归属到第一个「常规闭包已有方法」的
+出边，即常规闭包里已有、在根下因事实变宽多出的出边；首次发现口径，非必要性口径）：
+
+| # | 出边（常规闭包已有方法@偏移） | 新增类 | 变宽原因 |
+|---:|---|---:|---|
+| 1 | `URL.lowerCaseProtocol@42`（折叠丢失） | 1038 | 常规闭包 `URL.<init>` 协议形参恒 `"file"`；根下 `URI.toURL` 传入未知协议 → `toLowerCase(ROOT)` → `ConditionalSpecialCasing` → ICU → `getResourceAsStream` → `URLClassPath$JarLoader` → `JarFile` |
+| 2 | `AccessController.executePrivileged@29`（折叠丢失） | 546 | 模块系统新实例化的 `PrivilegedAction` 使 `run` 分派变宽（`SystemModuleFinders$1` / `ModulePath.findAll` …） |
+| 3 | `String.valueOf@11`（`toString` 分派） | 411 | 新实例化类型（`ModuleDescriptor$Exports` 等）的 `toString` |
+| 4 | `Objects.equals@11`（`equals` 分派） | 306 | 同上，`equals` |
+| 5 | 根 `initPhase2` 直接带入 | 72 | `ModuleBootstrap` / `SystemModuleFinders` / `ModuleLayer` 本体 |
+| 6 | `ConcurrentHashMap.computeIfAbsent@115`（`Function.apply`） | 34 | `ImageReaderFactory$1` → `ImageReader.open` |
+| 7 | `AbstractCollection.toString@1` | 23 | 新集合元素类型 |
+| 8 | `ImmutableCollections$AbstractImmutableSet.equals@37` | 18 | 同上 |
+| 9 | `Pattern.compile@24`（折叠丢失） | 17 | 正则常量变宽 |
+| 10 | `Formatter$FormatSpecifier.print@136/@11`（折叠丢失） | 12 | 格式化实参类型变宽 |
+
+结论：F1/F2 关掉的是「早退分支」，剩余 ~2750 类绝大多数不是 boot2 的独立分支，而是 `SystemModuleFinders.ofSystem`
+（`boot2@257`）/ `newConfiguration`（`boot2@935`）真实执行时新增的实例化类型与非常量实参，使常规闭包已有方法的分派 / 形参常量
+变宽。分组 `--cut` 实验呈非单调（基线二进制「只开一组」：none 3271、patcher 3277、resolve 3279、cds / arch / post 3271、
+finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快路径后改走 `ofSystem` / `ModulePath`），故不以切点差值作路径
+代价。下一步（boot layer 步骤 2–5）的收敛手段：phase 实参（甲闸门）与锚字段（`bootLayer` / `Class.module` 由 phase 产生，
+其余方法读锚而不是重走 `ofSystem`），使分派变宽只发生在 phase 自身帧内；第 1 名的 URL 协议变宽另需 `URI.toURL` 协议来源
+事实（`jrt` 常量经 `URI` 字段流）。
+
+**验收对照**（`rava closure`，类数；base = 1fa483a4 构建，new = 本步；种子 0 / 1）：
+
+| 测试 | 常规 base（s0 / s1） | 常规 new（s0 / s1） | initPhase2 根 + PST 切 base（s0 / s1） | 同 new（s0 / s1） |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 | 469 / 469 | 3283 / 3283 | 3221 / 3221 |
+| StockTrans | 3386 / 3386 | 3384 / 3384 | 3470 / **4230** | 3468 / 3468 |
+| DeepCopy | 3388 / 3388 | 3386 / 3386 | 4232 / 4232 | 3469 / 3469 |
+| TestModuleLayerDefine | 3262 / **4205** | 3262 / 3262 | 3291 / 3291 | 3280 / 3280 |
+
+- new 在 8 组配置下两种子类集合逐名一致；相对 base 只减不增（常规闭包减 `ModuleLoaderMap` / `$Mapper`；根下减 2–763）。
+- base 有种子依赖（StockTrans 根 +760、TestModuleLayerDefine 常规 +943，JCA / jar 区域），new 下消失：属事实变窄后不再经过
+  顺序敏感的大门，**不是**顺序问题已修复，引擎顺序线另行跟踪。
+- 档案规模（≤ 3609）与 `--stop-after compile` 0 错误、多种子大例对照：服务器作业（见 tasks.md 行）。
+
+**服务器结果（dddf8b49）**：
+- 单例编译作业 `c1da-dddf8b49-compile`：HelloWorld（466 JDK + 1 用户类）与 TestModuleLayerDefine（3340 + 3）
+  `--stop-after compile` 均通过，0 错误。
+- 全量单测作业 `c1da-ut-dddf8b49`：唯一失败 `closure_independent_of_hash_seed`，cargo 停在该测试二进制。
+  失败内容（`c1da-ut2-dddf8b49` 单跑）：`TestSerialDefaultSuid` 种子 2 多出 JCA 区域（`com/sun/crypto/provider/AESCipher*` …）。
+  本机新二进制下该例与 StockTrans 种子 0 / 1 / 2 集合一致，未复现。
+  同一 JCA 大门在基线二进制本机就有种子依赖（StockTrans 根下种子 1 +760、TestModuleLayerDefine 常规种子 1 +943），
+  属引擎顺序线的既有问题；F1/F2 改变了事实到达顺序，触发它的用例 / 种子随之变化。
+- 其余单测（`--skip` 该测试 + `--no-fail-fast`，含 rava_macros_core）：作业 `c1da-ut2-dddf8b49` 01 全部通过（rc=0）。
+
+## 23.5 种子序阻塞、引导阶段第 1 步与锚点实测（2026-10-05，c1d-a2c b47568ec）
+
+### 种子序（合入阻塞项 `closure_independent_of_hash_seed`）
+
+- 根因两条（本机 `--hash-seed 0/1/2` 二分）：
+  - (a) JCA 大门：`Class.forName` / 服务查找的宿主集合在不动点中途按到达顺序放行，种子不同时 JCA 提供者区域时进时不进。
+    修法为宿主集合（`instantiation_hosts`）单调求值，本分支 96d677d8 与引擎顺序线 7426e583 文本一致，合并时吸收。
+  - (b) 形参窗口内的 `V::Str` 被当作调用点字面量：派生字符串（拼接 / 子串结果）按先到的值进入 `site_lits`，
+    后到的值不再撤回。引擎顺序线把 `V::Str` 改为携带来源（`V::Str(Rc<str>, Srcs)`），`site_lits` / `derived_str`
+    只收真字面量，合并后本分支适配（sysprops / sysprops_key 改 `V::Str(..)` / `V::lit`）。
+- 终态由集成分支 engine-order（V9）给出；b47568ec 合并后本机五例（TestSerialDefaultSuid、StockTrans、
+  TestModuleLayerDefine、TestAppClassLoader、HelloWorld）种子 0 / 1 / 2 集合逐名一致。服务器结果见本节末。
+
+### `[[boot_init.phases]]`（6666c19b）
+
+- 清单：`call = "类.方法:描述符"`（静态，形参限 Z/B/C/S/I）、`args`（布尔 / 整数常量，个数与描述符一致）、
+  `anchors`（字段键 `类.字段:描述符`）；装载期校验，错误报清单位置。
+- 分析器：字段首次 GETSTATIC / GETFIELD 时若命中任一阶段锚点，该阶段作根（`Via::root("boot_phase")`），入口形参经
+  `bind_pvs` 绑定 `args` 常量（与调用点常量实参同一通道），返回值回 VM；判定单调，一旦作根不撤回。
+- 发射：闭包内已访问的阶段按清单顺序追加为 `vm_boot_init` 条目（main 前执行），非 void 返回值非 0 时 `exit(1)`（同 HotSpot）。
+- 登记 initPhase2 `args = [false, false]`，锚点留空——锚点空时闭包与生成树与提交前一致。
+
+### 锚点实测（本地临时 runtime：锚点 = `System.bootLayer`，并移出 `ModuleLayer` 的 vm_boundary 与 `module_layer_impl.rs`）
+
+| 用例 | 常规 类 / 方法 | 锚点 类 / 方法 | 增量（类） | `rava closure` 耗时 |
+|---|---|---|---:|---|
+| HelloWorld | 469 / 1813 | 469 / 1813 | 0（无锚点读取） | — |
+| TestCustomException | 480 / 1867 | 3193 / 18618 | **+2713** | 1 s → 18 s |
+| TestStackWalkerFrames | 3108 / 17934 | 3257 / 19283 | +149 | — |
+| TestAppClassLoader | 3108 / 17891 | 3257 / 19236 | +149 | — |
+| TestModuleLayerDefine | 3265 / 19219 | 3249 / 19184 | −16 | — |
+| StockTrans | 3380 / 20800 | 3435 / 21439 | +55 | — |
+
+- phase 实参确实关掉了甲闸门：`logInitException` 在链上，但不再带出 `printStackTrace` 的额外路径。
+- TestCustomException 的 +2713 按包：java/util 227、java/util/stream 151、java/lang/invoke 123、sun/nio/cs 97、
+  sun/security/provider 86、sun/security/util 80、sun/security/x509 74、java/lang 71、java/security 68、
+  java/util/concurrent 66、sun/security/ec 50、sun/nio/fs 44、xml 安全算法 43、java/text 42 ……
+- `--cut` 二分（锚点运行时）：切整个 initPhase2 → 480；切 `boot2` → 486；切 `boot2` 全部 ≤@1014 调用点 → 488；
+  只切 `ofSystem` 路径（@252/@257）或 resolve 调用点 → 不变（3193）；只保留 0–240 组 → 3202；只保留
+  @194 `SystemModuleFinders.systemModules` + @240 `SystemModuleFinders.of` → 3901。没有单一调用点独占增量，
+  `URL.lowerCaseProtocol@42`、`StringLatin1.toLowerCase@95` 单切也不变——多路径。
+- 真实路径（`--why`）：`systemModules`（`SystemModules$default`）→ `of` → `toModuleReference`（以
+  `JavaNetUriAccess.create("jrt", "/"+name)` 建 URI）→ defineModules。新实例化类型（`ModuleDescriptor$Exports` 等）使
+  `String.valueOf` / `Objects.equals` / `AccessController.executePrivileged` 的分派变宽；`URL.<init>` 协议形参失去常量后
+  `lowerCaseProtocol` → `String.toLowerCase(Locale)` → `StringUTF16.toLowerCaseEx` → `ConditionalSpecialCasing` → ICU
+  `getResourceAsStream` → `URLClassPath$JarLoader` → `JarURLConnection` → `Files.createTempFile` → `SecureRandom` → JCA
+  （sun/security/* 区域即由此进入）；`Collection.stream` 经 `ModuleDescriptor.toString` 带入 java/util/stream。
+
+**结论**：单例增量 2713 类 > 300，按引导层计划第 1 步规则另立精度项，锚点不启用；引导层第 2–5 步（含
+`BootLoader.getSystemPackageLocation`、命名 java.base、强封装、非空 boot layer）以该精度项为前置。精度项两条线：
+
+1. URL / URI 协议事实。真实入口是 `boot2@64 BootLoader.loadModule` → `BuiltinClassLoader$LoadedModule.<init>@57`
+   → `createURL(mref.location())` → `URI.toURL` → `URL.of(uri, null)`。`URL.of` 两支：
+   - `handler == null && scheme.equals("jrt") && !uri.isOpaque() && uri.getRawFragment() == null` → `@136 new URL("jrt", host, port, file, null)`；
+   - 否则 `@251 new URL(null, uri.toString(), handler)`（按规格串解析，`@188 lowerCaseProtocol(子串)` 的协议不可静态求出）。
+
+   `toModuleReference` 以 `JavaNetUriAccess.create("jrt", "/"+name)`（私有构造只写 `scheme` / `path`）建 URI，故
+   系统模块的 URI 走第一支；要关掉第二支须**按分配点**的对象字段事实（该 URI 的 `scheme` = `"jrt"`、`path` 非空、
+   `fragment` 未写），按字段不分接收者的槽（`PSlot::F`）不够——程序里其他 URI 由解析构造写同名字段。
+   第一支之后 `@36 lowerCaseProtocol(protocol)` 的协议形参在 5 参构造上汇合 `"file"`（`ParseUtil.fileToEncodedURL`）
+   与 `"jrt"`，单常量格即 Top；需把选择子形参（`selector.rs`，现只认 int 族）推广到「入口值作 `equals` 接收者、
+   实参为字面量」的 String 形参，并让构造方法按分配点接收者克隆，常量才能逐调用点到达 `lowerCaseProtocol`。
+   `toLowerCase(ROOT)` 内的 `toLowerCaseEx` 依赖字符串内容（σ / 代理对 / İ），不能靠 `Locale.ROOT` 语言事实单独关掉。
+   三件（分配点字段事实、String 选择子、构造方法接收者克隆）合起来才关掉第 1 名出口，属独立精度项，工作量不在本线。
+2. 分派变宽限制在 phase 帧：锚点启用后其余方法读 `bootLayer` 而不重走 `ofSystem`；新实例化类型的 `toString` /
+   `equals` / `PrivilegedAction.run` 分派只在实际有调用者的接收者集合上展开（与 §23.4 第 2–4 名同一机制）。

@@ -8,6 +8,8 @@
 //! - `SysProps`：清单声明的系统属性表对象（`[facts.system_properties]` 的持有锚点给出）
 //! - `MaybeSysProps`：可能是系统属性表对象（属性表与其它对象合流）：不按属性表读取折叠，
 //!   但它上面的改写 / 逃逸照样计入属性表的改写判定——属性表的别名不会因合流而从判定中消失
+//! - `Empty`：空的不可修改集合（清单 `[facts.empty_collections]` 的工厂结果）：按 JDK 规范不含元素、
+//!   不可改写，其上的查询（`isEmpty` / `size` / `get` …）按清单给出的值折叠
 //!
 //! - `MirrorSub(o)`：类镜像子类型判定（`K.class.isAssignableFrom(x)`，见 `narrow.rs`）成立一侧的 x：值本身与来源
 //!   不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）处的收窄节点——输入值集中所指类
@@ -29,6 +31,7 @@ pub enum Obj {
     Fields(Vec<(MemberRef, V)>),
     SysProps,
     MaybeSysProps,
+    Empty,
     /// 类镜像子类型判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
     MirrorSub(u32),
 }

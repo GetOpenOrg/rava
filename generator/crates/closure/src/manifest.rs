@@ -68,6 +68,8 @@ pub enum LinkRoute {
 }
 
 mod sysprops;
+mod empty;
+pub use empty::EmptyCollections;
 mod names;
 mod concrete;
 mod field_names;
@@ -77,6 +79,8 @@ mod indy_helpers;
 mod keyed;
 pub use keyed::{KeyedLookup, KeyedLookups};
 mod vm_state;
+mod boot_phases;
+pub use boot_phases::BootPhase;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
@@ -162,6 +166,8 @@ pub struct Manifest {
     pub boot_init: Vec<String>,
     /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
     pub boot_calls: Vec<String>,
+    /// VM 引导阶段（seeds.toml `[[boot_init.phases]]`，锚点可达时作根，见 `boot_phases.rs`）
+    pub boot_phases: Vec<BootPhase>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
@@ -177,6 +183,8 @@ pub struct Manifest {
     string_ops: HashMap<String, StrOp>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
+    /// 空的不可修改集合工厂与其上的查询结果（`[facts.empty_collections]`）
+    pub empty: EmptyCollections,
     /// 按名取类与字符串拼接
     pub names: NameFacts,
     /// 具体求值（`[concrete]`）
@@ -431,6 +439,7 @@ impl Manifest {
             method_to_handle: reflect("method_to_handle").into_iter().collect(),
             boot_init: strings(&seeds, "boot_init", "classes"),
             boot_calls: strings(&seeds, "boot_init", "calls"),
+            boot_phases: boot_phases::parse(&seeds)?,
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
             indy_helpers: IndyHelpers::from_toml(
@@ -443,6 +452,7 @@ impl Manifest {
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
+            empty: EmptyCollections::from_toml(vm.get("facts").and_then(|s| s.get("empty_collections")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
             concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,

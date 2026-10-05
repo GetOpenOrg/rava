@@ -180,5 +180,17 @@ calls = [
     "java/lang/System.setJavaLangAccess:()V",
 ]
 
+# VM 引导阶段（HotSpot call_initPhase2 / call_initPhase3，准入 ③ VM 发起的启动入口）：VM 以常量实参调用的静态方法，
+# 按序在 calls / classes 之后、main 之前执行。args：实参常量（个数与描述符一致，只限 Z/B/C/S/I）；分析器以此作入口
+# 形参常量，与 VM 调用一致。anchors：阶段写入、此后由 Java 代码读取的 VM 状态字段（`类.字段:描述符`）——闭包内
+# 任一锚点有读取点时阶段作根并在启动时执行，否则不入链、不执行。返回整数的阶段非 0 即启动失败（退出码 1）。
+[[boot_init.phases]]
+# initPhase2：模块系统引导（ModuleBootstrap.boot → 引导层）。实参为 HotSpot 缺省的 DisplayVMOutputToStderr、
+# 引导日志开关（均为 false）。锚点暂空：引导层落地（docs/plans/2026-10-02-boot-layer.md 第 2–3 步：Class.module
+# 钩子、Module / ModuleLayer 回到字节码）之前不作根；届时填 System.bootLayer 与 Class.module
+call = "java/lang/System.initPhase2:(ZZ)I"
+args = [false, false]
+anchors = []
+
 # ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导
 # （`generator/crates/input/src/resources.rs`），以 include_bytes! 嵌入，运行时由 ClassLoader 的资源查询承载。

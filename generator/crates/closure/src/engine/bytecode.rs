@@ -318,6 +318,9 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
+            if opcode == op::GETSTATIC || opcode == op::GETFIELD {
+                self.phase_anchor_read(&decl, f);
+            }
             // 接收者钩子（`receiver = true`）在有接收者值集时按值集判定（见下）；静态钩子与其余访问点
             // 无条件接入——静态钩子（如 initPhase3 段）不看接收者，实例字段读写同样先执行它
             let recv_hook = instance_op(opcode)

@@ -127,6 +127,34 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
                 registration_turbofish(ctx, ems, b)
             )
         }));
+    // VM 引导阶段（HotSpot call_initPhase2 / 3，清单 [[boot_init.phases]]）：锚点可达而入链的阶段，以清单
+    // 常量实参在引导类初始化之后按序调用；返回整数的阶段非 0 即启动失败（HotSpot vm_exit_during_initialization，
+    // 阶段自己先打印原因），退出码 1
+    boot.extend(ctx.manifest.boot_phases.iter().filter(|(c, _)| ctx.input.precheck_visited.contains(c.as_str())).filter_map(
+        |(c, args)| {
+            let (cls, rest) = c.split_once('.')?;
+            let (name, desc) = rest.split_once(':')?;
+            let (params, ret) = desc.strip_prefix('(')?.split_once(')')?;
+            if !jdk.generated.contains(cls) {
+                return None;
+            }
+            let lits: Vec<String> = params
+                .bytes()
+                .zip(args)
+                .map(|(t, a)| match t {
+                    b'Z' => (*a != 0).to_string(),
+                    _ => a.to_string(),
+                })
+                .collect();
+            let call = format!("{}::{}({})?", jrt_path(ctx, cls), safe_pkg_part(name), lits.join(", "));
+            let body = if ret == "V" {
+                format!("{call}; Ok(())")
+            } else {
+                format!("if {call} != 0 {{ ::std::process::exit(1) }} Ok(())")
+            };
+            Some(format!("        (\"{cls}.{name}\", (|| {{ {body} }}) as fn() -> {rt}::error::Result<()>),"))
+        },
+    ));
     if !boot.is_empty() {
         hb += &block(&format!("    {rt}::vm_boot_init(&["), &boot, "    ]);");
     }

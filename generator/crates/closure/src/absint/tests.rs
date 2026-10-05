@@ -265,6 +265,16 @@ fn symbolic_offset_flows_to_call_and_dies_in_arithmetic() {
     assert_eq!(arg(15), Some(V::Top));
 }
 
+#[test]
+fn empty_collection_tag_join() {
+    let e = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Empty)) };
+    let other = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None };
+    // 与 null 合流保留标签（可空性另记）；与其它对象合流即丢
+    assert!(super::obj::join_obj(&e, &V::Null).is_some_and(|o| *o == Obj::Empty));
+    assert!(super::obj::join_obj(&e, &e.clone()).is_some_and(|o| *o == Obj::Empty));
+    assert!(super::obj::join_obj(&e, &other).is_none());
+}
+
 /// 桩 Oracle：`p/M.isSub` 是类镜像子类型判定
 struct SubTests;
 
