@@ -261,7 +261,7 @@ pub struct HwTypeRefs {
     prelude: HashMap<String, Vec<String>>,
 }
 
-/// 手写层全部顶层 pub item 名（类型 / 常量 / 静态 / 函数 / 宏）。
+/// 手写层全部顶层 pub item 名（类型 / 常量 / 静态 / 函数 / pub mod）。
 /// 伴生文件依赖判定用：手写符号经 overlay 全量复制进 scratch，永不缺席；
 /// 不在集合中的大写段才按「生成类 snake 文件」探测 scratch（生成类本轮可能未生成）。
 pub fn pub_item_names(src: &Path) -> BTreeSet<String> {
@@ -278,6 +278,8 @@ pub fn pub_item_names(src: &Path) -> BTreeSet<String> {
                 syn::Item::Trait(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
                 syn::Item::TraitAlias(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
                 syn::Item::Type(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                // pub mod（内联或外置文件）：经宿主模块的 glob 再导出可按包路径引用
+                syn::Item::Mod(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
                 syn::Item::Macro(i)
                     if i.mac.path.is_ident("java_class") || i.mac.path.is_ident("jvm_ext") =>
                 {
