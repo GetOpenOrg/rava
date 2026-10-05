@@ -261,6 +261,54 @@ pub struct HwTypeRefs {
     prelude: HashMap<String, Vec<String>>,
 }
 
+/// 手写层全部顶层 pub item 名（类型 / 常量 / 静态 / 函数 / 宏）。
+/// 伴生文件依赖判定用：手写符号经 overlay 全量复制进 scratch，永不缺席；
+/// 不在集合中的大写段才按「生成类 snake 文件」探测 scratch（生成类本轮可能未生成）。
+pub fn pub_item_names(src: &Path) -> BTreeSet<String> {
+    fn collect_file(path: &Path, out: &mut BTreeSet<String>) {
+        let Ok(content) = std::fs::read_to_string(path) else { return };
+        let Ok(file) = syn::parse_file(&content) else { return };
+        for item in file.items {
+            let name = match &item {
+                syn::Item::Const(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Static(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Fn(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.sig.ident),
+                syn::Item::Struct(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Enum(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Trait(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::TraitAlias(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Type(i) if !matches!(i.vis, syn::Visibility::Inherited) => Some(&i.ident),
+                syn::Item::Macro(i)
+                    if i.mac.path.is_ident("java_class") || i.mac.path.is_ident("jvm_ext") =>
+                {
+                    // 宏声明类：路径引用按宏参数里的类名，不在顶层 ident——跳过（生成类按 snake 探测兜住）
+                    None
+                }
+                _ => None,
+            };
+            if let Some(n) = name {
+                out.insert(n.to_string());
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    let Ok(rd) = std::fs::read_dir(src) else { return out };
+    fn walk(dir: &Path, out: &mut BTreeSet<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                collect_file(&p, out);
+            }
+        }
+    }
+    let _ = rd;
+    walk(src, &mut out);
+    out
+}
+
 impl HwTypeRefs {
     /// `runtime_dir` = runtime/java_runtime
     pub fn new(runtime_dir: &Path) -> Self {

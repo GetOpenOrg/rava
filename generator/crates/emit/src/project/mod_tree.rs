@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use closure::handwritten::{layout, HwTypeRefs};
+use closure::handwritten::{layout, pub_item_names, to_snake, HwTypeRefs};
 use ty::ident::is_rust_keyword;
 
 use super::fs::{has_marker, walk, Writer};
@@ -19,6 +19,8 @@ use crate::error::{io_err, Result};
 /// 其服务的 native 方法回落 panic 存根，而不是让无法解析的 import 拖垮整个 crate。
 pub struct CompanionDeps {
     hw: HwTypeRefs,
+    /// 手写层全部顶层 pub item 名（手写符号永不缺席）
+    hw_items: BTreeSet<String>,
     /// scratch 的 crate src 根（`crate::` 起点）
     src_root: PathBuf,
 }
@@ -30,7 +32,11 @@ fn seg_name(s: &str) -> &str {
 
 impl CompanionDeps {
     pub fn new(runtime_dir: &Path, src_root: &Path) -> CompanionDeps {
-        CompanionDeps { hw: HwTypeRefs::new(runtime_dir), src_root: src_root.to_path_buf() }
+        CompanionDeps {
+            hw: HwTypeRefs::new(runtime_dir),
+            hw_items: pub_item_names(&runtime_dir.join("src")),
+            src_root: src_root.to_path_buf(),
+        }
     }
 
     /// 一条路径引用（`super::…` / `crate::…`）指向的模块文件是否在场。
@@ -59,10 +65,29 @@ impl CompanionDeps {
             if cur.join(format!("{seg}.rs")).is_file() || cur.join(format!("{seg}_t.rs")).is_file() {
                 return true;
             }
-            if cur == self.src_root || !seg.starts_with(|c: char| c.is_ascii_lowercase()) {
+            if cur == self.src_root {
                 return true;
             }
-            return false;
+            if seg.starts_with(|c: char| c.is_ascii_uppercase()) {
+                // 大写段三类：手写层 pub item（overlay 全量复制，永不缺席）；
+                // 生成类（文件名 = snake 化类名，本轮可能未生成）按 snake 名探测 scratch；
+                // 「目录 + 同名 .rs」并存（array/ 与 array.rs）时类型可能在 .rs 模块体里，
+                // 保守在场。三者皆不满足才是依赖缺失——companion 不声明，方法回落存根
+                if self.hw_items.contains(seg) {
+                    return true;
+                }
+                let snake = to_snake(seg);
+                if cur.join(format!("{snake}.rs")).is_file()
+                    || cur.join(format!("{snake}_t.rs")).is_file()
+                    || cur.join(&snake).is_dir()
+                {
+                    return true;
+                }
+                return cur.with_extension("rs").is_file();
+            }
+            // 其余段（小写模块名 / `__` 前缀内部类型）：不以「文件即模块」形态存在，
+            // 视为在场——缺席只由前述显式探测判
+            return true;
         }
         true
     }
