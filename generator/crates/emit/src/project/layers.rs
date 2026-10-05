@@ -223,7 +223,8 @@ impl BodyPlan {
         out
     }
 
-    pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
+    /// `top`：声明层末段 crate（以声明层名改名引入，类文件头 `use <声明层>::…` 不变）
+    pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, top: &str) -> Result<()> {
         for c in &self.crates {
             let dir = out_dir.join(&c.name);
             let src = dir.join("src");
@@ -248,7 +249,7 @@ impl BodyPlan {
             }
             let decl = ctx.crates().decl();
             w.write(&src.join("lib.rs"), &body_lib(&decl))?;
-            let deps = [path_dep(&decl, &decl), format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display())];
+            let deps = [path_dep(&decl, top), format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display())];
             w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, &c.name, &deps))?;
         }
         Ok(())

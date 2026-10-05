@@ -30,9 +30,9 @@ pub fn path_dep(name: &str, dir: &str) -> String {
     }
 }
 
-/// 以根名引入根声明层（非链接者 crate 用）
-pub fn root_decl_dep(crates: &ModuleCrates) -> String {
-    path_dep(crates.root(), &crates.decl())
+/// 以根名引入根声明层的完整视图（`top`：声明层末段 crate；非链接者 crate 用）
+pub fn root_decl_dep(crates: &ModuleCrates, top: &str) -> String {
+    path_dep(crates.root(), top)
 }
 
 /// crate 清单头：`[package]` + `[lib]` + `[dependencies]` 行 + lints
@@ -71,7 +71,7 @@ fn top_mods(src: &Path) -> Result<Vec<String>> {
 }
 
 /// 非根模块 crate 的 lib.rs 与 Cargo.toml（包 mod 树须已写出）
-pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
+pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, top: &str) -> Result<()> {
     let crates = ctx.crates();
     for c in crates.others() {
         let dir = out_dir.join(&c.name);
@@ -83,7 +83,7 @@ pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) ->
         ];
         lib_rs.extend(top_mods(&src)?.iter().map(|t| format!("pub mod {};", safe_pkg_part(t))));
         w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
-        let mut deps = vec![root_decl_dep(crates)];
+        let mut deps = vec![root_decl_dep(crates, top)];
         deps.extend(c.deps.iter().filter(|d| d.as_str() != crates.root()).map(|d| path_dep(d, d)));
         deps.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
         deps.push("libc            = \"0.2\"".into());
@@ -92,8 +92,8 @@ pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) ->
     Ok(())
 }
 
-/// 根门面 crate：再导出声明层，链接实现层
-pub fn write_facade(w: &mut Writer, out_dir: &Path, crates: &ModuleCrates, bodies: &[&str]) -> Result<()> {
+/// 根门面 crate：再导出声明层（以声明层名改名引入末段完整视图），链接实现层
+pub fn write_facade(w: &mut Writer, out_dir: &Path, crates: &ModuleCrates, top: &str, bodies: &[&str]) -> Result<()> {
     let root = crates.root();
     let decl = crates.decl();
     let dir = out_dir.join(root);
@@ -104,7 +104,7 @@ pub fn write_facade(w: &mut Writer, out_dir: &Path, crates: &ModuleCrates, bodie
     ];
     lib_rs.extend(bodies.iter().map(|b| format!("use {b} as _;")));
     w.write(&dir.join("src").join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
-    let mut deps = vec![path_dep(&decl, &decl)];
+    let mut deps = vec![path_dep(&decl, top)];
     deps.extend(bodies.iter().map(|b| path_dep(b, b)));
     w.write(&dir.join("Cargo.toml"), &lib_manifest(&dir, root, &deps))
 }
@@ -117,6 +117,7 @@ mod tests {
     fn dep_lines() {
         assert_eq!(path_dep("m", "m"), "m               = { path = \"../m\" }");
         assert_eq!(path_dep("rt", "rt_decl"), "rt              = { package = \"rt_decl\", path = \"../rt_decl\" }");
-        assert_eq!(root_decl_dep(&ModuleCrates::single("rt")), path_dep("rt", "rt_decl"));
+        assert_eq!(root_decl_dep(&ModuleCrates::single("rt"), "rt_decl"), path_dep("rt", "rt_decl"));
+        assert_eq!(root_decl_dep(&ModuleCrates::single("rt"), "rt_decl_2"), path_dep("rt", "rt_decl_2"));
     }
 }
