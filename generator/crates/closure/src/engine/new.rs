@@ -108,6 +108,8 @@ impl<'a> Engine<'a> {
             rcall_conv_pending: HashMap::default(),
             rcall_conv_seen: HashSet::default(),
             rcall_stats: Default::default(),
+            rcall_rn_pending: Default::default(),
+            rcall_wait_members: Vec::new(),
             callers: HashMap::default(),
             call_vals: None,
             unresolved: BTreeSet::new(),

@@ -17,15 +17,16 @@
 //! 字段 / 数组互不汇合。池中所指未知（open）的接收者：可覆写的退回 VM 枢纽（[`HubSet::Vm`]，目标形参同样接实参池），
 //! 不可覆写的进成员本体。lambda / 手写实现对象不是字节码类，反射调用不在字节码层选中实现（同 VM 枢纽）。
 //!
-//! 去冗余：成员形参接 [`Node::RN`]（池中 open 已涵盖、只能经未知接收者视图读写的值不逐个列出）；可覆写成员退回 VM
-//! 枢纽后，枢纽按声明类成员集展开已覆盖逐接收者派发，不再重复派发。池收窄后两者都不触发，结果即逐值派发。
+//! 去冗余：成员形参接 [`Node::RN`]（池中 open 已涵盖、只能经未知接收者视图读写的值不逐个列出）；涵盖与否在工作队列
+//! 排空时判定（[`Engine::rcall_release`]），与值入池的先后无关。可覆写成员退回 VM 枢纽后，枢纽按声明类成员集展开已覆盖
+//! 逐接收者派发，不再重复派发。池收窄后两者都不触发，结果即逐值派发。
 
 use super::*;
 
 /// 反射调用通道：反射对象 / 方法句柄
 pub(super) const RC_OBJ: u8 = 0;
 pub(super) const RC_HANDLE: u8 = 1;
-const CHANNELS: [u8; 2] = [RC_OBJ, RC_HANDLE];
+pub(super) const CHANNELS: [u8; 2] = [RC_OBJ, RC_HANDLE];
 
 /// 通道位
 pub(super) const fn rc_bit(c: u8) -> u8 {
@@ -60,16 +61,19 @@ pub(super) enum VmBind {
 /// 反射方法成员
 pub(super) struct RcallMember {
     pub(super) key: MemberRef,
-    iface: bool,
+    pub(super) iface: bool,
     /// 可覆写：按接收者选中实现；否则实现就是成员本身
-    virt: bool,
+    pub(super) virt: bool,
     /// 经哪些通道调用（通道位集）
-    mask: u8,
+    pub(super) mask: u8,
     /// 已派发的接收者值；已接入的目标（通道扩大时补接）
-    done: HashSet<u32>,
-    targets: Vec<usize>,
+    pub(super) done: HashSet<u32>,
+    pub(super) targets: Vec<usize>,
     /// 池中有所指未知的接收者、已退回 VM 枢纽
-    fallback: bool,
+    pub(super) fallback: bool,
+    /// 待定的接收者（可覆写成员、枢纽可能涵盖，排空时判定）；已登记在待定成员表中
+    pub(super) wait: Vec<u32>,
+    pub(super) waiting: bool,
 }
 
 /// 反射调用统计（closure.json `summary.rcall`）
@@ -82,6 +86,10 @@ pub(super) struct RcallStats {
     pub(super) open_recvs: usize,
     /// 跳过的 lambda / 手写实现对象接收者
     pub(super) synthetic_recvs: usize,
+    /// 去冗余：被池中 open 涵盖而略去的值数 / 排空时放行进视图的值数 / 有放行的排空轮数
+    pub(super) absorbed: usize,
+    pub(super) released: usize,
+    pub(super) release_rounds: usize,
 }
 
 impl<'a> Engine<'a> {
@@ -324,37 +332,6 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 实参池新增值：经该通道调用的实例成员按新增接收者派发
-    pub(super) fn rcall_pool_grown(&mut self, ch: u8, delta: &TypeSet) {
-        let lean = self.rcall_absorb(ch, delta);
-        if !lean.is_empty() {
-            self.add_to(Node::RN(ch), &lean);
-        }
-        for i in 0..self.rcall_members.len() {
-            if self.rcall_members[i].mask & rc_bit(ch) != 0 {
-                self.rcall_dispatch(i, delta);
-            }
-        }
-    }
-
-    /// 池增量 delta 去掉池中 open 已涵盖的值：x 属于池中某 open 类型，且 x 不是 lambda / 手写实现对象，抽象对象 / 数组
-    /// 分配点须已逃逸（未逃逸的只经字节码可见引用读写，open 视图碰不到它）。之后才逃逸的值已逐个列出，不受影响
-    fn rcall_absorb(&mut self, ch: u8, delta: &TypeSet) -> TypeSet {
-        let opens: Vec<u32> = self.graph.get(&Node::RP(ch)).map(|s| s.open.iter().collect()).unwrap_or_default();
-        if opens.is_empty() || delta.classes.is_empty() {
-            return delta.clone();
-        }
-        let mut keep = IdSet::default();
-        for x in delta.classes.iter() {
-            let synthetic = self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x);
-            let hidden = (self.objs.contains_key(&x) || self.arrays.contains_key(&x)) && !self.escaped.contains(&x);
-            if synthetic || hidden || !opens.iter().any(|&o| self.sub(x, o)) {
-                keep.insert(x);
-            }
-        }
-        TypeSet { classes: keep, open: delta.open.clone() }
-    }
-
     /// 反射方法成员 key 经通道位集 mask 入链（重复入链时并入新通道）
     pub(super) fn rcall_member(&mut self, key: MemberRef, iface: bool, virt: bool, mask: u8) {
         let mask = if self.rcall_m2h && mask & rc_bit(RC_OBJ) != 0 { mask | rc_bit(RC_HANDLE) } else { mask };
@@ -363,7 +340,7 @@ impl<'a> Engine<'a> {
             None => {
                 let i = self.rcall_members.len();
                 self.rcall_ix.insert(key.clone(), i);
-                self.rcall_members.push(RcallMember { key, iface, virt, mask: 0, done: HashSet::default(), targets: vec![], fallback: false });
+                self.rcall_members.push(RcallMember { key, iface, virt, mask: 0, done: HashSet::default(), targets: vec![], fallback: false, wait: vec![], waiting: false });
                 i
             }
         };
@@ -400,7 +377,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 目标 t 的形参（不含接收者）接 mask 各通道的实参池（形参常量为未知）；经方法句柄通道调用的返回值并入其池
-    fn rcall_bind(&mut self, t: usize, mask: u8) {
+    pub(super) fn rcall_bind(&mut self, t: usize, mask: u8) {
         let old = self.rcall_bound.get(&t).copied().unwrap_or(0);
         let new = mask & !old;
         if new == 0 {
@@ -430,77 +407,6 @@ impl<'a> Engine<'a> {
             if ch == RC_HANDLE && self.methods[t].rtype.is_some() {
                 self.flow(Node::R(t), Node::RP(ch), obj);
             }
-        }
-    }
-
-    /// 成员 i 按接收者值集 s 派发（只处理新的接收者值）
-    fn rcall_dispatch(&mut self, i: usize, s: &TypeSet) {
-        let (key, iface, virt, mask) = {
-            let m = &self.rcall_members[i];
-            (m.key.clone(), m.iface, m.virt, m.mask)
-        };
-        // 已退回 VM 枢纽：枢纽按成员集展开到声明类的全部成员（同样按接收者克隆上下文、P0 = exact、形参接池），
-        // 逐接收者派发只剩枢纽不展开的未逃逸数组分配点；open 已由枢纽承接
-        let covered = virt && self.rcall_members[i].fallback;
-        if covered && !s.classes.iter().any(|x| self.arrays.contains_key(&x) && !self.escaped.contains(&x)) {
-            return;
-        }
-        let owner = self.id(&key.owner);
-        let via = Via::class("reflect", &key.owner);
-        let opens: Vec<u32> = s.open.iter().filter(|&o| self.sub(o, owner) || self.sub(owner, o)).collect();
-        if !opens.is_empty() {
-            if virt {
-                if !std::mem::replace(&mut self.rcall_members[i].fallback, true) {
-                    self.rcall_stats.hub_fallbacks += 1;
-                    self.vm_dispatch(&key, iface, via.clone(), VmBind::Rcall(i));
-                }
-            } else {
-                let o = TypeSet { classes: IdSet::default(), open: IdSet::from_sorted(opens) };
-                let o = self.filter(&o, owner);
-                if !o.is_empty() {
-                    self.rcall_stats.open_recvs += 1;
-                    let t = self.method(key.clone(), via.clone());
-                    self.add_to(Node::P(t, 0), &o);
-                }
-            }
-        }
-        let site = if virt { self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) } else { None };
-        if virt && site.is_none() {
-            self.unresolved.insert(key.to_string());
-            return;
-        }
-        let covered = virt && self.rcall_members[i].fallback;
-        let xs: Vec<u32> = s.classes.iter().filter(|x| !covered || (self.arrays.contains_key(x) && !self.escaped.contains(x))).collect();
-        for x in xs {
-            if !self.sub(x, owner) || !self.rcall_members[i].done.insert(x) {
-                continue;
-            }
-            if self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
-                self.rcall_stats.synthetic_recvs += 1;
-                continue;
-            }
-            let k = match &site {
-                Some(site) => {
-                    let rt = self.ty(x);
-                    let rname = self.names[rt as usize].to_string();
-                    let Some(sel) = self.h.select(&rname, site) else {
-                        self.unresolved.insert(format!("select {rname} {}", key.name));
-                        continue;
-                    };
-                    let (o, n, d) = sel.key();
-                    MemberRef { owner: o, name: n, desc: d }
-                }
-                None => key.clone(),
-            };
-            self.rcall_stats.dispatched += 1;
-            let cx = self.recv_ctx(x);
-            let t = self.method_ctx(k, cx, via.clone());
-            if virt {
-                self.vm_targets.insert(t);
-            }
-            self.add_to(Node::P(t, 0), &TypeSet::exact(x));
-            self.rcall_members[i].targets.push(t);
-            self.rcall_bind(t, mask);
         }
     }
 
@@ -561,6 +467,9 @@ impl<'a> Engine<'a> {
             "hub_fallbacks": self.rcall_stats.hub_fallbacks,
             "open_recvs": self.rcall_stats.open_recvs,
             "synthetic_recvs": self.rcall_stats.synthetic_recvs,
+            "absorbed": self.rcall_stats.absorbed,
+            "released": self.rcall_stats.released,
+            "release_rounds": self.rcall_stats.release_rounds,
         })
     }
 }

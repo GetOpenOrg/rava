@@ -106,6 +106,10 @@ impl<'a> Engine<'a> {
                     self.stat_leave();
                     continue;
                 }
+                // 反射调用实参池的去冗余视图在不动点上判定涵盖（`reflect_call.rs::rcall_release`）
+                if self.rcall_release() {
+                    continue;
+                }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
                 let seeded = self.seed_round();

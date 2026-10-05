@@ -2125,3 +2125,34 @@ finder 3268；新二进制切除全部组反而 4076——切掉 CDS 归档快�
    三件（分配点字段事实、String 选择子、构造方法接收者克隆）合起来才关掉第 1 名出口，属独立精度项，工作量不在本线。
 2. 分派变宽限制在 phase 帧：锚点启用后其余方法读 `bootLayer` 而不重走 `ofSystem`；新实例化类型的 `toString` /
    `equals` / `PrivilegedAction.run` 分派只在实际有调用者的接收者集合上展开（与 §23.4 第 2–4 名同一机制）。
+
+## 24. V9：闭包随哈希种子变化——反射调用池去冗余与透传过时边（2026-10-05，分支 v9-rcall）
+
+**症状**：基线 2602f409 上 TestJndiNoProvider 种子 0 = 24492 方法、种子 1/2 = 24470。多出的 20 个方法是两组：
+`ObjectStreamClass.getReflector@78` 带入的 Provider / Properties / Hashtable / Collections 各 Map / ImmutableMap /
+ReferencedKeyMap 的 `putIfAbsent`，以及 XMLParserImpl 带入的 ArrayDeque / LinkedList / LBQ / LTQ / SynchronousQueue /
+DelayedWorkQueue 的 `offer` / `poll`。
+
+**两处依赖求值次序的判定**（终态都与次序无关，取精确一侧，不靠放宽到 open）：
+
+1. 反射调用实参池的去冗余视图 RN（`reflect_call.rs::rcall_absorb`，e57444ae）。值 x 被池中 open 涵盖的条件（非合成、
+   已逃逸、属于某 open）随分析只增不减，但原实现在值入池时判定：x 先到就逐个列出、open 先到就略去。两种结果的下游
+   效果不等价——未收窄的按偏移写入对逐个列出的对象写其全部引用字段，对 open 目标只写 open 类型自身的字段。
+   现在：此刻已涵盖的永久略去，其余挂起，到工作队列排空（单调部分的不动点）时由 `rcall_release` 定夺（与
+   `lookup_release` 同口径，排在 `seed_round` 之前）。可覆写成员的接收者同理：是否已退回 VM 枢纽（枢纽展开覆盖
+   逐接收者派发）也在排空时判定。实现拆到 `engine/reflect_call_pool.rs`。
+2. 透传摘要的过时边（`invoke.rs::edge_ret`，主因）。被调方的透传摘要（返回值只来自形参）随分析推进会在「透传」与
+   「经 R 汇合」之间转换，调用方按新摘要重接，但已接的透传边不撤回。原透传边只按调用点返回类型过滤（Object），
+   不按被调形参声明类型过滤：种子 0 下 `SocketPermissionCollection.lambda$add$0` 一度是透传，`Map.merge@32`
+   （`BiFunction.apply`）的结果因此接上 `@12 Map.get` 的巨集合（反序列化来的 open(Object)），经 `Map.put` →
+   `WeakHashMap.put` / `remove` → `ClassValueMap.removeEntry@8` 的 checkcast 注入 open(ClassValue$Entry)，再经
+   `FieldReflector.setObjFieldValues` / VarHandle CAS 把巨集合写进 `ClassValue$Entry.value`，`ClassValue.get` 的
+   返回随之变宽。种子 1 下该 lambda 从未是透传，结果只经 R（{SocketPermission, open(SocketPermission)}）。
+   修法：透传边按被调形参声明类型收窄（与 P → R 汇合路径同一口径；形参类型不是调用点返回类型子类型时取后者）。
+   优化性分析下活代码只增不减，早先透传的形参在终态仍经 return 流入 R，过时的透传边因而被 R 涵盖，结果与次序无关。
+
+**结果**（本机 `rava closure`，种子 0/1/2）：TestJndiNoProvider 三种子类 3820 / 方法 24470 / 反射成员 1610，
+集合逐项一致（取精确一侧）。`closure_independent_of_hash_seed` 增加 TestJndiNoProvider。
+
+**诊断方法备忘**：`@trace:open:<类型>` 记录首达来源，沿来源反向追链即可定位；本例最后一跳靠
+`@edge:<节点>` 看到 `@12 → @32 [Object]` 这条不应存在的边（实参直连结果 = 透传边）。
