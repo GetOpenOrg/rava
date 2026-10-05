@@ -85,7 +85,7 @@ impl LibPlan {
     }
 
     /// 类文件落盘后：各 lib crate 的包 mod 树、lib.rs、Cargo.toml
-    pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
+    pub fn write_crates(&self, ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, top: &str) -> Result<()> {
         for (i, (name, files)) in self.files.iter().enumerate() {
             let dir = out_dir.join(name);
             let src = dir.join("src");
@@ -96,7 +96,7 @@ impl LibPlan {
             w.write(&src.join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
             // JDK 依赖：根（以根名引入声明层）+ 全部非根模块 crate（库的 JDK 引用面不按模块细分）
             let crates = ctx.crates();
-            let mut deps = vec![root_decl_dep(crates)];
+            let mut deps = vec![root_decl_dep(crates, top)];
             deps.extend(crates.others().iter().map(|c| path_dep(&c.name, &c.name)));
             deps.push(format!("rava_macros     = {{ path = \"{}\" }}", ctx.macros_crate.display()));
             deps.extend(self.routes[..i].iter().map(|(prev, _)| dep_line(prev)));

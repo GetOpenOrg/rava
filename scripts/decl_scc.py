@@ -12,7 +12,7 @@ exports / contains / qualified exports）时另报该模块子图的最大 SCC�
 凝聚成 DAG，按拓扑序（被依赖者在前）切成每段 ≤ N 类的连续段（单个 SCC 超过 N 时独占一段），报段数与各段类数。
 模块子图另加伪节点 INFRA 代表手写基础设施（java_runtime/src 下无生成标记、非 `_impl.rs` 的文件）：
 全部类 → INFRA（Object / ObjectVTable / Result / GIL 等），INFRA → 手写基础设施正文引用到的类；
-`<x>_impl.rs`（手写固有方法，留声明层）的引用并入同目录 `<x>.rs` 的类。含 INFRA 的 SCC 即最底层 crate。
+`<x>_impl.rs`（手写固有方法，留声明层，含其私有辅助目录内的文件）的引用并入同目录 `<x>.rs` 的类。含 INFRA 的 SCC 即最底层 crate。
 """
 import os,re,sys,collections
 root=sys.argv[1]+'/java_runtime/src'
@@ -55,18 +55,27 @@ for dp,_,fs in os.walk(root):
             t=open(os.path.join(dp,f),encoding='utf-8',errors='ignore').read()
             m=re.search(r'java_(?:class|interface)!\s*\{.*?^\s*pub (?:struct|trait) ([A-Za-z_][A-Za-z0-9_]*)',t,re.S|re.M)
             if m and m.group(1) in nodes: file2node[os.path.join(dp,f)]=m.group(1)
+def host_of(path):
+    """私有辅助目录约定（docs/reference/handwritten-boundary.md §五）：辅助目录内的文件归宿主 `<目录>.rs`"""
+    cur=root
+    for c in os.path.relpath(path,root).split(os.sep)[:-1]:
+        parent,cur=cur,os.path.join(cur,c)
+        if (c.endswith('_impl') or c.endswith('_ext') or parent==root) and c!='lib' and os.path.isfile(cur+'.rs'):
+            return cur+'.rs'
+    return path
 infra_refs=set(); impl_refs=collections.defaultdict(set)
 for dp,_,fs in os.walk(root):
     for f in fs:
         if not f.endswith('.rs'): continue
         path=os.path.join(dp,f)
+        hdp,hf=os.path.split(host_of(path))
         t=open(path,encoding='utf-8',errors='ignore').read()
         if 'java_class!' in t or 'java_interface!' in t or 'java_class_opaque!' in t: continue
         code=re.sub(r'//[^\n]*','',t)  # 注释与文档不计
         code=re.sub(r'"(?:[^"\\]|\\.)*"','""',code)  # 字符串字面量不计
         refs={x for x in IDENT.findall(code) if x in nodes}
-        if f.endswith('_impl.rs'):
-            owner=file2node.get(os.path.join(dp,f[:-len('_impl.rs')]+'.rs'))
+        if hf.endswith('_impl.rs'):
+            owner=file2node.get(os.path.join(hdp,hf[:-len('_impl.rs')]+'.rs'))
             if owner: impl_refs[owner]|=refs; continue
         infra_refs|=refs
 def base(u):

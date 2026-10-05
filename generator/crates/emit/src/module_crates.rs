@@ -118,6 +118,11 @@ impl ModuleCrates {
         format!("{}{DECL_SUFFIX}", self.root())
     }
 
+    /// 根模块第 j 个上层声明段 crate 名（`<根>_decl_<j>`，j ≥ 1；底段即 [`Self::decl`]）
+    pub fn decl_segment(&self, j: usize) -> String {
+        format!("{}_{j}", self.decl())
+    }
+
     /// 根模块第 k 个实现层 crate 名
     pub fn body(&self, k: usize) -> String {
         format!("{}{BODY_INFIX}{k}", self.root())
@@ -189,6 +194,7 @@ mod tests {
         assert_eq!(t.root(), "rt");
         assert_eq!(t.decl(), "rt_decl");
         assert_eq!(t.body(2), "rt_body_2");
+        assert_eq!(t.decl_segment(1), "rt_decl_1");
         assert_eq!(t.crate_of("p/A"), "rt");
         assert!(t.others().is_empty());
         assert_eq!(ModuleCrates::head("rt", "rt"), "crate");

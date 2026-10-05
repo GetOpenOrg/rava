@@ -208,6 +208,7 @@ name = "instr"
 version = "0.1.0"
 dependencies = [
  "classfile",
+ "closure",
  "input",
  "ir",
  "sim",
