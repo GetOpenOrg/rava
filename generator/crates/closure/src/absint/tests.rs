@@ -334,3 +334,47 @@ fn mirror_subtype_test_narrows_true_side() {
     assert_eq!(c, "p/K");
     assert_eq!(v.mirror_narrowed(), None);
 }
+
+/// 桩 Oracle：形参 0 镜像值集上的接收者钩子字段读（Some = 每个镜像的该字段都为该值）
+struct MirrorField(Option<V>);
+
+impl Oracle for MirrorField {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        None
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+    fn param_mirror_field(&self, i: u16, _: &MemberRef) -> Option<V> {
+        (i == 0).then(|| self.0.clone()).flatten()
+    }
+}
+
+/// `void f() { if (this.cl == null) return; throw …; }`
+fn mirror_field_code() -> Code {
+    let i = |offset, opcode, operand| Insn { offset, opcode, operand };
+    let f = MemberRef { owner: "p/C".into(), name: "cl".into(), desc: "Lp/L;".into() };
+    let insns = vec![
+        i(0, ALOAD_0, Operand::None),
+        i(1, op::GETFIELD, Operand::Field(f)),
+        i(4, 0xc6, Operand::Branch(9)),
+        i(7, ALOAD_0, Operand::None),
+        i(8, op::ATHROW, Operand::None),
+        i(9, op::RETURN, Operand::None),
+    ];
+    Code { max_stack: 1, max_locals: 1, code_len: 10, insns, exception_table: vec![] }
+}
+
+/// this 的镜像值集上字段恒 null：非空分支不可达，登记乐观答复；未知：两支都可达、不登记
+#[test]
+fn receiver_hook_field_folds_by_param_mirrors() {
+    let a = analyze("p/C", "()V", false, &mirror_field_code(), &MirrorField(Some(V::Null)));
+    assert_eq!(a.reachable, vec![true, true, true, false, false, true]);
+    assert_eq!(a.mirror_field_assumed, vec![0]);
+    let a = analyze("p/C", "()V", false, &mirror_field_code(), &MirrorField(None));
+    assert_eq!(a.reachable, vec![true; 6]);
+    assert!(a.mirror_field_assumed.is_empty());
+}

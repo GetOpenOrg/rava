@@ -299,6 +299,7 @@ impl<'a> Engine<'a> {
             events: Vec::new(),
             pending_types: Vec::new(),
             mirror_assumed: Vec::new(),
+            mirror_field_assumed: Vec::new(),
             conservative: false,
             cfg: Rc::default(),
             selector_params: 0,

@@ -286,6 +286,12 @@ pub trait Oracle {
     fn param_mirror(&self, _i: u16, _cls: &str) -> Option<bool> {
         None
     }
+    /// 形参 i（Class 类型）上读 VM 注入的接收者状态字段（清单 `[vm_state.field_hooks]` 的接收者钩子字段）：
+    /// 值集已知且其中每个类镜像的该字段都由类的事实定出同一值时为该值（乐观答复，值集增长时由引擎重分析，
+    /// 见 [`Analysis::mirror_field_assumed`]）；None = 未知
+    fn param_mirror_field(&self, _i: u16, _f: &MemberRef) -> Option<V> {
+        None
+    }
     /// 是否为类镜像子类型判定（清单 `[facts.reflect] mirror_subtype_tests`，`K.isAssignableFrom(x)` 形态：
     /// 接收者镜像所指类是实参镜像所指类的超类型时为真），见 `narrow.rs`
     fn mirror_subtype_test(&self, _m: &MemberRef) -> bool {
@@ -335,6 +341,8 @@ pub struct Analysis {
     pub pending_types: Vec<String>,
     /// 按「形参 i 不是类 c 的镜像」折叠的引用比较（形参序号, 类）——形参值集增长后需重分析
     pub mirror_assumed: Vec<(u16, String)>,
+    /// 按形参镜像值集折叠了 VM 注入字段读的形参序号（[`Oracle::param_mirror_field`]）——形参值集增长后需重分析
+    pub mirror_field_assumed: Vec<u16>,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
     /// 基本块控制流图（拼接链拆段的循环判定用）
@@ -426,6 +434,8 @@ struct Interp<'a, O: Oracle> {
     emit: Option<&'a mut Vec<(u32, Event)>>,
     /// 已作出的「形参不是该类镜像」乐观答复
     assumed: Vec<(u16, String)>,
+    /// 已作出的形参镜像字段答复（形参序号）
+    field_assumed: Vec<u16>,
     /// 见 [`Analysis::selector_params`]
     selects: u64,
 }
@@ -461,6 +471,17 @@ impl<O: Oracle> Interp<'_, O> {
             self.assumed.push((*i, c.to_string()));
         }
         Some(false)
+    }
+}
+
+impl<O: Oracle> Interp<'_, O> {
+    /// 接收者只来自一个 Class 形参时按形参镜像值集读 VM 注入字段（记为乐观答复）
+    fn param_mirror_field(&mut self, recv: Option<&V>, f: &MemberRef) -> Option<V> {
+        let Some(V::Ref { src, .. }) = recv else { return None };
+        let [Src::Param(i)] = &src[..] else { return None };
+        let v = self.oracle.param_mirror_field(*i, f)?;
+        self.field_assumed.push(*i);
+        Some(v)
     }
 }
 
@@ -911,7 +932,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     }
                     op::GETFIELD => {
                         recv = Some(pop(s)?);
-                        let v = self.folded(opc, off, self.oracle.field(opc, f, recv.as_ref())).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let known = self.oracle.field(opc, f, recv.as_ref()).or_else(|| self.param_mirror_field(recv.as_ref(), f));
+                        let v = self.folded(opc, off, known).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     _ => {
@@ -1097,7 +1119,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], mirror_field_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
 }
 
 /// 分析一个方法体
@@ -1156,7 +1178,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         })
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
-    let mut interp = Interp { oracle, emit: None, assumed: vec![], selects: 0 };
+    let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], selects: 0 };
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
         match entry.get_mut(&i) {
@@ -1299,6 +1321,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         }
     }
     let mut mirror_assumed = std::mem::take(&mut interp.assumed);
+    let mut mirror_field_assumed = std::mem::take(&mut interp.field_assumed);
+    mirror_field_assumed.sort();
+    mirror_field_assumed.dedup();
     let selector_params = interp.selects;
     drop(interp);
     mirror_assumed.sort();
@@ -1324,7 +1349,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    Some(Analysis { reachable, events, pending_types, mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params })
+    Some(Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params })
 }
 
 fn targets_empty(o: &Operand) -> bool {
