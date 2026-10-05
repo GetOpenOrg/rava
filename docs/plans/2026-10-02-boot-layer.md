@@ -178,6 +178,7 @@ anchors = [
    - `findBootstrapClass`：只返回引导加载器定义的类。
    这样 `BuiltinClassLoader.loadClassOrNull` 不论走 `findLoadedModule` 分支还是委派分支，都在 `findLoadedClass` 一步命中，
    不进入 `findClassInModuleOrNull` → `defineClass`。
+   **已实施**（c1d-a2c 57ca684a，`class_loader_impl.rs`；抽查 c1db-sp-57ca684a 加载器 5 例 + HelloWorld + TestCustomException 7/7）。
 6. **模块内容读取器**：命名模块的资源经 `SystemModuleReader` → `ImageReader` → `BasicImageReader`（`USE_JVM_MAP` 缺省为真、
    读取方为引导类）→ native `NativeImageBuffer.getNativeMap`。
    - 生成器把闭包推出的资源集（`input/src/resources.rs`）写成 jimage 格式的嵌入数据；

@@ -34,15 +34,15 @@ impl CovariantView {
 pub(super) fn covariant_view<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe>(
     a: &JArray<T>,
 ) -> CovariantView {
-    match &*a.0 {
-        Repr::Covariant(view) => Clone::clone(view),
-        Repr::Own(..) => CovariantView {
+    match a.0.as_deref() {
+        Some(Repr::Covariant(view)) => Clone::clone(view),
+        Some(Repr::Own(..)) => CovariantView {
             origin: Object::from(Clone::clone(a)),
             get: own_view_get::<T>,
             set: own_view_set::<T>,
             update: own_view_update::<T>,
         },
-        Repr::Null => panic!("NullPointerException: 构造 null 数组的协变视图"),
+        None => panic!("NullPointerException: 构造 null 数组的协变视图"),
     }
 }
 
@@ -51,7 +51,7 @@ pub(super) fn covariant_view<T: Clone + Default + From<Object> + Into<Object> + 
 /// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
 /// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
 pub(super) fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
-    JArray(Rc::new(Repr::Covariant(CovariantView {
+    JArray::own(Repr::Covariant(CovariantView {
         origin,
         get: |o, i| o.array_load_object(i),
         set: |o, i, v| o.array_store_object(i, v),
@@ -67,7 +67,7 @@ pub(super) fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
                     "{} 不是引用元素数组", o.0.__class_name()))),
             }
         },
-    })))
+    }))
 }
 
 // ── 自有存储源数组的协变视图元素访问（`covariant_view` 按元素类型 T 单态化的函数指针）──

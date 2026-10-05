@@ -1,16 +1,16 @@
 //! 实例字段描述与按描述符的字段协议（S7-3，docs/plans/2026-10-04-s7-object-handle-descriptor.md）。
 //!
 //! 每个类的描述符（`__ClassDesc`）列出本类自有实例字段（`fields`）与继承字段数（`field_base`）。
-//! 存储 `X__inner` 是 `#[repr(C)]`：继承字段（最深祖先在前）、自有字段、标识单元依次排列，每个
-//! 字段都是一个 `__Shared` 细指针，故本类第 i 个自有字段位于存储基址 + `(field_base + i)` 个
-//! 指针宽（宏为每个存储发射编译期断言守护该布局）。
+//! 存储 `X__inner` 内联平铺全部字段单元（基本字段 `__PrimCell<T>`、引用字段
+//! `__RefField<Option<T>>`），本类第 i 个自有字段的平铺下标是 `field_base + i`，其地址为存储
+//! 基址 + 运行时类 `offsets()[下标]`（偏移表由实现层按 `offset_of!` 导出）。
 //!
 //! 由此，按类展开的浅拷贝、Unsafe 按名单元 / 字视图 / 引用协议、Java 字段身份 → Rust 字段名
 //! 映射都改为这里的非泛型逻辑：沿运行时类描述符的 `display` 查各类的 `fields`。
 
 use crate::class_desc::__ClassDesc;
 use crate::java::lang::{Object, ObjectVTable};
-use crate::sync_model::{__AtomicRepr, __PrimCell, __RefSlot, __Shared};
+use crate::sync_model::{__AtomicRepr, __PrimCell, __RefField};
 
 /// 引用原子协议的操作（`__unsafe_ref_get` / `__unsafe_ref_set` / `__unsafe_ref_update` 的落点）。
 #[doc(hidden)]
@@ -27,10 +27,10 @@ pub enum __RefAccess<'a> {
 }
 
 /// 引用字段单元上的协议操作：按字段载体类型实例化的 `__ref_field::<T>`，入参是存储中该字段
-/// （`__Shared<__RefSlot<Option<Box<T>>>>`）的地址。
+/// （`__RefField<Option<T>>`）的地址。
 pub type __RefFieldFn = for<'a, 'b> unsafe fn(*const (), &'a mut __RefAccess<'b>) -> Option<Object>;
 
-/// 实例字段的存储形态。基本类型单元一律是 `__Shared<__PrimCell<T>>`（`AtomicU64` 位形，
+/// 实例字段的存储形态。基本类型单元一律是 `__PrimCell<T>`（`AtomicU64` 位形，
 /// `#[repr(transparent)]`）；按 Java 基本类型细分只为 Unsafe 的字 / 双字视图与按名单元协议。
 #[derive(Clone, Copy)]
 pub enum __FieldKind {
@@ -98,40 +98,40 @@ impl __FieldDesc {
 pub unsafe fn __ref_field<T>(slot: *const (), op: &mut __RefAccess<'_>) -> Option<Object>
 where T: Clone + From<Object>, Object: From<T>
 {
-    type Cell<T> = __Shared<__RefSlot<Option<Box<T>>>>;
+    type Cell<T> = __RefField<Option<T>>;
     // SAFETY: 调用方保证
     let slot: &Cell<T> = unsafe { &*(slot as *const Cell<T>) };
     match op {
-        __RefAccess::Get => Some(Option::unwrap_or_default(
-            slot.borrow().as_deref().map(|b| Object::from(Clone::clone(b))))),
+        __RefAccess::Get => Some(slot.get().map(Object::from).unwrap_or_default()),
         __RefAccess::Set(v) => {
-            let v = Some(Box::new(<T as From<Object>>::from(v.take().unwrap_or_default())));
-            *slot.borrow_mut() = v;
+            let v = <T as From<Object>>::from(v.take().unwrap_or_default());
+            slot.set(Some(v));
             Some(Object::default())
         }
         __RefAccess::Update(f) => {
-            let mut g = slot.borrow_mut();
-            let cur: Object = Option::unwrap_or_default(
-                g.as_deref().map(|b| Object::from(Clone::clone(b))));
-            if let Some(n) = f(Clone::clone(&cur)) {
-                *g = Some(Box::new(<T as From<Object>>::from(n)));
-            }
+            // 锁内读出当前值并按 f 写入（f 只比较引用、不访问本单元）；被替换的旧值在锁外释放
+            let (cur, old) = slot.with(|g| {
+                let cur: Object = g.as_ref().map(|b| Object::from(Clone::clone(b))).unwrap_or_default();
+                let old = f(Clone::clone(&cur))
+                    .map(|n| std::mem::replace(g, Some(<T as From<Object>>::from(n))));
+                (cur, old)
+            });
+            drop(old);
             Some(cur)
         }
         __RefAccess::CopyInto(dst) => {
             // SAFETY: 调用方保证目标是同一字段（同一载体类型）
             let dst: &Cell<T> = unsafe { &*(*dst as *const Cell<T>) };
-            let v = slot.borrow().clone();
-            *dst.borrow_mut() = v;
+            dst.set(slot.get());
             Some(Object::default())
         }
     }
 }
 
-/// 存储基址起第 `idx` 个字段的地址。
+/// 运行时类存储中平铺下标为 `idx` 的字段地址。
 #[inline]
-fn slot_at(base: *const (), idx: usize) -> *const () {
-    (base as *const usize).wrapping_add(idx) as *const ()
+fn slot_at(base: *const (), desc: &__ClassDesc, idx: usize) -> *const () {
+    (base as *const u8).wrapping_add((desc.offsets)()[idx] as usize) as *const ()
 }
 
 /// 基本单元按 `T` 解读。
@@ -140,8 +140,8 @@ fn slot_at(base: *const (), idx: usize) -> *const () {
 /// `slot` 指向存活存储中的基本字段；`__PrimCell<_>` 为 `#[repr(transparent)]` 的 `AtomicU64`，
 /// 各实例化布局相同，按另一 `T` 解读只改变位形的读写方式。
 #[inline]
-pub(crate) unsafe fn prim_at<'a, T: __AtomicRepr>(slot: *const ()) -> &'a __Shared<__PrimCell<T>> {
-    unsafe { &*(slot as *const __Shared<__PrimCell<T>>) }
+pub(crate) unsafe fn prim_at<'a, T: __AtomicRepr>(slot: *const ()) -> &'a __PrimCell<T> {
+    unsafe { &*(slot as *const __PrimCell<T>) }
 }
 
 use prim_at as prim;
@@ -159,7 +159,7 @@ pub unsafe fn __clone_fields(src: *const (), desc: &'static __ClassDesc) -> Obje
     for class in desc.display {
         for (i, f) in class.fields.iter().enumerate() {
             let idx = class.field_base as usize + i;
-            let (s, d) = (slot_at(src, idx), slot_at(dst, idx));
+            let (s, d) = (slot_at(src, desc, idx), slot_at(dst, desc, idx));
             match f.kind {
                 // SAFETY: 两处存储同属 `desc`，同一下标是同一字段
                 __FieldKind::Ref(op) => unsafe { op(s, &mut __RefAccess::CopyInto(d)); },
@@ -180,7 +180,7 @@ impl dyn ObjectVTable {
         let base = self as *const dyn ObjectVTable as *const ();
         desc.display.iter().rev().find_map(|class| {
             class.fields.iter().position(|f| f.rust == rust)
-                .map(|i| (&class.fields[i], slot_at(base, class.field_base as usize + i)))
+                .map(|i| (&class.fields[i], slot_at(base, desc, class.field_base as usize + i)))
         })
     }
 
@@ -197,33 +197,33 @@ impl dyn ObjectVTable {
         };
         let i = class.fields.iter().position(|f| f.java == name)?;
         let base = self as *const dyn ObjectVTable as *const ();
-        Some(Ok((class.fields[i].kind, slot_at(base, class.field_base as usize + i))))
+        Some(Ok((class.fields[i].kind, slot_at(base, desc, class.field_base as usize + i))))
     }
 
-    /// 按名单元协议：类型为 `T` 的基本字段的共享单元（与该对象全部视图的字段读写同一存储）。
+    /// 按名单元协议：类型为 `T` 的基本字段的单元（存储内联单元，借用期不超过对象引用）。
     fn __prim_cell<T: __AtomicRepr>(&self, field: &str, want: fn(__FieldKind) -> bool)
-        -> Option<__Shared<__PrimCell<T>>> {
+        -> Option<&__PrimCell<T>> {
         let (f, p) = self.__field_at(field)?;
-        // SAFETY: 字段种类已核对为 T 对应的基本类型
-        want(f.kind).then(|| unsafe { prim::<T>(p) }.clone())
+        // SAFETY: 字段种类已核对为 T 对应的基本类型；p 位于 self 的存储内
+        want(f.kind).then(|| unsafe { prim::<T>(p) })
     }
 
     /// Unsafe 实例字段 long 单元（`getLongVolatile` / `compareAndSetLong` 等实例字段形态，及
-    /// VarHandle `fieldOffset` 直读）：非擦除 long 字段 → 共享单元；其余 → None。
+    /// VarHandle `fieldOffset` 直读）：非擦除 long 字段 → 其单元；其余 → None。
     #[doc(hidden)]
-    pub fn __unsafe_long_cell(&self, field: &str) -> Option<__Shared<__PrimCell<i64>>> {
+    pub fn __unsafe_long_cell(&self, field: &str) -> Option<&__PrimCell<i64>> {
         self.__prim_cell(field, |k| matches!(k, __FieldKind::Long))
     }
 
     /// `__unsafe_long_cell` 的 int 镜像。
     #[doc(hidden)]
-    pub fn __unsafe_int_cell(&self, field: &str) -> Option<__Shared<__PrimCell<i32>>> {
+    pub fn __unsafe_int_cell(&self, field: &str) -> Option<&__PrimCell<i32>> {
         self.__prim_cell(field, |k| matches!(k, __FieldKind::Int))
     }
 
     /// `__unsafe_long_cell` 的 boolean 镜像（VarHandle 字节数组视图的字节序位）。
     #[doc(hidden)]
-    pub fn __unsafe_bool_cell(&self, field: &str) -> Option<__Shared<__PrimCell<bool>>> {
+    pub fn __unsafe_bool_cell(&self, field: &str) -> Option<&__PrimCell<bool>> {
         self.__prim_cell(field, |k| matches!(k, __FieldKind::Bool))
     }
 

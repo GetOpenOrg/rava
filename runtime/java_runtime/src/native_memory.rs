@@ -31,38 +31,28 @@ pub fn free(address: i64) {
     unsafe { libc::free(address as *mut libc::c_void) }
 }
 
-/// 基本类型数组 `o` 的本机字节视图上执行 `f`（按元素类型分派，数组存储写锁内）；非基本类型数组
-/// 返回 None。boolean 数组在 `f` 之后把每个字节规范化为 0 / 1（`bool` 的合法位形；锁内完成，
-/// 读者不会看到中间态）。
-fn with_array_bytes<R>(o: &Object, f: impl FnOnce(&mut [u8]) -> R) -> Option<Result<R>> {
-    fn bytes_of<T>(v: &mut [T]) -> &mut [u8] {
-        let n = std::mem::size_of_val(v);
-        // SAFETY: 基本类型元素的存储即连续字节，视图不越过 Vec 的初始化区间
-        unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, n) }
-    }
-    if let Some(a) = o.0.as_any().downcast_ref::<JArray<bool>>() {
-        return Some(a.with_vec(|v| {
-            let bytes = bytes_of(v);
-            let r = f(&mut *bytes);
-            for b in bytes.iter_mut() {
-                *b = (*b != 0) as u8;
+/// 基本类型数组 `o` 按元素类型取 `JArray<T>`，对其求 `$e`（`$a` 绑定为数组引用）；非基本类型
+/// 数组为 None。数组字节视图的访问全部经元素原子单元（见 array/store.rs），不持锁、无数据竞争。
+macro_rules! with_prim_array {
+    ($o:expr, |$a:ident| $e:expr) => {{
+        let any = $o.0.as_any();
+        with_prim_array!(@try any, $a, $e; bool, i8, u16, i16, i32, f32, i64, f64)
+    }};
+    (@try $any:ident, $a:ident, $e:expr; $($t:ty),*) => {{
+        let mut r = None;
+        $(
+            if r.is_none() {
+                if let Some($a) = $any.downcast_ref::<JArray<$t>>() {
+                    r = Some($e);
+                }
             }
-            r
-        }));
-    }
-    macro_rules! try_elem {
-        ($($t:ty),*) => {$(
-            if let Some(a) = o.0.as_any().downcast_ref::<JArray<$t>>() {
-                return Some(a.with_vec(|v| f(bytes_of(v))));
-            }
-        )*};
-    }
-    try_elem!(i8, u16, i16, i32, f32, i64, f64);
-    None
+        )*
+        r
+    }};
 }
 
 /// `width` 字节的本机字节序位形 → 零扩展的 u64。
-fn load_bits(src: &[u8]) -> u64 {
+pub(crate) fn load_bits(src: &[u8]) -> u64 {
     let mut b = [0u8; 8];
     if cfg!(target_endian = "big") {
         b[8 - src.len()..].copy_from_slice(src);
@@ -74,7 +64,7 @@ fn load_bits(src: &[u8]) -> u64 {
 }
 
 /// u64 的低 `dst.len()` 字节按本机字节序写入 `dst`（截断）。
-fn store_bits(dst: &mut [u8], v: u64) {
+pub(crate) fn store_bits(dst: &mut [u8], v: u64) {
     let n = dst.len();
     if cfg!(target_endian = "big") {
         dst.copy_from_slice(&v.to_be_bytes()[8 - n..]);
@@ -85,8 +75,8 @@ fn store_bits(dst: &mut [u8], v: u64) {
 
 /// `(base, offset)` 处 `width`（1 / 2 / 4 / 8）字节值的原子读-改-写（Unsafe 基本类型访问器族的
 /// 原生内存形态：读、写、CAS、getAndAdd 等统一经此）。值是本机字节序零扩展的位形；`op(旧)` 给出
-/// 新值则写入其低 `width` 字节，返回旧值，给 None 即只读。基本类型数组在数组存储写锁内完成（与
-/// 数组元素的直接读写同一把锁）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
+/// 新值则写入其低 `width` 字节，返回旧值，给 None 即只读。基本类型数组经元素原子单元（区间在单个元素
+/// 内为该元素的 CAS，跨元素见 `JArray::__update_bytes`）；直接内存经该地址上的同宽原子指令（地址按宽度对齐时——JDK 对
 /// 未对齐地址的原子访问不作保证，未对齐时退为普通读写）。CAS 重试时 op 重新求值（须为纯函数）。
 pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Result<u64> {
     if base.0.is_jvm_null() {
@@ -126,16 +116,7 @@ pub fn update(base: &Object, offset: i64, width: usize, op: &mut dyn FnMut(u64) 
         return Ok(old);
     }
     let start = usize::try_from(offset - ARRAY_BASE_OFFSET).unwrap_or(usize::MAX - 8);
-    with_array_bytes(base, |b| match b.get_mut(start..start + width) {
-        Some(slot) => {
-            let old = load_bits(slot);
-            if let Some(n) = op(old) {
-                store_bits(slot, n);
-            }
-            Ok(old)
-        }
-        None => Err(out_of_bounds()),
-    }).unwrap_or_else(|| Err(out_of_bounds()))?
+    with_prim_array!(base, |a| a.__update_bytes(start, width, &mut *op)).flatten().ok_or_else(out_of_bounds)
 }
 
 fn out_of_bounds() -> JvmError {
@@ -149,11 +130,11 @@ pub fn read(base: &Object, offset: i64, dst: &mut [u8]) -> Result<()> {
         unsafe { std::ptr::copy_nonoverlapping(offset as *const u8, dst.as_mut_ptr(), dst.len()) };
         return Ok(());
     }
-    let start = (offset - ARRAY_BASE_OFFSET) as usize;
-    with_array_bytes(base, |b| match b.get(start..start + dst.len()) {
-        Some(src) => { dst.copy_from_slice(src); Ok(()) }
-        None => Err(out_of_bounds()),
-    }).unwrap_or_else(|| Err(out_of_bounds()))?
+    let start = usize::try_from(offset - ARRAY_BASE_OFFSET).map_err(|_| out_of_bounds())?;
+    match with_prim_array!(base, |a| a.__read_bytes(start, &mut *dst)) {
+        Some(true) => Ok(()),
+        _ => Err(out_of_bounds()),
+    }
 }
 
 /// 向 `(base, offset)` 写 `src`。
@@ -163,11 +144,11 @@ pub fn write(base: &Object, offset: i64, src: &[u8]) -> Result<()> {
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), offset as *mut u8, src.len()) };
         return Ok(());
     }
-    let start = (offset - ARRAY_BASE_OFFSET) as usize;
-    with_array_bytes(base, |b| match b.get_mut(start..start + src.len()) {
-        Some(dst) => { dst.copy_from_slice(src); Ok(()) }
-        None => Err(out_of_bounds()),
-    }).unwrap_or_else(|| Err(out_of_bounds()))?
+    let start = usize::try_from(offset - ARRAY_BASE_OFFSET).map_err(|_| out_of_bounds())?;
+    match with_prim_array!(base, |a| a.__write_bytes(start, src)) {
+        Some(true) => Ok(()),
+        _ => Err(out_of_bounds()),
+    }
 }
 
 /// `(base, offset)` 起 `bytes` 字节填 `value`（Unsafe.setMemory0）。
@@ -202,7 +183,7 @@ pub fn copy(src_base: &Object, src_offset: i64, dst_base: &Object, dst_offset: i
 /// `(base, offset)` 是否按原生内存寻址：base 为 null（直接内存）或基本类型数组。
 /// 其余对象（实例字段偏移、引用数组）由 Unsafe 的字段 / 引用访问器处理。
 pub fn is_raw(base: &Object) -> bool {
-    base.0.is_jvm_null() || with_array_bytes(base, |_| ()).is_some()
+    base.0.is_jvm_null() || with_prim_array!(base, |_a| ()).is_some()
 }
 
 /// 读 N 字节（本机字节序，供 `T::from_ne_bytes`）。

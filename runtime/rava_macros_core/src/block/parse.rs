@@ -46,6 +46,8 @@ pub(crate) struct ClassInput {
     pub struct_ident: Ident,
     pub generics: syn::Generics,
     pub fields: Vec<(Ident, Type)>,
+    /// 声明为 volatile 的自有实例字段（字段属性 `java_field(.., modifiers = "volatile ..")`）
+    pub volatile_fields: std::collections::HashSet<String>,
     pub fns: Vec<FnItem>,
     pub iface_impls: Vec<InterfaceImpl>,
     pub statics: Vec<StaticItem>,
@@ -64,15 +66,19 @@ impl Parse for ClassInput {
         }
 
         let mut fields: Vec<(Ident, Type)> = Vec::new();
+        let mut volatile_fields = std::collections::HashSet::new();
         if input.peek(syn::token::Brace) {
             let content;
             syn::braced!(content in input);
             while !content.is_empty() {
-                let _field_attrs = content.call(Attribute::parse_outer)?;
+                let field_attrs = content.call(Attribute::parse_outer)?;
                 let _field_vis: Visibility = content.parse()?;
                 let name: Ident = content.parse()?;
                 let _colon: Token![:] = content.parse()?;
                 let ty: Type = content.parse()?;
+                if super::util::java_field_is_volatile(&field_attrs) {
+                    volatile_fields.insert(name.to_string());
+                }
                 fields.push((name, ty));
                 if content.peek(Token![,]) {
                     let _: Token![,] = content.parse()?;
@@ -114,7 +120,7 @@ impl Parse for ClassInput {
             }
         }
 
-        Ok(ClassInput { attrs, struct_ident, generics, fields, fns, iface_impls, statics })
+        Ok(ClassInput { attrs, struct_ident, generics, fields, volatile_fields, fns, iface_impls, statics })
     }
 }
 
@@ -207,6 +213,8 @@ pub(crate) struct ClassMeta {
     /// 声明方（祖先）按自身类型形参声明、已被声明方宏 Object 化的继承字段（A-1 擦除
     /// 按声明类判定）：继承者的存储 / 访问器签名同步擦除
     pub superclass_erased_fields: std::collections::HashSet<String>,
+    /// 祖先声明为 volatile 的继承字段（访问器取顺序一致原子序）
+    pub superclass_volatile_fields: std::collections::HashSet<String>,
     /// 线性超类链（从最深祖先到直接父类），Rust short names，不含 Object 和 self。
     pub all_superclasses: Vec<String>,
     /// 每个祖先在本类视角下的类型实参（含尖括号，如 `<P_IN, P_OUT, Object>`）；非泛型祖先为空。
@@ -311,6 +319,10 @@ impl ClassMeta {
                         .ok_or_else(|| syn::Error::new_spanned(attr, "field_slots 项形如 声明类.字段=Rust 名"))?;
                     m.field_slots.push((decl.to_owned(), java.to_owned(), rust.to_owned()));
                 }
+            } else if path.is_ident("superclass_volatile_fields") {
+                let s = lit_str(attr)?;
+                m.superclass_volatile_fields =
+                    s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("superclass_erased_fields") {
                 let s = lit_str(attr)?;
                 m.superclass_erased_fields =

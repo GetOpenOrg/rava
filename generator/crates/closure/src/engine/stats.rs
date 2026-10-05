@@ -126,6 +126,8 @@ pub(super) struct Stats {
     /// 读者站点重跑按事件种类：[次数, 耗时 ns（含其中的流传播）]（下标见 [`RERUN_KINDS`]）
     pub(super) rerun_by_event: [[u64; 2]; RERUN_KINDS.len()],
     pub(super) lcall_reruns: u64,
+    /// 调用点接收者值集版本记忆：命中 / 未命中（`recv_fp.rs`）
+    pub(super) recv_fp: [u64; 2],
     pub(super) aux_analyses: u64,
     /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
     pub(super) ceval: [u64; 3],
@@ -187,6 +189,7 @@ impl Default for Stats {
             site_reruns: 0,
             rerun_by_event: Default::default(),
             lcall_reruns: 0,
+            recv_fp: [0; 2],
             aux_analyses: 0,
             ceval: [0; 3],
             rss_marks: Vec::new(),
@@ -362,6 +365,7 @@ impl<'a> Engine<'a> {
             "lookup_releases": [s.releases[0], s.releases[1], s.first_release.map_or(0, |t| ms(t - s.born)), s.first_release.map_or(0, |t| ms(t.elapsed()))],
             "at_first_release": s.at_release,
             "lcall_reruns": s.lcall_reruns,
+            "recv_fp": s.recv_fp,
             "flow_edges": self.graph.edge_count,
             "adds": self.graph.adds,
             // 环合并：检测次数 / 合并掉的节点数 / 检测耗时 ms（scc.rs）

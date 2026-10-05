@@ -419,11 +419,17 @@ impl Object {
     }
 
     /// 类 wrapper 的 null 装入 Object（`From<X> for Object` 的 null 臂，S7-2b）：静态类型取自
-    /// 本类描述符。非泛型冷路径，全程序一份。
+    /// 本类描述符，取该类的类型化 null 单例（描述符的 `typed_null`）。
     #[doc(hidden)]
-    #[inline(never)]
+    #[inline]
     pub fn __typed_null_desc(desc: &'static crate::class_desc::__ClassDesc) -> Object {
-        Self::__typed_null_of(desc.binary_name, Some(desc))
+        (desc.typed_null)()
+    }
+
+    /// 新建带本类描述符的类型化 null（描述符 `typed_null` 单例的构造，每类只执行一次）。
+    #[doc(hidden)]
+    pub fn __new_typed_null(desc: &'static crate::class_desc::__ClassDesc) -> Object {
+        Object(Rc::new(TypedNull(desc.binary_name, Some(desc))))
     }
 
     fn __typed_null_of(binary_name: &'static str,
