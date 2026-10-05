@@ -108,7 +108,7 @@ use setstore::SetStore;
 mod scc;
 mod levels;
 mod open_world;
-mod concrete;
+pub mod concrete;
 mod caller;
 mod boot_phases;
 

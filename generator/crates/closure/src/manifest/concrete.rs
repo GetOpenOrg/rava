@@ -3,7 +3,7 @@
 //! 入口方法在调用点实参可枚举时按实参逐组具体执行（engine/concrete），轨迹上的方法入闭包、
 //! 结果对象图物化为类型流；native 只认白名单（成员 → 操作名，操作的实现只按操作名分派）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, Default)]
 pub struct ConcreteCfg {
@@ -20,6 +20,32 @@ pub struct ConcreteCfg {
     pub implicit: HashMap<String, String>,
     /// VM 布局的字段（字符串字面量与类镜像由 VM 直接构造）：键为语义名（`string_value` / `string_coder` / `component_type`），值为 `类.字段`
     pub vm_fields: HashMap<String, String>,
+    /// 构建期引导求值（`[concrete.boot]`，engine/concrete/boot.rs）
+    pub boot: BootCfg,
+}
+
+/// 构建期引导求值：调用序列、引导期专用 native 操作、VM 注入静态值、VM / 平台属性。
+/// 值 `@deferred` = 宿主相关（运行期取宿主值，构建期内容不可读），`@null` = null，
+/// `@jdk_feature` = 参考 JDK 的特性版本号，其余为字面量
+#[derive(Debug, Clone, Default)]
+pub struct BootCfg {
+    /// 调用序列：`[成员, 实参...]`（实参为整数字面量）
+    pub calls: Vec<(String, Vec<i64>)>,
+    /// 成员 → 操作名（优先于 `[concrete.natives]`）
+    pub natives: HashMap<String, String>,
+    /// VM 注入静态字段 `类.字段` → 整数字面量 / `@deferred`
+    pub statics: HashMap<String, String>,
+    /// VM 属性（`SystemProps$Raw.vmProperties` 的键值对，按序）
+    pub vm_props: Vec<(String, String)>,
+    /// 平台属性：`SystemProps$Raw` 下标常量 `_<名>_NDX` 的名 → 值（下标按参考 JDK 的类文件取）
+    pub platform_props: BTreeMap<String, String>,
+    /// VM 在调用序列前初始化的类（按序）
+    pub init: Vec<String>,
+    /// VM 构造的对象：`[类, 构造器描述符, 实参...]`，实参 `@k` = 第 k 个对象、`str:..` = 字符串；
+    /// 先分配并登记，再执行构造器（初始线程在构造器执行前已是当前线程）
+    pub objects: Vec<Vec<String>>,
+    /// 当前线程取 objects 的下标
+    pub current_thread: Option<usize>,
 }
 
 fn strs(v: Option<&toml::Value>) -> Vec<String> {
@@ -46,5 +72,32 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
         implicit: table(get("implicit"), "implicit")?,
+        boot: parse_boot(get("boot"))?,
+    })
+}
+
+fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
+    let get = |k: &str| t.and_then(|t| t.get(k));
+    let mut calls = Vec::new();
+    for c in get("calls").and_then(|v| v.as_array()).into_iter().flatten() {
+        let Some(a) = c.as_array() else { return Err("[concrete.boot] calls 的项须为数组".into()) };
+        let m = a.first().and_then(|x| x.as_str()).ok_or("[concrete.boot] calls 项首元须为成员")?;
+        let args = a[1..].iter().map(|x| x.as_integer().ok_or("[concrete.boot] calls 实参须为整数")).collect::<Result<Vec<_>, _>>()?;
+        calls.push((m.to_string(), args));
+    }
+    let mut vm_props = Vec::new();
+    for p in get("vm_props").and_then(|v| v.as_array()).into_iter().flatten() {
+        let a = p.as_array().filter(|a| a.len() == 2).ok_or("[concrete.boot] vm_props 项须为 [键, 值]")?;
+        vm_props.push((a[0].as_str().unwrap_or_default().to_string(), a[1].as_str().unwrap_or_default().to_string()));
+    }
+    Ok(BootCfg {
+        calls,
+        natives: table(get("natives"), "boot.natives")?,
+        statics: table(get("statics"), "boot.statics")?,
+        vm_props,
+        platform_props: table(get("platform_props"), "boot.platform_props")?.into_iter().collect(),
+        init: strs(get("init")),
+        objects: get("objects").and_then(|v| v.as_array()).into_iter().flatten().map(|o| strs(Some(o))).collect(),
+        current_thread: get("current_thread").and_then(|v| v.as_integer()).map(|x| x as usize),
     })
 }

@@ -48,11 +48,13 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         "const:false" | "const:0" => ret(CV::I(0)),
         "const:true" => ret(CV::I(1)),
         "const:null" => ret(CV::N),
-        c if c.starts_with("const:") => match c["const:".len()..].parse::<i32>() {
-            Ok(x) => ret(CV::I(x)),
+        c if c.starts_with("const:") => match c["const:".len()..].parse::<i64>() {
+            Ok(x) if desc.ends_with(")J") => ret(CV::J(x)),
+            Ok(x) => ret(CV::I(x as i32)),
             Err(_) => fail(format!("未知常量操作 {c}")),
         },
         "self" => ret(arg(0)?),
+        "arg1" => ret(arg(1)?),
         // VM 持有的单例（如 Unsafe.getUnsafe 的实例）：返回类型的唯一映像对象，无实例字段状态
         "vm_singleton" => {
             let Some(t) = desc.rsplit(')').next().and_then(|d| d.strip_prefix('L')).and_then(|d| d.strip_suffix(';')) else {
@@ -167,6 +169,150 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             ret(CV::R(vm.new_array(&array_of(&t), arg(1)?.i()?)?))
         }
+        // ── 构建期引导求值（探针）专用操作 ──
+        // 运行期副作用（信号、线程启动、OS 环境）：登记为运行期按序重放的 native；有返回值的即宿主相关值
+        "defer" => {
+            if !desc.ends_with(")V") {
+                return defer(format!("延迟值参与求值：宿主相关的返回值 {}", info.key));
+            }
+            vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: None });
+            Ok(None)
+        }
+        // 宿主标量（机器资源 / 描述符状态）：构建期取零值，调用点登记待第 2 步的污点与重算槽（计划 §3.2）
+        "host_scalar" => {
+            let caller = vm.frames.last().map_or_else(String::new, |f| f.to_string());
+            vm.bj.host_scalars.insert((info.key.to_string(), caller));
+            ret(CV::zero(desc.rsplit(')').next().unwrap_or("I")))
+        }
+        "boot_current_thread" => match env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i)) {
+            Some(&o) => ret(CV::R(o)),
+            None => fail("初始线程尚未构造"),
+        },
+        // 构建期无回收：引用对象按强引用语义读其所指（VM 布局字段 `reference_referent`）
+        "refers_to" => {
+            let o = arg(0)?.obj()?;
+            let cur = ref_field(vm, env, o)?;
+            ret(CV::I(i32::from(cur == arg(1)?)))
+        }
+        "clear_referent" => {
+            let o = arg(0)?.obj()?;
+            let spec = env.cfg().vm_fields.get("reference_referent").cloned().map_or_else(|| fail("清单缺 VM 布局字段 reference_referent"), Ok)?;
+            let (owner, name) = spec.rsplit_once('.').unwrap_or((&spec, ""));
+            let fr = vm.field_res(env, &MemberRef { owner: owner.into(), name: name.into(), desc: "Ljava/lang/Object;".into() })?;
+            vm.put_field(o, &fr, CV::N)?;
+            Ok(None)
+        }
+        // Unsafe.ensureClassInitialized0 / shouldBeInitialized0（实参 0 为 Unsafe 接收者，1 为镜像）
+        "unsafe_ensure_init" => {
+            let t = mirror_type(vm, arg(1)?)?;
+            if !t.starts_with('[') && !is_prim(&t) {
+                vm.ensure_init(env, &t)?;
+            }
+            Ok(None)
+        }
+        "unsafe_should_be_init" => {
+            let t = mirror_type(vm, arg(1)?)?;
+            ret(CV::I(i32::from(!t.starts_with('[') && !is_prim(&t) && !matches!(vm.init.get(&t), Some(Init::Done)))))
+        }
+        // 宿主相关的返回值（文件系统查询等）：字符串为内容延迟的非空串，其余即宿主相关值参与求值
+        "defer_value" => {
+            if desc.ends_with(")Ljava/lang/String;") {
+                let k = info.key.to_string();
+                return Ok(Some(boot_string(vm, env, &k, "@deferred")?));
+            }
+            defer(format!("延迟值参与求值：宿主相关的返回值 {}", info.key))
+        }
+        // 延迟调用：结果依赖宿主（如当前目录），构建期只登记调用、返回占位对象；占位对象只许被存放，
+        // 读写其状态、判空、比较身份即「延迟值参与求值」。运行期重放该调用得到真值
+        "defer_call" => {
+            let Some(t) = desc.rsplit(')').next().and_then(|d| d.strip_prefix('L')).and_then(|d| d.strip_suffix(';')) else {
+                return fail("defer_call 返回类型非类");
+            };
+            let o = vm.alloc(t, Body::Inst(Vec::new()));
+            vm.mark_placeholder(o, &format!("延迟调用 {}", info.key));
+            vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: Some(o) });
+            ret(CV::R(o))
+        }
+        // VM 侧状态登记（模块定义、导出、读边等）：构建期记入 VM 表，物化为运行期 VM 表的初值
+        "vm_record" => {
+            vm.bj.vm_effects += 1;
+            *vm.vm_tables.entry(info.key.name.clone()).or_default() += 1;
+            // defineModule0(Module, isOpen, version, location, String[] 包名)：包 → 模块登记，
+            // 已有与此后新建的类镜像按包填 Class.module（HotSpot 的 java.base 修补与 create_mirror 同义）
+            if info.key.name == "defineModule0" {
+                let m = arg(0)?.obj()?;
+                vm.base_module.get_or_insert(m);
+                if let Some(pns) = args.last().copied().and_then(|v| v.r().ok().flatten()) {
+                    let names: Vec<CV> = vm.arr(pns)?.clone();
+                    *vm.vm_tables.entry("packages".into()).or_default() += names.len();
+                    for n in names {
+                        let p = vm.rust_string(env, n.obj()?)?.replace('.', "/");
+                        vm.pkg_module.insert(Rc::from(p.as_str()), m);
+                    }
+                }
+                let ms: Vec<(Rc<str>, u32)> = vm.mirrors.iter().map(|(t, &o)| (t.clone(), o)).collect();
+                for (t, o) in ms {
+                    vm.mirror_module(env, &t, o)?;
+                }
+            }
+            Ok(zero())
+        }
+        // 向文件描述符写出是运行期副作用：所在的根帧调用 / 区段残差化
+        "boot_write" => defer(format!("延迟值参与求值：构建期输出 {}", info.key)),
+        "props:vm" => {
+            let kv: Vec<(String, String)> = env.cfg().boot.vm_props.clone();
+            let a = vm.new_array(&array_of(STRING), (kv.len() * 2) as i32)?;
+            for (i, (k, v)) in kv.iter().enumerate() {
+                let ko = boot_string(vm, env, k, k)?;
+                let vo = boot_string(vm, env, k, v)?;
+                vm.arr_mut(a)?[2 * i] = ko;
+                vm.arr_mut(a)?[2 * i + 1] = vo;
+            }
+            ret(CV::R(a))
+        }
+        // 平台属性按名给出：下标取自 native 所在类的 `_<名>_NDX` 常量（各 JDK 版本的下标不同），
+        // 数组长度 = 最大下标 + 1；清单未给的名字为 null，清单有而本版本无的名字不出现
+        "props:platform" => {
+            let cf = info.site.class.clone();
+            let ndx: HashMap<&str, usize> = cf
+                .fields
+                .iter()
+                .filter_map(|f| {
+                    let n = f.name.strip_prefix('_')?.strip_suffix("_NDX")?;
+                    match f.constant_value {
+                        Some(Const::Int(i)) if i >= 0 => Some((n, i as usize)),
+                        _ => None,
+                    }
+                })
+                .collect();
+            let Some(len) = ndx.values().max().map(|m| m + 1) else { return fail(format!("{} 无 _<名>_NDX 下标常量", cf.name)) };
+            let a = vm.new_array(&array_of(STRING), len as i32)?;
+            let vs: Vec<(String, String)> = env.cfg().boot.platform_props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for (k, v) in vs {
+                let Some(&i) = ndx.get(k.as_str()) else { continue };
+                let o = boot_string(vm, env, &k, &v)?;
+                vm.arr_mut(a)?[i] = o;
+            }
+            ret(CV::R(a))
+        }
+        // 数组元素 stride（目标布局常量，与运行时 vm_constants::array_index_scale 同口径）
+        "array_index_scale" => {
+            let t = mirror_type(vm, arg(1)?)?;
+            ret(CV::I(match t.as_bytes().get(1) {
+                Some(b'Z' | b'B') => 1,
+                Some(b'C' | b'S') => 2,
+                Some(b'J' | b'D') => 8,
+                _ => 4,
+            }))
+        }
+        s if s.starts_with("set_static:") => {
+            let spec = &s["set_static:".len()..];
+            let (owner, name) = spec.rsplit_once('.').map_or_else(|| fail("set_static 操作数"), Ok)?;
+            let key = vm.fkey(owner, name);
+            vm.jlog_static(key);
+            vm.statics.insert(key, arg(0)?);
+            Ok(None)
+        }
         _ => match super::unsafe_ops::call(vm, env, op, &args) {
             Some(r) => r,
             None => class_op(vm, env, op, &args),
@@ -204,6 +350,11 @@ fn class_op(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> R<Option<CV>> {
             };
             Ok(Some(CV::I(m as i32)))
         }
+        // Reflection.getClassAccessFlags(Class)：类文件 access_flags（实参 0 即镜像）
+        "class_access_flags" => match &cf {
+            Some(c) => Ok(Some(CV::I((c.access & WRITTEN_FLAGS) as i32))),
+            None => fail("数组 / 基本类型的访问标志"),
+        },
         "class_superclass" => {
             let s = match &cf {
                 Some(c) if !c.is_interface() => c.super_name.clone(),
@@ -269,4 +420,29 @@ fn class_op(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> R<Option<CV>> {
         }
         _ => fail(format!("未知 native 操作 {op}")),
     }
+}
+
+/// 引导属性值：`@null` = null，`@deferred` = 宿主相关（内容数组登记为延迟值），否则为字面量
+fn boot_string(vm: &mut Vm, env: &Env, key: &str, v: &str) -> R<CV> {
+    match v {
+        "@null" => Ok(CV::N),
+        "@deferred" => {
+            let s = vm.make_string(env, &format!("<{key}>").encode_utf16().collect::<Vec<_>>())?;
+            let a = vm.get_vm_field(env, s, "string_value")?.obj()?;
+            vm.deferred.insert(a, Rc::from(key));
+            Ok(CV::R(s))
+        }
+        "@jdk_feature" => {
+            let f = vm.jdk_feature(env)?.to_string();
+            Ok(CV::R(vm.make_string(env, &f.encode_utf16().collect::<Vec<_>>())?))
+        }
+        _ => Ok(CV::R(vm.make_string(env, &v.encode_utf16().collect::<Vec<_>>())?)),
+    }
+}
+
+fn ref_field(vm: &mut Vm, env: &Env, o: u32) -> R<CV> {
+    let spec = env.cfg().vm_fields.get("reference_referent").cloned().map_or_else(|| fail("清单缺 VM 布局字段 reference_referent"), Ok)?;
+    let (owner, name) = spec.rsplit_once('.').unwrap_or((&spec, ""));
+    let fr = vm.field_res(env, &MemberRef { owner: owner.into(), name: name.into(), desc: "Ljava/lang/Object;".into() })?;
+    vm.get_field(env, o, &fr)
 }

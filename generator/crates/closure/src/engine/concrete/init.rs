@@ -15,6 +15,9 @@ impl Vm {
             None => {}
         }
         let key: Rc<str> = Rc::from(c);
+        if self.boot {
+            return self.boot_init(env, key);
+        }
         self.init.insert(key.clone(), Init::Running);
         let (floor, foreign, done) = (self.heap.len(), self.foreign, self.done_log.len());
         self.clinit_floor.push(floor);
@@ -36,14 +39,51 @@ impl Vm {
             Err(Flow::Fail(w)) => Init::Failed(Rc::from(w.as_str())),
             Err(Flow::Throw(o)) => Init::Failed(Rc::from(format!("抛出 {}", self.ty(*o)).as_str())),
             Err(Flow::Implicit(k)) => Init::Failed(Rc::from(format!("隐式异常 {k}").as_str())),
+            Err(Flow::Defer(w)) => Init::Failed(Rc::from(w.as_str())),
         });
         if r.is_ok() && self.tracing() {
             self.trace.inited.insert(c.to_string());
         }
         r.map_or_else(|e| match e {
-            Flow::Fail(w) => fail(format!("类初始化失败 {c}：{w}")),
+            Flow::Fail(w) | Flow::Defer(w) => fail(format!("类初始化失败 {c}：{w}")),
             Flow::Throw(_) | Flow::Implicit(_) => fail(format!("类初始化抛出异常 {c}")),
         }, Ok)
+    }
+
+    /// 引导求值的类初始化：`<clinit>` 在日志标记内执行；延迟值参与求值即撤回其全部效果，该类转为
+    /// 运行期初始化（静态字段构建期不可读）。其余失败与异常即构建失败
+    fn boot_init(&mut self, env: &Env, key: Rc<str>) -> R<()> {
+        self.jlog_init(&key);
+        self.init.insert(key.clone(), Init::Running);
+        let m = self.jmark();
+        let r = self.do_init(env, &key);
+        match r {
+            Ok(()) => {
+                self.jpop(m);
+                self.done_log.push(key.clone());
+                self.init.insert(key, Init::Done);
+                Ok(())
+            }
+            Err(Flow::Defer(w)) => {
+                self.jrollback(m)?;
+                self.fail_frames = None;
+                self.mark_opaque(key.clone());
+                let why = w.split(" @ ").next().unwrap_or(&w).to_string();
+                self.bj.recs.push(super::journal::Rec::RuntimeInit { class: key.clone(), why });
+                self.init.insert(key, Init::Done);
+                Ok(())
+            }
+            Err(f) => {
+                self.jpop(m);
+                let w = match &f {
+                    Flow::Fail(w) | Flow::Defer(w) => w.clone(),
+                    Flow::Throw(o) => format!("抛出 {}", self.ty(*o)),
+                    Flow::Implicit(k) => format!("隐式异常 {k}"),
+                };
+                self.init.insert(key.clone(), Init::Failed(Rc::from(w.as_str())));
+                fail(format!("类初始化失败 {key}：{w}"))
+            }
+        }
     }
 
     fn do_init(&mut self, env: &Env, c: &str) -> R<()> {
@@ -63,7 +103,7 @@ impl Vm {
         let info = self.info(env, &site);
         // 静态状态由 VM / 手写层承载的类：初始化不执行，其静态字段不可读
         if info.op.as_deref() == Some("opaque") {
-            self.opaque.insert(Rc::from(c));
+            self.mark_opaque(Rc::from(c));
             return Ok(());
         }
         if !info.bytecode && info.op.is_none() {
