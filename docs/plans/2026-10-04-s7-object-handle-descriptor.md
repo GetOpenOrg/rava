@@ -3,7 +3,7 @@
 > 拆 crate 线（`docs/plans/2026-10-01-rustc-memory-and-crate-split.md` §7.5.4）的结构性终态项。用户 2026-10-04 批准（D7，取法 B）；S7-0 / S7-1 在 s7-desc 分支实施，进度见下文「现状」。
 > 测量数据见上述计划 §7.7「2026-10-04 复测」。
 
-> **切分轴已定（2026-10-04）：先按 JDK 模块，超阈值的模块内再按体量**（crate-split 计划 §7.5.5，与 t1-link 方案 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md` §4.8 对齐）。S7 作用于每个模块 crate 的声明层，峰值约束只在 `java_base_decl`。§九的按签名 SCC 分段是 `java_base_decl` 内部的第三级，仍是方案（V5）。
+> **切分轴已定（2026-10-04）：先按 JDK 模块，超阈值的模块内再按体量**（crate-split 计划 §7.5.5，与 t1-link 方案 `docs/plans/2026-10-04-t1-step2-direct-rustc-link.md` §4.8 对齐）。S7 作用于每个模块 crate 的声明层，峰值约束只在 `java_base_decl`。§九的按签名 SCC 分段是 `java_base_decl` 内部的第三级，D8 已提前实施（与 S7-4 并行，b51f9531 / b093069f 合入，见 §9.7）。
 
 ## 现状（实施记录，S7-0/1 在 s7-desc 分支、S7-2 在 s7-wrap 分支，随提交同步）
 
@@ -474,3 +474,38 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 - 方法体与调用点文本不变：`let animal: Animal = Dog::new(); animal.speak();`。
 - 变化只在文件头 `use` 的 crate 前缀，例如 `use java_base_decl_2::java::lang::Object;`；下游模块写 `use java_base::java::lang::Object;`。
 
+### 9.7 实施记录（D8，2026-10-05，与 S7-4 并行）
+
+**提交**：第 1 步 b51f9531（纯分析 + 单测，合入 2602f409）；第 2 步 b093069f（发射多 crate，gate-ec6cbe11 合入 10314222）。
+
+**分析**（`generator/crates/emit/src/project/decl_segments.rs`）
+- 节点 = java.base 声明层每个生成类文件；边取自文件里的 `crate::` 路径（含花括号组、`r#`、`as`、`__` 后缀词干）与属性字符串里的二进制名（按 `;` 拆）。
+- INFRA 伪节点：所有类 → INFRA；INFRA → 手写运行时文件里出现的类名与钉住类（有 `_impl` / `_ext` 共置手写的宿主、整类手写的类）。含 INFRA 的 SCC 必为底段。
+- Tarjan（迭代）求 SCC，Kahn 依赖先行定序；底段之外的类按拓扑序连续切成均衡段，每段 ≤ `DECL_SEGMENT_CLASSES` = 650 类；java.base 声明类数 ≤ 650 时不拆。全程无类名。
+
+**布局**（`decl_side.rs`）——与 §9.6 的「跨段写 crate 前缀 + 门面镜像树」不同，实施取**镜像链**，省掉了按类改写前缀：
+- 底段仍叫 `java_base_decl`；上段 `java_base_decl_<j>` 只依赖前一段，`lib.rs` 为 `pub use <前段>::*;` 加本段顶层包 mod；每个包 `mod.rs` 写 `pub use <前段>::<包>::*;`（前段视图有该包时）、`pub mod <子包>;`、`pub mod x; pub use x::*;`。显式 mod 遮蔽 glob，叶子项每类只在一段，不冲突。
+- 末段因此是 java.base 声明层的完整视图。门面、方法体 crate、其他模块 crate、lib crate 都用 Cargo 重命名依赖末段（`java_base_decl = { package = "java_base_decl_<k>", .. }`），可读层与方法体文本不变。
+- 本机临时把上限降到 20 强制分段：HelloWorld 3 个上段、FWord 33 个上段均 cargo check 通过，无 `pub(crate)` 可见性问题。
+
+**服务器实测**（release，`crate_mem_profile.py --release`，b093069f；java.base 2757 类左右 → 底段约 2095 + 两段各约 331）
+
+| 例 | `java_base_decl`（底段）峰值 MB | `_1` / `_2` 峰值 MB | 底段墙钟 s |
+|---|---:|---:|---:|
+| FWord | 7906 | 1263 / 1279 | 215 |
+| FractionReduction | 7922 | 1265 / 1281 | 215 |
+| PartitionInteger | 8149 | 1266 / 1292 | 228 |
+| FibonacciMatrixExponentiation | 7912 | 1274 / 1281 | 206 |
+| IQPuzzle | 7912 | 1268 / 1281 | 205 |
+| SelfNumbers | 7873 | 1270 / 1283 | 205 |
+| FourIsTheNumberOfLetters | 7918 | 1271 / 1280 | 210 |
+| PrimorialNumbers | 7911 | 1272 / 1280 | 209 |
+| RailwayCircuit | 7931 | 1262 / 1282 | 209 |
+
+（作业 scc-rel1/2/3-b093069f，服务器 us1 / jp2 / kr1。）
+- 9 例声明层全部编过，最大声明 crate 7.9–8.1 GB，低于 cgroup 上限 11.88 GB，比合入前（约 11.9 GB 被杀）降约 3.8 GB。上段每段约 1.27 GB、约 20 s。
+- 但 9 例 `rava compile` 仍 rc=1，作业尾有 `__RAVA_OOM_KILL__`：OOM 落在声明层之外的 crate——OOM_CULPRIT_PLACEHOLDER
+- 调试档抽查 scc-b093069f：4 例 debug 构建成功、运行超时（R1 运行性能已知问题，不归 D8）。单测 scc-ut-b093069f rc=0。
+
+**与终态目标的差距**
+- 每个声明 crate ≤ 1.3 GB：上段已达标；底段 7.9 GB 是含 INFRA 的签名 SCC（约 76% 的类），现状形态下即为下限（§9.5）。底段继续降只靠 S7：泛型类方法体与描述符化把底段 SCC 收到约 22%（§9.1 / §9.4）后，同一机制自动切出 ≤ 1.3 GB 的段，D8 无需再改。
