@@ -1712,6 +1712,9 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
   HotSpot Parker 一致，运行时没有可做的忠实修正——任何「吞掉多余许可」的改法都会丢掉调度器真实的唤醒。处置需用户裁定：
   ① 测试第 1d 段按规范改成「循环 parkNanos 至截止时间」或放宽断言（违反「合法测试不改」，需用户批准）；② 维持现状，承认约 3% 的
   偶发失败，随生成代码提速（R1 / 运行档位）下降。已报协调者。
+- 裁定与处置（2026-10-05 用户批准取 ①，作为「合法测试不改」的明示例外，只改这一段）：第 1d 段改为
+  `while ((now = System.nanoTime()) < deadline) LockSupport.parkNanos(deadline - now);`，断言 `elapsed>=25ms` 与输出不变；
+  参考 JDK 下输出一致。1c（pin 中 `sleep` 被观察到中途 RUNNABLE）属同一机制的更低频表现，不改测试。
 
 **T6 剖析：10⁵ 虚拟线程的每线程开销与 start 路径（2026-10-05，分支 vthread-t6）**
 
@@ -1765,6 +1768,13 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
 
   opt 1 下墙钟与内存都过线，剩 sleep 模式的 `all sleeping at once`：主线程建 + 启 10⁵ 个须在 2 s 睡眠窗口内完成（≤20 µs/VT），
   实测约 34 µs/VT，还差 1.7 倍，需要杠杆 ②–④ 与 CHM / ForkJoinPool 常数继续压。
+- 分工（2026-10-05 a3-T6 收尾）：
+  - 杠杆 ② ldc 逐调用点缓存驻留实例、③ 类型化 null 按描述符静态缓存、④ Unsafe 字段偏移解码与引用数组访问免查表 / 免 String
+    克隆，三项移交 **R1（运行性能线）**，不在 a3-T 内实施。
+  - 杠杆 ① dev 档位 opt-level 待用户决定（实测数据见上表：opt 1 构建 8:32、峰值 5.7 GiB、二进制 426 MiB）。
+  - TestVirtualThreadScale 的达标（sleep 模式 `all sleeping at once: true`，≤20 µs/VT）依赖 R1 与 opt-level 决定；在此之前该例
+    预期失败，不阻塞 a3-T6 合入。a3-T6 本身的交付止于：monitor 侧表分片（4a983fe8）、剖析结论与 opt-level 实测、
+    TestContinuationPinned 第 1d 段按规范改写。
 
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
