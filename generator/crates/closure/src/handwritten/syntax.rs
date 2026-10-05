@@ -719,8 +719,8 @@ const ARRAY_TYPE: &str = "JArray";
 const ARRAY_CAST: &str = "try_cast_array";
 /// 只存取基本类型元素的 Object 数组存取（不改写引用元素）
 const PRIMITIVE_STORES: &[&str] = &["array_store_byte"];
-/// 数组视图上改写元素的方法（`JArray::set` / `__update` / `with_vec` 取可变切片）。接收者类型推不出，按方法名保守计
-const ELEMENT_MUTATORS: &[&str] = &["set", "__update", "with_vec"];
+/// 数组视图上改写元素的方法（`JArray::set` / `__update`）。接收者类型推不出，按方法名保守计
+const ELEMENT_MUTATORS: &[&str] = &["set", "__update"];
 /// Java 基本类型在运行时里的 Rust 元素类型
 const PRIMITIVE_ELEMS: &[&str] = &["i8", "u16", "i16", "i32", "i64", "f32", "f64", "bool"];
 
