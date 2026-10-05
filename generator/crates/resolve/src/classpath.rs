@@ -37,6 +37,8 @@ pub struct LibMeta {
     pub coordinate: Option<String>,
     /// 锁条目显式给出的模块名（命名兜底链的最后一环之前）
     pub module: Option<String>,
+    /// jar 内容摘要（依赖锁给出；profile.json modules[].jars 用）
+    pub sha256: Option<String>,
 }
 
 /// 档案的模块视图：模块描述符（jmod / 模块化 jar）与 `META-INF/services` 配置

@@ -220,6 +220,11 @@ impl ModuleFacts {
     pub fn graph<'a>(&'a self, cp: &'a ClassPath) -> ModuleGraph<'a> {
         ModuleGraph { cp, f: self }
     }
+
+    /// 档案下标的模块名（档案级归属；无名 → None）
+    pub fn archive_module(&self, idx: usize) -> Option<&str> {
+        self.archive_module.get(idx).and_then(Option::as_deref)
+    }
 }
 
 /// 驱动侧类路径组装后的模块图硬校验（`shadow_jdk_owned_packages` 之后调用）：
@@ -254,6 +259,11 @@ impl<'a> ModuleGraph<'a> {
 
     pub fn node(&self, module: &str) -> Option<&'a ModuleNode> {
         self.f.nodes.get(module)
+    }
+
+    /// 来源类路径（模块 jar 的锁元数据查询用）
+    pub fn classpath(&self) -> &'a ClassPath {
+        self.cp
     }
 
     /// 同一包归属的多个模块（按名序）；交由 crate 计划做分量合并

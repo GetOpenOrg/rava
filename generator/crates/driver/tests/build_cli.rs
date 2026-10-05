@@ -158,8 +158,8 @@ fn batch_trace_and_debug() {
     std::fs::remove_dir_all(&out).ok();
 }
 
-/// `--lib`：jar 类进独立 lib crate（Java 可见性、lib.rs 包模块、user 依赖）；`--full-precheck`
-/// 只出预检，不出审计与发射汇总
+/// `--deps` + `--cp`：jar 类进独立 lib crate（crate 名 = 模块 crate 名，Java 可见性、
+/// lib.rs 包模块、user 依赖）；`--full-precheck` 只出预检，不出审计与发射汇总
 #[test]
 fn lib_crate_and_precheck_only() {
     let Some(home) = resolve::jdk::find_major(21) else { return };
@@ -170,8 +170,11 @@ fn lib_crate_and_precheck_only() {
     assert!(Command::new(home.join("bin/javac")).arg("-d").arg(&classes).arg(&src).status().unwrap().success());
     let jar = work.join("greet.jar");
     assert!(Command::new(home.join("bin/jar")).arg("cf").arg(&jar).arg("-C").arg(&classes).arg(".").status().unwrap().success());
-    let spec = format!("greet={}", jar.display());
-    let Some((stdout, out)) = build("LibUser.java", "lib", &["--lib", &spec, "--full-precheck"]) else { return };
+    // 依赖锁（V12 §3.2）：条目名 = 无坐标时的文件名 stem（greet）；jar 无描述符与 AMN，
+    // 模块名按 JPMS 文件名推导 = greet → crate 名 greet
+    let lock = work.join("deps.lock.toml");
+    std::fs::write(&lock, format!("release = 21\n[[jar]]\npath = \"{}\"\nsha256 = \"test\"\n", jar.display())).unwrap();
+    let Some((stdout, out)) = build("LibUser.java", "lib", &["--deps", lock.to_str().unwrap(), "--cp", "greet", "--full-precheck"]) else { return };
     assert!(stdout.contains("[jar] greet ← greet.jar（1 类）"), "{stdout}");
     assert!(stdout.contains("[precheck] native-missing="), "预检行");
     assert!(!stdout.contains("[equiv-audit]") && !stdout.contains("[emit]"), "--full-precheck 不出审计 / 汇总：{stdout}");

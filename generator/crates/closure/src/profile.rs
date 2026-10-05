@@ -24,12 +24,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{json, Value};
 
 /// profile.json 格式版本（入档案键）
-pub const PROFILE_FORMAT: u32 = 1;
+pub const PROFILE_FORMAT: u32 = 2;
 
-/// 一个入口的单例闭包（`Closure::to_json()` 形）
+/// 一个入口的单例闭包（`Closure::to_json()` 形）。`cp` / `launch`：入口类路径（锁条目名，
+/// 锁序）与启动选项（`--launch`），记入 profile.entries（§4.2；不参与并集 / 内容摘要）
 pub struct EntryClosure {
     pub name: String,
     pub closure: Value,
+    pub cp: Vec<String>,
+    pub launch: Option<String>,
 }
 
 /// 字节码方法的异常处理器起点（`类.方法:描述符` → 处理器偏移；找不到方法字节码时 None）
@@ -354,12 +357,26 @@ fn entry_stats(e: &EntryClosure) -> Value {
         "methods": c.get("methods").and_then(Value::as_array).map_or(0, Vec::len),
         "elapsed_ms": s.and_then(|s| s.get("elapsed_ms")).cloned().unwrap_or(Value::Null),
         "peak_mem_mb": s.and_then(|s| at(s, "perf.peak_mem_mb")).cloned().unwrap_or(Value::Null),
+        "classpath": e.cp,
+        "launch": e.launch,
     })
 }
 
-/// 构建档案：并集事实 + `profile` 段（格式版本、键、内容摘要、键输入、入口统计）
-pub fn build(entries: &[EntryClosure], handlers: &HandlerTable, inputs: &KeyInputs) -> Result<Value, String> {
+/// 构建档案：并集事实 + `profile` 段（格式版本、键、内容摘要、键输入、入口统计）。
+/// `modules_ctx`：给出模块事实与类路径时，合并后的 `modules` 行按 §4.2 富化
+/// （kind / crate / jars[{path=文件名, sha256, coordinate}] / release）——富化只在档案层做，
+/// 逐入口 closure.json 的模块行保持最小面（缓存兼容），jar 以文件名 + sha256 记（不记绝对路径，
+/// P 与机器无关）
+pub fn build(
+    entries: &[EntryClosure],
+    handlers: &HandlerTable,
+    inputs: &KeyInputs,
+    modules_ctx: Option<(&resolve::ModuleFacts, &resolve::ClassPath)>,
+) -> Result<Value, String> {
     let mut v = merge(entries, handlers)?;
+    if let Some((facts, cp)) = modules_ctx {
+        enrich_modules(&mut v, facts, cp);
+    }
     let content = content_digest(&v);
     let mut stats: Vec<Value> = entries.iter().map(entry_stats).collect();
     stats.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
@@ -373,15 +390,48 @@ pub fn build(entries: &[EntryClosure], handlers: &HandlerTable, inputs: &KeyInpu
             "jdk_major": inputs.jdk_major,
             "archives": inputs.archives,
             "entries": inputs.entries,
+            "deps_lock": inputs.deps_lock,
         },
         "entries": stats,
     });
     Ok(v)
 }
 
+/// `modules` 段富化（§4.2）：kind / crate / jars / release（模块图单一来源）
+fn enrich_modules(v: &mut Value, facts: &resolve::ModuleFacts, cp: &resolve::ClassPath) {
+    let g = facts.graph(cp);
+    let Some(rows) = v.get_mut("modules").and_then(Value::as_array_mut) else { return };
+    for row in rows.iter_mut() {
+        let Some(name) = row.get("name").and_then(Value::as_str).map(str::to_string) else { continue };
+        let Some(node) = g.node(&name) else { continue };
+        row["kind"] = json!(match node.kind {
+            resolve::modules::ModuleKind::Jdk => "jdk",
+            resolve::modules::ModuleKind::Lib => "lib",
+            resolve::modules::ModuleKind::User => "user",
+        });
+        if let Some(c) = g.crate_name(&name) {
+            row["crate"] = json!(c);
+        }
+        row["release"] = json!(cp.release());
+        row["jars"] = Value::Array(
+            node.jars
+                .iter()
+                .map(|p| {
+                    let meta = cp.lib_meta(p);
+                    json!({
+                        "path": p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+                        "sha256": meta.and_then(|m| m.sha256.clone()).unwrap_or_default(),
+                        "coordinate": meta.and_then(|m| m.coordinate.clone()).or_else(|| node.coordinate.clone()).unwrap_or_default(),
+                    })
+                })
+                .collect(),
+        );
+    }
+}
+
 /// 档案 P 是否覆盖入口 E（§4.1 子集复用）：E 的单例闭包并入 P 后内容不变
 pub fn covers(profile: &Value, entry: &EntryClosure, handlers: &HandlerTable) -> Result<bool, String> {
-    let p = EntryClosure { name: String::new(), closure: profile.clone() };
-    let joined = merge(&[p, EntryClosure { name: format!("\u{1}{}", entry.name), closure: entry.closure.clone() }], handlers)?;
+    let p = EntryClosure { name: String::new(), closure: profile.clone(), cp: Vec::new(), launch: None };
+    let joined = merge(&[p, EntryClosure { name: format!("\u{1}{}", entry.name), closure: entry.closure.clone(), cp: Vec::new(), launch: None }], handlers)?;
     Ok(content_digest(&joined) == content_digest(profile))
 }

@@ -218,8 +218,8 @@ fn naming_fallback_coordinate_then_explicit_module() {
     cp.add(Origin::Lib, &explicit).unwrap();
     assert!(ModuleFacts::build(&cp).errors.iter().any(|e| e.contains("-1.jar")), "无任何命名来源应报错");
 
-    cp.set_lib_meta(&coord, LibMeta { coordinate: Some("org.example:mylib:1.0".into()), module: None });
-    cp.set_lib_meta(&explicit, LibMeta { coordinate: None, module: Some("explicit.name".into()) });
+    cp.set_lib_meta(&coord, LibMeta { coordinate: Some("org.example:mylib:1.0".into()), module: None, sha256: None });
+    cp.set_lib_meta(&explicit, LibMeta { coordinate: None, module: Some("explicit.name".into()), sha256: None });
     let f = ModuleFacts::build(&cp);
     assert!(f.errors.is_empty(), "{}", f.errors.join("; "));
     let g = f.graph(&cp);
