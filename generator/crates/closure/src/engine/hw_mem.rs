@@ -22,14 +22,13 @@ impl<'a> Engine<'a> {
             return;
         }
         let oi = ws.iter().flatten().find_map(|w| w.offset);
-        if let Some(&s) = self.hw_site_ids.get(&(m, off, t)) {
-            self.site_restrict(s, m, off, oi);
-            return;
-        }
+        let base = usize::from(!self.methods[t].is_static);
+        // 方法重分析时调用点已登记：本次分析的实参来源照样接入（边幂等，终态 = 各次分析来源之并）；
+        // 只接首次分析的来源会让结果取决于首次分析时常量格的中间态（D1）
+        let again = self.hw_site_ids.contains_key(&(m, off, t));
         let s = self.hw_site_id(m, off, t);
         self.site_restrict(s, m, off, oi);
-        let base = usize::from(!self.methods[t].is_static);
-        self.note_self_copies(s, base, &ws);
+        self.note_self_copies(s, base, &ws, again);
         let obj = self.id(OBJECT);
         // 签名多态：实参按调用点描述符排布（VM 打包进 Object[]），引用实参一律按 Object 接入
         let poly = self.is_poly(t);
@@ -70,18 +69,35 @@ impl<'a> Engine<'a> {
 
     /// 元素来源与写入目标是同一个入口形参值的写入（`System.arraycopy(es, i + 1, es, i, n)` 等
     /// 数组内搬移）：运行期两者是同一数组，写入不改变其元素集。只认未经合流的入口形参值——
-    /// 形参在方法执行期间恒指同一对象；调用点 / 字段读取来源在循环里可能是不同对象，不认
-    fn note_self_copies(&mut self, s: u32, base: usize, ws: &[Option<HwWrite>]) {
-        let Some(vals) = self.call_vals.clone() else { return };
-        let entry = |k: usize| match k.checked_sub(base).and_then(|k| vals.get(k)) {
+    /// 形参在方法执行期间恒指同一对象；调用点 / 字段读取来源在循环里可能是不同对象，不认。
+    /// 省略须对本调用点的每次分析都成立：首次分析登记，重分析（`again`）不成立的撤销并补接已有数组的元素
+    /// （省略是少接边，只能取各次分析之交；只在首次分析判定会随首次分析时的中间态变化，D1）
+    fn note_self_copies(&mut self, s: u32, base: usize, ws: &[Option<HwWrite>], again: bool) {
+        let vals = self.call_vals.clone();
+        let entry = |k: usize| match vals.as_ref().and_then(|v| v.get(k.checked_sub(base)?)) {
             Some(V::Ref { src, .. }) if src.len() == 1 && matches!(src[0], Src::Param(_)) => Some(src[0]),
             _ => None,
         };
         for (j, w) in ws.iter().enumerate() {
             let Some(w) = w else { continue };
             for &i in &w.elements {
-                if i != j && entry(i).is_some() && entry(i) == entry(j) {
-                    self.hw_self_copies.insert((s, i as u16, j as u16));
+                if i == j {
+                    continue;
+                }
+                let holds = entry(i).is_some() && entry(i) == entry(j);
+                let key = (s, i as u16, j as u16);
+                if !again {
+                    if holds {
+                        self.hw_self_copies.insert(key);
+                    }
+                } else if !holds && self.hw_self_copies.remove(&key) {
+                    let obj = self.id(OBJECT);
+                    let ys: Vec<u32> = self.set_of(Node::A(s, i as u16)).classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
+                    for y in ys {
+                        for p in PARITIES {
+                            self.flow(Node::E(y, p), Node::W(s, j as u16), obj);
+                        }
+                    }
                 }
             }
         }
@@ -102,11 +118,15 @@ impl<'a> Engine<'a> {
     pub(super) fn hw_read_site(&mut self, m: usize, off: u32, t: usize, i: u16, fs: &[Feed], res: Node, rt: u32) {
         let s = self.hw_site_id(m, off, t);
         let oi = self.man.memory_read_offset(&self.methods[t].key.to_string()).map(|x| x + usize::from(!self.methods[t].is_static));
-        if self.hw_reads.insert(s, (i, res, rt)).is_some() {
-            self.site_restrict(s, m, off, oi);
+        let again = self.hw_reads.insert(s, (i, res, rt)).is_some();
+        self.site_restrict(s, m, off, oi);
+        // 重分析：本次分析的源实参来源照样接入（同 `hw_site`，D1）
+        if again {
+            let obj = self.id(OBJECT);
+            let pt = if self.is_poly(t) { obj } else { self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or(obj) };
+            self.feed(fs, Node::A(s, i), pt);
             return;
         }
-        self.site_restrict(s, m, off, oi);
         // 签名多态：源实参按调用点描述符排布，引用实参一律按 Object 接入（与写入侧同）
         let obj = self.id(OBJECT);
         let pt = if self.is_poly(t) { obj } else { self.methods[t].ptypes.get(i as usize).copied().flatten().unwrap_or(obj) };
