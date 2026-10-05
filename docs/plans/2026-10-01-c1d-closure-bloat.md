@@ -2348,6 +2348,7 @@ native 缺失、`String.class.getModule()` 不是命名的 java.base），三者
    期间被访问的调用点在终态已被判死（如 `ClassFileDumper.<init>@52 → validateDumpDir` 落在终态死区 [51,56]），但可达是单调的、
    不会撤回。离线实测（`--cut @edgeoff --dump-edges` 后按终态 `dead_pcs` / `noreturn_dead_pcs` 剔除过期边，从根重扫）：
    锚点 3189 → 3153 类、18589 → 18327 方法（约 −36 类 / −262 方法）；无锚点 −5 方法、类数不变。
+   **（§28.10 更正：上述数字把死区右端点误当闭区间；`dead_pcs` 是半开区间 `[a, b)`，更正后锚点只有 −4 类 / −34 方法）**
    终态做法：引擎在不动点后做一次「终态回收」，按终态折叠剔除死区出边，从全部根重算方法 / 类 / 初始化 / 反射面，
    输出只取重算后的集合。前提是触发边覆盖全部入链原因：目前转储只覆盖方法 / 类 / 分配 / 枢纽四类，无锚点口径下重扫
    只得 1049 / 1813 方法（根种类、补种、VM 规则、反射面未入转储），需先补齐成完整的入链边表。
@@ -2361,7 +2362,7 @@ native 缺失、`String.class.getModule()` 不是命名的 java.base），三者
    `hw_offset`、`hw_syntax`、`field_lookup`、`mirror_init`、`mirror_eq` 等），新值种类必须在每处都按「所指未知」处理，
    否则 Unsafe 静态基址读会漏掉 open（不健全）。
 
-两项合计约 −55 类，HelloWorld 锚点口径约 3135，离 569 仍差约 2570。
+两项合计约 −55 类，HelloWorld 锚点口径约 3135，离 569 仍差约 2570。（§28.10 更正：合计约 −23 类）
 
 ### 28.7 结论与差距
 
@@ -2408,3 +2409,38 @@ ubuntu 上为 `/mnt/d/workspace/java_rta-spot-job-sink-*`），没有删除。�
    - c1d-elem：只在本文档末尾追加时冲突，重排节号即可；
    - v11-vn：`flow.rs::flow()` 首行相邻插入（`tau_check_flow` 与 `node_cut`）冲突，两行都保留即可；
    - 其余文件自动合并。
+
+### 28.10 恢复后：同步集成分支与两项回收的复核（2026-10-05，c1d-sink）
+
+**同步**：已把 origin/rust-closure-analyzer（54850400）与 gate/39dc3e02（boot-image-s1）merge 进 c1d-sink，得到 0837196d。
+唯一冲突在 `flow.rs::flow()` 开头，`node_cut` 与 V11 的 `tau_check_flow` 两行都保留。合入后复测：无锚点 HelloWorld 469 / 1813，
+锚点口径 3190 / 18611，与合入前逐项相同。锚点临时 runtime 按 §25.1 重建在 `build/sink_work/rt_sink`
+（原来放在 /tmp，已被巡检清掉）。
+
+**过期可达复核（第 1 项）：实际收益几乎为零**。§28.6 的离线重扫把死区当作闭区间 `[a, b]`。但折叠导出的 `dead_pcs` /
+`noreturn_dead_pcs` 是半开区间 `[a, b)`（`fold_noreturn_dead_bytes = Σ(b − a)`），所以落在 `b` 上的边其实是存活的
+（例：`NormalizerBase$NFKDMode.getNormalizer2` 死区 `[7, 16)`，16 处的 `<clinit>` 触发边是活的）。按半开区间重扫：
+
+| 口径 | 过期边 | 类 | 方法 |
+|---|---|---|---|
+| 锚点 | 329 | 3189 → 3185（−4：`Path$1`、`StructureViolationException`、`JrtPath$1`、`ClassFileDumper$2`） | 18589 → 18555（−34） |
+| 无锚点 | 4 | 不变 | −4 |
+
+过期边主要来自两类：noreturn 折叠出现在调用点首次处理之后（`WeakHashMap$*Spliterator.tryAdvance`、`ProtectionDomain.toString`），
+以及 `ModuleBootstrap.decode` / `addModules` 的系统属性折叠。
+
+无损的终态做法只有一种：不动点之后，把终态死区当作已知死代码，再跑第二遍分析。第二遍的状态是第一遍的子集，第一遍的折叠对
+子集依然成立，所以是健全的。代价是分析时间翻倍：锚点约 18 s → 36 s，档案作业每例都要多跑一遍。换来的只是 −4 类，
+和「引擎提速优先」相悖，因此**不实施**。如果以后折叠的时机能改成单调的（例如 noreturn 判定确定之前先挂起调用点的入链），
+可以零代价拿到这部分收益，记为引擎改进的候选。
+
+**有界未知镜像（第 2 项）：只在锚点口径下有收益，而锚点口径已被引导映像求值器取代**。实测 −19 类（3190 → 3171），
+无锚点为 0。生产构建当前 `anchors = []`，这一项对任何实际构建都没有收益。引导映像求值器第 1 步（boot-image-s1，
+`docs/plans/2026-10-05-boot-image-evaluator.md` §5）已给出 HelloWorld 闭包上界：JDK 21 ≤ 525，JDK 25 ≤ 465，都在 569 以内。
+走映像路线后，`ResourceBundle.getServiceLoader` 这类引导期路径不再入链，这一项的收益随之消失。实施它要改十余处「指向未知
+类的 Class」判定（`hw_mem` 静态基址读 ×2、`hw_offset`、`hw_name_write`、`hw_syntax`、`mirror_eq`、`classes::sub`、`ty` 等），
+漏改任何一处都是不健全，风险与收益不相称，因此**不实施**。
+
+**结论**：共享汇点线到此收口，引擎语义没有改动。§28.6 原估的 −55 类，更正后为 −23 类：第 1 项 −4，第 2 项 −19，
+后者还只在锚点口径下才有。≤ 569 的达成路线是引导映像求值器（在途），不是锚点口径下的精度修补。本分支只保留诊断工具
+（`--cut @node:` / `@noopenhub` / `@noreopen` / `@noopenrecv` / `@edgeoff`，`--flows @fopen:` / `@in:` / `@svcunk`）。
