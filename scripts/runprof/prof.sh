@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # R1 运行性能剖析（服务器无 perf 权限时用）：发射 + 编译一例，LD_PRELOAD 采样器跑 N 秒并符号化。
-# 用法：scripts/runprof/prof.sh <Test.java> [release|debug] [秒数]
+# 用法：scripts/runprof/prof.sh <Test.java> [release|dev-opt|debug] [秒数]
 # 产物：build/runprof/<snake>_<profile>.txt（报告）与 .time（无采样全程计时，可选 RUNPROF_FULL=1）
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -10,7 +10,7 @@ SN=$(python3 -c "import re,sys;n=sys.argv[1];n=re.sub(r'([A-Z]+)([A-Z][a-z])',r'
 mkdir -p build/runprof
 WS=$("$RAVA" build "$T" --stop-after emit 2>&1 | sed -n 's/.*→ \(.*\)（bin.*/\1/p' | tail -1)
 [ -n "$WS" ] || { echo "emit 失败"; exit 1; }
-REL=(); [ "$P" = release ] && REL=(--release)
+REL=(); [ "$P" = release ] && REL=(--release); [ "$P" = dev-opt ] && REL=(--dev-opt)
 "$RAVA" compile "$WS" --target-dir "$PWD/build/runprof-target" "${REL[@]}" > build/runprof/${SN}_${P}_compile.log 2>&1 || { tail -30 build/runprof/${SN}_${P}_compile.log; exit 1; }
 BIN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['exe'])" "$WS/build_status.json")
 echo "bin $BIN"

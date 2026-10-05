@@ -5,6 +5,7 @@ pub mod class_desc;
 pub mod field_desc;
 pub mod field_reflect;
 pub mod handle;
+pub mod obj_ref;
 pub mod sync_model;
 pub mod gil;
 pub mod reflect_dispatch;
@@ -565,6 +566,8 @@ pub mod prelude {
     pub use super::array::JArray;
     pub use super::class_desc::__ClassDesc;
     pub use super::handle::{__Handle, __IfaceRef, __Ref};
+    pub use super::obj_ref::__Obj;
+    pub use super::java::lang::__TypedNull;
     pub use super::error::{JvmError, Result};
     pub use super::java::lang::Object;
     pub use super::java::lang::ObjectVTable;
