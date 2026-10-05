@@ -162,6 +162,17 @@ fn closure_independent_of_hash_seed_large() {
     seeds_agree("72_http/TestHttpLoopbackSync.java");
 }
 
+/// 反射数组分配（`Arrays.copyOf(T[], int, Class)` → `Array.newArray`）按调用点逐类型建分配点：`ArrayList.elementData` 的元素
+/// 只来自实际写入，`ModuleDescriptor$Version.compareTokens` 的 `toString` / `compareTo` 不派发到全体活类型，`KeyFactory.nextSpi`
+/// 的 `Provider$Service.newInstance` 不派发到其余 provider 的服务实现。放行判定在不动点上做，三个种子结果一致（首版即时饱和时种子 2 多 180 类）
+#[test]
+fn reflect_new_array_element_precision() {
+    let Some([classes, ..]) = seeds_agree("62_reflection/TestModuleLayerDefine.java") else { return };
+    for c in ["com/sun/org/apache/xml/internal/security/Init", "org/jcp/xml/dsig/internal/dom/ApacheCanonicalizer", "java/util/concurrent/ArrayBlockingQueue"] {
+        assert!(!classes.contains(c), "反射数组元素退回 open(Object)：闭包含 {c}");
+    }
+}
+
 /// 形参字符串常量进形参常量格：URL 构造器把协议名常量传给 URL$DefaultFactory.createURLStreamHandler，
 /// 其字符串 switch（String.hashCode / equals 折叠）只取 file 臂。形参字符串一律置 Top 时 switch 不折叠，
 /// 经 jrt 处理器、类路径 JarLoader、服务加载与反射池把 HelloWorld 闭包撑到约 2856 类（正常约 500 类）

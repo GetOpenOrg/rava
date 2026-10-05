@@ -2335,8 +2335,10 @@ open(Object)，于是 `ArrayList.grow` 之后的 `elementData` 成了任意对�
 
 减少的 180 类逐项论证：它们在改前只经两条 open 派发进入。
 - `compareTokens@105` 的 `toString` / `compareTo` 派发到全体活类型，例如 `ArrayBlockingQueue.toString`。
-- `executePrivileged@29` 的 `PrivilegedAction.run` 打开 open 接收者 → `ProviderConfig$3.run` → `ProviderLoader` →
-  `ServiceLoader` 补入全部安全 provider：xml-security 111 类、org/jcp/xml/dsig 12 类、sasl 5 类、jgss 3 类等。
+- `KeyFactory.nextSpi@64` 等 JCA 取实现处的 `Provider$Service.newInstance` 派发到 open(Provider$Service)，即全部 provider
+  的服务类，例如 `XMLDSigRI$ProviderService.newInstance@107`。由此进入 xml-security 实现 111 类（`ApacheCanonicalizer` →
+  `Init` …）、org/jcp/xml/dsig 实现 12 类、sasl 工厂、jgss 机制等。provider 类本身（XMLDSigRI 等）仍经 ServiceLoader
+  进入，不在减少之列。
 
 这两条派发的接收者都来自 `Array.newArray` 结果的 open(Object) 元素。改后元素只来自实际写入，这两条链都不再成立；
 测试本身没有使用这些类。
