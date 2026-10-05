@@ -23,6 +23,7 @@ impl<'a> Engine<'a> {
         let i = self.graph.id(n);
         if !s.is_empty() {
             self.graph.injected[i as usize] = true;
+            self.tau_check_add(i, s);
         }
         self.add_to_id(i, s);
     }
@@ -165,9 +166,10 @@ impl<'a> Engine<'a> {
     /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        self.tau_check_flow(di, filter);
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
         let objf = filter & NOT_SUB == 0 && self.names[filter as usize].as_ref() == OBJECT;
-        if rs == rd && objf {
+        if rs == rd && (objf || self.ident_edge(rs, filter, u32::MAX)) {
             return;
         }
         if !self.graph.add_edge(rs, rd, filter) {

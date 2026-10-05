@@ -18,6 +18,12 @@ pub(super) struct FlowGraph {
     hooked: Vec<bool>,
     /// 节点受过直接注入（`flow.rs::add_to`，非流边推送）：等价节点诊断（`hvn_diag.rs`）的入边签名之外的来源
     pub(super) injected: Vec<bool>,
+    /// 节点失去封闭类型（`tau.rs`，单调）
+    pub(super) tau_broken: Vec<bool>,
+    /// 合并过的代表 → 各成员的封闭类型（去重；无则不登记）
+    pub(super) rep_taus: HashMap<u32, Vec<u32>>,
+    /// 观测：失去封闭类型的节点数 / 其中失去时已在合并分量里的数（期望 0）/ 环合并中含非 Object 恒等边的分量数
+    pub(super) tau_stats: [u64; 3],
     /// 节点类型集（空 = 尚无值），按内容驻留共享（`setstore.rs`）
     pub(super) sets: SetStore,
     /// 出边（目标序号, 过滤类型 id），按接边顺序
@@ -116,6 +122,7 @@ impl FlowGraph {
         self.mirror_src.push(false);
         self.hooked.push(matches!(n, Node::Esc | Node::K(_) | Node::NR(_) | Node::A(..)));
         self.injected.push(false);
+        self.tau_broken.push(false);
         self.sets.push_empty();
         self.edges.push(Vec::new());
         self.delta.push(TypeSet::default());

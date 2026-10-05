@@ -107,6 +107,7 @@ mod setstore;
 use setstore::SetStore;
 mod scc;
 mod hvn_diag;
+mod tau;
 mod levels;
 mod open_world;
 mod concrete;
