@@ -300,7 +300,7 @@ impl<'a> Engine<'a> {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
         // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
-        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
+        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceVolatile → putReference 等），
         // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
         let subsumed = self.declares_memory(m) && self.declares_memory(t);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {

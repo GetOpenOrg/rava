@@ -614,11 +614,7 @@ factories = [
 # 为对象时写入其引用字段（`__unsafe_ref_update` 按字段名匹配）
 "jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.putReferenceVolatile:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.putReferenceOpaque:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.putReferenceRelease:(Ljava/lang/Object;JLjava/lang/Object;)V" = { dst = 0, values = [2], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [2], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
-"jdk/internal/misc/Unsafe.weakCompareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = { dst = 0, values = [3], fields = true, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, values = [3], fields = true, offset = 1 }
 # VarHandle 引用写入访问模式（签名多态，var_handle_impl.rs → `__unsafe_ref_update` / 数组元素写入）：
 # 形参序号按调用点实参；第 0 个坐标是 holder（实例字段 / 数组），写入值是最后一个实参（last）。
@@ -641,8 +637,6 @@ factories = [
 # 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
-"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
-"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeExact:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invokeBasic:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.invoke:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
@@ -690,13 +684,10 @@ members = [
 # 数组取其元素，对象取其偏移已可取得的引用字段（按名查找 / 字段枚举 / 反序列化 / 字节码外写入的字段——
 # 实例字段偏移只能经这些途径得到，与 [facts.array_writes] 的 fields 写入同一集合）。分析器按调用点接入，替代手写返回的
 # open(返回类型)——open 结果只能按非抽象接收者分派，容器元素 / 字段读取经此会失去对象敏感
-# Unsafe 引用读取（unsafe__impl.rs）；getAndSet / compareAndExchange 返回旧值。
+# Unsafe 引用读取（unsafe__impl.rs，只列 native；opaque / acquire / getAndSet 等访问序变体按字节码翻译，经这些 native）；compareAndExchange 返回旧值。
 # offset = 字段偏移形参：调用点上为符号偏移时只读所指字段（同 [facts.array_writes] 的 offset）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getReferenceOpaque:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getReferenceAcquire:(Ljava/lang/Object;J)Ljava/lang/Object;" = { src = 0, offset = 1 }
-"jdk/internal/misc/Unsafe.getAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
 "jdk/internal/misc/Unsafe.compareAndExchangeReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" = { src = 0, offset = 1 }
 # VarHandle 引用读取访问模式（签名多态，var_handle_impl.rs `_field_read` / 数组元素读取；getAndSet / compareAndExchange
 # 返回旧值）：实参按调用点描述符排布，0 号是 holder（实例字段句柄）/ 数组（数组元素句柄）；静态字段句柄没有 holder 坐标，
