@@ -221,6 +221,21 @@ LynchBell release（同作业 jp1，10000 样本，自耗）：静态 getter `s`
 
 同机前后对照：基线作业 `r1s-timebase-2602f409`（sg2，`2602f409`，与上表同 5 例同档，作业超时 5400 s）在途，由主会话接手判读。判读口径：同一服务器两段的运行段之比；release 两例（D8 合入前只计这两例）以运行段为准，dev-opt 例与 VT/µs 只作同机前后比较，不与 release 起点比。IQPuzzle、FourIsTheNumberOfLetters、PrimorialNumbers、RailwayCircuit、UnprimeableNumbers 五例的 dev-opt 前后对照没跑（作业超时）。
 
+**同机基线对照**（`r1s-timebase-2602f409` 对 `r1s-time2-d28fd72e`，均在 sg2，rc=0；比值 = r1 / 基线，运行段）：
+
+| 用例 | 档 | 基线 `2602f409` | r1 `d28fd72e` | 比值 |
+|---|---|---|---|---|
+| LynchBell | release | 118.9 s | 66.5 s | 0.56 |
+| Factorion | release | 44.8 s | 28.8 s | 0.64 |
+| TestVirtualThreadScale | dev-opt | 10.37 s（≈ 84 µs/VT） | 7.41 s（≈ 54 µs/VT） | 0.71 |
+| SelfNumbers | dev-opt | 156.3 s | 207.9 s | **1.33** |
+| FibonacciMatrixExponentiation | dev-opt | 245.1 s | 172.5 s | 0.70 |
+
+- 基线上 TestVirtualThreadScale 输出有 2 行差异（基线自身问题，r1 输出一致）。
+- 二进制：release 7.6 → 7.2 MB；dev-opt 428.0 / 421.1 → 428.1 / 421.4 MB（持平）。
+- 构建耗时基本持平：release 2 m 19–21 s → 2 m 20–23 s；dev-opt 8 m 31–51 s → 8 m 45 s–9 m 05 s。
+- SelfNumbers dev-opt 慢 33%，单次样本：转入 R1 续（`r1-next`）先同机复跑确认，属实则剖析（疑点：opt-level 1 下内联字段自旋单元 / 数组元素访问未内联），修到不慢于基线。
+
 **余项**：
 - TestVirtualThreadScale 约 54 µs/VT，离 ≤ 20 µs 还差约 2.7 倍。要先拿到同机基线判断存储改造的贡献，再剖析虚拟线程创建 / 挂起 / 调度路径（Continuation 栈分配、载体队列、`Thread` 对象构造）。
 - `Object` 的 null 是全局 `JVM_NULL` 单例（`Rc` 克隆即原子增减），多线程下引用计数争用；类型化 null 单例同理。终态做法：null 用不带引用计数的哨兵表示（`Option` 化或静态无计数指针）。
