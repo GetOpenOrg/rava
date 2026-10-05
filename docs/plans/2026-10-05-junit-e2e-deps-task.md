@@ -209,6 +209,21 @@
      `j1-trees`（结果回填）。
    - 注：任务书引用的 `no_jdk_literals` 守护在仓库无实现（grep 无命中）；以 92/92 对账与
      本提交不新增 JDK / 库类名字面量（人工 diff 复查）为准。
+   - **J1 树对照回填（2026-10-06 凌晨）**：作业 `j1-trees2`（jp1）——全部 .rs 正文与资源
+     逐字节相同、raw-audit 一致；**五个 scratch 各恰 3 行 closure.json 差异**（疑似 J1 包归属
+     语义预期的库模块标注，非正文回归；mv 撞上前次尝试残留目录致链路部分短路，计数仍有效）。
+     3 行内容取证：`j1-diffm1b` 在 kr1 遭 infra 死亡（「远端进程已死且无 done」），已重派
+     `j1-diffm1c`，结果落地后在此补记最终口径。
+
+12. **J2a 验收与 J2b（2026-10-06 凌晨，2174812a）**：
+   - `j2a-golden2`（kr1，a67c33c2）：**新入口 `--deps/--cp/--seed-class` 下 m1–m5 5/5
+     GOLDEN OK**（J2A-GOLDEN-5OF5）——J2 核心验收落地。
+   - 锁条目名坐标真源修正（a67c33c2）：mvn dependency:list 解析坐标（92/92 有坐标；
+     junit→junit、hamcrest-3.0→hamcrest，sha256 与 J0 一致）。
+   - J2b（2174812a）：profile.json §4.2（modules 富化在档案层、closure.json 模块行最小面保
+     缓存兼容、富化字段入摘要剔除面保 --covers 一致、deps_lock 摘要入 P）；EntryClosure 增
+     cp/launch；`closure::lib_runtime` 区间读取器 + `runtime/lib_runtime/junit/` 骨架
+     （versions="[4,)"，seeds 由 J4 填）。gate：34 ok + 唯一已知回归（第 7 条）。
    - 单测 gate：generator 全量 + 宏 crate——closure（含重型真实 JDK 闭包测试）/ driver / emit
      69+1 / input / ty / classfile / cfg 全绿；**唯一失败 = `companion_skipped_when_used_module_absent`
      （d7f482e1 已知回归，主会话另派代理修，本任务不动，见第 7 条）**。宏 crate本轮未触碰
