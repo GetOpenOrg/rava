@@ -24,6 +24,10 @@ pub struct BootImage {
     pub json: serde_json::Value,
     /// 审计报告（Markdown，`rava audit boot`）
     pub report: String,
+    /// 映像可达对象的类型（非数组，有序）
+    pub types: Vec<String>,
+    /// 运行期部分的入口类：运行期初始化类、残差调用 / 重放 native 的声明类、占位读取的类、残差区段所在类
+    pub runtime_classes: Vec<String>,
 }
 
 /// FNV-1a 双通道
@@ -36,7 +40,8 @@ impl Fnv {
     fn bytes(&mut self, b: &[u8]) {
         for &x in b {
             self.0 = (self.0 ^ u64::from(x)).wrapping_mul(0x0100_0000_01b3);
-            self.1 = (self.1 ^ u64::from(x)).wrapping_mul(0x0000_0100_0000_01b3 ^ 0x5bd1_e995);
+            // 第二道：旋转异或 + 奇数乘子（偶数乘子会逐步丢失低位）
+            self.1 = (self.1.rotate_left(5) ^ u64::from(x)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         }
         self.0 = (self.0 ^ 0xff).wrapping_mul(0x0100_0000_01b3);
     }
@@ -142,6 +147,7 @@ fn reachable(vm: &Vm) -> Size {
                 stack.extend(args.iter().filter_map(|v| if let CV::R(o) = v { Some(*o) } else { None }));
                 stack.extend(ph.iter().copied());
             }
+            Rec::Read { ph, .. } => stack.push(*ph),
             Rec::Region { locals, .. } => stack.extend(locals.iter().filter_map(|v| if let CV::R(o) = v { Some(*o) } else { None })),
             Rec::RuntimeInit { .. } => {}
         }
@@ -220,6 +226,10 @@ fn digest(vm: &Vm) -> String {
                 c.h.str(&format!("native {callee}"));
                 args.iter().for_each(|&v| c.value(v));
                 c.value(ph.map_or(CV::N, CV::R));
+            }
+            Rec::Read { decl, name, ph } => {
+                c.h.str(&format!("read {decl}.{name}"));
+                c.value(CV::R(*ph));
             }
             Rec::Region { phase, start, end, locals, .. } => {
                 c.h.str(&format!("region {phase}@{start}..{end:?}"));
@@ -308,6 +318,7 @@ impl<'a> Engine<'a> {
         let rt_init: Vec<(String, String)> = vm.bj.recs.iter().filter_map(|r| if let Rec::RuntimeInit { class, why } = r { Some((class.to_string(), why.clone())) } else { None }).collect();
         let calls: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Call { phase, off, callee, why, ph, .. } = r { Some(format!("`{phase}@{off}` → `{callee}`{}：{why}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
         let regions: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Region { phase, start, end, why, .. } = r { Some(format!("`{phase}` [{start}, {})：{why}", end.map_or("出口".to_string(), |e| e.to_string()))) } else { None }).collect();
+        let reads: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Read { decl, name, .. } = r { Some(format!("`{decl}.{name}`")) } else { None }).collect();
         let natives: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Native { callee, ph, .. } = r { Some(format!("`{callee}`{}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
         let json = json!({
             "status": if ok { "ok" } else { "failed" },
@@ -326,6 +337,7 @@ impl<'a> Engine<'a> {
             "residual_calls": calls.len(),
             "regions": regions.len(),
             "replay_natives": natives.len(),
+            "deferred_reads": reads.len(),
             "host_scalars": vm.bj.host_scalars.len(),
         });
         let mut r = String::new();
@@ -344,12 +356,23 @@ impl<'a> Engine<'a> {
         for (c, w) in &rt_init {
             let _ = writeln!(r, "- `{c}`：{w}");
         }
+        let _ = writeln!(r, "\n## 运行期初始化尝试（含被外层撤回吸收的，{}）\n", vm.bj.rt_attempts.len());
+        for (c, w) in &vm.bj.rt_attempts {
+            let _ = writeln!(r, "- `{c}`：{w}");
+        }
         let _ = writeln!(r, "\n## 残差调用（{}）\n", calls.len());
         for c in &calls {
             let _ = writeln!(r, "- {c}");
         }
         let _ = writeln!(r, "\n## 残差区段（{}）\n", regions.len());
         for c in &regions {
+            let _ = writeln!(r, "- {c}");
+        }
+        for c in &vm.bj.region_notes {
+            let _ = writeln!(r, "  - 终点后移：{c}");
+        }
+        let _ = writeln!(r, "\n## 运行期初始化类的静态读取（占位对象，{}）\n", reads.len());
+        for c in &reads {
             let _ = writeln!(r, "- {c}");
         }
         let _ = writeln!(r, "\n## 启动重放 native（{}）\n", natives.len());
@@ -367,7 +390,17 @@ impl<'a> Engine<'a> {
             }
         }
         let _ = writeln!(r, "\n## 已初始化类（构建期，按完成次序）\n\n{}", vm.done_log.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" "));
-        Some(BootImage { ok, digest: dg, json, report: r })
+        let mut runtime_classes: BTreeSet<String> = BTreeSet::new();
+        for rec in &vm.bj.recs {
+            runtime_classes.insert(match rec {
+                Rec::RuntimeInit { class, .. } => class.to_string(),
+                Rec::Call { callee, .. } | Rec::Native { callee, .. } => callee.owner.to_string(),
+                Rec::Read { decl, .. } => decl.to_string(),
+                Rec::Region { phase, .. } => phase.owner.to_string(),
+            });
+        }
+        let types = size.types.iter().map(|t| t.to_string()).collect();
+        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect() })
     }
 }
 

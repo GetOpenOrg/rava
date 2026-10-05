@@ -371,8 +371,13 @@ impl Vm {
             0xc0 | 0xc1 => {
                 let Operand::Class(c) = &insn.operand else { return fail("checkcast 操作数") };
                 let v = pop!();
-                if self.boot {
-                    self.check_identity(v)?;
+                // 占位对象的运行期类型是其声明类型的子类型：声明类型可赋给 c 时 checkcast 必过，
+                // 已知非空时 instanceof 为真；其余即延迟值参与求值
+                if self.boot && self.is_placeholder(v) {
+                    let o = v.obj()?;
+                    if !self.instance_of(env, &self.ty(o), o, c) || (op == 0xc1 && !self.bj.nonnull.contains(&o)) {
+                        self.check_identity(v)?;
+                    }
                 }
                 let is = match v.r()? {
                     None => None,
@@ -404,7 +409,7 @@ impl Vm {
             }
             0xc6 | 0xc7 => {
                 let v = pop!();
-                if self.boot {
+                if self.boot && !matches!(v, CV::R(o) if self.bj.nonnull.contains(&o)) {
                     self.check_identity(v)?;
                 }
                 let v = v.r()?;

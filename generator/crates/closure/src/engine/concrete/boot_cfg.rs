@@ -40,6 +40,18 @@ fn producer_effect(insn: &Insn) -> Option<usize> {
     }
 }
 
+/// 产生引用值的取值指令（getstatic / getfield / aaload）：（弹出个数, 值的声明类型）
+pub(super) fn ref_load(insn: &Insn) -> Option<(usize, String)> {
+    match (insn.opcode, &insn.operand) {
+        (0xb2 | 0xb4, Operand::Field(f)) if f.desc.starts_with('L') || f.desc.starts_with('[') => {
+            let ty = f.desc.strip_prefix('L').and_then(|t| t.strip_suffix(';')).unwrap_or(&f.desc);
+            Some((usize::from(insn.opcode == 0xb4), ty.to_string()))
+        }
+        (0x32, _) => Some((2, OBJECT.to_string())),
+        _ => None,
+    }
+}
+
 fn idx(index: &HashMap<u32, usize>, off: u32) -> R<usize> {
     index.get(&off).copied().map_or_else(|| fail("分支目标非指令边界"), Ok)
 }
@@ -146,4 +158,56 @@ pub(super) fn fork_shape(code: &Code, x: usize, depth: usize) -> Option<(usize, 
         return None;
     }
     Some((x + 1, (depth + 1).checked_sub(pops + branch_pops(b.opcode))?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use classfile::{ExceptionEntry, MemberRef};
+
+    fn insn(offset: u32, opcode: u8, operand: Operand) -> Insn {
+        Insn { offset, opcode, operand }
+    }
+
+    /// `if (s != null) { 1; } return;` 加一条覆盖分支体首条指令的 try 区间
+    fn sample() -> (Code, HashMap<u32, usize>) {
+        let field = MemberRef { owner: "p/C".into(), name: "s".into(), desc: "Lp/S;".into() };
+        let insns = vec![
+            insn(0, 0xb2, Operand::Field(field)),
+            insn(3, 0xc6, Operand::Branch(10)),
+            insn(6, 0x04, Operand::None),
+            insn(7, 0xa7, Operand::Branch(10)),
+            insn(10, 0xb1, Operand::None),
+        ];
+        let index = insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
+        let code = Code {
+            max_stack: 1,
+            max_locals: 0,
+            code_len: 11,
+            insns,
+            exception_table: vec![ExceptionEntry { start: 6, end: 7, handler: 10, catch_type: None }],
+        };
+        (code, index)
+    }
+
+    #[test]
+    fn ipdom_of_branch_is_join_point() {
+        let (code, index) = sample();
+        let pd = PDom::new(&code, &index).unwrap_or_else(|_| panic!("后支配树"));
+        assert_eq!(pd.ipdom(0), Some(1));
+        assert_eq!(pd.ipdom(1), Some(4));
+        // 下标 2 在 try 区间内：异常边直达处理器（下标 4），故后支配点越过 goto
+        assert_eq!(pd.ipdom(2), Some(4));
+        assert_eq!(pd.ipdom(3), Some(4));
+        assert_eq!(pd.ipdom(4), None);
+    }
+
+    #[test]
+    fn fork_shape_of_producer_and_branch() {
+        let (code, _) = sample();
+        assert_eq!(fork_shape(&code, 0, 0), Some((1, 0)));
+        assert_eq!(fork_shape(&code, 1, 1), Some((1, 0)));
+        assert_eq!(fork_shape(&code, 2, 0), None);
+        assert_eq!(ref_load(&code.insns[0]), Some((0, "p/S".to_string())));
+    }
 }

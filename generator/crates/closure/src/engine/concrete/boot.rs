@@ -246,7 +246,11 @@ impl Vm {
             }
             loop {
                 if Some(ix) == c {
-                    ok &= st.is_empty() && locals == ck;
+                    if !(st.is_empty() && locals == ck) {
+                        ok = false;
+                        let d: Vec<usize> = (0..ck.len()).filter(|&i| locals.get(i) != ck.get(i)).collect();
+                        self.bj.region_notes.push(format!("{}@{}→{:?}：到达终点时栈深 {}，局部变量变化 {d:?}", info.key, code.insns[s].offset, c.map(|c| code.insns[c].offset), st.len()));
+                    }
                     break;
                 }
                 let pre = st.clone();
@@ -273,6 +277,19 @@ impl Vm {
                                 continue;
                             }
                         }
+                        // 区段内取到延迟的引用值：以占位对象代之继续（区段整体运行期执行，构建期只求写入集）
+                        if let Some((pops, ty)) = super::boot_cfg::ref_load(&code.insns[ix]) {
+                            if let Some(keep) = pre.len().checked_sub(pops) {
+                                st.clear();
+                                st.extend_from_slice(&pre[..keep]);
+                                let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
+                                let o = self.alloc(&ty, body);
+                                self.mark_placeholder(o, &why_of(&why));
+                                st.push(CV::R(o));
+                                ix += 1;
+                                continue;
+                            }
+                        }
                         match fork_shape(code, ix, pre.len()) {
                             Some((b, keep)) => {
                                 let succ = super::boot_cfg::succs(code, &info.index, b)?;
@@ -281,7 +298,10 @@ impl Vm {
                                 }
                             }
                             // 延迟值不在分支上：此后的栈与局部变量构建期不可知
-                            None => ok = false,
+                            None => {
+                                ok = false;
+                                self.bj.region_notes.push(format!("{}@{}→{:?}：{} 处延迟值不在分支上：{}", info.key, code.insns[s].offset, c.map(|c| code.insns[c].offset), code.insns[ix].offset, why_of(&why)));
+                            }
                         }
                         break;
                     }

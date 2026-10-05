@@ -17,7 +17,8 @@ use super::vm::*;
 use super::*;
 
 pub(super) enum JEnt {
-    Static(u32, Option<CV>),
+    /// 静态字段（旧值，写入时所在的最内层 `<clinit>` 类）
+    Static(u32, Option<CV>, Option<Rc<str>>),
     Field(u32, u32, Option<CV>),
     Elem(u32, usize, CV),
     Arr(u32, Vec<CV>),
@@ -47,6 +48,8 @@ pub(super) enum Rec {
     Call { phase: MemberRef, off: u32, callee: MemberRef, args: Vec<CV>, ph: Option<u32>, why: String },
     /// 运行期副作用 native（线程启动、信号、OS 环境）/ 结果依赖宿主的调用（占位对象 `ph`）：运行期按序重放
     Native { callee: MemberRef, args: Vec<CV>, ph: Option<u32> },
+    /// 运行期初始化类的 final 引用静态字段被读取：构建期得到占位对象 `ph`，运行期（触发该类初始化后）回填
+    Read { decl: Rc<str>, name: Rc<str>, ph: u32 },
     /// 根帧区段 `[start, end)` 运行期执行（局部变量取区段入口的值）
     Region { phase: MemberRef, start: u32, end: Option<u32>, locals: Vec<CV>, why: String },
 }
@@ -61,11 +64,22 @@ pub(super) struct Journal {
     pub dirty_cells: HashSet<usize>,
     /// 残差调用结果的占位对象：可存放、可传递；判空、比较身份、分派、取类型即延迟值参与求值
     pub placeholders: HashSet<u32>,
+    /// 已知非空的占位对象（清单声明结果非空的延迟调用）：判空可在构建期定值
+    pub nonnull: HashSet<u32>,
     pub recs: Vec<Rec>,
     /// VM 侧登记次数（模块表、构建期输出等不可撤回的效果）
     pub vm_effects: u64,
     /// 宿主标量的（native, 调用方）：构建期取零值（操作 `host_scalar`），第 2 步改为污点值与重算槽
     pub host_scalars: BTreeSet<(String, String)>,
+    /// 诊断：转为运行期初始化的全部尝试（含随后被外层撤回吸收的），不入摘要
+    pub rt_attempts: Vec<(Rc<str>, String)>,
+    /// 诊断：残差区段终点后移的原因（不入摘要）
+    pub region_notes: Vec<String>,
+    /// 正在执行的 `<clinit>`（栈顶为最内层）
+    pub clinits: Vec<Rc<str>>,
+    /// 条件脏静态：由撤回后回到未初始化的类的 `<clinit>` 写入。该类日后在构建期重新初始化即重做这次
+    /// 写入（不脏）；转为运行期初始化或始终未初始化则运行期重放会改写（脏）。读时按该类的终局判定
+    pub pending_static: HashMap<u32, BTreeSet<Rc<str>>>,
 }
 
 impl Vm {
@@ -92,27 +106,39 @@ impl Vm {
 
     /// 回滚到标记（含出栈）：撤回的位置记为脏位置
     pub(super) fn jrollback(&mut self, m: Mark) -> R<()> {
+        self.jrollback_for(m, None)
+    }
+
+    /// 回滚；`rt` 为撤回后转为运行期初始化的类（其 `<clinit>` 的写入与撤回后回到未初始化的类同样处理）
+    pub(super) fn jrollback_for(&mut self, m: Mark, rt: Option<&Rc<str>>) -> R<()> {
         if self.bj.vm_effects != m.vm {
             return fail("撤回范围内有 VM 侧登记（模块表 / 构建期输出），不可残差化");
         }
         // 撤回后回到未初始化的类：其静态字段由日后的 `<clinit>` 重新定义，不记脏
-        let uninit: HashSet<Rc<str>> = self.bj.ents[m.j..]
+        let mut uninit: HashSet<Rc<str>> = self.bj.ents[m.j..]
             .iter()
             .filter_map(|e| match e {
                 JEnt::Init(c, None) => Some(c.clone()),
                 _ => None,
             })
             .collect();
+        uninit.extend(rt.cloned());
         while self.bj.ents.len() > m.j {
             let Some(e) = self.bj.ents.pop() else { break };
             match e {
-                JEnt::Static(k, old) => {
+                JEnt::Static(k, old, owner) => {
                     match old {
                         Some(v) => self.statics.insert(k, v),
                         None => self.statics.remove(&k),
                     };
-                    if old.is_some() || !uninit.contains(&self.fnames[k as usize].0) {
-                        self.bj.dirty_static.insert(k);
+                    match owner.filter(|c| uninit.contains(c)) {
+                        Some(c) => {
+                            self.bj.pending_static.entry(k).or_default().insert(c);
+                        }
+                        None if old.is_none() && uninit.contains(&self.fnames[k as usize].0) => {}
+                        None => {
+                            self.bj.dirty_static.insert(k);
+                        }
                     }
                 }
                 JEnt::Field(o, k, old) => {
@@ -178,7 +204,8 @@ impl Vm {
     pub(super) fn jlog_static(&mut self, k: u32) {
         if !self.bj.marks.is_empty() {
             let old = self.statics.get(&k).copied();
-            self.bj.ents.push(JEnt::Static(k, old));
+            let owner = self.bj.clinits.last().cloned();
+            self.bj.ents.push(JEnt::Static(k, old, owner));
         }
     }
 
@@ -280,16 +307,29 @@ impl Vm {
         if let Some(k) = self.deferred.get(&o) {
             return defer(format!("延迟值参与求值：{k} 的字段 {} 被改写", fr.name));
         }
-        self.jlog_field(o, fr.key);
+        // 内存缓存字段：撤回时保留缓存值（重算得同一值），不记脏
+        if !fr.memo {
+            self.jlog_field(o, fr.key);
+        }
         Ok(())
     }
 
-    pub(super) fn boot_static_check(&self, fr: &FRes) -> R<()> {
+    pub(super) fn boot_static_check(&mut self, env: &Env, fr: &FRes) -> R<()> {
         if self.bj.dirty_static.contains(&fr.key) {
             return defer(format!("延迟值参与求值：运行期重放会改写的静态字段 {}.{}", fr.decl, fr.name));
         }
         if self.opaque.contains(&fr.decl) {
             return defer(format!("延迟值参与求值：运行期初始化类的静态字段 {}.{}", fr.decl, fr.name));
+        }
+        // 条件脏：写入者的 `<clinit>` 先在构建期重做（与运行期「先初始化写入者、后读」的次序一致）
+        let owners: Vec<Rc<str>> = self.bj.pending_static.get(&fr.key).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+        for c in owners {
+            if self.init.get(&c).is_none() {
+                self.ensure_init(env, &c)?;
+            }
+            if self.opaque.contains(&c) {
+                return defer(format!("延迟值参与求值：运行期初始化类 {c} 会改写的静态字段 {}.{}", fr.decl, fr.name));
+            }
         }
         Ok(())
     }

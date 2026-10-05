@@ -33,7 +33,17 @@ impl Vm {
                         st.push(match &*fr.desc { "J" => CV::J(x), "Z" | "B" | "C" | "S" | "I" => CV::I(x as i32), d => return fail(format!("引导静态类型 {d}")) });
                         return Ok(());
                     }
-                    self.boot_static_check(&fr)?;
+                    // 运行期初始化类的 final 引用静态字段：值在该类 `<clinit>` 后不变，读取得占位对象（可存放、可传递）
+                    if self.opaque.contains(&fr.decl) && fr.fin && matches!(fr.desc.as_bytes().first(), Some(b'L' | b'[')) && !self.bj.dirty_static.contains(&fr.key) {
+                        let ty = fr.desc.strip_prefix('L').and_then(|t| t.strip_suffix(';')).unwrap_or(&fr.desc);
+                        let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
+                        let o = self.alloc(ty, body);
+                        self.mark_placeholder(o, &format!("运行期初始化类的静态字段 {}.{}", fr.decl, fr.name));
+                        self.bj.recs.push(super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
+                        st.push(CV::R(o));
+                        return Ok(());
+                    }
+                    self.boot_static_check(env, &fr)?;
                 }
                 if self.opaque.contains(&fr.decl) || env.man().is_injected_static(&fr.decl, &fr.name) {
                     return fail(format!("读取 VM 承载的静态字段 {}.{}", fr.decl, fr.name));

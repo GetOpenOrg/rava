@@ -56,7 +56,9 @@ impl Vm {
         self.jlog_init(&key);
         self.init.insert(key.clone(), Init::Running);
         let m = self.jmark();
+        self.bj.clinits.push(key.clone());
         let r = self.do_init(env, &key);
+        self.bj.clinits.pop();
         match r {
             Ok(()) => {
                 self.jpop(m);
@@ -65,10 +67,11 @@ impl Vm {
                 Ok(())
             }
             Err(Flow::Defer(w)) => {
-                self.jrollback(m)?;
+                self.jrollback_for(m, Some(&key))?;
                 self.fail_frames = None;
                 self.mark_opaque(key.clone());
                 let why = w.split(" @ ").next().unwrap_or(&w).to_string();
+                self.bj.rt_attempts.push((key.clone(), why.clone()));
                 self.bj.recs.push(super::journal::Rec::RuntimeInit { class: key.clone(), why });
                 self.init.insert(key, Init::Done);
                 Ok(())

@@ -169,7 +169,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             ret(CV::R(vm.new_array(&array_of(&t), arg(1)?.i()?)?))
         }
-        // ── 构建期引导求值（探针）专用操作 ──
+        // ── 构建期引导求值专用操作 ──
         // 运行期副作用（信号、线程启动、OS 环境）：登记为运行期按序重放的 native；有返回值的即宿主相关值
         "defer" => {
             if !desc.ends_with(")V") {
@@ -222,14 +222,15 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             defer(format!("延迟值参与求值：宿主相关的返回值 {}", info.key))
         }
-        // 延迟调用：结果依赖宿主（如当前目录），构建期只登记调用、返回占位对象；占位对象只许被存放，
-        // 读写其状态、判空、比较身份即「延迟值参与求值」。运行期重放该调用得到真值
+        // 延迟调用：结果依赖宿主（如当前目录），构建期只登记调用、返回非空占位对象；占位对象只许被存放、
+        // 判空，读写其状态、比较身份即「延迟值参与求值」。运行期重放该调用得到真值（清单登记即承诺非空）
         "defer_call" => {
             let Some(t) = desc.rsplit(')').next().and_then(|d| d.strip_prefix('L')).and_then(|d| d.strip_suffix(';')) else {
                 return fail("defer_call 返回类型非类");
             };
             let o = vm.alloc(t, Body::Inst(Vec::new()));
             vm.mark_placeholder(o, &format!("延迟调用 {}", info.key));
+            vm.bj.nonnull.insert(o);
             vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: Some(o) });
             ret(CV::R(o))
         }
@@ -250,7 +251,8 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
                         vm.pkg_module.insert(Rc::from(p.as_str()), m);
                     }
                 }
-                let ms: Vec<(Rc<str>, u32)> = vm.mirrors.iter().map(|(t, &o)| (t.clone(), o)).collect();
+                let mut ms: Vec<(Rc<str>, u32)> = vm.mirrors.iter().map(|(t, &o)| (t.clone(), o)).collect();
+                ms.sort_unstable();
                 for (t, o) in ms {
                     vm.mirror_module(env, &t, o)?;
                 }

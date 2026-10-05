@@ -190,11 +190,15 @@ pub fn run(args: &Args) -> Result<(), String> {
         if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
         }
+        let outside = |v: &[String]| -> Vec<String> { v.iter().filter(|t| !c.engine.classes.contains_key(t.as_str())).map(|t| format!("`{t}`")).collect() };
+        let (ti, ri) = (outside(&b.types), outside(&b.runtime_classes));
         let md = format!("{}
 ## 闭包
 
 - 入口 `{main}`：闭包 {} 类；引导映像求值 {} ms
-", b.report, c.engine.classes.len(), c.boot_ms);
+- 映像类型 {} 个，不在闭包 {} 个：{}
+- 运行期部分入口类 {} 个，不在闭包 {} 个：{}
+", b.report, c.engine.classes.len(), c.boot_ms, b.types.len(), ti.len(), ti.join(" "), b.runtime_classes.len(), ri.len(), ri.join(" "));
         std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))?;
         eprintln!("[boot] 报告 {r}：{}，摘要 {}", if b.ok { "通过" } else { "失败" }, b.digest);
     }
