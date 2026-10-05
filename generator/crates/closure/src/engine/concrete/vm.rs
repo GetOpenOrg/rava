@@ -85,9 +85,16 @@ pub(super) enum Flow {
     /// 隐式异常（种类见清单 `[concrete.implicit]`）：由解释循环分配异常对象后按 `Throw` 处理
     Implicit(&'static str),
     Fail(String),
+    /// 引导求值：宿主相关值（延迟值）参与求值——内容被读、身份被比较、取值改变控制流。
+    /// 不被异常处理器捕获；在调用序列的根帧残差化为运行期重放，在 `<clinit>` 边界使该类转为运行期初始化
+    Defer(String),
 }
 
 pub(super) type R<T> = Result<T, Flow>;
+
+pub(super) fn defer<T>(why: impl Into<String>) -> R<T> {
+    Err(Flow::Defer(why.into()))
+}
 
 pub(super) fn implicit<T>(kind: &'static str) -> R<T> {
     Err(Flow::Implicit(kind))
@@ -228,13 +235,33 @@ pub(super) struct Vm {
     /// 映像实例对象 → 首个持有它的不变静态字段（类初始化写入的 final / 只在 `<clinit>` 写入的字段）：
     /// 物化时以该静态字段的抽象值代表（抽象分析对 `<clinit>` 的建模给出同一对象）
     pub image_roots: HashMap<u32, MemberRef>,
-    ihash: HashMap<u32, i32>,
+    pub ihash: HashMap<u32, i32>,
     pub steps: u64,
     /// 调用栈（调用方类查询）
     pub frames: Vec<MemberRef>,
     pub trace: Trace,
     /// 内存缓存字段写入的撤销日志：(对象 / u32::MAX = 静态, 字段键, 原值)
     pub undo: Vec<(u32, u32, Option<CV>)>,
+    /// 构建期引导求值：全部分配与写入永久进映像，可变静态可读，跨类静态写入放行
+    pub boot: bool,
+    pub step_limit: u64,
+    /// 宿主相关值（`@deferred`）的字符串内容数组 → 属性名：引导求值读到其内容即「延迟值参与求值」
+    pub deferred: HashMap<u32, Rc<str>>,
+    /// 首个失败点的调用栈（引导求值诊断）
+    pub fail_frames: Option<Vec<String>>,
+    /// 最近一次隐式异常的调用栈（引导求值诊断）
+    pub throw_frames: Option<Vec<String>>,
+    /// VM 构造的引导对象（`[concrete.boot] objects`）
+    pub boot_objs: Vec<u32>,
+    /// VM 原生单元（名字, 位模式）
+    pub cells: Vec<(Rc<str>, i64)>,
+    /// VM 侧状态登记计数（操作 `vm_record`）
+    pub vm_tables: BTreeMap<String, usize>,
+    /// 包（内部形式）→ 模块对象（defineModule0 登记）
+    pub pkg_module: HashMap<Rc<str>, u32>,
+    pub base_module: Option<u32>,
+    /// 引导求值的写入日志、脏位置与残差记录（concrete/journal.rs）
+    pub bj: super::journal::Journal,
 }
 
 impl Vm {
@@ -268,6 +295,17 @@ impl Vm {
             frames: Vec::new(),
             trace: Trace::default(),
             undo: Vec::new(),
+            boot: false,
+            step_limit: STEP_LIMIT,
+            deferred: HashMap::default(),
+            fail_frames: None,
+            throw_frames: None,
+            boot_objs: Vec::new(),
+            cells: Vec::new(),
+            vm_tables: BTreeMap::default(),
+            pkg_module: HashMap::default(),
+            base_module: None,
+            bj: Default::default(),
         }
     }
 
@@ -302,6 +340,9 @@ impl Vm {
     }
 
     pub(super) fn arr(&self, o: u32) -> R<&Vec<CV>> {
+        if self.boot {
+            self.boot_arr_check(o)?;
+        }
         match &self.heap[o as usize].body {
             Body::Arr(_) if self.heap[o as usize].epoch == 0 && self.image == 0 && !self.frozen.contains(&o) => {
                 fail(format!("读取可变映像数组 {}", self.heap[o as usize].ty))
@@ -319,6 +360,14 @@ impl Vm {
     }
 
     pub(super) fn arr_mut(&mut self, o: u32) -> R<&mut Vec<CV>> {
+        if self.boot {
+            self.boot_arr_write(o)?;
+        }
+        self.arr_store(o)
+    }
+
+    /// 数组写入（不记引导日志：调用方已按元素记）
+    pub(super) fn arr_store(&mut self, o: u32) -> R<&mut Vec<CV>> {
         let ep = self.cur_epoch();
         self.note_foreign(o);
         let h = &mut self.heap[o as usize];
@@ -370,6 +419,9 @@ impl Vm {
     /// 实例字段读：映像对象（`<clinit>` 构造、程序其余部分可见）只许读 final 字段、内存缓存字段，以及
     /// 发布后不再改写的类型（`[concrete] stable_types`）的全部字段——经后者取到的映像数组同样冻结
     pub(super) fn get_field(&mut self, env: &Env, o: u32, fr: &FRes) -> R<CV> {
+        if self.boot {
+            self.boot_field_check(o, fr)?;
+        }
         let image = self.image == 0 && self.heap[o as usize].epoch == 0;
         let stable = image && self.stable(env, o);
         if image && !fr.fin && !fr.memo && !stable {
@@ -389,6 +441,9 @@ impl Vm {
 
     /// 实例字段写入：映像对象只许写内存缓存字段（记撤销）
     pub(super) fn put_field(&mut self, o: u32, fr: &FRes, v: CV) -> R<()> {
+        if self.boot {
+            self.boot_field_write(o, fr)?;
+        }
         let ep = self.cur_epoch();
         let shared = self.heap[o as usize].epoch != ep;
         if shared && !fr.memo {
@@ -416,7 +471,11 @@ impl Vm {
         let Some(spec) = env.cfg().vm_fields.get(what) else { return fail(format!("清单缺 VM 布局字段 {what}")) };
         let (owner, name) = spec.rsplit_once('.').unwrap_or((spec, ""));
         let key = self.fkey(owner, name);
+        if self.boot {
+            self.jlog_field(o, key);
+        }
         let Body::Inst(fs) = &mut self.heap[o as usize].body else { return fail("期望实例") };
+        fs.retain(|(k, _)| *k != key);
         fs.push((key, v));
         Ok(())
     }
@@ -439,6 +498,9 @@ impl Vm {
             }
             let old = self.statics.get(&fr.key).copied();
             self.undo.push((u32::MAX, fr.key, old));
+        }
+        if self.boot {
+            self.jlog_static(fr.key);
         }
         if let (true, true, CV::R(o)) = (self.image > 0, fr.fin, v) {
             if matches!(self.heap[o as usize].body, Body::Inst(_)) && self.heap[o as usize].epoch == 0 {
@@ -545,7 +607,30 @@ impl Vm {
             let cm = self.mirror(env, ct)?;
             self.put_vm_field(env, o, "component_type", CV::R(cm))?;
         }
+        if self.boot {
+            self.mirror_module(env, &t, o)?;
+        }
         Ok(o)
+    }
+
+    /// 类镜像的 Class.module（引导求值）：按所在包查 defineModule0 登记；数组取元素类型的模块
+    pub(super) fn mirror_module(&mut self, env: &Env, t: &str, o: u32) -> R<()> {
+        let base = t.trim_start_matches('[');
+        let base = base.strip_prefix('L').and_then(|x| x.strip_suffix(';')).unwrap_or(base);
+        let pkg = base.rsplit_once('/').map_or("", |(p, _)| p);
+        let m = match self.pkg_module.get(pkg) {
+            Some(&m) => m,
+            // 基本类型与其数组属于基础模块（VM 规定首个 defineModule0 即基础模块）
+            None if !base.contains('/') => match self.base_module {
+                Some(m) => m,
+                None => return Ok(()),
+            },
+            None => return Ok(()),
+        };
+        if env.cfg().vm_fields.contains_key("class_module") && self.get_vm_field(env, o, "class_module")? == CV::N {
+            self.put_vm_field(env, o, "class_module", CV::R(m))?;
+        }
+        Ok(())
     }
 
     // ── 方法解析与选择（按引用缓存）──────────────────────────────────────────
@@ -580,13 +665,15 @@ impl Vm {
         let index = site.method().code.as_ref().map(|c| c.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect()).unwrap_or_default();
         // 显式操作优先；其次清单的返回值事实（`[facts.returns]` / `[vm_constants] null_returns`：原生二进制里恒定的返回值）
         let ks = key.to_string();
-        let op = env.cfg().natives.get(&ks).cloned().or_else(|| {
+        let boot_op = if self.boot { env.cfg().boot.natives.get(&ks).cloned() } else { None };
+        let op = boot_op.or_else(|| env.cfg().natives.get(&ks).cloned()).or_else(|| {
             env.man().return_fact(&ks).map(|f| match f {
                 crate::manifest::Fact::Null => "const:null".to_string(),
                 crate::manifest::Fact::Int(x) => format!("const:{x}"),
             })
         });
-        let bytecode = site.method().code.is_some() && matches!(env.ctx.kind_of(&site.class, site.method()), Kind::Bytecode);
+        // 引导求值执行 JDK 字节码本身（手写替换是运行期承载，不是构建期语义）
+        let bytecode = site.method().code.is_some() && (self.boot || matches!(env.ctx.kind_of(&site.class, site.method()), Kind::Bytecode));
         let i = Rc::new(MInfo { key: key.clone(), site: site.clone(), index, op, bytecode });
         self.minfo.insert(key, i.clone());
         i

@@ -21,8 +21,29 @@ impl Vm {
                 }
                 // 非 final 静态字段只在其类初始化期间可读：初始化之后它可能被程序其它部分改写
                 let running = matches!(self.init.get(&fr.decl), Some(Init::Running));
-                if !fr.fin && !fr.memo && !running {
+                if !self.boot && !fr.fin && !fr.memo && !running {
                     return fail(format!("读取可变静态字段 {}.{}", fr.decl, fr.name));
+                }
+                if self.boot {
+                    if let Some(v) = env.cfg().boot.statics.get(&format!("{}.{}", fr.decl, fr.name)) {
+                        if v == "@deferred" {
+                            return defer(format!("延迟值参与求值：VM 注入的宿主相关静态 {}.{}", fr.decl, fr.name));
+                        }
+                        let x = v.parse::<i64>().map_or_else(|_| fail(format!("引导静态值非整数 {v}")), Ok)?;
+                        st.push(match &*fr.desc { "J" => CV::J(x), "Z" | "B" | "C" | "S" | "I" => CV::I(x as i32), d => return fail(format!("引导静态类型 {d}")) });
+                        return Ok(());
+                    }
+                    // 运行期初始化类的 final 引用静态字段：值在该类 `<clinit>` 后不变，读取得占位对象（可存放、可传递）
+                    if self.opaque.contains(&fr.decl) && fr.fin && matches!(fr.desc.as_bytes().first(), Some(b'L' | b'[')) && !self.bj.dirty_static.contains(&fr.key) {
+                        let ty = fr.desc.strip_prefix('L').and_then(|t| t.strip_suffix(';')).unwrap_or(&fr.desc);
+                        let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
+                        let o = self.alloc(ty, body);
+                        self.mark_placeholder(o, &format!("运行期初始化类的静态字段 {}.{}", fr.decl, fr.name));
+                        self.bj.recs.push(super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
+                        st.push(CV::R(o));
+                        return Ok(());
+                    }
+                    self.boot_static_check(env, &fr)?;
                 }
                 if self.opaque.contains(&fr.decl) || env.man().is_injected_static(&fr.decl, &fr.name) {
                     return fail(format!("读取 VM 承载的静态字段 {}.{}", fr.decl, fr.name));
@@ -40,7 +61,7 @@ impl Vm {
             0xb3 => {
                 self.ensure_init(env, &fr.decl)?;
                 let v = pop(st)?;
-                if self.image > 0 && !matches!(self.init.get(&fr.decl), Some(Init::Running)) && !fr.memo {
+                if !self.boot && self.image > 0 && !matches!(self.init.get(&fr.decl), Some(Init::Running)) && !fr.memo {
                     return fail(format!("类初始化写入它类静态字段 {}.{}", fr.decl, fr.name));
                 }
                 self.put_static(&fr, v)?;
@@ -86,6 +107,9 @@ impl Vm {
                 resolved
             }
             _ => {
+                if self.boot {
+                    self.check_identity(args[0])?;
+                }
                 let recv = args[0].obj()?;
                 if let Body::Lam(l) = &self.heap[recv as usize].body {
                     let l = l.clone();

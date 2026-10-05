@@ -6,6 +6,9 @@ use super::*;
 
 /// 字段偏移的编码基址：偏移 = 基址 + 字段键（`Vm::fkey`），与数组基址 / 下标偏移不相交
 const FIELD_OFFSET_BASE: i64 = 1 << 40;
+/// VM 原生单元（如线程 id 计数器）的地址编码基址：null 基址 + 该区间偏移即按单元读写；
+/// 物化时单元终值成为运行期原生单元的初值（地址本身是运行期重定位值，不进映像）
+const VM_CELL_BASE: i64 = 1 << 48;
 
 pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> Option<R<Option<CV>>> {
     let arg = |i: usize| args.get(i).copied().map_or_else(|| fail("native 实参个数"), Ok);
@@ -36,9 +39,165 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> Option<R<Op
             }
             Ok(Some(CV::I(i32::from(hit))))
         })(),
-        _ => return None,
+        _ => match op.split_once(':') {
+            Some(("vm_cell", name)) => {
+                let i = match vm.cells.iter().position(|(n, _)| &**n == name) {
+                    Some(i) => i,
+                    None => {
+                        vm.cells.push((Rc::from(name), 0));
+                        vm.cells.len() - 1
+                    }
+                };
+                Ok(Some(CV::J(VM_CELL_BASE + i as i64 * 8)))
+            }
+            Some(("unsafe_get", k)) => (|| Ok(Some(mem_get(vm, env, arg(1)?, arg(2)?.j()?, k)?)))(),
+            Some(("unsafe_put", k)) => (|| {
+                mem_put(vm, env, arg(1)?, arg(2)?.j()?, k, arg(3)?)?;
+                Ok(None)
+            })(),
+            // compareAndSet / compareAndExchange（`unsafe_cas` 返回是否命中，`unsafe_cax` 返回旧值）
+            Some((cas @ ("unsafe_cas" | "unsafe_cax"), k)) => (|| {
+                let (o, off) = (arg(1)?, arg(2)?.j()?);
+                let wide = matches!(k, "J" | "D");
+                let (exp, x) = if wide { (arg(3)?, arg(4)?) } else { (arg(3)?, arg(4)?) };
+                let cur = mem_get(vm, env, o, off, k)?;
+                let hit = cur == exp;
+                if hit {
+                    mem_put(vm, env, o, off, k, x)?;
+                }
+                Ok(Some(if cas == "unsafe_cas" { CV::I(i32::from(hit)) } else { cur }))
+            })(),
+            _ => return None,
+        },
     };
     Some(r)
+}
+
+/// 访问宽度（字节）
+fn width(k: &str) -> usize {
+    match k {
+        "Z" | "B" => 1,
+        "C" | "S" => 2,
+        "J" | "D" => 8,
+        "L" => 4,
+        _ => 4,
+    }
+}
+
+/// 数组元素宽度（按数组描述符）
+fn elem_width(ty: &str) -> usize {
+    width(&ty[1..2])
+}
+
+/// 偏移 → 数组下标（基址与运行时 `vm_constants::array_base_offset` 同口径）
+fn arr_index(off: i64, w: usize) -> R<usize> {
+    let rel = off - 16;
+    if rel < 0 || rel % w as i64 != 0 {
+        return fail(format!("非对齐数组偏移 {off}"));
+    }
+    Ok((rel / w as i64) as usize)
+}
+
+/// 取值的位模式（整数类）
+fn bits(v: CV) -> R<i64> {
+    Ok(match v {
+        CV::I(x) => i64::from(x),
+        CV::J(x) => x,
+        CV::F(x) => i64::from(x.to_bits()),
+        CV::D(x) => x.to_bits() as i64,
+        _ => return fail("非数值"),
+    })
+}
+
+fn of_bits(k: &str, b: i64) -> CV {
+    match k {
+        "J" => CV::J(b),
+        "F" => CV::F(f32::from_bits(b as u32)),
+        "D" => CV::D(f64::from_bits(b as u64)),
+        "Z" => CV::I((b & 1) as i32),
+        "B" => CV::I(b as i8 as i32),
+        "S" => CV::I(b as i16 as i32),
+        "C" => CV::I(b as u16 as i32),
+        _ => CV::I(b as i32),
+    }
+}
+
+fn cell(vm: &Vm, o: CV, off: i64) -> R<Option<usize>> {
+    if o != CV::N || off < VM_CELL_BASE {
+        return Ok(None);
+    }
+    let i = ((off - VM_CELL_BASE) / 8) as usize;
+    if i >= vm.cells.len() {
+        return fail(format!("未分配的 VM 单元 {off}"));
+    }
+    Ok(Some(i))
+}
+
+fn mem_get(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str) -> R<CV> {
+    if let Some(i) = cell(vm, o, off)? {
+        if vm.bj.dirty_cells.contains(&i) {
+            return defer(format!("延迟值参与求值：运行期重放会改写的 VM 单元 {}", vm.cells[i].0));
+        }
+        return Ok(of_bits(k, vm.cells[i].1));
+    }
+    let o = o.obj()?;
+    let ty = vm.ty(o);
+    if ty.starts_with('[') {
+        let ew = elem_width(&ty);
+        let w = width(k);
+        if k == "L" || ew == w {
+            let i = arr_index(off, ew)?;
+            let a = vm.arr(o)?;
+            return a.get(i).copied().map_or_else(|| fail("Unsafe 数组越界"), Ok);
+        }
+        if ew == 1 {
+            let i = arr_index(off, 1)?;
+            let a = vm.arr(o)?;
+            let mut b: i64 = 0;
+            for j in (0..w).rev() {
+                b = (b << 8) | (a.get(i + j).copied().map_or_else(|| fail("Unsafe 数组越界"), Ok)?.i()? as i64 & 0xFF);
+            }
+            return Ok(of_bits(k, b));
+        }
+        return fail(format!("Unsafe 跨宽度读 {ty} as {k}"));
+    }
+    let fr = field_at(vm, env, off)?;
+    vm.get_field(env, o, &fr)
+}
+
+fn mem_put(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str, v: CV) -> R<()> {
+    if let Some(i) = cell(vm, o, off)? {
+        let old = vm.cells[i].1;
+        vm.jlog(super::journal::JEnt::Cell(i, old));
+        vm.cells[i].1 = bits(v)?;
+        return Ok(());
+    }
+    let o = o.obj()?;
+    let ty = vm.ty(o);
+    if ty.starts_with('[') {
+        let ew = elem_width(&ty);
+        let w = width(k);
+        if k == "L" || ew == w {
+            let i = arr_index(off, ew)?;
+            let a = vm.arr_mut(o)?;
+            let slot = a.get_mut(i).map_or_else(|| fail("Unsafe 数组越界"), Ok)?;
+            *slot = v;
+            return Ok(());
+        }
+        if ew == 1 {
+            let i = arr_index(off, 1)?;
+            let b = bits(v)?;
+            let a = vm.arr_mut(o)?;
+            for j in 0..w {
+                let slot = a.get_mut(i + j).map_or_else(|| fail("Unsafe 数组越界"), Ok)?;
+                *slot = CV::I(((b >> (8 * j)) & 0xFF) as u8 as i8 as i32);
+            }
+            return Ok(());
+        }
+        return fail(format!("Unsafe 跨宽度写 {ty} as {k}"));
+    }
+    let fr = field_at(vm, env, off)?;
+    vm.traced_put_field(o, &fr, v)
 }
 
 /// 偏移所指字段的解析结果
