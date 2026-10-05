@@ -77,6 +77,8 @@ fn parse_jimage_list(text: &str) -> BTreeMap<String, String> {
 
 /// `<java_home>/jmods/*.jmod`：(模块名, 档案)，按文件名序
 fn jmod_archives(home: &Path) -> Vec<(String, Archive)> {
+    // jmod 无版本化条目，release 只对 jar 有意义；按该 JDK 自身主版本取视图即可
+    let release = crate::jdk::major_of(home).unwrap_or(0);
     let mut paths: Vec<PathBuf> = std::fs::read_dir(home.join("jmods"))
         .into_iter()
         .flatten()
@@ -89,7 +91,7 @@ fn jmod_archives(home: &Path) -> Vec<(String, Archive)> {
         .into_iter()
         .filter_map(|p| {
             let module = p.file_stem()?.to_str()?.to_string();
-            Archive::open(&p).ok().map(|a| (module, a))
+            Archive::open(&p, release).ok().map(|a| (module, a))
         })
         .collect()
 }
@@ -337,7 +339,7 @@ mod tests {
         let rewritten = rewritten_dirs(&home);
         assert!(!rewritten.is_empty(), "JDK 21 镜像应有 jlink 改写类");
         let mut jmods = jmod_archives(&home);
-        let mut cp = crate::classpath::ClassPath::new();
+        let mut cp = crate::classpath::ClassPath::new(21);
         cp.add_jdk(&home).unwrap();
         for (module, d) in &rewritten {
             let (_, jmod) = jmods.iter_mut().find(|(m, _)| m == module).unwrap();

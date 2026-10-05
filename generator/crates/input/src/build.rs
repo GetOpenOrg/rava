@@ -36,27 +36,23 @@ fn key_of(r: &MemberRef) -> MethodKey {
 /// 一个 lib crate 的输入规格
 #[derive(Debug, Clone)]
 pub struct LibCrate {
+    /// crate 名 = 模块 crate 名（`resolve::modules` 按模块名映射，冲突加 FNV 后缀）
     pub name: String,
-    /// jar 内全部类（按名排序，不含 module-info）
+    /// jar 内全部类（按名排序，不含 module-info）；发射集 = 闭包触达的子集
+    /// （整包翻译以显式种子 `--seed-class` 覆盖全部类达成，不再是 crate 属性）
     pub jar_classes: Vec<String>,
-    /// 整包模式：jar 全部类发射进 crate；否则只发射闭包触达的 jar 类
-    pub wholesale: bool,
 }
 
 impl LibCrate {
-    /// 从 jar 档案枚举类
-    pub fn from_jar(name: &str, jar: &Path, wholesale: bool) -> Result<LibCrate, InputError> {
-        let a = classfile::archive::Archive::open(jar).map_err(|e| InputError::Io(format!("{}：{e}", jar.display())))?;
+    /// 从 jar 档案枚举类（`release`：多版本 jar 视图）
+    pub fn from_jar(name: &str, jar: &Path, release: u32) -> Result<LibCrate, InputError> {
+        let a = classfile::archive::Archive::open(jar, release).map_err(|e| InputError::Io(format!("{}：{e}", jar.display())))?;
         let jar_classes = a
             .class_names()
             .into_iter()
             .filter(|n| n != "module-info" && !n.ends_with("/module-info"))
             .collect();
-        Ok(LibCrate {
-            name: name.to_string(),
-            jar_classes,
-            wholesale,
-        })
+        Ok(LibCrate { name: name.to_string(), jar_classes })
     }
 }
 
@@ -300,12 +296,8 @@ impl<'a> BuildInput<'a> {
         }
         let mut libs = Vec::new();
         for (l, disc) in self.libs.iter().zip(found) {
-            let classes = if l.wholesale {
-                l.jar_classes.clone()
-            } else {
-                disc.into_iter().collect()
-            };
-            libs.push((l.name.clone(), classes));
+            // 发射集 = 闭包触达的子集；整包翻译由显式种子覆盖全部类（触达 = 全部）
+            libs.push((l.name.clone(), disc.into_iter().collect()));
         }
         Ok((libs, jdk))
     }

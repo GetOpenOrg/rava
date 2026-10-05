@@ -26,7 +26,7 @@ pub(super) struct CallerState {
     /// 当前字节码调用指令的被调引用是否解析到 @CallerSensitive 声明（生成器压栈）；不在调用指令内为 false
     pub(super) site_wrapped: bool,
     /// 被调引用（类, 名, 描述符）→ 是否解析到 @CallerSensitive 声明的记忆
-    refs: HashMap<(String, String, String), bool>,
+    refs: HashMap<MemberRef, bool>,
     /// 当前 lambda SAM 调用转接的实现方法是 @CallerSensitive（方法引用）：(lambda 类序号, 实现方法名, 描述符)。
     /// 生成器在 SAM 闭包体内以隐藏类名压栈，进入该实现方法的边取 lambda 类镜像；字节码调用指令内不生效
     pub(super) lambda_site: Option<(u32, String, String)>,
@@ -50,8 +50,7 @@ impl<'a> Engine<'a> {
     /// 被调引用是否解析到 @CallerSensitive 声明：沿超类链找同名同描述符的首个声明，看其注解（与生成器
     /// `caller_sensitive_decl` 同一判据）
     pub(super) fn ref_caller_sensitive(&mut self, mref: &MemberRef) -> bool {
-        let key = (mref.owner.to_string(), mref.name.to_string(), mref.desc.to_string());
-        if let Some(&b) = self.cs.refs.get(&key) {
+        if let Some(&b) = self.cs.refs.get(mref) {
             return b;
         }
         let mut cur = self.h.class(&mref.owner);
@@ -68,7 +67,7 @@ impl<'a> Engine<'a> {
             }
             cur = cf.super_name.as_deref().and_then(|s| self.h.class(s));
         }
-        self.cs.refs.insert(key, b);
+        self.cs.refs.insert(mref.clone(), b);
         b
     }
 

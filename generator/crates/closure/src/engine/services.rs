@@ -18,7 +18,7 @@ pub struct ServiceState {
     /// 输出：出现过所指未知的服务 Class 实参（按闭包内的服务处理）
     pub unknown: bool,
     /// 服务 Class 实参所指未知的查找站点：目录服务类入闭包时重跑
-    unknown_sites: BTreeSet<(usize, u32)>,
+    pub(super) unknown_sites: BTreeSet<(usize, u32)>,
 }
 
 impl Ctx<'_> {
@@ -97,9 +97,7 @@ impl<'a> Engine<'a> {
             return;
         }
         for w in self.seeds.services.unknown_sites.clone() {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+            self.push_site(w, site_prof::TRIG_SERVICES, None);
         }
     }
 

@@ -6,6 +6,9 @@
 
 ## 0. 结论
 
+> **2026-10-05 用户决策 U0–U6 已定（§8.1）**；第 1 步已在分支 `boot-image-s1` 实施，实测见 §5.3。
+> U1 改判为「运行期取宿主值」：下文 §3.2、§5.2 B1、§6 第 2 步验收已按 U1 改写；§0 第 1 条与 §5.1 的探针数字为钉值时的历史实测。
+
 1. **可行，探针已在构建期跑完 HotSpot 的全部三个引导阶段。** 探针用的是 `engine/concrete` 同一个解释器的引导模式，输入是 macOS JDK 21.0.11 的 java.base 字节码，例子为 HelloWorld：
    - 次序：VM 预初始化 9 类和 3 个 VM 构造对象，然后 `initPhase1`、`initPhase2(false,false)`、`initPhase3`；
    - 规模：共 **1,609,459 条指令、10,805 个堆对象（映像可达 8,356 个）、274 个已初始化类、约 130–150 ms**；
@@ -117,7 +120,7 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 | 类别 | 例子（探针实际命中的加 ✓） | 处理 |
 |---|---|---|
 | 平台属性中的宿主值 | `os.version` ✓、`user.dir` / `user.home` / `user.name`、`java.io.tmpdir`、`file.encoding` 的宿主取值 | `defer_value`：返回延迟字符串，内容数组标为延迟 |
-| 影响控制流、但必须在构建期定值的属性 | `sun.jnu.encoding` ✓（initPhase1 中 `Charset.isSupported` 分支）、`stdout/stderr.encoding` ✓、`line.separator` | **钉值**（用户决策 U1），与原生二进制「无 `-D`」的定位一致 |
+| 影响控制流的属性 | `sun.jnu.encoding` ✓（initPhase1 中 `Charset.isSupported` 分支）、`stdout/stderr.encoding` ✓、`file.encoding`、`line.separator`、`java.home` | **运行期取宿主值**（U1）：`defer_value`；求值器把依赖它们的部分残差化（下文「残差化」），不钉值 |
 | 时间 / 熵 | `nanoTime`（ImmutableCollections SALT）✓、`currentTimeMillis`、`/dev/urandom` | SALT 由 JDK 钩子 `CDS.getRandomSeedForDumping` 给固定种子 ✓；其余时间和熵为延迟值 |
 | 机器资源 | `availableProcessors` ✓、`maxMemory` ✓ | 延迟值并带污点（终态，见下）；探针按 `defer` 读成 0 是**错误简化** |
 | 文件系统 | `canonicalize0` / `getBooleanAttributes0` ✓（空 class path 即 cwd） | 宿主路径：延迟值。`URLClassPath.toFileURL` ✓ 为 `defer_call`，构建期得到占位对象、运行期重放。java.home 只读树是构建期输入，按 §4.3 处理 |
@@ -137,6 +140,19 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 
    探针实测级联：`OSVersion`（os.version）→ `ClassLoaderHelper` → `NativeLibraries`，共 3 类。
 4. **占位对象**（`defer_call` 的返回值）只允许存入字段，不允许读取它的内容；运行期重放时回填该字段。探针中的 `URLClassPath.toFileURL("")` 就是这样处理的，app class path 的 URL 在运行期建。
+
+**残差化（U1，第 1 步已实现）**：延迟值参与求值时，求值器按出现位置自动选择运行期执行的最小单位，全部记入映像的运行期部分（`Rec`），按构建期次序重放：
+
+| 形态 | 触发 | 运行期动作 | HelloWorld 实测（JDK 21 macOS） |
+|---|---|---|---|
+| 运行期初始化类 | 类的 `<clinit>` 中延迟值参与求值 | 撤回该 `<clinit>` 全部写入；首次主动使用时运行期执行 | `StaticProperty`（java.home / user.dir 等）、`NativeLibraries`（macOS 链） |
+| 残差调用 | 根帧调用的被调方法内延迟值参与求值，且结果只被存放 | 撤回该调用；运行期重放，结果为占位对象 | `newPrintStream` ×2（stdout / stderr 编码） |
+| 残差区段 | 根帧中延迟值决定分支 | 根帧 `[s, ipdom)` 整段运行期执行，构建期只求写入集（区段内的延迟引用以占位对象代之） | initPhase1 jnu 编码段、initPhase3 不支持编码的告警段 |
+| 静态读取占位 | 读运行期初始化类的 final 引用静态字段（未被改写） | 运行期触发该类初始化后回填 | `StaticProperty.JAVA_HOME` ×2、`USER_DIR` |
+| 条件脏静态 | 被撤回的 `<clinit>` 写过的静态字段 | 写入者日后在构建期重新初始化即不脏；转运行期初始化则读者级联延迟 | — |
+
+占位对象只可存放、传递、判空（延迟调用与清单承诺非空的结果）、按声明类型 checkcast；读写其状态或比较身份即延迟。
+内存缓存字段（`String.hash`、`Class.packageName` 等，清单 `memo_fields`）的写入不记日志：撤回时保留，重算得同一值。
 
 **判定是全自动的**：清单只登记源（哪些 native / 属性 / 静态字段宿主相关），哪些类在构建期初始化由求值结果决定。每次构建输出审计表，包含延迟源命中、运行期初始化类及其连带链、重算槽和重放序列。
 
@@ -281,7 +297,7 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 
 | # | 卡点 | 探针处理 | 终态 |
 |---|---|---|---|
-| B1 | `sun.jnu.encoding` 决定 initPhase1 的 `Charset.isSupported` 分支 | 钉 UTF-8 | 钉值属性（U1） |
+| B1 | `sun.jnu.encoding` 决定 initPhase1 的 `Charset.isSupported` 分支 | 钉 UTF-8 | 运行期取宿主值（U1）：该分支段为残差区段，stdout / stderr 的 `newPrintStream` 为残差调用，`StaticProperty` 运行期初始化（§3.2 残差化） |
 | B2 | ImmutableCollections SALT 取 `nanoTime` | `CDS.getRandomSeedForDumping` 给固定种子 | 同左（U2） |
 | B3 | 初始线程组 / 线程须在 initPhase1 前由 VM 构造，当前线程在构造器之前就已设定 | 清单 `objects` 与 `current_thread` | 同左，运行期绑定 OS 主线程 |
 | B4 | Finalizer 启动 | `isFinalizationEnabled = false` | 与运行期共享同一常量 |
@@ -296,12 +312,47 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 
 除此之外，探针在 initPhase1–3 中**没有**碰到缺字节码或缺 native 的失败。引导期清单共 128 条 native 登记（其中 35 条 noop，即 registerNatives / initIDs 等；Unsafe 读写与 CAS 54 条），详见 `vm_intrinsics.toml [concrete.boot]`。
 
+### 5.3 第 1 步实测（U1 运行期取宿主值，分支 `boot-image-s1` 3e04048d）
+
+Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四组合指 `--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64。
+
+| 项 | Linux JDK 21 | Linux JDK 25 | macOS JDK 21 | macOS JDK 25 |
+|---|---|---|---|---|
+| initPhase1–3 / initPhase2 | 完成 / I(0) | 完成 / I(0) | 完成 / I(0) | 完成 / I(0) |
+| 未登记失败 | 0 | 0 | 0 | 0 |
+| 摘要（四组合相同） | `03c8d112…a0a1` | `b2d2284a…0657` | `f819f982…7232` | `7e759918…f739` |
+| 求值耗时 | 268 ms | 263 ms | 150 ms | 150 ms |
+| `rava audit boot` 进程 RSS | 235 MB | 281 MB | 236 MB | 241 MB |
+| 指令步数 | 1,600,400 | 1,726,599 | 1,602,115 | — |
+| 映像可达对象 / 槽位 | 8,270 / 69,716 | 8,363 / 69,816 | 8,248 / 69,451 | 8,341 / 69,556 |
+| 映像静态字段 / 非数组类型 | 358 / 138 | 363 / 110 | 354 / 137 | 359 / 109 |
+| 构建期初始化类（其中运行期） | 252（1） | 222（1） | 249（2） | — （2） |
+| HelloWorld 闭包（现状） | 468 | 428 | 469 | — |
+
+**U1 的影响**
+
+- **转为运行期初始化的类**：Linux 只有 `jdk/internal/util/StaticProperty` 1 个（它在 `<clinit>` 中读 java.home、user.dir、jnu 编码等，jnu 残差区段改写了属性表的 CHM 节点）。
+  macOS 另有 `jdk/internal/loader/NativeLibraries`，经 `os.version → OSVersion → ClassLoaderHelper` 链转入；该链上的 2 个中间类在外层撤回时被吸收，不单独计数。
+- **运行期部分（两平台、两版本相同）**：
+  - 残差调用 2 个：`System.newPrintStream` ×2（stdout / stderr 编码）；
+  - 残差区段 2 个：initPhase1 的 jnu 编码段 `[36, 70)`，initPhase3 的不支持编码告警段（21 为 `[367, 401)`，25 为 `[178, 212)`）；
+  - 静态读取占位 3 个：`StaticProperty.JAVA_HOME` ×2、`USER_DIR`；
+  - 启动重放 native 5 个：`Terminator.setup`、`VM.initializeOSEnvironment`、`toFileURL`（U3）、`Thread.setPriority0`、`Thread.start0`；
+  - 宿主标量 3 个，留给第 2 步：`getAppend`、`availableProcessors`、`maxMemory`。
+- **映像规模**：与钉值探针（8,356 个可达对象）相比为 8,270，减少约 1%。initPhase1 的 Charset 段在运行期执行，所以映像中没有该段建的编码对象；模块图（initPhase2）不受 U1 影响。
+- **闭包上界**：上界 = 现状闭包 + 映像中不在闭包的类型 + 运行期部分新增的根。
+  - 运行期部分入口类 6 个，其中只有 `java/lang/Terminator` 不在闭包；以它为根，macOS 实测闭包多 5 类。
+  - 映像中不在闭包的类型：JDK 21 有 52 个（模块图、`ModuleDescriptor$*`、`AccessFlag$N`、URI 等），JDK 25 有 32 个。
+  - 由此得到：Linux JDK 21 约为 468 + 5 + 52 = **≤ 525**，JDK 25 约为 428 + 5 + 32 = **≤ 465**。两者都低于 569 的目标，也低于 §0 的 540 估计。
+  - 第 3 步抽象分析从映像出发，引导代码不再入链，实际值应低于这个上界。
+- **第 2 步验收锁定**：运行期初始化类 Linux ≤ 1、macOS ≤ 2，只减不增。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
 |---|---|---|
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
-| 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 3（macOS）/ 0（Linux，第 1 步实测后锁定） |
+| 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 |
 | 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 |
@@ -322,6 +373,28 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 
 ## 8. 需用户决策
 
+### 8.1 已定（2026-10-05）
+
+| # | 决定 |
+|---|---|
+| U0 | 立项；作为 a3 余项、boot-layer 第 2–5 步的前置，取代第 2–3 步的锚点机制 |
+| U1 | 运行期取宿主值，不钉值：`sun.jnu.encoding`、`stdout/stderr.encoding`、`file.encoding`、`line.separator`、`java.home` 为延迟值，相关类转为运行期初始化，initPhase1 的 Charset 分支在运行期执行。影响实测见 §5.3 |
+| U2 | 固定 SALT 种子（经 `CDS.getRandomSeedForDumping`） |
+| U3 | 运行期重放 `toFileURL` |
+| U4 | 直接做 arena 永久区零拷贝，不做批量建对象的过渡形态；所依赖的 S7 句柄设计作为本线前置定稿 |
+| U5 | 映像放在 `java_base` 档案内 |
+| U6 | 与「Class 接收者逐镜像求值」并行 |
+
+### 8.2 第 1 步提出的新决策项
+
+| # | 事项 | 选项 | 建议 |
+|---|---|---|---|
+| U7 | 延迟调用的非空承诺：`toFileURL` 在当前目录不可规范化时返回 null，映像却按非空占位处理（判空在构建期定值） | 清单承诺非空（现状）/ 判空也延迟（initPhase3 中依赖它的段落改为残差区段） | 承诺非空：原生二进制当前目录不可用时 JVM 本身也无法启动应用类加载 |
+| U8 | 残差重放与构建期写入的次序（WAR）：残差调用 / 区段在运行期执行时，构建期已把延迟点之后的写入烘进映像；若重放读到这些写入，会与 JVM 次序不同 | 第 2 步审计（重放读集 ∩ 延迟点后的写集 = 0，否则构建失败）/ 不处理 | 第 2 步加审计；第 1 步未测交集 |
+| U9 | 内存缓存字段（`memo_fields`，新增 `Class.packageName`）撤回时保留缓存值 | 保留（现状）/ 撤回 | 保留：重算得同一值，不是运行期改写 |
+
+### 8.3 原始选项（存档）
+
 | # | 事项 | 选项 | 建议 |
 |---|---|---|---|
 | U0 | 是否立项（C3 `build_time_init` 已定归 C3，本方案把它扩为 VM 引导阶段整体执行，并取代 boot-layer 第 2–3 步的锚点机制） | 立项并作为 a3 余项、boot-layer 第 2–5 步的前置 / 维持 boot-layer 原方案 | 立项：一个机制解决 a3 余项全部 33 个 `#[jvm_boundary]`、锚点膨胀和 `SystemModules$default` 的大方法编译 |
@@ -331,15 +404,3 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 | U4 | 映像装载形态 | 甲：启动时批量建对象（约 0.4 ms）/ 乙：arena 永久区零拷贝（依赖 S7 句柄设计） | 终态取乙；S7 未定前先实施甲作为装载层，不影响映像格式 |
 | U5 | 映像所在的档案层 | 放在 `java_base` 档案内 / 独立 `boot_image` crate | `java_base` 内（引用的类全属 java.base） |
 | U6 | 实施次序与在途精度线 | 先做映像，再测 §25.2 的 1852 类 / 先等「Class 接收者逐镜像求值」 | 并行：两者正交，第 3 步验收时合测 |
-
-### 8.1 用户决策（2026-10-05）
-
-| # | 决定 |
-|---|---|
-| U0 | 立项：作为 a3 余项与 boot-layer 第 2–5 步的前置，取代第 2–3 步的锚点机制 |
-| U1 | **运行期取宿主值**（不钉值）：`sun.jnu.encoding`、`stdout/stderr.encoding`、`file.encoding`、`line.separator`、`java.home` 的读取方按延迟值处理，相关类转运行期初始化，initPhase1 的 Charset 分支在运行期执行；须实测连带转运行期的类集合及其对映像规模、HelloWorld 闭包（目标 ≤569）的影响 |
-| U2 | 固定 SALT 种子（经 `CDS.getRandomSeedForDumping`），与 CDS dump 一致 |
-| U3 | 按建议：运行期重放 `toFileURL` |
-| U4 | **直接做 arena 永久区零拷贝**（终态），不经启动期批量建对象的过渡形态；依赖的 S7 句柄设计作为本线前置一并定稿 |
-| U5 | 按建议：映像放在 `java_base` 档案内 |
-| U6 | 按建议：与「Class 接收者逐镜像求值」并行，第 3 步验收时合测 |

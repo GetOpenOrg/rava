@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use classfile::archive::Archive;
 use classfile::ClassFile;
 
+use crate::hierarchy::package_of;
+
 const JMOD_PRIORITY: [&str; 6] = [
     "java.base.jmod",
     "java.desktop.jmod",
@@ -28,6 +30,17 @@ pub enum Origin {
     Image,
 }
 
+/// 依赖锁条目喂入的库元数据（J2 由 `deps.lock.toml` 填充）：坐标与显式模块名兜底
+#[derive(Debug, Clone, Default)]
+pub struct LibMeta {
+    /// Maven 坐标 `group:artifact:version`（可缺省）
+    pub coordinate: Option<String>,
+    /// 锁条目显式给出的模块名（命名兜底链的最后一环之前）
+    pub module: Option<String>,
+    /// jar 内容摘要（依赖锁给出；profile.json modules[].jars 用）
+    pub sha256: Option<String>,
+}
+
 /// 档案的模块视图：模块描述符（jmod / 模块化 jar）与 `META-INF/services` 配置
 pub struct ArchiveView {
     pub origin: Origin,
@@ -36,7 +49,23 @@ pub struct ArchiveView {
     pub services: Vec<(String, Vec<u8>)>,
 }
 
+/// 被遮蔽的类：类名、被遮蔽副本所在档案、拥有该包的 JDK 模块
+pub struct Shadowed {
+    pub class: String,
+    pub archive: PathBuf,
+    pub owner: String,
+}
+
+/// 跨档案重复类：类名、胜出档案（类路径序在前）、落选档案
+pub struct Duplicate {
+    pub class: String,
+    pub winner: PathBuf,
+    pub loser: PathBuf,
+}
+
 pub struct ClassPath {
+    /// 构建单元目标 release（多版本 jar 视图）
+    release: u32,
     /// 档案（读取需可变游标：并行发射下以互斥锁串行化）
     archives: Mutex<Vec<Archive>>,
     /// 档案下标 → 来源角色（与 `archives` 同序；只读，免锁）
@@ -51,11 +80,18 @@ pub struct ClassPath {
     module_names: std::sync::OnceLock<Vec<Option<String>>>,
     /// 覆盖档案（镜像改写类目录）的档案下标 → 所属模块名：目录本身无 module-info
     overlay_modules: HashMap<usize, String>,
+    /// 依赖锁喂入的库档案路径 → 元数据
+    lib_meta: HashMap<PathBuf, LibMeta>,
+    /// JDK 具名模块包遮蔽的用户 / 库类（`shadow_jdk_owned_packages` 填充）
+    shadowed: Vec<Shadowed>,
+    /// 跨档案重复类（后加入者落选）
+    duplicates: Vec<Duplicate>,
 }
 
 impl ClassPath {
-    pub fn new() -> Self {
+    pub fn new(release: u32) -> Self {
         ClassPath {
+            release,
             archives: Mutex::new(Vec::new()),
             origins: Vec::new(),
             index: HashMap::new(),
@@ -64,19 +100,47 @@ impl ClassPath {
             java_home: None,
             module_names: std::sync::OnceLock::new(),
             overlay_modules: HashMap::new(),
+            lib_meta: HashMap::new(),
+            shadowed: Vec::new(),
+            duplicates: Vec::new(),
         }
+    }
+
+    pub fn release(&self) -> u32 {
+        self.release
     }
 
     pub fn java_home(&self) -> Option<&Path> {
         self.java_home.as_deref()
     }
 
-    /// 追加一个档案（jmod / jar / 类目录）；先加入者优先
+    /// 依赖锁条目元数据登记（档案加入前或后均可，按路径匹配）
+    pub fn set_lib_meta(&mut self, jar: &Path, meta: LibMeta) {
+        self.lib_meta.insert(jar.to_path_buf(), meta);
+    }
+
+    /// 档案路径 → 依赖锁元数据（命名兜底链消费）
+    pub fn lib_meta(&self, jar: &Path) -> Option<&LibMeta> {
+        self.lib_meta.get(jar)
+    }
+
+    /// 追加一个档案（jmod / jar / 类目录）；先加入者优先；同名重复类记录在案
     pub fn add(&mut self, origin: Origin, path: &Path) -> Result<(), classfile::Error> {
-        let a = Archive::open(path)?;
+        let a = Archive::open(path, self.release)?;
         let idx = self.origins.len();
         for n in a.class_names() {
-            self.index.entry(n).or_insert(idx);
+            match self.index.get(&n) {
+                None => {
+                    self.index.insert(n, idx);
+                }
+                Some(&w) => {
+                    // 镜像覆盖（add_overlay）与 JDK 档案不算重复；用户 / 库跨档案重复可观测
+                    if !matches!((self.origins[w], origin), (Origin::Jdk, _) | (_, Origin::Jdk)) {
+                        let winner_path = lock(&self.archives).get(w).map(|a| a.path.clone()).unwrap_or_default();
+                        self.duplicates.push(Duplicate { class: n, winner: winner_path, loser: path.to_path_buf() });
+                    }
+                }
+            }
         }
         self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
         self.origins.push(origin);
@@ -109,7 +173,7 @@ impl ClassPath {
 
     /// 追加覆盖档案：其中的类取代已加入档案中的同名类；`module_of` 报告给定模块名
     fn add_overlay(&mut self, origin: Origin, path: &Path, module: String) -> Result<(), classfile::Error> {
-        let a = Archive::open(path)?;
+        let a = Archive::open(path, self.release)?;
         let idx = self.origins.len();
         for n in a.class_names() {
             self.index.insert(n, idx);
@@ -225,7 +289,12 @@ impl ClassPath {
         if let Some(m) = self.overlay_modules.get(&i) {
             return Some(m.clone());
         }
-        let names = self.module_names.get_or_init(|| {
+        self.ensure_module_names().get(i).cloned().flatten()
+    }
+
+    /// 档案级模块名（jmod / 模块化 jar 的描述符名；overlay 登记名另查 `overlay_modules`）
+    fn ensure_module_names(&self) -> &Vec<Option<String>> {
+        self.module_names.get_or_init(|| {
             let mut archives = lock(&self.archives);
             archives
                 .iter_mut()
@@ -234,8 +303,7 @@ impl ClassPath {
                     _ => None,
                 })
                 .collect()
-        });
-        names.get(i).cloned().flatten()
+        })
     }
 
     /// 类所在档案的下标（首个命中者；[`Self::module_views`] / [`Self::archives`] 同序）
@@ -261,6 +329,81 @@ impl ClassPath {
     pub fn failures(&self) -> Vec<(String, String)> {
         lock(&self.failures).clone()
     }
+
+    /// JDK 具名模块包遮蔽的用户 / 库类（`shadow_jdk_owned_packages` 之后可查）
+    pub fn shadowed(&self) -> &[Shadowed] {
+        &self.shadowed
+    }
+
+    /// 跨档案重复类（类路径序在前者胜出；JDK 档案与镜像覆盖不在此列）
+    pub fn duplicates(&self) -> &[Duplicate] {
+        &self.duplicates
+    }
+
+    /// JDK / 镜像具名模块拥有的包 → 模块名（JPMS：一个包只属于一个具名模块）
+    fn jdk_package_owners(&self) -> HashMap<String, String> {
+        let names = self.ensure_module_names();
+        let mut out: HashMap<String, String> = HashMap::new();
+        let archives = lock(&self.archives);
+        for (class, &i) in self.index.iter() {
+            if !matches!(self.origins[i], Origin::Jdk | Origin::Image) {
+                continue;
+            }
+            if archives.get(i).is_none() {
+                continue;
+            }
+            let named = self.overlay_modules.get(&i).cloned().or_else(|| names.get(i).cloned().flatten());
+            let Some(m) = named else { continue };
+            out.entry(package_of(class).to_string()).or_insert(m);
+        }
+        out
+    }
+
+    /// 全部档案加入后调用一次：JPMS 包归属遮蔽——用户 / 库档案中属于 JDK 具名模块
+    /// 所拥有包的类不入索引（记入 [`Self::shadowed`]），JDK 侧同名类接管可见性；
+    /// JDK 侧无同名类时该类整体不可见。此后的全部查询以遮蔽后的索引为准
+    pub fn shadow_jdk_owned_packages(&mut self) {
+        let owners = self.jdk_package_owners();
+        if owners.is_empty() {
+            return;
+        }
+        let candidates: Vec<(String, usize, String)> = self
+            .index
+            .iter()
+            .filter(|(_, &i)| matches!(self.origins[i], Origin::User | Origin::Lib))
+            .filter_map(|(class, &i)| {
+                let owner = owners.get(package_of(class))?;
+                Some((class.clone(), i, owner.clone()))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        for (class, i, owner) in candidates {
+            let archive = lock(&self.archives).get(i).map(|a| a.path.clone()).unwrap_or_default();
+            // JDK / 镜像侧同名类（最早加入且含有该类者）接管；没有则从索引移除
+            let takeover = {
+                let archives = lock(&self.archives);
+                self.origins
+                    .iter()
+                    .zip(archives.iter())
+                    .enumerate()
+                    .find(|(_, (o, a))| matches!(o, Origin::Jdk | Origin::Image) && a.contains(&class))
+                    .map(|(j, _)| j)
+            };
+            match takeover {
+                Some(j) => {
+                    self.index.insert(class.clone(), j);
+                }
+                None => {
+                    self.index.remove(&class);
+                }
+            }
+            self.shadowed.push(Shadowed { class, archive, owner });
+        }
+        // 遮蔽改变了解析结果：清掉此前可能已缓存的解析（正常流程在本方法后才首次查询）
+        lock_w(&self.cache).clear();
+    }
 }
 
 /// 锁中毒只意味着别的线程在持锁时 panic（整个进程随之失败）；数据本身仍一致，照常取用
@@ -276,8 +419,3 @@ fn lock_w<T>(m: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
     m.write().unwrap_or_else(|e| e.into_inner())
 }
 
-impl Default for ClassPath {
-    fn default() -> Self {
-        Self::new()
-    }
-}

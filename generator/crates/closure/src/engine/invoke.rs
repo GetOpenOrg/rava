@@ -4,6 +4,7 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
+        self.prof_seg(site_prof::SEG_PRE);
         self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
@@ -13,7 +14,9 @@ impl<'a> Engine<'a> {
         let wrapped = self.ref_caller_sensitive(mref);
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
         let lambda = self.cs.lambda_site.take();
+        self.prof_seg(site_prof::SEG_ARGS);
         self.invoke_inner(m, off, opcode, mref, iface, args);
+        self.prof_seg(site_prof::SEG_POST);
         self.lookup_wrap_call(m, off, args);
         self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
@@ -56,6 +59,9 @@ impl<'a> Engine<'a> {
         };
         match opcode {
             op::INVOKESTATIC => {
+                self.prof_path(site_prof::PATH_STATIC);
+                self.prof_role(&[], &a);
+                self.prof_seg(site_prof::SEG_STATIC);
                 self.init(&resolved.owner, via.clone());
                 if self.concrete_call(m, off, &resolved, &md, None, pargs) {
                     return;
@@ -79,6 +85,9 @@ impl<'a> Engine<'a> {
                     self.keyed_ctor(m, &mref.owner, &mref.desc, recv_v, pargs);
                 }
                 let r = recv_feeds(self);
+                self.prof_path(site_prof::PATH_SPECIAL);
+                self.prof_role(&r, &a);
+                self.prof_seg(site_prof::SEG_EDGE_RECV);
                 self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
             }
             _ => {
@@ -91,6 +100,9 @@ impl<'a> Engine<'a> {
                         self.direct_virtual_sites.insert((m, off));
                     }
                     let r = recv_feeds(self);
+                    self.prof_path(site_prof::PATH_NONVIRT);
+                    self.prof_role(&r, &a);
+                    self.prof_seg(site_prof::SEG_EDGE_RECV);
                     if !rm.is_static() && self.man.concrete.entries.contains(&*self.mref_key(&resolved)) {
                         let s = self.value_set(&r);
                         if self.concrete_call(m, off, &resolved, &md, Some(&s), pargs) {
@@ -101,36 +113,63 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 let r = recv_feeds(self);
+                self.prof_role(&r, &a);
+                self.prof_seg(site_prof::SEG_RECV);
                 // 接收者值集未变（`recv_fp.rs`）时沿用上次的接收者判定与 open 枢纽
                 let fp = (self.methods[m].kind == Kind::Bytecode).then(|| self.feeds_version(&r));
                 let cached = fp.and_then(|v| self.recv_fp_hit(m, off, v)).flatten();
+                let mut seen = None;
                 let (recv, opens): (Rc<[u32]>, Option<IdSet>) = match &cached {
-                    Some((recv, _)) => (recv.clone(), None),
+                    Some((recv, _)) => {
+                        self.prof_path(site_prof::PATH_VFP_HIT);
+                        (recv.clone(), None)
+                    }
                     None => {
-                        let s = self.value_set(&r);
+                        // 值集确有增长：精确部分只取新增（`recv_fp.rs::value_since`）
+                        let since = match fp {
+                            Some(v) => self.value_since(m, off, &r, v.0, true),
+                            None => recv_fp::Since { s: self.value_set(&r), prev: None, seen: None },
+                        };
+                        seen = since.seen;
                         // 精确接收者：少量时逐个派发，否则经集合枢纽；open 部分经 open 枢纽
-                        let exact = TypeSet { classes: s.classes, open: IdSet::default() };
-                        (self.receivers(m, &exact, owner).into(), Some(s.open))
+                        let exact = TypeSet { classes: since.s.classes, open: IdSet::default() };
+                        let fresh = self.receivers(m, &exact, owner);
+                        let old = since.prev.as_ref().map_or(0, |p| p.len());
+                        let recv: Rc<[u32]> = match since.prev {
+                            Some(prev) => merge_sorted(&prev, &fresh).into(),
+                            None => fresh.into(),
+                        };
+                        self.prof_vmiss(recv.len(), recv.len() - old);
+                        (recv, Some(since.s.open))
                     }
                 };
                 if recv.len() < HUB_MIN {
+                    self.prof_path(site_prof::PATH_VSMALL);
+                    self.prof_seg(site_prof::SEG_DISPATCH);
                     for &r in recv.iter() {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
                     }
                 } else {
                     // 同一调用点、同一接收者集合即同一枢纽键（成员与接口标志由该偏移的指令决定）
+                    self.prof_seg(site_prof::SEG_HUB);
                     let last = self.hub_last.get(&(m, off)).cloned();
                     let h = match last {
-                        Some((h, rs)) if *rs == recv[..] => h,
+                        Some((h, rs)) if *rs == recv[..] => {
+                            self.prof_path(site_prof::PATH_VHUB_SAME);
+                            h
+                        }
                         last => {
+                            self.prof_path(site_prof::PATH_VHUB_NEW);
                             let rs = recv.clone();
                             let h = self.hub(mref, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
                             self.hub_last.insert((m, off), (h, rs));
                             h
                         }
                     };
+                    self.prof_seg(site_prof::SEG_LINK);
                     self.link_hub(h, m, off, &a, res);
                 }
+                self.prof_seg(site_prof::SEG_LINK);
                 if let Some((_, hubs)) = cached {
                     for &h in hubs.iter() {
                         self.link_hub(h, m, off, &a, res);
@@ -149,7 +188,7 @@ impl<'a> Engine<'a> {
                     hubs.push(h);
                 }
                 if let Some(v) = fp {
-                    self.recv_fp_store(m, off, v, Some((recv, hubs.into())));
+                    self.recv_fp_store(m, off, v, Some((recv, hubs.into())), seen);
                 }
             }
         }
@@ -216,12 +255,13 @@ impl<'a> Engine<'a> {
         if fp.is_some_and(|v| self.recv_fp_hit(m, off, v).is_some()) {
             return;
         }
-        let s = self.value_set(&fs);
         let s = if let Some(v) = fp {
-            self.recv_fp_store(m, off, v, None);
-            self.recv_delta(m, off, s)
+            // 值集确有增长：只取新增（已见部分都已登记进 `recv_done`，见 `recv_fp.rs::value_since`）
+            let since = self.value_since(m, off, &fs, v.0, false);
+            self.recv_fp_store(m, off, v, None, since.seen);
+            self.recv_delta(m, off, since.s)
         } else {
-            s
+            self.value_set(&fs)
         };
         let s = self.filter(&s, owner);
         let mut rest = TypeSet { classes: IdSet::default(), open: s.open.clone() };
@@ -248,7 +288,9 @@ impl<'a> Engine<'a> {
     /// 调用边：接收者注入 this、实参按位置流入形参（被调声明类型过滤）、返回值流回结果节点
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
-        self.dispatch.entry((m, off)).or_default().insert(t);
+        if self.dispatch.entry((m, off)).or_default().insert(t) {
+            self.ctx.stats.borrow_mut().sprof.dispatch_new += 1;
+        }
         self.callers.entry(t).or_default().insert(m);
         self.caller_edge(m, t);
         let is_static = self.methods[t].is_static;
@@ -300,7 +342,7 @@ impl<'a> Engine<'a> {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
         // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
-        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceOpaque → putReference 等），
+        // 成员的上调是同一语义的实现（VarHandle.set → Unsafe.putReference、putReferenceVolatile → putReference 等），
         // 不再以调用方值池为实参另建一份汇合的读写——否则偏移与对象跨调用点相乘
         let subsumed = self.declares_memory(m) && self.declares_memory(t);
         if matches!(self.methods[t].kind, Kind::Handwritten(_)) && !subsumed {
@@ -421,6 +463,27 @@ impl<'a> Engine<'a> {
 }
 
 /// 调用描述中的属主是数组类型（`[` 开头的描述符形式）
+/// 两个不相交的升序序列归并为升序
+fn merge_sorted(a: &[u32], b: &[u32]) -> Vec<u32> {
+    if b.is_empty() {
+        return a.to_vec();
+    }
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] < b[j] {
+            out.push(a[i]);
+            i += 1;
+        } else {
+            out.push(b[j]);
+            j += 1;
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
+}
+
 fn is_array_type(owner: &str) -> bool {
     owner.starts_with('[')
 }

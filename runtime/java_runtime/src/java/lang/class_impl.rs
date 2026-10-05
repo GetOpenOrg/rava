@@ -22,8 +22,18 @@ impl Class {
     /// 未命名模块；消费面（Files.writeString 的调用方模块一致性检查等）只做
     /// 相等比较，单一单例即可承载（JDK 类侧与 JVM 行为一致：java.base 类
     /// 同模块恒真）。模块名/层级的完整语义不在档 A 面内。
+    ///
+    /// 非引导加载器定义的类（定义加载器表 app / platform、运行期定义类所记的加载器）归其定义加载器
+    /// 的无名模块（JDK：未定义命名模块的加载器所定义的类归 `loader.getUnnamedModule()`），保持
+    /// `getModule().getClassLoader() == getClassLoader()`——`Class.forName(Module, String)` 按模块的
+    /// 加载器分派，`ServiceLoader.loadProvider` 加载平台加载器定义的 provider（`ExtendedCharsets`）经
+    /// `ClassLoader.loadClass(Module, String)` 的 `findLoadedClass` 命中并比对模块。
     #[jvm_boundary]
     pub fn getModule(&self) -> Result<Module> {
+        let loader = self.__vm_defining_loader()?.__get_classLoader();
+        if !Object::from(Clone::clone(&loader)).0.is_jvm_null() {
+            return loader.getUnnamedModule();
+        }
         crate::__process_static! {
             static THE_MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
         }

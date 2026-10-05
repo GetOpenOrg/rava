@@ -5,6 +5,8 @@
 //! - `rava audit corpus [--filter S]… [-j N]`：e2e 语料逐例，按触达测试数汇总，报告 `docs/reports/gap-scan-corpus-<过滤>.md`；
 //! - `rava audit native [--filter S]… [-j N]`：同一逐例扫描，只取闭包种类为 `handwritten:native` /
 //!   `handwritten:boundary` 的缺口（无手写体），报告 `docs/reports/native-gap-scan.md`；
+//! - `rava audit boot [<A.java>] [closure 选项]…`：构建期引导映像审计（缺省入口 e2e HelloWorld），报告
+//!   `docs/reports/boot-image-jdk<N>-<平台>.md`（`--boot-report` 可改），求值失败即命令失败；
 //! - `rava audit test <A.java> [build 选项]…`：单例扫描（corpus / native 的子进程），输出一行 `[gaps] <json>`。
 //!
 //! 缺口归类即发射层预检（[`Precheck`]）：发射只在内存进行（[`scan_gaps`]），不写 scratch；javac 产物落
@@ -96,9 +98,12 @@ fn scan(o: &BuildOpts, tag: &str) -> Result<Gaps, String> {
 
 fn scan_in(o: &BuildOpts, rt: &Path, home: &Path, tmp: &Path) -> Result<Gaps, String> {
     let classes = tmp.join("classes");
-    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    let libs_sel = build_libs::select_entries(o)?;
+    let jars: Vec<PathBuf> = libs_sel.iter().map(|e| e.path.clone()).collect();
     javac(home, &o.inputs, &jars, &classes)?;
-    let cp = class_path(&classes, &jars, home, &image_dirs(o, home, rt))?;
+    let cp = class_path(&classes, &libs_sel, home, &image_dirs(o, home, rt))?;
+    let Libs { crates, .. } = build_libs::from_lock(&libs_sel, &cp, &resolve::ModuleFacts::build(&cp))?;
+    let seed_classes = o.seed_classes.clone();
     let user = user_order(&cp, &o.inputs, o.main.as_deref())?;
     let java_files: Vec<PathBuf> = o.inputs.iter().map(|p| abs(p)).collect();
     let virtual_out = tmp.join("scratch");
@@ -175,14 +180,32 @@ fn with_cache(mut pass: Vec<String>, repo: &Path) -> Vec<String> {
 
 pub fn run(args: &Args) -> Result<(), String> {
     let Some((mode, rest)) = args.rest.split_first() else {
-        return Err("用法：rava audit api|corpus|native|test …".into());
+        return Err("用法：rava audit api|corpus|native|boot|test …".into());
     };
     match mode.as_str() {
         "test" => run_test(rest),
+        "boot" => run_boot(rest),
         "api" => run_api(&parse_audit(rest)?),
         "corpus" | "native" => run_corpus(mode == "native", &parse_audit(rest)?),
-        _ => Err(format!("未知审计模式：{mode}（api / corpus / native / test）")),
+        _ => Err(format!("未知审计模式：{mode}（api / corpus / native / boot / test）")),
     }
+}
+
+/// 引导映像审计：转 `rava closure <入口> --boot-report <报告>`
+fn run_boot(rest: &[String]) -> Result<(), String> {
+    let mut argv: Vec<String> = rest.to_vec();
+    let probe = Args { rest: argv.clone() };
+    let rt = runtime_of(&argv)?;
+    let repo = repo_root(&rt);
+    if argv.first().is_none_or(|a| a.starts_with('-')) {
+        argv.insert(0, repo.join("tests/e2e/01_basics/HelloWorld.java").display().to_string());
+    }
+    if probe.opt("--boot-report").is_none() {
+        let jdk = crate::choose_jdk(&probe)?.major.map_or("x".to_string(), |m| m.to_string());
+        let out = repo.join("docs/reports").join(format!("boot-image-jdk{jdk}-{}.md", std::env::consts::OS));
+        argv.extend(["--boot-report".to_string(), out.display().to_string()]);
+    }
+    crate::closure_cmd::run(&Args { rest: argv })
 }
 
 /// 单例：`[gaps] <json>` 一行（其余输出为闭包诊断）

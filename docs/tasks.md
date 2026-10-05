@@ -257,6 +257,26 @@ regress2 遗留（◀── a2）───────────────�
 
 ---
 
+## 🧭 任务分级（2026-10-06 用户采纳）
+
+用户定：功能优化先放一边，先完成闭包分析器主线（正确、确定、最小，过 C4）。派发只从「继续」项选，空出名额优先 C3 / C5。
+
+| 类 | 项 | 处理 |
+|---|---|---|
+| A 正确性缺陷 | A1 TestModuleLayerDefine NPE（引导映像第 3 步）、A2 TestClassModuleFace 具名模块（第 4 步）、A4 JNDI / HTTP 转译超时、A5 C4 全量 e2e | 继续 |
+| A 正确性缺陷 | A3 URL 协议可靠口径（c1d-urlhost） | 依赖提速，随 D2 搁置 |
+| B 架构终态 | B1 a3 `#[jvm_boundary]` 归零、B2 引导映像求值器第 2–7 步 | 继续 |
+| B 架构终态 | B3 虚拟线程余项（T6 规模 / T1b 审计 / pinned 偶发）、B4 T1-M3 按模块登记 | 缓 |
+| C 闭包精度与规模 | C1 c1d-elem、C2 clsfact、C3 a5-4 收窄（DeepCopy ≤1640）、C5 C1d-b（T2 余 / b1 / b2 / b3 余） | 继续 |
+| C 闭包精度与规模 | C4 a5 关系型边界推理（HelloWorld ≤371）、C6 jar 签名收窄 / jar·URL class-path | 缓 |
+| C 闭包精度与规模 | 共享汇点（c1d-sink） | 已收口（§28.10），≤569 由引导映像达成 |
+| D 分析性能 | D1 处理顺序无关（分支 closure-order-free，定性为正确性） | 继续 |
+| D 分析性能 | D2 枢纽翻新 / 延迟站点重跑等结构改造、D3 在线节点合并 | 暂停（V12 后提速线暂停） |
+| E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 继续 |
+| E 编译资源 | E2 D8 声明层分段 | 缓（视 B4 结果） |
+| B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
+| F 纯优化 | 二进制 ≤3 MB、S7-3～5、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
+
 ## 🔴 活跃任务
 
 > 依赖关系见上方「任务依赖树」。本表只列在途分支的当前状态。原表长单元格见历史 §J。
@@ -279,7 +299,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-甲 | ⏳ | jar/URL 来源甲 class-path（计划 §22.2） |
 | C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤1640，pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅，余 a5-4b / a5-4e / a5-4f |
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
-| C1d-a-a3 | ⏳ ◀── a2 | `#[jvm_boundary]` 归零，审计数 86→0；拆分与验收见计划 §21 / §21.7 |
+| C1d-a-a3 | 🔄 U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | a3-T 虚拟线程终态（a3t-vthread） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· T1–T5 ✅ a78cccef | VirtualThread 字节码翻译 + Continuation 有栈协程；交接见计划 §21.8.5 |
 | a3-T-T6 | ⏳ | 规模指标：10 万虚拟线程 ≤10 s / ≤2 GiB（现 14.6 s / 2.66 GB，草稿未提交） |
@@ -308,9 +328,9 @@ regress2 遗留（◀── a2）───────────────�
 | S7-3…S7-5 | ⏳ ◀── S7-2 | 见同计划 |
 | 二进制体积 | 🔄 | 用户 2026-10-04 交主会话推进；计划 `docs/plans/2026-10-04-binary-size.md`；HelloWorld release 14.4 MB → ≤3 MB |
 | BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
-| BS-B2 | ⏳ ◀── B1 | 栈还原按地址查表，release 加 strip=symbols |
-| BS-B3 | ⏳ ◀── B2 | opt=s / z 体积档位性能对照，交用户决定 |
-| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值、容器元素类型、实例汇合点（c1d §25.4，判据 HelloWorld ≤569 类）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
+| BS-B2 | ✅ 8f5ad0c5（合并 6f9b189b） | 栈还原按地址查表（rava-link 链接期 pcmap），release 加 strip=symbols；release 验证 b2-8f5ad0c5-rel1 5/5，HelloWorld release 7,410,488 B（ubuntu）。 |
+| BS-B3 | ✅ 38c17d97（合并 5bc31469） | 可选体积档 `--release-small`（opt s，不设 z）。对照（ubuntu b3-bench2-b064f315）：s 档二进制 −19~24%、构建 −25~32%，计算用例运行 +13%（ARM +22~40%），按 5%/15% 规则维持 opt 3 缺省。16 GB 机器上 opt 3 构建大闭包用例 OOM（峰值 14.5–15.7 GB；b3-mem16-b064f315 4/8 OOM），s 档 8/8 可构建，交用户决定缺省档（binary-size §五）。 |
+| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值（✅ c1d-clsfact 69d1c73d，c1d §26：classLoader 逐镜像、`Class.module` 锚点按接收者；锚点口径 HelloWorld 仍为 3190，膨胀是 `boot2` 内共享汇点饱和，`arraycopy` / `append(Object)` / Unsafe 引用写）、容器元素类型、实例汇合点（c1d §25.4 / §26.3，判据 HelloWorld ≤569 类，差 2621）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |

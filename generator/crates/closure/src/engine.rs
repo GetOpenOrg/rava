@@ -50,6 +50,7 @@ mod invoke;
 mod reflect_writes;
 mod hub;
 mod recv_fp;
+mod site_prof;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -106,14 +107,17 @@ pub mod cut;
 mod setstore;
 use setstore::SetStore;
 mod scc;
+mod hvn_diag;
+mod tau;
 mod levels;
 mod open_world;
-mod concrete;
+pub mod concrete;
 mod caller;
 mod boot_phases;
 
 use graph::FlowGraph;
 use share::Dep;
+use mirror_eq::HOOK_FIELD;
 use ctxsel::Call;
 use stats::{Phase, Why};
 pub use cut::Diag;
@@ -244,7 +248,8 @@ pub struct Engine<'a> {
     pub methods: IndexMap<(MemberRef, u32), MNode>,
     /// 成员 → 首个方法节点（输出按成员去重）
     mbase: HashMap<MemberRef, usize>,
-    fields: IndexMap<MemberRef, ()>,
+    /// 字段 → 声明类型（引用；V11 封闭类型用）
+    fields: IndexMap<MemberRef, Option<u32>>,
     /// 类型流图：节点类型集 / 流边 / 待推增量（节点驻留为序号）
     graph: FlowGraph,
 
@@ -536,6 +541,8 @@ pub struct Engine<'a> {
     fwriter_cause: Option<String>,
     /// 反事实切除（诊断，缺省为空）
     pub(crate) cuts: cut::Cuts,
+    /// 节点切除（`@node:`）的逐节点判定记忆
+    cut_nodes: HashMap<u32, bool>,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
     probes: Option<Box<diag::Probes>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）

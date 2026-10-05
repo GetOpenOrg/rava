@@ -282,7 +282,7 @@ impl Ctx<'_> {
         }
         let origin = self.cp.origin(cls);
         let d = match self.man.domain(cls, origin == Some(Origin::User)) {
-            // 依赖库类（`--lib`）：库自身不属 JDK 边界，一律按字节码翻译
+            // 依赖库类（类路径 jar，Origin::Lib）：库自身不属 JDK 边界，一律按字节码翻译
             Domain::Boundary if origin == Some(Origin::Lib) => Domain::Translate,
             d => d,
         };
@@ -550,6 +550,10 @@ impl Oracle for Facts<'_, '_> {
     }
     fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
         self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
+    }
+    fn param_mirror_field(&self, i: u16, f: &MemberRef) -> Option<V> {
+        let s = self.mirrors.get(i as usize)?.as_ref()?;
+        self.ctx.mirrors_hook_field(f, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)

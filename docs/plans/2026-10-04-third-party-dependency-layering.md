@@ -269,17 +269,49 @@ user（bin）
 
 **GC**：crate 目录按链接目录引用计数，被最近 N 个档案链接目录引用的 crate 保留（N 沿用 cross-test §4.6 的 4 个键 / 8 个键），其余回收。回退链（本机命中 → 拉取 → 本机构建）沿用 t1-link §4.6，粒度改为单个 crate。
 
-### 3.6 库专属的手写与种子
+### 3.6 第三方库：rava 仓库不放任何库专属内容
 
-- **手写边界不变**（CLAUDE.md 第 1 条）：库的 `ACC_NATIVE` 方法（例如 commons-daemon 的 JNI、JNA 绑定）按第 ① 类准入手写。没有其他准入理由。
-- **位置**：`runtime/lib_runtime/<模块名>/`，与 `runtime/java_runtime/` 对称：
-  - `closure.toml` / `seeds.toml` 只写本库的边界、补种与手写登记；
-  - `src/<pkg>/<x>_impl.rs` 在生成时 overlay 进该库 crate，与 `<x>.rs` 共置（第 3 条）；
-  - 清单按模块名匹配，带 `versions = "[a,b)"` 区间，命中多个区间时报错。
-- **种子**：库的可达性只由入口决定。`--lib … :seed=` 一类的整包或子集种子退出构建单元语义。
-  - 反射、注解驱动的入口（例如 JUnit 发现 `@Test` 时由框架反射调用用户方法，gson / jackson 按字段反射）由分析器的反射建模与 `seeds.toml` 补种覆盖；
-  - crate 验收（lib_pilot golden）需要整包翻译时，在验收的构建单元里以 `--seed-class` 入口显式给出。
-- 库专属清单的摘要只进入该库的 `K`，改动不波及 JDK。
+> 2026-10-06 用户定：rava 项目不放第三方依赖包的任何东西。与第三方库相关的配置，随具体用户项目在开发时配置，归用户项目所有。rava 仓库中第三方库专属的文件数为 0：不设 `runtime/lib_runtime/`，不写库专属的手写、清单、补种。
+
+**1. 职责划分**
+
+| 归属 | 内容 |
+|---|---|
+| rava 仓库（与具体库无关、一次实现） | 闭包分析器的通用反射与注解建模；JNI ABI 层；构建期捕获运行期生成类的机制；用户项目配置的读取器 |
+| 用户项目（随项目开发配置） | 依赖锁 `deps.lock.toml`；入口与启动选项；分析器推不出的外部事实声明（见下文第 3 节） |
+
+- 生成器和分析器里不得出现第三方库名、注解名字面量（第 4 条推广到第三方库）。
+- e2e 语料里的库用例（如 `tests/e2e/63_junit/`）以「用户项目」身份携带自己的配置（`form.toml` 等），放在用例目录里，不进 `runtime/`。
+- lib_pilot golden 的 `--seed-class` 属于验收入口，写在验收脚本里。
+
+**2. 字节码无法表达的情形与通用机制**
+
+库专属的手写 Rust 代码，终态为 0。
+
+| 情形 | 典型 | 通用机制（rava 仓库，一次实现） |
+|---|---|---|
+| ① `ACC_NATIVE` | JNA、sqlite-jdbc、netty-tcnative、commons-daemon | **JNI ABI 层**：rava 运行时实现 `JNIEnv` 函数表，包括类与方法查找、`Call*Method`、字段存取、字符串与数组、`GetPrimitiveArrayCritical`、局部与全局引用表、异常。`System.loadLibrary` 加载库自带的动态库，按 JNI 命名或 `RegisterNatives` 下行调用。产物随附或静态链接该动态库，部署条件与 JVM 相同。按手写准入属于第 ③ 类 VM 落地语义 |
+| ② 运行期生成并加载字节码 | cglib、ByteBuddy、javassist、ASM（Spring AOP、Hibernate 代理、Mockito） | 构建期执行生成逻辑，拦截 `defineClass` / `Lookup.defineClass` 捕获产出字节，再走正常翻译。载体是构建期引导映像求值器 |
+| ③ 依赖 VM 驱动或 VM 内部 | 用 `Unsafe` 的 Netty、Agrona；`java.lang.instrument` agent | `Unsafe` 由 JDK 侧统一提供；instrument 改写同 ② 一样在构建期完成 |
+| 注解驱动或配置驱动的反射（字节码可以表达，只是值推不出） | JUnit `@Test`、Spring、Jackson、gson | 分析器通用建模：类常量或 `Class` 值 → `getMethods` / `getDeclared*` → 按注解或修饰符过滤 → `invoke` / `newInstance` / `Field.get` / `Field.set`。覆盖不了的入口记为分析器缺口，修分析器 |
+
+**3. 用户项目侧的声明**
+
+声明只针对分析器确实推不出的外部事实：
+- JNI 回调目标：C 代码经 `GetMethodID` 回调的 Java 方法，库二进制里能静态提取的部分不必声明；
+- 来自外部配置值的反射目标，例如 `Class.forName(配置文件中的值)`；
+- 构建期无法自动捕获的生成类。
+
+这些声明放在用户项目里，经 `--deps` / `--cp` 同级的构建单元选项给出，读取器在 rava 仓库，内容在用户项目。
+
+**4. 真正的边界：构建时不存在的字节码**
+
+插件从外部加载 jar、运行期编译脚本（Groovy、Janino）等情形，只能内嵌解释器兜底或声明不支持，属于产品范围取舍，需求出现时再定。
+
+**5. 实施状态**
+
+- JNI 层、构建期捕获生成类：**缓一缓**（2026-10-06 用户定），不在 C4 关键路径上；有带 native 或运行期生成的库进入语料时再实施。
+- 注解驱动反射的通用建模：由 junit J4 承担。
 
 ## 四、与现有实现的接口（问题 6）
 
@@ -324,7 +356,7 @@ user（bin）
 | 步 | 内容 | 依赖 | 验收（量化） |
 |---|---|---|---|
 | V12-0 | 类路径与模块归属修正：多版本 jar 视图、JDK 包遮蔽、库模块命名兜底、crate 名冲突规则、重名模块合并、分裂包 / 重复类检测；`ModuleNode` 新字段 | 无（只动 classfile / resolve，可先于 M2 合入） | 52 个 pilot jar 的模块名与 `jar --describe-module --release 21`（具名）/ `Automatic-Module-Name` / JPMS 推导逐一相符：**52 / 52**（今天名字错 18、描述符丢失 30）；`META-INF/versions/` 形态的类名入索引 **0**（今天 3,078）；合成夹具 6 例（分裂包、重名具名模块、重名自动模块、JDK 包遮蔽、重复类、多版本覆盖）全过；`no_jdk_literals` 通过；m1–m5 生成正文不变 |
-| V12-1 | 依赖锁与入口类路径：`--deps` / `--cp` / `--launch`，`profile.json` 增量（§4.2），删除 `--lib`；`fetch_pilot_deps.sh` 输出 `deps.lock.toml`（含 sha256 与坐标）；`runtime/lib_runtime/` 清单读取 | V12-0 | L-a 档案：入口顺序、锁内条目顺序不变时，`P` 不随入口给出顺序变化；`--covers` 对五个 main 都成立；档案类集合 = 五个单例非用户侧之并 |
+| V12-1 | 依赖锁与入口类路径：`--deps` / `--cp` / `--launch`，`profile.json` 增量（§4.2），删除 `--lib`；`fetch_pilot_deps.sh` 输出 `deps.lock.toml`（含 sha256 与坐标）；用户项目配置读取（§3.6，不设 `runtime/lib_runtime/`） | V12-0 | L-a 档案：入口顺序、锁内条目顺序不变时，`P` 不随入口给出顺序变化；`--covers` 对五个 main 都成立；档案类集合 = 五个单例非用户侧之并 |
 | V12-2 | crate 计划（与 M2 合并实施）：库 crate 命名、依赖 = 实际引用、具名模块越界即失败、分量合并 + 门面、D6 拆层推广到库；`CrateRoute` 由 crate 计划取代 | V12-0、M2 | L-a、L-b 生成并 cargo 构建通过；`[module-audit] out_of_reads=0`（含库）；库 → 用户 / 下游的链接边 **0**；L-c 夹具生成 1 个分量 crate 与 2 个门面，用户路径与无环时逐字节相同；服务器抽查 m1–m5 golden 不变 |
 | V12-3 | 切片与逐 crate 键（与 M3 合并实施）：`slice(c)`、`K(c)` / `S(c)` / 每 crate 包版本；下游无关性守护测试；登记集按入口类路径；未登记库的 `NoClassDefFoundError` 屏障；晚绑定登记表 | V12-2、M3 | ① L-a 增加一个只改用户侧的入口后，`org_hamcrest`、`junit` 与全部 JDK crate 的 `S` 不变（字节差 0）；② L-b 中把某个库换成内容不同但不新增 JDK 方法的版本后，JDK crate 的 `S` 不变；③ 守护测试：给构建单元加一个下游库后，上游各 crate 的字节差为 0（上游切片不变时）；④ L-c 未登记库的类首次使用时的输出与 JVM 一致 |
 | V12-4 | 产物按 crate 存放（与 L2 合并实施）：`~/.cache/rava/crates/`、链接目录 `<A>`、`rava archive build` / `explain`、逐 crate 回退与 GC；release 模式 `embed-bitcode` / fat LTO | V12-3、L2 | 只改库切片后重建：JDK crate 重编 **0**、拉取 **0** 字节；只改用户代码：rustc 只编用户 crate（库 0、JDK 0）；服务器上每个库 `.so` 的 `NEEDED` 恰为其 crate 依赖 + std，`RUNPATH=$ORIGIN`；`explain --since` 对 ①② 两种变化分别报出正确原因 |
@@ -366,6 +398,7 @@ user（bin）
    - B：按 (模块, jar sha256) 给库类分命名空间，多个版本并存于一个档案。它要求分析器把库类像用户类一样按入口隔离，并入时再按实例合并，复杂度高，收益只在语料。
 5. **库专属手写与清单的位置**
    - A（推荐）：`runtime/lib_runtime/<模块名>/`（清单 + `<x>_impl.rs`，带版本区间），只进该库的 `K`。
+   - **2026-10-06 用户定：A、B 都不采纳。rava 仓库不放任何第三方库专属内容；库相关配置归用户项目，native 走 JNI ABI 层，反射 / 注解入口走分析器通用建模（§3.6）。**
    - B：并入 `runtime/java_runtime/` 的三份清单。改动会让全部 JDK crate 的键失效。
 6. **生产模式的远端共享缓存**
    - A（推荐）：逐 crate 内容寻址的 store 本机缺省开启，远端 store（团队共享）为可选配置，协议沿用 cross-test §4 的分块校验。

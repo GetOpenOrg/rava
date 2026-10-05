@@ -72,18 +72,34 @@ pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: 
     Ok(())
 }
 
-/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）
-pub(crate) fn class_path(user_dir: &Path, jars: &[PathBuf], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
-    let mut cp = ClassPath::new();
+/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）。
+/// 全部加入后做 JDK 包遮蔽与模块图硬校验（build / audit / profile 三流程共用此装配点）
+pub(crate) fn class_path(user_dir: &Path, libs: &[crate::build_libs::LibEntry], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+    let release = resolve::jdk::major_of(home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
+    let mut cp = ClassPath::new(release);
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
-    for j in jars {
-        cp.add(Origin::Lib, j).map_err(|e| format!("{}：{e}", j.display()))?;
+    for e in libs {
+        cp.set_lib_meta(&e.path, e.meta.clone());
+        cp.add(Origin::Lib, &e.path).map_err(|err| format!("{}：{err}", e.path.display()))?;
     }
     cp.add_jdk(home).map_err(|e| e.to_string())?;
     for d in images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
+    cp.shadow_jdk_owned_packages();
+    resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
+    print_classpath_diag(&cp);
     Ok(cp)
+}
+
+/// 类路径装配的可观测项：JDK 包遮蔽与跨档案重复类
+fn print_classpath_diag(cp: &ClassPath) {
+    if let Some(s) = cp.shadowed().first() {
+        eprintln!("[classpath] JDK 包遮蔽 {} 个类（如 {} ← 模块 {}）", cp.shadowed().len(), s.class, s.owner);
+    }
+    if let Some(d) = cp.duplicates().first() {
+        eprintln!("[classpath] 跨档案重复类 {} 个（如 {}：{} 胜出 {}）", cp.duplicates().len(), d.class, d.winner.display(), d.loser.display());
+    }
 }
 
 /// `--image` 缺省：由 JDK 镜像与 `runtime/java_support` 派生（[`resolve::image`]）；显式给出则原样使用
@@ -378,20 +394,24 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
     let home = jdk.home;
     let cin = out.join(CLOSURE_INPUT_DIR);
     let classes = cin.join("classes");
-    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs)?;
+    let libs_sel = build_libs::select_entries(o)?;
+    let jars: Vec<PathBuf> = libs_sel.iter().map(|e| e.path.clone()).collect();
     javac(&home, &o.inputs, &jars, &classes)?;
     perf.mark("javac");
     if o.stop_after == Stage::Javac {
         return Ok(());
     }
     st.stage = Stage::Closure;
-    let cp = class_path(&classes, &jars, &home, &image_dirs(o, &home, rt))?;
+    let cp = class_path(&classes, &libs_sel, &home, &image_dirs(o, &home, rt))?;
+    let facts = resolve::ModuleFacts::build(&cp);
+    let Libs { crates, jars } = build_libs::from_lock(&libs_sel, &cp, &facts)?;
+    let _ = &jars;
     let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
     perf.mark("classpath");
     let java_files: Vec<PathBuf> = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
     let emit_too = o.stop_after >= Stage::Emit;
     let profile = o.profile.as_deref().map(|p| crate::profile_emit::load(p, rt, &home)).transpose()?;
-    let emitted = analyze(&cp, rt, &user[0], o, &seed_classes, &cin.join("closure.json"), &mut perf, |single, perf| {
+    let emitted = analyze(&cp, rt, &user[0], o, &o.seed_classes, &cin.join("closure.json"), &mut perf, |single, perf| {
         if !emit_too {
             return Ok(None);
         }

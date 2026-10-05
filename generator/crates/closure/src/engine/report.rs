@@ -275,6 +275,62 @@ impl<'a> Engine<'a> {
             v.sort();
             return v;
         }
+        // 字段不折叠来源诊断：`@fopen:<字段名子串>`——全局开关、按名放开、按键放开、手写写入中匹配者
+        if let Some(q) = pat.strip_prefix("@fopen:") {
+            let c = &self.ctx;
+            out.push(format!("@fopen all={} deser={}", c.fopen_all.get(), c.deser.get()));
+            let mut v: Vec<String> = c.fopen_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  name {n}")).collect();
+            v.extend(c.fopen.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  key {k}")));
+            v.extend(c.fhw.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  hw {k}")));
+            v.extend(c.fhw_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  hwname {n}")));
+            v.sort();
+            out.extend(v);
+            return out;
+        }
+        // 前驱诊断：`@in:<节点标签>`——标签恰为该串的节点的流入边源，按源节点所在方法 / 字段归并计数（前 60）
+        if let Some(q) = pat.strip_prefix("@in:") {
+            let mut by: HashMap<String, usize> = HashMap::default();
+            for (src, edges) in &self.graph.flow_list() {
+                if edges.iter().any(|(d, _)| self.node_str(*d) == q) {
+                    let l = self.node_str(*src);
+                    let k = l.split(" #").next().unwrap_or(&l).to_string();
+                    *by.entry(k).or_default() += 1;
+                }
+            }
+            let mut v: Vec<(String, usize)> = by.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            out.push(format!("@in {q}: {} 个源分组", v.len()));
+            out.extend(v.into_iter().take(60).map(|(k, n)| format!("  {n}\t{k}")));
+            return out;
+        }
+        // 服务查找诊断：`@svcunk`——服务 Class 实参所指未知的查找站点
+        if pat == "@svcunk" {
+            for &(m, off) in &self.seeds.services.unknown_sites {
+                out.push(format!("  {}@{off}", self.methods[m].key));
+            }
+            return out;
+        }
+        // 值集明细诊断：`@set:<节点子串>`——匹配节点（前 8 个）的值集按成员类别列出（分配点数组 / 抽象对象 / 其余类 / open）
+        if let Some(q) = pat.strip_prefix("@set:") {
+            let mut ns: Vec<Node> = self.graph.keys().filter(|n| self.node_str(**n).contains(q)).copied().collect();
+            ns.sort_by_key(|n| format!("{n:?}"));
+            for n in ns.into_iter().take(8) {
+                let s = self.graph.get(&n).cloned().unwrap_or_default();
+                let (mut arr, mut obj, mut other) = (0, 0, Vec::new());
+                for c in s.classes.iter() {
+                    if self.arrays.contains_key(&c) {
+                        arr += 1;
+                    } else if self.objs.contains_key(&c) {
+                        obj += 1;
+                    } else {
+                        other.push(self.names[c as usize].to_string());
+                    }
+                }
+                let opens: Vec<String> = s.open.iter().map(|o| self.names[o as usize].to_string()).collect();
+                out.push(format!("  {}：数组分配点 {arr}、抽象对象 {obj}、open {opens:?}、其余 {}：{}", self.node_str(n), other.len(), other.iter().take(40).cloned().collect::<Vec<_>>().join(" ")));
+            }
+            return out;
+        }
         // 方法节点序号诊断：`@m:<序号>`（数组分配点名里的方法序号）
         if let Some(i) = pat.strip_prefix("@m:").and_then(|v| v.parse::<usize>().ok()) {
             return vec![format!("  {i} = {}", self.ctx_label(i))];
@@ -330,6 +386,11 @@ impl<'a> Engine<'a> {
             return out;
         }
         // 未收窄的按偏移写入站点诊断：`@hwopen`——写入目标实参含 open 的站点（目标 / 写入值规模与 open 类型）
+        if pat == "@hvn" {
+            let mut v = self.hvn_report();
+            v.extend(self.tau_report());
+            return v;
+        }
         if pat == "@hwopen" {
             let mut v: Vec<String> = Vec::new();
             for (s, &(m, off, t)) in self.hw_sites.iter().enumerate() {

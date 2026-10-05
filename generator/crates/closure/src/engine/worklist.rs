@@ -343,6 +343,10 @@ impl<'a> Engine<'a> {
             self.mirror_watch.entry(Node::P(m, *i)).or_default().insert((m, cid));
             self.graph.mark_hooked(Node::P(m, *i));
         }
+        for &i in &a.mirror_field_assumed {
+            self.mirror_watch.entry(Node::P(m, i)).or_default().insert((m, HOOK_FIELD));
+            self.graph.mark_hooked(Node::P(m, i));
+        }
         self.methods[m].analysis = Some(a.clone());
         self.methods[m].aseq = self.methods[m].aseq.wrapping_add(1);
         self.nr_end(m);

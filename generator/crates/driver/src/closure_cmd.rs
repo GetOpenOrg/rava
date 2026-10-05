@@ -5,13 +5,14 @@
 //! `@grow:` / `@trace:` / `@edge:` 为记录型，分析前登记、传播中记录，见 `closure/src/engine/diag.rs`）、`--report <报告.md>`、
 //! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
-//! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类；缺省与 `rava build` 同源派生，
+//! 转译接入（均可多次）：`--deps <deps.lock.toml>` + `--cp <锁条目名>[,…]`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类；缺省与 `rava build` 同源派生，
 //! 见 [`crate::build_cmd::image_dirs`]）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
 //! `--locale <标签>`（locale 资源束种子）；
 //! 诊断（缺省关闭，不影响结果）：`--cut <类.方法:描述符[@偏移]>`（反事实切除，可多次）、`--cut-file <文件>`（每行一条，`#` 注释）、
-//! `--dump-edges <文件>`（触发边转储）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
+//! `--dump-edges <文件>`（触发边转储）、`--site-prof`（读者站点重跑剖析，进 `summary.perf.site_prof`）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
+//! 引导映像：`--boot-report <报告.md>`（写构建期引导映像审计报告；求值失败即命令失败，`rava audit boot` 用）。
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 //!
 //! 参数逐个校验：未知参数、多余的位置参数一律报错。闭包结果取决于输入（类路径、镜像目录），静默忽略的参数会
@@ -32,11 +33,12 @@ pub(crate) const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
 /// 带值选项（后随一个参数）
 const VALUE_OPTS: &[&str] = &[
     "--jdk", "--java-home", "--runtime", "--main", "-o", "--why", "--flows", "--report", "--release", "--release-bytecode",
-    "--lib", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
-    "--hash-seed", "--closure-cache", "--closure-cache-max-mb",
+    "--deps",
+    "--cp", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
+    "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
-const FLAG_OPTS: &[&str] = &["--cold-cut"];
+const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof"];
 
 /// 参数校验：恰一个位置参数（输入），其余都是已知选项（带值选项须有值）
 fn check_args(rest: &[String]) -> Result<(), String> {
@@ -87,7 +89,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new() })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -125,11 +127,40 @@ pub fn run(args: &Args) -> Result<(), String> {
     let multi = |flag: &str| -> Vec<&String> {
         args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
     };
-    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类
-    let mut cp = ClassPath::new();
+    // 依赖锁：--deps + --cp（库输入唯一来源，--lib 已删除）
+    let libs_sel = match args.opt("--deps") {
+        Some(d) => {
+            let names: Vec<String> = args
+                .opt("--cp")
+                .map(|c| c.split(',').map(str::trim).filter(|n| !n.is_empty()).map(String::from).collect())
+                .ok_or_else(|| "--deps 须配合 --cp 给出入口类路径（锁条目名）".to_string())?;
+            let lock = crate::deps_lock::DepsLock::load(Path::new(d.as_str()))?;
+            lock.select(&names)?
+                .iter()
+                .map(|j| crate::build_libs::LibEntry {
+                    path: j.path.clone(),
+                    meta: resolve::classpath::LibMeta {
+                        coordinate: j.coordinate.clone(),
+                        module: j.module.clone(),
+                        sha256: Some(j.sha256.clone()),
+                    },
+                })
+                .collect()
+        }
+        None => {
+            if args.opt("--cp").is_some() {
+                return Err("--cp 须配合 --deps（库输入唯一来源是依赖锁）".into());
+            }
+            Vec::new()
+        }
+    };
+    // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类；随后 JDK 包遮蔽 + 模块图硬校验
+    let release = resolve::jdk::major_of(&home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
+    let mut cp = ClassPath::new(release);
     cp.add(Origin::User, &classes).map_err(|e| e.to_string())?;
-    for jar in multi("--lib") {
-        cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
+    for e in &libs_sel {
+        cp.set_lib_meta(&e.path, e.meta.clone());
+        cp.add(Origin::Lib, &e.path).map_err(|err| format!("{}：{err}", e.path.display()))?;
     }
     cp.add_jdk(&home).map_err(|e| e.to_string())?;
     let images: Vec<PathBuf> = multi("--image").into_iter().map(PathBuf::from).collect();
@@ -137,6 +168,8 @@ pub fn run(args: &Args) -> Result<(), String> {
     for d in &images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
+    cp.shadow_jdk_owned_packages();
+    resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
 
     let flows = multi("--flows");
     let users = cp.names_of(Origin::User);
@@ -160,12 +193,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         roots: vec![MemberRef { owner: main.clone(), name: MAIN.0.into(), desc: MAIN.1.into() }],
         seed_roots: seed_roots(&cp, &multi("--root"), &multi("--seed-class"))?,
         locales: multi("--locale").into_iter().cloned().collect(),
-        diag: closure::engine::Diag { flows: flows.iter().map(|f| f.to_string()).collect(), ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
+        diag: closure::engine::Diag {
+            flows: flows.iter().map(|f| f.to_string()).collect(),
+            site_prof: args.rest.iter().any(|a| a == "--site-prof"),
+            ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
     let whys = multi("--why");
-    let need_engine = args.opt("--report").is_some() || !whys.is_empty() || !flows.is_empty();
+    let boot_report = args.opt("--boot-report");
+    let need_engine = args.opt("--report").is_some() || boot_report.is_some() || !whys.is_empty() || !flows.is_empty();
     let cache = crate::closure_run::CacheOpts {
         dir: args.opt("--closure-cache").map(PathBuf::from),
         max_mb: num("--closure-cache-max-mb")?,
@@ -183,6 +220,23 @@ pub fn run(args: &Args) -> Result<(), String> {
     if let Some(r) = args.opt("--report") {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
+    if let Some(r) = &boot_report {
+        let b = c.boot_image.as_ref().ok_or("引导映像未求值（清单无 [concrete.boot] calls 或类路径无引导阶段方法）")?;
+        if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
+        }
+        let outside = |v: &[String]| -> Vec<String> { v.iter().filter(|t| !c.engine.classes.contains_key(t.as_str())).map(|t| format!("`{t}`")).collect() };
+        let (ti, ri) = (outside(&b.types), outside(&b.runtime_classes));
+        let md = format!("{}
+## 闭包
+
+- 入口 `{main}`：闭包 {} 类；引导映像求值 {} ms
+- 映像类型 {} 个，不在闭包 {} 个：{}
+- 运行期部分入口类 {} 个，不在闭包 {} 个：{}
+", b.report, c.engine.classes.len(), c.boot_ms, b.types.len(), ti.len(), ti.join(" "), b.runtime_classes.len(), ri.len(), ri.join(" "));
+        std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))?;
+        eprintln!("[boot] 报告 {r}：{}，摘要 {}", if b.ok { "通过" } else { "失败" }, b.digest);
+    }
     for w in whys {
         for line in c.why(w) {
             println!("{line}");
@@ -196,6 +250,9 @@ pub fn run(args: &Args) -> Result<(), String> {
         println!();
     }
     println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
+    if boot_report.is_some() && c.boot_image.as_ref().is_some_and(|b| !b.ok) {
+        return Err("引导映像求值失败（见报告）".into());
+    }
     Ok(())
 }
 

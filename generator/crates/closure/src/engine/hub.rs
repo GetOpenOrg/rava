@@ -116,7 +116,7 @@ impl<'a> Engine<'a> {
             if self.methods[m].kind != Kind::Bytecode {
                 let hub = &self.hubs[h as usize];
                 let (site, lambdas, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.ret);
-                for r in lambdas {
+                for &r in lambdas.iter() {
                     self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
                 }
             }
@@ -126,6 +126,7 @@ impl<'a> Engine<'a> {
         if cut::edges_on() {
             cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("H:{h}"));
         }
+        self.prof_seg(site_prof::SEG_LINK_FEED);
         let hub = &self.hubs[h as usize];
         let (ptypes, ret) = (hub.ptypes.clone(), hub.ret);
         for (j, f) in a.iter().enumerate() {
@@ -136,6 +137,7 @@ impl<'a> Engine<'a> {
         if let (Some(rt), Some(res)) = (ret, res) {
             self.flow(Node::HR(h), res, rt);
         }
+        self.prof_seg(site_prof::SEG_LINK_VALS);
         let cv = self.call_vals.clone();
         if let Some(vs) = &cv {
             let string = self.id(STRING);
@@ -145,44 +147,55 @@ impl<'a> Engine<'a> {
         }
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
         self.hub_vals(h, &mine);
+        self.prof_seg(site_prof::SEG_LINK_REPLAY);
         let hub = &mut self.hubs[h as usize];
         let id = hub.link_seq;
         hub.link_seq += 1;
         hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
         let replay = self.methods[m].kind == Kind::Bytecode;
-        for r in lambdas {
+        // 本调用点已接入的最近祖先：它的 lambda 接收者都已送达本调用点（`hub_lsent` 已登记，重放即跳过），
+        // 故与它的 lambda 表相同的前缀直接跳过，结果与逐个查登记相同
+        let anc = if replay { self.linked_ancestor(m, off, h) } else { None };
+        let skip = anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas));
+        for &r in &lambdas[skip..] {
             if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                 continue;
             }
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
         }
         for (t, rs) in special {
-            if replay && self.ancestor_sent(m, off, h, t, &rs) {
+            if anc.is_some_and(|p| self.ancestor_sent(p, t, &rs)) {
                 continue;
             }
-            let recv = TypeSet { classes: rs.into_iter().collect(), open: IdSet::default() };
+            let recv = TypeSet { classes: rs.iter().copied().collect(), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
             self.hubs[h as usize].edged.insert((id, t));
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
+        self.prof_seg(site_prof::SEG_LINK_EXPAND);
         self.hub_expand(h);
     }
 
-    /// 调用点 (m, off) 已接入枢纽 h 的某个祖先、且该祖先已把目标 t 的接收者 rs 全部送达：重放恒等。
-    /// 精确集合枢纽在首个调用点接入时一次展开、其后接收者不再增长，子枢纽的接收者表以父枢纽的为前缀，
-    /// 故已接入的祖先的接收者表即本调用点经它收到的全部接收者
-    fn ancestor_sent(&self, m: usize, off: u32, h: u32, t: usize, rs: &[u32]) -> bool {
-        let Some(linked) = self.hub_linked.get(&m) else { return false };
+    /// 枢纽 h 的祖先中调用点 (m, off) 已接入的最近者
+    fn linked_ancestor(&self, m: usize, off: u32, h: u32) -> Option<u32> {
+        let linked = self.hub_linked.get(&m)?;
         let mut p = self.hubs[h as usize].parent;
         while let Some(a) = p {
             if linked.contains(&(off, a)) {
-                let ps = self.hubs[a as usize].special.get(&t).map_or(&[][..], |v| &v[..]);
-                return rs.len() <= ps.len() && (ps.starts_with(rs) || rs.iter().all(|r| ps.contains(r)));
+                return Some(a);
             }
             p = self.hubs[a as usize].parent;
         }
-        false
+        None
+    }
+
+    /// 调用点已接入的祖先 a 已把目标 t 的接收者 rs 全部送达：重放恒等。
+    /// 精确集合枢纽在首个调用点接入时一次展开、其后接收者不再增长，子枢纽的接收者表以父枢纽的为前缀，
+    /// 故已接入的祖先的接收者表即本调用点经它收到的全部接收者。与祖先共享同一张表（未追加过）时直接成立
+    fn ancestor_sent(&self, a: u32, t: usize, rs: &Rc<Vec<u32>>) -> bool {
+        let Some(ps) = self.hubs[a as usize].special.get(&t) else { return rs.is_empty() };
+        Rc::ptr_eq(ps, rs) || rs.len() <= ps.len() && (ps.starts_with(rs) || rs.iter().all(|r| ps.contains(r)))
     }
 
     /// 实参常量并入枢纽（沿父链下传）；变化时重新并入各中转目标
@@ -206,6 +219,9 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn hub_expand(&mut self, h: u32) {
+        if self.cuts.no_open_hub && self.hubs[h as usize].open.is_some() {
+            return;
+        }
         let hub = &mut self.hubs[h as usize];
         if std::mem::replace(&mut hub.expanded, true) {
             return;
@@ -263,7 +279,7 @@ impl<'a> Engine<'a> {
         let ret = self.hubs[h as usize].ret;
         // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
-            self.hubs[h as usize].lambdas.push(r);
+            Rc::make_mut(&mut self.hubs[h as usize].lambdas).push(r);
             let saved = self.call_vals.take();
             for ((m, off), l) in links(self) {
                 if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
@@ -297,7 +313,7 @@ impl<'a> Engine<'a> {
             self.hub_bind(h, t);
         }
         if !self.hub_plain(t) {
-            self.hubs[h as usize].special.entry(t).or_default().push(r);
+            Rc::make_mut(self.hubs[h as usize].special.entry(t).or_default()).push(r);
             let saved = self.call_vals.take();
             for ((m, off), l) in links(self) {
                 // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
@@ -363,6 +379,14 @@ impl<'a> Engine<'a> {
         self.hubs[h as usize].vals = Some(vec![PV::Top; md.params.len()]);
         self.hub_expand(h);
     }
+}
+
+/// a 与 b 的公共前缀长度（同一张表时即全长）
+fn common_prefix(a: &Rc<Vec<u32>>, b: &Rc<Vec<u32>>) -> usize {
+    if Rc::ptr_eq(a, b) {
+        return a.len();
+    }
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
 }
 
 /// 升序序列 a 是否为升序切片 b 的子集（逐个前移，首个缺失即否）

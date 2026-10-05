@@ -104,6 +104,7 @@ dependencies = [
  "resolve",
  "rustc-demangle",
  "serde_json",
+ "toml",
  "ty",
  "typed-arena",
 ]
@@ -358,6 +359,8 @@ name = "resolve"
 version = "0.1.0"
 dependencies = [
  "classfile",
+ "ty",
+ "zip",
 ]
 
 [[package]]

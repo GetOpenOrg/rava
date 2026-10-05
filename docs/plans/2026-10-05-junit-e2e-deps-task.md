@@ -164,4 +164,125 @@
    - spot `cfgfix-264e73ee`（按目录抽样）：AbstractShape ✓ / ABCProblem ✗（regex
      `Pattern$CharPredicate.union` 存根命中——main 既有失败族，与本修复无关）；`--tests` 指定例
      未被 spot 模式采纳，三例指定抽查另发作业 `cfgfix-3spot-264e73ee`（结果回填）。
+7. **A 族修复合入后（2026-10-05 晚）**：
+   - A 族（E0432 Proxy_Dyn）修复 `d7f482e1`：伴生依赖判定大写段三类判定（手写层 pub item 全集 /
+     snake 名探测 scratch / 目录+同名 .rs 保守在场）。本机 m1 golden：5008 错→0。
+   - 服务器复验 `cfgfix2-golden-d7f482e1`（10314222 + A 修复 + JDK 21）：**m1/m2 GOLDEN OK**；
+     m3–m5 运行期同 panic：`Unsafe 静态字段读-改-写：Result$SerializedForm.serialVersionUID
+     无字段闭包（静态字段表项 []）`。
+   - B/C 族 5×E0308 定性为**环境假象**：本机 shell `JAVA_HOME=graalvm-25` 压过语料 pin
+     （`resolve/src/jdk.rs` 优先级缺陷），JDK 25 语料 vs JDK 21 手写层的字段 J→I 错配；JDK 21
+     重发后自消。已修 `a4acb1a5`：pin 高于 JAVA_HOME（主版本不符忽略并打印、一致用其 home、
+     无 pin 照常），单测三分支覆盖。
+   - **m3–m5 blocker 定性（2026-10-05 晚，主会话裁定）：S7-3c 已修缺陷未同步**——`statics_table`
+     的反射标记判断原来用 to_string 子串匹配恒不命中（b259fdb1 修复，已在集成分支 00fe97ce）。
+     junit-deps 已合并 origin/rust-closure-analyzer@85a56289（含修复），m3–m5 golden 复测中
+     （作业 junit-m345-aftermerge）。
+   - d7f482e1 的已知回归：`emit::project::tests::companion_skipped_when_used_module_absent`
+     失败（缺失小写段判在场 vs 注释不一致 + 夹具 Class 判缺席）——主会话已另派代理修，本任务不动。
+
+8. **J1 = V12-0 类路径与模块归属修正（2026-10-05 深夜，本条目所在提交）**：
+   - `classfile/src/archive.rs`：`Archive::open(path, release)` 多版本 jar 视图——清单
+     `Multi-Release: true` 时 `META-INF/versions/N/`（9 ≤ N ≤ release，取最大 N）覆盖基础条目，
+     版本化 `module-info.class` 作根描述符；版本化路径不以任何形态进入类索引；无清单标记则对任何
+     release 完全不可见。`manifest_attr` 上移 classfile 供 resolve 复用。
+   - `classfile/src/module.rs`：`ModuleDecl` 增 `exports` / `opens` 明细（(包, 目标模块；空 = 无限定)）。
+   - `resolve/src/classpath.rs`：`ClassPath::new(release)`；`shadow_jdk_owned_packages()`——用户 / 库
+     档案中属于 JDK 具名模块所拥有包的类不入索引（记 `shadowed`，JDK 侧同名类接管可见性）；
+     跨档案重复类记 `duplicates`（JDK 档案与镜像覆盖除外）；依赖锁元数据口 `set_lib_meta`
+     （`LibMeta { coordinate, module }`，J2 由 deps.lock 喂入）。
+   - `resolve/src/modules.rs`：`ModuleNode` 增 `kind(Jdk|Lib|User)` / `jars` / `coordinate` /
+     `exports` / `opens`；命名兜底链：描述符 → `Automatic-Module-Name`（限定名校验）→ JPMS 文件名
+     推导 → 坐标 artifactId → 锁条目显式 module → 报错；具名跨侧重名、具名模块分裂包、无法命名
+     为硬错误（`modules::check`，在 `build_cmd::class_path` / `closure_cmd` / `profile_cmd::jdk_path`
+     三处装配点调用）；自动模块重名合并且告警；分裂包登记 `split_packages`（交 crate 计划分量
+     合并）；crate 名 = 模块名 `.`→`_`（Rust 关键字加 `_`），冲突时名序靠后者加 FNV 4 位十六进制后缀。
+   - `driver` / `input`：release 贯穿 `build_libs::load` / `LibCrate::from_jar`（多版本视图进 lib
+     crate 类枚举）；`lib_pilot_golden.sh` 增 `--emit-only` 与 `SCRATCH_ROOT`（树对照用）。
+   - 验收：合成夹具 8 例（任务书 6 例 + crate 名冲突后缀 + 命名兜底链）全过；pilot 模块名对账
+     `resolve/tests/pilot_module_names.tsv`（`scripts/pilot_module_expected.sh` 以参考 JDK
+     `ModuleFinder` 生成，pom 变更后重跑）**92 / 92 相符**——含此前 18 个错名 jar（gson→
+     com.google.gson、jackson-databind→com.fasterxml.jackson.databind、failureaccess→
+     com.google.common.util.concurrent.internal 等）与 30 个丢描述符 jar；`META-INF/versions/`
+     形态类名入索引 **0**（byte-buddy 3,071 + jackson-core 7 等）。锁定集 2/2：hamcrest→
+     org.hamcrest、junit→junit（均在 92 对账内）。m1–m5 与 J0（63005c6b）逐字节对照作业
+     `j1-trees`（结果回填）。
+   - 注：任务书引用的 `no_jdk_literals` 守护在仓库无实现（grep 无命中）；以 92/92 对账与
+     本提交不新增 JDK / 库类名字面量（人工 diff 复查）为准。
+   - **J1 树对照回填（2026-10-06 凌晨）**：作业 `j1-trees2`（jp1）——全部 .rs 正文与资源
+     逐字节相同、raw-audit 一致；**五个 scratch 各恰 3 行 closure.json 差异**（疑似 J1 包归属
+     语义预期的库模块标注，非正文回归；mv 撞上前次尝试残留目录致链路部分短路，计数仍有效）。
+     **终局定性（2026-10-06 晨，本机受控对照）**：服务器两轮取证均遭 infra 死亡，改本机
+     heavy_lock 取证——63005c6b vs f294a0a4、**同一 `--lib` 参数**、emit-only 各一轮：
+     `compare_trees` **= 0 差异**（含计时剔除后的 closure.json）、裸 diff 正文 0 差异、
+     raw-audit 一致——**J1 验收「m1 生成正文与 J0 逐字节相同」成立**。j1-trees2 的五目录
+     各 3 行差异由此定性：其两侧实为「J2a 新入口（crate 名 org_hamcrest 等）vs J0 老入口
+     （crate 名 hamcrest）」——J2 预期的入口面差异，非 J1 回归；m2–m5 与 m1 同码路径，
+     3 行齐一性与之相符。
+
+12. **J2a 验收与 J2b（2026-10-06 凌晨，2174812a）**：
+   - `j2a-golden2`（kr1，a67c33c2）：**新入口 `--deps/--cp/--seed-class` 下 m1–m5 5/5
+     GOLDEN OK**（J2A-GOLDEN-5OF5）——J2 核心验收落地。
+   - 锁条目名坐标真源修正（a67c33c2）：mvn dependency:list 解析坐标（92/92 有坐标；
+     junit→junit、hamcrest-3.0→hamcrest，sha256 与 J0 一致）。
+   - J2b（2174812a）：profile.json §4.2（modules 富化在档案层、closure.json 模块行最小面保
+     缓存兼容、富化字段入摘要剔除面保 --covers 一致、deps_lock 摘要入 P）；EntryClosure 增
+     cp/launch；`closure::lib_runtime` 区间读取器 + `runtime/lib_runtime/junit/` 骨架
+     （versions="[4,)"，seeds 由 J4 填）。gate：34 ok + 唯一已知回归（第 7 条）。
+   - 单测 gate：generator 全量 + 宏 crate——closure（含重型真实 JDK 闭包测试）/ driver / emit
+     69+1 / input / ty / classfile / cfg 全绿；**唯一失败 = `companion_skipped_when_used_module_absent`
+     （d7f482e1 已知回归，主会话另派代理修，本任务不动，见第 7 条）**。宏 crate本轮未触碰
+     （J1 零文件），沿用当日早间 gate 绿。
+
+9. **J0 闭环：m1–m5 golden 5/5（2026-10-05 深夜）**：作业 `junit-m345-aftermerge`
+   （sg1，junit-deps@63005c6b = ba3955bd 合并 S7-3c 修复后）——**m3 / m4 / m5 全部
+   GOLDEN OK**；连同 `cfgfix2-golden-d7f482e1` 的 m1 / m2，**五个模式 5/5 逐字对账通过**。
+   第 7 条的定性（S7-3c 未同步）完全成立：合并即愈，`--lib` 老入口下 J0 基线闭环。
+   J2 切 `--deps` 新入口后须再次 5/5（J2 验收项）。
+
+10. **J2a = V12-1 依赖锁与入口类路径（2026-10-06 凌晨，本条目所在提交；J2b=profile.json 增量与
+    runtime/lib_runtime 另行提交）**：
+   - `driver/src/deps_lock.rs`（新）：`deps.lock.toml` 读取与校验（条目名 = 坐标 artifactId /
+     文件名 stem，须唯一；sha256 必填、jar 在位）；`select` 子集**取锁序**（入口给出序不影响
+     类路径 → `P` 不随入口序变化）。
+   - `scripts/fetch_pilot_deps.sh`：取包后生成 `tests/lib_pilot/deps/target/deps.lock.toml`
+     （92 条：release=参考 JDK 主版本、坐标取 jar 内 pom.properties（75 条有）、sha256）。
+   - 命令面（`--lib` 删除，出现即报指点错误）：`rava build`/`rava closure`/`rava profile`/
+     `rava audit` 墇改 `--deps <锁> --cp <条目名>[,…] [--launch <启动选项>] [--seed-class FQN[,…]]`；
+     种子不再挂库声明（`:seed=` 退出），整包翻译以 `--seed-class` 显式给出。
+   - lib crate 装配：`build_libs::from_lock`——crate 名 = jar 模块的 crate 名（J1 模块图：
+     hamcrest → `org_hamcrest`、junit → `junit`），序 = 锁序；`LibCrate` 去 wholesale 字段
+     （发射集 = 闭包触达；整包经显式种子覆盖达成）。
+   - `lib_pilot_golden.sh` 切 `--deps/--cp/--seed-class`（m1 = hamcrest 全类种子；m2–m5 在此
+     之上加 junit 种子，序与原 `:seed=` 一致）。
+   - 验证：driver 29+4 用例绿（含改写后的 `lib_crate_and_precheck_only` 端到端锁流用例：
+     jar → 锁 → `--cp greet` → crate 名 greet、跨 crate 可见性、user 依赖行不变）；
+     generator 全量 gate：全绿，唯一失败仍为已知回归 `companion_skipped_when_used_module_absent`
+     （第 7 条，他代理在修）。服务器作业：`j2a-golden`（新入口 m1–m5 5/5，结果回填）、
+     `j1-trees2`（J1 vs J0 逐字节对照——首轮 `j1-trees` 因 J0 旧脚本不识 `--emit-only` 走了
+     完整 golden（意外复验 5/5），树落默认 build/ 致对照空跑；本轮修正取 `build/*_main`
+     并剥编译产物）。
+
+11. **J2a 后续与 J2b = profile.json 增量与 lib_runtime（2026-10-06 凌晨，本条目所在提交）**：
+    - **锁条目名修正**（j2a-golden 首轮暴露）：junit / hamcrest 等 5 个 jar 不带 pom.properties，
+      条目名回退文件名 stem 致 `--cp hamcrest,junit` 报「不在依赖锁中」。坐标真源改
+      `mvn dependency:list -DoutputAbsoluteArtifactFilename`（剥行尾 module 注记、version 取
+      倒数第三段兼容 classifier），jar 内 pom.properties 只作回退——92/92 条全有坐标。
+    - **profile.json §4.2 增量**：`PROFILE_FORMAT 1→2`；modules[] 行在档案层富化
+      kind/crate/jars[{path=文件名, sha256, coordinate}]/release（`profile::build` 合并后统一做，
+      逐入口 closure.json 模块行保持最小面——缓存兼容；富化字段入内容摘要剔除面，
+      `--covers` 重并两侧一致；jar 绝对路径不进 P，身份经 `profile.inputs.deps_lock`
+      （锁摘要，含 sha256 与序）**入 P**）；entries[] 增 classpath（锁条目名）与 launch；
+      EntryClosure 增 cp/launch。
+    - **`--launch` 入库**：rava profile 顶层选项，记 profile.entries[].launch（本步只入库传递，
+      启动语义随 V12 模块路径模式验收）。
+    - **runtime/lib_runtime/**（V12 §3.6）：`closure::lib_runtime` 读取器——模块目录
+      manifest.toml `versions = "[a,b)"`（下含上不含、开界省略；单串或数组，数组展开多段、
+      命中多段报错），版本比较数值段感知（4.13.2 > 4.9）；`select(module, version)` 命中
+      唯一性校验。骨架 `runtime/lib_runtime/junit/`（versions="[4,)"，seeds.toml 由 J4 填
+      @Test 发现路径补种）。清单摘要进该库 K(c) 属 V12-3，本步读取器就位。
+    - 验证：closure 160+2 用例绿（含区间/多命中/坏格式夹具）；driver 全套绿（profile_cli 的
+      `--covers` 断言经内容摘要剔除面修正后通过）。全量 gate 见提交说明（唯一失败仍为
+      第 7 条已知回归）。
+
 

@@ -75,13 +75,20 @@ impl<'a> Engine<'a> {
         }
         let cf = self.h.class(&self.methods[m].key.owner);
         let lo = a.events.partition_point(|e| e.0 < off);
+        let mut snap = self.prof_begin((m, off));
         for (o, e) in a.events[lo..].iter().take_while(|e| e.0 == off) {
             let t0 = std::time::Instant::now();
             self.event(m, *o, e, &cf);
-            let c = &mut self.ctx.stats.borrow_mut().rerun_by_event[super::stats::rerun_kind(e)];
-            c[0] += 1;
-            c[1] += t0.elapsed().as_nanos() as u64;
+            let ns = t0.elapsed().as_nanos() as u64;
+            let k = super::stats::rerun_kind(e);
+            {
+                let c = &mut self.ctx.stats.borrow_mut().rerun_by_event[k];
+                c[0] += 1;
+                c[1] += ns;
+            }
+            snap = self.prof_event(k, snap, ns);
         }
+        self.prof_end();
     }
 
     pub(super) fn event(&mut self, m: usize, off: u32, e: &Event, cf: &Option<std::sync::Arc<ClassFile>>) {
@@ -319,7 +326,8 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
-            if opcode == op::GETSTATIC || opcode == op::GETFIELD {
+            // 实例字段锚点有接收者值集时按值集判定（见下与 `boot_phases.rs`）
+            if opcode == op::GETSTATIC || (opcode == op::GETFIELD && recv.is_none()) {
                 self.phase_anchor_read(&decl, f);
             }
             // 接收者钩子（`receiver = true`）在有接收者值集时按值集判定（见下）；静态钩子与其余访问点
@@ -351,6 +359,9 @@ impl<'a> Engine<'a> {
                 if instance_op(opcode) && recv.is_some() && self.recv_hook_field(&decl, f) {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
+                if opcode == op::GETFIELD && recv.is_some() {
+                    self.phase_anchor_read(&decl, f);
+                }
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
             }
             return;
@@ -369,8 +380,15 @@ impl<'a> Engine<'a> {
                 if self.recv_hook_needed(&decl, f, &s) {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
+                if opcode == op::GETFIELD {
+                    self.phase_anchor_recv(&decl, f, &s);
+                }
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
-                (objs.clone(), !s.open.is_empty() || s.classes.len() > objs.len())
+                // 类镜像上读接收者钩子字段（VM 注入状态）：值只由钩子落地（应用 / 平台类镜像已接钩子值池，引导类
+                // 镜像恒 null），不经全局字段节点——否则一个镜像读到的是全部镜像的值并集
+                let vm_read = opcode == op::GETFIELD && self.recv_hook_field(&decl, f);
+                let rest = s.classes.iter().filter(|x| !self.objs.contains_key(x) && !(vm_read && self.mirrors.contains_key(x))).count();
+                (objs.clone(), !s.open.is_empty() || rest > 0)
             }
             None => (vec![], true),
         };
@@ -453,9 +471,8 @@ impl Engine<'_> {
         let mut new = Vec::new();
         let mut i = 0;
         for &x in xs {
-            while i < v.len() && v[i] < x {
-                i += 1;
-            }
+            // 已登记表远大于本批时逐个前移是 O(|表|)：二分跳到首个 ≥ x 处
+            i += v[i..].partition_point(|&y| y < x);
             if i == v.len() || v[i] != x {
                 new.push(x);
             }

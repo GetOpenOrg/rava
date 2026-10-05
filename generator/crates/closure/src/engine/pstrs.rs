@@ -111,10 +111,9 @@ impl<'a> Engine<'a> {
             set.union_with(&new);
             self.pstr_wake(s);
             if let PSlot::M(t, i) = s {
-                for &off in self.pstr.sites.get(&(t, i)).into_iter().flatten() {
-                    if self.in_swork.insert((t, off)) {
-                        self.swork.push_back((t, off));
-                    }
+                let offs: Vec<u32> = self.pstr.sites.get(&(t, i)).into_iter().flatten().copied().collect();
+                for off in offs {
+                    self.push_site((t, off), site_prof::TRIG_PSTR, None);
                 }
             }
             for &n in self.pstr.succ.get(&s).into_iter().flatten() {
@@ -159,10 +158,8 @@ impl<'a> Engine<'a> {
     /// 读过槽 s 的按名取类站点入站点队列重跑
     fn pstr_wake(&mut self, s: PSlot) {
         let Some(ws) = self.pstr.demand.get(&s) else { return };
-        for &w in ws {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+        for w in ws.iter().copied().collect::<Vec<_>>() {
+            self.push_site(w, site_prof::TRIG_PSTR_WAKE, None);
         }
     }
 
@@ -187,10 +184,8 @@ impl<'a> Engine<'a> {
     /// 调用方 m 重分析：读过其调用点实参的读者站点重跑
     pub(super) fn pstr_reanalyzed(&mut self, m: usize) {
         let Some(ws) = self.pstr.xdemand.get(&m) else { return };
-        for &w in ws {
-            if self.in_swork.insert(w) {
-                self.swork.push_back(w);
-            }
+        for w in ws.iter().copied().collect::<Vec<_>>() {
+            self.push_site(w, site_prof::TRIG_PSTR_REANALYZED, None);
         }
     }
 

@@ -21,6 +21,10 @@ impl<'a> Engine<'a> {
 
     pub(super) fn add_to(&mut self, n: Node, s: &TypeSet) {
         let i = self.graph.id(n);
+        if !s.is_empty() {
+            self.graph.injected[i as usize] = true;
+            self.tau_check_add(i, s);
+        }
         self.add_to_id(i, s);
     }
 
@@ -29,7 +33,7 @@ impl<'a> Engine<'a> {
         let src = std::mem::replace(&mut self.flow_src, diag::NO_SRC);
         let direct = src == diag::NO_SRC;
         self.graph.adds[0] += 1;
-        if s.is_empty() {
+        if s.is_empty() || self.node_cut(i) {
             return;
         }
         // 无增量快速返回（流边推送的绝大多数）：不取节点、不查暂存。暂存中的空数组元素节点
@@ -66,6 +70,20 @@ impl<'a> Engine<'a> {
         self.grown(r, &delta);
         // 只沿流边推送新增部分（差分传播）
         self.queue_delta(r, &delta);
+    }
+
+    /// 诊断节点切除（`--cut @node:<标签子串>`）：该节点不接收值
+    fn node_cut(&mut self, i: u32) -> bool {
+        if self.cuts.nodes.is_empty() {
+            return false;
+        }
+        if let Some(&b) = self.cut_nodes.get(&i) {
+            return b;
+        }
+        let l = self.node_str(self.graph.node(i));
+        let b = self.cuts.nodes.iter().any(|q| l.contains(q.as_str()));
+        self.cut_nodes.insert(i, b);
+        b
     }
 
     /// 代表 r 登记待推增量
@@ -140,10 +158,13 @@ impl<'a> Engine<'a> {
             }
         }
         if let Some(ws) = self.watch.get(&n) {
+            let src = stats::kind_ix(&n) as u8;
             for &w in ws {
-                if self.in_swork.insert(w) {
+                let new = self.in_swork.insert(w);
+                if new {
                     self.swork.push_back(w);
                 }
+                self.ctx.stats.borrow_mut().sprof.note_push(w, src, Some(n), new);
             }
         }
         if self.mirror_watch.contains_key(&n) {
@@ -162,9 +183,13 @@ impl<'a> Engine<'a> {
     /// 同一代表内的 Object 边是空操作（合并只经 Object 边，见 `scc.rs`）
     pub(super) fn flow(&mut self, src: Node, dst: Node, filter: u32) {
         let (si, di) = (self.graph.id(src), self.graph.id(dst));
+        if self.node_cut(di) {
+            return;
+        }
+        self.tau_check_flow(di, filter);
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
         let objf = filter & (NOT_SUB | OPEN_EXACT) == 0 && self.names[filter as usize].as_ref() == OBJECT;
-        if rs == rd && objf {
+        if rs == rd && (objf || self.ident_edge(rs, filter, u32::MAX)) {
             return;
         }
         if !self.graph.add_edge(rs, rd, filter) {
@@ -377,8 +402,9 @@ impl<'a> Engine<'a> {
         if let Some(fi) = self.fields.get_index_of(&key) {
             return fi;
         }
-        let (fi, _) = self.fields.insert_full(key.clone(), ());
-        if let Some(tid) = parse_field(&key.desc).and_then(|t| self.ptype(&t)) {
+        let ftid = parse_field(&key.desc).and_then(|t| self.ptype(&t));
+        let (fi, _) = self.fields.insert_full(key.clone(), ftid);
+        if let Some(tid) = ftid {
             self.flow(Node::U(fi), Node::F(fi), tid);
             if self.hw_written_names.contains(&key.name) {
                 self.add_to(Node::U(fi), &TypeSet::open(tid));

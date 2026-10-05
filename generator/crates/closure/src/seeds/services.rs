@@ -137,6 +137,8 @@ mod tests {
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_static: Vec::new(),
             exports_api: api,
+            exports: Vec::new(),
+            opens: Vec::new(),
             uses: uses.iter().map(|s| s.to_string()).collect(),
             provides: provides.iter().map(|(s, p)| (s.to_string(), vec![p.to_string()])).collect(),
             do_not_resolve_by_default: false,

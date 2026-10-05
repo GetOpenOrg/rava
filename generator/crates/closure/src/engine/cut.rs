@@ -1,8 +1,12 @@
 //! 反事实诊断（仅诊断，缺省关闭；由 `closure::Input::diag` 给出，CLI `--cut` / `--cut-file` / `--dump-edges`）：
 //! - 切除：条目 `类.方法:描述符` 表示该方法体不处理（节点保留、体内事件全部不执行，读者站点重跑同样挡住）；
 //!   `类.方法:描述符@偏移` 表示该方法在该偏移处的调用 / 字段 / new 事件不执行。
+//!   `@node:<节点标签子串>` 表示标签含该子串的类型流节点不接收任何值（流入边不建、直接注入忽略），用于量化
+//!   「去掉某个汇点后闭包实际减少多少」（汇点下游全部失去经它到达的值）。
 //!   用于量化「切掉某条路径后闭包实际减少多少」。只宜切「消费型」节点（方法体、派发点）：切构造器 / 写入点会让
 //!   字段值集变空、按初值折叠为恒 null，结果非单调（见 docs/plans/2026-10-01-c1d-closure-bloat.md §7）。
+//!   `@noopenhub` / `@noreopen` / `@noopenrecv` 分别关掉 open 接收者枢纽展开、G 增长重跑、调用点 open 接收者展开
+//!   （量化 open 派发的贡献，结果不健全）；`@edgeoff` 只改触发边转储格式（方法源带偏移）。
 //! - 触发边转储：方法 / 类 / 分配 / 枢纽节点被登记的每一条触发边（不止首次溯源），派发边带接收者分配条件。
 //! - 记录型类型流查询：`--flows` 里的 `@grow:` / `@trace:` / `@edge:` 须在分析前登记，传播中逐条记录（见 `diag.rs`）。
 
@@ -18,18 +22,50 @@ pub struct Diag {
     pub dump_edges: Option<PathBuf>,
     /// `--flows` 查询全文；其中记录型（`@grow:` / `@trace:` / `@edge:`）在分析前登记，其余在分析后求值
     pub flows: Vec<String>,
+    /// `--site-prof`：读者站点重跑剖析（`site_prof.rs`，结果进 `summary.perf.site_prof`）
+    pub site_prof: bool,
 }
 
 #[derive(Default)]
 pub struct Cuts {
     methods: HashSet<String>,
     sites: HashMap<String, HashSet<u32>>,
+    /// 节点切除：标签子串
+    pub nodes: Vec<String>,
+    /// `@noopenhub`：open 接收者枢纽不展开（量化 open 派发的贡献）
+    pub no_open_hub: bool,
+    /// `@noreopen`：G 增长不重跑 open 展开的方法 / 站点
+    pub no_reopen: bool,
+    /// `@noopenrecv`：字节码调用点的接收者集合不按 G 展开 open 部分
+    pub no_open_recv: bool,
+    /// `@edgeoff`：触发边转储的方法源带调用偏移（`M:方法@偏移`）
+    pub edge_off: bool,
 }
 
 impl Cuts {
     pub fn parse<'s>(entries: impl IntoIterator<Item = &'s String>) -> Cuts {
         let mut c = Cuts::default();
         for e in entries.into_iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
+            if e == "@noopenhub" {
+                c.no_open_hub = true;
+                continue;
+            }
+            if e == "@noopenrecv" {
+                c.no_open_recv = true;
+                continue;
+            }
+            if e == "@edgeoff" {
+                c.edge_off = true;
+                continue;
+            }
+            if e == "@noreopen" {
+                c.no_reopen = true;
+                continue;
+            }
+            if let Some(n) = e.strip_prefix("@node:") {
+                c.nodes.push(n.to_string());
+                continue;
+            }
             match e.rsplit_once('@').and_then(|(m, off)| Some((m, off.parse::<u32>().ok()?))) {
                 Some((m, off)) => {
                     c.sites.entry(m.to_string()).or_default().insert(off);
@@ -42,7 +78,7 @@ impl Cuts {
         c
     }
     pub fn active(&self) -> bool {
-        !self.methods.is_empty() || !self.sites.is_empty()
+        !self.methods.is_empty() || !self.sites.is_empty() || !self.nodes.is_empty() || self.no_open_hub || self.no_reopen || self.no_open_recv
     }
     pub fn method(&self, label: &str) -> bool {
         self.methods.contains(label)
@@ -127,7 +163,11 @@ impl super::Engine<'_> {
     pub(super) fn via_node(&self, v: &super::Via) -> String {
         match &v.from {
             super::From::Root(s) => format!("R:{s}"),
-            super::From::Method(i) => format!("M:{}", self.methods[*i].key),
+            super::From::Method(i) => match v.off {
+                // 偏移随源方法记录（`M:方法@偏移`），离线按终态死区剔除过期触发边
+                Some(off) if self.cuts.edge_off => format!("M:{}@{off}", self.methods[*i].key),
+                _ => format!("M:{}", self.methods[*i].key),
+            },
             super::From::Class(c) if matches!(v.kind, "clinit" | "super-init" | "iface-init") => format!("I:{c}"),
             super::From::Class(c) => format!("C:{c}"),
         }

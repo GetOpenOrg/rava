@@ -129,9 +129,7 @@ impl Engine<'_> {
                 continue;
             }
             for off in self.pstr_readers(t, i) {
-                if self.in_swork.insert((t, off)) {
-                    self.swork.push_back((t, off));
-                }
+                self.push_site((t, off), site_prof::TRIG_TAINT, None);
             }
             work.extend(self.pstr_succ_methods(t, i));
         }
