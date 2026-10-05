@@ -2344,9 +2344,62 @@ open(Object)，于是 `ArrayList.grow` 之后的 `elementData` 成了任意对�
 测试本身没有使用这些类。
 
 验证作业：
-- 单测 c1de-ut-61da38bd
+- 单测 c1de-ut-c146f5c8（新增 `reflect_new_array_element_precision`：TestModuleLayerDefine 三种子一致，且不含上述两条链带入的类）
 - 抽查 c1de-sp-61da38bd（TestModuleLayerDefine、TestArrayComponentType、TestReflectArrayDeep、TestVmPlatformNatives、
   SuccessivePrimeDifferences、RankingMethods、ArrayListDemo、ArrayListFull）
-- 档案 c1de-prof-61da38bd（24 片）对照同口径基线 c1de-profb-8bb25e10
+- 档案 c1de-prof-c146f5c8（24 片）对照同口径基线 c1de-profb-8bb25e10
 
 结果见 §27.1。
+
+### 27.1 进度与暂停记录（2026-10-05，按协调方要求暂停，分支 c1d-elem @ c146f5c8 + 本文档提交）
+
+**在途作业的处置**（已全部按 PID 停掉，服务器残留已清，无 c1de 运行目录存活）：
+
+| 作业 | 状态 | 结论 |
+|---|---|---|
+| c1de-ut-c146f5c8 | 作业超时（kr1，60:07，rc=None） | **不算通过**：作业缺 `--job-timeout 7200`，单测未跑完。恢复时须带该参数重发 |
+| c1de-sp-61da38bd | 停止时 6 例 PASS：ArrayListDemo、ArrayListFull、TestArrayComponentType、TestVmPlatformNatives、SuccessivePrimeDifferences、RankingMethods | TestReflectArrayDeep、TestModuleLayerDefine 未跑完。TestModuleLayerDefine 运行期 NPE 在集成分支（int-2602f409、c1db-sp-b47568ec）上已存在，不是本改动引入 |
+| c1de-prof-c146f5c8 | 停止时 5 / 24 片 rc=0 | 未完成，无并集结论 |
+| c1de-profb-8bb25e10（基线） | 停止时 11 / 24 片 rc=0 | 未完成 |
+
+**未解决的回归（阻塞合入）**：TestJndiNoProvider 在 c146f5c8 上种子稳定（3820 类 / 24502 方法），类集与集成分支
+781eeec2 相同，但**方法多 32 个**（781eeec2 为 3820 / 24470），违反「集合只减不增」。新增方法与 V9 修过的是同一族：
+`Provider.implPutIfAbsent/putIfAbsent`、`ArrayDeque.offer/offerLast`、`Collections$EmptyMap/SingletonMap/SynchronizedMap.putIfAbsent`、
+`Collections$SynchronizedCollection.add` 等。
+
+已查明的链路：
+1. `XMLParserImpl.repoolDocumentBuilder@10 Queue.offer` 的接收者来自 `getDocumentBuilderQueue@16`，取值路径是
+   `SynchronizedMap.get` → `WeakHashMap.get`（上下文 `WeakHashMap@127623:30`）→ `WeakHashMap$Entry.value`（14 个对象）。
+   该接收者集合改后为 8499 类加若干 open，改前为 29 类加 open(Object[]) 和 open(SocketPermission)。
+   `@path` 显示 `WeakHashMap$Entry.value` 与全局 `R ConcurrentHashMap.get`（8499）同处一个 Object 流强连通代表。
+   改后有新值流入这个汇点。
+2. 新流入的来源：`Arrays.copyOf(Object[], int, Class)@35 → System.arraycopy` 写入新建的反射数组分配点。
+   - 例如 `[Ljava/lang/ClassValue$Entry;@1629:2`，上下文为 `Vector@194:85`、`ArrayList@1088:23`、`ArrayList@606:43`、
+     `ImmutableCollections$ListN@494:88`、`TimSort`/`copyOfRange` 等十余个。
+   - 共享上下文里，元素类型实参集是众多调用方之和；源数组元素里有 open(Object)。arraycopy 写入时按分量类型收窄，
+     open(Object) 变成 open(C)。结果是每个类型 C 的新数组都带上 open(C) 元素。
+   - 例如 `@trace:open:java/lang/ClassValue$Entry` 在改后有 101212 个节点。改前这些调用点返回 open(Object)：
+     open 数组只按已有的逃逸分配点展开，arraycopy 写进 open 目标时不新增元素（hw_site 只接具体数组）。
+   - 于是 open(ClassValue$Entry) 经 `ClassValueMap.finishEntry → WeakHashMap.put` 第 2 实参进入。该实参改后为
+     {9 类, open(ClassValue$Entry)}，改前为 {7 类}，并最终汇入上述强连通汇点。
+3. 诊断落盘：
+   - /tmp/c1de_whp_base2.txt、/tmp/c1de_whp_head.txt：WeakHashMap.put 第 2 实参来源，改前 / 改后。
+   - /tmp/c1de_cve.txt：open(ClassValue$Entry) 的 trace。
+   - 二进制：/tmp/rava_base2（781eeec2）、/tmp/rava_head（c146f5c8）。
+
+**恢复时的第一步**：
+1. 在 c1d-elem 上 `git merge rust-closure-analyzer`。
+2. 修第 2 点的终态口径：反射数组分配点的元素只能来自实际写入，而 arraycopy 只搬移元素、不产生新值。
+   - 源元素里的 open(o) 写进反射分配点时，不应按分量类型收窄成新的 open(C)。
+   - 拟法：hw 写入槽流向反射分配点元素时，open 部分沿用「open 目标只覆盖已逃逸分配点」的同一口径，即只保留源中
+     已有的 open(t ⊂ C)，不从 open(Object) 生成 open(C)。
+   - 或者在 `array_of_into` 处把「源数组元素含 open(Object)」的共享上下文视同所指未知。
+   - 两种方案都必须是不动点上的单调判定。
+3. 验收：
+   - TestJndiNoProvider 的方法集 ⊆ 781eeec2，且种子 0/1/2 结果一致。
+   - TestModuleLayerDefine 仍为 3084 类，且种子无关。
+   - `reflect_new_array_element_precision` 通过。
+4. 然后推送并重发作业：
+   - 单测作业带 `--job-timeout 7200`。
+   - 抽查（补 TestReflectArrayDeep、TestJndiNoProvider）。
+   - 档案 24 片，与 c1de-profb 同口径基线一起重跑。
