@@ -2260,3 +2260,91 @@ TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 在 
 native 缺失、`String.class.getModule()` 不是命名的 java.base），三者都依赖引导层，随第 2–3 步一起解决。不单独补手写近似：
 `PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
 仍然会抛 `InternalError("java.base not loaded")`。
+
+## 26. 档案并集实测：c1db-prof-2574ead5 + c1db-prof16b（2026-10-05，分支 c1d-elem）
+
+**口径**：作业 c1db-prof-2574ead5 共 16 片，第 16 片缺 8 例，由 c1db-prof16b 补齐，合计 1092 例。
+用 `scripts/profile_union.py stats` 统计，按类与基线 t1-prof21（4bd826ae，3609 类）逐类对照。
+
+**结论：并集 JDK 类 7972、方法 51767，未达到 ≤ 3609。** 相对基线新增 4698 类、减少 335 类。
+
+| 测试数 | 1 | 10 | 30 | 60 | 120 | 240 | 480 | 960 | 1092 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 并集类数 | 2096 | 3504 | 3761 | 3775 | 4777 | 5981 | 6732 | 7718 | 7972 |
+| 并集方法数 | 11692 | 20554 | 23105 | 23257 | 30477 | 38059 | 43535 | 50060 | 51767 |
+
+- 按域：translate 7952 / boundary 19 / root 1。按最高层级：code 7051、layout 566、type 193、init 91、alloc 71。
+- 单例 JDK 类：中位 521、最大 5466。单例方法：中位 2183、最大 34015。
+- 单例分两档：533 例在约 3180 类，共享 3144 类的公共核。这一档来自边界域收窄（675 → 19）：open 派发经
+  `executePrivileged`、`String.valueOf`、`Objects.equals` 打开了全体活类型的 `run` / `toString` / `equals`。
+
+**新增 4698 类的来源**（逐类沿 via 链从根往下，找第一个不在基线里的节点；明细见
+`docs/reports/c1db-prof-union-added.tsv`，减少的 335 类见 `docs/reports/c1db-prof-union-removed.txt`）：
+
+| 来源 | 类数 | 主要闸口（类数） |
+|---|---:|---|
+| former_boundary：经基线时的边界类展开 | 3944 | java/lang/Class 991、jdk/internal/util/Preconditions 781、xalan TransformerImpl 726、TransformerFactoryImpl 434、XPathImpl 197、HttpClientBuilderImpl 155、HttpClientFacade 144、rmiURLContextFactory 79、HttpServer 68、jline TerminalBuilder 49 |
+| new_edge：基线已有的类上新增的边 | 600 | SSLContextImpl$DefaultSSLContext 95、RemoteObjectInvocationHandler 47、AsyncSSLTunnelConnection 15、SignatureParser 15 |
+| only_new_tests：只出现在基线之后新增的测试里 | 154 | — |
+
+增量主体（84%）是 C1d 拆除边界后，原边界类（Class、Preconditions、xalan / XPath / HttpClient 等）的方法体转为字节码翻译，
+其调用链随之展开。其中 java/lang/Class 与 Preconditions 两个闸口合计 1772 类，主要经反射成员枚举和异常格式化
+（`Preconditions.outOfBounds` → `String.format` → Formatter 全家）进入。
+
+精度缺口按影响排序：
+1. 容器元素 open(Object)，见 §27。
+2. Class 接收者的 classLoader / module 逐类求值（§25.4 第 1 项）。
+3. G2 实例汇合点（V10）。
+
+## 27. 容器元素精度第 1 项：反射数组分配按调用点建模（2026-10-05，分支 c1d-elem，956db0b4 + 35c78422）
+
+**根因**：`Arrays.copyOf(T[], int, Class)@18` 调 `Array.newInstance` → native `Array.newArray`。原模型把它的结果当作
+open(Object)，于是 `ArrayList.grow` 之后的 `elementData` 成了任意对象数组，`aaload` 读出 open(Object)，下游的
+`toString` / `compareTo` / `equals` 派发到全体活类型。
+例：`ModuleDescriptor$Version.compareTokens@100/@105` 原有 392 个派发目标。
+
+**终态做法**：
+- **清单登记**：反射数组分配方法在 `vm_intrinsics.toml [facts.reflect.array_allocators]` 中登记，值为元素类型实参序号
+  （`Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;` = 0）。生成器中不出现类名字面量。
+- **返回模型**：调用点的返回模型为 `RetModel::NewArray(i)`，经镜像流边 `MirrorOp::ArrayOf(m, off)` 把元素类型实参的
+  类镜像集变换成结果。
+- **分配点**：对所指已知的类镜像 X，在调用点 (m, off) 上建数组分配点 `[X@m:off`（与 `anewarray` 同一机制），
+  元素只来自其后的写入。
+  - 基本类型类镜像给 8 种基本类型数组。
+  - 已达 255 维的数组类镜像不产生结果（JVMS §4.4.1）。
+- **所指未知时**：元素类型实参出现所指未知的 Class（open、非镜像 Class 值、非字节码类镜像）时，结果为 open(Object)，
+  语义与原模型相同。
+- **放行判定只在不动点上做**：放行前到达的类镜像只记下。工作队列排空时，实参仍没有所指未知的调用点才放行、逐类型建分配点
+  （`reflect.rs::array_of_release`，与 `lookup_release` / `rcall_release` 同一口径）。出现过所指未知的调用点不放行。
+  放行后，结果是实参集的单调函数，因此终态与求值次序无关。
+  - 首版（956db0b4）在值入点即时判定「先到所指未知即饱和」，饱和前已建的分配点会留存，结果随散列种子变化：
+    TestModuleLayerDefine 种子 0/1 为 3084 类，种子 2 为 3264 类。
+  - 次版（35c78422）改为排空时判定后，三个种子的结果逐项相同。
+- **代价控制**：反射上下文里（`MethodType.fromDescriptor` 的描述符解析、`getClass(open)` 等），元素类型实参约有 1700 个镜像，
+  另有 open。在这些上下文里逐类型建点会让分析超过 20 分钟，`Class.arrayType` 还会让维数递归失控。按上一条规则，
+  这类调用点在不动点上已有所指未知，不会放行，所以不建分配点。
+
+**结果**（本机 `rava closure`，TestModuleLayerDefine，JDK 21）：
+
+| | 改前 8bb25e10 | 改后 35c78422 种子 0 / 1 / 2 |
+|---|---:|---:|
+| JDK 类 | 3264 | 3084 / 3084 / 3084（集合逐项相同，均为改前子集，−180） |
+| 方法 | 19219 | 18853 ×3（均为改前子集，−366，无新增） |
+| compareTokens@100/@105 派发目标 | 392 | 2 |
+| 闭包耗时 | — | 25–28 s，RSS ≤ 1.9 GB |
+
+减少的 180 类逐项论证：它们在改前只经两条 open 派发进入。
+- `compareTokens@105` 的 `toString` / `compareTo` 派发到全体活类型，例如 `ArrayBlockingQueue.toString`。
+- `executePrivileged@29` 的 `PrivilegedAction.run` 打开 open 接收者 → `ProviderConfig$3.run` → `ProviderLoader` →
+  `ServiceLoader` 补入全部安全 provider：xml-security 111 类、org/jcp/xml/dsig 12 类、sasl 5 类、jgss 3 类等。
+
+这两条派发的接收者都来自 `Array.newArray` 结果的 open(Object) 元素。改后元素只来自实际写入，这两条链都不再成立；
+测试本身没有使用这些类。
+
+验证作业：
+- 单测 c1de-ut-61da38bd
+- 抽查 c1de-sp-61da38bd（TestModuleLayerDefine、TestArrayComponentType、TestReflectArrayDeep、TestVmPlatformNatives、
+  SuccessivePrimeDifferences、RankingMethods、ArrayListDemo、ArrayListFull）
+- 档案 c1de-prof-61da38bd（24 片）对照同口径基线 c1de-profb-8bb25e10
+
+结果见 §27.1。
