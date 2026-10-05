@@ -181,3 +181,36 @@
    - d7f482e1 的已知回归：`emit::project::tests::companion_skipped_when_used_module_absent`
      失败（缺失小写段判在场 vs 注释不一致 + 夹具 Class 判缺席）——主会话已另派代理修，本任务不动。
 
+8. **J1 = V12-0 类路径与模块归属修正（2026-10-05 深夜，本条目所在提交）**：
+   - `classfile/src/archive.rs`：`Archive::open(path, release)` 多版本 jar 视图——清单
+     `Multi-Release: true` 时 `META-INF/versions/N/`（9 ≤ N ≤ release，取最大 N）覆盖基础条目，
+     版本化 `module-info.class` 作根描述符；版本化路径不以任何形态进入类索引；无清单标记则对任何
+     release 完全不可见。`manifest_attr` 上移 classfile 供 resolve 复用。
+   - `classfile/src/module.rs`：`ModuleDecl` 增 `exports` / `opens` 明细（(包, 目标模块；空 = 无限定)）。
+   - `resolve/src/classpath.rs`：`ClassPath::new(release)`；`shadow_jdk_owned_packages()`——用户 / 库
+     档案中属于 JDK 具名模块所拥有包的类不入索引（记 `shadowed`，JDK 侧同名类接管可见性）；
+     跨档案重复类记 `duplicates`（JDK 档案与镜像覆盖除外）；依赖锁元数据口 `set_lib_meta`
+     （`LibMeta { coordinate, module }`，J2 由 deps.lock 喂入）。
+   - `resolve/src/modules.rs`：`ModuleNode` 增 `kind(Jdk|Lib|User)` / `jars` / `coordinate` /
+     `exports` / `opens`；命名兜底链：描述符 → `Automatic-Module-Name`（限定名校验）→ JPMS 文件名
+     推导 → 坐标 artifactId → 锁条目显式 module → 报错；具名跨侧重名、具名模块分裂包、无法命名
+     为硬错误（`modules::check`，在 `build_cmd::class_path` / `closure_cmd` / `profile_cmd::jdk_path`
+     三处装配点调用）；自动模块重名合并且告警；分裂包登记 `split_packages`（交 crate 计划分量
+     合并）；crate 名 = 模块名 `.`→`_`（Rust 关键字加 `_`），冲突时名序靠后者加 FNV 4 位十六进制后缀。
+   - `driver` / `input`：release 贯穿 `build_libs::load` / `LibCrate::from_jar`（多版本视图进 lib
+     crate 类枚举）；`lib_pilot_golden.sh` 增 `--emit-only` 与 `SCRATCH_ROOT`（树对照用）。
+   - 验收：合成夹具 8 例（任务书 6 例 + crate 名冲突后缀 + 命名兜底链）全过；pilot 模块名对账
+     `resolve/tests/pilot_module_names.tsv`（`scripts/pilot_module_expected.sh` 以参考 JDK
+     `ModuleFinder` 生成，pom 变更后重跑）**92 / 92 相符**——含此前 18 个错名 jar（gson→
+     com.google.gson、jackson-databind→com.fasterxml.jackson.databind、failureaccess→
+     com.google.common.util.concurrent.internal 等）与 30 个丢描述符 jar；`META-INF/versions/`
+     形态类名入索引 **0**（byte-buddy 3,071 + jackson-core 7 等）。锁定集 2/2：hamcrest→
+     org.hamcrest、junit→junit（均在 92 对账内）。m1–m5 与 J0（63005c6b）逐字节对照作业
+     `j1-trees`（结果回填）。
+   - 注：任务书引用的 `no_jdk_literals` 守护在仓库无实现（grep 无命中）；以 92/92 对账与
+     本提交不新增 JDK / 库类名字面量（人工 diff 复查）为准。
+   - 单测 gate：generator 全量 + 宏 crate——closure（含重型真实 JDK 闭包测试）/ driver / emit
+     69+1 / input / ty / classfile / cfg 全绿；**唯一失败 = `companion_skipped_when_used_module_absent`
+     （d7f482e1 已知回归，主会话另派代理修，本任务不动，见第 7 条）**。宏 crate本轮未触碰
+     （J1 零文件），沿用当日早间 gate 绿。
+

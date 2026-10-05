@@ -5,3 +5,7 @@ edition.workspace = true
 
 [dependencies]
 classfile.workspace = true
+ty.workspace = true
+
+[dev-dependencies]
+zip.workspace = true
