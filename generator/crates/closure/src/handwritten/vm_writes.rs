@@ -15,7 +15,9 @@ impl Handwritten {
     pub fn vm_field_writes(&self) -> BTreeSet<String> {
         let mut out = BTreeSet::new();
         walk(&self.src, &mut |path, content| {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // 私有辅助目录内的文件按其宿主归类（共置手写的辅助文件随宿主方法扫描）
+            let host = super::layout::host_of(&self.src, path);
+            let name = host.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if SUFFIXES.iter().any(|s| name.ends_with(s)) || content.contains(GENERATED_MARK) {
                 return;
             }

@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use closure::handwritten::layout::helper_root;
+
 use super::fs::walk;
 use crate::ctx::EmitShared;
 use crate::error::{io_err, Result};
@@ -64,10 +66,16 @@ impl JdkDirs {
         let rt_src = ctx.runtime_src();
         let mut dirs = BTreeMap::new();
         for (dir, _, _) in walk(&rt_src) {
-            let rel = dir.strip_prefix(&rt_src).unwrap_or(Path::new("")).to_string_lossy().replace('\\', "/");
-            let target = match crates.crate_of_package(&rel) {
+            let rel_of = |d: &Path| d.strip_prefix(&rt_src).unwrap_or(Path::new("")).to_string_lossy().replace('\\', "/");
+            let rel = rel_of(&dir);
+            // 私有辅助目录不是包：随宿主文件所在的包定向
+            let pkg = match helper_root(&rt_src, &dir) {
+                Some(h) => rel_of(h.parent().unwrap_or(&rt_src)),
+                None => rel.clone(),
+            };
+            let target = match crates.crate_of_package(&pkg) {
                 Some(c) => Some(crates.dir_of(c)),
-                None => match g.package_module(&rel).map(crate_name) {
+                None => match g.package_module(&pkg).map(crate_name) {
                     Some(c) if c != crates.root() => crates.contains(&c).then(|| crates.dir_of(&c)),
                     _ => Some(decl.clone()),
                 },

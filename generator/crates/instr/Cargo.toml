@@ -9,3 +9,4 @@ ty.workspace = true
 ir.workspace = true
 sim.workspace = true
 input.workspace = true
+closure.workspace = true

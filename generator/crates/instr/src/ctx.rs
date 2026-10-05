@@ -95,7 +95,7 @@ impl InstrFacts {
         let mut root_api = BTreeSet::new();
         let lang = runtime_src.join("java").join("lang");
         for f in ["object_impl.rs", "object_ext.rs", "object.rs"] {
-            if let Ok(text) = std::fs::read_to_string(lang.join(f)) {
+            if let Ok(text) = closure::handwritten::layout::read_unit(runtime_src, &lang.join(f)) {
                 root_api.extend(scan_fn_names(&text, true));
             }
         }
@@ -127,7 +127,7 @@ impl InstrFacts {
         if let Some(hit) = self.impl_fn_cache.read().unwrap_or_else(|e| e.into_inner()).get(rel) {
             return hit.contains(rust_name);
         }
-        let names = std::fs::read_to_string(self.runtime_src.join(rel))
+        let names = closure::handwritten::layout::read_unit(&self.runtime_src, &self.runtime_src.join(rel))
             .map(|t| scan_fn_names(&t, false))
             .unwrap_or_default();
         let hit = names.contains(rust_name);

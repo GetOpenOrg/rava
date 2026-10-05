@@ -145,12 +145,13 @@ fn scan_impls(src_dir: &Path) -> HashSet<String> {
     let mut result = HashSet::new();
     if !src_dir.exists() { return result; }
     for path in walk_rs_files(src_dir) {
-        // K-4: 只处理 *_impl.rs 文件（共置的手写 impl 文件）
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        // K-4: 只处理 *_impl.rs 文件（共置的手写 impl 文件）及其私有辅助目录内的文件（归宿主）
+        let host = host_of(src_dir, &path);
+        let stem = host.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if !stem.ends_with("_impl") { continue; }
         let content = fs::read_to_string(&path).unwrap_or_default();
         // 去掉 _impl 后缀还原为对应类的路径
-        let impl_path = path.with_file_name(format!("{}.rs", &stem[..stem.len()-5]));
+        let impl_path = host.with_file_name(format!("{}.rs", &stem[..stem.len()-5]));
         let class = path_to_class(src_dir, &impl_path);
         for line in content.lines() {
             let t = line.trim();
@@ -176,6 +177,25 @@ fn scan_impls(src_dir: &Path) -> HashSet<String> {
         }
     }
     result
+}
+
+/// 私有辅助目录约定（docs/reference/handwritten-boundary.md §五；与生成器
+/// `closure::handwritten::layout` 同口径）：目录 `<stem>/` 旁有宿主 `<stem>.rs`，且宿主是共置手写
+/// （`_impl` / `_ext` 结尾）或 crate 根模块文件（`lib.rs` 除外）时，目录子树是宿主的私有模块树。
+/// 返回文件所属手写单元的宿主（最外层辅助目录的宿主；不在辅助目录内 → 自身）
+fn host_of(src_dir: &Path, path: &Path) -> PathBuf {
+    let Ok(rel) = path.strip_prefix(src_dir) else { return path.to_path_buf() };
+    let mut cur = src_dir.to_path_buf();
+    for c in rel.components() {
+        let parent = cur.clone();
+        cur.push(c);
+        let name = c.as_os_str().to_str().unwrap_or("");
+        let host_ok = name.ends_with("_impl") || name.ends_with("_ext") || (parent == src_dir && name != "lib");
+        if host_ok && cur.is_dir() && parent.join(format!("{name}.rs")).is_file() {
+            return cur.with_extension("rs");
+        }
+    }
+    path.to_path_buf()
 }
 
 fn path_to_class(base: &Path, path: &Path) -> String {
