@@ -517,6 +517,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 因此压闭包的终态方向（按收益）：
 - (B) 先做：`String.valueOf(Object)` / `append(Object)` 等的实参按调用点区分（上下文敏感或按调用点克隆）。`Signal.handle@71` 的拼接实参只有 `Signal` / 处理器，不应派发到 `Constructor.toString`。`Class.newInstance` 经 `getConstructor0` → `copyConstructor` 真实分配 `Constructor`，`Constructor` 进入实例化集合本身是正确的，放大来自 open 实参的 `toString` 派发。
+  - 核对（javap）：`Signal.handle@71` 拼接的是 `sig`（`Signal`），`Terminator.setup` 传入的是 `new Signal("HUP" / "INT" / "TERM")`。`--why` 只给首次发现路径，`StringBuilder.append(Object)` 的形参在全部调用点之间合流；`Constructor` 是否在别处被真实拼接（如反射异常消息）尚未核实。如果有真实拼接，`Constructor.toString` → 流 → `EnumMap` → `Method.invoke` 是 JDK 真实可达路径，压缩须落在其后的 `isCallerSensitive` 注解查询（原 (c)）与 `Proxy$Dyn` open 派发（原 (a)）上，且两者要同时做（单切 `__vm_proxy_invoke` 仍为 2,986）。下一步先用 `--flows` 查 `StringBuilder.append(Object)` 形参中 `Constructor` 的来源点。
 - (A) 辅助：`lookup` 的类名集合。`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集。只做 (A) 不能消除 `Constructor` 的分配。
 - 原 (a)–(c) 降级：单独做都不改变 2,986。
 
