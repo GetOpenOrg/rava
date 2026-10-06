@@ -3205,3 +3205,123 @@ B1 + B4② 合并为一步，交付以下内容：
 - 类路径目录事实（B1①）。
 
 验收沿用 §30.3：DeepCopy ≤3097（去掉 B5 一项之后的上界再实测），J 出闭包。
+
+### 30.9 第 4 步：B1 串形状域落地 + B1② 的引擎前提实测（2026-10-06，分支 `c1d-url-b2`）
+
+**结论先行**：
+- **第 1 小步已落地**：方法内串形状域（前缀 / 后缀 / 不含字符）、清单构建器内容跟踪、`startsWith` / `endsWith` 分支收窄、
+  `encodePath` 形状事实。四例集合与 B4① 完全相同（0 增 0 减），折叠逐方法对照只多出健全的死分支。它是 B1③ 与 §30.8 第 3 条的判定器。
+- **B1② 不是「再加一层字段记录」能完成的**。逐条核对 `R` 与 `FileLoader.getResource` 的值来源链后，确认还缺 **5 项彼此独立的引擎能力**，
+  见下文「B1② 的前提链」。缺任何一项，`R@97/@127/@139` 与 `startsWith` 守卫都折不掉，闭包不变。这 5 项合起来就是
+  「按对象的常量传播」（对象敏感的值分析），是闭包引擎的一项大能力，不是 URL 的局部补丁。本步收口时只实现第 1 小步，其余记为设计与恢复入口。
+- 「去掉 B5 一项」的反事实上界见下文实测。
+
+#### 第 1 小步：串形状域（提交见本节末）
+
+设计（终态通用，分析器内无类名，清单只新增串操作与一条结果形状事实）：
+
+- **形状格**（`absint/shape.rs`）：`Shape { pre, suf, no: u128, exact }`，是前缀、后缀、ASCII 字符不出现三个经典串抽象域之积。
+  - 合流取公共前缀、公共后缀，以及不出现字符的交集。
+  - 前后缀上限 `CAP = 256` 字符，超出截短（变弱，仍健全）。格高有限，不动点必收敛。
+  - 判定：`starts_with` / `ends_with` / `equals` / `is_empty` / `contains`；`index_of` 只在所找字符确定不出现时折叠为 -1。
+  - 收窄：`meet_starts` / `meet_ends`。
+- **值上的标签**（`absint/obj.rs`）：
+  - `Obj::Str(Shape)` 经 PV 跨方法传递（形参、返回、字段值集），`PV::join` 按形状合流。
+  - `Obj::Builder { group, content }` 只在方法内存在，PV 从不保存构建器标签（`of_ret` 把非空构建器引用映射为 `nonnull_ref`）。
+- **构建器内容跟踪**（`absint/strs.rs`）：清单 `[facts.string_concat]` 的构造 / 追加 / 取结果三类，按分配点分组。
+  - 健全性靠一条不变式：同一状态里同组的各份带标签拷贝指向同一对象，且该对象不可能经无标签的引用被改写。
+  - 维持手段：
+    - 再次执行分配点，或值交出去（作其它调用的实参、写字段 / 静态字段 / 数组、indy 实参）：撤掉整组标签。
+    - 合流时任一入边带某组标签、而结果不带，整组撤掉（`drop_lost_groups`）。
+    - 异常处理器入口撤掉全部构建器标签。
+  - 追加段按 `String.valueOf` 语义取形状：整数为 `-0123456789` 字符集，布尔为 `truefals` 字符集，引用可能为 null 时并入 `"null"`。
+- **分支收窄**：`aload k; ldc L; invokevirtual <starts_with|ends_with>; ifeq/ifne`，后三条须在同一基本块。
+  - 成立一侧：局部变量 k 的形状与 L 相交。
+  - 两侧：k 都确定非空（接收者已被解引用）。
+- **清单**（`vm_intrinsics.toml`）：
+  - `[facts.string_ops]` 新增 `starts_with` / `ends_with` / `index_of` ×4 / `last_index_of` ×4 / `contains`。
+  - 新表 `[facts.string_shapes]`，只允许 `excludes` 一个键。登记 `ParseUtil.encodePath` 两个重载 `excludes = "#?"`。依据是
+    `L_ENCODED` 的第 35 / 63 位，已用 javap 与位运算核对，论证抄在清单注释里。
+  - 用途：`fileToEncodedURL` → `new URL("file", "", path)` 里的 `indexOf('#')` / `lastIndexOf('?')` 折叠为 -1。
+
+健全性与反例检查：
+- 前后缀判定按 Rust `str` 计算。形状里的串都来自类文件的合法 Unicode 常量，合法串之间按码点与按 UTF-16 码元的前后缀关系一致；
+  含孤立代理项的常量不成形状。
+- `startsWith` 反例检查：`pre = "/"` 判 `startsWith("/a")` 为「推不出」，判 `startsWith("/x")` 为假，因为 `x` 在两侧都不出现。
+  单测 `join_keeps_common_affixes_and_absent_chars` 覆盖这两种情况。
+- 超长串（> CAP）不再 `exact`，`equals(全串)` 推不出（单测 `non_ascii_affixes_split_on_char_boundaries`）。
+- 构建器别名反例：带标签拷贝在一侧被追加、另一侧没有，合流后整组撤掉（单测 `join_losing_tag_drops_group`）。
+  语句式追加（`sb.append(x);` 不用返回值）同步更新同组各拷贝（单测 `statement_appends_update_all_copies`）。
+- `encodePath` 事实只声明结果不含 `#` `?`，不声明前缀。`fileToEncodedURL` 里 `startsWith("/")` 两支都以 `/` 开头，
+  这是由分支收窄加拼接从字节码推出的（单测 `prefix_after_guard_and_concat` 用同形字节码验证返回值以 `/` 开头）。
+
+实测（本机 `rava closure`，refjdk 21.0.11+10，冷缓存）：
+
+| 例 | 类（B4① / 本步） | 方法（B4① / 本步） | 集合 |
+|---|---|---|---|
+| HelloWorld | 469 / 469 | 1827 / 1827 | 相同 |
+| StockTrans | 3185 / 3185 | 20261 / 20261 | 相同 |
+| DeepCopy | 3187 / 3187 | 20279 / 20279 | 相同 |
+| TestSerialDefaultSuid | 3192 / 3192 | 20273 / 20273 | 相同 |
+
+- 耗时在噪声范围内（约 24 s）。
+- 逐方法折叠对照（`build/url/folds.py`）：多出的只有新的死 null 检查分支，以及 `SocketPermission.getHost` 等处的 `indexOf` 折叠，逐条核对均健全。
+
+验证：closure crate 单测 179 通过（新增 shape 4 / strs 3 / manifest 1）；`closure_cli` 的 `closure_independent_of_hash_seed` 与
+`container_elements_per_object` 通过；`cargo check` 无告警。
+
+#### B1② 的前提链（为什么形状域单独不缩闭包）
+
+`R` 的三个分支取决于 `val$url.getProtocol()` 与 `val$url.getFile()`。逐跳核对值来源：
+
+| 跳 | 现状 | 缺的能力 |
+|---|---|---|
+| ① `URL.<init>(String,String,int,String,Handler)` 写 `this.protocol` / `this.file` | 字段值集 `fvals` 按字段键全局汇合：全部 URL 对象的 `file` 并在一起，含解析式构造、反序列化、用户 URL | **P1 按对象字段值**：`putfield` 按接收者值集里的抽象对象记入 `ovals[(对象, 字段)]`；非对象接收者（open / 非抽象对象 / 手写 / 物化快照）记入 `owild[字段]`；读取在接收者值集全为抽象对象时取「各对象值 ⊔ owild ⊔ 初值」，否则退回全局。写站点已有按接收者增量重跑（`bytecode.rs::field` 的 `recv_delta`），值归属可以挂在同一处 |
+| ② `file` / `protocol` 的初值 null | `alloc_defaults` 把初值并入全局值集。按对象值同样要含初值，于是 `R@17 ifnull` 的 null 支永远活着，`"file".equals(protocol)` 也折不掉 | **P2 构造器确定初始化**：分配点之后接的 `<init>` 在把 `this` 交出去之前，在每条路径上都写了字段 f，才去掉该对象 f 的初值。必须是路径敏感的必然分析：放在 absint 状态里，和 `finals` 同构，合流取交集；`this(…)` 委托递归；超类构造器须不交出 `this`。经 lambda 构造器引用、手写分配、序列化分配的对象一律保留初值 |
+| ③ `this.file = this.path`（`URL.<init>@303..308`） | 构造器内读自身刚写的字段，取的是全局值集 | P2 的同一状态顺带给出「本方法刚写的值」（同 `finals` 对 static final 的处理） |
+| ④ `getFile()` / `getProtocol()` 的返回 | 返回常量格 `rvals` 按成员键汇合（`facts.rs` 的 `rvals: HashMap<MemberRef, PV>`），各接收者对象的克隆节点结果并在一起 | **P3 按接收者对象的返回值**：`orvals[(成员, 对象)]` 在节点记录返回时按 `P(m,0)` 中的抽象对象归属，`P(m,0)` 增长时补归属；调用点接收者值集全为抽象对象时取各对象之并。健全性：调用点派发到的每个目标节点 `P(·,0)` 都含该对象，所以按对象之并覆盖本调用点的全部可能返回 |
+| ⑤ `URLClassPath$3.val$url` | `$3` 不是容器形态类（非泛型，字段类型 URL 不是键类），`val$url` 按全局读：所有 `URLClassPath` 对象的全部 URL 汇合（含用户 `URLClassLoader` 的 URL） | **P4 读站点接收者值集**：调用点 / 字段读的接收者来源是本方法站点（`Src::Site`）而非形参时，按站点节点的值集判定。Oracle 目前看不到流图，须给 `Facts` 只读的值集查询，并以形参节点 / 站点节点增长为依赖重分析（同 `mirror_watch`）。另需判定 `$3` 这类「持有按对象类实例的匿名类」是否按对象区分（`container_shape` 新判据，影响面要单独实测） |
+| ⑥ 反序列化放开 | DeepCopy / TSDS 里反序列化可达，`URL.file` / `protocol` 可序列化、非 transient，`field_open`（`deser`）对全局读一律不折叠 | **P5 按对象的放开判定**：反序列化只写它自己分配的对象（序列化分配是类 id，不是抽象对象），所以按对象读只看偏移可得（`fopen` / `fopen_names` / `fopen_all`）与手写写入，不看 `deser`（同 `construct.rs::object_field` 的现有论证） |
+| ⑦ `path` 以 `/` 结尾 | `fileToEncodedURL@48` 的 `isDirectory()` 推不出 | 「启动目录是目录」清单事实（B1①，见下「待用户决策」） |
+
+P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getResource` 的守卫另需 §30.8 的按键分对象与 `"."` 相对解析保前缀事实，
+这两条同样建立在 P1–P5 上：`normalizedBase.getFile()` 也要经 P1 + P3。
+
+实施顺序建议（每项单独提交，单独看不到闭包变化，验收看折叠对照与单测）：
+1. P1 + P5（按对象字段值 + 按对象放开）；
+2. P2（构造器确定初始化，含本方法刚写值）；
+3. P3 + P4（按对象返回值 + 站点接收者值集）；
+4. ⑦ 目录事实，以及 §30.8 的按键分对象与 `"."` 事实。
+
+#### 「去掉 B5 一项」的反事实上界
+
+切除集 `build/url/cutsNoB5.txt` 是 §30.1 第 5 层去掉 `BootLoader$PackageHelper.definePackage@67`；`cutsAll.txt` 是完整第 5 层。均以本步代码实测：
+
+| DeepCopy 切除集 | 类 | 方法 | 与当前（3187 / 20279）之差 |
+|---|---|---|---|
+| 无切除（本步） | 3187 | 20279 | — |
+| `cutsNoB5`（去掉 B5 一项） | 3099 | 18549 | −88 / −1730 |
+| `cutsAll`（完整第 5 层） | 3088 | 18445 | −99 / −1834 |
+
+结论：
+- 只做 B1（不做 B5）的反事实上界是 3099 类，比目标 ≤3097 多 2 类；完整第 5 层（含 B5）才能到 3088。所以 ≤3097 必须 B1 与 B5 都做。
+- **jar Handler 在两种切除下都还在闭包里**。`URLClassPath.<init>(String,Z)@185` 无条件执行 `new sun/net/www/protocol/jar/Handler` 并写入 `jarHandler`，这个类是必然实例化的，任何健全的折叠都去不掉它。可去掉的只有经 `URLStreamHandler` 虚分派进来的方法：`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `hashCode` / `newURL` 等。前提是 §30.8 第 1 项：`URL.handler` 按分析出来的协议键分对象，jar Handler 只流进 `jarHandler` 字段和由它构造的 URL。因此 §30.8 原目标「jar Handler 出闭包」应改为「jar Handler 只保留构造器，经分派进来的方法出闭包」。
+
+#### 待用户决策
+
+1. **启动目录是目录**（B1①）：原生二进制的应用类路径固定为 `""`，经 `new File("").getCanonicalFile()` 解析为 `user.dir`。
+   声明它「是目录」有一个可达反例：进程启动后工作目录被删除，此时 `isDirectory()` 为假，`R@139` 走 JarLoader，命中存根即 panic，
+   而 JVM 上是抛 IOException 后跳过该类路径项。是否接受这条启动期事实（或改为构建期把类路径固定为非空的资源目录），需要决定。
+2. **B1② 的规模**：P1–P5 是对象敏感的值分析，影响全部字段读 / 返回值，分析耗时与内存需要实测，不是 URL 的局部改动。
+   是否按上面的顺序投入，还是先做 B5（独立、清单事实即可）与能力②③，需要决定。
+3. `encodePath` 的结果形状用清单事实声明，没有从字节码推出：推出需要数组 / 位运算 / 循环不变式，超出串形状域。
+   清单注释附有可核对的位运算论证。
+4. 构建器同组、内容不同的合流目前直接撤掉标签（健全但偏粗）；需要时可改为内容形状合流。
+
+#### 恢复入口
+
+- worktree `/Users/yuwei/dev/workspace/java_rta_c1durl2`，分支 `c1d-url-b2`。
+- 测量：`build/url/cl.sh <Test> <tag> [参数]`，对照用 `build/url/cmp.py <tag 后缀> [基线后缀]` 与 `build/url/folds.py A.json B.json`。
+- 下一步从 P1 + P5 开始：写入归属挂在 `engine/bytecode.rs::field` 的 `objs` / `other` 处，读取挂在 `Facts::field`。
+  依赖与重分析仿 `engine/mirror_eq.rs`：`mirror_watch`、`param_mirror_sets`，以及 `worklist.rs::analysis` 里 `mirror_assumed` 的登记。
+  共享摘要（`share.rs`）对用过按对象读的分析不登记共享。
