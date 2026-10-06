@@ -577,7 +577,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 依据：数组长度不可变（JVMS §2.7）。
   - `methodToString` 只经 `getConstructor0` 被 `newInstance@54` 以 `new Class[0]` 调用，`argTypes.length == 0` 折叠后剪掉 stream 支。
   - 单独做 X1 再反事实切 TIOE，结果为 524。
-- **X2（本提交）：TIOE 不可达。**
+- **X2 7f7c4201：TIOE 不可达。**
   - 判定条件：`caller == null`（@14 / @40）；`callerModule == declaringModule`（@62），以及 `callerModule == Object.class.getModule()`（@74）。分三处修改：
   - **调用者类镜像结果非空。** 清单 `caller_class` 的结果按非空引用答复（`CallInfo.nonnull_ret`）。依据：`reflection_impl.rs` 的 `getCallerClass` 运行期恒有调用者或回退根类，`vm_intrinsics.toml` 已补注。
   - **形参常量格接受「非空引用」**（`bind_params` 用 `PV::of_ret`）。被调方法入口按形参序号换来源，并按描述符补类型（`absint::entry_state`）。非空性由此可以经形参传到 `checkCanSetAccessible`。
