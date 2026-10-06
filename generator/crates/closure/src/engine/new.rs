@@ -75,6 +75,7 @@ impl<'a> Engine<'a> {
             dflt_alloc: HashSet::default(),
             factories: HashMap::default(),
             forwarders: HashMap::default(),
+            relays: Default::default(),
             inited: IndexMap::default(),
             dispatch: BTreeMap::new(),
             recv_sites: HashSet::default(),

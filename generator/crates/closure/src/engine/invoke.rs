@@ -232,8 +232,12 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let cx = self.recv_ctx(r);
-                let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
+                let key = MemberRef { owner: o, name: n, desc: d };
+                let cx = match self.recv_ctx(r) {
+                    NOCTX => self.relay_ctx(m, &key),
+                    c => c,
+                };
+                let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
@@ -280,7 +284,9 @@ impl<'a> Engine<'a> {
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
-            let t = self.method(key, via);
+            // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体
+            let cx = self.relay_ctx(m, &key);
+            let t = self.method_ctx(key, cx, via);
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(rest)]), a, ret, res);
         }
     }
