@@ -13,6 +13,7 @@
 #   rb    §29 路线三 S（ResourceBundle.getServiceLoader@16）
 #   nos   DeepCopy.deepCopy 整体（完全不走序列化，只对 DeepCopy 有意义）
 #   fmt   PrintStream.implFormat（printf 进 Formatter 的入口；只对用 printf 的例有意义）
+#   fmtc  Formatter 只剩 %s / %n 转换（切数值 / 日期 / 字符 / 布尔 / 哈希转换与大写标志）：格式串常量求值的上界
 set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 exp=$1; shift
@@ -35,6 +36,13 @@ for p in "${parts[@]}"; do
     rb) args+=(--cut 'java/util/ResourceBundle.getServiceLoader:(Ljava/lang/Module;Ljava/lang/String;)Ljava/util/ServiceLoader;@16') ;;
     nos) args+=(--cut 'DeepCopy.deepCopy:(Ljava/lang/Object;)Ljava/lang/Object;') ;;
     fmt) args+=(--cut 'java/io/PrintStream.implFormat:(Ljava/lang/String;[Ljava/lang/Object;)V') ;;
+    fmtc) args+=(--cut 'java/util/Formatter$FormatSpecifier.printInteger:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.printFloat:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.printDateTime:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.printCharacter:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.printBoolean:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.printHashCode:(Ljava/util/Formatter;Ljava/lang/Object;Ljava/util/Locale;)V'
+                 --cut 'java/util/Formatter$FormatSpecifier.toUpperCaseWithLocale:(Ljava/lang/String;Ljava/util/Locale;)Ljava/lang/String;') ;;
     *) echo "未知组件 $p" >&2; exit 2 ;;
   esac
 done
