@@ -175,3 +175,10 @@ signature = "expected type, found module `lr_parser`"
 owner = "生成器命名（小写 Java 类名与其模块名同名：java_cup lr_parser / sym / virtual_parse_stack、xsltc parser_actions）"
 since = "2026-10-06"
 note = "java_xml crate 编译 E0425 / E0573 16 处；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露；与 lambda default 改动无关（plan 判定只影响发射）"
+
+[[known]]
+test = "TestStringGetCharsLegacy"
+signature = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;"
+owner = "引导映像第 4 / 5 步（命名 java.base 与非空 boot layer、BootLoader 2）；与 TestProtectionDomainFaces 同根"
+since = "2026-10-07"
+note = "String.class.getPackage() → BootLoader.getDefinedPackage → native getSystemPackageLocation；只补 native（返回 jrt:/<模块>）不够：PackageHelper.findModule 经 Modules.findLoadedModule 在 boot layer 找模块，现 boot layer 为空层、全部类在无名模块，会转成 InternalError(\"java.base not loaded\")；须随命名模块 / boot layer 物化一并落地（docs/plans/2026-10-07-c4-misc-failures.md）"
