@@ -52,6 +52,8 @@
 | FibonacciMatrixExponentiation（不在 Python 基线，Python 侧亦 > 300 s） | 性能 / 既有 | fib(10^7) 的 BigInteger Toom-Cook 乘法 + 递归 toString，debug 档运行极慢；非卡死、非 2d87d368 回归：b093069f / 1079507631c4 / e983141d 三次抽查（均早于 2d87d368、debug 档）已在 300 s 运行时限超时，dev-opt 档实测 121–245 s 通过（2026-09-30 优化方向文档），JVM 约 6–9 s；本次放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，后续由运行期性能线或 dev-opt 档处理 | — |
 | FractionReduction（不在 Python 基线） | 性能 / 既有 | debug 档运行慢（优化方向文档：debug > 300 s、release 12.75 s，GraalVM 参照 9.00 s）；非 2d87d368 回归：b093069f（kr2）/ 1079507631c4（sg1）/ e983141d（sg1）三次抽查均在 300 s 运行时限超时，本次 sg2 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
 | IQPuzzle（不在 Python 基线） | 性能 / 既有 | 千万级节点 DFS、上亿次对象分配与虚调用，debug 档运行慢（优化方向文档：debug > 300 s、release 4.86 s，GraalVM 参照 3.98 s）；非 2d87d368 回归：b093069f（ubuntu）/ 1079507631c4（sg2）/ e983141d（kr2）三次抽查均在 300 s 运行时限超时，本次 us1 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
+| RailwayCircuit（不在 Python 基线） | 性能 / 既有 | debug 档运行慢（优化方向文档：2026-10-01 全量新增 > 300 s 超时用例；debug > 300 s，release 曾失败（JVM 0.81 s），GraalVM 参照 1.88 s）；非 2d87d368 回归：b093069f（kr2）/ 1079507631c4（kr1）/ e983141d（ubuntu）三次抽查均在 300 s 运行时限超时，本次 kr2 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
+| StringFormatTest | 基础设施（非回归） | 该例已于 acc13430（e2e 冗余剪枝 184 例）删除，2d87d368 / 264e73ee 树中均无；`master_passed_jdk21.txt` 残留 181 条已剪枝路径，分层抽样与 `--tests` 名单未按 ref 树过滤，派出即「No test files found」（cfgfix-264e73ee 同因）。printf → Formatter 链路由现存 `17_string_advanced/TestStringFormat` 与 ABCProblem 覆盖 | server_maintenance b8435ab：抽查名单按 `--ref` 的 tests/e2e 树剔除不存在用例并记日志 | — |
 | TestModuleLayerDefine / TestClassModuleFace | 已知待办 | 引导映像线 | 不在本分支修 | — |
 
 ## 五、全量建议参数
