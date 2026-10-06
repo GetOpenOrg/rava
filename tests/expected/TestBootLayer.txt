@@ -1,0 +1,37 @@
+boot != null: true
+boot same: true
+parents = 1, empty parent: true
+java.base present: true
+String module same: true
+base named: true, layer same: true
+base loader: null
+base exports java.lang: true
+base exports jdk.internal.misc: false
+base opens java.lang: false
+descriptor name: java.base, open: false, has java.util: true
+in boot modules: true
+java.sql loader: platform
+findLoader(java.sql) platform: true
+java.sql reads base: true
+java.sql exports java.sql: true
+Time module same: true
+missing module: false
+cf has java.base: true
+cf parent empty: true
+app module named: false, layer: null
+app module is scl unnamed: true
+app reads base: true
+Object.class magic: cafebabe
+scl = app, parent = platform
+thread = main, group = main, parent group = system
+ctx == scl: true
+file.separator = /
+path.separator = :
+lineSeparator is \n: true
+line.separator same: true
+user.dir set: true
+java.home set: true
+default charset = UTF-8
+out same: true, err != out: true
+processors > 0: true
+maxMemory > 0: true
