@@ -258,7 +258,7 @@ impl<V: ?Sized + 'static> __IfaceRef<V> {
 
     /// 带接口静态类型的 null（不查询）。
     #[inline]
-    pub fn null(obj: crate::java::lang::Object) -> Self { __IfaceRef { obj, vt: None } }
+    pub const fn null(obj: crate::java::lang::Object) -> Self { __IfaceRef { obj, vt: None } }
 
     /// 交出句柄（`From<Iface> for Object`）。
     #[inline]

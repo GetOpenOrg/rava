@@ -164,6 +164,14 @@ impl<T: ?Sized> __Obj<T> {
         __Obj { ptr: unsafe { NonNull::new_unchecked(p.map_addr(|a| a | STATIC_TAG)) }, _owns: PhantomData }
     }
 
+    /// 静态哨兵（常量求值可用，引导映像的 null 元素）：同 [`Self::from_static`]，对齐 ≥ 2 时
+    /// 加 1 即置标记位（哨兵须非零大小，否则常量求值判其可能为空指针）
+    pub const fn from_static_const(value: &'static T) -> __Obj<T> {
+        let p = (value as *const T as *mut T).wrapping_byte_add(STATIC_TAG);
+        // SAFETY: 非空地址加 1 后仍非空
+        __Obj { ptr: unsafe { NonNull::new_unchecked(p) }, _owns: PhantomData }
+    }
+
     /// 是否为静态哨兵（null / 类型化 null）
     #[inline(always)]
     pub fn is_static(&self) -> bool {

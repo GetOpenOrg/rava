@@ -393,6 +393,14 @@ pub(crate) fn expand_class_init(
                 Ok(())
             })
         }
+
+        /// 构建期引导映像：本类在构建期已完成初始化（静态字段已由启动序列写入映像值），
+        /// 登记后直接进入「已初始化」，不运行 `<clinit>`
+        #[doc(hidden)]
+        pub fn __boot_initialized() {
+            #register
+            __boot_initialized_run(#binary_name, &#state);
+        }
     };
     (storage, member)
 }

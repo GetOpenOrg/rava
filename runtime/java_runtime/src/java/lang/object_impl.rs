@@ -3,11 +3,11 @@ use super::object::Object;
 use super::string::String as JvmString;
 
 /// `new Object()` 的实例体：无 Java 字段；占 1 字节使每个实例拥有独立堆地址（对象身份）。
-pub(crate) struct Instance(#[allow(dead_code)] u8);
+pub struct Instance(#[allow(dead_code)] u8);
 
 impl Instance {
     /// 引导映像中的 `new Object()` 实例（常量求值，映像模块的对象值）
-    pub(crate) const IMAGE: Instance = Instance(0);
+    pub const IMAGE: Instance = Instance(0);
 }
 
 impl super::object::ObjectVTable for Instance {

@@ -191,6 +191,15 @@ pub(crate) fn expand_interface(
         }}
     };
 
+    let null_const = if binary_name.is_empty() {
+        quote! { Object::__NULL }
+    } else {
+        quote! {{
+            static __TYPED_NULL: __TypedNull = __TypedNull::new(#binary_name, None);
+            Object::__const_static(&__TYPED_NULL)
+        }}
+    };
+
     quote! {
         #[allow(non_camel_case_types)]
         pub trait #vtable_ident: 'static + __ThreadSafe {
@@ -226,6 +235,10 @@ pub(crate) fn expand_interface(
             pub const fn __from_image(__ref: __IfaceRef<dyn #vtable_ident>) -> Self {
                 Self { __ref, __phantom: ( #( ::std::marker::PhantomData::<fn() -> #type_params>, )* ) }
             }
+
+            /// 映像中引用数组的 null 元素（与 `Default` 同为本接口的类型化 null）
+            #[doc(hidden)]
+            pub const __IMAGE_NULL: Self = Self::__from_image(__IfaceRef::null(#null_const));
         }
 
         impl #impl_g From<#struct_ident #ty_g> for Object #where_c {

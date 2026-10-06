@@ -245,7 +245,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 
 /// 引导映像中 `new Object()` 实例的值类型（映像模块按此发射对象值）
 #[doc(hidden)]
-pub(crate) use super::object_impl::Instance as __ObjectInstance;
+pub use super::object_impl::Instance as __ObjectInstance;
 
 /// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：
 /// 实例体地址经 SplitMix64 混合取 31 位——非负、非零（HotSpot markWord 的 31 位 hash 域，
@@ -448,6 +448,16 @@ impl Object {
     pub fn __from_static(value: &'static __TypedNull) -> Object {
         Object(__Obj::from_static(value as &'static dyn ObjectVTable))
     }
+
+    /// 静态哨兵装入 Object（常量求值可用：引导映像中引用数组的 null 元素）
+    #[doc(hidden)]
+    pub const fn __const_static(value: &'static __TypedNull) -> Object {
+        Object(__Obj::from_static_const(value as &'static dyn ObjectVTable))
+    }
+
+    /// 无静态类型的 null 常量（引导映像）
+    #[doc(hidden)]
+    pub const __NULL: Object = Object::__const_static(&JVM_NULL);
 
     fn __typed_null_of(binary_name: &'static str,
                        desc: Option<&'static crate::class_desc::__ClassDesc>) -> Object {
