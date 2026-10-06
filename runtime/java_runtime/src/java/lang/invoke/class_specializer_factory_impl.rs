@@ -18,7 +18,7 @@ where
     S: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
 {
     /// `generateConcreteSpeciesCode(String className, SpeciesData)`：登记动态物种，返回通用载体类。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn __impl_generateConcreteSpeciesCode(
         &self,
         _className: String,

@@ -11,7 +11,7 @@ impl CDS {
     /// 原生二进制不携带归档，无任何可恢复的静态状态 → no-op。
     /// 调用方（如 Integer$IntegerCache）随后检查归档字段仍为 null，
     /// 走常规初始化路径，与无归档启动的 JVM 行为一致。
-    #[jvm_boundary]
+    #[jvm_native]
     pub fn initializeFromArchive(_arg0: Class) -> Result<()> {
         Ok(())
     }

@@ -1,0 +1,2 @@
+# junit 补种（J4 填充）：@Test / @Before / @BeforeClass 等注解驱动入口经反射建模与
+# 本清单补种覆盖（如 JUnitCore 发现路径的类初始化锚点）。

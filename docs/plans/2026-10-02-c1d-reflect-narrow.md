@@ -1277,3 +1277,107 @@ TestSerialEnumNoInit 3391 / 20868 → 3385 / 20821，集合差同上 6 类，无
 - 冲突：`invoke.rs` 方法查找分支与 `lookup_pair.rs` 是 engine-order 正在改的区段（`git diff 6f93f1c6 origin/engine-order`
   在 invoke.rs 58 / 130 行两处 hunk），按约定须等其合入后再做。
 - 收益上界：5.5 的两种近似实验在旧基线上 ≤7 类 / 约 319 方法，相对现基线 20813 方法约 1.5%。
+
+## 八、4b 实测与根因：反射对象池被方法句柄全局池灌满（分支 `c1d-b-t2b`，基于 140ef55e，2026-10-06）
+
+### 8.1 测量（服务器，`scripts/diag/closure_job.sh`，参考 JDK，`--stop-after closure --closure-json`，逐例单跑）
+
+| 例 | 基线 140ef55e+f3f1a90f 类（有代码）/ 方法 | 按角色分池 c42186ce | 下界实验 t2b-exp1 9ba82191（不健全） |
+|---|---|---|---|
+| HelloWorld | 468（339）/ 1806 | 同基线 | 同基线 |
+| StockTrans | 3420（2990）/ 20888 | **集合逐一相同** | 3414 / 20683 |
+| DeepCopy | 3422（2992）/ 20907 | **集合逐一相同** | 3416 / 20693 |
+| TestSerialDefaultSuid | 3427（2995）/ 20901 | **集合逐一相同** | 3421 / 20696 |
+
+- 按角色分池（c42186ce）：反射对象通道拆成接收者池 `RP(0)`（只供派发）与实参池 `RP(2)`（数组元素，只供成员形参）。
+  实参池确比接收者池小（StockTrans 4595 类 vs 7501 类），但两池都含同一批 217 个 open 值（含 `open(Object)`），
+  `open(Object)` 经成员形参的类型过滤得 `open(T)`，仍在实例化集上展开，故闭包集合与基线逐一相同，收益 0。
+  已 `git revert`，不合入（无收益的结构改动不留）。
+- 下界实验（t2b-exp1，只作测量、不合入）：反射对象通道的成员形参完全不接实参池（不健全）。三例同样只少 6 类、
+  205–214 方法、新增 0：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth}$1`、
+  `ConcurrentLinkedQueue$Itr`、`LinkedBlockingQueue$Itr`。这是「反射对象通道实参精度」能带来的**上界**，
+  任何按成员分池 / 按角色分池的方案都不会超过它（接收者侧另有 hub_fallbacks 32–42 个，exp1 未动，见 8.2）。
+
+### 8.2 根因（ReflectCallRoles 小例 + `--flows` 取证，本机）
+
+`invoke0` 的接收者 / 实参数组几乎全部来自**方法句柄通道**，不是来自用户或 JDK 的 `Method.invoke` 调用点：
+
+1. `DirectMethodHandleAccessor$NativeAccessor$ReflectiveInvoker.<clinit>@18` 以常量名
+   `findVirtual(NativeAccessor.class, "invoke", genericMethodType(1, true))` 取得句柄（存静态字段
+   `NATIVE_ACCESSOR_INVOKE`），`reflect_name` 因此把 `NativeAccessor.invoke(Object, Object[])` 登记为**方法句柄通道成员**。
+   这条路径是真实的：调用者敏感方法经 native 访问器反射调用时，`NativeAccessor.invoke(Object, Object[], Class)`
+   → `ReflectiveInvoker.invoke` → `JLIA.reflectiveInvoker(caller).invokeExact(mh, obj, args)` → 绑定后的句柄回调
+   `NativeAccessor.invoke(Object, Object[])` → `invoke0`。健全分析必须让它入链。
+2. 方法句柄通道只有一个全局实参池 `RP(1)`：签名多态入口与 LambdaForm 解释器（`BoundMethodHandle.arg`、
+   `ArrayAccessor.getElementL`、`invokeBasic` / `invokeExact` 的 pool、`Species_L*.argL*` 字段等 617 个注入点）
+   全部并入，小例中 4332 类 + 71 个 open；`invoke0` 的返回值又经 `NativeAccessor.invoke(...,Class)@66` 回流此池，成环。
+3. 方法句柄通道成员的形参接 `RN(1)`，于是 `NativeAccessor.invoke(Object, Object[])` 的 P1 / P2 得到整池，
+   经它的 `invoke0` 调用点流入反射对象通道：接收者池得 `open(Object)` 等 71 个 open（可覆写的反射成员因此退回
+   VM 枢纽，hub_fallbacks），实参数组得 `open([Object)`、元素展开为 `open(Object)`。
+
+结论：反射对象通道的过近似**由方法句柄通道的全局池决定**。只要后者仍是一锅全局值，反射对象侧的任何收窄
+（按角色分池、§7.4 的 Method 成员伪 id 按成员分池）都会在 `NativeAccessor.invoke` 这一个句柄成员处被重新灌满，
+收益为 0（8.1 已实测按角色分池）。§7.4「按成员分池」的终态设计本身不变，但它的前置条件是方法句柄的身份建模。
+
+### 8.3 终态设计（4b 改挂到方法句柄身份之后）
+
+- 前置：**方法句柄对象化**——`findVirtual` / `findStatic` / `findSpecial` / `unreflect*` 等常量查找点产出
+  「成员句柄伪值」（同类镜像：伪 id → 成员），`bindTo` / `insertArguments` / `asType` / 反射调用器
+  （`reflectiveInvoker`）等组合子按清单声明的形状传递伪值与绑定实参；签名多态调用点按接收者句柄值集里的伪 id
+  把实参接到**该句柄成员自己的池**，只有 open / 推不出的句柄值才接全局池 `RP(1)`（健全）。
+- 之后 `NativeAccessor.invoke(Object, Object[])` 只经 `ReflectiveInvoker.invoke` 的 `invokeExact(mh, obj, args)` 获得
+  `obj` / `args`，即 `NativeAccessor.invoke(Object, Object[], Class)` 的 P1 / P2，不再引入新值；再做 §7.4 的
+  Method 成员伪 id 与按成员分池，反射对象侧才有收益。
+- 收益上界：8.1 下界实验的 6 类 / ≤214 方法（约 1%）+ 接收者侧 hub_fallbacks 32–42 个成员的枢纽展开。
+  相对其改动面（方法句柄组合子建模 + 反射成员伪 id 两层），列为低优先级；记入 tasks.md「C1d-b-T2余」。
+
+### 8.4 本步产物
+
+- 保留：`scripts/diag/closure_job.sh`（f3f1a90f，服务器闭包实测作业脚本，逐例摘要行含 `summary.rcall`）。
+- 撤回：按角色分池 c42186ce（revert）；守护单测随之撤回（集合与基线相同，无可守护的收窄）。
+- 实验分支 `t2b-exp1`（9ba82191，不健全下界）测量完即删。
+
+## 九、b1 实测与收口：未知接收者字段视图的上界只有 6 类，挂起（分支 `c1d-b-b1`，基于 a5f01c16，2026-10-06）
+
+### 9.1 测量（服务器作业 `b1-probe-d914249b`，`scripts/diag/closure_probe_job.sh`，参考 JDK，`rava closure` 逐例单跑）
+
+生成器代码在 f3f1a90f 与 a5f01c16 之间没有变化，所以基线直接用 §8.1 的 DeepCopy。`--cut` 是不健全的反事实实验，只用来测上界：
+
+| 实验 | 切断点 | DeepCopy 类 / 方法 | 相对基线 |
+|---|---|---|---|
+| 基线 | — | 3422 / 20907（fold_props 92） | — |
+| cutdc | `DeepCopy.deepCopy`（完全不走序列化） | 3144 / 17990 | −278 / −2917 |
+| cutser | `ObjectOutputStream.writeObject0`、`ObjectInputStream.readObject0` | 3164 / 18103 | −258 / −2804 |
+| cutfr | `ObjectStreamClass$FieldReflector.getObjFieldValues` / `setObjFieldValues`（未知接收者字段视图环） | 3416 / 20741 | **−6 / −166**，新增 0 |
+
+- 序列化带进来的规模合计约 8%（278 类）。其中 b1 设想的「字段视图 obj→field→obj 环」**上界只有 6 类、166 个方法**（类数约 0.18%），远低于 2% 门槛。
+- 这 6 类与 §8.1 的 t2b-exp1 下界**逐一相同**：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth}$1`、`ConcurrentLinkedQueue$Itr`、`LinkedBlockingQueue$Itr`。字段视图和反射实参池是同一批值的两个入口，切掉任意一个，剩下的那个都会把这批值灌满。
+- 原目标「DeepCopy ≤1640」已作废：完全不走序列化（cutdc）仍有 3144 类。这个目标出自 S2 之前的旧基线，此后的增长来自序列化以外的入口。
+
+### 9.2 `writeObject0` P1 大值集的来源（`--flows` 的 `@merge` / `@openstat` 等查询）
+
+`writeObject0` 的 P1 有 7475 类，另含 open(Object)、open(Class) 等开放值。它有多个互相独立的来源：
+
+1. `defaultWriteFields@232` → `FieldReflector.getObjFieldValues@74`（字段视图，6978 类），也就是 b1 原先针对的环；
+2. `writeObject` P1（4604 类 + open(Object)），来自反射回调（自定义 `writeObject` / `readObject` 经 `Method.invoke`）；
+3. `writeObject0@201`，即 `invokeWriteReplace` 的返回值。它是反射 `Method.invoke` 的返回，也就是 open(Object)；
+4. `writeArray@509`（5492 类），以及 `PutFieldImpl.writeFields@137`（4103 类）；
+5. 写致命异常 `writeFatalException`（open IOException）。
+
+open(Object) 出现在 69037 个节点中，共有 27205 个引入点，大头是 `Reference.get`；`@merge` 的前几名还包括反射池（`field_reflect.*` / `native_memory.*`，4605 类）和「reflect-call 实参池·方法句柄」（3732 类）。所以只切断其中一个来源，其余来源仍会把 open(Object) 或整个实例化集带回来。这和 cutfr 只能减 6 类的结果一致。来源 2、3 的收窄依赖反射调用的返回值与实参精度，也就是 §8.3 的前置条件「方法句柄对象化」。
+
+### 9.3 序列化增量的构成（基线对比 cutser）
+
+- 实例化集从 2044 增加到 2241（+197）。按引入方式分：`new` 124，字段 18，checkcast 17，签名 11，调用 9，其余零散。
+  - 主要是序列化机制本身，这部分是真实可达的：`ObjectStreamClass$*`、`ObjectInputStream$*`、各类序列化异常，以及各类 `writeReplace` / `readResolve` 代理（`java/time/Ser`、`java/time/chrono/Ser`、`CollSer`、`EnumSet$SerializationProxy`、`KeyRep`、`CertificateRep` 等）。
+  - 序列化构造器访问器生成（`MethodAccessorGenerator` → `jdk/internal/org/objectweb/asm` 33 类）。
+  - 动态代理生成链（`ObjectInputStream.resolveProxyClass` → `Proxy$ProxyBuilder` / `ProxyGenerator` / `AccessFlag$1..18`）。
+  - 由 open 值派发放宽带进来的 `java/util/stream` 并行任务类（61 类）和 `java/time/chrono` 历法类（26 类）。
+- 删掉的 2804 个方法里，多数是**已有类上的派发放宽**，由新增的实例化类引起，例如 `Formatter$FormatSpecifier.print(TemporalAccessor)` 49 个、`String.valueOf` 36 个、`PreHashedMap.get` 28 个、`CopyOnWriteArrayList.hashCodeOfRange` 27 个。
+- 这些增量的「最小化」并不在字段视图上，而在两处：一是 writeReplace / readResolve / 回调的反射返回值精度（属于方法句柄 / 反射对象建模，§8.3）；二是 `writeObject0` 的按类型分派。后者在接收者值集为 open(Object) 时必须健全地保留全部 `Ser` 代理。
+
+### 9.4 结论与产物
+
+- 结论：b1（字段视图环只沿已知类字段闭合）上界为 −6 类 / −166 方法，与 4b 下界重合；剩下的大值集来源都以方法句柄对象化（§8.3）为前置。按派发规则（上界 <2%，前置是大改造）**不实施、挂起**，并入 tasks.md「C1d-b-T2余」，等方法句柄对象化完成后一起重测。
+- 保留：`scripts/diag/closure_probe_job.sh`（d914249b）。这是服务器单例 `rava closure` 探查作业，可以带任意 `--flows` / `--cut` / `--why` 参数，产物压缩后取回；后续反事实实验都可以复用。
+- 没有实验分支（`--cut` 直接在 d914249b 上跑），没有生成器改动，也没有守护单测（没有收窄可守护）。

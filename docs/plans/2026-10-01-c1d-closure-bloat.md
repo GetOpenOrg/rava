@@ -1776,6 +1776,78 @@ Java 方法入口检查点（`__stack_check` / `__enter`）。经 Java 方法往
     预期失败，不阻塞 a3-T6 合入。a3-T6 本身的交付止于：monitor 侧表分片（4a983fe8）、剖析结论与 opt-level 实测、
     TestContinuationPinned 第 1d 段按规范改写。
 
+### 21.9 a3 实施记录（2026-10-05，分支 c1d-a3）
+
+口径：HelloWorld `--stop-after emit` 审计；闭包类数为本机 `rava closure` 实测，前后在同一提交上只差该子项的改动（反向应用补丁取底数）。
+HelloWorld emit JDK 类数全程 467，各子项均未增加。
+
+| 子项 | 提交 | HelloWorld `vm_boundary_methods` | 闭包类数（前 → 后） | 说明 |
+|---|---|---|---|---|
+| U0 | 33283267 | 77 → 77 | — | Unsafe 中 JDK 为 `ACC_NATIVE` 的 33 个方法属性改 `#[jvm_native]`，只改标注（审计按 ACC_NATIVE 标志计数，故不变） |
+| U1 | 62372b34 | 77 → 62 | TestDirectBuffer 524 → 524（字节码方法 +13） | 原始内存 15 个公开包装按字节码翻译，手写只留 `ACC_NATIVE` 的 `*0` 族；新增边界用例 TestDirectBufferPaging（跨页 putLong / getLong、两种字节序交换拷贝、分配清零，expected 取 JDK 21） |
+| U2 | ab0f5fcc | 62 → 42 | TestAtomics 3114、TestCompletableFuture 3119、TestDirectBuffer 524，均不变 | 原子 / 访问序变体 17 个与栅栏 3 个按字节码翻译；`vm_intrinsics.toml` 中按 Java 层原子成员登记的 `array_writes` / `memory_reads` 条目（9 行）删除，内存效果由内层 native 的既有登记承担 |
+| U3 | f91c7b90 | 42 → 33 | HelloWorld JDK 467、TestAtomics 3114、TestDirectBuffer 524，均不变 | 布局 / 偏移 / 类初始化包装 10 个与 `<clinit>` 按字节码翻译；补 native 落点 `registerNatives`、`objectFieldOffset0/1`、`staticFieldOffset0`、`staticFieldBase0`、`arrayIndexScale0`、`ensureClassInitialized0`、`shouldBeInitialized0`，`arrayBaseOffset0` 改独立实现。Unsafe 移出 `[vm_boundary]` 与 `clinit_carried`，unsafe 系 `#[jvm_boundary]` 归零 |
+| L1 | 3e15de4b | 33 → 29 | TestDirectBuffer 524 → 534、GZIPTest 517 → 527；ServiceLoader / AppClassLoader / ZipFs 用例不变 | BootLoader `loadLibrary` / `hasClassPath` / `loadClass` / `loadClassOrNull` 按字节码翻译。+10 类是 JDK 本地库装载路径本身（`NativeLibraries$LibraryPaths` / `$NativeLibraryContext` / `$CountedLock` / `$Unloader` 等），属字节码取代截断的必要部分；落到既有 native `findBuiltinLib` / `load` 与 `findBootstrapClass` |
+| X1 | 95826e8f、44889a8b | 链外 | TestMethodHandleCombinators 3106、TestBmhDynamicSpecies 3102、TestDynamicProxy 3105、DeepCopy 3382、TestSerialProxyForm 3383，均不变 | `InvokerBytecodeGenerator` 只手写两个类定义点；`isStaticallyInvocable`×3 与 `lookupPregenerated` 删手写并撤 `[[intrinsic]]` 登记（调用面只有截断的生成链与引导类 assert，后者经 `$assertionsDisabled` 折叠）。IBG 移出 `[vm_boundary]` 与 `clinit_carried`（`<clinit>` 按字节码翻译，方法 +3）。已登记 `class_definition` 的手写属性改 `#[jvm_native]`（与 `makeInjectedInvoker` 同口径）；`Proxy$Dyn.__vm_proxy_invoke` 是 VM 钩子，去掉属性 |
+| X2 一 | 22528eeb | 链外 | — | `CDS.initializeFromArchive` 是 `ACC_NATIVE`，属性改 `#[jvm_native]` |
+| X2 二 | e336f8ef | 链外 | TestUnixFileNatives 3127 → 3119；TestFilesApi / FileIODemo 3102 → 3095 | `FileSystems.getDefault` 按字节码翻译，删 `file_systems_impl.rs`，FileSystems 移出 `[vm_boundary]` 与 `clinit_carried`。`getDefaultProvider` 的系统属性分支经属性事实折叠，不展开反射链。手写返回的一般 `FileSystem` 值曾让 jrtfs 实现入闭包；翻译后取精确值，净减 7–8 类 |
+
+`#[jvm_boundary]` 全仓 123 → 33：vm_impl 8、module_impl 7、class_loader_impl 6、jce_security_impl 6、boot_loader_impl 2、module_layer_impl 2、class_impl 1、class_impl/members 1。
+
+**调用点事实不随被调方改成字节码而迁移**：`name_resolvers.offset` 折叠（`facts.rs::field_offset`）、`class_initializers`、
+`static_offset_getters`、`class_loads` 都按成员在调用点或可达时生效，与被调方是手写还是字节码无关。所以这些事实仍登记在公开包装上。
+内层 native 只拿到形参，挂在那里永远不会触发，§21.1 U3 行「识别点改到 `objectFieldOffset1`」不需要。
+U3 之后，emit `class_writer/methods.rs` 的 `core_` 适配已无运行时用户，由 Z 一并删除。
+
+**未完成项的阻塞（实测判定）**
+
+- **a3-C（`Class.enumConstantDirectory`）阻塞于反射调用精度。** 翻译后经 `getEnumConstantsShared` 走
+  `getMethod("values").invoke(null)`，TestEnumBasic 闭包 472 → 3103。每个枚举生成的 `valueOf(String)` 都调
+  `Enum.valueOf`，所以凡是用到枚举 `valueOf` 的程序都会多出约 2600 类。EnumSet / EnumMap 用例（`getUniverse`）已在承担同一代价（3103）。
+  前置：「已知类上已知名的静态无参方法的反射调用」按直接调用建边，不展开 `Method.invoke` 的访问器 / 句柄体系，
+  归 C1d 精度项。前置完成后 a3-C 直接删手写（已验证 `constant_directory_entries` 可随之删除）。
+- **a3-L2（ClassLoader 资源 6）与 L1 余项（`findResourceAsStream`、`getServicesCatalog`）阻塞于 boot layer 第 2–3 步。**
+  翻译路径 `BootLoader.findResource` → `BuiltinClassLoader.findResource` 依赖 `packageToModule` / `nameToModule`
+  与系统模块读取器（jimage）。TestClassResourceStream 要求 `getSystemResource("java/lang/String.class")` 非 null、
+  模块资源（currency.data 等）可读，引导层未建时翻译即回归。
+- **SecurityManager 移出 `[vm_boundary]` / `clinit_carried` 阻塞于 boot layer。** 手写只有 native `getClassContext`，
+  但 `<clinit>` 调 `ModuleLayer.boot()` → `addNonExportedPackages` 遍历层内模块描述符，依赖 Module / ModuleLayer 回到字节码。
+- **a3-V（VM 10）需要先做设计决定。** 翻译后 `initLevel()` 读静态字段，现行的线程内档位覆盖
+  （`__vm_at_init_level`：saveProperties 段为 0、惰性 initPhase3 段为 3）无法用单一字段表达。终态两条路：
+  ① 字段读取钩子带返回值（生成器新能力：`[vm_state.field_hooks]` 现只在访问前调用钩子，不改读出值）；
+  ② 启动序列按 HotSpot 改为急切执行（initLevel 1 → 2 → 3 → 4），但 initPhase3 的 `initSystemClassLoader` 会进入所有闭包。
+  `[facts.returns]` 中 isBooted / isModuleSystemInited / isJavaLangInvokeInited 按成员登记，翻译后照常生效，不影响闭包。
+- **X2 余项 JceSecurity 6 需要嵌入 java.home 的 NIO 虚拟层。** 翻译后 `<clinit>` 经 `Files.isDirectory` / `isReadable` /
+  `newDirectoryStream("{default,exempt}_*.policy")` / `Files.newInputStream` 读取 `${java.home}/conf/security/policy/<crypto.policy>`。
+  伪 java.home（`jdk_resources`）现只接入 `FileInputStream.open0`。终态做法是在 `UnixNativeDispatcher` 的
+  `stat0` / `lstat0` / `access0` / `opendir0` / `readdir0` / `closedir` / `open0` 与文件分派器 read / size / close 上接入嵌入树，
+  并嵌入 JDK 的 `conf/security/policy/{unlimited,limited}` 文件。`getVerificationResult` 对引导类 provider 走
+  `ProviderVerifier`（codeBase 为 null），不展开 JAR 签名校验栈。单独立项，验收见 §21.3 X2 行。
+- Module 7 / ModuleLayer 2 / `Class.getModule` 归 boot layer 第 2–3 步；Z 在全部完成后进行。
+
+审计余量：HelloWorld `vm_boundary_methods` 29 = VM 10、Module 7、ClassLoader 6、BootLoader 2、ModuleLayer 2、Class 2。
+
+**a3x2 验证后的两项修正（2026-10-05）**
+
+- **TestCharsetNamedStreams：`ServiceConfigurationError: Provider sun.nio.cs.ext.ExtendedCharsets not found`（005282bf）。**
+  L1 把 BootLoader.loadClass 改为字节码翻译后，`ServiceLoader.loadProvider` → `Class.forName(Module, String)` 按
+  `module.getClassLoader()` 分派。原手写 `Class.getModule` 对所有类都返回同一个无名模块，其加载器为 null，于是
+  走 `BootLoader.loadClassOrNull` → `findBootstrapClass`。平台加载器定义的类在这里按定义加载器表返回 null。
+  修正后 `getModule` 对非引导加载器定义的类返回其定义加载器的 `getUnnamedModule()`，保持
+  `getModule().getClassLoader() == getClassLoader()`，provider 经 `ClassLoader.loadClass(Module, String)` 的
+  `findLoadedClass` 命中。
+- **closure_independent_of_hash_seed：TestSerialLookupPairing 种子 0 比种子 1 多 `FinalReference`（780ba97d，生成器）。**
+  - **触发点：** `Lookup.findVarHandle` 内的 `resolveOrFail(byte, Class, String, Class)` 调用点（反射式字段写入的形状规则）。
+    若只有点名 `"head"` 的调用方先接入，名字形参在常量格上是 `"head"`，而类形参已合流为非常量。原实现先把这个
+    常量名并入点名、再试配对；类不是字面量，于是按名放开全部 `head` 字段，且放开不撤回。
+  - **后果：** `ReferenceQueue.head` 不再折叠，`poll` / `poll0` 的非空分支存活，`instanceof FinalReference` 生效。
+  - **为何与顺序有关：** 终态下名字形参抬为非常量、登记字段配对，不再按名放开，所以结果取决于调用点接入的先后。
+  - **修正：** 本方法字面量总放开；常量格给出的名字只在未登记配对时放开。
+  - **验证：** Linux 参考 JDK 下种子 0 / 1 / 2 的类 / 方法 / 反射成员集合一致。a3 合入前的运行时 3393 类，
+    a3 当前运行时 3386 类，均不含 `FinalReference`。
+  - **为何在 a3 出现：** a3 合并集成分支（d7315af6）后调用点接入次序改变，缺陷才暴露。clsfact 分支同样失败，
+    同属这一生成器缺陷。
+
 ## 22. jar/URL 来源精度：现状 / 交接（2026-10-04，c1d-p0 74a8977e）
 
 C1d-a 按子代理时限（tasks.md 执行约束第 8 条）在此交接。本项**尚未改代码**：分支 c1d-p0 与集成分支 74a8977e 同步，
@@ -2261,6 +2333,64 @@ native 缺失、`String.class.getModule()` 不是命名的 java.base），三者
 `PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
 仍然会抛 `InternalError("java.base not loaded")`。
 
+## 26. 前置第 1 项：`Class` 实例方法按接收者镜像求 `classLoader` / `module`（2026-10-05，分支 c1d-clsfact）
+
+提交 69d1c73d（基于集成分支 85a56289）。事实来源只有 `.class` / jmod 与 `runtime/java_runtime` 清单：定义加载器取
+`[vm_state.field_hooks]` 的接收者钩子与 `[vm_state.loader_map]`，模块归属取类路径来源（User / Lib = 无名模块）。生成器 crate
+不出现类名。
+
+### 26.1 改动
+
+| 层 | 改动 |
+|---|---|
+| 流图（`bytecode.rs` field） | 类镜像上读接收者钩子字段（`receiver = true`）时，镜像不再计入「其余接收者」，所以不接全局字段节点 `F`。值只来自钩子：应用 / 平台类镜像接钩子值池，引导类镜像恒为 null。此前一个镜像读到的是全部镜像的值并集（`getResourceAsStream@44` 在 boot 类上读到 AppClassLoader / PlatformClassLoader） |
+| 抽象解释（`absint.rs`） | 新增 `Oracle::param_mirror_field`。接收者只来自一个 Class 形参（通常是 `this`），且形参镜像值集全是引导类时，`this.classLoader` 折为 null。这是乐观答复，复用 `mirror_watch`，以哨兵 `HOOK_FIELD` 登记；值集新增非引导类镜像、所指未知的 Class 对象或 open 时重分析（`mirror_eq.rs::may_hook`） |
+| 引导阶段锚点（`boot_phases.rs`） | 实例字段锚点（`Class.module`）按接收者值集判定：值集只含用户类 / 库类镜像时不作根（boot-layer.md 2.1 的规则此前没有实现） |
+| 单测 | `absint::receiver_hook_field_folds_by_param_mirrors`、`mirror_eq::hook_answer_invalidates_on_non_boot_mirror` |
+
+`this.module` 没有做逐镜像的值折叠。现行 runtime 里 `Class.module` 从不写入，`getModule` 是手写；`Module.isNamed` 等也是手写
+（`Module` 在 `[vm_boundary]`）。命名 / 无名模块的区分要等 boot-layer 第 2 步加上 `Class.__vm_module` 接收者钩子、
+`Module` 回到字节码之后才有可读的值。到那时，流图这一侧已经按接收者钩子字段统一处理，不需要再改：钩子值池按镜像接入，不经 `F`。
+同一机制在 `module` 上缺的只有「引导类镜像 → java.base 模块对象」这一条值，需要有按模块名区分的抽象对象。
+
+### 26.2 验收
+
+| 口径 | 前（85a56289） | 后（69d1c73d） | 说明 |
+|---|---|---|---|
+| HelloWorld，无锚点 | 469 类 / 1813 方法 | 469 / 1813，集合逐项相同 | 只收窄：流图少接 `F` 边，折叠只去分支，锚点只少作根，三处都单调 |
+| HelloWorld，§25 临时 runtime（两锚点） | 3190 / 18611 | 3190 / 18611，集合逐项相同 | 折叠确实生效：`Class.getResourceAsStream` 的 `@44` / `@108` 折为 null，死区 `[60,103]`、`[121,127]`（命名模块走 BuiltinClassLoader 的分支和 `cl.getResourceAsStream`） |
+
+**锚点口径没有下降**。§25.2 估的「约 1852 类」是首达链归因，不是必经路径。反事实切除（`--cut`，同一临时 runtime）：
+
+| 切除 | 类数 |
+|---|---|
+| 无 | 3190 |
+| `Class.getResourceAsStream` 整个方法体 / `@75` / `@75 @83 @95 @123` / `ClassLoader.getSystemResourceAsStream` | 均为 3190 |
+| `SecureRandom.<init>()V` | 3179 |
+| `ICUBinary.getRequiredData` | 3187 |
+| `ClassLoaders.<clinit>` | 3164 |
+| `ModuleBootstrap.boot2` 整个方法体 | 427 |
+| `boot2@352`（`BootLoader.loadModule`）/ `@363`（`defineModule`） | 3249 / 3249（切写入点不单调，见 §7） |
+| `boot2@896` / `@747 @815`（流水线） | 3190 / 3190 |
+| `boot2@194 @228 @240`（系统模块） | 3893（不单调） |
+
+膨胀全部在 `boot2` 之内，但切除 `boot2` 内任何单个出口都不能消除它，说明这是共享汇点饱和，不是某一条路径。`--flows @merge:300`
+的前几项：`System.arraycopy` P0 汇入 2604 类、P2 汇入 1679 类，`StringBuilder.append(Object)` P1 汇入 1210 类，escape 1026 类，
+`Formatter.format` 实参数组 871 类，`Unsafe.putReferenceRelease` / `compareAndSetReference` 769 / 725 类，`ComparableTimSort` /
+`Arrays.mergeSort` 约 480 类。`@openstat`：`Object` 在 21852 个节点上展开，引入点以 `Reference.get`（WeakHashMap$Entry、
+LocaleResources$ResourceReference）与 `HashMap$Node.getKey` 为首。建层代码一旦把模块系统的类型送进这些汇点，任何读出汇点的
+虚调用都会对全部类型分派，于是 JCA / ICU / XMLDSig / locale 全部可达。
+
+### 26.3 离判据还差多少
+
+判据：锚点口径 HelloWorld ≤ 569 类（469 + 100；真实 JVM `-Xshare:off` 加载 556 类）。本项完成后仍是 3190 类，**还差 2621 类**。
+这一项在锚点口径上没有贡献；它的作用是去掉 `Class` 接收者汇合本身的不精确（汇点饱和消除后，这里就不会再成为新的出口）。
+剩余前置按实测重新排序：
+1. 共享汇点：`System.arraycopy` 的形参、`append(Object)` / `String.valueOf(Object)`、`Unsafe` 引用 CAS / release 写，以及
+   `Reference.get` / `HashMap$Node.getKey` 的 Object 引入。这些属于 V10（逃逸对象上下文收拢）和 c1d-elem（容器元素类型）两条线。
+2. 两线合入后，用同一临时 runtime（`seeds.toml` 两锚点、`ModuleLayer` 移出 `[vm_boundary]`、删 `module_layer_impl.rs` 与两处
+   `Class.getModule` 手写）重测 HelloWorld，并重复本节的 `boot2` 切除和 `@merge` 测量；若还有残余，再按出口逐项立项。
+
 ## 28. 共享汇点精度：逐汇点分解与反事实实测（2026-10-05，分支 c1d-sink，基于 0192bf20）
 
 > 编号说明：c1d-clsfact 线占 §26，c1d-elem 线占 §26（档案并集）/ §27（容器元素精度），本节取 §28，合并时按合入顺序重排。
@@ -2444,3 +2574,90 @@ ubuntu 上为 `/mnt/d/workspace/java_rta-spot-job-sink-*`），没有删除。�
 **结论**：共享汇点线到此收口，引擎语义没有改动。§28.6 原估的 −55 类，更正后为 −23 类：第 1 项 −4，第 2 项 −19，
 后者还只在锚点口径下才有。≤ 569 的达成路线是引导映像求值器（在途），不是锚点口径下的精度修补。本分支只保留诊断工具
 （`--cut @node:` / `@noopenhub` / `@noreopen` / `@noopenrecv` / `@edgeoff`，`--flows @fopen:` / `@in:` / `@svcunk`）。
+
+## 29. a5-4b 归因：JarVerifier / pkcs11 的真实来源与所需能力（2026-10-06，分支 c1d-a54b，基于 140ef55e）
+
+**结论先行**：a5-4b 原设想（§21.5「引导加载器 `ucp` 在未设 `-Xbootclasspath/a` 时为 null」）在 140ef55e 上回收为 0：
+`ClassLoaders.<clinit>@66..72` 建 boot `URLClassPath` 的分支已按 `jdk.boot.class.path.append` 缺席折叠为死，活的
+`URLClassPath.<init>(String,Z)` 调用点只剩 `@144`（应用类路径）。JarVerifier 与 pkcs11 是三条彼此独立的路线，每条都要一项
+本步范围外的新能力才能健全地剪掉；本步**不改引擎语义、无代码提交**，只落归因与反事实实测。DeepCopy 前后均为 3374 类 / 20766 方法。
+
+口径：本机 macOS、`rava closure --jdk 21`，DeepCopy 基线 3374 类 / 20766 方法 / 约 40 s。`--cut` 是反事实切除（不健全，只作归因）。
+记号：`R` = `URLClassPath$3.run:()…Loader;`，`J` = `sun/net/www/protocol/jar/Handler.openConnection:(Ljava/net/URL;)…`，
+`P` = `ProviderConfig.doLoadProvider:()Ljava/security/Provider;`（方法体整段），`S` = `ResourceBundle.getServiceLoader:(Module,String)@16`
+（`ServiceLoader.load(service, loader, module)` 调用点）。
+
+### 29.1 反事实实测
+
+| 切除 | 类数 | 变化 | pkcs11 / smartcardio / ec / XMLDSig(com/sun/org/apache/xml) / org/jcp | JarVerifier |
+|---|---:|---:|---|---|
+| 无（基线） | 3374 | — | 29 / 8 / 87 / 111 / 16 | 在 |
+| `BuiltinClassLoader.findClassOnClassPathOrNull` 方法体 | 3372 | −2 | 不变 | 在 |
+| `JarFile.getManifestFromReference@69`（`new JarVerifier`） | 3213 | −161 | 不变 | 去 |
+| `R@97` + `R@139`（两处 `new JarLoader`） | 3371 | −3 | 不变 | 在 |
+| 只切 `J` | 3353 | −21 | 不变 | 在（经 JarLoader） |
+| D：`R@97` + `R@139` + `J` | 3157 | −217 | 不变 | 去 |
+| P | 3353 | −21 | 12 / 8 / 87 / 111 / 16 | 在 |
+| S | 3355 | −19 | 不变 | 在 |
+| P + S | 2990 | −384 | **全部 0** | 在 |
+| D + P | 3136 | −238 | 12 / 8 / 73 / 111 / 16 | 去 |
+| D + P + S | 2766 | −608 | 全部 0 | 去 |
+
+- JarVerifier 与签名校验链（PKCS7、SignatureFileVerifier、x509 / provider / rsa 等约 217 类）要**同时**堵住类路径来源（甲：
+  `$3.run` 的 JarLoader 分支）和协议处理器来源（乙：`URL.handler` 含 jar `Handler`）才出闭包，与 §22.1 的 StockTrans 结论一致。
+- **pkcs11 / smartcardio / ec / XMLDSig 不走 jar 链**：D 之后原样保留。它们来自两条 Provider 服务查找，P 与 S 单切各只 −20 左右，
+  合切 −384 且五个包全部清零（闭包多连通，单切时另一条照样拉进同一批类）。
+
+### 29.2 路线一（甲 + 乙）：JarVerifier
+
+首次发现链：`ObjectInputStream.<init>` → `ObjectInputFilter$Config.<clinit>` → `System.getLogger` → … → `sun/nio/fs/Util.<clinit>`
+→ `Charset.forName` → `ExtendedProviderHolder` → `ServiceLoader` → `loadProvider` → `Class.forName(Module,String)` →
+`BuiltinClassLoader.findClassOnClassPathOrNull` → `URLClassPath.getResource` → `getLoader(URL)` → `$3.run@139` `new JarLoader`
+→ `JarLoader.getClassPath` → `JarFile.getManifest` → `new JarVerifier`。即**应用**类路径，不是引导类路径。
+
+**按对象 URL 实验（未提交）**：给「容器形态」判据（`engine/classes.rs::container_shape`）加一条结构判据——持有类型为某个
+`[facts.keyed_lookups]` 键类（按键查找入口的返回类型，此处 `URLStreamHandler`）的实例字段的类按分配点区分。判据只取清单事实、
+不含类名。实测 `URL` 确已按分配点区分（`URL.handler of java/net/URL@<方法>:<偏移>`），`fileToEncodedURL` 产出的类路径 URL
+只含 file `Handler`。但闭包：单独 3374（0 变化）；叠加 `R@97` / `R@127` / `R@139` 三处反事实切除也只 3369（−5，对照 D 的 −217）。
+原因：
+
+- `URLClassPath$FileLoader.getResource@0` 的 `new URL(getBaseURL(), ParseUtil.encodePath(name, false))` 走解析式构造器，
+  spec 推不出（`name` 来自任意类名 / 资源名，`encodePath` 是逐字符变换），`@386` 的协议键闸门退回全集，jar `Handler` 写进该
+  对象的 `handler`；该 URL 经 `getResources` 流到 `ServiceLoader$LazyClassPathLookupIterator.parse@9` 的 `openConnection`，派发到 `J`。
+- JDK 语义下这条派发不可达：`FileLoader.getResource@20..38` 要求 `url.getFile().startsWith(normalizedBase.getFile())`，否则返回 null；
+  `normalizedBase` 的 file 以 `/` 开头（`fileToEncodedURL` 保证），而 jar URL 的 file 是嵌套 URL 串（`<scheme>:…!/…`），
+  不可能以 `/` 开头。证明它需要「按处理器区分的 `URL.file` 前缀」这类串域推理，分析器目前没有。
+- 甲同理：`$3.run@139` 只在 `file` 不以 `/` 结尾时走 JarLoader；应用类路径 `""` → 当前目录，`fileToEncodedURL` 仅在
+  `File.isDirectory()` 为真时补 `/`。要剪掉需要 §22.2 的两处运行期对齐 + 「启动目录是目录」清单事实 + `isDirectory` 调用按
+  文件对象区分，单独收益 −3。
+
+所需能力（终态）：URL 按对象字段精度（上面的判据可直接用）+ `URL.file` / spec 的前缀串域推理（含 `encodePath` 这类逐字符
+变换的前缀保持）+ 甲的目录事实。三者齐备才兑现 D 的约 −217。
+
+### 29.3 路线二（P）：JCA 提供者逐个装载
+
+`ObjectStreamClass.computeDefaultSUID` → `MessageDigest.getInstance("SHA")` → `ProviderList.getService` 逐个取 provider →
+`ProviderConfig.getProvider` → `doLoadProvider` → `ProviderConfig$ProviderLoader.<clinit>` → `ServiceLoader.load(Provider.class, …)`，
+引导层全部 Provider 服务的 provider（SunPKCS11、SunPCSC、XMLDSig、SunEC 等）入链。
+
+JDK 语义：`java.security` 的 provider 顺序已嵌入（`runtime/java_runtime/src/jdk_resources/java.security.21.properties`，
+SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 SHA，`getService` 在第 0 个 provider 就返回，非内建 provider
+（走 ServiceLoader 的那些）不会装载。所需能力：**JCA 提供者序求值**——闭包内无 `Security` 改写入口（`setProperty` /
+`insertProviderAt` / `removeProvider` 等）可达时，provider 表是构建期事实；对每个被请求的（服务类型, 算法）按表序找到第一个
+内建且在 `[jca] providers` 登记里提供该服务的 provider，之后的 provider 不入链；有推不出算法名的请求时退回全表。
+限制：jar 链上的 `PKCS7` / `SignatureFileVerifier` 请求推不出算法名，所以 P 的收益以路线一先完成为前提（D + P 才是 −238）。
+
+### 29.4 路线三（S）：ResourceBundle 服务查找的未知 Class
+
+`ResourceBundle.getServiceLoader@16` 的服务 Class 实参为 `open(java/lang/Class)`（来自 `getResourceBundleProviderType` 里按名
+`Class.forName`，`ResourceBundleProvider.class.isAssignableFrom(c)` 的收窄对 open 不生效），按 `engine/services.rs` 的规则选中闭包内
+全部目录服务，Provider 服务随之入链。所需能力即 §28.10 的「有界未知镜像」；§28.10 已按风险收益判为不实施，结论是这条引导期
+路径由引导映像求值器路线消解。本步不改判。
+
+### 29.5 对 a5-4 的影响
+
+- a5-4b 作为独立一步关闭（无独立的健全收窄手段）；它的收益拆到三项能力上：①URL 按对象 + 串前缀推理 + 甲目录事实（约 −217，
+  与 tasks.md「jar/URL 来源甲」及乙的余项同一件事）；②JCA 提供者序求值（叠加①后约再 −21）；③引导映像路线消解 S。
+  ①②③ 齐备的反事实上界是 DeepCopy 3374 → 2766（−608），pkcs11 / smartcardio / ec / XMLDSig 全部出闭包。
+- 达到 ≤1640 仍要 a5-4e / a5-4f 与 §21.5 列的其余来源；2766 只是这三项的上界。
+- 测量脚本：`build/a54b/cl.sh`（`rava closure` 包装，经全机锁）与 `build/a54b/fp.py`（按包指纹对比），均在 scratch，不提交。

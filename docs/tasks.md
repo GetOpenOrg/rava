@@ -135,7 +135,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ⏳ a5-4 闭包膨胀收窄：终态 DeepCopy ≤1640（计划 §21.5）
 │   │     │     ├─ ✅ s1 构造器查找只在 Class 值集齐全时点名
 │   │     │     ├─ ✅ s2 instanceof 否定分支收窄 + 钩子字段不按 open
-│   │     │     ├─ ⏳ a5-4b 引导加载器类路径查找 → JarVerifier / pkcs11
+│   │     │     ├─ ⏸ a5-4b 归因完成、无独立收窄手段（§29）：JarVerifier = 应用类路径甲 + URL 处理器乙；pkcs11 = JCA 提供者逐个装载 + RB 未知 Class 服务查找
 │   │     │     ├─ ⏳ a5-4e ICU 归一化入口 / Latin-1 语言折叠
 │   │     │     ├─ ⏳ a5-4f 日志后端探测
 │   │     │     ├─ ⏳ 容器元素 Object 方法（归通用 open 值精度另立项）
@@ -148,7 +148,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md；原节点见历史 §E）
 │   │     ├─ ✅ b0 合入 e90a592d（eb6571ba）
 │   │     ├─ 🔄 b1′ ArrayList.writeObject 分派臂（计划 §4.6）：T3–T7 ✅，T2 ✅ 35c5f0ee
-│   │     │     └─ ⏳ T2 余项：getDefaultSerialFields 收窄、4b
+│   │     │     └─ ⏸ T2 余项 4b：受阻于方法句柄全局池（计划 §八），前置方法句柄对象化；上界 6 类 / ≤214 方法
 │   │     ├─ 🔄 b1 序列化收窄：S2 ✅ 0d7dd2a5；DeepCopy ≤1640、fold_props ≥42
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
 │   │     ├─ ✅ b3 class_init.unknown 归零（d46d9b06，扇出收窄 6294755d / ee52c596）
@@ -274,6 +274,7 @@ regress2 遗留（◀── a2）───────────────�
 | D 分析性能 | D2 枢纽翻新 / 延迟站点重跑等结构改造、D3 在线节点合并 | 暂停（V12 后提速线暂停） |
 | E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 继续 |
 | E 编译资源 | E2 D8 声明层分段 | 缓（视 B4 结果） |
+| B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
 | F 纯优化 | 二进制 ≤3 MB、S7-3～5、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
 
 ## 🔴 活跃任务
@@ -296,9 +297,9 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-jar签名 | ⏳ | jar 签名校验路径收窄（4 个算法名不可定的请求点） |
 | C1d-a-乙 | ✅ fca1643b | URL.getURLStreamHandler 按键闸门；闭包不变，根因 URL host 无逐对象精度（§22.10），后续归「URL 协议可靠口径」 |
 | C1d-a-甲 | ⏳ | jar/URL 来源甲 class-path（计划 §22.2） |
-| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤1640，pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅，余 a5-4b / a5-4e / a5-4f |
+| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤1640，pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅；a5-4b 归因完成（计划 §29：boot `ucp` 已折叠，回收 0；JarVerifier / pkcs11 要靠 URL 按对象 + 串前缀推理、JCA 提供者序求值、引导映像三项能力，反事实上界 3374 → 2766）；余 a5-4e / a5-4f |
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
-| C1d-a-a3 | ⏳ ◀── a2 | `#[jvm_boundary]` 归零，审计数 86→0；拆分与验收见计划 §21 / §21.7 |
+| C1d-a-a3 | 🔄 U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | a3-T 虚拟线程终态（a3t-vthread） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· T1–T5 ✅ a78cccef | VirtualThread 字节码翻译 + Continuation 有栈协程；交接见计划 §21.8.5 |
 | a3-T-T6 | ⏳ | 规模指标：10 万虚拟线程 ≤10 s / ≤2 GiB（现 14.6 s / 2.66 GB，草稿未提交） |
@@ -306,8 +307,8 @@ regress2 遗留（◀── a2）───────────────�
 | a3-T-pinned | ⏳ | TestContinuationPinned parkNanos 早返偶发需查 |
 | C1d-b 反射收窄（c1d-pick） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-02 | b0 / T3–T7 / T2 / b3 已合入；余 T2 余项、b1、b2；过程见历史 §E / §J |
 | C1d-b-b1′ | ⏸ 未派（2026-10-04 优化线优先期间暂停）· | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
-| C1d-b-T2余 | 🔧 c1d-b-t2 | 类镜像子类型判定收窄（计划 §七）：StockTrans 目标按 6f93f1c6 重定为 ≤3380 / ≤20813，实测 3386/20860→3380/20813；可序列化字段可读面贡献 0（§6.2）；StockTrans 已通过，writeObject 反射臂一项消解；余 4b |
-| C1d-b-b1 | ⏸ 未派（2026-10-04 优化线优先期间暂停）· S2 ✅ 0d7dd2a5 | 序列化收窄：目标 DeepCopy ≤1640、fold_props ≥42；大值集来自未知接收者字段视图 |
+| C1d-b-T2余 | ⏸ c1d-b-t2b | 类镜像子类型判定收窄已合入（§七，StockTrans 3386/20860→3380/20813）。4b（§八）：反射对象池由方法句柄全局池经 `NativeAccessor.invoke` 句柄成员灌满，按角色分池实测 0 收益已撤回；不健全下界实验仅 −6 类 / −205~214 方法（StockTrans / DeepCopy / TSDS），终态前置为方法句柄对象化（成员句柄伪值 + 组合子形状清单），低优先级挂起 |
+| C1d-b-b1 | ⏸ 挂起（2026-10-06 实测收口，计划 §九；分支 c1d-b-b1 仅文档 + 探查脚本）· S2 ✅ 0d7dd2a5 | 序列化收窄：字段视图环反事实上界仅 −6 类 / −166 方法（DeepCopy 3422→3416，与 4b 下界同 6 类）；序列化总量 278 类，其余大值集来源（writeReplace / 回调反射返回、反射与句柄池）前置为方法句柄对象化（§8.3），并入 T2余；原目标 ≤1640 作废（不走序列化也有 3144） |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-jndi | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
@@ -329,7 +330,7 @@ regress2 遗留（◀── a2）───────────────�
 | BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
 | BS-B2 | ✅ 8f5ad0c5（合并 6f9b189b） | 栈还原按地址查表（rava-link 链接期 pcmap），release 加 strip=symbols；release 验证 b2-8f5ad0c5-rel1 5/5，HelloWorld release 7,410,488 B（ubuntu）。 |
 | BS-B3 | ✅ 38c17d97（合并 5bc31469） | 可选体积档 `--release-small`（opt s，不设 z）。对照（ubuntu b3-bench2-b064f315）：s 档二进制 −19~24%、构建 −25~32%，计算用例运行 +13%（ARM +22~40%），按 5%/15% 规则维持 opt 3 缺省。16 GB 机器上 opt 3 构建大闭包用例 OOM（峰值 14.5–15.7 GB；b3-mem16-b064f315 4/8 OOM），s 档 8/8 可构建，交用户决定缺省档（binary-size §五）。 |
-| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值、容器元素类型、实例汇合点（c1d §25.4，判据 HelloWorld ≤569 类）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
+| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值（✅ c1d-clsfact 69d1c73d，c1d §26：classLoader 逐镜像、`Class.module` 锚点按接收者；锚点口径 HelloWorld 仍为 3190，膨胀是 `boot2` 内共享汇点饱和，`arraycopy` / `append(Object)` / Unsafe 引用写）、容器元素类型、实例汇合点（c1d §25.4 / §26.3，判据 HelloWorld ≤569 类，差 2621）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
 | C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `server_maintenance/rava/distribute_tests.py`（`--spot` / `--job`）在 8 台服务器执行；本机只做编译 / 构建 / 单测 |

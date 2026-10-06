@@ -3,6 +3,9 @@
 //! 抽象解释遇到「类字面量 vs 只来自一个 Class 形参的值」的 if_acmp 时问 Oracle：形参值集里的类镜像是否可能是该类。
 //! 值集只由镜像组成且不含该类的镜像 → 不等，分支折叠（乐观答复）。答复登记在形参节点上：值集此后新增该类的镜像、
 //! 所指未知的 Class 对象（非镜像）或 open 时方法重分析——值集单调增长，不动点时答复与最终值集一致。
+//!
+//! 同一机制承载形参镜像上的 VM 注入字段读（`Oracle::param_mirror_field`，如 `this.classLoader` 在只含引导类镜像时
+//! 为 null）：登记为哨兵类 [`HOOK_FIELD`]，值集新增钩子非空操作的镜像（应用 / 平台类）、所指未知的 Class 对象或 open 时重分析。
 
 use super::*;
 
@@ -10,6 +13,14 @@ use super::*;
 fn may_be_mirror(classes: impl IntoIterator<Item = u32>, open: bool, c: u32, mirror: impl Fn(u32) -> Option<u32>, is_class: impl Fn(u32) -> bool) -> bool {
     open || classes.into_iter().any(|x| match mirror(x) {
         Some(t) => t == c,
+        None => is_class(x),
+    })
+}
+
+/// 值集是否可能含钩子非空操作的 Class 对象：open、所指未知的 Class 对象，或非引导类的镜像
+fn may_hook(classes: impl IntoIterator<Item = u32>, open: bool, mirror: impl Fn(u32) -> Option<u32>, is_class: impl Fn(u32) -> bool, boot: impl Fn(u32) -> bool) -> bool {
+    open || classes.into_iter().any(|x| match mirror(x) {
+        Some(t) => !boot(t),
         None => is_class(x),
     })
 }
@@ -31,6 +42,9 @@ fn mirror_targets(classes: impl IntoIterator<Item = u32>, open: bool, mirror: im
     }
     Some(out)
 }
+
+/// 镜像答复登记的哨兵类：答复是「形参镜像值集上的接收者钩子字段读结果」（见模块注释）
+pub(super) const HOOK_FIELD: u32 = u32::MAX;
 
 impl<'a> Engine<'a> {
     /// 值 x 是否是 Class 对象（非数组、实例类型为 Class）
@@ -62,7 +76,13 @@ impl<'a> Engine<'a> {
         let hit: Vec<(usize, u32)> = ws
             .iter()
             .copied()
-            .filter(|&(_, c)| may_be_mirror(delta.classes.iter(), !delta.open.is_empty(), c, |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x)))
+            .filter(|&(_, c)| {
+                if c == HOOK_FIELD {
+                    let boot = |t| self.defining_loader(t) == crate::loaders::Loader::Boot;
+                    return may_hook(delta.classes.iter(), !delta.open.is_empty(), |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x), boot);
+                }
+                may_be_mirror(delta.classes.iter(), !delta.open.is_empty(), c, |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x))
+            })
             .collect();
         if hit.is_empty() {
             return;
@@ -107,5 +127,15 @@ mod tests {
         assert!(may_be_mirror([11], false, 21, mirror, is_class));
         assert!(may_be_mirror([1], false, 21, mirror, is_class));
         assert!(may_be_mirror([], true, 21, mirror, is_class));
+    }
+
+    // 类 20 由引导加载器定义，21 不是
+    #[test]
+    fn hook_answer_invalidates_on_non_boot_mirror() {
+        let boot = |t| t == 20;
+        assert!(!may_hook([10, 30], false, mirror, is_class, boot));
+        assert!(may_hook([11], false, mirror, is_class, boot));
+        assert!(may_hook([1], false, mirror, is_class, boot));
+        assert!(may_hook([], true, mirror, is_class, boot));
     }
 }

@@ -133,17 +133,23 @@ impl<'a> Engine<'a> {
                 if !spos.contains(&i) {
                     continue;
                 }
-                fnames.extend(a.lits());
-                if matches!(a, V::Ref { .. }) || a.derived_str() {
-                    let mut paired = false;
-                    for &c in &cpos {
-                        paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
-                    }
-                    if !paired {
-                        fnames.extend(self.param_strs(m, off, a));
-                    }
-                    fnames.extend(self.field_strs(m, a));
+                if !(matches!(a, V::Ref { .. }) || a.derived_str()) {
+                    fnames.extend(a.lits());
+                    continue;
                 }
+                // 本方法的字面量（合流来源里的字面量）总按名放开；常量格给出的名字（形参常量窗口）只在未登记配对时
+                // 放开——配对后形参名字由各调用点按本点类值集点名，中间态常量若在此汇合放开，终态（形参抬为非常量、
+                // 登记配对）不再给出，结果随调用点接入先后而变（同名字段被按名全部放开）
+                fnames.extend(a.site_lits());
+                let mut paired = false;
+                for &c in &cpos {
+                    paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
+                }
+                if !paired {
+                    fnames.extend(a.lits());
+                    fnames.extend(self.param_strs(m, off, a));
+                }
+                fnames.extend(self.field_strs(m, a));
             }
             for name in &fnames {
                 let mut hit = false;

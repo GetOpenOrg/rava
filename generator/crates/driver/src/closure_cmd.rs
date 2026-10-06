@@ -5,7 +5,7 @@
 //! `@grow:` / `@trace:` / `@edge:` 为记录型，分析前登记、传播中记录，见 `closure/src/engine/diag.rs`）、`--report <报告.md>`、
 //! `--release <包前缀/ | 类>`（分析期视同 `[release]` 放行，可多次；C1d 放行实测）、
 //! `--release-bytecode <包前缀/ | 类>`（放行并模拟删除其中按精确名提供的共置手写，可多次）；
-//! 转译接入（均可多次）：`--lib <jar>`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类；缺省与 `rava build` 同源派生，
+//! 转译接入（均可多次）：`--deps <deps.lock.toml>` + `--cp <锁条目名>[,…]`（依赖库）、`--image <目录>`（镜像独有 / VM 支持类；缺省与 `rava build` 同源派生，
 //! 见 [`crate::build_cmd::image_dirs`]）、
 //! `--root <类.方法:描述符>`（外部种子方法）、`--seed-class <类>`（lib 公开 API 面：全部 public 方法入链，main 除外）、
 //! `--locale <标签>`（locale 资源束种子）；
@@ -33,7 +33,8 @@ pub(crate) const MAIN: (&str, &str) = ("main", "([Ljava/lang/String;)V");
 /// 带值选项（后随一个参数）
 const VALUE_OPTS: &[&str] = &[
     "--jdk", "--java-home", "--runtime", "--main", "-o", "--why", "--flows", "--report", "--release", "--release-bytecode",
-    "--lib", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
+    "--deps",
+    "--cp", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
     "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
@@ -126,12 +127,40 @@ pub fn run(args: &Args) -> Result<(), String> {
     let multi = |flag: &str| -> Vec<&String> {
         args.rest.iter().zip(args.rest.iter().skip(1)).filter(|(a, _)| *a == flag).map(|(_, v)| v).collect()
     };
+    // 依赖锁：--deps + --cp（库输入唯一来源，--lib 已删除）
+    let libs_sel = match args.opt("--deps") {
+        Some(d) => {
+            let names: Vec<String> = args
+                .opt("--cp")
+                .map(|c| c.split(',').map(str::trim).filter(|n| !n.is_empty()).map(String::from).collect())
+                .ok_or_else(|| "--deps 须配合 --cp 给出入口类路径（锁条目名）".to_string())?;
+            let lock = crate::deps_lock::DepsLock::load(Path::new(d.as_str()))?;
+            lock.select(&names)?
+                .iter()
+                .map(|j| crate::build_libs::LibEntry {
+                    path: j.path.clone(),
+                    meta: resolve::classpath::LibMeta {
+                        coordinate: j.coordinate.clone(),
+                        module: j.module.clone(),
+                        sha256: Some(j.sha256.clone()),
+                    },
+                })
+                .collect()
+        }
+        None => {
+            if args.opt("--cp").is_some() {
+                return Err("--cp 须配合 --deps（库输入唯一来源是依赖锁）".into());
+            }
+            Vec::new()
+        }
+    };
     // 同名类先加入者优先：用户 → 依赖库 → JDK → 镜像独有 / VM 支持类；随后 JDK 包遮蔽 + 模块图硬校验
     let release = resolve::jdk::major_of(&home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
     let mut cp = ClassPath::new(release);
     cp.add(Origin::User, &classes).map_err(|e| e.to_string())?;
-    for jar in multi("--lib") {
-        cp.add(Origin::Lib, Path::new(jar)).map_err(|e| format!("{jar}：{e}"))?;
+    for e in &libs_sel {
+        cp.set_lib_meta(&e.path, e.meta.clone());
+        cp.add(Origin::Lib, &e.path).map_err(|err| format!("{}：{err}", e.path.display()))?;
     }
     cp.add_jdk(&home).map_err(|e| e.to_string())?;
     let images: Vec<PathBuf> = multi("--image").into_iter().map(PathBuf::from).collect();

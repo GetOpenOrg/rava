@@ -98,9 +98,12 @@ fn scan(o: &BuildOpts, tag: &str) -> Result<Gaps, String> {
 
 fn scan_in(o: &BuildOpts, rt: &Path, home: &Path, tmp: &Path) -> Result<Gaps, String> {
     let classes = tmp.join("classes");
-    let Libs { crates, seed_classes, jars } = build_libs::load(&o.libs, resolve::jdk::major_of(home).unwrap_or(0))?;
+    let libs_sel = build_libs::select_entries(o)?;
+    let jars: Vec<PathBuf> = libs_sel.iter().map(|e| e.path.clone()).collect();
     javac(home, &o.inputs, &jars, &classes)?;
-    let cp = class_path(&classes, &jars, home, &image_dirs(o, home, rt))?;
+    let cp = class_path(&classes, &libs_sel, home, &image_dirs(o, home, rt))?;
+    let Libs { crates, .. } = build_libs::from_lock(&libs_sel, &cp, &resolve::ModuleFacts::build(&cp))?;
+    let seed_classes = o.seed_classes.clone();
     let user = user_order(&cp, &o.inputs, o.main.as_deref())?;
     let java_files: Vec<PathBuf> = o.inputs.iter().map(|p| abs(p)).collect();
     let virtual_out = tmp.join("scratch");
