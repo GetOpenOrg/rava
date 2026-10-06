@@ -52,7 +52,7 @@ fn field_name_resolvers_and_class_initializers_parse() {
     .unwrap();
     assert_eq!(
         m.field_name_resolver("a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J"),
-        Some(NameResolver { class: Some(0), name: 1, handle: false, offset: false })
+        Some(NameResolver { class: Some(0), name: 1, handle: false, offset: false, kind: None, read_kinds: 0 })
     );
     assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
     assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));

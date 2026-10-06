@@ -440,6 +440,7 @@ impl<'a> Engine<'a> {
 
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        self.pstr_offsite(t);
         if vals.is_none() {
             self.pstr_top_m(t);
         }

@@ -283,8 +283,8 @@ queries = [
 [facts.field_writes]
 # 字段常量折叠的反射式写入来源（计划 C1c 第 1 步）。分析器按「全部写入来源」求字段值集，
 # 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
-# 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
-# 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
+# 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名") / 字段 MemberName 构造）
+# 见下方 name_resolvers，不在此列。
 # enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：枚举结果带来源标记，标记随句柄
 #   沿字节码数据流传到 handle_writers 的句柄实参时，接收者是类字面量则只放开该类及其超类的字段，否则全部
 #   字段不折叠；只读句柄（取名字 / 修饰符 / 值，如 ObjectStreamClass.computeDefaultSUID）与按名字常量取到的
@@ -359,8 +359,17 @@ static_offset_getters = [
 #   类字面量 + 名字常量的调用折叠为符号偏移，供按偏移读写的手写调用点只触及该字段）。名字是常量时按上面的形状规则放开；
 #   名字取自形参时按各调用点的常量逐个放开；形参出现过非常量实参、或名字来自字段读 / 调用返回 / 拼接时，
 #   放开 class 所指类（类字面量）及其超类的全部字段，推不出类则全部字段不折叠；handle = true 的按字段枚举
-#   处理（结果句柄带来源标记，流到句柄写入口才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
-#   写入能力（ClassSpecializer 的 resolveOrFail 取 species 字段的 getter，只读），不在此列
+#   处理（结果句柄带来源标记，流到句柄写入口才放开）。名字取自字段读时取该 String 字段各写入处的字符串常量，取自
+#   辅助方法返回时取其返回常量候选。类与名字都取自所在方法形参时登记字段配对，各调用点按本点实参放开（逐层上推）。
+#   本表是按名取字段身份的全部入口（清单即边界）：分析器不按调用形状（Class + String 实参）兜底放开同名字段。
+#   kind = 引用种类（JVMS §5.4.3.5 reference_kind）形参序号，read_kinds = 只读种类（1 REF_getField / 2 REF_getStatic）：
+#   该实参是只读种类的常量时只取读取能力，不放开。按名字段 MemberName 的取法：Lookup.resolveOrFail(byte, Class,
+#   String, Class)——Lookup 全部按名字段查找（findSetter / findGetter / findVarHandle …）与 JDK 内部直接解析
+#   （ClassSpecializer$Factory.linkCodeToSpeciesData 以 REF_putStatic 解析 species 字段后经 Unsafe.putReference 写入）
+#   都经此；MemberName(byte, Class, String, Object) 是方法句柄常量链接（Lookup.linkMethodHandleConstant）的入口。
+#   MemberName(Class, String, Class, byte) 不列：java.base 内调用者只有上面的 resolveOrFail 与
+#   DirectMethodHandle.createFunction（REF_getStatic 常量，只读）；列入则 resolveOrFail 内的引用种类是形参，
+#   getter 查找也会按写入配对放开
 [facts.field_writes.name_resolvers]
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = { class = 0, name = 1, offset = true }
 "java/lang/invoke/MethodHandles$Lookup.findSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
@@ -372,6 +381,8 @@ static_offset_getters = [
 "java/util/concurrent/atomic/AtomicLongFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicLongFieldUpdater;" = { class = 0, name = 1 }
 "java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
 "java/lang/Class.getField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+"java/lang/invoke/MethodHandles$Lookup.resolveOrFail:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MemberName;" = { kind = 0, class = 1, name = 2, read_kinds = [1, 2] }
+"java/lang/invoke/MemberName.<init>:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Object;)V" = { kind = 0, class = 1, name = 2, read_kinds = [1, 2] }
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；

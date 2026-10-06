@@ -47,6 +47,8 @@ pub(super) struct PStrs {
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
     top_h: HashSet<u32>,
+    /// 经字节码调用点以外的入口接入的方法（枢纽、引导阶段、反射调用、无调用点记录）：字段配对看不到这些入口
+    offsite: HashSet<usize>,
     /// 有非常量写入的 String 字段：字段槽推不出
     top_f: HashSet<usize>,
     /// 读过槽（按名取类遍历到的上游槽）的站点
@@ -170,6 +172,22 @@ impl<'a> Engine<'a> {
                 self.pstr_wake(PSlot::M(t, i));
             }
         }
+    }
+
+    /// 方法 t 经字节码调用点以外的入口接入：包装配对（`lookup_pair.rs`）只在字节码调用点上配对，这类方法形参上的
+    /// 名字按形参常量集与污染口径取（engine/field_names.rs）；首次登记时重跑读过其形参槽的站点
+    pub(super) fn pstr_offsite(&mut self, t: usize) {
+        if self.pstr.offsite.insert(t) {
+            for i in 0..self.methods[t].ptypes.len() {
+                for off in self.pstr_readers(t, i) {
+                    self.push_site((t, off), site_prof::TRIG_TAINT, None);
+                }
+            }
+        }
+    }
+
+    pub(super) fn pstr_is_offsite(&self, t: usize) -> bool {
+        self.pstr.offsite.contains(&t)
     }
 
     /// 枢纽 h 有实参值未知的调用点接入：形参槽推不出
