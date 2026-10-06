@@ -154,3 +154,24 @@ signature = "Can't find bundle for base name com.sun.rowset.RowSetResourceBundle
 owner = "java.sql.rowset 模块资源包按名装载（ResourceBundle 按名加载的分析器建模 / 模块资源）"
 since = "2026-10-06"
 note = "入库起从未通过：e2enew-da8abee1 为 CachedRowSetImpl.<init> 存根，m2-f0c12c3b 起同 MissingResourceException"
+
+[[known]]
+test = "TestLocaleDateCjk"
+signature = "hashCode 抛出异常: java.lang.NullPointerException"
+owner = "jdk.localedata / java.time 文本提供者（DateTimeTextProvider$LocaleStore 键 String 未初始化）"
+since = "2026-10-06"
+note = "入库起从未通过（10-03 为 LocaleProviderAdapter 存根）；958251ab 单例复测同一 NPE，非 2d87d368 引入"
+
+[[known]]
+test = "TestVirtualThreadScale"
+signature = "+all sleeping at once: false"
+owner = "虚拟线程终态线（VirtualThread 字节码翻译 + Continuation 有栈协程）/ 运行期性能"
+since = "2026-10-06"
+note = "debug 档下创建 1e5 VT 过慢，「同时休眠」时序判定不成立；vt6-spot-4a983fe8 / vt-int-2602f409 / r1n-sp-204f8cbe 等同 diff"
+
+[[known]]
+test = "TestXmlTransform"
+signature = "expected type, found module `lr_parser`"
+owner = "生成器命名（小写 Java 类名与其模块名同名：java_cup lr_parser / sym / virtual_parse_stack、xsltc parser_actions）"
+since = "2026-10-06"
+note = "java_xml crate 编译 E0425 / E0573 16 处；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露；与 lambda default 改动无关（plan 判定只影响发射）"
