@@ -12,6 +12,7 @@
 #   jca   §29 路线二 P（ProviderConfig.doLoadProvider）
 #   rb    §29 路线三 S（ResourceBundle.getServiceLoader@16）
 #   nos   DeepCopy.deepCopy 整体（完全不走序列化，只对 DeepCopy 有意义）
+#   fmt   PrintStream.implFormat（printf 进 Formatter 的入口；只对用 printf 的例有意义）
 set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 exp=$1; shift
@@ -33,6 +34,7 @@ for p in "${parts[@]}"; do
     jca) args+=(--cut 'sun/security/jca/ProviderConfig.doLoadProvider:()Ljava/security/Provider;') ;;
     rb) args+=(--cut 'java/util/ResourceBundle.getServiceLoader:(Ljava/lang/Module;Ljava/lang/String;)Ljava/util/ServiceLoader;@16') ;;
     nos) args+=(--cut 'DeepCopy.deepCopy:(Ljava/lang/Object;)Ljava/lang/Object;') ;;
+    fmt) args+=(--cut 'java/io/PrintStream.implFormat:(Ljava/lang/String;[Ljava/lang/Object;)V') ;;
     *) echo "未知组件 $p" >&2; exit 2 ;;
   esac
 done
