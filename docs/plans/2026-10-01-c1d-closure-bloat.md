@@ -2574,3 +2574,90 @@ ubuntu 上为 `/mnt/d/workspace/java_rta-spot-job-sink-*`），没有删除。�
 **结论**：共享汇点线到此收口，引擎语义没有改动。§28.6 原估的 −55 类，更正后为 −23 类：第 1 项 −4，第 2 项 −19，
 后者还只在锚点口径下才有。≤ 569 的达成路线是引导映像求值器（在途），不是锚点口径下的精度修补。本分支只保留诊断工具
 （`--cut @node:` / `@noopenhub` / `@noreopen` / `@noopenrecv` / `@edgeoff`，`--flows @fopen:` / `@in:` / `@svcunk`）。
+
+## 29. a5-4b 归因：JarVerifier / pkcs11 的真实来源与所需能力（2026-10-06，分支 c1d-a54b，基于 140ef55e）
+
+**结论先行**：a5-4b 原设想（§21.5「引导加载器 `ucp` 在未设 `-Xbootclasspath/a` 时为 null」）在 140ef55e 上回收为 0：
+`ClassLoaders.<clinit>@66..72` 建 boot `URLClassPath` 的分支已按 `jdk.boot.class.path.append` 缺席折叠为死，活的
+`URLClassPath.<init>(String,Z)` 调用点只剩 `@144`（应用类路径）。JarVerifier 与 pkcs11 是三条彼此独立的路线，每条都要一项
+本步范围外的新能力才能健全地剪掉；本步**不改引擎语义、无代码提交**，只落归因与反事实实测。DeepCopy 前后均为 3374 类 / 20766 方法。
+
+口径：本机 macOS、`rava closure --jdk 21`，DeepCopy 基线 3374 类 / 20766 方法 / 约 40 s。`--cut` 是反事实切除（不健全，只作归因）。
+记号：`R` = `URLClassPath$3.run:()…Loader;`，`J` = `sun/net/www/protocol/jar/Handler.openConnection:(Ljava/net/URL;)…`，
+`P` = `ProviderConfig.doLoadProvider:()Ljava/security/Provider;`（方法体整段），`S` = `ResourceBundle.getServiceLoader:(Module,String)@16`
+（`ServiceLoader.load(service, loader, module)` 调用点）。
+
+### 29.1 反事实实测
+
+| 切除 | 类数 | 变化 | pkcs11 / smartcardio / ec / XMLDSig(com/sun/org/apache/xml) / org/jcp | JarVerifier |
+|---|---:|---:|---|---|
+| 无（基线） | 3374 | — | 29 / 8 / 87 / 111 / 16 | 在 |
+| `BuiltinClassLoader.findClassOnClassPathOrNull` 方法体 | 3372 | −2 | 不变 | 在 |
+| `JarFile.getManifestFromReference@69`（`new JarVerifier`） | 3213 | −161 | 不变 | 去 |
+| `R@97` + `R@139`（两处 `new JarLoader`） | 3371 | −3 | 不变 | 在 |
+| 只切 `J` | 3353 | −21 | 不变 | 在（经 JarLoader） |
+| D：`R@97` + `R@139` + `J` | 3157 | −217 | 不变 | 去 |
+| P | 3353 | −21 | 12 / 8 / 87 / 111 / 16 | 在 |
+| S | 3355 | −19 | 不变 | 在 |
+| P + S | 2990 | −384 | **全部 0** | 在 |
+| D + P | 3136 | −238 | 12 / 8 / 73 / 111 / 16 | 去 |
+| D + P + S | 2766 | −608 | 全部 0 | 去 |
+
+- JarVerifier 与签名校验链（PKCS7、SignatureFileVerifier、x509 / provider / rsa 等约 217 类）要**同时**堵住类路径来源（甲：
+  `$3.run` 的 JarLoader 分支）和协议处理器来源（乙：`URL.handler` 含 jar `Handler`）才出闭包，与 §22.1 的 StockTrans 结论一致。
+- **pkcs11 / smartcardio / ec / XMLDSig 不走 jar 链**：D 之后原样保留。它们来自两条 Provider 服务查找，P 与 S 单切各只 −20 左右，
+  合切 −384 且五个包全部清零（闭包多连通，单切时另一条照样拉进同一批类）。
+
+### 29.2 路线一（甲 + 乙）：JarVerifier
+
+首次发现链：`ObjectInputStream.<init>` → `ObjectInputFilter$Config.<clinit>` → `System.getLogger` → … → `sun/nio/fs/Util.<clinit>`
+→ `Charset.forName` → `ExtendedProviderHolder` → `ServiceLoader` → `loadProvider` → `Class.forName(Module,String)` →
+`BuiltinClassLoader.findClassOnClassPathOrNull` → `URLClassPath.getResource` → `getLoader(URL)` → `$3.run@139` `new JarLoader`
+→ `JarLoader.getClassPath` → `JarFile.getManifest` → `new JarVerifier`。即**应用**类路径，不是引导类路径。
+
+**按对象 URL 实验（未提交）**：给「容器形态」判据（`engine/classes.rs::container_shape`）加一条结构判据——持有类型为某个
+`[facts.keyed_lookups]` 键类（按键查找入口的返回类型，此处 `URLStreamHandler`）的实例字段的类按分配点区分。判据只取清单事实、
+不含类名。实测 `URL` 确已按分配点区分（`URL.handler of java/net/URL@<方法>:<偏移>`），`fileToEncodedURL` 产出的类路径 URL
+只含 file `Handler`。但闭包：单独 3374（0 变化）；叠加 `R@97` / `R@127` / `R@139` 三处反事实切除也只 3369（−5，对照 D 的 −217）。
+原因：
+
+- `URLClassPath$FileLoader.getResource@0` 的 `new URL(getBaseURL(), ParseUtil.encodePath(name, false))` 走解析式构造器，
+  spec 推不出（`name` 来自任意类名 / 资源名，`encodePath` 是逐字符变换），`@386` 的协议键闸门退回全集，jar `Handler` 写进该
+  对象的 `handler`；该 URL 经 `getResources` 流到 `ServiceLoader$LazyClassPathLookupIterator.parse@9` 的 `openConnection`，派发到 `J`。
+- JDK 语义下这条派发不可达：`FileLoader.getResource@20..38` 要求 `url.getFile().startsWith(normalizedBase.getFile())`，否则返回 null；
+  `normalizedBase` 的 file 以 `/` 开头（`fileToEncodedURL` 保证），而 jar URL 的 file 是嵌套 URL 串（`<scheme>:…!/…`），
+  不可能以 `/` 开头。证明它需要「按处理器区分的 `URL.file` 前缀」这类串域推理，分析器目前没有。
+- 甲同理：`$3.run@139` 只在 `file` 不以 `/` 结尾时走 JarLoader；应用类路径 `""` → 当前目录，`fileToEncodedURL` 仅在
+  `File.isDirectory()` 为真时补 `/`。要剪掉需要 §22.2 的两处运行期对齐 + 「启动目录是目录」清单事实 + `isDirectory` 调用按
+  文件对象区分，单独收益 −3。
+
+所需能力（终态）：URL 按对象字段精度（上面的判据可直接用）+ `URL.file` / spec 的前缀串域推理（含 `encodePath` 这类逐字符
+变换的前缀保持）+ 甲的目录事实。三者齐备才兑现 D 的约 −217。
+
+### 29.3 路线二（P）：JCA 提供者逐个装载
+
+`ObjectStreamClass.computeDefaultSUID` → `MessageDigest.getInstance("SHA")` → `ProviderList.getService` 逐个取 provider →
+`ProviderConfig.getProvider` → `doLoadProvider` → `ProviderConfig$ProviderLoader.<clinit>` → `ServiceLoader.load(Provider.class, …)`，
+引导层全部 Provider 服务的 provider（SunPKCS11、SunPCSC、XMLDSig、SunEC 等）入链。
+
+JDK 语义：`java.security` 的 provider 顺序已嵌入（`runtime/java_runtime/src/jdk_resources/java.security.21.properties`，
+SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 SHA，`getService` 在第 0 个 provider 就返回，非内建 provider
+（走 ServiceLoader 的那些）不会装载。所需能力：**JCA 提供者序求值**——闭包内无 `Security` 改写入口（`setProperty` /
+`insertProviderAt` / `removeProvider` 等）可达时，provider 表是构建期事实；对每个被请求的（服务类型, 算法）按表序找到第一个
+内建且在 `[jca] providers` 登记里提供该服务的 provider，之后的 provider 不入链；有推不出算法名的请求时退回全表。
+限制：jar 链上的 `PKCS7` / `SignatureFileVerifier` 请求推不出算法名，所以 P 的收益以路线一先完成为前提（D + P 才是 −238）。
+
+### 29.4 路线三（S）：ResourceBundle 服务查找的未知 Class
+
+`ResourceBundle.getServiceLoader@16` 的服务 Class 实参为 `open(java/lang/Class)`（来自 `getResourceBundleProviderType` 里按名
+`Class.forName`，`ResourceBundleProvider.class.isAssignableFrom(c)` 的收窄对 open 不生效），按 `engine/services.rs` 的规则选中闭包内
+全部目录服务，Provider 服务随之入链。所需能力即 §28.10 的「有界未知镜像」；§28.10 已按风险收益判为不实施，结论是这条引导期
+路径由引导映像求值器路线消解。本步不改判。
+
+### 29.5 对 a5-4 的影响
+
+- a5-4b 作为独立一步关闭（无独立的健全收窄手段）；它的收益拆到三项能力上：①URL 按对象 + 串前缀推理 + 甲目录事实（约 −217，
+  与 tasks.md「jar/URL 来源甲」及乙的余项同一件事）；②JCA 提供者序求值（叠加①后约再 −21）；③引导映像路线消解 S。
+  ①②③ 齐备的反事实上界是 DeepCopy 3374 → 2766（−608），pkcs11 / smartcardio / ec / XMLDSig 全部出闭包。
+- 达到 ≤1640 仍要 a5-4e / a5-4f 与 §21.5 列的其余来源；2766 只是这三项的上界。
+- 测量脚本：`build/a54b/cl.sh`（`rava closure` 包装，经全机锁）与 `build/a54b/fp.py`（按包指纹对比），均在 scratch，不提交。
