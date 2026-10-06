@@ -49,6 +49,7 @@
 |---|---|---|---|---|
 | ABCProblem（Python 基线内，96 h 前通过） | 回归 / 系统性 | lambda 合成对象为每个闭包接口生成 vtable，default 条目按「本接口自身声明有体」取体；子接口覆盖超接口 default 时（JDK 21 `Pattern$BmpCharPredicate.union` 覆盖 `CharPredicate.union`），超接口 vtable 落回超接口声明，其体不在调用链上即命中存根（`stub: Pattern$CharPredicate.union`），在调用链上则执行错误的 default。printf → Formatter.<clinit> → Pattern.compile 链路均受影响 | 958251ab：各接口 vtable 的 default 条目统一取闭包上的极大声明（JVMS §5.4.6），新增 e2e TestLambdaSubIfaceDefault | 见 c4pre-2d87d368 |
 | （探查发现）lambda 接收者调用含外部虚调用的 default | 系统性缺口 | `iface_default_body` 拒绝 default 体内任何未在本接口声明的虚调用（`System.out.println`、`StringBuilder`、参数接口上的调用），这类 default 在载体上无体；实现类经继承展开不受影响，但 lambda 合成对象只能经载体 `__default_<m>` 执行，命中即存根 panic | 2d87d368：只在所有者为本接口 / 传递超接口 / 根超类、且方法不在接口层次内声明时拒绝；新增 e2e TestLambdaDefaultForeignCall | 见 c4pre-2d87d368 |
+| FibonacciMatrixExponentiation（不在 Python 基线，Python 侧亦 > 300 s） | 性能 / 既有 | fib(10^7) 的 BigInteger Toom-Cook 乘法 + 递归 toString，debug 档运行极慢；非卡死、非 2d87d368 回归：b093069f / 1079507631c4 / e983141d 三次抽查（均早于 2d87d368、debug 档）已在 300 s 运行时限超时，dev-opt 档实测 121–245 s 通过（2026-09-30 优化方向文档），JVM 约 6–9 s；本次放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，后续由运行期性能线或 dev-opt 档处理 | — |
 | TestModuleLayerDefine / TestClassModuleFace | 已知待办 | 引导映像线 | 不在本分支修 | — |
 
 ## 五、全量建议参数
