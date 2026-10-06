@@ -200,7 +200,8 @@ impl<'a> Engine<'a> {
             return PV::Const(V::Str(Rc::from(t), Default::default()));
         }
         let mut finals: Vec<(MemberRef, V)> = Vec::new();
-        if let (IBody::Inst(fs), true, None, None) = (&x.body, deep, &x.deferred, &x.mirror) {
+        // 内容延迟的字符串：启动序列按宿主值改写其内容字段（value / coder / hash），不取字段标签
+        if let (IBody::Inst(fs), true, None, None, false) = (&x.body, deep, &x.deferred, &x.mirror, x.ty == STRING) {
             for (decl, name, v) in fs {
                 let Some(f) = self.h.class(decl).and_then(|c| c.fields.iter().find(|f| f.name == *name && f.access & classfile::acc::FINAL != 0 && !f.is_static()).map(|f| f.desc.clone())) else { continue };
                 let pv = match *v {
@@ -216,7 +217,7 @@ impl<'a> Engine<'a> {
         PV::Const(V::Ref { ty: Some(Rc::from(x.ty.as_str())), nonnull: true, src: Default::default(), obj: Some(Rc::new(Obj::Fields(finals))) })
     }
 
-    /// 映像字符串对象的内容（`value` 数组 + `coder`；LATIN1 / UTF16 小端）
+    /// 映像字符串对象的内容（`value` 数组 + `coder`；LATIN1 / UTF16 小端）；对象或内容数组为延迟值 / 占位 → None
     fn image_string(&self, o: u32) -> Option<String> {
         let d = &self.img.as_ref()?.data;
         let x = &d.objs[o as usize];
@@ -231,7 +232,12 @@ impl<'a> Engine<'a> {
             Some(_) => return None,
         };
         let IVal::R(a) = field("value")? else { return None };
-        let IBody::Arr(es) = &d.objs[a as usize].body else { return None };
+        // 宿主相关的属性值：内容数组登记为延迟值（启动序列按宿主值写入），内容不是常量
+        let arr = &d.objs[a as usize];
+        if arr.deferred.is_some() || arr.placeholder {
+            return None;
+        }
+        let IBody::Arr(es) = &arr.body else { return None };
         let bytes: Vec<u8> = es.iter().map(|e| if let IVal::I(b) = e { Some(*b as u8) } else { None }).collect::<Option<_>>()?;
         match coder {
             0 => Some(bytes.iter().map(|&b| char::from(b)).collect()),
