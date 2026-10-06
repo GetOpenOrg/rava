@@ -2902,7 +2902,11 @@ SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 S
 
 ### 30.3 终态目标与验收
 
-- 能力①兑现后（B1–B6 齐备）：DeepCopy 3374 → **≤3097**（−277，按 §30.1 第 5 层），JarVerifier 与 jar `Handler` 不在闭包内；
+- 能力①兑现后（B1–B6 齐备）：DeepCopy 3374 → **≤3097**（−277，按 §30.1 第 5 层），jar `Handler` 的分派方法
+  （`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `openConnection` / `hashCode` / `sameFile` / `newURL` 等，
+  即经 `URLStreamHandler` 虚分派进来的全部方法）与 `JarURLConnection`、`JarVerifier` 及签名校验链不在闭包内。
+  jar `Handler` **类本身**可以留在闭包内：`URLClassPath.<init>(String,Z)@185` 无条件 `new` 它并写入 `jarHandler`，是必然实例化的，
+  只保留类与构造器（2026-10-06 协调方改写，依据见 §30.6「去掉 B5 一项」）；
   StockTrans / TSDS 走同一组来源，预期同量级（落地时实测，不足 −217 即不达标）。HelloWorld 不走 URL，保持不变（服务器 468）。
 - a5-4 总目标沿用 mh-objectify §6.3 的修订值：**DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468**，由①②③与格式串求值共同兑现，①的验收口径是「约 −217 且 JarVerifier 链出闭包」（本节实测上界 −277）。
 - 验收：服务器单测 rc=0（含 D1 顺序 / 种子无关守护）；抽查 DeepCopy 系、`TestAppClassLoader`、`TestJarFile*`、URL / 类路径相关 e2e 与 HelloWorld 全过；
@@ -3348,7 +3352,7 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
 
 结论：
 - 只做 B1（不做 B5）的反事实上界是 3099 类，比目标 ≤3097 多 2 类；完整第 5 层（含 B5）才能到 3088。所以 ≤3097 必须 B1 与 B5 都做。
-- **jar Handler 在两种切除下都还在闭包里**。`URLClassPath.<init>(String,Z)@185` 无条件执行 `new sun/net/www/protocol/jar/Handler` 并写入 `jarHandler`，这个类是必然实例化的，任何健全的折叠都去不掉它。可去掉的只有经 `URLStreamHandler` 虚分派进来的方法：`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `hashCode` / `newURL` 等。前提是 §30.8 第 1 项：`URL.handler` 按分析出来的协议键分对象，jar Handler 只流进 `jarHandler` 字段和由它构造的 URL。因此 §30.8 原目标「jar Handler 出闭包」应改为「jar Handler 只保留构造器，经分派进来的方法出闭包」。
+- **jar Handler 在两种切除下都还在闭包里**。`URLClassPath.<init>(String,Z)@185` 无条件执行 `new sun/net/www/protocol/jar/Handler` 并写入 `jarHandler`，这个类是必然实例化的，任何健全的折叠都去不掉它。可去掉的只有经 `URLStreamHandler` 虚分派进来的方法：`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `hashCode` / `newURL` 等。前提是 §30.8 第 1 项：`URL.handler` 按分析出来的协议键分对象，jar Handler 只流进 `jarHandler` 字段和由它构造的 URL。因此 §30.8 原目标「jar Handler 出闭包」应改为「jar Handler 只保留构造器，经分派进来的方法出闭包」。（2026-10-06 协调方已采纳，§30.3 验收措辞已改写。）
 
 #### 待用户决策
 
@@ -3373,3 +3377,104 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
   - 按接收者对象的返回值：`rvals` 旁加 `orvals`，归属按节点 `P(m,0)`；
   - Oracle 读站点值集：调用 / 字段读的接收者来自 `Src::Site` 时，查流图站点节点，登记复核方式同 `obj_watch`。
   - 两者都可复用本步的「查询记录 + 答复复核」框架：`ObjQuery`、`obj_queries_same`、`obj_readers_recheck`。
+
+### 30.10 第 5 步：B5 引导包位置 `jrt:/` 前缀（2026-10-06，分支 `c1d-url-b2`，基于 da165172）
+
+协调方决定（2026-10-06）：先做 B5，B1② 的 P2–P4 后做；构建器内容在合流处丢弃可以接受；jar `Handler` 验收口径改写（§30.3 已改）；
+「启动目录是目录」待用户决定，本步不实施依赖它的折叠；`encodePath` 的结果形状要改为从字节码推出（见本节末）。
+
+#### 设计
+
+1. **清单事实**（`vm_intrinsics.toml [facts.string_shapes]`）：`BootLoader.getSystemPackageLocation` 的非 null 结果以 `jrt:/` 开头。
+   - 依据：JVM 返回命名模块包的模块位置 `jrt:/<模块>`、`-Xbootclasspath/a` 追加项上包的类路径项，或 null。原生二进制没有
+     `-Xbootclasspath/a`（无启动参数注入，引导类全部来自构建期模块镜像），所以只剩 null 与 `jrt:/<模块>`。
+   - 归类：native 方法（手写类 ①）的落地语义，属 handwritten-boundary §③「VM 注入状态」。清单注释写明手写实现须守此约定。
+   - `[facts.string_shapes]` 的表项由 `excludes` 单项扩为 `{ prefix, excludes }` 两项（至少一项；前缀不得含被排除字符，解析期报错）。
+     `Shape::prefixed` 取代 `Shape::excluding`。
+2. **返回常量格合流 `PV::join_ret`**：两侧都确定非空、值 / 标签无法合流时取「非空引用」，不再落到 Top。
+   触发点：`StringLatin1.newString` 一条路径返回常量 `""`、另一条返回带对象标签的 `new String`，合流后 `String.substring` 的返回成了 Top，
+   `findModule` 里 `substring` 结果之后的 `ModuleLayer.findModule(mn)` 链因此失去非空性。只用于返回常量格，形参 / 字段常量格不变。
+3. **final 实例字段复读收窄**（`absint/narrow.rs`，`State::nnf`）：`aload k; getfield f; ifnull/ifnonnull`（同块，f 为 final 实例字段）
+   非 null 一侧记下 (k, f)；此后 `aload k; getfield f` 的结果确定非空。写 k、本帧 `putfield f`、任一调用处撤掉，合流取交集，
+   异常处理器入口为空。触发点：`Optional.orElseThrow`（`if (value == null) throw …; return value;`）。
+   - 健全性：本线程内，final 字段的字节码写入只在 `<init>`，字节码外写入（反射 / Unsafe / 反序列化 / 手写）都要经调用，已被撤掉规则覆盖；
+     他线程的写入与第二次读之间没有 happens-before 边（本线程两次读之间无调用），第二次读取到第一次的值是 JLS §17.4.5 允许的结果，
+     final 字段另有 JLS §17.5.3 明文允许缓存（即使构造后被反射改写）。HotSpot C2 对无中间副作用的同字段读取也做公共子表达式合并。
+     所以收窄**不看字段的开放判定**（`Oracle::final_field` 只看访问标志，不登记依赖）。
+   - 为什么不看开放判定：`Optional.value` 在三处被「按名放开」——`ObjectStreamField("value", char[].class)`（`StringBuffer.<clinit>`）、
+     `ObjectInputStream$FieldValues.get` / `ObjectOutputStream$PutFieldImpl.put` 的 `getFieldOffset(name, type)`。它们都走
+     `reflect_writes.rs` 的形状兜底（「Class + String 实参 → 按名放开」，Class 实参上找不到该名字段时全局按名放开），
+     而实际按名取字段的汇点（`getDeclaredField` / `objectFieldOffset` / `name_resolvers`）另有精确建模。若收窄依赖开放判定，
+     这条兜底会让收窄失效；收窄的健全性本就不依赖写入集合（见上），所以与开放判定解耦。
+4. **字段配对的基本类型 / 非字节码类镜像**（`lookup_pair.rs::field_wrap_call`）：类值集里的基本类型类镜像（`Class#<primitive>`）与
+   非字节码类镜像没有 Java 字段，按名取不到字段，不再算「所指未知」而全局按名放开（与 `field_lookup.rs::class_values` 同一口径）。
+   来由：`findVarHandle(Class recv, String name, Class type)` 内部 `MemberName.<init>(Class, String, Class, byte)` 的形状配对把 `type`
+   形参也登记成查找类，`AtomicBoolean.<clinit>` 等传入 `int.class`，曾把 `value` 全局放开。
+
+#### 实测（tag `11d`，对照 da165172 的 `10p`）
+
+| 测试 | 类 | 方法 | 折叠常量 / 折叠方法 | 用时 ms（本机有并行作业，仅供参考） |
+|---|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 340→340 / 345→345 | 495 → 523 |
+| StockTrans | 3185 → **3150** | 20259 → **19919** | 2238→2212 / 1992→1962 | 34777 → 31700 |
+| DeepCopy | 3187 → **3152** | 20277 → **19939** | 2236→2210 / 1991→1961 | 25967 → 29822 |
+| TestSerialDefaultSuid | 3192 → **3157** | 20271 → **19931** | 2237→2211 / 1991→1961 | 31033 → 27555 |
+
+- 四例均为 `10p` 的子集（新增类 0、新增方法 0）；三例各 −35 类 / 约 −340 方法。折叠常量 / 方法计数下降是因为被折叠的方法本身出了闭包。
+- DeepCopy 折叠：`PackageHelper.definePackage` 死区 `[57, 87]`（`toFileURL` / `getManifest` / `defineOrCheckPackage` 分支）；
+  `findModule` 死区 `[24, 79]`（`-Xbootclasspath/a` 的 `file:` 分支）与 `[102, 104]`（`return null`）。
+- 出闭包的 35 类：jrtfs（`JrtFileSystem` / `JrtPath` / `SystemImage` / `ExplodedImage` 等）、`ImageReader` 节点类、`FileTreeWalker` 一组、
+  `ZipFileSystem`、`JarInputStream` / `ZipInputStream` / `PushbackInputStream`、`AllPermissionCollection`、`Class$Holder`、
+  `PackageHelper$1` / `$2`、`UnixUriUtils` 等。
+- 分步：只加前缀事实 −29 类（`findModule` 的 `file:` 分支死）；加 `join_ret` 后 `[102,104]` 也死但计数不变；
+  final 字段复读收窄解耦开放判定后 `definePackage@57..87` 死，再 −6 类。
+- `JarVerifier`、`JarFile`、`JarURLConnection`、jar `Handler` 仍在闭包内：B5 这条路线已切断，剩余来源是 B1 / B4（§30.8、§30.9）。
+
+#### 与引导映像项目的一致性
+
+- `getSystemPackageLocation` 现为 native 手写边界（a3-L1 / 引导映像第 5 步，已知失败 `TestProtectionDomainFaces` 的
+  `BootLoader.getSystemPackageLocation` native 缺口即此方法）。落地实现须只返回 null 或 `jrt:/<模块名>`，与本清单事实一致；
+  清单注释已写明这一约定。
+- `findModule` 的模块分支另需 `ModuleLayer.boot().findModule(mn)` 在运行期能找到该模块（引导层可用），这同样是引导映像第 5 步的范围，
+  本步不改变它，只是闭包不再保留 jar 分支作兜底。
+- 两边重叠点只有这一个 native 方法；引导映像若改为构建期求值包位置，结果仍须落在 `jrt:/` 前缀内，否则本事实失效（清单解析不检查运行期值）。
+
+#### 单测
+
+- closure crate：新增 `final_field_reread_keeps_nonnull`（final / 非 final、中间调用、`putfield`、改写接收者局部五种情形）、
+  `join_ret_keeps_nonnull`，`string_shapes_parse` 增前缀项与两种错误项。
+
+#### `encodePath` 结果形状：从字节码推出所需的域扩展（本步未实施，清单事实暂留）
+
+`ParseUtil.encodePath(String, Z)` 的「结果不含 `#` `?`」要从字节码推出，需要下列五项能力，每项都是独立的域扩展，
+合计超出本步范围（串形状域只描述串本身，不描述数组内容、不跨变量关联）：
+
+| # | 字节码位置 | 需要的能力 |
+|---|---|---|
+| E1 | `firstEncodeIndex`：`for (i < len) { c = charAt(i); if (快速通道) continue; if (c > 0x7F \|\| match(c, L, H)) return i; } return -1` | **扫描循环摘要**：返回 -1 ⇒ 串中每个字符都不满足谓词 P；返回 i ≥ 0 ⇒ 前缀 [0, i) 不满足 P。P 对 0–127 逐值常量求值（`match` 的两个掩码是 `ldc2_w` 常量，纯算术），得到 ASCII 排除集 |
+| E2 | `encodePath(String,Z)@26..40`：`index > -1` 的假侧返回 `path` | **关系事实**：int 值携带「它是串 s 的扫描下标」标签，分支收窄到 `== -1` 时把 s 的形状并上排除集（需要按来源回写局部变量） |
+| E3 | `encodePath(String,I,C)`：`retCC[retLen++] = c` 各处 | **路径敏感的字符值集**：比较链（`c == sep`、`a–z` / `A–Z` / `0–9`、`c ≤ 0x7F`、`match`）两侧收窄 char 局部的值集，`castore` 处取值集 |
+| E4 | 同上：`newarray char`、`toCharArray`、`System.arraycopy`、扩容拷贝、`new String(char[], int, int)` | **char 数组内容域**：按分配点记「元素排除集」（全部 `castore` 值集与拷贝来源的交），`new String(char[],…)` 结果取之；`arraycopy(pathCC, 0, retCC, 0, index)` 的拷贝段需要 E1 的前缀事实经形参 `index` 传入（两个调用点：常量 0 与扫描下标），即 E2 的关系标签要过形参常量格 |
+| E5 | `escape(char[], char, int)`：写 `'%'` 与 `Character.forDigit(…, 16)` | **数组形参写入摘要**（被调方法对实参数组写入的值集）+ `forDigit` 的返回字符集（返回 int 值集求值，`'0'–'9'`、`'a'–'z'`、`'\0'`） |
+
+终态做法：E1–E5 全部落地后删除两条 `excludes` 清单项，由 `encodePath` 的返回值形状直接给出。E3 / E5 的 int 值集已有
+（`absint/ints.rs` 的有限值集），缺的是比较链两侧的收窄与「数组形参写入」摘要；E4 是新的对象标签（`Obj::Chars { no }`），
+与 §30.9 的构建器标签同构（`castore` 对应 `append`）；E1 / E2 是新的循环摘要与关系标签，工作量最大。
+在此之前保留清单事实，注释里的位运算论证可逐位核对（`#` = 0x23、`?` = 0x3F 落在 L_ENCODED 的置位上）。
+
+#### 待用户决策
+
+1. **final 字段复读收窄不看开放判定**（本步实施）：依据 JLS §17.4.5 / §17.5.3（见设计第 3 项）。可观察差异只在「他线程在本线程两次读取之间
+   用反射 / Unsafe 改写 final 字段为 null」时出现：JVM 允许第二次读取返回旧值（C2 实际如此），生成的 Rust 按折叠删去 null 分支后
+   读到 null 会继续走非 null 路径。若不接受，需改为依赖开放判定，并先收窄 `reflect_writes.rs` 的形状兜底（见下），否则 B5 的
+   `definePackage@57..87` 回到可达（−6 类）。
+2. **启动目录是目录**（B1①）：仍待决定，本步未实施任何依赖它的折叠。
+
+#### 遗留与恢复入口
+
+- 分支 `c1d-url-b2`，worktree `/Users/yuwei/dev/workspace/java_rta_c1durl2`。测量 `build/url/run4.sh <tag 后缀>`（构建 rava + 四例 + 对照 `10p`）。
+- **形状兜底**：`reflect_writes.rs` 中「调用含 Class 形参与 String 实参 → 名字在 Class 实参上找不到字段时全局按名放开」是按名放开的
+  最大来源之一（`value` 由 `ObjectStreamField.<init>` / `getFieldOffset` 放开）。终态：按名取字段的汇点全部精确建模
+  （`getDeclaredField(s)` / `objectFieldOffset` / `name_resolvers` / `MemberName` 解析），形状兜底删除。需单独立项、服务器全量验证。
+- **`encodePath`**：清单 `excludes` 两项暂留，E1–E5（上表）落地后删除。
+- 下一步按协调方顺序回到 B1② 的 P2（构造器确定初始化，入口见 §30.9「恢复入口」）。
