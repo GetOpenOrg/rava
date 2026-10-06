@@ -308,7 +308,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-b 反射收窄（c1d-pick） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-02 | b0 / T3–T7 / T2 / b3 已合入；余 T2 余项、b1、b2；过程见历史 §E / §J |
 | C1d-b-b1′ | ⏸ 未派（2026-10-04 优化线优先期间暂停）· | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
 | C1d-b-T2余 | ⏸ c1d-b-t2b | 类镜像子类型判定收窄已合入（§七，StockTrans 3386/20860→3380/20813）。4b（§八）：反射对象池由方法句柄全局池经 `NativeAccessor.invoke` 句柄成员灌满，按角色分池实测 0 收益已撤回；不健全下界实验仅 −6 类 / −205~214 方法（StockTrans / DeepCopy / TSDS），终态前置为方法句柄对象化（成员句柄伪值 + 组合子形状清单），低优先级挂起 |
-| C1d-b-b1 | ⏸ 未派（2026-10-04 优化线优先期间暂停）· S2 ✅ 0d7dd2a5 | 序列化收窄：目标 DeepCopy ≤1640、fold_props ≥42；大值集来自未知接收者字段视图 |
+| C1d-b-b1 | ⏸ 挂起（2026-10-06 实测收口，计划 §九；分支 c1d-b-b1 仅文档 + 探查脚本）· S2 ✅ 0d7dd2a5 | 序列化收窄：字段视图环反事实上界仅 −6 类 / −166 方法（DeepCopy 3422→3416，与 4b 下界同 6 类）；序列化总量 278 类，其余大值集来源（writeReplace / 回调反射返回、反射与句柄池）前置为方法句柄对象化（§8.3），并入 T2余；原目标 ≤1640 作废（不走序列化也有 3144） |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-jndi | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
