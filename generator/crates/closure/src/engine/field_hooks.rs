@@ -83,4 +83,19 @@ impl Ctx<'_> {
         let h = self.man.vm_state.field_hook(&fi.key.owner, &fi.key.name, &fi.key.desc)?;
         (h.receiver && classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot)).then_some(V::Null)
     }
+
+    /// 实例调用 m 在一组接收者类镜像上的结果：m 属清单 `[vm_state] boot_singletons` 且每个镜像都是引导加载器定义的
+    /// 类时为同一个进程内对象（带 `Obj::BootSingleton` 标签的非空引用，类型由调用点按描述符补上）；否则未知。
+    /// 空集合同样给出（乐观：调用方按值集增长重分析，失效条件与接收者钩子字段同为「新增非引导类镜像」）
+    pub(super) fn mirrors_boot_singleton<'c>(&self, m: &MemberRef, classes: impl IntoIterator<Item = &'c str>) -> Option<V> {
+        if self.man.vm_state.boot_singletons.is_empty() {
+            return None;
+        }
+        let k = m.to_string();
+        if !self.man.vm_state.is_boot_singleton(&k) || !classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot) {
+            return None;
+        }
+        let tag = Rc::new(crate::absint::Obj::BootSingleton(Rc::from(k)));
+        Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) })
+    }
 }

@@ -22,9 +22,10 @@ impl PV {
             _ => PV::Top,
         }
     }
-    /// 返回值 → 返回常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」（[`nonnull_ref`]）。
-    /// 只用于返回常量格：调用点据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法），
-    /// 形参 / 字段常量格不取它（那里的引用须保留来源）
+    /// 返回值 / 实参 → 返回常量格与形参常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」
+    /// （[`nonnull_ref`]）。调用点 / 被调方法体据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法、
+    /// 实参恒为调用者类镜像的形参）；形参入口按形参序号换来源、按描述符补类型（`absint::entry_state`）。
+    /// 字段常量格不取它（字段值的来源须保留）
     pub(super) fn of_ret(v: &V) -> PV {
         match v {
             V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
@@ -168,8 +169,9 @@ pub(super) struct CallInfo {
     pub(super) reader: Option<super::sysprops::PropSum>,
     /// 按名取字段偏移的入口（`name_resolvers` 里 offset = true）
     pub(super) offset: Option<crate::manifest::NameResolver>,
-    /// 空的不可修改集合工厂的结果（带 `Obj::Empty` 标签的非空引用，`[facts.empty_collections] factories`）
-    pub(super) empty: Option<V>,
+    /// 清单确定非空的调用结果：空的不可修改集合工厂（带 `Obj::Empty` 标签，`[facts.empty_collections] factories`）、
+    /// 调用者类镜像（`caller_class`，运行期恒有调用者或回退根类，见 `vm_intrinsics.toml`）
+    pub(super) nonnull_ret: Option<V>,
     /// 接收者为空集合时的查询结果（`[facts.empty_collections] queries`）
     pub(super) empty_query: Option<V>,
 }
@@ -376,7 +378,11 @@ impl Ctx<'_> {
         let k = m.to_string();
         let fact = self.man.return_fact(&k).map(fact_value);
         // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
-        let empty = self.man.empty.is_factory(&k).then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) });
+        let nonnull_ret = if self.man.empty.is_factory(&k) {
+            Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) })
+        } else {
+            self.man.returns_caller_class(&k).then(nonnull_ref)
+        };
         let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
         let target = self
             .exact_target(opcode, m, iface)
@@ -394,7 +400,7 @@ impl Ctx<'_> {
             holder: self.man.sysprops.is_holder(&k),
             reader: self.reader_spec(&k),
             offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
-            empty,
+            nonnull_ret,
             empty_query,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
@@ -495,7 +501,7 @@ impl Oracle for Facts<'_, '_> {
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
         }
-        if let Some(v) = &c.empty {
+        if let Some(v) = &c.nonnull_ret {
             return Ret::Value(v.clone());
         }
         if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
@@ -503,6 +509,12 @@ impl Oracle for Facts<'_, '_> {
         }
         if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
             return Ret::Value(v);
+        }
+        // 类字面量接收者上的引导单例方法
+        if let (classfile::op::INVOKEVIRTUAL, Some(V::Class(k, _))) = (opcode, args.first()) {
+            if let Some(v) = self.ctx.mirrors_boot_singleton(m, [&**k]) {
+                return Ret::Value(v);
+            }
         }
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
@@ -561,6 +573,10 @@ impl Oracle for Facts<'_, '_> {
     fn param_mirror_field(&self, i: u16, f: &MemberRef) -> Option<V> {
         let s = self.mirrors.get(i as usize)?.as_ref()?;
         self.ctx.mirrors_hook_field(f, s.iter().map(|c| &**c))
+    }
+    fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
+        let s = self.mirrors.get(i as usize)?.as_ref()?;
+        self.ctx.mirrors_boot_singleton(m, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)

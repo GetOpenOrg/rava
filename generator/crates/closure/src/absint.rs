@@ -292,6 +292,12 @@ pub trait Oracle {
     fn param_mirror_field(&self, _i: u16, _f: &MemberRef) -> Option<V> {
         None
     }
+    /// 形参 i（Class 类型）为接收者调用 m：值集已知且其中每个类镜像上 m 的结果由类的事实定出时为该结果
+    /// （清单 `[vm_state] boot_singletons`：全为引导类镜像时为同一对象），乐观答复同 [`Oracle::param_mirror_field`]
+    /// （记入 [`Analysis::mirror_field_assumed`]）；None = 未知
+    fn param_mirror_call(&self, _i: u16, _m: &MemberRef) -> Option<V> {
+        None
+    }
     /// 是否为类镜像子类型判定（清单 `[facts.reflect] mirror_subtype_tests`，`K.isAssignableFrom(x)` 形态：
     /// 接收者镜像所指类是实参镜像所指类的超类型时为真），见 `narrow.rs`
     fn mirror_subtype_test(&self, _m: &MemberRef) -> bool {
@@ -457,6 +463,11 @@ impl<O: Oracle> Interp<'_, O> {
             (Some(false), Some(true)) | (Some(true), Some(false)) => return Some(false),
             _ => {}
         }
+        if let (Some(x), Some(y)) = (a.obj(), b.obj()) {
+            if matches!(**x, Obj::BootSingleton(_)) && x == y {
+                return Some(true);
+            }
+        }
         let (c, v) = match (a, b) {
             (V::Class(x, _), V::Class(y, _)) => return Some(x == y),
             (V::Class(c, _), v) | (v, V::Class(c, _)) => (c, v),
@@ -480,6 +491,15 @@ impl<O: Oracle> Interp<'_, O> {
         let Some(V::Ref { src, .. }) = recv else { return None };
         let [Src::Param(i)] = &src[..] else { return None };
         let v = self.oracle.param_mirror_field(*i, f)?;
+        self.field_assumed.push(*i);
+        Some(v)
+    }
+
+    /// 接收者只来自一个 Class 形参的实例调用按形参镜像值集求结果（记为乐观答复）
+    fn param_mirror_call(&mut self, recv: Option<&V>, m: &MemberRef) -> Option<V> {
+        let Some(V::Ref { src, .. }) = recv else { return None };
+        let [Src::Param(i)] = &src[..] else { return None };
+        let v = self.oracle.param_mirror_call(*i, m)?;
         self.field_assumed.push(*i);
         Some(v)
     }
@@ -954,7 +974,10 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     let recv = pop(s)?;
                     args.insert(0, recv);
                 }
-                let r = self.oracle.invoke_result(opc, m, *iface, &args);
+                let r = match self.oracle.invoke_result(opc, m, *iface, &args) {
+                    Ret::Unknown if opc == op::INVOKEVIRTUAL => self.param_mirror_call(args.first(), m).map_or(Ret::Unknown, Ret::Value),
+                    r => r,
+                };
                 if opc == op::INVOKESPECIAL && m.name == "<init>" {
                     self.constructed(s, m, &args);
                 }
@@ -1080,7 +1103,16 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
     let base = u16::from(!is_static);
     for (i, p) in md.params.iter().enumerate() {
         let k = base + i as u16;
-        locals.push(param(k).map_or_else(|| value_of(p, Src::Param(k)), |v| v.rebased(Src::Param(k))));
+        // 形参常量格的「非空引用」不带类型：按描述符补上
+        let v = match param(k).map(|v| v.rebased(Src::Param(k))) {
+            Some(V::Ref { ty: None, nonnull, src, obj }) => match value_of(p, Src::Param(k)) {
+                V::Ref { ty, .. } => V::Ref { ty, nonnull, src, obj },
+                _ => V::Ref { ty: None, nonnull, src, obj },
+            },
+            Some(v) => v,
+            None => value_of(p, Src::Param(k)),
+        };
+        locals.push(v);
         if p.slots() == 2 {
             locals.push(V::Hi);
         }
