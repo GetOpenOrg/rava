@@ -38,6 +38,8 @@ pub struct JcaCfg {
     /// 服务实现类的反射构造点（`类.名字:描述符`）：方法内按名取类的所指类由本规则按被请求的算法补种，
     /// 不按类名字段的字符串集解析（否则注册表里全部算法的实现类都入链）
     pub instantiation_hosts: Vec<String>,
+    /// 提供者序求值（`[jca.order]`）
+    pub order: Option<super::jca_order::OrderCfg>,
 }
 
 impl JcaCfg {
@@ -58,6 +60,7 @@ impl JcaCfg {
                 .collect(),
             alias_sources: arr("alias_sources").iter().filter_map(|x| x.as_str().map(String::from)).collect(),
             instantiation_hosts: arr("instantiation_hosts").iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            order: super::jca_order::OrderCfg::from_toml(sec.get("order")),
         }
     }
 

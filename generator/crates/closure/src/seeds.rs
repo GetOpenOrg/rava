@@ -3,6 +3,7 @@
 
 pub mod annotation;
 pub mod jca;
+pub mod jca_order;
 pub mod locale;
 pub mod services;
 
