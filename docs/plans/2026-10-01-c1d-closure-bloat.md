@@ -3443,6 +3443,8 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
 
 - closure crate：新增 `final_field_reread_keeps_nonnull`（final / 非 final、中间调用、`putfield`、改写接收者局部五种情形）、
   `join_ret_keeps_nonnull`，`string_shapes_parse` 增前缀项与两种错误项。
+- closure crate 181 过；`closure_independent_of_hash_seed` 过（1320s）、`container_elements_per_object` 过。
+  （首轮哈希种子测试与 rava 重建并发，二进制中途被替换，结果作废后单独重跑。）
 
 #### `encodePath` 结果形状：从字节码推出所需的域扩展（本步未实施，清单事实暂留）
 
