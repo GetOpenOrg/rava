@@ -1079,7 +1079,7 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
 | HelloWorld | batch 1/7/64/512/4096 × seed 0/1/2/12345（20 组） | 468 类 / 1791 方法，全键一致 | 服务器 `d1-n2-b763ee15/02` |
 | TestModuleLayerDefine | 同上 20 组 | 3313 类 / 19355 方法 / 451 反射成员，全一致 | 服务器 `d1-n2-b763ee15/02` |
 | TestJndiNoProvider | b4096 × 4 seed | 3865 / 24624 / 1624，全一致，与修前 b1 只差两条中间态缺口 | 服务器 `d1-n2-b763ee15/06` |
-| TestHttpLoopbackSync | b7、b512、b4096 各 × 4 seed（12 组） | 5466 / 34011 / 1746，跨 batch、跨 seed 全一致 | 服务器 `d1-n2-b763ee15/08`、`d1-n3-b763ee15/05`、`/07` |
+| TestHttpLoopbackSync | batch 1/7/64/512/4096 × seed 0/1/2/12345（20 组） | 5466 / 34011 / 1746，全一致 | 服务器 `d1-n2-b763ee15/08`（b7）、`d1-n3-b763ee15/05`（b512）、`/06`（b64）、`/07`（b4096）、`/08`（b1） |
 | DeepCopy | b64/1/4096 × s0/s12345 | 3381 / 20819 / 842，全一致 | 本机 `build/d1/m5`（本机 JDK 21） |
 | CollectorsDemo / TestModuleLayerDefine | b64/1/512/4096 × s0/s12345 | 3101 / 17877 / 423；3264 / 19219 / 433，全一致 | 本机 `build/d1/m4` |
 | TestHttpLoopbackSync | b1、b512 × s0 | 5420 / 33857 / 1732，一致 | 本机 `build/d1/http5` |
@@ -1105,7 +1105,7 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
 |---|---|---|---|---|
 | DeepCopy | jp2（`d1-n3-b763ee15/02`） | 84.6 s | 84.6 s | +0.0% |
 | TestJndiNoProvider | jp2（同上） | 243.7 s | 260.4 s | **+6.9%** |
-| TestHttpLoopbackSync | sg2（`d1-n3-b763ee15/01`） | 待出 | 待出 | 待出 |
+| TestHttpLoopbackSync | sg2（`d1-n3-b763ee15/01`） | 760.5 s | 763.0 s | +0.3% |
 
 **JNDI +6.9% 的解释**：确定性工作量计数（与机器负载无关）显示，新版多做的正是修前漏做的工作。
 数据来自本机同一对二进制的 JNDI 闭包 `summary.perf`（本机 JDK，3820 类）：
