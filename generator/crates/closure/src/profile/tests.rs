@@ -25,7 +25,7 @@ fn closure(classes: &[(&str, &str, &str)], methods: &[(&str, &str)], folds: Vec<
 }
 
 fn entry(name: &str, c: Value) -> EntryClosure {
-    EntryClosure { name: name.into(), closure: c }
+    EntryClosure { name: name.into(), closure: c, cp: Vec::new(), launch: None }
 }
 
 fn no_table(_: &str) -> Option<Vec<u32>> {
@@ -37,7 +37,7 @@ fn names(v: &Value, key: &str, field: &str) -> Vec<String> {
 }
 
 fn inputs() -> KeyInputs {
-    KeyInputs { generator: "g".into(), runtime: "r".into(), jdk_major: 21, archives: "a".into(), entries: "e".into() }
+    KeyInputs { generator: "g".into(), runtime: "r".into(), jdk_major: 21, archives: "a".into(), entries: "e".into(), deps_lock: String::new() }
 }
 
 /// 两个入口有同名用户类 Main（语料常见）：档案只含非用户侧，类层级取最高，方法 / 集合取并
@@ -86,15 +86,15 @@ fn independent_of_entry_order() {
 fn key_is_stable_and_order_free() {
     let (a, b) = pair();
     let (a2, b2) = pair();
-    let k1 = build(&[a, b], &no_table, &inputs()).unwrap();
-    let k2 = build(&[b2, a2], &no_table, &inputs()).unwrap();
+    let k1 = build(&[a, b], &no_table, &inputs(), None).unwrap();
+    let k2 = build(&[b2, a2], &no_table, &inputs(), None).unwrap();
     assert_eq!(k1["profile"]["key"], k2["profile"]["key"]);
     assert_eq!(k1, k2);
 }
 
 #[test]
 fn key_is_sensitive_to_inputs_and_entries() {
-    let key = |es: Vec<EntryClosure>, i: &KeyInputs| build(&es, &no_table, i).unwrap()["profile"]["key"].as_str().unwrap().to_string();
+    let key = |es: Vec<EntryClosure>, i: &KeyInputs| build(&es, &no_table, i, None).unwrap()["profile"]["key"].as_str().unwrap().to_string();
     let base = || {
         let (a, b) = pair();
         vec![a, b]

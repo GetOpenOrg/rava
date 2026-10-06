@@ -1,7 +1,8 @@
 //! `rava build` / `rava emit` 的参数解析（纯函数，单测覆盖）。
 //!
 //! - `rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类]
-//!   [--image D]… [--locale L]… [--root 类.方法:描述符]… [--lib NAME=JAR[:seed=FQN,…]]… [--batch]
+//!   [--image D]… [--locale L]… [--root 类.方法:描述符]…
+//!   [--deps deps.lock.toml] [--cp 锁条目名[,…]] [--launch "<启动选项>"] [--seed-class FQN[,…]]… [--batch]
 //!   [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--strict] [--debug]
 //!   [--stop-after javac|closure|emit|compile|run] [--full-precheck] [--build-timeout SECS] [--release | --release-small | --dev-opt] [--target-dir D]
 //!   [--keep-artifacts]
@@ -57,43 +58,6 @@ pub enum Mode {
     Emit,
 }
 
-/// `--lib NAME=JAR[:seed=FQN[,FQN…]]`：一个 lib crate 的 jar 输入（声明序即 crate 依赖序）
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LibSpec {
-    pub name: String,
-    pub jar: PathBuf,
-    /// None = 整包模式（jar 全部类进 crate，种子 = 全部类的 public 方法）；
-    /// Some = 子集模式（种子类的 public 方法，只收闭包触达的 jar 类）。斜线形态
-    pub seeds: Option<Vec<String>>,
-}
-
-impl LibSpec {
-    pub fn parse(raw: &str) -> Result<LibSpec, String> {
-        let (head, seed_part) = match raw.split_once(":seed=") {
-            Some((h, s)) => (h, Some(s)),
-            None => (raw, None),
-        };
-        let (name, jar) = head
-            .split_once('=')
-            .ok_or_else(|| format!("--lib 格式应为 NAME=JAR[:seed=FQN[,FQN...]]，收到：{raw}"))?;
-        if name.is_empty() || jar.is_empty() {
-            return Err(format!("--lib 的 NAME/JAR 不能为空：{raw}"));
-        }
-        let seeds = match seed_part {
-            None => None,
-            Some(s) => {
-                let v: Vec<String> =
-                    s.split(',').map(str::trim).filter(|f| !f.is_empty()).map(|f| f.replace('.', "/")).collect();
-                if v.is_empty() {
-                    return Err(format!("--lib seed 为空：{raw}"));
-                }
-                Some(v)
-            }
-        };
-        Ok(LibSpec { name: name.to_string(), jar: PathBuf::from(jar), seeds })
-    }
-}
-
 /// 解析结果
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BuildOpts {
@@ -119,7 +83,14 @@ pub struct BuildOpts {
     pub api_packages: Vec<String>,
     /// `--api-package` 含子包
     pub api_recursive: bool,
-    pub libs: Vec<LibSpec>,
+    /// 依赖锁（V12 §3.2）：`--deps <deps.lock.toml>`；库输入唯一来源（`--lib` 已删除）
+    pub deps: Option<PathBuf>,
+    /// 入口类路径：`--cp <锁条目名>[,…]`（实际顺序取锁序，与给出序无关）
+    pub cp: Vec<String>,
+    /// 启动选项（`--launch "<启动选项>"`）：进入分析与运行期（本步入库传递）
+    pub launch: Option<String>,
+    /// 显式种子类（斜线形态）：整包翻译的 crate 验收以显式种子给出（`:seed=` 已删除）
+    pub seed_classes: Vec<String>,
     /// 批量模式：入口写 `user/src/bin/<bin>.rs` 并向 user/Cargo.toml 追加 `[[bin]]`
     pub batch: bool,
     /// 打印该类 / 方法入闭包的最短 provenance 链（`rava closure --why`）
@@ -157,7 +128,7 @@ pub struct BuildOpts {
     pub profile: Option<PathBuf>,
 }
 
-const VALUED: [&str; 25] = [
+const VALUED: [&str; 28] = [
     "--profile",
     "--stop-after",
     "--target-dir",
@@ -175,7 +146,10 @@ const VALUED: [&str; 25] = [
     "--locale",
     "--root",
     "-o",
-    "--lib",
+    "--deps",
+    "--cp",
+    "--launch",
+    "--seed-class",
     "--trace-class",
     "--raw-sites",
     "--api-package",
@@ -199,7 +173,7 @@ const FLAGS: [&str; 12] = [
     "--keep-artifacts",
 ];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 22] = [
+const BUILD_ONLY: [&str; 25] = [
     "--release",
     "--release-small",
     "--dev-opt",
@@ -213,7 +187,10 @@ const BUILD_ONLY: [&str; 22] = [
     "--stop-after",
     "--build-timeout",
     "-o",
-    "--lib",
+    "--deps",
+    "--cp",
+    "--launch",
+    "--seed-class",
     "--batch",
     "--trace-class",
     "--api-package",
@@ -240,6 +217,9 @@ impl BuildOpts {
                 Mode::Build => EMIT_ONLY.contains(&a.as_str()),
                 Mode::Emit => BUILD_ONLY.contains(&a.as_str()),
             };
+            if a == "--lib" {
+                return Err("--lib 已删除：库输入改用 --deps <deps.lock.toml> + --cp <锁条目名>[,…]，整包种子改用 --seed-class".into());
+            }
             if foreign || !(VALUED.contains(&a.as_str()) || FLAGS.contains(&a.as_str())) {
                 return Err(format!("未知选项：{a}"));
             }
@@ -281,7 +261,12 @@ impl BuildOpts {
                 "--cut" => o.cuts.push(v.clone()),
                 "--cut-file" => o.cut_files.push(v.clone()),
                 "--dump-edges" => o.dump_edges = Some(v.clone()),
-                "--lib" => o.libs.push(LibSpec::parse(v)?),
+                "--deps" => o.deps = Some(PathBuf::from(v)),
+                "--cp" => o.cp.extend(v.split(',').map(str::trim).filter(|n| !n.is_empty()).map(String::from)),
+                "--launch" => o.launch = Some(v.clone()),
+                "--seed-class" => o
+                    .seed_classes
+                    .extend(v.split(',').map(str::trim).filter(|f| !f.is_empty()).map(|f| f.replace('.', "/"))),
                 "--trace-class" => o.trace_class = Some(v.clone()),
                 "--raw-sites" => o.raw_sites = Some(PathBuf::from(v)),
                 "--api-package" => o.api_packages.push(v.clone()),
@@ -311,12 +296,16 @@ impl BuildOpts {
         if self.build_timeout.is_some() && self.stop_after < Stage::Compile {
             return Err("--build-timeout 只对 compile / run 阶段有效".into());
         }
-        if !self.libs.is_empty() && self.batch {
-            return Err("jar 输入模式（--lib）不支持 --batch（单 bin 消费形态）".into());
+        match (&self.deps, self.cp.is_empty(), mode) {
+            (Some(_), true, _) => return Err("--deps 须配合 --cp 给出入口类路径（锁条目名）".into()),
+            (None, false, _) => return Err("--cp 须配合 --deps（库输入唯一来源是依赖锁）".into()),
+            _ => {}
         }
-        let mut seen = std::collections::BTreeSet::new();
-        if let Some(d) = self.libs.iter().find(|l| !seen.insert(l.name.as_str())) {
-            return Err(format!("--lib crate 名重复：{}", d.name));
+        if !self.seed_classes.is_empty() && self.deps.is_none() {
+            return Err("--seed-class 是库类的种子，须配合 --deps".into());
+        }
+        if !self.cp.is_empty() && self.batch {
+            return Err("带依赖锁的构建（--deps）不支持 --batch（单 bin 消费形态）".into());
         }
         match mode {
             Mode::Build => {
@@ -444,30 +433,36 @@ mod tests {
     }
 
     #[test]
-    fn lib_specs_and_diagnostic_flags() {
+    fn deps_cp_seed_class_and_diagnostic_flags() {
         let o = BuildOpts::parse(
             Mode::Build,
-            &args("A.java --lib h=/j/h.jar --lib ju=/j/ju.jar:seed=org.junit.Assert,,org.junit.Test --trace-class java/net/X --debug --stop-after emit --full-precheck --raw-sites /tmp/r.txt"),
+            &args("A.java --deps /d/deps.lock.toml --cp junit,hamcrest --launch add-opens:a/b=c \
+                   --seed-class org.junit.Assert,org.junit.Test --seed-class org/hamcrest/CoreMatchers \
+                   --trace-class java/net/X --debug --stop-after emit --full-precheck --raw-sites /tmp/r.txt"),
         )
         .unwrap();
-        assert_eq!(o.libs.len(), 2);
-        assert_eq!(o.libs[0], LibSpec { name: "h".into(), jar: PathBuf::from("/j/h.jar"), seeds: None });
-        assert_eq!(o.libs[1].seeds, Some(vec!["org/junit/Assert".to_string(), "org/junit/Test".to_string()]));
+        assert_eq!(o.deps.as_deref(), Some(Path::new("/d/deps.lock.toml")));
+        assert_eq!(o.cp, ["junit", "hamcrest"]);
+        assert_eq!(o.launch.as_deref(), Some("add-opens:a/b=c"));
+        assert_eq!(o.seed_classes, ["org/junit/Assert", "org/junit/Test", "org/hamcrest/CoreMatchers"]);
         assert_eq!(o.trace_class.as_deref(), Some("java/net/X"));
         assert!(o.debug && o.full_precheck && !o.batch);
         assert_eq!(o.raw_sites, Some(PathBuf::from("/tmp/r.txt")));
         for bad in [
-            "A.java --lib h",
-            "A.java --lib =/j.jar",
-            "A.java --lib h=",
-            "A.java --lib h=/j.jar:seed=,",
-            "A.java --lib h=/a.jar --lib h=/b.jar",
-            "A.java --lib h=/a.jar --batch",
+            "A.java --lib h=/j.jar",
+            "A.java --deps /d.lock",
+            "A.java --cp junit",
+            "A.java --seed-class org.junit.Assert",
+            "A.java --deps /d.lock --cp j --batch",
+            "A.java --deps",
+            "A.java --deps /d.lock --cp",
         ] {
             assert!(BuildOpts::parse(Mode::Build, &args(bad)).is_err(), "{bad}");
         }
+        let err = BuildOpts::parse(Mode::Build, &args("A.java --lib h=/j.jar")).unwrap_err();
+        assert!(err.contains("--lib 已删除"), "{err}");
         assert!(BuildOpts::parse(Mode::Build, &args("A.java --batch")).unwrap().batch);
-        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --lib h=/a.jar")).is_err());
+        assert!(BuildOpts::parse(Mode::Emit, &args("c.json --deps /d.lock --cp j")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --trace-class X")).is_err());
         assert!(BuildOpts::parse(Mode::Emit, &args("c.json --debug --full-precheck")).is_ok());
     }

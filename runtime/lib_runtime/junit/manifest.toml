@@ -1,0 +1,3 @@
+# junit 库专属运行时清单（V12 §3.6）：只进该库的生成输入，不进 runtime/java_runtime/ 三份清单。
+# versions 区间按依赖锁坐标的 version 匹配；命中多个区间报错。
+versions = "[4,)"

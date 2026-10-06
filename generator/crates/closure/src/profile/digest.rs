@@ -30,6 +30,8 @@ pub struct KeyInputs {
     pub archives: String,
     /// 入口输入摘要（[`entries_digest`]；记录用，不入 P）
     pub entries: String,
+    /// 依赖锁摘要（`--deps`；锁序是构建单元输入的一部分——顺序变化即 P 变化，入 P）
+    pub deps_lock: String,
 }
 
 /// 内容摘要：去掉溯源与统计后的规范序列化
@@ -44,6 +46,17 @@ pub fn content_digest(profile: &Value) -> String {
                     x.remove("via");
                     x.remove("entry");
                 }
+            }
+        }
+        // modules 行的 §4.2 富化字段是档案层元数据（模块图单一来源），不是闭包事实：
+        // 不入内容摘要——覆盖判定（`--covers`）重并时无富化上下文，两侧须一致；
+        // jar 身份变化经 profile.inputs.deps_lock（含 sha256）进入 P
+        for x in o.get_mut("modules").and_then(Value::as_array_mut).into_iter().flatten() {
+            if let Some(x) = x.as_object_mut() {
+                x.remove("kind");
+                x.remove("crate");
+                x.remove("jars");
+                x.remove("release");
             }
         }
     }
@@ -61,6 +74,7 @@ pub fn profile_key(k: &KeyInputs, content: &str) -> String {
     f.field("runtime", k.runtime.as_bytes());
     f.field("jdk_major", &k.jdk_major.to_le_bytes());
     f.field("archives", k.archives.as_bytes());
+    f.field("deps_lock", k.deps_lock.as_bytes());
     f.field("content", content.as_bytes());
     f.hex()
 }

@@ -45,7 +45,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 类型序号 c 的定义加载器
-    fn defining_loader(&self, c: u32) -> Loader {
+    pub(super) fn defining_loader(&self, c: u32) -> Loader {
         self.ctx.defining_loader(&self.names[c as usize])
     }
 }
@@ -73,8 +73,14 @@ impl Ctx<'_> {
         if opcode != classfile::op::GETFIELD {
             return None;
         }
+        self.mirrors_hook_field(f, [&**c])
+    }
+
+    /// 接收者钩子字段在一组类镜像上的读结果：每个镜像的钩子都是空操作（引导加载器定义的类）时恒为 null；
+    /// 否则未知。空集合同样为 null（乐观：调用方按值集增长重分析）
+    pub(super) fn mirrors_hook_field<'c>(&self, f: &MemberRef, classes: impl IntoIterator<Item = &'c str>) -> Option<V> {
         let fi = self.field_info(f)?;
         let h = self.man.vm_state.field_hook(&fi.key.owner, &fi.key.name, &fi.key.desc)?;
-        (h.receiver && self.defining_loader(c) == Loader::Boot).then_some(V::Null)
+        (h.receiver && classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot)).then_some(V::Null)
     }
 }
