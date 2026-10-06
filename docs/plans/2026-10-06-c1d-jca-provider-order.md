@@ -103,7 +103,56 @@ jdk_resources/java.security.{21,25}.properties`），原生二进制不接受 `-
 
 ## 5. 实测
 
-（见下文，测量脚本 `build/jca/cl.sh`、`build/jca/batch.sh`，scratch 不提交；`off` = 去掉 `[jca.order]` 的 runtime 副本，即改动前。）
+测量脚本 `build/jca/cl.sh`、`build/jca/batch.sh`（scratch 不提交）。`off` = 去掉 `[jca.order]` 的完整 `runtime/` 副本（即改动前，
+与 b15b81a3 基线同）；`ds` = 叠加 D+S 切除（`build/jca/cuts_ds.txt`：URLClassPath$3 两点、jar Handler、ResourceBundle
+服务查找）；`pds` 另加 P（`doLoadProvider` 方法体）。JDK 21，类 / 方法，均为 1845f494（含 §5.3 修复）。
+
+### 5.1 闭包规模
+
+| 测试 | off | new | off+DS | new+DS | 放行成因（new+DS） |
+|---|---|---|---|---|---|
+| HelloWorld | 469 / 1828 | 469 / 1828 | 469 / 1828 | 469 / 1828 | 无 JCA |
+| DeepCopy | 3195 / 20447 | 3195 / 20447 | 3131 / 18957 | 3131 / 18957 | 改写入口 `setSystemProviderList` 可达 |
+| StockTrans | 3193 / 20429 | 3193 / 20429 | 3129 / 18941 | 3129 / 18941 | 同上 |
+| TestSerialDefaultSuid | 3200 / 20441 | 3200 / 20441 | 3136 / 18951 | 3136 / 18951 | 同上 |
+| Digester | 2912 / 17435 | 2912 / 17435 | 2332 / 14232 | **2263 / 13888** | 扣住（getInstance 深度 0） |
+| TestSecureRandomApi | 2914 / 17461 | 2914 / 17461 | 2347 / 14341 | **2278 / 13997** | 扣住（深度 0） |
+| SecurityDemo | 2912 / 17439 | 2912 / 17439 | 2349 / 14342 | **2280 / 13998** | 扣住（深度 0） |
+| TestMessageDigestApi | 2912 / 17436 | 2912 / 17436 | 2336 / 14271 | 2336 / 14271 | 请求不存在的 `FOO-1`（真实走完全表） |
+| TestJcaIndirectDigest | 2941 / 17547 | 2941 / 17547 | 2377 / 14432 | 2377 / 14432 | 改写入口可达 |
+| TestMacHmacDigest | 2923 / 17491 | 2923 / 17491 | 2351 / 14322 | 2351 / 14322 | 改写入口可达 |
+| TestRsaSignVerify | 2933 / 17680 | 2933 / 17680 | 2602 / 15667 | 2602 / 15667 | 改写入口可达 |
+| TestEcSignVerify | 2921 / 17588 | 2921 / 17588 | 2562 / 15441 | 2562 / 15441 | `getServices` 列表在非内部方法消费 |
+| TestAesGcmRound | 3011 / 18041 | 3011 / 18041 | 2570 / 15285 | 2570 / 15285 | 同上 |
+| TestCipherDesModes | 2998 / 17986 | 2998 / 17986 | 2555 / 15219 | 2555 / 15219 | 同上 |
+
+扣住时少掉的 69 类：SunPKCS11 / SunPCSC(smartcardio) / SunSASL / SunJGSS / JdkLDAP / SunEC / XMLDSig、
+`ProviderConfig$ProviderLoader` 与 EC 参数 / 工具类。
+
+### 5.2 结论与放行归因
+
+- **不叠加切除时，本能力在全部测试上为 0**：`Security.getProviders` → `Providers.getFullProviderList` → `removeInvalid` →
+  `setSystemProviderList` 是真实的全表装载（`getProviders` 逐项实例化），经 `AlgorithmId.getName` → `aliasOidsTable` →
+  `collectOIDAliases` 入链。入链有两条：①未知接收者 `Object.toString` 派发到 `AlgorithmId.toString`；②`AlgorithmId.<init>`
+  → `decodeParams` → `getName`（证书解析，序列化里 `CodeSource.readObject` → `CertificateFactory.generateCertificate`）。
+- 三例序列化测试：在 D+S 上再切 ①（`AlgorithmId.toString`，`build/jca/cuts_dst.txt`）仍放行，成因转为 ②：DeepCopy off/new
+  均 3131 / 18956，StockTrans 均 3129 / 18940，TSDS 均 3136 / 18950。P+D+S+切 ① = DeepCopy 2766 / 17943、StockTrans 2764 / 17931、TSDS 2771 / 17937，
+  与 P+D+S 相同——**序列化三例上 P 的收益只能由「CodeSource 反序列化证书路径」收窄取得，提供者序求值本身取不到**
+  （该路径在运行期确会走完全表，本能力放行是正确的）。目标 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 不靠本能力达成。
+- Cipher / Mac / EC：JDK 21 上 SunJCE（序号 4）、SunEC（序号 2）在首个非内建表项 SunEC 处或其后，运行期确经装载器，放行正确。
+- 本能力的实际收益在「只用 SUN 提供的服务（摘要 / SecureRandom）」的程序上：在 URL（D）与 ResourceBundle（S）收窄落地后
+  每例 −69 类 / −344 方法。
+
+### 5.3 顺手修复：`[jca]` 服务种子的求值序依赖
+
+测量中发现 TestRsaSignVerify new+DS 比 off+DS 多 4 类（2606 vs 2602），不单调。根因在既有 `seed_jca`：请求点算法名并入一个与类型
+无关的集合，`RSAUtil.getParams` 的 AlgorithmParameters 请求名（RSASSA-PSS 等）若在该类型变为「推不出」之前被求值，就会选中
+Signature / KeyFactory / KeyPairGenerator 的同名服务；求值先后随调度变化。修复（1845f494）：请求名按（服务类型, 算法键）登记，
+`jca::select` 只按同类型命中（含同义名）。修复后两侧均为 2602 / 15667，其余测试数字不变。
+
+### 5.4 顺序无关与单测
+
+（见 §5.5 记录）
 
 ## 6. 恢复入口
 
