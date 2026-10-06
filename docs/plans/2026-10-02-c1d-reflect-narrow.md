@@ -1277,3 +1277,62 @@ TestSerialEnumNoInit 3391 / 20868 → 3385 / 20821，集合差同上 6 类，无
 - 冲突：`invoke.rs` 方法查找分支与 `lookup_pair.rs` 是 engine-order 正在改的区段（`git diff 6f93f1c6 origin/engine-order`
   在 invoke.rs 58 / 130 行两处 hunk），按约定须等其合入后再做。
 - 收益上界：5.5 的两种近似实验在旧基线上 ≤7 类 / 约 319 方法，相对现基线 20813 方法约 1.5%。
+
+## 八、4b 实测与根因：反射对象池被方法句柄全局池灌满（分支 `c1d-b-t2b`，基于 140ef55e，2026-10-06）
+
+### 8.1 测量（服务器，`scripts/diag/closure_job.sh`，参考 JDK，`--stop-after closure --closure-json`，逐例单跑）
+
+| 例 | 基线 140ef55e+f3f1a90f 类（有代码）/ 方法 | 按角色分池 c42186ce | 下界实验 t2b-exp1 9ba82191（不健全） |
+|---|---|---|---|
+| HelloWorld | 468（339）/ 1806 | 同基线 | 同基线 |
+| StockTrans | 3420（2990）/ 20888 | **集合逐一相同** | 3414 / 20683 |
+| DeepCopy | 3422（2992）/ 20907 | **集合逐一相同** | 3416 / 20693 |
+| TestSerialDefaultSuid | 3427（2995）/ 20901 | **集合逐一相同** | 3421 / 20696 |
+
+- 按角色分池（c42186ce）：反射对象通道拆成接收者池 `RP(0)`（只供派发）与实参池 `RP(2)`（数组元素，只供成员形参）。
+  实参池确比接收者池小（StockTrans 4595 类 vs 7501 类），但两池都含同一批 217 个 open 值（含 `open(Object)`），
+  `open(Object)` 经成员形参的类型过滤得 `open(T)`，仍在实例化集上展开，故闭包集合与基线逐一相同，收益 0。
+  已 `git revert`，不合入（无收益的结构改动不留）。
+- 下界实验（t2b-exp1，只作测量、不合入）：反射对象通道的成员形参完全不接实参池（不健全）。三例同样只少 6 类、
+  205–214 方法、新增 0：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth}$1`、
+  `ConcurrentLinkedQueue$Itr`、`LinkedBlockingQueue$Itr`。这是「反射对象通道实参精度」能带来的**上界**，
+  任何按成员分池 / 按角色分池的方案都不会超过它（接收者侧另有 hub_fallbacks 32–42 个，exp1 未动，见 8.2）。
+
+### 8.2 根因（ReflectCallRoles 小例 + `--flows` 取证，本机）
+
+`invoke0` 的接收者 / 实参数组几乎全部来自**方法句柄通道**，不是来自用户或 JDK 的 `Method.invoke` 调用点：
+
+1. `DirectMethodHandleAccessor$NativeAccessor$ReflectiveInvoker.<clinit>@18` 以常量名
+   `findVirtual(NativeAccessor.class, "invoke", genericMethodType(1, true))` 取得句柄（存静态字段
+   `NATIVE_ACCESSOR_INVOKE`），`reflect_name` 因此把 `NativeAccessor.invoke(Object, Object[])` 登记为**方法句柄通道成员**。
+   这条路径是真实的：调用者敏感方法经 native 访问器反射调用时，`NativeAccessor.invoke(Object, Object[], Class)`
+   → `ReflectiveInvoker.invoke` → `JLIA.reflectiveInvoker(caller).invokeExact(mh, obj, args)` → 绑定后的句柄回调
+   `NativeAccessor.invoke(Object, Object[])` → `invoke0`。健全分析必须让它入链。
+2. 方法句柄通道只有一个全局实参池 `RP(1)`：签名多态入口与 LambdaForm 解释器（`BoundMethodHandle.arg`、
+   `ArrayAccessor.getElementL`、`invokeBasic` / `invokeExact` 的 pool、`Species_L*.argL*` 字段等 617 个注入点）
+   全部并入，小例中 4332 类 + 71 个 open；`invoke0` 的返回值又经 `NativeAccessor.invoke(...,Class)@66` 回流此池，成环。
+3. 方法句柄通道成员的形参接 `RN(1)`，于是 `NativeAccessor.invoke(Object, Object[])` 的 P1 / P2 得到整池，
+   经它的 `invoke0` 调用点流入反射对象通道：接收者池得 `open(Object)` 等 71 个 open（可覆写的反射成员因此退回
+   VM 枢纽，hub_fallbacks），实参数组得 `open([Object)`、元素展开为 `open(Object)`。
+
+结论：反射对象通道的过近似**由方法句柄通道的全局池决定**。只要后者仍是一锅全局值，反射对象侧的任何收窄
+（按角色分池、§7.4 的 Method 成员伪 id 按成员分池）都会在 `NativeAccessor.invoke` 这一个句柄成员处被重新灌满，
+收益为 0（8.1 已实测按角色分池）。§7.4「按成员分池」的终态设计本身不变，但它的前置条件是方法句柄的身份建模。
+
+### 8.3 终态设计（4b 改挂到方法句柄身份之后）
+
+- 前置：**方法句柄对象化**——`findVirtual` / `findStatic` / `findSpecial` / `unreflect*` 等常量查找点产出
+  「成员句柄伪值」（同类镜像：伪 id → 成员），`bindTo` / `insertArguments` / `asType` / 反射调用器
+  （`reflectiveInvoker`）等组合子按清单声明的形状传递伪值与绑定实参；签名多态调用点按接收者句柄值集里的伪 id
+  把实参接到**该句柄成员自己的池**，只有 open / 推不出的句柄值才接全局池 `RP(1)`（健全）。
+- 之后 `NativeAccessor.invoke(Object, Object[])` 只经 `ReflectiveInvoker.invoke` 的 `invokeExact(mh, obj, args)` 获得
+  `obj` / `args`，即 `NativeAccessor.invoke(Object, Object[], Class)` 的 P1 / P2，不再引入新值；再做 §7.4 的
+  Method 成员伪 id 与按成员分池，反射对象侧才有收益。
+- 收益上界：8.1 下界实验的 6 类 / ≤214 方法（约 1%）+ 接收者侧 hub_fallbacks 32–42 个成员的枢纽展开。
+  相对其改动面（方法句柄组合子建模 + 反射成员伪 id 两层），列为低优先级；记入 tasks.md「C1d-b-T2余」。
+
+### 8.4 本步产物
+
+- 保留：`scripts/diag/closure_job.sh`（f3f1a90f，服务器闭包实测作业脚本，逐例摘要行含 `summary.rcall`）。
+- 撤回：按角色分池 c42186ce（revert）；守护单测随之撤回（集合与基线相同，无可守护的收窄）。
+- 实验分支 `t2b-exp1`（9ba82191，不健全下界）测量完即删。

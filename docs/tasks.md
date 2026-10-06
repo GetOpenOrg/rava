@@ -148,7 +148,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ 🔄 C1d-b 反射与过近似收窄（c1d-pick，2026-10-02-c1d-reflect-narrow.md；原节点见历史 §E）
 │   │     ├─ ✅ b0 合入 e90a592d（eb6571ba）
 │   │     ├─ 🔄 b1′ ArrayList.writeObject 分派臂（计划 §4.6）：T3–T7 ✅，T2 ✅ 35c5f0ee
-│   │     │     └─ ⏳ T2 余项：getDefaultSerialFields 收窄、4b
+│   │     │     └─ ⏸ T2 余项 4b：受阻于方法句柄全局池（计划 §八），前置方法句柄对象化；上界 6 类 / ≤214 方法
 │   │     ├─ 🔄 b1 序列化收窄：S2 ✅ 0d7dd2a5；DeepCopy ≤1640、fold_props ≥42
 │   │     ├─ ⏳ b2 任务 2 ◀── why2-93e0f28e 取证
 │   │     ├─ ✅ b3 class_init.unknown 归零（d46d9b06，扇出收窄 6294755d / ee52c596）
@@ -307,7 +307,7 @@ regress2 遗留（◀── a2）───────────────�
 | a3-T-pinned | ⏳ | TestContinuationPinned parkNanos 早返偶发需查 |
 | C1d-b 反射收窄（c1d-pick） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 2026-10-02 | b0 / T3–T7 / T2 / b3 已合入；余 T2 余项、b1、b2；过程见历史 §E / §J |
 | C1d-b-b1′ | ⏸ 未派（2026-10-04 优化线优先期间暂停）· | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
-| C1d-b-T2余 | 🔧 c1d-b-t2 | 类镜像子类型判定收窄（计划 §七）：StockTrans 目标按 6f93f1c6 重定为 ≤3380 / ≤20813，实测 3386/20860→3380/20813；可序列化字段可读面贡献 0（§6.2）；StockTrans 已通过，writeObject 反射臂一项消解；余 4b |
+| C1d-b-T2余 | ⏸ c1d-b-t2b | 类镜像子类型判定收窄已合入（§七，StockTrans 3386/20860→3380/20813）。4b（§八）：反射对象池由方法句柄全局池经 `NativeAccessor.invoke` 句柄成员灌满，按角色分池实测 0 收益已撤回；不健全下界实验仅 −6 类 / −205~214 方法（StockTrans / DeepCopy / TSDS），终态前置为方法句柄对象化（成员句柄伪值 + 组合子形状清单），低优先级挂起 |
 | C1d-b-b1 | ⏸ 未派（2026-10-04 优化线优先期间暂停）· S2 ✅ 0d7dd2a5 | 序列化收窄：目标 DeepCopy ≤1640、fold_props ≥42；大值集来自未知接收者字段视图 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
