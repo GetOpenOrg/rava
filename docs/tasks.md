@@ -132,7 +132,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ⏳ jar 签名校验路径收窄（JCA 后 +134 类的来源）
 │   │     ├─ ✅ jar/URL 来源精度乙（fca1643b，闭包不变，根因 §22.10）
 │   │     ├─ ⏳ jar/URL 来源甲 class-path（计划 §22.2）
-│   │     ├─ ⏳ a5-4 闭包膨胀收窄：终态 DeepCopy ≤2810 / StockTrans ≤2807 / TSDS ≤2814 / HelloWorld 468（2026-10-06 用户定，替代作废的 ≤1640；mh-objectify §7）
+│   │     ├─ ⏳ a5-4 闭包膨胀收窄：终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468 / DeepCopy 去序列化 ≤480（2026-10-06 用户定，mhd 实测修订；替代作废的 ≤1640；mh-objectify §6.3 / §7）
 │   │     │     ├─ ⏳ §29 能力①（优先）URL 按对象字段精度 + URL.file / spec 前缀串域推理 + 启动目录事实（甲 + 乙，约 −217，含原 C6 jar·URL class-path）
 │   │     │     ├─ ⏳ §29 能力②（优先）JCA 提供者序求值（叠①后约 −21；P + S 合切 −384）
 │   │     │     ├─ ⏳ §29 能力③（优先）RB 服务查找未知 Class 由引导映像求值器消解（随 B2）
@@ -271,7 +271,7 @@ regress2 遗留（◀── a2）───────────────�
 | A 正确性缺陷 | A3 URL 协议可靠口径（c1d-urlhost） | 依赖提速，随 D2 搁置 |
 | B 架构终态 | B1 a3 `#[jvm_boundary]` 归零、B2 引导映像求值器第 2–7 步 | 继续 |
 | B 架构终态 | B3 虚拟线程余项（T6 规模 / T1b 审计 / pinned 偶发）、B4 T1-M3 按模块登记 | 缓 |
-| C 闭包精度与规模 | C1 c1d-elem、C2 clsfact、C3 a5-4 收窄（DeepCopy ≤2810，§29 三项能力优先）、C5 C1d-b（T2 余 / b1 / b2 / b3 余） | 继续 |
+| C 闭包精度与规模 | C1 c1d-elem、C2 clsfact、C3 a5-4 收窄（DeepCopy ≤2803，§29 三项能力优先）、C5 C1d-b（T2 余 / b1 / b2 / b3 余） | 继续 |
 | C 闭包精度与规模 | C4 a5 关系型边界推理（HelloWorld ≤371） | 缓 |
 | C 闭包精度与规模 | C6 jar 签名收窄 / jar·URL class-path（并入 §29 能力①）、§29 能力② JCA 提供者序求值 | 继续，优先（10-06 用户定） |
 | C 闭包精度与规模 | 方法句柄对象化（C1d-b-mhobj）、T2 余 4b、b1 | 不实施 / 挂起（10-06 用户定，上界 −5~−6 类） |
@@ -303,7 +303,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-jar签名 | ⏳ | jar 签名校验路径收窄（4 个算法名不可定的请求点） |
 | C1d-a-乙 | ✅ fca1643b | URL.getURLStreamHandler 按键闸门；闭包不变，根因 URL host 无逐对象精度（§22.10），后续归「URL 协议可靠口径」 |
 | C1d-a-甲 | ⏳ | jar/URL 来源甲 class-path（计划 §22.2） |
-| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤2810（10-06 用户定，原 ≤1640 作废），pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅；a5-4b 归因完成（计划 §29：boot `ucp` 已折叠，回收 0；JarVerifier / pkcs11 要靠 URL 按对象 + 串前缀推理、JCA 提供者序求值、引导映像三项能力，反事实上界 3374 → 2766）；余 a5-4e / a5-4f |
+| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤2803（10-06 用户定，mhd 实测修订；原 ≤1640 作废），pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅；a5-4b 归因完成（计划 §29：boot `ucp` 已折叠，回收 0；JarVerifier / pkcs11 要靠 URL 按对象 + 串前缀推理、JCA 提供者序求值、引导映像三项能力，反事实上界 3374 → 2766）；余 a5-4e / a5-4f |
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
 | C1d-a-a3 | 🔄 U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
@@ -315,7 +315,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-b-b1′ | ⏸ 未派（2026-10-04 优化线优先期间暂停）· | ArrayList.writeObject 分派臂（计划 §4.6）：T2 ✅ 35c5f0ee（抽查 13/14，TestFieldHandleProvenance 为 OOM 归声明层拆分线） |
 | C1d-b-T2余 | ⏸ c1d-b-t2b | 类镜像子类型判定收窄已合入（§七，StockTrans 3386/20860→3380/20813）。4b（§八）：反射对象池由方法句柄全局池经 `NativeAccessor.invoke` 句柄成员灌满，按角色分池实测 0 收益已撤回；不健全下界实验仅 −6 类 / −205~214 方法（StockTrans / DeepCopy / TSDS），终态前置为方法句柄对象化（成员句柄伪值 + 组合子形状清单），低优先级挂起 |
 | C1d-b-b1 | ⏸ 挂起（2026-10-06 实测收口，计划 §九；分支 c1d-b-b1 仅文档 + 探查脚本）· S2 ✅ 0d7dd2a5 | 序列化收窄：字段视图环反事实上界仅 −6 类 / −166 方法（DeepCopy 3422→3416，与 4b 下界同 6 类）；序列化总量 278 类，其余大值集来源（writeReplace / 回调反射返回、反射与句柄池）前置为方法句柄对象化（§8.3），并入 T2余；原目标 ≤1640 作废（不走序列化也有 3144） |
-| C1d-b-mhobj 方法句柄对象化 | ⏸ 不实施（2026-10-06 用户定；实测收口；分支 mh-objectify-plan 仅文档 + 探查脚本） | 计划 `docs/plans/2026-10-06-mh-objectify.md`：切 `RP(1)` 上界 0 类 / −33 方法，对象化 + 4b + b1 合计 −5~−6 类，不实施；反射对象池大值集来自 `Object[]` 元素与 `Reference.get`，非句柄池。新目标（10-06 用户采纳）DeepCopy ≤2810 / StockTrans ≤2807 / TSDS ≤2814 / HelloWorld 468，主力为 §29 三项能力（−608）；格式串常量求值另列（不走序列化时 3144 中 2679 由 printf→Formatter 带入，全程序仅 −10） |
+| C1d-b-mhobj 方法句柄对象化 | ⏸ 不实施（2026-10-06 用户定；实测收口；分支 mh-objectify-plan 仅文档 + 探查脚本） | 计划 `docs/plans/2026-10-06-mh-objectify.md`：切 `RP(1)` 上界 0 类 / −33 方法，对象化 + 4b + b1 合计 −5~−6 类，不实施；反射对象池大值集来自 `Object[]` 元素与 `Reference.get`，非句柄池。新目标（10-06 用户采纳，mhd 实测修订）DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468，主力为 §29 三项能力（−608）；格式串常量求值另立项（全程序 −10，与 §29 可加；不走序列化时 DeepCopy 3144→480） |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄（b3 原「余」项之一；registerNatives 开放接收者 toString 已由 6294755d / ee52c596 收窄，此项未见完成记录） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-jndi | ⏸ 未派（2026-10-04 优化线优先期间暂停）· 第 1 步 ✅ 26720aff | TestJndiNoProvider 冷闭包 198.7 s→126 s（600 s 上限不放宽）；余修法 B（按调用点配对 + Const 形参保留 Src::Param + flow-batch×seed 集合不变性守护），计划 `docs/plans/2026-10-03-jndi-transpile-perf.md` |
