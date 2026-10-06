@@ -449,9 +449,63 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 - **D5 残差区段**：区段 `[s, e)` 由生成器切出为合成静态方法（字节码拷贝 + `return`，入口局部变量作形参、按槽位布局补占位形参），按普通方法翻译；启动序列以映像中记录的局部值调用。残差调用、重放 native、回填、重算槽按 `step2` 的启动重放序列次序生成为一个启动函数，取代 `vm_boot_init` 的 `calls` / `classes` / `phases`。
 - **D6 抽象分析从映像出发**：引擎不再以 `[boot_init]` 与引导阶段为根。构建期初始化类的 `<clinit>` 不入链；被闭包读取的静态字段，其抽象值以映像对象（每个映像对象一个分配点 `image:#n`，字段值按映像具体值）为初值；映像对象的类型随其被读取而入实例化集合。只物化从「闭包内被读取的静态字段」与启动序列可达的映像对象（联合不动点，单调）。
 
+- **D7 档位上下文**（`engine/levels_boot.rs`）：映像导出时把引导档位（`VM.initLevel`，清单 `[concrete.boot] level`）的变化记为启动步骤 `IStep::Level`。残差调用与残差区段在其构建期档位的克隆上下文 `@level:L` 中分析；该上下文中的方法按 `[concrete.boot.level_queries]`（`VM.isBooted` ≥ 4、`VM.isModuleSystemInited` ≥ 2）折叠引导查询，不与本体共享摘要，派发枢纽按档位分族，触发的 `<clinit>` 也在档位上下文中登记。档位只沿直接调用（溯源类别 `invoke`，被调方的普通上下文为 NOCTX 或已是档位上下文）传播。实测：若沿全部同步类别（派发、lambda、反射……）传播，档位克隆失控（23 GB、200 万调用点），所以收窄到直接调用。手写方法不克隆，回调回到本体（已知局限）。档位 ≥ 全部门限时不建上下文。
+- **D8 映像对象的分配点**：映像数组逐对象建分配点（`<类型>@image<n>`），容器形状类（与 `obj_at` 同一判定）的映像实例也逐对象建分配点，字段值进该对象的字段节点（`Node::O`）。其他实例按确切类型代表，与程序新建对象合流。逐对象是为了避免各映像数组、各容器的元素互相混合（模块图里有上千个数组）。
+- **D9 残差调用的实参**：残差调用的被调方法，其形参取构建期记录的实参，不再 open。标量与 null 进常量格；字符串对象（非占位、非延迟）进字符串常量；其他映像对象记为「带标签的非空引用」，标签是它 final 实例字段中的标量 / 字符串常量，与构造器摘要同一口径。引用实参的映像对象经 `image_ref` 流入形参节点。静态字段的映像初值同样走这套常量格（`image_pv`）。重放 native 与残差区段内的调用目标仍按 open 形参作根。
+- **D10 数组读取按静态类型收窄来源**（`engine/bytecode.rs`，通用精度修正）：aaload 的数组来源集先按数组值的静态类型过滤（checkcast / 声明类型），再判定是否含非数组值。原实现中，链表式 `Object[]`（如 `PreHashedMap.put` 的 `a = (Object[]) a[2]`）的来源集带有同数组其他元素（String），被当成 open 数组，于是注入 `open(Object)`。
+
 #### 5.5.3 进展与恢复入口
 
-（随提交更新）
+**进展（2026-10-06 15:30，分支 `boot-image-s3`）**
+
+- 已提交：aaafd123（运行时映像常量构造原语）、ffdc14a5（§5.5.1 核对与物化设计）。
+- 本次提交为分析侧，从映像出发：
+  - `image.rs`：映像数据形态，规范编号，启动步骤含 Level；
+  - `concrete/export.rs`：解释器堆导出；
+  - `engine/image_start.rs`：装载映像。构建期初始化类不展开 `<clinit>`，活对象联合不动点，占位对象取来源，残差步骤作根；
+  - `engine/levels_boot.rs`：D7；
+  - D8–D10；
+  - 去掉 `[boot_init]` 根的调用条件：映像求值成功时不再以 `boot_init` 为根。
+- 尚未做：
+  - 发射侧物化（D1–D5）、启动重放函数；
+  - 删除 `[boot_init] calls / phases` 与 FS-C2 钩子；
+  - TestBootLayer e2e。
+  - 运行时 `vm_impl` 的档位重放补丁草稿（`__vm_at_init_level`）未入库。
+
+**实测（本机 macOS JDK 21，HelloWorld）**
+
+| 口径 | 类数 |
+|---|---|
+| 不从映像出发（现状） | 469 |
+| 从映像出发，D7–D10 全开 | **2,986**（RSS 2.3 GB，约 40 s） |
+| 跳过全部映像启动步骤（只装映像） | 366 |
+| 只跳过残差调用与残差区段 | 401 |
+
+硬门槛「≤ 540」**未达成**。超出部分全部来自运行期部分的根，链路如下：
+
+1. **残差区段** initPhase1 `[36, 70)`：`Charset.isSupported(sun.jnu.encoding)`，参数是宿主值（U1，Linux 上取自区域环境变量）。
+   - 调用链为 `Charset.lookup2` → `StandardCharsets.lookup`（名字不定）→ `Class.forName(...).newInstance()`。
+   - 这是 JDK 运行期真实会走的路径。现状不走，是因为手写 `registerNatives` 不执行 initPhase1。
+2. `Class.newInstance` → `getConstructor0`，异常消息分支走 `methodToString` → `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `getEnumConstantsShared` → `Method.invoke`。
+3. `Method.invoke` → `isCallerSensitive` → `isAnnotationPresent` → 注解解析 → 建 `Proxy`。
+4. `Proxy$Dyn` 的 VM 钩子以 open 实参派发全部代理方法，到 `AnnotationInvocationHandler.equalsImpl` → `Objects.equals(open, open)`。
+5. open `equals` 派发到全部已实例化类型，其中 `URL.equals` 来自 `toFileURL` 重放。
+6. 由此展开：`InetAddress` → `ServiceLoader` → 类路径 / jar / 文件系统 / 安全……
+
+D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null → `Charset.defaultCharset` → 同一处 `StandardCharsets.lookup`。D10 消掉了 `PreHashedMap.put` 的 open 注入。剩余放大点是 2–4，属于通用精度问题，不是映像特有：任何以非常量名调 `Charset.forName` 的程序同样会碰到。
+
+**恢复入口**
+
+1. 先压闭包（硬门槛）。候选按收益排序：
+   - (a) `Proxy$Dyn` VM 钩子按代理实际接口与调用点派发，不再以 open 实参派发全部方法；
+   - (b) `Class.newInstance` / `getConstructor0` 异常消息分支的冷路径；
+   - (c) `Method.invoke` 的 `isCallerSensitive` 注解查询，按 `@CallerSensitive` 的静态事实折叠。
+   - 每做一项，都以 `rava closure tests/e2e/01_basics/HelloWorld.java -o … --why <类>` 复测。
+   - `--flows "@openorig:<类型>|<节点>"` 与 `@grow:` 可定位 open 注入点。
+2. 再做发射侧 D1–D5 与启动重放函数。
+3. 最后删 `[boot_init] calls / phases`、FS-C2 钩子，加 TestBootLayer，跑服务器单测 / 审计 / 抽查。
+4. 确定性（`--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64）在本次提交上尚未复验。
+5. 本分支在发射侧完成前不可合入：分析已从映像出发，但映像尚未物化。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
