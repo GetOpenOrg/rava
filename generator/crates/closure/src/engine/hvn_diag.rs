@@ -224,11 +224,11 @@ impl<'a> Engine<'a> {
             if injected(y) || mixed[y as usize] {
                 return tau_static(y);
             }
-            in_f[y as usize].filter(|&f| f & NOT_SUB == 0 && f != obj).or_else(|| tau_static(y))
+            in_f[y as usize].filter(|&f| f & (NOT_SUB | OPEN_EXACT) == 0 && f != obj).or_else(|| tau_static(y))
         };
         let le = |a: u32, f: u32| -> bool { a == f || self.h.is_subtype(&self.names[a as usize], &self.names[f as usize]) };
         let ident = |tau: &dyn Fn(u32) -> Option<u32>, y: u32, f: u32| -> bool {
-            f == obj || (f & NOT_SUB == 0 && tau(y).is_some_and(|t| le(t, f)))
+            f == obj || (f & (NOT_SUB | OPEN_EXACT) == 0 && tau(y).is_some_and(|t| le(t, f)))
         };
         let mut out = Vec::new();
         for (name, which) in [("静态 τ", 0), ("终态动态 τ", 1)] {

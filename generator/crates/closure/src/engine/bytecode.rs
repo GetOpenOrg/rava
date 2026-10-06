@@ -219,8 +219,9 @@ impl<'a> Engine<'a> {
                         let Some(&at) = self.arrays.get(&x) else { continue };
                         let Some(c) = absint::component(&self.names[at as usize].clone()).filter(|c| c.len() > 1) else { continue };
                         let cx = self.id(&c);
+                        let f = self.elem_filter(x, cx);
                         for p in slots(index) {
-                            self.feed(&fs, Node::E(x, p), cx);
+                            self.feed(&fs, Node::E(x, p), f);
                         }
                     }
                     // 数组值未知（保守分析）：可能是任一分配点数组。open 数组来自手写层 / VM，

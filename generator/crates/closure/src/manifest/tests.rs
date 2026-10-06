@@ -159,3 +159,12 @@ fn empty_collections_parse() {
     assert!(with_vm("[facts.empty_collections.queries]\n\"a/L.size:()I\" = 0\n").is_err());
     assert!(with_vm("[facts.empty_collections.queries]\n\"size:()I\" = \"zero\"\n").is_err());
 }
+
+#[test]
+fn array_allocators_parse() {
+    let m = with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)Ljava/lang/Object;\" = 0\n").unwrap();
+    assert_eq!(m.array_allocator("a/R.alloc:(Ljava/lang/Class;I)Ljava/lang/Object;"), Some(0));
+    assert_eq!(m.array_allocator("a/R.other:(Ljava/lang/Class;I)Ljava/lang/Object;"), None);
+    assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)I\" = 0\n").is_err());
+    assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)Ljava/lang/Object;\" = -1\n").is_err());
+}

@@ -137,6 +137,8 @@ impl<'a> Engine<'a> {
             RetModel::Read(src)
         } else if self.man.returns_caller_class(&ks) {
             RetModel::Caller
+        } else if let Some(i) = self.man.array_allocator(&ks) {
+            RetModel::NewArray(i)
         } else {
             RetModel::Plain
         };

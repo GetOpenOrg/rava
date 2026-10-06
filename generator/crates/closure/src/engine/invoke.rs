@@ -366,6 +366,15 @@ impl<'a> Engine<'a> {
                 }
             } else if model == RetModel::Caller {
                 self.caller_ret(m, t, res, rt);
+            } else if let RetModel::NewArray(i) = model {
+                // 新数组：结果 = 本调用点元素类型实参各类镜像所指类型的数组分配点（逐调用点；元素只来自其后的写入）
+                let op = MirrorOp::ArrayOf(m as u32, off);
+                for f in a.get(i).cloned().flatten().iter().flatten() {
+                    match f {
+                        Feed::N(n) => self.mflow(*n, res, op),
+                        Feed::S(s) => self.mirror_into(op, s, res),
+                    }
+                }
             } else if let RetModel::Read(src) = model {
                 let i = src + usize::from(!is_static);
                 let fs = if subsumed {

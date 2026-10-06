@@ -2333,6 +2333,41 @@ native 缺失、`String.class.getModule()` 不是命名的 java.base），三者
 `PackageHelper.findModule` 要经 `Modules.findLoadedModule` 取到 java.base 的 `Module` 对象，只返回 `"jrt:/java.base"`
 仍然会抛 `InternalError("java.base not loaded")`。
 
+## 26. 档案并集实测：c1db-prof-2574ead5 + c1db-prof16b（2026-10-05，分支 c1d-elem）
+
+**口径**：作业 c1db-prof-2574ead5 共 16 片，第 16 片缺 8 例，由 c1db-prof16b 补齐，合计 1092 例。
+用 `scripts/profile_union.py stats` 统计，按类与基线 t1-prof21（4bd826ae，3609 类）逐类对照。
+
+**结论：并集 JDK 类 7972、方法 51767，未达到 ≤ 3609。** 相对基线新增 4698 类、减少 335 类。
+
+| 测试数 | 1 | 10 | 30 | 60 | 120 | 240 | 480 | 960 | 1092 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 并集类数 | 2096 | 3504 | 3761 | 3775 | 4777 | 5981 | 6732 | 7718 | 7972 |
+| 并集方法数 | 11692 | 20554 | 23105 | 23257 | 30477 | 38059 | 43535 | 50060 | 51767 |
+
+- 按域：translate 7952 / boundary 19 / root 1。按最高层级：code 7051、layout 566、type 193、init 91、alloc 71。
+- 单例 JDK 类：中位 521、最大 5466。单例方法：中位 2183、最大 34015。
+- 单例分两档：533 例在约 3180 类，共享 3144 类的公共核。这一档来自边界域收窄（675 → 19）：open 派发经
+  `executePrivileged`、`String.valueOf`、`Objects.equals` 打开了全体活类型的 `run` / `toString` / `equals`。
+
+**新增 4698 类的来源**（逐类沿 via 链从根往下，找第一个不在基线里的节点；明细见
+`docs/reports/c1db-prof-union-added.tsv`，减少的 335 类见 `docs/reports/c1db-prof-union-removed.txt`）：
+
+| 来源 | 类数 | 主要闸口（类数） |
+|---|---:|---|
+| former_boundary：经基线时的边界类展开 | 3944 | java/lang/Class 991、jdk/internal/util/Preconditions 781、xalan TransformerImpl 726、TransformerFactoryImpl 434、XPathImpl 197、HttpClientBuilderImpl 155、HttpClientFacade 144、rmiURLContextFactory 79、HttpServer 68、jline TerminalBuilder 49 |
+| new_edge：基线已有的类上新增的边 | 600 | SSLContextImpl$DefaultSSLContext 95、RemoteObjectInvocationHandler 47、AsyncSSLTunnelConnection 15、SignatureParser 15 |
+| only_new_tests：只出现在基线之后新增的测试里 | 154 | — |
+
+增量主体（84%）是 C1d 拆除边界后，原边界类（Class、Preconditions、xalan / XPath / HttpClient 等）的方法体转为字节码翻译，
+其调用链随之展开。其中 java/lang/Class 与 Preconditions 两个闸口合计 1772 类，主要经反射成员枚举和异常格式化
+（`Preconditions.outOfBounds` → `String.format` → Formatter 全家）进入。
+
+精度缺口按影响排序：
+1. 容器元素 open(Object)，见 §27。
+2. Class 接收者的 classLoader / module 逐类求值（§25.4 第 1 项）。
+3. G2 实例汇合点（V10）。
+
 ## 26. 前置第 1 项：`Class` 实例方法按接收者镜像求 `classLoader` / `module`（2026-10-05，分支 c1d-clsfact）
 
 提交 69d1c73d（基于集成分支 85a56289）。事实来源只有 `.class` / jmod 与 `runtime/java_runtime` 清单：定义加载器取
@@ -2390,6 +2425,146 @@ LocaleResources$ResourceReference）与 `HashMap$Node.getKey` 为首。建层代
    `Reference.get` / `HashMap$Node.getKey` 的 Object 引入。这些属于 V10（逃逸对象上下文收拢）和 c1d-elem（容器元素类型）两条线。
 2. 两线合入后，用同一临时 runtime（`seeds.toml` 两锚点、`ModuleLayer` 移出 `[vm_boundary]`、删 `module_layer_impl.rs` 与两处
    `Class.getModule` 手写）重测 HelloWorld，并重复本节的 `boot2` 切除和 `@merge` 测量；若还有残余，再按出口逐项立项。
+
+## 27. 容器元素精度第 1 项：反射数组分配按调用点建模（2026-10-05，分支 c1d-elem，956db0b4 + 35c78422）
+
+**根因**：`Arrays.copyOf(T[], int, Class)@18` 调 `Array.newInstance` → native `Array.newArray`。原模型把它的结果当作
+open(Object)，于是 `ArrayList.grow` 之后的 `elementData` 成了任意对象数组，`aaload` 读出 open(Object)，下游的
+`toString` / `compareTo` / `equals` 派发到全体活类型。
+例：`ModuleDescriptor$Version.compareTokens@100/@105` 原有 392 个派发目标。
+
+**终态做法**：
+- **清单登记**：反射数组分配方法在 `vm_intrinsics.toml [facts.reflect.array_allocators]` 中登记，值为元素类型实参序号
+  （`Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;` = 0）。生成器中不出现类名字面量。
+- **返回模型**：调用点的返回模型为 `RetModel::NewArray(i)`，经镜像流边 `MirrorOp::ArrayOf(m, off)` 把元素类型实参的
+  类镜像集变换成结果。
+- **分配点**：对所指已知的类镜像 X，在调用点 (m, off) 上建数组分配点 `[X@m:off`（与 `anewarray` 同一机制），
+  元素只来自其后的写入。
+  - 基本类型类镜像给 8 种基本类型数组。
+  - 已达 255 维的数组类镜像不产生结果（JVMS §4.4.1）。
+- **所指未知时**：元素类型实参出现所指未知的 Class（open、非镜像 Class 值、非字节码类镜像）时，结果为 open(Object)，
+  语义与原模型相同。
+- **放行判定只在不动点上做**：放行前到达的类镜像只记下。工作队列排空时，实参仍没有所指未知的调用点才放行、逐类型建分配点
+  （`reflect.rs::array_of_release`，与 `lookup_release` / `rcall_release` 同一口径）。出现过所指未知的调用点不放行。
+  放行后，结果是实参集的单调函数，因此终态与求值次序无关。
+  - 首版（956db0b4）在值入点即时判定「先到所指未知即饱和」，饱和前已建的分配点会留存，结果随散列种子变化：
+    TestModuleLayerDefine 种子 0/1 为 3084 类，种子 2 为 3264 类。
+  - 次版（35c78422）改为排空时判定后，三个种子的结果逐项相同。
+- **代价控制**：反射上下文里（`MethodType.fromDescriptor` 的描述符解析、`getClass(open)` 等），元素类型实参约有 1700 个镜像，
+  另有 open。在这些上下文里逐类型建点会让分析超过 20 分钟，`Class.arrayType` 还会让维数递归失控。按上一条规则，
+  这类调用点在不动点上已有所指未知，不会放行，所以不建分配点。
+
+**结果**（本机 `rava closure`，TestModuleLayerDefine，JDK 21）：
+
+| | 改前 8bb25e10 | 改后 35c78422 种子 0 / 1 / 2 |
+|---|---:|---:|
+| JDK 类 | 3264 | 3084 / 3084 / 3084（集合逐项相同，均为改前子集，−180） |
+| 方法 | 19219 | 18853 ×3（均为改前子集，−366，无新增） |
+| compareTokens@100/@105 派发目标 | 392 | 2 |
+| 闭包耗时 | — | 25–28 s，RSS ≤ 1.9 GB |
+
+减少的 180 类逐项论证：它们在改前只经两条 open 派发进入。
+- `compareTokens@105` 的 `toString` / `compareTo` 派发到全体活类型，例如 `ArrayBlockingQueue.toString`。
+- `KeyFactory.nextSpi@64` 等 JCA 取实现处的 `Provider$Service.newInstance` 派发到 open(Provider$Service)，即全部 provider
+  的服务类，例如 `XMLDSigRI$ProviderService.newInstance@107`。由此进入 xml-security 实现 111 类（`ApacheCanonicalizer` →
+  `Init` …）、org/jcp/xml/dsig 实现 12 类、sasl 工厂、jgss 机制等。provider 类本身（XMLDSigRI 等）仍经 ServiceLoader
+  进入，不在减少之列。
+
+这两条派发的接收者都来自 `Array.newArray` 结果的 open(Object) 元素。改后元素只来自实际写入，这两条链都不再成立；
+测试本身没有使用这些类。
+
+验证作业：
+- 单测 c1de-ut-c146f5c8（新增 `reflect_new_array_element_precision`：TestModuleLayerDefine 三种子一致，且不含上述两条链带入的类）
+- 抽查 c1de-sp-61da38bd（TestModuleLayerDefine、TestArrayComponentType、TestReflectArrayDeep、TestVmPlatformNatives、
+  SuccessivePrimeDifferences、RankingMethods、ArrayListDemo、ArrayListFull）
+- 档案 c1de-prof-c146f5c8（24 片）对照同口径基线 c1de-profb-8bb25e10
+
+结果见 §27.1。
+
+### 27.1 进度与暂停记录（2026-10-05，按协调方要求暂停，分支 c1d-elem @ c146f5c8 + 本文档提交）
+
+**在途作业的处置**（已全部按 PID 停掉，服务器残留已清，无 c1de 运行目录存活）：
+
+| 作业 | 状态 | 结论 |
+|---|---|---|
+| c1de-ut-c146f5c8 | 作业超时（kr1，60:07，rc=None） | **不算通过**：作业缺 `--job-timeout 7200`，单测未跑完。恢复时须带该参数重发 |
+| c1de-sp-61da38bd | 停止时 6 例 PASS：ArrayListDemo、ArrayListFull、TestArrayComponentType、TestVmPlatformNatives、SuccessivePrimeDifferences、RankingMethods | TestReflectArrayDeep、TestModuleLayerDefine 未跑完。TestModuleLayerDefine 运行期 NPE 在集成分支（int-2602f409、c1db-sp-b47568ec）上已存在，不是本改动引入 |
+| c1de-prof-c146f5c8 | 停止时 5 / 24 片 rc=0 | 未完成，无并集结论 |
+| c1de-profb-8bb25e10（基线） | 停止时 11 / 24 片 rc=0 | 未完成 |
+
+**未解决的回归（阻塞合入）**：TestJndiNoProvider 在 c146f5c8 上种子稳定（3820 类 / 24502 方法），类集与集成分支
+781eeec2 相同，但**方法多 32 个**（781eeec2 为 3820 / 24470），违反「集合只减不增」。新增方法与 V9 修过的是同一族：
+`Provider.implPutIfAbsent/putIfAbsent`、`ArrayDeque.offer/offerLast`、`Collections$EmptyMap/SingletonMap/SynchronizedMap.putIfAbsent`、
+`Collections$SynchronizedCollection.add` 等。
+
+已查明的链路：
+1. `XMLParserImpl.repoolDocumentBuilder@10 Queue.offer` 的接收者来自 `getDocumentBuilderQueue@16`，取值路径是
+   `SynchronizedMap.get` → `WeakHashMap.get`（上下文 `WeakHashMap@127623:30`）→ `WeakHashMap$Entry.value`（14 个对象）。
+   该接收者集合改后为 8499 类加若干 open，改前为 29 类加 open(Object[]) 和 open(SocketPermission)。
+   `@path` 显示 `WeakHashMap$Entry.value` 与全局 `R ConcurrentHashMap.get`（8499）同处一个 Object 流强连通代表。
+   改后有新值流入这个汇点。
+2. 新流入的来源：`Arrays.copyOf(Object[], int, Class)@35 → System.arraycopy` 写入新建的反射数组分配点。
+   - 例如 `[Ljava/lang/ClassValue$Entry;@1629:2`，上下文为 `Vector@194:85`、`ArrayList@1088:23`、`ArrayList@606:43`、
+     `ImmutableCollections$ListN@494:88`、`TimSort`/`copyOfRange` 等十余个。
+   - 共享上下文里，元素类型实参集是众多调用方之和；源数组元素里有 open(Object)。arraycopy 写入时按分量类型收窄，
+     open(Object) 变成 open(C)。结果是每个类型 C 的新数组都带上 open(C) 元素。
+   - 例如 `@trace:open:java/lang/ClassValue$Entry` 在改后有 101212 个节点。改前这些调用点返回 open(Object)：
+     open 数组只按已有的逃逸分配点展开，arraycopy 写进 open 目标时不新增元素（hw_site 只接具体数组）。
+   - 于是 open(ClassValue$Entry) 经 `ClassValueMap.finishEntry → WeakHashMap.put` 第 2 实参进入。该实参改后为
+     {9 类, open(ClassValue$Entry)}，改前为 {7 类}，并最终汇入上述强连通汇点。
+3. 诊断落盘：
+   - /tmp/c1de_whp_base2.txt、/tmp/c1de_whp_head.txt：WeakHashMap.put 第 2 实参来源，改前 / 改后。
+   - /tmp/c1de_cve.txt：open(ClassValue$Entry) 的 trace。
+   - 二进制：/tmp/rava_base2（781eeec2）、/tmp/rava_head（c146f5c8）。
+
+**恢复时的第一步**：
+1. 在 c1d-elem 上 `git merge rust-closure-analyzer`。
+2. 修第 2 点的终态口径：反射数组分配点的元素只能来自实际写入，而 arraycopy 只搬移元素、不产生新值。
+   - 源元素里的 open(o) 写进反射分配点时，不应按分量类型收窄成新的 open(C)。
+   - 拟法：hw 写入槽流向反射分配点元素时，open 部分沿用「open 目标只覆盖已逃逸分配点」的同一口径，即只保留源中
+     已有的 open(t ⊂ C)，不从 open(Object) 生成 open(C)。
+   - 或者在 `array_of_into` 处把「源数组元素含 open(Object)」的共享上下文视同所指未知。
+   - 两种方案都必须是不动点上的单调判定。
+3. 验收：
+   - TestJndiNoProvider 的方法集 ⊆ 781eeec2，且种子 0/1/2 结果一致。
+   - TestModuleLayerDefine 仍为 3084 类，且种子无关。
+   - `reflect_new_array_element_precision` 通过。
+4. 然后推送并重发作业：
+   - 单测作业带 `--job-timeout 7200`。
+   - 抽查（补 TestReflectArrayDeep、TestJndiNoProvider）。
+   - 档案 24 片，与 c1de-profb 同口径基线一起重跑。
+
+### 27.2 恢复：反射数组分配点元素写入不收窄 open（2026-10-05，分支 c1d-elem，合入 300389ce 后）
+
+**根因补充**：§27.1 第 2 点只写了 hw arraycopy。只在 hw 写入上改口径（`hw_site_arrays`）后，TestJndiNoProvider 仍多 32 个方法。
+用 `@trace:open:java/lang/ClassValue$Entry` 复查，open(ClassValue$Entry) 还经字节码 aastore 进来：
+- 写入点是 `ArrayList.add(int, Object)` 的 P2，写进 `[Ljava/lang/ClassValue$Entry;@…:2` 的元素。
+- 机制：共享上下文中，`Arrays.copyOf(T[], int)` 的 newType 取 `original.getClass()`，镜像集是各调用方之和。
+  因此 `ArrayList.elementData` 会收到别的调用方所要分量类型的数组。
+- 对这些数组的任何元素写入（hw 搬移或字节码 aastore），只要按分量类型过滤，open(Object) 就会被收窄成 open(C)。
+
+**终态口径**（不动点上的单调判定，与写入路径无关）：
+- 反射数组分配调用点建出的分配点登记在 `refl_arrays`。
+- 写入其元素的流边带 `OPEN_EXACT` 标记。`classes.rs::filter_open_exact` 的规则：
+  - 确定类型 ⊂ 分量类型的保留；
+  - open(o) 只在 o ⊂ 分量类型时原样保留，不收窄出新的 open(分量)。
+- 统一入口是 `elem_filter(x, c)`，用于字节码 aastore（`bytecode.rs`）和 hw 写入（`hw_mem.rs`）。
+- 逃逸数组从 `Node::Array` 回灌元素的边仍按分量类型收窄。开放世界里外部代码写入逃逸数组的未知对象，必须读得到。
+- 这与改前的语义一致：改前这些调用点返回 open(Object)，元素读出后由 checkcast 收窄；分配点本身不带凭空收窄出的 open。
+- 该过滤是集合上的逐元素判定，满足单调性，与工作表顺序无关。
+- `OPEN_EXACT` 边不参与 Object 流的 SCC 合并（`flow.rs` 的 objf 判定）。
+
+**本机验收**（二进制为 c1d-elem 工作树 HEAD 加本改动）：
+
+| 项 | 结果 |
+|---|---|
+| TestJndiNoProvider 种子 0 / 1 / 2 | 均为 3820 类 / 24470 方法，三者相同；与 781eeec2 的类、方法集**完全相同**（+0 / −0），§27.1 的 +32 方法已消除 |
+| TestModuleLayerDefine 种子 0 / 1 | 3084 类 / 18853 方法，与 c146f5c8 相同；比 781eeec2（3264 / 19219）少 180 类、366 方法，无新增 |
+| `closure_cli::reflect_new_array_element_precision` | 通过（68 s） |
+| `cargo test -p closure` | 160 通过 |
+
+注：本机 `CARGO_TARGET_DIR` 指向多个工作树共享的目录。`cargo test` 用的 `CARGO_BIN_EXE_rava` 可能是别的工作树产出的二进制
+（首次运行时该用例误报失败）。本机跑 driver 集成测试时须显式设 `CARGO_TARGET_DIR=../build/analyzer-target`。
 
 ## 28. 共享汇点精度：逐汇点分解与反事实实测（2026-10-05，分支 c1d-sink，基于 0192bf20）
 
@@ -2574,6 +2749,15 @@ ubuntu 上为 `/mnt/d/workspace/java_rta-spot-job-sink-*`），没有删除。�
 **结论**：共享汇点线到此收口，引擎语义没有改动。§28.6 原估的 −55 类，更正后为 −23 类：第 1 项 −4，第 2 项 −19，
 后者还只在锚点口径下才有。≤ 569 的达成路线是引导映像求值器（在途），不是锚点口径下的精度修补。本分支只保留诊断工具
 （`--cut @node:` / `@noopenhub` / `@noreopen` / `@noopenrecv` / `@edgeoff`，`--flows @fopen:` / `@in:` / `@svcunk`）。
+
+### 27.3 同步集成分支（140ef55e，含 V11 类型恒等边 / V12）
+
+- `flow.rs` 冲突：本分支的 objf 判定屏蔽 `OPEN_EXACT`，集成分支（V11）在同代表跳过条件上加了 `ident_edge`。两者都保留：
+  `rs == rd && (objf || ident_edge(...))`，objf 仍按 `NOT_SUB | OPEN_EXACT` 屏蔽。
+- V11 的 `tau.rs::ident_edge` / `tau_check_flow` 与 `hvn_diag.rs` 原先只识别 `NOT_SUB`，带 `OPEN_EXACT` 位的过滤会被当作类型序号去下标 `names`。
+  这里取保守解：`OPEN_EXACT` 边一律不算恒等边；作为入边时，按「非 τ 子类型」使目标失去封闭类型。
+  另一种解是去掉标记位后按分量类型判定。`filter_open_exact` 的输出 ⊂ 分量类型，这样做也健全，而且能多合并一些。
+  未采用的原因：保守解只少合并，闭包结果不变；而且目前 `OPEN_EXACT` 边只写入 `Node::E`，`E` 节点本来就没有封闭类型。
 
 ## 29. a5-4b 归因：JarVerifier / pkcs11 的真实来源与所需能力（2026-10-06，分支 c1d-a54b，基于 140ef55e）
 

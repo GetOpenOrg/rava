@@ -188,7 +188,7 @@ impl<'a> Engine<'a> {
         }
         self.tau_check_flow(di, filter);
         let (rs, rd) = (self.graph.rep(si), self.graph.rep(di));
-        let objf = filter & NOT_SUB == 0 && self.names[filter as usize].as_ref() == OBJECT;
+        let objf = filter & (NOT_SUB | OPEN_EXACT) == 0 && self.names[filter as usize].as_ref() == OBJECT;
         if rs == rd && (objf || self.ident_edge(rs, filter, u32::MAX)) {
             return;
         }

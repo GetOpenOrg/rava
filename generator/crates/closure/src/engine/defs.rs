@@ -76,6 +76,8 @@ pub(super) enum MirrorOp {
     Declaring,
     /// 所指类 ⊂ 该类型（类型 id）的类镜像（类镜像子类型判定成立一侧，见 `absint/narrow.rs`）
     Sub(u32),
+    /// 每个类镜像所指类型的新数组（`Array.newInstance`）：调用点（方法, 偏移）上按元素类型区分的数组分配点
+    ArrayOf(u32, u32),
 }
 
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
@@ -95,6 +97,8 @@ pub(super) enum RetModel {
     Receiver,
     /// 按实参（序号，不含接收者）读内存
     Read(usize),
+    /// 按实参（序号，不含接收者）所指元素类型新分配的数组（元素全为 null）
+    NewArray(usize),
     /// 调用者类镜像：调用方（@CallerSensitive 方法）各调用边上调用方所在类的镜像
     Caller,
 }
@@ -249,6 +253,21 @@ pub(super) struct Hub {
     pub(super) link_seq: u32,
     /// 已对 (接入记录, 按调用点建模的目标) 完整接边：同一记录再派发该目标的新接收者时只接接收者相关部分
     pub(super) edged: HashSet<(u32, usize)>,
+}
+
+/// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
+/// 定夺，与值到达的先后无关：不动点上元素类型实参仍无所指未知的 Class 才放行逐类型建分配点，
+/// 否则结果为 open(Object)、不建分配点（`reflect.rs::array_of_into`）
+#[derive(Default)]
+pub(super) struct ArrayOfSite {
+    /// 已到达的所指已知类镜像（字节码类 / 基本类型）
+    pub(super) mirrors: BTreeSet<u32>,
+    /// 结果节点
+    pub(super) dsts: Vec<Node>,
+    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含 open(Object)
+    pub(super) open: bool,
+    /// 已放行：所指已知的类镜像逐类型建分配点
+    pub(super) released: bool,
 }
 
 /// 调用点接入枢纽的记录：实参来源、结果节点、实参值

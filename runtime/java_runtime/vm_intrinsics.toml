@@ -517,6 +517,14 @@ instantiators = [
 [facts.reflect.serial_allocators]
 "jdk/internal/reflect/MethodAccessorGenerator.generateSerializationConstructor:(Ljava/lang/Class;[Ljava/lang/Class;ILjava/lang/Class;)Ljdk/internal/reflect/SerializationConstructorAccessorImpl;" = 0
 
+# 按类镜像分配新数组的手写方法 → 元素类型 Class 形参序号（不含接收者）。JLS §15.10.2 / JVMS anewarray：新数组的元素为
+# 缺省值 null，数组类型由元素类型镜像决定（Array.newInstance 规范）。分析器按调用点把结果建模为该调用点上按元素类型
+# 区分的数组分配点（同字节码 anewarray，元素只来自其后的写入），替代 open(返回类型)——open(Object) 结果的元素读取
+# 是 open(Object)，经容器（ArrayList.grow → Arrays.copyOf(T[],int,Class)）流回元素数组后对全部逃逸对象分派。
+# 基本类型类镜像给各基本类型数组；所指未知的 Class 与 open 仍给 open(返回类型)。实现：array_impl.rs newArray
+[facts.reflect.array_allocators]
+"java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = 0
+
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 

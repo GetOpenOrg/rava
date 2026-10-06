@@ -153,6 +153,9 @@ const TO_STRING: (&str, &str) = ("toString", "()Ljava/lang/String;");
 const CATCH: u32 = 1 << 31;
 /// 流边过滤标记：只放行 ⊄ 过滤类型的成员（instanceof 判定不成立一侧，见 `classes.rs` `filter`）
 const NOT_SUB: u32 = 1 << 31;
+/// 流边过滤标记：写入反射数组分配点的元素——确定类型按 ⊂ 过滤类型取舍，open(o) 只在 o ⊂ 过滤类型时原样保留，
+/// 不收窄出新的 open（见 `classes.rs` `filter_open_exact`）
+const OPEN_EXACT: u32 = 1 << 30;
 /// 站点键：手写方法的值池
 const POOL: u32 = u32::MAX;
 /// 站点键：手写体产出的值（分配 / 构造 / 字段读取 / 回调返回值），汇入值池
@@ -161,6 +164,8 @@ const PROD: u32 = u32::MAX - 1;
 const ARRAY_RET: u32 = u32::MAX - 2;
 /// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
 const CALLER: u32 = u32::MAX - 3;
+/// 数组类型的维数上限（JVMS §4.4.1；反射分配更高维数组抛 IllegalArgumentException）
+const MAX_ARRAY_DIMS: usize = 255;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -485,6 +490,13 @@ pub struct Engine<'a> {
     /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
     mirror_open: BTreeMap<u32, Vec<Node>>,
     mirror_open_seen: HashSet<(u32, Node)>,
+    /// 反射数组分配调用点 (方法, 偏移) 的元素类型实参与结果节点（`reflect.rs::array_of_into`）
+    array_of: HashMap<(usize, u32), ArrayOfSite>,
+    /// 尚未放行的反射数组分配调用点：到工作队列排空时由 `reflect.rs::array_of_release` 定夺
+    array_of_pending: BTreeSet<(usize, u32)>,
+    /// 反射数组分配调用点建出的数组分配点（`reflect.rs::array_sites`）：写入其元素时按 [`OPEN_EXACT`] 口径过滤
+    /// （[`Self::elem_filter`]）
+    refl_arrays: HashSet<u32>,
     /// 非字节码类（lambda 合成类、手写实现对象）的共用类镜像：Class 类型的抽象对象，不指向任何字节码类、无 Java 字段
     synth_mirror: Option<u32>,
     /// 成员枚举的接收者节点 → 枚举类别；节点增长的新增部分排队处理

@@ -56,7 +56,8 @@ impl<'a> Engine<'a> {
         if f == obj {
             return true;
         }
-        if f & NOT_SUB != 0 {
+        // 反射数组元素写入（OPEN_EXACT）按非恒等处理：只少合并，不改结果
+        if f & (NOT_SUB | OPEN_EXACT) != 0 {
             return false;
         }
         let ts = self.rep_taus(rs);
@@ -79,7 +80,7 @@ impl<'a> Engine<'a> {
     /// 入边 → 节点 i（过滤 f）：f 不是 τ(i) 的子类型时 i 失去封闭类型
     pub(super) fn tau_check_flow(&mut self, i: u32, f: u32) {
         let Some(t) = self.node_tau(i) else { return };
-        if f == t || (f & NOT_SUB == 0 && self.sub(f, t)) || self.names[t as usize].as_ref() == OBJECT {
+        if f == t || (f & (NOT_SUB | OPEN_EXACT) == 0 && self.sub(f, t)) || self.names[t as usize].as_ref() == OBJECT {
             return;
         }
         self.tau_break(i);
