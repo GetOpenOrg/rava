@@ -46,6 +46,10 @@ impl Mark {
     pub(super) fn rl(&self) -> usize {
         self.rl
     }
+
+    pub(super) fn heap(&self) -> usize {
+        self.heap
+    }
 }
 
 /// 引导映像的运行期部分：运行期初始化的类、残差调用、残差区段
@@ -214,6 +218,7 @@ impl Vm {
         self.done_log.truncate(m.done);
         self.bj.recs.truncate(m.recs);
         self.bj.war.reads.retain(|r| r.0 < m.recs);
+        self.war_rollback(m.rl, m.heap);
         while self.bj.war.wundo.len() > m.wu {
             let Some((l, old)) = self.bj.war.wundo.pop() else { break };
             match old {

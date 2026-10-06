@@ -126,7 +126,7 @@ impl Vm {
                         locals: ck,
                         why: why_of(&why),
                     });
-                    self.war_capture(m.rl());
+                    self.war_capture(m.rl(), m.heap());
                     match end {
                         Some(e) => ix = e,
                         None => return Ok(PhaseEnd::Residual),
@@ -213,7 +213,7 @@ impl Vm {
         };
         if record {
             self.bj.recs.push(Rec::Call { phase: info.key.clone(), off: insn.offset, callee: callee.clone(), args, ph, why: why_of(why) });
-            self.war_capture(m.rl());
+            self.war_capture(m.rl(), m.heap());
         }
         Ok(Some(ph))
     }
