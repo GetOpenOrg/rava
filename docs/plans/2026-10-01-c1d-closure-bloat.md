@@ -2936,3 +2936,104 @@ if chain.iter().any(|cf| inst(cf).iter().any(|f| f.desc.strip_prefix('L').and_th
 
 恢复入口：worktree `../java_rta_c1durl`（分支 `c1d-url`）。测量脚本 `build/url/cl.sh <Test> <tag> [rava closure 参数]`（经全机锁、冷缓存）。
 切除集 `build/url/cuts7.txt`；实验补丁 `build/url/per_object_url.patch`。以上文件都在 scratch，补丁正文已抄在 §30.4。
+
+### 30.6 第 1 步实施：B2 + B6 容器元素出口按对象（2026-10-06，分支 `c1d-url-b2`，基于 353d5162）
+
+**结论先行**：B2 的 open(URL) 引入点 `findResource@118`、`findResources@134`、`elements [Ljava/lang/Object;@…` 全部消失；
+§30.2 列的 `$1.hasNext@31`、`URLClassPath.<init>@160`、`getLoader(I)@36` 在本基线上已不是引入点。剩余引入点只有三个：
+`ServiceLoader$LazyClassPathLookupIterator.nextProviderClass@173`（B6 的残留，来源是 B3）、`ClassLoader.getResource` 的返回（B3），
+以及 `URL.equals@1`（`Object` 形参上的 `instanceof`，不属于容器出口）。本步在四例上的独立收益是 −8 类 / −153 方法。
+`J` 和 JarVerifier 链仍在闭包内，要等 B3 起各步兑现（见下文「收益归属」）。
+
+#### 根因链（DeepCopy，`@path` / `@in` / `@objs` 逐层查）
+
+1. `findResource@118` 的 checkcast 结果来自 `List.get`。这个 list 是 `findMiscResource@56` 从资源缓存 map（一个
+   `ConcurrentHashMap` 分配点）用 `get` 取出的值。
+2. `ConcurrentHashMap.get` 经静态辅助 `tabAt` 读表。`tabAt` 自身按 `ctxsel.rs` 规则 1 继承 map 上下文，但它在调用
+   `Unsafe.getReferenceAcquire` 这个字节码包装。包装的接收者是单例、不是抽象对象，所以进了方法本体；本体内只有一个
+   native `getReferenceVolatile` 调用点，全部 map 的表都在这里汇合。结果是任何一个 map 的 `tabAt` 都读出全部 map 的节点，
+   节点的 `val` 也就带上了全部 map 的值。
+3. 修好第 2 层后，`tabAt` 只读出本 map 的 9 个节点对象，但 `get@104`（`Node.find` 的结果 `.val`）仍是全集。原因是树箱
+   `TreeBin@396:137#@map` 在 `putTreeVal` 里以自身为上下文分配 `TreeNode`，堆上下文链 `@site#@396:137` 截断到 `HEAP_DEPTH`
+   后丢掉了属主 map。于是各 map 的树箱共用同一组树节点，`find` 读出全部 map 的值。
+
+#### 实现（两项通用能力，生成器内无类名）
+
+- **内存访问中继方法继承调用方上下文**（`engine/relay.rs`，接在 `invoke.rs` 的非对象接收者分支与 `dispatch_one`）。
+  - 中继方法的定义：字节码方法，其引用形参直接或经下游中继方法，作为实参流到清单 `[facts.memory_reads]` 的 `src`，
+    或 `[facts.array_writes]` 的 `dst` / `values` / `elements` 槽。
+  - 当调用方处在某个上下文中、接收者不是抽象对象时，中继方法继承调用方上下文，与静态辅助方法同一口径。
+    具体求值上下文不外传。
+  - 判定方式：在字节码调用图上求最小不动点，按「自 key 可达的未定成员集」一次求解并整体缓存。
+    解唯一，与查询顺序和成环形态无关（D1）。每个成员的调用边只算一次。
+  - 首版逐成员递归、不缓存成环结果，DeepCopy 要 697 s；改成不动点后为 39 s。
+- **同巢内部分配沿用属主链**（`engine/classes.rs::obj_at` + `internal_alloc`）。
+  - 分配方对象与新对象同类，或同属一个嵌套巢（JVMS §4.7.28 `NestHost`，且分配方是巢成员）时，新对象的链取分配方链
+    去掉其自身分配点的部分，即属主链。
+  - 巢宿主分配成员对象不算内部分配：宿主就是数据结构的属主，成员对象按宿主分开。
+  - 分配方没有属主（链长 1）时，退回原规则：递归结构不延长链，其余以分配方为上下文。
+- 诊断：`--flows '@objs:<节点子串>'` 列出匹配节点值集里的抽象对象 / 数组分配点名，并标出逃逸对象。
+- 守护测试：`driver/tests/closure_cli.rs::container_elements_per_object`，fixture 是 `ElemTrack.java`。
+  - 用例：两个 `ConcurrentHashMap` 各存一种元素，从 m1 取出后 cast 再派发。
+  - 断言：`Square.name` 不得入链。改动前它入链，改动后不入链。
+
+单独只加中继一项时，DeepCopy 为 3195 / 20447，与基线相同，`@118` / `@134` 仍是引入点。两项叠加才见效。
+
+#### 实测（本机 macOS，`rava closure`，refjdk 21.0.11+10，冷缓存；基线 353d5162）
+
+| 测试 | 基线 类 / 方法 | 本步 类 / 方法 | 差 | 分析耗时 ms | 方法上下文 |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 469 / 1828 | 469 / 1827 | 0 / −1 | 489 → 515 | 4056 → 4198 |
+| StockTrans | 3193 / 20429 | 3185 / 20276 | −8 / −153 | 45971 → 25296 | 95451 → 93454 |
+| DeepCopy | 3195 / 20447 | 3187 / 20294 | −8 / −153 | 44550 → 25837 | 95350 → 93331 |
+| TestSerialDefaultSuid | 3200 / 20441 | 3192 / 20288 | −8 / −153 | 45768 → 27854 | 95205 → 93171 |
+
+（§30 开头表格的基线是 b60e4f36 上的值。353d5162 之前合入的其他改动已把三例降到约 3195，本节一律以 353d5162 为基线。）
+
+- 四例都是严格子集，新增类 0、新增方法 0。
+- 三例去掉的 8 个类相同：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth}$1`（`ChronoField` 的 switch 映射表），以及
+  `java/util/stream/Nodes$CollectorTask$OfInt` / `Nodes$SizedCollectorTask$OfInt` / `Nodes$ToArrayTask$OfInt` /
+  `Nodes$ToArrayTask$OfPrimitive`。它们原先是靠 map 值汇合造出的 `TemporalAccessor` / `IntStream` 接收者派发进来的。
+- HelloWorld 去掉 `ConcurrentHashMap$ReservationNode.find`：`ReservationNode` 只经 `computeIfAbsent` 写进被计算的那个 map 的表，
+  读这个 map 的 `get` 才会派发到它的 `find`。
+- 分析耗时降了约 40%：值集汇合减少，传播量随之下降。
+
+#### 健全性论证
+
+- **上下文选择不影响健全性。** 两项改动都只改「方法克隆按哪个上下文」和「分配点按哪条链命名」。
+  - 每个运行期调用仍落在某个方法克隆上，克隆的形参取自其调用方的实参，全部克隆之并就是原本体的值集。
+  - 每个运行期分配仍映射到恰好一个抽象对象。
+  - 手写内存访问调用点在克隆内按克隆的实参接入，读出的仍是该实参所指对象的元素 / 字段全集。
+  - 所以改动只做细分，不丢值。上下文敏感指针分析对任意上下文抽象都健全，这里没有依赖某种特定选法。
+- **判定错误只影响精度，不影响健全。** 中继判定的任一处误差（例如保守分析的方法记为无边）只会让方法退回本体，也就是原行为。
+- **引擎不假设克隆的接收者就是上下文对象。** 检查过，`ctx` 只用于堆链命名、上下文选择与具体求值标记；具体求值上下文已排除。
+- **结果是严格子集。** 实测四例的类集与方法集都是基线的严格子集（上表）。去掉的成员都能用「元素按 map 分开后，派发接收者不再含该类型」解释。
+- **与顺序无关（D1）。** 中继判定是唯一的最小不动点；内部分配规则只读类文件的 `NestHost` 属性。本机已跑
+  `closure_independent_of_hash_seed`（StockTrans / DeepCopy / TSDS 等 7 例，换种子后集合一致）与 `container_elements_per_object`，两项均通过。
+
+#### 收益归属（为何本步只有 −8）
+
+open(URL) 退出容器出口以后，`J`（jar `Handler.openConnection`）与 JarVerifier 链仍各有独立来源：
+
+- **B3：** `ClassLoader.getResource` / `getResources` / `getSystemResources` 是手写边界（`class_loader_impl.rs`），返回值被建模为
+  open(URL) / open(Enumeration)。`nextProviderClass@106/@48` 的 `configs` 因此只有 open(Enumeration)，`@168` 的 `nextElement`
+  落到枢纽返回，`@173` 的 checkcast 造出 open(URL)。这就是 B6 的残留，B6 随 B3 兑现。
+- **B4 / B1 / B5：** 不变（§30.2）。
+
+§30.1 的 −277 上界要在 B3 → B4 → B1 → B5 依次落地后兑现。本步是这些步骤看到收益的前提：B3 只要按清单收窄
+`getResource*` 的返回，`@118` / `@134` / `@173` 就不会再从容器出口重新引入 open(URL)。
+
+#### 遗留
+
+- `URL.equals@1`：`Object` 形参 `instanceof URL` 产生 open(URL)，属于形参来源精度，不在 B2 范围，留给 B4 一并评估
+  （其接收者 handler 是否带进 `J`，需在 B3 后重查）。
+- §30.4 按对象 URL 判据仍未提交。它是 B4① 的前提，单独没有收益，随 B4 一起做。
+- 内部分配规则对「巢成员分配巢成员」一律沿用属主链。在属主相同、分配方不同的情况下，会少一层分配方区分，可能损失精度。
+  四例实测是净收益，健全性不受影响。
+
+#### 验证
+
+- 本机：`cargo build --release -p driver` 通过；`closure_cli` 的 `container_elements_per_object` 与 `closure_independent_of_hash_seed` 通过。
+- 服务器单测作业 `c1db2-ut-8f2dc45c`（ref 8f2dc45c，全量 generator 单测 + rava_macros_core）：rc=0，521 通过、0 失败。
+- C4 全量冻结期内，本分支不合入、不发起抽查。冻结解除后合入，并按 §30.3 抽查 DeepCopy 系、`TestAppClassLoader`、
+  `TestJarFile*`、HelloWorld，同时做动态对照。
