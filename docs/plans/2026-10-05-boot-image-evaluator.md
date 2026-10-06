@@ -503,9 +503,26 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 
 D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null → `Charset.defaultCharset` → 同一处 `StandardCharsets.lookup`。D10 消掉了 `PreHashedMap.put` 的 open 注入。剩余放大点是 2–4，属于通用精度问题，不是映像特有：任何以非常量名调 `Charset.forName` 的程序同样会碰到。
 
+**补测（16:20，64075e73，同口径反事实 `--cut`，不健全、只作归因）**
+
+| 切除 | 类数 |
+|---|---|
+| 无（64075e73 现状，RSS 2.0 GB、50 s） | 2,986 |
+| `sun/nio/cs/StandardCharsets.lookup(String)` 整个方法 | **401** |
+| 同上 + `Proxy$Dyn.__vm_proxy_invoke` | 401 |
+| 只切 `Class.newInstance()` | **459**（≤ 540） |
+| 只切 `Class.methodToString`（异常消息支） | 2,986 |
+
+结论修正：放大点只有一个——`StandardCharsets.lookup` 以不定名字走到 `Class.forName(…).newInstance()`（lookup@122/125），名字不定的三条入口（jnu 区段、stdout / stderr 编码）都汇到这里。`Class.newInstance` 本身让 `Constructor` 进入实例化集合，此后任何以 open 实参调用 `String.valueOf(Object)` / `StringBuilder.append(Object)` 的点都会派发到 `Constructor.toString` → `Executable.sharedToString` → `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `Method.invoke` → 注解 → `Proxy` → open `equals` → `URL.equals` → `InetAddress`……。实测入口之一是 `Terminator.setup` → `Signal.handle@71` 的字符串拼接（映像残差根），所以单切异常消息支不够。
+
+因此压闭包的终态方向（按收益）：
+- (A) `lookup` 的类名集合：`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集，`newInstance` 只建这些类的无参构造（不让 `Constructor` 进实例化集合以外的派发）。需核对 `Class.forName` / `newInstance` 在名字集有限时的建模是否仍落到 open 反射。
+- (B) `String.valueOf(Object)` / `append(Object)` 的实参按调用点区分（上下文敏感或按调用点克隆），`Signal.handle@71` 的实参只有 `Signal`，不应派发到 `Constructor.toString`。
+- 原 (a)–(c) 降级：单独做都不改变 2,986。
+
 **恢复入口**
 
-1. 先压闭包（硬门槛）。候选按收益排序：
+1. 先压闭包（硬门槛）。先按上面的 (A) / (B) 做；以下为原候选，按补测已降级：
    - (a) `Proxy$Dyn` VM 钩子按代理实际接口与调用点派发，不再以 open 实参派发全部方法；
    - (b) `Class.newInstance` / `getConstructor0` 异常消息分支的冷路径；
    - (c) `Method.invoke` 的 `isCallerSensitive` 注解查询，按 `@CallerSensitive` 的静态事实折叠。
