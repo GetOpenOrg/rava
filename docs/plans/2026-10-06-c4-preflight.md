@@ -51,6 +51,7 @@
 | （探查发现）lambda 接收者调用含外部虚调用的 default | 系统性缺口 | `iface_default_body` 拒绝 default 体内任何未在本接口声明的虚调用（`System.out.println`、`StringBuilder`、参数接口上的调用），这类 default 在载体上无体；实现类经继承展开不受影响，但 lambda 合成对象只能经载体 `__default_<m>` 执行，命中即存根 panic | 2d87d368：只在所有者为本接口 / 传递超接口 / 根超类、且方法不在接口层次内声明时拒绝；新增 e2e TestLambdaDefaultForeignCall | 见 c4pre-2d87d368 |
 | FibonacciMatrixExponentiation（不在 Python 基线，Python 侧亦 > 300 s） | 性能 / 既有 | fib(10^7) 的 BigInteger Toom-Cook 乘法 + 递归 toString，debug 档运行极慢；非卡死、非 2d87d368 回归：b093069f / 1079507631c4 / e983141d 三次抽查（均早于 2d87d368、debug 档）已在 300 s 运行时限超时，dev-opt 档实测 121–245 s 通过（2026-09-30 优化方向文档），JVM 约 6–9 s；本次放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，后续由运行期性能线或 dev-opt 档处理 | — |
 | FractionReduction（不在 Python 基线） | 性能 / 既有 | debug 档运行慢（优化方向文档：debug > 300 s、release 12.75 s，GraalVM 参照 9.00 s）；非 2d87d368 回归：b093069f（kr2）/ 1079507631c4（sg1）/ e983141d（sg1）三次抽查均在 300 s 运行时限超时，本次 sg2 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
+| IQPuzzle（不在 Python 基线） | 性能 / 既有 | 千万级节点 DFS、上亿次对象分配与虚调用，debug 档运行慢（优化方向文档：debug > 300 s、release 4.86 s，GraalVM 参照 3.98 s）；非 2d87d368 回归：b093069f（ubuntu）/ 1079507631c4（sg2）/ e983141d（kr2）三次抽查均在 300 s 运行时限超时，本次 us1 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
 | TestModuleLayerDefine / TestClassModuleFace | 已知待办 | 引导映像线 | 不在本分支修 | — |
 
 ## 五、全量建议参数
