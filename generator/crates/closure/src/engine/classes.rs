@@ -553,14 +553,22 @@ impl<'a> Engine<'a> {
         let b = self.mbase[&self.methods[m].key];
         let mut chain = format!("@{b}:{off}");
         let ctx = self.methods[m].ctx;
-        // 递归结构（同类对象在自身方法里分配同类，如链表节点 / 表达式树）：堆上下文不再延长，
-        // 否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度
+        let outer: Vec<String> = self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).map(str::to_string).collect();
+        // 分配方是同一数据结构的内部对象（`internal_alloc`）：新对象沿用分配方的属主链（去掉分配方自身的分配点），
+        // 不把分配方的分配点叠进链——否则截断到 HEAP_DEPTH 后丢掉属主，各容器的内部对象汇合（树箱在自身方法里
+        // 分配的树节点、链表节点分配的后继）。分配方无属主时：递归结构不延长链（否则分配点两两组合成 O(站点²)
+        // 个抽象对象而不带来任何分派精度），其余照常以分配方为上下文
+        let internal = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| self.internal_alloc(&self.names[t as usize].clone(), cls));
         let recursive = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| &*self.names[t as usize] == cls);
-        if ctx != NOCTX && !recursive {
-            for seg in self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
-                chain.push('#');
-                chain.push_str(seg);
-            }
+        let segs: &[String] = match () {
+            _ if ctx == NOCTX => &[],
+            _ if internal && outer.len() > 1 => &outer[1..],
+            _ if recursive => &[],
+            _ => &outer,
+        };
+        for seg in segs.iter().take(HEAP_DEPTH - 1) {
+            chain.push('#');
+            chain.push_str(seg);
         }
         let name = format!("{cls}{chain}");
         if let Some(&id) = self.ids.get(name.as_str()) {
@@ -571,6 +579,17 @@ impl<'a> Engine<'a> {
         self.objs.insert(id, tid);
         self.obj_chain.insert(id, Rc::from(chain));
         id
+    }
+
+    /// 类 x 的对象分配 cls 的对象属于同一数据结构的内部分配：同类（递归结构），或 x 是某嵌套巢（JVMS §4.7.28 NestHost）
+    /// 的成员、cls 与之同巢（巢宿主或另一成员）。巢宿主自身分配成员对象不算——宿主是数据结构的属主，成员对象按宿主分开
+    pub(super) fn internal_alloc(&self, x: &str, cls: &str) -> bool {
+        if x == cls {
+            return true;
+        }
+        let host = |c: &str| self.h.class(c).and_then(|cf| cf.nest_host.clone());
+        let Some(h) = host(x) else { return false };
+        cls == h || host(cls).is_some_and(|c| c == h)
     }
 
     /// 新鲜工厂：有引用形参的静态字节码方法，返回值来自本方法分配的容器对象 / 引用数组，或来自另一个新鲜工厂
