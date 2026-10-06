@@ -171,7 +171,7 @@ note = "debug 档下创建 1e5 VT 过慢，「同时休眠」时序判定不成�
 
 [[known]]
 test = "TestXmlTransform"
-signature = "expected type, found module `lr_parser`"
-owner = "生成器命名（小写 Java 类名与其模块名同名：java_cup lr_parser / sym / virtual_parse_stack、xsltc parser_actions）"
+signature = "this method takes 1 argument but 3 arguments were supplied"
+owner = "生成器重载命名（接口层次跨层重载：ContentHandler.endElement(3) / LexicalHandler.comment(char[],int,int) 与子接口 ExtendedContentHandler / ExtendedLexicalHandler 的单参重载同取无后缀名）"
 since = "2026-10-06"
-note = "java_xml crate 编译 E0425 / E0573 16 处；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露；与 lambda default 改动无关（plan 判定只影响发射）"
+note = "java_xml crate 编译 E0061 ×2 / E0308 ×1（serializer/to_unknown_stream.rs 经 SerializationHandler 接收者调用）；先前的小写类名与模块同名（E0425 / E0573 16 处）已由 gen-lc-naming 1afed3fc 修复（lcname-spot2-1afed3fc 放宽超时抽查）；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露"
