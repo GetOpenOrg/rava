@@ -1094,10 +1094,10 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
 - `rava_macros_core` 16 通过；
 - 本机 `-p closure` 161 通过，`closure_cli` 6 通过。
 
-补测（服务器作业 `d1-n3-b763ee15`，04/09/10/11 四项被 main 以 HOLD 暂停，合入路径空出后自动恢复）：
-- `profile_matrix.sh` 验收集 27 例档案矩阵；
-- JNDI b1/b7、b64/b512；
-- DeepCopy / CollectorsDemo 的服务器全矩阵。
+补测（服务器作业 `d1-n3-b763ee15`，04/09/10/11 四项，合入后恢复跑完，全部一致）：
+- `profile_matrix.sh` 验收集 27 例档案矩阵（`/04`，ubuntu）：b1/b7/b64/b512/b4096 × 不同 seed 五组摘要相同（`ed2a9df8…` / `b64dab29…`），档案一致；
+- JNDI（`/09` sg2：b1/b7；`/10` jp1：b64/b512）× 4 seed：3865 / 24624 / 1624，16 组全一致；
+- 服务器全矩阵（`/11` kr2）batch 1/7/64/512/4096 × 4 seed：CollectorsDemo 3149 / 18023 / 441，DeepCopy 3429 / 20960 / 856，各 20 组全一致（服务器参考 JDK，与本机 JDK 21 计数不同属环境差异）。
 
 ### 同机配对计时（`scripts/diag/pair_time.sh`，基准 5a6332af，冷闭包交替 3 轮取中位数）
 
