@@ -605,6 +605,10 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - 运行时 `vm_impl` 档位重放补丁草稿仍在 `/tmp/bimg3_vm_impl_level.patch`（`isBooted` / `isModuleSystemInited` 取 `initLevel() >= 4 / 2`），随发射侧一起入库。
 2. 删除 `[boot_init] calls / phases` 与 FS-C2 钩子，补 TestBootLayer。C4 全量结束后再发服务器单测 / 审计 / 抽查，并复验 JDK 25。
 3. 本分支在发射侧完成前仍不可合入。
+4. 本机验证范围：closure 库单测 171 个全过（含 `const_length_array_folds_arraylength`、`boot_singleton_results_compare_equal`）。driver `closure_cli` 中，小用例 5 个已过。
+   - 大闭包用例 `closure_independent_of_hash_seed` / `_large` / `closure_independent_of_order` 涉及 JNDI / DeepCopy / Serial 族，每个 rava 约 1.9 GB、16–20 分钟。按巡检要求，这些在本机中止。
+   - C4 冻结解除后上服务器补跑，与第 2 条的服务器单测一并进行。
+   - 服务器作业 bimg3-ut-d6e932c7 在收口时仍显示 running，日志为空。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
