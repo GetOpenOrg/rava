@@ -2,9 +2,8 @@
 //!
 //! 反射方法成员（按名查找 / 枚举入链的方法）只经反射调用执行。调用入口分两条通道，各有实参池 [`Node::RP`]：
 //! - 反射对象通道：清单 `method_invokers` 里声明了反射对象形参（Object / Object[] 以外的引用形参，即 Method）的
-//!   入口（`invoke0`）。按角色分两个池：调用点上声明为 Object 的实参（接收者）并入接收者池 `RP(RC_OBJ)`，声明为
-//!   Object[] 的实参数组经 [`Node::RA`] 把元素并入实参池 `RP(RC_OBJ_ARGS)`。成员只按接收者池派发、形参只接实参池——
-//!   反射调用的接收者不会成为任何成员的实参，实参也不会成为接收者（与 `Method.invoke(obj, args)` 的语义一致）；
+//!   入口（`invoke0`）。调用点上声明为 Object 的实参（接收者）并入池，声明为 Object[] 的实参数组经 [`Node::RA`]
+//!   把元素并入池；
 //! - 方法句柄通道：签名多态入口（`method_invokers` 与 `[facts.handle_interpreters]` 的成员）。调用点上的接收者
 //!   （句柄本身）与全部实参、解释器手写体的值池（LambdaForm 常量、绑定值、字段 / 内存读取，同手写回调的实参来源）、
 //!   经本通道调用的成员的返回值（具名函数的结果是后续具名函数的实参）并入池。
@@ -28,21 +27,6 @@ use super::*;
 pub(super) const RC_OBJ: u8 = 0;
 pub(super) const RC_HANDLE: u8 = 1;
 pub(super) const CHANNELS: [u8; 2] = [RC_OBJ, RC_HANDLE];
-/// 反射对象通道的实参池（池号，不是通道）：反射对象入口按角色分池——`RP(RC_OBJ)` 只收接收者实参，
-/// 实参数组的元素进 `RP(RC_OBJ_ARGS)`。成员按前者派发、形参接后者（经其去冗余视图 `RN(RC_OBJ_ARGS)`）
-pub(super) const RC_OBJ_ARGS: u8 = 2;
-/// 池的个数（`RP` / `RN` 的下标范围）
-pub(super) const POOLS: usize = 3;
-
-/// 通道 c 的成员形参所接的实参池号：反射对象通道按角色分池，方法句柄通道接收者与实参同池
-/// （签名多态调用把句柄本身与全部实参平铺传入，解释器按 LambdaForm 决定谁是接收者）
-pub(super) const fn arg_pool(c: u8) -> u8 {
-    if c == RC_OBJ {
-        RC_OBJ_ARGS
-    } else {
-        c
-    }
-}
 
 /// 通道位
 pub(super) const fn rc_bit(c: u8) -> u8 {
@@ -50,10 +34,10 @@ pub(super) const fn rc_bit(c: u8) -> u8 {
 }
 
 pub(super) fn channel_name(c: u8) -> &'static str {
-    match c {
-        RC_OBJ => "反射对象（接收者）",
-        RC_OBJ_ARGS => "反射对象（实参）",
-        _ => "方法句柄",
+    if c == RC_OBJ {
+        "反射对象"
+    } else {
+        "方法句柄"
     }
 }
 
@@ -314,14 +298,9 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 通道 ch 的实参池 / 实参数组节点登记增长钩子（一次）；反射对象通道另有实参池（按角色分池）
+    /// 通道 ch 的实参池 / 实参数组节点登记增长钩子（一次）
     fn rcall_hooks(&mut self, ch: u8) {
-        let ap = arg_pool(ch);
-        let mut hooks = vec![(Node::RP(ch), RHook::Pool, ch), (Node::RA(ch), RHook::Array, ch)];
-        if ap != ch {
-            hooks.push((Node::RP(ap), RHook::Pool, ap));
-        }
-        for (n, k, ch) in hooks {
+        for (n, k) in [(Node::RP(ch), RHook::Pool), (Node::RA(ch), RHook::Array)] {
             if self.enum_recv.insert(n, (k, ch as usize)).is_none() {
                 self.graph.mark_hooked(n);
                 let s = self.set_of(n);
@@ -332,9 +311,9 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 实参数组新增值：数组的元素（分配点元素节点；open 数组按元素类型 open）并入该通道的实参池（反射对象通道为实参池）
+    /// 实参数组新增值：数组的元素（分配点元素节点；open 数组按元素类型 open）并入该通道的实参池
     pub(super) fn rcall_array_grown(&mut self, ch: u8, delta: &TypeSet) {
-        let pool = Node::RP(arg_pool(ch));
+        let pool = Node::RP(ch);
         let obj = self.id(OBJECT);
         let xs: Vec<u32> = delta.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
         for x in xs {
@@ -423,7 +402,7 @@ impl<'a> Engine<'a> {
             }
             for (i, pt) in pts.iter().enumerate().skip(base) {
                 if let Some(pt) = pt {
-                    self.flow(Node::RN(arg_pool(ch)), Node::P(t, i as u16), *pt);
+                    self.flow(Node::RN(ch), Node::P(t, i as u16), *pt);
                 }
             }
             if ch == RC_HANDLE && self.methods[t].rtype.is_some() {
@@ -475,10 +454,8 @@ impl<'a> Engine<'a> {
             .iter()
             .map(|&c| {
                 let (p, po) = size(Node::RP(c));
-                let (ap, apo) = size(Node::RP(arg_pool(c)));
                 let members = self.rcall_members.iter().filter(|m| m.mask & rc_bit(c) != 0).count();
                 serde_json::json!({"channel": channel_name(c), "members": members, "pool": p, "pool_open": po,
-                    "arg_pool": ap, "arg_pool_open": apo,
                     "targets": self.rcall_bound.values().filter(|&&b| b & rc_bit(c) != 0).count()})
             })
             .collect();

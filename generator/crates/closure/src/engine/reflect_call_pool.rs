@@ -4,18 +4,15 @@
 //! 退回的 VM 枢纽涵盖（要不要逐个派发）。涵盖条件随分析只增不减，判定若在到达时做，结果取决于求值次序（散列种子）。
 //! 所以此刻已涵盖的永久略去，尚未涵盖的挂起，到工作队列排空（单调部分的不动点）时由 [`Engine::rcall_release`] 定夺。
 
-use super::reflect_call::{arg_pool, rc_bit, VmBind, POOLS};
+use super::reflect_call::{rc_bit, CHANNELS, VmBind};
 use super::*;
 
 impl Engine<'_> {
     /// 实参池新增值：经该通道调用的实例成员按新增接收者派发；去冗余视图按 [`Self::rcall_absorb`] 取值
     pub(super) fn rcall_pool_grown(&mut self, ch: u8, delta: &TypeSet) {
-        // 去冗余视图只给成员形参用：只做实参池的（反射对象通道的接收者池不接形参）
-        if (ch as usize) < POOLS && arg_pool(ch) == ch {
-            let lean = self.rcall_absorb(ch, delta);
-            if !lean.is_empty() {
-                self.add_to(Node::RN(ch), &lean);
-            }
+        let lean = self.rcall_absorb(ch, delta);
+        if !lean.is_empty() {
+            self.add_to(Node::RN(ch), &lean);
         }
         for i in 0..self.rcall_members.len() {
             if self.rcall_members[i].mask & rc_bit(ch) != 0 {
@@ -63,7 +60,7 @@ impl Engine<'_> {
     /// 排空时的状态是单调部分的不动点，与求值先后无关；放行后的新增值照常挂起、下一次排空再判
     pub(super) fn rcall_release(&mut self) -> bool {
         let mut any = self.rcall_release_recvs();
-        for ch in 0..POOLS as u8 {
+        for ch in CHANNELS {
             let wait = std::mem::take(&mut self.rcall_rn_pending[ch as usize]);
             if wait.is_empty() {
                 continue;
