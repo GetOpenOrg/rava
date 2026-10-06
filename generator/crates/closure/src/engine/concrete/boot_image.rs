@@ -139,6 +139,10 @@ struct Size {
     objects: usize,
     slots: usize,
     types: BTreeSet<Rc<str>>,
+    /// 类型（含数组）→ 可达对象数
+    counts: BTreeMap<Rc<str>, usize>,
+    /// 可达 lambda 对象（函数式接口 ← 实现方法）
+    lams: BTreeSet<String>,
 }
 
 fn reachable(vm: &Vm) -> Size {
@@ -158,7 +162,7 @@ fn reachable(vm: &Vm) -> Size {
         }
     }
     let mut seen = vec![false; vm.heap.len()];
-    let mut s = Size { objects: 0, slots: 0, types: BTreeSet::new() };
+    let mut s = Size { objects: 0, slots: 0, types: BTreeSet::new(), counts: BTreeMap::new(), lams: BTreeSet::new() };
     while let Some(o) = stack.pop() {
         let i = o as usize;
         if i >= seen.len() || seen[i] {
@@ -170,6 +174,7 @@ fn reachable(vm: &Vm) -> Size {
         if !h.ty.starts_with('[') {
             s.types.insert(h.ty.clone());
         }
+        *s.counts.entry(h.ty.clone()).or_default() += 1;
         let push = |v: &CV, st: &mut Vec<u32>| {
             if let CV::R(r) = v {
                 st.push(*r)
@@ -184,7 +189,10 @@ fn reachable(vm: &Vm) -> Size {
                 s.slots += a.len();
                 a.iter().for_each(|v| push(v, &mut stack));
             }
-            Body::Lam(l) => l.captured.iter().for_each(|v| push(v, &mut stack)),
+            Body::Lam(l) => {
+                s.lams.insert(format!("`{}` ← `{}.{}{}`", l.iface, l.imp.member.owner, l.imp.member.name, l.imp.member.desc));
+                l.captured.iter().for_each(|v| push(v, &mut stack))
+            }
         }
     }
     s
@@ -396,6 +404,12 @@ impl<'a> Engine<'a> {
             for f in fs.iter().rev().take(30).rev() {
                 let _ = writeln!(r, "    {f}");
             }
+        }
+        let _ = writeln!(r, "\n## 映像可达对象的类型（{} 种，对象数）\n", size.counts.len());
+        let _ = writeln!(r, "{}", size.counts.iter().map(|(t, n)| format!("`{t}` {n}")).collect::<Vec<_>>().join("、"));
+        let _ = writeln!(r, "\n## 映像可达 lambda 对象（{}）\n", size.lams.len());
+        for l in &size.lams {
+            let _ = writeln!(r, "- {l}");
         }
         let _ = writeln!(r, "\n## 已初始化类（构建期，按完成次序）\n\n{}", vm.done_log.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" "));
         let mut runtime_classes: BTreeSet<String> = BTreeSet::new();

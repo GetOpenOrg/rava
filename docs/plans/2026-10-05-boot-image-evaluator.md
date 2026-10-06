@@ -408,6 +408,51 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
   - TestBootLayer 在 `tests/e2e` 中不存在，是第 3 步验收要新增的用例。
   - TestClassModuleFace（`jbase-named=false`）由第 4 步处理，与本步无关。
 
+### 5.5 第 3 步实测（分支 `boot-image-s3`，基于 c5812d89）
+
+#### 5.5.1 §7 第 3 条核对：映像类型中的手写 struct（动手前，本机 macOS JDK 21 HelloWorld 档案键）
+
+审计报告新增「映像可达对象的类型」「映像可达 lambda 对象」两节（`rava audit boot`）。实测映像可达类型 162 种（非数组 137、数组 25），lambda 对象 **0**。
+
+**结论：映像类型中没有手写的 Java 类 struct**。137 个非数组类型的存储（`X__inner`）全部由字节码经 `java_class!` 生成；例外只有两类基础设施，均为常驻形态而非过渡类：
+
+| 类型 | 运行期形态 | 物化处理 |
+|---|---|---|
+| `java/lang/Object` 实例（44，锁对象） | 手写 `object_impl.rs` 的 `Instance(u8)` | 运行时给出常量构造入口，映像按同一类型发射 |
+| 数组（25 种，2,017 个） | `JArray<T>` → `__Obj<__ArrayObj<T>>` + 尾随元素 | 运行时给出「头 + 数组对象 + 定长元素」的 `#[repr(C)]` 映像形态，与 `__trailing` 的布局一致（编译期断言） |
+
+但有 9 处**结构之外的手写旁路状态**与映像对象并存，物化时必须让旁路以映像为初值，否则同一 Java 对象在运行期出现两份：
+
+| # | 类型（映像对象数） | 手写旁路状态 | 第 3 步处理 |
+|---|---|---|---|
+| S1 | `Class`（78） | `Class::for_class` 的名字 → 镜像缓存、`getPrimitiveClass` 缓存 | 两处缓存先查映像镜像表（按名排序的静态表，二分），未命中才新建 |
+| S2 | `String`（1,435） | `__STRING_INTERN_TABLE` | 驻留查找先查映像驻留表（按 UTF-16 单元排序的静态表） |
+| S3 | `Thread`（1）/ `ThreadGroup`（2） | `thread_impl` 的主线程构造（`platform_main_thread`）、`INITIAL_THREAD` | 启动时把映像中的 main 线程绑定到 OS 主线程（§3.3 启动序列第 2 步），不再手写构造 |
+| S4 | `Thread` id | `getNextThreadIdOffset` 的进程静态计数器（初值 0） | 初值取映像 VM 单元 `next_thread_id` |
+| S5 | `Module`（68）/ `ModuleLayer`（2） | `module_impl` 的 VM 模块表（`defineModule0` 运行期登记）、`unnamed_module` / `ModuleLayer.boot` 的手写单例 | VM 模块表以映像 VM 表（62 模块 / 771 包，含读与导出）为初值；两个手写单例属 a3 第 4 步删除的 `#[jvm_boundary]`，本步不改其语义，只保证映像对象与之不冲突（见 §5.5.3 余项） |
+| S6 | `System` | `registerNatives` 手写建属性表与 out / err / in | `System` 构建期已初始化，运行期不再执行其 `<clinit>`；该手写体只在映像缺席时可达 |
+| S7 | `ClassLoader.scl`、`Thread.contextClassLoader` | `[vm_state.field_hooks]` → `__vm_init_phase3`（FS-C2） | 映像带构建期 initPhase3 写入的值，钩子与 `__vm_init_phase3` 删除 |
+| S8 | 身份哈希（87 个对象） | `__identity_hash(地址)` | 映像对象的对象头记录构建期哈希，`__identity_hash` 对映像区地址返回该值（§5.5.2 D3） |
+| S9 | 枚举常量目录（`Thread$State`、`AccessFlag` 等构建期初始化的枚举） | 登记语句在 `__class_init` 慢路径内执行 | 构建期初始化类的初始化状态物化为「已完成」，慢路径不再执行，登记改由启动序列对这些类执行一次（与 `<clinit>` 前登记的次序语义相同：查询时才读静态字段） |
+
+运行期对映像对象的**宿主相关内容**：`@deferred` 属性值（`java.home`、编码、`user.dir` 等 13 个平台属性与 2 个 VM 属性）在映像中是内容数组被登记为延迟值的 String。物化时这些 String 的内容字段（`value` / `coder` / `hash`）在启动序列中按宿主值写入（同一对象，属性表、`System.lineSeparator` 等引用它的位置自动看到宿主值）。
+
+#### 5.5.2 物化设计（技术决策，按授权自定）
+
+- **D1 映像位置**：`java_base_decl` crate 的 `boot_image` 模块（U5 的「java_base 档案内」取声明层：映像类型的 `X__inner` 都在该 crate，`pub(crate)` 字段可直接按名初始化，无需每类再生成构造器）。
+- **D2 零拷贝形态（U4）**：全部映像对象是**一个** `#[repr(C)]` 静态结构 `BOOT_IMAGE` 的字段，每个对象为「16 字节对象头 + 值（+ 数组定长元素）」，与 `__Obj` 堆布局相同。
+  - 对象头的强引用计数取常驻值（`1 << 62`）：克隆 / 释放照常增减而永不归零，不需要静态标记位，`is_unique` 恒假。
+  - 对象之间、静态字段到对象的引用都是编译期常量地址（静态结构可引用自身字段）。句柄、视图指针、接口指针由运行时新增的 `const fn` 入口构造（`__Obj::image`、`__Handle::image`、`__Ref::image`、`__IfaceRef::image`、`__PrimCell::from_bits`），视图指针在常量求值期由 unsize 得到。
+  - 装载成本为 0（无启动扫描），满足「启动装载 ≤ 1 ms」。
+- **D3 身份哈希**：映像对象头的第二个字（堆对象为分配字节数）写「标记位 | 构建期哈希」。`BOOT_IMAGE` 是单个静态，地址区间判定即可知是否映像对象，`__identity_hash` 先做区间判定（两次比较），命中读头。这避免了 §7 第 5 条的每对象多一个字。
+- **D4 静态字段与初始化状态**：生成器给构建期初始化类的静态字段带上映像初值（`java_class!` 静态字段属性），宏展开为 `static __STATIC_X_f: … = <映像初值>`；`__CLINIT_STATE_X` 初值为 3（完成）。运行期初始化类（`StaticProperty` 等）保持现状。
+- **D5 残差区段**：区段 `[s, e)` 由生成器切出为合成静态方法（字节码拷贝 + `return`，入口局部变量作形参、按槽位布局补占位形参），按普通方法翻译；启动序列以映像中记录的局部值调用。残差调用、重放 native、回填、重算槽按 `step2` 的启动重放序列次序生成为一个启动函数，取代 `vm_boot_init` 的 `calls` / `classes` / `phases`。
+- **D6 抽象分析从映像出发**：引擎不再以 `[boot_init]` 与引导阶段为根。构建期初始化类的 `<clinit>` 不入链；被闭包读取的静态字段，其抽象值以映像对象（每个映像对象一个分配点 `image:#n`，字段值按映像具体值）为初值；映像对象的类型随其被读取而入实例化集合。只物化从「闭包内被读取的静态字段」与启动序列可达的映像对象（联合不动点，单调）。
+
+#### 5.5.3 进展与恢复入口
+
+（随提交更新）
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
