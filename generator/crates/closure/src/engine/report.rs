@@ -331,6 +331,20 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 抽象对象明细诊断：`@objs:<节点子串>`——匹配节点（前 4 个）值集里的抽象对象 / 数组分配点名（前 40，标逃逸）
+        if let Some(q) = pat.strip_prefix("@objs:") {
+            let mut ns: Vec<Node> = self.graph.keys().filter(|n| self.node_str(**n).contains(q)).copied().collect();
+            ns.sort_by_key(|n| format!("{n:?}"));
+            for n in ns.into_iter().take(4) {
+                let s = self.graph.get(&n).cloned().unwrap_or_default();
+                out.push(format!("  {}：", self.node_str(n)));
+                for c in s.classes.iter().filter(|c| self.objs.contains_key(c) || self.arrays.contains_key(c)).take(40) {
+                    let esc = if self.escaped.contains(&c) { " [逃逸]" } else { "" };
+                    out.push(format!("    {}{esc}", self.names[c as usize]));
+                }
+            }
+            return out;
+        }
         // 方法节点序号诊断：`@m:<序号>`（数组分配点名里的方法序号）
         if let Some(i) = pat.strip_prefix("@m:").and_then(|v| v.parse::<usize>().ok()) {
             return vec![format!("  {i} = {}", self.ctx_label(i))];
