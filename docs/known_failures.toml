@@ -21,3 +21,108 @@ signature = "sym=[CN¥]"
 owner = "expected 基线（CLDR 随 JDK 21 小版本漂移，见 tasks.md e2e 失败复核）"
 since = "2026-10-03"
 note = "CNY 符号 expected 为 ¥，实际 CN¥；基线缺陷，非生成器问题"
+
+# ── C4 预检（c4pre-2d87d368）分诊确认「入库起从未通过、非回归」的用例 ──
+# 慢测试的运行超时（FibonacciMatrixExponentiation / FractionReduction / IQPuzzle / RailwayCircuit）
+# 按本文件口径不可登记（超时不算已知），见 docs/plans/2026-10-06-c4-preflight.md 第四节
+
+[[known]]
+test = "TestModuleLayerDefine"
+signature = "Exception in thread \"main\" java.lang.NullPointerException"
+owner = "引导映像第 3 步（映像物化与装载，docs/plans/2026-10-05-boot-image-evaluator.md §步骤表）"
+since = "2026-10-06"
+note = "运行期未捕获 NPE（无 Java 栈）；refl-6f93f1c6、bimg2-d1dc540a / e69b596c 等抽查同症状；第 3 步验收含本例输出与 JDK 相同"
+
+[[known]]
+test = "TestClassModuleFace"
+signature = "+jbase-named=false"
+owner = "引导映像第 4 步（a3 归零第一批：Module / ModuleLayer / Class）"
+since = "2026-10-06"
+note = "java.base 的 Module 未命名：jbase-named / jbase-name / exported-internal / own-loader 四行 diff，10-03 入库起逐行相同"
+
+[[known]]
+test = "TestDomBuildTree"
+signature = "Provider com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl not found"
+owner = "java.xml 按名加载（FactoryFinder 按名加载 JAXP 实现类的分析器建模）"
+since = "2026-10-06"
+note = "Xerces 实现类未入闭包，dyn-compare 漏覆盖 134；m2-f0c12c3b（10-04）起完全相同"
+
+[[known]]
+test = "TestCharsetAvailable"
+signature = "Exception in thread \"main\" java.lang.NullPointerException"
+owner = "jdk.charsets（docs/plans/2026-10-03-jmod-coverage.md R9）"
+since = "2026-10-06"
+note = "运行期未捕获 NPE（无 Java 栈）；m2-f0c12c3b、main-charset-e519e22c 同症状"
+
+# 63_junit 十例：run_tests 尚无依赖包概念（junit4 + hamcrest 不在 javac classpath），javac 即失败；
+# 由 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）收敛，J3 合入时删除下列条目
+
+[[known]]
+test = "TestJunitAssertFamily"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitAssertThrowsAssume"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitBeforeClassState"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitFailureMessages"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitHamcrestBridge"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitIgnoreAndExpected"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitLifecycleOrder"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitNewInstancePerTest"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitRunnerResult"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestJunitTimeoutFast"
+signature = "javac 编译失败"
+owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
+since = "2026-10-06"
+note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
