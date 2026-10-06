@@ -12,9 +12,10 @@ impl<'a> Engine<'a> {
     pub(super) fn process_handwritten(&mut self, m: usize) {
         let key = self.methods[m].key.clone();
         let via = Via::method("handwritten", m, None);
-        // 手写返回值：open(返回类型)
+        // 手写返回值：open(返回类型)，手写体返回点可推出来源时改接来源（见 `hw_ret.rs`）
         let reads = self.man.memory_read(&key.to_string()).is_some();
         let array_ret = self.man.array_return(&key.to_string()).map(<[String]>::to_vec);
+        let mut open_ret = None;
         if let Some(rt) = self.methods[m].rtype {
             if let Some(es) = &array_ret {
                 self.array_return(m, rt, es);
@@ -25,7 +26,7 @@ impl<'a> Engine<'a> {
                 let k = self.mirror(&cls);
                 self.add_to(Node::R(m), &TypeSet::exact(k));
             } else if !self.man.returns_receiver(&key.to_string()) && !reads {
-                self.add_to(Node::R(m), &TypeSet::open(rt));
+                open_ret = Some(rt);
             }
         }
         if key.name == "<clinit>" {
@@ -64,14 +65,32 @@ impl<'a> Engine<'a> {
         }
         let obj = self.id(OBJECT);
         self.flow(Node::S(m, PROD), Node::S(m, POOL), obj);
-        let Some(cf) = self.h.class(&key.owner) else { return };
+        let Some(cf) = self.h.class(&key.owner) else {
+            if let Some(rt) = open_ret {
+                self.add_to(Node::R(m), &TypeSet::open(rt));
+            }
+            return;
+        };
         self.touch_truncated_body(m, &cf, &key, &via);
         let mh = self.hw_member(&cf, &key.name, &key.desc);
         if mh.fns.is_empty() {
             self.hw_base_fn(m, &cf, &key.name, &key.desc);
         }
+        let mut ret_traced = false;
+        if let Some(rt) = open_ret {
+            match self.hw_ret_sources(&key.owner, &mh, &via) {
+                Some(ts) => {
+                    ret_traced = true;
+                    for t in ts {
+                        self.flow(Node::R(t), Node::R(m), rt);
+                    }
+                }
+                None => self.add_to(Node::R(m), &TypeSet::open(rt)),
+            }
+        }
         // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类 / 元素类型镜像）时不经 open 返回值交出
         let modeled = reads
+            || ret_traced
             || array_ret.is_some()
             || self.man.returns_receiver(&ks)
             || self.man.returns_mirror(&ks)

@@ -65,6 +65,7 @@ mod hw_syntax;
 mod hw_name_write;
 mod hw_stype;
 mod hw_infer;
+mod hw_ret;
 mod hw_inherit;
 mod hwobj;
 mod hwfield;
