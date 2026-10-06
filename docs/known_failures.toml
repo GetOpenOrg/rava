@@ -140,3 +140,17 @@ signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"
 owner = "套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）：补 IOUtil.fdLimit 等 ACC_NATIVE 手写"
 since = "2026-10-06"
 note = "同 TestHttpLoopbackSync"
+
+[[known]]
+test = "TestProtectionDomainFaces"
+signature = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;"
+owner = "C1d a3-L1 BootLoader 归零（新增 native getSystemPackageLocation，boot 包位置恒为 jrt:）/ 引导映像第 5 步 BootLoader 2"
+since = "2026-10-06"
+note = "入库起从未通过：refl-6f93f1c6 为 Class$Holder.allPermDomain 存根，refl-c97ceed1 / hw-spot-d5f1599a 起同 native 缺失"
+
+[[known]]
+test = "TestRowSetProvider"
+signature = "Can't find bundle for base name com.sun.rowset.RowSetResourceBundle"
+owner = "java.sql.rowset 模块资源包按名装载（ResourceBundle 按名加载的分析器建模 / 模块资源）"
+since = "2026-10-06"
+note = "入库起从未通过：e2enew-da8abee1 为 CachedRowSetImpl.<init> 存根，m2-f0c12c3b 起同 MissingResourceException"

@@ -61,6 +61,9 @@
 | TestHttpLoopbackSync / Async（不在 master_passed） | 已知待办 / 既有 | 此前各抽查均 600 s 转译超时；放宽后进到运行期，0.3 s 命中 `native: sun/nio/ch/IOUtil.fdLimit:()I`（ACC_NATIVE 未手写） | 不在本分支修：套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）；已登记 known_failures | — |
 | TestLocaleCurrency | 已知（基线缺陷） | `sym=[CN¥]`：CLDR 随 JDK 21 小版本漂移，expected 基线问题；m2-f0c12c3b 同 diff；known_failures 早有条目 | — | — |
 | TestLocaleDateCjk（不在 master_passed） | 待定 | 入库起从未通过：e2enew-da8abee1（10-03）为 stub 命中 `LocaleProviderAdapter.getJavaTimeDateTimePatternProvider`；本次为 `DateTimeTextProvider$LocaleStore.<init>` 中 HashMap.put 的 String.hashCode 抛 NPE（键 String 未初始化）。症状变化区间较大，为排除 958251ab / 2d87d368，对 5a6332af 与 958251ab 单例复测 | 视二分结果 | c4pre-cjk-5a6332af / c4pre-cjk-958251ab |
+| TestProtectionDomainFaces（不在 master_passed / Python 基线） | 已知待办 / 既有 | 运行期 `native: BootLoader.getSystemPackageLocation`（ACC_NATIVE 未手写）；refl-c97ceed1、hw-spot-d5f1599a 同症状，更早 refl-6f93f1c6 为存根 | 不在本分支修：C1d a3-L1 BootLoader 归零 / 引导映像第 5 步；已登记 known_failures | — |
+| TestRowSetProvider（不在 master_passed / Python 基线） | 已知待办 / 既有 | `MissingResourceException: com.sun.rowset.RowSetResourceBundle`（java.sql.rowset 资源包按名装载未建模）；m2-f0c12c3b 同症状 | 不在本分支修：模块资源包按名装载；已登记 known_failures | — |
+| TestVarHandleArray | 基础设施（非回归） | 仓库任何提交中都不存在该用例（git log --all 无记录），系预检名单误带的旧抽查失败名（r1n-sp-5f87b295 同为「No test files found」）；分发侧 b8435ab 起按 ref 树剔除 | — | — |
 | TestModuleLayerDefine / TestClassModuleFace | 已知待办 / 既有 | 引导映像线。TestClassModuleFace（不在 master_passed / Python 基线）2026-10-03 入库起从未通过：java.base 的 Module 未命名（jbase-named / jbase-name / exported-internal / own-loader 四行），e2enew-da8abee1（10-03）、refl-6f93f1c6（10-05）两次早于 2d87d368 的抽查以及 c1d-a3 分支 bae31727 / 60965b11 抽查的 diff 与本次逐行相同，非回归 | 不在本分支修（引导映像 / a3 线） | — |
 
 ### 已知失败登记（docs/known_failures.toml）
