@@ -123,6 +123,18 @@ pub(super) struct Ctx<'a> {
     pub(super) ovals: RefCell<HashMap<(u32, MemberRef), PV>>,
     /// 不按抽象对象分开的实例字段写入值（接收者含非抽象对象 / 物化快照）
     pub(super) owild: RefCell<HashMap<MemberRef, PV>>,
+    /// 构造器的确定初始化摘要（永久缓存，见 `ctor_init.rs`）
+    pub(super) cinits: RefCell<HashMap<MemberRef, super::ctor_init::CInit>>,
+    /// 被调方法 → 读过其返回常量的构造器摘要（`rvals` 该项变化时作废，见 `ctor_init.rs`）
+    pub(super) cinit_rdeps: RefCell<HashMap<MemberRef, Vec<MemberRef>>>,
+    /// 正在计算的构造器摘要各自读过返回常量的被调方法（栈，嵌套摘要并入外层）
+    pub(super) cinit_rets: RefCell<Vec<BTreeSet<MemberRef>>>,
+    /// `cinits` 有条目作废（`odef` 待清空、按对象读者待复核，见 `ctor_init.rs`）
+    pub(super) cinit_drop: Cell<bool>,
+    /// 字节码 `new` 分配的抽象对象 → (类, 分配方法里该类的构造器调用)
+    pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
+    /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
+    pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
     /// (抽象对象, 字段) → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
     pub(super) odeps: RefCell<HashMap<(u32, MemberRef), BTreeSet<usize>>>,
     /// 字段 → 按对象读过它的方法（`owild` 变化时失效）
@@ -630,6 +642,12 @@ impl Oracle for Facts<'_, '_> {
     fn final_field(&self, f: &MemberRef) -> bool {
         // 只看声明的访问标志（与开放判定无关，见 `narrow.rs`）：结果不随分析增长，无须登记依赖
         self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::FINAL != 0 && fi.access & acc::STATIC == 0)
+    }
+    fn init_key(&self, f: &MemberRef) -> Option<MemberRef> {
+        self.ctx.init_key(f)
+    }
+    fn init_sum(&self, init: &MemberRef) -> Option<Rc<crate::absint::InitSum>> {
+        self.ctx.ctor_init(init)
     }
 }
 

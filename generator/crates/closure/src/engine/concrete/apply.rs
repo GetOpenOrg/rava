@@ -128,6 +128,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
+        self.ctx.cinit_ret_changed(key);
         let deps = self.ctx.rdeps.borrow().get(key).cloned();
         self.invalidate_all(deps, Why::RetConst);
     }

@@ -114,7 +114,13 @@ impl<'a> Engine<'a> {
                     self.instantiate(c, via("new"));
                     self.init(c, via("new"));
                     // 容器形态类按分配点（+ 堆上下文）成为抽象对象；G 里记类型本身（open 展开用）
-                    let id = if self.container(c) { self.obj_at(m, off, c) } else { self.id(c) };
+                    let id = if self.container(c) {
+                        let o = self.obj_at(m, off, c);
+                        self.osite_note(m, o, c, cf);
+                        o
+                    } else {
+                        self.id(c)
+                    };
                     self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
                 Event::NewArray(t, empty) => {
@@ -258,6 +264,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
+        self.ctx.cinit_ret_changed(&key);
         let deps = self.ctx.rdeps.borrow().get(&key).cloned();
         self.invalidate_all(deps, Why::RetConst);
     }

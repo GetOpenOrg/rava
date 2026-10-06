@@ -3480,3 +3480,75 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
   （`getDeclaredField(s)` / `objectFieldOffset` / `name_resolvers` / `MemberName` 解析），形状兜底删除。需单独立项、服务器全量验证。
 - **`encodePath`**：清单 `excludes` 两项暂留，E1–E5（上表）落地后删除。
 - 下一步按协调方顺序回到 B1② 的 P2（构造器确定初始化，入口见 §30.9「恢复入口」）。
+
+### 30.11 第 6 步：B1② 的 P2——构造器确定初始化（2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策（2026-10-07，协调方转达）
+
+1. **不采纳「启动目录一定是目录」假设**（§30.9「待用户决策」第 1 项、§30.10 第 2 项）：进程启动后工作目录被删时，JVM 抛 IOException、
+   跳过该类路径项，转译版走 JarLoader 撞存根 panic，行为不一致。因此：
+   - 不实施任何依赖该假设的折叠；不再测「采用该假设」的反事实上界（§30.9 的 `cutsNoB5` / `cutsAll` 上界含该假设，作废为参考值）；
+   - 改找不依赖该假设的可靠事实，例如由字节码推出 `ParseUtil.fileToEncodedURL` 产生的 `file` 路径以 `/` 开头（来自绝对路径），
+     不要求它是目录。
+2. **B5 的「final 字段判非空后同对象再读仍非空」获认可**（JLS §17.5.3），保留（§30.10 设计第 3 项、待决第 1 项结案）。
+
+#### 设计（通用，无类名）
+
+- **构造器摘要**（`absint/init.rs`，`absint::analyze_init`）：抽象解释状态加 `inits`——当前路径上 `this` 必然已写的实例字段
+  （解析后的声明键），合流取交集，异常处理器入口为空。逐指令在执行前的栈上判定：
+  - `putfield`：接收者恰为 `this`（来源只有形参 0）→ 并入 `inits`；写入值含 `this` → 交出；
+  - `getfield`：接收者可能是 `this` 且字段未写 → 记入 `bad`；
+  - 委托 / 超类构造器（`invokespecial <init>`，接收者恰为 `this`，其余实参不含 `this`）：按被调摘要组合——交出集取
+    「本方已写 ∪ 被调方交出集」，被调方 `bad` 去掉本方已写，返回后并入被调方返回集；无摘要（手写 / 无法分析）按交出；
+  - 其余调用的实参 / 接收者、`putstatic` / `aastore` 的值、`athrow`、indy 实参、`checkcast` / `instanceof` / `areturn` 的输入含 `this` → 交出；
+  - `return`：返回集取交。摘要 = (返回集, 交出集, bad)，确定集 = 返回集 ∩ 交出集 \ bad。只有第二阶段（不动点入口状态）记录。
+- **引擎**（`engine/ctor_init.rs`）：
+  - 摘要以辅助分析事实（`Facts { m: None }`）在记忆化帧内求出，记入 `cinits`；输入记录与求值记忆同一套，
+    读过的字段转不折叠或属性不折叠集合增长时作废（`ceval_drop` / `sysprops.rs`）。
+  - 辅助事实答不出的调用取唯一字节码目标的返回常量 `rvals`（只取 `Const`；缺席 / Top 按未知，不取「不返回」），
+    读过的目标记入摘要（嵌套摘要并入外层），该目标返回常量变化时作废（`cinit_ret_changed`，`bytecode.rs::returns` 与
+    `concrete/apply.rs::join_rval` 两处写入点）。触发点：辅助分析不对无实参方法常量求值，`System.getSecurityManager()` 不折 null，
+    `URL` 构造器在安全管理器分支把 `this` 交出（`checkSpecifyHandler`），确定集只剩 `hashCode` / `port`。
+  - 分配点（`Event::New`）登记 `osite`：该方法里全部 `invokespecial cls.<init>`（JVMS §4.10.1.9：`new cls` 只能经 `cls` 自身的
+    `<init>` 初始化，初始化前不能使用）。对象确定集 `odef` = 各构造器确定集之交；类链（不含根类）声明了非抽象 `finalize()V` 时为空。
+  - 任一摘要作废置 `cinit_drop`，下一次 `invalidate_all` 开头 `obj_defs_dropped`：清空 `odef`，按对象读过的方法按当前答复复核
+    （`obj_queries_same`），答复有变才重分析。终态等于按最终事实计算的摘要，与处理顺序无关。
+- **读取侧**（`obj_fields.rs::obj_field_value`）：只有字段不在对象确定集时才并入初值；`ovals` / `owild` 改为从 ⊥ 起算。
+
+#### 健全性与反例核对
+
+- 读到对象字段须先持有引用。构造链帧内的直接读（`getfield this`）未写时记 `bad`；引用经交出点流出时只保留交出时已写的字段；
+  构造器正常返回后的读取只看返回集；构造器异常退出时对象不可达（交出点已覆盖其它可达途径），唯一例外是终结器，已排除。
+- 抽象对象名含（方法键, 偏移）：字节码 `new`、手写分配（`u32::MAX - k`）、lambda 构造引用（indy 偏移）偏移空间互不相交，
+  后两者不在 `osite` 中，保留初值。反序列化 / 物化快照分配的是类 id 而非抽象对象；`clone` 复制的是已写入的值。
+- 字节码外写入（反射 / Unsafe / 手写 / VM 钩子）不影响「初值是否可见」：这些写入本身仍由 P5 规则（偏移可得 / 手写写入不折叠）覆盖。
+- 返回常量依赖：`rvals[t]` 在不动点上覆盖 t 的全部实际返回（与主分析同一事实，主分析调用点即按此取值），增长时摘要作废重算，单调收敛。
+- 反例核对（新增折叠逐条，见下）：
+  - `LinkedBlockingQueue.capacity = MAX_VALUE`：可达分配只经无参构造器（委托 `this(Integer.MAX_VALUE)`），`capacity` 在交出前写入；
+    若用户调用带容量的构造器，写入按对象记录，折叠自动解除。
+  - `SliceOps$1` 的 `val$` 字段：合成外部捕获字段在超类构造器调用前写入（javac 形态），确定初始化。
+  - `SpinedBuffer.<init>` 的 `initialChunkPower = 4`：无参构造器路径写常量。
+  - `SliceOps$SliceTask.doLeaf` / `doTruncate` / `onCompletion` 的死区，及 `cancel` / `completedSize` / `isLeftCompleted` 出闭包：
+    依赖的字段在构造器内必写，原先只因初值并入而保留了初值分支。
+
+#### 实测（tag `12b`，对照 `11d`）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 523 → 465 |
+| StockTrans | 3150 → 3150 | 19919 → **19916** | 31700 → 26135 |
+| DeepCopy | 3152 → 3152 | 19939 → **19936** | 29822 → 26326 |
+| TestSerialDefaultSuid | 3157 → 3157 | 19931 → **19928** | 27555 → 26272 |
+
+- 四例均为 `11d` 的子集（新增类 0、新增方法 0）；三个大例各 −3 方法（`SliceOps$SliceTask.cancel` / `completedSize` / `isLeftCompleted`）。
+  分析耗时无增幅。DeepCopy 摘要作废 91 次（`init_drops`）。
+- 加 `rvals` 依赖前（`12a`）集合相同；加入后 `URL.<init>(String,String,String)` 的确定集由 {`hashCode`, `port`} 扩为
+  {`file`, `handler`, `hashCode`, `path`, `port`, `protocol`, `ref`}。
+  `URL.<init>(URL,String,URLStreamHandler)`（规格串解析）仍只有 {`hashCode`, `port`}：`handler.parseURL(this, …)` 是对可覆盖方法的
+  真实交出，属正确结果。
+- 本步单独不折 `R`：`getFile()` 的返回仍按成员键汇合（P3），`val$url` 的接收者来自站点（P4）。
+
+#### 单测
+
+- `absint/init_tests.rs` 10 项（全路径写入、交出截断、自存交出、写前读、单侧分支、未知超类、委托组合、无返回、处理器路径、缺省不跟踪）。
+- closure crate 191 过；`closure_independent_of_hash_seed`、`container_elements_per_object` 过（1364s）。

@@ -156,6 +156,7 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn invalidate_all(&mut self, ms: Option<BTreeSet<usize>>, why: Why) {
+        self.obj_defs_dropped();
         for m in ms.unwrap_or_default() {
             self.invalidate(m, why);
         }

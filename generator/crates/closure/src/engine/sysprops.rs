@@ -552,6 +552,11 @@ impl Engine<'_> {
         ctx.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
         ctx.cevals.borrow_mut().retain(|_, (_, inp)| keep(inp));
         ctx.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        let n = ctx.cinits.borrow().len();
+        ctx.cinits.borrow_mut().retain(|_, c| keep(&c.inp));
+        if ctx.cinits.borrow().len() != n {
+            ctx.cinit_drop.set(true);
+        }
         // 删除包装方法的形参摘要只看字节码结构，与不折叠集合无关，不作废
         let mut deps: BTreeSet<usize> = std::mem::take(&mut *ctx.pdeps.borrow_mut());
         deps.extend(ctx.memo_consumers(ids));

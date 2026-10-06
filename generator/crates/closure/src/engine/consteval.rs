@@ -182,6 +182,11 @@ impl Ctx<'_> {
         self.objs.borrow_mut().retain(|_, (_, inp)| keep(inp));
         self.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
         self.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        let n = self.cinits.borrow().len();
+        self.cinits.borrow_mut().retain(|_, c| keep(&c.inp));
+        if self.cinits.borrow().len() != n {
+            self.cinit_drop.set(true);
+        }
         self.memo_consumers(ids)
     }
 }

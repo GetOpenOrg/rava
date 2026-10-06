@@ -20,6 +20,9 @@ use classfile::descriptor::{parse_field, parse_method, FieldType};
 use classfile::{op, Code, Const, Insn, MemberRef, Operand};
 
 pub mod cfg;
+mod init;
+#[cfg(test)]
+mod init_tests;
 pub mod ints;
 mod lit;
 mod narrow;
@@ -30,6 +33,7 @@ mod strs;
 mod strs_tests;
 #[cfg(test)]
 mod tests;
+pub use init::InitSum;
 pub use lit::{lit_id, lit_str};
 pub use obj::Obj;
 pub use shape::Shape;
@@ -311,6 +315,14 @@ pub trait Oracle {
     fn final_field(&self, _f: &MemberRef) -> bool {
         false
     }
+    /// 实例字段的解析后声明键（构造器确定初始化用，见 `init.rs`；None = 不跟踪）
+    fn init_key(&self, _f: &MemberRef) -> Option<MemberRef> {
+        None
+    }
+    /// 被委托 / 超类构造器的确定初始化摘要（None = 无法分析，按交出 `this` 处理）
+    fn init_sum(&self, _init: &MemberRef) -> Option<Rc<InitSum>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -400,6 +412,8 @@ struct State {
     finals: Vec<(MemberRef, V)>,
     /// 已判定非空的 (局部变量槽, final 实例字段)（见 `narrow.rs` 的 final 字段重读）
     nnf: Vec<(usize, MemberRef)>,
+    /// 构造器跟踪：`this` 在全部路径上都已写入的实例字段（排序，见 `init.rs`）；不跟踪时恒空
+    inits: Vec<MemberRef>,
 }
 
 impl State {
@@ -434,6 +448,7 @@ impl State {
         let before = self.nnf.len();
         self.nnf.retain(|x| o.nnf.contains(x));
         changed |= self.nnf.len() != before;
+        changed |= init::join(&mut self.inits, &o.inits);
         for (a, b) in self.locals.iter_mut().chain(self.stack.iter_mut()).zip(o.locals.iter().chain(o.stack.iter())) {
             let j = a.join(b);
             if j != *a {
@@ -1138,7 +1153,7 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
         return None;
     }
     locals.resize(max_locals as usize, V::Top);
-    Some(State { locals, stack: Vec::new(), finals: Vec::new(), nnf: Vec::new() })
+    Some(State { locals, stack: Vec::new(), finals: Vec::new(), nnf: Vec::new(), inits: Vec::new() })
 }
 
 fn conservative(code: &Code) -> Analysis {
@@ -1183,13 +1198,18 @@ fn conservative(code: &Code) -> Analysis {
 
 /// 分析一个方法体
 pub fn analyze<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle: &O) -> Analysis {
-    match run(owner, desc, is_static, code, oracle) {
-        Some(a) => a,
+    match run(owner, desc, is_static, code, oracle, false) {
+        Some((a, _)) => a,
         None => conservative(code),
     }
 }
 
-fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle: &O) -> Option<Analysis> {
+/// 构造器的确定初始化摘要（见 `init.rs`）；无法建模（保守模式）→ None
+pub fn analyze_init<O: Oracle>(owner: &str, desc: &str, code: &Code, oracle: &O) -> Option<InitSum> {
+    run(owner, desc, false, code, oracle, true)?.1
+}
+
+fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle: &O, track: bool) -> Option<(Analysis, Option<InitSum>)> {
     let insns = &code.insns;
     let n = insns.len();
     // 指令按偏移升序：偏移 → 下标用二分（免逐次分析建表）
@@ -1238,6 +1258,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
     let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], selects: 0 };
+    let mut tr = track.then(init::Track::default);
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
         match entry.get_mut(&i) {
@@ -1271,6 +1292,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     }
                 }
                 let ins = &insns[i];
+                if let Some(t) = &mut tr {
+                    t.pre(oracle, &mut st, ins, false);
+                }
                 let fl = interp.step(&mut st, ins).ok()?;
                 narrow::final_reread(insns, &leader, i, &mut st);
                 match fl {
@@ -1358,6 +1382,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                 stack: vec![V::Ref { ty: Some(ty), nonnull: true, src: src1(Src::Catch(h.handler)), obj: None }],
                 finals: Vec::new(),
                 nnf: Vec::new(),
+                inits: Vec::new(),
             };
             merge(&mut entry, &mut work, at(h.handler)?, &st)?;
         }
@@ -1374,6 +1399,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         let mut i = l;
         loop {
             let ins = &insns[i];
+            if let Some(t) = &mut tr {
+                t.pre(oracle, &mut st, ins, true);
+            }
             let fl = interp.step(&mut st, ins).ok()?;
             narrow::final_reread(insns, &leader, i, &mut st);
             match fl {
@@ -1425,7 +1453,8 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    Some(Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params })
+    let a = Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params };
+    Some((a, tr.map(init::Track::finish)))
 }
 
 fn targets_empty(o: &Operand) -> bool {

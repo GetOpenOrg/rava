@@ -5,9 +5,11 @@
 //!   接收者值集里的其余值（open / 非抽象对象的类 / 无接收者）并入 `owild[字段]`。
 //!   基本类型字段不拆接收者，物化快照（`concrete/apply.rs`）的写入也一律并入 `owild`。
 //!   写站点按接收者增量重跑（`bytecode.rs::field` 的 `recv_delta`），后到的抽象对象同样补记。
-//!   两张表都从初值起算，写入初值不算变化。
+//!   两张表都从 ⊥ 起算（不含初值）。
 //! - **读取**：`getfield` 的接收者只来自形参 i，且该形参值集非空、全由抽象对象组成时，答复
-//!   「初值 ⊔ owild ⊔ 各对象值」，否则退回全局值集。初值总并入，构造器确定初始化另做（见 §30.9 P2）。
+//!   「owild ⊔ 各对象值 ⊔ 未确定初始化对象的初值」，否则退回全局值集。确定初始化（字节码 `new` 分配、
+//!   各构造器完成前该字段必然已写且未在写入前交出 / 读取，见 `ctor_init.rs`）的对象不并入初值；
+//!   结果为 ⊥（尚无写入）时同样退回全局值集。
 //! - **依赖**：每次按对象读都记成 `(形参, 字段, 答复)`（形参无对象集时答复 None，同样记）。
 //!   抽象解释是 Oracle 答复的确定函数，所以以下三处都按「答复是否变化」判定，不按「输入是否变化」：
 //!   - 按对象值变化（`odeps` / `owdeps` 登记的读者）：用当前形参对象集复核，答复有变才重分析；
@@ -43,19 +45,19 @@ impl Ctx<'_> {
         (fi.access & acc::STATIC == 0 && self.man.injected_literal(&fi.key.owner, &fi.key.name).is_none() && !open).then_some(fi)
     }
 
-    /// 抽象对象集 objs 上实例字段 key 的值：初值 ⊔ 通配值 ⊔ 各对象值
+    /// 抽象对象集 objs 上实例字段 key 的值：通配值 ⊔ 各对象值 ⊔ 未确定初始化对象的初值；⊥ → None
     pub(super) fn obj_field_value(&self, key: &MemberRef, objs: &[u32]) -> Option<V> {
-        let mut pv = default_pv(&key.desc);
-        if let Some(w) = self.owild.borrow().get(key) {
-            pv = PV::join(Some(&pv), w);
-        }
+        let mut pv: Option<PV> = self.owild.borrow().get(key).cloned();
         let ov = self.ovals.borrow();
         for &o in objs {
+            if self.obj_definite(o).binary_search(key).is_err() {
+                pv = Some(PV::join(pv.as_ref(), &default_pv(&key.desc)));
+            }
             if let Some(x) = ov.get(&(o, key.clone())) {
-                pv = PV::join(Some(&pv), x);
+                pv = Some(PV::join(pv.as_ref(), x));
             }
         }
-        pv.value()
+        pv?.value()
     }
 }
 
@@ -105,10 +107,10 @@ impl Engine<'_> {
             let k = (o, key.clone());
             let changed = {
                 let mut ov = self.ctx.ovals.borrow_mut();
-                // 读取总并入初值：从初值起算，写入初值不算变化
-                let cur = ov.get(&k).cloned().unwrap_or_else(|| default_pv(&key.desc));
-                let new = PV::join(Some(&cur), v);
-                let changed = cur != new;
+                // 从 ⊥ 起算：初值由读取侧按确定初始化并入
+                let cur = ov.get(&k).cloned();
+                let new = PV::join(cur.as_ref(), v);
+                let changed = cur.as_ref() != Some(&new);
                 if changed {
                     ov.insert(k.clone(), new);
                 }
@@ -134,9 +136,9 @@ impl Engine<'_> {
 
     fn wild_join(&mut self, key: &MemberRef, v: &PV) -> bool {
         let mut w = self.ctx.owild.borrow_mut();
-        let cur = w.get(key).cloned().unwrap_or_else(|| default_pv(&key.desc));
-        let new = PV::join(Some(&cur), v);
-        if cur == new {
+        let cur = w.get(key).cloned();
+        let new = PV::join(cur.as_ref(), v);
+        if cur.as_ref() == Some(&new) {
             return false;
         }
         w.insert(key.clone(), new);
