@@ -521,6 +521,12 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - (A) 辅助：`lookup` 的类名集合。`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集。只做 (A) 不能消除 `Constructor` 的分配。
 - 原 (a)–(c) 降级：单独做都不改变 2,986。
 
+**收口（18:05，到 6 h 上限停止）**
+
+- 分支 `boot-image-s3` 提交：aaafd123、ffdc14a5、67550efc、d8c62216、deb82e0d、64075e73（D9 健全性：内容延迟的字符串不折叠），以及 90cadb84、b2594f89、ca3393db、d6e932c7（文档）。
+- 服务器单测：bimg3-ut-d8c62216 被 bimg3-ut-d6e932c7 取代，旧作业已停。bimg3-ut-d6e932c7（jp2，16:20 起）停止时仍在跑（与 C4 全量并行，C4 独占服务器），结果见 `server_maintenance/rava/test_results/job/bimg3-ut-d6e932c7/`。
+- 审计 / 抽查 / JDK 25 / TestBootLayer 未做：发射侧未完成，且 C4 全量期间不发新服务器作业。
+
 **恢复入口**
 
 1. 先压闭包（硬门槛）。先按上面的 (A) / (B) 做；以下为原候选，按补测已降级：
