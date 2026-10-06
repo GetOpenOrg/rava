@@ -10,8 +10,8 @@
    - 叠在 jar+jca+rb 之上时少 5 类、255 方法（DeepCopy 2814 → 2809）。
 3. **§8.2 的根因判断在 DeepCopy 规模上不成立**。§8.2 的取证来自小例。在 DeepCopy 上，切掉 `RP(1)` 之后反射对象池 `RP(0)` 仍有 7479 类、204 个 open（基线 7498 类、218 个 open），基本没变。也就是说，反射对象池的大值集**不是**由方法句柄池灌进来的，它来自实例化集本身经 open 值和字段视图的汇合（来源见 §2.5）。
 4. **判断：不值得实施**（详见下条与 §八）。上界低于派发规则的 2% 门槛，前后两次收窄（4b、b1）挂在它后面也一并失去理由。终态设计（§三）写成文档备用，**不排期**：只有当以后的大改造（引导映像求值器、§29 的三项能力）让基线大幅缩小、句柄池在新基线上重新成为主导来源时，才重测（重测方法见 §六）。
-5. **最大的收益项是 §29 的三项能力，不是对象化**。jar+jca+rb 三刀合计 DeepCopy 3422 → 2814（−608 类，−17.8%），再叠对象化 + 4b + b1 到 2809。新发现的「格式串按调用点常量求值」在带序列化的全程序上只值 −10 类（3422 → 3412），因为 Formatter 数值 / 日期分支带进来的类多数另有序列化路径可达；但在不走序列化时它是 3144 类里的最大块（§七）。
-6. **新目标**（§八）：DeepCopy ≤ 2810 类、StockTrans ≤ 2807、TestSerialDefaultSuid ≤ 2814、HelloWorld 468 不变，即各项能力实测上界之和；取代作废的「DeepCopy ≤1640」。
+5. **最大的收益项是 §29 的三项能力，不是对象化**。jar+jca+rb 三刀合计 DeepCopy 3422 → 2814（−608 类，−17.8%），再叠对象化 + 4b + b1 到 2809。新发现的「格式串按调用点常量求值」在带序列化的全程序上只值 −10 类（3422 → 3412），因为 Formatter 数值 / 日期分支带进来的类多数另有序列化路径可达；但在不走序列化时它是 3144 类里的最大块：nos+fmtc 实测 3144 → 480，只比 HelloWorld 多 3 个用户类、10 个 Formatter 异常类和 `Formatter$DateTime`（§七）。
+6. **新目标**（§八）：DeepCopy ≤ 2803 类、StockTrans ≤ 2807、TestSerialDefaultSuid ≤ 2809、HelloWorld 468 不变，即各项能力实测上界之和；不走序列化的 `%s` 程序闭包 ≈ HelloWorld + 用户类 + ≤ 11 个 Formatter 类（DeepCopy-nos 3144 → 480）。取代作废的「DeepCopy ≤1640」。
 
 ## 二、现状剖析
 
@@ -210,10 +210,13 @@
 | fmtc | Formatter 只剩 `%s` / `%n`：格式串常量求值上界 | 468 / 1806 | — | 3412 / 20738 | 3417 / 20732 |
 | jar+jca+rb | §29 三项能力 | 468 / 1806 | 2812 / 18085 | 2814 / 18097 | 2819 / 18091 |
 | mh+4b+b1+jar+jca+rb | 对象化 + 两次收窄 + §29 | 468 | 2807 / 17830 | 2809 / 17842 | 2814 / 17836 |
-| fmtc+jar+jca+rb(+mh+4b+b1) | 再叠格式串求值 | — | — | 见 6.3 | 见 6.3 |
+| fmtc+jar+jca+rb | 格式串求值 + §29 | — | — | 2804 / 17928 | 2809 / 17922 |
+| fmtc+jar+jca+rb+mh+4b+b1 | 全部能力 | — | — | 2803 / 17746 | — |
 | nos | DeepCopy 不走序列化（§9.1） | — | — | 3144 / 17990 | — |
 | nos+fmt | 且不进 Formatter | — | — | 465 / 1725 | — |
 | nos+fmt+jar+jca+rb | | — | — | 465 / 1725 | — |
+| nos+fmtc | 不走序列化 + 格式串求值 | — | — | 480 / 1873 | — |
+| nos+fmtc+jar+jca+rb | | — | — | 480 / 1873 | — |
 
 （StockTrans 用 `%d` / `%f` / `%b`，fmtc 对它不成立，不测。所有切除实验相对基线均无新增类，HelloWorld 在每项实验下都不变。）
 
@@ -224,10 +227,12 @@
 - **fmtc（−10 类 / −136 方法，DeepCopy 与 TSDS 相同）**：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth,ZonedDateTime}$1`、`ChronoZonedDateTime$1`、`Formatter$BigDecimalLayoutForm`、`Formatter$FormatSpecifier$BigDecimalLayout`、`IllegalFormatCodePointException`、`IllegalFormatConversionException`。其中 4 个 `java/time/*$1` 与 mh+4b+b1 那组重合。
 - **jar+jca+rb（−608 类）**：明细见 c1d 计划 §29。
 
-### 6.3 待补
+### 6.3 组合结果（作业 mhd-29caebe3 第 2、3 项）
 
-作业 mhd-29caebe3 第 2、3 项（`fmtc+jar+jca+rb`、`nos+fmtc`、`nos+fmtc+jar+jca+rb`、`fmtc+jar+jca+rb+mh+4b+b1`）出结果后补进 6.1。它们回答两个问题：格式串求值在 §29 三项之后还剩多少；不走序列化时它能把 3144 收到多少。
-
+- **fmtc 叠在 §29 之上仍是 −10 类**：jar+jca+rb 2814 → fmtc+jar+jca+rb 2804（DeepCopy），TSDS 2819 → 2809；去掉的 10 类与单独 fmtc 完全相同。两项能力的收益在全程序上**可加、互不重叠**。
+- **全部能力**：fmtc+jar+jca+rb+mh+4b+b1 = 2803 / 17746，比 mh+4b+b1+jar+jca+rb（2809）再少 6 类，比 fmtc+jar+jca+rb（2804）再少 1 类：4 个 `java/time/*$1` 两边重合，所以对象化 + 4b + b1 在 fmtc 之上只剩 −1 类（`LinkedBlockingQueue$Itr`）、−182 方法。
+- **不走序列化时**：nos+fmtc = 480 / 1873，叠 jar+jca+rb 不再变化。对 HelloWorld（468）：多了 3 个用户类（`DeepCopy`、`$Address`、`$Person`），少了 HelloWorld 自身，另多 `Formatter$DateTime` 和 9 个格式异常类（`DuplicateFormatFlagsException`、`UnknownFormatConversionException` 等，这是解析格式串必经的校验路径）。即 3144 中 2664 类完全由不可执行的格式转换分支带入，§29 那 597 类重合部分也全在这些分支里。
+- 所有组合相对其子组合均无新增类（集合差 B−A = 0）。
 ### 6.4 重测方法
 
 `scripts/diag/mh_bound_job.sh <组件+组件> [Test...]` 在服务器上逐例跑 `rava closure --cut … --flows '@rcall'`，产物在 `build/cj/<实验>/`。将来基线大幅缩小后，先重跑 `mh` 一项：只有 mh 相对新基线少 ≥2% 类时，才重启 §四。
@@ -262,7 +267,7 @@ DeepCopy 的格式串只有 `%s` 和 `%n`。按 javap，`printString` 只走 For
 **按收益排序的能力**：
 
 1. **§29 三项能力**（应用类路径 jar 分支折叠、JCA 提供者逐个装载的建模、ResourceBundle 未知 Class 服务查找的建模）：全程序 −608 类（−17.8%），对所有带序列化 / 反射的例都成立。
-2. **格式串按调用点常量求值**（具体求值器 + 调用点上下文：`String.format` / `printf` / `Formatter.format` 的格式串为常量时只开放对应转换分支）：不走序列化时最多 −2679 类中的非 `<clinit>` 部分；带序列化时 −10 类。收益依赖程序形状。
+2. **格式串按调用点常量求值**（具体求值器 + 调用点上下文：`String.format` / `printf` / `Formatter.format` 的格式串为常量时只开放对应转换分支）：不走序列化时实测 −2664 类（nos 3144 → nos+fmtc 480）；带序列化时 −10 类（与 §29 叠加仍是 −10）。收益依赖程序形状。
 3. **对象化 + 4b + b1**：−5 至 −6 类。
 4. **序列化本体**：约 278 类，基本是真实可达，不作为收窄目标。
 
@@ -273,12 +278,14 @@ DeepCopy 的格式串只有 `%s` 和 `%n`。按 javap，`printString` 只走 For
 
 | 例 | 基线 | 新目标（类） | 依据 |
 |---|---|---|---|
-| DeepCopy | 3422 | **≤ 2810** | jar+jca+rb+mh+4b+b1 = 2809 |
-| StockTrans | 3420 | **≤ 2807** | 同上 = 2807 |
-| TestSerialDefaultSuid | 3427 | **≤ 2814** | 同上 = 2814 |
+| DeepCopy | 3422 | **≤ 2803** | fmtc+jar+jca+rb+mh+4b+b1 = 2803 |
+| StockTrans | 3420 | **≤ 2807** | mh+4b+b1+jar+jca+rb = 2807（用 `%d` / `%f` / `%b`，fmtc 不成立） |
+| TestSerialDefaultSuid | 3427 | **≤ 2809** | fmtc+jar+jca+rb = 2809（全部能力组合未测，按 DeepCopy 的差推算可再少约 1 类，不计入目标） |
 | HelloWorld | 468 | **468（不变）** | 各项均不影响 |
+| DeepCopy 去序列化（nos） | 3144 | **≤ 480** | nos+fmtc = 480，作为「格式串常量求值」一项的单独验收 |
 
-- 主力是 §29 三项能力（−608），应优先排期；对象化 + 4b + b1 只贡献最后 5 类，排在最后，或者不做。
-- 格式串常量求值另立一项：对用 `%s` 格式化、但不走序列化的程序，目标是使其闭包等于不进 Formatter 时的规模加 `Formatter.<clinit>`（DeepCopy 去序列化情形：3144 → ≤ 510，即 465 + Formatter 自身；以 nos+fmtc 实测为准）。它对上表四例的全程序目标只贡献约 10 类，§6.3 的组合结果出来后修订。
-- 达到 2810 后，剩余规模以序列化本体（约 278 类）与 `Reference.get` / `Object[]` 容器元素引起的反射对象池大值集（§2.5）为主，届时以新基线重测 mh 一项，再决定是否重启对象化。
+- 主力是 §29 三项能力（−608），应优先排期。
+- 格式串常量求值单独立项：全程序只少 10 类，但对不走序列化、只用 `%s` 的程序是决定性的（3144 → 480，−85%）。它的终态是：`String.format` / `printf` / `Formatter.format` 的格式串在调用点为常量时，只开放解析出的转换分支；格式串非常量时保持现状。哪些方法是格式化入口、转换字符对应哪个分支方法，全部由 `runtime/java_runtime/` 下清单声明，生成器不写类名。
+- 对象化 + 4b + b1 在其余能力之上只剩 −1 类，不做。
+- 达到 2803 后，剩余规模以序列化本体（约 278 类）与 `Reference.get` / `Object[]` 容器元素引起的反射对象池大值集（§2.5）为主，届时以新基线重测 mh 一项，再决定是否重启对象化。
 
