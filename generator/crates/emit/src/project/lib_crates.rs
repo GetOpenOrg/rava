@@ -4,7 +4,7 @@
 //! Java 可见性映射 + 按目标 crate 定向的引用。依赖方向 = 声明序（后声明者 path 依赖先声明者），
 //! user crate 依赖全部 lib crate。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -16,7 +16,7 @@ use crate::ctx::EmitCtx;
 use crate::error::Result;
 use crate::imports::CrateRoute;
 use super::module_side::{lib_manifest, path_dep, root_decl_dep};
-use crate::text::{safe_pkg_part, to_snake};
+use crate::text::safe_pkg_part;
 
 /// lib crate 的 lib.rs 属性行
 const LIB_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, \
@@ -33,27 +33,16 @@ pub struct LibPlan {
     pub files: Vec<(String, IndexMap<String, PathBuf>)>,
 }
 
-/// 类文件路径：`<src>/<包…>/<snake>.rs`；snake 名与同目录子包同名时加 `_t` 后缀（E0761）
+/// 类文件路径：`<src>/<包…>/<模块名>.rs`（模块名见 `module_names`：与子包 / 包内类型名冲突时加 `_t`）
 fn lib_files(src: &Path, classes: &[String]) -> IndexMap<String, PathBuf> {
-    let mut pkg_dirs: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
-    for c in classes {
-        let mut parent = src.to_path_buf();
-        for p in c.split('/').rev().skip(1).collect::<Vec<_>>().into_iter().rev() {
-            pkg_dirs.entry(parent.clone()).or_default().insert(p.to_string());
-            parent = parent.join(p);
-        }
-    }
+    let modules = crate::module_names::lib_modules(classes);
     let mut sorted: Vec<&String> = classes.iter().collect();
     sorted.sort();
     let mut out = IndexMap::new();
     for c in sorted {
-        let (pkg, simple) = c.rsplit_once('/').unwrap_or(("", c));
+        let pkg = c.rsplit_once('/').map_or("", |(p, _)| p);
         let parent = pkg.split('/').filter(|p| !p.is_empty()).fold(src.to_path_buf(), |d, p| d.join(p));
-        let mut m = to_snake(simple);
-        if pkg_dirs.get(&parent).is_some_and(|s| s.contains(&m)) {
-            m.push_str("_t");
-        }
-        out.insert(c.clone(), parent.join(format!("{m}.rs")));
+        out.insert(c.clone(), parent.join(format!("{}.rs", modules[c.as_str()])));
     }
     out
 }
