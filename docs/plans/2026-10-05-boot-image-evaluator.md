@@ -492,6 +492,15 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 5. open `equals` 派发到全部已实例化类型，其中 `URL.equals` 来自 `toFileURL` 重放。
 6. 由此展开：`InetAddress` → `ServiceLoader` → 类路径 / jar / 文件系统 / 安全……
 
+反事实切除（`--cut`）逐个切掉以下各项，结果都仍是 2,986 类：
+
+- `Charset.isSupported`
+- `toFileURL`
+- `Proxy$Dyn.__vm_proxy_invoke`
+- `Class.getConstructor0@76`
+
+原因是名字不定的 `StandardCharsets.lookup` 有三条独立入口：jnu 区段，以及 stdout / stderr 两个 `newPrintStream` 残差调用。后两者的编码名是延迟值，按 U1 在运行期取宿主值，所以 `Charset.forName(enc, …)` 的名字也不定。open `equals` 的来源同样不止一处。因此压闭包须在通用路径上做精度，不能切单根。
+
 D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null → `Charset.defaultCharset` → 同一处 `StandardCharsets.lookup`。D10 消掉了 `PreHashedMap.put` 的 open 注入。剩余放大点是 2–4，属于通用精度问题，不是映像特有：任何以非常量名调 `Charset.forName` 的程序同样会碰到。
 
 **恢复入口**
