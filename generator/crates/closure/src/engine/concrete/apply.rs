@@ -113,6 +113,7 @@ impl<'a> Engine<'a> {
             rv = Some(PV::Top);
         }
         if let Some(rv) = rv {
+            self.oret_wild(entry, &rv);
             self.join_rval(entry, rv);
         }
     }

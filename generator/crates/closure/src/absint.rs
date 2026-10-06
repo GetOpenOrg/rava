@@ -276,6 +276,11 @@ pub trait Oracle {
     fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret;
     /// 字段读（getstatic / getfield）的常量值；recv = getfield 的接收者
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V>;
+    /// getfield 的结果：缺省取 [`Self::field`]；Never = 乐观假设下尚无可读到的值（按对象读的 ⊥，见引擎 `obj_fields.rs`），
+    /// 读取之后暂不可达
+    fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
+        self.field(op::GETFIELD, f, recv).map_or(Ret::Unknown, Ret::Value)
+    }
     /// `new C` 的对象经构造器 init（实参含接收者）完成后的身份标签（final 字段常量）
     fn construct(&self, _init: &MemberRef, _args: &[V]) -> Option<Rc<Obj>> {
         None
@@ -985,7 +990,15 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     }
                     op::GETFIELD => {
                         recv = Some(pop(s)?);
-                        let known = self.oracle.field(opc, f, recv.as_ref()).or_else(|| self.param_mirror_field(recv.as_ref(), f));
+                        let known = match self.oracle.getfield(f, recv.as_ref()) {
+                            Ret::Never => {
+                                self.ev(off, Event::Field { opcode: opc, mref: f.clone(), recv, value: None });
+                                return Ok(Flow::End);
+                            }
+                            Ret::Value(v) => Some(v),
+                            Ret::Unknown => None,
+                        };
+                        let known = known.or_else(|| self.param_mirror_field(recv.as_ref(), f));
                         let v = self.folded(opc, off, known).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }

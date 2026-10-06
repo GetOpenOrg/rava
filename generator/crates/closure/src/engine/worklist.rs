@@ -67,6 +67,11 @@ impl<'a> Engine<'a> {
         let mut batch = 0usize;
         loop {
             self.pkey_flush();
+            if !self.obj_dirty.is_empty() {
+                self.stat_enter(Phase::Flows);
+                self.obj_flush();
+                self.stat_leave();
+            }
             // 流传播按批：连续处理若干方法 / 站点后再排空，各处的零碎增量在源头汇齐后一次推下去。
             // 不动点单调，先处理的单元读到的是较小的集合，增长后经读者登记重跑——终态集合与逐个排空相同
             let idle = self.mwork.is_empty() && self.swork.is_empty() && self.cwork.is_empty();
@@ -74,6 +79,7 @@ impl<'a> Engine<'a> {
                 batch = 0;
                 self.stat_enter(Phase::Flows);
                 self.drain_flows();
+                self.obj_flush();
                 self.stat_leave();
             }
             batch += 1;
@@ -305,7 +311,7 @@ impl<'a> Engine<'a> {
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let mirrors = self.param_mirror_sets(m);
-        let pobjs = self.param_obj_sets(m);
+        let pobjs = self.obj_sets(m);
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
         // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）

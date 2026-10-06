@@ -257,6 +257,7 @@ impl<'a> Engine<'a> {
         }
         let Some(r) = r else { return };
         self.sysprops_rval(m, a, &r);
+        self.obj_ret_note(m, &r);
         let key = self.methods[m].key.clone();
         let cur = self.ctx.rvals.borrow().get(&key).cloned();
         let new = PV::join_ret(cur.as_ref(), &r);

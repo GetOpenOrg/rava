@@ -1,6 +1,7 @@
 //! 常量 / 事实查询：常量格 `PV`、分析上下文 `Ctx`、absint 的 `Oracle` 实现 `Facts`。
 
 use super::*;
+use super::obj_fields::ObjAns;
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
 
@@ -119,8 +120,8 @@ pub(super) struct Ctx<'a> {
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
-    /// 按抽象对象的实例字段写入值（见 `obj_fields.rs`）
-    pub(super) ovals: RefCell<HashMap<(u32, MemberRef), PV>>,
+    /// 按抽象对象的实例字段写入值：字段 → 抽象对象 → 值（见 `obj_fields.rs`）
+    pub(super) ovals: RefCell<HashMap<MemberRef, HashMap<u32, PV>>>,
     /// 不按抽象对象分开的实例字段写入值（接收者含非抽象对象 / 物化快照）
     pub(super) owild: RefCell<HashMap<MemberRef, PV>>,
     /// 构造器的确定初始化摘要（永久缓存，见 `ctor_init.rs`）
@@ -135,10 +136,22 @@ pub(super) struct Ctx<'a> {
     pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
     /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
     pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
-    /// (抽象对象, 字段) → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
-    pub(super) odeps: RefCell<HashMap<(u32, MemberRef), BTreeSet<usize>>>,
+    /// 字段 → 抽象对象 → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
+    pub(super) odeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
     /// 字段 → 按对象读过它的方法（`owild` 变化时失效）
     pub(super) owdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 实例方法 → 抽象对象 → 接收者含该对象的方法节点返回值之并（见 `obj_rets.rs`）
+    pub(super) orvals: RefCell<HashMap<MemberRef, HashMap<u32, PV>>>,
+    /// 实例方法 → 接收者不按对象归属的返回值（具体求值结果）
+    pub(super) orwild: RefCell<HashMap<MemberRef, PV>>,
+    /// 实例方法 → 抽象对象 → 按对象读过其返回值的方法
+    pub(super) ordeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
+    /// 实例方法 → 按对象读过其返回值的方法（`orwild` 变化时复核）
+    pub(super) orwdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 按对象查询过的抽象对象 → 其类（`obj_rets.rs` 按对象选择调用目标）
+    pub(super) oclass: RefCell<HashMap<u32, Rc<str>>>,
+    /// 按对象选择的调用目标缓存：调用点 (指令, 符号引用, 接口调用) → 抽象对象 → 目标（选择只看对象的类与类层次，不随分析变化）
+    pub(super) oret_sel: RefCell<HashMap<(u8, bool, MemberRef), HashMap<u32, Option<Rc<MemberRef>>>>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
     /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
@@ -573,13 +586,36 @@ impl Oracle for Facts<'_, '_> {
             let exact = c.target.as_ref().and_then(|t| self.ctx.const_eval(self.m, t, args));
             return Ret::Value(exact.unwrap_or_else(|| v.clone()));
         }
+        // 接收者只来自形参且全为抽象对象：按对象的返回值（`obj_rets.rs`），否则取按成员汇合的返回常量
+        let per = self.obj_ret(opcode, m, iface, args);
         // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）；
         // 返回常量在各调用点上汇合为 Top 时按本调用点的常量实参求值
-        let Some(t) = &c.target else { return Ret::Unknown };
+        let per = match per {
+            Some(ObjAns::Value(p)) => Some(p),
+            // 有接收者对象的目标尚未定论（对象集只在有方法上下文时查询）
+            Some(ObjAns::Never) => {
+                if let Some(me) = self.m {
+                    self.ctx.dep(me, Dep::Never);
+                }
+                return Ret::Never;
+            }
+            None => None,
+        };
+        let Some(t) = &c.target else {
+            return match per {
+                Some(PV::Const(v)) => Ret::Value(v),
+                _ => Ret::Unknown,
+            };
+        };
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
-        let r = self.ctx.rvals.borrow().get(t).cloned();
-        self.ctx.dep(me, Dep::Ret(t.clone()));
+        let r = match per {
+            Some(p) => Some(p),
+            None => {
+                self.ctx.dep(me, Dep::Ret(t.clone()));
+                self.ctx.rvals.borrow().get(t).cloned()
+            }
+        };
         match r {
             // 小集合：先按本调用点的常量实参求值，求不出时取集合
             Some(PV::Const(v @ V::Ints(_))) => match eval() {
@@ -610,12 +646,25 @@ impl Oracle for Facts<'_, '_> {
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
             return Some(v);
         }
-        if opcode == classfile::op::GETFIELD {
-            if let Some(v) = self.obj_field(f, recv) {
-                return Some(v);
-            }
-        }
         self.ctx.field_value(self.m, f)
+    }
+    fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
+        let op = classfile::op::GETFIELD;
+        if let Some(v) = self.ctx.mirror_hook_field(op, f, recv).or_else(|| self.ctx.object_field(self.m, op, f, recv)) {
+            return Ret::Value(v);
+        }
+        // 按对象读（`obj_fields.rs`）：⊥ 按读取之后暂不可达，排空时重算
+        match self.obj_field(f, recv) {
+            Some(ObjAns::Value(v)) => return Ret::Value(v),
+            Some(ObjAns::Never) => {
+                if let Some(me) = self.m {
+                    self.ctx.dep(me, Dep::Never);
+                }
+                return Ret::Never;
+            }
+            None => {}
+        }
+        self.ctx.field_value(self.m, f).map_or(Ret::Unknown, Ret::Value)
     }
     fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
         self.ctx.construct(self.m, init, args)

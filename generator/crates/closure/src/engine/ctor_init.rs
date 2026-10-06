@@ -192,22 +192,15 @@ impl Ctx<'_> {
 }
 
 impl Engine<'_> {
-    /// 构造器摘要有作废：确定集整表清空，按对象读过的方法按当前答复复核，有变才重分析
+    /// 构造器摘要有作废：确定集整表清空，按对象读过的方法记入待复核（`obj_flush`），答复有变才重分析
     pub(super) fn obj_defs_dropped(&mut self) {
         if !self.ctx.cinit_drop.replace(false) {
             return;
         }
         self.ctx.stats.borrow_mut().init_drops += 1;
         self.ctx.odef.borrow_mut().clear();
-        let mut ms: Vec<usize> = self.obj_queries.keys().copied().collect();
-        ms.sort_unstable();
-        for m in ms {
-            let Some(qs) = self.obj_queries.get(&m).cloned() else { continue };
-            let sets = self.param_obj_sets(m);
-            if !self.obj_queries_same(&sets, &qs) {
-                self.invalidate(m, Why::FieldPut);
-            }
-        }
+        let ms: BTreeSet<usize> = self.obj_queries.keys().copied().collect();
+        self.obj_readers_recheck(ms, super::obj_fields::ObjCause::All);
     }
 
     /// 字节码 `new cls`（方法 m，结果为抽象对象 o）：登记分配方法里的 `cls` 构造器调用

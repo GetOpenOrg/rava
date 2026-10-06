@@ -3552,3 +3552,166 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
 
 - `absint/init_tests.rs` 10 项（全路径写入、交出截断、自存交出、写前读、单侧分支、未知超类、委托组合、无返回、处理器路径、缺省不跟踪）。
 - closure crate 191 过；`closure_independent_of_hash_seed`、`container_elements_per_object` 过（1364s）。
+
+### 30.12 第 7 步：B1② 的 P3——按接收者对象的返回值（2026-10-07，分支 `c1d-url-b2`）
+
+#### 设计（通用，无类名；`engine/obj_rets.rs`）
+
+- **归属**：实例方法节点 m 每次分析的返回值并入 `nret[m]`，再并入接收者形参节点 `P(m,0)` 值集里每个抽象对象 o 的
+  `orvals[(o, 方法键)]`（方法键 = 节点自身的声明键）；`P(m,0)` 增长时把 `nret[m]` 补归属到新对象（`oret_watch`，经 `flow.rs::node_grown`）。
+  具体求值结果（`concrete/apply.rs`）的返回不按对象归属，并入 `orwild[方法键]`。
+- **读取**（`Facts::invoke_result` 的 `obj_ret`）：实例调用、非 void、接收者只来自形参 i、该形参值集非空且全为抽象对象时，
+  逐对象定出所执行的方法：精确目标（static / special / private / final），否则按对象的类 `Hierarchy::select`（JVMS §5.4.6，
+  对象的类在 `param_obj_sets` 时记入 `oclass`）；只取有字节码的方法（手写 / 无体的返回不按对象归属，有此类对象即不折）。
+  答复 = 各对象（`orvals[(o,t)]` ⊔ `orwild[t]`）之并：
+  - 有值 → 按该值（与按成员的 `rvals` 同一取法：小集合 / 非空引用仍先按常量实参求值）；
+  - 无值而有对象的目标未定论（`noreturn.answer_never`：乐观阶段恒真，收尾阶段只对未建节点 / 未分析完 / 等待中的目标）→ 不返回，
+    记 `Dep::Never`，与按成员的「尚无返回」同一收尾机制（排空时重算）；
+  - 其余（全部对象定论无返回、或有对象选不出字节码目标）→ 退回按成员的 `rvals`。
+  调用点没有唯一目标（虚调用多实现）时同样可用：原先直接答未知。
+- **依赖**：查询记为 `ObjQuery::Ret(形参, RetSite{指令, 符号引用, 接口}, 答复)`，与按对象字段读同一套复核：`ordeps[(o,t)]` /
+  `orwdeps[t]` 登记读者（按各对象选出的 t），归属变化时按答复复核（`obj_readers_recheck`），形参值集增长经 `obj_watch` 复核，
+  共享摘要按答复比对（`obj_queries_same`）。
+
+#### 健全性与反例核对
+
+- 接收者为 o 的调用执行方法 t 时，派发把 o 送进所连 t 节点的 `P(·,0)`，该节点的分析覆盖这次执行（入口状态含本调用点实参），
+  其返回值归属到 o；节点按旧入口得出的返回值先归属、后因重分析变化时新值继续并入（只增不减）。所以不动点上
+  `orvals[(o,t)] ⊔ orwild[t]` 覆盖接收者为 o、执行 t 的全部正常返回值。
+- 方法选择只看对象的类（抽象对象的类固定），与分析进度无关；`select` 与派发用同一解析。手写 / native / 无体方法的返回
+  不经字节码 `returns`，不按对象归属，这类对象出现即不折。
+- 「定论无返回」的对象贡献 ⊥：目标的全部节点都已分析且无一归属到 o，即 o 不在任何 t 节点的接收者值集里（或这些节点无正常返回），
+  不动点上此调用点不会以 o 为接收者正常返回 t 的值。之后若 o 流入 t 节点，`oret_grown` 补归属并经 `ordeps` 复核。
+- 「不返回」答复只在目标未定论时给出，排空进入收尾后按 `noreturn.rs` 规则重算，同按成员的「尚无返回」。
+- 反例核对：同一形参的对象集含两个对象、各自 `tag` 不同 → 答复为两值之并，不折；对象的类覆盖了被调方法 → 按对象的类选出
+  覆盖方法，取其归属；接收者经类型转换 / 合流来自多个来源 → `srcs` 不只一个形参，不查。
+
+#### 实测（tag `13b`，对照 `12b`）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 465 → 483 |
+| StockTrans | 3150 → 3150 | 19916 → 19916 | 26135 → 29304 |
+| DeepCopy | 3152 → 3152 | 19936 → 19936 | 26326 → 28980 |
+| TestSerialDefaultSuid | 3157 → 3157 | 19928 → 19928 | 26272 → 29317 |
+
+- 四例集合与 `12b` 相同（子集成立）；耗时 +10%–12%，在 20% 线内（同机另有负载，`13a` 只做归属时为 +0%–7%）。
+- 夹具 `ObjFacts`：`use(b1)` 的 `b.tag()`（虚调用、无唯一目标）按对象答 `"a"`，`Rare.go` 出闭包；`Holder.run` 的接收者来自
+  字段读（站点），留给 P4。
+- 中途发现：答复「对象尚无归属 → 退回 `rvals`」时首次分析恒先退回（被调方尚未分析），而调用边不撤回，折叠永远落空；
+  改为与按成员「尚无返回」同一乐观机制后生效。
+- 本步四例无折叠差异：URL 链上的 `getFile()` 等调用接收者来自站点（字段读 / 调用结果），需 P4。
+
+#### 单测
+
+- closure_cli 新增 `returns_per_receiver_object`（夹具 `tests/fixtures/ObjFacts.java`）。
+- 本节 `13b` 是暂存版（⊥ 退回规则为旧口径），未单独提交；最终实现随 P4 一并提交，修订见 §30.13。
+
+### 30.13 第 8 步：B1② 的 P4——站点来源的接收者 + 复核框架定型（2026-10-07，分支 `c1d-url-b2`）
+
+P3 与 P4 共用一套按对象查询 / 复核框架（`obj_fields.rs` / `obj_rets.rs`），P4 实施中对框架的 ⊥ 规则、复核时机和数据结构都做了改动，
+P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规则。所以 P3 + P4 合成一个提交；另把顺带发现的、与本线无关的
+站点求值顺序依赖单独先提交（见下文「站点求值所用分析」）。
+
+#### 设计（通用，无类名）
+
+- **站点来源**（P4）：`Recv::Site(偏移)`——接收者值只来自一个字节码站点（字段读 / 调用结果，`Src::Site`），且该站点结果的
+  声明类型是容器形态类（`obj_site_cands`，按方法键缓存）时，对象集取流图站点节点 `S(m, 偏移)` 的值集。字段读与返回值两种
+  查询都可用站点来源。站点节点就是派发用的值集，覆盖方法节点 m 各次执行时该站点产生的全部对象。
+- **⊥ 规则**（对象集为空，或各对象尚无值 / 尚无归属）：
+  - 字段读：定论（`settled`）之前答 `Never`（读取之后暂不可达），定论之后退回全局值集（`bottom_never`）。
+  - 返回值：与按成员的「尚无返回」同一口径——收尾（`closing`）前答 `Never`；收尾阶段只在某个对象的目标 t 仍满足
+    `noreturn.answer_never(t)`（尚无节点 / 未分析 / 等待中）时答 `Never`，否则退回 `rvals`。
+    这样按对象答复不会比按成员更早放弃「不返回」，乐观不返回的定论时机不受按对象查询影响。
+  - P3 暂存版的「对象无归属 → 收尾阶段立即退回」会让退回的宽答复先建边，随后到达的归属再把答复收窄，
+    边不撤回，结果依赖处理顺序。
+- **复核延后、合并**（`obj_flush`）：值变化（`obj_readers_recheck`，原因 = 字段 / 方法键）、来源值集增长（`obj_grown`）、
+  构造器摘要作废（原因 = 全部）都只把方法记入 `obj_dirty`（附原因）。复核在两处进行：流传播排空之后，以及主循环每轮开头
+  （不动点各项判定之前）。复核时：
+  - 只重算来源对象集（仅限查询用到的来源，`obj_sets_of`，与 `obj_sets` 同口径）；
+  - 只复核输入可能变了的查询：来源对象集变了的，所读字段在原因里的，同名同描述符方法在原因里的。
+    选择保持名字和描述符，JVMS §5.4.6。
+  - 答复有变才重分析。不变时，有增长就按上次登记的对象集只补登新增对象（`ObjBound`，同一组查询 `Rc::ptr_eq`）。
+- **数据结构**：`ovals` / `odeps` / `orvals` / `ordeps` 由 `(对象, 成员键)` 改为 `成员键 → 对象 → …` 两级表，
+  逐对象查表不再克隆、散列成员键；目标选择按（调用点, 对象）缓存（`oret_sel`：只依赖对象的类与类层次）；
+  `obj_field_value` 的初值只并一次。
+- **站点求值所用分析**（`worklist.rs::site_analysis`，单独提交）：按名查找的名字、键集（`keyed.rs::names_of`）、字段 / 返回串、
+  类查找、方法名求值改取 `applied`（其事件正在 / 已经执行的那次分析），未执行过时取当前分析。
+  - 问题：方法失效后、重分析前，站点仍可能因接收者 / 键集增长按 `applied` 的事件重跑。原代码取 `analysis`，此时它已被清空，
+    于是答「推不出」→ `Keys::Any` / 开放查找，而这种放宽不可撤回。
+  - 实例：TestSerialLookupPairing 的 `tryGet@225/@282` 键门放行全部服务提供者，20250 对 19918，随散列种子变化。
+  - 这是本线之前就存在的顺序依赖，P3/P4 增加了失效次数，所以暴露出来。
+
+#### 健全性与反例核对
+
+- 站点来源：`S(m,off)` 是该站点结果的流图值集，不动点上覆盖其全部运行期对象（派发同样依赖它）；只取全由抽象对象组成的值集，
+  含 open / 非抽象类 / 镜像即不查。按对象字段值 / 返回值的覆盖论证同 §30.12，与来源种类无关。
+- 延后复核：读者在复核前用的是旧答复，可能偏窄（偏乐观）。但每次变化都会记入 `obj_dirty`，主循环在不动点各项判定之前
+  一定先排空它，所以终态里每个方法的答复都等于按最终对象集 / 最终值算出的答复。原因过滤只略过输入未变的查询：
+  - 答复的输入只有四样：来源对象集、`ovals` / `owild[字段]`、`orvals` / `orwild[选出的目标]`、`odef`（作废时原因为全部）；
+  - `bottom_never` / `closing` 的变化不在其中，由 `Dep::Never` / 收尾重算覆盖，与原机制相同；
+  - 开放判定的变化不在其中，由 `fdeps` 全局读者失效覆盖。
+- 补登只增不删：重分析后旧登记残留，只会多复核，不影响结果。
+- 反例核对（新增折叠抽查，StockTrans `13b → 14d`）：
+  - `ReferenceQueue.poll()` 按对象答 null，于是 `WeakHashMap.expungeStaleEntries`、`ClassCache.processQueue`、
+    `LogManager.drainLoggerRefQueueBounded`、`Level$KnownLevel.purge` 的出队分支死。原因是闭包里没有 `ReferenceQueue.enqueue`：
+    引用入队由 VM 的引用处理线程驱动，当前闭包与运行时都没有承载它，所以转译产物里队列确实恒空，与该折叠一致。
+    将来按手写边界类别 ③ 落地 GC 引用处理时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
+    这一项属于既有的建模缺口，不是新的不健全；见「待用户决策」。
+    同类还有 `ResourceBundle.findBundle@73`、`FileInputStreamPool.getInputStream@3`、`CleanerImpl.run`、`MemoryCache.emptyQueue`、
+    `LocaleObjectCache.cleanStaleEntries`、`ThreadContainers.expungeStaleEntries`、`Bundles.cleanupCache` 等（均为引用队列出队）。
+  - 其余新增常量多为 `true`：`Logger.doSetParent@146`、`ProviderList.<init>@358`、`SortedOps$RefSortingSink.accept@5`、
+    `URLClassPath.getLoader@164` 等，接收者对象是 `ArrayList` 一类，其 `add` 字节码恒返回 `true`；按对象选出目标后取该目标的返回值。
+  - HelloWorld −4 方法：`ConcurrentHashMap.remove(Object,Object)` / `replaceNode` / `TreeBin.removeTreeNode` / `balanceDeletion`。
+
+#### 实测（tag `14d`，对照 `13b`；`14a`–`14c` 为优化过程）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → **1823** | 483 → 520（+7.7%） |
+| StockTrans | 3150 → 3150 | 19916 → 19916 | 29304 → 32428（+10.7%） |
+| DeepCopy | 3152 → 3152 | 19936 → 19936 | 28980 → 32496（+12.1%） |
+| TestSerialDefaultSuid | 3157 → 3157 | 19928 → 19928 | 29317 → 31974（+9.1%） |
+
+- 四例均为 `13b` 的子集（新增类 0、新增方法 0）。大例集合不变，只多了一些常量和死区折叠（StockTrans 有 31 个方法的折叠发生变化，均为增加）。
+  URL 链上 `R` 所需的 `getFile()` 站点折叠仍未成立：需要 B4 / `fileToEncodedURL` 路径以 `/` 开头的串形状事实（见下）。
+- 耗时优化过程（StockTrans）：
+
+  | tag | 做法 | 用时 |
+  |---|---|---|
+  | `14a` | 每次流增量都即时重算全部来源、全部重登 | 83985 ms（+187%） |
+  | `14b` | 延后合并复核 | 70436 ms |
+  | `14c` | 两级表 + 目标选择缓存 + 增量补登 | 35701 ms（+22%） |
+  | `14d` | 按原因只复核受影响查询 | 32428 ms |
+
+  `14d` 的 `reasons.mirror.analyses` 为 21742（`13b` 为 1516），`field_put` 由 15443 降到 7819；合计重分析增加约 12600 次，
+  分析阶段 +0.6 s。复核本身约 7–8 s，剩余优化空间主要在这里。
+- 峰值内存（分配器口径 `peak_mem_mb`，`11d` → `12b` → `13b` → `14d`）：
+  - HelloWorld 235 → 236 → 238 → 221；
+  - StockTrans 2178 → 2173 → 2174 → 2245（相对 B5 +3.1%）；
+  - DeepCopy 2200 → 2224 → 2293 → 2304（+4.7%）；
+  - TestSerialDefaultSuid 2201 → 2149 → 2249 → 2161（−1.8%）。
+
+  P2–P4 合计增幅在 20% 线内。`peak_rss_mb` 受本机 swap（约 90%）影响波动大：`11d` 为 1352–1520，之后为 1967–2315，
+  这只说明页面是否被换出，不作判据。
+- 确定性：TestSerialLookupPairing 种子 0 / 1 / 2 的类集合与方法集合一致（3153 / 19918，via 字段可变），修复前为 20250。
+
+#### 单测
+
+- closure crate 191 过；closure_cli `closure_independent_of_hash_seed`、`container_elements_per_object`、`returns_per_receiver_object`、
+  `returns_per_site_receiver`（夹具 `ObjFacts.Holder.run`：接收者来自字段读站点，`Rare2.go` 出闭包）4 项全过（1554 s）。
+
+#### 待用户决策
+
+1. 引用队列：P3/P4 让「闭包与运行时都不承载 VM 引用处理线程」这一既有缺口变得可见：`WeakHashMap` 等的出队清理分支被删去，
+   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把 GC 引用处理（手写边界类别 ③）列入后续项？
+   一旦列入，入队路径进入档案，相关折叠会自动解除，不需要回退本步。
+
+#### 遗留与恢复入口
+
+- 下一步（不依赖「启动目录是目录」假设）：由字节码推出 `ParseUtil.fileToEncodedURL` 产生的 `file` 路径以 `/` 开头
+  （绝对路径），配合 §30.9 的 B4 `startsWith` 守卫与串形状域，验证 URL 链 `R` 能否折叠。入口：
+  - `build/url/cl.sh tests/e2e/23_algorithms/DeepCopy.java <tag> --flows '@trace:sun/net/www/protocol/jar/Handler'`；
+  - `build/url/folds.py`。
+- 复核耗时：`obj_flush` 约 7–8 s（StockTrans），可再按查询粒度登记脏位（字段读按 (字段, 对象) 精确定位查询）。
+- 工具：`build/url/run4.sh <tag>`，`python3 build/url/cmp.py <new> <old>`。

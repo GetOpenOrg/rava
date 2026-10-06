@@ -173,6 +173,9 @@ impl<'a> Engine<'a> {
         if self.obj_watch.contains_key(&n) {
             self.obj_grown(n);
         }
+        if self.oret_watch.contains(&n) {
+            self.oret_grown(n, delta);
+        }
         if let Some(cs) = self.call_watch.get(&n) {
             for &c in cs {
                 if self.in_cwork.insert(c) {

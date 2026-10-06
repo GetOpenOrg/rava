@@ -93,7 +93,7 @@ impl<'a> Engine<'a> {
         key: &MemberRef,
         params: &[Option<V>],
         mirrors: &[Option<BTreeSet<Rc<str>>>],
-        pobjs: &[Option<Rc<[u32]>>],
+        pobjs: &super::obj_fields::ObjSets,
     ) -> Option<(Rc<Analysis>, Rc<[Dep]>, Rc<[super::obj_fields::ObjQuery]>)> {
         let methods = &self.methods;
         let es = self.shared.get_mut(key)?;

@@ -30,6 +30,7 @@ mod sets;
 mod meta_classes;
 mod idset;
 mod facts;
+mod obj_rets;
 mod consteval;
 mod construct;
 mod sysprops;
@@ -408,7 +409,15 @@ pub struct Engine<'a> {
     /// 形参节点 → 按其抽象对象集读过实例字段的方法：值集增长时重分析（见 `obj_fields.rs`）
     obj_watch: HashMap<Node, BTreeSet<usize>>,
     /// 方法 → 最近一次分析的按对象读（值集增长时按新对象集复核答复）
-    obj_queries: HashMap<usize, Rc<[obj_fields::ObjQuery]>>,
+    obj_queries: HashMap<usize, obj_fields::ObjBound>,
+    /// 待复核按对象读的方法（来源值集增长 / 按对象值变化）：流传播排空后一次复核（`obj_fields.rs::obj_flush`）
+    obj_dirty: BTreeMap<usize, obj_fields::ObjDirty>,
+    /// 方法节点 → 各次分析返回值之并（按接收者对象归属的来源，见 `obj_rets.rs`）
+    nret: HashMap<usize, PV>,
+    /// 已有返回值的实例方法节点的接收者形参节点：值集增长时把节点返回值补归属到新对象
+    oret_watch: HashSet<Node>,
+    /// 按对象接收者来源的候选站点（方法键 → 偏移，`obj_fields.rs::obj_site_cands`）
+    site_cands: HashMap<MemberRef, Rc<[u32]>>,
     /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
     shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
