@@ -170,6 +170,29 @@ value_equals = [
 "java/lang/Character.toLowerCase:(C)C" = "char_to_lower_case"
 # 按 locale 小写：只在 ASCII 且不含 `I` 的串上折叠（此时各 locale 结果相同，土耳其语等的 `I` 例外不出现）
 "java/lang/String.toLowerCase:(Ljava/util/Locale;)Ljava/lang/String;" = "to_lower_case"
+# 形状判定（absint/shape.rs：已知前后缀 / 确定不出现的字符；接收者为常量时即按值）：
+# starts_with / ends_with 判定成立一侧另收窄被测局部变量的形状；index_of / last_index_of 所找字符确定不出现时为 -1
+# （带起点的形态只折叠 -1）；contains 实参为常量时判定
+"java/lang/String.startsWith:(Ljava/lang/String;)Z" = "starts_with"
+"java/lang/String.endsWith:(Ljava/lang/String;)Z" = "ends_with"
+"java/lang/String.indexOf:(I)I" = "index_of"
+"java/lang/String.indexOf:(II)I" = "index_of"
+"java/lang/String.indexOf:(Ljava/lang/String;)I" = "index_of"
+"java/lang/String.indexOf:(Ljava/lang/String;I)I" = "index_of"
+"java/lang/String.lastIndexOf:(I)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(II)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(Ljava/lang/String;)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(Ljava/lang/String;I)I" = "last_index_of"
+"java/lang/String.contains:(Ljava/lang/CharSequence;)Z" = "contains"
+
+# 返回串的形状事实：结果确定不含 excludes 中的 ASCII 字符（实参常量能求出常量时取常量）。
+# ParseUtil.encodePath：firstEncodeIndex 对 `#`（0x23）/ `?`（0x3F）——不在 a-z / `&`-`:` / A-Z 快速通道内——按
+# L_ENCODED 判定（两者的位 35 / 63 置位），命中即从该处起走 encodePath(path, index, sep) 逐字符转义为 `%23` / `%3F`；
+# 分隔符 sep 为 File.separatorChar 或 `/`，不是这两个字符。于是结果恒不含 `#` `?`
+# （fileToEncodedURL → new URL("file", "", path) 里的 indexOf('#') / lastIndexOf('?') 折叠为 -1）
+[facts.string_shapes]
+"sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;)Ljava/lang/String;" = { excludes = "#?" }
+"sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;Z)Ljava/lang/String;" = { excludes = "#?" }
 
 [facts.returns]
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`

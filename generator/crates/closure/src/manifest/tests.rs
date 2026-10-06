@@ -105,6 +105,17 @@ fn string_ops_parse() {
 }
 
 #[test]
+fn string_shapes_parse() {
+    let m = with_vm("[facts.string_ops]\n\"a/S.sw:(La/S;)Z\" = \"starts_with\"\n\"a/S.io:(I)I\" = \"index_of\"\n[facts.string_shapes]\n\"a/P.enc:(La/S;)La/S;\" = { excludes = \"#?\" }\n").unwrap();
+    assert_eq!(m.string_op("a/S.sw:(La/S;)Z"), Some(StrOp::StartsWith));
+    assert_eq!(m.string_op("a/S.io:(I)I"), Some(StrOp::IndexOf));
+    assert_eq!(m.string_excludes("a/P.enc:(La/S;)La/S;"), Some("#?"));
+    assert_eq!(m.string_excludes("a/P.x:()La/S;"), None);
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = { excludes = \"#\", extra = 1 }\n").is_err());
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = \"#\"\n").is_err());
+}
+
+#[test]
 fn handle_interpreters_parse() {
     let m = with_vm("[facts.handle_interpreters]\nmembers = [\"a/H.run:([La/O;)La/O;\"]\n").unwrap();
     let key = |n: &str| classfile::constant::MemberRef { owner: "a/H".into(), name: n.into(), desc: "([La/O;)La/O;".into() };

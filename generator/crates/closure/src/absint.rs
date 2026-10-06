@@ -24,10 +24,16 @@ pub mod ints;
 mod lit;
 mod narrow;
 mod obj;
+mod shape;
+mod strs;
+#[cfg(test)]
+mod strs_tests;
 #[cfg(test)]
 mod tests;
 pub use lit::{lit_id, lit_str};
 pub use obj::Obj;
+pub use shape::Shape;
+pub use strs::StrKind;
 
 /// 引用值来源
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -297,6 +303,10 @@ pub trait Oracle {
     fn mirror_subtype_test(&self, _m: &MemberRef) -> bool {
         false
     }
+    /// 清单字符串操作的种类（构建器新建 / 追加 / 取结果、前后缀判定），见 `strs.rs`
+    fn str_kind(&self, _opcode: u8, _m: &MemberRef, _iface: bool) -> Option<StrKind> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -391,6 +401,16 @@ impl State {
         if self.stack.len() != o.stack.len() || self.locals.len() != o.locals.len() {
             return Err(());
         }
+        if !strs::has_builders(self) && !strs::has_builders(o) {
+            return Ok(self.join_values(o));
+        }
+        let before_join = self.clone();
+        let mut changed = self.join_values(o);
+        changed |= strs::drop_lost_groups(self, &before_join, o);
+        Ok(changed)
+    }
+
+    fn join_values(&mut self, o: &State) -> bool {
         let mut changed = false;
         let before = self.finals.len();
         self.finals.retain_mut(|(f, a)| match o.finals.iter().find(|(g, _)| g == f) {
@@ -412,7 +432,7 @@ impl State {
                 changed = true;
             }
         }
-        Ok(changed)
+        changed
     }
 }
 
@@ -591,7 +611,10 @@ impl<'a, O: Oracle> Interp<'a, O> {
         if **o != Obj::Uninit {
             return;
         }
-        let done = self.oracle.construct(init, args);
+        let done = match self.oracle.str_kind(op::INVOKESPECIAL, init, false) {
+            Some(StrKind::Init) => parse_method(&init.desc).and_then(|md| strs::init_tag(&md.params, args)),
+            _ => self.oracle.construct(init, args),
+        };
         let V::Ref { ty, nonnull, src, .. } = recv else { return };
         let v = V::Ref { ty: ty.clone(), nonnull: *nonnull, src: src.clone(), obj: done };
         for x in s.locals.iter_mut().chain(s.stack.iter_mut()) {
@@ -708,6 +731,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let value = pop(s)?;
                 let index = pop(s)?;
                 let array = pop(s)?;
+                strs::escape(s, &value);
                 self.ev(off, Event::ArrayStore { array, index, value });
             }
             0x57 => popn(s, 1)?,
@@ -924,9 +948,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
                             pop(s)?;
                         }
                         let v = pop(s)?;
+                        strs::escape(s, &v);
                         if self.oracle.final_static(f) {
                             s.finals.retain(|(g, _)| g != f);
                             s.finals.push((f.clone(), v.clone()));
+                            strs::escape(s, &v);
                         }
                         value = Some(v);
                     }
@@ -942,6 +968,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         }
                         value = Some(pop(s)?);
                         recv = Some(pop(s)?);
+                        if let Some(v) = &value {
+                            strs::escape(s, v);
+                        }
                     }
                 }
                 self.ev(off, Event::Field { opcode: opc, mref: f.clone(), recv, value });
@@ -954,6 +983,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     let recv = pop(s)?;
                     args.insert(0, recv);
                 }
+                let kind = self.oracle.str_kind(opc, m, *iface);
+                let retag = strs::invoke(s, kind, &md.params, &args, opc == op::INVOKESTATIC);
                 let r = self.oracle.invoke_result(opc, m, *iface, &args);
                 if opc == op::INVOKESPECIAL && m.name == "<init>" {
                     self.constructed(s, m, &args);
@@ -971,6 +1002,14 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         Some(v) => v,
                         None => value_of(ret, Src::Site(off)),
                     };
+                    // 构建器追加 / 取结果：结果换成内容标签（常量结果保持常量）
+                    let v = match (retag, &v) {
+                        (Some(tag), V::Ref { ty, nonnull, src, obj }) if tag.is_some() || matches!(obj.as_deref(), Some(Obj::Builder { .. })) => {
+                            let nonnull = *nonnull || tag.is_some();
+                            V::Ref { ty: ty.clone(), nonnull, src: src.clone(), obj: tag }
+                        }
+                        _ => v,
+                    };
                     push_typed(&mut s.stack, ret, v);
                 }
             }
@@ -978,6 +1017,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let Operand::InvokeDynamic { bsm, name, desc, .. } = &ins.operand else { return Err(()) };
                 let md = parse_method(desc).ok_or(())?;
                 let args = pop_args(s, &md.params)?;
+                for a in &args {
+                    strs::escape(s, a);
+                }
                 if let Some(ret) = &md.ret {
                     push_typed(&mut s.stack, ret, value_of(ret, Src::Site(off)));
                 }
@@ -985,6 +1027,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
             }
             op::NEW => {
                 let Operand::Class(c) = &ins.operand else { return Err(()) };
+                // 再次执行分配点：旧对象的构建器标签整组撤掉（新对象独占该组）
+                strs::drop_group(s, off);
                 s.stack.push(V::Ref { ty: Some(Rc::from(c.as_str())), nonnull: true, src: src1(Src::Site(off)), obj: Some(Rc::new(Obj::Uninit)) });
                 self.ev(off, Event::New(c.clone()));
             }
@@ -1227,8 +1271,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                         // instanceof 判定成立的一侧收窄被测局部变量
                         let narrow = narrow::instanceof_narrow(insns, &leader, i, &st)
                             .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)));
-                        // ifnull / ifnonnull 两侧收窄被测局部变量的可空性
-                        let nulls = narrow::null_narrow(insns, &leader, i, &st);
+                        // ifnull / ifnonnull 两侧收窄被测局部变量的可空性；前后缀判定成立一侧收窄形状
+                        let nulls = narrow::null_narrow(insns, &leader, i, &st)
+                            .or_else(|| strs::affix_narrow(insns, &leader, i, &st, |m| interp.oracle.str_kind(op::INVOKEVIRTUAL, m, false)));
                         let edge = |taken: bool| match (&narrow, &nulls) {
                             (Some(nw), _) => {
                                 let mut s2 = st.clone();
@@ -1280,8 +1325,10 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                 handler_on[hi] = true;
             }
             let ty: Rc<str> = Rc::from(h.catch_type.as_deref().unwrap_or("java/lang/Throwable"));
+            let mut hl = hl.clone();
+            strs::strip_builders(&mut hl);
             let st = State {
-                locals: hl.clone(),
+                locals: hl,
                 stack: vec![V::Ref { ty: Some(ty), nonnull: true, src: src1(Src::Catch(h.handler)), obj: None }],
                 finals: Vec::new(),
             };

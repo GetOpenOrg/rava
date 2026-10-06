@@ -77,8 +77,32 @@ pub(super) fn string_op(op: crate::manifest::StrOp, args: &[V]) -> Option<V> {
         (StrOp::CharAt, [V::Str(a, _), V::Int(i)]) => usize::try_from(*i).ok().and_then(|i| a.encode_utf16().nth(i)).map(|c| V::Int(i32::from(c))),
         (StrOp::CharToLowerCase, [V::Int(c)]) => u8::try_from(*c).ok().filter(u8::is_ascii).map(|b| V::Int(i32::from(b.to_ascii_lowercase()))),
         (StrOp::ToLowerCase, [V::Str(a, _)] | [V::Str(a, _), _]) => ascii_lower(a).map(|l| V::lit(Rc::from(l.as_str()))),
+        (StrOp::IsEmpty, [r]) => r.str_shape()?.is_empty().map(|b| V::Int(b as i32)),
+        (StrOp::StartsWith, [r, V::Str(l, _)]) => r.str_shape()?.starts_with(l).map(|b| V::Int(b as i32)),
+        (StrOp::EndsWith, [r, V::Str(l, _)]) => r.str_shape()?.ends_with(l).map(|b| V::Int(b as i32)),
+        (StrOp::Contains, [r, V::Str(l, _)]) => r.str_shape()?.contains(l).map(|b| V::Int(b as i32)),
+        (StrOp::IndexOf | StrOp::LastIndexOf, [r, x, rest @ ..]) if rest.len() <= 1 => index_of(op == StrOp::LastIndexOf, r, x, rest.is_empty()),
         _ => None,
     }
+}
+
+/// `indexOf` / `lastIndexOf`：所找字符（子串的任一字符）确定不出现 → -1；接收者为常量且不带起点 → 按 UTF-16 下标求值
+fn index_of(last: bool, r: &V, x: &V, whole: bool) -> Option<V> {
+    let sh = r.str_shape()?;
+    let needle: String = match x {
+        V::Int(c) => char::from_u32(u32::try_from(*c).ok()?)?.to_string(),
+        V::Str(l, _) => l.to_string(),
+        _ => return None,
+    };
+    if sh.contains(&needle) == Some(false) {
+        return Some(V::Int(-1));
+    }
+    let V::Str(a, _) = r else { return None };
+    if !whole {
+        return None;
+    }
+    let at = if last { a.rfind(needle.as_str()) } else { a.find(needle.as_str()) };
+    Some(V::Int(at.map_or(-1, |i| a[..i].encode_utf16().count() as i32)))
 }
 
 /// 与语言无关的小写（`String.toLowerCase` 在 ASCII 且不含 `I` 的串上各语言结果相同）；其余 None
@@ -131,6 +155,8 @@ impl Ctx<'_> {
             return match args {
                 [V::Str(a, _), V::Str(b, _)] => Some(Ret::Value(V::Int((a == b) as i32))),
                 [V::Str(..), V::Null] => Some(Ret::Value(V::Int(0))),
+                // 一侧为常量、另一侧形状已知：形状排除该常量时不等（实参 null 同样不等）
+                [r, V::Str(l, _)] | [V::Str(l, _), r] => r.str_shape().and_then(|sh| sh.equals(l)).filter(|b| !b).map(|_| Ret::Value(V::Int(0))),
                 _ => None,
             };
         }

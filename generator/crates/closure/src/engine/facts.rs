@@ -18,7 +18,7 @@ impl PV {
         match v {
             V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Offset(_) => PV::Const(v.clone()),
             V::Str(..) => PV::Const(v.stripped()),
-            V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
+            V::Ref { .. } if v.obj().is_some() || v.shape_tagged() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
     }
@@ -28,6 +28,8 @@ impl PV {
     pub(super) fn of_ret(v: &V) -> PV {
         match v {
             V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
+            // 构建器标签只在方法内有效
+            V::Ref { nonnull: true, .. } if v.builder().is_some() => PV::Const(nonnull_ref()),
             _ => PV::of(v),
         }
     }
@@ -43,6 +45,11 @@ impl PV {
             (Some(PV::Const(x)), PV::Const(y)) if crate::absint::ints::members(x).is_some() && crate::absint::ints::members(y).is_some() => {
                 crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
             }
+            // 字符串形状（常量 / 形状标签 / null 之间）：合流取形状的并
+            (Some(PV::Const(x)), PV::Const(y)) if x.shape_tagged() || y.shape_tagged() || matches!((x, y), (V::Str(..), V::Str(..))) => match x.join(y) {
+                j @ V::Ref { .. } if j.shape_tagged() => PV::Const(j.stripped()),
+                _ => PV::Top,
+            },
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
             (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
                 j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
@@ -172,6 +179,10 @@ pub(super) struct CallInfo {
     pub(super) empty: Option<V>,
     /// 接收者为空集合时的查询结果（`[facts.empty_collections] queries`）
     pub(super) empty_query: Option<V>,
+    /// 清单字符串操作种类（构建器 / 前后缀判定，absint `strs.rs`）
+    pub(super) str_kind: Option<crate::absint::StrKind>,
+    /// 返回串的形状事实（`[facts.string_shapes]`，带形状标签的可空 String 引用）
+    pub(super) shape: Option<V>,
 }
 
 fn fact_value(f: &Fact) -> V {
@@ -383,6 +394,28 @@ impl Ctx<'_> {
         let tk = target.as_ref().map(|t| t.to_string());
         let value_eq = self.man.is_value_equals(&k) || tk.as_ref().is_some_and(|t| self.man.is_value_equals(t));
         let str_op = self.man.string_op(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_op(t)));
+        let str_kind = {
+            use crate::absint::StrKind;
+            use crate::manifest::StrOp;
+            let names = &self.man.names;
+            if names.is_builder(&k) {
+                Some(StrKind::Init)
+            } else if names.is_append(&k) {
+                Some(StrKind::Append)
+            } else if names.is_result(&k) {
+                Some(StrKind::Result)
+            } else {
+                match str_op {
+                    Some(StrOp::StartsWith) => Some(StrKind::StartsWith),
+                    Some(StrOp::EndsWith) => Some(StrKind::EndsWith),
+                    _ => None,
+                }
+            }
+        };
+        let shape = self.man.string_excludes(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_excludes(t))).map(|x| {
+            let sh = crate::absint::Shape::excluding(x);
+            V::Ref { ty: None, nonnull: false, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Str(sh))) }
+        });
         let c = Rc::new(CallInfo {
             fact,
             null_to_false: self.man.is_null_to_false(&k),
@@ -394,6 +427,8 @@ impl Ctx<'_> {
             offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
             empty,
             empty_query,
+            str_kind,
+            shape,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
@@ -500,6 +535,11 @@ impl Oracle for Facts<'_, '_> {
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
         }
+        // 返回串形状事实：常量实参能求出常量时取常量
+        if let Some(v) = &c.shape {
+            let exact = c.target.as_ref().and_then(|t| self.ctx.const_eval(self.m, t, args));
+            return Ret::Value(exact.unwrap_or_else(|| v.clone()));
+        }
         // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）；
         // 返回常量在各调用点上汇合为 Top 时按本调用点的常量实参求值
         let Some(t) = &c.target else { return Ret::Unknown };
@@ -514,7 +554,7 @@ impl Oracle for Facts<'_, '_> {
                 x => x,
             },
             // 非空引用：先按本调用点的常量实参求值（可能得出字符串常量），求不出时取非空引用
-            Some(PV::Const(v)) if is_nonnull_ref(&v) => match eval() {
+            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() => match eval() {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
@@ -547,6 +587,9 @@ impl Oracle for Facts<'_, '_> {
     }
     fn mirror_subtype_test(&self, m: &MemberRef) -> bool {
         self.ctx.man.is_mirror_subtype_test(&m.to_string())
+    }
+    fn str_kind(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<crate::absint::StrKind> {
+        self.ctx.call_info(opcode, m, iface).str_kind
     }
     fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
         self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))

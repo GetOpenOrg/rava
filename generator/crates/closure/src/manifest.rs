@@ -110,6 +110,14 @@ pub enum StrOp {
     /// 字符串转小写（`toLowerCase()` / `toLowerCase(Locale)`，不看语言实参）：仅接收者为 ASCII 且不含 `I` 时折叠——
     /// 此时各语言结果相同（语言相关的规则只涉及 `I` 与非 ASCII 字符：tr / az 的 `I` → `ı`，lt 的带附加符号的 `I` / `J` / `Į`）
     ToLowerCase,
+    /// `startsWith(String)` / `endsWith(String)`：接收者形状已知时按前后缀判定（`absint/shape.rs`），判定成立一侧另收窄形状
+    StartsWith,
+    EndsWith,
+    /// `indexOf` / `lastIndexOf`（字符或子串，可带起点）：所找字符确定不出现时为 -1；接收者为常量时按 UTF-16 下标求值（不带起点的形态）
+    IndexOf,
+    LastIndexOf,
+    /// `contains(CharSequence)`：实参为常量时按接收者形状判定
+    Contains,
 }
 
 pub struct Manifest {
@@ -183,6 +191,8 @@ pub struct Manifest {
     value_equals: HashSet<String>,
     /// 字符串纯函数
     string_ops: HashMap<String, StrOp>,
+    /// 返回串的形状事实（[facts.string_shapes]）：方法 → 结果确定不含的 ASCII 字符
+    string_shapes: HashMap<String, String>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 空的不可修改集合工厂与其上的查询结果（`[facts.empty_collections]`）
@@ -260,13 +270,30 @@ impl Manifest {
                     Some("char_at") => StrOp::CharAt,
                     Some("char_to_lower_case") => StrOp::CharToLowerCase,
                     Some("to_lower_case") => StrOp::ToLowerCase,
+                    Some("starts_with") => StrOp::StartsWith,
+                    Some("ends_with") => StrOp::EndsWith,
+                    Some("index_of") => StrOp::IndexOf,
+                    Some("last_index_of") => StrOp::LastIndexOf,
+                    Some("contains") => StrOp::Contains,
                     _ => {
                         return Err(format!(
-                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case / to_lower_case"
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case / to_lower_case / starts_with / ends_with / index_of / last_index_of / contains"
                         ))
                     }
                 };
                 string_ops.insert(k.clone(), op);
+            }
+        }
+
+        let mut string_shapes = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("string_shapes")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                match v.get("excludes").and_then(|x| x.as_str()) {
+                    Some(x) if x.is_ascii() && v.as_table().is_some_and(|t| t.len() == 1) => {
+                        string_shapes.insert(k.clone(), x.to_string());
+                    }
+                    _ => return Err(format!("vm_intrinsics.toml [facts.string_shapes]：{k} 的值须为 {{ excludes = \"<ASCII 字符>\" }}")),
+                }
             }
         }
 
@@ -465,6 +492,7 @@ impl Manifest {
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
+            string_shapes,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             empty: EmptyCollections::from_toml(vm.get("facts").and_then(|s| s.get("empty_collections")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
@@ -750,6 +778,11 @@ impl Manifest {
 
     pub fn string_op(&self, member: &str) -> Option<StrOp> {
         self.string_ops.get(member).copied()
+    }
+
+    /// 方法返回串确定不含的 ASCII 字符（`[facts.string_shapes]`）
+    pub fn string_excludes(&self, member: &str) -> Option<&str> {
+        self.string_shapes.get(member).map(String::as_str)
     }
 
     pub fn is_null_to_false(&self, member: &str) -> bool {

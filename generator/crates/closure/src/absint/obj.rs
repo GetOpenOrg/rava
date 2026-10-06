@@ -15,6 +15,13 @@
 //!   不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）处的收窄节点——输入值集中所指类
 //!   ⊂ K 的类镜像。偏移只在本方法内有意义：不算对象身份（[`V::obj`] 不给出），不进常量格、不跨方法传递
 //!
+//! - `Str(s)`：字符串值（或 null）的形状（[`Shape`]：已知前后缀与不出现的字符）。串不可变，标签随值跨方法传递
+//!   （常量格保留）；不算对象身份（[`V::obj`] 不给出）
+//! - `Builder { group, content }`：清单字符串构建器（`[facts.string_concat]`）在本方法内的已知内容。构建器可变，
+//!   标签只在本方法内有效：group = 分配点偏移，同组标签是同一对象（或同一分配点的先后对象）的各份拷贝；
+//!   任何可能改写或泄露它的操作（追加、作为实参 / 写入字段 / 数组 / 再次执行该分配点）撤掉全组标签，
+//!   追加结果另得新标签；不进常量格、不跨方法，异常处理器入口撤掉
+//!
 //! 标签只随值传播：两个值合流时标签相同才保留（null 与对象合流保留对象标签，可空性另记）；
 //! 属性表（或可能的属性表）与其它值合流得 `MaybeSysProps`。
 
@@ -22,6 +29,7 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+use super::shape::Shape;
 use super::{Src, V};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +42,10 @@ pub enum Obj {
     Empty,
     /// 类镜像子类型判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
     MirrorSub(u32),
+    /// 字符串形状
+    Str(Shape),
+    /// 构建器内容（分配点偏移, 内容形状）
+    Builder { group: u32, content: Shape },
 }
 
 impl Obj {
@@ -55,9 +67,37 @@ impl V {
     /// 值的对象标签（`Uninit` 与类镜像收窄标记不算身份）
     pub fn obj(&self) -> Option<&Rc<Obj>> {
         match self {
-            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::MirrorSub(_)) => Some(o),
+            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::MirrorSub(_) | Obj::Str(_) | Obj::Builder { .. }) => Some(o),
             _ => None,
         }
+    }
+
+    /// 字符串值的形状（null 以外的部分）：常量即恰为该串；带形状标签的引用取标签
+    pub fn str_shape(&self) -> Option<Shape> {
+        match self {
+            V::Str(s, _) => Some(Shape::lit(s)),
+            V::Ref { obj: Some(o), .. } => match &**o {
+                Obj::Str(sh) => Some(sh.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// 构建器标签（分配点偏移, 内容）
+    pub fn builder(&self) -> Option<(u32, &Shape)> {
+        match self {
+            V::Ref { obj: Some(o), .. } => match &**o {
+                Obj::Builder { group, content } => Some((*group, content)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// 带形状标签的引用（常量格保留，跨方法传递）
+    pub fn shape_tagged(&self) -> bool {
+        matches!(self, V::Ref { obj: Some(o), .. } if matches!(**o, Obj::Str(_)))
     }
 
     /// 类镜像子类型判定成立一侧的收窄值：其类型流取本方法该偏移处的收窄节点
@@ -100,6 +140,14 @@ pub(super) fn join_obj(a: &V, b: &V) -> Option<Rc<Obj>> {
         (V::Null, V::Ref { obj, .. }) | (V::Ref { obj, .. }, V::Null) => obj.clone(),
         (V::Ref { obj: Some(x), .. }, V::Ref { obj: Some(y), .. }) if x == y => Some(x.clone()),
         _ if [tag(a), tag(b)].iter().flatten().any(|o| o.may_be_sysprops()) => Some(Rc::new(Obj::MaybeSysProps)),
-        _ => None,
+        _ => join_shapes(a, b).map(|s| Rc::new(Obj::Str(s))),
+    }
+}
+
+/// 两个字符串值（常量 / 带形状标签的引用 / null）合流的形状；任一侧不是这三类（形状未知）→ None
+fn join_shapes(a: &V, b: &V) -> Option<Shape> {
+    match (a, b) {
+        (V::Null, x) | (x, V::Null) => x.str_shape(),
+        _ => Some(a.str_shape()?.join(&b.str_shape()?)).filter(|s| !s.is_top()),
     }
 }
