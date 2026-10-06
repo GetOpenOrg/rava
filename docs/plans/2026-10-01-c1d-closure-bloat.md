@@ -3293,6 +3293,49 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
 3. P3 + P4（按对象返回值 + 站点接收者值集）；
 4. ⑦ 目录事实，以及 §30.8 的按键分对象与 `"."` 事实。
 
+#### 第 2 小步：P1 + P5 按对象字段值（`engine/obj_fields.rs`）
+
+**设计**（通用，无类名）：
+- **写入**：`bytecode.rs::field` 的 `putfield` 把值并入接收者值集里每个抽象对象的 `ovals[(对象, 字段)]`；其余接收者（open / 非抽象对象 / 无接收者）的值并入 `owild[字段]`。
+  - 基本类型字段不拆接收者，写入只进 `owild`；物化快照的写入（`concrete/apply.rs`）也只进 `owild`。
+  - 两张表都从初值起算。
+- **读取**：`Facts::field` 处理 `getfield` 时，若接收者只来自形参 i（`srcs == [Param(i)]`），且形参值集非空、全由抽象对象组成，就取「初值 ⊔ owild ⊔ 各对象值」。
+  - 形参对象集在分析开始时取（`param_obj_sets`），只看声明类型是容器形态类的形参。
+  - P5：按对象读不看 `deser`，偏移可得、手写写入、VM 钩子一律不折叠。
+- **依赖与共享**：每次按对象读记成 `(形参, 字段, 答复)`；形参无对象集时答复为 None，同样记录。抽象解释是 Oracle 答复的确定函数，所以三处失效都按「答复是否变化」判定：
+  - 按对象值变化：读者按 `(对象, 字段)` 登记（`odeps`），`owild` 的读者按字段登记（`owdeps`）。用当前形参对象集复核，答复有变才重分析。
+  - 形参值集增长（`obj_watch`，同 `mirror_watch`）：复核答复；不变就只补登新对象的读者。值集由空变成全抽象对象时也会复核，所以不动点与分析顺序无关。
+  - 共享摘要：每条记录在新上下文的形参对象集下答复都相同，才复用（`share.rs::shared_analysis`）。开放判定只增不减，仍经全局 `fdeps` 失效。
+
+**健全性**：
+- 字节码写入要么记到接收者值集里的每个抽象对象，要么记入 `owild`，读取并入两者。
+- open 接收者的写入在流图里流向所有已逃逸对象，这里由 `owild` 覆盖。
+- 字节码外写入（手写 / 偏移可得 / VM 钩子）不按对象折叠。
+- 反序列化分配是类 id，不是抽象对象（`serial_alloc.rs`），不会落进全由抽象对象组成的值集。
+- 手写体分配的容器对象（`hw_obj`）的 Rust 字段写入登记在 `fhw`，按字段不折叠。
+- 反例核对：
+  - `Properties.enumerate@1` 的 `defaults` 折成 null。Properties 可序列化，但反序列化出来的 Properties 是类 id 接收者，读取时值集不全为抽象对象，退回全局。
+  - `BigInteger$RecursiveOp.parallel` 折成 false。可达的分配只有 `multiply` 一侧（`parallel = false`），`parallelMultiply` 不可达。若用户调用了它，写入会按对象记录，折叠自动解除。
+
+**失效判定的迭代**：三版 DeepCopy 实测（基线 23.7s）：
+- 直接按字段失效全部读者：203s。`field_put` 重分析 287 万次，其中 286 万次结果不变；共享因形参对象集不同而大量失配。
+- 改为按对象登记读者，并按查询答复共享：28.8s。
+- 增长与值变化都先复核答复：26.0s。
+
+**实测**（tag `10p`，对照 B4① `4`）：
+
+| 测试 | 类 | 方法 | 折叠常量 / 折叠方法 | 用时（ms，本机负载 6.5，墙钟仅供参考） |
+|---|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 337→340 / 342→345 | 482 → 495 |
+| StockTrans | 3185 → 3185 | 20261 → 20259 | 2220→2238 / 1973→1992 | 24841 → 34777 |
+| DeepCopy | 3187 → 3187 | 20279 → 20277 | 2218→2236 / 1972→1991 | 23699 → 25967 |
+| TestSerialDefaultSuid | 3192 → 3192 | 20273 → 20271 | 2219→2237 / 1972→1991 | 25298 → 31033 |
+
+- 三例各少同样 2 个方法：`ReferencePipeline$Head.opIsStateful`、`BigInteger$RecursiveOp.getParallelForkDepthThreshold`。集合是 B4① 的真子集，没有新增。
+- StockTrans / TSDS 的墙钟增幅里，不受本步影响的 setup / seeds 阶段同样慢了约 1.5 倍，属本机负载噪声；分析相关阶段约增 10%–30%。
+- 单测：closure 179 过（去掉的过渡测试 `objs_compatible` 不再计入）；`closure_independent_of_hash_seed`、`container_elements_per_object` 过（1494s）。
+- 正如前提链所述，本步单独不折 `R`：`getFile()` 的返回仍按成员键汇合（P3），`val$url` 的接收者来自站点而不是形参（P4），初值 null 仍在（P2）。
+
 #### 「去掉 B5 一项」的反事实上界
 
 切除集 `build/url/cutsNoB5.txt` 是 §30.1 第 5 层去掉 `BootLoader$PackageHelper.definePackage@67`；`cutsAll.txt` 是完整第 5 层。均以本步代码实测：
@@ -3322,6 +3365,11 @@ P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getR
 
 - worktree `/Users/yuwei/dev/workspace/java_rta_c1durl2`，分支 `c1d-url-b2`。
 - 测量：`build/url/cl.sh <Test> <tag> [参数]`，对照用 `build/url/cmp.py <tag 后缀> [基线后缀]` 与 `build/url/folds.py A.json B.json`。
-- 下一步从 P1 + P5 开始：写入归属挂在 `engine/bytecode.rs::field` 的 `objs` / `other` 处，读取挂在 `Facts::field`。
-  依赖与重分析仿 `engine/mirror_eq.rs`：`mirror_watch`、`param_mirror_sets`，以及 `worklist.rs::analysis` 里 `mirror_assumed` 的登记。
-  共享摘要（`share.rs`）对用过按对象读的分析不登记共享。
+- P1 + P5 已落地（`engine/obj_fields.rs`，见「第 2 小步」）。下一步是 P2 构造器确定初始化：
+  - 在 absint 状态里加 `this` 字段的必然写入集（与 `finals` 同构，合流取交集）；
+  - 在 `<init>` 返回点、且 `this` 未被交出时，产出「必然写入字段」摘要；
+  - 引擎在分配点后接的构造器全部给出摘要时，`ovals` 不再并入该对象该字段的初值。读取侧的初值并入点是 `obj_fields.rs::obj_field_value`。
+- 再往后是 P3 + P4：
+  - 按接收者对象的返回值：`rvals` 旁加 `orvals`，归属按节点 `P(m,0)`；
+  - Oracle 读站点值集：调用 / 字段读的接收者来自 `Src::Site` 时，查流图站点节点，登记复核方式同 `obj_watch`。
+  - 两者都可复用本步的「查询记录 + 答复复核」框架：`ObjQuery`、`obj_queries_same`、`obj_readers_recheck`。
