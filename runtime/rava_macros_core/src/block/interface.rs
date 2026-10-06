@@ -78,7 +78,11 @@ pub(crate) fn expand_interface(
             Err(e) => return e.to_compile_error(),
         };
         let sig = without_param_mut(&f.sig);
-        let mname = &sig.ident;
+        // 视图名与声明名不同（兄弟超接口同名异参）时 `target` 给出声明接口上的方法名
+        let mname = match attr_str(&f.attrs, "target") {
+            Some(t) => format_ident!("{}", t),
+            None => sig.ident.clone(),
+        };
         let args = param_idents(&sig);
         let keep_attrs = strip_meta_attrs(&f.attrs);
         carrier_methods.push(quote! {
