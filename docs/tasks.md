@@ -135,7 +135,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     ├─ ⏳ a5-4 闭包膨胀收窄：终态 DeepCopy ≤1640（计划 §21.5）
 │   │     │     ├─ ✅ s1 构造器查找只在 Class 值集齐全时点名
 │   │     │     ├─ ✅ s2 instanceof 否定分支收窄 + 钩子字段不按 open
-│   │     │     ├─ ⏳ a5-4b 引导加载器类路径查找 → JarVerifier / pkcs11
+│   │     │     ├─ ⏸ a5-4b 归因完成、无独立收窄手段（§29）：JarVerifier = 应用类路径甲 + URL 处理器乙；pkcs11 = JCA 提供者逐个装载 + RB 未知 Class 服务查找
 │   │     │     ├─ ⏳ a5-4e ICU 归一化入口 / Latin-1 语言折叠
 │   │     │     ├─ ⏳ a5-4f 日志后端探测
 │   │     │     ├─ ⏳ 容器元素 Object 方法（归通用 open 值精度另立项）
@@ -297,7 +297,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-jar签名 | ⏳ | jar 签名校验路径收窄（4 个算法名不可定的请求点） |
 | C1d-a-乙 | ✅ fca1643b | URL.getURLStreamHandler 按键闸门；闭包不变，根因 URL host 无逐对象精度（§22.10），后续归「URL 协议可靠口径」 |
 | C1d-a-甲 | ⏳ | jar/URL 来源甲 class-path（计划 §22.2） |
-| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤1640，pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅，余 a5-4b / a5-4e / a5-4f |
+| C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤1640，pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅；a5-4b 归因完成（计划 §29：boot `ucp` 已折叠，回收 0；JarVerifier / pkcs11 要靠 URL 按对象 + 串前缀推理、JCA 提供者序求值、引导映像三项能力，反事实上界 3374 → 2766）；余 a5-4e / a5-4f |
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
 | C1d-a-a3 | 🔄 U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
