@@ -179,7 +179,10 @@ impl<'a> Engine<'a> {
                     let tid = self.id(comp.as_deref().unwrap_or(OBJECT));
                     let aid = aty.map(|t| self.id(&t)).unwrap_or(obj);
                     let fs = self.feeds(m, array, aid);
-                    let s = self.value_set(&fs);
+                    // 数组值的静态类型（checkcast / 声明类型）收窄来源集：同一局部变量的其他来源中不是该数组类型的
+                    // 值（如链表式 Object[] 中经 checkcast 取出的下一节点，来源集含同数组的其他元素）不被当作 open 数组
+                    let raw = self.value_set(&fs);
+                    let s = self.filter(&raw, aid);
                     let mut add = TypeSet::default();
                     let xs: Vec<u32> = s.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
                     if xs.len() < s.classes.len() {

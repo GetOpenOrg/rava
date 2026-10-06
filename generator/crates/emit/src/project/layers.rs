@@ -41,7 +41,7 @@ fn body_lib(decl: &str) -> String {
          non_camel_case_types, non_upper_case_globals, static_mut_refs, unused_comparisons)]\n\
          // 声明层全部公开项（`crate::java::…` / `crate::prelude` 经此解析到声明层）\n\
          use {decl}::*;\n\
-         mod body;\n"
+         pub mod body;\n"
     )
 }
 
@@ -207,7 +207,8 @@ fn pack(sizes: &[usize], cap: usize) -> Vec<usize> {
 
 /// 模块声明行（关键字名加 `r#`）
 fn mod_line(name: &str) -> String {
-    if is_rust_keyword(name) { format!("mod r#{name};") } else { format!("mod {name};") }
+    // 公开：构建期引导映像（根门面 crate）按路径引用实现层的 `X__inner`
+    if is_rust_keyword(name) { format!("pub mod r#{name};") } else { format!("pub mod {name};") }
 }
 
 impl BodyPlan {

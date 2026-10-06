@@ -300,14 +300,16 @@ impl<'a> Engine<'a> {
         self.nr_begin(m);
         // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）
         let closing = self.ctx.noreturn.borrow().closing();
-        let reuse = if closing { None } else { self.shared_analysis(&key, &params, &mirrors) };
+        // 档位上下文（`levels_boot.rs`）的克隆按档位折叠引导查询：不与本体共享摘要
+        let level = self.level_of(m);
+        let reuse = if closing || level.is_some() { None } else { self.shared_analysis(&key, &params, &mirrors) };
         let a = if let Some((a, deps)) = reuse {
             self.share_join(m, &a, &deps);
             a
         } else {
-            let entry = (!closing).then(|| (params.clone(), mirrors.clone()));
+            let entry = (!closing && level.is_none()).then(|| (params.clone(), mirrors.clone()));
             *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
-            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level };
             let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
             let deps = self.ctx.dep_log.borrow_mut().take();
             if self.cold_cut {

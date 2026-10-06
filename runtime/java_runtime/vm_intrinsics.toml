@@ -926,6 +926,9 @@ objects = [
     ["java/lang/Thread", "(Ljava/lang/ThreadGroup;Ljava/lang/String;)V", "@1", "str:main"],
 ]
 current_thread = 2
+# 引导档位（HotSpot 由 initPhase1~3 经 `VM.initLevel(int)` 写入）：残差步骤记录构建期档位，运行期在该档位下重放
+# （vm_impl.rs `__vm_at_init_level`），闭包分析在档位上下文中按 level_queries 折叠——与 JVM 引导期次序一致
+level = "jdk/internal/misc/VM.initLevel"
 vm_props = [
     ["java.home", "@deferred"],
     ["sun.boot.library.path", "@deferred"],
@@ -967,6 +970,11 @@ os_version = "@deferred"
 user_dir = "@deferred"
 user_home = "@deferred"
 user_name = "@deferred"
+
+# 按档位定值的 VM 查询：成员 → 门限（initLevel ≥ 门限为 true；JDK VM.java 的 isBooted / isModuleSystemInited）
+[concrete.boot.level_queries]
+"jdk/internal/misc/VM.isBooted:()Z" = 4
+"jdk/internal/misc/VM.isModuleSystemInited:()Z" = 2
 
 [concrete.boot.natives]
 "java/lang/System.registerNatives:()V" = "noop"

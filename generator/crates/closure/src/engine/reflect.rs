@@ -24,6 +24,9 @@ impl<'a> Engine<'a> {
         let c = self.id(cls);
         let id = self.id(&name);
         self.mirrors.insert(id, c);
+        if self.img.is_some() {
+            self.image_mirror(cls);
+        }
         id
     }
 

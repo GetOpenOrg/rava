@@ -203,6 +203,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) params: Vec<Option<V>>,
     /// Class 形参值集所指的类镜像（按形参序号；None = 非 Class 形参或值集含所指未知的 Class）
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
+    /// 引导档位上下文（残差步骤的运行期档位）：清单 `level_queries` 的调用按档位折叠
+    pub(super) level: Option<i32>,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -444,7 +446,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
@@ -481,6 +483,11 @@ fn is_empty_tag(v: Option<&V>) -> bool {
 
 impl Oracle for Facts<'_, '_> {
     fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
+        if let Some(l) = self.level {
+            if let Some(&t) = self.ctx.man.concrete.boot.level_queries.get(&m.to_string()) {
+                return Ret::Value(V::Int(i32::from(i64::from(l) >= t)));
+            }
+        }
         let c = self.ctx.call_info(opcode, m, iface);
         if let Some(v) = &c.fact {
             return Ret::Value(v.clone());

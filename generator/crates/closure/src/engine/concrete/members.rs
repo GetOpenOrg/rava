@@ -39,7 +39,7 @@ impl Vm {
                         let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
                         let o = self.alloc(ty, body);
                         self.mark_placeholder(o, &format!("运行期初始化类的静态字段 {}.{}", fr.decl, fr.name));
-                        self.bj.recs.push(super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
+                        self.push_rec(env, super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
                         st.push(CV::R(o));
                         return Ok(());
                     }

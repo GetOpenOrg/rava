@@ -5,11 +5,17 @@ use super::*;
 impl<'a> Engine<'a> {
     /// JVMS §5.5 初始化：超类链、声明非抽象实例方法的超接口、`<clinit>`
     pub fn init(&mut self, cls: &str, via: Via) {
+        if !self.level_ctxs.is_empty() {
+            let lc = self.via_level_any(&via);
+            if lc != NOCTX {
+                self.level_init(cls, lc);
+            }
+        }
         if cut::edges_on() && !cls.starts_with('[') {
             let from = self.via_node(&via);
             cut::edge(&from, &format!("I:{cls}"));
         }
-        if cls.starts_with('[') || self.inited.contains_key(cls) {
+        if cls.starts_with('[') || self.inited.contains_key(cls) || self.image_init(cls, &via) {
             return;
         }
         let Some(cf) = self.touch(cls, Level::Init, via.clone()) else { return };
@@ -78,6 +84,12 @@ impl<'a> Engine<'a> {
 
     /// 方法节点（按声明类 + 名字 + 描述符 + 克隆上下文）；首次登记入队。只有字节码方法按上下文克隆
     pub(super) fn method_ctx(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
+        let ctx = self.level_override(ctx, &via);
+        self.method_node(key, ctx, via)
+    }
+
+    /// 方法节点（上下文已定；非字节码方法不克隆，回落本体）
+    fn method_node(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
@@ -96,7 +108,7 @@ impl<'a> Engine<'a> {
         }
         let (key, ctx) = k;
         if ctx != NOCTX && self.mbase.get(&key).is_some_and(|&b| self.methods[b].kind != Kind::Bytecode) {
-            return self.method_ctx(key, NOCTX, via);
+            return self.method_node(key, NOCTX, via);
         }
         let (kind, cf, is_static) = match self.h.class(&key.owner) {
             Some(cf) => match cf.method(&key.name, &key.desc) {
@@ -106,7 +118,7 @@ impl<'a> Engine<'a> {
             None => (Kind::Missing, None, false),
         };
         if ctx != NOCTX && kind != Kind::Bytecode {
-            return self.method_ctx(key, NOCTX, via);
+            return self.method_node(key, NOCTX, via);
         }
         let mut ptypes = Vec::new();
         if !is_static {

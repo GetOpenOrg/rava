@@ -9,6 +9,7 @@ pub mod cache;
 pub mod cold;
 pub mod engine;
 pub mod handwritten;
+pub mod image;
 pub mod lib_runtime;
 pub mod manifest;
 pub mod modules_json;
@@ -70,6 +71,21 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
         e.flow_batch = n;
     }
+    // 构建期引导映像（计划 2026-10-05-boot-image-evaluator）：与用户程序无关，先于其他根求值；
+    // 求值成功时分析从映像出发（构建期初始化类不展开 `<clinit>`，运行期部分作根）
+    let tb = std::time::Instant::now();
+    let mut boot_image = e.boot_image();
+    let boot_ms = tb.elapsed().as_millis();
+    if let Some(b) = boot_image.as_ref().filter(|b| !b.ok) {
+        eprintln!("[closure] 引导映像求值失败：{}", b.json["error"].as_str().unwrap_or("?"));
+    }
+    let from_image = match boot_image.as_mut().filter(|b| b.ok).and_then(|b| b.data.clone()) {
+        Some(d) => {
+            e.install_image(d);
+            true
+        }
+        None => false,
+    };
     for r in &input.roots {
         e.root(r.clone(), "main");
     }
@@ -80,20 +96,18 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         e.open_vm_field_write(&n);
     }
     e.root_vm_rules();
-    for c in &man.boot_init {
-        e.root_init(c, "boot_init");
-    }
-    for m in &man.boot_calls {
-        e.root_boot_call(m, "boot_init");
-    }
-    // 构建期引导映像（计划 2026-10-05-boot-image-evaluator）：与用户程序无关，先于闭包分析求值
-    let tb = std::time::Instant::now();
-    let boot_image = e.boot_image();
-    let boot_ms = tb.elapsed().as_millis();
-    if let Some(b) = boot_image.as_ref().filter(|b| !b.ok) {
-        eprintln!("[closure] 引导映像求值失败：{}", b.json["error"].as_str().unwrap_or("?"));
+    if !from_image {
+        for c in &man.boot_init {
+            e.root_init(c, "boot_init");
+        }
+        for m in &man.boot_calls {
+            e.root_boot_call(m, "boot_init");
+        }
     }
     e.run();
+    if let Some(d) = boot_image.as_mut().and_then(|b| b.data.as_mut()) {
+        d.live = e.image_live();
+    }
     if let Some(p) = &input.diag.dump_edges {
         if let Err(err) = engine::cut::edges_finish(p) {
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
@@ -238,6 +252,7 @@ impl Closure<'_> {
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
             "boot_image": self.boot_image.as_ref().map(|b| &b.json),
+            "boot_image_live": self.boot_image.as_ref().and_then(|b| b.data.as_ref()).map(|d| d.live.len()),
             "elapsed_ms": self.elapsed_ms,
             // 性能观测（计时 / 内存 / 重分析分布）：不属于分析结果，对照输出时与 elapsed_ms 一并剔除
             "perf": perf,
@@ -275,6 +290,7 @@ impl Closure<'_> {
         let folds: Vec<Value> = fold_list.iter().map(fold_json).collect();
         json!({
             "summary": self.summary_with(&fold_list),
+            "boot_image_data": self.boot_image.as_ref().and_then(|b| b.data.as_ref()).map(image::ImageData::to_json),
             "classes": classes,
             "modules": modules,
             "methods": methods,

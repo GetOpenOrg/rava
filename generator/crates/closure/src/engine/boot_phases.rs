@@ -13,6 +13,9 @@ use super::*;
 impl<'a> Engine<'a> {
     /// 字段读取点（声明类 `decl`）：命中锚点的阶段作根
     pub(super) fn phase_anchor_read(&mut self, decl: &str, f: &MemberRef) {
+        if self.img.is_some() {
+            return;
+        }
         let hit: Vec<usize> = (0..self.man.boot_phases.len())
             .filter(|i| !self.phases_rooted.contains(i))
             .filter(|&i| self.man.boot_phases[i].anchors.iter().any(|(o, n, d)| o == decl && *n == f.name && *d == f.desc))

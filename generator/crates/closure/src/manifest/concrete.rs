@@ -46,6 +46,11 @@ pub struct BootCfg {
     pub objects: Vec<Vec<String>>,
     /// 当前线程取 objects 的下标
     pub current_thread: Option<usize>,
+    /// 引导档位静态字段（`类.字段`，int）：残差步骤记录其构建期档位，运行期在该档位下重放
+    pub level: Option<String>,
+    /// 按档位定值的 VM 查询：成员 → 门限（档位 ≥ 门限为 true）。档位低于门限的残差步骤上下文中折叠为 false，
+    /// 其余处沿用 `[facts.returns]`
+    pub level_queries: HashMap<String, i64>,
 }
 
 fn strs(v: Option<&toml::Value>) -> Vec<String> {
@@ -99,5 +104,12 @@ fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
         init: strs(get("init")),
         objects: get("objects").and_then(|v| v.as_array()).into_iter().flatten().map(|o| strs(Some(o))).collect(),
         current_thread: get("current_thread").and_then(|v| v.as_integer()).map(|x| x as usize),
+        level: get("level").and_then(|v| v.as_str()).map(String::from),
+        level_queries: get("level_queries")
+            .and_then(|v| v.as_table())
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| v.as_integer().map(|x| (k.clone(), x)).ok_or_else(|| format!("[concrete.boot.level_queries] {k} 的值须为整数")))
+            .collect::<Result<_, _>>()?,
     })
 }

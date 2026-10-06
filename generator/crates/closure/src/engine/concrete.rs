@@ -13,6 +13,7 @@ mod boot;
 mod boot_cfg;
 pub mod boot_image;
 mod boot_slots;
+mod export;
 mod indy;
 mod init;
 mod interp;

@@ -28,6 +28,8 @@ pub struct BootImage {
     pub types: Vec<String>,
     /// 运行期部分的入口类：运行期初始化类、残差调用 / 重放 native 的声明类、占位读取的类、残差区段所在类
     pub runtime_classes: Vec<String>,
+    /// 物化数据（求值失败或导出失败时为 None）
+    pub data: Option<crate::image::ImageData>,
 }
 
 /// FNV-1a 双通道
@@ -158,7 +160,7 @@ fn reachable(vm: &Vm) -> Size {
             }
             Rec::Read { ph, .. } => stack.push(*ph),
             Rec::Region { locals, .. } => stack.extend(locals.iter().filter_map(|v| if let CV::R(o) = v { Some(*o) } else { None })),
-            Rec::RuntimeInit { .. } => {}
+            Rec::RuntimeInit { .. } | Rec::Level(_) => {}
         }
     }
     let mut seen = vec![false; vm.heap.len()];
@@ -248,6 +250,7 @@ fn digest(vm: &Vm) -> String {
                 c.h.str(&format!("region {phase}@{start}..{end:?}"));
                 locals.iter().for_each(|&v| c.value(v));
             }
+            Rec::Level(l) => c.h.str(&format!("level {l}")),
         }
     }
     c.drain();
@@ -331,6 +334,17 @@ impl<'a> Engine<'a> {
         if error.is_none() {
             error = s2.fail.clone();
         }
+        let data = if error.is_none() {
+            match super::export::export(&vm) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    error = Some(format!("映像导出：{e}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let ok = error.is_none();
         let rt_init: Vec<(String, String)> = vm.bj.recs.iter().filter_map(|r| if let Rec::RuntimeInit { class, why } = r { Some((class.to_string(), why.clone())) } else { None }).collect();
         let calls: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Call { phase, off, callee, why, ph, .. } = r { Some(format!("`{phase}@{off}` → `{callee}`{}：{why}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
@@ -419,10 +433,11 @@ impl<'a> Engine<'a> {
                 Rec::Call { callee, .. } | Rec::Native { callee, .. } => callee.owner.to_string(),
                 Rec::Read { decl, .. } => decl.to_string(),
                 Rec::Region { phase, .. } => phase.owner.to_string(),
+                Rec::Level(_) => continue,
             });
         }
         let types = size.types.iter().map(|t| t.to_string()).collect();
-        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect() })
+        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect(), data })
     }
 }
 

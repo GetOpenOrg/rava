@@ -30,6 +30,7 @@ mod sets;
 mod meta_classes;
 mod idset;
 mod facts;
+mod levels_boot;
 mod consteval;
 mod construct;
 mod sysprops;
@@ -114,6 +115,7 @@ mod open_world;
 pub mod concrete;
 mod caller;
 mod boot_phases;
+mod image_start;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -304,14 +306,14 @@ pub struct Engine<'a> {
     concrete: concrete::Concrete,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
-    hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
+    hub_ids: HashMap<(MemberRef, bool, HubSet, u32), u32>,
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
     /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
-    hub_family: HashMap<(MemberRef, bool), Vec<(u32, Rc<[u32]>)>>,
+    hub_family: HashMap<(MemberRef, bool, u32), Vec<(u32, Rc<[u32]>)>>,
     /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
     gathers: Vec<(gather::Slot, u32, bool)>,
     gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
@@ -366,6 +368,11 @@ pub struct Engine<'a> {
     pub cold_cut: bool,
     /// 已作根的引导阶段（`Manifest::boot_phases` 下标；锚点读取点出现时登记，不撤回）
     phases_rooted: BTreeSet<usize>,
+    /// 构建期引导映像起点（`install_image`）
+    img: Option<Box<image_start::ImgState>>,
+    /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
+    level_ctxs: HashMap<u32, i32>,
+    level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,

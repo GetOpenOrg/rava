@@ -175,7 +175,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             if !desc.ends_with(")V") {
                 return defer(format!("延迟值参与求值：宿主相关的返回值 {}", info.key));
             }
-            vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: None });
+            vm.push_rec(env, super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: None });
             Ok(None)
         }
         // 宿主标量（机器资源 / 描述符状态）：返回污点值（`host_scalar:<下界>:<上界>`，计划 §3.2），
@@ -233,7 +233,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             let o = vm.alloc(t, Body::Inst(Vec::new()));
             vm.mark_placeholder(o, &format!("延迟调用 {}", info.key));
             vm.bj.nonnull.insert(o);
-            vm.bj.recs.push(super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: Some(o) });
+            vm.push_rec(env, super::journal::Rec::Native { callee: info.key.clone(), args: args.clone(), ph: Some(o) });
             ret(CV::R(o))
         }
         // VM 侧状态登记（模块定义、导出、读边等）：构建期记入 VM 表，物化为运行期 VM 表的初值

@@ -386,6 +386,23 @@ impl Vm {
         }
     }
 
+    /// 登记残差步骤：引导档位（清单 `[concrete.boot] level`）与上一档位记录不同时先记档位
+    pub(super) fn push_rec(&mut self, env: &Env, r: super::journal::Rec) {
+        use super::journal::Rec;
+        if let Some((d, n)) = env.cfg().boot.level.as_deref().and_then(|l| l.rsplit_once('.')) {
+            let k = self.fkey(d, n);
+            let cur = match self.statics.get(&k) {
+                Some(CV::I(x)) => *x,
+                _ => 0,
+            };
+            let last = self.bj.recs.iter().rev().find_map(|r| if let Rec::Level(l) = r { Some(*l) } else { None });
+            if last != Some(cur) {
+                self.bj.recs.push(Rec::Level(cur));
+            }
+        }
+        self.bj.recs.push(r);
+    }
+
     pub(super) fn fkey(&mut self, decl: &str, name: &str) -> u32 {
         let k = format!("{decl}.{name}");
         if let Some(&n) = self.fkeys.get(&k) {
