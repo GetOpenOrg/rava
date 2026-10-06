@@ -378,3 +378,23 @@ fn receiver_hook_field_folds_by_param_mirrors() {
     assert_eq!(a.reachable, vec![true; 6]);
     assert!(a.mirror_field_assumed.is_empty());
 }
+
+/// 常量长度数组经局部变量往返后 `arraylength` 折叠：`new Object[0]` 的长度判零分支只走一侧
+#[test]
+fn const_length_array_folds_arraylength() {
+    let code = code_of(
+        vec![
+            (0, 0x03, Operand::None),                         // iconst_0
+            (1, op::ANEWARRAY, Operand::Class("p/B".into())), // anewarray
+            (4, 0x4b, Operand::None),                         // astore_0
+            (5, 0x2a, Operand::None),                         // aload_0
+            (6, 0xbe, Operand::None),                         // arraylength
+            (7, 0x99, Operand::Branch(11)),                   // ifeq
+            (10, op::RETURN, Operand::None),
+            (11, op::RETURN, Operand::None),
+        ],
+        12,
+    );
+    let a = analyze("p/A", "()V", true, &code, &Sets);
+    assert_eq!(a.reachable, vec![true, true, true, true, true, true, false, true]);
+}

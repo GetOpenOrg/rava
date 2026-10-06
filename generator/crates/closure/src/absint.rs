@@ -989,7 +989,8 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 self.ev(off, Event::New(c.clone()));
             }
             op::NEWARRAY | op::ANEWARRAY => {
-                let empty = pop(s)? == V::Int(0);
+                let len = pop(s)?;
+                let empty = len == V::Int(0);
                 let ty = match &ins.operand {
                     Operand::NewArray(t) => {
                         let c = b"ZCFDBSIJ".get((*t as usize).wrapping_sub(4)).ok_or(())?;
@@ -999,12 +1000,21 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     Operand::Class(c) => format!("[L{c};"),
                     _ => return Err(()),
                 };
-                s.stack.push(site_ref(&ty, true, off));
+                // 常量长度：数组带长度标签（长度不可变，`arraylength` 按标签折叠）
+                let obj = match len {
+                    V::Int(n) if n >= 0 => Some(Rc::new(Obj::Len(n))),
+                    _ => None,
+                };
+                s.stack.push(V::Ref { ty: Some(Rc::from(ty.as_str())), nonnull: true, src: src1(Src::Site(off)), obj });
                 self.ev(off, Event::NewArray(ty, empty));
             }
+            // arraylength：常量长度标签的数组折叠为该长度
             0xbe => {
-                pop(s)?;
-                s.stack.push(V::Top);
+                let a = pop(s)?;
+                s.stack.push(match a.obj().map(|o| &**o) {
+                    Some(&Obj::Len(n)) => V::Int(n),
+                    _ => V::Top,
+                });
             }
             op::ATHROW => {
                 let v = pop(s)?;
