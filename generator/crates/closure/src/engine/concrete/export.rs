@@ -197,6 +197,7 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
             hash: vm.ihash.get(&o).copied(),
             mirror: vm.mirror_of.get(&o).map(|t| t.to_string()),
             deferred: vm.deferred.get(&o).map(|w| w.to_string()),
+            host: vm.host_src.get(&o).map(|(n, i)| (n.to_string(), *i)),
             placeholder: vm.bj.placeholders.contains(&o),
             body,
         });

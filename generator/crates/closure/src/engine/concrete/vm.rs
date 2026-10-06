@@ -252,6 +252,8 @@ pub(super) struct Vm {
     pub step_limit: u64,
     /// 宿主相关值（`@deferred`）的字符串内容数组 → 属性名：引导求值读到其内容即「延迟值参与求值」
     pub deferred: HashMap<u32, Rc<str>>,
+    /// 宿主相关内容数组的运行期来源（native 键，结果数组下标）：见 `image::IObj::host`
+    pub host_src: HashMap<u32, (Rc<str>, Option<u32>)>,
     /// 首个失败点的调用栈（引导求值诊断）
     pub fail_frames: Option<Vec<String>>,
     /// 最近一次隐式异常的调用栈（引导求值诊断）
@@ -303,6 +305,7 @@ impl Vm {
             boot: false,
             step_limit: STEP_LIMIT,
             deferred: HashMap::default(),
+            host_src: HashMap::default(),
             fail_frames: None,
             throw_frames: None,
             boot_objs: Vec::new(),

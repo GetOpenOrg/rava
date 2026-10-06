@@ -41,6 +41,9 @@ pub struct IObj {
     pub mirror: Option<String>,
     /// 宿主相关值（`@deferred`）的字符串内容数组：属性名
     pub deferred: Option<String>,
+    /// 宿主相关字符串内容数组的运行期来源：（native 键，结果字符串数组的下标；`None` = native 直接返回该串）。
+    /// 启动序列调用一次该 native，以宿主值改写引用此内容数组的字符串
+    pub host: Option<(String, Option<u32>)>,
     /// 残差调用 / 重放 native / 运行期初始化类静态读取的结果占位对象：启动序列以运行期结果回填其引用位置
     pub placeholder: bool,
     pub body: IBody,
@@ -179,6 +182,9 @@ impl ImageData {
                 if let Some(d) = &o.deferred {
                     v["deferred"] = json!(d);
                 }
+                if let Some((n, i)) = &o.host {
+                    v["host"] = json!([n, i]);
+                }
                 if o.placeholder {
                     v["placeholder"] = json!(true);
                 }
@@ -244,6 +250,13 @@ impl ImageData {
                 hash: o.get("hash").and_then(Value::as_i64).map(|h| h as i32),
                 mirror: o.get("mirror").and_then(Value::as_str).map(str::to_string),
                 deferred: o.get("deferred").and_then(Value::as_str).map(str::to_string),
+                host: match o.get("host").and_then(Value::as_array) {
+                    Some(h) => Some((
+                        h.first().and_then(Value::as_str).ok_or("映像宿主来源格式")?.to_string(),
+                        h.get(1).and_then(Value::as_u64).map(|i| i as u32),
+                    )),
+                    None => None,
+                },
                 placeholder: o.get("placeholder").and_then(Value::as_bool).unwrap_or(false),
                 body,
             });
@@ -310,9 +323,9 @@ mod tests {
     fn json_roundtrip() {
         let d = ImageData {
             objs: vec![
-                IObj { ty: "a/B".into(), hash: Some(-7), mirror: None, deferred: None, placeholder: false, body: IBody::Inst(vec![("a/B".into(), "x".into(), IVal::R(1)), ("a/B".into(), "y".into(), IVal::J(-3))]) },
-                IObj { ty: "[B".into(), hash: None, mirror: None, deferred: Some("p.q".into()), placeholder: false, body: IBody::Arr(vec![IVal::I(1), IVal::N, IVal::F(0x3f80_0000), IVal::D(1), IVal::T(0, b'J')]) },
-                IObj { ty: "a/M".into(), hash: None, mirror: Some("int".into()), deferred: None, placeholder: true, body: IBody::Inst(vec![]) },
+                IObj { ty: "a/B".into(), hash: Some(-7), mirror: None, deferred: None, host: None, placeholder: false, body: IBody::Inst(vec![("a/B".into(), "x".into(), IVal::R(1)), ("a/B".into(), "y".into(), IVal::J(-3))]) },
+                IObj { ty: "[B".into(), hash: None, mirror: None, deferred: Some("p.q".into()), host: Some(("a/R.p:()[La/S;".into(), Some(3))), placeholder: false, body: IBody::Arr(vec![IVal::I(1), IVal::N, IVal::F(0x3f80_0000), IVal::D(1), IVal::T(0, b'J')]) },
+                IObj { ty: "a/M".into(), hash: None, mirror: Some("int".into()), deferred: None, host: Some(("a/R.q:()La/S;".into(), None)), placeholder: true, body: IBody::Inst(vec![]) },
             ],
             statics: vec![("a/B".into(), "s".into(), IVal::R(0))],
             strings: vec![1],

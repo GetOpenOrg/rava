@@ -220,7 +220,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         "defer_value" => {
             if desc.ends_with(")Ljava/lang/String;") {
                 let k = info.key.to_string();
-                return Ok(Some(boot_string(vm, env, &k, "@deferred")?));
+                return Ok(Some(boot_string(vm, env, &k, "@deferred", Some((&k, None)))?));
             }
             defer(format!("延迟值参与求值：宿主相关的返回值 {}", info.key))
         }
@@ -266,9 +266,10 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         "props:vm" => {
             let kv: Vec<(String, String)> = env.cfg().boot.vm_props.clone();
             let a = vm.new_array(&array_of(STRING), (kv.len() * 2) as i32)?;
+            let src = info.key.to_string();
             for (i, (k, v)) in kv.iter().enumerate() {
-                let ko = boot_string(vm, env, k, k)?;
-                let vo = boot_string(vm, env, k, v)?;
+                let ko = boot_string(vm, env, k, k, None)?;
+                let vo = boot_string(vm, env, k, v, Some((&src, Some(2 * i as u32 + 1))))?;
                 vm.arr_mut(a)?[2 * i] = ko;
                 vm.arr_mut(a)?[2 * i + 1] = vo;
             }
@@ -292,9 +293,10 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             let Some(len) = ndx.values().max().map(|m| m + 1) else { return fail(format!("{} 无 _<名>_NDX 下标常量", cf.name)) };
             let a = vm.new_array(&array_of(STRING), len as i32)?;
             let vs: Vec<(String, String)> = env.cfg().boot.platform_props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let src = info.key.to_string();
             for (k, v) in vs {
                 let Some(&i) = ndx.get(k.as_str()) else { continue };
-                let o = boot_string(vm, env, &k, &v)?;
+                let o = boot_string(vm, env, &k, &v, Some((&src, Some(i as u32))))?;
                 vm.arr_mut(a)?[i] = o;
             }
             ret(CV::R(a))
@@ -426,14 +428,18 @@ fn class_op(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> R<Option<CV>> {
     }
 }
 
-/// 引导属性值：`@null` = null，`@deferred` = 宿主相关（内容数组登记为延迟值），否则为字面量
-fn boot_string(vm: &mut Vm, env: &Env, key: &str, v: &str) -> R<CV> {
+/// 引导属性值：`@null` = null，`@deferred` = 宿主相关（内容数组登记为延迟值），否则为字面量。
+/// `src`：宿主值的运行期来源（native 键，结果数组下标），随内容数组导出（`IObj::host`）
+fn boot_string(vm: &mut Vm, env: &Env, key: &str, v: &str, src: Option<(&str, Option<u32>)>) -> R<CV> {
     match v {
         "@null" => Ok(CV::N),
         "@deferred" => {
             let s = vm.make_string(env, &format!("<{key}>").encode_utf16().collect::<Vec<_>>())?;
             let a = vm.get_vm_field(env, s, "string_value")?.obj()?;
             vm.deferred.insert(a, Rc::from(key));
+            if let Some((n, i)) = src {
+                vm.host_src.insert(a, (Rc::from(n), i));
+            }
             Ok(CV::R(s))
         }
         "@jdk_feature" => {
