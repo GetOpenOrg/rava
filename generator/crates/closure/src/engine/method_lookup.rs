@@ -115,7 +115,7 @@ impl<'a> Engine<'a> {
         if let Some((sm, off)) = self.cur_site.filter(|s| s.0 == m) {
             self.xreaders.entry(sm).or_default().insert(off);
         }
-        let a = self.methods[m].analysis.clone()?;
+        let a = self.site_analysis(m)?;
         if a.conservative {
             return None;
         }

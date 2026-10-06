@@ -262,6 +262,14 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 站点求值（按名查找的名字、键集、字段 / 返回串）所用的分析：其事件正在 / 已经执行的那次分析（`applied`），
+    /// 未执行过时取当前分析。方法失效后、重分析前，站点仍可因接收者 / 键集增长按 `applied` 的事件重跑：
+    /// 此时实参来自 `applied`，名字也须按它求值——取当前分析（已失效为空）会把这次求值当成「推不出」，
+    /// 放宽结果（任意键 / 开放查找）不可撤回，结果依赖失效与重跑的先后
+    pub(super) fn site_analysis(&self, m: usize) -> Option<Rc<Analysis>> {
+        self.methods[m].applied.clone().or_else(|| self.methods[m].analysis.clone())
+    }
+
     pub(super) fn analysis(&mut self, m: usize) -> Option<Rc<Analysis>> {
         if self.is_concrete(m) {
             return None;

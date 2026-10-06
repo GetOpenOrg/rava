@@ -208,7 +208,7 @@ impl<'a> Engine<'a> {
     }
 
     fn class_lookup_eval(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
-        let a = self.methods[m].analysis.clone()?;
+        let a = self.site_analysis(m)?;
         if a.conservative {
             return None;
         }

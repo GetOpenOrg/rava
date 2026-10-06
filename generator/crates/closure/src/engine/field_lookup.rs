@@ -123,7 +123,7 @@ impl<'a> Engine<'a> {
 
     /// 值 v 读自 String 字段时，该字段各写入处的字符串常量（字段不折叠——可被字节码外写入——或有非常量写入时不给出）
     pub(super) fn field_strs(&mut self, m: usize, v: &V) -> Vec<Rc<str>> {
-        let Some(a) = self.methods[m].analysis.clone() else { return vec![] };
+        let Some(a) = self.site_analysis(m) else { return vec![] };
         let mut out = vec![];
         for s in v.srcs().iter() {
             let Src::Site(o) = *s else { continue };
@@ -145,7 +145,7 @@ impl<'a> Engine<'a> {
     /// 值 v 取自调用返回时，被调辅助方法返回值全是字符串常量的候选（[`Self::callee_consts`]，按被调字节码，与
     /// 求值时机无关）。常量格把这类调用折叠成的字符串常量（`V::Str` 带 `Src::Site`）按此来源取名
     pub(super) fn site_strs(&mut self, m: usize, v: &V) -> Vec<Rc<str>> {
-        let Some(a) = self.methods[m].analysis.clone() else { return vec![] };
+        let Some(a) = self.site_analysis(m) else { return vec![] };
         let mut out = vec![];
         for s in v.srcs().iter() {
             let Src::Site(o) = *s else { continue };

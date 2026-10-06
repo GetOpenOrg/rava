@@ -169,7 +169,7 @@ impl<'a> Engine<'a> {
             V::Null => return Keys::default(),
             _ => {}
         }
-        let Some(a) = self.methods[m].analysis.clone() else { return Keys::Any };
+        let Some(a) = self.site_analysis(m) else { return Keys::Any };
         if a.conservative {
             return Keys::Any;
         }
