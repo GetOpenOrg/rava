@@ -86,6 +86,10 @@ impl<'a> Engine<'a> {
                         _ => (NOCTX, None),
                     };
                     let m = self.root_in(key, "boot_image", ctx, args);
+                    // 重放 native 的形参 open；其实参是启动序列传入的映像对象，须物化（成为活对象）
+                    if let IStep::Native { args, .. } = st {
+                        self.image_roots(args);
+                    }
                     if let Some(p) = ph {
                         self.img.as_mut().expect("映像").ph_src.insert(*p, Feed::N(Node::R(m)));
                     }
@@ -98,7 +102,11 @@ impl<'a> Engine<'a> {
                         self.img.as_mut().expect("映像").ph_src.insert(*ph, Feed::N(Node::F(fi)));
                     }
                 }
-                IStep::Region { phase, start, end, .. } => self.image_region(phase, *start, *end, lc),
+                IStep::Region { phase, start, end, locals } => {
+                    // 区段入口的局部变量由启动序列传入合成方法：所指映像对象须物化
+                    self.image_roots(locals);
+                    self.image_region(phase, *start, *end, lc);
+                }
             }
         }
         // 已出现的字段节点 / 镜像补传播
@@ -139,6 +147,16 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 启动序列直接传递的映像对象（重放 native 实参、区段局部变量）成为活对象
+    fn image_roots(&mut self, vs: &[IVal]) {
+        for v in vs {
+            if let IVal::R(o) = *v {
+                self.image_ref(o);
+            }
+        }
+        self.image_drain();
     }
 
     /// 构建期初始化类：初始化已在映像中完成（不展开 `<clinit>`）。返回 true 表示已处理
