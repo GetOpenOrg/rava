@@ -516,8 +516,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 结论修正：放大点只有一个——`StandardCharsets.lookup` 以不定名字走到 `Class.forName(…).newInstance()`（lookup@122/125），名字不定的三条入口（jnu 区段、stdout / stderr 编码）都汇到这里。`Class.newInstance` 本身让 `Constructor` 进入实例化集合，此后任何以 open 实参调用 `String.valueOf(Object)` / `StringBuilder.append(Object)` 的点都会派发到 `Constructor.toString` → `Executable.sharedToString` → `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `Method.invoke` → 注解 → `Proxy` → open `equals` → `URL.equals` → `InetAddress`……。实测入口之一是 `Terminator.setup` → `Signal.handle@71` 的字符串拼接（映像残差根），所以单切异常消息支不够。
 
 因此压闭包的终态方向（按收益）：
-- (A) `lookup` 的类名集合：`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集，`newInstance` 只建这些类的无参构造（不让 `Constructor` 进实例化集合以外的派发）。需核对 `Class.forName` / `newInstance` 在名字集有限时的建模是否仍落到 open 反射。
-- (B) `String.valueOf(Object)` / `append(Object)` 的实参按调用点区分（上下文敏感或按调用点克隆），`Signal.handle@71` 的实参只有 `Signal`，不应派发到 `Constructor.toString`。
+- (B) 先做：`String.valueOf(Object)` / `append(Object)` 等的实参按调用点区分（上下文敏感或按调用点克隆）。`Signal.handle@71` 的拼接实参只有 `Signal` / 处理器，不应派发到 `Constructor.toString`。`Class.newInstance` 经 `getConstructor0` → `copyConstructor` 真实分配 `Constructor`，`Constructor` 进入实例化集合本身是正确的，放大来自 open 实参的 `toString` 派发。
+- (A) 辅助：`lookup` 的类名集合。`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集。只做 (A) 不能消除 `Constructor` 的分配。
 - 原 (a)–(c) 降级：单独做都不改变 2,986。
 
 **恢复入口**
