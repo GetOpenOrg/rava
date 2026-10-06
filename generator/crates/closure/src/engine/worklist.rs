@@ -296,19 +296,22 @@ impl<'a> Engine<'a> {
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let mirrors = self.param_mirror_sets(m);
+        let pobjs = self.param_obj_sets(m);
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
         // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）
         let closing = self.ctx.noreturn.borrow().closing();
-        let reuse = if closing { None } else { self.shared_analysis(&key, &params, &mirrors) };
-        let a = if let Some((a, deps)) = reuse {
+        let reuse = if closing { None } else { self.shared_analysis(&key, &params, &mirrors, &pobjs) };
+        let (a, queries) = if let Some((a, deps, queries)) = reuse {
             self.share_join(m, &a, &deps);
-            a
+            (a, queries)
         } else {
             let entry = (!closing).then(|| (params.clone(), mirrors.clone()));
             *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
-            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
+            let objs = super::obj_fields::ObjParams { sets: pobjs.clone(), queries: Default::default() };
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, objs };
             let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
+            let queries: Rc<[super::obj_fields::ObjQuery]> = facts.objs.queries.take().into();
             let deps = self.ctx.dep_log.borrow_mut().take();
             if self.cold_cut {
                 let cold = crate::cold::doomed(code);
@@ -319,10 +322,11 @@ impl<'a> Engine<'a> {
             a.events.shrink_to_fit();
             let a = Rc::new(a);
             if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
-                self.share_record(m, params, mirrors, &a, deps);
+                self.share_record(m, (params, mirrors, queries.clone()), &a, deps);
             }
-            a
+            (a, queries)
         };
+        self.obj_queries_bind(m, &pobjs, &queries);
         self.stat_leave();
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);

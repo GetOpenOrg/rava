@@ -170,6 +170,9 @@ impl<'a> Engine<'a> {
         if self.mirror_watch.contains_key(&n) {
             self.mirror_grown(n, delta);
         }
+        if self.obj_watch.contains_key(&n) {
+            self.obj_grown(n);
+        }
         if let Some(cs) = self.call_watch.get(&n) {
             for &c in cs {
                 if self.in_cwork.insert(c) {

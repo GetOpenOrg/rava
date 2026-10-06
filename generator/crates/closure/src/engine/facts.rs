@@ -108,6 +108,14 @@ pub(super) struct Ctx<'a> {
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
+    /// 按抽象对象的实例字段写入值（见 `obj_fields.rs`）
+    pub(super) ovals: RefCell<HashMap<(u32, MemberRef), PV>>,
+    /// 不按抽象对象分开的实例字段写入值（接收者含非抽象对象 / 物化快照）
+    pub(super) owild: RefCell<HashMap<MemberRef, PV>>,
+    /// (抽象对象, 字段) → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
+    pub(super) odeps: RefCell<HashMap<(u32, MemberRef), BTreeSet<usize>>>,
+    /// 字段 → 按对象读过它的方法（`owild` 变化时失效）
+    pub(super) owdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
     /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
@@ -214,6 +222,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) params: Vec<Option<V>>,
     /// Class 形参值集所指的类镜像（按形参序号；None = 非 Class 形参或值集含所指未知的 Class）
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
+    /// 形参的抽象对象集与按对象读过的形参（见 `obj_fields.rs`）
+    pub(super) objs: super::obj_fields::ObjParams,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -479,7 +489,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], objs: Default::default() })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
@@ -576,6 +586,11 @@ impl Oracle for Facts<'_, '_> {
         }
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
             return Some(v);
+        }
+        if opcode == classfile::op::GETFIELD {
+            if let Some(v) = self.obj_field(f, recv) {
+                return Some(v);
+            }
         }
         self.ctx.field_value(self.m, f)
     }

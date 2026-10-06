@@ -354,6 +354,11 @@ impl<'a> Engine<'a> {
         }
         let Some(ft) = parse_field(&f.desc) else { return };
         let Some(tid) = self.ptype(&ft) else {
+            // 基本类型字段不拆接收者：写入值并入按对象读的通配值（见 `obj_fields.rs`）
+            if first && opcode == op::PUTFIELD {
+                let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
+                self.wild_put(&key, &value.map_or(PV::Top, PV::of));
+            }
             // 手写字段访问器仍需沿其回调入链；基本类型字段无值集，接收者钩子在此无条件接入
             if first {
                 if instance_op(opcode) && recv.is_some() && self.recv_hook_field(&decl, f) {
@@ -393,6 +398,11 @@ impl<'a> Engine<'a> {
             None => (vec![], true),
         };
         let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
+        if opcode == op::PUTFIELD {
+            // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）
+            let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
+            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of));
+        }
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {

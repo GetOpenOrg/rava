@@ -263,7 +263,7 @@ impl Ctx<'_> {
         let code = meth.code.as_ref()?;
         let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![] });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], objs: Default::default() });
         if a.conservative {
             return None;
         }
@@ -360,7 +360,7 @@ impl Ctx<'_> {
         let mut params = vec![None; md.params.len() + base];
         params[i] = Some(self.sysprops_ref(&p.descriptor()));
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![] });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![], objs: Default::default() });
         if a.conservative {
             return false;
         }

@@ -98,6 +98,7 @@ mod pstrs;
 mod keyed;
 mod keyed_scheme;
 mod share;
+mod obj_fields;
 mod new;
 mod methods;
 mod worklist;
@@ -403,6 +404,10 @@ pub struct Engine<'a> {
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
+    /// 形参节点 → 按其抽象对象集读过实例字段的方法：值集增长时重分析（见 `obj_fields.rs`）
+    obj_watch: HashMap<Node, BTreeSet<usize>>,
+    /// 方法 → 最近一次分析的按对象读（值集增长时按新对象集复核答复）
+    obj_queries: HashMap<usize, Rc<[obj_fields::ObjQuery]>>,
     /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
     shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,

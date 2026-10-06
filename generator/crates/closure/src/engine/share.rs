@@ -35,6 +35,8 @@ pub(super) enum Dep {
 pub(super) struct Shared {
     params: Vec<Option<V>>,
     mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
+    /// 分析期间的按对象读及其答复（见 `obj_fields.rs`）
+    queries: Rc<[super::obj_fields::ObjQuery]>,
     a: Weak<Analysis>,
     /// 装入过该摘要的上下文（其中仍持有者使之有效）
     holders: Vec<usize>,
@@ -91,7 +93,8 @@ impl<'a> Engine<'a> {
         key: &MemberRef,
         params: &[Option<V>],
         mirrors: &[Option<BTreeSet<Rc<str>>>],
-    ) -> Option<(Rc<Analysis>, Rc<[Dep]>)> {
+        pobjs: &[Option<Rc<[u32]>>],
+    ) -> Option<(Rc<Analysis>, Rc<[Dep]>, Rc<[super::obj_fields::ObjQuery]>)> {
         let methods = &self.methods;
         let es = self.shared.get_mut(key)?;
         let held = |h: usize, p: *const Analysis| methods[h].analysis.as_ref().is_some_and(|x| Rc::as_ptr(x) == p);
@@ -100,8 +103,9 @@ impl<'a> Engine<'a> {
             e.holders.retain(|&h| held(h, p));
         }
         es.retain(|e| !e.holders.is_empty());
-        let e = es.iter().find(|e| e.params == params && e.mirrors == mirrors)?;
-        Some((e.a.upgrade()?, e.deps.clone()))
+        let es = self.shared.get(key)?;
+        let e = es.iter().find(|e| e.params == params && e.mirrors == mirrors && self.obj_queries_same(pobjs, &e.queries))?;
+        Some((e.a.upgrade()?, e.deps.clone(), e.queries.clone()))
     }
 
     /// 新上下文装入共享摘要：重放依赖、记为持有者
@@ -120,15 +124,21 @@ impl<'a> Engine<'a> {
     pub(super) fn share_record(
         &mut self,
         m: usize,
-        params: Vec<Option<V>>,
-        mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
+        (params, mirrors, queries): EntryState,
         a: &Rc<Analysis>,
         mut deps: Vec<Dep>,
     ) {
         deps.sort_unstable();
         deps.dedup();
         let key = self.methods[m].key.clone();
-        let e = Shared { params, mirrors, a: Rc::downgrade(a), holders: vec![m], deps: deps.into() };
+        let e = Shared { params, mirrors, queries, a: Rc::downgrade(a), holders: vec![m], deps: deps.into() };
         self.shared.entry(key).or_default().push(e);
     }
 }
+
+/// 入口状态：形参常量、Class 形参镜像集、分析期间的按对象读及其答复。
+///
+/// 按对象读的共享判定：抽象解释是 Oracle 答复的确定函数，其余事实（形参常量、镜像集、全局依赖）相同时，
+/// 摘要的每一次按对象读在新上下文的形参对象集下答复都不变，新上下文的分析就必然与摘要相同。
+/// 形参无对象集的读同样登记（答复 None），于是「摘要时没有对象集、新上下文有」能被比出差别
+pub(super) type EntryState = (Vec<Option<V>>, Vec<Option<BTreeSet<Rc<str>>>>, Rc<[super::obj_fields::ObjQuery]>);
