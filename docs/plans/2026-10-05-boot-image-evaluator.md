@@ -540,6 +540,72 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 4. 确定性：64075e73 上 HelloWorld `--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64 四组合已复验（本机 macOS JDK 21）。映像数据（`boot_image_data`）逐字节一致；类集合（2,986）、方法集合（18,008）、折叠计数、实例化 1,991 全部一致，差异只在 via 与内部计数 `method_contexts` / `context_objects`（±0.1%）。JDK 25 尚未复验。
 5. 本分支在发射侧完成前不可合入：分析已从映像出发，但映像尚未物化。
 
+#### 5.5.4 压闭包：核实结论与两处精度（2026-10-06 晚，分支 `boot-image-s3`）
+
+**§5.5.3 待核实项的结论：`Constructor` 确实被真实拼接**
+
+- `--flows "@path:P1 java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;|java/lang/reflect/Constructor@…"` 查得，`append(Object)` 形参中 `Constructor` 的唯一来源是 `AccessibleObject.throwInaccessibleObjectException`（下称 TIOE）@33 拼接的 `this`。
+- 这是 JDK 真实代码：`Class.newInstance@72` → `doPrivileged` → `Class$1.run` → `Constructor.setAccessible` → `checkCanSetAccessible(Class,Class,Z)` 的拒绝分支。
+- `Signal.handle@71` 只因 `append(Object)` 的 P1 在各调用点间合流才出现在 `--why` 里，它本身不拼接 `Constructor`。
+- 因此 (B)（按调用点区分 `append` / `valueOf` 实参）**对规模无效**，已撤销。
+
+**真正的闸门：两条冷异常消息支**
+
+两条支路都通向 `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `getEnumConstantsShared` → open `Method.invoke` → `isCallerSensitive` → 注解 → `Proxy` → open `equals` → ……
+
+1. `Class.getConstructor0@76` → `methodToString`（NoSuchMethodException 消息）。参数类型数组非空时走 stream。
+2. TIOE → `Constructor.toString` → `Executable.sharedToString`，无条件使用 stream。
+
+反事实切除实测（`--cut`，不健全，只作归因，基于 64075e73，原值 2,986 类 / 18,008 方法）：
+
+| 切除 | 类 / 方法 |
+|---|---|
+| `Constructor.toString` | 2,986 |
+| TIOE | 2,985 |
+| `Method.invoke` | 585 / 2,111 |
+| `Reflection.isCallerSensitive` | 756 / 3,855 |
+| `StreamOpFlag.<clinit>` | 2,978 |
+| `Class.getEnumConstantsShared` | 579 |
+| `StandardCharsets.lookup` | 401 |
+| `methodToString` + TIOE | **524 / 1,926** |
+| `methodToString` + `Constructor.toString` | 525 |
+
+**两处通用精度（健全，替代切除）**
+
+- **X1 c459845f：常量长度数组标签。**
+  - absint 的 `Obj::Len(n)`：`newarray` / `anewarray` 的常量长度随引用标签经局部变量、形参、字段、返回值传播，`arraylength` 折叠为常量。
+  - 依据：数组长度不可变（JVMS §2.7）。
+  - `methodToString` 只经 `getConstructor0` 被 `newInstance@54` 以 `new Class[0]` 调用，`argTypes.length == 0` 折叠后剪掉 stream 支。
+  - 单独做 X1 再反事实切 TIOE，结果为 524。
+- **X2（本提交）：TIOE 不可达。**
+  - 判定条件：`caller == null`（@14 / @40）；`callerModule == declaringModule`（@62），以及 `callerModule == Object.class.getModule()`（@74）。分三处修改：
+  - **调用者类镜像结果非空。** 清单 `caller_class` 的结果按非空引用答复（`CallInfo.nonnull_ret`）。依据：`reflection_impl.rs` 的 `getCallerClass` 运行期恒有调用者或回退根类，`vm_intrinsics.toml` 已补注。
+  - **形参常量格接受「非空引用」**（`bind_params` 用 `PV::of_ret`）。被调方法入口按形参序号换来源，并按描述符补类型（`absint::entry_state`）。非空性由此可以经形参传到 `checkCanSetAccessible`。
+  - **引导单例**：新清单 `[vm_state] boot_singletons`，现只登记 `Class.getModule`。依据：`class_impl.rs` 中引导类共用同一模块单例。
+    - 接收者是类字面量，或 Class 形参镜像值集全为引导类时，结果带 `Obj::BootSingleton(m)` 标签。
+    - 同标签的两个值 `if_acmp` 折叠为相等（`ref_eq`）。
+    - 形参值集上的答复记入 `mirror_field_assumed`，失效条件与接收者钩子字段相同：值集新增非引导类镜像、所指未知的 Class 对象或 open。
+
+**结果（本机 macOS JDK 21，HelloWorld，`rava closure`）**
+
+| 口径 | 类 | 方法 |
+|---|---|---|
+| 64075e73（§5.5.3） | 2,986 | 18,008 |
+| X1 | 2,985 | 18,002 |
+| X1 + 调用者非空 / 形参非空 | 2,983 | 17,998 |
+| X1 + X2 | **524** | **1,921** |
+
+- 硬门槛 ≤ 540 已达成。类集合与反事实「`methodToString` + TIOE」完全相同。
+- 剩余构成：`sun/nio/cs` 104 个，来自 `StandardCharsets.lookup` 名字不定（U1 宿主编码），属于合法可达。(A)（lookup 有限类集）实测已由 D8 逐对象容器给出 classMap 有限值集，不再单列。
+- 确定性：`--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64 四组合下，类集合、方法 id + kind 集合，以及 summary 中除耗时外的全部字段逐项一致。
+
+**恢复入口（接 §5.5.3 第 2 条起）**
+
+1. 发射侧物化 D1–D5 与启动重放函数（设计见 §5.5.2）。
+   - 运行时 `vm_impl` 档位重放补丁草稿仍在 `/tmp/bimg3_vm_impl_level.patch`（`isBooted` / `isModuleSystemInited` 取 `initLevel() >= 4 / 2`），随发射侧一起入库。
+2. 删除 `[boot_init] calls / phases` 与 FS-C2 钩子，补 TestBootLayer。C4 全量结束后再发服务器单测 / 审计 / 抽查，并复验 JDK 25。
+3. 本分支在发射侧完成前仍不可合入。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
