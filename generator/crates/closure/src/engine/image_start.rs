@@ -41,6 +41,11 @@ impl ImgState {
     }
 }
 
+/// 映像对象的宿主值来源 native（宿主相关内容数组）
+fn x_host(s: &ImgState, o: u32) -> Option<String> {
+    s.data.objs[o as usize].host.as_ref().map(|(n, _)| n.clone())
+}
+
 fn is_ref_desc(d: &str) -> bool {
     d.starts_with('L') || d.starts_with('[')
 }
@@ -326,9 +331,14 @@ impl<'a> Engine<'a> {
             TypeSet::exact(if self.container(&ty) { self.image_obj_site(o, &ty) } else { self.id(&ty) })
         };
         if newly {
+            // 宿主相关内容数组：启动序列调用其来源 native 取宿主值改写（U1），该 native 作根
+            let host = x_host(self.img.as_ref()?, o);
             let s = self.img.as_mut()?;
             s.live[o as usize] = true;
             s.queue.push(o);
+            if let Some(k) = host.as_deref().and_then(seeds::parse_member) {
+                self.root(k, "boot_image");
+            }
         }
         Some(Feed::S(set))
     }
