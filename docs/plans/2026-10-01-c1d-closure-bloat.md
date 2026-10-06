@@ -3843,3 +3843,98 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
 - `MemberName(Class, String, Class, byte)` 不入表靠调用方审计。若将来档案中出现新的调用方，需要复查。
   审计脚本思路：用 javap 列出 java.base 中该构造器的调用点。
 - 工具：`build/url/run4.sh <tag> <base>`、`build/url/cnt.py`、`build/url/folds.py`。
+
+### 30.15 第 12 步：原生二进制不设应用类路径（用户决策 (c)，2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策（2026-10-07，协调方转达）
+
+选 §30.14 第 10 步的 (c)：生成的原生程序没有运行期应用类路径，等价于模块模式下 `cp = null`。
+类全部在构建期编入二进制，运行期不按类路径从磁盘加载 `.class`。用户代码经
+`ClassLoader.getResource` / `getResourceAsStream` 读取的类路径资源，在构建期打包进二进制。
+机制通用，不为任何库做特判。
+
+#### 字节码事实（JDK 21，javap 核对）
+
+- `ClassLoaders.<clinit>`：`cp = System.getProperty("java.class.path")`。若 cp 为空串或 null，再看
+  `jdk.module.main` 是否为 null：为 null 时取 `""`，否则取 null。随后**无条件**执行 `new URLClassPath(cp, false)`。
+- 只有 `jdk.module.main != null` 才会得到 cp = null。但 `ModuleBootstrap.boot2`（会追加根模块）和 `LauncherHelper`
+  也读这个属性，所以不能用设置它的办法来实现 (c)。
+- `URLClassPath(String, boolean)`：逐个把类路径元素交给 `toFileURL(String)`，返回非 null 的才加入 `path`。
+  构造器还**无条件**执行 `this.jarHandler = new sun.net.www.protocol.jar.Handler()`，cp = null 时也一样。
+- `toFileURL` 的调用方只有两处：上面的 String 构造器，以及 `addFile`
+  （`BuiltinClassLoader.appendClassPath` ← Instrumentation 追加类路径）。两处的含义都是「类路径字符串元素 → 运行期加载源」。
+- 应用加载器使用 ucp 的地方：`findClassOnClassPathOrNull`（`ucp.getResource` → `defineClass(String, Resource)` →
+  `defineClass1`）、`findResourceOnClassPath`、`findResourcesOnClassPath`，以及 `hasClassPath()`（`ucp != null`）。
+
+#### 设计（通用，无类名；清单声明运行模型）
+
+1. **类路径运行模型由清单声明。** `vm_intrinsics.toml` 新增内建类别 `class_path`，含义是：原生二进制没有运行期
+   应用类路径，方法体唯一的可观察效果就是「把类路径变成运行期加载源」或「从类路径加载」，由 VM 以构建期结果等价承载。
+   登记三个成员，均为手写类 ②（运行模型替换）：
+   - `URLClassPath.toFileURL(String)` 恒返回 null。类路径字符串里的元素不形成加载源，于是应用 ucp 的 `path` 恒空，
+     与模块模式 cp = null 时「类路径上没有任何东西」的状态一致。`addFile` 自然随之失效。
+   - `BuiltinClassLoader.findClassOnClassPathOrNull(String)` 恒返回 null。类路径上没有可定义的字节码；闭包内的类
+     已经由 `findLoadedClass0` 在前一步命中。
+   - `BuiltinClassLoader.findResourceOnClassPath(String)` 和 `findResourcesOnClassPath(String)`：保留 `hasClassPath()`
+     的判定，资源改由构建期嵌入表（见第 2 条）提供。
+   
+   `[concrete.boot.natives]` 里 toFileURL 的条目由 `defer_call` 改为 `const:null`，引导映像求值与运行期一致。
+   闭包分析器把手写体当作精确返回（`hw_ret`：返回 null，或返回 Java 静态方法调用的结果），不需要类名特判。
+2. **构建期资源表。**
+   - **来源**：用户档案（`Origin::User` 的编译输出目录，含用户项目资源目录）和 `--deps` / `--cp` 给出的库档案
+     （`Origin::Lib`），按类路径顺序收录**全部文件**，包括 `.class`，与 JVM 上「类路径资源」的口径一致。
+     同名资源按类路径顺序保留多份（对应 `getResources` 的枚举序）。
+   - **落点**：用户侧元数据。`UserMeta` 增加 `class_path_resources` 字段，由用户 crate 的
+     `rava_user_meta.rs` 用 `include_bytes!` 给出 `(名, 字节)` 表，按名有序，同名保持类路径序。
+     运行时声明层与档案侧不随用户变化，跨测试编译复用不受影响。
+   - **门控**：表只在读取它的 native 方法位于闭包调用链上时发射，否则为空表。
+3. **运行期资源面（VM 支持类，`runtime/java_support/java.base/jdk/internal/loader/EmbeddedClassPath.java`）。**
+   - 两个 native 读表：`count(String)` 返回同名资源的份数，`bytes(String, int)` 返回第 i 份的字节。
+   - Java 方法 `findResource(String)` / `findResources(String)` / `stream(String)` 构造 URL 与流。
+   - URL 形如 `rava-cp:/<ParseUtil.encodePath(名)>`，第 i（≥ 1）份带 `#i`。构造时显式给出本类的 `URLStreamHandler`
+     （`Handler`）：`openConnection` 返回读表的 `URLConnection`，`getInputStream` 是 `ByteArrayInputStream`，
+     同时给出 `getContentLengthLong`。
+   - natives 写在共置手写文件 `embedded_class_path_impl.rs`（`#[jvm_native]`），读 `meta::class_path_resources()`。
+4. **java.class.path 属性**保持 `""`（`[facts.system_properties.values]` 与 `[concrete.boot] vm_props` 不变）：
+   - JDK 模块模式下该属性同样是 `""`；
+   - `TestSystemPropsSpec` 只要求该属性存在；
+   - 在 `jdk.module.main` 为 null 时，`""` 经 ClassLoaders 得到的就是 `""`，再经第 1 条得到空 ucp。
+   
+   语义：「没有运行期类路径」。属性值不列出构建期的类路径，因为这些路径在运行期机器上并不存在。
+5. **模块资源的口径收窄。** `input/src/resources.rs::derive` 只在 JDK 档案（`Origin::Jdk` / `Image`）里查找资源。
+   用户档案和库档案的资源统一由第 2 条的类路径表承载，不再混入 `jdk_resources::module_resources`
+   （它位于声明层，混入会让声明层随用户变化）。
+6. **过渡期手写（L2 六个资源方法，`class_loader_impl.rs`）改为经第 3 条取类路径部分。**
+   - `__impl_getResource` / `getSystemResource` → `EmbeddedClassPath.findResource`；
+   - `__impl_getResources` / `getSystemResources` → `findResources`；
+   - `__impl_getResourceAsStream` / `getSystemResourceAsStream` → 先查模块资源，再查 `stream`。
+   
+   这六个方法的终态仍是撤除：引导映像第 5 步（jimage）落地后，`ClassLoader.getResource` 走字节码，经委派链到达
+   第 1 条的 `findResourceOnClassPath` 钩子，由同一张表承载。
+
+#### 影响的 e2e 与处理
+
+| 测试 | 依赖 | 处理 |
+|---|---|---|
+| `TestClassResourceStream` | 读自身 `.class`（流、URL）、未命中为 null、`getSystemResource(自身)`、`getClassLoader().getResource(自身)`；`getSystemResource("java/lang/String.class")` | 类路径部分由资源表命中（预期由失败转为通过，只剩 `jdk-res` 一行）。JDK 类资源属于引导映像第 5 步（jimage），不在本步范围 |
+| `TestSystemStableProps` | `getSystemResourceAsStream("java/lang/String.class")` | JDK 类资源，同上，仍为已知失败（R7） |
+| `TestSystemPropsSpec` | `java.class.path` 存在 | 保持 `""`，不受影响 |
+| `TestAppClassLoader` | `forName` 不存在的类 → CNFE；自定义 `getResources` 覆盖；ServiceLoader 经上下文加载器 | CNFE 路径：`findClassOnClassPathOrNull` 恒 null，结果不变。覆盖分派不变 |
+| `TestServiceLoaderEmpty`、`TestBootContextLoader` 等 ServiceLoader / 上下文加载器用例 | `getResources("META-INF/services/…")` | 用户档案若带 `META-INF/services`，现在能枚举到。e2e 用例没有资源文件，枚举仍为空，输出不变 |
+| `TestClassLoaderIdentity`、`TestForNameInit`、`TestClassForNameInit`、`TestForNameComputedName`、`TestModuleLayerDefine`、`TestDynamicProxy` 等 | 加载器层级 / forName | 走 `findLoadedClass0`，不经类路径，不受影响；需抽查确认 |
+
+e2e 语料中没有非 `.java` 的资源文件，所以资源表的内容只有用户 `.class`。
+
+#### 产品取舍（待用户决策，本项停在建议上，实现按建议默认）
+
+- **T1 资源表的收录口径**（二进制体积与 JVM 等价之间的取舍）：
+  - (a) 收录全部文件，含 `.class`。与 JVM 等价，体积约为类路径归档的大小；只在读表 native 可达时发射。
+  - (b) 不收录 `.class`。体积最小，但 `getResource("X.class")` 不再与 JVM 一致（常见于字节码库、版本探测）。
+  - (c) 按调用链上的资源名常量推导收窄（同 `module_resources` 的推导法），名字无法静态枚举时退回 (a)。
+  
+  建议：现在实现 (a)；(c) 作为后续的精度项，单列在体积线上。
+- **T2 URL 字符串往返**：`new URL(url.toString())` 要求 `sun.net.www.protocol.<scheme>.Handler` 这个类存在。
+  - (a) 不支持往返。不在 java.base 中新增包；`toString` 后重建 URL 会抛 `MalformedURLException`。
+  - (b) 新增 VM 支持类 `sun.net.www.protocol.rava_cp.Handler`，使 URL$DefaultFactory 能按协议名找到它。
+  
+  建议：先 (a)。若库语料出现往返用法再做 (b)。
