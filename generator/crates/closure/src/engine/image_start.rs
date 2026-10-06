@@ -81,6 +81,8 @@ impl<'a> Engine<'a> {
                 IStep::Level(l) => lc = if self.level_needed(*l) { self.level_ctx(*l) } else { NOCTX },
                 IStep::Recompute { expr, .. } => self.image_expr_roots(&data, *expr),
                 IStep::RuntimeInit { class } => self.init(class, Via::root("boot_image", class)),
+                // 重定位值是基本类型（偏移 / 地址），不引入方法与对象
+                IStep::Reloc { .. } => {}
                 IStep::Call { callee, ph, .. } | IStep::Native { callee, ph, .. } => {
                     let Some(key) = seeds::parse_member(callee) else {
                         self.unresolved.insert(callee.clone());

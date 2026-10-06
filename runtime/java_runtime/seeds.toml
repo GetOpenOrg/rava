@@ -171,26 +171,8 @@ classes = [
     # 重入读到 null。
     "java/lang/reflect/AccessibleObject",
 ]
-# VM 启动期调用的静态方法（无参 `()V`，按序在 classes 之前执行）：HotSpot 由 initPhase1 在任何应用代码
-# 之前完成的全局登记。准入：VM 发起的启动入口（docs/reference/handwritten-boundary.md 准入 ③）——
-# 由闭包分析器作为根入链、生成项目 main 启动时调用（runtime vm_boot_init）。
-calls = [
-    # initPhase1 的 setJavaLangAccess()：SharedSecrets.setJavaLangAccess(new System$2)——JavaLangAccess
-    # 无惰性初始化路径（SharedSecrets.getJavaLangAccess 直接返回静态字段），缺席即 null。
-    "java/lang/System.setJavaLangAccess:()V",
-]
-
-# VM 引导阶段（HotSpot call_initPhase2 / call_initPhase3，准入 ③ VM 发起的启动入口）：VM 以常量实参调用的静态方法，
-# 按序在 calls / classes 之后、main 之前执行。args：实参常量（个数与描述符一致，只限 Z/B/C/S/I）；分析器以此作入口
-# 形参常量，与 VM 调用一致。anchors：阶段写入、此后由 Java 代码读取的 VM 状态字段（`类.字段:描述符`）——闭包内
-# 任一锚点有读取点时阶段作根并在启动时执行，否则不入链、不执行。返回整数的阶段非 0 即启动失败（退出码 1）。
-[[boot_init.phases]]
-# initPhase2：模块系统引导（ModuleBootstrap.boot → 引导层）。实参为 HotSpot 缺省的 DisplayVMOutputToStderr、
-# 引导日志开关（均为 false）。锚点暂空：引导层落地（docs/plans/2026-10-02-boot-layer.md 第 2–3 步：Class.module
-# 钩子、Module / ModuleLayer 回到字节码）之前不作根；届时填 System.bootLayer 与 Class.module
-call = "java/lang/System.initPhase2:(ZZ)I"
-args = [false, false]
-anchors = []
+# 引导期其余部分（HotSpot initPhase1–3：setJavaLangAccess、引导层等）由构建期引导映像求值并物化
+# （docs/plans/2026-10-05-boot-image-evaluator.md），生成项目 main 调用映像启动序列，不在此登记。
 
 # ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导
 # （`generator/crates/input/src/resources.rs`），以 include_bytes! 嵌入，运行时由 ClassLoader 的资源查询承载。

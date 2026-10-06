@@ -57,6 +57,10 @@ impl<T> JArray<T> {
     /// 映像数组的引用（常量求值可用，引导映像物化）
     #[doc(hidden)]
     pub const fn __image(value: &'static __ArrayObj<T>) -> Self { JArray(Some(__Obj::image(value))) }
+
+    /// 映像中引用数组的 null 元素（数组元素类型的类型化 null）
+    #[doc(hidden)]
+    pub const __IMAGE_NULL: Self = JArray(None);
 }
 
 impl<T> Clone for JArray<T> {

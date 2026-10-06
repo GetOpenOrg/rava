@@ -152,7 +152,13 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
     let wt = |l: Loc| vm.bj.war.wtime.get(&l).copied().unwrap_or(0);
     let mut slots: Vec<(u64, ILoc, u32)> = Vec::new();
     let mut d = ImageData::default();
+    // 重定位槽（位置次序：静态字段、对象字段、数组元素）：映像取零值
+    let mut relocs: Vec<IStep> = Vec::new();
     for ((decl, name), k, v) in &statics {
+        if let Some(reloc) = super::unsafe_ops::reloc_of(vm, *v) {
+            relocs.push(IStep::Reloc { loc: ILoc::Static(decl.to_string(), name.to_string()), reloc });
+            continue;
+        }
         let v = x.val(*v);
         if let IVal::T(e, _) = v {
             slots.push((wt(Loc::S(*k)), ILoc::Static(decl.to_string(), name.to_string()), e));
@@ -169,6 +175,10 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
                 let mut out: Vec<(String, String, IVal)> = Vec::new();
                 for &(k, v) in fs {
                     let (dc, n) = &vm.fnames[k as usize];
+                    if let Some(reloc) = super::unsafe_ops::reloc_of(vm, v) {
+                        relocs.push(IStep::Reloc { loc: ILoc::Field(i as u32, dc.to_string(), n.to_string()), reloc });
+                        continue;
+                    }
                     let iv = x.val(v);
                     if let IVal::T(e, _) = iv {
                         slots.push((wt(Loc::F(o, k)), ILoc::Field(i as u32, dc.to_string(), n.to_string()), e));
@@ -182,6 +192,11 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
             Body::Arr(a) => {
                 let mut es = Vec::with_capacity(a.len());
                 for (j, &v) in a.iter().enumerate() {
+                    if let Some(reloc) = super::unsafe_ops::reloc_of(vm, v) {
+                        relocs.push(IStep::Reloc { loc: ILoc::Elem(i as u32, j as u32), reloc });
+                        es.push(IVal::J(0));
+                        continue;
+                    }
                     let iv = x.val(v);
                     if let IVal::T(e, _) = iv {
                         slots.push((wt(Loc::A(o)), ILoc::Elem(i as u32, j as u32), e));
@@ -204,6 +219,7 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
     }
     // 槽位次序：写入时刻，同刻按位置
     slots.sort_by(|a, b| (a.0, format!("{:?}", a.1)).cmp(&(b.0, format!("{:?}", b.1))));
+    d.steps.extend(relocs);
     d.steps.extend(slots.into_iter().map(|(_, loc, expr)| IStep::Recompute { loc, expr }));
     for r in &vm.bj.recs {
         d.steps.push(match r {

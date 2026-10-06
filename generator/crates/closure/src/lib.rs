@@ -100,9 +100,6 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         for c in &man.boot_init {
             e.root_init(c, "boot_init");
         }
-        for m in &man.boot_calls {
-            e.root_boot_call(m, "boot_init");
-        }
     }
     e.run();
     if let Some(d) = boot_image.as_mut().and_then(|b| b.data.as_mut()) {

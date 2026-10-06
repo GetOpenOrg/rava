@@ -10,6 +10,21 @@ const FIELD_OFFSET_BASE: i64 = 1 << 40;
 /// 物化时单元终值成为运行期原生单元的初值（地址本身是运行期重定位值，不进映像）
 const VM_CELL_BASE: i64 = 1 << 48;
 
+/// 构建期编码的重定位值（字段偏移 / VM 单元地址）：映像导出时转为运行期口径的重定位槽
+pub(super) fn reloc_of(vm: &Vm, v: CV) -> Option<crate::image::IReloc> {
+    let CV::J(x) = v else { return None };
+    if x >= VM_CELL_BASE {
+        let off = x - VM_CELL_BASE;
+        let i = usize::try_from(off / 8).ok()?;
+        return (off % 8 == 0).then(|| vm.cells.get(i)).flatten().map(|(n, _)| crate::image::IReloc::Cell(n.to_string()));
+    }
+    if x >= FIELD_OFFSET_BASE {
+        let k = usize::try_from(x - FIELD_OFFSET_BASE).ok()?;
+        return vm.fnames.get(k).map(|(d, n)| crate::image::IReloc::FieldOffset(d.to_string(), n.to_string()));
+    }
+    None
+}
+
 pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> Option<R<Option<CV>>> {
     let arg = |i: usize| args.get(i).copied().map_or_else(|| fail("native 实参个数"), Ok);
     let r = match op {

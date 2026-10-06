@@ -91,6 +91,8 @@ pub struct SuperFields {
     pub volatile: Vec<String>,
     /// Rust 名与 Java 名不同的继承字段：`声明类.Java 名=Rust 名`（宏属性 `field_slots`）
     pub slots: Vec<String>,
+    /// 与 `fields` 逐项对应的（声明类, Java 字段名, 描述符）：引导映像按声明类与字段名定位存储槽
+    pub origin: Vec<(String, String, String)>,
 }
 
 /// `field_slots` 项：Rust 名与 Java 名不同时给出 `声明类.Java 名=Rust 名`
@@ -138,6 +140,7 @@ pub fn flatten_super_fields(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> SuperFields {
             if f.access & super::attrs::ACC_VOLATILE != 0 {
                 out.volatile.push(name.clone());
             }
+            out.origin.push((anc.name().to_string(), f.name.clone(), f.desc.clone()));
             out.fields.push((name, view));
         }
     }
@@ -188,7 +191,7 @@ fn idents(text: &str) -> Vec<&str> {
 }
 
 /// static 字段的 Rust 类型文本（签名优先；引用类型形参 / 无效时回退描述符）
-fn static_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) -> String {
+pub(crate) fn static_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) -> String {
     let names = &ctx.ty;
     let sig = f.signature.as_deref().unwrap_or("");
     let gs = ctx.ty.parse_field_type(sig, tps).map(|t| t.render(names)).filter(|g| {

@@ -329,10 +329,6 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
-            // 实例字段锚点有接收者值集时按值集判定（见下与 `boot_phases.rs`）
-            if opcode == op::GETSTATIC || (opcode == op::GETFIELD && recv.is_none()) {
-                self.phase_anchor_read(&decl, f);
-            }
             // 接收者钩子（`receiver = true`）在有接收者值集时按值集判定（见下）；静态钩子与其余访问点
             // 无条件接入——静态钩子（如 initPhase3 段）不看接收者，实例字段读写同样先执行它
             let recv_hook = instance_op(opcode)
@@ -362,9 +358,6 @@ impl<'a> Engine<'a> {
                 if instance_op(opcode) && recv.is_some() && self.recv_hook_field(&decl, f) {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
-                if opcode == op::GETFIELD && recv.is_some() {
-                    self.phase_anchor_read(&decl, f);
-                }
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
             }
             return;
@@ -382,9 +375,6 @@ impl<'a> Engine<'a> {
                 let s = self.filter(&s, oid);
                 if self.recv_hook_needed(&decl, f, &s) {
                     self.field_hook(&decl, f, opcode, &via, res);
-                }
-                if opcode == op::GETFIELD {
-                    self.phase_anchor_recv(&decl, f, &s);
                 }
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 // 类镜像上读接收者钩子字段（VM 注入状态）：值只由钩子落地（应用 / 平台类镜像已接钩子值池，引导类

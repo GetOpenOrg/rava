@@ -123,7 +123,15 @@ pub fn struct_name(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
 
 /// 类型存根：JDK 类且无任何方法在调用链上（static 字段发 panic 存根访问器）
 pub fn is_type_only(ctx: &EmitCtx<'_>, ci: &ClassInfo, site: &ClassSite<'_>) -> bool {
-    !site.is_user() && !ci.methods().iter().any(|m| ctx.in_chain(ci.name(), &m.name, &m.desc))
+    !site.is_user()
+        && !ci.methods().iter().any(|m| ctx.in_chain(ci.name(), &m.name, &m.desc))
+        && !has_image_statics(ctx, ci.name())
+}
+
+/// 引导映像给出静态字段初值的类：构建期初始化后 `<clinit>` 不入链，静态字段仍由启动序列写入、
+/// 被闭包内的方法读取，须有真实存储（不是类型存根）
+fn has_image_statics(ctx: &EmitCtx<'_>, cls: &str) -> bool {
+    ctx.input.boot_image.as_ref().is_some_and(|b| b.statics.iter().any(|(c, _, _)| c == cls))
 }
 
 /// 父类 Rust 类型（含本类视角的祖先实参）；父类为根类时为空

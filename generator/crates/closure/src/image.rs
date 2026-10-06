@@ -67,10 +67,21 @@ pub enum ILoc {
     Elem(u32, u32),
 }
 
+/// 运行期重定位值：构建期求值所用的编码在运行期另行分配，映像中取零值，启动序列按运行期口径写入
+#[derive(Clone, Debug, PartialEq)]
+pub enum IReloc {
+    /// Unsafe 实例字段偏移（声明类, 字段名）：运行期偏移是按字段身份登记的不透明 id
+    FieldOffset(String, String),
+    /// VM 原生单元的地址（单元名）
+    Cell(String),
+}
+
 /// 启动序列（构建期次序）
 #[derive(Clone, Debug, PartialEq)]
 pub enum IStep {
     Recompute { loc: ILoc, expr: u32 },
+    /// 重定位槽：按运行期口径取值后写入
+    Reloc { loc: ILoc, reloc: IReloc },
     /// 类转为运行期初始化（首次主动使用时执行 `<clinit>`）
     RuntimeInit { class: String },
     /// 根帧调用 `phase@off` → `callee(args)`；结果回填占位对象 `ph` 的引用位置
@@ -166,6 +177,26 @@ fn untriple(v: &Value) -> Result<(String, String, IVal), String> {
     Ok((a[0].as_str().ok_or("映像三元组格式")?.to_string(), a[1].as_str().ok_or("映像三元组格式")?.to_string(), unval(&a[2])?))
 }
 
+fn loc_json(loc: &ILoc) -> Value {
+    match loc {
+        ILoc::Static(d, n) => json!({ "static": [d, n] }),
+        ILoc::Field(o, d, n) => json!({ "obj": o, "field": [d, n] }),
+        ILoc::Elem(o, i) => json!({ "obj": o, "elem": i }),
+    }
+}
+
+fn unloc(l: &Value) -> Result<ILoc, String> {
+    let two = |k: &str| l.get(k).and_then(Value::as_array).filter(|a| a.len() == 2);
+    let st = |v: &Value| v.as_str().map(str::to_string).ok_or("映像序列格式");
+    Ok(if let Some(a) = two("static") {
+        ILoc::Static(st(&a[0])?, st(&a[1])?)
+    } else if let Some(f) = two("field") {
+        ILoc::Field(n(l, "obj")?, st(&f[0])?, st(&f[1])?)
+    } else {
+        ILoc::Elem(n(l, "obj")?, n(l, "elem")?)
+    })
+}
+
 impl ImageData {
     pub fn to_json(&self) -> Value {
         let objs: Vec<Value> = self
@@ -209,14 +240,9 @@ impl ImageData {
             .steps
             .iter()
             .map(|st| match st {
-                IStep::Recompute { loc, expr } => {
-                    let l = match loc {
-                        ILoc::Static(d, n) => json!({ "static": [d, n] }),
-                        ILoc::Field(o, d, n) => json!({ "obj": o, "field": [d, n] }),
-                        ILoc::Elem(o, i) => json!({ "obj": o, "elem": i }),
-                    };
-                    json!({ "recompute": l, "expr": expr })
-                }
+                IStep::Recompute { loc, expr } => json!({ "recompute": loc_json(loc), "expr": expr }),
+                IStep::Reloc { loc, reloc: IReloc::FieldOffset(d, n) } => json!({ "reloc": loc_json(loc), "field_offset": [d, n] }),
+                IStep::Reloc { loc, reloc: IReloc::Cell(c) } => json!({ "reloc": loc_json(loc), "cell": c }),
                 IStep::RuntimeInit { class } => json!({ "runtime_init": class }),
                 IStep::Call { phase, off, callee, args, ph } => json!({ "call": callee, "phase": phase, "off": off, "args": vals(args), "ph": ph }),
                 IStep::Native { callee, args, ph } => json!({ "native": callee, "args": vals(args), "ph": ph }),
@@ -286,15 +312,16 @@ impl ImageData {
                 Ok((a[0].as_str().ok_or("映像序列格式")?.to_string(), a[1].as_str().ok_or("映像序列格式")?.to_string()))
             };
             d.steps.push(if let Some(l) = st.get("recompute") {
-                let loc = if l.get("static").is_some() {
-                    let a = l["static"].as_array().filter(|a| a.len() == 2).ok_or("映像序列格式")?;
-                    ILoc::Static(a[0].as_str().unwrap_or_default().to_string(), a[1].as_str().unwrap_or_default().to_string())
-                } else if let Some(f) = l.get("field").and_then(Value::as_array).filter(|a| a.len() == 2) {
-                    ILoc::Field(n(l, "obj")?, f[0].as_str().unwrap_or_default().to_string(), f[1].as_str().unwrap_or_default().to_string())
-                } else {
-                    ILoc::Elem(n(l, "obj")?, n(l, "elem")?)
+                IStep::Recompute { loc: unloc(l)?, expr: n(st, "expr")? }
+            } else if let Some(l) = st.get("reloc") {
+                let reloc = match st.get("cell").and_then(Value::as_str) {
+                    Some(c) => IReloc::Cell(c.to_string()),
+                    None => {
+                        let (d, n) = pair("field_offset")?;
+                        IReloc::FieldOffset(d, n)
+                    }
                 };
-                IStep::Recompute { loc, expr: n(st, "expr")? }
+                IStep::Reloc { loc: unloc(l)?, reloc }
             } else if let Some(c) = st.get("runtime_init").and_then(Value::as_str) {
                 IStep::RuntimeInit { class: c.to_string() }
             } else if st.get("call").is_some() {
@@ -336,6 +363,8 @@ mod tests {
                 IStep::Recompute { loc: ILoc::Field(0, "a/B".into(), "y".into()), expr: 1 },
                 IStep::Recompute { loc: ILoc::Static("a/B".into(), "s".into()), expr: 0 },
                 IStep::Recompute { loc: ILoc::Elem(1, 4), expr: 0 },
+                IStep::Reloc { loc: ILoc::Static("a/B".into(), "OFF".into()), reloc: IReloc::FieldOffset("a/B".into(), "y".into()) },
+                IStep::Reloc { loc: ILoc::Elem(1, 3), reloc: IReloc::Cell("next_thread_id".into()) },
                 IStep::RuntimeInit { class: "a/C".into() },
                 IStep::Call { phase: "a/B.p:()V".into(), off: 3, callee: "a/B.q:()La/B;".into(), args: vec![IVal::R(0)], ph: Some(2) },
                 IStep::Native { callee: "a/B.n:()V".into(), args: vec![], ph: None },

@@ -121,6 +121,8 @@ pub struct EmitInput {
     pub module_services: Vec<(String, String)>,
     /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
     pub system_properties: SysPropFacts,
+    /// 构建期引导映像（分析器 `boot_image_data`；无映像 / 求值失败 → None）：发射层物化映像区与启动序列
+    pub boot_image: Option<closure::image::ImageData>,
     /// 模块资源（清单序；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
@@ -426,6 +428,7 @@ impl<'a> BuildInput<'a> {
             sam_types: f.sam_types.iter().cloned().collect(),
             module_services: f.seeds.module_services.clone(),
             system_properties: f.system_properties.clone(),
+            boot_image: f.boot_image.clone(),
             module_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,

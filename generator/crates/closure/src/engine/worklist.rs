@@ -49,16 +49,6 @@ impl<'a> Engine<'a> {
         self.init(cls, Via::root(kind, cls));
     }
 
-    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
-    pub fn root_boot_call(&mut self, member: &str, kind: &'static str) {
-        match seeds::parse_member(member) {
-            Some(key) => self.root(key, kind),
-            None => {
-                self.unresolved.insert(member.to_string());
-            }
-        }
-    }
-
     pub fn run(&mut self) {
         // 写入未知数组的元素：数组可能由非建模代码持有
         let obj = self.id(OBJECT);

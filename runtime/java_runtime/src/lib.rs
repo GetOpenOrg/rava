@@ -5,6 +5,8 @@ pub mod class_desc;
 pub mod field_desc;
 pub mod field_reflect;
 pub mod handle;
+#[doc(hidden)]
+pub mod image_rt;
 pub mod obj_ref;
 pub mod sync_model;
 pub mod gil;

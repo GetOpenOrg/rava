@@ -50,6 +50,10 @@ const JAVA_THREAD_STACK: usize = 256 << 20;
 // （`VirtualThread.mount` → `setCurrentThread`；`Continuation.run` 存取 ScopedValue 缓存）换入换出，
 // 随执行流走的状态在执行上下文块（`exec_context.rs`）。执行流可能在一次调用之后换到另一载体上继续，
 // 槽一律经下方不内联的存取函数访问（LLVM 视线程局部地址在函数内不变，内联后会跨让出点缓存旧载体的地址）。
+/// `Thread$ThreadIdentifiers` 的线程 id 计数字（VM 侧静态存储，`getNextThreadIdOffset` 返回其地址）；
+/// 引导映像的 VM 单元 `next_thread_id` 给出初值
+pub(crate) static NEXT_THREAD_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 std::thread_local! {
     /// 当前线程（`JavaThread::_vthread`）：平台线程即载体自身，虚拟线程挂载期间为该虚拟线程
     static CURRENT: RefCell<Option<Thread>> = const { RefCell::new(None) };
@@ -164,6 +168,13 @@ fn run_java_thread(t: &Thread) {
 }
 
 impl Thread {
+    /// 线程 id 计数字的地址与初值（引导映像 VM 单元 `next_thread_id`；本伴生文件以私有 mod 挂入，
+    /// 经类型挂载对包外可见）
+    #[doc(hidden)]
+    pub fn __next_thread_id_cell() -> &'static std::sync::atomic::AtomicI64 {
+        &NEXT_THREAD_ID
+    }
+
     /// `Thread.registerNatives:()V`：JVM 内部的 JNI 方法注册钩子（HotSpot 在
     /// `<clinit>` 中调用）。转译运行时的 native 在编译期静态解析，注册动作无
     /// 对应物 → no-op（与 CDS.initializeFromArchive 同一处置）。
@@ -339,7 +350,6 @@ impl Thread {
     /// 绝对地址，`Unsafe.getAndAddLong(null, 地址, 1)` 经原生内存的原子指令推进。
     #[jvm_native]
     pub fn getNextThreadIdOffset() -> Result<i64> {
-        static NEXT_THREAD_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
         Ok(NEXT_THREAD_ID.as_ptr() as i64)
     }
 
