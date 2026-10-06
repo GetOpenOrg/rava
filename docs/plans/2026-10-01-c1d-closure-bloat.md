@@ -3037,3 +3037,56 @@ open(URL) 退出容器出口以后，`J`（jar `Handler.openConnection`）与 Ja
 - 服务器单测作业 `c1db2-ut-8f2dc45c`（ref 8f2dc45c，全量 generator 单测 + rava_macros_core）：rc=0，521 通过、0 失败。
 - C4 全量冻结期内，本分支不合入、不发起抽查。冻结解除后合入，并按 §30.3 抽查 DeepCopy 系、`TestAppClassLoader`、
   `TestJarFile*`、HelloWorld，同时做动态对照。
+
+### 30.7 第 2 步实施：B3 手写方法返回值来源（2026-10-06，分支 `c1d-url-b2`，提交 b9335ac7）
+
+#### 设计（终态通用，分析器不写类名，清单不新增条目）
+
+手写体本身就是成员的运行期语义，返回值来源直接从手写体语法推出：
+
+- **语法判定**（`handwritten/returns.rs`）：返回点 = fn 体尾表达式（穿过块 / `unsafe` / 带 else 的 `if` / `match` 各分支）与全部 `return`
+  （闭包、async 块、嵌套 item 内的不算）。每个返回点只认两种形态：
+  - null：`Ok(Default::default())` / `Ok(T::default())`；
+  - 路径调用 `T::m(…)` 直接作尾表达式，或 `Ok(T::m(…)?)`。
+  - `Err(…)` 是异常路径，不计入；发散宏（`panic!` 等）作尾表达式不产生值。
+  - 其余形态（局部变量、方法调用、本文件自由 fn、其他宏、宏内含 `return`、无 else 的 `if`）记为未知。
+- **合并**：同名 fn（`merge_fn`）与成员命中的多个 fn（`MemberHw::absorb`）取并，任一未知即未知。返回来源只取本 fn 自己的返回点，
+  不沿 `close_transitive` / 手写对象 `absorb_body` 从被调 fn 传递。
+- **引擎**（`engine/hw_ret.rs`、`process_handwritten`）：路径类型经 `resolve_tref` 解析，Rust 名按 `methods_by_rust_name` 取同实参数的方法。
+  全部命中都是静态方法、可解析，且被调方按返回值节点给出结果（`RetModel::Plain`）时，接 R(被调) → R(本方法)，返回类型不再导出值池；
+  否则（含命中 fn 为空）退回 open(返回类型)，即原行为。
+
+#### 健全性
+
+- null 不贡献对象。尾调用交出的就是被调方本次调用的返回值，被调方的 R 节点汇合其全部返回值，是它的上近似。
+- 按调用点建模返回值的被调方（类镜像 / 浅拷贝 / 内存读取 / 新数组 / 调用者类），其 R 不一定承载结果，因此一律退回 open。
+- 判定只在「全部返回点都认得」时生效，认不出的形态一律退回原行为。
+- 返回类型不再导出值池：导出的作用是让 open 返回值能从值池取到对象。返回值改由被调方 R 给出后，值池里的对象不会经返回值交出。
+
+#### 实测（`--stop-after` 级 `rava closure`，冷缓存，B2 = 0c8eb802 → B3）
+
+| 例 | 类（基线 / B2 / B3） | 方法（基线 / B2 / B3） | B3 ⊆ B2 | B3 ⊆ 基线 |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 / 469 | 1828 / 1827 / 1827 | 是 | 是 |
+| StockTrans | 3193 / 3185 / 3185 | 20429 / 20276 / 20261 | 是 | 是 |
+| DeepCopy | 3195 / 3187 / 3187 | 20447 / 20294 / 20279 | 是 | 是 |
+| TestSerialDefaultSuid | 3200 / 3192 / 3192 | 20441 / 20288 / 20273 | 是 | 是 |
+
+- `@opens:java/net/URL` 的引入点从 `R ClassLoader.getResource` + `nextProviderClass@173`（4 个上下文）+ `URL.equals@1`
+  收窄到只剩 `URL.equals@1`。
+- 三个大例各少 15 个方法，内容一致：`URLConnection.getLastModified` / `getHeaderField*`、`FileURLConnection.getLastModified`、
+  `MessageHeader.findValue`、`ZipEntry.getTime` 与 `ZipUtils.*DosToJavaTime`、`LocalDateTime.of` / `LocalTime.of` / `ZoneRules.getOffset`、
+  `Class.setSigners`、`StringTokenizer.hasMoreElements`、`ConcurrentHashMap$KeyIterator.nextElement`。类数不变。
+
+#### 验证
+
+- 本机：`closure` crate 全部单测 171 通过（新增 `handwritten::returns` 3 例）；`rava` release 构建通过；
+  `closure_cli` 的 `closure_independent_of_hash_seed` 与 `container_elements_per_object` 均通过。
+- C4 全量冻结期内未发起服务器作业。冻结解除后跑服务器单测，并与 §30.6 一起按 §30.3 抽查。
+
+#### 遗留
+
+- jar `Handler.openConnection` 与 `JarVerifier` 仍在闭包内，引入点只剩 `URL.equals@1`（`Object` 形参 `instanceof URL`）与
+  URL 对象 handler 字段的分派，这部分归 B4 / B1 / B5（§30.2）。§30.1 的 −277 上界仍待 B4 → B1 → B5 兑现。
+- 返回来源只认尾调用形态。手写体先绑定局部变量再返回（`let x = T::m()?; Ok(x)`）的仍按 open 处理。需要时再扩展到
+  局部 `let` 的单赋值传递，判定口径不变。
