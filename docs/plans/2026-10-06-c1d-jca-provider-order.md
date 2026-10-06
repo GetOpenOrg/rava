@@ -150,9 +150,17 @@ jdk_resources/java.security.{21,25}.properties`），原生二进制不接受 `-
 Signature / KeyFactory / KeyPairGenerator 的同名服务；求值先后随调度变化。修复（1845f494）：请求名按（服务类型, 算法键）登记，
 `jca::select` 只按同类型命中（含同义名）。修复后两侧均为 2602 / 15667，其余测试数字不变。
 
-### 5.4 顺序无关与单测
+### 5.4 验收
 
-（见 §5.5 记录）
+- **顺序无关**：Digester / SecurityDemo（扣住）与 TestRsaSignVerify（放行）在 D+S 上以 `--hash-seed 7`、`--flow-batch 1` 各重跑，
+  类集合、方法集合与缺省运行逐项相同（via 可变）。
+- **单测**：本机 closure crate 171 通过（含 `jca_order` 5 例、`jca::select` 按类型登记新用例）；服务器全量单测
+  `c1dj-ut-1845f494`（sg1，生成器 + rava_macros_core）523 通过 0 失败，rc=0。
+- **服务器 spot**（`c1dj-spot-1845f494`，JDK 21）：TestMessageDigestApi、Digester、TestSecureRandomApi、SecurityDemo、
+  TestJcaIndirectDigest、TestMacHmacDigest、TestRsaSignVerify、TestEcSignVerify、TestAesGcmRound、TestCipherDesModes、
+  DeepCopy、TestSerialDefaultSuid、StockTrans、HelloWorld 14/14 通过（输出与 JDK 一致，无存根命中）。
+- **局限**：不叠切除时本能力在全部测试上放行，e2e 闭包与改动前相同；扣住分支的运行期正确性只能在 D（能力①）与 S（能力③）落地后
+  由 e2e 覆盖——届时 Digester / TestSecureRandomApi / SecurityDemo 是首批验证例。
 
 ## 6. 恢复入口
 
