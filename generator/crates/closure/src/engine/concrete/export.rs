@@ -109,8 +109,8 @@ fn is_default(v: CV) -> bool {
     }
 }
 
-/// 导出映像（含 lambda 对象时失败）
-pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
+/// 导出映像（含 lambda 对象时失败）；`current_thread` 为 VM 初始线程的堆下标
+pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, String> {
     let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new(), texprs: HashMap::default(), exprs: Vec::new() };
     let mut statics: Vec<(&(Rc<str>, Rc<str>), u32, CV)> = vm.statics.iter().map(|(k, v)| (&vm.fnames[*k as usize], *k, *v)).collect();
     statics.sort_by(|a, b| a.0.cmp(b.0));
@@ -240,6 +240,7 @@ pub(super) fn export(vm: &Vm) -> Result<ImageData, String> {
     d.build_time = bt;
     d.cells = vm.cells.iter().map(|(n, v)| (n.to_string(), *v)).collect();
     d.cells.sort();
+    d.current_thread = current_thread.map(|o| x.ids[&o]);
     if x.order.len() != d.objs.len() {
         return Err(format!("污点表达式引用了映像根不可达的对象 {} 个", x.order.len() - d.objs.len()));
     }

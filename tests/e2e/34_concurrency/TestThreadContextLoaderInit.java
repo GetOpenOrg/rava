@@ -1,7 +1,6 @@
-// 边界用例：只建线程、不经系统类加载器链的程序，首次读写 Thread.contextClassLoader 时
-// 由 initPhase3 段（ClassLoader.__vm_init_phase3）经手写体设置初始线程的上下文加载器——
-// 手写体里经模块路径调用的自由 fn（super::thread_impl::__vm_initial_thread()）的返回类型
-// 须推得出，其上的 setContextClassLoader 回调才入闭包（本程序字节码不直接调用它）。
+// 边界用例：只建线程、不经系统类加载器链的程序读写 Thread.contextClassLoader。初始线程的上下文
+// 加载器由 initPhase3 设置——构建期引导映像求值后随映像物化，启动序列把映像中的 main 线程对象绑定为
+// 初始线程；新线程在构造时继承它（本程序字节码不直接调用 setContextClassLoader）。
 public class TestThreadContextLoaderInit {
     public static void main(String[] args) throws Exception {
         StringBuilder sb = new StringBuilder();

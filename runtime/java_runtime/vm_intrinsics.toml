@@ -764,9 +764,9 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # `属主.字段名:描述符`；receiver = true 的钩子是属主上的接收者方法（`fn(&self) -> Result<&Self>`），
 # 发射为 `recv.hook()?.__get_x()`；否则为宿主类静态 fn，访问（读 / 写）前调用。手写体属
 # docs/reference/handwritten-boundary.md 准入第 ③ 类（VM 注入状态）。
-# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
-# - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
-#   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
+# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充。
+#   （ClassLoader.scl / Thread.contextClassLoader 由构建期引导映像给出：initPhase3 构建期执行，初始线程为映像
+#   中的 main 线程，启动序列绑定到 OS 主线程。）
 # boot_singletons：类镜像上的实例方法，接收者所指类由引导加载器定义时恒返回同一个进程内对象（手写承载）。
 # 闭包分析器给这类结果带身份标签，引用相等按标签折叠（AccessibleObject.checkCanSetAccessible 的
 # 调用方模块 == 声明类模块等）。
@@ -778,8 +778,6 @@ boot_singletons = [
 
 [vm_state.field_hooks]
 "java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
-"java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
-"java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
 
 # loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
 # 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →

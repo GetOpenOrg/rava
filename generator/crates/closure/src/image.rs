@@ -111,6 +111,9 @@ pub struct ImageData {
     pub steps: Vec<IStep>,
     /// 联合不动点的活对象（升序）；抽象分析之前为空
     pub live: Vec<u32>,
+    /// VM 初始线程（HotSpot `create_initial_thread` 的 main 线程对象）：启动序列把它绑定为 OS 主线程的
+    /// 当前线程（§5.5.1 S3）
+    pub current_thread: Option<u32>,
 }
 
 fn val(v: IVal) -> Value {
@@ -260,6 +263,7 @@ impl ImageData {
             "exprs": exprs,
             "steps": steps,
             "live": self.live,
+            "current_thread": self.current_thread,
         })
     }
 
@@ -287,6 +291,7 @@ impl ImageData {
                 body,
             });
         }
+        d.current_thread = v.get("current_thread").and_then(Value::as_u64).map(|x| x as u32);
         d.statics = arr("statics")?.iter().map(untriple).collect::<Result<_, _>>()?;
         d.strings = arr("strings")?.iter().map(|x| x.as_u64().map(|x| x as u32).ok_or("映像驻留表格式")).collect::<Result<_, _>>()?;
         d.build_time = arr("build_time")?.iter().map(|x| x.as_str().map(str::to_string).ok_or("映像类表格式")).collect::<Result<_, _>>()?;
@@ -373,6 +378,7 @@ mod tests {
                 IStep::Region { phase: "a/B.p:()V".into(), start: 1, end: None, locals: vec![IVal::N] },
             ],
             live: vec![0, 2],
+            current_thread: Some(0),
         };
         let back = ImageData::from_json(&d.to_json()).unwrap();
         assert_eq!(back, d);

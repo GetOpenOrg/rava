@@ -12,6 +12,11 @@ pub fn mirror(desc: &str) -> Object {
     Object::from(Class::__class_for_descriptor(desc))
 }
 
+/// 映像中的 VM 初始线程绑定为 OS 主线程的当前线程
+pub fn bind_initial_thread(t: Object) {
+    Thread::from(t).__vm_bind_initial();
+}
+
 /// 驻留映像字符串（构建期驻留表的内容：运行期驻留表以映像对象为规范实例）
 pub fn intern(s: Object) {
     let _ = String::from(s).__interned();

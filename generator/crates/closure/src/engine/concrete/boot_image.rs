@@ -335,7 +335,7 @@ impl<'a> Engine<'a> {
             error = s2.fail.clone();
         }
         let data = if error.is_none() {
-            match super::export::export(&vm) {
+            match super::export::export(&vm, env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i).copied())) {
                 Ok(d) => Some(d),
                 Err(e) => {
                     error = Some(format!("映像导出：{e}"));

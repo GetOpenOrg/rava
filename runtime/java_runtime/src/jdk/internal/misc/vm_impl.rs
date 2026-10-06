@@ -15,9 +15,8 @@ impl VM {
 
     /// 引导阶段 `initLevel()`（VM 注入状态，准入第 ③ 类；HotSpot 由 initPhase1~3 经 `initLevel(int)` 写入）。
     /// 原生二进制进入 main 时为 SYSTEM_BOOTED（4）；只有正在执行引导段的线程在段内读到该段的档位：
-    /// initPhase1 的属性快照段（`System::registerNatives` → `VM.saveProperties`）为 0，initPhase3 的系统类
-    /// 加载器段（`ClassLoader::__vm_init_phase3`）为 SYSTEM_LOADER_INITIALIZING（3）——其余线程此时读
-    /// 对应状态会在该段的互斥上等待结束，与 JVM「引导段先于任何应用线程」的时序一致。
+    /// 引导映像启动序列按构建期档位重放残差步骤（`image_rt::set_level`），启动序列先于任何应用线程，
+    /// 与 JVM「引导段先于任何应用线程」的时序一致。
     #[jvm_boundary]
     pub fn initLevel() -> Result<i32> {
         Ok(crate::exec_context::state().boot_level.get().unwrap_or(4))

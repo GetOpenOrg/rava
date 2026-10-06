@@ -325,6 +325,13 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
     for (name, v) in &d.cells {
         g.line(&format!("rt::vm_cell({name:?}, {v}i64);"));
     }
+    // VM 初始线程（§5.5.1 S3）：先于任何 Java 代码绑定为 OS 主线程的当前线程
+    if let Some(t) = d.current_thread {
+        if !p.mat.contains(&t) {
+            return Err(EmitError::Input(format!("引导映像的初始线程 #{t} 未物化")));
+        }
+        g.line(&format!("rt::bind_initial_thread({});", obj_ref(t)));
+    }
     // 链接：常量不可表达的映像内引用与类镜像；占位对象留到其步骤
     for l in links {
         if p.obj(l.target).placeholder {

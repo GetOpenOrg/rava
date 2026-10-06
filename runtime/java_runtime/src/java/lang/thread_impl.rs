@@ -104,15 +104,6 @@ crate::__process_static! {
         crate::sync_model::__RefSlot::new(None);
 }
 
-/// 初始线程对象：initPhase3 在其上设上下文类加载器。尚未构造时调用方即在初始线程上（其余 Java 线程都由
-/// 初始线程派生，派生时已经 currentThread 构造了它）。
-pub(crate) fn __vm_initial_thread() -> Result<Thread> {
-    if let Some(t) = INITIAL_THREAD.with(|m| m.borrow().as_ref().map(Clone::clone)) {
-        return Ok(t);
-    }
-    Thread::currentThread()
-}
-
 fn thread_identity(t: &Thread) -> usize {
     Object::from(Clone::clone(t)).0.__identity() as usize
 }
@@ -168,6 +159,28 @@ fn run_java_thread(t: &Thread) {
 }
 
 impl Thread {
+    /// 绑定初始线程（计划 2026-10-05-boot-image-evaluator §5.5.1 S3）：引导映像中的 main 线程（HotSpot
+    /// `create_initial_thread` 的对象：system / main 线程组、initPhase3 设定的上下文类加载器）成为 OS 主线程的
+    /// 当前线程。eetop / threadStatus 按 `create_initial_thread` 写入（存活、RUNNABLE）。启动序列在任何 Java
+    /// 代码之前调用；此前若已按需构造过初始线程，以映像线程取代。
+    #[doc(hidden)]
+    pub fn __vm_bind_initial(&self) {
+        let t = Clone::clone(self);
+        t.__set_eetop(1);
+        let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
+        let old = INITIAL_THREAD.with(|m| m.borrow_mut().replace(Clone::clone(&t)));
+        LIVE_THREADS.with(|v| {
+            let mut v = v.borrow_mut();
+            if let Some(old) = old {
+                let id = thread_identity(&old);
+                v.retain(|x| thread_identity(x) != id);
+            }
+            v.insert(0, Clone::clone(&t));
+        });
+        set_carrier_slot(Some(Clone::clone(&t)));
+        set_current_slot(Some(t));
+    }
+
     /// 线程 id 计数字的地址与初值（引导映像 VM 单元 `next_thread_id`；本伴生文件以私有 mod 挂入，
     /// 经类型挂载对包外可见）
     #[doc(hidden)]
@@ -405,4 +418,70 @@ fn platform_main_thread() -> Thread {
     let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
     t.__set_holder(holder);
     t
+}
+
+/// 派生 VM 系统线程（HotSpot `JavaThread::create_system_thread_object` + `start_internal_daemon`，如
+/// 「Signal Dispatcher」）：守护线程，属 system 线程组（初始线程所在组的父组），最高优先级；线程对象
+/// 在调用线程上按与主线程相同的方式直接构造（不经 Java 构造器），线程号取同一计数。
+fn spawn_vm_system_thread(name: &'static str, body: impl FnOnce() + Send + 'static) -> Result<()> {
+    let t = vm_system_thread(name)?;
+    LIVE_THREADS.with(|v| v.borrow_mut().push(Clone::clone(&t)));
+    crate::gil::note_started(true);
+    let handoff = crate::gil::Handoff(Clone::clone(&t));
+    let spawned = std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(JAVA_THREAD_STACK)
+        .spawn(move || {
+            let handoff = handoff;
+            let t = handoff.0;
+            rava_coro::init_platform_thread();
+            set_carrier_slot(Some(Clone::clone(&t)));
+            set_current_slot(Some(Clone::clone(&t)));
+            body();
+            t.__set_eetop(0);
+            let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
+            let id = thread_identity(&t);
+            LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
+            set_current_slot(None);
+            set_carrier_slot(None);
+            drop(t);
+            crate::gil::note_terminated(true);
+        });
+    if spawned.is_err() {
+        let id = thread_identity(&t);
+        LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
+        crate::gil::note_terminated(true);
+        return Err(JvmError::out_of_memory("unable to create native thread"));
+    }
+    Ok(())
+}
+
+/// 系统线程对象：组取当前线程所在组的根（system 组），优先级 MAX、守护
+fn vm_system_thread(name: &str) -> Result<Thread> {
+    let mut group = Thread::currentThread()?.__get_holder().__get_group();
+    loop {
+        let parent = group.__get_parent();
+        if Object::from(Clone::clone(&parent)).0.is_jvm_null() {
+            break;
+        }
+        group = parent;
+    }
+    let mut t = Thread::default();
+    t._init_not_null();
+    t.__set_eetop(1);
+    t.__set_tid(NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    t.__set_name(String::from(name));
+    t.__set_interruptLock(Object::new()?);
+    let holder = Thread_FieldHolder::new(group, Default::default(), 0, Thread::MAX_PRIORITY()?, true)?;
+    let _ = holder.__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
+    t.__set_holder(holder);
+    Ok(t)
+}
+
+impl Thread {
+    /// 派生 VM 系统线程（见 [`spawn_vm_system_thread`]；本伴生文件以私有 mod 挂入，经类型挂载对包外可见）
+    #[doc(hidden)]
+    pub fn __vm_spawn_system(name: &'static str, body: impl FnOnce() + Send + 'static) -> Result<()> {
+        spawn_vm_system_thread(name, body)
+    }
 }

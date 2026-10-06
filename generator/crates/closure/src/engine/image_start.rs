@@ -116,6 +116,10 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        // VM 初始线程：启动序列把它绑定为 OS 主线程的当前线程（运行期 `Thread.currentThread()` 的结果）
+        if let Some(t) = data.current_thread {
+            self.image_roots(&[IVal::R(t)]);
+        }
         // 已出现的字段节点 / 镜像补传播
         let keys: Vec<MemberRef> = self.fields.keys().cloned().collect();
         for (fi, k) in keys.into_iter().enumerate() {
