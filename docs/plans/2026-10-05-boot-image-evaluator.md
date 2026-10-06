@@ -531,7 +531,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - `--flows "@openorig:<类型>|<节点>"` 与 `@grow:` 可定位 open 注入点。
 2. 再做发射侧 D1–D5 与启动重放函数。
 3. 最后删 `[boot_init] calls / phases`、FS-C2 钩子，加 TestBootLayer，跑服务器单测 / 审计 / 抽查。
-4. 确定性（`--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64）在本次提交上尚未复验。
+4. 确定性：64075e73 上 HelloWorld `--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64 四组合已复验（本机 macOS JDK 21）。映像数据（`boot_image_data`）逐字节一致；类集合（2,986）、方法集合（18,008）、折叠计数、实例化 1,991 全部一致，差异只在 via 与内部计数 `method_contexts` / `context_objects`（±0.1%）。JDK 25 尚未复验。
 5. 本分支在发射侧完成前不可合入：分析已从映像出发，但映像尚未物化。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
