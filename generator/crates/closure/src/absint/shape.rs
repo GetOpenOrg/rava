@@ -94,9 +94,9 @@ impl Shape {
         Shape { pre: Rc::from(""), suf: Rc::from(""), no: !ascii_mask(allowed), exact: false }
     }
 
-    /// 确定不含 `absent` 中各 ASCII 字符的任意串
-    pub fn excluding(absent: &str) -> Shape {
-        Shape { pre: Rc::from(""), suf: Rc::from(""), no: ascii_mask(absent), exact: false }
+    /// 以 `prefix` 开头、确定不含 `absent` 中各 ASCII 字符的串（清单形状事实；前缀超过 [`CAP`] 时截短）
+    pub fn prefixed(prefix: &str, absent: &str) -> Shape {
+        Shape { pre: Rc::from(head(prefix, CAP)), suf: Rc::from(""), no: ascii_mask(absent), exact: false }
     }
 
     /// 推不出任何性质

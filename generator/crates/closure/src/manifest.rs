@@ -94,6 +94,13 @@ pub enum Fact {
 }
 
 /// 字符 / 字符串纯函数（[facts.string_ops]）：接收者与实参都是常量时结果即常量
+/// 返回串的形状事实（`[facts.string_shapes]`）：非 null 结果一定以 `prefix` 开头、不含 `excludes` 中的 ASCII 字符
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrShapeFact {
+    pub prefix: String,
+    pub excludes: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrOp {
     /// 忽略大小写相等（实参 null 为 false）
@@ -191,8 +198,8 @@ pub struct Manifest {
     value_equals: HashSet<String>,
     /// 字符串纯函数
     string_ops: HashMap<String, StrOp>,
-    /// 返回串的形状事实（[facts.string_shapes]）：方法 → 结果确定不含的 ASCII 字符
-    string_shapes: HashMap<String, String>,
+    /// 返回串的形状事实（[facts.string_shapes]）：方法 → 非 null 结果的已知前缀与确定不含的 ASCII 字符
+    string_shapes: HashMap<String, StrShapeFact>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 空的不可修改集合工厂与其上的查询结果（`[facts.empty_collections]`）
@@ -288,12 +295,20 @@ impl Manifest {
         let mut string_shapes = HashMap::new();
         if let Some(t) = vm.get("facts").and_then(|s| s.get("string_shapes")).and_then(|v| v.as_table()) {
             for (k, v) in t {
-                match v.get("excludes").and_then(|x| x.as_str()) {
-                    Some(x) if x.is_ascii() && v.as_table().is_some_and(|t| t.len() == 1) => {
-                        string_shapes.insert(k.clone(), x.to_string());
-                    }
-                    _ => return Err(format!("vm_intrinsics.toml [facts.string_shapes]：{k} 的值须为 {{ excludes = \"<ASCII 字符>\" }}")),
+                let bad = || format!("vm_intrinsics.toml [facts.string_shapes]：{k} 的值须为 {{ prefix = \"<串>\", excludes = \"<ASCII 字符>\" }}（至少一项，前缀不含被排除的字符）");
+                let tb = v.as_table().ok_or_else(bad)?;
+                if tb.is_empty() || tb.keys().any(|x| x != "prefix" && x != "excludes") {
+                    return Err(bad());
                 }
+                let get = |name: &str| match tb.get(name) {
+                    None => Ok(String::new()),
+                    Some(x) => x.as_str().map(str::to_string).ok_or_else(bad),
+                };
+                let (prefix, excludes) = (get("prefix")?, get("excludes")?);
+                if !excludes.is_ascii() || prefix.chars().any(|c| excludes.contains(c)) {
+                    return Err(bad());
+                }
+                string_shapes.insert(k.clone(), StrShapeFact { prefix, excludes });
             }
         }
 
@@ -780,9 +795,9 @@ impl Manifest {
         self.string_ops.get(member).copied()
     }
 
-    /// 方法返回串确定不含的 ASCII 字符（`[facts.string_shapes]`）
-    pub fn string_excludes(&self, member: &str) -> Option<&str> {
-        self.string_shapes.get(member).map(String::as_str)
+    /// 方法返回串的形状事实（`[facts.string_shapes]`）
+    pub fn string_shape(&self, member: &str) -> Option<&StrShapeFact> {
+        self.string_shapes.get(member)
     }
 
     pub fn is_null_to_false(&self, member: &str) -> bool {

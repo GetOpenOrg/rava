@@ -33,6 +33,17 @@ impl PV {
             _ => PV::of(v),
         }
     }
+    /// 返回常量格的合流：在 [`PV::join`] 之上，两侧都确定非空而值 / 标签无法合流时取「非空引用」
+    /// （如一条路径返回常量串、另一条返回带字段标签的新建对象）
+    pub(super) fn join_ret(a: Option<&PV>, b: &PV) -> PV {
+        match PV::join(a, b) {
+            PV::Top => match (a, b) {
+                (Some(PV::Const(x)), PV::Const(y)) if x.nonnull() == Some(true) && y.nonnull() == Some(true) => PV::Const(nonnull_ref()),
+                _ => PV::Top,
+            },
+            j => j,
+        }
+    }
     pub(super) fn join(a: Option<&PV>, b: &PV) -> PV {
         match (a, b) {
             (None, x) => x.clone(),
@@ -422,8 +433,8 @@ impl Ctx<'_> {
                 }
             }
         };
-        let shape = self.man.string_excludes(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_excludes(t))).map(|x| {
-            let sh = crate::absint::Shape::excluding(x);
+        let shape = self.man.string_shape(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_shape(t))).map(|x| {
+            let sh = crate::absint::Shape::prefixed(&x.prefix, &x.excludes);
             V::Ref { ty: None, nonnull: false, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Str(sh))) }
         });
         let c = Rc::new(CallInfo {
@@ -616,6 +627,10 @@ impl Oracle for Facts<'_, '_> {
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)
     }
+    fn final_field(&self, f: &MemberRef) -> bool {
+        // 只看声明的访问标志（与开放判定无关，见 `narrow.rs`）：结果不随分析增长，无须登记依赖
+        self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::FINAL != 0 && fi.access & acc::STATIC == 0)
+    }
 }
 
 /// 反序列化可写的字段：非 static、非 transient，且声明类可序列化（非可序列化超类的字段由其无参构造器初始化，走字节码）
@@ -633,6 +648,20 @@ mod tests {
         assert!(!deser_writes(acc::PRIVATE, false));
         assert!(!deser_writes(acc::STATIC, true));
         assert!(!deser_writes(acc::TRANSIENT, true));
+    }
+
+    /// 返回常量格合流：常量串 × 带对象标签的新建对象（`StringLatin1.newString` 形态）两侧都非空时取非空引用；
+    /// 任一侧可空时仍取 Top
+    #[test]
+    fn join_ret_keeps_nonnull() {
+        let s = PV::Const(V::Str(Rc::from(""), Rc::from([].as_slice())));
+        let tagged = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) };
+        let o = PV::Const(tagged.clone());
+        assert_eq!(PV::join(Some(&s), &o), PV::Top);
+        assert_eq!(PV::join_ret(Some(&s), &o), PV::Const(nonnull_ref()));
+        let maybe = PV::Const(V::Ref { ty: None, nonnull: false, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) });
+        assert_eq!(PV::join_ret(Some(&s), &maybe), PV::Top);
+        assert_eq!(PV::join_ret(None, &o), o);
     }
 }
 

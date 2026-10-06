@@ -185,7 +185,8 @@ value_equals = [
 "java/lang/String.lastIndexOf:(Ljava/lang/String;I)I" = "last_index_of"
 "java/lang/String.contains:(Ljava/lang/CharSequence;)Z" = "contains"
 
-# 返回串的形状事实：结果确定不含 excludes 中的 ASCII 字符（实参常量能求出常量时取常量）。
+# 返回串的形状事实：非 null 结果一定以 prefix 开头、确定不含 excludes 中的 ASCII 字符（两项至少一项；
+# 实参常量能求出常量时取常量）。结果仍可为 null。
 # ParseUtil.encodePath：firstEncodeIndex 对 `#`（0x23）/ `?`（0x3F）——不在 a-z / `&`-`:` / A-Z 快速通道内——按
 # L_ENCODED 判定（两者的位 35 / 63 置位），命中即从该处起走 encodePath(path, index, sep) 逐字符转义为 `%23` / `%3F`；
 # 分隔符 sep 为 File.separatorChar 或 `/`，不是这两个字符。于是结果恒不含 `#` `?`
@@ -193,6 +194,12 @@ value_equals = [
 [facts.string_shapes]
 "sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;)Ljava/lang/String;" = { excludes = "#?" }
 "sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;Z)Ljava/lang/String;" = { excludes = "#?" }
+# BootLoader.getSystemPackageLocation（native，手写边界类 1；落地语义属类 3「VM 注入状态」）：JVM 返回引导加载器
+# 所定义包的位置——命名模块的包为模块位置 `jrt:/<模块名>`，`-Xbootclasspath/a` 追加项上的包为该类路径项，未定义为
+# null。原生二进制没有 `-Xbootclasspath/a`（无启动参数注入，引导类全部来自构建期的模块镜像），所以结果只有 null 与
+# `jrt:/<模块名>` 两种。手写实现（a3-L1 / 引导映像第 5 步）须守此约定。用途：PackageHelper.definePackage 经
+# findModule 的 `startsWith("jrt:/")` 只走模块分支，`toFileURL` / `getManifest`（→ JarFile → JarVerifier）不可达
+"jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;" = { prefix = "jrt:/" }
 
 [facts.returns]
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`

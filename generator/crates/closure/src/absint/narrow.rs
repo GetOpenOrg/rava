@@ -15,6 +15,16 @@
 //!
 //! null 收窄：`aload k; ifnull/ifnonnull` 两侧各自收窄局部变量 k——为 null 一侧即 null，非 null 一侧
 //! 保留原值（来源 / 类型 / 标签不变）并确定非空。两条指令须处于同一基本块。
+//!
+//! final 字段重读：`aload k; getfield f; ifnull/ifnonnull`（三条同块，f 为 [`Oracle::final_field`]）非 null 一侧
+//! 记下「局部 k 所指对象的 f 非空」（[`State::nnf`]）；此后（沿控制流，合流取交集）`aload k; getfield f`（两条同块）
+//! 的结果确定非空。依据：
+//! - 本线程内：final 实例字段的字节码写入只在声明类 `<init>` 里（JVMS §6.5 putfield），字节码外写入（反射 / Unsafe /
+//!   反序列化 / 手写）都要经调用；事实在本帧 `putfield f` 与任一调用处撤掉，所以两次读取之间本线程不会改写它。
+//! - 他线程：两次读取之间本线程无调用，他线程的写入与第二次读取之间没有 happens-before 边，第二次读取取到第一次的值
+//!   是 JLS §17.4.5 允许的结果；final 字段另有 JLS §17.5.3：实现可以缓存 final 字段的值、不重新读取，即使它在构造后
+//!   被反射改写（HotSpot C2 对无中间副作用的同字段读取同样做公共子表达式合并）。因此不看字段的开放判定。
+//! 事实在写 k（含宽类型覆盖）、本帧 `putfield f`、任一调用处撤掉，异常处理器入口为空。
 
 use std::rc::Rc;
 
@@ -120,5 +130,35 @@ fn aload_slot(ld: &Insn) -> Option<usize> {
         (0x19, Operand::Local(k)) => Some(*k as usize),
         (0x2a..=0x2d, _) => Some((ld.opcode - 0x2a) as usize),
         _ => None,
+    }
+}
+
+/// 下标 i 处 `aload k; getfield f; ifnull/ifnonnull` 的 final 字段非空判定：返回 (k, f, 非 null 一侧是否为跳转侧)
+pub(super) fn final_null_test(insns: &[Insn], leader: &[bool], i: usize, is_final: impl Fn(&MemberRef) -> bool) -> Option<(usize, MemberRef, bool)> {
+    let nonnull_taken = match insns[i].opcode {
+        op::IFNULL => false,
+        op::IFNONNULL => true,
+        _ => return None,
+    };
+    if i < 2 || leader[i] || leader[i - 1] {
+        return None;
+    }
+    let (op::GETFIELD, Operand::Field(f)) = (insns[i - 1].opcode, &insns[i - 1].operand) else { return None };
+    let k = aload_slot(&insns[i - 2])?;
+    is_final(f).then(|| (k, f.clone(), nonnull_taken))
+}
+
+/// 刚执行完下标 i 的 `getfield f`：前一条是同块的 `aload k` 且 (k, f) 已知非空时，栈顶结果确定非空
+pub(super) fn final_reread(insns: &[Insn], leader: &[bool], i: usize, st: &mut State) {
+    if st.nnf.is_empty() || i < 1 || leader[i] {
+        return;
+    }
+    let (op::GETFIELD, Operand::Field(f)) = (insns[i].opcode, &insns[i].operand) else { return };
+    let Some(k) = aload_slot(&insns[i - 1]) else { return };
+    if !st.nnf.iter().any(|(j, g)| *j == k && g == f) {
+        return;
+    }
+    if let Some(V::Ref { nonnull, .. }) = st.stack.last_mut() {
+        *nonnull = true;
     }
 }

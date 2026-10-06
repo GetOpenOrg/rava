@@ -109,10 +109,17 @@ fn string_shapes_parse() {
     let m = with_vm("[facts.string_ops]\n\"a/S.sw:(La/S;)Z\" = \"starts_with\"\n\"a/S.io:(I)I\" = \"index_of\"\n[facts.string_shapes]\n\"a/P.enc:(La/S;)La/S;\" = { excludes = \"#?\" }\n").unwrap();
     assert_eq!(m.string_op("a/S.sw:(La/S;)Z"), Some(StrOp::StartsWith));
     assert_eq!(m.string_op("a/S.io:(I)I"), Some(StrOp::IndexOf));
-    assert_eq!(m.string_excludes("a/P.enc:(La/S;)La/S;"), Some("#?"));
-    assert_eq!(m.string_excludes("a/P.x:()La/S;"), None);
+    let enc = m.string_shape("a/P.enc:(La/S;)La/S;").unwrap();
+    assert_eq!((enc.prefix.as_str(), enc.excludes.as_str()), ("", "#?"));
+    assert_eq!(m.string_shape("a/P.x:()La/S;"), None);
+    let m = with_vm("[facts.string_shapes]\n\"a/B.loc:(La/S;)La/S;\" = { prefix = \"jrt:/\" }\n").unwrap();
+    let loc = m.string_shape("a/B.loc:(La/S;)La/S;").unwrap();
+    assert_eq!((loc.prefix.as_str(), loc.excludes.as_str()), ("jrt:/", ""));
     assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = { excludes = \"#\", extra = 1 }\n").is_err());
     assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = \"#\"\n").is_err());
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = {}\n").is_err());
+    // 前缀含被排除的字符：自相矛盾
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = { prefix = \"a#\", excludes = \"#\" }\n").is_err());
 }
 
 #[test]

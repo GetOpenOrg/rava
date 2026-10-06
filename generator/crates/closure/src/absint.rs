@@ -307,6 +307,10 @@ pub trait Oracle {
     fn str_kind(&self, _opcode: u8, _m: &MemberRef, _iface: bool) -> Option<StrKind> {
         None
     }
+    /// 字段是否为 final 实例字段，见 `narrow.rs` 的 final 字段重读
+    fn final_field(&self, _f: &MemberRef) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -394,6 +398,8 @@ struct State {
     stack: Vec<V>,
     /// 本帧在全部路径上都已写入的 static final 字段及其值（见 [`Oracle::final_static`]）
     finals: Vec<(MemberRef, V)>,
+    /// 已判定非空的 (局部变量槽, final 实例字段)（见 `narrow.rs` 的 final 字段重读）
+    nnf: Vec<(usize, MemberRef)>,
 }
 
 impl State {
@@ -425,6 +431,9 @@ impl State {
             None => false,
         });
         changed |= self.finals.len() != before;
+        let before = self.nnf.len();
+        self.nnf.retain(|x| o.nnf.contains(x));
+        changed |= self.nnf.len() != before;
         for (a, b) in self.locals.iter_mut().chain(self.stack.iter_mut()).zip(o.locals.iter().chain(o.stack.iter())) {
             let j = a.join(b);
             if j != *a {
@@ -724,6 +733,9 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 if wide {
                     s.locals[idx + 1] = V::Hi;
                 }
+                if !s.nnf.is_empty() {
+                    s.nnf.retain(|(k, _)| *k != idx && !(wide && *k == idx + 1));
+                }
             }
             0x4f | 0x51 | 0x54 | 0x55 | 0x56 => popn(s, 3)?,
             0x50 | 0x52 => popn(s, 4)?,
@@ -971,6 +983,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                         if let Some(v) = &value {
                             strs::escape(s, v);
                         }
+                        s.nnf.retain(|(_, g)| g != f);
                     }
                 }
                 self.ev(off, Event::Field { opcode: opc, mref: f.clone(), recv, value });
@@ -983,6 +996,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     let recv = pop(s)?;
                     args.insert(0, recv);
                 }
+                s.nnf.clear();
                 let kind = self.oracle.str_kind(opc, m, *iface);
                 let retag = strs::invoke(s, kind, &md.params, &args, opc == op::INVOKESTATIC);
                 let r = self.oracle.invoke_result(opc, m, *iface, &args);
@@ -1017,6 +1031,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let Operand::InvokeDynamic { bsm, name, desc, .. } = &ins.operand else { return Err(()) };
                 let md = parse_method(desc).ok_or(())?;
                 let args = pop_args(s, &md.params)?;
+                s.nnf.clear();
                 for a in &args {
                     strs::escape(s, a);
                 }
@@ -1123,7 +1138,7 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
         return None;
     }
     locals.resize(max_locals as usize, V::Top);
-    Some(State { locals, stack: Vec::new(), finals: Vec::new() })
+    Some(State { locals, stack: Vec::new(), finals: Vec::new(), nnf: Vec::new() })
 }
 
 fn conservative(code: &Code) -> Analysis {
@@ -1256,7 +1271,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     }
                 }
                 let ins = &insns[i];
-                match interp.step(&mut st, ins).ok()? {
+                let fl = interp.step(&mut st, ins).ok()?;
+                narrow::final_reread(insns, &leader, i, &mut st);
+                match fl {
                     Flow::Next => {
                         if i + 1 >= n {
                             return None;
@@ -1274,18 +1291,27 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                         // ifnull / ifnonnull 两侧收窄被测局部变量的可空性；前后缀判定成立一侧收窄形状
                         let nulls = narrow::null_narrow(insns, &leader, i, &st)
                             .or_else(|| strs::affix_narrow(insns, &leader, i, &st, |m| interp.oracle.str_kind(op::INVOKEVIRTUAL, m, false)));
-                        let edge = |taken: bool| match (&narrow, &nulls) {
-                            (Some(nw), _) => {
-                                let mut s2 = st.clone();
-                                s2.locals[nw.slot] = nw.side(taken).clone();
-                                s2
+                        let ffield = narrow::final_null_test(insns, &leader, i, |f| interp.oracle.final_field(f));
+                        let edge = |taken: bool| {
+                            let mut s2 = match (&narrow, &nulls) {
+                                (Some(nw), _) => {
+                                    let mut s2 = st.clone();
+                                    s2.locals[nw.slot] = nw.side(taken).clone();
+                                    s2
+                                }
+                                (None, Some((k, on_taken, on_next))) => {
+                                    let mut s2 = st.clone();
+                                    s2.locals[*k] = if taken { on_taken.clone() } else { on_next.clone() };
+                                    s2
+                                }
+                                (None, None) => st.clone(),
+                            };
+                            if let Some((k, f, nn_taken)) = &ffield {
+                                if taken == *nn_taken && !s2.nnf.iter().any(|(j, g)| j == k && g == f) {
+                                    s2.nnf.push((*k, f.clone()));
+                                }
                             }
-                            (None, Some((k, on_taken, on_next))) => {
-                                let mut s2 = st.clone();
-                                s2.locals[*k] = if taken { on_taken.clone() } else { on_next.clone() };
-                                s2
-                            }
-                            (None, None) => st.clone(),
+                            s2
                         };
                         if k != Some(false) {
                             merge(&mut entry, &mut work, at(t)?, &edge(true))?;
@@ -1331,6 +1357,7 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                 locals: hl,
                 stack: vec![V::Ref { ty: Some(ty), nonnull: true, src: src1(Src::Catch(h.handler)), obj: None }],
                 finals: Vec::new(),
+                nnf: Vec::new(),
             };
             merge(&mut entry, &mut work, at(h.handler)?, &st)?;
         }
@@ -1347,7 +1374,9 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         let mut i = l;
         loop {
             let ins = &insns[i];
-            match interp.step(&mut st, ins).ok()? {
+            let fl = interp.step(&mut st, ins).ok()?;
+            narrow::final_reread(insns, &leader, i, &mut st);
+            match fl {
                 Flow::Next if i + 1 < n && !leader[i + 1] => {
                     i += 1;
                     continue;

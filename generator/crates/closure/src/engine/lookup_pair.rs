@@ -159,6 +159,8 @@ impl<'a> Engine<'a> {
         for x in s.classes.iter() {
             match self.mirrors.get(&x) {
                 Some(&c) => classes.push(c),
+                // 非字节码类镜像、基本类型类镜像都没有 Java 字段（同 `class_values`）：按名取不到字段，不算所指未知
+                None if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror => {}
                 None => unknown = true,
             }
         }
