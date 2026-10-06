@@ -51,7 +51,7 @@ impl<'a> Engine<'a> {
                     V::Ref { .. } | V::Str(..) => {
                         // 合流前的各字面量（如按条件二选一的名字）与形参上流入的字符串常量
                         site_names.extend(a.site_lits());
-                        names.extend(a.lits());
+                        names.extend(a.site_lits());
                         names.extend(self.param_strs(m, off, a));
                         names.extend(self.field_strs(m, a));
                         let Some(parts) = self.method_name_parts(m, a) else { continue };
@@ -133,23 +133,20 @@ impl<'a> Engine<'a> {
                 if !spos.contains(&i) {
                     continue;
                 }
-                if !(matches!(a, V::Ref { .. }) || a.derived_str()) {
-                    fnames.extend(a.lits());
-                    continue;
-                }
-                // 本方法的字面量（合流来源里的字面量）总按名放开；常量格给出的名字（形参常量窗口）只在未登记配对时
-                // 放开——配对后形参名字由各调用点按本点类值集点名，中间态常量若在此汇合放开，终态（形参抬为非常量、
-                // 登记配对）不再给出，结果随调用点接入先后而变（同名字段被按名全部放开）
+                // 常量格给出的名字（`V::derived_str`）按来源取：形参（配对或各调用点常量）、字段写入字面量集、
+                // 辅助方法返回常量。中间态常量若当字面量按名放开，形参配对后的终态不再给出该名，放开不撤回（D1）
                 fnames.extend(a.site_lits());
-                let mut paired = false;
-                for &c in &cpos {
-                    paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
+                if matches!(a, V::Ref { .. }) || a.derived_str() {
+                    let mut paired = false;
+                    for &c in &cpos {
+                        paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
+                    }
+                    if !paired {
+                        fnames.extend(self.param_strs(m, off, a));
+                    }
+                    fnames.extend(self.field_strs(m, a));
+                    fnames.extend(self.site_strs(m, a));
                 }
-                if !paired {
-                    fnames.extend(a.lits());
-                    fnames.extend(self.param_strs(m, off, a));
-                }
-                fnames.extend(self.field_strs(m, a));
             }
             for name in &fnames {
                 let mut hit = false;

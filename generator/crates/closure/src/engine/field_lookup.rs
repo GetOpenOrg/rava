@@ -10,7 +10,7 @@
 //! - 查到的静态字段：声明类按静态字段句柄处理（初始化并记为句柄 / 反射链接目标，`static_field_owner`），覆盖
 //!   `findStaticGetter` 等只读入口（按名写字段的 `name_resolvers` 只列写入口）。
 
-use super::class_lookup::{event_at, Part};
+use super::class_lookup::{event_at, is_invoke, Part};
 use super::sealed::is_field;
 use super::method_lookup::parts_match;
 use super::*;
@@ -34,8 +34,8 @@ impl<'a> Engine<'a> {
                 FieldType::Object(c) if c == CLASS && !named => tvals.push(a),
                 FieldType::Object(c) if c == absint::STRING => {
                     named = true;
-                    names.extend(a.lits());
-                    // 常量格给出的名字另按其来源求值（同常量格推不出时，见 `V::Str`）
+                    names.extend(a.site_lits());
+                    // 常量格给出的名字按其来源求值，同常量格推不出时（见 `V::Str`；中间态常量不当字面量，D1）
                     if matches!(a, V::Ref { .. }) || a.derived_str() {
                         names.extend(self.param_strs(m, off, a));
                         names.extend(self.field_strs(m, a));
@@ -138,6 +138,21 @@ impl<'a> Engine<'a> {
             if let Some(Some(set)) = self.field_strs.get(&fi.key) {
                 out.extend(set.iter().cloned());
             }
+        }
+        out
+    }
+
+    /// 值 v 取自调用返回时，被调辅助方法返回值全是字符串常量的候选（[`Self::callee_consts`]，按被调字节码，与
+    /// 求值时机无关）。常量格把这类调用折叠成的字符串常量（`V::Str` 带 `Src::Site`）按此来源取名
+    pub(super) fn site_strs(&mut self, m: usize, v: &V) -> Vec<Rc<str>> {
+        let Some(a) = self.methods[m].analysis.clone() else { return vec![] };
+        let mut out = vec![];
+        for s in v.srcs().iter() {
+            let Src::Site(o) = *s else { continue };
+            if event_at(&a, o, is_invoke).is_none() {
+                continue;
+            }
+            out.extend(self.callee_consts(&a, o, 0).into_iter().flatten());
         }
         out
     }

@@ -975,3 +975,155 @@ TestSerialUserGenericCallbacks 三个种子都是 3391，与 main 种子 1 的�
    - 枢纽翻新（每次增长建新精确枢纽）与延迟站点重跑（来源稳定后再派发）都会改流图形状或处理顺序。
      引擎仍有残余顺序依赖（`--flow-batch` 会改类数），这类方案无法以「集合一致」验收。
      建议先消除顺序依赖，使结果与处理顺序无关，再做结构性改造；是否立项由用户决定。
+
+## D1：处理顺序无关（2026-10-06，closure-order-free 分支）
+
+目标：闭包结果（类集、方法集含 kind 与截断标记、反射成员、折叠、缺口；via 除外）与 `--flow-batch` 和 `--hash-seed` 完全无关。
+这是正确性（确定性）任务。不用「延后放行」或调高 batch 门槛掩盖，每个依赖点都给出不动点单调性论证。
+
+### 判据与工具
+
+- `scripts/diag/order_matrix.sh`：单用例 batch × seed 矩阵，跑冷闭包，用 `cj_cmp.py` 做全键对照（去 via）。
+- `scripts/diag/profile_matrix.sh`：验收集 27 例跑 `rava profile`，多组合对照档案 key 与 content_digest。
+- `scripts/diag/pair_time.sh`：同机配对计时。基准提交经 `git archive` 自建 rava（带自己的 runtime），与当前树交替跑冷闭包，取中位数。
+- 回归单测 `driver/tests/closure_cli.rs::closure_independent_of_order`：
+  - HelloWorld 全矩阵（batch 1/7/64/512/4096 × seed 0/1/2/12345）；
+  - DeepCopy 对角 4 组合；
+  - 闭包 JSON 全键逐项相同（via、summary 除外）。
+
+### 单调性框架
+
+引擎是单调数据流不动点：类型集、实例化集、放开字段、点名成员只增不减；常量格是两层格（Const(c) → Top）。
+结果与顺序无关的充分条件是：
+
+**每个在中间态做出、事后不撤回的决定，都被终态的同类决定所包含（下称「包含」），或者在依据变化时被撤销并重做。**
+
+本次找到的依赖点都属于两类违例之一：
+
+- **违例 A**：中间态常量被当成本点字面量，产出不撤回；
+- **违例 B**：重分析时依据变了，但没有重接或作废。
+
+空闲阶段的决定（rcall_release → seed_round → lookup_release → nr_drain → promote_layout）都在工作表真不动点处做出，按层分层（stratified）。
+每层看到的是前一层的完整不动点，与层内处理顺序无关，不需要改动。
+
+### 依赖点与修复
+
+1. **按名拆段把常量格的派生字符串当字面量**（4e11854d，`class_lookup.rs::by_source`）
+   - 问题：`name_parts` / `seg_parts` 把 `V::derived_str`（来源为形参 / 字段 / 调用返回的常量格常量）当字面量拆段。
+     形参只有一个调用点时的中间态 Const 一旦抬为 Top，已产出的点名和缺口都不撤回。
+   - 现象：DeepCopy 在 b7/b512/b4096/b1 下多出 `Class.getMethodsRecursive` 的「按名查字段：目标类推不出、名字为拼接」缺口。
+   - 修复：派生字符串按来源当作引用值处理，与格值为 Top 时同口径。
+   - 单调性：拆段结果只取决于来源，与格值所处的层无关（违例 A 消除）。
+2. **手写内存调用点重分析时跳过实参接入**（ec752db3，`hw_mem.rs`）
+   - 问题：`hw_site` / `hw_read_site` 对已登记的调用点直接返回，只接了首次分析的实参来源。
+     首次分析时常量格的中间态（字段常量为 null 等）使实参缺失。
+   - 现象：CollectorsDemo `ChoiceFormat.hashCode` / `parse` 的 null_recv 折叠只在 b64 出现。
+   - 修复：每次分析都接入（边幂等）。
+   - 自拷贝省略（`hw_self_copies`）意味着少接边，必须对**所有**分析都成立，所以取各次分析之交：
+     - 首次分析时登记；
+     - 重分析时若不再成立就撤销，并把 `A(s,i)` 现有的每个数组 y 补接 `E(y,p) → W(s,j)`。
+   - 单调性：边集是各次分析的并，省略集是各次分析的交，两者都与分析次数和次序无关（违例 B 消除）。
+3. **按名放开字段 / 按名查方法 / 查找配对的名字取了派生常量**（c50006c6）
+   - 涉及 `reflect_writes.rs`、`field_lookup.rs`、`lookup_pair.rs`。
+   - 问题：这些位置用 `lits()` 取名字，包含常量格派生常量。
+     `findVarHandle → resolveOrFail` 在形参只有一个调用点时，中间态名为 `head`。
+     形参配对（`lookup_wrap_site`）后的终态不再给出这个名字，但按名放开的 `ReferenceQueue.head` 不撤回。
+   - 现象：TestModuleLayerDefine b1/b512 多出 `FinalReference`。
+   - 修复：改用 `site_lits()`（只取本方法字面量）；派生名字按来源取：
+     - 形参：配对，或取各调用点常量（`param_strs`）；
+     - 字段：字段写入字面量集（`field_strs`）；
+     - 调用返回：新增 `site_strs`，取被调字节码的常量超集（`callee_consts`）。
+   - 单调性：各来源取值都是终态集合的单调函数，违例 A 消除。
+4. **字段转为不折叠时只作废了 cevals 记忆**（7a418935，`consteval.rs::ceval_drop`）
+   - 问题：`consts` / `objs` / `psums` / `preadonly` 四张记忆表里，输入含该字段的条目没有一起作废。
+   - 现象：TestModuleLayerDefine b4096 下，`PlatformLogger.isLoggable` 读到过期的 `Level.INFO` 常量，多出 dead_pcs [[4,12]]。
+   - 修复：五张表按同一 keep 条件保留或丢弃，再作废其消费者。
+   - 单调性：记忆是其输入的函数；输入（字段可折叠性）变化后全部重算，违例 B 消除。
+
+### 包含论证（保留不改的中间态决定）
+
+- **`field_names.rs::field_name_site`**：`V::Str` 名字（可能是派生常量）直接按名放开。
+  - 常量格两层，中间态 Const(c) 的终态只有两种：
+    - 仍是 Const(c)：与终态决定相同；
+    - 抬为 Top：
+      - 若形参槽未被污染，`param_strs` 取各调用点常量，其中含 c；
+      - 若已被污染，`known = false`，走保守回退（放开该类及其超类的全部字段，或全部字段不折叠），是超集。
+  - 结论：中间态放开的名字被终态包含。
+- **`reflect_call.rs::rcall_conv_lookup`**：常量名字经方法句柄通道点名。
+  名字抬为 Top 后返回 false，转入 `rcall_global_m2h`：反射对象通道的全部成员另经方法句柄通道调用，是超集。
+- **V11 τ 合并（`tau.rs`）**：
+  - 封闭类型来自声明类型，`tau_broken` 单调。
+  - 若已据 τ 合并之后才失去 τ，结果会保守（合并后值集相等，是超集）。这种情况计入 `perf.tau[1]`。
+  - 矩阵各次运行实测 `perf.tau[1] = 0`，即没有合并依赖过可能失效的 τ。
+
+### 集合差异登记（相对修前缺省 b64 s0）
+
+基准：集成分支 5a6332af（服务器作业 `d1-base-d48c585d`，d48c585d 与之闭包代码相同）；本地 CollectorsDemo / TestModuleLayerDefine / DeepCopy 修前树。
+修前各 batch 之间本身就不一致，下表的「修前」指缺省组合。
+每项都已核实为更可靠（补齐分派目标），或是中间态产物（修后各组合都不出现，且有成因）。
+
+| 用例 | 差异 | 判定与成因 |
+|---|---|---|
+| CollectorsDemo | `ChoiceFormat.hashCode` / `parse` 的 null_recv 折叠消失 | 中间态产物（依赖点 2）：首次分析时字段常量为 null，手写内存调用点的实参缺失，重分析未补接 |
+| CollectorsDemo | 7 个分派点补齐 `ZoneRules` / `ZoneOffsetTransition` / `ZoneOffsetTransitionRule` 的 equals / hashCode 目标（`WeakHashMap$Entry.equals@43`、`ConcurrentHashMap$MapEntry.hashCode@11`、`ConcurrentHashMap$Node.hashCode@11`、`ConcurrentHashMap.hashCode@49`、`ConcurrentHashMap.replaceNode@178/@324`、`LocaleResources.getCurrencyName@60`） | 更可靠（依赖点 2）：修前漏接的数组元素流入这些容器 |
+| CollectorsDemo / DeepCopy / TestJndiNoProvider（b4096） | 少 `java/lang/ref/FinalReference`（类数 −1）、少 `NativeReferenceQueue.poll0` 引用；`ReferenceQueue` / `NativeReferenceQueue` 的 poll / remove 折叠恢复 | 中间态产物（依赖点 3）：`findVarHandle → resolveOrFail` 形参的中间态常量 `head` 被按名放开 `ReferenceQueue.head`。终态经配对不给出这个名字。修前 JNDI 只在 b4096、TestModuleLayerDefine 只在 b1/b512 出现 |
+| DeepCopy / TestJndiNoProvider / TestHttpLoopbackSync | `reflect.gaps` 少 `Class.getMethodsRecursive`、`System$2.getDeclaredPublicMethods` 的「按名查字段：目标类推不出、名字为拼接」 | 中间态产物（依赖点 1）：形参常量格窗口期把派生字符串拆段 |
+| TestHttpLoopbackSync | `Executors$RunnableAdapter.call` 的 `result` getfield 折叠为 null：修前只在 b1/b7 有、b64/b512 没有；修后各组合都有 | 修前顺序相关，修后取精确值。可靠性：闭包内构造 `RunnableAdapter` 的唯一路径是 `ScheduledFutureTask.<init> → FutureTask(Runnable, V) → Executors.callable`，`ScheduledThreadPoolExecutor` 各入口在该实参上传的都是 null 字面量 |
+| TestModuleLayerDefine | 缺省组合与修前缺省无差异；修前 b4096 下 `PlatformLogger.isLoggable` 多出的 dead_pcs [[4,12]] 消失 | 中间态产物（依赖点 4）：过期的 `consts` 记忆 |
+| HelloWorld | 无差异 | — |
+
+### 顺序矩阵结果（分支头 b763ee15，闭包代码同 7a418935）
+
+| 用例 | 组合 | 结果 | 出处 |
+|---|---|---|---|
+| HelloWorld | batch 1/7/64/512/4096 × seed 0/1/2/12345（20 组） | 468 类 / 1791 方法，全键一致 | 服务器 `d1-n2-b763ee15/02` |
+| TestModuleLayerDefine | 同上 20 组 | 3313 类 / 19355 方法 / 451 反射成员，全一致 | 服务器 `d1-n2-b763ee15/02` |
+| TestJndiNoProvider | b4096 × 4 seed | 3865 / 24624 / 1624，全一致，与修前 b1 只差两条中间态缺口 | 服务器 `d1-n2-b763ee15/06` |
+| TestHttpLoopbackSync | batch 1/7/64/512/4096 × seed 0/1/2/12345（20 组） | 5466 / 34011 / 1746，全一致 | 服务器 `d1-n2-b763ee15/08`（b7）、`d1-n3-b763ee15/05`（b512）、`/06`（b64）、`/07`（b4096）、`/08`（b1） |
+| DeepCopy | b64/1/4096 × s0/s12345 | 3381 / 20819 / 842，全一致 | 本机 `build/d1/m5`（本机 JDK 21） |
+| CollectorsDemo / TestModuleLayerDefine | b64/1/512/4096 × s0/s12345 | 3101 / 17877 / 423；3264 / 19219 / 433，全一致 | 本机 `build/d1/m4` |
+| TestHttpLoopbackSync | b1、b512 × s0 | 5420 / 33857 / 1732，一致 | 本机 `build/d1/http5` |
+
+对照：修前基准作业 `d1-base-d48c585d` 中：
+- TestJndiNoProvider：b1/b7 为 3865 类，b4096 为 3866 类（多 FinalReference）；
+- TestHttpLoopbackSync：b1/b7 与 b64/b512 的 `RunnableAdapter.call` 折叠不同；
+- seed 维度在修前已一致（engine-order 阶段 2 的成果），batch 维度不一致。
+
+单测（服务器 `d1-n3-b763ee15/03`）：
+- 生成器全量 `cargo test --release` 共 494 通过、0 失败、1 忽略，含 `closure_independent_of_order`；
+- `rava_macros_core` 16 通过；
+- 本机 `-p closure` 161 通过，`closure_cli` 6 通过。
+
+补测（服务器作业 `d1-n3-b763ee15`，04/09/10/11 四项被 main 以 HOLD 暂停，合入路径空出后自动恢复）：
+- `profile_matrix.sh` 验收集 27 例档案矩阵；
+- JNDI b1/b7、b64/b512；
+- DeepCopy / CollectorsDemo 的服务器全矩阵。
+
+### 同机配对计时（`scripts/diag/pair_time.sh`，基准 5a6332af，冷闭包交替 3 轮取中位数）
+
+| 用例 | 服务器 | 基准 | 新 | 变化 |
+|---|---|---|---|---|
+| DeepCopy | jp2（`d1-n3-b763ee15/02`） | 84.6 s | 84.6 s | +0.0% |
+| TestJndiNoProvider | jp2（同上） | 243.7 s | 260.4 s | **+6.9%** |
+| TestHttpLoopbackSync | sg2（`d1-n3-b763ee15/01`） | 760.5 s | 763.0 s | +0.3% |
+
+**JNDI +6.9% 的解释**：确定性工作量计数（与机器负载无关）显示，新版多做的正是修前漏做的工作。
+数据来自本机同一对二进制的 JNDI 闭包 `summary.perf`（本机 JDK，3820 类）：
+
+| 计数 | 修前 → 修后 | 变化 |
+|---|---|---|
+| analyses | 187361 → 194582 | +3.9% |
+| shared_analyses | | +5.6% |
+| site_reruns | | +3.7% |
+| reapply_callee_summary | | +9.7% |
+| flow_edges | | +1.9% |
+| hub_sent | | +1.9% |
+| E->G 边 | 165823 → 273842 | |
+
+- 前四项主要对应依赖点 4（未逐项单独计时，属推断）：字段转为不折叠时，作废全部输入含该字段的记忆并重分析其消费者。修前这些消费者沿用过期常量，没有重分析。
+- E->G 边增加来自依赖点 2：手写内存调用点每次分析都接入实参，更多数组元素经汇集节点流入写入来源。
+- SCC 合并数下降约 4.5%，每次增量的传播量随之变大。
+
+DeepCopy 的分析数、边数基本不变（analyses 持平，adds +3.9%），墙钟持平。
+这部分开销是不动点正确性的必要工作，不能靠跳过重分析或重接回收，否则会退回中间态依赖。
+逐项归因（每个修复单独计时）没有另起作业。服务器队列被 main 暂停，这一项也不影响结论。

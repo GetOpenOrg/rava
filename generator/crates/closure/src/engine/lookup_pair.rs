@@ -114,7 +114,10 @@ impl<'a> Engine<'a> {
                 self.field_wrap_call(m, off, &cv, &nv, &w.extra);
                 continue;
             }
-            let mut names: BTreeSet<Rc<str>> = nv.lits().into_iter().collect();
+            // 名字按来源取（常量格的中间态常量不当字面量，同 `reflect_writes`，D1）
+            let mut names: BTreeSet<Rc<str>> = nv.site_lits().into_iter().collect();
+            names.extend(self.field_strs(m, &nv));
+            names.extend(self.site_strs(m, &nv));
             // 名字与类都来自本方法形参：本方法同样是包装方法（其调用点再配对）；
             // 只有名字来自形参时，类已在本点确定，名字取各调用点在该形参上的字符串常量
             if !self.lookup_wrap_site(m, &cv, &nv, &w.extra, w.ch, false) {
@@ -138,11 +141,12 @@ impl<'a> Engine<'a> {
     /// （与形参上各调用点的字符串常量、字段写入的字面量集），按类值集里类镜像所指的类点名放开字段。
     /// 类值集尚空时等值到达（读者登记，增长时重跑）；含所指未知的值时同名字段全部放开
     fn field_wrap_call(&mut self, m: usize, off: u32, cv: &V, nv: &V, extra: &Rc<[Node]>) {
-        let mut names: BTreeSet<Rc<str>> = nv.lits().into_iter().collect();
+        let mut names: BTreeSet<Rc<str>> = nv.site_lits().into_iter().collect();
         if !self.lookup_wrap_site(m, cv, nv, extra, 0, true) {
             names.extend(self.param_strs(m, off, nv));
         }
         names.extend(self.field_strs(m, nv));
+        names.extend(self.site_strs(m, nv));
         if names.is_empty() {
             return;
         }
