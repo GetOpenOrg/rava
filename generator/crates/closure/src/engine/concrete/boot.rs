@@ -126,6 +126,7 @@ impl Vm {
                         locals: ck,
                         why: why_of(&why),
                     });
+                    self.war_capture(m.rl(), m.heap());
                     match end {
                         Some(e) => ix = e,
                         None => return Ok(PhaseEnd::Residual),
@@ -144,7 +145,7 @@ impl Vm {
             return fail("步数超限");
         }
         let Some(insn) = code.insns.get(ix) else { return fail("越过方法末尾") };
-        let r = match self.step(env, info, insn, locals, st) {
+        let r = match self.step_t(env, info, ix, insn, locals, st) {
             Err(Flow::Implicit(k)) => {
                 self.throw_frames = Some(self.frames.iter().map(|f| f.to_string()).chain([format!("隐式异常 {k} @ {}", insn.offset)]).collect());
                 self.implicit(env, k).and_then(|o| Err(Flow::Throw(o)))
@@ -212,6 +213,7 @@ impl Vm {
         };
         if record {
             self.bj.recs.push(Rec::Call { phase: info.key.clone(), off: insn.offset, callee: callee.clone(), args, ph, why: why_of(why) });
+            self.war_capture(m.rl(), m.heap());
         }
         Ok(Some(ph))
     }

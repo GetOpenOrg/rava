@@ -37,6 +37,19 @@ pub(super) struct Mark {
     done: usize,
     recs: usize,
     vm: u64,
+    /// 读日志 / 写入时刻撤销日志的位置（U8 审计，war.rs）
+    rl: usize,
+    wu: usize,
+}
+
+impl Mark {
+    pub(super) fn rl(&self) -> usize {
+        self.rl
+    }
+
+    pub(super) fn heap(&self) -> usize {
+        self.heap
+    }
 }
 
 /// 引导映像的运行期部分：运行期初始化的类、残差调用、残差区段
@@ -69,7 +82,7 @@ pub(super) struct Journal {
     pub recs: Vec<Rec>,
     /// VM 侧登记次数（模块表、构建期输出等不可撤回的效果）
     pub vm_effects: u64,
-    /// 宿主标量的（native, 调用方）：构建期取零值（操作 `host_scalar`），第 2 步改为污点值与重算槽
+    /// 宿主标量的（native, 调用方）：返回污点值（操作 `host_scalar:<下界>:<上界>`），入映像处为启动重算槽
     pub host_scalars: BTreeSet<(String, String)>,
     /// 诊断：转为运行期初始化的全部尝试（含随后被外层撤回吸收的），不入摘要
     pub rt_attempts: Vec<(Rc<str>, String)>,
@@ -80,6 +93,18 @@ pub(super) struct Journal {
     /// 条件脏静态：由撤回后回到未初始化的类的 `<clinit>` 写入。该类日后在构建期重新初始化即重做这次
     /// 写入（不脏）；转为运行期初始化或始终未初始化则运行期重放会改写（脏）。读时按该类的终局判定
     pub pending_static: HashMap<u32, BTreeSet<Rc<str>>>,
+    /// 污点表达式表与统计（taint.rs）
+    pub taint: super::taint::Taints,
+    /// 方法的后支配树（污点分支合并用）
+    pub pdoms: HashMap<MemberRef, Rc<super::boot_cfg::PDom>>,
+    /// 残差重放读后写审计（U8，war.rs）
+    pub war: super::war::War,
+}
+
+impl Journal {
+    pub(super) fn marked(&self) -> bool {
+        !self.marks.is_empty()
+    }
 }
 
 impl Vm {
@@ -91,6 +116,8 @@ impl Vm {
             done: self.done_log.len(),
             recs: self.bj.recs.len(),
             vm: self.bj.vm_effects,
+            rl: self.bj.war.rlog.borrow().len(),
+            wu: self.bj.war.wundo.len(),
         };
         self.bj.marks.push(m);
         m
@@ -101,7 +128,14 @@ impl Vm {
         self.bj.marks.truncate(m.depth);
         if self.bj.marks.is_empty() {
             self.bj.ents.clear();
+            self.bj.war.rlog.borrow_mut().clear();
+            self.bj.war.wundo.clear();
         }
+    }
+
+    /// 标记以来无任何可观测效果（写入、分配、类初始化、残差记录、VM 登记）
+    pub(super) fn pure_since(&self, m: Mark) -> bool {
+        self.bj.ents.len() == m.j && self.heap.len() == m.heap && self.done_log.len() == m.done && self.bj.recs.len() == m.recs && self.bj.vm_effects == m.vm
     }
 
     /// 回滚到标记（含出栈）：撤回的位置记为脏位置
@@ -183,9 +217,20 @@ impl Vm {
         }
         self.done_log.truncate(m.done);
         self.bj.recs.truncate(m.recs);
+        self.bj.war.reads.retain(|r| r.0 < m.recs);
+        self.war_rollback(m.rl, m.heap);
+        while self.bj.war.wundo.len() > m.wu {
+            let Some((l, old)) = self.bj.war.wundo.pop() else { break };
+            match old {
+                Some(t) => self.bj.war.wtime.insert(l, t),
+                None => self.bj.war.wtime.remove(&l),
+            };
+        }
         self.bj.marks.truncate(m.depth);
         if self.bj.marks.is_empty() {
+            // 读日志保留到最外层标记出栈：撤回后登记的残差（区段）仍要取标记起的读集
             self.bj.ents.clear();
+            self.bj.war.wundo.clear();
         }
         Ok(())
     }
@@ -202,6 +247,7 @@ impl Vm {
     }
 
     pub(super) fn jlog_static(&mut self, k: u32) {
+        self.war_write(super::war::Loc::S(k));
         if !self.bj.marks.is_empty() {
             let old = self.statics.get(&k).copied();
             let owner = self.bj.clinits.last().cloned();
@@ -210,6 +256,7 @@ impl Vm {
     }
 
     pub(super) fn jlog_field(&mut self, o: u32, k: u32) {
+        self.war_write(super::war::Loc::F(o, k));
         if self.logging(o) {
             let old = match &self.heap[o as usize].body {
                 Body::Inst(fs) => fs.iter().find(|(x, _)| *x == k).map(|(_, v)| *v),
@@ -271,6 +318,7 @@ impl Vm {
     /// 数组整体写（批量操作）：已有数组整体存底
     pub(super) fn boot_arr_write(&mut self, o: u32) -> R<()> {
         self.boot_arr_check(o)?;
+        self.war_write(super::war::Loc::A(o));
         if self.logging(o) {
             if let Body::Arr(v) = &self.heap[o as usize].body {
                 let v = v.clone();
@@ -283,6 +331,7 @@ impl Vm {
     /// 数组单元素写（xastore）
     pub(super) fn boot_elem_write(&mut self, o: u32, i: usize) -> R<()> {
         self.boot_arr_check(o)?;
+        self.war_write(super::war::Loc::A(o));
         if self.logging(o) {
             if let Body::Arr(v) = &self.heap[o as usize].body {
                 if let Some(&old) = v.get(i) {
@@ -300,6 +349,7 @@ impl Vm {
         if self.bj.dirty_field.contains(&(o, fr.key)) {
             return defer(format!("延迟值参与求值：运行期重放会改写的字段 {}.{}", fr.decl, fr.name));
         }
+        self.war_read(super::war::Loc::F(o, fr.key));
         Ok(())
     }
 
@@ -331,6 +381,7 @@ impl Vm {
                 return defer(format!("延迟值参与求值：运行期初始化类 {c} 会改写的静态字段 {}.{}", fr.decl, fr.name));
             }
         }
+        self.war_read(super::war::Loc::S(fr.key));
         Ok(())
     }
 }

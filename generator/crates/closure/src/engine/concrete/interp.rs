@@ -109,7 +109,7 @@ impl Vm {
             if tracing {
                 hits[ix] = true;
             }
-            let r = match self.step(env, info, insn, locals, &mut stack) {
+            let r = match self.step_t(env, info, ix, insn, locals, &mut stack) {
                 Err(Flow::Implicit(k)) => {
                     if self.boot {
                         self.throw_frames = Some(self.frames.iter().map(|f| f.to_string()).chain([format!("隐式异常 {k} @ {}", insn.offset)]).collect());
@@ -214,7 +214,10 @@ impl Vm {
                 let i = pop!().i()?;
                 let a = pop!().obj()?;
                 let ty = self.ty(a);
+                let tainted = matches!(v, CV::T(..));
                 let v = match (op, elem(&ty)) {
+                    (0x54, "Z") if tainted => self.tbin(0x7e, v, CV::I(1))?,
+                    (0x54..=0x56, _) if tainted => self.tun(op + 0x3d, v)?,
                     (0x54, "Z") => CV::I(v.i()? & 1),
                     (0x54, _) => CV::I(v.i()? as i8 as i32),
                     (0x55, _) => CV::I(v.i()? as u16 as i32),
@@ -254,11 +257,19 @@ impl Vm {
             0x60..=0x83 => self.arith(op, st)?,
             0x84 => {
                 let Operand::Iinc { index, delta } = insn.operand else { return fail("iinc 操作数") };
-                let v = locals[index as usize].i()?;
-                locals[index as usize] = CV::I(v.wrapping_add(delta as i32));
+                let cur = locals[index as usize];
+                locals[index as usize] = if matches!(cur, CV::T(..)) {
+                    self.tbin(0x60, cur, CV::I(delta as i32))?
+                } else {
+                    CV::I(cur.i()?.wrapping_add(delta as i32))
+                };
             }
             0x85..=0x93 => {
                 let v = pop!();
+                if matches!(v, CV::T(..)) {
+                    st.push(self.tun(op, v)?);
+                    return Ok(Next::Fall);
+                }
                 st.push(match op {
                     0x85 => CV::J(v.i()? as i64),
                     0x86 => CV::F(v.i()? as f32),
@@ -276,6 +287,11 @@ impl Vm {
                     0x92 => CV::I(v.i()? as u16 as i32),
                     _ => CV::I(v.i()? as i16 as i32),
                 });
+            }
+            0x94 if matches!(st.last(), Some(CV::T(..))) || matches!(st.len().checked_sub(2).and_then(|i| st.get(i)), Some(CV::T(..))) => {
+                let b = pop!();
+                let a = pop!();
+                st.push(self.tbin(0x94, a, b)?);
             }
             0x94 => bin!(j, CV::I, |a, b| (a > b) as i32 - (a < b) as i32),
             0x95..=0x98 => {
@@ -480,6 +496,10 @@ impl Vm {
         // 取负
         if (0x74..=0x77).contains(&op) {
             let v = pop(st)?;
+            if matches!(v, CV::T(..)) {
+                st.push(self.tun(op, v)?);
+                return Ok(());
+            }
             st.push(match v {
                 CV::I(x) => CV::I(x.wrapping_neg()),
                 CV::J(x) => CV::J(x.wrapping_neg()),
@@ -491,6 +511,10 @@ impl Vm {
         }
         let b = pop(st)?;
         let a = pop(st)?;
+        if matches!(a, CV::T(..)) || matches!(b, CV::T(..)) {
+            st.push(self.tbin(op, a, b)?);
+            return Ok(());
+        }
         let r = match (op, a, b) {
             (0x60, CV::I(x), CV::I(y)) => CV::I(x.wrapping_add(y)),
             (0x61, CV::J(x), CV::J(y)) => CV::J(x.wrapping_add(y)),

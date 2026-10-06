@@ -347,12 +347,73 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
   - 第 3 步抽象分析从映像出发，引导代码不再入链，实际值应低于这个上界。
 - **第 2 步验收锁定**：运行期初始化类 Linux ≤ 1、macOS ≤ 2，只减不增。
 
+### 5.4 第 2 步实测与验收（分支 `boot-image-s2`；3d808e77 暂停，d1dc540a 验收通过）
+
+**暂停原因**：用户 10-06 定 C4 全量正确性优先，全量期间集成分支冻结语义改动，本线让出服务器。服务器作业未派发，无在途作业。
+
+**已完成（3d808e77）**：
+- 污点值 `CV::T`（`concrete/taint.rs`）：宿主源（清单 op `host_scalar:<下界>:<上界>`，缺省为返回类型全域，boolean 为 0..1）产生带区间的表达式；整数算术、移位、位运算、`lcmp`、窄化与扩宽按 i128 区间传播，溢出取全域，单点区间直接定值；除数区间含 0、浮点转换、其他具体取值仍按第 1 步残差化。清单改为 `availableProcessors` / `maxMemory` 取 `host_scalar:1:max`，`getAppend` 保持 `host_scalar`。
+- 污点上的分支（`concrete/taint_fork.rs`）：区间可判定就按判定走；不可判定时，两侧各自无副作用地执行到直接后支配点（每侧 ≤ 4096 步，嵌套 ≤ 8 层），各侧细化分支操作数的区间，合并时不同的整数值成为选择表达式。路径中有调用、写入、分配或抛出时，撤回后按第 1 步残差化。
+- 启动重算槽、污点审计、级联链与重放序列（`concrete/boot_slots.rs`）：
+  - 重算槽：映像中持有污点的静态字段、实例字段和数组元素，按构建期写入次序列出；
+  - 污点审计：重算槽与重放输入之外的污点为 0；重算表达式的实参不能是占位对象，否则构建失败；
+  - 运行期初始化级联链：由原因串回溯上游类；
+  - 启动重放序列：先重算槽，再按构建期次序执行残差记录。
+  - 以上都写进报告和 JSON 的 `step2` 字段。
+- U8 读后写审计（`concrete/war.rs`）：
+  - 写入时刻：每次写入推进逻辑时钟，按位置（静态字段、实例字段、数组、VM 单元）记录；撤回时一并恢复。
+  - 读集：读日志挂在日志标记上。残差调用、残差区段和运行期初始化登记时，捕获标记以来的读集。
+  - 判定：读集中的位置若在登记之后被写过，构建失败。
+
+**本机 macOS JDK 21 实测**（HelloWorld 档案键，`rava audit boot --jdk 21`）：
+
+| 项 | 门槛 | 实测 |
+|---|---|---|
+| 结论 / initPhase1–3 | 通过 | 通过（摘要 `f1e75fdf4f1dfa83727395409ee0e89d`；第 1 步为 `f819f982…`，变化来自污点值入摘要） |
+| 映像中污点值（重算槽与重放输入之外） | 0 | 0；不可独立重算 0；宿主标量取零值 0 |
+| 重算槽 | `NCPU` / `directMemory` 等 | 5 个：`ConcurrentHashMap.NCPU`、`VM.directMemory`，以及 `FileDescriptor.in/out/err.append`（同一字段的 3 个实例槽） |
+| 运行期初始化类 | macOS ≤ 2 | 2（`StaticProperty`、`NativeLibraries`），没有新增 |
+| U8 交集 | 0 | 0（6 个残差，读集 156 个位置） |
+| 求值耗时 | ≤ 0.5 s | 130 ms |
+
+- 污点分支：HelloWorld 引导期间判定 0 次、合并 0 次。`NCPU` 只在扩容（`transfer`）和争用（`fullAddCount`）时参与分支，引导期间没有走到。合并路径只有单元测试 `decide_and_narrow` 覆盖区间判定和细化，两侧合并还没有实际例子。
+- 与 §3.2 的偏差：§3.2 写的是「宿主值写入对象图即运行期初始化」。本步改为实例字段进重算槽（`FileDescriptor.append`），所以 `FileDescriptor` 仍在构建期初始化，运行期初始化数没有增加。污点分支也是在构建期合并，不转为运行期初始化。
+
+**恢复与验收（2026-10-06，分支 `boot-image-s2` d1dc540a，已同步集成分支 9d34449b）**：
+
+- 本机单测 `taint` / `concrete` 全过（含 `decide_and_narrow`）。
+- 服务器首轮 `bimg2-aud-e69b596c`（us1）：Linux JDK 21 通过；**JDK 25 失败，U8 交集 3 项**，均为 `jdk/internal/util/Preconditions.SIOOBE_FORMATTER`，涉及 initPhase1 的 jnu 残差区段与两个 `newPrintStream` 残差调用。
+  - 根因：审计口径过宽。JDK 25 的串代码在残差窗口内首次触发 `Preconditions` 初始化，窗口内先写后读 `SIOOBE_FORMATTER`。窗口撤回后，构建期在登记之后重新初始化 `Preconditions`，同一位置的写入时刻晚于登记时刻，于是被误报。
+  - 修正（d1dc540a，`concrete/war.rs`）：读集只计窗口的**外部读**。窗口内先写后读的位置不计，包括窗口内触发的类初始化；窗口内分配的对象也不计，但类镜像由 VM 缓存持有，仍按已有对象处理。撤回到标记时压缩读写日志：撤回段只留外部读，写入作废，这样兄弟路径不会因被撤回路径的写入而漏报。
+  - 健全性：运行期重放时，窗口内的类初始化因映像中该类已初始化而跳过，读到的是映像中同一 `<clinit>` 的结果。该 `<clinit>` 在窗口内的外部读取仍在读集内受审计；映像值若与窗口值不同，必然有某个读集位置在登记后被写，交集会报出。单测 `external_reads_drop_own_writes_and_fresh_objects` 覆盖。
+- 服务器复验 `bimg2-aud-d1dc540a`（kr2，rc 0）：
+
+| 项 | 门槛 | Linux JDK 21 | Linux JDK 25 | macOS JDK 21（本机） | macOS JDK 25（本机） |
+|---|---|---|---|---|---|
+| 结论 / initPhase1–3 | 通过 | 通过 | 通过 | 通过 | 通过 |
+| 摘要（Linux 为 4 组合，均相同；macOS 为单次） | 相同 | `b9247cfc…c51d` | `aa61275e…96f7` | `f1e75fdf…e89d` | `dd8d4aeb…7cdc` |
+| 映像中污点值（重算槽与重放输入之外） | 0 | 0 | 0 | 0 | 0 |
+| 重算槽 | `NCPU` / `directMemory` 等 | 5 | 5 | 5 | 5 |
+| 运行期初始化类 | Linux ≤ 1 / macOS ≤ 2 | 1（`StaticProperty`） | 1（`StaticProperty`） | 2 | 2 |
+| U8 交集（残差 / 读集） | 0 | 0（5 / 114） | 0（5 / 112） | 0（6 / 115） | 0（6 / 113） |
+| 求值耗时 | ≤ 0.5 s | 324 ms | 319 ms | 130 ms（暂停记录） | — |
+| `rava audit boot` 进程 RSS | ≤ 300 MB | 238 MB | 254 MB | 239 MB | — |
+| HelloWorld 闭包 | 不变 | 468 | 428 | — | — |
+
+  - 重算槽 5 个为 `VM.directMemory`、`ConcurrentHashMap.NCPU`，以及 `FileDescriptor.in/out/err.append`（同一字段的 3 个实例槽）。按字段计为 3 个；§6 写的「4 个字段」为估计口径，以上表的字段 / 槽数为准，不另立决策项。
+  - 读集从 155 / 156 降到 112–115，即窗口内自产位置约占 1/4。
+- 服务器全量单测 `bimg2-ut-d1dc540a`（jp1，rc 0，4319 s）：generator 与 rava_macros_core 全过，0 失败（1 个 ignored 为既有）。
+- 抽查 `bimg2-d1dc540a`（JDK 21，`--per-dir 0`）：HelloWorld、TestAppClassLoader 通过；TestModuleLayerDefine 运行期 NPE，与集成分支上的抽查（`c1de-sp-956db0b4`、`c1db3-212c9229` 等）同症状，不在 master_passed 中，属已知失败，验收在第 3 步。
+  - 本步映像只求值、不物化，闭包类数与集成分支相同（HelloWorld 468），不影响生成产物。
+  - TestBootLayer 在 `tests/e2e` 中不存在，是第 3 步验收要新增的用例。
+  - TestClassModuleFace（`jbase-named=false`）由第 4 步处理，与本步无关。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
 |---|---|---|
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
-| 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 |
+| 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 |
 | 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 |
@@ -384,8 +445,11 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 | U4 | 直接做 arena 永久区零拷贝，不做批量建对象的过渡形态；所依赖的 S7 句柄设计作为本线前置定稿 |
 | U5 | 映像放在 `java_base` 档案内 |
 | U6 | 与「Class 接收者逐镜像求值」并行 |
+| U7 | （2026-10-06）延迟调用的非空承诺维持现状：`toFileURL` 占位对象由清单承诺非空，判空在构建期定值 |
+| U8 | （2026-10-06）第 2 步加审计：残差重放的读集 ∩ 延迟点之后构建期的写集非空即构建失败；交集实测见 §5.4 |
+| U9 | （2026-10-06）内存缓存字段（`memo_fields`）撤回时保留缓存值（现状） |
 
-### 8.2 第 1 步提出的新决策项
+### 8.2 第 1 步提出的新决策项（2026-10-06 已定，见 §8.1，本表存档）
 
 | # | 事项 | 选项 | 建议 |
 |---|---|---|---|

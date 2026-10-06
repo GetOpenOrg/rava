@@ -70,6 +70,11 @@ impl Canon<'_> {
             CV::F(x) => self.h.str(&format!("F{:08x}", x.to_bits())),
             CV::D(x) => self.h.str(&format!("D{:016x}", x.to_bits())),
             CV::N => self.h.str("N"),
+            // 污点值按规范表达式文本（与表达式表下标无关）
+            CV::T(..) => {
+                let t = self.vm.tstr(v);
+                self.h.str(&format!("T{t}"));
+            }
             CV::R(o) => {
                 let n = self.ids.len() as u32;
                 let id = *self.ids.entry(o).or_insert_with(|| {
@@ -314,6 +319,10 @@ impl<'a> Engine<'a> {
         let elapsed = t0.elapsed().as_millis();
         let size = reachable(&vm);
         let dg = digest(&vm);
+        let s2 = super::boot_slots::audit(&vm);
+        if error.is_none() {
+            error = s2.fail.clone();
+        }
         let ok = error.is_none();
         let rt_init: Vec<(String, String)> = vm.bj.recs.iter().filter_map(|r| if let Rec::RuntimeInit { class, why } = r { Some((class.to_string(), why.clone())) } else { None }).collect();
         let calls: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Call { phase, off, callee, why, ph, .. } = r { Some(format!("`{phase}@{off}` → `{callee}`{}：{why}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
@@ -339,6 +348,8 @@ impl<'a> Engine<'a> {
             "replay_natives": natives.len(),
             "deferred_reads": reads.len(),
             "host_scalars": vm.bj.host_scalars.len(),
+            "eval_ms": elapsed,
+            "step2": s2.json,
         });
         let mut r = String::new();
         let _ = writeln!(r, "# 构建期引导映像审计（JDK {jdk}，{}）\n", std::env::consts::OS);
@@ -379,10 +390,7 @@ impl<'a> Engine<'a> {
         for c in &natives {
             let _ = writeln!(r, "- {c}");
         }
-        let _ = writeln!(r, "\n## 宿主标量（构建期取零值，第 2 步污点与重算槽，{}）\n", vm.bj.host_scalars.len());
-        for (n, c) in &vm.bj.host_scalars {
-            let _ = writeln!(r, "- `{n}` ← `{c}`");
-        }
+        r.push_str(&s2.report);
         if let Some(fs) = vm.fail_frames.as_ref().or(vm.throw_frames.as_ref()).filter(|_| !ok) {
             let _ = writeln!(r, "\n## 失败栈（外→内）\n");
             for f in fs.iter().rev().take(30).rev() {
