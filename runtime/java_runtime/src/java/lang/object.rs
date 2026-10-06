@@ -243,6 +243,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 }
 
+/// 引导映像中 `new Object()` 实例的值类型（映像模块按此发射对象值）
+#[doc(hidden)]
+pub(crate) use super::object_impl::Instance as __ObjectInstance;
+
 /// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：
 /// 实例体地址经 SplitMix64 混合取 31 位——非负、非零（HotSpot markWord 的 31 位 hash 域，
 /// 0 保留为「未计算」，取 0 时换 0xBAD），低位分布均匀（地址对齐使低位恒 0，直接截断
@@ -250,6 +254,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 /// 的哈希只在混合碰撞时相同（与 HotSpot 随机哈希同等概率级别）。
 #[inline]
 pub fn __identity_hash(id: *const ()) -> i32 {
+    // 映像对象返回构建期取得的值：构建期建好的哈希表桶位在运行期仍然有效（引导映像 §3.6）
+    if let Some(h) = crate::obj_ref::__image_hash(id) {
+        return h;
+    }
     let mut z = (id as usize as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);

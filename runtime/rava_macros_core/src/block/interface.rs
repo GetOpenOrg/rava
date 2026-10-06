@@ -220,6 +220,14 @@ pub(crate) fn expand_interface(
             }
         }
 
+        // 构建期引导映像的对象引用（常量求值，映像模块的静态初值）
+        impl #impl_g #struct_ident #ty_g #where_c {
+            #[doc(hidden)]
+            pub const fn __from_image(__ref: __IfaceRef<dyn #vtable_ident>) -> Self {
+                Self { __ref, __phantom: ( #( ::std::marker::PhantomData::<fn() -> #type_params>, )* ) }
+            }
+        }
+
         impl #impl_g From<#struct_ident #ty_g> for Object #where_c {
             fn from(iface: #struct_ident #ty_g) -> Object { iface.__ref.into_object() }
         }

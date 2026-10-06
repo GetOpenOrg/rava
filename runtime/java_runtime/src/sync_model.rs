@@ -94,6 +94,9 @@ mod mt {
         /// 全零位形（各基本类型的 JVM 缺省值）：常量求值可用（静态字段单元）
         #[inline]
         pub const fn zeroed() -> Self { __PrimCell { bits: AtomicU64::new(0), _t: PhantomData } }
+        /// 给定位形（`__to_bits` 的结果）：常量求值可用（引导映像的字段与静态字段初值）
+        #[inline]
+        pub const fn from_bits(bits: u64) -> Self { __PrimCell { bits: AtomicU64::new(bits), _t: PhantomData } }
         #[inline(always)]
         pub fn get(&self) -> T { T::__from_bits(self.bits.load(SeqCst)) }
         /// 普通（非 volatile）字段读：relaxed

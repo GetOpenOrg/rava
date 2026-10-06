@@ -24,6 +24,9 @@ impl __Handle {
     #[inline]
     pub fn new(rc: __Obj<dyn ObjectVTable>) -> Self { __Handle(Some(rc)) }
 
+    /// 映像对象的句柄（常量求值可用，引导映像物化）
+    pub const fn image(rc: __Obj<dyn ObjectVTable>) -> Self { __Handle(Some(rc)) }
+
     #[inline]
     pub fn is_none(&self) -> bool { self.0.is_none() }
 
@@ -133,6 +136,12 @@ impl<V: ?Sized> __Ref<V> {
     /// null 引用（不分配）。
     pub const NULL: Self = __Ref { h: __Handle::NULL, vt: None };
 
+    /// 映像对象的类型化引用（常量求值可用）：`vt` 是 `h` 所持映像对象的本类视图
+    pub const fn image(h: __Handle, vt: &'static V) -> Self {
+        // SAFETY: 引用非空
+        __Ref { h, vt: Some(unsafe { NonNull::new_unchecked(vt as *const V as *mut V) }) }
+    }
+
     /// 以新存储建立引用：`view` 给出存储的本类视图（`|i| i as &dyn X__VTable`）。
     #[inline]
     pub fn new<T: ObjectVTable>(rc: __Obj<T>, view: impl for<'a> FnOnce(&'a T) -> &'a V) -> Self {
@@ -239,6 +248,12 @@ impl<V: ?Sized + 'static> __IfaceRef<V> {
         let mut slot: Option<NonNull<V>> = None;
         obj.0.__interface(&mut slot);
         __IfaceRef { obj, vt: slot }
+    }
+
+    /// 映像对象的接口引用（常量求值可用）：`vt` 是 `obj` 所持映像对象的接口视图
+    pub const fn image(obj: crate::java::lang::Object, vt: &'static V) -> Self {
+        // SAFETY: 引用非空
+        __IfaceRef { obj, vt: Some(unsafe { NonNull::new_unchecked(vt as *const V as *mut V) }) }
     }
 
     /// 带接口静态类型的 null（不查询）。

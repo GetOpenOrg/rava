@@ -12,7 +12,7 @@ use view::*;
 mod store;
 use store::*;
 mod obj;
-pub use obj::{__ArrayNull, __ArrayObj};
+pub use obj::{__ArrayNull, __ArrayObj, __ImageArr};
 use obj::{Form, Repr};
 use crate::obj_ref::__Obj;
 
@@ -51,6 +51,12 @@ fn aastore_storable<T: Clone + From<Object> + 'static>(v: &Object, elem_name: &s
         return true;
     }
     v.0.is_instance_of(elem_name)
+}
+
+impl<T> JArray<T> {
+    /// 映像数组的引用（常量求值可用，引导映像物化）
+    #[doc(hidden)]
+    pub const fn __image(value: &'static __ArrayObj<T>) -> Self { JArray(Some(__Obj::image(value))) }
 }
 
 impl<T> Clone for JArray<T> {

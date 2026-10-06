@@ -16,7 +16,7 @@ use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 /// 对象头：值地址前 16 字节
 #[repr(C, align(16))]
-struct Header {
+pub(crate) struct Header {
     strong: AtomicUsize,
     /// 整个分配的字节数（头 + 值 + 尾随元素）
     size: usize,
@@ -30,6 +30,63 @@ const ALIGN: usize = std::mem::align_of::<Header>();
 const STATIC_TAG: usize = 1;
 /// 计数上限：超出即中止（与 `Arc` 同一防护，防止计数回绕后提前释放）
 const MAX_REFCOUNT: usize = isize::MAX as usize;
+
+/// 映像对象的常驻强引用计数：克隆 / 释放照常增减而永不归零（不释放、不需要静态标记位）
+const IMMORTAL: usize = 1 << 62;
+/// 映像对象头第二个字的标记：低 32 位为构建期身份哈希（堆对象该字为分配字节数，恒为 16 的倍数）
+const IMAGE_HASHED: usize = 1 << 63;
+
+impl Header {
+    /// 映像对象头（计划 2026-10-05-boot-image-evaluator §5.5.2 D2 / D3）
+    pub(crate) const fn image(hash: Option<i32>) -> Header {
+        Header {
+            strong: AtomicUsize::new(IMMORTAL),
+            size: match hash {
+                Some(h) => IMAGE_HASHED | (h as u32 as usize),
+                None => 0,
+            },
+        }
+    }
+}
+
+/// 构建期引导映像中的对象：与堆对象同一布局（16 字节头 + 值），作为映像静态结构的字段常驻。
+/// 名字带 `__` 前缀：对象模型实现细节，只出现在生成的映像模块。
+#[repr(C)]
+pub struct __ImageObj<T> {
+    head: Header,
+    pub value: T,
+}
+
+impl<T> __ImageObj<T> {
+    /// `hash`：构建期取过身份哈希的对象带上该值（运行期 `identityHashCode` 原样返回）
+    pub const fn new(hash: Option<i32>, value: T) -> Self {
+        const { assert!(std::mem::align_of::<T>() <= ALIGN, "对象值的对齐超过 16") };
+        __ImageObj { head: Header::image(hash), value }
+    }
+}
+
+// 映像区（单个静态结构）的地址区间：启动时登记一次，身份哈希据此判定映像对象
+static IMAGE_START: AtomicUsize = AtomicUsize::new(0);
+static IMAGE_END: AtomicUsize = AtomicUsize::new(0);
+
+/// 登记映像区（生成的启动序列第一步调用）
+pub fn __image_register(start: *const u8, len: usize) {
+    IMAGE_START.store(start as usize, Ordering::Relaxed);
+    IMAGE_END.store(start as usize + len, Ordering::Release);
+}
+
+/// 映像对象的构建期身份哈希：`id` 为对象值地址；不在映像区或构建期未取哈希 → None
+#[inline]
+pub fn __image_hash(id: *const ()) -> Option<i32> {
+    let a = id as usize;
+    let end = IMAGE_END.load(Ordering::Acquire);
+    if a >= end || a < IMAGE_START.load(Ordering::Relaxed) + HEAD {
+        return None;
+    }
+    // SAFETY: 映像区内的对象值地址前 HEAD 字节是其对象头（映像结构的每个字段都是 `__ImageObj` / 映像数组）
+    let size = unsafe { (*((a - HEAD) as *const Header)).size };
+    (size & IMAGE_HASHED != 0).then_some(size as u32 as i32)
+}
 
 /// Java 对象的共享指针：堆对象引用计数，静态哨兵不计数。
 pub struct __Obj<T: ?Sized> {
@@ -91,6 +148,13 @@ impl<T> __Obj<T> {
 }
 
 impl<T: ?Sized> __Obj<T> {
+    /// 映像对象的指针（常量求值可用）：`value` 必须是 `__ImageObj` / 映像数组的值（前有映像对象头）；
+    /// 计数常驻，按堆对象处理
+    pub const fn image(value: &'static T) -> __Obj<T> {
+        // SAFETY: 引用非空
+        __Obj { ptr: unsafe { NonNull::new_unchecked(value as *const T as *mut T) }, _owns: PhantomData }
+    }
+
     /// 静态哨兵（不计数）：`value` 的对齐须 ≥ 2
     #[inline]
     pub fn from_static(value: &'static T) -> __Obj<T> {
@@ -257,5 +321,27 @@ mod tests {
         assert!(s.is_static() && !s.is_unique());
         assert_eq!(*t, 5);
         assert!(__Obj::ptr_eq(&s, &t));
+    }
+
+    #[repr(C)]
+    struct Img {
+        a: __ImageObj<u64>,
+        b: __ImageObj<u64>,
+    }
+    static IMG: Img = Img { a: __ImageObj::new(Some(0x1234), 7), b: __ImageObj::new(None, 9) };
+
+    #[test]
+    fn image_objects_are_immortal_and_hashed() {
+        __image_register(&IMG as *const Img as *const u8, std::mem::size_of::<Img>());
+        let a = __Obj::image(&IMG.a.value);
+        let a2 = a.clone();
+        drop(a2);
+        drop(a);
+        assert_eq!(*__Obj::image(&IMG.a.value), 7);
+        assert!(!__Obj::image(&IMG.b.value).is_unique());
+        assert_eq!(__image_hash(&IMG.a.value as *const u64 as *const ()), Some(0x1234));
+        assert_eq!(__image_hash(&IMG.b.value as *const u64 as *const ()), None);
+        let heap = __Obj::new(5u64);
+        assert_eq!(__image_hash(heap.as_ptr() as *const ()), None);
     }
 }

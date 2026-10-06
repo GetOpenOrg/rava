@@ -287,8 +287,12 @@ impl<'a> GenContext<'a> {
         } else {
             quote! {}
         };
+        // 显式构造（常量求值可用：映像对象的 `__from_image`）
         let phantom_init: TokenStream2 = if class_is_generic {
-            quote! { __phantom: ::std::default::Default::default(), }
+            let params: Vec<&Ident> = gen.params.iter()
+                .filter_map(|p| if let GenericParam::Type(tp) = p { Some(&tp.ident) } else { None })
+                .collect();
+            quote! { __phantom: ( #( ::std::marker::PhantomData::<fn() -> #params>, )* ), }
         } else {
             quote! {}
         };

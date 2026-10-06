@@ -89,6 +89,11 @@ impl<T: 'static> __ArrayObj<T> {
         }
     }
 
+    /// 映像数组对象的值（常量求值可用）：`prim` 必须与 `has_primitive_elements` 一致
+    pub const fn __image(len: usize, prim: bool) -> Self {
+        __ArrayObj { repr: Repr::Own { len, prim, tag: None }, _cell: UnsafeCell::new(()), _elem: PhantomData }
+    }
+
     /// 协变视图数组（无元素）
     pub(super) fn covariant(view: CovariantView) -> __Obj<Self> {
         __Obj::new(__ArrayObj { repr: Repr::Covariant(view), _cell: UnsafeCell::new(()), _elem: PhantomData })
@@ -257,5 +262,28 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
             Form::Own(store, _) => store.len() as i32,
             Form::Covariant(view) => view.len(),
         }
+    }
+}
+
+/// 构建期引导映像中的数组：`[映像对象头 | __ArrayObj<T> | 元素区 S]`，与堆数组同一布局
+/// （元素区紧随值，`__trailing`）。`S`：基本元素为同宽位形数组的 `UnsafeCell`（如 `byte[]` 取
+/// `UnsafeCell<[u8; N]>`，与 `[PrimSlot<i8>; N]` 同布局），引用元素为 `[__RefField<T>; N]`。
+#[repr(C)]
+pub struct __ImageArr<T, S> {
+    head: crate::obj_ref::Header,
+    pub value: __ArrayObj<T>,
+    elems: S,
+}
+
+// 元素只经原子指令或单元锁访问（与 `__ArrayObj` 同一条件）
+unsafe impl<T: Send + Sync, S> Sync for __ImageArr<T, S> {}
+
+impl<T: 'static, S> __ImageArr<T, S> {
+    /// `len` 个元素；`prim` 为基本元素；`hash` 同 `__ImageObj::new`
+    pub const fn new(hash: Option<i32>, len: usize, prim: bool, elems: S) -> Self {
+        let width = if prim { size_of::<PrimSlot<T>>() } else { size_of::<__RefField<T>>() };
+        assert!(size_of::<S>() == len * width, "映像数组元素区大小与长度不符");
+        assert!(size_of::<__ArrayObj<T>>() % align_of::<S>() == 0, "映像数组元素区未紧随数组对象");
+        __ImageArr { head: crate::obj_ref::Header::image(hash), value: __ArrayObj::__image(len, prim), elems }
     }
 }
