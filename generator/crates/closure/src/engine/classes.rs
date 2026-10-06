@@ -513,6 +513,18 @@ impl<'a> Engine<'a> {
         {
             return true;
         }
+        // 持有按键查找键类实例字段的对象（`[facts.keyed_lookups]` 入口的返回类型）：字段值是按键选出的服务对象，
+        // 键随对象的构造实参而定，按对象分开才能让各对象只派发到自身键选出的服务（计划 c1d §30.4 / B4①）
+        let kcs: Vec<u32> = self.key_classes();
+        for cf in &chain {
+            for f in inst(cf) {
+                // 键类已在 `key_classes` 里登记过序号；查不到序号的字段类型不是键类（不为判定新登记类名）
+                let Some(c) = f.desc.strip_prefix('L').and_then(|d| d.strip_suffix(';')) else { continue };
+                if self.ids.get(c).is_some_and(|id| kcs.contains(id)) {
+                    return true;
+                }
+            }
+        }
         if !generic {
             return false;
         }
