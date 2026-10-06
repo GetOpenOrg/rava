@@ -3090,3 +3090,118 @@ open(URL) 退出容器出口以后，`J`（jar `Handler.openConnection`）与 Ja
   URL 对象 handler 字段的分派，这部分归 B4 / B1 / B5（§30.2）。§30.1 的 −277 上界仍待 B4 → B1 → B5 兑现。
 - 返回来源只认尾调用形态。手写体先绑定局部变量再返回（`let x = T::m()?; Ok(x)`）的仍按 open 处理。需要时再扩展到
   局部 `let` 的单赋值传递，判定口径不变。
+
+### 30.8 第 3 步：B4——按对象 URL 落地，`startsWith` 守卫须与 B1② 合并实施（2026-10-06，分支 `c1d-url-b2`，提交 f6752b81）
+
+**结论先行**：
+- **B4① 已落地**（f6752b81）：采用 §30.4 判据。单独提交时四例集合不变，它是 B4② 的前提。
+- **`URL.equals@1` 复核**：这是通用的 `instanceof` 收窄，不是 URL 特有的漏洞。反事实去掉它，类数和方法数都是 0 变化，所以不处理。
+- **`FileLoader.getResource` 的 `startsWith` 守卫在 B4 范围内不能健全折叠。** 下面给出 JDK 能实际走到的反例。要折叠，必须知道
+  `normalizedBase.getFile()` 以 `/` 开头。这是基 URL 的按对象串事实，正是 B1② 的能力。终态目标不降：B4②（按键分对象 + 处理器
+  `file` 前缀事实 + `startsWith` 收窄）**并入 B1，作为一步实施**，§30.5 的顺序改为 B1+B4② → B5。
+- 在 L1 切除下，该守卫的反事实收益已经实测（见下文「守卫」一节）：jar / zip / jrt 连接链与签名校验链全部依赖它。
+
+#### B4①：按对象 URL
+
+`engine/classes.rs::container_shape` 新增一条判据：类链上有实例字段的类型是 `[facts.keyed_lookups]` 键类（按键查找入口的返回类型）时，
+对象按分配点区分。判据只读清单键类，不写类名。字段类型没有登记序号的，直接判为非键类，不为判定而新登记类名。
+`engine/keyed.rs::key_classes` 改为 `pub(super)`。
+
+健全性：按对象区分只是精化。各对象的字段值集之并，等于原来的无上下文字段值集。
+
+| 例 | 类（基线 / B3 / B4①） | 方法（基线 / B3 / B4①） | B4① = B3 | B4① ⊆ 基线 |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 / 469 | 1828 / 1827 / 1827 | 是 | 是 |
+| StockTrans | 3193 / 3185 / 3185 | 20429 / 20261 / 20261 | 是 | 是 |
+| DeepCopy | 3195 / 3187 / 3187 | 20447 / 20279 / 20279 | 是 | 是 |
+| TestSerialDefaultSuid | 3200 / 3192 / 3192 | 20441 / 20273 / 20273 | 是 | 是 |
+
+- 分析耗时在噪声范围内：DeepCopy 22.5 → 23.7 s，TSDS 23.0 → 25.3 s。测量期间机器上有其他作业，没有单独复测。
+- 叠加 L1 切除（`R@97` / `R@127` / `R@139`）时，DeepCopy 从 3182 / 20159 变为 3182 / 20157，只少 2 个方法。原因是
+  `FileLoader.getResource` 的 URL 对象（`URL@<getResource>:0`）在构造器克隆的 `@386` 闸门上，spec 键未知（`encodePath(name)` 的返回值），
+  `handler` 字段仍含 jar `Handler`。
+
+#### `URL.equals@1` 复核
+
+- `--flows '@openorig:java/net/URL|@1 java/net/URL.equals'`（StockTrans）共找到 20 个注入点，都是 open(Object) 经
+  `Object.equals` 枢纽实参（`hub 实参0 … on open(Object)`）流到 `URL.equals` 的 P1，再在 `instanceof URL` 处被收窄成 open(URL)。
+  open(Object) 的来源是：反射调用实参池、`Objects.equals` / `Arrays.equals` / `ConcurrentHashMap.put` 的实参、反序列化的
+  `cloneArray`、注解 `memberValueEquals`。
+- 收窄本身是健全的：open(Object) 里确实可能有未经分配点追踪的 URL，例如反序列化出来的 URL。
+- 反事实（临时开关，没有提交）：只让 `URL.equals@1` 不产出收窄值，DeepCopy 3187 / 20279 不变。原因是 open(URL) 已经由反序列化路线
+  （`URL.readObject` / `readResolve` 等接收者）带入，`URL` 是 final 类，open(URL) 上的派发不会多出目标。
+- 结论：不改，也不为 URL 做特判。它属于 open(Object) 来源的通用精度问题，归入 open 来源收窄线。
+
+#### `startsWith` 守卫：为什么 B4 单独做不了
+
+字节码（`URLClassPath$FileLoader.getResource(String,Z)`）：
+
+```
+url = new URL(getBaseURL(), ParseUtil.encodePath(name, false));   // @0..@13，两参解析式构造
+if (!url.getFile().startsWith(normalizedBase.getFile())) return null;   // @20..@38
+file = new File(dir, name.replace('/', File.separatorChar)); if (!file.exists()) return null; ...
+```
+
+`normalizedBase = new URL(getBaseURL(), ".")` 在 `FileLoader.<init>` 中赋值。
+
+- **jar URL 的 `file` 形态**：jar `Handler.parseAbsoluteSpec` 要求内层 `spec.substring(0, idx-1)` 能被 `new URL(...)` 解析，
+  所以解析式构造出的 jar URL，其 `file` 一定以「内层协议名 + `:`」开头（协议名以字母开头），不可能以 `/` 开头。三参构造
+  `new URL("jar", "", "/x")` 的 `file` 可以是 `/x`，所以这条事实只对**解析式构造**成立，不能挂在 `URL.file` 字段上全局成立。
+- **反例：`normalizedBase.file` 不一定以 `/` 开头。**
+  1. 取基 URL `file:jrt:/`。它的 protocol 是 `file`，`file` 以 `/` 结尾，`getLoader` 会为它造 `FileLoader`。
+  2. 得到 `normalizedBase.file = "jrt:/"`。
+  3. 取资源名 `jar:jrt:/x!/y`。`encodePath` 不编码 `:`，所以 spec 的键是 `jar`，`url.file = "jrt:/x!/y"`。
+  4. 这个 `url.file` 以 `"jrt:/"` 开头，守卫通过。
+  5. 之后的 `file.exists()` 是文件系统事实，不能折叠。
+
+  `URLClassLoader(new URL[]{new URL("file:jrt:/")})` 这类用户 URL 就能走到这里，所以 J 确实可达。只看本对象的 handler 与 spec，无法排除这一点。
+- **折叠需要的三条事实**（缺任何一条都退回现状）：
+  1. **按键分对象**：解析式构造的分配点按 spec 的协议键拆成「每键一对象 + 无协议」。拆分后，构造器克隆里的 `@386` 闸门只放行
+     本键的 handler，`handler`、`protocol` 与 `file` 前缀在对象内保持对应。清单为每个键处理器声明「解析式构造结果的 `file` 前缀」，
+     例如 jar 为 `<字母>…:`。
+  2. **基 URL 的 `file` 以 `/` 开头**：这一条可以从字节码推出。应用类路径的 URL 来自 `ParseUtil.fileToEncodedURL`：
+     `if (!path.startsWith("/")) path = "/" + path; … new URL("file", "", path)`。在串前缀域里按 `startsWith` 分支收窄后，两支都以 `/`
+     开头，三参构造器把它写进 `file` 字段。还要求：
+     - `FileLoader` 的基 URL 只来自这类对象。`URLClassPath(URL[])` 来自用户 URL，必须在对象层面与类路径实例分开，要求
+       `URLClassPath` / `Loader` 按对象，`unopenedUrls` 已由 B2 按对象处理。
+     - 清单声明 `new URL(base, ".")` 的相对解析保持开头的 `/`。`URLStreamHandler.parseURL` 中的 `/./`、`/../` 循环无法由纯字节码推出前缀，
+       这里只声明「上下文 `file` 以 `/` 开头、spec 无协议且无 `//`」时结果仍以 `/` 开头。
+  3. **`startsWith` 收窄**：接收者前缀与实参前缀不相容时（`<字母>…:` 与 `/…` 不相容），判定恒为假，jar 键对象到不了 `@39` 之后。
+
+  第 2 条是 B1② 的「URL 对象 `protocol` / `file` 按对象串事实」。B1③ 的 `endsWith("/")` / `equals` 收窄与第 3 条的 `startsWith` 收窄
+  属于同一个串前缀判定器。所以 B4② 与 B1 合并实施：同一个按对象串域，同时服务 `R@97/127/139` 的分支折叠和本守卫。
+- **守卫的反事实价值**（DeepCopy，L1 切除下）：
+  - 切掉该对象的 `openConnection` 节点：3182 / 20157 → 3104 / 18576。
+  - 切掉该对象 `@386` 闸门节点（只剩 file handler）：去掉 218 类，包括 jar / zip / jrt 连接链、JarVerifier、PKCS7 / 签名、
+    `DisabledAlgorithmConstraints` 等。
+  - 切写入点不单调（§7），这两个数只作量级参考。不加 L1 切除时为 0：J 还经 JarLoader 路线可达（B1）。
+
+#### spec 未知的解析式构造点全表（DeepCopy，`@srcs:sun/net/www/protocol/jar/Handler` 的 `@386` 克隆）
+
+| 构造点 | spec 来源 | 归属 |
+|---|---|---|
+| `URLClassPath$FileLoader.getResource@0` | `encodePath(name)` | 本节守卫，并入 B1 |
+| `URLClassPath$3.run@78` | `file.substring(0, len-2)`（`!/` 结尾的 jar 内 jar） | B1（`isDefaultJarHandler` + `endsWith("!/")` 分支） |
+| `URL.fabricateNewURL@10`、`URL.readObject@18`、`URL.readResolve@9` | 反序列化流 | 真实未知（流内容由运行期决定），保留 |
+| `NativePRNG.getEgdUrl@42` | `securerandom.source` 属性 | 构造后有 `getProtocol().equalsIgnoreCase("file")` 守卫，按键分对象后可由协议串事实折叠，同 B1 串域 |
+| `URI.toURL` → `URL.of@238` | URI 串 | 真实未知，保留 |
+| `JarURLConnection.parseSpecs@45`，jar `Handler.newURL`（经 `parseAbsoluteSpec` / `sameFile` / `hashCode`） | jar URL 内部 | 只在 J 已可达时出现，是自循环，不构成独立来源 |
+
+「spec 未知时的 handler 事实」的终态答案：键未知时，handler 集合**只能**是全集，不存在更强的健全事实。能做的是第 1 条的按键分对象：
+让「若 handler 是 jar，则 `file` 有 jar 形态」这一相关性留在对象内，交给下游守卫折叠。它单独不缩闭包，并入 B1 实施。
+
+#### 验证
+
+- 本机：`closure` crate 单测 171 通过；`rava` release 构建通过；`closure_cli` 的 `closure_independent_of_hash_seed` 与
+  `container_elements_per_object` 通过。
+- C4 全量冻结期内没有发起服务器作业。
+
+#### 下一步（建议）
+
+B1 + B4② 合并为一步，交付以下内容：
+- 按对象串前缀域：字段按接收者对象记前缀，构造器克隆内 `putfield this` 的串值进入对象字段；
+- `startsWith` / `endsWith` / `equals` 分支收窄；
+- 解析式构造按键分对象，以及清单中的处理器 `file` 前缀与相对解析保前缀事实；
+- 类路径目录事实（B1①）。
+
+验收沿用 §30.3：DeepCopy ≤3097（去掉 B5 一项之后的上界再实测），J 出闭包。
