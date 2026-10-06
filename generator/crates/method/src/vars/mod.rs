@@ -20,7 +20,7 @@ use instr::InstrEnv;
 use ir::{AssignStmt, Expr, LetStmt, Stmt, Type, UpcastWrap, VarOrigin};
 use sim::{safe_name, SlotDecl};
 
-use crate::entry::{Entry, Item};
+use crate::entry::{Entry, Item, Tag};
 use crate::text;
 
 pub use if_hoist::hoist_if_vars;
@@ -265,9 +265,13 @@ pub fn promote_undeclared_assigns(entries: &mut [Entry], predeclared: &BTreeSet<
     for e in entries.iter_mut() {
         if e.is_text() {
             nesting += e.delta();
-            if e.delta() < 0 {
+            // `} catch … {` / `} else {` 关闭前一兄弟块并在同一深度打开新块（delta 0）：
+            // 前一兄弟块体内（深度 ≥ nesting）的声明在新块中不可见
+            let sibling = matches!(e.tag(), Some(Tag::Catch | Tag::Else)) && e.delta() == 0;
+            if e.delta() < 0 || sibling {
+                let keep = if sibling { nesting - 1 } else { nesting };
                 declared.retain(|_, st| {
-                    st.retain(|d| *d <= nesting);
+                    st.retain(|d| *d <= keep);
                     !st.is_empty()
                 });
             }
@@ -326,6 +330,54 @@ fn apply_insertions(entries: &mut Vec<Entry>, mut insertions: Vec<(usize, Entry)
 #[cfg(test)]
 mod tests {
     use super::has_infer_placeholder;
+    use super::promote_undeclared_assigns;
+    use crate::entry::{Entry, Tag};
+    use ir::{AssignStmt, Expr, Ident, Stmt, VarOrigin};
+    use std::collections::BTreeSet;
+
+    fn assign(name: &str, value: &str) -> Entry {
+        let target = Expr::Var(Ident::new(name).unwrap());
+        let value = Expr::Var(Ident::new(value).unwrap());
+        Entry::stmt("        ", Stmt::Assign(AssignStmt { target, value, origin: VarOrigin::default() }))
+    }
+
+    fn is_let(e: &Entry) -> bool {
+        matches!(e.as_stmt(), Some(Stmt::Let(_)))
+    }
+
+    /// 同一 try 的兄弟 catch 复用同名变量（javac 同槽）：前一 catch 头的绑定在后一 catch 体内不可见，
+    /// 后者的首次赋值须升为 let（TestMultiCatchOrder E0425）
+    #[test]
+    fn sibling_catch_binding_not_visible() {
+        let mut es = vec![
+            Entry::structure("    java_try! {".into(), 1, Tag::Plain),
+            Entry::structure("        try {".into(), 1, Tag::Try),
+            Entry::structure("        } catch (e: IOException) {".into(), 0, Tag::Catch),
+            assign("e", "e"),
+            Entry::structure("        } catch (_caught3: Exception) {".into(), 0, Tag::Catch),
+            assign("e", "_caught3"),
+            Entry::structure("        }".into(), -1, Tag::Plain),
+            Entry::structure("    }".into(), -1, Tag::Plain),
+        ];
+        promote_undeclared_assigns(&mut es, &BTreeSet::new());
+        assert!(!is_let(&es[3]), "catch 体内对本 catch 绑定的重新赋值仍是赋值");
+        assert!(is_let(&es[5]), "兄弟 catch 体内的首次赋值升为 let");
+    }
+
+    /// then 分支内的 let 在 else 分支不可见
+    #[test]
+    fn then_let_not_visible_in_else() {
+        let mut es = vec![
+            Entry::structure("    if c {".into(), 1, Tag::Plain),
+            assign("x", "a"),
+            Entry::structure("    } else {".into(), 0, Tag::Else),
+            assign("x", "b"),
+            Entry::structure("    }".into(), -1, Tag::Plain),
+        ];
+        promote_undeclared_assigns(&mut es, &BTreeSet::new());
+        assert!(is_let(&es[1]));
+        assert!(is_let(&es[3]));
+    }
 
     #[test]
     fn infer_placeholder() {
