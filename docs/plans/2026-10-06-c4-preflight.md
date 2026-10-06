@@ -54,6 +54,7 @@
 | IQPuzzle（不在 Python 基线） | 性能 / 既有 | 千万级节点 DFS、上亿次对象分配与虚调用，debug 档运行慢（优化方向文档：debug > 300 s、release 4.86 s，GraalVM 参照 3.98 s）；非 2d87d368 回归：b093069f（ubuntu）/ 1079507631c4（sg2）/ e983141d（kr2）三次抽查均在 300 s 运行时限超时，本次 us1 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
 | RailwayCircuit（不在 Python 基线） | 性能 / 既有 | debug 档运行慢（优化方向文档：2026-10-01 全量新增 > 300 s 超时用例；debug > 300 s，release 曾失败（JVM 0.81 s），GraalVM 参照 1.88 s）；非 2d87d368 回归：b093069f（kr2）/ 1079507631c4（kr1）/ e983141d（ubuntu）三次抽查均在 300 s 运行时限超时，本次 kr2 放宽至 900 s 仍超时 | 不修（不改测试）；归资源 / 性能类已知失败，由运行期性能线处理 | — |
 | StringFormatTest | 基础设施（非回归） | 该例已于 acc13430（e2e 冗余剪枝 184 例）删除，2d87d368 / 264e73ee 树中均无；`master_passed_jdk21.txt` 残留 181 条已剪枝路径，分层抽样与 `--tests` 名单未按 ref 树过滤，派出即「No test files found」（cfgfix-264e73ee 同因）。printf → Formatter 链路由现存 `17_string_advanced/TestStringFormat` 与 ABCProblem 覆盖 | server_maintenance b8435ab：抽查名单按 `--ref` 的 tests/e2e 树剔除不存在用例并记日志 | — |
+| TestCharsetAvailable（不在 Python 基线，不在 master_passed） | 已知待办 / 既有 | 运行即抛未捕获 NullPointerException（无 Java 栈）；2026-10-03 入库起从未通过：jmod 覆盖文档记为 run error / R9，m2-f0c12c3b（us1）与 main-charset-e519e22c（jp2）两次抽查同症状失败，二者均早于 2d87d368；与 lambda default 改动无关 | 不在本分支修（jdk.charsets 线） | — |
 | TestModuleLayerDefine / TestClassModuleFace | 已知待办 | 引导映像线 | 不在本分支修 | — |
 
 ## 五、全量建议参数
