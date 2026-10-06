@@ -610,6 +610,58 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - C4 冻结解除后上服务器补跑，与第 2 条的服务器单测一并进行。
    - 服务器作业 bimg3-ut-d6e932c7 在收口时仍显示 running，日志为空。
 
+#### 5.5.5 发射侧物化与启动序列（2026-10-06 夜，分支 `boot-image-s3`）
+
+**提交**
+
+- 5d4b2769：发射侧物化映像区（`java_base/src/boot_image.rs`：`#[repr(C)] __BootImage` / `BOOT_IMAGE` 常量）与启动函数 `__boot_image_start()`（`main.rs` 在 `vm_boot_init` 前调用）；删除 `[boot_init] calls / phases`（闭包与清单两侧）；运行时映像原语（`image_rt.rs`、数组 / Unsafe 重定位、`SystemProps$Raw` 宿主表）。
+- 2fe9e265：S3 映像初始线程绑定（`ImageData.current_thread` → `rt::bind_initial_thread`）；删除 FS-C2 钩子（`ClassLoader.__vm_init_phase3`、`scl` / `contextClassLoader` 字段钩子）；补 4 个 native：`Reference.getAndClearReferencePendingList`（恒 null）/ `waitForReferencePendingList`（永久阻塞），`Signal.findSignal0` / `handle0` / `raise0`（自管道 + 「Signal Dispatcher」守护系统线程回调 `Signal.dispatch`）。
+- 29338223：`tests/e2e/62_reflection/TestBootLayer.java` 与期望输出（参考 JDK 21.0.11+10 实跑，37 行）。本机未跑。
+
+**启动序列（`__boot_image_start`）**：类注册 → VM 单元 → 绑定初始线程 → 引用链接（接口视图 / 数组视图 / 类镜像 / 占位对象槽）→ 宿主改写（`SystemProps$Raw` 两表）→ 字符串驻留 → 静态字段（`__si_set_*`）→ `__boot_initialized()` → 残差步骤 → `set_level(None)`。
+
+**本机实测（macOS，参考 JDK，HelloWorld `--stop-after emit`）**
+
+| 口径 | JDK 21 | JDK 25 |
+|---|---|---|
+| 映像类 | 528 | 498 |
+| 映像对象 | 614 | 618 |
+| 映像区字节 | 280,837 | 287,221 |
+
+- emit 阶段 4.78 s / RSS 445 MB（含 rava 增量构建的整条命令 50 s）。
+- `[precheck] native-missing` 中 Reference / Signal 4 项已消；余 13 项为档案内 apple KeychainStore / pkcs11 / jimage / HostLocaleProviderAdapter，不在启动路径。
+- `scripts/seed_check.sh HelloWorld`：seed-diff-lines = 0（2fe9e265 后复验）。
+- 单测（按名过滤）：closure `image` 1、emit `boot_image` 3、`jdk_literal_lint` 2，全过；`cargo check --workspace --tests --release` 无警告。运行时 crate 本机不编译。
+
+**测量方法（服务器执行，不新增环境变量）**
+
+- 二进制体积：同一档案、同一 profile（缺省档）下，release 二进制字节数与集成分支基线对比，门槛 ≤ +5%。分项用 `size -A <bin>` 看 `.rodata` / `.data`，用 `nm --size-sort -S <bin> | grep BOOT_IMAGE` 看映像区本身。
+- 启动装载：Linux uprobes——`perf probe -x <bin> __boot_image_start` 与 `__boot_image_start%return`，`perf record -e probe_<bin>:* -- <bin>` 取两事件时间戳差，门槛 ≤ 1 ms。辅以 `hyperfine -w 3 '<bin>'` 看总启动，与基线对比。符号须保留（测量用未 strip 的同构建产物）。
+
+**未完成 / 恢复入口**
+
+1. 服务器验证（C4 全量结束后）：closure_cli 三个大用例（`closure_independent_of_hash_seed` / `_large` / `closure_independent_of_order`）；生成器全量单测、审计、抽查、JDK 25；e2e HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer、TestThreadContextLoaderInit；体积与启动两项门槛。运行时改动（`image_rt.rs`、`thread_impl.rs`、`signal_impl.rs`、`reference_impl.rs`）未经本机编译，首轮服务器编译即其编译检查。
+2. D5 残差区段未物化：HelloWorld 两段都是 jnu 编码不受支持路径（JDK 21 initPhase1 `[36,70)`、initPhase3 `[367,401)`；JDK 25 `[178,212)`），UTF-8 宿主上为空操作。终态做法：由解码后的指令（`classfile::Code` 的 insns + 异常表）合成一个静态方法，类型由 `sim` 推断（无 StackMapTable），分析器登记入档案、发射器照常翻译，启动序列以 Call 步骤调用。
+3. S6：手写 `System.out` / `err` / `in` / `lineSeparator` 访问器仍为运行时侧状态，映像中对应静态字段由 `static_setter` 跳过；终态随 System 手写收窄一并改为取映像值。
+
+**需用户决策（技术取舍，已按授权先行实现）**
+
+1. D4 偏离：静态字段在启动时经 setter 写入，不是常量初值。
+2. D1 偏离：映像区放在门面 `java_base` crate，不放 decl 层。
+3. 启动时有引用链接与宿主改写，装载开销非零（U4「零拷贝」的偏离）。
+4. 映像使存活集变大（映像对象可达的类与方法入档案）。
+5. 宿主值为 null 时保留构建期值。
+6. 接口视图 / 数组视图 / 其他形态槽与类镜像在启动时链接，不进常量。
+7. S5 模块身份：映像中的 Module 对象即运行期模块单例。
+8. 映像中出现非生成类型即发射错误（不降级）。
+9. FS-C2 已删：映像缺失时系统类加载器初始化随之缺失，映像事实上为必需。
+10. D5 未物化（见上）。
+11. 重定位识别按值域判定（指针值落在宿主地址区间）。
+12. `vmProperties` 的键序在运行时 native 中重复一份，与 `[concrete.boot] vm_props` 须同步。
+13. 宿主 native 限零参静态方法。
+14. Reference Handler 与 Signal Dispatcher 现为真实 OS 线程（守护，不阻止退出）。
+15. S6 手写标准流仍为侧状态（见上）。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
