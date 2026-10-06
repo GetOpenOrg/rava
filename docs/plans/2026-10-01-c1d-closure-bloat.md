@@ -3715,3 +3715,131 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
   - `build/url/folds.py`。
 - 复核耗时：`obj_flush` 约 7–8 s（StockTrans），可再按查询粒度登记脏位（字段读按 (字段, 对象) 精确定位查询）。
 - 工具：`build/url/run4.sh <tag>`，`python3 build/url/cmp.py <new> <old>`。
+
+### 30.14 第 9–11 步：facts.rs 拆分、URL 链折叠 R 的可行性、撤除按名放开字段的兜底（2026-10-07，分支 `c1d-url-b2`）
+
+#### 第 9 步：`engine/facts.rs` 按职责拆分（提交 2d4a4bd8）
+
+- 拆为 `facts/{kinds,fields,calls,oracle}.rs`，行为不变。
+- `15a` 对 `14d`：四例类 / 方法集合完全一致。
+- 用时（ms）：HelloWorld 520 → 510，StockTrans 32428 → 31857，DeepCopy 32496 → 32121，TestSerialDefaultSuid 31974 → 31689。
+- closure crate 单测 191 过。
+
+#### 第 10 步：URL 链折叠 R（E1–E5）——阻塞，待用户决策
+
+目标：由字节码推出 `ParseUtil.fileToEncodedURL` 的路径以 `/` 开头，从而折叠 `URLClassPath$3.run`（R）里的 jar 分支，
+把 jar `Handler`（J）移出闭包。不假设启动目录是目录。
+
+结论：仅凭 `/` 前缀不能移除 J，**不是推导精度问题，是语义上推不出**。
+
+- R 的 URL 不只来自 `fileToEncodedURL`：`JarLoader` 解析 manifest 的 `Class-Path` 得到相对 URL，
+  以 jar 的 URL 为基解析后回流到 R 的同一入口。
+- `Class-Path` 内容来自运行期读到的 jar，不受字节码约束，可以写成 `jrt:/…` 等任意形状。
+  例如基为 `file:/a/b.jar`、条目为 `jrt:/x` 时，得到的 URL 不以 `file:/` 开头。
+  所以 `/` 前缀事实对这一来源不成立，R 的 jar 分支在开放世界下可达。
+- 反事实实测（DeepCopy，**不健全的剪枝，只用于量化上限**）：
+
+  | 剪掉的分支 | 类 / 方法 | J |
+  |---|---|---|
+  | 不剪（`15a`） | 3152 / 19936 | 在 |
+  | R@97 + R@127 | 3150 / 19913 | 仍在 |
+  | 再加 `getJarFile@63` | 3150 / 19908 | 仍在 |
+  | R 的三个分支全剪 | 3147 / 19812 | 仍在 |
+
+  即使把 R 全部剪掉，J 仍经其他路径留在闭包中，收益上限约 5 类 / 124 方法。
+  E1–E5 做到底也只能拿到其中健全的一部分，并且依赖下面的产品取舍。
+
+待用户决策（原则 / 产品取舍，本项停在此处）：
+
+- (a) 接受现状：URL 链保留。不改语义，闭包多约 5 类 / 百余方法。
+- (b) 构建期固定资源目录：原生二进制的资源与类路径在构建期确定，运行期不再按 jar manifest 扩展类路径。
+  这样 `Class-Path` 来源在档案中消失，R 的 jar 分支可健全折叠。
+- (c) 原生二进制不设应用类路径：与模块模式一致（`cp = null`），类全部静态链接，`URLClassPath` 只服务于显式构造的
+  `URLClassLoader`。R 整条链在档案中只因用户显式使用而进入。
+- (d) 重新评估「启动目录是目录」的假设：只能处理 `fileToEncodedURL` 一支，按上面的反例仍不足以移除 J。不建议。
+
+建议 (c)：最贴合「rava 是 Java 的原生编译后端」的定位，类在构建期全部已知，运行期类路径扩展本来就无从加载新字节码。
+次选 (b)。选定后，R 的折叠由清单声明运行模型，生成器不需要类名特判。
+
+#### 第 11 步：撤除「按调用形状按名放开字段」的兜底
+
+原状：`reflective_writes` 对任何带 `Class` 形参或 `Class` 接收者、且有 `String` 实参的调用点，按名放开同名字段
+（`open_field` / `open_field_name`）。这是不按清单的兜底，与「清单即边界」相悖，也是若干假阳性的来源。
+
+撤除前先实测兜底触发的全部站点。它覆盖、而精确解析器没有覆盖的字段身份入口只有两个：
+
+- `MethodHandles$Lookup.resolveOrFail(byte, Class, String, Class)` 的字段形态；
+- `MemberName.<init>(Class, String, Class, byte)`。
+
+其余触发都是方法查找（已由 `method_lookups` 覆盖）或假阳性。
+
+终态设计：
+
+- 按名取字段身份的入口**只有**清单 `[facts.field_writes.name_resolvers]`。新增两条，都带引用种类过滤：
+  - `MethodHandles$Lookup.resolveOrFail:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)…`
+    = `{ kind = 0, class = 1, name = 2, read_kinds = [1, 2] }`；
+  - `MemberName.<init>:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Object;)V`，过滤同上。
+- `kind` / `read_kinds`：`kind` 形参是常量且属于只读种类（JVMS `REF_getField` = 1、`REF_getStatic` = 2）时，
+  本站点不算写入。种类非常量时按写入处理（健全）。只给 `read_kinds` 不给 `kind` 时清单解析报错。
+- `MemberName(Class, String, Class, byte)` 不入表：java.base 中它的调用方只有 `resolveOrFail` 与
+  `DirectMethodHandle.createFunction`（`REF_getStatic`，只读）。前者已经在 `resolveOrFail` 处按种类过滤，
+  后者只读。实测把它列为根时，getter 查找会被当成写入（`16a` 多出 `FinalReference` 1 类 + 2 方法）。
+- 名字值集（`field_names.rs::name_values`）：
+  - 本点字面量。有来源时只取 `site_lits`，即不把常量格派生出的中间态常量当字面量（D1）。
+    `16b` 的反例：`findVarHandle` 内的派生值 `V::Str("head", [Param(2)])` 导致 `open_field_name("head")`，
+    多出 `FinalReference`。
+  - 形参来源：取各调用点在该形参上的字符串常量（`pstr_read`）。已配对、且方法只经字节码调用点进入时不取，交给配对。
+    形参被污染（`ptaint`）时为未知。
+  - 字段读来源：`String` 字段的字面量写入集（`field_strs`）。字段已放开或有非常量写入时为未知。
+  - 辅助方法返回：`callee_consts`。
+  - `catch` 来源：未知。
+- 未知名字的回退：按类值集放开该类全部字段，类也未知时全放开（`open_class_fields(None)`），
+  不再按同名字段在全体类上放开。
+- 配对（`lookup_pair.rs::field_wrap_call`）：同样取 `name_values`，名字未知时按配对的类值集放开。
+- 非字节码入口（`pstrs.rs::offsite`）：方法经 `bind_pvs`（反射 / 句柄等非字节码调用）进入时登记为 offsite，
+  并以 `TRIG_TAINT` 重跑其形参读站点。此后配对不再豁免形参名，避免漏掉不经字节码调用点进入的名字。
+
+健全性审计：被新折叠掉的项逐一查过，都是旧兜底的假阳性。
+
+- 名字取自 `ObjectStreamField` / `FieldValues.getFieldOffset` 等按名 `getField` 读路径，被兜底当成写入：
+  - `ObjectOutputStream.protocol`、`CountingWrapper.count`；
+  - `KeySetView.value`、`TimeUnit`、`PlatformLogger.isLoggable`；
+  - `SunPKCS11.<init>`、`CoderResult`、`ServiceList.tryGet`。
+- `ModuleReader.open` / `read`：可达的实现只有 `NullModuleReader`。
+- `UnresolvedPermissionCollection` / `Secmod$Module`：闭包中没有其构造器或 `readObject`。
+
+迭代记录：
+
+| tag | 做法 | 相对 `15a` |
+|---|---|---|
+| `16x` | 直接删兜底 | **不健全**：`BMH_SPECIES` 被折为 null（`resolveOrFail` 字段形态无人放开） |
+| `16a` | 加 `resolveOrFail` 与 `MemberName(Class,String,Class,B)` 为解析器 | 多出 `FinalReference` +1 类 +2 方法（getter 查找被当成写入） |
+| `16b` | 引用种类过滤，去掉 `MemberName(Class,String,Class,B)` 根 | 多出 `FinalReference`（中间态派生名，D1） |
+| `16c` | 有来源时只取 `site_lits` | 四例集合与 `15a` 完全一致 |
+
+四例数据（`15a` → `16c`；类 / 方法集合逐项相等）：
+
+| 用例 | 类 | 方法 | 用时 ms | `peak_mem_mb` |
+|---|---|---|---|---|
+| HelloWorld | 469 | 1823 | 510 → 548（+7.5%） | 221 → 249（+12.7%） |
+| StockTrans | 3150 | 19916 | 31857 → 31147 | 2247 → 2173 |
+| DeepCopy | 3152 | 19936 | 32121 → 31048 | 2300 → 2225 |
+| TestSerialDefaultSuid | 3157 | 19928 | 31689 → 31641 | 2165 → 2264（+4.6%） |
+
+- 用时与内存增幅都在 20% 线内。HelloWorld 的绝对增量是 38 ms / 28 MB。
+- 本步的收益是结构性的：去掉一条不按清单的通道，`name_resolvers` 成为按名取字段身份的唯一入口。
+  四例集合没有缩小，因为旧兜底的假阳性在这四例中都已被其他事实覆盖或不可达。
+
+#### 单测
+
+- closure crate 193 过（新增 `reference_kind_filters_read_only_sites`、`read_kinds_require_kind`）。
+- closure_cli：`closure_independent_of_hash_seed`、`closure_independent_of_order`、`param_string_constants_fold_switch` 3 项全过（1667 s）。
+
+#### 遗留与恢复入口
+
+- 第 10 步待用户在 (a)–(d) 中选定。选 (b) 或 (c) 后，入口是清单声明运行模型（类路径来源），再以
+  `build/url/cl.sh tests/e2e/23_algorithms/DeepCopy.java <tag> --flows '@trace:sun/net/www/protocol/jar/Handler'`
+  核对 J 的剩余路径。反事实表说明，剪掉 R 后 J 仍在，需要沿 trace 继续找。
+- `MemberName(Class, String, Class, byte)` 不入表靠调用方审计。若将来档案中出现新的调用方，需要复查。
+  审计脚本思路：用 javap 列出 java.base 中该构造器的调用点。
+- 工具：`build/url/run4.sh <tag> <base>`、`build/url/cnt.py`、`build/url/folds.py`。
