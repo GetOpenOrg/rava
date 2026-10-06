@@ -126,3 +126,17 @@ signature = "javac 编译失败"
 owner = "junit e2e 依赖包 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）"
 since = "2026-10-06"
 note = "依赖 org.junit / org.hamcrest，harness 无依赖 classpath，转译阶段 javac 报 cannot find symbol"
+
+[[known]]
+test = "TestHttpLoopbackSync"
+signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"
+owner = "套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）：补 IOUtil.fdLimit 等 ACC_NATIVE 手写"
+since = "2026-10-06"
+note = "入库起从未通过：此前各抽查均为 600 s 转译超时；放宽转译时限后进到运行期，0.3 s 命中未实现 native"
+
+[[known]]
+test = "TestHttpLoopbackAsync"
+signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"
+owner = "套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）：补 IOUtil.fdLimit 等 ACC_NATIVE 手写"
+since = "2026-10-06"
+note = "同 TestHttpLoopbackSync"
