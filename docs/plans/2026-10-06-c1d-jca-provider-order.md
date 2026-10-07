@@ -167,3 +167,105 @@ Signature / KeyFactory / KeyPairGenerator 的同名服务；求值先后随调�
 - worktree `../java_rta_c1djca`，分支 c1d-jca；
 - 量类：`build/jca/batch.sh <Test...>`（每例 off / new / offds / newds 四次），结果 `build/jca/<tag>_<Test>.json` 的
   `summary.{classes,methods,jca_order}`。
+
+## 7. 现状（2026-10-07，分支 fix-jca-subset @ f75c32a4 起）
+
+### 7.1 任务与假设
+
+TestJndiNoProvider 在 f75c32a4（含 fix-jndi-bloat）上 4521 类、峰值 15.3G（`jndig-329a6981`）。上一步的结论：JCA 门经
+`Providers.getFullProviderList@58 → setSystemProviderList` 判为「改写 provider 顺序」而放开，于是 XMLDSig provider 入链：
+RMI `getMethodHash` → `MessageDigest.getInstance` → `XMLDSigRI$ProviderService.newInstance` → `DOMCanonicalXMLC14NMethod`
+→ `ApacheCanonicalizer.<clinit>` → `Init.init` → `DocumentBuilderFactory.newInstance` → Xerces / Xalan。原定修法：
+`getFullProviderList` 写回的是 `removeInvalid()` 的结果（同一张表的保序子集），按「保序子集写回」处理，不判为放开。
+
+### 7.2 实测：这个修法达不到目标
+
+结论：「保序子集写回不放开」本身是对的，但**门仍会放开**，而且放开是对的。原因是 `getFullProviderList` 本身就会装载整张表。
+
+**字节码（JDK 21 javap）**：`Providers.getFullProviderList` 在 @14 / @48 无条件调用 `ProviderList.removeInvalid`，`removeInvalid`
+在 @1 无条件调用 `loadAll`，`loadAll` 对每个表项调用 `ProviderConfig.getProvider`，非内建项会走 `doLoadProvider`。
+所以只要 `Security.getProviders`（→ `getFullProviderList`）可达，XMLDSig 等全部表项在运行期就会被实例化。这正是 §5.2 已记录的
+「真实的全表装载」。写回点只是这次全表装载的后果；不判写回放开，门也会在游走判据（§2.3 第 3 条）上放开：
+扣住点 → `getProvider` ← `loadAll` ← `removeInvalid` ← `getFullProviderList`（非内部方法）。
+
+**基线对照**：39979fae（「好基线」，3777 类、5.1G，`jndig-39979fae`）上 JCA 门**同样已放开**，成因相同（`setSystemProviderList`
+可达），XMLDSig 链也在（`jndiw-39979fae` 的 `--why` 能看到 `XMLDSigRI$ProviderService.newInstance` → `FactoryFinder.getProviderClass@38`）。
+3777 → 4521 的 +744 类（其中 `com/sun/org` 113 → 656）来自 a5de7eee（「按名取类站点名字含推不出的支时已知名字照常在不动点上放行」，
+修 FactoryFinder 缺省实现类漏闭包）。它让 `DocumentBuilderFactoryImpl` 等缺省实现正确入链，Xerces 随之入链。也就是说，3777 是在
+「缺省实现漏闭包」这个正确性缺陷下测得的，不能作为本步的目标值。
+
+**服务器实验**（JDK 21，TestJndiNoProvider，`rava closure`，作业里用 sed 改 scratch 检出的 seeds.toml，仅作诊断，不提交）：
+
+| 变体 | 改动 | 结果 |
+|---|---|---|
+| A（基线 f75c32a4 / 329a6981） | 无 | 4521 类，峰值 15.3G，放开成因：`setSystemProviderList` 可达 |
+| B（`jcasub-exp2-f75c32a4`） | 去掉 `setSystemProviderList` 改写入口 | 4543 类 / 29080 方法，峰值 19.6G；放开成因转为 `changeThreadProviderList` 可达（`getFullProviderList@24`，线程表分支的同一种保序子集写回）；`com/sun/org` 656、`org/jcp/xml` 16、pkcs11 29 |
+| C（`jcasub-exp-f75c32a4` 02） | B + `Providers` 计入 interior | 14G 上限内 OOM（峰值 ≥14.3G），即仍为膨胀形态 |
+| B 首跑（`jcasub-exp-f75c32a4` 01） | 同 B | 14G 上限内 OOM |
+
+B 比 A 多 22 类，是放开时机推迟（不动点上才放开）引起的。按 §2.4，结果只应与 A 相同；这 22 类差异尚未分析（可能是放开前后某个求值点依赖次序，属 D1 守护范围），待续跑时一并核对。
+
+**待测（dev 关机维护，未跑完）**：
+- D：去掉三个 `Providers` 改写入口（`setSystemProviderList` / `changeThreadProviderList` / `beginThreadProviderList`）。预期放开成因
+  转为「游走经非内部方法 `sun/security/jca/Providers.getFullProviderList`」，规模同 B。
+- E：D + `Providers` 计入 interior。预期成因转为「游走经非内部方法 `java/security/Security.getProviders`」，规模同 B。
+- 作业：`jcasub-exp3-f75c32a4`，`--slot-mem dev=24`，脚本见本节末。两项都只用来确认成因链，不改变 §7.2 的结论。
+
+### 7.3 根因与候选方案
+
+根因：TestJndiNoProvider 的调用链上 `Security.getProviders` 可达（类路径 jar 校验 → `SignatureFileVerifier` → `PKCS7` → `AlgorithmId.getName`
+→ `aliasOidsTable` → `collectOIDAliases`），它会真实地装载整张 provider 表，所以 JCA 门放开是对的。膨胀的直接来源是放开之后
+`Provider$Service.newInstance` 的派发不按服务类型区分：MessageDigest 请求的 Service 接收者值集里混入了 XMLDSigRI 的
+`ProviderService`，而 XMLDSig 只注册 XMLSignatureFactory / KeyInfoFactory / TransformService，从不提供 MessageDigest。
+
+候选方案（按收益排序；均须通用、不在 crate 中写 JDK 类名）：
+1. **Service 对象按（类型, 算法）键流动**：Service 对象构造时的 type / algorithm 实参在字节码里是常量（`ldc`）。`Provider.putService` / `getService`
+   在服务表上按 `ServiceKey(type, algo)` 存取；按键建模这张表（复用 sysprops / keyed 的按键容器框架），让 `getService(T, A)` 只返回
+   以 T（及其同义名）注册的 Service 对象。这样 `GetInstance.getInstance(Service, Class)` 的 `newInstance` 派发就排除了 XMLDSigRI$ProviderService。
+   这一步直接解决 TestJndiNoProvider，对所有放开 JCA 门的测试（序列化三例等）都有收益。
+2. **收窄 `Security.getProviders` 的入链**（能力① URL / 类路径 jar）：原生二进制运行期类路径不含已签名 jar，
+   `URLClassPath$JarLoader` → `JarVerifier` 这条链在闭包上的可达性由能力① 处理（§5 的 D 切除）。落地后 `collectOIDAliases` 退出闭包，JCA 门可以扣住。
+3. `AlgorithmId.getName` 只在 OID 不在 `KnownOIDs` 时才查 `aliasOidsTable`：要做值敏感，收益小，不建议。
+
+「保序子集写回不放开」这个细化（原任务的修法）在当前判据下**没有独立收益**：`getFullProviderList` 的两处写回都在
+`removeInvalid → loadAll` 全表装载之后，游走判据必然放开；`Security.addProvider` / `insertProviderAt` / `removeProvider` 是真实改写。
+因此本步不实施、不提交该改动，待协调方在候选 1 / 2 中定向。
+
+已知残留（本步未处理）：handle kind 5 / 9 的绑定方法引用经 SAM 点 dispatch 进入时被当作可跟踪（`jca_order_entry` 的 `tracked` 判定只看
+via 种类与调用方是否为字节码），应按「绑定接收者的方法句柄入口」计入有根。
+
+诊断脚本（作业 `--cmd` 里 base64 内联；变体 B / C / D / E）：在检出目录 `sed` 掉 seeds.toml 中对应改写入口行（E 另把
+`sun/security/jca/Providers` 加入 interior），构建 rava 后跑 `rava closure tests/e2e/73_jndi_script/TestJndiNoProvider.java --jdk 21`，
+打印 `summary.{classes,methods,jca_order}` 与 `com/sun/org` / `org/jcp/xml` / pkcs11 / `javax/xml/parsers` 包类数。
+
+### 7.4 候选 1 落地：按服务类型追踪 Service 对象（669169e9）
+
+**诊断**（新增 `--flows @keyed`：各按键查找闸门的站点键集 / 暂扣类型与类键集，0102d017）：`Provider.getService` 的按类型闸门在
+DeepCopy、TestJcaOpen、TestJcaRmi 上工作正常（MessageDigest 请求不放行 XMLDSig 的 ProviderService）。漏点在不经 `getService`
+的服务遍历：`Sasl.getFactories(String)` 走 `Provider.getServices()` 全集，以 `s.getType().equals(serviceName)` 筛选后
+`loadFactory → Service.newInstance`，筛选没有建模，全部 Service 子类流入 `newInstance` 派发 → `XMLDSigRI$ProviderService` →
+`DOMCanonicalXMLC14NMethod` → Xerces。合成例实测（kr1，JDK 21，`rava closure`）：TestJcaOpen 3021 类、带 SHA 摘要 3308 类
+（`com/sun/org` 0）、TestJcaRmi 3053 类（0）、TestJcaSasl 3931 类（`com/sun/org` 655、`org/jcp/xml` 16）。
+TestJndiNoProvider 在云服务器单槽 11.9G cgroup 上 OOM，无法在云上诊断（待 dev 恢复后复测）。
+
+**实现**（通用、清单驱动，生成器 crate 无 JDK 类名）：
+- 清单 `[facts.keyed_lookups]` 条目增 `getters`：键类上返回对象键的读取方法（不可覆写）；JCA 登记 `Provider$Service.getType`
+  （final、返回 final 字段 type；公有构造器存 `getEngineName(type)`，与构造器键形参只差大小写，按该入口的 fold_case 比较涵盖）。
+- `absint/narrow.rs` 键判定收窄：`aload k; <键读取>; name; <字符串相等>; ifeq/ifne` 及两侧互换形态（相等判定取
+  `[facts] value_equals` / `string_ops equals_ignore_case`；操作数取判定调用前的栈，键读取结果按调用偏移认定；从 `aload k`
+  到跳转同一基本块且无局部变量写入）。成立一侧 k 打收窄标记、发 `Event::KeyTest`。收窄标记 `Obj::MirrorSub` 泛化为
+  `Obj::Narrowed`（与类镜像子类型判定共用：类型流取跳转偏移处的收窄节点）。
+- `engine/keyed.rs keyed_test`：复用按键查找闸门（放行 / 暂扣 / 单调补判），站点键集为 name 的全部名字，**推不全即任意**
+  （`lookup_partial` / `lookup_incomplete`），输入为 k 的值，放行到收窄节点。
+- **不按算法建键**：类键按类合并（同一服务类登记多种算法，按算法分不出类），且算法另有别名 / OID 查找（aliases、KnownOIDs、
+  旧式别名条目），按算法筛选既无收益又须完整建模别名才健全。
+
+**结果**（`jcasub-diag6-669169e9`，kr1）：closure 单测 183 通过；TestJcaSasl 3931 → 3072 类（`com/sun/org` 655 → 0、
+`org/jcp/xml` 16 → 4，与 TestJcaOpen 同形态；`Sasl.getFactories@102` 闸门键 {SaslClientFactory}，暂扣其余 ProviderService）；
+TestJcaRmi 3053 不变。JCA 抽查 `jcasub-669169e9`（kr1 / sg1）9/9 通过：TestMessageDigestApi、TestJcaIndirectDigest、TestMacHmacDigest、TestRsaSignVerify、TestEcSignVerify、Digester、SecurityDemo、DeepCopy、HelloWorld。
+
+**已知残留**：`names_of` 在名字求值推不全时给出已知部分（不记任意），查找调用点闸门 `keyed_res` 沿用此口径：
+`Provider$Service.newInstance@19`（键取开放字段 `this.type`）与 `ServiceList.tryGet@282`（键取 `ServiceId.type`）键集为 {}，
+暂扣全部。前者结果只与 this 比较、不影响派发；后者理论上不健全（运行期返回的服务类型若只经该点流出会漏），改为任意会把全部
+Service 子类放进 `GetInstance` 的 `newInstance` 派发、抵消本节收益，须先给 `ServiceId.type` 的名字建模（`getInstance`
+系列的 `List<ServiceId>` 实参）再改口径。新加的键判定已按「推不全即任意」处理。

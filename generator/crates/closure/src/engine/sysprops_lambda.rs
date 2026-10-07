@@ -31,7 +31,7 @@ fn alias_close(a: &Analysis, mut set: BTreeSet<Src>) -> BTreeSet<Src> {
         let n = set.len();
         for (o, e) in &a.events {
             let inp = match e {
-                Event::CheckCast(_, Some(v)) | Event::InstanceOf(_, Some(v)) | Event::NotInstance(_, v) | Event::MirrorSub(_, v) => v,
+                Event::CheckCast(_, Some(v)) | Event::InstanceOf(_, Some(v)) | Event::NotInstance(_, v) | Event::MirrorSub(_, v) | Event::KeyTest { input: v, .. } => v,
                 _ => continue,
             };
             if hits(inp, &set) {
