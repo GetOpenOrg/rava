@@ -126,7 +126,7 @@ impl<'a> Engine<'a> {
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
         if cut::edges_on() {
-            cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("H:{h}"));
+            cut::edge_plain(&self.site_node(m, off), &format!("H:{h}"));
         }
         self.prof_seg(site_prof::SEG_LINK_FEED);
         let hub = &self.hubs[h as usize];

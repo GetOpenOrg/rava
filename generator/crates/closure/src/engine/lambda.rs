@@ -234,7 +234,7 @@ impl<'a> Engine<'a> {
         let via = Via::method("indy", m, Some(off));
         let lid = self.id(lname);
         if super::cut::edges_on() {
-            super::cut::edge_plain(&format!("M:{}", self.methods[m].key), &format!("A:{lname}"));
+            super::cut::edge_plain(&self.site_node(m, off), &format!("A:{lname}"));
         }
         let adapt = self.lambda_plan(bargs, imh, cap.len());
         let markers = alt_markers(bargs, self.man.serializable_markers());

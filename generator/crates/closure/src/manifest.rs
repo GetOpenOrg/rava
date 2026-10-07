@@ -80,6 +80,8 @@ mod keyed;
 pub use keyed::{KeyedLookup, KeyedLookups};
 mod direct;
 pub use direct::{DirectInvoker, DirectInvokers, LookupScope};
+mod gates;
+pub use gates::{GateCategory, GateHints};
 mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
@@ -212,6 +214,8 @@ pub struct Manifest {
     pub concrete: ConcreteCfg,
     /// VM 注入状态的落地（字段访问钩子、模块 → 加载器映射来源）
     pub vm_state: VmState,
+    /// 门排名的处理类别提示（closure.toml `[gates]`，见 `manifest/gates.rs`）
+    pub gate_hints: GateHints,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -519,6 +523,7 @@ impl Manifest {
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
             concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,
+            gate_hints: GateHints::from_toml(closure.get("gates"))?,
         })
     }
 

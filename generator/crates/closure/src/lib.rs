@@ -53,6 +53,8 @@ pub struct Closure<'a> {
     /// 构建期引导映像与求值耗时
     pub boot_image: engine::concrete::boot_image::BootImage,
     pub boot_ms: u128,
+    /// 触发边（`Diag::keep_edges` 时有；门排名建触发图用）
+    pub edges: Option<engine::cut::Edges>,
 }
 
 pub use engine::concrete::boot_image::BootFailure;
@@ -63,7 +65,11 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     let mut e = Engine::new(h, input.cp, man, hw);
     e.cuts = engine::cut::Cuts::parse(&input.diag.cuts);
     e.arm_probes(&input.diag.flows);
-    if input.diag.dump_edges.is_some() {
+    if input.diag.keep_edges {
+        // 门排名按调用点切除：方法源须带偏移
+        e.cuts.edge_off = true;
+    }
+    if input.diag.dump_edges.is_some() || input.diag.keep_edges {
         engine::cut::edges_begin();
     }
     e.seeds.locales = input.locales.clone();
@@ -90,12 +96,14 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     e.root_vm_rules();
     e.run();
     boot_image.data.live = e.image_live();
-    if let Some(p) = &input.diag.dump_edges {
-        if let Err(err) = engine::cut::edges_finish(p) {
+    let edges = engine::cut::edges_take();
+    if let (Some(p), Some(g)) = (&input.diag.dump_edges, &edges) {
+        if let Err(err) = engine::cut::edges_write(g, p) {
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
         }
     }
-    Ok(Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis(), boot_image, boot_ms })
+    let edges = edges.filter(|_| input.diag.keep_edges);
+    Ok(Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis(), boot_image, boot_ms, edges })
 }
 
 /// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）

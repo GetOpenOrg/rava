@@ -95,3 +95,47 @@ clinit_carried = [
 vm_upcall_classes = [
     "java/lang/invoke/MethodHandleNatives",
 ]
+
+# ── 门排名的处理类别提示（rava closure --gates，读取入口 generator/crates/closure/src/manifest/gates.rs）──
+# 门排名给每个门（让闭包膨胀的枢纽方法体 / 调用点）标处理类别：精度缺口 / 构建期可求值 / 运行模型替换 / VM 驱动。
+# 分析器自身事实（派发扇出、溯源根种类、属性读取……，见 engine/gates/classify.rs）之外的逐类判定只写在这里，
+# 依据为闭包构成报告 docs/reports/2026-10-07-closure-composition.md §六「逐块判定」。
+# 门所在类先查、调用目标类后查；条目以 `/` 结尾为包前缀，否则为类 binary name（覆盖自身与其 `$` 嵌套类）；
+# 多条命中取最长条目。本段只影响 `--gates` 输出的类别标签，不影响闭包。
+[gates]
+# ② 构建期可求值：配置 / 提供者表 / 缺省值在构建期确定（引导映像求值或清单定值后整块不再可达）
+build_time = [
+    "java/security/Security",
+    "java/security/Provider",
+    "sun/security/jca/",
+    "java/nio/charset/Charset",
+    "sun/util/locale/provider/",
+    "java/util/ServiceLoader",
+    "java/lang/System$LoggerFinder",
+    "jdk/internal/logger/",
+    "sun/util/logging/",
+    "jdk/internal/module/",
+    "java/io/ObjectInputFilter$Config",
+    "java/util/random/RandomGeneratorFactory",
+]
+# ① 运行模型替换：机制在封闭原生映像下不成立（运行期类加载、类路径 jar、jar 签名校验、类路径服务查找）
+runtime_model = [
+    "jdk/internal/loader/",
+    "java/net/URLClassLoader",
+    "java/util/jar/JarFile",
+    "java/util/jar/JarVerifier",
+    "sun/security/util/SignatureFileVerifier",
+    "java/util/ServiceLoader$LazyClassPathLookupIterator",
+]
+# VM 驱动：GC 引用处理、信号分发、关停钩子由 VM 驱动（无 GC 模型下引用清理随 Rc 释放触发）
+vm_driven = [
+    "java/lang/ref/",
+    "jdk/internal/ref/",
+    "jdk/internal/misc/Signal",
+    "java/lang/Shutdown",
+    "java/lang/ApplicationShutdownHooks",
+]
+# ③ 精度缺口（分析器事实不足以判定、但已确认属精度问题的门）：doPrivileged 上下文无关派发
+precision = [
+    "java/security/AccessController",
+]

@@ -24,6 +24,8 @@ pub struct Diag {
     pub flows: Vec<String>,
     /// `--site-prof`：读者站点重跑剖析（`site_prof.rs`，结果进 `summary.perf.site_prof`）
     pub site_prof: bool,
+    /// 触发边留在内存（`Closure::edges`，方法源一律带偏移），供门排名（`engine/gates/`）建触发图
+    pub keep_edges: bool,
 }
 
 #[derive(Default)]
@@ -131,7 +133,7 @@ pub fn edge(from: &str, to: &str) {
         };
         let a = id(fo.as_deref().unwrap_or(from));
         let b = id(to);
-        let c = cond.as_deref().map_or(u32::MAX, &mut id);
+        let c = cond.as_deref().map_or(NO_COND, &mut id);
         set.insert((a, b, c));
     });
 }
@@ -141,24 +143,46 @@ pub fn edge_plain(from: &str, to: &str) {
     with_ctx(None, None, || edge(from, to));
 }
 
-/// 运行结束时写出并停止记录：每行 `源\t目标\t条件`
-pub fn edges_finish(path: &std::path::Path) -> std::io::Result<()> {
+/// 记录下的触发边：节点名表 + 边 `(源, 目标, 条件)`（下标进 `names`；条件 [`NO_COND`] = 无条件）
+#[derive(Debug, Default, Clone)]
+pub struct Edges {
+    pub names: Vec<String>,
+    pub edges: Vec<(u32, u32, u32)>,
+}
+
+/// 无条件边的条件值
+pub const NO_COND: u32 = u32::MAX;
+
+/// 停止记录并取出已记录的触发边（未在记录时为 None）。边按 (源, 目标, 条件) 排序，与登记次序无关
+pub fn edges_take() -> Option<Edges> {
     EDGES.with(|e| {
-        let Some((ids, set)) = e.borrow_mut().take() else { return Ok(()) };
-        let mut names = vec![""; ids.len()];
-        for (k, v) in &ids {
-            names[*v as usize] = k.as_str();
+        let (ids, set) = e.borrow_mut().take()?;
+        let mut names = vec![String::new(); ids.len()];
+        for (k, v) in ids {
+            names[v as usize] = k;
         }
-        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
-        for (a, b, c) in &set {
-            let c = if *c == u32::MAX { "" } else { names[*c as usize] };
-            writeln!(f, "{}\t{}\t{}", names[*a as usize], names[*b as usize], c)?;
-        }
-        f.flush()
+        let mut edges: Vec<_> = set.into_iter().collect();
+        edges.sort_unstable();
+        Some(Edges { names, edges })
     })
 }
 
+/// 写出触发边转储：每行 `源\t目标\t条件`
+pub fn edges_write(g: &Edges, path: &std::path::Path) -> std::io::Result<()> {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    for &(a, b, c) in &g.edges {
+        let c = if c == NO_COND { "" } else { g.names[c as usize].as_str() };
+        writeln!(f, "{}\t{}\t{}", g.names[a as usize], g.names[b as usize], c)?;
+    }
+    f.flush()
+}
+
 impl super::Engine<'_> {
+    /// 调用点源节点名：方法 m 在偏移 off 处登记的边（枢纽接入、lambda 创建）与溯源同口径
+    pub(super) fn site_node(&self, m: usize, off: u32) -> String {
+        self.via_node(&super::Via::method("site", m, Some(off)))
+    }
+
     /// 溯源的源节点名（触发边转储用）
     pub(super) fn via_node(&self, v: &super::Via) -> String {
         match &v.from {

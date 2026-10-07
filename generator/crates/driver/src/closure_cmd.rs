@@ -89,7 +89,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false, keep_edges: false })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回

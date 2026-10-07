@@ -117,6 +117,7 @@ mod stats;
 mod graph;
 mod grow;
 pub mod cut;
+pub mod gates;
 mod setstore;
 use setstore::SetStore;
 mod scc;
