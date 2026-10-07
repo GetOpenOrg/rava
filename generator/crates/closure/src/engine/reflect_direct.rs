@@ -4,15 +4,19 @@
 //! 反射对象，经它的每个调用点都把注解解析与 CS 访问器链带进闭包。调用点满足下列条件时，反射对象只可能是
 //! 解析出的非 CS 静态目标之一，原入口的执行与清单登记的特化入口（helper）逐句一致：
 //! 1. 反射对象（接收者）唯一来自本方法内一个清单所列查找入口的调用点；
-//! 2. 查找的名字是常量，形参类型数组恒为空（常量长度 0 的数组或 null），查找类集（类字面量 / Class 接收者值集里的
-//!    类镜像）不含所指未知的值；
+//! 2. 查找的名字是常量，形参类型数组恒为空（常量长度 0 的数组或 null）；查找类集取类字面量 / Class 值集里字节码类
+//!    镜像所指的类。值集里所指未知的部分（open、非镜像的 Class 对象、隐藏 / 代理类镜像）按反射缺口口径处理
+//!    （同 `method_lookup.rs::recv_mirrors`：查找点自身已记缺口，分析器不做模糊扩展）——缺口类上的成员本就不经
+//!    该查找点进入调用链，原入口与 helper 在缺口上同样落到调用链外（helper 的 native 与原入口的 native 访问器共用
+//!    `reflect_dispatch::native_invoke`：非 CS 方法的实参检查、空接收者 NPE、装箱逐句一致；CS 方法只在 JDK 内且
+//!    名字可见，缺口不改变此前提），不因缺口回退；
 //! 3. 按查找口径（public：公开成员沿超类链；declared：只查声明类）在各类上解析出的目标全是无参、返回引用或 void、
 //!    非 @CallerSensitive 的静态方法（解析不到 = 查找抛 NoSuchMethodException，不产生目标；有超接口同名无参方法
 //!    参与选择时不直连）。
 //!
 //! 满足时调用点接到 helper（静态调用，按 @CallerSensitive 声明压栈调用方所在类）与各目标（结果 = 目标返回值），
 //! 目标入反射分派面（`reflect_members`，helper 的 native 按声明键分派），不再接原入口——Method.invoke 体内的
-//! CS 判定、注解解析、访问器链不经本调用点入链。条件随值集增长可由真变假（查找类集出现所指未知的值等）：
+//! CS 判定、注解解析、访问器链不经本调用点入链。条件随值集增长可由真变假（查找类集新增的类上解析出不可直连的目标等）：
 //! 一旦不满足，调用点记入 `rdirect_fallback`，此后恒按原入口接边（已接的直连边保留，过近似），导出时不改写。
 //! 导出见 `report.rs`（folds `direct_calls`：全部克隆在该点都按直连处理时才改写）。
 
@@ -71,7 +75,6 @@ impl<'a> Engine<'a> {
         let class_arr = format!("[L{CLASS};");
         let mut name = None;
         let mut classes = BTreeSet::new();
-        let mut unknown = false;
         for (j, p) in md.params.iter().enumerate() {
             let v = largs.get(base + j)?;
             match p {
@@ -79,7 +82,7 @@ impl<'a> Engine<'a> {
                     V::Str(s, _) => name = Some(s.clone()),
                     _ => return None,
                 },
-                FieldType::Object(c) if c == CLASS => unknown |= self.lookup_classes(m, v, &mut classes),
+                FieldType::Object(c) if c == CLASS => self.lookup_classes(m, v, &mut classes),
                 _ if p.descriptor() == class_arr => {
                     if !empty_array(v) {
                         return None;
@@ -92,12 +95,9 @@ impl<'a> Engine<'a> {
             if mref.owner != CLASS {
                 return None;
             }
-            unknown |= self.lookup_classes(m, largs.first()?, &mut classes);
+            self.lookup_classes(m, largs.first()?, &mut classes);
         }
         let name = name?;
-        if unknown {
-            return None;
-        }
         let mut out = Vec::new();
         for c in &classes {
             out.extend(self.direct_resolve(c, &name, scope)?);
@@ -170,24 +170,22 @@ impl<'a> Engine<'a> {
         Some(MemberRef { owner: owner.to_string(), name: x.name.clone(), desc: x.desc.clone() })
     }
 
-    /// 查找类集：Class 值 v 所指的类并入 out，返回是否含所指未知的 Class。与 [`Self::class_values`] 同口径，
-    /// 只是非字节码类镜像（隐藏类 / 代理类等，成员不在类路径上）也算未知；基本类型类镜像没有方法，查找恒抛异常
-    fn lookup_classes(&mut self, m: usize, v: &V, out: &mut BTreeSet<String>) -> bool {
-        let V::Ref { .. } = v else { return self.class_values(m, v, out) };
+    /// 查找类集：Class 值 v 所指的字节码类并入 out（类字面量；值集里的类镜像，值集增长时本站点重跑）。
+    /// 所指未知的部分（open、非镜像的 Class 对象、隐藏 / 代理类镜像）是反射缺口，不并入；基本类型类镜像没有方法，
+    /// 查找恒抛异常，不并入
+    fn lookup_classes(&mut self, m: usize, v: &V, out: &mut BTreeSet<String>) {
+        let V::Ref { .. } = v else {
+            self.class_values(m, v, out);
+            return;
+        };
         let class = self.id(CLASS);
         let fs = self.feeds(m, v, class);
         let s = self.value_set(&fs);
-        let mut unknown = !s.open.is_empty();
         for x in s.classes.iter() {
-            match self.mirrors.get(&x) {
-                Some(&c) => {
-                    out.insert(self.names[c as usize].to_string());
-                }
-                None if Some(x) == self.prim_mirror => {}
-                None => unknown = true,
+            if let Some(&c) = self.mirrors.get(&x) {
+                out.insert(self.names[c as usize].to_string());
             }
         }
-        unknown
     }
 
     /// cls 的类链上全部超接口（传递）里有名为 name 的无参非静态方法；None = 有类不可得
