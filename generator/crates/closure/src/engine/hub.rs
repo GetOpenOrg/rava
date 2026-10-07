@@ -141,7 +141,7 @@ impl<'a> Engine<'a> {
         let cv = self.call_vals.clone();
         if let Some(vs) = &cv {
             let string = self.id(STRING);
-            self.pstr_site(m, off, vs, |j| PSlot::H(h, j), |j| ptypes.get(j).copied().flatten() == Some(string));
+            self.pstr_site(m, off, vs, |j| Some(PSlot::H(h, j)), |j| ptypes.get(j).copied().flatten() == Some(string));
         } else {
             self.pstr_top_h(h);
         }

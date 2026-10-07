@@ -189,7 +189,7 @@ impl<'a> Engine<'a> {
         }
         let ctx = self.methods[m].ctx;
         let Some(Const::MethodHandle(imh)) = l.bargs.get(1) else { return };
-        self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, cap, &l.bargs);
+        self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, (cap, None), &l.bargs);
     }
 
     /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）
@@ -276,7 +276,7 @@ impl<'a> Engine<'a> {
                 }
                 (Operand::InvokeDynamic { bsm, name, desc, .. }, _) => {
                     let n = interp::nparams(desc);
-                    self.indy(m, off, &cf, *bsm, name, desc, &vec![V::Top; n]);
+                    self.indy(m, off, &cf, *bsm, name, desc, &vec![V::Top; n], false);
                 }
                 _ => {}
             }

@@ -85,8 +85,20 @@ impl<'a> Engine<'a> {
         self.cs.lambda_site = outer;
     }
 
-    /// 按实现句柄种类接边（静态 / 构造 / 特殊 / 虚分派）
+    /// 接边期间登记捕获值与接收者位置，实现方法的形参值按其对齐（`lambda_vals.rs`）
     fn lambda_connect(&mut self, m: usize, off: u32, id: Option<u32>) {
+        let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
+        let l = &self.lambdas[&self.lcalls[at].call.0];
+        // 静态 / 构造实现的实参自首个起，其余实现的首个实参是接收者
+        let skip = usize::from(!matches!(l.imh.kind, 6 | 8));
+        let cap = super::lambda_vals::LambdaCap { site: l.site, vals: l.vals.clone(), skip };
+        let outer = self.lambda_cap.replace(cap);
+        self.lambda_dispatch(m, off, id);
+        self.lambda_cap = outer;
+    }
+
+    /// 按实现句柄种类接边（静态 / 构造 / 特殊 / 虚分派）
+    fn lambda_dispatch(&mut self, m: usize, off: u32, id: Option<u32>) {
         let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
         let (lid, a, ret, res) = self.lcalls[at].call.clone();
         let l = self.lambdas[&lid].clone();
@@ -216,7 +228,7 @@ impl<'a> Engine<'a> {
         ctx: u32,
         (iface, sam): (String, &str),
         imh: &MethodHandle,
-        cap: Args,
+        (cap, vals): (Args, Option<Rc<[V]>>),
         bargs: &[Const],
     ) -> u32 {
         let via = Via::method("indy", m, Some(off));
@@ -229,7 +241,7 @@ impl<'a> Engine<'a> {
         for x in &markers {
             self.touch(x, Level::Type, via.clone());
         }
-        self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: sam.to_string(), imh: imh.clone(), cap, adapt });
+        self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: sam.to_string(), imh: imh.clone(), cap, vals, adapt });
         self.touch(&iface, Level::Alloc, via.clone());
         for a in bargs {
             if let Const::MethodType(d) = a {
@@ -260,8 +272,9 @@ impl<'a> Engine<'a> {
         lid
     }
 
+    /// indy 调用点；`known` = 实参值来自本方法的抽象分析帧（具体上下文的克隆为占位值，捕获值按未知处理）
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn indy(&mut self, m: usize, off: u32, cf: &ClassFile, bsm: u16, name: &str, desc: &str, args: &[V]) {
+    pub(super) fn indy(&mut self, m: usize, off: u32, cf: &ClassFile, bsm: u16, name: &str, desc: &str, args: &[V], known: bool) {
         let via = Via::method("indy", m, Some(off));
         self.touch_desc(desc, &via);
         let Some(b) = cf.bootstrap_methods.get(bsm as usize).cloned() else { return };
@@ -287,7 +300,7 @@ impl<'a> Engine<'a> {
                 }
                 let lname = format!("{}$$Lambda@{}:{}", cf.name, m, off);
                 let ctx = self.methods[m].ctx;
-                let lid = self.new_lambda(m, off, &lname, ctx, (iface, name), imh, cap, &b.args);
+                let lid = self.new_lambda(m, off, &lname, ctx, (iface, name), imh, (cap, known.then(|| Rc::from(args))), &b.args);
                 self.add_to(Node::S(m, off), &TypeSet::exact(lid));
             }
             Some(IndyKind::Concat) => {

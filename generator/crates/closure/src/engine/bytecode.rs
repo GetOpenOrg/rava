@@ -170,7 +170,7 @@ impl<'a> Engine<'a> {
                 Event::Invoke { opcode, mref, iface, args } => self.invoke(m, off, *opcode, mref, *iface, args),
                 Event::Indy { bsm, name, desc, args } => {
                     if let Some(cf) = &cf {
-                        self.indy(m, off, cf, *bsm, name, desc, args);
+                        self.indy(m, off, cf, *bsm, name, desc, args, true);
                     }
                 }
                 Event::ArrayLoad { array, index } => {
