@@ -31,37 +31,37 @@ impl SystemProps_Raw {
     #[jvm_native]
     pub fn platformProperties() -> Result<JArray<String>> {
         use std::io::IsTerminal;
-        let mut t: Vec<String> = (0..Self::FIXED_LENGTH).map(|_| String::default()).collect();
+        let mut t: Vec<String> = (0..Self::FIXED_LENGTH()?).map(|_| String::default()).collect();
         let mut put = |i: i32, v: String| t[i as usize] = v;
         let (language, country) = crate::posix::locale();
         let country = if country.is_empty() { String::default() } else { owned(country) };
-        put(Self::_display_language_NDX, owned(language.clone()));
-        put(Self::_display_country_NDX, country.clone());
-        put(Self::_format_language_NDX, owned(language));
-        put(Self::_format_country_NDX, country);
-        put(Self::_file_separator_NDX, s("/"));
-        put(Self::_path_separator_NDX, s(":"));
-        put(Self::_line_separator_NDX, s("\n"));
-        put(Self::_java_io_tmpdir_NDX, owned(std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())));
-        put(Self::_os_arch_NDX, s(crate::posix::os_arch()));
-        put(Self::_os_name_NDX, s(crate::posix::os_name()));
-        put(Self::_os_version_NDX, owned(crate::posix::os_release()));
-        put(Self::_sun_arch_data_model_NDX, s(if cfg!(target_pointer_width = "64") { "64" } else { "32" }));
-        put(Self::_sun_cpu_endian_NDX, s(if cfg!(target_endian = "little") { "little" } else { "big" }));
-        put(Self::_sun_io_unicode_encoding_NDX, s(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" }));
-        put(Self::_sun_jnu_encoding_NDX, owned(crate::posix::native_encoding()));
-        put(Self::_stdout_encoding_NDX, tty_encoding(std::io::stdout().is_terminal()));
-        put(Self::_stderr_encoding_NDX, tty_encoding(std::io::stderr().is_terminal()));
+        put(Self::_display_language_NDX()?, owned(language.clone()));
+        put(Self::_display_country_NDX()?, country.clone());
+        put(Self::_format_language_NDX()?, owned(language));
+        put(Self::_format_country_NDX()?, country);
+        put(Self::_file_separator_NDX()?, s("/"));
+        put(Self::_path_separator_NDX()?, s(":"));
+        put(Self::_line_separator_NDX()?, s("\n"));
+        put(Self::_java_io_tmpdir_NDX()?, owned(std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())));
+        put(Self::_os_arch_NDX()?, s(crate::posix::os_arch()));
+        put(Self::_os_name_NDX()?, s(crate::posix::os_name()));
+        put(Self::_os_version_NDX()?, owned(crate::posix::os_release()));
+        put(Self::_sun_arch_data_model_NDX()?, s(if cfg!(target_pointer_width = "64") { "64" } else { "32" }));
+        put(Self::_sun_cpu_endian_NDX()?, s(if cfg!(target_endian = "little") { "little" } else { "big" }));
+        put(Self::_sun_io_unicode_encoding_NDX()?, s(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" }));
+        put(Self::_sun_jnu_encoding_NDX()?, owned(crate::posix::native_encoding()));
+        put(Self::_stdout_encoding_NDX()?, tty_encoding(std::io::stdout().is_terminal()));
+        put(Self::_stderr_encoding_NDX()?, tty_encoding(std::io::stderr().is_terminal()));
         #[cfg(jdk_ge_25)]
         {
-            put(Self::_native_encoding_NDX, owned(crate::posix::native_encoding()));
-            put(Self::_stdin_encoding_NDX, tty_encoding(std::io::stdin().is_terminal()));
+            put(Self::_native_encoding_NDX()?, owned(crate::posix::native_encoding()));
+            put(Self::_stdin_encoding_NDX()?, tty_encoding(std::io::stdin().is_terminal()));
         }
         #[cfg(not(jdk_ge_25))]
-        put(Self::_file_encoding_NDX, owned(crate::posix::native_encoding()));
-        put(Self::_user_dir_NDX, owned(std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()));
-        put(Self::_user_home_NDX, owned(std::env::var("HOME").unwrap_or_default()));
-        put(Self::_user_name_NDX, owned(crate::posix::current_user_name()));
+        put(Self::_file_encoding_NDX()?, owned(crate::posix::native_encoding()));
+        put(Self::_user_dir_NDX()?, owned(std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()));
+        put(Self::_user_home_NDX()?, owned(std::env::var("HOME").unwrap_or_default()));
+        put(Self::_user_name_NDX()?, owned(crate::posix::current_user_name()));
         Ok(JArray::from(t))
     }
 
