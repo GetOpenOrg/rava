@@ -71,6 +71,7 @@ impl<'a> Engine<'a> {
             obj_fields: HashMap::default(),
             objs: HashMap::default(),
             obj_chain: HashMap::default(),
+            ctx_heap: HashMap::default(),
             containers: HashMap::default(),
             dflt_alloc: HashSet::default(),
             factories: HashMap::default(),

@@ -552,7 +552,9 @@ impl<'a> Engine<'a> {
     pub(super) fn obj_at(&mut self, m: usize, off: u32, cls: &str) -> u32 {
         let b = self.mbase[&self.methods[m].key];
         let mut chain = format!("@{b}:{off}");
+        // 形参常量克隆的堆上下文即其外层上下文
         let ctx = self.methods[m].ctx;
+        let ctx = self.ctx_heap.get(&ctx).copied().unwrap_or(ctx);
         // 递归结构（同类对象在自身方法里分配同类，如链表节点 / 表达式树）：堆上下文不再延长，
         // 否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度
         let recursive = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| &*self.names[t as usize] == cls);
