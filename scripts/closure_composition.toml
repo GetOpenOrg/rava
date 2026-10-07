@@ -1,0 +1,209 @@
+# 闭包构成分析：类 → 机制归类规则（scripts/closure_composition.py 读取；脚本里不写 JDK 类名特判）
+#
+# 匹配：每个类取全部条目中「最长匹配」的那条，同长取先声明者。条目三种写法：
+#   "a/b/"   包前缀（含子包）
+#   "a/b/C"  精确类及其嵌套类（C 或 C$…）
+#   "a/b/C*" 原样前缀（a/b/C 开头的任何类名）
+# kind：
+#   mechanism  机制块：参与入链归属（via 链上第一个落入机制块的节点决定该类的「入口机制」）
+#   base       基础库（lang 核心 / 集合 / 基础 IO 等）：只按自身包计数，不作为入链归属
+#   user       用户 / 第三方类（闭包 domain 为 user / lib 时归此，不看包名）
+# 未命中任何条目的 JDK 类归 base 的 "other"。
+# 口径：docs/reports/2026-10-07-closure-composition.md
+
+[[category]]
+id = "user"
+title = "用户 / 第三方"
+kind = "user"
+prefixes = []
+
+[[category]]
+id = "logging"
+title = "日志（JUL / System.Logger）"
+kind = "mechanism"
+prefixes = [
+  "java/util/logging/", "sun/util/logging/", "jdk/internal/logger/", "jdk/internal/event/",
+  "java/lang/System$Logger", "java/lang/System$LoggerFinder", "java/lang/System$Logger$Level",
+  "jdk/internal/util/Exceptions*", "jdk/jfr/",
+]
+
+[[category]]
+id = "signal"
+title = "信号 / 关停（Signal、Terminator、Shutdown）"
+kind = "mechanism"
+prefixes = [
+  "jdk/internal/misc/Signal", "java/lang/Terminator", "java/lang/Shutdown", "java/lang/ApplicationShutdownHooks",
+  "java/io/Console", "jdk/internal/io/",
+]
+
+[[category]]
+id = "charset"
+title = "字符集"
+kind = "mechanism"
+prefixes = ["java/nio/charset/", "sun/nio/cs/", "jdk/internal/util/xml/", "java/lang/StringCoding*"]
+
+[[category]]
+id = "locale"
+title = "locale / 资源束 / 文本格式"
+kind = "mechanism"
+prefixes = [
+  "java/util/Locale", "java/util/ResourceBundle", "java/util/ListResourceBundle", "java/util/PropertyResourceBundle",
+  "java/util/spi/", "sun/util/locale/", "sun/util/resources/", "sun/text/", "sun/util/cldr/",
+  "java/text/", "jdk/internal/icu/", "java/util/Currency", "sun/util/spi/",
+  "java/util/Formatter", "java/util/Formattable", "java/util/FormatFlagsConversionMismatchException",
+  "java/util/IllegalFormat*", "java/util/UnknownFormat*", "java/util/MissingFormat*", "java/util/DuplicateFormatFlagsException",
+  "jdk/internal/math/FormattedFP*",
+]
+
+[[category]]
+id = "time"
+title = "日期时间（java.time / Calendar / TimeZone）"
+kind = "mechanism"
+prefixes = [
+  "java/time/", "sun/util/calendar/", "java/util/Calendar", "java/util/GregorianCalendar", "java/util/TimeZone",
+  "java/util/SimpleTimeZone", "java/util/Date", "java/util/JapaneseImperialCalendar",
+]
+
+[[category]]
+id = "security"
+title = "安全 / JCA"
+kind = "mechanism"
+prefixes = [
+  "java/security/", "javax/crypto/", "javax/security/", "sun/security/", "com/sun/crypto/", "com/sun/security/",
+  "org/jcp/xml/", "javax/xml/crypto/", "org/ietf/", "javax/smartcardio/", "javax/net/", "javax/security/sasl/",
+  "jdk/internal/access/JavaSecurity*",
+]
+
+[[category]]
+id = "reflect"
+title = "反射 / 注解 / 泛型签名元数据"
+kind = "mechanism"
+prefixes = [
+  "java/lang/reflect/", "jdk/internal/reflect/", "sun/reflect/", "java/lang/annotation/", "jdk/internal/vm/annotation/",
+  "java/lang/Class$*", "java/lang/PublicMethods", "java/lang/Record", "java/lang/runtime/",
+  "java/lang/constant/", "jdk/internal/classfile/", "java/lang/ClassValue",
+]
+
+[[category]]
+id = "module"
+title = "模块系统 / boot layer / jimage"
+kind = "mechanism"
+prefixes = [
+  "java/lang/module/", "jdk/internal/module/", "java/lang/ModuleLayer", "java/lang/Module", "java/lang/Module$*",
+  "jdk/internal/jimage/", "jdk/internal/jrtfs/", "java/lang/NamedPackage", "java/lang/Package",
+  "java/lang/WeakPairMap",
+]
+
+[[category]]
+id = "classload"
+title = "类加载（ClassLoader / URLClassPath）"
+kind = "mechanism"
+prefixes = [
+  "java/lang/ClassLoader", "jdk/internal/loader/", "java/net/URLClassLoader", "java/security/SecureClassLoader",
+  "java/lang/CompoundEnumeration", "jdk/internal/util/jar/", "java/util/jar/", "java/util/zip/", "sun/net/www/protocol/jar/",
+  "jdk/internal/foreign/",
+]
+
+[[category]]
+id = "service"
+title = "ServiceLoader"
+kind = "mechanism"
+prefixes = ["java/util/ServiceLoader", "java/util/ServiceConfigurationError"]
+
+[[category]]
+id = "concurrent"
+title = "并发 / 线程"
+kind = "mechanism"
+prefixes = [
+  "java/util/concurrent/", "java/lang/Thread", "java/lang/ThreadGroup", "java/lang/VirtualThread", "java/lang/BaseVirtualThread",
+  "jdk/internal/vm/", "jdk/internal/misc/CarrierThread*", "jdk/internal/misc/InnocuousThread", "java/lang/InheritableThreadLocal",
+  "java/lang/ScopedValue", "jdk/internal/misc/ThreadTracker", "java/util/Timer", "java/util/TimerTask",
+  "java/lang/LiveStackFrame*", "java/lang/StackWalker", "java/lang/StackStreamFactory", "java/lang/StackFrameInfo",
+]
+
+[[category]]
+id = "ref"
+title = "引用 / Cleaner（GC 驱动）"
+kind = "mechanism"
+prefixes = ["java/lang/ref/", "jdk/internal/ref/", "java/util/WeakHashMap"]
+
+[[category]]
+id = "serial"
+title = "序列化"
+kind = "mechanism"
+prefixes = [
+  "java/io/ObjectInputStream", "java/io/ObjectOutputStream", "java/io/ObjectStreamClass", "java/io/ObjectStreamField",
+  "java/io/ObjectStreamConstants", "java/io/ObjectInputFilter", "java/io/ObjectInputValidation", "java/io/ObjectStreamException",
+  "java/io/SerialCallbackContext", "java/io/SerializablePermission", "java/io/InvalidClassException", "java/io/InvalidObjectException",
+  "java/io/NotSerializableException", "java/io/OptionalDataException", "java/io/StreamCorruptedException",
+  "java/io/WriteAbortedException", "java/io/ObjectInput", "java/io/ObjectOutput", "java/io/Externalizable",
+  "jdk/internal/util/ByteArray*", "java/io/Bits",
+]
+
+[[category]]
+id = "invoke"
+title = "方法句柄 / lambda / indy"
+kind = "mechanism"
+prefixes = ["java/lang/invoke/", "sun/invoke/", "jdk/internal/org/objectweb/", "java/lang/runtime/ObjectMethods", "java/lang/runtime/SwitchBootstraps"]
+
+[[category]]
+id = "regex"
+title = "正则"
+kind = "mechanism"
+prefixes = ["java/util/regex/", "jdk/internal/util/regex/"]
+
+[[category]]
+id = "nio"
+title = "NIO 文件系统 / 通道"
+kind = "mechanism"
+prefixes = ["java/nio/file/", "java/nio/channels/", "sun/nio/fs/", "sun/nio/ch/", "jdk/nio/", "jdk/internal/fs/", "java/io/File",
+  "java/io/FileSystem", "java/io/UnixFileSystem", "java/io/DefaultFileSystem", "java/io/ExpiringCache", "java/io/WinNTFileSystem",
+]
+
+[[category]]
+id = "net"
+title = "网络 / URL"
+kind = "mechanism"
+prefixes = ["java/net/", "sun/net/", "jdk/internal/net/"]
+
+[[category]]
+id = "xml"
+title = "XML / JAXP"
+kind = "mechanism"
+prefixes = ["javax/xml/", "com/sun/org/apache/", "org/w3c/", "org/xml/", "jdk/xml/", "com/sun/xml/"]
+
+[[category]]
+id = "naming"
+title = "JNDI / RMI / 管理"
+kind = "mechanism"
+prefixes = ["javax/naming/", "com/sun/jndi/", "com/sun/naming/", "java/rmi/", "sun/rmi/", "javax/management/", "sun/management/", "java/lang/management/", "jdk/internal/perf/", "jdk/internal/platform/"]
+
+[[category]]
+id = "props"
+title = "系统属性 / 环境"
+kind = "mechanism"
+prefixes = ["jdk/internal/util/SystemProps*", "jdk/internal/util/StaticProperty", "java/lang/ProcessEnvironment*", "java/lang/ProcessBuilder", "java/lang/Process", "java/lang/ProcessImpl*", "java/lang/ProcessHandle*"]
+
+[[category]]
+id = "stream"
+title = "Stream API"
+kind = "base"
+prefixes = ["java/util/stream/", "java/util/Spliterator", "java/util/Spliterators", "java/util/function/", "java/util/Optional"]
+
+[[category]]
+id = "collections"
+title = "集合"
+kind = "base"
+prefixes = ["java/util/"]
+
+[[category]]
+id = "lang"
+title = "java.lang 核心 / 数值 / 字符串"
+kind = "base"
+prefixes = ["java/lang/", "java/math/", "jdk/internal/math/", "jdk/internal/util/", "jdk/internal/misc/", "jdk/internal/access/"]
+
+[[category]]
+id = "io"
+title = "基础 IO 流"
+kind = "base"
+prefixes = ["java/io/", "java/nio/"]
