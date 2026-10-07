@@ -1,0 +1,20 @@
+# S0 类路径（deps.lock.toml 条目名 = Maven artifactId；同时是 JVM 运行与 rava 闭包的 --cp）
+# 阶段口径：docs/plans/2026-10-07-framework-driven-api-coverage.md §二 S0
+spring-boot
+spring-boot-autoconfigure
+spring-context
+spring-beans
+spring-core
+spring-aop
+spring-expression
+spring-jcl
+logback-classic
+logback-core
+slf4j-api
+log4j-to-slf4j
+log4j-api
+jul-to-slf4j
+snakeyaml
+jakarta.annotation-api
+micrometer-observation
+micrometer-commons

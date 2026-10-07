@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: s0-boot
+  main:
+    banner-mode: "off"
+s0:
+  greeting:
+    prefix: Hello
+  names: Alice,Bob,Carol
+  repeat: 2
