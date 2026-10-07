@@ -89,7 +89,8 @@ impl ModuleFacts {
         let mut named_from: HashMap<&str, (usize, usize, usize)> = HashMap::new();
         for (idx, (view, (_, path))) in views.iter().zip(&paths).enumerate() {
             let name = if let Some(m) = cp.overlay_module(idx) {
-                // 镜像改写目录：登记名即所属 jmod 模块，节点由该 jmod 建立
+                // 镜像改写 / 镜像独有 / VM 支持类目录：登记名即所属 jmod 模块，节点由该 jmod 建立（无此节点的登记名
+                // 在收尾清除，见下）
                 Some(m.to_string())
             } else if let Some(d) = &view.module {
                 let node = nodes.entry(d.name.clone()).or_default();
@@ -169,6 +170,12 @@ impl ModuleFacts {
             } else if *lib > 1 {
                 let jars = nodes[*name].jars.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、");
                 errors.push(format!("具名模块 {name} 由多个库档案声明（JPMS 拒绝）：{jars}"));
+            }
+        }
+        // 登记名不是 JDK 模块（如显式 `--image` 给出的目录名不对应任何 jmod）：不归属具名模块，按包归属查询
+        for (idx, name) in archive_module.iter_mut().enumerate() {
+            if cp.overlay_module(idx).is_some() && name.as_ref().is_some_and(|m| !nodes.contains_key(m)) {
+                *name = None;
             }
         }
         let mut package_owner: HashMap<String, (usize, String)> = HashMap::new();

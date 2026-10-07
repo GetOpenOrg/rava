@@ -78,7 +78,8 @@ pub struct ClassPath {
     java_home: Option<PathBuf>,
     /// 档案下标 → 模块名（`module_of` 惰性填充）
     module_names: std::sync::OnceLock<Vec<Option<String>>>,
-    /// 覆盖档案（镜像改写类目录）的档案下标 → 所属模块名：目录本身无 module-info
+    /// JDK 侧无 module-info 的类目录的档案下标 → 所属模块名：镜像改写类目录（覆盖档案，登记名即 jmod 模块）、
+    /// 镜像独有类目录与 VM 支持类目录（[`crate::image`] 按模块给出，目录名即模块名）
     overlay_modules: HashMap<usize, String>,
     /// 依赖锁喂入的库档案路径 → 元数据
     lib_meta: HashMap<PathBuf, LibMeta>,
@@ -144,6 +145,13 @@ impl ClassPath {
         }
         self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
         self.origins.push(origin);
+        // 镜像独有类 / VM 支持类目录按模块给出（`<根>/<模块>/`，见 [`crate::image`]）：目录名即所属模块。
+        // VM 支持类可以落在模块原本没有的包里（如按协议名命名的 URL 处理器包），包归属由此登记，不按包借用
+        if origin == Origin::Image && path.is_dir() {
+            if let Some(m) = path.file_name().and_then(|n| n.to_str()) {
+                self.overlay_modules.insert(idx, m.to_string());
+            }
+        }
         self.module_names = std::sync::OnceLock::new();
         Ok(())
     }
@@ -316,7 +324,7 @@ impl ClassPath {
         self.index.iter().map(|(n, &i)| (n.as_str(), i))
     }
 
-    /// 覆盖档案（镜像改写类目录）登记的模块名
+    /// JDK 侧无 module-info 的类目录（镜像改写 / 镜像独有 / VM 支持类目录）登记的模块名
     pub fn overlay_module(&self, idx: usize) -> Option<&str> {
         self.overlay_modules.get(&idx).map(String::as_str)
     }
