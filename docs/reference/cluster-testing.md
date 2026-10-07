@@ -9,7 +9,7 @@
 `uv run --group cluster python -m unittest discover -s tests/unit/cluster`。
 
 服务器选取：不加 `--servers` 时按清单 `pools` 取——全量 / 抽查用 test 池，作业用 job 池；未列入任何池的服务器只在
-`--servers` 点名时使用。2026-10-07 起只用内网 dev（test）与 ubuntu（job），云服务器不再参与（其上 rava 遗留已清理）。
+`--servers` 点名时使用。2026-10-07 起只用内网 dev（test）与 ubuntu（job）；dev 关机期间（2026-10-07 晚起，等用户通知恢复）改用云服务器，见「十二、工作流与现状」。
 
 ```
 本地 Mac（调度中心，java_rta 主检出）
@@ -565,8 +565,7 @@ compile 模式与 run_tests 一致分两段（`build --stop-after emit` 再 `rav
 
 - 四件工具（原在 server_maintenance `dist-tools` 分支，2026-10-07 随全部分发脚本迁入 `scripts/cluster/`）：`failure_extract.py` + `dist_e2e.py`（日志保全）、`known_failures.py`、
   `merge_queue.py` + `merge_daemon.py`、`remote_rava.py`；单元测试 `tests/unit/cluster/test_merge_queue.py`、`tests/unit/cluster/test_merge_daemon.py`。
-- 已知失败清单在 java_rta `dist-known-failures` 分支（3ac45c90）的 `docs/known_failures.toml`，待协调者并入集成分支；
-  并入前守护用 `--known <路径>` 指向该文件。
+- 已知失败清单 `docs/known_failures.toml` 已并入集成分支（原在 `dist-known-failures` 分支 3ac45c90）。
 - 守护**未启用**：试运行一律 `--dry-run`（演练 worktree `~/dev/workspace/java_rta_dryrun_wt`，可保留复用）；
   正式启用与推广由协调者复核本节试运行记录后决定。
 - 未覆盖 / 已知局限：
@@ -676,3 +675,48 @@ rust-closure-analyzer 与 main 均只随协调者自己的提交前进。
 
 试运行收尾：临时分支 `tools-trial-*` 已从本地、origin、github 删除，`java_rta_tools_trial` worktree 已移除；
 演练 worktree `java_rta_dryrun_wt` 保留，守护每次演练前自动重置。
+
+## 十二、工作流与现状（2026-10-08）
+
+### 12.1 合批测试
+
+- 子代理只实现：本机 cargo check、推分支、在计划文档写待验证清单，不自发跑测试。
+- 主会话把若干完工分支合成验证分支（`batch-<日期>`，如 `batch-1008`），一次跑全量单测加各分支待验证清单抽查的并集。
+- 通过后快进集成分支（rust-closure-analyzer）与 main；批内失败转回所属分支修，下一批再带上。
+- 合入走合批，不经 11.4 的合入队列守护。
+
+### 12.2 推送
+
+测试分支、合批分支、集成分支、main 都推 origin 与 github（2026-10-08 起 main 也推 github）。服务器从 origin 检出。
+
+### 12.3 本机只跑 cargo check
+
+```bash
+cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock.py cargo check --release --tests --target-dir ../build/check-target
+```
+
+单测、闭包分析（`rava closure`，11.5 `remote_rava.py`）、e2e 都发分布式。
+
+### 12.4 服务器
+
+- dev 关机期间用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1，各 15G 内存、1 槽。
+- jp2 直连失败时经 jp1 跳板（服务器条目 `jump` 键，见九）。
+- 全量单测在云上超过 7200 s，作业用 `--job-timeout 14400`（缺省 3600）。
+
+### 12.5 分发进程存活判定
+
+```bash
+pgrep -f "\.venv/bin/python3? .*distribute_tests"
+```
+
+作业分发器的进程名为 `python`，抽查为 `python3`，正则两者都覆盖。禁止用 `ps -eo` 判断（macOS 上 `-e` 不列全部进程）。
+同一 tag 只留一个实例，多余的 `kill -9`。
+
+### 12.6 子代理等作业
+
+用 Bash `run_in_background` 写 until 循环，盯 `cluster_results/<spot|job>/<tag>/summary.json` 的 status，
+或盯 `state_jdk21.json` 的 `leases` 为空。不要只等分发进程的完成通知——实际出现过漏收完成信号的情况。
+
+### 12.7 内存超限判定
+
+失败日志为「could not compile」且无 `E` 码时，先查 `__RAVA_OOM_KILL__` 标记；命中属资源类失败（见四 OOM 防护），不按代码回归处理。
