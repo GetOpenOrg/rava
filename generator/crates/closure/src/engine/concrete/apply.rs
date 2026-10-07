@@ -21,6 +21,15 @@ fn lam_name(l: &Lam, m: usize, off: u32, i: usize) -> String {
     format!("{}$$Lambda@concrete:{m}:{off}:{i}:{}", l.imp.member.owner, l.imp.member.name)
 }
 
+/// String 字段写入的字符串值：内容可读时为字面量，否则推不出（None）；null 不计
+fn put_str(p: &Put) -> Option<Option<V>> {
+    match p {
+        Put::Null => None,
+        Put::Str(s) => Some(Some(V::Str(s.clone(), Rc::from([Src::Str(crate::absint::lit_id(s))])))),
+        _ => Some(None),
+    }
+}
+
 fn pv_of(v: &MV) -> PV {
     match v {
         MV::Prim(Put::Int(x)) => PV::Const(V::Int(*x)),
@@ -67,6 +76,7 @@ impl<'a> Engine<'a> {
             for p in ps {
                 self.field_put(f, pv_of(&MV::Prim(p.clone())));
             }
+            self.concrete_str_puts(m, f, ps);
         }
         // 结果对象图
         let obj = self.id(OBJECT);
@@ -140,6 +150,19 @@ impl<'a> Engine<'a> {
             TypeSet::exact(self.id(&x.ty))
         };
         ids[i] = Some(s);
+    }
+
+    /// 具体求值中 String 字段的写入并入字段常量集与字段字符串槽（与字节码写入同一口径，见 bytecode.rs）：
+    /// 按名读取的资源 / 类 / 资源束经字段取名时，具体求值写入的名字照样计入，内容不可读的写入使槽推不出
+    fn concrete_str_puts(&mut self, m: usize, f: &MemberRef, ps: &[Put]) {
+        if f.desc != format!("L{STRING};") {
+            return;
+        }
+        let fi = self.field_node(f.clone());
+        for v in ps.iter().filter_map(put_str) {
+            self.field_strs_put(f, v.as_ref());
+            self.pstr_field_put(m, fi, v.as_ref());
+        }
     }
 
     fn mat_val(&mut self, v: &MV, ids: &[Option<TypeSet>], via: &Via) -> Option<Feed> {

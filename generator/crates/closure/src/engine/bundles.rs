@@ -50,13 +50,21 @@ impl<'a> Engine<'a> {
             let skip = usize::from(*opcode != classfile::op::INVOKESTATIC);
             let Some(v) = args.get(skip + j).cloned() else { continue };
             let prev = self.cur_site.replace((m, off));
+            // 槽值推不全（如未定字段 / 未知调用的结果）时 names_of 只给出已知部分：已知名字照收，
+            // 站点同时记为推不出，由字面量兜底覆盖其余基名
+            let saved = (std::mem::take(&mut self.lookup_partial), std::mem::take(&mut self.lookup_incomplete));
             let keys = self.names_of(m, &v);
+            let partial = std::mem::replace(&mut self.lookup_partial, saved.0);
+            let incomplete = std::mem::replace(&mut self.lookup_incomplete, saved.1);
             self.cur_site = prev;
             match keys {
                 keyed::Keys::Any => {
                     self.seeds.bundles.unknown.insert((m, off));
                 }
                 keyed::Keys::Set(names) => {
+                    if partial || incomplete {
+                        self.seeds.bundles.unknown.insert((m, off));
+                    }
                     for n in names {
                         want.entry(n.to_string()).or_insert((m, Some(off)));
                     }
