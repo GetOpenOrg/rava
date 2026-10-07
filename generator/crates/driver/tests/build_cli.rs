@@ -369,3 +369,26 @@ fn bridge_merged_inherited_slot_not_stubbed() {
     assert!(!line.contains("__stub"), "{line}");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// 用户类展开的 JDK 接口 default 按调用链门控（JDK 字节码不随用户类全量翻译）：
+/// 链外 → 存根（其体内 lambda 的 samtype 不在 SAM 合成集，翻译即失败）；链上 → 翻译体，
+/// 体内 lambda 经 samtype 的 SAM 合成对象装箱
+#[test]
+fn user_class_inherited_jdk_default_gated_by_chain() {
+    let Some((_, out)) = build("JdkDefaultUnreached.java", "jdk-default-unreached", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/jdk_default_unreached_1.rs")).unwrap();
+    let body: Vec<&str> = rs.lines().skip_while(|l| !l.contains("pub fn thenComparing_comparator(")).take(3).collect();
+    assert!(body.get(1).is_some_and(|l| l.contains("__stub(\"stub: JdkDefaultUnreached$1.thenComparing:")), "{body:#?}");
+    std::fs::remove_dir_all(&out).ok();
+
+    let Some((_, out)) = build("JdkDefaultReached.java", "jdk-default-reached", &[]) else { return };
+    let rs = std::fs::read_to_string(out.join("user/src/jdk_default_reached_1.rs")).unwrap();
+    let body: Vec<&str> = rs
+        .lines()
+        .skip_while(|l| !l.contains("pub fn thenComparing_comparator("))
+        .take_while(|l| !l.trim_start().starts_with("#[java_method"))
+        .collect();
+    assert!(body.iter().all(|l| !l.contains("__stub(")), "链上 default 不落存根：{body:#?}");
+    assert!(body.iter().any(|l| l.contains("Comparator__Lambda::new(")), "体内 lambda 经合成对象：{body:#?}");
+    std::fs::remove_dir_all(&out).ok();
+}
