@@ -4,6 +4,9 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
+        if self.jca_order_hold(m, off, mref) {
+            return;
+        }
         self.prof_seg(site_prof::SEG_PRE);
         self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);

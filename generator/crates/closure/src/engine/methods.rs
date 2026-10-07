@@ -85,6 +85,7 @@ impl<'a> Engine<'a> {
             self.static_offset_reached();
         }
         self.sysprops_entry(&key, &via);
+        self.jca_order_entry(&key, &via);
         self.linked_member(&key, &via);
         if cut::edges_on() {
             let from = self.via_node(&via);

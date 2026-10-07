@@ -129,6 +129,10 @@ impl<'a> Engine<'a> {
                 if self.nr_drain() {
                     continue;
                 }
+                // JCA 提供者序：其余放行都完成后判定装载器调用点能否继续扣住（`jca_order.rs`）
+                if self.jca_order_release() {
+                    continue;
+                }
                 self.promote_layout();
                 self.ctx.stats.borrow_mut().mark_rss("final");
                 break;
