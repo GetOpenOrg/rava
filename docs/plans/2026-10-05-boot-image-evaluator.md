@@ -779,10 +779,10 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 项 | 实测（Linux，在 E 上切） | 预计减少 | 做完后终态 | 前置 / 待决 |
 |---|---|---|---|---|
 | S1 `sun/nio/cs/StandardCharsets.lookup` 以不定名字反射 | 598 → 406 | Linux −192（`sun/nio/cs` 165 → 9，另有 `jdk/internal/reflect` 8、`java/lang/invoke` 8 等）；macOS 约 −120（闭包中 `sun/nio/cs` 104 类，推算） | Linux ≈ 436，macOS ≈ 470 | 在 U1（运行期取宿主编码）下，按不定名字查字符集是合法可达，不是精度缺陷。要收窄，须先由用户重新审视 U1：例如把可选字符集固定为构建期声明的集合 |
-| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。无用户决策项 |
+| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。收窄单独不可达（§5.6.5），终态需 `Class.genericInfo` 入映像，待用户决策 U13（§8.4） |
 | S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
 
-- 排期：S2 无待决，排在三个机制之后的第一项；S1 待用户对 U1 的决定，不排进当前步骤。
+- 排期：S2 待用户决策 U13（§8.4），排在三个机制之后的第一项；S1 待用户对 U1 的决定，不排进当前步骤。
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 
@@ -1017,3 +1017,14 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - **顺序**：C4 冻结解除后，先在服务器上把现有实现（3e309fec）编译、跑通，排除正确性问题；再单独一步改零拷贝；最后实测体积（≤+5%）与启动装载（≤1 ms）。
 - 不采纳「实测达标即接受现状」的备选。
 - §5.5.5 其余待决项（2、4、5、7–15）按代理实现认可；D5 物化与 S6 标准流随零拷贝一步排期。
+
+### 8.4 待用户决策与先行实施项（2026-10-08）
+
+| # | 事项 | 选项 | 建议 |
+|---|---|---|---|
+| U12 | U1 例外：§5.5.6 终态设计机制 ①③ 要求日志 / 信号链（(L) 链，`Runtime.exit` → `logRuntimeExit`）上的属性在构建期取值、用户 `LoggerFinder` 提供者的构造函数在构建期运行、运行期 `-Djdk.system.logger.level` 不再生效（原文第 757、765 行附近：「与 U1 的划界在实施时登记为 U1 的例外项」「一并登记」）。①③ 因此挂起，② 已做（§5.6.1）但 HelloWorld 收益依赖 ① | 采纳例外（仅限该路径）/ 维持 U1（①③ 不做，按平台上限 Linux ≤ 640 / macOS ≤ 590 重定） | 待用户 |
+| U13 | S2：`Class.genericInfo` 写入引导映像。S2 接收者精度已修（`Recv::Bounded`，§5.6.5），但 HelloWorld 闭包不降（约 3043 类）；需把热路径类镜像的 `genericInfo`（`ClassRepository`）在构建期算好写进映像，运行期命中缓存不再解析签名（§5.6.7 #6） | 做 / 不做（接受 `sun/reflect/generics` 留在闭包） | 做 |
+
+**已按授权先行实施、用户可撤回**：去除无映像回退——映像求值失败即构建失败，不保留运行期引导的第二条路径（dcabf9e3，§5.6.8，batch-1008 合批验证中）。
+
+**待核对**：闭包构成报告（`docs/reports/2026-10-07-closure-composition.md`）基线 HelloWorld 468 类，与 boot-image-s4 起实测约 3043 / 3011 类（§5.6.5、enum-values-direct）落差很大，原因待查；门排名（`rava closure --gates`，分支 closure-gates）在新基线上出数后解释。

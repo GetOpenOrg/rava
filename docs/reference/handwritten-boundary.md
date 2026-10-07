@@ -17,6 +17,9 @@
   JVM 执行的也不是字节码，但 rava 翻译其字节码、坚持字节码语义，不追平台内建。
   例：`Math` 的超越函数 JVM 走 libm 内建，rava 按字节码走 `StrictMath` 语义，两者都合规范（允许 1 ulp 误差）；
   e2e golden 取自 JVM 时，这类末位差异在比对口径上注明，不为对齐 golden 改手写。
+- **闭包或体积膨胀同样不是手写理由**（与「性能替换不算」并列）。膨胀点先用闭包分析定位（反事实切除；
+  `rava closure --gates` 门自动排名在开发中，分支 closure-gates），再按三类处理：分析器精度缺口（修精度）、
+  构建期求值（引导映像）、运行模型（类 2 登记）。
 - **手写不等于必须实现**：满足准入、但不在档案调用链上的方法仍是 `panic!("stub: 类.方法:描述符")` 存根，按档案调用链按需补。档案 = 一个构建单元（生产构建：用户项目；语料构建：e2e 全集）全体入口调用链的并集，开放世界下实例化集合折叠只对用户无法扩展的类型做（final / sealed / 非公开等），闭包规模以档案衡量（e2e 全集 JDK 21 实测基线 3609 类，见 T1 计划 §1.4）；当前闭包分析器仍按单测试逐例计算，档案化随 T1 实施。
 
 ## 二、准入类别（终态）
@@ -49,8 +52,8 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - **状态**：类元数据表、反射对象构造所依据的元数据（`getRecordComponents0` 等）、VM 注入的隐藏字段、
   VM 直接写入的字段。
 - **行为的落地语义**：VM 驱动、原生二进制没有对应设施时，语义如何落地的决定。须在清单中逐条写明：
-  - GC 驱动的引用处理：Reference pending list、`Cleaner` / `PhantomReference` 入队、finalize
-    （如 `PhantomCleanable.clean` 在无 GC 时的语义）；
+  - 引用类语义（`WeakReference` / `SoftReference` 清空、`ReferenceQueue` 入队、`Cleaner` / finalize）：由对象释放
+    （`Rc` drop）触发，不引入任何 GC，见 [`docs/plans/2026-10-07-no-gc-memory-model.md`](../plans/2026-10-07-no-gc-memory-model.md)；
   - JVMTI 通知（`VirtualThread.notifyJvmti*`）；
   - 栈遍历（`StackWalker`、`fillInStackTrace`、`@CallerSensitive` 调用者传入）；
   - VM 发起的启动入口（`initPhase1~3`）——入口方法本身翻译字节码，落地的是「谁来调用」。
@@ -76,9 +79,10 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - `sun/reflect/generics` 不再截断：其编译成本（泛型 visitor 体系曾使 `java_runtime` 编译峰值越过 15G）
   由分析器精度收敛解决，不以截断承载。
 
-残留的策略截断（仍在 `[vm_boundary]`、收录理由写明「策略截断」，终态 0）：`java/nio/file/FileSystems`、
-`javax/crypto/JceSecurity`（`java/net/InetAddress` 2026-10-03 移出：`<clinit>` 未翻译使静态 `impl` 为 null，
-`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
+残留的过渡手写（终态 0）：`[vm_boundary]` 中整方法手写的 `#[jvm_boundary]`，2026-10-08 全仓 14 个——
+`ClassLoader` 资源方法 6、`BootLoader` 2（随引导映像第 5 步 jimage 删除）、`javax/crypto/JceSecurity` 6（构建期求值，
+与第 5 步同任务）；引导映像第 4 步由 23 降到 14。已移出：`java/nio/file/FileSystems`（a3-X2，按字节码翻译）、
+`java/net/InetAddress`（2026-10-03：`<clinit>` 未翻译使静态 `impl` 为 null，`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
 
 规则：
 
@@ -145,3 +149,38 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；
 精确闭包分析下的实测与精度收敛项见 C1d 计划 §6.12。
+
+## 八、类 2 / 类 3 实施盘点（2026-10-08）
+
+**类 2 已完成**
+
+- lambda / indy（`vm_intrinsics.toml [indy]`：lambda、字符串拼接、`typeSwitch` / `enumSwitch`、`ObjectMethods`）；
+- LambdaForm 编译 → 原生 LambdaForm 解释器（MH-native）；
+- 动态代理 `Proxy$Dyn`、BMH 动态物种 `Species_Dyn`（Java 源在 `runtime/java_support/`）；
+- 序列化构造器访问器；`@CallerSensitive` 注入调用器；
+- 类路径运行模型 `class_path` 4 条（`EmbeddedClassPath`）。
+
+清单登记（`[[intrinsic]]`）共 13 条：`class_definition` 7、`class_path` 4、`bytecode_generator` 1、`stack_frame` 1；
+另有 `exact` 1 条，属 native 实现的正确性说明（见类 1），不计入类 2。
+
+**类 2 未完成**
+
+- 模块层 / jimage：引导映像第 5 步，进行中（分支 boot-image-s5）；
+- `ClassLoader` 资源方法 6 个、`BootLoader` 2 个 `#[jvm_boundary]`：随第 5 步删除；
+- `JceSecurity` 6 个 `#[jvm_boundary]`：构建期求值，与第 5 步同任务；
+- 用户代码 `defineClass` / 隐藏类的通用入口：未统一落地。
+
+**类 3 已完成**
+
+- 类 / 反射 / 注解 / 行表元数据（`java_meta`）；
+- VM 注入的静态与隐藏字段（`[vm_constants.injected_statics]`，清单声明、生成器追加）；
+- `@CallerSensitive` 调用者显式传入（`[caller_sensitive]`）；
+- `fillInStackTrace` / `StackWalker`（`vm_stack.rs`）；
+- VM 启动入口 initPhase1–3：构建期引导映像求值器（第 1–4 步）；
+- Continuation 有栈协程（2026-10-03 决定，`continuation_impl.rs`）。
+
+**类 3 未完成**
+
+- 引用类语义：无 GC 模型，C4 之后实施（见类 3 条目）；
+- 信号 / 关停的最终语义：待决定 L，见引导映像计划 §8 U1 例外待决项（U12）；
+- JVMTI 通知（`VirtualThread.notifyJvmti*`）：当前空操作，语义决定待在清单逐条登记。
