@@ -92,8 +92,9 @@ pub enum IStep {
     Read { decl: String, name: String, ph: u32 },
     /// 根帧区段 `[start, end)`（局部变量取区段入口的值）
     Region { phase: String, start: u32, end: Option<u32>, locals: Vec<IVal> },
-    /// 引导档位变更：其后的步骤在该档位下重放
-    Level(i32),
+    /// 引导档位变更：档位静态字段（`[concrete.boot] level`）写入 `level`，其后的步骤在该档位下重放；
+    /// 序列末尾的档位步骤恢复映像值
+    Level { decl: String, name: String, level: i32 },
 }
 
 /// VM 模块表项（`defineModule0` 登记，构建期次序）：启动序列以之为运行期 VM 模块表的初值，
@@ -268,7 +269,7 @@ impl ImageData {
                 IStep::Native { callee, args, ph } => json!({ "native": callee, "args": vals(args), "ph": ph }),
                 IStep::Read { decl, name, ph } => json!({ "read": [decl, name], "ph": ph }),
                 IStep::Region { phase, start, end, locals } => json!({ "region": phase, "start": start, "end": end, "locals": vals(locals) }),
-                IStep::Level(l) => json!({ "level": l }),
+                IStep::Level { decl, name, level } => json!({ "level": level, "at": [decl, name] }),
             })
             .collect();
         json!({
@@ -352,7 +353,8 @@ impl ImageData {
             } else if st.get("native").is_some() {
                 IStep::Native { callee: s(st, "native")?, args: unvals(st.get("args"))?, ph: opt_n(st, "ph") }
             } else if let Some(l) = st.get("level").and_then(Value::as_i64) {
-                IStep::Level(l as i32)
+                let (decl, name) = pair("at")?;
+                IStep::Level { decl, name, level: l as i32 }
             } else if st.get("read").is_some() {
                 let (decl, name) = pair("read")?;
                 IStep::Read { decl, name, ph: n(st, "ph")? }
@@ -407,7 +409,7 @@ mod tests {
                 IStep::Call { phase: "a/B.p:()V".into(), off: 3, callee: "a/B.q:()La/B;".into(), args: vec![IVal::R(0)], ph: Some(2) },
                 IStep::Native { callee: "a/B.n:()V".into(), args: vec![], ph: None },
                 IStep::Read { decl: "a/C".into(), name: "X".into(), ph: 2 },
-                IStep::Level(1),
+                IStep::Level { decl: "a/V".into(), name: "lv".into(), level: 1 },
                 IStep::Region { phase: "a/B.p:()V".into(), start: 1, end: None, locals: vec![IVal::N] },
             ],
             live: vec![0, 2],

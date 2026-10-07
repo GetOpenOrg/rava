@@ -56,11 +56,10 @@ impl System {
         }
         // initPhase1 同序：保存属性快照（VM.saveProperties：directMemory / pageAlignDirectMemory /
         // classFileMajorVersion 等按快照取值，未指定 -XX:MaxDirectMemorySize 时取 Runtime.maxMemory()）。
-        // saveProperties 只允许在 initLevel == 0 调用，本段即 initPhase1 的引导段
+        // saveProperties 只允许在 initLevel == 0 调用：本方法只在无引导映像时于运行期执行（有映像时 System 在构建期
+        // 初始化，initPhase1 由求值器执行），此时尚无 `VM.initLevel(int)` 写入，档位即 VM 的初值 0
         let snapshot: crate::java::util::Map<Object, Object> = Object::from(Clone::clone(&map)).try_cast("java/util/Map")?;
-        crate::jdk::internal::misc::VM::__vm_at_init_level(0, || {
-            crate::jdk::internal::misc::VM::saveProperties(snapshot)
-        })?;
+        crate::jdk::internal::misc::VM::saveProperties(snapshot)?;
         let mut p = crate::java::util::Properties::default();
         p._init_not_null();
         p.__set_map(map);

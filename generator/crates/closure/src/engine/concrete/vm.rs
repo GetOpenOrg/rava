@@ -403,9 +403,9 @@ impl Vm {
                 Some(CV::I(x)) => *x,
                 _ => 0,
             };
-            let last = self.bj.recs.iter().rev().find_map(|r| if let Rec::Level(l) = r { Some(*l) } else { None });
+            let last = self.bj.recs.iter().rev().find_map(|r| if let Rec::Level { level, .. } = r { Some(*level) } else { None });
             if last != Some(cur) {
-                self.bj.recs.push(Rec::Level(cur));
+                self.bj.recs.push(Rec::Level { key: k, level: cur });
             }
         }
         self.bj.recs.push(r);
@@ -694,10 +694,16 @@ impl Vm {
             return i.clone();
         }
         let index = site.method().code.as_ref().map(|c| c.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect()).unwrap_or_default();
-        // 显式操作优先；其次清单的返回值事实（`[facts.returns]` / `[vm_constants] null_returns`：原生二进制里恒定的返回值）
+        // 显式操作优先；其次清单的返回值事实（`[facts.returns]` / `[vm_constants] null_returns`：原生二进制里恒定的返回值）。
+        // 引导求值中有字节码的方法不取返回值事实：事实描述的是进入 main 之后的值（如 `VM.isBooted` 恒 true），
+        // 引导期间按字节码读档位等静态状态，与 JVM 引导期次序一致
         let ks = key.to_string();
         let boot_op = if self.boot { env.cfg().boot.natives.get(&ks).cloned() } else { None };
+        let fact_ok = !self.boot || site.method().code.is_none();
         let op = boot_op.or_else(|| env.cfg().natives.get(&ks).cloned()).or_else(|| {
+            if !fact_ok {
+                return None;
+            }
             env.man().return_fact(&ks).map(|f| match f {
                 crate::manifest::Fact::Null => "const:null".to_string(),
                 crate::manifest::Fact::Int(x) => format!("const:{x}"),

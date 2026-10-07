@@ -20,7 +20,8 @@
 # 引导一路展开到整个模块 / 反射子系统，而这些路径在运行时永不执行。
 [vm_boundary]
 classes = [
-    "java/lang/SecurityManager",
+    # （SecurityManager 已移出：手写只剩 ACC_NATIVE getClassContext（栈遍历，准入 ③），<clinit> 与其余成员按
+    # 字节码翻译，引导映像第 4 步）
     "java/lang/ClassLoader",
     "java/lang/Class",
 
@@ -40,9 +41,9 @@ classes = [
 
     # ── C1d 终态：内部包的 VM 契约类（准入 ③ VM 注入状态 / VM 驱动行为，② 类加载模型）──────────────
     # （Unsafe 已移出：手写只剩 ACC_NATIVE，公开包装与 <clinit> 按字节码翻译，a3-U0~U3）
-    # VM：引导阶段状态（initLevel / isBooted / isModuleSystemInited / isJavaLangInvokeInited）、停机标记、
-    # 保存属性——HotSpot 由 initPhase1~3 与 create_vm 写入，原生二进制进入 main 即「引导完成」档位。
-    "jdk/internal/misc/VM",
+    # （VM 已移出：引导档位、停机标记、保存属性、java.lang.invoke 初始化标记按字节码读写静态字段，构建期由
+    # initPhase1~3 与 JSR 292 核心类初始化写入映像；手写只剩 ACC_NATIVE（initialize / latestUserDefinedLoader0 /
+    # getNanoTimeAdjustment），引导映像第 4 步）
     # 引导加载器的 boot 层服务（引导类的包 / 资源定位、本地库）：原生单二进制无动态类加载与本地库加载。
     # 内建加载器层级 ClassLoaders（boot / platform / app）没有准入 ③ 方法，整类按字节码翻译（FS-C2，
     # docs/plans/2026-10-02-fs-c2-app-classloader.md）：scl 由 initPhase3 引导段写入。
@@ -73,11 +74,11 @@ translate_nested = [
 # 不翻译就保持 null（ModuleLayer.CLV 为 null 时 ServiceLoader 的模块层查找即 NPE）。
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
 # - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
-# - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
+# - Class：静态状态为纯 Java（registerNatives + 两个空数组常量），构建期在 VM 预初始化中执行、值在映像中；
+#   待 Class 移出 [vm_boundary]（struct 归生成器）时一并移出本表。
 clinit_carried = [
     "javax/crypto/JceSecurity",
     "java/lang/Class",
-    "java/lang/SecurityManager",
 ]
 
 # ── 动态对照：JVM 直接调用的 Java 入口 ────────────────────────────────────────────────

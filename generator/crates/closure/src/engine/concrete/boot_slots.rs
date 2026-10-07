@@ -192,7 +192,7 @@ pub(super) fn audit(vm: &Vm) -> Step2 {
             Rec::Native { callee, .. } => format!("重放 native `{callee}`"),
             Rec::Read { decl, name, .. } => format!("回填 `{decl}.{name}`"),
             Rec::Region { phase, start, end, .. } => format!("残差区段 `{phase}` [{start}, {})", end.map_or("出口".to_string(), |e| e.to_string())),
-            Rec::Level(l) => format!("引导档位 {l}"),
+            Rec::Level { level, .. } => format!("引导档位 {level}"),
         });
     }
     let war = vm.war_audit();

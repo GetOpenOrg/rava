@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::boot::PhaseEnd;
 use super::journal::Rec;
+use crate::manifest::BootCall;
 use super::vm::*;
 use super::*;
 
@@ -160,7 +161,7 @@ fn reachable(vm: &Vm) -> Size {
             }
             Rec::Read { ph, .. } => stack.push(*ph),
             Rec::Region { locals, .. } => stack.extend(locals.iter().filter_map(|v| if let CV::R(o) = v { Some(*o) } else { None })),
-            Rec::RuntimeInit { .. } | Rec::Level(_) => {}
+            Rec::RuntimeInit { .. } | Rec::Level { .. } => {}
         }
     }
     let mut seen = vec![false; vm.heap.len()];
@@ -250,7 +251,7 @@ fn digest(vm: &Vm) -> String {
                 c.h.str(&format!("region {phase}@{start}..{end:?}"));
                 locals.iter().for_each(|&v| c.value(v));
             }
-            Rec::Level(l) => c.h.str(&format!("level {l}")),
+            Rec::Level { level, .. } => c.h.str(&format!("level {level}")),
         }
     }
     c.drain();
@@ -288,7 +289,7 @@ impl<'a> Engine<'a> {
     /// 构建期引导映像（`[concrete.boot] calls` 为空或首个阶段方法所在类不在类路径上时为 None）
     pub fn boot_image(&self) -> Option<BootImage> {
         let boot = &self.man.concrete.boot;
-        let first = boot.calls.first().and_then(|(m, _)| super::super::seeds::parse_member(m))?;
+        let first = boot.calls.iter().find_map(|c| if let BootCall::Phase(m, _) = c { Some(m) } else { None }).and_then(|m| super::super::seeds::parse_member(m))?;
         self.h.class(&first.owner)?;
         let t0 = std::time::Instant::now();
         let mut vm = Vm::new();
@@ -305,10 +306,24 @@ impl<'a> Engine<'a> {
             Ok(()) => rows.push(format!("| VM 预初始化（{} 类 + {} 个 VM 构造对象） | 完成 | {} | {} | {} | {} |", boot.init.len(), boot.objects.len(), vm.steps, vm.heap.len(), vm.done_log.len(), t0.elapsed().as_millis())),
             Err(f) => error = Some(format!("VM 预初始化：{}", flow_text(&vm, &f))),
         }
-        for (m, args) in &boot.calls {
+        for call in &boot.calls {
             if error.is_some() {
                 break;
             }
+            let (m, args) = match call {
+                BootCall::Phase(m, args) => (m, args),
+                BootCall::Init(cs) => {
+                    let what = format!("VM 初始化 {}", cs.join(" / "));
+                    let r = cs.iter().try_for_each(|c| vm.ensure_init(&env, c));
+                    let res = r.as_ref().map_or_else(|f| flow_text(&vm, f), |()| "完成".to_string());
+                    phases.push(json!({ "init": cs, "result": res, "steps": vm.steps }));
+                    rows.push(format!("| {what} | {res} | {} | {} | {} | {} |", vm.steps, vm.heap.len(), vm.done_log.len(), t0.elapsed().as_millis()));
+                    if r.is_err() {
+                        error = Some(format!("{what}：{res}"));
+                    }
+                    continue;
+                }
+            };
             let r = (|| -> R<PhaseEnd> {
                 let mr = super::super::seeds::parse_member(m).map_or_else(|| fail(format!("成员格式 {m}")), Ok)?;
                 let md = parse_method(&mr.desc).map_or_else(|| fail("描述符"), Ok)?;
@@ -433,7 +448,7 @@ impl<'a> Engine<'a> {
                 Rec::Call { callee, .. } | Rec::Native { callee, .. } => callee.owner.to_string(),
                 Rec::Read { decl, .. } => decl.to_string(),
                 Rec::Region { phase, .. } => phase.owner.to_string(),
-                Rec::Level(_) => continue,
+                Rec::Level { .. } => continue,
             });
         }
         let types = size.types.iter().map(|t| t.to_string()).collect();

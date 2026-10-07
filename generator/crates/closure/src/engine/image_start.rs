@@ -90,7 +90,7 @@ impl<'a> Engine<'a> {
         let mut lc = NOCTX;
         for st in &data.steps {
             match st {
-                IStep::Level(l) => lc = if self.level_needed(*l) { self.level_ctx(*l) } else { NOCTX },
+                IStep::Level { level, .. } => lc = if self.level_needed(*level) { self.level_ctx(*level) } else { NOCTX },
                 IStep::Recompute { expr, .. } => self.image_expr_roots(&data, *expr),
                 IStep::RuntimeInit { class } => self.init(class, Via::root("boot_image", class)),
                 // 重定位值是基本类型（偏移 / 地址），不引入方法与对象

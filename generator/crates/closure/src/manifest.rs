@@ -73,7 +73,7 @@ pub use empty::EmptyCollections;
 mod names;
 mod concrete;
 mod field_names;
-pub use concrete::ConcreteCfg;
+pub use concrete::{BootCall, ConcreteCfg};
 pub use field_names::NameResolver;
 mod indy_helpers;
 mod keyed;
