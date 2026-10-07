@@ -765,26 +765,16 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # 发射为 `recv.hook()?.__get_x()`；否则为宿主类静态 fn，访问（读 / 写）前调用。手写体属
 # docs/reference/handwritten-boundary.md 准入第 ③ 类（VM 注入状态）。
 # - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充。
+#   引导加载器定义的类恒为 null，钩子对其为空操作（boot_noop）。
 #   （ClassLoader.scl / Thread.contextClassLoader 由构建期引导映像给出：initPhase3 构建期执行，初始线程为映像
 #   中的 main 线程，启动序列绑定到 OS 主线程。）
-# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
-#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作（ModuleLayer.boot 回到字节码后随第 4 步删除）。
-# boot_singletons：类镜像上的实例方法，接收者所指类由引导加载器定义时恒返回同一个进程内对象（手写承载）。
-# 闭包分析器给这类结果带身份标签，引用相等按标签折叠（AccessibleObject.checkCanSetAccessible 的
-# 调用方模块 == 声明类模块等）。
-# - Class.getModule：引导类共用一个模块单例（class_impl.rs `getModule`，非引导类归其定义加载器的无名模块）。
-[vm_state]
-boot_singletons = [
-    "java/lang/Class.getModule:()Ljava/lang/Module;",
-]
-
+# - Class.module：类镜像所属模块（create_mirror 按包条目写入），按「定义加载器 + 包」查 VM 模块表（启动序列以
+#   映像中 defineModule0 登记的模块为初值），未登记的包归定义加载器的无名模块（class_impl.rs `__vm_module`）。
+#   闭包分析器给该钩子的值池接上映像 VM 模块表的模块（[concrete.vm_fields] class_module）。
 [vm_state.field_hooks]
-"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
-"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
+"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true, boot_noop = true }
+"java/lang/Class.module:Ljava/lang/Module;" = { hook = "java/lang/Class.__vm_module", receiver = true }
 
-# loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
-# 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →
-# 平台加载器，其余 JDK 模块 → 应用加载器；用户类与库类为应用加载器。
 [vm_state.loader_map]
 class = "jdk/internal/module/ModuleLoaderMap$Modules"
 boot = "bootModules"
@@ -912,6 +902,7 @@ string_coder = "java/lang/String.coder"
 component_type = "java/lang/Class.componentType"
 reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
+module_loader = "java/lang/Module.loader"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
 # 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image

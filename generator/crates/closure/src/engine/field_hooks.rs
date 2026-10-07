@@ -3,10 +3,11 @@
 //! 访问点连到钩子的手写体（发射层在访问前调用钩子），读站点的结果另接钩子值池——钩子落地写入的值
 //! （如定义加载器）经手写体产出。
 //!
-//! 接收者钩子按接收者值集判定是否可达：钩子只为「尚未落地」的对象做事。类镜像的定义加载器钩子对引导
-//! 加载器定义的类是空操作（镜像的 `classLoader` 恒 null），故接收者值集只含引导类镜像时不接入钩子、读结果
-//! 只有字段值集（null）；含应用 / 平台类镜像、所指未知的 Class 对象或 open 时接入。求值器同口径：接收者为
-//! 引导类的类字面量时读结果折叠为 null（`mirror_hook_field`）。
+//! 接收者钩子按接收者值集判定是否可达：钩子只为「尚未落地」的对象做事。登记为 `boot_noop` 的钩子（类镜像的
+//! 定义加载器）对引导加载器定义的类是空操作（镜像的 `classLoader` 恒 null），故接收者值集只含引导类镜像时不接入
+//! 钩子、读结果只有字段值集（null）；含应用 / 平台类镜像、所指未知的 Class 对象或 open 时接入。求值器同口径：
+//! 接收者为引导类的类字面量时读结果折叠为 null（`mirror_hook_field`）。其余接收者钩子（类镜像的模块）对每个镜像
+//! 都落地，有接收者即接入；类镜像模块的钩子值池另含映像 VM 模块表（`image_start.rs` `image_module_table`）。
 
 use super::*;
 use crate::loaders::{DefiningLoaders, Loader};
@@ -19,6 +20,7 @@ impl<'a> Engine<'a> {
         let t = self.rt_fn_node(&h.host, &h.func, via.clone());
         if opcode == op::GETFIELD || opcode == op::GETSTATIC {
             let Some(tid) = parse_field(&f.desc).and_then(|ft| self.ptype(&ft)) else { return };
+            self.image_module_table(decl, &f.name, t, tid);
             self.flow(Node::S(t, POOL), res, tid);
         }
     }
@@ -30,11 +32,11 @@ impl<'a> Engine<'a> {
 
     /// 接收者钩子字段：接收者值集 s（已按属主过滤）中是否有钩子需落地的对象
     pub(super) fn recv_hook_needed(&mut self, decl: &str, f: &MemberRef, s: &TypeSet) -> bool {
-        match self.man.vm_state.field_hook(decl, &f.name, &f.desc) {
-            Some(h) if h.receiver => {}
+        let boot_noop = match self.man.vm_state.field_hook(decl, &f.name, &f.desc) {
+            Some(h) if h.receiver => h.boot_noop,
             _ => return false,
-        }
-        if !s.open.is_empty() {
+        };
+        if !s.open.is_empty() || (!boot_noop && !s.classes.is_empty()) {
             return true;
         }
         let xs: Vec<u32> = s.classes.iter().collect();
@@ -81,7 +83,7 @@ impl Ctx<'_> {
     pub(super) fn mirrors_hook_field<'c>(&self, f: &MemberRef, classes: impl IntoIterator<Item = &'c str>) -> Option<V> {
         let fi = self.field_info(f)?;
         let h = self.man.vm_state.field_hook(&fi.key.owner, &fi.key.name, &fi.key.desc)?;
-        (h.receiver && classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot)).then_some(V::Null)
+        (h.receiver && h.boot_noop && classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot)).then_some(V::Null)
     }
 
     /// 实例调用 m 在一组接收者类镜像上的结果：m 属清单 `[vm_state] boot_singletons` 且每个镜像都是引导加载器定义的

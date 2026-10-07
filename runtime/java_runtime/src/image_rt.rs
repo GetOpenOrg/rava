@@ -17,6 +17,11 @@ pub fn bind_initial_thread(t: Object) {
     Thread::from(t).__vm_bind_initial();
 }
 
+/// 映像中的模块登记为运行期 VM 模块表的初值（构建期 `defineModule0` 的结果；`loader` 为其定义加载器）
+pub fn define_module(module: Object, loader: Object, open: bool, packages: &[&str]) {
+    crate::java::lang::Module::__vm_register(module, loader, open, packages);
+}
+
 /// 驻留映像字符串（构建期驻留表的内容：运行期驻留表以映像对象为规范实例）
 pub fn intern(s: Object) {
     let _ = String::from(s).__interned();

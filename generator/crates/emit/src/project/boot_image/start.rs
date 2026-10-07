@@ -1,5 +1,5 @@
 //! 启动序列 `__boot_image_start`（计划 §5.5.2 D4 / D5）：登记映像区 → VM 单元 → 链接 → 宿主值改写 →
-//! 驻留 → 静态字段初值 → 构建期初始化标记 → 按构建期次序重放（档位、重定位、重算、残差调用 / 读取）。
+//! 驻留 → VM 模块表 → 静态字段初值 → 构建期初始化标记 → 按构建期次序重放（档位、重定位、重算、残差调用 / 读取）。
 //!
 //! 占位对象（残差调用 / 重放 native / 运行期初始化类静态读取的结果）在其步骤处绑定为局部 `ph{i}`，随即
 //! 回填映像中全部引用该占位的位置；之后的步骤实参直接使用该绑定。
@@ -377,6 +377,19 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
         if p.mat.contains(&s) {
             g.line(&format!("rt::intern({});", obj_ref(s)));
         }
+    }
+    // VM 模块表（§5.5.1 S5）：映像中的模块与其定义加载器登记为运行期 VM 模块表的初值（类镜像的模块按
+    // 「定义加载器 + 包」查表；运行期 defineModule0 的重名 / 包冲突检查以之为准）
+    for m in &d.modules {
+        if !p.mat.contains(&m.obj) {
+            continue;
+        }
+        let loader = match m.loader {
+            IVal::R(l) => g.obj(l).ok_or_else(|| EmitError::Input(format!("引导映像模块 #{} 的定义加载器 #{l} 未物化", m.obj)))?,
+            _ => "Object::__NULL".to_string(),
+        };
+        let pkgs: Vec<String> = m.packages.iter().map(|x| format!("{x:?}")).collect();
+        g.line(&format!("rt::define_module({}, {loader}, {}, &[{}]);", obj_ref(m.obj), m.open, pkgs.join(", ")));
     }
     // 静态字段初值（零值即存储缺省值；重算 / 重定位槽由步骤写入）
     for (cls, name, v) in &d.statics {

@@ -96,6 +96,19 @@ pub enum IStep {
     Level(i32),
 }
 
+/// VM 模块表项（`defineModule0` 登记，构建期次序）：启动序列以之为运行期 VM 模块表的初值，
+/// 类镜像的模块（清单 `[concrete.vm_fields] class_module`）按「定义加载器 + 包」查本表
+#[derive(Clone, Debug, PartialEq)]
+pub struct IModule {
+    /// 模块对象
+    pub obj: u32,
+    /// 定义加载器（清单 `[concrete.vm_fields] module_loader`；null = 引导加载器）
+    pub loader: IVal,
+    pub open: bool,
+    /// 包（内部形式，斜线分隔）
+    pub packages: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImageData {
     pub objs: Vec<IObj>,
@@ -114,6 +127,8 @@ pub struct ImageData {
     /// VM 初始线程（HotSpot `create_initial_thread` 的 main 线程对象）：启动序列把它绑定为 OS 主线程的
     /// 当前线程（§5.5.1 S3）
     pub current_thread: Option<u32>,
+    /// VM 模块表（§5.5.1 S5）
+    pub modules: Vec<IModule>,
 }
 
 fn val(v: IVal) -> Value {
@@ -264,6 +279,7 @@ impl ImageData {
             "steps": steps,
             "live": self.live,
             "current_thread": self.current_thread,
+            "modules": self.modules.iter().map(|m| json!({ "obj": m.obj, "loader": val(m.loader), "open": m.open, "packages": m.packages })).collect::<Vec<_>>(),
         })
     }
 
@@ -342,6 +358,20 @@ impl ImageData {
                 IStep::Region { phase: s(st, "region")?, start: n(st, "start")?, end: opt_n(st, "end"), locals: unvals(st.get("locals"))? }
             });
         }
+        for m in v.get("modules").and_then(Value::as_array).into_iter().flatten() {
+            d.modules.push(IModule {
+                obj: n(m, "obj")?,
+                loader: unval(m.get("loader").ok_or("映像模块表格式")?)?,
+                open: m.get("open").and_then(Value::as_bool).ok_or("映像模块表格式")?,
+                packages: m
+                    .get("packages")
+                    .and_then(Value::as_array)
+                    .ok_or("映像模块表格式")?
+                    .iter()
+                    .map(|p| p.as_str().map(str::to_string).ok_or("映像模块表格式"))
+                    .collect::<Result<_, _>>()?,
+            });
+        }
         d.live = arr("live")?.iter().map(|x| x.as_u64().map(|x| x as u32).ok_or("映像活对象格式")).collect::<Result<_, _>>()?;
         Ok(d)
     }
@@ -379,6 +409,7 @@ mod tests {
             ],
             live: vec![0, 2],
             current_thread: Some(0),
+            modules: vec![IModule { obj: 0, loader: IVal::N, open: false, packages: vec!["a".into(), "a/b".into()] }],
         };
         let back = ImageData::from_json(&d.to_json()).unwrap();
         assert_eq!(back, d);

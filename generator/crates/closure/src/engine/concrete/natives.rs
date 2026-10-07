@@ -245,14 +245,19 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             if info.key.name == "defineModule0" {
                 let m = arg(0)?.obj()?;
                 vm.base_module.get_or_insert(m);
+                let mut pkgs: Vec<Rc<str>> = Vec::new();
                 if let Some(pns) = args.last().copied().and_then(|v| v.r().ok().flatten()) {
                     let names: Vec<CV> = vm.arr(pns)?.clone();
                     *vm.vm_tables.entry("packages".into()).or_default() += names.len();
                     for n in names {
-                        let p = vm.rust_string(env, n.obj()?)?.replace('.', "/");
-                        vm.pkg_module.insert(Rc::from(p.as_str()), m);
+                        let p: Rc<str> = Rc::from(vm.rust_string(env, n.obj()?)?.replace('.', "/").as_str());
+                        vm.pkg_module.insert(p.clone(), m);
+                        pkgs.push(p);
                     }
                 }
+                let loader = if env.cfg().vm_fields.contains_key("module_loader") { vm.get_vm_field(env, m, "module_loader")? } else { CV::N };
+                let open = arg(1)?.i()? != 0;
+                vm.modules.push((m, loader, open, pkgs));
                 let mut ms: Vec<(Rc<str>, u32)> = vm.mirrors.iter().map(|(t, &o)| (t.clone(), o)).collect();
                 ms.sort_unstable();
                 for (t, o) in ms {

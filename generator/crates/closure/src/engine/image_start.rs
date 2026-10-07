@@ -33,6 +33,8 @@ pub(super) struct ImgState {
     /// 映像对象 → 抽象对象（数组与容器形态类的实例逐对象成为分配点，与字节码 `new` 的容器建模一致）
     sites: HashMap<u32, u32>,
     busy: bool,
+    /// VM 模块表已汇入类镜像模块钩子的值池
+    modules_fed: bool,
 }
 
 impl ImgState {
@@ -72,6 +74,7 @@ impl<'a> Engine<'a> {
             ph_src: HashMap::default(),
             sites: HashMap::default(),
             busy: false,
+            modules_fed: false,
             data: data.clone(),
         }));
         // 残差调用 / 区段在其构建期档位的上下文中分析（`levels_boot.rs`）；重放 native 与运行期初始化类在本体
@@ -503,6 +506,31 @@ impl<'a> Engine<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// 类镜像模块字段（清单 `[concrete.vm_fields] class_module`）的钩子值池：映像 VM 模块表的模块（§5.5.1 S5）。
+    /// 运行期钩子按「定义加载器 + 包」查启动序列登记的 VM 模块表，未登记的归其加载器的无名模块（钩子手写体）；
+    /// 表中模块与其定义加载器在钩子首次接入时成为活对象（启动序列以之登记 VM 模块表）
+    pub(super) fn image_module_table(&mut self, decl: &str, name: &str, hook: usize, tid: u32) {
+        let Some(s) = self.img.as_ref() else { return };
+        if s.modules_fed || s.data.modules.is_empty() {
+            return;
+        }
+        let is_module_field = self.man.concrete.vm_fields.get("class_module").and_then(|k| k.rsplit_once('.')).is_some_and(|(o, n)| o == decl && n == name);
+        if !is_module_field {
+            return;
+        }
+        let data = s.data.clone();
+        self.img.as_mut().expect("映像").modules_fed = true;
+        for m in &data.modules {
+            if let Some(f) = self.image_ref(m.obj) {
+                self.feed(&[f], Node::S(hook, POOL), tid);
+            }
+            if let IVal::R(l) = m.loader {
+                self.image_ref(l);
+            }
+        }
+        self.image_drain();
     }
 
     /// 活对象（映像对象下标，升序）

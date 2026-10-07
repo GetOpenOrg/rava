@@ -1,77 +1,13 @@
 use crate::prelude::*;
 use super::Module;
 
-// java.lang.Module 伴生：单二进制运行时的模块语义。
+// java.lang.Module 伴生：VM 模块表（HotSpot `Modules` / `ModuleEntryTable` 的可观测部分）。
 //
-// 产物无模块层（no JPMS runtime）——类全集编译期定死，全部归属**无名模块**
-//（JDK 的 ALL-UNNAMED 语义）：isNamed 恒 false，ServiceLoader 的
-// LazyClassPathLookupIterator 据此走 classpath 分支（资源枚举为空，
-// 外部 provider 发现终止）。无名模块单例挂系统类加载器为 defining loader。
+// 模块系统按字节码运行：引导层（initPhase2）在构建期求值，其模块对象、读边与导出表都在映像中；
+// 启动序列把映像中 defineModule0 登记过的模块登记为本表的初值（`__vm_register`），运行期新定义的层
+// 经 `defineModule0` 追加。类镜像的模块（`Class.module`，VM 在建镜像时写入）由 `Class.__vm_module`
+// 钩子按「定义加载器 + 包」查本表落地，未登记的包归其加载器的无名模块。
 
-/// 全二进制唯一的无名模块（ALL-UNNAMED 对应物）。
-pub fn unnamed_module() -> Module {
-    crate::__process_static! {
-        static UNNAMED: Module = {
-            let mut m = Module::default();
-            m._init_not_null();
-            m.__set_loader(crate::java::lang::ClassLoader::getSystemClassLoader()
-                .unwrap_or_default());
-            m
-        };
-    }
-    UNNAMED.with(Clone::clone)
-}
-
-impl Module {
-    /// `getLayer()`：命名模块所在的层；无名模块不属于任何层 → null（JDK 语义；本运行时只有
-    /// 无名模块）。消费方：`StackTraceElement.isHashedInJavaBase`（`ModuleLayer.boot() == m.getLayer()`）。
-    #[jvm_boundary]
-    pub fn getLayer(&self) -> Result<crate::java::lang::ModuleLayer> {
-        Ok(Default::default())
-    }
-
-    /// 无名模块恒未命名（name 为 null → isNamed false，JDK 语义）。
-    #[jvm_boundary]
-    pub fn isNamed(&self) -> Result<bool> {
-        Ok(!_is_jnull(&Object::from(self.__get_name())))
-    }
-
-    /// `Module.canUse(Class service)`：模块是否 uses 该服务。
-    /// 无名模块对全部服务恒 uses（JDK Module.addUses/implAddUses 语义的
-    /// 无名模块默认——ServiceLoader 据此放行 provider 消费）。
-    #[jvm_boundary]
-    pub fn canUse(&self, _service: crate::java::lang::Class) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// `isExported(String pn, Module other)`：无名模块向全部模块导出其全部包（JLS §7.7.5 /
-    /// Module 规范：unnamed module exports all packages）。消费方：反射访问检查
-    /// Reflection.verifyModuleAccess（FS-R R2a 字节码路径）。
-    #[jvm_boundary]
-    pub fn isExported_str_module(&self, _pn: String, _other: Module) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// `isExported(String pn)`：无条件导出（同上）。
-    #[jvm_boundary]
-    pub fn isExported_str(&self, _pn: String) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// `isOpen(String pn, Module other)`：无名模块向全部模块开放其全部包（深反射可达）。
-    #[jvm_boundary]
-    pub fn isOpen_str_module(&self, _pn: String, _other: Module) -> Result<bool> {
-        Ok(true)
-    }
-
-    /// `isOpen(String pn)`：无条件开放（同上）。
-    #[jvm_boundary]
-    pub fn isOpen_str(&self, _pn: String) -> Result<bool> {
-        Ok(true)
-    }
-}
-
-// ── VM 模块表（HotSpot ModuleEntryTable / PackageEntryTable 的落地，类 3 VM 状态）──────────────
 // 命名模块只经 `Module(ModuleLayer, ClassLoader, ModuleDescriptor, URI)` 构造器的 defineModule0
 // 进入 VM（ModuleLayer.defineModules*）；未登记的 Module（含全部无名模块）在 HotSpot 中解析为其
 // 加载器的无名模块（`java_lang_Module::module_entry` 的缺省分支），addReads0 / addExports*0 对其
@@ -92,6 +28,30 @@ fn _vm_modules<R>(f: impl FnOnce(&mut Vec<VmModule>) -> R) -> R {
         static MODULES: crate::sync_model::__RefSlot<Vec<VmModule>> = crate::sync_model::__RefSlot::new(Vec::new());
     }
     MODULES.with(|t| f(&mut t.borrow_mut()))
+}
+
+impl Module {
+    /// 启动序列：映像中的模块登记为 VM 模块表的初值（`image_rt::define_module`）
+    pub fn __vm_register(module: Object, loader: Object, open: bool, packages: &[&str]) {
+        let module = Module::from(module);
+        let name = format!("{}", module.__get_name());
+        let loader = _identity(loader);
+        let packages = packages.iter().map(|p| p.to_string()).collect();
+        _vm_modules(|t| t.push(VmModule { module, loader, name, open, packages }));
+    }
+
+    /// 定义加载器为 `loader` 的包 `pkg`（内部形式）所属的已登记模块；`pkg` 为 None（基本类型）→ java.base
+    pub fn __vm_package_module(loader: Object, pkg: Option<&str>) -> Option<Module> {
+        let loader = _identity(loader);
+        _vm_modules(|t| {
+            t.iter()
+                .find(|e| match pkg {
+                    Some(p) => e.loader == loader && e.packages.iter().any(|x| x == p),
+                    None => e.loader == 0 && e.name == "java.base",
+                })
+                .map(|e| Clone::clone(&e.module))
+        })
+    }
 }
 
 fn _identity(o: Object) -> usize {

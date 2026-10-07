@@ -267,6 +267,8 @@ pub(super) struct Vm {
     /// 包（内部形式）→ 模块对象（defineModule0 登记）
     pub pkg_module: HashMap<Rc<str>, u32>,
     pub base_module: Option<u32>,
+    /// VM 模块表（defineModule0 次序）：（模块, 定义加载器, open, 包）
+    pub modules: Vec<(u32, CV, bool, Vec<Rc<str>>)>,
     /// 引导求值的写入日志、脏位置与残差记录（concrete/journal.rs）
     pub bj: super::journal::Journal,
 }
@@ -313,6 +315,7 @@ impl Vm {
             vm_tables: BTreeMap::default(),
             pkg_module: HashMap::default(),
             base_module: None,
+            modules: Vec::new(),
             bj: Default::default(),
         }
     }
