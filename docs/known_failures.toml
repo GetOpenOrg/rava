@@ -41,13 +41,6 @@ since = "2026-10-06"
 note = "java.base 的 Module 未命名：jbase-named / jbase-name / exported-internal / own-loader 四行 diff，10-03 入库起逐行相同"
 
 [[known]]
-test = "TestDomBuildTree"
-signature = "Provider com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl not found"
-owner = "java.xml 按名加载（FactoryFinder 按名加载 JAXP 实现类的分析器建模）"
-since = "2026-10-06"
-note = "Xerces 实现类未入闭包，dyn-compare 漏覆盖 134；m2-f0c12c3b（10-04）起完全相同"
-
-[[known]]
 test = "TestCharsetAvailable"
 signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "jdk.charsets（docs/plans/2026-10-03-jmod-coverage.md R9）"
