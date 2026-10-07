@@ -212,6 +212,9 @@ impl Engine<'_> {
         if let Some(r) = self.probe_report(pat) {
             return Some(r);
         }
+        if pat == "@keyed" {
+            return Some(self.keyed_report());
+        }
         if pat == "@nullrecv" {
             return Some(self.null_recv_sites());
         }

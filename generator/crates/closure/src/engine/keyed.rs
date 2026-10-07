@@ -391,6 +391,25 @@ impl<'a> Engine<'a> {
         format!("@{} {}", gate.off, self.ctx_label(gate.m))
     }
 
+    /// 诊断 `@keyed`：各闸门的站点键集与暂扣类型、各键类子类型的类键集
+    pub(super) fn keyed_report(&self) -> Vec<String> {
+        let show = |k: &Keys| match k {
+            Keys::Any => "任意".to_string(),
+            Keys::Set(s) => format!("{{{}}}", s.iter().map(|x| &**x).collect::<Vec<_>>().join(", ")),
+        };
+        let mut out = vec![];
+        for (g, gate) in self.keyed.gates.iter().enumerate() {
+            let held: Vec<&str> = gate.held.keys().map(|t| &*self.names[*t as usize]).collect();
+            out.push(format!("  闸门 {} 键类 {} 键 {} 暂扣 [{}]", self.kgate_label(g as u32), self.names[gate.kc as usize], show(&gate.keys), held.join(", ")));
+        }
+        let mut cks: Vec<(&str, String)> = self.keyed.class_keys.iter().map(|(t, k)| (&*self.names[*t as usize], show(k))).collect();
+        cks.sort();
+        for (n, k) in cks {
+            out.push(format!("  类键 {n} = {k}"));
+        }
+        out
+    }
+
     fn kgate_push(&mut self, g: u32, s: TypeSet) {
         let (m, off) = (self.keyed.gates[g as usize].m, self.keyed.gates[g as usize].off);
         self.flow_src = self.graph.id(Node::K(g));
