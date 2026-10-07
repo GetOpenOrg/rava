@@ -4296,3 +4296,36 @@ lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 为 97.0k（基线
 5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
    `TestJcaSasl`（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
    （重点看反射拷贝构造、`AtomicXxxFieldUpdater`、序列化 `ObjectStreamClass` 字段读写、注解代理等经 `Field` 存取的用例）。
+
+### 30.18 合批 batch-1008 的语义合并（2026-10-08）
+
+batch-1008 依次并入 user-unreach-stubs（108558e0）、c1d-url-b2（3391eb2d，04600e21）、boot-image-s4（c614f840，b52917c9）、
+enum-values-direct（59451c29）、closure-composition（c3a06331），合并修复 b558e0c2。c1d-url-b2 与 boot-image-s4 两侧
+同改分析器核心，冲突取舍如下（合并提交信息为准）：
+
+- **Facts 两侧字段并存**：`level`（引导求值档位上下文）与 `objs`（c1d 形参抽象对象集）同时在 `Facts` 上。共享分析复用键含
+  对象参数集；档位上下文不复用（`engine/worklist.rs`：`closing || level.is_some()` 时不查共享摘要）。
+- **facts 拆分**：`engine/facts.rs` 拆为 `facts/{kinds,fields,calls,oracle}.rs`，本批改动移入子模块；`calls.rs` 的
+  `CallInfo.nonnull_ret`（含调用者类镜像非空）取代原 `empty`。
+- **`invoke_result` 先后**（`facts/oracle.rs`）：`level_queries` 档位折叠 → 清单事实 / 空集合 / `nonnull_ret` 等 →
+  偏移判定（`field_offset`）→ 类字面量接收者 `mirrors_call` → 派生结果。`Oracle` 新增 `key_getter`、`string_equality`、
+  `param_mirror_call`。
+- **absint 拆分**：`absint.rs` 拆为 `value` / `oracle` / `step` / `fixpoint` 子模块（final 字段复读单测拆至
+  `final_field_tests.rs`）。定点循环每条指令的次序：`eq_operands` → `tr.pre` → `step` → `final_reread`。条件分支：
+  类型收窄 `instanceof_narrow` / `mirror_sub_narrow` 之后 `.or_else(key_test)`，可空性 `null_narrow` 之后
+  `.or_else(affix_narrow)`，另算 `final_null_test`。
+- **`named_resources`**：分析器按名求出的资源只并入档案侧（模块资源）推导；用户侧推导传空集，并剔除档案已有资源
+  （`input/src/build.rs`）。
+- **删除「按名开放字段」回退**（取 c1d 撤除兜底，§30.14），本批侧的 `analyzed_exact` 守卫随之删除。
+- **`PV::join`**：两侧确定非空 → 非空引用；合并时与 `join_ret` 同时生效，b558e0c2 将 `join_ret` 吸收进 `PV::join` 后删除
+  （单测改为 `join_keeps_nonnull`）。
+- **映像必需**：`BuildInput.boot_image` 改为必需的 `ImageData`（去 Option）；`BuildInput.system_properties`（`SysPropFacts`）
+  与 `input/manifest.rs` 的 `boot_init_classes`（随 `[boot_init]`）删除。closure.json 的 `system_properties` 保留。
+- **合并修复 b558e0c2**：引导求值的类路径运行模型与常量格合流——c1d 把 `toFileURL` 的延迟调用改由 `null_returns` 给出，
+  s4 起引导求值不取有字节码方法的返回值事实，二者叠加使 initPhase2 执行 `toFileURL` 字节码遇宿主延迟值、映像求值失败；
+  `[concrete.boot.natives]` 对 `URLClassPath.toFileURL` / `BuiltinClassLoader.findClassOnClassPathOrNull` 显式 `const:null`。
+
+**验证现状**：首次验证（6934dc93）抽查 41/41 因映像求值失败、单测 closure `--lib` 11 失败、driver 层 32 失败；
+b558e0c2 之后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G）。
+
+**待补：根因与修复。**
