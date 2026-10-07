@@ -90,13 +90,15 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
             } else {
                 // 方法体需要 wrapper 上下文（this 传参 / 非虚方法调用 / Self::）→
                 // 经钩子重建声明类的擦除实例化 wrapper，执行 wrapper 方法体 `__impl_<method>`
-                // （签名已擦除，边界转换见 erased_impl_call）
+                // （签名已擦除，边界转换见 erased_impl_call）。钩子以本类 trait 限定调用：
+                // 祖先与本类简单名相同（java.sql.Date ⊂ java.util.Date）时 supertrait 上有同名
+                // `__as_<名>`，方法调用语法有歧义（E0034）
                 let impl_name = format_ident!("__impl_{}", mname);
                 let call = erased_impl_call(
                     &effective_sig, &impl_name, &ctx.type_param_names, &HashSet::new());
                 vtable_default_methods.push(quote! {
                     #erased_default_sig {
-                        let __w = self.#as_self_hook();
+                        let __w = #vtable_trait_ident::#as_self_hook(self);
                         #call
                     }
                 });
@@ -108,7 +110,7 @@ pub(crate) fn vtable_trait(ctx: &GenContext) -> TokenStream2 {
                 &effective_sig, &impl_name, &ctx.type_param_names, &HashSet::new());
             vtable_default_methods.push(quote! {
                 #erased_default_sig {
-                    let __w = self.#as_self_hook();
+                    let __w = #vtable_trait_ident::#as_self_hook(self);
                     #call
                 }
             });

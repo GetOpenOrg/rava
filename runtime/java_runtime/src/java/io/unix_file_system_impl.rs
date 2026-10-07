@@ -22,6 +22,116 @@ fn null_str_array() -> JArray<String> {
     JArray::default()
 }
 
+/// realpath(3)（`std::fs::canonicalize` 在 Unix 上即 realpath）。
+fn realpath(path: &str) -> std::io::Result<std::string::String> {
+    std::fs::canonicalize(path).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// `JDK_Canonicalize(orig, out, PATH_MAX)` 的逐句移植。
+fn jdk_canonicalize(orig: &str) -> std::io::Result<std::string::String> {
+    let path_max = libc::PATH_MAX as usize;
+    if orig.len() > path_max {
+        return Err(std::io::Error::from_raw_os_error(libc::ENAMETOOLONG));
+    }
+    // 先对整条路径 realpath
+    if let Ok(r) = realpath(orig) {
+        return Ok(collapse(&r));
+    }
+    // 原路径某处不成立：从末尾逐段去名，直到某个子路径可解析或名字用尽
+    let bytes = orig.as_bytes();
+    let mut p = bytes.len();
+    let mut resolved: Option<std::string::String> = None;
+    while p > 0 {
+        // 跳过最后一个名字：`while ((--p > path) && (*p != '/'));`
+        loop {
+            p -= 1;
+            if p == 0 || bytes[p] == b'/' {
+                break;
+            }
+        }
+        if p == 0 {
+            break;
+        }
+        match realpath(&orig[..p]) {
+            Ok(r) => {
+                resolved = Some(r);
+                break;
+            }
+            // 不存在 / 类型不对 / 无权访问：再去一个名字；其他 I/O 错误直接失败
+            Err(e) if matches!(e.raw_os_error(),
+                Some(libc::ENOENT) | Some(libc::ENOTDIR) | Some(libc::EACCES)) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    match resolved {
+        Some(mut r) => {
+            // 把未解析的尾部接到已解析前缀后（避免重复斜杠）
+            let mut tail = &orig[p..];
+            if r.len() + tail.len() >= path_max {
+                return Err(std::io::Error::from_raw_os_error(libc::ENAMETOOLONG));
+            }
+            if r.ends_with('/') && tail.starts_with('/') {
+                tail = &tail[1..];
+            }
+            r.push_str(tail);
+            Ok(collapse(&r))
+        }
+        // 一段也解析不了：返回原路径
+        None => Ok(collapse(orig)),
+    }
+}
+
+/// `splitNames` 的名字切分：每个名字从当前位置起（首字符不作分隔符），到下一个 `/` 为止。
+fn split_names(s: &str) -> Vec<&str> {
+    let b = s.as_bytes();
+    let mut names = Vec::new();
+    let mut p = 0;
+    while p < b.len() {
+        let start = p;
+        p += 1;
+        let mut end = b.len();
+        while p < b.len() {
+            if b[p] == b'/' {
+                end = p;
+                p += 1;
+                break;
+            }
+            p += 1;
+        }
+        names.push(&s[start..end]);
+    }
+    names
+}
+
+/// `collapse`：语法上消解 `.` 与 `..`（不查询文件系统，只用于 realpath 之后的整理）。
+/// `.` 总是去掉；`..` 与它之前最近的未去名字一并去掉，之前没有名字时保留。保留首个 `/`。
+fn collapse(path: &str) -> std::string::String {
+    let (root, names_str) = match path.strip_prefix('/') {
+        Some(rest) => ("/", rest),
+        None => ("", path),
+    };
+    let names = split_names(names_str);
+    let has_dots = names.iter().any(|n| *n == "." || *n == "..");
+    if !has_dots || names.len() < 2 {
+        return path.to_owned();
+    }
+    let mut kept: Vec<Option<&str>> = names.iter().map(|n| Some(*n)).collect();
+    for i in 0..kept.len() {
+        match names[i] {
+            "." => kept[i] = None,
+            ".." => {
+                if let Some(j) = (0..i).rev().find(|&j| kept[j].is_some()) {
+                    kept[j] = None;
+                    kept[i] = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    let joined: Vec<&str> = kept.into_iter().flatten().collect();
+    format!("{}{}", root, joined.join("/"))
+}
+
 impl UnixFileSystem {
     /// native initIDs：HotSpot 缓存 JNI 字段 ID；原生二进制无此需要。
     #[jvm_native]
@@ -76,14 +186,20 @@ impl UnixFileSystem {
         Ok(md.len() as i64)
     }
 
-    /// native canonicalize0(String)：realpath(3) 语义（解析符号链接、消解
-    /// `..`）。失败抛 IOException。
+    /// native canonicalize0(String)：`JDK_Canonicalize`（libjava `canonicalize_md.c`）语义——
+    /// 整条路径 realpath 失败时（如路径不存在）从末尾逐段剥离，取能 realpath 的最长前缀再接回
+    /// 未解析的尾部，最后语法上消解 `.` / `..`；路径不必存在。失败抛 IOException，消息同
+    /// `JNU_ThrowIOExceptionWithLastError(env, "Bad pathname")`（errno 文案优先）。
     #[jvm_native]
     pub fn canonicalize0(&self, path: String) -> Result<String> {
-        match std::fs::canonicalize(format!("{}", path)) {
-            Ok(p) => Ok(String::from(p.to_str().unwrap_or_default())),
-            Err(e) => Err(JvmError::from(
-                super::IOException::new_str(String::from(format!("{}", e)))?)),
+        match jdk_canonicalize(&format!("{}", path)) {
+            Ok(p) => Ok(String::from(p.as_str())),
+            Err(e) => {
+                let msg = e.raw_os_error()
+                    .and_then(crate::net_posix::strerror)
+                    .unwrap_or_else(|| "Bad pathname".to_owned());
+                Err(JvmError::from(super::IOException::new_str(String::from(msg.as_str()))?))
+            }
         }
     }
 
