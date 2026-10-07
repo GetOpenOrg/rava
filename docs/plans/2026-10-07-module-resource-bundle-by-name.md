@@ -74,9 +74,24 @@ root = "java/util/ResourceBundle"          # 束类候选须是它的子类
 - 名字求值的非常量实参也支持 indy 创建点。
 - 任一段的值未知（非字节码调用方、具体求值物化的 lambda）时，形参整体按未知处理。
 
-做完后 `SecuritySupport` 的站点能沿 `getResourceBundle` 调用点精确求出 XMLMessages 等基名，不必再走字面量回退。
+做完后 `SecuritySupport` 的站点能沿 `getResourceBundle` 调用点求出捕获的基名；上游推不全的部分见 2.5。
 
-### 2.5 事实链路
+### 2.5 名字推不全与具体求值写入
+
+抽查诊断（resbchk-62b4be4a）补出两处：
+
+- **推不全的站点**：`names_of` 用 `Gap::Fail` 求值，槽推不全时（未定字段、非常量上游）只给出已知部分并置
+  `lookup_partial` / `lookup_incomplete`，结果仍是 `Keys::Set`。资源束站点此前忽略这两个标记，把「只知道一部分」
+  当成「全部名字」，XMLMessages 等基名于是漏选。现在 `seed_bundles` 在求值前后取走这两个标记：推不全时
+  已知名字照收，站点同时记为推不出，由字面量兜底覆盖其余基名。
+- **具体求值的字段写入**：具体求值器（`engine/concrete/`）执行的 `putstatic` / `putfield` 此前只把写入值的常量格投影
+  （整数 / 长整数 / null / 其他）并入字段值集，String 字段的字段常量集 `field_strs` 与字段字符串槽 `PSlot::F`
+  都没有收到写入——字段读取方于是误判为「字节码写入已全部推出」。`SyncFactory.initMapIfNecessary` 在具体求值中
+  把拼接结果 `javax/sql/rowset/rowset.properties` 写进 `ROWSET_PROPERTIES`，按名读取的资源只看到 `<clinit>`
+  里的 `rowset.properties`。现在写入投影新增 `Put::Str`（字符串内容可读时），物化时（`concrete_str_puts`）与字节码
+  写入同一口径并入两处：内容可读为字面量，不可读则字段槽推不出。
+
+### 2.6 事实链路
 
 `SeedState.named_resources`（资源束属性文件 ∪ 按名读取的资源）→ 闭包 JSON `seeds.named_resources` → 档案 profile（集合并）→
 `input::facts::SeedFacts.named_resources`（`from_closure` / `parse_seeds` 两个入口一致）→ `compose`（档案非用户侧 ∪ 单测用户侧）
