@@ -148,6 +148,8 @@ pub struct Manifest {
     serial_enumerators: HashSet<String>,
     instance_field_users: HashSet<String>,
     static_offset_getters: Vec<String>,
+    /// `[facts.field_writes] static_bases`：返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址（声明类镜像）
+    static_base_returns: HashSet<String>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     field_name_resolvers: HashMap<String, NameResolver>,
@@ -462,6 +464,7 @@ impl Manifest {
             serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
             instance_field_users: field_writes("instance_field_users").into_iter().collect(),
             static_offset_getters: field_writes("static_offset_getters"),
+            static_base_returns: field_writes("static_bases").into_iter().collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
@@ -648,6 +651,11 @@ impl Manifest {
     /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
     pub fn is_static_offset_getter(&self, key: &classfile::constant::MemberRef) -> bool {
         self.static_offset_getters.iter().any(|s| member_is(s, key))
+    }
+
+    /// 返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址——声明类的类镜像（`[facts.field_writes] static_bases`）
+    pub fn returns_static_base(&self, member: &str) -> bool {
+        self.static_base_returns.contains(member)
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）

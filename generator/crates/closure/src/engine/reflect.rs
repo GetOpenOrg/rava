@@ -49,6 +49,7 @@ impl<'a> Engine<'a> {
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
+            MirrorOp::Holder => self.holder_set(s),
             MirrorOp::Sub(k) => self.sub_mirrors(s, k),
             MirrorOp::ArrayOf(..) => unreachable!("反射数组分配只经 mirror_into"),
         }
@@ -214,6 +215,38 @@ impl<'a> Engine<'a> {
     /// Class 值集中各类镜像所指类的声明类镜像（`getDeclaringClass0`，JVMS §4.7.6：本类 InnerClasses 中以本类为
     /// inner 的条目的 outer；顶层 / 局部 / 匿名类、数组、基本类型与非字节码类镜像为 null，不入结果）；所指未知的
     /// Class（非镜像值、类文件缺失）给所指未知的 Class，open 仍为 open
+    /// 字段句柄值集 s 所指静态字段的基址（类镜像）：枚举标记按口径类及其超类、超接口（`getFields` 含继承的公开字段，
+    /// 接口常量的声明类是接口）各给一个类镜像；口径推不出、非标记的句柄（按名取得等）与 open 给所指未知的类镜像
+    /// （按偏移写入经 `poly_write` 落到按名打开的静态字段，不作任意对象的写入）
+    fn holder_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        if !s.open.is_empty() {
+            out.classes.insert(class);
+        }
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            let Some(c) = self.fh_marks.get(&x).and_then(|sc| sc.1.clone()) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let mut todo = vec![c];
+            let mut seen: HashSet<String> = HashSet::default();
+            while let Some(n) = todo.pop() {
+                if !seen.insert(n.clone()) {
+                    continue;
+                }
+                let k = self.mirror(&n);
+                out.classes.insert(k);
+                if let Some(cf) = self.h.class(&n) {
+                    todo.extend(cf.super_name.iter().cloned());
+                    todo.extend(cf.interfaces.iter().cloned());
+                }
+            }
+        }
+        out
+    }
+
     fn declaring_set(&mut self, s: &TypeSet) -> TypeSet {
         let class = self.id(CLASS);
         let mut out = TypeSet::default();

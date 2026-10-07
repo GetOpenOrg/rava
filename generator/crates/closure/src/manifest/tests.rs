@@ -139,6 +139,13 @@ fn static_offset_getters_parse() {
 }
 
 #[test]
+fn static_bases_parse() {
+    let m = with_vm("[facts.field_writes]\nstatic_bases = [\"a/U.sfb:(La/F;)La/O;\"]\n").unwrap();
+    assert!(m.returns_static_base("a/U.sfb:(La/F;)La/O;"));
+    assert!(!m.returns_static_base("a/U.sfo:(La/F;)J"));
+}
+
+#[test]
 fn serial_enumerators_parse() {
     let m = with_vm("[facts.field_writes]\nserial_enumerators = [\"a/S.f:(Ljava/lang/Class;)J\"]\n").unwrap();
     assert!(m.is_serial_enumerator("a/S.f:(Ljava/lang/Class;)J"));

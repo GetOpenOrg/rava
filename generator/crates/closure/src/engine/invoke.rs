@@ -390,6 +390,14 @@ impl<'a> Engine<'a> {
                         Feed::S(s) => self.mirror_into(op, s, res),
                     }
                 }
+            } else if model == RetModel::StaticBase {
+                // 静态字段基址：结果 = 本调用点字段句柄实参各值所指字段声明类的类镜像（逐调用点；不经返回值汇合的 open 基址）
+                for f in a.first().cloned().flatten().iter().flatten() {
+                    match f {
+                        Feed::N(n) => self.mflow(*n, res, MirrorOp::Holder),
+                        Feed::S(s) => self.mirror_into(MirrorOp::Holder, s, res),
+                    }
+                }
             } else if let RetModel::Read(src) = model {
                 let i = src + usize::from(!is_static);
                 let fs = if subsumed {

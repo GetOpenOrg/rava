@@ -389,6 +389,13 @@ static_offset_getters = [
     "java/lang/invoke/MethodHandleNatives.staticFieldBase:(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandleNatives.staticFieldOffset:(Ljava/lang/invoke/MemberName;)J",
 ]
+# static_bases：返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址——HotSpot 下是声明类的类镜像
+#   （unsafe__impl/access.rs staticFieldBase0 返回 Field.clazz）。分析器按调用点把结果取为句柄值集所指声明类的类镜像
+#   （枚举标记按口径类及其超类 / 超接口；推不出的为所指未知的类镜像），不按声明返回类型 open(Object)——
+#   否则 UnsafeStaticFieldAccessorImpl.base 为 open，Field.set 的全部值经静态访问器的 putReference 逃逸（c1d §30.17）
+static_bases = [
+    "jdk/internal/misc/Unsafe.staticFieldBase0:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
+]
 
 # name_resolvers：按名取字段身份的入口（名字 → 偏移 / setter / VarHandle / 更新器 / 字段句柄）。
 #   class = Class 实参形参序号（"receiver" = 接收者本身），name = 字段名形参序号（均不含接收者），
