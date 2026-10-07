@@ -85,6 +85,26 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
+## 📌 现状（2026-10-08）
+
+> 本节优先于下方 10-04 版依赖树与活跃任务表；两者与本节冲突处以本节为准。
+
+- **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f（origin、github 均已推）。之后的工作都在合批分支上，未合入集成分支。
+- **batch-1007**（98e733c9）：boot-image-s3、fix-jca-subset（已于 b6ed3950 合入集成分支）、user-unreach-stubs 早期版本。抽查 36 通过，失败 2 例：TestBootLayer（需引导映像第 5 步）、TestClassResourceStream（需 c1d-url-b2）。被 batch-1008 取代，未单独合入。
+- **batch-1008**（6934dc93 → 修复 b558e0c2，修复进行中）：以下分支均为「已合入 batch-1008，待合批验证」——
+  - user-unreach-stubs（108558e0）：链外方法存根；use 行扫描按调用链门控；
+  - c1d-url-b2（3391eb2d）：c1d §30.17 四个成因；
+  - boot-image-s4（c614f840）：引导映像第 4 步，`#[jvm_boundary]` 23 → 14，去除无映像回退，getClass 接口界收窄 `Recv::Bounded`；S2 接收者精度已修但闭包不降；
+  - enum-values-direct（59451c29）：直连反射调用，`fold_direct_calls` = 1，类数 3011 未降（另 4 个调用点使 `Method.invoke` 入链）；
+  - closure-composition（c3a06331）：闭包构成报告与脚本。
+  - 首次验证（6934dc93）：抽查 41/41 因映像求值失败；单测 closure `--lib` 11 失败、driver 层 32 失败。修复 b558e0c2 后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G），定位中。合批语义取舍见 c1d §30.18。
+- **进行中**：closure-gates（门自动排名 `rava closure --gates`）；boot-image-s5（引导映像第 5 步 jimage + JceSecurity 6，`#[jvm_boundary]` 14 → 0）；docs-align（文档对齐）。
+- **待用户决策**：U12（U1 例外，①③ 挂起）、U13（S2 `Class.genericInfo` 入映像），见引导映像计划 §8.4。去除无映像回退已先行实施、可撤回。
+- **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
+- **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents。
+- **C4 全量**：尚未开始。前置：合批合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。
+- **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
+
 ## 🌳 任务依赖树（2026-10-04，集成分支 rust-closure-analyzer 21fc601b，已推送；main 已快进到 21fc601b）
 
 > 图例：✅ 已完成　🔄 进行中　⏳ 已立项待启　⏸ 按用户决定暂停　◇ 待用户决策
@@ -113,7 +133,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ✅ FS-C2 应用类加载器（fs-c2 9c737f03，合入 4a98f5e3；vm_boundary_methods 30→27）
 │   ├─ ✅ scripts-into-rava S1–S5：Python 脚本并入 rava、名字作用域统一、m3 编译错误 0（bb0b7736）
 │   ├─ ✅ run-tests-prune：逐例清理产物、rava prune（ad9e938d）
-│   └─ ✅ 测试分发：全部 e2e 与重命令作业走集群服务器（scripts/cluster/distribute_tests.py；2026-10-07 起全量 / 抽查 dev、作业 ubuntu）
+│   └─ ✅ 测试分发：全部 e2e 与重命令作业走集群服务器（scripts/cluster/distribute_tests.py；2026-10-07 起全量 / 抽查 dev、作业 ubuntu；dev 关机期间用云服务器）
 │
 ├─ 【当前】阶段 C 收官：闭包分析器（rust-closure-analyzer）── 用户 2026-10-01 决定先做完本阶段
 │   │
@@ -278,7 +298,7 @@ regress2 遗留（◀── a2）───────────────�
 | C 闭包精度与规模 | 共享汇点（c1d-sink） | 已收口（§28.10），≤569 由引导映像达成 |
 | D 分析性能 | D1 处理顺序无关（分支 closure-order-free，定性为正确性） | 继续 |
 | D 分析性能 | D2 枢纽翻新 / 延迟站点重跑等结构改造、D3 在线节点合并 | 暂停（V12 后提速线暂停） |
-| E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 继续 |
+| E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
 | E 编译资源 | E2 D8 声明层分段 | 缓（视 B4 结果） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
 | F 纯优化 | 二进制 ≤3 MB、S7-3～5、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
@@ -305,7 +325,7 @@ regress2 遗留（◀── a2）───────────────�
 | C1d-a-甲 | ⏳ | jar/URL 来源甲 class-path（计划 §22.2） |
 | C1d-a-a5-4 | ⏳ | 闭包膨胀收窄，终态 DeepCopy ≤2803（10-06 用户定，mhd 实测修订；原 ≤1640 作废），pkcs11 / smartcardio / defineClass0 所在类不入闭包（计划 §21.5）；s1 / s2 ✅；a5-4b 归因完成（计划 §29：boot `ucp` 已折叠，回收 0；JarVerifier / pkcs11 要靠 URL 按对象 + 串前缀推理、JCA 提供者序求值、引导映像三项能力，反事实上界 3374 → 2766）；余 a5-4e / a5-4f |
 | C1d-a-a5 | ⏳ | OOB 关系型边界推理 a5-1 → a5-2 → a5-3，HelloWorld 目标 ≤371 |
-| C1d-a-a3 | 🔄 U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
+| C1d-a-a3 | 🔄 现状（2026-10-08）：c1d-a3 已合入集成分支 b98a40f2；全仓 `#[jvm_boundary]` 经引导映像第 4 步降到 14（待合批验证，batch-1008），余 ClassLoader 6 / BootLoader 2 / JceSecurity 6 归第 5 步（进行中，boot-image-s5）。以下为 10-04 记录：U0–U3 / L1（4 项）/ X1 / X2（CDS、FileSystems）✅ 分支 c1d-a3 e336f8ef | `#[jvm_boundary]` 归零。HelloWorld 审计 77→29，全仓属性 123→33，各项闭包类数持平或下降（L1 +10 类为本地库装载路径本身）。余项阻塞：C ◀ 反射调用精度；L2、L1 余 2、SecurityManager ◀ boot layer 第 2–3 步；V 待定字段钩子或急切引导；JceSecurity ◀ java.home NIO 虚拟层。见计划 §21.9 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | a3-T 虚拟线程终态（a3t-vthread） | ⏸ 未派（2026-10-04 优化线优先期间暂停）· T1–T5 ✅ a78cccef | VirtualThread 字节码翻译 + Continuation 有栈协程；交接见计划 §21.8.5 |
 | a3-T-T6 | ⏳ | 规模指标：10 万虚拟线程 ≤10 s / ≤2 GiB（现 14.6 s / 2.66 GB，草稿未提交） |
@@ -337,10 +357,10 @@ regress2 遗留（◀── a2）───────────────�
 | BS-B1 | ✅ 2682139c | HelloWorld release 元数据 3,506,260→255,720 B（B0 的 7.3%），二进制 15.1→11.8 MB；抽查 18/18（含注解数组 / 嵌套注解 / CallerSensitive 回归修复：L1 用户类与注解类型保留类级注解，注解解析可达时闭包内注解类型带方法表）。 |
 | BS-B2 | ✅ 8f5ad0c5（合并 6f9b189b） | 栈还原按地址查表（rava-link 链接期 pcmap），release 加 strip=symbols；release 验证 b2-8f5ad0c5-rel1 5/5，HelloWorld release 7,410,488 B（ubuntu）。 |
 | BS-B3 | ✅ 38c17d97（合并 5bc31469） | 可选体积档 `--release-small`（opt s，不设 z）。对照（ubuntu b3-bench2-b064f315）：s 档二进制 −19~24%、构建 −25~32%，计算用例运行 +13%（ARM +22~40%），按 5%/15% 规则维持 opt 3 缺省。16 GB 机器上 opt 3 构建大闭包用例 OOM（峰值 14.5–15.7 GB；b3-mem16-b064f315 4/8 OOM），s 档 8/8 可构建，交用户决定缺省档（binary-size §五）。 |
-| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值（✅ c1d-clsfact 69d1c73d，c1d §26：classLoader 逐镜像、`Class.module` 锚点按接收者；锚点口径 HelloWorld 仍为 3190，膨胀是 `boot2` 内共享汇点饱和，`arraycopy` / `append(Object)` / Unsafe 引用写）、容器元素类型、实例汇合点（c1d §25.4 / §26.3，判据 HelloWorld ≤569 类，差 2621）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
+| boot layer | 🔄 第 0 / 1 步 ✅ 27dfb419 / 6666c19b；第 2–5 步改由引导映像求值器承担（2026-10-08：求值器第 1–2 步已完成 c5812d89，第 3–4 步待合批验证 batch-1008，第 5 步进行中 boot-image-s5） | ModuleBootstrap 引导期建层。第 2–5 步依赖：`Class` 实例方法按接收者镜像求值（✅ c1d-clsfact 69d1c73d，c1d §26：classLoader 逐镜像、`Class.module` 锚点按接收者；锚点口径 HelloWorld 仍为 3190，膨胀是 `boot2` 内共享汇点饱和，`arraycopy` / `append(Object)` / Unsafe 引用写）、容器元素类型、实例汇合点（c1d §25.4 / §26.3，判据 HelloWorld ≤569 类，差 2621）；验收 TestModuleLayerDefine 原样通过，TestProtectionDomainFaces / TestClassModuleFace / TestSetAccessibleBoundary 随第 2–3 步解决 |
 | regress2 遗留 | ⏳ ◀── C1d-a a2 | Object.wait 帧行号、过渡 <init> 帧 |
-| C4 收官 · 全量 e2e | ⏳ | JDK 21 ⊇ 1029 例基线；以上全部合入后 |
-| 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py`（`--spot` / `--job`）在集群服务器执行（2026-10-07 起全量 / 抽查 dev、作业 ubuntu）；本机只做编译 / 构建 / 单测 |
+| C4 收官 · 全量 e2e | ⏳ 尚未开始 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口 |
+| 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py`（`--spot` / `--job`）在集群服务器执行（2026-10-07 起全量 / 抽查 dev、作业 ubuntu；dev 关机期间改用云服务器）；单测与闭包分析也走分布式，本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---
 
