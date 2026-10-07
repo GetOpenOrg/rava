@@ -802,6 +802,116 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - 本分支补 Signal native 之后，(L) 链经 ① 的 `BootLoader.findResources` 使 jrt `Handler` 可达，闭包为 3045 类，两条断言都不满足。
    - 断言本身正确，不改；机制 1–3 落地后（628 < 1000，且 ① 去掉了 jrt `Handler`）预期通过，进合批复验。
 
+### 5.6 第 4 步（续）：静态字段非空折叠、VM / Class / SecurityManager 归零（2026-10-08，分支 `boot-image-s4`，基于 batch-1007 98e733c9）
+
+本节提交只在本机做过 `cargo check --release --tests`（生成器 + `rava_macros_core`；`java_runtime` 不在该 workspace，未经编译），单测、闭包与 e2e 一律未跑，见下「待验证清单」。
+
+**提交**
+
+| 提交 | 内容 |
+|---|---|
+| b75e0b03 | §5.5.6 机制 ②：静态字段非空折叠（`engine/static_init.rs`） |
+| e40e805c | `Class.enumConstantDirectory` 回到字节码，删除运行时常量目录 |
+| cabe9fb0 | VM 移出 `[vm_boundary]`（8 个 `#[jvm_boundary]` 归零）、档位写回 `VM.initLevel`、JSR 292 核心类构建期初始化、SecurityManager 移出边界 |
+
+**`#[jvm_boundary]` 计数（`git grep -c`，`runtime/java_runtime/src`）**
+
+| 文件 | 98e733c9 | cabe9fb0 |
+|---|---|---|
+| `jdk/internal/misc/vm_impl.rs` | 8 | **0** |
+| `java/lang/class_impl/members.rs`（`getModule` 已在 e50d4ba3 删除） | 1 | **0** |
+| `java/lang/class_loader_impl.rs` | 6 | 6 |
+| `javax/crypto/jce_security_impl.rs` | 6 | 6 |
+| `jdk/internal/loader/boot_loader_impl.rs` | 2 | 2 |
+| **全仓** | 23 | **14**（达第 4 步验收数；余项归第 5 步 L2 6、BootLoader 2，第 6 步 JceSecurity 6） |
+
+`[vm_boundary] classes` 余 ClassLoader、Class、JceSecurity、BootLoader；`clinit_carried` 余 JceSecurity、Class。
+
+#### 5.6.1 机制 ②：静态字段非空折叠（b75e0b03）
+
+- 静态字段的常量格 = 初值 ⊔ 档案内全部可达 `putstatic` 写入值。初值：映像 `build_time` 中的类取映像值（映像只导出非缺省值，缺席即缺省值；污点 / 占位为 Top），其余类取缺省值。
+- 静态写入值按「非空」入格：确定非空、无标签的引用记为非空引用（不同对象 / 不同字符串合流仍为非空引用，与 null 合流为可空）。映像值非空且全部可达写入非空时，`getstatic` 后的 `ifnull` / `ifnonnull` 按非空折叠。
+- 写入来源超出字节码的字段（反射 / Unsafe / VarHandle / 手写写入）由 `field_open` 先行排除；规则只看字段与映像，无类名。实例字段不取非空引用（`allocateInstance` / 反序列化的对象不经构造器）。
+- 附带修正：构建期初始化类的基本类型静态字段原先以缺省 0 为初值（`<clinit>` 不再展开，写入集里没有初值写入），现取映像值。
+- **HelloWorld 单独效果（预计）：≈ 0 类**。§5.5.6 的 ② 切口针对 `System$LoggerFinder.accessProvider` / `LoggerFinderLoader.service()` 的「静态字段为空」分支，而这些字段在不做 ①（构建期确定提供者）时映像值就是 null，② 不折叠；表中 ①+② = 2998 与 ① = 2999 只差 1 类，也说明 ② 的收益要等 ① 落地。① 与 ③ 待用户（本步未做）。
+
+#### 5.6.2 VM：8 个 `#[jvm_boundary]` 回到字节码（cabe9fb0）
+
+三问逐方法判定（JDK 21 字节码，javap 核对）：
+
+| 方法 | 字节码 | 判定 |
+|---|---|---|
+| `initLevel()` / `isBooted()` / `isModuleSystemInited()` | 读静态 `initLevel`，`>= 4` / `>= 2` | 运行模型成立：映像值 4（initPhase3 写入）；按字节码 |
+| `shutdown()` / `isShutdown()` | `initLevel(5)` / `initLevel == 5` | 按字节码；删进程级 `SHUTDOWN` 标记 |
+| `getSavedProperty(key)` | `savedProps.get(key)`，`savedProps` 为空抛 ISE | 构建期可求值：`savedProps` 是 initPhase1 保存的属性表，在映像中；按字节码 |
+| `isSystemDomainLoader(loader)` | `loader == null \|\| loader == getPlatformClassLoader()` | 按字节码（原手写恒 true 与 JDK 不等价：app 加载器为 false） |
+| `latestUserDefinedLoader()` | 调 native `latestUserDefinedLoader0`，null 时回落平台加载器 | 字节码；native 按 HotSpot `JVM_LatestUserDefinedLoader` 手写：自栈顶逐帧取首个「非引导、非平台」定义加载器，跳过 `MethodAccessorImpl` / `ConstructorAccessorImpl` 子类帧（帧源 `vm_stack`） |
+| `setJavaLangInvokeInited()` / `isJavaLangInvokeInited()`（原无属性的手写） | 置位 / 读静态 `javaLangInvokeInited` | 按字节码；HotSpot `initialize_jsr292_core_classes` 在 initPhase1 之后初始化 `MethodHandle` / `ResolvedMethodName` / `MemberName` / `MethodHandleNatives`，后者 `<clinit>` 置位。清单 `[concrete.boot] calls` 新增 `{ init = [类...] }` 项（`BootCall::Init`，阶段之间由 VM 初始化的类），在 initPhase1 与 initPhase2 之间按 HotSpot 次序初始化这 4 类，映像中 `javaLangInvokeInited = true` |
+
+`vm_impl.rs` 只剩 3 个 `#[jvm_native]`：`initialize`、`latestUserDefinedLoader0`、`getNanoTimeAdjustment`。
+
+档位的单一字段化：
+- 原做法：线程局部 `ExecState.boot_level` + `__vm_at_init_level` + `image_rt::set_level`，`initLevel()` 手写读它。
+- 现做法：`IStep::Level { decl, name, level }` 携带档位字段（`[concrete.boot] level`），启动序列重放残差步骤前把构建期档位直接写入 `VM.initLevel`（`g.store(ILoc::Static ..)`，与映像静态字段写入同一路径）；导出时序列末尾追加一条恢复映像值的档位步骤（末步已是该值则不加）。JSON：`{"level": l, "at": [类, 字段]}`。删除 `boot_level` / `set_level` / `__vm_at_init_level`。
+- 无映像（求值失败）时 `System.registerNatives` 直接调 `VM.saveProperties`，此时档位即 VM 初值 0，与字节码的 `initLevel() != 0` 检查一致。
+
+清单：
+- `[facts.returns]`：保留 `isBooted` / `isModuleSystemInited` = true（映像值 4，唯一写入方 `initLevel(int)` 只增），注释改为字节码口径；删 `isJavaLangInvokeInited`（由映像值 + ② 的基本类型初值给出常量）。
+- `[vm_constants] null_returns`：删 `getSavedProperty`（准入「手写无条件给出」不再成立），表为空。
+- 求值器（`concrete/vm.rs`）：引导求值中**有字节码的方法不取返回值事实**。原先 initPhase1–3 期间 `isBooted` / `isModuleSystemInited` 也按事实读成 true，与 JVM 引导期次序不一致（如 `ReflectionFactory.config()` 在模块系统就绪前应返回 `DEFAULT_CONFIG` 且不缓存）；现按字节码读档位。native（`desiredAssertionStatus0`）不受影响。
+- `closure.toml`：删 `[vm_boundary]` 的 `jdk/internal/misc/VM`。
+
+#### 5.6.3 Class：`enumConstantDirectory` 回到字节码（e40e805c）
+
+- 原手写读运行时常量目录（`java_class!` 宏在类初始化后为「自身类型 static 字段」登记取值闭包）。JDK 体是 `getEnumConstantsShared()` → 反射调 `values()` → 建 HashMap 缓存于字段，语义可由字节码表达，判定为翻译。
+- 删除：`members.rs` 手写体；`lib.rs` 的 `CONSTANT_DIRECTORY` / `register_constant_directory` / `lookup_constant` / `constant_directory_entries` / `constant_directory_universe`；宏 `class_init.rs` 的 `constant_directory_registration` 及 `__class_init` / `__boot_initialized` 中的登记。
+- 影响：`Enum.valueOf` 的 `values()` 走反射调用，闭包精度依赖集成线上的「枚举 values 直接调用收窄」。
+
+#### 5.6.4 SecurityManager 移出边界（cabe9fb0；T1 / T2 / T5 / T6 余项）
+
+- T1 / T2 / T5 / T6 已在 e50d4ba3 / fcc54fb8 完成（§5.5.6），余项只有 T2 一栏的 SecurityManager：`<clinit>` 为 `getRootGroup`、锁、CHM 与 `ModuleLayer.boot()` → `addNonExportedPackages`，引导层已在映像中，按字节码可执行。
+- `SecurityManager` 移出 `[vm_boundary]` 与 `clinit_carried`；手写只剩 ACC_NATIVE `getClassContext`（准入 ③ 栈遍历）。
+- `Class` 留在 `clinit_carried`：`<clinit>` 只有 `registerNatives` 与两个空数组，构建期已在 VM 预初始化中执行；`Class` 移出 `[vm_boundary]`（struct 归生成器）时一并移出，属第 5 / 6 步。
+
+#### 5.6.5 S2（泛型签名精度）
+
+未实施。`Class.getGenericInterfaces` 已是 `[concrete] entries` 的实例方法入口（接收者值集全为所指已知的类镜像时逐镜像具体求值），S2 的切口 `ConcurrentHashMap.comparableClassFor@21` 仍拉入 `sun/reflect/generics`，说明该调用点回退了抽象调用边；回退原因（接收者含 open 类型 / 非镜像类、超过 64 组、或某镜像求值失败）须读 `--flows @concrete` 的诊断才能定，本步唯一的服务器作业（bimg4-s2-cabe9fb0）因输出截断（`tail -150` 只留下 summary JSON）没有取到该行。下一步作业命令：
+
+```
+build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -o /tmp/hw.json --flows @concrete > /tmp/flows.txt 2>&1; grep -n "comparableClassFor" /tmp/flows.txt
+```
+
+按诊断分两种终态做法：回退原因是「接收者含 open / 非镜像」时，把 `getGenericSignature0` 在抽象解释中按接收者镜像集折叠（集合内各类均无类签名属性 → null，`getGenericInfo` 取 `ClassRepository.NONE`，`ClassRepository.make` 一段不可达；open 类型须先由键类型集收窄）；回退原因是某镜像求值失败时，补求值器语义。`HashMap.comparableClassFor` 同形，一并处理。
+
+
+#### 5.6.6 待验证清单（合批测试；本节提交只做过 cargo check）
+
+1. 单测（`cd generator && cargo test --release`）：
+   - `engine::static_init::tests::{image_nonnull_and_nonnull_writes_stay_nonnull, nullable_write_breaks_nonnull, default_initial_outside_image, primitive_image_value_is_initial, distinct_nonnull_values_join_nonnull, instance_writes_keep_plain_lattice}`；
+   - `absint::tests::nonnull_static_field_folds_null_test`；
+   - `manifest::concrete::tests::boot_calls_phase_and_init`；
+   - `image::tests::json_roundtrip`（`IStep::Level` 新形态）；
+   - 全量单测中 `param_string_constants_fold_switch` / `closure_independent_of_order` 沿用 §5.5.6 待验证清单第 1、6 条。
+2. `java_runtime` 编译（任一 e2e 即覆盖）：`vm_impl.rs` 的 `latestUserDefinedLoader0`（`ClassLoaders::platformClassLoader` / `Class::__vm_defining_loader` / `vm_stack::capture_java_frames`）、`system_impl.rs`、宏去掉常量目录登记后的全部生成类。
+3. 引导映像（**已实测**，bimg4-s2-cabe9fb0，us1 Linux JDK 21，HelloWorld `rava closure`：status ok，initPhase1 55,243 步 → JSR 292 4 类初始化「完成」74,696 步 → initPhase2 返回 I(0) → initPhase3 完成，共 1,616,260 步、321 ms；已初始化 256 类、映像对象 8,385；运行期初始化只有 `jdk/internal/util/StaticProperty`（Linux 1，不增）；WAR 交集 0、映像污点 0）。仍待核对：HelloWorld `rava audit boot`（或 build 报告）中 initPhase1 之后出现「VM 初始化 java/lang/invoke/MethodHandle / ResolvedMethodName / MemberName / MethodHandleNatives　完成」一行，未登记失败 = 0，运行期初始化类数不增（Linux 1 / macOS 2）；映像中 `VM.javaLangInvokeInited = true`、`VM.initLevel = 4`；启动序列中档位步骤为 `VM.initLevel` 静态写入，末尾恢复为 4。引导期不取返回值事实后，initPhase2 / 3 结果与 §5.4 一致（返回 0、`scl = AppClassLoader`）。
+4. 抽查（输出与 JDK 相同）：
+   - 第 4 步回归集：HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy；
+   - 枚举 `valueOf`（常量目录删除）：TestEnumBasic、TestEnumAdvanced、SwitchExpressions；
+   - `getSavedProperty`：TestIntegerCacheSpec；
+   - 停机（`shutdown` / `isShutdown` 改写 `initLevel`）：TestShutdownHooks、TestSystemExitEnv；
+   - `javaLangInvokeInited` / JSR 292 构建期初始化：TestMethodHandleDirect，及任一反射调用用例（`MethodHandleAccessorFactory.useNativeAccessor` 依赖该标记）；
+   - `VM.directMemory` / `savedProps`：TestDirectBuffer；
+   - `latestUserDefinedLoader`：任一 `ObjectInputStream.readObject` 用例（如 DeepCopy、TestSerialUserGenericCallbacks）。
+5. 闭包数字（Linux JDK 21 HelloWorld，`rava closure` summary.classes）：基线 3045（(L) 链在）/ 598（切 `logRuntimeExit`）。**实测 cabe9fb0：3043 类 / 18,093 方法**（bimg4-s2-cabe9fb0；基线 3045 / 18,108 测于 86f4f9be，其后并入的 JCA 键判定收窄等也在本数内，差值不单归本节）。待测：切 `logRuntimeExit` 的对照数（预期 ≈ 598）。本节预期：② 单独 ≈ 0；VM 回到字节码后 `isSystemDomainLoader` / `latestUserDefinedLoader` / `getSavedProperty` 的字节码入链（小幅增加，预计 < 10 类）；`enumConstantDirectory` 经反射 `values()` 的增量取决于集成线收窄；S2 见 §5.6.5。
+
+#### 5.6.7 遗留与待决
+
+1. ① 构建期确定 `LoggerFinder` 提供者、③ 日志级别取映像值：待用户，本步未做；② 的 HelloWorld 收益依赖 ①。
+2. 无映像（求值失败）时运行期 `initLevel` 停在 0，`isBooted()` 为 false：终态应把引导映像设为必需（求值失败即构建失败），现状保留无映像的回退路径。是否取消回退待定。
+3. `getSavedProperty` 改为真实语义（读映像 `savedProps`），`[vm_constants]` 剪枝失效；`Integer$IntegerCache` 等调用点的闭包变化待测（见清单第 5 条）。
+4. `concrete/vm.rs` 已 740 行（> 600），后续触及时按职责拆分（方法信息 / 堆 / 帧）。
+5. `Class` 仍在 `[vm_boundary]` 与 `clinit_carried`（native 与 struct 归属），随第 5 / 6 步处理。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -809,7 +919,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
-| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；VM、Class 2、SecurityManager 未做 |
+| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；**VM / Class / SecurityManager（cabe9fb0，§5.6）**：vm_impl 8、class_impl 归零，全仓 23 → 14，SecurityManager 移出边界；待合批验证 |
 | 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
 | 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
