@@ -264,8 +264,46 @@ TestJndiNoProvider 在云服务器单槽 11.9G cgroup 上 OOM，无法在云上�
 `org/jcp/xml` 16 → 4，与 TestJcaOpen 同形态；`Sasl.getFactories@102` 闸门键 {SaslClientFactory}，暂扣其余 ProviderService）；
 TestJcaRmi 3053 不变。JCA 抽查 `jcasub-669169e9`（kr1 / sg1）9/9 通过：TestMessageDigestApi、TestJcaIndirectDigest、TestMacHmacDigest、TestRsaSignVerify、TestEcSignVerify、Digester、SecurityDemo、DeepCopy、HelloWorld。
 
-**已知残留**：`names_of` 在名字求值推不全时给出已知部分（不记任意），查找调用点闸门 `keyed_res` 沿用此口径：
+**已知残留**（已于 §7.5 解决）：`names_of` 在名字求值推不全时给出已知部分（不记任意），查找调用点闸门 `keyed_res` 沿用此口径：
 `Provider$Service.newInstance@19`（键取开放字段 `this.type`）与 `ServiceList.tryGet@282`（键取 `ServiceId.type`）键集为 {}，
 暂扣全部。前者结果只与 this 比较、不影响派发；后者理论上不健全（运行期返回的服务类型若只经该点流出会漏），改为任意会把全部
 Service 子类放进 `GetInstance` 的 `newInstance` 派发、抵消本节收益，须先给 `ServiceId.type` 的名字建模（`getInstance`
 系列的 `List<ServiceId>` 实参）再改口径。新加的键判定已按「推不全即任意」处理。
+
+### 7.5 查找调用点「推不全即任意」与 `ServiceId.type` 的名字来源（e1f8f77d、5c8d013e）
+
+**改动**：
+- `keyed_res`（按键查找调用点闸门）的站点键集改用 `names_complete`：名字求值推不全（`lookup_partial` / `lookup_incomplete`，
+  含所读字段不折叠）即任意，与 §7.4 键判定同口径（e1f8f77d）。§7.4「已知残留」的不健全口径由此消除。
+- `ServiceId.type` 的名字来源已由既有槽模型覆盖：`ServiceId.<init>` 形参 → 字段槽，调用点 `Cipher.getServiceIds`
+  的 `new ServiceId("Cipher", …)` 字面量与 `ProviderList.getServices(String, List)` 的形参透传（java.base 内无调用点）。
+  实测 Cipher 用例 `tryGet@282` 键集为 {Cipher}（完整），不构造 ServiceId 的用例为 {}（完整，无 ServiceId 即无服务从该点流出）。
+- 诊断（`--flows @keyed`）列出站点键实参所读字段的不折叠成因；`--flows @fopen:<名>` 列出同名字段放开的首个引入站点（ce92ce44）。
+- **反射写入形状规则收窄**（5c8d013e，`engine/reflect_writes.rs`）：改口径后 DeepCopy 回涨（3308 → 4232、`com/sun/org` 0 → 656），
+  成因是 `type` 被按名放开（`ServiceId.type` / `Provider$Service.type` / `ServiceList.type` 全部不折叠 → 键集任意）。引入点
+  `ObjectInputStream$FieldValues.get(String, Object)@4` 调 `getFieldOffset(name, Object.class)`：名字取各 `readObject` 调用点的
+  `GetField.get("type", …)` 常量，形状规则把 Class 字面量实参（此处是字段类型）当所属类，查不到即按名兜底放开全部同名字段。
+  新口径：Class 字面量上查不到该名、且调用的唯一目标按字节码建模（非 native / 手写承载 / 抽象）时不兜底——被调体内真正按名
+  取字段的点由其自身站点规则处理（形参名字取各调用点常量、字段配对）；兜底只保留给看不到体的目标。
+
+**诊断实测**（kr1 / sg1，JDK 21，`rava closure`；基线 669169e9）：
+
+| 用例 | 基线类数 | 5c8d013e 类数 | `com/sun/org` | `tryGet@282` 键 |
+|---|---|---|---|---|
+| TestJcaSasl（合成，见 §7.4） | 3072 | 3072 | 0 | {} |
+| TestRsaSignVerify | 3042 | 3042 | 0 | {} |
+| TestEcSignVerify | 3030 | 3030 | 0 | {} |
+| DeepCopy | 3308 | 3308 | 0 | {} |
+| SecurityDemo | 3021 | 3021 | 0 | {} |
+| TestAesGcmRound | 3090 | 3090 | 0 | {Cipher} |
+| TestCipherDesModes | 3077 | 3077 | 0 | {Cipher} |
+
+方法数同样不变（如 TestJcaSasl 18194、DeepCopy 21031）。`Provider$Service.newInstance@19` 键转为任意，结果只与 this 比较，
+类数不变。
+
+**待合批验证清单**（10-07 起改合批测试，本分支未自发单测 / 抽查）：
+- 单测：`(cd generator && cargo test --release -p closure)`（闭包 crate 全部；上次 669169e9 为 183 通过），及生成器全量单测。
+- 抽查（JCA 9 例）：TestMessageDigestApi、TestJcaIndirectDigest、TestMacHmacDigest、TestRsaSignVerify、TestEcSignVerify、
+  Digester、SecurityDemo、DeepCopy、HelloWorld；建议加 TestAesGcmRound、TestCipherDesModes（`ServiceId` 路径）。
+- 期望闭包数字：上表各例类数与基线一致；TestJcaSasl ≤ 3072、各例 `com/sun/org` = 0。
+- 形状规则收窄影响全部用例的字段折叠面（只减少按名放开），需关注依赖反序列化 / 反射写入的用例运行结果（DeepCopy 类）。
