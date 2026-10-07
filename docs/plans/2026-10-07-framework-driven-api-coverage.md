@@ -45,3 +45,7 @@
 ## 四、现状
 
 - 10-07：口径拍板，文档立项。步骤 1 等子代理名额（当前 5 / 5 满），有空位即派。
+- 10-07 用户追加：「现在有一些失败的 Java 测试所用的 API，可能在这些第三方依赖包里不会用到，可以先延后或暂缓解决」。已知失败清单首批人工判定（`docs/known_failures.toml` 的 deferred 字段）：
+  - 暂缓 9 例：TestModuleLayerDefine、TestLocaleDateCjk、TestVirtualThreadScale、TestStringGetCharsLegacy（面外）；TestCharsetAvailable、TestHttpLoopbackSync / Async、TestXmlTransform（S1）；TestRowSetProvider（S2）。
+  - 保留：TestClassModuleFace（Spring 6 PathMatchingResourcePatternResolver 扫描 ModuleLayer.boot()）、TestProtectionDomainFaces（Boot ApplicationHome 取 CodeSource）、TestSetAccessibleBoundary（ReflectionUtils.makeAccessible）、TestXmlSaxEvents（logback 配置走 SAX）、JUnit 10 例（框架 pilot 本身）。TestLocaleCurrency 属 expected 基线缺陷，另案。
+  - S0 API 面算出后按数据复核这份判定。
