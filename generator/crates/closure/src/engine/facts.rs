@@ -548,6 +548,19 @@ impl Oracle for Facts<'_, '_> {
     fn mirror_subtype_test(&self, m: &MemberRef) -> bool {
         self.ctx.man.is_mirror_subtype_test(&m.to_string())
     }
+    fn key_getter(&self, m: &MemberRef) -> Option<(String, bool)> {
+        if self.ctx.man.keyed_lookups.is_empty() {
+            return None;
+        }
+        self.ctx.man.keyed_lookups.key_getter(&m.to_string())
+    }
+    fn string_equality(&self, m: &MemberRef) -> Option<bool> {
+        let k = m.to_string();
+        if self.ctx.man.is_value_equals(&k) {
+            return Some(false);
+        }
+        matches!(self.ctx.man.string_op(&k), Some(crate::manifest::StrOp::EqualsIgnoreCase)).then_some(true)
+    }
     fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
         self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
     }

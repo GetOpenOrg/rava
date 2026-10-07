@@ -11,9 +11,10 @@
 //! - `Empty`：空的不可修改集合（清单 `[facts.empty_collections]` 的工厂结果）：按 JDK 规范不含元素、
 //!   不可改写，其上的查询（`isEmpty` / `size` / `get` …）按清单给出的值折叠
 //!
-//! - `MirrorSub(o)`：类镜像子类型判定（`K.class.isAssignableFrom(x)`，见 `narrow.rs`）成立一侧的 x：值本身与来源
-//!   不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）处的收窄节点——输入值集中所指类
-//!   ⊂ K 的类镜像。偏移只在本方法内有意义：不算对象身份（[`V::obj`] 不给出），不进常量格、不跨方法传递
+//! - `Narrowed(o)`：条件分支判定成立一侧的收窄值（见 `narrow.rs`）——类镜像子类型判定（`K.class.isAssignableFrom(x)`）
+//!   成立一侧的 x（输入值集中所指类 ⊂ K 的类镜像），或键判定（`x.<键读取>().equals(name)`）成立一侧的 x（输入值集中
+//!   键可能等于 name 的对象）。值本身与来源不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）
+//!   处的收窄节点。偏移只在本方法内有意义：不算对象身份（[`V::obj`] 不给出），不进常量格、不跨方法传递
 //!
 //! 标签只随值传播：两个值合流时标签相同才保留（null 与对象合流保留对象标签，可空性另记）；
 //! 属性表（或可能的属性表）与其它值合流得 `MaybeSysProps`。
@@ -32,8 +33,8 @@ pub enum Obj {
     SysProps,
     MaybeSysProps,
     Empty,
-    /// 类镜像子类型判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
-    MirrorSub(u32),
+    /// 条件分支判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
+    Narrowed(u32),
 }
 
 impl Obj {
@@ -52,19 +53,19 @@ impl Obj {
 }
 
 impl V {
-    /// 值的对象标签（`Uninit` 与类镜像收窄标记不算身份）
+    /// 值的对象标签（`Uninit` 与收窄标记不算身份）
     pub fn obj(&self) -> Option<&Rc<Obj>> {
         match self {
-            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::MirrorSub(_)) => Some(o),
+            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::Narrowed(_)) => Some(o),
             _ => None,
         }
     }
 
-    /// 类镜像子类型判定成立一侧的收窄值：其类型流取本方法该偏移处的收窄节点
-    pub fn mirror_narrowed(&self) -> Option<u32> {
+    /// 条件分支判定成立一侧的收窄值：其类型流取本方法该偏移处的收窄节点
+    pub fn narrowed(&self) -> Option<u32> {
         match self {
             V::Ref { obj: Some(o), .. } => match **o {
-                Obj::MirrorSub(at) => Some(at),
+                Obj::Narrowed(at) => Some(at),
                 _ => None,
             },
             _ => None,

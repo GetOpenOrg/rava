@@ -9,6 +9,9 @@
 //!   open(o ⊂ 键类) 展开为已实例化的 o 的子类型逐个判定（G 增长时补判）。站点键集任意时 open 原样放行。
 //!
 //! 单调：两类键集只并不减，暂扣的值在键集增长 / 变为任意时放行；放行结果与处理顺序无关。
+//!
+//! 键判定收窄（[`Engine::keyed_test`]）复用同一套闸门：对象集合上的按键筛选 `x.<键读取>().equals(name)` 成立一侧，
+//! 站点键集为 name 的全部名字（推不全即任意），闸门节点的输入为 x 的值、放行到条件跳转偏移处的收窄节点。
 
 use super::class_lookup::Gap;
 use super::name_eval::Frame;
@@ -141,15 +144,7 @@ impl<'a> Engine<'a> {
         let (ki, fold) = (spec.key, spec.fold_case);
         let Some(Some(FieldType::Object(c))) = parse_method(&resolved.desc).map(|md| md.ret) else { return Node::S(m, off) };
         let kc = self.id(&c);
-        let g = match self.keyed.at.get(&(m, off)) {
-            Some(&g) => g,
-            None => {
-                let g = self.keyed.gates.len() as u32;
-                self.keyed.gates.push(KGate { m, off, kc, fold, keys: Keys::default(), held: BTreeMap::new(), opens: BTreeSet::new() });
-                self.keyed.at.insert((m, off), g);
-                g
-            }
-        };
+        let g = self.kgate_at(m, off, kc, fold);
         // 协议键站点：键是本方法某个 URL 串形参解析出的协议名（见 `keyed_scheme.rs`），不取键实参的写入名字
         let site = self.mref_key(&self.methods[m].key.clone());
         let keys = match spec.scheme_sites.get(&*site) {
@@ -160,6 +155,45 @@ impl<'a> Engine<'a> {
             self.kgate_recheck(g, None);
         }
         Node::K(g)
+    }
+
+    /// 方法 m 偏移 off 处的闸门（键类 kc），首次取时新建
+    fn kgate_at(&mut self, m: usize, off: u32, kc: u32, fold: bool) -> u32 {
+        if let Some(&g) = self.keyed.at.get(&(m, off)) {
+            return g;
+        }
+        let g = self.keyed.gates.len() as u32;
+        self.keyed.gates.push(KGate { m, off, kc, fold, keys: Keys::default(), held: BTreeMap::new(), opens: BTreeSet::new() });
+        self.keyed.at.insert((m, off), g);
+        g
+    }
+
+    /// 键判定收窄（`x.<键读取>().equals(name)` 成立一侧，见 `absint/narrow.rs`）：方法 m 偏移 off（条件跳转）处，
+    /// 输入值 input 中键类 kc 子类型的对象只在其类键与 name 的名字相交时流入收窄节点 S(m, off)，其余值原样流入。
+    /// 按闸门处理（站点键集 = name 的全部名字，推不全即任意），与查找调用点的闸门同一套放行 / 暂扣 / 单调补判
+    pub(super) fn keyed_test(&mut self, m: usize, off: u32, kc: &str, fold: bool, input: &V, name: &V) {
+        let kid = self.id(kc);
+        let g = self.kgate_at(m, off, kid, fold);
+        let keys = self.names_complete(m, name);
+        if self.keyed.gates[g as usize].keys.merge(keys) {
+            self.kgate_recheck(g, None);
+        }
+        let obj = self.id(OBJECT);
+        let fs = self.feeds(m, input, obj);
+        self.feed(&fs, Node::K(g), obj);
+    }
+
+    /// 方法 m 中字符串值 v 的全部名字；求值推不全（某段只得已知部分）时为任意
+    fn names_complete(&mut self, m: usize, v: &V) -> Keys {
+        let saved = (std::mem::take(&mut self.lookup_partial), std::mem::take(&mut self.lookup_incomplete));
+        let keys = self.names_of(m, v);
+        let partial = std::mem::replace(&mut self.lookup_partial, saved.0);
+        let incomplete = std::mem::replace(&mut self.lookup_incomplete, saved.1);
+        if partial || incomplete {
+            Keys::Any
+        } else {
+            keys
+        }
     }
 
     /// 方法 m 中字符串值 v 的全部名字
