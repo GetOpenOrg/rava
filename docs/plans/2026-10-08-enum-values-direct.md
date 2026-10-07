@@ -189,6 +189,13 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 查找类集改按反射缺口口径（§2.3 第 4 条）：所指未知的值不再使调用点回退。getEnumConstantsShared @49 由此直连
 （17 个类镜像上解析：枚举类得 `values()`，其余无公开无参 `values` 抛 NoSuchMethodException 不产生目标）。
 
+### 6.4 修正后核对（作业 enumvalfix-c223f31b，kr2，ref c223f31b）
+
+| 用例 | 类 | 方法 | `fold_direct_calls` | `Method.invoke` 在闭包 |
+|---|---|---|---|---|
+| HelloWorld | 3011 | 17861 | 1（getEnumConstantsShared pc 49 → `Method$Direct.invoke`） | 是 |
+| CollectorsDemo | 3011 | 17893 | 1（同上） | 是 |
+
 **结论**：本修正只消掉枚举取常量这一个入口；`Method.invoke` 仍经其余 4 个调用点入链，闭包规模不会单因本修正
 降到 ~528。降到切除实验的规模需要这 4 个入口同样不经 `Method.invoke` 体，见 §八。
 
