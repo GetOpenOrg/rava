@@ -322,17 +322,123 @@ fn mirror_subtype_test_narrows_true_side() {
         })
     };
     let narrowed = arg(10).expect("g 调用");
-    assert_eq!(narrowed.mirror_narrowed(), Some(6));
+    assert_eq!(narrowed.narrowed(), Some(6));
     assert_eq!(narrowed.srcs().as_ref(), &[Src::Param(0)]);
     assert!(narrowed.obj().is_none());
-    assert_eq!(arg(14).expect("h 调用").mirror_narrowed(), None);
+    assert_eq!(arg(14).expect("h 调用").narrowed(), None);
     let ev = a.events.iter().find_map(|(o, e)| match e {
         Event::MirrorSub(c, v) if *o == 6 => Some((c.clone(), v.clone())),
         _ => None,
     });
     let (c, v) = ev.expect("MirrorSub 事件");
     assert_eq!(c, "p/K");
-    assert_eq!(v.mirror_narrowed(), None);
+    assert_eq!(v.narrowed(), None);
+}
+
+/// 桩 Oracle：`p/S.key` 是键类 p/S 的键读取方法，`p/Str.equals` 是字符串相等判定
+struct KeyTests;
+
+impl Oracle for KeyTests {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        None
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+    fn key_getter(&self, m: &MemberRef) -> Option<(String, bool)> {
+        (m.owner == "p/S" && m.name == "key").then(|| ("p/S".to_string(), false))
+    }
+    fn string_equality(&self, m: &MemberRef) -> Option<bool> {
+        (m.owner == "p/Str" && m.name == "equals").then_some(false)
+    }
+}
+
+/// `static void f(S s, String n)`：按 body 给出的判定 + `ifeq 跳过 g(s)`，之后 h(s)
+fn key_test_code(body: Vec<(u32, u8, Operand)>) -> (Analysis, Vec<(u32, V)>) {
+    let g = MemberRef { owner: "p/A".into(), name: "g".into(), desc: "(Lp/S;)V".into() };
+    let h = MemberRef { owner: "p/A".into(), name: "h".into(), desc: "(Lp/S;)V".into() };
+    let b = body.last().unwrap().0 + 3;
+    let mut insns = body;
+    insns.push((b, IFEQ, Operand::Branch(b + 7)));
+    insns.push((b + 3, ALOAD_0, Operand::None));
+    insns.push((b + 4, op::INVOKESTATIC, Operand::Method(g, false)));
+    insns.push((b + 7, ALOAD_0, Operand::None));
+    insns.push((b + 8, op::INVOKESTATIC, Operand::Method(h, false)));
+    insns.push((b + 11, op::RETURN, Operand::None));
+    let mut code = code_of(insns, b + 12);
+    code.max_locals = 2;
+    let a = analyze("p/A", "(Lp/S;Lp/Str;)V", true, &code, &KeyTests);
+    let args = a
+        .events
+        .iter()
+        .filter_map(|(o, e)| match e {
+            Event::Invoke { opcode: op::INVOKESTATIC, args, .. } => Some((*o, args[0].clone())),
+            _ => None,
+        })
+        .collect();
+    (a, args)
+}
+
+fn key_mref() -> MemberRef {
+    MemberRef { owner: "p/S".into(), name: "key".into(), desc: "()Lp/Str;".into() }
+}
+
+fn equals_mref() -> MemberRef {
+    MemberRef { owner: "p/Str".into(), name: "equals".into(), desc: "(Lp/O;)Z".into() }
+}
+
+/// `if (s.key().equals(n)) g(s); h(s);` 与 `if (n.equals(s.key())) …`：成立一侧的 s 来源不变、带收窄标记，
+/// 该偏移发 KeyTest（输入为原值、名字为 n）；汇合后标记消失
+#[test]
+fn key_test_narrows_true_side() {
+    let fwd = vec![
+        (0, ALOAD_0, Operand::None),
+        (1, op::INVOKEVIRTUAL, Operand::Method(key_mref(), false)),
+        (4, 0x2b, Operand::None),
+        (5, op::INVOKEVIRTUAL, Operand::Method(equals_mref(), false)),
+    ];
+    let rev = vec![
+        (0, 0x2b, Operand::None),
+        (1, ALOAD_0, Operand::None),
+        (2, op::INVOKEVIRTUAL, Operand::Method(key_mref(), false)),
+        (5, op::INVOKEVIRTUAL, Operand::Method(equals_mref(), false)),
+    ];
+    for body in [fwd, rev] {
+        let (a, args) = key_test_code(body);
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].1.narrowed(), Some(8));
+        assert_eq!(args[0].1.srcs().as_ref(), &[Src::Param(0)]);
+        assert!(args[0].1.obj().is_none());
+        assert_eq!(args[1].1.narrowed(), None);
+        let ev = a.events.iter().find_map(|(o, e)| match e {
+            Event::KeyTest { kc, fold, input, name } if *o == 8 => Some((kc.clone(), *fold, input.clone(), name.clone())),
+            _ => None,
+        });
+        let (kc, fold, input, name) = ev.expect("KeyTest 事件");
+        assert_eq!((kc.as_str(), fold), ("p/S", false));
+        assert_eq!(input.srcs().as_ref(), &[Src::Param(0)]);
+        assert_eq!(input.narrowed(), None);
+        assert_eq!(name.srcs().as_ref(), &[Src::Param(1)]);
+    }
+}
+
+/// 读取键之后被测局部变量被改写：条件跳转处的 s 不再是被读取键的对象，不收窄
+#[test]
+fn key_test_skips_rewritten_local() {
+    let body = vec![
+        (0, ALOAD_0, Operand::None),
+        (1, op::INVOKEVIRTUAL, Operand::Method(key_mref(), false)),
+        (4, 0x01, Operand::None),
+        (5, 0x4b, Operand::None),
+        (6, 0x2b, Operand::None),
+        (7, op::INVOKEVIRTUAL, Operand::Method(equals_mref(), false)),
+    ];
+    let (a, args) = key_test_code(body);
+    assert!(args.iter().all(|(_, v)| v.narrowed().is_none()));
+    assert!(!a.events.iter().any(|(_, e)| matches!(e, Event::KeyTest { .. })));
 }
 
 /// 桩 Oracle：形参 0 镜像值集上的接收者钩子字段读（Some = 每个镜像的该字段都为该值）

@@ -158,10 +158,10 @@ deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomc
 
 [[known]]
 test = "TestXmlTransform"
-signature = "this method takes 1 argument but 3 arguments were supplied"
-owner = "生成器重载命名（接口层次跨层重载：ContentHandler.endElement(3) / LexicalHandler.comment(char[],int,int) 与子接口 ExtendedContentHandler / ExtendedLexicalHandler 的单参重载同取无后缀名）"
-since = "2026-10-06"
-note = "java_xml crate 编译 E0061 ×2 / E0308 ×1（serializer/to_unknown_stream.rs 经 SerializationHandler 接收者调用）；先前的小写类名与模块同名（E0425 / E0573 16 处）已由 gen-lc-naming 1afed3fc 修复（lcname-spot2-1afed3fc 放宽超时抽查）；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露"
+signature = "Could not load any resource bundle by com.sun.org.apache.xml.internal.serializer.utils.SerializerMessages"
+owner = "java.xml 模块资源包按名装载（与 TestXmlSaxEvents / TestRowSetProvider 同根因）"
+since = "2026-10-07"
+note = "编译期重载命名已修：接口层次跨层重载由 1b3c26d1 修复（ovl-base-1fe9e5ea 编译通过），类视图规则 5 由 gen-overload-hier 补齐（设计 docs/plans/2026-10-07-overload-naming-hierarchy.md；ovl-spot-dff8d8be / -r 抽查编译通过、运行期止于 SerializerMessages 资源束未装载）；先前小写类名与模块同名由 gen-lc-naming 1afed3fc 修复"
 deferred = "S1"
 deferred_reason = "javax.xml.transform 由 spring-web SourceHttpMessageConverter / spring-oxm 使用"
 

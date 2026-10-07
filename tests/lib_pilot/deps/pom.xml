@@ -302,6 +302,77 @@
       <version>7.12.0</version>
     </dependency>
 
+    <!-- ═══ S0 最小 Spring Boot（2026-10-07，docs/plans/2026-10-07-framework-driven-api-coverage.md §二）═══
+         钉代：Boot 3.5.16（3.x 末线）+ Spring 6.2.19（与上方 core/beans 同版，即 Boot 3.5.16 托管版本），
+         不上 Boot 4 / Spring 7。其余版本取 spring-boot-dependencies 3.5.16 托管值；logback / slf4j / snakeyaml
+         沿用上方已钉的较新同线版本（1.5.38 / 2.0.20 / 2.7，pilot-libs 每坐标仅一份），jul-to-slf4j 随 slf4j。
+         样例应用与类路径清单：tests/lib_pilot/s0_boot/（jars.txt 为 S0 的 jar 集合）。 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot</artifactId>
+      <version>3.5.16</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-autoconfigure</artifactId>
+      <version>3.5.16</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-aop</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-expression</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-jcl</artifactId>
+      <version>6.2.19</version>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-core</artifactId>
+      <version>1.5.38</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-to-slf4j</artifactId>
+      <version>2.24.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-api</artifactId>
+      <version>2.24.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>jul-to-slf4j</artifactId>
+      <version>2.0.20</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.annotation</groupId>
+      <artifactId>jakarta.annotation-api</artifactId>
+      <version>2.1.1</version>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-observation</artifactId>
+      <version>1.15.12</version>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-commons</artifactId>
+      <version>1.15.12</version>
+    </dependency>
+
     <!-- 反推荐（勿加，静态模型边界件）：mockito（Instrumentation agent）、netty（unsafe/NIO）、
          maven/gradle（类加载容器）、byte-buddy/cglib（运行期字节码生成本体——其静态替代
          见矩阵 K11 翻译期子类合成）。spring 已按切片入列（core/beans 6.2，非全量）。 -->

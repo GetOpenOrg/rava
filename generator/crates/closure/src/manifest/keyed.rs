@@ -9,6 +9,10 @@
 //!   用于键类对象无构造器键形参、而查找入口按约定拼类名加载的情形；不符合约定的子类仍按 `ctors` 追溯（追溯不到即任意）；
 //! - `scheme_sites`：所列方法（`类.方法:描述符`）内的查找调用点，键取该方法某个 String 形参的 URL scheme
 //!   （按 `java.net.URL` 的解析规则，见 `engine/keyed_scheme.rs`）而不取键实参；无 scheme 的实参不经该调用点。
+//!
+//! `getters`：键类上返回对象键的读取方法（`名:描述符`，不可覆写、返回 String；`fold_case` 时与构造器键形参可差大小写）。
+//! 分析器据此识别对象集合上的按键筛选 `x.<读取>().equals(name)`（`[facts] value_equals` / `string_ops` 的
+//! `equals_ignore_case`），判定成立一侧的 x 只取键可能等于 name 的对象（见 `absint/narrow.rs`、`engine/keyed.rs`）。
 
 use std::collections::HashMap;
 
@@ -25,6 +29,8 @@ pub struct KeyedLookup {
     pub class_pattern: Option<(String, String)>,
     /// 方法（`类.方法:描述符`）→ String 形参序号（按描述符，0 起，不含接收者）：该方法内查找调用点的键取此形参的 URL scheme
     pub scheme_sites: HashMap<String, usize>,
+    /// 键类上返回对象键的读取方法（`名:描述符`）
+    pub getters: Vec<String>,
 }
 
 impl KeyedLookup {
@@ -86,8 +92,22 @@ impl KeyedLookups {
                 }
                 ctors.insert(c.clone(), idx(j).ok_or_else(|| err(&format!("ctors.{c} 须为形参序号")))?);
             }
+            let mut getters = vec![];
+            if let Some(x) = e.get("getters") {
+                for g in x.as_array().ok_or_else(|| err("getters 须为数组"))? {
+                    let g = g.as_str().ok_or_else(|| err("getters 的元素须为字符串"))?;
+                    let ok = g.split_once(':').is_some_and(|(n, d)| !n.is_empty() && !n.contains('.') && d.starts_with("()"));
+                    if !ok {
+                        return Err(err(&format!("getters 的元素须为无参方法 `名:描述符`：{g}")));
+                    }
+                    getters.push(g.to_string());
+                }
+            }
+            if !getters.is_empty() && key_class(k).is_none() {
+                return Err(err("登记 getters 的入口须返回对象类型"));
+            }
             let fold_case = e.get("fold_case").and_then(|x| x.as_bool()).unwrap_or(false);
-            out.insert(k.clone(), KeyedLookup { key, ctors, fold_case, class_pattern, scheme_sites });
+            out.insert(k.clone(), KeyedLookup { key, ctors, fold_case, class_pattern, scheme_sites, getters });
         }
         Ok(KeyedLookups(out))
     }
@@ -107,6 +127,23 @@ impl KeyedLookups {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// 方法（`类.方法:描述符`）是否为某键类的键读取方法：Some((键类, 键是否不区分大小写))
+    pub fn key_getter(&self, member: &str) -> Option<(String, bool)> {
+        let (cls, rest) = member.split_once(':').and_then(|(h, d)| h.rsplit_once('.').map(|(c, n)| (c, (n, d))))?;
+        for k in self.members() {
+            let e = &self.0[k];
+            if key_class(k) == Some(cls) && e.getters.iter().any(|g| g.split_once(':') == Some(rest)) {
+                return Some((cls.to_string(), e.fold_case));
+            }
+        }
+        None
+    }
+}
+
+/// 入口（`类.方法:描述符`）的返回类型（键类，内部名）
+fn key_class(member: &str) -> Option<&str> {
+    member.split_once(')').map(|x| x.1)?.strip_prefix('L')?.strip_suffix(';')
 }
 
 #[cfg(test)]
@@ -145,6 +182,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_key_getters() {
+        let s = sec("\"a/P.get:(La/S;)La/V;\" = { key = 0, fold_case = true, ctors = { \"<init>:(La/S;)V\" = 0 }, getters = [\"key:()La/S;\"] }\n");
+        let k = KeyedLookups::from_toml(Some(&s)).unwrap();
+        assert_eq!(k.key_getter("a/V.key:()La/S;"), Some(("a/V".to_string(), true)));
+        assert_eq!(k.key_getter("a/V.other:()La/S;"), None);
+        assert_eq!(k.key_getter("a/W.key:()La/S;"), None);
+    }
+
+    #[test]
     fn rejects_malformed() {
         for bad in [
             "\"bad\" = { key = 0, ctors = {} }\n",
@@ -155,6 +201,9 @@ mod tests {
             "\"a/P.get:(La/S;)La/V;\" = { key = 0, class_pattern = \"p/Handler\" }\n",
             "\"a/P.get:(La/S;)La/V;\" = { key = 0, class_pattern = \"p.{}.Handler\" }\n",
             "\"a/P.get:(La/S;)La/V;\" = { key = 0, class_pattern = \"p/{}/H\", scheme_sites = { \"bad\" = 1 } }\n",
+            "\"a/P.get:(La/S;)La/V;\" = { key = 0, ctors = {}, getters = [\"a/V.key:()La/S;\"] }\n",
+            "\"a/P.get:(La/S;)La/V;\" = { key = 0, ctors = {}, getters = [\"key:(I)La/S;\"] }\n",
+            "\"a/P.get:(La/S;)I\" = { key = 0, ctors = {}, getters = [\"key:()La/S;\"] }\n",
         ] {
             assert!(KeyedLookups::from_toml(Some(&sec(bad))).is_err(), "{bad}");
         }

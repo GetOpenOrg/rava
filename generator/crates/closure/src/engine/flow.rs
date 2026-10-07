@@ -332,8 +332,8 @@ impl<'a> Engine<'a> {
 
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open
     pub(super) fn feeds(&mut self, m: usize, v: &V, decl: u32) -> Vec<Feed> {
-        // 类镜像子类型判定成立一侧的收窄值：类型流取本方法该偏移处的收窄节点（来源不变，见 `absint/narrow.rs`）
-        if let Some(at) = v.mirror_narrowed() {
+        // 条件分支判定（类镜像子类型 / 键判定）成立一侧的收窄值：类型流取本方法该偏移处的收窄节点（来源不变，见 `absint/narrow.rs`）
+        if let Some(at) = v.narrowed() {
             return vec![Feed::N(Node::S(m, at))];
         }
         match v {

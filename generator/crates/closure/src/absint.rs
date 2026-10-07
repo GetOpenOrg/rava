@@ -314,6 +314,14 @@ pub trait Oracle {
     fn mirror_subtype_test(&self, _m: &MemberRef) -> bool {
         false
     }
+    /// 是否为键类的键读取方法（清单 `[facts.keyed_lookups]` 的 `getters`）：Some((键类, 键是否不区分大小写))，见 `narrow.rs`
+    fn key_getter(&self, _m: &MemberRef) -> Option<(String, bool)> {
+        None
+    }
+    /// 是否为字符串相等判定（清单 `[facts] value_equals` / `string_ops` 的 `equals_ignore_case`）：Some(是否不区分大小写)
+    fn string_equality(&self, _m: &MemberRef) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -337,6 +345,9 @@ pub enum Event {
     /// `ldc K; aload; <类镜像子类型判定>; ifeq/ifne` 判定成立一侧的收窄值（发在条件跳转指令偏移，该偏移即其类型流节点）：
     /// 输入值的类镜像中所指类 ⊂ K 者，见 `narrow.rs`
     MirrorSub(String, V),
+    /// `x.<键读取>().equals(name)`（或两侧互换 / 不区分大小写）判定成立一侧的收窄值（发在条件跳转指令偏移，该偏移即其
+    /// 类型流节点）：输入值 x 中键类 `kc` 子类型的对象只取键可能等于 name 者，见 `narrow.rs`
+    KeyTest { kc: String, fold: bool, input: V, name: V },
     ArrayLoad { array: V, index: V },
     ArrayStore { array: V, index: V, value: V },
     Throw(V),
@@ -1254,10 +1265,16 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
         Some(())
     };
 
+    // 键判定收窄（键读取方法 / 字符串相等判定取自清单事实）
+    let key_test = |i: usize, st: &State, pre: Option<&[V]>| {
+        narrow::key_test_narrow(insns, &leader, i, st, pre, |m| oracle.key_getter(m), |m| oracle.string_equality(m))
+    };
     loop {
         while let Some(l) = work.pop() {
             let mut st = entry[&l].clone();
             let mut i = l;
+            // 前一条指令（字符串相等判定）调用前的两个操作数（键判定收窄用，见 `narrow.rs`）
+            let mut pre: Option<Vec<V>> = None;
             loop {
                 reachable[i] = true;
                 for &hi in &cover[i] {
@@ -1271,8 +1288,10 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     }
                 }
                 let ins = &insns[i];
+                let cur = narrow::eq_operands(insns, &leader, i, &st, |m| oracle.string_equality(m).is_some());
                 match interp.step(&mut st, ins).ok()? {
                     Flow::Next => {
+                        pre = cur;
                         if i + 1 >= n {
                             return None;
                         }
@@ -1285,7 +1304,8 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
                     Flow::Cond(t, k) => {
                         // instanceof 判定成立的一侧收窄被测局部变量
                         let narrow = narrow::instanceof_narrow(insns, &leader, i, &st)
-                            .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)));
+                            .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)))
+                            .or_else(|| key_test(i, &st, pre.as_deref()));
                         // ifnull / ifnonnull 两侧收窄被测局部变量的可空性
                         let nulls = narrow::null_narrow(insns, &leader, i, &st);
                         let edge = |taken: bool| match (&narrow, &nulls) {
@@ -1357,17 +1377,21 @@ fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Code, oracle:
     for (&l, st0) in &entry {
         let mut st = st0.clone();
         let mut i = l;
+        let mut pre: Option<Vec<V>> = None;
         loop {
             let ins = &insns[i];
+            let cur = narrow::eq_operands(insns, &leader, i, &st, |m| oracle.string_equality(m).is_some());
             match interp.step(&mut st, ins).ok()? {
                 Flow::Next if i + 1 < n && !leader[i + 1] => {
+                    pre = cur;
                     i += 1;
                     continue;
                 }
                 // 收窄值以事件给出的一侧可达（instanceof 不成立一侧、类镜像子类型判定成立一侧）：发其来源事件
                 Flow::Cond(_, k) => {
                     let narrow = narrow::instanceof_narrow(insns, &leader, i, &st)
-                        .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)));
+                        .or_else(|| narrow::mirror_sub_narrow(insns, &leader, i, &st, |m| interp.oracle.mirror_subtype_test(m)))
+                        .or_else(|| key_test(i, &st, pre.as_deref()));
                     if let Some(nw) = narrow {
                         if k != Some(!nw.event_when) {
                             interp.ev(nw.event.0, nw.event.1);

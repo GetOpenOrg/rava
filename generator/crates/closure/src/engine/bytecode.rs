@@ -158,6 +158,7 @@ impl<'a> Engine<'a> {
                         }
                     }
                 }
+                Event::KeyTest { kc, fold, input, name } => self.keyed_test(m, off, kc, *fold, input, name),
                 Event::Catch(ct) => {
                     let t = ct.clone().unwrap_or_else(|| THROWABLE.to_string());
                     self.touch(&t, Level::Type, via("catch"));

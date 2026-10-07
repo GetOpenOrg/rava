@@ -705,7 +705,13 @@ members = [
 # 分析器只让键可能匹配的服务对象类型流出调用点（engine/keyed.rs），各 ProviderService 子类的 newInstance 随之只按所请求的服务类型派发。
 # JCA：Provider.getService(type, algorithm) 只返回 type 相同的服务（Provider.putService 以 Service.type 建键；
 # 旧式条目的类型名经 getEngineName 规范大小写，按不区分大小写比较涵盖）。
-"java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;" = { key = 0, fold_case = true, ctors = { "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/Map;)V" = 1, "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;)V" = 1 } }
+# getters = 键类上返回对象键的读取方法（不可覆写）：对象集合上的按键筛选 `s.<读取>().equals(name)`（[facts] value_equals /
+# string_ops 的 equals_ignore_case）成立一侧只取键可能等于 name 的对象（absint/narrow.rs）。JCA：Service.getType 为 final、
+# 返回 final 字段 type（公有构造器存 getEngineName(type)，与构造器键形参只差大小写，按 fold_case 比较涵盖）；
+# Sasl.getFactories 等按 getServices() 遍历、以 getType().equals(serviceName) 筛选后 newInstance。
+# 不按算法建键：类键按类合并（同一服务类登记多种算法），且算法另有别名 / OID 查找（aliases、KnownOIDs、旧式别名条目），
+# 按算法筛选既无收益又须完整建模别名才健全。
+"java/security/Provider.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;" = { key = 0, fold_case = true, ctors = { "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/Map;)V" = 1, "<init>:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;)V" = 1 }, getters = ["getType:()Ljava/lang/String;"] }
 # class_pattern = 键类子类的类名命名约定（`{}` 为键，键中的 `.` 对应包分隔）：类名匹配的对象，其键由类名定出，
 # 与实例化途径无关；不匹配的子类按 ctors 追溯（未登记即任意键）。
 # scheme_sites = 协议键站点：该方法内本入口调用点的键不取键实参，而取方法第 j 个形参（按描述符 0 起，不含接收者）

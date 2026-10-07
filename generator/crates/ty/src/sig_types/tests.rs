@@ -270,3 +270,49 @@ fn interface_view_names_consistent_and_disjoint() {
     let p = x.interface_view_member_name(ci("p/SubPath"), ci("p/Path"), "compareTo", "(Lp/Path;)I");
     assert_eq!(p, "compareTo");
 }
+
+#[test]
+fn class_view_disjoint_for_interface_only_members() {
+    let mut s = iface_specs();
+    // 抽象类不声明 put / end：经兄弟接口、超接口层次继承到同名异参的抽象成员
+    s.push(class("p/AbsBoth").ifaces(&["p/Left", "p/Right"]));
+    s.push(class("p/AbsSer").ifaces(&["p/SerHandler"]));
+    s.push(class("p/SubSer").sup("p/AbsSer"));
+    // 只经一侧继承：不制造重载
+    s.push(class("p/AbsLeft").ifaces(&["p/Left"]));
+    // 祖先类声明 put(I)，接口只声明 put(String)：类视图两种参数段
+    s.push(class("p/HasInt").method(method(PUBLIC, "put", "(I)V", None)));
+    s.push(class("p/AbsMixed").sup("p/HasInt").ifaces(&["p/Left"]));
+    // 泛型桥承载的擦除接口成员（枚举 compareTo(E) + 桥 compareTo(Object) 形态）：不计入视图参数段，
+    // 子类视图里桥成员仍按描述符区分
+    const SYNTHETIC: u16 = 0x1000;
+    s.push(
+        class("p/CmpBase")
+            .ifaces(&["p/Cmp"])
+            .method(method(PUBLIC, "compareTo", "(Lp/CmpBase;)I", None))
+            .method(method(PUBLIC | SYNTHETIC, "compareTo", &format!("(L{OBJECT};)I"), None)),
+    );
+    s.push(class("p/CmpLeaf").sup("p/CmpBase"));
+    let f = Fixture::new(s);
+    let x = f.ctx();
+    let ci = |c: &str| f.reg.get(c).expect(c);
+    let s3 = format!("(L{STRING};L{STRING};L{STRING};)V");
+    let s1 = format!("(L{STRING};)V");
+    let local = |c: &str, n: &str, d: &str| x.interface_member_local_name(ci(c), n, d);
+    let (l, r) = (local("p/AbsBoth", "put", &s1), local("p/AbsBoth", "put", "(I)V"));
+    assert!(l != "put" && r != "put" && l != r);
+    let (e3, e1) = (local("p/AbsSer", "end", &s3), local("p/AbsSer", "end", &s1));
+    assert!(e3 != "end" && e1 != "end" && e3 != e1);
+    // 子类沿用（单调继承），同一成员在类层次上同名
+    assert_eq!(e3, local("p/SubSer", "end", &s3));
+    assert_eq!(local("p/AbsLeft", "put", &s1), "put");
+    // 祖先类成员与接口成员在类视图上同按描述符区分
+    assert_ne!(x.receiver_member_name("put", "(I)V", ci("p/AbsMixed")), "put");
+    assert_ne!(local("p/AbsMixed", "put", &s1), "put");
+    let obj_cmp = format!("(L{OBJECT};)I");
+    assert!(!x.hierarchy_overloaded_names(ci("p/CmpLeaf")).contains("compareTo"));
+    assert_ne!(local("p/CmpLeaf", "compareTo", &obj_cmp), "compareTo");
+    // 接口自身的声明名不受实现类影响
+    assert!(x.hierarchy_overloaded_names(ci("p/Handler")).is_empty());
+    assert!(!x.hierarchy_overloaded_names(ci("p/Left")).contains("put"));
+}

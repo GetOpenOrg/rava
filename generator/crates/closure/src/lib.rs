@@ -10,7 +10,6 @@ pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod image;
-pub mod lib_runtime;
 pub mod manifest;
 pub mod modules_json;
 pub mod loaders;
