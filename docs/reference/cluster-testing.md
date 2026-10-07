@@ -9,7 +9,10 @@
 `uv run --group cluster python -m unittest discover -s tests/unit/cluster`。
 
 服务器选取：不加 `--servers` 时按清单 `pools` 取——全量 / 抽查用 test 池，作业用 job 池；未列入任何池的服务器只在
-`--servers` 点名时使用。2026-10-07 起只用内网 dev（test）与 ubuntu（job）；dev 关机期间（2026-10-07 晚起，等用户通知恢复）改用云服务器，见「十二、工作流与现状」。
+`--servers` 点名时使用。**现行池（2026-10-08）**：dev 关机维护中（2026-10-07 晚起，等用户通知恢复，清单里 `pools = []`）；
+test 池 = 云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1（各 15G 内存 / 8 核、1 槽，跑着业务）；job 池 = 同 7 台云服务器 + 内网 ubuntu。
+云服务器访问不到内部 forgejo，按条目 `repo_url` 从 GitHub 克隆——被测分支须同时推 github。dev 恢复后 test 池改回 dev（16 槽）。
+工作流见「十二、工作流与现状」。
 
 ```
 本地 Mac（调度中心，java_rta 主检出）
@@ -21,11 +24,12 @@
 ├── cluster_results/                     本地结果汇总目录（gitignore；各 worktree 共用主检出这一份）
 └── ~/.config/rava/cluster.toml          服务器清单（本机配置，不入库；格式见 scripts/cluster/cluster.example.toml）
 
-服务器（执行节点，按 pools 分工）
-├── test 池（dev，16 槽）：全量 / 抽查
-│   └── /data/rava/                 git clone 的项目，测试在此运行
+服务器（执行节点，按 pools 分工；2026-10-08 现行）
+├── test 池（jp1 / jp2 / kr1 / kr2 / sg1 / sg2 / us1，各 15G、1 槽）：全量 / 抽查
+│   └── /data/rava/                 git clone 的项目（云服务器从 GitHub 克隆），测试在此运行
 │       └── /data/rava-spot-<tag>/  抽查独立检出目录（与全量隔离）
-├── job 池（ubuntu）：gate 等作业
+├── job 池（同 7 台云服务器 + 内网 ubuntu）：单测、闭包、gate 等作业
+├── dev（内网 32 核、16 槽）：关机维护中，恢复后回 test 池
 └── <remote_dir 所在盘>/rava-jdk/<tag>/   语料参考 JDK（Temurin 21.0.11，见下「语料参考 JDK」）
 ```
 
@@ -67,17 +71,18 @@ graph TD
         Results["cluster_results/\n├── error_logs/\n├── master_passed_jdk{N}.txt\n├── failed_tests_jdk{N}.txt\n└── spot/<tag>/"]
     end
 
-    subgraph Servers["服务器（并行执行节点）"]
-        DEV["dev\n内网 32 核，test 池 16 槽"]
+    subgraph Servers["服务器（并行执行节点，2026-10-08 现行）"]
+        CLOUD["云服务器 jp1 / jp2 / kr1 / kr2 / sg1 / sg2 / us1\n各 15G、1 槽；test 池 + job 池\n（jp2 经 jp1 跳板）"]
         UB["ubuntu\n内网，job 池"]
+        DEV["dev\n内网 32 核 16 槽\n关机维护中，恢复后回 test 池"]
     end
 
     CLI --> Pool
     CLI --> State
-    Pool -- "SSH 下发测试任务" --> DEV
+    Pool -- "SSH 下发测试任务 / 作业" --> CLOUD
     Pool -- "SSH 下发作业" --> UB
 
-    DEV -- "SFTP 返回结果" --> Results
+    CLOUD -- "SFTP 返回结果" --> Results
     UB  -- "SFTP 返回结果" --> Results
 
     Results --> State
@@ -86,6 +91,9 @@ graph TD
 ---
 
 ## 二、启动流程
+
+> 现行池（2026-10-08）：云服务器 7 台各 1 个 worker（1 槽）；云服务器上的检出来源是 GitHub（条目 `repo_url`），
+> 下图的 `origin/main` / `git fetch origin <ref>` 在云服务器上即 GitHub 远端——被测提交须先推 github。
 
 ```mermaid
 flowchart TD
@@ -132,6 +140,8 @@ flowchart TD
 ---
 
 ## 三、单台服务器工作循环
+
+> 每台服务器按 `slots` 起 worker（缺省 1）；现行云服务器均为 1 槽，即一台同时只跑一个测试 / 作业。
 
 ```mermaid
 flowchart TD
@@ -193,6 +203,8 @@ CPU > 60%           → CPU 过载  等待 30s，不取任务
 磁盘 < 5GB          → 磁盘不足  退出此服务器
 ```
 
+> **现行服务器**：云服务器 15G 内存、8 核、跑着业务，1 槽；受限 scope 上限 = 15G − 4G 预留 ≈ 11G。
+> 大闭包用例（StockTrans 级）在该上限内可能 OOM，按十二 12.7 判定为资源类失败；重例与 S0 闭包等 dev 恢复。  
 > **目标**：测试占用 ≤ 40% CPU + ≤ 4.5GB RAM，为服务器上的其他服务保留资源。  
 > **内存上限**：每个 e2e 测试与作业都在 user systemd scope 内运行（`systemd-run --user --scope`），
 > cgroup `MemoryMax = 总内存 − 预留`（`MEM_RESERVE_GB=4`，服务器可用 `mem_reserve_gb` 覆盖）、`MemorySwapMax=0`，
@@ -294,6 +306,7 @@ cluster_results/
         └── error_logs/
 ```
 
+> C4 验收全量（`--reset`）等 dev 恢复后在 dev 上跑；dev 关机期间云服务器只做抽查与作业。
 > 续跑口径：已通过的测试默认在最新代码上仍通过，重启只跑未通过的（失败的用 --reset-failed 重新入队），
 > 服务器始终拉最新代码；只有 --reset 才在最新代码上从头全量。不再使用远端 `--record-passed` 清单
 > （残留清单会让 run_tests 跳过测试、被误判失败）。失败日志合并为单文件，避免文件堆积。
@@ -302,7 +315,8 @@ cluster_results/
 
 ## 七、抽查模式（--spot）
 
-适用场景：验证新分支没有破坏已通过测试，无需等待全量完成。
+适用场景：验证新分支没有破坏已通过测试，无需等待全量完成。现行用法是合批验证（十二 12.1）：对合批分支跑各分支待验证清单的并集，
+通常 `--per-dir 0 --tests ...`。
 
 ```mermaid
 flowchart LR
@@ -314,7 +328,7 @@ flowchart LR
     end
 
     subgraph Checkout["检出阶段（各服务器）"]
-        CLONE["首次：从 /data/rava 本地克隆\n到 /data/rava-spot（复用对象）"]
+        CLONE["首次：从 /data/rava 本地克隆\n到 /data/rava-spot（复用对象）\n（云服务器的 origin = GitHub）"]
         CLONE --> FETCH["git fetch origin <ref>"]
         FETCH --> CO["git checkout -B spot FETCH_HEAD"]
         CO --> SYNC["uv sync"]
@@ -391,7 +405,8 @@ flowchart TD
 ```
 
 - 每种方式每轮只连 1 次，建连超时 `CONNECT_TIMEOUT=10s`；最坏约 15 分钟放弃
-- `direct_only: True` 的内网服务器（ubuntu）只直连，不降级走跳板或代理
+- `direct_only: True` 的内网服务器（ubuntu、dev）只直连，不降级走跳板或代理
+- 现行跳板：jp2 经 jp1（条目 `jump = "jp1"`）；其余云服务器直连失败走 SOCKS5 代理
 - 跳板连接按跳板服务器缓存、各线程共用，失效时重建；跳板自身只试直连 → 代理
 - 实现在 `dist_conn.py`
 - `env_setup.py` 的检查与初始化使用同一套重连逻辑
@@ -402,6 +417,8 @@ flowchart TD
 
 ```bash
 # 工作目录：java_rta 主检出根目录（服务器清单见 ~/.config/rava/cluster.toml）
+# 现行池（2026-10-08）：不加 --servers 时 test 池 = 7 台云服务器，job 池 = 7 台云服务器 + ubuntu；dev 关机待恢复
+# 被测分支须先推 origin 与 github（云服务器从 GitHub 检出）
 cd ~/dev/workspace/java_rta
 
 # ── 全量跑批 ──────────────────────────────────────────────────────────────────
@@ -415,7 +432,7 @@ uv run --group cluster python scripts/cluster/distribute_tests.py --skip-setup
 # 切换 JDK 版本（非参考构建，仅供实验；缺省 21 = 参考构建 Temurin 21.0.11）
 uv run --group cluster python scripts/cluster/distribute_tests.py --jdk 25
 
-# 清除全部进度，从头开始
+# 清除全部进度，从头开始（C4 验收全量等 dev 恢复后再跑）
 uv run --group cluster python scripts/cluster/distribute_tests.py --reset
 
 # 只清除失败记录，重新入队（保留已通过记录）
@@ -457,7 +474,7 @@ uv run --group cluster python scripts/cluster/analyze_failures.py
 uv run --group cluster python scripts/cluster/analyze_failures.py --jdk 25
 uv run --group cluster python scripts/cluster/analyze_failures.py --out report.txt
 
-# 合并分支到 main 并推送（自动读取代理环境变量）
+# 合并分支到 main 并推送（自动读取代理环境变量；现行合入走合批，见十二 12.1）
 uv run --group cluster python scripts/cluster/merge_to_main.py
 uv run --group cluster python scripts/cluster/merge_to_main.py --branch claude/my-branch
 uv run --group cluster python scripts/cluster/merge_to_main.py --dry-run
@@ -470,10 +487,10 @@ uv run --group cluster python scripts/cluster/env_setup.py --check-only        #
 
 ---
 
-## 十一、子代理工作流：自发抽查 / 已知失败 / 合入队列 / 远端 rava
+## 十一、子代理工作流：已知失败 / 合批 / 远端 rava
 
-> 2026-10-04 起（提速四项 ① ②）。正式启用（守护去掉 `--dry-run`、推广给各子代理）由协调者复核试运行记录后决定。
-> 所有命令在 java_rta 主检出根目录下执行；java_rta 提交须先推送 origin（服务器从内部仓库取，地址为本机配置 repo_url）。
+> 2026-10-04 起（提速四项 ① ②）；2026-10-07 起合入改为合批（11.4、十二 12.1），子代理不自发抽查、不入合入队列。
+> 所有命令在 java_rta 主检出根目录下执行；被测提交须先推送 origin 与 github（dev / ubuntu 从内部仓库取，云服务器从 GitHub 取）。
 
 ### 11.1 失败日志保全
 
@@ -512,39 +529,15 @@ uv run --group cluster python scripts/cluster/known_failures.py c1dt2-1a2b3c4d -
 
 用例名单 = 任务验收用例 + 受影响面的回归用例；失败看 `cluster_results/spot/<tag>/error_logs/`。
 
-### 11.4 合入队列与守护
+### 11.4 合批流程（2026-10-07 起，取代合入队列守护）
 
-子代理完成一个可合入小步后**只入队、不自己合并**：
+1. 子代理只实现：本机 cargo check（十二 12.3）、推分支（origin + github）、在计划文档写待验证清单（用例名单 + 单测范围），完工即停，不自发抽查、不入队。
+2. 主会话攒一批完工分支，在 `batch-<月日>`（如 `batch-1008`）上逐个 `git merge --no-ff`，冲突在合批分支上解决，取舍记入所属计划（例：c1d §30.18）。
+3. 对合批分支发一次全量单测作业（`--job`，云上 `--job-timeout 14400`）和一次抽查（`--spot <tag> --ref <合批 sha> --per-dir 0 --tests <各分支待验证清单的并集>`）。
+4. 判定用 11.2 的已知失败清单（`known_failures.py <tag>`）；新失败在合批分支上修（如 batch-1008 的 b558e0c2），或退回所属分支、下一批再带上。
+5. 通过后快进集成分支 rust-closure-analyzer 与 main，推 origin 与 github；已合入的工作分支按合并后清理规则删除。
 
-```bash
-uv run --group cluster python scripts/cluster/merge_daemon.py enqueue --branch c1d-t2 --sha <40 位或可解析的短 sha> \
-    --tests StockTrans TestSerialDefaultSuid HelloWorld --gate generator \
-    --summary "T2 序列化回调收窄" --by c1d-t2 [--spot c1dt2-1a2b3c4d] [--no-keep-branch]
-uv run --group cluster python scripts/cluster/merge_daemon.py status
-```
-
-- `--gate`：`generator` / `generator+macros_core` / `generator+rava_coro` / `generator+macros_core+rava_coro` /
-  `doc-only`（不跑闸门，只核对改动全是 `docs/` 或 `*.md`；仅 doc-only 允许 `--tests` 为空）；
-- `--spot` 缺省 `<分支名去符号前 12 位>-<sha8>`；子代理已自发抽查过就填同一 tag，守护直接用现成结果；
-- 队列文件 cluster_results/merge_queue.toml`（加锁读改写，勿手改处理中的条目）。
-
-守护（协调者定时 / 循环调用）：
-
-```bash
-uv run --group cluster python scripts/cluster/merge_daemon.py --once --dry-run   # 演练：合并与闸门在 ~/dev/workspace/java_rta_dryrun_wt 里做
-uv run --group cluster python scripts/cluster/merge_daemon.py --once             # 正式（协调者复核后启用）
-uv run --group cluster python scripts/cluster/merge_daemon.py retry <id> [--reset-spot-failed]   # blocked 修复后重新入队
-```
-
-每条依次：抽查（未发起 / 进程已退但结果不全 → 发起或续跑，至多 4 次；进行中 → 等下轮）→ 已知失败判定
-（新失败 → `blocked` + 新失败摘要）→ 集成 worktree（`java_rta_closure_wt`，须在 rust-closure-analyzer 上且无已跟踪
-改动，否则保持 `ready` 等下轮）`git merge -q --no-ff`（冲突 → `merge --abort`，`blocked`）→ 闸门（不干净 → 核对
-HEAD 正是本次合并后 `reset --hard` 回合并前，`blocked`）→ 推 origin（失败 `push_pending`，下轮重推）→
-主仓 `merge --ff-only` 并推 main（失败 `main_pending`）→ `--no-keep-branch` 时 `git branch -d`。
-合并信息：`Merge <分支>（<sha8>）into rust-closure-analyzer：<summary>；抽查 <tag> 8/9（StockTrans 为已知失败）`，
-无署名行。动作日志 `cluster_results/merge_daemon.log`；闸门 / 抽查输出 cluster_results/merge/<id>/`。
-闸门在一次 `heavy_lock.py` 内顺序跑 driver 构建、generator 单测（及 macros_core / rava_coro 单测），
-`CARGO_BUILD_JOBS=2`；判定 = 各步退出码全 0 且输出无 `^error` / `test result: F` / `FAILED` / `panicked`。
+合入队列守护 `merge_daemon.py` / `merge_queue.py` 保留在 `scripts/cluster/`，但不再使用（试运行记录见 11.7）。
 
 ### 11.5 远端 rava（closure / emit / compile 下放）
 
@@ -566,8 +559,7 @@ compile 模式与 run_tests 一致分两段（`build --stop-after emit` 再 `rav
 - 四件工具（原在 server_maintenance `dist-tools` 分支，2026-10-07 随全部分发脚本迁入 `scripts/cluster/`）：`failure_extract.py` + `dist_e2e.py`（日志保全）、`known_failures.py`、
   `merge_queue.py` + `merge_daemon.py`、`remote_rava.py`；单元测试 `tests/unit/cluster/test_merge_queue.py`、`tests/unit/cluster/test_merge_daemon.py`。
 - 已知失败清单 `docs/known_failures.toml` 已并入集成分支（原在 `dist-known-failures` 分支 3ac45c90）。
-- 守护**未启用**：试运行一律 `--dry-run`（演练 worktree `~/dev/workspace/java_rta_dryrun_wt`，可保留复用）；
-  正式启用与推广由协调者复核本节试运行记录后决定。
+- 守护**未启用、不再使用**：2026-10-07 起合入走合批（11.4）；试运行一律 `--dry-run`（演练 worktree `~/dev/workspace/java_rta_dryrun_wt`）。
 - 未覆盖 / 已知局限：
   - 正式路径的推送 / 主仓快进 / 删分支 / push_pending 续推只由单元测试（临时仓库 + 裸远端）覆盖，真实远端未推过；
   - `generator+macros_core`、`generator+rava_coro` 闸门变体未真实跑过（命令与 generator 同构，仅多一步）；
@@ -683,7 +675,7 @@ rust-closure-analyzer 与 main 均只随协调者自己的提交前进。
 - 子代理只实现：本机 cargo check、推分支、在计划文档写待验证清单，不自发跑测试。
 - 主会话把若干完工分支合成验证分支（`batch-<日期>`，如 `batch-1008`），一次跑全量单测加各分支待验证清单抽查的并集。
 - 通过后快进集成分支（rust-closure-analyzer）与 main；批内失败转回所属分支修，下一批再带上。
-- 合入走合批，不经 11.4 的合入队列守护。
+- 步骤见 11.4。
 
 ### 12.2 推送
 
