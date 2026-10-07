@@ -62,6 +62,13 @@ impl<'a> Engine<'a> {
                 statics.insert((c.clone(), n.clone()), IVal::T(*expr, b'I'));
             }
         }
+        let mut img_modules: HashMap<String, Vec<(u32, bool)>> = HashMap::default();
+        for m in &data.modules {
+            for p in &m.packages {
+                img_modules.entry(p.clone()).or_default().push((m.obj, m.loader == IVal::N));
+            }
+        }
+        let _ = self.ctx.img_modules.set(img_modules);
         let mirror_obj = data.objs.iter().enumerate().filter_map(|(i, o)| o.mirror.clone().map(|m| (m, i as u32))).collect();
         self.img = Some(Box::new(ImgState {
             build_time: data.build_time.iter().cloned().collect(),

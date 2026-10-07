@@ -399,10 +399,10 @@ fn const_length_array_folds_arraylength() {
     assert_eq!(a.reachable, vec![true, true, true, true, true, true, false, true]);
 }
 
-/// 桩 Oracle：Class 形参上的引导单例方法（true = 每个形参的镜像值集都只含引导类）
-struct BootSingle(bool);
+/// 桩 Oracle：Class 形参上的映像对象取值方法——形参 i 的结果为映像对象 `self.0[i]`（None = 未知）
+struct ImageGetter([Option<u32>; 2]);
 
-impl Oracle for BootSingle {
+impl Oracle for ImageGetter {
     fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
@@ -412,16 +412,16 @@ impl Oracle for BootSingle {
     fn type_live(&self, _: &str) -> bool {
         true
     }
-    fn param_mirror_call(&self, _: u16, m: &MemberRef) -> Option<V> {
-        let tag = Rc::new(Obj::BootSingleton(Rc::from(m.to_string())));
-        self.0.then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) })
+    fn param_mirror_call(&self, i: u16, _: &MemberRef) -> Option<V> {
+        let o = self.0.get(i as usize).copied().flatten()?;
+        Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Image(o))) })
     }
 }
 
-/// `static boolean f(Class a, Class b) { return a.m() == b.m(); }` 形态：两侧同为引导单例时引用相等折叠，
-/// 两个形参都登记乐观答复；未知时两支都可达、不登记
+/// `static boolean f(Class a, Class b) { return a.m() == b.m(); }` 形态：两侧为同一映像对象时引用相等折叠、
+/// 不同映像对象时引用不等折叠，两个形参都登记乐观答复；未知时两支都可达、不登记
 #[test]
-fn boot_singleton_results_compare_equal() {
+fn image_object_results_compare_by_identity() {
     let m = MemberRef { owner: "p/K".into(), name: "m".into(), desc: "()Lp/M;".into() };
     let code = code_of(
         vec![
@@ -436,10 +436,13 @@ fn boot_singleton_results_compare_equal() {
         13,
     );
     let code = Code { max_locals: 2, ..code };
-    let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &BootSingle(true));
+    let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &ImageGetter([Some(7), Some(7)]));
     assert_eq!(a.reachable, vec![true, true, true, true, true, true, false]);
     assert_eq!(a.mirror_field_assumed, vec![0, 1]);
-    let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &BootSingle(false));
+    let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &ImageGetter([Some(7), Some(8)]));
+    assert_eq!(a.reachable, vec![true, true, true, true, true, false, true]);
+    assert_eq!(a.mirror_field_assumed, vec![0, 1]);
+    let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &ImageGetter([Some(7), None]));
     assert_eq!(a.reachable, vec![true; 7]);
     assert!(a.mirror_field_assumed.is_empty());
 }

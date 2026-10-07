@@ -48,7 +48,7 @@ pub(super) fn constrained(parts: &[Part]) -> bool {
 }
 
 /// 方法体是否为 `return this.f`；是则返回 f 的名字与描述符
-fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
+pub(super) fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
     let [a, g, r] = code.insns.as_slice() else { return None };
     let this = a.opcode == ALOAD_0 || a.opcode == ALOAD && matches!(a.operand, classfile::Operand::Local(0));
     if !this || g.opcode != classfile::op::GETFIELD || r.opcode != ARETURN {

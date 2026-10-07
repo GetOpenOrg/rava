@@ -17,6 +17,7 @@ impl<'a> Engine<'a> {
                 guards: RefCell::new(memo::Guards::new()),
                 catalog: Default::default(),
                 loaders: Default::default(),
+                img_modules: Default::default(),
                 selectors: Default::default(),
                 fvals: Default::default(),
                 rvals: Default::default(),

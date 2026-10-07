@@ -8,11 +8,8 @@
 //!   闭包分析器把每个访问点连到钩子的手写体。
 //! - `loader_map`：JDK 模块 → 内建加载器的映射所在（类 `<clinit>` 里按静态字段分组的字符串常量集合），
 //!   生成器据此给每个类定出定义加载器（`loaders.rs`）。
-//! - `boot_singletons`：类镜像上的实例方法（`类.方法:描述符`），接收者所指类由引导加载器定义时运行时恒返回同一个
-//!   进程内对象（手写承载的 VM 状态，如引导类共用的模块单例）。闭包分析器据此给结果带身份标签，两个这样的结果
-//!   引用相等（`if_acmp`）按标签折叠（`absint::obj::Obj::BootSingleton`）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// 字段访问钩子
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,8 +38,6 @@ pub struct VmState {
     /// `属主.字段名:描述符` → 钩子
     pub field_hooks: BTreeMap<String, FieldHook>,
     pub loader_map: Option<LoaderMapSrc>,
-    /// `类.方法:描述符`：接收者为引导类镜像时恒返回同一对象
-    pub boot_singletons: BTreeSet<String>,
 }
 
 impl VmState {
@@ -75,15 +70,7 @@ impl VmState {
                 }
             }
         };
-        let mut boot_singletons = BTreeSet::new();
-        for v in sec.and_then(|s| s.get("boot_singletons")).into_iter() {
-            let bad = || "vm_intrinsics.toml [vm_state] boot_singletons 须为 \"类.方法:描述符\" 数组".to_string();
-            for x in v.as_array().ok_or_else(bad)? {
-                let k = x.as_str().filter(|k| k.split_once('.').is_some_and(|(_, r)| r.contains(':'))).ok_or_else(bad)?;
-                boot_singletons.insert(k.to_string());
-            }
-        }
-        Ok(VmState { field_hooks, loader_map, boot_singletons })
+        Ok(VmState { field_hooks, loader_map })
     }
 
     /// 字段 `owner.name:desc` 的访问钩子
@@ -92,11 +79,6 @@ impl VmState {
             return None;
         }
         self.field_hooks.get(&format!("{owner}.{name}:{desc}"))
-    }
-
-    /// 方法（`类.方法:描述符`）是否在接收者为引导类镜像时恒返回同一对象
-    pub fn is_boot_singleton(&self, member: &str) -> bool {
-        self.boot_singletons.contains(member)
     }
 }
 
@@ -107,8 +89,6 @@ mod tests {
     #[test]
     fn parses_hooks_and_loader_map() {
         let t: toml::Table = r#"
-[vm_state]
-boot_singletons = ["a/K.m:()La/M;"]
 [vm_state.field_hooks]
 "a/B.f:La/C;" = { hook = "a/B.__vm_f", receiver = true, boot_noop = true }
 "a/B.g:La/C;" = { hook = "a/B.__vm_g", receiver = true }
@@ -125,7 +105,6 @@ platform = "p"
         assert_eq!(s.field_hook("a/B", "g", "La/C;").map(|h| (h.receiver, h.boot_noop)), Some((true, false)));
         let h = s.field_hook("a/D", "s", "La/C;").unwrap();
         assert_eq!((h.host.as_str(), h.func.as_str(), h.receiver), ("a/E", "__vm_boot", false));
-        assert!(s.is_boot_singleton("a/K.m:()La/M;") && !s.is_boot_singleton("a/K.n:()La/M;"));
         assert_eq!(s.loader_map.unwrap().platform, "p");
     }
 

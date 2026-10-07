@@ -13,8 +13,9 @@
 //! - `Len(n)`：以常量长度 n 分配的数组（`newarray` / `anewarray` 的长度操作数为常量）。数组长度在其生命期内不变
 //!   （JVMS §2.7，没有任何指令、反射或 Unsafe 操作能改变已分配数组的长度），`arraylength` 按标签折叠为 n，
 //!   无论数组经局部变量、形参、字段还是返回值传到读取点（形参 / 字段 / 返回常量格按标签汇合，见 `engine/facts.rs`）
-//! - `BootSingleton(m)`：清单 `[vm_state] boot_singletons` 的方法 m 在引导类镜像上的结果——运行时恒为同一个进程内
-//!   对象（如引导类共用的模块单例），两个同标签的值引用相等（`if_acmp` 折叠为相等）
+//! - `Image(o)`：构建期引导映像中的对象 o（映像对象下标）——运行时为同一个进程内对象（启动序列物化），
+//!   如类镜像所属的模块（按「定义加载器 + 包」查映像 VM 模块表）。两个同标签的值引用相等、不同标签的引用不等
+//!   （`if_acmp` 按标签折叠）。`IMAGE_PENDING` 是空镜像值集的乐观占位（调用方登记乐观答复，值集增长后重分析）
 //!
 //! - `MirrorSub(o)`：类镜像子类型判定（`K.class.isAssignableFrom(x)`，见 `narrow.rs`）成立一侧的 x：值本身与来源
 //!   不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）处的收窄节点——输入值集中所指类
@@ -29,6 +30,9 @@ use classfile::MemberRef;
 
 use super::{Src, V};
 
+/// 空镜像值集上映像对象读取的乐观占位（见模块文档）
+pub const IMAGE_PENDING: u32 = u32::MAX;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Obj {
     Uninit,
@@ -39,8 +43,8 @@ pub enum Obj {
     Empty,
     /// 常量长度的数组（见模块文档）
     Len(i32),
-    /// 引导类镜像上恒返回同一对象的方法（`类.方法:描述符`）的结果（见模块文档）
-    BootSingleton(Rc<str>),
+    /// 构建期引导映像中的对象（映像对象下标，见模块文档）
+    Image(u32),
     /// 类镜像子类型判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
     MirrorSub(u32),
 }

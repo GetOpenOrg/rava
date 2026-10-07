@@ -98,6 +98,8 @@ pub(super) struct Ctx<'a> {
     pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
     /// 类的定义加载器表（字段钩子的接收者判定与镜像读取折叠，惰性建立）
     pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
+    /// 映像 VM 模块表：包 → [(模块对象, 定义加载器为引导)]（装入映像时建立；类镜像模块读折叠用）
+    pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -510,9 +512,9 @@ impl Oracle for Facts<'_, '_> {
         if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
             return Ret::Value(v);
         }
-        // 类字面量接收者上的引导单例方法
+        // 类字面量接收者上的接收者钩子字段取值方法
         if let (classfile::op::INVOKEVIRTUAL, Some(V::Class(k, _))) = (opcode, args.first()) {
-            if let Some(v) = self.ctx.mirrors_boot_singleton(m, [&**k]) {
+            if let Some(v) = self.ctx.mirrors_call(m, [&**k]) {
                 return Ret::Value(v);
             }
         }
@@ -576,7 +578,7 @@ impl Oracle for Facts<'_, '_> {
     }
     fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
         let s = self.mirrors.get(i as usize)?.as_ref()?;
-        self.ctx.mirrors_boot_singleton(m, s.iter().map(|c| &**c))
+        self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)

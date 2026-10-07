@@ -27,7 +27,7 @@ mod obj;
 #[cfg(test)]
 mod tests;
 pub use lit::{lit_id, lit_str};
-pub use obj::Obj;
+pub use obj::{Obj, IMAGE_PENDING};
 
 /// 引用值来源
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -304,7 +304,7 @@ pub trait Oracle {
         None
     }
     /// 形参 i（Class 类型）为接收者调用 m：值集已知且其中每个类镜像上 m 的结果由类的事实定出时为该结果
-    /// （清单 `[vm_state] boot_singletons`：全为引导类镜像时为同一对象），乐观答复同 [`Oracle::param_mirror_field`]
+    /// （方法体为接收者钩子字段的平凡取值时按 [`Oracle::param_mirror_field`] 读该字段），乐观答复同 [`Oracle::param_mirror_field`]
     /// （记入 [`Analysis::mirror_field_assumed`]）；None = 未知
     fn param_mirror_call(&self, _i: u16, _m: &MemberRef) -> Option<V> {
         None
@@ -476,8 +476,8 @@ impl<O: Oracle> Interp<'_, O> {
             _ => {}
         }
         if let (Some(x), Some(y)) = (a.obj(), b.obj()) {
-            if matches!(**x, Obj::BootSingleton(_)) && x == y {
-                return Some(true);
+            if let (Obj::Image(a), Obj::Image(b)) = (&**x, &**y) {
+                return Some(a == b);
             }
         }
         let (c, v) = match (a, b) {
