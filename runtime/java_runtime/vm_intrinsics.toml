@@ -1169,6 +1169,8 @@ user_name = "@deferred"
 "java/lang/Thread.currentCarrierThread:()Ljava/lang/Thread;" = "boot_current_thread"
 "java/security/AccessController.getStackAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
 "java/security/AccessController.getInheritedAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
+# 调用方保护域：与运行期 access_controller_impl.rs 同（恒 null，原生二进制无代码源保护域）
+"java/security/AccessController.getProtectionDomain:(Ljava/lang/Class;)Ljava/security/ProtectionDomain;" = "const:null"
 # 线程 id 计数器：原生地址（thread_impl.rs NEXT_THREAD_ID）→ VM 单元
 "java/lang/Thread.getNextThreadIdOffset:()J" = "vm_cell:next_thread_id"
 "java/lang/ref/Reference.refersTo0:(Ljava/lang/Object;)Z" = "refers_to"
