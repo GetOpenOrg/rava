@@ -2,9 +2,11 @@
 # 闭包构成分析作业（服务器以作业模式运行；本机不跑）：对选定用例跑 rava closure，产出 closure.json（gzip）
 # 供 scripts/closure_composition.py 按机制拆分；可带反事实切除（--cut-file）做「整块去掉能减多少类」的归因。
 #
-# 用法：scripts/closure_composition_job.sh [--cut-file F --tag T | --cut-sets "名1 名2 …"] <用例>...
+# 用法：scripts/closure_composition_job.sh [--gates] [--cut-file F --tag T | --cut-sets "名1 名2 …"] <用例>...
 #   用例：hello | collectors | deepcopy | jcasasl | s0boot（s0boot 需 dev 级内存，见报告）
 #   --cut-file F：反事实切除条目文件（同 rava closure --cut-file；不健全，只作归因）；--tag T 为产物名后缀
+#   --gates：门自动排名（rava closure --gates，取代手工切除集）：产物 <用例>[.<tag>].gates.json.gz / .gates.md；
+#            额外参数经环境变量 CCOMP_GATES_ARGS 传入（如 "--gates-top 30 --gates-verify 16 --gates-mem-mb 12288"）
 #   --cut-sets：依次取 scripts/closure_composition_cuts/<名>.txt 作切除、名作 tag，对每个用例各跑一遍
 # 产物：build/ccomp/<用例>[.<tag>].json.gz、.out（stdout 摘要）、.err（stderr 尾与 /usr/bin/time）
 #       作业取回：--fetch 'build/ccomp/**'
@@ -13,12 +15,13 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/build/ccomp"
 mkdir -p "$OUT"
-CUT=(); TAG=""; SETS=""
+CUT=(); TAG=""; SETS=""; GATES=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cut-file) CUT=(--cut-file "$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"); shift 2 ;;
         --tag) TAG=".$2"; shift 2 ;;
         --cut-sets) SETS="$2"; shift 2 ;;
+        --gates) GATES=1; shift ;;
         *) break ;;
     esac
 done
@@ -26,7 +29,7 @@ done
 if [[ -n "$SETS" ]]; then
     rc_sets=0
     for s in $SETS; do
-        bash "$0" --cut-file "$(cd "$(dirname "$0")" && pwd)/closure_composition_cuts/$s.txt" --tag "$s" "$@" || rc_sets=1
+        bash "$0" $([[ $GATES == 1 ]] && echo --gates) --cut-file "$(cd "$(dirname "$0")" && pwd)/closure_composition_cuts/$s.txt" --tag "$s" "$@" || rc_sets=1
     done
     exit $rc_sets
 fi
@@ -106,6 +109,20 @@ for c in "$@"; do
     base="$OUT/$c$TAG"
     timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
     t0=$SECONDS
+    if [[ $GATES == 1 ]]; then
+        # 门排名：基线 + 子进程实测重跑（并行度与内存预算由 rava 自控）；不写 closure.json（-o 时并入 gates 键，体积大）
+        base="$base.gates"
+        read -r -a GARGS <<<"${CCOMP_GATES_ARGS:-}"
+        timeout "${CCOMP_TIMEOUT:-5400}" "${timer[@]}" "$RAVA" closure "${IN[@]}" "${CORPUS_JDK_ARGS[@]}" "${CUT[@]}" \
+            --gates --gates-out "$base.json" --gates-md "$base.md" "${GARGS[@]}" >"$base.out" 2>"$base.err"
+        rc=$?
+        echo "门排名 $c$TAG rc=$rc 耗时 $((SECONDS - t0))s"
+        grep -E "Maximum resident|Elapsed" "$base.err" | sed 's/^\s*/  /'
+        grep -E "^\[gates\]" "$base.err" | head -3
+        [[ -s "$base.md" ]] && sed -n '1,30p' "$base.md"
+        if [[ $rc == 0 && -s "$base.json" ]]; then gzip -f "$base.json"; else rc_all=1; rm -f "$base.json"; fi
+        continue
+    fi
     timeout "${CCOMP_TIMEOUT:-3000}" "${timer[@]}" "$RAVA" closure "${IN[@]}" "${CORPUS_JDK_ARGS[@]}" "${CUT[@]}" \
         -o "$base.json" >"$base.out" 2>"$base.err"
     rc=$?

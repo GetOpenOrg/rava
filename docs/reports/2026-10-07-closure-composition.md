@@ -10,7 +10,16 @@
 1. **闭包不是按机制线性叠加的，而是一个共享的核心团块加少数几道「门」。**
    CollectorsDemo / DeepCopy / TestJcaSasl 三例共有 **2987 类**（三例并集 3328 类）。三例在核心团块之外各自只多出 3 / 288 / 52 类；HelloWorld 的 468 类中有 467 类也在团块内。
    团块内部是多连通的。单独切掉一个机制只少 0–180 类，切掉入口门则整块消失：
-   **CollectorsDemo 只切「枚举 `values()` 反射调用」一处，类数就从 2990 降到 528（−2462，降 82%）**。降完后比 HelloWorld 只多 61 类，其中 44 类是 Stream。
+   CollectorsDemo 切掉「枚举 `values()` 反射调用」一处，类数从 2990 降到 528（−2462）。
+   **这是切除上界，不是直连收益（2026-10-08 更正）。** enum-values-direct（59451c29，已合入 batch-1008）把该调用点改成直接调用后，
+   HelloWorld 与 CollectorsDemo 实测都还是 **3011 类**：`Method.invoke` 仍经另外 4 个调用点入链
+   （docs/plans/2026-10-08-enum-values-direct.md §六 / §八）：
+   - `BasicImageReader$2.run@37`：经 `Random.<clinit>` 的 doPrivileged 扇出入链；
+   - `ServiceLoader$ProviderImpl.invokeFactoryMethod@20`；
+   - `AnnotationInvocationHandler.equalsImpl@121`；
+   - `HostLocaleProviderAdapter.findInstalledProvider@39`。
+   切除实验与直连差在多连通：切除挡住的是切点下游整条路，而直连只消掉一个入口。团块还有其余入口，只要有一个敞开，整块照旧进来。
+   上界要兑现，须让 `Method.invoke` 的全部入口都不经原入口（见第 5 条）。
 2. **按入口机制首达归属看：** 反射 1357（collectors）、序列化 2146（deepcopy）、安全 2197（jcasasl）。这只说明各例经哪扇门进入团块，团块本身的构成三例几乎相同。
    按自身包统计团块构成：安全 671、locale 310、集合 199、字符集 195、lang 190、NIO 152、invoke 148、并发 146、Stream 146、反射 143、时间 121、类加载 99、IO 95、日志 74。
 3. **拿 S0 Boot 在 JVM 上实际加载的 JDK 类（1694）作对照：** 团块 2987 类中只有 1378 类被 Boot 实际用到，**1609 类连一个 Spring Boot 应用都不加载**。
@@ -24,10 +33,10 @@
    | TestJcaSasl | 3039 | 2325 | allmech，−714 |
    | DeepCopy | 3275 | **2111** | r2all，−1164 |
 
-5. **推荐顺序**（详见 §七）：
-   1. 枚举反射调用直连（a3-C 前置）。
-   2. 「Lookup 访问校验折叠」，即 `SharedSecrets.ensureClassInitialized` 链。每个程序都受益，HelloWorld −82。
-   3. doPrivileged 扇出精度：三例共用的门；DeepCopy 合并切除到 2111。
+5. **推荐顺序**（详见 §七；2026-10-08 按直连实测调整，前两项前移）：
+   1. `Method.invoke` 全部入口直连：枚举入口已合入；其余 4 个入口（第 1 条所列）按 enum-values-direct §八 的三种形状收口。
+   2. doPrivileged 扇出精度：三例共用的门，又是 `BasicImageReader$2.run` 入口的来路；DeepCopy 合并切除到 2111。
+   3. 「Lookup 访问校验折叠」，即 `SharedSecrets.ensureClassInitialized` 链。每个程序都受益，HelloWorld −82（旧基线）。
    4. JCA / 字符集 / 日志 / locale 四块的构建期求值。
    5. 类加载 / jar / 资源整体替换为封闭映像，即 boot-layer 步骤 1–5。
    6. 引用 / 信号按 ③ 收口。
@@ -49,6 +58,47 @@
   切写入点会让字段值集变空、按初值折叠，结果非单调（jarverify 组使 collectors +40、deepcopy +923）；切 assertion 则使分析停滞。两者都已在 §五 注明。
 - JVM 对照取 S0 Boot 样例的 `-Xlog:class+load`（作业 apis0-kr2b-1fdb1bed），只统计 jrt / CDS 来源的 JDK 类；隐藏类与代理另计（510 + 281 + 44）。
   JVM 按需加载，这一列是「一个真实 Boot 应用运行期实际用到」的参考值，不是闭包下限。
+
+### 门自动排名：`rava closure --gates`（2026-10-08 起取代手工切除集）
+
+上面的手工流程是：读 §3.3 的首达链猜门 → 手写 `closure_composition_cuts/*.txt` → 作业逐组重跑 → `--diff` 对账。
+它的三个弱点是：门靠人猜；多连通团块上的单门 Δ 都是 0，要靠人试组合；切到写入点 / 构造器会非单调（jarverify 组），要事后才发现。
+`--gates` 把这条流程收进分析器，一次运行完成（实现：`generator/crates/closure/src/engine/gates*`，driver `gates_cmd.rs`）。
+
+1. **候选**：沿每个类的首达溯源链（与 `--why` 同口径）上溯，统计每个节点下游经过的类数，取前 `pool` 个（缺省 max(4 × top, 40)）。
+   只取消费型节点：方法体（非构造器 / 类初始化、体内无字段写入、不是根）与调用点（invokevirtual / invokeinterface / invokestatic / 非构造 invokespecial）。
+   写入点和构造器不作候选，所以不会出现 jarverify 那样的非单调切除。
+2. **模型量测**：基线运行同时登记全部触发边（方法源带调用点偏移）。在这张触发图上做「与」可达性：派发边以接收者实例化为条件，被切节点保留但不再触发出边，与引擎的切除同口径。
+   在图上算出：
+   - 每个候选的单切 Δ（类 / 方法 / 消失类的包分布）；
+   - 贪心组合累计曲线：逐步取边际收益最大者。若全体单切都低于门槛（多连通），就沿模型首达树依次切剩余最大子树的入口，至多 4 步成段：段内累计达标就整段采纳，不达标就回退。
+   - 同机制组合上界：同包，或消失类集合 Jaccard ≥ 0.5。
+   模型是上近似：值流折叠不在图上。
+3. **实测校准**：贪心前缀（第 1、2、4、8… 步与末步）、前 3 组、单切前几名，以 `--cut-file` 子进程重跑，与手工切除逐字节同口径。预算 `--gates-verify`，缺省 12。
+   排名优先用实测单切 Δ；实测出现基线没有的类时标「非单调」。
+   并行度取 `--gates-jobs`、CPU 数、内存预算（`--gates-mem-mb`，缺省 12288）÷ 基线峰值三者的最小值。超时（`--gates-timeout`，缺省 1800 s）的子进程会被终止，记为失败。
+4. **类别**：按分析器事实与清单判定，不写类名特判。依次检查：
+   1. 清单 `closure.toml [gates]` 条目（门所在类，其次调用目标类）；
+   2. 首达链经 VM 驱动入口（vm-rule / vm-hook）或 VM 边界类 → **VM 驱动**；
+   3. 首达链根为构建期种子（jca / locale / 注解 / …）、下游经服务 / 资源束查找首达、或门内读系统属性 → **可构建期求值**；
+   4. 调用点派发目标 ≥ 枢纽阈值、开放枢纽、或下游经反射建模首达 → **精度缺口**；
+   5. 只在类初始化链上 → 可构建期求值（弱）；
+   6. 都不满足 → 精度缺口（按 ③ 查精度）。
+   每条判定都带证据文字。**运行模型替换**目前只来自清单（类加载 / jar / 签名校验）。
+
+输出：
+- `--gates-out` 写机读 JSON：各门的 id（可直接放进 `--cut-file`）、单切 Δ（模型 / 实测）、贪心累计 Δ、包分布、类别与证据、示例首达链；
+- `-o` 的 closure.json 另并入 `gates` 键；
+- `--gates-md` 写人读排名表，同时打到标准输出。
+
+作业脚本：`closure_composition_job.sh --gates <用例>…` 产出 `build/ccomp/<例>.gates.json.gz` / `.gates.md`。
+
+```bash
+uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --servers us1 \
+  --job gates-<短sha> --ref <sha> --job-timeout 7200 \
+  --cmd "CCOMP_TIMEOUT=5400 bash scripts/closure_composition_job.sh --gates hello collectors deepcopy jcasasl" \
+  --fetch 'build/ccomp/*.gz' --fetch 'build/ccomp/*.md' --fetch 'build/ccomp/*.out'
+```
 
 **作业：**
 
@@ -82,6 +132,10 @@ uv run python scripts/closure_composition.py --closure collectors=<…>/collecto
 | CollectorsDemo | 2990 | 17770 | 67 s | 2.2 GB |
 | TestJcaSasl | 3039 | 17956 | 72 s | 2.3 GB |
 | DeepCopy | 3275 | 20792 | 158 s | 3.4 GB |
+
+**基线口径差（2026-10-08 补记）：** 本文的 HelloWorld 基线是 468 类。boot-image-s4 合入后实测约 **3043**，enum-values-direct 核对时（§六 6.4）为 **3011**，
+即 HelloWorld 也进了核心团块：`Enum.valueOf` 经 `enumConstantDirectory` 让 `Method.invoke` 入链，另有第一节所列 4 个入口。
+因此本文 §三至 §五的数字都属旧基线，§七各项的单项收益须在新基线上重测。差距由哪些门带入，待 `rava closure --gates` 在新基线上出数后补写到这里。
 
 ### 3.1 自身包构成（类数）
 
@@ -207,6 +261,11 @@ S0 Boot 的 JVM 实载为参照列。
 | **allmech** | 以上合并，不含 formatter / serfilter / accobj / urleq | **375（−93）** | **503（−2487）** | **2325（−714）** | 3986（消失 214、新增 925：被 jarverify 副作用污染） |
 | **r2all** | allmech + serfilter + accobj + urleq | 369（−99） | 503 | 超时（>900 s） | **2111（−1164）** |
 
+**切除上界 ≠ 直连收益（2026-10-08 补记）：** enumrefl 行的 −2462 是切除上界。enum-values-direct 已把该调用点直连，
+新基线上 HelloWorld / CollectorsDemo 仍为 3011 类，原因是 `Method.invoke` 还有 4 个入口（第一节第 1 条）。
+团块是多连通的：切除一点只在该点是唯一入口时才兑现整块；其余入口任一敞开，整块照旧进来。
+`--gates` 的贪心组合曲线（入口段）和组合实测就是用来量这种「多入口一起关」的收益的。
+
 **assertion 组**（`Class.desiredAssertionStatus` 体切除）使 collectors / jcasasl 的分析停滞 35 分钟以上，已从切除集删除。
 该方法的 VM 初值已由 `vm_intrinsics.toml` 中 `desiredAssertionStatus0 = false` 折叠，`$assertionsDisabled` 已是常量，不需要再做反事实。
 **r2all 在 jcasasl 上超时**，原因同属切除副作用：切除使某些值集变空，下游折叠条件失效，分析重复展开。不影响结论。
@@ -214,7 +273,7 @@ S0 Boot 的 JVM 实载为参照列。
 ### 5.2 消失类的构成（按自身包）
 
 - **collectors-enumrefl −2462：** 安全 657、locale 289、字符集 173、NIO 145、invoke 134、集合 130、时间 121、并发 113、Stream 98、类加载 79、lang 78、日志 74…
-  切后 528 类比 hello 多 61 类：Stream 44、集合 10、反射 5、lang 1、其他 1。这就是 CollectorsDemo 的真实增量。
+  切后 528 类比 hello 多 61 类：Stream 44、集合 10、反射 5、lang 1、其他 1。这是 CollectorsDemo 在旧基线上相对 HelloWorld 的增量（切除上界口径）。
 - **jcasasl-allmech −714：** 安全 468、字符集 158、并发 29、日志 19、类加载 14…
   剩下的 2325 类以 JCA 为主：`Security.<clinit>` 加 provider 表，见 §六「安全」。
 - **jcasasl-accobj −146：** 安全 88、反射 23、NIO 13、模块 13。
@@ -247,7 +306,7 @@ S0 Boot 的 JVM 实载为参照列。
 
 | 块 | ① 模型下成立？ | ② 构建期可求值？ | ③ 翻译 + 精度缺口 | 处理 | 可减类数 | 工作 | 风险 | S0 面 |
 |---|---|---|---|---|---|---|---|---|
-| **反射：枚举 `values()` 反射调用** | 成立 | — | **是**：`getMethod("values").invoke(null)` 的接收类是已知的枚举类，却展开了整个 `Method.invoke` 访问器 / 句柄体系，经 `AccessibleObject.<clinit>` 进入团块 | 精度：已知类上已知名静态无参方法的反射调用按直接调用建边（a3-C 前置；c1d §21.9） | 实测：collectors **−2462**；所有用到 EnumMap / EnumSet / `Enum.valueOf` 的程序同量级（a3-C 记 TestEnumBasic 472 → 3103） | 分析器反射调用建模：名字与接收类都已知时直连；未知时仍走全套 | 低：名字或类不确定时保持现状，健全性不受影响 | 在面内（反射 126 方法 / 23 类）：反射保留，只收窄 |
+| **反射：枚举 `values()` 反射调用** | 成立 | — | **是**：`getMethod("values").invoke(null)` 的接收类是已知的枚举类，却展开了整个 `Method.invoke` 访问器 / 句柄体系，经 `AccessibleObject.<clinit>` 进入团块 | 精度：已知类上已知名静态无参方法的反射调用按直接调用建边（a3-C 前置；c1d §21.9） | 实测：collectors **−2462**；所有用到 EnumMap / EnumSet / `Enum.valueOf` 的程序同量级（a3-C 记 TestEnumBasic 472 → 3103）。切除上界：直连已合入（59451c29），新基线仍 3011 类，须连同其余 4 个 `Method.invoke` 入口一起收口才兑现（§七第 1 项） | 分析器反射调用建模：名字与接收类都已知时直连；未知时仍走全套 | 低：名字或类不确定时保持现状，健全性不受影响 | 在面内（反射 126 方法 / 23 类）：反射保留，只收窄 |
 | **invoke：`SharedSecrets.ensureClassInitialized` → `Lookup.ensureInitialized`** | 类初始化本身是 ③（已经由 `class_initializers` 承载）；`Lookup` 的访问校验在 rava 下恒通过 | **是**：调用方是 java.base 内的全权 `MethodHandles.lookup()`，访问校验在构建期就有确定结果 | — | 构建期求值：`Lookup` 访问校验按全权 lookup 折叠，或把 `SharedSecrets.ensureClassInitialized` 登记为按镜像初始化入口（`class_initializers`）、不分析其体 | 实测：hello **−82**（468 → 386）。所有程序都受益；用到 lambda 的程序本来就需要 invoke 体系，收益较小（collectors −1） | 分析器折叠，或清单登记 1 行 | 低 | 面内只有 4 类，不受影响 |
 | **安全 / JCA** | 成立（提供者是纯 Java） | **是**：`java.security` 配置、提供者列表与顺序、`Security.<clinit>` 读配置、`Debug` 读 sysprop | 有：Object 虚方法的 reflect 成员边扇出到 `AlgorithmId.toString` 一类（随实例化集合收窄自然消失） | 构建期求值：`ProviderList` / `ProviderConfig` 只展开配置且实际被请求的提供者与服务类型；fix-jca-subset 的类型过滤之外，再按算法名常量收窄；jar 签名校验整体移除（封闭映像无签名 jar，见「类加载」） | 实测：jcasasl allmech **−714**（安全 468）；估计：团块差 **593** | 引导映像求值器覆盖 `Security.<clinit>` 与 provider 装载；分析器按服务类型 + 算法名收窄 | 中：算法名来自运行期字符串时要回退到全集 | 在面内（150 / 45：MessageDigest、SecureRandom 等）：保留，只收窄提供者 |
 | **locale / 资源束 / 文本格式** | 成立 | **是**：缺省 locale、`LocaleProviderAdapter` 偏好（sysprop）、CLDR / JRE 适配器选择、可用 locale 列表都能在构建期定 | 有：`Formatter` 本身在面内；locale 数据类按 locale 种子收窄已做 | 构建期求值：适配器链与缺省 locale 定值，只保留实际 locale 的束；`Formatter` 翻译 | 实测：formatter −25（只是这一门，团块多连通）；估计：团块差 **295** | 引导映像求值 `LocaleProviderAdapter` 静态状态；分析器按适配器类型收窄 | 中：用户代码显式 `Locale.forLanguageTag` 时需保留对应束 | 在面内（74 / 14）：Formatter / DateTimeFormatter 不可删 |
@@ -268,16 +327,22 @@ S0 Boot 的 JVM 实载为参照列。
 
 ## 七、推荐收窄任务（按回收量 × 覆盖面排序，本文不实施）
 
-1. **枚举 `values()` 反射调用直连**（精度；a3-C 前置）。
-   - 已知类、已知名、静态无参的反射调用按直接调用建边，不展开 `Method.invoke` 的访问器 / 句柄体系。
-   - 实测 collectors 2990 → 528；凡用到 EnumMap / EnumSet / `Enum.valueOf` 的程序都有同量级收益。
-   - 完成后 a3-C 的 `Class.enumConstantDirectory` 手写可删。
-2. **`SharedSecrets.ensureClassInitialized` 链构建期折叠**（构建期求值 / 清单）。
-   - 每个程序 −82（HelloWorld 468 → 386）。工作量最小（清单 1 行或一处折叠）。
-3. **doPrivileged 扇出精度**（`executePrivileged` 按调用点上下文敏感，或在 rava 下把 `doPrivileged(a)` 视为对 `a.run()` 的单点调用）。
-   - 这是三例共用的门：单门实测 −145 至 −181。
+1. **`Method.invoke` 全部入口直连**（精度；a3-C 前置；2026-10-08 按直连实测改写）。
+   - 枚举入口 `Class.getEnumConstantsShared@49` 已直连（enum-values-direct 59451c29，已合入 batch-1008）。
+   - 但新基线上 HelloWorld / CollectorsDemo 仍为 3011 类：切除实验的 2990 → 528 是上界，只有其余 4 个入口也不经 `Method.invoke` 体时才兑现。
+   - 其余入口按 enum-values-direct §八 收口：
+     - 实例目标（`BasicImageReader$2.run@37`、`AnnotationInvocationHandler.equalsImpl@121`）：按接收者值集虚派发接边；
+     - 反射对象跨方法流动（`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`、`equalsImpl`）：反射对象建「解析出的成员键」抽象值；
+     - 非常量名（`HostLocaleProviderAdapter.findInstalledProvider@39`）：名字按拆段口径求候选集。
+   - 每收口一个入口，就用 `--gates` 在新基线上复测，看贪心组合里剩余入口的累计 Δ。
+   - 全部完成后，a3-C 的 `Class.enumConstantDirectory` 手写可删。
+2. **doPrivileged 扇出精度**（前移；`executePrivileged` 按调用点上下文敏感，或在 rava 下把 `doPrivileged(a)` 视为对 `a.run()` 的单点调用）。
+   - 这是三例共用的门：单门实测 −145 至 −181（旧基线）。
+   - 它还是第 1 项 `BasicImageReader$2.run` 入口的来路：`Random.<clinit>` → `getReflectionFactory` → doPrivileged 按全部 PrivilegedAction 实现派发。所以它与第 1 项同属关闭 `Method.invoke` 入口的前置。
    - DeepCopy 的 OIS 反射构造经它进入团块，与第 4–6 项合并后为 −1164（3275 → 2111）。
    - c1d §21.5 曾测得约 0，那是在枚举门敞开时的口径，需要在新口径下复核。
+3. **`SharedSecrets.ensureClassInitialized` 链构建期折叠**（构建期求值 / 清单）。
+   - 旧基线下每个程序 −82（HelloWorld 468 → 386）。工作量最小（清单 1 行或一处折叠）。
 4. **JCA 提供者构建期求值 + jar 签名校验移除**（构建期求值 + 整体替换）。
    - jcasasl allmech −714，团块差 593。与 c1d §21.5 重定向 1 合并。
 5. **字符集构建期求值**：扩展提供者为空；常量名查找收窄。三例都是 −149 至 −151，团块差 173。
@@ -287,7 +352,8 @@ S0 Boot 的 JVM 实载为参照列。
 9. **容器元素敏感**（`Objects.equals` 汇合派发）：c1d §21.5 重定向 2，随后续多连通门关闭而显现。
 10. **引用 / 信号按 ③ 收口**：随无 GC 模型与决定 L 实施，减量小。
 
-**口径提醒：** 团块是多连通的。第 1 项完成后，第 3–9 项的单项收益要在新基线上重测（collectors 已降到 503–528，deepcopy / jcasasl 取决于各自的门）。
+**口径提醒：** 团块是多连通的。§五的单项收益都是旧基线（HelloWorld 468）上的切除上界，新基线（约 3011–3043）上要重测。
+重测用 `rava closure --gates`：单切 Δ、贪心累计与组合实测一次给出。第 1、2 项完成前，第 3–9 项的单切 Δ 多半接近 0（团块仍经 `Method.invoke` 入口整体进来），要看贪心组合曲线。
 建议每完成一项，用 `closure_composition_job.sh` 在 4 例上重跑基线与 r2all，作为验收数据（jarverify 组是写入点切除、非单调，合并上界不含它更准，下一轮可剔除）。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
