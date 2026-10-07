@@ -299,6 +299,15 @@ impl Engine<'_> {
     pub(super) fn null_recv(&self, clones: &[usize], um: &super::unmodeled::Unmodeled) -> Vec<u32> {
         let mut hit: BTreeMap<u32, bool> = BTreeMap::new();
         for &i in clones {
+            // 具体上下文克隆没有抽象分析结果：轨迹执行过的调用点在具体求值里实际取到了接收者，运行期同一段
+            // 字节码照常执行（具体求值只决定闭包，不替换生成代码），不判恒 null。否则抽象克隆的形参值集为空
+            // （如映像 lambda 的实现方法只经具体轨迹调用）时，会把具体轨迹上的活调用误折叠为 null_recv
+            if self.is_concrete(i) {
+                for &pc in self.concrete_pcs(&self.methods[i].key).into_iter().flatten() {
+                    hit.insert(pc, true);
+                }
+                continue;
+            }
             let Some(a) = &self.methods[i].analysis else { continue };
             for (pc, e) in &a.events {
                 if let Event::Invoke { opcode: classfile::op::INVOKEVIRTUAL | classfile::op::INVOKEINTERFACE, mref, args, .. } = e {
