@@ -408,11 +408,13 @@ method_lookups = [
 ]
 # constructor_lookups  构造器查找：Class 实参 / Class 接收者值集里类镜像所指类的构造器成为反射构造目标（构造器没有
 #                     按名形状，查找即点名该类构造器）；方法句柄 newInvokeSpecial（DirectMethodHandle 先 allocateInstance
-#                     再调 <init>）与 Constructor.newInstance 都经 L3 分派闭包的 <alloc> / <init> 臂执行
+#                     再调 <init>）与 Constructor.newInstance 都经 L3 分派闭包的 <alloc> / <init> 臂执行。
+#                     Class.newInstance 即 getDeclaredConstructor().newInstance()（体内经私有 getConstructor0 查找），同口径
 constructor_lookups = [
     "java/lang/invoke/MethodHandles$Lookup.findConstructor:(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
     "java/lang/Class.getConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
     "java/lang/Class.getDeclaredConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.newInstance:()Ljava/lang/Object;",
 ]
 # method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
 #                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，

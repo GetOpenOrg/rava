@@ -11,10 +11,10 @@
 | TestXmlSaxEvents | 工厂缺省实现同上已修；随后暴露下一层：`MissingResourceException: Could not load any resource bundle by com.sun.org.apache.xerces.internal.impl.msg.XMLMessages`（解析错误消息按名装载资源束类） | 资源束按名装载未建模，与 TestRowSetProvider（已登记）同根因，登记已知 | c4run-xml-a5de7eee：ubuntu 失败（签名如左） |
 | TestPropertiesXmlRoundTrip | ① CJK 键 String.hashCode NPE（c4-regress 1b096880 已修，TestStringHashUtf16 同根）；② `Properties.store0` 局部 `entries` 的 LVT 声明为 `Collection`，首值 `entrySet()` 为子接口 `Set`、后值为 `ArrayList`；生成器的「再赋值接口声明变量取载体」规则跳过接口值，按 `Set` 定型，ArrayList 被包成 Set 视图，`Collection.iterator` 派发落空 → AbstractMethodError | a927148c：再赋值的接口声明局部首值为子接口时同样按声明接口载体定型（`sim/src/store/align.rs`） | c4run-props-4981c057（c4-runfix + c4-regress 合成抽查分支 `c4-runfix-chk`）：本例与 CollectorsDemo / DeepCopy / TestStringHashUtf16 全过 |
 | TestSetAccessibleBoundary | Class.getModule 手写近似使 java.base 类落无名模块，checkCanSetAccessible 放行 | b3c2bf8c 登记已知，归引导映像第 4 步 | — |
-| TestBeansPropertyEditor | 见第二节 | 登记已知（原则取舍，停在该项） | — |
+| TestBeansPropertyEditor | 见第二节 | 方案 A 实施（分支 `c4-beans-precision`：3005a63d 引用选择子按 null 分调用点上下文 + 清单 `Class.newInstance` 入 `constructor_lookups`），已知失败登记已删 | 待抽查 |
 | TestUrlParsingFaces | 见第三节（产品取舍，停在该项） | — | c4run-url-3f59a8e9（us1）同样失败，非 ubuntu 脏工作区所致 |
 
-## 二、TestBeansPropertyEditor：构造器查找值集不齐全（待决）
+## 二、TestBeansPropertyEditor：构造器查找值集不齐全（10-07 用户定方案 A，已实施）
 
 **根因**：`PropertyEditorManager.findEditor(int.class)` 返回 null，用户随后 `intEd.setAsText` NPE。
 `PropertyEditorFinder.<init>` 以 ldc 把预置编辑器（`com/sun/beans/editors/IntegerEditor` 等 8 个）登记进 `WeakCache`，
@@ -38,7 +38,46 @@
   语义等价却口径不同，属特判，且 JDK 内其他 `newInstance` 站点的代价未量。
 - **C. 维持现状登记已知**（已登记 `docs/known_failures.toml`）。
 
-**建议**：A（终态口径：靠精度区分真实目标，不放宽齐全判定）。需协调者确认后另立任务，本项停在此处。
+**建议**：A（终态口径：靠精度区分真实目标，不放宽齐全判定）。
+
+**实施（10-07 用户选定 A，分支 `c4-beans-precision`，基于 rust-closure-analyzer 84440f29）**：
+
+1. 分析器（3005a63d）：选择子形参（`selector.rs`）由「int 族形参作 switch / 条件跳转键」扩到「可空性未知、直接作
+   ifnull / ifnonnull 操作数的引用形参」，判定扩到实例方法，静态转发链同时认引用形参原样转发。字节码调用点在
+   被调方引用选择子形参上传 null 时，被调方按调用点克隆（虚分派 `dispatch_one` / 非虚 `edge_recv` 经
+   `recv_call_ctx`，静态经 `selector_ctx`）。克隆用新的「形参常量上下文」（`ctxsel.rs` `const_ctx`）：只分开方法节点，
+   堆上下文取外层上下文（`ctx_heap`），克隆体内分配与不克隆时同一抽象对象；按（堆上下文, 调用点）命名，递归链上有界。
+   `instantiate(predefined, null)` 克隆里 `name` 形参常量为 null，`if (name != null)` 支剪去，@29 接收者只剩注册表镜像。
+2. 清单：`Class.newInstance:()Ljava/lang/Object;` 入 `[facts.reflect] constructor_lookups`（即 `getDeclaredConstructor().newInstance()`，
+   同口径；齐全判定不放宽）。克隆里 @29 值集齐全，预置编辑器构造器按已知集合点名。
+
+**过程中否掉的两版**（均未提交）：
+- 克隆沿用 `site_ctx_in`（调用点为堆上下文链首）：类集不变，但方法集 +15～+41（克隆体内分配按调用点而非接收者命名，
+  不同接收者经同一调用点的容器对象合流，`List.forEach` / `LoggerWrapper.log` 等多出目标）。改为堆上下文取外层后方法集逐项一致。
+- 形参常量上下文按外层上下文全名命名：外层本身是克隆时名字逐层延长，递归调用链上上下文无界——本机 beans 闭包 22 分钟、
+  内存 30GB（协调者已停）。改为按堆上下文命名后有界。
+
+**闭包对照**（本机 `rava build <T> --stop-after emit --closure-json --clean`，单例、8GB 内存上限；基线 = 84440f29 构建）：
+
+| 用例 | 基线类数 | 仅分析器（3005a63d） | 分析器 + 清单 | 方法数 基线 → 终 | 方法上下文 基线 → 终 |
+|---|---|---|---|---|---|
+| TestBeansPropertyEditor | 2940 | 2940（类 / 方法集一致） | 2950（+10） | 17522 → 17601 | 70648 → 78446 |
+| HelloWorld | 469 | 469（一致） | 469（一致） | 1828 → 1828 | 4056 → 4405 |
+| CollectorsDemo | 2914 | 2914（一致） | 2924（+10） | 17465 → 17513 | 70841 → 78381 |
+| DeepCopy | 3195 | 3195（一致） | 3205（+10） | 20460 → 20507 | 95359 → 104694 |
+| TestSerialUserGenericCallbacks | 3198 | 3198（一致） | 3208（+10） | 20451 → 20498 | 95520 → 104838 |
+
+- 预置编辑器入链：`com/sun/beans/editors/{Boolean,Byte,Double,Float,Integer,Long,Short}Editor` 全部实例化，`<init>` / `setAsText` 等进闭包
+  （beans 方法 +79 / -0：`com/sun/beans/editors` 18 个、keystore 相关 45 个、其余为解析路径）。
+- 四个对照用例 +10 类全部相同：`java/security/KeyStore$Entry$Attribute`、`java/security/PKCS12Attribute`、
+  `sun/security/pkcs12/PKCS12KeyStore$`{`CertEntry`,`Entry`,`KeyEntry`,`PrivateKeyEntry`,`SecretKeyEntry`}、
+  `sun/security/provider/JavaKeyStore$`{`KeyEntry`,`TrustedCertEntry`}、`sun/security/tools/KeyStoreUtil`。来源是清单一项，不是分析器改动：
+  `sun/security/util/KeyStoreDelegator.engineLoad` 等 4 处以 `Class.newInstance` 实例化其 `primaryKeyStore` / `secondaryKeyStore`
+  字段（值集齐全：`JavaKeyStore$JKS` / `PKCS12KeyStore` 镜像，`DualFormatJKS.<init>` 的 ldc）。原先这两个 keystore 类停在 type 级、
+  构造器不在闭包——`KeyStore.getInstance("JKS").load(...)`（`AnchorCertificates` 读 cacerts 即走此路）运行期会落存根，属漏闭包，
+  补上的是 keystore 加载体（条目类 / PKCS12 属性）。与第二节「已实测否决的方案」的 +1062 不同：那是放宽齐全判定所致，本方案不放宽。
+- 闭包耗时（`summary.elapsed_ms`，本机同期有其他重进程，仅供参考）：beans 21.3 s → 25.4 s、DeepCopy 47.9 s → 64.5 s；
+  方法上下文数稳定在 +9%～+11%。
 
 ## 三、TestUrlParsingFaces：URL 协议处理器按包前缀装载（待决）
 
@@ -79,7 +118,7 @@ HelloWorld 469、CollectorsDemo 2914、DeepCopy 3195、TestModuleLayerDefine 307
 ## 五、未完成项
 
 - TestUrlParsingFaces：待决（第三节，建议 A，需实测体积）。
-- TestBeansPropertyEditor：待决（第二节，建议 A）。
+- TestBeansPropertyEditor：方案 A 已实施（第二节），待服务器抽查运行通过；+10 KeyStore 类为漏闭包补全，请协调者确认是否接受。
 - TestXmlSaxEvents / TestRowSetProvider：模块资源束按名装载的分析器建模，另立任务。
 - TestPropertiesXmlRoundTrip 依赖 c4-regress（1b096880）先合入集成分支；a927148c 与之合并后该例通过。
 - a927148c 改动生成器存储对齐，影响面只在「接口声明、区间内再赋值、首值为子接口」的局部；抽查四例通过，C4 解冻合入前随全量再验。
