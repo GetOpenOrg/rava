@@ -127,6 +127,7 @@ impl<'a> Engine<'a> {
                     // 转换结果是独立来源：只收输入中 ⊂ 目标类型的部分（转换失败的值到不了后继）
                     if let Some(v) = v {
                         let cid = self.id(c);
+                        self.bound_site(Node::S(m, off), cid);
                         let fs = self.feeds(m, v, cid);
                         self.feed(&fs, Node::S(m, off), cid);
                     }
@@ -136,6 +137,7 @@ impl<'a> Engine<'a> {
                     // 判定成立一侧的收窄值：输入中 ⊂ 目标类型的部分
                     if let Some(v) = v {
                         let cid = self.id(c);
+                        self.bound_site(Node::S(m, off), cid);
                         let fs = self.feeds(m, v, cid);
                         self.feed(&fs, Node::S(m, off), cid);
                     }
@@ -154,7 +156,7 @@ impl<'a> Engine<'a> {
                     for f in self.feeds(m, v, class) {
                         match f {
                             Feed::N(n) => self.mflow(n, dst, MirrorOp::Sub(kid)),
-                            Feed::S(s) => self.mirror_into(MirrorOp::Sub(kid), &s, dst),
+                            Feed::S(s) => self.mirror_into(MirrorOp::Sub(kid), &s, dst, None),
                         }
                     }
                 }

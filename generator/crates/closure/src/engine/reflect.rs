@@ -45,10 +45,10 @@ impl<'a> Engine<'a> {
         k
     }
 
-    /// 镜像流边的变换：op 作用于值集 s
-    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
+    /// 镜像流边的变换：op 作用于值集 s（bound 见 [`Self::mirror_into`]）
+    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet, bound: Option<u32>) -> TypeSet {
         match op {
-            MirrorOp::Of => self.mirror_set(s),
+            MirrorOp::Of => self.mirror_set(s, bound),
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
@@ -284,7 +284,9 @@ impl<'a> Engine<'a> {
     /// 值集中各值的类镜像（`getClass`）。open(T) 是「任意已实例化的 T 子类型」，其类镜像是 G 中 T 的子类型
     /// （数组分配点须已逃逸，同虚调用接收者的 open 展开）各自的镜像；G 增长时由 [`Self::mirror_into`] 登记的
     /// 结果节点补入（[`Self::mirror_reopen`]）。lambda 合成类、手写实现对象给非字节码类镜像（[`Self::synthetic_mirror`]）
-    pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
+    ///
+    /// bound：值集来自接口类型判定站点（[`Self::open_bounds`]）时的接口；open(T) 只展开为 G 中同时 ⊂ 该接口的子类型
+    pub(super) fn mirror_set(&mut self, s: &TypeSet, bound: Option<u32>) -> TypeSet {
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
@@ -294,6 +296,9 @@ impl<'a> Engine<'a> {
         for o in s.open.iter() {
             for &x in self.g_of(o).iter() {
                 if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+                    continue;
+                }
+                if bound.is_some_and(|b| !self.sub(x, b)) {
                     continue;
                 }
                 let k = self.value_mirror(x);
@@ -327,20 +332,24 @@ impl<'a> Engine<'a> {
     }
 
     /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，
-    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像
-    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像。
+    ///
+    /// bound：s 取自接口类型判定站点（instanceof 成立一侧 / checkcast 到接口 I）时为 I。类 × 接口的收窄保留 open(T)
+    /// （`classes.rs` `open_narrow`：交集「T 的子类中实现 I 者」不可表示为单一 open 类型），getClass 展开时按 I 再求交——
+    /// 否则 `x instanceof Comparable ? x.getClass() : …` 对 open(Thread) 得到全部 Thread 子类的镜像
+    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node, bound: Option<u32>) {
         if let MirrorOp::ArrayOf(m, off) = op {
             self.array_of_into(m as usize, off, s, dst);
             return;
         }
         if op == MirrorOp::Of {
             for o in s.open.iter() {
-                if self.mirror_open_seen.insert((o, dst)) {
-                    self.mirror_open.entry(o).or_default().push(dst);
+                if self.mirror_open_seen.insert((o, dst, bound)) {
+                    self.mirror_open.entry(o).or_default().push((dst, bound));
                 }
             }
         }
-        let k = self.mirror_op(op, s);
+        let k = self.mirror_op(op, s, bound);
         self.add_to(dst, &k);
     }
 
@@ -353,7 +362,12 @@ impl<'a> Engine<'a> {
         let mut dsts: Vec<Node> = vec![];
         for o in os {
             if self.sub(x, o) {
-                dsts.extend(self.mirror_open[&o].iter().copied());
+                let ds = self.mirror_open[&o].clone();
+                for (d, bound) in ds {
+                    if bound.is_none_or(|b| self.sub(x, b)) {
+                        dsts.push(d);
+                    }
+                }
             }
         }
         if dsts.is_empty() {

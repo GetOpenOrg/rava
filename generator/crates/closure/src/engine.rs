@@ -508,9 +508,12 @@ pub struct Engine<'a> {
     /// 流入 dst（逐调用点）
     mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
     mflow_seen: HashSet<(Node, Node, MirrorOp)>,
-    /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
-    mirror_open: BTreeMap<u32, Vec<Node>>,
-    mirror_open_seen: HashSet<(u32, Node)>,
+    /// `getClass` 作用于 open(T) 的结果节点：T → (节点, 接口界)（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
+    mirror_open: BTreeMap<u32, Vec<(Node, Option<u32>)>>,
+    mirror_open_seen: HashSet<(u32, Node, Option<u32>)>,
+    /// 接口类型判定站点（instanceof 成立一侧 / checkcast，目标为接口 I）的收窄节点 → I：节点中的 open(T) 实为 T ∩ I
+    /// （`reflect.rs` `mirror_into`）
+    open_bounds: HashMap<Node, u32>,
     /// 反射数组分配调用点 (方法, 偏移) 的元素类型实参与结果节点（`reflect.rs::array_of_into`）
     array_of: HashMap<(usize, u32), ArrayOfSite>,
     /// 尚未放行的反射数组分配调用点：到工作队列排空时由 `reflect.rs::array_of_release` 定夺

@@ -374,7 +374,7 @@ impl<'a> Engine<'a> {
                 for f in recv_fs.iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => self.mirror_into(op, s, res),
+                        Feed::S(s) => self.mirror_into(op, s, res, None),
                     }
                 }
             } else if model == RetModel::Receiver {
@@ -390,7 +390,7 @@ impl<'a> Engine<'a> {
                 for f in a.get(i).cloned().flatten().iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => self.mirror_into(op, s, res),
+                        Feed::S(s) => self.mirror_into(op, s, res, None),
                     }
                 }
             } else if let RetModel::Read(src) = model {

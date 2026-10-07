@@ -191,6 +191,7 @@ impl<'a> Engine<'a> {
             mflow_seen: HashSet::default(),
             mirror_open: BTreeMap::new(),
             mirror_open_seen: HashSet::default(),
+            open_bounds: HashMap::default(),
             array_of: HashMap::default(),
             array_of_pending: BTreeSet::new(),
             refl_arrays: HashSet::default(),
