@@ -4164,3 +4164,123 @@ e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内�
 - `b2a3e67b` 宏：vtable trait 缺省方法按本类 trait 限定调用 `__as_` 钩子（E0034）。
 - `5cfe2541` 生成器：局部槽「确定为空」跟踪（E0277）。
 - 本节文档：本节之后的提交。
+
+### 30.17 第 14 步：SyspropsLambdaLeak 闭包不收敛——三处成因已修、第四处待修（2026-10-07，分支 `c1d-url-b2`）
+
+#### 现象
+
+- 单测 `sysprops_lambda_return_confined`（`generator/crates/driver/tests/closure_cli.rs`，fixture `SyspropsLambdaLeak.java`：lambda 经
+  doPrivileged 返回 `System.getProperties()` 存入静态字段，系统属性表整片逃逸，断言 `leak["all"] == true`）在本分支跑不完。
+- 集成分支 f75c32a4 上同一闭包：sg2 用时 10:45、峰值 7.06 GB（复跑 11:28 / 7.13 GB），终态 lcalls 199k、escaped 10.9k、methods 136.7k。
+- 本分支 95b2d84e：540 s 时 lcalls 900k、RSS 9.4 GB 仍在涨，10 GB 上限内跑不完。
+- 诊断手段：服务器作业（url2fix-*）给引擎临时打补丁，每 120 s 打印规模（方法 / 对象 / 逃逸 / lcalls 按站点与 lambda 实现分布），
+  并在逃逸节点增长处按来源计数（事件数 / 对象数 / 数组数）；补丁不提交。配合 `--flows @grow: / @edge:` 与 `--cut` 定位。
+
+#### 成因 1：同巢内部分配一律沿用属主链（提交 `62097efc`）
+
+- B6 对同类 / 同巢分配一律沿用分配方的属主链。集合借出的拆分器（`ArraySpliterator.trySplit`、`IteratorSpliterator.trySplit`）
+  按「分配点 × 属主集合」成倍展开；它们之上的方法克隆与 lambda 调用相乘。
+- 修正：只在属主与分配方同巢时沿用（例如树箱属于所在 map）。属主由链首段经类表（`seg_cls`）求出，与求值次序无关。
+  递归分配给空链。
+- 实测（f1，sg2）：6:48 时 rc=134，峰值 9.4 GB。拆分器展开消失，剩余膨胀的源头换成 VarHandle 读-改-写的手写池（见成因 2）。
+
+#### 成因 2：VarHandle 数值读-改-写访问模式未登记，手写池级联（提交 `a33e6f9d`）
+
+- 涉及 `VarHandle.getAndAdd*` 与 `getAndBitwise{Or,And,Xor}*`（含 Acquire / Release，共 12 项）。
+  它们是手写方法，体内取引用元素视图（`_field_read` / `_array_get_and_*`），却没有登记在 `[facts.array_writes]` / `[facts.memory_reads]` 中。
+- 后果 1：`hw_writes` 的保守口径生效——每个引用形参都可被其它形参、全部实参数组元素和手写产出写入。
+- 后果 2：上调已声明内存语义的成员（`Unsafe.getReference*`）时，`subsumed` 不成立。
+  调用方值池因此按 `Feed::N(pool)` 汇合为读写实参，读结果又经池回流。
+- 实测（c1，`Socket.getAndBitwiseOrState` 截断诊断）：getAndBitwiseOr 池带来 2062 个对象、16883 个数组的逃逸。
+- 修正：清单登记这 12 项为无引用写入（`= {}`）。依据 JDK 规范：数值读-改-写只作用于基本类型载体，
+  引用载体抛 `UnsupportedOperationException`，不读写引用字段 / 元素。
+- 实测（f2，us1）：5:59 时 rc=134，峰值 9.39 GB。lcalls 在 60 / 180 / 300 s 时为 102k / 177k / 690k，
+  escaped 为 3.2k / 15.6k / 22.0k。getAndBitwise / getAndAdd 级联消失。
+  逃逸来源第一位换成 `UnsafeStaticObjectFieldAccessorImpl.set@47 → Unsafe.putReference` 的写入（1619 对象 / 14181 数组）。
+
+#### 成因 3：静态字段基址按 open(Object) 建模，Field.set 的汇合值经静态访问器整体逃逸（提交 `50da15df`）
+
+- 探针 h1 / h2（a33e6f9d，sg2）与 h2I（f75c32a4，us1）的结果如下。
+  - 写入值：`Field.set` 的 P2 来自 `sun/security/jgss/GSSContextImpl.<init>(GSSContextImpl)@131`，即拷贝构造器
+    `for (Field f : GSSContextImpl.class.getDeclaredFields()) f.set(this, f.get(src))`。
+    `f.get(src)` 是 `FieldAccessor.get` 在 45 个接收者上的汇合，到达 5149 / 4197 / 2692 … 个类以及 `open(Object)`。
+  - 写入目标：`UnsafeStaticFieldAccessorImpl.base` 由构造器 `@10` 的 `unsafe.staticFieldBase(field)` 赋值。
+    两个提交上它都是 `open(Object)`：手写 native `staticFieldBase0` 按声明返回类型给出 open。
+  - 汇合：`hw_site_fields` 遇到 open 写入目标时把写入值接到 `Esc`，于是整个汇合值集逃逸。
+  - 集成分支不出现，是因为 GSSContextImpl 链不可达。§30.16 的 `param_inputs` 修正后，按名取协议处理器的站点不再 unsure，
+    ftp → http → 认证 / JGSS 链进入可达（同 §30.16 中 TestEmbeddedUrlRebuild 的 +311 类）。
+    系统属性表整片逃逸时，`jdk.reflect.useDirectMethodHandle` 等不折叠，Unsafe 字段访问器同样可达。
+    缺陷早已存在，只是本分支的正确可达性把它暴露出来。
+- 修正（终态，生成器不含类名）：
+  - 清单 `[facts.field_writes] static_bases` 登记 `jdk/internal/misc/Unsafe.staticFieldBase0`；
+    引擎为它设返回值模型 `RetModel::StaticBase`，按调用点对字段句柄实参（形参 0）做镜像变换 `MirrorOp::Holder`，规则如下：
+    - 字段枚举的来源标记（`Field#<enum:C>`）给出口径类 C 及其超类、超接口的类镜像。
+      超类、超接口用于覆盖 `getFields` 的继承公开字段与接口常量。
+    - 口径推不出、不是枚举标记的句柄（按名取得等）以及 open，给所指未知的类镜像（裸 `Class`）。
+  - 按偏移写入时，基址为类镜像的只落到该类按名打开的静态字段（`mirror_write`）；
+    所指未知的类镜像落到全部按名打开的静态字段（`poly_write`）。两者都不再流入 `Esc`。
+    读侧经 `static_base_read` 按静态偏移取法门控，比原来的 `open(rt)` 更精确。
+  - 规则可靠的依据：HotSpot 的 `staticFieldBase` 即声明类的 mirror（手写实现 `Object::from(f.__get_clazz())`）。
+    枚举标记在创建时即登记口径，变换对值集逐元素、单调，结果与次序无关。
+  - 补充（`c62a0a6f`）：`hw_exports` 的 `modeled` 判定加入 `returns_static_base`。
+    这样 `staticFieldBase0` 的手写值池不再按 open 返回类型交给 `Esc`，因为返回值已按 `StaticBase` 建模。
+  - `MethodHandleNatives.staticFieldBase(MemberName)` 不在本次登记范围内。DMH 静态访问器走 `Gate::Handle`，
+    MemberName 也没有枚举标记；如要改为所指未知的类镜像，另行评估。
+
+#### 实测（SyspropsLambdaLeak，`rava closure`，ulimit -v 10 GB）
+
+| 提交 | 机器 | 结果 | 用时 | 峰值 RSS | 备注 |
+|---|---|---|---|---|---|
+| f75c32a4（集成分支，基线） | sg2 | 完成 | 10:45（复跑 11:28） | 7.06 GB（7.13 GB） | lcalls 199k、escaped 10.9k、methods 136.7k |
+| 95b2d84e（本分支起点） | sg2 | 未完成 | >540 s | 9.4 GB（540 s 时） | lcalls 900k |
+| 62097efc（成因 1） | sg2 | rc=134 | 6:48 | 9.4 GB | getAndBitwiseOr 池级联 |
+| 62097efc + 截断诊断 | sg2 | rc=134 | 6:17 | 9.38 GB | getAndAdd 池、静态访问器写入 |
+| a33e6f9d（成因 2） | us1 | rc=134 | 5:59 | 9.39 GB | escaped 3.2k → 15.6k → 22.0k |
+| 50da15df（成因 3） | sg2 | rc=134 | 6:10 | 9.38 GB | 静态访问器写入逃逸消失；lcalls 60/180/300 s：92.6k/174k/621k，escaped 3.2k/13.5k/18.6k |
+| c62a0a6f（成因 3 补：hw 池不交出） | sg2 | 探针 rc=124 | — | — | 只用于 grow 来源归因，见成因 4 |
+
+#### 成因 4（未修）：`FieldAccessor.get` 接口汇合点把 45 个接收者的返回值并到每个 `Field.get` 调用点
+
+f3 的逃逸首要来源是 `pool MethodHandle.invokeExact`，共 11892 个数组。其后依次是 `Object[]@24628`、`HashMap$Node.key`、
+`putReferenceRelease`、`invokeBasic` 池和 `CHM.put` P2。
+lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 达 404 克隆 × 160 lambda（253k），基线为 604 × 81（93.6k）。
+
+探针 i1（c62a0a6f）的 grow 归因如下：
+- `hub 实参0 FieldAccessor.get on 45 个接收者 ==> P1 MethodHandleObjectFieldAccessorImpl.get`：673。
+- `@96 HttpConnectSocketImpl.doTunnel ==> P1 Field.get`：672。
+- `hub 返回 FieldAccessor.get ==> @33 / @22 Field.get`：332 / 302。
+- 接着是 `String.value`、`sun/reflect/generics/tree/*` 各数组字段、`ArrayList.elementData`、`CHM$Node[]` 元素、`Class[]` 元素等。
+  这些值经 `Field.get` 的返回值（R）扩散，每项约 35。
+
+结论：`Field.get(obj)` 的取值走 `getFieldAccessor()` → `FieldAccessor.get` 接口派发。45 个访问器实现汇合成一个 hub，
+所有被反射读取的字段值并成一个集合。
+这个集合经 `Field.get` 的返回值流向 GSSContextImpl 复制构造等调用方，又经
+`MethodHandleObjectFieldAccessorImpl.set` → `setter.invokeExact` 进入 `invokeExact` 手写池，最终交给 Esc。
+per-object 精度把每个汇合元素都物化为独立对象和上下文，于是这个汇合乘出了 lcalls 爆炸。
+
+终态修法（下一步，未实现）：
+1. `Field.get` / `Field.set` 及基本类型变体按字段句柄的枚举标记（`fh_marks`，`Field#<enum:C>`）建模。
+   结果取「接收者对象在 C 声明字段上的取值」，不再经 `FieldAccessor` 接口 hub。
+   字段句柄所指未知时才退回 hub 口径。这和成因 3 用 `MirrorOp::Holder` 按标记取声明类的做法是同一种。
+2. 字段访问器内部的 `MethodHandle.invokeExact`（getter / setter 句柄）不再走 `invokeExact` 通用手写池，改由 1 的建模替代。
+   否则 setter 实参经手写池整组交给 Esc。
+3. 若标记只到类粒度（不含字段名），需在 `Field` 枚举标记上补充字段名，或接受「C 的全部引用字段」的类粒度上界。
+   类粒度上界已经远小于 45 接收者汇合。
+
+验收：f4 应在 sg2 上 ≤ 约 11 min、≤ 7 GB 完成，且热点回到 ≤ 基线 604 × 81 量级。
+
+#### 残留与后续
+
+- lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9`（f2 时 55k）：成因 3 修正后需复查它是否回到基线量级。
+- 防回归：可加一道清单审计——上调已声明内存语义成员（`subsumed` 一侧）的手写方法本身也必须登记读写事实。
+  未登记时 `hw_writes` 的保守口径会与汇合池相乘（成因 2 即是这种情况）。审计放在 `rava audit native` 中。
+
+#### 待验证清单（合批测试，本分支不自跑）
+
+1. （成因 4 修复后）`sysprops_lambda_return_confined`：sg2 级机器上 ≤ 约 11 分钟、峰值 ≤ 7 GB 完成（不超过集成分支 10:45 / 7.06 GB 的量级），
+   且 `leak["all"] == true`、断言全部通过。
+2. 闭包 per-object 精度单测（ElemTrack / ObjFacts 各例）与 `closure_cli` 全套。
+3. 生成器 `manifest` 单测新增 `static_bases_parse`。
+4. `closure_independent_of_hash_seed` / `closure_independent_of_order`：待 dev 恢复后跑。
+5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
+   `TestJcaSasl` 与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径。
