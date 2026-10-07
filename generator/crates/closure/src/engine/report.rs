@@ -279,7 +279,10 @@ impl<'a> Engine<'a> {
         if let Some(q) = pat.strip_prefix("@fopen:") {
             let c = &self.ctx;
             out.push(format!("@fopen all={} deser={}", c.fopen_all.get(), c.deser.get()));
-            let mut v: Vec<String> = c.fopen_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  name {n}")).collect();
+            let mut v: Vec<String> = c.fopen_names.borrow().iter().filter(|n| n.contains(q)).map(|n| {
+                let via = self.fopen_name_via.get(n).copied().flatten().map_or("站点外".into(), |(m, off)| format!("{}@{off}", self.method_label(m)));
+                format!("  name {n} ← {via}")
+            }).collect();
             v.extend(c.fopen.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  key {k}")));
             v.extend(c.fhw.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  hw {k}")));
             v.extend(c.fhw_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  hwname {n}")));
