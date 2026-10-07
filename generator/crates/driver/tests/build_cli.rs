@@ -419,7 +419,8 @@ fn user_class_inherited_jdk_default_gated_by_chain() {
 }
 
 /// 用户类与 JDK 类同一可达性判据：调用链外的用户方法（静态 / 实例 / 接口 default 展开）发 `stub:` 存根，
-/// 链上的（main、lambda 实现、虚派发目标、接口 default）照常翻译；只经静态字段触发初始化的用户类不是类型存根
+/// 链上的（main、lambda 实现、虚派发目标、接口 default）照常翻译；只经静态字段触发初始化的用户类不是类型存根；
+/// 链外方法体内引用的类型不进 `use` 行（引用集方法体扫描按链门控）
 #[test]
 fn user_unreachable_methods_stubbed() {
     let Some((_, out)) = build("UserUnreached.java", "user-unreached", &[]) else { return };
@@ -437,7 +438,6 @@ fn user_unreachable_methods_stubbed() {
     assert!(!fn_body(&main, "pub fn main(").contains("__stub("), "main 照常翻译：{main}");
     assert!(!main.contains("stub: UserUnreached.lambda$main$0"), "lambda 实现方法在链上：{main}");
     let hello = read("user_unreached_hello.rs");
-    assert!(hello.contains("__stub(\"stub: UserUnreached$Hello.unusedInstance:()Ljava/lang/String;\")"), "链外实例方法存根：{hello}");
     assert!(!fn_body(&hello, "pub fn greet(").contains("__stub("), "虚派发目标照常翻译：{hello}");
     assert!(!fn_body(&hello, "pub fn loud(").contains("__stub("), "链上 default 展开照常翻译：{hello}");
     assert!(fn_body(&hello, "pub fn quiet(").contains("__stub(\"stub: UserUnreached$Hello.quiet:"), "链外 default 展开为存根：{hello}");
@@ -448,5 +448,7 @@ fn user_unreachable_methods_stubbed() {
     assert!(!counter.contains("stub-set:") && !counter.contains("stub: UserUnreached$Counter.count:I"), "经静态字段初始化的类不是类型存根：{counter}");
     assert!(counter.contains("pub static count: i32;"), "静态字段有存储：{counter}");
     assert!(counter.contains("__stub(\"stub: UserUnreached$Counter.<init>:()V\")"), "未实例化类的构造器在链外：{counter}");
+    assert!(counter.contains("__stub(\"stub: UserUnreached$Counter.unusedInstance:()Ljava/lang/String;\")"), "链外实例方法存根：{counter}");
+    assert!(!counter.contains("TreeMap"), "链外实例方法体不翻译、体内类型不进 use 行：{counter}");
     std::fs::remove_dir_all(&out).ok();
 }

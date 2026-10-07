@@ -13,13 +13,15 @@ public class UserUnreached {
 
     static class Hello implements Greeter {
         public String greet() { return "Hello"; }
-
-        String unusedInstance() { return new java.util.TreeMap<String, String>().toString(); }
     }
 
-    // 无 <clinit>、无链上方法，只经静态字段读写触发初始化：不得退化为类型存根（字段访问器不得是存根）
+    // 无 <clinit>、无链上方法，只经静态字段读写触发初始化：不得退化为类型存根（字段访问器不得是存根）。
+    // 实例方法放在从未实例化的类上：已实例化的用户类会经 open 接收者 getClass 的反射枚举全成员入链
+    // （分析器反射建模口径），链外实例方法只能在未实例化类上稳定观测
     static class Counter {
         static int count;
+
+        String unusedInstance() { return new java.util.TreeMap<String, String>().toString(); }
     }
 
     static String unusedStatic() { return new java.util.ArrayDeque<String>().toString(); }
