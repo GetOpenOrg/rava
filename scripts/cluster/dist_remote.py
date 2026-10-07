@@ -183,11 +183,16 @@ def mem_reserve_gb(server: dict) -> int:
     return server.get("mem_reserve_gb", MEM_RESERVE_GB)
 
 
+def slot_mem_gb(server: dict | None) -> int:
+    """多槽每槽内存上限的下限（GB）：服务器条目 slot_mem_gb（或 --slot-mem 本次覆盖），缺省 MIN_SLOT_MEM_GB。"""
+    return (server or {}).get("slot_mem_gb", MIN_SLOT_MEM_GB)
+
+
 def mem_limited(cmd: str, server: dict) -> str:
     """shell 片段：在 user systemd scope 内执行 cmd（bash 语法），禁用 swap；子进程一并计入。
     两级上限：
     - 全部槽的 scope 都放在 user 级 MEM_SLICE 下，slice 的 MemoryMax = 总内存 − 预留，同机各槽合计不越过它；
-    - 每槽 scope 的 MemoryMax = max((总内存 − 预留) / 槽数, MIN_SLOT_MEM_GB)，允许超分——多数测试峰值远低于
+    - 每槽 scope 的 MemoryMax = max((总内存 − 预留) / 槽数, slot_mem_gb)，允许超分——多数测试峰值远低于
       均分额，单例峰值（约 12G）仍放得下；合计吃紧时由 slice 内的 OOM kill 落到某个测试上（标 OOM_MARK，
       属资源类失败），不波及服务器上其他服务。
     无法建立受限 slice / scope 时输出 NO_MEMLIMIT_MARK 并以 NO_MEMLIMIT_RC 退出，不在无上限的状态下运行。"""
@@ -197,7 +202,9 @@ def mem_limited(cmd: str, server: dict) -> str:
     # 多槽：关掉 rustc 包装（如 ~/.cargo/config.toml 的 rustc-wrapper = "sccache"）——sccache 服务进程常驻在
     # 首个启动它的 scope 里，经它编译的 rustc 不计入本槽 scope，每槽内存上限对编译形同虚设
     split = "" if slots == 1 else (
-        f"[ $RAVA_LIM -lt {MIN_SLOT_MEM_GB * 1024} ] && RAVA_LIM={MIN_SLOT_MEM_GB * 1024}; "
+        f"[ $RAVA_LIM -lt {slot_mem_gb(server) * 1024} ] && RAVA_LIM={slot_mem_gb(server) * 1024}; "
+        # 下限高于合计时按合计取：单槽不越过 slice 总量
+        "[ $RAVA_LIM -gt $RAVA_TOTAL ] && RAVA_LIM=$RAVA_TOTAL; "
         "export RUSTC_WRAPPER=; ")
     return (
         (f"RAVA_TOTAL=$(( {total} )); RAVA_LIM=$RAVA_TOTAL; " if slots == 1
@@ -288,9 +295,9 @@ def load_limit(server: dict | None = None) -> float:
 
 def min_free_ram_mb(server: dict | None = None) -> int:
     """空闲内存门槛：单槽为 MIN_RAM_MB；多槽时同机其他槽已占用的内存不在 MemAvailable 内，
-    新开一槽要求空闲内存够它跑到每槽上限的下限 MIN_SLOT_MEM_GB（OOM 例峰值约 12G）。"""
+    新开一槽要求空闲内存够它跑到每槽上限的下限 slot_mem_gb（缺省 MIN_SLOT_MEM_GB，OOM 例峰值约 12G）。"""
     slots = (server or {}).get("slots", 1)
-    return MIN_RAM_MB if slots == 1 else max(MIN_RAM_MB, MIN_SLOT_MEM_GB * 1024)
+    return MIN_RAM_MB if slots == 1 else max(MIN_RAM_MB, slot_mem_gb(server) * 1024)
 
 
 def _resource_ok(free_ram_mb: int, load_per_cpu: float, server: dict | None = None) -> bool:

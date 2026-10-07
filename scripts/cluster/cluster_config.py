@@ -47,7 +47,7 @@ LOCAL_E2E_DIR = REPO_ROOT / "tests" / "e2e" if (REPO_ROOT / "tests" / "e2e").exi
 
 # 条目键：label / host / port（缺省 22）/ username / private_key_path（~ 展开）/ remote_dir（缺省 REMOTE_DIR）；
 # 可选键：skip_setup 跳过环境初始化；direct_only 只直连不降级走代理（内网服务器）；
-#         mem_reserve_gb 覆盖 MEM_RESERVE_GB；
+#         mem_reserve_gb 覆盖 MEM_RESERVE_GB；slot_mem_gb 覆盖 MIN_SLOT_MEM_GB；
 #         jump 同区跳板服务器标签：直连失败后先经跳板（direct-tcpip 通道）再降级走代理；
 #         refjdk_root 覆盖 REFJDK_ROOT（参考 JDK 根目录，放在 remote_dir 所在的数据盘）；
 #         slots 每台服务器同时跑的测试 / 作业数（缺省 1）。槽 i 的工作线程标签为 <label>#i（slots=1 时仍为
