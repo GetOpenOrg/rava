@@ -277,6 +277,17 @@ fn param_string_constants_fold_switch() {
     assert!(classes.len() < 1000, "HelloWorld 闭包 {} 类", classes.len());
 }
 
+/// 按名取类站点名字含推不出的支时，已知名字仍在不动点上放行：工厂查找（`FactoryFinder.find`）先读系统属性 / 配置文件
+/// （任意串），再回落到调用方传入的缺省实现类名——缺省实现类必须入闭包，否则运行期 `Class.forName` 找不到
+/// （FactoryConfigurationError: Provider … not found）。三个种子结果一致
+#[test]
+fn unsure_lookup_releases_known_names() {
+    let Some([classes, ..]) = seeds_agree("71_xml/TestSaxLocatorAttributes.java") else { return };
+    for c in ["com/sun/org/apache/xerces/internal/jaxp/SAXParserFactoryImpl", "com/sun/org/apache/xerces/internal/jaxp/SAXParserImpl"] {
+        assert!(classes.contains(c), "按名取类的缺省实现类未入闭包：{c}");
+    }
+}
+
 /// HelloWorld 级程序：栈耗尽 VM 规则（stack-check）把 StackOverflowError 带入闭包（a3-T1b）
 #[test]
 fn stack_overflow_error_in_minimal_closure() {
