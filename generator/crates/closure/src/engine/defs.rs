@@ -208,6 +208,8 @@ pub(super) enum Recv {
     None,
     Exact(u32),
     Feeds(Vec<Feed>),
+    /// 已物化的接收者值集，其 open(T) 实为 T ∩ 接口 I（来源全为同一接口类型判定站点，见 `Engine::open_bounds`）
+    Bounded(TypeSet, u32),
 }
 
 /// 派发枢纽：同一调用成员在同一接收者集合上的派发。
