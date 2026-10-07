@@ -1,0 +1,7 @@
+self found=true head=CAFEBABE
+self rebuilt-same-string=true rebuilt-eq=true
+self uri-eq=true length-eq=true
+inner found=true head=CAFEBABE
+inner rebuilt-same-string=true rebuilt-eq=true
+inner uri-eq=true length-eq=true
+jdk head=CAFEBABE eq=true
