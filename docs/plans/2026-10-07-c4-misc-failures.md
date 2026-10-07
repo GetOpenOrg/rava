@@ -72,4 +72,6 @@
 ## 六、验证与抽查
 
 - 本机：`rava_macros_core` 单测（`cargo test --release`，独立 target）通过。
-- 抽查：见下（推送后补记）。
+- 抽查 `c4misc-bae70fb1`（JDK 21，`--per-dir 0`）：TestSqlDateTime PASS（jp2）、TestFileCanonicalPaths PASS（jp1）；
+  TestStringGetCharsLegacy FAIL（jp2），失败日志含已登记签名 `native: …getSystemPackageLocation…`，按已知计。
+- PartitionInteger 未抽查：超时不可登记，修复依赖 §五待决项与 R1。
