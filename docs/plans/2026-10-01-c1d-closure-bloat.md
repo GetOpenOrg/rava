@@ -4165,7 +4165,7 @@ e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内�
 - `5cfe2541` 生成器：局部槽「确定为空」跟踪（E0277）。
 - 本节文档：本节之后的提交。
 
-### 30.17 第 14 步：SyspropsLambdaLeak 闭包不收敛——三处成因已修、第四处待修（2026-10-07，分支 `c1d-url-b2`）
+### 30.17 第 14 步：SyspropsLambdaLeak 闭包不收敛——四处成因已修、验收达成（2026-10-07～08，分支 `c1d-url-b2`）
 
 #### 现象
 
@@ -4238,8 +4238,9 @@ e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内�
 | a33e6f9d（成因 2） | us1 | rc=134 | 5:59 | 9.39 GB | escaped 3.2k → 15.6k → 22.0k |
 | 50da15df（成因 3） | sg2 | rc=134 | 6:10 | 9.38 GB | 静态访问器写入逃逸消失；lcalls 60/180/300 s：92.6k/174k/621k，escaped 3.2k/13.5k/18.6k |
 | c62a0a6f（成因 3 补：hw 池不交出） | sg2 | 探针 rc=124 | — | — | 只用于 grow 来源归因，见成因 4 |
+| 485d30b6（成因 4） | sg2 | 完成 rc=0 | 6:18（elapsed_ms 373582） | 4.50 GB | `all=true`、classes 3499；lcalls 230.8k、escaped 6.6k、method_contexts 130.7k；`fa_untrusted=None`，句柄存取站点 6、名字标记 30、枚举标记 2 |
 
-#### 成因 4（未修）：`FieldAccessor.get` 接口汇合点把 45 个接收者的返回值并到每个 `Field.get` 调用点
+#### 成因 4（已修，提交 `485d30b6`）：`FieldAccessor.get` 接口汇合点把 45 个接收者的返回值并到每个 `Field.get` 调用点
 
 f3 的逃逸首要来源是 `pool MethodHandle.invokeExact`，共 11892 个数组。其后依次是 `Object[]@24628`、`HashMap$Node.key`、
 `putReferenceRelease`、`invokeBasic` 池和 `CHM.put` P2。
@@ -4258,29 +4259,40 @@ lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 达 404 克隆 × 
 `MethodHandleObjectFieldAccessorImpl.set` → `setter.invokeExact` 进入 `invokeExact` 手写池，最终交给 Esc。
 per-object 精度把每个汇合元素都物化为独立对象和上下文，于是这个汇合乘出了 lcalls 爆炸。
 
-终态修法（下一步，未实现）：
-1. `Field.get` / `Field.set` 及基本类型变体按字段句柄的枚举标记（`fh_marks`，`Field#<enum:C>`）建模。
-   结果取「接收者对象在 C 声明字段上的取值」，不再经 `FieldAccessor` 接口 hub。
-   字段句柄所指未知时才退回 hub 口径。这和成因 3 用 `MirrorOp::Holder` 按标记取声明类的做法是同一种。
-2. 字段访问器内部的 `MethodHandle.invokeExact`（getter / setter 句柄）不再走 `invokeExact` 通用手写池，改由 1 的建模替代。
-   否则 setter 实参经手写池整组交给 Esc。
-3. 若标记只到类粒度（不含字段名），需在 `Field` 枚举标记上补充字段名，或接受「C 的全部引用字段」的类粒度上界。
-   类粒度上界已经远小于 45 接收者汇合。
+修正（终态，生成器不含类名）：
+1. 清单 `vm_intrinsics.toml` 的 `[facts.field_writes]` 新增 `handle_getters` / `handle_setters`，登记 `Field.get` / `Field.set` 及
+   8 个基本类型变体；引擎给它们设返回值模型 `RetModel::HandleAccess(写?)`（`engine/field_access.rs`）。
+2. 调用边到达这些入口时按接收者分类，命中建模就不再接字节码体（不进 `getFieldAccessor` → `FieldAccessor` hub、
+   也不进访问器内部的 `MethodHandle.invokeExact` 手写池）：
+   - 枚举标记 `Field#<enum:C>`：类粒度上界——C 及其超类的实例引用字段（对象实参中类属于 C 的抽象对象取 `obj_field`，
+     其它值取字段汇总 `F` / 写侧 `U`），C 沿 `holder_chain` 的静态引用字段，以及基本类型字段的装箱类（来自 `[boxing]`）。
+   - 名字解析的字段句柄（`getDeclaredField(name)` 等，`name_resolvers` 中 `handle` 项）补字段名标记 `Field#<name:owner.name:desc>`，
+     精确到单字段；名字或类推不出时标记为 `Field#<name:?>`，该站点退回字节码接边。
+   - 接收者是真实 `Field` 对象或手写层产出的确定句柄值时视为「已由标记覆盖」：句柄身份统一由来源标记承载。
+3. 可靠性兜底：字段句柄来源（枚举器 / 名字解析器）若经非字节码调用点（反射、手写体、派发外入口）可达，标记可能缺失，
+   引擎记 `fa_untrusted` 并把全部已建模站点整体回放为字节码接边（对象 / 值 / 结果节点补接），结论退回原口径、不丢可达性。
+   本例 `fa_untrusted=None`。
+4. 成因 3 的 `MirrorOp::Holder` 对名字标记取 owner 的类镜像（`holder_set`），与枚举标记同一套口径。
+5. 已知取舍：`Field.get(obj)` 的 obj 实参不再进入访问器体，访问器中只依赖 obj 的路径（类型检查失败的异常消息构造）不被分析；
+   这些路径只构造 `IllegalArgumentException` 消息，类已由其它路径可达。
 
-验收：f4 应在 sg2 上 ≤ 约 11 min、≤ 7 GB 完成，且热点回到 ≤ 基线 604 × 81 量级。
+实测（f4，sg2，ulimit -v 10 GB）：6:18 完成、峰值 4.50 GB，`all=true`。比基线 10:45 / 7.06 GB 更快更省；
+lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 为 97.0k（基线 93.6k，同一量级），
+逃逸来源首位换成 `Object[]@24628` 元素（440 对象 / 1888 数组）与 `CHM.get` 返回值，`invokeExact` 池不再出现。
 
 #### 残留与后续
 
-- lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9`（f2 时 55k）：成因 3 修正后需复查它是否回到基线量级。
+- lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9`：f4 为 97.0k，已回到基线（93.6k）量级。
+- 字段标记目前是类粒度上界（枚举标记）+ 单字段（名字标记）；枚举结果按名字过滤后（`f.getName().equals(..)`）再存取的站点仍取类粒度，若后续出现热点再加名字收窄。
 - 防回归：可加一道清单审计——上调已声明内存语义成员（`subsumed` 一侧）的手写方法本身也必须登记读写事实。
   未登记时 `hw_writes` 的保守口径会与汇合池相乘（成因 2 即是这种情况）。审计放在 `rava audit native` 中。
 
 #### 待验证清单（合批测试，本分支不自跑）
 
-1. （成因 4 修复后）`sysprops_lambda_return_confined`：sg2 级机器上 ≤ 约 11 分钟、峰值 ≤ 7 GB 完成（不超过集成分支 10:45 / 7.06 GB 的量级），
-   且 `leak["all"] == true`、断言全部通过。
+1. `sysprops_lambda_return_confined`：f4 在 `rava closure` 层已验（6:18 / 4.50 GB / `all=true`）；合批时以单测本身复核断言全部通过。
 2. 闭包 per-object 精度单测（ElemTrack / ObjFacts 各例）与 `closure_cli` 全套。
-3. 生成器 `manifest` 单测新增 `static_bases_parse`。
+3. 生成器 `manifest` 单测新增 `static_bases_parse`、`handle_access_parse`。
 4. `closure_independent_of_hash_seed` / `closure_independent_of_order`：待 dev 恢复后跑。
 5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
-   `TestJcaSasl` 与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径。
+   `TestJcaSasl` 与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
+   （重点看反射拷贝构造、`AtomicXxxFieldUpdater`、序列化 `ObjectStreamClass` 字段读写、注解代理等经 `Field` 存取的用例）。
