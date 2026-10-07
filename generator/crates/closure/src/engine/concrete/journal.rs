@@ -65,6 +65,8 @@ pub(super) enum Rec {
     Read { decl: Rc<str>, name: Rc<str>, ph: u32 },
     /// 根帧区段 `[start, end)` 运行期执行（局部变量取区段入口的值）
     Region { phase: MemberRef, start: u32, end: Option<u32>, locals: Vec<CV>, why: String },
+    /// 引导档位变更：其后的残差步骤在该档位下重放（`[concrete.boot] level`）
+    Level(i32),
 }
 
 #[derive(Default)]

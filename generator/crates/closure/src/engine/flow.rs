@@ -419,6 +419,9 @@ impl<'a> Engine<'a> {
                 self.open_static(&key);
             }
         }
+        if self.img.is_some() {
+            self.image_field(&key, fi);
+        }
         fi
     }
 

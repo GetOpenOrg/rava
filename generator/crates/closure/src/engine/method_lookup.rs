@@ -48,7 +48,7 @@ pub(super) fn constrained(parts: &[Part]) -> bool {
 }
 
 /// 方法体是否为 `return this.f`；是则返回 f 的名字与描述符
-fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
+pub(super) fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
     let [a, g, r] = code.insns.as_slice() else { return None };
     let this = a.opcode == ALOAD_0 || a.opcode == ALOAD && matches!(a.operand, classfile::Operand::Local(0));
     if !this || g.opcode != classfile::op::GETFIELD || r.opcode != ARETURN {
@@ -197,7 +197,7 @@ impl<'a> Engine<'a> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
-        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![] });
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None });
         // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
         if let Some((outer, _)) = self.cur_site {
             for (_, e) in &ca.events {

@@ -24,6 +24,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 同一存储（不复制），对象标识即存储地址。
     let erased_ref_cell: TokenStream2 = quote! { __RefField<::std::option::Option<Object>> };
     let mut inner_field_tokens: Vec<TokenStream2> = Vec::new();
+    // 映像对象的常量零值（构建期引导映像以结构更新语法给出非缺省字段，`..X__inner::__IMAGE_ZERO`）
+    let mut zero_tokens: Vec<TokenStream2> = Vec::new();
+    let zero_of = |prim: bool| if prim { quote! { __PrimCell::zeroed() } } else { quote! { __RefField::new(::std::option::Option::None) } };
 
     // 继承字段（平铺，最深祖先在前）
     for (name, ty) in &ctx.meta.superclass_fields {
@@ -34,7 +37,9 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         } else {
             quote! { __RefField<::std::option::Option<#ty>> }
         };
-        inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
+        let z = zero_of(!ctx.is_erased(name) && ctx.inherited_is_basic(name, ty));
+        zero_tokens.push(quote! { #name: #z });
+        inner_field_tokens.push(quote! { #[doc(hidden)] pub #name: #cell_ty });
     }
 
     // 自有字段
@@ -46,14 +51,22 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         } else {
             quote! { __RefField<::std::option::Option<#ty>> }
         };
-        inner_field_tokens.push(quote! { pub(crate) #name: #cell_ty });
+        let z = zero_of(!ctx.is_erased(name) && is_basic(ty));
+        zero_tokens.push(quote! { #name: #z });
+        inner_field_tokens.push(quote! { #[doc(hidden)] pub #name: #cell_ty });
     }
 
     // 字段在存储中的位置由分配钩子旁的偏移表给出（`storage_hooks`，描述符 `offsets`，S7-3）
     let inner_struct = quote! {
         #[derive(::core::default::Default, ::core::fmt::Debug)]
-        pub(crate) struct #inner_ident {
+        #[doc(hidden)]
+        pub struct #inner_ident {
             #(#inner_field_tokens,)*
+        }
+        impl #inner_ident {
+            #[doc(hidden)]
+            #[allow(clippy::declare_interior_mutable_const)]
+            pub const __IMAGE_ZERO: Self = Self { #(#zero_tokens,)* };
         }
     };
 

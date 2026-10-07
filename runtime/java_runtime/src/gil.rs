@@ -144,6 +144,14 @@ pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>
     CLINIT_CV.notify_all();
 }
 
+/// 构建期已初始化的类（引导映像，计划 2026-10-05-boot-image-evaluator D4）：启动序列在静态字段
+/// 写入映像值之后调用，不运行 `<clinit>`，直接进入「已初始化」（同 `clinit_exit` 的成功分支）。
+/// 启动序列单线程执行，无等待者。
+pub fn boot_initialized(class: &'static str, state: &'static __PrimCell<u8>) {
+    CLINIT_DONE.lock().get_or_insert_with(Default::default).insert(class);
+    state.set(3);
+}
+
 // ── 跨线程移交 ──────────────────────────────────────────────────────────────
 
 /// 把线程对象移交给新 OS 线程的载体（对象模型为 `Arc` + 线程安全单元，移交安全）。

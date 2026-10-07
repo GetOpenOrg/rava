@@ -120,9 +120,16 @@ pub fn struct_name(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
 }
 
 /// 类型存根：无任何方法在调用链上且类不在初始化集合（static 字段发 panic 存根访问器）；
-/// 用户类与非用户类同一口径（[`input::EmitInput::type_only`]，与判定层 `ClassPlan::type_only` 同源）
+/// 用户类与非用户类同一口径（[`input::EmitInput::type_only`]，与判定层 `ClassPlan::type_only` 同源）。
+/// 引导映像给出静态字段初值的类除外：静态字段须有真实存储
 pub fn is_type_only(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> bool {
-    ctx.input.type_only(ci)
+    ctx.input.type_only(ci) && !has_image_statics(ctx, ci.name())
+}
+
+/// 引导映像给出静态字段初值的类：构建期初始化后 `<clinit>` 不入链，静态字段仍由启动序列写入、
+/// 被闭包内的方法读取，须有真实存储（不是类型存根）
+fn has_image_statics(ctx: &EmitCtx<'_>, cls: &str) -> bool {
+    ctx.input.boot_image.as_ref().is_some_and(|b| b.statics.iter().any(|(c, _, _)| c == cls))
 }
 
 /// 父类 Rust 类型（含本类视角的祖先实参）；父类为根类时为空

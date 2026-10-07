@@ -17,36 +17,6 @@ impl Class {
         Ok(())
     }
 
-    /// `getModule()`：类所属模块。原生二进制无模块系统（vm_boundary：
-    /// java/lang/Module 整体手写）——JDK 类全部落在 java.base，用户类落在
-    /// 未命名模块；消费面（Files.writeString 的调用方模块一致性检查等）只做
-    /// 相等比较，单一单例即可承载（JDK 类侧与 JVM 行为一致：java.base 类
-    /// 同模块恒真）。模块名/层级的完整语义不在档 A 面内。
-    ///
-    /// 非引导加载器定义的类（定义加载器表 app / platform、运行期定义类所记的加载器）归其定义加载器
-    /// 的无名模块（JDK：未定义命名模块的加载器所定义的类归 `loader.getUnnamedModule()`），保持
-    /// `getModule().getClassLoader() == getClassLoader()`——`Class.forName(Module, String)` 按模块的
-    /// 加载器分派，`ServiceLoader.loadProvider` 加载平台加载器定义的 provider（`ExtendedCharsets`）经
-    /// `ClassLoader.loadClass(Module, String)` 的 `findLoadedClass` 命中并比对模块。
-    #[jvm_boundary]
-    pub fn getModule(&self) -> Result<Module> {
-        let loader = self.__vm_defining_loader()?.__get_classLoader();
-        if !Object::from(Clone::clone(&loader)).0.is_jvm_null() {
-            return loader.getUnnamedModule();
-        }
-        crate::__process_static! {
-            static THE_MODULE: RefCell<Option<Module>> = const { RefCell::new(None) };
-        }
-        Ok(THE_MODULE.with(|cell| {
-            if cell.borrow().is_none() {
-                let mut m = Module::default();
-                m._init_not_null();
-                *cell.borrow_mut() = Some(m);
-            }
-            Clone::clone(cell.borrow().as_ref().unwrap())
-        }))
-    }
-
     /// native getPrimitiveClass(String)：每个基本类型名对应唯一的 Class 对象
     /// （`Integer.TYPE == int.class` 的身份语义），首次请求时创建。
     #[jvm_native]
@@ -125,6 +95,33 @@ impl Class {
         Ok(self)
     }
 
+
+    /// VM 注入状态 `module` 的落地（vm_intrinsics.toml `[vm_state.field_hooks]`，准入 ③）：HotSpot 建镜像时
+    /// （`java_lang_Class::create_mirror`）按类的包条目写入所属模块。按「定义加载器 + 包」查 VM 模块表
+    /// （映像中的引导层模块与运行期 defineModule0 登记的模块）；未登记的包归定义加载器的无名模块
+    /// （引导加载器为 `BootLoader.getUnnamedModule()`）。数组类取元素类型的模块，基本类型与其数组属 java.base。
+    pub fn __vm_module(&self) -> Result<&Self> {
+        if !Object::from(self.__get_module()).0.is_jvm_null() {
+            return Ok(self);
+        }
+        let name = format!("{}", self.__get_name()).replace('.', "/");
+        let elem = name.trim_start_matches('[');
+        let pkg = if elem.len() < name.len() {
+            elem.strip_prefix('L').and_then(|e| e.strip_suffix(';')).map(|e| e.rsplit_once('/').map_or("", |(p, _)| p))
+        } else if name.contains('/') || !is_primitive_name(&name) {
+            Some(name.rsplit_once('/').map_or("", |(p, _)| p))
+        } else {
+            None
+        };
+        let loader = self.__vm_defining_loader()?.__get_classLoader();
+        let module = match Module::__vm_package_module(Object::from(Clone::clone(&loader)), pkg) {
+            Some(m) => m,
+            None if Object::from(Clone::clone(&loader)).0.is_jvm_null() => crate::jdk::internal::loader::BootLoader::getUnnamedModule()?,
+            None => loader.getUnnamedModule()?,
+        };
+        self.__set_module(module);
+        Ok(self)
+    }
 
     /// native `Class.isArray()`：数组类判定。数组类的名字是 JVM 描述符形态
     /// （`[I`、`[Ljava.lang.String;`——for_class 的存储形态），首字符 `[`
@@ -331,12 +328,6 @@ impl Class {
 
 
 
-    /// `Class.getModule()`：类所属模块。单二进制无模块层——全类集归属
-    /// 无名模块单例（module_impl::unnamed_module，isNamed 恒 false）。
-    pub fn __impl_getModule(&self) -> Result<crate::java::lang::Module> {
-        Ok(super::module_impl::unnamed_module())
-    }
-
     /// native `Class.getModifiers()`：类修饰符位集（Modifier 协议）。
     /// 查询经 java_meta 从 java_class! 的 access/super_class 属性生成的修饰符
     /// 表；未登记形态按 JVM 语义：数组/基本类型类恒 PUBLIC|FINAL|ABSTRACT，
@@ -474,4 +465,9 @@ fn __anno_bytes(raw: &'static [u8]) -> JArray<i8> {
 /// 与 HotSpot `Reflection::new_method` / `new_field` / `new_constructor` 同义）。
 fn __signature(sig: &str) -> String {
     if sig.is_empty() { String::default() } else { String::from(sig) }
+}
+
+/// 基本类型名（类镜像名为 Java 关键字形态：`int`、`void` …）
+fn is_primitive_name(n: &str) -> bool {
+    matches!(n, "boolean" | "byte" | "char" | "short" | "int" | "long" | "float" | "double" | "void")
 }

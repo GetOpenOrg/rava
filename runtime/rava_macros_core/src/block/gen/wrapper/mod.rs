@@ -51,6 +51,12 @@ pub(crate) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
                 #struct_ident { __r, #phantom_init }
             }
 
+            // 构建期引导映像的对象引用（常量求值，映像模块的静态初值）
+            #[doc(hidden)]
+            pub const fn __from_image(__r: __Ref<dyn #vtable_trait_ident>) -> Self {
+                #struct_ident { __r, #phantom_init }
+            }
+
             // invokevirtual 在 Object 接收者上的类 vtable 分派入口（§6 步骤 4）：
             // 运行时类是本类或其子类 → `Some(本实例化视图)`。句柄取自原对象（与
             // `From<Object>` 擦除路径同源——共享存储与对象标识，子类 vtable 经 supertrait

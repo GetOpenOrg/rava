@@ -356,6 +356,7 @@ static_offset_getters = [
 #                       调用时，值集 = M 各压栈调用边上调用方所在类的镜像（生成器在被调引用解析到 CS 声明的字节码
 #                       调用点压入调用方类）；M 另有不压栈的调用边（手写体、lambda / 方法句柄转接等）时再并入全部
 #                       压栈调用方类与根类（运行期取外层栈顶或回退）；在非 CS 方法体内调用时所指未知
+#                       结果恒非 null（运行期无调用者时回退根类，reflection_impl.rs），分析按非空引用折叠 null 判定
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -776,20 +777,17 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # `属主.字段名:描述符`；receiver = true 的钩子是属主上的接收者方法（`fn(&self) -> Result<&Self>`），
 # 发射为 `recv.hook()?.__get_x()`；否则为宿主类静态 fn，访问（读 / 写）前调用。手写体属
 # docs/reference/handwritten-boundary.md 准入第 ③ 类（VM 注入状态）。
-# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
-# - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
-#   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
-# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
-#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作。
+# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充。
+#   引导加载器定义的类恒为 null，钩子对其为空操作（boot_noop）。
+#   （ClassLoader.scl / Thread.contextClassLoader 由构建期引导映像给出：initPhase3 构建期执行，初始线程为映像
+#   中的 main 线程，启动序列绑定到 OS 主线程。）
+# - Class.module：类镜像所属模块（create_mirror 按包条目写入），按「定义加载器 + 包」查 VM 模块表（启动序列以
+#   映像中 defineModule0 登记的模块为初值），未登记的包归定义加载器的无名模块（class_impl.rs `__vm_module`）。
+#   闭包分析器给该钩子的值池接上映像 VM 模块表的模块（[concrete.vm_fields] class_module）。
 [vm_state.field_hooks]
-"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
-"java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
-"java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
-"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
+"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true, boot_noop = true }
+"java/lang/Class.module:Ljava/lang/Module;" = { hook = "java/lang/Class.__vm_module", receiver = true }
 
-# loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
-# 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →
-# 平台加载器，其余 JDK 模块 → 应用加载器；用户类与库类为应用加载器。
 [vm_state.loader_map]
 class = "jdk/internal/module/ModuleLoaderMap$Modules"
 boot = "bootModules"
@@ -917,6 +915,7 @@ string_coder = "java/lang/String.coder"
 component_type = "java/lang/Class.componentType"
 reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
+module_loader = "java/lang/Module.loader"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
 # 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image
@@ -942,6 +941,9 @@ objects = [
     ["java/lang/Thread", "(Ljava/lang/ThreadGroup;Ljava/lang/String;)V", "@1", "str:main"],
 ]
 current_thread = 2
+# 引导档位（HotSpot 由 initPhase1~3 经 `VM.initLevel(int)` 写入）：残差步骤记录构建期档位，运行期在该档位下重放
+# （vm_impl.rs `__vm_at_init_level`），闭包分析在档位上下文中按 level_queries 折叠——与 JVM 引导期次序一致
+level = "jdk/internal/misc/VM.initLevel"
 vm_props = [
     ["java.home", "@deferred"],
     ["sun.boot.library.path", "@deferred"],
@@ -983,6 +985,11 @@ os_version = "@deferred"
 user_dir = "@deferred"
 user_home = "@deferred"
 user_name = "@deferred"
+
+# 按档位定值的 VM 查询：成员 → 门限（initLevel ≥ 门限为 true；JDK VM.java 的 isBooted / isModuleSystemInited）
+[concrete.boot.level_queries]
+"jdk/internal/misc/VM.isBooted:()Z" = 4
+"jdk/internal/misc/VM.isModuleSystemInited:()Z" = 2
 
 [concrete.boot.natives]
 "java/lang/System.registerNatives:()V" = "noop"

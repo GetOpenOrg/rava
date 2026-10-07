@@ -22,9 +22,10 @@
 classes = [
     "java/lang/SecurityManager",
     "java/lang/ClassLoader",
-    "java/lang/Module",
-    "java/lang/ModuleLayer",
     "java/lang/Class",
+
+    # （Module / ModuleLayer 已移出：引导层在构建期求值，模块对象与静态状态在映像中；VM 模块表以映像为初值，
+    # 手写只剩 ACC_NATIVE（defineModule0 / addReads0 / addExports*），引导映像第 4 步）
 
     # （FileSystems 已移出：getDefault 与默认持有者链按字节码翻译，a3-X2）
 
@@ -54,9 +55,6 @@ classes = [
 # Class.newInstance 的特权块（构造器 setAccessible(true)）。
 # ClassLoader$ParallelLoaders：静态 loaderTypes = newSetFromMap(WeakHashMap) 并登记 ClassLoader.class；
 # ClassLoader 构造器按字节码调 isRegistered，归入边界则 loaderTypes 为 null → NPE。
-# Module$EnableNativeAccess：静态 UNSAFE / FIELD_OFFSET（objectFieldOffset(Module.class, "enableNativeAccess")）
-# 为纯 Java 状态；BootLoader.<clinit> 按字节码经 JLA.addEnableNativeAccess → implAddEnableNativeAccess
-# → trySetEnableNativeAccess 对无名模块置位，随外层 Module 归入 clinit_carried 则 UNSAFE 为 null → NPE。
 translate_nested = [
     "java/lang/Class$ReflectionData",
     "java/lang/Class$EnclosingMethodInfo",
@@ -67,7 +65,6 @@ translate_nested = [
     # null（引导类）时 Class.protectionDomain() 的回落值——纯 Java 静态状态。
     "java/lang/Class$Holder",
     "java/lang/ClassLoader$ParallelLoaders",
-    "java/lang/Module$EnableNativeAccess",
 ]
 
 # VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，
@@ -75,11 +72,9 @@ translate_nested = [
 # VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表、ModuleLayer 的空层与 CLV）
 # 不翻译就保持 null（ModuleLayer.CLV 为 null 时 ServiceLoader 的模块层查找即 NPE）。
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
-# - Module：CDS 归档模块图（ArchivedData）与无名 / everyone 模块由 VM 模型承载（module_impl.rs）；
 # - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
 # - Class / SecurityManager：静态状态为纯 Java（空数组常量 / 锁与缓存），待逐类核实后移出本表。
 clinit_carried = [
-    "java/lang/Module",
     "javax/crypto/JceSecurity",
     "java/lang/Class",
     "java/lang/SecurityManager",

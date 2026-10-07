@@ -15,9 +15,8 @@ impl VM {
 
     /// 引导阶段 `initLevel()`（VM 注入状态，准入第 ③ 类；HotSpot 由 initPhase1~3 经 `initLevel(int)` 写入）。
     /// 原生二进制进入 main 时为 SYSTEM_BOOTED（4）；只有正在执行引导段的线程在段内读到该段的档位：
-    /// initPhase1 的属性快照段（`System::registerNatives` → `VM.saveProperties`）为 0，initPhase3 的系统类
-    /// 加载器段（`ClassLoader::__vm_init_phase3`）为 SYSTEM_LOADER_INITIALIZING（3）——其余线程此时读
-    /// 对应状态会在该段的互斥上等待结束，与 JVM「引导段先于任何应用线程」的时序一致。
+    /// 引导映像启动序列按构建期档位重放残差步骤（`image_rt::set_level`），启动序列先于任何应用线程，
+    /// 与 JVM「引导段先于任何应用线程」的时序一致。
     #[jvm_boundary]
     pub fn initLevel() -> Result<i32> {
         Ok(crate::exec_context::state().boot_level.get().unwrap_or(4))
@@ -31,10 +30,12 @@ impl VM {
         r
     }
 
-    /// 原生二进制进入 main 时运行时已完成初始化（对应 initLevel == SYSTEM_BOOTED）。
+    /// `initLevel >= SYSTEM_BOOTED`（JDK VM.java）。原生二进制进入 main 时为 4；引导映像的残差步骤在其构建期
+    /// 档位下重放（`__vm_at_init_level`），与 JVM 引导期的查询结果一致（闭包分析按 vm_intrinsics.toml
+    /// `[concrete.boot.level_queries]` 在档位上下文中折叠，见 engine/levels_boot.rs）。
     #[jvm_boundary]
     pub fn isBooted() -> Result<bool> {
-        Ok(true)
+        Ok(Self::initLevel()? >= 4)
     }
 
     /// `shutdown()` / `isShutdown()`：停机标记（JDK 语义为 initLevel 置 SYSTEM_SHUTDOWN）。
@@ -77,9 +78,10 @@ impl VM {
     /// 类型宇宙由 BFS 闭包静态组装（进入 main 前完成），模块层概念不在
     /// 运行时呈现——调用点（如 ClassLoader 的引导期分支）语义上处于
     /// 「系统模块已就绪」档位，恒真。
+    /// 残差步骤按构建期档位重放时取 `initLevel >= MODULE_SYSTEM_INITED`（JDK VM.java）。
     #[jvm_boundary]
     pub fn isModuleSystemInited() -> Result<bool> {
-        Ok(true)
+        Ok(Self::initLevel()? >= 2)
     }
 
     /// `latestUserDefinedLoader()`：调用栈上最近的用户定义类加载器。原生二进制无类加载器

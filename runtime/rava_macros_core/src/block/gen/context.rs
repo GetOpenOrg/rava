@@ -287,8 +287,13 @@ impl<'a> GenContext<'a> {
         } else {
             quote! {}
         };
+        // 显式构造（常量求值可用：映像对象的 `__from_image`）。元素类型由字段推断、不写形参名：
+        // vtable 上下文（`impl X__VTable for X__inner`，非泛型）以擦除实参构造 wrapper，形参不在作用域
         let phantom_init: TokenStream2 = if class_is_generic {
-            quote! { __phantom: ::std::default::Default::default(), }
+            let elems = gen.params.iter()
+                .filter(|p| matches!(p, GenericParam::Type(_)))
+                .map(|_| quote! { ::std::marker::PhantomData });
+            quote! { __phantom: ( #( #elems, )* ), }
         } else {
             quote! {}
         };

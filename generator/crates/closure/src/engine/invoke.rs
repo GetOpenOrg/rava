@@ -430,7 +430,7 @@ impl<'a> Engine<'a> {
     /// 形参常量：并入本调用点的实参值（非字节码调用点 = Top）；变化时被调方法失效
     pub(super) fn bind_params(&mut self, m: usize, t: usize, base: usize, n: usize) {
         let cv = self.call_vals.clone();
-        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of).collect());
+        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of_ret).collect());
         match &cv {
             Some(vs) => {
                 self.taint_site(m, t, base, n, vs);

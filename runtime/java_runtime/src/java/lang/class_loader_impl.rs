@@ -6,9 +6,6 @@ use super::class_loader::ClassLoader;
 // 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent 一律走字节码
 // （ClassLoaders 整类翻译）。本文件只承载：
 //   - native 方法；
-//   - initPhase3 系统类加载器段的落地（`__vm_init_phase3`，准入第 ③ 类：HotSpot 在进入 main 前执行，
-//     原生二进制改为首次读写 `ClassLoader.scl` / `Thread.contextClassLoader` 时执行，见
-//     vm_intrinsics.toml `[vm_state.field_hooks]`）；
 //   - 运行期类定义点（第 ② 类）；
 //   - 资源族：模块资源（jmod 内数据文件）由编译期嵌入表承载，其余资源恒缺席——单二进制无
 //     classpath 资源，ServiceLoader 的 LazyClassPathLookupIterator 据此枚举为空。
@@ -56,40 +53,6 @@ impl ClassLoader {
             return Ok(super::Class::default());
         }
         Ok(super::Class::for_class(String::from(slash.as_str())))
-    }
-
-    /// initPhase3 的系统类加载器段（`System.initPhase3`）：
-    /// ```text
-    /// VM.initLevel(3);
-    /// ClassLoader scl = ClassLoader.initSystemClassLoader();
-    /// Thread.currentThread().setContextClassLoader(scl);   // 初始线程
-    /// VM.initLevel(4);
-    /// ```
-    /// 两步调用都走字节码（`initSystemClassLoader` 写 `scl`，`setContextClassLoader` 写初始线程的
-    /// 上下文加载器）。进程内只执行一次：其余线程在段执行期间读写钩子字段时于互斥上等待；段内
-    /// 本线程对钩子字段的读写（`putstatic scl`、`putfield contextClassLoader`）直接放行。
-    pub fn __vm_init_phase3() -> Result<()> {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static DONE: AtomicBool = AtomicBool::new(false);
-        static RUNNING: parking_lot::ReentrantMutex<std::cell::Cell<bool>> =
-            parking_lot::const_reentrant_mutex(std::cell::Cell::new(false));
-        if DONE.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        let guard = RUNNING.lock();
-        if DONE.load(Ordering::Acquire) || guard.get() {
-            return Ok(());
-        }
-        guard.set(true);
-        let r = crate::jdk::internal::misc::VM::__vm_at_init_level(3, || -> Result<()> {
-            let scl = ClassLoader::initSystemClassLoader()?;
-            super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)
-        });
-        guard.set(false);
-        if r.is_ok() {
-            DONE.store(true, Ordering::Release);
-        }
-        r
     }
 
     /// 单资源查询：单二进制无 classpath 资源 → 恒 null。

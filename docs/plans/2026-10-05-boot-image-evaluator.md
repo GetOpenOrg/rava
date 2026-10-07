@@ -408,6 +408,400 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
   - TestBootLayer 在 `tests/e2e` 中不存在，是第 3 步验收要新增的用例。
   - TestClassModuleFace（`jbase-named=false`）由第 4 步处理，与本步无关。
 
+### 5.5 第 3 步实测（分支 `boot-image-s3`，基于 c5812d89）
+
+#### 5.5.1 §7 第 3 条核对：映像类型中的手写 struct（动手前，本机 macOS JDK 21 HelloWorld 档案键）
+
+审计报告新增「映像可达对象的类型」「映像可达 lambda 对象」两节（`rava audit boot`）。实测映像可达类型 162 种（非数组 137、数组 25），lambda 对象 **0**。
+
+**结论：映像类型中没有手写的 Java 类 struct**。137 个非数组类型的存储（`X__inner`）全部由字节码经 `java_class!` 生成；例外只有两类基础设施，均为常驻形态而非过渡类：
+
+| 类型 | 运行期形态 | 物化处理 |
+|---|---|---|
+| `java/lang/Object` 实例（44，锁对象） | 手写 `object_impl.rs` 的 `Instance(u8)` | 运行时给出常量构造入口，映像按同一类型发射 |
+| 数组（25 种，2,017 个） | `JArray<T>` → `__Obj<__ArrayObj<T>>` + 尾随元素 | 运行时给出「头 + 数组对象 + 定长元素」的 `#[repr(C)]` 映像形态，与 `__trailing` 的布局一致（编译期断言） |
+
+但有 9 处**结构之外的手写旁路状态**与映像对象并存，物化时必须让旁路以映像为初值，否则同一 Java 对象在运行期出现两份：
+
+| # | 类型（映像对象数） | 手写旁路状态 | 第 3 步处理 |
+|---|---|---|---|
+| S1 | `Class`（78） | `Class::for_class` 的名字 → 镜像缓存、`getPrimitiveClass` 缓存 | 两处缓存先查映像镜像表（按名排序的静态表，二分），未命中才新建 |
+| S2 | `String`（1,435） | `__STRING_INTERN_TABLE` | 驻留查找先查映像驻留表（按 UTF-16 单元排序的静态表） |
+| S3 | `Thread`（1）/ `ThreadGroup`（2） | `thread_impl` 的主线程构造（`platform_main_thread`）、`INITIAL_THREAD` | 启动时把映像中的 main 线程绑定到 OS 主线程（§3.3 启动序列第 2 步），不再手写构造 |
+| S4 | `Thread` id | `getNextThreadIdOffset` 的进程静态计数器（初值 0） | 初值取映像 VM 单元 `next_thread_id` |
+| S5 | `Module`（68）/ `ModuleLayer`（2） | `module_impl` 的 VM 模块表（`defineModule0` 运行期登记）、`unnamed_module` / `ModuleLayer.boot` 的手写单例 | VM 模块表以映像 VM 表（62 模块 / 771 包，含读与导出）为初值；两个手写单例属 a3 第 4 步删除的 `#[jvm_boundary]`，本步不改其语义，只保证映像对象与之不冲突（见 §5.5.3 余项） ；**e50d4ba3 起**两个手写单例已删，VM 模块表由映像 `modules` 登记初值，`Class.module` 经 `__vm_module` 钩子查表（§5.5.6） |
+| S6 | `System` | `registerNatives` 手写建属性表与 out / err / in | `System` 构建期已初始化，运行期不再执行其 `<clinit>`；该手写体只在映像缺席时可达 |
+| S7 | `ClassLoader.scl`、`Thread.contextClassLoader` | `[vm_state.field_hooks]` → `__vm_init_phase3`（FS-C2） | 映像带构建期 initPhase3 写入的值，钩子与 `__vm_init_phase3` 删除 |
+| S8 | 身份哈希（87 个对象） | `__identity_hash(地址)` | 映像对象的对象头记录构建期哈希，`__identity_hash` 对映像区地址返回该值（§5.5.2 D3） |
+| S9 | 枚举常量目录（`Thread$State`、`AccessFlag` 等构建期初始化的枚举） | 登记语句在 `__class_init` 慢路径内执行 | 构建期初始化类的初始化状态物化为「已完成」，慢路径不再执行，登记改由启动序列对这些类执行一次（与 `<clinit>` 前登记的次序语义相同：查询时才读静态字段） |
+
+运行期对映像对象的**宿主相关内容**：`@deferred` 属性值（`java.home`、编码、`user.dir` 等 13 个平台属性与 2 个 VM 属性）在映像中是内容数组被登记为延迟值的 String。物化时这些 String 的内容字段（`value` / `coder` / `hash`）在启动序列中按宿主值写入（同一对象，属性表、`System.lineSeparator` 等引用它的位置自动看到宿主值）。
+
+#### 5.5.2 物化设计（技术决策，按授权自定）
+
+- **D1 映像位置**：`java_base_decl` crate 的 `boot_image` 模块（U5 的「java_base 档案内」取声明层：映像类型的 `X__inner` 都在该 crate，`pub(crate)` 字段可直接按名初始化，无需每类再生成构造器）。
+- **D2 零拷贝形态（U4）**：全部映像对象是**一个** `#[repr(C)]` 静态结构 `BOOT_IMAGE` 的字段，每个对象为「16 字节对象头 + 值（+ 数组定长元素）」，与 `__Obj` 堆布局相同。
+  - 对象头的强引用计数取常驻值（`1 << 62`）：克隆 / 释放照常增减而永不归零，不需要静态标记位，`is_unique` 恒假。
+  - 对象之间、静态字段到对象的引用都是编译期常量地址（静态结构可引用自身字段）。句柄、视图指针、接口指针由运行时新增的 `const fn` 入口构造（`__Obj::image`、`__Handle::image`、`__Ref::image`、`__IfaceRef::image`、`__PrimCell::from_bits`），视图指针在常量求值期由 unsize 得到。
+  - 装载成本为 0（无启动扫描），满足「启动装载 ≤ 1 ms」。
+- **D3 身份哈希**：映像对象头的第二个字（堆对象为分配字节数）写「标记位 | 构建期哈希」。`BOOT_IMAGE` 是单个静态，地址区间判定即可知是否映像对象，`__identity_hash` 先做区间判定（两次比较），命中读头。这避免了 §7 第 5 条的每对象多一个字。
+- **D4 静态字段与初始化状态**：生成器给构建期初始化类的静态字段带上映像初值（`java_class!` 静态字段属性），宏展开为 `static __STATIC_X_f: … = <映像初值>`；`__CLINIT_STATE_X` 初值为 3（完成）。运行期初始化类（`StaticProperty` 等）保持现状。
+- **D5 残差区段**：区段 `[s, e)` 由生成器切出为合成静态方法（字节码拷贝 + `return`，入口局部变量作形参、按槽位布局补占位形参），按普通方法翻译；启动序列以映像中记录的局部值调用。残差调用、重放 native、回填、重算槽按 `step2` 的启动重放序列次序生成为一个启动函数，取代 `vm_boot_init` 的 `calls` / `classes` / `phases`。
+- **D6 抽象分析从映像出发**：引擎不再以 `[boot_init]` 与引导阶段为根。构建期初始化类的 `<clinit>` 不入链；被闭包读取的静态字段，其抽象值以映像对象（每个映像对象一个分配点 `image:#n`，字段值按映像具体值）为初值；映像对象的类型随其被读取而入实例化集合。只物化从「闭包内被读取的静态字段」与启动序列可达的映像对象（联合不动点，单调）。
+
+- **D7 档位上下文**（`engine/levels_boot.rs`）：映像导出时把引导档位（`VM.initLevel`，清单 `[concrete.boot] level`）的变化记为启动步骤 `IStep::Level`。残差调用与残差区段在其构建期档位的克隆上下文 `@level:L` 中分析；该上下文中的方法按 `[concrete.boot.level_queries]`（`VM.isBooted` ≥ 4、`VM.isModuleSystemInited` ≥ 2）折叠引导查询，不与本体共享摘要，派发枢纽按档位分族，触发的 `<clinit>` 也在档位上下文中登记。档位只沿直接调用（溯源类别 `invoke`，被调方的普通上下文为 NOCTX 或已是档位上下文）传播。实测：若沿全部同步类别（派发、lambda、反射……）传播，档位克隆失控（23 GB、200 万调用点），所以收窄到直接调用。手写方法不克隆，回调回到本体（已知局限）。档位 ≥ 全部门限时不建上下文。
+- **D8 映像对象的分配点**：映像数组逐对象建分配点（`<类型>@image<n>`），容器形状类（与 `obj_at` 同一判定）的映像实例也逐对象建分配点，字段值进该对象的字段节点（`Node::O`）。其他实例按确切类型代表，与程序新建对象合流。逐对象是为了避免各映像数组、各容器的元素互相混合（模块图里有上千个数组）。
+- **D9 残差调用的实参**：残差调用的被调方法，其形参取构建期记录的实参，不再 open。标量与 null 进常量格；字符串对象（非占位、非延迟，且内容数组非延迟——宿主属性值的延迟标记落在 String 的 `value` 数组上，启动序列按宿主值改写其内容）进字符串常量，内容延迟的字符串只取「非空引用」、不取字段标签；其他映像对象记为「带标签的非空引用」，标签是它 final 实例字段中的标量 / 字符串常量，与构造器摘要同一口径。引用实参的映像对象经 `image_ref` 流入形参节点。静态字段的映像初值同样走这套常量格（`image_pv`）。重放 native 与残差区段内的调用目标仍按 open 形参作根。
+- **D10 数组读取按静态类型收窄来源**（`engine/bytecode.rs`，通用精度修正）：aaload 的数组来源集先按数组值的静态类型过滤（checkcast / 声明类型），再判定是否含非数组值。原实现中，链表式 `Object[]`（如 `PreHashedMap.put` 的 `a = (Object[]) a[2]`）的来源集带有同数组其他元素（String），被当成 open 数组，于是注入 `open(Object)`。
+
+#### 5.5.3 进展与恢复入口
+
+**进展（2026-10-06 15:30，分支 `boot-image-s3`）**
+
+- 已提交：aaafd123（运行时映像常量构造原语）、ffdc14a5（§5.5.1 核对与物化设计）。
+- 本次提交为分析侧，从映像出发：
+  - `image.rs`：映像数据形态，规范编号，启动步骤含 Level；
+  - `concrete/export.rs`：解释器堆导出；
+  - `engine/image_start.rs`：装载映像。构建期初始化类不展开 `<clinit>`，活对象联合不动点，占位对象取来源，残差步骤作根；
+  - `engine/levels_boot.rs`：D7；
+  - D8–D10；
+  - 去掉 `[boot_init]` 根的调用条件：映像求值成功时不再以 `boot_init` 为根。
+- 尚未做：
+  - 发射侧物化（D1–D5）、启动重放函数；
+  - 删除 `[boot_init] calls / phases` 与 FS-C2 钩子；
+  - TestBootLayer e2e。
+  - 运行时 `vm_impl` 的档位重放补丁草稿（`__vm_at_init_level`）未入库。
+
+**实测（本机 macOS JDK 21，HelloWorld）**
+
+| 口径 | 类数 |
+|---|---|
+| 不从映像出发（现状） | 469 |
+| 从映像出发，D7–D10 全开 | **2,986**（RSS 2.3 GB，约 40 s） |
+| 跳过全部映像启动步骤（只装映像） | 366 |
+| 只跳过残差调用与残差区段 | 401 |
+
+硬门槛「≤ 540」**未达成**。超出部分全部来自运行期部分的根，链路如下：
+
+1. **残差区段** initPhase1 `[36, 70)`：`Charset.isSupported(sun.jnu.encoding)`，参数是宿主值（U1，Linux 上取自区域环境变量）。
+   - 调用链为 `Charset.lookup2` → `StandardCharsets.lookup`（名字不定）→ `Class.forName(...).newInstance()`。
+   - 这是 JDK 运行期真实会走的路径。现状不走，是因为手写 `registerNatives` 不执行 initPhase1。
+2. `Class.newInstance` → `getConstructor0`，异常消息分支走 `methodToString` → `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `getEnumConstantsShared` → `Method.invoke`。
+3. `Method.invoke` → `isCallerSensitive` → `isAnnotationPresent` → 注解解析 → 建 `Proxy`。
+4. `Proxy$Dyn` 的 VM 钩子以 open 实参派发全部代理方法，到 `AnnotationInvocationHandler.equalsImpl` → `Objects.equals(open, open)`。
+5. open `equals` 派发到全部已实例化类型，其中 `URL.equals` 来自 `toFileURL` 重放。
+6. 由此展开：`InetAddress` → `ServiceLoader` → 类路径 / jar / 文件系统 / 安全……
+
+反事实切除（`--cut`）逐个切掉以下各项，结果都仍是 2,986 类：
+
+- `Charset.isSupported`
+- `toFileURL`
+- `Proxy$Dyn.__vm_proxy_invoke`
+- `Class.getConstructor0@76`
+
+原因是名字不定的 `StandardCharsets.lookup` 有三条独立入口：jnu 区段，以及 stdout / stderr 两个 `newPrintStream` 残差调用。后两者的编码名是延迟值，按 U1 在运行期取宿主值，所以 `Charset.forName(enc, …)` 的名字也不定。open `equals` 的来源同样不止一处。因此压闭包须在通用路径上做精度，不能切单根。
+
+D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null → `Charset.defaultCharset` → 同一处 `StandardCharsets.lookup`。D10 消掉了 `PreHashedMap.put` 的 open 注入。剩余放大点是 2–4，属于通用精度问题，不是映像特有：任何以非常量名调 `Charset.forName` 的程序同样会碰到。
+
+**补测（16:20，64075e73，同口径反事实 `--cut`，不健全、只作归因）**
+
+| 切除 | 类数 |
+|---|---|
+| 无（64075e73 现状，RSS 2.0 GB、50 s） | 2,986 |
+| `sun/nio/cs/StandardCharsets.lookup(String)` 整个方法 | **401** |
+| 同上 + `Proxy$Dyn.__vm_proxy_invoke` | 401 |
+| 只切 `Class.newInstance()` | **459**（≤ 540） |
+| 只切 `Class.methodToString`（异常消息支） | 2,986 |
+
+结论修正：放大点只有一个——`StandardCharsets.lookup` 以不定名字走到 `Class.forName(…).newInstance()`（lookup@122/125），名字不定的三条入口（jnu 区段、stdout / stderr 编码）都汇到这里。`Class.newInstance` 本身让 `Constructor` 进入实例化集合，此后任何以 open 实参调用 `String.valueOf(Object)` / `StringBuilder.append(Object)` 的点都会派发到 `Constructor.toString` → `Executable.sharedToString` → `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `Method.invoke` → 注解 → `Proxy` → open `equals` → `URL.equals` → `InetAddress`……。实测入口之一是 `Terminator.setup` → `Signal.handle@71` 的字符串拼接（映像残差根），所以单切异常消息支不够。
+
+因此压闭包的终态方向（按收益）：
+- (B) 先做：`String.valueOf(Object)` / `append(Object)` 等的实参按调用点区分（上下文敏感或按调用点克隆）。`Signal.handle@71` 的拼接实参只有 `Signal` / 处理器，不应派发到 `Constructor.toString`。`Class.newInstance` 经 `getConstructor0` → `copyConstructor` 真实分配 `Constructor`，`Constructor` 进入实例化集合本身是正确的，放大来自 open 实参的 `toString` 派发。
+  - 核对（javap）：`Signal.handle@71` 拼接的是 `sig`（`Signal`），`Terminator.setup` 传入的是 `new Signal("HUP" / "INT" / "TERM")`。`--why` 只给首次发现路径，`StringBuilder.append(Object)` 的形参在全部调用点之间合流；`Constructor` 是否在别处被真实拼接（如反射异常消息）尚未核实。如果有真实拼接，`Constructor.toString` → 流 → `EnumMap` → `Method.invoke` 是 JDK 真实可达路径，压缩须落在其后的 `isCallerSensitive` 注解查询（原 (c)）与 `Proxy$Dyn` open 派发（原 (a)）上，且两者要同时做（单切 `__vm_proxy_invoke` 仍为 2,986）。下一步先用 `--flows` 查 `StringBuilder.append(Object)` 形参中 `Constructor` 的来源点。
+- (A) 辅助：`lookup` 的类名集合。`classMap()` 的值是映像中的字符串常量（D8 逐对象容器），`"sun.nio.cs." + cln` 应得有限名字集，`Class.forName` 解析为有限类集。只做 (A) 不能消除 `Constructor` 的分配。
+- 原 (a)–(c) 降级：单独做都不改变 2,986。
+
+**收口（18:05，到 6 h 上限停止）**
+
+- 分支 `boot-image-s3` 提交：aaafd123、ffdc14a5、67550efc、d8c62216、deb82e0d、64075e73（D9 健全性：内容延迟的字符串不折叠），以及 90cadb84、b2594f89、ca3393db、d6e932c7（文档）。
+- 服务器单测：bimg3-ut-d8c62216 被 bimg3-ut-d6e932c7 取代，旧作业已停。bimg3-ut-d6e932c7（jp2，16:20 起）停止时仍在跑（与 C4 全量并行，C4 独占服务器），结果见 `server_maintenance/rava/test_results/job/bimg3-ut-d6e932c7/`。
+- 审计 / 抽查 / JDK 25 / TestBootLayer 未做：发射侧未完成，且 C4 全量期间不发新服务器作业。
+
+**恢复入口**
+
+1. 先压闭包（硬门槛）。先按上面的 (A) / (B) 做；以下为原候选，按补测已降级：
+   - (a) `Proxy$Dyn` VM 钩子按代理实际接口与调用点派发，不再以 open 实参派发全部方法；
+   - (b) `Class.newInstance` / `getConstructor0` 异常消息分支的冷路径；
+   - (c) `Method.invoke` 的 `isCallerSensitive` 注解查询，按 `@CallerSensitive` 的静态事实折叠。
+   - 每做一项，都以 `rava closure tests/e2e/01_basics/HelloWorld.java -o … --why <类>` 复测。
+   - `--flows "@openorig:<类型>|<节点>"` 与 `@grow:` 可定位 open 注入点。
+2. 再做发射侧 D1–D5 与启动重放函数。
+3. 最后删 `[boot_init] calls / phases`、FS-C2 钩子，加 TestBootLayer，跑服务器单测 / 审计 / 抽查。
+4. 确定性：64075e73 上 HelloWorld `--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64 四组合已复验（本机 macOS JDK 21）。映像数据（`boot_image_data`）逐字节一致；类集合（2,986）、方法集合（18,008）、折叠计数、实例化 1,991 全部一致，差异只在 via 与内部计数 `method_contexts` / `context_objects`（±0.1%）。JDK 25 尚未复验。
+5. 本分支在发射侧完成前不可合入：分析已从映像出发，但映像尚未物化。
+
+#### 5.5.4 压闭包：核实结论与两处精度（2026-10-06 晚，分支 `boot-image-s3`）
+
+**§5.5.3 待核实项的结论：`Constructor` 确实被真实拼接**
+
+- `--flows "@path:P1 java/lang/StringBuilder.append:(Ljava/lang/Object;)Ljava/lang/StringBuilder;|java/lang/reflect/Constructor@…"` 查得，`append(Object)` 形参中 `Constructor` 的唯一来源是 `AccessibleObject.throwInaccessibleObjectException`（下称 TIOE）@33 拼接的 `this`。
+- 这是 JDK 真实代码：`Class.newInstance@72` → `doPrivileged` → `Class$1.run` → `Constructor.setAccessible` → `checkCanSetAccessible(Class,Class,Z)` 的拒绝分支。
+- `Signal.handle@71` 只因 `append(Object)` 的 P1 在各调用点间合流才出现在 `--why` 里，它本身不拼接 `Constructor`。
+- 因此 (B)（按调用点区分 `append` / `valueOf` 实参）**对规模无效**，已撤销。
+
+**真正的闸门：两条冷异常消息支**
+
+两条支路都通向 `Arrays.stream` → `StreamOpFlag.<clinit>` → `EnumMap` → `getEnumConstantsShared` → open `Method.invoke` → `isCallerSensitive` → 注解 → `Proxy` → open `equals` → ……
+
+1. `Class.getConstructor0@76` → `methodToString`（NoSuchMethodException 消息）。参数类型数组非空时走 stream。
+2. TIOE → `Constructor.toString` → `Executable.sharedToString`，无条件使用 stream。
+
+反事实切除实测（`--cut`，不健全，只作归因，基于 64075e73，原值 2,986 类 / 18,008 方法）：
+
+| 切除 | 类 / 方法 |
+|---|---|
+| `Constructor.toString` | 2,986 |
+| TIOE | 2,985 |
+| `Method.invoke` | 585 / 2,111 |
+| `Reflection.isCallerSensitive` | 756 / 3,855 |
+| `StreamOpFlag.<clinit>` | 2,978 |
+| `Class.getEnumConstantsShared` | 579 |
+| `StandardCharsets.lookup` | 401 |
+| `methodToString` + TIOE | **524 / 1,926** |
+| `methodToString` + `Constructor.toString` | 525 |
+
+**两处通用精度（健全，替代切除）**
+
+- **X1 c459845f：常量长度数组标签。**
+  - absint 的 `Obj::Len(n)`：`newarray` / `anewarray` 的常量长度随引用标签经局部变量、形参、字段、返回值传播，`arraylength` 折叠为常量。
+  - 依据：数组长度不可变（JVMS §2.7）。
+  - `methodToString` 只经 `getConstructor0` 被 `newInstance@54` 以 `new Class[0]` 调用，`argTypes.length == 0` 折叠后剪掉 stream 支。
+  - 单独做 X1 再反事实切 TIOE，结果为 524。
+- **X2 7f7c4201：TIOE 不可达。**
+  - 判定条件：`caller == null`（@14 / @40）；`callerModule == declaringModule`（@62），以及 `callerModule == Object.class.getModule()`（@74）。分三处修改：
+  - **调用者类镜像结果非空。** 清单 `caller_class` 的结果按非空引用答复（`CallInfo.nonnull_ret`）。依据：`reflection_impl.rs` 的 `getCallerClass` 运行期恒有调用者或回退根类，`vm_intrinsics.toml` 已补注。
+  - **形参常量格接受「非空引用」**（`bind_params` 用 `PV::of_ret`）。被调方法入口按形参序号换来源，并按描述符补类型（`absint::entry_state`）。非空性由此可以经形参传到 `checkCanSetAccessible`。
+  - **引导单例**：新清单 `[vm_state] boot_singletons`，现只登记 `Class.getModule`。依据：`class_impl.rs` 中引导类共用同一模块单例。
+    - 接收者是类字面量，或 Class 形参镜像值集全为引导类时，结果带 `Obj::BootSingleton(m)` 标签。
+    - 同标签的两个值 `if_acmp` 折叠为相等（`ref_eq`）。
+    - 形参值集上的答复记入 `mirror_field_assumed`，失效条件与接收者钩子字段相同：值集新增非引导类镜像、所指未知的 Class 对象或 open。
+
+**结果（本机 macOS JDK 21，HelloWorld，`rava closure`）**
+
+| 口径 | 类 | 方法 |
+|---|---|---|
+| 64075e73（§5.5.3） | 2,986 | 18,008 |
+| X1 | 2,985 | 18,002 |
+| X1 + 调用者非空 / 形参非空 | 2,983 | 17,998 |
+| X1 + X2 | **524** | **1,921** |
+
+- 硬门槛 ≤ 540 已达成。类集合与反事实「`methodToString` + TIOE」完全相同。
+- 剩余构成：`sun/nio/cs` 104 个，来自 `StandardCharsets.lookup` 名字不定（U1 宿主编码），属于合法可达。(A)（lookup 有限类集）实测已由 D8 逐对象容器给出 classMap 有限值集，不再单列。
+- 确定性：`--hash-seed` 0 / 12345 × `--flow-batch` 1 / 64 四组合下，类集合、方法 id + kind 集合，以及 summary 中除耗时外的全部字段逐项一致。
+
+**恢复入口（接 §5.5.3 第 2 条起）**
+
+1. 发射侧物化 D1–D5 与启动重放函数（设计见 §5.5.2）。
+   - 运行时 `vm_impl` 档位重放补丁草稿仍在 `/tmp/bimg3_vm_impl_level.patch`（`isBooted` / `isModuleSystemInited` 取 `initLevel() >= 4 / 2`），随发射侧一起入库。
+2. 删除 `[boot_init] calls / phases` 与 FS-C2 钩子，补 TestBootLayer。C4 全量结束后再发服务器单测 / 审计 / 抽查，并复验 JDK 25。
+3. 本分支在发射侧完成前仍不可合入。
+4. 本机验证范围：closure 库单测 171 个全过（含 `const_length_array_folds_arraylength`、`boot_singleton_results_compare_equal`）。driver `closure_cli` 中，小用例 5 个已过。
+   - 大闭包用例 `closure_independent_of_hash_seed` / `_large` / `closure_independent_of_order` 涉及 JNDI / DeepCopy / Serial 族，每个 rava 约 1.9 GB、16–20 分钟。按巡检要求，这些在本机中止。
+   - C4 冻结解除后上服务器补跑，与第 2 条的服务器单测一并进行。
+   - 服务器作业 bimg3-ut-d6e932c7 在收口时仍显示 running，日志为空。
+
+#### 5.5.5 发射侧物化与启动序列（2026-10-06 夜，分支 `boot-image-s3`）
+
+**提交**
+
+- 5d4b2769：发射侧物化映像区（`java_base/src/boot_image.rs`：`#[repr(C)] __BootImage` / `BOOT_IMAGE` 常量）与启动函数 `__boot_image_start()`（`main.rs` 在 `vm_boot_init` 前调用）；删除 `[boot_init] calls / phases`（闭包与清单两侧）；运行时映像原语（`image_rt.rs`、数组 / Unsafe 重定位、`SystemProps$Raw` 宿主表）。
+- 2fe9e265：S3 映像初始线程绑定（`ImageData.current_thread` → `rt::bind_initial_thread`）；删除 FS-C2 钩子（`ClassLoader.__vm_init_phase3`、`scl` / `contextClassLoader` 字段钩子）；补 4 个 native：`Reference.getAndClearReferencePendingList`（恒 null）/ `waitForReferencePendingList`（永久阻塞），`Signal.findSignal0` / `handle0` / `raise0`（自管道 + 「Signal Dispatcher」守护系统线程回调 `Signal.dispatch`）。
+- 29338223：`tests/e2e/62_reflection/TestBootLayer.java` 与期望输出（参考 JDK 21.0.11+10 实跑，37 行）。本机未跑。
+
+**启动序列（`__boot_image_start`）**：类注册 → VM 单元 → 绑定初始线程 → 引用链接（接口视图 / 数组视图 / 类镜像 / 占位对象槽）→ 宿主改写（`SystemProps$Raw` 两表）→ 字符串驻留 → 静态字段（`__si_set_*`）→ `__boot_initialized()` → 残差步骤 → `set_level(None)`。
+
+**本机实测（macOS，参考 JDK，HelloWorld `--stop-after emit`）**
+
+| 口径 | JDK 21 | JDK 25 |
+|---|---|---|
+| 映像类 | 528 | 498 |
+| 映像对象 | 614 | 618 |
+| 映像区字节 | 280,837 | 287,221 |
+
+- emit 阶段 4.78 s / RSS 445 MB（含 rava 增量构建的整条命令 50 s）。
+- `[precheck] native-missing` 中 Reference / Signal 4 项已消；余 13 项为档案内 apple KeychainStore / pkcs11 / jimage / HostLocaleProviderAdapter，不在启动路径。
+- `scripts/seed_check.sh HelloWorld`：seed-diff-lines = 0（2fe9e265 后复验）。
+- 单测（按名过滤）：closure `image` 1、emit `boot_image` 3、`jdk_literal_lint` 2，全过；`cargo check --workspace --tests --release` 无警告。运行时 crate 本机不编译。
+
+**测量方法（服务器执行，不新增环境变量）**
+
+- 二进制体积：同一档案、同一 profile（缺省档）下，release 二进制字节数与集成分支基线对比，门槛 ≤ +5%。分项用 `size -A <bin>` 看 `.rodata` / `.data`，用 `nm --size-sort -S <bin> | grep BOOT_IMAGE` 看映像区本身。
+- 启动装载：Linux uprobes——`perf probe -x <bin> __boot_image_start` 与 `__boot_image_start%return`，`perf record -e probe_<bin>:* -- <bin>` 取两事件时间戳差，门槛 ≤ 1 ms。辅以 `hyperfine -w 3 '<bin>'` 看总启动，与基线对比。符号须保留（测量用未 strip 的同构建产物）。
+
+**未完成 / 恢复入口**
+
+1. 服务器验证（C4 全量结束后）：closure_cli 三个大用例（`closure_independent_of_hash_seed` / `_large` / `closure_independent_of_order`）；生成器全量单测、审计、抽查、JDK 25；e2e HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer、TestThreadContextLoaderInit；体积与启动两项门槛。运行时改动（`image_rt.rs`、`thread_impl.rs`、`signal_impl.rs`、`reference_impl.rs`）未经本机编译，首轮服务器编译即其编译检查。
+2. D5 残差区段未物化：HelloWorld 两段都是 jnu 编码不受支持路径（JDK 21 initPhase1 `[36,70)`、initPhase3 `[367,401)`；JDK 25 `[178,212)`），UTF-8 宿主上为空操作。终态做法：由解码后的指令（`classfile::Code` 的 insns + 异常表）合成一个静态方法，类型由 `sim` 推断（无 StackMapTable），分析器登记入档案、发射器照常翻译，启动序列以 Call 步骤调用。
+3. S6：手写 `System.out` / `err` / `in` / `lineSeparator` 访问器仍为运行时侧状态，映像中对应静态字段由 `static_setter` 跳过；终态随 System 手写收窄一并改为取映像值。
+
+**需用户决策（技术取舍，已按授权先行实现）**
+
+1. D4 偏离：静态字段在启动时经 setter 写入，不是常量初值。
+2. D1 偏离：映像区放在门面 `java_base` crate，不放 decl 层。
+3. 启动时有引用链接与宿主改写，装载开销非零（U4「零拷贝」的偏离）。
+4. 映像使存活集变大（映像对象可达的类与方法入档案）。
+5. 宿主值为 null 时保留构建期值。
+6. 接口视图 / 数组视图 / 其他形态槽与类镜像在启动时链接，不进常量。
+7. S5 模块身份：映像中的 Module 对象即运行期模块单例。
+8. 映像中出现非生成类型即发射错误（不降级）。
+9. FS-C2 已删：映像缺失时系统类加载器初始化随之缺失，映像事实上为必需。
+10. D5 未物化（见上）。
+11. 重定位识别按值域判定（指针值落在宿主地址区间）。
+12. `vmProperties` 的键序在运行时 native 中重复一份，与 `[concrete.boot] vm_props` 须同步。
+13. 宿主 native 限零参静态方法。
+14. Reference Handler 与 Signal Dispatcher 现为真实 OS 线程（守护，不阻止退出）。
+15. S6 手写标准流仍为侧状态（见上）。
+
+#### 5.5.6 服务器跑通与第 4 步、第 5 步（部分）（2026-10-07，分支 `boot-image-s3`）
+
+**跑通（服务器 dev，JDK 21）**：1ecdcb51（泛型 wrapper `__phantom` 按字段推断）、0e540b1c（映像存储类型 `X__inner` 按实现层路径）、6c344f81（宿主改写 null 判定走 `is_jvm_null`，不活对象的重定位 / 重算写入跳过）、bad5901d（基本类型镜像按描述符字符还原：映像 `IObj.mirror` 的基本类型为描述符字符，原按类型名匹配，`byte.class` 退化为类 `B`，`Unsafe.allocateUninitializedArray` 抛 `Component type is not primitive`）。
+
+**第 4 步（模块部分）**
+
+- e50d4ba3：`Module` / `ModuleLayer` / `Class.getModule` 回到字节码。
+  - 删 `module_impl.rs` 的 `unnamed_module` 单例与 7 个 `#[jvm_boundary]`、`module_layer_impl.rs` 整个文件（`boot` / `parents` / `servicesCatalog` 钩子）、`class_impl.rs` 的手写 `getModule`。
+  - VM 模块表以映像为初值：求值器的 `defineModule0`（`vm_record`）同时记 `vm.modules`（模块、定义加载器、open、位置、包），导出为 `ImageData.modules`；启动序列在字符串驻留后逐条 `rt::define_module` 登记（`Module::__vm_register`）。
+  - `Class.module` 改为接收者字段钩子 `Class.__vm_module`：按「定义加载器 + 包」查 VM 模块表，未登记的包归定义加载器的无名模块（HotSpot 同）。分析侧钩子池由 `image_module_table` 以映像模块对象喂入。
+  - 清单 `[vm_state.field_hooks]` 新增 `boot_noop`：`classLoader` 钩子对引导类为空操作，`module` 钩子对每个镜像都需要。
+  - 删 `[vm_state] boot_singletons`（§5.5.3 X2 的「引导单例」）：`Class.getModule` 不再是手写单例，`callerModule == declaringModule` 不再按单例折叠。闭包规模影响待测（见下「未决」）。
+- fcc54fb8：`Module` / `ModuleLayer` 移出 `closure.toml [vm_boundary]`，`Module` 移出 `clinit_carried`，删 `translate_nested` 的 `Module$EnableNativeAccess`。原因：嵌套类 `Module$ReflectionData` 随外层归入 `clinit_carried`，静态访问器发为存根（`stub: java/lang/Module$ReflectionData.exports`）。手写只剩 ACC_NATIVE（`defineModule0` / `addReads0` / `addExports*`）。
+
+**第 5 步（部分）**：44be328e，`BootLoader.getSystemPackageLocation` native——引导加载器的包按 VM 模块表取所属模块的 location（映像模块表带 `defineModule0` 的 location 实参，引导层为 `jrt:/<模块名>`），未登记 → null。
+
+**抽查 bimg3-m-fcc54fb8（JDK 21）**：8 例 7 过——HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy 通过（后 5 例已从 `docs/known_failures.toml` 删除）；TestBootLayer 运行期 NPE（见未决 1）。宽抽查 bimg3-w-f442cecf：CollectorsDemo、DeepCopy、TestSerialUserGenericCallbacks 通过，TestBootLayer 同上。
+
+**未决**
+
+1. TestBootLayer（第 3 步验收项）：作业 bimg3-bl-fcc54fb8 实跑，前 23 行与 JDK 相同（引导层、java.base / java.sql 模块、Configuration、无名模块均正确），在 `base.getResourceAsStream("java/lang/Object.class")` 返回 null 后 `readNBytes` NPE。原因：`input/src/resources.rs` 的资源推导按设计排除 `.class`（`path_like` 单测断言 `!path_like("p/q/A.class")`），类字节不在嵌入资源中。按 boot-layer 第 5 步（2026-10-02-boot-layer.md §2.3 第 6 条：jimage 嵌入数据 + `getNativeMap`，`.class` 字节同属模块内容）一并解决；是否放开 `.class` 资源推导属该步设计，未自行改动。其后各行（系统类加载器、线程组、属性、标准流）未覆盖到。
+2. 闭包规模（需决策，2026-10-07 晚拆分实测，见下「闭包回升拆分」）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。
+3. 二进制体积 / 启动：基线 af1bf145 HelloWorld release 二进制 7,761,904 字节（已无符号，`.text` 4.70 MB、`.rodata` 0.41 MB、`.data.rel.ro` 0.48 MB），整进程墙钟中位数 0.99 ms（30 次）。本分支同口径作业 bimg3-meas2-f442cecf 因 dev 关机维护被停，未得数；uprobes 测 `__boot_image_start` 需未 strip 的产物（缺省 release 已无符号），须另配。测量脚本两作业共用 `/tmp/meas_*.txt` 会串扰，重跑时须按 tag 区分文件名。
+4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
+
+**闭包回升拆分（2026-10-07 晚，Linux JDK 21，`rava closure` HelloWorld，summary.classes；作业 bimg3-why-* / bimg3-cut-95cc94f2 / bimg3-fold-86f4f9be / bimg3-base-*）**
+
+| 提交 / 反事实 | 类 | 方法 |
+|---|---|---|
+| 7f7c4201（§5.5.4 X2，本机 macOS 524） | 576 | — |
+| 1605feb7（第 3 步宿主内容来源根，本机 macOS 530） | 582 | — |
+| 6c344f81（2fe9e265 补 Signal native 之后，`boot_singletons` 仍在） | 3022 | 17956 |
+| e50d4ba3（删 `boot_singletons`） / fcc54fb8 / 95cc94f2 | 3068 / 3055 / 3088 | 18524（95cc94f2） |
+| 95cc94f2 切 `Shutdown.logRuntimeExit` | 3088 | 18524 |
+| 95cc94f2 切 `Signal.dispatch` | 3087 | 18520 |
+| 95cc94f2 恢复 `boot_singletons` | 3045 | 18107 |
+| 95cc94f2 恢复 `boot_singletons` + 切 `logRuntimeExit` | 598 | 2149 |
+| 86f4f9be（映像模块折叠，下述） | 3045 | 18108 |
+| 86f4f9be 切 `logRuntimeExit` | 598 | 2149 |
+| 86f4f9be 切 `logRuntimeExit` + `Signal.dispatch` | 591 | 2117 |
+
+- 两个独立的放大入口，各自单独都能把闭包放大到约 3000 类：
+  - (L) 2fe9e265 补 `Signal.handle0` 等 native 后，映像中 `Terminator.setup` 登记的 INT / TERM / HUP 处理器经 Signal Dispatcher 线程可达：`Thread.start0`（映像根）→ `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `logRuntimeExit` → `System.getLogger("java.lang.Runtime")` → `LazyLoggers` → `LoggerFinder.getLoggerFinder` → `LoggerFinderLoader` → `ServiceLoader`（含 JUL 后端）。约 +2447 类。
+  - (M) e50d4ba3 删 `boot_singletons` 后，`checkCanSetAccessible` 的 `callerModule == declaringModule` 不再折叠，§5.5.4 的 TIOE 链重新打开。只消 (L) 仍为 3088，两者都消为 598。
+- (M) 已按终态修复（86f4f9be）：`Class.getModule` 已回到字节码（`return this.module`，字段钩子 `Class.module`）。抽象解释在已知类镜像值集上读 `class_module` 钩子字段时，按「定义加载器 + 包」查映像 VM 模块表——与运行期钩子查的是同一张表（启动序列登记）。若全部落到同一模块，结果就是该映像对象（`Obj::Image(下标)`）。引用相等按映像对象身份折叠：同下标相等，不同下标不等。镜像接收者上的调用，若唯一目标是接收者钩子字段的平凡取值（字节码形态 `aload_0 / getfield / areturn`），则按该字段读折叠。清单 `[vm_state] boot_singletons` 与 `Obj::BootSingleton` 删除。实测与恢复 `boot_singletons` 的结果相同（3045 / 598）。
+- (L) 是 JDK 21 的真实运行期语义：HotSpot 上 Ctrl-C / SIGTERM 同样经 `Shutdown.exit` → `logRuntimeExit` 初始化 System.Logger 后端。该链取决于运行期日志配置与服务提供者。不用 `closure.toml` 边界截断，就压不到 540 以内；用户已决策，见下「决定」。（更正：原先此处写「即使把 `LoggerFinder` 的提供者在构建期定下，JUL 后端仍在链上」。本机 JVM 探针（JDK 21，`-Xshare:off -Xlog:class+load`，`System.exit` 路径）显示 `LogManager` 在该路径上并不初始化，JUL 后端不在 HelloWorld 的运行期装载集里，见下「决定后的实测」。）
+- Linux 上的基线本身也超过 540：X2（7f7c4201）在 Linux 上为 576 类，本机 macOS 为 524，第 3 步的 ≤ 540 只在 macOS 上测过。86f4f9be 消除 (L) 之后为 598：比 1605feb7 多出的 17 类来自 Module 回到字节码（`Module$ReflectionData`、`WeakPairMap*`、`ModuleDescriptor`、`ServicesCatalog`、`BootLoader`、`HashSet`、`ImmutableCollections$SetN`）和 Signal 派发余项（`Signal$1`、`Thread$State`、`Thread$ThreadIdentifiers`、`IllegalThreadStateException`、`Permission` / `Guard` / `DomainCombiner`），`ModuleLayer` 少 1 类。598 中 `sun/nio/cs` 有 165 类（`Charset.isSupported` 映像残差根 → `StandardCharsets.lookup` 以不定名字反射），`sun/reflect/generics/tree` 有 24 类（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor` 的泛型签名解析）。这两项在 Linux 基线 576 中已经存在。
+
+**决定（用户 2026-10-07，取推荐项）**
+
+1. 信号处理链 (L)：接受，行为与 JDK 一致，信号行为不做任何改动。
+   - 在构建期确定 `LoggerFinder` 的提供者：生产构建时类路径资源全量打包，提供者集合在构建期可知，用它去掉 `ServiceLoader` 一段。JUL 后端保留。
+   - 决定依据（主会话按 S0 Spring Boot API 面 `tests/api_surface/s0.txt` 核对）：
+     - JUL 44 个方法在 S0 面内（`LogManager.getLogManager`、`Logger.getLogger`、`isLoggable` 等）；
+     - System.Logger 3 个方法和 `System.getLogger` 1 个在面内；
+     - `ServiceLoader` 2 个、`Runtime.addShutdownHook` 1 个在面内。
+     - Spring Boot 会注册 shutdown hook，容器内 SIGTERM 优雅停机依赖 JDK 信号处理器触发这个 hook。
+   - 结论：信号链 + JUL + ServiceLoader 属 S0 必需路径，不能暂缓；构建期定 `LoggerFinder` 提供者照做，对所有程序收窄 `ServiceLoader` 一段。
+2. HelloWorld 闭包上限按平台分别定：以无截断实测为准，Linux 与 macOS 各给一个明确的量化目标（见下「按平台上限」）。§5.5.3 的两项精度改进（`StandardCharsets.lookup`、泛型签名）作为后续收窄项另列（见下「后续收窄排期」）。
+
+**决定后的实测（Linux JDK 21，HelloWorld，ref 787035b3；作业 bimg3-lf3 / bimg3-lf4 / bimg3-prec-787035b3，sg1）**
+
+用诊断切口（`--cut`，整方法或 `方法@偏移`）把 (L) 链拆成三段，分别量各段的贡献。切口只是近似：切掉 `service()` 等于把它的返回值置空，属于下近似。
+
+| 切口 | 类 | 方法 |
+|---|---|---|
+| 基线 A（无切口） | 3045 | 18108 |
+| E：整个 `Shutdown.logRuntimeExit`（(L) 全切） | 598 | 2149 |
+| ①：`DetectBackend.<clinit>` + `LoggerFinderLoader.service`（ServiceLoader 一段） | 2999 | 17744 |
+| ① + ②：再切 `System$LoggerFinder.accessProvider` @8 / @26（静态字段为空的分支） | 2998 | 17741 |
+| ③：`logRuntimeExit@74`（DEBUG 级 `log` 调用） | 3045 | 18107 |
+| ① + ③ | 2999 | 17743 |
+| ① + ② + ③ | **628** | 2255 |
+
+- 三段互相独立，各自单独都能保住约 3000 类，只有三段同时去掉才落到 628：
+  - ① ServiceLoader 一段：`ServiceLoader` → 类路径 `findClass` → `URLClassPath` / jar → `SecureRandom` → JCA；`BootLoader.findResources` → jrt `Handler` → jimage；
+  - ② `accessProvider` / `LoggerFinderLoader.service()` 的「静态字段为空」分支：`doPrivileged(PA, ACC, Permission[])` → `FilePermCompat` → `SecurityProperties` → regex → ICU；
+  - ③ `logRuntimeExit` 的 DEBUG 级日志：`log` → `SimpleConsoleLogger.getCallerInfo` → `CallerFinder.<clinit>` → `StackWalker` → `StackFrameInfo` → `MethodHandleImpl`（invoke 一大块）。
+- 628 比 E（598）多 30 类，就是 HotSpot 上该路径真实装载的 System.Logger 前端：`jdk/internal/logger` 17 类、`sun/util/logging` 5 类、`System$Logger` / `Level` / `LoggerFinder`、`TemporaryLoggerFinder`、`SimpleConsoleLogger`、`SurrogateLogger`、`RuntimePermission` / `BasicPermission`、`BooleanSupplier`、`Class$EnclosingMethodInfo`、`PreviewFeatures` 等。
+- JVM 真值（本机 JDK 21，`-Xshare:off -Xlog:class+load`，main 之后 `System.exit`）：
+  - main 之后约装载 236 类，其中日志相关类与 ①+②+③ 的 30 类一致；
+  - 另装载 `ServiceLoader`（两种迭代器）、stream、jimage（12 类）、`sun.nio.fs`、`NativeLibraries`、lambda / invoke；
+  - **不装载** `LogManager`（JUL 后端）、`StackWalker`、regex、JCA。
+  - 结论：628 与 JDK 的运行期行为对齐；3045 中的大头（JCA、regex、StackWalker）是分析精度造成的，并非真实语义。
+
+**终态设计：三个机制，缺一不可（只做构建期提供者确定是 −46 类）**
+
+1. 构建期确定 `LoggerFinder` 提供者（本决定，对应 ①）。
+   - 引导求值器在 `[concrete.boot] calls` 的 `initPhase3` 之后追加一次 `LoggerFinder` 查找（清单项，不写进生成器）。由求值器在构建期跑完 `LoggerFinderLoader.service()`，结果（提供者实例与 `service` 静态字段）进入映像，运行期不再走 `ServiceLoader`。
+   - 前置条件：
+     - 求值器能读 jimage 与模块资源（第 5 步 T3）；
+     - 类路径资源在构建期全量打包，求值器可以枚举（U3：生产构建打包资源，取代延迟的 `toFileURL` 占位）。否则求值器在 `ServiceLoader` 上失败，构建报错。
+   - 语义：该路径上读到的属性取构建期值；用户提供者的构造函数在构建期运行。与 U1（属性运行期取宿主值）的划界在实施时登记为 U1 的例外项，例外项仅限提供者选择。
+2. 通用静态字段非空折叠（对应 ②，分析器通用机制，无类名）。
+   - 条件：静态字段的映像值非空，且档案内所有可达的 `putstatic` 写入值都非空。
+   - 动作：`getstatic` 后的 `ifnull` / `ifnonnull` 按「非空」折叠，空分支不可达。
+   - 这条只依赖 JDK 侧事实（映像值 + 档案内写点集合），符合「折叠只对用户无法扩展的事实做」。
+3. 日志级别折叠（对应 ③）。
+   - `jdk.system.logger.level` 缺省为 INFO，经 `SurrogateLogger` / `SimpleConsoleLogger` 的级别字段决定 `isLoggable(DEBUG)`。
+   - 级别值进映像（构建期初始化），`isLoggable` 的结果按映像值折叠，`logRuntimeExit@15 ifeq` 只剩不记日志的分支。
+   - 若用户在运行期用 `-Djdk.system.logger.level=DEBUG` 打开，行为与 JDK 不同。这与机制 1 一样属于「该路径属性取构建期值」，一并登记。
+
+**按平台上限（HelloWorld，JDK 21，无 `closure.toml` 边界截断）**
+
+| 平台 | 上限 | 依据 |
+|---|---|---|
+| Linux | **≤ 640** | 实测 628（①+②+③ 切口）+ 映像中提供者实现约 5 类，留少量余量 |
+| macOS | **≤ 590** | Linux 上限减平台差约 52（X2：576 / 524，1605feb7：582 / 530）；**推算值，三个机制落地后须在 macOS 上实测确认** |
+
+- 现状：Linux 3045、macOS 未测。上限在上述三个机制全部落地后验收；只做机制 1 的预计值为 Linux ≈ 2999。
+- 原第 3 步门槛 ≤ 540 是 macOS 上未计 (L) 链时定的，现由本表取代。
+
+**后续收窄排期（三个机制之后，各自独立）**
+
+| 项 | 实测（Linux，在 E 上切） | 预计减少 | 做完后终态 | 前置 / 待决 |
+|---|---|---|---|---|
+| S1 `sun/nio/cs/StandardCharsets.lookup` 以不定名字反射 | 598 → 406 | Linux −192（`sun/nio/cs` 165 → 9，另有 `jdk/internal/reflect` 8、`java/lang/invoke` 8 等）；macOS 约 −120（闭包中 `sun/nio/cs` 104 类，推算） | Linux ≈ 436，macOS ≈ 470 | 在 U1（运行期取宿主编码）下，按不定名字查字符集是合法可达，不是精度缺陷。要收窄，须先由用户重新审视 U1：例如把可选字符集固定为构建期声明的集合 |
+| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。无用户决策项 |
+| S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
+
+- 排期：S2 无待决，排在三个机制之后的第一项；S1 待用户对 U1 的决定，不排进当前步骤。
+
+**待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
+
+1. 全量单测：bimg3-ut2-911a3a4d（sg1）的结果由主会话收取。该作业在 7000 s 处被停止，没有跑完：前 7 个测试二进制全部通过，第 8 个（10 项闭包集成测试）中 `param_string_constants_fold_switch` 和 `closure_independent_of_order` 已标 FAILED，断言细节因进程中止未输出。这两项待合批复验；后者属于确定性测试，集成分支 d7b490db 也记有「闭包确定性两项待 dev」。合并 b6ed3950（Narrowed 改名、lib_runtime 删除）之后单测未跑。重点看三项：
+   - `absint::tests::image_object_results_compare_by_identity`；
+   - `manifest::vm_state` 各项（`boot_singletons` 已删除）；
+   - 闭包确定性两项。
+2. 抽查 7 例，输出须与 JDK 相同：HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy。6878583b 上 bimg3-f 为 7/7 通过，合并后待复验。known_failures.toml 中 TestModuleLayerDefine / TestClassModuleFace / TestProtectionDomainFaces 三项已移除，复验失败即为回归。
+3. 闭包数字：HelloWorld 在 Linux JDK 21 档案键下应为 3045，(M) 已折叠；去掉 (L) 后为 598。合并集成分支的 JCA 键判定收窄之后，这两个数是否变化待测。
+4. 第 3 步其余验收项未测：
+   - 二进制大小增量 ≤ 5%；
+   - 启动装载 ≤ 1 ms；
+   - TestBootLayer 输出与 JDK 相同（依赖第 5 步 jimage / getNativeMap）。
+5. 闭包上限已按平台改定（上「按平台上限」：Linux ≤ 640，macOS ≤ 590），在三个机制落地后验收。
+6. `param_string_constants_fold_switch` 已做静态判断，不是本分支抽象解释改动（`Image` / `Narrowed` 合并等）引起的。
+   - 该测试断言闭包不含 `sun/net/www/protocol/jrt/Handler`，且类数 < 1000。
+   - 本分支补 Signal native 之后，(L) 链经 ① 的 `BootLoader.findResources` 使 jrt `Handler` 可达，闭包为 3045 类，两条断言都不满足。
+   - 断言本身正确，不改；机制 1–3 落地后（628 < 1000，且 ① 去掉了 jrt `Handler`）预期通过，进合批复验。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -415,8 +809,8 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
-| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 |
-| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 |
+| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；VM、Class 2、SecurityManager 未做 |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
 | 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 
@@ -468,3 +862,12 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 | U4 | 映像装载形态 | 甲：启动时批量建对象（约 0.4 ms）/ 乙：arena 永久区零拷贝（依赖 S7 句柄设计） | 终态取乙；S7 未定前先实施甲作为装载层，不影响映像格式 |
 | U5 | 映像所在的档案层 | 放在 `java_base` 档案内 / 独立 `boot_image` crate | `java_base` 内（引用的类全属 java.base） |
 | U6 | 实施次序与在途精度线 | 先做映像，再测 §25.2 的 1852 类 / 先等「Class 接收者逐镜像求值」 | 并行：两者正交，第 3 步验收时合测 |
+
+#### 5.5.6 用户决策 U11（2026-10-07）：启动链接改为零拷贝终态
+
+§5.5.5 待决项 1、3、6（静态字段启动期 setter 写入、启动期链接与宿主改写、接口 / 数组视图与 Class 镜像启动期链接）偏离 U4「直接做零拷贝永久区」。用户 2026-10-07 采纳协调者建议：
+
+- **按终态重做为零拷贝**：映像在构建期全部落为 Rust 常量（静态字段初值、接口 / 数组视图、Class 镜像均为常量），启动期只覆盖确实依赖宿主的少数字段（编码、换行符、java.home 等，与 U1 一致）。
+- **顺序**：C4 冻结解除后，先在服务器上把现有实现（3e309fec）编译、跑通，排除正确性问题；再单独一步改零拷贝；最后实测体积（≤+5%）与启动装载（≤1 ms）。
+- 不采纳「实测达标即接受现状」的备选。
+- §5.5.5 其余待决项（2、4、5、7–15）按代理实现认可；D5 物化与 S6 标准流随零拷贝一步排期。

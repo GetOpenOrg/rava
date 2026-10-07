@@ -112,6 +112,9 @@ struct Acc {
     services: BTreeMap<String, BTreeSet<(Option<String>, String)>>,
     services_unknown: bool,
     sysprops: Option<Value>,
+    /// 引导映像（各入口须同一映像）与活对象之并
+    image: Option<Value>,
+    image_live: BTreeSet<u64>,
     modules: crate::modules_json::ModuleRows,
 }
 
@@ -233,6 +236,19 @@ impl Acc {
             Some(p) if p != sp => return Err(format!("入口 {} 的系统属性表与其他入口不一致（运行时清单不同）", e.name)),
             Some(_) => {}
         }
+        if let Some(img) = c.get("boot_image_data").filter(|v| !v.is_null()) {
+            let mut body = img.clone();
+            if let Some(o) = body.as_object_mut() {
+                for x in o.remove("live").and_then(|l| l.as_array().cloned()).unwrap_or_default() {
+                    self.image_live.insert(x.as_u64().ok_or("boot_image_data.live 应为整数")?);
+                }
+            }
+            match &self.image {
+                None => self.image = Some(body),
+                Some(p) if *p != body => return Err(format!("入口 {} 的引导映像与其他入口不一致（参考 JDK 或运行时清单不同）", e.name)),
+                Some(_) => {}
+            }
+        }
         Ok(())
     }
 
@@ -284,6 +300,10 @@ impl Acc {
             "folds_version": crate::FOLDS_VERSION,
             "folds": folds,
             "system_properties": self.sysprops.clone().unwrap_or_else(|| json!({"values": {}, "dynamic": []})),
+            "boot_image_data": self.image.clone().map(|mut b| {
+                b["live"] = json!(self.image_live);
+                b
+            }),
             "reflect": {
                 "members": self.reflect_members.iter().map(|(k, m)| json!({"kind": k, "member": m})).collect::<Vec<_>>(),
                 "gaps": set("reflect.gaps"),

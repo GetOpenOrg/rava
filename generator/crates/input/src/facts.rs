@@ -187,6 +187,8 @@ pub struct ClosureFacts {
     /// lambda 站点的函数式接口（samtype，分析器 `sam_types`）：发射层合成 `I__Lambda` 的接口集
     pub sam_types: Vec<String>,
     pub system_properties: SysPropFacts,
+    /// 构建期引导映像（物化数据与活对象集；求值失败时为 None）
+    pub boot_image: Option<closure::image::ImageData>,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -300,6 +302,7 @@ impl ClosureFacts {
                 values: e.sysprops().values().clone(),
                 dynamic: e.sysprops().dynamic().clone(),
             },
+            boot_image: c.boot_image.as_ref().and_then(|b| b.data.clone()),
         }
     }
 
@@ -320,6 +323,9 @@ impl ClosureFacts {
             });
         }
         out.clinit = strings(v.get("clinit"))?;
+        if let Some(b) = v.get("boot_image_data").filter(|b| !b.is_null()) {
+            out.boot_image = Some(closure::image::ImageData::from_json(b).map_err(InputError::Format)?);
+        }
         out.refs = strings(v.get("refs"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         for m in v.get("missing").and_then(Value::as_array).into_iter().flatten() {
             out.missing.push(str_of(m, "name")?.to_string());

@@ -5,6 +5,7 @@
 //! Cargo.toml / strict.txt / jdk_feature.txt。
 
 mod archive_side;
+pub mod boot_image;
 pub mod meta_sides;
 pub mod decl_segments;
 pub mod decl_side;
@@ -347,7 +348,8 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&decl_src, &runtime_src, &mut w)?;
-    module_side::write_facade(&mut w, out_dir, crates, segs.top(), &body_names)?;
+    let image = boot_image::write_boot_image(ctx, &mut w, out_dir, &ems, &body_plan.homes)?;
+    module_side::write_facade(&mut w, out_dir, crates, segs.top(), &body_names, image)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp)?;
     mod_tree::sweep_user_crate(&user_src, &user.mod_tree, &w, crate::par::resolve_jobs(ctx.opts.jobs))?;

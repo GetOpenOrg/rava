@@ -28,6 +28,8 @@ pub struct BootImage {
     pub types: Vec<String>,
     /// 运行期部分的入口类：运行期初始化类、残差调用 / 重放 native 的声明类、占位读取的类、残差区段所在类
     pub runtime_classes: Vec<String>,
+    /// 物化数据（求值失败或导出失败时为 None）
+    pub data: Option<crate::image::ImageData>,
 }
 
 /// FNV-1a 双通道
@@ -139,6 +141,10 @@ struct Size {
     objects: usize,
     slots: usize,
     types: BTreeSet<Rc<str>>,
+    /// 类型（含数组）→ 可达对象数
+    counts: BTreeMap<Rc<str>, usize>,
+    /// 可达 lambda 对象（函数式接口 ← 实现方法）
+    lams: BTreeSet<String>,
 }
 
 fn reachable(vm: &Vm) -> Size {
@@ -154,11 +160,11 @@ fn reachable(vm: &Vm) -> Size {
             }
             Rec::Read { ph, .. } => stack.push(*ph),
             Rec::Region { locals, .. } => stack.extend(locals.iter().filter_map(|v| if let CV::R(o) = v { Some(*o) } else { None })),
-            Rec::RuntimeInit { .. } => {}
+            Rec::RuntimeInit { .. } | Rec::Level(_) => {}
         }
     }
     let mut seen = vec![false; vm.heap.len()];
-    let mut s = Size { objects: 0, slots: 0, types: BTreeSet::new() };
+    let mut s = Size { objects: 0, slots: 0, types: BTreeSet::new(), counts: BTreeMap::new(), lams: BTreeSet::new() };
     while let Some(o) = stack.pop() {
         let i = o as usize;
         if i >= seen.len() || seen[i] {
@@ -170,6 +176,7 @@ fn reachable(vm: &Vm) -> Size {
         if !h.ty.starts_with('[') {
             s.types.insert(h.ty.clone());
         }
+        *s.counts.entry(h.ty.clone()).or_default() += 1;
         let push = |v: &CV, st: &mut Vec<u32>| {
             if let CV::R(r) = v {
                 st.push(*r)
@@ -184,7 +191,10 @@ fn reachable(vm: &Vm) -> Size {
                 s.slots += a.len();
                 a.iter().for_each(|v| push(v, &mut stack));
             }
-            Body::Lam(l) => l.captured.iter().for_each(|v| push(v, &mut stack)),
+            Body::Lam(l) => {
+                s.lams.insert(format!("`{}` ← `{}.{}{}`", l.iface, l.imp.member.owner, l.imp.member.name, l.imp.member.desc));
+                l.captured.iter().for_each(|v| push(v, &mut stack))
+            }
         }
     }
     s
@@ -240,6 +250,7 @@ fn digest(vm: &Vm) -> String {
                 c.h.str(&format!("region {phase}@{start}..{end:?}"));
                 locals.iter().for_each(|&v| c.value(v));
             }
+            Rec::Level(l) => c.h.str(&format!("level {l}")),
         }
     }
     c.drain();
@@ -323,6 +334,17 @@ impl<'a> Engine<'a> {
         if error.is_none() {
             error = s2.fail.clone();
         }
+        let data = if error.is_none() {
+            match super::export::export(&vm, env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i).copied())) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    error = Some(format!("映像导出：{e}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let ok = error.is_none();
         let rt_init: Vec<(String, String)> = vm.bj.recs.iter().filter_map(|r| if let Rec::RuntimeInit { class, why } = r { Some((class.to_string(), why.clone())) } else { None }).collect();
         let calls: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Call { phase, off, callee, why, ph, .. } = r { Some(format!("`{phase}@{off}` → `{callee}`{}：{why}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
@@ -397,6 +419,12 @@ impl<'a> Engine<'a> {
                 let _ = writeln!(r, "    {f}");
             }
         }
+        let _ = writeln!(r, "\n## 映像可达对象的类型（{} 种，对象数）\n", size.counts.len());
+        let _ = writeln!(r, "{}", size.counts.iter().map(|(t, n)| format!("`{t}` {n}")).collect::<Vec<_>>().join("、"));
+        let _ = writeln!(r, "\n## 映像可达 lambda 对象（{}）\n", size.lams.len());
+        for l in &size.lams {
+            let _ = writeln!(r, "- {l}");
+        }
         let _ = writeln!(r, "\n## 已初始化类（构建期，按完成次序）\n\n{}", vm.done_log.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(" "));
         let mut runtime_classes: BTreeSet<String> = BTreeSet::new();
         for rec in &vm.bj.recs {
@@ -405,10 +433,11 @@ impl<'a> Engine<'a> {
                 Rec::Call { callee, .. } | Rec::Native { callee, .. } => callee.owner.to_string(),
                 Rec::Read { decl, .. } => decl.to_string(),
                 Rec::Region { phase, .. } => phase.owner.to_string(),
+                Rec::Level(_) => continue,
             });
         }
         let types = size.types.iter().map(|t| t.to_string()).collect();
-        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect() })
+        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect(), data })
     }
 }
 

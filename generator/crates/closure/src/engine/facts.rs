@@ -22,9 +22,10 @@ impl PV {
             _ => PV::Top,
         }
     }
-    /// 返回值 → 返回常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」（[`nonnull_ref`]）。
-    /// 只用于返回常量格：调用点据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法），
-    /// 形参 / 字段常量格不取它（那里的引用须保留来源）
+    /// 返回值 / 实参 → 返回常量格与形参常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」
+    /// （[`nonnull_ref`]）。调用点 / 被调方法体据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法、
+    /// 实参恒为调用者类镜像的形参）；形参入口按形参序号换来源、按描述符补类型（`absint::entry_state`）。
+    /// 字段常量格不取它（字段值的来源须保留）
     pub(super) fn of_ret(v: &V) -> PV {
         match v {
             V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
@@ -97,6 +98,8 @@ pub(super) struct Ctx<'a> {
     pub(super) catalog: std::cell::OnceCell<Rc<crate::seeds::services::Catalog>>,
     /// 类的定义加载器表（字段钩子的接收者判定与镜像读取折叠，惰性建立）
     pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
+    /// 映像 VM 模块表：包 → [(模块对象, 定义加载器为引导)]（装入映像时建立；类镜像模块读折叠用）
+    pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -168,8 +171,9 @@ pub(super) struct CallInfo {
     pub(super) reader: Option<super::sysprops::PropSum>,
     /// 按名取字段偏移的入口（`name_resolvers` 里 offset = true）
     pub(super) offset: Option<crate::manifest::NameResolver>,
-    /// 空的不可修改集合工厂的结果（带 `Obj::Empty` 标签的非空引用，`[facts.empty_collections] factories`）
-    pub(super) empty: Option<V>,
+    /// 清单确定非空的调用结果：空的不可修改集合工厂（带 `Obj::Empty` 标签，`[facts.empty_collections] factories`）、
+    /// 调用者类镜像（`caller_class`，运行期恒有调用者或回退根类，见 `vm_intrinsics.toml`）
+    pub(super) nonnull_ret: Option<V>,
     /// 接收者为空集合时的查询结果（`[facts.empty_collections] queries`）
     pub(super) empty_query: Option<V>,
 }
@@ -203,6 +207,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) params: Vec<Option<V>>,
     /// Class 形参值集所指的类镜像（按形参序号；None = 非 Class 形参或值集含所指未知的 Class）
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
+    /// 引导档位上下文（残差步骤的运行期档位）：清单 `level_queries` 的调用按档位折叠
+    pub(super) level: Option<i32>,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -374,7 +380,11 @@ impl Ctx<'_> {
         let k = m.to_string();
         let fact = self.man.return_fact(&k).map(fact_value);
         // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
-        let empty = self.man.empty.is_factory(&k).then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) });
+        let nonnull_ret = if self.man.empty.is_factory(&k) {
+            Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) })
+        } else {
+            self.man.returns_caller_class(&k).then(nonnull_ref)
+        };
         let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
         let target = self
             .exact_target(opcode, m, iface)
@@ -392,7 +402,7 @@ impl Ctx<'_> {
             holder: self.man.sysprops.is_holder(&k),
             reader: self.reader_spec(&k),
             offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
-            empty,
+            nonnull_ret,
             empty_query,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
@@ -444,7 +454,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![] })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
@@ -481,6 +491,11 @@ fn is_empty_tag(v: Option<&V>) -> bool {
 
 impl Oracle for Facts<'_, '_> {
     fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
+        if let Some(l) = self.level {
+            if let Some(&t) = self.ctx.man.concrete.boot.level_queries.get(&m.to_string()) {
+                return Ret::Value(V::Int(i32::from(i64::from(l) >= t)));
+            }
+        }
         let c = self.ctx.call_info(opcode, m, iface);
         if let Some(v) = &c.fact {
             return Ret::Value(v.clone());
@@ -488,7 +503,7 @@ impl Oracle for Facts<'_, '_> {
         if c.null_to_false && args.contains(&V::Null) {
             return Ret::Value(V::Int(0));
         }
-        if let Some(v) = &c.empty {
+        if let Some(v) = &c.nonnull_ret {
             return Ret::Value(v.clone());
         }
         if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
@@ -496,6 +511,12 @@ impl Oracle for Facts<'_, '_> {
         }
         if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
             return Ret::Value(v);
+        }
+        // 类字面量接收者上的接收者钩子字段取值方法
+        if let (classfile::op::INVOKEVIRTUAL, Some(V::Class(k, _))) = (opcode, args.first()) {
+            if let Some(v) = self.ctx.mirrors_call(m, [&**k]) {
+                return Ret::Value(v);
+            }
         }
         if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
             return r;
@@ -567,6 +588,10 @@ impl Oracle for Facts<'_, '_> {
     fn param_mirror_field(&self, i: u16, f: &MemberRef) -> Option<V> {
         let s = self.mirrors.get(i as usize)?.as_ref()?;
         self.ctx.mirrors_hook_field(f, s.iter().map(|c| &**c))
+    }
+    fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
+        let s = self.mirrors.get(i as usize)?.as_ref()?;
+        self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {
         (self.live)(ty)

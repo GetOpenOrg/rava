@@ -96,26 +96,12 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
     if !disp.fields.is_empty() {
         hb += &block(&format!("    {rt}::reflect_dispatch::register_field_dispatch(&["), &disp.fields, "    ]);");
     }
-    // VM 引导期（HotSpot initPhase1 对应物，清单 seeds.toml [boot_init]）：先按序调用 calls 中
-    // 入链的静态方法（VM 发起的全局登记），再按序初始化 classes 中在闭包内翻译在场的类
-    let mut boot: Vec<String> = ctx
-        .manifest
-        .boot_init_calls
-        .iter()
-        .filter(|c| ctx.input.precheck_visited.contains(c.as_str()))
-        .filter_map(|c| {
-            let (cls, rest) = c.split_once('.')?;
-            let name = rest.split(':').next()?;
-            jdk.generated.contains(cls).then(|| {
-                format!(
-                    "        (\"{cls}.{name}\", {}::{} as fn() -> {rt}::error::Result<()>),",
-                    jrt_path(ctx, cls),
-                    safe_pkg_part(name)
-                )
-            })
-        })
-        .collect();
-    boot.extend(ctx
+    // 构建期引导映像（HotSpot initPhase1–3 的构建期求值结果）：登记钩子之后、引导类初始化之前装入
+    if ctx.input.boot_image.is_some() {
+        hb += &format!("    {rt}::{}::{}();\n", super::boot_image::MODULE, super::boot_image::START_FN);
+    }
+    // VM 引导类（清单 seeds.toml [boot_init] classes）：按序初始化在闭包内翻译在场的类（映像已初始化者为空操作）
+    let boot: Vec<String> = ctx
         .manifest
         .boot_init_classes
         .iter()
@@ -126,35 +112,8 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
                 jrt_path(ctx, b),
                 registration_turbofish(ctx, ems, b)
             )
-        }));
-    // VM 引导阶段（HotSpot call_initPhase2 / 3，清单 [[boot_init.phases]]）：锚点可达而入链的阶段，以清单
-    // 常量实参在引导类初始化之后按序调用；返回整数的阶段非 0 即启动失败（HotSpot vm_exit_during_initialization，
-    // 阶段自己先打印原因），退出码 1
-    boot.extend(ctx.manifest.boot_phases.iter().filter(|(c, _)| ctx.input.precheck_visited.contains(c.as_str())).filter_map(
-        |(c, args)| {
-            let (cls, rest) = c.split_once('.')?;
-            let (name, desc) = rest.split_once(':')?;
-            let (params, ret) = desc.strip_prefix('(')?.split_once(')')?;
-            if !jdk.generated.contains(cls) {
-                return None;
-            }
-            let lits: Vec<String> = params
-                .bytes()
-                .zip(args)
-                .map(|(t, a)| match t {
-                    b'Z' => (*a != 0).to_string(),
-                    _ => a.to_string(),
-                })
-                .collect();
-            let call = format!("{}::{}({})?", jrt_path(ctx, cls), safe_pkg_part(name), lits.join(", "));
-            let body = if ret == "V" {
-                format!("{call}; Ok(())")
-            } else {
-                format!("if {call} != 0 {{ ::std::process::exit(1) }} Ok(())")
-            };
-            Some(format!("        (\"{cls}.{name}\", (|| {{ {body} }}) as fn() -> {rt}::error::Result<()>),"))
-        },
-    ));
+        })
+        .collect();
     if !boot.is_empty() {
         hb += &block(&format!("    {rt}::vm_boot_init(&["), &boot, "    ]);");
     }

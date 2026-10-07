@@ -20,6 +20,9 @@ pub struct FieldHook {
     pub func: String,
     /// 接收者方法（实例字段，宿主即字段属主）
     pub receiver: bool,
+    /// 接收者钩子对引导加载器定义的类镜像是空操作（字段恒为缺省值，如镜像的定义加载器）：闭包分析器对只含
+    /// 引导类镜像的接收者值集不接钩子、读结果折叠为 null。缺省 false（每个镜像都须钩子落地，如镜像的模块）
+    pub boot_noop: bool,
 }
 
 /// 模块 → 加载器映射的来源：`class` 的 `<clinit>` 写入 `boot` / `platform` 两个静态字段的字符串常量集合
@@ -43,15 +46,19 @@ impl VmState {
         let sec = vm.get("vm_state");
         let mut field_hooks = BTreeMap::new();
         for (k, v) in sec.and_then(|s| s.get("field_hooks")).and_then(|v| v.as_table()).into_iter().flatten() {
-            let bad = || format!("vm_intrinsics.toml [vm_state.field_hooks]：{k} 须为 {{ hook = \"类.fn\", receiver = 布尔 }}");
+            let bad = || format!("vm_intrinsics.toml [vm_state.field_hooks]：{k} 须为 {{ hook = \"类.fn\", receiver = 布尔, boot_noop = 布尔 }}");
             let (owner, _) = k.split_once('.').filter(|(_, r)| r.contains(':')).ok_or_else(bad)?;
             let t = v.as_table().ok_or_else(bad)?;
             let (host, func) = t.get("hook").and_then(|h| h.as_str()).and_then(|h| h.rsplit_once('.')).ok_or_else(bad)?;
             let receiver = t.get("receiver").map(|r| r.as_bool().ok_or_else(bad)).transpose()?.unwrap_or(false);
+            let boot_noop = t.get("boot_noop").map(|r| r.as_bool().ok_or_else(bad)).transpose()?.unwrap_or(false);
+            if boot_noop && !receiver {
+                return Err(format!("vm_intrinsics.toml [vm_state.field_hooks]：{k} 的 boot_noop 只用于接收者钩子"));
+            }
             if receiver && host != owner {
                 return Err(format!("vm_intrinsics.toml [vm_state.field_hooks]：{k} 的接收者钩子须定义在字段属主 {owner} 上"));
             }
-            field_hooks.insert(k.clone(), FieldHook { host: host.to_string(), func: func.to_string(), receiver });
+            field_hooks.insert(k.clone(), FieldHook { host: host.to_string(), func: func.to_string(), receiver, boot_noop });
         }
         let loader_map = match sec.and_then(|s| s.get("loader_map")) {
             None => None,
@@ -83,7 +90,8 @@ mod tests {
     fn parses_hooks_and_loader_map() {
         let t: toml::Table = r#"
 [vm_state.field_hooks]
-"a/B.f:La/C;" = { hook = "a/B.__vm_f", receiver = true }
+"a/B.f:La/C;" = { hook = "a/B.__vm_f", receiver = true, boot_noop = true }
+"a/B.g:La/C;" = { hook = "a/B.__vm_g", receiver = true }
 "a/D.s:La/C;" = { hook = "a/E.__vm_boot" }
 [vm_state.loader_map]
 class = "a/M"
@@ -93,7 +101,8 @@ platform = "p"
         .parse()
         .unwrap();
         let s = VmState::from_toml(&t).unwrap();
-        assert_eq!(s.field_hook("a/B", "f", "La/C;").unwrap().receiver, true);
+        assert_eq!(s.field_hook("a/B", "f", "La/C;").map(|h| (h.receiver, h.boot_noop)), Some((true, true)));
+        assert_eq!(s.field_hook("a/B", "g", "La/C;").map(|h| (h.receiver, h.boot_noop)), Some((true, false)));
         let h = s.field_hook("a/D", "s", "La/C;").unwrap();
         assert_eq!((h.host.as_str(), h.func.as_str(), h.receiver), ("a/E", "__vm_boot", false));
         assert_eq!(s.loader_map.unwrap().platform, "p");

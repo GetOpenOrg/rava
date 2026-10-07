@@ -5,6 +5,8 @@ pub mod class_desc;
 pub mod field_desc;
 pub mod field_reflect;
 pub mod handle;
+#[doc(hidden)]
+pub mod image_rt;
 pub mod obj_ref;
 pub mod sync_model;
 pub mod gil;
@@ -584,7 +586,8 @@ pub mod prelude {
     pub use crate::meta::{is_subtype_of as __is_subtype_of, java_name as __java_name};
     pub use crate::gil::{safepoint as __safepoint, ClinitEnter as __ClinitEnter,
                          clinit_enter as __clinit_enter, clinit_exit as __clinit_exit,
-                         class_init as __class_init_run};
+                         class_init as __class_init_run,
+                         boot_initialized as __boot_initialized_run};
     pub use super::_is_jnull;
     pub use super::_is_jnull_ref;
     pub use super::__NonNull;

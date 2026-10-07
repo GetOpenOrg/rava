@@ -10,6 +10,12 @@
 //!   但它上面的改写 / 逃逸照样计入属性表的改写判定——属性表的别名不会因合流而从判定中消失
 //! - `Empty`：空的不可修改集合（清单 `[facts.empty_collections]` 的工厂结果）：按 JDK 规范不含元素、
 //!   不可改写，其上的查询（`isEmpty` / `size` / `get` …）按清单给出的值折叠
+//! - `Len(n)`：以常量长度 n 分配的数组（`newarray` / `anewarray` 的长度操作数为常量）。数组长度在其生命期内不变
+//!   （JVMS §2.7，没有任何指令、反射或 Unsafe 操作能改变已分配数组的长度），`arraylength` 按标签折叠为 n，
+//!   无论数组经局部变量、形参、字段还是返回值传到读取点（形参 / 字段 / 返回常量格按标签汇合，见 `engine/facts.rs`）
+//! - `Image(o)`：构建期引导映像中的对象 o（映像对象下标）——运行时为同一个进程内对象（启动序列物化），
+//!   如类镜像所属的模块（按「定义加载器 + 包」查映像 VM 模块表）。两个同标签的值引用相等、不同标签的引用不等
+//!   （`if_acmp` 按标签折叠）。`IMAGE_PENDING` 是空镜像值集的乐观占位（调用方登记乐观答复，值集增长后重分析）
 //!
 //! - `Narrowed(o)`：条件分支判定成立一侧的收窄值（见 `narrow.rs`）——类镜像子类型判定（`K.class.isAssignableFrom(x)`）
 //!   成立一侧的 x（输入值集中所指类 ⊂ K 的类镜像），或键判定（`x.<键读取>().equals(name)`）成立一侧的 x（输入值集中
@@ -25,6 +31,9 @@ use classfile::MemberRef;
 
 use super::{Src, V};
 
+/// 空镜像值集上映像对象读取的乐观占位（见模块文档）
+pub const IMAGE_PENDING: u32 = u32::MAX;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Obj {
     Uninit,
@@ -33,6 +42,10 @@ pub enum Obj {
     SysProps,
     MaybeSysProps,
     Empty,
+    /// 常量长度的数组（见模块文档）
+    Len(i32),
+    /// 构建期引导映像中的对象（映像对象下标，见模块文档）
+    Image(u32),
     /// 条件分支判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
     Narrowed(u32),
 }

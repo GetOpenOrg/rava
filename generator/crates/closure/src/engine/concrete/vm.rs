@@ -254,6 +254,8 @@ pub(super) struct Vm {
     pub step_limit: u64,
     /// 宿主相关值（`@deferred`）的字符串内容数组 → 属性名：引导求值读到其内容即「延迟值参与求值」
     pub deferred: HashMap<u32, Rc<str>>,
+    /// 宿主相关内容数组的运行期来源（native 键，结果数组下标）：见 `image::IObj::host`
+    pub host_src: HashMap<u32, (Rc<str>, Option<u32>)>,
     /// 首个失败点的调用栈（引导求值诊断）
     pub fail_frames: Option<Vec<String>>,
     /// 最近一次隐式异常的调用栈（引导求值诊断）
@@ -267,6 +269,8 @@ pub(super) struct Vm {
     /// 包（内部形式）→ 模块对象（defineModule0 登记）
     pub pkg_module: HashMap<Rc<str>, u32>,
     pub base_module: Option<u32>,
+    /// VM 模块表（defineModule0 次序）：（模块, 定义加载器, open, 位置, 包）
+    pub modules: Vec<(u32, CV, bool, Option<String>, Vec<Rc<str>>)>,
     /// 引导求值的写入日志、脏位置与残差记录（concrete/journal.rs）
     pub bj: super::journal::Journal,
 }
@@ -305,6 +309,7 @@ impl Vm {
             boot: false,
             step_limit: STEP_LIMIT,
             deferred: HashMap::default(),
+            host_src: HashMap::default(),
             fail_frames: None,
             throw_frames: None,
             boot_objs: Vec::new(),
@@ -312,6 +317,7 @@ impl Vm {
             vm_tables: BTreeMap::default(),
             pkg_module: HashMap::default(),
             base_module: None,
+            modules: Vec::new(),
             bj: Default::default(),
         }
     }
@@ -386,6 +392,23 @@ impl Vm {
             Body::Arr(v) => Ok(v),
             _ => fail("期望数组"),
         }
+    }
+
+    /// 登记残差步骤：引导档位（清单 `[concrete.boot] level`）与上一档位记录不同时先记档位
+    pub(super) fn push_rec(&mut self, env: &Env, r: super::journal::Rec) {
+        use super::journal::Rec;
+        if let Some((d, n)) = env.cfg().boot.level.as_deref().and_then(|l| l.rsplit_once('.')) {
+            let k = self.fkey(d, n);
+            let cur = match self.statics.get(&k) {
+                Some(CV::I(x)) => *x,
+                _ => 0,
+            };
+            let last = self.bj.recs.iter().rev().find_map(|r| if let Rec::Level(l) = r { Some(*l) } else { None });
+            if last != Some(cur) {
+                self.bj.recs.push(Rec::Level(cur));
+            }
+        }
+        self.bj.recs.push(r);
     }
 
     pub(super) fn fkey(&mut self, decl: &str, name: &str) -> u32 {

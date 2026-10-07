@@ -10,7 +10,9 @@ impl<'a> Engine<'a> {
     /// 取（或建立）枢纽。精确集合枢纽的父枢纽：调用点原枢纽，其集合须是本集合的子集
     #[allow(clippy::too_many_arguments)]
     pub(super) fn hub(&mut self, mref: &MemberRef, iface: bool, owner: u32, set: HubSet, parent: Option<u32>, site: &resolve::MethodSite, md: &classfile::descriptor::MethodDesc, via: Via) -> u32 {
-        let key = (mref.clone(), iface, set);
+        // 档位上下文的调用点各用一族枢纽（目标在档位上下文中克隆，见 `levels_boot.rs`）
+        let lc = self.via_level(&via);
+        let key = (mref.clone(), iface, set, lc);
         if let Some(&h) = self.hub_ids.get(&key) {
             return h;
         }
@@ -20,7 +22,7 @@ impl<'a> Engine<'a> {
         let (open, pending, parent, set) = match &key.2 {
             HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None, None),
             HubSet::Exact(rs) => {
-                let parent = self.hub_parent(&key.0, iface, rs, parent);
+                let parent = self.hub_parent(&key.0, iface, lc, rs, parent);
                 let pending = match parent.and_then(|p| self.hubs[p as usize].set.clone()) {
                     Some(ps) => sorted_minus(rs, &ps),
                     None => rs.to_vec(),
@@ -50,7 +52,7 @@ impl<'a> Engine<'a> {
             edged: HashSet::default(),
         });
         if let HubSet::Exact(rs) = &key.2 {
-            let fam = self.hub_family.entry((key.0.clone(), iface)).or_default();
+            let fam = self.hub_family.entry((key.0.clone(), iface, lc)).or_default();
             let at = fam.partition_point(|x| x.1.len() <= rs.len());
             fam.insert(at, (h, rs.clone()));
         }
@@ -81,7 +83,7 @@ impl<'a> Engine<'a> {
     /// （调用点原枢纽 last 也是候选）。父枢纽承接其集合部分，新枢纽只展开差集：同一成员在大体相同的接收者集合上
     /// 派发的各调用点（不同上下文的同一调用点、汇自同一值池的各调用点）共用已展开的部分，不各自展开全集。
     /// 目标、实参与返回值的汇合与无父时相同（见 [`Hub`]）。族内按大小降序试探，未命中的试探次数有上限
-    fn hub_parent(&self, mref: &MemberRef, iface: bool, rs: &[u32], last: Option<u32>) -> Option<u32> {
+    fn hub_parent(&self, mref: &MemberRef, iface: bool, lc: u32, rs: &[u32], last: Option<u32>) -> Option<u32> {
         const TRIES: usize = 16;
         let usable = |p: u32| {
             let ph = &self.hubs[p as usize];
@@ -90,7 +92,7 @@ impl<'a> Engine<'a> {
         let set = |p: u32| self.hubs[p as usize].set.as_deref();
         let best = last.filter(|&p| set(p).is_some_and(|ps| sorted_subset(ps.iter().copied(), rs)));
         let best_len = best.and_then(set).map_or(0, <[u32]>::len);
-        let Some(fam) = self.hub_family.get(&(mref.clone(), iface)) else { return best };
+        let Some(fam) = self.hub_family.get(&(mref.clone(), iface, lc)) else { return best };
         let end = fam.partition_point(|x| x.1.len() <= rs.len());
         let mut tries = 0;
         for (p, ps) in fam[..end].iter().rev() {
