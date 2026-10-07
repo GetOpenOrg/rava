@@ -50,7 +50,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, args: &[CV]) -> Option<R<Op
             let cur = vm.get_field(env, o, &fr)?;
             let hit = cur == arg(3)?;
             if hit {
-                vm.traced_put_field(o, &fr, arg(4)?)?;
+                vm.traced_put_field(env, o, &fr, arg(4)?)?;
             }
             Ok(Some(CV::I(i32::from(hit))))
         })(),
@@ -219,7 +219,7 @@ fn mem_put(vm: &mut Vm, env: &Env, o: CV, off: i64, k: &str, v: CV) -> R<()> {
         return fail(format!("Unsafe 跨宽度写 {ty} as {k}"));
     }
     let fr = field_at(vm, env, off)?;
-    vm.traced_put_field(o, &fr, v)
+    vm.traced_put_field(env, o, &fr, v)
 }
 
 /// 偏移所指字段的解析结果

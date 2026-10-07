@@ -260,17 +260,17 @@ def install_uv(client, label: str, on_status=None):
     )
 
 
-def sync_project(client, label: str, remote_dir: str = REMOTE_DIR, on_status=None):
-    """git clone 或 git pull 项目，并 uv sync。"""
+def sync_project(client, label: str, remote_dir: str = REMOTE_DIR, repo_url: str | None = REPO_URL, on_status=None):
+    """git clone 或 git pull 项目，并 uv sync。repo_url 为克隆地址（服务器条目 repo_url 覆盖全局值）。"""
     has_git = _exec_check(client, f"test -d {remote_dir}/.git")
     if has_git:
         _notify(label, "git pull", on_status)
         run_command(client, f"cd {remote_dir} && git pull --ff-only", timeout=120)
     else:
-        if not REPO_URL:
+        if not repo_url:
             raise RuntimeError(f"{CONFIG_PATH} 缺少 repo_url，无法在 {label} 上克隆项目")
         _notify(label, "git clone", on_status)
-        run_command(client, f"git clone {REPO_URL} {remote_dir}", timeout=300)
+        run_command(client, f"git clone {repo_url} {remote_dir}", timeout=300)
 
     _notify(label, "uv sync", on_status)
     run_command(
@@ -350,7 +350,7 @@ def setup_with_client(client, server: dict, on_status=None) -> bool:
             install_uv(client, label, on_status=on_status)
 
         if not status["rava"] or not status["uv_sync"]:
-            sync_project(client, label, remote_dir=remote_dir, on_status=on_status)
+            sync_project(client, label, remote_dir=remote_dir, repo_url=server.get("repo_url", REPO_URL), on_status=on_status)
         else:
             _notify(label, "git pull（更新代码）", on_status)
             run_command(client, f"cd {remote_dir} && git pull --ff-only", timeout=120)

@@ -241,6 +241,43 @@ population = [
 "java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
 "java/util/ServiceLoader.<init>:(Ljava/lang/Module;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
 
+# ── 按名装载的资源束（ResourceBundle.getBundle）────────────────────────────────────────────────
+# 束类经 Class.forName + newInstance 反射构造、.properties 束经模块资源查询读入，均无静态调用边。
+# 分析器在 lookups 调用点求基名实参（常量 / 构造点键值；推不出时回退到调用链上的束形字面量），按入选 locale
+# 的父链（同 [locale] 口径）展开：<基名>[_<后缀>] 为 root 子类且有无参构造器的束类补种，
+# <基名>[_<后缀>].properties 存在的嵌入模块资源表（generator/crates/closure/src/engine/bundles.rs）。
+#   root     资源束根类（束类候选须是其子类）
+#   lookups  按名装载入口 → 基名形参序号（不含接收者，0 起）
+[bundles]
+root = "java/util/ResourceBundle"
+[bundles.lookups]
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/lang/Module;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/Locale;Ljava/lang/Module;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/Locale;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/Locale;Ljava/lang/ClassLoader;)Ljava/util/ResourceBundle;" = 0
+"java/util/ResourceBundle.getBundle:(Ljava/lang/String;Ljava/util/Locale;Ljava/lang/ClassLoader;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;" = 0
+
+# ── 按名读取的资源（名字经拼接 / 字段得出）────────────────────────────────────────────────────
+# 字面量资源名由生成器按调用链上的 ldc 推导；名字经拼接、字段（如静态字段存拼接结果、另一支取系统属性）得出时
+# 无字面量可认。分析器在下列入口的调用点按名求资源名实参（推不出的段记为任意串，只取全部已知的候选），
+# 类路径上存在的资源嵌入模块资源表（generator/crates/closure/src/engine/res_lookups.rs）。
+# 键为声明处的成员（调用点按解析结果匹配）。
+#   arg       资源名形参序号（不含接收者，0 起）
+#   relative  相对名按调用点所在类的包解析（Class.resolveName 语义）
+[resource_lookups]
+"java/lang/Module.getResourceAsStream:(Ljava/lang/String;)Ljava/io/InputStream;" = { arg = 0 }
+"java/lang/Class.getResourceAsStream:(Ljava/lang/String;)Ljava/io/InputStream;" = { arg = 0, relative = true }
+"java/lang/Class.getResource:(Ljava/lang/String;)Ljava/net/URL;" = { arg = 0, relative = true }
+"java/lang/ClassLoader.getResource:(Ljava/lang/String;)Ljava/net/URL;" = { arg = 0 }
+"java/lang/ClassLoader.getResourceAsStream:(Ljava/lang/String;)Ljava/io/InputStream;" = { arg = 0 }
+"java/lang/ClassLoader.getResources:(Ljava/lang/String;)Ljava/util/Enumeration;" = { arg = 0 }
+"java/lang/ClassLoader.getSystemResource:(Ljava/lang/String;)Ljava/net/URL;" = { arg = 0 }
+"java/lang/ClassLoader.getSystemResourceAsStream:(Ljava/lang/String;)Ljava/io/InputStream;" = { arg = 0 }
+"java/lang/ClassLoader.getSystemResources:(Ljava/lang/String;)Ljava/util/Enumeration;" = { arg = 0 }
+
 # ── VM 引导期类初始化（HotSpot 在执行应用代码前完成初始化的类，initPhase1 等）───────────────
 # 生成项目 main 启动时按本表顺序初始化其中「在闭包内翻译在场」的类（runtime vm_boot_init）。
 # 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。
@@ -260,4 +297,5 @@ classes = [
 # （docs/plans/2026-10-05-boot-image-evaluator.md），生成项目 main 调用映像启动序列，不在此登记。
 
 # ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导
-# （`generator/crates/input/src/resources.rs`），以 include_bytes! 嵌入，运行时由 ClassLoader 的资源查询承载。
+# （`generator/crates/input/src/resources.rs`），并入 [bundles] 求得的属性文件资源束与 [resource_lookups] 按名求出的资源，以 include_bytes! 嵌入，
+# 运行时由 ClassLoader 的资源查询承载。

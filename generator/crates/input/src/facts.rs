@@ -135,6 +135,8 @@ pub struct SeedFacts {
     /// 模块服务表：(服务, provider) 二元组，只含命名模块里的 provider（类路径 provider 经
     /// META-INF/services 发现，不入引导服务目录），事实序（服务名序 → provider 声明序）
     pub module_services: Vec<(String, String)>,
+    /// 闭包分析器按名求出的资源（属性文件资源束 + 按名读取的资源；资源路径，生成器并入模块资源表嵌入）
+    pub named_resources: BTreeSet<String>,
 }
 
 /// VM 初始系统属性表（分析器折叠属性读点所用的清单表 `[facts.system_properties]`）：
@@ -290,6 +292,7 @@ impl ClosureFacts {
                     .iter()
                     .flat_map(|(svc, ps)| ps.iter().filter(|p| p.module.is_some()).map(move |p| (svc.clone(), p.class.clone())))
                     .collect(),
+                named_resources: s.named_resources.clone(),
             },
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
@@ -481,6 +484,7 @@ fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
         }
     }
     out.reflect_all = strings(s.get("reflect_all"))?.into_iter().collect();
+    out.named_resources = strings(s.get("named_resources"))?.into_iter().collect();
     for svc in s.get("services").and_then(Value::as_array).into_iter().flatten() {
         let service = str_of(svc, "service")?;
         for p in arr(svc, "providers")? {

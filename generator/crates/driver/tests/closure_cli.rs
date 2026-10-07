@@ -297,3 +297,28 @@ fn stack_overflow_error_in_minimal_closure() {
     assert!(out.contains("java/lang/StackOverflowError（"), "{out}");
     assert!(out.contains("[vm-rule] 根 stack-check"), "{out}");
 }
+
+/// 一次 `rava closure -o` 的 summary.sysprops_unstable
+fn sysprops_unstable(java: &str) -> Option<serde_json::Value> {
+    let out = std::env::temp_dir().join(format!("rava_sysprops_{}_{java}.json", std::process::id()));
+    closure(java, &["-o", out.to_str().unwrap()])?;
+    let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
+    let _ = std::fs::remove_file(&out);
+    let d: serde_json::Value = serde_json::from_str(&text).expect("闭包 JSON");
+    Some(d["summary"]["sysprops_unstable"].clone())
+}
+
+/// lambda 返回系统属性表：lambda 封闭于创建方法的一次调用、结果原路返回后只读 → 不逃逸；
+/// 结果存入字段 → 逃逸，全部不折叠（`sysprops_lambda.rs`）
+#[test]
+fn sysprops_lambda_return_confined() {
+    let Some(base) = sysprops_unstable("MinimalMain.java") else { return };
+    let Some(read) = sysprops_unstable("SyspropsLambdaRead.java") else { return };
+    let Some(leak) = sysprops_unstable("SyspropsLambdaLeak.java") else { return };
+    assert_eq!(read["all"], base["all"], "只读使用不应改变不折叠判定：{read}");
+    assert_eq!(leak["all"], serde_json::Value::Bool(true), "存入字段应全部不折叠：{leak}");
+    if base["all"] == serde_json::Value::Bool(false) {
+        let cause = leak["cause"].as_str().unwrap_or_default();
+        assert!(cause.contains("SyspropsLambdaLeak"), "成因应指向本例：{cause}");
+    }
+}

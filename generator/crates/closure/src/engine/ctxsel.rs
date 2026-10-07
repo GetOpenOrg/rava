@@ -4,11 +4,13 @@
 //! 选择规则全部在本文件，调用方只描述调用的形态：
 //!
 //! - **接收者**（`recv_ctx`）：实例方法按接收者抽象对象克隆（对象敏感，容器对象各进其克隆）；非对象接收者进本体。
+//!   字节码调用点在被调方引用选择子形参（`selector.rs`）上传 null 时（`recv_call_ctx`）按调用点克隆（`const_ctx`）。
 //! - **静态调用**（`static_ctx`，按 `Call` 形态）：
 //!   1. 字节码 `invokestatic`：返回引用或有引用形参的辅助方法继承调用方上下文（返回值与经实参写入的字段 / 元素
 //!      按容器对象分开，如 `casTabAt(tab, i, null, node)` 只写进本容器的表）；只有基本类型形参与返回的
 //!      按本体共享；上下文无关的调用方调用新鲜工厂（`fresh_factory`）按调用点克隆。
-//!      选择子形参（`selector.rs`）上传常量时按调用点克隆、链尾接调用方上下文；否则调用方在上下文中则继承。
+//!      选择子形参（`selector.rs`）上传 int 常量时按调用点克隆、链尾接调用方上下文；只在引用选择子形参上传 null 时
+//!      按调用点克隆、堆上下文同上述规则所得（`const_ctx`）；否则调用方在上下文中则继承。
 //!   2. lambda 静态实现方法：继承 lambda 创建时的上下文。
 //!   3. 方法句柄常量（`MethodHandle` 静态引用）：本体。
 //!   4. 以上结果为本体、调用方是字节码方法、被调是分派转发方法（`forward.rs`）时：按调用点克隆
@@ -16,6 +18,8 @@
 //!   5. lambda 创建点预建实现方法节点（`Call::Eager`）：继承创建方上下文，不做 4。
 //!
 //! 调用点上下文（`site_ctx` / `site_ctx_in`）是以调用点命名的堆上下文，克隆体内的容器分配以它为链首。
+//! 形参常量上下文（`const_ctx`）只为形参常量（null）分开方法节点：堆上下文取外层上下文，克隆体内的分配与不克隆时
+//! 同一抽象对象——只剪去常量判定不可达的分支，不改变对象敏感的粒度。
 
 use super::*;
 
@@ -43,6 +47,22 @@ impl Engine<'_> {
         }
     }
 
+    /// 字节码调用点 (m, off) 以接收者上下文 base 调用实例方法 key（已选中的实现）时的上下文：实参（`call_vals`，
+    /// 不含接收者）在 key 的选择子形参上传常量时按调用点克隆、链尾接 base，否则即 base
+    pub(super) fn recv_call_ctx(&mut self, m: usize, off: u32, key: &MemberRef, base: u32) -> u32 {
+        if self.methods[m].kind != Kind::Bytecode {
+            return base;
+        }
+        let Some(args) = self.call_vals.clone() else { return base };
+        // 实例方法的掩码按形参序号含接收者槽 0
+        let mask = self.ctx.selector_slots(key) >> 1;
+        if mask != 0 && selector::null_selector(mask, &args) {
+            self.const_ctx(m, off, base)
+        } else {
+            base
+        }
+    }
+
     /// 调用点 (m, off) 以形态 call 调用静态方法 key 时的上下文。在建节点前判定，不建出无调用方的本体
     pub(super) fn static_ctx(&mut self, m: usize, off: u32, key: &MemberRef, call: Call) -> u32 {
         let caller = self.methods[m].ctx;
@@ -53,7 +73,7 @@ impl Engine<'_> {
                     NOCTX if self.fresh_factory(key) => self.site_ctx(m, off),
                     c => c,
                 };
-                self.selector_ctx(m, off, key, args).unwrap_or(c)
+                self.selector_ctx(m, off, key, args, c)
             }
             Call::Lambda(c) => c,
             Call::Handle => NOCTX,
@@ -68,22 +88,47 @@ impl Engine<'_> {
         ctx
     }
 
-    /// 按选择子形参克隆的上下文（None = 不克隆）
-    fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, args: &[V]) -> Option<u32> {
+    /// 按选择子形参克隆的上下文（不克隆时为 dflt）
+    fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, args: &[V], dflt: u32) -> u32 {
         if self.methods[m].kind != Kind::Bytecode {
-            return None;
+            return dflt;
         }
         let mask = self.ctx.selector_slots(key);
         if mask == 0 {
-            return None;
+            return dflt;
         }
         let c = self.methods[m].ctx;
         if selector::const_selector(mask, args) {
             // 同一调用方（克隆）里不同调用点传不同常量：按调用点分开，链尾接调用方上下文
-            Some(self.site_ctx_in(m, off, c))
-        } else {
-            (c != NOCTX).then_some(c)
+            return self.site_ctx_in(m, off, c);
         }
+        let inherit = if c != NOCTX { c } else { dflt };
+        if selector::null_selector(mask, args) {
+            self.const_ctx(m, off, inherit)
+        } else {
+            inherit
+        }
+    }
+
+    /// 形参常量上下文：调用点 (m, off) 上按形参常量分开的方法节点，堆上下文取 outer 的堆上下文
+    /// （outer 本身是形参常量上下文时取其堆上下文；`NOCTX` 即无堆上下文）。按（堆上下文, 调用点）命名、不随外层
+    /// 形参常量上下文延长：递归调用链上同一调用点回到同一上下文，上下文数有界
+    fn const_ctx(&mut self, m: usize, off: u32, outer: u32) -> u32 {
+        let heap = self.ctx_heap.get(&outer).copied().unwrap_or(outer);
+        let at = format!("@{}:{off}", self.mbase[&self.methods[m].key]);
+        let name = match heap {
+            NOCTX => format!("~{at}"),
+            h => format!("{}~{at}", self.names[h as usize]),
+        };
+        if let Some(&id) = self.ids.get(name.as_str()) {
+            return id;
+        }
+        let id = self.id(&name);
+        self.ctx_heap.insert(id, heap);
+        if let Some(chain) = self.obj_chain.get(&heap).cloned() {
+            self.obj_chain.insert(id, chain);
+        }
+        id
     }
 
     /// 调用点上下文：以调用点命名的堆上下文（不是对象，不进入值集），克隆体内的容器分配以它为链首

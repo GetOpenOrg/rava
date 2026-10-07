@@ -185,6 +185,8 @@ pub(super) enum Put {
     Int(i32),
     Long(i64),
     Null,
+    /// 内容可读的字符串（String 字段的写入名字并入字段字符串槽，见 apply.rs）
+    Str(Rc<str>),
     /// 非空引用 / 浮点
     Other,
 }
