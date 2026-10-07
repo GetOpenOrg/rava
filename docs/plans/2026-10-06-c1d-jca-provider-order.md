@@ -237,3 +237,35 @@ via 种类与调用方是否为字节码），应按「绑定接收者的方法�
 诊断脚本（作业 `--cmd` 里 base64 内联；变体 B / C / D / E）：在检出目录 `sed` 掉 seeds.toml 中对应改写入口行（E 另把
 `sun/security/jca/Providers` 加入 interior），构建 rava 后跑 `rava closure tests/e2e/73_jndi_script/TestJndiNoProvider.java --jdk 21`，
 打印 `summary.{classes,methods,jca_order}` 与 `com/sun/org` / `org/jcp/xml` / pkcs11 / `javax/xml/parsers` 包类数。
+
+### 7.4 候选 1 落地：按服务类型追踪 Service 对象（669169e9）
+
+**诊断**（新增 `--flows @keyed`：各按键查找闸门的站点键集 / 暂扣类型与类键集，0102d017）：`Provider.getService` 的按类型闸门在
+DeepCopy、TestJcaOpen、TestJcaRmi 上工作正常（MessageDigest 请求不放行 XMLDSig 的 ProviderService）。漏点在不经 `getService`
+的服务遍历：`Sasl.getFactories(String)` 走 `Provider.getServices()` 全集，以 `s.getType().equals(serviceName)` 筛选后
+`loadFactory → Service.newInstance`，筛选没有建模，全部 Service 子类流入 `newInstance` 派发 → `XMLDSigRI$ProviderService` →
+`DOMCanonicalXMLC14NMethod` → Xerces。合成例实测（kr1，JDK 21，`rava closure`）：TestJcaOpen 3021 类、带 SHA 摘要 3308 类
+（`com/sun/org` 0）、TestJcaRmi 3053 类（0）、TestJcaSasl 3931 类（`com/sun/org` 655、`org/jcp/xml` 16）。
+TestJndiNoProvider 在云服务器单槽 11.9G cgroup 上 OOM，无法在云上诊断（待 dev 恢复后复测）。
+
+**实现**（通用、清单驱动，生成器 crate 无 JDK 类名）：
+- 清单 `[facts.keyed_lookups]` 条目增 `getters`：键类上返回对象键的读取方法（不可覆写）；JCA 登记 `Provider$Service.getType`
+  （final、返回 final 字段 type；公有构造器存 `getEngineName(type)`，与构造器键形参只差大小写，按该入口的 fold_case 比较涵盖）。
+- `absint/narrow.rs` 键判定收窄：`aload k; <键读取>; name; <字符串相等>; ifeq/ifne` 及两侧互换形态（相等判定取
+  `[facts] value_equals` / `string_ops equals_ignore_case`；操作数取判定调用前的栈，键读取结果按调用偏移认定；从 `aload k`
+  到跳转同一基本块且无局部变量写入）。成立一侧 k 打收窄标记、发 `Event::KeyTest`。收窄标记 `Obj::MirrorSub` 泛化为
+  `Obj::Narrowed`（与类镜像子类型判定共用：类型流取跳转偏移处的收窄节点）。
+- `engine/keyed.rs keyed_test`：复用按键查找闸门（放行 / 暂扣 / 单调补判），站点键集为 name 的全部名字，**推不全即任意**
+  （`lookup_partial` / `lookup_incomplete`），输入为 k 的值，放行到收窄节点。
+- **不按算法建键**：类键按类合并（同一服务类登记多种算法，按算法分不出类），且算法另有别名 / OID 查找（aliases、KnownOIDs、
+  旧式别名条目），按算法筛选既无收益又须完整建模别名才健全。
+
+**结果**（`jcasub-diag6-669169e9`，kr1）：closure 单测 183 通过；TestJcaSasl 3931 → 3072 类（`com/sun/org` 655 → 0、
+`org/jcp/xml` 16 → 4，与 TestJcaOpen 同形态；`Sasl.getFactories@102` 闸门键 {SaslClientFactory}，暂扣其余 ProviderService）；
+TestJcaRmi 3053 不变。JCA 抽查 `jcasub-669169e9`（kr1 / sg1）9/9 通过：TestMessageDigestApi、TestJcaIndirectDigest、TestMacHmacDigest、TestRsaSignVerify、TestEcSignVerify、Digester、SecurityDemo、DeepCopy、HelloWorld。
+
+**已知残留**：`names_of` 在名字求值推不全时给出已知部分（不记任意），查找调用点闸门 `keyed_res` 沿用此口径：
+`Provider$Service.newInstance@19`（键取开放字段 `this.type`）与 `ServiceList.tryGet@282`（键取 `ServiceId.type`）键集为 {}，
+暂扣全部。前者结果只与 this 比较、不影响派发；后者理论上不健全（运行期返回的服务类型若只经该点流出会漏），改为任意会把全部
+Service 子类放进 `GetInstance` 的 `newInstance` 派发、抵消本节收益，须先给 `ServiceId.type` 的名字建模（`getInstance`
+系列的 `List<ServiceId>` 实参）再改口径。新加的键判定已按「推不全即任意」处理。
