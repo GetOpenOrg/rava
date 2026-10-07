@@ -164,6 +164,7 @@ impl<'a> Engine<'a> {
             jorder: jca_order::JcaOrder::new(man, cp),
             lookup_hosts: man.seeds.jca.instantiation_hosts.iter().filter_map(|h| super::seeds::parse_member(h)).collect(),
             lookup_partial: false,
+            phi_nest: 0,
             lookup_incomplete: false,
             lookup_unsure: HashSet::default(),
             lookup_pending: BTreeSet::new(),

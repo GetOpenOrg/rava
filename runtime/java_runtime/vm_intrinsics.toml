@@ -562,6 +562,11 @@ results = [
 resets = [
     "java/lang/StringBuilder.setLength:(I)V",
 ]
+# 取后缀（第 0 个 int 实参为起点）：名字段是拼接结果按需截掉前缀（如 `name.substring(name.lastIndexOf('.') + 1)`
+# 取简单名）时，起点为常量取该后缀，否则取接收者各候选的全部后缀（超集，候选名只保留类路径上存在的类）
+suffixes = [
+    "java/lang/String.substring:(I)Ljava/lang/String;",
+]
 
 [facts.empty_collections]
 # 空的不可修改集合：工厂的返回值按 JDK 规范（List / Set / Map 的 `of()` javadoc：「Returns an unmodifiable … containing

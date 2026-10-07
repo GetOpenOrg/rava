@@ -86,6 +86,7 @@ mod noreturn;
 mod class_lookup;
 mod builder;
 mod name_eval;
+mod name_ops;
 mod sealed;
 mod nest;
 mod method_lookup;
@@ -450,6 +451,8 @@ pub struct Engine<'a> {
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 名字求值中合流值拆支的当前嵌套层数（`name_ops.rs`）
+    phi_nest: u8,
     /// 服务实现类的反射构造点（清单 `[jca] instantiation_hosts`，构造时解析）：其中按名取类恒按推不出处理
     lookup_hosts: HashSet<MemberRef>,
     /// JCA 提供者序求值：装载器调用点闸门（`jca_order.rs`）

@@ -11,7 +11,7 @@
 | TestXmlSaxEvents | 工厂缺省实现同上已修；随后暴露下一层：`MissingResourceException: Could not load any resource bundle by com.sun.org.apache.xerces.internal.impl.msg.XMLMessages`（解析错误消息按名装载资源束类） | 资源束按名装载未建模，与 TestRowSetProvider（已登记）同根因，登记已知 | c4run-xml-a5de7eee：ubuntu 失败（签名如左） |
 | TestPropertiesXmlRoundTrip | ① CJK 键 String.hashCode NPE（c4-regress 1b096880 已修，TestStringHashUtf16 同根）；② `Properties.store0` 局部 `entries` 的 LVT 声明为 `Collection`，首值 `entrySet()` 为子接口 `Set`、后值为 `ArrayList`；生成器的「再赋值接口声明变量取载体」规则跳过接口值，按 `Set` 定型，ArrayList 被包成 Set 视图，`Collection.iterator` 派发落空 → AbstractMethodError | a927148c：再赋值的接口声明局部首值为子接口时同样按声明接口载体定型（`sim/src/store/align.rs`） | c4run-props-4981c057（c4-runfix + c4-regress 合成抽查分支 `c4-runfix-chk`）：本例与 CollectorsDemo / DeepCopy / TestStringHashUtf16 全过 |
 | TestSetAccessibleBoundary | Class.getModule 手写近似使 java.base 类落无名模块，checkCanSetAccessible 放行 | b3c2bf8c 登记已知，归引导映像第 4 步 | — |
-| TestBeansPropertyEditor | 见第二节 | 方案 A 实施（分支 `c4-beans-precision`：3005a63d 引用选择子按 null 分调用点上下文 + 清单 `Class.newInstance` 入 `constructor_lookups`），已知失败登记已删 | 待抽查 |
+| TestBeansPropertyEditor | 见第二节 | 方案 A 实施（分支 `c4-beans-precision`：3005a63d 引用选择子按 null 分调用点上下文 + 清单 `Class.newInstance` 入 `constructor_lookups`；第二步按名取类名字求值补合流 / 取后缀 / 基本类型镜像取名），已知失败登记已删 | 待抽查 |
 | TestUrlParsingFaces | 见第三节（产品取舍，停在该项） | — | c4run-url-3f59a8e9（us1）同样失败，非 ubuntu 脏工作区所致 |
 
 ## 二、TestBeansPropertyEditor：构造器查找值集不齐全（10-07 用户定方案 A，已实施）
@@ -79,6 +79,45 @@
 - 闭包耗时（`summary.elapsed_ms`，本机同期有其他重进程，仅供参考）：beans 21.3 s → 25.4 s、DeepCopy 47.9 s → 64.5 s；
   方法上下文数稳定在 +9%～+11%。
 
+**第二步：按名取类的名字求值（beans-ff651aca 抽查 11/12，beans 仍 NPE）**
+
+抽查与 dev 诊断作业（`beansdiag-ff651aca`）定位：`int` 编辑器已正常，NPE 在 `findEditor(String.class)` 返回 null 后的
+`strEd.setAsText`（用户第 50 行）。`com/sun/beans/editors/StringEditor` 不在 `PropertyEditorFinder` 预置表里，只经
+`InstanceFinder.find` 的按名支取得：`name = type.getName() + suffix`；`idx = name.lastIndexOf('.') + 1`；
+`if (idx > 0) name = name.substring(idx)`；再对 `packages` 各前缀 `instantiate(type, prefix, name)` →
+`prefix + "." + name` → `ClassFinder.findClass` → `Class.forName`。原名字求值在三处推不出，`ClassFinder` 站点名字集为空、
+只剩「任意串」支（只匹配闭包里已有的类），`StringEditor` 永不入链：
+
+1. 合流值（`name` 在 `if` 后是拼接结果与截取结果的合流）：原先多来源值整体推不出。现各来源各成一支（`Part::Alt`），
+   字面量来源成字面量；拆支嵌套至多 2 层（值经循环回到自身必经合流，保证终止）——`engine/name_ops.rs` `phi_parts`。
+2. 取后缀：清单 `[facts.string_concat] suffixes` 新增 `String.substring:(I)Ljava/lang/String;`。接收者候选能拍平时，
+   起点为 int 常量取该后缀，否则取各候选的全部后缀（超集；候选名最终只保留类路径上存在的类）——`name_ops.rs` `suffix_part`。
+3. 基本类型镜像取名：`type` 值集含基本类型镜像（`findEditor(int.class)`，各基本类型共用一个抽象镜像）时
+   `getName` / `getSimpleName` 原先整体推不出；现取全部基本类型关键字（超集）——`name_eval.rs` `mirror_name`。
+
+`ClassFinder.findClass@11/26/35` 的名字集由空集变为含 `com.sun.beans.editors.StringEditor`（及 `TestBeansPropertyEditor$LevelEditor`、
+`intEditor` 等不存在的候选，解析时丢弃）。分析器不含类名，三项都是通用名字求值能力。
+
+**第二步闭包对照**（同上口径，基线 = ff651aca）：
+
+| 用例 | 类数 ff651aca → 第二步 | 方法数 | 方法上下文 |
+|---|---|---|---|
+| TestBeansPropertyEditor | 2950 → 2967（+17） | 17601 → 17702 | 78446 → 80798 |
+| HelloWorld | 469 → 469（类 / 方法集一致） | 1828 → 1828 | 4405 → 4405 |
+| CollectorsDemo | 2924 → 2940（+16） | 17513 → 17612 | 78381 → 80721 |
+| DeepCopy | 3205 → 3225（+20） | 20507 → 20637 | 104694 → 107764 |
+| TestSerialUserGenericCallbacks | 3208 → 3228（+20） | 20498 → 20628 | 104838 → 107944 |
+
+- beans 的 +17 中 `com/sun/beans/editors/StringEditor` 是目标；其余 16 类四个用例共有，来自同一个此前推不出的按名取类站点
+  `SPILocaleProviderAdapter$1.run@77`：`Class.forName(SPILocaleProviderAdapter.class.getCanonicalName() + "$" + c.getSimpleName() + "Delegate")`。
+  `getCanonicalName` 的返回值是合流（数组 / 局部类 / 顶层类各支），原先整体推不出，名字只剩「任意串 + `$` + 简单名 + `Delegate`」，
+  只匹配闭包已有类（无）；现顶层类支解析出 `sun.util.locale.provider.SPILocaleProviderAdapter`，点名 12 个
+  `SPILocaleProviderAdapter$*ProviderDelegate`，及其 `addImpl` 带入的 `JRELocaleProviderAdapter$AvailableJRELocales`、
+  `java/util/stream/DistinctOps`（+3 个内部类）；DeepCopy / Serial 另有 `Nodes$CollectionNode`、`ReduceOps$4`（+1）、
+  `StreamSpliterators$DistinctSpliterator`。这是可达站点由「推不出」变为「解析出」的漏闭包补全：用户经 ServiceLoader 装了
+  `LocaleServiceProvider` 实现时，原闭包运行期落 ClassNotFoundException。若要收回，正途是 ServiceLoader 遍历按档案内
+  服务提供者集折叠（无提供者时循环体不可达），属另一项精度改进，不在本修复内。
+
 ## 三、TestUrlParsingFaces：URL 协议处理器按包前缀装载（待决）
 
 **根因**：`URL$DefaultFactory.createURLStreamHandler@162` 以 `"sun.net.www.protocol." + protocol + ".Handler"` 按名取类，
@@ -118,7 +157,7 @@ HelloWorld 469、CollectorsDemo 2914、DeepCopy 3195、TestModuleLayerDefine 307
 ## 五、未完成项
 
 - TestUrlParsingFaces：待决（第三节，建议 A，需实测体积）。
-- TestBeansPropertyEditor：方案 A 已实施（第二节），待服务器抽查运行通过；+10 KeyStore 类为漏闭包补全，请协调者确认是否接受。
+- TestBeansPropertyEditor：方案 A 与第二步已实施（第二节），待服务器抽查运行通过；+10 KeyStore 类、+16～20 SPI 委托 / 流类均为可达站点的漏闭包补全，请协调者确认是否接受。
 - TestXmlSaxEvents / TestRowSetProvider：模块资源束按名装载的分析器建模，另立任务。
 - TestPropertiesXmlRoundTrip 依赖 c4-regress（1b096880）先合入集成分支；a927148c 与之合并后该例通过。
 - a927148c 改动生成器存储对齐，影响面只在「接口声明、区间内再赋值、首值为子接口」的局部；抽查四例通过，C4 解冻合入前随全量再验。
