@@ -162,6 +162,7 @@ impl<'a> Engine<'a> {
             xreaders: HashMap::default(),
             pkey_dirty: BTreeSet::new(),
             lookup_top: HashSet::default(),
+            jorder: jca_order::JcaOrder::new(man, cp),
             lookup_hosts: man.seeds.jca.instantiation_hosts.iter().filter_map(|h| super::seeds::parse_member(h)).collect(),
             lookup_partial: false,
             lookup_incomplete: false,

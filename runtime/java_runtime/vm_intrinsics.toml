@@ -767,6 +767,8 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充。
 #   （ClassLoader.scl / Thread.contextClassLoader 由构建期引导映像给出：initPhase3 构建期执行，初始线程为映像
 #   中的 main 线程，启动序列绑定到 OS 主线程。）
+# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
+#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作（ModuleLayer.boot 回到字节码后随第 4 步删除）。
 # boot_singletons：类镜像上的实例方法，接收者所指类由引导加载器定义时恒返回同一个进程内对象（手写承载）。
 # 闭包分析器给这类结果带身份标签，引用相等按标签折叠（AccessibleObject.checkCanSetAccessible 的
 # 调用方模块 == 声明类模块等）。
@@ -778,6 +780,7 @@ boot_singletons = [
 
 [vm_state.field_hooks]
 "java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
+"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
 
 # loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
 # 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →

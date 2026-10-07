@@ -142,6 +142,33 @@ java_class! {
 // - impl<E: Clone + Default + 'static> ArrayList<E> { __get_size(), __set_size(), ... }
 ```
 
+### 3.3 类型名与类模块名（文件布局）
+
+类型名（读者可见层）与 Java 类名一致；类模块名（文件 stem，只出现在包 `mod.rs` 与文件名里）服从类型名让路。
+
+| 名字 | 规则 | 例 |
+|------|------|----|
+| 定义名（struct 名） | 简单名，`$` → `_`；与 prelude 名同名时取限定名（`/`、`$` → `_`） | `java/util/HashMap$Node` → `HashMap_Node`；`javax/xml/transform/Result` → `javax_xml_transform_Result` |
+| 类模块名 | `snake(简单名)`（关键字加 `_`）；落在保留名中时追加 `_t`，直到空闲 | `HashMap` → `hash_map.rs` |
+
+包模块 `mod.rs` 写 `pub mod <模块名>; pub use <模块名>::*;`。Rust 的模块与类型同处类型命名空间，显式 `mod` 条目遮蔽 glob 再导出的同名类型，因此同一包目录内，类模块名的**保留名**为：
+
+1. 同目录子包名（目录与 `<m>.rs` 并存即 E0761）；
+2. 本包全部类的定义名（全小写 Java 类名 `lr_parser` 的 snake 名即其定义名——不让路则 `pkg::lr_parser` 解析成模块：类型位置 E0573、`lr_parser::new` / `sym::FIELD` E0425）；
+3. 本包已分配给其他类的模块名（`FooBar` 与 `foo_bar` 同 snake）；
+4. 共置手写文件路径（`XImpl` 的 snake 名 `x_impl` 与类 `X` 的 `x_impl.rs` 同名且手写真源存在）。
+
+分配按包内 binary 字典序逐个进行，结果只由该包目录的类集决定（确定性）；驼峰类名的 snake 名含小写化，与含大写的定义名天然不同，规则对它们是恒等的。
+
+```
+com/sun/java_cup/internal/runtime/
+├── lr_parser_t.rs            // pub struct lr_parser（类型名不变）
+├── symbol.rs                 // pub struct Symbol
+└── mod.rs                    // pub mod lr_parser_t; pub use lr_parser_t::*;
+```
+
+JDK 类（按模块 crate）、lib 类（按 lib crate）、用户类（按源文件 package）同一规则，实现 `generator/crates/emit/src/module_names.rs`；跨文件引用一律写到包层（`crate::pkg::lr_parser`，经 glob 再导出），用户类写到模块层时取同一张表（`crate::<包段>::<模块名>::<定义名>`）。
+
 ---
 
 ## 4 字段访问封装
@@ -699,6 +726,37 @@ pub fn add(&self, e: E, cmp: Object) -> Result<bool> { ... }
 
 codegen 通过 registry 中 `ClassInfo.is_interface` 动态识别接口类型，无任何硬编码的 JDK 类名。
 
+### 13.4 接口方法的重载命名
+
+重载后缀（§15.1）对接口方法的判定**跨整个超接口层次**，名字只由**声明接口**决定：
+
+| 规则 | 内容 |
+|------|------|
+| 声明名 | 接口 I 自有的方法名 n：I 自有的同名方法，加上全部超接口（传递）上**未被 I 自有实例方法覆盖**的同名实例成员，合计参数段 ≥ 2 种 → I 上该名带描述符后缀；否则原名 |
+| 覆盖 | 参数段相同；或把超接口形参代入 I 视角的类型实参后参数擦除相同（`interface Path extends Comparable<Path> { int compareTo(Path) }` 覆盖 `compareTo(T)`，**不**构成重载，`compareTo` 保持原名） |
+| 一致性 | 方法的 Rust 名是（声明接口, 名字, 描述符）的函数：声明处、子接口继承成员声明、实现类的接口 impl、调用点同名；子接口、实现类、调用点、处理顺序都不改变它（超接口不受子接口影响，档案内 JDK 接口名与用户代码无关） |
+| 子接口视图 | 接口接收者经继承看到的超接口成员沿用声明名；只有来自不同声明者、声明名相同而参数段不同、互不覆盖的成员（兄弟超接口各自声明的同名异参方法）在该接收者视图里带描述符后缀，载体方法以 `target` 转调声明名。被更具体超接口同槽覆盖的成员在视图中不可见，不参与冲突 |
+| 静态 | 接口自有 static 方法与超接口同名实例成员异参 → 同样带后缀（同在载体 impl 上） |
+
+```java
+interface ContentHandler { void endElement(String uri, String local, String q); }
+interface ExtendedContentHandler extends ContentHandler { void endElement(String elemName); }
+interface SerializationHandler extends ExtendedContentHandler { ... }
+
+SerializationHandler h = ...;
+h.endElement(uri, local, q);
+h.endElement(name);
+```
+```rust
+// ContentHandler 内无同名异参 → 原名；ExtendedContentHandler 自有 endElement 与超接口异参 → 后缀
+h.endElement(uri, local, q)?;     // 声明于 ContentHandler
+h.endElement_str(name)?;          // 声明于 ExtendedContentHandler
+```
+
+类的重载判定（祖先类并集 + 未实现的接口成员，§6）不变；类实现接口时接口 impl 的成员名取接口声明名，与类方法名不同时以 `target` 映射。
+
+实现：`generator/crates/ty/src/sig_types/iface.rs`（`interface_overloaded_names` 由 `hierarchy_overloaded_names` 对接口调用；`interface_view_member_name` 供调用点 `instr/src/naming.rs` 与子接口继承成员声明 `emit/src/phase2/iface_impls.rs` 共用）。
+
 ---
 
 ## 14 静态字段与 `<clinit>`
@@ -753,6 +811,8 @@ Java 方法名保持原样（`camelCase`），参数类型签名附加在方法�
 | `void speak()` | `speak` |
 
 参数类型缩写规则：`i`=int、`l`=long、`b`=byte、`s`=String（完整规则见 `type_map.py`）。
+
+是否附加后缀由类 / 接口层次的重载判定决定：类见 §6，接口跨超接口层次的规则见 §13.4。
 
 ### 15.2 静态方法 vs 实例方法
 

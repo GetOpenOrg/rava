@@ -115,6 +115,7 @@ mod open_world;
 pub mod concrete;
 mod caller;
 mod image_start;
+mod jca_order;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -453,9 +454,11 @@ pub struct Engine<'a> {
     lookup_partial: bool,
     /// 服务实现类的反射构造点（清单 `[jca] instantiation_hosts`，构造时解析）：其中按名取类恒按推不出处理
     lookup_hosts: HashSet<MemberRef>,
+    /// JCA 提供者序求值：装载器调用点闸门（`jca_order.rs`）
+    jorder: jca_order::JcaOrder,
     /// 本次按名取类求值中，名字推不出（某支无约束任意串，或形参 / 字段名字集不完备）
     lookup_incomplete: bool,
-    /// 名字曾推不出的按名取类调用点（恒按推不出处理，未放行时不按已知名字加载）
+    /// 名字曾推不出的按名取类调用点（恒按推不出处理：结果另接所指未知的 Class；已知名字照常在不动点上放行）
     lookup_unsure: HashSet<(usize, u32)>,
     /// 名字齐全、等待排空时放行的按名取类调用点（有序：放行次序确定）
     lookup_pending: BTreeSet<(usize, u32)>,

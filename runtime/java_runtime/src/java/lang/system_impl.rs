@@ -23,8 +23,15 @@ impl System {
     /// （Properties.getProperty 消费 `map` 字段）。
     ///
     /// 属性表建成后与 initPhase1 同样交 `VM.saveProperties`（翻译的字节码）保存快照。
+    ///
+    /// 与 initPhase1 同序，首先登记共享秘钥 `setJavaLangAccess()`（翻译的字节码；JDK 注释：
+    /// "register the shared secrets - do this first, since SystemProps.initProperties might
+    /// initialize CharsetDecoders that rely on it"）：属性表建立途中的字符串哈希经
+    /// `StringLatin1.hashCode` → `ArraysSupport.vectorizedHashCode` 触发 `ArraysSupport.<clinit>`，
+    /// 其 `JLA = SharedSecrets.getJavaLangAccess()` 只取一次——先于登记即永久缓存 null。
     #[jvm_native]
     pub fn registerNatives() -> Result<()> {
+        System::setJavaLangAccess()?;
         use crate::java::util::concurrent::ConcurrentHashMap;
         let map = ConcurrentHashMap::<Object, Object>::new()?;
         // 局部闭包不取 Java 方法名（分析器按「名字 + 实参个数」反解手写回调的实参来源）

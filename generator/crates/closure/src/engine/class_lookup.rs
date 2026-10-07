@@ -174,15 +174,13 @@ impl<'a> Engine<'a> {
         if matches!(args.first(), Some(V::Str(..))) || self.lookup_released.contains(&site) {
             return (names, top);
         }
-        // 未放行时名字推不出（某支无约束任意串 / 形参或字段名字集不完备）：不按已知名字加载，结果接所指未知的 Class
-        if unsure {
-            return (Vec::new(), true);
-        }
         if names.is_empty() {
             return (names, top);
         }
-        // 名字齐全：只在排空时（不动点上）仍齐全才放行（`lookup_release`）。中途齐全、终态推不出的站点不加载，
-        // 结果因而与求值先后无关
+        // 已知名字只在排空时（不动点上）放行（`lookup_release`），之后按单调口径照常求值。推不出（某支无约束任意串 /
+        // 形参或字段名字集不完备）不阻止放行：运行期那一支的名字只取得到 VM 登记的生成类（结果另接所指未知的 Class），
+        // 其余各支的已知名字照样会被按名加载（如工厂查找先读系统属性、再回落到调用方给出的缺省实现类名），
+        // 丢弃即不健全。是否放行只看不动点上的已知名字，与站点何时转为推不出无关，结果因而与求值先后无关
         if trial {
             self.lookup_released.insert(site);
             return (names, top);
@@ -191,11 +189,11 @@ impl<'a> Engine<'a> {
         (Vec::new(), top)
     }
 
-    /// 工作队列排空时放行挂起的按名取类站点：各站点重跑，求值仍齐全即解析名字（之后按单调口径照常求值）。
+    /// 工作队列排空时放行挂起的按名取类站点：各站点重跑，已知名字非空即解析（之后按单调口径照常求值）。
     /// 返回是否有站点放行
     pub(super) fn lookup_release(&mut self) -> bool {
         let ready: Vec<(usize, u32)> =
-            std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_unsure.contains(w) && !self.lookup_released.contains(w)).collect();
+            std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_released.contains(w)).collect();
         if !ready.is_empty() {
             let (edges, adds) = (self.graph.edge_count, self.graph.adds[0]);
             self.ctx.stats.borrow_mut().released(ready.len(), edges, adds);

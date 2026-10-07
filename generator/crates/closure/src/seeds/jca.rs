@@ -38,6 +38,8 @@ pub struct JcaCfg {
     /// 服务实现类的反射构造点（`类.名字:描述符`）：方法内按名取类的所指类由本规则按被请求的算法补种，
     /// 不按类名字段的字符串集解析（否则注册表里全部算法的实现类都入链）
     pub instantiation_hosts: Vec<String>,
+    /// 提供者序求值（`[jca.order]`）
+    pub order: Option<super::jca_order::OrderCfg>,
 }
 
 impl JcaCfg {
@@ -58,6 +60,7 @@ impl JcaCfg {
                 .collect(),
             alias_sources: arr("alias_sources").iter().filter_map(|x| x.as_str().map(String::from)).collect(),
             instantiation_hosts: arr("instantiation_hosts").iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+            order: super::jca_order::OrderCfg::from_toml(sec.get("order")),
         }
     }
 
@@ -151,10 +154,11 @@ pub fn request_sites(insns: &[Insn], types: &HashSet<&str>, string_desc: &str) -
     out
 }
 
-/// 入选服务：provider 已注册、engine 类可达 且 算法名（或同义名）命中或该类型请求名推不出；或属触发的缺省服务
+/// 入选服务：provider 已注册、engine 类可达 且 同类型的请求算法名（或同义名）命中或该类型请求名推不出；或属触发的缺省服务。
+/// 请求名按（服务类型, 小写算法键）登记：某类型请求点的名字只选该类型的服务（与请求点求值先后无关）
 pub fn select<'s>(
     services: &'s BTreeSet<Service>,
-    algorithms: &HashSet<String>,
+    algorithms: &HashSet<(String, String)>,
     any_types: &HashSet<String>,
     live_providers: &HashSet<String>,
     live_types: &HashSet<String>,
@@ -171,7 +175,8 @@ pub fn select<'s>(
                 return false;
             }
             let a = s.algorithm.to_lowercase();
-            any_types.contains(&s.ty) || (algorithms.contains(&a) || aliases.get(&a).is_some_and(|g| g.iter().any(|x| algorithms.contains(x))))
+            let requested = |k: &String| algorithms.contains(&(s.ty.clone(), k.clone()));
+            any_types.contains(&s.ty) || requested(&a) || aliases.get(&a).is_some_and(|g| g.iter().any(requested))
         })
         .collect()
 }
@@ -199,11 +204,15 @@ mod tests {
         let none = HashMap::new();
         let forced = HashSet::new();
         let names = |v: Vec<&Service>| v.iter().map(|s| s.algorithm.clone()).collect::<Vec<_>>();
-        // 只请求 x：Q 未注册，Z 不入选
-        let r = select(&services, &set(&["x"]), &set(&[]), &set(&["P"]), &live, &none, &forced);
+        let req = |xs: &[(&str, &str)]| xs.iter().map(|(t, a)| (t.to_string(), a.to_string())).collect::<HashSet<(String, String)>>();
+        // 只请求 D/x：Q 未注册，Z 不入选
+        let r = select(&services, &req(&[("D", "x")]), &set(&[]), &set(&["P"]), &live, &none, &forced);
         assert_eq!(names(r), ["X"]);
+        // 请求名按类型登记：S 类型请求 x 不选 D/X，S/W 只由 S 类型的请求选中
+        let r = select(&services, &req(&[("S", "x"), ("S", "w")]), &set(&[]), &set(&["P"]), &live, &none, &forced);
+        assert_eq!(names(r), ["W"]);
         // 类型 D 的请求名推不出：P 的 D 全部入选，S 不受影响
-        let r = select(&services, &set(&[]), &set(&["D"]), &set(&["P"]), &live, &none, &forced);
+        let r = select(&services, &req(&[]), &set(&["D"]), &set(&["P"]), &live, &none, &forced);
         assert_eq!(names(r), ["X", "Y"]);
     }
 }

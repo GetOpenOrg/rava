@@ -359,6 +359,13 @@ impl<'a> Engine<'a> {
                     continue;
                 }
             };
+            // 服务实现类的反射构造点（`[jca] instantiation_hosts`）把类名字段传给被调方的按名取类（如经类加载器
+            // 按名加载）：所指类同宿主内的按名取类，由 JCA 规则按被请求的算法补种，不按类名字段的字符串集解析——
+            // 否则注册表里全部算法的实现类都经被调方站点按名入链。该实参按推不出处理
+            if self.lookup_hosts.contains(&self.methods[cm].key) {
+                complete = false;
+                continue;
+            }
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
             match self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten) {

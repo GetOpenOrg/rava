@@ -127,8 +127,9 @@ fn vtable_entries(
         let body = if key == sam_key {
             format!("(self.0)({})", args.join(", "))
         } else {
-            let target = if !jm.is_abstract() { em_m.has_body.then_some((jbin, em_m)) } else { default_bodies.get(&key).copied() };
-            let Some((kbin, em_k)) = target else { continue };
+            // 各接口 vtable 的同键条目一律走闭包上的极大 default（JVMS §5.4.6）：子接口覆盖的
+            // default 在超接口 vtable 里也必须落到子接口的体，不得回落到超接口自身的声明
+            let Some((kbin, em_k)) = default_bodies.get(&key).copied() else { continue };
             let kci = reg.get(kbin).expect("default 声明接口在注册表");
             let k_ty = format!("{}{}", quote_path(ctx, kbin, host), objects(class_params(ctx, kci).len()));
             let Some(b) = default_entry_body(ctx, em_k, kci, &k_ty, &args, &entry_tys) else { continue };
@@ -137,6 +138,37 @@ fn vtable_entries(
         entries.push(format!("    fn {head} {{ {body} }}"));
     }
     Ok(entries)
+}
+
+/// default 执行载体：每个 (名, 参数描述符) 取闭包上声明者中的极大元（不是其他声明者的超接口；
+/// JVMS §5.4.6 maximally-specific）。极大声明为抽象（重新抽象 / SAM）或其体未翻译 → 无条目
+fn maximal_defaults<'a, 'e>(
+    ctx: &EmitCtx<'_>,
+    ems: &'e Emissions,
+    targets: &[(&'a str, String)],
+) -> Result<BTreeMap<(String, String), (&'a str, &'e EmittedMethod)>> {
+    let reg = ctx.ty.reg;
+    let mut decls: BTreeMap<(String, String), Vec<(&'a str, bool)>> = BTreeMap::new();
+    for (jbin, _) in targets {
+        let jci = reg.get(jbin).expect("impl 目标在注册表");
+        for jm in contract_methods(ctx, jci) {
+            decls.entry((jm.name.clone(), param_part(&jm.desc).to_string())).or_default().push((jbin, jm.is_abstract()));
+        }
+    }
+    let anc: BTreeMap<&str, BTreeSet<String>> =
+        targets.iter().map(|(j, _)| (*j, crate::sam::iface_closure(ctx, j).into_iter().collect())).collect();
+    let mut out = BTreeMap::new();
+    for (key, per) in decls {
+        let maximal = per.iter().find(|(j, _)| !per.iter().any(|(k, _)| k != j && anc.get(k).is_some_and(|a| a.contains(*j))));
+        let Some(&(jbin, is_abstract)) = maximal else { continue };
+        if is_abstract {
+            continue;
+        }
+        if let Some(em_d) = emission(ems, jbin)?.find(&key.0, &key.1).filter(|e| e.has_body) {
+            out.insert(key, (jbin, em_d));
+        }
+    }
+    Ok(out)
 }
 
 /// 单接口的合成对象文本
@@ -186,18 +218,7 @@ fn lambda_text(ctx: &EmitCtx<'_>, spec: &SamSpec, host: &ClassEmission, ems: &Em
     l.push("    }".into());
     l.push("}".into());
     l.push(String::new());
-    // default 执行载体：闭包内首个带翻译体的 default 声明
-    let mut default_bodies: BTreeMap<(String, String), (&str, &EmittedMethod)> = BTreeMap::new();
-    for (jbin, _) in &targets {
-        let jci = reg.get(jbin).expect("impl 目标在注册表");
-        let jem = emission(ems, jbin)?;
-        for jm in contract_methods(ctx, jci).into_iter().filter(|m| !m.is_abstract()) {
-            let pd = param_part(&jm.desc).to_string();
-            if let Some(em_d) = jem.find(&jm.name, &pd).filter(|e| e.has_body) {
-                default_bodies.entry((jm.name.clone(), pd)).or_insert((jbin, em_d));
-            }
-        }
-    }
+    let default_bodies = maximal_defaults(ctx, ems, &targets)?;
     for (jbin, jpath) in &targets {
         l.push(format!("impl {jpath}__VTable for {lam} {{"));
         l.extend(vtable_entries(ctx, spec, host, ems, jbin, &default_bodies)?);

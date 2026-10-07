@@ -31,6 +31,7 @@ pub mod lang;
 pub mod method_bodies;
 pub mod module_audit;
 pub mod module_crates;
+pub mod module_names;
 pub mod par;
 pub mod perf;
 pub mod phase2;

@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 
 use crate::ctx::EmitCtx;
-use crate::text::{pkg_from_java, to_snake};
 
 /// JDK 侧布局（各模块 crate）
 #[derive(Debug, Default)]
@@ -28,27 +27,11 @@ impl JdkLayout {
     pub fn build(ctx: &EmitCtx<'_>, out_dir: &Path) -> JdkLayout {
         let classes = &ctx.input.jdk_classes;
         let crates = ctx.crates();
-        let src_of = |c: &str| crates.src_dir(out_dir, crates.crate_of(c));
-        // 父目录 → 子包目录名（类名与子包同名 → `_t` 后缀）
-        let mut pkg_dirs: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
-        for c in classes {
-            let mut parent = src_of(c);
-            for p in pkg_parts(c) {
-                pkg_dirs.entry(parent.clone()).or_default().insert(p.to_string());
-                parent = parent.join(p);
-            }
-        }
-        let runtime_src = ctx.runtime_src();
         let mut lay = JdkLayout::default();
         for c in classes {
-            let parts = pkg_parts(c);
-            let simple = c.rsplit('/').next().unwrap_or(c);
-            let parent = parts.iter().fold(src_of(c), |d, p| d.join(p));
-            let mut m = to_snake(simple);
-            if pkg_dirs.get(&parent).is_some_and(|s| s.contains(&m)) || companion_clash(&runtime_src, &parts, &m) {
-                m.push_str("_t");
-            }
-            lay.files.insert(c.clone(), parent.join(format!("{m}.rs")));
+            // 模块名见 `module_names`：与子包 / 包内类型名 / 共置手写路径冲突时加 `_t`
+            let parent = pkg_parts(c).iter().fold(crates.src_dir(out_dir, crates.crate_of(c)), |d, p| d.join(p));
+            lay.files.insert(c.clone(), parent.join(format!("{}.rs", ctx.module_of(c))));
             lay.generated.insert(c.clone());
         }
         lay
@@ -67,14 +50,6 @@ impl JdkLayout {
             Some((c.clone(), dir))
         })
     }
-}
-
-/// 类名以 Impl / Ext 结尾时，snake 名与同包类 X 的共置手写 `x_impl.rs` / `x_ext.rs` 同名
-/// （`Inet6AddressImpl` ↔ `Inet6Address` 的 native 手写 `inet6_address_impl.rs`）：手写真源同路径
-/// 已有文件即为共置手写，生成类让出该路径（加 `_t` 后缀），否则生成文件被当作手写而不落盘
-fn companion_clash(runtime_src: &Path, parts: &[&str], stem: &str) -> bool {
-    (stem.ends_with("_impl") || stem.ends_with("_ext"))
-        && parts.iter().fold(runtime_src.to_path_buf(), |d, p| d.join(p)).join(format!("{stem}.rs")).is_file()
 }
 
 /// 用户类位置
@@ -98,26 +73,12 @@ pub struct UserLayout {
 
 impl UserLayout {
     pub fn build(ctx: &EmitCtx<'_>, user_src: &Path) -> UserLayout {
-        let by_source: BTreeMap<String, String> = ctx
-            .opts
-            .java_files
-            .iter()
-            .filter_map(|f| Some((f.file_name()?.to_string_lossy().into_owned(), pkg_from_java(f))))
-            .collect();
         let mut lay = UserLayout::default();
+        let modules = ctx.class_modules();
         for c in &ctx.input.user_classes {
-            let Some(ci) = ctx.class(c) else { continue };
-            let pkg = ci
-                .class_file()
-                .source_file
-                .as_ref()
-                .and_then(|s| by_source.get(s))
-                .cloned()
-                .unwrap_or_default();
-            let pkg_parts: Vec<String> = if pkg.is_empty() { Vec::new() } else { pkg.split('.').map(str::to_string).collect() };
-            // 模块名取简单名的 snake（不取完整 binary name：含包时路径形态异常）
-            let simple = c.rsplit('/').next().unwrap_or(c);
-            let mod_name = to_snake(simple);
+            let Some(pkg_parts) = modules.user_pkg(c).map(<[String]>::to_vec) else { continue };
+            // 模块名见 `module_names`（包段取源文件 package 声明）
+            let mod_name = ctx.module_of(c);
             let dir = pkg_parts.iter().fold(user_src.to_path_buf(), |d, p| d.join(p));
             let path = dir.join(format!("{mod_name}.rs"));
             let mut parent = user_src.to_path_buf();

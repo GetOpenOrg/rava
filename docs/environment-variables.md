@@ -39,6 +39,7 @@ $RAVA jdk --json                                                       # 选中�
 | `--clean` | 发射前清空 scratch（emit 的输入位于 scratch 内时拒绝） |
 | `--stop-after STAGE` | 仅 build：最后执行的阶段 `javac` / `closure` / `emit` / `compile` / `run`（缺省 `run`）。`emit` = 只生成（不编译运行）；`compile` = 生成并 `cargo build`，产物清单写 `<scratch>/build_artifacts.json`（`{bin, executable, paths}`，仅本 scratch 的产物），rustc 全文写 `<scratch>/logs/build.log`。每次 build 都写 `<scratch>/build_status.json`：`{stage, ok, exit, signal, timeout, first_error, log, jdk:{home,major,source}, heavy, emit:{bin,jdk_classes,precheck}, exe}`（stage = 停止或失败的阶段；`emit.precheck` = 预检全量明细 `{native_missing_count, boundary_stub_count, native_missing[], boundary_stub[]}`，不受 stdout 明细 40 条上限影响，`rava compile` 原样保留；`exe` = 编译成功的可执行文件）。编译环境见下文「重型闭包的自动处理」 |
 | `--build-timeout 秒` | cargo 编译超时（build / compile；缺省重型闭包 3000 秒，其余 600 秒），到时终止整个 cargo 进程组，`build_status.json` 记 `timeout: true`；build 下须配合 `--stop-after compile` 或 `run` |
+| `--build-timeout-scale K` | 仅 compile：编译超时取缺省值（按重型判定 3000 / 600 秒）的 K 倍（正整数），与 `--build-timeout` 互斥；全量跑批放宽超时用（`run_tests.py --build-timeout-scale` 透传） |
 | `--release` / `--target-dir D` | build / compile：release 配置编译 / 共享编译缓存目录（缺省 `<仓库>/build/target`）；build 下须配合 `--stop-after compile` 或 `run` |
 | `--release-small` | build / compile：体积档（cargo profile `release-small`，产物在 `<target>/release-small/`）：继承 release（fat LTO、codegen-units 1、strip），opt-level `"s"`；`run_tests.py --release-small` 同义。档位取舍与实测见 `docs/plans/2026-10-04-binary-size.md` B3 |
 | `--dev-opt` | build / compile：性能类测试档（cargo profile `dev-opt`，产物在 `<target>/dev-opt/`）：继承 dev 语义，档案侧 crate 与第三方依赖 opt-level 1、用户 crate 0；与 `--release` / `--release-small` 互斥。e2e 用例在源文件中以独占一行的 `// rava-build-profile: dev-opt` 声明，`run_tests.py` 缺省 dev 档时按声明改走该档（`--release` 时不变） |
@@ -66,6 +67,9 @@ $RAVA jdk --json                                                       # 选中�
 | `--jdk N` / `--java-home P` | 实验覆盖（互斥）：改用本机 JDK N / 指定 JDK home。`[jdk]` 与 `[meta]` 行标记「非参考构建」，结果不与 expected 同源 |
 | `--show-jdk` | 只解析并打印本次语料 JDK 后退出（干跑，不跑测试） |
 | `--build-timeout SEC` | 单测试 cargo 构建超时，透传 `rava compile`（缺省由 rava 按重型判定：3000 / 600 秒） |
+| `--build-timeout-scale K` | 构建超时取 rava 缺省值的 K 倍，透传 `rava compile --build-timeout-scale`（与 `--build-timeout` 互斥）；C4 全量取 2（重型 6000 / 普通 1200 秒） |
+| `--transpile-timeout SEC` | 单测试转译段（`rava build --stop-after emit`：闭包 + 发射）超时，缺省 600；C4 全量取 1800 |
+| `--run-timeout SEC` | 单测试运行段超时（含失败分类时的重跑），缺省 300；C4 全量取 900 |
 | `--debug` / `--strict` | 透传给每个测试的 `rava build` |
 | `--deny SPEC` | 审计计数非零升级为整体失败（`equiv` / `fallback` / `stub-hit` 等，见 `--help`） |
 | `--no-dyn` | 关闭动态对照（缺省开，见下） |
@@ -81,7 +85,11 @@ scratch 的 `build_status.json`（超时 / 信号 / 首错行 / 日志路径）�
 编译，按源码 + JDK 缓存于 `build/dyn_agent/`。单独运行：`python3 scripts/dyn_compare.py build/jdk21/<test> [-o out.json]`。
 
 启动时的 `[meta]` 行打印语料 JDK（`jdk=<tag>(参考构建)` 或 `jdk=<home>(非参考构建)`）、`CARGO_INCREMENTAL`、
-`CARGO_BUILD_JOBS` 与透传选项，便于事后解读结果。
+`CARGO_BUILD_JOBS`、透传选项与三段超时（`timeout=transpile …/build …/run …`），便于事后解读结果。
+
+分布式跑批（`scripts/cluster/distribute_tests.py`，见 [cluster-testing](reference/cluster-testing.md)）以 `--run-tests-args "<选项>"` 原样透传上述选项给
+服务器上的 `run_tests.py`，并以 `--task-timeout 秒` 放宽单例总时限（缺省 1800 秒，须不小于三段超时之和，否则
+外层先到期）。C4 全量建议：`--run-tests-args "--transpile-timeout 1800 --run-timeout 900 --build-timeout-scale 2" --task-timeout 9000`。
 
 ### `scripts/fetch_reference_jdk.sh`（语料参考 JDK 取包，方案 `docs/plans/2026-10-03-reference-jdk-21.md`）
 

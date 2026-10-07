@@ -1,6 +1,6 @@
 //! 编译阶段：`rava build` 的 compile 段与 `rava compile <scratch>` 共用。
 //!
-//! `rava compile <scratch> [--release | --release-small | --dev-opt] [--target-dir D] [--build-timeout SECS] [--keep-artifacts] [--runtime R]`：编译已由
+//! `rava compile <scratch> [--release | --release-small | --dev-opt] [--target-dir D] [--build-timeout SECS | --build-timeout-scale K] [--keep-artifacts] [--runtime R]`：编译已由
 //! `rava build --stop-after emit` 发射好的工作区（bin 名与重型判定输入读自 `build_status.json` 的 emit 段），
 //! 更新 `build_status.json` / `build_artifacts.json`。批量编排先并行发射、再逐个编译时用它——发射进程
 //! 不必常驻等待共享 target 的 cargo 文件锁。
@@ -21,6 +21,8 @@ pub struct CompileArgs {
     pub profile: BuildProfile,
     pub target_dir: Option<PathBuf>,
     pub build_timeout: Option<u64>,
+    /// 缺省超时（按重型判定）的整数倍数；与 `build_timeout` 互斥（全量跑批放宽超时用）
+    pub build_timeout_scale: Option<u32>,
     /// 保留中间产物（缺省链接成功后只留可执行文件）
     pub keep_artifacts: bool,
 }
@@ -33,7 +35,7 @@ pub fn compile_stage(out: &Path, repo: &Path, emit: &EmitSummary, c: &CompileArg
     let opts = CargoOpts {
         target_dir: c.target_dir.clone().unwrap_or_else(|| repo.join("build").join("target")),
         profile: c.profile,
-        timeout: c.build_timeout.map(Duration::from_secs),
+        timeout: c.build_timeout.map(Duration::from_secs).or_else(|| c.build_timeout_scale.map(|k| heavy.default_timeout() * k)),
     };
     let r = cargo::compile(out, &emit.bin, &heavy, &opts);
     // 链接成功只留可执行文件；失败的中间产物同样只是缓存，一并删除
@@ -62,11 +64,14 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
         }
         match a.as_str() {
             "--keep-artifacts" => c.keep_artifacts = true,
-            "--target-dir" | "--build-timeout" | "--runtime" => {
+            "--target-dir" | "--build-timeout" | "--build-timeout-scale" | "--runtime" => {
                 let v = it.next().ok_or_else(|| format!("{a} 缺少取值"))?;
                 match a.as_str() {
                     "--target-dir" => c.target_dir = Some(PathBuf::from(v)),
                     "--runtime" => runtime = Some(PathBuf::from(v)),
+                    "--build-timeout-scale" => {
+                        c.build_timeout_scale = Some(v.parse().ok().filter(|k| *k >= 1).ok_or_else(|| format!("--build-timeout-scale 需为正整数：{v}"))?)
+                    }
                     _ => c.build_timeout = Some(v.parse().map_err(|_| format!("--build-timeout 需为秒数：{v}"))?),
                 }
             }
@@ -76,6 +81,9 @@ fn parse(rest: &[String]) -> Result<(PathBuf, CompileArgs, Option<PathBuf>), Str
         }
     }
     c.profile = BuildProfile::from_flags(&profiles)?;
+    if c.build_timeout.is_some() && c.build_timeout_scale.is_some() {
+        return Err("--build-timeout 与 --build-timeout-scale 互斥".into());
+    }
     Ok((scratch.ok_or("缺少 scratch 工作区目录")?, c, runtime))
 }
 
@@ -119,6 +127,9 @@ mod tests {
         assert_eq!(c.target_dir, Some(PathBuf::from("/t")));
         assert_eq!(c.build_timeout, Some(9));
         assert_eq!(rt, Some(PathBuf::from("/r")));
+        assert_eq!(parse(&args("/s --build-timeout-scale 2")).unwrap().1.build_timeout_scale, Some(2));
+        assert!(parse(&args("/s --build-timeout-scale 0")).is_err(), "倍数须为正整数");
+        assert!(parse(&args("/s --build-timeout 9 --build-timeout-scale 2")).is_err(), "两种超时互斥");
         assert!(parse(&args("--release")).is_err(), "缺 scratch");
         assert!(parse(&args("/s /t")).is_err());
         assert!(parse(&args("/s --bogus")).is_err());

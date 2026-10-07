@@ -192,3 +192,81 @@ fn local_class_inherits_enclosing_method_tparams() {
         vec!["U".to_string(), "V".to_string()]
     );
 }
+
+const ABSTRACT: u16 = 0x0400;
+
+/// 接口层次：子接口自有方法与超接口（传递）同名异参 → 子接口的该名按描述符区分，
+/// 超接口不受子接口影响；泛型特化覆盖（`extends Cmp<Path>` 的 `compareTo(Path)`）不构成重载
+fn iface_specs() -> Vec<crate::testutil::ClassSpec> {
+    let s3 = format!("(L{STRING};L{STRING};L{STRING};)V");
+    let s1 = format!("(L{STRING};)V");
+    let mut s = base_specs();
+    s.push(class("p/Handler").iface().method(method(PUBLIC | ABSTRACT, "end", &s3, None)));
+    s.push(class("p/ExtHandler").iface().ifaces(&["p/Handler"]).method(method(PUBLIC | ABSTRACT, "end", &s1, None)));
+    s.push(class("p/SerHandler").iface().ifaces(&["p/ExtHandler"]).method(method(PUBLIC | ABSTRACT, "flush", "()V", None)));
+    s.push(
+        class("p/Cmp")
+            .iface()
+            .sig(&format!("<T:L{OBJECT};>L{OBJECT};"))
+            .method(method(PUBLIC | ABSTRACT, "compareTo", &format!("(L{OBJECT};)I"), Some("(TT;)I"))),
+    );
+    s.push(
+        class("p/Path")
+            .iface()
+            .ifaces(&["p/Cmp"])
+            .sig(&format!("L{OBJECT};Lp/Cmp<Lp/Path;>;"))
+            .method(method(PUBLIC | ABSTRACT, "compareTo", "(Lp/Path;)I", None)),
+    );
+    s.push(class("p/SubPath").iface().ifaces(&["p/Path"]).method(method(PUBLIC | ABSTRACT, "compareTo", "(Lp/Path;)I", None)));
+    // 代入后擦除不同（Cmp<String> 的 compareTo(T) 擦除为 String）：真重载
+    s.push(
+        class("p/Odd")
+            .iface()
+            .ifaces(&["p/Cmp"])
+            .sig(&format!("L{OBJECT};Lp/Cmp<L{STRING};>;"))
+            .method(method(PUBLIC | ABSTRACT, "compareTo", "(Lp/Path;)I", None)),
+    );
+    // 兄弟超接口各自声明同名异参
+    s.push(class("p/Left").iface().method(method(PUBLIC | ABSTRACT, "put", &s1, None)));
+    s.push(class("p/Right").iface().method(method(PUBLIC | ABSTRACT, "put", "(I)V", None)));
+    s.push(class("p/Both").iface().ifaces(&["p/Left", "p/Right"]));
+    s.push(class("p/OnlyLeft").iface().ifaces(&["p/Left"]));
+    s
+}
+
+#[test]
+fn interface_overload_spans_superinterfaces() {
+    let f = Fixture::new(iface_specs());
+    let x = f.ctx();
+    let names = |c: &str| f.reg.get(c).map(|ci| x.hierarchy_overloaded_names(ci));
+    assert!(names("p/Handler").is_some_and(|n| !n.contains("end")));
+    assert!(names("p/ExtHandler").is_some_and(|n| n.contains("end")));
+    // SerHandler 不自有 end：名字由声明接口决定
+    assert!(names("p/SerHandler").is_some_and(|n| !n.contains("end")));
+    assert!(names("p/Path").is_some_and(|n| !n.contains("compareTo")));
+    assert!(names("p/SubPath").is_some_and(|n| !n.contains("compareTo")));
+    assert!(names("p/Odd").is_some_and(|n| n.contains("compareTo")));
+}
+
+#[test]
+fn interface_view_names_consistent_and_disjoint() {
+    let f = Fixture::new(iface_specs());
+    let x = f.ctx();
+    let ci = |c: &str| f.reg.get(c).expect(c);
+    let s3 = format!("(L{STRING};L{STRING};L{STRING};)V");
+    let s1 = format!("(L{STRING};)V");
+    // 子接口视图沿用声明名：Handler.end 原名，ExtHandler.end 带后缀，两者不同
+    let h = x.interface_view_member_name(ci("p/SerHandler"), ci("p/Handler"), "end", &s3);
+    let e = x.interface_view_member_name(ci("p/SerHandler"), ci("p/ExtHandler"), "end", &s1);
+    assert_eq!(h, "end");
+    assert_ne!(e, "end");
+    assert_eq!(e, x.interface_view_member_name(ci("p/ExtHandler"), ci("p/ExtHandler"), "end", &s1));
+    // 兄弟超接口同名异参：视图内两者按描述符区分；只继承一侧时取声明名
+    let l = x.interface_view_member_name(ci("p/Both"), ci("p/Left"), "put", &s1);
+    let r = x.interface_view_member_name(ci("p/Both"), ci("p/Right"), "put", "(I)V");
+    assert!(l != "put" && r != "put" && l != r);
+    assert_eq!(x.interface_view_member_name(ci("p/OnlyLeft"), ci("p/Left"), "put", &s1), "put");
+    // 被特化覆盖的超接口成员不制造视图冲突
+    let p = x.interface_view_member_name(ci("p/SubPath"), ci("p/Path"), "compareTo", "(Lp/Path;)I");
+    assert_eq!(p, "compareTo");
+}

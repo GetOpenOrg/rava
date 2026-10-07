@@ -3,13 +3,13 @@
 use ty::ident::is_rust_keyword;
 
 use super::Emissions;
-use crate::ctx::{EmitCtx, USER_CRATE};
-use crate::text::to_snake;
+use crate::ctx::EmitCtx;
 
 /// 类在 Rust 中的完整引用路径（不含 `use` 与 `;`），首段按目标类所在 crate 定向：
 ///
 /// - JDK 类（模块 crate，包 mod.rs 再导出）：同 crate `crate::java::lang::String`，跨 crate `<模块 crate>::java::…`
-/// - 用户类 / 默认包类：main.rs 只声明 mod，路径写到模块层 `crate::<snake>::<Short>`
+/// - 用户类：路径写到模块层 `crate::<包段…>::<模块名>::<Short>`（模块名见 `module_names`）；
+///   其余默认包类 `crate::<模块名>::<Short>`
 /// - lib crate 类：接收者同 crate 用 `crate::`，否则用其 crate 名
 ///
 /// `recv_crate` 为引用所在文件的 crate 名
@@ -29,8 +29,13 @@ pub fn use_path(ctx: &EmitCtx<'_>, binary: &str, recv_crate: &str) -> String {
         .join("::");
     let target = ctx.crate_of(binary);
     let head = if target == recv_crate { "crate" } else { target };
-    if pkg.is_empty() || target == USER_CRATE {
-        return format!("{head}::{}::{short}", to_snake(binary));
+    if let Some(parts) = ctx.class_modules().user_pkg(binary) {
+        let segs: Vec<String> = parts.iter().map(|p| if is_rust_keyword(p) { format!("r#{p}") } else { p.clone() }).collect();
+        let pre = segs.iter().map(|s| format!("{s}::")).collect::<String>();
+        return format!("{head}::{pre}{}::{short}", ctx.module_of(binary));
+    }
+    if pkg.is_empty() {
+        return format!("{head}::{}::{short}", ctx.module_of(binary));
     }
     format!("{head}::{pkg}::{short}")
 }

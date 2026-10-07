@@ -2845,3 +2845,94 @@ SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 S
   ①②③ 齐备的反事实上界是 DeepCopy 3374 → 2766（−608），pkcs11 / smartcardio / ec / XMLDSig 全部出闭包。
 - 达到 ≤1640 仍要 a5-4e / a5-4f 与 §21.5 列的其余来源；2766 只是这三项的上界。
 - 测量脚本：`build/a54b/cl.sh`（`rava closure` 包装，经全机锁）与 `build/a54b/fp.py`（按包指纹对比），均在 scratch，不提交。
+
+## 30. 能力①：URL 来源精度——阻塞清单、终态设计与验收（2026-10-06，分支 c1d-url，基于 b60e4f36）
+
+**结论先行**：§29.2 估计的「URL 按对象 + 串前缀 + 甲目录事实」三项**不够**。实测表明，jar `Handler.openConnection`（下记 `J`）
+与 JarVerifier 链至少还有 5 个彼此独立的来源，每个来源各要一项能力才能健全剪掉。本步**不改引擎语义、无代码提交**：
+只落阻塞清单、反事实上界和终态设计。按对象 URL 判据的实验补丁记在 §30.4，作为第 1 步的起点。
+
+口径：本机 macOS，`rava closure`，`--java-home tools/refjdk/jdk-21.0.11+10`，冷缓存。`--cut` 是反事实切除（不健全，只作归因）。
+记号 `R` = `URLClassPath$3.run:()…Loader;`。基线（b60e4f36）：
+
+| 测试 | 类 | 方法 |
+|---|---:|---:|
+| HelloWorld | 469 | 1828 |
+| StockTrans | 3372 | 20747 |
+| DeepCopy | 3374 | 20766 |
+| TestSerialDefaultSuid（TSDS） | 3379 | 20760 |
+
+（HelloWorld 本机 469、服务器口径 468，差 1 类是本机与服务器的环境差，与本节无关。）
+
+### 30.1 反事实逐层剥离（DeepCopy）
+
+每一层都在上一层的切除集上追加，每次追加后重查 `J` 的 `--why` 链和 `@opens:java/net/URL` 引入点：
+
+| 层 | 追加切除 | 类 / 方法 | `J` 仍可达的原因 |
+|---|---|---:|---|
+| 0 | 无 | 3374 / 20766 | — |
+| 1 | `R@97` `R@127` `R@139`（甲 + 通用 Loader） | 3371 / 20719 | `ServiceLoader$LazyClassPathLookupIterator.parse@9` 的 `openConnection` |
+| 2 | + `BuiltinClassLoader.findResource@113`、`findResources@129`、`URLClassPath.<init>(String,Z)@157`、`ResourceBundle$Control$2.run@8`、`Control.needsReload@65` | 3369 / 20679 | `parse` 的 P1 = {`FileLoader.getResource` 的 URL 对象, open(URL)} |
+| 3 | + `URLClassPath$FileLoader.getResource@13`（模拟「该对象 handler 只有 file」） | 3369 / 20679 | open(URL) 引入点：`BuiltinClassLoader$1.hasNext@31`（`Iterator.next` + checkcast）、`URLClassPath.getLoader(I)@36`（`unopenedUrls.pollFirst` + checkcast） |
+| 4 | + `BuiltinClassLoader$1.hasNext@26`、`URLClassPath.getLoader(I)@33` | 3369 / 20676 | 新引入点 `nextProviderClass@173`（`Enumeration.nextElement` 在 open(Enumeration) 上的枢纽返回 + checkcast）。JarVerifier 另有独立路线：`ObjectInputFilter$Config` → `BootLoader.getDefinedPackage@33` → `BootLoader$PackageHelper.definePackage@67` → `getManifest` → `new JarInputStream` → `checkManifest@120` |
+| 5 | + `nextProviderClass@168`、`BootLoader$PackageHelper.definePackage@67` | **3097 / 18629** | `J` 与 JarVerifier 都不在闭包内 |
+
+第 5 层是能力①在 DeepCopy 上的反事实上界：**−277 类 / −2137 方法**。比 §29 的 D（−217）多出的部分，来自 BootLoader 包定义路线带进的 jar 清单类。
+`build/url/` 下的 `cuts1.txt` / `cuts3.txt` / `cuts6.txt` / `cuts7.txt` 依次是第 2–5 层的切除集（scratch，不提交）。
+
+注意：不能用切 `URL.<init>(URL,String,URLStreamHandler)@386`（协议键闸门）的办法模拟「各处 spec 已知」。切构造器内部的事件
+不单调，实测运行 20 分钟以上不收敛，已放弃。
+
+### 30.2 阻塞清单（每项都要独立的健全能力）
+
+| # | 来源 | 现状 | 终态能力 |
+|---|---|---|---|
+| B1 | 甲：`R@139` / `R@97` 的 JarLoader 分支，`R@127` 的通用 Loader | 类路径 URL 的 `file` 是否以 `/` 结尾、`protocol` 是否为 `"file"` 都推不出 | ①「启动目录是目录」清单事实（`[facts]`，原生二进制的应用类路径固定为 `""` → `user.dir`，无 `-cp`）+ `File.isDirectory` 按文件对象求值；② URL 对象的 `protocol` / `file` 按对象串事实（构造器写入的常量与前后缀）；③ `endsWith("/")` / `String.equals` 条件按对象串事实收窄分支 |
+| B2 | URL 容器出口的 checkcast：`BuiltinClassLoader.findResource@118`、`findResources@134`、`$1.hasNext@31`、`URLClassPath.<init>@160`、`getLoader(I)@36`、`nextProviderClass@173` | 容器元素未按对象建模时，`Iterator.next` / `pollFirst` / `Enumeration.nextElement` 落到枢纽返回，checkcast 造出 open(URL)；open 接收者走无上下文的 `URL.handler`，后者含全部 handler | 对 `ArrayList` / `ArrayDeque` / 匿名 `Enumeration` 的元素按分配点建模（`container()` 判据延伸到元素出口），使这些 checkcast 的结果只含对象、不含 open。判据只看字节码形态（元素字段 + 出口方法），不写类名 |
+| B3 | 手写 `ClassLoader.__impl_getResource`（`class_loader_impl.rs`，`#[jvm_boundary]`）恒返回 null，分析器却把返回建模为 open(URL) | 手写边界的返回值建模过宽 | 随 a3-L2 改为字节码翻译后自然消失；在那之前按清单声明返回值只含 null，不引入 open |
+| B4 | 未知 spec 的解析式构造：`FileLoader.getResource@13`（`encodePath(name)`）、`URL.readObject` / `fabricateNewURL`（反序列化）、`SeedGenerator$URLSeedGenerator`（`securerandom.source` 属性）、`JarURLConnection.parseSpecs`（jar 链内部，自循环） | `@386` 协议键闸门在 Any 键下退回全集，jar `Handler` 写进该对象的 `handler` | ① URL 按对象字段精度（§30.4 判据）；② `FileLoader.getResource@20..38` 的 `getFile().startsWith(normalizedBase.getFile())` 守卫：需要「相对 spec 在 file 基 URL 上解析，结果 `file` 以 `/` 开头」+「jar URL 的 `file` 以 `<scheme>:` 开头」这两条按处理器区分的**清单事实**。注意 `new URL("jar", "", "/x")` 这种三参构造的 jar URL，`file` 也以 `/` 开头，所以事实只对解析式路径成立，不对 `URL.file` 全局成立。`URLStreamHandler.parseURL` 里有 `/./`、`/../` 子串循环，纯字节码推前缀不可行；③ 反序列化与安全属性两处的键由引导映像 / 属性求值给出（`securerandom.source` 缺省 `file:/dev/random`，已在嵌入的 `java.security` 内） |
+| B5 | `BootLoader$PackageHelper.definePackage@67` → `getManifest` → `JarInputStream` → JarVerifier | `getSystemPackageLocation`（native）返回值未建模，非 `jrt:` 分支活 | 清单事实：原生二进制没有 `-Xbootclasspath/a`，引导包的位置只有 `jrt:/<module>`。把 native 返回值建模为串前缀 `jrt:`，`definePackage` 的 jar 分支按前缀折叠 |
+| B6 | `nextProviderClass@168` 的 `configs` 来自 `ClassLoader.getResources` / `getSystemResources`，在 open(ClassLoader) 上派发 | 同 B2 | 同 B2，并随 B3 收窄 |
+
+健全性论证（每项单独成立）：
+- B1 的目录事实只在应用类路径固定、无用户可设项时成立。rava 生产构建不接受 `-cp`，类路径资源由构建期打包，这一点要在清单里登记为事实。
+- B2 的元素按对象建模只是**精化**：checkcast 结果集合是元素集合的子集，没有丢失可能的值。
+- B3、B5 是把 VM / native 的已知行为写进清单，属于 handwritten-boundary §③ 的「VM 注入状态的落地语义」。
+- B4 的守卫只在两条串事实都成立时折叠 `J`；任何一条推不出就退回现状（全集），所以不会漏。
+
+### 30.3 终态目标与验收
+
+- 能力①兑现后（B1–B6 齐备）：DeepCopy 3374 → **≤3097**（−277，按 §30.1 第 5 层），JarVerifier 与 jar `Handler` 不在闭包内；
+  StockTrans / TSDS 走同一组来源，预期同量级（落地时实测，不足 −217 即不达标）。HelloWorld 不走 URL，保持不变（服务器 468）。
+- a5-4 总目标沿用 mh-objectify §6.3 的修订值：**DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468**，由①②③与格式串求值共同兑现，①的验收口径是「约 −217 且 JarVerifier 链出闭包」（本节实测上界 −277）。
+- 验收：服务器单测 rc=0（含 D1 顺序 / 种子无关守护）；抽查 DeepCopy 系、`TestAppClassLoader`、`TestJarFile*`、URL / 类路径相关 e2e 与 HelloWorld 全过；
+  动态对照漏覆盖 0、存根命中 0；`--hash-seed` 与 `--flow-batch 1` 两种跑法下闭包集合一致。
+
+### 30.4 第 1 步起点：按对象 URL 判据（实验补丁，未提交）
+
+在 `engine/classes.rs::container_shape` 的 `if !generic { return false; }` 之前加一条判据：类的实例字段类型是某个
+`[facts.keyed_lookups]` 键类（按键查找入口的返回类型）时，按分配点区分对象。同时把 `engine/keyed.rs::key_classes`
+改为 `pub(super)`。判据只读清单，不含类名：
+
+```rust
+let kcs: Vec<String> = self.key_classes().into_iter().map(|k| self.names[k as usize].to_string()).collect();
+if chain.iter().any(|cf| inst(cf).iter().any(|f| f.desc.strip_prefix('L').and_then(|d| d.strip_suffix(';')).is_some_and(|c| kcs.iter().any(|k| k == c)))) {
+    return true;
+}
+```
+
+实测：单独加这条，DeepCopy 不变（3374）；叠加第 1 层切除为 3371。它是 B4① 的前提，但单独没有收益，所以不在 C4 冻结期提交。
+
+### 30.5 实施顺序与恢复入口
+
+建议按「收益可独立观测」排序，每步单独分支、小步合入：
+1. **B2 + B6**：容器元素出口按对象。这一步消掉 open(URL) 的 6 个引入点，是其余各项能看到收益的前提。可用 `@opens:java/net/URL` 检验：引入点应当归零，只剩 B3。
+2. **B3**：手写 `getResource` 的返回值按清单声明。
+3. **B4**：§30.4 判据 + 两条处理器串事实 + `startsWith` 守卫收窄。
+4. **B1**：目录事实 + 按对象串字段 + `endsWith` / `equals` 收窄。
+5. **B5**：`jrt:` 前缀事实。
+
+每步完成后，按 §30.1 的表格把对应切除项从 `cuts7.txt` 中拿掉，重跑并确认仍是 3097。
+
+恢复入口：worktree `../java_rta_c1durl`（分支 `c1d-url`）。测量脚本 `build/url/cl.sh <Test> <tag> [rava closure 参数]`（经全机锁、冷缓存）。
+切除集 `build/url/cuts7.txt`；实验补丁 `build/url/per_object_url.patch`。以上文件都在 scratch，补丁正文已抄在 §30.4。

@@ -38,7 +38,7 @@
 | HotSpot 阶段 | rava 现状 | 位置 |
 |---|---|---|
 | `Threads::initialize_java_lang_classes`：String、System、Class、ThreadGroup、Thread、Module、UnsafeConstants、Method、Finalizer，以及 `create_initial_thread_group` / `create_initial_thread` | 不存在。运行期各类惰性初始化，主线程由手写层构造 | runtime `thread_impl.rs` 等 |
-| `initPhase1`：属性表、`VM.saveProperties`、`setJavaLangAccess`、stdin/out/err、`Terminator.setup`、`VM.initLevel(1)` | 手写的 `System.registerNatives` 承担其中的属性表、saveProperties 段和 `out` / `err` / `in`；`setJavaLangAccess` 由 `[boot_init] calls` 在 main 前调用 | `system_impl.rs`、`seeds.toml [boot_init]` |
+| `initPhase1`：属性表、`VM.saveProperties`、`setJavaLangAccess`、stdin/out/err、`Terminator.setup`、`VM.initLevel(1)` | 手写的 `System.registerNatives` 承担其中的属性表、saveProperties 段和 `out` / `err` / `in`，首步与 initPhase1 同序调用翻译的 `setJavaLangAccess`；`System` 由 `[boot_init] classes` 首项在 main 前初始化（10-07 c4-regress：原经 `[boot_init] calls` 进入，属性表段先于登记触发 `ArraysSupport.<clinit>` 缓存 null JLA） | `system_impl.rs`、`seeds.toml [boot_init]` |
 | `initPhase2`：`ModuleBootstrap.boot()`，建引导层 | `[[boot_init.phases]]` 已经清单化，锚点留空，所以不入链、不执行；Module、ModuleLayer、`Class.getModule` 由手写近似 | `seeds.toml`、`module_impl.rs`、`module_layer_impl.rs` |
 | `initPhase3`：安全管理器、`initSystemClassLoader`、`setContextClassLoader`、`VM.initLevel(4)` | FS-C2 在 `ClassLoader.scl` / `Thread.contextClassLoader` 首次读时由字段钩子 `__vm_init_phase3` 惰性执行 | `class_loader_impl.rs` |
 | `VM.initLevel()` | 手写读取模型 `__vm_at_init_level`：saveProperties 段为 0，惰性 initPhase3 段为 3，其余时间为 4 | `vm_impl.rs`（`#[jvm_boundary]`） |
