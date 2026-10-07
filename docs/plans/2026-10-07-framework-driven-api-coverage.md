@@ -49,3 +49,6 @@
   - 暂缓 9 例：TestModuleLayerDefine、TestLocaleDateCjk、TestVirtualThreadScale、TestStringGetCharsLegacy（面外）；TestCharsetAvailable、TestHttpLoopbackSync / Async、TestXmlTransform（S1）；TestRowSetProvider（S2）。
   - 保留：TestClassModuleFace（Spring 6 PathMatchingResourcePatternResolver 扫描 ModuleLayer.boot()）、TestProtectionDomainFaces（Boot ApplicationHome 取 CodeSource）、TestSetAccessibleBoundary（ReflectionUtils.makeAccessible）、TestXmlSaxEvents（logback 配置走 SAX）、JUnit 10 例（框架 pilot 本身）。TestLocaleCurrency 属 expected 基线缺陷，另案。
   - S0 API 面算出后按数据复核这份判定。
+- 10-07 步骤 1 开工（分支 api-surface-s0，worktree java_rta_apis0）。已完成：pom 补 S0 jar（Boot 3.5.16 / Spring 6.2.19 同代）；最小 Boot 样例 `tests/lib_pilot/s0_boot/`；面与分层脚本 `scripts/api_surface.py`（face / tiers / seeds）、`scripts/jdk_index.py`（jmods 类层次，引用解析到声明类）、作业脚本 `scripts/api_surface_job.sh`；语义类目录白名单 `tests/api_surface/semantic_dirs.toml`；报告框架 `docs/reports/api-surface-s0.md`。
+  - dev 实测（apis0-s0-38c29002）：取包成功（锁 102 条）；样例在真 JVM 上 rc=0，输出已记入报告；实载 JDK 类 1722、框架 / 样例类 1987（作闭包变体 B 的种子）。
+  - **交接**：闭包 A 刚启动时 dev 关机维护，作业被停。dev 恢复后在本 worktree 推送最新提交，发作业 `--cmd 'bash scripts/api_surface_job.sh s0' --fetch 'build/api_surface/s0/**' --fetch 'tests/api_surface/*' --slot-mem dev=28 --job-timeout 7000`（换新 tag），取回 `s0.txt` / `tiers_s0.toml` 入库，按 `face.json` / `tiers.json` 补报告第五～七节。作业脚本已改为参考 JDK（首轮用了服务器系统 JDK 21.0.12）。

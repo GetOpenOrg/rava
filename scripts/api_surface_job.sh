@@ -22,8 +22,8 @@ export MAVEN_OPTS="-Dmaven.repo.local=$REPO/build/m2 ${MAVEN_OPTS:-}"
 bash "$REPO/scripts/fetch_pilot_deps.sh" --no-scan >"$OUT/fetch.log" 2>&1 || { echo "取包失败"; tail -30 "$OUT/fetch.log"; exit 2; }
 grep -E "deps.lock.toml" "$OUT/fetch.log"
 . "$REPO/scripts/rava_env.sh" "$REPO"
-JAVA_HOME="$("$RAVA" jdk --home-only)"; export JAVA_HOME
-echo "JAVA_HOME=$JAVA_HOME"
+# 参考 JDK（与 run_tests / 语料脚本同口径；jmods 供 jdk_index 解析），导出 JAVA_HOME 与 CORPUS_JDK_ARGS
+. "$REPO/scripts/corpus_jdk.sh" "$REPO"
 
 # 2. 阶段类路径：jars.txt 条目名 → 锁内 jar 路径
 NAMES="$(grep -v '^\s*#' "$APP/jars.txt" | grep -v '^\s*$' | paste -sd, -)"
@@ -63,7 +63,7 @@ run_closure() {
     step "闭包 $tag"
     local t0=$SECONDS
     local timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
-    "${timer[@]}" "$RAVA" closure "$CLS" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
+    "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
         -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err"
     local rc=$?
     echo "闭包 $tag rc=$rc 耗时 $((SECONDS - t0))s"
