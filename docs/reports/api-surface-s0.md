@@ -65,17 +65,121 @@ INFO ... --- [s0-boot] [main] s0app.GreetingRunner : runner done
 
 未列入（按 API 面分层）的边界目录及理由：04 / 13 / 33 / 44 集合 API；05 / 17 / 27 / 42 字符串与正则 API；18_arrays_advanced（`java.util.Arrays` 工具面占多数）；24_object_methods（含反射调用例）；47_annotations（注解反射）；48_refs（引用 / VarHandle）；58_misc（混合）；59_method_handles（`java.lang.invoke`）。
 
-## 五、结果（待 dev 恢复后补）
+## 五、结果（kr2 作业 `apis0-kr2b-1fdb1bed`，@ 1fdb1bed；闭包待 dev 恢复复算）
 
-- 面规模（A / B / 一跳 / 并集 / 公开面）、按包聚合、排序前列：待补
-- 闭包实测（类数、方法数、耗时、峰值内存）与 JVM 实载 JDK 类对照：待补
-- 分层计数（主力 / 暂缓 / 补测）与按目录分布：待补
+### 5.1 闭包实测（两变体均未产出）
+
+| 变体 | 入口 | 结果 | 耗时 | 峰值 RSS | 失败点 |
+|---|---|---|---|---|---|
+| A | `s0app.S0Application.main` | rc=124（超时） | 2400 s（上限） | 未取到（`timeout` 先于 `/usr/bin/time` 结束） | 资源束与按名读资源阶段已过（ServiceLoader 读 log4j / slf4j provider、`sun.util.logging.resources.logging` 束），之后 37 分钟无新输出，未到达不动点 |
+| B | A + 1987 个实载框架类种子 | rc=137（SIGKILL，内存上限） | 737 s | 11.58 GiB（12140864 KB，机器上限 11891 MiB） | 展开阶段，无阶段日志即被杀 |
+
+kr2 为 15G / 8 核，作业内存上限 11891 MiB。结论：S0 档案规模的闭包在该机型上不可完成，A 是时间不够，B 是内存不够。**本节以下的「调用链命中」一律取 JVM 实载近似**：一跳方法的声明类被真 JVM 加载，就算命中（`chain_mode = "jvm-loaded"`）。dev 恢复后用同一作业脚本复算，`s0.txt` 与 `tiers_s0.toml` 随之重出。
+
+### 5.2 面规模
+
+| 口径 | 方法数 |
+|---|---|
+| 调用链面（闭包） | 0（未产出） |
+| 一跳面（18 jar 常量池引用，解析到声明类） | 2868 |
+| 并集 = `tests/api_surface/s0.txt` | **2868** |
+| 其中公开 JDK API（java / javax / org.w3c / org.xml / org.ietf，public 类 public / protected） | 2865 |
+| 其中声明类被 JVM 实载（命中） | 2087（公开 2086） |
+| JVM 实载 JDK 类 / 非 JDK 类 | 1720 / 2876（S0 jar 与样例 1987） |
+
+各 jar 的一跳 JDK 方法数：spring-core 1506、spring-boot 935、spring-context 786、logback-core 682、spring-beans 557、log4j-api 432、spring-boot-autoconfigure 424、snakeyaml 335、spring-expression 268、logback-classic 259、spring-aop 222、slf4j-api 113、micrometer-commons 103、micrometer-observation 80、spring-jcl 40、log4j-to-slf4j 21、jul-to-slf4j 17、jakarta.annotation-api 2。
+
+引用 jar 数的分布：只被 1 个 jar 引用的方法 1679 个，被 2 个引用的 464 个，被 ≥ 5 个引用的 386 个；最多 16 个 jar（`Class.getName`、`Object.<init>`、`Object.getClass`）。
+
+### 5.3 按包聚合（前 25；列为 面 / 命中）
+
+| 包 | 面 | 命中 | 包 | 面 | 命中 |
+|---|---|---|---|---|---|
+| java.util | 533 | 504 | java.security | 54 | 16 |
+| java.lang | 498 | 492 | java.util.stream | 47 | 46 |
+| java.io | 188 | 143 | javax.management | 46 | 0 |
+| java.util.concurrent | 154 | 128 | java.text | 45 | 7 |
+| java.lang.reflect | 120 | 120 | java.util.concurrent.atomic | 45 | 35 |
+| java.time | 99 | 97 | java.util.logging | 44 | 23 |
+| java.net | 83 | 61 | javax.xml.stream.events | 43 | 0 |
+| javax.xml.stream | 81 | 0 | org.xml.sax | 39 | 15 |
+| java.nio.file | 69 | 62 | java.math | 36 | 36 |
+| javax.net.ssl | 61 | 0 | java.nio | 35 | 35 |
+| java.beans | 59 | 47 | org.w3c.dom | 27 | 0 |
+| | | | javax.management.modelmbean | 25 | 0 |
+| | | | javax.lang.model.element | 25 | 0 |
+| | | | java.util.function | 24 | 22 |
+
+命中为 0 的包（javax.xml.stream、javax.net.ssl、javax.management*、org.w3c.dom、javax.lang.model）都是 jar 里可选特性的引用，例如 logback 的 SSL 与 JMX 配置、spring-core 的 StAX 工具、Boot 的注解处理元数据。最小 Boot 启动时不触达它们。这类方法在一跳面上，但不在实载面上，是闭包复算时预期会剪掉的主体。
+
+### 5.4 排序前列（键：引用 jar 数 × 命中，引用 jar 数，命中，字典序）
+
+前 40 均已命中，依次为：`Class.getName`、`Object.<init>`、`Object.getClass`（16 jar）；`Enum.<init>`、`Enum.valueOf`、`String.equals`、`String.valueOf(Object)`、`LambdaMetafactory.metafactory`、`Iterator.hasNext / next`（15）；`IllegalArgumentException.<init>(String)`、`IllegalStateException.<init>(String)`、`String.isEmpty`、`StringBuilder.<init> / append(C / Object / String) / toString`、`Arrays.asList`、`List.add / iterator`、`Map.containsKey / get / put / remove`（14）；`Class.isAssignableFrom`、`Object.toString`、`String.hashCode / length`、`System.arraycopy`、`Thread.currentThread`、`ArrayList.<init>() / (I)`、`HashMap.<init>`、`List.addAll / size`、`Set.add / iterator`、`ConcurrentHashMap.<init>`（13）。完整排序见 `tests/api_surface/s0.txt`。
+
+### 5.5 e2e 分层（`tests/api_surface/tiers_s0.toml`）
+
+| 项 | 数 |
+|---|---|
+| e2e 用例 | 1105（javac 失败 1：`41_patterns_advanced/TestUnnamedVar`，未命名变量需 `--enable-preview`，属白名单目录，缺省主力） |
+| 通用方法（被 ≥ 10%，即 ≥ 110 例引用；`common_df = 0.1`） | 22 个（`println` 系列、`StringBuilder`、`ArrayList` / `List` / `Iterator`、`LambdaMetafactory`、`StringConcatFactory` 等） |
+| **主力** | **1095**（白名单目录 674，规则 2 / 3 共 421） |
+| **暂缓** | **10** |
+| **补测**（面上公开 JDK 方法、e2e 零直接引用） | **1376** |
+| e2e 已直接引用的面方法 | 1490 |
+
+暂缓 10 例（专属方法全部在面外）：
+
+| 用例 | 面外的专属 API |
+|---|---|
+| 04_collections/PriorityQueueDemo | `PriorityQueue` |
+| 30_streams/JavaBaseLongStatisticsTest | `LongSummaryStatistics` |
+| 30_streams/JavaBaseStatisticsTest | `Int / DoubleSummaryStatistics` |
+| 35_io/ScannerInputTest | `Scanner`、`PrintStream.println(D / Z)` |
+| 35_io/ScannerTest | `Scanner` |
+| 37_datetime/TestLocalDate | `LocalDate` 日历运算 |
+| 53_io_api/TestSecurityProperties | `java.security.Security` |
+| 67_sql/TestRowSetProvider | `javax.sql.rowset` |
+| 67_sql/TestSqlDateTime | `java.sql.Date / Time / Timestamp` |
+| 68_random_gen/TestRandomGeneratorOf | `java.util.random.RandomGenerator*` |
+
+补测清单按包分布（前 10）：java.util 163、java.util.concurrent 116、java.lang 111、java.io 73、javax.xml.stream 70、java.time 65、javax.net.ssl 61、java.lang.reflect 52、java.net 52、javax.management 46。被最多 jar 引用的缺口有：`UnsupportedOperationException.<init>()`（10 jar）；`Boolean.equals`、`IllegalArgument / IllegalStateException.<init>(String, Throwable)`、`List.equals`（8）；`ClassLoader.getResources`、`String.toLowerCase(Locale)`、`Method.getParameterCount`、`LinkedHashSet / HashSet / LinkedHashMap / ArrayDeque.<init>(I)`、`Lock.lock / unlock`、`Stream.concat`（6–7）；`Annotation.annotationType`、`Executable.getParameters`、`Constructor.getParameterTypes`、`URL.openConnection`、`URLConnection.getInputStream`（5–6）。补测应按 `s0.txt` 的排序优先覆盖命中项；面外的 javax.xml.stream / javax.net.ssl / javax.management 等待闭包复算确认后再定。
+
+**分层的区分度不足（须在闭包复算时一并修正）**：当前面是一跳全集（2868 个），比调用链宽，所以规则 3「专属 ∩ 面 ≠ ∅」几乎对所有用例成立，暂缓只剩 10 例。典型例子是 TestCharsetAvailable：唯一落在面内的专属方法是 `Map.containsKey`，关键 API `Charset.availableCharsets` 在面外，却判了主力。终态口径是：面取闭包调用链面（不取一跳并集），并以「专属方法中面外占比」或「关键 API 在面外」判暂缓。阈值做成 `tiers` 参数，与 `common_df` 同样写入数据文件。本轮 toml 按任务口径原样产出。
 
 ## 六、闸门项
 
-- 已知（静态推断，待闭包实测确认）：K11 子类合成（`@Configuration` 的 CGLIB 增强，实载类中可见 `$$SpringCGLIB$$`）；K10 资源枚举（`SpringFactoriesLoader` / `ImportCandidates` 经 `ClassLoader.getResources` 读 `META-INF/spring.factories` 与 `AutoConfiguration.imports`）；反射实例化种子（变体 B 以 JVM 实载类补，档案口径下需分析器通用建模）。
-- 实测：待补
+1. **G1 闭包规模（实测）**：S0 档案在 15G 机型上闭包不可完成。A 超时 40 分钟，资源束阶段之后无进展；B 带 1987 个框架种子，在 11.6 GiB 处被 OOM 杀掉。这是 S0 一跳面以外所有口径的前置条件。dev（大内存）恢复后先复算，拿到真实峰值和不动点轮数，再判断是需要分析器内存优化，还是可以分片。
+2. **G2 反射实例化与组件扫描**：Boot 的 bean 类由 `@ComponentScan` 包扫描、`AutoConfiguration.imports` 与 `spring.factories` 按名装载，再经反射构造。只以 main 为入口（A）看不见这些类，只能靠 JVM 实载种子（B）补。在档案口径下，需要分析器对「资源枚举 → `Class.forName` / 构造器反射」做通用建模（K10 资源枚举）。按原则，不往 runtime/ 加库种子。
+3. **G3 CGLIB 子类合成（K11）**：`@Configuration` 增强类 `$$SpringCGLIB$$` 在运行期定义，实载类中可见。这属于运行期类定义点，需要走构建期合成或 AOT 产物，不能靠静态闭包。
+4. **G4 面的精度**：在闭包产出前，「命中」是类级近似（声明类被加载即算命中），会高估。例如 `Thread.ofVirtual`、`Transformer.setOutputProperty` 因 `Thread` / `Transformer` 类被加载而计为命中，但 S0 启动路径未必调用它们。
 
 ## 七、已知失败首批暂缓判定的复核
 
-待分层数据产出后逐例填写（9 例暂缓 + 保留的 TestClassModuleFace / TestProtectionDomainFaces / TestSetAccessibleBoundary / TestXmlSaxEvents / JUnit 10 例 / TestLocaleCurrency）。判定变化只在此列出，不改 `docs/known_failures.toml`。
+口径：看用例的关键 API（区分该用例的那组方法）是否在 S0 面上。机械分层结果一并列出，仅供参考，因为第五节已指出规则 3 区分度不足。**判定变化只在此列出，不改 `docs/known_failures.toml`。**
+
+### 7.1 首批暂缓 9 例
+
+| 用例 | 现判 | 机械分层 | 关键 API 在面上？ | 复核结论 |
+|---|---|---|---|---|
+| TestModuleLayerDefine | 面外 | 主力（25 / 47 面内） | 否：`ModuleLayer.defineModulesWithOneLoader`、`Configuration.resolve`、`ModuleFinder.of`、`ModuleDescriptor.Builder` 全在面外；面内的只是 `ModuleLayer.boot`、`Module.getName` 等只读面 | 维持面外 |
+| TestLocaleDateCjk | 面外 | 主力（2 / 7） | 部分：`DateTimeFormatter.ofLocalizedDate` 在面上（1 jar 引用）；`DayOfWeek / Month.getDisplayName`、`LocalDate.format` 不在。失败根因是 CJK 本地化数据，S0 启动不用 CJK locale | 维持面外 |
+| TestVirtualThreadScale | 面外 | 主力（10 / 12） | 是：`Thread.ofVirtual` 在面上（1 jar 引用，Spring 6.1+ 的虚拟线程执行器支持）；`Thread$Builder.start` 在面外 | **变化候选：面外 → S0 相关**。默认配置不开虚拟线程，建议仍暂缓，标「S0 可选特性」，闭包复算后再定 |
+| TestStringGetCharsLegacy | 面外 | 主力（白名单目录 52） | 是：`String.getChars(II[CI)V` 在面上；`System.getSecurityManager` 也在面上 | **变化：面外 → S0 面内**，建议移出暂缓 |
+| TestCharsetAvailable | S1 | 主力（1 / 2，仅 `Map.containsKey`） | 否：`Charset.availableCharsets` 在面外 | 维持 S1（机械主力属规则 3 的误判） |
+| TestHttpLoopbackSync | S1 | 主力（8 / 34） | 否：`com.sun.net.httpserver.*` 全在面外，面内的只是 `URI` / `InetSocketAddress` / 流 | 维持 S1 |
+| TestHttpLoopbackAsync | S1 | 主力（8 / 29） | 否：`HttpServer`、`java.net.http.HttpClient` 全在面外 | 维持 S1 |
+| TestXmlTransform | S1 | 主力（8 / 15） | 部分：只有 `Transformer.setOutputProperty` 在面上（1 jar），`TransformerFactory.newInstance`、`Transformer.transform`、`StreamSource / StreamResult` 不在 | 维持 S1 |
+| TestRowSetProvider | S2 | 暂缓（0 / 10） | 否 | 维持 S2（与机械分层一致） |
+
+### 7.2 保留各例
+
+| 用例 | 机械分层 | 关键 API 在面上？ | 复核结论 |
+|---|---|---|---|
+| TestClassModuleFace | 主力（4 / 7） | 是：`Class.getModule`、`Module.isNamed`、`Module.getName`、`Class.getClassLoader` | 维持保留 |
+| TestProtectionDomainFaces | 主力（8 / 11） | 是：`Class.getProtectionDomain`（4 jar；Boot 用它定位应用 jar）、`ProtectionDomain.getCodeSource`、`Package.getImplementation*` | 维持保留 |
+| TestSetAccessibleBoundary | 主力（4 / 5） | 是：`Field.setAccessible / get / set`、`Class.getDeclaredField`（`trySetAccessible` 在面外） | 维持保留 |
+| TestXmlSaxEvents | 主力（15 / 15） | 是：`SAXParserFactory`、`SAXParser.parse`、`org.xml.sax.Attributes` 全在面上 | 维持保留 |
+| JUnit 10 例（63_junit） | 主力（专属 0–4 个且全在面内） | 无 JDK 专属关键 API，由库驱动 | 维持保留 |
+| TestLocaleCurrency | 主力（7 / 9） | 是：`Currency.getInstance`、`NumberFormat.getCurrencyInstance` 在面上（`getSymbol`、`getDefaultFractionDigits` 在面外） | 维持保留 |
+
+复核差异汇总：TestStringGetCharsLegacy（面外 → S0 面内，建议移出暂缓）；TestVirtualThreadScale（关键 API 在面上，属 S0 可选特性，建议闭包复算后再定）。其余 7 例暂缓与全部保留例维持原判。
