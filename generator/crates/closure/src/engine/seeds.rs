@@ -55,6 +55,10 @@ pub struct SeedState {
     pub services: super::services::ServiceState,
     /// 按名装载的资源束（`[bundles]`）
     pub bundles: super::bundles::BundleState,
+    /// 按名读取的资源调用点（`[resource_lookups]`）
+    pub res_lookups: super::res_lookups::ResLookupState,
+    /// 输出：按名求出、类路径上存在的资源（属性文件资源束 + 按名读取的资源），生成器嵌入模块资源表
+    pub named_resources: BTreeSet<String>,
 }
 
 impl<'a> Engine<'a> {
@@ -83,6 +87,7 @@ impl<'a> Engine<'a> {
         let fed = self.seed_locale(&reached);
         self.seed_jca(&reached);
         self.seed_bundles();
+        self.seed_res_lookups();
         self.seed_image();
         self.seed_static_owner_names();
         let named = self.seed_ctor_lookups();

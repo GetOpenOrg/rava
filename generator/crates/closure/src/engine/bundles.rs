@@ -4,7 +4,7 @@
 //! 当前分析里重求基名实参（与 JCA 请求点同一套键值求值）。名字推不出（如基名经 lambda 捕获实参传入）时，
 //! 回退到调用链上的束形字面量：原生程序里能装载的束，名字只能来自闭包内的代码；回退名只在类路径上真有
 //! 对应的束类 / 属性文件时入选。入选基名按 locale 父链展开：束类按 locale 束的方式补种（反射构造），
-//! 属性文件进 `resources`（生成器嵌入模块资源表，运行时由模块资源查询读入）。集合只增不减（外层不动点）。
+//! 属性文件进 `named_resources`（生成器嵌入模块资源表，运行时由模块资源查询读入）。集合只增不减（外层不动点）。
 
 use super::*;
 use crate::seeds::{bundles, locale};
@@ -25,17 +25,17 @@ pub struct BundleState {
     bases: BTreeSet<String>,
     /// 输出：入选的束类
     pub classes: BTreeSet<String>,
-    /// 输出：入选的属性文件束（资源路径）
-    pub resources: BTreeSet<String>,
+    /// 入选的属性文件束数（资源路径并入 `named_resources`）
+    props: usize,
 }
 
 impl<'a> Engine<'a> {
     /// 一轮资源束补种
     pub(super) fn seed_bundles(&mut self) {
-        if self.man.seeds.bundles.lookups.is_empty() {
+        if self.man.seeds.bundles.lookups.is_empty() && self.man.seeds.resource_lookups.lookups.is_empty() {
             return;
         }
-        self.bundle_scan();
+        self.named_scan();
         if self.seeds.bundles.sites.is_empty() {
             return;
         }
@@ -74,7 +74,7 @@ impl<'a> Engine<'a> {
         }
         let suffixes = self.bundle_suffixes();
         let root = self.man.seeds.bundles.root.clone();
-        let (c0, r0) = (self.seeds.bundles.classes.len(), self.seeds.bundles.resources.len());
+        let (c0, r0) = (self.seeds.bundles.classes.len(), self.seeds.bundles.props);
         let named: Vec<String> = want.iter().filter(|(_, (_, off))| off.is_some()).map(|(b, _)| b.clone()).collect();
         let fallback = want.len() - named.len();
         for (base, (m, off)) in want {
@@ -98,8 +98,9 @@ impl<'a> Engine<'a> {
                 self.seeds.bundles.classes.insert(c);
             }
             for p in props {
-                if !self.seeds.bundles.resources.contains(&p) && self.cp.resource(&p).is_some() {
-                    self.seeds.bundles.resources.insert(p);
+                if !self.seeds.named_resources.contains(&p) && self.cp.resource(&p).is_some() {
+                    self.seeds.named_resources.insert(p);
+                    self.seeds.bundles.props += 1;
                 }
             }
         }
@@ -111,14 +112,14 @@ impl<'a> Engine<'a> {
             named,
             fallback,
             b.classes.len() - c0,
-            b.resources.len() - r0,
+            b.props - r0,
             b.classes.len(),
-            b.resources.len()
+            b.props
         );
     }
 
-    /// 新可达方法：登记按名装载调用点与束形字面量
-    fn bundle_scan(&mut self) {
+    /// 新可达方法：登记按名装载调用点、束形字面量与按名读取的资源调用点（`res_lookups.rs`，按声明处的成员键）
+    fn named_scan(&mut self) {
         for i in 0..self.methods.len() {
             if !self.seeds.bundles.scanned.insert(i) {
                 continue;
@@ -128,11 +129,18 @@ impl<'a> Engine<'a> {
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|m| m.code.as_ref()) else { continue };
             for x in &code.insns {
                 match &x.operand {
-                    Operand::Method(r, _) => {
-                        if let Some(&j) = self.man.seeds.bundles.lookups.get(&format!("{}.{}:{}", r.owner, r.name, r.desc)) {
-                            let k = &self.methods[i].key;
-                            eprintln!("[closure] 资源束调用点：{}.{}{}@{}", k.owner, k.name, k.desc, x.offset);
+                    Operand::Method(r, iface) => {
+                        let k = format!("{}.{}:{}", r.owner, r.name, r.desc);
+                        if let Some(&j) = self.man.seeds.bundles.lookups.get(&k) {
                             self.seeds.bundles.sites.push((i, x.offset, j));
+                        }
+                        if self.man.seeds.resource_lookups.names.contains(r.name.as_str()) {
+                            if let Some(site) = self.h.resolve_method(&r.owner, &r.name, &r.desc, *iface) {
+                                let (o, n, d) = site.key();
+                                if let Some(&l) = self.man.seeds.resource_lookups.lookups.get(&format!("{o}.{n}:{d}")) {
+                                    self.seeds.res_lookups.sites.push((i, x.offset, l));
+                                }
+                            }
                         }
                     }
                     Operand::Ldc(Const::String(s)) if bundles::bundle_shaped(s) => {

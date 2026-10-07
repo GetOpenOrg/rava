@@ -6,12 +6,14 @@ pub mod bundles;
 pub mod jca;
 pub mod jca_order;
 pub mod locale;
+pub mod res_lookups;
 pub mod services;
 
 use annotation::AnnoCfg;
 use bundles::BundleCfg;
 use jca::JcaCfg;
 use locale::LocaleCfg;
+use res_lookups::ResLookupCfg;
 use services::ServicesCfg;
 
 #[derive(Debug, Default)]
@@ -21,6 +23,7 @@ pub struct SeedCfg {
     pub jca: JcaCfg,
     pub services: ServicesCfg,
     pub bundles: BundleCfg,
+    pub resource_lookups: ResLookupCfg,
 }
 
 impl SeedCfg {
@@ -31,6 +34,7 @@ impl SeedCfg {
             jca: JcaCfg::from_toml(t.get("jca")),
             services: ServicesCfg::from_toml(t.get("services")),
             bundles: BundleCfg::from_toml(t.get("bundles")),
+            resource_lookups: ResLookupCfg::from_toml(t.get("resource_lookups")),
         }
     }
 }

@@ -80,6 +80,7 @@ mod field_handles;
 mod mirror_init;
 mod seeds;
 mod bundles;
+mod res_lookups;
 mod services;
 mod memo;
 mod mirror_eq;

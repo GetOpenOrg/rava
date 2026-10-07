@@ -78,7 +78,7 @@ const SETS: &[(&str, bool)] = &[
     ("seeds.annotation_enums", true),
     ("seeds.mirror_inits", true),
     ("seeds.reflect_all", true),
-    ("seeds.bundle_resources", false),
+    ("seeds.named_resources", false),
 ];
 
 struct ClassRec {
@@ -300,7 +300,7 @@ impl Acc {
                 "mirror_inits": set("seeds.mirror_inits"),
                 "reflect_names": self.reflect_names,
                 "reflect_all": set("seeds.reflect_all"),
-                "bundle_resources": set("seeds.bundle_resources"),
+                "named_resources": set("seeds.named_resources"),
                 "services": self.services.iter().map(|(s, ps)| json!({
                     "service": s,
                     "providers": ps.iter().map(|(m, c)| json!({"module": m, "class": c})).collect::<Vec<_>>(),

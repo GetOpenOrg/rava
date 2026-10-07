@@ -405,7 +405,7 @@ impl<'a> BuildInput<'a> {
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
-        let module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.bundle_resources);
+        let module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.named_resources);
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");

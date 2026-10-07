@@ -85,7 +85,7 @@ impl ClosureFacts {
                 reflect_all: p.reflect_all.iter().cloned().chain(s.reflect_all.iter().filter(|c| is_user(c)).cloned()).collect(),
                 module_services,
                 // 资源路径不分属主：两侧取并（嵌入时只取本例类路径上存在的）
-                bundle_resources: p.bundle_resources.union(&s.bundle_resources).cloned().collect(),
+                named_resources: p.named_resources.union(&s.named_resources).cloned().collect(),
             },
             dispatched: by_str(&profile.dispatched, user_refs(&single.dispatched)),
             instantiated: sorted_union(&profile.instantiated, user_strs(&single.instantiated)),
