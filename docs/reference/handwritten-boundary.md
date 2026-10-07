@@ -42,7 +42,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - 动态代理（`Proxy.newProxyInstance` → `Proxy$Dyn`）、BMH 动态物种、序列化构造器访问器；
 - `defineClass` / 隐藏类定义点及其对偶查询。
 
-按方法登记（现为 `vm_intrinsics.toml [[intrinsic]]` 的 `class_definition` / `bytecode_generator` / `stack_frame`、
+按方法登记（现为 `vm_intrinsics.toml [[intrinsic]]` 的 `class_definition` / `class_path` / `bytecode_generator` / `stack_frame`、
 `[indy]`），不按类或包整体截断。
 
 ### 类 3：VM 注入的状态与 VM 驱动的行为

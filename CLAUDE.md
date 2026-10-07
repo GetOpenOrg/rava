@@ -112,9 +112,9 @@ runtime/                            # 提交到 git：手写代码唯一真源
 ├── java_runtime/
 │   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/rava_macros"
 │   ├── build.rs                    # 维护 native_status.toml；反射 / 注解元数据表
-│   ├── closure.toml                # 调用链边界 / VM 边界类 / 放行清单
-│   ├── seeds.toml                  # 补种（注解 / locale / JCA / 模块资源 / 引导初始化）
-│   ├── vm_intrinsics.toml          # VM 承载方法、调用点特判、VM 常量
+│   ├── closure.toml                # VM 边界类（[vm_boundary]，按方法划分）/ 动态对照清单
+│   ├── seeds.toml                  # 补种（注解 / locale / JCA / 服务与资源束查找 / 按名资源）
+│   ├── vm_intrinsics.toml          # VM 承载方法、调用点特判、VM 常量、引导映像求值（[concrete.boot]）
 │   └── src/
 │       ├── lib.rs / error.rs       # VM 基础设施（java/jdk/sun 顶层 mod 声明）
 │       ├── java/lang/
@@ -122,8 +122,7 @@ runtime/                            # 提交到 git：手写代码唯一真源
 │       │   ├── object_impl.rs      # 手写 native impl（co-located）
 │       │   ├── string_ext.rs       # 手写扩展
 │       │   └── ...
-│       ├── java/util/function/     # Arch-1 接口存根（4 个）
-│       └── jdk/internal/...        # 内部边界类（完整手写）
+│       └── jdk/internal/...        # 共置手写（native 与 VM 契约方法，<x>_impl.rs）
 ├── java_support/                   # VM 支持类的 Java 源（Proxy$Dyn、BMH Species_Dyn 等）
 └── rava_macros/                    # proc-macro crate（java_class! 块级宏）
 

@@ -924,7 +924,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - 全量单测，重点为 `closure_independent_of_order`（`open_bounds` 在 InstanceOf / CheckCast 事件登记；`Recv::Bounded` 依赖来源节点当时的值集，须与工作队列次序无关）及反射 / getClass 相关闭包单测；
    - 抽查 getClass 密集的用例：TestTreeMapComparable 类用例、任一 HashMap 树化用例、反射 `getGenericInterfaces` 用例，输出与 JDK 相同；
    - 已实测：HelloWorld `--flows @concrete` 中 `comparableClassFor@21` 的接收者全为 Comparable（s2f-13bafec6）。
-8. TestClassResourceStream（batch-1007 抽查回归）：**根因不在本分支**。`getResource` / `getSystemResource` 的 4 行差异（self-url、fqcn-abs、jdk-res、loader-eq）来自 `class_loader_impl.rs` 中这两个方法在集成分支仍是返回 null 的 `#[jvm_boundary]`。10-07 通过的 url2m-95b2d84e-r2 跑在 `c1d-url-b2` 分支（95b2d84e，`EmbeddedClassPath::findResource` / `findResources`），该分支尚未并入集成线与 batch-1007。待 `c1d-url-b2` 并入后复验，本分支不改。
+8. TestClassResourceStream（batch-1007 抽查回归）：**根因不在本分支**。`getResource` / `getSystemResource` 的 4 行差异（self-url、fqcn-abs、jdk-res、loader-eq）来自 `class_loader_impl.rs` 中这两个方法在集成分支仍是返回 null 的 `#[jvm_boundary]`。10-07 通过的 url2m-95b2d84e-r2 跑在 `c1d-url-b2` 分支（95b2d84e，`EmbeddedClassPath::findResource` / `findResources`），该分支尚未并入集成线与 batch-1007。待 `c1d-url-b2` 并入后复验，本分支不改。（2026-10-08：c1d-url-b2 已合入 batch-1008 04600e21，随合批复验。）
 
 #### 5.6.7 遗留与待决
 
