@@ -149,6 +149,12 @@ build/                              # gitignore：每测试一次性 scratch
 ## 常用命令
 
 ```bash
+# ── 本机：只跑 cargo check 与分布式派发 ──────────────────────────────────────────
+(cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock.py cargo check --release --tests --target-dir ../build/check-target)   # 本机唯一的编译检查
+uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml；dev 关机期间只有云服务器可用，见 docs/reference/cluster-testing.md）
+uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
+
+# ── 仅服务器执行（经 distribute_tests.py --job / --spot 或 remote_rava.py 下发；本机只跑 cargo check）──────
 cargo build --release -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target   # 构建 rava（新鲜时为空操作）
 build/analyzer-target/release/rava build <Test.java>                     # 转译 + 编译 + 运行（scratch = build/<test>）
 build/analyzer-target/release/rava build <Test.java> --stop-after emit   # 只生成
@@ -161,9 +167,6 @@ build/analyzer-target/release/rava build <Test.java> --stop-after emit --trace-c
 build/analyzer-target/release/rava audit api|corpus|native ...          # 编译前缺口审计（报告写 docs/reports/）
 (cd generator && cargo test --release)         # 生成器 / 闭包分析器单元测试
 python3 -m unittest tests.unit.<模块>            # 脚本单元测试（test_dyn_compare / test_baseline_diff）
-uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml；dev 关机期间只有云服务器可用，见 docs/reference/cluster-testing.md）
-uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
-# 本机只跑 cargo check；单测、闭包分析、e2e 一律发分布式（工作流见 docs/reference/cluster-testing.md「工作流与现状」）
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
 scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/
