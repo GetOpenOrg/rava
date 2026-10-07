@@ -1082,6 +1082,10 @@ calls = [
     { init = ["java/lang/invoke/MethodHandle", "java/lang/invoke/ResolvedMethodName", "java/lang/invoke/MemberName", "java/lang/invoke/MethodHandleNatives"] },
     ["java/lang/System.initPhase2:(ZZ)I", 0, 0],
     ["java/lang/System.initPhase3:()V"],
+    # U12（2026-10-08，U1 例外，仅限 (L) 日志链）：构建期确定 System.LoggerFinder 提供者——求值器在此跑完
+    # BootstrapLogger$DetectBackend 与 LoggerFinderLoader.service()（ServiceLoader 查找、提供者构造），提供者实例与
+    # LoggerFinder.service 静态字段进映像，运行期不再走 ServiceLoader；该路径读到的属性取构建期值
+    ["java/lang/System$LoggerFinder.getLoggerFinder:()Ljava/lang/System$LoggerFinder;"],
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [
