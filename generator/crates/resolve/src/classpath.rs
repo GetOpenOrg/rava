@@ -294,10 +294,7 @@ impl ClassPath {
     /// 各档案的 module-info 只解析一次
     pub fn module_of(&self, name: &str) -> Option<String> {
         let &i = self.index.get(name)?;
-        if let Some(m) = self.overlay_modules.get(&i) {
-            return Some(m.clone());
-        }
-        self.ensure_module_names().get(i).cloned().flatten()
+        self.archive_module(i)
     }
 
     /// 档案级模块名（jmod / 模块化 jar 的描述符名；overlay 登记名另查 `overlay_modules`）
@@ -331,23 +328,32 @@ impl ClassPath {
 
     /// JDK 侧资源：只在 JDK / 镜像档案中查（模块资源；用户与库档案的文件属于应用类路径，由
     /// [`ClassPath::class_path_files`] 承载）。`<类名>.class` 取该 JDK 类的解析胜出字节（与类本身同源，
-    /// 镜像改写类优先于 jmod）；其余按档案顺序首个命中
-    pub fn jdk_resource(&self, path: &str) -> Option<Vec<u8>> {
+    /// 镜像改写类优先于 jmod）；其余按档案顺序首个命中。返回 (所属模块, 字节)：模块取命中档案的
+    /// 模块名（jmod 描述符名或 overlay 登记名）；命中档案无模块名时为 None（模块资源必属某个具名模块）
+    pub fn jdk_resource(&self, path: &str) -> Option<(String, Vec<u8>)> {
         if let Some(name) = path.strip_suffix(".class") {
             return match self.origin(name) {
-                Some(Origin::Jdk | Origin::Image) => self.bytes(name),
+                Some(Origin::Jdk | Origin::Image) => Some((self.module_of(name)?, self.bytes(name)?)),
                 _ => None,
             };
         }
-        let mut a = lock(&self.archives);
-        for (i, arch) in a.iter_mut().enumerate() {
-            if matches!(self.origins[i], Origin::Jdk | Origin::Image) {
-                if let Ok(Some(b)) = arch.read_resource(path) {
-                    return Some(b);
-                }
-            }
+        // 先在档案锁内找首个命中，放锁后再取模块名（模块名惰性解析同样要取档案锁）
+        let (i, b) = {
+            let mut a = lock(&self.archives);
+            a.iter_mut()
+                .enumerate()
+                .filter(|(i, _)| matches!(self.origins[*i], Origin::Jdk | Origin::Image))
+                .find_map(|(i, arch)| arch.read_resource(path).ok().flatten().map(|b| (i, b)))?
+        };
+        Some((self.archive_module(i)?, b))
+    }
+
+    /// 档案的模块名：overlay 登记名优先，其次档案描述符名
+    fn archive_module(&self, i: usize) -> Option<String> {
+        if let Some(m) = self.overlay_modules.get(&i) {
+            return Some(m.clone());
         }
-        None
+        self.ensure_module_names().get(i).cloned().flatten()
     }
 
     /// 应用类路径（用户与库档案，加入序）的全部文件：(资源名, 字节)，按名稳定排序——同名按类路径序。

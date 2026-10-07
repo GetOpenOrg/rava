@@ -33,7 +33,7 @@ fn runtime(root: &Path) -> PathBuf {
     put(&rt.join("src/lib.rs"), "pub mod java;\npub mod jdk;\npub mod jdk_resources;\npub mod sun;\n");
     put(&rt.join("src/java/lang/object.rs"), "// 手写\n");
     put(&rt.join("src/java/lang/object_impl.rs"), "// 手写 impl\n");
-    put(&rt.join("src/jdk_resources/mod.rs"), "pub mod module_resources;\n");
+    put(&rt.join("src/jdk_resources/mod.rs"), "pub mod generated_table;\n");
     put(&rt.join("build.rs"), "fn main() {}\n");
     put(
         &rt.join("Cargo.toml"),
@@ -112,12 +112,12 @@ fn mod_tree_declares_disk_contents() {
     w.write(&src.join("java/lang/r#ref/reference.rs"), "x").unwrap();
     w.write(&src.join("java/util/stream/collectors_collector_impl.rs"), "rava_macros::java_class! {}\n").unwrap();
     put(&src.join("java/util/stale.rs"), "rava_macros::java_class! {}\n");
-    w.write(&src.join("jdk_resources/module_resources.rs"), "pub fn lookup() {}\n").unwrap();
+    w.write(&src.join("jdk_resources/generated_table.rs"), "pub fn lookup() {}\n").unwrap();
     put(&src.join("java/lang/gone.rs"), "// 旧手写\n");
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/util/stale.rs").exists(), "本轮未写的生成文件清扫");
     assert!(!src.join("java/lang/gone.rs").exists(), "手写真源已删除的无标记文件清扫");
-    assert!(src.join("jdk_resources/module_resources.rs").exists(), "本轮写出的无标记生成文件保留");
+    assert!(src.join("jdk_resources/generated_table.rs").exists(), "本轮写出的无标记生成文件保留");
     assert_eq!(
         read(&src.join("java/lang/mod.rs")),
         "#![allow(ambiguous_glob_reexports)]\npub mod object;\npub use object::*;\npub mod r#ref;\n\
@@ -127,7 +127,7 @@ fn mod_tree_declares_disk_contents() {
         read(&src.join("java/util/stream/mod.rs")),
         "#![allow(ambiguous_glob_reexports)]\npub mod collectors_collector_impl;\npub use collectors_collector_impl::*;\n"
     );
-    assert_eq!(read(&src.join("jdk_resources/mod.rs")), "pub mod module_resources;\n", "手写模块目录不重建");
+    assert_eq!(read(&src.join("jdk_resources/mod.rs")), "pub mod generated_table;\n", "手写模块目录不重建");
     std::fs::create_dir_all(src.join("javax")).unwrap();
     put(&src.join("javax/mod.rs"), "");
     complete_lib_rs(&src, &rt.join("src"), &mut w).unwrap();

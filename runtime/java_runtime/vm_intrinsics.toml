@@ -268,9 +268,9 @@ holders = [
     "sun/security/action/GetPropertyAction.privilegedGetProperties:()Ljava/util/Properties;",
 ]
 dynamic = [
-    "java.home", "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
+    "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
     "os.name", "os.arch", "os.version", "sun.arch.data.model", "sun.cpu.endian", "sun.io.unicode.encoding",
-    "sun.boot.library.path", "native.encoding", "sun.jnu.encoding", "user.timezone",
+    "native.encoding", "sun.jnu.encoding", "user.timezone",
     "user.language", "user.country",
     # VersionProps.init（翻译的字节码，取值随语料 JDK）
     "java.version", "java.version.date", "java.runtime.version", "java.runtime.name", "java.vendor.version",
@@ -286,6 +286,9 @@ queries = [
 ]
 
 [facts.system_properties.values]
+# U14：java.home 构建期钉值为嵌入虚拟树的根（[concrete.boot] vm_props 同值）
+"java.home" = "/java-runtime"
+"sun.boot.library.path" = "/java-runtime/lib"
 "file.separator" = "/"
 "path.separator" = ":"
 "java.class.path" = ""
@@ -1073,7 +1076,10 @@ module_loader = "java/lang/Module.loader"
 # 与 `rava audit boot`。值：`@deferred` = 宿主相关（运行期取宿主值；构建期读其内容即「延迟值参与求值」，
 # 所在根帧调用 / 区段残差化或所在类转为运行期初始化）；`@null` = null；`@jdk_feature` = 参考 JDK 特性版本号。
 # 用户决策 U1（2026-10-05）：sun.jnu.encoding、stdout/stderr.encoding、file.encoding（JDK 25 为 native.encoding）、
-# line.separator、java.home 不钉值，一律延迟。
+# line.separator 不钉值，一律延迟。U14（2026-10-08）改判 java.home：构建期钉值——原生二进制不依赖 JDK 安装，
+# `${java.home}` 是构建期嵌入的虚拟树（jdk_resources::JAVA_RUNTIME_HOME：lib/modules 为本程序 jimage、
+# conf/security 为参考 JDK 的安全配置，boot-image §5.7），sun.boot.library.path 随之为 `${java.home}/lib`；
+# 与运行期 SystemProps$Raw.vmProperties 的回答一致。
 [concrete.boot]
 calls = [
     ["java/lang/System.initPhase1:()V"],
@@ -1100,8 +1106,8 @@ current_thread = 2
 # 与 JVM 引导期次序一致
 level = "jdk/internal/misc/VM.initLevel"
 vm_props = [
-    ["java.home", "@deferred"],
-    ["sun.boot.library.path", "@deferred"],
+    ["java.home", "/java-runtime"],
+    ["sun.boot.library.path", "/java-runtime/lib"],
     ["java.library.path", ""],
     ["java.class.path", ""],
     ["java.vm.specification.name", "Java Virtual Machine Specification"],

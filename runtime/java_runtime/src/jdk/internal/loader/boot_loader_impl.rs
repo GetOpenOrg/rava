@@ -1,41 +1,10 @@
 use crate::prelude::*;
 use super::boot_loader::BootLoader;
 
-// jdk.internal.loader.BootLoader 伴生：bootstrap 加载器（null 层级顶）的
-// 服务面。运行期全部类由 boot 定义：模块 provider 全部登记在 boot 服务目录
-// （`boot_catalog`，按分析器导出的服务事实装填）。引导层的模块定义与服务登记由 VM / 启动器
-// 在 main 之前完成（handwritten-boundary.md 类 ③ VM 注入状态），目录本身与登记动作走字节码。
+// jdk.internal.loader.BootLoader 伴生：只含 ACC_NATIVE 方法（手写边界 ①）。服务目录（getServicesCatalog）
+// 与资源定位（findResource / findResourceAsStream）走字节码：引导层由 Module.defineModules 按 jimage
+// 系统模块登记服务目录，资源经 SystemModuleReader 读本程序 jimage（boot-image §5.7）。
 impl BootLoader {
-    /// `getServicesCatalog()`：boot 加载器定义的模块的服务目录（JDK：引导期逐模块
-    /// `ServicesCatalog.register` 装填）。运行期全部类由 boot 定义 → 全部模块 provider 在此；
-    /// 进程唯一目录，首次请求时按服务事实装填（addProvider 在有模块 provider 时由
-    /// seeds.toml [services] population 作根，与此处只在服务表非空时调用一致）。
-    #[jvm_boundary]
-    pub fn getServicesCatalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
-        boot_catalog()
-    }
-
-    /// `findResourceAsStream(String mn, String name)`：引导加载器的资源定位（closure.toml [vm_boundary]
-    /// BootLoader：引导类的包 / 资源定位）。HotSpot 下引导层的模块资源经 jimage 运行时镜像读出；原生单二进制
-    /// 的运行时镜像是编译期嵌入的模块资源（jdk_resources::module_resources，由调用链上的资源名推导），
-    /// 全部 JDK 类在同一镜像中，按资源名查找、与模块名无关。消费方：`Module.getResourceAsStream`
-    /// （`BreakIteratorResourceBundle` 读 `sun/text/resources/*BreakIteratorData`）、命名模块的
-    /// `Class.getResourceAsStream`。未命中 → null（JDK 同：资源不存在返回 null）。查找同系统加载器的
-    /// `ClassLoader.getSystemResourceAsStream`（class_loader_impl.rs）；字节流在本文件内构造，供手写体扫描识别分配。
-    #[jvm_boundary]
-    pub fn findResourceAsStream(_mn: String, name: String) -> Result<crate::java::io::InputStream> {
-        if name.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let key = format!("{}", name);
-        let Some(bytes) = crate::jdk_resources::module_resources::lookup(&key) else {
-            return Ok(Default::default());
-        };
-        let arr = JArray::from(bytes.iter().map(|b| *b as i8).collect::<Vec<i8>>());
-        let stream = crate::java::io::ByteArrayInputStream::new_arr_b(arr)?;
-        Ok(<crate::java::io::InputStream as ::std::convert::From<Object>>::from(Object::from(stream)))
-    }
-
     /// native `getSystemPackageNames()`：boot 层已定义包名（Package.getPackages / ClassLoader
     /// .getPackages 的 boot 部分）。单二进制无模块层包登记——空数组（BootLoader.packages()
     /// 的其余部分由 Java 侧按已加载类补齐）。
@@ -67,26 +36,4 @@ impl BootLoader {
     pub fn setBootLoaderUnnamedModule0(_module: crate::java::lang::Module) -> Result<()> {
         Ok(())
     }
-}
-
-/// 引导服务目录：进程内唯一，首次请求时按分析器导出的服务事实装填
-/// （closure.json seeds.services 的模块 provider，经 java_meta 的 MODULE_SERVICES 表读取）。
-/// 装填走字节码翻译的 `create()` + `addProvider(provider 所在模块, 服务, provider)`，
-/// 与 JDK 引导期 `ServicesCatalog.register(Module)` 按模块描述符 provides 登记的结果同构。
-fn boot_catalog() -> Result<crate::jdk::internal::module::ServicesCatalog> {
-    use crate::jdk::internal::module::ServicesCatalog;
-    crate::__process_static! {
-        static BOOT: RefCell<Option<ServicesCatalog>> = const { RefCell::new(None) };
-    }
-    if let Some(c) = BOOT.with(|b| b.borrow().clone()) {
-        return Ok(c);
-    }
-    let catalog = ServicesCatalog::create()?;
-    for (service, provider) in crate::meta::module_services() {
-        let service = crate::java::lang::Class::for_class(String::from(*service));
-        let provider = crate::java::lang::Class::for_class(String::from(*provider));
-        catalog.addProvider(provider.getModule()?, service, provider)?;
-    }
-    BOOT.with(|b| *b.borrow_mut() = Some(catalog.clone()));
-    Ok(catalog)
 }

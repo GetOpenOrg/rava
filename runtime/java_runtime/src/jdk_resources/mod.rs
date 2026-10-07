@@ -15,10 +15,6 @@
 //! （非负），-1 为 invalid——嵌入资源句柄从 -2 起递减分配，与 OS fd
 //! 空间天然无碰撞；光标状态（`&'static [u8]` + 位置）存全局注册表。
 
-/// 模块资源嵌入表（生成物：`emit::project::entry::write_module_resources` 按 seeds.toml [module_resources]
-/// 从所用 JDK 的 jmod 提取；`Class.getResourceAsStream("/java/util/currency.data")` 等）。
-pub mod module_resources;
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Mutex;

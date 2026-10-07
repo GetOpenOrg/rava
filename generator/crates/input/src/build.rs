@@ -117,16 +117,12 @@ pub struct EmitInput {
     pub hw_inherited: Vec<MethodKey>,
     /// lambda 站点的函数式接口（分析器 `sam_types`；档案发射时 JDK 侧取档案）：`I__Lambda` 合成集
     pub sam_types: BTreeSet<String>,
-    /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
-    pub module_services: Vec<(String, String)>,
     /// 构建期引导映像（分析器 `boot_image_data`）：发射层物化映像区与启动序列
     pub boot_image: closure::image::ImageData,
-    /// 模块资源（档案侧：非用户域调用链上方法体推导，并入分析器按名求出的资源；缺失者不列）
-    pub module_resources: Vec<(String, Vec<u8>)>,
-    /// 用户侧模块资源：用户类调用链上方法体指名、档案侧未收的 JDK 模块资源（如
-    /// `ClassLoader.getSystemResourceAsStream("java/lang/String.class")`），按名有序。随用户元数据发射，
-    /// 档案侧与具体程序无关
-    pub user_module_resources: Vec<(String, Vec<u8>)>,
+    /// 模块资源（嵌入本程序 jimage，`NativeImageBuffer.getNativeMap` 映射）：档案侧（非用户域调用链上方法体
+    /// 推导，并入分析器按名求出的资源）与用户侧（用户类调用链上方法体指名的 JDK 模块资源，如
+    /// `ClassLoader.getSystemResourceAsStream("java/lang/String.class")`）取并，按 (资源名, 模块) 有序去重
+    pub module_resources: Vec<crate::resources::ModuleResource>,
     /// 类路径资源（§30.15）：应用类路径的全部文件 (资源名, 字节)，按名有序、同名按类路径序；
     /// 读表入口不在调用链上时为空
     pub class_path_resources: Vec<(String, Vec<u8>)>,
@@ -444,14 +440,12 @@ impl<'a> BuildInput<'a> {
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
-        let module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.named_resources);
         let user_files: Vec<Arc<ClassFile>> = self.user_classes.iter().filter_map(|c| self.cp.get(c)).collect();
         let user_strings = visited_strings(&user_files, &visited, &normalized);
-        let archived: BTreeSet<&str> = module_resources.iter().map(|(p, _)| p.as_str()).collect();
-        let user_module_resources: Vec<(String, Vec<u8>)> = crate::resources::derive(self.cp, &user_strings, &BTreeSet::new())
-            .into_iter()
-            .filter(|(p, _)| !archived.contains(p.as_str()))
-            .collect();
+        let mut module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.named_resources);
+        module_resources.extend(crate::resources::derive(self.cp, &user_strings, &BTreeSet::new()));
+        module_resources.sort_by(|a, b| (&a.name, &a.module).cmp(&(&b.name, &b.module)));
+        module_resources.dedup_by(|a, b| a.name == b.name && a.module == b.module);
         let class_path_resources = if self.class_path_read(&visited) { self.cp.class_path_files() } else { Vec::new() };
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
@@ -471,10 +465,8 @@ impl<'a> BuildInput<'a> {
             instantiated: f.instantiated.iter().cloned().collect(),
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
             sam_types: f.sam_types.iter().cloned().collect(),
-            module_services: f.seeds.module_services.clone(),
             boot_image: f.boot_image.clone(),
             module_resources,
-            user_module_resources,
             class_path_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,

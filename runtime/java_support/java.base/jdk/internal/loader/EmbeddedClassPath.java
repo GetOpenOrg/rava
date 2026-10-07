@@ -3,11 +3,12 @@
  *
  * JVM 上应用类加载器经 URLClassPath 在运行期按类路径读取资源（目录 / jar 内文件）。原生二进制的类
  * 全集在构建期静态链接，类路径（用户编译输出与库归档）的全部文件在构建期按类路径顺序嵌入二进制；
- * 同名资源按类路径序保留多份（对应 getResources 的枚举序）。视图与系统类加载器所见一致：模块资源
- *（JDK 侧编译期嵌入表，含 <类名>.class 形态的 JDK 类文件）在前，类路径在后。本类以 Java 给出资源面：URL 与字节流，
- * 读表的两个 native 由 runtime/java_runtime/src/jdk/internal/loader/embedded_class_path_impl.rs 承载。
+ * 同名资源按类路径序保留多份（对应 getResources 的枚举序）。本类只承载类路径：模块资源在本程序 jimage 里，
+ * 经翻译的 BuiltinClassLoader / SystemModuleReader 读取（docs/plans/2026-10-05-boot-image-evaluator.md §5.7）。
+ * 本类以 Java 给出资源面（URL），读表的两个 native 由
+ * runtime/java_runtime/src/jdk/internal/loader/embedded_class_path_impl.rs 承载。
  * 入口：BuiltinClassLoader.findResourceOnClassPath / findResourcesOnClassPath（vm_intrinsics.toml
- * kind = class_path）与过渡期的 ClassLoader 资源族手写。
+ * kind = class_path）。
  * 方案：docs/plans/2026-10-01-c1d-closure-bloat.md §30.15
  *
  * URL 形如 ravacp:/<encodePath(资源名)>，同名第 i（≥ 1）份带 #i，主机为空串（与 JVM 上类路径 file URL 同形，
@@ -66,12 +67,6 @@ public final class EmbeddedClassPath {
             urls.add(url(name, i));
         }
         return Collections.enumeration(urls);
-    }
-
-    /** 首个同名资源的字节流；未命中 null */
-    static InputStream stream(String name) {
-        byte[] b = bytes(name, 0);
-        return b == null ? null : new ByteArrayInputStream(b);
     }
 
     @SuppressWarnings("deprecation")

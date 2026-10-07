@@ -17,7 +17,7 @@
 //! 按名装载的资源束（`ResourceBundle.getBundle` 的 `.properties` 束，`closure/src/engine/bundles.rs`）与
 //! 按名读取入口上拼接 / 字段得出的资源名（`closure/src/engine/res_lookups.rs`）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use resolve::classpath::ClassPath;
 
@@ -72,9 +72,16 @@ fn ext_suffix(s: &str) -> bool {
     s.len() > 1 && s.starts_with('.') && !s.contains('/') && path_like(s)
 }
 
-/// 由调用链上的字符串常量推导要嵌入的资源，并入闭包分析器按名求出的资源（`named`）：
-/// (资源路径, 字节)，按路径排序
-pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<String>) -> Vec<(String, Vec<u8>)> {
+/// 一份模块资源：所属模块、模块内资源名（jmod `classes/` 下的相对路径）、字节
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleResource {
+    pub module: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// 由调用链上的字符串常量推导要嵌入的资源，并入闭包分析器按名求出的资源（`named`），按资源名排序
+pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<String>) -> Vec<ModuleResource> {
     let mut names: BTreeSet<String> = named.clone();
     names.extend(strings
         .lits
@@ -91,8 +98,10 @@ pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<Str
         }
     }
     // 只查 JDK 档案：用户与库档案的文件属于应用类路径，由类路径资源表承载（计划 c1d §30.15）
-    let found: BTreeMap<String, Vec<u8>> = names.into_iter().filter_map(|p| cp.jdk_resource(&p).map(|b| (p, b))).collect();
-    found.into_iter().collect()
+    names
+        .into_iter()
+        .filter_map(|name| cp.jdk_resource(&name).map(|(module, bytes)| ModuleResource { module, name, bytes }))
+        .collect()
 }
 
 #[cfg(test)]

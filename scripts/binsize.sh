@@ -39,7 +39,7 @@ else
 fi
 
 echo "== metadata sources (bytes)"
-for f in "$ci/meta_tables.rs" "$ci/line_tables.rs" "$ci/closure_tables.rs" "$scratch/user/src/rava_user_meta.rs"; do
+for f in "$ci/meta_tables.rs" "$ci/line_tables.rs" "$scratch/user/src/rava_user_meta.rs"; do
   [[ -f "$f" ]] && printf '%-24s %12d\n' "$(basename "$f")" "$(wc -c < "$f")"
 done
 
@@ -57,15 +57,15 @@ done
 
 echo "== metadata binary bytes"
 meta="$ci/meta_tables.rs"; lines="$ci/line_tables.rs"; user="$scratch/user/src/rava_user_meta.rs"
-stats=$(grep -h '^// \[meta-stats\]' "$meta" "$lines" "$ci/closure_tables.rs" 2>/dev/null || true)
+stats=$(grep -h '^// \[meta-stats\]' "$meta" "$lines" 2>/dev/null || true)
 if [[ -n "$stats" ]]; then
   # 表是字符串池 + 字节流：发射层写出各表字节流 / 池的确切字节数（档案侧三文件 + 用户侧行）
-  for f in "$meta" "$lines" "$ci/closure_tables.rs" "$user"; do
+  for f in "$meta" "$lines" "$user"; do
     [[ -f "$f" ]] || continue
     grep -h '^// \[meta-stats\]' "$f" | awk -v file="$(basename "$f")" '{ printf "  %-22s %-24s %10d\n", file, $3, $4; t += $4 }
       END { printf "  %-22s %-24s %10d\n", file, "(total)", t }'
   done
-  cat "$meta" "$lines" "$ci/closure_tables.rs" "$user" 2>/dev/null | grep -h '^// \[meta-stats\]' \
+  cat "$meta" "$lines" "$user" 2>/dev/null | grep -h '^// \[meta-stats\]' \
     | awk '{ t += $4 } END { printf "meta_bytes %d  (exact: pools + streams)\n", t }'
 else
   echo "(no [meta-stats]: emit first)"

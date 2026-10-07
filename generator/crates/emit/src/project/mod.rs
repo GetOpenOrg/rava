@@ -11,6 +11,7 @@ pub mod decl_segments;
 pub mod decl_side;
 pub mod entry;
 pub mod fs;
+pub mod jimage;
 pub mod layers;
 pub mod line_tables;
 pub mod layout;
@@ -325,8 +326,6 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
-    entry::write_module_resources(ctx, &mut w, &decl_src)?;
-    entry::write_closure_tables(ctx, &mut w, out_dir)?;
     perf.mark("write");
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
@@ -369,7 +368,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
             .chain(body_names.iter().copied())
             .chain(lib_names.iter().copied())
             .collect();
-        let included = [meta_sides::META_TABLES, entry::CLOSURE_TABLES, line_tables::LINE_TABLES_PATH];
+        let included = [meta_sides::META_TABLES, line_tables::LINE_TABLES_PATH];
         archive_side::stamp_versions(&mut w, out_dir, &stamped, &included)?;
     }
     perf.mark("entry");
