@@ -683,9 +683,42 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 **未决**
 
 1. TestBootLayer（第 3 步验收项）：作业 bimg3-bl-fcc54fb8 实跑，前 23 行与 JDK 相同（引导层、java.base / java.sql 模块、Configuration、无名模块均正确），在 `base.getResourceAsStream("java/lang/Object.class")` 返回 null 后 `readNBytes` NPE。原因：`input/src/resources.rs` 的资源推导按设计排除 `.class`（`path_like` 单测断言 `!path_like("p/q/A.class")`），类字节不在嵌入资源中。按 boot-layer 第 5 步（2026-10-02-boot-layer.md §2.3 第 6 条：jimage 嵌入数据 + `getNativeMap`，`.class` 字节同属模块内容）一并解决；是否放开 `.class` 资源推导属该步设计，未自行改动。其后各行（系统类加载器、线程组、属性、标准流）未覆盖到。
-2. 闭包规模（需决策）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。已知来源为 Signal → Shutdown.exit → System.getLogger → LazyLoggers / DetectBackend → ServiceLoader 链（本机 macOS 曾测 524）；删 `boot_singletons` 的影响叠加其上，未拆分。
+2. 闭包规模（需决策，2026-10-07 晚拆分实测，见下「闭包回升拆分」）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。
 3. 二进制体积 / 启动：基线 af1bf145 HelloWorld release 二进制 7,761,904 字节（已无符号，`.text` 4.70 MB、`.rodata` 0.41 MB、`.data.rel.ro` 0.48 MB），整进程墙钟中位数 0.99 ms（30 次）。本分支同口径作业 bimg3-meas2-f442cecf 因 dev 关机维护被停，未得数；uprobes 测 `__boot_image_start` 需未 strip 的产物（缺省 release 已无符号），须另配。测量脚本两作业共用 `/tmp/meas_*.txt` 会串扰，重跑时须按 tag 区分文件名。
 4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
+
+**闭包回升拆分（2026-10-07 晚，Linux JDK 21，`rava closure` HelloWorld，summary.classes；作业 bimg3-why-* / bimg3-cut-95cc94f2 / bimg3-fold-86f4f9be / bimg3-base-*）**
+
+| 提交 / 反事实 | 类 | 方法 |
+|---|---|---|
+| 7f7c4201（§5.5.4 X2，本机 macOS 524） | 576 | — |
+| 1605feb7（第 3 步宿主内容来源根，本机 macOS 530） | 582 | — |
+| 6c344f81（2fe9e265 补 Signal native 之后，`boot_singletons` 仍在） | 3022 | 17956 |
+| e50d4ba3（删 `boot_singletons`） / fcc54fb8 / 95cc94f2 | 3068 / 3055 / 3088 | 18524（95cc94f2） |
+| 95cc94f2 切 `Shutdown.logRuntimeExit` | 3088 | 18524 |
+| 95cc94f2 切 `Signal.dispatch` | 3087 | 18520 |
+| 95cc94f2 恢复 `boot_singletons` | 3045 | 18107 |
+| 95cc94f2 恢复 `boot_singletons` + 切 `logRuntimeExit` | 598 | 2149 |
+| 86f4f9be（映像模块折叠，下述） | 3045 | 18108 |
+| 86f4f9be 切 `logRuntimeExit` | 598 | 2149 |
+| 86f4f9be 切 `logRuntimeExit` + `Signal.dispatch` | 591 | 2117 |
+
+- 两个独立的放大入口，各自单独都能把闭包放大到约 3000 类：
+  - (L) 2fe9e265 补 `Signal.handle0` 等 native 后，映像中 `Terminator.setup` 登记的 INT / TERM / HUP 处理器经 Signal Dispatcher 线程可达：`Thread.start0`（映像根）→ `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `logRuntimeExit` → `System.getLogger("java.lang.Runtime")` → `LazyLoggers` → `LoggerFinder.getLoggerFinder` → `LoggerFinderLoader` → `ServiceLoader`（含 JUL 后端）。约 +2447 类。
+  - (M) e50d4ba3 删 `boot_singletons` 后，`checkCanSetAccessible` 的 `callerModule == declaringModule` 不再折叠，§5.5.4 的 TIOE 链重新打开。只消 (L) 仍为 3088，两者都消为 598。
+- (M) 已按终态修复（86f4f9be）：`Class.getModule` 已回到字节码（`return this.module`，字段钩子 `Class.module`）。抽象解释在已知类镜像值集上读 `class_module` 钩子字段时，按「定义加载器 + 包」查映像 VM 模块表——与运行期钩子查的是同一张表（启动序列登记）。若全部落到同一模块，结果就是该映像对象（`Obj::Image(下标)`）。引用相等按映像对象身份折叠：同下标相等，不同下标不等。镜像接收者上的调用，若唯一目标是接收者钩子字段的平凡取值（字节码形态 `aload_0 / getfield / areturn`），则按该字段读折叠。清单 `[vm_state] boot_singletons` 与 `Obj::BootSingleton` 删除。实测与恢复 `boot_singletons` 的结果相同（3045 / 598）。
+- (L) 是 JDK 21 的真实运行期语义：HotSpot 上 Ctrl-C / SIGTERM 同样经 `Shutdown.exit` → `logRuntimeExit` 初始化 System.Logger 后端。该链取决于运行期日志配置与服务提供者，构建期事实折叠不掉：即使把 `LoggerFinder` 的提供者在构建期定下，JUL 后端仍在链上。不用 `closure.toml` 边界截断，就压不到 540 以内。需用户决策，见下「待决」。
+- Linux 上的基线本身也超过 540：X2（7f7c4201）在 Linux 上为 576 类，本机 macOS 为 524，第 3 步的 ≤ 540 只在 macOS 上测过。86f4f9be 消除 (L) 之后为 598：比 1605feb7 多出的 17 类来自 Module 回到字节码（`Module$ReflectionData`、`WeakPairMap*`、`ModuleDescriptor`、`ServicesCatalog`、`BootLoader`、`HashSet`、`ImmutableCollections$SetN`）和 Signal 派发余项（`Signal$1`、`Thread$State`、`Thread$ThreadIdentifiers`、`IllegalThreadStateException`、`Permission` / `Guard` / `DomainCombiner`），`ModuleLayer` 少 1 类。598 中 `sun/nio/cs` 有 165 类（`Charset.isSupported` 映像残差根 → `StandardCharsets.lookup` 以不定名字反射），`sun/reflect/generics/tree` 有 24 类（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor` 的泛型签名解析）。这两项在 Linux 基线 576 中已经存在。
+
+**待决（闭包，需用户决策）**
+
+- (L) 的处置。可选方向：
+  - ① 接受。凡启用 Java 信号处理器的程序都带 System.Logger / JUL 后端，HelloWorld 约 3045 类。
+  - ② 构建期定下 `LoggerFinder` 的提供者（服务目录在映像中，用户类路径在生产构建期已知）。只能去掉 `ServiceLoader` 一侧，JUL 仍在，预计仍远超 540。
+  - ③ 改变信号语义，例如 INT / TERM / HUP 不交给 Java 处理器。这会偏离 JDK 语义：关停钩子不再执行。
+  
+  三者都不满足「≤ 540 + 不截断 + 语义等价」，需要定取舍。
+- 门槛口径：Linux 上的 X2 基线已是 576。≤ 540 是否改按平台分别给出，或者继续压 `StandardCharsets.lookup` / 泛型签名两项（属 §5.5.3 精度线）。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
