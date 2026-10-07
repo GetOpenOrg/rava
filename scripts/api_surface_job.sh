@@ -63,7 +63,7 @@ run_closure() {
     step "闭包 $tag"
     local t0=$SECONDS
     local timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
-    "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
+    timeout "${API_SURFACE_CLOSURE_TIMEOUT:-2400}" "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
         -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err"
     local rc=$?
     echo "闭包 $tag rc=$rc 耗时 $((SECONDS - t0))s"

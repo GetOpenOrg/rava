@@ -133,9 +133,18 @@ def cmd_face(a):
         jar_count.update(refs)
     onehop = set(jar_count)
     face = chain | onehop
+    loaded = other = None
+    if a.classload and Path(a.classload).exists():
+        loaded, other = jvm_loaded(Path(a.classload))
+    # 闭包全部未产出时的近似：一跳方法的声明类被真 JVM 实载 = 调用链命中（报告须标「闭包待复算」）
+    chain_mode = "closure" if any(v.get("status") == "ok" for v in variants.values()) else "jvm-loaded"
+    if chain_mode == "jvm-loaded" and loaded is not None:
+        hit = {k for k in onehop if split_key(k)[0] in loaded}
+    else:
+        hit = chain
 
     def rank(k):
-        j, c = jar_count.get(k, 0), 1 if k in chain else 0
+        j, c = jar_count.get(k, 0), 1 if k in hit else 0
         return (-(j * c), -j, -c, k)
 
     ordered = sorted(face, key=rank)
@@ -150,28 +159,28 @@ def cmd_face(a):
     for k in face:
         row = by_pkg[pkg_of(split_key(k)[0])]
         row[0] += 1
-        row[1] += k in chain
+        row[1] += k in hit
         row[2] += k in onehop
         row[3] += public(k)
     data = {
         "face": len(face), "chain": len(chain), "onehop": len(onehop), "both": len(chain & onehop),
         "onehop_only": len(onehop - chain), "chain_only": len(chain - onehop),
         "public": sum(1 for k in face if public(k)), "chain_classes": len(chain_classes),
+        "chain_mode": chain_mode, "hit": len(hit), "public_hit": sum(1 for k in hit if public(k)),
         "variants": variants, "per_jar_onehop": per_jar,
         "by_pkg": sorted(([p, *r] for p, r in by_pkg.items()), key=lambda r: -r[1]),
-        "top": [[k, jar_count.get(k, 0), k in chain] for k in ordered[:a.top]],
+        "top": [[k, jar_count.get(k, 0), k in hit] for k in ordered[:a.top]],
         "onehop_jars": {k: jar_count[k] for k in onehop},
         "missing_lib_classes_top": [n for n, _ in missing_all.most_common(60)],
     }
-    if a.classload and Path(a.classload).exists():
-        loaded, other = jvm_loaded(Path(a.classload))
+    if loaded is not None:
         lost = sorted(c for c in loaded - chain_classes if "$$" not in c and "/$Proxy" not in c)
         lost_pkg = Counter(pkg_of(c) for c in lost)
         data["jvm"] = {"loaded_jdk": len(loaded), "loaded_other": len(other),
                        "loaded_jdk_in_closure": len(loaded & chain_classes),
                        "lost_by_pkg": lost_pkg.most_common(40), "lost_sample": lost[:200]}
     Path(a.data).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"[api-surface] 面 {len(face)}（调用链 {len(chain)}，一跳 {len(onehop)}，交 {len(chain & onehop)}）→ {a.out}")
+    print(f"[api-surface] 面 {len(face)}（{chain_mode}，命中 {len(hit)}，调用链 {len(chain)}，一跳 {len(onehop)}，交 {len(chain & onehop)}）→ {a.out}")
 
 
 def compile_test(java: Path, out: Path, javac: str, cp: str) -> bool:
