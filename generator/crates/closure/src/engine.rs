@@ -86,6 +86,7 @@ mod noreturn;
 mod class_lookup;
 mod builder;
 mod name_eval;
+mod name_ops;
 mod sealed;
 mod nest;
 mod method_lookup;
@@ -278,6 +279,8 @@ pub struct Engine<'a> {
     /// 容器抽象对象 id → 类型 id；分配点链（`@方法:偏移#…`，堆上下文）
     pub objs: HashMap<u32, u32>,
     obj_chain: HashMap<u32, Rc<str>>,
+    /// 形参常量克隆上下文 → 其堆上下文（外层上下文，`NOCTX` 即无）：克隆只以调用点区分节点，分配点链与外层相同（`ctxsel.rs`）
+    ctx_heap: HashMap<u32, u32>,
     /// 容器形态判定缓存（类型 id）
     containers: HashMap<u32, bool>,
     /// 抽象分配过的类（类型 id）：其实例字段的缺省值可被观察到，已并入字段值集（见 `alloc_defaults`）
@@ -448,6 +451,8 @@ pub struct Engine<'a> {
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
+    /// 名字求值中合流值拆支的当前嵌套层数（`name_ops.rs`）
+    phi_nest: u8,
     /// 服务实现类的反射构造点（清单 `[jca] instantiation_hosts`，构造时解析）：其中按名取类恒按推不出处理
     lookup_hosts: HashSet<MemberRef>,
     /// JCA 提供者序求值：装载器调用点闸门（`jca_order.rs`）

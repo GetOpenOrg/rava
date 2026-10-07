@@ -235,8 +235,10 @@ impl<'a> Engine<'a> {
         match self.h.select(&rname, site) {
             Some(sel) => {
                 let (o, n, d) = sel.key();
-                let cx = self.recv_ctx(r);
-                let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
+                let key = MemberRef { owner: o, name: n, desc: d };
+                let base = self.recv_ctx(r);
+                let cx = self.recv_call_ctx(m, off, &key, base);
+                let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             None => {
@@ -278,12 +280,17 @@ impl<'a> Engine<'a> {
             }
         }
         rest.classes = IdSet::from_sorted(cls);
+        // 字节码调用点自身在被调方选择子形参上传常量时按调用点克隆（`ctxsel.rs`）
+        let cx = |e: &mut Self, base: u32| if site { e.recv_call_ctx(m, off, &key, base) } else { base };
         for x in objs {
-            let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
+            let base = self.recv_ctx(x);
+            let c = cx(self, base);
+            let t = self.method_ctx(key.clone(), c, via.clone());
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
-            let t = self.method(key, via);
+            let c = cx(self, NOCTX);
+            let t = self.method_ctx(key, c, via);
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(rest)]), a, ret, res);
         }
     }

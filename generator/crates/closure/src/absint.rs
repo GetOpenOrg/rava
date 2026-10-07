@@ -107,6 +107,17 @@ impl V {
         }
     }
 
+    /// 值恰为入口处的引用形参 i（来源只有该形参，可空性未知；≥ 64 不计）：判定形参是否按可空性选择分支
+    pub(crate) fn param_ref(&self) -> Option<u16> {
+        match self {
+            V::Ref { nonnull: false, src, .. } => match &src[..] {
+                [Src::Param(i)] if *i < 64 => Some(*i),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn is_ref(&self) -> bool {
         matches!(self, V::Null | V::Ref { .. } | V::Str(..) | V::Class(..))
     }
@@ -347,7 +358,8 @@ pub struct Analysis {
     pub conservative: bool,
     /// 基本块控制流图（拼接链拆段的循环判定用）
     pub cfg: Rc<cfg::Cfg>,
-    /// 值未知时直接作 switch 键 / 条件跳转操作数的 int 族形参（按形参序号的位掩码，≥ 64 不计）
+    /// 选择子形参（按形参序号的位掩码，≥ 64 不计）：值未知时直接作 switch 键 / 条件跳转操作数的 int 族形参，
+    /// 及可空性未知时直接作 ifnull / ifnonnull 操作数的引用形参（调用点传 null 常量即剪去一支）
     pub selector_params: u64,
 }
 
@@ -1050,6 +1062,11 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let a = pop(s)?;
                 let Operand::Branch(t) = ins.operand else { return Err(()) };
                 let k = a.nonnull().map(|nn| if opc == op::IFNULL { !nn } else { nn });
+                if k.is_none() {
+                    if let Some(i) = a.param_ref() {
+                        self.selects |= 1 << i;
+                    }
+                }
                 return Ok(Flow::Cond(t, k));
             }
             _ => return Err(()),
