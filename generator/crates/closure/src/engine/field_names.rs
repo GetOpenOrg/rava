@@ -50,13 +50,19 @@ impl Engine<'_> {
         // 按本点的类值集 × 名字放开（`lookup_pair.rs`）；返回字段句柄的入口按句柄标记口径，不配对
         let paired = !r.handle && cls_arg.as_ref().is_some_and(|c| self.lookup_wrap_site(m, c, &v, &[], 0, true));
         let (names, known) = self.name_values(m, off, &v, paired);
+        // 返回字段句柄的入口：结果带所指字段的来源标记（句柄存取按字段建模，见 `field_access.rs`）
+        let hdesc = k.split_once(':').map_or("", |x| x.1).to_string();
         for name in &names {
             match cls.as_deref().and_then(|c| self.field_by_name(c, name)) {
                 Some((decl, desc)) => {
                     if self.is_static_field(&decl, name) {
                         self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
                     }
-                    self.open_field(MemberRef { owner: decl, name: name.to_string(), desc })
+                    let f = MemberRef { owner: decl, name: name.to_string(), desc };
+                    if r.handle {
+                        self.mark_named(m, off, &hdesc, Some(f.clone()));
+                    }
+                    self.open_field(f)
                 }
                 None => {
                     // 类不是字面量：按 Class 值集所指类解析静态字段的声明类（初始化），字段按名放开；
@@ -65,14 +71,22 @@ impl Engine<'_> {
                         let (classes, complete) = self.mirror_classes_of(m, off, k, a, false);
                         if !complete {
                             self.static_owner_name_open(name);
+                            if r.handle {
+                                self.mark_named(m, off, &hdesc, None);
+                            }
                         }
                         for c in classes {
-                            if let Some((decl, _)) = self.field_by_name(&c, name) {
+                            if let Some((decl, desc)) = self.field_by_name(&c, name) {
                                 if self.is_static_field(&decl, name) {
                                     self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
                                 }
+                                if r.handle {
+                                    self.mark_named(m, off, &hdesc, Some(MemberRef { owner: decl, name: name.to_string(), desc }));
+                                }
                             }
                         }
+                    } else if r.handle {
+                        self.mark_named(m, off, &hdesc, None);
                     }
                     self.open_field_name(name)
                 }

@@ -396,6 +396,34 @@ static_offset_getters = [
 static_bases = [
     "jdk/internal/misc/Unsafe.staticFieldBase0:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
 ]
+# handle_getters / handle_setters：按字段句柄（接收者）读 / 写对象实参（形参 0）的字段，setter 的写入值为形参 1。
+#   字节码调用点上接收者是字段枚举标记、且口径类 C 推得出时，分析器按调用点建模（engine/field_access.rs）：
+#   读的结果 = 对象实参里 C 的子类型对象在 C（含超类）引用实例字段上的值 ∪ C 及其超类 / 超接口的静态引用字段
+#   ∪ 基本类型字段的装箱值（取被调方返回值中该装箱类的值）；写入值落到同一组字段。对象实参与写入值不再流入
+#   被调方形参——否则它们经 FieldAccessor 接口汇合（45 个访问器实现）与访问器内 getter / setter 的
+#   MethodHandle.invokeExact 手写值池整组逃逸（c1d §30.17 成因 4）。接收者不是枚举标记或口径推不出时照常接边
+handle_getters = [
+    "java/lang/reflect/Field.get:(Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/reflect/Field.getBoolean:(Ljava/lang/Object;)Z",
+    "java/lang/reflect/Field.getByte:(Ljava/lang/Object;)B",
+    "java/lang/reflect/Field.getChar:(Ljava/lang/Object;)C",
+    "java/lang/reflect/Field.getShort:(Ljava/lang/Object;)S",
+    "java/lang/reflect/Field.getInt:(Ljava/lang/Object;)I",
+    "java/lang/reflect/Field.getLong:(Ljava/lang/Object;)J",
+    "java/lang/reflect/Field.getFloat:(Ljava/lang/Object;)F",
+    "java/lang/reflect/Field.getDouble:(Ljava/lang/Object;)D",
+]
+handle_setters = [
+    "java/lang/reflect/Field.set:(Ljava/lang/Object;Ljava/lang/Object;)V",
+    "java/lang/reflect/Field.setBoolean:(Ljava/lang/Object;Z)V",
+    "java/lang/reflect/Field.setByte:(Ljava/lang/Object;B)V",
+    "java/lang/reflect/Field.setChar:(Ljava/lang/Object;C)V",
+    "java/lang/reflect/Field.setShort:(Ljava/lang/Object;S)V",
+    "java/lang/reflect/Field.setInt:(Ljava/lang/Object;I)V",
+    "java/lang/reflect/Field.setLong:(Ljava/lang/Object;J)V",
+    "java/lang/reflect/Field.setFloat:(Ljava/lang/Object;F)V",
+    "java/lang/reflect/Field.setDouble:(Ljava/lang/Object;D)V",
+]
 
 # name_resolvers：按名取字段身份的入口（名字 → 偏移 / setter / VarHandle / 更新器 / 字段句柄）。
 #   class = Class 实参形参序号（"receiver" = 接收者本身），name = 字段名形参序号（均不含接收者），

@@ -106,6 +106,8 @@ pub(super) enum RetModel {
     Caller,
     /// 静态字段基址：本调用点字段句柄实参（形参 0，不含接收者）所指字段声明类的类镜像
     StaticBase,
+    /// 按字段句柄存取（false 读 / true 写）：接收者为口径推得出的字段枚举标记时按调用点建模（`field_access.rs`）
+    HandleAccess(bool),
 }
 
 impl RetModel {

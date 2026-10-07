@@ -316,7 +316,14 @@ impl<'a> Engine<'a> {
             let string = self.id(STRING);
             self.pstr_site(m, off, &cv, |j| pstrs::PSlot::M(t, base + j), |j| ptypes.get(base + j).copied().flatten() == Some(string));
         }
+        // 按字段句柄存取、接收者为来源标记（或由标记给出身份的句柄对象）：按调用点建模，对象实参与写入值
+        // 不流入被调方形参（`field_access.rs`）
+        let fa = self.field_access_recv(t, &recv).filter(|k| !matches!(k, field_access::FaRecv::Bytecode));
         let recv_fs = self.edge_this(t, recv);
+        if let Some(k) = fa {
+            self.field_access_site(m, off, t, k, a, res.filter(|_| ret.is_some()));
+            return;
+        }
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);

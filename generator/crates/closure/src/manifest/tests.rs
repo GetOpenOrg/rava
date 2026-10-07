@@ -193,3 +193,11 @@ fn array_allocators_parse() {
     assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)I\" = 0\n").is_err());
     assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)Ljava/lang/Object;\" = -1\n").is_err());
 }
+
+#[test]
+fn handle_access_parse() {
+    let m = with_vm("[facts.field_writes]\nhandle_getters = [\"a/F.get:(La/O;)La/O;\"]\nhandle_setters = [\"a/F.set:(La/O;La/O;)V\"]\n").unwrap();
+    assert_eq!(m.field_handle_access("a/F.get:(La/O;)La/O;"), Some(false));
+    assert_eq!(m.field_handle_access("a/F.set:(La/O;La/O;)V"), Some(true));
+    assert_eq!(m.field_handle_access("a/F.getInt:(La/O;)I"), None);
+}

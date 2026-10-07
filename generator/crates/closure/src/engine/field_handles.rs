@@ -182,6 +182,30 @@ impl<'a> Engine<'a> {
         self.add_to(Node::S(m, off), &TypeSet::exact(k));
     }
 
+    /// 按名取句柄的调用点 (m, off)（描述符 desc）：所指字段 f（None = 名字或类推不出）的标记并入结果。
+    /// 只作句柄存取的身份（`field_access.rs`）；字段已由名字点名放开，不参与句柄写入口的放开
+    pub(super) fn mark_named(&mut self, m: usize, off: u32, desc: &str, f: Option<MemberRef>) {
+        let Some(ty) = desc.rsplit_once(')').and_then(|(_, r)| r.strip_prefix('L')).and_then(|c| c.strip_suffix(';')) else {
+            return;
+        };
+        let ty = ty.to_string();
+        let name = match &f {
+            Some(f) => format!("{ty}#<name:{f}>"),
+            None => format!("{ty}#<name:?>"),
+        };
+        let k = match self.ids.get(name.as_str()) {
+            Some(&id) => id,
+            None => {
+                let tid = self.id(&ty);
+                let id = self.id(&name);
+                self.objs.insert(id, tid);
+                self.fh_named.insert(id, f);
+                id
+            }
+        };
+        self.add_to(Node::S(m, off), &TypeSet::exact(k));
+    }
+
     /// 字节码调用点 (m, off) 调用句柄写入口（实参 args 含接收者）：句柄类型的实参值集里的标记所指口径放开；
     /// 值集含句柄相关类型的 open、或实参值不可知时按保守口径。值集增长时本站点重跑
     pub(super) fn handle_writer_site(&mut self, m: usize, mref: &MemberRef, opcode: u8, args: &[V]) {

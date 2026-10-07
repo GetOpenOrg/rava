@@ -91,6 +91,11 @@ impl<'a> Engine<'a> {
         self.fwriter_cause.as_deref()
     }
 
+    /// 句柄存取不再按来源标记建模的原因（字段句柄取得入口经非字节码调用点可达，见 `field_access.rs`）
+    pub fn field_access_untrusted(&self) -> Option<&str> {
+        self.fa_untrusted.as_deref()
+    }
+
     pub fn field_handle_released(&self) -> Vec<String> {
         self.fh_released.iter().map(|(s, c)| format!("{}{}", c.as_deref().unwrap_or("*"), if *s { ":serial" } else { "" })).collect()
     }

@@ -81,6 +81,9 @@ impl<'a> Engine<'a> {
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
+        if self.fa_untrusted.is_none() {
+            self.field_source_edge(&key, &via);
+        }
         if !self.static_offset_live && self.man.is_static_offset_getter(&key) {
             self.static_offset_reached();
         }
@@ -140,6 +143,8 @@ impl<'a> Engine<'a> {
             RetModel::Caller
         } else if self.man.returns_static_base(&ks) {
             RetModel::StaticBase
+        } else if let Some(w) = self.man.field_handle_access(&ks) {
+            RetModel::HandleAccess(w)
         } else if let Some(i) = self.man.array_allocator(&ks) {
             RetModel::NewArray(i)
         } else {

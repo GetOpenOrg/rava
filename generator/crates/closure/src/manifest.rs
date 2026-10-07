@@ -150,6 +150,9 @@ pub struct Manifest {
     static_offset_getters: Vec<String>,
     /// `[facts.field_writes] static_bases`：返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址（声明类镜像）
     static_base_returns: HashSet<String>,
+    /// `[facts.field_writes] handle_getters / handle_setters`：按字段句柄（接收者）读 / 写对象实参（形参 0）的字段
+    /// （false = 读，结果为字段值；true = 写，写入值为形参 1）
+    field_handle_access: HashMap<String, bool>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     field_name_resolvers: HashMap<String, NameResolver>,
@@ -465,6 +468,11 @@ impl Manifest {
             instance_field_users: field_writes("instance_field_users").into_iter().collect(),
             static_offset_getters: field_writes("static_offset_getters"),
             static_base_returns: field_writes("static_bases").into_iter().collect(),
+            field_handle_access: field_writes("handle_getters")
+                .into_iter()
+                .map(|m| (m, false))
+                .chain(field_writes("handle_setters").into_iter().map(|m| (m, true)))
+                .collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
@@ -656,6 +664,19 @@ impl Manifest {
     /// 返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址——声明类的类镜像（`[facts.field_writes] static_bases`）
     pub fn returns_static_base(&self, member: &str) -> bool {
         self.static_base_returns.contains(member)
+    }
+
+    /// 按字段句柄（接收者）存取对象实参字段的入口（`[facts.field_writes] handle_getters / handle_setters`）：
+    /// Some(false) = 读（结果为字段值），Some(true) = 写（形参 1 为写入值）
+    pub fn field_handle_access(&self, member: &str) -> Option<bool> {
+        self.field_handle_access.get(member).copied()
+    }
+
+    /// 字段句柄的取得入口（`enumerators` 与 `handle = true` 的 `name_resolvers`）：其字节码调用点给结果带来源标记
+    /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有十余项）
+    pub fn is_field_handle_source(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.field_enumerators.iter().any(|s| member_is(s, key))
+            || self.field_name_resolvers.iter().any(|(s, r)| r.handle && member_is(s, key))
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）

@@ -80,6 +80,7 @@ mod diag;
 mod write_audit;
 mod field_names;
 mod field_handles;
+mod field_access;
 mod mirror_init;
 mod seeds;
 mod services;
@@ -590,6 +591,13 @@ pub struct Engine<'a> {
     fenum_static: BTreeSet<Option<String>>,
     /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
     fh_marks: HashMap<u32, field_handles::EnumScope>,
+    /// 按字段句柄存取的调用点（`field_access.rs`）与其对象实参汇集节点
+    fa_sites: HashMap<(usize, u32), field_access::FaSite>,
+    /// 按名取得的字段句柄来源标记 → 所指字段（None = 名字或类推不出），见 `field_handles.rs` `mark_named`
+    fh_named: HashMap<u32, Option<MemberRef>>,
+    /// 字段句柄取得入口经非字节码调用点可达（句柄不带来源标记）的原因：此后句柄存取一律按字节码接边
+    fa_untrusted: Option<String>,
+    fa_watch: HashMap<Node, (usize, u32)>,
     /// 标记已流到句柄写入口的枚举口径
     fh_released: BTreeSet<field_handles::EnumScope>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠

@@ -204,7 +204,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 类 c 自身声明的静态引用字段节点（静态字段基址 = 声明类的类镜像）
-    fn static_ref_fields(&mut self, c: u32) -> Vec<(usize, u32)> {
+    pub(super) fn static_ref_fields(&mut self, c: u32) -> Vec<(usize, u32)> {
         let Some(cf) = self.h.class(&self.names[c as usize].clone()) else { return vec![] };
         let mut out = Vec::new();
         for f in cf.fields.iter().filter(|f| f.is_static()) {
