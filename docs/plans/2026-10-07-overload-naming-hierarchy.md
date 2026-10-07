@@ -62,8 +62,10 @@
 `RecvPass::interface_member` 的 `taken`）第二个落空，调用点按原名命中另一元数 → E0061 / E0308。
 规则 5 让类视图与接口视图同一口径：**视图内同名异参即后缀**。
 
-「只声明在接口上的成员」在类视图上的名字（`interface_member_local_name`）直接取类视图集合判定，
-与类自有成员、祖先类继承成员同一来源；不再单独沿超类链推断。
+「只声明在接口上的成员」在类视图上的名字（`interface_member_local_name`）先取类视图集合判定，
+与类自有成员、祖先类继承成员同一来源；不在集合内时再沿超类链找同名声明——异参即后缀。后一步覆盖
+「只由合成桥承载的擦除接口成员」（枚举 `compareTo(Object)`）：桥不计入视图参数段，但其接口成员与类自有
+`compareTo(E)` 异参，须取 `compareTo_obj`。
 
 ### 3.4 视图之间的映射
 
@@ -115,16 +117,20 @@ DeepCopy / TestPropertiesXmlRoundTrip / TestSaxLocatorAttributes / TestXmlSaxEve
 - java.xml：`ExtendedContentHandler.endElement(String)` → `endElement_str`，`ExtendedLexicalHandler.comment(String)` →
   `comment_str`，TestXmlTransform 的 E0061 ×2 / E0308 ×1 消失（`ovl-base-1fe9e5ea`：编译通过，进入运行期）。
 
-### 6.2 类视图规则 5（本分支，作业 `ovl-impact3-dff8d8be`，基线 1fe9e5ea）
+### 6.2 类视图规则 5（本分支，作业 `ovl-impact3-dff8d8be-m28`，基线 1fe9e5ea）
 
-- 验收集 + 抽查集 33 例生成树**逐字节一致**（`compare_trees` 全 0），raw-audit 一致：规则 5 只作用于「类不声明、
-  类视图内同名异参」的名字，java.base 档案内无此形态。
-- TestXmlTransform（java_xml crate）单独对照见 `ovl-impact4-dff8d8be`（两树并行生成超出作业内存上限，改顺序重跑）。
+- 验收集 27 例 + 抽查集 7 例（含 TestXmlTransform 的 java_xml crate）共 34 例生成树**逐字节一致**
+  （`compare_trees` 全 0，净改名 0），raw-audit 一致。规则 5 只作用于「类不声明、类视图内同名异参」的名字，
+  当前语料档案内无此形态——它补的是规则空隙（第三方抽象类 / 后续档案扩大时会出现），不改动现有任何名字。
+  （首跑 `ovl-impact3-dff8d8be` 两树并行生成撞 14G 上限，以每槽 28G 重跑。）
 - 中途教训（`ovl-impact2-e7dd4c2e`）：曾把 `interface_member_local_name` 简化为只查类视图集合，丢了「只由合成桥
   承载的擦除接口成员」（枚举 `compareTo(Object)`）的异参判定，全部枚举的桥成员 `compareTo_obj` 被继承成员认领吞掉
   （每例 3.4–5 万行差异）；已恢复超类链异参判定并补单测，对照归零。
 
 ## 七、遗留
+
+- TestXmlTransform：重载命名已修（1b3c26d1 起编译通过），运行期失败于 `SerializerMessages` 资源束未装载
+  （java.xml 模块资源包按名装载线，与 TestXmlSaxEvents / TestRowSetProvider 同根），`known_failures.toml` 条目已改签名。
 
 - 字面量名与后缀名撞名（Java 方法字面量名恰为另一重载的后缀名，如同时有 `put(int)` 与 `put_i()`）：
   规则不处理，语料未见；终态由名字分配阶段在视图内检测并对字面量名追加声明者区分，另立项。
