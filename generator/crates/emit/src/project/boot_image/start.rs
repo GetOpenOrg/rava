@@ -231,6 +231,12 @@ impl Gen<'_, '_, '_> {
     /// 位置写入：静态字段经免触发 setter、实例字段经 wrapper setter、元素经数组视图
     fn store(&mut self, loc: &ILoc, v: &str) -> Result<()> {
         let p = self.p;
+        // 未物化（不活）的对象：写入不可观察
+        if let ILoc::Field(o, ..) | ILoc::Elem(o, _) = loc {
+            if !p.mat.contains(o) {
+                return Ok(());
+            }
+        }
         let s = match loc {
             ILoc::Static(c, n) => {
                 let Some(acc) = static_setter(p, c, n) else { return Ok(()) };
@@ -438,7 +444,7 @@ fn host_rewrite(g: &mut Gen<'_, '_, '_>) -> Result<()> {
             let ty = &p.obj(s).ty;
             let full = p.full_ty(ty);
             g.line(&format!("let h: Object = {src};"));
-            g.line("if !h.is_jvm_null() {");
+            g.line("if !h.0.is_jvm_null() {");
             g.line(&format!("    let (src, dst) = (<{full} as From<Object>>::from(h), <{full} as From<Object>>::from({}));", obj_ref(s)));
             for slot in &p.layouts[ty] {
                 g.line(&format!("    dst.__set_{0}(src.__get_{0}());", slot.rust));
