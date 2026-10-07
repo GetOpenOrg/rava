@@ -4,7 +4,7 @@
 流程：
   1. 只 fetch 源分支（不拉 main）
   2. fast-forward 合并到本地 main
-  3. 推送到 origin/main 和 github/main
+  3. 推送到 origin/main
 
 代理：自动读取 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY 环境变量，
       只作用于 fetch / push 等网络操作。
@@ -23,8 +23,8 @@ from pathlib import Path
 
 from cluster_config import REPO_ROOT as JAVA_RTA_DIR  # noqa: E402
 DEFAULT_BRANCH = "claude/jolly-dijkstra-diftum"
-FETCH_REMOTE   = "github"
-PUSH_REMOTES   = ["origin", "github"]
+FETCH_REMOTE   = "origin"
+PUSH_REMOTES   = ["origin"]
 
 
 def _detect_proxy() -> str | None:

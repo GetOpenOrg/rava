@@ -1,6 +1,9 @@
 # rava 集群测试服务器清单示例：复制到 ~/.config/rava/cluster.toml（或 RAVA_CLUSTER_CONFIG 指定的路径）后按本机填写。
 # 各键含义见 cluster_config.py「服务器列表」注释。
 
+# 服务器检出用的仓库地址（内部仓库；首次初始化时 git clone）
+repo_url = "git@git.example.internal:team/rava.git"
+
 # 可选：直连失败时的降级 SOCKS5 代理；只直连的服务器（direct_only）不用
 # fallback_proxy = { host = "127.0.0.1", port = 10808 }
 

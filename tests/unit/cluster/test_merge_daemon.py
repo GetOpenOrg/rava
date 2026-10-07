@@ -30,7 +30,7 @@ def sh(cwd, *args) -> str:
 class Repo:
     def __init__(self, root: Path):
         self.root = root
-        for name in ("origin.git", "github.git"):
+        for name in ("origin.git",):
             sh(root, "init", "-q", "--bare", "-b", "main", name)
         self.main = root / "main"
         sh(root, "init", "-q", "-b", "main", "main")
@@ -42,7 +42,7 @@ class Repo:
         sh(self.main, "add", ".")
         sh(self.main, "commit", "-qm", "init")
         sh(self.main, "branch", "rust-closure-analyzer")
-        for r in ("origin", "github"):
+        for r in ("origin",):
             sh(self.main, "remote", "add", r, str(root / f"{r}.git"))
             sh(self.main, "push", "-q", r, "main", "rust-closure-analyzer")
         self.integ = root / "integ"
@@ -108,7 +108,7 @@ class DaemonTest(unittest.TestCase):
         self.assertIn("Merge feat（", msg)
         self.assertIn("抽查 e1 1/1", msg)
         self.assertNotIn("Claude", msg)
-        for rem in ("origin", "github"):
+        for rem in ("origin",):
             self.assertEqual(r.remote_head(rem, "rust-closure-analyzer"), head)
             self.assertEqual(r.remote_head(rem, "main"), head)
         self.assertEqual(sh(r.main, "rev-parse", "main"), head)
@@ -155,14 +155,14 @@ class DaemonTest(unittest.TestCase):
         r = self.repo
         sha = r.feature("p", "rust-closure-analyzer", "src.rs", "fn e() {}\n")
         self.enqueue("e5", "p", sha)
-        good = sh(r.main, "remote", "get-url", "github")
-        sh(r.main, "remote", "set-url", "github", str(r.root / "missing.git"))
+        good = sh(r.main, "remote", "get-url", "origin")
+        sh(r.main, "remote", "set-url", "origin", str(r.root / "missing.git"))
         q = self.scan()
         self.assertEqual(q["e5"]["status"], "push_pending")
-        sh(r.main, "remote", "set-url", "github", good)
+        sh(r.main, "remote", "set-url", "origin", good)
         q = self.scan()
         self.assertEqual(q["e5"]["status"], "merged")
-        self.assertEqual(r.remote_head("github", "main"), sh(r.integ, "rev-parse", "HEAD"))
+        self.assertEqual(r.remote_head("origin", "main"), sh(r.integ, "rev-parse", "HEAD"))
 
     def test_dirty_integ_waits(self):
         r = self.repo

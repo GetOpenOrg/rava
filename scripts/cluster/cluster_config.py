@@ -32,7 +32,6 @@ REMOTE_DIR   = "/data/rava"                                   # 服务器项目�
 # 语料参考 JDK 根目录（tools/refjdk.toml 的固定构建落在 <根>/<tag>/；数据目录，不碰系统 JDK）。
 # 服务器可用 refjdk_root 键覆盖（放在 remote_dir 所在盘）；抽查 / 作业的独立检出共用这一份
 REFJDK_ROOT  = "/data/rava-jdk"
-REPO_URL     = "https://github.com/GetOpenOrg/rava"           # 公开仓库
 
 # GraalVM 参照基线（scripts/graalvm_bench.sh）：Oracle GraalVM 落到 <refjdk_root>/<GRAALVM_DIR>，
 # 版本与本机 macOS 基线同版（native-image 21.0.12）；归档地址固定版本，sha256 取 Oracle 同名 .sha256
@@ -62,10 +61,11 @@ LOCAL_E2E_DIR = REPO_ROOT / "tests" / "e2e" if (REPO_ROOT / "tests" / "e2e").exi
 #         未列入任何池的服务器（云服务器：跑着业务）只在 --servers 显式点名时使用
 
 
-def _load_cluster(path: Path) -> tuple[list[dict], dict | None]:
-    """读本机集群配置：返回 (服务器条目列表, 直连失败时的降级 SOCKS5 代理或 None)。文件缺失时清单为空。"""
+def _load_cluster(path: Path) -> tuple[list[dict], dict | None, str | None]:
+    """读本机集群配置：返回 (服务器条目列表, 直连失败时的降级 SOCKS5 代理或 None, 服务器检出用的仓库地址或 None)。
+    文件缺失时清单为空。"""
     if not path.exists():
-        return [], None
+        return [], None, None
     data = tomllib.loads(path.read_text())
     servers = []
     for s in data.get("servers", []):
@@ -73,10 +73,10 @@ def _load_cluster(path: Path) -> tuple[list[dict], dict | None]:
         if "private_key_path" in s:
             s["private_key_path"] = str(Path(s["private_key_path"]).expanduser())
         servers.append(s)
-    return servers, data.get("fallback_proxy")
+    return servers, data.get("fallback_proxy"), data.get("repo_url")
 
 
-SERVERS, FALLBACK_PROXY = _load_cluster(CONFIG_PATH)
+SERVERS, FALLBACK_PROXY, REPO_URL = _load_cluster(CONFIG_PATH)
 
 # ── 连接重试策略（2s → 5s → 稳定 10s，共 30 次） ─────────────────────────────
 

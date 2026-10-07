@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from ssh_client import run_command
 import cluster_config as config
-from cluster_config import SERVERS, REMOTE_DIR, REPO_URL, REFJDK_ROOT, GRAALVM_DIR, GRAALVM_VERSION, GRAALVM_URL, GRAALVM_SHA256
+from cluster_config import SERVERS, CONFIG_PATH, REMOTE_DIR, REPO_URL, REFJDK_ROOT, GRAALVM_DIR, GRAALVM_VERSION, GRAALVM_URL, GRAALVM_SHA256
 from dist_ctx import _shutdown
 from dist_remote import _connect_with_retry, ensure_reference_jdk
 
@@ -267,6 +267,8 @@ def sync_project(client, label: str, remote_dir: str = REMOTE_DIR, on_status=Non
         _notify(label, "git pull", on_status)
         run_command(client, f"cd {remote_dir} && git pull --ff-only", timeout=120)
     else:
+        if not REPO_URL:
+            raise RuntimeError(f"{CONFIG_PATH} 缺少 repo_url，无法在 {label} 上克隆项目")
         _notify(label, "git clone", on_status)
         run_command(client, f"git clone {REPO_URL} {remote_dir}", timeout=300)
 

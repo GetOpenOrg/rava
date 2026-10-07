@@ -16,7 +16,7 @@
   2. 合并（--dry-run 时在独立演练 worktree 里做，不动集成分支、不推送）：集成 worktree 须在
      rust-closure-analyzer 上且无已跟踪改动；git merge -q --no-ff；冲突 → merge --abort，blocked。
   3. 闸门（doc-only 只核对改动文件全在文档内）：失败 → 校验 HEAD 正是本次合并后 reset --hard 回合并前，blocked。
-  4. 推送 origin + github；失败记 push_pending，下轮重推（不回退）。
+  4. 推送 origin；失败记 push_pending，下轮重推（不回退）。
   5. 主仓 git merge -q --ff-only rust-closure-analyzer 并推 main 到两远端；失败记 main_pending，下轮重试。
   6. keep_branch = false 时 git branch -d 删本地分支引用（检出中 / 未合并则保留并记日志）。
 只回退守护自己刚做的那次合并；提交信息不含任何署名行。
@@ -46,7 +46,7 @@ INTEG_WT = WS / "java_rta_closure_wt"
 DRYRUN_WT = WS / "java_rta_dryrun_wt"
 HEAVY_LOCK = WS / "heavy_lock.py"
 INTEG_BRANCH = "rust-closure-analyzer"
-REMOTES = ("origin", "github")
+REMOTES = ("origin",)
 MAX_SPOT_LAUNCHES = 4
 GATE_TIMEOUT = 3 * 3600
 DOC_PATHS = re.compile(r"^(docs/|[^/]+\.md$|.*/[^/]+\.md$)")

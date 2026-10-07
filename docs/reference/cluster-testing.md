@@ -473,7 +473,7 @@ uv run --group cluster python scripts/cluster/env_setup.py --check-only        #
 ## 十一、子代理工作流：自发抽查 / 已知失败 / 合入队列 / 远端 rava
 
 > 2026-10-04 起（提速四项 ① ②）。正式启用（守护去掉 `--dry-run`、推广给各子代理）由协调者复核试运行记录后决定。
-> 所有命令在 java_rta 主检出根目录下执行；java_rta 提交须先推送 origin 与 github（服务器从 github 取）。
+> 所有命令在 java_rta 主检出根目录下执行；java_rta 提交须先推送 origin（服务器从内部仓库取，地址为本机配置 repo_url）。
 
 ### 11.1 失败日志保全
 
@@ -504,7 +504,7 @@ uv run --group cluster python scripts/cluster/known_failures.py <spot_tag> [--te
 不复用别人的 tag（守护发现同 tag 下有其他提交的结果会直接 blocked）：
 
 ```bash
-git -C ~/dev/workspace/java_rta push origin <分支> && git -C ~/dev/workspace/java_rta push github <分支>
+git -C ~/dev/workspace/java_rta push origin <分支>
 uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot c1dt2-1a2b3c4d \
     --ref <40 位 sha> --per-dir 0 --tests StockTrans TestSerialDefaultSuid HelloWorld
 uv run --group cluster python scripts/cluster/known_failures.py c1dt2-1a2b3c4d --tests StockTrans TestSerialDefaultSuid HelloWorld
@@ -539,7 +539,7 @@ uv run --group cluster python scripts/cluster/merge_daemon.py retry <id> [--rese
 每条依次：抽查（未发起 / 进程已退但结果不全 → 发起或续跑，至多 4 次；进行中 → 等下轮）→ 已知失败判定
 （新失败 → `blocked` + 新失败摘要）→ 集成 worktree（`java_rta_closure_wt`，须在 rust-closure-analyzer 上且无已跟踪
 改动，否则保持 `ready` 等下轮）`git merge -q --no-ff`（冲突 → `merge --abort`，`blocked`）→ 闸门（不干净 → 核对
-HEAD 正是本次合并后 `reset --hard` 回合并前，`blocked`）→ 推 origin + github（失败 `push_pending`，下轮重推）→
+HEAD 正是本次合并后 `reset --hard` 回合并前，`blocked`）→ 推 origin（失败 `push_pending`，下轮重推）→
 主仓 `merge --ff-only` 并推 main（失败 `main_pending`）→ `--no-keep-branch` 时 `git branch -d`。
 合并信息：`Merge <分支>（<sha8>）into rust-closure-analyzer：<summary>；抽查 <tag> 8/9（StockTrans 为已知失败）`，
 无署名行。动作日志 `cluster_results/merge_daemon.log`；闸门 / 抽查输出 cluster_results/merge/<id>/`。

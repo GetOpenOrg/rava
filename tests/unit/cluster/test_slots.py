@@ -144,11 +144,12 @@ class LoadClusterTest(unittest.TestCase):
     """本机清单读取：示例文件可解析，端口缺省 22，私钥路径展开 ~；文件缺失时清单为空。"""
 
     def test_example(self):
-        servers, proxy = config._load_cluster(Path(config.__file__).with_name("cluster.example.toml"))
+        servers, proxy, repo_url = config._load_cluster(Path(config.__file__).with_name("cluster.example.toml"))
         self.assertEqual({s["label"]: s.get("pools") for s in servers}, {"job1": ["job"], "test1": ["test"]})
         self.assertTrue(all(s["port"] == 22 and not s["private_key_path"].startswith("~") for s in servers))
         self.assertIsNone(proxy)
+        self.assertEqual(repo_url, "git@git.example.internal:team/rava.git")
 
     def test_missing(self):
-        self.assertEqual(config._load_cluster(Path("/nonexistent/cluster.toml")), ([], None))
+        self.assertEqual(config._load_cluster(Path("/nonexistent/cluster.toml")), ([], None, None))
 
