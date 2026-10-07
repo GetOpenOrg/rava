@@ -31,3 +31,6 @@ docs/reports/jdk-scan-*
 
 # 语料参考 JDK 落位（tools/refjdk.toml，scripts/fetch_reference_jdk.sh）
 /tools/refjdk/
+
+# 集群测试本地结果（scripts/cluster/，各 worktree 共用主检出这一份）
+/cluster_results

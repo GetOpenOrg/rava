@@ -8,7 +8,7 @@
 并单列「通过时的提交早于最新提交」的例数，供判断是否需要 --reset 在最新代码上全量复跑。
 
 输入（二选一）：
-  --results    分布式跑批结果目录（server_maintenance/rava/test_results）：读 state_jdk{N}.json 的
+  --results    分布式跑批结果目录（主检出 cluster_results/）：读 state_jdk{N}.json 的
                passed / failed（每例带运行提交），转译失败取 error_logs/*_jdk{N}.log
   --passed     通过清单，可多个（run_tests.py --record-passed 的 passed_tests_jdk21.txt，或
                distribute_tests 的 master_passed_jdk21.txt）；每行一个用例路径，# 开头为注释
@@ -20,7 +20,7 @@
 输出：Markdown 报告（可直接贴入 §五）；退出码 0 = 满足删除条件，1 = 不满足，2 = 输入错误。
 
 用法：
-    python3 scripts/baseline_diff.py --results ../server_maintenance/rava/test_results
+    python3 scripts/baseline_diff.py --results cluster_results
     python3 scripts/baseline_diff.py --passed build/passed_tests_jdk21.txt --log build/logs/bg/full21.log --commit <sha>
 """
 from __future__ import annotations

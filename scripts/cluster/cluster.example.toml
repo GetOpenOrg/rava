@@ -1,0 +1,28 @@
+# rava 集群测试服务器清单示例：复制到 ~/.config/rava/cluster.toml（或 RAVA_CLUSTER_CONFIG 指定的路径）后按本机填写。
+# 各键含义见 cluster_config.py「服务器列表」注释。
+
+# 可选：直连失败时的降级 SOCKS5 代理；只直连的服务器（direct_only）不用
+# fallback_proxy = { host = "127.0.0.1", port = 10808 }
+
+# 作业服务器（gate 单元测试等）
+[[servers]]
+label = "job1"
+host = "192.0.2.11"
+username = "rava"
+private_key_path = "~/.ssh/id_ed25519"
+remote_dir = "/srv/rava/java_rta"
+refjdk_root = "/srv/rava/rava-jdk"
+skip_setup = true
+direct_only = true
+pools = ["job"]
+
+# 测试服务器（全量 / 抽查），多槽并行
+[[servers]]
+label = "test1"
+host = "192.0.2.17"
+username = "rava"
+private_key_path = "~/.ssh/id_ed25519"
+skip_setup = true
+direct_only = true
+slots = 16
+pools = ["test"]

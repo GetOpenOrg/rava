@@ -1,7 +1,7 @@
 # 已知失败清单（抽查 / 合入守护判定用）
 #
-# 用途：server_maintenance 的 rava/merge_daemon.py 与 rava/known_failures.py 读取本文件，
-# 判定抽查（spot）里的失败是否「已知」。失败用例的本地失败日志（test_results/spot/<tag>/error_logs/
+# 用途：scripts/cluster/merge_daemon.py 与 scripts/cluster/known_failures.py 读取本文件，
+# 判定抽查（spot）里的失败是否「已知」。失败用例的本地失败日志（cluster_results/spot/<tag>/error_logs/
 # <测试>_<服务器>_jdk<N>.log）包含某条同名条目的 signature 子串，才算已知；同名用例签名不符算新失败。
 # OOM / 超时 / 无结果 / infra 失败一律不算已知（日志里不会出现这些签名）。
 #

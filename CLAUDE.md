@@ -162,6 +162,8 @@ build/analyzer-target/release/rava build <Test.java> --stop-after emit --trace-c
 build/analyzer-target/release/rava audit api|corpus|native ...          # 编译前缺口审计（报告写 docs/reports/）
 (cd generator && cargo test --release)         # 生成器 / 闭包分析器单元测试
 python3 -m unittest tests.unit.<模块>            # 脚本单元测试（test_dyn_compare / test_baseline_diff）
+uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml，见 docs/reference/cluster-testing.md）
+uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
 scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/

@@ -5,3 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+# 集群测试分发（scripts/cluster/）：uv run --group cluster python scripts/cluster/<脚本>
+[dependency-groups]
+cluster = [
+    "paramiko>=3.5",
+]

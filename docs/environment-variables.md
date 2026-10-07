@@ -87,7 +87,7 @@ scratch 的 `build_status.json`（超时 / 信号 / 首错行 / 日志路径）�
 启动时的 `[meta]` 行打印语料 JDK（`jdk=<tag>(参考构建)` 或 `jdk=<home>(非参考构建)`）、`CARGO_INCREMENTAL`、
 `CARGO_BUILD_JOBS`、透传选项与三段超时（`timeout=transpile …/build …/run …`），便于事后解读结果。
 
-分布式跑批（server_maintenance `rava/distribute_tests.py`）以 `--run-tests-args "<选项>"` 原样透传上述选项给
+分布式跑批（`scripts/cluster/distribute_tests.py`，见 [cluster-testing](reference/cluster-testing.md)）以 `--run-tests-args "<选项>"` 原样透传上述选项给
 服务器上的 `run_tests.py`，并以 `--task-timeout 秒` 放宽单例总时限（缺省 1800 秒，须不小于三段超时之和，否则
 外层先到期）。C4 全量建议：`--run-tests-args "--transpile-timeout 1800 --run-timeout 900 --build-timeout-scale 2" --task-timeout 9000`。
 
