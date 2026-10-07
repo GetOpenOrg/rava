@@ -460,8 +460,9 @@ impl Engine<'_> {
         if !key.desc.ends_with(';') || tracked || self.spret.untracked.contains(key) {
             return;
         }
-        if via.kind == "lambda" && bytecode {
-            // 判定推迟到实现方法返回属性表对象时（按 lambda 创建点）；已返回过的节点重分析重判
+        if matches!(via.kind, "lambda" | "indy") && bytecode {
+            // SAM 调用点进入（lambda），或静态 / 私有实现在创建点预先入链（indy）：判定推迟到实现方法
+            // 返回属性表对象时（按 lambda 创建点；不是 lambda 实现方法的按不可跟踪）；已返回过的节点重分析重判
             if self.spret.lambda_in.insert(key.clone()) {
                 self.sysprops_lambda_recheck(key);
             }
