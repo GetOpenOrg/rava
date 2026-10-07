@@ -37,7 +37,7 @@ pub struct IObj {
     pub ty: String,
     /// 构建期取过的身份哈希
     pub hash: Option<i32>,
-    /// 类镜像所代表的类（binary name / 数组描述符 / 基本类型名）
+    /// 类镜像所代表的类（binary name / 数组描述符 / 基本类型描述符字符）
     pub mirror: Option<String>,
     /// 宿主相关值（`@deferred`）的字符串内容数组：属性名
     pub deferred: Option<String>,
@@ -390,7 +390,7 @@ mod tests {
             objs: vec![
                 IObj { ty: "a/B".into(), hash: Some(-7), mirror: None, deferred: None, host: None, placeholder: false, body: IBody::Inst(vec![("a/B".into(), "x".into(), IVal::R(1)), ("a/B".into(), "y".into(), IVal::J(-3))]) },
                 IObj { ty: "[B".into(), hash: None, mirror: None, deferred: Some("p.q".into()), host: Some(("a/R.p:()[La/S;".into(), Some(3))), placeholder: false, body: IBody::Arr(vec![IVal::I(1), IVal::N, IVal::F(0x3f80_0000), IVal::D(1), IVal::T(0, b'J')]) },
-                IObj { ty: "a/M".into(), hash: None, mirror: Some("int".into()), deferred: None, host: Some(("a/R.q:()La/S;".into(), None)), placeholder: true, body: IBody::Inst(vec![]) },
+                IObj { ty: "a/M".into(), hash: None, mirror: Some("I".into()), deferred: None, host: Some(("a/R.q:()La/S;".into(), None)), placeholder: true, body: IBody::Inst(vec![]) },
             ],
             statics: vec![("a/B".into(), "s".into(), IVal::R(0))],
             strings: vec![1],

@@ -14,25 +14,12 @@ use super::values::{bits, obj_ref, prim_rust, Link, LinkLoc};
 use super::{Plan, START_FN};
 use crate::error::{EmitError, Result};
 
-/// 基本类型名 → 描述符字母（类镜像名）
-const PRIM_NAMES: [(&str, &str); 9] = [
-    ("boolean", "Z"),
-    ("byte", "B"),
-    ("char", "C"),
-    ("short", "S"),
-    ("int", "I"),
-    ("long", "J"),
-    ("float", "F"),
-    ("double", "D"),
-    ("void", "V"),
-];
-
-/// 类镜像名 → 描述符
+/// 类镜像名（映像 `IObj.mirror`：binary name / 数组描述符 / 基本类型描述符字符）→ 描述符
 fn mirror_desc(name: &str) -> String {
-    if name.starts_with('[') {
+    if name.starts_with('[') || name.len() == 1 {
         return name.to_string();
     }
-    PRIM_NAMES.iter().find(|(n, _)| *n == name).map_or_else(|| format!("L{name};"), |(_, d)| d.to_string())
+    format!("L{name};")
 }
 
 /// 被调成员键 `cls.name:desc`
@@ -508,7 +495,7 @@ mod tests {
 
     #[test]
     fn literals_and_names() {
-        assert_eq!(mirror_desc("int"), "I");
+        assert_eq!(mirror_desc("I"), "I");
         assert_eq!(mirror_desc("[I"), "[I");
         assert_eq!(mirror_desc("a/B"), "La/B;");
         assert_eq!(prim_lit(b'Z', 1), "true");
