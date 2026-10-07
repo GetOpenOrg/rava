@@ -143,8 +143,8 @@ impl SamSpec {
 }
 
 impl SamLedger {
-    /// 预扫描会翻译出方法体的方法（用户类全量 + JDK 类调用链上方法）的 invokedynamic 站点：
-    /// 函数式接口 = 调用点描述符的返回类型。调用链外 JDK 方法发 `panic!("stub: ..")` 存根，
+    /// 预扫描会翻译出方法体的方法（调用链上方法，用户类与 JDK 类同一口径）的 invokedynamic 站点：
+    /// 函数式接口 = 调用点描述符的返回类型。调用链外方法发 `panic!("stub: ..")` 存根，
     /// 其站点不发射，分析器也不据此抬升接口级别（可能停在 L1 不透明形态），不得入账。
     ///
     /// 非用户接口另取分析器的 `sam_types`（档案发射时为档案的并，含各入口用户方法里的站点），
@@ -155,7 +155,7 @@ impl SamLedger {
         for cls in input.user_classes.iter().chain(&input.jdk_classes) {
             let Some(ci) = ctx.ty.reg.get(cls) else { continue };
             let user = ctx.is_user(cls);
-            for m in ci.methods().iter().filter(|m| user || ctx.in_chain(cls, &m.name, &m.desc)) {
+            for m in ci.methods().iter().filter(|m| ctx.in_chain(cls, &m.name, &m.desc)) {
                 let Some(code) = input.code_ops(cls, m) else { continue };
                 for insn in code.ops() {
                     let Operand::InvokeDynamic { desc, .. } = &insn.operand else { continue };

@@ -159,7 +159,30 @@ impl EmitInput {
     pub fn normalized(&self) -> &BTreeMap<MethodKey, NormCode> {
         &self.normalized
     }
+
+    /// 调用链成员判定：方法键在 [`EmitInput::visited`] 中（闭包分析器的已解析方法 ∪ 调用点符号键 ∪
+    /// 类初始化）。用户类与非用户类同一口径——不在链上的方法一律发 `panic!("stub: …")` 存根
+    pub fn in_chain(&self, cls: &str, name: &str, desc: &str) -> bool {
+        self.visited.contains(&(cls.to_string(), name.to_string(), desc.to_string()))
+    }
+
+    /// 类在分析器的类初始化集合中（`visited` 含 `(类, <clinit>, ()V)`；类未声明 `<clinit>` 时同样登记，
+    /// 如只经 getstatic / putstatic 默认值静态字段而触发初始化的类）
+    pub fn initialized(&self, cls: &str) -> bool {
+        self.in_chain(cls, CLINIT_NAME, CLINIT_DESC)
+    }
+
+    /// 类型存根（仅类型身份：不发 `__clinit`、静态字段发 panic 存根访问器）：没有任何声明方法在调用链上，
+    /// 且类不在初始化集合中。用户类与非用户类同一口径
+    pub fn type_only(&self, ci: &ClassInfo) -> bool {
+        let n = ci.name();
+        !self.initialized(n) && !ci.methods().iter().any(|m| self.in_chain(n, &m.name, &m.desc))
+    }
 }
+
+/// 类初始化方法名与描述符（[`EmitInput::initialized`] 的键）
+const CLINIT_NAME: &str = "<clinit>";
+const CLINIT_DESC: &str = "()V";
 
 /// 闭包类的装载口径：lib / JDK / 镜像档案（用户档案只经本编译单元进入）
 fn load(cp: &ClassPath, name: &str) -> Option<Arc<ClassFile>> {
@@ -224,7 +247,7 @@ fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
     let clinits: Vec<MethodKey> = f
         .clinit
         .iter()
-        .map(|c| (c.clone(), "<clinit>".to_string(), "()V".to_string()))
+        .map(|c| (c.clone(), CLINIT_NAME.to_string(), CLINIT_DESC.to_string()))
         .filter(|k| !boundary.contains(k.0.as_str()) || visited.contains(k))
         .collect();
     visited.extend(clinits);

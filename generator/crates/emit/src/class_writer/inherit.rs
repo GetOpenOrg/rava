@@ -47,19 +47,6 @@ pub(super) fn adapt_interface_method(
     Ok((adapted, Some(view)))
 }
 
-/// 类是否按全量翻译（用户类；Python `call_chain is None`）
-pub(super) fn chain_all(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> bool {
-    ctx.is_user(ci.name())
-}
-
-/// 接口方法展开到实现类时，字节码出处接口 `owner` 的方法体是否免调用链门控全量翻译：
-/// 全量翻译只覆盖用户字节码（实现类与出处接口都是用户类）。JDK 接口的 default / 私有方法
-/// 展开到用户类时仍是 JDK 字节码，按调用链判定——不在链上即存根：分析器不分析链外方法的
-/// 内部依赖（引用类、lambda 函数式接口），翻译其体会引用闭包外的类与未合成的 `I__Lambda`
-fn iface_body_all(ctx: &EmitCtx<'_>, ci: &ClassInfo, owner: &ClassInfo) -> bool {
-    chain_all(ctx, ci) && ctx.is_user(owner.name())
-}
-
 fn method_index(ci: &ClassInfo, m: &Method) -> usize {
     ci.methods().iter().position(|x| std::ptr::eq(x, m)).unwrap_or(0)
 }
@@ -187,7 +174,8 @@ pub(super) fn interface_default_inheritance<'c>(
         // default 的结果须经祖先 vtable 派发）；否则本类新开槽位
         let mut extra = slot_extra(cx, &e.method, &rust);
         extra.declared_by = ici.name().to_string();
-        let in_cc = iface_body_all(ctx, ci, ici) || ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
+        // 用户类与非用户类同一口径：不在链上即存根（分析器不分析链外方法的内部依赖）
+        let in_cc = ctx.in_chain(ci.name(), &dm.name, &dm.desc) || ctx.in_chain(ici.name(), &dm.name, &dm.desc);
         let mut text = None;
         if in_cc {
             let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: true, view: view.as_ref(), site: "iface-inherit" };
@@ -257,10 +245,9 @@ pub(super) fn interface_special_members<'c>(
     if ci.is_interface() {
         return Ok(());
     }
-    let all = chain_all(ctx, ci);
     let mut sources: VecDeque<(&ClassInfo, Cow<'_, Method>)> = visible
         .iter()
-        .filter(|(_, m)| all || ctx.in_chain(ci.name(), &m.name, &m.desc))
+        .filter(|(_, m)| ctx.in_chain(ci.name(), &m.name, &m.desc))
         .map(|(o, m)| (*o, Cow::Borrowed(*m)))
         .collect();
     sources.extend(translated.into_iter().map(|(o, m)| (o, Cow::Borrowed(m))));
@@ -284,7 +271,7 @@ pub(super) fn interface_special_members<'c>(
             let e = Emitted { method: Cow::Owned(adapted), owner, index: idx };
             let extra = MethodAttrExtra::default();
             let mut text = None;
-            if iface_body_all(ctx, ci, owner) || ctx.in_chain(owner.name(), &name, &desc) {
+            if ctx.in_chain(owner.name(), &name, &desc) {
                 let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&rust), in_vtable_body: false, view: view.as_ref(), site: "iface-special" };
                 text = cx.body_with(state, bodies, &e, &spec)?;
                 if text.is_some() {
