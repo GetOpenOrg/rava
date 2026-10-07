@@ -417,3 +417,36 @@ fn user_class_inherited_jdk_default_gated_by_chain() {
     assert!(body.iter().any(|l| l.contains("Comparator__Lambda::new(")), "体内 lambda 经合成对象：{body:#?}");
     std::fs::remove_dir_all(&out).ok();
 }
+
+/// 用户类与 JDK 类同一可达性判据：调用链外的用户方法（静态 / 实例 / 接口 default 展开）发 `stub:` 存根，
+/// 链上的（main、lambda 实现、虚派发目标、接口 default）照常翻译；只经静态字段触发初始化的用户类不是类型存根
+#[test]
+fn user_unreachable_methods_stubbed() {
+    let Some((_, out)) = build("UserUnreached.java", "user-unreached", &[]) else { return };
+    let read = |f: &str| std::fs::read_to_string(out.join("user/src").join(f)).unwrap();
+    let fn_body = |rs: &str, head: &str| -> String {
+        rs.lines()
+            .skip_while(|l| !l.contains(head))
+            .take_while(|l| !l.trim_start().starts_with("#[java_method"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let main = read("user_unreached.rs");
+    assert!(main.contains("__stub(\"stub: UserUnreached.unusedStatic:()Ljava/lang/String;\")"), "链外静态方法存根：{main}");
+    assert!(!main.contains("ArrayDeque"), "链外方法体不翻译：{main}");
+    assert!(!fn_body(&main, "pub fn main(").contains("__stub("), "main 照常翻译：{main}");
+    assert!(!main.contains("stub: UserUnreached.lambda$main$0"), "lambda 实现方法在链上：{main}");
+    let hello = read("user_unreached_hello.rs");
+    assert!(hello.contains("__stub(\"stub: UserUnreached$Hello.unusedInstance:()Ljava/lang/String;\")"), "链外实例方法存根：{hello}");
+    assert!(!fn_body(&hello, "pub fn greet(").contains("__stub("), "虚派发目标照常翻译：{hello}");
+    assert!(!fn_body(&hello, "pub fn loud(").contains("__stub("), "链上 default 展开照常翻译：{hello}");
+    assert!(fn_body(&hello, "pub fn quiet(").contains("__stub(\"stub: UserUnreached$Hello.quiet:"), "链外 default 展开为存根：{hello}");
+    let greeter = read("user_unreached_greeter.rs");
+    let quiet = greeter.lines().find(|l| l.contains("pub fn quiet(")).expect("quiet 声明");
+    assert!(quiet.trim_end().ends_with(';'), "链外 default 在接口载体只发声明：{quiet}");
+    let counter = read("user_unreached_counter.rs");
+    assert!(!counter.contains("stub-set:") && !counter.contains("stub: UserUnreached$Counter.count:I"), "经静态字段初始化的类不是类型存根：{counter}");
+    assert!(counter.contains("pub static count: i32;"), "静态字段有存储：{counter}");
+    assert!(counter.contains("__stub(\"stub: UserUnreached$Counter.<init>:()V\")"), "未实例化类的构造器在链外：{counter}");
+    std::fs::remove_dir_all(&out).ok();
+}
