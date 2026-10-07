@@ -148,6 +148,10 @@ impl<'a> Engine<'a> {
                     fnames.extend(self.site_strs(m, a));
                 }
             }
+            // 形状规则把 Class 字面量实参当作字段所属类：所属类上查不到该名时按名兜底放开。唯一目标按字节码
+            // 建模时不兜底——该字面量不是所属类（如 `getFieldOffset(name, Object.class)` 的字段类型实参），
+            // 被调体内真正按名取字段的点由其自身的站点规则处理（形参名字取各调用点常量 / 字段配对）
+            let analyzed = !classes.is_empty() && self.analyzed_exact(opcode, mref);
             for name in &fnames {
                 let mut hit = false;
                 for c in &classes {
@@ -156,7 +160,7 @@ impl<'a> Engine<'a> {
                         hit = true;
                     }
                 }
-                if !hit {
+                if !hit && !analyzed {
                     self.open_field_name(name);
                 }
             }
@@ -212,5 +216,12 @@ impl<'a> Engine<'a> {
         if self.man.is_deserializer(&k) && !self.ctx.deser.replace(true) {
             self.open_fields_all(self.ctx.fopen_all.get(), false);
         }
+    }
+
+    /// 调用的唯一目标按字节码建模（非 native / 手写承载 / 抽象）：其体内的按名取字段点由分析器直接看到
+    fn analyzed_exact(&self, opcode: u8, mref: &MemberRef) -> bool {
+        let iface = self.h.class(&mref.owner).is_some_and(|c| c.is_interface());
+        let Some((cf, t)) = self.ctx.exact_target(opcode, mref, iface) else { return false };
+        cf.methods.iter().find(|x| x.name == t.name && x.desc == t.desc).is_some_and(|rm| self.kind_of(&cf, rm) == Kind::Bytecode)
     }
 }
