@@ -707,18 +707,82 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - (L) 2fe9e265 补 `Signal.handle0` 等 native 后，映像中 `Terminator.setup` 登记的 INT / TERM / HUP 处理器经 Signal Dispatcher 线程可达：`Thread.start0`（映像根）→ `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `logRuntimeExit` → `System.getLogger("java.lang.Runtime")` → `LazyLoggers` → `LoggerFinder.getLoggerFinder` → `LoggerFinderLoader` → `ServiceLoader`（含 JUL 后端）。约 +2447 类。
   - (M) e50d4ba3 删 `boot_singletons` 后，`checkCanSetAccessible` 的 `callerModule == declaringModule` 不再折叠，§5.5.4 的 TIOE 链重新打开。只消 (L) 仍为 3088，两者都消为 598。
 - (M) 已按终态修复（86f4f9be）：`Class.getModule` 已回到字节码（`return this.module`，字段钩子 `Class.module`）。抽象解释在已知类镜像值集上读 `class_module` 钩子字段时，按「定义加载器 + 包」查映像 VM 模块表——与运行期钩子查的是同一张表（启动序列登记）。若全部落到同一模块，结果就是该映像对象（`Obj::Image(下标)`）。引用相等按映像对象身份折叠：同下标相等，不同下标不等。镜像接收者上的调用，若唯一目标是接收者钩子字段的平凡取值（字节码形态 `aload_0 / getfield / areturn`），则按该字段读折叠。清单 `[vm_state] boot_singletons` 与 `Obj::BootSingleton` 删除。实测与恢复 `boot_singletons` 的结果相同（3045 / 598）。
-- (L) 是 JDK 21 的真实运行期语义：HotSpot 上 Ctrl-C / SIGTERM 同样经 `Shutdown.exit` → `logRuntimeExit` 初始化 System.Logger 后端。该链取决于运行期日志配置与服务提供者，构建期事实折叠不掉：即使把 `LoggerFinder` 的提供者在构建期定下，JUL 后端仍在链上。不用 `closure.toml` 边界截断，就压不到 540 以内。需用户决策，见下「待决」。
+- (L) 是 JDK 21 的真实运行期语义：HotSpot 上 Ctrl-C / SIGTERM 同样经 `Shutdown.exit` → `logRuntimeExit` 初始化 System.Logger 后端。该链取决于运行期日志配置与服务提供者。不用 `closure.toml` 边界截断，就压不到 540 以内；用户已决策，见下「决定」。（更正：原先此处写「即使把 `LoggerFinder` 的提供者在构建期定下，JUL 后端仍在链上」。本机 JVM 探针（JDK 21，`-Xshare:off -Xlog:class+load`，`System.exit` 路径）显示 `LogManager` 在该路径上并不初始化，JUL 后端不在 HelloWorld 的运行期装载集里，见下「决定后的实测」。）
 - Linux 上的基线本身也超过 540：X2（7f7c4201）在 Linux 上为 576 类，本机 macOS 为 524，第 3 步的 ≤ 540 只在 macOS 上测过。86f4f9be 消除 (L) 之后为 598：比 1605feb7 多出的 17 类来自 Module 回到字节码（`Module$ReflectionData`、`WeakPairMap*`、`ModuleDescriptor`、`ServicesCatalog`、`BootLoader`、`HashSet`、`ImmutableCollections$SetN`）和 Signal 派发余项（`Signal$1`、`Thread$State`、`Thread$ThreadIdentifiers`、`IllegalThreadStateException`、`Permission` / `Guard` / `DomainCombiner`），`ModuleLayer` 少 1 类。598 中 `sun/nio/cs` 有 165 类（`Charset.isSupported` 映像残差根 → `StandardCharsets.lookup` 以不定名字反射），`sun/reflect/generics/tree` 有 24 类（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor` 的泛型签名解析）。这两项在 Linux 基线 576 中已经存在。
 
-**待决（闭包，需用户决策）**
+**决定（用户 2026-10-07，取推荐项）**
 
-- (L) 的处置。可选方向：
-  - ① 接受。凡启用 Java 信号处理器的程序都带 System.Logger / JUL 后端，HelloWorld 约 3045 类。
-  - ② 构建期定下 `LoggerFinder` 的提供者（服务目录在映像中，用户类路径在生产构建期已知）。只能去掉 `ServiceLoader` 一侧，JUL 仍在，预计仍远超 540。
-  - ③ 改变信号语义，例如 INT / TERM / HUP 不交给 Java 处理器。这会偏离 JDK 语义：关停钩子不再执行。
-  
-  三者都不满足「≤ 540 + 不截断 + 语义等价」，需要定取舍。
-- 门槛口径：Linux 上的 X2 基线已是 576。≤ 540 是否改按平台分别给出，或者继续压 `StandardCharsets.lookup` / 泛型签名两项（属 §5.5.3 精度线）。
+1. 信号处理链 (L)：接受，行为与 JDK 一致，信号行为不做任何改动。
+   - 在构建期确定 `LoggerFinder` 的提供者：生产构建时类路径资源全量打包，提供者集合在构建期可知，用它去掉 `ServiceLoader` 一段。JUL 后端保留。
+   - 决定依据（主会话按 S0 Spring Boot API 面 `tests/api_surface/s0.txt` 核对）：
+     - JUL 44 个方法在 S0 面内（`LogManager.getLogManager`、`Logger.getLogger`、`isLoggable` 等）；
+     - System.Logger 3 个方法和 `System.getLogger` 1 个在面内；
+     - `ServiceLoader` 2 个、`Runtime.addShutdownHook` 1 个在面内。
+     - Spring Boot 会注册 shutdown hook，容器内 SIGTERM 优雅停机依赖 JDK 信号处理器触发这个 hook。
+   - 结论：信号链 + JUL + ServiceLoader 属 S0 必需路径，不能暂缓；构建期定 `LoggerFinder` 提供者照做，对所有程序收窄 `ServiceLoader` 一段。
+2. HelloWorld 闭包上限按平台分别定：以无截断实测为准，Linux 与 macOS 各给一个明确的量化目标（见下「按平台上限」）。§5.5.3 的两项精度改进（`StandardCharsets.lookup`、泛型签名）作为后续收窄项另列（见下「后续收窄排期」）。
+
+**决定后的实测（Linux JDK 21，HelloWorld，ref 787035b3；作业 bimg3-lf3 / bimg3-lf4 / bimg3-prec-787035b3，sg1）**
+
+用诊断切口（`--cut`，整方法或 `方法@偏移`）把 (L) 链拆成三段，分别量各段的贡献。切口只是近似：切掉 `service()` 等于把它的返回值置空，属于下近似。
+
+| 切口 | 类 | 方法 |
+|---|---|---|
+| 基线 A（无切口） | 3045 | 18108 |
+| E：整个 `Shutdown.logRuntimeExit`（(L) 全切） | 598 | 2149 |
+| ①：`DetectBackend.<clinit>` + `LoggerFinderLoader.service`（ServiceLoader 一段） | 2999 | 17744 |
+| ① + ②：再切 `System$LoggerFinder.accessProvider` @8 / @26（静态字段为空的分支） | 2998 | 17741 |
+| ③：`logRuntimeExit@74`（DEBUG 级 `log` 调用） | 3045 | 18107 |
+| ① + ③ | 2999 | 17743 |
+| ① + ② + ③ | **628** | 2255 |
+
+- 三段互相独立，各自单独都能保住约 3000 类，只有三段同时去掉才落到 628：
+  - ① ServiceLoader 一段：`ServiceLoader` → 类路径 `findClass` → `URLClassPath` / jar → `SecureRandom` → JCA；`BootLoader.findResources` → jrt `Handler` → jimage；
+  - ② `accessProvider` / `LoggerFinderLoader.service()` 的「静态字段为空」分支：`doPrivileged(PA, ACC, Permission[])` → `FilePermCompat` → `SecurityProperties` → regex → ICU；
+  - ③ `logRuntimeExit` 的 DEBUG 级日志：`log` → `SimpleConsoleLogger.getCallerInfo` → `CallerFinder.<clinit>` → `StackWalker` → `StackFrameInfo` → `MethodHandleImpl`（invoke 一大块）。
+- 628 比 E（598）多 30 类，就是 HotSpot 上该路径真实装载的 System.Logger 前端：`jdk/internal/logger` 17 类、`sun/util/logging` 5 类、`System$Logger` / `Level` / `LoggerFinder`、`TemporaryLoggerFinder`、`SimpleConsoleLogger`、`SurrogateLogger`、`RuntimePermission` / `BasicPermission`、`BooleanSupplier`、`Class$EnclosingMethodInfo`、`PreviewFeatures` 等。
+- JVM 真值（本机 JDK 21，`-Xshare:off -Xlog:class+load`，main 之后 `System.exit`）：
+  - main 之后约装载 236 类，其中日志相关类与 ①+②+③ 的 30 类一致；
+  - 另装载 `ServiceLoader`（两种迭代器）、stream、jimage（12 类）、`sun.nio.fs`、`NativeLibraries`、lambda / invoke；
+  - **不装载** `LogManager`（JUL 后端）、`StackWalker`、regex、JCA。
+  - 结论：628 与 JDK 的运行期行为对齐；3045 中的大头（JCA、regex、StackWalker）是分析精度造成的，并非真实语义。
+
+**终态设计：三个机制，缺一不可（只做构建期提供者确定是 −46 类）**
+
+1. 构建期确定 `LoggerFinder` 提供者（本决定，对应 ①）。
+   - 引导求值器在 `[concrete.boot] calls` 的 `initPhase3` 之后追加一次 `LoggerFinder` 查找（清单项，不写进生成器）。由求值器在构建期跑完 `LoggerFinderLoader.service()`，结果（提供者实例与 `service` 静态字段）进入映像，运行期不再走 `ServiceLoader`。
+   - 前置条件：
+     - 求值器能读 jimage 与模块资源（第 5 步 T3）；
+     - 类路径资源在构建期全量打包，求值器可以枚举（U3：生产构建打包资源，取代延迟的 `toFileURL` 占位）。否则求值器在 `ServiceLoader` 上失败，构建报错。
+   - 语义：该路径上读到的属性取构建期值；用户提供者的构造函数在构建期运行。与 U1（属性运行期取宿主值）的划界在实施时登记为 U1 的例外项，例外项仅限提供者选择。
+2. 通用静态字段非空折叠（对应 ②，分析器通用机制，无类名）。
+   - 条件：静态字段的映像值非空，且档案内所有可达的 `putstatic` 写入值都非空。
+   - 动作：`getstatic` 后的 `ifnull` / `ifnonnull` 按「非空」折叠，空分支不可达。
+   - 这条只依赖 JDK 侧事实（映像值 + 档案内写点集合），符合「折叠只对用户无法扩展的事实做」。
+3. 日志级别折叠（对应 ③）。
+   - `jdk.system.logger.level` 缺省为 INFO，经 `SurrogateLogger` / `SimpleConsoleLogger` 的级别字段决定 `isLoggable(DEBUG)`。
+   - 级别值进映像（构建期初始化），`isLoggable` 的结果按映像值折叠，`logRuntimeExit@15 ifeq` 只剩不记日志的分支。
+   - 若用户在运行期用 `-Djdk.system.logger.level=DEBUG` 打开，行为与 JDK 不同。这与机制 1 一样属于「该路径属性取构建期值」，一并登记。
+
+**按平台上限（HelloWorld，JDK 21，无 `closure.toml` 边界截断）**
+
+| 平台 | 上限 | 依据 |
+|---|---|---|
+| Linux | **≤ 640** | 实测 628（①+②+③ 切口）+ 映像中提供者实现约 5 类，留少量余量 |
+| macOS | **≤ 590** | Linux 上限减平台差约 52（X2：576 / 524，1605feb7：582 / 530）；**推算值，三个机制落地后须在 macOS 上实测确认** |
+
+- 现状：Linux 3045、macOS 未测。上限在上述三个机制全部落地后验收；只做机制 1 的预计值为 Linux ≈ 2999。
+- 原第 3 步门槛 ≤ 540 是 macOS 上未计 (L) 链时定的，现由本表取代。
+
+**后续收窄排期（三个机制之后，各自独立）**
+
+| 项 | 实测（Linux，在 E 上切） | 预计减少 | 做完后终态 | 前置 / 待决 |
+|---|---|---|---|---|
+| S1 `sun/nio/cs/StandardCharsets.lookup` 以不定名字反射 | 598 → 406 | Linux −192（`sun/nio/cs` 165 → 9，另有 `jdk/internal/reflect` 8、`java/lang/invoke` 8 等）；macOS 约 −120（闭包中 `sun/nio/cs` 104 类，推算） | Linux ≈ 436，macOS ≈ 470 | 在 U1（运行期取宿主编码）下，按不定名字查字符集是合法可达，不是精度缺陷。要收窄，须先由用户重新审视 U1：例如把可选字符集固定为构建期声明的集合 |
+| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。无用户决策项 |
+| S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
+
+- 排期：S2 无待决，排在三个机制之后的第一项；S1 待用户对 U1 的决定，不排进当前步骤。
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 
@@ -732,7 +796,11 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - 二进制大小增量 ≤ 5%；
    - 启动装载 ≤ 1 ms；
    - TestBootLayer 输出与 JDK 相同（依赖第 5 步 jimage / getNativeMap）。
-5. 闭包 ≤ 540 待用户对上面 (L) 与门槛口径作出决策，本分支不再自行压缩。
+5. 闭包上限已按平台改定（上「按平台上限」：Linux ≤ 640，macOS ≤ 590），在三个机制落地后验收。
+6. `param_string_constants_fold_switch` 已做静态判断，不是本分支抽象解释改动（`Image` / `Narrowed` 合并等）引起的。
+   - 该测试断言闭包不含 `sun/net/www/protocol/jrt/Handler`，且类数 < 1000。
+   - 本分支补 Signal native 之后，(L) 链经 ① 的 `BootLoader.findResources` 使 jrt `Handler` 可达，闭包为 3045 类，两条断言都不满足。
+   - 断言本身正确，不改；机制 1–3 落地后（628 < 1000，且 ① 去掉了 jrt `Handler`）预期通过，进合批复验。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
