@@ -13,6 +13,8 @@
 //! `--dump-edges <文件>`（触发边转储）、`--site-prof`（读者站点重跑剖析，进 `summary.perf.site_prof`）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
 //! 引导映像：`--boot-report <报告.md>`（写构建期引导映像审计报告；求值失败即命令失败，`rava audit boot` 用）。
+//! 门自动排名：`--gates`（见 [`crate::gates_cmd`]；`--gates-top N`、`--gates-pool N`、`--gates-verify N`、`--gates-jobs N`、
+//! `--gates-mem-mb N`、`--gates-timeout 秒`、`--gates-out <json>`、`--gates-md <md>`；`--gates-child` 为内部子进程模式）。
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 //!
 //! 参数逐个校验：未知参数、多余的位置参数一律报错。闭包结果取决于输入（类路径、镜像目录），静默忽略的参数会
@@ -38,14 +40,14 @@ const VALUE_OPTS: &[&str] = &[
     "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
-const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof"];
+const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof", "--gates"];
 
 /// 参数校验：恰一个位置参数（输入），其余都是已知选项（带值选项须有值）
 fn check_args(rest: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
-        if VALUE_OPTS.contains(&a.as_str()) {
+        if VALUE_OPTS.contains(&a.as_str()) || crate::gates_cmd::VALUE_OPTS.contains(&a.as_str()) {
             it.next().ok_or_else(|| format!("{a} 缺少值"))?;
         } else if FLAG_OPTS.contains(&a.as_str()) {
         } else if a.starts_with('-') {
@@ -200,6 +202,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
+    if let Some(out) = args.opt("--gates-child") {
+        return crate::gates_cmd::child(&input_desc, &h, &man, &hw, &out);
+    }
+    if args.rest.iter().any(|a| a == "--gates") {
+        let diag = ["--why", "--flows", "--report", "--boot-report", "--dump-edges", "--site-prof"];
+        if let Some(a) = args.rest.iter().find(|a| diag.contains(&a.as_str())) {
+            return Err(format!("--gates 不与 {a} 同用（门排名自带溯源链；诊断请单独运行）"));
+        }
+        return crate::gates_cmd::run(args, input_desc, &h, &man, &hw, &crate::gates_cmd::abs(&classes), &main);
+    }
     let whys = multi("--why");
     let boot_report = args.opt("--boot-report");
     let need_engine = args.opt("--report").is_some() || boot_report.is_some() || !whys.is_empty() || !flows.is_empty();
