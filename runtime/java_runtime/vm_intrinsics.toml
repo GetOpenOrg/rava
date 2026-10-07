@@ -766,10 +766,13 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
 # - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
 #   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
+# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
+#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作。
 [vm_state.field_hooks]
 "java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
 "java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
 "java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
+"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
 
 # loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
 # 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →
