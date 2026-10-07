@@ -1,0 +1,2 @@
+# 栈帧元素的模块哈希（boot layer 构建期求值）
+java/lang/StackTraceElement$HashedModules.hashedModules:()Ljava/util/Set;

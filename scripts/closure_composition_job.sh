@@ -2,9 +2,10 @@
 # 闭包构成分析作业（服务器以作业模式运行；本机不跑）：对选定用例跑 rava closure，产出 closure.json（gzip）
 # 供 scripts/closure_composition.py 按机制拆分；可带反事实切除（--cut-file）做「整块去掉能减多少类」的归因。
 #
-# 用法：scripts/closure_composition_job.sh [--cut-file F --tag T] <用例>...
+# 用法：scripts/closure_composition_job.sh [--cut-file F --tag T | --cut-sets "名1 名2 …"] <用例>...
 #   用例：hello | collectors | deepcopy | jcasasl | s0boot（s0boot 需 dev 级内存，见报告）
 #   --cut-file F：反事实切除条目文件（同 rava closure --cut-file；不健全，只作归因）；--tag T 为产物名后缀
+#   --cut-sets：依次取 scripts/closure_composition_cuts/<名>.txt 作切除、名作 tag，对每个用例各跑一遍
 # 产物：build/ccomp/<用例>[.<tag>].json.gz、.out（stdout 摘要）、.err（stderr 尾与 /usr/bin/time）
 #       作业取回：--fetch 'build/ccomp/**'
 # 口径：docs/reports/2026-10-07-closure-composition.md
@@ -12,15 +13,23 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/build/ccomp"
 mkdir -p "$OUT"
-CUT=(); TAG=""
+CUT=(); TAG=""; SETS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cut-file) CUT=(--cut-file "$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"); shift 2 ;;
         --tag) TAG=".$2"; shift 2 ;;
+        --cut-sets) SETS="$2"; shift 2 ;;
         *) break ;;
     esac
 done
-[[ $# -gt 0 ]] || { echo "用法：$0 [--cut-file F --tag T] <用例>..."; exit 2; }
+[[ $# -gt 0 ]] || { echo "用法：$0 [--cut-file F --tag T | --cut-sets 名单] <用例>..."; exit 2; }
+if [[ -n "$SETS" ]]; then
+    rc_sets=0
+    for s in $SETS; do
+        bash "$0" --cut-file "$(cd "$(dirname "$0")" && pwd)/closure_composition_cuts/$s.txt" --tag "$s" "$@" || rc_sets=1
+    done
+    exit $rc_sets
+fi
 step() { echo "═══ $(date '+%H:%M:%S') $*"; }
 . "$REPO/scripts/rava_env.sh" "$REPO"
 . "$REPO/scripts/corpus_jdk.sh" "$REPO"

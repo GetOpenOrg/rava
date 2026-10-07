@@ -1,0 +1,2 @@
+# 显式类初始化请求（VM 驱动的类初始化，③ 类 VM 承载）
+jdk/internal/access/SharedSecrets.ensureClassInitialized:(Ljava/lang/Class;)V

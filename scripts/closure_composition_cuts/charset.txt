@@ -1,0 +1,3 @@
+# 字符集按名查找的未知名路径与提供者枚举（构建期按常量名折叠）
+java/nio/charset/Charset.lookup2:(Ljava/lang/String;)Ljava/nio/charset/Charset;
+java/nio/charset/Charset$2.run:()Ljava/nio/charset/Charset;

@@ -1,0 +1,4 @@
+# 类路径资源查找（闭合映像：资源构建期嵌入）
+jdk/internal/loader/URLClassPath.getResource:(Ljava/lang/String;Z)Ljdk/internal/loader/Resource;
+jdk/internal/loader/URLClassPath.findResource:(Ljava/lang/String;Z)Ljava/net/URL;
+jdk/internal/loader/URLClassPath.findResources:(Ljava/lang/String;Z)Ljava/util/Enumeration;

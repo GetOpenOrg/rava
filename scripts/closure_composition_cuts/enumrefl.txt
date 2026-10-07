@@ -1,0 +1,2 @@
+# 枚举常量反射：Class.getEnumConstantsShared 里 Method.invoke(values) 调用点改为精确目标（模拟：切该调用点；values() 本身仍由其他路径可达）
+java/lang/Class.getEnumConstantsShared:()[Ljava/lang/Object;@49

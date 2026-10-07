@@ -40,7 +40,7 @@ prefixes = [
 id = "charset"
 title = "字符集"
 kind = "mechanism"
-prefixes = ["java/nio/charset/", "sun/nio/cs/", "jdk/internal/util/xml/", "java/lang/StringCoding*"]
+prefixes = ["java/nio/charset/", "sun/nio/cs/", "java/lang/StringCoding*", "sun/util/PreHashedMap"]
 
 [[category]]
 id = "locale"
@@ -50,7 +50,7 @@ prefixes = [
   "java/util/Locale", "java/util/ResourceBundle", "java/util/ListResourceBundle", "java/util/PropertyResourceBundle",
   "java/util/spi/", "sun/util/locale/", "sun/util/resources/", "sun/text/", "sun/util/cldr/",
   "java/text/", "jdk/internal/icu/", "java/util/Currency", "sun/util/spi/",
-  "java/util/Formatter", "java/util/Formattable", "java/util/FormatFlagsConversionMismatchException",
+  "java/util/Formatter", "java/util/Formattable", "sun/util/PropertyResourceBundleCharset", "java/util/FormatFlagsConversionMismatchException",
   "java/util/IllegalFormat*", "java/util/UnknownFormat*", "java/util/MissingFormat*", "java/util/DuplicateFormatFlagsException",
   "jdk/internal/math/FormattedFP*",
 ]
@@ -61,7 +61,7 @@ title = "日期时间（java.time / Calendar / TimeZone）"
 kind = "mechanism"
 prefixes = [
   "java/time/", "sun/util/calendar/", "java/util/Calendar", "java/util/GregorianCalendar", "java/util/TimeZone",
-  "java/util/SimpleTimeZone", "java/util/Date", "java/util/JapaneseImperialCalendar",
+  "java/util/SimpleTimeZone", "java/util/Date", "java/util/JapaneseImperialCalendar", "sun/util/BuddhistCalendar",
 ]
 
 [[category]]
@@ -147,6 +147,12 @@ kind = "mechanism"
 prefixes = ["java/lang/invoke/", "sun/invoke/", "jdk/internal/org/objectweb/", "java/lang/runtime/ObjectMethods", "java/lang/runtime/SwitchBootstraps"]
 
 [[category]]
+id = "random"
+title = "随机数生成器族（RandomGenerator 工厂）"
+kind = "mechanism"
+prefixes = ["java/util/random/", "jdk/random/", "jdk/internal/util/random/"]
+
+[[category]]
 id = "regex"
 title = "正则"
 kind = "mechanism"
@@ -170,7 +176,7 @@ prefixes = ["java/net/", "sun/net/", "jdk/internal/net/"]
 id = "xml"
 title = "XML / JAXP"
 kind = "mechanism"
-prefixes = ["javax/xml/", "com/sun/org/apache/", "org/w3c/", "org/xml/", "jdk/xml/", "com/sun/xml/"]
+prefixes = ["javax/xml/", "com/sun/org/apache/", "org/w3c/", "org/xml/", "jdk/xml/", "com/sun/xml/", "jdk/internal/org/xml/", "jdk/internal/util/xml/"]
 
 [[category]]
 id = "naming"
@@ -206,4 +212,4 @@ prefixes = ["java/lang/", "java/math/", "jdk/internal/math/", "jdk/internal/util
 id = "io"
 title = "基础 IO 流"
 kind = "base"
-prefixes = ["java/io/", "java/nio/"]
+prefixes = ["java/io/", "java/nio/", "sun/nio/ByteBuffered"]

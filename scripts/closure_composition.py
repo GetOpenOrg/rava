@@ -157,15 +157,33 @@ class Closure:
         return out
 
     def rep(self, cname: str, skip_clinit: bool = False):
-        """类的代表节点：类有方法入闭包时取首达链最短（原始 via 深度）的方法节点（代码层的入链原因），否则取类节点。
-        skip_clinit（链中途的类节点替换）：只取原始链不经过该类自身的方法——否则 <clinit> 内 new 自身等形成回环"""
+        """类的代表节点：该类入闭包的「原因」节点里首达链最短（原始 via 深度）者。
+        候选：类节点自身（via 来自方法 / 根时：new / 字段 / ldc 等直接引用）+ 该类经 invoke 等直接调用入闭包的方法；
+        排除 dispatch 边入的方法（虚派发展开是实例化的后果，不是原因）与挂在类上入的方法（clinit、手写 Object 层的 reflect 成员边）。无候选时退回全部方法，再退回类节点。
+        skip_clinit（链中途的类节点替换）：只取原始链不经过该类自身的节点——否则 <clinit> 内 new 自身等形成回环"""
         key = (cname, skip_clinit)
         if key in self._rep:
             return self._rep[key]
-        ms = self.by_owner.get(cname, ())
+
+        def loops(n):
+            p = self.raw_parent(n)[0]
+            return p is not None and cname in self._raw_owners(p)
+
+        def caused(m):
+            v = self.methods[m].get("via") or {}
+            return v.get("kind") != "dispatch" and "class" not in v.get("from", {})
+
+        cands = [("M", m) for m in self.by_owner.get(cname, ()) if caused(m)]
+        cp = self.raw_parent(("C", cname))[0]
+        if cp is not None and cp[0] != "C":
+            cands.append(("C", cname))
         if skip_clinit:
-            ms = [m for m in ms if cname not in (self._raw_owners(self.raw_parent(("M", m))[0]) if self.raw_parent(("M", m))[0] else set())]
-        r = min((("M", m) for m in ms), key=lambda n: (self._raw_depth(n), n[1])) if ms else ("C", cname)
+            cands = [n for n in cands if not loops(n)]
+        if not cands:
+            cands = [("M", m) for m in self.by_owner.get(cname, ())]
+            if skip_clinit:
+                cands = [n for n in cands if not loops(n)]
+        r = min(cands, key=lambda n: (self._raw_depth(n), n[0], n[1])) if cands else ("C", cname)
         self._rep[key] = r
         return r
 
@@ -191,7 +209,10 @@ class Closure:
                 prev_res = self._first[n]
             else:
                 if prev_res[0] is None and self.rules.is_mech(self.node_cat(n)):
-                    prev_res = (self.node_cat(n), prev, n)
+                    rp, rk = self.raw_parent(n)
+                    # 原始前驱是类节点（clinit / 手写 Object 层成员边等）时如实标出该类与边种类，不显示替换后的代表方法
+                    pred = ("C", f"{rp[1]}（{rk} 边）") if rp is not None and rp[0] == "C" else prev
+                    prev_res = (self.node_cat(n), pred, n)
                 self._first[n] = prev_res
             prev = n
         return self._first[node]
