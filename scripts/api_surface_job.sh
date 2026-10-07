@@ -15,6 +15,8 @@ RAW="$REPO/build/api_surface_raw/$STAGE"
 DEPS="$REPO/tests/lib_pilot/deps/target"
 mkdir -p "$OUT" "$RAW"
 step() { echo "═══ $(date '+%H:%M:%S') $*"; }
+# 项目解释器（pyproject requires-python ≥3.12，tomllib 内置）；服务器系统 python3 可能更旧
+PY=(uv run -q --project "$REPO" python)
 
 # 1. 取包（maven 本地库落在检出目录内，不写服务器 ~/.m2）
 step "取包"
@@ -27,10 +29,9 @@ grep -E "deps.lock.toml" "$OUT/fetch.log"
 
 # 2. 阶段类路径：jars.txt 条目名 → 锁内 jar 路径
 NAMES="$(grep -v '^\s*#' "$APP/jars.txt" | grep -v '^\s*$' | paste -sd, -)"
-CP="$(python3 - "$DEPS/deps.lock.toml" "$NAMES" "$REPO/scripts" <<'PY'
+CP="$("${PY[@]}" - "$DEPS/deps.lock.toml" "$NAMES" <<'PY'
 import sys
-sys.path.insert(0, sys.argv[3])
-import mini_toml as tomllib
+import tomllib
 from pathlib import Path
 lock = Path(sys.argv[1]); want = sys.argv[2].split(",")
 jars = tomllib.loads(lock.read_text())["jar"]
@@ -54,7 +55,7 @@ timeout 600 "$JAVA_HOME/bin/java" -Xlog:class+load=info:file="$RAW/classload.log
     "$(grep -rl 'static void main' "$APP/src" | head -1 | sed "s|$APP/src/||; s|\.java$||; s|/|.|g")" \
     >"$OUT/jvm_stdout.txt" 2>"$OUT/jvm_stderr.txt"
 echo "JVM rc=$?"; cat "$OUT/jvm_stdout.txt" | head -40
-python3 "$REPO/scripts/api_surface.py" seeds --classload "$RAW/classload.log" --out "$OUT/seed_classes.txt" \
+"${PY[@]}" "$REPO/scripts/api_surface.py" seeds --classload "$RAW/classload.log" --out "$OUT/seed_classes.txt" \
     --source "$CLS" $(echo "$CP" | tr ':' '\n' | sed 's/^/--source /')
 grep -c ' source: jrt:/\| source: shared objects file' "$RAW/classload.log" | sed 's/^/JVM 实载 JDK 类 /'
 
@@ -83,12 +84,12 @@ run_closure b "${SEEDS[@]}"
 # 5. 面 + 分层
 step "面"
 JARS=(); while read -r j; do JARS+=(--jar "$DEPS/$j"); done <"$OUT/classpath.txt"
-python3 "$REPO/scripts/api_surface.py" face --closure "a=$RAW/closure_a.json" --closure "b=$RAW/closure_b.json" \
+"${PY[@]}" "$REPO/scripts/api_surface.py" face --closure "a=$RAW/closure_a.json" --closure "b=$RAW/closure_b.json" \
     "${JARS[@]}" --classload "$RAW/classload.log" --out "$REPO/tests/api_surface/$STAGE.txt" --data "$OUT/face.json" || exit 2
 cp "$REPO/tests/api_surface/$STAGE.txt" "$OUT/"
 step "分层"
 JUNIT_CP="$(ls "$DEPS"/pilot-libs/junit-*.jar "$DEPS"/pilot-libs/hamcrest-*.jar 2>/dev/null | paste -sd: -)"
-python3 "$REPO/scripts/api_surface.py" tiers --face "$REPO/tests/api_surface/$STAGE.txt" --face-data "$OUT/face.json" \
+"${PY[@]}" "$REPO/scripts/api_surface.py" tiers --face "$REPO/tests/api_surface/$STAGE.txt" --face-data "$OUT/face.json" \
     --cp "$JUNIT_CP" -j "${API_SURFACE_JOBS:-8}" --out "$REPO/tests/api_surface/tiers_$STAGE.toml" --data "$OUT/tiers.json" || exit 2
 cp "$REPO/tests/api_surface/tiers_$STAGE.toml" "$OUT/"
 gzip -c "$RAW/classload.log" >"$OUT/classload.log.gz"

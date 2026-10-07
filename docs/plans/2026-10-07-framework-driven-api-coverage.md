@@ -51,7 +51,7 @@
   - S0 API 面算出后按数据复核这份判定。
 - 10-07 步骤 1 开工（分支 api-surface-s0，worktree java_rta_apis0）。已完成：pom 补 S0 jar（Boot 3.5.16 / Spring 6.2.19 同代）；最小 Boot 样例 `tests/lib_pilot/s0_boot/`；面与分层脚本 `scripts/api_surface.py`（face / tiers / seeds）、`scripts/jdk_index.py`（jmods 类层次，引用解析到声明类）、作业脚本 `scripts/api_surface_job.sh`；语义类目录白名单 `tests/api_surface/semantic_dirs.toml`；报告框架 `docs/reports/api-surface-s0.md`。
   - dev 实测（apis0-s0-38c29002）：取包成功（锁 102 条）；样例在真 JVM 上 rc=0，输出已记入报告；实载 JDK 类 1722、框架 / 样例类 1987（作闭包变体 B 的种子）。
-  - 交接已完成：dev 关机期间改在云服务器 kr2（15G / 8 核）上跑，作业 apis0-kr2b-1fdb1bed。服务器 python3 低于 3.11，为此加了 `scripts/mini_toml.py` 作回退。
+  - 交接已完成：dev 关机期间改在云服务器 kr2（15G / 8 核）上跑，作业 apis0-kr2b-1fdb1bed。服务器系统 python3 是 3.10，作业脚本统一用项目解释器（`uv run --project`，requires-python ≥3.12）调用。
   - 步骤 1 产出已入库：`tests/api_surface/s0.txt`（面 2868，其中公开 2865，JVM 实载命中 2087）、`tests/api_surface/tiers_s0.toml`（主力 1095 / 暂缓 10 / 补测 1376，`common_df = 0.1`），报告 `docs/reports/api-surface-s0.md` 第五～七节已补。
   - **闭包两变体在 15G 上均未产出**：A 超时 2400 s；B（加 1987 个种子）在峰值 11.6 GiB 时被 OOM 杀掉。面与分层暂取「一跳 ∪ JVM 实载近似」，标「闭包待 dev 恢复复算」。dev 恢复后用同一作业脚本换新 tag 复算（加 `--slot-mem dev=28`，必要时放宽 `API_SURFACE_CLOSURE_TIMEOUT`），重出 s0.txt 与分层。
   - 遗留：分层规则 3（专属 ∩ 面 ≠ ∅）在一跳全集上区分度不足，复算时改为以闭包面加面外占比阈值判定（见报告 §5.5）。known_failures 复核有差异 2 例（TestStringGetCharsLegacy、TestVirtualThreadScale，见报告 §七），未改 toml。
