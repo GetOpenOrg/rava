@@ -399,6 +399,17 @@ def render(results, loads, diffs, face, rules: Rules) -> str:
                 row += f" | {f['methods']} / {f['classes']}" if f else " | 0"
             out.append(row + " |")
         out.append("| **合计** | | " + " | ".join(f"{r['classes']} 类 / {r['methods']} 方法" for r in results) + (" | |" if face else " |"))
+    if results or loads:
+        cols = results + loads
+        out.append("\n## 总览：自身包归属（类数 / 占比；JVM 实载列只计 JDK 类）\n")
+        out.append("| 块 | " + " | ".join(c["name"] for c in cols) + " |")
+        out.append("|---|" + "---|" * len(cols))
+        for cid in rules.order:
+            vals = [c.get("own_classes", c.get("by_cat", {})).get(cid, 0) for c in cols]
+            if not any(vals):
+                continue
+            out.append(f"| {rules.title[cid]} | " + " | ".join(f"{v} ({pct(v, c['classes'])})" if v else "0" for v, c in zip(vals, cols)) + " |")
+        out.append("| **合计** | " + " | ".join(str(c["classes"]) for c in cols) + " |")
     for r in results:
         t = r["classes"]
         out.append(f"\n## {r['name']}：{t} 类 / {r['methods']} 方法\n")
