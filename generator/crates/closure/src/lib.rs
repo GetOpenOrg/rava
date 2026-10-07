@@ -141,6 +141,7 @@ fn fold_json(f: &Fold) -> Value {
         "null_recv": f.null_recv,
         "noreturn_calls": f.noreturn_calls,
         "noreturn_dead_pcs": f.noreturn_dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+        "direct_calls": f.direct_calls.iter().map(|(pc, h)| json!({"pc": pc, "target": h.to_string()})).collect::<Vec<_>>(),
     })
 }
 
@@ -234,6 +235,7 @@ impl Closure<'_> {
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
             "fold_noreturn_calls": folds.iter().map(|f| f.noreturn_calls.len()).sum::<usize>(),
+            "fold_direct_calls": folds.iter().map(|f| f.direct_calls.len()).sum::<usize>(),
             "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "sysprops_unstable": e.sysprops_report(),

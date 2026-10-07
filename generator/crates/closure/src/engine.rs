@@ -45,6 +45,7 @@ mod classes;
 mod reflect;
 mod reflect_call;
 mod reflect_call_pool;
+mod reflect_direct;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -351,6 +352,10 @@ pub struct Engine<'a> {
     rcall_conv: HashSet<(String, u16)>,
     rcall_conv_pending: HashMap<String, Vec<(usize, u16, V)>>,
     rcall_conv_seen: HashSet<(usize, u32, u16)>,
+    /// 直连反射调用（`reflect_direct.rs`）：按直连处理的调用点 → 特化入口；曾不满足直连条件的调用点
+    /// （单调：此后恒按原入口接边，已接的直连边保留）
+    rdirect: HashMap<(usize, u32), MemberRef>,
+    rdirect_fallback: HashSet<(usize, u32)>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],

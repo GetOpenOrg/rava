@@ -12,6 +12,10 @@ impl<'a> Engine<'a> {
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
         self.prop_key_site(m, off, opcode, mref, iface, args);
+        // 直连反射调用（`reflect_direct.rs`）：调用点已接特化入口与各目标，不再按原入口接边
+        if self.reflect_direct(m, off, opcode, mref, args) {
+            return;
+        }
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         let lambda_cap = self.lambda_cap.take();

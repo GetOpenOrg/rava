@@ -122,6 +122,8 @@ pub struct MethodFold {
     pub noreturn_calls: BTreeSet<u32>,
     /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
+    /// 直连反射调用点：pc → 特化入口（静态方法）。该调用指令改写为对特化入口的 invokestatic（栈形不变）
+    pub direct_calls: BTreeMap<u32, MemberRef>,
 }
 
 /// 种子输出
@@ -261,6 +263,7 @@ impl ClosureFacts {
                 null_recv: f.null_recv.iter().copied().collect(),
                 noreturn_calls: f.noreturn_calls.iter().copied().collect(),
                 noreturn_dead_pcs: f.noreturn_dead_pcs.clone(),
+                direct_calls: f.direct_calls.iter().cloned().collect(),
             };
             folds.insert(f.method.clone(), mf);
         }
@@ -468,6 +471,10 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
         let ty = c.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let value = parse_fold_value(c.get("value").unwrap_or(&Value::Null), &ty)?;
         mf.consts.insert(pc, FoldConst { pc, kind, value, ty });
+    }
+    for c in f.get("direct_calls").and_then(Value::as_array).into_iter().flatten() {
+        let pc = u32_of(c.get("pc").ok_or_else(|| missing("pc"))?)?;
+        mf.direct_calls.insert(pc, parse_member_id(str_of(c, "target")?)?);
     }
     Ok(mf)
 }

@@ -24,6 +24,9 @@ pub struct Fold {
     pub noreturn_calls: Vec<u32>,
     /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
+    /// 直连反射调用点（pc, 特化入口）：全部到达该点的克隆都按直连处理（`reflect_direct.rs`），发射层把该调用指令
+    /// 改写为对特化入口的 invokestatic（栈形不变）。与 null_recv / noreturn_calls / consts 不相交
+    pub direct_calls: Vec<(u32, MemberRef)>,
     /// 常量来自系统属性读取折叠的调用点（consts 的子集；统计用，不导出）
     pub props: Vec<u32>,
     /// 违反「活的非跳转指令落到死区」约定的 pc（应恒为空）
@@ -113,6 +116,7 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
         null_recv: Vec::new(),
         noreturn_calls: Vec::new(),
         noreturn_dead_pcs: Vec::new(),
+        direct_calls: Vec::new(),
         props: Vec::new(),
         violations,
     }
