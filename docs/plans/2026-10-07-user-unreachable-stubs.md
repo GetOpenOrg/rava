@@ -45,7 +45,7 @@ vtable / trait 槽位所需的签名照常生成，只把方法体换成存根�
 - **用户 crate**：链外方法（包括未被调用的 `<init>`）变为存根，其方法体内引用的类型不再拉入 import，用户生成代码体积下降。
 - **JDK 档案侧（有意修正）**：类在初始化集合中、未声明 `<clinit>`、且没有链上方法的 JDK 类，此前按类型存根处理，静态字段生成的是 panic 访问器；现在生成 `pub static`。生成树会因此出现 diff，按预期 diff 只出现在静态字段块。boundary 类的 clinit 键原本就被过滤，不受影响。
 - **反射分派表**（phase2/dispatch.rs）对用户类仍全成员出臂，臂指向存根函数，可以编译。如果反射建模漏掉某个方法，运行期会命中精确的 `stub: <类>.<方法>:<描述符>` panic，这是设计上预期的失败方式。
-- **import 扫描**（referenced.rs）仍扫描全部方法体，但结果按生成集过滤，属于过近似，无害。
+- **import 扫描**（imports/referenced.rs `collect_referenced`）：方法签名照旧全量扫描（存根签名需要）；方法体与虚分派 downcast 子类型只扫链上方法，口径与方法体发射一致（`in_chain(声明者) || in_chain(本类)`，同 cross.rs `base_fn_claims`）。链外方法体内的类型不再进入 `use` 行。JDK 档案侧同样收窄（链外 JDK 方法体只发存根，原先这些引用是无用 import），预期生成树 diff 只是 `use` 行减少。
 
 ## 五、风险点
 
@@ -60,9 +60,9 @@ vtable / trait 槽位所需的签名照常生成，只把方法体换成存根�
 ### 单测
 - `(cd generator && cargo test --release)` 全量，重点：
   - 新增 `driver/tests/build_cli.rs::user_unreachable_methods_stubbed`（fixture `UserUnreached.java`）：
-    - `unusedStatic` / `Hello.unusedInstance` / `Hello.quiet` / `Counter.<init>` 为存根；
+    - `unusedStatic` / `Counter.unusedInstance` / `Hello.quiet` / `Counter.<init>` 为存根；
     - `main`、`lambda$main$0`、`Hello.greet`、`Hello.loud`（经接口 default 展开）照常翻译；
-    - 用户文件中不出现 `ArrayDeque`（不可达方法体内的类型不得拉入 import）；
+    - 用户文件中不出现 `ArrayDeque` / `TreeMap`（不可达方法体内的类型不得拉入 import）；
     - `Counter.count` 为 `pub static`，不是存根访问器；
   - 现有 build_cli 各例（RecordSwitch、DefaultSlot、TryFinallyReturn、ConcatOrder、NullView、OpaqueLevels、ProxyIface、JdkDefault*）应不受影响；
   - `no_jdk_literals` / `jdk_literal_lint`。
@@ -90,5 +90,8 @@ vtable / trait 槽位所需的签名照常生成，只把方法体换成存根�
 - [x] 类型存根判据加入初始化条件
 - [x] 新增单测 `user_unreachable_methods_stubbed`（只编译、未运行）
 - [x] `cargo check --release --tests` 通过（无 warning）
+- [x] import 扫描按链门控（合批 batch-1007 单测暴露：`unusedStatic` 已正确发存根，但 referenced.rs 扫全部方法体，`ArrayDeque` 仍进 `use` 行，断言「链外方法体不翻译」失败；与 boot-image-s3 / fix-jca-subset 无交互）
+- [x] 单测夹具修正：`unusedInstance` 原放在已实例化的 `Hello` 上，`rava closure --why` 显示其经 `[reflect] 类 UserUnreached$Hello` 入链——已实例化用户类会被 open 接收者 `getClass` 的反射枚举（`reflect.rs` `enumerate` → `expose`，用户类被枚举即全成员入链）带入，方法体照常翻译，符合分析器当前事实；emitter 无缺陷。链外实例方法改放在未实例化的 `Counter` 上观测
+- [ ] 残留（分析器精度，另立项）：open 接收者 `getClass` 的成员枚举把全部已实例化用户类的全部成员拉入链，用户类链外实例方法在实例化后几乎都会翻译；收窄需让枚举点的接收者值集可推（不再 open），属于反射建模精度线
 - [ ] 服务器单测全量
 - [ ] e2e 抽查与树对照
