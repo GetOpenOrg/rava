@@ -61,6 +61,8 @@ pub struct EmitShared<'a> {
     sam: OnceLock<crate::sam::SamLedger>,
     instr_facts: OnceLock<instr::InstrFacts>,
     lib_crate_of: OnceLock<HashMap<String, String>>,
+    /// 类模块名（类文件 stem）与用户类包段（见 `module_names`）
+    class_modules: OnceLock<crate::module_names::ClassModules>,
     /// 内建加载器的模块映射（定义加载器属性，见 `closure::loaders`）
     loaders: OnceLock<closure::loaders::DefiningLoaders>,
     /// 模块图：类 → 模块、requires 闭包（T1 第 2 步 M1，见 `resolve::modules`）
@@ -150,6 +152,7 @@ impl<'a> EmitShared<'a> {
             sam: OnceLock::new(),
             instr_facts: OnceLock::new(),
             lib_crate_of: OnceLock::new(),
+            class_modules: OnceLock::new(),
             loaders: OnceLock::new(),
             modules: OnceLock::new(),
             module_crates: OnceLock::new(),
@@ -201,6 +204,19 @@ impl<'a> EmitShared<'a> {
     pub fn defining_loader(&self, cls: &str) -> Option<&'static str> {
         let l = self.loaders.get_or_init(|| closure::loaders::DefiningLoaders::new(self.cp, self.manifest.vm_state.loader_map.as_ref()));
         l.loader_of(self.cp, cls).attr()
+    }
+
+    /// 本次发射全部类的模块位置（首次查询时构建，见 `module_names`）
+    pub fn class_modules(&self) -> &crate::module_names::ClassModules {
+        self.class_modules.get_or_init(|| crate::module_names::ClassModules::build(self))
+    }
+
+    /// 类的模块名（类文件 stem）；不在本次发射集 → snake(简单名)
+    pub fn module_of(&self, binary: &str) -> String {
+        match self.class_modules().module_of(binary) {
+            Some(m) => m.to_string(),
+            None => crate::text::to_snake(binary.rsplit('/').next().unwrap_or(binary)),
+        }
     }
 
     /// 手写真源 `runtime/java_runtime/src`
