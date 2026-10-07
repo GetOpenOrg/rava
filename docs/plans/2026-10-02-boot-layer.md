@@ -185,6 +185,12 @@ anchors = [
    - `getNativeMap` 是唯一手写（准入 ①），返回覆盖该数据的直接缓冲区；
    - `jdk/internal/jimage` 按字节码翻译；
    - `ClassLoader` 资源族的手写（FS-C2 保留的嵌入表查询）改读同一份数据，资源只有一个来源。
+   **已实施**（boot-image-s5 82c49923，boot-image §5.7.1–5.7.2）：发射层 `emit/project/jimage.rs` 写本程序 jimage，
+   嵌入用户侧元数据 `MODULE_IMAGE`；`getNativeMap` 对 `${java.home}/lib/modules`（U14 钉值的嵌入树）返回其直接缓冲区。
+   `ClassLoader` 资源族的手写不是改读，而是**整族删除**：`getResource*` / `getSystemResource*` 6 个与
+   `BootLoader.getServicesCatalog` / `findResourceAsStream` 按字节码执行，模块资源经 `SystemModuleReader` 读 jimage，
+   类路径资源经 class_path 内建。`ClassLoader`、`BootLoader` 移出 `[vm_boundary]`，`closure_tables` / `module_resources`
+   表与 `seeds.toml [services] population` 删除；服务目录由构建期 `Module.defineModules` 写入引导映像。待合批验证。
 
 ### 2.4 闭包预算
 
@@ -206,7 +212,7 @@ anchors = [
 | 2 | `Class.module` 钩子与类块 `module` 属性；`findLoadedClass0` / `findBootstrapClass` 按定义加载器；`defineModule0` java.base 语义 | TestAppClassLoader / TestClassNestNatives |
 | 3 | 锚点启用；删 `module_layer_impl.rs`、`module_impl.rs` 的 7 个方法、`Class.getModule` 手写；移出 `[vm_boundary]` / `clinit_carried` | TestModuleLayerDefine 原样通过；新边界用例 TestBootLayer |
 | 4 | 服务目录走 `initServices`；删 `__boot_catalog` / `services_table` / `getServicesCatalogOrNull`；分析器 / 运行期引导层一致性单测 | TestCharsetForName、ServiceLoader 用例 |
-| 5 | 模块内容读取器：jimage 嵌入数据 + `getNativeMap`；`ClassLoader` 资源族改读同一数据 | 读 JDK 资源的用例（ICU 规范化、tzdb、字体 / 区域数据） |
+| 5 | 模块内容读取器：jimage 嵌入数据 + `getNativeMap`；`ClassLoader` 资源族改读同一数据 | 读 JDK 资源的用例（ICU 规范化、tzdb、字体 / 区域数据）；**实现 82c49923**（资源族整族回字节码，2.3 第 6 条） |
 | 6 | initPhase3 并入 `[[boot_init.phases]]`，删 FS-C2 的两个字段钩子 | TestAppClassLoader / TestParallelCapable |
 
 ## 四、验收
