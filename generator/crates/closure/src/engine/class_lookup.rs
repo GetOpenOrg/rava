@@ -54,7 +54,7 @@ pub(super) enum Gap {
 }
 
 impl Gap {
-    fn wild(self) -> bool {
+    pub(super) fn wild(self) -> bool {
         self != Gap::Fail
     }
 }
@@ -275,11 +275,17 @@ impl<'a> Engine<'a> {
         if let V::Str(s, _) = &v {
             return Some(vec![Part::Lit(s.clone())]);
         }
+        if let Some(p) = self.phi_parts(f, &v, gap, depth) {
+            return p.map(|p| vec![p]);
+        }
         let Some(o) = site_of(&v) else {
             // 引擎方法的形参：各调用点流入的名字（按名取类）
             return self.segment_values(f, &v, gap, depth).map(|p| vec![p]);
         };
         let a = f.a;
+        if let Some(p) = self.suffix_part(f, o, gap, depth) {
+            return p.map(|p| vec![p]);
+        }
         if let Some(segs) = self.indy_concat_segs(f.owner, a, o) {
             return self.seg_parts(f, &segs, gap, depth);
         }
@@ -419,12 +425,18 @@ impl<'a> Engine<'a> {
     /// → 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
     fn segment_values(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Part> {
         let a = f.a;
+        if let Some(p) = self.phi_parts(f, v, gap, depth) {
+            return p;
+        }
         if let (Some(m), None) = (f.m, site_of(v)) {
             // 按名查方法的形参名字由调用点的字符串常量另行点名（`param_strs`），这里只服务按名取类
             let [Src::Param(i)] = v.srcs()[..] else { return None };
             return if gap == Gap::Method { None } else { self.param_names(m, i as usize, depth).map(|(set, complete)| self.partial_part(set, complete, gap)) };
         }
         let o = site_of(v)?;
+        if let Some(p) = self.suffix_part(f, o, gap, depth) {
+            return p;
+        }
         if let Some(r) = self.mirror_name(f, o) {
             return match r {
                 Some(set) => Some(Part::Any(set)),

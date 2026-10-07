@@ -75,7 +75,7 @@ rava 分布式测试调度器（任务池模式）。
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   每个测试 / 作业在 user systemd scope 内运行，scope 都挂在 user 级 rava.slice 下：slice 的 MemoryMax =
   总内存 − MEM_RESERVE_GB（默认 4，服务器可用 mem_reserve_gb 覆盖），同机各槽合计不越过它；每槽 scope 的
-  MemoryMax = max(均分额, MIN_SLOT_MEM_GB)（允许超分），MemorySwapMax=0，子进程一并计入。超限只杀 scope 内进程，
+  MemoryMax = max(均分额, MIN_SLOT_MEM_GB)（允许超分；服务器条目 slot_mem_gb 或 --slot-mem dev=28 覆盖下限，不超过合计），MemorySwapMax=0，子进程一并计入。超限只杀 scope 内进程，
   结果记为 OOM 失败（失败原因 / 失败日志头 / failed_tests 均写明服务器、上限、峰值）。
   服务器建不了受限 scope 时不在其上运行；env_setup.py --check-only 的 memlimit 列可查。
 
@@ -88,7 +88,8 @@ rava 分布式测试调度器（任务池模式）。
   --out-dir build/slot<i>，scratch / 编译缓存 target / 日志按槽隔离；槽输出根写 .cargo/config.toml
   限 rustc 并行度为核数 / 槽数。收尾只删本测试的 scratch 与日志、只结束本槽的进程。
   负载门槛按槽数放宽（dist_remote.load_limit），新开一槽要求空闲内存 ≥ MIN_SLOT_MEM_GB。
-  --slots dev=6 只对本次运行覆盖槽数（实测调槽数用）。
+  --slots dev=6 只对本次运行覆盖槽数（实测调槽数用）；--slot-mem dev=28 只对本次运行覆盖每槽内存下限
+  （OOM 例放宽重跑用），新开一槽的空闲内存门槛随之提高。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   远端脱钩执行（全量 / 抽查 / 作业，见 remote_run.py）
@@ -212,6 +213,8 @@ def main():
                     help="只用这些服务器（作业 / 全量 / 抽查模式均适用；缺省按 config pools：全量 / 抽查用 test 池、作业用 job 池）")
     ap.add_argument("--slots",         nargs="+", metavar="LABEL=N",
                     help="本次运行覆盖服务器槽数（如 dev=6；实测调槽数用，不改 config）")
+    ap.add_argument("--slot-mem",      nargs="+", metavar="LABEL=GB",
+                    help="本次运行覆盖多槽服务器每槽内存上限的下限（如 dev=28；OOM 例放宽重跑用，不改 config）")
     ap.add_argument("--min-ram",       type=int, default=4000,
                     help="作业模式：开跑所需空闲内存 MB（默认 4000）")
     ap.add_argument("--job-timeout",   type=int, default=3600,
@@ -225,6 +228,12 @@ def main():
         if srv is None or not n.isdigit() or int(n) < 1:
             ap.error(f"--slots {spec}：需为 <服务器标签>=<正整数>")
         srv["slots"] = int(n)
+    for spec in args.slot_mem or []:
+        lbl, _, n = spec.partition("=")
+        srv = next((x for x in SERVERS if x["label"] == lbl), None)
+        if srv is None or not n.isdigit() or int(n) < 1:
+            ap.error(f"--slot-mem {spec}：需为 <服务器标签>=<正整数 GB>")
+        srv["slot_mem_gb"] = int(n)
 
     # 启动清理：后台删除 24h 未改动且无进程在用的 *-spot-* 检出与 /tmp 条目（服务器端 1 小时节流）
     if not (args.no_cleanup or args.status or args.merge):

@@ -300,6 +300,8 @@ pub(super) struct Lambda {
     pub(super) imh: MethodHandle,
     /// 捕获实参来源（按 indy 描述符形参位置）
     pub(super) cap: Args,
+    /// 捕获实参值（创建点帧；None = 未知，如具体求值物化的 lambda）
+    pub(super) vals: Option<Rc<[V]>>,
     /// SAM 与实现方法签名差异处的装箱 / 拆箱适配
     pub(super) adapt: Vec<lambda_adapt::Conv>,
 }

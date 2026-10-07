@@ -21,6 +21,8 @@ pub struct NameFacts {
     results: HashSet<String>,
     /// 构建器清空（实参为常量 0 时内容变空）：循环复用的构建器在追加前清空时拆段仍成立
     resets: HashSet<String>,
+    /// 取后缀：结果是接收者字符串自第 0 个 int 实参（不含接收者）起的后缀
+    suffixes: HashSet<String>,
     /// 值映射：新建即空、写入入口按（键, 值）存入、读取入口只返回已存入的值或 null 的映射实现类
     value_maps: ValueMaps,
     /// 返回接收者镜像所指类的 binary name（`.` 分隔，数组为描述符形式）/ 简单名：拼接段可由镜像值集确定
@@ -69,6 +71,7 @@ impl NameFacts {
             appends: list(concat, "appends").into_iter().collect(),
             results: list(concat, "results").into_iter().collect(),
             resets: list(concat, "resets").into_iter().collect(),
+            suffixes: list(concat, "suffixes").into_iter().collect(),
             name_of: list(reflect, "name_of_receiver").into_iter().collect(),
             simple_name_of: list(reflect, "simple_name_of_receiver").into_iter().collect(),
             value_maps: {
@@ -120,6 +123,10 @@ impl NameFacts {
         self.resets.contains(member)
     }
 
+    pub fn is_suffix(&self, member: &str) -> bool {
+        self.suffixes.contains(member)
+    }
+
     /// 返回接收者镜像所指类的 binary name（`Class.getName` 语义）
     pub fn is_name_of(&self, member: &str) -> bool {
         self.name_of.contains(member)
@@ -161,6 +168,7 @@ mod tests {
             appends = ["a/B.add:(Ljava/lang/String;)La/B;"]
             results = ["a/B.str:()Ljava/lang/String;"]
             resets = ["a/B.clear:(I)V"]
+            suffixes = ["a/S.tail:(I)La/S;"]
             "#,
         )
         .unwrap();
@@ -168,7 +176,7 @@ mod tests {
         assert!(f.is_class_lookup("a/C.byName:(Ljava/lang/String;)La/C;") && f.is_instantiator("a/C.make:()Ljava/lang/Object;"));
         assert_eq!(f.table_bases("get:(Ljava/lang/Object;)Ljava/lang/Object;").collect::<Vec<_>>(), vec!["a/T"]);
         assert!(f.is_builder("a/B.<init>:()V") && f.is_append("a/B.add:(Ljava/lang/String;)La/B;") && f.is_result("a/B.str:()Ljava/lang/String;"));
-        assert!(f.is_reset("a/B.clear:(I)V"));
+        assert!(f.is_reset("a/B.clear:(I)V") && f.is_suffix("a/S.tail:(I)La/S;"));
         assert!(f.is_class_load("a/L.load:(Ljava/lang/String;)Ljava/lang/Class;") && !f.is_class_load("a/C.byName:(Ljava/lang/String;)La/C;"));
         assert!(f.is_hw_mirror("a/K", "for_class") && !f.is_hw_mirror("a/K", "new"));
         assert!(f.is_name_of("a/K.name:()Ljava/lang/String;") && !f.is_name_of("a/K.simple:()Ljava/lang/String;"));

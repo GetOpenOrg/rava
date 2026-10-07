@@ -66,7 +66,8 @@ impl Vm {
                 }
                 self.put_static(&fr, v)?;
                 if self.tracing() {
-                    self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
+                    let p = self.put_of(env, v);
+                    self.trace.puts.entry(fr.mref()).or_default().push(p);
                     self.trace.memo_vals.push((fr.mref(), v));
                 }
             }
@@ -78,17 +79,18 @@ impl Vm {
             _ => {
                 let v = pop(st)?;
                 let o = pop(st)?.obj()?;
-                self.traced_put_field(o, &fr, v)?;
+                self.traced_put_field(env, o, &fr, v)?;
             }
         }
         Ok(())
     }
 
     /// 实例字段写入并记入轨迹（字段写入值；映像对象上的写入另记内存缓存值）
-    pub(super) fn traced_put_field(&mut self, o: u32, fr: &FRes, v: CV) -> R<()> {
+    pub(super) fn traced_put_field(&mut self, env: &Env, o: u32, fr: &FRes, v: CV) -> R<()> {
         self.put_field(o, fr, v)?;
         if self.tracing() {
-            self.trace.puts.entry(fr.mref()).or_default().push(put_of(v));
+            let p = self.put_of(env, v);
+            self.trace.puts.entry(fr.mref()).or_default().push(p);
             if self.heap[o as usize].epoch == 0 {
                 self.trace.memo_vals.push((fr.mref(), v));
             }
@@ -161,12 +163,15 @@ impl Vm {
     }
 }
 
-/// 写入值的常量格投影
-fn put_of(v: CV) -> Put {
-    match v {
-        CV::I(x) => Put::Int(x),
-        CV::J(x) => Put::Long(x),
-        CV::N => Put::Null,
-        _ => Put::Other,
+impl Vm {
+    /// 写入值的常量格投影：字符串对象取其内容（内容不可读时为 Other）
+    fn put_of(&mut self, env: &Env, v: CV) -> Put {
+        match v {
+            CV::I(x) => Put::Int(x),
+            CV::J(x) => Put::Long(x),
+            CV::N => Put::Null,
+            CV::R(o) if &*self.heap[o as usize].ty == STRING => self.rust_string(env, o).map_or(Put::Other, |s| Put::Str(Rc::from(s))),
+            _ => Put::Other,
+        }
     }
 }

@@ -67,6 +67,7 @@ fn prim_name(c: u8) -> Option<&'static str> {
         b'J' => "long",
         b'S' => "short",
         b'Z' => "boolean",
+        b'V' => "void",
         _ => return None,
     })
 }
@@ -102,8 +103,12 @@ impl<'a> Engine<'a> {
             return None;
         };
         let Some(recv) = args.first() else { return Some(None) };
-        let Some(classes) = self.frame_mirror_classes(f, recv) else { return Some(None) };
+        let Some((classes, prim)) = self.frame_mirror_classes(f, recv) else { return Some(None) };
         let mut out = BTreeSet::new();
+        // 基本类型镜像（各基本类型共用一个抽象镜像）：名字与简单名同为类型关键字，取全部基本类型名（超集）
+        if prim {
+            out.extend(b"BCDFIJSZV".iter().filter_map(|&c| prim_name(c)).map(Rc::from));
+        }
         for c in classes {
             let name = if simple {
                 let h = &self.h;
@@ -123,11 +128,12 @@ impl<'a> Engine<'a> {
         Some(Some(out))
     }
 
-    /// Class 值所指的字节码类（内部名 / 数组描述符）：类字面量，或引擎帧里值集全是类镜像（值集增长时站点重跑）
-    fn frame_mirror_classes(&mut self, f: &Frame, v: &V) -> Option<Vec<String>> {
+    /// Class 值所指的字节码类（内部名 / 数组描述符）与是否含基本类型镜像：类字面量，或引擎帧里值集全是字节码类镜像 /
+    /// 基本类型镜像（值集增长时站点重跑）
+    fn frame_mirror_classes(&mut self, f: &Frame, v: &V) -> Option<(Vec<String>, bool)> {
         let (f, v) = f.resolve(v);
         match &v {
-            V::Class(c, _) => Some(vec![c.to_string()]),
+            V::Class(c, _) => Some((vec![c.to_string()], false)),
             V::Ref { .. } => {
                 let m = f.m?;
                 let class = self.id(CLASS);
@@ -137,11 +143,16 @@ impl<'a> Engine<'a> {
                     return None;
                 }
                 let mut out = vec![];
+                let mut prim = false;
                 for x in s.classes.iter() {
+                    if Some(x) == self.prim_mirror {
+                        prim = true;
+                        continue;
+                    }
                     let &c = self.mirrors.get(&x)?;
                     out.push(self.names[c as usize].to_string());
                 }
-                Some(out)
+                Some((out, prim))
             }
             _ => None,
         }
