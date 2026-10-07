@@ -26,6 +26,8 @@ mod taint;
 mod taint_fork;
 mod unsafe_ops;
 mod vm;
+mod vm_heap;
+mod vm_link;
 mod war;
 
 use resolve::MethodSite;

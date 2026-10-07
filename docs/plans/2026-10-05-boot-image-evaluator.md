@@ -914,7 +914,7 @@ build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -
 1. ① 构建期确定 `LoggerFinder` 提供者、③ 日志级别取映像值：待用户，本步未做；② 的 HelloWorld 收益依赖 ①。
 2. ~~无映像（求值失败）时的回退路径~~：已取消，映像必需，见 §5.6.8。
 3. `getSavedProperty` 改为真实语义（读映像 `savedProps`），`[vm_constants]` 剪枝失效；`Integer$IntegerCache` 等调用点的闭包变化待测（见清单第 5 条）。
-4. `concrete/vm.rs` 已 740 行（> 600），后续触及时按职责拆分（方法信息 / 堆 / 帧）。
+4. ~~`concrete/vm.rs` 740 行~~：已按职责拆为 `vm.rs`（值 / 非正常完成 / 对象与方法信息表示 / `Vm` 本体与 `Env`，353 行）、`vm_heap.rs`（分配、数组、字段读写与纪元检查、撤销、身份哈希，243 行）、`vm_link.rs`（字符串 / 类镜像驻留、方法解析 / 选择 / 方法信息，159 行），纯搬移无语义改动。
 5. `Class` 仍在 `[vm_boundary]` 与 `clinit_carried`（native 与 struct 归属），随第 5 / 6 步处理。
 
 #### 5.6.8 映像必需：取消无映像回退（dcabf9e3）
