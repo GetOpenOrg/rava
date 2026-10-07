@@ -12,6 +12,8 @@
 //! 5. 控制流终点：null_recv 调用点替换为 [`NInsn::NullRecv`]（不调用，抛 NPE），noreturn 调用点
 //!    替换为 [`NInsn::NoReturn`]（调用后终止）；两者其后另外不可达的 noreturn_dead_pcs 与 dead_pcs
 //!    合并删除。死区只从跳转 / switch / return / athrow 或这两类终点之后开始。
+//! 6. 直连反射调用点（direct_calls）：invokevirtual 改写为对特化入口的 invokestatic（特化入口形参 = 原接收者 +
+//!    原形参，返回类型同原调用，栈形不变；偏移沿用原指令）。
 //!
 //! 违反格式约定的输入返回 [`InputError::Fold`]。
 
@@ -299,6 +301,19 @@ fn validate(fold: &MethodFold, code: &Code, is_dead: &dyn Fn(u32) -> bool, where
             return Err(err(where_, format!("noreturn_calls pc={pc} 同时列为常量")));
         }
     }
+    for (&pc, helper) in &fold.direct_calls {
+        let orig = code.insns.iter().find(|x| x.offset == pc).filter(|x| x.opcode == op::INVOKEVIRTUAL && !is_dead(pc));
+        let Some(Insn { operand: Operand::Method(orig, _), .. }) = orig else {
+            return Err(err(where_, format!("direct_calls pc={pc} 不是活的 invokevirtual 指令")));
+        };
+        if fold.consts.contains_key(&pc) || fold.noreturn_calls.contains(&pc) || fold.null_recv.contains(&pc) {
+            return Err(err(where_, format!("direct_calls pc={pc} 同时列为常量 / noreturn / null_recv 调用")));
+        }
+        let expect = format!("(L{};{}", orig.owner, orig.desc.get(1..).unwrap_or(""));
+        if helper.desc != expect {
+            return Err(err(where_, format!("direct_calls pc={pc} 特化入口 {helper} 的描述符须为 {expect}")));
+        }
+    }
     for h in &fold.dead_handlers {
         if !starts.contains(h) {
             return Err(err(where_, format!("dead_handlers {h} 不在指令起点")));
@@ -345,6 +360,10 @@ pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<No
         }
         if let Some(c) = fold.consts.get(&ins.offset) {
             out.push(const_insn(ins, c, where_)?);
+            continue;
+        }
+        if let Some(h) = fold.direct_calls.get(&ins.offset) {
+            out.push(NInsn::Op(Insn { offset: ins.offset, opcode: op::INVOKESTATIC, operand: Operand::Method(h.clone(), false) }));
             continue;
         }
         out.extend(rewrite_branch(ins, next_dead, &is_dead, where_)?);

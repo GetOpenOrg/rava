@@ -644,6 +644,19 @@ instantiators = [
 [facts.reflect.array_allocators]
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = 0
 
+# 直连反射调用：反射调用入口 → 非 @CallerSensitive 目标的特化入口（VM 支持类 Method$Direct，java_support/）。
+# Method.invoke 的体对任意反射对象都要判 isCallerSensitive（解析方法注解）、取访问器、按 CS 与否两路调用访问器；
+# 这些分支的取舍取决于运行期的反射对象，分析器无从折叠，使经它的每个调用点都把注解解析与 CS 访问器链带进闭包。
+# 调用点的反射对象来自同方法内的常量名查找（lookups 所列入口，形参类型数组为空）、查找类集已知、解析出的目标全是
+# 无参、返回引用或 void、非 @CallerSensitive 的静态方法时，isCallerSensitive 恒为假、访问器恒为本地访问器
+# （jdk.reflect.useNativeAccessorOnly），Method.invoke 的执行即「未 override 时访问检查 + 本地访问器 invoke0」，
+# 与 helper 逐句一致。分析器把调用点接到 helper 与各目标（目标入反射分派面），经 folds `direct_calls` 把调用指令
+# 改写为 invokestatic helper（engine/reflect_direct.rs、input/norm.rs）。典型调用点：Class.getEnumConstantsShared 的
+# `getMethod("values").invoke(null)`。lookups 口径：public = Class.getMethod（公开成员沿超类链）；declared = 只查声明类
+[facts.reflect.direct_invokers."java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"]
+helper = "java/lang/reflect/Method$Direct.invoke:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
+lookups = { "java/lang/Class.getMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "public", "java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "declared" }
+
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 
@@ -774,6 +787,7 @@ factories = [
 "java/lang/invoke/MethodHandle.linkToSpecial:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.linkToInterface:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
 

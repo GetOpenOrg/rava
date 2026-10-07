@@ -6,7 +6,9 @@
 //! - 死区：D = ∩ D_X（区间集求交，端点仍是各输入的端点，即指令起点或代码长度）；
 //! - 活指令 p 的折叠：在 p 活着的入口上逐点取格的并——NullRecv ⊔ NullRecv = NullRecv，
 //!   NullRecv / NoReturn 两两之并 = NoReturn（都不正常返回；照常调用，之后截断），Const(v) ⊔ Const(v) = Const(v)，
-//!   其余组合与未折叠（Normal）之并都是 Normal；
+//!   Direct(h) ⊔ Direct(h) = Direct(h)（直连反射调用点，特化入口 h），Direct(h) ⊔ NullRecv = Direct(h)（NullRecv 的入口不给
+//!   原入口入链，并后若按原入口调用会撞到闭包外的存根；接收者为 null 时特化入口同样抛 NullPointerException），
+//!   其余组合与未折叠（Normal）之并都是 Normal（Normal / NoReturn / Const 的入口照常给原入口入链，按原入口调用成立）；
 //! - 不进入的处理器：在每个入口里都列入 dead_handlers 或位于 D_X 的处理器；另外 D 内的全部处理器
 //!   （各入口里它们都不会被进入：列入 dead_handlers，或随 noreturn_dead_pcs 连同表项删除）；
 //! - 死 catch 表项：在每个入口里列入 dead_catches、或其处理器不进入、或其保护区间整段在 D_X 内；
@@ -81,6 +83,8 @@ struct In {
     consts: BTreeMap<u32, (String, Value)>,
     null_recv: BTreeSet<u32>,
     noreturn: BTreeSet<u32>,
+    /// pc → 特化入口
+    direct: BTreeMap<u32, String>,
 }
 
 fn pcs(f: &Value, key: &str) -> Result<BTreeSet<u32>, String> {
@@ -119,6 +123,12 @@ fn parse(f: Option<&Value>) -> Result<In, String> {
         }
         consts.insert(pc, (body.to_string(), c.clone()));
     }
+    let mut direct = BTreeMap::new();
+    for c in f.get("direct_calls").and_then(Value::as_array).into_iter().flatten() {
+        let pc = c.get("pc").and_then(Value::as_u64).ok_or_else(|| format!("direct_calls 缺 pc：{c}"))? as u32;
+        let t = c.get("target").and_then(Value::as_str).ok_or_else(|| format!("direct_calls 缺 target：{c}"))?;
+        direct.insert(pc, t.to_string());
+    }
     Ok(In {
         dead: normalize(dead),
         handlers: pcs(f, "dead_handlers")?,
@@ -126,6 +136,7 @@ fn parse(f: Option<&Value>) -> Result<In, String> {
         consts,
         null_recv: pcs(f, "null_recv")?,
         noreturn: pcs(f, "noreturn_calls")?,
+        direct,
     })
 }
 
@@ -135,6 +146,7 @@ enum St {
     NullRecv,
     NoReturn,
     Const(String),
+    Direct(String),
     Normal,
 }
 
@@ -145,6 +157,8 @@ fn status(x: &In, pc: u32) -> St {
         St::NoReturn
     } else if let Some((k, _)) = x.consts.get(&pc) {
         St::Const(k.clone())
+    } else if let Some(t) = x.direct.get(&pc) {
+        St::Direct(t.clone())
     } else {
         St::Normal
     }
@@ -155,6 +169,8 @@ fn lub(a: St, b: St) -> St {
         (St::NullRecv, St::NullRecv) => St::NullRecv,
         (St::NullRecv | St::NoReturn, St::NullRecv | St::NoReturn) => St::NoReturn,
         (St::Const(x), St::Const(y)) if x == y => St::Const(x),
+        (St::Direct(x), St::Direct(y)) if x == y => St::Direct(x),
+        (St::Direct(x), St::NullRecv) | (St::NullRecv, St::Direct(x)) => St::Direct(x),
         _ => St::Normal,
     }
 }
@@ -165,8 +181,8 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
     let Some(first) = xs.first() else { return Ok(None) };
     let dead = xs[1..].iter().fold(first.dead.clone(), |d, x| intersect(&d, &x.dead));
     // 活指令的折叠：候选点为任一入口的折叠点
-    let cand: BTreeSet<u32> = xs.iter().flat_map(|x| x.null_recv.iter().chain(&x.noreturn).chain(x.consts.keys()).copied()).collect();
-    let (mut null_recv, mut noreturn, mut consts) = (Vec::new(), Vec::new(), Vec::new());
+    let cand: BTreeSet<u32> = xs.iter().flat_map(|x| x.null_recv.iter().chain(&x.noreturn).chain(x.consts.keys()).chain(x.direct.keys()).copied()).collect();
+    let (mut null_recv, mut noreturn, mut consts, mut direct) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for pc in cand {
         if in_ranges(&dead, pc) {
             continue;
@@ -179,6 +195,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
                 let entry = xs.iter().find_map(|x| x.consts.get(&pc).filter(|(kk, _)| *kk == k)).map(|(_, v)| v.clone());
                 consts.extend(entry);
             }
+            Some(St::Direct(t)) => direct.push(json!({"pc": pc, "target": t})),
             Some(St::Normal) | None => {}
         }
     }
@@ -197,7 +214,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
         .flat_map(|x| &x.catches)
         .filter(|c| !dead_handlers.contains(&c.handler) && xs.iter().all(|x| catch_dead(x, c)))
         .collect();
-    if dead.is_empty() && dead_handlers.is_empty() && catches.is_empty() && consts.is_empty() && null_recv.is_empty() && noreturn.is_empty() {
+    if dead.is_empty() && dead_handlers.is_empty() && catches.is_empty() && consts.is_empty() && null_recv.is_empty() && noreturn.is_empty() && direct.is_empty() {
         return Ok(None);
     }
     Ok(Some(json!({
@@ -209,6 +226,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
         "null_recv": null_recv,
         "noreturn_calls": noreturn,
         "noreturn_dead_pcs": [],
+        "direct_calls": direct,
     })))
 }
 
@@ -232,5 +250,13 @@ pub(super) mod unit {
         assert!(lub(St::Const("1".into()), St::Const("2".into())) == St::Normal);
         assert!(lub(St::Const("1".into()), St::NoReturn) == St::Normal);
         assert!(lub(St::NullRecv, St::Normal) == St::Normal);
+        let d = |t: &str| St::Direct(t.into());
+        assert!(lub(d("h"), d("h")) == d("h"));
+        assert!(lub(d("h"), d("g")) == St::Normal);
+        assert!(lub(d("h"), St::NullRecv) == d("h"));
+        assert!(lub(St::NullRecv, d("h")) == d("h"));
+        assert!(lub(d("h"), St::Normal) == St::Normal);
+        assert!(lub(d("h"), St::NoReturn) == St::Normal);
+        assert!(lub(d("h"), St::Const("1".into())) == St::Normal);
     }
 }

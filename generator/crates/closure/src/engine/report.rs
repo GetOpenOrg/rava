@@ -39,15 +39,48 @@ impl<'a> Engine<'a> {
             f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &thrown, &mut f);
             f.props = self.prop_folds(&f, &all);
+            f.direct_calls = self.direct_calls(&clones, &all, code, &f);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() || !f.direct_calls.is_empty() {
                 out.push(f);
             }
         }
         out.sort_by(|a, b| a.method.cmp(&b.method));
+        out
+    }
+
+    /// 直连反射调用点：每个到达该点的克隆都按直连处理且特化入口相同（未分析的克隆不导出），
+    /// 且该点不按 null_recv / noreturn / 常量导出
+    fn direct_calls(&self, clones: &[usize], all: &[Rc<Analysis>], code: &classfile::Code, f: &Fold) -> Vec<(u32, MemberRef)> {
+        let pcs: BTreeSet<u32> = self.rdirect.keys().filter(|(i, _)| clones.contains(i)).map(|(_, pc)| *pc).collect();
+        let mut out = Vec::new();
+        for pc in pcs {
+            if f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.consts.iter().any(|c| c.0 == pc) {
+                continue;
+            }
+            let Ok(idx) = code.insns.binary_search_by_key(&pc, |x| x.offset) else { continue };
+            let mut helper: Option<&MemberRef> = None;
+            let mut ok = true;
+            for (&i, a) in clones.iter().zip(all) {
+                if !a.reachable.get(idx).copied().unwrap_or(false) {
+                    continue;
+                }
+                match (self.direct_call_of(i, pc), helper) {
+                    (Some(h), None) => helper = Some(h),
+                    (Some(h), Some(prev)) if h == prev => {}
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if let (true, Some(h)) = (ok, helper) {
+                out.push((pc, h.clone()));
+            }
+        }
         out
     }
 
