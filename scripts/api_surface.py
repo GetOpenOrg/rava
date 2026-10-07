@@ -21,13 +21,13 @@ import json
 import os
 import subprocess
 import sys
-import tomllib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from jdk_index import JdkIndex  # noqa: E402
+import mini_toml as tomllib  # noqa: E402
 from jdk_method_scan import parse_constant_pool  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent

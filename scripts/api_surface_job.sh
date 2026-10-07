@@ -27,8 +27,10 @@ grep -E "deps.lock.toml" "$OUT/fetch.log"
 
 # 2. 阶段类路径：jars.txt 条目名 → 锁内 jar 路径
 NAMES="$(grep -v '^\s*#' "$APP/jars.txt" | grep -v '^\s*$' | paste -sd, -)"
-CP="$(python3 - "$DEPS/deps.lock.toml" "$NAMES" <<'PY'
-import sys, tomllib
+CP="$(python3 - "$DEPS/deps.lock.toml" "$NAMES" "$REPO/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[3])
+import mini_toml as tomllib
 from pathlib import Path
 lock = Path(sys.argv[1]); want = sys.argv[2].split(",")
 jars = tomllib.loads(lock.read_text())["jar"]
