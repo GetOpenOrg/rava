@@ -121,8 +121,15 @@ pub struct EmitInput {
     pub module_services: Vec<(String, String)>,
     /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
     pub system_properties: SysPropFacts,
-    /// 模块资源（清单序；缺失者不列）
+    /// 模块资源（档案侧：非用户域调用链上方法体推导；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
+    /// 用户侧模块资源：用户类调用链上方法体指名、档案侧未收的 JDK 模块资源（如
+    /// `ClassLoader.getSystemResourceAsStream("java/lang/String.class")`），按名有序。随用户元数据发射，
+    /// 档案侧与具体程序无关
+    pub user_module_resources: Vec<(String, Vec<u8>)>,
+    /// 类路径资源（§30.15）：应用类路径的全部文件 (资源名, 字节)，按名有序、同名按类路径序；
+    /// 读表入口不在调用链上时为空
+    pub class_path_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
     pub precheck_visited: BTreeSet<String>,
     pub handwritten: HandwrittenMap,
@@ -384,6 +391,15 @@ impl<'a> BuildInput<'a> {
         }
     }
 
+    /// 类路径资源表的读取入口是否在调用链上（`[class_path] resource_readers`）
+    fn class_path_read(&self, visited: &BTreeSet<MethodKey>) -> bool {
+        self.manifest.class_path_readers.iter().any(|m| {
+            let Some((cls, rest)) = m.split_once('.') else { return false };
+            let Some((name, desc)) = rest.split_once(':') else { return false };
+            visited.contains(&(cls.to_string(), name.to_string(), desc.to_string()))
+        })
+    }
+
     /// 构建发射层输入
     pub fn build(&self) -> Result<EmitInput, InputError> {
         let f = self.facts;
@@ -406,6 +422,14 @@ impl<'a> BuildInput<'a> {
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
         let module_resources = crate::resources::derive(self.cp, &strings);
+        let user_files: Vec<Arc<ClassFile>> = self.user_classes.iter().filter_map(|c| self.cp.get(c)).collect();
+        let user_strings = visited_strings(&user_files, &visited, &normalized);
+        let archived: BTreeSet<&str> = module_resources.iter().map(|(p, _)| p.as_str()).collect();
+        let user_module_resources: Vec<(String, Vec<u8>)> = crate::resources::derive(self.cp, &user_strings)
+            .into_iter()
+            .filter(|(p, _)| !archived.contains(p.as_str()))
+            .collect();
+        let class_path_resources = if self.class_path_read(&visited) { self.cp.class_path_files() } else { Vec::new() };
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
@@ -427,6 +451,8 @@ impl<'a> BuildInput<'a> {
             module_services: f.seeds.module_services.clone(),
             system_properties: f.system_properties.clone(),
             module_resources,
+            user_module_resources,
+            class_path_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,
             warnings,

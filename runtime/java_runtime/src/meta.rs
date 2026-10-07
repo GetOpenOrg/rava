@@ -142,6 +142,11 @@ pub struct UserMeta {
     pub module_services: &'static [u8],
     pub line_pool: &'static [u8],
     pub line_numbers: &'static [u8],
+    /// 类路径资源（计划 docs/plans/2026-10-01-c1d-closure-bloat.md §30.15）：(资源名, 字节)，按名有序，
+    /// 同名按类路径序；读表的 native 不在闭包调用链上时为空表
+    pub class_path_resources: &'static [(&'static str, &'static [u8])],
+    /// 用户侧模块资源：用户代码指名、档案侧模块资源表未收的 JDK 模块资源（如 `java/lang/String.class`），按名有序
+    pub user_module_resources: &'static [(&'static str, &'static [u8])],
 }
 
 static USER_META: std::sync::OnceLock<&'static UserMeta> = std::sync::OnceLock::new();
@@ -326,6 +331,21 @@ pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, 
     static CELL: std::sync::OnceLock<&'static [(&'static str, &'static [(&'static str, &'static str, &'static str)])]> = std::sync::OnceLock::new();
     merged(&CELL, || meta_codec::record_components(archive_meta(unsafe { RECORD_COMPONENTS })), |m| meta_codec::record_components(user_meta(m, m.record_components)), Some(|a, b| a.0.cmp(b.0)))
 }
+/// 类路径资源（只在用户侧：类路径即用户程序的类路径；未登记用户侧时为空）
+pub fn class_path_resources() -> &'static [(&'static str, &'static [u8])] {
+    USER_META.get().map_or(&[], |m| m.class_path_resources)
+}
+/// 模块资源：档案侧编译期嵌入表优先，其次用户侧表（用户代码指名的 JDK 模块资源）。资源名不带前导 `/`
+pub fn module_resource(name: &str) -> Option<&'static [u8]> {
+    if name.starts_with('/') {
+        return None;
+    }
+    crate::jdk_resources::module_resources::lookup(name).or_else(|| {
+        let t = USER_META.get().map_or(&[][..], |m| m.user_module_resources);
+        t.binary_search_by(|(n, _)| (*n).cmp(name)).ok().map(|i| t[i].1)
+    })
+}
+
 /// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
 pub fn module_services() -> &'static [(&'static str, &'static str)] {
     static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();

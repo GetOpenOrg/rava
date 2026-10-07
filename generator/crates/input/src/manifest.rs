@@ -57,6 +57,8 @@ pub struct RuntimeManifest {
     pub vm_injected_statics: BTreeMap<String, String>,
     /// 模块资源路径（jmod `classes/` 下相对路径）
     pub module_resource_paths: Vec<String>,
+    /// 类路径资源表的读取入口（`[class_path] resource_readers`，`类.方法:描述符`）：其一在调用链上即嵌入类路径资源
+    pub class_path_readers: Vec<String>,
     /// 引导初始化类
     pub boot_init_classes: Vec<String>,
     /// 引导期调用的静态方法（`类.方法:()V`）
@@ -203,6 +205,7 @@ impl RuntimeManifest {
             release,
             vm_injected_statics: injected_statics(vmc)?,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
+            class_path_readers: str_list(section(&vm, "class_path"), "resource_readers", "class_path")?,
             boot_init_classes: classes(boot, "classes", "boot_init")?,
             boot_init_calls,
             boot_phases: boot_phases(&seeds)?,
