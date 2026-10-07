@@ -903,14 +903,34 @@ build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -
    - `VM.directMemory` / `savedProps`：TestDirectBuffer；
    - `latestUserDefinedLoader`：任一 `ObjectInputStream.readObject` 用例（如 DeepCopy、TestSerialUserGenericCallbacks）。
 5. 闭包数字（Linux JDK 21 HelloWorld，`rava closure` summary.classes）：基线 3045（(L) 链在）/ 598（切 `logRuntimeExit`）。**实测 cabe9fb0：3043 类 / 18,093 方法**（bimg4-s2-cabe9fb0；基线 3045 / 18,108 测于 86f4f9be，其后并入的 JCA 键判定收窄等也在本数内，差值不单归本节）。待测：切 `logRuntimeExit` 的对照数（预期 ≈ 598）。本节预期：② 单独 ≈ 0；VM 回到字节码后 `isSystemDomainLoader` / `latestUserDefinedLoader` / `getSavedProperty` 的字节码入链（小幅增加，预计 < 10 类）；`enumConstantDirectory` 经反射 `values()` 的增量取决于集成线收窄；S2 见 §5.6.5。
+6. 映像必需（§5.6.8，dcabf9e3）：
+   - **全量语料映像求值 ok 数**（合批时统计）：全量 e2e 中「引导映像求值失败」导致的构建失败数应为 0；按 build_status / 构建日志统计 ok 数 = 参与构建的用例数，失败的逐例记首个失败阶段与失败栈末帧；
+   - 单测全量通过（`analyze` 签名改为 `Result`；`ClosureFacts::from_json` 缺 `boot_image_data` 即错）；
+   - `java_runtime` 编译：`system_impl.rs`（`registerNatives` 空体、删 `host_property` / `derived_vm_property`）、`meta.rs`（删 `VM_CONST_PROPERTIES` / `VM_DYNAMIC_PROPERTIES` 外部表）、`lib.rs`（删 `vm_boot_init`）；
+   - 系统属性抽查（输出与 JDK 相同，属性表现只来自映像）：TestSystemStableProps、TestBootLayer、TestIntegerCacheSpec、TestDirectBuffer。
 
 #### 5.6.7 遗留与待决
 
 1. ① 构建期确定 `LoggerFinder` 提供者、③ 日志级别取映像值：待用户，本步未做；② 的 HelloWorld 收益依赖 ①。
-2. 无映像（求值失败）时运行期 `initLevel` 停在 0，`isBooted()` 为 false：终态应把引导映像设为必需（求值失败即构建失败），现状保留无映像的回退路径。是否取消回退待定。
+2. ~~无映像（求值失败）时的回退路径~~：已取消，映像必需，见 §5.6.8。
 3. `getSavedProperty` 改为真实语义（读映像 `savedProps`），`[vm_constants]` 剪枝失效；`Integer$IntegerCache` 等调用点的闭包变化待测（见清单第 5 条）。
 4. `concrete/vm.rs` 已 740 行（> 600），后续触及时按职责拆分（方法信息 / 堆 / 帧）。
 5. `Class` 仍在 `[vm_boundary]` 与 `clinit_carried`（native 与 struct 归属），随第 5 / 6 步处理。
+
+#### 5.6.8 映像必需：取消无映像回退（dcabf9e3）
+
+终态原则：原生二进制只有「从构建期引导映像出发」一条启动路径，映像求值失败即构建失败，不保留运行期引导的第二条路径。
+
+- **失败即失败**：`closure::analyze` 返回 `Result<Closure, BootFailure>`；`BootFailure` 带首个失败阶段与原因（求值器的失败文本，含未登记的 native / VM 操作名，如「native 未登记 X」）、失败点调用栈（外→内，展示末 30 帧）与审计报告。`rava build` / `rava profile` 以该错误结束；`rava closure --boot-report` 失败时仍写报告再返回错误。清单 `[concrete.boot] calls` 无引导阶段、阶段方法所在类不在类路径上（缺参考 JDK）同为失败。失败不写闭包缓存。
+- **去 Option**：`Closure.boot_image`、`BootImage.data`（删 `ok` 字段）、`ClosureFacts.boot_image`、`BuildInput.boot_image` 均为必有；closure.json / 档案 `profile.json` 缺 `boot_image_data` 即格式错误；发射层无条件发射 `boot_image.rs` 与 main 中的 `__boot_image_start()` 调用（`write_facade` / `write_boot_image` 去掉「有无映像」分支）。
+- **删除的回退代码**：
+  - 分析器：无映像时以 `seeds.toml [boot_init]` 类作初始化根（`root_init` 一并删除）；
+  - 清单：`seeds.toml [boot_init]` 段（System、AccessibleObject）与分析器 / 发射层两侧的读取字段——两类在映像中已于构建期初始化（System 在 `[concrete.boot] init`，AccessibleObject 作为 `java/lang/reflect/Method` 的超类随之初始化），有映像时这张表本就全是空操作；
+  - 发射层 main 的 `vm_boot_init(&[...])` 调用与运行时 `vm_boot_init`；
+  - `System.registerNatives` 的运行期属性表构建（`ConcurrentHashMap` 直挂、`VersionProps.init`、`VM.saveProperties`、`setJavaLangAccess`）——只在无映像时运行；现回到 native 本义（绑定 JNI 入口，原生二进制为空操作），`System.props` / `VM.savedProps` 由构建期 initPhase1 写入映像，宿主相关键经 `SystemProps$Raw` 启动重放取值。随之删除 `host_property` / `derived_vm_property`、java_meta 的 `VM_CONST_PROPERTIES` / `VM_DYNAMIC_PROPERTIES` 表（发射与运行时 `meta::vm_const_properties` / `vm_dynamic_properties`）与输入侧 `SysPropFacts`。closure.json 的 `system_properties`（分析器折叠表、档案一致性校验）保留。
+- 不受影响：`#[jvm_boundary]` 计数不变（14）；`gil.rs` 的 `__boot_initialized`（映像启动序列标记构建期已初始化类）保留。
+
+验证见 §5.6.6 第 6 条。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
