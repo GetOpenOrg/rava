@@ -3658,7 +3658,7 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
   - `ReferenceQueue.poll()` 按对象答 null，于是 `WeakHashMap.expungeStaleEntries`、`ClassCache.processQueue`、
     `LogManager.drainLoggerRefQueueBounded`、`Level$KnownLevel.purge` 的出队分支死。原因是闭包里没有 `ReferenceQueue.enqueue`：
     引用入队由 VM 的引用处理线程驱动，当前闭包与运行时都没有承载它，所以转译产物里队列确实恒空，与该折叠一致。
-    将来按手写边界类别 ③ 落地 GC 引用处理时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
+    将来按手写边界类别 ③ 落地引用类语义（由 `Rc` 释放触发、不引入 GC，见 `2026-10-07-no-gc-memory-model.md`）时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
     这一项属于既有的建模缺口，不是新的不健全；见「待用户决策」。
     同类还有 `ResourceBundle.findBundle@73`、`FileInputStreamPool.getInputStream@3`、`CleanerImpl.run`、`MemoryCache.emptyQueue`、
     `LocaleObjectCache.cleanStaleEntries`、`ThreadContainers.expungeStaleEntries`、`Bundles.cleanupCache` 等（均为引用队列出队）。
@@ -3706,8 +3706,9 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
 #### 待用户决策
 
 1. 引用队列：P3/P4 让「闭包与运行时都不承载 VM 引用处理线程」这一既有缺口变得可见：`WeakHashMap` 等的出队清理分支被删去，
-   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把 GC 引用处理（手写边界类别 ③）列入后续项？
+   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把引用类语义（手写边界类别 ③）列入后续项？
    一旦列入，入队路径进入档案，相关折叠会自动解除，不需要回退本步。
+   **已定（2026-10-07）**：列入，按无 GC 内存模型实施——引用类语义由 `Rc` 释放触发，C4 之后（`2026-10-07-no-gc-memory-model.md`）。
 
 #### 遗留与恢复入口
 

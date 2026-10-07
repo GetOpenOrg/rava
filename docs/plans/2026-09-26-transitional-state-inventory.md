@@ -176,10 +176,10 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-G1 | 没有 GC（Rc 循环永不释放，驻留表只增不减）；`Runtime.gc/freeMemory/totalMemory/maxMemory` 缺失 | 回收机制 + 内存查询 | 内存持续增长；调用即 panic | 部分（compat「无 GC」） |
-| FS-G2 | 弱 / 软 / 虚引用不清除、不入队 | — | WeakHashMap 条目不消失 | compat 近似行 |
-| FS-G3 | finalize 不触发 | — | finalize 不执行 | compat |
-| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | — | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立；2026-09-28 FileCleanable 回到字节码，no-op 语义下沉内部边界 PhantomCleanable / CleanerFactory（语义不变：仍无 GC 驱动清理） |
+| FS-G1 | 没有 GC（Rc 循环永不释放，驻留表只增不减）；`Runtime.gc/freeMemory/totalMemory/maxMemory` 缺失 | 无 GC 内存模型：编译期逃逸分析整组释放 + 所有权推断弱引用，不做追踪式 GC 与运行期环回收（2026-10-07 定，C4 之后，`2026-10-07-no-gc-memory-model.md`）+ 内存查询 | 内存持续增长；调用即 panic | 部分（compat「无 GC」） |
+| FS-G2 | 弱 / 软 / 虚引用不清除、不入队 | 引用类语义由 `Rc` 释放触发（无 GC 模型，C4 之后） | WeakHashMap 条目不消失 | compat 近似行 |
+| FS-G3 | finalize 不触发 | 随对象释放触发（无 GC 模型，C4 之后） | finalize 不执行 | compat |
+| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | Cleaner 动作随对象释放触发（无 GC 模型，C4 之后） | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立；2026-09-28 FileCleanable 回到字节码，no-op 语义下沉内部边界 PhantomCleanable / CleanerFactory（语义不变：仍无 GC 驱动清理） |
 | FS-G5 | 监视器 / park 侧表条目不回收，地址键可能被复用 | 对象头或弱键 | 内存增长；理论上身份冲突 | 新立 |
 
 ## 十一、生成器质量
