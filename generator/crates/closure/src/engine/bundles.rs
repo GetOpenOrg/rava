@@ -75,6 +75,8 @@ impl<'a> Engine<'a> {
         let suffixes = self.bundle_suffixes();
         let root = self.man.seeds.bundles.root.clone();
         let (c0, r0) = (self.seeds.bundles.classes.len(), self.seeds.bundles.resources.len());
+        let named: Vec<String> = want.iter().filter(|(_, (_, off))| off.is_some()).map(|(b, _)| b.clone()).collect();
+        let fallback = want.len() - named.len();
         for (base, (m, off)) in want {
             self.seeds.bundles.bases.insert(base.clone());
             let (classes, props) = bundles::candidates(&base, &suffixes);
@@ -103,9 +105,11 @@ impl<'a> Engine<'a> {
         }
         let b = &self.seeds.bundles;
         eprintln!(
-            "[closure] 资源束：{} 个调用点（{} 个基名推不出）→ 束类 +{}、属性文件 +{}（累计 {} / {}）",
+            "[closure] 资源束：{} 个调用点（{} 个基名推不出）；基名 {:?} + 字面量回退 {} 个 → 束类 +{}、属性文件 +{}（累计 {} / {}）",
             b.sites.len(),
             b.unknown.len(),
+            named,
+            fallback,
             b.classes.len() - c0,
             b.resources.len() - r0,
             b.classes.len(),
@@ -126,6 +130,8 @@ impl<'a> Engine<'a> {
                 match &x.operand {
                     Operand::Method(r, _) => {
                         if let Some(&j) = self.man.seeds.bundles.lookups.get(&format!("{}.{}:{}", r.owner, r.name, r.desc)) {
+                            let k = &self.methods[i].key;
+                            eprintln!("[closure] 资源束调用点：{}.{}{}@{}", k.owner, k.name, k.desc, x.offset);
                             self.seeds.bundles.sites.push((i, x.offset, j));
                         }
                     }
