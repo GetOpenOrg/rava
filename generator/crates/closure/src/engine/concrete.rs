@@ -40,6 +40,8 @@ use super::*;
 const CONCRETE_CTX: &str = "@concrete";
 /// 单个调用点的实参组合数上限
 const COMBO_LIMIT: usize = 64;
+/// 诊断（`--flows @concrete`）列出的实参组合数上限
+const DIAG_COMBOS: usize = 64;
 
 /// 枚举出的实参
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -79,8 +81,8 @@ pub(super) struct Concrete {
     applied: HashSet<(usize, u32, Vec<AK>)>,
     /// 已回退抽象调用边的调用点
     fallback: HashSet<(usize, u32)>,
-    /// 诊断：调用点 → 结论
-    pub(super) diag: BTreeMap<String, String>,
+    /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
+    pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl<'a> Engine<'a> {
@@ -138,13 +140,16 @@ impl<'a> Engine<'a> {
             let Ok(o) = &*r else { continue };
             self.concrete_apply(m, off, resolved, md, o);
         }
-        self.concrete.diag.insert(site_name, format!("具体求值 {} 组实参", combos.len()));
+        let shown: Vec<String> = combos.iter().take(DIAG_COMBOS).map(|c| format!("{c:?}")).collect();
+        let more = combos.len().saturating_sub(DIAG_COMBOS);
+        let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
+        self.concrete.diag.entry(site_name).or_default().insert(line);
         true
     }
 
     fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
         self.concrete.fallback.insert((m, off));
-        self.concrete.diag.insert(site, format!("回退：{why}"));
+        self.concrete.diag.entry(site).or_default().insert(format!("回退：{why}"));
         false
     }
 
