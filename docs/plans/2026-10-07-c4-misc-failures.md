@@ -75,3 +75,36 @@
 - 抽查 `c4misc-bae70fb1`（JDK 21，`--per-dir 0`）：TestSqlDateTime PASS（jp2）、TestFileCanonicalPaths PASS（jp1）；
   TestStringGetCharsLegacy FAIL（jp2），失败日志含已登记签名 `native: …getSystemPackageLocation…`，按已知计。
 - PartitionInteger 未抽查：超时不可登记，修复依赖 §五待决项与 R1。
+
+## 七、CheckOutputDeviceIsATerminal：boot layer 服务目录为 null（Python 基线回归，已修）
+
+- 现象（C4 全量，3f59a8e9，sg2）：转译、构建成功，运行期 `ExceptionInInitializerError`，cause 为
+  `NullPointerException`，无 Java 栈。
+- 调用链（JDK 21.0.11 字节码，`javap -c -p`）：`System.console()` → `SharedSecrets.getJavaIOAccess()` →
+  `ensureClassInitialized(Console)` → `Console.<clinit>`：native `ttyStatus()`（手写已有，`console_impl.rs`；
+  非终端为 0 → `istty = false`）→ `Charset.forName(StaticProperty.nativeEncoding(), defaultCharset())` →
+  `instantiateConsole(false)` → `AccessController.doPrivileged(lambda$instantiateConsole$3)`：
+  `ServiceLoader.load(ModuleLayer.boot(), JdkConsoleProvider.class).stream()…findAny().orElse(null)`。
+  `LayerLookupIterator.providers(layer)` → `JavaLangAccess.getServicesCatalog(layer)` →
+  `ModuleLayer.getServicesCatalog()`：字段 `servicesCatalog` 为 null 时遍历 `nameToModule.values()` 建目录。
+- 根因：C1d 删除 `System$2.getServicesCatalog` 手写覆盖后该方法按字节码执行；手写 `ModuleLayer.boot()`
+  返回的空层对象 `nameToModule` 为 null → NPE。lambda 只捕获 `ServiceConfigurationError`，NPE 穿出
+  `Console.<clinit>` 成 EIIE。属 VM 注入状态缺失（HotSpot 在 initPhase2 经 `Module.defineModules` →
+  `initServices` 写入 boot layer 的服务目录），不是 native 缺失、闭包漏类或生成器语义错误。
+- 修复（24c45c0a，经 dead6c42 合入集成分支；本分支起点 b6ed3950 已含）：准入 ③（VM 注入状态），
+  `vm_intrinsics.toml [vm_state.field_hooks]` 登记
+  `java/lang/ModuleLayer.servicesCatalog` 接收者钩子 `ModuleLayer.__vm_services_catalog`
+  （共置 `runtime/java_runtime/src/java/lang/module_layer_impl.rs`）：boot layer 首次读该字段前写入引导服务目录
+  （`BootLoader.getServicesCatalog`，按分析器服务事实装填），其他层仍按字节码由 `nameToModule` 惰性建立。
+  生成器无类名特判，`boot()` 仍为最小空层，闭包规模不变。
+- 终态语义核对：provider（`jdk.internal.le` / `jdk.jshell` 的 `JdkConsoleProvider` 实现）经无名模块路径装载，
+  `lambda$instantiateConsole$0` 比较 `"java.base".equals(jcp.getClass().getModule().getName())`——
+  JDK 下 java.base 无该服务 provider，结果为空；rava 下全部类在无名模块（`getName()` 为 null），同样全部滤掉。
+  `orElse(null)` → `cons = null`，`istty` 为 false 时不回落 `JdkConsoleImpl` → `System.console()` 返回 null，
+  与 JDK 21 非终端行为一致；终端下 `istty` 为 true，回落 `ProxyingConsole(JdkConsoleImpl)`，与 JDK 一致。
+- 残留（不影响本例，随引导映像第 4 步命名模块落地）：`-Djdk.console=jdk.internal.le` 这类按模块名选 provider
+  的配置，在 rava 下因模块名为 null 永不命中，JDK 下会选中 jline 实现。
+- 已有验证：抽查 jp2@24c45c0a PASS、dev#2@3b87ded8 PASS（`cluster_results/spot/c4reg`、
+  `spot/merged-3b87ded8`）。
+- 待验证（dev 恢复后统一跑）：CheckOutputDeviceIsATerminal（JDK 21 / 25）；同经 boot layer 服务查找的
+  TestServiceLoaderLayers、TestModuleLayerDefine、TestServiceLoaderEmpty、TestScriptEngineNone 回归确认。
