@@ -1,5 +1,7 @@
 # C1d §29 能力②：JCA 提供者序求值（2026-10-06，分支 c1d-jca，基于 b15b81a3）
 
+> 状态（2026-10-08）：§7.4 键判定收窄已完成（fix-jca-subset 709aaa8d，合入集成分支 b6ed3950，2026-10-07；JCA 抽查 9/9）。
+
 上游：`docs/plans/2026-10-01-c1d-closure-bloat.md` §29.3（路线 P）。能力①（URL 按对象 + 前缀串域，分支 c1d-url）与
 能力③（ResourceBundle 未知 Class 的服务查找，引导映像线）不在本步范围。
 

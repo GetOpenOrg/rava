@@ -1,6 +1,7 @@
 # 直连反射调用：枚举常量取得路径不再经 Method.invoke 通用反射扇出
 
 > 分支 `enum-values-direct`（基于 batch-1007 98e733c9，已并入 boot-image-s4 17dd9b7c）。
+> 状态（2026-10-08）：待合批验证（59451c29，已合入 batch-1008 24f08764）；`fold_direct_calls` = 1，HelloWorld / CollectorsDemo 类数 3011 未降，`Method.invoke` 经其余 4 个调用点入链（§6.4、§八）。
 > 起因：闭包构成报告（`docs/reports/2026-10-07-closure-composition.md`，c3a06331）的反事实切除——
 > 枚举反射门切除后 CollectorsDemo 2990 → 528 类，约 2460 类经 `Method.invoke` 入链。
 
