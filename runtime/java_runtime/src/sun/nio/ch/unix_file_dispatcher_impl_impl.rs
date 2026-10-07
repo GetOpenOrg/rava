@@ -3,6 +3,8 @@
 //! 缓冲区参数是本地内存绝对地址（`Unsafe.allocateMemory` / 直接缓冲区）。返回值与异常按 JNI 同款：
 //! 读写走 `convertReturnVal`（EOF = -1、EAGAIN = -2、EINTR = -3，其余抛 IOException），
 //! 其它调用走 `handle`（EINTR = -3，其余抛 IOException，消息为 strerror 文案）。
+//! 虚拟句柄（`${java.home}` 虚拟树，`crate::jdk_resources`，NIO `open0` 所得）的 read / pread / seek / size
+//! 读嵌入数据；其余调用对负 fd 由系统调用自然得 EBADF（与只读打开的写入同为 IOException）。
 
 use crate::prelude::*;
 use super::unix_file_dispatcher_impl::UnixFileDispatcherImpl;
@@ -65,10 +67,23 @@ pub(super) fn fd_of(fdo: &FileDescriptor) -> i32 {
     fdo.__get_fd()
 }
 
+/// 虚拟句柄的读目标缓冲区（本地内存 address 起 len 字节）；非虚拟句柄为 None
+fn virtual_buf<'a>(fdo: &FileDescriptor, address: i64, len: i32) -> Option<&'a mut [u8]> {
+    if !crate::jdk_resources::is_virtual(fd_of(fdo)) {
+        return None;
+    }
+    // SAFETY: address 指向调用方至少 len 字节的本地缓冲区（IOUtil 临时直接缓冲区 / 直接缓冲区）
+    Some(unsafe { std::slice::from_raw_parts_mut(address as *mut u8, len.max(0) as usize) })
+}
+
 impl UnixFileDispatcherImpl {
     /// native `read0(FileDescriptor, long address, int len)`：read(2)。
     #[jvm_native]
     pub fn read0(fdo: FileDescriptor, address: i64, len: i32) -> Result<i32> {
+        if let Some(buf) = virtual_buf(&fdo, address, len) {
+            let n = crate::jdk_resources::virtual_read(fd_of(&fdo), buf);
+            return Ok(if n == 0 { IOS_EOF as i32 } else { n as i32 });
+        }
         // SAFETY: address 指向至少 len 字节的本地缓冲区
         let n = unsafe { libc::read(fd_of(&fdo), address as *mut libc::c_void, len as usize) };
         Ok(convert(n as i64, true)? as i32)
@@ -77,6 +92,10 @@ impl UnixFileDispatcherImpl {
     /// native `pread0(FileDescriptor, long address, int len, long position)`：pread(2)。
     #[jvm_native]
     pub fn pread0(fdo: FileDescriptor, address: i64, len: i32, position: i64) -> Result<i32> {
+        if let Some(buf) = virtual_buf(&fdo, address, len) {
+            let n = crate::jdk_resources::virtual_pread(fd_of(&fdo), buf, position);
+            return Ok(if n == 0 { IOS_EOF as i32 } else { n as i32 });
+        }
         // SAFETY: 同 read0
         let n = unsafe { libc::pread(fd_of(&fdo), address as *mut libc::c_void, len as usize, position as libc::off_t) };
         Ok(convert(n as i64, true)? as i32)
@@ -101,6 +120,14 @@ impl UnixFileDispatcherImpl {
     /// native `seek0(FileDescriptor, long offset)`：offset < 0 取当前位置，否则定位到 offset。
     #[jvm_native]
     pub fn seek0(fdo: FileDescriptor, offset: i64) -> Result<i64> {
+        let fd = fd_of(&fdo);
+        if crate::jdk_resources::is_virtual(fd) {
+            return Ok(if offset < 0 {
+                crate::jdk_resources::virtual_position(fd)
+            } else {
+                crate::jdk_resources::virtual_seek(fd, offset)
+            });
+        }
         // SAFETY: lseek 只作用于 fd
         let r = unsafe {
             if offset < 0 {
@@ -115,6 +142,9 @@ impl UnixFileDispatcherImpl {
     /// native `size0(FileDescriptor)`：fstat(2) 的 st_size。
     #[jvm_native]
     pub fn size0(fdo: FileDescriptor) -> Result<i64> {
+        if let Some(st) = crate::jdk_resources::virtual_fstat(fd_of(&fdo)) {
+            return Ok(st.st_size as i64);
+        }
         // SAFETY: buf 为栈上 stat 结构
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
         if unsafe { libc::fstat(fd_of(&fdo), &mut buf) } < 0 {

@@ -4,11 +4,14 @@
 //! 本文件只承载 JNI 对应物（libnio `UnixNativeDispatcher.c`）：路径参数是 NativeBuffer 的绝对地址
 //! （以 NUL 结尾的 C 串，`Unsafe.allocateMemory` 所得），失败时按 JNI 同款抛 `UnixException(errno)`
 //! 或返回 errno。本类 49 个 native 全部承载（续见 `unix_native_dispatcher_ext.rs`）。
+//! 路径落入 `${java.home}` 虚拟树（U14，`crate::jdk_resources`）或句柄为虚拟句柄时改读嵌入数据：
+//! open / openat / close / read / stat / lstat / fstatat / access / dup / opendir / fdopendir / readdir / closedir。
 
 use crate::prelude::*;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
 use super::unix_exception::UnixException;
 use super::unix_file_attributes::UnixFileAttributes;
+use crate::jdk_resources::{self as vfs, tree};
 
 // UnixNativeDispatcher 的能力位（JDK 常量值）
 const SUPPORTS_OPENAT: i32 = 1 << 1;
@@ -45,6 +48,17 @@ fn c_path(address: i64) -> *const libc::c_char {
     address as *const libc::c_char
 }
 
+/// NativeBuffer 路径 → Rust 串（`${java.home}` 虚拟树判定，jdk_resources）
+pub(super) fn path_of(address: i64) -> std::string::String {
+    // SAFETY: address 指向 NativeBuffer 中以 NUL 结尾的路径串
+    unsafe { std::ffi::CStr::from_ptr(c_path(address)) }.to_string_lossy().into_owned()
+}
+
+/// 虚拟树的 stat 结果按 JNI 形态落地：Ok → 填属性；Err(errno) → 交调用方
+pub(super) fn virtual_stat(path: &str) -> Option<std::result::Result<libc::stat, i32>> {
+    tree::stat(path)
+}
+
 /// JNI `RESTARTABLE`：返回 -1 且 errno == EINTR 时重试；其它失败返回 errno。
 pub(super) fn restartable(mut f: impl FnMut() -> i32) -> std::result::Result<i32, i32> {
     loop {
@@ -77,6 +91,9 @@ impl UnixNativeDispatcher {
     /// native `openat0(int dfd, long path, int flags, int mode)`：openat(2)。
     #[jvm_native]
     pub fn openat0(dfd: i32, path_address: i64, flags: i32, mode: i32) -> Result<i32> {
+        if let Some(r) = vfs::at_path(dfd, &path_of(path_address)).and_then(|p| vfs::nio_open(&p, flags)) {
+            return r.map_err(unix_exception);
+        }
         // SAFETY: path_address 指向 NUL 结尾路径；dfd 为调用方持有的目录描述符
         restartable(|| unsafe { libc::openat(dfd, c_path(path_address), flags, mode as libc::c_uint) })
             .map_err(unix_exception)
@@ -176,6 +193,10 @@ impl UnixNativeDispatcher {
     /// native `fstatat0(int dfd, long path, int flag, UnixFileAttributes)`：fstatat(2) 后填 st_* 字段。
     #[jvm_native]
     pub fn fstatat0(dfd: i32, path_address: i64, flag: i32, attrs: UnixFileAttributes) -> Result<()> {
+        if let Some(r) = vfs::at_path(dfd, &path_of(path_address)).and_then(|p| virtual_stat(&p)) {
+            fill_stat(&attrs, &r.map_err(unix_exception)?);
+            return Ok(());
+        }
         // SAFETY: 同 openat0；buf 为栈上 stat 结构
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
         restartable(|| unsafe { libc::fstatat(dfd, c_path(path_address), &mut buf, flag) }).map_err(unix_exception)?;
@@ -186,6 +207,11 @@ impl UnixNativeDispatcher {
     /// native `read0(int fd, long address, int nbytes)`：read(2) 到直接内存，返回读到的字节数。
     #[jvm_native]
     pub fn read0(fd: i32, address: i64, nbytes: i32) -> Result<i32> {
+        if vfs::is_virtual(fd) {
+            // SAFETY: address 为调用方 NativeBuffer，至少 nbytes 字节可写
+            let buf = unsafe { std::slice::from_raw_parts_mut(address as *mut u8, nbytes.max(0) as usize) };
+            return Ok(vfs::virtual_read(fd, buf) as i32);
+        }
         // SAFETY: address 为调用方 NativeBuffer，至少 nbytes 字节可写
         restartable(|| unsafe { libc::read(fd, address as *mut libc::c_void, nbytes as libc::size_t) as i32 })
             .map_err(unix_exception)
@@ -202,6 +228,9 @@ impl UnixNativeDispatcher {
     /// native `open0(long path, int flags, int mode)`：open(2)。
     #[jvm_native]
     pub fn open0(path_address: i64, flags: i32, mode: i32) -> Result<i32> {
+        if let Some(r) = vfs::nio_open(&path_of(path_address), flags) {
+            return r.map_err(unix_exception);
+        }
         // SAFETY: path_address 指向 NativeBuffer 中以 NUL 结尾的路径串
         restartable(|| unsafe { libc::open(c_path(path_address), flags, mode as libc::c_uint) })
             .map_err(unix_exception)
@@ -210,6 +239,10 @@ impl UnixNativeDispatcher {
     /// native `close0(int fd)`：close(2)；EINTR 视为已关闭（JNI 同款）。
     #[jvm_native]
     pub fn close0(fd: i32) -> Result<()> {
+        if vfs::is_virtual(fd) {
+            vfs::virtual_close(fd);
+            return Ok(());
+        }
         // SAFETY: fd 为调用方持有的文件描述符
         if unsafe { libc::close(fd) } == -1 {
             let err = errno();
@@ -223,6 +256,15 @@ impl UnixNativeDispatcher {
     /// native `stat0(long path, UnixFileAttributes attrs)`：stat(2)，返回 errno（0 = 成功）。
     #[jvm_native]
     pub fn stat0(path_address: i64, attrs: UnixFileAttributes) -> Result<i32> {
+        if let Some(r) = virtual_stat(&path_of(path_address)) {
+            return Ok(match r {
+                Ok(st) => {
+                    fill_stat(&attrs, &st);
+                    0
+                }
+                Err(e) => e,
+            });
+        }
         // SAFETY: 同 open0；buf 为栈上 stat 结构
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
         if let Err(err) = restartable(|| unsafe { libc::stat(c_path(path_address), &mut buf) }) {
@@ -235,6 +277,10 @@ impl UnixNativeDispatcher {
     /// native `lstat0(long path, UnixFileAttributes attrs)`：lstat(2)，失败抛 UnixException。
     #[jvm_native]
     pub fn lstat0(path_address: i64, attrs: UnixFileAttributes) -> Result<()> {
+        if let Some(r) = virtual_stat(&path_of(path_address)) {
+            fill_stat(&attrs, &r.map_err(unix_exception)?);
+            return Ok(());
+        }
         // SAFETY: 同 stat0
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
         restartable(|| unsafe { libc::lstat(c_path(path_address), &mut buf) }).map_err(unix_exception)?;
@@ -275,6 +321,9 @@ impl UnixNativeDispatcher {
     /// native `access0(long path, int amode)`：access(2)，返回 errno（0 = 允许）。
     #[jvm_native]
     pub fn access0(path_address: i64, amode: i32) -> Result<i32> {
+        if let Some(e) = tree::access(&path_of(path_address), amode) {
+            return Ok(e);
+        }
         // SAFETY: 同 open0
         Ok(restartable(|| unsafe { libc::access(c_path(path_address), amode) }).err().unwrap_or(0))
     }
@@ -295,6 +344,9 @@ impl UnixNativeDispatcher {
     /// native `dup(int)`：dup(2)。
     #[jvm_native]
     pub fn dup(fd: i32) -> Result<i32> {
+        if let Some(nfd) = vfs::virtual_dup(fd) {
+            return Ok(nfd);
+        }
         // SAFETY: dup 只作用于 fd
         restartable(|| unsafe { libc::dup(fd) }).map_err(unix_exception)
     }
@@ -302,6 +354,9 @@ impl UnixNativeDispatcher {
     /// native `opendir0(long path)`：opendir(3)，返回 DIR* 地址。
     #[jvm_native]
     pub fn opendir0(path_address: i64) -> Result<i64> {
+        if let Some(r) = tree::opendir(&path_of(path_address)) {
+            return r.map_err(unix_exception);
+        }
         // SAFETY: 同 open0
         let d = unsafe { libc::opendir(c_path(path_address)) };
         if d.is_null() {
@@ -313,6 +368,9 @@ impl UnixNativeDispatcher {
     /// native `fdopendir(int)`：fdopendir(3)，返回 DIR* 地址。
     #[jvm_native]
     pub fn fdopendir(dfd: i32) -> Result<i64> {
+        if let Some(r) = tree::fdopendir(dfd) {
+            return r.map_err(unix_exception);
+        }
         // SAFETY: dfd 为调用方持有的目录描述符
         let d = unsafe { libc::fdopendir(dfd) };
         if d.is_null() {
@@ -324,6 +382,10 @@ impl UnixNativeDispatcher {
     /// native `closedir(long)`：closedir(3)；EINTR 视为已关闭（JNI 同款）。
     #[jvm_native]
     pub fn closedir(dir: i64) -> Result<()> {
+        if tree::is_stream(dir) {
+            tree::closedir(dir);
+            return Ok(());
+        }
         // SAFETY: dir 为 opendir0 / fdopendir 返回的 DIR*
         if unsafe { libc::closedir(dir as *mut libc::DIR) } == -1 {
             let err = errno();
@@ -337,6 +399,12 @@ impl UnixNativeDispatcher {
     /// native `readdir0(long)`：下一目录项名（字节形态）；目录读完返回 null。
     #[jvm_native]
     pub fn readdir0(dir: i64) -> Result<JArray<i8>> {
+        if tree::is_stream(dir) {
+            return Ok(match tree::readdir(dir) {
+                Some(name) => JArray::from(name.bytes().map(|b| b as i8).collect::<Vec<i8>>()),
+                None => JArray::default(),
+            });
+        }
         // SAFETY: dir 为有效 DIR*；清 errno 以区分读完与出错
         unsafe {
             *errno_location() = 0;
