@@ -513,6 +513,18 @@ impl<'a> Engine<'a> {
         {
             return true;
         }
+        // 持有按键查找键类实例字段的对象（`[facts.keyed_lookups]` 入口的返回类型）：字段值是按键选出的服务对象，
+        // 键随对象的构造实参而定，按对象分开才能让各对象只派发到自身键选出的服务（计划 c1d §30.4 / B4①）
+        let kcs: Vec<u32> = self.key_classes();
+        for cf in &chain {
+            for f in inst(cf) {
+                // 键类已在 `key_classes` 里登记过序号；查不到序号的字段类型不是键类（不为判定新登记类名）
+                let Some(c) = f.desc.strip_prefix('L').and_then(|d| d.strip_suffix(';')) else { continue };
+                if self.ids.get(c).is_some_and(|id| kcs.contains(id)) {
+                    return true;
+                }
+            }
+        }
         if !generic {
             return false;
         }
@@ -555,14 +567,30 @@ impl<'a> Engine<'a> {
         // 形参常量克隆的堆上下文即其外层上下文
         let ctx = self.methods[m].ctx;
         let ctx = self.ctx_heap.get(&ctx).copied().unwrap_or(ctx);
-        // 递归结构（同类对象在自身方法里分配同类，如链表节点 / 表达式树）：堆上下文不再延长，
-        // 否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度
-        let recursive = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| &*self.names[t as usize] == cls);
-        if ctx != NOCTX && !recursive {
-            for seg in self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).take(HEAP_DEPTH - 1) {
-                chain.push('#');
-                chain.push_str(seg);
-            }
+        let outer: Vec<String> = self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).map(str::to_string).collect();
+        // 分配方是同一数据结构的内部对象（`internal_alloc`），且分配方的属主（链第二段所指对象）与分配方同属一个
+        // 嵌套巢（属主即巢宿主 / 巢成员：树箱属于其所在的 map）：新对象沿用分配方的属主链（去掉分配方自身的分配点），
+        // 不把分配方的分配点叠进链——否则截断到 HEAP_DEPTH 后丢掉属主，各容器的内部对象汇合（树箱在自身方法里
+        // 分配的树节点、链表节点分配的后继）。属主在巢外（分配方只是被某容器借用的独立对象，如集合给出的拆分器
+        // 再拆分出的拆分器）时不算内部分配：沿用属主会把新对象按「分配点 × 属主」成倍展开，其上的方法克隆与
+        // lambda 调用随之相乘，而这些对象的状态并不归属主管理。分配方无属主 / 属主在巢外时：递归结构不延长链
+        // （否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度），其余照常以分配方为上下文
+        let ctx_cls = if ctx == NOCTX { None } else { self.objs.get(&ctx).map(|&t| self.names[t as usize].clone()) };
+        let owner_cls = outer.get(1).and_then(|g| self.seg_cls.get(g.as_str())).map(|&t| self.names[t as usize].clone());
+        let internal = match (&ctx_cls, &owner_cls) {
+            (Some(x), Some(o)) => self.internal_alloc(x, cls) && self.same_nest(x, o),
+            _ => false,
+        };
+        let recursive = ctx_cls.as_deref().is_some_and(|x| x == cls);
+        let segs: &[String] = match () {
+            _ if ctx == NOCTX => &[],
+            _ if internal => &outer[1..],
+            _ if recursive => &[],
+            _ => &outer,
+        };
+        for seg in segs.iter().take(HEAP_DEPTH - 1) {
+            chain.push('#');
+            chain.push_str(seg);
         }
         let name = format!("{cls}{chain}");
         if let Some(&id) = self.ids.get(name.as_str()) {
@@ -571,8 +599,27 @@ impl<'a> Engine<'a> {
         let tid = self.id(cls);
         let id = self.id(&name);
         self.objs.insert(id, tid);
+        let site = chain.split('#').next().unwrap_or("").to_string();
+        self.seg_cls.entry(Rc::from(site)).or_insert(tid);
         self.obj_chain.insert(id, Rc::from(chain));
         id
+    }
+
+    /// a 与 b 同属一个嵌套巢（JVMS §4.7.28：无 `NestHost` 的类是自身巢的宿主）
+    pub(super) fn same_nest(&self, a: &str, b: &str) -> bool {
+        let nest = |c: &str| self.h.class(c).and_then(|cf| cf.nest_host.clone()).unwrap_or_else(|| c.to_string());
+        nest(a) == nest(b)
+    }
+
+    /// 类 x 的对象分配 cls 的对象属于同一数据结构的内部分配：同类（递归结构），或 x 是某嵌套巢（JVMS §4.7.28 NestHost）
+    /// 的成员、cls 与之同巢（巢宿主或另一成员）。巢宿主自身分配成员对象不算——宿主是数据结构的属主，成员对象按宿主分开
+    pub(super) fn internal_alloc(&self, x: &str, cls: &str) -> bool {
+        if x == cls {
+            return true;
+        }
+        let host = |c: &str| self.h.class(c).and_then(|cf| cf.nest_host.clone());
+        let Some(h) = host(x) else { return false };
+        cls == h || host(cls).is_some_and(|c| c == h)
     }
 
     /// 新鲜工厂：有引用形参的静态字节码方法，返回值来自本方法分配的容器对象 / 引用数组，或来自另一个新鲜工厂
@@ -598,7 +645,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return false };
         let live = |_: &str| true;
-        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None });
+        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() });
         if a.conservative {
             return false;
         }

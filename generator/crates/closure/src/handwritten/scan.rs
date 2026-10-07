@@ -169,6 +169,10 @@ impl FileScan<'_> {
         ids.visit_block(block);
         ids.0.extend(info.opaque.iter().cloned());
         info.objects = ids.0.iter().filter_map(|i| self.object_ref(i)).collect();
+        info.ret = match super::returns::fn_returns(block) {
+            HwRet::Known(cs) => HwRet::Known(cs.into_iter().map(|c| RetCall { path_ty: TypeRef(expand(self.uses, c.path_ty.0)), ..c }).collect()),
+            r => r,
+        };
         let raw = RawFn { info, calls: b.calls, nonself: b.nonself };
         match &self.cur_obj {
             Some(o) => self.object_fns.push((o.clone(), name, raw)),
@@ -304,6 +308,7 @@ fn merge_fn(fns: &mut HashMap<String, FnInfo>, calls: &mut HashMap<String, HashS
     e.fields.extend(raw.info.fields);
     e.array_access |= raw.info.array_access;
     e.objects.extend(raw.info.objects);
+    e.ret.join(&raw.info.ret);
 }
 
 /// 文件顶层 fn 的返回类型（use 表含 prelude；同 [`scan_file`] 记入 `rets` 的部分）

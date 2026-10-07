@@ -52,7 +52,7 @@ impl Ctx<'_> {
         let code = meth.code.as_ref()?;
         let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None, objs: Default::default() });
         (!a.conservative).then_some(a)
     }
 

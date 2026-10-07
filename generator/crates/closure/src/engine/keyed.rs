@@ -108,7 +108,7 @@ const MAX_CHAIN: u8 = 8;
 
 impl<'a> Engine<'a> {
     /// 清单登记的全部键类（按键查找入口的返回类型）
-    fn key_classes(&mut self) -> Vec<u32> {
+    pub(super) fn key_classes(&mut self) -> Vec<u32> {
         if let Some(k) = &self.keyed.kcs {
             return k.clone();
         }
@@ -215,7 +215,7 @@ impl<'a> Engine<'a> {
             V::Null => return Keys::default(),
             _ => {}
         }
-        let Some(a) = self.methods[m].analysis.clone() else { return Keys::Any };
+        let Some(a) = self.site_analysis(m) else { return Keys::Any };
         if a.conservative {
             return Keys::Any;
         }

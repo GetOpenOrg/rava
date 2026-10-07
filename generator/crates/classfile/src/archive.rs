@@ -155,6 +155,36 @@ impl Archive {
         }
     }
 
+    /// 档案内全部文件（类路径资源视图，含类文件与 `module-info.class`）：(档案内路径, 字节)，按路径排序。
+    /// 多版本 jar 取版本覆盖后的条目（`META-INF/versions/` 下的原始条目不单列）
+    pub fn all_files(&mut self) -> Result<Vec<(String, Vec<u8>)>, Error> {
+        match &mut self.kind {
+            Kind::Zip(zip) => {
+                let mut entries: Vec<(String, usize)> = self
+                    .index
+                    .iter()
+                    .map(|(b, &i)| (format!("{b}.class"), i))
+                    .chain(self.resources.iter().map(|(r, &i)| (r.clone(), i)))
+                    .chain(self.module_info.map(|i| ("module-info.class".to_string(), i)))
+                    .collect();
+                entries.sort();
+                entries.into_iter().map(|(n, i)| read_entry(zip, i, &self.path).map(|b| (n, b))).collect()
+            }
+            Kind::Dir(root) => {
+                let mut files = Vec::new();
+                walk_files(root, root, &mut files);
+                files.sort();
+                files
+                    .into_iter()
+                    .map(|n| {
+                        let p = root.join(&n);
+                        std::fs::read(&p).map(|b| (n, b)).map_err(|e| Error::Io(p.display().to_string(), e.to_string()))
+                    })
+                    .collect()
+            }
+        }
+    }
+
     /// 类路径服务配置 `META-INF/services/<服务二进制名>`：(服务二进制名, 文件字节)，按名排序
     pub fn service_files(&mut self) -> Vec<(String, Vec<u8>)> {
         const DIR: &str = "META-INF/services/";
@@ -249,6 +279,33 @@ mod tests {
         p
     }
 
+    /// 类路径资源视图：jar 与目录档案都列出全部文件（含类文件），按路径排序；多版本 jar 取覆盖后的条目
+    #[test]
+    fn all_files_lists_class_path_view() {
+        let p = mr_jar(
+            "allf",
+            Some("Manifest-Version: 1.0\nMulti-Release: true\n"),
+            &[("p/A.class", &[1u8]), ("p/r.txt", &[7u8]), ("META-INF/versions/11/p/A.class", &[2u8]), ("d/", &[])],
+        );
+        let mut a = Archive::open(&p, 21).unwrap();
+        let names: Vec<(String, Vec<u8>)> = a.all_files().unwrap();
+        assert_eq!(
+            names,
+            vec![
+                (MANIFEST_PATH.to_string(), b"Manifest-Version: 1.0\nMulti-Release: true\n".to_vec()),
+                ("p/A.class".to_string(), vec![2u8]),
+                ("p/r.txt".to_string(), vec![7u8]),
+            ]
+        );
+        let dir = p.parent().unwrap().join("tree");
+        std::fs::create_dir_all(dir.join("q/s")).unwrap();
+        std::fs::write(dir.join("q/B.class"), [3u8]).unwrap();
+        std::fs::write(dir.join("q/s/x.dat"), [4u8]).unwrap();
+        let mut d = Archive::open(&dir, 21).unwrap();
+        assert_eq!(d.all_files().unwrap(), vec![("q/B.class".to_string(), vec![3u8]), ("q/s/x.dat".to_string(), vec![4u8])]);
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
     /// 多版本 jar：versions/11 的类与 versions/9 的 module-info 覆盖基础条目；
     /// META-INF/versions 路径不入索引；release 低于版本号时版本化条目不可见
     #[test]
@@ -305,6 +362,19 @@ mod tests {
         assert_eq!(manifest_attr(mf, "Automatic-Module-Name").as_deref(), Some("org.example.lib"));
         assert_eq!(manifest_attr("Name: x\n", "Automatic-Module-Name"), None);
         assert_eq!(manifest_attr("Manifest-Version: 1.0\n", "Multi-Release"), None);
+    }
+}
+
+/// 目录档案内全部文件的相对路径（`/` 分隔）
+fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            walk_files(root, &p, out);
+        } else if let Ok(rel) = p.strip_prefix(root) {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
     }
 }
 

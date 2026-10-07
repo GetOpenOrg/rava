@@ -6,11 +6,18 @@
 //! - 取自本方法形参：取各调用点在该形参上的字符串常量逐个放开；形参槽出现过非常量实参（或方法无调用点
 //!   记录即进入，如 VM / 手写入口）时名字不可知，走保守回退；常量集增长 / 槽被污染时本站点重跑；
 //! - 合流的字面量（`Src::Str` 携带字面量编号）：逐个取回放开；
-//! - 其它（字段读 / 调用返回 / 拼接）：名字不可知，走保守回退。
+//! - 字段读：String 字段各写入处的字符串常量（字段不折叠或有非常量写入时不可知）；
+//! - 调用返回：被调辅助方法的返回常量候选（返回非常量时不可知）；
+//! - 类与名字都取自本方法形参：登记字段配对，各调用点按本点实参放开（`lookup_pair.rs`）；
+//! - 其它（拼接、数组读等）：名字不可知，走保守回退。
+//!
+//! 清单即边界：按名取字段身份只经 `name_resolvers`，不按调用形状（Class + String 实参）兜底放开同名字段。
 //!
 //! 保守回退：字段所属类是类字面量时放开该类及其超类的全部字段，否则全部字段不折叠；返回字段句柄的入口
 //! （`handle = true`）按字段枚举处理——句柄写入口（`handle_writers`）可达时才放开。
 
+use super::class_lookup::{event_at, is_invoke};
+use super::sealed::is_field;
 use super::*;
 
 impl Engine<'_> {
@@ -27,24 +34,35 @@ impl Engine<'_> {
             Some(V::Class(c, _)) => Some(c.to_string()),
             _ => None,
         };
-        let Some(v) = args.get(base + r.name) else { return };
-        let (names, known) = match v {
-            V::Str(s, _) => (vec![s.clone()], true),
-            V::Null => return,
-            _ => {
-                // 合流前的各字面量（Src::Str 可取回）与形参上流入的字符串常量
-                let mut names = v.lits();
-                names.extend(self.param_strs(m, off, v));
-                (names, names_known(&v.srcs(), |i| self.ptaint.contains(&(m, i))))
-            }
-        };
+        let Some(v) = args.get(base + r.name).cloned() else { return };
+        if matches!(v, V::Null) {
+            return;
+        }
+        // 引用种类实参是只读种类（getter）的常量：只取读取能力，不放开、不配对
+        let kind = r.kind.and_then(|i| args.get(base + i)).and_then(|a| match a {
+            V::Int(x) => Some(i64::from(*x)),
+            _ => None,
+        });
+        if r.read_only(kind) {
+            return;
+        }
+        // 类与名字都来自本方法形参（如 `resolveOrFail` 内的 MemberName 构造）：登记字段配对，形参上的名字由各调用点
+        // 按本点的类值集 × 名字放开（`lookup_pair.rs`）；返回字段句柄的入口按句柄标记口径，不配对
+        let paired = !r.handle && cls_arg.as_ref().is_some_and(|c| self.lookup_wrap_site(m, c, &v, &[], 0, true));
+        let (names, known) = self.name_values(m, off, &v, paired);
+        // 返回字段句柄的入口：结果带所指字段的来源标记（句柄存取按字段建模，见 `field_access.rs`）
+        let hdesc = k.split_once(':').map_or("", |x| x.1).to_string();
         for name in &names {
             match cls.as_deref().and_then(|c| self.field_by_name(c, name)) {
                 Some((decl, desc)) => {
                     if self.is_static_field(&decl, name) {
                         self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
                     }
-                    self.open_field(MemberRef { owner: decl, name: name.to_string(), desc })
+                    let f = MemberRef { owner: decl, name: name.to_string(), desc };
+                    if r.handle {
+                        self.mark_named(m, off, &hdesc, Some(f.clone()));
+                    }
+                    self.open_field(f)
                 }
                 None => {
                     // 类不是字面量：按 Class 值集所指类解析静态字段的声明类（初始化），字段按名放开；
@@ -53,14 +71,22 @@ impl Engine<'_> {
                         let (classes, complete) = self.mirror_classes_of(m, off, k, a, false);
                         if !complete {
                             self.static_owner_name_open(name);
+                            if r.handle {
+                                self.mark_named(m, off, &hdesc, None);
+                            }
                         }
                         for c in classes {
-                            if let Some((decl, _)) = self.field_by_name(&c, name) {
+                            if let Some((decl, desc)) = self.field_by_name(&c, name) {
                                 if self.is_static_field(&decl, name) {
                                     self.static_field_owner(&decl, Via::method("field-name", m, Some(off)));
                                 }
+                                if r.handle {
+                                    self.mark_named(m, off, &hdesc, Some(MemberRef { owner: decl, name: name.to_string(), desc }));
+                                }
                             }
                         }
+                    } else if r.handle {
+                        self.mark_named(m, off, &hdesc, None);
                     }
                     self.open_field_name(name)
                 }
@@ -91,6 +117,67 @@ impl Engine<'_> {
                 }
             }
         }
+    }
+
+    /// 名字值 v 的名字集与是否齐全（齐全 = 名字集即终态全集，其增长由读者登记驱动重跑）：
+    /// - 字面量（含合流前的各字面量）；常量格给出的字符串常量（`V::derived_str`）按其来源取；
+    /// - 形参：各调用点在该形参上的字符串常量，槽被污染时不齐全；`paired`（已登记字段配对）时形参名字由各调用点
+    ///   配对放开，此处只登记读者——方法经字节码调用点以外的入口接入时配对看不到这些入口，仍按常量集与污染口径取；
+    /// - 字段读：String 字段各写入处的字符串常量（字段不折叠或有非常量写入时不齐全）；
+    /// - 调用返回：被调辅助方法的返回常量候选（`callee_consts`，返回非常量时不齐全）；
+    /// - 其它来源（数组读、异常值等）不齐全
+    pub(super) fn name_values(&mut self, m: usize, off: u32, v: &V, paired: bool) -> (Vec<Rc<str>>, bool) {
+        let srcs = v.srcs();
+        // 常量格给出的字符串常量（`V::derived_str`）按其来源取：中间态常量不当字面量（来源给出终态全集，
+        // 结果与处理次序无关，D1）；无来源的常量即终态值
+        let mut names = if srcs.is_empty() { v.lits() } else { v.site_lits() };
+        if matches!(v, V::Str(..)) && (!v.derived_str() || srcs.is_empty()) {
+            return (names, true);
+        }
+        let mut known = !srcs.is_empty();
+        let a = self.site_analysis(m);
+        let offsite = self.pstr_is_offsite(m);
+        for s in srcs.iter() {
+            match *s {
+                Src::Str(_) => {}
+                Src::Param(i) => {
+                    let ns = self.pstr_read(m, i as usize, off);
+                    if !paired || offsite {
+                        names.extend(ns);
+                        known &= !self.ptaint.contains(&(m, i as usize));
+                    }
+                }
+                Src::Site(o) => match a.as_deref().and_then(|a| self.site_names(a, o)) {
+                    Some(xs) => names.extend(xs),
+                    None => known = false,
+                },
+                Src::Catch(_) => known = false,
+            }
+        }
+        names.sort_unstable();
+        names.dedup();
+        (names, known)
+    }
+
+    /// 偏移 o 处产生的名字值的终态全集：String 字段读取该字段各写入处的字符串常量（尚无写入为空集），调用返回取
+    /// 被调辅助方法的返回常量候选；推不出时 None
+    fn site_names(&mut self, a: &Analysis, o: u32) -> Option<Vec<Rc<str>>> {
+        if let Some(Event::Field { opcode, mref, .. }) = event_at(a, o, is_field) {
+            if !matches!(*opcode, classfile::op::GETSTATIC | classfile::op::GETFIELD) {
+                return None;
+            }
+            let fi = self.ctx.field_info(mref)?;
+            if fi.key.desc != format!("L{};", absint::STRING) || self.ctx.field_open(&fi) {
+                return None;
+            }
+            return match self.field_strs.get(&fi.key) {
+                Some(Some(set)) => Some(set.iter().cloned().collect()),
+                Some(None) => None,
+                None => Some(vec![]),
+            };
+        }
+        event_at(a, o, is_invoke)?;
+        self.callee_consts(a, o, 0).map(|s| s.into_iter().collect())
     }
 
     fn is_static_field(&self, decl: &str, name: &str) -> bool {

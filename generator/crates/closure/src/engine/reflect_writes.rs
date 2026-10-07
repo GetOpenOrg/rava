@@ -3,9 +3,8 @@
 use super::*;
 
 impl<'a> Engine<'a> {
-    /// 反射式字段写入（按字节码形状）：
-    /// - 同一调用里有字符串常量，且形参含 Class 或接收者是 Class：点名字段不折叠
-    ///   （所属类取 Class 常量实参 / 接收者，取不到时同名字段全部不折叠）；
+    /// 反射式字段写入与点名：
+    /// - 清单 `[facts.field_writes.name_resolvers]`（按名取字段身份的全部入口）：名字值集放开字段（`field_names.rs`）；
     /// - 清单 `[facts.field_writes] enumerators`（返回字段句柄数组）：句柄写入口（`handle_writers`）也可达时
     ///   接收者类的全部字段不折叠，推不出时全部字段（调用方是清单 `serial_enumerators` 时为可序列化字段）；
     /// - 清单 `[facts.reflect] method_lookups`：字符串常量登记为 Class 常量所指类的方法点名；名字是本方法形参时
@@ -114,57 +113,6 @@ impl<'a> Engine<'a> {
                 self.reflect_name(c, name, ch);
             }
         }
-        if class_param || class_recv {
-            // 按名放开字段：字面量与常量格给出的名字，另取按来源给出的名字（形参上各调用点的字符串常量、字段写入的
-            // 字面量集）。形参常量窗口内的文本是终态形参字符串集的子集，后者在形参抬为 Top 后仍给出同样的名字
-            // 类值（Class 接收者 / Class 形参）与名字都来自本方法形参时登记字段配对，形参名字不在此汇合放开，
-            // 由各调用点按本点实参配对点名（`lookup_pair.rs`）
-            let skip = usize::from(opcode != classfile::op::INVOKESTATIC);
-            let mut cpos: Vec<usize> = if class_recv { vec![0] } else { vec![] };
-            // 名字位：声明为 String 的形参。Object 等其他引用形参不是字段名（如 `compareComparables(Class, Object, Object)`
-            // 的键），不取名字、不登记配对——否则映射键上流入的全部字符串常量都会按名放开字段
-            let mut spos: Vec<usize> = vec![];
-            if let Some(md) = parse_method(&mref.desc) {
-                cpos.extend(md.params.iter().enumerate().filter(|(_, p)| matches!(p, FieldType::Object(c) if c == CLASS)).map(|(i, _)| i + skip));
-                spos.extend(md.params.iter().enumerate().filter(|(_, p)| matches!(p, FieldType::Object(c) if c == STRING)).map(|(i, _)| i + skip));
-            }
-            let mut fnames: BTreeSet<Rc<str>> = BTreeSet::new();
-            for (i, a) in args.iter().enumerate() {
-                if !spos.contains(&i) {
-                    continue;
-                }
-                // 常量格给出的名字（`V::derived_str`）按来源取：形参（配对或各调用点常量）、字段写入字面量集、
-                // 辅助方法返回常量。中间态常量若当字面量按名放开，形参配对后的终态不再给出该名，放开不撤回（D1）
-                fnames.extend(a.site_lits());
-                if matches!(a, V::Ref { .. }) || a.derived_str() {
-                    let mut paired = false;
-                    for &c in &cpos {
-                        paired |= self.lookup_wrap_site(m, &args[c], a, &[], 0, true);
-                    }
-                    if !paired {
-                        fnames.extend(self.param_strs(m, off, a));
-                    }
-                    fnames.extend(self.field_strs(m, a));
-                    fnames.extend(self.site_strs(m, a));
-                }
-            }
-            // 形状规则把 Class 字面量实参当作字段所属类：所属类上查不到该名时按名兜底放开。唯一目标按字节码
-            // 建模时不兜底——该字面量不是所属类（如 `getFieldOffset(name, Object.class)` 的字段类型实参），
-            // 被调体内真正按名取字段的点由其自身的站点规则处理（形参名字取各调用点常量 / 字段配对）
-            let analyzed = !classes.is_empty() && self.analyzed_exact(opcode, mref);
-            for name in &fnames {
-                let mut hit = false;
-                for c in &classes {
-                    if let Some((decl, desc)) = self.field_by_name(c, name) {
-                        self.open_field(MemberRef { owner: decl, name: name.to_string(), desc });
-                        hit = true;
-                    }
-                }
-                if !hit && !analyzed {
-                    self.open_field_name(name);
-                }
-            }
-        }
         self.field_name_site(m, off, &k, opcode, args);
         self.handle_writer_site(m, mref, opcode, args);
         self.mirror_init_site(m, off, mref, &k, opcode, args);
@@ -218,10 +166,4 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 调用的唯一目标按字节码建模（非 native / 手写承载 / 抽象）：其体内的按名取字段点由分析器直接看到
-    fn analyzed_exact(&self, opcode: u8, mref: &MemberRef) -> bool {
-        let iface = self.h.class(&mref.owner).is_some_and(|c| c.is_interface());
-        let Some((cf, t)) = self.ctx.exact_target(opcode, mref, iface) else { return false };
-        cf.methods.iter().find(|x| x.name == t.name && x.desc == t.desc).is_some_and(|rm| self.kind_of(&cf, rm) == Kind::Bytecode)
-    }
 }

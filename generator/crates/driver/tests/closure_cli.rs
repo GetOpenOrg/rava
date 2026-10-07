@@ -298,6 +298,38 @@ fn stack_overflow_error_in_minimal_closure() {
     assert!(out.contains("[vm-rule] 根 stack-check"), "{out}");
 }
 
+/// 容器元素按对象（计划 c1d §30 B2）：两个 ConcurrentHashMap 各存一种元素，`m1.get` 再 cast 的结果只含 m1 的元素，
+/// `Square.name` 不经 `Shape.name` 派发入链。依赖两项：Unsafe 访问序包装（`getReferenceAcquire`）继承调用方上下文
+/// （`relay.rs`，否则 `tabAt` 读出全部 map 的节点），树箱在自身方法里分配的树节点沿用属主 map 的堆上下文
+/// （`classes.rs::internal_alloc`，否则截断后各 map 共用树节点、`val` 汇合全部 map 的值）
+#[test]
+fn container_elements_per_object() {
+    let java = manifest_dir().join("tests/fixtures/ElemTrack.java");
+    let Some([_, methods, _]) = closure_sets(&java, 0) else { return };
+    assert!(methods.contains("ElemTrack$Circle.name:()Ljava/lang/String;"), "缺 Circle.name");
+    assert!(!methods.contains("ElemTrack$Square.name:()Ljava/lang/String;"), "m1.get 的结果混入 m2 的元素：Square.name 入链");
+}
+
+/// 按接收者对象的返回值（计划 c1d §30.9 的 P3）：`use(b1)` 中 `b.tag()` 按形参对象取 b1 的返回值，
+/// 构造器必然写 `tag`（P2）不并入初值；按成员汇合时含 b2 的 null，`Rare.go` 入链
+#[test]
+fn returns_per_receiver_object() {
+    let java = manifest_dir().join("tests/fixtures/ObjFacts.java");
+    let Some([_, methods, _]) = closure_sets(&java, 0) else { return };
+    assert!(methods.contains("ObjFacts$Box.tag:()Ljava/lang/String;"), "缺 Box.tag");
+    assert!(!methods.contains("ObjFacts$Rare.go:()V"), "use(b1) 的 b.tag() 混入 b2 的 null：Rare.go 入链");
+}
+
+/// 按站点值集的接收者（计划 c1d §30.9 的 P4）：`Holder.run` 中 `box.tag()` 的接收者来自字段读，
+/// 站点节点值集只有 b1，按对象取返回值，`Rare2.go` 不入链
+#[test]
+fn returns_per_site_receiver() {
+    let java = manifest_dir().join("tests/fixtures/ObjFacts.java");
+    let Some([_, methods, _]) = closure_sets(&java, 0) else { return };
+    assert!(methods.contains("ObjFacts$Holder.run:()V"), "缺 Holder.run");
+    assert!(!methods.contains("ObjFacts$Rare2.go:()V"), "box.tag() 混入 b2 的 null：Rare2.go 入链");
+}
+
 /// 一次 `rava closure -o` 的 summary.sysprops_unstable
 fn sysprops_unstable(java: &str) -> Option<serde_json::Value> {
     let out = std::env::temp_dir().join(format!("rava_sysprops_{}_{java}.json", std::process::id()));

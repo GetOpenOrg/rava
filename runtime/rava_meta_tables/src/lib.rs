@@ -73,11 +73,14 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("module_services", "MODULE_SERVICES"),
     ("line_pool", "LINE_POOL"),
     ("line_numbers", "LINE_NUMBERS"),
+    // 构建期嵌入资源表（发射层 `meta_sides` 以 `include_bytes!` 给出）
+    ("class_path_resources", "CLASS_PATH_RESOURCES"),
+    ("user_module_resources", "USER_MODULE_RESOURCES"),
 ];
 
 /// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表（表组 `META_POOL`，编码见 [`codec`]）。
-/// 用户侧另需调用方在同一文件给出闭包派生表组（`CLOSURE_POOL` / `MODULE_SERVICES`）与行表组
-///（`LINE_POOL` / `LINE_NUMBERS`）的 `const`（`USER_META` 引用之）
+/// 用户侧另需调用方在同一文件给出闭包派生表组（`CLOSURE_POOL` / `MODULE_SERVICES`）、行表组
+///（`LINE_POOL` / `LINE_NUMBERS`）与类路径资源表（`CLASS_PATH_RESOURCES`）的 `const`（`USER_META` 引用之）
 pub fn render(texts: &[&str], side: Side) -> String {
     let mut methods = scan_class_methods(texts);
     let mut fields = scan_class_fields(texts);

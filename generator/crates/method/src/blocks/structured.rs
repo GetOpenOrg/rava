@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cfg::{analyze, JumpKind, NodeId};
 use ir::{Expr, LetStmt, Stmt, VarOrigin};
+use sim::Local;
 
 use super::{Blocks, SimOutcome};
 use crate::cond_text::render_cond;
@@ -77,7 +78,9 @@ impl Blocks<'_, '_> {
                 return cfg_err(format!("异常处理器 pc={start_pc} 同时是正常控制流的目标"));
             }
             let e = self.new_entry(Expr::Var(hb.bind), hb.ty);
-            let locals = self.nodes.node(preds[0]).exit_locals.clone();
+            // try 区间内任一点都可能抛出：确定为空只对 try 入口成立，不带入处理器
+            let mut locals = self.nodes.node(preds[0]).exit_locals.clone();
+            Local::forget_null(&mut locals);
             let n = self.nodes.node_mut(nid);
             n.entry_stack = vec![e];
             n.entry_locals = locals;
@@ -91,6 +94,10 @@ impl Blocks<'_, '_> {
             n.entry_locals = locals;
         } else {
             self.merge_entry(nid, &preds)?;
+        }
+        if self.all_preds(nid).iter().any(|p| !preds.contains(p)) {
+            // 尚有未处理的前驱（回边）：其出口状态未知，不保留确定为空的事实
+            Local::forget_null(&mut self.nodes.node_mut(nid).entry_locals);
         }
         Ok(())
     }

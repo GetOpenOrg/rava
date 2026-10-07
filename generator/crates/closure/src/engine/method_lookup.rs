@@ -115,7 +115,7 @@ impl<'a> Engine<'a> {
         if let Some((sm, off)) = self.cur_site.filter(|s| s.0 == m) {
             self.xreaders.entry(sm).or_default().insert(off);
         }
-        let a = self.methods[m].analysis.clone()?;
+        let a = self.site_analysis(m)?;
         if a.conservative {
             return None;
         }
@@ -197,7 +197,7 @@ impl<'a> Engine<'a> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
-        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None });
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() });
         // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
         if let Some((outer, _)) = self.cur_site {
             for (_, e) in &ca.events {

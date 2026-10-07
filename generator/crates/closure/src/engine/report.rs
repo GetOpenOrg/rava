@@ -91,6 +91,11 @@ impl<'a> Engine<'a> {
         self.fwriter_cause.as_deref()
     }
 
+    /// 句柄存取不再按来源标记建模的原因（字段句柄取得入口经非字节码调用点可达，见 `field_access.rs`）
+    pub fn field_access_untrusted(&self) -> Option<&str> {
+        self.fa_untrusted.as_deref()
+    }
+
     pub fn field_handle_released(&self) -> Vec<String> {
         self.fh_released.iter().map(|(s, c)| format!("{}{}", c.as_deref().unwrap_or("*"), if *s { ":serial" } else { "" })).collect()
     }
@@ -331,6 +336,20 @@ impl<'a> Engine<'a> {
                 }
                 let opens: Vec<String> = s.open.iter().map(|o| self.names[o as usize].to_string()).collect();
                 out.push(format!("  {}：数组分配点 {arr}、抽象对象 {obj}、open {opens:?}、其余 {}：{}", self.node_str(n), other.len(), other.iter().take(40).cloned().collect::<Vec<_>>().join(" ")));
+            }
+            return out;
+        }
+        // 抽象对象明细诊断：`@objs:<节点子串>`——匹配节点（前 4 个）值集里的抽象对象 / 数组分配点名（前 40，标逃逸）
+        if let Some(q) = pat.strip_prefix("@objs:") {
+            let mut ns: Vec<Node> = self.graph.keys().filter(|n| self.node_str(**n).contains(q)).copied().collect();
+            ns.sort_by_key(|n| format!("{n:?}"));
+            for n in ns.into_iter().take(4) {
+                let s = self.graph.get(&n).cloned().unwrap_or_default();
+                out.push(format!("  {}：", self.node_str(n)));
+                for c in s.classes.iter().filter(|c| self.objs.contains_key(c) || self.arrays.contains_key(c)).take(40) {
+                    let esc = if self.escaped.contains(&c) { " [逃逸]" } else { "" };
+                    out.push(format!("    {}{esc}", self.names[c as usize]));
+                }
             }
             return out;
         }

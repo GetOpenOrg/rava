@@ -129,6 +129,10 @@ pub(super) struct Stats {
     /// 调用点接收者值集版本记忆：命中 / 未命中（`recv_fp.rs`）
     pub(super) recv_fp: [u64; 2],
     pub(super) aux_analyses: u64,
+    /// 构造器确定初始化摘要作废后复核按对象读者的次数（见 `ctor_init.rs`）
+    pub(super) init_drops: u64,
+    /// 按接收者对象答出返回值的调用点查询次数（`obj_rets.rs`）
+    pub(super) oret_hits: u64,
     /// 常量实参求值：记忆命中 / 未命中 / 未命中中实际分析（consteval.rs）
     pub(super) ceval: [u64; 3],
     /// 各阶段结束时的峰值 RSS（MB）
@@ -194,6 +198,8 @@ impl Default for Stats {
             lcall_reruns: 0,
             recv_fp: [0; 2],
             aux_analyses: 0,
+            init_drops: 0,
+            oret_hits: 0,
             ceval: [0; 3],
             rss_marks: Vec::new(),
             releases: [0; 2],
@@ -358,6 +364,8 @@ impl<'a> Engine<'a> {
             "analyses": total,
             "analyzed_contexts": s.per_method.iter().filter(|&&c| c > 0).count(),
             "aux_analyses": s.aux_analyses,
+            "init_drops": s.init_drops,
+            "oret_hits": s.oret_hits,
             "ceval_memo": s.ceval,
             "cap_hits": CAPS.with(|c| CAP_NAMES.iter().zip(c.get()).filter(|(_, n)| *n > 0).map(|(k, n)| (k.to_string(), json!(n))).collect::<serde_json::Map<_, _>>()),
             "reasons": reasons,

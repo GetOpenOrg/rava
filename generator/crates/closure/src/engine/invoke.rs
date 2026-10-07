@@ -238,7 +238,10 @@ impl<'a> Engine<'a> {
             Some(sel) => {
                 let (o, n, d) = sel.key();
                 let key = MemberRef { owner: o, name: n, desc: d };
-                let base = self.recv_ctx(r);
+                let base = match self.recv_ctx(r) {
+                    NOCTX => self.relay_ctx(m, &key),
+                    c => c,
+                };
                 let cx = self.recv_call_ctx(m, off, &key, base);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
@@ -291,7 +294,9 @@ impl<'a> Engine<'a> {
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
-            let c = cx(self, NOCTX);
+            // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体
+            let base = self.relay_ctx(m, &key);
+            let c = cx(self, base);
             let t = self.method_ctx(key, c, via);
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(rest)]), a, ret, res);
         }
@@ -319,7 +324,14 @@ impl<'a> Engine<'a> {
                 self.pstr_site(m, off, &cv, |j| Some(pstrs::PSlot::M(t, base + j)), |j| ptypes.get(base + j).copied().flatten() == Some(string));
             }
         }
+        // 按字段句柄存取、接收者为来源标记（或由标记给出身份的句柄对象）：按调用点建模，对象实参与写入值
+        // 不流入被调方形参（`field_access.rs`）
+        let fa = self.field_access_recv(t, &recv).filter(|k| !matches!(k, field_access::FaRecv::Bytecode));
         let recv_fs = self.edge_this(t, recv);
+        if let Some(k) = fa {
+            self.field_access_site(m, off, t, k, a, res.filter(|_| ret.is_some()));
+            return;
+        }
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);
@@ -393,6 +405,14 @@ impl<'a> Engine<'a> {
                         Feed::S(s) => self.mirror_into(op, s, res),
                     }
                 }
+            } else if model == RetModel::StaticBase {
+                // 静态字段基址：结果 = 本调用点字段句柄实参各值所指字段声明类的类镜像（逐调用点；不经返回值汇合的 open 基址）
+                for f in a.first().cloned().flatten().iter().flatten() {
+                    match f {
+                        Feed::N(n) => self.mflow(*n, res, MirrorOp::Holder),
+                        Feed::S(s) => self.mirror_into(MirrorOp::Holder, s, res),
+                    }
+                }
             } else if let RetModel::Read(src) = model {
                 let i = src + usize::from(!is_static);
                 let fs = if subsumed {
@@ -452,6 +472,7 @@ impl<'a> Engine<'a> {
 
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        self.pstr_offsite(t);
         if vals.is_none() {
             self.pstr_top_m(t);
         }

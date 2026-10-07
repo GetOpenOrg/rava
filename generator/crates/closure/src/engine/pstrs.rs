@@ -49,6 +49,8 @@ pub(super) struct PStrs {
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
     top_h: HashSet<u32>,
+    /// 经字节码调用点以外的入口接入的方法（枢纽、引导阶段、反射调用、无调用点记录）：字段配对看不到这些入口
+    offsite: HashSet<usize>,
     /// 有非常量写入的 String 字段：字段槽推不出
     top_f: HashSet<usize>,
     /// 读过槽（按名取类遍历到的上游槽）的站点
@@ -177,6 +179,22 @@ impl<'a> Engine<'a> {
                 self.pstr_wake(PSlot::M(t, i));
             }
         }
+    }
+
+    /// 方法 t 经字节码调用点以外的入口接入：包装配对（`lookup_pair.rs`）只在字节码调用点上配对，这类方法形参上的
+    /// 名字按形参常量集与污染口径取（engine/field_names.rs）；首次登记时重跑读过其形参槽的站点
+    pub(super) fn pstr_offsite(&mut self, t: usize) {
+        if self.pstr.offsite.insert(t) {
+            for i in 0..self.methods[t].ptypes.len() {
+                for off in self.pstr_readers(t, i) {
+                    self.push_site((t, off), site_prof::TRIG_TAINT, None);
+                }
+            }
+        }
+    }
+
+    pub(super) fn pstr_is_offsite(&self, t: usize) -> bool {
+        self.pstr.offsite.contains(&t)
     }
 
     /// 枢纽 h 有实参值未知的调用点接入：形参槽推不出
@@ -391,8 +409,17 @@ impl<'a> Engine<'a> {
             }
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
-            match self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten) {
-                Some(names) => out.extend(names),
+            // 内部求值（Gap::Fail）的推不出只记在引擎级标志上：在这里收进本槽的「是否推得出」，不外泄给外层求值——
+            // 外层按自己的 gap 处理推不出的槽（按名取类为「已知名字 | 任意串」，按生成范围内的类名匹配），
+            // 而不是因上游某个调用方推不出把整个站点记为推不出
+            let saved = (std::mem::take(&mut self.lookup_incomplete), std::mem::take(&mut self.lookup_partial));
+            let r = self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten);
+            let inner = std::mem::replace(&mut self.lookup_incomplete, saved.0) | std::mem::replace(&mut self.lookup_partial, saved.1);
+            match r {
+                Some(names) => {
+                    out.extend(names);
+                    complete &= !inner;
+                }
                 None => complete = false,
             }
         }

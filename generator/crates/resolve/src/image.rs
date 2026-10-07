@@ -8,6 +8,9 @@
 //! - 两者都由逐字节比对求得（不按类名），结果按 JDK 指纹缓存；jimage 缺席或 JDK 无 jmod → 空。
 //! - **VM 支持类**：`runtime/java_support/<module>/…java`，以当前 JDK 的 `javac --patch-module` 编入对应包，
 //!   按「JDK 路径 + 源码相对路径与内容」指纹缓存编译产物。编译失败告警并跳过该模块。
+//!   VM 支持类可以落在模块原本没有的包里（如 URL 协议处理器包 `sun.net.www.protocol.<协议>`）。
+//! - 两类目录都按模块给出（`<根>/<模块>/`），**目录名即所属模块**：类路径装入时据此登记包归属
+//!   （[`crate::classpath::ClassPath::add`]），不按已有包借用。
 //!
 //! 缓存根 `$XDG_CACHE_HOME`（缺省 `~/.cache`）下 `rava/jimage/<指纹>/{only,rewritten}/<模块>`、`rava/vmsupport/<指纹>/<模块>`；
 //! 指纹为 FNV-1a 64 位（跨工具链版本稳定），与 Python 解析器的 SHA-1 目录互不干扰。

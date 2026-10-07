@@ -74,7 +74,10 @@ impl<'a> Engine<'a> {
                 continue;
             }
             for p in ps {
-                self.field_put(f, pv_of(&MV::Prim(p.clone())));
+                let pv = pv_of(&MV::Prim(p.clone()));
+                // 物化写入不按抽象对象分开：同时并入按对象读的通配值（见 `obj_fields.rs`）
+                self.wild_put(f, &pv);
+                self.field_put(f, pv);
             }
             self.concrete_str_puts(m, f, ps);
         }
@@ -120,6 +123,7 @@ impl<'a> Engine<'a> {
             rv = Some(PV::Top);
         }
         if let Some(rv) = rv {
+            self.oret_wild(entry, &rv);
             self.join_rval(entry, rv);
         }
     }
@@ -135,6 +139,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
+        self.ctx.cinit_ret_changed(key);
         let deps = self.ctx.rdeps.borrow().get(key).cloned();
         self.invalidate_all(deps, Why::RetConst);
     }
@@ -218,7 +223,9 @@ impl<'a> Engine<'a> {
     /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）
     fn mat_field(&mut self, f: &MemberRef, v: &MV, ids: &[Option<TypeSet>], via: &Via) {
         if !self.static_final(f) {
-            self.field_put(f, pv_of(v));
+            let pv = pv_of(v);
+            self.wild_put(f, &pv);
+            self.field_put(f, pv);
         }
         if parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_none() {
             return;

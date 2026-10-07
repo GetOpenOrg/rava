@@ -1,5 +1,11 @@
 //! 常量 / 事实查询：常量格 `PV`、分析上下文 `Ctx`、absint 的 `Oracle` 实现 `Facts`。
 
+
+mod calls;
+mod fields;
+mod kinds;
+mod oracle;
+
 use super::*;
 
 // ── 常量 / 事实查询（absint 的 Oracle）──────────────────────────────────────
@@ -18,7 +24,7 @@ impl PV {
         match v {
             V::Int(_) | V::Ints(_) | V::Long(_) | V::Null | V::Offset(_) => PV::Const(v.clone()),
             V::Str(..) => PV::Const(v.stripped()),
-            V::Ref { .. } if v.obj().is_some() => PV::Const(v.stripped()),
+            V::Ref { .. } if v.obj().is_some() || v.shape_tagged() => PV::Const(v.stripped()),
             _ => PV::Top,
         }
     }
@@ -29,7 +35,20 @@ impl PV {
     pub(super) fn of_ret(v: &V) -> PV {
         match v {
             V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
+            // 构建器标签只在方法内有效
+            V::Ref { nonnull: true, .. } if v.builder().is_some() => PV::Const(nonnull_ref()),
             _ => PV::of(v),
+        }
+    }
+    /// 返回常量格的合流：在 [`PV::join`] 之上，两侧都确定非空而值 / 标签无法合流时取「非空引用」
+    /// （如一条路径返回常量串、另一条返回带字段标签的新建对象）
+    pub(super) fn join_ret(a: Option<&PV>, b: &PV) -> PV {
+        match PV::join(a, b) {
+            PV::Top => match (a, b) {
+                (Some(PV::Const(x)), PV::Const(y)) if x.nonnull() == Some(true) && y.nonnull() == Some(true) => PV::Const(nonnull_ref()),
+                _ => PV::Top,
+            },
+            j => j,
         }
     }
     pub(super) fn join(a: Option<&PV>, b: &PV) -> PV {
@@ -44,6 +63,11 @@ impl PV {
             (Some(PV::Const(x)), PV::Const(y)) if crate::absint::ints::members(x).is_some() && crate::absint::ints::members(y).is_some() => {
                 crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
             }
+            // 字符串形状（常量 / 形状标签 / null 之间）：合流取形状的并
+            (Some(PV::Const(x)), PV::Const(y)) if x.shape_tagged() || y.shape_tagged() || matches!((x, y), (V::Str(..), V::Str(..))) => match x.join(y) {
+                j @ V::Ref { .. } if j.shape_tagged() => PV::Const(j.stripped()),
+                _ => PV::Top,
+            },
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
             (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
                 j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
@@ -104,6 +128,38 @@ pub(super) struct Ctx<'a> {
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
+    /// 按抽象对象的实例字段写入值：字段 → 抽象对象 → 值（见 `obj_fields.rs`）
+    pub(super) ovals: RefCell<HashMap<MemberRef, HashMap<u32, PV>>>,
+    /// 不按抽象对象分开的实例字段写入值（接收者含非抽象对象 / 物化快照）
+    pub(super) owild: RefCell<HashMap<MemberRef, PV>>,
+    /// 构造器的确定初始化摘要（永久缓存，见 `ctor_init.rs`）
+    pub(super) cinits: RefCell<HashMap<MemberRef, super::ctor_init::CInit>>,
+    /// 被调方法 → 读过其返回常量的构造器摘要（`rvals` 该项变化时作废，见 `ctor_init.rs`）
+    pub(super) cinit_rdeps: RefCell<HashMap<MemberRef, Vec<MemberRef>>>,
+    /// 正在计算的构造器摘要各自读过返回常量的被调方法（栈，嵌套摘要并入外层）
+    pub(super) cinit_rets: RefCell<Vec<BTreeSet<MemberRef>>>,
+    /// `cinits` 有条目作废（`odef` 待清空、按对象读者待复核，见 `ctor_init.rs`）
+    pub(super) cinit_drop: Cell<bool>,
+    /// 字节码 `new` 分配的抽象对象 → (类, 分配方法里该类的构造器调用)
+    pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
+    /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
+    pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
+    /// 字段 → 抽象对象 → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
+    pub(super) odeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
+    /// 字段 → 按对象读过它的方法（`owild` 变化时失效）
+    pub(super) owdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 实例方法 → 抽象对象 → 接收者含该对象的方法节点返回值之并（见 `obj_rets.rs`）
+    pub(super) orvals: RefCell<HashMap<MemberRef, HashMap<u32, PV>>>,
+    /// 实例方法 → 接收者不按对象归属的返回值（具体求值结果）
+    pub(super) orwild: RefCell<HashMap<MemberRef, PV>>,
+    /// 实例方法 → 抽象对象 → 按对象读过其返回值的方法
+    pub(super) ordeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
+    /// 实例方法 → 按对象读过其返回值的方法（`orwild` 变化时复核）
+    pub(super) orwdeps: RefCell<HashMap<MemberRef, BTreeSet<usize>>>,
+    /// 按对象查询过的抽象对象 → 其类（`obj_rets.rs` 按对象选择调用目标）
+    pub(super) oclass: RefCell<HashMap<u32, Rc<str>>>,
+    /// 按对象选择的调用目标缓存：调用点 (指令, 符号引用, 接口调用) → 抽象对象 → 目标（选择只看对象的类与类层次，不随分析变化）
+    pub(super) oret_sel: RefCell<HashMap<(u8, bool, MemberRef), HashMap<u32, Option<Rc<MemberRef>>>>>,
     /// 字节码方法的返回常量（缺席 = 尚无返回路径）
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
     /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
@@ -176,14 +232,12 @@ pub(super) struct CallInfo {
     pub(super) nonnull_ret: Option<V>,
     /// 接收者为空集合时的查询结果（`[facts.empty_collections] queries`）
     pub(super) empty_query: Option<V>,
+    /// 清单字符串操作种类（构建器 / 前后缀判定，absint `strs.rs`）
+    pub(super) str_kind: Option<crate::absint::StrKind>,
+    /// 返回串的形状事实（`[facts.string_shapes]`，带形状标签的可空 String 引用）
+    pub(super) shape: Option<V>,
 }
 
-fn fact_value(f: &Fact) -> V {
-    match f {
-        Fact::Null => V::Null,
-        Fact::Int(i) => V::Int(*i),
-    }
-}
 
 /// 字段引用解析结果
 pub(super) struct FieldInfo {
@@ -209,6 +263,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
     /// 引导档位上下文（残差步骤的运行期档位）：清单 `level_queries` 的调用按档位折叠
     pub(super) level: Option<i32>,
+    /// 形参的抽象对象集与按对象读过的形参（见 `obj_fields.rs`）
+    pub(super) objs: super::obj_fields::ObjParams,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {
@@ -217,417 +273,5 @@ pub(super) fn const_value(c: &Const) -> Option<V> {
         Const::Long(v) => Some(V::Long(*v)),
         Const::String(s) => Some(V::lit(Rc::from(s.as_str()))),
         _ => None,
-    }
-}
-
-impl Ctx<'_> {
-    pub(super) fn kind_of(&self, cf: &ClassFile, m: &classfile::Method) -> Kind {
-        let member = format!("{}.{}:{}", cf.name, m.name, m.desc);
-        match self.domain(&cf.name) {
-            // VM 契约边界（`[vm_boundary]`）按方法划分：手写承载（native / VM 内建 / 共置手写体
-            // 按精确名提供 / 类初始化器）的取手写效果，其余被调用到的方法运行时执行的就是其字节码
-            // （发射层同样翻译），按字节码建模——否则其体内的调用与写入（如经 native 手写体
-            // 写入的字段）从分析中消失，成为漏报。类初始化器由清单逐类决定（`translate_clinit`）
-            Domain::Boundary => {
-                let hw = self.boundary_carried(cf, m, &member);
-                return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
-            }
-            Domain::Root => return Kind::Handwritten("root"),
-            _ => {}
-        }
-        if m.is_native() {
-            return Kind::Handwritten("native");
-        }
-        if self.man.is_intrinsic(&member) {
-            return Kind::Handwritten("intrinsic");
-        }
-        if m.name != "<clinit>" && self.provided(cf, &m.name, &m.desc) {
-            return Kind::Handwritten("provides");
-        }
-        if m.code.is_none() {
-            return Kind::Abstract;
-        }
-        Kind::Bytecode
-    }
-
-    /// 边界方法由手写层承载（native / 无体 / 内部边界类与 `clinit_carried` 所列 VM 边界类的 `<clinit>` /
-    /// VM 内建 / 共置手写体提供）。其余 VM 边界类的 `<clinit>` 是纯 Java 静态状态，按字节码翻译
-    fn boundary_carried(&self, cf: &ClassFile, m: &classfile::Method, member: &str) -> bool {
-        m.is_native()
-            || m.code.is_none()
-            || (m.name == "<clinit>" && (!self.man.is_vm_boundary(&cf.name) || self.man.is_vm_clinit_carried(&cf.name)))
-            || self.man.is_intrinsic(member)
-            || self.provided(cf, &m.name, &m.desc)
-    }
-
-    /// 共置手写体按精确 Rust 名提供该成员（与发射侧 `_nf_covered` 同口径：mangle 名，或类内无重载时的裸名）
-    pub(super) fn provided(&self, cf: &ClassFile, name: &str, desc: &str) -> bool {
-        let hw = self.hw.class(&cf.name);
-        if hw.fns.is_empty() || self.man.hw_dropped(&cf.name) {
-            return false;
-        }
-        let (rust, mangled) = self.rust_names(cf, name, desc);
-        hw.fns.iter().any(|(f, i)| {
-            let f = f.strip_prefix("__impl_").unwrap_or(f);
-            i.is_pub && (f == mangled || rust.as_deref() == Some(f))
-        })
-    }
-
-    /// (类内无重载时的裸名, mangle 名)
-    pub(super) fn rust_names(&self, cf: &ClassFile, name: &str, desc: &str) -> (Option<String>, String) {
-        let base = if name == "<init>" { "new" } else { name };
-        let suffix = self.hw.descriptor_suffix(desc);
-        let mangled = if suffix.is_empty() { base.to_string() } else { format!("{base}_{suffix}") };
-        let overloaded = cf.methods.iter().filter(|m| m.name == name).count() > 1;
-        (if overloaded { None } else { Some(base.to_string()) }, mangled)
-    }
-
-    pub(super) fn domain(&self, cls: &str) -> Domain {
-        if let Some(&d) = self.domains.borrow().get(cls) {
-            return d;
-        }
-        let origin = self.cp.origin(cls);
-        let d = match self.man.domain(cls, origin == Some(Origin::User)) {
-            // 依赖库类（类路径 jar，Origin::Lib）：库自身不属 JDK 边界，一律按字节码翻译
-            Domain::Boundary if origin == Some(Origin::Lib) => Domain::Translate,
-            d => d,
-        };
-        self.domains.borrow_mut().insert(cls.to_string(), d);
-        d
-    }
-
-    /// 字段的写入来源超出字节码（手写 / 边界类 / 反射 / 反序列化）：不折叠
-    pub(super) fn field_open(&self, fi: &FieldInfo) -> bool {
-        self.field_open_under(fi, self.fopen_all.get(), self.deser.get())
-    }
-
-    /// 按给定的全局开关（全部放开 / 反序列化可达）判定字段是否不折叠：偏移可得的字段（[`Self::field_offset_under`]）
-    /// 加上手写体写入的字段
-    pub(super) fn field_open_under(&self, fi: &FieldInfo, all: bool, deser: bool) -> bool {
-        fi.open || self.field_offset_under(fi, all, deser) || self.hw_written(fi)
-    }
-
-    /// 可序列化字段：所属类可序列化、非 static、非 transient（默认序列化与反序列化按偏移读写的字段面）
-    pub(super) fn serial_field(fi: &FieldInfo) -> bool {
-        deser_writes(fi.access, fi.serializable)
-    }
-
-    /// 字段被手写体写入（只不折叠，不使偏移可得）
-    pub(super) fn hw_written(&self, fi: &FieldInfo) -> bool {
-        self.fhw.borrow().contains(&fi.key) || self.fhw_names.borrow().contains(&fi.key.name)
-    }
-
-    /// 按给定的全局开关判定字段偏移可经字节码外途径取得（按名取得 / 字段枚举 / 反序列化），从而可按偏移读写。
-    /// 手写体写入与 [`FieldInfo::open`] 不算：手写 / VM 落地按 Rust 字段直接写入，不产出偏移
-    pub(super) fn field_offset_under(&self, fi: &FieldInfo, all: bool, deser: bool) -> bool {
-        all
-            || self.fopen.borrow().contains(&fi.key)
-            || self.fopen_names.borrow().contains(&fi.key.name)
-            || deser && deser_writes(fi.access, fi.serializable)
-    }
-
-    pub(super) fn field_info(&self, f: &MemberRef) -> Option<Rc<FieldInfo>> {
-        if let Some(fi) = self.fields.borrow().get(f) {
-            return fi.clone();
-        }
-        let fi = self.h.resolve_field(&f.owner, &f.name, &f.desc).map(|site| {
-            let fd = site.field();
-            let key = MemberRef { owner: site.class.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-            // VM 注入的静态字段：运行期值由 VM 写入，字节码初值 / ConstantValue 均不代表运行期值
-            let injected = self.man.is_injected_static(&key.owner, &key.name);
-            // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
-            let open = injected
-                || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
-                || !self.hw.member(&key.owner, &key.name).fns.is_empty()
-                || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
-            let constant = if injected { None } else { fd.constant_value.clone() };
-            let markers = self.man.serializable_markers();
-            let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
-            Rc::new(FieldInfo { key, access: fd.access, constant, open, serializable })
-        });
-        self.fields.borrow_mut().insert(f.clone(), fi.clone());
-        fi
-    }
-
-    /// 字段读的常量值；方法 m 登记为该字段的读者
-    pub(super) fn field_value(&self, m: Option<usize>, f: &MemberRef) -> Option<V> {
-        let fi = self.field_info(f)?;
-        if let Some(m) = m {
-            self.dep(m, Dep::Field(fi.key.clone()));
-        }
-        // VM 注入的字面量值：字节码写入被 VM 值覆盖，读取恒为该值
-        if let Some(x) = self.man.injected_literal(&fi.key.owner, &fi.key.name) {
-            return Some(if fi.key.desc == "J" { V::Long(x) } else { V::Int(x as i32) });
-        }
-        if self.field_open(&fi) {
-            return None;
-        }
-        if m.is_none() {
-            self.note_aux_read(&fi.key);
-        }
-        if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-            return self.static_const(m, &fi.key, fi.constant.as_ref());
-        }
-        m?;
-        self.fvals.borrow().get(&fi.key).cloned().unwrap_or_else(|| default_pv(&fi.key.desc)).value()
-    }
-
-    /// 调用点的静态摘要（清单事实 + 唯一字节码目标）
-    pub(super) fn call_info(&self, opcode: u8, m: &MemberRef, iface: bool) -> Rc<CallInfo> {
-        if let Some(c) = self.calls.borrow().get(m).and_then(|v| v.iter().find(|x| x.0 == opcode && x.1 == iface)) {
-            return c.2.clone();
-        }
-        let k = m.to_string();
-        let fact = self.man.return_fact(&k).map(fact_value);
-        // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
-        let nonnull_ret = if self.man.empty.is_factory(&k) {
-            Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) })
-        } else {
-            self.man.returns_caller_class(&k).then(nonnull_ref)
-        };
-        let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
-        let target = self
-            .exact_target(opcode, m, iface)
-            .filter(|(cf, t)| cf.method(&t.name, &t.desc).is_some_and(|tm| self.kind_of(cf, tm) == Kind::Bytecode))
-            .map(|(_, t)| t);
-        let tk = target.as_ref().map(|t| t.to_string());
-        let value_eq = self.man.is_value_equals(&k) || tk.as_ref().is_some_and(|t| self.man.is_value_equals(t));
-        let str_op = self.man.string_op(&k).or_else(|| tk.as_ref().and_then(|t| self.man.string_op(t)));
-        let c = Rc::new(CallInfo {
-            fact,
-            null_to_false: self.man.is_null_to_false(&k),
-            target,
-            value_eq,
-            str_op,
-            holder: self.man.sysprops.is_holder(&k),
-            reader: self.reader_spec(&k),
-            offset: self.man.field_name_resolver(&k).filter(|r| r.offset),
-            nonnull_ret,
-            empty_query,
-        });
-        self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
-        c
-    }
-
-    /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）
-    pub(super) fn exact_target(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<(std::sync::Arc<ClassFile>, MemberRef)> {
-        use classfile::op;
-        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
-        let rm = site.method();
-        let exact = matches!(opcode, op::INVOKESTATIC | op::INVOKESPECIAL)
-            || rm.is_private()
-            || rm.is_static()
-            || rm.is_final()
-            || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
-        let (o, n, d) = site.key();
-        exact.then(|| (site.class.clone(), MemberRef { owner: o, name: n, desc: d }))
-    }
-
-    /// 按名取字段偏移的调用折叠为符号偏移：Class 实参是类字面量、名字是字符串常量，且该类自身声明了
-    /// 同名实例字段（VM 只查声明类本身，查不到即抛出）
-    pub(super) fn field_offset(&self, opcode: u8, r: crate::manifest::NameResolver, args: &[V]) -> Option<V> {
-        let base = usize::from(opcode != classfile::op::INVOKESTATIC);
-        let cls = match r.class {
-            Some(i) => args.get(i + base)?,
-            None => args.first()?,
-        };
-        let (V::Class(c, _), Some(V::Str(name, _))) = (cls, args.get(r.name + base)) else { return None };
-        let cf = self.h.class(c)?;
-        let fd = cf.fields.iter().find(|f| f.name == **name && !f.is_static())?;
-        Some(V::Offset(Rc::new(MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() })))
-    }
-
-    /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值
-    pub(super) fn static_const(&self, me: Option<usize>, key: &MemberRef, cv: Option<&Const>) -> Option<V> {
-        if let Some(c) = cv {
-            return const_value(c);
-        }
-        let hit = self.consts.borrow().get(key).cloned();
-        if let Some((v, inp)) = hit {
-            self.memo_use(me, &inp);
-            return v;
-        }
-        // `<clinit>` 唯一一次常量赋值（递归保护：分析中的类不再展开）。
-        // 一次分析得出本类全部 static final 字段的答复，与外层无关时逐字段缓存
-        let cls = self.h.class(&key.owner)?;
-        let frame = self.memo_enter(format!("clinit:{}", cls.name), true)?;
-        let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
-        let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
-            let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None })
-        });
-        for (_, e) in a.iter().flat_map(|a| &a.events) {
-            if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {
-                if mref.owner == cls.name {
-                    puts.entry((&mref.name, &mref.desc)).or_default().push(value.clone());
-                }
-            }
-        }
-        let (clean, inp) = self.memo_leave(frame);
-        self.memo_use(me, &inp);
-        let value_of = |name: &str, desc: &str| match puts.get(&(name, desc)).map(Vec::as_slice) {
-            Some([Some(v)]) => PV::of(v).value(),
-            _ => None,
-        };
-        if !clean {
-            return value_of(&key.name, &key.desc);
-        }
-        let mut consts = self.consts.borrow_mut();
-        for fd in &cls.fields {
-            if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 || fd.constant_value.is_some() {
-                continue;
-            }
-            let k = MemberRef { owner: cls.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-            consts.insert(k, (value_of(&fd.name, &fd.desc), inp.clone()));
-        }
-        consts.get(key).and_then(|e| e.0.clone())
-    }
-}
-
-/// 值带空集合标签（接收者为空的不可修改集合）
-fn is_empty_tag(v: Option<&V>) -> bool {
-    v.and_then(|v| v.obj()).is_some_and(|o| **o == crate::absint::Obj::Empty)
-}
-
-impl Oracle for Facts<'_, '_> {
-    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
-        if let Some(l) = self.level {
-            if let Some(&t) = self.ctx.man.concrete.boot.level_queries.get(&m.to_string()) {
-                return Ret::Value(V::Int(i32::from(i64::from(l) >= t)));
-            }
-        }
-        let c = self.ctx.call_info(opcode, m, iface);
-        if let Some(v) = &c.fact {
-            return Ret::Value(v.clone());
-        }
-        if c.null_to_false && args.contains(&V::Null) {
-            return Ret::Value(V::Int(0));
-        }
-        if let Some(v) = &c.nonnull_ret {
-            return Ret::Value(v.clone());
-        }
-        if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
-            return Ret::Value(v.clone());
-        }
-        if let Some(v) = c.offset.and_then(|r| self.ctx.field_offset(opcode, r, args)) {
-            return Ret::Value(v);
-        }
-        // 类字面量接收者上的接收者钩子字段取值方法
-        if let (classfile::op::INVOKEVIRTUAL, Some(V::Class(k, _))) = (opcode, args.first()) {
-            if let Some(v) = self.ctx.mirrors_call(m, [&**k]) {
-                return Ret::Value(v);
-            }
-        }
-        if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
-            return r;
-        }
-        // 唯一目标且为字节码方法：取其返回常量（被调方法返回常量变化时本方法失效重算）；
-        // 返回常量在各调用点上汇合为 Top 时按本调用点的常量实参求值
-        let Some(t) = &c.target else { return Ret::Unknown };
-        let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
-        let Some(me) = self.m else { return eval() };
-        let r = self.ctx.rvals.borrow().get(t).cloned();
-        self.ctx.dep(me, Dep::Ret(t.clone()));
-        match r {
-            // 小集合：先按本调用点的常量实参求值，求不出时取集合
-            Some(PV::Const(v @ V::Ints(_))) => match eval() {
-                Ret::Unknown => Ret::Value(v),
-                x => x,
-            },
-            // 非空引用：先按本调用点的常量实参求值（可能得出字符串常量），求不出时取非空引用
-            Some(PV::Const(v)) if is_nonnull_ref(&v) => match eval() {
-                Ret::Unknown => Ret::Value(v),
-                x => x,
-            },
-            Some(PV::Const(v)) => Ret::Value(v),
-            Some(PV::Top) => eval(),
-            None if self.ctx.noreturn.borrow().answer_never(t) => {
-                self.ctx.dep(me, Dep::Never);
-                Ret::Never
-            }
-            None => eval(),
-        }
-    }
-    fn final_static(&self, f: &MemberRef) -> bool {
-        self.ctx.field_info(f).is_some_and(|fi| fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 && !self.ctx.field_open(&fi))
-    }
-    fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V> {
-        if let Some(v) = self.ctx.mirror_hook_field(opcode, f, recv) {
-            return Some(v);
-        }
-        if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
-            return Some(v);
-        }
-        self.ctx.field_value(self.m, f)
-    }
-    fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
-        self.ctx.construct(self.m, init, args)
-    }
-    fn param(&self, i: u16) -> Option<V> {
-        self.params.get(i as usize).cloned().flatten()
-    }
-    fn mirror_subtype_test(&self, m: &MemberRef) -> bool {
-        self.ctx.man.is_mirror_subtype_test(&m.to_string())
-    }
-    fn key_getter(&self, m: &MemberRef) -> Option<(String, bool)> {
-        if self.ctx.man.keyed_lookups.is_empty() {
-            return None;
-        }
-        self.ctx.man.keyed_lookups.key_getter(&m.to_string())
-    }
-    fn string_equality(&self, m: &MemberRef) -> Option<bool> {
-        let k = m.to_string();
-        if self.ctx.man.is_value_equals(&k) {
-            return Some(false);
-        }
-        matches!(self.ctx.man.string_op(&k), Some(crate::manifest::StrOp::EqualsIgnoreCase)).then_some(true)
-    }
-    fn param_mirror(&self, i: u16, cls: &str) -> Option<bool> {
-        self.mirrors.get(i as usize)?.as_ref().map(|s| s.contains(cls))
-    }
-    fn param_mirror_field(&self, i: u16, f: &MemberRef) -> Option<V> {
-        let s = self.mirrors.get(i as usize)?.as_ref()?;
-        self.ctx.mirrors_hook_field(f, s.iter().map(|c| &**c))
-    }
-    fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
-        let s = self.mirrors.get(i as usize)?.as_ref()?;
-        self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
-    }
-    fn type_live(&self, ty: &str) -> bool {
-        (self.live)(ty)
-    }
-}
-
-/// 反序列化可写的字段：非 static、非 transient，且声明类可序列化（非可序列化超类的字段由其无参构造器初始化，走字节码）
-fn deser_writes(access: u16, serializable: bool) -> bool {
-    serializable && access & (acc::STATIC | acc::TRANSIENT) == 0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deser_writes_rule() {
-        assert!(deser_writes(acc::PRIVATE, true));
-        assert!(!deser_writes(acc::PRIVATE, false));
-        assert!(!deser_writes(acc::STATIC, true));
-        assert!(!deser_writes(acc::TRANSIENT, true));
-    }
-}
-
-#[cfg(test)]
-mod empty_tests {
-    use super::*;
-    use crate::absint::Obj;
-
-    #[test]
-    fn empty_tag_recognized_on_receiver() {
-        let e = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Empty)) };
-        let other = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None };
-        assert!(is_empty_tag(Some(&e)));
-        assert!(!is_empty_tag(Some(&other)));
-        assert!(!is_empty_tag(Some(&V::Null)));
-        assert!(!is_empty_tag(None));
     }
 }

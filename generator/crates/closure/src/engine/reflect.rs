@@ -52,6 +52,7 @@ impl<'a> Engine<'a> {
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
+            MirrorOp::Holder => self.holder_set(s),
             MirrorOp::Sub(k) => self.sub_mirrors(s, k),
             MirrorOp::ArrayOf(..) => unreachable!("反射数组分配只经 mirror_into"),
         }
@@ -210,6 +211,44 @@ impl<'a> Engine<'a> {
         }
         if !s.open.is_empty() {
             out.open.insert(class);
+        }
+        out
+    }
+
+    /// 字段句柄值集 s 所指静态字段的基址（类镜像）：按名标记按所指字段的声明类；枚举标记按口径类及其超类、超接口（`getFields` 含继承的公开字段，
+    /// 接口常量的声明类是接口）各给一个类镜像；口径推不出、非标记的句柄（按名取得等）与 open 给所指未知的类镜像
+    /// （按偏移写入经 `poly_write` 落到按名打开的静态字段，不作任意对象的写入）
+    fn holder_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        if !s.open.is_empty() {
+            out.classes.insert(class);
+        }
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            // 按名所指的字段：基址为其声明类的类镜像
+            if let Some(Some(f)) = self.fh_named.get(&x) {
+                let k = self.mirror(&f.owner.clone());
+                out.classes.insert(k);
+                continue;
+            }
+            let Some(c) = self.fh_marks.get(&x).and_then(|sc| sc.1.clone()) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let mut todo = vec![c];
+            let mut seen: HashSet<String> = HashSet::default();
+            while let Some(n) = todo.pop() {
+                if !seen.insert(n.clone()) {
+                    continue;
+                }
+                let k = self.mirror(&n);
+                out.classes.insert(k);
+                if let Some(cf) = self.h.class(&n) {
+                    todo.extend(cf.super_name.iter().cloned());
+                    todo.extend(cf.interfaces.iter().cloned());
+                }
+            }
         }
         out
     }

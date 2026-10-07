@@ -44,7 +44,10 @@ impl Blocks<'_, '_> {
                         vars.push(self.new_entry(Expr::Var(var), v.ty.clone()));
                     }
                     slot.insert(vars);
-                    entry_locals.insert(s, node.exit_locals.clone());
+                    // 状态机分派：后续前驱的出口状态不参与汇合，不保留确定为空的事实
+                    let mut locals = node.exit_locals.clone();
+                    Local::forget_null(&mut locals);
+                    entry_locals.insert(s, locals);
                 }
                 let vars = &spill[&s];
                 if vars.len() != values.len() {
