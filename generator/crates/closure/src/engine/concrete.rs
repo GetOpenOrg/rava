@@ -20,6 +20,7 @@ mod interp;
 mod journal;
 mod members;
 mod natives;
+pub(super) mod persist;
 mod snap;
 mod stable;
 mod taint;
@@ -66,6 +67,9 @@ pub(super) struct Outcome {
     thrown: Vec<MV>,
     /// 写入映像的字段值（撤销后对程序仍可见）
     memo: Vec<(MemberRef, MV)>,
+    /// 映像状态的写入全部可物化进引导映像时（`[concrete] image_memo_fields`，见 `concrete/persist.rs`）：
+    /// 各缓存片段与只按热求值的结果（运行期缓存已在映像中，执行的即热路径）
+    alt: Option<Box<(Vec<persist::Frag>, Outcome)>>,
 }
 
 #[derive(Default)]
@@ -126,19 +130,32 @@ impl<'a> Engine<'a> {
             }
             outs.push((c.clone(), r));
         }
-        let image: Vec<Rc<str>> = outs.iter().filter_map(|(_, r)| r.as_ref().as_ref().ok()).flat_map(|o| apply::image_types(o).cloned().collect::<Vec<_>>()).collect();
+        // 镜像缓存可物化进引导映像的组合按热求值入闭包（运行期缓存已命中）
+        let hot: Vec<bool> = outs.iter().map(|(_, r)| r.as_ref().as_ref().ok().and_then(|o| o.alt.as_ref()).is_some_and(|a| self.image_memo_ok(&a.0))).collect();
+        let image: Vec<Rc<str>> = outs
+            .iter()
+            .zip(&hot)
+            .filter_map(|((_, r), &h)| r.as_ref().as_ref().ok().map(|o| pick(o, h)))
+            .flat_map(|o| apply::image_types(o).cloned().collect::<Vec<_>>())
+            .collect();
         if let Some(t) = image.iter().find(|t| self.container(t)) {
             return self.concrete_fallback(m, off, site_name, format!("结果引用映像中的容器形态对象 {t}"));
         }
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
-        for (c, r) in outs {
+        for ((c, r), h) in outs.into_iter().zip(hot) {
             if !self.concrete.applied.insert((m, off, c)) {
                 continue;
             }
             let Ok(o) = &*r else { continue };
-            self.concrete_apply(m, off, resolved, md, o);
+            match o.alt.as_ref().filter(|_| h) {
+                Some(a) => {
+                    self.image_memo_apply(&a.0);
+                    self.concrete_apply(m, off, resolved, md, &a.1);
+                }
+                None => self.concrete_apply(m, off, resolved, md, o),
+            }
         }
         let shown: Vec<String> = combos.iter().take(DIAG_COMBOS).map(|c| format!("{c:?}")).collect();
         let more = combos.len().saturating_sub(DIAG_COMBOS);
@@ -236,11 +253,12 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败
+/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败。热求值的结果另记一份：缓存写入可物化进映像时按它入闭包
 fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcome, String> {
     let mut out = Outcome::default();
+    let mut hot = Outcome::default();
     let r = (|| {
-        for _ in 0..2 {
+        for pass in 0..2 {
             vm.epoch += 1;
             vm.trace = Trace::default();
             vm.steps = 0;
@@ -267,10 +285,29 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                 let x = sn.value(*v)?;
                 out.memo.push((f.clone(), x));
             }
+            if pass == 1 && !env.cfg().image_memo_fields.is_empty() {
+                let mut sn = snap::Snap::new(vm, env, &mut hot.objs);
+                if let Some(v) = ret {
+                    let x = sn.value(v)?;
+                    hot.rets.push(x);
+                }
+                if let Some(v) = thrown {
+                    let x = sn.value(v)?;
+                    hot.thrown.push(x);
+                }
+                let mut t = trace.clone();
+                t.inited.extend(t.touched.iter().cloned());
+                merge(&mut hot, t);
+            }
             merge(&mut out, trace);
         }
         Ok(())
     })();
+    if r.is_ok() {
+        if let Some(frags) = persist::collect(vm, env) {
+            out.alt = Some(Box::new((frags, hot)));
+        }
+    }
     vm.rollback();
     vm.frames.clear();
     match r {
@@ -278,6 +315,14 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
         Err(Flow::Fail(w)) => Err(w),
         Err(Flow::Throw(_) | Flow::Implicit(_)) => Err("实参构造抛出异常".into()),
         Err(Flow::Defer(w)) => Err(w),
+    }
+}
+
+/// 一组实参入闭包的结果：热求值（缓存物化进映像）或冷 / 热之并
+fn pick(o: &Outcome, hot: bool) -> &Outcome {
+    match &o.alt {
+        Some(a) if hot => &a.1,
+        _ => o,
     }
 }
 

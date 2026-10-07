@@ -89,7 +89,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.root_vm_rules();
     e.run();
-    boot_image.data.live = e.image_live();
+    e.image_finish(&mut boot_image.data);
     if let Some(p) = &input.diag.dump_edges {
         if let Err(err) = engine::cut::edges_finish(p) {
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());

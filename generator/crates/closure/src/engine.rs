@@ -126,6 +126,7 @@ mod levels;
 mod open_world;
 pub mod concrete;
 mod caller;
+mod image_memo;
 mod image_start;
 mod static_init;
 mod jca_order;

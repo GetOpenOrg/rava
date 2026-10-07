@@ -191,7 +191,7 @@ pub(super) enum Put {
 }
 
 /// 一次求值的轨迹（只记求值纪元内执行的字节码；`<clinit>` 由抽象分析的类初始化覆盖）
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct Trace {
     /// 执行过的指令偏移（按方法）
     pub pcs: BTreeMap<MemberRef, BTreeSet<u32>>,
@@ -201,6 +201,8 @@ pub(super) struct Trace {
     pub puts: BTreeMap<MemberRef, Vec<Put>>,
     /// 求值中触发初始化的类
     pub inited: BTreeSet<String>,
+    /// 求值中请求初始化的类（含此前已完成初始化的）：只按热求值入闭包时，冷求值完成的初始化由此补登
+    pub touched: BTreeSet<String>,
     /// 按白名单操作执行的手写承载方法
     pub natives: BTreeSet<MemberRef>,
     /// 写入映像（内存缓存字段 / 静态字段）的值：撤销后对程序仍可见，物化进字段值集

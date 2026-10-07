@@ -978,6 +978,10 @@ memo_fields = [
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
 ]
+# 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
+# （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
+# 不再解析泛型签名）。求值对映像状态还有其他写入、或值的对象图不可物化时照旧按冷 / 热之并
+image_memo_fields = ["java/lang/Class.genericInfo"]
 # 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结；
 # 声明在这类类型上的静态字段所指映像数组同样冻结。
 # Pattern 的契约是「实例不可变、可多线程共享」：节点图与字符谓词在构造（compile）中建成，匹配状态全在 Matcher；
@@ -1082,6 +1086,9 @@ calls = [
     { init = ["java/lang/invoke/MethodHandle", "java/lang/invoke/ResolvedMethodName", "java/lang/invoke/MemberName", "java/lang/invoke/MethodHandleNatives"] },
     ["java/lang/System.initPhase2:(ZZ)I", 0, 0],
     ["java/lang/System.initPhase3:()V"],
+    # 非 HotSpot 步骤（U13）：泛型信息缓存命中路径（Class.getGenericInfo）与 ClassRepository.NONE 比较，其类须在
+    # 构建期初始化——运行期不再执行 <clinit>（解析 "Ljava/lang/Object;" 签名）。纯类：<clinit> 只构造 NONE
+    { init = ["sun/reflect/generics/repository/ClassRepository"] },
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [
