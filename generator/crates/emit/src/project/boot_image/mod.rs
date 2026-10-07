@@ -42,15 +42,17 @@ pub(crate) struct Plan<'c, 'a> {
     /// 物化为映像区字段的对象（活、非类镜像、非占位）
     pub mat: BTreeSet<u32>,
     pub layouts: BTreeMap<String, Vec<Slot>>,
+    /// 类 → 实现层模块路径（存储类型 `X__inner` 随存储层进实现 crate）
+    pub homes: &'c BTreeMap<String, String>,
 }
 
 impl<'c, 'a> Plan<'c, 'a> {
-    fn new(ctx: &'c EmitCtx<'a>, ems: &'c Emissions, d: &'c ImageData) -> Result<Self> {
+    fn new(ctx: &'c EmitCtx<'a>, ems: &'c Emissions, d: &'c ImageData, homes: &'c BTreeMap<String, String>) -> Result<Self> {
         let live: BTreeSet<u32> = d.live.iter().copied().collect();
         let mat: BTreeSet<u32> =
             live.iter().copied().filter(|&i| d.objs.get(i as usize).is_some_and(|o| o.mirror.is_none() && !o.placeholder)).collect();
         let root = ctx.crates().root().to_string();
-        let mut p = Plan { ctx, ems, d, root, live, mat, layouts: BTreeMap::new() };
+        let mut p = Plan { ctx, ems, d, root, live, mat, layouts: BTreeMap::new(), homes };
         let tys: BTreeSet<&str> = p.mat.iter().map(|&i| d.objs[i as usize].ty.as_str()).filter(|t| !t.starts_with('[')).collect();
         for t in tys {
             if t == ty::consts::OBJECT {
@@ -77,6 +79,14 @@ impl<'c, 'a> Plan<'c, 'a> {
     /// 类在映像模块中的路径
     pub fn path(&self, cls: &str) -> String {
         use_path(self.ctx, cls, &self.root)
+    }
+
+    /// 类的存储类型 `X__inner` 的路径（实现层模块；未拆层的类在声明位置）
+    pub fn inner(&self, cls: &str) -> String {
+        match self.homes.get(cls) {
+            Some(h) => format!("{h}::{}__inner", self.ctx.declared(cls)),
+            None => format!("{}__inner", self.path(cls)),
+        }
     }
 
     /// 泛型类的全 `Object` 实参（`<Object, ..>`；非泛型为空）
@@ -123,9 +133,11 @@ impl<'c, 'a> Plan<'c, 'a> {
 }
 
 /// 发射映像模块（无映像 → 不发射，返回 false）
-pub fn write_boot_image(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, ems: &Emissions) -> Result<bool> {
+pub fn write_boot_image(
+    ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, ems: &Emissions, homes: &BTreeMap<String, String>,
+) -> Result<bool> {
     let Some(d) = ctx.input.boot_image.as_ref() else { return Ok(false) };
-    let plan = Plan::new(ctx, ems, d)?;
+    let plan = Plan::new(ctx, ems, d, homes)?;
     let image = values::image_struct(&plan)?;
     let start = start::start_fn(&plan, &image.links)?;
     let text = format!(

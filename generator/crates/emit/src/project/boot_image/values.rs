@@ -183,7 +183,7 @@ pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
                 (format!("__ImageObj<{object_instance}>"), format!("__ImageObj::new({hash}, {object_instance}::IMAGE)"))
             }
             IBody::Inst(_) => {
-                let inner = format!("{}__inner", p.path(&o.ty));
+                let inner = p.inner(&o.ty);
                 let body = inst_value(p, i, &mut links)?;
                 (format!("__ImageObj<{inner}>"), format!("__ImageObj::new({hash}, {inner} {{{body}}})"))
             }
