@@ -10,10 +10,10 @@ mod bind;
 
 use crate::env::{erased_base, to_ir_type, type_text};
 use crate::error::SimResult;
-use crate::exprs::{clone_moved_var, is_trivial};
+use crate::exprs::{clone_moved_var, is_null, is_trivial};
 use crate::names::safe_name;
 use crate::state::{SlotDecl, StackEntry, StackSim};
-use crate::types::diamond_arity;
+use crate::types::{diamond_arity, is_object};
 use ir::{Expr, FnPath, Ident, Type};
 use std::collections::BTreeMap;
 use ty::RsType;
@@ -37,7 +37,12 @@ impl StackSim<'_> {
     pub fn store_local(&mut self, slot: u16, value: StackEntry) -> SimResult<()> {
         let source_id = value.id;
         let source_trivial = is_trivial(&value.expr);
+        let stores_null = is_null(&value.expr);
         self.store_inner(slot, value.expr, value.ty)?;
+        if let Some(l) = self.state.locals.get_mut(&slot) {
+            // 每次存储重置；只有根类型绑定的无类型 null 记为确定为空
+            l.null = stores_null && is_object(&l.ty);
+        }
         if source_trivial {
             return Ok(());
         }

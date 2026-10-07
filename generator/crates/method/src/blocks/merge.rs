@@ -89,6 +89,10 @@ impl Blocks<'_, '_> {
                 }
             }
         }
+        // 确定为空：各前驱出口均确定为空才成立
+        for (slot, l) in locals.iter_mut() {
+            l.null = preds.iter().all(|p| self.nodes.node(*p).exit_locals.get(slot).is_some_and(|o| o.null));
+        }
         locals
     }
 
