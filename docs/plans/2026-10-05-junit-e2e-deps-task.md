@@ -223,6 +223,26 @@
 12. **J2a 验收与 J2b（2026-10-06 凌晨，2174812a）**：
    - `j2a-golden2`（kr1，a67c33c2）：**新入口 `--deps/--cp/--seed-class` 下 m1–m5 5/5
      GOLDEN OK**（J2A-GOLDEN-5OF5）——J2 核心验收落地。
+
+13. **§3.6 改判执行：rava 仓库第三方库专属文件归零（2026-10-06 晨，主会话转达用户裁定）**：
+    - junit-deps 快进同步到 **f9298933**（J1+J2 由主会话合入集成分支；冲突 --release-small /
+      --boot-report 已由主会话解好；companion 修复 399f064d 在链——此前「已知回归」消除）。
+    - 第三方库不设专属补种 / 手写 / 清单：**`runtime/lib_runtime/` 整目录删除**（含 junit
+      骨架 manifest.toml / seeds.toml）、**`closure::lib_runtime` 读取器删除**。今后用户项目
+      的外部事实声明（JNI 回调目标、配置值驱动的反射目标）作为构建单元选项从用户项目路径
+      读取，现阶段不实现；JNI ABI 与构建期捕获登记 B5 缓行。方案 §3.6 由主会话改写
+      （87447716 / 24532f6c，随 gate 通过推 main）。
+    - **J4 改写为分析器任务**「注解驱动反射入口的通用建模」：流 = 类常量 / Class 值 →
+      getMethods / getDeclaredMethods / getDeclaredFields → getAnnotation /
+      isAnnotationPresent / 修饰符过滤 → Method.invoke / Constructor.newInstance /
+      Field.get / Field.set。验收：runtime/ 下 junit 专属文件 0；生成器与分析器无 junit /
+      hamcrest 字面量；63_junit 无任何补种全过 + 动态对照漏覆盖 0；补一个用户自定义注解 +
+      反射发现 + invoke 的 e2e 用例（expected 取真 JDK 21 输出）。C4 冻结期属语义改动：
+      全量开跑前合入 / 全量后合入 / 或附 compare_trees 27 例 0 差异证据。
+    - **J3 分阶段**：先做不碰 `scripts/run_tests.py` 的部分（form.toml 解析 + Form 独立模块 +
+      --pilot-libs 预置），C4 预检（超时参数）合入并广播后再接线挂接点；63_junit 按用户项目
+      对待，form.toml 放 `tests/e2e/63_junit/` 用例目录。
+    - C4 全量期间服务器作业一次一个；本提交为结构性删除的单独提交，推送后报主会话优先合入。
    - 锁条目名坐标真源修正（a67c33c2）：mvn dependency:list 解析坐标（92/92 有坐标；
      junit→junit、hamcrest-3.0→hamcrest，sha256 与 J0 一致）。
    - J2b（2174812a）：profile.json §4.2（modules 富化在档案层、closure.json 模块行最小面保
