@@ -52,6 +52,15 @@ class SlotCmdTest(unittest.TestCase):
         self.assertIn("--slice=rava.slice", cmd)
         self.assertEqual(subprocess.run(["bash", "-n", "-c", cmd]).returncode, 0)
 
+    def test_slot_mem_override(self):
+        s2 = config.slot_servers([{**FOUR, "slot_mem_gb": 28}])[2]
+        cmd = dist_remote.mem_limited("true", s2)
+        self.assertIn("[ $RAVA_LIM -lt 28672 ] && RAVA_LIM=28672", cmd)
+        self.assertIn("[ $RAVA_LIM -gt $RAVA_TOTAL ] && RAVA_LIM=$RAVA_TOTAL", cmd)
+        self.assertEqual(subprocess.run(["bash", "-n", "-c", cmd]).returncode, 0)
+        self.assertEqual(dist_remote.min_free_ram_mb(s2), 28672)
+        self.assertFalse(dist_remote._resource_ok(20000, 0.1, s2))
+
     def test_job_dirs_and_jobs(self):
         self.assertEqual(dist_remote.job_remote_dir("/data/r", "t", 0), "/data/r-spot-job-t")
         self.assertEqual(dist_remote.job_remote_dir("/data/r", "t", 2), "/data/r-spot-job-t-s2")

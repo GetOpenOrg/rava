@@ -11,6 +11,9 @@
 #   owner      负责分支 / 任务
 #   since      登记日期（YYYY-MM-DD）
 #   note       说明（可选）
+#   deferred   暂缓阶段（可选，见 docs/plans/2026-10-07-framework-driven-api-coverage.md）：S1 / S2 / … = 到该阶段框架
+#              纳入 API 面时恢复；面外 = 目前已知框架都不用。暂缓条目不排修、不阻塞合入，只在全量轮次跑
+#   deferred_reason  暂缓依据（10-07 首批为人工判断，S0 API 面算出后按数据复核）
 #
 # 维护：修复合入后删除对应条目（与修复同一提交或紧随其后）；新增条目须写明负责分支。
 # 同一测试可有多条（不同签名），任一命中即为已知。
@@ -32,6 +35,8 @@ signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "引导映像第 3 步（映像物化与装载，docs/plans/2026-10-05-boot-image-evaluator.md §步骤表）"
 since = "2026-10-06"
 note = "运行期未捕获 NPE（无 Java 栈）；refl-6f93f1c6、bimg2-d1dc540a / e69b596c 等抽查同症状；第 3 步验收含本例输出与 JDK 相同"
+deferred = "面外"
+deferred_reason = "Spring Boot 及主流库不自行定义 ModuleLayer（只读 ModuleLayer.boot()）"
 
 [[known]]
 test = "TestClassModuleFace"
@@ -49,6 +54,8 @@ note = "运行期未捕获 NPE（无 Java 栈）；m2-f0c12c3b、main-charset-e5
 
 # 63_junit 十例：run_tests 尚无依赖包概念（junit4 + hamcrest 不在 javac classpath），javac 即失败；
 # 由 J3 形态接线（docs/plans/2026-10-05-junit-e2e-deps-task.md）收敛，J3 合入时删除下列条目
+deferred = "S1"
+deferred_reason = "Charset.availableCharsets 由 spring-web StringHttpMessageConverter 使用"
 
 [[known]]
 test = "TestJunitAssertFamily"
@@ -126,6 +133,8 @@ signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"
 owner = "套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）：补 IOUtil.fdLimit 等 ACC_NATIVE 手写"
 since = "2026-10-06"
 note = "入库起从未通过：此前各抽查均为 600 s 转译超时；放宽转译时限后进到运行期，0.3 s 命中未实现 native"
+deferred = "S1"
+deferred_reason = "JDK HttpClient 仅作 Spring 6 RestClient 可选后端"
 
 [[known]]
 test = "TestHttpLoopbackAsync"
@@ -133,6 +142,8 @@ signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"
 owner = "套接字 native 层（e310dec2 续，jmod 覆盖 java.net.http 线）：补 IOUtil.fdLimit 等 ACC_NATIVE 手写"
 since = "2026-10-06"
 note = "同 TestHttpLoopbackSync"
+deferred = "S1"
+deferred_reason = "同 TestHttpLoopbackSync"
 
 [[known]]
 test = "TestProtectionDomainFaces"
@@ -147,6 +158,8 @@ signature = "Can't find bundle for base name com.sun.rowset.RowSetResourceBundle
 owner = "java.sql.rowset 模块资源包按名装载（ResourceBundle 按名加载的分析器建模 / 模块资源）"
 since = "2026-10-06"
 note = "入库起从未通过：e2enew-da8abee1 为 CachedRowSetImpl.<init> 存根，m2-f0c12c3b 起同 MissingResourceException"
+deferred = "S2"
+deferred_reason = "javax.sql.rowset 由 spring-jdbc SqlRowSet 使用"
 
 [[known]]
 test = "TestLocaleDateCjk"
@@ -154,6 +167,8 @@ signature = "hashCode 抛出异常: java.lang.NullPointerException"
 owner = "jdk.localedata / java.time 文本提供者（DateTimeTextProvider$LocaleStore 键 String 未初始化）"
 since = "2026-10-06"
 note = "入库起从未通过（10-03 为 LocaleProviderAdapter 存根）；958251ab 单例复测同一 NPE，非 2d87d368 引入"
+deferred = "面外"
+deferred_reason = "CJK locale 日期格式化不在框架调用链上"
 
 [[known]]
 test = "TestVirtualThreadScale"
@@ -161,6 +176,8 @@ signature = "+all sleeping at once: false"
 owner = "虚拟线程终态线（VirtualThread 字节码翻译 + Continuation 有栈协程）/ 运行期性能"
 since = "2026-10-06"
 note = "debug 档下创建 1e5 VT 过慢，「同时休眠」时序判定不成立；vt6-spot-4a983fe8 / vt-int-2602f409 / r1n-sp-204f8cbe 等同 diff"
+deferred = "面外"
+deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomcat 执行器再评估"
 
 [[known]]
 test = "TestXmlTransform"
@@ -168,6 +185,8 @@ signature = "this method takes 1 argument but 3 arguments were supplied"
 owner = "生成器重载命名（接口层次跨层重载：ContentHandler.endElement(3) / LexicalHandler.comment(char[],int,int) 与子接口 ExtendedContentHandler / ExtendedLexicalHandler 的单参重载同取无后缀名）"
 since = "2026-10-06"
 note = "java_xml crate 编译 E0061 ×2 / E0308 ×1（serializer/to_unknown_stream.rs 经 SerializationHandler 接收者调用）；先前的小写类名与模块同名（E0425 / E0573 16 处）已由 gen-lc-naming 1afed3fc 修复（lcname-spot2-1afed3fc 放宽超时抽查）；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露"
+deferred = "S1"
+deferred_reason = "javax.xml.transform 由 spring-web SourceHttpMessageConverter / spring-oxm 使用"
 
 [[known]]
 test = "TestStringGetCharsLegacy"
@@ -175,6 +194,8 @@ signature = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation:(Lj
 owner = "引导映像第 4 / 5 步（命名 java.base 与非空 boot layer、BootLoader 2）；与 TestProtectionDomainFaces 同根"
 since = "2026-10-07"
 note = "String.class.getPackage() → BootLoader.getDefinedPackage → native getSystemPackageLocation；只补 native（返回 jrt:/<模块>）不够：PackageHelper.findModule 经 Modules.findLoadedModule 在 boot layer 找模块，现 boot layer 为空层、全部类在无名模块，会转成 InternalError(\"java.base not loaded\")；须随命名模块 / boot layer 物化一并落地（docs/plans/2026-10-07-c4-misc-failures.md）"
+deferred = "面外"
+deferred_reason = "废弃 API String.getBytes(int,int,byte[],int)"
 
 [[known]]
 test = "TestSetAccessibleBoundary"
@@ -189,10 +210,3 @@ signature = "Could not load any resource bundle by com.sun.org.apache.xerces.int
 owner = "java.xml 模块资源包按名装载（ResourceBundle 按名加载的分析器建模 / 模块资源，与 TestRowSetProvider 同根因）"
 since = "2026-10-07"
 note = "FactoryFinder 缺省实现类漏闭包已由 c4-runfix a5de7eee 修复（c4run-xml-a5de7eee 其余 7 例通过）；本例随后暴露解析错误消息的 XMLMessages.properties 模块资源束未装载"
-
-[[known]]
-test = "TestBeansPropertyEditor"
-signature = "Exception in thread \"main\" java.lang.NullPointerException"
-owner = "闭包分析器：构造器查找值集不齐全时的已知镜像放行（流 / 调用点敏感区分 InstanceFinder.instantiate 两个调用），见 docs/plans/2026-10-07-c4-run-failures.md 第二节"
-since = "2026-10-07"
-note = "PropertyEditorManager.findEditor(int.class) 返回 null：预置编辑器（com/sun/beans/editors/IntegerEditor 等）镜像经 WeakCache 注册表流到 InstanceFinder.instantiate@29 的 Class.newInstance，与 ClassFinder.findClass 的 open(Class) 在同一接收者合流，构造器未点名、未实例化"
