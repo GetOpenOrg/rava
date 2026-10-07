@@ -11,6 +11,10 @@
 #   stack_frame       栈帧查询点：原生二进制无 Java 栈帧，方法体的唯一可观察效果是「按抛出位置作布尔
 #                     判定」，VM 的运行期登记与栈帧判定逐例同解
 #   bytecode_generator 字节码生成器内部判定：只为「生成的字节码」服务，生成链截断后无语义消费方
+#   class_path        类路径运行模型：原生二进制无运行期应用类路径（用户决策 (c)，模块模式 cp = null 的等价；
+#                     计划 docs/plans/2026-10-01-c1d-closure-bloat.md §30.15）——类全集构建期静态链接，类路径资源
+#                     构建期嵌入（VM 支持类 jdk.internal.loader.EmbeddedClassPath）；方法体的唯一可观察效果是
+#                     「类路径元素 → 运行期加载源」或「自类路径加载」，VM 以构建期结果等价承载
 
 [[intrinsic]]
 member = "java/lang/StrictMath.sqrt:(D)D"
@@ -46,6 +50,35 @@ reason = "@CallerSensitive 注入调用器隐藏类按宿主由 VM 登记，静�
 member = "java/lang/invoke/MethodHandleImpl$BindCaller.generateInvokerTemplate:()[B"
 kind = "bytecode_generator"
 reason = "注入调用器模板类字节（ASM）；唯一消费方 makeInjectedInvoker 由 VM 承载 → 空模板"
+
+# 类路径运行模型（kind = class_path，手写类 ②）：jdk/internal/loader/url_class_path_impl.rs、builtin_class_loader_impl.rs
+[[intrinsic]]
+member = "jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;"
+kind = "class_path"
+reason = "类路径字符串元素不形成运行期加载源 → null（调用方 String 构造器 / addFile 跳过 null），应用 ucp 恒空"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;"
+kind = "class_path"
+reason = "类路径上无可定义的字节码（类全集构建期静态链接，闭包内的类由 findLoadedClass0 命中）→ null"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findResourceOnClassPath:(Ljava/lang/String;)Ljava/net/URL;"
+kind = "class_path"
+reason = "类路径资源为构建期嵌入表（hasClassPath 判定保留）→ EmbeddedClassPath.findResource"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findResourcesOnClassPath:(Ljava/lang/String;)Ljava/util/Enumeration;"
+kind = "class_path"
+reason = "类路径资源为构建期嵌入表（hasClassPath 判定保留）→ EmbeddedClassPath.findResources"
+
+# 类路径资源表的读取入口（§30.15）：其一在闭包调用链上时，发射层把应用类路径（用户与库档案）的全部文件
+# 按名嵌入用户侧元数据（UserMeta.class_path_resources），否则为空表
+[class_path]
+resource_readers = [
+    "jdk/internal/loader/EmbeddedClassPath.count:(Ljava/lang/String;)I",
+    "jdk/internal/loader/EmbeddedClassPath.bytes:(Ljava/lang/String;I)[B",
+]
 
 # LambdaForm 编译：JDK 把 LambdaForm 编译为隐藏类字节码（ASM + defineHiddenClass），原生二进制以原生
 # LambdaForm 解释器承载全部句柄调用（MH-native，docs/plans/2026-09-26-mh-native.md §二-2）；编译入口
@@ -97,6 +130,9 @@ callsite_typed = [
 null_returns = [
     # VM 保存属性仅来自 -XX: / 归档选项；原生二进制无启动选项（vm_impl.rs getSavedProperty 恒 null）
     "jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;",
+    # 类路径运行模型（[[intrinsic]] kind = class_path）：无运行期类路径加载源 / 类路径上无可定义的字节码
+    "jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;",
+    "jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;",
 ]
 null_to_false = [
     "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
@@ -1041,9 +1077,7 @@ user_name = "@deferred"
 "jdk/internal/misc/Unsafe.shouldBeInitialized0:(Ljava/lang/Class;)Z" = "unsafe_should_be_init"
 # 文件系统查询：宿主相关
 "java/io/UnixFileSystem.canonicalize0:(Ljava/lang/String;)Ljava/lang/String;" = "defer_value"
-# 空类路径元素 = 当前目录（宿主相关）：URL 由运行期重放 toFileURL 得到（U3）；登记为非空（当前目录不可规范化时
-# toFileURL 返回 null，映像按非空处理，见计划 §8）
-"jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;" = "defer_call"
+# URLClassPath.toFileURL 无显式操作：[vm_constants] null_returns 给出 const:null（类路径运行模型，§30.15）
 "java/io/UnixFileSystem.getBooleanAttributes0:(Ljava/io/File;)I" = "defer_value"
 # 构建期单线程：监视器通知为空操作
 "java/lang/Object.notifyAll:()V" = "noop"
