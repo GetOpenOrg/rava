@@ -215,6 +215,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            self.fopen_name_via.insert(name.to_string(), self.cur_site);
             let mut deps = self.ctx.ceval_drop_name(name);
             deps.extend(self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()));
             self.invalidate_all(Some(deps), Why::FieldOpenName);

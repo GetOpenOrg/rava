@@ -475,6 +475,8 @@ pub struct Engine<'a> {
     lookup_released: HashSet<(usize, u32)>,
     /// 字段名配对已处理的 (类, 名字)：类层次不变，按名打开只做一次
     fpair_done: HashSet<(u32, Rc<str>)>,
+    /// 诊断：同名字段放开（`open_field_name`）的首个引入站点（`--flows @fopen:` 列出）
+    fopen_name_via: HashMap<String, Option<(usize, u32)>>,
     /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
     pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理

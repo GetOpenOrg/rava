@@ -172,6 +172,7 @@ impl<'a> Engine<'a> {
             lookup_trial: HashSet::default(),
             lookup_released: HashSet::default(),
             fpair_done: HashSet::default(),
+            fopen_name_via: HashMap::default(),
             class_patterns: HashMap::default(),
             flow_batch: super::worklist::FLOW_BATCH,
             open_methods: BTreeMap::new(),
