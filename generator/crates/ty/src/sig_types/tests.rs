@@ -283,6 +283,16 @@ fn class_view_disjoint_for_interface_only_members() {
     // 祖先类声明 put(I)，接口只声明 put(String)：类视图两种参数段
     s.push(class("p/HasInt").method(method(PUBLIC, "put", "(I)V", None)));
     s.push(class("p/AbsMixed").sup("p/HasInt").ifaces(&["p/Left"]));
+    // 泛型桥承载的擦除接口成员（枚举 compareTo(E) + 桥 compareTo(Object) 形态）：不计入视图参数段，
+    // 子类视图里桥成员仍按描述符区分
+    const SYNTHETIC: u16 = 0x1000;
+    s.push(
+        class("p/CmpBase")
+            .ifaces(&["p/Cmp"])
+            .method(method(PUBLIC, "compareTo", "(Lp/CmpBase;)I", None))
+            .method(method(PUBLIC | SYNTHETIC, "compareTo", &format!("(L{OBJECT};)I"), None)),
+    );
+    s.push(class("p/CmpLeaf").sup("p/CmpBase"));
     let f = Fixture::new(s);
     let x = f.ctx();
     let ci = |c: &str| f.reg.get(c).expect(c);
@@ -299,6 +309,9 @@ fn class_view_disjoint_for_interface_only_members() {
     // 祖先类成员与接口成员在类视图上同按描述符区分
     assert_ne!(x.receiver_member_name("put", "(I)V", ci("p/AbsMixed")), "put");
     assert_ne!(local("p/AbsMixed", "put", &s1), "put");
+    let obj_cmp = format!("(L{OBJECT};)I");
+    assert!(!x.hierarchy_overloaded_names(ci("p/CmpLeaf")).contains("compareTo"));
+    assert_ne!(local("p/CmpLeaf", "compareTo", &obj_cmp), "compareTo");
     // 接口自身的声明名不受实现类影响
     assert!(x.hierarchy_overloaded_names(ci("p/Handler")).is_empty());
     assert!(!x.hierarchy_overloaded_names(ci("p/Left")).contains("put"));

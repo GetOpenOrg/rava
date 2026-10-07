@@ -248,14 +248,33 @@ impl TyCtx<'_> {
         safe_name.to_string()
     }
 
-    /// 类 ci 视角下「只声明在接口上的成员」的 Rust 方法名：与类视图的其他成员同一判定
-    /// （类视图内同名异参 ≥2 → 后缀，见 `overloaded_rec` 规则 5）
+    /// 类 ci 视角下「只声明在接口上的成员」的 Rust 方法名：类视图内同名异参 → 后缀
+    /// （`overloaded_rec` 规则 5）；否则沿超类链找同名声明——同参数段即类方法表成员（注入的
+    /// default）取原名，异参（含只由合成桥承载、不计入视图参数段的擦除接口成员，如泛型
+    /// `compareTo(T)` 的 `compareTo(Object)`）带后缀
     pub fn interface_member_local_name(&self, ci: &ClassInfo, mname: &str, desc: &str) -> String {
         if self.hierarchy_overloaded_names(ci).contains(mname) {
-            mangle_name(self.manifest, mname, desc)
-        } else {
-            mname.to_string()
+            return mangle_name(self.manifest, mname, desc);
         }
+        let params = param_section(desc);
+        let mut seen = BTreeSet::new();
+        let mut cur = Some(ci);
+        while let Some(c) = cur.filter(|c| !seen.contains(c.name())) {
+            seen.insert(c.name().to_string());
+            if let Some(declared) = self.class_method_param_sets(c).1.get(mname) {
+                return if declared.contains(&params) {
+                    mname.to_string()
+                } else {
+                    mangle_name(self.manifest, mname, desc)
+                };
+            }
+            cur = if self.reg.is_empty() {
+                None
+            } else {
+                self.reg.get(c.super_class())
+            };
+        }
+        mname.to_string()
     }
 
     /// 类 ci 声明的方法名是否带描述符后缀
