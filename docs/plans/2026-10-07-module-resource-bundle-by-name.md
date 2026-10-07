@@ -15,6 +15,30 @@
 - 束是类（`ListResourceBundle` 子类）时同理：`Class.forName` + `newInstance` 反射构造，没有静态调用边。
   按名取类的通用建模只能看到 `getBundle` 内部拼出的名字，那个名字推不出。
 
+### 进度（2026-10-07 收尾，排期调整后暂缓）
+
+TestRowSetProvider（S2）按用户排期暂缓（known_failures `deferred`），本线到此收尾。
+
+- **已完成并抽查验证**（合成分支 c4-resbundle-chk = 本分支 + c1d-url-b2，抽查 resbchk-ee998acd / resbchk-cf858e27）：
+  TestXmlSaxEvents 通过；HelloWorld、CollectorsDemo、TestPropertiesXmlRoundTrip、TestSaxLocatorAttributes 不回归。
+  通用部分：资源束基名按键值求值与字面量兜底（2.1–2.2）、按名读取的资源（2.3）、lambda 捕获值对齐（2.4）、
+  推不全站点与 String 字段非常量写入的槽输入（2.5）。`ResourceBundle.getBundle` / 资源读取入口都由清单登记，
+  框架侧（如 Spring `ResourceBundleMessageSource` 经 `getBundle` 按名装载）同样适用。
+- **已查实的结论（TestRowSetProvider）**：
+  - `com.sun.rowset.RowSetResourceBundle` 束已能按字面量站点求出并嵌入，原报错不再出现；
+  - 第二个根因是 `SyncFactory` 经 `Module.getResourceAsStream(ROWSET_PROPERTIES)` 读 `javax/sql/rowset/rowset.properties`，
+    名字是拼接后写进静态字段的。resb-diag8 确认闭包现已求出
+    `{"javax/sql/rowset/rowset.properties", "rowset.properties"}`。
+- **未完成**：resbchk-cf858e27 中 TestRowSetProvider 仍报 `Resource javax/sql/rowset/rowset.properties not found`。
+  名字已求出，所以问题在其后两段之一，尚未区分：
+  - ① 事实链路没把该资源嵌进模块资源表：`named_resources` → profile / compose → `input/build.rs` `module_resources`；
+  - ② 运行时 `Module.getResourceAsStream` 对具名模块 `java.sql.rowset` 的查找（模块名 / 包可见性 / 资源表键）没命中。
+- **恢复时从这里开始**：在 scratch 生成树里查 `jdk_resources::module_resources` 是否含 `javax/sql/rowset/rowset.properties`
+  （属于哪个模块键）。
+  - 含：追运行时 `Module.getResourceAsStream` → `BootLoader.findResourceAsStream` 的查找路径；
+  - 不含：追 `[closure] 按名读取的资源` 日志行，再看 profile 合并或 compose 的过滤。
+- c4-resbundle-chk 上的临时诊断提交（476fb384、084e9c5f）只在 chk 分支，不并入。
+
 ## 二、终态设计
 
 ### 2.1 清单（seeds.toml `[bundles]`）
