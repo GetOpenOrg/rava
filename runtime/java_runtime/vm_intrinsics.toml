@@ -1171,6 +1171,9 @@ user_name = "@deferred"
 "java/security/AccessController.getInheritedAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
 # 调用方保护域：与运行期 access_controller_impl.rs 同（恒 null，原生二进制无代码源保护域）
 "java/security/AccessController.getProtectionDomain:(Ljava/lang/Class;)Ljava/security/ProtectionDomain;" = "const:null"
+# 系统模块读取器的资源存在判定（ModuleReader.find 的唯一映像访问点）：按参考 JDK 模块内容回答，构建期不读
+# ${java.home}/lib/modules（U12：LoggerFinder 提供者查找经 BuiltinClassLoader.findMiscResource 遍历各模块）
+"jdk/internal/module/SystemModuleFinders$SystemModuleReader.containsImageLocation:(Ljava/lang/String;)Z" = "module_resource:module"
 # 线程 id 计数器：原生地址（thread_impl.rs NEXT_THREAD_ID）→ VM 单元
 "java/lang/Thread.getNextThreadIdOffset:()J" = "vm_cell:next_thread_id"
 "java/lang/ref/Reference.refersTo0:(Ljava/lang/Object;)Z" = "refers_to"

@@ -350,6 +350,26 @@ impl ClassPath {
         None
     }
 
+    /// JDK 具名模块 `module` 的内容是否含资源 `path`（参考 JDK 运行期映像的模块读取器语义：只查该模块所在的
+    /// JDK / 镜像档案；`<类名>.class` 取该类的解析胜出档案）
+    pub fn module_has_resource(&self, module: &str, path: &str) -> bool {
+        if let Some(name) = path.strip_suffix(".class") {
+            return matches!(self.origin(name), Some(Origin::Jdk | Origin::Image)) && self.module_of(name).as_deref() == Some(module);
+        }
+        let names = self.ensure_module_names();
+        let mut a = lock(&self.archives);
+        for (i, arch) in a.iter_mut().enumerate() {
+            if !matches!(self.origins[i], Origin::Jdk | Origin::Image) {
+                continue;
+            }
+            let m = self.overlay_modules.get(&i).map(String::as_str).or_else(|| names.get(i).and_then(|x| x.as_deref()));
+            if m == Some(module) && matches!(arch.read_resource(path), Ok(Some(_))) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 应用类路径（用户与库档案，加入序）的全部文件：(资源名, 字节)，按名稳定排序——同名按类路径序。
     /// 读取失败记入 failures
     pub fn class_path_files(&self) -> Vec<(String, Vec<u8>)> {
