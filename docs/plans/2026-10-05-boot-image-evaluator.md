@@ -678,13 +678,13 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 **第 5 步（部分）**：44be328e，`BootLoader.getSystemPackageLocation` native——引导加载器的包按 VM 模块表取所属模块的 location（映像模块表带 `defineModule0` 的 location 实参，引导层为 `jrt:/<模块名>`），未登记 → null。
 
-**抽查 bimg3-m-fcc54fb8（JDK 21）**：8 例 7 过——HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy 通过（后 5 例已从 `docs/known_failures.toml` 删除）；TestBootLayer 运行期 NPE，排查中。
+**抽查 bimg3-m-fcc54fb8（JDK 21）**：8 例 7 过——HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy 通过（后 5 例已从 `docs/known_failures.toml` 删除）；TestBootLayer 运行期 NPE（见未决 1）。宽抽查 bimg3-w-f442cecf：CollectorsDemo、DeepCopy、TestSerialUserGenericCallbacks 通过，TestBootLayer 同上。
 
 **未决**
 
-1. TestBootLayer（第 3 步验收项）运行期 NPE。
-2. 闭包规模：删 `boot_singletons` 后 HelloWorld 闭包 ≤ 540 门槛待服务器复测；此前服务器上另有 Signal → Shutdown.exit → System.getLogger → LazyLoggers / DetectBackend → ServiceLoader 链使档案闭包约 3000 类（本机 macOS 524），属需决策项。
-3. 二进制体积 ≤ +5%、启动装载 ≤ 1 ms 两项门槛未测。
+1. TestBootLayer（第 3 步验收项）：作业 bimg3-bl-fcc54fb8 实跑，前 23 行与 JDK 相同（引导层、java.base / java.sql 模块、Configuration、无名模块均正确），在 `base.getResourceAsStream("java/lang/Object.class")` 返回 null 后 `readNBytes` NPE。原因：`input/src/resources.rs` 的资源推导按设计排除 `.class`（`path_like` 单测断言 `!path_like("p/q/A.class")`），类字节不在嵌入资源中。按 boot-layer 第 5 步（2026-10-02-boot-layer.md §2.3 第 6 条：jimage 嵌入数据 + `getNativeMap`，`.class` 字节同属模块内容）一并解决；是否放开 `.class` 资源推导属该步设计，未自行改动。其后各行（系统类加载器、线程组、属性、标准流）未覆盖到。
+2. 闭包规模（需决策）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。已知来源为 Signal → Shutdown.exit → System.getLogger → LazyLoggers / DetectBackend → ServiceLoader 链（本机 macOS 曾测 524）；删 `boot_singletons` 的影响叠加其上，未拆分。
+3. 二进制体积 / 启动：基线 af1bf145 HelloWorld release 二进制 7,761,904 字节（已无符号，`.text` 4.70 MB、`.rodata` 0.41 MB、`.data.rel.ro` 0.48 MB），整进程墙钟中位数 0.99 ms（30 次）。本分支同口径作业 bimg3-meas2-f442cecf 因 dev 关机维护被停，未得数；uprobes 测 `__boot_image_start` 需未 strip 的产物（缺省 release 已无符号），须另配。测量脚本两作业共用 `/tmp/meas_*.txt` 会串扰，重跑时须按 tag 区分文件名。
 4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
