@@ -433,7 +433,7 @@ process(VirtCall T, sig):
 - 字段名字符串：`AtomicInteger/Long/ReferenceFieldUpdater.newUpdater(类, "字段")`、`Unsafe.objectFieldOffset(类, "字段")`、`MethodHandles.Lookup.findVarHandle` / `findStaticVarHandle`
 - `MethodHandles.Lookup.findVirtual` / `findStatic` / `findSpecial` / `findConstructor` / `findGetter` / `findSetter` / `unreflect*`
 - `ServiceLoader.load(X.class)`：结合 `META-INF/services` 与 `provides`，所有提供者的公共无参构造器（或静态 `provider()`）可达。
-- `ResourceBundle.getBundle(name)`：按 `name_语言_地区_变体` 模式加载类和 `.properties`。
+- `ResourceBundle.getBundle(name)`：按 `name_语言_地区_变体` 模式加载类和 `.properties`。已实施（seeds.toml `[bundles]`，`engine/bundles.rs`）：调用点基名按键值求值，推不出时回退到调用链上的束形字面量；按入选 locale 父链展开，束类反射构造补种、属性文件入模块资源表。
 - 系统属性 / 配置文件中的类名：各类 SPI 默认实现类名。
 - `Class.getName()` → `Class.forName()` 的字符串回流。
 
@@ -500,7 +500,7 @@ process(VirtCall T, sig):
 与类闭包并行计算的第二个闭包：
 
 - `Class.getResource*` / `ClassLoader.getResource*` / `Module.getResourceAsStream` 的字面量参数
-- `ResourceBundle` 文件
+- `ResourceBundle` 文件（`.properties` 束由 8.3 的 getBundle 建模给出，种子事实 `bundle_resources`）
 - `META-INF/services/*`
 - 输出时保留被引用的资源；无法推断的资源访问点进入报告。
 

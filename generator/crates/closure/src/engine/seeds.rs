@@ -53,6 +53,8 @@ pub struct SeedState {
     pub reflect_all: BTreeSet<String>,
     /// 服务目录事实（`[services]`）
     pub services: super::services::ServiceState,
+    /// 按名装载的资源束（`[bundles]`）
+    pub bundles: super::bundles::BundleState,
 }
 
 impl<'a> Engine<'a> {
@@ -61,12 +63,12 @@ impl<'a> Engine<'a> {
         self.methods.values().map(|m| format!("{}.{}", m.key.owner, m.key.name)).collect()
     }
 
-    fn user_classes(&self) -> Vec<std::sync::Arc<ClassFile>> {
+    pub(super) fn user_classes(&self) -> Vec<std::sync::Arc<ClassFile>> {
         self.cp.names_of(Origin::User).iter().filter_map(|n| self.cp.get(n)).collect()
     }
 
     /// 种子方法：形参来自非建模代码（反射 / VM），返回值交回非建模代码
-    fn seed_method(&mut self, key: MemberRef, kind: &'static str) {
+    pub(super) fn seed_method(&mut self, key: MemberRef, kind: &'static str) {
         let via = Via::root(kind, &key.to_string());
         let t = self.method(key, via);
         self.open_params(t);
@@ -80,6 +82,7 @@ impl<'a> Engine<'a> {
         self.seed_annotations(&reached);
         let fed = self.seed_locale(&reached);
         self.seed_jca(&reached);
+        self.seed_bundles();
         self.seed_image();
         self.seed_static_owner_names();
         let named = self.seed_ctor_lookups();

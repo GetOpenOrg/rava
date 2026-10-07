@@ -11,6 +11,8 @@
 //! 记为拼接模板，中间的动态段取调用链上方法体里的单段字符串常量（拼接实参的常量本身也是调用链上
 //! 某个方法的 ldc，如 `NFCSingleton.<clinit>` 的 `"nfc"`）。
 //! 只看调用链上的方法：资源随读取它的代码进出闭包，不在链上的资源不进二进制。
+//! 按名装载的资源束（`ResourceBundle.getBundle` 的 `.properties` 束）由闭包分析器求基名、按 locale 展开后
+//! 作为种子事实 `bundle_resources` 给出（`closure/src/engine/bundles.rs`），在此一并嵌入。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -67,14 +69,16 @@ fn ext_suffix(s: &str) -> bool {
     s.len() > 1 && s.starts_with('.') && !s.contains('/') && path_like(s)
 }
 
-/// 由调用链上的字符串常量推导要嵌入的资源：(资源路径, 字节)，按路径排序
-pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>) -> Vec<(String, Vec<u8>)> {
-    let mut names: BTreeSet<String> = strings
+/// 由调用链上的字符串常量推导要嵌入的资源，并入闭包分析器按名装载的属性文件资源束（`bundles`）：
+/// (资源路径, 字节)，按路径排序
+pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, bundles: &BTreeSet<String>) -> Vec<(String, Vec<u8>)> {
+    let mut names: BTreeSet<String> = bundles.clone();
+    names.extend(strings
         .lits
         .iter()
         .filter(|(_, s)| path_like(s))
-        .flat_map(|(c, s)| candidates(c, s))
-        .collect();
+        .flat_map(|(c, s)| candidates(c, s)),
+    );
     if !strings.templates.is_empty() {
         let segs: BTreeSet<&str> = strings.lits.iter().map(|(_, s)| *s).filter(|s| path_like(s) && !s.contains('/')).collect();
         for (c, p, x) in &strings.templates {

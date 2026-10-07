@@ -2,12 +2,14 @@
 //! 引擎侧的补种时机见 `engine/seeds.rs`。
 
 pub mod annotation;
+pub mod bundles;
 pub mod jca;
 pub mod jca_order;
 pub mod locale;
 pub mod services;
 
 use annotation::AnnoCfg;
+use bundles::BundleCfg;
 use jca::JcaCfg;
 use locale::LocaleCfg;
 use services::ServicesCfg;
@@ -18,6 +20,7 @@ pub struct SeedCfg {
     pub locale: LocaleCfg,
     pub jca: JcaCfg,
     pub services: ServicesCfg,
+    pub bundles: BundleCfg,
 }
 
 impl SeedCfg {
@@ -27,6 +30,7 @@ impl SeedCfg {
             locale: LocaleCfg::from_toml(t.get("locale")),
             jca: JcaCfg::from_toml(t.get("jca")),
             services: ServicesCfg::from_toml(t.get("services")),
+            bundles: BundleCfg::from_toml(t.get("bundles")),
         }
     }
 }

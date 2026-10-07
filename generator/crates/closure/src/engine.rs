@@ -78,6 +78,7 @@ mod field_names;
 mod field_handles;
 mod mirror_init;
 mod seeds;
+mod bundles;
 mod services;
 mod memo;
 mod mirror_eq;

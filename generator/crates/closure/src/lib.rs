@@ -313,6 +313,7 @@ impl Closure<'_> {
                 "mirror_inits": e.seeds.mirror_inits,
                 "reflect_names": e.seeds.reflect_names,
                 "reflect_all": e.seeds.reflect_all,
+                "bundle_resources": e.seeds.bundles.resources,
                 "services": e.seeds.services.selected.iter().map(|(s, ps)| json!({
                     "service": s,
                     "providers": ps.iter().map(|p| json!({"module": p.module, "class": p.class})).collect::<Vec<_>>(),
