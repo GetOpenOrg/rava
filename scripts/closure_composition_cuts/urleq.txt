@@ -1,0 +1,2 @@
+# URL.equals（经 Objects.equals 的 Object 形参汇合派发入；量化元素 / 上下文精度缺口）
+java/net/URL.equals:(Ljava/lang/Object;)Z

@@ -1,0 +1,5 @@
+# 序列化过滤器配置：jdk.serialFilter / jdk.serialFilterFactory 缺省为 null 时不建过滤器、不按名反射实例化工厂（构建期求值近似）
+java/io/ObjectInputFilter$Config.<clinit>:()V@120
+java/io/ObjectInputFilter$Config.<clinit>:()V@209
+java/io/ObjectInputFilter$Config.<clinit>:()V@220
+java/io/ObjectInputFilter$Config.<clinit>:()V@227
