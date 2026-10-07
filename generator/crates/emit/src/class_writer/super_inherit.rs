@@ -18,7 +18,7 @@ use ty::type_map::mangle_name;
 use ty::ClassInfo;
 
 use super::attrs::MethodAttrExtra;
-use super::inherit::{chain_all, interface_special_member_name};
+use super::inherit::interface_special_member_name;
 use super::methods::{BodySpec, Cx, Emitted};
 use super::slot::override_vtable_erasure;
 use crate::body::MethodBodyEmitter;
@@ -102,7 +102,10 @@ struct Anc<'c> {
     index: usize,
     vm: &'c Method,
     user: bool,
-    in_cc: bool,
+    /// 本类桥（与祖先方法同名同描述符、由本类声明）在调用链上：按本类键判定
+    bridge_live: bool,
+    /// 祖先方法体在调用链上：按祖先声明键判定（分析器只分析了这一键的方法体内部依赖）
+    body_live: bool,
 }
 
 /// 超类虚方法继承段
@@ -118,8 +121,6 @@ pub(super) fn superclass_virtual_inheritance(
     if ci.is_interface() || sup0.is_empty() {
         return Ok(());
     }
-    // 用户类且超类为用户类：全量（Python call_chain None）；否则按调用链门控
-    let cc_all = chain_all(ctx, ci) && !sup0.contains('/');
     let mut existing: BTreeSet<(String, String)> =
         visible.iter().map(|m| (m.name.clone(), param_part(&m.desc).to_string())).collect();
     let mut done: BTreeSet<(String, String)> = BTreeSet::new();
@@ -144,7 +145,8 @@ pub(super) fn superclass_virtual_inheritance(
             if !virt {
                 continue;
             }
-            let in_cc = cc_all || ctx.in_chain(ci.name(), &vm.name, &vm.desc) || ctx.in_chain(sup, &vm.name, &vm.desc);
+            // 用户类与非用户类同一口径：按调用链门控（本类符号键或祖先声明键）
+            let in_cc = ctx.in_chain(ci.name(), &vm.name, &vm.desc) || ctx.in_chain(sup, &vm.name, &vm.desc);
             let impl_name = |n: &str| format!("__impl_{}", safe_ident(n));
             let hw_has = |n: &str| anc_hw.is_some_and(|h| h.contains(n));
             let mangled = mangle_name(&ctx.manifest.ty, &vm.name, &vm.desc);
@@ -165,7 +167,9 @@ pub(super) fn superclass_virtual_inheritance(
                 }
                 continue;
             }
-            let a = Anc { sci, index, vm, user, in_cc };
+            let bridge_live = ctx.in_chain(ci.name(), &vm.name, &vm.desc);
+            let body_live = ctx.in_chain(sup, &vm.name, &vm.desc);
+            let a = Anc { sci, index, vm, user, bridge_live, body_live };
             if let Some(block) = user_ancestor_block(cx, state, bodies, visible, &a, bridge)? {
                 out.push(block);
             }
@@ -211,7 +215,7 @@ fn user_ancestor_block(
         extra.vtable_erasure = override_vtable_erasure(ctx, ci, vm, &virt_in);
     }
     let e = Emitted { method: Cow::Borrowed(vm), owner: a.sci, index: a.index };
-    if let Some(bi) = bridge.filter(|_| a.in_cc) {
+    if let Some(bi) = bridge {
         let b = &ci.methods()[bi];
         let base = bridge_wrapper_name(ctx, visible, b, &virt_in);
         let mut bx = MethodAttrExtra { virtual_in: virt_in.clone(), ..Default::default() };
@@ -223,6 +227,10 @@ fn user_ancestor_block(
             bx.vtable_erasure = override_vtable_erasure(ctx, ci, vm, &virt_in);
         }
         let be = Emitted::declared(ci, bi);
+        if !a.bridge_live {
+            // 本类桥不在调用链上：槽位仍由桥占据（签名照发），体为存根
+            return Ok(Some(cx.body_block(&be, &bx, None, &base, cx.tps)));
+        }
         let spec = BodySpec { ctparams: cx.tps, rust_name: Some(&base), in_vtable_body: true, view: None, site: "bridge" };
         if let Some(f) = cx.body_with(state, bodies, &be, &spec)? {
             return Ok(Some(cx.block(&be, &bx, f.text, f.sig.as_ref(), true)));
@@ -231,7 +239,7 @@ fn user_ancestor_block(
             return Ok(None);
         }
     }
-    let text = if vm.is_native() || vm.is_abstract() || !a.in_cc {
+    let text = if vm.is_native() || vm.is_abstract() || !a.body_live {
         None
     } else {
         let spec = BodySpec { ctparams: cx.tps, rust_name: None, in_vtable_body: true, view: None, site: "super-inherit" };

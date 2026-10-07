@@ -97,7 +97,6 @@ impl<'l> ClassSite<'l> {
                 generated: Some(l.generated),
                 here: self.here,
                 crates: self.crates,
-                all_in_chain: self.is_user(),
                 route: Some(l.route),
             };
         }
@@ -106,7 +105,6 @@ impl<'l> ClassSite<'l> {
             generated: jdk_on.then_some(&self.jdk.generated),
             here: self.here,
             crates: self.crates,
-            all_in_chain: self.is_user(),
             route: None,
         }
     }
@@ -121,9 +119,10 @@ pub fn struct_name(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> String {
     }
 }
 
-/// 类型存根：JDK 类且无任何方法在调用链上（static 字段发 panic 存根访问器）
-pub fn is_type_only(ctx: &EmitCtx<'_>, ci: &ClassInfo, site: &ClassSite<'_>) -> bool {
-    !site.is_user() && !ci.methods().iter().any(|m| ctx.in_chain(ci.name(), &m.name, &m.desc))
+/// 类型存根：无任何方法在调用链上且类不在初始化集合（static 字段发 panic 存根访问器）；
+/// 用户类与非用户类同一口径（[`input::EmitInput::type_only`]，与判定层 `ClassPlan::type_only` 同源）
+pub fn is_type_only(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> bool {
+    ctx.input.type_only(ci)
 }
 
 /// 父类 Rust 类型（含本类视角的祖先实参）；父类为根类时为空
@@ -242,7 +241,7 @@ pub fn class_text(
     // G-10 账本：本类方法由本轮生成
     state.generated_classes.insert(ci.name().to_string());
     let mut method_blocks: Vec<MethodBlock> =
-        fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci, site)).into_iter().map(MethodBlock::plain).collect();
+        fields::static_field_blocks(ctx, ci, &tps, is_type_only(ctx, ci)).into_iter().map(MethodBlock::plain).collect();
     let mb = methods::emit_method_blocks(ctx, state, bodies, ci, &tps)?;
     method_blocks.extend(mb.method_blocks);
     let iface_lambda_blocks = mb.iface_lambda_blocks;
