@@ -9,7 +9,7 @@
 > **2026-10-05 用户决策 U0–U6 已定（§8.1）**；第 1 步已在分支 `boot-image-s1` 实施，实测见 §5.3。
 > U1 改判为「运行期取宿主值」：下文 §3.2、§5.2 B1、§6 第 2 步验收已按 U1 改写；§0 第 1 条与 §5.1 的探针数字为钉值时的历史实测。2026-10-08 U1 被 U14 部分修订（§8.4）：`line.separator`、`file.encoding`、`java.home` 改为构建期钉值（逐项实测闭包收益，无收益不钉），`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取。
 >
-> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。U12 / U13 已定（2026-10-08，用户采纳建议），U14 已定（2026-10-08，U1 部分修订），见 §8.4。
+> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。U12 / U13 已定（2026-10-08，用户采纳建议），U14 已定（2026-10-08，U1 部分修订），见 §8.4。派发：u12-props（U12 ①③ + U14 line.separator / file.encoding，基于 b558e0c2）进行中；U14 java.home 随 boot-image-s5；U13 待派。
 
 1. **可行，探针已在构建期跑完 HotSpot 的全部三个引导阶段。** 探针用的是 `engine/concrete` 同一个解释器的引导模式，输入是 macOS JDK 21.0.11 的 java.base 字节码，例子为 HelloWorld：
    - 次序：VM 预初始化 9 类和 3 个 VM 构造对象，然后 `initPhase1`、`initPhase2(false,false)`、`initPhase3`；
@@ -956,9 +956,9 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 |---|---|---|
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
-| 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
+| 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同；HelloWorld 闭包上限已由 §5.5.6「按平台上限」取代。**派发状态（2026-10-08）**：机制 ①③（U12）+ U14 `line.separator` / `file.encoding` 钉值合为一个任务，🔄 进行中（分支 u12-props，基于 b558e0c2）；S2 `Class.genericInfo` 入映像（U13）⏳ 待派（有空名额即派） |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；**VM / Class / SecurityManager（cabe9fb0，§5.6）**：vm_impl 8、class_impl 归零，全仓 23 → 14，SecurityManager 移出边界；待合批验证 |
-| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2、JceSecurity 6（2026-10-08 由第 6 步前移，分支 boot-image-s5） | `#[jvm_boundary]` 14 → 0；TestClassResourceStream 通过；JCA 用例通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2、JceSecurity 6（2026-10-08 由第 6 步前移）；U14 `java.home` 构建期钉值，JceSecurity 策略文件改为构建期事实。🔄 进行中（分支 boot-image-s5） | `#[jvm_boundary]` 14 → 0；TestClassResourceStream 通过；JCA 用例通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
 | 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native | `#[jvm_boundary]` 保持 0；CollectorsDemo 等冷独占正则链 0 类 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 
@@ -1024,9 +1024,9 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 | # | 事项 | 决定 |
 |---|---|---|
-| U12 | U1 例外：§5.5.6 终态设计机制 ①③ 所在的日志 / 信号链（(L) 链，`Runtime.exit` / `Shutdown.exit` → `logRuntimeExit`） | **已定（2026-10-08，用户采纳建议）**：接受为 U1 的例外，仅限该路径——日志路径相关属性取构建期值；用户 `LoggerFinder` 提供者的构造函数在构建期运行；运行期 `-Djdk.system.logger.level` 不再生效。此前因 U12 挂起的机制 ①③ 解除挂起，按 §5.5.6 实施 |
-| U13 | S2：`Class.genericInfo` 写入引导映像（S2 接收者精度已修，`Recv::Bounded`，§5.6.5；HelloWorld 闭包不降，约 3043 类；§5.6.7 #6） | **已定（2026-10-08，用户采纳建议）**：做——热路径类镜像的 `genericInfo`（`ClassRepository`）在构建期算好写进映像，运行期命中缓存不再解析签名 |
+| U12 | U1 例外：§5.5.6 终态设计机制 ①③ 所在的日志 / 信号链（(L) 链，`Runtime.exit` / `Shutdown.exit` → `logRuntimeExit`） | **已定（2026-10-08，用户采纳建议）**：接受为 U1 的例外，仅限该路径——日志路径相关属性取构建期值；用户 `LoggerFinder` 提供者的构造函数在构建期运行；运行期 `-Djdk.system.logger.level` 不再生效。此前因 U12 挂起的机制 ①③ 解除挂起，按 §5.5.6 实施。**派发**：🔄 进行中（分支 u12-props，基于 b558e0c2，与 U14 的 `line.separator` / `file.encoding` 合为一个任务） |
+| U13 | S2：`Class.genericInfo` 写入引导映像（S2 接收者精度已修，`Recv::Bounded`，§5.6.5；HelloWorld 闭包不降，约 3043 类；§5.6.7 #6） | **已定（2026-10-08，用户采纳建议）**：做——热路径类镜像的 `genericInfo`（`ClassRepository`）在构建期算好写进映像，运行期命中缓存不再解析签名。**派发**：⏳ 待派（有空名额即派） |
 | — | 去除无映像回退（映像求值失败即构建失败，不保留运行期引导的第二条路径；dcabf9e3，§5.6.8，batch-1008 合批验证中） | **保留（2026-10-08 用户确认）** |
-| U14 | U1 部分修订：系统属性按来源分别取值。用户原话：「只要有利于缩小闭包，也可以进行调整，把一部分这类属性改成编译时的值」 | **已定（2026-10-08，用户改判）**。判据：属性值由目标平台或 JDK 规范决定、与运行宿主无关的，构建期钉值，依赖类随之进入引导映像；值真正取决于运行宿主环境的，仍运行期读取。逐项：`line.separator` 按目标三元组钉值（unix `\n`、windows `\r\n`）；`file.encoding` 钉为 UTF-8（JEP 400，JDK 18 起缺省）；`java.home` 钉为构建期值（原生二进制运行时不依赖 JDK 安装目录，jimage 与 conf 资源在构建期嵌入，JceSecurity 策略文件因此成为构建期事实）；`sun.jnu.encoding`、`stdout.encoding`、`stderr.encoding` 维持运行期读取（取决于宿主 locale 与终端）。**每项改动实测闭包类数变化；没有收益的项不钉值。** U1 被本项部分修订；U12 不变 |
+| U14 | U1 部分修订：系统属性按来源分别取值。用户原话：「只要有利于缩小闭包，也可以进行调整，把一部分这类属性改成编译时的值」 | **已定（2026-10-08，用户改判）**。判据：属性值由目标平台或 JDK 规范决定、与运行宿主无关的，构建期钉值，依赖类随之进入引导映像；值真正取决于运行宿主环境的，仍运行期读取。逐项：`line.separator` 按目标三元组钉值（unix `\n`、windows `\r\n`）；`file.encoding` 钉为 UTF-8（JEP 400，JDK 18 起缺省）；`java.home` 钉为构建期值（原生二进制运行时不依赖 JDK 安装目录，jimage 与 conf 资源在构建期嵌入，JceSecurity 策略文件因此成为构建期事实）；`sun.jnu.encoding`、`stdout.encoding`、`stderr.encoding` 维持运行期读取（取决于宿主 locale 与终端）。**每项改动实测闭包类数变化；没有收益的项不钉值。** U1 被本项部分修订；U12 不变。**派发**：`line.separator`、`file.encoding` 🔄 进行中（u12-props，随 U12）；`java.home` 🔄 进行中（归第 5 步分支 boot-image-s5，JceSecurity 策略文件改为构建期事实） |
 
 **待核对**：闭包构成报告（`docs/reports/2026-10-07-closure-composition.md`）基线 HelloWorld 468 类，与 boot-image-s4 起实测约 3043 / 3011 类（§5.6.5、enum-values-direct）落差很大，原因待查；门排名（`rava closure --gates`，分支 closure-gates）在新基线上出数后解释。

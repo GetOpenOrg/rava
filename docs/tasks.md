@@ -98,7 +98,9 @@
   - enum-values-direct（59451c29）：直连反射调用，`fold_direct_calls` = 1，类数 3011 未降（另 4 个调用点使 `Method.invoke` 入链）；
   - closure-composition（c3a06331）：闭包构成报告与脚本。
   - 首次验证（6934dc93）：抽查 41/41 因映像求值失败；单测 closure `--lib` 11 失败、driver 层 32 失败。修复 b558e0c2 后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G），定位中。合批语义取舍见 c1d §30.18。
-- **进行中**：closure-gates（门自动排名 `rava closure --gates`）；boot-image-s5（引导映像第 5 步 jimage + JceSecurity 6，`#[jvm_boundary]` 14 → 0）；docs-align（文档对齐）。
+- **进行中**：closure-gates（门自动排名 `rava closure --gates`）；boot-image-s5（引导映像第 5 步 jimage + JceSecurity 6，`#[jvm_boundary]` 14 → 0，含 U14 `java.home` 钉值）；u12-props（基于 b558e0c2，U12 机制 ①③ + U14 `line.separator` / `file.encoding` 钉值）；docs-align（文档对齐）。
+- **待派**：U13 `Class.genericInfo` 入映像。
+- **派发规则（2026-10-08）**：子代理上限 5；有空名额即按已定顺序派发，不需再请示用户；子代理不得再派代理。
 - **用户已定（2026-10-08）**：U12 接受为 U1 例外（日志路径属性构建期取值，①③ 解除挂起）；U13 `Class.genericInfo` 入映像；去除无映像回退保留；U14 部分修订 U1——`line.separator`（按目标三元组）、`file.encoding`（UTF-8）、`java.home`（构建期值）构建期钉值，`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取，每项实测闭包类数、无收益不钉。见引导映像计划 §8.4。
 - **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents。
@@ -140,11 +142,12 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │           └─▶ 合批通过即合入集成分支、快进 main
 │   │
 │   ├─ 🔄 引导映像第 5 步（boot-image-s5）：jimage 嵌入 + getNativeMap，ClassLoader 6 / BootLoader 2 / JceSecurity 6，`#[jvm_boundary]` 14 → 0 ◀── batch-1008
-│   │     ├─ ⏳ §5.5.6 机制 ①③（构建期定 LoggerFinder 提供者、日志级别折叠；U12 已定 10-08）
-│   │     ├─ ⏳ S2 `Class.genericInfo` 入映像（U13 已定 10-08）
-│   │     ├─ ⏳ U14 属性钉值：line.separator / file.encoding / java.home 构建期钉值，逐项实测闭包类数，无收益不钉（10-08 定）
+│   │     ├─ U14 `java.home` 构建期钉值随本分支：JceSecurity 策略文件改为构建期事实
 │   │     ├─ ⏳ 零拷贝永久区（§8.3，10-07 定；先服务器跑通现实现，再改零拷贝，再测体积 ≤+5% / 启动装载 ≤1 ms）
 │   │     └─▶ 第 6 步 非引导类构建期初始化（C3 build_time_init）──▶ 第 7 步 语料全量
+│   │
+│   ├─ 🔄 u12-props（基于 b558e0c2）：U12 机制 ①③（构建期定 LoggerFinder 提供者、日志级别折叠）+ U14 `line.separator`（按目标三元组）/ `file.encoding`（UTF-8）钉值；逐项实测闭包类数，无收益不钉
+│   ├─ ⏳ 待派：S2 `Class.genericInfo` 入映像（U13 已定 10-08），有空名额即派
 │   │
 │   ├─ 🔄 闭包门自动排名 `rava closure --gates`（closure-gates）──▶ 解释 HelloWorld 468 与约 3011 类的落差（引导映像 §8.4 待核对）
 │   │
@@ -179,6 +182,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 
 ```
 batch-1008 合批验证（emit 内存超限修复）──▶ 合入集成分支 ──▶ 引导映像第 5 步（14 → 0）──┐
+u12-props（U12 ①③ + U14 钉值）/ U13 genericInfo（待派）─────────────────────────────────────┤
 closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ─────────────────────────────────────┼──▶ C4 验收全量 ──▶ S6–S8 / JUnit J3–J4 / API 覆盖 ──▶ pilot ──▶ 产品化
 改名 rava + dev BIOS 窗口 ──────────────────────────────────────────────────────┘
 ```
@@ -215,10 +219,9 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 |------|------|------------|
 | 合批 batch-1008 | 🧪 待合批验证（batch-1008，6934dc93 → 修复 b558e0c2） | 含 boot-image-s4（c614f840）、c1d-url-b2（3391eb2d）、user-unreach-stubs（108558e0）、enum-values-direct（59451c29）、closure-composition（c3a06331）。首次验证抽查 41/41 因映像求值失败；修复后映像求值通过，HelloWorld emit 内存超限（峰值约 11.9G）定位中。语义取舍见 c1d §30.18；known_failures +TestBootLayer、−TestXmlSaxEvents |
 | 引导映像第 3–4 步 | 🧪 待合批验证（boot-image-s3 / s4，batch-1008） | `#[jvm_boundary]` 23 → 14；VM / Module / ModuleLayer / Class / SecurityManager 移出边界；去除无映像回退（用户 10-08 确认保留） |
-| 引导映像第 5 步 | 🔄 进行中（boot-image-s5） | jimage 嵌入 + `getNativeMap`；ClassLoader 6、BootLoader 2、JceSecurity 6 归零，`#[jvm_boundary]` 14 → 0；验收 TestClassResourceStream、TestBootLayer、JCA 用例 |
-| 引导映像机制 ①③ | ⏳（U12 已定 2026-10-08，解除挂起） | 构建期确定 `LoggerFinder` 提供者、日志级别按映像值折叠；HelloWorld 按平台上限 Linux ≤ 640 / macOS ≤ 590 |
-| 引导映像 S2 genericInfo | ⏳（U13 已定 2026-10-08） | `Class.genericInfo` 入映像，`sun/reflect/generics` 出 HelloWorld 闭包 |
-| 引导映像 U14 属性钉值 | ⏳（U14 已定 2026-10-08） | `line.separator` 按目标三元组、`file.encoding` = UTF-8、`java.home` 取构建期值，构建期钉值、依赖类入映像；`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取；每项实测闭包类数，无收益不钉 |
+| 引导映像第 5 步 | 🔄 进行中（boot-image-s5） | jimage 嵌入 + `getNativeMap`；ClassLoader 6、BootLoader 2、JceSecurity 6 归零，`#[jvm_boundary]` 14 → 0；U14 `java.home` 构建期钉值（JceSecurity 策略文件改为构建期事实）；验收 TestClassResourceStream、TestBootLayer、JCA 用例 |
+| u12-props：引导映像机制 ①③ + U14 属性钉值 | 🔄 进行中（u12-props，基于 b558e0c2） | U12：构建期确定 `LoggerFinder` 提供者、日志级别按映像值折叠；U14：`line.separator` 按目标三元组、`file.encoding` = UTF-8 构建期钉值，依赖类入映像。每项实测闭包类数，无收益不钉。HelloWorld 按平台上限 Linux ≤ 640 / macOS ≤ 590 |
+| 引导映像 S2 genericInfo | ⏳ 待派（U13 已定 2026-10-08，有空名额即派） | `Class.genericInfo` 入映像，`sun/reflect/generics` 出 HelloWorld 闭包 |
 | 引导映像零拷贝 | ⏳（§8.3，10-07 定） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
 | 闭包门自动排名 | 🔄 进行中（closure-gates） | `rava closure --gates`；在新基线上解释 HelloWorld 468 与约 3011 类的落差 |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
