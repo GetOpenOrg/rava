@@ -20,6 +20,8 @@ struct VmModule {
     loader: usize,
     name: std::string::String,
     open: bool,
+    /// defineModule0 的 location 实参（引导层模块为 `jrt:/<模块名>`）；null → None
+    location: Option<std::string::String>,
     packages: Vec<std::string::String>,
 }
 
@@ -32,12 +34,23 @@ fn _vm_modules<R>(f: impl FnOnce(&mut Vec<VmModule>) -> R) -> R {
 
 impl Module {
     /// 启动序列：映像中的模块登记为 VM 模块表的初值（`image_rt::define_module`）
-    pub fn __vm_register(module: Object, loader: Object, open: bool, packages: &[&str]) {
+    pub fn __vm_register(module: Object, loader: Object, open: bool, location: Option<&str>, packages: &[&str]) {
         let module = Module::from(module);
         let name = format!("{}", module.__get_name());
         let loader = _identity(loader);
+        let location = location.map(str::to_string);
         let packages = packages.iter().map(|p| p.to_string()).collect();
-        _vm_modules(|t| t.push(VmModule { module, loader, name, open, packages }));
+        _vm_modules(|t| t.push(VmModule { module, loader, name, open, location, packages }));
+    }
+
+    /// 引导加载器定义的包 `pkg`（内部形式）所属模块的位置（HotSpot `ClassLoader::get_system_package`
+    /// 取包所在模块的 location）；未登记 → None
+    pub fn __vm_boot_package_location(pkg: &str) -> Option<std::string::String> {
+        _vm_modules(|t| {
+            t.iter()
+                .find(|e| e.loader == 0 && e.packages.iter().any(|x| x == pkg))
+                .and_then(|e| e.location.clone())
+        })
     }
 
     /// 定义加载器为 `loader` 的包 `pkg`（内部形式）所属的已登记模块；`pkg` 为 None（基本类型）→ java.base
@@ -114,7 +127,7 @@ impl Module {
     /// native `defineModule0`：HotSpot `Modules::define_module`——校验名与包，按加载器登记模块及其包；
     /// 重名模块 / 包已属他模块 → IllegalStateException；java.base 已由引导定义。
     #[jvm_native]
-    pub fn defineModule0(module: Module, is_open: bool, _version: String, _location: String,
+    pub fn defineModule0(module: Module, is_open: bool, _version: String, location: String,
                          pns: JArray<Object>) -> Result<()> {
         if _is_null(Clone::clone(&module)) {
             return Err(_npe("Null module object"));
@@ -169,7 +182,8 @@ impl Module {
                     "Package {} for module {} is already in another module, {}, defined to the class loader",
                     pkg.replace('/', "."), name, other.name)));
             }
-            t.push(VmModule { module: Clone::clone(&module), loader, name: name.clone(), open: is_open, packages });
+            let location = if location.is_jvm_null() { None } else { Some(format!("{}", location)) };
+            t.push(VmModule { module: Clone::clone(&module), loader, name: name.clone(), open: is_open, location, packages });
             Ok(())
         })
     }

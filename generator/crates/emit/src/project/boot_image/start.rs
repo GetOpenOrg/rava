@@ -389,7 +389,7 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             _ => "Object::__NULL".to_string(),
         };
         let pkgs: Vec<String> = m.packages.iter().map(|x| format!("{x:?}")).collect();
-        g.line(&format!("rt::define_module({}, {loader}, {}, &[{}]);", obj_ref(m.obj), m.open, pkgs.join(", ")));
+        g.line(&format!("rt::define_module({}, {loader}, {}, {:?}, &[{}]);", obj_ref(m.obj), m.open, m.location, pkgs.join(", ")));
     }
     // 静态字段初值（零值即存储缺省值；重算 / 重定位槽由步骤写入）
     for (cls, name, v) in &d.statics {

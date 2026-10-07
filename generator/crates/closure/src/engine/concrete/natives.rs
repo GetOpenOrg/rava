@@ -257,7 +257,11 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
                 }
                 let loader = if env.cfg().vm_fields.contains_key("module_loader") { vm.get_vm_field(env, m, "module_loader")? } else { CV::N };
                 let open = arg(1)?.i()? != 0;
-                vm.modules.push((m, loader, open, pkgs));
+                let location = match arg(3)?.r()? {
+                    Some(s) => Some(vm.rust_string(env, s)?),
+                    None => None,
+                };
+                vm.modules.push((m, loader, open, location, pkgs));
                 let mut ms: Vec<(Rc<str>, u32)> = vm.mirrors.iter().map(|(t, &o)| (t.clone(), o)).collect();
                 ms.sort_unstable();
                 for (t, o) in ms {

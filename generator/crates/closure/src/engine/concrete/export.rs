@@ -125,7 +125,7 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
     }
     x.drain()?;
     // VM 模块表（模块与其定义加载器，defineModule0 次序）
-    for (m, l, _, _) in &vm.modules {
+    for (m, l, ..) in &vm.modules {
         x.obj(*m);
         if let CV::R(l) = l {
             x.obj(*l);
@@ -252,7 +252,13 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
     d.modules = vm
         .modules
         .iter()
-        .map(|(m, l, open, ps)| crate::image::IModule { obj: x.ids[m], loader: x.val(*l), open: *open, packages: ps.iter().map(|p| p.to_string()).collect() })
+        .map(|(m, l, open, loc, ps)| crate::image::IModule {
+            obj: x.ids[m],
+            loader: x.val(*l),
+            open: *open,
+            location: loc.clone(),
+            packages: ps.iter().map(|p| p.to_string()).collect(),
+        })
         .collect();
     if x.order.len() != d.objs.len() {
         return Err(format!("污点表达式引用了映像根不可达的对象 {} 个", x.order.len() - d.objs.len()));

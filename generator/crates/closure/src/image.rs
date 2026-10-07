@@ -105,6 +105,8 @@ pub struct IModule {
     /// 定义加载器（清单 `[concrete.vm_fields] module_loader`；null = 引导加载器）
     pub loader: IVal,
     pub open: bool,
+    /// 模块位置（defineModule0 的 location 实参，如 `jrt:/java.base`；null → None）
+    pub location: Option<String>,
     /// 包（内部形式，斜线分隔）
     pub packages: Vec<String>,
 }
@@ -279,7 +281,7 @@ impl ImageData {
             "steps": steps,
             "live": self.live,
             "current_thread": self.current_thread,
-            "modules": self.modules.iter().map(|m| json!({ "obj": m.obj, "loader": val(m.loader), "open": m.open, "packages": m.packages })).collect::<Vec<_>>(),
+            "modules": self.modules.iter().map(|m| json!({ "obj": m.obj, "loader": val(m.loader), "open": m.open, "location": m.location, "packages": m.packages })).collect::<Vec<_>>(),
         })
     }
 
@@ -363,6 +365,7 @@ impl ImageData {
                 obj: n(m, "obj")?,
                 loader: unval(m.get("loader").ok_or("映像模块表格式")?)?,
                 open: m.get("open").and_then(Value::as_bool).ok_or("映像模块表格式")?,
+                location: m.get("location").and_then(Value::as_str).map(str::to_string),
                 packages: m
                     .get("packages")
                     .and_then(Value::as_array)
@@ -409,7 +412,7 @@ mod tests {
             ],
             live: vec![0, 2],
             current_thread: Some(0),
-            modules: vec![IModule { obj: 0, loader: IVal::N, open: false, packages: vec!["a".into(), "a/b".into()] }],
+            modules: vec![IModule { obj: 0, loader: IVal::N, open: false, location: Some("jrt:/a".into()), packages: vec!["a".into(), "a/b".into()] }],
         };
         let back = ImageData::from_json(&d.to_json()).unwrap();
         assert_eq!(back, d);
