@@ -359,6 +359,31 @@ fn locale_bundle_parent_not_null_recv() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// 具体求值轨迹执行过的虚调用不判恒 null：`Pattern.compile` 字面量在构建期具体求值，字符类并集 lambda 的
+/// 实现方法 `lambda$union$3` 只经具体轨迹调用（抽象克隆的捕获形参值集为空），轨迹执行过的捕获谓词上的
+/// `is` 调用运行期照常执行，不得导出为 null_recv
+#[test]
+fn concrete_trace_call_not_null_recv() {
+    let Some((_, out)) = build("ConcreteLambdaRecv.java", "concrete-nr", &["--full-precheck", "--closure-json"]) else {
+        return;
+    };
+    let facts: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("closure_input/closure.json")).unwrap()).unwrap();
+    let union = "java/util/regex/Pattern.lambda$union$3:(Ljava/util/regex/Pattern$CharPredicate;Ljava/util/regex/Pattern$CharPredicate;I)Z";
+    // 非空断言：并集 lambda 实现方法在闭包内（具体轨迹确实经过它）
+    assert!(facts["methods"].as_array().unwrap().iter().any(|m| m["id"] == union), "lambda$union$3 不在闭包内");
+    let nr: Vec<u64> = facts["folds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["method"] == union)
+        .flat_map(|f| f["null_recv"].as_array().cloned().unwrap_or_default())
+        .filter_map(|x| x.as_u64())
+        .collect();
+    // @2（p1.is）在编译期具体求值中执行过；@12（p2.is）短路未执行，只按抽象克隆判定
+    assert!(!nr.contains(&2), "具体轨迹上的 is 调用误判恒 null：{nr:?}");
+    std::fs::remove_dir_all(&out).ok();
+}
+
 /// 被派发的桥方法所桥接的真实方法算作已派发：桥被省略、槽并入继承的真实实现时，
 /// 该继承槽条目照常转发，不发 `__stub`
 #[test]
