@@ -707,6 +707,23 @@ factories = [
 "java/lang/invoke/VarHandle.getAndSet:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
 "java/lang/invoke/VarHandle.getAndSetAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
 "java/lang/invoke/VarHandle.getAndSetRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+# VarHandle 数值读-改-写访问模式（getAndAdd / getAndBitwiseOr / And / Xor 及 Acquire / Release 档位，var_handle_impl.rs
+# `getAndAdd` / `_get_and_bitwise`）：只作用于布尔 / 整数 / 浮点载体，引用载体抛 UnsupportedOperationException——
+# 不读写任何引用字段或引用元素，返回装箱的旧基本值。登记为无引用写入：手写体里共用的引用读取臂
+# （`_field_read` → Unsafe.getReference[Volatile]）运行期不可达，不以值池为基址另建读取；未登记时按保守规则，
+# 读取结果经产出回流值池再作基址，逐层读遍偏移已放开的引用字段，并把值池写进实参数组（计划 c1d §30.17）
+"java/lang/invoke/VarHandle.getAndAdd:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndAddAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndAddRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOr:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOrAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOrRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAnd:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAndAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAndRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXor:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXorAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXorRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 # 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
