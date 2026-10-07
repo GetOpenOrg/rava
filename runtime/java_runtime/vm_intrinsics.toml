@@ -185,8 +185,8 @@ value_equals = [
 "jdk/internal/misc/VM.isBooted:()Z" = true
 "jdk/internal/misc/VM.isModuleSystemInited:()Z" = true
 
-# VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（System.registerNatives 按本表填充，
-# 与 system_impl.rs 的 initPhase1 对应物同源）。原生二进制无 `-D` 注入机制，因此：
+# VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（构建期引导映像执行 initPhase1 写入，宿主相关键
+# 经 SystemProps$Raw 启动重放取值，本表须与之一致）。原生二进制无 `-D` 注入机制，因此：
 #   values   取值恒定的键——读取折叠为该值
 #   dynamic  存在、但取值由宿主环境 / 语料 JDK（VersionProps）在启动期决定的键——不折叠
 #   其余键   启动时不存在——读取折叠为 null（带缺省值的读取折叠为缺省值）

@@ -109,10 +109,6 @@ extern "Rust" {
     static RECORD_COMPONENTS: &'static [u8];
     #[link_name = "__java_meta_MODULE_SERVICES"]
     static MODULE_SERVICES: &'static [u8];
-    #[link_name = "__java_meta_VM_CONST_PROPERTIES"]
-    static VM_CONST_PROPERTIES: &'static [u8];
-    #[link_name = "__java_meta_VM_DYNAMIC_PROPERTIES"]
-    static VM_DYNAMIC_PROPERTIES: &'static [u8];
     #[link_name = "__java_meta_LINE_NUMBERS"]
     static LINE_NUMBERS: &'static [u8];
 }
@@ -330,16 +326,6 @@ pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, 
 pub fn module_services() -> &'static [(&'static str, &'static str)] {
     static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
     merged(&CELL, || meta_codec::pairs(archive_closure(unsafe { MODULE_SERVICES })), |m| meta_codec::pairs(user_closure(m, m.module_services)), None)
-}
-/// VM 初始系统属性的常量键（键, 值）：闭包事实 system_properties.values，与分析器折叠同源。
-pub fn vm_const_properties() -> &'static [(&'static str, &'static str)] {
-    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| meta_codec::pairs(archive_closure(unsafe { VM_CONST_PROPERTIES })))
-}
-/// VM 初始系统属性的动态键（由手写层取宿主值）：闭包事实 system_properties.dynamic。
-pub fn vm_dynamic_properties() -> &'static [&'static str] {
-    static CELL: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| meta_codec::names(archive_closure(unsafe { VM_DYNAMIC_PROPERTIES })))
 }
 /// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
 pub fn line_numbers() -> &'static [LineNumbers] {

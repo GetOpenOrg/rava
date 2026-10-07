@@ -2,7 +2,7 @@
 //!
 //! 组合类型层清单 [`ty::Manifest`]（txt 清单）与三份结构化清单中发射层需要的部分：
 //! - closure.toml：`[vm_boundary]`（含 `translate_nested` / `clinit_carried`）；
-//! - seeds.toml：`[module_resources]`、`[boot_init]`；
+//! - seeds.toml：`[module_resources]`；
 //! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）、`[vm_state]`。
 //!
 //! 文件缺失视为空表；格式约定（类条目不以 `/` 结尾、
@@ -57,8 +57,6 @@ pub struct RuntimeManifest {
     pub vm_injected_statics: BTreeMap<String, String>,
     /// 模块资源路径（jmod `classes/` 下相对路径）
     pub module_resource_paths: Vec<String>,
-    /// 引导初始化类
-    pub boot_init_classes: Vec<String>,
     /// VM 内建成员
     pub intrinsic_members: BTreeSet<String>,
     pub caller_sensitive_annotations: BTreeSet<String>,
@@ -185,7 +183,6 @@ impl RuntimeManifest {
         let vm_boundary_classes: BTreeSet<String> = classes(vmb, "classes", "vm_boundary")?.into_iter().collect();
         let release = classes(vmb, "translate_nested", "vm_boundary")?;
         let vm_clinit_carried: BTreeSet<String> = classes(vmb, "clinit_carried", "vm_boundary")?.into_iter().collect();
-        let boot = section(&seeds, "boot_init");
         let vmc = section(&vm, "vm_constants");
         Ok(RuntimeManifest {
             ty,
@@ -194,7 +191,6 @@ impl RuntimeManifest {
             release,
             vm_injected_statics: injected_statics(vmc)?,
             module_resource_paths: str_list(section(&seeds, "module_resources"), "paths", "module_resources")?,
-            boot_init_classes: classes(boot, "classes", "boot_init")?,
             intrinsic_members: intrinsics(&vm)?,
             caller_sensitive_annotations: str_list(section(&vm, "caller_sensitive"), "annotations", "caller_sensitive")?
                 .into_iter()

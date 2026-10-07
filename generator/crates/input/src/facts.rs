@@ -139,16 +139,6 @@ pub struct SeedFacts {
     pub named_resources: BTreeSet<String>,
 }
 
-/// VM 初始系统属性表（分析器折叠属性读点所用的清单表 `[facts.system_properties]`）：
-/// 运行时 System.registerNatives 只写入这两类键，与折叠结论同源
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SysPropFacts {
-    /// 启动时的常量属性（键 → 值）
-    pub values: BTreeMap<String, String>,
-    /// 运行期取宿主值的键
-    pub dynamic: BTreeSet<String>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ClosureFacts {
     /// 按类名排序（与引擎处理次序无关）
@@ -186,9 +176,8 @@ pub struct ClosureFacts {
     pub hw_inherited: Vec<MemberRef>,
     /// lambda 站点的函数式接口（samtype，分析器 `sam_types`）：发射层合成 `I__Lambda` 的接口集
     pub sam_types: Vec<String>,
-    pub system_properties: SysPropFacts,
-    /// 构建期引导映像（物化数据与活对象集；求值失败时为 None）
-    pub boot_image: Option<closure::image::ImageData>,
+    /// 构建期引导映像（物化数据与活对象集）
+    pub boot_image: closure::image::ImageData,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -298,11 +287,7 @@ impl ClosureFacts {
             instantiated: e.instantiated(),
             hw_inherited: e.hw_inherited_requests().into_iter().collect(),
             sam_types: e.sam_types().into_iter().collect(),
-            system_properties: SysPropFacts {
-                values: e.sysprops().values().clone(),
-                dynamic: e.sysprops().dynamic().clone(),
-            },
-            boot_image: c.boot_image.as_ref().and_then(|b| b.data.clone()),
+            boot_image: c.boot_image.data.clone(),
         }
     }
 
@@ -323,9 +308,8 @@ impl ClosureFacts {
             });
         }
         out.clinit = strings(v.get("clinit"))?;
-        if let Some(b) = v.get("boot_image_data").filter(|b| !b.is_null()) {
-            out.boot_image = Some(closure::image::ImageData::from_json(b).map_err(InputError::Format)?);
-        }
+        let b = v.get("boot_image_data").filter(|b| !b.is_null()).ok_or_else(|| InputError::Format("closure.json 缺 boot_image_data（引导映像）".into()))?;
+        out.boot_image = closure::image::ImageData::from_json(b).map_err(InputError::Format)?;
         out.refs = strings(v.get("refs"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         for m in v.get("missing").and_then(Value::as_array).into_iter().flatten() {
             out.missing.push(str_of(m, "name")?.to_string());
@@ -358,12 +342,6 @@ impl ClosureFacts {
         out.instantiated = strings(v.get("instantiated"))?;
         out.sam_types = strings(v.get("sam_types"))?;
         out.hw_inherited = strings(v.get("hw_inherited"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
-        let sp = v.get("system_properties").ok_or_else(|| missing("system_properties"))?;
-        for (k, val) in sp.get("values").and_then(Value::as_object).into_iter().flatten() {
-            let val = val.as_str().ok_or_else(|| InputError::Format(format!("system_properties.values.{k} 应为字符串")))?;
-            out.system_properties.values.insert(k.clone(), val.to_string());
-        }
-        out.system_properties.dynamic = strings(sp.get("dynamic"))?.into_iter().collect();
         Ok(out)
     }
 }

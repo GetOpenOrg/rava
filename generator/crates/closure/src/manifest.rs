@@ -163,7 +163,6 @@ pub struct Manifest {
     mirror_subtype_tests: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
     method_to_handle: HashSet<String>,
-    pub boot_init: Vec<String>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
@@ -445,7 +444,6 @@ impl Manifest {
                 .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
                 .collect(),
             method_to_handle: reflect("method_to_handle").into_iter().collect(),
-            boot_init: strings(&seeds, "boot_init", "classes"),
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
             indy_helpers: IndyHelpers::from_toml(

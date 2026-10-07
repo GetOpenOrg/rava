@@ -91,7 +91,6 @@ impl ClosureFacts {
             instantiated: sorted_union(&profile.instantiated, user_strs(&single.instantiated)),
             hw_inherited: by_str(&profile.hw_inherited, user_refs(&single.hw_inherited)),
             sam_types: sorted_union(&profile.sam_types, user_strs(&single.sam_types)),
-            system_properties: profile.system_properties.clone(),
             boot_image: profile.boot_image.clone(),
         })
     }

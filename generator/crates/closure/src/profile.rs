@@ -236,7 +236,8 @@ impl Acc {
             Some(p) if p != sp => return Err(format!("入口 {} 的系统属性表与其他入口不一致（运行时清单不同）", e.name)),
             Some(_) => {}
         }
-        if let Some(img) = c.get("boot_image_data").filter(|v| !v.is_null()) {
+        {
+            let img = c.get("boot_image_data").filter(|v| !v.is_null()).ok_or_else(|| format!("入口 {}：closure 缺字段 boot_image_data（引导映像）", e.name))?;
             let mut body = img.clone();
             if let Some(o) = body.as_object_mut() {
                 for x in o.remove("live").and_then(|l| l.as_array().cloned()).unwrap_or_default() {

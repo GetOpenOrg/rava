@@ -217,7 +217,7 @@ impl Env {
             cold_cut: false,
             flow_batch: self.flow_batch,
         };
-        let out = crate::closure_run::analyze(&self.cache, &input, &h, &man, &hw, false, true);
+        let out = crate::closure_run::analyze(&self.cache, &input, &h, &man, &hw, false, true).map_err(|f| format!("入口 {}：{f}", e.name))?;
         let v = out.json.ok_or_else(|| format!("入口 {}：闭包产物缺失", e.name))?;
         if !java.is_empty() {
             let _ = std::fs::remove_dir_all(&classes);

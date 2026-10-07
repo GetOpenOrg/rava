@@ -16,9 +16,8 @@ use crate::manifest::BootCall;
 use super::vm::*;
 use super::*;
 
-/// 映像求值结果
+/// 映像求值结果（求值成功；失败见 [`BootFailure`]）
 pub struct BootImage {
-    pub ok: bool,
     /// 规范摘要（128 位十六进制）
     pub digest: String,
     /// closure.json `summary.boot_image`
@@ -29,8 +28,35 @@ pub struct BootImage {
     pub types: Vec<String>,
     /// 运行期部分的入口类：运行期初始化类、残差调用 / 重放 native 的声明类、占位读取的类、残差区段所在类
     pub runtime_classes: Vec<String>,
-    /// 物化数据（求值失败或导出失败时为 None）
-    pub data: Option<crate::image::ImageData>,
+    /// 物化数据
+    pub data: crate::image::ImageData,
+}
+
+/// 映像求值失败：构建随之失败（原生二进制只有映像出发一条启动路径，计划 §5.6.8）
+pub struct BootFailure {
+    /// 首个失败的阶段与原因（含未登记的 native / VM 操作名）
+    pub error: String,
+    /// 失败点调用栈（外→内；求值未进入字节码时为空）
+    pub stack: Vec<String>,
+    /// 审计报告（Markdown，与成功时同一格式，`rava closure --boot-report` 写出）
+    pub report: String,
+}
+
+/// 失败栈展示的最内层帧数
+const STACK_SHOWN: usize = 30;
+
+impl std::fmt::Display for BootFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "引导映像求值失败：{}", self.error)?;
+        if !self.stack.is_empty() {
+            let skip = self.stack.len().saturating_sub(STACK_SHOWN);
+            write!(f, "\n失败栈（外→内{}）：", if skip > 0 { format!("，省略外层 {skip} 帧") } else { String::new() })?;
+            for fr in &self.stack[skip..] {
+                write!(f, "\n    {fr}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// FNV-1a 双通道
@@ -286,11 +312,16 @@ fn flow_text(vm: &Vm, f: &Flow) -> String {
 }
 
 impl<'a> Engine<'a> {
-    /// 构建期引导映像（`[concrete.boot] calls` 为空或首个阶段方法所在类不在类路径上时为 None）
-    pub fn boot_image(&self) -> Option<BootImage> {
+    /// 构建期引导映像。清单 `[concrete.boot] calls` 无引导阶段、阶段方法所在类不在类路径上、或任一阶段求值 /
+    /// 映像导出失败，都是失败——原生二进制没有不经映像的启动路径
+    pub fn boot_image(&self) -> Result<BootImage, BootFailure> {
         let boot = &self.man.concrete.boot;
-        let first = boot.calls.iter().find_map(|c| if let BootCall::Phase(m, _) = c { Some(m) } else { None }).and_then(|m| super::super::seeds::parse_member(m))?;
-        self.h.class(&first.owner)?;
+        let bare = |error: String| BootFailure { report: format!("# 构建期引导映像审计\n\n- 结论：**失败**——{error}\n"), error, stack: Vec::new() };
+        let first = boot.calls.iter().find_map(|c| if let BootCall::Phase(m, _) = c { Some(m) } else { None }).ok_or_else(|| bare("清单 [concrete.boot] calls 无引导阶段方法".into()))?;
+        let fm = super::super::seeds::parse_member(first).ok_or_else(|| bare(format!("引导阶段成员格式 {first}")))?;
+        if self.h.class(&fm.owner).is_none() {
+            return Err(bare(format!("引导阶段方法所在类 {} 不在类路径上（类路径缺参考 JDK）", fm.owner)));
+        }
         let t0 = std::time::Instant::now();
         let mut vm = Vm::new();
         vm.boot = true;
@@ -360,6 +391,7 @@ impl<'a> Engine<'a> {
         } else {
             None
         };
+        let stack: Vec<String> = if error.is_some() { vm.fail_frames.as_ref().or(vm.throw_frames.as_ref()).cloned().unwrap_or_default() } else { Vec::new() };
         let ok = error.is_none();
         let rt_init: Vec<(String, String)> = vm.bj.recs.iter().filter_map(|r| if let Rec::RuntimeInit { class, why } = r { Some((class.to_string(), why.clone())) } else { None }).collect();
         let calls: Vec<String> = vm.bj.recs.iter().filter_map(|r| if let Rec::Call { phase, off, callee, why, ph, .. } = r { Some(format!("`{phase}@{off}` → `{callee}`{}：{why}", if ph.is_some() { "（结果为占位对象）" } else { "" })) } else { None }).collect();
@@ -428,9 +460,9 @@ impl<'a> Engine<'a> {
             let _ = writeln!(r, "- {c}");
         }
         r.push_str(&s2.report);
-        if let Some(fs) = vm.fail_frames.as_ref().or(vm.throw_frames.as_ref()).filter(|_| !ok) {
+        if !stack.is_empty() {
             let _ = writeln!(r, "\n## 失败栈（外→内）\n");
-            for f in fs.iter().rev().take(30).rev() {
+            for f in &stack[stack.len().saturating_sub(STACK_SHOWN)..] {
                 let _ = writeln!(r, "    {f}");
             }
         }
@@ -451,8 +483,11 @@ impl<'a> Engine<'a> {
                 Rec::Level { .. } => continue,
             });
         }
+        let (Some(data), None) = (data, error.clone()) else {
+            return Err(BootFailure { error: error.unwrap_or_default(), stack, report: r });
+        };
         let types = size.types.iter().map(|t| t.to_string()).collect();
-        Some(BootImage { ok, digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect(), data })
+        Ok(BootImage { digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect(), data })
     }
 }
 

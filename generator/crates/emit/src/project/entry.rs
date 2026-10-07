@@ -96,27 +96,8 @@ fn hook_block(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: &Emiss
     if !disp.fields.is_empty() {
         hb += &block(&format!("    {rt}::reflect_dispatch::register_field_dispatch(&["), &disp.fields, "    ]);");
     }
-    // 构建期引导映像（HotSpot initPhase1–3 的构建期求值结果）：登记钩子之后、引导类初始化之前装入
-    if ctx.input.boot_image.is_some() {
-        hb += &format!("    {rt}::{}::{}();\n", super::boot_image::MODULE, super::boot_image::START_FN);
-    }
-    // VM 引导类（清单 seeds.toml [boot_init] classes）：按序初始化在闭包内翻译在场的类（映像已初始化者为空操作）
-    let boot: Vec<String> = ctx
-        .manifest
-        .boot_init_classes
-        .iter()
-        .filter(|b| jdk.generated.contains(*b))
-        .map(|b| {
-            format!(
-                "        (\"{b}\", {}{}::__class_init as fn() -> {rt}::error::Result<()>),",
-                jrt_path(ctx, b),
-                registration_turbofish(ctx, ems, b)
-            )
-        })
-        .collect();
-    if !boot.is_empty() {
-        hb += &block(&format!("    {rt}::vm_boot_init(&["), &boot, "    ]);");
-    }
+    // 构建期引导映像（HotSpot initPhase1–3 的构建期求值结果）：登记钩子之后装入，main 之前完成引导的残差部分
+    hb += &format!("    {rt}::{}::{}();\n", super::boot_image::MODULE, super::boot_image::START_FN);
     hb
 }
 
@@ -393,27 +374,16 @@ pub fn write_module_resources(ctx: &EmitCtx<'_>, w: &mut Writer, jrt_src: &Path)
 /// 闭包派生表文件（scratch 相对路径）：java_meta 的 `lib.rs` 以 `include!` 引入
 pub const CLOSURE_TABLES: &str = "closure_input/closure_tables.rs";
 
-/// 闭包派生表：模块服务表（`__java_meta_MODULE_SERVICES`，BootLoader.getServicesCatalog 装填引导服务目录）
-/// 与 VM 初始系统属性表（`__java_meta_VM_CONST_PROPERTIES` / `__java_meta_VM_DYNAMIC_PROPERTIES`，
-/// System.registerNatives 写入）。运行时 meta 以同名 extern 声明读取；事实随闭包（即用户代码）变化，
+/// 闭包派生表：模块服务表（`__java_meta_MODULE_SERVICES`，BootLoader.getServicesCatalog 装填引导服务目录）。
+/// 运行时 meta 以同名 extern 声明读取；事实随闭包（即用户代码）变化，
 /// 放在 java_meta 才不连带重编运行时 crate。每次构建写入（内容相同不重写）
 pub fn write_closure_tables(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path) -> Result<()> {
     let input = &ctx.input;
     // 档案侧：涉及用户类的服务随用户元数据行登记（`meta_sides`）
     let services: Vec<&(String, String)> =
         input.module_services.iter().filter(|(s, p)| !super::meta_sides::is_user_service(ctx, s, p)).collect();
-    let mut g = closure_group(&services);
-    // VM_CONST_PROPERTIES 行：键, 值；VM_DYNAMIC_PROPERTIES 行：键
-    let (s, p) = g.table("VM_CONST_PROPERTIES");
-    for (k, v) in &input.system_properties.values {
-        s.str(p, k);
-        s.str(p, v);
-    }
-    let (s, p) = g.table("VM_DYNAMIC_PROPERTIES");
-    for k in &input.system_properties.dynamic {
-        s.str(p, k);
-    }
-    let src = format!("// 生成：闭包派生表（模块服务表 / VM 初始系统属性表；字符串池 + 字节流），由 java_meta 的 lib.rs 引入。\n\n{}", g.render());
+    let g = closure_group(&services);
+    let src = format!("// 生成：闭包派生表（模块服务表；字符串池 + 字节流），由 java_meta 的 lib.rs 引入。\n\n{}", g.render());
     w.write(&out_dir.join(CLOSURE_TABLES), &src)
 }
 

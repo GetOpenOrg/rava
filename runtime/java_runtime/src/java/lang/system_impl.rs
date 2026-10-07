@@ -4,66 +4,11 @@ use crate::java::io::{BufferedInputStream, BufferedOutputStream, FileDescriptor,
 use crate::sun::nio::cs::UTF_8;
 
 impl System {
-    /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数。
-    ///
-    /// 同时承担 HotSpot `System.initPhase1` 的角色：`<clinit>` 后由 VM 引导填充
-    /// `System.props`。原生二进制无 -D 注入机制，属性表的键集与常量值来自闭包分析器折叠
-    /// 属性读点所用的同一张表（清单 `vm_intrinsics.toml [facts.system_properties]`，经
-    /// closure.json 由 java_meta 构建脚本生成，经 `crate::meta::vm_const_properties` /
-    /// `vm_dynamic_properties` 读取）：
-    /// - 常量键按表中值写入；
-    /// - 动态键由本层取宿主值（[`host_property`]：文件系统 / 用户 / os / 编码族，
-    ///   `java.home` 为嵌入资源伪值 jdk_resources::JAVA_RUNTIME_HOME，`user.timezone`
-    ///   只在 TZ 存在时设），版本族由翻译的 `VersionProps.init(Map)` 写入（JDK initPhase1
-    ///   同一来源），VM 族随版本族派生（[`derived_vm_property`]）；
-    /// - 表外的键不写入（分析器按缺省 null 折叠），手写层无取值的动态键同样缺席。
-    ///
-    /// 构造不经 JDK 构造器链（Properties.<init> → Hashtable 族种子在 sig_types 载体化
-    /// 上有 codegen 域缺口），按擦除字段协议直接挂后备 ConcurrentHashMap
-    /// （Properties.getProperty 消费 `map` 字段）。
-    ///
-    /// 属性表建成后与 initPhase1 同样交 `VM.saveProperties`（翻译的字节码）保存快照。
-    ///
-    /// 与 initPhase1 同序，首先登记共享秘钥 `setJavaLangAccess()`（翻译的字节码；JDK 注释：
-    /// "register the shared secrets - do this first, since SystemProps.initProperties might
-    /// initialize CharsetDecoders that rely on it"）：属性表建立途中的字符串哈希经
-    /// `StringLatin1.hashCode` → `ArraysSupport.vectorizedHashCode` 触发 `ArraysSupport.<clinit>`，
-    /// 其 `JLA = SharedSecrets.getJavaLangAccess()` 只取一次——先于登记即永久缓存 null。
+    /// native registerNatives：HotSpot 绑定 JNI 入口；原生二进制的 native 方法即本文件的 Rust 函数，无事可做。
+    /// System 在构建期引导映像中初始化（`[concrete.boot] init`），`System.props` 与 `VM.savedProps` 由构建期
+    /// 执行的 initPhase1 写入映像，宿主相关键经 `SystemProps$Raw` 的启动重放取值（system_props_raw_impl.rs）
     #[jvm_native]
     pub fn registerNatives() -> Result<()> {
-        System::setJavaLangAccess()?;
-        use crate::java::util::concurrent::ConcurrentHashMap;
-        let map = ConcurrentHashMap::<Object, Object>::new()?;
-        // 局部闭包不取 Java 方法名（分析器按「名字 + 实参个数」反解手写回调的实参来源）
-        let store = |k: &str, v: &str| -> Result<()> {
-            map.put(Object::from(String::from(k)), Object::from(String::from(v)))?;
-            Ok(())
-        };
-        for (k, v) in crate::meta::vm_const_properties() {
-            store(k, v)?;
-        }
-        for k in crate::meta::vm_dynamic_properties() {
-            if let Some(v) = host_property(k) {
-                store(k, &v)?;
-            }
-        }
-        crate::java::lang::VersionProps::init(
-            Object::from(Clone::clone(&map)).try_cast("java/util/Map")?)?;
-        for k in crate::meta::vm_dynamic_properties() {
-            if let Some(v) = derived_vm_property(k, &map)? {
-                store(k, &v)?;
-            }
-        }
-        // initPhase1 同序：保存属性快照（VM.saveProperties：directMemory / pageAlignDirectMemory /
-        // classFileMajorVersion 等按快照取值，未指定 -XX:MaxDirectMemorySize 时取 Runtime.maxMemory()）。
-        // saveProperties 只允许在 initLevel == 0 调用：本方法只在无引导映像时于运行期执行（有映像时 System 在构建期
-        // 初始化，initPhase1 由求值器执行），此时尚无 `VM.initLevel(int)` 写入，档位即 VM 的初值 0
-        let snapshot: crate::java::util::Map<Object, Object> = Object::from(Clone::clone(&map)).try_cast("java/util/Map")?;
-        crate::jdk::internal::misc::VM::saveProperties(snapshot)?;
-        let mut p = crate::java::util::Properties::default();
-        p._init_not_null();
-        p.__set_map(map);
-        System::set_props(p)?;
         Ok(())
     }
 
@@ -232,54 +177,6 @@ impl System {
         let suffix = if cfg!(target_os = "macos") { "dylib" } else { "so" };
         Ok(String::from_owned(format!("lib{}.{}", libname, suffix)))
     }
-}
-
-/// 动态键的宿主取值（HotSpot `SystemProps.Raw` / `os::` 的同名来源）；版本族与 VM 族不在此
-/// （分别由 VersionProps.init 与 [`derived_vm_property`] 写入）→ None
-fn host_property(key: &str) -> Option<std::string::String> {
-    let s = std::string::String::from;
-    Some(match key {
-        "java.home" => s(crate::jdk_resources::JAVA_RUNTIME_HOME),
-        "line.separator" => s(if cfg!(windows) { "\r\n" } else { "\n" }),
-        "user.dir" => std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-        "user.home" => std::env::var("HOME").unwrap_or_default(),
-        "user.name" => crate::posix::current_user_name(),
-        "java.io.tmpdir" => std::env::var("TMPDIR").unwrap_or_else(|_| s("/tmp")),
-        "os.name" => s(crate::posix::os_name()),
-        "os.arch" => s(crate::posix::os_arch()),
-        "os.version" => crate::posix::os_release(),
-        "sun.arch.data.model" => s(if cfg!(target_pointer_width = "64") { "64" } else { "32" }),
-        "sun.cpu.endian" => s(if cfg!(target_endian = "little") { "little" } else { "big" }),
-        "sun.io.unicode.encoding" => s(if cfg!(target_endian = "little") { "UnicodeLittle" } else { "UnicodeBig" }),
-        "sun.boot.library.path" => format!("{}/lib", crate::jdk_resources::JAVA_RUNTIME_HOME),
-        // native / jnu 编码取宿主区域的 codeset（file.encoding 与标准流编码为常量键 UTF-8，JEP 400）
-        "native.encoding" | "sun.jnu.encoding" => crate::posix::native_encoding(),
-        // 区域族（SystemProps.Raw：来自宿主区域环境变量）；国家缺席则不设
-        "user.language" => crate::posix::locale().0,
-        "user.country" => Some(crate::posix::locale().1).filter(|c| !c.is_empty())?,
-        // TZ 环境变量存在才设（JDK initPhase1 同款条件），缺席留给 TimeZone/ZoneId 惰性解析
-        "user.timezone" => std::env::var("TZ").ok().filter(|tz| !tz.is_empty())?,
-        _ => return None,
-    })
-}
-
-/// VM 族动态键（HotSpot `Arguments::init_system_properties` / `VM_Version`）：规范版本取语料
-/// JDK 的特性版本，实现侧版本号与供应商随 `java.runtime.version` / `java.vendor`
-/// （VersionProps 已写入 map）；其余键 → None
-fn derived_vm_property(
-    key: &str,
-    map: &crate::java::util::concurrent::ConcurrentHashMap<Object, Object>,
-) -> Result<Option<std::string::String>> {
-    let from = match key {
-        "java.vm.specification.version" => "java.specification.version",
-        "java.vm.vendor" => "java.vendor",
-        "java.vm.version" => "java.runtime.version",
-        _ => return Ok(None),
-    };
-    // 表值恒为 String（VersionProps.init 写入）：先按 String 转换再取文本——以 Object 直接 Display
-    // 即 Object.toString 虚分派，接收者为 CHM 值字段的全部值集
-    let v = map.get(Object::from(String::from(from)))?.try_cast::<String>("java/lang/String")?;
-    Ok(Some(if v.is_jvm_null() { std::string::String::new() } else { format!("{}", v) }))
 }
 
 crate::__process_static! {

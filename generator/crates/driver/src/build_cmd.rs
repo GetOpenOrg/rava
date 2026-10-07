@@ -203,7 +203,7 @@ pub(crate) fn analyze<R: Send>(
     // 跨运行闭包缓存缺省落仓库 build/closure_cache（键覆盖分析器、JDK、手写层、用户类与全部分析参数）
     let dir = o.closure_cache.clone().unwrap_or_else(|| repo_root(rt).join("build").join("closure_cache"));
     let cache = crate::closure_run::CacheOpts { dir: Some(dir), max_mb: o.closure_cache_max_mb };
-    let out = crate::closure_run::analyze(&cache, &input, &h, &man, &hw, o.trace_class.is_some(), o.closure_json);
+    let out = crate::closure_run::analyze(&cache, &input, &h, &man, &hw, o.trace_class.is_some(), o.closure_json).map_err(|f| f.to_string())?;
     if let (Some(t), Some(c)) = (&o.trace_class, &out.closure) {
         for line in c.why(&t.replace('.', "/")).into_iter().chain([String::new()]) {
             println!("{}", if line.is_empty() { line } else { format!("      [why] {line}") });

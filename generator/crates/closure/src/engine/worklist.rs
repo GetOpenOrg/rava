@@ -45,10 +45,6 @@ impl<'a> Engine<'a> {
         self.root(key, kind);
     }
 
-    pub fn root_init(&mut self, cls: &str, kind: &'static str) {
-        self.init(cls, Via::root(kind, cls));
-    }
-
     pub fn run(&mut self) {
         // 写入未知数组的元素：数组可能由非建模代码持有
         let obj = self.id(OBJECT);
