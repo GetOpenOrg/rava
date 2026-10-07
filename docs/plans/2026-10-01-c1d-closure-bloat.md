@@ -3961,11 +3961,14 @@ e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内�
   - (c) 按调用链上的资源名常量推导收窄（同 `module_resources` 的推导法），名字无法静态枚举时退回 (a)。
   
   建议：现在实现 (a)；(c) 作为后续的精度项，单列在体积线上。
+  **用户已决策（2026-10-07）：取 (a)，见 §30.16。**
 - **T2 URL 字符串往返**：`new URL(url.toString())` 要求 `sun.net.www.protocol.<scheme>.Handler` 这个类存在。
   - (a) 不支持往返。不在 java.base 中新增包；`toString` 后重建 URL 会抛 `MalformedURLException`。
   - (b) 新增 VM 支持类 `sun.net.www.protocol.rava_cp.Handler`，使 URL$DefaultFactory 能按协议名找到它。
+    （注：`rava_cp` 不是合法的 URL 协议名，协议只允许字母、数字、`+`、`-`、`.`；实施时改为 `ravacp`。）
   
   建议：先 (a)。若库语料出现往返用法再做 (b)。
+  **用户已决策（2026-10-07）：取 (b)，已实施，见 §30.16。**
 
 #### 实测（tag `17b`，对照 `16c`；`17a` 为第 8 条修正前）
 
@@ -4020,5 +4023,144 @@ e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内�
 #### 未完成项与续作入口
 
 1. 服务器抽查：按上面的清单，在 C4 冻结解除后由用户发起。合入集成分支也等冻结解除，本分支暂不合入。
-2. T1 / T2 产品取舍：待用户决策。当前实现按建议，T1 取 (a)，T2 取 (a)。
+2. T1 / T2 产品取舍：用户已决策，T1 取 (a)，T2 取 (b)，见 §30.16。
 3. T1 (c) 的收窄（资源名推导）属于体积线的精度项，待 T1 决策后再排。
+
+### 30.16 第 13 步：T1 定案与 T2 (b)——嵌入资源 URL 的字符串往返（2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策
+
+- **T1（资源表收录口径）**：构建期收录类路径上的全部资源，包括 `.class`。这是正确性口径的终态。
+  按调用链上的资源名收窄属于后续的体积优化：名字能静态枚举时收窄，不能时退回全量。本步只记录结论，不实现收窄。
+- **T2（URL 字符串往返）**：取 (b)。由字符串重建的 URL（`new URL(url.toString())`、`URI.create(s).toURL()`）
+  能读到构建期嵌入的资源。
+
+#### 设计
+
+1. **协议名 `ravacp`**。URL 协议只允许字母、数字、`+`、`-`、`.`（§30.15 原文写的 `rava_cp` 不合法）。
+   `EmbeddedClassPath.PROTOCOL = "ravacp"`。
+2. **处理器 `sun.net.www.protocol.ravacp.Handler`**，是 VM 支持类，Java 源在
+   `runtime/java_support/java.base/sun/net/www/protocol/ravacp/Handler.java`，由字节码翻译。
+   - 它只覆盖 `openConnection(URL)`，转给 `EmbeddedClassPath.openConnection(u)`。
+   - 包名遵循 `URL$DefaultFactory` 的约定 `"sun.net.www.protocol." + protocol + ".Handler"`，所以按协议名能找到它。
+     `getURLStreamHandler` 的其余查找层（工厂、provider、`java.protocol.handler.pkgs`）不受影响。
+   - 嵌套类 `EmbeddedClassPath$Handler` 删除；`EmbeddedClassPath` 改为 public，供该包访问。
+3. **URL 形状**：`new URL("ravacp", "", -1, "/<编码后的资源名>#<序号>", HANDLER)`。
+   - host 取 `""`，与 `parseURL` 对无 authority 串给出的结果一致，所以 `toString` 往返后 `equals` 和 `hashCode` 成立。
+     JVM 的 `file:` 资源 URL 的 host 也是 `""`。
+   - 构造时直接传入 `HANDLER` 单例，不经查找，所以 getResource 路径的开销不变。
+4. **连接对任意重建 URL 健壮**。`Connection.connect()` 解码路径（必须以 `/` 开头，`ParseUtil.decode` 失败视为非法），
+   再解析 ref 中的副本序号（非数字视为非法）。路径或序号非法，或表中查不到该项，一律抛 `FileNotFoundException`，
+   与 JVM 打开不存在的 `file:` URL 一致。读取的条目与 `[class_path] resource_readers` 是同一张表。
+5. **镜像补充目录的模块归属**（resolve，提交 `7f0bd9ed`）。
+   - VM 支持类可以位于 JDK 没有的新包，比如 `sun/net/www/protocol/ravacp`。此前镜像来源的类只能借已有包的归属取得模块，
+     新包里的类会没有所属模块：`real_jdk_module_graph` 的无主类检查不过，`reads()` 和导入发射也会出错。
+   - 新规则：仅镜像目录 `jimage/<fp>/only/<module>` 与 VM 支持类目录 `vmsupport/<fp>/<module>` 本来就按模块分目录给出，
+     目录名即所属模块（`ClassPath::add` 登记 `overlay_modules`）。`ModuleFacts::build` 加一道后处理：
+     登记名不是 JDK 模块节点的（比如测试用的临时目录）清掉，退回原来按包借归属的做法。
+6. **seed_image 判据（§30.15 第 8 条）不变**：Handler 由 `EmbeddedClassPath.<clinit>` 直接 `new`，按普通可达性入闭包。
+
+#### 接入点（清单声明，生成器不含类名）
+
+- `vm_intrinsics.toml [facts] class_lookups`：`Class.forName` 按名取类。协议名推不出时，
+  按闭包内的类名匹配 `"sun.net.www.protocol.*.Handler"`。
+- `vm_intrinsics.toml [facts.keyed_lookups]` 中 `URL.getURLStreamHandler` 一条：`class_pattern = "sun/net/www/protocol/{}/Handler"`，
+  按此键为 `"ravacp"`。该条注释已补上 ravacp 的说明；`[class_path] resource_readers` 的注释补上 `openConnection` 读同一张表。
+- 不新增清单条目，也不新增生成器特判。
+
+#### 分析器修正：按名取类站点的「推不出」不再从上游槽外泄（`engine/pstrs.rs::param_inputs`）
+
+- 实测：`TestEmbeddedUrlRebuild` 闭包（tag `eur1`）中，`URL$DefaultFactory.createURLStreamHandler` 的 `forName` 站点
+  （偏移 162）被记为 unsure。
+  - 结果接到所指未知的 Class，没有点名任何类，也没有登记类名模式。
+  - 反射缺口里因此出现 `getDeclaredConstructor @ ...createURLStreamHandler@169 <- open(Class)`。
+  - 运行期的后果：所有 Handler 的构造器都不在反射面上，重建的 ravacp URL 会报 unknown protocol。
+    这个问题同样出现在 DeepCopy / StockTrans / TestSerialDefaultSuid（17b）中。
+- 根因：形参槽的名字集由 `param_inputs` 在各调用方帧里以 `Gap::Fail` 求值。
+  - 内部求值推不出时（`partial_part` / 常量表部分值），只置引擎级标志 `lookup_incomplete` / `lookup_partial`，
+    返回值仍算「推得出」。
+  - 标志外泄到外层的 `Gap::Class` 求值，把整个站点记为 unsure。本该得到的是「已知名字 | 受约束的任意串」，
+    后者按生成范围内的类名匹配。
+- 修正：`param_inputs` 对每个调用方实参求值前清零两个标志、求值后取回并恢复外层值；内部推不出收进本槽的
+  `complete = false`。外层按自己的 gap 处理推不出的槽：按名取类为「已知名字 | 任意串」，按名查方法为任意串，
+  内部求值 `Gap::Fail` 仍置标志，逐层传递。
+- 修正后（tag `eur3`）：站点的模式为 `sun.net.www.protocol.*.Handler`，点名 ftp / jrt / ravacp。
+  `ravacp/Handler.<init>` 进入反射成员面，`DefaultFactory` 的缺口消失。
+
+#### 实测
+
+| 用例 | 类 | 方法 | 耗时 ms | 反射缺口 |
+|---|---|---|---|---|
+| HelloWorld（17b → 18a） | 464 → 464 | 1738 → 1738 | 530 → 536 | 0 → 0 |
+| StockTrans（17b → 18a） | 2798 → 2798（−1 / +1） | 17310 → 17314 | 30228 → 31064 | 48 → 47 |
+| DeepCopy（17b → 18a） | 2800 → 2800（−1 / +1） | 17323 → 17327 | 30203 → 32462 | 48 → 47 |
+| TestSerialDefaultSuid（17b → 18a） | 2805 → 2805（−1 / +1） | 17319 → 17323 | 30856 → 35292 | 48 → 47 |
+| TestEmbeddedUrlRebuild（eur1 → eur3，eur1 已含 ravacp、未含分析器修正） | 2867 → 3178（+311） | 16892 → 18993 | 16126 → 21028 | 25 → 26 |
+
+- 四例回归用例：类集只是 `EmbeddedClassPath$Handler` 换成 `sun/net/www/protocol/ravacp/Handler`，方法多出
+  `openConnection` / `resourceName` / `copyIndex` 等 6 个。`DefaultFactory` 的缺口在三例大用例中都消失，类集不变。
+  耗时差在本机跑批波动范围内（同时有其他重进程持锁）。
+- TestEmbeddedUrlRebuild 的 +311 类是**正确性所需**，不是膨胀：
+  - 用户以运行期字符串 `new URL(String)` 后调用 `openConnection`。协议推不出，`file` Handler 的 `openConnection` 可达。
+  - 其字节码对非本机 host 的 `file://host/path` 执行 `new URL("ftp", host, file)` 并按 FTP 打开（JDK 21 `file/Handler.openConnection@62`），
+    因此 `"ftp"` 流入协议形参，ftp Handler → `FtpURLConnection` → 代理时的 `HttpURLConnection` → 认证 / JGSS 可达。
+  - 修正前这条链因站点 unsure 被截断：闭包看似更小，但实际运行时 ftp Handler 根本无法构造。
+  - 新增的两条缺口（`ProviderList.getMechFactoryImpl` 的 `getConstructor`、`Field.copy` 按名查字段）都位于新可达的 JGSS 代码中，
+    属于既有的缺口类别。
+- 本地 JDK 21 运行 `TestEmbeddedUrlRebuild`：输出与 `tests/expected/TestEmbeddedUrlRebuild.txt` 一致。
+
+#### 生成器 / 宏修正：scratch 编译暴露的两处（2026-10-07）
+
+`TestEmbeddedUrlRebuild` 的闭包新增 ftp → http → 认证链之后，scratch `cargo check` 暴露出两处既有缺陷。
+两处都在生成器或宏中修正，不改生成文件。
+
+1. **E0034：`__as_<SimpleName>` 钩子歧义**（宏，提交 `b2a3e67b`）。
+   - `sun.net.www.protocol.http.HttpURLConnection` 继承 `java.net.HttpURLConnection`，两者简单名相同，
+     所以两个祖先 vtable trait 都有 `__as_HttpURLConnection`。
+   - vtable trait 缺省方法体中的 `self.__as_X()` 因此在 decl 层报方法歧义。
+   - 修正：`virtual_dispatch/trait_decl.rs` 改为按本类 trait 限定调用，`<VTable>::__as_X(self)`。
+2. **E0277：只经 null 存储到达的根类型槽**（生成器，提交 `5cfe2541`）。
+   - 涉及 `NegotiateAuthentication.getCache` 中 `aconst_null; astore_0; …; aload_0; areturn` 这条路径。
+   - 模拟阶段按根类型 `Object` 绑定该槽，返回点因此生成 `From::from(local_0)`。
+   - 变量提升阶段（`slot_type::merged_slot_type`）随后把「null + 单一引用类型」的槽重定为 `HashMap<Object, Object>`，
+     读取点于是失配：`HashMap<String, Negotiator>: From<HashMap<Object, Object>>` 不成立。
+   - 修正：`sim::Local` 增加「确定为空」标记。
+     - 每次存储都会重置这个标记；只有无类型 null 存入根类型绑定时才置位。
+     - 汇合点取各前驱的合取。
+     - 回边（尚有未处理的前驱）、异常处理器入口和状态机分派入口一律清除。
+     - 读取确定为空的槽时直接产出空字面量，由各消费点按目标类型落为默认值。该处现在生成 `return Ok(Default::default())`。
+
+#### 单元测试与编译（本机，`build/check-target`）
+
+- 闭包 / classfile / resolve / input / emit 各 crate：11 + 193 + 71 + 2 + 19 + 13 + 8 + 1 全部通过（`param_inputs` 修正后）。
+- instr / sim / method / emit（null 槽修正后）：71、2、20、2、20、2、1、6，全部通过。
+- rava_macros_core 16 通过（2 个 ignored）；rava_macros 0 个测试执行（2 个 ignored）。
+- 生成器全量 `cargo test --release`：未跑完，有两例失败，均非本分支引入：
+  - `reflect_new_array_element_precision`：TestModuleLayerDefine 种子 2 比种子 0 多 `java/nio/file/Path$1`、`jdk/internal/util/ClassFileDumper$2`。原因是种子 2 下 `ClassFileDumper.enabled` 未折叠为 false，`validateDumpDir` 因此可达。基线 91f54a35 自建二进制跑出同样差异，撤掉 `param_inputs` 修正后也一样，属于既有的顺序依赖。
+  - `closure_independent_of_hash_seed`：资源巡检停止了 `TestJndiNoProvider` 的闭包进程（RSS 22G 还在涨），所以失败。同一用例在集成分支 84440f29 的 gate 上也膨胀，问题出在 3f59a8e9..84440f29 之间的合并，已另开任务二分定位。本机实测（8G 上限）：基线 91f54a35 二进制 + 基线 runtime 用时 388 s，未触顶；本分支撤掉 `param_inputs` 修正的二进制用时 466 s，未触顶。
+- rava release 构建通过。`TestEmbeddedUrlRebuild --stop-after emit` 生成 3175 个 JDK 类 + 2 个用户类，
+  scratch `cargo check --keep-going` 结果为 **rc=0、0 个错误**（修正前只有上述 E0034，修后只有上述 E0277）。
+
+#### 抽查清单（服务器，由用户发起；在 §30.15 清单基础上追加）
+
+- 新增：`TestEmbeddedUrlRebuild`，预期通过（自身 / 内部类 `.class` 以及 `java/lang/String.class` 的 URL 经字符串往返后，
+  读到的内容与 `getResourceAsStream` 一致）。
+- §30.15 的全部项目：
+  - `TestClassResourceStream`、`TestSystemStableProps`；
+  - 类路径 / 加载器 / ServiceLoader 各例，以及 `--filter ServiceLoader`；
+  - `--filter MethodHandle`、`--filter Proxy`；
+  - 四例回归：HelloWorld / StockTrans / DeepCopy / TestSerialDefaultSuid。
+- URL 相关用例（受协议处理器查找与分析器修正影响）：`--filter Url`、`--filter URL`、`--filter URI`，
+  其中包含 `TestUrlParsingFaces`。
+- 反射 / 按名取类用例（受 `param_inputs` 修正影响）：`TestForNameComputedName`、`TestForNameInit`、`TestClassForNameInit`、
+  `--filter ServiceLoader`（已含）。
+
+#### 提交
+
+- `7f0bd9ed` resolve：镜像补充目录以目录名为所属模块。
+- `47b83880` ravacp 协议与独立 Handler（VM 支持类）+ `EmbeddedClassPath` 改动 + 清单注释。
+- `6695d716` e2e `TestEmbeddedUrlRebuild` 与期望输出。
+- `fdc94f56` 闭包分析：`param_inputs` 中的推不出收进本槽结果，不再外泄为整站点 unsure。
+- `b2a3e67b` 宏：vtable trait 缺省方法按本类 trait 限定调用 `__as_` 钩子（E0034）。
+- `5cfe2541` 生成器：局部槽「确定为空」跟踪（E0277）。
+- 本节文档：本节之后的提交。
