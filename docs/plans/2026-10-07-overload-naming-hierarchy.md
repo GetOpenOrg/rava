@@ -134,3 +134,19 @@ DeepCopy / TestPropertiesXmlRoundTrip / TestSaxLocatorAttributes / TestXmlSaxEve
 
 - 字面量名与后缀名撞名（Java 方法字面量名恰为另一重载的后缀名，如同时有 `put(int)` 与 `put_i()`）：
   规则不处理，语料未见；终态由名字分配阶段在视图内检测并对字面量名追加声明者区分，另立项。
+
+## 八、进度与恢复起点（2026-10-07，dev 关机维护挂起）
+
+- 分支 `gen-overload-hier` 最新 `d70f46dd`（已推 origin）：本分支提交 e7dd4c2e（规则 5）、dff8d8be（超类链兜底 + 桥单测）、
+  c4ae555e / 26cdbc6e（设计文档）、fb553a18（known_failures 改签名），再合并集成分支 `74837098`
+  （含 JNDI 膨胀修复 f75c32a4 与资源束线 c4-resbundle）；冲突只在 `known_failures.toml` TestXmlTransform 条目，
+  取本分支签名 + 集成分支暂缓字段（S1）。本机 cargo check 通过。
+- 已有实测（合并前 dff8d8be）：抽查 `ovl-spot-dff8d8be` / `-r` 6 例通过，TestXmlTransform 编译通过、运行期止于
+  SerializerMessages 资源束；`ovl-impact3-dff8d8be-m28` 34 例生成树逐字节一致。生成器单测 `ovl-impact3-dff8d8be`
+  job 02 仅 driver `closure_cli::closure_independent_of_hash_seed` 撞 14G OOM（基线 JNDI 膨胀，未带 f75c32a4），且
+  cargo 缺省 fail-fast 致 driver 之后的 crate 未跑。
+- **待续（dev 恢复后）**：在 d70f46dd 上重跑
+  1. 单测作业 `ovl-ut-d70f46dd`（`--slot-mem dev=28`，`cargo test --release -q --no-fail-fast` + rava_macros_core）；
+  2. 抽查 `ovl-spot-d70f46dd`（TestXmlTransform TestXmlSaxEvents TestSaxLocatorAttributes HelloWorld CollectorsDemo
+     DeepCopy TestPropertiesXmlRoundTrip）——合入资源束线后 TestXmlTransform 若通过，删除其 known_failures 条目。
+  两者均于 dev 关机前被停，无结果。
