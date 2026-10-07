@@ -71,12 +71,12 @@ impl Ctx<'_> {
         for &o in objs.iter() {
             let t = self.obj_ret_key(s, o)?;
             if let Some(x) = orvals.get(&*t).and_then(|ov| ov.get(&o)) {
-                pv = Some(PV::join_ret(pv.as_ref(), x));
+                pv = Some(PV::join(pv.as_ref(), x));
             }
             // 通配值按目标只并一次
             if !ts.iter().any(|u| Rc::ptr_eq(u, &t) || **u == *t) {
                 if let Some(w) = orwild.get(&*t) {
-                    pv = Some(PV::join_ret(pv.as_ref(), w));
+                    pv = Some(PV::join(pv.as_ref(), w));
                 }
                 ts.push(t);
             }
@@ -117,7 +117,7 @@ impl Engine<'_> {
             return;
         }
         let cur = self.nret.get(&m).cloned();
-        let new = PV::join_ret(cur.as_ref(), r);
+        let new = PV::join(cur.as_ref(), r);
         if cur.as_ref() == Some(&new) {
             return;
         }
@@ -148,7 +148,7 @@ impl Engine<'_> {
             let deps = deps.get(&key);
             for &o in objs {
                 let cur = ov.get(&o);
-                let new = PV::join_ret(cur, v);
+                let new = PV::join(cur, v);
                 if cur != Some(&new) {
                     ov.insert(o, new);
                     readers.extend(deps.and_then(|d| d.get(&o)).into_iter().flatten().copied());
@@ -163,7 +163,7 @@ impl Engine<'_> {
         let changed = {
             let mut w = self.ctx.orwild.borrow_mut();
             let cur = w.get(key).cloned();
-            let new = PV::join_ret(cur.as_ref(), v);
+            let new = PV::join(cur.as_ref(), v);
             let changed = cur.as_ref() != Some(&new);
             if changed {
                 w.insert(key.clone(), new);

@@ -158,17 +158,17 @@ mod tests {
         assert!(!deser_writes(acc::TRANSIENT, true));
     }
 
-    /// 返回常量格合流：常量串 × 带对象标签的新建对象（`StringLatin1.newString` 形态）两侧都非空时取非空引用；
+    /// 常量格合流：常量串 × 带对象标签的新建对象（`StringLatin1.newString` 形态）两侧都非空时取非空引用；
     /// 任一侧可空时仍取 Top
     #[test]
-    fn join_ret_keeps_nonnull() {
+    fn join_keeps_nonnull() {
         let s = PV::Const(V::Str(Rc::from(""), Rc::from([].as_slice())));
         let tagged = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) };
         let o = PV::Const(tagged.clone());
-        assert_eq!(PV::join(Some(&s), &o), PV::Top);
-        assert_eq!(PV::join_ret(Some(&s), &o), PV::Const(nonnull_ref()));
+        assert_eq!(PV::join(Some(&s), &o), PV::Const(nonnull_ref()));
+        assert_eq!(PV::join(Some(&o), &s), PV::Const(nonnull_ref()));
         let maybe = PV::Const(V::Ref { ty: None, nonnull: false, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) });
-        assert_eq!(PV::join_ret(Some(&s), &maybe), PV::Top);
-        assert_eq!(PV::join_ret(None, &o), o);
+        assert_eq!(PV::join(Some(&s), &maybe), PV::Top);
+        assert_eq!(PV::join(None, &o), o);
     }
 }

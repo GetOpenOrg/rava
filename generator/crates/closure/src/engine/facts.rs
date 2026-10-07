@@ -40,23 +40,15 @@ impl PV {
             _ => PV::of(v),
         }
     }
-    /// 返回常量格的合流：在 [`PV::join`] 之上，两侧都确定非空而值 / 标签无法合流时取「非空引用」
+    /// 形参 / 返回 / 静态字段常量格的合流。两侧都确定非空而值 / 标签 / 形状无法合流时取「非空引用」
     /// （如一条路径返回常量串、另一条返回带字段标签的新建对象）
-    pub(super) fn join_ret(a: Option<&PV>, b: &PV) -> PV {
-        match PV::join(a, b) {
-            PV::Top => match (a, b) {
-                (Some(PV::Const(x)), PV::Const(y)) if x.nonnull() == Some(true) && y.nonnull() == Some(true) => PV::Const(nonnull_ref()),
-                _ => PV::Top,
-            },
-            j => j,
-        }
-    }
     pub(super) fn join(a: Option<&PV>, b: &PV) -> PV {
+        let both_nonnull = |x: &V, y: &V| x.nonnull() == Some(true) && y.nonnull() == Some(true);
         match (a, b) {
             (None, x) => x.clone(),
             (Some(PV::Const(x)), PV::Const(y)) if x == y => PV::Const(x.clone()),
             // 非空引用与确定非空的引用（含带标签的）合流：仍是非空引用
-            (Some(PV::Const(x)), PV::Const(y)) if (is_nonnull_ref(x) || is_nonnull_ref(y)) && x.nonnull() == Some(true) && y.nonnull() == Some(true) => {
+            (Some(PV::Const(x)), PV::Const(y)) if (is_nonnull_ref(x) || is_nonnull_ref(y)) && both_nonnull(x, y) => {
                 PV::Const(nonnull_ref())
             }
             // int 族常量：取有限并
@@ -66,6 +58,7 @@ impl PV {
             // 字符串形状（常量 / 形状标签 / null 之间）：合流取形状的并
             (Some(PV::Const(x)), PV::Const(y)) if x.shape_tagged() || y.shape_tagged() || matches!((x, y), (V::Str(..), V::Str(..))) => match x.join(y) {
                 j @ V::Ref { .. } if j.shape_tagged() => PV::Const(j.stripped()),
+                _ if both_nonnull(x, y) => PV::Const(nonnull_ref()),
                 _ => PV::Top,
             },
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
@@ -73,7 +66,7 @@ impl PV {
                 PV::Const(x.join(y).stripped())
             }
             // 其余两侧都确定非空的引用（不同标签、不同字符串常量）：非空引用
-            (Some(PV::Const(x)), PV::Const(y)) if x.is_ref() && y.is_ref() && x.nonnull() == Some(true) && y.nonnull() == Some(true) => {
+            (Some(PV::Const(x)), PV::Const(y)) if both_nonnull(x, y) => {
                 PV::Const(nonnull_ref())
             }
             _ => PV::Top,

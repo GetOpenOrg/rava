@@ -1178,7 +1178,11 @@ user_name = "@deferred"
 "jdk/internal/misc/Unsafe.shouldBeInitialized0:(Ljava/lang/Class;)Z" = "unsafe_should_be_init"
 # 文件系统查询：宿主相关
 "java/io/UnixFileSystem.canonicalize0:(Ljava/lang/String;)Ljava/lang/String;" = "defer_value"
-# URLClassPath.toFileURL 无显式操作：[vm_constants] null_returns 给出 const:null（类路径运行模型，§30.15）
+# 类路径运行模型（[[intrinsic]] kind = class_path，§30.15）在构建期同样成立：映像里的应用 ucp 与运行期一样恒空、
+# 不从类路径定义类。引导求值不取有字节码方法的返回值事实（[vm_constants] null_returns 只描述运行期），故在此显式给出；
+# 否则执行 toFileURL 的字节码（File 规范化 → 宿主相关的延迟值），initPhase2 在已登记模块表之后撤回而映像求值失败
+"jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;" = "const:null"
+"jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;" = "const:null"
 "java/io/UnixFileSystem.getBooleanAttributes0:(Ljava/io/File;)I" = "defer_value"
 # 构建期单线程：监视器通知为空操作
 "java/lang/Object.notifyAll:()V" = "noop"

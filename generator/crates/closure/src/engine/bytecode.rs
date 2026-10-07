@@ -258,7 +258,7 @@ impl<'a> Engine<'a> {
         let mut r: Option<PV> = None;
         for (_, e) in &a.events {
             if let Event::Return(v) = e {
-                r = Some(PV::join_ret(r.as_ref(), &PV::of_ret(v)));
+                r = Some(PV::join(r.as_ref(), &PV::of_ret(v)));
             }
         }
         let Some(r) = r else { return };
@@ -266,7 +266,7 @@ impl<'a> Engine<'a> {
         self.obj_ret_note(m, &r);
         let key = self.methods[m].key.clone();
         let cur = self.ctx.rvals.borrow().get(&key).cloned();
-        let new = PV::join_ret(cur.as_ref(), &r);
+        let new = PV::join(cur.as_ref(), &r);
         if cur.as_ref() == Some(&new) {
             return;
         }
