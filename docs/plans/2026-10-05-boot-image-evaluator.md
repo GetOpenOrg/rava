@@ -429,7 +429,7 @@ Linux 为服务器作业 `bimg-aud2-3e04048d`（jp2）；macOS 为本机。四�
 | S2 | `String`（1,435） | `__STRING_INTERN_TABLE` | 驻留查找先查映像驻留表（按 UTF-16 单元排序的静态表） |
 | S3 | `Thread`（1）/ `ThreadGroup`（2） | `thread_impl` 的主线程构造（`platform_main_thread`）、`INITIAL_THREAD` | 启动时把映像中的 main 线程绑定到 OS 主线程（§3.3 启动序列第 2 步），不再手写构造 |
 | S4 | `Thread` id | `getNextThreadIdOffset` 的进程静态计数器（初值 0） | 初值取映像 VM 单元 `next_thread_id` |
-| S5 | `Module`（68）/ `ModuleLayer`（2） | `module_impl` 的 VM 模块表（`defineModule0` 运行期登记）、`unnamed_module` / `ModuleLayer.boot` 的手写单例 | VM 模块表以映像 VM 表（62 模块 / 771 包，含读与导出）为初值；两个手写单例属 a3 第 4 步删除的 `#[jvm_boundary]`，本步不改其语义，只保证映像对象与之不冲突（见 §5.5.3 余项） |
+| S5 | `Module`（68）/ `ModuleLayer`（2） | `module_impl` 的 VM 模块表（`defineModule0` 运行期登记）、`unnamed_module` / `ModuleLayer.boot` 的手写单例 | VM 模块表以映像 VM 表（62 模块 / 771 包，含读与导出）为初值；两个手写单例属 a3 第 4 步删除的 `#[jvm_boundary]`，本步不改其语义，只保证映像对象与之不冲突（见 §5.5.3 余项） ；**e50d4ba3 起**两个手写单例已删，VM 模块表由映像 `modules` 登记初值，`Class.module` 经 `__vm_module` 钩子查表（§5.5.6） |
 | S6 | `System` | `registerNatives` 手写建属性表与 out / err / in | `System` 构建期已初始化，运行期不再执行其 `<clinit>`；该手写体只在映像缺席时可达 |
 | S7 | `ClassLoader.scl`、`Thread.contextClassLoader` | `[vm_state.field_hooks]` → `__vm_init_phase3`（FS-C2） | 映像带构建期 initPhase3 写入的值，钩子与 `__vm_init_phase3` 删除 |
 | S8 | 身份哈希（87 个对象） | `__identity_hash(地址)` | 映像对象的对象头记录构建期哈希，`__identity_hash` 对映像区地址返回该值（§5.5.2 D3） |
@@ -662,6 +662,31 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 14. Reference Handler 与 Signal Dispatcher 现为真实 OS 线程（守护，不阻止退出）。
 15. S6 手写标准流仍为侧状态（见上）。
 
+#### 5.5.6 服务器跑通与第 4 步、第 5 步（部分）（2026-10-07，分支 `boot-image-s3`）
+
+**跑通（服务器 dev，JDK 21）**：1ecdcb51（泛型 wrapper `__phantom` 按字段推断）、0e540b1c（映像存储类型 `X__inner` 按实现层路径）、6c344f81（宿主改写 null 判定走 `is_jvm_null`，不活对象的重定位 / 重算写入跳过）、bad5901d（基本类型镜像按描述符字符还原：映像 `IObj.mirror` 的基本类型为描述符字符，原按类型名匹配，`byte.class` 退化为类 `B`，`Unsafe.allocateUninitializedArray` 抛 `Component type is not primitive`）。
+
+**第 4 步（模块部分）**
+
+- e50d4ba3：`Module` / `ModuleLayer` / `Class.getModule` 回到字节码。
+  - 删 `module_impl.rs` 的 `unnamed_module` 单例与 7 个 `#[jvm_boundary]`、`module_layer_impl.rs` 整个文件（`boot` / `parents` / `servicesCatalog` 钩子）、`class_impl.rs` 的手写 `getModule`。
+  - VM 模块表以映像为初值：求值器的 `defineModule0`（`vm_record`）同时记 `vm.modules`（模块、定义加载器、open、位置、包），导出为 `ImageData.modules`；启动序列在字符串驻留后逐条 `rt::define_module` 登记（`Module::__vm_register`）。
+  - `Class.module` 改为接收者字段钩子 `Class.__vm_module`：按「定义加载器 + 包」查 VM 模块表，未登记的包归定义加载器的无名模块（HotSpot 同）。分析侧钩子池由 `image_module_table` 以映像模块对象喂入。
+  - 清单 `[vm_state.field_hooks]` 新增 `boot_noop`：`classLoader` 钩子对引导类为空操作，`module` 钩子对每个镜像都需要。
+  - 删 `[vm_state] boot_singletons`（§5.5.3 X2 的「引导单例」）：`Class.getModule` 不再是手写单例，`callerModule == declaringModule` 不再按单例折叠。闭包规模影响待测（见下「未决」）。
+- fcc54fb8：`Module` / `ModuleLayer` 移出 `closure.toml [vm_boundary]`，`Module` 移出 `clinit_carried`，删 `translate_nested` 的 `Module$EnableNativeAccess`。原因：嵌套类 `Module$ReflectionData` 随外层归入 `clinit_carried`，静态访问器发为存根（`stub: java/lang/Module$ReflectionData.exports`）。手写只剩 ACC_NATIVE（`defineModule0` / `addReads0` / `addExports*`）。
+
+**第 5 步（部分）**：44be328e，`BootLoader.getSystemPackageLocation` native——引导加载器的包按 VM 模块表取所属模块的 location（映像模块表带 `defineModule0` 的 location 实参，引导层为 `jrt:/<模块名>`），未登记 → null。
+
+**抽查 bimg3-m-fcc54fb8（JDK 21）**：8 例 7 过——HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy 通过（后 5 例已从 `docs/known_failures.toml` 删除）；TestBootLayer 运行期 NPE，排查中。
+
+**未决**
+
+1. TestBootLayer（第 3 步验收项）运行期 NPE。
+2. 闭包规模：删 `boot_singletons` 后 HelloWorld 闭包 ≤ 540 门槛待服务器复测；此前服务器上另有 Signal → Shutdown.exit → System.getLogger → LazyLoggers / DetectBackend → ServiceLoader 链使档案闭包约 3000 类（本机 macOS 524），属需决策项。
+3. 二进制体积 ≤ +5%、启动装载 ≤ 1 ms 两项门槛未测。
+4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -669,8 +694,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 1 | 引导模式入正式代码：清单 `[concrete.boot]`、5 处语义分叉、21 种新增 op、审计报告（`rava audit boot`）；Linux JDK 21 / 25 两个映像 | HelloWorld 档案键下 initPhase1–3 跑完，initPhase2 返回 0，未登记失败 = 0；`--hash-seed` × `--flow-batch` 4 组合映像摘要相同；求值耗时 ≤ 0.5 s、RSS ≤ 300 MB |
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
-| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 |
-| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 |
+| 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；VM、Class 2、SecurityManager 未做 |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
 | 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 

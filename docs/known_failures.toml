@@ -27,20 +27,6 @@ note = "CNY 符号 expected 为 ¥，实际 CN¥；基线缺陷，非生成器�
 # 按本文件口径不可登记（超时不算已知），见 docs/plans/2026-10-06-c4-preflight.md 第四节
 
 [[known]]
-test = "TestModuleLayerDefine"
-signature = "Exception in thread \"main\" java.lang.NullPointerException"
-owner = "引导映像第 3 步（映像物化与装载，docs/plans/2026-10-05-boot-image-evaluator.md §步骤表）"
-since = "2026-10-06"
-note = "运行期未捕获 NPE（无 Java 栈）；refl-6f93f1c6、bimg2-d1dc540a / e69b596c 等抽查同症状；第 3 步验收含本例输出与 JDK 相同"
-
-[[known]]
-test = "TestClassModuleFace"
-signature = "+jbase-named=false"
-owner = "引导映像第 4 步（a3 归零第一批：Module / ModuleLayer / Class）"
-since = "2026-10-06"
-note = "java.base 的 Module 未命名：jbase-named / jbase-name / exported-internal / own-loader 四行 diff，10-03 入库起逐行相同"
-
-[[known]]
 test = "TestCharsetAvailable"
 signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "jdk.charsets（docs/plans/2026-10-03-jmod-coverage.md R9）"
@@ -135,13 +121,6 @@ since = "2026-10-06"
 note = "同 TestHttpLoopbackSync"
 
 [[known]]
-test = "TestProtectionDomainFaces"
-signature = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;"
-owner = "C1d a3-L1 BootLoader 归零（新增 native getSystemPackageLocation，boot 包位置恒为 jrt:）/ 引导映像第 5 步 BootLoader 2"
-since = "2026-10-06"
-note = "入库起从未通过：refl-6f93f1c6 为 Class$Holder.allPermDomain 存根，refl-c97ceed1 / hw-spot-d5f1599a 起同 native 缺失"
-
-[[known]]
 test = "TestRowSetProvider"
 signature = "Can't find bundle for base name com.sun.rowset.RowSetResourceBundle"
 owner = "java.sql.rowset 模块资源包按名装载（ResourceBundle 按名加载的分析器建模 / 模块资源）"
@@ -168,20 +147,6 @@ signature = "this method takes 1 argument but 3 arguments were supplied"
 owner = "生成器重载命名（接口层次跨层重载：ContentHandler.endElement(3) / LexicalHandler.comment(char[],int,int) 与子接口 ExtendedContentHandler / ExtendedLexicalHandler 的单参重载同取无后缀名）"
 since = "2026-10-06"
 note = "java_xml crate 编译 E0061 ×2 / E0308 ×1（serializer/to_unknown_stream.rs 经 SerializationHandler 接收者调用）；先前的小写类名与模块同名（E0425 / E0573 16 处）已由 gen-lc-naming 1afed3fc 修复（lcname-spot2-1afed3fc 放宽超时抽查）；入库时为 run error / R1（XSLTC 未入闭包），闭包扩展后暴露"
-
-[[known]]
-test = "TestStringGetCharsLegacy"
-signature = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;"
-owner = "引导映像第 4 / 5 步（命名 java.base 与非空 boot layer、BootLoader 2）；与 TestProtectionDomainFaces 同根"
-since = "2026-10-07"
-note = "String.class.getPackage() → BootLoader.getDefinedPackage → native getSystemPackageLocation；只补 native（返回 jrt:/<模块>）不够：PackageHelper.findModule 经 Modules.findLoadedModule 在 boot layer 找模块，现 boot layer 为空层、全部类在无名模块，会转成 InternalError(\"java.base not loaded\")；须随命名模块 / boot layer 物化一并落地（docs/plans/2026-10-07-c4-misc-failures.md）"
-
-[[known]]
-test = "TestSetAccessibleBoundary"
-signature = "+jdk-open=unexpected"
-owner = "引导映像第 4 步（a3 归零第一批：Module / ModuleLayer / Class，T1 / T6；docs/plans/2026-10-05-boot-image-evaluator.md 步骤表第 4 行验收含本例）"
-since = "2026-10-07"
-note = "Class.getModule 手写近似：JDK 类全落无名模块（module_impl::unnamed_module / class_impl.getModule 的单例，isNamed 恒 false），AccessibleObject.checkCanSetAccessible 见声明模块未命名即放行，String.value 的 setAccessible 不抛 InaccessibleObjectException；与 TestClassModuleFace（jbase-named=false）同根因，修复为映像物化 T1 / T6 后 Class.module 按包表取 java.base"
 
 [[known]]
 test = "TestXmlSaxEvents"
