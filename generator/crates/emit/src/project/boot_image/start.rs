@@ -408,7 +408,6 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
     for st in &d.steps {
         step(&mut g, st)?;
     }
-    g.line("rt::set_level(None);");
     g.line("Ok(())");
     Ok(format!(
         "/// 构建期引导映像的启动序列（`main` 在创建 VM 之后调用）\npub fn {START_FN}() {{\n    rt::run(__start)\n}}\n\nfn __start() -> Result<()> {{\n{}}}\n",
@@ -458,7 +457,8 @@ fn host_rewrite(g: &mut Gen<'_, '_, '_>) -> Result<()> {
 fn step(g: &mut Gen<'_, '_, '_>, st: &IStep) -> Result<()> {
     let p = g.p;
     match st {
-        IStep::Level(l) => g.line(&format!("rt::set_level(Some({l}));")),
+        // 档位字段即 `VM.initLevel` 之类的普通静态字段：重放期写入构建期档位，序列末尾的档位步骤恢复映像值
+        IStep::Level { decl, name, level } => g.store(&ILoc::Static(decl.clone(), name.clone()), &format!("{level}i32"))?,
         IStep::Reloc { loc, reloc } => {
             let v = match reloc {
                 IReloc::FieldOffset(c, n) => format!("rt::field_offset({c:?}, {n:?})"),

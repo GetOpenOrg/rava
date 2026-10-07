@@ -27,11 +27,6 @@ pub fn intern(s: Object) {
     let _ = String::from(s).__interned();
 }
 
-/// 引导初始化档位（`VM.initLevel` 的执行流视图）：`None` = 引导完成
-pub fn set_level(level: Option<i32>) {
-    crate::exec_context::state().boot_level.set(level);
-}
-
 /// VM 原生单元的初值
 pub fn vm_cell(name: &str, bits: i64) {
     cell(name).store(bits, std::sync::atomic::Ordering::Relaxed);

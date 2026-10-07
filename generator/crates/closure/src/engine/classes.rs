@@ -53,6 +53,13 @@ impl<'a> Engine<'a> {
     }
 
     /// open(o) 按过滤类型 t 收窄的结果（None = 空），按 (o, t) 缓存
+    /// 类型判定站点 n（目标 t）：t 为接口时登记为 n 的接口界（类 × 接口收窄保留的 open(T) 实为 T ∩ t，见 `open_bounds`）
+    pub(super) fn bound_site(&mut self, n: Node, t: u32) {
+        if self.is_iface(t) {
+            self.open_bounds.insert(n, t);
+        }
+    }
+
     fn open_narrow(&mut self, o: u32, t: u32) -> Option<u32> {
         if let Some(&r) = self.narrow_cache.get(&(o, t)) {
             return (r != u32::MAX).then_some(r);

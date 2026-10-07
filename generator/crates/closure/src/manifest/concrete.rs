@@ -29,8 +29,8 @@ pub struct ConcreteCfg {
 /// `@jdk_feature` = 参考 JDK 的特性版本号，其余为字面量
 #[derive(Debug, Clone, Default)]
 pub struct BootCfg {
-    /// 调用序列：`[成员, 实参...]`（实参为整数字面量）
-    pub calls: Vec<(String, Vec<i64>)>,
+    /// 调用序列（按序）：引导阶段方法与 VM 在阶段之间初始化的类
+    pub calls: Vec<BootCall>,
     /// 成员 → 操作名（优先于 `[concrete.natives]`）
     pub natives: HashMap<String, String>,
     /// VM 注入静态字段 `类.字段` → 整数字面量 / `@deferred`
@@ -51,6 +51,16 @@ pub struct BootCfg {
     /// 按档位定值的 VM 查询：成员 → 门限（档位 ≥ 门限为 true）。档位低于门限的残差步骤上下文中折叠为 false，
     /// 其余处沿用 `[facts.returns]`
     pub level_queries: HashMap<String, i64>,
+}
+
+/// `[concrete.boot] calls` 的一项
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootCall {
+    /// `[成员, 实参...]`：在根帧执行的引导阶段方法（实参为整数字面量）
+    Phase(String, Vec<i64>),
+    /// `{ init = [类...] }`：VM 在两个阶段之间按序初始化的类（如 HotSpot 在 initPhase1 之后初始化的
+    /// JSR 292 核心类）
+    Init(Vec<String>),
 }
 
 fn strs(v: Option<&toml::Value>) -> Vec<String> {
@@ -85,10 +95,16 @@ fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
     let get = |k: &str| t.and_then(|t| t.get(k));
     let mut calls = Vec::new();
     for c in get("calls").and_then(|v| v.as_array()).into_iter().flatten() {
-        let Some(a) = c.as_array() else { return Err("[concrete.boot] calls 的项须为数组".into()) };
+        if let Some(t) = c.as_table() {
+            let cs = t.get("init").and_then(|v| v.as_array()).ok_or("[concrete.boot] calls 的表项须为 { init = [类...] }")?;
+            let cs = cs.iter().map(|x| x.as_str().map(String::from).ok_or("[concrete.boot] calls init 的类须为字符串")).collect::<Result<Vec<_>, _>>()?;
+            calls.push(BootCall::Init(cs));
+            continue;
+        }
+        let Some(a) = c.as_array() else { return Err("[concrete.boot] calls 的项须为数组或 { init = [...] }".into()) };
         let m = a.first().and_then(|x| x.as_str()).ok_or("[concrete.boot] calls 项首元须为成员")?;
         let args = a[1..].iter().map(|x| x.as_integer().ok_or("[concrete.boot] calls 实参须为整数")).collect::<Result<Vec<_>, _>>()?;
-        calls.push((m.to_string(), args));
+        calls.push(BootCall::Phase(m.to_string(), args));
     }
     let mut vm_props = Vec::new();
     for p in get("vm_props").and_then(|v| v.as_array()).into_iter().flatten() {
@@ -112,4 +128,23 @@ fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
             .map(|(k, v)| v.as_integer().map(|x| (k.clone(), x)).ok_or_else(|| format!("[concrete.boot.level_queries] {k} 的值须为整数")))
             .collect::<Result<_, _>>()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// calls 的两种项：阶段方法 `[成员, 实参...]` 与阶段之间的类初始化 `{ init = [...] }`，按序保留
+    #[test]
+    fn boot_calls_phase_and_init() {
+        let t: toml::Value = toml::from_str(r#"calls = [["a/S.p1:()V"], { init = ["a/M", "a/N"] }, ["a/S.p2:(ZZ)I", 0, 1]]"#).unwrap();
+        let b = parse_boot(Some(&t)).unwrap();
+        assert_eq!(b.calls, vec![
+            BootCall::Phase("a/S.p1:()V".into(), vec![]),
+            BootCall::Init(vec!["a/M".into(), "a/N".into()]),
+            BootCall::Phase("a/S.p2:(ZZ)I".into(), vec![0, 1]),
+        ]);
+        let bad: toml::Value = toml::from_str(r#"calls = [{ other = 1 }]"#).unwrap();
+        assert!(parse_boot(Some(&bad)).is_err());
+    }
 }

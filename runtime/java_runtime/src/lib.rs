@@ -439,75 +439,13 @@ impl PartialEq for MutexHolder {
     fn eq(&self, other: &Self) -> bool { std::sync::Arc::ptr_eq(&self.0, &other.0) }
 }
 
-// ── 常量目录（JDK `Class.enumConstantDirectory` 的数据面）────────────────────
-//
-// `java_class!` 宏在类初始化（JVMS §5.5）完成后，为声明了「自身类型 static 字段」
-// 的类登记（常量名 → 取值闭包）——Java 枚举常量即该形态（`static final Day MONDAY`，
-// 值由 `<clinit>` 写入线程局部存储）。查询侧（手写 `Enum.valueOf`）按类对象的
-// binary name（点分）取常量。登记只看结构形态，不感知枚举语义；非枚举类的
-// 同形态 static 字段一并登记，无副作用（目录仅被常量名查找消费）。
-
-type ConstantGetter = crate::sync_model::__Shared<crate::__DynFn!(() -> Result<Object>)>;
-
-crate::__process_static! {
-    static CONSTANT_DIRECTORY: crate::sync_model::__RefSlot<
-        std::collections::HashMap<std::string::String, Vec<(std::string::String, ConstantGetter)>>
-    > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
-}
-
-/// 登记一个类的常量目录项。`binary_name` 为 JVM binary name（斜线 / $ 形态），
-/// 内部归一为点分形态（与 `Class` 对象承载的名字一致）。
-pub fn register_constant_directory(binary_name: &str, entries: Vec<(std::string::String, ConstantGetter)>) {
-    CONSTANT_DIRECTORY.with(|dir| {
-        dir.borrow_mut().insert(binary_name.replace('/', "."), entries);
-    });
-}
-
-/// 按类名 + 常量名取常量。类未登记（无该形态 static 字段 / 尚未初始化）或
-/// 常量不存在 → None；常量取值闭包失败（如 erroneous 类初始化后置访问）→ None。
-pub fn lookup_constant(binary_name: &str, constant_name: &str) -> Option<Object> {
-    CONSTANT_DIRECTORY.with(|dir| {
-        let dir = dir.borrow();
-        dir.get(binary_name)?
-            .iter()
-            .find(|(name, _)| name == constant_name)
-            .and_then(|(_, get)| get().ok())
-    })
-}
-
-/// 按类名取（常量名, 常量）全表（JDK `Class.enumConstantDirectory` 的数据面），登记序。
-/// 类未登记 → None；任一常量取值失败 → None。
-pub fn constant_directory_entries(binary_name: &str) -> Option<Vec<(std::string::String, Object)>> {
-    CONSTANT_DIRECTORY.with(|dir| {
-        let dir = dir.borrow();
-        dir.get(binary_name)?
-            .iter()
-            .map(|(name, get)| get().ok().map(|v| (name.clone(), v)))
-            .collect::<Option<Vec<_>>>()
-    })
-}
-
-/// 按类名取常量宇宙（JDK `JavaLangAccess.getEnumConstantsShared` 的数据面）：
-/// 返回该类登记的全部常量，登记序 == 字段声明序（枚举常量即 ordinal 序）。
-/// 类未登记 → None；任一常量取值失败 → None。取值闭包经访问器触发类初始化，
-/// 已初始化类（枚举宇宙的常态消费方）直接命中。
-pub fn constant_directory_universe(binary_name: &str) -> Option<Vec<Object>> {
-    CONSTANT_DIRECTORY.with(|dir| {
-        let dir = dir.borrow();
-        dir.get(binary_name)?
-            .iter()
-            .map(|(_, get)| get().ok())
-            .collect::<Option<Vec<Object>>>()
-    })
-}
-
 // ── 类初始化钩子（JVM 反射路径强制初始化的数据面）──────────────────────────
 //
 // JVM 语义：`Class` 字面量（ldc）不触发初始化（JVMS §5.5 无 passivity 例外），
 // 但反射式消费方（`getEnumConstantsShared`、`Class.getEnumConstants`、
 // `Enum.valueOf(Class, name)` 等）会强制目标类初始化后再读常量。名字 token
 // `Class::for_class` 与用户类的 `__class_init` 之间没有通道——生成项目在 main
-// 启动时按语料登记钩子（枚举形态类，与常量目录同一结构谓词），运行时按名代调。
+// 启动时按语料登记钩子（枚举形态类），运行时按名代调。
 
 pub type ClassInitHook = crate::sync_model::__Shared<crate::__DynFn!(() -> Result<()>)>;
 
@@ -517,20 +455,7 @@ crate::__process_static! {
     > = crate::sync_model::__RefSlot::new(std::collections::HashMap::new());
 }
 
-/// VM 引导期（HotSpot `initPhase1` 等对应物，清单 `seeds.toml [boot_init]`）：VM 发起的全局登记
-/// 调用（calls，例：System.setJavaLangAccess）与引导期类初始化（classes）。JDK 依赖
-/// 某些类先于任何应用代码完成初始化（例：AccessibleObject 登记 ReflectAccess 并缓存
-/// ReflectionFactory——若由 ReflectionFactory.<clinit> 反向触发，重入读到 null 单例）。
-/// 生成项目 main 按清单顺序（先 calls 后 classes）传入闭包内在场者；失败即 VM 启动失败。
-pub fn vm_boot_init(inits: &[(&str, fn() -> Result<()>)]) {
-    for (_name, init) in inits {
-        if let Err(e) = init() {
-            e.report_uncaught();
-        }
-    }
-}
-
-/// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一规则与常量目录一致。
+/// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一为点分形态（与 `Class` 对象承载的名字一致）。
 pub fn register_class_init_hooks(hooks: &[(&str, ClassInitHook)]) {
     CLASS_INIT_HOOKS.with(|h| {
         let mut h = h.borrow_mut();
@@ -598,7 +523,6 @@ pub mod prelude {
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;
-    pub use super::{register_constant_directory, lookup_constant, constant_directory_universe};
     pub use super::monitor::{MonitorGuard, class_monitor};
     pub use crate::sync_model::__Shared as Rc;
     pub use crate::sync_model::__RefSlot as RefCell;

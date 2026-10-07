@@ -42,7 +42,7 @@ pub use shape::Shape;
 pub use strs::StrKind;
 mod value;
 pub use value::{component, Src, Srcs, CLASS, STRING, V};
-use value::{ft_name, push_typed, site_ref, src1, value_of};
+use value::{ft_name, push_typed, site_ref, src1, typed, value_of};
 mod oracle;
 pub use oracle::{Analysis, Event, Oracle, Ret};
 mod step;

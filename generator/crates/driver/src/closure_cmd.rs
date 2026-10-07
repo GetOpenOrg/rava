@@ -207,7 +207,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         dir: args.opt("--closure-cache").map(PathBuf::from),
         max_mb: num("--closure-cache-max-mb")?,
     };
-    let out = crate::closure_run::analyze(&cache, &input_desc, &h, &man, &hw, need_engine, true);
+    let out = match crate::closure_run::analyze(&cache, &input_desc, &h, &man, &hw, need_engine, true) {
+        Ok(o) => o,
+        Err(f) => {
+            if let Some(r) = &boot_report {
+                write_report(r, &f.report)?;
+                eprintln!("[boot] 报告 {r}：失败");
+            }
+            return Err(f.to_string());
+        }
+    };
     let v = out.json.as_ref().ok_or("闭包产物缺失")?;
     if let Some(o) = args.opt("-o") {
         let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
@@ -221,10 +230,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
     if let Some(r) = &boot_report {
-        let b = c.boot_image.as_ref().ok_or("引导映像未求值（清单无 [concrete.boot] calls 或类路径无引导阶段方法）")?;
-        if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
-        }
+        let b = &c.boot_image;
         let outside = |v: &[String]| -> Vec<String> { v.iter().filter(|t| !c.engine.classes.contains_key(t.as_str())).map(|t| format!("`{t}`")).collect() };
         let (ti, ri) = (outside(&b.types), outside(&b.runtime_classes));
         let md = format!("{}
@@ -234,8 +240,8 @@ pub fn run(args: &Args) -> Result<(), String> {
 - 映像类型 {} 个，不在闭包 {} 个：{}
 - 运行期部分入口类 {} 个，不在闭包 {} 个：{}
 ", b.report, c.engine.classes.len(), c.boot_ms, b.types.len(), ti.len(), ti.join(" "), b.runtime_classes.len(), ri.len(), ri.join(" "));
-        std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))?;
-        eprintln!("[boot] 报告 {r}：{}，摘要 {}", if b.ok { "通过" } else { "失败" }, b.digest);
+        write_report(r, &md)?;
+        eprintln!("[boot] 报告 {r}：通过，摘要 {}", b.digest);
     }
     for w in whys {
         for line in c.why(w) {
@@ -250,10 +256,15 @@ pub fn run(args: &Args) -> Result<(), String> {
         println!();
     }
     println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
-    if boot_report.is_some() && c.boot_image.as_ref().is_some_and(|b| !b.ok) {
-        return Err("引导映像求值失败（见报告）".into());
-    }
     Ok(())
+}
+
+/// 写引导映像审计报告（建上级目录）
+fn write_report(r: &str, md: &str) -> Result<(), String> {
+    if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
+    }
+    std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))
 }
 
 /// `--root 类.方法:描述符` 与 `--seed-class 类`（全部 public 方法，命令行入口 main 除外）展开为种子方法

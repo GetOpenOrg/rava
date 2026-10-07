@@ -152,7 +152,7 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
                 x.obj(*ph);
             }
             Rec::Region { locals, .. } => locals.iter().for_each(|v| if let CV::R(o) = v { x.obj(*o); }),
-            Rec::RuntimeInit { .. } | Rec::Level(_) => {}
+            Rec::RuntimeInit { .. } | Rec::Level { .. } => {}
         }
         x.drain()?;
     }
@@ -238,8 +238,18 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
             Rec::Native { callee, args, ph } => IStep::Native { callee: callee.to_string(), args: args.iter().map(|&v| x.val(v)).collect(), ph: ph.map(|o| x.ids[&o]) },
             Rec::Read { decl, name, ph } => IStep::Read { decl: decl.to_string(), name: name.to_string(), ph: x.ids[ph] },
             Rec::Region { phase, start, end, locals, .. } => IStep::Region { phase: phase.to_string(), start: *start, end: *end, locals: locals.iter().map(|&v| x.val(v)).collect() },
-            Rec::Level(l) => IStep::Level(*l),
+            Rec::Level { key, level } => level_step(vm, *key, *level),
         });
+    }
+    // 残差重放之后档位回到映像值（启动序列以同一字段承载重放期档位）
+    if let Some(key) = vm.bj.recs.iter().rev().find_map(|r| if let Rec::Level { key, .. } = r { Some(*key) } else { None }) {
+        let fin = match vm.statics.get(&key) {
+            Some(CV::I(x)) => *x,
+            _ => 0,
+        };
+        if !matches!(d.steps.last(), Some(IStep::Level { level, .. }) if *level == fin) {
+            d.steps.push(level_step(vm, key, fin));
+        }
     }
     d.strings = strings;
     let mut bt: Vec<String> = vm.done_log.iter().filter(|c| !vm.opaque.contains(*c)).map(|c| c.to_string()).collect();
@@ -265,4 +275,10 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
     }
     d.exprs = x.exprs;
     Ok(d)
+}
+
+/// 档位步骤：档位字段（`[concrete.boot] level`）与其值
+fn level_step(vm: &Vm, key: u32, level: i32) -> IStep {
+    let (decl, name) = &vm.fnames[key as usize];
+    IStep::Level { decl: decl.to_string(), name: name.to_string(), level }
 }

@@ -358,7 +358,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 match opc {
                     op::GETSTATIC => {
                         let own = s.finals.iter().find(|(g, _)| g == f).map(|(_, v)| v.clone());
-                        let v = own.or_else(|| self.folded(opc, off, self.oracle.field(opc, f, None))).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let v = own.or_else(|| self.folded(opc, off, self.oracle.field(opc, f, None)).map(|v| typed(v, &ft))).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     op::PUTSTATIC => {
@@ -385,7 +385,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                             Ret::Unknown => None,
                         };
                         let known = known.or_else(|| self.param_mirror_field(recv.as_ref(), f));
-                        let v = self.folded(opc, off, known).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let v = self.folded(opc, off, known).map(|v| typed(v, &ft)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     _ => {

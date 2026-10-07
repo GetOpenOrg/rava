@@ -84,11 +84,13 @@ impl<'a> Engine<'a> {
             modules_fed: false,
             data: data.clone(),
         }));
+        let st = self.img.as_ref().expect("映像").statics.clone();
+        self.image_statics_install(&st, &data.build_time);
         // 残差调用 / 区段在其构建期档位的上下文中分析（`levels_boot.rs`）；重放 native 与运行期初始化类在本体
         let mut lc = NOCTX;
         for st in &data.steps {
             match st {
-                IStep::Level(l) => lc = if self.level_needed(*l) { self.level_ctx(*l) } else { NOCTX },
+                IStep::Level { level, .. } => lc = if self.level_needed(*level) { self.level_ctx(*level) } else { NOCTX },
                 IStep::Recompute { expr, .. } => self.image_expr_roots(&data, *expr),
                 IStep::RuntimeInit { class } => self.init(class, Via::root("boot_image", class)),
                 // 重定位值是基本类型（偏移 / 地址），不引入方法与对象
@@ -216,7 +218,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 映像值的常量格：int / long / null / 字符串（映像字符串对象的内容）
-    fn image_pv(&self, v: IVal) -> PV {
+    pub(super) fn image_pv(&self, v: IVal) -> PV {
         match v {
             IVal::I(x) => PV::Const(V::Int(x)),
             IVal::J(x) => PV::Const(V::Long(x)),

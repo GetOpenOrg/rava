@@ -73,10 +73,11 @@ impl Ctx<'_> {
             self.note_aux_read(&fi.key);
         }
         if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-            return self.static_const(m, &fi.key, fi.constant.as_ref());
+            return self.static_const(m, &fi.key, fi.constant.as_ref()).or_else(|| self.image_final(&fi.key));
         }
         m?;
-        self.fvals.borrow().get(&fi.key).cloned().unwrap_or_else(|| default_pv(&fi.key.desc)).value()
+        let v = self.fvals.borrow().get(&fi.key).cloned();
+        v.unwrap_or_else(|| if fi.access & acc::STATIC != 0 { self.static_initial(&fi.key) } else { default_pv(&fi.key.desc) }).value()
     }
 
     /// 按名取字段偏移的调用折叠为符号偏移：Class 实参是类字面量、名字是字符串常量，且该类自身声明了

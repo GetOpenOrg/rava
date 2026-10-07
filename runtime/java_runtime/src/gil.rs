@@ -159,7 +159,7 @@ pub struct Handoff<T>(pub T);
 unsafe impl<T> Send for Handoff<T> {}
 
 /// 类初始化骨架的慢路径（JVMS §5.5）：他线程初始化中则等待、同线程递归立即返回、失败后
-/// NoClassDefFoundError；初始化体（父类 / 超接口初始化、常量目录登记、`<clinit>`）由调用方给出。
+/// NoClassDefFoundError；初始化体（父类 / 超接口初始化、`<clinit>`）由调用方给出。
 /// 宏按类只生成快路径判定与一行转交，骨架全程序一份（拆 crate §7.5.4，S7-4 的类初始化部分）。
 pub fn class_init(
     class: &'static str,

@@ -27,7 +27,8 @@ pub struct Outcome<'a> {
     pub json: Option<Value>,
 }
 
-/// 查缓存或冷算。`need_engine`：调用方要用引擎本体（不读缓存）；`want_json`：调用方要产物值
+/// 查缓存或冷算。`need_engine`：调用方要用引擎本体（不读缓存）；`want_json`：调用方要产物值。
+/// 引导映像求值失败即失败（不写缓存）
 pub fn analyze<'a>(
     opts: &CacheOpts,
     input: &Input<'a>,
@@ -36,7 +37,7 @@ pub fn analyze<'a>(
     hw: &'a Handwritten,
     need_engine: bool,
     want_json: bool,
-) -> Outcome<'a> {
+) -> Result<Outcome<'a>, closure::BootFailure> {
     let t0 = Instant::now();
     let slot = opts.dir.as_ref().and_then(|d| {
         let max = opts.max_mb.unwrap_or(cache::DEFAULT_MAX_MB).saturating_mul(1 << 20);
@@ -54,13 +55,13 @@ pub fn analyze<'a>(
                 }
                 cache::mark_hit(&mut v, t0.elapsed().as_millis(), key_ms);
                 eprintln!("[closure-cache] 命中 {k}（{} ms）", t0.elapsed().as_millis());
-                return Outcome { closure: None, json: Some(v) };
+                return Ok(Outcome { closure: None, json: Some(v) });
             }
             Load::Corrupt(why) => eprintln!("[closure-cache] 条目损坏已删除，重算：{why}"),
             Load::Miss => {}
         }
     }
-    let c = closure::analyze(input, h, man, hw);
+    let c = closure::analyze(input, h, man, hw)?;
     let mut diag: Vec<String> = hw.errors.borrow().iter().map(|e| format!("[closure] 手写文件解析失败：{e}")).collect();
     diag.extend(input.cp.failures().into_iter().map(|(n, e)| format!("[closure] 类解析失败：{n}：{e}")));
     for d in &diag {
@@ -72,5 +73,5 @@ pub fn analyze<'a>(
             eprintln!("[closure-cache] 写入失败：{e}");
         }
     }
-    Outcome { closure: Some(c), json }
+    Ok(Outcome { closure: Some(c), json })
 }

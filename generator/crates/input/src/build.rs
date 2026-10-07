@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::{ClosureFacts, SysPropFacts};
+use crate::facts::ClosureFacts;
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -119,10 +119,8 @@ pub struct EmitInput {
     pub sam_types: BTreeSet<String>,
     /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
     pub module_services: Vec<(String, String)>,
-    /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
-    pub system_properties: SysPropFacts,
-    /// 构建期引导映像（分析器 `boot_image_data`；无映像 / 求值失败 → None）：发射层物化映像区与启动序列
-    pub boot_image: Option<closure::image::ImageData>,
+    /// 构建期引导映像（分析器 `boot_image_data`）：发射层物化映像区与启动序列
+    pub boot_image: closure::image::ImageData,
     /// 模块资源（档案侧：非用户域调用链上方法体推导，并入分析器按名求出的资源；缺失者不列）
     pub module_resources: Vec<(String, Vec<u8>)>,
     /// 用户侧模块资源：用户类调用链上方法体指名、档案侧未收的 JDK 模块资源（如
@@ -474,7 +472,6 @@ impl<'a> BuildInput<'a> {
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
             sam_types: f.sam_types.iter().cloned().collect(),
             module_services: f.seeds.module_services.clone(),
-            system_properties: f.system_properties.clone(),
             boot_image: f.boot_image.clone(),
             module_resources,
             user_module_resources,

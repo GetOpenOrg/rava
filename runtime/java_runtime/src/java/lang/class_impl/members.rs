@@ -114,39 +114,6 @@ impl Class {
 }
 
 impl Class {
-    /// `enumConstantDirectory()`（包私有；`Enum.valueOf` 的查表面，FS-H8）：JDK 体经
-    /// `getEnumConstantsShared()`（反射调用 `values()`）建「常量名 → 常量」映射并缓存于
-    /// `enumConstantDirectory` 字段。原生侧枚举宇宙取运行时常量目录（`java_class!` 宏在类初始化
-    /// 后登记，与 `JavaLangAccess.getEnumConstantsShared` 同源），其余逐句同 JDK：先查字段缓存；
-    /// 非枚举类（修饰符无 ACC_ENUM）抛 `IllegalArgumentException(getName() + " is not an enum class")`。
-    #[jvm_boundary]
-    pub fn __impl_enumConstantDirectory(&self) -> Result<crate::java::util::Map<Object, Object>> {
-        let cached = self.__get_enumConstantDirectory();
-        if !cached.is_jvm_null() {
-            return Ok(cached);
-        }
-        let cls_name = format!("{}", self.__get_name());
-        // JVM 反射路径语义：读常量宇宙前强制目标类初始化（常量目录在 `<clinit>` 之后登记）
-        crate::ensure_class_initialized(&cls_name)?;
-        let entries = if self.getModifiers()? & 0x4000 != 0 {
-            crate::constant_directory_entries(&cls_name)
-        } else {
-            None
-        };
-        let Some(entries) = entries else {
-            let ex = crate::java::lang::IllegalArgumentException::new_str(
-                String::from(format!("{} is not an enum class", cls_name).as_str()))?;
-            return Err(ex.into());
-        };
-        let map = crate::java::util::HashMap::<Object, Object>::new()?;
-        for (name, value) in entries {
-            let _ = map.put(Object::from(String::from(name.as_str())), value)?;
-        }
-        let dir = <crate::java::util::Map<Object, Object> as ::std::convert::From<Object>>::from(Object::from(map));
-        self.__set_enumConstantDirectory(Clone::clone(&dir));
-        Ok(dir)
-    }
-
     /// 本类按 (名字, 描述符) 声明的方法（VM 直取反射对象：动态代理的接口方法对象，
     /// HotSpot 同样经方法元数据构造）。未声明 → null。
     pub(crate) fn __table_method(&self, name: &str, descriptor: &str) -> Result<crate::java::lang::reflect::Method> {

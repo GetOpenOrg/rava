@@ -132,11 +132,11 @@ impl<'c, 'a> Plan<'c, 'a> {
     }
 }
 
-/// 发射映像模块（无映像 → 不发射，返回 false）
+/// 发射映像模块
 pub fn write_boot_image(
     ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, ems: &Emissions, homes: &BTreeMap<String, String>,
-) -> Result<bool> {
-    let Some(d) = ctx.input.boot_image.as_ref() else { return Ok(false) };
+) -> Result<()> {
+    let d = &ctx.input.boot_image;
     let plan = Plan::new(ctx, ems, d, homes)?;
     let image = values::image_struct(&plan)?;
     let start = start::start_fn(&plan, &image.links)?;
@@ -151,5 +151,5 @@ pub fn write_boot_image(
         image.text, start
     );
     w.write(&out_dir.join(&plan.root).join("src").join(format!("{MODULE}.rs")), &text)?;
-    Ok(true)
+    Ok(())
 }
