@@ -451,7 +451,7 @@ pub struct Engine<'a> {
     lookup_hosts: HashSet<MemberRef>,
     /// 本次按名取类求值中，名字推不出（某支无约束任意串，或形参 / 字段名字集不完备）
     lookup_incomplete: bool,
-    /// 名字曾推不出的按名取类调用点（恒按推不出处理，未放行时不按已知名字加载）
+    /// 名字曾推不出的按名取类调用点（恒按推不出处理：结果另接所指未知的 Class；已知名字照常在不动点上放行）
     lookup_unsure: HashSet<(usize, u32)>,
     /// 名字齐全、等待排空时放行的按名取类调用点（有序：放行次序确定）
     lookup_pending: BTreeSet<(usize, u32)>,
