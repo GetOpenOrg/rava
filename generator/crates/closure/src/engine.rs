@@ -58,6 +58,7 @@ pub use defs::{ClassNode, From, Kind, Level, Via};
 use defs::*;
 mod lambda;
 mod lambda_adapt;
+mod lambda_vals;
 mod hw;
 mod hw_mem;
 mod hw_offset;
@@ -79,6 +80,8 @@ mod field_names;
 mod field_handles;
 mod mirror_init;
 mod seeds;
+mod bundles;
+mod res_lookups;
 mod services;
 mod memo;
 mod mirror_eq;
@@ -355,6 +358,8 @@ pub struct Engine<'a> {
     callers: HashMap<usize, BTreeSet<usize>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
     call_vals: Option<Rc<[V]>>,
+    /// 进行中的 lambda 接边：捕获值所在创建点与接收者位置（`lambda_vals.rs`）
+    lambda_cap: Option<lambda_vals::LambdaCap>,
     pub unresolved: BTreeSet<String>,
     /// 活代码调用点的符号引用（常量池 owner.name:desc）：发射层槽位需求按调用点键消费
     pub refs: BTreeSet<String>,

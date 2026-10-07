@@ -49,6 +49,8 @@ LOCAL_E2E_DIR = REPO_ROOT / "tests" / "e2e" if (REPO_ROOT / "tests" / "e2e").exi
 # 可选键：skip_setup 跳过环境初始化；direct_only 只直连不降级走代理（内网服务器）；
 #         mem_reserve_gb 覆盖 MEM_RESERVE_GB；slot_mem_gb 覆盖 MIN_SLOT_MEM_GB；
 #         jump 同区跳板服务器标签：直连失败后先经跳板（direct-tcpip 通道）再降级走代理；
+#         repo_url 覆盖全局 repo_url（该服务器首次克隆用的地址；抽查 / 作业检出沿用其 origin，
+#         如访问不到内网仓库的云服务器用公开镜像）；
 #         refjdk_root 覆盖 REFJDK_ROOT（参考 JDK 根目录，放在 remote_dir 所在的数据盘）；
 #         slots 每台服务器同时跑的测试 / 作业数（缺省 1）。槽 i 的工作线程标签为 <label>#i（slots=1 时仍为
 #         <label>），各持服务器端槽锁 slot_lock_path(i)（e2e 与作业共用），内存上限 = (总内存 − 预留) / slots，

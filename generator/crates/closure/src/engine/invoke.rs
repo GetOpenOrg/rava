@@ -14,6 +14,7 @@ impl<'a> Engine<'a> {
         self.prop_key_site(m, off, opcode, mref, iface, args);
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
+        let lambda_cap = self.lambda_cap.take();
         let wrapped = self.ref_caller_sensitive(mref);
         let outer = std::mem::replace(&mut self.cs.site_wrapped, wrapped);
         let lambda = self.cs.lambda_site.take();
@@ -24,6 +25,7 @@ impl<'a> Engine<'a> {
         self.cs.lambda_site = lambda;
         self.cs.site_wrapped = outer;
         self.call_vals = None;
+        self.lambda_cap = lambda_cap;
     }
 
     pub(super) fn invoke_inner(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
@@ -306,10 +308,16 @@ impl<'a> Engine<'a> {
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();
         let base = usize::from(!is_static);
-        self.bind_params(m, t, base, ptypes.len());
-        if let Some(cv) = self.call_vals.clone() {
-            let string = self.id(STRING);
-            self.pstr_site(m, off, &cv, |j| pstrs::PSlot::M(t, base + j), |j| ptypes.get(base + j).copied().flatten() == Some(string));
+        // lambda 接边：捕获值与 SAM 实参按实现方法形参对齐（`lambda_vals.rs`）；接边期间的嵌套调用不继承
+        if let Some(c) = self.lambda_cap.take() {
+            self.bind_lambda_params(m, off, t, base, &ptypes, &c);
+            self.lambda_cap = Some(c);
+        } else {
+            self.bind_params(m, t, base, ptypes.len());
+            if let Some(cv) = self.call_vals.clone() {
+                let string = self.id(STRING);
+                self.pstr_site(m, off, &cv, |j| Some(pstrs::PSlot::M(t, base + j)), |j| ptypes.get(base + j).copied().flatten() == Some(string));
+            }
         }
         let recv_fs = self.edge_this(t, recv);
         for (j, f) in a.iter().enumerate() {
@@ -451,7 +459,7 @@ impl<'a> Engine<'a> {
         self.join_pvs(t, base, n, vals);
     }
 
-    fn join_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+    pub(super) fn join_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         let cur = self.pvals.get(&t).cloned();
         let new: Vec<PV> = (0..n)
             .map(|i| {
