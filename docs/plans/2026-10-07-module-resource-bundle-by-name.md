@@ -78,18 +78,22 @@ root = "java/util/ResourceBundle"          # 束类候选须是它的子类
 
 ### 2.5 名字推不全与具体求值写入
 
-抽查诊断（resbchk-62b4be4a）补出两处：
+抽查诊断（resbchk-62b4be4a、resbchk-ee998acd）补出三处：
 
 - **推不全的站点**：`names_of` 用 `Gap::Fail` 求值，槽推不全时（未定字段、非常量上游）只给出已知部分并置
   `lookup_partial` / `lookup_incomplete`，结果仍是 `Keys::Set`。资源束站点此前忽略这两个标记，把「只知道一部分」
   当成「全部名字」，XMLMessages 等基名于是漏选。现在 `seed_bundles` 在求值前后取走这两个标记：推不全时
   已知名字照收，站点同时记为推不出，由字面量兜底覆盖其余基名。
-- **具体求值的字段写入**：具体求值器（`engine/concrete/`）执行的 `putstatic` / `putfield` 此前只把写入值的常量格投影
-  （整数 / 长整数 / null / 其他）并入字段值集，String 字段的字段常量集 `field_strs` 与字段字符串槽 `PSlot::F`
-  都没有收到写入——字段读取方于是误判为「字节码写入已全部推出」。`SyncFactory.initMapIfNecessary` 在具体求值中
-  把拼接结果 `javax/sql/rowset/rowset.properties` 写进 `ROWSET_PROPERTIES`，按名读取的资源只看到 `<clinit>`
-  里的 `rowset.properties`。现在写入投影新增 `Put::Str`（字符串内容可读时），物化时（`concrete_str_puts`）与字节码
-  写入同一口径并入两处：内容可读为字面量，不可读则字段槽推不出。
+- **String 字段的非常量写入**：`SyncFactory.initMapIfNecessary` 把拼接结果 `"javax" + strFileSep + … + "rowset.properties"`
+  写进 `ROWSET_PROPERTIES`。字段字符串槽 `PSlot::F` 此前只收字面量写入与形参透传，拼接 / 调用结果写入只把槽记为推不出；
+  而读者直接读字段时名字段按内部求值（`Gap::Fail`）处理，推不全只置引擎标志，按名读取的资源把 `<clinit>` 里的
+  `rowset.properties` 当成全部名字。现在非常量写入与非常量实参同一口径，登记为槽的输入
+  （写入方, putfield / putstatic 偏移, `FIELD_VALUE`）：读者在写入方帧里按拼接段求出名字（`strFileSep` 本身又经字段槽
+  取得 `/`），求不出的写入（如系统属性一支）使槽推不全。值未知的写入仍使槽推不出。
+  按名读取的资源只取已知名字，求值前后保存引擎的推不全标志，不外泄给其他站点。
+- **具体求值的字段写入**：具体求值器（`engine/concrete/`）执行的写入此前只投影为常量格（整数 / 长整数 / null / 其他），
+  String 字段的常量集 `field_strs` 与字段槽都收不到。现在投影新增 `Put::Str`（字符串内容可读时），物化时
+  （`concrete_str_puts`）与字节码写入同一口径并入：内容可读为字面量，不可读则字段槽推不出。
 
 ### 2.6 事实链路
 
