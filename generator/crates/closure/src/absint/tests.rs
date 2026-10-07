@@ -552,3 +552,41 @@ fn image_object_results_compare_by_identity() {
     assert_eq!(a.reachable, vec![true; 7]);
     assert_eq!(a.mirror_field_assumed, vec![0]);
 }
+
+/// 桩 Oracle：静态字段读的常量格答复（`Some(非空引用)` = 映像值与全部可达写入都非空）
+struct StaticNonNull(Option<V>);
+
+impl Oracle for StaticNonNull {
+    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+        Ret::Unknown
+    }
+    fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
+        self.0.clone()
+    }
+    fn type_live(&self, _: &str) -> bool {
+        true
+    }
+}
+
+/// `X x = B.f; if (x == null) { ... }` 形态（`System$LoggerFinder.accessProvider` 同形）：静态字段常量格为非空引用时
+/// 空分支不可达；答复未知时两支都可达
+#[test]
+fn nonnull_static_field_folds_null_test() {
+    let f = MemberRef { owner: "p/B".into(), name: "f".into(), desc: "Lp/X;".into() };
+    let code = code_of(
+        vec![
+            (0, op::GETSTATIC, Operand::Field(f)),
+            (3, 0x4b, Operand::None),         // astore_0
+            (4, 0x2a, Operand::None),         // aload_0
+            (5, 0xc7, Operand::Branch(9)),    // ifnonnull
+            (8, op::RETURN, Operand::None),
+            (9, op::RETURN, Operand::None),
+        ],
+        10,
+    );
+    let nonnull = V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None };
+    let a = analyze("p/A", "()V", true, &code, &StaticNonNull(Some(nonnull)));
+    assert_eq!(a.reachable, vec![true, true, true, true, false, true]);
+    let a = analyze("p/A", "()V", true, &code, &StaticNonNull(None));
+    assert_eq!(a.reachable, vec![true; 6]);
+}

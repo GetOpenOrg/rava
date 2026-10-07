@@ -120,6 +120,7 @@ mod open_world;
 pub mod concrete;
 mod caller;
 mod image_start;
+mod static_init;
 mod jca_order;
 
 use graph::FlowGraph;

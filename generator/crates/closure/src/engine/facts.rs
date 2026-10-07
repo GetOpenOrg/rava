@@ -25,7 +25,7 @@ impl PV {
     /// 返回值 / 实参 → 返回常量格与形参常量格：在 [`PV::of`] 之上，确定非空、无标签的引用记为「非空引用」
     /// （[`nonnull_ref`]）。调用点 / 被调方法体据此判定 `ifnull` / `ifnonnull`（如恒返回新建对象的工厂方法、
     /// 实参恒为调用者类镜像的形参）；形参入口按形参序号换来源、按描述符补类型（`absint::entry_state`）。
-    /// 字段常量格不取它（字段值的来源须保留）
+    /// 字段常量格只有静态字段取它（`static_init::write_pv`；读点按描述符补类型），实例字段不取
     pub(super) fn of_ret(v: &V) -> PV {
         match v {
             V::Ref { nonnull: true, obj: None, .. } => PV::Const(nonnull_ref()),
@@ -45,10 +45,13 @@ impl PV {
                 crate::absint::ints::union(x, y).map_or(PV::Top, PV::Const)
             }
             // 同一对象标签（或 null 与标签对象）：合流保留标签，可空性取并
-            (Some(PV::Const(x)), PV::Const(y)) if x.obj().is_some() || y.obj().is_some() => match x.join(y) {
-                j @ V::Ref { .. } if j.obj().is_some() => PV::Const(j.stripped()),
-                _ => PV::Top,
-            },
+            (Some(PV::Const(x)), PV::Const(y)) if (x.obj().is_some() || y.obj().is_some()) && matches!(x.join(y), V::Ref { obj: Some(_), .. }) => {
+                PV::Const(x.join(y).stripped())
+            }
+            // 其余两侧都确定非空的引用（不同标签、不同字符串常量）：非空引用
+            (Some(PV::Const(x)), PV::Const(y)) if x.is_ref() && y.is_ref() && x.nonnull() == Some(true) && y.nonnull() == Some(true) => {
+                PV::Const(nonnull_ref())
+            }
             _ => PV::Top,
         }
     }
@@ -100,6 +103,8 @@ pub(super) struct Ctx<'a> {
     pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 映像 VM 模块表：包 → [(模块对象, 定义加载器为引导)]（装入映像时建立；类镜像模块读折叠用）
     pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
+    /// 映像中构建期初始化类的静态字段初值（装入映像时建立，见 `static_init.rs`）
+    pub(super) img_statics: std::cell::OnceCell<super::static_init::ImgStatics>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
@@ -366,10 +371,11 @@ impl Ctx<'_> {
             self.note_aux_read(&fi.key);
         }
         if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-            return self.static_const(m, &fi.key, fi.constant.as_ref());
+            return self.static_const(m, &fi.key, fi.constant.as_ref()).or_else(|| self.image_final(&fi.key));
         }
         m?;
-        self.fvals.borrow().get(&fi.key).cloned().unwrap_or_else(|| default_pv(&fi.key.desc)).value()
+        let v = self.fvals.borrow().get(&fi.key).cloned();
+        v.unwrap_or_else(|| if fi.access & acc::STATIC != 0 { self.static_initial(&fi.key) } else { default_pv(&fi.key.desc) }).value()
     }
 
     /// 调用点的静态摘要（清单事实 + 唯一字节码目标）

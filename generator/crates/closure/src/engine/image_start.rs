@@ -84,6 +84,8 @@ impl<'a> Engine<'a> {
             modules_fed: false,
             data: data.clone(),
         }));
+        let st = self.img.as_ref().expect("映像").statics.clone();
+        self.image_statics_install(&st, &data.build_time);
         // 残差调用 / 区段在其构建期档位的上下文中分析（`levels_boot.rs`）；重放 native 与运行期初始化类在本体
         let mut lc = NOCTX;
         for st in &data.steps {
@@ -216,7 +218,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 映像值的常量格：int / long / null / 字符串（映像字符串对象的内容）
-    fn image_pv(&self, v: IVal) -> PV {
+    pub(super) fn image_pv(&self, v: IVal) -> PV {
         match v {
             IVal::I(x) => PV::Const(V::Int(x)),
             IVal::J(x) => PV::Const(V::Long(x)),

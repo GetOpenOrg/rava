@@ -118,7 +118,7 @@ impl V {
         }
     }
 
-    fn is_ref(&self) -> bool {
+    pub(crate) fn is_ref(&self) -> bool {
         matches!(self, V::Null | V::Ref { .. } | V::Str(..) | V::Class(..))
     }
 
@@ -235,6 +235,14 @@ fn value_of(ft: &FieldType, s: Src) -> V {
             (FieldType::Prim(b'B' | b'C' | b'I' | b'S' | b'Z'), Src::Param(i)) => V::Arg(i),
             _ => V::Top,
         }
+    }
+}
+
+/// 字段读的常量格非空引用不带类型（`PV::of_ret`）：补上字段声明类型
+fn typed(v: V, ft: &FieldType) -> V {
+    match v {
+        V::Ref { ty: None, nonnull, src, obj } if ft.is_reference() => V::Ref { ty: Some(ft_name(ft)), nonnull, src, obj },
+        v => v,
     }
 }
 
@@ -959,7 +967,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 match opc {
                     op::GETSTATIC => {
                         let own = s.finals.iter().find(|(g, _)| g == f).map(|(_, v)| v.clone());
-                        let v = own.or_else(|| self.folded(opc, off, self.oracle.field(opc, f, None))).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let v = own.or_else(|| self.folded(opc, off, self.oracle.field(opc, f, None)).map(|v| typed(v, &ft))).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     op::PUTSTATIC => {
@@ -976,7 +984,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                     op::GETFIELD => {
                         recv = Some(pop(s)?);
                         let known = self.oracle.field(opc, f, recv.as_ref()).or_else(|| self.param_mirror_field(recv.as_ref(), f));
-                        let v = self.folded(opc, off, known).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
+                        let v = self.folded(opc, off, known).map(|v| typed(v, &ft)).unwrap_or_else(|| value_of(&ft, Src::Site(off)));
                         push_typed(&mut s.stack, &ft, v);
                     }
                     _ => {

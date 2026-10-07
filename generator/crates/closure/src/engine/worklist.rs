@@ -160,7 +160,7 @@ impl<'a> Engine<'a> {
     /// 静态字段的缺省值总可观察（初始化前 / 初始化中读）；实例字段的缺省值只在有对象处于该状态时并入：
     /// 抽象分配（`alloc_defaults`）或物化快照中未写的字段。值集为空（尚无对象）时读者按缺省值读
     pub(super) fn field_put(&mut self, key: &MemberRef, v: PV) {
-        let cur = self.ctx.fvals.borrow().get(key).cloned().or_else(|| self.is_static_key(key).then(|| default_pv(&key.desc)));
+        let cur = self.ctx.fvals.borrow().get(key).cloned().or_else(|| self.is_static_key(key).then(|| self.ctx.static_initial(key)));
         let new = PV::join(cur.as_ref(), &v);
         if cur.as_ref() == Some(&new) {
             return;
