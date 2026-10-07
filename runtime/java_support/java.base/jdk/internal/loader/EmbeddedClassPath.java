@@ -10,8 +10,11 @@
  * kind = class_path）与过渡期的 ClassLoader 资源族手写。
  * 方案：docs/plans/2026-10-01-c1d-closure-bloat.md §30.15
  *
- * URL 形如 rava-cp:/<encodePath(资源名)>，同名第 i（≥ 1）份带 #i；构造时显式给出本类的 Handler
- *（不经协议名查找处理器，toString 后按字符串重建 URL 不受支持，见计划 §30.15 取舍 T2）。
+ * URL 形如 ravacp:/<encodePath(资源名)>，同名第 i（≥ 1）份带 #i，主机为空串（与 JVM 上类路径 file URL 同形，
+ * 字符串重建后 equals 成立）。协议处理器是 VM 支持类 sun.net.www.protocol.ravacp.Handler：本类构造 URL 时显式
+ * 给出它；由字符串重建的 URL（new URL(url.toString())、URI.create(s).toURL()）经 URL.getURLStreamHandler 的
+ * 内建工厂按协议名 "sun.net.www.protocol." + 协议 + ".Handler" 反射构造同一个类，连接同样读嵌入表
+ *（计划 §30.16，取舍 T2 (b)）。
  *
  * 编译：转译时以当前 JDK 的 javac --patch-module java.base 编入 jdk.internal.loader 包
  * （generator/crates/resolve/src/image.rs VM 支持类目录）。
@@ -33,11 +36,11 @@ import java.util.List;
 
 import sun.net.www.ParseUtil;
 
-final class EmbeddedClassPath {
-    /** URL 协议名 */
-    static final String PROTOCOL = "rava-cp";
+public final class EmbeddedClassPath {
+    /** URL 协议名：协议处理器类为 sun.net.www.protocol.<协议名>.Handler（URL$DefaultFactory 的命名约定） */
+    static final String PROTOCOL = "ravacp";
 
-    private static final Handler HANDLER = new Handler();
+    private static final URLStreamHandler HANDLER = new sun.net.www.protocol.ravacp.Handler();
 
     private EmbeddedClassPath() {}
 
@@ -75,21 +78,21 @@ final class EmbeddedClassPath {
     private static URL url(String name, int index) {
         String file = "/" + ParseUtil.encodePath(name, false) + (index == 0 ? "" : "#" + index);
         try {
-            return new URL(PROTOCOL, null, -1, file, HANDLER);
+            return new URL(PROTOCOL, "", -1, file, HANDLER);
         } catch (MalformedURLException e) {
             throw new InternalError(e);
         }
     }
 
-    /** 嵌入资源的 URL 处理器：连接读表字节 */
-    static final class Handler extends URLStreamHandler {
-        @Override
-        protected URLConnection openConnection(URL u) {
-            return new Connection(u);
-        }
+    /**
+     * 嵌入资源 URL 的连接（协议处理器 sun.net.www.protocol.ravacp.Handler 的 openConnection）：
+     * 与 {@link #url} 互逆——名取 URL 路径去掉首个 / 后解码，份序取 ref。连接时未命中 → FileNotFoundException
+     */
+    public static URLConnection openConnection(URL u) {
+        return new Connection(u);
     }
 
-    /** 嵌入资源的连接：字节取自嵌入表（名取 URL 路径去掉首个 /，份序取 ref） */
+    /** 嵌入资源的连接：字节取自嵌入表 */
     static final class Connection extends URLConnection {
         private byte[] data;
 
@@ -100,15 +103,38 @@ final class EmbeddedClassPath {
         @Override
         public void connect() throws IOException {
             if (data == null) {
-                String name = ParseUtil.decode(url.getPath().substring(1));
+                // 由字符串重建的 URL 形状任意：路径不以 / 开头、转义非法、ref 不是份序时同未命中
+                String name = resourceName(url.getPath());
                 String ref = url.getRef();
-                byte[] b = bytes(name, ref == null ? 0 : Integer.parseInt(ref));
+                int index = ref == null ? 0 : copyIndex(ref);
+                byte[] b = name != null && index >= 0 ? bytes(name, index) : null;
                 if (b == null) {
                     throw new FileNotFoundException(url.toString());
                 }
                 data = b;
             }
             connected = true;
+        }
+
+        /** URL 路径对应的资源名（去掉首个 / 后解码）；路径不以 / 开头或转义非法 → null */
+        private static String resourceName(String path) {
+            if (!path.startsWith("/")) {
+                return null;
+            }
+            try {
+                return ParseUtil.decode(path.substring(1));
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+        }
+
+        /** ref 的份序（十进制非负整数）；否则 -1 */
+        private static int copyIndex(String ref) {
+            try {
+                return Integer.parseInt(ref);
+            } catch (NumberFormatException e) {
+                return -1;
+            }
         }
 
         @Override

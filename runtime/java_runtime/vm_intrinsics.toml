@@ -73,7 +73,8 @@ kind = "class_path"
 reason = "类路径资源为构建期嵌入表（hasClassPath 判定保留）→ EmbeddedClassPath.findResources"
 
 # 类路径资源表的读取入口（§30.15）：其一在闭包调用链上时，发射层把应用类路径（用户与库档案）的全部文件
-# 按名嵌入用户侧元数据（UserMeta.class_path_resources），否则为空表
+# 按名嵌入用户侧元数据（UserMeta.class_path_resources），否则为空表。资源 URL（协议 ravacp）的连接与由字符串
+# 重建的 URL 都经 EmbeddedClassPath.openConnection 读这两个入口（§30.16）
 [class_path]
 resource_readers = [
     "jdk/internal/loader/EmbeddedClassPath.count:(Ljava/lang/String;)I",
@@ -784,6 +785,10 @@ members = [
 # 应用无法构造其中的处理器；pkgs 前缀取到的同样是 `<前缀>.<protocol>.Handler`）、内建工厂 URL$DefaultFactory
 # （file / jar / jrt 直接 new，其余按 "sun.net.www.protocol." + protocol + ".Handler" 反射构造）——
 # 返回的内建处理器都是 sun/net/www/protocol/<protocol>/Handler。
+# 构建期嵌入资源的协议 ravacp 同走这条路径：其处理器是 VM 支持类 sun/net/www/protocol/ravacp/Handler
+# （runtime/java_support，EmbeddedClassPath 构造 URL 时 new 它而入闭包），由字符串重建的 ravacp URL 经内建工厂的
+# 按名取类（[facts] class_lookups：协议名推不出时按闭包内类名匹配 "sun.net.www.protocol.*.Handler"）取到同一个类，
+# 按本条 class_pattern 键为 "ravacp"（计划 c1d §30.16）
 # URL(URL context, String spec, URLStreamHandler handler) 的查找点读 this.protocol：只在 handler 实参为 null、且未沿用
 # context 的处理器（context.handler 恒非 null）时到达，此时 spec 必带协议且 protocol 即 spec 解析出的协议名；
 # spec 不带协议时要么沿用 context 处理器、要么抛 MalformedURLException("no protocol")，不按协议查找
