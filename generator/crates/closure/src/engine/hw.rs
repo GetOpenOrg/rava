@@ -88,7 +88,7 @@ impl<'a> Engine<'a> {
                 None => self.add_to(Node::R(m), &TypeSet::open(rt)),
             }
         }
-        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类 / 元素类型镜像）时不经 open 返回值交出
+        // 返回值已精确建模（内存读取 / 接收者浅拷贝 / 类镜像 / 超类 / 元素类型镜像 / 静态字段基址）时不经 open 返回值交出
         let modeled = reads
             || ret_traced
             || array_ret.is_some()
@@ -99,7 +99,8 @@ impl<'a> Engine<'a> {
             || self.man.returns_declaring_class(&ks)
             || self.man.returns_primitive_class(&ks)
             || self.man.defined_class(&ks).is_some()
-            || self.man.array_allocator(&ks).is_some();
+            || self.man.array_allocator(&ks).is_some()
+            || self.man.returns_static_base(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {
