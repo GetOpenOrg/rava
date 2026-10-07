@@ -161,7 +161,7 @@ impl<'a> Engine<'a> {
         let fi = self.field_node(f.clone());
         for v in ps.iter().filter_map(put_str) {
             self.field_strs_put(f, v.as_ref());
-            self.pstr_field_put(m, fi, v.as_ref());
+            self.pstr_field_put(m, None, fi, v.as_ref());
         }
     }
 

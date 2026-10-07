@@ -54,7 +54,11 @@ impl<'a> Engine<'a> {
         let owner = self.methods[m].key.owner.clone();
         let f = Frame { m: Some(m), a: &a, owner: &owner, up: None };
         let prev = self.cur_site.replace((m, off));
+        // 推不全的段（直接读字段等内部求值）只取已知名字：资源只能来自闭包内已知的名字，推不出的部分无从嵌入
+        let saved = (std::mem::take(&mut self.lookup_incomplete), std::mem::take(&mut self.lookup_partial));
         let parts = self.name_parts(&f, &v, Gap::Class, 0);
+        self.lookup_incomplete = saved.0;
+        self.lookup_partial = saved.1;
         self.cur_site = prev;
         let Some(pats) = parts.as_deref().and_then(expand) else { return vec![] };
         let mut out = Vec::new();

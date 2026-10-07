@@ -17,7 +17,8 @@
 //! - 递归传参成环（槽在求值栈上）或上游槽过多时推不出。
 //!
 //! String 字段同样有槽（`PSlot::F`，按字段、不分接收者）：字节码写入的字面量并入、写入本方法形参时登记子集边
-//! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
+//! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）与非常量实参同一口径登记为字段槽的输入，读者在写入方帧里
+//! 按拼接段求名字（求不出即推不出）；值未知的写入使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
 //! 读者不取槽。读取 String 字段的名字段由此取得全部写入名字（如按类型名查找服务时，类型名存于列表对象的字段）。
 
 use super::class_lookup::{event_at, expand, Gap, Part, MAX_NAMES};
@@ -42,7 +43,8 @@ pub(super) struct PStrs {
     sites: HashMap<(usize, usize), BTreeSet<u32>>,
     /// 子集边的逆：槽 → 流入它的槽
     pred: HashMap<PSlot, BTreeSet<PSlot>>,
-    /// 流入 String 形参槽的非常量实参：(调用方, 调用偏移, 实参序号（不含接收者）)
+    /// 流入 String 形参槽的非常量实参：(调用方, 调用偏移, 实参序号（不含接收者）)；
+    /// 流入 String 字段槽的非常量写入：(写入方, putfield / putstatic 偏移, [`FIELD_VALUE`])
     inputs: HashMap<PSlot, BTreeSet<(usize, u32, usize)>>,
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
@@ -56,6 +58,9 @@ pub(super) struct PStrs {
     /// 正在求值的起点槽
     active: Vec<PSlot>,
 }
+
+/// 非常量输入为字段写入值（而非调用点实参）时的序号
+const FIELD_VALUE: usize = usize::MAX;
 
 /// 读者遍历的上游槽数上限：超出按推不出处理
 const MAX_SLOTS: usize = 256;
@@ -191,8 +196,9 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 方法 m 中字节码写入 String 字段（字段节点 fi）的值 v（None = 值未知）并入字段槽
-    pub(super) fn pstr_field_put(&mut self, m: usize, fi: usize, v: Option<&V>) {
+    /// 方法 m 偏移 off 写入 String 字段（字段节点 fi）的值 v（None = 值未知）并入字段槽。非常量写入有字节码写入点时
+    /// 与非常量实参同一口径登记为槽的输入（读者在写入方帧里按拼接段求名字），否则（具体求值物化）槽推不出
+    pub(super) fn pstr_field_put(&mut self, m: usize, off: Option<u32>, fi: usize, v: Option<&V>) {
         let slot = PSlot::F(fi);
         match v {
             Some(V::Null) => {}
@@ -205,6 +211,15 @@ impl<'a> Engine<'a> {
                     if let Src::Param(i) = s {
                         self.pstr_edge(PSlot::M(m, *i as usize), slot);
                     }
+                }
+            }
+            Some(v) if off.is_some() => {
+                let lits = v.lit_ids();
+                if !lits.is_empty() {
+                    self.pstr_add(slot, lits.into_iter().collect());
+                }
+                if self.pstr.inputs.entry(slot).or_default().insert((m, off.unwrap_or_default(), FIELD_VALUE)) {
+                    self.pstr_wake(slot);
                 }
             }
             _ => {
@@ -327,10 +342,11 @@ impl<'a> Engine<'a> {
         if ca.conservative {
             return Err(());
         }
-        // 调用点实参不含接收者；lambda 捕获值为创建点 indy 的实参（`lambda_vals.rs`）
-        let v = match event_at(&ca, off, |e| matches!(e, Event::Invoke { .. } | Event::Indy { .. })) {
-            Some(Event::Invoke { opcode, args, .. }) => args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j),
-            Some(Event::Indy { args, .. }) => args.get(j),
+        // 调用点实参不含接收者；lambda 捕获值为创建点 indy 的实参（`lambda_vals.rs`）；字段槽的输入为写入值
+        let v = match event_at(&ca, off, |e| matches!(e, Event::Invoke { .. } | Event::Indy { .. } | Event::Field { .. })) {
+            Some(Event::Invoke { opcode, args, .. }) if j != FIELD_VALUE => args.get(usize::from(*opcode != classfile::op::INVOKESTATIC) + j),
+            Some(Event::Indy { args, .. }) if j != FIELD_VALUE => args.get(j),
+            Some(Event::Field { opcode: classfile::op::PUTFIELD | classfile::op::PUTSTATIC, value, .. }) if j == FIELD_VALUE => value.as_ref(),
             _ => return Ok(None),
         };
         let v = v.ok_or(())?.clone();
