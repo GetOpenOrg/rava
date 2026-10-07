@@ -143,6 +143,14 @@ impl TyCtx<'_> {
                     result.insert(n.clone());
                 }
             }
+            // 规则 5：本类未声明的名字，类视图（祖先类实例方法 ∪ 未实现的接口成员）内同名异参
+            // ≥2 种同样带后缀——抽象类经两个接口 / 超接口层次继承到同名异参的抽象成员时，
+            // 两者在本类 wrapper 上不得同取原名
+            for (n, ps) in &inherited {
+                if !own_all.contains_key(n) && ps.len() > 1 {
+                    result.insert(n.clone());
+                }
+            }
         }
         visiting.remove(ci.name());
         let result = Arc::new(result);
@@ -240,7 +248,10 @@ impl TyCtx<'_> {
         safe_name.to_string()
     }
 
-    /// 类 ci 视角下「只声明在接口上的成员」的 Rust 方法名
+    /// 类 ci 视角下「只声明在接口上的成员」的 Rust 方法名：类视图内同名异参 → 后缀
+    /// （`overloaded_rec` 规则 5）；否则沿超类链找同名声明——同参数段即类方法表成员（注入的
+    /// default）取原名，异参（含只由合成桥承载、不计入视图参数段的擦除接口成员，如泛型
+    /// `compareTo(T)` 的 `compareTo(Object)`）带后缀
     pub fn interface_member_local_name(&self, ci: &ClassInfo, mname: &str, desc: &str) -> String {
         if self.hierarchy_overloaded_names(ci).contains(mname) {
             return mangle_name(self.manifest, mname, desc);
@@ -251,7 +262,6 @@ impl TyCtx<'_> {
         while let Some(c) = cur.filter(|c| !seen.contains(c.name())) {
             seen.insert(c.name().to_string());
             if let Some(declared) = self.class_method_param_sets(c).1.get(mname) {
-                // 同参数列表 = 该成员就在类的方法表里（注入的接口 default）→ 名字由类链决定
                 return if declared.contains(&params) {
                     mname.to_string()
                 } else {
