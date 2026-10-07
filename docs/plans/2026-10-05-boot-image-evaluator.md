@@ -875,14 +875,24 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 #### 5.6.5 S2（泛型签名精度）
 
-未实施。`Class.getGenericInterfaces` 已是 `[concrete] entries` 的实例方法入口（接收者值集全为所指已知的类镜像时逐镜像具体求值），S2 的切口 `ConcurrentHashMap.comparableClassFor@21` 仍拉入 `sun/reflect/generics`，说明该调用点回退了抽象调用边；回退原因（接收者含 open 类型 / 非镜像类、超过 64 组、或某镜像求值失败）须读 `--flows @concrete` 的诊断才能定，本步唯一的服务器作业（bimg4-s2-cabe9fb0）因输出截断（`tail -150` 只留下 summary JSON）没有取到该行。下一步作业命令：
+**诊断**（us1 Linux JDK 21 HelloWorld `rava closure --flows @concrete`，作业 bimg4-s2c-9c78c3ac / s2d-8cebe1b8 / s2e-8cebe1b8（`@grow` / `@edge` 探针）/ s2f-13bafec6）：
 
-```
-build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -o /tmp/hw.json --flows @concrete > /tmp/flows.txt 2>&1; grep -n "comparableClassFor" /tmp/flows.txt
-```
-
-按诊断分两种终态做法：回退原因是「接收者含 open / 非镜像」时，把 `getGenericSignature0` 在抽象解释中按接收者镜像集折叠（集合内各类均无类签名属性 → null，`getGenericInfo` 取 `ClassRepository.NONE`，`ClassRepository.make` 一段不可达；open 类型须先由键类型集收窄）；回退原因是某镜像求值失败时，补求值器语义。`HashMap.comparableClassFor` 同形，一并处理。
-
+- 诊断粒度：`[concrete]` 结果原按调用点覆盖写，「28 组」只是最后一个上下文的结果；9c78c3ac 改为按调用点累计各上下文结果（成功列出各组实参，至多 64 组；回退同列）。
+- `comparableClassFor@21`（HashMap / ConcurrentHashMap 同形）在多数上下文具体求值成功，但每个方法各有一个上下文回退为抽象调用边，`sun/reflect/generics` 由该边拉入。回退原因：
+  1. **接收者超过 64 个**：键来源为 open(Comparable) / 宽集合的上下文（树化桶 `TreeBin` 克隆、映像对象上下文等）；
+  2. 修复前另有 `[Ljava/lang/String;`（数组的接口）与 Thread、ReferenceHandler、InnocuousThread、WeakReference、ModuleReferenceImpl 等**非 Comparable 接收者**。
+- 非 Comparable 接收者的根因（s2e 探针）：instanceof 收窄节点 `@1` 正确过滤为 Comparable 的子集，但「类 × 接口」收窄保留 open(Thread)（Thread 的子类可能实现 Comparable）；`Object.getClass` 是 final，走非虚调用 `edge_recv`，接收者值集在那里被物化为 `Feed::S`，丢失来源节点，`getClass` 结果按 open(Thread) 全量展开成镜像（探针显示 `@8` 的增长为「直接」注入）。
+- **修复（终态做法）**：
+  - 8cebe1b8：接口类型判定站点（instanceof 成立一侧 / checkcast 目标为接口 I）登记为节点的接口界 `open_bounds`；镜像流 `mflow` / G 增长重开 `mirror_reopen` 只展开同时 ⊂ I 的子类型。
+  - 13bafec6：非虚调用物化接收者时，若含 open 的来源都是同一接口判定站点，以 `Recv::Bounded(值集, I)` 带上接口界，`getClass` 结果按界展开。
+  - 实测 s2f-13bafec6：两个 `comparableClassFor@21` 的成功上下文接收者全为 Comparable（String、Integer、Long、Character、File、UnixPath、StandardOpenOption、TextStyle、LocaleProviderAdapter$Type），数组接收者回退消失；闭包仍为 3043 类 / 18,093 方法（未变）。
+- **结论：S2 的预期减量（≈ −41 类）单靠收窄不可达**，原因有二：
+  1. **真泛型接收者**：File、Integer、UnixPath 与各枚举实现 `Comparable<T>`，带类签名属性。桶树化时 `getGenericInterfaces` 在运行期确实解析签名（`ClassRepository.make` → `SignatureParser`）。§5.6.5 原案「集合内各类均无签名 → null」的折叠对它们不成立。
+  2. **open(Comparable) 上下文**：键来源为开放类型（用户可扩展），接收者超过 64 个且不可枚举，只能走抽象边。
+- **终态方向（待决，见 §5.6.7）**：在构建期把热路径类镜像的 `Class.genericInfo`（`ClassRepository`）物化进引导映像。即保留映像镜像上 memo 字段的写入，运行期命中缓存不再解析签名。open(Comparable) 的上下文仍要为映像外的类保留解析路径，所以 `sun/reflect/generics` 能否出闭包取决于开放世界下的可达性判定。这是架构选择，未实施。
+- 其余 `[concrete]` 回退（与 S2 无关，留档）：
+  - `Runtime$VersionPattern.<clinit>@2`、`LocaleResources.<clinit>@29`：求值读到 VM 承载的静态字段 `Integer$IntegerCache.high`；
+  - `Formatter.format@11`：格式串实参来自形参，不可枚举。
 
 #### 5.6.6 待验证清单（合批测试；本节提交只做过 cargo check）
 
@@ -908,6 +918,11 @@ build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -
    - 单测全量通过（`analyze` 签名改为 `Result`；`ClosureFacts::from_json` 缺 `boot_image_data` 即错）；
    - `java_runtime` 编译：`system_impl.rs`（`registerNatives` 空体、删 `host_property` / `derived_vm_property`）、`meta.rs`（删 `VM_CONST_PROPERTIES` / `VM_DYNAMIC_PROPERTIES` 外部表）、`lib.rs`（删 `vm_boot_init`）；
    - 系统属性抽查（输出与 JDK 相同，属性表现只来自映像）：TestSystemStableProps、TestBootLayer、TestIntegerCacheSpec、TestDirectBuffer。
+7. 接口界收窄（§5.6.5，9c78c3ac / 8cebe1b8 / 13bafec6）：
+   - 全量单测，重点为 `closure_independent_of_order`（`open_bounds` 在 InstanceOf / CheckCast 事件登记；`Recv::Bounded` 依赖来源节点当时的值集，须与工作队列次序无关）及反射 / getClass 相关闭包单测；
+   - 抽查 getClass 密集的用例：TestTreeMapComparable 类用例、任一 HashMap 树化用例、反射 `getGenericInterfaces` 用例，输出与 JDK 相同；
+   - 已实测：HelloWorld `--flows @concrete` 中 `comparableClassFor@21` 的接收者全为 Comparable（s2f-13bafec6）。
+8. TestClassResourceStream（batch-1007 抽查回归）：**根因不在本分支**。`getResource` / `getSystemResource` 的 4 行差异（self-url、fqcn-abs、jdk-res、loader-eq）来自 `class_loader_impl.rs` 中这两个方法在集成分支仍是返回 null 的 `#[jvm_boundary]`。10-07 通过的 url2m-95b2d84e-r2 跑在 `c1d-url-b2` 分支（95b2d84e，`EmbeddedClassPath::findResource` / `findResources`），该分支尚未并入集成线与 batch-1007。待 `c1d-url-b2` 并入后复验，本分支不改。
 
 #### 5.6.7 遗留与待决
 
@@ -916,6 +931,7 @@ build/analyzer-target/release/rava closure tests/e2e/01_basics/HelloWorld.java -
 3. `getSavedProperty` 改为真实语义（读映像 `savedProps`），`[vm_constants]` 剪枝失效；`Integer$IntegerCache` 等调用点的闭包变化待测（见清单第 5 条）。
 4. ~~`concrete/vm.rs` 740 行~~：已按职责拆为 `vm.rs`（值 / 非正常完成 / 对象与方法信息表示 / `Vm` 本体与 `Env`，353 行）、`vm_heap.rs`（分配、数组、字段读写与纪元检查、撤销、身份哈希，243 行）、`vm_link.rs`（字符串 / 类镜像驻留、方法解析 / 选择 / 方法信息，159 行），纯搬移无语义改动。
 5. `Class` 仍在 `[vm_boundary]` 与 `clinit_carried`（native 与 struct 归属），随第 5 / 6 步处理。
+6. S2 的类减量：构建期物化热路径镜像的 `Class.genericInfo` 进引导映像（§5.6.5 终态方向），待决。
 
 #### 5.6.8 映像必需：取消无映像回退（dcabf9e3）
 
