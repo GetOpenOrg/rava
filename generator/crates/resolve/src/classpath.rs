@@ -321,6 +321,45 @@ impl ClassPath {
         self.overlay_modules.get(&idx).map(String::as_str)
     }
 
+    /// JDK 侧资源：只在 JDK / 镜像档案中查（模块资源；用户与库档案的文件属于应用类路径，由
+    /// [`ClassPath::class_path_files`] 承载）。`<类名>.class` 取该 JDK 类的解析胜出字节（与类本身同源，
+    /// 镜像改写类优先于 jmod）；其余按档案顺序首个命中
+    pub fn jdk_resource(&self, path: &str) -> Option<Vec<u8>> {
+        if let Some(name) = path.strip_suffix(".class") {
+            return match self.origin(name) {
+                Some(Origin::Jdk | Origin::Image) => self.bytes(name),
+                _ => None,
+            };
+        }
+        let mut a = lock(&self.archives);
+        for (i, arch) in a.iter_mut().enumerate() {
+            if matches!(self.origins[i], Origin::Jdk | Origin::Image) {
+                if let Ok(Some(b)) = arch.read_resource(path) {
+                    return Some(b);
+                }
+            }
+        }
+        None
+    }
+
+    /// 应用类路径（用户与库档案，加入序）的全部文件：(资源名, 字节)，按名稳定排序——同名按类路径序。
+    /// 读取失败记入 failures
+    pub fn class_path_files(&self) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut a = lock(&self.archives);
+        for (i, arch) in a.iter_mut().enumerate() {
+            if !matches!(self.origins[i], Origin::User | Origin::Lib) {
+                continue;
+            }
+            match arch.all_files() {
+                Ok(files) => out.extend(files),
+                Err(e) => lock(&self.failures).push((arch.path.display().to_string(), e.to_string())),
+            }
+        }
+        out.sort_by(|x: &(String, Vec<u8>), y| x.0.cmp(&y.0));
+        out
+    }
+
     /// 某个档案内的资源（非类文件）
     pub fn resource_in(&self, idx: usize, path: &str) -> Option<Vec<u8>> {
         lock(&self.archives).get_mut(idx)?.read_resource(path).ok().flatten()
