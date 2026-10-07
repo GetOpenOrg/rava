@@ -230,6 +230,7 @@ impl<'a> Engine<'a> {
             self.touch(x, Level::Type, via.clone());
         }
         self.lambdas.insert(lid, Lambda { site: (m, off), ctx, iface: iface.clone(), markers, sam: sam.to_string(), imh: imh.clone(), cap, adapt });
+        self.sysprops_lambda_new(imh);
         self.touch(&iface, Level::Alloc, via.clone());
         for a in bargs {
             if let Const::MethodType(d) = a {

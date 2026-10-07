@@ -35,6 +35,7 @@ mod construct;
 mod sysprops;
 mod sysprops_write;
 mod sysprops_key;
+mod sysprops_lambda;
 mod fold;
 mod unmodeled;
 mod forward;
