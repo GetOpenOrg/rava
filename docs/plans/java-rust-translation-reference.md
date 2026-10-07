@@ -753,7 +753,7 @@ h.endElement(uri, local, q)?;     // 声明于 ContentHandler
 h.endElement_str(name)?;          // 声明于 ExtendedContentHandler
 ```
 
-类的重载判定（祖先类并集 + 未实现的接口成员，§6）不变；类实现接口时接口 impl 的成员名取接口声明名，与类方法名不同时以 `target` 映射。
+类的重载判定按类视图（自有实例方法 ∪ 祖先类实例方法 ∪ 未实现的接口成员）：视图内同名异参 ≥2 种即带后缀，类未声明的名字同样适用（抽象类经兄弟接口 / 超接口层次继承到的同名异参抽象成员不同取原名）；类实现接口时接口 impl 的成员名取接口声明名，与类方法名不同时以 `target` 映射。完整规则与性质见 [`2026-10-07-overload-naming-hierarchy.md`](2026-10-07-overload-naming-hierarchy.md)。
 
 实现：`generator/crates/ty/src/sig_types/iface.rs`（`interface_overloaded_names` 由 `hierarchy_overloaded_names` 对接口调用；`interface_view_member_name` 供调用点 `instr/src/naming.rs` 与子接口继承成员声明 `emit/src/phase2/iface_impls.rs` 共用）。
 
