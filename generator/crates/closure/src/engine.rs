@@ -285,6 +285,8 @@ pub struct Engine<'a> {
     /// 容器抽象对象 id → 类型 id；分配点链（`@方法:偏移#…`，堆上下文）
     pub objs: HashMap<u32, u32>,
     obj_chain: HashMap<u32, Rc<str>>,
+    /// 抽象对象分配点（链首段）→ 所分配的类 id：由链第二段求属主对象的类（`obj_at` 内部分配判定）
+    seg_cls: HashMap<Rc<str>, u32>,
     /// 形参常量克隆上下文 → 其堆上下文（外层上下文，`NOCTX` 即无）：克隆只以调用点区分节点，分配点链与外层相同（`ctxsel.rs`）
     ctx_heap: HashMap<u32, u32>,
     /// 容器形态判定缓存（类型 id）

@@ -568,15 +568,23 @@ impl<'a> Engine<'a> {
         let ctx = self.methods[m].ctx;
         let ctx = self.ctx_heap.get(&ctx).copied().unwrap_or(ctx);
         let outer: Vec<String> = self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).map(str::to_string).collect();
-        // 分配方是同一数据结构的内部对象（`internal_alloc`）：新对象沿用分配方的属主链（去掉分配方自身的分配点），
+        // 分配方是同一数据结构的内部对象（`internal_alloc`），且分配方的属主（链第二段所指对象）与分配方同属一个
+        // 嵌套巢（属主即巢宿主 / 巢成员：树箱属于其所在的 map）：新对象沿用分配方的属主链（去掉分配方自身的分配点），
         // 不把分配方的分配点叠进链——否则截断到 HEAP_DEPTH 后丢掉属主，各容器的内部对象汇合（树箱在自身方法里
-        // 分配的树节点、链表节点分配的后继）。分配方无属主时：递归结构不延长链（否则分配点两两组合成 O(站点²)
-        // 个抽象对象而不带来任何分派精度），其余照常以分配方为上下文
-        let internal = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| self.internal_alloc(&self.names[t as usize].clone(), cls));
-        let recursive = ctx != NOCTX && self.objs.get(&ctx).is_some_and(|&t| &*self.names[t as usize] == cls);
+        // 分配的树节点、链表节点分配的后继）。属主在巢外（分配方只是被某容器借用的独立对象，如集合给出的拆分器
+        // 再拆分出的拆分器）时不算内部分配：沿用属主会把新对象按「分配点 × 属主」成倍展开，其上的方法克隆与
+        // lambda 调用随之相乘，而这些对象的状态并不归属主管理。分配方无属主 / 属主在巢外时：递归结构不延长链
+        // （否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度），其余照常以分配方为上下文
+        let ctx_cls = if ctx == NOCTX { None } else { self.objs.get(&ctx).map(|&t| self.names[t as usize].clone()) };
+        let owner_cls = outer.get(1).and_then(|g| self.seg_cls.get(g.as_str())).map(|&t| self.names[t as usize].clone());
+        let internal = match (&ctx_cls, &owner_cls) {
+            (Some(x), Some(o)) => self.internal_alloc(x, cls) && self.same_nest(x, o),
+            _ => false,
+        };
+        let recursive = ctx_cls.as_deref().is_some_and(|x| x == cls);
         let segs: &[String] = match () {
             _ if ctx == NOCTX => &[],
-            _ if internal && outer.len() > 1 => &outer[1..],
+            _ if internal => &outer[1..],
             _ if recursive => &[],
             _ => &outer,
         };
@@ -591,8 +599,16 @@ impl<'a> Engine<'a> {
         let tid = self.id(cls);
         let id = self.id(&name);
         self.objs.insert(id, tid);
+        let site = chain.split('#').next().unwrap_or("").to_string();
+        self.seg_cls.entry(Rc::from(site)).or_insert(tid);
         self.obj_chain.insert(id, Rc::from(chain));
         id
+    }
+
+    /// a 与 b 同属一个嵌套巢（JVMS §4.7.28：无 `NestHost` 的类是自身巢的宿主）
+    pub(super) fn same_nest(&self, a: &str, b: &str) -> bool {
+        let nest = |c: &str| self.h.class(c).and_then(|cf| cf.nest_host.clone()).unwrap_or_else(|| c.to_string());
+        nest(a) == nest(b)
     }
 
     /// 类 x 的对象分配 cls 的对象属于同一数据结构的内部分配：同类（递归结构），或 x 是某嵌套巢（JVMS §4.7.28 NestHost）
