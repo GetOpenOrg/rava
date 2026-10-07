@@ -722,7 +722,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 
-1. 全量单测：bimg3-ut2-911a3a4d（sg1）的结果由主会话收取。合并 b6ed3950（Narrowed 改名、lib_runtime 删除）之后单测未跑。重点看三项：
+1. 全量单测：bimg3-ut2-911a3a4d（sg1）的结果由主会话收取。该作业在 7000 s 处被停止，没有跑完：前 7 个测试二进制全部通过，第 8 个（10 项闭包集成测试）中 `param_string_constants_fold_switch` 和 `closure_independent_of_order` 已标 FAILED，断言细节因进程中止未输出。这两项待合批复验；后者属于确定性测试，集成分支 d7b490db 也记有「闭包确定性两项待 dev」。合并 b6ed3950（Narrowed 改名、lib_runtime 删除）之后单测未跑。重点看三项：
    - `absint::tests::image_object_results_compare_by_identity`；
    - `manifest::vm_state` 各项（`boot_singletons` 已删除）；
    - 闭包确定性两项。
