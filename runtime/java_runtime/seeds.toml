@@ -144,6 +144,86 @@ triggers = [
     "sun/security/jca/GetInstance.getService",
 ]
 
+# ── JCA 提供者序求值（docs/plans/2026-10-06-c1d-jca-provider-order.md）──────────────────────────────
+# 运行期提供者表 = 嵌入的 java.security 生效属性里 `security.provider.N` 按 N 的有序名单；表上逐项装载：
+# 内建名字由 ProviderConfig 直接 `new`，其余经装载器（ServiceLoader 遍历全部 Provider 实现并逐个构造）。
+# 游走按序、命中即停：可证游走深度都小于首个非内建表项时，装载器调用点不放行（其后的全部 Provider 实现
+# 不入链）；任一前提推不出即在不动点上放行（保守回到原结果）。
+#   table / table_key      提供者表来源（相对本目录；{jdk} = 参考 JDK 主版本）与表键前缀
+#   preferred_key          偏好序属性（设了即 ProviderList.getService 先走偏好表）：表中出现或可被改写即放行
+#   override_property      附加属性文件的系统属性（Security 初始化时读取）：系统属性推不出 / 该键可被改写即放行
+#   builtin                按 JDK 主版本：ProviderConfig 按名直接构造的 provider 名
+#   loader                 装载器调用点的被调成员：闸门所在
+#   interior               游走内部类（类名或其嵌套类）：沿调用方上溯；越出到非内部、非入口方法即放行
+#   views                  惰性视图类（对象只经 producers 返回、在入口内就地消费）：视图方法改从生产者上溯
+#   entries                外部入口（实参序号含接收者）：walk = first（按序取首个提供 类型/算法 的 provider，
+#                          failover = 首个服务构造失败时改走全表）/ name（按名定位：name 实参或 literal 常量）
+#   mutators               改写提供者表 / 偏好表的入口：无 key 即可达放行；有 key（属性键实参序号）时键推不出、
+#                          以 table_key 开头或等于 preferred_key 才放行
+#   total_types            首个服务构造不会失败的服务类型（first 的 failover 不发生）
+#   registrations          内建 provider 构造时必定执行的注册体；plain / aliased = 注册调用（aliased 另登记
+#                          [jca] alias_sources 里的同义名）；只取无条件执行的 `ldc 类型; ldc 算法; ldc 类名` 注册
+[jca.order]
+table = "src/jdk_resources/java.security.{jdk}.properties"
+table_key = "security.provider."
+preferred_key = "jdk.security.provider.preferred"
+override_property = "java.security.properties"
+loader = "sun/security/jca/ProviderConfig.doLoadProvider:()Ljava/security/Provider;"
+interior = ["sun/security/jca/ProviderList", "sun/security/jca/ProviderConfig"]
+total_types = ["MessageDigest"]
+plain = [
+    "sun/security/provider/SunEntries.add:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "sun/security/provider/SunEntries.add:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/HashMap;)V",
+    "sun/security/rsa/SunRsaSignEntries.add:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/HashMap;)V",
+    "com/sun/crypto/provider/SunJCE.ps:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "com/sun/crypto/provider/SunJCE.ps:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/HashMap;)V",
+]
+aliased = [
+    "sun/security/provider/SunEntries.addWithAlias:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/HashMap;)V",
+    "sun/security/rsa/SunRsaSignEntries.addA:(Ljava/security/Provider;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/HashMap;)V",
+    "com/sun/crypto/provider/SunJCE.psA:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/HashMap;)V",
+]
+registrations = [
+    { provider = "SUN", body = "sun/security/provider/SunEntries.<init>:(Ljava/security/Provider;)V" },
+    { provider = "SunRsaSign", body = "sun/security/rsa/SunRsaSignEntries.<init>:(Ljava/security/Provider;)V" },
+    { provider = "SunJCE", body = "com/sun/crypto/provider/SunJCE.putEntries:()V" },
+]
+entries = [
+    { member = "sun/security/jca/GetInstance.getInstance:(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/String;)Lsun/security/jca/GetInstance$Instance;", walk = "first", type = 0, algorithm = 2, failover = true },
+    { member = "sun/security/jca/GetInstance.getService:(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;", walk = "first", type = 0, algorithm = 1, failover = false },
+    { member = "sun/security/jca/GetInstance.getService:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/security/Provider$Service;", walk = "name", name = 2 },
+    { member = "java/security/Security.getProvider:(Ljava/lang/String;)Ljava/security/Provider;", walk = "name", name = 0 },
+    # 缺省 PRNG：按序取首个名为 SUN（表首）或自带缺省 SecureRandom 的 provider
+    { member = "java/security/SecureRandom.getDefaultPRNG:(Z[B)V", walk = "name", literal = "SUN" },
+]
+mutators = [
+    { member = "java/security/Security.setProperty:(Ljava/lang/String;Ljava/lang/String;)V", key = 0 },
+    { member = "sun/security/jca/Providers.setSystemProviderList:(Lsun/security/jca/ProviderList;)V" },
+    { member = "sun/security/jca/Providers.changeThreadProviderList:(Lsun/security/jca/ProviderList;)V" },
+    { member = "sun/security/jca/Providers.beginThreadProviderList:(Lsun/security/jca/ProviderList;)Lsun/security/jca/ProviderList;" },
+]
+
+[jca.order.builtin]
+"21" = ["SUN", "SunRsaSign", "SunJCE", "SunJSSE"]
+"25" = ["SUN", "SunRsaSign", "SunEC", "SunJSSE", "SunJCE"]
+
+[jca.order.views]
+"21" = [
+    { class = "sun/security/jca/ProviderList$3", producers = ["sun/security/jca/ProviderList.providers:()Ljava/util/List;"] },
+    { class = "sun/security/jca/ProviderList$ServiceList", producers = [
+        "sun/security/jca/ProviderList.getServices:(Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;",
+        "sun/security/jca/ProviderList.getServices:(Ljava/lang/String;Ljava/util/List;)Ljava/util/List;",
+        "sun/security/jca/ProviderList.getServices:(Ljava/util/List;)Ljava/util/List;",
+    ] },
+]
+"25" = [
+    { class = "sun/security/jca/ProviderList$2", producers = ["sun/security/jca/ProviderList.providers:()Ljava/util/List;"] },
+    { class = "sun/security/jca/ProviderList$ServiceIterator", producers = [
+        "sun/security/jca/ProviderList.getServices:(Ljava/lang/String;Ljava/lang/String;)Ljava/util/Iterator;",
+        "sun/security/jca/ProviderList.getServices:(Ljava/util/List;)Ljava/util/Iterator;",
+    ] },
+]
+
 # ── 服务目录（ServiceLoader，模块 provides / 类路径 META-INF/services 作事实）─────────────────────
 # provider 由 ServiceLoader 按服务目录反射构造（Class.forName + 无参构造器 / provider()），无静态调用边。
 # 目录由分析器从所用 JDK 的 jmod 模块描述符（JVM 默认引导层：API 根集 + requires 闭包 + uses 绑定）与
@@ -166,6 +246,11 @@ population = [
 # 准入：JDK 代码显式依赖「该类已在引导期初始化」的时序（惰性初始化下会重入读到未就绪状态）。
 [boot_init]
 classes = [
+    # HotSpot 引导先初始化 System 再调 initPhase1（首步 setJavaLangAccess：SharedSecrets.setJavaLangAccess(new System$2)，
+    # JavaLangAccess 无惰性初始化路径，SharedSecrets.getJavaLangAccess 直接返回静态字段，缺席即 null）。
+    # 本运行时 initPhase1 的引导段由 System.<clinit> 的 registerNatives 承载（system_impl.rs，首步即 setJavaLangAccess），
+    # 故以类初始化入链：经静态方法调用进入会先跑 <clinit>，属性表建立期间初始化的类（ArraysSupport 等）读到未登记的 null。
+    "java/lang/System",
     # JDK 注释 "AccessibleObject is initialized early in initPhase1"：<clinit> 登记 ReflectAccess 并
     # 缓存 ReflectionFactory 单例；由 ReflectionFactory.<clinit> 反向触发时 GetReflectionFactoryAction
     # 重入读到 null。
@@ -174,11 +259,8 @@ classes = [
 # VM 启动期调用的静态方法（无参 `()V`，按序在 classes 之前执行）：HotSpot 由 initPhase1 在任何应用代码
 # 之前完成的全局登记。准入：VM 发起的启动入口（docs/reference/handwritten-boundary.md 准入 ③）——
 # 由闭包分析器作为根入链、生成项目 main 启动时调用（runtime vm_boot_init）。
-calls = [
-    # initPhase1 的 setJavaLangAccess()：SharedSecrets.setJavaLangAccess(new System$2)——JavaLangAccess
-    # 无惰性初始化路径（SharedSecrets.getJavaLangAccess 直接返回静态字段），缺席即 null。
-    "java/lang/System.setJavaLangAccess:()V",
-]
+# （initPhase1 的 setJavaLangAccess 随 System 类初始化执行，见 classes 首项；不再列为独立调用。）
+calls = []
 
 # VM 引导阶段（HotSpot call_initPhase2 / call_initPhase3，准入 ③ VM 发起的启动入口）：VM 以常量实参调用的静态方法，
 # 按序在 calls / classes 之后、main 之前执行。args：实参常量（个数与描述符一致，只限 Z/B/C/S/I）；分析器以此作入口

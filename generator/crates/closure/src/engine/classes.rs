@@ -564,7 +564,9 @@ impl<'a> Engine<'a> {
     pub(super) fn obj_at(&mut self, m: usize, off: u32, cls: &str) -> u32 {
         let b = self.mbase[&self.methods[m].key];
         let mut chain = format!("@{b}:{off}");
+        // 形参常量克隆的堆上下文即其外层上下文
         let ctx = self.methods[m].ctx;
+        let ctx = self.ctx_heap.get(&ctx).copied().unwrap_or(ctx);
         let outer: Vec<String> = self.obj_chain.get(&ctx).map_or("", |c| &**c).split('#').filter(|g| !g.is_empty()).map(str::to_string).collect();
         // 分配方是同一数据结构的内部对象（`internal_alloc`）：新对象沿用分配方的属主链（去掉分配方自身的分配点），
         // 不把分配方的分配点叠进链——否则截断到 HEAP_DEPTH 后丢掉属主，各容器的内部对象汇合（树箱在自身方法里

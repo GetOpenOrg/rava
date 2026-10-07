@@ -277,6 +277,17 @@ fn param_string_constants_fold_switch() {
     assert!(classes.len() < 1000, "HelloWorld 闭包 {} 类", classes.len());
 }
 
+/// 按名取类站点名字含推不出的支时，已知名字仍在不动点上放行：工厂查找（`FactoryFinder.find`）先读系统属性 / 配置文件
+/// （任意串），再回落到调用方传入的缺省实现类名——缺省实现类必须入闭包，否则运行期 `Class.forName` 找不到
+/// （FactoryConfigurationError: Provider … not found）。三个种子结果一致
+#[test]
+fn unsure_lookup_releases_known_names() {
+    let Some([classes, ..]) = seeds_agree("71_xml/TestSaxLocatorAttributes.java") else { return };
+    for c in ["com/sun/org/apache/xerces/internal/jaxp/SAXParserFactoryImpl", "com/sun/org/apache/xerces/internal/jaxp/SAXParserImpl"] {
+        assert!(classes.contains(c), "按名取类的缺省实现类未入闭包：{c}");
+    }
+}
+
 /// HelloWorld 级程序：栈耗尽 VM 规则（stack-check）把 StackOverflowError 带入闭包（a3-T1b）
 #[test]
 fn stack_overflow_error_in_minimal_closure() {
@@ -317,4 +328,29 @@ fn returns_per_site_receiver() {
     let Some([_, methods, _]) = closure_sets(&java, 0) else { return };
     assert!(methods.contains("ObjFacts$Holder.run:()V"), "缺 Holder.run");
     assert!(!methods.contains("ObjFacts$Rare2.go:()V"), "box.tag() 混入 b2 的 null：Rare2.go 入链");
+}
+
+/// 一次 `rava closure -o` 的 summary.sysprops_unstable
+fn sysprops_unstable(java: &str) -> Option<serde_json::Value> {
+    let out = std::env::temp_dir().join(format!("rava_sysprops_{}_{java}.json", std::process::id()));
+    closure(java, &["-o", out.to_str().unwrap()])?;
+    let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
+    let _ = std::fs::remove_file(&out);
+    let d: serde_json::Value = serde_json::from_str(&text).expect("闭包 JSON");
+    Some(d["summary"]["sysprops_unstable"].clone())
+}
+
+/// lambda 返回系统属性表：lambda 封闭于创建方法的一次调用、结果原路返回后只读 → 不逃逸；
+/// 结果存入字段 → 逃逸，全部不折叠（`sysprops_lambda.rs`）
+#[test]
+fn sysprops_lambda_return_confined() {
+    let Some(base) = sysprops_unstable("MinimalMain.java") else { return };
+    let Some(read) = sysprops_unstable("SyspropsLambdaRead.java") else { return };
+    let Some(leak) = sysprops_unstable("SyspropsLambdaLeak.java") else { return };
+    assert_eq!(read["all"], base["all"], "只读使用不应改变不折叠判定：{read}");
+    assert_eq!(leak["all"], serde_json::Value::Bool(true), "存入字段应全部不折叠：{leak}");
+    if base["all"] == serde_json::Value::Bool(false) {
+        let cause = leak["cause"].as_str().unwrap_or_default();
+        assert!(cause.contains("SyspropsLambdaLeak"), "成因应指向本例：{cause}");
+    }
 }

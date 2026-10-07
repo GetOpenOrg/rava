@@ -140,7 +140,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 | JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1） |
 | `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`Module`、`Unsafe`、`VM`、`BootLoader` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译 |
 | `[vm_boundary].translate_nested` | VM 契约类的纯 Java 嵌套类，按字节码翻译 |
-| `seeds.toml [boot_init] calls` | VM 引导期直接调用的 Java 入口（如 `System.setJavaLangAccess`），作为闭包根并在 `vm_boot_init` 中先于类初始化发射 |
+| `seeds.toml [boot_init] calls` | VM 引导期直接调用的无参 Java 入口，作为闭包根并在 `vm_boot_init` 中先于类初始化发射（当前为空：`setJavaLangAccess` 随 `[boot_init] classes` 首项 `System` 的初始化由 initPhase1 引导段首步执行） |
 
 原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；

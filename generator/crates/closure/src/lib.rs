@@ -227,6 +227,7 @@ impl Closure<'_> {
             "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "sysprops_unstable": e.sysprops_report(),
+            "jca_order": e.jca_order_report(),
             "reflect_members": e.reflect_members.len(),
             "reflect_gaps": e.reflect_gaps.len(),
             "field_enum_gaps": e.field_enum_gaps.len(),

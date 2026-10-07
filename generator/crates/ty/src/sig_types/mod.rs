@@ -3,6 +3,7 @@
 
 mod ctor;
 mod emitted;
+mod iface;
 #[cfg(test)]
 mod tests;
 
@@ -88,11 +89,16 @@ impl TyCtx<'_> {
         }
         visiting.insert(ci.name().to_string());
         let (own_all, own_inst) = self.class_method_param_sets(ci);
-        let mut result: BTreeSet<String> = own_all
-            .iter()
-            .filter(|(_, ps)| ps.len() > 1)
-            .map(|(n, _)| n.clone())
-            .collect();
+        let mut result: BTreeSet<String> = if ci.is_interface() {
+            // 接口：自有方法名与超接口（传递）未覆盖的同名成员合计判定（iface.rs）
+            self.interface_overloaded_names(ci, &own_all)
+        } else {
+            own_all
+                .iter()
+                .filter(|(_, ps)| ps.len() > 1)
+                .map(|(n, _)| n.clone())
+                .collect()
+        };
         if !self.reg.is_empty() && !ci.is_interface() {
             let parent = self.reg.get(ci.super_class());
             if let Some(p) =

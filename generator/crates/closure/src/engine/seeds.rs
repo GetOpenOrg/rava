@@ -21,8 +21,8 @@ pub struct SeedState {
     /// 已产出束对象的（手写触发方法节点序号, 束族基名）
     locale_fed: StdSet<(usize, String)>,
     jca_services: Option<BTreeSet<Service>>,
-    /// 请求点上求得的算法键
-    jca_algos: StdSet<String>,
+    /// 请求点上求得的（服务类型, 算法键）
+    jca_algos: StdSet<(String, String)>,
     /// 请求点算法名推不出的服务类型
     jca_any: StdSet<String>,
     jca_aliases: StdMap<String, StdSet<String>>,
@@ -240,7 +240,7 @@ impl<'a> Engine<'a> {
                 keyed::Keys::Any => {
                     self.seeds.jca_any.insert(ty);
                 }
-                keyed::Keys::Set(names) => self.seeds.jca_algos.extend(names.iter().flat_map(|n| jca::algorithm_keys(n))),
+                keyed::Keys::Set(names) => self.seeds.jca_algos.extend(names.iter().flat_map(|n| jca::algorithm_keys(n)).map(|k| (ty.clone(), k))),
             }
         }
     }

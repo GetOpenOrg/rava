@@ -54,7 +54,7 @@ pub(super) enum Gap {
 }
 
 impl Gap {
-    fn wild(self) -> bool {
+    pub(super) fn wild(self) -> bool {
         self != Gap::Fail
     }
 }
@@ -174,15 +174,13 @@ impl<'a> Engine<'a> {
         if matches!(args.first(), Some(V::Str(..))) || self.lookup_released.contains(&site) {
             return (names, top);
         }
-        // 未放行时名字推不出（某支无约束任意串 / 形参或字段名字集不完备）：不按已知名字加载，结果接所指未知的 Class
-        if unsure {
-            return (Vec::new(), true);
-        }
         if names.is_empty() {
             return (names, top);
         }
-        // 名字齐全：只在排空时（不动点上）仍齐全才放行（`lookup_release`）。中途齐全、终态推不出的站点不加载，
-        // 结果因而与求值先后无关
+        // 已知名字只在排空时（不动点上）放行（`lookup_release`），之后按单调口径照常求值。推不出（某支无约束任意串 /
+        // 形参或字段名字集不完备）不阻止放行：运行期那一支的名字只取得到 VM 登记的生成类（结果另接所指未知的 Class），
+        // 其余各支的已知名字照样会被按名加载（如工厂查找先读系统属性、再回落到调用方给出的缺省实现类名），
+        // 丢弃即不健全。是否放行只看不动点上的已知名字，与站点何时转为推不出无关，结果因而与求值先后无关
         if trial {
             self.lookup_released.insert(site);
             return (names, top);
@@ -191,11 +189,11 @@ impl<'a> Engine<'a> {
         (Vec::new(), top)
     }
 
-    /// 工作队列排空时放行挂起的按名取类站点：各站点重跑，求值仍齐全即解析名字（之后按单调口径照常求值）。
+    /// 工作队列排空时放行挂起的按名取类站点：各站点重跑，已知名字非空即解析（之后按单调口径照常求值）。
     /// 返回是否有站点放行
     pub(super) fn lookup_release(&mut self) -> bool {
         let ready: Vec<(usize, u32)> =
-            std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_unsure.contains(w) && !self.lookup_released.contains(w)).collect();
+            std::mem::take(&mut self.lookup_pending).into_iter().filter(|w| !self.lookup_released.contains(w)).collect();
         if !ready.is_empty() {
             let (edges, adds) = (self.graph.edge_count, self.graph.adds[0]);
             self.ctx.stats.borrow_mut().released(ready.len(), edges, adds);
@@ -277,11 +275,17 @@ impl<'a> Engine<'a> {
         if let V::Str(s, _) = &v {
             return Some(vec![Part::Lit(s.clone())]);
         }
+        if let Some(p) = self.phi_parts(f, &v, gap, depth) {
+            return p.map(|p| vec![p]);
+        }
         let Some(o) = site_of(&v) else {
             // 引擎方法的形参：各调用点流入的名字（按名取类）
             return self.segment_values(f, &v, gap, depth).map(|p| vec![p]);
         };
         let a = f.a;
+        if let Some(p) = self.suffix_part(f, o, gap, depth) {
+            return p.map(|p| vec![p]);
+        }
         if let Some(segs) = self.indy_concat_segs(f.owner, a, o) {
             return self.seg_parts(f, &segs, gap, depth);
         }
@@ -421,12 +425,18 @@ impl<'a> Engine<'a> {
     /// → 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
     fn segment_values(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Part> {
         let a = f.a;
+        if let Some(p) = self.phi_parts(f, v, gap, depth) {
+            return p;
+        }
         if let (Some(m), None) = (f.m, site_of(v)) {
             // 按名查方法的形参名字由调用点的字符串常量另行点名（`param_strs`），这里只服务按名取类
             let [Src::Param(i)] = v.srcs()[..] else { return None };
             return if gap == Gap::Method { None } else { self.param_names(m, i as usize, depth).map(|(set, complete)| self.partial_part(set, complete, gap)) };
         }
         let o = site_of(v)?;
+        if let Some(p) = self.suffix_part(f, o, gap, depth) {
+            return p;
+        }
         if let Some(r) = self.mirror_name(f, o) {
             return match r {
                 Some(set) => Some(Part::Any(set)),

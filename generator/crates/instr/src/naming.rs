@@ -104,6 +104,10 @@ fn mangle_uncached(ctx: &InstrCtx, cls: &str, mname: &str, desc: Option<&str>) -
             },
         }
     }
+    // 接口接收者经继承看到的超接口成员：声明名，兄弟超接口同名异参时视图内按描述符区分
+    if recv.is_interface() && target.is_interface() && target.name() != recv.name() && bridged_iface_desc.is_none() && !call_desc.is_empty() {
+        return Ok(ctx.ty.interface_view_member_name(recv, target, mname, &call_desc));
+    }
     let name_ci = if recv.is_interface() { target } else { recv };
     if !ctx.ty.hierarchy_overloaded_names(name_ci).contains(mname) {
         if let (Some(bd), false) = (&bridged_iface_desc, recv.is_interface()) {

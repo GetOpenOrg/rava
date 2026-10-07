@@ -313,6 +313,21 @@ user（bin）
 - JNI 层、构建期捕获生成类：**缓一缓**（2026-10-06 用户定），不在 C4 关键路径上；有带 native 或运行期生成的库进入语料时再实施。
 - 注解驱动反射的通用建模：由 junit J4 承担。
 
+**6. JNI ABI 层的实施前提：可变参数调用族（2026-10-07 补）**
+
+C 库通过 `env->CallObjectMethod(obj, mid, ...)` 回调 Java 时，rava 处在「Rust 提供 `JNIEnv`」一侧。这时函数表中可变参数的函数都要由 rava 定义，涉及 `Call<T>Method`、`CallStatic<T>Method`、`CallNonvirtual<T>Method` 和 `NewObject`。每个都有三种形式，共约 30 组：
+
+| 形式 | 签名尾部 | 实现方式 |
+|---|---|---|
+| `...` 版 | C 可变参数 | Rust 直接定义 `extern "C" fn(..., mut args: ...)` |
+| `V` 版 | `va_list` | 参数类型取 `VaList`，与 C 的 `va_list` ABI 兼容 |
+| `A` 版 | `const jvalue*` | 读 `jvalue` 数组 |
+
+终态要求：
+1. **不写 C shim**：`...` 版和 `V` 版都用 Rust 定义，产物不引入 C 构建依赖。前提是工具链支持在 Rust 中定义 C 可变参数函数，实施前先核对 Rust release notes，确认 `c_variadic` 稳定的版本（据称是 1.99；2026-10-07 本机为 1.98.1）。本机和服务器的工具链要一起升级。
+2. **三种形式汇成一个实现**：`...` 版和 `V` 版先按 `jmethodID` 对应的方法描述符逐个读出参数，组装成 `jvalue` 数组，再与 `A` 版走同一个分派入口。描述符在构建期已知，参数读取表由生成器按描述符生成，不手写逐方法代码。
+3. **默认实参提升**：C 可变参数会提升窄类型。`jboolean`、`jbyte`、`jchar`、`jshort` 要按 `i32` 读出后截断，`jfloat` 要按 `f64` 读出后转成 `f32`，`VaArgSafe` 也不允许直接读这些窄类型。这条规则放在统一的读取表里实现，不散落到各个函数。
+
 ## 四、与现有实现的接口（问题 6）
 
 ### 4.1 `resolve::modules` 扩展点

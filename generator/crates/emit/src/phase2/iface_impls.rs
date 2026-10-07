@@ -336,6 +336,7 @@ fn superinterface_views(ctx: &EmitCtx<'_>, recv_ci: &ClassInfo) -> Vec<(String, 
 fn iface_recv_member(
     ctx: &EmitCtx<'_>,
     ems: &Emissions,
+    recv_ci: &ClassInfo,
     views: &[(String, Vec<RsType>)],
     name: &str,
     pdesc: &str,
@@ -345,17 +346,28 @@ fn iface_recv_member(
         let owner_args = &render_args(ctx, owner_args_ty);
         let Some(owner) = ems.get(owner_bin).filter(|e| !e.handwritten) else { continue };
         let Some(method) = owner.find(name, pdesc) else { continue };
-        if !taken.insert(method.rust_name.clone()) {
+        // 视图名（与调用侧同一判定）：通常即声明名；兄弟超接口同名异参时按描述符区分，
+        // 载体方法经 `target` 转调声明接口上的声明名
+        let view_name = match ctx.ty.reg.get(owner_bin) {
+            Some(owner_ci) => ty::ident::safe_ident(&ctx.ty.interface_view_member_name(recv_ci, owner_ci, name, &method.descriptor)),
+            None => method.rust_name.clone(),
+        };
+        if !taken.insert(view_name.clone()) {
             return None;
         }
+        let mut sig = method.sig.clone();
+        sig.name = view_name.clone();
         let owner_params = ctx.ty.reg.get(owner_bin).map(|c| class_params(ctx, c)).unwrap_or_default();
-        let signature = substitute_type_params(&method.signature(&ctx.ty), &param_mapping(&owner_params, owner_args));
+        let signature = substitute_type_params(&sig.render(&ctx.ty), &param_mapping(&owner_params, owner_args));
         let owner_ty = rust_type(&ctx.short(owner_bin), owner_args);
         let mut attr = vec![format!("name = \"{}\"", method.name), format!("descriptor = \"{}\"", method.descriptor)];
         if !method.access.is_empty() {
             attr.push(format!("access = \"{}\"", method.access));
         }
         attr.push(format!("inherited_from = \"{owner_ty}\""));
+        if view_name != method.rust_name {
+            attr.push(format!("target = \"{}\"", method.rust_name));
+        }
         let decl = format!("#[java_method({})]\n{signature};", attr.join(", "));
         let mut classes = substituted_classes(ctx, &method.sig, owner_bin, owner_args_ty);
         classes.extend(type_classes(owner_bin, owner_args_ty));
@@ -384,7 +396,7 @@ pub fn resolve_interface_inherited_members(ctx: &EmitCtx<'_>, state: &ProjectSta
             if recv.find(name, pdesc).is_some() {
                 continue;
             }
-            if let Some(d) = iface_recv_member(ctx, ems, &views, name, pdesc, &mut taken) {
+            if let Some(d) = iface_recv_member(ctx, ems, recv_ci, &views, name, pdesc, &mut taken) {
                 decls.push(d);
             }
         }

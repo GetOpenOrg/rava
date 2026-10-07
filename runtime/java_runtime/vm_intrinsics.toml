@@ -486,11 +486,13 @@ method_lookups = [
 ]
 # constructor_lookups  构造器查找：Class 实参 / Class 接收者值集里类镜像所指类的构造器成为反射构造目标（构造器没有
 #                     按名形状，查找即点名该类构造器）；方法句柄 newInvokeSpecial（DirectMethodHandle 先 allocateInstance
-#                     再调 <init>）与 Constructor.newInstance 都经 L3 分派闭包的 <alloc> / <init> 臂执行
+#                     再调 <init>）与 Constructor.newInstance 都经 L3 分派闭包的 <alloc> / <init> 臂执行。
+#                     Class.newInstance 即 getDeclaredConstructor().newInstance()（体内经私有 getConstructor0 查找），同口径
 constructor_lookups = [
     "java/lang/invoke/MethodHandles$Lookup.findConstructor:(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;",
     "java/lang/Class.getConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
     "java/lang/Class.getDeclaredConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.newInstance:()Ljava/lang/Object;",
 ]
 # method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
 #                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，
@@ -637,6 +639,11 @@ results = [
 # 清空（实参为常量 0）：循环复用的构建器在每次追加前清空时，拆段从清空点起算
 resets = [
     "java/lang/StringBuilder.setLength:(I)V",
+]
+# 取后缀（第 0 个 int 实参为起点）：名字段是拼接结果按需截掉前缀（如 `name.substring(name.lastIndexOf('.') + 1)`
+# 取简单名）时，起点为常量取该后缀，否则取接收者各候选的全部后缀（超集，候选名只保留类路径上存在的类）
+suffixes = [
+    "java/lang/String.substring:(I)Ljava/lang/String;",
 ]
 
 [facts.empty_collections]
@@ -848,10 +855,13 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
 # - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
 #   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
+# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
+#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作。
 [vm_state.field_hooks]
 "java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
 "java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
 "java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
+"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
 
 # loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
 # 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →

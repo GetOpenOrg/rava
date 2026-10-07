@@ -4,6 +4,9 @@ use super::*;
 
 impl<'a> Engine<'a> {
     pub(super) fn invoke(&mut self, m: usize, off: u32, opcode: u8, mref: &MemberRef, iface: bool, args: &[V]) {
+        if self.jca_order_hold(m, off, mref) {
+            return;
+        }
         self.prof_seg(site_prof::SEG_PRE);
         self.note_ref(mref);
         self.reflective_writes(m, off, mref, opcode, args);
@@ -233,10 +236,11 @@ impl<'a> Engine<'a> {
             Some(sel) => {
                 let (o, n, d) = sel.key();
                 let key = MemberRef { owner: o, name: n, desc: d };
-                let cx = match self.recv_ctx(r) {
+                let base = match self.recv_ctx(r) {
                     NOCTX => self.relay_ctx(m, &key),
                     c => c,
                 };
+                let cx = self.recv_call_ctx(m, off, &key, base);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
@@ -279,14 +283,19 @@ impl<'a> Engine<'a> {
             }
         }
         rest.classes = IdSet::from_sorted(cls);
+        // 字节码调用点自身在被调方选择子形参上传常量时按调用点克隆（`ctxsel.rs`）
+        let cx = |e: &mut Self, base: u32| if site { e.recv_call_ctx(m, off, &key, base) } else { base };
         for x in objs {
-            let t = self.method_ctx(key.clone(), self.recv_ctx(x), via.clone());
+            let base = self.recv_ctx(x);
+            let c = cx(self, base);
+            let t = self.method_ctx(key.clone(), c, via.clone());
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
             // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体
-            let cx = self.relay_ctx(m, &key);
-            let t = self.method_ctx(key, cx, via);
+            let base = self.relay_ctx(m, &key);
+            let c = cx(self, base);
+            let t = self.method_ctx(key, c, via);
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(rest)]), a, ret, res);
         }
     }

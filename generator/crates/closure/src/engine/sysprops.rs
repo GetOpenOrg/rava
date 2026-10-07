@@ -12,7 +12,8 @@
 //! - 作返回值不算逃逸，只要每个调用方都拿到带标签的结果（其后的使用由调用方自己的扫描判定）：
 //!   调用方拿到标签 ⇔ 字节码调用点、调用目标唯一（取被调方法返回常量）、返回常量仍带属性表标签。
 //!   以下任一成立即全部不折叠：返回常量合流后丢了标签；方法有非字节码调用点入口（手写 / 反射 /
-//!   方法句柄 / lambda / VM 根）；某个目标不唯一（虚派发）的调用点与它同名同描述符。
+//!   方法句柄 / VM 根，或创建点不封闭的 lambda，见 `sysprops_lambda.rs`）；某个目标不唯一（虚派发）的
+//!   调用点与它同名同描述符。
 //!
 //! 不折叠集合只增不减；增长时清掉依赖它的缓存（static final 常量、构造器摘要、读取摘要），
 //! 折叠过属性读取 / 字段读取的方法失效重算——单调不动点上的折叠只来自最终仍稳定的键。
@@ -46,6 +47,10 @@ pub(super) struct SpRet {
     untracked: HashSet<MemberRef>,
     /// 目标不唯一的引用返回调用点（名字, 描述符）
     virt: BTreeSet<(String, String)>,
+    /// 经字节码 SAM 调用点进入的实现方法（是否可跟踪由 lambda 创建点判定，见 `sysprops_lambda.rs`）
+    lambda_in: HashSet<MemberRef>,
+    /// 返回属性表对象的方法节点（lambda 入口晚到时重分析重判）
+    nodes: HashMap<MemberRef, BTreeSet<usize>>,
 }
 
 /// 运行期可能被改写（不折叠）的键
@@ -314,7 +319,7 @@ impl Ctx<'_> {
 impl Ctx<'_> {
     /// 属性表对象作调用的第 i 个实参不构成逃逸：只读查询 / 读取入口的接收者，
     /// 或唯一字节码目标上的只读形参（该形参在被调方法里只流向同类不逃逸的用途）
-    fn sysprops_arg_ok(&self, me: Option<usize>, opcode: u8, mref: &MemberRef, iface: bool, i: usize) -> bool {
+    pub(super) fn sysprops_arg_ok(&self, me: Option<usize>, opcode: u8, mref: &MemberRef, iface: bool, i: usize) -> bool {
         let k = mref.to_string();
         if self.man.sysprops.writer(&k).is_some() {
             return false;
@@ -450,8 +455,9 @@ impl Engine<'_> {
         let sig = (key.name.to_string(), key.desc.to_string());
         let r = &mut self.spret;
         let esc = r.untracked.contains(&key) || r.virt.contains(&sig);
-        r.methods.insert(key);
-        esc
+        r.methods.insert(key.clone());
+        r.nodes.entry(key.clone()).or_default().insert(m);
+        esc || self.spret.lambda_in.contains(&key) && !self.sysprops_lambda_tracked(m, &key)
     }
 
     /// 目标不唯一（或分析保守、返回值由清单事实替换）的引用返回调用点：与返回属性表对象的方法同名同描述符 → 逃逸（true）
@@ -474,16 +480,34 @@ impl Engine<'_> {
         if self.man.sysprops.is_empty() {
             return;
         }
-        let tracked = matches!(via.kind, "invoke" | "dispatch")
-            && matches!(via.from, From::Method(c) if self.methods[c].kind == Kind::Bytecode);
+        let bytecode = matches!(via.from, From::Method(c) if self.methods[c].kind == Kind::Bytecode);
+        let tracked = matches!(via.kind, "invoke" | "dispatch") && bytecode;
         self.remove_entry(key, tracked);
         if !key.desc.ends_with(';') || tracked || self.spret.untracked.contains(key) {
+            return;
+        }
+        if matches!(via.kind, "lambda" | "indy") && bytecode {
+            // SAM 调用点进入（lambda），或静态 / 私有实现在创建点预先入链（indy）：判定推迟到实现方法
+            // 返回属性表对象时（按 lambda 创建点；不是 lambda 实现方法的按不可跟踪）；已返回过的节点重分析重判
+            if self.spret.lambda_in.insert(key.clone()) {
+                self.sysprops_lambda_recheck(key);
+            }
             return;
         }
         self.spret.untracked.insert(key.clone());
         if self.spret.methods.contains(key) {
             let (k, kind) = (key.to_string(), via.kind);
             self.sysprops_unstable(vec![None], || format!("{k}：非字节码入口（{kind}）"));
+        }
+    }
+
+    /// 经 lambda 入口、已返回过属性表对象的实现方法：入口或创建点增加时其节点重分析重判
+    pub(super) fn sysprops_lambda_recheck(&mut self, key: &MemberRef) {
+        if !self.spret.lambda_in.contains(key) {
+            return;
+        }
+        for n in self.spret.nodes.get(key).cloned().unwrap_or_default() {
+            self.invalidate(n, Why::Sysprops);
         }
     }
 
@@ -570,7 +594,7 @@ fn event_brief(e: &Event) -> String {
         Event::Invoke { mref, .. } => format!("属性表对象作实参 / 接收者调用 {mref}"),
         Event::Field { mref, .. } => format!("字段 {mref} 读写属性表对象"),
         Event::ArrayStore { .. } => "属性表对象存入数组".into(),
-        Event::Return(_) => "返回属性表对象（有非字节码入口或同名虚调用点）".into(),
+        Event::Return(_) => "返回属性表对象（有非字节码入口、不封闭的 lambda 入口或同名虚调用点）".into(),
         Event::Indy { .. } => "属性表对象作 indy 实参".into(),
         _ => "其他".into(),
     }
