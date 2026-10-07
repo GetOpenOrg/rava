@@ -22,7 +22,6 @@ jdk/internal/loader/URLClassPath.findResources:(Ljava/lang/String;Z)Ljava/util/E
 java/nio/charset/Charset.lookup2:(Ljava/lang/String;)Ljava/nio/charset/Charset;
 java/nio/charset/Charset$2.run:()Ljava/nio/charset/Charset;
 jdk/internal/access/SharedSecrets.ensureClassInitialized:(Ljava/lang/Class;)V
-java/lang/Class.desiredAssertionStatus:()Z
 jdk/internal/util/ClassFileDumper$2.run:()Ljava/nio/file/Path;
 jdk/internal/util/ClassFileDumper.validateDumpDir:(Ljava/lang/String;)Ljava/nio/file/Path;
 java/lang/StackTraceElement$HashedModules.hashedModules:()Ljava/util/Set;

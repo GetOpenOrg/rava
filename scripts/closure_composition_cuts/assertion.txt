@@ -1,2 +1,0 @@
-# 断言状态查询（构建期常量：断言关闭）
-java/lang/Class.desiredAssertionStatus:()Z

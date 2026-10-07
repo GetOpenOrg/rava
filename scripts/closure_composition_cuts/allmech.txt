@@ -1,4 +1,4 @@
-# 以上除 formatter 外全部合并（面外机制同时收窄的上界）
+# 以上除 formatter、assertion（已删：desiredAssertionStatus0 已由 vm_intrinsics 折叠，再切其调用者使分析停滞 >35 分钟）外全部合并（面外机制同时收窄的上界）
 java/lang/Class.getEnumConstantsShared:()[Ljava/lang/Object;@49
 java/util/Tripwire.trip:(Ljava/lang/Class;Ljava/lang/String;)V
 sun/util/logging/PlatformLogger.getLogger:(Ljava/lang/String;)Lsun/util/logging/PlatformLogger;
@@ -16,7 +16,6 @@ jdk/internal/loader/URLClassPath.findResources:(Ljava/lang/String;Z)Ljava/util/E
 java/nio/charset/Charset.lookup2:(Ljava/lang/String;)Ljava/nio/charset/Charset;
 java/nio/charset/Charset$2.run:()Ljava/nio/charset/Charset;
 jdk/internal/access/SharedSecrets.ensureClassInitialized:(Ljava/lang/Class;)V
-java/lang/Class.desiredAssertionStatus:()Z
 jdk/internal/util/ClassFileDumper$2.run:()Ljava/nio/file/Path;
 jdk/internal/util/ClassFileDumper.validateDumpDir:(Ljava/lang/String;)Ljava/nio/file/Path;
 java/lang/StackTraceElement$HashedModules.hashedModules:()Ljava/util/Set;
