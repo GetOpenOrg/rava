@@ -379,8 +379,17 @@ impl<'a> Engine<'a> {
             };
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
-            match self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten) {
-                Some(names) => out.extend(names),
+            // 内部求值（Gap::Fail）的推不出只记在引擎级标志上：在这里收进本槽的「是否推得出」，不外泄给外层求值——
+            // 外层按自己的 gap 处理推不出的槽（按名取类为「已知名字 | 任意串」，按生成范围内的类名匹配），
+            // 而不是因上游某个调用方推不出把整个站点记为推不出
+            let saved = (std::mem::take(&mut self.lookup_incomplete), std::mem::take(&mut self.lookup_partial));
+            let r = self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten);
+            let inner = std::mem::replace(&mut self.lookup_incomplete, saved.0) | std::mem::replace(&mut self.lookup_partial, saved.1);
+            match r {
+                Some(names) => {
+                    out.extend(names);
+                    complete &= !inner;
+                }
                 None => complete = false,
             }
         }
