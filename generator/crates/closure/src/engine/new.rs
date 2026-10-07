@@ -113,6 +113,7 @@ impl<'a> Engine<'a> {
             rcall_wait_members: Vec::new(),
             callers: HashMap::default(),
             call_vals: None,
+            lambda_cap: None,
             unresolved: BTreeSet::new(),
             refs: BTreeSet::new(),
             mref_keys: HashMap::default(),

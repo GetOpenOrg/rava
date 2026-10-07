@@ -21,6 +21,15 @@ fn lam_name(l: &Lam, m: usize, off: u32, i: usize) -> String {
     format!("{}$$Lambda@concrete:{m}:{off}:{i}:{}", l.imp.member.owner, l.imp.member.name)
 }
 
+/// String 字段写入的字符串值：内容可读时为字面量，否则推不出（None）；null 不计
+fn put_str(p: &Put) -> Option<Option<V>> {
+    match p {
+        Put::Null => None,
+        Put::Str(s) => Some(Some(V::Str(s.clone(), Rc::from([Src::Str(crate::absint::lit_id(s))])))),
+        _ => Some(None),
+    }
+}
+
 fn pv_of(v: &MV) -> PV {
     match v {
         MV::Prim(Put::Int(x)) => PV::Const(V::Int(*x)),
@@ -67,6 +76,7 @@ impl<'a> Engine<'a> {
             for p in ps {
                 self.field_put(f, pv_of(&MV::Prim(p.clone())));
             }
+            self.concrete_str_puts(m, f, ps);
         }
         // 结果对象图
         let obj = self.id(OBJECT);
@@ -142,6 +152,19 @@ impl<'a> Engine<'a> {
         ids[i] = Some(s);
     }
 
+    /// 具体求值中 String 字段的写入并入字段常量集与字段字符串槽（与字节码写入同一口径，见 bytecode.rs）：
+    /// 按名读取的资源 / 类 / 资源束经字段取名时，具体求值写入的名字照样计入，内容不可读的写入使槽推不出
+    fn concrete_str_puts(&mut self, m: usize, f: &MemberRef, ps: &[Put]) {
+        if f.desc != format!("L{STRING};") {
+            return;
+        }
+        let fi = self.field_node(f.clone());
+        for v in ps.iter().filter_map(put_str) {
+            self.field_strs_put(f, v.as_ref());
+            self.pstr_field_put(m, None, fi, v.as_ref());
+        }
+    }
+
     fn mat_val(&mut self, v: &MV, ids: &[Option<TypeSet>], via: &Via) -> Option<Feed> {
         let s = match v {
             MV::Prim(_) => None,
@@ -189,7 +212,7 @@ impl<'a> Engine<'a> {
         }
         let ctx = self.methods[m].ctx;
         let Some(Const::MethodHandle(imh)) = l.bargs.get(1) else { return };
-        self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, cap, &l.bargs);
+        self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, (cap, None), &l.bargs);
     }
 
     /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）
@@ -276,7 +299,7 @@ impl<'a> Engine<'a> {
                 }
                 (Operand::InvokeDynamic { bsm, name, desc, .. }, _) => {
                     let n = interp::nparams(desc);
-                    self.indy(m, off, &cf, *bsm, name, desc, &vec![V::Top; n]);
+                    self.indy(m, off, &cf, *bsm, name, desc, &vec![V::Top; n], false);
                 }
                 _ => {}
             }
