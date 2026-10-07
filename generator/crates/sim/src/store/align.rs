@@ -5,7 +5,7 @@ use crate::env::{erase, erased_base, to_ir_type, type_text};
 use crate::error::SimResult;
 use crate::exprs::{
     clone_moved_var, default_value, from_call, int_family_cast, into_call, is_default, is_default_or_null, is_null,
-    object_type, qualified_from, unchecked_cast,
+    object_from, object_type, qualified_from, unchecked_cast,
 };
 use crate::state::StackSim;
 use crate::types::{int_family, is_jvm_array, is_object, is_scalar, param_name, same_generic_family};
@@ -137,13 +137,18 @@ impl StackSim<'_> {
         Ok(())
     }
 
-    /// 再赋值的接口声明变量存入非接口值（非 null）：接口擦除载体；否则 None
+    /// 再赋值的接口声明变量存入非 null 值、且值不是该接口本身：接口擦除载体；否则 None。
+    /// 值为子接口（如 `Collection` 声明存入 `Set`）同样取声明接口——区间内后续存入的值
+    /// 可能不实现该子接口，变量按子接口定型会把它们包成子接口视图，派发落空
     fn reassigned_iface_carrier(&self, c: &StoreCtx, hint: &RsType) -> Option<RsType> {
         let env = self.env;
-        if !c.decl.as_ref().is_some_and(|d| d.reassigned) || is_null(&c.expr) || env.is_interface(&erase(&c.ty)) {
+        if !c.decl.as_ref().is_some_and(|d| d.reassigned) || is_null(&c.expr) {
             return None;
         }
         if !env.is_interface(&erase(hint)) {
+            return None;
+        }
+        if env.is_interface(&erase(&c.ty)) && erased_base(&c.ty, env) == erased_base(hint, env) {
             return None;
         }
         env.carrier_type(hint).filter(|k| type_text(k, env) != type_text(&c.ty, env))
@@ -162,7 +167,11 @@ impl StackSim<'_> {
         } else if let Some(carrier) = self.reassigned_iface_carrier(c, hint) {
             // 声明为接口且区间内再赋值：变量先后可持有不同运行时类（如 ArrayList 后接 subList 视图），
             // 静态类型取接口擦除载体，不收窄为首个值的具体类
-            let src = clone_moved_var(c.expr.clone(), &c.ty)?;
+            let mut src = clone_moved_var(c.expr.clone(), &c.ty)?;
+            if env.is_interface(&erase(&c.ty)) {
+                // 接口载体之间无直接 From：经 Object 边界
+                src = object_from(src)?;
+            }
             c.expr = qualified_from(to_ir_type(&carrier, env)?, Type::Infer, src)?;
             c.ty = carrier;
             c.force_let_ty = true;
