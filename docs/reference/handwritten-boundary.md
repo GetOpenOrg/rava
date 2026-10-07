@@ -137,16 +137,17 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - 分析器对手写的建模：手写返回对分析不透明、只能取 open(返回类型)，精度低于字节码（C1d 实测：`jdk/internal/misc`
   放行后 CollectorsDemo 闭包 −105 类）。这是收窄手写的直接收益之一。
 
-## 七、现状（C1d 终态，2026-09-30）
+## 七、现状（2026-10-08）
 
 | 调用目标 | 处理 |
 |---|---|
 | JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1） |
-| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`VM`、`BootLoader` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译 |
+| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`BootLoader`、`JceSecurity`） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译；过渡手写 `#[jvm_boundary]` 14 个（ClassLoader 6、BootLoader 2、JceSecurity 6），引导映像第 5 步（分支 boot-image-s5）归零 |
 | `[vm_boundary].translate_nested` | VM 契约类的纯 Java 嵌套类，按字节码翻译 |
-| `seeds.toml [boot_init] calls` | VM 引导期直接调用的无参 Java 入口，作为闭包根并在 `vm_boot_init` 中先于类初始化发射（当前为空：`setJavaLangAccess` 随 `[boot_init] classes` 首项 `System` 的初始化由 initPhase1 引导段首步执行） |
 
-原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
+已移出 `[vm_boundary]`、整类按字节码翻译（手写只剩 `ACC_NATIVE`）：`VM`、`Module`、`ModuleLayer`、`SecurityManager`（引导映像第 4 步）、`Unsafe`（a3-U0~U3）、`FileSystems`（a3-X2）、`InvokerBytecodeGenerator`（a3-X1，类定义点按 `[[intrinsic]] class_definition` 登记）。
+
+原 `[boundary]` 前缀、`[release]`、`seeds.toml [data_bundle]`、`seeds.toml [boot_init]`（引导初始化改由构建期引导映像求值器承担，`[concrete.boot]` 在 `vm_intrinsics.toml`，引导映像第 3–4 步）已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；
 精确闭包分析下的实测与精度收敛项见 C1d 计划 §6.12。
 
@@ -182,5 +183,5 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 **类 3 未完成**
 
 - 引用类语义：无 GC 模型，C4 之后实施（见类 3 条目）；
-- 信号 / 关停的最终语义：待决定 L，见引导映像计划 §8 U1 例外待决项（U12）；
+- 日志 / 信号链（(L) 链，`Shutdown.exit` → `logRuntimeExit`）：信号行为与 JDK 一致（2026-10-07 已定）；链上 `LoggerFinder` 提供者构建期确定、日志级别按映像值折叠（U12 已定，2026-10-08，引导映像计划 §8.4），机制 ①③ 待实施；
 - JVMTI 通知（`VirtualThread.notifyJvmti*`）：当前空操作，语义决定待在清单逐条登记。

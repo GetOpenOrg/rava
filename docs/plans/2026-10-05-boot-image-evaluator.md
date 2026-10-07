@@ -9,7 +9,7 @@
 > **2026-10-05 用户决策 U0–U6 已定（§8.1）**；第 1 步已在分支 `boot-image-s1` 实施，实测见 §5.3。
 > U1 改判为「运行期取宿主值」：下文 §3.2、§5.2 B1、§6 第 2 步验收已按 U1 改写；§0 第 1 条与 §5.1 的探针数字为钉值时的历史实测。
 >
-> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。待用户决策 U12 / U13 见 §8.4。
+> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。U12 / U13 已定（2026-10-08，用户采纳建议），见 §8.4。
 
 1. **可行，探针已在构建期跑完 HotSpot 的全部三个引导阶段。** 探针用的是 `engine/concrete` 同一个解释器的引导模式，输入是 macOS JDK 21.0.11 的 java.base 字节码，例子为 HelloWorld：
    - 次序：VM 预初始化 9 类和 3 个 VM 构造对象，然后 `initPhase1`、`initPhase2(false,false)`、`initPhase3`；
@@ -260,7 +260,7 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 
 ### 4.3 JceSecurity（6 个）
 
-**可以物化，但它不是引导阶段的内容**：HelloWorld 的 initPhase1–3 不初始化 JceSecurity。它属于用户程序可达时的构建期类初始化（C3 `build_time_init`，第 6 步），用同一个求值器。核对 JDK 21 的 `JceSecurity.<clinit>`：
+**可以物化，但它不是引导阶段的内容**：HelloWorld 的 initPhase1–3 不初始化 JceSecurity。它属于用户程序可达时的构建期类初始化（C3 `build_time_init`），用同一个求值器；JceSecurity 6 个的归零 2026-10-08 起前移到第 5 步（§6，分支 boot-image-s5）。核对 JDK 21 的 `JceSecurity.<clinit>`：
 - 它只建 CHM / IdentityHashMap / ReferenceQueue / WeakHashMap、`new URL("http://null.oracle.com/")`，再经 `JceSecurity$1` 调 `setupJurisdictionPolicies`；
 - 后者读 `Security.getProperty("crypto.policy")`，`Security.<clinit>` 读 `${java.home}/conf/security/java.security`；
 - 然后 NIO `isDirectory` / `newDirectoryStream("{default,exempt}_*.policy")` / `newInputStream`，解析出 `CryptoPermissions`；
@@ -756,7 +756,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
    - 前置条件：
      - 求值器能读 jimage 与模块资源（第 5 步 T3）；
      - 类路径资源在构建期全量打包，求值器可以枚举（U3：生产构建打包资源，取代延迟的 `toFileURL` 占位）。否则求值器在 `ServiceLoader` 上失败，构建报错。
-   - 语义：该路径上读到的属性取构建期值；用户提供者的构造函数在构建期运行。与 U1（属性运行期取宿主值）的划界在实施时登记为 U1 的例外项，例外项仅限提供者选择。
+   - 语义：该路径上读到的属性取构建期值；用户提供者的构造函数在构建期运行。与 U1（属性运行期取宿主值）的划界在实施时登记为 U1 的例外项，例外项仅限提供者选择（U12 已定，范围见 §8.4）。
 2. 通用静态字段非空折叠（对应 ②，分析器通用机制，无类名）。
    - 条件：静态字段的映像值非空，且档案内所有可达的 `putstatic` 写入值都非空。
    - 动作：`getstatic` 后的 `ifnull` / `ifnonnull` 按「非空」折叠，空分支不可达。
@@ -781,10 +781,10 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 项 | 实测（Linux，在 E 上切） | 预计减少 | 做完后终态 | 前置 / 待决 |
 |---|---|---|---|---|
 | S1 `sun/nio/cs/StandardCharsets.lookup` 以不定名字反射 | 598 → 406 | Linux −192（`sun/nio/cs` 165 → 9，另有 `jdk/internal/reflect` 8、`java/lang/invoke` 8 等）；macOS 约 −120（闭包中 `sun/nio/cs` 104 类，推算） | Linux ≈ 436，macOS ≈ 470 | 在 U1（运行期取宿主编码）下，按不定名字查字符集是合法可达，不是精度缺陷。要收窄，须先由用户重新审视 U1：例如把可选字符集固定为构建期声明的集合 |
-| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。收窄单独不可达（§5.6.5），终态需 `Class.genericInfo` 入映像，待用户决策 U13（§8.4） |
+| S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。收窄单独不可达（§5.6.5），终态需 `Class.genericInfo` 入映像，U13 已定（§8.4，做） |
 | S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
 
-- 排期：S2 待用户决策 U13（§8.4），排在三个机制之后的第一项；S1 待用户对 U1 的决定，不排进当前步骤。
+- 排期：S2 按 U13 已定（§8.4，`Class.genericInfo` 入映像），排在三个机制之后的第一项；S1 不做——U1 维持现状（2026-10-08 用户定，§8.4），按不定名字查字符集属合法可达。
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 
@@ -825,7 +825,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | `java/lang/class_loader_impl.rs` | 6 | 6 |
 | `javax/crypto/jce_security_impl.rs` | 6 | 6 |
 | `jdk/internal/loader/boot_loader_impl.rs` | 2 | 2 |
-| **全仓** | 23 | **14**（达第 4 步验收数；余项归第 5 步 L2 6、BootLoader 2，第 6 步 JceSecurity 6） |
+| **全仓** | 23 | **14**（达第 4 步验收数；余项归第 5 步 L2 6、BootLoader 2、JceSecurity 6——JceSecurity 2026-10-08 由第 6 步前移，§6） |
 
 `[vm_boundary] classes` 余 ClassLoader、Class、JceSecurity、BootLoader；`clinit_carried` 余 JceSecurity、Class。
 
@@ -958,8 +958,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；**VM / Class / SecurityManager（cabe9fb0，§5.6）**：vm_impl 8、class_impl 归零，全仓 23 → 14，SecurityManager 移出边界；待合批验证 |
-| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
-| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2、JceSecurity 6（2026-10-08 由第 6 步前移，分支 boot-image-s5） | `#[jvm_boundary]` 14 → 0；TestClassResourceStream 通过；JCA 用例通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
+| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native | `#[jvm_boundary]` 保持 0；CollectorsDemo 等冷独占正则链 0 类 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 
 ## 7. 风险
@@ -1020,13 +1020,13 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 不采纳「实测达标即接受现状」的备选。
 - §5.5.5 其余待决项（2、4、5、7–15）按代理实现认可；D5 物化与 S6 标准流随零拷贝一步排期。
 
-### 8.4 待用户决策与先行实施项（2026-10-08）
+### 8.4 U12 / U13 与去除无映像回退（已定，2026-10-08，用户采纳建议）
 
-| # | 事项 | 选项 | 建议 |
-|---|---|---|---|
-| U12 | U1 例外：§5.5.6 终态设计机制 ①③ 要求日志 / 信号链（(L) 链，`Runtime.exit` → `logRuntimeExit`）上的属性在构建期取值、用户 `LoggerFinder` 提供者的构造函数在构建期运行、运行期 `-Djdk.system.logger.level` 不再生效（原文第 757、765 行附近：「与 U1 的划界在实施时登记为 U1 的例外项」「一并登记」）。①③ 因此挂起，② 已做（§5.6.1）但 HelloWorld 收益依赖 ① | 采纳例外（仅限该路径）/ 维持 U1（①③ 不做，按平台上限 Linux ≤ 640 / macOS ≤ 590 重定） | 待用户 |
-| U13 | S2：`Class.genericInfo` 写入引导映像。S2 接收者精度已修（`Recv::Bounded`，§5.6.5），但 HelloWorld 闭包不降（约 3043 类）；需把热路径类镜像的 `genericInfo`（`ClassRepository`）在构建期算好写进映像，运行期命中缓存不再解析签名（§5.6.7 #6） | 做 / 不做（接受 `sun/reflect/generics` 留在闭包） | 做 |
-
-**已按授权先行实施、用户可撤回**：去除无映像回退——映像求值失败即构建失败，不保留运行期引导的第二条路径（dcabf9e3，§5.6.8，batch-1008 合批验证中）。
+| # | 事项 | 决定 |
+|---|---|---|
+| U12 | U1 例外：§5.5.6 终态设计机制 ①③ 所在的日志 / 信号链（(L) 链，`Runtime.exit` / `Shutdown.exit` → `logRuntimeExit`） | **已定（2026-10-08，用户采纳建议）**：接受为 U1 的例外，仅限该路径——日志路径相关属性取构建期值；用户 `LoggerFinder` 提供者的构造函数在构建期运行；运行期 `-Djdk.system.logger.level` 不再生效。此前因 U12 挂起的机制 ①③ 解除挂起，按 §5.5.6 实施 |
+| U13 | S2：`Class.genericInfo` 写入引导映像（S2 接收者精度已修，`Recv::Bounded`，§5.6.5；HelloWorld 闭包不降，约 3043 类；§5.6.7 #6） | **已定（2026-10-08，用户采纳建议）**：做——热路径类镜像的 `genericInfo`（`ClassRepository`）在构建期算好写进映像，运行期命中缓存不再解析签名 |
+| — | 去除无映像回退（映像求值失败即构建失败，不保留运行期引导的第二条路径；dcabf9e3，§5.6.8，batch-1008 合批验证中） | **保留（2026-10-08 用户确认）** |
+| U1 | 属性运行期取宿主值 | **维持现状（2026-10-08 用户定）**：`java.home`、`file.encoding`、`line.separator`、`sun.jnu.encoding`、`stdout.encoding` / `stderr.encoding` 仍为运行期宿主值；U12 之外不再加例外（S1 因此不做，见 §5.5.6「后续收窄排期」） |
 
 **待核对**：闭包构成报告（`docs/reports/2026-10-07-closure-composition.md`）基线 HelloWorld 468 类，与 boot-image-s4 起实测约 3043 / 3011 类（§5.6.5、enum-values-direct）落差很大，原因待查；门排名（`rava closure --gates`，分支 closure-gates）在新基线上出数后解释。
