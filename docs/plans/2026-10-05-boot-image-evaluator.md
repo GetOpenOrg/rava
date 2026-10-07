@@ -720,6 +720,20 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   三者都不满足「≤ 540 + 不截断 + 语义等价」，需要定取舍。
 - 门槛口径：Linux 上的 X2 基线已是 576。≤ 540 是否改按平台分别给出，或者继续压 `StandardCharsets.lookup` / 泛型签名两项（属 §5.5.3 精度线）。
 
+**待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
+
+1. 全量单测：bimg3-ut2-911a3a4d（sg1）的结果由主会话收取。合并 b6ed3950（Narrowed 改名、lib_runtime 删除）之后单测未跑。重点看三项：
+   - `absint::tests::image_object_results_compare_by_identity`；
+   - `manifest::vm_state` 各项（`boot_singletons` 已删除）；
+   - 闭包确定性两项。
+2. 抽查 7 例，输出须与 JDK 相同：HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestClassModuleFace、TestSetAccessibleBoundary、TestProtectionDomainFaces、TestStringGetCharsLegacy。6878583b 上 bimg3-f 为 7/7 通过，合并后待复验。known_failures.toml 中 TestModuleLayerDefine / TestClassModuleFace / TestProtectionDomainFaces 三项已移除，复验失败即为回归。
+3. 闭包数字：HelloWorld 在 Linux JDK 21 档案键下应为 3045，(M) 已折叠；去掉 (L) 后为 598。合并集成分支的 JCA 键判定收窄之后，这两个数是否变化待测。
+4. 第 3 步其余验收项未测：
+   - 二进制大小增量 ≤ 5%；
+   - 启动装载 ≤ 1 ms；
+   - TestBootLayer 输出与 JDK 相同（依赖第 5 步 jimage / getNativeMap）。
+5. 闭包 ≤ 540 待用户对上面 (L) 与门槛口径作出决策，本分支不再自行压缩。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
