@@ -3870,7 +3870,7 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
 
 1. **类路径运行模型由清单声明。** `vm_intrinsics.toml` 新增内建类别 `class_path`，含义是：原生二进制没有运行期
    应用类路径，方法体唯一的可观察效果就是「把类路径变成运行期加载源」或「从类路径加载」，由 VM 以构建期结果等价承载。
-   登记三个成员，均为手写类 ②（运行模型替换）：
+   登记四个成员，均为手写类 ②（运行模型替换）：
    - `URLClassPath.toFileURL(String)` 恒返回 null。类路径字符串里的元素不形成加载源，于是应用 ucp 的 `path` 恒空，
      与模块模式 cp = null 时「类路径上没有任何东西」的状态一致。`addFile` 自然随之失效。
    - `BuiltinClassLoader.findClassOnClassPathOrNull(String)` 恒返回 null。类路径上没有可定义的字节码；闭包内的类
@@ -3911,19 +3911,47 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
    
    这六个方法的终态仍是撤除：引导映像第 5 步（jimage）落地后，`ClassLoader.getResource` 走字节码，经委派链到达
    第 1 条的 `findResourceOnClassPath` 钩子，由同一张表承载。
+7. **嵌入资源视图与系统类加载器所见一致：模块资源在前，类路径在后**（协调方 C4 补充：`TestSystemStableProps`、
+   `TestClassResourceStream`）。
+   - `EmbeddedClassPath` 的两个 native 读的是「模块资源（至多一份）+ 类路径行」的合并视图，与 JVM 上
+     `getSystemResources` 的顺序（父加载器 / 模块先、类路径后）一致。于是 `getResource` / `getResources` /
+     `getResourceAsStream` 对 JDK 模块资源也给出 URL 与流，第 6 条的 `resource_stream` 不再另查模块表。
+   - 类文件也是模块资源：`<类名>.class` 形态的字符串若指向 JDK 类（`Origin::Jdk` / `Image`），嵌入该类解析胜出的
+     类文件字节（镜像改写类优先于 jmod，与类本身同源）。`resources.rs::path_like` 不再排除 `.class`，
+     `ClassPath::jdk_resource` 对 `.class` 名按类解析取字节。
+   - 资源名的来源分两侧，保证档案侧与具体程序无关：
+     - 档案侧（`jdk_resources::module_resources`，声明层）：非用户域调用链上方法体的字符串常量推导，规则不变；
+     - 用户侧（`UserMeta.user_module_resources`，用户 crate 的 `USER_MODULE_RESOURCES`）：用户类调用链上方法体
+       的字符串常量推导、档案侧未收的 JDK 模块资源，如 `getSystemResourceAsStream("java/lang/String.class")`。
+     运行期 `meta::module_resource(name)` 先查档案表、再查用户表；带前导 `/` 的名不命中（`ClassLoader` 资源名语义）。
+   - 用户侧两张表落在 `user/src/rava_resources/{class_path,module}/<i>`。
+8. **镜像类整体入闭包只限运行期定义的类**（`closure/src/engine/seeds.rs::seed_image`）。
+   - 原规则：镜像独有类 / VM 支持类中父类在闭包内的非接口类，整体入闭包（实例化 + 全部方法 + 全量反射面），
+     且同直接父类的闭包类（物种族）同取全部方法。它针对物种类、代理类、注入调用器这类由 VM / 运行模型在运行期
+     直接定义并实例化、字节码里看不到实例化点的类。
+   - `EmbeddedClassPath$Handler`（父类 `URLStreamHandler`）与 `$Connection`（父类 `URLConnection`）是普通支持类，
+     却命中了原规则：`Handler` 被整体实例化，`sun.net.www.protocol.jar.Handler` 等同父类的闭包类被拉成物种族、
+     全部方法入闭包（`sameFile → hostsEqual → InetAddress.getByName → ServiceLoader → …`），HelloWorld 由 469 类
+     涨到 2870 类（tag `17a`）。
+   - 新判据（通用，按字节码事实）：**除自身外没有任何镜像类 `new` 它**，才是运行期定义的类。被别的镜像类 `new`
+     的类，实例化点在字节码里可见，走常规可达性。实测：JDK 21 镜像独有类与五个 VM 支持类中，`Species_*`、
+     `Proxy$Dyn`、`Species_Dyn`、`InjectedInvokerDyn`、`SerializationConstructorAccessorDyn` 只被自身 `new`（或从不被 `new`），
+     判定不变；只有 `EmbeddedClassPath$Handler` / `$Connection` 改走常规可达性。判据集首轮补种时算一次
+     （`SeedState.image_static_new`）。
 
 #### 影响的 e2e 与处理
 
 | 测试 | 依赖 | 处理 |
 |---|---|---|
-| `TestClassResourceStream` | 读自身 `.class`（流、URL）、未命中为 null、`getSystemResource(自身)`、`getClassLoader().getResource(自身)`；`getSystemResource("java/lang/String.class")` | 类路径部分由资源表命中（预期由失败转为通过，只剩 `jdk-res` 一行）。JDK 类资源属于引导映像第 5 步（jimage），不在本步范围 |
-| `TestSystemStableProps` | `getSystemResourceAsStream("java/lang/String.class")` | JDK 类资源，同上，仍为已知失败（R7） |
+| `TestClassResourceStream` | 读自身 `.class`（流、URL）、未命中为 null、`getSystemResource(自身)`、`getClassLoader().getResource(自身)`；`getSystemResource("java/lang/String.class")` | 自身 `.class` 由类路径表命中；`jdk-res` 由第 7 条用户侧模块资源（`java/lang/String.class`）命中。预期由运行 NPE 转为通过（C4 全量登记的失败） |
+| `TestSystemStableProps` | `getSystemResourceAsStream("java/lang/String.class")`，期望 `sys-stream=true head=CA` | 第 7 条：用户侧模块资源嵌入 `java/lang/String.class` 字节，流首字节 `0xCA`。预期由 `sys-stream-ex=NullPointerException` 转为通过（C4 全量登记的失败，日志 `error_logs/TestSystemStableProps_ubuntu_jdk21.log`） |
 | `TestSystemPropsSpec` | `java.class.path` 存在 | 保持 `""`，不受影响 |
 | `TestAppClassLoader` | `forName` 不存在的类 → CNFE；自定义 `getResources` 覆盖；ServiceLoader 经上下文加载器 | CNFE 路径：`findClassOnClassPathOrNull` 恒 null，结果不变。覆盖分派不变 |
 | `TestServiceLoaderEmpty`、`TestBootContextLoader` 等 ServiceLoader / 上下文加载器用例 | `getResources("META-INF/services/…")` | 用户档案若带 `META-INF/services`，现在能枚举到。e2e 用例没有资源文件，枚举仍为空，输出不变 |
 | `TestClassLoaderIdentity`、`TestForNameInit`、`TestClassForNameInit`、`TestForNameComputedName`、`TestModuleLayerDefine`、`TestDynamicProxy` 等 | 加载器层级 / forName | 走 `findLoadedClass0`，不经类路径，不受影响；需抽查确认 |
 
-e2e 语料中没有非 `.java` 的资源文件，所以资源表的内容只有用户 `.class`。
+e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内容只有用户 `.class`；用户侧模块资源表只含用户代码
+指名的 JDK 资源（`TestClassResourceStream` / `TestSystemStableProps` 为 `java/lang/String.class`）。
 
 #### 产品取舍（待用户决策，本项停在建议上，实现按建议默认）
 
@@ -3938,3 +3966,59 @@ e2e 语料中没有非 `.java` 的资源文件，所以资源表的内容只有�
   - (b) 新增 VM 支持类 `sun.net.www.protocol.rava_cp.Handler`，使 URL$DefaultFactory 能按协议名找到它。
   
   建议：先 (a)。若库语料出现往返用法再做 (b)。
+
+#### 实测（tag `17b`，对照 `16c`；`17a` 为第 8 条修正前）
+
+| 用例 | 类（16c → 17b） | 方法（16c → 17b） | 耗时 ms | 峰值 RSS MB |
+|---|---|---|---|---|
+| HelloWorld | 469 → 464（−6 / +1） | 1823 → 1738（−85 / +0） | 548 → 530 | 290 → 225 |
+| StockTrans | 3150 → 2798（−355 / +3） | 19916 → 17310（−2621 / +15） | 31147 → 30228 | 2247 → 1941 |
+| DeepCopy | 3152 → 2800（−355 / +3） | 19936 → 17323（−2628 / +15） | 31048 → 30203 | 2270 → 1963 |
+| TestSerialDefaultSuid | 3157 → 2805（−355 / +3） | 19928 → 17319（−2624 / +15） | 31641 → 30856 | 2308 → 1887 |
+
+- 新增项只有 `EmbeddedClassPath` 本身（HelloWorld 只到类型层，无方法），以及三例大用例里的 `$Handler` / `$Connection`
+  与它们覆盖或继承的 `URLConnection.getHeaderField` / `getHeaderFieldDate` / `getLastModified`：这是新运行模型的承载类，
+  取代被移除的 `URLClassPath$JarLoader` / `$FileLoader` / `$Loader`、`FileURLMapper`、`HttpURLConnection` 等。除此之外，
+  类集与方法集均为 16c 的子集。
+- 大用例的 −355 类来自 ucp 的加载器链整体出闭包：jar / file 加载源、`JarFile` 校验、由此牵出的 JCA 提供者
+  （`KeychainStore`、`RSACipher` …）与 NIO 缓冲族。
+- `17a`（第 8 条修正前）HelloWorld 涨到 2870 类 / 16962 方法，原因见第 8 条。
+
+#### jar `Handler` 能否出闭包（`cl.sh DeepCopy dcjh17b --flows '@trace:sun/net/www/protocol/jar/Handler'`）
+
+不能。理由可靠，两条都是字节码事实：
+
+1. `ClassLoaders.<clinit>` 无条件执行 `new URLClassPath(cp, false)`，构造器无条件执行
+   `jarHandler = new sun.net.www.protocol.jar.Handler()`（trace #1–#6）。cp = null 时也一样。所以 `Handler` 必然被实例化。
+   HelloWorld 中它只有 `<init>` 在闭包里。
+2. DeepCopy 另有一条用户可达路径：`URL.readObject` / `readResolve`（反序列化 URL）→ `URL.getURLStreamHandler(protocol)`
+   → `URL$DefaultFactory.createURLStreamHandler`，协议名来自流，于是按名构造 jar `Handler`（trace #16–#55）。
+   这是合法语义：反序列化一个 `jar:` URL 本来就需要它。它的 `parseURL` / `sameFile` / `hashCode` 等方法因此可达。
+
+`ucp` 的 jar 加载源（`JarLoader`）已经出闭包；`Handler` 本身只能经由「把 `jarHandler` 字段改成惰性」这类改写 JDK 字节码
+的方式拿掉，不符合手写边界规范，不做。
+
+#### 抽查清单（服务器，由用户发起）
+
+- 预期由失败转为通过：`TestClassResourceStream`、`TestSystemStableProps`（C4 全量登记的两例）。
+- 类路径 / 加载器 / 资源：`TestSystemPropsSpec`、`TestAppClassLoader`、`TestServiceLoaderEmpty`、`TestBootContextLoader`、
+  `TestClassLoaderIdentity`、`TestForNameInit`、`TestClassForNameInit`、`TestForNameComputedName`、`TestModuleLayerDefine`、
+  `TestDynamicProxy`，以及其余 ServiceLoader 用例（`--filter ServiceLoader`）。
+- 第 8 条判据（物种类 / 代理类整体入闭包不变）：MethodHandle 与 Proxy 相关用例（`--filter MethodHandle`、`--filter Proxy`）。
+- 四例回归：`HelloWorld`、`StockTrans`、`DeepCopy`、`TestSerialDefaultSuid`。
+
+#### 单元测试与编译（本机，`build/check-target`）
+
+- 生成器单测：`closure`、`classfile`、`resolve`、`input`、`emit` 全过（11 + 193 + 71 + 2 + 19 + 13 + 8 + 1，0 失败）。
+- `closure_cli` 的 `closure_independent_of_hash_seed` 与 `closure_independent_of_order` 都通过（`_large` 按惯例 ignored），
+  即与哈希种子和处理顺序无关。
+- `rava_meta_tables` 单测全过。
+- 对 `TestClassResourceStream` 的 scratch 跑 `cargo check`，rc=0。唯一的警告是既有的 pc_map 警告，与本步无关。
+- 提交顺序说明：`34b92dd2`（清单与加载器手写改用 `EmbeddedClassPath`）在 `5351646a`（新增该类）之前。
+  因此只有 `34b92dd2` 这个中间提交缺类，`5351646a` 及之后的终态可以编译。
+
+#### 未完成项与续作入口
+
+1. 服务器抽查：按上面的清单，在 C4 冻结解除后由用户发起。合入集成分支也等冻结解除，本分支暂不合入。
+2. T1 / T2 产品取舍：待用户决策。当前实现按建议，T1 取 (a)，T2 取 (a)。
+3. T1 (c) 的收窄（资源名推导）属于体积线的精度项，待 T1 决策后再排。
