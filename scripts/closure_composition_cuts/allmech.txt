@@ -1,0 +1,22 @@
+# 以上除 formatter、assertion（已删：desiredAssertionStatus0 已由 vm_intrinsics 折叠，再切其调用者使分析停滞 >35 分钟）外全部合并（面外机制同时收窄的上界）
+java/lang/Class.getEnumConstantsShared:()[Ljava/lang/Object;@49
+java/util/Tripwire.trip:(Ljava/lang/Class;Ljava/lang/String;)V
+sun/util/logging/PlatformLogger.getLogger:(Ljava/lang/String;)Lsun/util/logging/PlatformLogger;
+java/lang/System.getLogger:(Ljava/lang/String;)Ljava/lang/System$Logger;
+java/lang/Shutdown.logRuntimeExit:(I)V
+jdk/internal/logger/LazyLoggers.getLogger:(Ljava/lang/String;Ljava/lang/Module;)Ljava/lang/System$Logger;
+jdk/internal/logger/LoggerFinderLoader.findLoggerFinderProviders:()Ljava/util/Iterator;
+jdk/internal/logger/LoggerFinderLoader.loadLoggerFinder:()Ljava/lang/System$LoggerFinder;
+java/util/ServiceLoader$LazyClassPathLookupIterator.nextProviderClass:()Ljava/lang/Class;
+java/util/jar/JarFile.initializeVerifier:()V
+java/util/jar/JarFile.maybeInstantiateVerifier:()V
+jdk/internal/loader/URLClassPath.getResource:(Ljava/lang/String;Z)Ljdk/internal/loader/Resource;
+jdk/internal/loader/URLClassPath.findResource:(Ljava/lang/String;Z)Ljava/net/URL;
+jdk/internal/loader/URLClassPath.findResources:(Ljava/lang/String;Z)Ljava/util/Enumeration;
+java/nio/charset/Charset.lookup2:(Ljava/lang/String;)Ljava/nio/charset/Charset;
+java/nio/charset/Charset$2.run:()Ljava/nio/charset/Charset;
+jdk/internal/access/SharedSecrets.ensureClassInitialized:(Ljava/lang/Class;)V
+jdk/internal/util/ClassFileDumper$2.run:()Ljava/nio/file/Path;
+jdk/internal/util/ClassFileDumper.validateDumpDir:(Ljava/lang/String;)Ljava/nio/file/Path;
+java/lang/StackTraceElement$HashedModules.hashedModules:()Ljava/util/Set;
+java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V

@@ -1,0 +1,2 @@
+# CHM 计数争用路径（ThreadLocalRandom 探针）
+java/util/concurrent/ConcurrentHashMap.fullAddCount:(JZ)V

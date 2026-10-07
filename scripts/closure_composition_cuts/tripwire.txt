@@ -1,0 +1,2 @@
+# Tripwire（org.openjdk.java.util.stream.tripwire 调试属性，构建期折叠为 false）
+java/util/Tripwire.trip:(Ljava/lang/Class;Ljava/lang/String;)V

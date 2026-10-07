@@ -1,0 +1,2 @@
+# ServiceLoader 类路径 META-INF/services 惰性查找（闭合映像：提供者构建期已知）
+java/util/ServiceLoader$LazyClassPathLookupIterator.nextProviderClass:()Ljava/lang/Class;

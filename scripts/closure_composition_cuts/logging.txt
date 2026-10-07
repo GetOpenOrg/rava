@@ -1,0 +1,6 @@
+# 整块日志入口（上界：平台日志 / System.Logger / 运行期退出日志全切）
+java/util/Tripwire.trip:(Ljava/lang/Class;Ljava/lang/String;)V
+sun/util/logging/PlatformLogger.getLogger:(Ljava/lang/String;)Lsun/util/logging/PlatformLogger;
+java/lang/System.getLogger:(Ljava/lang/String;)Ljava/lang/System$Logger;
+java/lang/Shutdown.logRuntimeExit:(I)V
+jdk/internal/logger/LazyLoggers.getLogger:(Ljava/lang/String;Ljava/lang/Module;)Ljava/lang/System$Logger;
