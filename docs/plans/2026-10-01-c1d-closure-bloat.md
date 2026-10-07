@@ -4294,5 +4294,5 @@ lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 为 97.0k（基线
 3. 生成器 `manifest` 单测新增 `static_bases_parse`、`handle_access_parse`。
 4. `closure_independent_of_hash_seed` / `closure_independent_of_order`：待 dev 恢复后跑。
 5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
-   `TestJcaSasl` 与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
+   `TestJcaSasl`（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
    （重点看反射拷贝构造、`AtomicXxxFieldUpdater`、序列化 `ObjectStreamClass` 字段读写、注解代理等经 `Field` 存取的用例）。

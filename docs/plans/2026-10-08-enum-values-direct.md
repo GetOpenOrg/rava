@@ -201,8 +201,8 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 
 ## 七、待验证清单
 
-1. **合批 e2e**：CollectorsDemo、HelloWorld、DeepCopy、TestJcaSasl、TestEnumBasic、TestEnumAdvanced、
-   SwitchExpressions 输出与 JDK 一致；含 EnumSet / EnumMap / `Enum.valueOf` / switch on enum 的用例抽查。
+1. **合批 e2e**：CollectorsDemo、HelloWorld、DeepCopy、TestEnumBasic、TestEnumAdvanced、
+   SwitchExpressions 输出与 JDK 一致；TestJcaSasl 只核闭包类数（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）；含 EnumSet / EnumMap / `Enum.valueOf` / switch on enum 的用例抽查。
 2. **VM 支持类编译**：`Method$Direct.java` 经 `image.rs` 的 `javac --patch-module java.base` 编入（本机已用 javac 21 /
    graalvm 25 手动编过；访问 `AccessibleObject.override` 与包私有 `checkAccess`，同包合法）。
 3. **手写 invoke0 编译**：`method_direct_impl.rs` 与生成的 `Method_Direct` 声明层对齐（本机不能单独 check java_runtime）。
