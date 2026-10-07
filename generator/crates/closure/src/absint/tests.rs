@@ -444,5 +444,5 @@ fn image_object_results_compare_by_identity() {
     assert_eq!(a.mirror_field_assumed, vec![0, 1]);
     let a = analyze("p/A", "(Ljava/lang/Class;Ljava/lang/Class;)V", true, &code, &ImageGetter([Some(7), None]));
     assert_eq!(a.reachable, vec![true; 7]);
-    assert!(a.mirror_field_assumed.is_empty());
+    assert_eq!(a.mirror_field_assumed, vec![0]);
 }
