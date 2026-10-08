@@ -380,8 +380,10 @@ impl ExtVm {
         let Some(x) = self.vm.ext.as_deref() else { return serde_json::Value::Null };
         let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
         for w in x.failed.values().chain(self.export_failed.values()) {
-            // 原因按首段归并（去掉类名后的具体位置）
-            let k: String = w.chars().take(60).collect();
+            // 原因按根因归并：取嵌套链最内层（最后一个「类初始化失败 <类>：」之后），去掉括注细节
+            let root = w.rsplit("类初始化失败 ").next().unwrap_or(w);
+            let root = root.split_once('：').filter(|_| root.len() < w.len()).map_or(root, |(_, r)| r);
+            let k = root.split('（').next().unwrap_or(root).to_string();
             *reasons.entry(k).or_default() += 1;
         }
         let mut top: Vec<(String, usize)> = reasons.into_iter().collect();
