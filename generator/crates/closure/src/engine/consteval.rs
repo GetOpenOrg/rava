@@ -150,12 +150,20 @@ impl Ctx<'_> {
         let Some(cf) = self.h.class(&t.owner) else { return empty() };
         let Some(meth) = cf.method(&t.name, &t.desc) else { return empty() };
         let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else { return empty() };
-        if self.ceval_depth.get() >= MAX_DEPTH {
+        // 穿过分派转发方法（`forward.rs`：静态方法把引用形参交给虚 / 接口分派）且转发的是构造完成标签对象时
+        // 不计深度：转发方法本身不产生值，深度留给被转发的动作体（如特权块 `doPrivileged → executePrivileged
+        // → action.run()`）。转发链有限、同键重入由 `memo_enter` 截断，求值仍然终止
+        let pass = meth.is_static() && {
+            let mask = self.dispatch_slots(t);
+            bound.iter().enumerate().any(|(i, b)| i < 64 && mask & (1 << i) != 0 && b.as_ref().is_some_and(fields_tag))
+        };
+        if !pass && self.ceval_depth.get() >= MAX_DEPTH {
             return None;
         }
         let frame = self.memo_enter(format!("ceval:{key}"), false)?;
         self.stats.borrow_mut().ceval[2] += 1;
-        self.ceval_depth.set(self.ceval_depth.get() + 1);
+        let depth = self.ceval_depth.get();
+        self.ceval_depth.set(depth + u32::from(!pass));
         let live = |_: &str| true;
         let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         let (clean, inp) = self.memo_leave(frame);

@@ -307,8 +307,6 @@ pub struct Engine<'a> {
     dflt_alloc: HashSet<u32>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
-    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
-    forwarders: HashMap<MemberRef, u64>,
     /// 内存访问中继槽判定缓存（按成员）：流到手写内存访问成员内存槽的形参槽；非空即继承调用方上下文（`relay`）
     relays: relay::RelayCache,
     pub inited: IndexMap<String, Via>,

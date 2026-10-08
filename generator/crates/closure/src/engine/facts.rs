@@ -206,6 +206,9 @@ pub(super) struct Ctx<'a> {
     pub(super) mdeps: RefCell<HashMap<u32, BTreeSet<usize>>>,
     pub(super) memo_next: Cell<u32>,
     pub(super) ceval_depth: Cell<u32>,
+    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward.rs`），
+    /// 常量实参求值穿过转发方法不计深度（`consteval.rs`）
+    pub(super) forwarders: RefCell<HashMap<MemberRef, u64>>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }
