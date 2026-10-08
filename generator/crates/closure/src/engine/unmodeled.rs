@@ -25,6 +25,7 @@ impl Engine<'_> {
     ///   open 展开为空集并不说明只可能是 null；
     /// - 手写调用点写回实参数组的元素来源；无字节码可分析（类缺失）的方法返回值；
     /// - open 直接注入点：类型集不经流边并入，来源不可追溯；
+    /// - 按调用点建模而切断实参的被调方形参（`field_access.rs`：字段句柄存取的对象实参 / 写入值）；
     /// - 派生：以值流可能缺失的对象为基址 / 接收者的读取结果——数组元素（数组来自手写 / native，元素由
     ///   Rust 填入，流图里没有元素到读取点的边）、实例字段（Rust 侧构造的对象，字段由 Rust 写入）、
     ///   实例方法返回值（接收者不在 G 中，派发目标与其返回值都不在流图里）。
@@ -42,9 +43,18 @@ impl Engine<'_> {
         // open 直接注入点（`add_to` 登记的 `open_inj`）：值以类型集而非流边并入（open 实参 / 接收者的非虚调用、
         // 未知值按声明类型……），其上游来源可能是未建模节点而流图里没有这条边——同样视为未建模来源
         let injected = self.open_inj.keys().filter_map(|x| g.lookup(x));
+        // 按调用点建模而切断的被调方形参（`field_access.rs`）：实参不经流边流入，被调方字节码照常使用。
+        // 不驻留流图的（从未有值、也无出边）取虚序号直接标记，被调方以它为接收者的调用同样不判
+        let cut = self.field_access_cut_params();
+        let mut absent: HashMap<Node, u32> = HashMap::default();
+        for x in cut.iter().filter(|x| g.lookup(x).is_none()) {
+            absent.insert(*x, (n + absent.len()) as u32);
+        }
+        let cut_in = cut.iter().filter_map(|x| g.lookup(x));
         let mut marked = vec![false; n];
         let rep = |i: u32| if (i as usize) < n { g.rep(i) } else { i };
-        reach(&g.edges, rep, &mut marked, roots.chain(injected));
+        reach(&g.edges, rep, &mut marked, roots.chain(injected).chain(cut_in));
+        marked.resize(n + absent.len(), true);
         // 派生读取点：(读取点代表, 基址 / 接收者值来源代表；None = 值未知)。类型集始终为空的读取点
         // （值流缺失时恰是这种情形：未建模的基址 / 接收者派发不到目标、读不出元素）不在流图里，
         // 取虚序号——否则它的派生标记无处存放，下游以它为接收者的调用会被误判恒 null
@@ -55,7 +65,6 @@ impl Engine<'_> {
             .filter_map(|(i, mn)| mn.analysis.as_ref().map(|a| (i, a)))
             .flat_map(|(i, a)| a.events.iter().filter_map(move |(pc, e)| Some((Node::S(i, *pc), recv_sources(i, derived_base(e)?)))))
             .collect();
-        let mut absent: HashMap<Node, u32> = HashMap::default();
         for (at, _) in &reads {
             if g.lookup(at).is_none() {
                 let k = (n + absent.len()) as u32;

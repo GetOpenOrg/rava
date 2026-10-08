@@ -16,7 +16,8 @@
 //! - 写：写入值落到同一组字段（抽象对象逐对象，其余经未知接收者写入）。
 //!
 //! 对象实参与写入值不流入被调方形参（接收者照常流入：访问器建立、访问检查、类初始化与对象实参无关），
-//! 存取效果由本模块给出。下列情形按字节码接边：接收者是口径推不出的标记、open（非建模代码产出的句柄）；
+//! 存取效果由本模块给出。被调方字节码运行期照常使用这些形参，它们的空值集按未建模来源处理（不判 `null_recv`，
+//! 见 [`Engine::field_access_cut_params`]）。下列情形按字节码接边：接收者是口径推不出的标记、open（非建模代码产出的句柄）；
 //! 取得入口经非字节码调用点（反射调用、lambda、手写体）可达时句柄可能不带标记，全部站点改按字节码接边。
 
 use super::*;
@@ -94,6 +95,28 @@ impl<'a> Engine<'a> {
             });
         }
         Some(FaRecv::Covered)
+    }
+
+    /// 被切断的被调方形参：已建模站点的被调方（句柄存取入口）上未接实参的引用形参（对象实参 / 写入值）。
+    /// 被调方字节码运行期照常执行并使用这些形参（`value.getClass().getName()` 构造异常消息、`value instanceof Xxx`
+    /// 分支……），流图里它们的值集只缺这些调用点的实参——空集是「值流缺失」，不是 null。`unmodeled.rs` 把它们
+    /// 作为未建模来源：依赖空集的 `null_recv` 折叠在它们及其下游（访问器形参、收窄值……）上一律不判。
+    /// 已整体回放为字节码接边（`fa_untrusted`）时实参都已接上，无切断
+    pub(super) fn field_access_cut_params(&self) -> Vec<Node> {
+        if self.fa_untrusted.is_some() {
+            return Vec::new();
+        }
+        let mut out: Vec<Node> = Vec::new();
+        for s in self.fa_sites.values() {
+            for &t in &s.ts {
+                let base = usize::from(!self.methods[t].is_static);
+                let pts = &self.methods[t].ptypes;
+                out.extend((base..pts.len()).filter(|&i| pts[i].is_some()).map(|i| Node::P(t, i as u16)));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// 字段句柄取得入口经非字节码调用点可达：句柄可能不带来源标记，已建模的站点改按字节码接边
