@@ -352,12 +352,15 @@ impl<'a> Engine<'a> {
                 let key = &self.methods[m].key;
                 out.push(format!("  {}", self.method_label(m)));
                 out.push(format!("    pvals {:?}", self.pvals.get(&m)));
+                let cs: Vec<String> = self.callers.get(&m).into_iter().flatten().take(12).map(|&c| self.method_label(c)).collect();
+                out.push(format!("    callers {cs:?}"));
                 out.push(format!("    sites {:?}", self.site_used.get(&m)));
                 out.push(format!("    sret {:?} nret {:?} rvals {:?}", self.sret.get(&m), self.nret.get(&m), self.ctx.rvals.borrow().get(key)));
                 if let Some(a) = self.site_analysis(m) {
                     let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
                         absint::Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
                         absint::Event::Return(v) => Some(format!("@{o} ret {v:?}")),
+                        absint::Event::Invoke { mref, args, .. } => Some(format!("@{o} {}{args:?}", mref.name)),
                         _ => None,
                     }).collect();
                     out.push(format!("    conservative {} events {}", a.conservative, evs.join(" ")));
