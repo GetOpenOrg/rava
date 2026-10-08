@@ -14,7 +14,7 @@ use ty::type_map::mangle_name;
 use ty::{consts, ClassInfo, Registry, ShortNames, TyCtx};
 
 use crate::boundary::Boundary;
-use crate::build::{EmitInput, MethodKey};
+use crate::build::EmitInput;
 use crate::handwritten::HwEntry;
 use crate::manifest::RuntimeManifest;
 use crate::norm::NInsn;
@@ -71,7 +71,7 @@ pub struct MethodPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassPlan {
     pub name: String,
-    /// 全部方法都不在调用链上（仅类型存根：无 `<clinit>`、静态字段不初始化）
+    /// 全部方法都不在调用链上且类不在初始化集合（仅类型存根：无 `<clinit>`、静态字段不初始化）
     pub type_only: bool,
     pub methods: Vec<MethodPlan>,
     /// 接口伴生契约补发的方法名（手写 vtable 实现、类模型缺席）
@@ -85,7 +85,6 @@ pub struct Planner<'a> {
     boundary: Boundary<'a>,
     /// 根类 public 实例方法 (名, 参数描述符部分)
     root_keys: BTreeSet<(String, String)>,
-    user: BTreeSet<&'a str>,
 }
 
 fn param_part(desc: &str) -> &str {
@@ -125,7 +124,6 @@ impl<'a> Planner<'a> {
             ty: TyCtx::new(&input.registry, names, &manifest.ty),
             boundary: Boundary::new(manifest),
             root_keys: root_virtual_methods(cp),
-            user: input.user_classes.iter().map(String::as_str).collect(),
         }
     }
 
@@ -133,12 +131,9 @@ impl<'a> Planner<'a> {
         &self.input.registry
     }
 
+    /// 调用链成员判定（用户类与非用户类同一口径，见 [`EmitInput::in_chain`]）
     fn in_chain(&self, cls: &str, m: &Method) -> bool {
-        if self.user.contains(cls) {
-            return true;
-        }
-        let k: MethodKey = (cls.to_string(), m.name.clone(), m.desc.clone());
-        self.input.visited.contains(&k)
+        self.input.in_chain(cls, &m.name, &m.desc)
     }
 
     /// `Iface.super.m()` 的方法体声明者（常量池类为 registry 接口时按广度遍历）
@@ -320,7 +315,7 @@ impl<'a> Planner<'a> {
         let cf: &ClassFile = ci.class_file();
         let hw = self.input.handwritten.get(cls);
         let is_iface = ci.is_interface();
-        let type_only = !self.user.contains(cls) && !cf.methods.iter().any(|m| self.in_chain(cls, m));
+        let type_only = self.input.type_only(ci);
         let visible: Vec<Method> = cf.methods.iter().filter(|m| !m.is_synthetic()).cloned().collect();
         let synthetic = cf
             .methods

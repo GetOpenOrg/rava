@@ -5,14 +5,13 @@
 //! 只有闭包内的类有类镜像，所指未知的 Class 只能是其中之一；此后有目录服务类入闭包，站点重跑补选。
 //! 入选服务的 provider 按 JVM `ServiceLoader.loadProvider` 的构造途径入链：命名模块里声明了
 //! `public static provider()` 的取该方法，否则取公开无参构造器（实例化 + 类初始化）。
-//! 有模块 provider 入选时，清单 `population`（引导期装填模块服务目录的 JDK 方法）作根。
+//! 模块服务目录本身由引导映像物化（`Module.defineModules` 按系统模块描述符登记，构建期执行），不另作根。
 
 use super::*;
 use crate::seeds::services::{self, Catalog, Provider};
 
 #[derive(Default)]
 pub struct ServiceState {
-    population_done: bool,
     /// 输出：被查找的服务 → 入选 provider（无 provider 的服务同样记录）
     pub selected: BTreeMap<String, Vec<Provider>>,
     /// 输出：出现过所指未知的服务 Class 实参（按闭包内的服务处理）
@@ -72,17 +71,6 @@ impl<'a> Engine<'a> {
             let providers = catalog.get(&svc).to_vec();
             for p in &providers {
                 self.seed_provider(p, Via::method("service-provider", m, Some(off)));
-            }
-            if providers.iter().any(|p| p.module.is_some()) && !self.seeds.services.population_done {
-                self.seeds.services.population_done = true;
-                for k in self.man.seeds.services.population.clone() {
-                    let Some(key) = super::seeds::parse_member(&k) else { continue };
-                    let via = Via::method("service-catalog", m, Some(off));
-                    self.init(&key.owner.clone(), via.clone());
-                    let t = self.method(key, via);
-                    self.open_params(t);
-                    self.returns_to_vm(t);
-                }
             }
             self.seeds.services.selected.insert(svc, providers);
         }

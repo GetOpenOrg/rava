@@ -9,13 +9,19 @@ impl Vm {
         if c.starts_with('[') {
             return Ok(());
         }
+        if self.tracing() {
+            self.trace.touched.insert(c.to_string());
+        }
         match self.init.get(c) {
-            Some(Init::Done | Init::Running) => return Ok(()),
+            Some(Init::Done | Init::Running) => return self.ext_inited(c),
             Some(Init::Failed(w)) => return fail(format!("类初始化失败 {c}：{w}")),
             None => {}
         }
         let key: Rc<str> = Rc::from(c);
         if self.boot {
+            if self.ext.is_some() {
+                return self.ext_init(env, key);
+            }
             return self.boot_init(env, key);
         }
         self.init.insert(key.clone(), Init::Running);
@@ -52,7 +58,7 @@ impl Vm {
 
     /// 引导求值的类初始化：`<clinit>` 在日志标记内执行；延迟值参与求值即撤回其全部效果，该类转为
     /// 运行期初始化（静态字段构建期不可读）。其余失败与异常即构建失败
-    fn boot_init(&mut self, env: &Env, key: Rc<str>) -> R<()> {
+    pub(super) fn boot_init(&mut self, env: &Env, key: Rc<str>) -> R<()> {
         self.jlog_init(&key);
         self.init.insert(key.clone(), Init::Running);
         let m = self.jmark();
@@ -72,7 +78,7 @@ impl Vm {
                 self.mark_opaque(key.clone());
                 let why = w.split(" @ ").next().unwrap_or(&w).to_string();
                 self.bj.rt_attempts.push((key.clone(), why.clone()));
-                self.bj.recs.push(super::journal::Rec::RuntimeInit { class: key.clone(), why });
+                self.push_rec(env, super::journal::Rec::RuntimeInit { class: key.clone(), why });
                 self.war_capture(m.rl(), m.heap());
                 self.init.insert(key, Init::Done);
                 Ok(())

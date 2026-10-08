@@ -41,7 +41,7 @@ fn body_lib(decl: &str) -> String {
          non_camel_case_types, non_upper_case_globals, static_mut_refs, unused_comparisons)]\n\
          // 声明层全部公开项（`crate::java::…` / `crate::prelude` 经此解析到声明层）\n\
          use {decl}::*;\n\
-         mod body;\n"
+         pub mod body;\n"
     )
 }
 
@@ -56,6 +56,8 @@ pub struct BodyCrate {
 #[derive(Debug, Default)]
 pub struct BodyPlan {
     pub crates: Vec<BodyCrate>,
+    /// 类 → 其实现层模块的绝对路径（`::<实现 crate>::body::<模块>`；存储类型 `X__inner` 在此）
+    pub homes: BTreeMap<String, String>,
 }
 
 impl BodyPlan {
@@ -174,11 +176,12 @@ pub fn split(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_
     let sizes: Vec<usize> = bodies.iter().map(|b| b.2.len()).collect();
     let bins = pack(&sizes, BODY_CRATE_BYTES);
     let mut plan = BodyPlan::default();
-    for ((_, rel, body), bin) in bodies.into_iter().zip(bins) {
+    for ((cls, rel, body), bin) in bodies.into_iter().zip(bins) {
         while plan.crates.len() <= bin {
             let name = crates.body(plan.crates.len() + 1);
             plan.crates.push(BodyCrate { name, files: BTreeMap::new() });
         }
+        plan.homes.insert(cls, format!("::{}::body::{}", plan.crates[bin].name, module_path(&rel)));
         plan.crates[bin].files.insert(rel, body);
     }
     Ok(plan)
@@ -207,7 +210,8 @@ fn pack(sizes: &[usize], cap: usize) -> Vec<usize> {
 
 /// 模块声明行（关键字名加 `r#`）
 fn mod_line(name: &str) -> String {
-    if is_rust_keyword(name) { format!("mod r#{name};") } else { format!("mod {name};") }
+    // 公开：构建期引导映像（根门面 crate）按路径引用实现层的 `X__inner`
+    if is_rust_keyword(name) { format!("pub mod r#{name};") } else { format!("pub mod {name};") }
 }
 
 impl BodyPlan {

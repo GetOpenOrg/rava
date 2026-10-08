@@ -12,6 +12,10 @@ impl<'a> Engine<'a> {
         self.reflective_writes(m, off, mref, opcode, args);
         self.service_lookup(m, off, opcode, mref, args);
         self.prop_key_site(m, off, opcode, mref, iface, args);
+        // 直连反射调用（`reflect_direct.rs`）：调用点已接特化入口与各目标，不再按原入口接边
+        if self.reflect_direct(m, off, opcode, mref, args) {
+            return;
+        }
         let pargs = if opcode == classfile::op::INVOKESTATIC { args } else { args.get(1..).unwrap_or(&[]) };
         self.call_vals = Some(Rc::from(pargs));
         let lambda_cap = self.lambda_cap.take();
@@ -238,7 +242,10 @@ impl<'a> Engine<'a> {
             Some(sel) => {
                 let (o, n, d) = sel.key();
                 let key = MemberRef { owner: o, name: n, desc: d };
-                let base = self.recv_ctx(r);
+                let base = match self.recv_ctx(r) {
+                    NOCTX => self.relay_ctx(m, &key),
+                    c => c,
+                };
                 let cx = self.recv_call_ctx(m, off, &key, base);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
@@ -291,9 +298,16 @@ impl<'a> Engine<'a> {
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
         if !rest.is_empty() {
-            let c = cx(self, NOCTX);
+            // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体
+            let base = self.relay_ctx(m, &key);
+            let c = cx(self, base);
             let t = self.method_ctx(key, c, via);
-            self.edge(m, off, t, Recv::Feeds(vec![Feed::S(rest)]), a, ret, res);
+            // 物化后的值集不再带来源节点：来源的接口界随接收者传下（`getClass` 结果只展开同时 ⊂ 该接口的子类型）
+            let recv = match self.feeds_bound(&fs) {
+                Some(b) => Recv::Bounded(rest, b),
+                None => Recv::Feeds(vec![Feed::S(rest)]),
+            };
+            self.edge(m, off, t, recv, a, ret, res);
         }
     }
 
@@ -319,13 +333,24 @@ impl<'a> Engine<'a> {
                 self.pstr_site(m, off, &cv, |j| Some(pstrs::PSlot::M(t, base + j)), |j| ptypes.get(base + j).copied().flatten() == Some(string));
             }
         }
+        // 按字段句柄存取、接收者为来源标记（或由标记给出身份的句柄对象）：按调用点建模，对象实参与写入值
+        // 不流入被调方形参（`field_access.rs`）
+        let fa = self.field_access_recv(t, &recv).filter(|k| !matches!(k, field_access::FaRecv::Bytecode));
+        let bound = match &recv {
+            Recv::Bounded(_, b) => Some(*b),
+            _ => None,
+        };
         let recv_fs = self.edge_this(t, recv);
+        if let Some(k) = fa {
+            self.field_access_site(m, off, t, k, a, res.filter(|_| ret.is_some()));
+            return;
+        }
         for (j, f) in a.iter().enumerate() {
             if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(base + j)) {
                 self.feed(fs, Node::P(t, (base + j) as u16), *pt);
             }
         }
-        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+        self.edge_ret(m, off, t, recv_fs, bound, a, ret, res);
     }
 
     /// 已对 (m, off, t) 以同一实参 a（同一实参值）完整接边后，再派发新接收者 r：
@@ -333,7 +358,7 @@ impl<'a> Engine<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge_more(&mut self, m: usize, off: u32, t: usize, r: u32, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let recv_fs = self.edge_this(t, Recv::Exact(r));
-        self.edge_ret(m, off, t, recv_fs, a, ret, res);
+        self.edge_ret(m, off, t, recv_fs, None, a, ret, res);
     }
 
     /// 接收者流入被调方 this，返回本调用点的接收者来源
@@ -350,13 +375,39 @@ impl<'a> Engine<'a> {
                 self.feed(&fs, Node::P(t, 0), pt);
                 Some(fs)
             }
+            (Recv::Bounded(s, _), Some(pt)) => {
+                let fs = vec![Feed::S(s)];
+                self.feed(&fs, Node::P(t, 0), pt);
+                Some(fs)
+            }
             _ => None,
         }
     }
 
-    /// 手写调用点与按调用点建模的返回值
+    /// 接收者来源 fs 的共同接口界：含 open 的来源全是同一接口类型判定站点（`open_bounds`）时为该接口，否则无界
+    fn feeds_bound(&mut self, fs: &[Feed]) -> Option<u32> {
+        let mut bound = None;
+        for f in fs {
+            let b = match f {
+                Feed::S(s) if s.open.is_empty() => continue,
+                Feed::S(_) => return None,
+                Feed::N(n) => match self.open_bounds.get(n).copied() {
+                    Some(b) => b,
+                    None if self.set_of(*n).open.is_empty() => continue,
+                    None => return None,
+                },
+            };
+            if bound.is_some_and(|x| x != b) {
+                return None;
+            }
+            bound = Some(b);
+        }
+        bound
+    }
+
+    /// 手写调用点与按调用点建模的返回值；bound 为物化接收者的接口界（[`Recv::Bounded`]）
     #[allow(clippy::too_many_arguments)]
-    fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+    fn edge_ret(&mut self, m: usize, off: u32, t: usize, recv_fs: Option<Vec<Feed>>, bound: Option<u32>, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         let is_static = self.methods[t].is_static;
         let base = usize::from(!is_static);
         // 调用方的内存效果已按清单逐调用点建模（`[facts.array_writes]` / `[facts.memory_reads]`）时，其手写体对内存访问
@@ -374,7 +425,7 @@ impl<'a> Engine<'a> {
                 for f in recv_fs.iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => self.mirror_into(op, s, res),
+                        Feed::S(s) => self.mirror_into(op, s, res, bound),
                     }
                 }
             } else if model == RetModel::Receiver {
@@ -390,7 +441,15 @@ impl<'a> Engine<'a> {
                 for f in a.get(i).cloned().flatten().iter().flatten() {
                     match f {
                         Feed::N(n) => self.mflow(*n, res, op),
-                        Feed::S(s) => self.mirror_into(op, s, res),
+                        Feed::S(s) => self.mirror_into(op, s, res, None),
+                    }
+                }
+            } else if model == RetModel::StaticBase {
+                // 静态字段基址：结果 = 本调用点字段句柄实参各值所指字段声明类的类镜像（逐调用点；不经返回值汇合的 open 基址）
+                for f in a.first().cloned().flatten().iter().flatten() {
+                    match f {
+                        Feed::N(n) => self.mflow(*n, res, MirrorOp::Holder),
+                        Feed::S(s) => self.mirror_into(MirrorOp::Holder, s, res, None),
                     }
                 }
             } else if let RetModel::Read(src) = model {
@@ -430,7 +489,7 @@ impl<'a> Engine<'a> {
     /// 形参常量：并入本调用点的实参值（非字节码调用点 = Top）；变化时被调方法失效
     pub(super) fn bind_params(&mut self, m: usize, t: usize, base: usize, n: usize) {
         let cv = self.call_vals.clone();
-        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of).collect());
+        let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of_ret).collect());
         match &cv {
             Some(vs) => {
                 self.taint_site(m, t, base, n, vs);
@@ -452,6 +511,7 @@ impl<'a> Engine<'a> {
 
     /// 形参常量并入（vals 不含接收者；None = 实参值未知）
     pub(super) fn bind_pvs(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
+        self.pstr_offsite(t);
         if vals.is_none() {
             self.pstr_top_m(t);
         }

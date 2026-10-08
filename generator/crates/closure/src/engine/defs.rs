@@ -78,6 +78,9 @@ pub(super) enum MirrorOp {
     Sub(u32),
     /// 每个类镜像所指类型的新数组（`Array.newInstance`）：调用点（方法, 偏移）上按元素类型区分的数组分配点
     ArrayOf(u32, u32),
+    /// 每个字段句柄所指静态字段的基址（`Unsafe.staticFieldBase`）：枚举标记口径内各类（含超类 / 超接口）的类镜像，
+    /// 口径推不出或句柄非枚举标记时为所指未知的类镜像
+    Holder,
 }
 
 /// 返回值按调用点建模的清单声明（`vm_intrinsics.toml`）
@@ -101,6 +104,10 @@ pub(super) enum RetModel {
     NewArray(usize),
     /// 调用者类镜像：调用方（@CallerSensitive 方法）各调用边上调用方所在类的镜像
     Caller,
+    /// 静态字段基址：本调用点字段句柄实参（形参 0，不含接收者）所指字段声明类的类镜像
+    StaticBase,
+    /// 按字段句柄存取（false 读 / true 写）：接收者为口径推得出的字段枚举标记时按调用点建模（`field_access.rs`）
+    HandleAccess(bool),
 }
 
 impl RetModel {
@@ -208,6 +215,8 @@ pub(super) enum Recv {
     None,
     Exact(u32),
     Feeds(Vec<Feed>),
+    /// 已物化的接收者值集，其 open(T) 实为 T ∩ 接口 I（来源全为同一接口类型判定站点，见 `Engine::open_bounds`）
+    Bounded(TypeSet, u32),
 }
 
 /// 派发枢纽：同一调用成员在同一接收者集合上的派发。
@@ -264,8 +273,10 @@ pub(super) struct ArrayOfSite {
     pub(super) mirrors: BTreeSet<u32>,
     /// 结果节点
     pub(super) dsts: Vec<Node>,
-    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含 open(Object)
+    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含任意数组（`reflect.rs::any_array`）
     pub(super) open: bool,
+    /// 实参出现过维数已达逐类型建模上限的数组类镜像：结果含 open(`[[Object`)（`reflect.rs::deep_mirror`）
+    pub(super) deep: bool,
     /// 已放行：所指已知的类镜像逐类型建分配点
     pub(super) released: bool,
 }

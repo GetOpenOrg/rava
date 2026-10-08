@@ -39,15 +39,49 @@ impl<'a> Engine<'a> {
             f.null_recv = self.null_recv(&clones, &um);
             self.noreturn_calls(code, &all, &thrown, &mut f);
             f.props = self.prop_folds(&f, &all);
+            f.direct_calls = self.direct_calls(&clones, &all, code, &f);
             // 自检：活指令顺序落入 dead_pcs（folds 规则禁止），出现即分析缺陷
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() || !f.direct_calls.is_empty() {
                 out.push(f);
             }
         }
         out.sort_by(|a, b| a.method.cmp(&b.method));
+        out
+    }
+
+    /// 直连反射调用点：每个到达该点的克隆都按直连处理且特化入口相同（未分析的克隆不导出），
+    /// 且该点不按 null_recv / noreturn / 常量导出，也不落在死区（dead_pcs / noreturn_dead_pcs：如前序调用定论不返回）
+    fn direct_calls(&self, clones: &[usize], all: &[Rc<Analysis>], code: &classfile::Code, f: &Fold) -> Vec<(u32, MemberRef)> {
+        let pcs: BTreeSet<u32> = self.rdirect.keys().filter(|(i, _)| clones.contains(i)).map(|(_, pc)| *pc).collect();
+        let dead = |pc: u32| f.dead_pcs.iter().chain(&f.noreturn_dead_pcs).any(|&(s, e)| s <= pc && pc < e);
+        let mut out = Vec::new();
+        for pc in pcs {
+            if dead(pc) || f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.consts.iter().any(|c| c.0 == pc) {
+                continue;
+            }
+            let Ok(idx) = code.insns.binary_search_by_key(&pc, |x| x.offset) else { continue };
+            let mut helper: Option<&MemberRef> = None;
+            let mut ok = true;
+            for (&i, a) in clones.iter().zip(all) {
+                if !a.reachable.get(idx).copied().unwrap_or(false) {
+                    continue;
+                }
+                match (self.direct_call_of(i, pc), helper) {
+                    (Some(h), None) => helper = Some(h),
+                    (Some(h), Some(prev)) if h == prev => {}
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if let (true, Some(h)) = (ok, helper) {
+                out.push((pc, h.clone()));
+            }
+        }
         out
     }
 
@@ -89,6 +123,11 @@ impl<'a> Engine<'a> {
     /// 标记已流到句柄写入口的枚举口径（`类` / `*` = 推不出；可序列化字段口径加 `:serial`）
     pub fn field_writer_cause(&self) -> Option<&str> {
         self.fwriter_cause.as_deref()
+    }
+
+    /// 句柄存取不再按来源标记建模的原因（字段句柄取得入口经非字节码调用点可达，见 `field_access.rs`）
+    pub fn field_access_untrusted(&self) -> Option<&str> {
+        self.fa_untrusted.as_deref()
     }
 
     pub fn field_handle_released(&self) -> Vec<String> {
@@ -279,7 +318,10 @@ impl<'a> Engine<'a> {
         if let Some(q) = pat.strip_prefix("@fopen:") {
             let c = &self.ctx;
             out.push(format!("@fopen all={} deser={}", c.fopen_all.get(), c.deser.get()));
-            let mut v: Vec<String> = c.fopen_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  name {n}")).collect();
+            let mut v: Vec<String> = c.fopen_names.borrow().iter().filter(|n| n.contains(q)).map(|n| {
+                let via = self.fopen_name_via.get(n).copied().flatten().map_or("站点外".into(), |(m, off)| format!("{}@{off}", self.method_label(m)));
+                format!("  name {n} ← {via}")
+            }).collect();
             v.extend(c.fopen.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  key {k}")));
             v.extend(c.fhw.borrow().iter().map(|k| k.to_string()).filter(|k| k.contains(q)).map(|k| format!("  hw {k}")));
             v.extend(c.fhw_names.borrow().iter().filter(|n| n.contains(q)).map(|n| format!("  hwname {n}")));
@@ -328,6 +370,20 @@ impl<'a> Engine<'a> {
                 }
                 let opens: Vec<String> = s.open.iter().map(|o| self.names[o as usize].to_string()).collect();
                 out.push(format!("  {}：数组分配点 {arr}、抽象对象 {obj}、open {opens:?}、其余 {}：{}", self.node_str(n), other.len(), other.iter().take(40).cloned().collect::<Vec<_>>().join(" ")));
+            }
+            return out;
+        }
+        // 抽象对象明细诊断：`@objs:<节点子串>`——匹配节点（前 4 个）值集里的抽象对象 / 数组分配点名（前 40，标逃逸）
+        if let Some(q) = pat.strip_prefix("@objs:") {
+            let mut ns: Vec<Node> = self.graph.keys().filter(|n| self.node_str(**n).contains(q)).copied().collect();
+            ns.sort_by_key(|n| format!("{n:?}"));
+            for n in ns.into_iter().take(4) {
+                let s = self.graph.get(&n).cloned().unwrap_or_default();
+                out.push(format!("  {}：", self.node_str(n)));
+                for c in s.classes.iter().filter(|c| self.objs.contains_key(c) || self.arrays.contains_key(c)).take(40) {
+                    let esc = if self.escaped.contains(&c) { " [逃逸]" } else { "" };
+                    out.push(format!("    {}{esc}", self.names[c as usize]));
+                }
             }
             return out;
         }

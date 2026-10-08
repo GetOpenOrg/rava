@@ -21,6 +21,7 @@ mod guards;
 mod hooks;
 pub mod layout;
 mod objects;
+mod returns;
 mod scan;
 mod stype;
 mod syntax;
@@ -73,6 +74,8 @@ pub enum Upcall {
 /// Rust 类型路径（分段）→ binary name 候选（由调用方按类路径验证存在）
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeRef(pub Vec<String>);
+
+pub use returns::{HwRet, RetCall};
 
 /// 手写体里的一次调用：`recv.name(args)` 或 `Path::name(args)`。
 ///
@@ -162,6 +165,8 @@ pub struct FnInfo {
     /// 引用的手写实现对象（本文件的 struct 名 `S`，或经 `use` 引入的 `…::<类>_impl::S`），同样传递闭包：
     /// 手写体可能在此新建该对象并交给建模代码
     pub objects: BTreeSet<TypeRef>,
+    /// 返回值来源（只取本 fn 自己的返回点，不沿被调 fn 传递；见 `returns.rs`）
+    pub ret: HwRet,
 }
 
 /// 手写实现对象：手写文件里实现 Java 类型 vtable trait（`impl X__VTable for S`）的本地 struct。
@@ -201,6 +206,8 @@ pub struct MemberHw {
     pub fields: Vec<FieldAccess>,
     pub array_access: bool,
     pub objects: BTreeSet<TypeRef>,
+    /// 命中 fn 返回值来源之并
+    pub ret: HwRet,
     /// 命中的 fn 名（溯源）
     pub fns: Vec<String>,
 }
@@ -216,6 +223,7 @@ impl MemberHw {
         self.fields.extend(f.fields.iter().cloned());
         self.array_access |= f.array_access;
         self.objects.extend(f.objects.iter().cloned());
+        self.ret.join(&f.ret);
         self.fns.push(name.to_string());
     }
 }

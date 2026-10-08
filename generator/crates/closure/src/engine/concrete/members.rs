@@ -25,6 +25,7 @@ impl Vm {
                     return fail(format!("读取可变静态字段 {}.{}", fr.decl, fr.name));
                 }
                 if self.boot {
+                    self.ext_get_static(&fr)?;
                     if let Some(v) = env.cfg().boot.statics.get(&format!("{}.{}", fr.decl, fr.name)) {
                         if v == "@deferred" {
                             return defer(format!("延迟值参与求值：VM 注入的宿主相关静态 {}.{}", fr.decl, fr.name));
@@ -39,7 +40,7 @@ impl Vm {
                         let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
                         let o = self.alloc(ty, body);
                         self.mark_placeholder(o, &format!("运行期初始化类的静态字段 {}.{}", fr.decl, fr.name));
-                        self.bj.recs.push(super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
+                        self.push_rec(env, super::journal::Rec::Read { decl: fr.decl.clone(), name: Rc::from(fr.name.as_str()), ph: o });
                         st.push(CV::R(o));
                         return Ok(());
                     }

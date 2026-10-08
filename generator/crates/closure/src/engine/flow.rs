@@ -167,8 +167,17 @@ impl<'a> Engine<'a> {
                 self.ctx.stats.borrow_mut().sprof.note_push(w, src, Some(n), new);
             }
         }
+        if self.fa_watch.contains_key(&n) {
+            self.field_access_grown(n, delta);
+        }
         if self.mirror_watch.contains_key(&n) {
             self.mirror_grown(n, delta);
+        }
+        if self.obj_watch.contains_key(&n) {
+            self.obj_grown(n);
+        }
+        if self.oret_watch.contains(&n) {
+            self.oret_grown(n, delta);
         }
         if let Some(cs) = self.call_watch.get(&n) {
             for &c in cs {
@@ -310,8 +319,9 @@ impl<'a> Engine<'a> {
             for m in ms {
                 let n = self.graph.node(m);
                 if let Some(ds) = self.mflows.get(&n).cloned() {
+                    let bound = self.open_bounds.get(&n).copied();
                     for (d, op) in ds {
-                        self.mirror_into(op, &s, d);
+                        self.mirror_into(op, &s, d, bound);
                     }
                 }
             }
@@ -327,7 +337,8 @@ impl<'a> Engine<'a> {
         let si = self.graph.id(src);
         self.graph.mark_mirror_src(si);
         let s = self.set_of(src);
-        self.mirror_into(op, &s, dst);
+        let bound = self.open_bounds.get(&src).copied();
+        self.mirror_into(op, &s, dst, bound);
     }
 
     /// 方法 m 内抽象值 v 的类型来源；未知值按声明类型 open
@@ -418,6 +429,9 @@ impl<'a> Engine<'a> {
             if self.ctx.fopen_names.borrow().contains(&key.name) {
                 self.open_static(&key);
             }
+        }
+        if self.img.is_some() {
+            self.image_field(&key, fi);
         }
         fi
     }

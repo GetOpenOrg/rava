@@ -10,11 +10,25 @@
 //!   但它上面的改写 / 逃逸照样计入属性表的改写判定——属性表的别名不会因合流而从判定中消失
 //! - `Empty`：空的不可修改集合（清单 `[facts.empty_collections]` 的工厂结果）：按 JDK 规范不含元素、
 //!   不可改写，其上的查询（`isEmpty` / `size` / `get` …）按清单给出的值折叠
+//! - `Len(n)`：以常量长度 n 分配的数组（`newarray` / `anewarray` 的长度操作数为常量）。数组长度在其生命期内不变
+//!   （JVMS §2.7，没有任何指令、反射或 Unsafe 操作能改变已分配数组的长度），`arraylength` 按标签折叠为 n，
+//!   无论数组经局部变量、形参、字段还是返回值传到读取点（形参 / 字段 / 返回常量格按标签汇合，见 `engine/facts.rs`）
+//! - `Image(o, finals)`：构建期引导映像中的对象 o（映像对象下标）——运行时为同一个进程内对象（启动序列物化），
+//!   如类镜像所属的模块（按「定义加载器 + 包」查映像 VM 模块表）、构建期初始化类静态字段所指的对象（枚举常量等）。
+//!   两个映像标签的值按下标判定引用相等 / 不等（`if_acmp` 折叠）；finals 同 `Fields`，为该对象 final 实例字段中的
+//!   标量 / 字符串常量（映像值，getfield 按其折叠；模块钩子给出的标签不带）。`IMAGE_PENDING` 是空镜像值集的乐观占位（调用方登记乐观答复，值集增长后重分析）
 //!
 //! - `Narrowed(o)`：条件分支判定成立一侧的收窄值（见 `narrow.rs`）——类镜像子类型判定（`K.class.isAssignableFrom(x)`）
 //!   成立一侧的 x（输入值集中所指类 ⊂ K 的类镜像），或键判定（`x.<键读取>().equals(name)`）成立一侧的 x（输入值集中
 //!   键可能等于 name 的对象）。值本身与来源不变（按来源上溯的名字 / 类求值照旧），只有类型流改取本方法偏移 o（条件跳转）
 //!   处的收窄节点。偏移只在本方法内有意义：不算对象身份（[`V::obj`] 不给出），不进常量格、不跨方法传递
+//!
+//! - `Str(s)`：字符串值（或 null）的形状（[`Shape`]：已知前后缀与不出现的字符）。串不可变，标签随值跨方法传递
+//!   （常量格保留）；不算对象身份（[`V::obj`] 不给出）
+//! - `Builder { group, content }`：清单字符串构建器（`[facts.string_concat]`）在本方法内的已知内容。构建器可变，
+//!   标签只在本方法内有效：group = 分配点偏移，同组标签是同一对象（或同一分配点的先后对象）的各份拷贝；
+//!   任何可能改写或泄露它的操作（追加、作为实参 / 写入字段 / 数组 / 再次执行该分配点）撤掉全组标签，
+//!   追加结果另得新标签；不进常量格、不跨方法，异常处理器入口撤掉
 //!
 //! 标签只随值传播：两个值合流时标签相同才保留（null 与对象合流保留对象标签，可空性另记）；
 //! 属性表（或可能的属性表）与其它值合流得 `MaybeSysProps`。
@@ -23,7 +37,11 @@ use std::rc::Rc;
 
 use classfile::MemberRef;
 
+use super::shape::Shape;
 use super::{Src, V};
+
+/// 空镜像值集上映像对象读取的乐观占位（见模块文档）
+pub const IMAGE_PENDING: u32 = u32::MAX;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Obj {
@@ -33,8 +51,16 @@ pub enum Obj {
     SysProps,
     MaybeSysProps,
     Empty,
+    /// 常量长度的数组（见模块文档）
+    Len(i32),
+    /// 构建期引导映像中的对象（映像对象下标, final 实例字段常量；见模块文档）
+    Image(u32, Vec<(MemberRef, V)>),
     /// 条件分支判定成立一侧的收窄值（本方法内条件跳转偏移，见模块文档）
     Narrowed(u32),
+    /// 字符串形状
+    Str(Shape),
+    /// 构建器内容（分配点偏移, 内容形状）
+    Builder { group: u32, content: Shape },
 }
 
 impl Obj {
@@ -46,7 +72,7 @@ impl Obj {
 
     pub fn field(&self, f: &MemberRef) -> Option<&V> {
         match self {
-            Obj::Fields(fs) => fs.iter().find(|(k, _)| k == f).map(|(_, v)| v),
+            Obj::Fields(fs) | Obj::Image(_, fs) => fs.iter().find(|(k, _)| k == f).map(|(_, v)| v),
             _ => None,
         }
     }
@@ -56,9 +82,37 @@ impl V {
     /// 值的对象标签（`Uninit` 与收窄标记不算身份）
     pub fn obj(&self) -> Option<&Rc<Obj>> {
         match self {
-            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::Narrowed(_)) => Some(o),
+            V::Ref { obj: Some(o), .. } if !matches!(**o, Obj::Uninit | Obj::Narrowed(_) | Obj::Str(_) | Obj::Builder { .. }) => Some(o),
             _ => None,
         }
+    }
+
+    /// 字符串值的形状（null 以外的部分）：常量即恰为该串；带形状标签的引用取标签
+    pub fn str_shape(&self) -> Option<Shape> {
+        match self {
+            V::Str(s, _) => Some(Shape::lit(s)),
+            V::Ref { obj: Some(o), .. } => match &**o {
+                Obj::Str(sh) => Some(sh.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// 构建器标签（分配点偏移, 内容）
+    pub fn builder(&self) -> Option<(u32, &Shape)> {
+        match self {
+            V::Ref { obj: Some(o), .. } => match &**o {
+                Obj::Builder { group, content } => Some((*group, content)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// 带形状标签的引用（常量格保留，跨方法传递）
+    pub fn shape_tagged(&self) -> bool {
+        matches!(self, V::Ref { obj: Some(o), .. } if matches!(**o, Obj::Str(_)))
     }
 
     /// 条件分支判定成立一侧的收窄值：其类型流取本方法该偏移处的收窄节点
@@ -101,6 +155,14 @@ pub(super) fn join_obj(a: &V, b: &V) -> Option<Rc<Obj>> {
         (V::Null, V::Ref { obj, .. }) | (V::Ref { obj, .. }, V::Null) => obj.clone(),
         (V::Ref { obj: Some(x), .. }, V::Ref { obj: Some(y), .. }) if x == y => Some(x.clone()),
         _ if [tag(a), tag(b)].iter().flatten().any(|o| o.may_be_sysprops()) => Some(Rc::new(Obj::MaybeSysProps)),
-        _ => None,
+        _ => join_shapes(a, b).map(|s| Rc::new(Obj::Str(s))),
+    }
+}
+
+/// 两个字符串值（常量 / 带形状标签的引用 / null）合流的形状；任一侧不是这三类（形状未知）→ None
+fn join_shapes(a: &V, b: &V) -> Option<Shape> {
+    match (a, b) {
+        (V::Null, x) | (x, V::Null) => x.str_shape(),
+        _ => Some(a.str_shape()?.join(&b.str_shape()?)).filter(|s| !s.is_top()),
     }
 }

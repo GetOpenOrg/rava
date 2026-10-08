@@ -204,7 +204,7 @@ impl StackSim<'_> {
 
     /// 绑定并发射 `let mut name[: ty] = value;`
     fn emit_let(&mut self, slot: u16, name: Ident, c: &mut StoreCtx) -> SimResult<()> {
-        self.state.locals.insert(slot, Local { name: name.clone(), ty: c.ty.clone(), is_new: true });
+        self.state.locals.insert(slot, Local { name: name.clone(), ty: c.ty.clone(), is_new: true, null: false });
         self.state.slot_decl_depth.insert(slot, self.state.depth);
         self.state.slot_bind_pos.insert(slot, self.state.current_offset);
         let value = if c.src_is_object { maybe_downcast(c.expr.clone(), &c.ty, self.env)? } else { c.expr.clone() };

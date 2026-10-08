@@ -19,7 +19,7 @@ use closure::manifest::Domain;
 use resolve::classpath::{ClassPath, Origin};
 use ty::{ClassInfo, Registry};
 
-use crate::facts::{ClosureFacts, SysPropFacts};
+use crate::facts::ClosureFacts;
 use crate::handwritten::HandwrittenMap;
 use crate::manifest::RuntimeManifest;
 use crate::norm::{apply_fold, CodeOps, NInsn, NormCode};
@@ -117,12 +117,15 @@ pub struct EmitInput {
     pub hw_inherited: Vec<MethodKey>,
     /// lambda 站点的函数式接口（分析器 `sam_types`；档案发射时 JDK 侧取档案）：`I__Lambda` 合成集
     pub sam_types: BTreeSet<String>,
-    /// 模块服务表（分析器 `seeds.module_services`）：java_meta 引导服务目录
-    pub module_services: Vec<(String, String)>,
-    /// VM 初始系统属性表（分析器折叠所用的清单表）：java_meta 初始属性
-    pub system_properties: SysPropFacts,
-    /// 模块资源（清单序；缺失者不列）
-    pub module_resources: Vec<(String, Vec<u8>)>,
+    /// 构建期引导映像（分析器 `boot_image_data`）：发射层物化映像区与启动序列
+    pub boot_image: closure::image::ImageData,
+    /// 模块资源（嵌入本程序 jimage，`NativeImageBuffer.getNativeMap` 映射）：档案侧（非用户域调用链上方法体
+    /// 推导，并入分析器按名求出的资源）与用户侧（用户类调用链上方法体指名的 JDK 模块资源，如
+    /// `ClassLoader.getSystemResourceAsStream("java/lang/String.class")`）取并，按 (资源名, 模块) 有序去重
+    pub module_resources: Vec<crate::resources::ModuleResource>,
+    /// 类路径资源（§30.15）：应用类路径的全部文件 (资源名, 字节)，按名有序、同名按类路径序；
+    /// 读表入口不在调用链上时为空
+    pub class_path_resources: Vec<(String, Vec<u8>)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
     pub precheck_visited: BTreeSet<String>,
     pub handwritten: HandwrittenMap,
@@ -159,7 +162,30 @@ impl EmitInput {
     pub fn normalized(&self) -> &BTreeMap<MethodKey, NormCode> {
         &self.normalized
     }
+
+    /// 调用链成员判定：方法键在 [`EmitInput::visited`] 中（闭包分析器的已解析方法 ∪ 调用点符号键 ∪
+    /// 类初始化）。用户类与非用户类同一口径——不在链上的方法一律发 `panic!("stub: …")` 存根
+    pub fn in_chain(&self, cls: &str, name: &str, desc: &str) -> bool {
+        self.visited.contains(&(cls.to_string(), name.to_string(), desc.to_string()))
+    }
+
+    /// 类在分析器的类初始化集合中（`visited` 含 `(类, <clinit>, ()V)`；类未声明 `<clinit>` 时同样登记，
+    /// 如只经 getstatic / putstatic 默认值静态字段而触发初始化的类）
+    pub fn initialized(&self, cls: &str) -> bool {
+        self.in_chain(cls, CLINIT_NAME, CLINIT_DESC)
+    }
+
+    /// 类型存根（仅类型身份：不发 `__clinit`、静态字段发 panic 存根访问器）：没有任何声明方法在调用链上，
+    /// 且类不在初始化集合中。用户类与非用户类同一口径
+    pub fn type_only(&self, ci: &ClassInfo) -> bool {
+        let n = ci.name();
+        !self.initialized(n) && !ci.methods().iter().any(|m| self.in_chain(n, &m.name, &m.desc))
+    }
 }
+
+/// 类初始化方法名与描述符（[`EmitInput::initialized`] 的键）
+const CLINIT_NAME: &str = "<clinit>";
+const CLINIT_DESC: &str = "()V";
 
 /// 闭包类的装载口径：lib / JDK / 镜像档案（用户档案只经本编译单元进入）
 fn load(cp: &ClassPath, name: &str) -> Option<Arc<ClassFile>> {
@@ -224,7 +250,7 @@ fn visited_of(inp: &BuildInput<'_>) -> BTreeSet<MethodKey> {
     let clinits: Vec<MethodKey> = f
         .clinit
         .iter()
-        .map(|c| (c.clone(), "<clinit>".to_string(), "()V".to_string()))
+        .map(|c| (c.clone(), CLINIT_NAME.to_string(), CLINIT_DESC.to_string()))
         .filter(|k| !boundary.contains(k.0.as_str()) || visited.contains(k))
         .collect();
     visited.extend(clinits);
@@ -384,6 +410,15 @@ impl<'a> BuildInput<'a> {
         }
     }
 
+    /// 类路径资源表的读取入口是否在调用链上（`[class_path] resource_readers`）
+    fn class_path_read(&self, visited: &BTreeSet<MethodKey>) -> bool {
+        self.manifest.class_path_readers.iter().any(|m| {
+            let Some((cls, rest)) = m.split_once('.') else { return false };
+            let Some((name, desc)) = rest.split_once(':') else { return false };
+            visited.contains(&(cls.to_string(), name.to_string(), desc.to_string()))
+        })
+    }
+
     /// 构建发射层输入
     pub fn build(&self) -> Result<EmitInput, InputError> {
         let f = self.facts;
@@ -405,7 +440,13 @@ impl<'a> BuildInput<'a> {
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
-        let module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.named_resources);
+        let user_files: Vec<Arc<ClassFile>> = self.user_classes.iter().filter_map(|c| self.cp.get(c)).collect();
+        let user_strings = visited_strings(&user_files, &visited, &normalized);
+        let mut module_resources = crate::resources::derive(self.cp, &strings, &f.seeds.named_resources);
+        module_resources.extend(crate::resources::derive(self.cp, &user_strings, &BTreeSet::new()));
+        module_resources.sort_by(|a, b| (&a.name, &a.module).cmp(&(&b.name, &b.module)));
+        module_resources.dedup_by(|a, b| a.name == b.name && a.module == b.module);
+        let class_path_resources = if self.class_path_read(&visited) { self.cp.class_path_files() } else { Vec::new() };
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
@@ -424,9 +465,9 @@ impl<'a> BuildInput<'a> {
             instantiated: f.instantiated.iter().cloned().collect(),
             hw_inherited: f.hw_inherited.iter().map(key_of).collect(),
             sam_types: f.sam_types.iter().cloned().collect(),
-            module_services: f.seeds.module_services.clone(),
-            system_properties: f.system_properties.clone(),
+            boot_image: f.boot_image.clone(),
             module_resources,
+            class_path_resources,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,
             warnings,

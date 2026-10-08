@@ -1,0 +1,2 @@
+# Method.invoke 方法体整体切除（全部反射方法调用不经通用访问器 / 句柄体系的上界）
+java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;

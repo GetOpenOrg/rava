@@ -1,7 +1,8 @@
 //! 引擎：按键查找闸门（`[facts.keyed_lookups]`，见 `manifest/keyed.rs`）。
 //!
 //! 按键查找入口的返回对象，其键等于调用点键实参的值。调用点的结果先进闸门节点 [`Node::K`]，再按键放行到站点节点：
-//! - 站点键集：调用点键实参的全部名字（字符串常量 / 拼接段 / 形参与 String 字段槽，见 `pstrs.rs`），推不出为任意；
+//! - 站点键集：调用点键实参的全部名字（字符串常量 / 拼接段 / 形参与 String 字段槽，见 `pstrs.rs`），推不出或推不全
+//!   （某段只得已知部分：字段可经字节码外途径写入、槽有值未知的输入等）为任意；
 //! - 类键集：键类子类 X 的对象的键——字节码 `new X` 后的构造器调用点上键形参的全部名字（键类构造器的键形参由清单给出，
 //!   子类构造器经 `super(..)` / `this(..)` 链追溯到键类构造器，见 [`Engine::ctor_key_slot`]）；X 经字节码 `new` 以外的
 //!   途径实例化（反射 / 手写 / 反序列化等）、构造器链追溯不到、或键实参推不出时为任意；
@@ -98,6 +99,8 @@ pub(super) struct KeyedState {
     open_watch: HashMap<u32, BTreeSet<u32>>,
     /// （类, 构造器描述符）→ 键来源
     slots: HashMap<(u32, Rc<str>), KeySlot>,
+    /// 诊断：站点键实参读自的字段（`@keyed` 列出其开放成因）
+    key_fields: BTreeSet<MemberRef>,
 }
 
 /// 构造器链追溯深度上限
@@ -105,7 +108,7 @@ const MAX_CHAIN: u8 = 8;
 
 impl<'a> Engine<'a> {
     /// 清单登记的全部键类（按键查找入口的返回类型）
-    fn key_classes(&mut self) -> Vec<u32> {
+    pub(super) fn key_classes(&mut self) -> Vec<u32> {
         if let Some(k) = &self.keyed.kcs {
             return k.clone();
         }
@@ -147,9 +150,18 @@ impl<'a> Engine<'a> {
         let g = self.kgate_at(m, off, kc, fold);
         // 协议键站点：键是本方法某个 URL 串形参解析出的协议名（见 `keyed_scheme.rs`），不取键实参的写入名字
         let site = self.mref_key(&self.methods[m].key.clone());
+        if let (Some(V::Ref { src, .. }), Some(a)) = (pargs.get(ki), self.methods[m].analysis.clone()) {
+            for s in src.iter() {
+                if let Src::Site(o) = s {
+                    if let Some(Event::Field { mref, .. }) = super::class_lookup::event_at(&a, *o, super::sealed::is_field) {
+                        self.keyed.key_fields.insert(mref.clone());
+                    }
+                }
+            }
+        }
         let keys = match spec.scheme_sites.get(&*site) {
             Some(&j) => self.scheme_keys(m, j),
-            None => pargs.get(ki).map_or(Keys::Any, |v| self.names_of(m, v)),
+            None => pargs.get(ki).map_or(Keys::Any, |v| self.names_complete(m, v)),
         };
         if self.keyed.gates[g as usize].keys.merge(keys) {
             self.kgate_recheck(g, None);
@@ -203,7 +215,7 @@ impl<'a> Engine<'a> {
             V::Null => return Keys::default(),
             _ => {}
         }
-        let Some(a) = self.methods[m].analysis.clone() else { return Keys::Any };
+        let Some(a) = self.site_analysis(m) else { return Keys::Any };
         if a.conservative {
             return Keys::Any;
         }
@@ -435,6 +447,18 @@ impl<'a> Engine<'a> {
         for (g, gate) in self.keyed.gates.iter().enumerate() {
             let held: Vec<&str> = gate.held.keys().map(|t| &*self.names[*t as usize]).collect();
             out.push(format!("  闸门 {} 键类 {} 键 {} 暂扣 [{}]", self.kgate_label(g as u32), self.names[gate.kc as usize], show(&gate.keys), held.join(", ")));
+        }
+        for f in &self.keyed.key_fields {
+            let Some(fi) = self.ctx.field_info(f) else { continue };
+            let c = &self.ctx;
+            out.push(format!(
+                "  键字段 {f}：open={} 偏移可得={} 按名放开={} 手写写入={} 反序列化={}",
+                fi.open,
+                c.fopen.borrow().contains(&fi.key) || c.fopen_all.get(),
+                c.fopen_names.borrow().contains(&fi.key.name),
+                c.hw_written(&fi),
+                c.deser.get() && Ctx::serial_field(&fi),
+            ));
         }
         let mut cks: Vec<(&str, String)> = self.keyed.class_keys.iter().map(|(t, k)| (&*self.names[*t as usize], show(k))).collect();
         cks.sort();

@@ -68,16 +68,17 @@ const USER_FIELDS: &[(&str, &str)] = &[
     ("class_defining_loader", "CLASS_DEFINING_LOADER"),
     ("record_classes", "RECORD_CLASSES"),
     ("record_components", "RECORD_COMPONENTS"),
-    // 以下由调用方（发射层）在同一文件内以同名 `const` 给出（闭包派生表组 / 行表组）
-    ("closure_pool", "CLOSURE_POOL"),
-    ("module_services", "MODULE_SERVICES"),
+    // 以下由调用方（发射层）在同一文件内以同名 `const` 给出（行表组）
     ("line_pool", "LINE_POOL"),
     ("line_numbers", "LINE_NUMBERS"),
+    // 构建期嵌入资源（发射层 `meta_sides` 以 `include_bytes!` 给出）
+    ("class_path_resources", "CLASS_PATH_RESOURCES"),
+    ("module_image", "MODULE_IMAGE"),
 ];
 
 /// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表（表组 `META_POOL`，编码见 [`codec`]）。
-/// 用户侧另需调用方在同一文件给出闭包派生表组（`CLOSURE_POOL` / `MODULE_SERVICES`）与行表组
-///（`LINE_POOL` / `LINE_NUMBERS`）的 `const`（`USER_META` 引用之）
+/// 用户侧另需调用方在同一文件给出行表组（`LINE_POOL` / `LINE_NUMBERS`）、类路径资源表（`CLASS_PATH_RESOURCES`）
+/// 与本程序 jimage（`MODULE_IMAGE`）的 `const`（`USER_META` 引用之）
 pub fn render(texts: &[&str], side: Side) -> String {
     let mut methods = scan_class_methods(texts);
     let mut fields = scan_class_fields(texts);

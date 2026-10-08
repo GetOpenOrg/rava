@@ -2848,6 +2848,8 @@ SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 S
 
 ## 30. 能力①：URL 来源精度——阻塞清单、终态设计与验收（2026-10-06，分支 c1d-url，基于 b60e4f36）
 
+> 状态（2026-10-08）：§30.6–§30.17 待合批验证（c1d-url-b2 3391eb2d，已合入 batch-1008 04600e21）；合批语义取舍见 §30.18。
+
 **结论先行**：§29.2 估计的「URL 按对象 + 串前缀 + 甲目录事实」三项**不够**。实测表明，jar `Handler.openConnection`（下记 `J`）
 与 JarVerifier 链至少还有 5 个彼此独立的来源，每个来源各要一项能力才能健全剪掉。本步**不改引擎语义、无代码提交**：
 只落阻塞清单、反事实上界和终态设计。按对象 URL 判据的实验补丁记在 §30.4，作为第 1 步的起点。
@@ -2902,7 +2904,11 @@ SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 S
 
 ### 30.3 终态目标与验收
 
-- 能力①兑现后（B1–B6 齐备）：DeepCopy 3374 → **≤3097**（−277，按 §30.1 第 5 层），JarVerifier 与 jar `Handler` 不在闭包内；
+- 能力①兑现后（B1–B6 齐备）：DeepCopy 3374 → **≤3097**（−277，按 §30.1 第 5 层），jar `Handler` 的分派方法
+  （`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `openConnection` / `hashCode` / `sameFile` / `newURL` 等，
+  即经 `URLStreamHandler` 虚分派进来的全部方法）与 `JarURLConnection`、`JarVerifier` 及签名校验链不在闭包内。
+  jar `Handler` **类本身**可以留在闭包内：`URLClassPath.<init>(String,Z)@185` 无条件 `new` 它并写入 `jarHandler`，是必然实例化的，
+  只保留类与构造器（2026-10-06 协调方改写，依据见 §30.6「去掉 B5 一项」）；
   StockTrans / TSDS 走同一组来源，预期同量级（落地时实测，不足 −217 即不达标）。HelloWorld 不走 URL，保持不变（服务器 468）。
 - a5-4 总目标沿用 mh-objectify §6.3 的修订值：**DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468**，由①②③与格式串求值共同兑现，①的验收口径是「约 −217 且 JarVerifier 链出闭包」（本节实测上界 −277）。
 - 验收：服务器单测 rc=0（含 D1 顺序 / 种子无关守护）；抽查 DeepCopy 系、`TestAppClassLoader`、`TestJarFile*`、URL / 类路径相关 e2e 与 HelloWorld 全过；
@@ -2936,3 +2942,1393 @@ if chain.iter().any(|cf| inst(cf).iter().any(|f| f.desc.strip_prefix('L').and_th
 
 恢复入口：worktree `../java_rta_c1durl`（分支 `c1d-url`）。测量脚本 `build/url/cl.sh <Test> <tag> [rava closure 参数]`（经全机锁、冷缓存）。
 切除集 `build/url/cuts7.txt`；实验补丁 `build/url/per_object_url.patch`。以上文件都在 scratch，补丁正文已抄在 §30.4。
+
+### 30.6 第 1 步实施：B2 + B6 容器元素出口按对象（2026-10-06，分支 `c1d-url-b2`，基于 353d5162）
+
+**结论先行**：B2 的 open(URL) 引入点 `findResource@118`、`findResources@134`、`elements [Ljava/lang/Object;@…` 全部消失；
+§30.2 列的 `$1.hasNext@31`、`URLClassPath.<init>@160`、`getLoader(I)@36` 在本基线上已不是引入点。剩余引入点只有三个：
+`ServiceLoader$LazyClassPathLookupIterator.nextProviderClass@173`（B6 的残留，来源是 B3）、`ClassLoader.getResource` 的返回（B3），
+以及 `URL.equals@1`（`Object` 形参上的 `instanceof`，不属于容器出口）。本步在四例上的独立收益是 −8 类 / −153 方法。
+`J` 和 JarVerifier 链仍在闭包内，要等 B3 起各步兑现（见下文「收益归属」）。
+
+#### 根因链（DeepCopy，`@path` / `@in` / `@objs` 逐层查）
+
+1. `findResource@118` 的 checkcast 结果来自 `List.get`。这个 list 是 `findMiscResource@56` 从资源缓存 map（一个
+   `ConcurrentHashMap` 分配点）用 `get` 取出的值。
+2. `ConcurrentHashMap.get` 经静态辅助 `tabAt` 读表。`tabAt` 自身按 `ctxsel.rs` 规则 1 继承 map 上下文，但它在调用
+   `Unsafe.getReferenceAcquire` 这个字节码包装。包装的接收者是单例、不是抽象对象，所以进了方法本体；本体内只有一个
+   native `getReferenceVolatile` 调用点，全部 map 的表都在这里汇合。结果是任何一个 map 的 `tabAt` 都读出全部 map 的节点，
+   节点的 `val` 也就带上了全部 map 的值。
+3. 修好第 2 层后，`tabAt` 只读出本 map 的 9 个节点对象，但 `get@104`（`Node.find` 的结果 `.val`）仍是全集。原因是树箱
+   `TreeBin@396:137#@map` 在 `putTreeVal` 里以自身为上下文分配 `TreeNode`，堆上下文链 `@site#@396:137` 截断到 `HEAP_DEPTH`
+   后丢掉了属主 map。于是各 map 的树箱共用同一组树节点，`find` 读出全部 map 的值。
+
+#### 实现（两项通用能力，生成器内无类名）
+
+- **内存访问中继方法继承调用方上下文**（`engine/relay.rs`，接在 `invoke.rs` 的非对象接收者分支与 `dispatch_one`）。
+  - 中继方法的定义：字节码方法，其引用形参直接或经下游中继方法，作为实参流到清单 `[facts.memory_reads]` 的 `src`，
+    或 `[facts.array_writes]` 的 `dst` / `values` / `elements` 槽。
+  - 当调用方处在某个上下文中、接收者不是抽象对象时，中继方法继承调用方上下文，与静态辅助方法同一口径。
+    具体求值上下文不外传。
+  - 判定方式：在字节码调用图上求最小不动点，按「自 key 可达的未定成员集」一次求解并整体缓存。
+    解唯一，与查询顺序和成环形态无关（D1）。每个成员的调用边只算一次。
+  - 首版逐成员递归、不缓存成环结果，DeepCopy 要 697 s；改成不动点后为 39 s。
+- **同巢内部分配沿用属主链**（`engine/classes.rs::obj_at` + `internal_alloc`）。
+  - 分配方对象与新对象同类，或同属一个嵌套巢（JVMS §4.7.28 `NestHost`，且分配方是巢成员）时，新对象的链取分配方链
+    去掉其自身分配点的部分，即属主链。
+  - 巢宿主分配成员对象不算内部分配：宿主就是数据结构的属主，成员对象按宿主分开。
+  - 分配方没有属主（链长 1）时，退回原规则：递归结构不延长链，其余以分配方为上下文。
+- 诊断：`--flows '@objs:<节点子串>'` 列出匹配节点值集里的抽象对象 / 数组分配点名，并标出逃逸对象。
+- 守护测试：`driver/tests/closure_cli.rs::container_elements_per_object`，fixture 是 `ElemTrack.java`。
+  - 用例：两个 `ConcurrentHashMap` 各存一种元素，从 m1 取出后 cast 再派发。
+  - 断言：`Square.name` 不得入链。改动前它入链，改动后不入链。
+
+单独只加中继一项时，DeepCopy 为 3195 / 20447，与基线相同，`@118` / `@134` 仍是引入点。两项叠加才见效。
+
+#### 实测（本机 macOS，`rava closure`，refjdk 21.0.11+10，冷缓存；基线 353d5162）
+
+| 测试 | 基线 类 / 方法 | 本步 类 / 方法 | 差 | 分析耗时 ms | 方法上下文 |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 469 / 1828 | 469 / 1827 | 0 / −1 | 489 → 515 | 4056 → 4198 |
+| StockTrans | 3193 / 20429 | 3185 / 20276 | −8 / −153 | 45971 → 25296 | 95451 → 93454 |
+| DeepCopy | 3195 / 20447 | 3187 / 20294 | −8 / −153 | 44550 → 25837 | 95350 → 93331 |
+| TestSerialDefaultSuid | 3200 / 20441 | 3192 / 20288 | −8 / −153 | 45768 → 27854 | 95205 → 93171 |
+
+（§30 开头表格的基线是 b60e4f36 上的值。353d5162 之前合入的其他改动已把三例降到约 3195，本节一律以 353d5162 为基线。）
+
+- 四例都是严格子集，新增类 0、新增方法 0。
+- 三例去掉的 8 个类相同：`java/time/{MonthDay,OffsetDateTime,Year,YearMonth}$1`（`ChronoField` 的 switch 映射表），以及
+  `java/util/stream/Nodes$CollectorTask$OfInt` / `Nodes$SizedCollectorTask$OfInt` / `Nodes$ToArrayTask$OfInt` /
+  `Nodes$ToArrayTask$OfPrimitive`。它们原先是靠 map 值汇合造出的 `TemporalAccessor` / `IntStream` 接收者派发进来的。
+- HelloWorld 去掉 `ConcurrentHashMap$ReservationNode.find`：`ReservationNode` 只经 `computeIfAbsent` 写进被计算的那个 map 的表，
+  读这个 map 的 `get` 才会派发到它的 `find`。
+- 分析耗时降了约 40%：值集汇合减少，传播量随之下降。
+
+#### 健全性论证
+
+- **上下文选择不影响健全性。** 两项改动都只改「方法克隆按哪个上下文」和「分配点按哪条链命名」。
+  - 每个运行期调用仍落在某个方法克隆上，克隆的形参取自其调用方的实参，全部克隆之并就是原本体的值集。
+  - 每个运行期分配仍映射到恰好一个抽象对象。
+  - 手写内存访问调用点在克隆内按克隆的实参接入，读出的仍是该实参所指对象的元素 / 字段全集。
+  - 所以改动只做细分，不丢值。上下文敏感指针分析对任意上下文抽象都健全，这里没有依赖某种特定选法。
+- **判定错误只影响精度，不影响健全。** 中继判定的任一处误差（例如保守分析的方法记为无边）只会让方法退回本体，也就是原行为。
+- **引擎不假设克隆的接收者就是上下文对象。** 检查过，`ctx` 只用于堆链命名、上下文选择与具体求值标记；具体求值上下文已排除。
+- **结果是严格子集。** 实测四例的类集与方法集都是基线的严格子集（上表）。去掉的成员都能用「元素按 map 分开后，派发接收者不再含该类型」解释。
+- **与顺序无关（D1）。** 中继判定是唯一的最小不动点；内部分配规则只读类文件的 `NestHost` 属性。本机已跑
+  `closure_independent_of_hash_seed`（StockTrans / DeepCopy / TSDS 等 7 例，换种子后集合一致）与 `container_elements_per_object`，两项均通过。
+
+#### 收益归属（为何本步只有 −8）
+
+open(URL) 退出容器出口以后，`J`（jar `Handler.openConnection`）与 JarVerifier 链仍各有独立来源：
+
+- **B3：** `ClassLoader.getResource` / `getResources` / `getSystemResources` 是手写边界（`class_loader_impl.rs`），返回值被建模为
+  open(URL) / open(Enumeration)。`nextProviderClass@106/@48` 的 `configs` 因此只有 open(Enumeration)，`@168` 的 `nextElement`
+  落到枢纽返回，`@173` 的 checkcast 造出 open(URL)。这就是 B6 的残留，B6 随 B3 兑现。
+- **B4 / B1 / B5：** 不变（§30.2）。
+
+§30.1 的 −277 上界要在 B3 → B4 → B1 → B5 依次落地后兑现。本步是这些步骤看到收益的前提：B3 只要按清单收窄
+`getResource*` 的返回，`@118` / `@134` / `@173` 就不会再从容器出口重新引入 open(URL)。
+
+#### 遗留
+
+- `URL.equals@1`：`Object` 形参 `instanceof URL` 产生 open(URL)，属于形参来源精度，不在 B2 范围，留给 B4 一并评估
+  （其接收者 handler 是否带进 `J`，需在 B3 后重查）。
+- §30.4 按对象 URL 判据仍未提交。它是 B4① 的前提，单独没有收益，随 B4 一起做。
+- 内部分配规则对「巢成员分配巢成员」一律沿用属主链。在属主相同、分配方不同的情况下，会少一层分配方区分，可能损失精度。
+  四例实测是净收益，健全性不受影响。
+
+#### 验证
+
+- 本机：`cargo build --release -p driver` 通过；`closure_cli` 的 `container_elements_per_object` 与 `closure_independent_of_hash_seed` 通过。
+- 服务器单测作业 `c1db2-ut-8f2dc45c`（ref 8f2dc45c，全量 generator 单测 + rava_macros_core）：rc=0，521 通过、0 失败。
+- C4 全量冻结期内，本分支不合入、不发起抽查。冻结解除后合入，并按 §30.3 抽查 DeepCopy 系、`TestAppClassLoader`、
+  `TestJarFile*`、HelloWorld，同时做动态对照。
+
+### 30.7 第 2 步实施：B3 手写方法返回值来源（2026-10-06，分支 `c1d-url-b2`，提交 b9335ac7）
+
+#### 设计（终态通用，分析器不写类名，清单不新增条目）
+
+手写体本身就是成员的运行期语义，返回值来源直接从手写体语法推出：
+
+- **语法判定**（`handwritten/returns.rs`）：返回点 = fn 体尾表达式（穿过块 / `unsafe` / 带 else 的 `if` / `match` 各分支）与全部 `return`
+  （闭包、async 块、嵌套 item 内的不算）。每个返回点只认两种形态：
+  - null：`Ok(Default::default())` / `Ok(T::default())`；
+  - 路径调用 `T::m(…)` 直接作尾表达式，或 `Ok(T::m(…)?)`。
+  - `Err(…)` 是异常路径，不计入；发散宏（`panic!` 等）作尾表达式不产生值。
+  - 其余形态（局部变量、方法调用、本文件自由 fn、其他宏、宏内含 `return`、无 else 的 `if`）记为未知。
+- **合并**：同名 fn（`merge_fn`）与成员命中的多个 fn（`MemberHw::absorb`）取并，任一未知即未知。返回来源只取本 fn 自己的返回点，
+  不沿 `close_transitive` / 手写对象 `absorb_body` 从被调 fn 传递。
+- **引擎**（`engine/hw_ret.rs`、`process_handwritten`）：路径类型经 `resolve_tref` 解析，Rust 名按 `methods_by_rust_name` 取同实参数的方法。
+  全部命中都是静态方法、可解析，且被调方按返回值节点给出结果（`RetModel::Plain`）时，接 R(被调) → R(本方法)，返回类型不再导出值池；
+  否则（含命中 fn 为空）退回 open(返回类型)，即原行为。
+
+#### 健全性
+
+- null 不贡献对象。尾调用交出的就是被调方本次调用的返回值，被调方的 R 节点汇合其全部返回值，是它的上近似。
+- 按调用点建模返回值的被调方（类镜像 / 浅拷贝 / 内存读取 / 新数组 / 调用者类），其 R 不一定承载结果，因此一律退回 open。
+- 判定只在「全部返回点都认得」时生效，认不出的形态一律退回原行为。
+- 返回类型不再导出值池：导出的作用是让 open 返回值能从值池取到对象。返回值改由被调方 R 给出后，值池里的对象不会经返回值交出。
+
+#### 实测（`--stop-after` 级 `rava closure`，冷缓存，B2 = 0c8eb802 → B3）
+
+| 例 | 类（基线 / B2 / B3） | 方法（基线 / B2 / B3） | B3 ⊆ B2 | B3 ⊆ 基线 |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 / 469 | 1828 / 1827 / 1827 | 是 | 是 |
+| StockTrans | 3193 / 3185 / 3185 | 20429 / 20276 / 20261 | 是 | 是 |
+| DeepCopy | 3195 / 3187 / 3187 | 20447 / 20294 / 20279 | 是 | 是 |
+| TestSerialDefaultSuid | 3200 / 3192 / 3192 | 20441 / 20288 / 20273 | 是 | 是 |
+
+- `@opens:java/net/URL` 的引入点从 `R ClassLoader.getResource` + `nextProviderClass@173`（4 个上下文）+ `URL.equals@1`
+  收窄到只剩 `URL.equals@1`。
+- 三个大例各少 15 个方法，内容一致：`URLConnection.getLastModified` / `getHeaderField*`、`FileURLConnection.getLastModified`、
+  `MessageHeader.findValue`、`ZipEntry.getTime` 与 `ZipUtils.*DosToJavaTime`、`LocalDateTime.of` / `LocalTime.of` / `ZoneRules.getOffset`、
+  `Class.setSigners`、`StringTokenizer.hasMoreElements`、`ConcurrentHashMap$KeyIterator.nextElement`。类数不变。
+
+#### 验证
+
+- 本机：`closure` crate 全部单测 171 通过（新增 `handwritten::returns` 3 例）；`rava` release 构建通过；
+  `closure_cli` 的 `closure_independent_of_hash_seed` 与 `container_elements_per_object` 均通过。
+- C4 全量冻结期内未发起服务器作业。冻结解除后跑服务器单测，并与 §30.6 一起按 §30.3 抽查。
+
+#### 遗留
+
+- jar `Handler.openConnection` 与 `JarVerifier` 仍在闭包内，引入点只剩 `URL.equals@1`（`Object` 形参 `instanceof URL`）与
+  URL 对象 handler 字段的分派，这部分归 B4 / B1 / B5（§30.2）。§30.1 的 −277 上界仍待 B4 → B1 → B5 兑现。
+- 返回来源只认尾调用形态。手写体先绑定局部变量再返回（`let x = T::m()?; Ok(x)`）的仍按 open 处理。需要时再扩展到
+  局部 `let` 的单赋值传递，判定口径不变。
+
+### 30.8 第 3 步：B4——按对象 URL 落地，`startsWith` 守卫须与 B1② 合并实施（2026-10-06，分支 `c1d-url-b2`，提交 f6752b81）
+
+**结论先行**：
+- **B4① 已落地**（f6752b81）：采用 §30.4 判据。单独提交时四例集合不变，它是 B4② 的前提。
+- **`URL.equals@1` 复核**：这是通用的 `instanceof` 收窄，不是 URL 特有的漏洞。反事实去掉它，类数和方法数都是 0 变化，所以不处理。
+- **`FileLoader.getResource` 的 `startsWith` 守卫在 B4 范围内不能健全折叠。** 下面给出 JDK 能实际走到的反例。要折叠，必须知道
+  `normalizedBase.getFile()` 以 `/` 开头。这是基 URL 的按对象串事实，正是 B1② 的能力。终态目标不降：B4②（按键分对象 + 处理器
+  `file` 前缀事实 + `startsWith` 收窄）**并入 B1，作为一步实施**，§30.5 的顺序改为 B1+B4② → B5。
+- 在 L1 切除下，该守卫的反事实收益已经实测（见下文「守卫」一节）：jar / zip / jrt 连接链与签名校验链全部依赖它。
+
+#### B4①：按对象 URL
+
+`engine/classes.rs::container_shape` 新增一条判据：类链上有实例字段的类型是 `[facts.keyed_lookups]` 键类（按键查找入口的返回类型）时，
+对象按分配点区分。判据只读清单键类，不写类名。字段类型没有登记序号的，直接判为非键类，不为判定而新登记类名。
+`engine/keyed.rs::key_classes` 改为 `pub(super)`。
+
+健全性：按对象区分只是精化。各对象的字段值集之并，等于原来的无上下文字段值集。
+
+| 例 | 类（基线 / B3 / B4①） | 方法（基线 / B3 / B4①） | B4① = B3 | B4① ⊆ 基线 |
+|---|---|---|---|---|
+| HelloWorld | 469 / 469 / 469 | 1828 / 1827 / 1827 | 是 | 是 |
+| StockTrans | 3193 / 3185 / 3185 | 20429 / 20261 / 20261 | 是 | 是 |
+| DeepCopy | 3195 / 3187 / 3187 | 20447 / 20279 / 20279 | 是 | 是 |
+| TestSerialDefaultSuid | 3200 / 3192 / 3192 | 20441 / 20273 / 20273 | 是 | 是 |
+
+- 分析耗时在噪声范围内：DeepCopy 22.5 → 23.7 s，TSDS 23.0 → 25.3 s。测量期间机器上有其他作业，没有单独复测。
+- 叠加 L1 切除（`R@97` / `R@127` / `R@139`）时，DeepCopy 从 3182 / 20159 变为 3182 / 20157，只少 2 个方法。原因是
+  `FileLoader.getResource` 的 URL 对象（`URL@<getResource>:0`）在构造器克隆的 `@386` 闸门上，spec 键未知（`encodePath(name)` 的返回值），
+  `handler` 字段仍含 jar `Handler`。
+
+#### `URL.equals@1` 复核
+
+- `--flows '@openorig:java/net/URL|@1 java/net/URL.equals'`（StockTrans）共找到 20 个注入点，都是 open(Object) 经
+  `Object.equals` 枢纽实参（`hub 实参0 … on open(Object)`）流到 `URL.equals` 的 P1，再在 `instanceof URL` 处被收窄成 open(URL)。
+  open(Object) 的来源是：反射调用实参池、`Objects.equals` / `Arrays.equals` / `ConcurrentHashMap.put` 的实参、反序列化的
+  `cloneArray`、注解 `memberValueEquals`。
+- 收窄本身是健全的：open(Object) 里确实可能有未经分配点追踪的 URL，例如反序列化出来的 URL。
+- 反事实（临时开关，没有提交）：只让 `URL.equals@1` 不产出收窄值，DeepCopy 3187 / 20279 不变。原因是 open(URL) 已经由反序列化路线
+  （`URL.readObject` / `readResolve` 等接收者）带入，`URL` 是 final 类，open(URL) 上的派发不会多出目标。
+- 结论：不改，也不为 URL 做特判。它属于 open(Object) 来源的通用精度问题，归入 open 来源收窄线。
+
+#### `startsWith` 守卫：为什么 B4 单独做不了
+
+字节码（`URLClassPath$FileLoader.getResource(String,Z)`）：
+
+```
+url = new URL(getBaseURL(), ParseUtil.encodePath(name, false));   // @0..@13，两参解析式构造
+if (!url.getFile().startsWith(normalizedBase.getFile())) return null;   // @20..@38
+file = new File(dir, name.replace('/', File.separatorChar)); if (!file.exists()) return null; ...
+```
+
+`normalizedBase = new URL(getBaseURL(), ".")` 在 `FileLoader.<init>` 中赋值。
+
+- **jar URL 的 `file` 形态**：jar `Handler.parseAbsoluteSpec` 要求内层 `spec.substring(0, idx-1)` 能被 `new URL(...)` 解析，
+  所以解析式构造出的 jar URL，其 `file` 一定以「内层协议名 + `:`」开头（协议名以字母开头），不可能以 `/` 开头。三参构造
+  `new URL("jar", "", "/x")` 的 `file` 可以是 `/x`，所以这条事实只对**解析式构造**成立，不能挂在 `URL.file` 字段上全局成立。
+- **反例：`normalizedBase.file` 不一定以 `/` 开头。**
+  1. 取基 URL `file:jrt:/`。它的 protocol 是 `file`，`file` 以 `/` 结尾，`getLoader` 会为它造 `FileLoader`。
+  2. 得到 `normalizedBase.file = "jrt:/"`。
+  3. 取资源名 `jar:jrt:/x!/y`。`encodePath` 不编码 `:`，所以 spec 的键是 `jar`，`url.file = "jrt:/x!/y"`。
+  4. 这个 `url.file` 以 `"jrt:/"` 开头，守卫通过。
+  5. 之后的 `file.exists()` 是文件系统事实，不能折叠。
+
+  `URLClassLoader(new URL[]{new URL("file:jrt:/")})` 这类用户 URL 就能走到这里，所以 J 确实可达。只看本对象的 handler 与 spec，无法排除这一点。
+- **折叠需要的三条事实**（缺任何一条都退回现状）：
+  1. **按键分对象**：解析式构造的分配点按 spec 的协议键拆成「每键一对象 + 无协议」。拆分后，构造器克隆里的 `@386` 闸门只放行
+     本键的 handler，`handler`、`protocol` 与 `file` 前缀在对象内保持对应。清单为每个键处理器声明「解析式构造结果的 `file` 前缀」，
+     例如 jar 为 `<字母>…:`。
+  2. **基 URL 的 `file` 以 `/` 开头**：这一条可以从字节码推出。应用类路径的 URL 来自 `ParseUtil.fileToEncodedURL`：
+     `if (!path.startsWith("/")) path = "/" + path; … new URL("file", "", path)`。在串前缀域里按 `startsWith` 分支收窄后，两支都以 `/`
+     开头，三参构造器把它写进 `file` 字段。还要求：
+     - `FileLoader` 的基 URL 只来自这类对象。`URLClassPath(URL[])` 来自用户 URL，必须在对象层面与类路径实例分开，要求
+       `URLClassPath` / `Loader` 按对象，`unopenedUrls` 已由 B2 按对象处理。
+     - 清单声明 `new URL(base, ".")` 的相对解析保持开头的 `/`。`URLStreamHandler.parseURL` 中的 `/./`、`/../` 循环无法由纯字节码推出前缀，
+       这里只声明「上下文 `file` 以 `/` 开头、spec 无协议且无 `//`」时结果仍以 `/` 开头。
+  3. **`startsWith` 收窄**：接收者前缀与实参前缀不相容时（`<字母>…:` 与 `/…` 不相容），判定恒为假，jar 键对象到不了 `@39` 之后。
+
+  第 2 条是 B1② 的「URL 对象 `protocol` / `file` 按对象串事实」。B1③ 的 `endsWith("/")` / `equals` 收窄与第 3 条的 `startsWith` 收窄
+  属于同一个串前缀判定器。所以 B4② 与 B1 合并实施：同一个按对象串域，同时服务 `R@97/127/139` 的分支折叠和本守卫。
+- **守卫的反事实价值**（DeepCopy，L1 切除下）：
+  - 切掉该对象的 `openConnection` 节点：3182 / 20157 → 3104 / 18576。
+  - 切掉该对象 `@386` 闸门节点（只剩 file handler）：去掉 218 类，包括 jar / zip / jrt 连接链、JarVerifier、PKCS7 / 签名、
+    `DisabledAlgorithmConstraints` 等。
+  - 切写入点不单调（§7），这两个数只作量级参考。不加 L1 切除时为 0：J 还经 JarLoader 路线可达（B1）。
+
+#### spec 未知的解析式构造点全表（DeepCopy，`@srcs:sun/net/www/protocol/jar/Handler` 的 `@386` 克隆）
+
+| 构造点 | spec 来源 | 归属 |
+|---|---|---|
+| `URLClassPath$FileLoader.getResource@0` | `encodePath(name)` | 本节守卫，并入 B1 |
+| `URLClassPath$3.run@78` | `file.substring(0, len-2)`（`!/` 结尾的 jar 内 jar） | B1（`isDefaultJarHandler` + `endsWith("!/")` 分支） |
+| `URL.fabricateNewURL@10`、`URL.readObject@18`、`URL.readResolve@9` | 反序列化流 | 真实未知（流内容由运行期决定），保留 |
+| `NativePRNG.getEgdUrl@42` | `securerandom.source` 属性 | 构造后有 `getProtocol().equalsIgnoreCase("file")` 守卫，按键分对象后可由协议串事实折叠，同 B1 串域 |
+| `URI.toURL` → `URL.of@238` | URI 串 | 真实未知，保留 |
+| `JarURLConnection.parseSpecs@45`，jar `Handler.newURL`（经 `parseAbsoluteSpec` / `sameFile` / `hashCode`） | jar URL 内部 | 只在 J 已可达时出现，是自循环，不构成独立来源 |
+
+「spec 未知时的 handler 事实」的终态答案：键未知时，handler 集合**只能**是全集，不存在更强的健全事实。能做的是第 1 条的按键分对象：
+让「若 handler 是 jar，则 `file` 有 jar 形态」这一相关性留在对象内，交给下游守卫折叠。它单独不缩闭包，并入 B1 实施。
+
+#### 验证
+
+- 本机：`closure` crate 单测 171 通过；`rava` release 构建通过；`closure_cli` 的 `closure_independent_of_hash_seed` 与
+  `container_elements_per_object` 通过。
+- C4 全量冻结期内没有发起服务器作业。
+
+#### 下一步（建议）
+
+B1 + B4② 合并为一步，交付以下内容：
+- 按对象串前缀域：字段按接收者对象记前缀，构造器克隆内 `putfield this` 的串值进入对象字段；
+- `startsWith` / `endsWith` / `equals` 分支收窄；
+- 解析式构造按键分对象，以及清单中的处理器 `file` 前缀与相对解析保前缀事实；
+- 类路径目录事实（B1①）。
+
+验收沿用 §30.3：DeepCopy ≤3097（去掉 B5 一项之后的上界再实测），J 出闭包。
+
+### 30.9 第 4 步：B1 串形状域落地 + B1② 的引擎前提实测（2026-10-06，分支 `c1d-url-b2`）
+
+**结论先行**：
+- **第 1 小步已落地**：方法内串形状域（前缀 / 后缀 / 不含字符）、清单构建器内容跟踪、`startsWith` / `endsWith` 分支收窄、
+  `encodePath` 形状事实。四例集合与 B4① 完全相同（0 增 0 减），折叠逐方法对照只多出健全的死分支。它是 B1③ 与 §30.8 第 3 条的判定器。
+- **B1② 不是「再加一层字段记录」能完成的**。逐条核对 `R` 与 `FileLoader.getResource` 的值来源链后，确认还缺 **5 项彼此独立的引擎能力**，
+  见下文「B1② 的前提链」。缺任何一项，`R@97/@127/@139` 与 `startsWith` 守卫都折不掉，闭包不变。这 5 项合起来就是
+  「按对象的常量传播」（对象敏感的值分析），是闭包引擎的一项大能力，不是 URL 的局部补丁。本步收口时只实现第 1 小步，其余记为设计与恢复入口。
+- 「去掉 B5 一项」的反事实上界见下文实测。
+
+#### 第 1 小步：串形状域（提交见本节末）
+
+设计（终态通用，分析器内无类名，清单只新增串操作与一条结果形状事实）：
+
+- **形状格**（`absint/shape.rs`）：`Shape { pre, suf, no: u128, exact }`，是前缀、后缀、ASCII 字符不出现三个经典串抽象域之积。
+  - 合流取公共前缀、公共后缀，以及不出现字符的交集。
+  - 前后缀上限 `CAP = 256` 字符，超出截短（变弱，仍健全）。格高有限，不动点必收敛。
+  - 判定：`starts_with` / `ends_with` / `equals` / `is_empty` / `contains`；`index_of` 只在所找字符确定不出现时折叠为 -1。
+  - 收窄：`meet_starts` / `meet_ends`。
+- **值上的标签**（`absint/obj.rs`）：
+  - `Obj::Str(Shape)` 经 PV 跨方法传递（形参、返回、字段值集），`PV::join` 按形状合流。
+  - `Obj::Builder { group, content }` 只在方法内存在，PV 从不保存构建器标签（`of_ret` 把非空构建器引用映射为 `nonnull_ref`）。
+- **构建器内容跟踪**（`absint/strs.rs`）：清单 `[facts.string_concat]` 的构造 / 追加 / 取结果三类，按分配点分组。
+  - 健全性靠一条不变式：同一状态里同组的各份带标签拷贝指向同一对象，且该对象不可能经无标签的引用被改写。
+  - 维持手段：
+    - 再次执行分配点，或值交出去（作其它调用的实参、写字段 / 静态字段 / 数组、indy 实参）：撤掉整组标签。
+    - 合流时任一入边带某组标签、而结果不带，整组撤掉（`drop_lost_groups`）。
+    - 异常处理器入口撤掉全部构建器标签。
+  - 追加段按 `String.valueOf` 语义取形状：整数为 `-0123456789` 字符集，布尔为 `truefals` 字符集，引用可能为 null 时并入 `"null"`。
+- **分支收窄**：`aload k; ldc L; invokevirtual <starts_with|ends_with>; ifeq/ifne`，后三条须在同一基本块。
+  - 成立一侧：局部变量 k 的形状与 L 相交。
+  - 两侧：k 都确定非空（接收者已被解引用）。
+- **清单**（`vm_intrinsics.toml`）：
+  - `[facts.string_ops]` 新增 `starts_with` / `ends_with` / `index_of` ×4 / `last_index_of` ×4 / `contains`。
+  - 新表 `[facts.string_shapes]`，只允许 `excludes` 一个键。登记 `ParseUtil.encodePath` 两个重载 `excludes = "#?"`。依据是
+    `L_ENCODED` 的第 35 / 63 位，已用 javap 与位运算核对，论证抄在清单注释里。
+  - 用途：`fileToEncodedURL` → `new URL("file", "", path)` 里的 `indexOf('#')` / `lastIndexOf('?')` 折叠为 -1。
+
+健全性与反例检查：
+- 前后缀判定按 Rust `str` 计算。形状里的串都来自类文件的合法 Unicode 常量，合法串之间按码点与按 UTF-16 码元的前后缀关系一致；
+  含孤立代理项的常量不成形状。
+- `startsWith` 反例检查：`pre = "/"` 判 `startsWith("/a")` 为「推不出」，判 `startsWith("/x")` 为假，因为 `x` 在两侧都不出现。
+  单测 `join_keeps_common_affixes_and_absent_chars` 覆盖这两种情况。
+- 超长串（> CAP）不再 `exact`，`equals(全串)` 推不出（单测 `non_ascii_affixes_split_on_char_boundaries`）。
+- 构建器别名反例：带标签拷贝在一侧被追加、另一侧没有，合流后整组撤掉（单测 `join_losing_tag_drops_group`）。
+  语句式追加（`sb.append(x);` 不用返回值）同步更新同组各拷贝（单测 `statement_appends_update_all_copies`）。
+- `encodePath` 事实只声明结果不含 `#` `?`，不声明前缀。`fileToEncodedURL` 里 `startsWith("/")` 两支都以 `/` 开头，
+  这是由分支收窄加拼接从字节码推出的（单测 `prefix_after_guard_and_concat` 用同形字节码验证返回值以 `/` 开头）。
+
+实测（本机 `rava closure`，refjdk 21.0.11+10，冷缓存）：
+
+| 例 | 类（B4① / 本步） | 方法（B4① / 本步） | 集合 |
+|---|---|---|---|
+| HelloWorld | 469 / 469 | 1827 / 1827 | 相同 |
+| StockTrans | 3185 / 3185 | 20261 / 20261 | 相同 |
+| DeepCopy | 3187 / 3187 | 20279 / 20279 | 相同 |
+| TestSerialDefaultSuid | 3192 / 3192 | 20273 / 20273 | 相同 |
+
+- 耗时在噪声范围内（约 24 s）。
+- 逐方法折叠对照（`build/url/folds.py`）：多出的只有新的死 null 检查分支，以及 `SocketPermission.getHost` 等处的 `indexOf` 折叠，逐条核对均健全。
+
+验证：closure crate 单测 179 通过（新增 shape 4 / strs 3 / manifest 1）；`closure_cli` 的 `closure_independent_of_hash_seed` 与
+`container_elements_per_object` 通过；`cargo check` 无告警。
+
+#### B1② 的前提链（为什么形状域单独不缩闭包）
+
+`R` 的三个分支取决于 `val$url.getProtocol()` 与 `val$url.getFile()`。逐跳核对值来源：
+
+| 跳 | 现状 | 缺的能力 |
+|---|---|---|
+| ① `URL.<init>(String,String,int,String,Handler)` 写 `this.protocol` / `this.file` | 字段值集 `fvals` 按字段键全局汇合：全部 URL 对象的 `file` 并在一起，含解析式构造、反序列化、用户 URL | **P1 按对象字段值**：`putfield` 按接收者值集里的抽象对象记入 `ovals[(对象, 字段)]`；非对象接收者（open / 非抽象对象 / 手写 / 物化快照）记入 `owild[字段]`；读取在接收者值集全为抽象对象时取「各对象值 ⊔ owild ⊔ 初值」，否则退回全局。写站点已有按接收者增量重跑（`bytecode.rs::field` 的 `recv_delta`），值归属可以挂在同一处 |
+| ② `file` / `protocol` 的初值 null | `alloc_defaults` 把初值并入全局值集。按对象值同样要含初值，于是 `R@17 ifnull` 的 null 支永远活着，`"file".equals(protocol)` 也折不掉 | **P2 构造器确定初始化**：分配点之后接的 `<init>` 在把 `this` 交出去之前，在每条路径上都写了字段 f，才去掉该对象 f 的初值。必须是路径敏感的必然分析：放在 absint 状态里，和 `finals` 同构，合流取交集；`this(…)` 委托递归；超类构造器须不交出 `this`。经 lambda 构造器引用、手写分配、序列化分配的对象一律保留初值 |
+| ③ `this.file = this.path`（`URL.<init>@303..308`） | 构造器内读自身刚写的字段，取的是全局值集 | P2 的同一状态顺带给出「本方法刚写的值」（同 `finals` 对 static final 的处理） |
+| ④ `getFile()` / `getProtocol()` 的返回 | 返回常量格 `rvals` 按成员键汇合（`facts.rs` 的 `rvals: HashMap<MemberRef, PV>`），各接收者对象的克隆节点结果并在一起 | **P3 按接收者对象的返回值**：`orvals[(成员, 对象)]` 在节点记录返回时按 `P(m,0)` 中的抽象对象归属，`P(m,0)` 增长时补归属；调用点接收者值集全为抽象对象时取各对象之并。健全性：调用点派发到的每个目标节点 `P(·,0)` 都含该对象，所以按对象之并覆盖本调用点的全部可能返回 |
+| ⑤ `URLClassPath$3.val$url` | `$3` 不是容器形态类（非泛型，字段类型 URL 不是键类），`val$url` 按全局读：所有 `URLClassPath` 对象的全部 URL 汇合（含用户 `URLClassLoader` 的 URL） | **P4 读站点接收者值集**：调用点 / 字段读的接收者来源是本方法站点（`Src::Site`）而非形参时，按站点节点的值集判定。Oracle 目前看不到流图，须给 `Facts` 只读的值集查询，并以形参节点 / 站点节点增长为依赖重分析（同 `mirror_watch`）。另需判定 `$3` 这类「持有按对象类实例的匿名类」是否按对象区分（`container_shape` 新判据，影响面要单独实测） |
+| ⑥ 反序列化放开 | DeepCopy / TSDS 里反序列化可达，`URL.file` / `protocol` 可序列化、非 transient，`field_open`（`deser`）对全局读一律不折叠 | **P5 按对象的放开判定**：反序列化只写它自己分配的对象（序列化分配是类 id，不是抽象对象），所以按对象读只看偏移可得（`fopen` / `fopen_names` / `fopen_all`）与手写写入，不看 `deser`（同 `construct.rs::object_field` 的现有论证） |
+| ⑦ `path` 以 `/` 结尾 | `fileToEncodedURL@48` 的 `isDirectory()` 推不出 | 「启动目录是目录」清单事实（B1①，见下「待用户决策」） |
+
+P1–P5 齐备、再加 ⑦，`R` 的三个分支才能折叠。`FileLoader.getResource` 的守卫另需 §30.8 的按键分对象与 `"."` 相对解析保前缀事实，
+这两条同样建立在 P1–P5 上：`normalizedBase.getFile()` 也要经 P1 + P3。
+
+实施顺序建议（每项单独提交，单独看不到闭包变化，验收看折叠对照与单测）：
+1. P1 + P5（按对象字段值 + 按对象放开）；
+2. P2（构造器确定初始化，含本方法刚写值）；
+3. P3 + P4（按对象返回值 + 站点接收者值集）；
+4. ⑦ 目录事实，以及 §30.8 的按键分对象与 `"."` 事实。
+
+#### 第 2 小步：P1 + P5 按对象字段值（`engine/obj_fields.rs`）
+
+**设计**（通用，无类名）：
+- **写入**：`bytecode.rs::field` 的 `putfield` 把值并入接收者值集里每个抽象对象的 `ovals[(对象, 字段)]`；其余接收者（open / 非抽象对象 / 无接收者）的值并入 `owild[字段]`。
+  - 基本类型字段不拆接收者，写入只进 `owild`；物化快照的写入（`concrete/apply.rs`）也只进 `owild`。
+  - 两张表都从初值起算。
+- **读取**：`Facts::field` 处理 `getfield` 时，若接收者只来自形参 i（`srcs == [Param(i)]`），且形参值集非空、全由抽象对象组成，就取「初值 ⊔ owild ⊔ 各对象值」。
+  - 形参对象集在分析开始时取（`param_obj_sets`），只看声明类型是容器形态类的形参。
+  - P5：按对象读不看 `deser`，偏移可得、手写写入、VM 钩子一律不折叠。
+- **依赖与共享**：每次按对象读记成 `(形参, 字段, 答复)`；形参无对象集时答复为 None，同样记录。抽象解释是 Oracle 答复的确定函数，所以三处失效都按「答复是否变化」判定：
+  - 按对象值变化：读者按 `(对象, 字段)` 登记（`odeps`），`owild` 的读者按字段登记（`owdeps`）。用当前形参对象集复核，答复有变才重分析。
+  - 形参值集增长（`obj_watch`，同 `mirror_watch`）：复核答复；不变就只补登新对象的读者。值集由空变成全抽象对象时也会复核，所以不动点与分析顺序无关。
+  - 共享摘要：每条记录在新上下文的形参对象集下答复都相同，才复用（`share.rs::shared_analysis`）。开放判定只增不减，仍经全局 `fdeps` 失效。
+
+**健全性**：
+- 字节码写入要么记到接收者值集里的每个抽象对象，要么记入 `owild`，读取并入两者。
+- open 接收者的写入在流图里流向所有已逃逸对象，这里由 `owild` 覆盖。
+- 字节码外写入（手写 / 偏移可得 / VM 钩子）不按对象折叠。
+- 反序列化分配是类 id，不是抽象对象（`serial_alloc.rs`），不会落进全由抽象对象组成的值集。
+- 手写体分配的容器对象（`hw_obj`）的 Rust 字段写入登记在 `fhw`，按字段不折叠。
+- 反例核对：
+  - `Properties.enumerate@1` 的 `defaults` 折成 null。Properties 可序列化，但反序列化出来的 Properties 是类 id 接收者，读取时值集不全为抽象对象，退回全局。
+  - `BigInteger$RecursiveOp.parallel` 折成 false。可达的分配只有 `multiply` 一侧（`parallel = false`），`parallelMultiply` 不可达。若用户调用了它，写入会按对象记录，折叠自动解除。
+
+**失效判定的迭代**：三版 DeepCopy 实测（基线 23.7s）：
+- 直接按字段失效全部读者：203s。`field_put` 重分析 287 万次，其中 286 万次结果不变；共享因形参对象集不同而大量失配。
+- 改为按对象登记读者，并按查询答复共享：28.8s。
+- 增长与值变化都先复核答复：26.0s。
+
+**实测**（tag `10p`，对照 B4① `4`）：
+
+| 测试 | 类 | 方法 | 折叠常量 / 折叠方法 | 用时（ms，本机负载 6.5，墙钟仅供参考） |
+|---|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 337→340 / 342→345 | 482 → 495 |
+| StockTrans | 3185 → 3185 | 20261 → 20259 | 2220→2238 / 1973→1992 | 24841 → 34777 |
+| DeepCopy | 3187 → 3187 | 20279 → 20277 | 2218→2236 / 1972→1991 | 23699 → 25967 |
+| TestSerialDefaultSuid | 3192 → 3192 | 20273 → 20271 | 2219→2237 / 1972→1991 | 25298 → 31033 |
+
+- 三例各少同样 2 个方法：`ReferencePipeline$Head.opIsStateful`、`BigInteger$RecursiveOp.getParallelForkDepthThreshold`。集合是 B4① 的真子集，没有新增。
+- StockTrans / TSDS 的墙钟增幅里，不受本步影响的 setup / seeds 阶段同样慢了约 1.5 倍，属本机负载噪声；分析相关阶段约增 10%–30%。
+- 单测：closure 179 过（去掉的过渡测试 `objs_compatible` 不再计入）；`closure_independent_of_hash_seed`、`container_elements_per_object` 过（1494s）。
+- 正如前提链所述，本步单独不折 `R`：`getFile()` 的返回仍按成员键汇合（P3），`val$url` 的接收者来自站点而不是形参（P4），初值 null 仍在（P2）。
+
+#### 「去掉 B5 一项」的反事实上界
+
+切除集 `build/url/cutsNoB5.txt` 是 §30.1 第 5 层去掉 `BootLoader$PackageHelper.definePackage@67`；`cutsAll.txt` 是完整第 5 层。均以本步代码实测：
+
+| DeepCopy 切除集 | 类 | 方法 | 与当前（3187 / 20279）之差 |
+|---|---|---|---|
+| 无切除（本步） | 3187 | 20279 | — |
+| `cutsNoB5`（去掉 B5 一项） | 3099 | 18549 | −88 / −1730 |
+| `cutsAll`（完整第 5 层） | 3088 | 18445 | −99 / −1834 |
+
+结论：
+- 只做 B1（不做 B5）的反事实上界是 3099 类，比目标 ≤3097 多 2 类；完整第 5 层（含 B5）才能到 3088。所以 ≤3097 必须 B1 与 B5 都做。
+- **jar Handler 在两种切除下都还在闭包里**。`URLClassPath.<init>(String,Z)@185` 无条件执行 `new sun/net/www/protocol/jar/Handler` 并写入 `jarHandler`，这个类是必然实例化的，任何健全的折叠都去不掉它。可去掉的只有经 `URLStreamHandler` 虚分派进来的方法：`parseURL` / `parseAbsoluteSpec` / `parseContextSpec` / `canonicalizeString` / `hashCode` / `newURL` 等。前提是 §30.8 第 1 项：`URL.handler` 按分析出来的协议键分对象，jar Handler 只流进 `jarHandler` 字段和由它构造的 URL。因此 §30.8 原目标「jar Handler 出闭包」应改为「jar Handler 只保留构造器，经分派进来的方法出闭包」。（2026-10-06 协调方已采纳，§30.3 验收措辞已改写。）
+
+#### 待用户决策
+
+1. **启动目录是目录**（B1①）：原生二进制的应用类路径固定为 `""`，经 `new File("").getCanonicalFile()` 解析为 `user.dir`。
+   声明它「是目录」有一个可达反例：进程启动后工作目录被删除，此时 `isDirectory()` 为假，`R@139` 走 JarLoader，命中存根即 panic，
+   而 JVM 上是抛 IOException 后跳过该类路径项。是否接受这条启动期事实（或改为构建期把类路径固定为非空的资源目录），需要决定。
+2. **B1② 的规模**：P1–P5 是对象敏感的值分析，影响全部字段读 / 返回值，分析耗时与内存需要实测，不是 URL 的局部改动。
+   是否按上面的顺序投入，还是先做 B5（独立、清单事实即可）与能力②③，需要决定。
+3. `encodePath` 的结果形状用清单事实声明，没有从字节码推出：推出需要数组 / 位运算 / 循环不变式，超出串形状域。
+   清单注释附有可核对的位运算论证。
+4. 构建器同组、内容不同的合流目前直接撤掉标签（健全但偏粗）；需要时可改为内容形状合流。
+
+#### 恢复入口
+
+- worktree `/Users/yuwei/dev/workspace/java_rta_c1durl2`，分支 `c1d-url-b2`。
+- 测量：`build/url/cl.sh <Test> <tag> [参数]`，对照用 `build/url/cmp.py <tag 后缀> [基线后缀]` 与 `build/url/folds.py A.json B.json`。
+- P1 + P5 已落地（`engine/obj_fields.rs`，见「第 2 小步」）。下一步是 P2 构造器确定初始化：
+  - 在 absint 状态里加 `this` 字段的必然写入集（与 `finals` 同构，合流取交集）；
+  - 在 `<init>` 返回点、且 `this` 未被交出时，产出「必然写入字段」摘要；
+  - 引擎在分配点后接的构造器全部给出摘要时，`ovals` 不再并入该对象该字段的初值。读取侧的初值并入点是 `obj_fields.rs::obj_field_value`。
+- 再往后是 P3 + P4：
+  - 按接收者对象的返回值：`rvals` 旁加 `orvals`，归属按节点 `P(m,0)`；
+  - Oracle 读站点值集：调用 / 字段读的接收者来自 `Src::Site` 时，查流图站点节点，登记复核方式同 `obj_watch`。
+  - 两者都可复用本步的「查询记录 + 答复复核」框架：`ObjQuery`、`obj_queries_same`、`obj_readers_recheck`。
+
+### 30.10 第 5 步：B5 引导包位置 `jrt:/` 前缀（2026-10-06，分支 `c1d-url-b2`，基于 da165172）
+
+协调方决定（2026-10-06）：先做 B5，B1② 的 P2–P4 后做；构建器内容在合流处丢弃可以接受；jar `Handler` 验收口径改写（§30.3 已改）；
+「启动目录是目录」待用户决定，本步不实施依赖它的折叠；`encodePath` 的结果形状要改为从字节码推出（见本节末）。
+
+#### 设计
+
+1. **清单事实**（`vm_intrinsics.toml [facts.string_shapes]`）：`BootLoader.getSystemPackageLocation` 的非 null 结果以 `jrt:/` 开头。
+   - 依据：JVM 返回命名模块包的模块位置 `jrt:/<模块>`、`-Xbootclasspath/a` 追加项上包的类路径项，或 null。原生二进制没有
+     `-Xbootclasspath/a`（无启动参数注入，引导类全部来自构建期模块镜像），所以只剩 null 与 `jrt:/<模块>`。
+   - 归类：native 方法（手写类 ①）的落地语义，属 handwritten-boundary §③「VM 注入状态」。清单注释写明手写实现须守此约定。
+   - `[facts.string_shapes]` 的表项由 `excludes` 单项扩为 `{ prefix, excludes }` 两项（至少一项；前缀不得含被排除字符，解析期报错）。
+     `Shape::prefixed` 取代 `Shape::excluding`。
+2. **返回常量格合流 `PV::join_ret`**：两侧都确定非空、值 / 标签无法合流时取「非空引用」，不再落到 Top。
+   触发点：`StringLatin1.newString` 一条路径返回常量 `""`、另一条返回带对象标签的 `new String`，合流后 `String.substring` 的返回成了 Top，
+   `findModule` 里 `substring` 结果之后的 `ModuleLayer.findModule(mn)` 链因此失去非空性。只用于返回常量格，形参 / 字段常量格不变。
+3. **final 实例字段复读收窄**（`absint/narrow.rs`，`State::nnf`）：`aload k; getfield f; ifnull/ifnonnull`（同块，f 为 final 实例字段）
+   非 null 一侧记下 (k, f)；此后 `aload k; getfield f` 的结果确定非空。写 k、本帧 `putfield f`、任一调用处撤掉，合流取交集，
+   异常处理器入口为空。触发点：`Optional.orElseThrow`（`if (value == null) throw …; return value;`）。
+   - 健全性：本线程内，final 字段的字节码写入只在 `<init>`，字节码外写入（反射 / Unsafe / 反序列化 / 手写）都要经调用，已被撤掉规则覆盖；
+     他线程的写入与第二次读之间没有 happens-before 边（本线程两次读之间无调用），第二次读取到第一次的值是 JLS §17.4.5 允许的结果，
+     final 字段另有 JLS §17.5.3 明文允许缓存（即使构造后被反射改写）。HotSpot C2 对无中间副作用的同字段读取也做公共子表达式合并。
+     所以收窄**不看字段的开放判定**（`Oracle::final_field` 只看访问标志，不登记依赖）。
+   - 为什么不看开放判定：`Optional.value` 在三处被「按名放开」——`ObjectStreamField("value", char[].class)`（`StringBuffer.<clinit>`）、
+     `ObjectInputStream$FieldValues.get` / `ObjectOutputStream$PutFieldImpl.put` 的 `getFieldOffset(name, type)`。它们都走
+     `reflect_writes.rs` 的形状兜底（「Class + String 实参 → 按名放开」，Class 实参上找不到该名字段时全局按名放开），
+     而实际按名取字段的汇点（`getDeclaredField` / `objectFieldOffset` / `name_resolvers`）另有精确建模。若收窄依赖开放判定，
+     这条兜底会让收窄失效；收窄的健全性本就不依赖写入集合（见上），所以与开放判定解耦。
+4. **字段配对的基本类型 / 非字节码类镜像**（`lookup_pair.rs::field_wrap_call`）：类值集里的基本类型类镜像（`Class#<primitive>`）与
+   非字节码类镜像没有 Java 字段，按名取不到字段，不再算「所指未知」而全局按名放开（与 `field_lookup.rs::class_values` 同一口径）。
+   来由：`findVarHandle(Class recv, String name, Class type)` 内部 `MemberName.<init>(Class, String, Class, byte)` 的形状配对把 `type`
+   形参也登记成查找类，`AtomicBoolean.<clinit>` 等传入 `int.class`，曾把 `value` 全局放开。
+
+#### 实测（tag `11d`，对照 da165172 的 `10p`）
+
+| 测试 | 类 | 方法 | 折叠常量 / 折叠方法 | 用时 ms（本机有并行作业，仅供参考） |
+|---|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 340→340 / 345→345 | 495 → 523 |
+| StockTrans | 3185 → **3150** | 20259 → **19919** | 2238→2212 / 1992→1962 | 34777 → 31700 |
+| DeepCopy | 3187 → **3152** | 20277 → **19939** | 2236→2210 / 1991→1961 | 25967 → 29822 |
+| TestSerialDefaultSuid | 3192 → **3157** | 20271 → **19931** | 2237→2211 / 1991→1961 | 31033 → 27555 |
+
+- 四例均为 `10p` 的子集（新增类 0、新增方法 0）；三例各 −35 类 / 约 −340 方法。折叠常量 / 方法计数下降是因为被折叠的方法本身出了闭包。
+- DeepCopy 折叠：`PackageHelper.definePackage` 死区 `[57, 87]`（`toFileURL` / `getManifest` / `defineOrCheckPackage` 分支）；
+  `findModule` 死区 `[24, 79]`（`-Xbootclasspath/a` 的 `file:` 分支）与 `[102, 104]`（`return null`）。
+- 出闭包的 35 类：jrtfs（`JrtFileSystem` / `JrtPath` / `SystemImage` / `ExplodedImage` 等）、`ImageReader` 节点类、`FileTreeWalker` 一组、
+  `ZipFileSystem`、`JarInputStream` / `ZipInputStream` / `PushbackInputStream`、`AllPermissionCollection`、`Class$Holder`、
+  `PackageHelper$1` / `$2`、`UnixUriUtils` 等。
+- 分步：只加前缀事实 −29 类（`findModule` 的 `file:` 分支死）；加 `join_ret` 后 `[102,104]` 也死但计数不变；
+  final 字段复读收窄解耦开放判定后 `definePackage@57..87` 死，再 −6 类。
+- `JarVerifier`、`JarFile`、`JarURLConnection`、jar `Handler` 仍在闭包内：B5 这条路线已切断，剩余来源是 B1 / B4（§30.8、§30.9）。
+
+#### 与引导映像项目的一致性
+
+- `getSystemPackageLocation` 现为 native 手写边界（a3-L1 / 引导映像第 5 步，已知失败 `TestProtectionDomainFaces` 的
+  `BootLoader.getSystemPackageLocation` native 缺口即此方法）。落地实现须只返回 null 或 `jrt:/<模块名>`，与本清单事实一致；
+  清单注释已写明这一约定。
+- `findModule` 的模块分支另需 `ModuleLayer.boot().findModule(mn)` 在运行期能找到该模块（引导层可用），这同样是引导映像第 5 步的范围，
+  本步不改变它，只是闭包不再保留 jar 分支作兜底。
+- 两边重叠点只有这一个 native 方法；引导映像若改为构建期求值包位置，结果仍须落在 `jrt:/` 前缀内，否则本事实失效（清单解析不检查运行期值）。
+
+#### 单测
+
+- closure crate：新增 `final_field_reread_keeps_nonnull`（final / 非 final、中间调用、`putfield`、改写接收者局部五种情形）、
+  `join_ret_keeps_nonnull`，`string_shapes_parse` 增前缀项与两种错误项。
+- closure crate 181 过；`closure_independent_of_hash_seed` 过（1320s）、`container_elements_per_object` 过。
+  （首轮哈希种子测试与 rava 重建并发，二进制中途被替换，结果作废后单独重跑。）
+
+#### `encodePath` 结果形状：从字节码推出所需的域扩展（本步未实施，清单事实暂留）
+
+`ParseUtil.encodePath(String, Z)` 的「结果不含 `#` `?`」要从字节码推出，需要下列五项能力，每项都是独立的域扩展，
+合计超出本步范围（串形状域只描述串本身，不描述数组内容、不跨变量关联）：
+
+| # | 字节码位置 | 需要的能力 |
+|---|---|---|
+| E1 | `firstEncodeIndex`：`for (i < len) { c = charAt(i); if (快速通道) continue; if (c > 0x7F \|\| match(c, L, H)) return i; } return -1` | **扫描循环摘要**：返回 -1 ⇒ 串中每个字符都不满足谓词 P；返回 i ≥ 0 ⇒ 前缀 [0, i) 不满足 P。P 对 0–127 逐值常量求值（`match` 的两个掩码是 `ldc2_w` 常量，纯算术），得到 ASCII 排除集 |
+| E2 | `encodePath(String,Z)@26..40`：`index > -1` 的假侧返回 `path` | **关系事实**：int 值携带「它是串 s 的扫描下标」标签，分支收窄到 `== -1` 时把 s 的形状并上排除集（需要按来源回写局部变量） |
+| E3 | `encodePath(String,I,C)`：`retCC[retLen++] = c` 各处 | **路径敏感的字符值集**：比较链（`c == sep`、`a–z` / `A–Z` / `0–9`、`c ≤ 0x7F`、`match`）两侧收窄 char 局部的值集，`castore` 处取值集 |
+| E4 | 同上：`newarray char`、`toCharArray`、`System.arraycopy`、扩容拷贝、`new String(char[], int, int)` | **char 数组内容域**：按分配点记「元素排除集」（全部 `castore` 值集与拷贝来源的交），`new String(char[],…)` 结果取之；`arraycopy(pathCC, 0, retCC, 0, index)` 的拷贝段需要 E1 的前缀事实经形参 `index` 传入（两个调用点：常量 0 与扫描下标），即 E2 的关系标签要过形参常量格 |
+| E5 | `escape(char[], char, int)`：写 `'%'` 与 `Character.forDigit(…, 16)` | **数组形参写入摘要**（被调方法对实参数组写入的值集）+ `forDigit` 的返回字符集（返回 int 值集求值，`'0'–'9'`、`'a'–'z'`、`'\0'`） |
+
+终态做法：E1–E5 全部落地后删除两条 `excludes` 清单项，由 `encodePath` 的返回值形状直接给出。E3 / E5 的 int 值集已有
+（`absint/ints.rs` 的有限值集），缺的是比较链两侧的收窄与「数组形参写入」摘要；E4 是新的对象标签（`Obj::Chars { no }`），
+与 §30.9 的构建器标签同构（`castore` 对应 `append`）；E1 / E2 是新的循环摘要与关系标签，工作量最大。
+在此之前保留清单事实，注释里的位运算论证可逐位核对（`#` = 0x23、`?` = 0x3F 落在 L_ENCODED 的置位上）。
+
+#### 待用户决策
+
+1. **final 字段复读收窄不看开放判定**（本步实施）：依据 JLS §17.4.5 / §17.5.3（见设计第 3 项）。可观察差异只在「他线程在本线程两次读取之间
+   用反射 / Unsafe 改写 final 字段为 null」时出现：JVM 允许第二次读取返回旧值（C2 实际如此），生成的 Rust 按折叠删去 null 分支后
+   读到 null 会继续走非 null 路径。若不接受，需改为依赖开放判定，并先收窄 `reflect_writes.rs` 的形状兜底（见下），否则 B5 的
+   `definePackage@57..87` 回到可达（−6 类）。
+2. **启动目录是目录**（B1①）：仍待决定，本步未实施任何依赖它的折叠。
+
+#### 遗留与恢复入口
+
+- 分支 `c1d-url-b2`，worktree `/Users/yuwei/dev/workspace/java_rta_c1durl2`。测量 `build/url/run4.sh <tag 后缀>`（构建 rava + 四例 + 对照 `10p`）。
+- **形状兜底**：`reflect_writes.rs` 中「调用含 Class 形参与 String 实参 → 名字在 Class 实参上找不到字段时全局按名放开」是按名放开的
+  最大来源之一（`value` 由 `ObjectStreamField.<init>` / `getFieldOffset` 放开）。终态：按名取字段的汇点全部精确建模
+  （`getDeclaredField(s)` / `objectFieldOffset` / `name_resolvers` / `MemberName` 解析），形状兜底删除。需单独立项、服务器全量验证。
+- **`encodePath`**：清单 `excludes` 两项暂留，E1–E5（上表）落地后删除。
+- 下一步按协调方顺序回到 B1② 的 P2（构造器确定初始化，入口见 §30.9「恢复入口」）。
+
+### 30.11 第 6 步：B1② 的 P2——构造器确定初始化（2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策（2026-10-07，协调方转达）
+
+1. **不采纳「启动目录一定是目录」假设**（§30.9「待用户决策」第 1 项、§30.10 第 2 项）：进程启动后工作目录被删时，JVM 抛 IOException、
+   跳过该类路径项，转译版走 JarLoader 撞存根 panic，行为不一致。因此：
+   - 不实施任何依赖该假设的折叠；不再测「采用该假设」的反事实上界（§30.9 的 `cutsNoB5` / `cutsAll` 上界含该假设，作废为参考值）；
+   - 改找不依赖该假设的可靠事实，例如由字节码推出 `ParseUtil.fileToEncodedURL` 产生的 `file` 路径以 `/` 开头（来自绝对路径），
+     不要求它是目录。
+2. **B5 的「final 字段判非空后同对象再读仍非空」获认可**（JLS §17.5.3），保留（§30.10 设计第 3 项、待决第 1 项结案）。
+
+#### 设计（通用，无类名）
+
+- **构造器摘要**（`absint/init.rs`，`absint::analyze_init`）：抽象解释状态加 `inits`——当前路径上 `this` 必然已写的实例字段
+  （解析后的声明键），合流取交集，异常处理器入口为空。逐指令在执行前的栈上判定：
+  - `putfield`：接收者恰为 `this`（来源只有形参 0）→ 并入 `inits`；写入值含 `this` → 交出；
+  - `getfield`：接收者可能是 `this` 且字段未写 → 记入 `bad`；
+  - 委托 / 超类构造器（`invokespecial <init>`，接收者恰为 `this`，其余实参不含 `this`）：按被调摘要组合——交出集取
+    「本方已写 ∪ 被调方交出集」，被调方 `bad` 去掉本方已写，返回后并入被调方返回集；无摘要（手写 / 无法分析）按交出；
+  - 其余调用的实参 / 接收者、`putstatic` / `aastore` 的值、`athrow`、indy 实参、`checkcast` / `instanceof` / `areturn` 的输入含 `this` → 交出；
+  - `return`：返回集取交。摘要 = (返回集, 交出集, bad)，确定集 = 返回集 ∩ 交出集 \ bad。只有第二阶段（不动点入口状态）记录。
+- **引擎**（`engine/ctor_init.rs`）：
+  - 摘要以辅助分析事实（`Facts { m: None }`）在记忆化帧内求出，记入 `cinits`；输入记录与求值记忆同一套，
+    读过的字段转不折叠或属性不折叠集合增长时作废（`ceval_drop` / `sysprops.rs`）。
+  - 辅助事实答不出的调用取唯一字节码目标的返回常量 `rvals`（只取 `Const`；缺席 / Top 按未知，不取「不返回」），
+    读过的目标记入摘要（嵌套摘要并入外层），该目标返回常量变化时作废（`cinit_ret_changed`，`bytecode.rs::returns` 与
+    `concrete/apply.rs::join_rval` 两处写入点）。触发点：辅助分析不对无实参方法常量求值，`System.getSecurityManager()` 不折 null，
+    `URL` 构造器在安全管理器分支把 `this` 交出（`checkSpecifyHandler`），确定集只剩 `hashCode` / `port`。
+  - 分配点（`Event::New`）登记 `osite`：该方法里全部 `invokespecial cls.<init>`（JVMS §4.10.1.9：`new cls` 只能经 `cls` 自身的
+    `<init>` 初始化，初始化前不能使用）。对象确定集 `odef` = 各构造器确定集之交；类链（不含根类）声明了非抽象 `finalize()V` 时为空。
+  - 任一摘要作废置 `cinit_drop`，下一次 `invalidate_all` 开头 `obj_defs_dropped`：清空 `odef`，按对象读过的方法按当前答复复核
+    （`obj_queries_same`），答复有变才重分析。终态等于按最终事实计算的摘要，与处理顺序无关。
+- **读取侧**（`obj_fields.rs::obj_field_value`）：只有字段不在对象确定集时才并入初值；`ovals` / `owild` 改为从 ⊥ 起算。
+
+#### 健全性与反例核对
+
+- 读到对象字段须先持有引用。构造链帧内的直接读（`getfield this`）未写时记 `bad`；引用经交出点流出时只保留交出时已写的字段；
+  构造器正常返回后的读取只看返回集；构造器异常退出时对象不可达（交出点已覆盖其它可达途径），唯一例外是终结器，已排除。
+- 抽象对象名含（方法键, 偏移）：字节码 `new`、手写分配（`u32::MAX - k`）、lambda 构造引用（indy 偏移）偏移空间互不相交，
+  后两者不在 `osite` 中，保留初值。反序列化 / 物化快照分配的是类 id 而非抽象对象；`clone` 复制的是已写入的值。
+- 字节码外写入（反射 / Unsafe / 手写 / VM 钩子）不影响「初值是否可见」：这些写入本身仍由 P5 规则（偏移可得 / 手写写入不折叠）覆盖。
+- 返回常量依赖：`rvals[t]` 在不动点上覆盖 t 的全部实际返回（与主分析同一事实，主分析调用点即按此取值），增长时摘要作废重算，单调收敛。
+- 反例核对（新增折叠逐条，见下）：
+  - `LinkedBlockingQueue.capacity = MAX_VALUE`：可达分配只经无参构造器（委托 `this(Integer.MAX_VALUE)`），`capacity` 在交出前写入；
+    若用户调用带容量的构造器，写入按对象记录，折叠自动解除。
+  - `SliceOps$1` 的 `val$` 字段：合成外部捕获字段在超类构造器调用前写入（javac 形态），确定初始化。
+  - `SpinedBuffer.<init>` 的 `initialChunkPower = 4`：无参构造器路径写常量。
+  - `SliceOps$SliceTask.doLeaf` / `doTruncate` / `onCompletion` 的死区，及 `cancel` / `completedSize` / `isLeftCompleted` 出闭包：
+    依赖的字段在构造器内必写，原先只因初值并入而保留了初值分支。
+
+#### 实测（tag `12b`，对照 `11d`）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 523 → 465 |
+| StockTrans | 3150 → 3150 | 19919 → **19916** | 31700 → 26135 |
+| DeepCopy | 3152 → 3152 | 19939 → **19936** | 29822 → 26326 |
+| TestSerialDefaultSuid | 3157 → 3157 | 19931 → **19928** | 27555 → 26272 |
+
+- 四例均为 `11d` 的子集（新增类 0、新增方法 0）；三个大例各 −3 方法（`SliceOps$SliceTask.cancel` / `completedSize` / `isLeftCompleted`）。
+  分析耗时无增幅。DeepCopy 摘要作废 91 次（`init_drops`）。
+- 加 `rvals` 依赖前（`12a`）集合相同；加入后 `URL.<init>(String,String,String)` 的确定集由 {`hashCode`, `port`} 扩为
+  {`file`, `handler`, `hashCode`, `path`, `port`, `protocol`, `ref`}。
+  `URL.<init>(URL,String,URLStreamHandler)`（规格串解析）仍只有 {`hashCode`, `port`}：`handler.parseURL(this, …)` 是对可覆盖方法的
+  真实交出，属正确结果。
+- 本步单独不折 `R`：`getFile()` 的返回仍按成员键汇合（P3），`val$url` 的接收者来自站点（P4）。
+
+#### 单测
+
+- `absint/init_tests.rs` 10 项（全路径写入、交出截断、自存交出、写前读、单侧分支、未知超类、委托组合、无返回、处理器路径、缺省不跟踪）。
+- closure crate 191 过；`closure_independent_of_hash_seed`、`container_elements_per_object` 过（1364s）。
+
+### 30.12 第 7 步：B1② 的 P3——按接收者对象的返回值（2026-10-07，分支 `c1d-url-b2`）
+
+#### 设计（通用，无类名；`engine/obj_rets.rs`）
+
+- **归属**：实例方法节点 m 每次分析的返回值并入 `nret[m]`，再并入接收者形参节点 `P(m,0)` 值集里每个抽象对象 o 的
+  `orvals[(o, 方法键)]`（方法键 = 节点自身的声明键）；`P(m,0)` 增长时把 `nret[m]` 补归属到新对象（`oret_watch`，经 `flow.rs::node_grown`）。
+  具体求值结果（`concrete/apply.rs`）的返回不按对象归属，并入 `orwild[方法键]`。
+- **读取**（`Facts::invoke_result` 的 `obj_ret`）：实例调用、非 void、接收者只来自形参 i、该形参值集非空且全为抽象对象时，
+  逐对象定出所执行的方法：精确目标（static / special / private / final），否则按对象的类 `Hierarchy::select`（JVMS §5.4.6，
+  对象的类在 `param_obj_sets` 时记入 `oclass`）；只取有字节码的方法（手写 / 无体的返回不按对象归属，有此类对象即不折）。
+  答复 = 各对象（`orvals[(o,t)]` ⊔ `orwild[t]`）之并：
+  - 有值 → 按该值（与按成员的 `rvals` 同一取法：小集合 / 非空引用仍先按常量实参求值）；
+  - 无值而有对象的目标未定论（`noreturn.answer_never`：乐观阶段恒真，收尾阶段只对未建节点 / 未分析完 / 等待中的目标）→ 不返回，
+    记 `Dep::Never`，与按成员的「尚无返回」同一收尾机制（排空时重算）；
+  - 其余（全部对象定论无返回、或有对象选不出字节码目标）→ 退回按成员的 `rvals`。
+  调用点没有唯一目标（虚调用多实现）时同样可用：原先直接答未知。
+- **依赖**：查询记为 `ObjQuery::Ret(形参, RetSite{指令, 符号引用, 接口}, 答复)`，与按对象字段读同一套复核：`ordeps[(o,t)]` /
+  `orwdeps[t]` 登记读者（按各对象选出的 t），归属变化时按答复复核（`obj_readers_recheck`），形参值集增长经 `obj_watch` 复核，
+  共享摘要按答复比对（`obj_queries_same`）。
+
+#### 健全性与反例核对
+
+- 接收者为 o 的调用执行方法 t 时，派发把 o 送进所连 t 节点的 `P(·,0)`，该节点的分析覆盖这次执行（入口状态含本调用点实参），
+  其返回值归属到 o；节点按旧入口得出的返回值先归属、后因重分析变化时新值继续并入（只增不减）。所以不动点上
+  `orvals[(o,t)] ⊔ orwild[t]` 覆盖接收者为 o、执行 t 的全部正常返回值。
+- 方法选择只看对象的类（抽象对象的类固定），与分析进度无关；`select` 与派发用同一解析。手写 / native / 无体方法的返回
+  不经字节码 `returns`，不按对象归属，这类对象出现即不折。
+- 「定论无返回」的对象贡献 ⊥：目标的全部节点都已分析且无一归属到 o，即 o 不在任何 t 节点的接收者值集里（或这些节点无正常返回），
+  不动点上此调用点不会以 o 为接收者正常返回 t 的值。之后若 o 流入 t 节点，`oret_grown` 补归属并经 `ordeps` 复核。
+- 「不返回」答复只在目标未定论时给出，排空进入收尾后按 `noreturn.rs` 规则重算，同按成员的「尚无返回」。
+- 反例核对：同一形参的对象集含两个对象、各自 `tag` 不同 → 答复为两值之并，不折；对象的类覆盖了被调方法 → 按对象的类选出
+  覆盖方法，取其归属；接收者经类型转换 / 合流来自多个来源 → `srcs` 不只一个形参，不查。
+
+#### 实测（tag `13b`，对照 `12b`）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → 1827 | 465 → 483 |
+| StockTrans | 3150 → 3150 | 19916 → 19916 | 26135 → 29304 |
+| DeepCopy | 3152 → 3152 | 19936 → 19936 | 26326 → 28980 |
+| TestSerialDefaultSuid | 3157 → 3157 | 19928 → 19928 | 26272 → 29317 |
+
+- 四例集合与 `12b` 相同（子集成立）；耗时 +10%–12%，在 20% 线内（同机另有负载，`13a` 只做归属时为 +0%–7%）。
+- 夹具 `ObjFacts`：`use(b1)` 的 `b.tag()`（虚调用、无唯一目标）按对象答 `"a"`，`Rare.go` 出闭包；`Holder.run` 的接收者来自
+  字段读（站点），留给 P4。
+- 中途发现：答复「对象尚无归属 → 退回 `rvals`」时首次分析恒先退回（被调方尚未分析），而调用边不撤回，折叠永远落空；
+  改为与按成员「尚无返回」同一乐观机制后生效。
+- 本步四例无折叠差异：URL 链上的 `getFile()` 等调用接收者来自站点（字段读 / 调用结果），需 P4。
+
+#### 单测
+
+- closure_cli 新增 `returns_per_receiver_object`（夹具 `tests/fixtures/ObjFacts.java`）。
+- 本节 `13b` 是暂存版（⊥ 退回规则为旧口径），未单独提交；最终实现随 P4 一并提交，修订见 §30.13。
+
+### 30.13 第 8 步：B1② 的 P4——站点来源的接收者 + 复核框架定型（2026-10-07，分支 `c1d-url-b2`）
+
+P3 与 P4 共用一套按对象查询 / 复核框架（`obj_fields.rs` / `obj_rets.rs`），P4 实施中对框架的 ⊥ 规则、复核时机和数据结构都做了改动，
+P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规则。所以 P3 + P4 合成一个提交；另把顺带发现的、与本线无关的
+站点求值顺序依赖单独先提交（见下文「站点求值所用分析」）。
+
+#### 设计（通用，无类名）
+
+- **站点来源**（P4）：`Recv::Site(偏移)`——接收者值只来自一个字节码站点（字段读 / 调用结果，`Src::Site`），且该站点结果的
+  声明类型是容器形态类（`obj_site_cands`，按方法键缓存）时，对象集取流图站点节点 `S(m, 偏移)` 的值集。字段读与返回值两种
+  查询都可用站点来源。站点节点就是派发用的值集，覆盖方法节点 m 各次执行时该站点产生的全部对象。
+- **⊥ 规则**（对象集为空，或各对象尚无值 / 尚无归属）：
+  - 字段读：定论（`settled`）之前答 `Never`（读取之后暂不可达），定论之后退回全局值集（`bottom_never`）。
+  - 返回值：与按成员的「尚无返回」同一口径——收尾（`closing`）前答 `Never`；收尾阶段只在某个对象的目标 t 仍满足
+    `noreturn.answer_never(t)`（尚无节点 / 未分析 / 等待中）时答 `Never`，否则退回 `rvals`。
+    这样按对象答复不会比按成员更早放弃「不返回」，乐观不返回的定论时机不受按对象查询影响。
+  - P3 暂存版的「对象无归属 → 收尾阶段立即退回」会让退回的宽答复先建边，随后到达的归属再把答复收窄，
+    边不撤回，结果依赖处理顺序。
+- **复核延后、合并**（`obj_flush`）：值变化（`obj_readers_recheck`，原因 = 字段 / 方法键）、来源值集增长（`obj_grown`）、
+  构造器摘要作废（原因 = 全部）都只把方法记入 `obj_dirty`（附原因）。复核在两处进行：流传播排空之后，以及主循环每轮开头
+  （不动点各项判定之前）。复核时：
+  - 只重算来源对象集（仅限查询用到的来源，`obj_sets_of`，与 `obj_sets` 同口径）；
+  - 只复核输入可能变了的查询：来源对象集变了的，所读字段在原因里的，同名同描述符方法在原因里的。
+    选择保持名字和描述符，JVMS §5.4.6。
+  - 答复有变才重分析。不变时，有增长就按上次登记的对象集只补登新增对象（`ObjBound`，同一组查询 `Rc::ptr_eq`）。
+- **数据结构**：`ovals` / `odeps` / `orvals` / `ordeps` 由 `(对象, 成员键)` 改为 `成员键 → 对象 → …` 两级表，
+  逐对象查表不再克隆、散列成员键；目标选择按（调用点, 对象）缓存（`oret_sel`：只依赖对象的类与类层次）；
+  `obj_field_value` 的初值只并一次。
+- **站点求值所用分析**（`worklist.rs::site_analysis`，单独提交）：按名查找的名字、键集（`keyed.rs::names_of`）、字段 / 返回串、
+  类查找、方法名求值改取 `applied`（其事件正在 / 已经执行的那次分析），未执行过时取当前分析。
+  - 问题：方法失效后、重分析前，站点仍可能因接收者 / 键集增长按 `applied` 的事件重跑。原代码取 `analysis`，此时它已被清空，
+    于是答「推不出」→ `Keys::Any` / 开放查找，而这种放宽不可撤回。
+  - 实例：TestSerialLookupPairing 的 `tryGet@225/@282` 键门放行全部服务提供者，20250 对 19918，随散列种子变化。
+  - 这是本线之前就存在的顺序依赖，P3/P4 增加了失效次数，所以暴露出来。
+
+#### 健全性与反例核对
+
+- 站点来源：`S(m,off)` 是该站点结果的流图值集，不动点上覆盖其全部运行期对象（派发同样依赖它）；只取全由抽象对象组成的值集，
+  含 open / 非抽象类 / 镜像即不查。按对象字段值 / 返回值的覆盖论证同 §30.12，与来源种类无关。
+- 延后复核：读者在复核前用的是旧答复，可能偏窄（偏乐观）。但每次变化都会记入 `obj_dirty`，主循环在不动点各项判定之前
+  一定先排空它，所以终态里每个方法的答复都等于按最终对象集 / 最终值算出的答复。原因过滤只略过输入未变的查询：
+  - 答复的输入只有四样：来源对象集、`ovals` / `owild[字段]`、`orvals` / `orwild[选出的目标]`、`odef`（作废时原因为全部）；
+  - `bottom_never` / `closing` 的变化不在其中，由 `Dep::Never` / 收尾重算覆盖，与原机制相同；
+  - 开放判定的变化不在其中，由 `fdeps` 全局读者失效覆盖。
+- 补登只增不删：重分析后旧登记残留，只会多复核，不影响结果。
+- 反例核对（新增折叠抽查，StockTrans `13b → 14d`）：
+  - `ReferenceQueue.poll()` 按对象答 null，于是 `WeakHashMap.expungeStaleEntries`、`ClassCache.processQueue`、
+    `LogManager.drainLoggerRefQueueBounded`、`Level$KnownLevel.purge` 的出队分支死。原因是闭包里没有 `ReferenceQueue.enqueue`：
+    引用入队由 VM 的引用处理线程驱动，当前闭包与运行时都没有承载它，所以转译产物里队列确实恒空，与该折叠一致。
+    将来按手写边界类别 ③ 落地引用类语义（由 `Rc` 释放触发、不引入 GC，见 `2026-10-07-no-gc-memory-model.md`）时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
+    这一项属于既有的建模缺口，不是新的不健全；见「待用户决策」。
+    同类还有 `ResourceBundle.findBundle@73`、`FileInputStreamPool.getInputStream@3`、`CleanerImpl.run`、`MemoryCache.emptyQueue`、
+    `LocaleObjectCache.cleanStaleEntries`、`ThreadContainers.expungeStaleEntries`、`Bundles.cleanupCache` 等（均为引用队列出队）。
+  - 其余新增常量多为 `true`：`Logger.doSetParent@146`、`ProviderList.<init>@358`、`SortedOps$RefSortingSink.accept@5`、
+    `URLClassPath.getLoader@164` 等，接收者对象是 `ArrayList` 一类，其 `add` 字节码恒返回 `true`；按对象选出目标后取该目标的返回值。
+  - HelloWorld −4 方法：`ConcurrentHashMap.remove(Object,Object)` / `replaceNode` / `TreeBin.removeTreeNode` / `balanceDeletion`。
+
+#### 实测（tag `14d`，对照 `13b`；`14a`–`14c` 为优化过程）
+
+| 测试 | 类 | 方法 | 用时 ms（本机负载，仅供参考） |
+|---|---|---|---|
+| HelloWorld | 469 → 469 | 1827 → **1823** | 483 → 520（+7.7%） |
+| StockTrans | 3150 → 3150 | 19916 → 19916 | 29304 → 32428（+10.7%） |
+| DeepCopy | 3152 → 3152 | 19936 → 19936 | 28980 → 32496（+12.1%） |
+| TestSerialDefaultSuid | 3157 → 3157 | 19928 → 19928 | 29317 → 31974（+9.1%） |
+
+- 四例均为 `13b` 的子集（新增类 0、新增方法 0）。大例集合不变，只多了一些常量和死区折叠（StockTrans 有 31 个方法的折叠发生变化，均为增加）。
+  URL 链上 `R` 所需的 `getFile()` 站点折叠仍未成立：需要 B4 / `fileToEncodedURL` 路径以 `/` 开头的串形状事实（见下）。
+- 耗时优化过程（StockTrans）：
+
+  | tag | 做法 | 用时 |
+  |---|---|---|
+  | `14a` | 每次流增量都即时重算全部来源、全部重登 | 83985 ms（+187%） |
+  | `14b` | 延后合并复核 | 70436 ms |
+  | `14c` | 两级表 + 目标选择缓存 + 增量补登 | 35701 ms（+22%） |
+  | `14d` | 按原因只复核受影响查询 | 32428 ms |
+
+  `14d` 的 `reasons.mirror.analyses` 为 21742（`13b` 为 1516），`field_put` 由 15443 降到 7819；合计重分析增加约 12600 次，
+  分析阶段 +0.6 s。复核本身约 7–8 s，剩余优化空间主要在这里。
+- 峰值内存（分配器口径 `peak_mem_mb`，`11d` → `12b` → `13b` → `14d`）：
+  - HelloWorld 235 → 236 → 238 → 221；
+  - StockTrans 2178 → 2173 → 2174 → 2245（相对 B5 +3.1%）；
+  - DeepCopy 2200 → 2224 → 2293 → 2304（+4.7%）；
+  - TestSerialDefaultSuid 2201 → 2149 → 2249 → 2161（−1.8%）。
+
+  P2–P4 合计增幅在 20% 线内。`peak_rss_mb` 受本机 swap（约 90%）影响波动大：`11d` 为 1352–1520，之后为 1967–2315，
+  这只说明页面是否被换出，不作判据。
+- 确定性：TestSerialLookupPairing 种子 0 / 1 / 2 的类集合与方法集合一致（3153 / 19918，via 字段可变），修复前为 20250。
+
+#### 单测
+
+- closure crate 191 过；closure_cli `closure_independent_of_hash_seed`、`container_elements_per_object`、`returns_per_receiver_object`、
+  `returns_per_site_receiver`（夹具 `ObjFacts.Holder.run`：接收者来自字段读站点，`Rare2.go` 出闭包）4 项全过（1554 s）。
+
+#### 待用户决策
+
+1. 引用队列：P3/P4 让「闭包与运行时都不承载 VM 引用处理线程」这一既有缺口变得可见：`WeakHashMap` 等的出队清理分支被删去，
+   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把引用类语义（手写边界类别 ③）列入后续项？
+   一旦列入，入队路径进入档案，相关折叠会自动解除，不需要回退本步。
+   **已定（2026-10-07）**：列入，按无 GC 内存模型实施——引用类语义由 `Rc` 释放触发，C4 之后（`2026-10-07-no-gc-memory-model.md`）。
+
+#### 遗留与恢复入口
+
+- 下一步（不依赖「启动目录是目录」假设）：由字节码推出 `ParseUtil.fileToEncodedURL` 产生的 `file` 路径以 `/` 开头
+  （绝对路径），配合 §30.9 的 B4 `startsWith` 守卫与串形状域，验证 URL 链 `R` 能否折叠。入口：
+  - `build/url/cl.sh tests/e2e/23_algorithms/DeepCopy.java <tag> --flows '@trace:sun/net/www/protocol/jar/Handler'`；
+  - `build/url/folds.py`。
+- 复核耗时：`obj_flush` 约 7–8 s（StockTrans），可再按查询粒度登记脏位（字段读按 (字段, 对象) 精确定位查询）。
+- 工具：`build/url/run4.sh <tag>`，`python3 build/url/cmp.py <new> <old>`。
+
+### 30.14 第 9–11 步：facts.rs 拆分、URL 链折叠 R 的可行性、撤除按名放开字段的兜底（2026-10-07，分支 `c1d-url-b2`）
+
+#### 第 9 步：`engine/facts.rs` 按职责拆分（提交 2d4a4bd8）
+
+- 拆为 `facts/{kinds,fields,calls,oracle}.rs`，行为不变。
+- `15a` 对 `14d`：四例类 / 方法集合完全一致。
+- 用时（ms）：HelloWorld 520 → 510，StockTrans 32428 → 31857，DeepCopy 32496 → 32121，TestSerialDefaultSuid 31974 → 31689。
+- closure crate 单测 191 过。
+
+#### 第 10 步：URL 链折叠 R（E1–E5）——阻塞，待用户决策
+
+目标：由字节码推出 `ParseUtil.fileToEncodedURL` 的路径以 `/` 开头，从而折叠 `URLClassPath$3.run`（R）里的 jar 分支，
+把 jar `Handler`（J）移出闭包。不假设启动目录是目录。
+
+结论：仅凭 `/` 前缀不能移除 J，**不是推导精度问题，是语义上推不出**。
+
+- R 的 URL 不只来自 `fileToEncodedURL`：`JarLoader` 解析 manifest 的 `Class-Path` 得到相对 URL，
+  以 jar 的 URL 为基解析后回流到 R 的同一入口。
+- `Class-Path` 内容来自运行期读到的 jar，不受字节码约束，可以写成 `jrt:/…` 等任意形状。
+  例如基为 `file:/a/b.jar`、条目为 `jrt:/x` 时，得到的 URL 不以 `file:/` 开头。
+  所以 `/` 前缀事实对这一来源不成立，R 的 jar 分支在开放世界下可达。
+- 反事实实测（DeepCopy，**不健全的剪枝，只用于量化上限**）：
+
+  | 剪掉的分支 | 类 / 方法 | J |
+  |---|---|---|
+  | 不剪（`15a`） | 3152 / 19936 | 在 |
+  | R@97 + R@127 | 3150 / 19913 | 仍在 |
+  | 再加 `getJarFile@63` | 3150 / 19908 | 仍在 |
+  | R 的三个分支全剪 | 3147 / 19812 | 仍在 |
+
+  即使把 R 全部剪掉，J 仍经其他路径留在闭包中，收益上限约 5 类 / 124 方法。
+  E1–E5 做到底也只能拿到其中健全的一部分，并且依赖下面的产品取舍。
+
+待用户决策（原则 / 产品取舍，本项停在此处）：
+
+- (a) 接受现状：URL 链保留。不改语义，闭包多约 5 类 / 百余方法。
+- (b) 构建期固定资源目录：原生二进制的资源与类路径在构建期确定，运行期不再按 jar manifest 扩展类路径。
+  这样 `Class-Path` 来源在档案中消失，R 的 jar 分支可健全折叠。
+- (c) 原生二进制不设应用类路径：与模块模式一致（`cp = null`），类全部静态链接，`URLClassPath` 只服务于显式构造的
+  `URLClassLoader`。R 整条链在档案中只因用户显式使用而进入。
+- (d) 重新评估「启动目录是目录」的假设：只能处理 `fileToEncodedURL` 一支，按上面的反例仍不足以移除 J。不建议。
+
+建议 (c)：最贴合「rava 是 Java 的原生编译后端」的定位，类在构建期全部已知，运行期类路径扩展本来就无从加载新字节码。
+次选 (b)。选定后，R 的折叠由清单声明运行模型，生成器不需要类名特判。
+
+#### 第 11 步：撤除「按调用形状按名放开字段」的兜底
+
+原状：`reflective_writes` 对任何带 `Class` 形参或 `Class` 接收者、且有 `String` 实参的调用点，按名放开同名字段
+（`open_field` / `open_field_name`）。这是不按清单的兜底，与「清单即边界」相悖，也是若干假阳性的来源。
+
+撤除前先实测兜底触发的全部站点。它覆盖、而精确解析器没有覆盖的字段身份入口只有两个：
+
+- `MethodHandles$Lookup.resolveOrFail(byte, Class, String, Class)` 的字段形态；
+- `MemberName.<init>(Class, String, Class, byte)`。
+
+其余触发都是方法查找（已由 `method_lookups` 覆盖）或假阳性。
+
+终态设计：
+
+- 按名取字段身份的入口**只有**清单 `[facts.field_writes.name_resolvers]`。新增两条，都带引用种类过滤：
+  - `MethodHandles$Lookup.resolveOrFail:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)…`
+    = `{ kind = 0, class = 1, name = 2, read_kinds = [1, 2] }`；
+  - `MemberName.<init>:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Object;)V`，过滤同上。
+- `kind` / `read_kinds`：`kind` 形参是常量且属于只读种类（JVMS `REF_getField` = 1、`REF_getStatic` = 2）时，
+  本站点不算写入。种类非常量时按写入处理（健全）。只给 `read_kinds` 不给 `kind` 时清单解析报错。
+- `MemberName(Class, String, Class, byte)` 不入表：java.base 中它的调用方只有 `resolveOrFail` 与
+  `DirectMethodHandle.createFunction`（`REF_getStatic`，只读）。前者已经在 `resolveOrFail` 处按种类过滤，
+  后者只读。实测把它列为根时，getter 查找会被当成写入（`16a` 多出 `FinalReference` 1 类 + 2 方法）。
+- 名字值集（`field_names.rs::name_values`）：
+  - 本点字面量。有来源时只取 `site_lits`，即不把常量格派生出的中间态常量当字面量（D1）。
+    `16b` 的反例：`findVarHandle` 内的派生值 `V::Str("head", [Param(2)])` 导致 `open_field_name("head")`，
+    多出 `FinalReference`。
+  - 形参来源：取各调用点在该形参上的字符串常量（`pstr_read`）。已配对、且方法只经字节码调用点进入时不取，交给配对。
+    形参被污染（`ptaint`）时为未知。
+  - 字段读来源：`String` 字段的字面量写入集（`field_strs`）。字段已放开或有非常量写入时为未知。
+  - 辅助方法返回：`callee_consts`。
+  - `catch` 来源：未知。
+- 未知名字的回退：按类值集放开该类全部字段，类也未知时全放开（`open_class_fields(None)`），
+  不再按同名字段在全体类上放开。
+- 配对（`lookup_pair.rs::field_wrap_call`）：同样取 `name_values`，名字未知时按配对的类值集放开。
+- 非字节码入口（`pstrs.rs::offsite`）：方法经 `bind_pvs`（反射 / 句柄等非字节码调用）进入时登记为 offsite，
+  并以 `TRIG_TAINT` 重跑其形参读站点。此后配对不再豁免形参名，避免漏掉不经字节码调用点进入的名字。
+
+健全性审计：被新折叠掉的项逐一查过，都是旧兜底的假阳性。
+
+- 名字取自 `ObjectStreamField` / `FieldValues.getFieldOffset` 等按名 `getField` 读路径，被兜底当成写入：
+  - `ObjectOutputStream.protocol`、`CountingWrapper.count`；
+  - `KeySetView.value`、`TimeUnit`、`PlatformLogger.isLoggable`；
+  - `SunPKCS11.<init>`、`CoderResult`、`ServiceList.tryGet`。
+- `ModuleReader.open` / `read`：可达的实现只有 `NullModuleReader`。
+- `UnresolvedPermissionCollection` / `Secmod$Module`：闭包中没有其构造器或 `readObject`。
+
+迭代记录：
+
+| tag | 做法 | 相对 `15a` |
+|---|---|---|
+| `16x` | 直接删兜底 | **不健全**：`BMH_SPECIES` 被折为 null（`resolveOrFail` 字段形态无人放开） |
+| `16a` | 加 `resolveOrFail` 与 `MemberName(Class,String,Class,B)` 为解析器 | 多出 `FinalReference` +1 类 +2 方法（getter 查找被当成写入） |
+| `16b` | 引用种类过滤，去掉 `MemberName(Class,String,Class,B)` 根 | 多出 `FinalReference`（中间态派生名，D1） |
+| `16c` | 有来源时只取 `site_lits` | 四例集合与 `15a` 完全一致 |
+
+四例数据（`15a` → `16c`；类 / 方法集合逐项相等）：
+
+| 用例 | 类 | 方法 | 用时 ms | `peak_mem_mb` |
+|---|---|---|---|---|
+| HelloWorld | 469 | 1823 | 510 → 548（+7.5%） | 221 → 249（+12.7%） |
+| StockTrans | 3150 | 19916 | 31857 → 31147 | 2247 → 2173 |
+| DeepCopy | 3152 | 19936 | 32121 → 31048 | 2300 → 2225 |
+| TestSerialDefaultSuid | 3157 | 19928 | 31689 → 31641 | 2165 → 2264（+4.6%） |
+
+- 用时与内存增幅都在 20% 线内。HelloWorld 的绝对增量是 38 ms / 28 MB。
+- 本步的收益是结构性的：去掉一条不按清单的通道，`name_resolvers` 成为按名取字段身份的唯一入口。
+  四例集合没有缩小，因为旧兜底的假阳性在这四例中都已被其他事实覆盖或不可达。
+
+#### 单测
+
+- closure crate 193 过（新增 `reference_kind_filters_read_only_sites`、`read_kinds_require_kind`）。
+- closure_cli：`closure_independent_of_hash_seed`、`closure_independent_of_order`、`param_string_constants_fold_switch` 3 项全过（1667 s）。
+
+#### 遗留与恢复入口
+
+- 第 10 步待用户在 (a)–(d) 中选定。选 (b) 或 (c) 后，入口是清单声明运行模型（类路径来源），再以
+  `build/url/cl.sh tests/e2e/23_algorithms/DeepCopy.java <tag> --flows '@trace:sun/net/www/protocol/jar/Handler'`
+  核对 J 的剩余路径。反事实表说明，剪掉 R 后 J 仍在，需要沿 trace 继续找。
+- `MemberName(Class, String, Class, byte)` 不入表靠调用方审计。若将来档案中出现新的调用方，需要复查。
+  审计脚本思路：用 javap 列出 java.base 中该构造器的调用点。
+- 工具：`build/url/run4.sh <tag> <base>`、`build/url/cnt.py`、`build/url/folds.py`。
+
+### 30.15 第 12 步：原生二进制不设应用类路径（用户决策 (c)，2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策（2026-10-07，协调方转达）
+
+选 §30.14 第 10 步的 (c)：生成的原生程序没有运行期应用类路径，等价于模块模式下 `cp = null`。
+类全部在构建期编入二进制，运行期不按类路径从磁盘加载 `.class`。用户代码经
+`ClassLoader.getResource` / `getResourceAsStream` 读取的类路径资源，在构建期打包进二进制。
+机制通用，不为任何库做特判。
+
+#### 字节码事实（JDK 21，javap 核对）
+
+- `ClassLoaders.<clinit>`：`cp = System.getProperty("java.class.path")`。若 cp 为空串或 null，再看
+  `jdk.module.main` 是否为 null：为 null 时取 `""`，否则取 null。随后**无条件**执行 `new URLClassPath(cp, false)`。
+- 只有 `jdk.module.main != null` 才会得到 cp = null。但 `ModuleBootstrap.boot2`（会追加根模块）和 `LauncherHelper`
+  也读这个属性，所以不能用设置它的办法来实现 (c)。
+- `URLClassPath(String, boolean)`：逐个把类路径元素交给 `toFileURL(String)`，返回非 null 的才加入 `path`。
+  构造器还**无条件**执行 `this.jarHandler = new sun.net.www.protocol.jar.Handler()`，cp = null 时也一样。
+- `toFileURL` 的调用方只有两处：上面的 String 构造器，以及 `addFile`
+  （`BuiltinClassLoader.appendClassPath` ← Instrumentation 追加类路径）。两处的含义都是「类路径字符串元素 → 运行期加载源」。
+- 应用加载器使用 ucp 的地方：`findClassOnClassPathOrNull`（`ucp.getResource` → `defineClass(String, Resource)` →
+  `defineClass1`）、`findResourceOnClassPath`、`findResourcesOnClassPath`，以及 `hasClassPath()`（`ucp != null`）。
+
+#### 设计（通用，无类名；清单声明运行模型）
+
+1. **类路径运行模型由清单声明。** `vm_intrinsics.toml` 新增内建类别 `class_path`，含义是：原生二进制没有运行期
+   应用类路径，方法体唯一的可观察效果就是「把类路径变成运行期加载源」或「从类路径加载」，由 VM 以构建期结果等价承载。
+   登记四个成员，均为手写类 ②（运行模型替换）：
+   - `URLClassPath.toFileURL(String)` 恒返回 null。类路径字符串里的元素不形成加载源，于是应用 ucp 的 `path` 恒空，
+     与模块模式 cp = null 时「类路径上没有任何东西」的状态一致。`addFile` 自然随之失效。
+   - `BuiltinClassLoader.findClassOnClassPathOrNull(String)` 恒返回 null。类路径上没有可定义的字节码；闭包内的类
+     已经由 `findLoadedClass0` 在前一步命中。
+   - `BuiltinClassLoader.findResourceOnClassPath(String)` 和 `findResourcesOnClassPath(String)`：保留 `hasClassPath()`
+     的判定，资源改由构建期嵌入表（见第 2 条）提供。
+   
+   `[concrete.boot.natives]` 里 toFileURL 的条目由 `defer_call` 改为 `const:null`，引导映像求值与运行期一致。
+   闭包分析器把手写体当作精确返回（`hw_ret`：返回 null，或返回 Java 静态方法调用的结果），不需要类名特判。
+2. **构建期资源表。**
+   - **来源**：用户档案（`Origin::User` 的编译输出目录，含用户项目资源目录）和 `--deps` / `--cp` 给出的库档案
+     （`Origin::Lib`），按类路径顺序收录**全部文件**，包括 `.class`，与 JVM 上「类路径资源」的口径一致。
+     同名资源按类路径顺序保留多份（对应 `getResources` 的枚举序）。
+   - **落点**：用户侧元数据。`UserMeta` 增加 `class_path_resources` 字段，由用户 crate 的
+     `rava_user_meta.rs` 用 `include_bytes!` 给出 `(名, 字节)` 表，按名有序，同名保持类路径序。
+     运行时声明层与档案侧不随用户变化，跨测试编译复用不受影响。
+   - **门控**：表只在读取它的 native 方法位于闭包调用链上时发射，否则为空表。
+3. **运行期资源面（VM 支持类，`runtime/java_support/java.base/jdk/internal/loader/EmbeddedClassPath.java`）。**
+   - 两个 native 读表：`count(String)` 返回同名资源的份数，`bytes(String, int)` 返回第 i 份的字节。
+   - Java 方法 `findResource(String)` / `findResources(String)` / `stream(String)` 构造 URL 与流。
+   - URL 形如 `rava-cp:/<ParseUtil.encodePath(名)>`，第 i（≥ 1）份带 `#i`。构造时显式给出本类的 `URLStreamHandler`
+     （`Handler`）：`openConnection` 返回读表的 `URLConnection`，`getInputStream` 是 `ByteArrayInputStream`，
+     同时给出 `getContentLengthLong`。
+   - natives 写在共置手写文件 `embedded_class_path_impl.rs`（`#[jvm_native]`），读 `meta::class_path_resources()`。
+4. **java.class.path 属性**保持 `""`（`[facts.system_properties.values]` 与 `[concrete.boot] vm_props` 不变）：
+   - JDK 模块模式下该属性同样是 `""`；
+   - `TestSystemPropsSpec` 只要求该属性存在；
+   - 在 `jdk.module.main` 为 null 时，`""` 经 ClassLoaders 得到的就是 `""`，再经第 1 条得到空 ucp。
+   
+   语义：「没有运行期类路径」。属性值不列出构建期的类路径，因为这些路径在运行期机器上并不存在。
+5. **模块资源的口径收窄。** `input/src/resources.rs::derive` 只在 JDK 档案（`Origin::Jdk` / `Image`）里查找资源。
+   用户档案和库档案的资源统一由第 2 条的类路径表承载，不再混入 `jdk_resources::module_resources`
+   （它位于声明层，混入会让声明层随用户变化）。
+6. **过渡期手写（L2 六个资源方法，`class_loader_impl.rs`）改为经第 3 条取类路径部分。**
+   - `__impl_getResource` / `getSystemResource` → `EmbeddedClassPath.findResource`；
+   - `__impl_getResources` / `getSystemResources` → `findResources`；
+   - `__impl_getResourceAsStream` / `getSystemResourceAsStream` → 先查模块资源，再查 `stream`。
+   
+   这六个方法的终态仍是撤除：引导映像第 5 步（jimage）落地后，`ClassLoader.getResource` 走字节码，经委派链到达
+   第 1 条的 `findResourceOnClassPath` 钩子，由同一张表承载。
+7. **嵌入资源视图与系统类加载器所见一致：模块资源在前，类路径在后**（协调方 C4 补充：`TestSystemStableProps`、
+   `TestClassResourceStream`）。
+   - `EmbeddedClassPath` 的两个 native 读的是「模块资源（至多一份）+ 类路径行」的合并视图，与 JVM 上
+     `getSystemResources` 的顺序（父加载器 / 模块先、类路径后）一致。于是 `getResource` / `getResources` /
+     `getResourceAsStream` 对 JDK 模块资源也给出 URL 与流，第 6 条的 `resource_stream` 不再另查模块表。
+   - 类文件也是模块资源：`<类名>.class` 形态的字符串若指向 JDK 类（`Origin::Jdk` / `Image`），嵌入该类解析胜出的
+     类文件字节（镜像改写类优先于 jmod，与类本身同源）。`resources.rs::path_like` 不再排除 `.class`，
+     `ClassPath::jdk_resource` 对 `.class` 名按类解析取字节。
+   - 资源名的来源分两侧，保证档案侧与具体程序无关：
+     - 档案侧（`jdk_resources::module_resources`，声明层）：非用户域调用链上方法体的字符串常量推导，规则不变；
+     - 用户侧（`UserMeta.user_module_resources`，用户 crate 的 `USER_MODULE_RESOURCES`）：用户类调用链上方法体
+       的字符串常量推导、档案侧未收的 JDK 模块资源，如 `getSystemResourceAsStream("java/lang/String.class")`。
+     运行期 `meta::module_resource(name)` 先查档案表、再查用户表；带前导 `/` 的名不命中（`ClassLoader` 资源名语义）。
+   - 用户侧两张表落在 `user/src/rava_resources/{class_path,module}/<i>`。
+8. **镜像类整体入闭包只限运行期定义的类**（`closure/src/engine/seeds.rs::seed_image`）。
+   - 原规则：镜像独有类 / VM 支持类中父类在闭包内的非接口类，整体入闭包（实例化 + 全部方法 + 全量反射面），
+     且同直接父类的闭包类（物种族）同取全部方法。它针对物种类、代理类、注入调用器这类由 VM / 运行模型在运行期
+     直接定义并实例化、字节码里看不到实例化点的类。
+   - `EmbeddedClassPath$Handler`（父类 `URLStreamHandler`）与 `$Connection`（父类 `URLConnection`）是普通支持类，
+     却命中了原规则：`Handler` 被整体实例化，`sun.net.www.protocol.jar.Handler` 等同父类的闭包类被拉成物种族、
+     全部方法入闭包（`sameFile → hostsEqual → InetAddress.getByName → ServiceLoader → …`），HelloWorld 由 469 类
+     涨到 2870 类（tag `17a`）。
+   - 新判据（通用，按字节码事实）：**除自身外没有任何镜像类 `new` 它**，才是运行期定义的类。被别的镜像类 `new`
+     的类，实例化点在字节码里可见，走常规可达性。实测：JDK 21 镜像独有类与五个 VM 支持类中，`Species_*`、
+     `Proxy$Dyn`、`Species_Dyn`、`InjectedInvokerDyn`、`SerializationConstructorAccessorDyn` 只被自身 `new`（或从不被 `new`），
+     判定不变；只有 `EmbeddedClassPath$Handler` / `$Connection` 改走常规可达性。判据集首轮补种时算一次
+     （`SeedState.image_static_new`）。
+
+#### 影响的 e2e 与处理
+
+| 测试 | 依赖 | 处理 |
+|---|---|---|
+| `TestClassResourceStream` | 读自身 `.class`（流、URL）、未命中为 null、`getSystemResource(自身)`、`getClassLoader().getResource(自身)`；`getSystemResource("java/lang/String.class")` | 自身 `.class` 由类路径表命中；`jdk-res` 由第 7 条用户侧模块资源（`java/lang/String.class`）命中。预期由运行 NPE 转为通过（C4 全量登记的失败） |
+| `TestSystemStableProps` | `getSystemResourceAsStream("java/lang/String.class")`，期望 `sys-stream=true head=CA` | 第 7 条：用户侧模块资源嵌入 `java/lang/String.class` 字节，流首字节 `0xCA`。预期由 `sys-stream-ex=NullPointerException` 转为通过（C4 全量登记的失败，日志 `error_logs/TestSystemStableProps_ubuntu_jdk21.log`） |
+| `TestSystemPropsSpec` | `java.class.path` 存在 | 保持 `""`，不受影响 |
+| `TestAppClassLoader` | `forName` 不存在的类 → CNFE；自定义 `getResources` 覆盖；ServiceLoader 经上下文加载器 | CNFE 路径：`findClassOnClassPathOrNull` 恒 null，结果不变。覆盖分派不变 |
+| `TestServiceLoaderEmpty`、`TestBootContextLoader` 等 ServiceLoader / 上下文加载器用例 | `getResources("META-INF/services/…")` | 用户档案若带 `META-INF/services`，现在能枚举到。e2e 用例没有资源文件，枚举仍为空，输出不变 |
+| `TestClassLoaderIdentity`、`TestForNameInit`、`TestClassForNameInit`、`TestForNameComputedName`、`TestModuleLayerDefine`、`TestDynamicProxy` 等 | 加载器层级 / forName | 走 `findLoadedClass0`，不经类路径，不受影响；需抽查确认 |
+
+e2e 语料中没有非 `.java` 的资源文件，所以类路径资源表的内容只有用户 `.class`；用户侧模块资源表只含用户代码
+指名的 JDK 资源（`TestClassResourceStream` / `TestSystemStableProps` 为 `java/lang/String.class`）。
+
+#### 产品取舍（待用户决策，本项停在建议上，实现按建议默认）
+
+- **T1 资源表的收录口径**（二进制体积与 JVM 等价之间的取舍）：
+  - (a) 收录全部文件，含 `.class`。与 JVM 等价，体积约为类路径归档的大小；只在读表 native 可达时发射。
+  - (b) 不收录 `.class`。体积最小，但 `getResource("X.class")` 不再与 JVM 一致（常见于字节码库、版本探测）。
+  - (c) 按调用链上的资源名常量推导收窄（同 `module_resources` 的推导法），名字无法静态枚举时退回 (a)。
+  
+  建议：现在实现 (a)；(c) 作为后续的精度项，单列在体积线上。
+  **用户已决策（2026-10-07）：取 (a)，见 §30.16。**
+- **T2 URL 字符串往返**：`new URL(url.toString())` 要求 `sun.net.www.protocol.<scheme>.Handler` 这个类存在。
+  - (a) 不支持往返。不在 java.base 中新增包；`toString` 后重建 URL 会抛 `MalformedURLException`。
+  - (b) 新增 VM 支持类 `sun.net.www.protocol.rava_cp.Handler`，使 URL$DefaultFactory 能按协议名找到它。
+    （注：`rava_cp` 不是合法的 URL 协议名，协议只允许字母、数字、`+`、`-`、`.`；实施时改为 `ravacp`。）
+  
+  建议：先 (a)。若库语料出现往返用法再做 (b)。
+  **用户已决策（2026-10-07）：取 (b)，已实施，见 §30.16。**
+
+#### 实测（tag `17b`，对照 `16c`；`17a` 为第 8 条修正前）
+
+| 用例 | 类（16c → 17b） | 方法（16c → 17b） | 耗时 ms | 峰值 RSS MB |
+|---|---|---|---|---|
+| HelloWorld | 469 → 464（−6 / +1） | 1823 → 1738（−85 / +0） | 548 → 530 | 290 → 225 |
+| StockTrans | 3150 → 2798（−355 / +3） | 19916 → 17310（−2621 / +15） | 31147 → 30228 | 2247 → 1941 |
+| DeepCopy | 3152 → 2800（−355 / +3） | 19936 → 17323（−2628 / +15） | 31048 → 30203 | 2270 → 1963 |
+| TestSerialDefaultSuid | 3157 → 2805（−355 / +3） | 19928 → 17319（−2624 / +15） | 31641 → 30856 | 2308 → 1887 |
+
+- 新增项只有 `EmbeddedClassPath` 本身（HelloWorld 只到类型层，无方法），以及三例大用例里的 `$Handler` / `$Connection`
+  与它们覆盖或继承的 `URLConnection.getHeaderField` / `getHeaderFieldDate` / `getLastModified`：这是新运行模型的承载类，
+  取代被移除的 `URLClassPath$JarLoader` / `$FileLoader` / `$Loader`、`FileURLMapper`、`HttpURLConnection` 等。除此之外，
+  类集与方法集均为 16c 的子集。
+- 大用例的 −355 类来自 ucp 的加载器链整体出闭包：jar / file 加载源、`JarFile` 校验、由此牵出的 JCA 提供者
+  （`KeychainStore`、`RSACipher` …）与 NIO 缓冲族。
+- `17a`（第 8 条修正前）HelloWorld 涨到 2870 类 / 16962 方法，原因见第 8 条。
+
+#### jar `Handler` 能否出闭包（`cl.sh DeepCopy dcjh17b --flows '@trace:sun/net/www/protocol/jar/Handler'`）
+
+不能。理由可靠，两条都是字节码事实：
+
+1. `ClassLoaders.<clinit>` 无条件执行 `new URLClassPath(cp, false)`，构造器无条件执行
+   `jarHandler = new sun.net.www.protocol.jar.Handler()`（trace #1–#6）。cp = null 时也一样。所以 `Handler` 必然被实例化。
+   HelloWorld 中它只有 `<init>` 在闭包里。
+2. DeepCopy 另有一条用户可达路径：`URL.readObject` / `readResolve`（反序列化 URL）→ `URL.getURLStreamHandler(protocol)`
+   → `URL$DefaultFactory.createURLStreamHandler`，协议名来自流，于是按名构造 jar `Handler`（trace #16–#55）。
+   这是合法语义：反序列化一个 `jar:` URL 本来就需要它。它的 `parseURL` / `sameFile` / `hashCode` 等方法因此可达。
+
+`ucp` 的 jar 加载源（`JarLoader`）已经出闭包；`Handler` 本身只能经由「把 `jarHandler` 字段改成惰性」这类改写 JDK 字节码
+的方式拿掉，不符合手写边界规范，不做。
+
+#### 抽查清单（服务器，由用户发起）
+
+- 预期由失败转为通过：`TestClassResourceStream`、`TestSystemStableProps`（C4 全量登记的两例）。
+- 类路径 / 加载器 / 资源：`TestSystemPropsSpec`、`TestAppClassLoader`、`TestServiceLoaderEmpty`、`TestBootContextLoader`、
+  `TestClassLoaderIdentity`、`TestForNameInit`、`TestClassForNameInit`、`TestForNameComputedName`、`TestModuleLayerDefine`、
+  `TestDynamicProxy`，以及其余 ServiceLoader 用例（`--filter ServiceLoader`）。
+- 第 8 条判据（物种类 / 代理类整体入闭包不变）：MethodHandle 与 Proxy 相关用例（`--filter MethodHandle`、`--filter Proxy`）。
+- 四例回归：`HelloWorld`、`StockTrans`、`DeepCopy`、`TestSerialDefaultSuid`。
+
+#### 单元测试与编译（本机，`build/check-target`）
+
+- 生成器单测：`closure`、`classfile`、`resolve`、`input`、`emit` 全过（11 + 193 + 71 + 2 + 19 + 13 + 8 + 1，0 失败）。
+- `closure_cli` 的 `closure_independent_of_hash_seed` 与 `closure_independent_of_order` 都通过（`_large` 按惯例 ignored），
+  即与哈希种子和处理顺序无关。
+- `rava_meta_tables` 单测全过。
+- 对 `TestClassResourceStream` 的 scratch 跑 `cargo check`，rc=0。唯一的警告是既有的 pc_map 警告，与本步无关。
+- 提交顺序说明：`34b92dd2`（清单与加载器手写改用 `EmbeddedClassPath`）在 `5351646a`（新增该类）之前。
+  因此只有 `34b92dd2` 这个中间提交缺类，`5351646a` 及之后的终态可以编译。
+
+#### 未完成项与续作入口
+
+1. 服务器抽查：按上面的清单，在 C4 冻结解除后由用户发起。合入集成分支也等冻结解除，本分支暂不合入。
+2. T1 / T2 产品取舍：用户已决策，T1 取 (a)，T2 取 (b)，见 §30.16。
+3. T1 (c) 的收窄（资源名推导）属于体积线的精度项，待 T1 决策后再排。
+
+### 30.16 第 13 步：T1 定案与 T2 (b)——嵌入资源 URL 的字符串往返（2026-10-07，分支 `c1d-url-b2`）
+
+#### 用户决策
+
+- **T1（资源表收录口径）**：构建期收录类路径上的全部资源，包括 `.class`。这是正确性口径的终态。
+  按调用链上的资源名收窄属于后续的体积优化：名字能静态枚举时收窄，不能时退回全量。本步只记录结论，不实现收窄。
+- **T2（URL 字符串往返）**：取 (b)。由字符串重建的 URL（`new URL(url.toString())`、`URI.create(s).toURL()`）
+  能读到构建期嵌入的资源。
+
+#### 设计
+
+1. **协议名 `ravacp`**。URL 协议只允许字母、数字、`+`、`-`、`.`（§30.15 原文写的 `rava_cp` 不合法）。
+   `EmbeddedClassPath.PROTOCOL = "ravacp"`。
+2. **处理器 `sun.net.www.protocol.ravacp.Handler`**，是 VM 支持类，Java 源在
+   `runtime/java_support/java.base/sun/net/www/protocol/ravacp/Handler.java`，由字节码翻译。
+   - 它只覆盖 `openConnection(URL)`，转给 `EmbeddedClassPath.openConnection(u)`。
+   - 包名遵循 `URL$DefaultFactory` 的约定 `"sun.net.www.protocol." + protocol + ".Handler"`，所以按协议名能找到它。
+     `getURLStreamHandler` 的其余查找层（工厂、provider、`java.protocol.handler.pkgs`）不受影响。
+   - 嵌套类 `EmbeddedClassPath$Handler` 删除；`EmbeddedClassPath` 改为 public，供该包访问。
+3. **URL 形状**：`new URL("ravacp", "", -1, "/<编码后的资源名>#<序号>", HANDLER)`。
+   - host 取 `""`，与 `parseURL` 对无 authority 串给出的结果一致，所以 `toString` 往返后 `equals` 和 `hashCode` 成立。
+     JVM 的 `file:` 资源 URL 的 host 也是 `""`。
+   - 构造时直接传入 `HANDLER` 单例，不经查找，所以 getResource 路径的开销不变。
+4. **连接对任意重建 URL 健壮**。`Connection.connect()` 解码路径（必须以 `/` 开头，`ParseUtil.decode` 失败视为非法），
+   再解析 ref 中的副本序号（非数字视为非法）。路径或序号非法，或表中查不到该项，一律抛 `FileNotFoundException`，
+   与 JVM 打开不存在的 `file:` URL 一致。读取的条目与 `[class_path] resource_readers` 是同一张表。
+5. **镜像补充目录的模块归属**（resolve，提交 `7f0bd9ed`）。
+   - VM 支持类可以位于 JDK 没有的新包，比如 `sun/net/www/protocol/ravacp`。此前镜像来源的类只能借已有包的归属取得模块，
+     新包里的类会没有所属模块：`real_jdk_module_graph` 的无主类检查不过，`reads()` 和导入发射也会出错。
+   - 新规则：仅镜像目录 `jimage/<fp>/only/<module>` 与 VM 支持类目录 `vmsupport/<fp>/<module>` 本来就按模块分目录给出，
+     目录名即所属模块（`ClassPath::add` 登记 `overlay_modules`）。`ModuleFacts::build` 加一道后处理：
+     登记名不是 JDK 模块节点的（比如测试用的临时目录）清掉，退回原来按包借归属的做法。
+6. **seed_image 判据（§30.15 第 8 条）不变**：Handler 由 `EmbeddedClassPath.<clinit>` 直接 `new`，按普通可达性入闭包。
+
+#### 接入点（清单声明，生成器不含类名）
+
+- `vm_intrinsics.toml [facts] class_lookups`：`Class.forName` 按名取类。协议名推不出时，
+  按闭包内的类名匹配 `"sun.net.www.protocol.*.Handler"`。
+- `vm_intrinsics.toml [facts.keyed_lookups]` 中 `URL.getURLStreamHandler` 一条：`class_pattern = "sun/net/www/protocol/{}/Handler"`，
+  按此键为 `"ravacp"`。该条注释已补上 ravacp 的说明；`[class_path] resource_readers` 的注释补上 `openConnection` 读同一张表。
+- 不新增清单条目，也不新增生成器特判。
+
+#### 分析器修正：按名取类站点的「推不出」不再从上游槽外泄（`engine/pstrs.rs::param_inputs`）
+
+- 实测：`TestEmbeddedUrlRebuild` 闭包（tag `eur1`）中，`URL$DefaultFactory.createURLStreamHandler` 的 `forName` 站点
+  （偏移 162）被记为 unsure。
+  - 结果接到所指未知的 Class，没有点名任何类，也没有登记类名模式。
+  - 反射缺口里因此出现 `getDeclaredConstructor @ ...createURLStreamHandler@169 <- open(Class)`。
+  - 运行期的后果：所有 Handler 的构造器都不在反射面上，重建的 ravacp URL 会报 unknown protocol。
+    这个问题同样出现在 DeepCopy / StockTrans / TestSerialDefaultSuid（17b）中。
+- 根因：形参槽的名字集由 `param_inputs` 在各调用方帧里以 `Gap::Fail` 求值。
+  - 内部求值推不出时（`partial_part` / 常量表部分值），只置引擎级标志 `lookup_incomplete` / `lookup_partial`，
+    返回值仍算「推得出」。
+  - 标志外泄到外层的 `Gap::Class` 求值，把整个站点记为 unsure。本该得到的是「已知名字 | 受约束的任意串」，
+    后者按生成范围内的类名匹配。
+- 修正：`param_inputs` 对每个调用方实参求值前清零两个标志、求值后取回并恢复外层值；内部推不出收进本槽的
+  `complete = false`。外层按自己的 gap 处理推不出的槽：按名取类为「已知名字 | 任意串」，按名查方法为任意串，
+  内部求值 `Gap::Fail` 仍置标志，逐层传递。
+- 修正后（tag `eur3`）：站点的模式为 `sun.net.www.protocol.*.Handler`，点名 ftp / jrt / ravacp。
+  `ravacp/Handler.<init>` 进入反射成员面，`DefaultFactory` 的缺口消失。
+
+#### 实测
+
+| 用例 | 类 | 方法 | 耗时 ms | 反射缺口 |
+|---|---|---|---|---|
+| HelloWorld（17b → 18a） | 464 → 464 | 1738 → 1738 | 530 → 536 | 0 → 0 |
+| StockTrans（17b → 18a） | 2798 → 2798（−1 / +1） | 17310 → 17314 | 30228 → 31064 | 48 → 47 |
+| DeepCopy（17b → 18a） | 2800 → 2800（−1 / +1） | 17323 → 17327 | 30203 → 32462 | 48 → 47 |
+| TestSerialDefaultSuid（17b → 18a） | 2805 → 2805（−1 / +1） | 17319 → 17323 | 30856 → 35292 | 48 → 47 |
+| TestEmbeddedUrlRebuild（eur1 → eur3，eur1 已含 ravacp、未含分析器修正） | 2867 → 3178（+311） | 16892 → 18993 | 16126 → 21028 | 25 → 26 |
+
+- 四例回归用例：类集只是 `EmbeddedClassPath$Handler` 换成 `sun/net/www/protocol/ravacp/Handler`，方法多出
+  `openConnection` / `resourceName` / `copyIndex` 等 6 个。`DefaultFactory` 的缺口在三例大用例中都消失，类集不变。
+  耗时差在本机跑批波动范围内（同时有其他重进程持锁）。
+- TestEmbeddedUrlRebuild 的 +311 类是**正确性所需**，不是膨胀：
+  - 用户以运行期字符串 `new URL(String)` 后调用 `openConnection`。协议推不出，`file` Handler 的 `openConnection` 可达。
+  - 其字节码对非本机 host 的 `file://host/path` 执行 `new URL("ftp", host, file)` 并按 FTP 打开（JDK 21 `file/Handler.openConnection@62`），
+    因此 `"ftp"` 流入协议形参，ftp Handler → `FtpURLConnection` → 代理时的 `HttpURLConnection` → 认证 / JGSS 可达。
+  - 修正前这条链因站点 unsure 被截断：闭包看似更小，但实际运行时 ftp Handler 根本无法构造。
+  - 新增的两条缺口（`ProviderList.getMechFactoryImpl` 的 `getConstructor`、`Field.copy` 按名查字段）都位于新可达的 JGSS 代码中，
+    属于既有的缺口类别。
+- 本地 JDK 21 运行 `TestEmbeddedUrlRebuild`：输出与 `tests/expected/TestEmbeddedUrlRebuild.txt` 一致。
+
+#### 生成器 / 宏修正：scratch 编译暴露的两处（2026-10-07）
+
+`TestEmbeddedUrlRebuild` 的闭包新增 ftp → http → 认证链之后，scratch `cargo check` 暴露出两处既有缺陷。
+两处都在生成器或宏中修正，不改生成文件。
+
+1. **E0034：`__as_<SimpleName>` 钩子歧义**（宏，提交 `b2a3e67b`）。
+   - `sun.net.www.protocol.http.HttpURLConnection` 继承 `java.net.HttpURLConnection`，两者简单名相同，
+     所以两个祖先 vtable trait 都有 `__as_HttpURLConnection`。
+   - vtable trait 缺省方法体中的 `self.__as_X()` 因此在 decl 层报方法歧义。
+   - 修正：`virtual_dispatch/trait_decl.rs` 改为按本类 trait 限定调用，`<VTable>::__as_X(self)`。
+2. **E0277：只经 null 存储到达的根类型槽**（生成器，提交 `5cfe2541`）。
+   - 涉及 `NegotiateAuthentication.getCache` 中 `aconst_null; astore_0; …; aload_0; areturn` 这条路径。
+   - 模拟阶段按根类型 `Object` 绑定该槽，返回点因此生成 `From::from(local_0)`。
+   - 变量提升阶段（`slot_type::merged_slot_type`）随后把「null + 单一引用类型」的槽重定为 `HashMap<Object, Object>`，
+     读取点于是失配：`HashMap<String, Negotiator>: From<HashMap<Object, Object>>` 不成立。
+   - 修正：`sim::Local` 增加「确定为空」标记。
+     - 每次存储都会重置这个标记；只有无类型 null 存入根类型绑定时才置位。
+     - 汇合点取各前驱的合取。
+     - 回边（尚有未处理的前驱）、异常处理器入口和状态机分派入口一律清除。
+     - 读取确定为空的槽时直接产出空字面量，由各消费点按目标类型落为默认值。该处现在生成 `return Ok(Default::default())`。
+
+#### 单元测试与编译（本机，`build/check-target`）
+
+- 闭包 / classfile / resolve / input / emit 各 crate：11 + 193 + 71 + 2 + 19 + 13 + 8 + 1 全部通过（`param_inputs` 修正后）。
+- instr / sim / method / emit（null 槽修正后）：71、2、20、2、20、2、1、6，全部通过。
+- rava_macros_core 16 通过（2 个 ignored）；rava_macros 0 个测试执行（2 个 ignored）。
+- 生成器全量 `cargo test --release`：未跑完，有两例失败，均非本分支引入：
+  - `reflect_new_array_element_precision`：TestModuleLayerDefine 种子 2 比种子 0 多 `java/nio/file/Path$1`、`jdk/internal/util/ClassFileDumper$2`。原因是种子 2 下 `ClassFileDumper.enabled` 未折叠为 false，`validateDumpDir` 因此可达。基线 91f54a35 自建二进制跑出同样差异，撤掉 `param_inputs` 修正后也一样，属于既有的顺序依赖。
+  - `closure_independent_of_hash_seed`：资源巡检停止了 `TestJndiNoProvider` 的闭包进程（RSS 22G 还在涨），所以失败。同一用例在集成分支 84440f29 的 gate 上也膨胀，问题出在 3f59a8e9..84440f29 之间的合并，已另开任务二分定位。本机实测（8G 上限）：基线 91f54a35 二进制 + 基线 runtime 用时 388 s，未触顶；本分支撤掉 `param_inputs` 修正的二进制用时 466 s，未触顶。
+- rava release 构建通过。`TestEmbeddedUrlRebuild --stop-after emit` 生成 3175 个 JDK 类 + 2 个用户类，
+  scratch `cargo check --keep-going` 结果为 **rc=0、0 个错误**（修正前只有上述 E0034，修后只有上述 E0277）。
+
+#### 抽查清单（服务器，由用户发起；在 §30.15 清单基础上追加）
+
+- 新增：`TestEmbeddedUrlRebuild`，预期通过（自身 / 内部类 `.class` 以及 `java/lang/String.class` 的 URL 经字符串往返后，
+  读到的内容与 `getResourceAsStream` 一致）。
+- §30.15 的全部项目：
+  - `TestClassResourceStream`、`TestSystemStableProps`；
+  - 类路径 / 加载器 / ServiceLoader 各例，以及 `--filter ServiceLoader`；
+  - `--filter MethodHandle`、`--filter Proxy`；
+  - 四例回归：HelloWorld / StockTrans / DeepCopy / TestSerialDefaultSuid。
+- URL 相关用例（受协议处理器查找与分析器修正影响）：`--filter Url`、`--filter URL`、`--filter URI`，
+  其中包含 `TestUrlParsingFaces`。
+- 反射 / 按名取类用例（受 `param_inputs` 修正影响）：`TestForNameComputedName`、`TestForNameInit`、`TestClassForNameInit`、
+  `--filter ServiceLoader`（已含）。
+
+#### 提交
+
+- `7f0bd9ed` resolve：镜像补充目录以目录名为所属模块。
+- `47b83880` ravacp 协议与独立 Handler（VM 支持类）+ `EmbeddedClassPath` 改动 + 清单注释。
+- `6695d716` e2e `TestEmbeddedUrlRebuild` 与期望输出。
+- `fdc94f56` 闭包分析：`param_inputs` 中的推不出收进本槽结果，不再外泄为整站点 unsure。
+- `b2a3e67b` 宏：vtable trait 缺省方法按本类 trait 限定调用 `__as_` 钩子（E0034）。
+- `5cfe2541` 生成器：局部槽「确定为空」跟踪（E0277）。
+- 本节文档：本节之后的提交。
+
+### 30.17 第 14 步：SyspropsLambdaLeak 闭包不收敛——四处成因已修、验收达成（2026-10-07～08，分支 `c1d-url-b2`）
+
+#### 现象
+
+- 单测 `sysprops_lambda_return_confined`（`generator/crates/driver/tests/closure_cli.rs`，fixture `SyspropsLambdaLeak.java`：lambda 经
+  doPrivileged 返回 `System.getProperties()` 存入静态字段，系统属性表整片逃逸，断言 `leak["all"] == true`）在本分支跑不完。
+- 集成分支 f75c32a4 上同一闭包：sg2 用时 10:45、峰值 7.06 GB（复跑 11:28 / 7.13 GB），终态 lcalls 199k、escaped 10.9k、methods 136.7k。
+- 本分支 95b2d84e：540 s 时 lcalls 900k、RSS 9.4 GB 仍在涨，10 GB 上限内跑不完。
+- 诊断手段：服务器作业（url2fix-*）给引擎临时打补丁，每 120 s 打印规模（方法 / 对象 / 逃逸 / lcalls 按站点与 lambda 实现分布），
+  并在逃逸节点增长处按来源计数（事件数 / 对象数 / 数组数）；补丁不提交。配合 `--flows @grow: / @edge:` 与 `--cut` 定位。
+
+#### 成因 1：同巢内部分配一律沿用属主链（提交 `62097efc`）
+
+- B6 对同类 / 同巢分配一律沿用分配方的属主链。集合借出的拆分器（`ArraySpliterator.trySplit`、`IteratorSpliterator.trySplit`）
+  按「分配点 × 属主集合」成倍展开；它们之上的方法克隆与 lambda 调用相乘。
+- 修正：只在属主与分配方同巢时沿用（例如树箱属于所在 map）。属主由链首段经类表（`seg_cls`）求出，与求值次序无关。
+  递归分配给空链。
+- 实测（f1，sg2）：6:48 时 rc=134，峰值 9.4 GB。拆分器展开消失，剩余膨胀的源头换成 VarHandle 读-改-写的手写池（见成因 2）。
+
+#### 成因 2：VarHandle 数值读-改-写访问模式未登记，手写池级联（提交 `a33e6f9d`）
+
+- 涉及 `VarHandle.getAndAdd*` 与 `getAndBitwise{Or,And,Xor}*`（含 Acquire / Release，共 12 项）。
+  它们是手写方法，体内取引用元素视图（`_field_read` / `_array_get_and_*`），却没有登记在 `[facts.array_writes]` / `[facts.memory_reads]` 中。
+- 后果 1：`hw_writes` 的保守口径生效——每个引用形参都可被其它形参、全部实参数组元素和手写产出写入。
+- 后果 2：上调已声明内存语义的成员（`Unsafe.getReference*`）时，`subsumed` 不成立。
+  调用方值池因此按 `Feed::N(pool)` 汇合为读写实参，读结果又经池回流。
+- 实测（c1，`Socket.getAndBitwiseOrState` 截断诊断）：getAndBitwiseOr 池带来 2062 个对象、16883 个数组的逃逸。
+- 修正：清单登记这 12 项为无引用写入（`= {}`）。依据 JDK 规范：数值读-改-写只作用于基本类型载体，
+  引用载体抛 `UnsupportedOperationException`，不读写引用字段 / 元素。
+- 实测（f2，us1）：5:59 时 rc=134，峰值 9.39 GB。lcalls 在 60 / 180 / 300 s 时为 102k / 177k / 690k，
+  escaped 为 3.2k / 15.6k / 22.0k。getAndBitwise / getAndAdd 级联消失。
+  逃逸来源第一位换成 `UnsafeStaticObjectFieldAccessorImpl.set@47 → Unsafe.putReference` 的写入（1619 对象 / 14181 数组）。
+
+#### 成因 3：静态字段基址按 open(Object) 建模，Field.set 的汇合值经静态访问器整体逃逸（提交 `50da15df`）
+
+- 探针 h1 / h2（a33e6f9d，sg2）与 h2I（f75c32a4，us1）的结果如下。
+  - 写入值：`Field.set` 的 P2 来自 `sun/security/jgss/GSSContextImpl.<init>(GSSContextImpl)@131`，即拷贝构造器
+    `for (Field f : GSSContextImpl.class.getDeclaredFields()) f.set(this, f.get(src))`。
+    `f.get(src)` 是 `FieldAccessor.get` 在 45 个接收者上的汇合，到达 5149 / 4197 / 2692 … 个类以及 `open(Object)`。
+  - 写入目标：`UnsafeStaticFieldAccessorImpl.base` 由构造器 `@10` 的 `unsafe.staticFieldBase(field)` 赋值。
+    两个提交上它都是 `open(Object)`：手写 native `staticFieldBase0` 按声明返回类型给出 open。
+  - 汇合：`hw_site_fields` 遇到 open 写入目标时把写入值接到 `Esc`，于是整个汇合值集逃逸。
+  - 集成分支不出现，是因为 GSSContextImpl 链不可达。§30.16 的 `param_inputs` 修正后，按名取协议处理器的站点不再 unsure，
+    ftp → http → 认证 / JGSS 链进入可达（同 §30.16 中 TestEmbeddedUrlRebuild 的 +311 类）。
+    系统属性表整片逃逸时，`jdk.reflect.useDirectMethodHandle` 等不折叠，Unsafe 字段访问器同样可达。
+    缺陷早已存在，只是本分支的正确可达性把它暴露出来。
+- 修正（终态，生成器不含类名）：
+  - 清单 `[facts.field_writes] static_bases` 登记 `jdk/internal/misc/Unsafe.staticFieldBase0`；
+    引擎为它设返回值模型 `RetModel::StaticBase`，按调用点对字段句柄实参（形参 0）做镜像变换 `MirrorOp::Holder`，规则如下：
+    - 字段枚举的来源标记（`Field#<enum:C>`）给出口径类 C 及其超类、超接口的类镜像。
+      超类、超接口用于覆盖 `getFields` 的继承公开字段与接口常量。
+    - 口径推不出、不是枚举标记的句柄（按名取得等）以及 open，给所指未知的类镜像（裸 `Class`）。
+  - 按偏移写入时，基址为类镜像的只落到该类按名打开的静态字段（`mirror_write`）；
+    所指未知的类镜像落到全部按名打开的静态字段（`poly_write`）。两者都不再流入 `Esc`。
+    读侧经 `static_base_read` 按静态偏移取法门控，比原来的 `open(rt)` 更精确。
+  - 规则可靠的依据：HotSpot 的 `staticFieldBase` 即声明类的 mirror（手写实现 `Object::from(f.__get_clazz())`）。
+    枚举标记在创建时即登记口径，变换对值集逐元素、单调，结果与次序无关。
+  - 补充（`c62a0a6f`）：`hw_exports` 的 `modeled` 判定加入 `returns_static_base`。
+    这样 `staticFieldBase0` 的手写值池不再按 open 返回类型交给 `Esc`，因为返回值已按 `StaticBase` 建模。
+  - `MethodHandleNatives.staticFieldBase(MemberName)` 不在本次登记范围内。DMH 静态访问器走 `Gate::Handle`，
+    MemberName 也没有枚举标记；如要改为所指未知的类镜像，另行评估。
+
+#### 实测（SyspropsLambdaLeak，`rava closure`，ulimit -v 10 GB）
+
+| 提交 | 机器 | 结果 | 用时 | 峰值 RSS | 备注 |
+|---|---|---|---|---|---|
+| f75c32a4（集成分支，基线） | sg2 | 完成 | 10:45（复跑 11:28） | 7.06 GB（7.13 GB） | lcalls 199k、escaped 10.9k、methods 136.7k |
+| 95b2d84e（本分支起点） | sg2 | 未完成 | >540 s | 9.4 GB（540 s 时） | lcalls 900k |
+| 62097efc（成因 1） | sg2 | rc=134 | 6:48 | 9.4 GB | getAndBitwiseOr 池级联 |
+| 62097efc + 截断诊断 | sg2 | rc=134 | 6:17 | 9.38 GB | getAndAdd 池、静态访问器写入 |
+| a33e6f9d（成因 2） | us1 | rc=134 | 5:59 | 9.39 GB | escaped 3.2k → 15.6k → 22.0k |
+| 50da15df（成因 3） | sg2 | rc=134 | 6:10 | 9.38 GB | 静态访问器写入逃逸消失；lcalls 60/180/300 s：92.6k/174k/621k，escaped 3.2k/13.5k/18.6k |
+| c62a0a6f（成因 3 补：hw 池不交出） | sg2 | 探针 rc=124 | — | — | 只用于 grow 来源归因，见成因 4 |
+| 485d30b6（成因 4） | sg2 | 完成 rc=0 | 6:18（elapsed_ms 373582） | 4.50 GB | `all=true`、classes 3499；lcalls 230.8k、escaped 6.6k、method_contexts 130.7k；`fa_untrusted=None`，句柄存取站点 6、名字标记 30、枚举标记 2 |
+
+#### 成因 4（已修，提交 `485d30b6`）：`FieldAccessor.get` 接口汇合点把 45 个接收者的返回值并到每个 `Field.get` 调用点
+
+f3 的逃逸首要来源是 `pool MethodHandle.invokeExact`，共 11892 个数组。其后依次是 `Object[]@24628`、`HashMap$Node.key`、
+`putReferenceRelease`、`invokeBasic` 池和 `CHM.put` P2。
+lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 达 404 克隆 × 160 lambda（253k），基线为 604 × 81（93.6k）。
+
+探针 i1（c62a0a6f）的 grow 归因如下：
+- `hub 实参0 FieldAccessor.get on 45 个接收者 ==> P1 MethodHandleObjectFieldAccessorImpl.get`：673。
+- `@96 HttpConnectSocketImpl.doTunnel ==> P1 Field.get`：672。
+- `hub 返回 FieldAccessor.get ==> @33 / @22 Field.get`：332 / 302。
+- 接着是 `String.value`、`sun/reflect/generics/tree/*` 各数组字段、`ArrayList.elementData`、`CHM$Node[]` 元素、`Class[]` 元素等。
+  这些值经 `Field.get` 的返回值（R）扩散，每项约 35。
+
+结论：`Field.get(obj)` 的取值走 `getFieldAccessor()` → `FieldAccessor.get` 接口派发。45 个访问器实现汇合成一个 hub，
+所有被反射读取的字段值并成一个集合。
+这个集合经 `Field.get` 的返回值流向 GSSContextImpl 复制构造等调用方，又经
+`MethodHandleObjectFieldAccessorImpl.set` → `setter.invokeExact` 进入 `invokeExact` 手写池，最终交给 Esc。
+per-object 精度把每个汇合元素都物化为独立对象和上下文，于是这个汇合乘出了 lcalls 爆炸。
+
+修正（终态，生成器不含类名）：
+1. 清单 `vm_intrinsics.toml` 的 `[facts.field_writes]` 新增 `handle_getters` / `handle_setters`，登记 `Field.get` / `Field.set` 及
+   8 个基本类型变体；引擎给它们设返回值模型 `RetModel::HandleAccess(写?)`（`engine/field_access.rs`）。
+2. 调用边到达这些入口时按接收者分类，命中建模就不再接字节码体（不进 `getFieldAccessor` → `FieldAccessor` hub、
+   也不进访问器内部的 `MethodHandle.invokeExact` 手写池）：
+   - 枚举标记 `Field#<enum:C>`：类粒度上界——C 及其超类的实例引用字段（对象实参中类属于 C 的抽象对象取 `obj_field`，
+     其它值取字段汇总 `F` / 写侧 `U`），C 沿 `holder_chain` 的静态引用字段，以及基本类型字段的装箱类（来自 `[boxing]`）。
+   - 名字解析的字段句柄（`getDeclaredField(name)` 等，`name_resolvers` 中 `handle` 项）补字段名标记 `Field#<name:owner.name:desc>`，
+     精确到单字段；名字或类推不出时标记为 `Field#<name:?>`，该站点退回字节码接边。
+   - 接收者是真实 `Field` 对象或手写层产出的确定句柄值时视为「已由标记覆盖」：句柄身份统一由来源标记承载。
+3. 可靠性兜底：字段句柄来源（枚举器 / 名字解析器）若经非字节码调用点（反射、手写体、派发外入口）可达，标记可能缺失，
+   引擎记 `fa_untrusted` 并把全部已建模站点整体回放为字节码接边（对象 / 值 / 结果节点补接），结论退回原口径、不丢可达性。
+   本例 `fa_untrusted=None`。
+4. 成因 3 的 `MirrorOp::Holder` 对名字标记取 owner 的类镜像（`holder_set`），与枚举标记同一套口径。
+5. 已知取舍：`Field.get(obj)` 的 obj 实参不再进入访问器体，访问器中只依赖 obj 的路径（类型检查失败的异常消息构造）不被分析；
+   这些路径只构造 `IllegalArgumentException` 消息，类已由其它路径可达。
+
+实测（f4，sg2，ulimit -v 10 GB）：6:18 完成、峰值 4.50 GB，`all=true`。比基线 10:45 / 7.06 GB 更快更省；
+lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 为 97.0k（基线 93.6k，同一量级），
+逃逸来源首位换成 `Object[]@24628` 元素（440 对象 / 1888 数组）与 `CHM.get` 返回值，`invokeExact` 池不再出现。
+
+#### 残留与后续
+
+- lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9`：f4 为 97.0k，已回到基线（93.6k）量级。
+- 字段标记目前是类粒度上界（枚举标记）+ 单字段（名字标记）；枚举结果按名字过滤后（`f.getName().equals(..)`）再存取的站点仍取类粒度，若后续出现热点再加名字收窄。
+- 防回归：可加一道清单审计——上调已声明内存语义成员（`subsumed` 一侧）的手写方法本身也必须登记读写事实。
+  未登记时 `hw_writes` 的保守口径会与汇合池相乘（成因 2 即是这种情况）。审计放在 `rava audit native` 中。
+
+#### 待验证清单（合批测试，本分支不自跑）
+
+1. `sysprops_lambda_return_confined`：f4 在 `rava closure` 层已验（6:18 / 4.50 GB / `all=true`）；合批时以单测本身复核断言全部通过。
+2. 闭包 per-object 精度单测（ElemTrack / ObjFacts 各例）与 `closure_cli` 全套。
+3. 生成器 `manifest` 单测新增 `static_bases_parse`、`handle_access_parse`。
+4. `closure_independent_of_hash_seed` / `closure_independent_of_order`：待 dev 恢复后跑。
+5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
+   `TestJcaSasl`（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
+   （重点看反射拷贝构造、`AtomicXxxFieldUpdater`、序列化 `ObjectStreamClass` 字段读写、注解代理等经 `Field` 存取的用例）。
+
+### 30.18 合批 batch-1008 的语义合并（2026-10-08）
+
+batch-1008 依次并入 user-unreach-stubs（108558e0）、c1d-url-b2（3391eb2d，04600e21）、boot-image-s4（c614f840，b52917c9）、
+enum-values-direct（59451c29）、closure-composition（c3a06331），合并修复 b558e0c2。c1d-url-b2 与 boot-image-s4 两侧
+同改分析器核心，冲突取舍如下（合并提交信息为准）：
+
+- **Facts 两侧字段并存**：`level`（引导求值档位上下文）与 `objs`（c1d 形参抽象对象集）同时在 `Facts` 上。共享分析复用键含
+  对象参数集；档位上下文不复用（`engine/worklist.rs`：`closing || level.is_some()` 时不查共享摘要）。
+- **facts 拆分**：`engine/facts.rs` 拆为 `facts/{kinds,fields,calls,oracle}.rs`，本批改动移入子模块；`calls.rs` 的
+  `CallInfo.nonnull_ret`（含调用者类镜像非空）取代原 `empty`。
+- **`invoke_result` 先后**（`facts/oracle.rs`）：`level_queries` 档位折叠 → 清单事实 / 空集合 / `nonnull_ret` 等 →
+  偏移判定（`field_offset`）→ 类字面量接收者 `mirrors_call` → 派生结果。`Oracle` 新增 `key_getter`、`string_equality`、
+  `param_mirror_call`。
+- **absint 拆分**：`absint.rs` 拆为 `value` / `oracle` / `step` / `fixpoint` 子模块（final 字段复读单测拆至
+  `final_field_tests.rs`）。定点循环每条指令的次序：`eq_operands` → `tr.pre` → `step` → `final_reread`。条件分支：
+  类型收窄 `instanceof_narrow` / `mirror_sub_narrow` 之后 `.or_else(key_test)`，可空性 `null_narrow` 之后
+  `.or_else(affix_narrow)`，另算 `final_null_test`。
+- **`named_resources`**：分析器按名求出的资源只并入档案侧（模块资源）推导；用户侧推导传空集，并剔除档案已有资源
+  （`input/src/build.rs`）。
+- **删除「按名开放字段」回退**（取 c1d 撤除兜底，§30.14），本批侧的 `analyzed_exact` 守卫随之删除。
+- **`PV::join`**：两侧确定非空 → 非空引用；合并时与 `join_ret` 同时生效，b558e0c2 将 `join_ret` 吸收进 `PV::join` 后删除
+  （单测改为 `join_keeps_nonnull`）。
+- **映像必需**：`BuildInput.boot_image` 改为必需的 `ImageData`（去 Option）；`BuildInput.system_properties`（`SysPropFacts`）
+  与 `input/manifest.rs` 的 `boot_init_classes`（随 `[boot_init]`）删除。closure.json 的 `system_properties` 保留。
+- **合并修复 b558e0c2**：引导求值的类路径运行模型与常量格合流——c1d 把 `toFileURL` 的延迟调用改由 `null_returns` 给出，
+  s4 起引导求值不取有字节码方法的返回值事实，二者叠加使 initPhase2 执行 `toFileURL` 字节码遇宿主延迟值、映像求值失败；
+  `[concrete.boot.natives]` 对 `URLClassPath.toFileURL` / `BuiltinClassLoader.findClassOnClassPathOrNull` 显式 `const:null`。
+
+**验证现状**：首次验证（6934dc93）抽查 41/41 因映像求值失败、单测 closure `--lib` 11 失败、driver 层 32 失败；
+b558e0c2 之后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G）。
+
+**待补：根因与修复。**

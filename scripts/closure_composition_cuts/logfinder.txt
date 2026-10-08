@@ -1,0 +1,3 @@
+# LoggerFinder 提供者发现（构建期定提供者：模拟为不走 ServiceLoader 发现）
+jdk/internal/logger/LoggerFinderLoader.findLoggerFinderProviders:()Ljava/util/Iterator;
+jdk/internal/logger/LoggerFinderLoader.loadLoggerFinder:()Ljava/lang/System$LoggerFinder;

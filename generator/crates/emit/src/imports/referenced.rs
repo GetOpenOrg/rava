@@ -27,7 +27,8 @@ fn scan_all<'a>(owner: &'a ClassInfo) -> impl Iterator<Item = ScanMethod<'a>> {
     owner.methods().iter().enumerate().map(move |(index, method)| ScanMethod { owner, index, method })
 }
 
-/// 扫描面：自身方法 + 注入本类的接口 default 方法 + 用户类超类链的方法
+/// 扫描面：自身方法 + 注入本类的接口 default 方法 + 用户类超类链的方法（签名全量扫描；
+/// 方法体只扫调用链上的，见 [`collect_referenced`]）
 fn scan_methods<'a>(ctx: &EmitCtx<'a>, ci: &'a ClassInfo) -> Vec<ScanMethod<'a>> {
     let reg = ctx.ty.reg;
     let mut out: Vec<ScanMethod<'a>> = scan_all(ci).collect();
@@ -292,7 +293,14 @@ pub fn collect_referenced(ctx: &EmitCtx<'_>, ci: &ClassInfo, generated: Option<&
         add_desc_refs(c.generic_signature(), &mut out);
         cur = reg.get(c.super_class());
     }
-    for s in &methods {
+    // 方法体扫描面与方法体发射同一口径：本类方法按自身键、注入的接口 default / 祖先方法按声明者键或本类符号键
+    // （inherit / super_inherit 的 in_cc）；链外方法只发存根，其体内引用的类型不进引用集
+    let live: Vec<ScanMethod<'_>> = methods
+        .iter()
+        .copied()
+        .filter(|s| ctx.in_chain(s.owner.name(), &s.method.name, &s.method.desc) || ctx.in_chain(ci.name(), &s.method.name, &s.method.desc))
+        .collect();
+    for s in &live {
         scan_method_body(ctx, *s, &mut out);
     }
     add_join_supers(ctx, &mut out);
@@ -301,7 +309,7 @@ pub fn collect_referenced(ctx: &EmitCtx<'_>, ci: &ClassInfo, generated: Option<&
         add_narrow_refs(&s.method.desc, &mut out);
         add_desc_refs(s.method.signature.as_deref().unwrap_or(""), &mut out);
     }
-    dispatch_subtype_refs(ctx, ci, &methods, &mut out);
+    dispatch_subtype_refs(ctx, ci, &live, &mut out);
     match generated {
         Some(g) => out.into_iter().filter(|c| g.contains(c)).collect(),
         None => out,

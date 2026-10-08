@@ -19,6 +19,7 @@ fn closure(classes: &[(&str, &str, &str)], methods: &[(&str, &str)], folds: Vec<
         "folds_version": crate::FOLDS_VERSION,
         "folds": folds,
         "system_properties": {"values": {"file.encoding": "UTF-8"}, "dynamic": ["java.home"]},
+        "boot_image_data": crate::image::ImageData::default().to_json(),
         "reflect": {"members": [], "gaps": [], "fields": [], "field_names": [], "static_fields": [], "field_enum_gaps": []},
         "seeds": {"annotation_enums": [], "mirror_inits": [], "reflect_names": {}, "reflect_all": [], "services": [], "services_unknown": false},
     })
@@ -201,6 +202,25 @@ fn fold_join_dead_catches() {
     let a = one_method("A", vec![fold(m, json!({"dead_catches": [catch]}))]);
     let c = one_method("C", vec![]);
     assert!(folds_of(&merge(&[a, c], &no_table).unwrap()).is_empty());
+}
+
+#[test]
+fn fold_join_direct_calls() {
+    let m = "x/P.f:()V";
+    let d = |t: &str| json!({"direct_calls": [{"pc": 4, "target": t}]});
+    // 两入口同为直连（同一特化入口）→ 直连
+    let p = merge(&[one_method("A", vec![fold(m, d("x/H.h:(Lx/M;)V"))]), one_method("B", vec![fold(m, d("x/H.h:(Lx/M;)V"))])], &no_table).unwrap();
+    assert_eq!(folds_of(&p)[0]["direct_calls"], json!([{"pc": 4, "target": "x/H.h:(Lx/M;)V"}]));
+    // 直连 ⊔ null_recv → 直连（null_recv 的入口不给原入口入链）
+    let p = merge(&[one_method("A", vec![fold(m, d("x/H.h:(Lx/M;)V"))]), one_method("B", vec![fold(m, json!({"null_recv": [4]}))])], &no_table).unwrap();
+    assert_eq!(folds_of(&p)[0]["direct_calls"], json!([{"pc": 4, "target": "x/H.h:(Lx/M;)V"}]));
+    assert_eq!(folds_of(&p)[0]["null_recv"], json!([]));
+    // 直连 ⊔ 照常调用（含无记录的到达入口）→ 不折叠
+    let p = merge(&[one_method("A", vec![fold(m, d("x/H.h:(Lx/M;)V"))]), one_method("B", vec![])], &no_table).unwrap();
+    assert!(folds_of(&p).is_empty());
+    // 该点在另一入口不可达：不削弱
+    let p = merge(&[one_method("A", vec![fold(m, d("x/H.h:(Lx/M;)V"))]), one_method("B", vec![fold(m, json!({"dead_pcs": [[2, 8]]}))])], &no_table).unwrap();
+    assert_eq!(folds_of(&p)[0]["direct_calls"], json!([{"pc": 4, "target": "x/H.h:(Lx/M;)V"}]));
 }
 
 #[test]

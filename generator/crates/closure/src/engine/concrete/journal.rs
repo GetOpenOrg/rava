@@ -65,6 +65,8 @@ pub(super) enum Rec {
     Read { decl: Rc<str>, name: Rc<str>, ph: u32 },
     /// 根帧区段 `[start, end)` 运行期执行（局部变量取区段入口的值）
     Region { phase: MemberRef, start: u32, end: Option<u32>, locals: Vec<CV>, why: String },
+    /// 引导档位变更：其后的残差步骤在该档位下重放（`[concrete.boot] level` 的静态字段键 `key`）
+    Level { key: u32, level: i32 },
 }
 
 #[derive(Default)]
@@ -175,6 +177,8 @@ impl Vm {
                         }
                     }
                 }
+                // 扩展期：标记后新建的类镜像由 VM 缓存（撤回后仍在），其 VM 字段保留
+                JEnt::Field(o, ..) if self.ext.is_some() && o as usize >= m.heap => {}
                 JEnt::Field(o, k, old) => {
                     if let Body::Inst(fs) = &mut self.heap[o as usize].body {
                         fs.retain(|(x, _)| *x != k);
@@ -318,6 +322,7 @@ impl Vm {
     /// 数组整体写（批量操作）：已有数组整体存底
     pub(super) fn boot_arr_write(&mut self, o: u32) -> R<()> {
         self.boot_arr_check(o)?;
+        self.ext_write(o)?;
         self.war_write(super::war::Loc::A(o));
         if self.logging(o) {
             if let Body::Arr(v) = &self.heap[o as usize].body {
@@ -331,6 +336,7 @@ impl Vm {
     /// 数组单元素写（xastore）
     pub(super) fn boot_elem_write(&mut self, o: u32, i: usize) -> R<()> {
         self.boot_arr_check(o)?;
+        self.ext_write(o)?;
         self.war_write(super::war::Loc::A(o));
         if self.logging(o) {
             if let Body::Arr(v) = &self.heap[o as usize].body {

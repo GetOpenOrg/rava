@@ -30,6 +30,8 @@ pub struct SeedState {
     /// 服务请求点：(方法, 偏移, 服务类型)
     jca_sites: Vec<(usize, u32, String)>,
     image_done: BTreeSet<String>,
+    /// 被别的镜像类 `new` 的镜像类（实例化点字节码可见，不按运行期定义类整体入闭包）；首轮补种时算一次
+    image_static_new: Option<BTreeSet<String>>,
     family_done: BTreeSet<String>,
 
     /// 输出：注解枚举元素类型（类初始化钩子）
@@ -251,19 +253,25 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 镜像独有类（jlink 预生成）/ VM 支持类：父类在闭包内的非接口类整体入闭包（实例化 + 全部方法 +
-    /// 全量反射面）；与之同直接父类的闭包类（物种族）同取全量反射面与全部方法
+    /// 镜像独有类（jlink 预生成）/ VM 支持类中由运行期定义的类：父类在闭包内的非接口类整体入闭包
+    /// （实例化 + 全部方法 + 全量反射面）；与之同直接父类的闭包类（物种族）同取全量反射面与全部方法。
+    ///
+    /// 「运行期定义」= 字节码里除它自身外没有任何类 `new` 它（物种类、代理类、注入调用器等由 VM /
+    /// 运行模型直接定义与实例化）；被别的镜像类 `new` 的普通支持类（其实例化点在字节码里可见）
+    /// 走常规可达性，不整体入闭包
     fn seed_image(&mut self) {
         let obj = OBJECT;
+        let names = self.cp.names_of(Origin::Image);
+        let statically_new = self.seeds.image_static_new.get_or_insert_with(|| image_static_new(self.cp, &names)).clone();
         let mut supers: BTreeSet<String> = BTreeSet::new();
-        for x in self.cp.names_of(Origin::Image) {
+        for x in names {
             let Some(cf) = self.cp.get(&x) else { continue };
             let Some(sup) = cf.super_name.clone() else { continue };
             if self.seeds.image_done.contains(&x) {
                 supers.insert(sup);
                 continue;
             }
-            if cf.is_interface() || sup == obj || !self.classes.contains_key(&sup) {
+            if cf.is_interface() || sup == obj || !self.classes.contains_key(&sup) || statically_new.contains(&x) {
                 continue;
             }
             self.seeds.image_done.insert(x.clone());
@@ -294,6 +302,26 @@ impl<'a> Engine<'a> {
             self.seed_method(MemberRef { owner: cls.to_string(), name: m.name.clone(), desc: m.desc.clone() }, kind);
         }
     }
+}
+
+/// 镜像类之间的 `new` 目标（排除类自身 `new` 自己）
+fn image_static_new(cp: &ClassPath, names: &[String]) -> BTreeSet<String> {
+    names
+        .iter()
+        .filter_map(|y| cp.get(y).map(|cf| (y, cf)))
+        .flat_map(|(y, cf)| {
+            cf.methods
+                .iter()
+                .filter_map(|m| m.code.as_ref())
+                .flat_map(|c| c.insns.iter())
+                .filter(|i| i.opcode == classfile::insn::op::NEW)
+                .filter_map(|i| match &i.operand {
+                    classfile::insn::Operand::Class(c) if c != y => Some(c.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// `类.方法:描述符` → MemberRef

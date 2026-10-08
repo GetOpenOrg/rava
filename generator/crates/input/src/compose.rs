@@ -57,8 +57,6 @@ impl ClosureFacts {
         for (owner, names) in s.reflect_names.iter().filter(|(o, _)| is_user(o)) {
             reflect_names.entry(owner.clone()).or_default().extend(names.iter().cloned());
         }
-        let mut module_services = p.module_services.clone();
-        module_services.extend(s.module_services.iter().filter(|(svc, prov)| is_user(svc) || is_user(prov)).cloned());
         Ok(ClosureFacts {
             classes,
             methods: methods.into_iter().map(|(_, m)| m).collect(),
@@ -83,7 +81,6 @@ impl ClosureFacts {
                 mirror_inits: sorted_union(&p.mirror_inits, user_strs(&s.mirror_inits)),
                 reflect_names,
                 reflect_all: p.reflect_all.iter().cloned().chain(s.reflect_all.iter().filter(|c| is_user(c)).cloned()).collect(),
-                module_services,
                 // 资源路径不分属主：两侧取并（嵌入时只取本例类路径上存在的）
                 named_resources: p.named_resources.union(&s.named_resources).cloned().collect(),
             },
@@ -91,7 +88,7 @@ impl ClosureFacts {
             instantiated: sorted_union(&profile.instantiated, user_strs(&single.instantiated)),
             hw_inherited: by_str(&profile.hw_inherited, user_refs(&single.hw_inherited)),
             sam_types: sorted_union(&profile.sam_types, user_strs(&single.sam_types)),
-            system_properties: profile.system_properties.clone(),
+            boot_image: profile.boot_image.clone(),
         })
     }
 }

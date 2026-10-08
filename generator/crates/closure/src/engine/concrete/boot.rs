@@ -119,7 +119,7 @@ impl Vm {
                     }
                     let pd = pdom.as_ref().map_or_else(|| fail("后支配树"), Ok)?;
                     let end = self.region(env, info, pd, s, ix, &ck)?;
-                    self.bj.recs.push(Rec::Region {
+                    self.push_rec(env, Rec::Region {
                         phase: info.key.clone(),
                         start: code.insns[s].offset,
                         end: end.map(|e| code.insns[e].offset),
@@ -212,7 +212,7 @@ impl Vm {
             Some(o)
         };
         if record {
-            self.bj.recs.push(Rec::Call { phase: info.key.clone(), off: insn.offset, callee: callee.clone(), args, ph, why: why_of(why) });
+            self.push_rec(env, Rec::Call { phase: info.key.clone(), off: insn.offset, callee: callee.clone(), args, ph, why: why_of(why) });
             self.war_capture(m.rl(), m.heap());
         }
         Ok(Some(ph))

@@ -17,6 +17,9 @@
   JVM 执行的也不是字节码，但 rava 翻译其字节码、坚持字节码语义，不追平台内建。
   例：`Math` 的超越函数 JVM 走 libm 内建，rava 按字节码走 `StrictMath` 语义，两者都合规范（允许 1 ulp 误差）；
   e2e golden 取自 JVM 时，这类末位差异在比对口径上注明，不为对齐 golden 改手写。
+- **闭包或体积膨胀同样不是手写理由**（与「性能替换不算」并列）。膨胀点先用闭包分析定位（反事实切除；
+  `rava closure --gates` 门自动排名在开发中，分支 closure-gates），再按三类处理：分析器精度缺口（修精度）、
+  构建期求值（引导映像）、运行模型（类 2 登记）。
 - **手写不等于必须实现**：满足准入、但不在档案调用链上的方法仍是 `panic!("stub: 类.方法:描述符")` 存根，按档案调用链按需补。档案 = 一个构建单元（生产构建：用户项目；语料构建：e2e 全集）全体入口调用链的并集，开放世界下实例化集合折叠只对用户无法扩展的类型做（final / sealed / 非公开等），闭包规模以档案衡量（e2e 全集 JDK 21 实测基线 3609 类，见 T1 计划 §1.4）；当前闭包分析器仍按单测试逐例计算，档案化随 T1 实施。
 
 ## 二、准入类别（终态）
@@ -39,7 +42,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - 动态代理（`Proxy.newProxyInstance` → `Proxy$Dyn`）、BMH 动态物种、序列化构造器访问器；
 - `defineClass` / 隐藏类定义点及其对偶查询。
 
-按方法登记（现为 `vm_intrinsics.toml [[intrinsic]]` 的 `class_definition` / `bytecode_generator` / `stack_frame`、
+按方法登记（现为 `vm_intrinsics.toml [[intrinsic]]` 的 `class_definition` / `class_path` / `bytecode_generator` / `stack_frame`、
 `[indy]`），不按类或包整体截断。
 
 ### 类 3：VM 注入的状态与 VM 驱动的行为
@@ -49,8 +52,8 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - **状态**：类元数据表、反射对象构造所依据的元数据（`getRecordComponents0` 等）、VM 注入的隐藏字段、
   VM 直接写入的字段。
 - **行为的落地语义**：VM 驱动、原生二进制没有对应设施时，语义如何落地的决定。须在清单中逐条写明：
-  - GC 驱动的引用处理：Reference pending list、`Cleaner` / `PhantomReference` 入队、finalize
-    （如 `PhantomCleanable.clean` 在无 GC 时的语义）；
+  - 引用类语义（`WeakReference` / `SoftReference` 清空、`ReferenceQueue` 入队、`Cleaner` / finalize）：由对象释放
+    （`Rc` drop）触发，不引入任何 GC，见 [`docs/plans/2026-10-07-no-gc-memory-model.md`](../plans/2026-10-07-no-gc-memory-model.md)；
   - JVMTI 通知（`VirtualThread.notifyJvmti*`）；
   - 栈遍历（`StackWalker`、`fillInStackTrace`、`@CallerSensitive` 调用者传入）；
   - VM 发起的启动入口（`initPhase1~3`）——入口方法本身翻译字节码，落地的是「谁来调用」。
@@ -76,9 +79,10 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - `sun/reflect/generics` 不再截断：其编译成本（泛型 visitor 体系曾使 `java_runtime` 编译峰值越过 15G）
   由分析器精度收敛解决，不以截断承载。
 
-残留的策略截断（仍在 `[vm_boundary]`、收录理由写明「策略截断」，终态 0）：`java/nio/file/FileSystems`、
-`javax/crypto/JceSecurity`（`java/net/InetAddress` 2026-10-03 移出：`<clinit>` 未翻译使静态 `impl` 为 null，
-`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
+残留的策略截断：**0**（2026-10-08）。`java/nio/file/FileSystems` 已移出（a3-X2，`getDefault` 与默认持有者链按字节码翻译）；
+`javax/crypto/JceSecurity` 已移出（引导映像第 5 步，boot-image §5.7.4：6 个手写删除，整类按字节码翻译，管辖策略经 NIO
+读 `${java.home}` 嵌入虚拟树中的 policy 文件，U14）；`java/net/InetAddress` 2026-10-03 移出（`<clinit>` 未翻译使静态
+`impl` 为 null，`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
 
 规则：
 
@@ -133,15 +137,57 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - 分析器对手写的建模：手写返回对分析不透明、只能取 open(返回类型)，精度低于字节码（C1d 实测：`jdk/internal/misc`
   放行后 CollectorsDemo 闭包 −105 类）。这是收窄手写的直接收益之一。
 
-## 七、现状（C1d 终态，2026-09-30）
+## 七、现状（2026-10-08，引导映像第 5 步后）
+
+全仓 `#[jvm_boundary]` = **0**（引导映像第 4 步 33 → 14，第 5 步 14 → 0：ClassLoader 资源族 6、BootLoader 2、
+JceSecurity 6，见 boot-image §5.6、§5.7）。
 
 | 调用目标 | 处理 |
 |---|---|
-| JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1） |
-| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`Module`、`Unsafe`、`VM`、`BootLoader` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译 |
+| JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1），含运行期类定义点（类 2）与 VM 驱动行为（类 3） |
+| `closure.toml [vm_boundary]`：只剩 `java/lang/Class` | 类 3：struct 承载 VM 注入的镜像状态（类元数据指针、数组组件类型等）；`<clinit>` 构建期在 VM 预初始化中执行（`clinit_carried`）；按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码 |
 | `[vm_boundary].translate_nested` | VM 契约类的纯 Java 嵌套类，按字节码翻译 |
-| `seeds.toml [boot_init] calls` | VM 引导期直接调用的无参 Java 入口，作为闭包根并在 `vm_boot_init` 中先于类初始化发射（当前为空：`setJavaLangAccess` 随 `[boot_init] classes` 首项 `System` 的初始化由 initPhase1 引导段首步执行） |
+| 已移出 `[vm_boundary]` | `VM`、`Module`、`ModuleLayer`、`SecurityManager`（第 4 步）；`ClassLoader`、`BootLoader`、`JceSecurity`（第 5 步）；`FileSystems`、`InetAddress`。手写只剩各自的 `ACC_NATIVE` |
+| 模块资源 / `${java.home}` 文件 | 发射层把闭包读取的模块资源写成 jimage 嵌入（唯一手写 native `NativeImageBuffer.getNativeMap`）；`java.home` 构建期钉值（U14），其下 `conf/security`、`lib/modules`、`lib/tzdb.dat` 为只读嵌入虚拟树，由 NIO / `UnixFileSystem` 的 native 手写读取（`jdk_resources`） |
+| VM 引导期 | 构建期引导映像求值（`vm_intrinsics.toml [concrete.boot]`），原 `seeds.toml [boot_init]` 已删除 |
 
-原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
+已移出 `[vm_boundary]`、整类按字节码翻译（手写只剩 `ACC_NATIVE`）：`VM`、`Module`、`ModuleLayer`、`SecurityManager`（引导映像第 4 步）、`Unsafe`（a3-U0~U3）、`FileSystems`（a3-X2）、`InvokerBytecodeGenerator`（a3-X1，类定义点按 `[[intrinsic]] class_definition` 登记）。
+
+原 `[boundary]` 前缀、`[release]`、`seeds.toml [data_bundle]`、`seeds.toml [boot_init]`（引导初始化改由构建期引导映像求值器承担，`[concrete.boot]` 在 `vm_intrinsics.toml`，引导映像第 3–4 步）已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；
 精确闭包分析下的实测与精度收敛项见 C1d 计划 §6.12。
+
+## 八、类 2 / 类 3 实施盘点（2026-10-08）
+
+**类 2 已完成**
+
+- lambda / indy（`vm_intrinsics.toml [indy]`：lambda、字符串拼接、`typeSwitch` / `enumSwitch`、`ObjectMethods`）；
+- LambdaForm 编译 → 原生 LambdaForm 解释器（MH-native）；
+- 动态代理 `Proxy$Dyn`、BMH 动态物种 `Species_Dyn`（Java 源在 `runtime/java_support/`）；
+- 序列化构造器访问器；`@CallerSensitive` 注入调用器；
+- 类路径运行模型 `class_path` 4 条（`EmbeddedClassPath`）。
+
+清单登记（`[[intrinsic]]`）共 13 条：`class_definition` 7、`class_path` 4、`bytecode_generator` 1、`stack_frame` 1；
+另有 `exact` 1 条，属 native 实现的正确性说明（见类 1），不计入类 2。
+
+**类 2 未完成**
+
+- 模块层 / jimage：引导映像第 5 步，进行中（分支 boot-image-s5）；
+- `ClassLoader` 资源方法 6 个、`BootLoader` 2 个 `#[jvm_boundary]`：随第 5 步删除；
+- `JceSecurity` 6 个 `#[jvm_boundary]`：构建期求值，与第 5 步同任务；
+- 用户代码 `defineClass` / 隐藏类的通用入口：未统一落地。
+
+**类 3 已完成**
+
+- 类 / 反射 / 注解 / 行表元数据（`java_meta`）；
+- VM 注入的静态与隐藏字段（`[vm_constants.injected_statics]`，清单声明、生成器追加）；
+- `@CallerSensitive` 调用者显式传入（`[caller_sensitive]`）；
+- `fillInStackTrace` / `StackWalker`（`vm_stack.rs`）；
+- VM 启动入口 initPhase1–3：构建期引导映像求值器（第 1–4 步）；
+- Continuation 有栈协程（2026-10-03 决定，`continuation_impl.rs`）。
+
+**类 3 未完成**
+
+- 引用类语义：无 GC 模型，C4 之后实施（见类 3 条目）；
+- 日志 / 信号链（(L) 链，`Shutdown.exit` → `logRuntimeExit`）：信号行为与 JDK 一致（2026-10-07 已定）；链上 `LoggerFinder` 提供者构建期确定、日志级别按映像值折叠（U12 已定，2026-10-08，引导映像计划 §8.4），机制 ①③ 进行中（分支 u12-props）；
+- JVMTI 通知（`VirtualThread.notifyJvmti*`）：当前空操作，语义决定待在清单逐条登记。

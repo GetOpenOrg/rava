@@ -24,6 +24,9 @@ impl<'a> Engine<'a> {
         let c = self.id(cls);
         let id = self.id(&name);
         self.mirrors.insert(id, c);
+        if self.img.is_some() {
+            self.image_mirror(cls);
+        }
         id
     }
 
@@ -42,13 +45,14 @@ impl<'a> Engine<'a> {
         k
     }
 
-    /// 镜像流边的变换：op 作用于值集 s
-    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet) -> TypeSet {
+    /// 镜像流边的变换：op 作用于值集 s（bound 见 [`Self::mirror_into`]）
+    fn mirror_op(&mut self, op: MirrorOp, s: &TypeSet, bound: Option<u32>) -> TypeSet {
         match op {
-            MirrorOp::Of => self.mirror_set(s),
+            MirrorOp::Of => self.mirror_set(s, bound),
             MirrorOp::Super => self.super_set(s),
             MirrorOp::Component => self.component_set(s),
             MirrorOp::Declaring => self.declaring_set(s),
+            MirrorOp::Holder => self.holder_set(s),
             MirrorOp::Sub(k) => self.sub_mirrors(s, k),
             MirrorOp::ArrayOf(..) => unreachable!("反射数组分配只经 mirror_into"),
         }
@@ -56,8 +60,10 @@ impl<'a> Engine<'a> {
 
     /// 反射数组分配调用点 (m, off) 的元素类型实参 s 流入、结果节点 dst（`Array.newInstance(c, n)`，元素为缺省值 null）。
     /// 结果按调用点在不动点上的状态取（与值到达的先后无关，同 `class_lookup.rs::lookup_release`）：
-    /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含 open(Object)（涵盖任意数组）；
+    /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含任意数组（[`Self::any_array`]）；
     ///   放行前出现的，该调用点不再放行、不建分配点；
+    /// - 实参出现所指维数已达逐类型建模上限的数组类镜像（[`Self::deep_mirror`]）：结果含 open(`[[Object`)（涵盖
+    ///   全部更深的数组），不影响其余已知镜像的放行与逐类型建分配点；
     /// - 放行前其余到达只记下，到工作队列排空时仍无所指未知者放行（[`Self::array_of_release`]）；
     /// - 放行后所指已知的类镜像逐类型建分配点（[`Self::array_sites`]），元素只来自其后的写入。
     ///
@@ -66,7 +72,12 @@ impl<'a> Engine<'a> {
         let key = (m, off);
         let unknown = !s.open.is_empty()
             || s.classes.iter().any(|x| Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x)));
-        let known: Vec<u32> = s.classes.iter().filter(|&x| Some(x) == self.prim_mirror || self.mirrors.contains_key(&x)).collect();
+        let deep = s.classes.iter().any(|x| self.deep_mirror(x));
+        let known: Vec<u32> = s
+            .classes
+            .iter()
+            .filter(|&x| Some(x) == self.prim_mirror || (self.mirrors.contains_key(&x) && !self.deep_mirror(x)))
+            .collect();
         let st = self.array_of.entry(key).or_default();
         let new_dst = !st.dsts.contains(&dst);
         if new_dst {
@@ -81,12 +92,26 @@ impl<'a> Engine<'a> {
         } else {
             vec![]
         };
+        let to_deep: Vec<Node> = if deep && !st.deep {
+            st.deep = true;
+            st.dsts.clone()
+        } else if st.deep && new_dst {
+            vec![dst]
+        } else {
+            vec![]
+        };
         let (released, open) = (st.released, st.open);
         let all: Vec<u32> = if released && new_dst { st.mirrors.iter().copied().collect() } else { vec![] };
         let dsts = st.dsts.clone();
         if !to_open.is_empty() {
-            let o = TypeSet::open(self.id(OBJECT));
+            let o = self.any_array();
             for d in to_open {
+                self.add_to(d, &o);
+            }
+        }
+        if !to_deep.is_empty() {
+            let o = TypeSet::open(self.id(&format!("[[L{OBJECT};")));
+            for d in to_deep {
                 self.add_to(d, &o);
             }
         }
@@ -126,8 +151,35 @@ impl<'a> Engine<'a> {
         !ready.is_empty()
     }
 
-    /// 调用点 (m, off) 上类镜像 xs 所指类型的数组分配点：基本类型类镜像给各基本类型数组（void 抛异常，无结果）；
-    /// 维数已达上限的数组类镜像抛异常（JVMS §4.4.1 数组至多 255 维；Array.newInstance 同），无结果
+    /// 任意数组的 open 概括：引用元素数组都是 `Object[]` 的子类型（JVMS §4.10.3 数组协变），其余只有 8 种一维基本类型
+    /// 数组，故 open(`[Object`) ∪ open(`[Z`…`[J`) 恰好涵盖全部数组。不按 open(Object) 概括：反射数组分配的结果只可能
+    /// 是数组，open(Object) 的 `getClass()` 却展开为全部已实例化类的镜像（如签名解析 `Array.newInstance(t, 0).getClass()`
+    /// 的结果经注解解析 / 反射枚举使所有用户类的成员入链）
+    fn any_array(&mut self) -> TypeSet {
+        let mut o = TypeSet::open(self.id(&format!("[L{OBJECT};")));
+        for c in b"ZCFDBSIJ" {
+            o.open.insert(self.id(&format!("[{}", *c as char)));
+        }
+        o
+    }
+
+    /// 所指类型维数已达反射数组逐类型建模上限（[`REFLECT_ARRAY_DIMS`]）的类镜像：以它为元素类型的反射数组分配
+    /// 不逐类型建分配点，结果按 open(`[[Object`) 概括——元素至少 2 维，结果至少 3 维，其元素是数组、数组都是 Object，
+    /// 故结果恒为 `Object[][]` 的子类型（JVMS §4.10.3 数组协变；基本类型多维数组同样成立）。
+    ///
+    /// 递归按元素镜像造数组、再取结果的 `getClass()` 回灌同一调用点（如方法签名解析逐维 `Array.newInstance(t, 0)
+    /// .getClass()`）时，逐类型建模每轮给已知镜像各加一维，直到 JVMS 255 维上限才停——已知镜像上千时类型数与内存
+    /// 随维数线性膨胀至 OOM。限维后更深的数组由 open(`[[Object`) 概括：可靠，且不动点有限——其 `getClass()` 只展开
+    /// 已实例化（数组则已逃逸）的 2 维及以上数组类镜像，回灌同一调用点仍是限维镜像、不再生成新类型。
+    /// 不按 open(Object) 概括，理由同 [`Self::any_array`]
+    fn deep_mirror(&self, x: u32) -> bool {
+        self.mirrors
+            .get(&x)
+            .is_some_and(|&t| self.names[t as usize].bytes().take_while(|&b| b == b'[').count() >= REFLECT_ARRAY_DIMS)
+    }
+
+    /// 调用点 (m, off) 上类镜像 xs 所指类型的数组分配点：基本类型类镜像给各基本类型数组（void 抛异常，无结果）。
+    /// xs 不含 [`Self::deep_mirror`]（已按 open 概括），所指维数远低于 JVMS §4.4.1 的 255 维上限
     fn array_sites(&mut self, m: usize, off: u32, xs: &[u32]) -> TypeSet {
         let mut out = TypeSet::default();
         for &x in xs {
@@ -135,9 +187,6 @@ impl<'a> Engine<'a> {
                 b"ZCFDBSIJ".iter().map(|&c| format!("[{}", c as char)).collect()
             } else {
                 let name = &self.names[self.mirrors[&x] as usize];
-                if name.bytes().take_while(|&b| b == b'[').count() >= MAX_ARRAY_DIMS {
-                    continue;
-                }
                 vec![if name.starts_with('[') { format!("[{name}") } else { format!("[L{name};") }]
             };
             for t in ts {
@@ -207,6 +256,44 @@ impl<'a> Engine<'a> {
         }
         if !s.open.is_empty() {
             out.open.insert(class);
+        }
+        out
+    }
+
+    /// 字段句柄值集 s 所指静态字段的基址（类镜像）：按名标记按所指字段的声明类；枚举标记按口径类及其超类、超接口（`getFields` 含继承的公开字段，
+    /// 接口常量的声明类是接口）各给一个类镜像；口径推不出、非标记的句柄（按名取得等）与 open 给所指未知的类镜像
+    /// （按偏移写入经 `poly_write` 落到按名打开的静态字段，不作任意对象的写入）
+    fn holder_set(&mut self, s: &TypeSet) -> TypeSet {
+        let class = self.id(CLASS);
+        let mut out = TypeSet::default();
+        if !s.open.is_empty() {
+            out.classes.insert(class);
+        }
+        let xs: Vec<u32> = s.classes.iter().collect();
+        for x in xs {
+            // 按名所指的字段：基址为其声明类的类镜像
+            if let Some(Some(f)) = self.fh_named.get(&x) {
+                let k = self.mirror(&f.owner.clone());
+                out.classes.insert(k);
+                continue;
+            }
+            let Some(c) = self.fh_marks.get(&x).and_then(|sc| sc.1.clone()) else {
+                out.classes.insert(class);
+                continue;
+            };
+            let mut todo = vec![c];
+            let mut seen: HashSet<String> = HashSet::default();
+            while let Some(n) = todo.pop() {
+                if !seen.insert(n.clone()) {
+                    continue;
+                }
+                let k = self.mirror(&n);
+                out.classes.insert(k);
+                if let Some(cf) = self.h.class(&n) {
+                    todo.extend(cf.super_name.iter().cloned());
+                    todo.extend(cf.interfaces.iter().cloned());
+                }
+            }
         }
         out
     }
@@ -281,7 +368,9 @@ impl<'a> Engine<'a> {
     /// 值集中各值的类镜像（`getClass`）。open(T) 是「任意已实例化的 T 子类型」，其类镜像是 G 中 T 的子类型
     /// （数组分配点须已逃逸，同虚调用接收者的 open 展开）各自的镜像；G 增长时由 [`Self::mirror_into`] 登记的
     /// 结果节点补入（[`Self::mirror_reopen`]）。lambda 合成类、手写实现对象给非字节码类镜像（[`Self::synthetic_mirror`]）
-    pub(super) fn mirror_set(&mut self, s: &TypeSet) -> TypeSet {
+    ///
+    /// bound：值集来自接口类型判定站点（[`Self::open_bounds`]）时的接口；open(T) 只展开为 G 中同时 ⊂ 该接口的子类型
+    pub(super) fn mirror_set(&mut self, s: &TypeSet, bound: Option<u32>) -> TypeSet {
         let mut out = TypeSet::default();
         let xs: Vec<u32> = s.classes.iter().collect();
         for x in xs {
@@ -291,6 +380,9 @@ impl<'a> Engine<'a> {
         for o in s.open.iter() {
             for &x in self.g_of(o).iter() {
                 if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+                    continue;
+                }
+                if bound.is_some_and(|b| !self.sub(x, b)) {
                     continue;
                 }
                 let k = self.value_mirror(x);
@@ -324,20 +416,24 @@ impl<'a> Engine<'a> {
     }
 
     /// 镜像流边推送：s 经变换 op 并入 dst。`getClass` 作用于 open(T) 时登记 dst，
-    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像
-    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node) {
+    /// T 的已实例化子类型此后进入 G（或数组逃逸）时补入其镜像。
+    ///
+    /// bound：s 取自接口类型判定站点（instanceof 成立一侧 / checkcast 到接口 I）时为 I。类 × 接口的收窄保留 open(T)
+    /// （`classes.rs` `open_narrow`：交集「T 的子类中实现 I 者」不可表示为单一 open 类型），getClass 展开时按 I 再求交——
+    /// 否则 `x instanceof Comparable ? x.getClass() : …` 对 open(Thread) 得到全部 Thread 子类的镜像
+    pub(super) fn mirror_into(&mut self, op: MirrorOp, s: &TypeSet, dst: Node, bound: Option<u32>) {
         if let MirrorOp::ArrayOf(m, off) = op {
             self.array_of_into(m as usize, off, s, dst);
             return;
         }
         if op == MirrorOp::Of {
             for o in s.open.iter() {
-                if self.mirror_open_seen.insert((o, dst)) {
-                    self.mirror_open.entry(o).or_default().push(dst);
+                if self.mirror_open_seen.insert((o, dst, bound)) {
+                    self.mirror_open.entry(o).or_default().push((dst, bound));
                 }
             }
         }
-        let k = self.mirror_op(op, s);
+        let k = self.mirror_op(op, s, bound);
         self.add_to(dst, &k);
     }
 
@@ -350,7 +446,12 @@ impl<'a> Engine<'a> {
         let mut dsts: Vec<Node> = vec![];
         for o in os {
             if self.sub(x, o) {
-                dsts.extend(self.mirror_open[&o].iter().copied());
+                let ds = self.mirror_open[&o].clone();
+                for (d, bound) in ds {
+                    if bound.is_none_or(|b| self.sub(x, b)) {
+                        dsts.push(d);
+                    }
+                }
             }
         }
         if dsts.is_empty() {

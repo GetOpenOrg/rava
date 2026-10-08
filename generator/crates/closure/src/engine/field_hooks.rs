@@ -3,12 +3,15 @@
 //! 访问点连到钩子的手写体（发射层在访问前调用钩子），读站点的结果另接钩子值池——钩子落地写入的值
 //! （如定义加载器）经手写体产出。
 //!
-//! 接收者钩子按接收者值集判定是否可达：钩子只为「尚未落地」的对象做事。类镜像的定义加载器钩子对引导
-//! 加载器定义的类是空操作（镜像的 `classLoader` 恒 null），故接收者值集只含引导类镜像时不接入钩子、读结果
-//! 只有字段值集（null）；含应用 / 平台类镜像、所指未知的 Class 对象或 open 时接入。求值器同口径：接收者为
-//! 引导类的类字面量时读结果折叠为 null（`mirror_hook_field`）。
+//! 接收者钩子按接收者值集判定是否可达：钩子只为「尚未落地」的对象做事。登记为 `boot_noop` 的钩子（类镜像的
+//! 定义加载器）对引导加载器定义的类是空操作（镜像的 `classLoader` 恒 null），故接收者值集只含引导类镜像时不接入
+//! 钩子、读结果只有字段值集（null）；含应用 / 平台类镜像、所指未知的 Class 对象或 open 时接入。求值器同口径：
+//! 接收者为引导类的类字面量时读结果折叠为 null（`mirror_hook_field`）。其余接收者钩子（类镜像的模块）对每个镜像
+//! 都落地，有接收者即接入；类镜像模块的钩子值池另含映像 VM 模块表（`image_start.rs` `image_module_table`），
+//! 抽象解释按同一张表把已知镜像的模块读折叠为映像对象（`mirrors_hook_field`，引用相等按对象身份折叠）。
 
 use super::*;
+use crate::absint::IMAGE_PENDING;
 use crate::loaders::{DefiningLoaders, Loader};
 
 impl<'a> Engine<'a> {
@@ -19,6 +22,7 @@ impl<'a> Engine<'a> {
         let t = self.rt_fn_node(&h.host, &h.func, via.clone());
         if opcode == op::GETFIELD || opcode == op::GETSTATIC {
             let Some(tid) = parse_field(&f.desc).and_then(|ft| self.ptype(&ft)) else { return };
+            self.image_module_table(decl, &f.name, t, tid);
             self.flow(Node::S(t, POOL), res, tid);
         }
     }
@@ -30,11 +34,11 @@ impl<'a> Engine<'a> {
 
     /// 接收者钩子字段：接收者值集 s（已按属主过滤）中是否有钩子需落地的对象
     pub(super) fn recv_hook_needed(&mut self, decl: &str, f: &MemberRef, s: &TypeSet) -> bool {
-        match self.man.vm_state.field_hook(decl, &f.name, &f.desc) {
-            Some(h) if h.receiver => {}
+        let boot_noop = match self.man.vm_state.field_hook(decl, &f.name, &f.desc) {
+            Some(h) if h.receiver => h.boot_noop,
             _ => return false,
-        }
-        if !s.open.is_empty() {
+        };
+        if !s.open.is_empty() || (!boot_noop && !s.classes.is_empty()) {
             return true;
         }
         let xs: Vec<u32> = s.classes.iter().collect();
@@ -76,11 +80,62 @@ impl Ctx<'_> {
         self.mirrors_hook_field(f, [&**c])
     }
 
-    /// 接收者钩子字段在一组类镜像上的读结果：每个镜像的钩子都是空操作（引导加载器定义的类）时恒为 null；
-    /// 否则未知。空集合同样为 null（乐观：调用方按值集增长重分析）
+    /// 接收者钩子字段在一组类镜像上的读结果：
+    /// - 每个镜像的钩子都是空操作（引导加载器定义的类）时恒为 null；
+    /// - 类镜像的模块（清单 `[concrete.vm_fields] class_module`）：每个镜像按「定义加载器 + 包」在映像 VM 模块表中
+    ///   查到同一个模块时为该映像对象（带 `Obj::Image` 标签的非空引用，类型由调用点按描述符补上）——运行期钩子
+    ///   以同一张表（启动序列登记）查得同一个对象；
+    /// - 否则未知。空集合给乐观值（null / `IMAGE_PENDING` 占位；调用方登记乐观答复，值集增长后重分析）
     pub(super) fn mirrors_hook_field<'c>(&self, f: &MemberRef, classes: impl IntoIterator<Item = &'c str>) -> Option<V> {
         let fi = self.field_info(f)?;
         let h = self.man.vm_state.field_hook(&fi.key.owner, &fi.key.name, &fi.key.desc)?;
-        (h.receiver && classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot)).then_some(V::Null)
+        if !h.receiver {
+            return None;
+        }
+        if h.boot_noop {
+            return classes.into_iter().all(|c| self.defining_loader(c) == Loader::Boot).then_some(V::Null);
+        }
+        if !self.is_class_module_field(&fi.key) {
+            return None;
+        }
+        let mut obj = IMAGE_PENDING;
+        for c in classes {
+            let m = self.image_module_of(c)?;
+            if obj != IMAGE_PENDING && obj != m {
+                return None;
+            }
+            obj = m;
+        }
+        let tag = Rc::new(crate::absint::Obj::Image(obj, Vec::new()));
+        Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) })
+    }
+
+    /// 字段是否为类镜像的模块字段（清单 `[concrete.vm_fields] class_module`）
+    fn is_class_module_field(&self, k: &MemberRef) -> bool {
+        self.man.concrete.vm_fields.get("class_module").and_then(|q| q.rsplit_once('.')).is_some_and(|(o, n)| o == k.owner && n == k.name)
+    }
+
+    /// 类镜像所属模块的映像对象：与运行期钩子同规则按「定义加载器 + 包」查映像 VM 模块表。数组类、未登记的包
+    /// （加载器的无名模块）、非 JDK 的非引导类不折叠（None）
+    fn image_module_of(&self, c: &str) -> Option<u32> {
+        if c.starts_with('[') {
+            return None;
+        }
+        let boot = self.defining_loader(c) == Loader::Boot;
+        if !boot && !matches!(self.cp.origin(c), Some(resolve::Origin::Jdk)) {
+            return None;
+        }
+        let pkg = c.rsplit_once('/').map_or("", |(p, _)| p);
+        self.img_modules.get()?.get(pkg)?.iter().find(|&&(_, b)| b == boot).map(|&(o, _)| o)
+    }
+
+    /// 实例调用 m 在一组接收者类镜像上的结果：m 的唯一目标是接收者钩子字段的平凡取值（`return this.f`）时
+    /// 为该字段在这组镜像上的读结果（[`Ctx::mirrors_hook_field`]）；否则未知
+    pub(super) fn mirrors_call<'c>(&self, m: &MemberRef, classes: impl IntoIterator<Item = &'c str>) -> Option<V> {
+        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, false)?;
+        let (owner, name, desc) = site.key();
+        let cf = self.cp.get(&owner)?;
+        let (fname, fdesc) = super::method_lookup::getter_field(cf.method(&name, &desc)?.code.as_ref()?, &owner)?;
+        self.mirrors_hook_field(&MemberRef { owner, name: fname, desc: fdesc }, classes)
     }
 }

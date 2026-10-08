@@ -56,7 +56,7 @@ fn archive_tree(scratch: &Path) -> BTreeMap<String, Vec<u8>> {
         // 档案 crate = user 以外的全部 crate（模块 crate、根声明层 / 实现层 / 门面、java_meta）
         .filter(|p| p.join("Cargo.toml").is_file() && p.file_name().is_some_and(|n| n != "user"))
         .collect();
-    for f in ["meta_tables.rs", "closure_tables.rs", "line_tables.rs"] {
+    for f in ["meta_tables.rs", "line_tables.rs"] {
         stack.push(scratch.join("closure_input").join(f));
     }
     while let Some(p) = stack.pop() {

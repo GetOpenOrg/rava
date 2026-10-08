@@ -36,6 +36,19 @@ pub struct Local {
     pub ty: RsType,
     /// 由方法体内 store 新建（形参与 `this` 为 false）
     pub is_new: bool,
+    /// 槽内当前值确定为空引用：到达此处的每条路径上最后一次存储都是无类型的 null（根类型绑定）。
+    /// 读取时直接产出空引用字面量——变量提升阶段可能把「null + 单一引用类型」的槽重定为该引用类型，
+    /// 按根类型生成的 `From::from(var)` 读取点会因此失配；空字面量由各消费点按目标类型落为默认值
+    pub null: bool,
+}
+
+impl Local {
+    /// 忘掉确定为空的事实（回边 / 异常处理器入口等无法逐路径确认的汇合点）
+    pub fn forget_null(locals: &mut BTreeMap<u16, Local>) {
+        for l in locals.values_mut() {
+            l.null = false;
+        }
+    }
 }
 
 /// LocalVariableTable / LocalVariableTypeTable 的一个声明区间
@@ -133,7 +146,7 @@ impl<'e> StackSim<'e> {
                 let args = sim.cfg.class_type_params.iter().map(|p| RsType::Param(p.clone())).collect();
                 RsType::class(sim.cfg.class_name.clone(), args)
             };
-            sim.state.locals.insert(0, Local { name: ident("this")?, ty: this_ty, is_new: false });
+            sim.state.locals.insert(0, Local { name: ident("this")?, ty: this_ty, is_new: false, null: false });
             sim.state.slot_decl_depth.insert(0, 0);
             slot = 1;
         }
@@ -141,7 +154,7 @@ impl<'e> StackSim<'e> {
             // 无调试信息时的缺省名按形参序号（long / double 之后按槽位命名会错位）
             let raw = sim.cfg.local_names.get(&slot).cloned().unwrap_or_else(|| format!("arg_{idx}"));
             let width = if is_wide(&rt) { 2 } else { 1 };
-            sim.state.locals.insert(slot, Local { name: ident(&safe_name(&raw))?, ty: rt, is_new: false });
+            sim.state.locals.insert(slot, Local { name: ident(&safe_name(&raw))?, ty: rt, is_new: false, null: false });
             sim.state.slot_decl_depth.insert(slot, 0);
             sim.state.param_slots.insert(slot);
             slot += width;
@@ -363,6 +376,9 @@ impl<'e> StackSim<'e> {
     /// 读取局部变量槽：已绑定 → 变量；否则按声明表（跨模拟路径）或合成名，缺省 i32
     pub fn load_local(&mut self, slot: u16) -> SimResult<(Expr, RsType)> {
         if let Some(l) = self.state.locals.get(&slot) {
+            if l.null && is_object(&l.ty) {
+                return Ok((Expr::Lit(ir::Lit::Null), RsType::Object));
+            }
             return Ok((Expr::Var(l.name.clone()), l.ty.clone()));
         }
         if let Some(d) = self.decl_at(slot, false) {

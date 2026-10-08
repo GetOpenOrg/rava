@@ -1,6 +1,6 @@
 //! rava closure：精确闭包分析器（计划 docs/plans/2026-09-29-rust-closure-analyzer.md）。
 //!
-//! 入口 [`analyze`]：用户类 main 为根，加 VM 基础设施种子（VM 规则、boot_init），
+//! 入口 [`analyze`]：先求值构建期引导映像（失败即分析失败），再以用户类 main 为根、从映像出发加 VM 基础设施种子，
 //! 以 XTA + 抽象解释计算调用链实际需要的类、方法、字段、实例化与初始化集合。
 //! 每个节点带溯源（via），`why` 沿溯源回溯到根。
 
@@ -9,6 +9,8 @@ pub mod cache;
 pub mod cold;
 pub mod engine;
 pub mod handwritten;
+pub mod image;
+pub mod image_ext;
 pub mod manifest;
 pub mod modules_json;
 pub mod loaders;
@@ -49,18 +51,26 @@ pub struct Closure<'a> {
     /// 类路径（输出的模块事实取自它，见 [`modules_json`]）
     pub cp: &'a ClassPath,
     pub elapsed_ms: u128,
-    /// 构建期引导映像（`[concrete.boot]` 未配置或类路径无 JDK 时为 None）与求值耗时
-    pub boot_image: Option<engine::concrete::boot_image::BootImage>,
+    /// 构建期引导映像与求值耗时
+    pub boot_image: engine::concrete::boot_image::BootImage,
     pub boot_ms: u128,
+    /// 触发边（`Diag::keep_edges` 时有；门排名建触发图用）
+    pub edges: Option<engine::cut::Edges>,
 }
 
-/// 运行分析。`h` / `man` / `hw` 由调用方持有（引擎借用）
-pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, hw: &'a Handwritten) -> Closure<'a> {
+pub use engine::concrete::boot_image::BootFailure;
+
+/// 运行分析。`h` / `man` / `hw` 由调用方持有（引擎借用）。引导映像求值失败即分析失败（不存在不经映像的启动路径）
+pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, hw: &'a Handwritten) -> Result<Closure<'a>, BootFailure> {
     let t0 = std::time::Instant::now();
     let mut e = Engine::new(h, input.cp, man, hw);
     e.cuts = engine::cut::Cuts::parse(&input.diag.cuts);
     e.arm_probes(&input.diag.flows);
-    if input.diag.dump_edges.is_some() {
+    if input.diag.keep_edges {
+        // 门排名按调用点切除：方法源须带偏移
+        e.cuts.edge_off = true;
+    }
+    if input.diag.dump_edges.is_some() || input.diag.keep_edges {
         engine::cut::edges_begin();
     }
     e.seeds.locales = input.locales.clone();
@@ -69,6 +79,12 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
         e.flow_batch = n;
     }
+    // 构建期引导映像（计划 2026-10-05-boot-image-evaluator）：与用户程序无关，先于其他根求值；
+    // 分析从映像出发（构建期初始化类不展开 `<clinit>`，运行期部分作根）
+    let tb = std::time::Instant::now();
+    let mut boot_image = e.boot_image()?;
+    let boot_ms = tb.elapsed().as_millis();
+    e.install_image(boot_image.data.clone());
     for r in &input.roots {
         e.root(r.clone(), "main");
     }
@@ -79,26 +95,21 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
         e.open_vm_field_write(&n);
     }
     e.root_vm_rules();
-    for c in &man.boot_init {
-        e.root_init(c, "boot_init");
-    }
-    for m in &man.boot_calls {
-        e.root_boot_call(m, "boot_init");
-    }
-    // 构建期引导映像（计划 2026-10-05-boot-image-evaluator）：与用户程序无关，先于闭包分析求值
-    let tb = std::time::Instant::now();
-    let boot_image = e.boot_image();
-    let boot_ms = tb.elapsed().as_millis();
-    if let Some(b) = boot_image.as_ref().filter(|b| !b.ok) {
-        eprintln!("[closure] 引导映像求值失败：{}", b.json["error"].as_str().unwrap_or("?"));
-    }
     e.run();
-    if let Some(p) = &input.diag.dump_edges {
-        if let Err(err) = engine::cut::edges_finish(p) {
+    // 映像数据 = 引导映像 + 分析中追加的扩展组（构建期初始化扩展与镜像缓存，规范化后与发现次序无关）
+    match e.image_final() {
+        Some(Ok(d)) => boot_image.data = d,
+        Some(Err(w)) => return Err(BootFailure { error: format!("映像扩展组规范化：{w}"), stack: Vec::new(), report: String::new() }),
+        None => boot_image.data.live = e.image_live(),
+    }
+    let edges = engine::cut::edges_take();
+    if let (Some(p), Some(g)) = (&input.diag.dump_edges, &edges) {
+        if let Err(err) = engine::cut::edges_write(g, p) {
             eprintln!("[closure] 触发边转储写入失败：{}：{err}", p.display());
         }
     }
-    Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis(), boot_image, boot_ms }
+    let edges = edges.filter(|_| input.diag.keep_edges);
+    Ok(Closure { engine: e, cp: input.cp, elapsed_ms: t0.elapsed().as_millis(), boot_image, boot_ms, edges })
 }
 
 /// closure.json 折叠点格式版本（计划 §7.3「折叠点导出」）
@@ -130,6 +141,7 @@ fn fold_json(f: &Fold) -> Value {
         "null_recv": f.null_recv,
         "noreturn_calls": f.noreturn_calls,
         "noreturn_dead_pcs": f.noreturn_dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
+        "direct_calls": f.direct_calls.iter().map(|(pc, h)| json!({"pc": pc, "target": h.to_string()})).collect::<Vec<_>>(),
     })
 }
 
@@ -223,6 +235,7 @@ impl Closure<'_> {
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
             "fold_noreturn_calls": folds.iter().map(|f| f.noreturn_calls.len()).sum::<usize>(),
+            "fold_direct_calls": folds.iter().map(|f| f.direct_calls.len()).sum::<usize>(),
             "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),
             "sysprops_unstable": e.sysprops_report(),
@@ -237,7 +250,9 @@ impl Closure<'_> {
             "fields_open_all": e.field_handles().1,
             "hw_written_fields": e.hw_written.len(),
             "hw_written_names": e.hw_written_names,
-            "boot_image": self.boot_image.as_ref().map(|b| &b.json),
+            "boot_image": &self.boot_image.json,
+            "boot_image_live": self.boot_image.data.live.len(),
+            "build_time_init": e.ext_report(),
             "elapsed_ms": self.elapsed_ms,
             // 性能观测（计时 / 内存 / 重分析分布）：不属于分析结果，对照输出时与 elapsed_ms 一并剔除
             "perf": perf,
@@ -275,6 +290,7 @@ impl Closure<'_> {
         let folds: Vec<Value> = fold_list.iter().map(fold_json).collect();
         json!({
             "summary": self.summary_with(&fold_list),
+            "boot_image_data": self.boot_image.data.to_json(),
             "classes": classes,
             "modules": modules,
             "methods": methods,

@@ -1,0 +1,4 @@
+# 签名解析两条入口合并（上界）：注解成员签名 parseSig + 类泛型信息 Class.getGenericInfo（open(Comparable) 回退经此）——
+# 量化 sun/reflect/generics 整包出闭包的可减数；后者在开放世界档案下不可删，只作归因
+sun/reflect/annotation/AnnotationParser.parseSig:(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Class;
+java/lang/Class.getGenericInfo:()Lsun/reflect/generics/repository/ClassRepository;

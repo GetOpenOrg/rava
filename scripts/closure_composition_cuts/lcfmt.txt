@@ -1,0 +1,11 @@
+# locale：Formatter 取本地化数据的全部入口（数字的零位 / 小数点 / 分组符号经 DecimalFormatSymbols，分组大小经
+# NumberFormat / 适配器，%t 日期时间经 Calendar / DateFormatSymbols）。Formatter 本身在 S0 面内，只量不切：
+# 量「格式串常量下不用这些转换」时 locale 链能少多少（不健全，只作上界）
+java/util/Formatter.getDecimalFormatSymbols:(Ljava/util/Locale;)Ljava/text/DecimalFormatSymbols;
+java/util/Formatter$FormatSpecifier.localizedMagnitude:(Ljava/util/Formatter;Ljava/lang/StringBuilder;Ljava/lang/CharSequence;IIILjava/util/Locale;)Ljava/lang/StringBuilder;@141
+java/util/Formatter$FormatSpecifier.localizedMagnitude:(Ljava/util/Formatter;Ljava/lang/StringBuilder;Ljava/lang/CharSequence;IIILjava/util/Locale;)Ljava/lang/StringBuilder;@169
+java/util/Formatter$FormatSpecifier.localizedMagnitude:(Ljava/util/Formatter;Ljava/lang/StringBuilder;Ljava/lang/CharSequence;IIILjava/util/Locale;)Ljava/lang/StringBuilder;@182
+java/util/Formatter$FormatSpecifier.print:(Ljava/util/Formatter;Ljava/util/Calendar;CLjava/util/Locale;)V
+java/util/Formatter$FormatSpecifier.print:(Ljava/util/Formatter;Ljava/lang/StringBuilder;Ljava/util/Calendar;CLjava/util/Locale;)Ljava/lang/Appendable;
+java/util/Formatter$FormatSpecifier.print:(Ljava/util/Formatter;Ljava/time/temporal/TemporalAccessor;CLjava/util/Locale;)V
+java/util/Formatter$FormatSpecifier.print:(Ljava/util/Formatter;Ljava/lang/StringBuilder;Ljava/time/temporal/TemporalAccessor;CLjava/util/Locale;)Ljava/lang/Appendable;

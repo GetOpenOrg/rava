@@ -13,6 +13,8 @@
 //! `--dump-edges <文件>`（触发边转储）、`--site-prof`（读者站点重跑剖析，进 `summary.perf.site_prof`）；`--cold-cut`（丢弃冷路径事件，测量冷路径独占规模，结果不健全）。
 //! 顺序无关检验：`--flow-batch N`（流传播批量，缺省 64，1 = 逐个排空）、`--hash-seed N`（内部表哈希初值，缺省 0）；
 //! 引导映像：`--boot-report <报告.md>`（写构建期引导映像审计报告；求值失败即命令失败，`rava audit boot` 用）。
+//! 门自动排名：`--gates`（见 [`crate::gates_cmd`]；`--gates-top N`、`--gates-pool N`、`--gates-verify N`、`--gates-jobs N`、
+//! `--gates-mem-mb N`、`--gates-timeout 秒`、`--gates-out <json>`、`--gates-md <md>`；`--gates-child` 为内部子进程模式）。
 //! 跨运行结果缓存：`--closure-cache <目录>`、`--closure-cache-max-mb N`（缺省 4096；`--why` / `--flows` / `--report` 时不读缓存）。
 //!
 //! 参数逐个校验：未知参数、多余的位置参数一律报错。闭包结果取决于输入（类路径、镜像目录），静默忽略的参数会
@@ -38,14 +40,14 @@ const VALUE_OPTS: &[&str] = &[
     "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
-const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof"];
+const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof", "--gates"];
 
 /// 参数校验：恰一个位置参数（输入），其余都是已知选项（带值选项须有值）
 fn check_args(rest: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
-        if VALUE_OPTS.contains(&a.as_str()) {
+        if VALUE_OPTS.contains(&a.as_str()) || crate::gates_cmd::VALUE_OPTS.contains(&a.as_str()) {
             it.next().ok_or_else(|| format!("{a} 缺少值"))?;
         } else if FLAG_OPTS.contains(&a.as_str()) {
         } else if a.starts_with('-') {
@@ -89,7 +91,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false, keep_edges: false })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -200,6 +202,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
     };
+    if let Some(out) = args.opt("--gates-child") {
+        return crate::gates_cmd::child(&input_desc, &h, &man, &hw, &out);
+    }
+    if args.rest.iter().any(|a| a == "--gates") {
+        let diag = ["--why", "--flows", "--report", "--boot-report", "--dump-edges", "--site-prof"];
+        if let Some(a) = args.rest.iter().find(|a| diag.contains(&a.as_str())) {
+            return Err(format!("--gates 不与 {a} 同用（门排名自带溯源链；诊断请单独运行）"));
+        }
+        return crate::gates_cmd::run(args, input_desc, &h, &man, &hw, &crate::gates_cmd::abs(&classes), &main);
+    }
     let whys = multi("--why");
     let boot_report = args.opt("--boot-report");
     let need_engine = args.opt("--report").is_some() || boot_report.is_some() || !whys.is_empty() || !flows.is_empty();
@@ -207,7 +219,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         dir: args.opt("--closure-cache").map(PathBuf::from),
         max_mb: num("--closure-cache-max-mb")?,
     };
-    let out = crate::closure_run::analyze(&cache, &input_desc, &h, &man, &hw, need_engine, true);
+    let out = match crate::closure_run::analyze(&cache, &input_desc, &h, &man, &hw, need_engine, true) {
+        Ok(o) => o,
+        Err(f) => {
+            if let Some(r) = &boot_report {
+                write_report(r, &f.report)?;
+                eprintln!("[boot] 报告 {r}：失败");
+            }
+            return Err(f.to_string());
+        }
+    };
     let v = out.json.as_ref().ok_or("闭包产物缺失")?;
     if let Some(o) = args.opt("-o") {
         let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
@@ -221,10 +242,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         std::fs::write(&r, c.report_md(&main)).map_err(|e| format!("{r}：{e}"))?;
     }
     if let Some(r) = &boot_report {
-        let b = c.boot_image.as_ref().ok_or("引导映像未求值（清单无 [concrete.boot] calls 或类路径无引导阶段方法）")?;
-        if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
-        }
+        let b = &c.boot_image;
         let outside = |v: &[String]| -> Vec<String> { v.iter().filter(|t| !c.engine.classes.contains_key(t.as_str())).map(|t| format!("`{t}`")).collect() };
         let (ti, ri) = (outside(&b.types), outside(&b.runtime_classes));
         let md = format!("{}
@@ -234,8 +252,8 @@ pub fn run(args: &Args) -> Result<(), String> {
 - 映像类型 {} 个，不在闭包 {} 个：{}
 - 运行期部分入口类 {} 个，不在闭包 {} 个：{}
 ", b.report, c.engine.classes.len(), c.boot_ms, b.types.len(), ti.len(), ti.join(" "), b.runtime_classes.len(), ri.len(), ri.join(" "));
-        std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))?;
-        eprintln!("[boot] 报告 {r}：{}，摘要 {}", if b.ok { "通过" } else { "失败" }, b.digest);
+        write_report(r, &md)?;
+        eprintln!("[boot] 报告 {r}：通过，摘要 {}", b.digest);
     }
     for w in whys {
         for line in c.why(w) {
@@ -250,10 +268,15 @@ pub fn run(args: &Args) -> Result<(), String> {
         println!();
     }
     println!("{}", serde_json::to_string_pretty(&v["summary"]).map_err(|e| e.to_string())?);
-    if boot_report.is_some() && c.boot_image.as_ref().is_some_and(|b| !b.ok) {
-        return Err("引导映像求值失败（见报告）".into());
-    }
     Ok(())
+}
+
+/// 写引导映像审计报告（建上级目录）
+fn write_report(r: &str, md: &str) -> Result<(), String> {
+    if let Some(d) = Path::new(r).parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}：{e}", d.display()))?;
+    }
+    std::fs::write(r, md).map_err(|e| format!("{r}：{e}"))
 }
 
 /// `--root 类.方法:描述符` 与 `--seed-class 类`（全部 public 方法，命令行入口 main 除外）展开为种子方法

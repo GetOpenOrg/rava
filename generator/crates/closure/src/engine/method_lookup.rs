@@ -48,7 +48,7 @@ pub(super) fn constrained(parts: &[Part]) -> bool {
 }
 
 /// 方法体是否为 `return this.f`；是则返回 f 的名字与描述符
-fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
+pub(super) fn getter_field(code: &classfile::Code, owner: &str) -> Option<(String, String)> {
     let [a, g, r] = code.insns.as_slice() else { return None };
     let this = a.opcode == ALOAD_0 || a.opcode == ALOAD && matches!(a.operand, classfile::Operand::Local(0));
     if !this || g.opcode != classfile::op::GETFIELD || r.opcode != ARETURN {
@@ -115,7 +115,7 @@ impl<'a> Engine<'a> {
         if let Some((sm, off)) = self.cur_site.filter(|s| s.0 == m) {
             self.xreaders.entry(sm).or_default().insert(off);
         }
-        let a = self.methods[m].analysis.clone()?;
+        let a = self.site_analysis(m)?;
         if a.conservative {
             return None;
         }
@@ -197,7 +197,7 @@ impl<'a> Engine<'a> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
-        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![] });
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() });
         // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
         if let Some((outer, _)) = self.cur_site {
             for (_, e) in &ca.events {
@@ -256,11 +256,13 @@ impl<'a> Engine<'a> {
         }).collect())
     }
 
-    /// 枚举取值段的候选字符串
-    pub(super) fn enum_field_values(&self, a: &Analysis, v: &V) -> Option<BTreeSet<Rc<str>>> {
+    /// 枚举取值段的候选字符串：接收者所指常量可按身份标记逐个确定时只取这些常量的字段值（`enum_consts.rs`），
+    /// 否则取该枚举类全部方法的 ldc 字符串（超集）
+    pub(super) fn enum_field_values(&mut self, f: &Frame, v: &V) -> Option<BTreeSet<Rc<str>>> {
+        let a = f.a;
         let o = site_of(v)?;
         // 取值方法调用，或直接读字段
-        let (cf, fname, fdesc) = match event_at(a, o, |e| is_invoke(e) || matches!(e, Event::Field { .. }))? {
+        let (cf, fname, fdesc, recv) = match event_at(a, o, |e| is_invoke(e) || matches!(e, Event::Field { .. }))? {
             Event::Invoke { opcode, mref, iface, args } => {
                 if *opcode == classfile::op::INVOKESTATIC || args.len() != 1 {
                     return None;
@@ -272,17 +274,20 @@ impl<'a> Engine<'a> {
                     return None;
                 }
                 let (n, d) = getter_field(rm.code.as_ref()?, &cf.name)?;
-                (cf, n, d)
+                (cf, n, d, args.first().cloned())
             }
-            Event::Field { opcode: classfile::op::GETFIELD, mref, .. } => (self.h.class(&mref.owner)?, mref.name.clone(), mref.desc.clone()),
+            Event::Field { opcode: classfile::op::GETFIELD, mref, recv, .. } => (self.h.class(&mref.owner)?, mref.name.clone(), mref.desc.clone(), recv.clone()),
             _ => return None,
         };
         if cf.access & acc::ENUM == 0 {
             return None;
         }
-        let f = cf.field(&fname, &fdesc)?;
-        if f.is_static() || f.access & acc::FINAL == 0 || fdesc != format!("L{STRING};") || !ctor_writes_plain(&cf, &fname, &fdesc) {
+        let fd = cf.field(&fname, &fdesc)?;
+        if fd.is_static() || fd.access & acc::FINAL == 0 || fdesc != format!("L{STRING};") || !ctor_writes_plain(&cf, &fname, &fdesc) {
             return None;
+        }
+        if let Some(set) = recv.and_then(|r| self.enum_recv_names(f, &r, &cf.name, &fname, &fdesc)) {
+            return Some(set);
         }
         let mut out = BTreeSet::new();
         for i in cf.methods.iter().flat_map(|mm| mm.code.iter().flat_map(|c| c.insns.iter())) {

@@ -136,6 +136,31 @@ fn noreturn_keeps_call_and_drops_cut_handler() {
 }
 
 #[test]
+fn direct_call_becomes_invokestatic() {
+    let h = MemberRef { owner: "p/A$D".into(), name: "f".into(), desc: "(Lp/A;I)Z".into() };
+    let fold = MethodFold { direct_calls: [(2, h.clone())].into(), ..Default::default() };
+    let n = apply_fold("A.m:()Z", &call_code(), &fold).unwrap();
+    // 栈形不变：接收者成为特化入口的首实参；偏移沿用原指令，异常表照旧
+    assert_eq!(shape(&n.insns), vec![(0, ALOAD_1), (1, ICONST_0), (2, op::INVOKESTATIC), (5, op::IRETURN), (6, ICONST_0), (7, op::IRETURN)]);
+    assert!(matches!(&n.insns[2], NInsn::Op(Insn { operand: Operand::Method(m, false), .. }) if *m == h));
+    assert_eq!(n.exception_table.len(), 1);
+    // 特化入口的描述符须为（原属主 + 原形参）原返回；指令须为活的 invokevirtual；不与其它折叠重叠
+    let bad = MethodFold { direct_calls: [(2, MemberRef { desc: "(I)Z".into(), ..h.clone() })].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+    let bad = MethodFold { direct_calls: [(1, h.clone())].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+    let bad = MethodFold { direct_calls: [(2, h.clone())].into(), null_recv: [2].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+}
+
+#[test]
+fn parse_fold_reads_direct_calls() {
+    let v = serde_json::json!({"direct_calls": [{"pc": 2, "target": "p/A$D.f:(Lp/A;I)Z"}]});
+    let f = parse_fold(&v).unwrap();
+    assert_eq!(f.direct_calls.get(&2).map(|m| m.to_string()).as_deref(), Some("p/A$D.f:(Lp/A;I)Z"));
+}
+
+#[test]
 fn abrupt_sites_are_validated() {
     // null_recv 须为活的虚调用指令；noreturn 调用落入 dead_pcs 以外的非调用指令同样报错
     let bad = MethodFold { null_recv: [1].into(), ..Default::default() };

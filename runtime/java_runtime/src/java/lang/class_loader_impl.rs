@@ -3,15 +3,11 @@ use super::class_loader::ClassLoader;
 
 // java.lang.ClassLoader 伴生。
 //
-// 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent 一律走字节码
-// （ClassLoaders 整类翻译）。本文件只承载：
+// 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent、资源族一律走字节码
+// （ClassLoaders 整类翻译；模块资源经 BuiltinClassLoader → SystemModuleReader 读本程序 jimage，
+// 类路径资源经 class_path 内建读 EmbeddedClassPath，boot-image §5.7）。本文件只承载：
 //   - native 方法；
-//   - initPhase3 系统类加载器段的落地（`__vm_init_phase3`，准入第 ③ 类：HotSpot 在进入 main 前执行，
-//     原生二进制改为首次读写 `ClassLoader.scl` / `Thread.contextClassLoader` 时执行，见
-//     vm_intrinsics.toml `[vm_state.field_hooks]`）；
-//   - 运行期类定义点（第 ② 类）；
-//   - 资源族：模块资源（jmod 内数据文件）由编译期嵌入表承载，其余资源恒缺席——单二进制无
-//     classpath 资源，ServiceLoader 的 LazyClassPathLookupIterator 据此枚举为空。
+//   - 运行期类定义点（第 ② 类）。
 impl ClassLoader {
     /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
@@ -56,82 +52,6 @@ impl ClassLoader {
             return Ok(super::Class::default());
         }
         Ok(super::Class::for_class(String::from(slash.as_str())))
-    }
-
-    /// initPhase3 的系统类加载器段（`System.initPhase3`）：
-    /// ```text
-    /// VM.initLevel(3);
-    /// ClassLoader scl = ClassLoader.initSystemClassLoader();
-    /// Thread.currentThread().setContextClassLoader(scl);   // 初始线程
-    /// VM.initLevel(4);
-    /// ```
-    /// 两步调用都走字节码（`initSystemClassLoader` 写 `scl`，`setContextClassLoader` 写初始线程的
-    /// 上下文加载器）。进程内只执行一次：其余线程在段执行期间读写钩子字段时于互斥上等待；段内
-    /// 本线程对钩子字段的读写（`putstatic scl`、`putfield contextClassLoader`）直接放行。
-    pub fn __vm_init_phase3() -> Result<()> {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static DONE: AtomicBool = AtomicBool::new(false);
-        static RUNNING: parking_lot::ReentrantMutex<std::cell::Cell<bool>> =
-            parking_lot::const_reentrant_mutex(std::cell::Cell::new(false));
-        if DONE.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        let guard = RUNNING.lock();
-        if DONE.load(Ordering::Acquire) || guard.get() {
-            return Ok(());
-        }
-        guard.set(true);
-        let r = crate::jdk::internal::misc::VM::__vm_at_init_level(3, || -> Result<()> {
-            let scl = ClassLoader::initSystemClassLoader()?;
-            super::thread_impl::__vm_initial_thread()?.setContextClassLoader(scl)
-        });
-        guard.set(false);
-        if r.is_ok() {
-            DONE.store(true, Ordering::Release);
-        }
-        r
-    }
-
-    /// 单资源查询：单二进制无 classpath 资源 → 恒 null。
-    /// 三个实例资源方法为虚方法体（`__impl_`，声明在生成的宏块内经 vtable 分派）：自定义加载器的覆盖
-    /// （如 ServiceLoader 经上下文加载器调 `getResources`）按 Java 语义分派到子类。
-    #[jvm_boundary]
-    pub fn __impl_getResource(&self, name: String) -> Result<crate::java::net::URL> {
-        let _ = name;
-        Ok(Default::default())
-    }
-
-    /// 资源枚举：恒空枚举（消费方 ServiceLoader 迭代即终止）。
-    #[jvm_boundary]
-    pub fn __impl_getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
-        let _ = name;
-        crate::java::util::Collections::emptyEnumeration()
-    }
-
-    /// static getSystemResource：委托实例形态（恒 null）。
-    #[jvm_boundary]
-    pub fn getSystemResource(name: String) -> Result<crate::java::net::URL> {
-        let _ = name;
-        Ok(Default::default())
-    }
-
-    /// `getResourceAsStream(String)`：模块资源 → 嵌入字节的 ByteArrayInputStream；其余 → null
-    ///（单二进制无 classpath 资源）。name 为 null → NPE（JDK `Objects.requireNonNull`）。
-    #[jvm_boundary]
-    pub fn __impl_getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
-        module_resource_stream(name)
-    }
-
-    /// static `getSystemResourceAsStream(String)`：委托系统加载器（同实例形态）。
-    #[jvm_boundary]
-    pub fn getSystemResourceAsStream(name: String) -> Result<crate::java::io::InputStream> {
-        module_resource_stream(name)
-    }
-
-    /// static getSystemResources：委托实例形态（恒空枚举）。
-    #[jvm_boundary]
-    pub fn getSystemResources(name: String) -> Result<crate::java::util::Enumeration<Object>> {
-        crate::java::util::Collections::emptyEnumeration()
     }
 }
 
@@ -308,18 +228,4 @@ impl ClassLoader {
         d.__set_deflt(false);
         Ok(d)
     }
-}
-
-/// 模块资源名 → 字节流（未命中 → null）。
-fn module_resource_stream(name: String) -> Result<crate::java::io::InputStream> {
-    if name.is_jvm_null() {
-        return Err(JvmError::null_pointer());
-    }
-    let key = format!("{}", name);
-    let Some(bytes) = crate::jdk_resources::module_resources::lookup(&key) else {
-        return Ok(Default::default());
-    };
-    let arr = JArray::from(bytes.iter().map(|b| *b as i8).collect::<Vec<i8>>());
-    let stream = crate::java::io::ByteArrayInputStream::new_arr_b(arr)?;
-    Ok(<crate::java::io::InputStream as ::std::convert::From<Object>>::from(Object::from(stream)))
 }

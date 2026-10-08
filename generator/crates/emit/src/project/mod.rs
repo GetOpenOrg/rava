@@ -5,11 +5,13 @@
 //! Cargo.toml / strict.txt / jdk_feature.txt。
 
 mod archive_side;
+pub mod boot_image;
 pub mod meta_sides;
 pub mod decl_segments;
 pub mod decl_side;
 pub mod entry;
 pub mod fs;
+pub mod jimage;
 pub mod layers;
 pub mod line_tables;
 pub mod layout;
@@ -324,8 +326,6 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     perf.mark("layers");
     let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
-    entry::write_module_resources(ctx, &mut w, &decl_src)?;
-    entry::write_closure_tables(ctx, &mut w, out_dir)?;
     perf.mark("write");
     for src in &jdk_srcs {
         mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
@@ -347,6 +347,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&decl_src, &runtime_src, &mut w)?;
+    boot_image::write_boot_image(ctx, &mut w, out_dir, &ems, &body_plan.homes)?;
     module_side::write_facade(&mut w, out_dir, crates, segs.top(), &body_names)?;
     entry::write_user_mods(&mut w, &user_src, &user)?;
     let bin = entry::write_main(ctx, &mut w, &user_src, &user, &jdk, &ems, &disp)?;
@@ -367,7 +368,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
             .chain(body_names.iter().copied())
             .chain(lib_names.iter().copied())
             .collect();
-        let included = [meta_sides::META_TABLES, entry::CLOSURE_TABLES, line_tables::LINE_TABLES_PATH];
+        let included = [meta_sides::META_TABLES, line_tables::LINE_TABLES_PATH];
         archive_side::stamp_versions(&mut w, out_dir, &stamped, &included)?;
     }
     perf.mark("entry");

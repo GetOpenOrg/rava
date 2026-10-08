@@ -30,6 +30,8 @@ mod sets;
 mod meta_classes;
 mod idset;
 mod facts;
+mod levels_boot;
+mod obj_rets;
 mod consteval;
 mod construct;
 mod sysprops;
@@ -39,11 +41,13 @@ mod sysprops_lambda;
 mod fold;
 mod unmodeled;
 mod forward;
+mod relay;
 mod ctxsel;
 mod classes;
 mod reflect;
 mod reflect_call;
 mod reflect_call_pool;
+mod reflect_direct;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -66,6 +70,7 @@ mod hw_syntax;
 mod hw_name_write;
 mod hw_stype;
 mod hw_infer;
+mod hw_ret;
 mod hw_inherit;
 mod hwobj;
 mod hwfield;
@@ -78,6 +83,8 @@ mod diag;
 mod write_audit;
 mod field_names;
 mod field_handles;
+mod enum_consts;
+mod field_access;
 mod mirror_init;
 mod seeds;
 mod bundles;
@@ -92,6 +99,7 @@ mod builder;
 mod name_eval;
 mod name_ops;
 mod sealed;
+mod map_slot;
 mod nest;
 mod method_lookup;
 mod lookup_pair;
@@ -101,6 +109,8 @@ mod pstrs;
 mod keyed;
 mod keyed_scheme;
 mod share;
+mod obj_fields;
+mod ctor_init;
 mod new;
 mod methods;
 mod worklist;
@@ -109,6 +119,7 @@ mod stats;
 mod graph;
 mod grow;
 pub mod cut;
+pub mod gates;
 mod setstore;
 use setstore::SetStore;
 mod scc;
@@ -118,7 +129,9 @@ mod levels;
 mod open_world;
 pub mod concrete;
 mod caller;
-mod boot_phases;
+mod image_memo;
+mod image_start;
+mod static_init;
 mod jca_order;
 
 use graph::FlowGraph;
@@ -170,8 +183,9 @@ const PROD: u32 = u32::MAX - 1;
 const ARRAY_RET: u32 = u32::MAX - 2;
 /// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
 const CALLER: u32 = u32::MAX - 3;
-/// 数组类型的维数上限（JVMS §4.4.1；反射分配更高维数组抛 IllegalArgumentException）
-const MAX_ARRAY_DIMS: usize = 255;
+/// 反射数组分配（`Array.newInstance`）逐元素类型建分配点的元素维数上限：元素类镜像所指已是这么多维的数组时，
+/// 结果按 open(`[[Object`) 概括（见 `reflect.rs::deep_mirror`）
+const REFLECT_ARRAY_DIMS: usize = 2;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
@@ -283,6 +297,8 @@ pub struct Engine<'a> {
     /// 容器抽象对象 id → 类型 id；分配点链（`@方法:偏移#…`，堆上下文）
     pub objs: HashMap<u32, u32>,
     obj_chain: HashMap<u32, Rc<str>>,
+    /// 抽象对象分配点（链首段）→ 所分配的类 id：由链第二段求属主对象的类（`obj_at` 内部分配判定）
+    seg_cls: HashMap<Rc<str>, u32>,
     /// 形参常量克隆上下文 → 其堆上下文（外层上下文，`NOCTX` 即无）：克隆只以调用点区分节点，分配点链与外层相同（`ctxsel.rs`）
     ctx_heap: HashMap<u32, u32>,
     /// 容器形态判定缓存（类型 id）
@@ -293,6 +309,8 @@ pub struct Engine<'a> {
     factories: HashMap<MemberRef, bool>,
     /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
     forwarders: HashMap<MemberRef, u64>,
+    /// 内存访问中继槽判定缓存（按成员）：流到手写内存访问成员内存槽的形参槽；非空即继承调用方上下文（`relay`）
+    relays: relay::RelayCache,
     pub inited: IndexMap<String, Via>,
 
     /// 调用点分派结果：(方法, 偏移) → 目标方法
@@ -312,14 +330,14 @@ pub struct Engine<'a> {
     concrete: concrete::Concrete,
     /// 派发枢纽；(调用成员, 接口调用, 接收者集合) → 序号；open 类型 → 枢纽
     hubs: Vec<Hub>,
-    hub_ids: HashMap<(MemberRef, bool, HubSet), u32>,
+    hub_ids: HashMap<(MemberRef, bool, HubSet, u32), u32>,
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
     /// 调用点 → 所连枢纽（输出分派结果用）；调用点当前的精确集合枢纽
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     /// 调用点当前的精确集合枢纽及其接收者集合（集合未变的重跑免查 `hub_ids`）
     hub_last: HashMap<(usize, u32), (u32, Rc<[u32]>)>,
     /// 精确集合枢纽按（调用成员, 接口调用）分族，族内按集合大小升序：新枢纽取族内最大的子集枢纽为父（`hub.rs`）
-    hub_family: HashMap<(MemberRef, bool), Vec<(u32, Rc<[u32]>)>>,
+    hub_family: HashMap<(MemberRef, bool, u32), Vec<(u32, Rc<[u32]>)>>,
     /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)
     gathers: Vec<(gather::Slot, u32, bool)>,
     gather_ids: HashMap<(gather::Slot, bool, Rc<[u32]>), u32>,
@@ -349,6 +367,10 @@ pub struct Engine<'a> {
     rcall_conv: HashSet<(String, u16)>,
     rcall_conv_pending: HashMap<String, Vec<(usize, u16, V)>>,
     rcall_conv_seen: HashSet<(usize, u32, u16)>,
+    /// 直连反射调用（`reflect_direct.rs`）：按直连处理的调用点 → 特化入口；曾不满足直连条件的调用点
+    /// （单调：此后恒按原入口接边，已接的直连边保留）
+    rdirect: HashMap<(usize, u32), MemberRef>,
+    rdirect_fallback: HashSet<(usize, u32)>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],
@@ -374,8 +396,13 @@ pub struct Engine<'a> {
     pub sigpoly_sites: BTreeSet<String>,
     /// 诊断：丢弃冷路径（`cold::doomed`）上的事件，量化冷路径独占的闭包规模（不健全，只用于测量）
     pub cold_cut: bool,
-    /// 已作根的引导阶段（`Manifest::boot_phases` 下标；锚点读取点出现时登记，不撤回）
-    phases_rooted: BTreeSet<usize>,
+    /// 构建期引导映像起点（`install_image`）
+    img: Option<Box<image_start::ImgState>>,
+    /// 构建期初始化扩展的求值器（引导映像求值器在导出后保留，concrete/ext_init.rs）
+    ext_vm: Option<Box<concrete::ExtVm>>,
+    /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
+    level_ctxs: HashMap<u32, i32>,
+    level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,
     in_mwork: HashSet<usize>,
@@ -409,6 +436,18 @@ pub struct Engine<'a> {
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
+    /// 形参节点 → 按其抽象对象集读过实例字段的方法：值集增长时重分析（见 `obj_fields.rs`）
+    obj_watch: HashMap<Node, BTreeSet<usize>>,
+    /// 方法 → 最近一次分析的按对象读（值集增长时按新对象集复核答复）
+    obj_queries: HashMap<usize, obj_fields::ObjBound>,
+    /// 待复核按对象读的方法（来源值集增长 / 按对象值变化）：流传播排空后一次复核（`obj_fields.rs::obj_flush`）
+    obj_dirty: BTreeMap<usize, obj_fields::ObjDirty>,
+    /// 方法节点 → 各次分析返回值之并（按接收者对象归属的来源，见 `obj_rets.rs`）
+    nret: HashMap<usize, PV>,
+    /// 已有返回值的实例方法节点的接收者形参节点：值集增长时把节点返回值补归属到新对象
+    oret_watch: HashSet<Node>,
+    /// 按对象接收者来源的候选站点（方法键 → 偏移，`obj_fields.rs::obj_site_cands`）
+    site_cands: HashMap<MemberRef, Rc<[u32]>>,
     /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
     shared: HashMap<MemberRef, Vec<share::Shared>>,
     open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
@@ -475,6 +514,8 @@ pub struct Engine<'a> {
     lookup_released: HashSet<(usize, u32)>,
     /// 字段名配对已处理的 (类, 名字)：类层次不变，按名打开只做一次
     fpair_done: HashSet<(u32, Rc<str>)>,
+    /// 诊断：同名字段放开（`open_field_name`）的首个引入站点（`--flows @fopen:` 列出）
+    fopen_name_via: HashMap<String, Option<(usize, u32)>>,
     /// 两次排空流传播之间最多处理的方法 / 站点数（`worklist.rs::run`；`rava closure --flow-batch N` 可改，1 = 逐个排空）
     pub flow_batch: usize,
     /// 按 open 在 G 上展开过接收者的方法，按 (open 类型, 接收者上界) 索引：新成员落在两者之下时重处理
@@ -501,9 +542,12 @@ pub struct Engine<'a> {
     /// 流入 dst（逐调用点）
     mflows: HashMap<Node, Vec<(Node, MirrorOp)>>,
     mflow_seen: HashSet<(Node, Node, MirrorOp)>,
-    /// `getClass` 作用于 open(T) 的结果节点：T → 节点（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
-    mirror_open: BTreeMap<u32, Vec<Node>>,
-    mirror_open_seen: HashSet<(u32, Node)>,
+    /// `getClass` 作用于 open(T) 的结果节点：T → (节点, 接口界)（T 的已实例化子类型增长时补入其类镜像，见 `reflect.rs`）
+    mirror_open: BTreeMap<u32, Vec<(Node, Option<u32>)>>,
+    mirror_open_seen: HashSet<(u32, Node, Option<u32>)>,
+    /// 接口类型判定站点（instanceof 成立一侧 / checkcast，目标为接口 I）的收窄节点 → I：节点中的 open(T) 实为 T ∩ I
+    /// （`reflect.rs` `mirror_into`）
+    open_bounds: HashMap<Node, u32>,
     /// 反射数组分配调用点 (方法, 偏移) 的元素类型实参与结果节点（`reflect.rs::array_of_into`）
     array_of: HashMap<(usize, u32), ArrayOfSite>,
     /// 尚未放行的反射数组分配调用点：到工作队列排空时由 `reflect.rs::array_of_release` 定夺
@@ -574,6 +618,17 @@ pub struct Engine<'a> {
     fenum_static: BTreeSet<Option<String>>,
     /// 字段句柄来源标记 → 枚举口径（`field_handles.rs`）
     fh_marks: HashMap<u32, field_handles::EnumScope>,
+    /// 按字段句柄存取的调用点（`field_access.rs`）与其对象实参汇集节点
+    fa_sites: HashMap<(usize, u32), field_access::FaSite>,
+    /// 按名取得的字段句柄来源标记 → 所指字段（None = 名字或类推不出），见 `field_handles.rs` `mark_named`
+    fh_named: HashMap<u32, Option<MemberRef>>,
+    /// 枚举常量身份标记 → 分配点（枚举类 `<clinit>` 方法节点, `new` 偏移），见 `enum_consts.rs`
+    enum_consts: HashMap<u32, (usize, u32)>,
+    /// 枚举常量标记上 final 字符串字段的值（缓存；None = 推不出，Some(None) = null）
+    enum_vals: HashMap<(u32, Rc<str>), Option<Option<Rc<str>>>>,
+    /// 字段句柄取得入口经非字节码调用点可达（句柄不带来源标记）的原因：此后句柄存取一律按字节码接边
+    fa_untrusted: Option<String>,
+    fa_watch: HashMap<Node, (usize, u32)>,
     /// 标记已流到句柄写入口的枚举口径
     fh_released: BTreeSet<field_handles::EnumScope>,
     /// 字段枚举缺口：接收者 Class 值集含所指未知的 Class 的枚举调用点（`方法@偏移`）；句柄写入口可达时全部字段不折叠

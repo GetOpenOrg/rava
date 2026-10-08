@@ -30,7 +30,6 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     let impl_g = &ctx.impl_g;
     let ty_g = &ctx.ty_g;
     let where_c = &ctx.where_c;
-    let binary_name = &ctx.meta.binary_name;
 
     // ══════════════════════════════════════════════════════════════════════════
     // 7. Impl block on wrapper（字段访问器委托 + 虚方法委托 + 构造器双入口）
@@ -282,13 +281,9 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     let (static_storage, static_accessors) =
         class_init::expand_statics(&ctx.struct_ident, &ctx.statics, &impl_method_set);
     let has_clinit = ctx.fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
-    // 自身类型 static 字段（枚举常量形态）→ 初始化完成后登记常量目录
-    let constant_register = class_init::constant_directory_registration(
-        &ctx.struct_ident, binary_name, &ctx.statics);
     let (init_state, class_init_fn) = class_init::expand_class_init(
         &ctx.struct_ident, &ctx.meta.binary_name, ctx.meta.superclass.as_ref(),
-        &ctx.meta.init_interfaces, has_clinit,
-        constant_register);
+        &ctx.meta.init_interfaces, has_clinit);
 
     let wrapper_impl = quote! {
         #(#static_storage)*

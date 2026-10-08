@@ -38,9 +38,9 @@ pub(super) enum Call<'x> {
 
 impl Engine<'_> {
     /// 接收者 r 调用实例方法时的上下文
-    /// （字段句柄来源标记只是身份标签、不是堆抽象，不作上下文）
+    /// （字段句柄来源标记、枚举常量标记只是身份标签、不是堆抽象，不作上下文）
     pub(super) fn recv_ctx(&self, r: u32) -> u32 {
-        if self.objs.contains_key(&r) && !self.fh_marks.contains_key(&r) {
+        if self.objs.contains_key(&r) && !self.fh_marks.contains_key(&r) && !self.fh_named.contains_key(&r) && !self.enum_consts.contains_key(&r) {
             r
         } else {
             NOCTX

@@ -92,7 +92,8 @@ pub fn write_module_crates(ctx: &EmitCtx<'_>, w: &mut Writer, out_dir: &Path, to
     Ok(())
 }
 
-/// 根门面 crate：再导出声明层（以声明层名改名引入末段完整视图），链接实现层
+/// 根门面 crate：再导出声明层（以声明层名改名引入末段完整视图），链接实现层；
+/// 带构建期引导映像模块（`boot_image.rs`，见 [`super::boot_image`]）
 pub fn write_facade(w: &mut Writer, out_dir: &Path, crates: &ModuleCrates, top: &str, bodies: &[&str]) -> Result<()> {
     let root = crates.root();
     let decl = crates.decl();
@@ -103,6 +104,7 @@ pub fn write_facade(w: &mut Writer, out_dir: &Path, crates: &ModuleCrates, top: 
         format!("pub use {decl}::*;"),
     ];
     lib_rs.extend(bodies.iter().map(|b| format!("use {b} as _;")));
+    lib_rs.push(format!("pub mod {};", super::boot_image::MODULE));
     w.write(&dir.join("src").join("lib.rs"), &(lib_rs.join("\n") + "\n"))?;
     let mut deps = vec![path_dep(&decl, top)];
     deps.extend(bodies.iter().map(|b| path_dep(b, b)));

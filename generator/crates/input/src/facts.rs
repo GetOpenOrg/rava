@@ -122,6 +122,8 @@ pub struct MethodFold {
     pub noreturn_calls: BTreeSet<u32>,
     /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
+    /// 直连反射调用点：pc → 特化入口（静态方法）。该调用指令改写为对特化入口的 invokestatic（栈形不变）
+    pub direct_calls: BTreeMap<u32, MemberRef>,
 }
 
 /// 种子输出
@@ -132,21 +134,8 @@ pub struct SeedFacts {
     pub mirror_inits: Vec<String>,
     pub reflect_names: BTreeMap<String, BTreeSet<String>>,
     pub reflect_all: BTreeSet<String>,
-    /// 模块服务表：(服务, provider) 二元组，只含命名模块里的 provider（类路径 provider 经
-    /// META-INF/services 发现，不入引导服务目录），事实序（服务名序 → provider 声明序）
-    pub module_services: Vec<(String, String)>,
     /// 闭包分析器按名求出的资源（属性文件资源束 + 按名读取的资源；资源路径，生成器并入模块资源表嵌入）
     pub named_resources: BTreeSet<String>,
-}
-
-/// VM 初始系统属性表（分析器折叠属性读点所用的清单表 `[facts.system_properties]`）：
-/// 运行时 System.registerNatives 只写入这两类键，与折叠结论同源
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SysPropFacts {
-    /// 启动时的常量属性（键 → 值）
-    pub values: BTreeMap<String, String>,
-    /// 运行期取宿主值的键
-    pub dynamic: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -186,7 +175,8 @@ pub struct ClosureFacts {
     pub hw_inherited: Vec<MemberRef>,
     /// lambda 站点的函数式接口（samtype，分析器 `sam_types`）：发射层合成 `I__Lambda` 的接口集
     pub sam_types: Vec<String>,
-    pub system_properties: SysPropFacts,
+    /// 构建期引导映像（物化数据与活对象集）
+    pub boot_image: closure::image::ImageData,
 }
 
 /// `owner.name:desc` → MemberRef（owner 含 `/`、`$`，名字不含 `.`）
@@ -259,6 +249,7 @@ impl ClosureFacts {
                 null_recv: f.null_recv.iter().copied().collect(),
                 noreturn_calls: f.noreturn_calls.iter().copied().collect(),
                 noreturn_dead_pcs: f.noreturn_dead_pcs.clone(),
+                direct_calls: f.direct_calls.iter().cloned().collect(),
             };
             folds.insert(f.method.clone(), mf);
         }
@@ -284,22 +275,13 @@ impl ClosureFacts {
                 mirror_inits: s.mirror_inits.iter().cloned().collect(),
                 reflect_names: s.reflect_names.clone(),
                 reflect_all: s.reflect_all.clone(),
-                module_services: s
-                    .services
-                    .selected
-                    .iter()
-                    .flat_map(|(svc, ps)| ps.iter().filter(|p| p.module.is_some()).map(move |p| (svc.clone(), p.class.clone())))
-                    .collect(),
                 named_resources: s.named_resources.clone(),
             },
             dispatched: e.dispatched().iter().filter_map(|d| parse_member_id(d).ok()).collect(),
             instantiated: e.instantiated(),
             hw_inherited: e.hw_inherited_requests().into_iter().collect(),
             sam_types: e.sam_types().into_iter().collect(),
-            system_properties: SysPropFacts {
-                values: e.sysprops().values().clone(),
-                dynamic: e.sysprops().dynamic().clone(),
-            },
+            boot_image: c.boot_image.data.clone(),
         }
     }
 
@@ -320,6 +302,8 @@ impl ClosureFacts {
             });
         }
         out.clinit = strings(v.get("clinit"))?;
+        let b = v.get("boot_image_data").filter(|b| !b.is_null()).ok_or_else(|| InputError::Format("closure.json 缺 boot_image_data（引导映像）".into()))?;
+        out.boot_image = closure::image::ImageData::from_json(b).map_err(InputError::Format)?;
         out.refs = strings(v.get("refs"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
         for m in v.get("missing").and_then(Value::as_array).into_iter().flatten() {
             out.missing.push(str_of(m, "name")?.to_string());
@@ -352,12 +336,6 @@ impl ClosureFacts {
         out.instantiated = strings(v.get("instantiated"))?;
         out.sam_types = strings(v.get("sam_types"))?;
         out.hw_inherited = strings(v.get("hw_inherited"))?.iter().map(|s| parse_member_id(s)).collect::<Result<_, _>>()?;
-        let sp = v.get("system_properties").ok_or_else(|| missing("system_properties"))?;
-        for (k, val) in sp.get("values").and_then(Value::as_object).into_iter().flatten() {
-            let val = val.as_str().ok_or_else(|| InputError::Format(format!("system_properties.values.{k} 应为字符串")))?;
-            out.system_properties.values.insert(k.clone(), val.to_string());
-        }
-        out.system_properties.dynamic = strings(sp.get("dynamic"))?.into_iter().collect();
         Ok(out)
     }
 }
@@ -463,6 +441,10 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
         let value = parse_fold_value(c.get("value").unwrap_or(&Value::Null), &ty)?;
         mf.consts.insert(pc, FoldConst { pc, kind, value, ty });
     }
+    for c in f.get("direct_calls").and_then(Value::as_array).into_iter().flatten() {
+        let pc = u32_of(c.get("pc").ok_or_else(|| missing("pc"))?)?;
+        mf.direct_calls.insert(pc, parse_member_id(str_of(c, "target")?)?);
+    }
     Ok(mf)
 }
 
@@ -479,13 +461,5 @@ fn parse_seeds(s: &Value) -> Result<SeedFacts, InputError> {
     }
     out.reflect_all = strings(s.get("reflect_all"))?.into_iter().collect();
     out.named_resources = strings(s.get("named_resources"))?.into_iter().collect();
-    for svc in s.get("services").and_then(Value::as_array).into_iter().flatten() {
-        let service = str_of(svc, "service")?;
-        for p in arr(svc, "providers")? {
-            if p.get("module").is_some_and(|m| !m.is_null()) {
-                out.module_services.push((service.to_string(), str_of(p, "class")?.to_string()));
-            }
-        }
-    }
     Ok(out)
 }

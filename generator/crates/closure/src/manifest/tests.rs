@@ -52,7 +52,7 @@ fn field_name_resolvers_and_class_initializers_parse() {
     .unwrap();
     assert_eq!(
         m.field_name_resolver("a/B.f:(Ljava/lang/Class;Ljava/lang/String;)J"),
-        Some(NameResolver { class: Some(0), name: 1, handle: false, offset: false })
+        Some(NameResolver { class: Some(0), name: 1, handle: false, offset: false, kind: None, read_kinds: 0 })
     );
     assert!(m.is_class_initializer("a/U.init:(Ljava/lang/Class;)V"));
     assert!(!m.is_class_initializer("a/U.other:(Ljava/lang/Class;)V"));
@@ -105,6 +105,24 @@ fn string_ops_parse() {
 }
 
 #[test]
+fn string_shapes_parse() {
+    let m = with_vm("[facts.string_ops]\n\"a/S.sw:(La/S;)Z\" = \"starts_with\"\n\"a/S.io:(I)I\" = \"index_of\"\n[facts.string_shapes]\n\"a/P.enc:(La/S;)La/S;\" = { excludes = \"#?\" }\n").unwrap();
+    assert_eq!(m.string_op("a/S.sw:(La/S;)Z"), Some(StrOp::StartsWith));
+    assert_eq!(m.string_op("a/S.io:(I)I"), Some(StrOp::IndexOf));
+    let enc = m.string_shape("a/P.enc:(La/S;)La/S;").unwrap();
+    assert_eq!((enc.prefix.as_str(), enc.excludes.as_str()), ("", "#?"));
+    assert_eq!(m.string_shape("a/P.x:()La/S;"), None);
+    let m = with_vm("[facts.string_shapes]\n\"a/B.loc:(La/S;)La/S;\" = { prefix = \"jrt:/\" }\n").unwrap();
+    let loc = m.string_shape("a/B.loc:(La/S;)La/S;").unwrap();
+    assert_eq!((loc.prefix.as_str(), loc.excludes.as_str()), ("jrt:/", ""));
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = { excludes = \"#\", extra = 1 }\n").is_err());
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = \"#\"\n").is_err());
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = {}\n").is_err());
+    // 前缀含被排除的字符：自相矛盾
+    assert!(with_vm("[facts.string_shapes]\n\"a/P.f:()La/S;\" = { prefix = \"a#\", excludes = \"#\" }\n").is_err());
+}
+
+#[test]
 fn handle_interpreters_parse() {
     let m = with_vm("[facts.handle_interpreters]\nmembers = [\"a/H.run:([La/O;)La/O;\"]\n").unwrap();
     let key = |n: &str| classfile::constant::MemberRef { owner: "a/H".into(), name: n.into(), desc: "([La/O;)La/O;".into() };
@@ -118,6 +136,13 @@ fn static_offset_getters_parse() {
     let key = |name: &str, desc: &str| classfile::constant::MemberRef { owner: "a/U".into(), name: name.into(), desc: desc.into() };
     assert!(m.is_static_offset_getter(&key("sfo", "(La/F;)J")));
     assert!(!m.is_static_offset_getter(&key("sfo", "(La/G;)J")));
+}
+
+#[test]
+fn static_bases_parse() {
+    let m = with_vm("[facts.field_writes]\nstatic_bases = [\"a/U.sfb:(La/F;)La/O;\"]\n").unwrap();
+    assert!(m.returns_static_base("a/U.sfb:(La/F;)La/O;"));
+    assert!(!m.returns_static_base("a/U.sfo:(La/F;)J"));
 }
 
 #[test]
@@ -167,4 +192,12 @@ fn array_allocators_parse() {
     assert_eq!(m.array_allocator("a/R.other:(Ljava/lang/Class;I)Ljava/lang/Object;"), None);
     assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)I\" = 0\n").is_err());
     assert!(with_vm("[facts.reflect.array_allocators]\n\"a/R.alloc:(Ljava/lang/Class;I)Ljava/lang/Object;\" = -1\n").is_err());
+}
+
+#[test]
+fn handle_access_parse() {
+    let m = with_vm("[facts.field_writes]\nhandle_getters = [\"a/F.get:(La/O;)La/O;\"]\nhandle_setters = [\"a/F.set:(La/O;La/O;)V\"]\n").unwrap();
+    assert_eq!(m.field_handle_access("a/F.get:(La/O;)La/O;"), Some(false));
+    assert_eq!(m.field_handle_access("a/F.set:(La/O;La/O;)V"), Some(true));
+    assert_eq!(m.field_handle_access("a/F.getInt:(La/O;)I"), None);
 }

@@ -179,9 +179,9 @@ pub(crate) fn expand_interface(
     let (static_storage, static_accessors) =
         class_init::expand_statics(struct_ident, statics, &impl_methods);
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
-    // 接口初始化不触发父接口初始化（JVMS §5.5）；接口无实例形态，不登记常量目录
+    // 接口初始化不触发父接口初始化（JVMS §5.5）
     let (init_state, class_init_fn) =
-        class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit, quote! {});
+        class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit);
 
     // 无 binary name 的载体（手写接口块缺元数据）退化为无类型 null
     let null_ref = if binary_name.is_empty() {
@@ -192,6 +192,15 @@ pub(crate) fn expand_interface(
         quote! {{
             static __TYPED_NULL: __TypedNull = __TypedNull::new(#binary_name, None);
             Object::__from_static(&__TYPED_NULL)
+        }}
+    };
+
+    let null_const = if binary_name.is_empty() {
+        quote! { Object::__NULL }
+    } else {
+        quote! {{
+            static __TYPED_NULL: __TypedNull = __TypedNull::new(#binary_name, None);
+            Object::__const_static(&__TYPED_NULL)
         }}
     };
 
@@ -222,6 +231,18 @@ pub(crate) fn expand_interface(
             fn from(obj: Object) -> Self {
                 Self { __ref: __IfaceRef::new(obj), __phantom: ::std::default::Default::default() }
             }
+        }
+
+        // 构建期引导映像的对象引用（常量求值，映像模块的静态初值）
+        impl #impl_g #struct_ident #ty_g #where_c {
+            #[doc(hidden)]
+            pub const fn __from_image(__ref: __IfaceRef<dyn #vtable_ident>) -> Self {
+                Self { __ref, __phantom: ( #( ::std::marker::PhantomData::<fn() -> #type_params>, )* ) }
+            }
+
+            /// 映像中引用数组的 null 元素（与 `Default` 同为本接口的类型化 null）
+            #[doc(hidden)]
+            pub const __IMAGE_NULL: Self = Self::__from_image(__IfaceRef::null(#null_const));
         }
 
         impl #impl_g From<#struct_ident #ty_g> for Object #where_c {

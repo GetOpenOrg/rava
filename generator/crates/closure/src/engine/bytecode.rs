@@ -114,7 +114,16 @@ impl<'a> Engine<'a> {
                     self.instantiate(c, via("new"));
                     self.init(c, via("new"));
                     // 容器形态类按分配点（+ 堆上下文）成为抽象对象；G 里记类型本身（open 展开用）
-                    let id = if self.container(c) { self.obj_at(m, off, c) } else { self.id(c) };
+                    let id = if self.container(c) {
+                        let o = self.obj_at(m, off, c);
+                        self.osite_note(m, o, c, cf);
+                        o
+                    } else if let Some(k) = self.enum_const_mark(m, off, c) {
+                        // 枚举常量：身份标记（不作克隆上下文，见 `enum_consts.rs`）
+                        k
+                    } else {
+                        self.id(c)
+                    };
                     self.add_to(Node::S(m, off), &TypeSet::exact(id));
                 }
                 Event::NewArray(t, empty) => {
@@ -127,6 +136,7 @@ impl<'a> Engine<'a> {
                     // 转换结果是独立来源：只收输入中 ⊂ 目标类型的部分（转换失败的值到不了后继）
                     if let Some(v) = v {
                         let cid = self.id(c);
+                        self.bound_site(Node::S(m, off), cid);
                         let fs = self.feeds(m, v, cid);
                         self.feed(&fs, Node::S(m, off), cid);
                     }
@@ -136,6 +146,7 @@ impl<'a> Engine<'a> {
                     // 判定成立一侧的收窄值：输入中 ⊂ 目标类型的部分
                     if let Some(v) = v {
                         let cid = self.id(c);
+                        self.bound_site(Node::S(m, off), cid);
                         let fs = self.feeds(m, v, cid);
                         self.feed(&fs, Node::S(m, off), cid);
                     }
@@ -154,7 +165,7 @@ impl<'a> Engine<'a> {
                     for f in self.feeds(m, v, class) {
                         match f {
                             Feed::N(n) => self.mflow(n, dst, MirrorOp::Sub(kid)),
-                            Feed::S(s) => self.mirror_into(MirrorOp::Sub(kid), &s, dst),
+                            Feed::S(s) => self.mirror_into(MirrorOp::Sub(kid), &s, dst, None),
                         }
                     }
                 }
@@ -168,7 +179,10 @@ impl<'a> Engine<'a> {
                 Event::Field { opcode, mref, recv, value } => {
                     self.field(m, off, *opcode, mref, recv.as_ref(), value.as_ref(), Node::S(m, off))
                 }
-                Event::Invoke { opcode, mref, iface, args } => self.invoke(m, off, *opcode, mref, *iface, args),
+                Event::Invoke { opcode, mref, iface, args } => {
+                    self.map_slot_write(m, off, *opcode, mref, args);
+                    self.invoke(m, off, *opcode, mref, *iface, args)
+                }
                 Event::Indy { bsm, name, desc, args } => {
                     if let Some(cf) = &cf {
                         self.indy(m, off, cf, *bsm, name, desc, args, true);
@@ -180,7 +194,10 @@ impl<'a> Engine<'a> {
                     let tid = self.id(comp.as_deref().unwrap_or(OBJECT));
                     let aid = aty.map(|t| self.id(&t)).unwrap_or(obj);
                     let fs = self.feeds(m, array, aid);
-                    let s = self.value_set(&fs);
+                    // 数组值的静态类型（checkcast / 声明类型）收窄来源集：同一局部变量的其他来源中不是该数组类型的
+                    // 值（如链表式 Object[] 中经 checkcast 取出的下一节点，来源集含同数组的其他元素）不被当作 open 数组
+                    let raw = self.value_set(&fs);
+                    let s = self.filter(&raw, aid);
                     let mut add = TypeSet::default();
                     let xs: Vec<u32> = s.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
                     if xs.len() < s.classes.len() {
@@ -252,6 +269,7 @@ impl<'a> Engine<'a> {
         }
         let Some(r) = r else { return };
         self.sysprops_rval(m, a, &r);
+        self.obj_ret_note(m, &r);
         let key = self.methods[m].key.clone();
         let cur = self.ctx.rvals.borrow().get(&key).cloned();
         let new = PV::join(cur.as_ref(), &r);
@@ -259,6 +277,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.ctx.rvals.borrow_mut().insert(key.clone(), new);
+        self.ctx.cinit_ret_changed(&key);
         let deps = self.ctx.rdeps.borrow().get(&key).cloned();
         self.invalidate_all(deps, Why::RetConst);
     }
@@ -327,10 +346,6 @@ impl<'a> Engine<'a> {
             if opcode == op::GETSTATIC || opcode == op::PUTSTATIC {
                 self.init(&decl, via.clone());
             }
-            // 实例字段锚点有接收者值集时按值集判定（见下与 `boot_phases.rs`）
-            if opcode == op::GETSTATIC || (opcode == op::GETFIELD && recv.is_none()) {
-                self.phase_anchor_read(&decl, f);
-            }
             // 接收者钩子（`receiver = true`）在有接收者值集时按值集判定（见下）；静态钩子与其余访问点
             // 无条件接入——静态钩子（如 initPhase3 段）不看接收者，实例字段读写同样先执行它
             let recv_hook = instance_op(opcode)
@@ -345,7 +360,7 @@ impl<'a> Engine<'a> {
             // static final 由 `<clinit>` 常量求值（Ctx::static_const），其余字段并入值集
             if fd.access & acc::STATIC == 0 || fd.access & acc::FINAL == 0 {
                 let key = MemberRef { owner: decl.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
-                self.field_put(&key, value.map_or(PV::Top, PV::of));
+                self.field_put(&key, super::static_init::write_pv(fd.is_static(), value));
                 self.field_strs_put(&key, value);
                 if key.desc == format!("L{};", absint::STRING) {
                     let fi = self.field_node(key);
@@ -355,13 +370,15 @@ impl<'a> Engine<'a> {
         }
         let Some(ft) = parse_field(&f.desc) else { return };
         let Some(tid) = self.ptype(&ft) else {
+            // 基本类型字段不拆接收者：写入值并入按对象读的通配值（见 `obj_fields.rs`）
+            if first && opcode == op::PUTFIELD {
+                let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
+                self.wild_put(&key, &value.map_or(PV::Top, PV::of));
+            }
             // 手写字段访问器仍需沿其回调入链；基本类型字段无值集，接收者钩子在此无条件接入
             if first {
                 if instance_op(opcode) && recv.is_some() && self.recv_hook_field(&decl, f) {
                     self.field_hook(&decl, f, opcode, &via, res);
-                }
-                if opcode == op::GETFIELD && recv.is_some() {
-                    self.phase_anchor_read(&decl, f);
                 }
                 self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
             }
@@ -381,9 +398,6 @@ impl<'a> Engine<'a> {
                 if self.recv_hook_needed(&decl, f, &s) {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
-                if opcode == op::GETFIELD {
-                    self.phase_anchor_recv(&decl, f, &s);
-                }
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
                 // 类镜像上读接收者钩子字段（VM 注入状态）：值只由钩子落地（应用 / 平台类镜像已接钩子值池，引导类
                 // 镜像恒 null），不经全局字段节点——否则一个镜像读到的是全部镜像的值并集
@@ -394,6 +408,11 @@ impl<'a> Engine<'a> {
             None => (vec![], true),
         };
         let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
+        if opcode == op::PUTFIELD {
+            // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）
+            let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
+            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of));
+        }
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {

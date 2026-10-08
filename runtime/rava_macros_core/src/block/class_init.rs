@@ -349,18 +349,12 @@ impl syn::visit_mut::VisitMut for OwnStaticRewriter<'_> {
 /// 状态：0 = 未初始化；1 = 初始化中；2 = erroneous（`<clinit>` 曾抛出异常）；3 = 已完成。
 /// 多线程协议（他线程等待 / 同线程递归返回）由运行时 `gil::clinit_enter/exit` 承载。
 ///
-/// `register` 为常量目录登记语句（见 `constant_directory_registration`），在 `<clinit>`
-/// 之前执行：登记的是惰性取值闭包（查询时才经访问器读 static 字段），提前登记使
-/// `<clinit>` 自身里的 `Enum.valueOf`（如 `OperatingSystem.initOS` → `valueOf("LINUX")`，
-/// 此时枚举常量已赋值）能查到本类目录——JVM 经 `values()` 读已赋值的 `$VALUES`，
-/// 同样不要求初始化完成。
 pub(crate) fn expand_class_init(
     struct_ident: &Ident,
     binary_name: &str,
     superclass: Option<&Type>,
     init_interfaces: &[Type],
     has_clinit: bool,
-    register: TokenStream2,
 ) -> (TokenStream2, TokenStream2) {
     let state = format_ident!("__CLINIT_STATE_{}", struct_ident);
     let storage = quote! {
@@ -388,59 +382,19 @@ pub(crate) fn expand_class_init(
             __class_init_run(#binary_name, __state, &|| -> Result<()> {
                 #init_super
                 #(#init_ifaces)*
-                #register
                 #run_clinit
                 Ok(())
             })
         }
+
+        /// 构建期引导映像：本类在构建期已完成初始化（静态字段已由启动序列写入映像值），
+        /// 登记后直接进入「已初始化」，不运行 `<clinit>`
+        #[doc(hidden)]
+        pub fn __boot_initialized() {
+            __boot_initialized_run(#binary_name, &#state);
+        }
     };
     (storage, member)
-}
-
-/// 常量目录登记语句：声明了「自身类型（无泛型实参）static 字段」的类，
-/// 在初始化完成后把 (字段名 → 取值闭包) 登记到运行时常量目录。
-///
-/// Java 枚举常量即该形态（`static final Day MONDAY`，字段名 == 常量名，javac
-/// 保证），是 JDK `Class.enumConstantDirectory` 目录项的来源；登记按结构形态
-/// 判定，不感知枚举语义。非常量（ConstantValue）与数组形态（`$VALUES`）不登记。
-pub(crate) fn constant_directory_registration(
-    struct_ident: &Ident,
-    binary_name: &str,
-    statics: &[StaticItem],
-) -> TokenStream2 {
-    let entries: Vec<TokenStream2> = statics.iter().filter(|st| {
-        if st.const_value.is_some() {
-            return false;
-        }
-        match &st.ty {
-            syn::Type::Path(tp) if tp.qself.is_none() => tp.path.segments.last()
-                .map(|seg| seg.ident == *struct_ident && seg.arguments.is_empty())
-                .unwrap_or(false),
-            _ => false,
-        }
-    }).map(|st| {
-        let name = &st.name;
-        let lit = name.to_string();
-        quote! {
-            (
-                ::std::string::String::from(#lit),
-                __Shared::new(|| -> Result<Object> { Ok(Object::from(Self::#name()?)) })
-            )
-        }
-    }).collect();
-    if entries.is_empty() {
-        return quote! {};
-    }
-    let dotted = binary_name.replace('/', ".");
-    quote! {
-        {
-            let __entries: ::std::vec::Vec<(
-                ::std::string::String,
-                __Shared<__DynFn!(() -> Result<Object>)>
-            )> = ::std::vec![#(#entries),*];
-            register_constant_directory(#dotted, __entries);
-        }
-    }
 }
 
 #[cfg(test)]

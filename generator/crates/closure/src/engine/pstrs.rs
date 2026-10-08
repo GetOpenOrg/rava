@@ -20,18 +20,23 @@
 //! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）与非常量实参同一口径登记为字段槽的输入，读者在写入方帧里
 //! 按拼接段求名字（求不出即推不出）；值未知的写入使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
 //! 读者不取槽。读取 String 字段的名字段由此取得全部写入名字（如按类型名查找服务时，类型名存于列表对象的字段）。
+//!
+//! 值映射字段同样有槽（`PSlot::V`，按字段、不分接收者）：经读字段的写入入口调用点把写入值并入，口径同 String 字段槽
+//! （字面量、形参子集边、其余值登记为输入，输入为调用点第 1 个实参即写入值）；读者见 `map_slot.rs`。
 
 use super::class_lookup::{event_at, expand, Gap, Part, MAX_NAMES};
 use super::name_eval::Frame;
 use super::sealed::{flatten, is_field};
 use super::*;
 
-/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）/ String 字段（字段节点序号）
+/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）/ String 字段（字段节点序号）/
+/// 值映射字段的存入值（字段节点序号）
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub(super) enum PSlot {
     M(usize, usize),
     H(u32, usize),
     F(usize),
+    V(usize),
 }
 
 #[derive(Default)]
@@ -49,6 +54,8 @@ pub(super) struct PStrs {
     /// 有实参值未知的调用边的方法 / 枢纽：形参槽推不出
     top_m: HashSet<usize>,
     top_h: HashSet<u32>,
+    /// 经字节码调用点以外的入口接入的方法（枢纽、引导阶段、反射调用、无调用点记录）：字段配对看不到这些入口
+    offsite: HashSet<usize>,
     /// 有非常量写入的 String 字段：字段槽推不出
     top_f: HashSet<usize>,
     /// 读过槽（按名取类遍历到的上游槽）的站点
@@ -99,7 +106,7 @@ impl<'a> Engine<'a> {
             .flatten()
             .filter_map(|s| match *s {
                 PSlot::M(t, j) => Some((t, j)),
-                PSlot::H(..) | PSlot::F(_) => None,
+                PSlot::H(..) | PSlot::F(_) | PSlot::V(_) => None,
             })
             .collect()
     }
@@ -179,6 +186,22 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 方法 t 经字节码调用点以外的入口接入：包装配对（`lookup_pair.rs`）只在字节码调用点上配对，这类方法形参上的
+    /// 名字按形参常量集与污染口径取（engine/field_names.rs）；首次登记时重跑读过其形参槽的站点
+    pub(super) fn pstr_offsite(&mut self, t: usize) {
+        if self.pstr.offsite.insert(t) {
+            for i in 0..self.methods[t].ptypes.len() {
+                for off in self.pstr_readers(t, i) {
+                    self.push_site((t, off), site_prof::TRIG_TAINT, None);
+                }
+            }
+        }
+    }
+
+    pub(super) fn pstr_is_offsite(&self, t: usize) -> bool {
+        self.pstr.offsite.contains(&t)
+    }
+
     /// 枢纽 h 有实参值未知的调用点接入：形参槽推不出
     pub(super) fn pstr_top_h(&mut self, h: u32) {
         if self.pstr.top_h.insert(h) {
@@ -228,6 +251,36 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 方法 m 偏移 off 的写入入口调用把值 v（调用点第 1 个实参，不含接收者）存入值映射字段（字段节点 fi）：并入值映射槽。
+    /// 字面量并入、形参透传登记子集边，其余值登记为槽的输入（读者在写入方帧里按拼接段求名字）
+    pub(super) fn pstr_map_put(&mut self, m: usize, off: u32, fi: usize, v: &V) {
+        let slot = PSlot::V(fi);
+        let lits = v.lit_ids();
+        if !lits.is_empty() {
+            self.pstr_add(slot, lits.into_iter().collect());
+        }
+        match v {
+            V::Null | V::Str(..) => {}
+            v if !computed(v) => {
+                for s in v.srcs().iter() {
+                    if let Src::Param(i) = s {
+                        self.pstr_edge(PSlot::M(m, *i as usize), slot);
+                    }
+                }
+            }
+            _ => {
+                if self.pstr.inputs.entry(slot).or_default().insert((m, off, 1)) {
+                    self.pstr_wake(slot);
+                }
+            }
+        }
+    }
+
+    /// 值映射字段（字段节点 fi）经读字段写入的全部名字与是否推得出（当前站点为读者）
+    pub(super) fn map_slot_names(&mut self, fi: usize, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
+        self.slot_names(PSlot::V(fi), depth)
     }
 
     /// 方法 m 的 String 形参槽 i 上的名字与是否推得出（当前站点为读者）；None = 非 String 形参 / 不在站点内
@@ -327,6 +380,7 @@ impl<'a> Engine<'a> {
                 PSlot::M(t, _) => self.pstr.top_m.contains(&t),
                 PSlot::H(h, _) => self.pstr.top_h.contains(&h),
                 PSlot::F(fi) => self.pstr.top_f.contains(&fi),
+                PSlot::V(_) => false,
             };
             complete &= !top;
             inputs.extend(self.pstr.inputs.get(&s).into_iter().flatten().copied());
@@ -391,8 +445,17 @@ impl<'a> Engine<'a> {
             }
             let owner = self.methods[cm].key.owner.clone();
             let f = Frame { m: Some(cm), a: &ca, owner: &owner, up: None };
-            match self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten) {
-                Some(names) => out.extend(names),
+            // 内部求值（Gap::Fail）的推不出只记在引擎级标志上：在这里收进本槽的「是否推得出」，不外泄给外层求值——
+            // 外层按自己的 gap 处理推不出的槽（按名取类为「已知名字 | 任意串」，按生成范围内的类名匹配），
+            // 而不是因上游某个调用方推不出把整个站点记为推不出
+            let saved = (std::mem::take(&mut self.lookup_incomplete), std::mem::take(&mut self.lookup_partial));
+            let r = self.name_parts(&f, &v, Gap::Fail, depth).as_deref().and_then(flatten);
+            let inner = std::mem::replace(&mut self.lookup_incomplete, saved.0) | std::mem::replace(&mut self.lookup_partial, saved.1);
+            match r {
+                Some(names) => {
+                    out.extend(names);
+                    complete &= !inner;
+                }
                 None => complete = false,
             }
         }

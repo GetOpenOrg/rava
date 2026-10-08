@@ -102,7 +102,7 @@ pub(super) fn site_of(v: &V) -> Option<u32> {
 }
 
 /// 事件里出现的全部值
-fn event_values(e: &Event) -> Vec<&V> {
+pub(super) fn event_values(e: &Event) -> Vec<&V> {
     match e {
         Event::Invoke { args, .. } | Event::Indy { args, .. } => args.iter().collect(),
         Event::Field { recv, value, .. } => recv.iter().chain(value.iter()).collect(),
@@ -206,7 +206,7 @@ impl<'a> Engine<'a> {
     }
 
     fn class_lookup_eval(&mut self, m: usize, off: u32, args: &[V]) -> Option<Vec<String>> {
-        let a = self.methods[m].analysis.clone()?;
+        let a = self.site_analysis(m)?;
         if a.conservative {
             return None;
         }
@@ -293,6 +293,11 @@ impl<'a> Engine<'a> {
             // 非调用结果（如直接读字段）：整体作为一段
             return self.segment_values(f, &v, Gap::Fail, depth).map(|p| vec![p]);
         };
+        if self.man.names.is_concat(&mref.to_string()) {
+            // 二元拼接：接收者段后接第 0 个实参段
+            let segs = vec![(args.first()?.clone(), b'L'), (args.get(1)?.clone(), b'L')];
+            return self.seg_parts(f, &segs, gap, depth);
+        }
         if !self.man.names.is_result(&mref.to_string()) {
             if let Some(r) = self.mirror_name(f, o) {
                 return r.map(|set| vec![Part::Any(set)]);
@@ -421,7 +426,8 @@ impl<'a> Engine<'a> {
         Some(segs)
     }
 
-    /// 引用值段：引擎方法形参（各调用点流入的名字）→ 类镜像取名 → 封存静态字段（值映射读取 / 常量字符串数组元素，`sealed.rs`）
+    /// 引用值段：引擎方法形参（各调用点流入的名字）→ 类镜像取名 → 二元拼接 → 封存值映射字段读取（`map_slot.rs`）→
+    /// 常量字符串数组元素（`sealed.rs`）
     /// → 常量表读取 → 枚举取值 → 返回字符串常量的辅助方法 → 辅助方法拼出的名字（按顺序取第一个成形的）
     fn segment_values(&mut self, f: &Frame, v: &V, gap: Gap, depth: u8) -> Option<Part> {
         let a = f.a;
@@ -443,6 +449,15 @@ impl<'a> Engine<'a> {
                 None => gap.wild().then_some(Part::Wild),
             };
         }
+        if let Some(Event::Invoke { mref, args, .. }) = event_at(a, o, is_invoke) {
+            if self.man.names.is_concat(&mref.to_string()) {
+                let segs = vec![(args.first()?.clone(), b'L'), (args.get(1)?.clone(), b'L')];
+                return self.seg_parts(f, &segs, gap, depth).map(|p| Part::Alt(vec![p]));
+            }
+        }
+        if let Some((set, complete)) = self.map_field_names(a, v, depth) {
+            return Some(self.partial_part(set, complete, gap));
+        }
         if let Some(set) = self.sealed_segment(a, v) {
             return Some(Part::Any(set));
         }
@@ -461,7 +476,7 @@ impl<'a> Engine<'a> {
                 }
             });
         }
-        if let Some(set) = self.enum_field_values(a, v) {
+        if let Some(set) = self.enum_field_values(f, v) {
             return Some(Part::Any(set));
         }
         if let Some((set, complete)) = f.m.and_then(|m| self.read_field_names(m, a, o, depth)) {

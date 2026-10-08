@@ -78,7 +78,8 @@ pub struct ClassPath {
     java_home: Option<PathBuf>,
     /// 档案下标 → 模块名（`module_of` 惰性填充）
     module_names: std::sync::OnceLock<Vec<Option<String>>>,
-    /// 覆盖档案（镜像改写类目录）的档案下标 → 所属模块名：目录本身无 module-info
+    /// JDK 侧无 module-info 的类目录的档案下标 → 所属模块名：镜像改写类目录（覆盖档案，登记名即 jmod 模块）、
+    /// 镜像独有类目录与 VM 支持类目录（[`crate::image`] 按模块给出，目录名即模块名）
     overlay_modules: HashMap<usize, String>,
     /// 依赖锁喂入的库档案路径 → 元数据
     lib_meta: HashMap<PathBuf, LibMeta>,
@@ -144,6 +145,13 @@ impl ClassPath {
         }
         self.archives.get_mut().unwrap_or_else(|e| e.into_inner()).push(a);
         self.origins.push(origin);
+        // 镜像独有类 / VM 支持类目录按模块给出（`<根>/<模块>/`，见 [`crate::image`]）：目录名即所属模块。
+        // VM 支持类可以落在模块原本没有的包里（如按协议名命名的 URL 处理器包），包归属由此登记，不按包借用
+        if origin == Origin::Image && path.is_dir() {
+            if let Some(m) = path.file_name().and_then(|n| n.to_str()) {
+                self.overlay_modules.insert(idx, m.to_string());
+            }
+        }
         self.module_names = std::sync::OnceLock::new();
         Ok(())
     }
@@ -286,10 +294,7 @@ impl ClassPath {
     /// 各档案的 module-info 只解析一次
     pub fn module_of(&self, name: &str) -> Option<String> {
         let &i = self.index.get(name)?;
-        if let Some(m) = self.overlay_modules.get(&i) {
-            return Some(m.clone());
-        }
-        self.ensure_module_names().get(i).cloned().flatten()
+        self.archive_module(i)
     }
 
     /// 档案级模块名（jmod / 模块化 jar 的描述符名；overlay 登记名另查 `overlay_modules`）
@@ -316,9 +321,77 @@ impl ClassPath {
         self.index.iter().map(|(n, &i)| (n.as_str(), i))
     }
 
-    /// 覆盖档案（镜像改写类目录）登记的模块名
+    /// JDK 侧无 module-info 的类目录（镜像改写 / 镜像独有 / VM 支持类目录）登记的模块名
     pub fn overlay_module(&self, idx: usize) -> Option<&str> {
         self.overlay_modules.get(&idx).map(String::as_str)
+    }
+
+    /// JDK 侧资源：只在 JDK / 镜像档案中查（模块资源；用户与库档案的文件属于应用类路径，由
+    /// [`ClassPath::class_path_files`] 承载）。`<类名>.class` 取该 JDK 类的解析胜出字节（与类本身同源，
+    /// 镜像改写类优先于 jmod）；其余按档案顺序首个命中。返回 (所属模块, 字节)：模块取命中档案的
+    /// 模块名（jmod 描述符名或 overlay 登记名）；命中档案无模块名时为 None（模块资源必属某个具名模块）
+    pub fn jdk_resource(&self, path: &str) -> Option<(String, Vec<u8>)> {
+        if let Some(name) = path.strip_suffix(".class") {
+            return match self.origin(name) {
+                Some(Origin::Jdk | Origin::Image) => Some((self.module_of(name)?, self.bytes(name)?)),
+                _ => None,
+            };
+        }
+        // 先在档案锁内找首个命中，放锁后再取模块名（模块名惰性解析同样要取档案锁）
+        let (i, b) = {
+            let mut a = lock(&self.archives);
+            a.iter_mut()
+                .enumerate()
+                .filter(|(i, _)| matches!(self.origins[*i], Origin::Jdk | Origin::Image))
+                .find_map(|(i, arch)| arch.read_resource(path).ok().flatten().map(|b| (i, b)))?
+        };
+        Some((self.archive_module(i)?, b))
+    }
+
+    /// 档案的模块名：overlay 登记名优先，其次档案描述符名
+    fn archive_module(&self, i: usize) -> Option<String> {
+        if let Some(m) = self.overlay_modules.get(&i) {
+            return Some(m.clone());
+        }
+        self.ensure_module_names().get(i).cloned().flatten()
+    }
+
+    /// JDK 具名模块 `module` 的内容是否含资源 `path`（参考 JDK 运行期映像的模块读取器语义：只查该模块所在的
+    /// JDK / 镜像档案；`<类名>.class` 取该类的解析胜出档案）
+    pub fn module_has_resource(&self, module: &str, path: &str) -> bool {
+        if let Some(name) = path.strip_suffix(".class") {
+            return matches!(self.origin(name), Some(Origin::Jdk | Origin::Image)) && self.module_of(name).as_deref() == Some(module);
+        }
+        let names = self.ensure_module_names();
+        let mut a = lock(&self.archives);
+        for (i, arch) in a.iter_mut().enumerate() {
+            if !matches!(self.origins[i], Origin::Jdk | Origin::Image) {
+                continue;
+            }
+            let m = self.overlay_modules.get(&i).map(String::as_str).or_else(|| names.get(i).and_then(|x| x.as_deref()));
+            if m == Some(module) && matches!(arch.read_resource(path), Ok(Some(_))) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 应用类路径（用户与库档案，加入序）的全部文件：(资源名, 字节)，按名稳定排序——同名按类路径序。
+    /// 读取失败记入 failures
+    pub fn class_path_files(&self) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut a = lock(&self.archives);
+        for (i, arch) in a.iter_mut().enumerate() {
+            if !matches!(self.origins[i], Origin::User | Origin::Lib) {
+                continue;
+            }
+            match arch.all_files() {
+                Ok(files) => out.extend(files),
+                Err(e) => lock(&self.failures).push((arch.path.display().to_string(), e.to_string())),
+            }
+        }
+        out.sort_by(|x: &(String, Vec<u8>), y| x.0.cmp(&y.0));
+        out
     }
 
     /// 某个档案内的资源（非类文件）

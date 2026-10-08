@@ -16,6 +16,8 @@ fn manifest_dir() -> PathBuf {
 
 /// lang.rs：语言锚点；tests.rs：`#[cfg(test)] mod tests;` 的外置测试模块
 const EXEMPT_FILES: [&str; 2] = ["lang.rs", "tests.rs"];
+/// 外置测试模块的另一命名形态：`#[cfg(test)] #[path = "<x>_tests.rs"] mod tests;`（如 project/jimage_tests.rs）
+const EXEMPT_TEST_SUFFIX: &str = "_tests.rs";
 const FORBIDDEN_PREFIXES: [&str; 6] = ["java/", "javax/", "jdk/", "sun/", "java.", "javax."];
 
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -85,7 +87,8 @@ fn no_jdk_class_literals_outside_lang() {
     assert!(!files.is_empty());
     let mut bad = Vec::new();
     for f in files {
-        if f.file_name().is_some_and(|n| EXEMPT_FILES.iter().any(|x| n == *x)) {
+        let exempt = f.file_name().and_then(|n| n.to_str()).is_some_and(|n| EXEMPT_FILES.contains(&n) || n.ends_with(EXEMPT_TEST_SUFFIX));
+        if exempt {
             continue;
         }
         let text = fs::read_to_string(&f).unwrap();

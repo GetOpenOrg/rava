@@ -2,10 +2,12 @@
 //!
 //! JDK 读数据文件的形态是 `X.class.getResourceAsStream("<名>")` / `getClass().getResourceAsStream(..)`
 //! 等，资源名为方法体里的 ldc 字符串常量（相对名如 `"x.dat"`、绝对名如 `"/p/q/y.data"`）；
+//! 类文件也是模块资源：`<类名>.class` 形态的字符串若指向 JDK 类，嵌入该类的类文件字节（JVM 上经 jrt 读出）。
 //! 资源名也可以无扩展名（`BreakIteratorResourceBundle` 以「所在类包名 + '/' + 信息束里的字符串」
 //! 拼出 `WordBreakIteratorData` 之类的路径）。调用链上方法体的每个路径形字符串按
 //! `Class.resolveName` 的规则解析（`/` 开头为绝对名，否则相对所在类的包；另按原样试一次，
-//! 对应 `ClassLoader.getResource` 的绝对名形态），类路径上存在的非类文件即嵌入。
+//! 对应 `ClassLoader.getResource` 的绝对名形态），JDK 档案中存在的非类文件即嵌入（用户与库档案的文件
+//! 属于应用类路径，由类路径资源表承载，计划 c1d §30.15）。
 //! 资源名也可以由拼接得出（ICU `Norm2AllModesSingleton(name)` 以「目录前缀 + 名 + `.nrm`」拼出
 //! `nfc.nrm`）：同一方法体里相邻的两个 ldc 常量为「`/` 结尾的目录前缀」与「`.` 开头的扩展名后缀」时
 //! 记为拼接模板，中间的动态段取调用链上方法体里的单段字符串常量（拼接实参的常量本身也是调用链上
@@ -15,14 +17,14 @@
 //! 按名装载的资源束（`ResourceBundle.getBundle` 的 `.properties` 束，`closure/src/engine/bundles.rs`）与
 //! 按名读取入口上拼接 / 字段得出的资源名（`closure/src/engine/res_lookups.rs`）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use resolve::classpath::ClassPath;
 
-/// 路径形字符串：非空、只含路径字符、无 `..` 段、不是类文件（是否为资源由类路径上是否存在决定）
+/// 路径形字符串：非空、只含路径字符、无 `..` 段（是否为资源由 JDK 档案中是否存在决定；`<类名>.class`
+/// 形态取该 JDK 类的类文件字节，如 `ClassLoader.getSystemResourceAsStream("java/lang/String.class")`）
 fn path_like(s: &str) -> bool {
     !s.is_empty()
-        && !s.ends_with(".class")
         && !s.ends_with('/')
         && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b'$'))
         && !s.split('/').any(|seg| seg == "..")
@@ -70,9 +72,16 @@ fn ext_suffix(s: &str) -> bool {
     s.len() > 1 && s.starts_with('.') && !s.contains('/') && path_like(s)
 }
 
-/// 由调用链上的字符串常量推导要嵌入的资源，并入闭包分析器按名求出的资源（`named`）：
-/// (资源路径, 字节)，按路径排序
-pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<String>) -> Vec<(String, Vec<u8>)> {
+/// 一份模块资源：所属模块、模块内资源名（jmod `classes/` 下的相对路径）、字节
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleResource {
+    pub module: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// 由调用链上的字符串常量推导要嵌入的资源，并入闭包分析器按名求出的资源（`named`），按资源名排序
+pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<String>) -> Vec<ModuleResource> {
     let mut names: BTreeSet<String> = named.clone();
     names.extend(strings
         .lits
@@ -88,8 +97,11 @@ pub(crate) fn derive(cp: &ClassPath, strings: &Strings<'_>, named: &BTreeSet<Str
             }
         }
     }
-    let found: BTreeMap<String, Vec<u8>> = names.into_iter().filter_map(|p| cp.resource(&p).map(|b| (p, b))).collect();
-    found.into_iter().collect()
+    // 只查 JDK 档案：用户与库档案的文件属于应用类路径，由类路径资源表承载（计划 c1d §30.15）
+    names
+        .into_iter()
+        .filter_map(|name| cp.jdk_resource(&name).map(|(module, bytes)| ModuleResource { module, name, bytes }))
+        .collect()
 }
 
 #[cfg(test)]
@@ -103,7 +115,7 @@ mod tests {
         assert!(path_like("WordBreakIteratorData"));
         assert!(!path_like("a b.txt"));
         assert!(!path_like("../x.dat"));
-        assert!(!path_like("p/q/A.class"));
+        assert!(path_like("p/q/A.class"));
         assert_eq!(candidates("p/q/Reader$1", "names.dat"), vec!["p/q/names.dat", "names.dat"]);
         assert_eq!(candidates("p/q/Table$1", "/p/q/table.data"), vec!["p/q/table.data"]);
         assert_eq!(candidates("Main", "x.dat"), vec!["x.dat"]);

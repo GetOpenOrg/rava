@@ -11,6 +11,10 @@
 #   stack_frame       栈帧查询点：原生二进制无 Java 栈帧，方法体的唯一可观察效果是「按抛出位置作布尔
 #                     判定」，VM 的运行期登记与栈帧判定逐例同解
 #   bytecode_generator 字节码生成器内部判定：只为「生成的字节码」服务，生成链截断后无语义消费方
+#   class_path        类路径运行模型：原生二进制无运行期应用类路径（用户决策 (c)，模块模式 cp = null 的等价；
+#                     计划 docs/plans/2026-10-01-c1d-closure-bloat.md §30.15）——类全集构建期静态链接，类路径资源
+#                     构建期嵌入（VM 支持类 jdk.internal.loader.EmbeddedClassPath）；方法体的唯一可观察效果是
+#                     「类路径元素 → 运行期加载源」或「自类路径加载」，VM 以构建期结果等价承载
 
 [[intrinsic]]
 member = "java/lang/StrictMath.sqrt:(D)D"
@@ -46,6 +50,36 @@ reason = "@CallerSensitive 注入调用器隐藏类按宿主由 VM 登记，静�
 member = "java/lang/invoke/MethodHandleImpl$BindCaller.generateInvokerTemplate:()[B"
 kind = "bytecode_generator"
 reason = "注入调用器模板类字节（ASM）；唯一消费方 makeInjectedInvoker 由 VM 承载 → 空模板"
+
+# 类路径运行模型（kind = class_path，手写类 ②）：jdk/internal/loader/url_class_path_impl.rs、builtin_class_loader_impl.rs
+[[intrinsic]]
+member = "jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;"
+kind = "class_path"
+reason = "类路径字符串元素不形成运行期加载源 → null（调用方 String 构造器 / addFile 跳过 null），应用 ucp 恒空"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;"
+kind = "class_path"
+reason = "类路径上无可定义的字节码（类全集构建期静态链接，闭包内的类由 findLoadedClass0 命中）→ null"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findResourceOnClassPath:(Ljava/lang/String;)Ljava/net/URL;"
+kind = "class_path"
+reason = "类路径资源为构建期嵌入表（hasClassPath 判定保留）→ EmbeddedClassPath.findResource"
+
+[[intrinsic]]
+member = "jdk/internal/loader/BuiltinClassLoader.findResourcesOnClassPath:(Ljava/lang/String;)Ljava/util/Enumeration;"
+kind = "class_path"
+reason = "类路径资源为构建期嵌入表（hasClassPath 判定保留）→ EmbeddedClassPath.findResources"
+
+# 类路径资源表的读取入口（§30.15）：其一在闭包调用链上时，发射层把应用类路径（用户与库档案）的全部文件
+# 按名嵌入用户侧元数据（UserMeta.class_path_resources），否则为空表。资源 URL（协议 ravacp）的连接与由字符串
+# 重建的 URL 都经 EmbeddedClassPath.openConnection 读这两个入口（§30.16）
+[class_path]
+resource_readers = [
+    "jdk/internal/loader/EmbeddedClassPath.count:(Ljava/lang/String;)I",
+    "jdk/internal/loader/EmbeddedClassPath.bytes:(Ljava/lang/String;I)[B",
+]
 
 # LambdaForm 编译：JDK 把 LambdaForm 编译为隐藏类字节码（ASM + defineHiddenClass），原生二进制以原生
 # LambdaForm 解释器承载全部句柄调用（MH-native，docs/plans/2026-09-26-mh-native.md §二-2）；编译入口
@@ -94,9 +128,12 @@ callsite_typed = [
 #           `<null_returns 调用> [astore k; aload k] <null_to_false 调用> ifeq L`——恒跳转，
 #           剪除 (分支, L) 之间的直线段（段内无外部跳入 / 异常表端点时才剪）。
 [vm_constants]
+# （VM.getSavedProperty 已移出：按字节码读映像中的 savedProps——initPhase1 构建期保存的属性表，
+# 引导映像第 4 步）
 null_returns = [
-    # VM 保存属性仅来自 -XX: / 归档选项；原生二进制无启动选项（vm_impl.rs getSavedProperty 恒 null）
-    "jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;",
+    # 类路径运行模型（[[intrinsic]] kind = class_path）：无运行期类路径加载源 / 类路径上无可定义的字节码
+    "jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;",
+    "jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;",
 ]
 null_to_false = [
     "java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z",
@@ -170,6 +207,36 @@ value_equals = [
 "java/lang/Character.toLowerCase:(C)C" = "char_to_lower_case"
 # 按 locale 小写：只在 ASCII 且不含 `I` 的串上折叠（此时各 locale 结果相同，土耳其语等的 `I` 例外不出现）
 "java/lang/String.toLowerCase:(Ljava/util/Locale;)Ljava/lang/String;" = "to_lower_case"
+# 形状判定（absint/shape.rs：已知前后缀 / 确定不出现的字符；接收者为常量时即按值）：
+# starts_with / ends_with 判定成立一侧另收窄被测局部变量的形状；index_of / last_index_of 所找字符确定不出现时为 -1
+# （带起点的形态只折叠 -1）；contains 实参为常量时判定
+"java/lang/String.startsWith:(Ljava/lang/String;)Z" = "starts_with"
+"java/lang/String.endsWith:(Ljava/lang/String;)Z" = "ends_with"
+"java/lang/String.indexOf:(I)I" = "index_of"
+"java/lang/String.indexOf:(II)I" = "index_of"
+"java/lang/String.indexOf:(Ljava/lang/String;)I" = "index_of"
+"java/lang/String.indexOf:(Ljava/lang/String;I)I" = "index_of"
+"java/lang/String.lastIndexOf:(I)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(II)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(Ljava/lang/String;)I" = "last_index_of"
+"java/lang/String.lastIndexOf:(Ljava/lang/String;I)I" = "last_index_of"
+"java/lang/String.contains:(Ljava/lang/CharSequence;)Z" = "contains"
+
+# 返回串的形状事实：非 null 结果一定以 prefix 开头、确定不含 excludes 中的 ASCII 字符（两项至少一项；
+# 实参常量能求出常量时取常量）。结果仍可为 null。
+# ParseUtil.encodePath：firstEncodeIndex 对 `#`（0x23）/ `?`（0x3F）——不在 a-z / `&`-`:` / A-Z 快速通道内——按
+# L_ENCODED 判定（两者的位 35 / 63 置位），命中即从该处起走 encodePath(path, index, sep) 逐字符转义为 `%23` / `%3F`；
+# 分隔符 sep 为 File.separatorChar 或 `/`，不是这两个字符。于是结果恒不含 `#` `?`
+# （fileToEncodedURL → new URL("file", "", path) 里的 indexOf('#') / lastIndexOf('?') 折叠为 -1）
+[facts.string_shapes]
+"sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;)Ljava/lang/String;" = { excludes = "#?" }
+"sun/net/www/ParseUtil.encodePath:(Ljava/lang/String;Z)Ljava/lang/String;" = { excludes = "#?" }
+# BootLoader.getSystemPackageLocation（native，手写边界类 1；落地语义属类 3「VM 注入状态」）：JVM 返回引导加载器
+# 所定义包的位置——命名模块的包为模块位置 `jrt:/<模块名>`，`-Xbootclasspath/a` 追加项上的包为该类路径项，未定义为
+# null。原生二进制没有 `-Xbootclasspath/a`（无启动参数注入，引导类全部来自构建期的模块镜像），所以结果只有 null 与
+# `jrt:/<模块名>` 两种。手写实现（a3-L1 / 引导映像第 5 步）须守此约定。用途：PackageHelper.definePackage 经
+# findModule 的 `startsWith("jrt:/")` 只走模块分支，`toFileURL` / `getManifest`（→ JarFile → JarVerifier）不可达
+"jdk/internal/loader/BootLoader.getSystemPackageLocation:(Ljava/lang/String;)Ljava/lang/String;" = { prefix = "jrt:/" }
 
 [facts.returns]
 # 断言的 VM 初值（`-ea` 缺省）：class_impl.rs desiredAssertionStatus0 恒 false。`desiredAssertionStatus()`
@@ -177,14 +244,17 @@ value_equals = [
 # `$assertionsDisabled = !X.class.desiredAssertionStatus()` 折叠为常量，assert 体不入闭包；应用 / 平台类按
 # 加载器的断言表在运行期求值
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = false
-# 原生二进制进入 main 时运行时已完成引导（vm_impl.rs：isBooted / isModuleSystemInited /
-# isJavaLangInvokeInited 恒 true）；引导期分支（如 ReflectionFactory.config 的 DEFAULT_CONFIG）不可达
+# 引导档位：isBooted / isModuleSystemInited 按字节码读 `VM.initLevel`。映像值为 SYSTEM_BOOTED（4，initPhase3
+# 写入），唯一写入方 `initLevel(int)` 只增（值须大于当前档位，shutdown 写 5）——用户代码可达处恒 true；
+# 引导期分支（如 ReflectionFactory.config 的 DEFAULT_CONFIG）不可达。残差步骤的上下文按
+# [concrete.boot.level_queries] 取构建期档位，不用本条。
+# （isJavaLangInvokeInited 不列：MethodHandleNatives 在 initPhase1 之后构建期初始化（[concrete.boot] calls），
+# 映像中 javaLangInvokeInited = true，静态字段非空 / 常量折叠按映像值与写点给出）
 "jdk/internal/misc/VM.isBooted:()Z" = true
 "jdk/internal/misc/VM.isModuleSystemInited:()Z" = true
-"jdk/internal/misc/VM.isJavaLangInvokeInited:()Z" = true
 
-# VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（System.registerNatives 按本表填充，
-# 与 system_impl.rs 的 initPhase1 对应物同源）。原生二进制无 `-D` 注入机制，因此：
+# VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（构建期引导映像执行 initPhase1 写入，宿主相关键
+# 经 SystemProps$Raw 启动重放取值，本表须与之一致）。原生二进制无 `-D` 注入机制，因此：
 #   values   取值恒定的键——读取折叠为该值
 #   dynamic  存在、但取值由宿主环境 / 语料 JDK（VersionProps）在启动期决定的键——不折叠
 #   其余键   启动时不存在——读取折叠为 null（带缺省值的读取折叠为缺省值）
@@ -198,9 +268,9 @@ holders = [
     "sun/security/action/GetPropertyAction.privilegedGetProperties:()Ljava/util/Properties;",
 ]
 dynamic = [
-    "java.home", "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
+    "line.separator", "user.dir", "user.home", "user.name", "java.io.tmpdir",
     "os.name", "os.arch", "os.version", "sun.arch.data.model", "sun.cpu.endian", "sun.io.unicode.encoding",
-    "sun.boot.library.path", "native.encoding", "sun.jnu.encoding", "user.timezone",
+    "native.encoding", "sun.jnu.encoding", "user.timezone",
     "user.language", "user.country",
     # VersionProps.init（翻译的字节码，取值随语料 JDK）
     "java.version", "java.version.date", "java.runtime.version", "java.runtime.name", "java.vendor.version",
@@ -216,6 +286,9 @@ queries = [
 ]
 
 [facts.system_properties.values]
+# U14：java.home 构建期钉值为嵌入虚拟树的根（[concrete.boot] vm_props 同值）
+"java.home" = "/java-runtime"
+"sun.boot.library.path" = "/java-runtime/lib"
 "file.separator" = "/"
 "path.separator" = ":"
 "java.class.path" = ""
@@ -253,8 +326,8 @@ queries = [
 [facts.field_writes]
 # 字段常量折叠的反射式写入来源（计划 C1c 第 1 步）。分析器按「全部写入来源」求字段值集，
 # 只有一个常量时把读取折叠掉；以下调用可达时相关字段不折叠。
-# 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名")）
-# 按字节码形状识别（同一调用含 Class 实参 / 接收者 + 字符串常量），不在此列。
+# 按名写入（objectFieldOffset(Class, "名") / findVarHandle / newUpdater / getDeclaredField("名") / 字段 MemberName 构造）
+# 见下方 name_resolvers，不在此列。
 # enumerators：返回字段句柄数组。句柄只有经下列 handle_writers 才能写字段：枚举结果带来源标记，标记随句柄
 #   沿字节码数据流传到 handle_writers 的句柄实参时，接收者是类字面量则只放开该类及其超类的字段，否则全部
 #   字段不折叠；只读句柄（取名字 / 修饰符 / 值，如 ObjectStreamClass.computeDefaultSUID）与按名字常量取到的
@@ -322,6 +395,41 @@ static_offset_getters = [
     "java/lang/invoke/MethodHandleNatives.staticFieldBase:(Ljava/lang/invoke/MemberName;)Ljava/lang/Object;",
     "java/lang/invoke/MethodHandleNatives.staticFieldOffset:(Ljava/lang/invoke/MemberName;)J",
 ]
+# static_bases：返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址——HotSpot 下是声明类的类镜像
+#   （unsafe__impl/access.rs staticFieldBase0 返回 Field.clazz）。分析器按调用点把结果取为句柄值集所指声明类的类镜像
+#   （枚举标记按口径类及其超类 / 超接口；推不出的为所指未知的类镜像），不按声明返回类型 open(Object)——
+#   否则 UnsafeStaticFieldAccessorImpl.base 为 open，Field.set 的全部值经静态访问器的 putReference 逃逸（c1d §30.17）
+static_bases = [
+    "jdk/internal/misc/Unsafe.staticFieldBase0:(Ljava/lang/reflect/Field;)Ljava/lang/Object;",
+]
+# handle_getters / handle_setters：按字段句柄（接收者）读 / 写对象实参（形参 0）的字段，setter 的写入值为形参 1。
+#   字节码调用点上接收者是字段枚举标记、且口径类 C 推得出时，分析器按调用点建模（engine/field_access.rs）：
+#   读的结果 = 对象实参里 C 的子类型对象在 C（含超类）引用实例字段上的值 ∪ C 及其超类 / 超接口的静态引用字段
+#   ∪ 基本类型字段的装箱值（取被调方返回值中该装箱类的值）；写入值落到同一组字段。对象实参与写入值不再流入
+#   被调方形参——否则它们经 FieldAccessor 接口汇合（45 个访问器实现）与访问器内 getter / setter 的
+#   MethodHandle.invokeExact 手写值池整组逃逸（c1d §30.17 成因 4）。接收者不是枚举标记或口径推不出时照常接边
+handle_getters = [
+    "java/lang/reflect/Field.get:(Ljava/lang/Object;)Ljava/lang/Object;",
+    "java/lang/reflect/Field.getBoolean:(Ljava/lang/Object;)Z",
+    "java/lang/reflect/Field.getByte:(Ljava/lang/Object;)B",
+    "java/lang/reflect/Field.getChar:(Ljava/lang/Object;)C",
+    "java/lang/reflect/Field.getShort:(Ljava/lang/Object;)S",
+    "java/lang/reflect/Field.getInt:(Ljava/lang/Object;)I",
+    "java/lang/reflect/Field.getLong:(Ljava/lang/Object;)J",
+    "java/lang/reflect/Field.getFloat:(Ljava/lang/Object;)F",
+    "java/lang/reflect/Field.getDouble:(Ljava/lang/Object;)D",
+]
+handle_setters = [
+    "java/lang/reflect/Field.set:(Ljava/lang/Object;Ljava/lang/Object;)V",
+    "java/lang/reflect/Field.setBoolean:(Ljava/lang/Object;Z)V",
+    "java/lang/reflect/Field.setByte:(Ljava/lang/Object;B)V",
+    "java/lang/reflect/Field.setChar:(Ljava/lang/Object;C)V",
+    "java/lang/reflect/Field.setShort:(Ljava/lang/Object;S)V",
+    "java/lang/reflect/Field.setInt:(Ljava/lang/Object;I)V",
+    "java/lang/reflect/Field.setLong:(Ljava/lang/Object;J)V",
+    "java/lang/reflect/Field.setFloat:(Ljava/lang/Object;F)V",
+    "java/lang/reflect/Field.setDouble:(Ljava/lang/Object;D)V",
+]
 
 # name_resolvers：按名取字段身份的入口（名字 → 偏移 / setter / VarHandle / 更新器 / 字段句柄）。
 #   class = Class 实参形参序号（"receiver" = 接收者本身），name = 字段名形参序号（均不含接收者），
@@ -329,8 +437,17 @@ static_offset_getters = [
 #   类字面量 + 名字常量的调用折叠为符号偏移，供按偏移读写的手写调用点只触及该字段）。名字是常量时按上面的形状规则放开；
 #   名字取自形参时按各调用点的常量逐个放开；形参出现过非常量实参、或名字来自字段读 / 调用返回 / 拼接时，
 #   放开 class 所指类（类字面量）及其超类的全部字段，推不出类则全部字段不折叠；handle = true 的按字段枚举
-#   处理（结果句柄带来源标记，流到句柄写入口才放开）。JDK 内部的 resolveOrFail / MemberName 构造只经下列公开入口取字段
-#   写入能力（ClassSpecializer 的 resolveOrFail 取 species 字段的 getter，只读），不在此列
+#   处理（结果句柄带来源标记，流到句柄写入口才放开）。名字取自字段读时取该 String 字段各写入处的字符串常量，取自
+#   辅助方法返回时取其返回常量候选。类与名字都取自所在方法形参时登记字段配对，各调用点按本点实参放开（逐层上推）。
+#   本表是按名取字段身份的全部入口（清单即边界）：分析器不按调用形状（Class + String 实参）兜底放开同名字段。
+#   kind = 引用种类（JVMS §5.4.3.5 reference_kind）形参序号，read_kinds = 只读种类（1 REF_getField / 2 REF_getStatic）：
+#   该实参是只读种类的常量时只取读取能力，不放开。按名字段 MemberName 的取法：Lookup.resolveOrFail(byte, Class,
+#   String, Class)——Lookup 全部按名字段查找（findSetter / findGetter / findVarHandle …）与 JDK 内部直接解析
+#   （ClassSpecializer$Factory.linkCodeToSpeciesData 以 REF_putStatic 解析 species 字段后经 Unsafe.putReference 写入）
+#   都经此；MemberName(byte, Class, String, Object) 是方法句柄常量链接（Lookup.linkMethodHandleConstant）的入口。
+#   MemberName(Class, String, Class, byte) 不列：java.base 内调用者只有上面的 resolveOrFail 与
+#   DirectMethodHandle.createFunction（REF_getStatic 常量，只读）；列入则 resolveOrFail 内的引用种类是形参，
+#   getter 查找也会按写入配对放开
 [facts.field_writes.name_resolvers]
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = { class = 0, name = 1, offset = true }
 "java/lang/invoke/MethodHandles$Lookup.findSetter:(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;" = { class = 0, name = 1 }
@@ -342,6 +459,8 @@ static_offset_getters = [
 "java/util/concurrent/atomic/AtomicLongFieldUpdater.newUpdater:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/concurrent/atomic/AtomicLongFieldUpdater;" = { class = 0, name = 1 }
 "java/lang/Class.getDeclaredField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
 "java/lang/Class.getField:(Ljava/lang/String;)Ljava/lang/reflect/Field;" = { class = "receiver", name = 0, handle = true }
+"java/lang/invoke/MethodHandles$Lookup.resolveOrFail:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MemberName;" = { kind = 0, class = 1, name = 2, read_kinds = [1, 2] }
+"java/lang/invoke/MemberName.<init>:(BLjava/lang/Class;Ljava/lang/String;Ljava/lang/Object;)V" = { kind = 0, class = 1, name = 2, read_kinds = [1, 2] }
 
 [facts.reflect]
 # 反射成员面（闭包分析，generator `rava closure` 读取）。VM 按类镜像构造反射对象、再按反射对象调用其成员；
@@ -356,6 +475,7 @@ static_offset_getters = [
 #                       调用时，值集 = M 各压栈调用边上调用方所在类的镜像（生成器在被调引用解析到 CS 声明的字节码
 #                       调用点压入调用方类）；M 另有不压栈的调用边（手写体、lambda / 方法句柄转接等）时再并入全部
 #                       压栈调用方类与根类（运行期取外层栈顶或回退）；在非 CS 方法体内调用时所指未知
+#                       结果恒非 null（运行期无调用者时回退根类，reflection_impl.rs），分析按非空引用折叠 null 判定
 #   methods / constructors / record_accessors  成员枚举：接收者镜像所指类的声明方法 / 构造器 /
 #                       record 组件访问器成为反射对象（class_impl.rs，按 build.rs 元数据表构造）
 #   method_lookups      按名查找方法：同一调用里的类字面量 + 方法名常量点名反射目标（字段查找不在此列）
@@ -527,16 +647,46 @@ instantiators = [
 [facts.reflect.array_allocators]
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = 0
 
+# 直连反射调用：反射调用入口 → 非 @CallerSensitive 目标的特化入口（VM 支持类 Method$Direct，java_support/）。
+# Method.invoke 的体对任意反射对象都要判 isCallerSensitive（解析方法注解）、取访问器、按 CS 与否两路调用访问器；
+# 这些分支的取舍取决于运行期的反射对象，分析器无从折叠，使经它的每个调用点都把注解解析与 CS 访问器链带进闭包。
+# 调用点的反射对象来自同方法内的常量名查找（lookups 所列入口，形参类型数组为空）、查找类集已知、解析出的目标全是
+# 无参、返回引用或 void、非 @CallerSensitive 的静态方法时，isCallerSensitive 恒为假、访问器恒为本地访问器
+# （jdk.reflect.useNativeAccessorOnly），Method.invoke 的执行即「未 override 时访问检查 + 本地访问器 invoke0」，
+# 与 helper 逐句一致。分析器把调用点接到 helper 与各目标（目标入反射分派面），经 folds `direct_calls` 把调用指令
+# 改写为 invokestatic helper（engine/reflect_direct.rs、input/norm.rs）。典型调用点：Class.getEnumConstantsShared 的
+# `getMethod("values").invoke(null)`。lookups 口径：public = Class.getMethod（公开成员沿超类链）；declared = 只查声明类
+[facts.reflect.direct_invokers."java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"]
+helper = "java/lang/reflect/Method$Direct.invoke:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
+lookups = { "java/lang/Class.getMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "public", "java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "declared" }
+
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
 
 # 值映射：新建即空、writers 按（键, 值）存入、readers 只返回已存入的值或 null 的映射实现类。
-# 封存的静态映射字段（private static，嵌套成员内的写入全是「新建本表 → 构造 → 写入 → putstatic」，读取全是 readers 的接收者）
-# 的读取结果候选 = 全部写入值的字符串候选（按名取类的拆段，engine/sealed.rs）
+# 封存的映射字段（private，静态或实例）：嵌套内每次写字段都是「新建本表 → 无内容构造 → 若干次写入 → putstatic / putfield」
+# （或写 null），每次读字段的值只作为 readers / writers / keeps 的接收者，或传给只以其为 readers / keeps 接收者的
+# 静态 / 私有辅助方法。映射对象不逃逸，读取结果只能是某次写入的值或 null：候选 = 新建点写入值 ∪ 经读字段写入的值
+# （引擎在每个写入点登记值映射槽，写入值为辅助方法形参时沿形参常量集取各调用点实参，engine/sealed.rs、map_slot.rs）。
+# 典型：jdk.charsets 扩展提供者的 classMap（TreeMap 实例字段，构造器经 charset(名, 类名, 别名) 以常量实参写入）。
+# keeps：不存入新值、不交出已存值的入口（删除 / 判定 / 清空 / 键视图——键视图不支持添加，JDK Map.keySet 规范）；
+# empty_ctors：带引用实参、但新建的映射为空的构造器（比较器构造，TreeMap(Comparator) 规范）
 [facts.reflect.value_maps]
-classes = ["java/util/HashMap", "java/util/concurrent/ConcurrentHashMap"]
-writers = ["put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"]
+classes = ["java/util/HashMap", "java/util/concurrent/ConcurrentHashMap", "java/util/TreeMap"]
+writers = [
+    "put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    "putIfAbsent:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]
+keeps = [
+    "remove:(Ljava/lang/Object;)Ljava/lang/Object;",
+    "containsKey:(Ljava/lang/Object;)Z",
+    "clear:()V",
+    "isEmpty:()Z",
+    "size:()I",
+    "keySet:()Ljava/util/Set;",
+]
+empty_ctors = ["<init>:(Ljava/util/Comparator;)V"]
 
 [facts.string_concat]
 # 字符串拼接链：新建构建器（可带初始内容）→ 逐段追加（返回接收者本身）→ 取结果。追加可是取结果前的独立语句
@@ -566,6 +716,10 @@ resets = [
 # 取简单名）时，起点为常量取该后缀，否则取接收者各候选的全部后缀（超集，候选名只保留类路径上存在的类）
 suffixes = [
     "java/lang/String.substring:(I)Ljava/lang/String;",
+]
+# 二元拼接：结果是接收者后接第 0 个实参（String.concat 规范）——名字段与前缀以 concat 相接时按两段拆
+concats = [
+    "java/lang/String.concat:(Ljava/lang/String;)Ljava/lang/String;",
 ]
 
 [facts.empty_collections]
@@ -629,6 +783,23 @@ factories = [
 "java/lang/invoke/VarHandle.getAndSet:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
 "java/lang/invoke/VarHandle.getAndSetAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
 "java/lang/invoke/VarHandle.getAndSetRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = { dst = 0, last = true, fields = true }
+# VarHandle 数值读-改-写访问模式（getAndAdd / getAndBitwiseOr / And / Xor 及 Acquire / Release 档位，var_handle_impl.rs
+# `getAndAdd` / `_get_and_bitwise`）：只作用于布尔 / 整数 / 浮点载体，引用载体抛 UnsupportedOperationException——
+# 不读写任何引用字段或引用元素，返回装箱的旧基本值。登记为无引用写入：手写体里共用的引用读取臂
+# （`_field_read` → Unsafe.getReference[Volatile]）运行期不可达，不以值池为基址另建读取；未登记时按保守规则，
+# 读取结果经产出回流值池再作基址，逐层读遍偏移已放开的引用字段，并把值池写进实参数组（计划 c1d §30.17）
+"java/lang/invoke/VarHandle.getAndAdd:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndAddAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndAddRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOr:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOrAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseOrRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAnd:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAndAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseAndRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXor:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXorAcquire:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/invoke/VarHandle.getAndBitwiseXorRelease:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 # 只读：引用读取、调用器（实参数组原样转交目标方法，目标方法的写入按其自身建模）、栈帧填充（写元素对象的字段）
 "jdk/internal/misc/Unsafe.getReference:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
 "jdk/internal/misc/Unsafe.getReferenceVolatile:(Ljava/lang/Object;J)Ljava/lang/Object;" = {}
@@ -640,6 +811,7 @@ factories = [
 "java/lang/invoke/MethodHandle.linkToSpecial:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/invoke/MethodHandle.linkToInterface:([Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
+"java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = {}
 "java/lang/StackTraceElement.initStackTraceElements:([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V" = {}
 
@@ -720,6 +892,10 @@ members = [
 # 应用无法构造其中的处理器；pkgs 前缀取到的同样是 `<前缀>.<protocol>.Handler`）、内建工厂 URL$DefaultFactory
 # （file / jar / jrt 直接 new，其余按 "sun.net.www.protocol." + protocol + ".Handler" 反射构造）——
 # 返回的内建处理器都是 sun/net/www/protocol/<protocol>/Handler。
+# 构建期嵌入资源的协议 ravacp 同走这条路径：其处理器是 VM 支持类 sun/net/www/protocol/ravacp/Handler
+# （runtime/java_support，EmbeddedClassPath 构造 URL 时 new 它而入闭包），由字符串重建的 ravacp URL 经内建工厂的
+# 按名取类（[facts] class_lookups：协议名推不出时按闭包内类名匹配 "sun.net.www.protocol.*.Handler"）取到同一个类，
+# 按本条 class_pattern 键为 "ravacp"（计划 c1d §30.16）
 # URL(URL context, String spec, URLStreamHandler handler) 的查找点读 this.protocol：只在 handler 实参为 null、且未沿用
 # context 的处理器（context.handler 恒非 null）时到达，此时 spec 必带协议且 protocol 即 spec 解析出的协议名；
 # spec 不带协议时要么沿用 context 处理器、要么抛 MalformedURLException("no protocol")，不按协议查找
@@ -776,20 +952,17 @@ component_equals = "java/util/Objects.equals:(Ljava/lang/Object;Ljava/lang/Objec
 # `属主.字段名:描述符`；receiver = true 的钩子是属主上的接收者方法（`fn(&self) -> Result<&Self>`），
 # 发射为 `recv.hook()?.__get_x()`；否则为宿主类静态 fn，访问（读 / 写）前调用。手写体属
 # docs/reference/handwritten-boundary.md 准入第 ③ 类（VM 注入状态）。
-# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充；
-# - ClassLoader.scl / Thread.contextClassLoader：initPhase3 的系统类加载器段（initSystemClassLoader +
-#   初始线程 setContextClassLoader），两步均走字节码，进程内执行一次。
-# - ModuleLayer.servicesCatalog：boot layer 的服务目录（initPhase2 initServices 登记引导层各模块 provides），
-#   取引导服务目录；其他层按字节码由 nameToModule 惰性建立，钩子空操作。
+# - Class.classLoader：类镜像的定义加载器（java_lang_Class::create_mirror），按类块属性 `defining_loader` 填充。
+#   引导加载器定义的类恒为 null，钩子对其为空操作（boot_noop）。
+#   （ClassLoader.scl / Thread.contextClassLoader 由构建期引导映像给出：initPhase3 构建期执行，初始线程为映像
+#   中的 main 线程，启动序列绑定到 OS 主线程。）
+# - Class.module：类镜像所属模块（create_mirror 按包条目写入），按「定义加载器 + 包」查 VM 模块表（启动序列以
+#   映像中 defineModule0 登记的模块为初值），未登记的包归定义加载器的无名模块（class_impl.rs `__vm_module`）。
+#   闭包分析器给该钩子的值池接上映像 VM 模块表的模块（[concrete.vm_fields] class_module）。
 [vm_state.field_hooks]
-"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true }
-"java/lang/ClassLoader.scl:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
-"java/lang/Thread.contextClassLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/ClassLoader.__vm_init_phase3" }
-"java/lang/ModuleLayer.servicesCatalog:Ljdk/internal/module/ServicesCatalog;" = { hook = "java/lang/ModuleLayer.__vm_services_catalog", receiver = true }
+"java/lang/Class.classLoader:Ljava/lang/ClassLoader;" = { hook = "java/lang/Class.__vm_defining_loader", receiver = true, boot_noop = true }
+"java/lang/Class.module:Ljava/lang/Module;" = { hook = "java/lang/Class.__vm_module", receiver = true }
 
-# loader_map：JDK 模块 → 内建加载器（ModuleLoaderMap 的构建期生成表：<clinit> 把 boot / platform 模块名
-# 集合写入两个静态字段）。生成器据此给 JDK 类定出定义加载器：boot 集合 → 引导（null），platform 集合 →
-# 平台加载器，其余 JDK 模块 → 应用加载器；用户类与库类为应用加载器。
 [vm_state.loader_map]
 class = "jdk/internal/module/ModuleLoaderMap$Modules"
 boot = "bootModules"
@@ -829,6 +1002,10 @@ memo_fields = [
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
 ]
+# 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
+# （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
+# 不再解析泛型签名）。求值对映像状态还有其他写入、或值的对象图不可物化时照旧按冷 / 热之并
+image_memo_fields = ["java/lang/Class.genericInfo"]
 # 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结；
 # 声明在这类类型上的静态字段所指映像数组同样冻结。
 # Pattern 的契约是「实例不可变、可多线程共享」：节点图与字符谓词在构造（compile）中建成，匹配状态全在 Matcher；
@@ -846,6 +1023,11 @@ stable_types = [
     "java/util/regex/Pattern$Node",
     "java/util/regex/Pattern$CharPredicate",
 ]
+# 软引用（含子类型须精确登记）：导出映像时 referent 不在映像其余部分可达集内即清除（JLS 软引用「可随时清除」
+# 语义；Class.reflectionData 等缓存的构建期反射对象由此不入映像，运行期按需重建）。引用须未入队
+# （queue 为 null 或属 null_queues 类型）
+soft_references = ["java/lang/ref/SoftReference"]
+null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 
 # 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
 # `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
@@ -881,6 +1063,7 @@ stable_types = [
 "java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
 "java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+"java/lang/ClassLoader.findBootstrapClass:(Ljava/lang/String;)Ljava/lang/Class;" = "boot_class"
 # 原生二进制不携带 CDS 归档（cds_impl.rs / vm_impl.rs）：查询恒 false、归档恢复为空操作、转储种子恒 0
 "jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
 "jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
@@ -899,6 +1082,12 @@ stable_types = [
 "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
 "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+# 反射（engine/concrete/reflect.rs；HotSpot Reflection::new_method / invoke_method 同义）
+"java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;" = "class_declared_methods"
+"java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;" = "class_declared_constructors"
+"java/lang/Class.getConstantPool:()Ljdk/internal/reflect/ConstantPool;" = "class_constant_pool"
+"jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
+"java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
 
 # 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
 # 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
@@ -917,18 +1106,56 @@ string_coder = "java/lang/String.coder"
 component_type = "java/lang/Class.componentType"
 reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
+module_loader = "java/lang/Module.loader"
+reference_queue = "java/lang/ref/Reference.queue"
+# VM 构造反射方法 / 构造器对象时写入的布局字段（reflect.rs，键前缀 method_ / ctor_）
+method_clazz = "java/lang/reflect/Method.clazz"
+method_name = "java/lang/reflect/Method.name"
+method_parameter_types = "java/lang/reflect/Method.parameterTypes"
+method_return_type = "java/lang/reflect/Method.returnType"
+method_exception_types = "java/lang/reflect/Method.exceptionTypes"
+method_modifiers = "java/lang/reflect/Method.modifiers"
+method_slot = "java/lang/reflect/Method.slot"
+method_signature = "java/lang/reflect/Method.signature"
+method_annotations = "java/lang/reflect/Method.annotations"
+method_parameter_annotations = "java/lang/reflect/Method.parameterAnnotations"
+method_annotation_default = "java/lang/reflect/Method.annotationDefault"
+ctor_clazz = "java/lang/reflect/Constructor.clazz"
+ctor_parameter_types = "java/lang/reflect/Constructor.parameterTypes"
+ctor_exception_types = "java/lang/reflect/Constructor.exceptionTypes"
+ctor_modifiers = "java/lang/reflect/Constructor.modifiers"
+ctor_slot = "java/lang/reflect/Constructor.slot"
+ctor_signature = "java/lang/reflect/Constructor.signature"
+ctor_annotations = "java/lang/reflect/Constructor.annotations"
+ctor_parameter_annotations = "java/lang/reflect/Constructor.parameterAnnotations"
+constant_pool_oop = "jdk/internal/reflect/ConstantPool.constantPoolOop"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
 # 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image
 # 与 `rava audit boot`。值：`@deferred` = 宿主相关（运行期取宿主值；构建期读其内容即「延迟值参与求值」，
 # 所在根帧调用 / 区段残差化或所在类转为运行期初始化）；`@null` = null；`@jdk_feature` = 参考 JDK 特性版本号。
 # 用户决策 U1（2026-10-05）：sun.jnu.encoding、stdout/stderr.encoding、file.encoding（JDK 25 为 native.encoding）、
-# line.separator、java.home 不钉值，一律延迟。
+# line.separator 不钉值，一律延迟。U14（2026-10-08）改判 java.home：构建期钉值——原生二进制不依赖 JDK 安装，
+# `${java.home}` 是构建期嵌入的虚拟树（jdk_resources::JAVA_RUNTIME_HOME：lib/modules 为本程序 jimage、
+# conf/security 为参考 JDK 的安全配置，boot-image §5.7），sun.boot.library.path 随之为 `${java.home}/lib`；
+# 与运行期 SystemProps$Raw.vmProperties 的回答一致。
 [concrete.boot]
 calls = [
     ["java/lang/System.initPhase1:()V"],
+    # HotSpot Threads::initialize_jsr292_core_classes：initPhase1 之后、initPhase2 之前初始化的 JSR 292 核心类
+    # （MethodHandleNatives.<clinit> 经 VM.setJavaLangInvokeInited 置位）
+    { init = ["java/lang/invoke/MethodHandle", "java/lang/invoke/ResolvedMethodName", "java/lang/invoke/MemberName", "java/lang/invoke/MethodHandleNatives"] },
     ["java/lang/System.initPhase2:(ZZ)I", 0, 0],
     ["java/lang/System.initPhase3:()V"],
+    # 非 HotSpot 步骤（U13）：泛型信息缓存命中路径（Class.getGenericInfo）与 ClassRepository.NONE 比较，其类须在
+    # 构建期初始化——运行期不再执行 <clinit>（解析 "Ljava/lang/Object;" 签名）。纯类：<clinit> 只构造 NONE
+    { init = ["sun/reflect/generics/repository/ClassRepository"] },
+    # U12 ①（构建期确定日志后端，计划 2026-10-05-boot-image-evaluator §5.9.7）：只求值后端探测类——SCL 上的
+    # LoggerFinder 提供者与已装 DefaultLoggerFinder 提供者是否存在、JUL 配置属性（U12：日志路径属性取构建期值）。
+    # HotSpot 在首次取日志器时才初始化它，结果只取决于这三项构建期事实，提前求值与之同值；不跑
+    # LoggerFinderLoader.service()——它末尾的 redirectTemporaryLoggers 会置 logManagerConfigured，与 HotSpot
+    # 启动后的状态不一致（§5.9.3 语义问题）。getLoggerFinder 整体求值仍不登记（经 FilePermCompat → Security 残差化）
+    { init = ["jdk/internal/logger/BootstrapLogger$DetectBackend"] },
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [
@@ -942,9 +1169,13 @@ objects = [
     ["java/lang/Thread", "(Ljava/lang/ThreadGroup;Ljava/lang/String;)V", "@1", "str:main"],
 ]
 current_thread = 2
+# 引导档位（HotSpot 由 initPhase1~3 经 `VM.initLevel(int)` 写入）：残差步骤记录构建期档位，启动序列在重放该步骤前
+# 把档位写回本字段、序列末尾恢复映像值（单一字段，与 HotSpot 同），闭包分析在档位上下文中按 level_queries 折叠——
+# 与 JVM 引导期次序一致
+level = "jdk/internal/misc/VM.initLevel"
 vm_props = [
-    ["java.home", "@deferred"],
-    ["sun.boot.library.path", "@deferred"],
+    ["java.home", "/java-runtime"],
+    ["sun.boot.library.path", "/java-runtime/lib"],
     ["java.library.path", ""],
     ["java.class.path", ""],
     ["java.vm.specification.name", "Java Virtual Machine Specification"],
@@ -984,6 +1215,11 @@ user_dir = "@deferred"
 user_home = "@deferred"
 user_name = "@deferred"
 
+# 按档位定值的 VM 查询：成员 → 门限（initLevel ≥ 门限为 true；JDK VM.java 的 isBooted / isModuleSystemInited）
+[concrete.boot.level_queries]
+"jdk/internal/misc/VM.isBooted:()Z" = 4
+"jdk/internal/misc/VM.isModuleSystemInited:()Z" = 2
+
 [concrete.boot.natives]
 "java/lang/System.registerNatives:()V" = "noop"
 "jdk/internal/util/SystemProps$Raw.vmProperties:()[Ljava/lang/String;" = "props:vm"
@@ -1003,6 +1239,11 @@ user_name = "@deferred"
 "java/lang/Thread.currentCarrierThread:()Ljava/lang/Thread;" = "boot_current_thread"
 "java/security/AccessController.getStackAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
 "java/security/AccessController.getInheritedAccessControlContext:()Ljava/security/AccessControlContext;" = "const:null"
+# 调用方保护域：与运行期 access_controller_impl.rs 同（恒 null，原生二进制无代码源保护域）
+"java/security/AccessController.getProtectionDomain:(Ljava/lang/Class;)Ljava/security/ProtectionDomain;" = "const:null"
+# 系统模块读取器的资源存在判定（ModuleReader.find 的唯一映像访问点）：按参考 JDK 模块内容回答，构建期不读
+# ${java.home}/lib/modules（U12 ①：LoggerFinder 提供者查找经 BuiltinClassLoader.findMiscResource 遍历各模块）
+"jdk/internal/module/SystemModuleFinders$SystemModuleReader.containsImageLocation:(Ljava/lang/String;)Z" = "module_resource:module"
 # 线程 id 计数器：原生地址（thread_impl.rs NEXT_THREAD_ID）→ VM 单元
 "java/lang/Thread.getNextThreadIdOffset:()J" = "vm_cell:next_thread_id"
 "java/lang/ref/Reference.refersTo0:(Ljava/lang/Object;)Z" = "refers_to"
@@ -1016,9 +1257,11 @@ user_name = "@deferred"
 "jdk/internal/misc/Unsafe.shouldBeInitialized0:(Ljava/lang/Class;)Z" = "unsafe_should_be_init"
 # 文件系统查询：宿主相关
 "java/io/UnixFileSystem.canonicalize0:(Ljava/lang/String;)Ljava/lang/String;" = "defer_value"
-# 空类路径元素 = 当前目录（宿主相关）：URL 由运行期重放 toFileURL 得到（U3）；登记为非空（当前目录不可规范化时
-# toFileURL 返回 null，映像按非空处理，见计划 §8）
-"jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;" = "defer_call"
+# 类路径运行模型（[[intrinsic]] kind = class_path，§30.15）在构建期同样成立：映像里的应用 ucp 与运行期一样恒空、
+# 不从类路径定义类。引导求值不取有字节码方法的返回值事实（[vm_constants] null_returns 只描述运行期），故在此显式给出；
+# 否则执行 toFileURL 的字节码（File 规范化 → 宿主相关的延迟值），initPhase2 在已登记模块表之后撤回而映像求值失败
+"jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;" = "const:null"
+"jdk/internal/loader/BuiltinClassLoader.findClassOnClassPathOrNull:(Ljava/lang/String;)Ljava/lang/Class;" = "const:null"
 "java/io/UnixFileSystem.getBooleanAttributes0:(Ljava/io/File;)I" = "defer_value"
 # 构建期单线程：监视器通知为空操作
 "java/lang/Object.notifyAll:()V" = "noop"

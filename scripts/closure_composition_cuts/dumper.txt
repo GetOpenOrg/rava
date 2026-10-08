@@ -1,0 +1,3 @@
+# ClassFileDumper 调试转储目录（调试属性构建期折叠）
+jdk/internal/util/ClassFileDumper$2.run:()Ljava/nio/file/Path;
+jdk/internal/util/ClassFileDumper.validateDumpDir:(Ljava/lang/String;)Ljava/nio/file/Path;

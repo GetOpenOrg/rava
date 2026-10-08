@@ -40,8 +40,6 @@ pub struct ExecState {
     /// StackWalker 锚定的帧流（`AbstractStackWalker.callStackWalk` / `fetchStackFrames`）
     pub(crate) walk_anchors: RefCell<HashMap<i64, crate::vm_stack::AnchoredWalk>>,
     pub(crate) next_walk_anchor: Cell<i64>,
-    /// 正在执行的引导段所处的 initLevel（`VM.initLevel`；None = 段外）
-    pub(crate) boot_level: Cell<Option<i32>>,
 }
 
 impl ExecContext {

@@ -9,7 +9,19 @@ impl<'a> Engine<'a> {
             let from = self.via_node(&via);
             cut::edge(&from, &format!("I:{cls}"));
         }
-        if cls.starts_with('[') || self.inited.contains_key(cls) {
+        if cls.starts_with('[') {
+            return;
+        }
+        // 构建期初始化尝试先于档位登记：档位上下文按类的构建期初始化结局决定是否登记 `<clinit>`，
+        // 结局须在登记前确定（否则取决于该类此前是否经别的路径尝试过，闭包随处理次序变化）
+        let settled = self.inited.contains_key(cls) || self.image_init(cls, &via);
+        if !self.level_ctxs.is_empty() {
+            let lc = self.via_level_any(&via);
+            if lc != NOCTX {
+                self.level_init(cls, lc);
+            }
+        }
+        if settled {
             return;
         }
         let Some(cf) = self.touch(cls, Level::Init, via.clone()) else { return };
@@ -78,8 +90,17 @@ impl<'a> Engine<'a> {
 
     /// 方法节点（按声明类 + 名字 + 描述符 + 克隆上下文）；首次登记入队。只有字节码方法按上下文克隆
     pub(super) fn method_ctx(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
+        let ctx = self.level_override(ctx, &via);
+        self.method_node(key, ctx, via)
+    }
+
+    /// 方法节点（上下文已定；非字节码方法不克隆，回落本体）
+    fn method_node(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
+        }
+        if self.fa_untrusted.is_none() {
+            self.field_source_edge(&key, &via);
         }
         if !self.static_offset_live && self.man.is_static_offset_getter(&key) {
             self.static_offset_reached();
@@ -97,7 +118,7 @@ impl<'a> Engine<'a> {
         }
         let (key, ctx) = k;
         if ctx != NOCTX && self.mbase.get(&key).is_some_and(|&b| self.methods[b].kind != Kind::Bytecode) {
-            return self.method_ctx(key, NOCTX, via);
+            return self.method_node(key, NOCTX, via);
         }
         let (kind, cf, is_static) = match self.h.class(&key.owner) {
             Some(cf) => match cf.method(&key.name, &key.desc) {
@@ -107,7 +128,7 @@ impl<'a> Engine<'a> {
             None => (Kind::Missing, None, false),
         };
         if ctx != NOCTX && kind != Kind::Bytecode {
-            return self.method_ctx(key, NOCTX, via);
+            return self.method_node(key, NOCTX, via);
         }
         let mut ptypes = Vec::new();
         if !is_static {
@@ -138,6 +159,10 @@ impl<'a> Engine<'a> {
             RetModel::Read(src)
         } else if self.man.returns_caller_class(&ks) {
             RetModel::Caller
+        } else if self.man.returns_static_base(&ks) {
+            RetModel::StaticBase
+        } else if let Some(w) = self.man.field_handle_access(&ks) {
+            RetModel::HandleAccess(w)
         } else if let Some(i) = self.man.array_allocator(&ks) {
             RetModel::NewArray(i)
         } else {

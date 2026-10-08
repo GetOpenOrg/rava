@@ -73,14 +73,16 @@ pub use empty::EmptyCollections;
 mod names;
 mod concrete;
 mod field_names;
-pub use concrete::ConcreteCfg;
+pub use concrete::{BootCall, ConcreteCfg};
 pub use field_names::NameResolver;
 mod indy_helpers;
 mod keyed;
 pub use keyed::{KeyedLookup, KeyedLookups};
+mod direct;
+pub use direct::{DirectInvoker, DirectInvokers, LookupScope};
+mod gates;
+pub use gates::{GateCategory, GateHints};
 mod vm_state;
-mod boot_phases;
-pub use boot_phases::BootPhase;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
 pub use names::{NameFacts, ValueMaps};
@@ -94,6 +96,13 @@ pub enum Fact {
 }
 
 /// 字符 / 字符串纯函数（[facts.string_ops]）：接收者与实参都是常量时结果即常量
+/// 返回串的形状事实（`[facts.string_shapes]`）：非 null 结果一定以 `prefix` 开头、不含 `excludes` 中的 ASCII 字符
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrShapeFact {
+    pub prefix: String,
+    pub excludes: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrOp {
     /// 忽略大小写相等（实参 null 为 false）
@@ -110,6 +119,14 @@ pub enum StrOp {
     /// 字符串转小写（`toLowerCase()` / `toLowerCase(Locale)`，不看语言实参）：仅接收者为 ASCII 且不含 `I` 时折叠——
     /// 此时各语言结果相同（语言相关的规则只涉及 `I` 与非 ASCII 字符：tr / az 的 `I` → `ı`，lt 的带附加符号的 `I` / `J` / `Į`）
     ToLowerCase,
+    /// `startsWith(String)` / `endsWith(String)`：接收者形状已知时按前后缀判定（`absint/shape.rs`），判定成立一侧另收窄形状
+    StartsWith,
+    EndsWith,
+    /// `indexOf` / `lastIndexOf`（字符或子串，可带起点）：所找字符确定不出现时为 -1；接收者为常量时按 UTF-16 下标求值（不带起点的形态）
+    IndexOf,
+    LastIndexOf,
+    /// `contains(CharSequence)`：实参为常量时按接收者形状判定
+    Contains,
 }
 
 pub struct Manifest {
@@ -133,6 +150,11 @@ pub struct Manifest {
     serial_enumerators: HashSet<String>,
     instance_field_users: HashSet<String>,
     static_offset_getters: Vec<String>,
+    /// `[facts.field_writes] static_bases`：返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址（声明类镜像）
+    static_base_returns: HashSet<String>,
+    /// `[facts.field_writes] handle_getters / handle_setters`：按字段句柄（接收者）读 / 写对象实参（形参 0）的字段
+    /// （false = 读，结果为字段值；true = 写，写入值为形参 1）
+    field_handle_access: HashMap<String, bool>,
     field_handle_writers: HashSet<String>,
     field_handle_bridges: HashSet<String>,
     field_name_resolvers: HashMap<String, NameResolver>,
@@ -165,11 +187,6 @@ pub struct Manifest {
     mirror_subtype_tests: HashSet<String>,
     member_owner_initializers: HashMap<String, LinkRoute>,
     method_to_handle: HashSet<String>,
-    pub boot_init: Vec<String>,
-    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
-    pub boot_calls: Vec<String>,
-    /// VM 引导阶段（seeds.toml `[[boot_init.phases]]`，锚点可达时作根，见 `boot_phases.rs`）
-    pub boot_phases: Vec<BootPhase>,
     /// seeds.toml 反射种子配置（注解 / locale / JCA / 纯数据束载体）
     pub seeds: crate::seeds::SeedCfg,
     indy: HashMap<String, IndyKind>,
@@ -177,12 +194,16 @@ pub struct Manifest {
     pub indy_helpers: IndyHelpers,
     /// 按键查找入口（`[facts.keyed_lookups]`，见 `keyed.rs`）
     pub keyed_lookups: KeyedLookups,
+    /// 直连反射调用（`[facts.reflect.direct_invokers]`，见 `direct.rs`）
+    pub direct_invokers: DirectInvokers,
     /// 基本类型描述符字符 → 装箱类（`[boxing]`；lambda 装箱 / 拆箱适配）
     boxing: HashMap<u8, String>,
     /// 按值比较的纯函数（接收者与实参都是常量时结果即常量）
     value_equals: HashSet<String>,
     /// 字符串纯函数
     string_ops: HashMap<String, StrOp>,
+    /// 返回串的形状事实（[facts.string_shapes]）：方法 → 非 null 结果的已知前缀与确定不含的 ASCII 字符
+    string_shapes: HashMap<String, StrShapeFact>,
     /// VM 初始系统属性表与读写锚点
     pub sysprops: SysProps,
     /// 空的不可修改集合工厂与其上的查询结果（`[facts.empty_collections]`）
@@ -193,6 +214,8 @@ pub struct Manifest {
     pub concrete: ConcreteCfg,
     /// VM 注入状态的落地（字段访问钩子、模块 → 加载器映射来源）
     pub vm_state: VmState,
+    /// 门排名的处理类别提示（closure.toml `[gates]`，见 `manifest/gates.rs`）
+    pub gate_hints: GateHints,
 }
 
 const OBJECT: &str = "java/lang/Object";
@@ -260,13 +283,38 @@ impl Manifest {
                     Some("char_at") => StrOp::CharAt,
                     Some("char_to_lower_case") => StrOp::CharToLowerCase,
                     Some("to_lower_case") => StrOp::ToLowerCase,
+                    Some("starts_with") => StrOp::StartsWith,
+                    Some("ends_with") => StrOp::EndsWith,
+                    Some("index_of") => StrOp::IndexOf,
+                    Some("last_index_of") => StrOp::LastIndexOf,
+                    Some("contains") => StrOp::Contains,
                     _ => {
                         return Err(format!(
-                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case / to_lower_case"
+                            "vm_intrinsics.toml [facts.string_ops]：{k} 的值须为 equals_ignore_case / length / is_empty / hash_code / char_at / char_to_lower_case / to_lower_case / starts_with / ends_with / index_of / last_index_of / contains"
                         ))
                     }
                 };
                 string_ops.insert(k.clone(), op);
+            }
+        }
+
+        let mut string_shapes = HashMap::new();
+        if let Some(t) = vm.get("facts").and_then(|s| s.get("string_shapes")).and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                let bad = || format!("vm_intrinsics.toml [facts.string_shapes]：{k} 的值须为 {{ prefix = \"<串>\", excludes = \"<ASCII 字符>\" }}（至少一项，前缀不含被排除的字符）");
+                let tb = v.as_table().ok_or_else(bad)?;
+                if tb.is_empty() || tb.keys().any(|x| x != "prefix" && x != "excludes") {
+                    return Err(bad());
+                }
+                let get = |name: &str| match tb.get(name) {
+                    None => Ok(String::new()),
+                    Some(x) => x.as_str().map(str::to_string).ok_or_else(bad),
+                };
+                let (prefix, excludes) = (get("prefix")?, get("excludes")?);
+                if !excludes.is_ascii() || prefix.chars().any(|c| excludes.contains(c)) {
+                    return Err(bad());
+                }
+                string_shapes.insert(k.clone(), StrShapeFact { prefix, excludes });
             }
         }
 
@@ -420,6 +468,12 @@ impl Manifest {
             serial_enumerators: field_writes("serial_enumerators").into_iter().collect(),
             instance_field_users: field_writes("instance_field_users").into_iter().collect(),
             static_offset_getters: field_writes("static_offset_getters"),
+            static_base_returns: field_writes("static_bases").into_iter().collect(),
+            field_handle_access: field_writes("handle_getters")
+                .into_iter()
+                .map(|m| (m, false))
+                .chain(field_writes("handle_setters").into_iter().map(|m| (m, true)))
+                .collect(),
             field_handle_writers: field_writes("handle_writers").into_iter().collect(),
             field_handle_bridges: field_writes("handle_bridges").into_iter().collect(),
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
@@ -451,9 +505,6 @@ impl Manifest {
                 .chain(reflect("reflect_owner_initializers").into_iter().map(|c| (c, LinkRoute::Reflect)))
                 .collect(),
             method_to_handle: reflect("method_to_handle").into_iter().collect(),
-            boot_init: strings(&seeds, "boot_init", "classes"),
-            boot_calls: strings(&seeds, "boot_init", "calls"),
-            boot_phases: boot_phases::parse(&seeds)?,
             seeds: crate::seeds::SeedCfg::from_toml(&seeds),
             indy,
             indy_helpers: IndyHelpers::from_toml(
@@ -462,14 +513,17 @@ impl Manifest {
                 !strings(&vm, "indy", "object_methods").is_empty(),
             )?,
             keyed_lookups: KeyedLookups::from_toml(vm.get("facts").and_then(|s| s.get("keyed_lookups")))?,
+            direct_invokers: DirectInvokers::from_toml(vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("direct_invokers")))?,
             boxing,
             value_equals: strings(&vm, "facts", "value_equals").into_iter().collect(),
             string_ops,
+            string_shapes,
             sysprops: SysProps::from_toml(vm.get("facts").and_then(|s| s.get("system_properties")))?,
             empty: EmptyCollections::from_toml(vm.get("facts").and_then(|s| s.get("empty_collections")))?,
             names: NameFacts::from_toml(vm.get("facts").and_then(|s| s.get("reflect")), vm.get("facts").and_then(|s| s.get("string_concat")))?,
             concrete: concrete::parse(vm.get("concrete"))?,
             vm_state: VmState::from_toml(&vm)?,
+            gate_hints: GateHints::from_toml(closure.get("gates"))?,
         })
     }
 
@@ -605,6 +659,24 @@ impl Manifest {
     /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有几项）
     pub fn is_static_offset_getter(&self, key: &classfile::constant::MemberRef) -> bool {
         self.static_offset_getters.iter().any(|s| member_is(s, key))
+    }
+
+    /// 返回字段句柄实参（形参 0，不含接收者）所指静态字段的基址——声明类的类镜像（`[facts.field_writes] static_bases`）
+    pub fn returns_static_base(&self, member: &str) -> bool {
+        self.static_base_returns.contains(member)
+    }
+
+    /// 按字段句柄（接收者）存取对象实参字段的入口（`[facts.field_writes] handle_getters / handle_setters`）：
+    /// Some(false) = 读（结果为字段值），Some(true) = 写（形参 1 为写入值）
+    pub fn field_handle_access(&self, member: &str) -> Option<bool> {
+        self.field_handle_access.get(member).copied()
+    }
+
+    /// 字段句柄的取得入口（`enumerators` 与 `handle = true` 的 `name_resolvers`）：其字节码调用点给结果带来源标记
+    /// 按成员引用逐项比对，不格式化（方法登记热路径，清单只有十余项）
+    pub fn is_field_handle_source(&self, key: &classfile::constant::MemberRef) -> bool {
+        self.field_enumerators.iter().any(|s| member_is(s, key))
+            || self.field_name_resolvers.iter().any(|(s, r)| r.handle && member_is(s, key))
     }
 
     /// 按字段句柄写字段的入口（与字段枚举同时可达才放开被枚举的字段）
@@ -750,6 +822,11 @@ impl Manifest {
 
     pub fn string_op(&self, member: &str) -> Option<StrOp> {
         self.string_ops.get(member).copied()
+    }
+
+    /// 方法返回串的形状事实（`[facts.string_shapes]`）
+    pub fn string_shape(&self, member: &str) -> Option<&StrShapeFact> {
+        self.string_shapes.get(member)
     }
 
     pub fn is_null_to_false(&self, member: &str) -> bool {

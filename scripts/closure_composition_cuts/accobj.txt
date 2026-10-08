@@ -1,0 +1,2 @@
+# 反射基类初始化里的 doPrivileged（GetReflectionFactoryAction）：量化 PrivilegedAction.run 上下文无关派发的扇出门
+java/lang/reflect/AccessibleObject.<clinit>:()V@17

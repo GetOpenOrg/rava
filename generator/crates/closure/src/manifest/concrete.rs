@@ -13,6 +13,9 @@ pub struct ConcreteCfg {
     pub natives: HashMap<String, String>,
     /// 内存缓存字段（`类.字段`）：首次求值写入、之后命中；轨迹按冷 / 热两次求值取并
     pub memo_fields: HashSet<String>,
+    /// 写入引导映像的内存缓存字段（`类.字段`，须同在 `memo_fields`）：具体求值中类镜像上该字段的写入值（求值结束时的
+    /// 对象图）物化进引导映像，运行期命中缓存；全部缓存写入都可物化的实参组合只按热求值的轨迹入闭包
+    pub image_memo_fields: HashSet<String>,
     /// 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结。
     /// 依据是类的不可变契约（如正则模式及其节点图编译后只读），由清单逐类声明
     pub stable_types: Vec<String>,
@@ -20,6 +23,11 @@ pub struct ConcreteCfg {
     pub implicit: HashMap<String, String>,
     /// VM 布局的字段（字符串字面量与类镜像由 VM 直接构造）：键为语义名（`string_value` / `string_coder` / `component_type`），值为 `类.字段`
     pub vm_fields: HashMap<String, String>,
+    /// 软引用类型（精确类型）：导出映像时，所指对象只经软引用可达、且引用未登记队列（队列字段为 null 或
+    /// `null_queues` 所列类型的对象）的，按「软引用可随时清除」语义清除所指（如类镜像的反射数据缓存）
+    pub soft_references: HashSet<String>,
+    /// 表示「未登记队列」的引用队列类型（精确类型）
+    pub null_queues: HashSet<String>,
     /// 构建期引导求值（`[concrete.boot]`，engine/concrete/boot.rs）
     pub boot: BootCfg,
 }
@@ -29,8 +37,8 @@ pub struct ConcreteCfg {
 /// `@jdk_feature` = 参考 JDK 的特性版本号，其余为字面量
 #[derive(Debug, Clone, Default)]
 pub struct BootCfg {
-    /// 调用序列：`[成员, 实参...]`（实参为整数字面量）
-    pub calls: Vec<(String, Vec<i64>)>,
+    /// 调用序列（按序）：引导阶段方法与 VM 在阶段之间初始化的类
+    pub calls: Vec<BootCall>,
     /// 成员 → 操作名（优先于 `[concrete.natives]`）
     pub natives: HashMap<String, String>,
     /// VM 注入静态字段 `类.字段` → 整数字面量 / `@deferred`
@@ -46,6 +54,21 @@ pub struct BootCfg {
     pub objects: Vec<Vec<String>>,
     /// 当前线程取 objects 的下标
     pub current_thread: Option<usize>,
+    /// 引导档位静态字段（`类.字段`，int）：残差步骤记录其构建期档位，运行期在该档位下重放
+    pub level: Option<String>,
+    /// 按档位定值的 VM 查询：成员 → 门限（档位 ≥ 门限为 true）。档位低于门限的残差步骤上下文中折叠为 false，
+    /// 其余处沿用 `[facts.returns]`
+    pub level_queries: HashMap<String, i64>,
+}
+
+/// `[concrete.boot] calls` 的一项
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootCall {
+    /// `[成员, 实参...]`：在根帧执行的引导阶段方法（实参为整数字面量）
+    Phase(String, Vec<i64>),
+    /// `{ init = [类...] }`：VM 在两个阶段之间按序初始化的类（如 HotSpot 在 initPhase1 之后初始化的
+    /// JSR 292 核心类）
+    Init(Vec<String>),
 }
 
 fn strs(v: Option<&toml::Value>) -> Vec<String> {
@@ -69,8 +92,11 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         entries: strs(get("entries")).into_iter().collect(),
         natives: table(get("natives"), "natives")?,
         memo_fields: strs(get("memo_fields")).into_iter().collect(),
+        image_memo_fields: strs(get("image_memo_fields")).into_iter().collect(),
         stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
+        soft_references: strs(get("soft_references")).into_iter().collect(),
+        null_queues: strs(get("null_queues")).into_iter().collect(),
         implicit: table(get("implicit"), "implicit")?,
         boot: parse_boot(get("boot"))?,
     })
@@ -80,10 +106,16 @@ fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
     let get = |k: &str| t.and_then(|t| t.get(k));
     let mut calls = Vec::new();
     for c in get("calls").and_then(|v| v.as_array()).into_iter().flatten() {
-        let Some(a) = c.as_array() else { return Err("[concrete.boot] calls 的项须为数组".into()) };
+        if let Some(t) = c.as_table() {
+            let cs = t.get("init").and_then(|v| v.as_array()).ok_or("[concrete.boot] calls 的表项须为 { init = [类...] }")?;
+            let cs = cs.iter().map(|x| x.as_str().map(String::from).ok_or("[concrete.boot] calls init 的类须为字符串")).collect::<Result<Vec<_>, _>>()?;
+            calls.push(BootCall::Init(cs));
+            continue;
+        }
+        let Some(a) = c.as_array() else { return Err("[concrete.boot] calls 的项须为数组或 { init = [...] }".into()) };
         let m = a.first().and_then(|x| x.as_str()).ok_or("[concrete.boot] calls 项首元须为成员")?;
         let args = a[1..].iter().map(|x| x.as_integer().ok_or("[concrete.boot] calls 实参须为整数")).collect::<Result<Vec<_>, _>>()?;
-        calls.push((m.to_string(), args));
+        calls.push(BootCall::Phase(m.to_string(), args));
     }
     let mut vm_props = Vec::new();
     for p in get("vm_props").and_then(|v| v.as_array()).into_iter().flatten() {
@@ -99,5 +131,31 @@ fn parse_boot(t: Option<&toml::Value>) -> Result<BootCfg, String> {
         init: strs(get("init")),
         objects: get("objects").and_then(|v| v.as_array()).into_iter().flatten().map(|o| strs(Some(o))).collect(),
         current_thread: get("current_thread").and_then(|v| v.as_integer()).map(|x| x as usize),
+        level: get("level").and_then(|v| v.as_str()).map(String::from),
+        level_queries: get("level_queries")
+            .and_then(|v| v.as_table())
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| v.as_integer().map(|x| (k.clone(), x)).ok_or_else(|| format!("[concrete.boot.level_queries] {k} 的值须为整数")))
+            .collect::<Result<_, _>>()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// calls 的两种项：阶段方法 `[成员, 实参...]` 与阶段之间的类初始化 `{ init = [...] }`，按序保留
+    #[test]
+    fn boot_calls_phase_and_init() {
+        let t: toml::Value = toml::from_str(r#"calls = [["a/S.p1:()V"], { init = ["a/M", "a/N"] }, ["a/S.p2:(ZZ)I", 0, 1]]"#).unwrap();
+        let b = parse_boot(Some(&t)).unwrap();
+        assert_eq!(b.calls, vec![
+            BootCall::Phase("a/S.p1:()V".into(), vec![]),
+            BootCall::Init(vec!["a/M".into(), "a/N".into()]),
+            BootCall::Phase("a/S.p2:(ZZ)I".into(), vec![0, 1]),
+        ]);
+        let bad: toml::Value = toml::from_str(r#"calls = [{ other = 1 }]"#).unwrap();
+        assert!(parse_boot(Some(&bad)).is_err());
+    }
 }

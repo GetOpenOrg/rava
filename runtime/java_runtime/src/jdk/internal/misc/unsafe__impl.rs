@@ -53,52 +53,14 @@ fn _ref_array_index(offset: i64) -> i32 {
     ((offset - ARRAY_BASE_OFFSET) / REF_INDEX_SCALE) as i32
 }
 
-crate::__process_static! {
-    /// 实例字段偏移登记表（进程级）：正向 (声明类名, 字段名) → id（只在 `objectFieldOffset` 登记时查），
-    /// 反向按 id 稠密排列的 (声明类 binary name, Java 字段名)——id = `FIELD_SLOT * (下标 + 1)`，访问器
-    /// 热路径按下标直取、不哈希不克隆。登记项进程内常驻（字段身份个数有界），以 `&'static` 借出。
-    /// `objectFieldOffset` 两重载共用；id 消费见基本类型统一载体（`unsafe__ext::prim` 的实例字段臂）
-    /// 与引用访问器族。
-    static FIELD_OFFSETS: RefCell<HashMap<(std::string::String, std::string::String), i64>> =
-        RefCell::new(HashMap::new());
-    static FIELD_OFFSET_BY_ID: RefCell<Vec<&'static (std::string::String, std::string::String)>> =
-        RefCell::new(Vec::new());
-}
-
-/// 实例字段偏移的不透明 id：键 = (声明类 binary name, 字段名)，同一字段恒等。
-///
-/// 原生二进制没有 C 对象布局，字段经名字访问——偏移量只作不透明标识。
-/// `objectFieldOffset(Field)` 与 `objectFieldOffset(Class, String)` 按 JDK 语义
-/// 对同一字段返回同一值，共用本登记表（Field 经 getDeclaredField 每次构造
-/// 新对象，对象身份不稳定，字段身份 = 声明类 + 字段名）。
-/// 消费方：基本类型访问器族经 ObjectVTable 的字 / 双字视图（`__unsafe_word` /
-/// `__unsafe_dword`）按字段名访问共享存储单元，引用访问器族经引用原子协议——写入对
-/// 直接字段读取可见。id 按 `FIELD_SLOT` 对齐，具体值不进可观察输出。
+/// 实例字段偏移的不透明 id（登记表见 `reflect_dispatch::instance_field_id`）。
 fn _object_field_offset_id(clazz_name: std::string::String, field_name: std::string::String) -> i64 {
-    FIELD_OFFSETS.with(|offsets| {
-        let mut offsets = offsets.borrow_mut();
-        let decl = clazz_name.replace('.', "/");
-        let key = (clazz_name, Clone::clone(&field_name));
-        if let Some(&id) = offsets.get(&key) {
-            return id;
-        }
-        let id = FIELD_OFFSET_BY_ID.with(|by_id| {
-            let mut by_id = by_id.borrow_mut();
-            by_id.push(Box::leak(Box::new((decl, field_name))));
-            FIELD_SLOT * by_id.len() as i64
-        });
-        offsets.insert(key, id);
-        id
-    })
+    crate::reflect_dispatch::instance_field_id(clazz_name, field_name)
 }
 
 /// 偏移 id → 登记的 (声明类 binary name, 字段名)；非实例字段 id（静态 id、数组偏移、哨兵）→ None。
 fn _field_by_id(offset: i64) -> Option<&'static (std::string::String, std::string::String)> {
-    if offset <= 0 || offset % FIELD_SLOT != 0 {
-        return None;
-    }
-    let idx = usize::try_from(offset / FIELD_SLOT - 1).ok()?;
-    FIELD_OFFSET_BY_ID.with(|by_id| by_id.borrow().get(idx).copied())
+    crate::reflect_dispatch::instance_field_by_id(offset)
 }
 
 /// 偏移 id → (声明类 binary name, 字段名)：MethodHandle 字段访问形态（DMH Accessor 的

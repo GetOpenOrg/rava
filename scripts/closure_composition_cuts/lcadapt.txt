@@ -1,0 +1,3 @@
+# locale 适配器链整体上界：LocaleProviderAdapter.forType 体（全部适配器的唯一构造点，按 Type 类名反射）切掉后，
+# 任何适配器都不被实例化，经适配器取本地化数据的下游整体不可达。量「本地化数据一次也不查」时的上界（不健全）
+sun/util/locale/provider/LocaleProviderAdapter.forType:(Lsun/util/locale/provider/LocaleProviderAdapter$Type;)Lsun/util/locale/provider/LocaleProviderAdapter;

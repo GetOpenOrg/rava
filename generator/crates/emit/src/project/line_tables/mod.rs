@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use super::fs::Writer;
 use crate::error::Result;
 
-/// 行表文件名（与 closure_tables.rs 同目录）
+/// 行表文件名（`closure_input/` 下，与 meta_tables.rs 同目录）
 pub const LINE_TABLES: &str = "line_tables.rs";
 /// 行表文件（scratch 相对路径）
 pub const LINE_TABLES_PATH: &str = "closure_input/line_tables.rs";

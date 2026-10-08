@@ -27,8 +27,6 @@ pub struct CrossInput<'s> {
     pub here: &'s str,
     /// JDK 模块 crate 表（JDK 类按模块定向）
     pub crates: &'s ModuleCrates,
-    /// 调用链不约束（用户类）
-    pub all_in_chain: bool,
     /// lib 模式（jar 输入）的按目标 crate 定向；None = 无 lib crate
     pub route: Option<CrateRoute<'s>>,
 }
@@ -137,7 +135,8 @@ fn chain_top<'a>(ctx: &EmitCtx<'a>, ci: &'a ClassInfo) -> &'a str {
 fn base_fn_claims(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &CrossInput<'_>) -> Result<()> {
     let reg = ctx.ty.reg;
     for (owner, m) in base_scan_methods(ctx, ci) {
-        if !inp.all_in_chain && !ctx.in_chain(owner, &m.name, &m.desc) {
+        // 落点扫描面与方法发射同一口径：本类方法按自身键、祖先方法按祖先键或本类符号键（super-inherit 重发射）
+        if !ctx.in_chain(owner, &m.name, &m.desc) && !ctx.in_chain(ci.name(), &m.name, &m.desc) {
             continue;
         }
         let Some(code) = ctx.input.code_ops(owner, m) else { continue };

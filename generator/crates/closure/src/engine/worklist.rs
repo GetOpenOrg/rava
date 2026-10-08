@@ -45,20 +45,6 @@ impl<'a> Engine<'a> {
         self.root(key, kind);
     }
 
-    pub fn root_init(&mut self, cls: &str, kind: &'static str) {
-        self.init(cls, Via::root(kind, cls));
-    }
-
-    /// VM 启动期调用的静态方法（seeds.toml `[boot_init] calls`，`类.方法:描述符`）
-    pub fn root_boot_call(&mut self, member: &str, kind: &'static str) {
-        match seeds::parse_member(member) {
-            Some(key) => self.root(key, kind),
-            None => {
-                self.unresolved.insert(member.to_string());
-            }
-        }
-    }
-
     pub fn run(&mut self) {
         // 写入未知数组的元素：数组可能由非建模代码持有
         let obj = self.id(OBJECT);
@@ -67,6 +53,11 @@ impl<'a> Engine<'a> {
         let mut batch = 0usize;
         loop {
             self.pkey_flush();
+            if !self.obj_dirty.is_empty() {
+                self.stat_enter(Phase::Flows);
+                self.obj_flush();
+                self.stat_leave();
+            }
             // 流传播按批：连续处理若干方法 / 站点后再排空，各处的零碎增量在源头汇齐后一次推下去。
             // 不动点单调，先处理的单元读到的是较小的集合，增长后经读者登记重跑——终态集合与逐个排空相同
             let idle = self.mwork.is_empty() && self.swork.is_empty() && self.cwork.is_empty();
@@ -74,6 +65,7 @@ impl<'a> Engine<'a> {
                 batch = 0;
                 self.stat_enter(Phase::Flows);
                 self.drain_flows();
+                self.obj_flush();
                 self.stat_leave();
             }
             batch += 1;
@@ -160,6 +152,7 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn invalidate_all(&mut self, ms: Option<BTreeSet<usize>>, why: Why) {
+        self.obj_defs_dropped();
         for m in ms.unwrap_or_default() {
             self.invalidate(m, why);
         }
@@ -170,7 +163,7 @@ impl<'a> Engine<'a> {
     /// 静态字段的缺省值总可观察（初始化前 / 初始化中读）；实例字段的缺省值只在有对象处于该状态时并入：
     /// 抽象分配（`alloc_defaults`）或物化快照中未写的字段。值集为空（尚无对象）时读者按缺省值读
     pub(super) fn field_put(&mut self, key: &MemberRef, v: PV) {
-        let cur = self.ctx.fvals.borrow().get(key).cloned().or_else(|| self.is_static_key(key).then(|| default_pv(&key.desc)));
+        let cur = self.ctx.fvals.borrow().get(key).cloned().or_else(|| self.is_static_key(key).then(|| self.ctx.static_initial(key)));
         let new = PV::join(cur.as_ref(), &v);
         if cur.as_ref() == Some(&new) {
             return;
@@ -215,6 +208,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn open_field_name(&mut self, name: &str) {
         if self.ctx.fopen_names.borrow_mut().insert(name.to_string()) {
+            self.fopen_name_via.insert(name.to_string(), self.cur_site);
             let mut deps = self.ctx.ceval_drop_name(name);
             deps.extend(self.ctx.fdeps.borrow().iter().filter(|(k, _)| k.name == name).flat_map(|(_, v)| v.iter().copied()));
             self.invalidate_all(Some(deps), Why::FieldOpenName);
@@ -265,6 +259,14 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 站点求值（按名查找的名字、键集、字段 / 返回串）所用的分析：其事件正在 / 已经执行的那次分析（`applied`），
+    /// 未执行过时取当前分析。方法失效后、重分析前，站点仍可因接收者 / 键集增长按 `applied` 的事件重跑：
+    /// 此时实参来自 `applied`，名字也须按它求值——取当前分析（已失效为空）会把这次求值当成「推不出」，
+    /// 放宽结果（任意键 / 开放查找）不可撤回，结果依赖失效与重跑的先后
+    pub(super) fn site_analysis(&self, m: usize) -> Option<Rc<Analysis>> {
+        self.methods[m].applied.clone().or_else(|| self.methods[m].analysis.clone())
+    }
+
     pub(super) fn analysis(&mut self, m: usize) -> Option<Rc<Analysis>> {
         if self.is_concrete(m) {
             return None;
@@ -300,19 +302,24 @@ impl<'a> Engine<'a> {
         let pv = self.pvals.entry(m).or_insert_with(|| vec![PV::Top; n]);
         let params: Vec<Option<V>> = pv.iter().map(PV::value).collect();
         let mirrors = self.param_mirror_sets(m);
+        let pobjs = self.obj_sets(m);
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
         // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）
         let closing = self.ctx.noreturn.borrow().closing();
-        let reuse = if closing { None } else { self.shared_analysis(&key, &params, &mirrors) };
-        let a = if let Some((a, deps)) = reuse {
+        // 档位上下文（`levels_boot.rs`）的克隆按档位折叠引导查询：不与本体共享摘要
+        let level = self.level_of(m);
+        let reuse = if closing || level.is_some() { None } else { self.shared_analysis(&key, &params, &mirrors, &pobjs) };
+        let (a, queries) = if let Some((a, deps, queries)) = reuse {
             self.share_join(m, &a, &deps);
-            a
+            (a, queries)
         } else {
-            let entry = (!closing).then(|| (params.clone(), mirrors.clone()));
+            let entry = (!closing && level.is_none()).then(|| (params.clone(), mirrors.clone()));
             *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
-            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors };
+            let objs = super::obj_fields::ObjParams { sets: pobjs.clone(), queries: Default::default() };
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level, objs };
             let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
+            let queries: Rc<[super::obj_fields::ObjQuery]> = facts.objs.queries.take().into();
             let deps = self.ctx.dep_log.borrow_mut().take();
             if self.cold_cut {
                 let cold = crate::cold::doomed(code);
@@ -323,10 +330,11 @@ impl<'a> Engine<'a> {
             a.events.shrink_to_fit();
             let a = Rc::new(a);
             if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
-                self.share_record(m, params, mirrors, &a, deps);
+                self.share_record(m, (params, mirrors, queries.clone()), &a, deps);
             }
-            a
+            (a, queries)
         };
+        self.obj_queries_bind(m, &pobjs, &queries);
         self.stat_leave();
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);

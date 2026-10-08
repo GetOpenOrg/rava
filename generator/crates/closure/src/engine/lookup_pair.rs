@@ -6,9 +6,10 @@
 //! 各调用点按本点的名字实参（字面量）× 本点的类实参值集（类镜像）点名——结果只并不减，与处理顺序无关。
 //! 调用点的两个实参又来自其形参时，调用方同样登记为包装方法（逐层上推）。
 //!
-//! 按名放开字段（反射式字段写入：Class 实参 + 名字实参，如 `findVarHandle(Class, String, Class)` 与其内部的
-//! `MemberName` 构造）同一口径：类与名字都来自形参时登记字段配对，各调用点按本点的类值集 × 名字点名放开字段；
-//! 类值集含所指未知的 Class 时同名字段全部放开。否则形参名字汇合全部调用点、类推不出，只能按名放开全部同名字段。
+//! 按名取字段身份（清单 `name_resolvers`，如 `resolveOrFail(byte, Class, String, Class)` 内部的 `MemberName` 构造）
+//! 同一口径：类与名字都来自形参时登记字段配对，各调用点按本点的类值集 × 名字值集放开字段；类值集含所指未知的
+//! Class 时同名字段全部放开，名字推不出时按类值集放开全部字段。否则形参名字汇合全部调用点、类推不出，只能按名
+//! 放开全部同名字段。
 
 use super::*;
 
@@ -137,17 +138,17 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段配对的调用点（类值 cv、名字值 nv）：两者又都来自本方法形参时上推登记；否则名字取本点字面量
-    /// （与形参上各调用点的字符串常量、字段写入的字面量集），按类值集里类镜像所指的类点名放开字段。
-    /// 类值集尚空时等值到达（读者登记，增长时重跑）；含所指未知的值时同名字段全部放开
+    /// 字段配对的调用点（类值 cv、名字值 nv）：两者又都来自本方法形参时上推登记；名字按来源取值集
+    /// （`name_values`：字面量、形参上各调用点的字符串常量、字段写入的字面量集、辅助方法返回常量），按类值集里
+    /// 类镜像所指的类点名放开字段。类值集尚空时等值到达（读者登记，增长时重跑）；含所指未知的值时同名字段全部放开。
+    /// 名字推不出时按类放开：类值集所指各类及其超类的全部字段，类值集含所指未知的值时全部字段不折叠
     fn field_wrap_call(&mut self, m: usize, off: u32, cv: &V, nv: &V, extra: &Rc<[Node]>) {
-        let mut names: BTreeSet<Rc<str>> = nv.site_lits().into_iter().collect();
-        if !self.lookup_wrap_site(m, cv, nv, extra, 0, true) {
-            names.extend(self.param_strs(m, off, nv));
+        if matches!(nv, V::Null) {
+            return;
         }
-        names.extend(self.field_strs(m, nv));
-        names.extend(self.site_strs(m, nv));
-        if names.is_empty() {
+        let paired = self.lookup_wrap_site(m, cv, nv, extra, 0, true);
+        let (names, known) = self.name_values(m, off, nv, paired);
+        if names.is_empty() && known {
             return;
         }
         let class = self.id(CLASS);
@@ -159,6 +160,8 @@ impl<'a> Engine<'a> {
         for x in s.classes.iter() {
             match self.mirrors.get(&x) {
                 Some(&c) => classes.push(c),
+                // 非字节码类镜像、基本类型类镜像都没有 Java 字段（同 `class_values`）：按名取不到字段，不算所指未知
+                None if Some(x) == self.synth_mirror || Some(x) == self.prim_mirror => {}
                 None => unknown = true,
             }
         }
@@ -174,6 +177,20 @@ impl<'a> Engine<'a> {
             }
             if unknown {
                 self.open_field_name(n);
+            }
+        }
+        if !known {
+            let scopes: Vec<Option<String>> = if unknown {
+                vec![None]
+            } else {
+                classes.iter().map(|&c| Some(self.names[c as usize].to_string())).collect()
+            };
+            let statics = !self.man.is_instance_field_user(&self.methods[m].key.to_string());
+            for scope in scopes {
+                if statics {
+                    self.fenum_static.insert(scope.clone());
+                }
+                self.open_class_fields(scope);
             }
         }
     }

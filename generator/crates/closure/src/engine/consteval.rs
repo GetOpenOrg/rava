@@ -137,7 +137,7 @@ impl Ctx<'_> {
         self.stats.borrow_mut().ceval[2] += 1;
         self.ceval_depth.set(self.ceval_depth.get() + 1);
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![] });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default() });
         let (clean, inp) = self.memo_leave(frame);
         let mut r: Option<PV> = None;
         if !a.conservative {
@@ -182,6 +182,11 @@ impl Ctx<'_> {
         self.objs.borrow_mut().retain(|_, (_, inp)| keep(inp));
         self.psums.borrow_mut().retain(|_, (_, inp)| keep(inp));
         self.preadonly.borrow_mut().retain(|_, (_, inp)| keep(inp));
+        let n = self.cinits.borrow().len();
+        self.cinits.borrow_mut().retain(|_, c| keep(&c.inp));
+        if self.cinits.borrow().len() != n {
+            self.cinit_drop.set(true);
+        }
         self.memo_consumers(ids)
     }
 }

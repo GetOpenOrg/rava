@@ -10,7 +10,7 @@ use crate::prelude::*;
 use super::unix_file_attributes::UnixFileAttributes;
 use super::unix_file_store_attributes::UnixFileStoreAttributes;
 use super::unix_native_dispatcher::UnixNativeDispatcher;
-use super::unix_native_dispatcher_impl::{errno, fill_stat, restartable, unix_exception};
+use super::unix_native_dispatcher_impl::{errno, fill_stat, path_of, restartable, unix_exception, virtual_stat};
 
 /// NativeBuffer 地址 → C 路径指针。
 fn cpath(address: i64) -> *const libc::c_char {
@@ -61,6 +61,12 @@ impl UnixNativeDispatcher {
     /// `realpath0(long path)`：realpath(3)，返回规范绝对路径字节。
     #[jvm_native]
     pub fn realpath0(path: i64) -> Result<JArray<i8>> {
+        // 虚拟树无链接：存在的节点即规范路径（调用方 UnixPath 已规范化）
+        let p = path_of(path);
+        if let Some(r) = virtual_stat(&p) {
+            r.map_err(unix_exception)?;
+            return Ok(JArray::from(p.trim_end_matches('/').bytes().map(|b| b as i8).collect::<Vec<i8>>()));
+        }
         let mut resolved = vec![0 as libc::c_char; libc::PATH_MAX as usize + 1];
         // SAFETY: resolved 至少 PATH_MAX 字节（realpath 的缓冲约定）
         if unsafe { libc::realpath(cpath(path), resolved.as_mut_ptr()) }.is_null() {
@@ -74,6 +80,10 @@ impl UnixNativeDispatcher {
     /// `fstat0(int fd, UnixFileAttributes)`：fstat(2) 后填 st_* 字段。
     #[jvm_native]
     pub fn fstat0(fd: i32, attrs: UnixFileAttributes) -> Result<()> {
+        if let Some(st) = crate::jdk_resources::virtual_fstat(fd) {
+            fill_stat(&attrs, &st);
+            return Ok(());
+        }
         // SAFETY: stat 为纯数据结构，零值合法；fd 归调用方所有
         let mut buf: libc::stat = unsafe { std::mem::zeroed() };
         check(|| unsafe { libc::fstat(fd, &mut buf) })?;
