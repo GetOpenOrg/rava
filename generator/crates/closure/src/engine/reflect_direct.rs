@@ -31,7 +31,7 @@ impl<'a> Engine<'a> {
         let key = self.mref_key(mref);
         let man = self.man;
         let Some(spec) = man.direct_invokers.get(&key) else { return false };
-        match self.direct_targets(m, spec, args) {
+        match self.direct_targets(m, off, spec, args) {
             Some(ts) => {
                 self.direct_edges(m, off, spec, args, ts);
                 true
@@ -44,7 +44,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 直连条件成立时的目标集（接收者值集尚空 = 空集）；None = 不满足
-    fn direct_targets(&mut self, m: usize, spec: &DirectInvoker, args: &[V]) -> Option<Vec<MemberRef>> {
+    fn direct_targets(&mut self, m: usize, off: u32, spec: &DirectInvoker, args: &[V]) -> Option<Vec<MemberRef>> {
         let tid = self.id(&spec.recv);
         let fs = self.feeds(m, args.first()?, tid);
         let s = self.value_set(&fs);
@@ -53,7 +53,7 @@ impl<'a> Engine<'a> {
         }
         let mut out = BTreeSet::new();
         for x in s.classes.iter() {
-            out.extend(self.mark_targets(x)?);
+            out.extend(self.mark_targets(x, (m, off))?);
         }
         for k in &out {
             let cf = self.h.class(&k.owner)?;
@@ -147,11 +147,16 @@ impl<'a> Engine<'a> {
     }
 
     /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发（同字节码 invokevirtual / invokeinterface 的目标选择）：
+    /// - 非虚目标（private / final 方法、final 类上的方法；同 `invoke.rs` 的非虚判定）：直接接已解析方法，接收者来源
+    ///   （精确与 open）按声明类过滤流入 this，不建枢纽——序列化回调 `writeObject` / `readObject` 等私有方法即此类；
     /// - 精确接收者按类型选出实现（逐类型一次，按调用点与目标记在 `rdirect_sel`），各实现以接收者来源为 this 直接接边
     ///   （实现的 this 形参按声明类过滤；不按接收者对象克隆）。直连调用点的接收者是被序列化 / 反射调用的任意对象，
-    ///   值集随程序增长、目标又按标记成百，按精确集合建枢纽时每次增长每个目标各建一枢纽（deepcopy 单点 3.7 万枢纽）；
-    ///   按实现接边的边数是「目标的实现数」，与接收者增长次数无关；
-    /// - lambda 与手写层对象接收者（派发规则特殊）与 open 部分仍经枢纽（精确集合按目标链上次枢纽为父）。
+    ///   值集随程序增长、目标又按标记成百，按实现接边的边数是「目标的实现数」，与接收者增长次数无关；
+    /// - open 部分经 open 枢纽，按目标声明类 C 归一（`direct_open_roots`）：值集含 C 的超类型 open 时只接 open(C)
+    ///   一个枢纽（G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。
+    ///   枢纽键是（目标, open(C)），与字节码虚调用及其他直连点共用；单点枢纽数以目标数为界，与 open 类型数无关；
+    /// - lambda 与手写层对象接收者（派发规则特殊）经精确集合枢纽（按目标链上次枢纽为父）。
+    /// 已接的实现与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空），值集增长时只增量接入。
     #[allow(clippy::too_many_arguments)]
     fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, ret: Option<u32>, res: Option<Node>, via: &Via) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
@@ -162,32 +167,48 @@ impl<'a> Engine<'a> {
         let owner = self.id(&key.owner);
         let fs = self.feeds(m, recv, owner);
         let s = self.value_set(&fs);
+        let rm = site.method();
+        let nonvirt = rm.is_private() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
         let exact = TypeSet { classes: s.classes.clone(), open: IdSet::default() };
         let rs = self.receivers(m, &exact, owner);
         let lk = (m, off, key.clone());
-        let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| self.lambdas.contains_key(r) || self.hwobjs.contains_key(r));
-        let mut sel = self.rdirect_sel.remove(&lk).unwrap_or_default();
-        for r in plain {
-            let t = self.ty(r);
-            if !sel.0.insert(t) {
-                continue;
+        let dk = (off, key.clone());
+        let mut done = self.rdirect_done.get_mut(&m).and_then(|d| d.remove(&dk)).unwrap_or_default();
+        let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| !nonvirt && (self.lambdas.contains_key(r) || self.hwobjs.contains_key(r)));
+        let impls: Vec<MemberRef> = if nonvirt {
+            if plain.is_empty() && s.open.is_empty() {
+                Vec::new()
+            } else {
+                let (o, n, d) = site.key();
+                vec![MemberRef { owner: o, name: n, desc: d }]
             }
-            let rname = self.names[t as usize].to_string();
-            match self.h.select(&rname, &site) {
-                Some(x) => {
-                    let (o, n, d) = x.key();
-                    sel.1.insert(MemberRef { owner: o, name: n, desc: d });
+        } else {
+            let mut sel = self.rdirect_sel.remove(&lk).unwrap_or_default();
+            for r in plain {
+                let t = self.ty(r);
+                if !sel.0.insert(t) {
+                    continue;
                 }
-                None => {
-                    self.unresolved.insert(format!("select {rname} {}", site.method().name));
+                let rname = self.names[t as usize].to_string();
+                match self.h.select(&rname, &site) {
+                    Some(x) => {
+                        let (o, n, d) = x.key();
+                        sel.1.insert(MemberRef { owner: o, name: n, desc: d });
+                    }
+                    None => {
+                        self.unresolved.insert(format!("select {rname} {}", site.method().name));
+                    }
                 }
             }
-        }
-        let impls: Vec<MemberRef> = sel.1.iter().cloned().collect();
-        self.rdirect_sel.insert(lk.clone(), sel);
+            let impls = sel.1.iter().cloned().collect();
+            self.rdirect_sel.insert(lk.clone(), sel);
+            impls
+        };
         for k in impls {
-            let t = self.method(k, via.clone());
-            self.edge(m, off, t, Recv::Feeds(fs.clone()), a, ret, res);
+            if done.impls.insert(k.clone()) {
+                let t = self.method(k, via.clone());
+                self.edge(m, off, t, Recv::Feeds(fs.clone()), a, ret, res);
+            }
         }
         if !special.is_empty() {
             let rs: Rc<[u32]> = special.into();
@@ -202,12 +223,35 @@ impl<'a> Engine<'a> {
             self.link_hub(h, m, off, &Vec::new(), res);
             self.direct_hub_args(h, a);
         }
-        let opens: Vec<u32> = s.open.iter().collect();
-        for o in opens {
-            let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
-            self.link_hub(h, m, off, &Vec::new(), res);
-            self.direct_hub_args(h, a);
+        if !nonvirt {
+            let mut grew = false;
+            for o in s.open.iter() {
+                grew |= done.opens.insert(o);
+            }
+            if grew {
+                let opens: Vec<u32> = done.opens.iter().copied().collect();
+                for o in self.direct_open_roots(owner, &opens) {
+                    if done.roots.insert(o) {
+                        let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
+                        self.link_hub(h, m, off, &Vec::new(), res);
+                        self.direct_hub_args(h, a);
+                    }
+                }
+            }
         }
+        self.rdirect_done.entry(m).or_default().insert(dk, done);
+    }
+
+    /// 直连实例目标（声明类 c）的接收者 open 类型 opens 中各自建枢纽者：有 c 的超类型时即 c 本身（其接收者
+    /// G(o) ∩ c = G(c)，其余 open 的贡献都含于其中）；否则只取可能与 c 有公共子类型者（o ⊂ c，或一方是接口；
+    /// 两个互不继承的类无公共子类型），再剔除被另一 open 超类型涵盖者
+    fn direct_open_roots(&mut self, c: u32, opens: &[u32]) -> Vec<u32> {
+        if opens.iter().any(|&o| self.sub(c, o)) {
+            return vec![c];
+        }
+        let c_iface = self.is_iface(c);
+        let rel: Vec<u32> = opens.iter().copied().filter(|&o| c_iface || self.is_iface(o) || self.sub(o, c)).collect();
+        self.open_roots(&rel)
     }
 
     /// 实参 a 接到枢纽 h 的形参（不含接收者）
@@ -227,4 +271,15 @@ impl<'a> Engine<'a> {
         }
         self.rdirect.get(&(m, pc))
     }
+}
+
+/// 直连调用点上一个实例目标已接的部分（`direct_virtual`）
+#[derive(Default)]
+pub(super) struct DirectDone {
+    /// 已以接收者来源为 this 接边的实现
+    impls: BTreeSet<MemberRef>,
+    /// 已见的接收者 open 类型
+    opens: BTreeSet<u32>,
+    /// 已接入枢纽的 open 类型
+    roots: BTreeSet<u32>,
 }

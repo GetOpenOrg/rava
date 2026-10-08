@@ -31,8 +31,10 @@ const LIST_CALL: u32 = 0x2000_0000;
 pub(super) enum MethodMark {
     /// 解析出的方法
     Member(MemberRef),
-    /// 类上按口径枚举的全部方法（无名字的查找）
-    All(String, LookupScope),
+    /// 无名字查找点（方法, 偏移）上按口径枚举的全部方法：一个查找点共享一个标记，所指类集记在 `rmark_all`、
+    /// 随查找类值集增长（各类一个标记时，遍历全部可序列化类的查找点给出成千个逃逸对象，涌入每个 open 枢纽）。
+    /// 同一查找点的标记本就同入本点结果、同进本点标记数组，合并不改变任何值集的去向
+    All(u32, u32, LookupScope),
     /// 所指不明（查找类落在反射缺口上）
     Gap,
 }
@@ -41,7 +43,7 @@ impl std::fmt::Display for MethodMark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MethodMark::Member(k) => write!(f, "{k}"),
-            MethodMark::All(c, s) => write!(f, "{s:?}:{c}"),
+            MethodMark::All(m, off, s) => write!(f, "{s:?}@{m}:{off}"),
             MethodMark::Gap => write!(f, "?"),
         }
     }
@@ -106,7 +108,12 @@ impl<'a> Engine<'a> {
         let man = self.man;
         let done = if let Some((inv, lk)) = man.direct_invokers.lookup(&key) {
             match self.lookup_marks(m, opcode, mref, args, lk.scope) {
-                Some(marks) => {
+                Some((mut marks, all)) => {
+                    if let Some(cs) = all {
+                        let id = self.method_mark(&inv.recv, MethodMark::All(m as u32, off, lk.scope));
+                        self.all_mark_grow(id, cs);
+                        marks.insert(MethodMark::All(m as u32, off, lk.scope));
+                    }
                     self.emit_marks(m, off, inv, lk.shape, marks);
                     true
                 }
@@ -189,8 +196,23 @@ impl<'a> Engine<'a> {
         self.call_vals = cv;
     }
 
-    /// 查找调用点的标记所指；None = 推不出（名字不完整、形参形状不符、类不可得）
-    fn lookup_marks(&mut self, m: usize, opcode: u8, mref: &MemberRef, args: &[V], scope: LookupScope) -> Option<BTreeSet<MethodMark>> {
+    /// 共享标记 id 的所指类集并入 cs；增长时重跑读取其所指的直连调用点
+    fn all_mark_grow(&mut self, id: u32, cs: BTreeSet<String>) {
+        let cur = self.rmark_all.entry(id).or_default();
+        let n = cur.len();
+        cur.extend(cs);
+        if cur.len() == n {
+            return;
+        }
+        for w in self.rmark_readers.get(&id).cloned().unwrap_or_default() {
+            self.push_site(w, site_prof::TRIG_RELEASE, None);
+        }
+    }
+
+    /// 查找调用点的标记所指（无名字查找另给出全部方法所指的类集，由调用方并入本点的共享标记）；
+    /// None = 推不出（名字不完整、形参形状不符、类不可得）
+    #[allow(clippy::type_complexity)]
+    fn lookup_marks(&mut self, m: usize, opcode: u8, mref: &MemberRef, args: &[V], scope: LookupScope) -> Option<(BTreeSet<MethodMark>, Option<BTreeSet<String>>)> {
         let md = parse_method(&mref.desc)?;
         let base = usize::from(opcode != classfile::op::INVOKESTATIC);
         let class_arr = format!("[L{CLASS};");
@@ -222,12 +244,12 @@ impl<'a> Engine<'a> {
             out.insert(MethodMark::Gap);
         }
         let Some(nv) = name else {
-            // 无名字：枚举类上口径内的全部方法
-            out.extend(classes.into_iter().map(|c| MethodMark::All(c, scope)));
-            return Some(out);
+            // 无名字：枚举类上口径内的全部方法（类集空时不建共享标记）
+            let all = (!classes.is_empty()).then_some(classes);
+            return Some((out, all));
         };
         if classes.is_empty() {
-            return Some(out);
+            return Some((out, None));
         }
         let pts = match ptv {
             Some(v) => self.mark_ptypes(m, v),
@@ -239,7 +261,7 @@ impl<'a> Engine<'a> {
                 out.insert(MethodMark::Member(k));
             }
         }
-        Some(out)
+        Some((out, None))
     }
 
     /// 查找类集：Class 值 v 所指的字节码类并入 out；返回值集是否含所指未知的部分（open、非字节码类镜像等，即反射缺口）。
@@ -408,12 +430,17 @@ impl<'a> Engine<'a> {
         true
     }
 
-    /// 标记 x 所指的方法（缺口 = 空）；None = 不是标记
-    pub(super) fn mark_targets(&self, x: u32) -> Option<Vec<MemberRef>> {
+    /// 标记 x 所指的方法（缺口 = 空）；None = 不是标记。共享标记登记读取点 w（所指增长时重跑）
+    pub(super) fn mark_targets(&mut self, x: u32, w: (usize, u32)) -> Option<Vec<MemberRef>> {
         Some(match self.rmarks.get(&x)? {
             MethodMark::Member(k) => vec![k.clone()],
             MethodMark::Gap => Vec::new(),
-            MethodMark::All(c, scope) => self.all_methods(c, *scope),
+            MethodMark::All(_, _, scope) => {
+                let scope = *scope;
+                self.rmark_readers.entry(x).or_default().insert(w);
+                let cs = self.rmark_all.get(&x).cloned().unwrap_or_default();
+                cs.iter().flat_map(|c| self.all_methods(c, scope)).collect()
+            }
         })
     }
 

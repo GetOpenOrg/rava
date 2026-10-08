@@ -375,9 +375,15 @@ pub struct Engine<'a> {
     rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
     /// 直连调用点上各实例目标已选过实现的接收者类型与选出的实现（`reflect_direct.rs::direct_virtual`）
     rdirect_sel: HashMap<(usize, u32, MemberRef), (BTreeSet<u32>, BTreeSet<MemberRef>)>,
+    /// 直连调用点上各实例目标已接的实现与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
+    rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
     /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
     rmarks: HashMap<u32, method_marks::MethodMark>,
     rmark_fallback: HashSet<(usize, u32)>,
+    /// 无名字查找点的共享标记（`MethodMark::All`）→ 所指类集（随查找类值集增长）与读取其所指的直连调用点
+    /// （所指增长时重跑）
+    rmark_all: HashMap<u32, BTreeSet<String>>,
+    rmark_readers: HashMap<u32, BTreeSet<(usize, u32)>>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],

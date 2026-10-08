@@ -186,13 +186,9 @@ impl<'a> Engine<'a> {
                     }
                     return;
                 }
-                // open(o) 的接收者（G 中 ⊂ o 者）被同一值集里另一 open 超类型的枢纽涵盖：只接后者，目标与结果相同
                 let opens: Vec<u32> = opens.unwrap_or_default().iter().collect();
                 let mut hubs = Vec::new();
-                for &o in &opens {
-                    if opens.iter().any(|&p| p != o && self.sub(o, p)) {
-                        continue;
-                    }
+                for o in self.open_roots(&opens) {
                     let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                     hubs.push(h);
@@ -202,6 +198,18 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 值集的 open 类型中各自建枢纽者：open(o) 的接收者（G 中 ⊂ o 者）被同一值集里另一 open 超类型的枢纽涵盖时
+    /// 只接后者，目标与结果相同
+    pub(super) fn open_roots(&mut self, opens: &[u32]) -> Vec<u32> {
+        let mut out = Vec::with_capacity(opens.len());
+        for &o in opens {
+            if !opens.iter().any(|&p| p != o && self.sub(o, p)) {
+                out.push(o);
+            }
+        }
+        out
     }
 
     /// 接收者 r 上分派已解析方法
