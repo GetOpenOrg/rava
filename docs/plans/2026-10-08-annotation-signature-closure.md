@@ -58,7 +58,18 @@
 
 ③后 **P2 已完全断开**：`--why sun/reflect/generics/parser/SignatureParser` 的首达链只剩 P1（`ServiceLoader$ProviderImpl.invokeFactoryMethod@20` → `Method.invoke` → `isCallerSensitive` → `isAnnotationPresent` → `AnnotationParser.parseAnnotation2` → `parseSig`）。`ClassRepository` 仍由 `Class.getGenericInfo` 的返回类型签名带入（热路径读映像缓存，类型存在、方法体不可达），属签名边，不拉签名树。方法数 −2（签名解析出 P2 路径的冷部分）。
 
-即：47 个 generics 类的剩余来源 100% 是 P1；gen / ann 归零取决于 P1（reflect-marker）。
+首达链上，47 个 generics 类都经 P1 到达。
+
+**P1 上界（切除集 `csanno`，作业 `asig-cs-0bac6226`，头 0bac6226）**：
+
+| 程序 | 类 / 方法 | gen | ann | jla |
+|---|---|---|---|---|
+| hello | 3245 / 18647（−59 / −350） | 28 (92) | 0 | 1 |
+| deepcopy | 3499 / 21246（−54 / −325） | 29 (102) | 0 | 1 |
+
+P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHashMap.comparableClassFor@21`（concrete）→ `SignatureParser.<init>`，方法含 `parseClassSig` / `parseSuperInterfaces` / `ParameterizedTypeImpl.make` 等，即**确有某组合的入闭包轨迹含真正的类签名解析**。但 asig-str 的诊断里两点组合全部标「⇒映像」，说明这是被 P1 遮住的第四层原因，P2 并没有完全断开。待查方向（见续作 1'）：
+- ⇒映像组合的温轨迹：温求值前只撤销非映像缓存写入，`ClassRepository` 的惰性字段（`superInterfaces`）若在撤销集合里，温轨迹会重解析。
+- 首个组合冷求值中的类初始化轨迹：例如 `ClassRepository.<clinit>` 的 `NONE`，它是否作为初始化轨迹并入。
 
 ## 五、失败 / 否定路线
 
@@ -70,7 +81,8 @@
 ## 六、续作入口
 
 1. **合 reflect-marker 后联测**：本分支 ①②③（P2）+ reflect-marker（P1 invoke 直连）合并后，量 hello / collectors / deepcopy 的 gen / ann；目标 0 / 0。合并后若 ann 仍非 0，用 `--why sun/reflect/annotation/AnnotationParser` 查剩余 invoke 点（`NTLMAuthenticationProxy` 等 `<clinit>` 期反射调用是否被标记覆盖）。
-2. **csanno 上界**：切除集 `scripts/closure_composition_cuts/csanno.txt`（切 `Reflection.isCallerSensitive@18`）给出 P1 全断的上界；与第 1 项实测对比判断剩余缺口属 P1 还是别处。
+1'. **P2 第四层（优先）**：用 `--cut-file csanno.txt --flows @concrete` 跑 hello，对 `comparableClassFor@21` 的每个组合输出冷 / 温 / 热轨迹里是否含 `SignatureParser.parseClassSig`（在 concrete.rs 诊断里加一列「轨迹含签名解析的组合」，按方法 id 比对，不写类名字面量，由 `--why` 目标给出），定位后修温轨迹或初始化轨迹的归属。目标是 csanno 下 gen = 0。
+2. **csanno 上界**：已量（第四节），hello −59 类，deepcopy −54 类；合 reflect-marker 后的实测应逼近该上界，若差距大则剩余 invoke 点未被标记覆盖。
 3. **终态备选（P1）**：若标记化覆盖不全，`Method` 的 CS 判定结果在构建期按方法注解求值并写入映像（与 `Class.genericInfo` 同走 `image_memo_fields` 清单，类名只在 TOML），运行期 `isCallerSensitive` 只读缓存位，不再到达 `AnnotationParser`。
 4. **运行期反射读注解的正确性**：链出闭包只针对不读注解的程序；`TestAnnoReflect` / `TestAnnoDeepAccess` 等真读注解的程序链仍可达（入口是用户代码的 `getAnnotation`），合入前抽查。
 5. **与其他分支的重叠**：
