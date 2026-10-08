@@ -369,12 +369,17 @@ impl<'a> Engine<'a> {
                                 _ => String::new(),
                             };
                             // 按对象返回值（实例调用）：目标的对象值 / 通配值
-                            let orv = match (&t, *opcode != classfile::op::INVOKESTATIC) {
-                                (Some(t), true) => {
-                                    let ov: Vec<String> = self.ctx.orvals.borrow().get(t).into_iter().flatten().take(6).map(|(o, v)| format!("{}={v:?}", self.names[*o as usize])).collect();
-                                    format!(" orv {ov:?} orw {:?}", self.ctx.orwild.borrow().get(t))
-                                }
-                                _ => String::new(),
+                            // 按对象返回值（实例调用）：同名同描述符各目标的对象值 / 通配值
+                            let orv = if *opcode != classfile::op::INVOKESTATIC {
+                                let same = |k: &MemberRef| k.name == mref.name && k.desc == mref.desc;
+                                let ov: Vec<String> = self.ctx.orvals.borrow().iter().filter(|(k, _)| same(k)).flat_map(|(k, ov)| {
+                                    ov.iter().take(6).map(move |(o, v)| format!("{}:{}={v:?}", k.owner, self.names[*o as usize]))
+                                }).take(12).collect();
+                                let ow: Vec<String> = self.ctx.orwild.borrow().iter().filter(|(k, _)| same(k)).map(|(k, v)| format!("{}={v:?}", k.owner)).take(6).collect();
+                                let objs: Vec<String> = self.set_of(Node::P(m, 0)).classes.iter().filter(|x| self.objs.contains_key(x)).take(6).map(|o| self.names[o as usize].to_string()).collect();
+                                format!(" orv {ov:?} orw {ow:?} this {objs:?}")
+                            } else {
+                                String::new()
                             };
                             Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}", mref.name))
                         }
