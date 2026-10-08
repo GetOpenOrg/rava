@@ -47,8 +47,20 @@ pub(super) struct Ext {
     pub ids: HashMap<u32, u32>,
     /// 字符串内容字段（清单 `vm_fields.string_value`）的字段键：经它取到的数组冻结
     pub str_value: Option<u32>,
+    /// 映像根模块（根类所在模块）：映像物化在根模块 crate，扩展类与扩展对象的类型限于此模块
+    pub home: Option<String>,
     /// 尝试中出现不可撤回的效果：此后不再尝试
     pub broken: Option<String>,
+}
+
+impl Ext {
+    /// 类型（数组取元素类型；基本类型恒真）属映像根模块
+    pub(super) fn at_home(&self, cp: &ClassPath, ty: &str) -> bool {
+        let e = ty.trim_start_matches('[');
+        let e = if e.len() < ty.len() { e.strip_prefix('L').and_then(|r| r.strip_suffix(';')) } else { Some(e) };
+        let Some(e) = e else { return true };
+        self.home.is_some() && cp.module_of(e) == self.home
+    }
 }
 
 /// 尝试前的效果计数
@@ -83,7 +95,8 @@ impl Vm {
         let rt = self.bj.recs.iter().filter_map(|r| if let super::journal::Rec::RuntimeInit { class, .. } = r { Some(class.clone()) } else { None }).collect();
         let str_value = env.cfg().vm_fields.get("string_value").and_then(|s| s.rsplit_once('.')).map(|(o, n)| (o.to_string(), n.to_string()));
         let str_value = str_value.map(|(o, n)| self.fkey(&o, &n));
-        self.ext = Some(Box::new(Ext { rt, ids, str_value, ..Default::default() }));
+        let home = env.cp.module_of(crate::engine::OBJECT);
+        self.ext = Some(Box::new(Ext { rt, ids, str_value, home, ..Default::default() }));
         // 扩展类在进入 main 之后初始化：返回值事实（如 VM 已引导完毕）对有字节码的方法同样成立
         self.minfo.clear();
     }
@@ -231,6 +244,11 @@ impl Vm {
         if let Some(w) = x.failed.get(&key) {
             return fail(format!("依赖类 {key} 运行期初始化：{w}"));
         }
+        if !x.at_home(env.cp, &key) {
+            let why = "不在映像根模块（映像物化在根模块 crate）".to_string();
+            x.failed.insert(key.clone(), why.clone());
+            return fail(format!("类 {key} 运行期初始化：{why}"));
+        }
         let outer = x.stack.is_empty();
         let done0 = x.done.len();
         x.stack.push(Attempt { class: key.clone(), floor: self.heap.len(), hn: 0 });
@@ -364,7 +382,7 @@ impl ExtVm {
         }
         let env = Env { ctx, cp };
         self.vm.ensure_init(&env, cls).ok()?;
-        let r = self.vm.ext_append(d, self.from);
+        let r = self.vm.ext_append(cp, d, self.from);
         self.from = self.vm.ext.as_deref().map_or(0, |x| x.done.len());
         match r {
             Ok(cs) => Some(cs),

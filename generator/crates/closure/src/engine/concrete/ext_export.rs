@@ -36,7 +36,7 @@ impl Vm {
     }
 
     /// 扩展类 `done[from..]` 追加为扩展组；返回追加的类。失败时映像不变
-    pub(super) fn ext_append(&mut self, d: &mut ImageData, from: usize) -> Result<Vec<String>, String> {
+    pub(super) fn ext_append(&mut self, cp: &ClassPath, d: &mut ImageData, from: usize) -> Result<Vec<String>, String> {
         let x = self.ext.as_deref().ok_or("非扩展期")?;
         let classes: Vec<Rc<str>> = x.done.get(from..).unwrap_or_default().to_vec();
         let batch: HashSet<&str> = classes.iter().map(|c| &**c).collect();
@@ -147,6 +147,9 @@ impl Vm {
             for &o in ms {
                 let i = id(o)?;
                 let h = &self.heap[o as usize];
+                if !x.at_home(cp, &h.ty) {
+                    return Err(format!("扩展组含根模块之外的类型 {}", h.ty));
+                }
                 let body = match &h.body {
                     Body::Inst(fs) => {
                         let mut out = Vec::new();
