@@ -85,22 +85,34 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
-## 📌 现状（2026-10-08）
+## 📌 现状（2026-10-09）
 
-> 下方依赖树与活跃任务表已于同日整表对齐本节。
+> 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
-- **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f（origin、github 均已推）。之后的工作都在合批分支上，未合入集成分支。
-- **batch-1009**（d5a2cb5d，验证中：全量单测 + 抽查）：batch-1008（user-unreach-stubs、c1d-url-b2、boot-image-s3 / s4、enum-values-direct、closure-composition、docs-align；HelloWorld 闭包 OOM 修复 f19e46e0；合批语义取舍见 c1d §30.18）+ closure-gates（c6a19c4c，`rava closure --gates`）+ boot-image-s5（57a9cec2，第 5 步 jimage + JceSecurity，`#[jvm_boundary]` 14 → 0，U14 `java.home` 钉值）。batch-1007 / 1008 已被取代。
-- **batch-1010**（c3f3e0f9，攒批中，待 batch-1009 放行后验证）：u13-generic（28ae3df8，U13 `Class.genericInfo` 入映像；机制生效但 HelloWorld 闭包 −0——`sun/reflect/generics` 另经注解签名解析与 open(Comparable) 键两条路径可达，见引导映像 §5.6.9）。
-- **进行中**：u12-props（U12 机制 ①③ + U14 `line.separator` / `file.encoding` 钉值）；reflect-direct（闭包收窄 ①：`Method.invoke` 全入口直连，先以 `--gates` 出新基线数）；boot-image-s6（第 6 步：非引导类构建期初始化）；ensure-init（闭包收窄 ③：`ensureClassInitialized`）。
-- **待派（按序）**：注解签名解析出闭包（java_meta 构建期求值 + `AnnotationParser` 可达性，U13 后续）；闭包构成报告 §七其余项——JCA、字符集、locale、类加载封闭映像、容器元素（以 `--gates` 实测排名为准）。
-- **派发规则（2026-10-08）**：子代理上限 5；有空名额即按已定顺序派发，不需再请示用户；子代理不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理（用户 10-08）。
-- **用户已定（2026-10-08）**：U12 接受为 U1 例外（日志路径属性构建期取值，①③ 解除挂起）；U13 `Class.genericInfo` 入映像；去除无映像回退保留；U14 部分修订 U1——`line.separator`（按目标三元组）、`file.encoding`（UTF-8）、`java.home`（构建期值）构建期钉值，`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取，每项实测闭包类数、无收益不钉。见引导映像计划 §8.4。
-- **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
-- **known_failures**：batch-1008 新增 TestBootLayer（第 5 步已实施，随 batch-1009 复验）、删除 TestXmlSaxEvents。
-- **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava、dev 恢复。
-- **dev（2026-10-08）**：内存条有坏点，等新条到货更换，恢复需数天；BIOS 散热调整随换内存同一次停机做，恢复后先做内存自检再放作业。改名不再等 dev，停派点（用户 10-08 定）= batch-1009/1010 放行合入时：停派新代理，在跑代理当前小步提交推送并写恢复入口后收尾，分发器作业清空后改名；硬条件仅「无在跑子代理 + 无在跑分发器」，改名后按恢复入口新开代理续作。
-- **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
+- **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f。batch-1007 至 1011 已被 batch-1012 包含，不再单独放行。
+- **batch-1012**（e5200a3e，验证中，放行即为改名停派点）：batch-1011（3cd43e28：batch-1010 + boot-image-s6 c18e8fc4 + charset-build + log-chain / log-chain2 + locale-build）+ fix-1010（24f8029c，batch-1010 三项回归）+ charset-ext（d85354b0）+ fix-1011（5fcd911f）。全量单测拆两组：B 组全过，A 组仅已知失败 `param_string_constants_fold_switch`。抽查除 TestJndiNoProvider 外全过（剩余用例续跑中）。
+  - **java_base OOM 根因**：c18e8fc4（s6）后启动映像对象 7702 → 19347，全部放在一个 static 和一个启动函数里。charset-ext 修复：映像分 24 段、启动函数拆 42 个（b3a860ac），重定位先于回放（160789c7），用 `ImageData::writes_statics_of` 统一判定静态存储（14917aed）。修复后 java_base 峰值 1642 MB（原 11.8 GB）。
+  - **TestJndiNoProvider**：sg1 上转译超时 600 s；在 jp2 单独重跑通过，但转译 569.8 s（b1009 为 324 s，慢 1.76×）。不阻塞放行，改名后派代理调查。
+- **batch-1013**（6c687d65，攒批完成，改名后开测）：batch-1012 + fix-1011 后续（3f78902a）+ reflect-marker（d51837e4）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c）。
+  - **fix-1011**：已修三处顺序相关根因（5fcd911f、7d56de55 image_settle_reads、bfe1bbb9 pkeys_seen）。第四处未修：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回，导致单测 `profile_union_key_and_coverage` 失败。终态做法：分析结束时删除只由回退站点贡献的缓存组，见引导映像计划 §5.8.6。
+  - **reflect-marker**：DeepCopy 3553 → 3532 类，HelloWorld / CollectorsDemo 3304 → 3263 类。DeepCopy 分析耗时 502 → 889 s，峰值内存 5.9 → 7.7 GB，原因未查明，疑为 78b744fe。续作见 `2026-10-08-enum-values-direct.md` §9.6。
+  - **logger-chain**：HelloWorld / CollectorsDemo 3304 → 3233 类，DeepCopy 3511 类，LogManager 为 0。目标 537 / 583 未达到。剩余持有者是 `logRuntimeExit@74` 的 `log(DEBUG)`，需要把 `isLoggable(DEBUG)` 折叠为 false（缺口 ③），见引导映像计划 §5.9.7。
+- **改名**：batch-1012 放行合入后停派新代理，分发器清空后改名。改名后重建巡检 cron，并更新 cluster.toml、巡检脚本路径和服务器检出的 origin。
+- **改名后待派（按序）**：
+  - 缓存组回退撤回（§5.8.6）；
+  - reflect-marker 耗时回归与 §9.6；
+  - 日志链缺口 ③；
+  - annot-sig 续作；
+  - TestJndiNoProvider 转译变慢调查。
+- **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
+- **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
+- **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
+- **暂缓**：
+  - build-memsafe；纯优化线（10-06 分级）；U1 重议；
+  - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
+  - 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例。
+- **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava。
+- **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
 
@@ -209,17 +221,17 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 
 ## 🔴 活跃任务
 
-> 依赖关系见上方「任务依赖树」。本表只列在途 / 待验证 / 待启项（2026-10-08）；已完成与过时行已删，见历史 §J 与各计划文档。
+> 依赖关系见上方「任务依赖树」。本表只列在途 / 待验证 / 待启项（2026-10-09）；已完成与过时行已删，见历史 §J 与各计划文档。
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| 合批 batch-1008 | 🧪 待合批验证（batch-1008，6934dc93 → 修复 b558e0c2） | 含 boot-image-s4（c614f840）、c1d-url-b2（3391eb2d）、user-unreach-stubs（108558e0）、enum-values-direct（59451c29）、closure-composition（c3a06331）。首次验证抽查 41/41 因映像求值失败；修复后映像求值通过，HelloWorld emit 内存超限（峰值约 11.9G）定位中。语义取舍见 c1d §30.18；known_failures +TestBootLayer、−TestXmlSaxEvents |
-| 引导映像第 3–4 步 | 🧪 待合批验证（boot-image-s3 / s4，batch-1008） | `#[jvm_boundary]` 23 → 14；VM / Module / ModuleLayer / Class / SecurityManager 移出边界；去除无映像回退（用户 10-08 确认保留） |
-| 引导映像第 5 步 | 🔄 进行中（boot-image-s5） | jimage 嵌入 + `getNativeMap`；ClassLoader 6、BootLoader 2、JceSecurity 6 归零，`#[jvm_boundary]` 14 → 0；U14 `java.home` 构建期钉值（JceSecurity 策略文件改为构建期事实）；验收 TestClassResourceStream、TestBootLayer、JCA 用例 |
-| u12-props：引导映像机制 ①③ + U14 属性钉值 | 🔄 进行中（u12-props，基于 b558e0c2） | U12：构建期确定 `LoggerFinder` 提供者、日志级别按映像值折叠；U14：`line.separator` 按目标三元组、`file.encoding` = UTF-8 构建期钉值，依赖类入映像。每项实测闭包类数，无收益不钉。HelloWorld 按平台上限 Linux ≤ 640 / macOS ≤ 590 |
-| 引导映像 S2 genericInfo | ⏳ 待派（U13 已定 2026-10-08，有空名额即派） | `Class.genericInfo` 入映像，`sun/reflect/generics` 出 HelloWorld 闭包 |
+| 合批 batch-1012 | 🧪 验证中（e5200a3e） | 包含 batch-1009 至 1011；单测达标；抽查除 TestJndiNoProvider（转译 1.76× 变慢，不阻塞）外全过；放行即为改名停派点 |
+| 合批 batch-1013 | ⏳ 改名后开测（6c687d65） | fix-1011 后续、reflect-marker、logger-chain + seed-chain；单测预期失败 `profile_union_key_and_coverage`（第四根因） |
+| 缓存组回退撤回 | ⏳ 改名后派 | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
+| reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
+| 日志链缺口 ③ | ⏳ 改名后派 | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
+| TestJndiNoProvider 转译变慢 | ⏳ 改名后派 | b1009 324 s → b1012 569.8 s（jp2），sg1 上超过 600 s 超时 |
 | 引导映像零拷贝 | ⏳（§8.3，10-07 定） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
-| 闭包门自动排名 | 🔄 进行中（closure-gates） | `rava closure --gates`；在新基线上解释 HelloWorld 468 与约 3011 类的落差 |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
