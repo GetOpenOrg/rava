@@ -449,8 +449,13 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             g.line(&format!("{}::__boot_initialized();", p.expr_path(cls)));
         }
     }
+    // 重定位（字段偏移 / VM 单元地址）的值与执行次序无关，先于任何重放调用写入：构建期初始化的类在运行期
+    // 从启动起即视为已初始化，宿主相关路径上的重放调用（如按宿主编码查字符集）可能先于其构建期次序读到这些槽
+    for st in d.steps.iter().filter(|st| matches!(st, IStep::Reloc { .. })) {
+        step(&mut g, st)?;
+    }
     main.push_str(&segment(&std::mem::take(&mut g.out), &mut fns, &mut next));
-    for st in &d.steps {
+    for st in d.steps.iter().filter(|st| !matches!(st, IStep::Reloc { .. })) {
         step(&mut g, st)?;
     }
     g.line("Ok(())");
