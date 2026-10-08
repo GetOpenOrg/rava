@@ -7,6 +7,7 @@
 //! - 不接抽象调用边。
 //! 任一组合失败（不可建模的指令 / native / 共享状态改写）即整个调用点回退抽象调用边；回退后不再撤回。
 //! 每组实参先冷后热各求值一次（内存缓存字段先写后读），轨迹取并；求值后撤销对映像的缓存写入。
+//! 冷求值兼写映像缓存与非映像缓存时插一次温求值（只撤销非映像缓存），映像缓存物化后按温 / 热之并入闭包。
 
 mod apply;
 mod boot;
@@ -79,7 +80,7 @@ pub(super) struct Outcome {
     /// 映像状态的写入全部可物化进引导映像时（`[concrete] image_memo_fields`，见 `concrete/persist.rs`）：
     /// 各缓存片段与只按热求值的结果（运行期缓存已在映像中，执行的即热路径）
     alt: Option<Box<(Vec<persist::Frag>, Outcome)>>,
-    /// 不可物化的原因（诊断）
+    /// 不可物化的原因；可物化（alt 为 Some）时为运行期仍重算的非映像缓存（温求值，诊断）
     alt_why: Option<String>,
 }
 
@@ -141,7 +142,7 @@ impl<'a> Engine<'a> {
             }
             outs.push((c.clone(), r));
         }
-        // 镜像缓存可物化进引导映像的组合按热求值入闭包（运行期缓存已命中）
+        // 镜像缓存可物化进引导映像的组合按热（有温求值时温 / 热之并）入闭包（运行期缓存已命中）
         let mut why: Vec<Option<String>> = Vec::new();
         let mut hot: Vec<bool> = Vec::new();
         for (_, r) in &outs {
@@ -154,8 +155,9 @@ impl<'a> Engine<'a> {
                 (Some(a), _) => self.image_memo_prepare(&a.0).err(),
                 (None, w) => w.clone(),
             };
-            hot.push(w.is_none() && o.alt.is_some());
-            why.push(w);
+            let h = w.is_none() && o.alt.is_some();
+            hot.push(h);
+            why.push(if h { o.alt_why.clone() } else { w });
         }
         let image: Vec<Rc<str>> = outs
             .iter()
@@ -193,7 +195,8 @@ impl<'a> Engine<'a> {
                 !h || n_hot <= DIAG_COMBOS
             })
             .map(|(c, (w, &h))| match (h, w) {
-                (true, _) => format!("{c:?}⇒映像"),
+                (true, Some(w)) => format!("{c:?}⇒映像（温：{w}）"),
+                (true, None) => format!("{c:?}⇒映像"),
                 (false, Some(w)) if w != "无缓存写入" => format!("{c:?}（并：{w}）"),
                 _ => format!("{c:?}"),
             })
@@ -294,12 +297,17 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败。热求值的结果另记一份：缓存写入可物化进映像时按它入闭包
+/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败。热求值的结果另记一份：缓存写入可物化进映像时按它入闭包。
+/// 冷求值同时写了映像缓存字段与非映像缓存（如别的镜像缓存字段）时，只撤销后者再求值一次（温）：运行期首次执行时
+/// 映像缓存已在、非映像缓存为空，执行的即温路径，此后为热路径；映像片段只取映像缓存字段，按温 / 热之并入闭包
 fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcome, String> {
     let mut out = Outcome::default();
     let mut hot = Outcome::default();
+    let img = !env.cfg().image_memo_fields.is_empty();
+    let mut partial = false;
     let r = (|| {
-        for pass in 0..2 {
+        let mut pass = 0;
+        while pass < 2 {
             vm.epoch += 1;
             vm.trace = Trace::default();
             vm.steps = 0;
@@ -326,7 +334,8 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                 let x = sn.value(*v)?;
                 out.memo.push((f.clone(), x));
             }
-            if pass == 1 && !env.cfg().image_memo_fields.is_empty() {
+            let warm_next = pass == 0 && img && !partial && persist::mixed(vm, env);
+            if (pass == 1 || partial) && img {
                 let mut sn = snap::Snap::new(vm, env, &mut hot.objs);
                 if let Some(v) = ret {
                     let x = sn.value(v)?;
@@ -341,12 +350,22 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                 merge(&mut hot, t);
             }
             merge(&mut out, trace);
+            if warm_next {
+                // 温：只撤销非映像缓存的写入，映像缓存保留（撤销日志里留待求值结束整体撤销）
+                persist::rollback_non_image(vm, env);
+                partial = true;
+                continue;
+            }
+            pass += 1;
         }
         Ok(())
     })();
-    if r.is_ok() && !env.cfg().image_memo_fields.is_empty() {
-        match persist::collect(vm, env) {
-            Ok(frags) => out.alt = Some(Box::new((frags, hot))),
+    if r.is_ok() && img {
+        match persist::collect(vm, env, partial) {
+            Ok((frags, note)) => {
+                out.alt = Some(Box::new((frags, hot)));
+                out.alt_why = note;
+            }
             Err(w) => out.alt_why = Some(w),
         }
     }
