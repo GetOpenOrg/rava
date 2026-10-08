@@ -3,8 +3,10 @@
 //! 输入是闭包分析器导出的 [`ImageData`]（活对象集已由联合不动点求出），输出根门面 crate 的
 //! `boot_image.rs`：
 //!
-//! - **映像区**：单个 `#[repr(C)]` 静态结构 `BOOT_IMAGE`，每个活对象一个字段（`__ImageObj<X__inner>` /
-//!   `__ImageArr<T, S>`），对象头带常驻计数与构建期身份哈希，字段初值是常量求值的映像内引用；
+//! - **映像区**：按规模分段的 `#[repr(C)]` 静态结构 `BOOT_IMAGE_{k}`，每个活对象一个字段
+//!   （`__ImageObj<X__inner>` / `__ImageArr<T, S>`），对象头带常驻计数与构建期身份哈希，字段初值是常量求值的
+//!   映像内引用（可跨段）。分段使每个静态初值体规模有界：rustc 对单个初值体的分析随体规模超线性增长，
+//!   整个映像放进一个静态时编译峰值随映像规模失控；分段后峰值只随映像规模线性增长；
 //! - **启动序列** `__boot_image_start`：登记映像区 → VM 单元 → 链接（常量不可表达的引用：类镜像、接口
 //!   视图、宿主相关值）→ 宿主值改写 → 驻留 → 静态字段初值 → 构建期初始化标记 → 按构建期次序重放
 //!   重定位 / 重算 / 残差调用（档位随之切换）。
@@ -44,7 +46,14 @@ pub(crate) struct Plan<'c, 'a> {
     pub layouts: BTreeMap<String, Vec<Slot>>,
     /// 类 → 实现层模块路径（存储类型 `X__inner` 随存储层进实现 crate）
     pub homes: &'c BTreeMap<String, String>,
+    /// 物化对象 → 所在映像段
+    pub seg: BTreeMap<u32, usize>,
+    /// 映像段数
+    pub nseg: usize,
 }
+
+/// 每个映像段的规模上限（估算的初值表达式节点数，见 [`Plan::weight`]）
+const SEG_WEIGHT: usize = 4096;
 
 impl<'c, 'a> Plan<'c, 'a> {
     fn new(ctx: &'c EmitCtx<'a>, ems: &'c Emissions, d: &'c ImageData, homes: &'c BTreeMap<String, String>) -> Result<Self> {
@@ -52,7 +61,7 @@ impl<'c, 'a> Plan<'c, 'a> {
         let mat: BTreeSet<u32> =
             live.iter().copied().filter(|&i| d.objs.get(i as usize).is_some_and(|o| o.mirror.is_none() && !o.placeholder)).collect();
         let root = ctx.crates().root().to_string();
-        let mut p = Plan { ctx, ems, d, root, live, mat, layouts: BTreeMap::new(), homes };
+        let mut p = Plan { ctx, ems, d, root, live, mat, layouts: BTreeMap::new(), homes, seg: BTreeMap::new(), nseg: 0 };
         // 映像镜像上写入的缓存字段（`mirror_memos`）按镜像类型的存储布局取设值器
         let memo_tys = d.mirror_memos.iter().map(|m| d.objs[m.mirror as usize].ty.as_str());
         let tys: BTreeSet<&str> =
@@ -65,7 +74,43 @@ impl<'c, 'a> Plan<'c, 'a> {
             let ci = p.generated(t).ok_or_else(|| EmitError::Input(format!("引导映像对象的类 {t} 没有生成的存储布局")))?;
             p.layouts.insert(t.to_string(), instance_layout(ctx, ci));
         }
+        // 按对象次序装段，每段估算规模不超过 SEG_WEIGHT（超限的单个对象独占一段）
+        let (mut k, mut acc) = (0usize, 0usize);
+        for &i in &p.mat {
+            let w = p.weight(i);
+            if acc > 0 && acc + w > SEG_WEIGHT {
+                k += 1;
+                acc = 0;
+            }
+            acc += w;
+            p.seg.insert(i, k);
+        }
+        p.nseg = if p.mat.is_empty() { 0 } else { k + 1 };
         Ok(p)
+    }
+
+    /// 对象初值的估算规模：实例按布局槽数，引用数组按元素数，基本类型数组的元素是字面量（`u8` 为单个
+    /// 字节串字面量）按较低权重计
+    fn weight(&self, i: u32) -> usize {
+        let o = self.obj(i);
+        1 + match &o.body {
+            IBody::Inst(_) => self.layouts.get(&o.ty).map_or(0, |l| l.len()),
+            IBody::Arr(es) => match o.ty.as_bytes().get(1) {
+                Some(b'L' | b'[') => es.len(),
+                Some(b'Z' | b'B') => es.len() / 64,
+                _ => es.len() / 8,
+            },
+        }
+    }
+
+    /// 物化对象 `i` 在映像中的位置（`BOOT_IMAGE_{k}.o{i}`）
+    pub fn img(&self, i: u32) -> String {
+        format!("BOOT_IMAGE_{}.o{i}", self.seg.get(&i).copied().unwrap_or(0))
+    }
+
+    /// 映像对象的 `Object` 句柄（常量求值可用）
+    pub fn obj_ref(&self, i: u32) -> String {
+        format!("Object(__Obj::image(&{}.value as &dyn ObjectVTable))", self.img(i))
     }
 
     pub fn obj(&self, i: u32) -> &'c IObj {

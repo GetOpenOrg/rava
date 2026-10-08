@@ -13,6 +13,7 @@ use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 /// 对象头：值地址前 16 字节
 #[repr(C, align(16))]
@@ -65,25 +66,38 @@ impl<T> __ImageObj<T> {
     }
 }
 
-// 映像区（单个静态结构）的地址区间：启动时登记一次，身份哈希据此判定映像对象
-static IMAGE_START: AtomicUsize = AtomicUsize::new(0);
-static IMAGE_END: AtomicUsize = AtomicUsize::new(0);
+// 映像区（按规模分段的静态结构）的地址区间：启动时登记一次，身份哈希据此判定映像对象。
+// IMAGE_LO / IMAGE_HI 是全部段的包络（快速排除堆对象），IMAGE_SEGS 是按起址排序的各段 [起, 止)
+static IMAGE_LO: AtomicUsize = AtomicUsize::new(0);
+static IMAGE_HI: AtomicUsize = AtomicUsize::new(0);
+static IMAGE_SEGS: OnceLock<Box<[(usize, usize)]>> = OnceLock::new();
 
-/// 登记映像区（生成的启动序列第一步调用）
-pub fn __image_register(start: *const u8, len: usize) {
-    IMAGE_START.store(start as usize, Ordering::Relaxed);
-    IMAGE_END.store(start as usize + len, Ordering::Release);
+/// 登记映像区各段（生成的启动序列第一步调用一次）：`(段起址, 段字节数)`
+pub fn __image_register(segs: &[(*const u8, usize)]) {
+    let mut v: Vec<(usize, usize)> = segs.iter().filter(|s| s.1 > 0).map(|&(p, n)| (p as usize, p as usize + n)).collect();
+    v.sort_unstable();
+    let (Some(lo), Some(hi)) = (v.first().map(|s| s.0), v.iter().map(|s| s.1).max()) else { return };
+    if IMAGE_SEGS.set(v.into_boxed_slice()).is_ok() {
+        IMAGE_LO.store(lo, Ordering::Relaxed);
+        IMAGE_HI.store(hi, Ordering::Release);
+    }
 }
 
 /// 映像对象的构建期身份哈希：`id` 为对象值地址；不在映像区或构建期未取哈希 → None
 #[inline]
 pub fn __image_hash(id: *const ()) -> Option<i32> {
     let a = id as usize;
-    let end = IMAGE_END.load(Ordering::Acquire);
-    if a >= end || a < IMAGE_START.load(Ordering::Relaxed) + HEAD {
+    let hi = IMAGE_HI.load(Ordering::Acquire);
+    if a >= hi || a < IMAGE_LO.load(Ordering::Relaxed) + HEAD {
         return None;
     }
-    // SAFETY: 映像区内的对象值地址前 HEAD 字节是其对象头（映像结构的每个字段都是 `__ImageObj` / 映像数组）
+    let segs = IMAGE_SEGS.get()?;
+    let k = segs.partition_point(|s| s.0 + HEAD <= a);
+    let &(start, end) = segs.get(k.checked_sub(1)?)?;
+    if a < start + HEAD || a >= end {
+        return None;
+    }
+    // SAFETY: 映像段内的对象值地址前 HEAD 字节是其对象头（映像段结构的每个字段都是 `__ImageObj` / 映像数组）
     let size = unsafe { (*((a - HEAD) as *const Header)).size };
     (size & IMAGE_HASHED != 0).then_some(size as u32 as i32)
 }
@@ -340,7 +354,7 @@ mod tests {
 
     #[test]
     fn image_objects_are_immortal_and_hashed() {
-        __image_register(&IMG as *const Img as *const u8, std::mem::size_of::<Img>());
+        __image_register(&[(&IMG as *const Img as *const u8, std::mem::size_of::<Img>())]);
         let a = __Obj::image(&IMG.a.value);
         let a2 = a.clone();
         drop(a2);
