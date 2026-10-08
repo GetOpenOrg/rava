@@ -30,12 +30,14 @@ pub(super) enum DefArg {
     Const(V),
 }
 
-/// 读取入口的形态：键 / 缺省值的实参序号；`receiver` = 接收者须为属性表对象
+/// 读取入口的形态：键 / 缺省值的实参序号；`receiver` = 接收者须为属性表对象；
+/// `snapshot` = 读启动快照（不查不折叠集合：运行期改写与属性表对象逃逸不影响快照）
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PropSum {
     pub(super) receiver: bool,
     pub(super) key: usize,
     pub(super) default: DefArg,
+    pub(super) snapshot: bool,
 }
 
 /// 返回属性表对象的方法与调用方可见性（均只增不减，两侧先后到达都能判定）
@@ -190,7 +192,7 @@ impl Ctx<'_> {
 
     /// 清单属性读取锚点（成员键）的读取形态
     pub(super) fn reader_spec(&self, k: &str) -> Option<PropSum> {
-        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) })
+        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param), snapshot: r.snapshot })
     }
 
     /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
@@ -219,8 +221,8 @@ impl Ctx<'_> {
             return None;
         }
         let V::Str(key, _) = args.get(spec.key)? else { return None };
-        self.note_props(me);
-        {
+        if !spec.snapshot {
+            self.note_props(me);
             let u = self.punstable.borrow();
             if u.all || u.keys.contains(&**key) {
                 return None;
@@ -312,7 +314,7 @@ impl Ctx<'_> {
                 v => DefArg::Param(param_of(v)?),
             },
         };
-        Some(PropSum { receiver: false, key, default })
+        Some(PropSum { receiver: false, key, default, snapshot: inner.snapshot })
     }
 }
 

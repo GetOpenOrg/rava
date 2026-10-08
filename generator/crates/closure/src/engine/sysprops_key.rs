@@ -70,8 +70,8 @@ impl Ctx<'_> {
         if spec.receiver && !args.first().is_some_and(|v| v.obj().is_some_and(|o| **o == Obj::SysProps)) {
             return None;
         }
-        self.note_props(Some(me));
-        {
+        if !spec.snapshot {
+            self.note_props(Some(me));
             let u = self.punstable.borrow();
             if u.all || u.keys.iter().any(|k| parts_match(p, k)) {
                 return None;
