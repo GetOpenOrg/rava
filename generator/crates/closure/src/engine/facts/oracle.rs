@@ -64,7 +64,9 @@ impl Oracle for Facts<'_, '_> {
             }
             None => None,
         };
-        let Some(t) = &c.target else {
+        // 无唯一目标时，带构造完成标签的接收者按标签所示的类选目标
+        let tagged = if c.target.is_none() { self.ctx.tagged_target(opcode, m, iface, args.first()) } else { None };
+        let Some(t) = c.target.as_ref().or(tagged.as_ref()) else {
             return match per {
                 Some(PV::Const(v)) => Ret::Value(v),
                 _ => Ret::Unknown,

@@ -29,9 +29,15 @@ fn image_id(v: &V) -> Option<(u32, usize)> {
     }
 }
 
-/// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
+/// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）、
+/// 构造完成标签的对象（被调方法里按标签读 final 字段、按标签的类选虚调用目标）
 fn bindable(v: &V) -> bool {
-    is_const(v) || is_sysprops_tag(v)
+    is_const(v) || is_sysprops_tag(v) || fields_tag(v)
+}
+
+/// 带非空构造完成标签（`Obj::Fields`）的引用
+fn fields_tag(v: &V) -> bool {
+    matches!(v.obj().map(|o| &**o), Some(crate::absint::Obj::Fields(fs)) if !fs.is_empty())
 }
 
 fn is_sysprops_tag(v: &V) -> bool {
@@ -58,6 +64,8 @@ pub(super) enum CArg {
     Class(u32),
     /// 引导映像对象（下标, 已知 final 字段数）
     Image(u32, usize),
+    /// 构造完成标签（标签的规范文本）
+    Fields(String),
 }
 
 /// 记忆键：目标、各实参（非常量 = None）、起始深度
@@ -71,6 +79,7 @@ fn carg(v: &V) -> Option<CArg> {
         V::Str(s, _) => Some(CArg::Str(crate::absint::lit_id(s))),
         v if is_sysprops_tag(v) => Some(CArg::SysProps),
         V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
+        v if fields_tag(v) => v.obj().map(|o| CArg::Fields(format!("{o:?}"))),
         v => image_id(v).map(|(id, n)| CArg::Image(id, n)),
     }
 }
@@ -83,7 +92,7 @@ impl Ctx<'_> {
         }
         // 无常量实参时只求可能返回属性表对象的方法（如返回持有字段的包装方法）
         let ret = t.desc.rsplit_once(')').map_or("", |x| x.1);
-        if !args.iter().any(is_const) && !self.man.sysprops.holder_type(ret) {
+        if !args.iter().any(|a| is_const(a) || fields_tag(a)) && !self.man.sysprops.holder_type(ret) {
             return None;
         }
         // 记忆键带起始深度：嵌套求值的深度上限截断只取决于它
