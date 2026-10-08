@@ -496,7 +496,50 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 后续入口：
 
 - 用户就 (a) 作出决定后实施 (b)。验收：`closure_composition_job.sh --cut-sets csstd` 的 −141 为兑现上界，实施后基线应接近 3183 / 3183 / 3432。
-- 第 5 条缺口独立立项（反射建模），与收窄无关。
+- 第 5 条缺口已由 7.3.1（分支 charset-ext）修复。
+
+#### 7.3.1 第 5 条缺口修复：实例字段值映射 + 写入辅助方法形参常量（2026-10-08，分支 charset-ext）
+
+根因：`AbstractCharsetProvider.lookup@75` 的 `Class.forName(packagePrefix.concat(cln), true, loader).newInstance()` 推不出类名，原因有三处：
+- `cln` 取自私有实例字段 `classMap`（`TreeMap(String.CASE_INSENSITIVE_ORDER)`），值映射事实只认封存静态 HashMap / CHM；
+- 写入走 `charset(name, className, aliases)` → `classMap.putIfAbsent(name, className)`，值是辅助方法的形参，`ExtendedCharsets.<init>` 以常量实参调用；
+- 前缀经 `String.concat` 拼接，类名切分不认 `concat`。
+
+机制（生成器只做通用建模，类名与方法名全部来自清单）：
+1. **清单** `vm_intrinsics.toml`：
+   - `[facts.reflect.value_maps]` 增加 `TreeMap`，`writers` 增加 `putIfAbsent`；
+   - 新增 `keeps`（remove / containsKey / clear / isEmpty / size / keySet）：不泄漏映射的只读或删除操作；
+   - 新增 `empty_ctors`（`<init>(Comparator)`）：只建空映射的构造器；
+   - `[facts.string_concat]` 增加 `concats = [String.concat]`。
+2. **封存判定**（`engine/sealed.rs` `map_seal`）：
+   - 适用于私有静态或实例字段，创建点为 `new` 加空构造器；
+   - 字段读取只允许作为 readers / keeps / writers 的接收者，或作为实参传给私有 / 静态辅助方法，并由 `helper_keeps` 在被调方内核对该形参只作 reader / keep 接收者。例如 `deleteCharset` → `remove(Map, K)`；
+   - 有 writer 时标记 `read_writes`。
+3. **写入槽**（`engine/map_slot.rs` + `pstrs.rs` `PSlot::V`）：
+   - 逐个 `writer` 调用点检查：接收者是私有字段读取时，值实参并入该字段的值槽；
+   - 字面量直接入槽，形参建子集边（复用 pstrs 的形参常量传播，`charset` 的 `className` 形参在全部 `ExtendedCharsets` 调用点上取并集），其他计算值登记为写入方帧内的输入；
+   - 读取点登记需求，槽变化时唤醒。
+4. **类名切分**（`class_lookup.rs`）：
+   - `concat` 按 (接收者, 实参) 两段处理；
+   - `segment_values` 的映射读取先走 `map_field_names`（创建点值 ∪ 值槽），字段不封存时退回原路径。
+
+实测（作业 `csext-base2-c18e8fc4` us1 / `csext-new-1fae1155` sg2，参考 JDK 21.0.11，基线 c18e8fc4 → 1fae1155）：
+
+| 例 | 基线 类 / 方法 / clinit | 修复后 | Δ | 闭包耗时 |
+|---|---:|---:|---:|---:|
+| HelloWorld | 3315 / 19106 / 769 | 3604 / 19809 / 1048 | +289 / +703 / +279 | 1:53 → 2:00 |
+| CollectorsDemo | 3315 / 19102 / 769 | 3604 / 19805 / 1048 | +289 / +703 / +279 | 1:53 → 1:59 |
+| DeepCopy | 3566 / 21708 / 810 | 3855 / 22411 / 1089 | +289 / +703 / +279 | 5:58 → 6:20 |
+| TestCharsetExtLookup（新） | — | 3608 / 19814 / 1049 | — | 2:03 |
+
+- 增量 289 类全部属于字符集：`sun/nio/cs/ext` 279 类（顶层字符集 122 个及其 Holder / Decoder / Encoder 内部类），`sun/nio/cs` 10 类（`CharsetMapping*`、`DoubleByte$Decoder_EBCDIC` / `_EUC_SIM` 等）。没有删除任何类，其他包没有变化。
+- `reflect_gaps` 35 → 34：`lookup@75` 的缺口消除。`reflect_members` 546 → 661。`translate_code_classes` 2884 → 3172。
+- `--why sun/nio/cs/ext/IBM930` 的首达是 `[reflect] AbstractCharsetProvider.lookup@68`，来路是 `Charset.lookupExtendedCharset` ← `Charset.forName` ← `sun/nio/fs/Util.<clinit>`（jnu 宿主名，U1）。每个程序都经宿主名进入扩展提供者，所以开放世界下全部 jdk.charsets 字符集类入闭包是健全结果，与 7.3 第 3 条的标准字符集同理。若要收窄，需要同一个 (a) + (b)。
+- 参考 JDK 探针确认：`x-IBM930` / `IBM037` / `x-IBM939` / `x-MacRoman` 的实现类都在 jdk.charsets，`GBK` / `Big5` 在 java.base。这是现有 64_charsets_ext 覆盖不到该缺口的原因。
+- 新测试 `tests/e2e/64_charsets_ext/TestCharsetExtLookup.java`：x-IBM930（含 SO/SI 双字节段）、IBM037 / cp037 别名编解码往返，`isSupported`，`availableCharsets` 含扩展名，经映射取 x-MacRoman 编码。期望输出由参考 JDK 生成。
+- 单测：`cargo test -p closure` 234 passed / 0 failed，含新增 `map_writes_instance_field_with_empty_ctor`。
+
+抽查：见下行。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
