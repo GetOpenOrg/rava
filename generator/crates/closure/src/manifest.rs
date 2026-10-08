@@ -79,7 +79,7 @@ mod indy_helpers;
 mod keyed;
 pub use keyed::{KeyedLookup, KeyedLookups};
 mod direct;
-pub use direct::{DirectInvoker, DirectInvokers, LookupScope};
+pub use direct::{DirectInvoker, DirectInvokers, Lookup, LookupScope, LookupShape};
 mod gates;
 pub use gates::{GateCategory, GateHints};
 mod vm_state;

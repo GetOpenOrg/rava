@@ -60,8 +60,9 @@ impl<'a> Engine<'a> {
             a.push(f);
         }
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
+        // 反射对象查找 / 复制入口的结果按标记建模（`method_marks.rs`）时不接被调方返回值；
         // 按键查找入口的结果先经闸门（`keyed.rs`）
-        let res = Some(self.keyed_res(m, off, &resolved, pargs));
+        let res = if self.method_marks_site(m, off, opcode, mref, args) { None } else { Some(self.keyed_res(m, off, &resolved, pargs)) };
         let recv_feeds = |e: &mut Self| match recv_v {
             Some(v) => e.feeds(m, v, owner),
             None => vec![Feed::S(TypeSet::open(owner))],

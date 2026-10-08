@@ -129,6 +129,8 @@ impl<'a> Engine<'a> {
             rcall_conv_pending: HashMap::default(),
             rdirect: HashMap::default(),
             rdirect_fallback: HashSet::default(),
+            rmarks: HashMap::default(),
+            rmark_fallback: HashSet::default(),
             rcall_conv_seen: HashSet::default(),
             rcall_stats: Default::default(),
             rcall_rn_pending: Default::default(),

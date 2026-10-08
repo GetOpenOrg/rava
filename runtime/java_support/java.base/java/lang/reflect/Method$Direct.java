@@ -2,9 +2,10 @@
  * VM 支持类（rava）：直连反射调用——Method.invoke 在「目标不是 @CallerSensitive」时的特化入口。
  *
  * Method.invoke 对任意反射对象都要判 isCallerSensitive（解析方法注解）、取访问器、按 CS 与否两路调用访问器，
- * 这些分支的取舍取决于运行期的反射对象，闭包分析器无从折叠。分析器证明某个调用点的反射对象只可能是
- * 非 CS 的静态目标时（vm_intrinsics.toml [facts.reflect.direct_invokers]，generator engine/reflect_direct.rs），
- * 把该调用指令改写为对本类 invoke 的 invokestatic（栈形不变：Method、obj、args → Object）。
+ * 这些分支的取舍取决于运行期的反射对象，闭包分析器无从折叠。分析器把查找结果建模为携带所指方法的标记，
+ * 证明某个调用点的反射对象只可能是标记所指的非 CS 方法时（vm_intrinsics.toml [facts.reflect.direct_invokers]，
+ * generator engine/method_marks.rs、engine/reflect_direct.rs），把该调用指令改写为对本类 invoke 的 invokestatic
+ * （栈形不变：Method、obj、args → Object）。
  *
  * 语义与 Method.invoke 逐句一致：isCallerSensitive 恒为假；未 override 时以调用者类做访问检查
  * （本方法标注 @CallerSensitive，生成器在改写后的调用点压入调用方所在类，getCallerClass 取到的即原
@@ -17,6 +18,9 @@
  * native invoke0：runtime/java_runtime/src/java/lang/reflect/method_direct_impl.rs
  */
 package java.lang.reflect;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import jdk.internal.reflect.CallerSensitive;
 import jdk.internal.reflect.Reflection;
@@ -37,6 +41,19 @@ final class Method$Direct {
                     modifiers);
         }
         return invoke0(m, obj, args);
+    }
+
+    /**
+     * 列表形查找结果的分析模型（清单 direct_invokers 的 list）：按数组顺序装入新建列表，同
+     * Class.getDeclaredPublicMethods 的「新建 ArrayList、逐个 add 筛出的方法副本」。分析器把列表形查找
+     * （JavaLangAccess.getDeclaredPublicMethods）的结果建模为本方法对标记数组的返回值；运行期不调用。
+     */
+    static List<Method> list(Method[] ms) {
+        List<Method> res = new ArrayList<>();
+        for (Method m : ms) {
+            res.add(m);
+        }
+        return res;
     }
 
     /** 本地访问器的调用（同 DirectMethodHandleAccessor$NativeAccessor.invoke0：按声明键分派）。 */

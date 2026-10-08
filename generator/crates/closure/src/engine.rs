@@ -48,6 +48,7 @@ mod reflect;
 mod reflect_call;
 mod reflect_call_pool;
 mod reflect_direct;
+mod method_marks;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -369,6 +370,9 @@ pub struct Engine<'a> {
     /// （单调：此后恒按原入口接边，已接的直连边保留）
     rdirect: HashMap<(usize, u32), MemberRef>,
     rdirect_fallback: HashSet<(usize, u32)>,
+    /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
+    rmarks: HashMap<u32, method_marks::MethodMark>,
+    rmark_fallback: HashSet<(usize, u32)>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],
