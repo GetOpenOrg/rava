@@ -1,0 +1,5 @@
+# 注解解析整体（上界）：AnnotationParser 全部入口不分析——模拟「注解元数据全在构建期求值、运行期不解析字节」
+sun/reflect/annotation/AnnotationParser.parseAnnotations:([BLjdk/internal/reflect/ConstantPool;Ljava/lang/Class;)Ljava/util/Map;
+sun/reflect/annotation/AnnotationParser.parseSelectAnnotations:([BLjdk/internal/reflect/ConstantPool;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/util/Map;
+sun/reflect/annotation/AnnotationParser.parseParameterAnnotations:([BLjdk/internal/reflect/ConstantPool;Ljava/lang/Class;)[[Ljava/lang/annotation/Annotation;
+sun/reflect/annotation/AnnotationParser.parseMemberValue:(Ljava/lang/Class;Ljava/nio/ByteBuffer;Ljdk/internal/reflect/ConstantPool;Ljava/lang/Class;)Ljava/lang/Object;

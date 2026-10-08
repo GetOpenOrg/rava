@@ -386,6 +386,10 @@ S0 Boot 的 JVM 实载为参照列。
   - 生成器不写类名。
 - 「目标类已在引导映像中初始化 → `SharedSecrets.getXxxAccess` 的 null 分支不可达」由引导映像第 6 步（非引导类构建期初始化）覆盖。DeepCopy 的 `HttpCookie` 13 类就在这条线上。
 
+### 7.2 注解成员签名解析新基线复测（2026-10-08，3f4fee31，分支 annot-sig）
+
+切除集 `annsig` / `annall` / `sigall`，作业 `as-cut-3f4fee31`、`as-gates-3f4fee31`。`parseSig` 折叠的健全收益为 0 类、至多 −2 方法，不实施；`sun/reflect/generics` 由 open(Comparable) 回退独立保留。数据与依据见 `docs/plans/2026-10-05-boot-image-evaluator.md` §5.6.10。
+
 ## 八、S0 Spring Boot（待 dev 恢复）
 
 S0 Boot 需要 dev 级内存（28 GB 槽），dev 关机期间不跑。dev 恢复后执行：
