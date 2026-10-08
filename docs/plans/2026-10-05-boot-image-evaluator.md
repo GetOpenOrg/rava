@@ -1381,6 +1381,53 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 **2026-10-08 改判前提（分支 seed-chain，c9d00b9b 之上）**：上表 L = 基线 3304 的原因是 `ThreadLocalRandom.<clinit>` 的种子读（`VM.getSavedProperty`）被属性表逃逸弄成未知，`new SecureRandom()` 分支作为后备持有同一大集合。快照读修复（读者 `snapshot = true`）之后，切 logRuntimeExit 为 HelloWorld 3304 → 537、CollectorsDemo 3304 → 583；DeepCopy 另经 `ObjectInputFilter$Config.<clinit>` 的 `System.getLogger` 同一缺口持有（3553 不变）。路径 A + ③ 的类收益上限因此不再是 0，「不实现」的决定需重新评估。实测、所缺机制与续作入口见闭包构成报告 §7.5。
 
+**2026-10-09 路径 A 落地：(L) 链的 finder / LogManager 段关闭（分支 `logger-chain`，基于 seed-chain c7fbaf8c，头 ef6a1249；作业 `lc-v7-debb5179`、`lc-v8-ef6a1249`，sg2 / kr1）**
+
+上一段「改判前提」之后重新实施路径 A，全部是通用机制（生成器 crate 无类名 / 属性名字面量）：
+
+| 提交 | 机制 |
+|---|---|
+| 5ffa5ed3 | @CallerSensitive 方法体内 `getCallerClass` 的结果按调用者镜像值集折叠实例调用（`getModule` → 映像 Module，`field_hooks.rs::mirrors_call`），值集增长时重分析 |
+| 2408cff5 / debb5179 | 静态调用点按克隆节点取返回值（`site_rets.rs`）：转发 / 工厂克隆节点各次分析返回值之并作调用点答复，乐观「尚无返回」；未接边且目标带选择子形参的调用点按可能克隆预判 |
+| 414dfa92 / 58166528 / ab2942ad | 映像对象标签：final 实例字段按类层次补缺省值；无对象引用的返回常量先按本调用点常量实参求值；入口状态接收者接受映像标签 |
+| c65c4cee | 构造完成标签（`Obj::Fields`）的接收者：无唯一目标的虚 / 接口调用按标签类选目标（`calls.rs::tagged_target`）；常量实参求值绑定该标签 |
+| ef6a1249 | 常量实参求值穿过分派转发方法（`forward.rs` 判定）且转发的是构造完成标签对象时不计深度——特权块 `isSystem → doPrivileged → executePrivileged → run() → getClassLoader / isSystemDomainLoader` 原本在第 4 层被深度上限截断 |
+
+效果链：`System.getLogger` 的调用者镜像值集（HelloWorld / DeepCopy 均只含 java.base 的类）→ `getModule` 折成映像 java.base Module（loader = null）→ `LazyLoggers.getLogger(name, module)` 按调用点克隆，`isSystem(module)` 经 `DefaultLoggerFinder$1.run` 求得 `Boolean.TRUE`（映像对象）→ `booleanValue` = 1 → `@15 getLoggerFromFinder` 不可达；`LoggerFinderLoader.service` / `redirectTemporaryLoggers` 随之出闭包。
+
+**缺口 3（`logManagerConfigured` 乐观折叠）不需另做机制。** 现有的静态字段值表（`fvals`）就是「映像初值 ⊔ 可达写入点的值」：
+- 唯一写点 `BootstrapLogger.redirectTemporaryLoggers` 不在闭包内时，该字段值集只有映像初值 false，`useSurrogateLoggers()` = `detectedBackend == JUL_DEFAULT && !logManagerConfigured` 折成 true；`JdkLazyLogger` 取用时的 `createLogger → LazyLoggers$1.apply → getLoggerFromFinder` 入口（§5.9.7「路径 A 与 ③ 的收益上限」所说的第二条入口）同时关闭。
+- 健全性论证：
+  1. 分析在不动点上求值：字段值集是全部可达写入点之并（加映像初值）的最小不动点。乐观起点（只有初值）不是假设「写点不可达」，而是「目前没有已发现的可达写点」；新的写点一旦可达，字段值集增长，读过该字段的方法（读者登记）失效重分析，重分析后可能放开的分支照常加入闭包、继续迭代。
+  2. 终止：值集与闭包都单调增长、格高度有限。
+  3. 结论成立条件：不动点上 `redirectTemporaryLoggers` 不可达。对任一运行期执行按步数归纳：若某次执行写了 true，则写之前执行的每一条指令所在方法都可达，而可达方法中的调用边都按其不动点值集（包括该字段当时的值集）建过边，所以写点方法可达——与不动点矛盾。故运行期该字段恒为 false，折叠健全。
+  4. 环：`isSystem` 折叠 → `getLoggerFromFinder` 不可达 → `service()` 不可达 → 写点不可达 → `useSurrogateLoggers` 折叠 → `createLogger` 入口不可达。环内每一步都是乐观起点 + 失效重算，与上条同一论证；不是先假设结论再验证。
+- 实测：HelloWorld / DeepCopy 的头 ef6a1249 上 `redirectTemporaryLoggers`、`releaseSurrogateLoggers`、`getLoggerFromFinder`、`LoggerFinderLoader.service` 全部不在闭包（DeepCopy 在 debb5179 上四者仍在，ef6a1249 起为 0）。
+
+**实测（类 / 方法）**
+
+| 头 | HelloWorld | CollectorsDemo | DeepCopy |
+|---|---:|---:|---:|
+| c7fbaf8c 基线 | 3304 / 18999 | 3304 / 18994 | 3553 / 21572 |
+| debb5179 | 3233 / 18390 | 3233 / 18397 | 3553 / 21567 |
+| ef6a1249 | **3233 / 18380** | **3233 / 18387** | **3511 / 21234** |
+
+- HelloWorld / CollectorsDemo 的 −71 类就是 log-chain2 切除表的 F（切 `getLoggerFromFinder`）上界，现在由分析得到，不靠切除。
+- DeepCopy：`LogManager` 0（debb5179 上经 `LocaleServiceProviderPool.getLocalizedObjectImpl → System.getLogger` 进入：`isSystem` 的成员级返回值被 `LogManager$LoggingProviderAccess.demandLoggerFor` 等未知模块的调用方汇合成 Top，常量实参求值又被深度上限截断；ef6a1249 修正后 0）。`SecureRandom` / `SeedGenerator` 仍在，持有者见下条。
+
+**剩余：③ `isLoggable(DEBUG)` 是 HelloWorld ≤ 537 的唯一缺口**
+- ef6a1249 上 HelloWorld / DeepCopy 的 `SecureRandom` 首达链：`Shutdown.logRuntimeExit@74 log(DEBUG, …)` → `AbstractLoggerWrapper.log` → `SimpleConsoleLogger.log`（`SurrogateLogger` 的超类）→ `publish → format → ZonedDateTime.now` → `ZoneId.systemDefault` → `ZoneRulesProvider.<clinit>` → `ServiceLoader` → `JarURLConnection` → `URLJarFile.retrieve` → `Files.createTempFile` → `TempFileHelper.<clinit>` 的 `new SecureRandom()`。也就是说，替身日志器的 `log` 本身就会把大集合带进来，只有 `@10 isLoggable(DEBUG)` 折成 false 才能关掉 `@18..@74`。
+- HotSpot 上该值为 false：替身日志器 `SimpleConsoleLogger.isLoggable(PlatformLogger.Level)` = `level != OFF && level.ordinal() >= effectiveLevel().ordinal()`，`effectiveLevel()` = `this.level` 为 null 时取 `DEFAULT_PLATFORM_LEVEL`（`jdk.system.logger.level`，缺省 INFO；按现行属性口径，清单未声明为动态的键按缺省值折叠）。
+- 所缺机制（按次序）：
+  1. 接收者对象：`logRuntimeExit@10` 的接收者是 `getLazyLogger` 新建的 `JdkLazyLogger`，`isLoggable` 走 `AbstractLoggerWrapper.isLoggable → wrapped() → LazyLoggerAccessor.wrapped()`；`wrapped()` 读实例字段 `w`（值集来自 `setWrappedIfNotSet` 与 `BootstrapLogger.getLogger(accessor, …)` 的返回），需要按抽象对象的返回值（`obj_rets`）把「`w` 的对象集 ∪ `BootstrapLogger.getLogger` 的返回」收窄到 `SurrogateLogger`（`useSurrogateLoggers` 已折叠为 true、`isBooted` 已为 true，替身之外的分支不可达）；
+  2. 调用点实参：`isLoggable(DEBUG)` 的结果必须按本调用点实参（映像枚举对象 DEBUG）求，而不是按成员汇合（其他调用点传 INFO 等，成员级返回值为 Top）。即「虚调用 + 抽象对象接收者 + 映像常量实参」的按调用点求值：接收者对象集已知、各目标逐一做常量实参求值、结果一致时折叠；
+  3. 替身对象的 `level` 字段：只有 `setLevel` / `setPlatformLevel` 写非 null；需按「可达写入点」口径确认其值集为 {null}（同缺口 3 的字段值表，扩到实例字段按抽象对象）；`DEFAULT_PLATFORM_LEVEL` 是 `SimpleConsoleLogger.<clinit>` 的 static final，非映像类时需 `<clinit>` 常量求值得到映像枚举对象 INFO（`toPlatformLevel` 查表）。
+- 切除上界不变：切 `logRuntimeExit` 后 HelloWorld 537 / CollectorsDemo 583（§7.5.1）；③ 落地即兑现，并使 `param_string_constants_fold_switch`（< 1000 类、无 jrt Handler）转绿。
+
+**续作入口（logger-chain 之后）**
+- ③ 按上面 1 → 2 → 3 实施；入口是 `engine/obj_rets.rs`（按对象返回值）与 `engine/facts/oracle.rs::invoke_result` 的虚调用分支（目前只有构造完成标签的 `tagged_target`，需扩到抽象对象集的逐目标求值）。
+- 诊断：`--flows '@vals:Shutdown.logRuntimeExit'` 看 `@10 isLoggable` 的 `orv`（按对象返回值）与 `ceval`；`--why java/security/SecureRandom` 看首达链是否仍经 `logRuntimeExit@74`。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。

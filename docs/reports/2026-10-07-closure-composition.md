@@ -640,7 +640,10 @@ HelloWorld 九组切除（d705cb20）：
 - 效果：`TLR.<clinit>` 常量 pc172 = null、pc177 = false，死区 [183, 236]（`SecureRandom` 分支不可达）。单独看三例类数不变（HelloWorld / CollectorsDemo 3304、DeepCopy 3553），因为 (L) 链仍持有同一大集合；与 (L) 链关闭合起来才兑现（7.5.1 第二表：HelloWorld −2767、CollectorsDemo −2721）。单测 `snapshot_read_ignores_props_escape`（closure_cli.rs）守护折叠本身。
 - JDK 21 的 `RandomSupport.secureRandomSeedRequested` 用 `doPrivileged(new GetPropertyAction(k))` 读同一键，不经快照，不受本修复影响（见 7.5.3 第 1 条）。
 
-#### 7.5.3 剩余缺口（关闭 (L) 链所需，均未实施）
+#### 7.5.3 剩余缺口（关闭 (L) 链所需）
+
+> **2026-10-09 状态（分支 logger-chain，ef6a1249）**：第 1、2 条已实施，第 3 条由现有字段值表在第 1、2 条落地后自然成立（不需新机制），第 4 条未做。三者合起来只关掉 finder / `LogManager` 段，(L) 链剩下的持有者是 `logRuntimeExit@10 isLoggable(DEBUG)`（③，见 7.5.6）。实施、实测与健全性论证见 boot-image 计划 §5.9.7「2026-10-09 路径 A 落地」。下面保留原始分析。
+
 
 HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter$Config.<clinit>` 等）的路径：`System.getLogger`→ `LazyLoggers.getLogger` → `DefaultLoggerFinder.isSystem(module)` 为 true → `getLazyLogger` → `useLazyLoggers()` → `JdkLazyLogger` → `BootstrapLogger.getLogger` → `useSurrogateLoggers()` → `SurrogateLogger`，不加载 `LogManager`。分析器上已折叠：`BootstrapLogger.isBooted()` = true、`useLazyLoggers` 的 CUSTOM 分支、`useSurrogateLoggers` 的 `detectedBackend == JUL_DEFAULT`。仍走偏处：`LazyLoggers.getLogger@15` 因 `isSystem` 未折叠而进 `getLoggerFromFinder` → `LoggingProviderImpl` → `LogManager`。所缺机制：
 
@@ -671,6 +674,19 @@ HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter
 - 入口是 boot-image 计划 §5.9.4（U12 ③）：按 7.5.3 第 1 → 2 → 3 条的顺序实施。验收：HelloWorld ≤ 640 类（boot-image 计划 §5.5.6 的 Linux 目标；本测切除上界 537）、CollectorsDemo 同量级（上界 583）、DeepCopy 的 `SecureRandom` / `SeedGenerator` / `LogManager` 为 0（`ObjectInputFilter$Config` 入口随第 1、2 条关闭）、`param_string_constants_fold_switch` 通过。
 - 第 1 条同时折叠 `RandomSupport.secureRandomSeedRequested`，使 `SplittableRandom` / `ThreadLocalRandom` 种子路径不再经 `SecureRandom`（JVM 在默认配置下也不走），是独立的正确性 / 精度收益。
 - 与其他线的交叠：本分支只改 `sysprops.rs` / `sysprops_key.rs` / `manifest/sysprops.rs` / `closure_cli.rs` 与 `vm_intrinsics.toml` 读者段；与 annot-sig / fix-1010 无文件交叠；charset-ext / reflect-marker 也改 `vm_intrinsics.toml`（不同段，三方合并干净）与本报告（不同小节）。
+
+#### 7.5.6 logger-chain 实施结果（2026-10-09，头 ef6a1249，作业 `lc-v8-ef6a1249`，sg2）
+
+| 例 | c7fbaf8c 基线 | ef6a1249 | 切 `logRuntimeExit` 上界 |
+|---|---:|---:|---:|
+| HelloWorld | 3304 / 18999 | 3233 / 18380 | 537 / 1746 |
+| CollectorsDemo | 3304 / 18994 | 3233 / 18387 | 583 / 1898 |
+| DeepCopy | 3553 / 21572 | 3511 / 21234 | — |
+
+- 已实施（通用机制，生成器无类名字面量）：@CallerSensitive 调用者镜像折叠 `getModule`；静态调用点按克隆节点取返回值（乐观、选择子目标按可能克隆预判）；映像 / 构造完成标签接收者的目标选择与常量实参求值绑定；常量实参求值穿过分派转发方法不计深度。
+- 三例的 `getLoggerFromFinder` / `LoggerFinderLoader.service` / `redirectTemporaryLoggers` 均不在闭包，`logManagerConfigured` 折成 false、`useSurrogateLoggers` 折成 true；DeepCopy 的 `LogManager` 为 0（`ObjectInputFilter$Config` 与 `LocaleServiceProviderPool.getLocalizedObjectImpl` 两个入口一起关闭）。
+- 未达标：HelloWorld / CollectorsDemo 仍为 3233，`SecureRandom` / `SeedGenerator` 仍在（DeepCopy 同）。首达链改为 `Shutdown.logRuntimeExit@74` → 替身日志器 `SimpleConsoleLogger.log` → `ZonedDateTime.now` → `ZoneRulesProvider.<clinit>` → `ServiceLoader` → jar URL → `Files.createTempFile` → `TempFileHelper.<clinit>` 的 `new SecureRandom()`：替身日志器的 `log` 本身持有大集合，须把 `@10 isLoggable(DEBUG)` 折成 false（HotSpot 上缺省级别 INFO，DEBUG 不记录）。所缺三项机制（抽象对象接收者的 `wrapped()` 收窄、虚调用按调用点映像实参求值、替身 `level` 字段按可达写入点）见计划 §5.9.7「剩余：③」。
+- `param_string_constants_fold_switch` 仍失败（3233 类、含 jrt Handler），随 ③ 转绿。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
