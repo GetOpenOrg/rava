@@ -205,7 +205,7 @@ impl<'a> Engine<'a> {
             return;
         }
         for w in self.rmark_readers.get(&id).cloned().unwrap_or_default() {
-            self.push_site(w, site_prof::TRIG_RELEASE, None);
+            self.push_site(w, site_prof::TRIG_MARK_ALL, None);
         }
     }
 
