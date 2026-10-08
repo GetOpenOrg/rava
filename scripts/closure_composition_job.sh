@@ -7,6 +7,8 @@
 #   --cut-file F：反事实切除条目文件（同 rava closure --cut-file；不健全，只作归因）；--tag T 为产物名后缀
 #   --gates：门自动排名（rava closure --gates，取代手工切除集）：产物 <用例>[.<tag>].gates.json.gz / .gates.md；
 #            额外参数经环境变量 CCOMP_GATES_ARGS 传入（如 "--gates-top 30 --gates-verify 16 --gates-mem-mb 12288"）
+#   基线模式的额外参数经环境变量 CCOMP_CLOSURE_ARGS 传入（如 "--why java/lang/reflect/Method.invoke:(…)…"；
+#            --why 输出在 .out 尾部，不截断）
 #   --cut-sets：依次取 scripts/closure_composition_cuts/<名>.txt 作切除、名作 tag，对每个用例各跑一遍
 # 产物：build/ccomp/<用例>[.<tag>].json.gz、.out（stdout 摘要）、.err（stderr 尾与 /usr/bin/time）
 #       作业取回：--fetch 'build/ccomp/**'
@@ -123,16 +125,17 @@ for c in "$@"; do
         if [[ $rc == 0 && -s "$base.json" ]]; then gzip -f "$base.json"; else rc_all=1; rm -f "$base.json"; fi
         continue
     fi
+    read -r -a CARGS <<<"${CCOMP_CLOSURE_ARGS:-}"
     timeout "${CCOMP_TIMEOUT:-3000}" "${timer[@]}" "$RAVA" closure "${IN[@]}" "${CORPUS_JDK_ARGS[@]}" "${CUT[@]}" \
-        -o "$base.json" >"$base.out" 2>"$base.err"
+        -o "$base.json" "${CARGS[@]}" >"$base.out" 2>"$base.err"
     rc=$?
     echo "闭包 $c$TAG rc=$rc 耗时 $((SECONDS - t0))s"
     grep -E "Maximum resident|Elapsed" "$base.err" | sed 's/^\s*/  /'
     grep -E '^\s*"(classes|methods)":' "$base.out" | head -2
     tail -c 2000 "$base.err" | grep -vE "^\s+(Maximum|Elapsed|Command|User|System|Percent|Average|Exit|Swaps|File|Socket|Signals|Page|Voluntary|Involuntary|Minor|Major)" | tail -8
     if [[ $rc == 0 && -s "$base.json" ]]; then gzip -f "$base.json"; else rc_all=1; rm -f "$base.json"; fi
-    # stdout 只留 summary 段之后的前 200 行（--why / --flows 不在本作业使用）
-    head -c 200000 "$base.out" >"$base.out.tmp" && mv "$base.out.tmp" "$base.out"
+    # stdout 截断到 200KB；带 CCOMP_CLOSURE_ARGS（如 --why）时保留全文
+    [[ -z "${CCOMP_CLOSURE_ARGS:-}" ]] && head -c 200000 "$base.out" >"$base.out.tmp" && mv "$base.out.tmp" "$base.out"
 done
 step "完成"
 exit $rc_all
