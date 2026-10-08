@@ -147,8 +147,8 @@ impl<'a> Engine<'a> {
     }
 
     /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发：精确接收者与 open 部分各经枢纽（枢纽按成员与接收者集合
-    /// 为键，同一调用点上的多个目标互不干扰）。实参 a 每次直接接到枢纽形参（实参数组的分配点随值集增长，
-    /// 而枢纽接入按调用点去重）
+    /// 为键，同一调用点上的多个目标互不干扰；精确集合增长时以上次的枢纽为父，只展开差集）。实参 a 每次直接接到
+    /// 枢纽形参（实参数组的分配点随值集增长，而枢纽接入按调用点去重）
     #[allow(clippy::too_many_arguments)]
     fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, res: Option<Node>, via: &Via) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
@@ -162,7 +162,16 @@ impl<'a> Engine<'a> {
         let exact = TypeSet { classes: s.classes.clone(), open: IdSet::default() };
         let rs: Rc<[u32]> = self.receivers(m, &exact, owner).into();
         if !rs.is_empty() {
-            let h = self.hub(key, iface, owner, HubSet::Exact(rs), None, &site, &md, via.clone());
+            // 接收者集合增长时新枢纽以上次的枢纽为父、只展开差集（同字节码调用点 `hub_last`）
+            let lk = (m, off, key.clone());
+            let h = match self.rdirect_last.get(&lk).cloned() {
+                Some((h, prev)) if *prev == rs[..] => h,
+                last => {
+                    let h = self.hub(key, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
+                    self.rdirect_last.insert(lk, (h, rs));
+                    h
+                }
+            };
             self.link_hub(h, m, off, &Vec::new(), res);
             self.direct_hub_args(h, a);
         }
