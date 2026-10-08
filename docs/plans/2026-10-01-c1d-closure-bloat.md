@@ -2848,6 +2848,8 @@ SUN 第 1），原生二进制没有 `-Djava.security.properties`；SUN 自带 S
 
 ## 30. 能力①：URL 来源精度——阻塞清单、终态设计与验收（2026-10-06，分支 c1d-url，基于 b60e4f36）
 
+> 状态（2026-10-08）：§30.6–§30.17 待合批验证（c1d-url-b2 3391eb2d，已合入 batch-1008 04600e21）；合批语义取舍见 §30.18。
+
 **结论先行**：§29.2 估计的「URL 按对象 + 串前缀 + 甲目录事实」三项**不够**。实测表明，jar `Handler.openConnection`（下记 `J`）
 与 JarVerifier 链至少还有 5 个彼此独立的来源，每个来源各要一项能力才能健全剪掉。本步**不改引擎语义、无代码提交**：
 只落阻塞清单、反事实上界和终态设计。按对象 URL 判据的实验补丁记在 §30.4，作为第 1 步的起点。
@@ -3656,7 +3658,7 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
   - `ReferenceQueue.poll()` 按对象答 null，于是 `WeakHashMap.expungeStaleEntries`、`ClassCache.processQueue`、
     `LogManager.drainLoggerRefQueueBounded`、`Level$KnownLevel.purge` 的出队分支死。原因是闭包里没有 `ReferenceQueue.enqueue`：
     引用入队由 VM 的引用处理线程驱动，当前闭包与运行时都没有承载它，所以转译产物里队列确实恒空，与该折叠一致。
-    将来按手写边界类别 ③ 落地 GC 引用处理时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
+    将来按手写边界类别 ③ 落地引用类语义（由 `Rc` 释放触发、不引入 GC，见 `2026-10-07-no-gc-memory-model.md`）时，入队路径进入档案，`head` 字段写入按对象记录，折叠自动解除。
     这一项属于既有的建模缺口，不是新的不健全；见「待用户决策」。
     同类还有 `ResourceBundle.findBundle@73`、`FileInputStreamPool.getInputStream@3`、`CleanerImpl.run`、`MemoryCache.emptyQueue`、
     `LocaleObjectCache.cleanStaleEntries`、`ThreadContainers.expungeStaleEntries`、`Bundles.cleanupCache` 等（均为引用队列出队）。
@@ -3704,8 +3706,9 @@ P3 的暂存版若单独提交会带着旧的、依赖处理顺序的退回规�
 #### 待用户决策
 
 1. 引用队列：P3/P4 让「闭包与运行时都不承载 VM 引用处理线程」这一既有缺口变得可见：`WeakHashMap` 等的出队清理分支被删去，
-   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把 GC 引用处理（手写边界类别 ③）列入后续项？
+   转译产物与当前运行时一致，但与 JVM 不同（JVM 下弱引用被回收后会入队）。是否把引用类语义（手写边界类别 ③）列入后续项？
    一旦列入，入队路径进入档案，相关折叠会自动解除，不需要回退本步。
+   **已定（2026-10-07）**：列入，按无 GC 内存模型实施——引用类语义由 `Rc` 释放触发，C4 之后（`2026-10-07-no-gc-memory-model.md`）。
 
 #### 遗留与恢复入口
 
@@ -4294,5 +4297,38 @@ lcalls 热点 `UnmodifiableEntrySet.lambda$entryConsumer$0@9` 为 97.0k（基线
 3. 生成器 `manifest` 单测新增 `static_bases_parse`、`handle_access_parse`。
 4. `closure_independent_of_hash_seed` / `closure_independent_of_order`：待 dev 恢复后跑。
 5. 抽查：§30.16 抽查清单全部项目，另加反射字段读写相关用例（`--filter Field`、`--filter Reflect`、`--filter Unsafe`）、
-   `TestJcaSasl` 与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
+   `TestJcaSasl`（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）与 JGSS / HTTP 认证链用例。成因 3 改变了静态字段基址的读写口径，成因 4 改变了 `Field.get/set` 的建模口径
    （重点看反射拷贝构造、`AtomicXxxFieldUpdater`、序列化 `ObjectStreamClass` 字段读写、注解代理等经 `Field` 存取的用例）。
+
+### 30.18 合批 batch-1008 的语义合并（2026-10-08）
+
+batch-1008 依次并入 user-unreach-stubs（108558e0）、c1d-url-b2（3391eb2d，04600e21）、boot-image-s4（c614f840，b52917c9）、
+enum-values-direct（59451c29）、closure-composition（c3a06331），合并修复 b558e0c2。c1d-url-b2 与 boot-image-s4 两侧
+同改分析器核心，冲突取舍如下（合并提交信息为准）：
+
+- **Facts 两侧字段并存**：`level`（引导求值档位上下文）与 `objs`（c1d 形参抽象对象集）同时在 `Facts` 上。共享分析复用键含
+  对象参数集；档位上下文不复用（`engine/worklist.rs`：`closing || level.is_some()` 时不查共享摘要）。
+- **facts 拆分**：`engine/facts.rs` 拆为 `facts/{kinds,fields,calls,oracle}.rs`，本批改动移入子模块；`calls.rs` 的
+  `CallInfo.nonnull_ret`（含调用者类镜像非空）取代原 `empty`。
+- **`invoke_result` 先后**（`facts/oracle.rs`）：`level_queries` 档位折叠 → 清单事实 / 空集合 / `nonnull_ret` 等 →
+  偏移判定（`field_offset`）→ 类字面量接收者 `mirrors_call` → 派生结果。`Oracle` 新增 `key_getter`、`string_equality`、
+  `param_mirror_call`。
+- **absint 拆分**：`absint.rs` 拆为 `value` / `oracle` / `step` / `fixpoint` 子模块（final 字段复读单测拆至
+  `final_field_tests.rs`）。定点循环每条指令的次序：`eq_operands` → `tr.pre` → `step` → `final_reread`。条件分支：
+  类型收窄 `instanceof_narrow` / `mirror_sub_narrow` 之后 `.or_else(key_test)`，可空性 `null_narrow` 之后
+  `.or_else(affix_narrow)`，另算 `final_null_test`。
+- **`named_resources`**：分析器按名求出的资源只并入档案侧（模块资源）推导；用户侧推导传空集，并剔除档案已有资源
+  （`input/src/build.rs`）。
+- **删除「按名开放字段」回退**（取 c1d 撤除兜底，§30.14），本批侧的 `analyzed_exact` 守卫随之删除。
+- **`PV::join`**：两侧确定非空 → 非空引用；合并时与 `join_ret` 同时生效，b558e0c2 将 `join_ret` 吸收进 `PV::join` 后删除
+  （单测改为 `join_keeps_nonnull`）。
+- **映像必需**：`BuildInput.boot_image` 改为必需的 `ImageData`（去 Option）；`BuildInput.system_properties`（`SysPropFacts`）
+  与 `input/manifest.rs` 的 `boot_init_classes`（随 `[boot_init]`）删除。closure.json 的 `system_properties` 保留。
+- **合并修复 b558e0c2**：引导求值的类路径运行模型与常量格合流——c1d 把 `toFileURL` 的延迟调用改由 `null_returns` 给出，
+  s4 起引导求值不取有字节码方法的返回值事实，二者叠加使 initPhase2 执行 `toFileURL` 字节码遇宿主延迟值、映像求值失败；
+  `[concrete.boot.natives]` 对 `URLClassPath.toFileURL` / `BuiltinClassLoader.findClassOnClassPathOrNull` 显式 `const:null`。
+
+**验证现状**：首次验证（6934dc93）抽查 41/41 因映像求值失败、单测 closure `--lib` 11 失败、driver 层 32 失败；
+b558e0c2 之后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G）。
+
+**待补：根因与修复。**

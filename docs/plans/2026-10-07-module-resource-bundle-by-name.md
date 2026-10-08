@@ -1,5 +1,7 @@
 # 模块资源束按名装载（c4-resbundle，基于 rust-closure-analyzer 1fe9e5ea）
 
+> 状态（2026-10-08）：已完成（c4-resbundle 110e1602，合入集成分支 74837098，2026-10-07）。TestXmlSaxEvents 的已知失败条目随 batch-1008 删除（6934dc93，待合批验证）；TestRowSetProvider 按框架 API 面暂缓。
+
 > 根因：`ResourceBundle.getBundle(基名, …)` 按名装载的资源束（`.properties` 文件或 `ResourceBundle` 子类）没有建模。
 > 涉及：TestRowSetProvider（`Can't find bundle for base name com.sun.rowset.RowSetResourceBundle`）、
 > TestXmlSaxEvents（`Could not load any resource bundle by com.sun.org.apache.xerces.internal.impl.msg.XMLMessages`）。

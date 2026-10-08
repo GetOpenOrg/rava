@@ -58,8 +58,8 @@ animal.speak();
 > **只有字节码无法表达该语义时才手写——没有字节码，或依赖运行期生成与加载字节码，或由 VM 直接驱动。性能替换不算。**
 
 - 判定单位是**方法**，不是类或包；`@IntrinsicCandidate` 之类的性能内建照样翻译字节码
-- 准入三类：① `ACC_NATIVE`；② 运行模型替换（lambda / indy 引导、LambdaForm 编译、动态代理等运行期类定义点）；③ VM 注入的状态与 VM 驱动行为的落地语义（GC 引用处理、JVMTI、栈遍历等）
-- 规模策略截断（`[boundary]` 前缀、因截断补的手写）是**过渡类**：单独计数，终态为 0，不作为新增手写的理由
+- 准入三类：① `ACC_NATIVE`；② 运行模型替换（lambda / indy 引导、LambdaForm 编译、动态代理等运行期类定义点）；③ VM 注入的状态与 VM 驱动行为的落地语义（引用类语义随 `Rc` 释放触发、不引入 GC，JVMTI、栈遍历等）
+- 过渡类（策略截断）：`[boundary]` 前缀已删除（规范 §三 / §七），只剩 `closure.toml [vm_boundary]` 中整方法手写的 `#[jvm_boundary]`（当前全仓 14：`ClassLoader` 6、`BootLoader` 2、`JceSecurity` 6；终态 0，由引导映像第 5 步与 JceSecurity 构建期求值归零）；单独计数，不作为新增手写的理由
 - 终态下 Java 类的 struct 一律由字节码生成；VM 注入的隐藏字段由清单声明、生成器追加
 - 每个非 native 手写方法在清单登记类别，raw-audit 按类计数（`non_native_overrides` 2026-09-28 已清零，新增即回归）
 - `System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自 JDK `.class` 字节码翻译，不得手写近似实现
@@ -83,7 +83,7 @@ D()  ← 不在任何入口的调用链上，panic!("stub: ...") 存根，其依
 - 档案内的 JDK 类只翻译、编译一次，生成结果与具体程序无关；单个程序可以含有它自己不可达、但档案可达的已翻译方法（语料模式动态链接档案，生产模式静态链接）
 - 依赖「实例化集合」的折叠（null 接收者等）只对用户无法扩展的类型做（final / sealed / 非公开 / 私有与静态目标），档案只依赖 JDK 侧事实
 - 闭包「正确且最小」以档案规模衡量
-- 过渡期：调用链进入 `closure.toml [boundary]` 前缀的类停止展开（见规范 §七）
+- `[boundary]` 前缀截断已删除，JDK 全部类按字节码翻译；`[vm_boundary]` 类按方法划分，残留过渡手写只剩 `#[jvm_boundary]` 方法（见规范 §三 / §七）
 
 存根**不用 `todo!()`**：运行时命中存根时，panic 消息精确报出类名+方法名+描述符，方便定位哪条规则或翻译路径没有覆盖到。
 
@@ -112,9 +112,9 @@ runtime/                            # 提交到 git：手写代码唯一真源
 ├── java_runtime/
 │   ├── Cargo.toml                  # 宏依赖为 path = "<repo>/runtime/rava_macros"
 │   ├── build.rs                    # 维护 native_status.toml；反射 / 注解元数据表
-│   ├── closure.toml                # 调用链边界 / VM 边界类 / 放行清单
-│   ├── seeds.toml                  # 补种（注解 / locale / JCA / 模块资源 / 引导初始化）
-│   ├── vm_intrinsics.toml          # VM 承载方法、调用点特判、VM 常量
+│   ├── closure.toml                # VM 边界类（[vm_boundary]，按方法划分）/ 动态对照清单
+│   ├── seeds.toml                  # 补种（注解 / locale / JCA / 服务与资源束查找 / 按名资源）
+│   ├── vm_intrinsics.toml          # VM 承载方法、调用点特判、VM 常量、引导映像求值（[concrete.boot]）
 │   └── src/
 │       ├── lib.rs / error.rs       # VM 基础设施（java/jdk/sun 顶层 mod 声明）
 │       ├── java/lang/
@@ -122,8 +122,7 @@ runtime/                            # 提交到 git：手写代码唯一真源
 │       │   ├── object_impl.rs      # 手写 native impl（co-located）
 │       │   ├── string_ext.rs       # 手写扩展
 │       │   └── ...
-│       ├── java/util/function/     # Arch-1 接口存根（4 个）
-│       └── jdk/internal/...        # 内部边界类（完整手写）
+│       └── jdk/internal/...        # 共置手写（native 与 VM 契约方法，<x>_impl.rs）
 ├── java_support/                   # VM 支持类的 Java 源（Proxy$Dyn、BMH Species_Dyn 等）
 └── rava_macros/                    # proc-macro crate（java_class! 块级宏）
 
@@ -150,6 +149,12 @@ build/                              # gitignore：每测试一次性 scratch
 ## 常用命令
 
 ```bash
+# ── 本机：只跑 cargo check 与分布式派发 ──────────────────────────────────────────
+(cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock.py cargo check --release --tests --target-dir ../build/check-target)   # 本机唯一的编译检查
+uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml；dev 关机期间只有云服务器可用，见 docs/reference/cluster-testing.md）
+uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
+
+# ── 仅服务器执行（经 distribute_tests.py --job / --spot 或 remote_rava.py 下发；本机只跑 cargo check）──────
 cargo build --release -p driver --manifest-path generator/Cargo.toml --target-dir build/analyzer-target   # 构建 rava（新鲜时为空操作）
 build/analyzer-target/release/rava build <Test.java>                     # 转译 + 编译 + 运行（scratch = build/<test>）
 build/analyzer-target/release/rava build <Test.java> --stop-after emit   # 只生成
@@ -162,8 +167,6 @@ build/analyzer-target/release/rava build <Test.java> --stop-after emit --trace-c
 build/analyzer-target/release/rava audit api|corpus|native ...          # 编译前缺口审计（报告写 docs/reports/）
 (cd generator && cargo test --release)         # 生成器 / 闭包分析器单元测试
 python3 -m unittest tests.unit.<模块>            # 脚本单元测试（test_dyn_compare / test_baseline_diff）
-uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml，见 docs/reference/cluster-testing.md）
-uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
 # 手写层改动的验证：直接重跑相关测试（scratch 每次重新 overlay）
 scripts/prune.sh                                # 清共享 target 过期产物（跑批间调用，防磁盘满）
 scripts/run_bg.sh <tag> <cmd...>                # 后台跑批：低内存编译环境 + prune + 落盘 build/logs/bg/

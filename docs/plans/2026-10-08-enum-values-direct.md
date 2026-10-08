@@ -1,6 +1,7 @@
 # 直连反射调用：枚举常量取得路径不再经 Method.invoke 通用反射扇出
 
 > 分支 `enum-values-direct`（基于 batch-1007 98e733c9，已并入 boot-image-s4 17dd9b7c）。
+> 状态（2026-10-08）：待合批验证（59451c29，已合入 batch-1008 24f08764）；`fold_direct_calls` = 1，HelloWorld / CollectorsDemo 类数 3011 未降，`Method.invoke` 经其余 4 个调用点入链（§6.4、§八）。
 > 起因：闭包构成报告（`docs/reports/2026-10-07-closure-composition.md`，c3a06331）的反事实切除——
 > 枚举反射门切除后 CollectorsDemo 2990 → 528 类，约 2460 类经 `Method.invoke` 入链。
 
@@ -201,8 +202,8 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 
 ## 七、待验证清单
 
-1. **合批 e2e**：CollectorsDemo、HelloWorld、DeepCopy、TestJcaSasl、TestEnumBasic、TestEnumAdvanced、
-   SwitchExpressions 输出与 JDK 一致；含 EnumSet / EnumMap / `Enum.valueOf` / switch on enum 的用例抽查。
+1. **合批 e2e**：CollectorsDemo、HelloWorld、DeepCopy、TestEnumBasic、TestEnumAdvanced、
+   SwitchExpressions 输出与 JDK 一致；TestJcaSasl 只核闭包类数（闭包规模样例，非 e2e；e2e 用 JCA 用例 TestAesGcmRound / TestCipherDesModes / TestMacHmacDigest / TestRsaSignVerify 等代替）；含 EnumSet / EnumMap / `Enum.valueOf` / switch on enum 的用例抽查。
 2. **VM 支持类编译**：`Method$Direct.java` 经 `image.rs` 的 `javac --patch-module java.base` 编入（本机已用 javac 21 /
    graalvm 25 手动编过；访问 `AccessibleObject.override` 与包私有 `checkAccess`，同包合法）。
 3. **手写 invoke0 编译**：`method_direct_impl.rs` 与生成的 `Method_Direct` 声明层对齐（本机不能单独 check java_runtime）。
