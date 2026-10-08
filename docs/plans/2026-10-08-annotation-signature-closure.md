@@ -72,6 +72,10 @@ P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHa
 - 首个组合冷求值中的类初始化轨迹：例如 `ClassRepository.<clinit>` 的 `NONE`（`make("Ljava/lang/Object;", null)` 会走 `parseClassSig` / `parseSuperInterfaces`），它是否作为初始化轨迹并入。另一种可能：映像里有 `ClassRepository` / `ParameterizedTypeImpl` 实例（物化的 genericInfo），类型进 `image_types` 后要求运行期初始化该类。这种情况的终态是映像预初始化这些类的静态状态（`NONE` 入映像），不走运行期 `<clinit>`。
 - 闭包单调：不动点早期轮次接收者尚未齐全时，若某组合失败触发了整点回退（抽象调用边），后续轮次即使全部物化也撤不回。要核对 `concrete_fallback` 是否在任一轮被调用过；诊断只打最后一轮的结果。
 
+### 单测（作业 `asig-ut-68cb2dfc`，代码同头 a57d4801）
+
+已知失败 3 项（container_elements_per_object / known_gate_ranks_first / param_string_constants_fold_switch），**新增失败 1 项：`reflect_new_array_element_precision`**（closure_cli.rs:150，`seeds_agree("62_reflection/TestModuleLayerDefine.java")`，种子 0 / 1 / 2 的闭包集合不同）。`-q` 下断言消息没有留存。疑似来自本分支：RECV_LIMIT 让更多组合进入具体求值，温求值和驻留串查表也可能引入顺序依赖。**合入前必须修**（续作 0）。
+
 ## 五、失败 / 否定路线
 
 - §5.6.10 的「annsig（只折叠 `parseSig`）」：健全收益 0 类，不实施（结论不变）。
@@ -82,6 +86,7 @@ P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHa
 ## 六、续作入口
 
 1. **合 reflect-marker 后联测**：本分支 ①②③（P2）+ reflect-marker（P1 invoke 直连）合并后，量 hello / collectors / deepcopy 的 gen / ann；目标 0 / 0。合并后若 ann 仍非 0，用 `--why sun/reflect/annotation/AnnotationParser` 查剩余 invoke 点（`NTLMAuthenticationProxy` 等 `<clinit>` 期反射调用是否被标记覆盖）。
+0. **种子确定性回归（阻塞合入）**：本地不能跑，在服务器上跑 `cargo test --release -p driver --test closure_cli reflect_new_array_element_precision -- --nocapture` 取差异集合。重点查三处：`persist::collect` / `rollback_non_image` 的撤销分区顺序；`Ex.interned` 是 HashMap，构造驻留串表时的遍历顺序；`image_memo::prepare` 追加字符串的顺序。按片段内容排序或改用 BTreeMap。
 1'. **P2 第四层（优先）**：用 `--cut-file csanno.txt --flows @concrete` 跑 hello，对 `comparableClassFor@21` 的每个组合输出冷 / 温 / 热轨迹里是否含 `SignatureParser.parseClassSig`（在 concrete.rs 诊断里加一列「轨迹含签名解析的组合」，按方法 id 比对，不写类名字面量，由 `--why` 目标给出），定位后修温轨迹或初始化轨迹的归属。目标是 csanno 下 gen = 0。
 2. **csanno 上界**：已量（第四节），hello −59 类，deepcopy −54 类；合 reflect-marker 后的实测应逼近该上界，若差距大则剩余 invoke 点未被标记覆盖。
 3. **终态备选（P1）**：若标记化覆盖不全，`Method` 的 CS 判定结果在构建期按方法注解求值并写入映像（与 `Class.genericInfo` 同走 `image_memo_fields` 清单，类名只在 TOML），运行期 `isCallerSensitive` 只读缓存位，不再到达 `AnnotationParser`。
