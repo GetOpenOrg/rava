@@ -106,7 +106,7 @@ impl Ctx<'_> {
             }
             obj = m;
         }
-        let tag = Rc::new(crate::absint::Obj::Image(obj));
+        let tag = Rc::new(crate::absint::Obj::Image(obj, Vec::new()));
         Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) })
     }
 

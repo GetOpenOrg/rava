@@ -247,9 +247,9 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 映像对象引用的常量格：字符串 → 字符串常量；其他构建期对象 → 带标签的非空引用，标签为其 final 实例字段中的
-    /// 标量 / 字符串常量（与构造器摘要同一口径，`construct.rs`）；占位对象（运行期结果）→ Top。
-    /// 延迟值对象（内容在启动序列按宿主值写入）只知非空
+    /// 映像对象引用的常量格：字符串 → 字符串常量；其他构建期对象 → 带映像标签（对象身份）的非空引用，标签另带其
+    /// final 实例字段中的标量 / 字符串常量（与构造器摘要同一口径，`construct.rs`）；占位对象（运行期结果）→ Top。
+    /// 延迟值对象（内容在启动序列按宿主值写入）只知身份与非空
     fn image_obj_pv(&self, o: u32, deep: bool) -> PV {
         let Some(s) = self.img.as_ref() else { return PV::Top };
         let x = &s.data.objs[o as usize];
@@ -274,7 +274,7 @@ impl<'a> Engine<'a> {
             }
             finals.sort_by(|a, b| (&a.0.owner, &a.0.name).cmp(&(&b.0.owner, &b.0.name)));
         }
-        PV::Const(V::Ref { ty: Some(Rc::from(x.ty.as_str())), nonnull: true, src: Default::default(), obj: Some(Rc::new(Obj::Fields(finals))) })
+        PV::Const(V::Ref { ty: Some(Rc::from(x.ty.as_str())), nonnull: true, src: Default::default(), obj: Some(Rc::new(Obj::Image(o, finals))) })
     }
 
     /// 映像字符串对象的内容（`value` 数组 + `coder`；LATIN1 / UTF16 小端）；对象或内容数组为延迟值 / 占位 → None
