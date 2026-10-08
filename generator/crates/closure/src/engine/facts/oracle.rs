@@ -92,8 +92,9 @@ impl Oracle for Facts<'_, '_> {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
-            // 非空引用：先按本调用点的常量实参求值（可能得出字符串常量），求不出时取非空引用
-            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() => match eval() {
+            // 非空 / 带类型的无对象引用：先按本调用点的常量实参求值（可能得出字符串常量、null 或映像对象），
+            // 求不出时取该引用（求值结果是本调用点实参下的精确值，比汇合格精确且同样可靠）
+            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() || matches!(v, V::Ref { obj: None, .. }) => match eval() {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
