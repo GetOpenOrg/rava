@@ -1181,6 +1181,85 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 两边都没有处理「运行期初始化类的字段粒度读取」（§5.9.3 前提 2）。
 - 合批时 `vm_intrinsics.toml` 的 `[concrete.boot.natives]` 段可能有文本冲突，两边条目并存即可。
 
+#### 5.9.7 日志链续作（2026-10-08，分支 `log-chain`，基于 b9f47c33）
+
+**测量口径**
+- 测量环境：kr1 / us1，Linux，JDK 21.0.11。指标为 `rava closure` 的 summary.classes / methods。
+- 「E」表示 `--cut AccessController.executePrivileged:(PrivilegedAction;AccessControlContext;Class)`，即切断 doPrivileged 的统一执行口。它用来衡量日志链在扣除 doPrivileged 大集合之后的份额。
+- b9f47c33 上 HelloWorld 的基线是 **3324**，不是 §5.8 / enum-values-direct 记录的 2178。差异来自 6db384e8（映像容器对象的字段值记入按对象值表）：这是正确性修复。修复前，引导层 HashMap 迭代被折成不可达，2178 偏小，是不正确的值。因此本节一律以 3324 为基线。
+- 协调方的门模型（gates）低估了实际份额，下文排序只按实测列。
+
+**求值器补齐：DetectBackend 构建期求值（机制 ①）**
+- 清单 `[concrete.boot] calls` 增加 `{ init = ["jdk/internal/logger/BootstrapLogger$DetectBackend"] }`。只初始化后端判定类，**不调用** `getLoggerFinder` / `LoggerFinderLoader.service()`，所以构建期不执行 `redirectTemporaryLoggers`，`logManagerConfigured` 保持与 HotSpot 启动后相同的 false。这同时绕开了 §5.9.3 中 `accessProvider` 残差化的问题。
+- 判定过程（ServiceLoader(LoggerFinder, SCL) → `loadInstalled(DefaultLoggerFinder)`）依次撞到以下缺口，都按 HotSpot 同义补成通用 native，事实写在清单里：
+
+| 缺口 | 触发位置 | 补法 |
+|---|---|---|
+| `Class.getDeclaredMethods0` | StreamOpFlag → EnumMap → `getEnumConstantsShared` | op `class_declared_methods`（`engine/concrete/reflect.rs`）。反射对象由 VM 直接填写布局字段，字段名在 `[concrete.vm_fields]` 中以 `method_*` 登记；`slot` 为类文件方法下标；注解取原始字节 |
+| `getDeclaredConstructors0` | `ServiceLoader.getConstructor` | op `class_declared_constructors`，布局字段 `ctor_*` |
+| `ConstantPool` 取得 | — | op `class_constant_pool`，布局字段 `constant_pool_oop` |
+| 本地反射调用 | `DirectMethodHandleAccessor$NativeAccessor.invoke0`、`Method$Direct.invoke0` | op `reflect_invoke`。实参与返回值只支持引用类型；目标抛出异常时求值失败（不建模 InvocationTargetException） |
+| `ClassLoader.findBootstrapClass` | `ServiceLoader.loadProvider` → `Class.forName(Module, String)` | op `boot_class`。按 `defineModule0` 记录的包 → 模块 → 加载器（null）判定 |
+
+- 构建期产生的反射对象经 `Class.reflectionData`（软引用）可达。导出映像时，软引用按「可随时清除」的语义清除：清单 `[concrete] soft_references` / `null_queues` 登记了软引用类型与空队列类型；referent 只在别处也可达时保留。这样反射对象不入映像。
+- 结果：boot report 为「通过」，inited 335，residual_calls 仍为 2（没有新增残差）。DetectBackend 与 StreamOpFlag 都成为构建期初始化类。
+
+**分析器：映像对象身份标记**
+- `Obj::Image(id, finals)` 携带映像对象 id（3d7b3c64）。`ref_eq` 对两个映像标记按 id 折叠 `if_acmp`。
+- `field_value` 对 static final 字段的处理：字节码常量为未定形对象（`Obj::Fields`）时，优先采用映像值（`image_final`）。
+- 收益：`BootstrapLogger.useLazyLoggers` 中 `detectedBackend == CUSTOM` 折成 false（[15,17) 不可达）。
+
+**实测**
+
+| 测例 | b9f47c33 类 / 方法 | 3d7b3c64 类 / 方法 | 差 |
+|---|---|---|---|
+| HelloWorld | 3324 / 19,847 | 3315 / 19,761 | −9 / −86 |
+| CollectorsDemo | 3324 / 19,853 | 3315 / 19,767 | −9 / −86 |
+| DeepCopy | 3573 / 22,505 | 3562 / 22,406 | −11 / −99 |
+| HelloWorld E | 2773 | 2764 / 15,926 | −9 |
+| CollectorsDemo E | — | 2764 / 15,946 | |
+| DeepCopy E | — | 2885 / 16,929 | |
+
+- HelloWorld 减少的 9 个类是 EnumMap 及其 5 个内部类、`StreamOpFlag$MaskBuilder`、`StreamOpFlag$Type`、`BootstrapLogger$DetectBackend$1`。E 下减少的是同一组类。
+
+**切断实验**（HelloWorld，3d7b3c64）
+
+| 变体 | 类 / 方法 |
+|---|---|
+| S：切 `LoggerFinderLoader.service` | 3245 / 19,153 |
+| ES | 2758 / 15,887 |
+| EG：E + 切 `LazyLoggers.getLoggerFromFinder` | 2756 / 15,880 |
+| b9f47c33 上的旧实验 | L（切 logRuntimeExit）3324；F（切 getLoggerFromFinder）3252；LE 929；FE 2834 |
+
+- 结论：扣除 doPrivileged 大集合之后，finder / service 本身只持有约 6–8 个类。E → LE 的 1844 类差由 logRuntimeExit 链上的**其他节点**持有，不在 finder 上。①③ 的收益上限因此受这些节点约束，下一步应先用 `--why` 定位它们。
+
+**为什么 `useSurrogateLoggers` 仍未折叠**
+- `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
+- 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
+  - logRuntimeExit 的调用者模块是 java.base（@CallerSensitive，调用点静态可知）；
+  - `isSystem` 经 `DefaultLoggerFinder$1` 字段 → doPrivileged 按调用点返回 → `Module.getClassLoader` → `VM.isSystemDomainLoader`；
+  - 需要以下能力：调用者模块的常量化、映像 Module 标记穿过 `DefaultLoggerFinder$1` 的字段、doPrivileged 的按调用点返回值（不经 executePrivileged 汇合）、`Module.loader` 的映像读取。
+  - 打通后，exit 路径走 `getLazyLogger`；只剩 `useLazyLoggers()` 的取值依赖 `logManagerConfigured`。此时还需要「service() 仅经由非 exit 根可达」的按上下文值域，或由 Tripwire 收窄线切掉 Tripwire 根。
+- 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。
+
+**③ isLoggable(DEBUG)**
+- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。
+
+**仍持有日志链的其他根**（交给对应的线）
+- `Tripwire.ENABLED`（doPrivileged 读属性）；
+- `Charset.isSupported`（charset-build 线负责）；
+- PlatformLogger 级别上下文不精确。
+
+**重叠**
+- boot-image-s6 同样编辑 `vm_intrinsics.toml` 的 `[concrete.boot]` / `[concrete.natives]`，合批时可能有文本冲突，两边条目并存即可。
+- reflect-direct 的 `Method$Direct.invoke0` 在求值器中映射为 `reflect_invoke`，与其运行期直连互不影响。
+- `Obj::Image` 签名改为带 id，`field_hooks.rs` 一并改动；boot-image 各线合批时注意此处。
+
+**续作入口**
+- 先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点，再决定是否做路径 A；
+- 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
+- ③ 在路径 A 之后做。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
