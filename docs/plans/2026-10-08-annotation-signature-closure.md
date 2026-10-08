@@ -50,13 +50,15 @@
 | a88d7075（基线） | — | 3304 / 18999 | 3304 / 18995 | 3553 / 21573 | 47 (211) / 10 (96) |
 | 0864913d ① | asig-p2-3d92fa35 | 3304 / 18999 | 3304 / 18995 | 3553 / 21573 | 47 / 10 |
 | 2b85e1e3 ①② | asig-warm-2b85e1e3 | 3304 / 18999 | 3304 / 18995 | 3553 / 21573 | 47 / 10 |
-| 51c0751d ①②③ | asig-str-51c0751d | 见下 | | | |
+| 51c0751d ①②③ | asig-str-51c0751d | 3304 / 18997 | 3304 / 18993 | 3553 / 21571 | 47 (209) / 10 (96) |
 
-`comparableClassFor@21` 的未物化接收者（hello）：①后 109（全部「写非映像缓存 reflectionData」）→ ②后 2（驻留串引用）→ ③后见下。回退（接收者超限）①后 0。
+`comparableClassFor@21` 的未物化接收者（hello）：①后 109（全部「写非映像缓存 reflectionData」）→ ②后 2（驻留串引用）→ ③后 **0**（HashMap / ConcurrentHashMap 两点全部组合「⇒映像」，约 200 个温求值）。回退（接收者超限）①后 0。
 
 类数在①②后不变的原因：签名树另经 P1 的 `AnnotationParser.parseSig` 可达（`--why` 首达链换成注解链），所以 P2 单独断开不减类，**gen = 0 须 P1 同时断开**。
 
-asig-str 结果：（作业进行中，回报时补）
+③后 **P2 已完全断开**：`--why sun/reflect/generics/parser/SignatureParser` 的首达链只剩 P1（`ServiceLoader$ProviderImpl.invokeFactoryMethod@20` → `Method.invoke` → `isCallerSensitive` → `isAnnotationPresent` → `AnnotationParser.parseAnnotation2` → `parseSig`）。`ClassRepository` 仍由 `Class.getGenericInfo` 的返回类型签名带入（热路径读映像缓存，类型存在、方法体不可达），属签名边，不拉签名树。方法数 −2（签名解析出 P2 路径的冷部分）。
+
+即：47 个 generics 类的剩余来源 100% 是 P1；gen / ann 归零取决于 P1（reflect-marker）。
 
 ## 五、失败 / 否定路线
 
