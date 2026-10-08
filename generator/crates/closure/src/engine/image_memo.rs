@@ -85,12 +85,7 @@ impl<'a> Engine<'a> {
         let d = Rc::make_mut(&mut s.data);
         let n0 = d.objs.len();
         let o = x.mirror(&self.ctx, self.cp, c, d)?;
-        s.live.resize(d.objs.len(), false);
-        for (i, obj) in d.objs.iter().enumerate().skip(n0) {
-            if let Some(m) = &obj.mirror {
-                s.mirror_obj.insert(m.clone(), i as u32);
-            }
-        }
+        self.image_appended(n0);
         Ok(o)
     }
 

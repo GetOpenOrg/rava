@@ -13,12 +13,6 @@ impl<'a> Engine<'a> {
         let d = Rc::make_mut(&mut s.data);
         let (n0, s0) = (d.objs.len(), d.statics.len());
         let Some(classes) = x.attempt(&self.ctx, self.cp, cls, d) else { return false };
-        s.live.resize(d.objs.len(), false);
-        for (i, o) in d.objs.iter().enumerate().skip(n0) {
-            if let Some(m) = &o.mirror {
-                s.mirror_obj.insert(m.clone(), i as u32);
-            }
-        }
         let fresh: Vec<(String, String, IVal)> = d.statics[s0..].to_vec();
         for (c, n, v) in &fresh {
             s.statics.insert((c.clone(), n.clone()), *v);
@@ -29,11 +23,32 @@ impl<'a> Engine<'a> {
             st.build_time.extend(classes.iter().cloned());
             st.vals.extend(vals);
         }
+        self.image_appended(n0);
         let keys: Vec<(MemberRef, usize)> = self.fields.keys().enumerate().filter(|(_, k)| classes.contains(&k.owner)).map(|(i, k)| (k.clone(), i)).collect();
         for (k, fi) in keys {
             self.image_field(&k, fi);
         }
         classes.iter().any(|c| c == cls)
+    }
+
+    /// 追加的映像对象（下标 ≥ n0：扩展组、镜像缓存组）接入映像状态：活标记扩容、新建的类镜像登记；
+    /// 程序已取过的类镜像随即成为活对象（与引导镜像在程序取镜像时成为活对象同一口径）
+    pub(in crate::engine) fn image_appended(&mut self, n0: usize) {
+        let Some(s) = self.img.as_deref_mut() else { return };
+        s.live.resize(s.data.objs.len(), false);
+        let mut taken: Vec<u32> = Vec::new();
+        for (i, o) in s.data.objs.iter().enumerate().skip(n0) {
+            if let Some(m) = &o.mirror {
+                s.mirror_obj.insert(m.clone(), i as u32);
+                if self.ids.contains_key(format!("{CLASS}#{m}").as_str()) {
+                    taken.push(i as u32);
+                }
+            }
+        }
+        for o in taken {
+            self.image_ref(o);
+        }
+        self.image_drain();
     }
 
     /// closure.json `summary.build_time_init`
