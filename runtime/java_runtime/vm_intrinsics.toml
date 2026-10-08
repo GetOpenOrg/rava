@@ -371,6 +371,11 @@ deserializers = [
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
 serializable_markers = ["java/io/Serializable"]
+# serial_persistent_fields：可序列化类以 private static final 的该字段显式声明序列化字段面时，默认序列化 / 反序列化
+#   只按其中的名字绑定本类字段（ObjectStreamClass.getDeclaredSerialFields）；其余字段即使非 static、非 transient
+#   也不经偏移读写。名字取自该类 <clinit> 的字符串常量（如 ObjectStreamClass 声明 NO_FIELDS：其 Method 缓存字段
+#   不受反序列化写入，直连调用点接收者不混入 open(Method)）
+serial_persistent_fields = ["serialPersistentFields:[Ljava/io/ObjectStreamField;"]
 # serial_enumerators：只对可序列化类（serializable_markers 的子类型）调用上列 enumerators、只用其非 static、
 #   非 transient 字段（默认序列化字段按 static / transient 掩码过滤；computeDefaultSUID 只读名字与修饰符）的调用方。
 #   其枚举接收者推不出（类来自流中类名 / 对象的 getClass）时按可序列化字段口径放开（同 deserializers 的字段面），

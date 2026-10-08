@@ -160,6 +160,8 @@ pub struct Manifest {
     field_name_resolvers: HashMap<String, NameResolver>,
     deserializers: HashSet<String>,
     serializable_markers: Vec<String>,
+    /// 可序列化字段面的显式声明字段（`[facts.field_writes] serial_persistent_fields`，名字 + 描述符）
+    serial_persistent_fields: Vec<(String, String)>,
     array_writes: HashMap<String, ArrayWrite>,
     /// 方法句柄解释器（`[facts.handle_interpreters]`）：其手写体调用点上的字段写入成员只写 DMH 所指字段
     handle_interpreters: Vec<String>,
@@ -479,6 +481,10 @@ impl Manifest {
             field_name_resolvers: field_names::parse(vm.get("facts").and_then(|s| s.get("field_writes")).and_then(|s| s.get("name_resolvers")))?,
             deserializers: field_writes("deserializers").into_iter().collect(),
             serializable_markers: field_writes("serializable_markers"),
+            serial_persistent_fields: field_writes("serial_persistent_fields")
+                .iter()
+                .filter_map(|x| x.split_once(':').map(|(n, d)| (n.to_string(), d.to_string())))
+                .collect(),
             array_writes,
             handle_interpreters: facts("handle_interpreters", "members"),
             memory_reads,
@@ -732,6 +738,11 @@ impl Manifest {
     /// 可序列化标记接口：反序列化只写实现者（声明类是其子类型）的字段；空 = 不区分（全部字段）
     pub fn serializable_markers(&self) -> &[String] {
         &self.serializable_markers
+    }
+
+    /// 可序列化类用以显式声明序列化字段面的静态字段（名字, 描述符）
+    pub fn serial_persistent_fields(&self) -> &[(String, String)] {
+        &self.serial_persistent_fields
     }
 
     /// 返回接收者的类镜像（`Object.getClass` 语义）

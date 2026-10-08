@@ -26,6 +26,8 @@ fn serializable_markers_parse() {
     let m = with_vm("[facts.field_writes]\nserializable_markers = [\"a/Ser\"]\n").unwrap();
     assert_eq!(m.serializable_markers(), &["a/Ser".to_string()][..]);
     assert!(with_vm("").unwrap().serializable_markers().is_empty());
+    let m = with_vm("[facts.field_writes]\nserial_persistent_fields = [\"spf:[La/F;\"]\n").unwrap();
+    assert_eq!(m.serial_persistent_fields(), &[("spf".to_string(), "[La/F;".to_string())][..]);
 }
 
 #[test]
