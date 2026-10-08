@@ -1171,6 +1171,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - `javax/crypto/Cipher` 不在闭包内。
 - 收窄方向（交给对应的收窄线，不在本分支做）：异常消息路径的 `String.format`、Proxy 反射调用的 `toString`、`Tripwire`、`ensureClassInitialized` 链（闭包收窄 ③ 线）。
 
+- **2026-10-08 复测（batch-1011 c9d00b9b，分支 seed-chain）**：上面「E = A」已再次改变——切 `Shutdown.logRuntimeExit` 后 HelloWorld 3304 → **537** 类（18999 → 1746 方法），(L) 链重新成为大集合的唯一持有者；`SecureRandom` / `SeedGenerator` / CLDR 适配器 / jrt 协议处理器 / `LogManager` 都只经它到达。U12 ③ 的实施条件与所缺精度机制（转发克隆的按调用点返回值、调用方模块、`logManagerConfigured` 乐观折叠）见闭包构成报告 §7.5。
+
 #### 5.9.6 与 boot-image-s5 的重叠
 
 - `java.home` 的钉值机制（`vm_props` + `system_properties.values`，并从 dynamic 列表移除）由 s5 落地；U14 将来钉值时用同一组 TOML 段，不另起新段。
