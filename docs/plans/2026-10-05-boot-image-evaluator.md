@@ -1326,6 +1326,57 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 - 结论：扣除 doPrivileged 大集合之后，finder / service 本身只持有约 6–8 个类。E → LE 的 1844 类差由 logRuntimeExit 链上的**其他节点**持有，不在 finder 上。①③ 的收益上限因此受这些节点约束，下一步应先用 `--why` 定位它们。
 
+**E → LE 的 1844 类差：当前头已不存在（2026-10-08，分支 `log-chain2`，b8988868，作业 lg2-why1）**
+
+| 变体（HelloWorld） | 类 / 方法 |
+|---|---|
+| ES | 2758 / 15,887 |
+| LES：ES + 切 logRuntimeExit | 2758 / 15,886 |
+| LE：E + 切 logRuntimeExit | 2764 / 15,925 |
+
+- 在 b8988868 上，切 logRuntimeExit 已经不减任何类：LE = E = 2764，LES = ES = 2758（只少 1 个方法）。可见 logRuntimeExit 链不持有这 1844 个类。ES 与 LE 之差共 6 个类，全部是 `LoggerFinderLoader.service` 与 `ServiceLoader.loadInstalled` 的直接产物（`BootstrapLogger$LogEvent`、`LoggingProviderImpl` 等）。
+- 旧 LE（b9f47c33，929 类）与新 LE（2764）逐类比对，前沿边如下（按首次发现链归因，共 1839 类）：
+
+| 持有点 | 类数 |
+|---|---|
+| `LocaleProviderAdapter.forType@61` 反射实例化 CLDR 适配器（`CLDRLocaleProviderAdapter.<init>`） | 725 |
+| `String.valueOf(Object)@11` 的 toString 派发 | 246 |
+| `executePrivileged(PrivilegedExceptionAction)@29` 派发 | 125 |
+| stream 管线（`AbstractPipeline.evaluate` / `copyInto` / `sourceSpliterator`） | 161 |
+| `StreamEncoder.<init>@4`（字符集） | 69 |
+| 其余（`FileDescriptor.closeAll`、`computeIfAbsent`、`URL.openConnection`、`Pattern.compile` …） | 513 |
+
+- 两边到 `forType` 的链完全相同：`[boot_region] Charset.isSupported` → `checkName` → `String.charAt` 越界消息 → `String.format` → `Locale.<clinit>` → … → `ThreadLocalRandom.<clinit>` → `SecureRandom.getSeed` → `Provider.<clinit>` → `String.toUpperCase(Locale)` → `ConditionalSpecialCasing` → `BreakIterator.getWordInstance` → `LocaleProviderAdapter.forType`。
+- 差别在 `forType@68` 的 `getDeclaredConstructor()` 是否返回：
+  - 旧 LE 中，`getConstructor0` 的循环体不可达（`ReflectionFactory.getExecutableSharedParameterTypes`、`Constructor.copy`、`Constructor.newInstance` 都不在闭包里）。`getDeclaredConstructor` 因此被判为不返回，`@75 newInstance` 之后整片不可达。
+  - 新 LE 中循环体可达，CLDR 适配器被实例化，下游整片回来。
+- 运行期 `getDeclaredConstructor()` 必然返回，所以旧 LE 的 929 是不健全的偏小结果，与 2178 同类（见「测量口径」）。转变发生在 b9f47c33..b8988868 之间：构建期求值器补了反射 native（ffff4c51 / 173f43de），映像标签也在其中（3d7b3c64）。
+- 结论如下：
+  - E 下日志链只剩 finder / service 的约 6–8 个类，logRuntimeExit 本身不持有大集合；
+  - 1844 类实际由 `Charset.isSupported` 根经越界消息与 `ThreadLocalRandom` 种子链持有，交给 charset-build 与越界消息线；
+  - 路径 A 的收益上限是 S 量级：基线下 −70（3315 → 3245），E 下 −6–8。路径 A 仍按终态做：它是精度改进，并且是 ③ 的前提。
+
+**路径 A 与 ③ 的收益上限：0 类，本线不实现（2026-10-08，`log-chain2` 29140373 = 合入 batch-1011 a88d7075 之后，作业 lg2-cut3，sg1）**
+
+| 变体（HelloWorld） | 类 |
+|---|---|
+| 基线 | 3304 |
+| L：切 `Shutdown.logRuntimeExit` | 3304（0） |
+| F：切 `LazyLoggers.getLoggerFromFinder` | 3233（−71） |
+| LF：L + F | 3233（−71） |
+| G：切 `System.getLogger(String)` | 3228（−76） |
+
+- ③（折叠 logRuntimeExit 中的 `isLoggable(DEBUG)`）只能删去 logRuntimeExit 体内 if 分支下的内容。整个 logRuntimeExit 被切掉都不减类（L = 基线；E 下也是 LE = E，见上），所以 ③ 的类收益上界是 0。
+- 路径 A（折叠 `LazyLoggers.getLogger` 中的 `isSystem(module)`）只删去一条边：`LazyLoggers.getLogger@15 → getLoggerFromFinder`。getLoggerFromFinder 还另有一条入口：
+  - 入口链：`getLazyLogger` → `JdkLazyLogger.<init>` → `LazyLoggerAccessor.makeAccessor`；运行期取用时经 `LazyLoggerAccessor.wrapped` → `createLogger@37` → `LazyLoggers$1.apply`（即 loggerSupplier），再到 getLoggerFromFinder。
+  - 这条入口在 HelloWorld 闭包中经 `PlatformLogger.getLogger@41 → getLazyLogger` 可达，与 isSystem 的取值无关，而且运行期也确实会走：惰性 logger 首次使用时就取 finder。
+  - 因此 F 的 −71 不能经路径 A 取得，路径 A 的类收益同样是 0。
+- 路径 A 本身还有一个结构性缺口：`LazyLoggers.getLogger` 的 module 形参按全部调用方汇合。`LoggerFinderLoader$TemporaryLoggerFinder.getLogger` 是另一个调用方，它的 module 经 `LazyLoggerAccessor.moduleRef`（WeakReference）一路传来，值未知。要折叠，需要「常量实参驱动的调用点克隆」，不能只做调用者镜像常量化加 const_eval 标签绑定。实现代价大，类收益为 0。
+- 决定：路径 A 与 ③ 在本线都不实现。日志链剩下的 71–76 类由 PlatformLogger / Tripwire 根经惰性 logger 的取用链持有，终态解法有两种：
+  - 映像求值器在构建期把这些 PlatformLogger 的后端判定落成映像值，使 `BootstrapLogger.useLazyLoggers` / `useSurrogateLoggers` 成为映像常量；
+  - 由 Tripwire 收窄线切掉 Tripwire 根。
+- locale-build 修复 3（`obj_at` 工厂对象保留调用点）合入后，基线变为 3304。上表已按新基线重测。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
@@ -1333,10 +1384,10 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - `isSystem` 经 `DefaultLoggerFinder$1` 字段 → doPrivileged 按调用点返回 → `Module.getClassLoader` → `VM.isSystemDomainLoader`；
   - 需要以下能力：调用者模块的常量化、映像 Module 标记穿过 `DefaultLoggerFinder$1` 的字段、doPrivileged 的按调用点返回值（不经 executePrivileged 汇合）、`Module.loader` 的映像读取。
   - 打通后，exit 路径走 `getLazyLogger`；只剩 `useLazyLoggers()` 的取值依赖 `logManagerConfigured`。此时还需要「service() 仅经由非 exit 根可达」的按上下文值域，或由 Tripwire 收窄线切掉 Tripwire 根。
-- 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。
+- 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。log-chain2 实测确认其类收益上限为 0，不再实现（见上「路径 A 与 ③ 的收益上限」）。
 
 **③ isLoggable(DEBUG)**
-- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。
+- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
 
 **仍持有日志链的其他根**（交给对应的线）
 - `Tripwire.ENABLED`（doPrivileged 读属性）；
@@ -1362,7 +1413,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   此外，`EmbeddedClassPath.url` 的协议常量化需要另行处理。
 
 **续作入口**
-- 先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点，再决定是否做路径 A；
+- ~~先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点~~ 已完成（见上「当前头已不存在」）；
 - 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
 - ③ 在路径 A 之后做。
 
