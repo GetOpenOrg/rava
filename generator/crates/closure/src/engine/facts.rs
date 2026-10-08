@@ -121,7 +121,7 @@ pub(super) struct Ctx<'a> {
     /// 映像 VM 模块表：包 → [(模块对象, 定义加载器为引导)]（装入映像时建立；类镜像模块读折叠用）
     pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
     /// 映像中构建期初始化类的静态字段初值（装入映像时建立，见 `static_init.rs`）
-    pub(super) img_statics: std::cell::OnceCell<super::static_init::ImgStatics>,
+    pub(super) img_statics: std::cell::RefCell<Option<super::static_init::ImgStatics>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）

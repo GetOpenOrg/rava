@@ -83,6 +83,7 @@ mod diag;
 mod write_audit;
 mod field_names;
 mod field_handles;
+mod enum_consts;
 mod field_access;
 mod mirror_init;
 mod seeds;
@@ -396,6 +397,8 @@ pub struct Engine<'a> {
     pub cold_cut: bool,
     /// 构建期引导映像起点（`install_image`）
     img: Option<Box<image_start::ImgState>>,
+    /// 构建期初始化扩展的求值器（引导映像求值器在导出后保留，concrete/ext_init.rs）
+    ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
     level_inited: HashSet<(String, u32)>,
@@ -618,6 +621,10 @@ pub struct Engine<'a> {
     fa_sites: HashMap<(usize, u32), field_access::FaSite>,
     /// 按名取得的字段句柄来源标记 → 所指字段（None = 名字或类推不出），见 `field_handles.rs` `mark_named`
     fh_named: HashMap<u32, Option<MemberRef>>,
+    /// 枚举常量身份标记 → 分配点（枚举类 `<clinit>` 方法节点, `new` 偏移），见 `enum_consts.rs`
+    enum_consts: HashMap<u32, (usize, u32)>,
+    /// 枚举常量标记上 final 字符串字段的值（缓存；None = 推不出，Some(None) = null）
+    enum_vals: HashMap<(u32, Rc<str>), Option<Option<Rc<str>>>>,
     /// 字段句柄取得入口经非字节码调用点可达（句柄不带来源标记）的原因：此后句柄存取一律按字节码接边
     fa_untrusted: Option<String>,
     fa_watch: HashMap<Node, (usize, u32)>,

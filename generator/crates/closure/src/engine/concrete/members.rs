@@ -25,6 +25,7 @@ impl Vm {
                     return fail(format!("读取可变静态字段 {}.{}", fr.decl, fr.name));
                 }
                 if self.boot {
+                    self.ext_get_static(&fr)?;
                     if let Some(v) = env.cfg().boot.statics.get(&format!("{}.{}", fr.decl, fr.name)) {
                         if v == "@deferred" {
                             return defer(format!("延迟值参与求值：VM 注入的宿主相关静态 {}.{}", fr.decl, fr.name));

@@ -314,7 +314,7 @@ fn flow_text(vm: &Vm, f: &Flow) -> String {
 impl<'a> Engine<'a> {
     /// 构建期引导映像。清单 `[concrete.boot] calls` 无引导阶段、阶段方法所在类不在类路径上、或任一阶段求值 /
     /// 映像导出失败，都是失败——原生二进制没有不经映像的启动路径
-    pub fn boot_image(&self) -> Result<BootImage, BootFailure> {
+    pub fn boot_image(&mut self) -> Result<BootImage, BootFailure> {
         let boot = &self.man.concrete.boot;
         let bare = |error: String| BootFailure { report: format!("# 构建期引导映像审计\n\n- 结论：**失败**——{error}\n"), error, stack: Vec::new() };
         let first = boot.calls.iter().find_map(|c| if let BootCall::Phase(m, _) = c { Some(m) } else { None }).ok_or_else(|| bare("清单 [concrete.boot] calls 无引导阶段方法".into()))?;
@@ -380,9 +380,13 @@ impl<'a> Engine<'a> {
         if error.is_none() {
             error = s2.fail.clone();
         }
+        let mut ext_ids = None;
         let data = if error.is_none() {
             match super::export::export(&vm, env.cfg(), env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i).copied())) {
-                Ok(d) => Some(d),
+                Ok((d, ids)) => {
+                    ext_ids = Some(ids);
+                    Some(d)
+                }
                 Err(e) => {
                     error = Some(format!("映像导出：{e}"));
                     None
@@ -487,6 +491,11 @@ impl<'a> Engine<'a> {
             return Err(BootFailure { error: error.unwrap_or_default(), stack, report: r });
         };
         let types = size.types.iter().map(|t| t.to_string()).collect();
+        // 求值器保留给构建期初始化扩展（ext_init.rs）
+        if let Some(ids) = ext_ids {
+            vm.ext_enter(&env, ids);
+            self.ext_vm = Some(Box::new(super::ext_init::ExtVm::new(vm)));
+        }
         Ok(BootImage { digest: dg, json, report: r, types, runtime_classes: runtime_classes.into_iter().collect(), data })
     }
 }

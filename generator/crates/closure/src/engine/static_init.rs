@@ -49,7 +49,7 @@ pub(super) fn write_pv(is_static: bool, v: Option<&V>) -> PV {
 impl Ctx<'_> {
     /// 静态字段的初值（映像中构建期初始化类取映像值）
     pub(super) fn static_initial(&self, key: &MemberRef) -> PV {
-        static_initial(self.img_statics.get(), key)
+        static_initial(self.img_statics.borrow().as_ref(), key)
     }
 
     /// 构建期初始化类的 static final 引用字段：`<clinit>` 推不出常量时取映像值（映像对象 / 字符串 / null；
@@ -58,7 +58,7 @@ impl Ctx<'_> {
         if !matches!(key.desc.as_bytes().first(), Some(b'L' | b'[')) {
             return None;
         }
-        self.img_statics.get()?.initial(key)?.value()
+        self.img_statics.borrow().as_ref()?.initial(key)?.value()
     }
 }
 
@@ -72,7 +72,7 @@ impl Engine<'_> {
                 vals.insert((c.clone(), n.clone()), self.image_pv(*v));
             }
         }
-        let _ = self.ctx.img_statics.set(ImgStatics { build_time, vals });
+        *self.ctx.img_statics.borrow_mut() = Some(ImgStatics { build_time, vals });
     }
 }
 

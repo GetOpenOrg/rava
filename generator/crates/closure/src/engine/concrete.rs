@@ -14,6 +14,8 @@ mod boot_cfg;
 pub mod boot_image;
 mod boot_slots;
 mod export;
+mod ext_export;
+mod ext_init;
 mod indy;
 mod init;
 mod interp;
@@ -33,6 +35,8 @@ mod vm_link;
 mod war;
 
 use resolve::MethodSite;
+
+pub(super) use self::ext_init::ExtVm;
 
 use self::snap::{MObj, MV};
 use self::vm::*;
@@ -143,7 +147,7 @@ impl<'a> Engine<'a> {
                 continue;
             };
             let w = match (&o.alt, &o.alt_why) {
-                (Some(a), _) => self.image_memo_ok(&a.0).err(),
+                (Some(a), _) => self.image_memo_prepare(&a.0).err(),
                 (None, w) => w.clone(),
             };
             hot.push(w.is_none() && o.alt.is_some());
