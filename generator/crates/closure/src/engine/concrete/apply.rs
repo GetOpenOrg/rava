@@ -177,13 +177,7 @@ impl<'a> Engine<'a> {
                 self.instantiate(STRING, via.clone());
                 Some(TypeSet::exact(self.id(STRING)))
             }
-            MV::Mirror(c) => {
-                if c.len() > 1 {
-                    self.touch(c, Level::Type, via.clone());
-                }
-                self.instantiate(CLASS, via.clone());
-                Some(TypeSet::exact(self.mirror(c)))
-            }
+            MV::Mirror(c) => Some(TypeSet::exact(self.named_mirror(c, via))),
             MV::Obj(i) => ids[*i].clone(),
             MV::Image(t) => {
                 self.instantiate(t, via.clone());

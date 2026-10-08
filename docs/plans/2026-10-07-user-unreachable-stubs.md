@@ -2,6 +2,8 @@
 
 分支：`user-unreach-stubs`（基于 rust-closure-analyzer @ b6ed3950）
 
+> 状态（2026-10-08）：待合批验证（user-unreach-stubs 108558e0，已合入 batch-1008 2bb95081）。早期版本曾随 batch-1007 测试，batch-1007 已被 batch-1008 取代、未单独合入。
+
 ## 一、目标
 
 用户 crate 与 JDK 侧采用同一个存根判据（CLAUDE.md 原则 §2）：不在档案调用链上的用户方法生成 `__stub("stub: 类名.方法名:描述符")`，不翻译方法体，也不分析方法体内引用的类型。终态要求：**用户类不可达方法的翻译数为 0**。

@@ -11,7 +11,7 @@
 > - 「可观察差异」：与 JVM 的行为差别；无行为差别时写「仅架构」。
 > - 「既有任务」：文档里已有的编号，没有则写「新立」。
 >
-> **统计**：共 116 项（原记 117，进程组实为 P1..P5 共 5 项，2026-09-28 核对更正）。其中既有记录 66 项（含部分覆盖），**无记录 50 项，本文件起立项**。
+> **统计**：共 117 项（原记 117，进程组实为 P1..P5 共 5 项，2026-09-28 核对更正为 116；2026-10-08 新增 FS-Q18 超长文件）。其中既有记录 66 项（含部分覆盖），**无记录 51 项，本文件起立项**。
 >
 > 抽查已核实三条（2026-09-26）：`Math.random()` 恒为 0.5（math_impl.rs:26）、`Character.digit` 只认 ASCII、`_nf_covered` 覆盖机制没有「仅 native」约束。
 >
@@ -176,10 +176,10 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 
 | # | 现状 | 最终态 | 可观察差异 | 既有任务 |
 |---|---|---|---|---|
-| FS-G1 | 没有 GC（Rc 循环永不释放，驻留表只增不减）；`Runtime.gc/freeMemory/totalMemory/maxMemory` 缺失 | 回收机制 + 内存查询 | 内存持续增长；调用即 panic | 部分（compat「无 GC」） |
-| FS-G2 | 弱 / 软 / 虚引用不清除、不入队 | — | WeakHashMap 条目不消失 | compat 近似行 |
-| FS-G3 | finalize 不触发 | — | finalize 不执行 | compat |
-| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | — | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立；2026-09-28 FileCleanable 回到字节码，no-op 语义下沉内部边界 PhantomCleanable / CleanerFactory（语义不变：仍无 GC 驱动清理） |
+| FS-G1 | 没有 GC（Rc 循环永不释放，驻留表只增不减）；`Runtime.gc/freeMemory/totalMemory/maxMemory` 缺失 | 无 GC 内存模型：编译期逃逸分析整组释放 + 所有权推断弱引用，不做追踪式 GC 与运行期环回收（2026-10-07 定，C4 之后，`2026-10-07-no-gc-memory-model.md`）+ 内存查询 | 内存持续增长；调用即 panic | 部分（compat「无 GC」） |
+| FS-G2 | 弱 / 软 / 虚引用不清除、不入队 | 引用类语义由 `Rc` 释放触发（无 GC 模型，C4 之后） | WeakHashMap 条目不消失 | compat 近似行 |
+| FS-G3 | finalize 不触发 | 随对象释放触发（无 GC 模型，C4 之后） | finalize 不执行 | compat |
+| FS-G4 | Cleaner / `FileCleanable.register` 是 no-op | Cleaner 动作随对象释放触发（无 GC 模型，C4 之后） | 未 close 的 fd 泄漏；Cleaner 动作不执行 | 新立；2026-09-28 FileCleanable 回到字节码，no-op 语义下沉内部边界 PhantomCleanable / CleanerFactory（语义不变：仍无 GC 驱动清理） |
 | FS-G5 | 监视器 / park 侧表条目不回收，地址键可能被复用 | 对象头或弱键 | 内存增长；理论上身份冲突 | 新立 |
 
 ## 十一、生成器质量
@@ -203,6 +203,7 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | FS-Q15 | `native_upcalls.provides` 按名前缀近似匹配 | 按 mangle 精确匹配 | 仅架构 | 新立 |
 | FS-Q16 | 翻译质量小项：mut 标注递归 / 括号优化 / 布尔压缩 / 语义桩计数 / 类级并行 | — | 仅架构 | T54 / T60 / T70 / T72 / T65 |
 | FS-Q17 | Debug 由宏生成 | 改用 `#[derive(Debug)]` | 仅架构 | R-3 |
+| FS-Q18 | 频繁修改的源文件超长（规则 ≤ 约 600 行，2026-10-08 `wc -l`）：`generator/crates/closure/src/engine.rs` 643、`engine/classes.rs` 720、`manifest.rs` 873 | 按职责拆子模块，纯搬移，各文件 ≤ 约 600 行 | 仅架构 | 新立（2026-10-08） |
 
 ## 十二、手写替代字节码翻译的类（违反原则 0 / 1）
 
@@ -262,11 +263,11 @@ FileSystems ↔ FS-IO4、JceSecurity ↔ FS-K 配置层）。
 | 异常与栈回溯 | 3 | 2 | 1 |
 | 数值 / 浮点 | 6 | 1 | 5 |
 | GC / 弱引用 / Finalization | 5 | 3 | 2 |
-| 生成器质量 | 17 | 14 | 3 |
+| 生成器质量 | 18 | 14 | 4 |
 | 手写替代字节码翻译的类 | 14 | 5 | 9 |
 | 进程 / 环境 / 系统属性 | 5 | 1 | 4 |
 | 其他 | 11 | 6 | 5 |
-| **合计** | **116** | **66** | **50** |
+| **合计** | **117** | **66** | **51** |
 
 ## 建议推进顺序
 
