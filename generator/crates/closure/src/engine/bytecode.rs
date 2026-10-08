@@ -432,8 +432,8 @@ impl<'a> Engine<'a> {
             if other {
                 self.feed(&fs, Node::U(fi), tid);
             }
-            // 边界类字段 / 有手写访问器的字段：写入值由手写层读出
-            if first && (matches!(self.domain(&decl), Domain::Boundary | Domain::Root) || !self.hw.member(&decl, &f.name).fns.is_empty()) {
+            // 手写层点名的边界类字段 / 有手写访问器的字段：写入值由手写层读出
+            if first && (self.ctx.boundary_field(&decl, &f.name) || !self.hw.member(&decl, &f.name).fns.is_empty()) {
                 self.feed(&fs, Node::Esc, tid);
             }
         } else if fresh {
@@ -460,10 +460,10 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 字段读：声明类是边界类（struct 与字段整体手写）或字段有手写访问器 → 按 open 处理（公开 API 类的
+    /// 字段读：手写层点名的边界类字段（[`Ctx::boundary_field`]）或字段有手写访问器 → 按 open 处理（公开 API 类的
     /// 手写写入经 `__set_` 在 [`Self::hw_fields`] 精确接入）；手写访问器声明的回调入链
     pub(super) fn field_handwritten(&mut self, decl: &str, name: &str, fdesc: &str, via: &Via, node: Option<(usize, u32)>) {
-        let boundary = matches!(self.domain(decl), Domain::Boundary | Domain::Root);
+        let boundary = self.ctx.boundary_field(decl, name);
         let mh = self.hw.member(decl, name);
         if let Some((fi, tid)) = node {
             // 边界类字段，或值由手写访问器提供（如标准流 `System::out()`）：按 open 处理。清单字段钩子

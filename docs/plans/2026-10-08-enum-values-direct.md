@@ -274,3 +274,89 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 
 - `Constructor.newInstance` 同型门（反射构造）可按同一清单形状扩展（`direct_invokers` 键为构造入口），未实施。
 - 有实参的静态目标（形参类型数组非空）未纳入：需按形参类型精确解析重载与实参拆箱，另行设计。
+
+## 九、反射对象标记直连（分支 reflect-marker，2026-10-08，未合入）
+
+§八「反射对象跨方法流动」的终态实施。基 b9f47c33（batch-1010）。
+
+### 9.1 实现
+
+- **3cb63099 标记机制**：查找入口（`getMethod` / `getDeclaredMethod` / `getDeclaredMethods` / `JavaLangAccess.getDeclaredPublicMethods`）的结果建模为携带所指方法的标记对象（`engine/method_marks.rs`：`Member` 单个成员 / `All` 某类全部方法 / `Gap` 所指未知），形态单个 / 数组 / 列表（经 `Method$Direct.list` 模型）；复制入口（`copyMethod` 等）保持标记；`invoke` 点接收者值集全为非 CS 标记时直连，混入普通 `Method` 即回退（`rdirect_fallback`，单调）。清单 `vm_intrinsics.toml [facts.reflect.direct_invokers]` 声明 `list` / `lookups` / `copies`，生成器无 JDK 类名。标记不作接收者上下文（`ctxsel.rs::recv_ctx` 排除 `rmarks`）。
+- **7c8128b0 列表模型**：`Method$Direct.list` 改为标记数组只读视图（私有 `Marks extends AbstractList` / `It`）。借用 `ArrayList` 时 `elementData` 经 `Arrays.copyOf` 全程序共享分配点扩容，元素混入别处的值，`ServiceLoader$ProviderImpl.invokeFactoryMethod@20` 先直连后回退，把 `Method.invoke` 方法体与注解解析链拉回闭包（hello 3325）。
+- **ac79b624 / 29f54f85 deepcopy 发散修正（未收敛，见 9.3）**：直连实例目标原按「每目标 × 精确接收者集合」建枢纽，接收者集合每增长一次每个目标各建一枢纽。ac79b624 改为按目标链上次枢纽为父、只展开差集；29f54f85 改为精确接收者逐类型选实现、各实现以接收者来源为 this 直接接边（不建枢纽、不按接收者对象克隆，lambda / 手写层对象接收者仍走枢纽）。
+
+### 9.2 实测（`scripts/closure_composition_job.sh`，sg2）
+
+基线是 b9f47c33（作业 `lg-before-b9f47c33`）：hello / collectors 3324、deepcopy 3573。注意 §6.5 与 closure-composition §七 记的 2178 是 61ab696e 口径，不是本基。
+
+| 用例 | 基 b9f47c33 | 7c8128b0 | 29f54f85（作业 rm-ccomp-29f54f85） |
+|---|---|---|---|
+| hello | 3324 | 3285 | 3285（77 s，峰值 2.0 GB，`fold_direct_calls` 7） |
+| collectors | 3324 | 3285 | 3285 |
+| hello.annsig / annall | — | 3285 / 3285 | 3285 / 3285 |
+| deepcopy（及 annsig / annall） | 3573（232 s，3.8 GB） | 3000 s 超时 | 3000 s 超时 |
+
+- hello / collectors 减 41 类、加 2 个模型类（`Method$Direct$Marks` / `$It`）。`Method.invoke` 方法体、`AnnotationParser*`、`AnnotationInvocationHandler*`、`AnnotationType*`、`Proxy*` / `Proxy$Dyn`、`InvocationHandler`、`DirectMethodHandleAccessor*` / `MethodAccessorImpl`、`CallerSensitive`、`Retention` / `RetentionPolicy` / `Inherited`、异常代理类与 `Double` / `LongPipeline` 都已出闭包。annsig / annall 截断集在 hello 上已无增量。
+- hello 中直连的点：`getEnumConstantsShared@49`、`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`、`HttpConnectSocketImpl.doTunneling@8`、`BasicImageReader$2.run@37`、`NTLMAuthenticationProxy.isTrustedSite@12` / `supportsTransparentAuth@8`、`HostLocaleProviderAdapter.findInstalledProvider@39`。`AnnotationInvocationHandler.equalsImpl@121` 所在类已整体出 hello 闭包，未单独核对。
+- 闭包 crate 单测：230 通过（3cb63099 / ac79b624 / 29f54f85 均同）。
+
+### 9.3 deepcopy 发散（未解决）
+
+诊断作业：`rm-diag-ee939793` / `rm-diag2-cb64e9a5` / `rm-diag3-51a1fa57`（临时分支 rm-diag3 = 29f54f85 + 打点，每 120 s 打印标记数、回退点与 `perf_json`，并打印枢纽数最多的调用点）。
+
+29f54f85 下第 937 s 的状态：
+
+- **枢纽**：`hubs` 为 [122529, 3467458, 37698]，基线是 [33909, 421373, 96]。单点枢纽数 `ObjectStreamClass.invokeWriteObject@24` 37698、`invokeWriteReplace@20` 18260，`invokeReadObject@24` / `invokeReadObjectNoData@20` 各 206。
+- **规模**：`flow_edges` 17.8 M（基线 3.4 M），`site_reruns` 1.98 M，峰值 11.2 GB。阶段耗时：sites 216 s、flows 320 s。
+- **标记**：member 405、all 3097、gap 1，回退点 22 个（全在 JDK 内部查找 / 复制入口：`Class.getMethod@55`、`getDeclaredMethod@59`、`copyMethods@24`、`ReflectAccess.copyMethod@1`、`Proxy$Dyn.dispatchObject@5`、`getEnclosingMethod@197`、`getDeclaredPublicMethods@77`）。
+- **结论**：29f54f85 去掉了精确集合枢纽，单点枢纽数却不变。说明这 3.7 万枢纽来自 open 部分：`direct_virtual` 对接收者值集里的每个 open 类型 × 每个目标各建一个 `HubSet::Open` 枢纽。`invokeWriteObject` 的接收者是任意被序列化对象，open 类型成千、目标上百。字节码虚调用点（`invoke.rs`）会跳过被同值集里另一 open 超类型涵盖的 open，并经 `recv_fp` 缓存；直连路径两者都没有。
+
+### 9.4 收敛修复（e59cc647 … 8ce97959，基 a88d7075 = batch-1011）
+
+诊断分支 rm-diag3 … rm-diag6（作业 `rm-diag4` … `rm-diag17`）逐层打点定位，四处修复依次落地：
+
+1. **open 枢纽收敛（e59cc647 / 25f1828c / cdd165bc / 75bead2f）**。直连实例目标的 open 部分按目标声明类归一建枢纽，非虚目标直接接边，按（调用点, 目标）增量接入；实参来源变化时重接；无名字查找点共享一个 `All` 标记。75bead2f 再按声明类门控：精确接收者逐对象选实现、只以选中者为 this 接边，非虚目标的 open 部分同样经 open 枢纽。结果：非直连点单点枢纽最多 125（原 3.7 万），`All` 标记 3097 → 1–3。
+2. **边界类字段（78b744fe）**。只有手写层点名的边界类字段才按手写读写处理。类镜像上的纯 Java 缓存字段（`enumConstants` / `enumConstantDirectory`、反射数据等）手写层不出现，改为同普通字段建模。原先直连 `values()` 后，`enumConstants` 一经写入就逃逸，全部枚举数组与常量表随之逃逸，deepcopy 的逃逸翻倍、不收敛。
+3. **直连 helper 的 native（072d4b17）**。清单 `direct_invokers` 新增 `native` 键，登记 helper 体内实际执行目标调用的 native（`Method$Direct.invoke0`）。直连调用点已逐目标接边（接收者、实参数组元素、返回值），所以该 native 的返回值不再按 open 交出，形参值池也不再按返回类型逃逸。此前 deepcopy 经这个值池逃逸 1.25 万对象，是新增逃逸的主体。
+4. **`serialPersistentFields`（8ce97959）**。可序列化类以 private static final 的 `serialPersistentFields` 显式声明序列化字段面时，反序列化与按偏移写入只放开声明里的名字。名字取自该类 `<clinit>` 的字符串常量；`<clinit>` 从别的类取同型数组时名字推不出，按未声明处理。清单项是 `[facts.field_writes] serial_persistent_fields`。
+   - 根因：rm-diag14 / 15 / 16 打点显示，约第 240 s 起 `ObjectStreamClass.invokeWriteObject@24` / `invokeWriteReplace@20` 回退到 `Method.invoke` 原入口。原因是接收者值集含 open(Method)：`FieldReflector.setObjFieldValues@241` 的 `Unsafe.putReference` 按「可序列化类的非 static、非 transient 字段」写进了 `ObjectStreamClass.writeObjectMethod` 等 Method 缓存字段。
+   - 实际上 `ObjectStreamClass` 声明的是 `serialPersistentFields = NO_FIELDS`，这些字段从不经反序列化写入。
+   - 回退后经 `NativeAccessor.invoke0` 的值池逃逸约 7.3 千类，按对象复核风暴（`obj_flush` 占 flows 阶段近 100%）导致不收敛。修复后 rm-diag17 中直连回退点为 0。
+
+### 9.5 实测（8ce97959）
+
+| 用例 | 基 a88d7075 | 8ce97959 |
+|---|---|---|
+| deepcopy 类数 | 3553 | 3532（−37 / +16） |
+| deepcopy 耗时 / 峰值 | 502 s / 5.9 GB（kr2） | 889 s / 7.7 GB（kr1，rm-cc-8ce97959；rm-diag17 同 897 s） |
+| hello / collectors | 3304 / 3304（109 s / 2.5 GB） | 3263 / 3263（96–98 s / 2.2 GB，sg2，rm-hc-8ce97959） |
+| hello.annsig / annall | 3303 / 3269 | 3263 / 3263 |
+
+- deepcopy 出闭包：`sun/reflect/annotation/*` 11、`java/lang/annotation/*` 6、`jdk/internal/reflect/*` 5（含 `DirectMethodHandleAccessor`）、`java/util/stream/*` 12、`Class$AnnotationData`、`EnumConstantNotPresentException` 等，`Method.invoke` 方法体不再入链。新增的 16 类是 2 个模型类（`Method$Direct$Marks` / `$It`），以及 `java/time` 的 4 个匿名类、`AbstractMap$1` / `$1$1`、`Hashtable$KeySet`、`ConcurrentSkipListMap` 的 2 个 spliterator、`JavaLangModuleAccess`、`JavaNetURLAccess`、`URL$3`、`ModuleDescriptor$1`、`ByteArrayTagOrder`。这 14 个是精度变化带入的合法可达类，未逐个核对。
+- 逃逸对象 10468，基线 14531；`context_objects` 16701，基线 15595。
+- **残留：deepcopy 分析耗时为基线的 1.77×**。
+  - `flows` 阶段 647 s，基线 297 s；`flow_edges` 14.3 M，基线 7.2 M。
+  - 推送量增长集中在三类：`W->E` 手写数组写入（13 M → 56 M）、`E->S`（25 M → 89 M）、`R->S`（58 M → 114 M）。
+  - 出度最大的节点变为 `U java/util/HashMap$Node.value`（32853，基线未进前列），另有多个 `G(·)` 出度约 1.4 万（基线约 7 千）。
+  - 推测与 78b744fe 有关：缓存字段不再按逃逸 / open 截断后，值经正常流边扩散，读者增多。未定位到具体站点。
+- **单测**（作业 `rm-ut3-8ce97959`，kr1，rc=0 跑完，日志 `cluster_results/job/rm-ut3-8ce97959/01_kr1.log`）：2 个 target 失败、3 例，其余套件全部通过。
+  - `driver/tests/closure_cli` 2 例：
+    - `param_string_constants_fold_switch`：batch-1012 已修的已知失败；
+    - `reflect_new_array_element_precision`：基 a88d7075 上同样失败（closure_cli.rs:150，两次种子闭包不一致），归种子确定性线。
+  - `driver/tests/profile_cli` 1 例 `profile_union_key_and_coverage`（profile_cli.rs:84）：fix-1011 的 fddb9bcb（`fix1011-ut2`）、`sc-ut-6da7e301`、`b1008-ut-6934dc93` 同样失败，属既有失败，与本分支无关。
+  - `container_elements_per_object` / `known_gate_ranks_first` 本次未失败。
+- **抽查未跑**：10 例抽查（TestServiceLoaderEmpty、TestReflectInvokeShapes、ReflectionAPI、TestAnnoReflect、TestAnnoDeepAccess、TestSerialUserGenericCallbacks、TestReflectEnumOps、HelloWorld、CollectorsDemo、DeepCopy）因 6 h 上限收尾未投，留待续作。
+
+### 9.6 续作入口
+
+0. **先同步新基线再验证**。把本分支合到 batch-1012（e5200a3e）或之后的集成分支，然后：
+   - 跑 §9.5 列出的 10 例抽查（tag 建议 `rm-spot-<sha>`）；
+   - 补跑全量单测；
+   - 复测 deepcopy / hello 的类数与耗时（`scripts/closure_composition_job.sh`，对照作业 `rm-cc-8ce97959`、`rm-hc-8ce97959`、`rm-diag17`）。
+   - 诊断分支 rm-diag3 … rm-diag6、rm-diagbase 已删（本地与双远端），打点代码不保留；需要回退点原因时，在 `engine/reflect_direct.rs` 的回退分支处临时加打印。
+1. **deepcopy 耗时回到基线**。先用 `--site-prof` 分别在基线与 8ce97959 上跑 deepcopy，对比重跑最多的站点；再用 `--flows @grow:` 盯 `U java/util/HashMap$Node.value` 与出度最大的 `G(·)` 节点，查清新增扩散的来源（78b744fe 放开的缓存字段、还是直连接边的实参来源）。在生成器内收窄，不回退 78b744fe 的建模口径。
+2. 核对 `ObjectStreamClass.invoke*` 五点与 `AnnotationInvocationHandler.equalsImpl@121` 的直连（deepcopy 中 `invokeWriteObject@24` 枢纽 207、`invokeWriteReplace@20` 83，均已直连）。
+3. `Constructor.newInstance` 同型门、有实参的静态目标：见 §八，未实施。
+4. **合入**。与 batch-1012（e5200a3e，含 fix-1010 / charset-ext / fix-1011）、seed-chain（c7fbaf8c）、annot-sig（2867cbde）三方试合并（`git merge-tree`）均无冲突。
+   - 同文件重叠：batch-1012 也改了 `engine.rs`、`engine/bytecode.rs`、`vm_intrinsics.toml`；seed-chain 也改了 `vm_intrinsics.toml`，但两者改的都是不同节。annot-sig 无同文件改动。
+   - 语义上需留意：本分支改了 `facts/fields.rs::field_info` 的可序列化字段面（`serialPersistentFields`）。若别的分支依赖「可序列化类全部非 transient 字段可经偏移写入」，合入后要复测。

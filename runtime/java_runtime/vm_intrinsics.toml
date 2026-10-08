@@ -371,6 +371,11 @@ deserializers = [
     "java/io/ObjectInputStream.readUnshared:()Ljava/lang/Object;",
 ]
 serializable_markers = ["java/io/Serializable"]
+# serial_persistent_fields：可序列化类以 private static final 的该字段显式声明序列化字段面时，默认序列化 / 反序列化
+#   只按其中的名字绑定本类字段（ObjectStreamClass.getDeclaredSerialFields）；其余字段即使非 static、非 transient
+#   也不经偏移读写。名字取自该类 <clinit> 的字符串常量（如 ObjectStreamClass 声明 NO_FIELDS：其 Method 缓存字段
+#   不受反序列化写入，直连调用点接收者不混入 open(Method)）
+serial_persistent_fields = ["serialPersistentFields:[Ljava/io/ObjectStreamField;"]
 # serial_enumerators：只对可序列化类（serializable_markers 的子类型）调用上列 enumerators、只用其非 static、
 #   非 transient 字段（默认序列化字段按 static / transient 掩码过滤；computeDefaultSUID 只读名字与修饰符）的调用方。
 #   其枚举接收者推不出（类来自流中类名 / 对象的 getClass）时按可序列化字段口径放开（同 deserializers 的字段面），
@@ -650,15 +655,24 @@ instantiators = [
 # 直连反射调用：反射调用入口 → 非 @CallerSensitive 目标的特化入口（VM 支持类 Method$Direct，java_support/）。
 # Method.invoke 的体对任意反射对象都要判 isCallerSensitive（解析方法注解）、取访问器、按 CS 与否两路调用访问器；
 # 这些分支的取舍取决于运行期的反射对象，分析器无从折叠，使经它的每个调用点都把注解解析与 CS 访问器链带进闭包。
-# 调用点的反射对象来自同方法内的常量名查找（lookups 所列入口，形参类型数组为空）、查找类集已知、解析出的目标全是
-# 无参、返回引用或 void、非 @CallerSensitive 的静态方法时，isCallerSensitive 恒为假、访问器恒为本地访问器
-# （jdk.reflect.useNativeAccessorOnly），Method.invoke 的执行即「未 override 时访问检查 + 本地访问器 invoke0」，
-# 与 helper 逐句一致。分析器把调用点接到 helper 与各目标（目标入反射分派面），经 folds `direct_calls` 把调用指令
-# 改写为 invokestatic helper（engine/reflect_direct.rs、input/norm.rs）。典型调用点：Class.getEnumConstantsShared 的
-# `getMethod("values").invoke(null)`。lookups 口径：public = Class.getMethod（公开成员沿超类链）；declared = 只查声明类
+# 分析器把 lookups 所列查找入口的结果建模为携带所指方法的标记（名字 / 查找类 / 形参类型推得出时；形态按返回类型：
+# 单个、数组、经 list 模型装入列表），copies 所列复制入口保持标记（复制所指方法不变），标记随字段 / 数组 / 列表
+# 流到别处。反射调用点的接收者全是标记、所指方法全非 @CallerSensitive 时，isCallerSensitive 恒为假、访问器恒为
+# 本地访问器（jdk.reflect.useNativeAccessorOnly），Method.invoke 的执行即「未 override 时访问检查 + 本地访问器
+# invoke0」，与 helper 逐句一致；混入普通 Method 对象即回退。分析器把调用点接到 helper 与各目标（目标入反射分派面，
+# 实参取实参数组元素），经 folds `direct_calls` 把调用指令改写为 invokestatic helper（engine/method_marks.rs、
+# engine/reflect_direct.rs、input/norm.rs）。典型调用点：Class.getEnumConstantsShared 的 `getMethod("values").invoke(null)`、
+# ServiceLoader$ProviderImpl.invokeFactoryMethod（经 JavaLangAccess.getDeclaredPublicMethods 列表与字段）、
+# AnnotationInvocationHandler.equalsImpl（getDeclaredMethods 数组经字段）、ObjectStreamClass 的 readObject / writeObject 等
+# （按形参名与形参类型数组查找，经字段）。lookups 口径：public = Class.getMethod（公开成员沿超类链与超接口）；
+# declared = 只查声明类（getDeclaredMethod / getDeclaredMethods）；declared_public = 只查声明类的公开方法。
+# native = helper 体内执行目标调用的 native：直连调用点已逐目标接边，其返回值不按 open 交出、形参值池不按返回类型逃逸
 [facts.reflect.direct_invokers."java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"]
 helper = "java/lang/reflect/Method$Direct.invoke:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
-lookups = { "java/lang/Class.getMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "public", "java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "declared" }
+list = "java/lang/reflect/Method$Direct.list:([Ljava/lang/reflect/Method;)Ljava/util/List;"
+lookups = { "java/lang/Class.getMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "public", "java/lang/Class.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;" = "declared", "java/lang/Class.getDeclaredMethods:()[Ljava/lang/reflect/Method;" = "declared", "jdk/internal/access/JavaLangAccess.getDeclaredPublicMethods:(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/util/List;" = "declared_public" }
+native = "java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
+copies = ["jdk/internal/reflect/ReflectionFactory.copyMethod:(Ljava/lang/reflect/Method;)Ljava/lang/reflect/Method;", "jdk/internal/reflect/ReflectionFactory.leafCopyMethod:(Ljava/lang/reflect/Method;)Ljava/lang/reflect/Method;", "java/lang/reflect/Method.copy:()Ljava/lang/reflect/Method;"]
 
 [facts.reflect.constant_tables."sun/util/PreHashedMap"]
 readers = ["get:(Ljava/lang/Object;)Ljava/lang/Object;"]

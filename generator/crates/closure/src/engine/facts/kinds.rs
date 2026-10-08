@@ -64,6 +64,13 @@ impl Ctx<'_> {
         (if overloaded { None } else { Some(base.to_string()) }, mangled)
     }
 
+    /// 边界类（struct 承载 VM 注入状态）的字段且手写层点名了它：值可能由手写层读写，按 open / 逃逸处理。
+    /// 手写层不点名的边界类字段（类镜像上的纯 Java 缓存，如枚举常量表、反射数据）只经字节码写入与构建期映像
+    /// 取值，与普通类字段同一口径（`Handwritten::mentions_field`，按名保守判定）
+    pub(in crate::engine) fn boundary_field(&self, decl: &str, name: &str) -> bool {
+        matches!(self.domain(decl), Domain::Boundary | Domain::Root) && self.hw.mentions_field(name)
+    }
+
     pub(in crate::engine) fn domain(&self, cls: &str) -> Domain {
         if let Some(&d) = self.domains.borrow().get(cls) {
             return d;

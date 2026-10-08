@@ -48,6 +48,7 @@ mod reflect;
 mod reflect_call;
 mod reflect_call_pool;
 mod reflect_direct;
+mod method_marks;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -371,6 +372,17 @@ pub struct Engine<'a> {
     /// （单调：此后恒按原入口接边，已接的直连边保留）
     rdirect: HashMap<(usize, u32), MemberRef>,
     rdirect_fallback: HashSet<(usize, u32)>,
+    /// 直连调用点上各实例目标的 lambda / 手写层对象接收者最近一次的精确集合枢纽与集合（同 `hub_last`，按目标分开）
+    rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
+    /// 直连调用点上各实例目标已接的精确接收者与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
+    rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
+    /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
+    rmarks: HashMap<u32, method_marks::MethodMark>,
+    rmark_fallback: HashSet<(usize, u32)>,
+    /// 无名字查找点的共享标记（`MethodMark::All`）→ 所指类集（随查找类值集增长）与读取其所指的直连调用点
+    /// （所指增长时重跑）
+    rmark_all: HashMap<u32, BTreeSet<String>>,
+    rmark_readers: HashMap<u32, BTreeSet<(usize, u32)>>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],
