@@ -539,7 +539,11 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 - 新测试 `tests/e2e/64_charsets_ext/TestCharsetExtLookup.java`：x-IBM930（含 SO/SI 双字节段）、IBM037 / cp037 别名编解码往返，`isSupported`，`availableCharsets` 含扩展名，经映射取 x-MacRoman 编码。期望输出由参考 JDK 生成。
 - 单测：`cargo test -p closure` 234 passed / 0 failed，含新增 `map_writes_instance_field_with_empty_ctor`。
 
-抽查：见下行。
+抽查 `csext-f3047901`（jp2 / us1，f3047901）：
+- CollectorsDemo（jp2）编译期 OOM：内存上限内被杀，limit = peak = 11882M；转译 122 s，构建 834 s 后被杀。属于资源类失败，不阻塞合入。
+- 成因：闭包增加 289 个字符集类（clinit +279、方法 +703，主要是 EBCDIC / CJK 双字节表），java.base / jdk.charsets crate 的编译内存随之升高。
+- 后续：由档案 crate 分层与构建并行度线处理（按 jmod 切分，jdk.charsets 独立 crate），不回退闭包的健全性。
+- 其余用例：待抽查完成后补记。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
