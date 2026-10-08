@@ -318,7 +318,7 @@ queries = [
 # getSavedProperties 的调用者 VMSupport / JVMCI 只读），取值与上表同——System.props 之外多出的 VM 私有键
 # （sun.nio.MaxDirectMemorySize 等）由 [concrete.boot] vm_props 提供，原生二进制不提供，同为不存在。
 # 快照不随运行期 System.setProperty / 属性表对象逃逸变化，读取不查不折叠集合（如
-# ThreadLocalRandom / RandomSupport 读 java.util.secureRandomSeed：不存在 → null → 不取 SecureRandom 种子）
+# ThreadLocalRandom.<clinit> 读 java.util.secureRandomSeed：不存在 → null → 不取 SecureRandom 种子）
 "jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;" = { key = 0, snapshot = true }
 
 # 按键改写入口（接收者为系统属性表对象时只改写 key 实参所指的键）。remove = 删除：只可能改变启动时
