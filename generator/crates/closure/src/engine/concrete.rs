@@ -183,17 +183,22 @@ impl<'a> Engine<'a> {
             }
         }
         // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
+        // 未物化（按冷 / 热之并入闭包）的组合全部列出，物化的只列前 DIAG_COMBOS 组
+        let mut n_hot = 0;
         let shown: Vec<String> = combos
             .iter()
             .zip(why.iter().zip(&hot))
-            .take(DIAG_COMBOS)
+            .filter(|(_, (_, &h))| {
+                n_hot += usize::from(h);
+                !h || n_hot <= DIAG_COMBOS
+            })
             .map(|(c, (w, &h))| match (h, w) {
                 (true, _) => format!("{c:?}⇒映像"),
                 (false, Some(w)) if w != "无缓存写入" => format!("{c:?}（并：{w}）"),
                 _ => format!("{c:?}"),
             })
             .collect();
-        let more = combos.len().saturating_sub(DIAG_COMBOS);
+        let more = combos.len() - shown.len();
         let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
         self.concrete.diag.entry(site_name).or_default().insert(line);
         true
