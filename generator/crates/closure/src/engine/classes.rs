@@ -589,12 +589,22 @@ impl<'a> Engine<'a> {
             _ => false,
         };
         let recursive = ctx_cls.as_deref().is_some_and(|x| x == cls);
-        let segs: &[String] = match () {
+        let mut segs: &[String] = match () {
             _ if ctx == NOCTX => &[],
             _ if internal => &outer[1..],
             _ if recursive => &[],
             _ => &outer,
         };
+        // 分配方是调用点上下文（工厂方法按调用点克隆，如包装视图工厂）而非对象：调用点并进本分配点的段，
+        // 不另占一段——工厂产物的身份是「分配点 × 调用点」，其方法里分配的对象（视图的迭代器等）以它为上下文时
+        // 链首段即带上调用点，截断到 HEAP_DEPTH 后不丢工厂调用点（否则全程序同一工厂产物的内部对象汇合，
+        // 其字段读取跨调用点混合各产物包装的容器内容）
+        if ctx != NOCTX && !self.objs.contains_key(&ctx) {
+            if let Some((first, rest)) = segs.split_first() {
+                chain.push_str(first);
+                segs = rest;
+            }
+        }
         for seg in segs.iter().take(HEAP_DEPTH - 1) {
             chain.push('#');
             chain.push_str(seg);
