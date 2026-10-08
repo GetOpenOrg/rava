@@ -18,7 +18,7 @@ use classfile::op::{GETSTATIC, INVOKESTATIC, PUTSTATIC};
 pub(super) struct Plain;
 
 impl Oracle for Plain {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {

@@ -197,7 +197,7 @@ impl<'a> Engine<'a> {
         let meth = cf.method(&t.name, &t.desc)?;
         let code = meth.code.as_ref()?;
         let live = |_: &str| true;
-        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() });
+        let ca = absint::analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default() });
         // 独立分析读过的字段登记给当前站点所在方法：字段转为不折叠时该方法失效，重分析时按名查找站点重跑
         if let Some((outer, _)) = self.cur_site {
             for (_, e) in &ca.events {

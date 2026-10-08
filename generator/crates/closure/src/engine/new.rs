@@ -18,6 +18,7 @@ impl<'a> Engine<'a> {
                 catalog: Default::default(),
                 loaders: Default::default(),
                 img_modules: Default::default(),
+                img_module_tags: Default::default(),
                 img_statics: Default::default(),
                 selectors: Default::default(),
                 fvals: Default::default(),

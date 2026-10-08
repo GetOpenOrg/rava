@@ -72,7 +72,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], mirror_field_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], mirror_field_assumed: vec![], site_mirror_assumed: false, conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
 }
 
 /// 分析一个方法体
@@ -136,7 +136,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
         })
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
-    let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], selects: 0 };
+    let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], site_assumed: false, selects: 0 };
     let mut tr = track.then(init::Track::default);
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
@@ -321,6 +321,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
     mirror_field_assumed.sort();
     mirror_field_assumed.dedup();
     let selector_params = interp.selects;
+    let site_mirror_assumed = interp.site_assumed;
     drop(interp);
     mirror_assumed.sort();
     let mut pending_types: Vec<String> = insns
@@ -345,7 +346,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    let a = Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params };
+    let a = Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, site_mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params };
     Some((a, tr.map(init::Track::finish)))
 }
 

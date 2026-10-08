@@ -89,6 +89,16 @@ impl<'a> Engine<'a> {
             memo: super::image_memo::MemoState::default(),
             data: data.clone(),
         }));
+        // 模块对象的映像标签带 final 字段常量（定义加载器等）：类镜像模块读折叠出的对象可再读这些字段
+        let tags: HashMap<u32, Rc<Obj>> = data
+            .modules
+            .iter()
+            .filter_map(|m| match self.image_obj_pv(m.obj, true) {
+                PV::Const(V::Ref { obj: Some(t), .. }) => Some((m.obj, t)),
+                _ => None,
+            })
+            .collect();
+        let _ = self.ctx.img_module_tags.set(tags);
         let st = self.img.as_ref().expect("映像").statics.clone();
         self.image_statics_install(&st, &data.build_time);
         // 残差调用 / 区段在其构建期档位的上下文中分析（`levels_boot.rs`）；重放 native 与运行期初始化类在本体

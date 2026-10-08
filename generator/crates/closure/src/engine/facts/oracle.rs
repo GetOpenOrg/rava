@@ -9,7 +9,7 @@ fn is_empty_tag(v: Option<&V>) -> bool {
 }
 
 impl Oracle for Facts<'_, '_> {
-    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
+    fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         if let Some(l) = self.level {
             if let Some(&t) = self.ctx.man.concrete.boot.level_queries.get(&m.to_string()) {
                 return Ret::Value(V::Int(i32::from(i64::from(l) >= t)));
@@ -23,6 +23,9 @@ impl Oracle for Facts<'_, '_> {
             return Ret::Value(V::Int(0));
         }
         if let Some(v) = &c.nonnull_ret {
+            if c.caller_class && self.callers.is_some() {
+                self.caller_sites.borrow_mut().insert(off);
+            }
             return Ret::Value(v.clone());
         }
         if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
@@ -159,6 +162,13 @@ impl Oracle for Facts<'_, '_> {
     }
     fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
         let s = self.mirrors.get(i as usize)?.as_ref()?;
+        self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
+    }
+    fn site_mirror_call(&self, off: u32, m: &MemberRef) -> Option<V> {
+        if !self.caller_sites.borrow().contains(&off) {
+            return None;
+        }
+        let s = self.callers.as_ref()?;
         self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {

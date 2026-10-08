@@ -18,10 +18,11 @@ impl Ctx<'_> {
         let k = m.to_string();
         let fact = self.man.return_fact(&k).map(fact_value);
         // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
+        let caller_class = self.man.returns_caller_class(&k);
         let nonnull_ret = if self.man.empty.is_factory(&k) {
             Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) })
         } else {
-            self.man.returns_caller_class(&k).then(nonnull_ref)
+            caller_class.then(nonnull_ref)
         };
         let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
         let target = self
@@ -66,6 +67,7 @@ impl Ctx<'_> {
             empty_query,
             str_kind,
             shape,
+            caller_class,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
