@@ -12,6 +12,9 @@
 //! - `list`（可选）：列表形结果的分析模型（`类.方法:描述符`，静态方法，形参为反射类型数组，返回列表：按数组顺序装入新建
 //!   列表，同 `Class.getDeclaredPublicMethods` 的「新建 ArrayList 逐个 add」）。分析器把列表形查找的结果建模为它对
 //!   标记数组的返回值，运行期不调用；
+//! - `native`（可选）：helper 体内执行目标调用的 native（`类.方法:描述符`，描述符同 helper）。它的执行即「按反射对象的
+//!   声明键调用目标」，直连调用点已逐目标接边（接收者 / 目标形参取实参数组元素 / 返回值流入调用点结果），故分析器不把它的
+//!   返回值当作 open 交出、不把形参值池按返回类型交给逃逸汇点（否则全部直连点的接收者与实参数组按 Object 逃逸）；
 //! - `copies`（可选）：复制入口（`类.方法:描述符`，返回反射类型；输入为反射类型的形参，无则为接收者）。复制保持所指
 //!   方法不变（`ReflectionFactory.copyMethod` / `Method.copy`），分析器让输入的标记原样成为结果。
 //!
@@ -64,6 +67,8 @@ pub struct DirectInvoker {
     pub list: Option<MemberRef>,
     /// 复制入口（`类.方法:描述符`）
     pub copies: HashSet<String>,
+    /// helper 体内执行目标调用的 native
+    pub native: Option<MemberRef>,
 }
 
 /// 按反射调用入口（`类.方法:描述符`）登记
@@ -74,6 +79,8 @@ pub struct DirectInvokers {
     lookup_of: HashMap<String, String>,
     /// 复制入口 → 反射调用入口
     copy_of: HashMap<String, String>,
+    /// 各入口 helper 体内执行目标调用的 native（`类.方法:描述符`）
+    natives: HashSet<String>,
 }
 
 /// `类.方法:描述符` → 成员引用
@@ -135,6 +142,17 @@ impl DirectInvokers {
                 };
                 lookups.insert(lk.clone(), Lookup { scope, shape });
             }
+            let native = match e.get("native") {
+                None => None,
+                Some(x) => {
+                    let n = x.as_str().and_then(parse_member).ok_or_else(|| err("native 须为 `类.方法:描述符`"))?;
+                    if n.desc != helper.desc {
+                        return Err(err(&format!("native 描述符须同 helper（{}）", helper.desc)));
+                    }
+                    out.natives.insert(n.to_string());
+                    Some(n)
+                }
+            };
             let mut copies = HashSet::new();
             for c in e.get("copies").and_then(|x| x.as_array()).map(|a| a.as_slice()).unwrap_or_default() {
                 let s = c.as_str().ok_or_else(|| err("copies 须为字符串数组"))?;
@@ -150,7 +168,7 @@ impl DirectInvokers {
             for c in &copies {
                 out.copy_of.insert(c.clone(), k.clone());
             }
-            out.by_entry.insert(k.clone(), DirectInvoker { helper, recv, lookups, list, copies });
+            out.by_entry.insert(k.clone(), DirectInvoker { helper, recv, lookups, list, copies, native });
         }
         Ok(out)
     }
@@ -168,6 +186,11 @@ impl DirectInvokers {
     /// 复制入口 member 所属的直连入口
     pub fn copy(&self, member: &str) -> Option<&DirectInvoker> {
         self.by_entry.get(self.copy_of.get(member)?)
+    }
+
+    /// member 是某入口 helper 体内执行目标调用的 native（返回值与实参由直连调用点逐目标建模）
+    pub fn is_native(&self, member: &str) -> bool {
+        self.natives.contains(member)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -193,9 +216,12 @@ helper = "p/M$D.invoke:(Lp/M;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Ob
 list = "p/M$D.list:([Lp/M;)Lp/L;"
 lookups = { "p/C.get:(Ljava/lang/String;[Lp/C;)Lp/M;" = "public", "p/C.getD:(Ljava/lang/String;[Lp/C;)Lp/M;" = "declared", "p/C.all:()[Lp/M;" = "declared", "p/A.pub:(Lp/C;Ljava/lang/String;[Lp/C;)Lp/L;" = "declared_public" }
 copies = ["p/F.copy:(Lp/M;)Lp/M;", "p/M.copy:()Lp/M;"]
+native = "p/M$D.invoke0:(Lp/M;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
 "#,
         )
         .unwrap();
+        assert!(d.is_native("p/M$D.invoke0:(Lp/M;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"));
+        assert!(!d.is_native("p/M$D.invoke:(Lp/M;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"));
         let e = d.get("p/M.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;").unwrap();
         assert_eq!(e.helper.owner, "p/M$D");
         assert_eq!(e.helper.name, "invoke");
