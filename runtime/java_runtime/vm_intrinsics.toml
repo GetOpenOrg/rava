@@ -1063,6 +1063,7 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
 # 反射（engine/concrete/reflect.rs；HotSpot Reflection::new_method / invoke_method 同义）
 "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;" = "class_declared_methods"
+"java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;" = "class_declared_constructors"
 "java/lang/Class.getConstantPool:()Ljdk/internal/reflect/ConstantPool;" = "class_constant_pool"
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
 "java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
@@ -1086,7 +1087,7 @@ reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
 module_loader = "java/lang/Module.loader"
 reference_queue = "java/lang/ref/Reference.queue"
-# VM 构造反射方法对象时写入的布局字段（reflect.rs）
+# VM 构造反射方法 / 构造器对象时写入的布局字段（reflect.rs，键前缀 method_ / ctor_）
 method_clazz = "java/lang/reflect/Method.clazz"
 method_name = "java/lang/reflect/Method.name"
 method_parameter_types = "java/lang/reflect/Method.parameterTypes"
@@ -1098,6 +1099,14 @@ method_signature = "java/lang/reflect/Method.signature"
 method_annotations = "java/lang/reflect/Method.annotations"
 method_parameter_annotations = "java/lang/reflect/Method.parameterAnnotations"
 method_annotation_default = "java/lang/reflect/Method.annotationDefault"
+ctor_clazz = "java/lang/reflect/Constructor.clazz"
+ctor_parameter_types = "java/lang/reflect/Constructor.parameterTypes"
+ctor_exception_types = "java/lang/reflect/Constructor.exceptionTypes"
+ctor_modifiers = "java/lang/reflect/Constructor.modifiers"
+ctor_slot = "java/lang/reflect/Constructor.slot"
+ctor_signature = "java/lang/reflect/Constructor.signature"
+ctor_annotations = "java/lang/reflect/Constructor.annotations"
+ctor_parameter_annotations = "java/lang/reflect/Constructor.parameterAnnotations"
 constant_pool_oop = "jdk/internal/reflect/ConstantPool.constantPoolOop"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──

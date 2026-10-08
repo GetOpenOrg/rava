@@ -2,6 +2,7 @@
 //! - `class_declared_methods`：`getDeclaredMethods0(publicOnly)`——本类声明的方法（不含 `<init>` / `<clinit>`），
 //!   按类文件声明序；反射对象不经构造器，VM 直接填写其布局字段（清单 `[concrete.vm_fields]` 的 `method_*`），
 //!   `slot` 为类文件方法表下标；注解三项取类文件属性原始字节（无 → null）；
+//! - `class_declared_constructors`：`getDeclaredConstructors0(publicOnly)`——同上，只取 `<init>`（布局字段 `ctor_*`）；
 //! - `class_constant_pool`：`getConstantPool()`——新建常量池对象，`constant_pool_oop` 指向所属类镜像；
 //! - `reflect_invoke`：本地访问器 `invoke0(Method, obj, args)`——按 (声明类, slot) 取方法，静态方法先初始化
 //!   声明类，实例方法除私有外按接收者类型虚选择。实参 / 返回值只支持引用类型（基本类型的装箱拆箱不建模，
@@ -74,7 +75,8 @@ impl Vm {
 
 pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: &[CV]) -> Option<R<Option<CV>>> {
     Some(match op {
-        "class_declared_methods" => declared_methods(vm, env, info, args),
+        "class_declared_methods" => declared_members(vm, env, info, args, "method"),
+        "class_declared_constructors" => declared_members(vm, env, info, args, "ctor"),
         "class_constant_pool" => constant_pool(vm, env, info, args),
         "reflect_invoke" => invoke(vm, env, args),
         _ => return None,
@@ -92,7 +94,10 @@ fn ret_class(desc: &str) -> R<&str> {
     r.strip_prefix('L').and_then(|x| x.strip_suffix(';')).map_or_else(|| fail(format!("返回类型非类 {desc}")), Ok)
 }
 
-fn declared_methods(vm: &mut Vm, env: &Env, info: &MInfo, args: &[CV]) -> R<Option<CV>> {
+/// `getDeclaredMethods0` / `getDeclaredConstructors0`：`kind` 为布局字段键前缀（`method` / `ctor`），
+/// 构造器只取 `<init>`、不写名字 / 返回类型 / 注解默认值
+fn declared_members(vm: &mut Vm, env: &Env, info: &MInfo, args: &[CV], kind: &str) -> R<Option<CV>> {
+    let ctor = kind == "ctor";
     let this = arg(args, 0)?;
     let public_only = arg(args, 1)?.i()? != 0;
     let t = vm.mirror_of.get(&this.obj()?).cloned().map_or_else(|| fail("非类镜像"), Ok)?;
@@ -109,32 +114,34 @@ fn declared_methods(vm: &mut Vm, env: &Env, info: &MInfo, args: &[CV]) -> R<Opti
     vm.ensure_init(env, &mty)?;
     let mut out = Vec::new();
     for (slot, m) in cf.methods.iter().enumerate() {
-        if m.name == "<init>" || m.name == "<clinit>" || public_only && m.access & acc::PUBLIC == 0 {
+        if (m.name == "<init>") != ctor || m.name == "<clinit>" || public_only && m.access & acc::PUBLIC == 0 {
             continue;
         }
         let (ps, ret) = split_desc(&m.desc)?;
         let o = vm.alloc(&mty, Body::Inst(Vec::new()));
-        let fs = [
-            ("method_clazz", this),
-            ("method_name", vm.java_string(env, &m.name)?),
-            ("method_parameter_types", vm.mirror_array(env, &ps)?),
-            ("method_return_type", CV::R(vm.mirror(env, mirror_key(ret))?)),
-            ("method_exception_types", {
+        let mut fs = vec![
+            ("clazz", this),
+            ("parameter_types", vm.mirror_array(env, &ps)?),
+            ("exception_types", {
                 let ex: Vec<String> = m.exceptions.iter().map(|e| format!("L{e};")).collect();
                 vm.mirror_array(env, &ex.iter().map(String::as_str).collect::<Vec<_>>())?
             }),
-            ("method_modifiers", CV::I((m.access & METHOD_MODIFIERS) as i32)),
-            ("method_slot", CV::I(slot as i32)),
-            ("method_signature", match &m.signature {
+            ("modifiers", CV::I((m.access & METHOD_MODIFIERS) as i32)),
+            ("slot", CV::I(slot as i32)),
+            ("signature", match &m.signature {
                 Some(s) => vm.java_string(env, s)?,
                 None => CV::N,
             }),
-            ("method_annotations", vm.byte_array(&extras.methods[slot].raw_annotations)),
-            ("method_parameter_annotations", vm.byte_array(&extras.methods[slot].raw_param_annotations)),
-            ("method_annotation_default", vm.byte_array(&extras.methods[slot].raw_annotation_default)),
+            ("annotations", vm.byte_array(&extras.methods[slot].raw_annotations)),
+            ("parameter_annotations", vm.byte_array(&extras.methods[slot].raw_param_annotations)),
         ];
+        if !ctor {
+            fs.push(("name", vm.java_string(env, &m.name)?));
+            fs.push(("return_type", CV::R(vm.mirror(env, mirror_key(ret))?)));
+            fs.push(("annotation_default", vm.byte_array(&extras.methods[slot].raw_annotation_default)));
+        }
         for (k, v) in fs {
-            vm.put_vm_field(env, o, k, v)?;
+            vm.put_vm_field(env, o, &format!("{kind}_{k}"), v)?;
         }
         out.push(CV::R(o));
     }
