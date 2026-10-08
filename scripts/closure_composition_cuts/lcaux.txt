@@ -1,0 +1,11 @@
+# locale 适配器链：HOST / SPI 两个辅助适配器（AuxLocaleProviderAdapter 子类）的全部可达面。
+# 二者只经 LocaleProviderAdapter.forType@61 按 Type 枚举类名反射构造；`java.locale.providers` 在原生二进制中
+# 不存在（启动表无此键，读取折叠为 null）→ 偏好表恒为 [CLDR, JRE]，FALLBACK 只经常量 forType(Type.FALLBACK)。
+# 归因用：量「适配器类型集合按构建期配置收窄到 {CLDR, JRE, FALLBACK}」的上界（不健全，只作上界）
+sun/util/locale/provider/HostLocaleProviderAdapter.findInstalledProvider:(Ljava/lang/Class;)Ljava/util/spi/LocaleServiceProvider;
+sun/util/locale/provider/SPILocaleProviderAdapter.findInstalledProvider:(Ljava/lang/Class;)Ljava/util/spi/LocaleServiceProvider;
+sun/util/locale/provider/HostLocaleProviderAdapter.getAdapterType:()Lsun/util/locale/provider/LocaleProviderAdapter$Type;
+sun/util/locale/provider/SPILocaleProviderAdapter.getAdapterType:()Lsun/util/locale/provider/LocaleProviderAdapter$Type;
+sun/util/locale/provider/AuxLocaleProviderAdapter.getLocaleServiceProvider:(Ljava/lang/Class;)Ljava/util/spi/LocaleServiceProvider;
+sun/util/locale/provider/AuxLocaleProviderAdapter.getLocaleResources:(Ljava/util/Locale;)Lsun/util/locale/provider/LocaleResources;
+sun/util/locale/provider/AuxLocaleProviderAdapter.getAvailableLocales:()[Ljava/util/Locale;
