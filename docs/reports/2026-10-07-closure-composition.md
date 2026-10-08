@@ -413,7 +413,7 @@ S0 Boot 的 JVM 实载为参照列。
    - 2026-10-08 新基线复测：只收窄宿主名或只收窄常量名，Δ 都是 0。两者同时收窄的上界为 −141。扩展提供者不能折为空。挂起，等待用户就 U1 字符集域作出决定（见 7.3）。
 6. **日志链构建期求值**（随决定 L）：−52 至 −110。
 7. **locale 适配器链构建期求值**：团块差 295（Formatter 单门只 −25 至 −28，需在其他门关闭后复测）。
-   - 2026-10-08 实施（分支 locale-build，bbeb13a5）：HOST / SPI 适配器出闭包，三例 −18 至 −19 类、−132 至 −144 方法（超过 lcaux 上界，见 7.4）。不涉及 U1：`java.locale.providers` 已折为 null，偏好表恒为 [CLDR, JRE]。CLDR / JRE 本体（lcadapt 上界剩余约 −115）是宿主 locale 下的合法数据访问，不再按构建期求值处理，残余见 7.4 第 5 条。
+   - 2026-10-08 实施（分支 locale-build，bbeb13a5）：HOST / SPI 适配器出闭包，三例 −18 至 −19 类、−132 至 −144 方法（超过 lcaux 上界，见 7.4）。不涉及 U1：`java.locale.providers` 已折为 null，偏好表恒为 [CLDR, JRE]。CLDR / JRE 本体（lcadapt 上界剩余 −112 至 −126 类）是宿主 locale 下的合法数据访问，不再按构建期求值处理，残余见 7.4 第 5 条。
 8. **类加载 / 资源封闭映像整体替换**（boot-layer 步骤 1–5）：本身减量小（团块差 18），但它是 ServiceLoader 类路径查找、jar 校验等多扇门的根；jar 校验不能用切写入点量化，以整体替换后的实测为准。
 9. **容器元素敏感**（`Objects.equals` 汇合派发）：c1d §21.5 重定向 2，随后续多连通门关闭而显现。
 10. **引用 / 信号按 ③ 收口**：随无 GC 模型与决定 L 实施，减量小。
@@ -553,7 +553,7 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 4. **lcfmt 只有 −5 方法，Formatter 不是独立门。**
    - Formatter 的本地化数据入口与 `BreakIterator`（`ConditionalSpecialCasing.isFinalCased` → `getWordInstance`）、`DecimalFormatSymbols` 等共用 CLDR / JRE 适配器。
    - 关掉任一入口，其余入口仍到达。
-5. **残余（lcadapt 上界剩余约 −115 类 / −880 方法）是合法数据访问。**
+5. **残余（lcadapt 上界剩余：HelloWorld −126 类 / −895 方法，DeepCopy −112 类 / −834 方法）是合法数据访问。**
    - CLDR / JRE 适配器及其资源束、`BreakIterator` 规则、`DecimalFormatSymbols` 数据，由宿主默认 locale（U1，运行期读取）驱动，在每个程序里都可达。不能以构建期求值去掉。
    - 能继续收窄的只有精度缺口：
      - `ConditionalSpecialCasing.isConditionMet`：门排名模型 −12、切除实测 −15，条件分支按 locale 语言常量判定；
