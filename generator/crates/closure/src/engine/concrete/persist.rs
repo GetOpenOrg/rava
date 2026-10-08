@@ -23,6 +23,8 @@ pub(in crate::engine) enum FVal {
     Mirror(Rc<str>),
     /// 由不变静态字段持有的映像对象（声明类, 字段名）
     Static(String, String),
+    /// 映像中的驻留字符串（UTF-16 内容；按内容取映像的驻留对象，驻留串的身份即其内容）
+    Str(Vec<u16>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +60,8 @@ fn is_default(v: CV) -> bool {
 
 struct Ex<'v> {
     vm: &'v Vm,
+    /// 驻留字符串对象 → 内容（首次遇到映像中的非静态所持对象时建）
+    interned: Option<HashMap<u32, &'v [u16]>>,
     ids: HashMap<u32, u32>,
     order: Vec<u32>,
     q: VecDeque<u32>,
@@ -78,8 +82,15 @@ impl Ex<'_> {
                 }
                 let h = &self.vm.heap[o as usize];
                 if h.epoch == 0 {
-                    let f = self.vm.image_roots.get(&o).ok_or_else(|| format!("引用映像对象 {}（非不变静态字段所持）", h.ty))?;
-                    return Ok(FVal::Static(f.owner.clone(), f.name.clone()));
+                    if let Some(f) = self.vm.image_roots.get(&o) {
+                        return Ok(FVal::Static(f.owner.clone(), f.name.clone()));
+                    }
+                    let vm = self.vm;
+                    let rev = self.interned.get_or_insert_with(|| vm.strings.iter().map(|(u, &o)| (o, u.as_slice())).collect());
+                    return match rev.get(&o) {
+                        Some(u) => Ok(FVal::Str(u.to_vec())),
+                        None => Err(format!("引用映像对象 {}（非不变静态字段所持、非驻留字符串）", h.ty)),
+                    };
                 }
                 if self.vm.ihash.contains_key(&o) {
                     return Err(format!("{} 对象取过身份哈希", h.ty));
@@ -100,7 +111,7 @@ impl Ex<'_> {
     }
 
     fn frag(vm: &Vm, mirror: Rc<str>, decl: &str, name: &str, v: CV) -> Result<Frag, String> {
-        let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new() };
+        let mut x = Ex { vm, interned: None, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new() };
         let val = x.val(v)?;
         let mut objs = Vec::new();
         while let Some(o) = x.q.pop_front() {

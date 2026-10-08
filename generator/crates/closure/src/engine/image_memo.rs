@@ -45,6 +45,22 @@ fn frag_mirrors(f: &Frag) -> Vec<&str> {
     names
 }
 
+/// 片段引用的驻留字符串
+fn frag_strs(f: &Frag) -> Vec<&[u16]> {
+    let mut out: Vec<&[u16]> = Vec::new();
+    for v in std::iter::once(&f.val).chain(f.objs.iter().flat_map(|o| -> Box<dyn Iterator<Item = &FVal>> {
+        match &o.body {
+            FBody::Inst(fs) => Box::new(fs.iter().map(|e| &e.2)),
+            FBody::Arr(es) => Box::new(es.iter()),
+        }
+    })) {
+        if let FVal::Str(u) = v {
+            out.push(u);
+        }
+    }
+    out
+}
+
 impl<'a> Engine<'a> {
     /// 片段全部可在映像中表达时备好其所需的类镜像（映像中没有的经构建期求值器新建）；否则给出原因：
     /// 由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象，片段对象的类型须属映像根模块
@@ -72,6 +88,9 @@ impl<'a> Engine<'a> {
             for n in frag_mirrors(f) {
                 self.image_mirror_obj(n)?;
             }
+            for u in frag_strs(f) {
+                self.image_string_obj(u)?;
+            }
         }
         Ok(())
     }
@@ -85,6 +104,16 @@ impl<'a> Engine<'a> {
         let d = Rc::make_mut(&mut s.data);
         let n0 = d.objs.len();
         let o = x.mirror(&self.ctx, self.cp, c, d)?;
+        self.image_appended(n0);
+        Ok(o)
+    }
+
+    /// 映像中内容为 u 的驻留字符串对象（没有即经构建期求值器驻留并追加）
+    fn image_string_obj(&mut self, u: &[u16]) -> Result<u32, String> {
+        let (Some(x), Some(s)) = (self.ext_vm.as_deref_mut(), self.img.as_deref_mut()) else { return Err("无构建期求值器".into()) };
+        let d = Rc::make_mut(&mut s.data);
+        let n0 = d.objs.len();
+        let o = x.string(&self.ctx, self.cp, u, d)?;
         self.image_appended(n0);
         Ok(o)
     }
@@ -106,6 +135,15 @@ impl<'a> Engine<'a> {
                     Err(w) => unreachable!("镜像缓存的类镜像已备好：{n}：{w}"),
                 }
             }
+            let mut sobj: HashMap<&[u16], u32> = HashMap::default();
+            for u in frag_strs(f) {
+                match self.image_string_obj(u) {
+                    Ok(o) => {
+                        sobj.insert(u, o);
+                    }
+                    Err(w) => unreachable!("镜像缓存的驻留字符串已备好：{w}"),
+                }
+            }
             let s = self.img.as_mut().expect("映像");
             let start = s.data.objs.len() as u32;
             let res = |v: &FVal| match v {
@@ -113,6 +151,7 @@ impl<'a> Engine<'a> {
                 FVal::Obj(i) => IVal::R(start + i),
                 FVal::Mirror(m) => IVal::R(mobj[&**m]),
                 FVal::Static(d, n) => s.statics[&(d.clone(), n.clone())],
+                FVal::Str(u) => IVal::R(sobj[u.as_slice()]),
             };
             let objs: Vec<IObj> = f
                 .objs
