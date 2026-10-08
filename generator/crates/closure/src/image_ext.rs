@@ -1,7 +1,9 @@
 //! 构建期初始化扩展的合并与规范化（计划 2026-10-05-boot-image-evaluator §5.8）。
 //!
-//! 映像 = 引导部分（与程序无关，各程序逐字节相同）+ 扩展组（[`IGroup`]）。扩展组的键与程序无关，同键内容相同；
-//! 不同程序的扩展组集合不同（各自初始化到的类不同）。于是：
+//! 映像 = 引导部分（与程序无关，各程序逐字节相同）+ 扩展组（[`IGroup`]）。分析期追加进映像的对象全部按组表达：
+//! 构建期初始化扩展（`c:` / `s:` / `m:`）与具体求值的镜像缓存（U13，`f:`，组外记录 [`IMemo`]）是同一套追加与
+//! 规范化流程（§5.8.5）。扩展组的键与程序无关，同键内容相同；不同程序的扩展组集合不同（各自初始化到 / 求值到的
+//! 类不同）。于是：
 //! - 单个程序的映像在分析中按发现次序追加扩展组，分析结束后 [`ImageData::canonicalize`] 按键排序重编号；
 //! - 档案按键求并（[`ImageData::absorb`]：同键复用，新键追加），全部入口并入后再规范化。
 //!
@@ -9,13 +11,22 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::image::{IBody, IGroup, ILoc, IObj, IStep, IVal, ImageData};
+use crate::image::{IBody, IGroup, ILoc, IMemo, IObj, IStep, IVal, ImageData};
 
 /// 扩展组键：类初始化结果
 pub const CLASS_KEY: &str = "c:";
+/// 扩展组键：类镜像（扩展期新建；镜像缓存所需的镜像同经构建期求值器新建，内容同一口径）
+pub const MIRROR_KEY: &str = "m:";
+/// 扩展组键：镜像缓存（U13）
+pub const MEMO_KEY: &str = "f:";
 
 pub fn class_of_key(key: &str) -> Option<&str> {
     key.strip_prefix(CLASS_KEY)
+}
+
+/// 镜像缓存的组键：镜像所代表的类型 + 字段
+pub fn memo_key(mirror: &str, decl: &str, name: &str) -> String {
+    format!("{MEMO_KEY}{mirror}#{decl}.{name}")
 }
 
 fn remap_val(v: IVal, f: &dyn Fn(u32) -> u32) -> IVal {
@@ -31,6 +42,10 @@ fn remap_obj(o: &IObj, f: &dyn Fn(u32) -> u32) -> IObj {
         IBody::Arr(es) => IBody::Arr(es.iter().map(|v| remap_val(*v, f)).collect()),
     };
     IObj { body, ..o.clone() }
+}
+
+fn remap_memo(m: &IMemo, f: &dyn Fn(u32) -> u32) -> IMemo {
+    IMemo { mirror: f(m.mirror), decl: m.decl.clone(), name: m.name.clone(), val: remap_val(m.val, f) }
 }
 
 fn remap_loc(l: &ILoc, f: &dyn Fn(u32) -> u32) -> ILoc {
@@ -53,6 +68,17 @@ impl ImageData {
     /// 扩展类（扩展组 `c:<类>`）
     pub fn ext_classes(&self) -> BTreeSet<&str> {
         self.ext.iter().filter_map(|g| class_of_key(&g.key)).collect()
+    }
+
+    /// 镜像缓存的组键（镜像对象须是类镜像）
+    pub fn memo_key_of(&self, m: &IMemo) -> Result<String, String> {
+        let t = self.objs.get(m.mirror as usize).and_then(|o| o.mirror.as_deref()).ok_or_else(|| format!("镜像缓存 {}.{} 的目标 #{} 不是类镜像", m.decl, m.name, m.mirror))?;
+        Ok(memo_key(t, &m.decl, &m.name))
+    }
+
+    /// 组键 → 镜像缓存记录
+    fn memos_by_key(&self) -> Result<HashMap<String, &IMemo>, String> {
+        self.mirror_memos.iter().map(|m| Ok((self.memo_key_of(m)?, m))).collect()
     }
 
     /// 各扩展组的步骤区间（按组次序接在引导步骤之后）
@@ -118,6 +144,8 @@ impl ImageData {
         let f = |x: u32| if x < base { x } else { map[(x - base) as usize] };
         // 同键复用的组：内容须相同（不同程序得到不同结果即判定依赖了程序）
         let osteps = o.group_steps();
+        let mine_memos: HashMap<String, IMemo> = self.memos_by_key()?.into_iter().map(|(k, m)| (k, m.clone())).collect();
+        let their_memos = o.memos_by_key()?;
         for g in &o.ext {
             if let Some(&i) = have.get(&g.key) {
                 let mine = self.ext[i].clone();
@@ -125,6 +153,9 @@ impl ImageData {
                     if remap_obj(&o.objs[(g.start + k) as usize], &f) != self.objs[(mine.start + k) as usize] {
                         return Err(format!("扩展组 {} 与其他入口不一致（对象内容）", g.key));
                     }
+                }
+                if g.key.starts_with(MEMO_KEY) && their_memos.get(&g.key).map(|m| remap_memo(m, &f)) != mine_memos.get(&g.key).cloned() {
+                    return Err(format!("扩展组 {} 与其他入口不一致（镜像缓存值）", g.key));
                 }
             }
         }
@@ -143,6 +174,10 @@ impl ImageData {
                 self.build_time.push(c.to_string());
             }
             self.strings.extend(o.strings.iter().filter(|&&x| x >= g.start && x < g.start + g.len).map(|&x| f(x)));
+            if g.key.starts_with(MEMO_KEY) {
+                let m = their_memos.get(&g.key).ok_or_else(|| format!("扩展组 {} 缺镜像缓存记录", g.key))?;
+                self.mirror_memos.push(remap_memo(m, &f));
+            }
             self.ext.push(IGroup { key: g.key.clone(), start, len: g.len, nsteps: g.nsteps });
         }
         let mut live: BTreeSet<u32> = self.live.iter().copied().collect();
@@ -156,6 +191,9 @@ impl ImageData {
         let base = self.ext_base;
         let mut order: Vec<usize> = (0..self.ext.len()).collect();
         order.sort_by(|&a, &b| self.ext[a].key.cmp(&self.ext[b].key));
+        if let Some(w) = order.windows(2).find(|w| self.ext[w[0]].key == self.ext[w[1]].key) {
+            return Err(format!("扩展组键重复 {}", self.ext[w[0]].key));
+        }
         let gsteps = self.group_steps();
         let mut map = vec![u32::MAX; self.objs.len() - base as usize];
         let mut at = base;
@@ -200,6 +238,19 @@ impl ImageData {
         self.strings = bs;
         self.build_time.sort();
         self.build_time.dedup();
+        // 镜像缓存：随组重编号，按组键排序（与组次序一致）
+        let mut memos: Vec<(String, IMemo)> = Vec::with_capacity(self.mirror_memos.len());
+        for m in &self.mirror_memos {
+            let m = remap_memo(m, &f);
+            memos.push((self.memo_key_of(&m)?, m));
+        }
+        memos.sort_by(|a, b| a.0.cmp(&b.0));
+        // 镜像缓存与 `f:` 组一一对应
+        let fk: Vec<&str> = self.ext.iter().map(|g| g.key.as_str()).filter(|k| k.starts_with(MEMO_KEY)).collect();
+        if !memos.iter().map(|e| e.0.as_str()).eq(fk.iter().copied()) {
+            return Err("镜像缓存记录与镜像缓存组不对应".into());
+        }
+        self.mirror_memos = memos.into_iter().map(|e| e.1).collect();
         let mut live: Vec<u32> = self.live.iter().map(|&x| f(x)).collect();
         live.sort_unstable();
         live.dedup();
@@ -248,6 +299,54 @@ mod tests {
         // A 的对象在前，指向 B 的对象（下标 2）
         assert_eq!(x.objs[1].body, IBody::Inst(vec![("a/X".into(), "f".into(), IVal::R(2))]));
         assert_eq!(x.statics, vec![("p/A".into(), "S".into(), IVal::R(1)), ("p/B".into(), "S".into(), IVal::R(2))]);
+    }
+
+    /// 镜像缓存组：镜像为 `m:` 组对象，值为组内对象；按键求并、重编号后记录随之重定位
+    fn memo_img(groups: &[(&str, &[IObj])], memo_val: Option<IVal>) -> ImageData {
+        let mut d = img(groups, &[]);
+        let mirror = d.ext.iter().find(|g| g.key == "m:p/T").map(|g| g.start).unwrap();
+        let at = d.ext.iter().find(|g| g.key.starts_with(MEMO_KEY)).map(|g| g.start).unwrap();
+        d.mirror_memos.push(IMemo { mirror, decl: "q/C".into(), name: "memo".into(), val: memo_val.unwrap_or(IVal::R(at)) });
+        d
+    }
+
+    fn mirror_obj(t: &str) -> IObj {
+        IObj { mirror: Some(t.into()), ..obj("q/C", None) }
+    }
+
+    #[test]
+    fn memo_groups_absorb_and_canonicalize() {
+        let fk = memo_key("p/T", "q/C", "memo");
+        // 程序一：先有镜像缓存（镜像组在其后），再有类组
+        let a = memo_img(&[(fk.as_str(), &[obj("q/R", None)]), ("m:p/T", &[mirror_obj("p/T")]), ("c:p/A", &[obj("p/A", Some(0))])], None);
+        // 程序二：只有镜像缓存，镜像组在前
+        let b = memo_img(&[("m:p/T", &[mirror_obj("p/T")]), (fk.as_str(), &[obj("q/R", None)])], None);
+        let mut x = a.clone();
+        x.absorb(&b).unwrap();
+        x.canonicalize().unwrap();
+        let mut y = b.clone();
+        y.absorb(&a).unwrap();
+        y.canonicalize().unwrap();
+        assert_eq!(x, y);
+        // 组次序 c: < f: < m:；记录的镜像与值随重编号
+        assert_eq!(x.ext.iter().map(|g| g.key.as_str()).collect::<Vec<_>>(), ["c:p/A", fk.as_str(), "m:p/T"]);
+        assert_eq!(x.mirror_memos, vec![IMemo { mirror: 3, decl: "q/C".into(), name: "memo".into(), val: IVal::R(2) }]);
+        let mut z = a.clone();
+        z.canonicalize().unwrap();
+        assert_eq!(z.mirror_memos, x.mirror_memos);
+    }
+
+    #[test]
+    fn absorb_rejects_divergent_memo() {
+        let fk = memo_key("p/T", "q/C", "memo");
+        let a = memo_img(&[("m:p/T", &[mirror_obj("p/T")]), (fk.as_str(), &[obj("q/R", None)])], None);
+        let b = memo_img(&[("m:p/T", &[mirror_obj("p/T")]), (fk.as_str(), &[obj("q/R", None)])], Some(IVal::N));
+        let mut x = a.clone();
+        assert!(x.absorb(&b).unwrap_err().contains("镜像缓存值"));
+        // 记录与组不对应即拒绝
+        let mut c = a.clone();
+        c.mirror_memos.clear();
+        assert!(c.canonicalize().is_err());
     }
 
     #[test]

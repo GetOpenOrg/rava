@@ -950,6 +950,59 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 验证见 §5.6.6 第 6 条。
 
+#### 5.6.9 U13：`Class.genericInfo` 入映像（2026-10-08，分支 `u13-generic`，d147fe31 / 41d45f3c）
+
+用户 10-08 采纳 §8.4 U13。本节实现 §5.6.5 的终态方向：具体求值在类镜像上写入的内存缓存物化进引导映像，运行期命中缓存后不再解析签名。
+
+**机制**
+
+- **清单**：`vm_intrinsics.toml [concrete] image_memo_fields = ["java/lang/Class.genericInfo"]` 声明可入映像的镜像缓存字段，生成器内不写类名。`ClassRepository` 追加进 `[concrete.boot] calls` 在构建期初始化（位于 initPhase3 之后），使其静态字段（`NONE` 等）成为映像对象，供片段按静态字段引用。
+- **导出**（`engine/concrete/persist.rs`）：每组实参冷 / 热两次求值后、撤销之前，检查撤销日志。条件是全部写入都落在类镜像的 `image_memo_fields` 字段上，且值的对象图只由三类对象组成：本求值纪元内新建的对象、类镜像、由不变静态字段持有的映像对象（`image_roots`）。满足时，按（镜像, 字段）导出片段（对象按广度优先编号，跳过缺省值字段，字段排序）。以下情况不可物化，给出原因：
+  - 写入静态字段、写入非镜像对象、写入非映像缓存字段；
+  - 值含污点；
+  - 新建对象取过身份哈希，或是 lambda；
+  - 引用不由静态字段持有的映像对象。
+- **入闭包口径**（`engine/concrete.rs`）：
+  - 可物化的组合只按**热求值**轨迹入闭包。热求值的 inited 并入求值触及的类（`Trace.touched`），使片段对象的类型被初始化 / 实例化。
+  - 不可物化的组合沿用冷 / 热轨迹并集。
+  - `--flows @concrete` 诊断逐组标注 `⇒映像` 或 `（并：原因）`。
+- **并入映像**（`engine/image_memo.rs`）：与第 6 步的构建期初始化扩展合为同一套追加与规范化流程，见 §5.8.5（下列为合并前 d147fe31 的做法，已被 §5.8.5 取代：值写进镜像对象体、`image_finish` 单独重排）。
+  - 片段中的静态字段引用须属于构建期初始化类，且映像值是对象。
+  - 同一（镜像, 字段）只写首个片段，因为缓存值与求值实参无关。
+- **发射**（`emit/.../boot_image/start.rs`）：启动序列在链接之后，对每条 `mirror_memos`（镜像与值均为活对象）生成 `<Class as From<Object>>::from(rt::mirror(desc)).__set_<slot>(From::from(v))`，写入运行期镜像；值取记录本身（`IMemo.val`），不读镜像对象体。
+
+**实测**（us1 Linux JDK 21，`rava closure`，作业 u13-s4-c614f840 / u13-s4b-41d45f3c）
+
+基线 b558e0c2 本身在闭包分析中发散：嵌套数组膨胀至 OOM，作业 u13-base / u13-m1 失败，与本改动无关。因此实测改在 c614f840（batch-1008 之前的 boot-image 头）上应用本分支补丁（`git diff b558e0c2 HEAD | git apply -3`）。
+
+| | 基线（c614f840） | U13 |
+|---|---|---|
+| HelloWorld 类 / 方法 | 3043 / 18,093 | 3043 / 18,090 |
+| CollectorsDemo 类 / 方法 | 3043 / 18,125 | 3043 / 18,122 |
+| HelloWorld 映像对象 / 活对象 | 8,385 / 7,542 | 8,733 / 7,770（`mirror_memos` 9 条） |
+| CollectorsDemo 映像对象 / 活对象 | — | 9,615 / 7,773（`mirror_memos` ≥ 13 条） |
+
+`sun/reflect/generics` 共 47 类，`GenericSignatureFormatError`、`TypeVariable`、`ParameterizedType`、`WildcardType`、`GenericArrayType` 各 1 类，前后不变。
+
+两个 `comparableClassFor@21` 的逐组标注（41d45f3c 诊断）：
+
+- String、Integer、Long、Character、File、StandardOpenOption、TextStyle、`LocaleProviderAdapter$Type` 全部 `⇒映像`。
+- 唯一例外是 `UnixPath`：`（并：写镜像 sun/nio/fs/UnixPath 的非映像缓存字段 java/lang/Class.reflectionData）`。原因是 UnixPath 无类签名，`getGenericInterfaces` 退到 `getInterfaces`，后者写 `reflectionData` 缓存。该组冷轨迹里没有签名解析，不影响 `sun/reflect/generics` 的可达性。
+
+**结论：机制生效，但 −41 类不可达，`sun/reflect/generics` 留在闭包内。** 留下的原因有两条，都不是 genericInfo 缓存能消除的：
+
+1. **注解解析路径**：U13 之后 `SignatureParser` 的首个入闭包原因由 `[concrete] comparableClassFor` 变为 `AnnotationParser.parseSig`，链路为 `AnnotatedElement.isAnnotationPresent` → `Method.getAnnotation` → `Executable.declaredAnnotations` → `AnnotationParser.parseAnnotations`。注解成员类型签名的解析与 `Class.genericInfo` 无关，属于档案里的反射 / 注解入口。
+2. **open(Comparable) 回退**：HashMap / ConcurrentHashMap 的 `comparableClassFor@21` 各有一个上下文「接收者超过 64 个」，原因是键来源为 open(Comparable)（树化桶等）。开放世界下用户类可实现 `Comparable<T>` 且带签名，运行期必须保留 `ClassRepository.make` → `SignatureParser.parseClassSignature` 的解析路径。档案只依赖 JDK 侧事实（核心原则 2），不能以映像缓存替代。
+
+所以 U13 的收益限于运行期：热路径 JDK 类首次树化时不再解析签名，映像多 348 个对象（HelloWorld）。闭包规模不变。
+
+**未完成 / 待续**
+
+- 在 b558e0c2 之后、batch-1008 修好发散的头上重测类数与映像数字（命令同上：`rava closure` 两例 + `--flows @concrete`）。
+- e2e 运行期验证未做：需验证启动序列的 `__set_genericInfo` 写入可编译，且 `HashMap` 树化等用到 genericInfo 的测试输出不变。按合批测试流程，随下一批验证分支统一测。
+- 单元测试作业 u13-ut-41d45f3c（jp2）在报告时仍在运行。b558e0c2 的发散可能影响依赖闭包的单测，判读时需与基线同口径对照。
+- 若要让 `sun/reflect/generics` 出闭包，前提是同时消除上面两条路径。注解成员签名解析需要把注解元数据的构建期求值（java_meta）与 `AnnotationParser` 的可达性一并改造；open(Comparable) 路径在开放世界档案下不可删除。这两项是独立课题，不属于 U13 范围。
+
 ### 5.7 第 5 步与第 6 步的 JceSecurity 部分：jimage 嵌入、`${java.home}` 虚拟树、`#[jvm_boundary]` 14 → 0（2026-10-08，分支 `boot-image-s5`，基于 batch-1008 b558e0c2）
 
 提交：82c49923（jimage 嵌入 + ClassLoader / BootLoader 回字节码 + U14 钉值）、f196dd71（JceSecurity 回字节码 + 虚拟树 NIO）。本节只有本机 `cargo check` 结论，运行期结论待合批验证（§5.7.5）。
@@ -1096,6 +1149,18 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - **恢复入口**：
   - `engine/image_start/ext.rs`（接入）、`engine/concrete/ext_init.rs`（隔离规则）、`engine/concrete/ext_export.rs`（组导出）、`closure/src/image_ext.rs`（合并 / 规范化）；
   - 根因收窄按 §5.8.2 表逐项推进，每项用同一作业命令复测类数。
+
+#### 5.8.5 与 U13 镜像缓存的整合：映像追加对象统一为扩展组（2026-10-08，合入 batch-1010 35d936c4）
+
+合并前有两套「往引导部分之后追加对象并重排编号」的机制：U13 的 `image_finish`（`m.base` 之后按镜像排序重排 memo 块）与本步的 `canonicalize`（`ext_base` 之后按组键重排扩展组）。二者若并存，`image_finish` 的重排会丢掉交错其间的扩展对象，`canonicalize` 遇到不属于任何组的 memo 对象无法编号；U13 还把缓存值写进镜像对象体，镜像是引导对象时引导部分随程序而变，档案 `boot_eq` 必然失败。终态取第一种做法：**镜像缓存也是与程序无关键的扩展组**，只保留 `canonicalize` / `absorb` 一套流程，`image_finish` 删除。
+
+- **组键**：`f:<镜像类型>#<声明类>.<字段>`（`image_ext::memo_key`）。缓存值只取决于镜像所代表的类，与求值实参、程序无关，所以同键内容相同，档案按键求并。组内对象是片段对象（广度优先次序），`nsteps = 0`。
+- **缓存值不写进镜像对象**：`ImageData.mirror_memos: Vec<IMemo { mirror, decl, name, val }>`，每条与一个 `f:` 组一一对应，按组键排序。镜像对象体保持构建期 VM 的原样，引导部分逐字节与程序无关。分析侧镜像成为活对象时，`image_drain` 把该镜像的缓存（`MemoState::of`）与字段同一口径传播；发射侧直接取 `IMemo.val`。
+- **新建镜像同经构建期求值器**：片段引用的类镜像若映像中没有，由保留的求值器 `ExtVm::mirror` 新建（`Vm::mirror`，VM 字段在新建时写定），经 `ext_append(…, roots)` 按 `m:<类型>` 组导出——与扩展期新建镜像同键同内容，扩展类之后再引用该镜像时直接复用（`Ext.ids` 已登记）。共享组（`m:` / `s:`）对象的身份哈希一律取键哈希 `fnv32(键)`（与扩展期查询同值），同键组内容与是否查询过无关。
+- **可物化判定**（`image_memo_prepare`，取代 `image_memo_ok`）：静态字段引用规则不变；片段对象类型须属映像根模块（与 §5.8.1 根模块限制同口径）；所需镜像在此备好，失败即该组按冷 / 热并集入闭包。
+- **规范化**（`ImageData::canonicalize`）：全部组按键排序重编号，`mirror_memos` 的镜像号与值随组重定位后按键排序；校验组键不重复、`mirror_memos` 与 `f:` 组一一对应。对象号只由组键集合决定，与发现次序（扩展尝试与具体求值的交错）无关；步骤号只有 `c:` 组的重定位步骤，随组排序。
+- **档案合并**（`ImageData::absorb`）：同键组比对对象数、步骤数、对象内容；`f:` 组另比对重定位后的缓存记录（镜像号与值），不同即报「扩展组 … 与其他入口不一致（镜像缓存值）」。新键组连同其缓存记录追加。
+- **单测**：`image::tests::json_roundtrip`（`ext` 含 `f:` 组、`mirror_memos` 四元组）；`image_ext::tests::memo_groups_absorb_and_canonicalize`（两种发现次序、两种合并次序结果相同，记录重定位正确）、`absorb_rejects_divergent_memo`（缓存值不同即拒绝；记录与组不对应即拒绝）。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 

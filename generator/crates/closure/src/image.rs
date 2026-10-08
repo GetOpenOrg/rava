@@ -132,21 +132,33 @@ pub struct ImageData {
     pub current_thread: Option<u32>,
     /// VM 模块表（§5.5.1 S5）
     pub modules: Vec<IModule>,
-    /// 引导部分的对象数 / 启动步骤数：其后是构建期初始化扩展（非引导类，§5.8），按 [`IGroup`] 分组
+    /// 引导部分的对象数 / 启动步骤数：其后是追加的扩展组（构建期初始化扩展与镜像缓存，§5.8），按 [`IGroup`] 分组
     pub ext_base: u32,
     pub ext_steps: u32,
     pub ext: Vec<IGroup>,
+    /// 类镜像上写入映像的内存缓存（U13，`[concrete] image_memo_fields`；每条对应扩展组 `f:<镜像>#<声明类>.<字段>`），
+    /// 按组键排序。值不写进镜像对象本身（镜像可能是引导对象，引导部分须与程序无关），启动序列写入运行期镜像
+    pub mirror_memos: Vec<IMemo>,
 }
 
-/// 构建期初始化扩展的一组（计划 §5.8）：键与程序无关（`c:<类>` 类初始化结果 / `s:<内容>` 驻留字符串 /
-/// `m:<类型>` 类镜像），组内对象在 `objs[start..start + len]`，组的重定位步骤按组次序接在引导步骤之后（`nsteps` 条）。
-/// 同一键在任何程序中内容相同（构建期初始化只取决于类本身与引导映像），档案按键求并
+/// 映像追加部分的一组（计划 §5.8 / §5.8.5）：键与程序无关——`c:<类>` 类初始化结果 / `s:<内容>` 驻留字符串 /
+/// `m:<类型>` 类镜像 / `f:<镜像>#<声明类>.<字段>` 镜像缓存（U13）。组内对象在 `objs[start..start + len]`，
+/// 组的重定位步骤按组次序接在引导步骤之后（`nsteps` 条）。同一键在任何程序中内容相同，档案按键求并
 #[derive(Clone, Debug, PartialEq)]
 pub struct IGroup {
     pub key: String,
     pub start: u32,
     pub len: u32,
     pub nsteps: u32,
+}
+
+/// 镜像缓存（U13）：镜像对象 `mirror` 的字段（声明类, 字段名）在运行期取值 `val`（值的对象图在同键扩展组内）
+#[derive(Clone, Debug, PartialEq)]
+pub struct IMemo {
+    pub mirror: u32,
+    pub decl: String,
+    pub name: String,
+    pub val: IVal,
 }
 
 fn val(v: IVal) -> Value {
@@ -301,6 +313,7 @@ impl ImageData {
             "ext_base": self.ext_base,
             "ext_steps": self.ext_steps,
             "ext": self.ext.iter().map(|g| json!([g.key, g.start, g.len, g.nsteps])).collect::<Vec<_>>(),
+            "mirror_memos": self.mirror_memos.iter().map(|m| json!([m.mirror, m.decl, m.name, val(m.val)])).collect::<Vec<_>>(),
         })
     }
 
@@ -402,6 +415,12 @@ impl ImageData {
             let u = |i: usize| a[i].as_u64().map(|x| x as u32).ok_or("映像扩展组格式");
             d.ext.push(IGroup { key: a[0].as_str().ok_or("映像扩展组格式")?.to_string(), start: u(1)?, len: u(2)?, nsteps: u(3)? });
         }
+        for m in arr("mirror_memos")? {
+            let a = m.as_array().filter(|a| a.len() == 4).ok_or("映像镜像缓存格式")?;
+            let o = a[0].as_u64().ok_or("映像镜像缓存格式")? as u32;
+            let st = |v: &Value| v.as_str().map(str::to_string).ok_or("映像镜像缓存格式");
+            d.mirror_memos.push(IMemo { mirror: o, decl: st(&a[1])?, name: st(&a[2])?, val: unval(&a[3])? });
+        }
         d.live = arr("live")?.iter().map(|x| x.as_u64().map(|x| x as u32).ok_or("映像活对象格式")).collect::<Result<_, _>>()?;
         Ok(d)
     }
@@ -442,7 +461,8 @@ mod tests {
             modules: vec![IModule { obj: 0, loader: IVal::N, open: false, location: Some("jrt:/a".into()), packages: vec!["a".into(), "a/b".into()] }],
             ext_base: 2,
             ext_steps: 10,
-            ext: vec![IGroup { key: "c:a/B".into(), start: 2, len: 1, nsteps: 1 }],
+            ext: vec![IGroup { key: "c:a/B".into(), start: 2, len: 1, nsteps: 1 }, IGroup { key: "f:a/M#a/M.memo".into(), start: 3, len: 0, nsteps: 0 }],
+            mirror_memos: vec![IMemo { mirror: 2, decl: "a/M".into(), name: "memo".into(), val: IVal::R(0) }],
         };
         let back = ImageData::from_json(&d.to_json()).unwrap();
         assert_eq!(back, d);

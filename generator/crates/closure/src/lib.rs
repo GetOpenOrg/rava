@@ -96,10 +96,10 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.root_vm_rules();
     e.run();
-    // 映像数据 = 引导映像 + 分析中追加的构建期初始化扩展组（规范化后与发现次序无关）
+    // 映像数据 = 引导映像 + 分析中追加的扩展组（构建期初始化扩展与镜像缓存，规范化后与发现次序无关）
     match e.image_final() {
         Some(Ok(d)) => boot_image.data = d,
-        Some(Err(w)) => return Err(BootFailure { error: format!("构建期初始化扩展规范化：{w}"), stack: Vec::new(), report: String::new() }),
+        Some(Err(w)) => return Err(BootFailure { error: format!("映像扩展组规范化：{w}"), stack: Vec::new(), report: String::new() }),
         None => boot_image.data.live = e.image_live(),
     }
     let edges = engine::cut::edges_take();

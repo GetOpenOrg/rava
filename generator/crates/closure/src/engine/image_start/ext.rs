@@ -41,7 +41,7 @@ impl<'a> Engine<'a> {
         self.ext_vm.as_deref().map_or(serde_json::Value::Null, |x| x.report())
     }
 
-    /// 分析结束时的映像数据：引导映像 + 扩展组，活对象登记后规范化（扩展组按键排序重编号）
+    /// 分析结束时的映像数据：引导映像 + 扩展组（构建期初始化扩展与镜像缓存），活对象登记后规范化（按键排序重编号）
     pub fn image_final(&self) -> Option<Result<ImageData, String>> {
         let s = self.img.as_ref()?;
         let mut d = (*s.data).clone();

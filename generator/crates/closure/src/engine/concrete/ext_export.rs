@@ -5,8 +5,63 @@
 //! - 共享组：扩展期新建的驻留字符串（`s:<内容>`，字符串与其内容数组）与类镜像（`m:<类型>`）。
 //!
 //! 组内对象引用引导对象、其它组对象一律按映像编号；组键与程序无关，同键组内容由尝试隔离保证相同。
+//! 共享对象的身份哈希一律取键哈希（扩展期查询时的取值），与是否在尝试中查询过无关。
+//!
+//! 镜像缓存（U13，`engine/image_memo.rs`）所需而映像中没有的类镜像同经本求值器新建、按 `m:` 组导出
+//! （[`Vm::ext_append`] 的 `roots`），与扩展期新建的镜像内容同一口径。
+
+/// 一组待导出：（组键, 类组的类, 成员）
+type Group = (String, Option<Rc<str>>, Vec<u32>);
+
+/// 共享组导出（队列中的键依次成组；成员引用的其它共享对象入队）
+struct Shared<'x> {
+    x: &'x Ext,
+    by_key: HashMap<Rc<str>, Vec<u32>>,
+    keys_done: HashSet<Rc<str>>,
+    q: VecDeque<Rc<str>>,
+}
+
+impl Shared<'_> {
+    fn push(&mut self, k: &Rc<str>) {
+        if !self.keys_done.contains(k) && !self.q.contains(k) {
+            self.q.push_back(k.clone());
+        }
+    }
+
+    fn drain(&mut self, vm: &Vm, ids: &mut HashMap<u32, u32>, next: &mut u32, groups: &mut Vec<Group>) -> Result<(), String> {
+        while let Some(k) = self.q.pop_front() {
+            if !self.keys_done.insert(k.clone()) {
+                continue;
+            }
+            let mut ms = self.by_key.get(&k).cloned().unwrap_or_default();
+            ms.sort_unstable();
+            for (i, &o) in ms.iter().enumerate() {
+                ids.insert(o, *next + i as u32);
+            }
+            *next += ms.len() as u32;
+            for &o in &ms {
+                for r in vm.ext_refs(o) {
+                    if self.x.ids.contains_key(&r) || ids.contains_key(&r) {
+                        continue;
+                    }
+                    match self.x.shared.get(&r) {
+                        Some(k2) => {
+                            let k2 = k2.clone();
+                            self.push(&k2);
+                        }
+                        None => return Err(format!("共享对象 {k} 引用映像之外的对象 {}", vm.heap[r as usize].ty)),
+                    }
+                }
+            }
+            groups.push((k.to_string(), None, ms));
+        }
+        Ok(())
+    }
+}
 
 use std::collections::VecDeque;
+
+use super::ext_init::{fnv32, Ext};
 
 use super::export::is_default;
 use super::vm::*;
@@ -35,8 +90,8 @@ impl Vm {
         }
     }
 
-    /// 扩展类 `done[from..]` 追加为扩展组；返回追加的类。失败时映像不变
-    pub(super) fn ext_append(&mut self, cp: &ClassPath, d: &mut ImageData, from: usize) -> Result<Vec<String>, String> {
+    /// 扩展类 `done[from..]` 与共享对象 `roots`（尚未导出的类镜像等）追加为扩展组；返回追加的类。失败时映像不变
+    pub(super) fn ext_append(&mut self, cp: &ClassPath, d: &mut ImageData, from: usize, roots: &[u32]) -> Result<Vec<String>, String> {
         let x = self.ext.as_deref().ok_or("非扩展期")?;
         let classes: Vec<Rc<str>> = x.done.get(from..).unwrap_or_default().to_vec();
         let batch: HashSet<&str> = classes.iter().map(|c| &**c).collect();
@@ -47,21 +102,18 @@ impl Vm {
         // 第一遍：分组与编号
         let mut ids: HashMap<u32, u32> = HashMap::default();
         let mut next = d.objs.len() as u32;
-        let mut groups: Vec<(String, Option<Rc<str>>, Vec<u32>)> = Vec::new();
-        let mut keys_done: HashSet<Rc<str>> = HashSet::default();
+        let mut groups: Vec<Group> = Vec::new();
+        let mut sh = Shared { x, by_key, keys_done: HashSet::default(), q: VecDeque::new() };
         let known = |ids: &HashMap<u32, u32>, o: u32| x.ids.contains_key(&o) || ids.contains_key(&o);
         for c in &classes {
             let mut members: Vec<u32> = Vec::new();
             let mut q: VecDeque<u32> = VecDeque::new();
-            let mut shared_q: VecDeque<Rc<str>> = VecDeque::new();
-            let visit = |o: u32, ids: &mut HashMap<u32, u32>, members: &mut Vec<u32>, q: &mut VecDeque<u32>, shared_q: &mut VecDeque<Rc<str>>| -> Result<(), String> {
+            let visit = |o: u32, ids: &mut HashMap<u32, u32>, members: &mut Vec<u32>, q: &mut VecDeque<u32>, sh: &mut Shared| -> Result<(), String> {
                 if known(ids, o) {
                     return Ok(());
                 }
                 if let Some(k) = x.shared.get(&o) {
-                    if !keys_done.contains(k) && !shared_q.contains(k) {
-                        shared_q.push_back(k.clone());
-                    }
+                    sh.push(k);
                     return Ok(());
                 }
                 match x.owner.get(&o) {
@@ -77,41 +129,26 @@ impl Vm {
             };
             for (_, v) in self.ext_statics(c) {
                 if let CV::R(o) = v {
-                    visit(o, &mut ids, &mut members, &mut q, &mut shared_q)?;
+                    visit(o, &mut ids, &mut members, &mut q, &mut sh)?;
                 }
             }
             while let Some(o) = q.pop_front() {
                 for r in self.ext_refs(o) {
-                    visit(r, &mut ids, &mut members, &mut q, &mut shared_q)?;
+                    visit(r, &mut ids, &mut members, &mut q, &mut sh)?;
                 }
             }
             next += members.len() as u32;
             groups.push((format!("{CLASS_KEY}{c}"), Some(c.clone()), members));
             // 共享组（可能引用更多共享对象）
-            while let Some(k) = shared_q.pop_front() {
-                if !keys_done.insert(k.clone()) {
-                    continue;
-                }
-                let mut ms = by_key.get(&k).cloned().unwrap_or_default();
-                ms.sort_unstable();
-                for (i, &o) in ms.iter().enumerate() {
-                    ids.insert(o, next + i as u32);
-                }
-                next += ms.len() as u32;
-                for &o in &ms {
-                    for r in self.ext_refs(o) {
-                        if known(&ids, r) {
-                            continue;
-                        }
-                        match x.shared.get(&r) {
-                            Some(k2) if !keys_done.contains(k2) && !shared_q.contains(k2) => shared_q.push_back(k2.clone()),
-                            Some(_) => {}
-                            None => return Err(format!("共享对象 {k} 引用映像之外的对象 {}", self.heap[r as usize].ty)),
-                        }
-                    }
-                }
-                groups.push((k.to_string(), None, ms));
+            sh.drain(self, &mut ids, &mut next, &mut groups)?;
+        }
+        for &o in roots {
+            if known(&ids, o) {
+                continue;
             }
+            let k = x.shared.get(&o).ok_or_else(|| format!("追加的根对象 {} 不是共享对象", self.heap[o as usize].ty))?;
+            sh.push(k);
+            sh.drain(self, &mut ids, &mut next, &mut groups)?;
         }
         // 第二遍：转换
         let id = |o: u32| -> Result<u32, String> { x.ids.get(&o).or_else(|| ids.get(&o)).copied().ok_or_else(|| format!("扩展组引用未编号对象 {}", self.heap[o as usize].ty)) };
@@ -181,7 +218,9 @@ impl Vm {
                 if class.is_none() && matches!(h.body, Body::Inst(_)) && self.mirror_of.get(&o).is_none() {
                     strings.push(i);
                 }
-                objs.push(IObj { ty: h.ty.to_string(), hash: self.ihash.get(&o).copied(), mirror: self.mirror_of.get(&o).map(|t| t.to_string()), deferred: None, host: None, placeholder: false, body });
+                // 共享对象的身份哈希取键哈希（与扩展期查询同值）：同键组内容与是否查询过、何时查询无关
+                let hash = if class.is_none() { Some(fnv32(key)) } else { self.ihash.get(&o).copied() };
+                objs.push(IObj { ty: h.ty.to_string(), hash, mirror: self.mirror_of.get(&o).map(|t| t.to_string()), deferred: None, host: None, placeholder: false, body });
             }
             ext.push(IGroup { key: key.clone(), start, len: ms.len() as u32, nsteps: (steps.len() - s0) as u32 });
         }

@@ -81,7 +81,7 @@ struct Snap {
 }
 
 /// 32 位 FNV-1a（身份哈希：正数、非零）
-fn fnv32(s: &str) -> i32 {
+pub(super) fn fnv32(s: &str) -> i32 {
     let mut h: u32 = 0x811c_9dc5;
     for b in s.bytes() {
         h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
@@ -196,22 +196,22 @@ impl Vm {
         if let Some(&h) = self.ihash.get(&o) {
             return Ok(h);
         }
-        let h = if !self.ext_memo() {
+        // 扩展期的共享对象（字符串 / 类镜像）不论是否在尝试中，一律取键哈希（与导出同值，`ext_export.rs`）
+        let shared = self.ext.as_deref().and_then(|x| x.shared.get(&o)).map(|k| fnv32(k));
+        let h = if let Some(h) = shared {
+            h
+        } else if !self.ext_memo() {
             0x1000 + self.ihash.len() as i32 * 7919
         } else {
             let ty = self.heap[o as usize].ty.clone();
             let x = self.ext.as_deref_mut().expect("扩展期");
-            if let Some(k) = x.shared.get(&o) {
-                fnv32(k)
+            let owned = x.owner.contains_key(&o);
+            let t = x.stack.last_mut().expect("尝试");
+            if o as usize >= t.floor && !owned {
+                t.hn += 1;
+                fnv32(&format!("{}#{}", t.class, t.hn))
             } else {
-                let owned = x.owner.contains_key(&o);
-                let t = x.stack.last_mut().expect("尝试");
-                if o as usize >= t.floor && !owned {
-                    t.hn += 1;
-                    fnv32(&format!("{}#{}", t.class, t.hn))
-                } else {
-                    return fail(format!("取它类对象的身份哈希 {ty}"));
-                }
+                return fail(format!("取它类对象的身份哈希 {ty}"));
             }
         };
         self.ihash.insert(o, h);
@@ -382,7 +382,7 @@ impl ExtVm {
         }
         let env = Env { ctx, cp };
         self.vm.ensure_init(&env, cls).ok()?;
-        let r = self.vm.ext_append(cp, d, self.from);
+        let r = self.vm.ext_append(cp, d, self.from, &[]);
         self.from = self.vm.ext.as_deref().map_or(0, |x| x.done.len());
         match r {
             Ok(cs) => Some(cs),
@@ -391,6 +391,31 @@ impl ExtVm {
                 None
             }
         }
+    }
+
+    /// 类型 t 的类镜像在映像中的编号：映像中没有即由本求值器新建（与扩展期新建的镜像同一口径：VM 字段在新建时写定），
+    /// 按 `m:` 组追加进映像数据 `d`（镜像缓存所需，`engine/image_memo.rs`）
+    pub(in crate::engine) fn mirror(&mut self, ctx: &Ctx, cp: &ClassPath, t: &str, d: &mut crate::image::ImageData) -> Result<u32, String> {
+        let x = self.vm.ext.as_deref().ok_or("非扩展期")?;
+        if let Some(w) = &x.broken {
+            return Err(format!("扩展求值已中止：{w}"));
+        }
+        let env = Env { ctx, cp };
+        let o = self.vm.mirror(&env, t).map_err(|f| match f {
+            Flow::Fail(w) | Flow::Defer(w) => w,
+            Flow::Throw(o) => format!("抛出 {}", self.vm.ty(o)),
+            Flow::Implicit(k) => format!("隐式异常 {k}"),
+        })?;
+        if let Some(&i) = self.vm.ext.as_deref().and_then(|x| x.ids.get(&o)) {
+            return Ok(i);
+        }
+        self.vm.ext_append(cp, d, self.from, &[o])?;
+        self.vm.ext.as_deref().and_then(|x| x.ids.get(&o)).copied().ok_or_else(|| format!("类镜像 {t} 未导出"))
+    }
+
+    /// 类型属映像根模块（映像对象的类型限于此模块，见 [`Ext::at_home`]）
+    pub(in crate::engine) fn at_home(&self, cp: &ClassPath, ty: &str) -> bool {
+        self.vm.ext.as_deref().is_some_and(|x| x.at_home(cp, ty))
     }
 
     /// closure.json `summary.build_time_init`：构建期初始化成功的类数、运行期初始化的类与原因（按原因计数）
