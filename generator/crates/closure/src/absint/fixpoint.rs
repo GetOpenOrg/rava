@@ -7,8 +7,15 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
     let md = parse_method(desc)?;
     let mut locals = Vec::with_capacity(max_locals as usize);
     if !is_static {
-        // 接收者：求值器给出的非空常量（字符串 / 类字面量）按其值，否则为属主类型的非空引用
-        let this = param(0).filter(|v| v.nonnull() == Some(true) && !matches!(v, V::Ref { .. }));
+        // 接收者：求值器给出的非空常量（字符串 / 类字面量）按其值；引导映像对象（身份确定、final 字段已知）
+        // 按该对象（进入方法体即非空）；否则为属主类型的非空引用
+        let this = param(0).and_then(|v| match v {
+            V::Ref { obj: Some(o), .. } if matches!(*o, Obj::Image(..)) => {
+                Some(V::Ref { ty: Some(Rc::from(owner)), nonnull: true, src: src1(Src::Param(0)), obj: Some(o) })
+            }
+            V::Ref { .. } => None,
+            v => (v.nonnull() == Some(true)).then_some(v),
+        });
         locals.push(this.map_or_else(|| V::Ref { ty: Some(Rc::from(owner)), nonnull: true, src: src1(Src::Param(0)), obj: None }, |v| v.rebased(Src::Param(0))));
     }
     let base = u16::from(!is_static);
