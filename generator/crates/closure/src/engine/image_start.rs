@@ -375,10 +375,7 @@ impl<'a> Engine<'a> {
         Some(Feed::S(set))
     }
 
-    /// 映像数组对象 o 的分配点（逐对象：不同映像数组的元素互不混合）。
-    /// 长度 0 的映像数组（如各集合类的共享空数组常量）同常量长度 0 的分配点：元素节点暂存不接收值、不参与合并
-    /// （`empty_arrays`）。映像数组长度固定，永不转为非空——否则集合在扩容前对共享空数组的写入（流不敏感）
-    /// 会把全部实例的元素汇入该数组，再经它流向每个持有过空数组的实例
+    /// 映像数组对象 o 的分配点（逐对象：不同映像数组的元素互不混合）
     fn image_array_site(&mut self, o: u32, t: &str, via: &Via) -> u32 {
         if let Some(&id) = self.img.as_ref().and_then(|s| s.sites.get(&o)) {
             return id;
@@ -387,10 +384,6 @@ impl<'a> Engine<'a> {
         let tid = self.id(t);
         let id = self.id(&format!("{t}@image{o}"));
         self.arrays.insert(id, tid);
-        let empty = self.img.as_ref().is_some_and(|s| matches!(&s.data.objs[o as usize].body, IBody::Arr(es) if es.is_empty()));
-        if empty {
-            self.empty_arrays.insert(id, HashMap::default());
-        }
         if self.g.insert(id) {
             self.on_g_grow(id);
         }
