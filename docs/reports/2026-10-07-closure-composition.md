@@ -646,7 +646,11 @@ HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter
 
 1. **转发克隆的按调用点返回值。** `doPrivileged` / `executePrivileged` 已按调用点克隆（G1，`forward.rs`），但克隆体的返回值在 `rvals` 按成员汇合，调用点取到的是全部特权块返回值之并（Top）。
    `isSystem` = `doPrivileged(new DefaultLoggerFinder$1(m))`（`run()` = `VM.isSystemDomainLoader(m.getClassLoader())`），`RandomSupport.secureRandomSeedRequested` = `doPrivileged(new GetPropertyAction(k))`（各克隆内已折叠为 null），都卡在这里。
-   终态做法：方法节点返回值按节点记录（现有 `nret` 只记实例方法，扩到静态克隆节点）；`Oracle::invoke_result` 带上调用点偏移，被调是分派转发方法时按 `static_ctx` 同一规则求出克隆节点、取其节点返回值，并按节点登记依赖。需要改 absint 的 Oracle 接口与依赖复核，属结构性改动，本分支未做。
+   终态做法：方法节点返回值按节点记录（现有 `nret` 只记实例方法，扩到静态克隆节点）；`Oracle::invoke_result` 带上调用点偏移，被调是分派转发方法时按 `static_ctx` 同一规则求出克隆节点、取其节点返回值，并按节点登记依赖。需要改 absint 的 Oracle 接口与依赖复核，属结构性改动，本分支未做。落点：
+   - `absint/step.rs` 的 invoke 分支已有指令偏移 `off`，`Oracle::invoke_result` 增加该参数（4 处实现：`engine/facts/oracle.rs`、`engine/ctor_init.rs` 与两个测试桩）；
+   - `Facts` 只持 `&Ctx`，查克隆节点需要只读的「(调用方节点, 偏移) → 上下文 id」与「(成员, 上下文) → 节点」映射（`ctxsel.rs::site_ctx_in` 现在边查边建，要拆出只查不建的读法，查不到即退回 `rvals`，健全）；
+   - 节点返回值：`obj_rets.rs::obj_ret_note` 现在对静态方法直接返回，改为静态克隆节点也记 `nret`，移到 `Ctx` 供 oracle 读；读者按节点登记新依赖（`Dep::Ret` 只在按成员汇合值变化时复核，汇合值已是 Top 后节点值变化不会通知读者）。
+   - 单独落地时类数不变（`RandomSupport` 的读值折叠了，但 (L) 链仍持有大集合），须与第 2、3 条一起验收。
 2. **调用方模块。** `System.getLogger` 用 `Reflection.getCallerClass()` 取调用方；要把 `Shutdown.class.getModule()` 折成映像里 java.base 的 Module（类加载器 null），需要 `@CallerSensitive` 调用点按静态调用方给出类字面量，并经静态方法 `LazyLoggers.getLogger` / `isSystem` 传到 `DefaultLoggerFinder$1`（形参常量上下文）。
 3. **`logManagerConfigured` 乐观折叠。** 只由 `redirectTemporaryLoggers` 写 true，而它只经 `LogManager` 可达；需要按「写入点可达才计入」的原始类型静态字段折叠（§5.9.4 所述 ② 式机制），与 1、2 形成互为前提的环，须乐观求解（先假设 false，写入点进闭包再撤销）。
 4. **`Locale.ROOT` 的大小写特判。** `SocketPermission.init@302` 等处 `toLowerCase(Locale.ROOT)`，ROOT 的语言是 ""，不可能等于 "tr" / "az" / "lt"，特殊大小写分支永不执行。`ref_eq` 现在只折 null / 映像对象 / 类字面量，不折内容不同的字符串常量；可健全地折为 false。但 `Locale` 是运行期初始化类，ROOT 不是映像对象，`language` 读不出常量；收益上界只有 −16 类（上表 `ConditionalSpecialCasing` 行），优先级低。
