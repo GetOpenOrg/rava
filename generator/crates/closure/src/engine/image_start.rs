@@ -381,6 +381,15 @@ impl<'a> Engine<'a> {
         let tid = self.id(t);
         let id = self.id(&format!("{t}@image{o}"));
         self.arrays.insert(id, tid);
+        // 长度 0 的映像数组（如共享的空元素数组常量）：数组长度不可变，向它的元素写入必抛越界，元素节点暂存不收值
+        // （与字节码零长分配点同口径，`classes.rs::array_site`）；宿主内容数组与占位对象在启动时可能换成别的内容，不按空处理
+        let fixed_empty = self.img.as_ref().is_some_and(|s| {
+            let x = &s.data.objs[o as usize];
+            !x.placeholder && x.host.is_none() && matches!(&x.body, IBody::Arr(es) if es.is_empty())
+        });
+        if fixed_empty {
+            self.empty_arrays.insert(id, HashMap::default());
+        }
         if self.g.insert(id) {
             self.on_g_grow(id);
         }

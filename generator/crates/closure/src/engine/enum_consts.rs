@@ -39,7 +39,8 @@ impl<'a> Engine<'a> {
     /// 字节码 `new c` 位于枚举类 `<clinit>`（方法 m、偏移 off）且 c 是该枚举或其常量体子类时，该常量的身份标记
     pub(super) fn enum_const_mark(&mut self, m: usize, off: u32, c: &str) -> Option<u32> {
         let key = &self.methods[m].key;
-        if key.name.as_str() != "<clinit>" || self.methods[m].ctx != NOCTX {
+        // 克隆上下文里的 `<clinit>`（如按调用链常量克隆）分配的仍是同一组常量：标记只按（类, 偏移）区分
+        if key.name.as_str() != "<clinit>" {
             return None;
         }
         let owner = key.owner.clone();

@@ -149,7 +149,8 @@ impl<'a> Engine<'a> {
         let s = if let Some(l) = &x.lam {
             TypeSet::exact(self.id(&lam_name(l, m, off, i)))
         } else if x.arr {
-            TypeSet::exact(self.array_site(m, off, &x.ty, false, via.clone()))
+            // 零长物化数组同字节码零长分配点：元素写入暂存（同一分配点出现非零长时补回，`classes.rs::array_sized`）
+            TypeSet::exact(self.array_site(m, off, &x.ty, x.elems.is_empty(), via.clone()))
         } else {
             self.instantiate_type(&x.ty, via.clone());
             TypeSet::exact(self.id(&x.ty))
