@@ -60,7 +60,7 @@ impl<'a> Engine<'a> {
 
     /// 反射数组分配调用点 (m, off) 的元素类型实参 s 流入、结果节点 dst（`Array.newInstance(c, n)`，元素为缺省值 null）。
     /// 结果按调用点在不动点上的状态取（与值到达的先后无关，同 `class_lookup.rs::lookup_release`）：
-    /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含 open(Object)（涵盖任意数组）；
+    /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含任意数组（[`Self::any_array`]）；
     ///   放行前出现的，该调用点不再放行、不建分配点；
     /// - 实参出现所指维数已达逐类型建模上限的数组类镜像（[`Self::deep_mirror`]）：结果含 open(`[[Object`)（涵盖
     ///   全部更深的数组），不影响其余已知镜像的放行与逐类型建分配点；
@@ -104,7 +104,7 @@ impl<'a> Engine<'a> {
         let all: Vec<u32> = if released && new_dst { st.mirrors.iter().copied().collect() } else { vec![] };
         let dsts = st.dsts.clone();
         if !to_open.is_empty() {
-            let o = TypeSet::open(self.id(OBJECT));
+            let o = self.any_array();
             for d in to_open {
                 self.add_to(d, &o);
             }
@@ -151,6 +151,18 @@ impl<'a> Engine<'a> {
         !ready.is_empty()
     }
 
+    /// 任意数组的 open 概括：引用元素数组都是 `Object[]` 的子类型（JVMS §4.10.3 数组协变），其余只有 8 种一维基本类型
+    /// 数组，故 open(`[Object`) ∪ open(`[Z`…`[J`) 恰好涵盖全部数组。不按 open(Object) 概括：反射数组分配的结果只可能
+    /// 是数组，open(Object) 的 `getClass()` 却展开为全部已实例化类的镜像（如签名解析 `Array.newInstance(t, 0).getClass()`
+    /// 的结果经注解解析 / 反射枚举使所有用户类的成员入链）
+    fn any_array(&mut self) -> TypeSet {
+        let mut o = TypeSet::open(self.id(&format!("[L{OBJECT};")));
+        for c in b"ZCFDBSIJ" {
+            o.open.insert(self.id(&format!("[{}", *c as char)));
+        }
+        o
+    }
+
     /// 所指类型维数已达反射数组逐类型建模上限（[`REFLECT_ARRAY_DIMS`]）的类镜像：以它为元素类型的反射数组分配
     /// 不逐类型建分配点，结果按 open(`[[Object`) 概括——元素至少 2 维，结果至少 3 维，其元素是数组、数组都是 Object，
     /// 故结果恒为 `Object[][]` 的子类型（JVMS §4.10.3 数组协变；基本类型多维数组同样成立）。
@@ -159,8 +171,7 @@ impl<'a> Engine<'a> {
     /// .getClass()`）时，逐类型建模每轮给已知镜像各加一维，直到 JVMS 255 维上限才停——已知镜像上千时类型数与内存
     /// 随维数线性膨胀至 OOM。限维后更深的数组由 open(`[[Object`) 概括：可靠，且不动点有限——其 `getClass()` 只展开
     /// 已实例化（数组则已逃逸）的 2 维及以上数组类镜像，回灌同一调用点仍是限维镜像、不再生成新类型。
-    /// 不按 open(Object) 概括：那样 `getClass()` 展开为全部已实例化类的镜像，经签名解析的结果流向注解 / 反射枚举等
-    /// 接收者，使所有用户类的成员经反射入链
+    /// 不按 open(Object) 概括，理由同 [`Self::any_array`]
     fn deep_mirror(&self, x: u32) -> bool {
         self.mirrors
             .get(&x)

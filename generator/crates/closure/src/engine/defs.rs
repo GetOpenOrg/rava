@@ -273,7 +273,7 @@ pub(super) struct ArrayOfSite {
     pub(super) mirrors: BTreeSet<u32>,
     /// 结果节点
     pub(super) dsts: Vec<Node>,
-    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含 open(Object)
+    /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含任意数组（`reflect.rs::any_array`）
     pub(super) open: bool,
     /// 实参出现过维数已达逐类型建模上限的数组类镜像：结果含 open(`[[Object`)（`reflect.rs::deep_mirror`）
     pub(super) deep: bool,
