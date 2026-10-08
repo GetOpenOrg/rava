@@ -345,6 +345,26 @@ impl<'a> Engine<'a> {
             out.extend(v.into_iter().take(60).map(|(k, n)| format!("  {n}\t{k}")));
             return out;
         }
+        // 常量诊断：`@vals:<方法标签子串>`——匹配方法节点（前 12 个）的形参常量、静态调用点答复表、节点 / 成员返回值与常量事件
+        if let Some(q) = pat.strip_prefix("@vals:") {
+            let ms: Vec<usize> = (0..self.methods.len()).filter(|&m| self.method_label(m).contains(q)).take(12).collect();
+            for m in ms {
+                let key = &self.methods[m].key;
+                out.push(format!("  {}", self.method_label(m)));
+                out.push(format!("    pvals {:?}", self.pvals.get(&m)));
+                out.push(format!("    sites {:?}", self.site_used.get(&m)));
+                out.push(format!("    sret {:?} nret {:?} rvals {:?}", self.sret.get(&m), self.nret.get(&m), self.ctx.rvals.borrow().get(key)));
+                if let Some(a) = self.site_analysis(m) {
+                    let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
+                        absint::Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
+                        absint::Event::Return(v) => Some(format!("@{o} ret {v:?}")),
+                        _ => None,
+                    }).collect();
+                    out.push(format!("    conservative {} events {}", a.conservative, evs.join(" ")));
+                }
+            }
+            return out;
+        }
         // 服务查找诊断：`@svcunk`——服务 Class 实参所指未知的查找站点
         if pat == "@svcunk" {
             for &(m, off) in &self.seeds.services.unknown_sites {
