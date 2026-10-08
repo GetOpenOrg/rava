@@ -159,6 +159,16 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             ret(CV::R(vm.mirror(env, &n)?))
         }
+        // 模块读取器的资源存在判定（`module_resource:<字段>`）：接收者的 `<字段>`（String）为模块名，实参 1 为
+        // 资源名；按参考 JDK 该模块的内容回答（运行期由嵌入的程序 jimage 回答，其内容取自同一参考 JDK）
+        m if m.starts_with("module_resource:") => {
+            let fname = &m["module_resource:".len()..];
+            let fr = vm.field_res(env, &MemberRef { owner: info.key.owner.clone(), name: fname.into(), desc: "Ljava/lang/String;".into() })?;
+            let mo = vm.get_field(env, arg(0)?.obj()?, &fr)?;
+            let module = vm.rust_string(env, mo.obj()?)?;
+            let path = vm.rust_string(env, arg(1)?.obj()?)?;
+            ret(CV::I(i32::from(env.cp.module_has_resource(&module, &path))))
+        }
         "caller_class" => {
             let n = vm.frames.len();
             let Some(c) = n.checked_sub(2).and_then(|i| vm.frames.get(i)) else { return fail("调用方帧缺失") };
