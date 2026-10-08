@@ -11,7 +11,7 @@
 //!    InvocationTargetException 包装逐句一致；CS 方法只在 JDK 内且名字可见，缺口不改变此前提）。
 //!
 //! 满足时调用点接到 helper（静态调用，按 @CallerSensitive 声明压栈调用方所在类）与各目标：静态目标直接接边，实例目标
-//! 按 invoke 的接收者实参值集逐类型选实现、各实现以接收者来源为 this 接边（同字节码虚调用的目标选择，见 `direct_virtual`）；目标形参（不含接收者）取 invoke 实参数组的元素
+//! 按 invoke 的接收者实参值集选实现：精确接收者逐对象选实现并作为 this 接边，open 部分经 open 枢纽（同字节码虚调用的目标选择，见 `direct_virtual`）；目标形参（不含接收者）取 invoke 实参数组的元素
 //! （按下标奇偶槽；open 数组取元素类型 open，同本地访问器的实参池 `reflect_call.rs`）；引用返回值流入调用点结果，
 //! 基本类型返回值经装箱类 `valueOf` 流入（同本地访问器）；
 //! 目标入反射分派面（`reflect_members`，helper 的 native 按声明键分派），不再接原入口——Method.invoke 体内的
@@ -146,18 +146,19 @@ impl<'a> Engine<'a> {
         self.cs.site_wrapped = outer;
     }
 
-    /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发（同字节码 invokevirtual / invokeinterface 的目标选择）：
-    /// - 非虚目标（private / final 方法、final 类上的方法；同 `invoke.rs` 的非虚判定）：直接接已解析方法，接收者来源
-    ///   （精确与 open）按声明类过滤流入 this，不建枢纽——序列化回调 `writeObject` / `readObject` 等私有方法即此类；
-    /// - 精确接收者按类型选出实现（逐类型一次，按调用点与目标记在 `rdirect_sel`），各实现以接收者来源为 this 直接接边
-    ///   （实现的 this 形参按声明类过滤；不按接收者对象克隆）。直连调用点的接收者是被序列化 / 反射调用的任意对象，
-    ///   值集随程序增长、目标又按标记成百，按实现接边的边数是「目标的实现数」，与接收者增长次数无关；
-    /// - open 部分经 open 枢纽，按目标声明类 C 归一（`direct_open_roots`）：值集含 C 的超类型 open 时只接 open(C)
-    ///   一个枢纽（G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。
-    ///   枢纽键是（目标, open(C)），与字节码虚调用及其他直连点共用；单点枢纽数以目标数为界，与 open 类型数无关；
+    /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发（同字节码 invokevirtual / invokeinterface 的目标选择）。
+    /// 直连调用点的接收者静态类型是 Object，目标只在接收者确是其声明类 C 的实例时才被调用，故精确与 open 两部分都按 C
+    /// 门控（非虚目标也一样：private / final 的 `writeObject` / `readObject` 等序列化回调只在有 C 的实例时可达）：
+    /// - 精确接收者（⊂ C）逐对象选实现（非虚目标即已解析方法），各实现以选中它的接收者为 this 接边（不按接收者对象
+    ///   克隆）；已接的接收者记在 `rdirect_done`，值集增长时只接新到者。this 只收精确接收者——open 部分不直接流入
+    ///   方法体（否则无 C 实例逃逸时方法体也按 open(C) 接收者分析）；
+    /// - open 部分经 open 枢纽，按 C 归一（`direct_open_roots`）：值集含 C 的超类型 open 时只接 open(C) 一个枢纽
+    ///   （G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。枢纽键是
+    ///   （目标, open(C)），与字节码虚调用及其他直连点共用，G 增长时由枢纽增量展开；单点枢纽数以目标数为界，与 open
+    ///   类型数无关；
     /// - lambda 与手写层对象接收者（派发规则特殊）经精确集合枢纽（按目标链上次枢纽为父）。
-    /// 已接的实现与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空），值集增长时只增量接入；
-    /// 目标实参来源（实参数组的分配点）变化时按新实参重接。
+    /// 已接的接收者与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空）；目标实参来源（实参数组的
+    /// 分配点）变化时按新实参重接。
     #[allow(clippy::too_many_arguments)]
     fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, ret: Option<u32>, res: Option<Node>, via: &Via) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
@@ -175,47 +176,35 @@ impl<'a> Engine<'a> {
         let lk = (m, off, key.clone());
         let dk = (off, key.clone());
         let mut done = self.rdirect_done.get_mut(&m).and_then(|d| d.remove(&dk)).unwrap_or_default();
-        // 实参来源（实参数组的分配点随值集增长）变了：已接的实现与 open 枢纽按新实参重接
+        // 实参来源（实参数组的分配点随值集增长）变了：已接的接收者与 open 枢纽按新实参重接
         let regrow = done.a.as_ref() != Some(a);
         if regrow {
-            done.impls.clear();
+            done.sent.clear();
             done.a = Some(a.clone());
         }
         let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| !nonvirt && (self.lambdas.contains_key(r) || self.hwobjs.contains_key(r)));
-        let impls: Vec<MemberRef> = if nonvirt {
-            if plain.is_empty() && s.open.is_empty() {
-                Vec::new()
-            } else {
-                let (o, n, d) = site.key();
-                vec![MemberRef { owner: o, name: n, desc: d }]
+        let mut by_impl: BTreeMap<MemberRef, Vec<u32>> = BTreeMap::new();
+        for r in plain {
+            if !done.sent.insert(r) {
+                continue;
             }
-        } else {
-            let mut sel = self.rdirect_sel.remove(&lk).unwrap_or_default();
-            for r in plain {
-                let t = self.ty(r);
-                if !sel.0.insert(t) {
-                    continue;
+            let t = self.ty(r);
+            let rname = self.names[t as usize].to_string();
+            match self.h.select(&rname, &site) {
+                Some(x) => {
+                    let (o, n, d) = x.key();
+                    by_impl.entry(MemberRef { owner: o, name: n, desc: d }).or_default().push(r);
                 }
-                let rname = self.names[t as usize].to_string();
-                match self.h.select(&rname, &site) {
-                    Some(x) => {
-                        let (o, n, d) = x.key();
-                        sel.1.insert(MemberRef { owner: o, name: n, desc: d });
-                    }
-                    None => {
-                        self.unresolved.insert(format!("select {rname} {}", site.method().name));
-                    }
+                None => {
+                    self.unresolved.insert(format!("select {rname} {}", rm.name));
                 }
             }
-            let impls = sel.1.iter().cloned().collect();
-            self.rdirect_sel.insert(lk.clone(), sel);
-            impls
-        };
-        for k in impls {
-            if done.impls.insert(k.clone()) {
-                let t = self.method(k, via.clone());
-                self.edge(m, off, t, Recv::Feeds(fs.clone()), a, ret, res);
-            }
+        }
+        for (k, mut rs) in by_impl {
+            rs.sort_unstable();
+            let t = self.method(k, via.clone());
+            let recv = TypeSet { classes: IdSet::from_sorted(rs), open: IdSet::default() };
+            self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
         }
         if !special.is_empty() {
             let rs: Rc<[u32]> = special.into();
@@ -230,26 +219,24 @@ impl<'a> Engine<'a> {
             self.link_hub(h, m, off, a, res);
             self.direct_hub_args(h, a);
         }
-        if !nonvirt {
-            if regrow {
-                for &h in done.roots.values() {
-                    self.direct_hub_args(h, a);
-                }
+        if regrow {
+            for &h in done.roots.values() {
+                self.direct_hub_args(h, a);
             }
-            let mut grew = false;
-            for o in s.open.iter() {
-                grew |= done.opens.insert(o);
-            }
-            if grew {
-                let opens: Vec<u32> = done.opens.iter().copied().collect();
-                for o in self.direct_open_roots(owner, &opens) {
-                    if done.roots.contains_key(&o) {
-                        continue;
-                    }
-                    let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
-                    self.link_hub(h, m, off, a, res);
-                    done.roots.insert(o, h);
+        }
+        let mut grew = false;
+        for o in s.open.iter() {
+            grew |= done.opens.insert(o);
+        }
+        if grew {
+            let opens: Vec<u32> = done.opens.iter().copied().collect();
+            for o in self.direct_open_roots(owner, &opens) {
+                if done.roots.contains_key(&o) {
+                    continue;
                 }
+                let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
+                self.link_hub(h, m, off, a, res);
+                done.roots.insert(o, h);
             }
         }
         self.rdirect_done.entry(m).or_default().insert(dk, done);
@@ -289,8 +276,8 @@ impl<'a> Engine<'a> {
 /// 直连调用点上一个实例目标已接的部分（`direct_virtual`）
 #[derive(Default)]
 pub(super) struct DirectDone {
-    /// 已以接收者来源为 this 接边的实现
-    impls: BTreeSet<MemberRef>,
+    /// 已作为 this 接到所选实现的精确接收者
+    sent: BTreeSet<u32>,
     /// 已见的接收者 open 类型
     opens: BTreeSet<u32>,
     /// 已接入枢纽的 open 类型 → 枢纽

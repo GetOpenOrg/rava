@@ -130,7 +130,6 @@ impl<'a> Engine<'a> {
             rdirect: HashMap::default(),
             rdirect_fallback: HashSet::default(),
             rdirect_last: HashMap::default(),
-            rdirect_sel: HashMap::default(),
             rdirect_done: HashMap::default(),
             rmarks: HashMap::default(),
             rmark_fallback: HashSet::default(),
