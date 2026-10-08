@@ -15,6 +15,10 @@ use crate::image::{IBody, IExpr, ILoc, IObj, IStep, IVal, ImageData};
 
 struct Ex<'v> {
     vm: &'v Vm,
+    /// 可清除的软引用的所指字段键（`reference_referent`）；None = 不清除
+    referent: Option<u32>,
+    /// 可清除的软引用对象（精确类型在 `soft_references`、未登记队列）
+    soft: HashSet<u32>,
     ids: HashMap<u32, u32>,
     order: Vec<u32>,
     q: VecDeque<u32>,
@@ -78,7 +82,10 @@ impl Ex<'_> {
             let vm = self.vm;
             match &vm.heap[o as usize].body {
                 Body::Inst(fs) => {
-                    let mut fs: Vec<(&(Rc<str>, Rc<str>), CV)> = fs.iter().map(|(k, v)| (&vm.fnames[*k as usize], *v)).collect();
+                    // 软引用的所指暂不登记：只经软引用可达的所指在第二遍按清除导出
+                    let soft = self.soft.contains(&o);
+                    let fs = fs.iter().filter(|(k, _)| !(soft && Some(*k) == self.referent));
+                    let mut fs: Vec<(&(Rc<str>, Rc<str>), CV)> = fs.map(|(k, v)| (&vm.fnames[*k as usize], *v)).collect();
                     fs.sort_by(|a, b| a.0.cmp(b.0));
                     for (_, v) in fs {
                         if let CV::R(r) = v {
@@ -100,6 +107,29 @@ impl Ex<'_> {
     }
 }
 
+/// 可清除的软引用：所指字段键与对象集（精确类型在 `soft_references`，队列字段为 null 或 `null_queues` 类型的对象）
+fn soft_refs(vm: &Vm, cfg: &crate::manifest::ConcreteCfg) -> (Option<u32>, HashSet<u32>) {
+    let key = |what: &str| cfg.vm_fields.get(what).and_then(|s| vm.fkeys.get(s.as_str()).copied());
+    let (Some(referent), Some(queue)) = (key("reference_referent"), key("reference_queue")) else { return (None, HashSet::default()) };
+    let mut soft = HashSet::default();
+    for (o, h) in vm.heap.iter().enumerate() {
+        if !cfg.soft_references.contains(&*h.ty) {
+            continue;
+        }
+        let Body::Inst(fs) = &h.body else { continue };
+        let q = fs.iter().find(|(k, _)| *k == queue).map_or(CV::N, |(_, v)| *v);
+        let unqueued = match q {
+            CV::N => true,
+            CV::R(r) => cfg.null_queues.contains(&*vm.heap[r as usize].ty),
+            _ => false,
+        };
+        if unqueued {
+            soft.insert(o as u32);
+        }
+    }
+    (Some(referent), soft)
+}
+
 pub(super) fn is_default(v: CV) -> bool {
     match v {
         CV::I(0) | CV::J(0) | CV::N => true,
@@ -111,8 +141,9 @@ pub(super) fn is_default(v: CV) -> bool {
 
 /// 导出映像（含 lambda 对象时失败）；`current_thread` 为 VM 初始线程的堆下标。
 /// 另返回堆下标 → 映像编号（构建期初始化扩展在其上续编，ext_init.rs）
-pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<(ImageData, HashMap<u32, u32>), String> {
-    let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new(), texprs: HashMap::default(), exprs: Vec::new() };
+pub(super) fn export(vm: &Vm, cfg: &crate::manifest::ConcreteCfg, current_thread: Option<u32>) -> Result<(ImageData, HashMap<u32, u32>), String> {
+    let (referent, soft) = soft_refs(vm, cfg);
+    let mut x = Ex { vm, referent, soft, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new(), texprs: HashMap::default(), exprs: Vec::new() };
     let mut statics: Vec<(&(Rc<str>, Rc<str>), u32, CV)> = vm.statics.iter().map(|(k, v)| (&vm.fnames[*k as usize], *k, *v)).collect();
     statics.sort_by(|a, b| a.0.cmp(b.0));
     for (_, _, v) in &statics {
@@ -184,6 +215,10 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<(ImageData,
                 let mut out: Vec<(String, String, IVal)> = Vec::new();
                 for &(k, v) in fs {
                     let (dc, n) = &vm.fnames[k as usize];
+                    // 软引用的所指只经软引用可达：按清除导出（零值不写出）
+                    if Some(k) == x.referent && x.soft.contains(&o) && matches!(v, CV::R(r) if !x.ids.contains_key(&r)) {
+                        continue;
+                    }
                     if let Some(reloc) = super::unsafe_ops::reloc_of(vm, v) {
                         relocs.push(IStep::Reloc { loc: ILoc::Field(i as u32, dc.to_string(), n.to_string()), reloc });
                         continue;

@@ -73,7 +73,13 @@ impl Ctx<'_> {
             self.note_aux_read(&fi.key);
         }
         if fi.access & acc::STATIC != 0 && fi.access & acc::FINAL != 0 {
-            return self.static_const(m, &fi.key, fi.constant.as_ref()).or_else(|| self.image_final(&fi.key));
+            // 构建期初始化类：`<clinit>` 唯一赋值的新建对象（构造器摘要的字段标签）改取映像值——同一对象，
+            // 映像标签另给出身份（`if_acmp` 可判相等）
+            return match self.static_const(m, &fi.key, fi.constant.as_ref()) {
+                Some(v @ V::Ref { .. }) if v.obj().is_some_and(|o| matches!(**o, Obj::Fields(_))) => self.image_final(&fi.key).or(Some(v)),
+                None => self.image_final(&fi.key),
+                v => v,
+            };
         }
         m?;
         let v = self.fvals.borrow().get(&fi.key).cloned();

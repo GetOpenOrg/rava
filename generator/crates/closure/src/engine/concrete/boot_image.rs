@@ -382,7 +382,7 @@ impl<'a> Engine<'a> {
         }
         let mut ext_ids = None;
         let data = if error.is_none() {
-            match super::export::export(&vm, env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i).copied())) {
+            match super::export::export(&vm, env.cfg(), env.cfg().boot.current_thread.and_then(|i| vm.boot_objs.get(i).copied())) {
                 Ok((d, ids)) => {
                     ext_ids = Some(ids);
                     Some(d)

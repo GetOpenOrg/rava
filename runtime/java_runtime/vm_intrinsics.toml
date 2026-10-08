@@ -1002,6 +1002,11 @@ stable_types = [
     "java/util/regex/Pattern$Node",
     "java/util/regex/Pattern$CharPredicate",
 ]
+# 软引用（含子类型须精确登记）：导出映像时 referent 不在映像其余部分可达集内即清除（JLS 软引用「可随时清除」
+# 语义；Class.reflectionData 等缓存的构建期反射对象由此不入映像，运行期按需重建）。引用须未入队
+# （queue 为 null 或属 null_queues 类型）
+soft_references = ["java/lang/ref/SoftReference"]
+null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 
 # 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
 # `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
@@ -1037,6 +1042,7 @@ stable_types = [
 "java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
 "java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+"java/lang/ClassLoader.findBootstrapClass:(Ljava/lang/String;)Ljava/lang/Class;" = "boot_class"
 # 原生二进制不携带 CDS 归档（cds_impl.rs / vm_impl.rs）：查询恒 false、归档恢复为空操作、转储种子恒 0
 "jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
 "jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
@@ -1055,6 +1061,12 @@ stable_types = [
 "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
 "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+# 反射（engine/concrete/reflect.rs；HotSpot Reflection::new_method / invoke_method 同义）
+"java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;" = "class_declared_methods"
+"java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;" = "class_declared_constructors"
+"java/lang/Class.getConstantPool:()Ljdk/internal/reflect/ConstantPool;" = "class_constant_pool"
+"jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
+"java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
 
 # 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
 # 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
@@ -1074,6 +1086,28 @@ component_type = "java/lang/Class.componentType"
 reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
 module_loader = "java/lang/Module.loader"
+reference_queue = "java/lang/ref/Reference.queue"
+# VM 构造反射方法 / 构造器对象时写入的布局字段（reflect.rs，键前缀 method_ / ctor_）
+method_clazz = "java/lang/reflect/Method.clazz"
+method_name = "java/lang/reflect/Method.name"
+method_parameter_types = "java/lang/reflect/Method.parameterTypes"
+method_return_type = "java/lang/reflect/Method.returnType"
+method_exception_types = "java/lang/reflect/Method.exceptionTypes"
+method_modifiers = "java/lang/reflect/Method.modifiers"
+method_slot = "java/lang/reflect/Method.slot"
+method_signature = "java/lang/reflect/Method.signature"
+method_annotations = "java/lang/reflect/Method.annotations"
+method_parameter_annotations = "java/lang/reflect/Method.parameterAnnotations"
+method_annotation_default = "java/lang/reflect/Method.annotationDefault"
+ctor_clazz = "java/lang/reflect/Constructor.clazz"
+ctor_parameter_types = "java/lang/reflect/Constructor.parameterTypes"
+ctor_exception_types = "java/lang/reflect/Constructor.exceptionTypes"
+ctor_modifiers = "java/lang/reflect/Constructor.modifiers"
+ctor_slot = "java/lang/reflect/Constructor.slot"
+ctor_signature = "java/lang/reflect/Constructor.signature"
+ctor_annotations = "java/lang/reflect/Constructor.annotations"
+ctor_parameter_annotations = "java/lang/reflect/Constructor.parameterAnnotations"
+constant_pool_oop = "jdk/internal/reflect/ConstantPool.constantPoolOop"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
 # 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image
@@ -1095,9 +1129,12 @@ calls = [
     # 非 HotSpot 步骤（U13）：泛型信息缓存命中路径（Class.getGenericInfo）与 ClassRepository.NONE 比较，其类须在
     # 构建期初始化——运行期不再执行 <clinit>（解析 "Ljava/lang/Object;" 签名）。纯类：<clinit> 只构造 NONE
     { init = ["sun/reflect/generics/repository/ClassRepository"] },
-    # U12 ①（构建期确定 LoggerFinder 提供者）暂不在此登记：getLoggerFinder 当前会经 FilePermCompat → Security →
-    # StaticProperty.JAVA_HOME（运行期初始化类）被残差化，残差调用成为启动根、反而在启动时急切加载 ServiceLoader
-    # 链；前提与续作入口见 docs/plans/2026-10-05-boot-image-evaluator.md §5.9
+    # U12 ①（构建期确定日志后端，计划 2026-10-05-boot-image-evaluator §5.9.7）：只求值后端探测类——SCL 上的
+    # LoggerFinder 提供者与已装 DefaultLoggerFinder 提供者是否存在、JUL 配置属性（U12：日志路径属性取构建期值）。
+    # HotSpot 在首次取日志器时才初始化它，结果只取决于这三项构建期事实，提前求值与之同值；不跑
+    # LoggerFinderLoader.service()——它末尾的 redirectTemporaryLoggers 会置 logManagerConfigured，与 HotSpot
+    # 启动后的状态不一致（§5.9.3 语义问题）。getLoggerFinder 整体求值仍不登记（经 FilePermCompat → Security 残差化）
+    { init = ["jdk/internal/logger/BootstrapLogger$DetectBackend"] },
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [

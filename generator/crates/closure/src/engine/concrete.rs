@@ -23,6 +23,7 @@ mod journal;
 mod members;
 mod natives;
 pub(super) mod persist;
+mod reflect;
 mod snap;
 mod stable;
 mod taint;
