@@ -413,6 +413,7 @@ S0 Boot 的 JVM 实载为参照列。
    - 2026-10-08 新基线复测：只收窄宿主名或只收窄常量名，Δ 都是 0。两者同时收窄的上界为 −141。扩展提供者不能折为空。挂起，等待用户就 U1 字符集域作出决定（见 7.3）。
 6. **日志链构建期求值**（随决定 L）：−52 至 −110。
 7. **locale 适配器链构建期求值**：团块差 295（Formatter 单门只 −25 至 −28，需在其他门关闭后复测）。
+   - 2026-10-08 实施（分支 locale-build，bbeb13a5）：HOST / SPI 适配器出闭包，三例 −18 至 −19 类、−132 至 −144 方法（超过 lcaux 上界，见 7.4）。不涉及 U1：`java.locale.providers` 已折为 null，偏好表恒为 [CLDR, JRE]。CLDR / JRE 本体（lcadapt 上界剩余约 −115）是宿主 locale 下的合法数据访问，不再按构建期求值处理，残余见 7.4 第 5 条。
 8. **类加载 / 资源封闭映像整体替换**（boot-layer 步骤 1–5）：本身减量小（团块差 18），但它是 ServiceLoader 类路径查找、jar 校验等多扇门的根；jar 校验不能用切写入点量化，以整体替换后的实测为准。
 9. **容器元素敏感**（`Objects.equals` 汇合派发）：c1d §21.5 重定向 2，随后续多连通门关闭而显现。
 10. **引用 / 信号按 ③ 收口**：随无 GC 模型与决定 L 实施，减量小。
@@ -497,6 +498,86 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 
 - 用户就 (a) 作出决定后实施 (b)。验收：`closure_composition_job.sh --cut-sets csstd` 的 −141 为兑现上界，实施后基线应接近 3183 / 3183 / 3432。
 - 第 5 条缺口独立立项（反射建模），与收窄无关。
+
+### 7.4 第 7 项 locale 适配器链（2026-10-08，bbeb13a5，分支 locale-build）
+
+作业（jp1 / jp2，产物在 `cluster_results/job/<tag>/01/build/ccomp/`）：
+
+- `lc-cut-2ef758c8`：切除集 `lcfmt` / `lcaux` / `lcadapt`；
+- `lc-gates-279572aa`：门排名；
+- `lc-enum-751066bc`：枚举常量标记；
+- `lc-diag2-751066bc`、`lc-diag5-b30a2622`、`lc-diag6-fbd752ac`、`lc-diag7-fbd752ac`：溯源，用到 `@trace` / `@openorig` / `@in` / `@objs` / `@m`；
+- `lc-img-fbd752ac`：修复 (a)(b) 后实测；
+- `lc-heap-bbeb13a5`：修复 (c) 后实测，含 `cargo test --release -p closure`（229 passed）。
+
+切除集（`scripts/closure_composition_cuts/`）：
+
+- `lcfmt`：Formatter 取本地化数据的入口；
+- `lcaux`：HOST / SPI 两个辅助适配器的全部可达面；
+- `lcadapt`：`LocaleProviderAdapter.forType` 整体，即本地化数据一次也不查的上界。
+
+三者都不健全，只作上界。
+
+| 例 | 基线 类 / 方法 | lcfmt | lcaux | lcadapt | (a)(b) fbd752ac | (a)(b)(c) bbeb13a5 |
+|---|---:|---:|---:|---:|---:|---:|
+| HelloWorld | 3324 / 19847 | 0 / −5 | −15 / −104 | −145 / −1027 | 0 / −6 | **−19 / −132** |
+| CollectorsDemo | 3324 / 19853 | — | — | — | 0 / −6 | **−19 / −132** |
+| DeepCopy | 3573 / 22505 | 0 / −5 | −14 / −98 | −130 / −978 | 0 / −27 | **−18 / −144** |
+
+（基线 `cs-cut-641d48ce`；切除作业未跑 CollectorsDemo，它与 HelloWorld 的基线逐数相同。）
+
+资源：
+- HelloWorld 闭包耗时 1:25 → 1:27，RSS 2.16 → 2.32 GB；
+- DeepCopy 闭包耗时 3:38 → 4:18，RSS 4.25 → 4.79 GB。
+
+增量来自修复 (c) 新分出的工厂产物内部对象。
+
+结论：
+
+1. **构建期配置已钉值，不涉及 U1。**
+   - `java.locale.providers` 在启动表中不存在，读取折叠为 null，`LocaleProviderAdapter.<clinit>` 的偏好表恒为 [CLDR, JRE]，FALLBACK 只经常量 `forType(Type.FALLBACK)` 进入。
+   - 所以 HOST / SPI 进闭包不是配置不确定，而是分析器精度缺口：`forType` 的实参里有 open[Type]，`Class.forName(type.getAdapterClassName())` 取 Type 全部常量的类名。
+2. **open[Type] 的三个来源，已全部修复（均为通用精度修复，不含类名特判）。**
+   - **(a) 克隆上下文里的枚举 `<clinit>`。** `Type.<clinit>` 被按档位上下文克隆（`#@level:2`），克隆体分配的常量不带枚举常量标记，按普通 Type 抽象对象流入静态字段。
+     - 修复：`enum_consts.rs::enum_const_mark` 不再要求 NOCTX，标记只按（类，偏移）区分。
+     - 效果：`@trace:Type` 由 11591 条降为 13 条。
+   - **(b) 共享空元素数组。** `ArrayList.DEFAULTCAPACITY_EMPTY_ELEMENTDATA`（映像对象 182，长度 0）的元素节点收到全程序 `ArrayList.add` 的写入，汇成 2225 节点的 SCC，再经 `adapterPreference` 迭代流到 `findAdapter`。
+     - JVM 数组长度不可变，向零长数组写入必抛越界。
+     - 修复：`image_start.rs::image_array_site` 把零长、非占位、无宿主来源的映像数组登记为 `empty_arrays`，与字节码零长分配点同口径，写入暂存而不汇合。`concrete/apply.rs::mat_obj` 的物化数组同样按 `elems.is_empty()` 处理。
+   - **(c) 工厂产物的堆上下文截断。** `adapterPreference = Collections.unmodifiableList(list)` 本身按调用点分开（`UnmodifiableRandomAccessList@5377:31#@5363:282`，只包着 `ArrayList@5363:42`）。但它的迭代器 `UnmodifiableCollection$1` 以它为上下文分配，截断到 HEAP_DEPTH=2 后链为 `@7957:0#@5377:31`，丢了调用点。
+     - 后果：全程序 `unmodifiableList` 产物的迭代器汇合，`c` 的读取汇集 6 个包装、9 个列表，其中 `Collectors.toList` 的 `ArrayList@72287:4` 收全局 `Optional.value` 与 EnumSet 迭代的 open 值。
+     - 修复：`classes.rs::obj_at` 中，分配方上下文是调用点上下文（非对象）时，调用点并入本分配点段（`@5377:31@5363:282`），链长不变、身份含调用点。
+3. **兑现量超过 lcaux 上界。**
+   - lcaux 只切 HOST / SPI 面（−15 / −104）。(c) 是程序全局的堆精度改进，其余包装视图迭代器的混合也一并消除，HelloWorld 多出 −4 类、−28 方法。
+   - (a)(b) 单独只有方法级收益（−6 / −27），因为 (c) 仍让 open[Type] 到达 `forType`。
+4. **lcfmt 只有 −5 方法，Formatter 不是独立门。**
+   - Formatter 的本地化数据入口与 `BreakIterator`（`ConditionalSpecialCasing.isFinalCased` → `getWordInstance`）、`DecimalFormatSymbols` 等共用 CLDR / JRE 适配器。
+   - 关掉任一入口，其余入口仍到达。
+5. **残余（lcadapt 上界剩余约 −115 类 / −880 方法）是合法数据访问。**
+   - CLDR / JRE 适配器及其资源束、`BreakIterator` 规则、`DecimalFormatSymbols` 数据，由宿主默认 locale（U1，运行期读取）驱动，在每个程序里都可达。不能以构建期求值去掉。
+   - 能继续收窄的只有精度缺口：
+     - `ConditionalSpecialCasing.isConditionMet`：门排名模型 −12、切除实测 −15，条件分支按 locale 语言常量判定；
+     - 格式串常量下不走本地化分支：Formatter 的 `%d` 无 `,` 标志时 `localizedMagnitude` 只取零位字符。
+   - 两者都需要字符串常量上下文，与 7.3 第 3 条 (b)「分析器按字符串常量建上下文」同一机制，建议并入该项。
+
+抽查建议（(b)(c) 是全局精度改动，影响面超出 locale）：
+
+- locale / 格式：`TestFormatLocale`、`TestLocaleConstants`、`TestStringFormat`、`FormatOutput`、`TestLocaleCurrency`、`TestLocaleNumberCjk`、`TestLocaleDateCjk`、`TestLocaleBundleFamilies`、`TestDateTimeFormat`、`TestLocaleLanguageTag`；
+- 集合 / 包装视图 / 收集器：`CollectorsDemo`、`StreamToUnmodifiableCollections`、`TestStreamCollectors`、`TestCollectorsMore`、`CollectorsTeeingTest`；
+- 枚举：`TestEnumSetMap`；
+- 日志格式：`TestLogHandlerFormat`。
+
+与其他线的交叠：
+
+- **batch 代理二分 `container_elements_per_object`：** (b)(c) 同属容器元素 / 堆上下文精度，合批时注意两者对同一批对象的命名与汇合口径，以合批后的 `closure_composition_job.sh` 实测为准；
+- **log-chain：** 日志链 `System.getLogger` 链上的 `unmodifiableList` / `List.of` 产物迭代同样受益于 (c)，其切除上界需在本分支合入后复测；
+- **reflect-marker：** `forType` 的 `Class.forName(常量类名)` 现由枚举常量标记的字段值给出（`method_lookup.rs::enum_field_values`），与 Method 查找标记对象直连互不重叠；
+- **boot-image-s6 / u12-props：** (b) 依赖映像对象的 `placeholder` / `host` 标志判定零长数组是否可被替换；s6 若新增追加对象的种类，需保持这两个标志的语义。`java.locale.providers` 的折叠来自 U12 启动表，不新增属性。
+
+后续入口：
+
+- 本项收口。残余随「字符串常量上下文」立项（与 7.3 (b) 合并）。
+- 资源增量（DeepCopy +0.54 GB）在合批全量时观察。若内存不足机器受影响，(c) 的并段规则只在分配方为工厂调用点上下文时生效，可由 `obj_at` 单点调整。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
