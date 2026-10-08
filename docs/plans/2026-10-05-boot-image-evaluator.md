@@ -1305,6 +1305,19 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - pd1–pd6：缺省次序与 fb1 次序的 MinimalMain / NullView 折叠对照。pd3 / pd4 定位并验证修复 2，pd5 排除形参常量差异，pd6（叠加修复 3）两例 `folds equal True`，剩余只有 via 差异。
 - scp2–scp4：seed-chain 叠加修复后跑两项单测。scp3（修复 1、2）上 profile 仍失败；scp4（修复 1–3，jp2）上 `reflect_new_array_element_precision` 与 `profile_union_key_and_coverage` 均通过。
 
+**残留：具体求值站点的镜像缓存在站点回退后不撤回**（未修，fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败）
+- **作业**：
+  - ut2-fddb9bcb：全量单测。失败项为已知三项，加上本项。
+  - pf3：档案对照。默认与 fb1 + seed 7 的 classes / methods 只有 via 不同；digest 差在 `boot_image_data.ext` / `mirror_memos`。
+  - cd1：单例对照。两种次序的构建期初始化集合相同（1962 类，失败集合相同）。只有 MinimalMain 在默认次序下多出约 42 个枚举的 `m:<枚举>` 与 `f:<枚举>#java/lang/Class.genericInfo` 组；NullView 两种次序相同。
+- **根因**：具体求值入口 `Class.getGenericInterfaces` 按接收者镜像逐组求值（`concrete_call`）。每次处理调用点时，对当前接收者集合中尚未应用的组合，经 `image_memo_apply` 把镜像缓存追加进映像。接收者集合随分析增长，超过 `COMBO_LIMIT` 或混入非镜像成员后，站点永久回退（`concrete.fallback`），但先前已追加的组不撤回。默认次序先以约 42 个枚举镜像的中间集合处理过该站点；fb1 次序在集合到达失败形态之前没有处理过它。站点最终都是回退，映像内容却不同。
+- **终态方向**：
+  - 未回退站点的已应用组合等于最终组合（集合只增，回退不可逆），残留只来自最终回退的站点。
+  - 因此映像的镜像缓存组应等于「最终未回退站点」所贡献的组：分析结束时剔除只由回退站点贡献的 `f:` 组，以及只被这些组引用的 `m:` 组，然后再规范化。
+  - 难点：剔除后要重编号；活标记与分析侧已记录的映像对象号要同步；`m:` 组可能被扩展期共享，需按引用判定。
+  - 另一种做法是推迟镜像缓存入映像到站点定论之后，但那样会丢失分析期的缓存值传播（热轨迹精度）。
+- seed-chain 叠加三处修复（scp4）时该测试恰好通过，属于次序巧合。
+
 **恢复入口**：
 - `engine/levels_boot.rs`：`image_settled_build_time`。
 - `engine/image_start/ext.rs`：`image_ext`、`image_settle_reads`。
