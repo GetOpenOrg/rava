@@ -1,30 +1,56 @@
-//! 引擎：具体求值的镜像缓存并入引导映像（U13，计划 2026-10-05-boot-image-evaluator §8.4）。
+//! 引擎：具体求值的镜像缓存并入引导映像（U13，计划 2026-10-05-boot-image-evaluator §5.6.9 / §5.8.5）。
 //!
-//! 具体求值在类镜像上写入的内存缓存（`[concrete] image_memo_fields`）以片段（`concrete/persist.rs`）给出；
-//! 片段的对象追加为映像对象，值写进映像镜像的该字段并登记 [`ImageData::mirror_memos`]（发射层在启动序列中
-//! 写入运行期镜像）。镜像已是活对象时补传播该字段；之后与映像中其他对象同一口径（`image_start.rs`）。
+//! 具体求值在类镜像上写入的内存缓存（`[concrete] image_memo_fields`）以片段（`concrete/persist.rs`）给出。
+//! 片段与构建期初始化扩展走同一套追加与规范化流程（`image_ext.rs`）：
+//! - 片段对象追加为扩展组 `f:<镜像>#<声明类>.<字段>`（键与程序无关：缓存值只取决于镜像所代表的类），
+//!   缓存值记为组外记录 [`IMemo`]（不写进镜像对象：镜像可能是引导对象，引导部分须与程序无关）；
+//! - 映像中没有的类镜像由构建期求值器新建，按 `m:` 组追加（与扩展期新建的镜像同键同内容）；
+//! - 分析结束时与扩展组一并按键排序重编号，档案按键求并（同键内容与缓存值须相同）。
 //!
-//! 追加对象的编号与求值次序有关；分析结束时按（镜像, 声明类, 字段名）次序重排（新建镜像在前，按类名），
-//! 使映像数据与工作表次序无关。
+//! 镜像是活对象时，缓存值随镜像传播（`image_drain` 并读 [`MemoState::of`]），之后与映像中其他对象同一口径。
 
 use super::concrete::persist::{FBody, FVal, Frag};
 use super::*;
-use crate::image::{IBody, IObj, IVal, ImageData};
+use crate::image::{IBody, IGroup, IMemo, IObj, IVal};
+use crate::image_ext::memo_key;
 
 #[derive(Default)]
 pub(super) struct MemoState {
-    /// 映像原有对象数（其后为追加对象）
-    pub(super) base: usize,
-    /// 新建的类镜像对象（类名, 对象）
-    pub(super) mirrors: Vec<(String, u32)>,
-    /// 已写入的缓存（镜像, 声明类, 字段名）→ 片段对象（按片段内下标）
-    pub(super) blocks: BTreeMap<(String, String, String), Vec<u32>>,
+    /// 已并入的缓存（组键）
+    keys: HashSet<String>,
+    /// 镜像对象 → 其缓存（声明类, 字段名, 值）
+    by_mirror: HashMap<u32, Vec<(String, String, IVal)>>,
+}
+
+impl MemoState {
+    /// 镜像对象 o 上并入的缓存
+    pub(super) fn of(&self, o: u32) -> &[(String, String, IVal)] {
+        self.by_mirror.get(&o).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// 片段引用的类镜像（含被缓存的镜像本身）
+fn frag_mirrors(f: &Frag) -> Vec<&str> {
+    let mut names: Vec<&str> = vec![&*f.mirror];
+    for v in std::iter::once(&f.val).chain(f.objs.iter().flat_map(|o| -> Box<dyn Iterator<Item = &FVal>> {
+        match &o.body {
+            FBody::Inst(fs) => Box::new(fs.iter().map(|e| &e.2)),
+            FBody::Arr(es) => Box::new(es.iter()),
+        }
+    })) {
+        if let FVal::Mirror(m) = v {
+            names.push(m);
+        }
+    }
+    names
 }
 
 impl<'a> Engine<'a> {
-    /// 片段全部可在映像中解析：由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象；否则给出原因
-    pub(super) fn image_memo_ok(&self, frags: &[Frag]) -> Result<(), String> {
+    /// 片段全部可在映像中表达时备好其所需的类镜像（映像中没有的经构建期求值器新建）；否则给出原因：
+    /// 由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象，片段对象的类型须属映像根模块
+    pub(super) fn image_memo_prepare(&mut self, frags: &[Frag]) -> Result<(), String> {
         let Some(s) = self.img.as_ref() else { return Err("无引导映像".into()) };
+        let Some(x) = self.ext_vm.as_deref() else { return Err("无构建期求值器".into()) };
         let ok = |v: &FVal| match v {
             FVal::Static(d, n) if !s.build_time.contains(d) => Err(format!("引用运行期初始化类的静态字段 {d}.{n}")),
             FVal::Static(d, n) if !matches!(s.statics.get(&(d.clone(), n.clone())), Some(IVal::R(_))) => Err(format!("映像静态字段 {d}.{n} 不是对象")),
@@ -33,52 +59,52 @@ impl<'a> Engine<'a> {
         for f in frags {
             ok(&f.val)?;
             for o in &f.objs {
+                if !x.at_home(self.cp, &o.ty) {
+                    return Err(format!("缓存对象类型 {} 不在映像根模块", o.ty));
+                }
                 match &o.body {
                     FBody::Inst(fs) => fs.iter().try_for_each(|(_, _, v)| ok(v))?,
                     FBody::Arr(es) => es.iter().try_for_each(ok)?,
                 }
             }
         }
+        for f in frags {
+            for n in frag_mirrors(f) {
+                self.image_mirror_obj(n)?;
+            }
+        }
         Ok(())
     }
 
-    /// 映像中类 c 的镜像对象（没有即新建）
-    fn image_mirror_obj(&mut self, c: &str) -> u32 {
-        let s = self.img.as_mut().expect("映像");
+    /// 映像中类 c 的镜像对象（没有即经构建期求值器新建，按 `m:` 组追加）
+    fn image_mirror_obj(&mut self, c: &str) -> Result<u32, String> {
+        let (Some(x), Some(s)) = (self.ext_vm.as_deref_mut(), self.img.as_deref_mut()) else { return Err("无构建期求值器".into()) };
         if let Some(&o) = s.mirror_obj.get(c) {
-            return o;
+            return Ok(o);
         }
         let d = Rc::make_mut(&mut s.data);
-        let o = d.objs.len() as u32;
-        d.objs.push(IObj { ty: CLASS.to_string(), hash: None, mirror: Some(c.to_string()), deferred: None, host: None, placeholder: false, body: IBody::Inst(Vec::new()) });
-        s.live.push(false);
-        s.mirror_obj.insert(c.to_string(), o);
-        s.memo.mirrors.push((c.to_string(), o));
-        o
+        let n0 = d.objs.len();
+        let o = x.mirror(&self.ctx, self.cp, c, d)?;
+        self.image_appended(n0);
+        Ok(o)
     }
 
-    /// 片段并入映像（已写入的（镜像, 字段）不重复写：同一缓存的值与求值实参无关，取首个）
+    /// 片段并入映像（须先经 [`Self::image_memo_prepare`]）：每个（镜像, 字段）一组，已并入的不重复写——同一缓存的值
+    /// 与求值实参无关，取首个；不同程序 / 实参得到不同值由档案合并的同键比对报出
     pub(super) fn image_memo_apply(&mut self, frags: &[Frag]) {
         for f in frags {
-            let key = (f.mirror.to_string(), f.decl.clone(), f.name.clone());
-            if self.img.as_ref().is_none_or(|s| s.memo.blocks.contains_key(&key)) {
+            let key = memo_key(&f.mirror, &f.decl, &f.name);
+            if self.img.as_ref().is_none_or(|s| s.memo.keys.contains(&key)) {
                 continue;
             }
-            let mut names: Vec<&str> = Vec::new();
-            for v in std::iter::once(&f.val).chain(f.objs.iter().flat_map(|o| -> Box<dyn Iterator<Item = &FVal>> {
-                match &o.body {
-                    FBody::Inst(fs) => Box::new(fs.iter().map(|e| &e.2)),
-                    FBody::Arr(es) => Box::new(es.iter()),
+            let mut mobj: HashMap<&str, u32> = HashMap::default();
+            for n in frag_mirrors(f) {
+                match self.image_mirror_obj(n) {
+                    Ok(o) => {
+                        mobj.insert(n, o);
+                    }
+                    Err(w) => unreachable!("镜像缓存的类镜像已备好：{n}：{w}"),
                 }
-            })) {
-                if let FVal::Mirror(m) = v {
-                    names.push(m);
-                }
-            }
-            let mut mobj: HashMap<String, u32> = HashMap::default();
-            for n in names.into_iter().chain([&*f.mirror]) {
-                let o = self.image_mirror_obj(n);
-                mobj.insert(n.to_string(), o);
             }
             let s = self.img.as_mut().expect("映像");
             let start = s.data.objs.len() as u32;
@@ -107,63 +133,18 @@ impl<'a> Engine<'a> {
             let val = res(&f.val);
             let mo = mobj[&*f.mirror];
             let d = Rc::make_mut(&mut s.data);
+            let len = objs.len() as u32;
             d.objs.extend(objs);
-            if let IBody::Inst(fs) = &mut d.objs[mo as usize].body {
-                fs.retain(|(x, y, _)| !(*x == f.decl && *y == f.name));
-                fs.push((f.decl.clone(), f.name.clone(), val));
-                fs.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-            }
-            d.mirror_memos.push((mo, f.decl.clone(), f.name.clone()));
+            d.ext.push(IGroup { key: key.clone(), start, len, nsteps: 0 });
+            d.mirror_memos.push(IMemo { mirror: mo, decl: f.decl.clone(), name: f.name.clone(), val });
             let n = d.objs.len();
             s.live.resize(n, false);
-            s.memo.blocks.insert(key, (start..n as u32).collect());
+            s.memo.keys.insert(key);
+            s.memo.by_mirror.entry(mo).or_default().push((f.decl.clone(), f.name.clone(), val));
             if s.live[mo as usize] {
                 s.queue.push(mo);
             }
         }
         self.image_drain();
-    }
-
-    /// 分析结束：活对象集写入映像数据；有追加对象时按规范次序重排
-    pub fn image_finish(&self, out: &mut ImageData) {
-        let Some(s) = self.img.as_ref() else { return };
-        let live = self.image_live();
-        let m = &s.memo;
-        if m.blocks.is_empty() {
-            out.live = live;
-            return;
-        }
-        let mut order: Vec<u32> = Vec::new();
-        let mut ms = m.mirrors.clone();
-        ms.sort();
-        order.extend(ms.iter().map(|x| x.1));
-        for b in m.blocks.values() {
-            order.extend(b);
-        }
-        let mut perm: Vec<u32> = (0..s.data.objs.len() as u32).collect();
-        for (i, &o) in order.iter().enumerate() {
-            perm[o as usize] = (m.base + i) as u32;
-        }
-        let re = |v: &IVal| match *v {
-            IVal::R(o) => IVal::R(perm[o as usize]),
-            x => x,
-        };
-        let mut d = (*s.data).clone();
-        let mut objs: Vec<IObj> = d.objs[..m.base].to_vec();
-        objs.extend(order.iter().map(|&o| d.objs[o as usize].clone()));
-        for o in &mut objs {
-            match &mut o.body {
-                IBody::Inst(fs) => fs.iter_mut().for_each(|e| e.2 = re(&e.2)),
-                IBody::Arr(es) => es.iter_mut().for_each(|e| *e = re(e)),
-            }
-        }
-        d.objs = objs;
-        let mut mm: Vec<(u32, String, String)> = d.mirror_memos.iter().map(|(o, a, b)| (perm[*o as usize], a.clone(), b.clone())).collect();
-        mm.sort_by(|a, b| (&d.objs[a.0 as usize].mirror, &a.1, &a.2).cmp(&(&d.objs[b.0 as usize].mirror, &b.1, &b.2)));
-        d.mirror_memos = mm;
-        let mut lv: Vec<u32> = live.iter().map(|&o| perm[o as usize]).collect();
-        lv.sort_unstable();
-        d.live = lv;
-        *out = d;
     }
 }

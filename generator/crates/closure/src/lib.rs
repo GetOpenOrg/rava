@@ -10,6 +10,7 @@ pub mod cold;
 pub mod engine;
 pub mod handwritten;
 pub mod image;
+pub mod image_ext;
 pub mod manifest;
 pub mod modules_json;
 pub mod loaders;
@@ -95,7 +96,12 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.root_vm_rules();
     e.run();
-    e.image_finish(&mut boot_image.data);
+    // 映像数据 = 引导映像 + 分析中追加的扩展组（构建期初始化扩展与镜像缓存，规范化后与发现次序无关）
+    match e.image_final() {
+        Some(Ok(d)) => boot_image.data = d,
+        Some(Err(w)) => return Err(BootFailure { error: format!("映像扩展组规范化：{w}"), stack: Vec::new(), report: String::new() }),
+        None => boot_image.data.live = e.image_live(),
+    }
     let edges = engine::cut::edges_take();
     if let (Some(p), Some(g)) = (&input.diag.dump_edges, &edges) {
         if let Err(err) = engine::cut::edges_write(g, p) {
@@ -246,6 +252,7 @@ impl Closure<'_> {
             "hw_written_names": e.hw_written_names,
             "boot_image": &self.boot_image.json,
             "boot_image_live": self.boot_image.data.live.len(),
+            "build_time_init": e.ext_report(),
             "elapsed_ms": self.elapsed_ms,
             // 性能观测（计时 / 内存 / 重分析分布）：不属于分析结果，对照输出时与 elapsed_ms 一并剔除
             "perf": perf,

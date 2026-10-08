@@ -22,6 +22,11 @@ impl Vm {
         self.image = image;
         let o = r?;
         self.strings.insert(units.to_vec(), o);
+        if self.ext.is_some() {
+            let key = String::from_utf16(units).map_or_else(|_| format!("s:#{}", units.iter().map(|u| format!("{u:04x}")).collect::<String>()), |s| format!("s:{s}"));
+            let arr = self.get_vm_field(env, o, "string_value")?.obj()?;
+            self.ext_share(&[o, arr], key);
+        }
         Ok(o)
     }
 
@@ -70,6 +75,9 @@ impl Vm {
         let t: Rc<str> = Rc::from(t);
         self.mirrors.insert(t.clone(), o);
         self.mirror_of.insert(o, t.clone());
+        if self.ext.is_some() {
+            self.ext_share(&[o], format!("m:{t}"));
+        }
         if let Some(c) = t.strip_prefix('[') {
             let ct = c.strip_prefix('L').and_then(|x| x.strip_suffix(';')).unwrap_or(c);
             let cm = self.mirror(env, ct)?;
@@ -136,7 +144,7 @@ impl Vm {
         // 引导期间按字节码读档位等静态状态，与 JVM 引导期次序一致
         let ks = key.to_string();
         let boot_op = if self.boot { env.cfg().boot.natives.get(&ks).cloned() } else { None };
-        let fact_ok = !self.boot || site.method().code.is_none();
+        let fact_ok = !self.boot || site.method().code.is_none() || self.ext.is_some();
         let op = boot_op.or_else(|| env.cfg().natives.get(&ks).cloned()).or_else(|| {
             if !fact_ok {
                 return None;

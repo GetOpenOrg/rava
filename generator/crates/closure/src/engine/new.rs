@@ -144,6 +144,7 @@ impl<'a> Engine<'a> {
             sigpoly_sites: BTreeSet::new(),
             cold_cut: false,
             img: None,
+            ext_vm: None,
             level_ctxs: HashMap::default(),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),
