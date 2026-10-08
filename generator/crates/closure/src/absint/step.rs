@@ -413,7 +413,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 s.nnf.clear();
                 let kind = self.oracle.str_kind(opc, m, *iface);
                 let retag = strs::invoke(s, kind, &md.params, &args, opc == op::INVOKESTATIC);
-                let r = match self.oracle.invoke_result(opc, m, *iface, &args) {
+                let r = match self.oracle.invoke_result(opc, off, m, *iface, &args) {
                     Ret::Unknown if opc == op::INVOKEVIRTUAL => self.param_mirror_call(args.first(), m).map_or(Ret::Unknown, Ret::Value),
                     r => r,
                 };

@@ -110,6 +110,31 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 方法 m 是 @CallerSensitive 方法时其调用者镜像值集所指的类（抽象解释按它折叠调用者类上的实例调用，
+    /// 见 `Oracle::site_mirror_call`）；None = 非 CS 方法或值集含所指未知的 Class
+    pub(super) fn caller_mirrors(&mut self, m: usize) -> Option<BTreeSet<Rc<str>>> {
+        if self.methods[m].kind != Kind::Bytecode || !self.is_caller_sensitive(m) {
+            return None;
+        }
+        let mb = self.caller_base(m);
+        self.node_mirror_set(Node::S(mb, CALLER))
+    }
+
+    /// 诊断：m 是已判定的 @CallerSensitive 方法时给出（调用者节点所在本体, 是否有不压栈调用边）
+    pub(super) fn caller_diag(&self, m: usize) -> Option<(usize, bool)> {
+        (self.cs.sensitive.get(&m) == Some(&true)).then(|| {
+            let mb = self.caller_base(m);
+            (mb, self.cs.unwrapped.contains(&mb))
+        })
+    }
+
+    /// 方法 m 的分析按其调用者镜像值集作了乐观答复：值集增长时重分析
+    pub(super) fn caller_watch(&mut self, m: usize) {
+        let n = Node::S(self.caller_base(m), CALLER);
+        self.mirror_watch.entry(n).or_default().insert((m, super::mirror_eq::HOOK_ANY));
+        self.graph.mark_hooked(n);
+    }
+
     /// `caller_class` 调用点（方法 m 内）的结果：m 是 @CallerSensitive 方法时取 m 的调用者节点，否则取返回值节点
     pub(super) fn caller_ret(&mut self, m: usize, t: usize, res: Node, rt: u32) {
         if self.is_caller_sensitive(m) {

@@ -37,6 +37,8 @@ pub(super) struct Shared {
     mirrors: Vec<Option<BTreeSet<Rc<str>>>>,
     /// 分析期间的按对象读及其答复（见 `obj_fields.rs`）
     queries: Rc<[super::obj_fields::ObjQuery]>,
+    /// 静态调用点答复表（`site_rets.rs`）
+    sites: super::site_rets::SiteTable,
     a: Weak<Analysis>,
     /// 装入过该摘要的上下文（其中仍持有者使之有效）
     holders: Vec<usize>,
@@ -94,6 +96,7 @@ impl<'a> Engine<'a> {
         params: &[Option<V>],
         mirrors: &[Option<BTreeSet<Rc<str>>>],
         pobjs: &super::obj_fields::ObjSets,
+        sites: &super::site_rets::SiteTable,
     ) -> Option<(Rc<Analysis>, Rc<[Dep]>, Rc<[super::obj_fields::ObjQuery]>)> {
         let methods = &self.methods;
         let es = self.shared.get_mut(key)?;
@@ -104,7 +107,7 @@ impl<'a> Engine<'a> {
         }
         es.retain(|e| !e.holders.is_empty());
         let es = self.shared.get(key)?;
-        let e = es.iter().find(|e| e.params == params && e.mirrors == mirrors && self.obj_queries_same(pobjs, &e.queries))?;
+        let e = es.iter().find(|e| e.params == params && e.mirrors == mirrors && e.sites == *sites && self.obj_queries_same(pobjs, &e.queries))?;
         Some((e.a.upgrade()?, e.deps.clone(), e.queries.clone()))
     }
 
@@ -125,13 +128,14 @@ impl<'a> Engine<'a> {
         &mut self,
         m: usize,
         (params, mirrors, queries): EntryState,
+        sites: super::site_rets::SiteTable,
         a: &Rc<Analysis>,
         mut deps: Vec<Dep>,
     ) {
         deps.sort_unstable();
         deps.dedup();
         let key = self.methods[m].key.clone();
-        let e = Shared { params, mirrors, queries, a: Rc::downgrade(a), holders: vec![m], deps: deps.into() };
+        let e = Shared { params, mirrors, queries, sites, a: Rc::downgrade(a), holders: vec![m], deps: deps.into() };
         self.shared.entry(key).or_default().push(e);
     }
 }

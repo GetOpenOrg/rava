@@ -15,14 +15,29 @@ const MAX_DEPTH: u32 = 3;
 /// 被求值方法的指令数上限
 const MAX_INSNS: usize = 256;
 
-/// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者）
+/// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者；
+/// 引导映像对象：身份与 final 字段在构建期确定，如映像 Module 上的 `getClassLoader()`）
 fn is_const(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..)) || image_id(v).is_some()
 }
 
-/// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
+/// 引导映像对象的下标与已知 final 字段数（同一对象带不带 finals 的两种标签分开记忆）
+fn image_id(v: &V) -> Option<(u32, usize)> {
+    match v.obj().map(|o| &**o) {
+        Some(crate::absint::Obj::Image(id, fs)) => Some((*id, fs.len())),
+        _ => None,
+    }
+}
+
+/// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）、
+/// 构造完成标签的对象（被调方法里按标签读 final 字段、按标签的类选虚调用目标）
 fn bindable(v: &V) -> bool {
-    is_const(v) || is_sysprops_tag(v)
+    is_const(v) || is_sysprops_tag(v) || fields_tag(v)
+}
+
+/// 带非空构造完成标签（`Obj::Fields`）的引用
+fn fields_tag(v: &V) -> bool {
+    matches!(v.obj().map(|o| &**o), Some(crate::absint::Obj::Fields(fs)) if !fs.is_empty())
 }
 
 fn is_sysprops_tag(v: &V) -> bool {
@@ -31,7 +46,7 @@ fn is_sysprops_tag(v: &V) -> bool {
 
 /// 可作为求值结果导出的常量
 fn exportable(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..)) || image_id(v).is_some()
 }
 
 /// 求值记忆：结果与求值的输入（见 `memo.rs`）
@@ -47,6 +62,10 @@ pub(super) enum CArg {
     SysProps,
     /// 类字面量（所指类名取字面量序号）
     Class(u32),
+    /// 引导映像对象（下标, 已知 final 字段数）
+    Image(u32, usize),
+    /// 构造完成标签（标签的规范文本）
+    Fields(String),
 }
 
 /// 记忆键：目标、各实参（非常量 = None）、起始深度
@@ -60,7 +79,8 @@ fn carg(v: &V) -> Option<CArg> {
         V::Str(s, _) => Some(CArg::Str(crate::absint::lit_id(s))),
         v if is_sysprops_tag(v) => Some(CArg::SysProps),
         V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
-        _ => None,
+        v if fields_tag(v) => v.obj().map(|o| CArg::Fields(format!("{o:?}"))),
+        v => image_id(v).map(|(id, n)| CArg::Image(id, n)),
     }
 }
 
@@ -72,7 +92,7 @@ impl Ctx<'_> {
         }
         // 无常量实参时只求可能返回属性表对象的方法（如返回持有字段的包装方法）
         let ret = t.desc.rsplit_once(')').map_or("", |x| x.1);
-        if !args.iter().any(is_const) && !self.man.sysprops.holder_type(ret) {
+        if !args.iter().any(|a| is_const(a) || fields_tag(a)) && !self.man.sysprops.holder_type(ret) {
             return None;
         }
         // 记忆键带起始深度：嵌套求值的深度上限截断只取决于它
@@ -130,14 +150,22 @@ impl Ctx<'_> {
         let Some(cf) = self.h.class(&t.owner) else { return empty() };
         let Some(meth) = cf.method(&t.name, &t.desc) else { return empty() };
         let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else { return empty() };
-        if self.ceval_depth.get() >= MAX_DEPTH {
+        // 穿过分派转发方法（`forward.rs`：静态方法把引用形参交给虚 / 接口分派）且转发的是构造完成标签对象时
+        // 不计深度：转发方法本身不产生值，深度留给被转发的动作体（如特权块 `doPrivileged → executePrivileged
+        // → action.run()`）。转发链有限、同键重入由 `memo_enter` 截断，求值仍然终止
+        let pass = meth.is_static() && {
+            let mask = self.dispatch_slots(t);
+            bound.iter().enumerate().any(|(i, b)| i < 64 && mask & (1 << i) != 0 && b.as_ref().is_some_and(fields_tag))
+        };
+        if !pass && self.ceval_depth.get() >= MAX_DEPTH {
             return None;
         }
         let frame = self.memo_enter(format!("ceval:{key}"), false)?;
         self.stats.borrow_mut().ceval[2] += 1;
-        self.ceval_depth.set(self.ceval_depth.get() + 1);
+        let depth = self.ceval_depth.get();
+        self.ceval_depth.set(depth + u32::from(!pass));
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default() });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         let (clean, inp) = self.memo_leave(frame);
         let mut r: Option<PV> = None;
         if !a.conservative {
@@ -153,6 +181,24 @@ impl Ctx<'_> {
             _ => None,
         };
         Some(((v, inp), clean))
+    }
+
+    /// 诊断：按实参 args 重做一次求值所用的辅助分析（不记忆），列出保守标志与返回 / 常量 / 调用事件
+    pub(super) fn ceval_trace(&self, t: &MemberRef, args: &[V]) -> String {
+        let Some(cf) = self.h.class(&t.owner) else { return "无类".into() };
+        let Some(meth) = cf.method(&t.name, &t.desc) else { return "无方法".into() };
+        let Some(code) = meth.code.as_ref() else { return "无代码".into() };
+        let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
+        let live = |_: &str| true;
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound.clone(), mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
+            Event::Return(v) => Some(format!("@{o} ret {v:?}")),
+            Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
+            Event::Invoke { mref, args, .. } => Some(format!("@{o} {}{args:?}", mref.name)),
+            Event::Field { mref, value, .. } => Some(format!("@{o} {} = {value:?}", mref.name)),
+            _ => None,
+        }).collect();
+        format!("bound {bound:?} conservative {} insns {} depth {} events {}", a.conservative, code.insns.len(), self.ceval_depth.get(), evs.join(" "))
     }
 
     /// 字段 f 转为不折叠：读过它的求值记忆作废（其余记忆的输入未变，重算结果相同）；返回取用过作废记忆的方法

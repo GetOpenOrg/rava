@@ -2,6 +2,7 @@
 
 use super::*;
 use super::super::obj_fields::ObjAns;
+use super::super::site_rets::SiteAns;
 
 /// 值带空集合标签（接收者为空的不可修改集合）
 fn is_empty_tag(v: Option<&V>) -> bool {
@@ -9,7 +10,7 @@ fn is_empty_tag(v: Option<&V>) -> bool {
 }
 
 impl Oracle for Facts<'_, '_> {
-    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
+    fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         if let Some(l) = self.level {
             if let Some(&t) = self.ctx.man.concrete.boot.level_queries.get(&m.to_string()) {
                 return Ret::Value(V::Int(i32::from(i64::from(l) >= t)));
@@ -23,6 +24,9 @@ impl Oracle for Facts<'_, '_> {
             return Ret::Value(V::Int(0));
         }
         if let Some(v) = &c.nonnull_ret {
+            if c.caller_class && self.callers.is_some() {
+                self.caller_sites.borrow_mut().insert(off);
+            }
             return Ret::Value(v.clone());
         }
         if let Some(v) = c.empty_query.as_ref().filter(|_| is_empty_tag(args.first())) {
@@ -60,7 +64,9 @@ impl Oracle for Facts<'_, '_> {
             }
             None => None,
         };
-        let Some(t) = &c.target else {
+        // 无唯一目标时，带构造完成标签的接收者按标签所示的类选目标
+        let tagged = if c.target.is_none() { self.ctx.tagged_target(opcode, m, iface, args.first()) } else { None };
+        let Some(t) = c.target.as_ref().or(tagged.as_ref()) else {
             return match per {
                 Some(PV::Const(v)) => Ret::Value(v),
                 _ => Ret::Unknown,
@@ -68,9 +74,16 @@ impl Oracle for Facts<'_, '_> {
         };
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
-        let r = match per {
-            Some(p) => Some(p),
-            None => {
+        // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）
+        let site = if opcode == classfile::op::INVOKESTATIC { self.sites.iter().find(|(o, _)| *o == off).map(|(_, a)| a) } else { None };
+        let r = match (per, site) {
+            (Some(p), _) => Some(p),
+            (None, Some(SiteAns::Never)) => {
+                self.ctx.dep(me, Dep::Never);
+                return Ret::Never;
+            }
+            (None, Some(SiteAns::Val(v))) => Some(PV::Const(v.clone())),
+            (None, None) => {
                 self.ctx.dep(me, Dep::Ret(t.clone()));
                 self.ctx.rvals.borrow().get(t).cloned()
             }
@@ -81,8 +94,9 @@ impl Oracle for Facts<'_, '_> {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
-            // 非空引用：先按本调用点的常量实参求值（可能得出字符串常量），求不出时取非空引用
-            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() => match eval() {
+            // 非空 / 带类型的无对象引用：先按本调用点的常量实参求值（可能得出字符串常量、null 或映像对象），
+            // 求不出时取该引用（求值结果是本调用点实参下的精确值，比汇合格精确且同样可靠）
+            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() || matches!(v, V::Ref { obj: None, .. }) => match eval() {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
@@ -159,6 +173,13 @@ impl Oracle for Facts<'_, '_> {
     }
     fn param_mirror_call(&self, i: u16, m: &MemberRef) -> Option<V> {
         let s = self.mirrors.get(i as usize)?.as_ref()?;
+        self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
+    }
+    fn site_mirror_call(&self, off: u32, m: &MemberRef) -> Option<V> {
+        if !self.caller_sites.borrow().contains(&off) {
+            return None;
+        }
+        let s = self.callers.as_ref()?;
         self.ctx.mirrors_call(m, s.iter().map(|c| &**c))
     }
     fn type_live(&self, ty: &str) -> bool {

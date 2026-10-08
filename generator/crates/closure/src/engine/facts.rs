@@ -120,6 +120,8 @@ pub(super) struct Ctx<'a> {
     pub(super) loaders: std::cell::OnceCell<crate::loaders::DefiningLoaders>,
     /// 映像 VM 模块表：包 → [(模块对象, 定义加载器为引导)]（装入映像时建立；类镜像模块读折叠用）
     pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
+    /// 映像 VM 模块对象 → 其映像标签（带 final 实例字段常量，如定义加载器；装入映像时建立）
+    pub(super) img_module_tags: std::cell::OnceCell<HashMap<u32, Rc<crate::absint::Obj>>>,
     /// 映像中构建期初始化类的静态字段初值（装入映像时建立，见 `static_init.rs`）
     pub(super) img_statics: std::cell::RefCell<Option<super::static_init::ImgStatics>>,
     /// 选择子形参缓存（见 `selector.rs`）
@@ -206,6 +208,9 @@ pub(super) struct Ctx<'a> {
     pub(super) mdeps: RefCell<HashMap<u32, BTreeSet<usize>>>,
     pub(super) memo_next: Cell<u32>,
     pub(super) ceval_depth: Cell<u32>,
+    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward.rs`），
+    /// 常量实参求值穿过转发方法不计深度（`consteval.rs`）
+    pub(super) forwarders: RefCell<HashMap<MemberRef, u64>>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }
@@ -236,6 +241,8 @@ pub(super) struct CallInfo {
     pub(super) str_kind: Option<crate::absint::StrKind>,
     /// 返回串的形状事实（`[facts.string_shapes]`，带形状标签的可空 String 引用）
     pub(super) shape: Option<V>,
+    /// 取调用者类（清单 `caller_class`）
+    pub(super) caller_class: bool,
 }
 
 
@@ -265,6 +272,12 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) level: Option<i32>,
     /// 形参的抽象对象集与按对象读过的形参（见 `obj_fields.rs`）
     pub(super) objs: super::obj_fields::ObjParams,
+    /// 被分析方法是 @CallerSensitive 时其调用者镜像值集所指的类（`caller.rs`；None = 非 CS 方法或值集含所指未知的 Class）
+    pub(super) callers: Option<BTreeSet<Rc<str>>>,
+    /// 取调用者类的调用点偏移（其结果的类镜像值集即 `callers`，见 [`Oracle::site_mirror_call`]）
+    pub(super) caller_sites: RefCell<BTreeSet<u32>>,
+    /// 静态调用点按克隆节点的返回值答复（`site_rets.rs`；空 = 全部走按成员的返回常量格）
+    pub(super) sites: super::site_rets::SiteTable,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {

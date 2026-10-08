@@ -416,6 +416,7 @@ S0 Boot 的 JVM 实载为参照列。
 5. **字符集构建期求值**：扩展提供者为空；常量名查找收窄。三例都是 −149 至 −151，团块差 173。
    - 2026-10-08 新基线复测：只收窄宿主名或只收窄常量名，Δ 都是 0。两者同时收窄的上界为 −141。扩展提供者不能折为空。挂起，等待用户就 U1 字符集域作出决定（见 7.3）。
 6. **日志链构建期求值**（随决定 L）：−52 至 −110。
+   - 2026-10-08 复测（分支 seed-chain）：TLR 种子读修复后，(L) 链与 `ObjectInputFilter$Config` 的 `System.getLogger` 是 HelloWorld / CollectorsDemo / DeepCopy 大集合的剩余持有者，切除上界 HelloWorld −2767、CollectorsDemo −2721；所缺精度机制见 7.5.3。
 7. **locale 适配器链构建期求值**：团块差 295（Formatter 单门只 −25 至 −28，需在其他门关闭后复测）。
    - 2026-10-08 实施（分支 locale-build，bbeb13a5）：HOST / SPI 适配器出闭包，三例 −18 至 −19 类、−132 至 −144 方法（超过 lcaux 上界，见 7.4）。不涉及 U1：`java.locale.providers` 已折为 null，偏好表恒为 [CLDR, JRE]。CLDR / JRE 本体（lcadapt 上界剩余 −112 至 −126 类）是宿主 locale 下的合法数据访问，不再按构建期求值处理，残余见 7.4 第 5 条。
 8. **类加载 / 资源封闭映像整体替换**（boot-layer 步骤 1–5）：本身减量小（团块差 18），但它是 ServiceLoader 类路径查找、jar 校验等多扇门的根；jar 校验不能用切写入点量化，以整体替换后的实测为准。
@@ -664,6 +665,115 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 
 - 本项收口。残余随「字符串常量上下文」立项（与 7.3 (b) 合并）。
 - 资源增量（DeepCopy +0.54 GB）在合批全量时观察。若内存不足机器受影响，(c) 的并段规则只在分配方为工厂调用点上下文时生效，可由 `obj_at` 单点调整。
+
+### 7.5 种子链：`Charset.isSupported` 根 → CLDR 适配器 / `new URL(securerandom.source)`（2026-10-08，分支 seed-chain）
+
+任务：收窄从 `[boot_region] 根 Charset.isSupported` 出发、经越界异常消息（`checkIndex` → `Preconditions.outOfBoundsMessage` → `String.format` → `Formatter`）与
+`ThreadLocalRandom` 种子（`TLR.<clinit>` → `RandomSupport` → `SecureRandom` → `SeedGenerator`）到达 `LocaleProviderAdapter.forType`（反射建 CLDR 适配器，约 725 类）
+与 `new URL(securerandom.source)`（jrt / jar 协议处理器）的链。基于 batch-1011 c9d00b9b。
+
+作业（产物在 `cluster_results/job/<tag>/01/build/ccomp/`）：
+
+- `sc-m1-c9d00b9b`：基线 + 种子链节点切除（`TLR.<clinit>@185`、`SecureRandom.getSeed`、`Preconditions.outOfBoundsMessage`、`SeedGenerator.<clinit>@8`）；
+- `sc-m2-d705cb20`：快照读修复后三例；
+- `sc-m3-d705cb20`：HelloWorld 九组切除（下表）；
+- `sc-g1-d705cb20`：`--gates` 门排名；
+- `sc-m4b-c9d00b9b` / `sc-m4n2-6da7e301`：切 `Shutdown.logRuntimeExit` 后，修复前 / 后三例对照；
+- `sc-ut-6da7e301`：全量单测。
+
+#### 7.5.1 实测
+
+种子链节点切除（c9d00b9b，HelloWorld 3304 / 18999）：四个节点单切、组合切，类 Δ 全为 0，方法 Δ 0 至 −11。链上每个节点都不是独立门。
+
+HelloWorld 九组切除（d705cb20）：
+
+| 切除 | 类 / 方法 | 说明 |
+|---|---:|---|
+| 基线 | 3304 / 18999 | |
+| `StringLatin1.toLowerCase@95`（特殊大小写分支） | 3304 / 18998 | |
+| `ConditionalSpecialCasing` 四个入口 | 3288 / 18882 | −16，见 7.5.3 第 4 条 |
+| `LocaleProviderAdapter.forType` | 3153 / 17888 | CLDR 仍在（经其他入口） |
+| **`Shutdown.logRuntimeExit`** | **537 / 1746** | 见下 |
+| `SecurityConstants.<clinit>` | 3299 / 18984 | |
+| `URL.getURLStreamHandler` | 2269 / 13021 | 不健全上界 |
+| `Charset.isSupported` | 3304 / 18998 | 根本身不是门 |
+| `ConditionalSpecialCasing` + `forType` | 3149 / 17867 | |
+| 以上全部 | 537 / 1746 | 与单切 `logRuntimeExit` 相同 |
+
+结论：**快照修复（7.5.2）之后，(L) 链 `Shutdown.logRuntimeExit` 是 HelloWorld 上两个目标的唯一持有者。**
+
+- 切 `logRuntimeExit` 后，`Formatter` / `Locale` / `TLR` / `Preconditions` / `Charset` 仍在闭包（越界异常消息链是 JVM 真实会走的路径，不切），而 `SecureRandom` / `SeedGenerator` / `CLDRLocaleProviderAdapter` / `jrt/Handler` / `LogManager` 全部出闭包。
+- 也就是说，`Charset.isSupported` 根经越界消息到 Formatter 这段只拉进 Formatter / Locale 本身；CLDR 适配器的反射构造与 `new URL(securerandom.source)` 都要经 (L) 链（`Logger` → `ResourceBundle` / `ServiceLoader` → `SplittableRandom.<clinit>` → `RandomSupport.initialSeed` → `SecureRandom`；以及 JUL `LogManager` 的 locale / jar URL 访问）才到达。
+- boot-image 计划 §5.9.5 与 §5.9.7（log-chain2，同在 c9d00b9b 上）记录的「切 logRuntimeExit 类差 0、路径 A 与 ③ 收益上限 0、不实现」以快照修复前为前提——那时 TLR 种子链是 (L) 链的后备持有者（下表「修复前 + 切」= 3304）。快照修复后两者不再互为后备，路径 A + ③ 的类收益上限变为 HelloWorld −2767、CollectorsDemo −2721，**该决定应重新评估**（§5.9.7 已加注）。
+
+切 `logRuntimeExit` 时修复前后对照（三例，m4）：
+
+| 例 | 修复后基线 d705cb20 | 修复前 + 切 c9d00b9b | **修复后 + 切 6da7e301** |
+|---|---:|---:|---:|
+| HelloWorld | 3304 / 18999 | 3304 / 18998 | **537 / 1746** |
+| CollectorsDemo | 3304 / 18995 | 3304 / 18994 | **583 / 1898** |
+| DeepCopy | 3553 / 21572 | 3553 / 21573 | 3553 / 21572 |
+
+（HelloWorld 修复前基线 `sc-m1` 为 3304 / 18999，类集合与修复后相同。）
+
+- **两条链互为后备，单关任一条都是 0。** 修复前切 `logRuntimeExit`，`TLR.<clinit>@185` 的 `new SecureRandom()` 仍把 `SecureRandom` → `SeedGenerator` → `new URL(securerandom.source)` → jar / jrt 协议处理器 → … 整个大集合带进来（3304 不变）；修复后不切 `logRuntimeExit`，(L) 链照样持有（3304 不变）。两者都关，HelloWorld / CollectorsDemo 降到 537 / 583。所以快照修复是必要的一半，另一半是 (L) 链（7.5.3）。
+- **DeepCopy 的持有者是同一缺口的另一个入口**：`ObjectInputFilter$Config.<clinit>@38` → `System.getLogger("java.io.serialization")` → `LazyLoggers.getLogger@15` → `getLoggerFromFinder` → `LoggingProviderImpl` → `LogManager` → `Logger.setupResourceInfo` → `ResourceBundle` → `ServiceLoader`（服务类型未定）→ `SplittableRandom.<clinit>` → `RandomSupport.initialSeed` → `SecureRandom.getSeed` → `SeedGenerator`。HotSpot 上调用方同在 java.base，`isSystem` 为真，走惰性 / 替身日志器，同样不加载 `LogManager`。7.5.3 第 1、2 条一并覆盖这两个入口；`logRuntimeExit` 只是其中之一，终态不应按入口切。
+
+#### 7.5.2 已实施：启动快照读不随属性表逃逸失稳（d705cb20 / 6da7e301）
+
+- 缺口：`ThreadLocalRandom.<clinit>` 经 `VM.getSavedProperty("java.util.secureRandomSeed")` 读种子开关。这个读取读的是 VM 启动时保存的属性快照，运行期 `System.setProperty` 改不到它；但分析器把它当普通属性读，HelloWorld 上 Properties 逃逸（`sysprops_unstable.all`）后读值失稳为 Top，`TLR.<clinit>@185` 的 `new SecureRandom()` 分支保活。
+- 修复（通用，清单驱动）：`vm_intrinsics.toml` 的属性读者条目新增 `snapshot = true` 标志（`manifest/sysprops.rs::PropRead.snapshot`），标了的读者只按启动表取值，不登记逃逸、不查失稳键（`engine/sysprops.rs::prop_read`、`sysprops_key.rs::absent_read`）。`snapshot` 与 `receiver` 互斥（解析时报错）。登记一条：`VM.getSavedProperty`。
+- 效果：`TLR.<clinit>` 常量 pc172 = null、pc177 = false，死区 [183, 236]（`SecureRandom` 分支不可达）。单独看三例类数不变（HelloWorld / CollectorsDemo 3304、DeepCopy 3553），因为 (L) 链仍持有同一大集合；与 (L) 链关闭合起来才兑现（7.5.1 第二表：HelloWorld −2767、CollectorsDemo −2721）。单测 `snapshot_read_ignores_props_escape`（closure_cli.rs）守护折叠本身。
+- JDK 21 的 `RandomSupport.secureRandomSeedRequested` 用 `doPrivileged(new GetPropertyAction(k))` 读同一键，不经快照，不受本修复影响（见 7.5.3 第 1 条）。
+
+#### 7.5.3 剩余缺口（关闭 (L) 链所需）
+
+> **2026-10-09 状态（分支 logger-chain，ef6a1249）**：第 1、2 条已实施，第 3 条由现有字段值表在第 1、2 条落地后自然成立（不需新机制），第 4 条未做。三者合起来只关掉 finder / `LogManager` 段，(L) 链剩下的持有者是 `logRuntimeExit@10 isLoggable(DEBUG)`（③，见 7.5.6）。实施、实测与健全性论证见 boot-image 计划 §5.9.7「2026-10-09 路径 A 落地」。下面保留原始分析。
+
+
+HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter$Config.<clinit>` 等）的路径：`System.getLogger`→ `LazyLoggers.getLogger` → `DefaultLoggerFinder.isSystem(module)` 为 true → `getLazyLogger` → `useLazyLoggers()` → `JdkLazyLogger` → `BootstrapLogger.getLogger` → `useSurrogateLoggers()` → `SurrogateLogger`，不加载 `LogManager`。分析器上已折叠：`BootstrapLogger.isBooted()` = true、`useLazyLoggers` 的 CUSTOM 分支、`useSurrogateLoggers` 的 `detectedBackend == JUL_DEFAULT`。仍走偏处：`LazyLoggers.getLogger@15` 因 `isSystem` 未折叠而进 `getLoggerFromFinder` → `LoggingProviderImpl` → `LogManager`。所缺机制：
+
+1. **转发克隆的按调用点返回值。** `doPrivileged` / `executePrivileged` 已按调用点克隆（G1，`forward.rs`），但克隆体的返回值在 `rvals` 按成员汇合，调用点取到的是全部特权块返回值之并（Top）。
+   `isSystem` = `doPrivileged(new DefaultLoggerFinder$1(m))`（`run()` = `VM.isSystemDomainLoader(m.getClassLoader())`），`RandomSupport.secureRandomSeedRequested` = `doPrivileged(new GetPropertyAction(k))`（各克隆内已折叠为 null），都卡在这里。
+   终态做法：方法节点返回值按节点记录（现有 `nret` 只记实例方法，扩到静态克隆节点）；`Oracle::invoke_result` 带上调用点偏移，被调是分派转发方法时按 `static_ctx` 同一规则求出克隆节点、取其节点返回值，并按节点登记依赖。需要改 absint 的 Oracle 接口与依赖复核，属结构性改动，本分支未做。落点：
+   - `absint/step.rs` 的 invoke 分支已有指令偏移 `off`，`Oracle::invoke_result` 增加该参数（4 处实现：`engine/facts/oracle.rs`、`engine/ctor_init.rs` 与两个测试桩）；
+   - `Facts` 只持 `&Ctx`，查克隆节点需要只读的「(调用方节点, 偏移) → 上下文 id」与「(成员, 上下文) → 节点」映射（`ctxsel.rs::site_ctx_in` 现在边查边建，要拆出只查不建的读法，查不到即退回 `rvals`，健全）；
+   - 节点返回值：`obj_rets.rs::obj_ret_note` 现在对静态方法直接返回，改为静态克隆节点也记 `nret`，移到 `Ctx` 供 oracle 读；读者按节点登记新依赖（`Dep::Ret` 只在按成员汇合值变化时复核，汇合值已是 Top 后节点值变化不会通知读者）。
+   - 单独落地时类数不变（`RandomSupport` 的读值折叠了，但 (L) 链仍持有大集合），须与第 2、3 条一起验收。
+2. **调用方模块。** `System.getLogger` 用 `Reflection.getCallerClass()` 取调用方；要把 `Shutdown.class.getModule()` 折成映像里 java.base 的 Module（类加载器 null），需要 `@CallerSensitive` 调用点按静态调用方给出类字面量，并经静态方法 `LazyLoggers.getLogger` / `isSystem` 传到 `DefaultLoggerFinder$1`（形参常量上下文）。
+3. **`logManagerConfigured` 乐观折叠。** 它也决定 §5.9.7 所说的另一条 finder 入口：`JdkLazyLogger` 取用时 `LazyLoggerAccessor.wrapped` → `BootstrapLogger.getLogger(accessor)`，`useSurrogateLoggers()` 为真时建 `SurrogateLogger`，为假才 `createLogger` → `LazyLoggers$1.apply` → `getLoggerFromFinder`。 只由 `redirectTemporaryLoggers` 写 true，而它只经 `LogManager` 可达；需要按「写入点可达才计入」的原始类型静态字段折叠（§5.9.4 所述 ② 式机制），与 1、2 形成互为前提的环，须乐观求解（先假设 false，写入点进闭包再撤销）。
+4. **`Locale.ROOT` 的大小写特判。** `SocketPermission.init@302` 等处 `toLowerCase(Locale.ROOT)`，ROOT 的语言是 ""，不可能等于 "tr" / "az" / "lt"，特殊大小写分支永不执行。`ref_eq` 现在只折 null / 映像对象 / 类字面量，不折内容不同的字符串常量；可健全地折为 false。但 `Locale` 是运行期初始化类，ROOT 不是映像对象，`language` 读不出常量；收益上界只有 −16 类（上表 `ConditionalSpecialCasing` 行），优先级低。
+
+`--gates`（`sc-g1-d705cb20`）没有把 `logRuntimeExit` 排为候选：它的排名只取首达链上的枢纽方法（`executePrivileged` 465 非单调、`Charset.lookup` 150、`getLoggerFromFinder` 71 …），而 `logRuntimeExit` 是 `Thread.start0` → Terminator 信号链上的叶子入口。人工切除表是本项的依据。
+
+#### 7.5.4 `param_string_constants_fold_switch` 状态
+
+断言 HelloWorld < 1000 类、闭包不含 `sun/net/www/protocol/jrt/Handler`。当前 3304 类、含 jrt Handler，**仍失败**。切 `logRuntimeExit` 后为 537 类、无 jrt Handler，满足断言——即 (L) 链关闭（U12 ③ 终态）后此测试自然通过；不需要也不应在种子链上另做切除（种子链节点都不是独立门，7.5.1）。
+
+#### 7.5.4a 单测（`sc-ut-6da7e301`，sg2）
+
+- 与 batch-1011 a88d7075（`b1011-ut-a88d7075`）对照：`container_elements_per_object`、`param_string_constants_fold_switch`、`reflect_new_array_element_precision`、`known_gate_ranks_first` 两边同败；closure_cli 通过数 7 → 8（新增 `snapshot_read_ignores_props_escape` 通过）。
+- **新增失败 `profile_union_key_and_coverage`**（profile_cli.rs:84，`--flow-batch 1 --hash-seed 7` 后 `content_digest` 不同）：本分支头重跑两次都失败、c9d00b9b 重跑通过（作业 `sc-prof-060185bc` / `sc-prof-c9d00b9b`）。逐项对照（`sc-pdiag-060185bc`）：类集合相同（3338），差异只有一处折叠——`CharsetEncoder.onMalformedInput` 的空值检查死区 [4, 14] 在缺省批量下成立、`--flow-batch 1` 下不成立（方法 19198 / 19197，一个类 code ↔ init）。这是求值顺序敏感的非单调折叠，与已知跳过的 `closure_independent_of_order` / `closure_independent_of_hash_seed` 同类（b1008 也出现过此测试失败）；快照修复改变了两个 fixture 上的求值次序而使它显现。未定位根因：续作先用 `--flows` 查 `onMalformedInput` 实参在两种批量下的值集，确认是哪个调用点的实参在乐观阶段曾为非空、后被撤销。
+
+#### 7.5.5 续作入口
+
+- 入口是 boot-image 计划 §5.9.4（U12 ③）：按 7.5.3 第 1 → 2 → 3 条的顺序实施。验收：HelloWorld ≤ 640 类（boot-image 计划 §5.5.6 的 Linux 目标；本测切除上界 537）、CollectorsDemo 同量级（上界 583）、DeepCopy 的 `SecureRandom` / `SeedGenerator` / `LogManager` 为 0（`ObjectInputFilter$Config` 入口随第 1、2 条关闭）、`param_string_constants_fold_switch` 通过。
+- 第 1 条同时折叠 `RandomSupport.secureRandomSeedRequested`，使 `SplittableRandom` / `ThreadLocalRandom` 种子路径不再经 `SecureRandom`（JVM 在默认配置下也不走），是独立的正确性 / 精度收益。
+- 与其他线的交叠：本分支只改 `sysprops.rs` / `sysprops_key.rs` / `manifest/sysprops.rs` / `closure_cli.rs` 与 `vm_intrinsics.toml` 读者段；与 annot-sig / fix-1010 无文件交叠；charset-ext / reflect-marker 也改 `vm_intrinsics.toml`（不同段，三方合并干净）与本报告（不同小节）。
+
+#### 7.5.6 logger-chain 实施结果（2026-10-09，头 ef6a1249，作业 `lc-v8-ef6a1249`，sg2）
+
+| 例 | c7fbaf8c 基线 | ef6a1249 | 切 `logRuntimeExit` 上界 |
+|---|---:|---:|---:|
+| HelloWorld | 3304 / 18999 | 3233 / 18380 | 537 / 1746 |
+| CollectorsDemo | 3304 / 18994 | 3233 / 18387 | 583 / 1898 |
+| DeepCopy | 3553 / 21572 | 3511 / 21234 | — |
+
+- 已实施（通用机制，生成器无类名字面量）：@CallerSensitive 调用者镜像折叠 `getModule`；静态调用点按克隆节点取返回值（乐观、选择子目标按可能克隆预判）；映像 / 构造完成标签接收者的目标选择与常量实参求值绑定；常量实参求值穿过分派转发方法不计深度。
+- 三例的 `getLoggerFromFinder` / `LoggerFinderLoader.service` / `redirectTemporaryLoggers` 均不在闭包，`logManagerConfigured` 折成 false、`useSurrogateLoggers` 折成 true；DeepCopy 的 `LogManager` 为 0（`ObjectInputFilter$Config` 与 `LocaleServiceProviderPool.getLocalizedObjectImpl` 两个入口一起关闭）。
+- 未达标：HelloWorld / CollectorsDemo 仍为 3233，`SecureRandom` / `SeedGenerator` 仍在（DeepCopy 同）。首达链改为 `Shutdown.logRuntimeExit@74` → 替身日志器 `SimpleConsoleLogger.log` → `ZonedDateTime.now` → `ZoneRulesProvider.<clinit>` → `ServiceLoader` → jar URL → `Files.createTempFile` → `TempFileHelper.<clinit>` 的 `new SecureRandom()`：替身日志器的 `log` 本身持有大集合，须把 `@10 isLoggable(DEBUG)` 折成 false（HotSpot 上缺省级别 INFO，DEBUG 不记录）。所缺三项机制（抽象对象接收者的 `wrapped()` 收窄、虚调用按调用点映像实参求值、替身 `level` 字段按可达写入点）见计划 §5.9.7「剩余：③」。
+- `param_string_constants_fold_switch` 仍失败（3233 类、含 jrt Handler），随 ③ 转绿。
+- 单测：`lc-ut-debb5179`（kr2，被新头取代后停止）停止前的失败只有 `container_elements_per_object` 与 `param_string_constants_fold_switch`，两者在 7.5.4a 的基线上同样失败；以 sg2 上的 `lc-ut-ef6a1249` 为准（交接时仍在跑，结果在 `cluster_results/job/lc-ut-ef6a1249/`），对照的已知失败：`profile_union_key_and_coverage`、`reflect_new_array_element_precision`（fix-1011）以及上面两项。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 

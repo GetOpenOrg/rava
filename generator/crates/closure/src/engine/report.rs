@@ -345,6 +345,63 @@ impl<'a> Engine<'a> {
             out.extend(v.into_iter().take(60).map(|(k, n)| format!("  {n}\t{k}")));
             return out;
         }
+        // 常量诊断：`@vals:<方法标签子串>`——匹配方法节点（前 12 个）的形参常量、静态调用点答复表、节点 / 成员返回值与常量事件
+        if let Some(q) = pat.strip_prefix("@vals:") {
+            let ms: Vec<usize> = (0..self.methods.len()).filter(|&m| self.method_label(m).contains(q)).take(12).collect();
+            for m in ms {
+                let key = &self.methods[m].key;
+                out.push(format!("  {}", self.method_label(m)));
+                out.push(format!("    pvals {:?}", self.pvals.get(&m)));
+                let cs: Vec<String> = self.callers.get(&m).into_iter().flatten().take(12).map(|&c| self.method_label(c)).collect();
+                out.push(format!("    callers {cs:?}"));
+                out.push(format!("    sites {:?}", self.site_used.get(&m)));
+                out.push(format!("    sret {:?} nret {:?} rvals {:?}", self.sret.get(&m), self.nret.get(&m), self.ctx.rvals.borrow().get(key)));
+                if let Some((mb, unwrapped)) = self.caller_diag(m) {
+                    let s = self.set_of(Node::S(mb, CALLER));
+                    let el: Vec<String> = s.classes.iter().take(24).map(|x| match self.mirrors.get(&x) {
+                        Some(&t) => format!("{}", self.names[t as usize]),
+                        None => format!("?{}", self.names[x as usize]),
+                    }).collect();
+                    out.push(format!("    caller_set n={} open={} unwrapped={} {el:?}", s.classes.len(), s.open.len(), unwrapped));
+                }
+                if let Some(a) = self.site_analysis(m) {
+                    let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
+                        absint::Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
+                        absint::Event::Return(v) => Some(format!("@{o} ret {v:?}")),
+                        absint::Event::Invoke { opcode, mref, iface, args } => {
+                            // 本调用点按常量实参求值的结果（诊断用，不登记依赖）
+                            let t = self.ctx.call_info(*opcode, mref, *iface).target.clone();
+                            let ev = t.as_ref().map(|t| self.ctx.const_eval(None, t, args));
+                            let tr = match (&t, &ev) {
+                                (Some(t), Some(None)) if args.iter().any(|a| a.obj().is_some()) => format!(" trace[{}]", self.ctx.ceval_trace(t, args)),
+                                _ => String::new(),
+                            };
+                            // 按对象返回值（实例调用）：目标的对象值 / 通配值
+                            // 按对象返回值（实例调用）：同名同描述符各目标的对象值 / 通配值
+                            let orv = if *opcode != classfile::op::INVOKESTATIC {
+                                let same = |k: &MemberRef| k.name == mref.name && k.desc == mref.desc;
+                                let ov: Vec<String> = self.ctx.orvals.borrow().iter().filter(|(k, _)| same(k)).flat_map(|(k, ov)| {
+                                    ov.iter().take(6).map(move |(o, v)| format!("{}:{}={v:?}", k.owner, self.names[*o as usize]))
+                                }).take(12).collect();
+                                let ow: Vec<String> = self.ctx.orwild.borrow().iter().filter(|(k, _)| same(k)).map(|(k, v)| format!("{}={v:?}", k.owner)).take(6).collect();
+                                let objs: Vec<String> = self.set_of(Node::P(m, 0)).classes.iter().filter(|x| self.objs.contains_key(x)).take(6).map(|o| self.names[o as usize].to_string()).collect();
+                                format!(" orv {ov:?} orw {ow:?} this {objs:?}")
+                            } else {
+                                String::new()
+                            };
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}", mref.name))
+                        }
+                        absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
+                            let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);
+                            format!("@{o} field {} open {} fopen {fopen} hw {}", fi.key, fi.open, self.ctx.hw_written(&fi))
+                        }),
+                        _ => None,
+                    }).collect();
+                    out.push(format!("    conservative {} events {}", a.conservative, evs.join(" ")));
+                }
+            }
+            return out;
+        }
         // 服务查找诊断：`@svcunk`——服务 Class 实参所指未知的查找站点
         if pat == "@svcunk" {
             for &(m, off) in &self.seeds.services.unknown_sites {

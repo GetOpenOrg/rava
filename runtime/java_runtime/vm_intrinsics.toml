@@ -129,7 +129,7 @@ callsite_typed = [
 #           剪除 (分支, L) 之间的直线段（段内无外部跳入 / 异常表端点时才剪）。
 [vm_constants]
 # （VM.getSavedProperty 已移出：按字节码读映像中的 savedProps——initPhase1 构建期保存的属性表，
-# 引导映像第 4 步）
+# 引导映像第 4 步；分析器按 [facts.system_properties.readers] 的启动快照读取折叠）
 null_returns = [
     # 类路径运行模型（[[intrinsic]] kind = class_path）：无运行期类路径加载源 / 类路径上无可定义的字节码
     "jdk/internal/loader/URLClassPath.toFileURL:(Ljava/lang/String;)Ljava/net/URL;",
@@ -305,7 +305,7 @@ queries = [
 # 不经 MethodHandle 访问器——原生二进制不在运行期生成 LambdaForm
 "jdk.reflect.useNativeAccessorOnly" = "true"
 
-# 读取入口：实参序号含接收者；receiver = 接收者须为系统属性表对象；default = 缺省值实参。
+# 读取入口：实参序号含接收者；receiver = 接收者须为系统属性表对象；default = 缺省值实参；snapshot = 读启动快照（见下）。
 # 包装方法（System.getProperty 等）由分析器从字节码识别：返回值恰是入口读取、键来自形参
 [facts.system_properties.readers]
 "java/util/Properties.getProperty:(Ljava/lang/String;)Ljava/lang/String;" = { receiver = true, key = 1 }
@@ -314,6 +314,12 @@ queries = [
 "sun/security/action/GetPropertyAction.privilegedGetProperty:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { key = 0, default = 1 }
 # 删除并返回原值：结果即该键的读取（启动时不存在、且从未写入的键为 null）
 "java/util/Properties.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { receiver = true, key = 1 }
+# 启动快照（snapshot）：VM.savedProps 是 initPhase1 交给 VM.saveProperties 的初始属性表（此后 JDK 内无写入方：
+# getSavedProperties 的调用者 VMSupport / JVMCI 只读），取值与上表同——System.props 之外多出的 VM 私有键
+# （sun.nio.MaxDirectMemorySize 等）由 [concrete.boot] vm_props 提供，原生二进制不提供，同为不存在。
+# 快照不随运行期 System.setProperty / 属性表对象逃逸变化，读取不查不折叠集合（如
+# ThreadLocalRandom.<clinit> 读 java.util.secureRandomSeed：不存在 → null → 不取 SecureRandom 种子）
+"jdk/internal/misc/VM.getSavedProperty:(Ljava/lang/String;)Ljava/lang/String;" = { key = 0, snapshot = true }
 
 # 按键改写入口（接收者为系统属性表对象时只改写 key 实参所指的键）。remove = 删除：只可能改变启动时
 # 存在的键（values / dynamic），只被删除、从未写入的键仍读作不存在；删除键推不出时按拼接段匹配 values 键，

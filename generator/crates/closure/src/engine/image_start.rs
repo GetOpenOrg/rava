@@ -92,6 +92,16 @@ impl<'a> Engine<'a> {
             memo: super::image_memo::MemoState::default(),
             data: data.clone(),
         }));
+        // 模块对象的映像标签带 final 字段常量（定义加载器等）：类镜像模块读折叠出的对象可再读这些字段
+        let tags: HashMap<u32, Rc<Obj>> = data
+            .modules
+            .iter()
+            .filter_map(|m| match self.image_obj_pv(m.obj, true) {
+                PV::Const(V::Ref { obj: Some(t), .. }) => Some((m.obj, t)),
+                _ => None,
+            })
+            .collect();
+        let _ = self.ctx.img_module_tags.set(tags);
         let st = self.img.as_ref().expect("映像").statics.clone();
         self.image_statics_install(&st, &data.build_time);
         // 残差调用 / 区段在其构建期档位的上下文中分析（`levels_boot.rs`）；重放 native 与运行期初始化类在本体
@@ -268,15 +278,20 @@ impl<'a> Engine<'a> {
         let mut finals: Vec<(MemberRef, V)> = Vec::new();
         // 内容延迟的字符串：启动序列按宿主值改写其内容字段（value / coder / hash），不取字段标签
         if let (IBody::Inst(fs), true, None, None, false) = (&x.body, deep, &x.deferred, &x.mirror, x.ty == STRING) {
-            for (decl, name, v) in fs {
-                let Some(f) = self.h.class(decl).and_then(|c| c.fields.iter().find(|f| f.name == *name && f.access & classfile::acc::FINAL != 0 && !f.is_static()).map(|f| f.desc.clone())) else { continue };
-                let pv = match *v {
-                    IVal::R(r) => self.image_obj_pv(r, false),
-                    v => self.image_pv(v),
-                };
-                if let PV::Const(c @ (V::Int(_) | V::Long(_) | V::Null | V::Str(..))) = pv {
-                    finals.push((MemberRef { owner: decl.clone(), name: name.clone(), desc: f }, c));
+            // 映像只列非缺省值：类层次上的 final 实例字段未列出即缺省值（null / 0）
+            let mut cls = Some(x.ty.clone());
+            while let Some(c) = cls.take().and_then(|c| self.h.class(&c)) {
+                for f in c.fields.iter().filter(|f| f.access & classfile::acc::FINAL != 0 && !f.is_static()) {
+                    let pv = match fs.iter().find(|(d, n, _)| *d == c.name && *n == f.name).map(|e| e.2) {
+                        Some(IVal::R(r)) => self.image_obj_pv(r, false),
+                        Some(v) => self.image_pv(v),
+                        None => default_pv(&f.desc),
+                    };
+                    if let PV::Const(v @ (V::Int(_) | V::Long(_) | V::Null | V::Str(..))) = pv {
+                        finals.push((MemberRef { owner: c.name.clone(), name: f.name.clone(), desc: f.desc.clone() }, v));
+                    }
                 }
+                cls = c.super_name.clone();
             }
             finals.sort_by(|a, b| (&a.0.owner, &a.0.name).cmp(&(&b.0.owner, &b.0.name)));
         }
