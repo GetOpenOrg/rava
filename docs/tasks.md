@@ -90,20 +90,14 @@
 > 下方依赖树与活跃任务表已于同日整表对齐本节。
 
 - **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f（origin、github 均已推）。之后的工作都在合批分支上，未合入集成分支。
-- **batch-1007**（98e733c9）：boot-image-s3、fix-jca-subset（已于 b6ed3950 合入集成分支）、user-unreach-stubs 早期版本。抽查 36 通过，失败 2 例：TestBootLayer（需引导映像第 5 步）、TestClassResourceStream（需 c1d-url-b2）。被 batch-1008 取代，未单独合入。
-- **batch-1008**（6934dc93 → 修复 b558e0c2，修复进行中）：以下分支均为「已合入 batch-1008，待合批验证」——
-  - user-unreach-stubs（108558e0）：链外方法存根；use 行扫描按调用链门控；
-  - c1d-url-b2（3391eb2d）：c1d §30.17 四个成因；
-  - boot-image-s4（c614f840）：引导映像第 4 步，`#[jvm_boundary]` 23 → 14，去除无映像回退，getClass 接口界收窄 `Recv::Bounded`；S2 接收者精度已修但闭包不降；
-  - enum-values-direct（59451c29）：直连反射调用，`fold_direct_calls` = 1，类数 3011 未降（另 4 个调用点使 `Method.invoke` 入链）；
-  - closure-composition（c3a06331）：闭包构成报告与脚本。
-  - 首次验证（6934dc93）：抽查 41/41 因映像求值失败；单测 closure `--lib` 11 失败、driver 层 32 失败。修复 b558e0c2 后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G），定位中。合批语义取舍见 c1d §30.18。
-- **进行中**：closure-gates（门自动排名 `rava closure --gates`）；boot-image-s5（引导映像第 5 步 jimage + JceSecurity 6，`#[jvm_boundary]` 14 → 0，含 U14 `java.home` 钉值）；u12-props（基于 b558e0c2，U12 机制 ①③ + U14 `line.separator` / `file.encoding` 钉值）；docs-align（文档对齐）。
-- **待派**：U13 `Class.genericInfo` 入映像。
-- **派发规则（2026-10-08）**：子代理上限 5；有空名额即按已定顺序派发，不需再请示用户；子代理不得再派代理。
+- **batch-1009**（d5a2cb5d，验证中：全量单测 + 抽查）：batch-1008（user-unreach-stubs、c1d-url-b2、boot-image-s3 / s4、enum-values-direct、closure-composition、docs-align；HelloWorld 闭包 OOM 修复 f19e46e0；合批语义取舍见 c1d §30.18）+ closure-gates（c6a19c4c，`rava closure --gates`）+ boot-image-s5（57a9cec2，第 5 步 jimage + JceSecurity，`#[jvm_boundary]` 14 → 0，U14 `java.home` 钉值）。batch-1007 / 1008 已被取代。
+- **batch-1010**（c3f3e0f9，攒批中，待 batch-1009 放行后验证）：u13-generic（28ae3df8，U13 `Class.genericInfo` 入映像；机制生效但 HelloWorld 闭包 −0——`sun/reflect/generics` 另经注解签名解析与 open(Comparable) 键两条路径可达，见引导映像 §5.6.9）。
+- **进行中**：u12-props（U12 机制 ①③ + U14 `line.separator` / `file.encoding` 钉值）；reflect-direct（闭包收窄 ①：`Method.invoke` 全入口直连，先以 `--gates` 出新基线数）；boot-image-s6（第 6 步：非引导类构建期初始化）；ensure-init（闭包收窄 ③：`ensureClassInitialized`）。
+- **待派（按序）**：注解签名解析出闭包（java_meta 构建期求值 + `AnnotationParser` 可达性，U13 后续）；闭包构成报告 §七其余项——JCA、字符集、locale、类加载封闭映像、容器元素（以 `--gates` 实测排名为准）。
+- **派发规则（2026-10-08）**：子代理上限 5；有空名额即按已定顺序派发，不需再请示用户；子代理不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理（用户 10-08）。
 - **用户已定（2026-10-08）**：U12 接受为 U1 例外（日志路径属性构建期取值，①③ 解除挂起）；U13 `Class.genericInfo` 入映像；去除无映像回退保留；U14 部分修订 U1——`line.separator`（按目标三元组）、`file.encoding`（UTF-8）、`java.home`（构建期值）构建期钉值，`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取，每项实测闭包类数、无收益不钉。见引导映像计划 §8.4。
 - **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
-- **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents。
+- **known_failures**：batch-1008 新增 TestBootLayer（第 5 步已实施，随 batch-1009 复验）、删除 TestXmlSaxEvents。
 - **C4 全量**：尚未开始。前置：合批合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。
 - **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
 
