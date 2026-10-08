@@ -19,8 +19,6 @@ use resolve::{ArchiveView, Origin};
 pub struct ServicesCfg {
     /// 服务查找入口 `类.方法:描述符` → 服务 Class 形参序号（不含接收者，0 起）
     pub lookups: HashMap<String, usize>,
-    /// 模块服务目录的装填入口（生成器在引导期按 `services` 事实调用）：有模块 provider 入选时作根
-    pub population: Vec<String>,
 }
 
 impl ServicesCfg {
@@ -31,12 +29,7 @@ impl ServicesCfg {
             .and_then(|v| v.as_table())
             .map(|t| t.iter().filter_map(|(k, v)| Some((k.clone(), usize::try_from(v.as_integer()?).ok()?))).collect())
             .unwrap_or_default();
-        let population = sec
-            .get("population")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        ServicesCfg { lookups, population }
+        ServicesCfg { lookups }
     }
 }
 

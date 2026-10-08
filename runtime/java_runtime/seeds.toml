@@ -228,14 +228,9 @@ mutators = [
 # provider 由 ServiceLoader 按服务目录反射构造（Class.forName + 无参构造器 / provider()），无静态调用边。
 # 目录由分析器从所用 JDK 的 jmod 模块描述符（JVM 默认引导层：API 根集 + requires 闭包 + uses 绑定）与
 # 用户 / 库档案的 META-INF/services 得出，不在此登记类名；入选服务与 provider 导出为 closure.json
-# seeds.services（运行期 build.rs 按它装填引导服务目录，见 boundary-narrowing §6.11 项 5 / 决策 4）。
+# seeds.services。运行期的引导层服务目录由引导映像物化（Module.defineModules 按系统模块描述符登记，构建期执行，
+# boot-image §5.7），类路径 provider 经 class_path 内建读嵌入的 META-INF/services。
 #   lookups     服务查找入口 → 服务 Class 形参序号（不含接收者，0 起）：该实参值集里的类镜像即被查找的服务
-#   population  模块服务目录的装填入口：有模块 provider 入选时作根（引导期按事实逐条调用）
-[services]
-population = [
-    "jdk/internal/module/ServicesCatalog.create:()Ljdk/internal/module/ServicesCatalog;",
-    "jdk/internal/module/ServicesCatalog.addProvider:(Ljava/lang/Module;Ljava/lang/Class;Ljava/lang/Class;)V",
-]
 [services.lookups]
 "java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/ModuleLayer;Ljava/lang/Class;)V" = 2
 "java/util/ServiceLoader.<init>:(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/ClassLoader;)V" = 1
@@ -283,5 +278,6 @@ root = "java/util/ResourceBundle"
 # 生成项目 main 调用映像启动序列；映像求值失败即构建失败，不存在运行期引导初始化表。
 
 # ── 模块资源（jmod 内的非类数据文件）不在此登记：生成器由调用链上方法体的 ldc 资源名推导
-# （`generator/crates/input/src/resources.rs`），并入 [bundles] 求得的属性文件资源束与 [resource_lookups] 按名求出的资源，以 include_bytes! 嵌入，
-# 运行时由 ClassLoader 的资源查询承载。
+# （`generator/crates/input/src/resources.rs`），并入 [bundles] 求得的属性文件资源束与 [resource_lookups] 按名求出的资源，
+# 写成本程序 jimage（`${java.home}/lib/modules`）嵌入用户侧元数据；运行时 NativeImageBuffer.getNativeMap 交出该映像，
+# ClassLoader / BootLoader / SystemModuleReader 的资源查询按字节码读取（boot-image §5.7）。

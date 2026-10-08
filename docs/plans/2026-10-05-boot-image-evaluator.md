@@ -120,7 +120,7 @@ c1d §25.3 在进入 `boot2` 之前就失败，失败点依次是 `registerNativ
 | 类别 | 例子（探针实际命中的加 ✓） | 处理 |
 |---|---|---|
 | 平台属性中的宿主值 | `os.version` ✓、`user.dir` / `user.home` / `user.name`、`java.io.tmpdir`、`file.encoding` 的宿主取值 | `defer_value`：返回延迟字符串，内容数组标为延迟 |
-| 影响控制流的属性 | `sun.jnu.encoding` ✓（initPhase1 中 `Charset.isSupported` 分支）、`stdout/stderr.encoding` ✓、`file.encoding`、`line.separator`、`java.home` | **运行期取宿主值**（U1）：`defer_value`；求值器把依赖它们的部分残差化（下文「残差化」），不钉值 |
+| 影响控制流的属性 | `sun.jnu.encoding` ✓（initPhase1 中 `Charset.isSupported` 分支）、`stdout/stderr.encoding` ✓、`file.encoding`、`line.separator`、`java.home` | **运行期取宿主值**（U1）：`defer_value`；求值器把依赖它们的部分残差化（下文「残差化」），不钉值；`java.home` 已由 U14 改为构建期钉值（§5.7.3） |
 | 时间 / 熵 | `nanoTime`（ImmutableCollections SALT）✓、`currentTimeMillis`、`/dev/urandom` | SALT 由 JDK 钩子 `CDS.getRandomSeedForDumping` 给固定种子 ✓；其余时间和熵为延迟值 |
 | 机器资源 | `availableProcessors` ✓、`maxMemory` ✓ | 延迟值并带污点（终态，见下）；探针按 `defer` 读成 0 是**错误简化** |
 | 文件系统 | `canonicalize0` / `getBooleanAttributes0` ✓（空 class path 即 cwd） | 宿主路径：延迟值。`URLClassPath.toFileURL` ✓ 为 `defer_call`，构建期得到占位对象、运行期重放。java.home 只读树是构建期输入，按 §4.3 处理 |
@@ -948,6 +948,70 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 验证见 §5.6.6 第 6 条。
 
+### 5.7 第 5 步与第 6 步的 JceSecurity 部分：jimage 嵌入、`${java.home}` 虚拟树、`#[jvm_boundary]` 14 → 0（2026-10-08，分支 `boot-image-s5`，基于 batch-1008 b558e0c2）
+
+提交：82c49923（jimage 嵌入 + ClassLoader / BootLoader 回字节码 + U14 钉值）、f196dd71（JceSecurity 回字节码 + 虚拟树 NIO）。本节只有本机 `cargo check` 结论，运行期结论待合批验证（§5.7.5）。
+
+#### 5.7.1 jimage 嵌入（T3 / T4 / T7）
+
+- **写侧**：发射层 `emit/project/jimage.rs` 把闭包读取的模块资源（档案侧 + 用户推导，带所属模块）写成标准 jimage：小端 7 字头（magic `0xCAFEDADA`）、redirect / offsets 表、位置属性、MUTF-8 字符串表、完美哈希（`0x01000193` 乘法哈希，与 `ImageStringsReader.hashCode` 同规则），以及 `/modules/<模块>/<目录>` 与 `/packages/<包>` 两棵目录树。单测 `jimage_tests.rs` 按 JDK 读侧规则（`BasicImageReader.getLocationIndex` / `ImageLocation.decompress`）回读全部位置，覆盖 2000 名完美哈希。
+- **嵌入**：映像作为用户侧元数据 `MODULE_IMAGE`（8 字节对齐）发射，运行时 `meta::module_image()` 取切片。语料模式每测试各带一份（只含该档案读取的资源），可接受。
+- **读侧**：唯一手写是 `NativeImageBuffer.getNativeMap`（类 ①，`ACC_NATIVE`）：路径为 `${java.home}/lib/modules` 时返回映像的 `DirectByteBuffer(addr, len)`（即 JNI `NewDirectByteBuffer`），否则 null。`BasicImageReader` 走 MAP_ALL 分支，不开 FileChannel；`ImageReader` / `SystemModuleReader` / jrt 协议全部按字节码执行。
+- **删除**：`closure_tables`（模块服务表、`closure_pool`）、输入侧 `module_resources` 表、`seeds.toml [services] population` 与分析器的 population 循环。引导层服务目录由构建期 `Module.defineModules` 登记进映像（与分析器按 boot layer `provides` 建的目录同源）。`EmbeddedClassPath` 只承载类路径资源（含 `META-INF/services`）。
+
+#### 5.7.2 ClassLoader 6、BootLoader 2 回字节码
+
+| 删除的手写 | 去向 |
+|---|---|
+| `ClassLoader.getResource` / `getResources` / `getResourceAsStream`（实例 3） | 字节码：父委派 → `BootLoader.findResource(s)` → `ClassLoaders$BootClassLoader` / `BuiltinClassLoader.findResource` → 模块资源经 `SystemModuleReader`（jimage），类路径资源经 `URLClassPath`（`EmbeddedClassPath` intrinsic） |
+| `ClassLoader.getSystemResource` / `getSystemResources` / `getSystemResourceAsStream`（静态 3） | 字节码：`getSystemClassLoader()` 后同上 |
+| `BootLoader.getServicesCatalog` | 字节码：读 `BootLoader.SERVICES_CATALOG`，内容由构建期 `Module.defineModules` 写入映像 |
+| `BootLoader.findResourceAsStream` | 字节码：`ClassLoaders.bootLoader().findResourceAsStream` → `SystemModuleReader.open` → jimage |
+
+`ClassLoader`、`BootLoader` 移出 `[vm_boundary]`；`ClassLoader$ParallelLoaders` 移出 `translate_nested`。`boot_loader_impl.rs` 只剩 3 个 native（`getSystemPackageNames`、`getSystemPackageLocation`、`setBootLoaderUnnamedModule0`）。
+
+#### 5.7.3 U14：`java.home` 构建期钉值与 `${java.home}` 虚拟树
+
+- **决定（用户 2026-10-08，U14）**：`java.home` 构建期钉值，原生二进制不依赖宿主 JDK 安装；`conf/security` 等由构建期嵌入。`java.home = /java-runtime`（`jdk_resources::JAVA_RUNTIME_HOME`），`sun.boot.library.path = /java-runtime/lib`。钉值在 `vm_intrinsics.toml` 的 `vm_props` 与 `system_properties.values` 中声明（两处同值），并从延迟属性列表移除；生成器代码无属性名字面量。`line.separator`、`file.encoding` 的钉值不在本步范围；`sun.jnu.encoding`、`stdout/stderr.encoding` 仍按 U1 运行期取宿主值。
+- **虚拟树**（`runtime/java_runtime/src/jdk_resources/tree.rs`，只读）：
+
+| 相对 java.home | 内容 |
+|---|---|
+| `conf/security/java.security` | 嵌入的安全属性文本（原有） |
+| `conf/security/policy/{limited,unlimited}/*.policy`（5 个） | 参考 JDK 21 / 25 原文件（两版逐字节相同），`include_bytes!` |
+| `lib/modules` | 本程序 jimage（`meta::module_image`） |
+| `lib/tzdb.dat` | 时区数据（原有） |
+
+  目录为文件路径的各级前缀；stat 形态为目录 `S_IFDIR|0555`、文件 `S_IFREG|0444`；写 / 建 / 截断得 `EROFS`，树内不存在得 `ENOENT`。虚拟 fd 从 -2 递减，虚拟 `DIR*` 句柄为负 i64，与真实空间不碰撞。
+- **NIO native 接入**：路径落入树内或句柄为虚拟句柄时，读嵌入数据，否则走宿主系统调用。
+  - `UnixNativeDispatcher` 共 15 个：open0、openat0、close0、read0、stat0、lstat0、fstatat0、fstat0、access0、dup、opendir0、fdopendir、readdir0、closedir、realpath0。
+  - `UnixFileDispatcherImpl` 共 4 个：read0、pread0、seek0、size0。
+  - `UnixFileSystem.getBooleanAttributes0`。
+  - 这些都是类 ① native 的既有手写，不新增手写类别。
+
+#### 5.7.4 JceSecurity 6 回字节码（第 6 步的 JceSecurity 部分）
+
+删除 `javax/crypto/jce_security_impl.rs` 的 6 个 `#[jvm_boundary]`：`canUseProvider`、`isRestricted`、`getVerificationResult`、`getDefaultPolicy`、`getExemptPolicy`、`verifyExemptJar`。JceSecurity 移出 `[vm_boundary]` 与 `clinit_carried`，整类按字节码翻译：
+
+- `<clinit>` → `setupJurisdictionPolicies`：先读 `Security.getProperty("crypto.policy")`（java.security 中为 `unlimited`），再取 `StaticProperty.javaHome()`。
+- 之后经 `Files.isDirectory`（stat0）/ `isReadable`（access0）/ `newDirectoryStream` / `newInputStream` 读虚拟树中的 policy 文件，解析出 `defaultPolicy` / `exemptPolicy`。目录流在 Linux 上是 open + dup + fdopendir，在 macOS 上是 opendir。
+- `getVerificationResult` → `ProviderVerifier.verify`：OpenJDK 构建 `savePerms=false`，直接返回。
+
+管辖策略不是手写常量，而是字节码在运行期解析嵌入文件的结果。全仓 `#[jvm_boundary]` 现为 **0**（14 = ClassLoader 6 + BootLoader 2 + JceSecurity 6，全部删除）；`[vm_boundary] classes` 只剩 `java/lang/Class`。
+
+**未做（第 6 步其余部分）**：非引导类的构建期初始化（C3 `build_time_init`）。JceSecurity 仍在运行期初始化：首次用 JCA 时 `<clinit>` 读虚拟树。待 `build_time_init` 落地后，可把 `isRestricted=false` 等事实折进映像，以收窄闭包。
+
+#### 5.7.5 风险与待验证
+
+- **闭包增长**：JceSecurity 字节码可达后，`ProviderVerifier.verifyExemptJar` 一侧（JarURLConnection / JarFile）、`<clinit>` 中的 `new URL("http://...")`（http 协议处理器）、`newDirectoryStream` 的 glob → 正则，都可能带入新类。需实测 JCA 例的闭包规模；收窄依赖第 6 步的 `build_time_init`。
+- **引导期读树**：java.home 钉为 `/java-runtime` 后，构建期 initPhase2 若触碰 `${java.home}/lib/modules`，求值器会报未登记 native。预期不会（`SystemModuleReader` 惰性），需在 HelloWorld 引导审计中确认。
+- **其他待实测**：`DirectByteBuffer(long,long)` 私有构造是否被闭包保留；`BasicImageReader` 的 FileChannel 分支是否膨胀闭包；映像中的服务目录是否列出闭包外的提供者。
+- **既有缺口（非本步）**：JDK 25 `UnixFileDispatcherImpl.available0` / `isOther0` 的 native 未实现。
+- **待验证清单**：
+  - 生成器单测：`jimage_tests` 与 emit / input / resolve / closure 全量单测。
+  - e2e：TestBootLayer、TestClassResourceStream、TestStringGetCharsLegacy、TestAppClassLoader、TestModuleLayerDefine，以及 ServiceLoader 相关例。
+  - JCA：TestAesGcmRound、TestCipherDesModes、TestMacHmacDigest、TestRsaSignVerify。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -956,8 +1020,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 2 | 污点与重算槽；延迟值传播到标量；运行期初始化类级联、重放序列 | 映像中污点值 = 0（审计）；`NCPU` / `directMemory` 等 4 个字段进入重算槽；运行期初始化类 ≤ 2（macOS）/ ≤ 1（Linux），即第 1 步按 U1 的实测值（§5.3），只减不增 ；**✅ d1dc540a 实测**：污点值 0，重算槽 3 字段 / 5 槽，运行期初始化 Linux 1 / macOS 2，U8 交集 0，Linux 21 / 25 四组合摘要一致，耗时 ≤ 324 ms，RSS ≤ 254 MB（§5.4） |
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同 |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；**VM / Class / SecurityManager（cabe9fb0，§5.6）**：vm_impl 8、class_impl 归零，全仓 23 → 14，SecurityManager 移出边界；待合批验证 |
-| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6） |
-| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类 |
+| 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2 | `#[jvm_boundary]` 14 → 6；TestClassResourceStream 通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6）；**实现 ✅ 82c49923（§5.7.1–5.7.2）**：ClassLoader 6、BootLoader 2 归零，两类移出 VM 边界；待合批验证 |
+| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native；JceSecurity 6 | `#[jvm_boundary]` 6 → 0；JCA 用例通过；CollectorsDemo 等冷独占正则链 0 类；**JceSecurity 部分 ✅ f196dd71（§5.7.3–5.7.4）**：JceSecurity 6 归零（U14 虚拟树 + NIO native），全仓 `#[jvm_boundary]` = 0；非引导类构建期初始化**未做**；待合批验证 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 
 ## 7. 风险
@@ -988,6 +1052,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | U7 | （2026-10-06）延迟调用的非空承诺维持现状：`toFileURL` 占位对象由清单承诺非空，判空在构建期定值 |
 | U8 | （2026-10-06）第 2 步加审计：残差重放的读集 ∩ 延迟点之后构建期的写集非空即构建失败；交集实测见 §5.4 |
 | U9 | （2026-10-06）内存缓存字段（`memo_fields`）撤回时保留缓存值（现状） |
+| U14 | （2026-10-08）`java.home` 构建期钉值为嵌入虚拟树 `/java-runtime`（`sun.boot.library.path` 同树 `lib`），原生二进制不依赖宿主 JDK 安装，`conf/security` 等构建期嵌入；钉值经 `vm_intrinsics.toml` 清单声明。取代 U1 中 `java.home` 一项（U1 其余属性中 `line.separator` / `file.encoding` 另行钉值，不在第 5 步范围）。实施见 §5.7.3 |
 
 ### 8.2 第 1 步提出的新决策项（2026-10-06 已定，见 §8.1，本表存档）
 

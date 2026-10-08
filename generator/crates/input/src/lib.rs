@@ -27,6 +27,7 @@ pub use manifest::RuntimeManifest;
 pub use norm::{CodeOps, NInsn, NormCode};
 pub use plan::{ClassPlan, MethodPlan, Planner, Role, Verdict};
 pub use prune::VmConstants;
+pub use resources::ModuleResource;
 
 /// 输入层错误
 #[derive(Debug, Clone, PartialEq, Eq)]

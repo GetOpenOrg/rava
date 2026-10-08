@@ -67,8 +67,6 @@ pub type LineNumbers = (&'static str, &'static str, &'static str, &'static [(u16
 extern "Rust" {
     #[link_name = "__java_meta_META_POOL"]
     static META_POOL: &'static [u8];
-    #[link_name = "__java_meta_CLOSURE_POOL"]
-    static CLOSURE_POOL: &'static [u8];
     #[link_name = "__java_meta_LINE_POOL"]
     static LINE_POOL: &'static [u8];
     #[link_name = "__java_meta_CLASS_HIERARCHY"]
@@ -107,8 +105,6 @@ extern "Rust" {
     static RECORD_CLASSES: &'static [u8];
     #[link_name = "__java_meta_RECORD_COMPONENTS"]
     static RECORD_COMPONENTS: &'static [u8];
-    #[link_name = "__java_meta_MODULE_SERVICES"]
-    static MODULE_SERVICES: &'static [u8];
     #[link_name = "__java_meta_LINE_NUMBERS"]
     static LINE_NUMBERS: &'static [u8];
 }
@@ -134,15 +130,14 @@ pub struct UserMeta {
     pub class_defining_loader: &'static [u8],
     pub record_classes: &'static [u8],
     pub record_components: &'static [u8],
-    pub closure_pool: &'static [u8],
-    pub module_services: &'static [u8],
     pub line_pool: &'static [u8],
     pub line_numbers: &'static [u8],
     /// 类路径资源（计划 docs/plans/2026-10-01-c1d-closure-bloat.md §30.15）：(资源名, 字节)，按名有序，
     /// 同名按类路径序；读表的 native 不在闭包调用链上时为空表
     pub class_path_resources: &'static [(&'static str, &'static [u8])],
-    /// 用户侧模块资源：用户代码指名、档案侧模块资源表未收的 JDK 模块资源（如 `java/lang/String.class`），按名有序
-    pub user_module_resources: &'static [(&'static str, &'static [u8])],
+    /// 本程序 jimage（`${java.home}/lib/modules` 格式，boot-image §5.7）：闭包读取的 JDK 模块资源，
+    /// `NativeImageBuffer.getNativeMap` 映射给翻译的 `BasicImageReader`；8 字节对齐
+    pub module_image: &'static [u8],
 }
 
 static USER_META: std::sync::OnceLock<&'static UserMeta> = std::sync::OnceLock::new();
@@ -183,10 +178,6 @@ fn archive_meta(table: &'static [u8]) -> meta_codec::Reader {
     static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
     meta_codec::Reader::new(meta_codec::pool_index(&POOL, unsafe { META_POOL }), table)
 }
-fn archive_closure(table: &'static [u8]) -> meta_codec::Reader {
-    static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
-    meta_codec::Reader::new(meta_codec::pool_index(&POOL, unsafe { CLOSURE_POOL }), table)
-}
 fn archive_line(table: &'static [u8]) -> meta_codec::Reader {
     static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
     meta_codec::Reader::new(meta_codec::pool_index(&POOL, unsafe { LINE_POOL }), table)
@@ -194,10 +185,6 @@ fn archive_line(table: &'static [u8]) -> meta_codec::Reader {
 fn user_meta(m: &'static UserMeta, table: &'static [u8]) -> meta_codec::Reader {
     static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
     meta_codec::Reader::new(meta_codec::pool_index(&POOL, m.meta_pool), table)
-}
-fn user_closure(m: &'static UserMeta, table: &'static [u8]) -> meta_codec::Reader {
-    static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
-    meta_codec::Reader::new(meta_codec::pool_index(&POOL, m.closure_pool), table)
 }
 fn user_line(m: &'static UserMeta, table: &'static [u8]) -> meta_codec::Reader {
     static POOL: std::sync::OnceLock<Vec<&'static [u8]>> = std::sync::OnceLock::new();
@@ -331,21 +318,9 @@ pub fn record_components() -> &'static [(&'static str, &'static [(&'static str, 
 pub fn class_path_resources() -> &'static [(&'static str, &'static [u8])] {
     USER_META.get().map_or(&[], |m| m.class_path_resources)
 }
-/// 模块资源：档案侧编译期嵌入表优先，其次用户侧表（用户代码指名的 JDK 模块资源）。资源名不带前导 `/`
-pub fn module_resource(name: &str) -> Option<&'static [u8]> {
-    if name.starts_with('/') {
-        return None;
-    }
-    crate::jdk_resources::module_resources::lookup(name).or_else(|| {
-        let t = USER_META.get().map_or(&[][..], |m| m.user_module_resources);
-        t.binary_search_by(|(n, _)| (*n).cmp(name)).ok().map(|i| t[i].1)
-    })
-}
-
-/// 模块服务 (服务, provider)：闭包事实 seeds.module_services（发射层写入 java_meta），事实序。
-pub fn module_services() -> &'static [(&'static str, &'static str)] {
-    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
-    merged(&CELL, || meta_codec::pairs(archive_closure(unsafe { MODULE_SERVICES })), |m| meta_codec::pairs(user_closure(m, m.module_services)), None)
+/// 本程序 jimage（只在用户侧：模块资源随本程序闭包；未登记用户侧时为空）
+pub fn module_image() -> &'static [u8] {
+    USER_META.get().map_or(&[], |m| m.module_image)
 }
 /// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
 pub fn line_numbers() -> &'static [LineNumbers] {

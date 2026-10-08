@@ -76,9 +76,10 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - `sun/reflect/generics` 不再截断：其编译成本（泛型 visitor 体系曾使 `java_runtime` 编译峰值越过 15G）
   由分析器精度收敛解决，不以截断承载。
 
-残留的策略截断（仍在 `[vm_boundary]`、收录理由写明「策略截断」，终态 0）：`java/nio/file/FileSystems`、
-`javax/crypto/JceSecurity`（`java/net/InetAddress` 2026-10-03 移出：`<clinit>` 未翻译使静态 `impl` 为 null，
-`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
+残留的策略截断：**0**（2026-10-08）。`java/nio/file/FileSystems` 已移出（a3-X2，`getDefault` 与默认持有者链按字节码翻译）；
+`javax/crypto/JceSecurity` 已移出（引导映像第 5 步，boot-image §5.7.4：6 个手写删除，整类按字节码翻译，管辖策略经 NIO
+读 `${java.home}` 嵌入虚拟树中的 policy 文件，U14）；`java/net/InetAddress` 2026-10-03 移出（`<clinit>` 未翻译使静态
+`impl` 为 null，`getLoopbackAddress` 即 NPE，整类改按字节码翻译）。
 
 规则：
 
@@ -133,14 +134,19 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 - 分析器对手写的建模：手写返回对分析不透明、只能取 open(返回类型)，精度低于字节码（C1d 实测：`jdk/internal/misc`
   放行后 CollectorsDemo 闭包 −105 类）。这是收窄手写的直接收益之一。
 
-## 七、现状（C1d 终态，2026-09-30）
+## 七、现状（2026-10-08，引导映像第 5 步后）
+
+全仓 `#[jvm_boundary]` = **0**（引导映像第 4 步 33 → 14，第 5 步 14 → 0：ClassLoader 资源族 6、BootLoader 2、
+JceSecurity 6，见 boot-image §5.6、§5.7）。
 
 | 调用目标 | 处理 |
 |---|---|
-| JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1） |
-| `closure.toml [vm_boundary]`（`Class`、`ClassLoader`、`VM`、`BootLoader` 等） | 按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码，`<clinit>` 不翻译 |
+| JDK 全部类（`java/`、`javax/`、`jdk/`、`sun/` 等） | 翻译字节码；`ACC_NATIVE` 手写（类 1），含运行期类定义点（类 2）与 VM 驱动行为（类 3） |
+| `closure.toml [vm_boundary]`：只剩 `java/lang/Class` | 类 3：struct 承载 VM 注入的镜像状态（类元数据指针、数组组件类型等）；`<clinit>` 构建期在 VM 预初始化中执行（`clinit_carried`）；按方法划分：native / 内建 / 按精确名提供的手写取手写（`vm_boundary_methods` 计数），其余翻译字节码 |
 | `[vm_boundary].translate_nested` | VM 契约类的纯 Java 嵌套类，按字节码翻译 |
-| `seeds.toml [boot_init] calls` | VM 引导期直接调用的无参 Java 入口，作为闭包根并在 `vm_boot_init` 中先于类初始化发射（当前为空：`setJavaLangAccess` 随 `[boot_init] classes` 首项 `System` 的初始化由 initPhase1 引导段首步执行） |
+| 已移出 `[vm_boundary]` | `VM`、`Module`、`ModuleLayer`、`SecurityManager`（第 4 步）；`ClassLoader`、`BootLoader`、`JceSecurity`（第 5 步）；`FileSystems`、`InetAddress`。手写只剩各自的 `ACC_NATIVE` |
+| 模块资源 / `${java.home}` 文件 | 发射层把闭包读取的模块资源写成 jimage 嵌入（唯一手写 native `NativeImageBuffer.getNativeMap`）；`java.home` 构建期钉值（U14），其下 `conf/security`、`lib/modules`、`lib/tzdb.dat` 为只读嵌入虚拟树，由 NIO / `UnixFileSystem` 的 native 手写读取（`jdk_resources`） |
+| VM 引导期 | 构建期引导映像求值（`vm_intrinsics.toml [concrete.boot]`），原 `seeds.toml [boot_init]` 已删除 |
 
 原 `[boundary]` 前缀、`[release]`、`seeds.toml [jca]` / `[data_bundle]` 已删除。截断的原始理由
 （`docs/reports/2026-09-14-impl-strategy.md`：跟随内部包类数 111 → 635）是 Python BFS 过近似口径；

@@ -1,15 +1,13 @@
 use crate::prelude::*;
 use super::class_loader::ClassLoader;
-use crate::jdk::internal::loader::EmbeddedClassPath;
 
 // java.lang.ClassLoader 伴生。
 //
-// 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent 一律走字节码
-// （ClassLoaders 整类翻译）。本文件只承载：
+// 内建加载器层级（app → platform → null）、getSystemClassLoader、getParent、资源族一律走字节码
+// （ClassLoaders 整类翻译；模块资源经 BuiltinClassLoader → SystemModuleReader 读本程序 jimage，
+// 类路径资源经 class_path 内建读 EmbeddedClassPath，boot-image §5.7）。本文件只承载：
 //   - native 方法；
-//   - 运行期类定义点（第 ② 类）；
-//   - 资源族（过渡期手写，L2）：模块资源（jmod 内数据文件）由编译期嵌入表承载；类路径资源由构建期
-//     嵌入表承载（VM 支持类 EmbeddedClassPath，原生二进制无运行期应用类路径，§30.15）。
+//   - 运行期类定义点（第 ② 类）。
 impl ClassLoader {
     /// native `registerNatives()`（<clinit> 首句）：HotSpot 绑定 JNI 入口；原生二进制无此需要。
     #[jvm_native]
@@ -54,46 +52,6 @@ impl ClassLoader {
             return Ok(super::Class::default());
         }
         Ok(super::Class::for_class(String::from(slash.as_str())))
-    }
-
-    /// 单资源查询（过渡期手写，L2：引导层资源待引导映像第 5 步 jimage）：取构建期嵌入资源视图
-    ///（EmbeddedClassPath，§30.15：模块资源在前、类路径在后）；未命中 null。
-    /// 三个实例资源方法为虚方法体（`__impl_`，声明在生成的宏块内经 vtable 分派）：自定义加载器的覆盖
-    /// （如 ServiceLoader 经上下文加载器调 `getResources`）按 Java 语义分派到子类。
-    #[jvm_boundary]
-    pub fn __impl_getResource(&self, name: String) -> Result<crate::java::net::URL> {
-        EmbeddedClassPath::findResource(name)
-    }
-
-    /// 资源枚举：同上视图（同名按模块资源、类路径序；ServiceLoader 据此枚举 META-INF/services）。
-    #[jvm_boundary]
-    pub fn __impl_getResources(&self, name: String) -> Result<crate::java::util::Enumeration<Object>> {
-        EmbeddedClassPath::findResources(name)
-    }
-
-    /// static getSystemResource：同实例形态。
-    #[jvm_boundary]
-    pub fn getSystemResource(name: String) -> Result<crate::java::net::URL> {
-        EmbeddedClassPath::findResource(name)
-    }
-
-    /// `getResourceAsStream(String)`：同上视图的首份（委派链上引导层先于类路径）；未命中 null。
-    /// name 为 null → NPE（JDK `Objects.requireNonNull`）。
-    #[jvm_boundary]
-    pub fn __impl_getResourceAsStream(&self, name: String) -> Result<crate::java::io::InputStream> {
-        resource_stream(name)
-    }
-
-    /// static `getSystemResourceAsStream(String)`：同实例形态。
-    #[jvm_boundary]
-    pub fn getSystemResourceAsStream(name: String) -> Result<crate::java::io::InputStream> {
-        resource_stream(name)
-    }
-
-    /// static getSystemResources：同实例形态。
-    #[jvm_boundary]
-    pub fn getSystemResources(name: String) -> Result<crate::java::util::Enumeration<Object>> {
-        EmbeddedClassPath::findResources(name)
     }
 }
 
@@ -270,9 +228,4 @@ impl ClassLoader {
         d.__set_deflt(false);
         Ok(d)
     }
-}
-
-/// 资源名 → 字节流：嵌入资源视图的首份（模块资源 → 类路径）；未命中 → null，name 为 null → NPE。
-fn resource_stream(name: String) -> Result<crate::java::io::InputStream> {
-    EmbeddedClassPath::stream(name)
 }

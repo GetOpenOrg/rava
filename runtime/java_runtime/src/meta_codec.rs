@@ -103,7 +103,7 @@ pub fn names(r: Reader) -> Names {
     r.rows(|r| r.str())
 }
 
-/// (串, 串) 行（CLASS_DIRECT_SUPER / CLASS_SOURCE_FILE / CLASS_DEFINING_LOADER / MODULE_SERVICES）
+/// (串, 串) 行（CLASS_DIRECT_SUPER / CLASS_SOURCE_FILE / CLASS_DEFINING_LOADER）
 pub fn pairs(r: Reader) -> &'static [(&'static str, &'static str)] {
     r.rows(|r| (r.str(), r.str()))
 }

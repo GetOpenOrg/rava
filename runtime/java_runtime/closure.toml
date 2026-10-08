@@ -22,7 +22,11 @@
 classes = [
     # （SecurityManager 已移出：手写只剩 ACC_NATIVE getClassContext（栈遍历，准入 ③），<clinit> 与其余成员按
     # 字节码翻译，引导映像第 4 步）
-    "java/lang/ClassLoader",
+    # （ClassLoader 已移出：getSystemResource* / getResource* 资源族按字节码翻译，模块资源经 SystemModuleReader
+    # 读本程序 jimage，类路径资源经 class_path 内建；手写只剩 ACC_NATIVE（含运行期类定义点 defineClass1/2，
+    # 准入 ②），引导映像第 5 步，boot-image §5.7）
+    # Class：struct 承载 VM 注入的镜像状态（类元数据指针、数组组件类型等，准入 ③），<clinit> 构建期在
+    # VM 预初始化中执行（clinit_carried）；嵌套纯 Java 类见 translate_nested。
     "java/lang/Class",
 
     # （Module / ModuleLayer 已移出：引导层在构建期求值，模块对象与静态状态在映像中；VM 模块表以映像为初值，
@@ -30,11 +34,9 @@ classes = [
 
     # （FileSystems 已移出：getDefault 与默认持有者链按字节码翻译，a3-X2）
 
-    # K-JCA（docs/plans/2026-09-25-jca-service-registry.md）：JCE 管辖策略。JceSecurity.<clinit> 从
-    # JDK 安装目录读 conf/security/policy/*.policy 并做 provider jar 签名校验——原生二进制无 JDK
-    # 安装目录，且 JDK 9+ 默认策略即 unlimited。整类手写：canUseProvider 恒 true、isRestricted 恒
-    # false（Cipher 据此取 CryptoAllPermission，JDK 默认安装的可观测行为一致）。
-    "javax/crypto/JceSecurity",
+    # （JceSecurity 已移出：<clinit> 与全部成员按字节码翻译——管辖策略经 NIO 读 ${java.home}/conf/security/policy
+    # 的嵌入虚拟树（U14 java.home 构建期钉值，jdk_resources::tree），provider 校验走 ProviderVerifier 字节码，
+    # 引导映像第 5 步，boot-image §5.7）
 
     # （InvokerBytecodeGenerator 已移出：类定义点按 [[intrinsic]] class_definition 逐方法登记，其余成员与
     # <clinit> 按字节码翻译，a3-X1）
@@ -44,18 +46,16 @@ classes = [
     # （VM 已移出：引导档位、停机标记、保存属性、java.lang.invoke 初始化标记按字节码读写静态字段，构建期由
     # initPhase1~3 与 JSR 292 核心类初始化写入映像；手写只剩 ACC_NATIVE（initialize / latestUserDefinedLoader0 /
     # getNanoTimeAdjustment），引导映像第 4 步）
-    # 引导加载器的 boot 层服务（引导类的包 / 资源定位、本地库）：原生单二进制无动态类加载与本地库加载。
+    # （BootLoader 已移出：服务目录与资源定位按字节码翻译——引导层服务目录由 Module.defineModules 按 jimage
+    # 系统模块构建期登记，资源经 SystemModuleReader；手写只剩 ACC_NATIVE，引导映像第 5 步）
     # 内建加载器层级 ClassLoaders（boot / platform / app）没有准入 ③ 方法，整类按字节码翻译（FS-C2，
     # docs/plans/2026-10-02-fs-c2-app-classloader.md）：scl 由 initPhase3 引导段写入。
-    "jdk/internal/loader/BootLoader",
 ]
 
 # VM 边界类的纯 Java 嵌套类：按字节码翻译（其余嵌套类随外层类归入边界）。
 # FS-R：java/lang/Class 的 reflectionData() 缓存、EnclosingMethodInfo（isLocalClass / isAnonymousClass /
 # getEnclosingClass）、Atomic（reflectionData / annotationData 的 CAS）、AnnotationData；Class$1 为
 # Class.newInstance 的特权块（构造器 setAccessible(true)）。
-# ClassLoader$ParallelLoaders：静态 loaderTypes = newSetFromMap(WeakHashMap) 并登记 ClassLoader.class；
-# ClassLoader 构造器按字节码调 isRegistered，归入边界则 loaderTypes 为 null → NPE。
 translate_nested = [
     "java/lang/Class$ReflectionData",
     "java/lang/Class$EnclosingMethodInfo",
@@ -65,19 +65,15 @@ translate_nested = [
     # Class$Holder：静态 allPermDomain = new ProtectionDomain(null, {AllPermission})，getProtectionDomain0 为
     # null（引导类）时 Class.protectionDomain() 的回落值——纯 Java 静态状态。
     "java/lang/Class$Holder",
-    "java/lang/ClassLoader$ParallelLoaders",
 ]
 
 # VM 边界类（按最外层类匹配，含嵌套类）中 <clinit> 由手写层承载、不翻译的类。未列入的 VM 边界类，
-# 其 <clinit> 按字节码翻译（方法语义以它自己的字节码为准）：纯 Java 静态状态（如 ClassLoader.nocerts、
-# VM.lock / directMemory 缺省值、BootLoader 的无名模块与类加载器值表、ModuleLayer 的空层与 CLV）
+# 其 <clinit> 按字节码翻译（方法语义以它自己的字节码为准）：纯 Java 静态状态（如 ModuleLayer 的空层与 CLV）
 # 不翻译就保持 null（ModuleLayer.CLV 为 null 时 ServiceLoader 的模块层查找即 NPE）。
 # 列入须说明 <clinit> 的哪部分由 VM 模型替换：
-# - JceSecurity：读 JDK 安装目录的管辖策略并校验签名，原生二进制无安装目录；
 # - Class：静态状态为纯 Java（registerNatives + 两个空数组常量），构建期在 VM 预初始化中执行、值在映像中；
 #   待 Class 移出 [vm_boundary]（struct 归生成器）时一并移出本表。
 clinit_carried = [
-    "javax/crypto/JceSecurity",
     "java/lang/Class",
 ]
 
