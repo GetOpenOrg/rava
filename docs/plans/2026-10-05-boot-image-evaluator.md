@@ -948,6 +948,79 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 验证见 §5.6.6 第 6 条。
 
+### 5.7 U12 / U14 实测（2026-10-08，分支 `u12-props`，基于 batch-1008 b558e0c2）
+
+用户 2026-10-08 定（§8.4）：U12 作为 U1 的例外，只限 (L) 链（`Runtime.exit` / `Shutdown.exit` → `logRuntimeExit`），落地 §5.5.6 的机制 ①（构建期确定 LoggerFinder 提供者）和 ③（`isLoggable(DEBUG)` 按映像值折叠）；U14 把 `line.separator` 按目标三元组钉值、`file.encoding` 钉为 UTF-8。约束是每项都测闭包类数，没有收益的不钉值。
+
+#### 5.7.1 测量口径
+
+- b558e0c2（batch-1008）在服务器上的闭包分析 OOM，属于合批回归，不是本分支引起的。因此对照在 **c614f840 + 本分支改动的移植补丁**上测：c614f840 缺 `jdk_resource` / `class_path_files`，补丁只保留 `module_has_resource`。测量环境是 kr1，Linux JDK 21.0.11，指标为 `rava closure` 的 summary.classes / methods，并附 `--boot-report`。
+- 变体：
+  - A：基线；
+  - E：`--cut logRuntimeExit`；
+  - B：清单 `[concrete.boot] calls` 在 initPhase3 后追加 `System$LoggerFinder.getLoggerFinder`；
+  - Bjh / Bjr：B 加上 `java.home` 钉值，分别钉为参考 JDK 路径和 `/java-runtime`；
+  - ls1 / ls2 / fe：`line.separator` 两种钉法，以及 `file.encoding`。
+
+| 变体 | HelloWorld 类 / 方法 | CollectorsDemo 类 / 方法 | 映像（residual_calls / objects / inited） |
+|---|---|---|---|
+| A 基线 | 3043 / 18,093 | 3043 / 18,125 | 2 / 8385 / 256 |
+| ls1、ls2（line.separator 钉值） | 3043，类集合差 0 | 3043，类集合差 0 | — |
+| fe（file.encoding） | 3043，类集合差 0 | 3043，类集合差 0 | — |
+| E（切 logRuntimeExit） | 3043，类集合差 0 | 3043，类集合差 0 | — |
+| B（U12 ①） | 3043 / 18,092 | 3043 / 18,124 | **3** / 8407 / 260 |
+| Bjh / Bjr（B + java.home 钉值） | 3043 / 18,092 | 3043 / 18,124（Bjh） | **3** / 8407 / 260 |
+
+#### 5.7.2 U14 结论：不钉值
+
+- `line.separator` 与 `file.encoding` 钉值后，两个主测例的类集合都没有变化（差 0）。按“没有收益的不钉值”，这两项**本分支不钉**：`vm_intrinsics.toml` 的 `platform_props` 仍是 `@deferred`，`[facts.system_properties] dynamic` 仍含 `line.separator`。
+- `file.encoding` 本来就经 `[facts.system_properties.values]` 与 SystemProps 字节码取 `"UTF-8"`；平台侧的 `file_encoding`（JDK 21）只用来供给 `native.encoding`，钉它没有闭包意义。
+- 将来钉值时（例如 §5.7.4 的大集合收窄后收益显现），沿用 boot-image-s5 对 `java.home` 已用的同一机制：
+  - `[concrete.boot.platform_props] line_separator = "\n"`；
+  - 从 `[facts.system_properties] dynamic` 中移除；
+  - 在 `values` 中加 `"line.separator" = "\n"`。
+  
+  Windows 目标的 `"\r\n"` 随 Windows 目标支持按三元组给出。jnu 编码与 stdout / stderr 编码保持运行期读取。
+
+#### 5.7.3 U12 ① 结论：构建期跑不完，残差化反而有害，清单不登记
+
+- B 求值成功（status ok），但 `getLoggerFinder` 成了**残差调用**。原因链（boot report 原文）：`accessProvider` → `AccessController.doPrivileged(PA, null, Permission[])` → `createWrapper` → `AccessControlContext.<init>` → `FilePermCompat.newPermPlusAltPath` 读静态字段 `compat`。为此要运行 `FilePermCompat.<clinit>` → `SecurityProperties.privilegedGetOverridable` → `Security.<clinit>`，后者读 `StaticProperty.JAVA_HOME`。`StaticProperty` 因启动重放改写 `ConcurrentHashMap$Node.val`（user.dir / user.home 等宿主相关属性）而属于运行期初始化类，于是 `Security` / `SecurityProperties` / `FilePermCompat` 相继成为运行期初始化类，整个调用被残差化。
+- **只钉 `java.home` 不够**（Bjh、Bjr 的 residual 仍为 3），因为判定的粒度是整个类：`StaticProperty` 只要有一个字段依赖宿主，所有静态读取都是占位对象。
+- 残差化的危害：残差调用会成为启动根（why 链显示 `[boot_image] 根 System$LoggerFinder.accessProvider`）。启动时会急切执行 `LoggerFinderLoader.service()` → `ServiceLoader` / `SimpleConsoleLogger` / `StackWalker` 链，比 HotSpot 只在首次记录日志时才加载更差。所以 a943b9c7 的登记行已撤销，清单里改为注释说明。保留的两个引导 native 作为 ① 的基础设施，与运行期语义一致，不改变现有闭包：
+  - `AccessController.getProtectionDomain` → `const:null`（1af54b60，与运行期 `access_controller_impl.rs` 相同）；
+  - `SystemModuleReader.containsImageLocation` → `module_resource:module`（8782f786，按参考 JDK 模块内容回答，构建期不读 `${java.home}/lib/modules`）。
+- **① 落地前提**（按依赖顺序）：
+  1. `java.home` 钉值（boot-image-s5 已在做，`/java-runtime`）；
+  2. **运行期初始化类的字段粒度读取**：`StaticProperty.JAVA_HOME` 等不依赖宿主的静态字段在构建期按映像值读取，只有被重放改写的字段才给占位对象。这是本项的核心缺口，改动点在求值器的运行期初始化判定与静态读取（`engine/concrete`，报告的「运行期初始化类的静态读取（占位对象）」一节列出了命中点）；
+  3. 构建期读取 `${java.home}/conf/security/java.security`（s5 的虚拟树 `/java-runtime`），让 `Security.<clinit>` 能在构建期跑完。
+- **语义问题（落地前必须先解决）**：`LoggerFinderLoader.service()` 末尾调用 `BootstrapLogger.redirectTemporaryLoggers()`，会把 `logManagerConfigured` 置为 true。如果构建期跑完 service()，后端为 JUL_DEFAULT 时运行期 `getLazyLogger` 的 `useLazyLoggers()` 会变成 false，转而走 `getLoggerFromFinder` → `LoggingProviderImpl` → JUL `LogManager`。这与 HotSpot 的 exit 路径（SurrogateLogger，不加载 LogManager）不一致，也与 ③ 按 surrogate 级别折叠的前提冲突。① 的终态必须只把「提供者已确定」这一事实放进映像，同时保持 `logManagerConfigured` 与 HotSpot 启动后的状态一致（例如只求值 `DetectBackend` 与提供者查找，不跑 `redirectTemporaryLoggers`），求值时还需要核对 HotSpot 进程在 main 前是否已经执行过 service()。
+
+#### 5.7.4 U12 ③：未做，续作入口
+
+- 折叠点是 `Shutdown.logRuntimeExit@15 ifeq`（`isLoggable(DEBUG)`）。终态链路：
+  - 后端为 JUL_DEFAULT 时 SurrogateLogger 的级别是常量 `JUL_DEFAULT_LEVEL = INFO`；
+  - `jdk.system.logger.level` 只影响后端 NONE 的 SimpleConsoleLogger；
+  - DetectBackend 的判定：SCL 上找到 LoggerFinder 时为 CUSTOM；否则有 java.logging 的 DefaultLoggerFinder 时为 JUL_DEFAULT / JUL_WITH_CONFIG；都没有时为 NONE。
+- 实现方式是 ② 式的原始类型静态字段折叠：映像值与全部可达 putstatic 取并，`useSurrogateLoggers` / `logManagerConfigured` 得到常量后，经 `getLazyLogger` 分支收窄到 surrogate，再按常量级别折叠 `isLoggable`。前提是 ① 的映像状态满足 §5.7.3 的语义问题。
+- 预期收益只能在 §5.7.5 的大集合解除后度量：当前 E（直接切断整条 logRuntimeExit）的类差也是 0。
+
+#### 5.7.5 468 与 3043 的差距（只记录，本分支不修）
+
+- c614f840 上 **E = A = 3043**，类集合差 0：(L) 链已经不是 HelloWorld 大集合的唯一持有者（§5.6 第 5 条记录的「切 logRuntimeExit → 598」已不成立）。因此 U12 / U14 当前都测不出类减量。
+- `--why` 指向的其他持有根（hw_Ew，类集合与 hw_Bjh 相同）：
+  - `java/util/regex/Pattern`：`[boot_region] 根 Charset.isSupported` → `Charset.checkName` → `String.charAt` → `checkIndex` → `Preconditions.outOfBoundsMessage` → `String.format` → `Formatter.<clinit>` → `Pattern`（越界异常消息路径）；
+  - `java/util/logging/LogManager`：`[hw-type] Proxy` → `Proxy$Dyn.__vm_proxy_invoke` → `AnnotationInvocationHandler.toStringImpl` → Stream 并行归约 → `Spliterator$OfDouble.forEachRemaining` → `Tripwire.trip` → `PlatformLogger.getLogger` → `LazyLoggers` → `LoggingProviderImpl` → `LogManager`；
+  - `java/security/SecureRandom`：`createWrapper` → `FilePermCompat` → `SharedSecrets.ensureClassInitialized` → `Lookup.ensureInitialized` → `Module.isExported` → `WeakPairMap.expungeStaleAssociations` → `ConcurrentHashMap.addCount` → `ThreadLocalRandom.<clinit>` → `SecureRandom`；
+  - `javax/crypto/Cipher` 不在闭包内。
+- 收窄方向（交给对应的收窄线，不在本分支做）：异常消息路径的 `String.format`、Proxy 反射调用的 `toString`、`Tripwire`、`ensureClassInitialized` 链（闭包收窄 ③ 线）。
+
+#### 5.7.6 与 boot-image-s5 的重叠
+
+- `java.home` 的钉值机制（`vm_props` + `system_properties.values`，并从 dynamic 列表移除）由 s5 落地；U14 将来钉值时用同一组 TOML 段，不另起新段。
+- 本分支的 `module_resource` 引导 native（构建期回答模块资源是否存在）与 s5 的 `getNativeMap`（运行期）互补，不冲突。
+- 两边都没有处理「运行期初始化类的字段粒度读取」（§5.7.3 前提 2）。
+- 合批时 `vm_intrinsics.toml` 的 `[concrete.boot.natives]` 段可能有文本冲突，两边条目并存即可。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
