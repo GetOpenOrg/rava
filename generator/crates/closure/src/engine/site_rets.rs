@@ -5,7 +5,7 @@
 //! 汇合，同一转发方法（`doPrivileged` 之类）在不同调用点返回不同常量时只剩 Top。
 //!
 //! - **答复表**：分析方法 m 之前按调用点算好（`site_table`），随入口状态参与摘要共享的比对（`share.rs`）。
-//!   调用点已接边时取所接节点；尚未接边时按与实参无关的克隆判定预判（选择子形参克隆依赖实参值，不预判）。
+//!   调用点已接边时取所接节点；尚未接边时按与实参无关的克隆判定预判（选择子形参克隆依赖实参值，按可能克隆预判）。
 //!   目标节点不克隆（`NOCTX`）的调用点不进表，仍走按成员的返回常量格。
 //! - **乐观**：克隆节点尚无返回值（未建节点 / 未分析 / 尚未返回）时按「尚无返回」答复（调用之后不可达），
 //!   与按成员的「尚无返回」同一套收尾（`noreturn.rs`）：收尾阶段已分析且无返回路径的节点改走按成员的格。
@@ -82,13 +82,19 @@ impl Engine<'_> {
         pending.then_some(SiteAns::Never)
     }
 
-    /// 尚未接边的调用点：与实参无关的克隆判定（`ctxsel.rs::static_ctx` 去掉选择子分支）；Some = 会克隆
+    /// 尚未接边的调用点：与实参无关的克隆判定（`ctxsel.rs::static_ctx`）；Some = 会克隆或可能克隆。
+    /// 有选择子形参的目标是否克隆取决于实参值，按可能克隆预判（乐观答复「尚无返回」）：接边后所接节点不克隆时
+    /// `site_linked` 比对答复不同、调用方重分析改取按成员的格。若按不克隆预判，首次分析取到按成员汇合的 Top，
+    /// 并入克隆节点只增不减的返回值之后不再收回
     fn site_predict(&mut self, m: usize, mref: &MemberRef, iface: bool) -> Option<()> {
         let site = self.h.resolve_method(&mref.owner, &mref.name, &mref.desc, iface)?;
         let (o, n, d) = site.key();
         let key = MemberRef { owner: o, name: n, desc: d };
-        if self.kind_of(&site.class, site.method()) != Kind::Bytecode || self.ctx.selector_slots(&key) != 0 {
+        if self.kind_of(&site.class, site.method()) != Kind::Bytecode {
             return None;
+        }
+        if self.ctx.selector_slots(&key) != 0 {
+            return Some(());
         }
         if self.man.concrete.entries.contains(&*self.mref_key(&key)) {
             return None;
