@@ -69,8 +69,14 @@ impl<'a> Engine<'a> {
     fn array_of_into(&mut self, m: usize, off: u32, s: &TypeSet, dst: Node) {
         let key = (m, off);
         let unknown = !s.open.is_empty()
-            || s.classes.iter().any(|x| Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x)));
-        let known: Vec<u32> = s.classes.iter().filter(|&x| Some(x) == self.prim_mirror || self.mirrors.contains_key(&x)).collect();
+            || s.classes.iter().any(|x| {
+                Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x) || self.deep_mirror(x))
+            });
+        let known: Vec<u32> = s
+            .classes
+            .iter()
+            .filter(|&x| Some(x) == self.prim_mirror || (self.mirrors.contains_key(&x) && !self.deep_mirror(x)))
+            .collect();
         let st = self.array_of.entry(key).or_default();
         let new_dst = !st.dsts.contains(&dst);
         if new_dst {
@@ -130,8 +136,21 @@ impl<'a> Engine<'a> {
         !ready.is_empty()
     }
 
-    /// 调用点 (m, off) 上类镜像 xs 所指类型的数组分配点：基本类型类镜像给各基本类型数组（void 抛异常，无结果）；
-    /// 维数已达上限的数组类镜像抛异常（JVMS §4.4.1 数组至多 255 维；Array.newInstance 同），无结果
+    /// 所指类型维数已达反射数组逐类型建模上限（[`REFLECT_ARRAY_DIMS`]）的类镜像：以它为元素类型的反射数组分配
+    /// 按所指未知处理（结果 open(Object)，涵盖任意数组）。
+    ///
+    /// 递归按元素镜像造数组、再取结果的 `getClass()` 回灌同一调用点（如方法签名解析逐维 `Array.newInstance(t, 0)
+    /// .getClass()`）时，逐类型建模每轮给已知镜像各加一维，直到 JVMS 255 维上限才停——已知镜像上千时类型数与内存
+    /// 随维数线性膨胀至 OOM。限维后更深的数组由 open(Object) 概括：可靠（任意数组都是 Object 的子类型，open 按
+    /// 转型 / 过滤类型收窄），且结果镜像所指未知，回灌后调用点已 open，不动点有限
+    fn deep_mirror(&self, x: u32) -> bool {
+        self.mirrors
+            .get(&x)
+            .is_some_and(|&t| self.names[t as usize].bytes().take_while(|&b| b == b'[').count() >= REFLECT_ARRAY_DIMS)
+    }
+
+    /// 调用点 (m, off) 上类镜像 xs 所指类型的数组分配点：基本类型类镜像给各基本类型数组（void 抛异常，无结果）。
+    /// xs 不含 [`Self::deep_mirror`]（已按 open 概括），所指维数远低于 JVMS §4.4.1 的 255 维上限
     fn array_sites(&mut self, m: usize, off: u32, xs: &[u32]) -> TypeSet {
         let mut out = TypeSet::default();
         for &x in xs {
@@ -139,9 +158,6 @@ impl<'a> Engine<'a> {
                 b"ZCFDBSIJ".iter().map(|&c| format!("[{}", c as char)).collect()
             } else {
                 let name = &self.names[self.mirrors[&x] as usize];
-                if name.bytes().take_while(|&b| b == b'[').count() >= MAX_ARRAY_DIMS {
-                    continue;
-                }
                 vec![if name.starts_with('[') { format!("[{name}") } else { format!("[L{name};") }]
             };
             for t in ts {

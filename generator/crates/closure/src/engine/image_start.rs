@@ -210,6 +210,22 @@ impl<'a> Engine<'a> {
         self.image_drain();
     }
 
+    /// 构建期值（映像 / 具体求值物化）里按所指类型命名的类镜像：名字为 binary name、数组描述符或基本类型描述符
+    /// 字符（含 V）。基本类型对应分析侧九类合一的基本类型类镜像——不能按类名取镜像，否则 `B` 被当成引用类，
+    /// `Array.newInstance` 给出 `[LB;`，数组维数逐轮增长不收敛
+    pub(super) fn named_mirror(&mut self, c: &str, via: &Via) -> u32 {
+        self.instantiate(CLASS, via.clone());
+        if c.len() == 1 {
+            return self.primitive_mirror();
+        }
+        if c.starts_with('[') {
+            self.touch_desc(c, via);
+        } else {
+            self.touch(c, Level::Type, via.clone());
+        }
+        self.mirror(c)
+    }
+
     /// 程序取类 cls 的镜像：映像中的该镜像成为活对象
     pub(super) fn image_mirror(&mut self, cls: &str) {
         let Some(&o) = self.img.as_ref().and_then(|s| s.mirror_obj.get(cls)) else { return };
@@ -333,15 +349,7 @@ impl<'a> Engine<'a> {
         let mirror = x.mirror.clone();
         let via = Via::root("boot_image", &ty);
         let set = if let Some(c) = mirror {
-            if c.len() > 1 {
-                if c.starts_with('[') {
-                    self.touch_desc(&c, &via);
-                } else {
-                    self.touch(&c, Level::Type, via.clone());
-                }
-            }
-            self.instantiate(CLASS, via);
-            TypeSet::exact(self.mirror(&c))
+            TypeSet::exact(self.named_mirror(&c, &via))
         } else if ty.starts_with('[') {
             TypeSet::exact(self.image_array_site(o, &ty, &via))
         } else {

@@ -179,8 +179,9 @@ const PROD: u32 = u32::MAX - 1;
 const ARRAY_RET: u32 = u32::MAX - 2;
 /// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
 const CALLER: u32 = u32::MAX - 3;
-/// 数组类型的维数上限（JVMS §4.4.1；反射分配更高维数组抛 IllegalArgumentException）
-const MAX_ARRAY_DIMS: usize = 255;
+/// 反射数组分配（`Array.newInstance`）逐元素类型建分配点的元素维数上限：元素类镜像所指已是这么多维的数组时，
+/// 结果按 open(Object) 概括（见 `reflect.rs::deep_mirror`）
+const REFLECT_ARRAY_DIMS: usize = 2;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
 /// 方法克隆的上下文：无（按声明类型 / open 接收者进入的方法本体）
