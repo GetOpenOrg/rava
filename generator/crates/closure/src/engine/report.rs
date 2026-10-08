@@ -364,7 +364,11 @@ impl<'a> Engine<'a> {
                             // 本调用点按常量实参求值的结果（诊断用，不登记依赖）
                             let t = self.ctx.call_info(*opcode, mref, *iface).target.clone();
                             let ev = t.as_ref().map(|t| self.ctx.const_eval(None, t, args));
-                            Some(format!("@{o} {}{args:?} ceval {ev:?}", mref.name))
+                            let tr = match (&t, &ev) {
+                                (Some(t), Some(None)) if args.iter().any(|a| a.obj().is_some()) => format!(" trace[{}]", self.ctx.ceval_trace(t, args)),
+                                _ => String::new(),
+                            };
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}", mref.name))
                         }
                         absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
                             let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);

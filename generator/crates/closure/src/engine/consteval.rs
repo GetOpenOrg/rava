@@ -166,6 +166,24 @@ impl Ctx<'_> {
         Some(((v, inp), clean))
     }
 
+    /// 诊断：按实参 args 重做一次求值所用的辅助分析（不记忆），列出保守标志与返回 / 常量 / 调用事件
+    pub(super) fn ceval_trace(&self, t: &MemberRef, args: &[V]) -> String {
+        let Some(cf) = self.h.class(&t.owner) else { return "无类".into() };
+        let Some(meth) = cf.method(&t.name, &t.desc) else { return "无方法".into() };
+        let Some(code) = meth.code.as_ref() else { return "无代码".into() };
+        let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
+        let live = |_: &str| true;
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound.clone(), mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
+            Event::Return(v) => Some(format!("@{o} ret {v:?}")),
+            Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
+            Event::Invoke { mref, args, .. } => Some(format!("@{o} {}{args:?}", mref.name)),
+            Event::Field { mref, value, .. } => Some(format!("@{o} {} = {value:?}", mref.name)),
+            _ => None,
+        }).collect();
+        format!("bound {bound:?} conservative {} insns {} depth {} events {}", a.conservative, code.insns.len(), self.ceval_depth.get(), evs.join(" "))
+    }
+
     /// 字段 f 转为不折叠：读过它的求值记忆作废（其余记忆的输入未变，重算结果相同）；返回取用过作废记忆的方法
     pub(super) fn ceval_drop_field(&self, f: &MemberRef) -> BTreeSet<usize> {
         self.ceval_drop(|inp| inp.reads.contains(f))
