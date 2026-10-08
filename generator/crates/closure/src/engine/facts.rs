@@ -190,6 +190,8 @@ pub(super) struct Ctx<'a> {
     pub(super) pwsums: RefCell<HashMap<MemberRef, Rc<[usize]>>>,
     /// 键为拼接值的属性读取点的候选模式：(方法节点, 键值来源站点)（`sysprops_key.rs`）
     pub(super) pkeys: RefCell<HashMap<(usize, Src), super::sysprops_key::KeyPats>>,
+    /// 已登记过候选模式（含求不出模式）的键为拼接值的读取点：(方法节点, 键值来源站点)；未登记前读取答复 ⊥
+    pub(super) pkeys_seen: RefCell<HashSet<(usize, Src)>>,
     /// 运行期可能被改写（不折叠）的系统属性键
     pub(super) punstable: RefCell<PropUnstable>,
     /// 折叠过属性读取 / 对象字段读取的方法（不折叠集合增长时失效）

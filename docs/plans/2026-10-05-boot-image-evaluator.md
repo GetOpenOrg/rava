@@ -1274,6 +1274,57 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - **规范化**（`ImageData::canonicalize`）：全部组按键排序重编号，`mirror_memos` 的镜像号与值随组重定位后按键排序；校验组键不重复、`mirror_memos` 与 `f:` 组一一对应。对象号只由组键集合决定，与发现次序（扩展尝试与具体求值的交错）无关；步骤号只有 `c:` 组的重定位步骤，随组排序。
 - **档案合并**（`ImageData::absorb`）：同键组比对对象数、步骤数、对象内容；`f:` 组另比对重定位后的缓存记录（镜像号与值），不同即报「扩展组 … 与其他入口不一致（镜像缓存值）」。新键组连同其缓存记录追加。
 - **单测**：`image::tests::json_roundtrip`（`ext` 含 `f:` 组、`mirror_memos` 四元组）；`image_ext::tests::memo_groups_absorb_and_canonicalize`（两种发现次序、两种合并次序结果相同，记录重定位正确）、`absorb_rejects_divergent_memo`（缓存值不同即拒绝；记录与组不对应即拒绝）。
+#### 5.8.6 构建期初始化结局与处理次序无关（2026-10-09，分支 fix-1011）
+
+**共同根因**：引擎是单调不动点，形参常量格 `pvals`、返回常量格 `rvals` 只升不降。只要某次分析看到「尚未定论」的状态并按值未知答复，未知值就永久并入格中，此后状态定论、给出更精确的值也无法撤回。哪次分析先于定论运行取决于处理次序，因此闭包会随哈希种子与 `--flow-batch` 变化。终态要求：凡答复依赖尚未定论的状态，一律答 ⊥（`Ret::Never` + `Dep::Never`，收尾阶段重算），或者在分析之前先定论；不靠排序掩盖。
+
+本节修复了三处这样的「未定论 → 未知」：
+
+1. **档位上下文登记 `<clinit>` 先于构建期初始化尝试**（5fcd911f，已合入 batch-1012 e5200a3e）
+   - **现象**：TestModuleLayerDefine 的 `reflect_new_array_element_precision` 在不同种子下，`GB18030$Encoder` / `HKSCS$Encoder.<clinit>` 时有时无。
+   - **根因**：`Engine::init` 先调用 `level_init` 登记类的 `<clinit>`，后尝试构建期初始化扩展（`image_init`）。如果类先经档位上下文到达，`<clinit>` 已入链，扩展随后成功也撤不回；如果先经 `init` 到达，扩展成功，`<clinit>` 就不入链。
+   - **修复**：`init` 中先尝试构建期初始化，再调用 `level_init`；`level_init` 遇到未尝试过的类先尝试（`image_settled_build_time`），构建期已初始化的类不登记 `<clinit>`。
+
+2. **getstatic 读静态字段时，声明类的构建期初始化尚未尝试**（7d56de55）
+   - **现象**：seed-chain 上 `profile_union_key_and_coverage` 失败（`--flow-batch 1 --hash-seed 7` 时 content_digest 变化），差异是 `CharsetEncoder.onMalformedInput` [4,14] 的空值折叠。
+   - **根因**：`StreamEncoder.<init>` 读 `CodingErrorAction.REPLACE` 时，若 `CodingErrorAction` 尚未尝试扩展，`field_value` 答复未知，`onMalformedInput` 的 P1 永久成为 Top。若扩展先完成，同一读取得到映像值，P1 为非空常量，[4,14] 折叠。
+   - **修复**：
+     - 方法体分析前，`image_settle_reads` 扫描 getstatic，对未初始化的声明类先尝试扩展。执行读取本就触发声明类初始化（JVMS §5.5），这里只是把尝试提前；只在死代码里读的类会多一次尝试，但结局与次序无关。
+     - 每类只尝试一次（`ImgState.tried`），结局即定论。
+     - 扩展成功时，`ceval_drop` 作废读过这些类静态字段的辅助分析记忆（辅助分析没有方法上下文，不经预先定论），并让取用者重算。
+
+3. **键为拼接值的属性读取，候选模式尚未登记**（bfe1bbb9）
+   - **现象**：修复 2 之后 seed-chain 仍有差异：`GetIntegerAction.privilegedGetProperty`（两个重载）、`Integer.getInteger(String)`、`GetIntegerAction.run` 的空值折叠在缺省次序下有，fb1 次序下没有。两种次序的 `pvals` 相同（作业 pd5）。
+   - **根因**：读取点的候选模式 `pkeys[(方法, 键来源)]` 由 `prop_key_site` 在本次分析之后的调用事件里登记。`Integer.getInteger(String,Integer)` 首次分析时尚无登记，`System.getProperty(nm)` 答复未知，经 `Integer.decode` 的非空路径并入 `rvals`，从此撤不回。缺省次序下 `decode` 尚未分析，乐观的「不返回」答复恰好截断了这条路径，等到登记完成后重算才得到 null。
+   - **修复**：`Ctx.pkeys_seen` 记录登记过的读取点，包括求不出模式的。未登记的读取点答复 ⊥ 并记 `Dep::Never`；调用事件照常发出，`prop_key_site` 首次登记时把该方法标脏重算。登记之后按模式求值；求不出模式时按值未知，与原先一致。定论阶段（`bottom_never` 为假）退回值未知，保证终止。
+
+**作业**（服务器 jp2 / kr2 / jp1；`fix1011-*`）：
+- dg1–dg3：Encoder 差异诊断。
+- t1-5fcd911f：两项单测通过。
+- ut-5fcd911f：全量单测只剩已知失败。
+- pd1–pd6：缺省次序与 fb1 次序的 MinimalMain / NullView 折叠对照。pd3 / pd4 定位并验证修复 2，pd5 排除形参常量差异，pd6（叠加修复 3）两例 `folds equal True`，剩余只有 via 差异。
+- scp2–scp4：seed-chain 叠加修复后跑两项单测。scp3（修复 1、2）上 profile 仍失败；scp4（修复 1–3，jp2）上 `reflect_new_array_element_precision` 与 `profile_union_key_and_coverage` 均通过。
+
+**残留：具体求值站点的镜像缓存在站点回退后不撤回**（未修，fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败）
+- **作业**：
+  - ut2-fddb9bcb：全量单测。失败项为已知三项，加上本项。
+  - pf3：档案对照。默认与 fb1 + seed 7 的 classes / methods 只有 via 不同；digest 差在 `boot_image_data.ext` / `mirror_memos`。
+  - cd1：单例对照。两种次序的构建期初始化集合相同（1962 类，失败集合相同）。只有 MinimalMain 在默认次序下多出约 42 个枚举的 `m:<枚举>` 与 `f:<枚举>#java/lang/Class.genericInfo` 组；NullView 两种次序相同。
+- **根因**：具体求值入口 `Class.getGenericInterfaces` 按接收者镜像逐组求值（`concrete_call`）。每次处理调用点时，对当前接收者集合中尚未应用的组合，经 `image_memo_apply` 把镜像缓存追加进映像。接收者集合随分析增长，超过 `COMBO_LIMIT` 或混入非镜像成员后，站点永久回退（`concrete.fallback`），但先前已追加的组不撤回。默认次序先以约 42 个枚举镜像的中间集合处理过该站点；fb1 次序在集合到达失败形态之前没有处理过它。站点最终都是回退，映像内容却不同。
+- **终态方向**：
+  - 未回退站点的已应用组合等于最终组合（集合只增，回退不可逆），残留只来自最终回退的站点。
+  - 因此映像的镜像缓存组应等于「最终未回退站点」所贡献的组：分析结束时剔除只由回退站点贡献的 `f:` 组，以及只被这些组引用的 `m:` 组，然后再规范化。
+  - 难点：剔除后要重编号；活标记与分析侧已记录的映像对象号要同步；`m:` 组可能被扩展期共享，需按引用判定。
+  - 另一种做法是推迟镜像缓存入映像到站点定论之后，但那样会丢失分析期的缓存值传播（热轨迹精度）。
+- seed-chain 叠加三处修复（scp4）时该测试恰好通过，属于次序巧合。
+
+**恢复入口**：
+- `engine/levels_boot.rs`：`image_settled_build_time`。
+- `engine/image_start/ext.rs`：`image_ext`、`image_settle_reads`。
+- `engine/worklist.rs`：`analysis()`。
+- `engine/sysprops.rs`：`derived_result`。
+- `engine/sysprops_key.rs`：`prop_key_site`。
+
 #### 5.9.7 日志链续作（2026-10-08，分支 `log-chain`，基于 b9f47c33）
 
 **测量口径**

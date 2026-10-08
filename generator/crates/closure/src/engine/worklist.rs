@@ -292,6 +292,7 @@ impl<'a> Engine<'a> {
             }
         }
         let live = |t: &str| live_cache.get(t).copied().unwrap_or(true);
+        self.image_settle_reads(code);
         // 尚无调用点记录即被分析：只剩无形参值可言的入口（<clinit>、序列化分配的无参构造器、按上下文克隆的
         // lambda 实现 / 具体求值节点，其各入口一律不带实参值），形参值未知，固定为 Top
         let n = self.methods[m].ptypes.len();

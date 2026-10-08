@@ -53,6 +53,7 @@ impl<'a> Engine<'a> {
                 preadonly: Default::default(),
                 pwsums: Default::default(),
                 pkeys: Default::default(),
+                pkeys_seen: Default::default(),
                 punstable: Default::default(),
                 pdeps: Default::default(),
                 dep_log: Default::default(),
