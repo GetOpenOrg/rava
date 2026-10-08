@@ -1233,6 +1233,36 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 - 结论：扣除 doPrivileged 大集合之后，finder / service 本身只持有约 6–8 个类。E → LE 的 1844 类差由 logRuntimeExit 链上的**其他节点**持有，不在 finder 上。①③ 的收益上限因此受这些节点约束，下一步应先用 `--why` 定位它们。
 
+**E → LE 的 1844 类差：当前头已不存在（2026-10-08，分支 `log-chain2`，b8988868，作业 lg2-why1）**
+
+| 变体（HelloWorld） | 类 / 方法 |
+|---|---|
+| ES | 2758 / 15,887 |
+| LES：ES + 切 logRuntimeExit | 2758 / 15,886 |
+| LE：E + 切 logRuntimeExit | 2764 / 15,925 |
+
+- 在 b8988868 上，切 logRuntimeExit 已经不减任何类：LE = E = 2764，LES = ES = 2758（只少 1 个方法）。可见 logRuntimeExit 链不持有这 1844 个类。ES 与 LE 之差共 6 个类，全部是 `LoggerFinderLoader.service` 与 `ServiceLoader.loadInstalled` 的直接产物（`BootstrapLogger$LogEvent`、`LoggingProviderImpl` 等）。
+- 旧 LE（b9f47c33，929 类）与新 LE（2764）逐类比对，前沿边如下（按首次发现链归因，共 1839 类）：
+
+| 持有点 | 类数 |
+|---|---|
+| `LocaleProviderAdapter.forType@61` 反射实例化 CLDR 适配器（`CLDRLocaleProviderAdapter.<init>`） | 725 |
+| `String.valueOf(Object)@11` 的 toString 派发 | 246 |
+| `executePrivileged(PrivilegedExceptionAction)@29` 派发 | 125 |
+| stream 管线（`AbstractPipeline.evaluate` / `copyInto` / `sourceSpliterator`） | 161 |
+| `StreamEncoder.<init>@4`（字符集） | 69 |
+| 其余（`FileDescriptor.closeAll`、`computeIfAbsent`、`URL.openConnection`、`Pattern.compile` …） | 513 |
+
+- 两边到 `forType` 的链完全相同：`[boot_region] Charset.isSupported` → `checkName` → `String.charAt` 越界消息 → `String.format` → `Locale.<clinit>` → … → `ThreadLocalRandom.<clinit>` → `SecureRandom.getSeed` → `Provider.<clinit>` → `String.toUpperCase(Locale)` → `ConditionalSpecialCasing` → `BreakIterator.getWordInstance` → `LocaleProviderAdapter.forType`。
+- 差别在 `forType@68` 的 `getDeclaredConstructor()` 是否返回：
+  - 旧 LE 中，`getConstructor0` 的循环体不可达（`ReflectionFactory.getExecutableSharedParameterTypes`、`Constructor.copy`、`Constructor.newInstance` 都不在闭包里）。`getDeclaredConstructor` 因此被判为不返回，`@75 newInstance` 之后整片不可达。
+  - 新 LE 中循环体可达，CLDR 适配器被实例化，下游整片回来。
+- 运行期 `getDeclaredConstructor()` 必然返回，所以旧 LE 的 929 是不健全的偏小结果，与 2178 同类（见「测量口径」）。转变发生在 b9f47c33..b8988868 之间：构建期求值器补了反射 native（ffff4c51 / 173f43de），映像标签也在其中（3d7b3c64）。
+- 结论如下：
+  - E 下日志链只剩 finder / service 的约 6–8 个类，logRuntimeExit 本身不持有大集合；
+  - 1844 类实际由 `Charset.isSupported` 根经越界消息与 `ThreadLocalRandom` 种子链持有，交给 charset-build 与越界消息线；
+  - 路径 A 的收益上限是 S 量级：基线下 −70（3315 → 3245），E 下 −6–8。路径 A 仍按终态做：它是精度改进，并且是 ③ 的前提。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
@@ -1269,7 +1299,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   此外，`EmbeddedClassPath.url` 的协议常量化需要另行处理。
 
 **续作入口**
-- 先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点，再决定是否做路径 A；
+- ~~先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点~~ 已完成（见上「当前头已不存在」）；
 - 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
 - ③ 在路径 A 之后做。
 
