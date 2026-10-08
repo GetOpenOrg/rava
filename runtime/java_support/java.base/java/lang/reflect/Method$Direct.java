@@ -19,8 +19,10 @@
  */
 package java.lang.reflect;
 
-import java.util.ArrayList;
+import java.util.AbstractList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import jdk.internal.reflect.CallerSensitive;
 import jdk.internal.reflect.Reflection;
@@ -44,16 +46,59 @@ final class Method$Direct {
     }
 
     /**
-     * 列表形查找结果的分析模型（清单 direct_invokers 的 list）：按数组顺序装入新建列表，同
-     * Class.getDeclaredPublicMethods 的「新建 ArrayList、逐个 add 筛出的方法副本」。分析器把列表形查找
+     * 列表形查找结果的分析模型（清单 direct_invokers 的 list）：标记数组的只读列表视图。分析器把列表形查找
      * （JavaLangAccess.getDeclaredPublicMethods）的结果建模为本方法对标记数组的返回值；运行期不调用。
+     * 不借用 ArrayList：其 elementData 经 Arrays.copyOf 的全程序共享分配点扩容，元素会混入别处的值，
+     * 使经列表取出的接收者不再全是标记；本视图的元素只来自传入的标记数组。
      */
     static List<Method> list(Method[] ms) {
-        List<Method> res = new ArrayList<>();
-        for (Method m : ms) {
-            res.add(m);
+        return new Marks(ms);
+    }
+
+    /** 标记数组的只读列表视图（含自有迭代器，不经 AbstractList$Itr 的共享字段）。 */
+    private static final class Marks extends AbstractList<Method> {
+        private final Method[] ms;
+
+        Marks(Method[] ms) {
+            this.ms = ms;
         }
-        return res;
+
+        @Override
+        public Method get(int i) {
+            return ms[i];
+        }
+
+        @Override
+        public int size() {
+            return ms.length;
+        }
+
+        @Override
+        public Iterator<Method> iterator() {
+            return new It(ms);
+        }
+    }
+
+    private static final class It implements Iterator<Method> {
+        private final Method[] ms;
+        private int i;
+
+        It(Method[] ms) {
+            this.ms = ms;
+        }
+
+        @Override
+        public boolean hasNext() {
+            return i < ms.length;
+        }
+
+        @Override
+        public Method next() {
+            if (i >= ms.length) {
+                throw new NoSuchElementException();
+            }
+            return ms[i++];
+        }
     }
 
     /** 本地访问器的调用（同 DirectMethodHandleAccessor$NativeAccessor.invoke0：按声明键分派）。 */
