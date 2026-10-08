@@ -343,6 +343,7 @@ S0 Boot 的 JVM 实载为参照列。
    - c1d §21.5 曾测得约 0，那是在枚举门敞开时的口径，需要在新口径下复核。
 3. **`SharedSecrets.ensureClassInitialized` 链构建期折叠**（构建期求值 / 清单）。
    - 旧基线下每个程序 −82（HelloWorld 468 → 386）。工作量最小（清单 1 行或一处折叠）。
+   - 2026-10-08 新基线复测：Δ 类为 0，门已消失，暂不实施（见 7.1）。
 4. **JCA 提供者构建期求值 + jar 签名校验移除**（构建期求值 + 整体替换）。
    - jcasasl allmech −714，团块差 593。与 c1d §21.5 重定向 1 合并。
 5. **字符集构建期求值**：扩展提供者为空；常量名查找收窄。三例都是 −149 至 −151，团块差 173。
@@ -355,6 +356,35 @@ S0 Boot 的 JVM 实载为参照列。
 **口径提醒：** 团块是多连通的。§五的单项收益都是旧基线（HelloWorld 468）上的切除上界，新基线（约 3011–3043）上要重测。
 重测用 `rava closure --gates`：单切 Δ、贪心累计与组合实测一次给出。第 1、2 项完成前，第 3–9 项的单切 Δ 多半接近 0（团块仍经 `Method.invoke` 入口整体进来），要看贪心组合曲线。
 建议每完成一项，用 `closure_composition_job.sh` 在 4 例上重跑基线与 r2all，作为验收数据（jarverify 组是写入点切除、非单调，合并上界不含它更准，下一轮可剔除）。
+
+### 7.1 第 3 项新基线复测（2026-10-08，06645419，分支 ensure-init）
+
+作业：`ei-gates-06645419`（us1，`--gates hello collectors`）、`ei-cut-06645419`（jp2，基线 + `--cut-sets ensureinit`）、`ei-base-06645419`（DeepCopy 基线）。产物在 `cluster_results/job/<tag>/01/build/ccomp/`。
+
+| 例 | 基线 类 / 方法 | 切 `SharedSecrets.ensureClassInitialized` 后 | Δ 类 | Δ 方法 |
+|---|---:|---:|---:|---:|
+| HelloWorld | 2178 / 13044 | 2178 / 13041 | 0 | −3 |
+| CollectorsDemo | 2178 / 13051 | 2178 / 13048 | 0 | −3 |
+| DeepCopy | 3573 / 22505 | 3560 / 22437 | −13 | −68 |
+
+`--gates` 的候选池（hello 68 / collectors 72）里没有这条链上的任何方法，单切与贪心组合都不出现。
+
+结论：**这扇门在新基线上已不存在，第 3 项不实施。** 依据如下：
+
+- 切除是**不健全的上界**：它连同目标类初始化一起去掉了。即便如此，三例可回收的也只有：
+  - `Lookup.ensureInitialized`、`checkSecurityManager`、`makeAccessException` 3 个方法；
+  - DeepCopy 另有 `HttpCookie` 及 12 个内部类。
+- `HttpCookie` 这 13 类属于目标类初始化本身的语义：`getJavaNetHttpCookieAccess` 在 access 为 null 时初始化 `HttpCookie`。按 ③ 的口径这部分不可删，健全折叠的收益是 **0 类**。
+- 旧基线下的 −82 是 invoke 体系（`MethodHandles` / `Lookup` / `VerifyAccess` / `ClassFileDumper` …）经这条链首达。新基线上，这些类改由 `ConcurrentSkipListMap.<clinit>` → `MethodHandles.lookup()` → `Lookup.findVarHandle` → `resolveOrFail` → `checkSymbolicClass` → `VerifyAccess.isClassAccessible` 进入。所以即使把这条链折叠掉，类也一个不少。
+- 只为 3 个方法加一个通用的「访问检查恒真」折叠机制，收益与成本不相称。
+
+后续入口：
+
+- 第 1、2 项完成、并且 j.u.c 的 `<clinit>` VarHandle 查找（`findVarHandle` 链）也收口之后，用 `closure_composition_job.sh --cut-sets ensureinit` 复测。若那时 Δ 类 > 0，再按以下终态方案实施：
+  - 清单声明「同模块全权 lookup 对公开类的访问检查恒真」这一事实；
+  - 分析器据此折叠 `makeAccessException` 分支，`MethodHandles.lookup()` 不因此链入闭包；
+  - 生成器不写类名。
+- 「目标类已在引导映像中初始化 → `SharedSecrets.getXxxAccess` 的 null 分支不可达」由引导映像第 6 步（非引导类构建期初始化）覆盖。DeepCopy 的 `HttpCookie` 13 类就在这条线上。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
