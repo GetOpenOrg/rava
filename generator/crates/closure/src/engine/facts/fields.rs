@@ -44,7 +44,7 @@ impl Ctx<'_> {
             let injected = self.man.is_injected_static(&key.owner, &key.name);
             // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
             let open = injected
-                || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+                || self.boundary_field(&key.owner, &key.name)
                 || !self.hw.member(&key.owner, &key.name).fns.is_empty()
                 || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
             let constant = if injected { None } else { fd.constant_value.clone() };
