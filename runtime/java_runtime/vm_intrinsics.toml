@@ -1095,9 +1095,12 @@ calls = [
     # 非 HotSpot 步骤（U13）：泛型信息缓存命中路径（Class.getGenericInfo）与 ClassRepository.NONE 比较，其类须在
     # 构建期初始化——运行期不再执行 <clinit>（解析 "Ljava/lang/Object;" 签名）。纯类：<clinit> 只构造 NONE
     { init = ["sun/reflect/generics/repository/ClassRepository"] },
-    # U12 ①（构建期确定 LoggerFinder 提供者）暂不在此登记：getLoggerFinder 当前会经 FilePermCompat → Security →
-    # StaticProperty.JAVA_HOME（运行期初始化类）被残差化，残差调用成为启动根、反而在启动时急切加载 ServiceLoader
-    # 链；前提与续作入口见 docs/plans/2026-10-05-boot-image-evaluator.md §5.9
+    # U12 ①（构建期确定日志后端，计划 2026-10-05-boot-image-evaluator §5.9.7）：只求值后端探测类——SCL 上的
+    # LoggerFinder 提供者与已装 DefaultLoggerFinder 提供者是否存在、JUL 配置属性（U12：日志路径属性取构建期值）。
+    # HotSpot 在首次取日志器时才初始化它，结果只取决于这三项构建期事实，提前求值与之同值；不跑
+    # LoggerFinderLoader.service()——它末尾的 redirectTemporaryLoggers 会置 logManagerConfigured，与 HotSpot
+    # 启动后的状态不一致（§5.9.3 语义问题）。getLoggerFinder 整体求值仍不登记（经 FilePermCompat → Security 残差化）
+    { init = ["jdk/internal/logger/BootstrapLogger$DetectBackend"] },
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [
