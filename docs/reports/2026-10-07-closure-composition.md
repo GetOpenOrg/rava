@@ -20,6 +20,8 @@
    - `HostLocaleProviderAdapter.findInstalledProvider@39`。
    切除实验与直连差在多连通：切除挡住的是切点下游整条路，而直连只消掉一个入口。团块还有其余入口，只要有一个敞开，整块照旧进来。
    上界要兑现，须让 `Method.invoke` 的全部入口都不经原入口（见第 5 条）。
+   **新基线（2026-10-08，d5a2cb5d）**：HelloWorld / CollectorsDemo 2178、DeepCopy 3573；`BasicImageReader$2` 与 `HostLocaleProviderAdapter` 两个入口已由
+   95558d79（实例目标、非常量名直连）消掉，剩余入口切除上界 hello / collectors −128、deepcopy −774（§3.0）。团块的大部分改由日志链与字符集带入。
 2. **按入口机制首达归属看：** 反射 1357（collectors）、序列化 2146（deepcopy）、安全 2197（jcasasl）。这只说明各例经哪扇门进入团块，团块本身的构成三例几乎相同。
    按自身包统计团块构成：安全 671、locale 310、集合 199、字符集 195、lang 190、NIO 152、invoke 148、并发 146、Stream 146、反射 143、时间 121、类加载 99、IO 95、日志 74。
 3. **拿 S0 Boot 在 JVM 上实际加载的 JDK 类（1694）作对照：** 团块 2987 类中只有 1378 类被 Boot 实际用到，**1609 类连一个 Spring Boot 应用都不加载**。
@@ -34,8 +36,8 @@
    | DeepCopy | 3275 | **2111** | r2all，−1164 |
 
 5. **推荐顺序**（详见 §七；2026-10-08 按直连实测调整，前两项前移）：
-   1. `Method.invoke` 全部入口直连：枚举入口已合入；其余 4 个入口（第 1 条所列）按 enum-values-direct §八 的三种形状收口。
-   2. doPrivileged 扇出精度：三例共用的门，又是 `BasicImageReader$2.run` 入口的来路；DeepCopy 合并切除到 2111。
+   1. `Method.invoke` 全部入口直连：枚举、实例目标、非常量名三种形状已完成；剩余入口都是「反射对象经字段 / 数组 / 列表跨方法流动」一种形状（§七第 1 项）。
+   2. doPrivileged 扇出精度：**新口径下已无缺口**（按调用点克隆，各克隆动作单一）；`--gates` 上的大 Δ 是工具缺陷，已修（§二）。
    3. 「Lookup 访问校验折叠」，即 `SharedSecrets.ensureClassInitialized` 链。每个程序都受益，HelloWorld −82（旧基线）。
    4. JCA / 字符集 / 日志 / locale 四块的构建期求值。
    5. 类加载 / jar / 资源整体替换为封闭映像，即 boot-layer 步骤 1–5。
@@ -100,6 +102,23 @@ uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor -
   --fetch 'build/ccomp/*.gz' --fetch 'build/ccomp/*.md' --fetch 'build/ccomp/*.out'
 ```
 
+#### 门排名工具核对（2026-10-08，新基线 4 例）
+
+1. **模型 Δ 远低于实测 Δ**：hello `getLoggerFromFinder` 模型 17 / 实测 198，`executePrivileged` 模型 33 / 实测 955，`Charset.lookup` 模型 1 / 实测 163。
+   模型是不含值流折叠的「与」可达性，多连通团块上单切几乎都近 0；排名必须以实测列为准，模型列只用于选候选与贪心顺序。
+   `--gates-verify` 预算（缺省 12）因此是排名质量的瓶颈，大例要给足内存预算（`CCOMP_GATES_ARGS="--gates-mem-mb 9000"`）。
+2. **非单调已能识别**：collectors 单切 `executePrivileged` 实测 2633 类（反升 931，非单调）、jcasasl 单切 `CryptoAlgorithmConstraints.permits` 反升 41，表中照标。
+3. **缺陷：分派转发方法被当成单一机制的门（已修，最终形态见下）**。`AccessController.executePrivileged` 已由 `forward.rs` 按调用点克隆，
+   各克隆的动作形参值集单一（`@set:` 核对；`@callers:` 无上下文无关体）；它在首达树上是全部特权块调用点的汇合，单切量是互不相关调用点之和，
+   且非单调，不对应任何一个机制。
+   - 试过直接排除（7f7d6ae7：静态转发方法不作候选；30cca0fb：收窄为各克隆分派目标不同者）。两版都把 `Charset.lookup` 一并排除
+     （它同为转发方法，各调用点名字不同、克隆分派也不同；作业 `rdg2-7f7d6ae7` / `rdg3-30cca0fb` 中 −163 的字符集门消失），且 30cca0fb 的克隆比对让模型计算 3 s → 55 s。
+     按字节码结构分不出「特权块汇合」与「按名查找」，排除会丢真门。
+   - 终版：照常作候选，证据末条标明「分派转发方法（已按调用点克隆）：切除量是全部调用点下游之和，未必是单一机制，门看调用方调用点」（`Facts.forwarder`）。
+     核对（作业 `rdg4-72f1aca5`，hello）：`Charset.lookup` 回到第 4 名（实测 −163），`executePrivileged` 证据带附注，模型计算 3.7 s。
+4. **陈旧提示（已撤，7f7d6ae7）**：`closure.toml [gates]` 的 `precision = ["java/security/AccessController"]` 把特权块整体标为精度缺口；
+   doPrivileged 已按调用点克隆，该提示不再成立，改为空表。
+
 **作业：**
 
 | 作业 | 内容 |
@@ -135,7 +154,48 @@ uv run python scripts/closure_composition.py --closure collectors=<…>/collecto
 
 **基线口径差（2026-10-08 补记）：** 本文的 HelloWorld 基线是 468 类。boot-image-s4 合入后实测约 **3043**，enum-values-direct 核对时（§六 6.4）为 **3011**，
 即 HelloWorld 也进了核心团块：`Enum.valueOf` 经 `enumConstantDirectory` 让 `Method.invoke` 入链，另有第一节所列 4 个入口。
-因此本文 §三至 §五的数字都属旧基线，§七各项的单项收益须在新基线上重测。差距由哪些门带入，待 `rava closure --gates` 在新基线上出数后补写到这里。
+因此本文 §三至 §五的数字都属旧基线，§七各项的单项收益须在新基线上重测。
+
+### 3.0 新基线（2026-10-08，batch-1009 d5a2cb5d，含 f19e46e0 HelloWorld OOM 修正）
+
+| 例 | 类 | 方法 | 闭包耗时 | 峰值内存 |
+|---|---:|---:|---:|---:|
+| HelloWorld | 2178 | 13047 | 44 s | 1.6 GB |
+| CollectorsDemo | 2178 | 13054 | 45 s | 1.6 GB |
+| TestJcaSasl | 2276 | 13606 | 65 s | — |
+| DeepCopy | 3573 | 22508 | 294 s | 4.6 GB |
+
+作业：`rdg-dj-d5a2cb5d`（sg2，`--gates` hello / collectors / deepcopy / jcasasl）、`rdbase-d5a2cb5d`（sg2，`@callers:Method.invoke`）。
+f19e46e0 之前的 3011 / 3043 已不作口径。HelloWorld 与 CollectorsDemo 现在几乎同集：枚举入口直连后，CollectorsDemo 自身只多 0 类。
+
+**468 → 2178 的差距由哪些门带入**（`--gates` 单切实测 Δ；`--why` 首达链）：
+
+| 门 | hello 单切实测 | 来路 | 归属 |
+|---|---:|---|---|
+| `LazyLoggers.getLoggerFromFinder` | −198 | `[boot_image] 根 Thread.start0` → `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `Runtime.logRuntimeExit` → `System.getLogger` → `LoggerFinder` | 日志链（U12 线）：引导映像把信号线程入口当根，关停路径带入整套 System.Logger / JUL |
+| `System$LoggerFinder.lambda$accessProvider$0` | −196 | 同上，LoggerFinder 的 ServiceLoader 查找 | 日志链 |
+| `LoggingProviderImpl.demandJULLoggerFor` | −140 | 同上，JUL `LogManager` | 日志链 |
+| `Charset.lookup` | −163 | 引导区根 `Charset.isSupported` → `lookup2` → `StandardCharsets.charsetForName` | 字符集（构建期求值线） |
+| `Method.invoke` 其余入口（`minvoke` 切除集 4 个调用点） | −128 | `InetAddress.loadResolver` → `ServiceLoader$ProviderImpl.invokeFactoryMethod@20`；`AnnotationInvocationHandler.equalsImpl@121` | 本线（§七第 1 项），见下 |
+| `Formatter.format` | −25 | `PrintStream.implFormat` | locale |
+| `InetAddress.getAllByName0` | −11 | `URL.equals` → DNS | 容器元素精度 |
+| `executePrivileged` | −955（模型 33） | 全部特权块的汇合 | **不是单一机制**：见 §二「门排名工具核对」 |
+
+日志三门互相重叠（都在 `Shutdown.exit` 之下），合计约 −200 到 −660（`getLoggerFromFinder` 首达树 663 类）；它们与字符集、`Method.invoke` 三条线是
+468 → 2178 的主体。旧基线的 468 没有信号线程根，也没有 `InetAddress.loadResolver` 这条 ServiceLoader 路径。
+DeepCopy 另有 `DeepCopy.deepCopy` −1393（序列化入口）、`LocaleProviderAdapter.forType` −130。
+
+**`Method.invoke` 剩余入口与切除上界**（作业 `rdcut-d442e327`，ref d442e327，含 95558d79 的实例目标直连）：
+
+| 切除集 | HelloWorld | CollectorsDemo | DeepCopy |
+|---|---:|---:|---:|
+| 基线 | 2178 | 2178 | 3573 |
+| `minvoke`（剩余 4 个调用点） | 2050（−128） | 2050（−128） | 3573（0） |
+| `minvokebody`（`Method.invoke` 体整体） | 2050（−128） | 2050（−128） | 2799（−774） |
+
+DeepCopy 切调用点为 0、切方法体 −774：DeepCopy 还有 `ObjectStreamClass.invoke{Read,Write}Object` / `invokeReadResolve` / `invokeWriteReplace` /
+`invokeReadObjectNoData`、`HttpConnectSocketImpl.doTunneling`、`NTLMAuthenticationProxy` 两处共 8 个入口，不在 `minvoke` 中。
+旧报告「2990 → 528」的上界在新基线上只剩 −128（hello / collectors）与 −774（deepcopy）：团块的其余部分已改由日志链、字符集等门带入。
 
 ### 3.1 自身包构成（类数）
 
@@ -327,20 +387,23 @@ S0 Boot 的 JVM 实载为参照列。
 
 ## 七、推荐收窄任务（按回收量 × 覆盖面排序，本文不实施）
 
-1. **`Method.invoke` 全部入口直连**（精度；a3-C 前置；2026-10-08 按直连实测改写）。
-   - 枚举入口 `Class.getEnumConstantsShared@49` 已直连（enum-values-direct 59451c29，已合入 batch-1008）。
-   - 但新基线上 HelloWorld / CollectorsDemo 仍为 3011 类：切除实验的 2990 → 528 是上界，只有其余 4 个入口也不经 `Method.invoke` 体时才兑现。
-   - 其余入口按 enum-values-direct §八 收口：
-     - 实例目标（`BasicImageReader$2.run@37`、`AnnotationInvocationHandler.equalsImpl@121`）：按接收者值集虚派发接边；
-     - 反射对象跨方法流动（`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`、`equalsImpl`）：反射对象建「解析出的成员键」抽象值；
-     - 非常量名（`HostLocaleProviderAdapter.findInstalledProvider@39`）：名字按拆段口径求候选集。
-   - 每收口一个入口，就用 `--gates` 在新基线上复测，看贪心组合里剩余入口的累计 Δ。
-   - 全部完成后，a3-C 的 `Class.enumConstantDirectory` 手写可删。
-2. **doPrivileged 扇出精度**（前移；`executePrivileged` 按调用点上下文敏感，或在 rava 下把 `doPrivileged(a)` 视为对 `a.run()` 的单点调用）。
-   - 这是三例共用的门：单门实测 −145 至 −181（旧基线）。
-   - 它还是第 1 项 `BasicImageReader$2.run` 入口的来路：`Random.<clinit>` → `getReflectionFactory` → doPrivileged 按全部 PrivilegedAction 实现派发。所以它与第 1 项同属关闭 `Method.invoke` 入口的前置。
-   - DeepCopy 的 OIS 反射构造经它进入团块，与第 4–6 项合并后为 −1164（3275 → 2111）。
-   - c1d §21.5 曾测得约 0，那是在枚举门敞开时的口径，需要在新口径下复核。
+1. **`Method.invoke` 全部入口直连**（精度；a3-C 前置；2026-10-08 实施进展）。
+   - 已完成：枚举入口 `Class.getEnumConstantsShared@49`（59451c29）；实例目标与非常量名（95558d79，分支 reflect-direct）——`BasicImageReader$2.run@37`、
+     `HostLocaleProviderAdapter.findInstalledProvider@39` 已不在闭包。新基线类数不变（hello / collectors 2178、deepcopy 3573），`fold_direct_calls` 1 → 2（hello）、0 → 2（deepcopy）：
+     这两个入口单独关掉不减类，团块还经其余入口进来。
+   - 剩余入口（`@callers:java/lang/reflect/Method.invoke:` 实测，作业 `rdbase-d5a2cb5d` / `rddiag2-d442e327`）：
+     - hello / collectors：`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`（5 个上下文；`Method` 来自 `getDeclaredPublicMethods` 列表、存字段）、`AnnotationInvocationHandler.equalsImpl@121`（数组元素）；
+     - deepcopy 另有 `ObjectStreamClass.invokeReadObject@24` / `invokeReadObjectNoData@20` / `invokeReadResolve@20` / `invokeWriteObject@24` / `invokeWriteReplace@20`（`Method` 存字段，查找有形参类型）、
+       `HttpConnectSocketImpl.doTunneling@8`、`NTLMAuthenticationProxy.isTrustedSite@12` / `supportsTransparentAuth@8`（静态字段）。
+   - 全部是同一形状：`Method` 对象在别的方法里查出、经字段 / 数组 / 列表流到 `invoke`。终态方案：反射对象建「解析出的成员键」抽象值
+     （查找点结果换成成员键标记对象，仿 `class_lookup` 的 forName 结果替换与 `field_handles` 的 `mark_named`；`Method.copy` / `ReflectionFactory.copyMethod` 由清单声明为保键复制），
+     调用点接收者值集全为成员键标记时按标记直连（非 CS 校验），含普通 `Method` 才回退。
+   - 收益上界：hello / collectors −128，deepcopy −774（§3.0）。全部完成后 a3-C 的 `Class.enumConstantDirectory` 手写可删。
+2. **doPrivileged 扇出精度**（2026-10-08 复核：**无缺口，不需实施**）。
+   - `executePrivileged` 已由 `forward.rs` 按调用点克隆（k = 1，转发链随最外层调用点分开）；`@callers:AccessController.executePrivileged` 无上下文无关体，
+     各克隆的动作形参 `@set:` 值集单一。旧基线的 −145 至 −181 是克隆前口径。
+   - `--gates` 上 `executePrivileged` 的 −955（hello）/ −1606（deepcopy）/ 非单调（collectors）是各特权块调用点之和，属工具缺陷，现已在证据中标注（§二「门排名工具核对」）。
+   - 与第 1 项不同机制：第 1 项是反射对象值流，本项是派发上下文，已由 G1 覆盖。
 3. **`SharedSecrets.ensureClassInitialized` 链构建期折叠**（构建期求值 / 清单）。
    - 旧基线下每个程序 −82（HelloWorld 468 → 386）。工作量最小（清单 1 行或一处折叠）。
    - 2026-10-08 新基线复测：Δ 类为 0，门已消失，暂不实施（见 7.1）。
@@ -353,8 +416,8 @@ S0 Boot 的 JVM 实载为参照列。
 9. **容器元素敏感**（`Objects.equals` 汇合派发）：c1d §21.5 重定向 2，随后续多连通门关闭而显现。
 10. **引用 / 信号按 ③ 收口**：随无 GC 模型与决定 L 实施，减量小。
 
-**口径提醒：** 团块是多连通的。§五的单项收益都是旧基线（HelloWorld 468）上的切除上界，新基线（约 3011–3043）上要重测。
-重测用 `rava closure --gates`：单切 Δ、贪心累计与组合实测一次给出。第 1、2 项完成前，第 3–9 项的单切 Δ 多半接近 0（团块仍经 `Method.invoke` 入口整体进来），要看贪心组合曲线。
+**口径提醒：** 团块是多连通的。§五的单项收益都是旧基线（HelloWorld 468）上的切除上界，新基线（2178 / 3573，§3.0）上要重测。
+重测用 `rava closure --gates`：单切 Δ、贪心累计与组合实测一次给出。新基线上日志链（−198）、字符集（−163）单切已有显著实测 Δ，`Method.invoke` 剩余入口只占 −128（hello）；排名以实测列为准（§二「门排名工具核对」）。
 建议每完成一项，用 `closure_composition_job.sh` 在 4 例上重跑基线与 r2all，作为验收数据（jarverify 组是写入点切除、非单调，合并上界不含它更准，下一轮可剔除）。
 
 ### 7.1 第 3 项新基线复测（2026-10-08，06645419，分支 ensure-init）

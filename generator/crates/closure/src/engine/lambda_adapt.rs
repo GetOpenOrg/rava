@@ -122,7 +122,7 @@ impl<'a> Engine<'a> {
     }
 
     /// `装箱类.valueOf(基本类型)`：返回值流入 `res`（给出时）
-    fn box_edge(&mut self, m: usize, off: u32, prim: u8, via: &Via, ret: Option<u32>, res: Option<Node>) -> Option<usize> {
+    pub(super) fn box_edge(&mut self, m: usize, off: u32, prim: u8, via: &Via, ret: Option<u32>, res: Option<Node>) -> Option<usize> {
         let owner = self.man.boxed_class(prim)?.to_string();
         let desc = format!("({})L{owner};", prim as char);
         let Some(site) = self.h.resolve_method(&owner, BOX_FACTORY, &desc, false) else {

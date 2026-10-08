@@ -1,0 +1,5 @@
+# Method.invoke 其余入口（直连未覆盖的调用点；切除上界：连同各点的真实目标一起切掉）
+java/util/ServiceLoader$ProviderImpl.invokeFactoryMethod:()Ljava/lang/Object;@20
+sun/reflect/annotation/AnnotationInvocationHandler.equalsImpl:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Boolean;@121
+sun/util/locale/provider/HostLocaleProviderAdapter.findInstalledProvider:(Ljava/lang/Class;)Ljava/util/spi/LocaleServiceProvider;@39
+jdk/internal/jimage/BasicImageReader$2.run:()Ljava/lang/Void;@37
