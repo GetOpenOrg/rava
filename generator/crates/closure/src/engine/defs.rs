@@ -275,6 +275,8 @@ pub(super) struct ArrayOfSite {
     pub(super) dsts: Vec<Node>,
     /// 实参出现过所指未知的 Class（open / 非镜像 Class / 非字节码类镜像）：结果含 open(Object)
     pub(super) open: bool,
+    /// 实参出现过维数已达逐类型建模上限的数组类镜像：结果含 open(`[[Object`)（`reflect.rs::deep_mirror`）
+    pub(super) deep: bool,
     /// 已放行：所指已知的类镜像逐类型建分配点
     pub(super) released: bool,
 }

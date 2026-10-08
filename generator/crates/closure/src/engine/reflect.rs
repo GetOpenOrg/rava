@@ -62,6 +62,8 @@ impl<'a> Engine<'a> {
     /// 结果按调用点在不动点上的状态取（与值到达的先后无关，同 `class_lookup.rs::lookup_release`）：
     /// - 实参出现所指未知的 Class（open、非镜像值、非字节码类镜像）：结果含 open(Object)（涵盖任意数组）；
     ///   放行前出现的，该调用点不再放行、不建分配点；
+    /// - 实参出现所指维数已达逐类型建模上限的数组类镜像（[`Self::deep_mirror`]）：结果含 open(`[[Object`)（涵盖
+    ///   全部更深的数组），不影响其余已知镜像的放行与逐类型建分配点；
     /// - 放行前其余到达只记下，到工作队列排空时仍无所指未知者放行（[`Self::array_of_release`]）；
     /// - 放行后所指已知的类镜像逐类型建分配点（[`Self::array_sites`]），元素只来自其后的写入。
     ///
@@ -69,9 +71,8 @@ impl<'a> Engine<'a> {
     fn array_of_into(&mut self, m: usize, off: u32, s: &TypeSet, dst: Node) {
         let key = (m, off);
         let unknown = !s.open.is_empty()
-            || s.classes.iter().any(|x| {
-                Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x) || self.deep_mirror(x))
-            });
+            || s.classes.iter().any(|x| Some(x) != self.prim_mirror && (Some(x) == self.synth_mirror || !self.mirrors.contains_key(&x)));
+        let deep = s.classes.iter().any(|x| self.deep_mirror(x));
         let known: Vec<u32> = s
             .classes
             .iter()
@@ -91,12 +92,26 @@ impl<'a> Engine<'a> {
         } else {
             vec![]
         };
+        let to_deep: Vec<Node> = if deep && !st.deep {
+            st.deep = true;
+            st.dsts.clone()
+        } else if st.deep && new_dst {
+            vec![dst]
+        } else {
+            vec![]
+        };
         let (released, open) = (st.released, st.open);
         let all: Vec<u32> = if released && new_dst { st.mirrors.iter().copied().collect() } else { vec![] };
         let dsts = st.dsts.clone();
         if !to_open.is_empty() {
             let o = TypeSet::open(self.id(OBJECT));
             for d in to_open {
+                self.add_to(d, &o);
+            }
+        }
+        if !to_deep.is_empty() {
+            let o = TypeSet::open(self.id(&format!("[[L{OBJECT};")));
+            for d in to_deep {
                 self.add_to(d, &o);
             }
         }
@@ -137,12 +152,15 @@ impl<'a> Engine<'a> {
     }
 
     /// 所指类型维数已达反射数组逐类型建模上限（[`REFLECT_ARRAY_DIMS`]）的类镜像：以它为元素类型的反射数组分配
-    /// 按所指未知处理（结果 open(Object)，涵盖任意数组）。
+    /// 不逐类型建分配点，结果按 open(`[[Object`) 概括——元素至少 2 维，结果至少 3 维，其元素是数组、数组都是 Object，
+    /// 故结果恒为 `Object[][]` 的子类型（JVMS §4.10.3 数组协变；基本类型多维数组同样成立）。
     ///
     /// 递归按元素镜像造数组、再取结果的 `getClass()` 回灌同一调用点（如方法签名解析逐维 `Array.newInstance(t, 0)
     /// .getClass()`）时，逐类型建模每轮给已知镜像各加一维，直到 JVMS 255 维上限才停——已知镜像上千时类型数与内存
-    /// 随维数线性膨胀至 OOM。限维后更深的数组由 open(Object) 概括：可靠（任意数组都是 Object 的子类型，open 按
-    /// 转型 / 过滤类型收窄），且结果镜像所指未知，回灌后调用点已 open，不动点有限
+    /// 随维数线性膨胀至 OOM。限维后更深的数组由 open(`[[Object`) 概括：可靠，且不动点有限——其 `getClass()` 只展开
+    /// 已实例化（数组则已逃逸）的 2 维及以上数组类镜像，回灌同一调用点仍是限维镜像、不再生成新类型。
+    /// 不按 open(Object) 概括：那样 `getClass()` 展开为全部已实例化类的镜像，经签名解析的结果流向注解 / 反射枚举等
+    /// 接收者，使所有用户类的成员经反射入链
     fn deep_mirror(&self, x: u32) -> bool {
         self.mirrors
             .get(&x)
