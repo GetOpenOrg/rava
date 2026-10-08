@@ -426,6 +426,12 @@ impl<'a> Engine<'a> {
                     for (d, n, v) in fs {
                         let Some(desc) = self.h.class(d).and_then(|c| c.fields.iter().find(|f| f.name == *n && !f.is_static()).map(|f| f.desc.clone())) else { continue };
                         let key = MemberRef { owner: d.clone(), name: n.clone(), desc };
+                        // 抽象对象（容器分配点）的字段值另记入按对象值表（`obj_fields.rs`）：映像对象不经字节码 `new` / `putfield`，
+                        // 不记则按对象读只得初值（size 0 / table null），其迭代、查找被折成不可达
+                        if let Some(xo) = site {
+                            let pv = self.image_pv(*v);
+                            self.obj_field_put(&key, &[xo], false, &pv);
+                        }
                         if let (Some(xo), IVal::R(r)) = (site, v) {
                             // 抽象对象的字段：值只进该对象的字段节点（逃逸后才与未知接收者视图相连）
                             self.field_put(&key, PV::Top);
