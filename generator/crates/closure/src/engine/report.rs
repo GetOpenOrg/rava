@@ -360,7 +360,16 @@ impl<'a> Engine<'a> {
                     let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
                         absint::Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
                         absint::Event::Return(v) => Some(format!("@{o} ret {v:?}")),
-                        absint::Event::Invoke { mref, args, .. } => Some(format!("@{o} {}{args:?}", mref.name)),
+                        absint::Event::Invoke { opcode, mref, iface, args } => {
+                            // 本调用点按常量实参求值的结果（诊断用，不登记依赖）
+                            let t = self.ctx.call_info(*opcode, mref, *iface).target.clone();
+                            let ev = t.as_ref().map(|t| self.ctx.const_eval(None, t, args));
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}", mref.name))
+                        }
+                        absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
+                            let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);
+                            format!("@{o} field {} open {} fopen {fopen} hw {}", fi.key, fi.open, self.ctx.hw_written(&fi))
+                        }),
                         _ => None,
                     }).collect();
                     out.push(format!("    conservative {} events {}", a.conservative, evs.join(" ")));
