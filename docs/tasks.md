@@ -98,7 +98,8 @@
 - **用户已定（2026-10-08）**：U12 接受为 U1 例外（日志路径属性构建期取值，①③ 解除挂起）；U13 `Class.genericInfo` 入映像；去除无映像回退保留；U14 部分修订 U1——`line.separator`（按目标三元组）、`file.encoding`（UTF-8）、`java.home`（构建期值）构建期钉值，`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取，每项实测闭包类数、无收益不钉。见引导映像计划 §8.4。
 - **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
 - **known_failures**：batch-1008 新增 TestBootLayer（第 5 步已实施，随 batch-1009 复验）、删除 TestXmlSaxEvents。
-- **C4 全量**：尚未开始。前置：合批合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。
+- **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava、dev 恢复。
+- **dev（2026-10-08）**：内存条有坏点，等新条到货更换，恢复需数天；BIOS 散热调整随换内存同一次停机做，恢复后先做内存自检再放作业。改名不再等 dev：当前子代理收尾、batch-1009/1010 合入且 gate 通过后单独进行。
 - **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
@@ -149,7 +150,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   ├─ ⏳ C1d-b 余项：b2（◀── why2-93e0f28e 取证）、b3 余 URL$DefaultFactory 扇出
 │   │
 │   └─ ⏳ C4 收官：验收轮全量 e2e（JDK 21）⊇ 1029 例基线——尚未开始
-│         ◀── 合批（batch-1008 起）合入集成分支、改名 rava 与 dev BIOS 维护窗口
+│         ◀── 合批（batch-1008 起）合入集成分支、改名 rava、dev 恢复（换内存条 + BIOS）
 │
 ├─ 【近期】依赖 C4 收官
 │   ├─ ⏳ scripts-into-rava S6 → S7 → S8（产品路径 Python 归零）
@@ -162,7 +163,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【暂缓】
 │   ├─ ⏸ build-memsafe 内存友好缺省构建档（10-08 暂缓）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
-│   ├─ ⏸ 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
+│   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
 │   ├─ ⏸ 不实施 / 挂起（10-06 用户定）：方法句柄对象化、T2 余 4b、b1 序列化收窄、a5 关系型边界推理
 │   └─ ⏸ 缓：虚拟线程余项（T6 规模、pinned）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
 │
@@ -178,7 +179,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 batch-1008 合批验证（emit 内存超限修复）──▶ 合入集成分支 ──▶ 引导映像第 5 步（14 → 0）──┐
 u12-props（U12 ①③ + U14 钉值）/ U13 genericInfo（待派）─────────────────────────────────────┤
 closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ─────────────────────────────────────┼──▶ C4 验收全量 ──▶ S6–S8 / JUnit J3–J4 / API 覆盖 ──▶ pilot ──▶ 产品化
-改名 rava + dev BIOS 窗口 ──────────────────────────────────────────────────────┘
+改名 rava ／ dev 恢复（换内存 + BIOS）──────────────────────────────┘
 ```
 
 ---
