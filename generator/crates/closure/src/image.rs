@@ -132,6 +132,9 @@ pub struct ImageData {
     pub current_thread: Option<u32>,
     /// VM 模块表（§5.5.1 S5）
     pub modules: Vec<IModule>,
+    /// 类镜像上写入映像的内存缓存字段（镜像对象, 声明类, 字段名；`[concrete] image_memo_fields`）：值在该镜像
+    /// 对象的字段中（分析期具体求值算出的缓存，如 `Class.genericInfo`），启动序列写入运行期镜像（U13）
+    pub mirror_memos: Vec<(u32, String, String)>,
 }
 
 fn val(v: IVal) -> Value {
@@ -283,6 +286,7 @@ impl ImageData {
             "live": self.live,
             "current_thread": self.current_thread,
             "modules": self.modules.iter().map(|m| json!({ "obj": m.obj, "loader": val(m.loader), "open": m.open, "location": m.location, "packages": m.packages })).collect::<Vec<_>>(),
+            "mirror_memos": self.mirror_memos.iter().map(|(o, d, n)| json!([o, d, n])).collect::<Vec<_>>(),
         })
     }
 
@@ -377,6 +381,12 @@ impl ImageData {
                     .collect::<Result<_, _>>()?,
             });
         }
+        for m in arr("mirror_memos")? {
+            let a = m.as_array().filter(|a| a.len() == 3).ok_or("映像镜像缓存格式")?;
+            let o = a[0].as_u64().ok_or("映像镜像缓存格式")? as u32;
+            let st = |v: &Value| v.as_str().map(str::to_string).ok_or("映像镜像缓存格式");
+            d.mirror_memos.push((o, st(&a[1])?, st(&a[2])?));
+        }
         d.live = arr("live")?.iter().map(|x| x.as_u64().map(|x| x as u32).ok_or("映像活对象格式")).collect::<Result<_, _>>()?;
         Ok(d)
     }
@@ -415,6 +425,7 @@ mod tests {
             live: vec![0, 2],
             current_thread: Some(0),
             modules: vec![IModule { obj: 0, loader: IVal::N, open: false, location: Some("jrt:/a".into()), packages: vec!["a".into(), "a/b".into()] }],
+            mirror_memos: vec![(2, "a/M".into(), "memo".into())],
         };
         let back = ImageData::from_json(&d.to_json()).unwrap();
         assert_eq!(back, d);

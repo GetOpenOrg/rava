@@ -13,6 +13,9 @@ pub struct ConcreteCfg {
     pub natives: HashMap<String, String>,
     /// 内存缓存字段（`类.字段`）：首次求值写入、之后命中；轨迹按冷 / 热两次求值取并
     pub memo_fields: HashSet<String>,
+    /// 写入引导映像的内存缓存字段（`类.字段`，须同在 `memo_fields`）：具体求值中类镜像上该字段的写入值（求值结束时的
+    /// 对象图）物化进引导映像，运行期命中缓存；全部缓存写入都可物化的实参组合只按热求值的轨迹入闭包
+    pub image_memo_fields: HashSet<String>,
     /// 发布后不再改写的类型（含子类型）：映像中这类对象的全部实例字段可读，经其字段取到的映像数组视为冻结。
     /// 依据是类的不可变契约（如正则模式及其节点图编译后只读），由清单逐类声明
     pub stable_types: Vec<String>,
@@ -84,6 +87,7 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         entries: strs(get("entries")).into_iter().collect(),
         natives: table(get("natives"), "natives")?,
         memo_fields: strs(get("memo_fields")).into_iter().collect(),
+        image_memo_fields: strs(get("image_memo_fields")).into_iter().collect(),
         stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
         implicit: table(get("implicit"), "implicit")?,

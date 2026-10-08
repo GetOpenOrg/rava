@@ -18,23 +18,25 @@ use super::*;
 use crate::image::{IBody, IStep, IVal, ImageData};
 
 pub(super) struct ImgState {
-    data: Rc<ImageData>,
-    build_time: HashSet<String>,
+    pub(super) data: Rc<ImageData>,
+    pub(super) build_time: HashSet<String>,
     /// 构建期初始化类中已登记的（初始化不展开 `<clinit>`）
-    touched: HashSet<String>,
-    statics: HashMap<(String, String), IVal>,
-    mirror_obj: HashMap<String, u32>,
-    live: Vec<bool>,
-    queue: Vec<u32>,
+    pub(super) touched: HashSet<String>,
+    pub(super) statics: HashMap<(String, String), IVal>,
+    pub(super) mirror_obj: HashMap<String, u32>,
+    pub(super) live: Vec<bool>,
+    pub(super) queue: Vec<u32>,
     /// 活对象的引用字段：字段节点尚未出现，等待（声明类, 字段名）→（值）
-    pending: HashMap<(String, String), Vec<IVal>>,
+    pub(super) pending: HashMap<(String, String), Vec<IVal>>,
     /// 占位对象 → 来源
-    ph_src: HashMap<u32, Feed>,
+    pub(super) ph_src: HashMap<u32, Feed>,
     /// 映像对象 → 抽象对象（数组与容器形态类的实例逐对象成为分配点，与字节码 `new` 的容器建模一致）
-    sites: HashMap<u32, u32>,
-    busy: bool,
+    pub(super) sites: HashMap<u32, u32>,
+    pub(super) busy: bool,
     /// VM 模块表已汇入类镜像模块钩子的值池
-    modules_fed: bool,
+    pub(super) modules_fed: bool,
+    /// 具体求值的镜像缓存并入（`image_memo.rs`）
+    pub(super) memo: super::image_memo::MemoState,
 }
 
 impl ImgState {
@@ -82,6 +84,7 @@ impl<'a> Engine<'a> {
             sites: HashMap::default(),
             busy: false,
             modules_fed: false,
+            memo: super::image_memo::MemoState { base: data.objs.len(), ..Default::default() },
             data: data.clone(),
         }));
         let st = self.img.as_ref().expect("映像").statics.clone();
@@ -336,7 +339,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 映像对象的抽象值（首次引用时成为活对象，内容入队）
-    fn image_ref(&mut self, o: u32) -> Option<Feed> {
+    pub(super) fn image_ref(&mut self, o: u32) -> Option<Feed> {
         let s = self.img.as_ref()?;
         let x = &s.data.objs[o as usize];
         let newly = !s.live[o as usize];
@@ -400,7 +403,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 活对象内容传播（工作表，避免深对象图递归）
-    fn image_drain(&mut self) {
+    pub(super) fn image_drain(&mut self) {
         let Some(s) = self.img.as_mut() else { return };
         if s.busy {
             return;

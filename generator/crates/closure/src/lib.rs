@@ -95,7 +95,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.root_vm_rules();
     e.run();
-    boot_image.data.live = e.image_live();
+    e.image_finish(&mut boot_image.data);
     let edges = engine::cut::edges_take();
     if let (Some(p), Some(g)) = (&input.diag.dump_edges, &edges) {
         if let Err(err) = engine::cut::edges_write(g, p) {

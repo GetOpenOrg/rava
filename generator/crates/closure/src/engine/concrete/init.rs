@@ -9,6 +9,9 @@ impl Vm {
         if c.starts_with('[') {
             return Ok(());
         }
+        if self.tracing() {
+            self.trace.touched.insert(c.to_string());
+        }
         match self.init.get(c) {
             Some(Init::Done | Init::Running) => return Ok(()),
             Some(Init::Failed(w)) => return fail(format!("类初始化失败 {c}：{w}")),
