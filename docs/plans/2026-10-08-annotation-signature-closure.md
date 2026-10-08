@@ -69,7 +69,8 @@
 
 P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHashMap.comparableClassFor@21`（concrete）→ `SignatureParser.<init>`，方法含 `parseClassSig` / `parseSuperInterfaces` / `ParameterizedTypeImpl.make` 等，即**确有某组合的入闭包轨迹含真正的类签名解析**。但 asig-str 的诊断里两点组合全部标「⇒映像」，说明这是被 P1 遮住的第四层原因，P2 并没有完全断开。待查方向（见续作 1'）：
 - ⇒映像组合的温轨迹：温求值前只撤销非映像缓存写入，`ClassRepository` 的惰性字段（`superInterfaces`）若在撤销集合里，温轨迹会重解析。
-- 首个组合冷求值中的类初始化轨迹：例如 `ClassRepository.<clinit>` 的 `NONE`，它是否作为初始化轨迹并入。
+- 首个组合冷求值中的类初始化轨迹：例如 `ClassRepository.<clinit>` 的 `NONE`（`make("Ljava/lang/Object;", null)` 会走 `parseClassSig` / `parseSuperInterfaces`），它是否作为初始化轨迹并入。另一种可能：映像里有 `ClassRepository` / `ParameterizedTypeImpl` 实例（物化的 genericInfo），类型进 `image_types` 后要求运行期初始化该类。这种情况的终态是映像预初始化这些类的静态状态（`NONE` 入映像），不走运行期 `<clinit>`。
+- 闭包单调：不动点早期轮次接收者尚未齐全时，若某组合失败触发了整点回退（抽象调用边），后续轮次即使全部物化也撤不回。要核对 `concrete_fallback` 是否在任一轮被调用过；诊断只打最后一轮的结果。
 
 ## 五、失败 / 否定路线
 
