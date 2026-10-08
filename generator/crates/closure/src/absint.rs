@@ -147,7 +147,7 @@ impl<O: Oracle> Interp<'_, O> {
             _ => {}
         }
         if let (Some(x), Some(y)) = (a.obj(), b.obj()) {
-            if let (Obj::Image(a), Obj::Image(b)) = (&**x, &**y) {
+            if let (Obj::Image(a, _), Obj::Image(b, _)) = (&**x, &**y) {
                 return Some(a == b);
             }
         }

@@ -1,0 +1,3 @@
+# 标准提供者按名反射取类（StandardCharsets.lookup@122 Class.forName("sun.nio.cs."+cln)）整方法切除：
+# 名字来源（宿主名 + 常量名）全部收窄到「只链匹配字符集」的上界；扩展 / 类路径提供者保留
+sun/nio/cs/StandardCharsets.lookup:(Ljava/lang/String;)Ljava/nio/charset/Charset;

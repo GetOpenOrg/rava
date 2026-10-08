@@ -1,0 +1,3 @@
+# 字符集扩展提供者与类路径提供者查找（ServiceLoader 构建期事实）：只切 lookup2 的第 2、3 级，标准提供者保留
+java/nio/charset/Charset.lookupExtendedCharset:(Ljava/lang/String;)Ljava/nio/charset/Charset;
+java/nio/charset/Charset.lookupViaProviders:(Ljava/lang/String;)Ljava/nio/charset/Charset;

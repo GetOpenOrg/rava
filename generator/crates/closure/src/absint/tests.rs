@@ -520,7 +520,7 @@ impl Oracle for ImageGetter {
     }
     fn param_mirror_call(&self, i: u16, _: &MemberRef) -> Option<V> {
         let o = self.0.get(i as usize).copied().flatten()?;
-        Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Image(o))) })
+        Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(Obj::Image(o, Vec::new()))) })
     }
 }
 

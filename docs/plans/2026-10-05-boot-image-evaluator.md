@@ -9,7 +9,7 @@
 > **2026-10-05 用户决策 U0–U6 已定（§8.1）**；第 1 步已在分支 `boot-image-s1` 实施，实测见 §5.3。
 > U1 改判为「运行期取宿主值」：下文 §3.2、§5.2 B1、§6 第 2 步验收已按 U1 改写；§0 第 1 条与 §5.1 的探针数字为钉值时的历史实测。2026-10-08 U1 被 U14 部分修订（§8.4）：`line.separator`、`file.encoding`、`java.home` 改为构建期钉值（逐项实测闭包收益，无收益不钉），`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取。
 >
-> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。U12 / U13 已定（2026-10-08，用户采纳建议），U14 已定（2026-10-08，U1 部分修订），见 §8.4。派发：u12-props（U12 ①③ + U14 line.separator / file.encoding，基于 b558e0c2）进行中；U14 java.home 随 boot-image-s5；U13 待派。
+> **现状（2026-10-08）**：第 1–2 步已完成（合入集成分支 c5812d89）；第 3 步（boot-image-s3）随 batch-1007 测过、未单独合入；第 3–4 步待合批验证（boot-image-s4 c614f840，已合入 batch-1008 b52917c9，`#[jvm_boundary]` 23 → 14）；第 5 步进行中（分支 boot-image-s5，jimage + JceSecurity 6，目标 14 → 0）。U12 / U13 已定（2026-10-08，用户采纳建议），U14 已定（2026-10-08，U1 部分修订），见 §8.4。派发：u12-props（U12 ①③ + U14 line.separator / file.encoding，基于 b558e0c2）进行中；U14 java.home 随 boot-image-s5；U13 待派。第 6 步（boot-image-s6，§5.8）：非引导类构建期初始化已实现，类 −30 / 方法 −734（HelloWorld），正则链验收阻塞于映像 lambda 对象（§5.8.3）。
 
 1. **可行，探针已在构建期跑完 HotSpot 的全部三个引导阶段。** 探针用的是 `engine/concrete` 同一个解释器的引导模式，输入是 macOS JDK 21.0.11 的 java.base 字节码，例子为 HelloWorld：
    - 次序：VM 预初始化 9 类和 3 个 VM 构造对象，然后 `initPhase1`、`initPhase2(false,false)`、`initPhase3`；
@@ -784,7 +784,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。收窄单独不可达（§5.6.5），终态需 `Class.genericInfo` 入映像，U13 已定（§8.4，做） |
 | S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
 
-- 排期：S2 按 U13 已定（§8.4，`Class.genericInfo` 入映像），排在三个机制之后的第一项；S1 按 U14（2026-10-08，§8.4）重估——`lookup` 的三条入口中 jnu 区段与 stdout / stderr 编码仍取决于运行宿主、保持运行期读取，名字不定仍属合法可达；`file.encoding` 钉为 UTF-8 后的收益逐项实测，无收益不钉。
+- 排期：S2 按 U13 已定（§8.4，`Class.genericInfo` 入映像），排在三个机制之后的第一项；S1 按 U14（2026-10-08，§8.4）重估——`lookup` 的三条入口中 jnu 区段与 stdout / stderr 编码仍取决于运行宿主、保持运行期读取，名字不定仍属合法可达；`file.encoding` 钉为 UTF-8 后的收益逐项实测，无收益不钉。2026-10-08 实测（`docs/reports/2026-10-07-closure-composition.md` §7.3）：只切宿主名来源 Δ = 0（常量名 `"UTF-8"` 经 `defaultCharset` 仍按全表反射）；收窄须同时有「U1 字符集域决定」与「字符串常量上下文 + 常量表键→值」，上界 −141 类。
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 
@@ -966,13 +966,10 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 可物化的组合只按**热求值**轨迹入闭包。热求值的 inited 并入求值触及的类（`Trace.touched`），使片段对象的类型被初始化 / 实例化。
   - 不可物化的组合沿用冷 / 热轨迹并集。
   - `--flows @concrete` 诊断逐组标注 `⇒映像` 或 `（并：原因）`。
-- **并入映像**（`engine/image_memo.rs`）：
+- **并入映像**（`engine/image_memo.rs`）：与第 6 步的构建期初始化扩展合为同一套追加与规范化流程，见 §5.8.5（下列为合并前 d147fe31 的做法，已被 §5.8.5 取代：值写进镜像对象体、`image_finish` 单独重排）。
   - 片段中的静态字段引用须属于构建期初始化类，且映像值是对象。
-  - 片段对象追加进 `ImageData.objs`；值写进映像镜像的字段，镜像不存在则新建，并登记 `ImageData.mirror_memos`（镜像, 声明类, 字段名）。
-  - 镜像已是活对象时，该字段补传播。
   - 同一（镜像, 字段）只写首个片段，因为缓存值与求值实参无关。
-  - 分析结束时 `image_finish` 把追加对象重排为规范次序：新建镜像按类名在前，片段块按（镜像, 声明类, 字段）次序在后。映像数据因此与工作表次序无关。
-- **发射**（`emit/.../boot_image/start.rs`）：启动序列在链接之后，对每条 `mirror_memos`（镜像与值均为活对象）生成 `<Class as From<Object>>::from(rt::mirror(desc)).__set_<slot>(From::from(v))`，写入运行期镜像。
+- **发射**（`emit/.../boot_image/start.rs`）：启动序列在链接之后，对每条 `mirror_memos`（镜像与值均为活对象）生成 `<Class as From<Object>>::from(rt::mirror(desc)).__set_<slot>(From::from(v))`，写入运行期镜像；值取记录本身（`IMemo.val`），不读镜像对象体。
 
 **实测**（us1 Linux JDK 21，`rava closure`，作业 u13-s4-c614f840 / u13-s4b-41d45f3c）
 
@@ -1181,6 +1178,245 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 两边都没有处理「运行期初始化类的字段粒度读取」（§5.9.3 前提 2）。
 - 合批时 `vm_intrinsics.toml` 的 `[concrete.boot.natives]` 段可能有文本冲突，两边条目并存即可。
 
+### 5.8 第 6 步：非引导类的构建期初始化（C3 `build_time_init`，2026-10-08，分支 `boot-image-s6`，基于 batch-1009 d5a2cb5d）
+
+#### 5.8.1 设计
+
+引导映像导出后**保留求值器**（`Engine.ext_vm`）。分析中首次初始化、且不在映像构建期初始化集合中的类（用户类与 JDK 类同一规则，无类名特判），先交给求值器尝试在构建期执行 `<clinit>`：
+- 成功：结果追加进映像，类按构建期初始化处理（不展开 `<clinit>`，静态字段取映像值，已出现的字段节点补传播）；
+- 失败：照旧在运行期初始化，原因记入 `summary.build_time_init.failed`。
+
+**与程序无关（档案约束）**。档案内各入口的映像引导部分逐字节相同，所以扩展结果按**扩展组**组织，组键与程序无关：
+- `c:<类>`：该类静态字段可达、归属该类的对象，该类的静态字段，以及重定位槽；
+- `s:<内容>`：扩展期新建的驻留字符串及其内容数组；
+- `m:<类型>`：扩展期新建的类镜像。
+
+单个程序按发现次序追加扩展组，分析结束后 `canonicalize()` 按键排序重编号（只动扩展对象，引导对象下标不变）。档案对每个入口做 `absorb()`：同键复用，且内容须相同，不同即报错；新键追加。全部并入后再规范化。代码：`closure/src/image_ext.rs`，数据结构 `IGroup`，`ImageData.ext_base` / `ext_steps` / `ext`。
+
+**尝试隔离（在线检查，`engine/concrete/ext_init.rs`）**。程序之间只差「哪些类已初始化、以什么次序」，所以一次尝试必须与此前的扩展类隔离，也必须与运行期可变的状态隔离：
+- **读**：
+  - 它类静态字段只许读 final / 只在 `<clinit>` 写的字段（`init_only`）和内存缓存字段；
+  - 它类对象只许读不变字段、内存缓存字段、类镜像，以及稳定类型的字段；
+  - 它类数组只许读冻结的：字符串内容，或经稳定类型取到的数组。
+- **写**：只许写本类静态字段（`putstatic` 与 `set_static` native）和本次尝试新建的对象。内存缓存字段的写入在外层尝试结束时撤销。
+- **初始化**：
+  - 依赖类嵌套尝试，各在自己的日志标记下进行；依赖失败则本类失败。
+  - 依赖引导中转为运行期初始化的类，或形成初始化环，即失败。
+- **身份哈希**：本类对象取 `fnv32("类#序号")`，共享对象取 `fnv32(键)`，其余对象失败。
+- **效果**：成功后核对残差、VM 侧登记、占位 / 延迟值、宿主来源、模块表、污点、VM 单元等计数，任何增长即失败。`<clinit>` 抛异常即失败（运行期照常抛）。
+- **导出**：静态字段可达的对象不得含污点、lambda、占位、延迟或宿主对象，也不得引用映像之外的对象（`ext_export.rs`）。
+- **失败时**：回滚到尝试标记，撤销嵌套成功的类（`done` 截断、认领撤回）；回滚本身失败时置 `broken`，此后不再尝试。
+
+**发射侧**：扩展对象、静态字段、构建期初始化类与重定位步骤沿用引导映像同一套物化路径（`boot_image/start.rs`），发射器不需要改动。
+
+**根模块限制（23637bec）**：映像物化在根门面 crate（根类所在模块），所以扩展类与扩展组对象的类型只能属根模块。用户类、其他 jmod 模块的类目前一律在运行期初始化（原因「不在映像根模块」）。否则分析按构建期初始化处理，发射侧却因类不在根 crate 而跳过静态字段与初始化标记，运行期会执行未入闭包的 `<clinit>` 链。
+
+终态是按 crate 分段物化：各模块 crate 与用户 crate 各带一段扩展映像，引用上游段的对象；启动序列按 crate 依赖序登记。用户类扩展组随用户 crate 生成，不进档案。
+
+#### 5.8.2 实测（服务器 us1，JDK 21.0.11，`scripts/closure_composition_job.sh hello collectors jcasasl`；基线 d5a2cb5d 与 c1b77e0a 同属作业 `bimg6-m1-c1b77e0a`，加根模块限制后的 23637bec 为作业 `bimg6-m2-23637bec`）
+
+| 用例 | 类 d5a2cb5d → c1b77e0a → 23637bec | 方法 | 构建期初始化成功 / 运行期（23637bec） | java/util/regex 类 |
+|---|---|---|---|---|
+| HelloWorld | 2178 → 2148 → **2148**（−30） | 13047 → 12301 → 12313（−734） | 1328 / 440 | 61 → 61 |
+| CollectorsDemo | 2178 → 2148 → **2148**（−30） | 13054 → 12298 → 12310（−744） | 1328 / 440 | 61 → 61 |
+| TestJcaSasl | 2276 → 2245 → **2246**（−30） | 13606 → 12819 → 12861（−745） | 1355 / 500 | 61 → 61 |
+
+- 删除的类全部是减项，没有新增类：BreakIterator 链 14 类（`sun/text/*`、`java/text/BreakIterator*`）、Vector / Stack 5 类、`HexFormat`、`Duration`、`Invokers$Holder`、`VarHandleGuards` 等。
+- **第 5 步风险压回**：JarFile、http 协议处理器、`Globs` 在基线 d5a2cb5d 已为 0（JceSecurity 字节码可达没有带入），本步后仍为 0。
+- **验收「CollectorsDemo 冷独占正则链 0 类」未达成**：`Formatter.<clinit>` 的唯一失败原因是映像含 lambda 对象。`Pattern.compile` 的节点持有 `Pattern$BmpCharPredicate` lambda（`Pattern.lambda$Single$14`）。`FloatingDecimal$HexFloatPattern`、`Period` 的失败原因相同。
+- `#[jvm_boundary]` 保持 0（本步不涉及手写层）。
+
+失败根因（HelloWorld，c1b77e0a 共 400 类，含嵌套传递；23637bec 另有 68 类因「不在映像根模块」转运行期，`summary.build_time_init.reasons` 已按根因归并）：
+
+| 类数 | 根因 | 终态处理 |
+|---|---|---|
+| 83 / 77 / 4 / 3 | 读 `SharedSecrets.javaLangAccess` / `javaLangRefAccess` / `javaNioAccess` / `javaLangInvokeAccess`（非 final、由 setter 写入） | 「一次写入」字段事实：所有写入点均为声明类内只写该字段的 setter，且 setter 的调用点只在 `<clinit>` 或引导阶段方法中（JDK 侧全局调用点扫描，与程序无关） |
+| 71 | 读 `System.props` | 正确拒绝：属性在运行期取宿主值（U1 / U14）。下游的 `Debug`、`ThreadLocal`、`ZoneRulesProvider` 等随之运行期初始化 |
+| 27 / 11 | 写 `SharedSecrets.*Access`（类 `<clinit>` 注册自身访问器） | 与上一项同一事实：写入目标是「一次写入」字段且当前为空时，作为本类效果随组导出 |
+| 18 / 12 / 7 / 3 / 2 | 无具体语义：`AtomicLong.VMSupportsCS8`、`Class.getDeclaredFields0`、`MethodHandleNatives.resolve`、`StackStreamFactory.checkStackWalkModes`、`System.currentTimeMillis` | 前四项补 `[concrete.boot]` native 语义；`currentTimeMillis` 正确拒绝 |
+| 12 / 8 | 初始化环（`KnownOIDs`、`IsoFields$Field`） | 环内的类整体作为一个尝试单元 |
+| 9 | 读 `Enum.hash`（缓存的身份哈希） | 引导对象的身份哈希已定，`Enum.hash` 按内存缓存字段处理 |
+| 3 | 映像含 lambda 对象 | 见 §5.8.3 |
+
+#### 5.8.3 遗留：映像中的 lambda 对象（正则链验收的唯一阻塞）
+
+映像格式要增加 lambda 对象 `IBody::Lam { site, captured }`，其中 `site` 为调用点（类、方法、描述符、pc）。分析器的 `Lam` 已有 `imp`、`bargs`、`desc`、`captured`，还要补记调用点。
+
+发射侧：翻译器对映像列出的调用点，在类上额外生成站点工厂 `__lambda_site_<pc>(捕获值…) -> Result<Object>`，函数体复用 `instr/src/sim/dynamic/lambda.rs` 的同一套降级（`call_args` / `closure_body` / `boxed_closure`），捕获值改为形参。启动序列以映像中的捕获值调用工厂。隐藏类名、SAM 账本登记都与站点同源。
+
+此项跨分析器、映像格式、翻译器和发射器。由于档案映像各测试共享，发射侧缺陷会影响全部用例，因此单独成步，须先做全量单测与抽查。
+
+#### 5.8.4 待验证与风险
+
+- **待验证**：
+  - closure / emit / input 全量单测；
+  - e2e 抽查 HelloWorld、CollectorsDemo、DeepCopy、TestJcaSasl 与 JCA 四例，确认扩展组物化正确，被删类无运行期回落；
+  - `scripts/seed_check.sh` 两次生成确定性；
+  - 语料档案 `absorb` 不报「扩展组与其他入口不一致」。
+- **风险**：
+  - 扩展类在 `image_init` 之前若已有缓存的静态初值，会以旧值参与传播。已对已出现的字段节点调用 `image_field` 补传播，但未覆盖其他缓存。
+  - `Rc::make_mut` 在映像数据被共享时会整体复制（性能项）。
+  - final 静态字段若之后被 native 改写，读取结果会过期（与引导映像同一前提）。
+- **恢复入口**：
+  - `engine/image_start/ext.rs`（接入）、`engine/concrete/ext_init.rs`（隔离规则）、`engine/concrete/ext_export.rs`（组导出）、`closure/src/image_ext.rs`（合并 / 规范化）；
+  - 根因收窄按 §5.8.2 表逐项推进，每项用同一作业命令复测类数。
+
+#### 5.8.5 与 U13 镜像缓存的整合：映像追加对象统一为扩展组（2026-10-08，合入 batch-1010 35d936c4）
+
+合并前有两套「往引导部分之后追加对象并重排编号」的机制：U13 的 `image_finish`（`m.base` 之后按镜像排序重排 memo 块）与本步的 `canonicalize`（`ext_base` 之后按组键重排扩展组）。二者若并存，`image_finish` 的重排会丢掉交错其间的扩展对象，`canonicalize` 遇到不属于任何组的 memo 对象无法编号；U13 还把缓存值写进镜像对象体，镜像是引导对象时引导部分随程序而变，档案 `boot_eq` 必然失败。终态取第一种做法：**镜像缓存也是与程序无关键的扩展组**，只保留 `canonicalize` / `absorb` 一套流程，`image_finish` 删除。
+
+- **组键**：`f:<镜像类型>#<声明类>.<字段>`（`image_ext::memo_key`）。缓存值只取决于镜像所代表的类，与求值实参、程序无关，所以同键内容相同，档案按键求并。组内对象是片段对象（广度优先次序），`nsteps = 0`。
+- **缓存值不写进镜像对象**：`ImageData.mirror_memos: Vec<IMemo { mirror, decl, name, val }>`，每条与一个 `f:` 组一一对应，按组键排序。镜像对象体保持构建期 VM 的原样，引导部分逐字节与程序无关。分析侧镜像成为活对象时，`image_drain` 把该镜像的缓存（`MemoState::of`）与字段同一口径传播；发射侧直接取 `IMemo.val`。
+- **新建镜像同经构建期求值器**：片段引用的类镜像若映像中没有，由保留的求值器 `ExtVm::mirror` 新建（`Vm::mirror`，VM 字段在新建时写定），经 `ext_append(…, roots)` 按 `m:<类型>` 组导出——与扩展期新建镜像同键同内容，扩展类之后再引用该镜像时直接复用（`Ext.ids` 已登记）。共享组（`m:` / `s:`）对象的身份哈希一律取键哈希 `fnv32(键)`（与扩展期查询同值），同键组内容与是否查询过无关。
+- **追加对象接入分析**（`Engine::image_appended`，扩展组与镜像缓存组共用）：活标记扩容、新建镜像登记 `mirror_obj`；程序此前已取过的类镜像随即成为活对象（与引导镜像在程序取镜像时成为活对象同一口径），否则缓存值不传播、发射侧因镜像不活而不写缓存。
+- **按对象值表**（batch-1009 6db384e8）：活对象内容传播（`image_drain`）对抽象对象的字段值另记入按对象值表；扩展组与镜像缓存组追加的对象同经 `image_drain`，镜像缓存值与镜像字段同一循环，一并记入，无需另行处理（重复传播按格并，幂等）。
+- **可物化判定**（`image_memo_prepare`，取代 `image_memo_ok`）：静态字段引用规则不变；片段对象类型须属映像根模块（与 §5.8.1 根模块限制同口径）；所需镜像在此备好，失败即该组按冷 / 热并集入闭包。
+- **规范化**（`ImageData::canonicalize`）：全部组按键排序重编号，`mirror_memos` 的镜像号与值随组重定位后按键排序；校验组键不重复、`mirror_memos` 与 `f:` 组一一对应。对象号只由组键集合决定，与发现次序（扩展尝试与具体求值的交错）无关；步骤号只有 `c:` 组的重定位步骤，随组排序。
+- **档案合并**（`ImageData::absorb`）：同键组比对对象数、步骤数、对象内容；`f:` 组另比对重定位后的缓存记录（镜像号与值），不同即报「扩展组 … 与其他入口不一致（镜像缓存值）」。新键组连同其缓存记录追加。
+- **单测**：`image::tests::json_roundtrip`（`ext` 含 `f:` 组、`mirror_memos` 四元组）；`image_ext::tests::memo_groups_absorb_and_canonicalize`（两种发现次序、两种合并次序结果相同，记录重定位正确）、`absorb_rejects_divergent_memo`（缓存值不同即拒绝；记录与组不对应即拒绝）。
+#### 5.9.7 日志链续作（2026-10-08，分支 `log-chain`，基于 b9f47c33）
+
+**测量口径**
+- 测量环境：kr1 / us1，Linux，JDK 21.0.11。指标为 `rava closure` 的 summary.classes / methods。
+- 「E」表示 `--cut AccessController.executePrivileged:(PrivilegedAction;AccessControlContext;Class)`，即切断 doPrivileged 的统一执行口。它用来衡量日志链在扣除 doPrivileged 大集合之后的份额。
+- b9f47c33 上 HelloWorld 的基线是 **3324**，不是 §5.8 / enum-values-direct 记录的 2178。差异来自 6db384e8（映像容器对象的字段值记入按对象值表）：这是正确性修复。修复前，引导层 HashMap 迭代被折成不可达，2178 偏小，是不正确的值。因此本节一律以 3324 为基线。
+- 协调方的门模型（gates）低估了实际份额，下文排序只按实测列。
+
+**求值器补齐：DetectBackend 构建期求值（机制 ①）**
+- 清单 `[concrete.boot] calls` 增加 `{ init = ["jdk/internal/logger/BootstrapLogger$DetectBackend"] }`。只初始化后端判定类，**不调用** `getLoggerFinder` / `LoggerFinderLoader.service()`，所以构建期不执行 `redirectTemporaryLoggers`，`logManagerConfigured` 保持与 HotSpot 启动后相同的 false。这同时绕开了 §5.9.3 中 `accessProvider` 残差化的问题。
+- 判定过程（ServiceLoader(LoggerFinder, SCL) → `loadInstalled(DefaultLoggerFinder)`）依次撞到以下缺口，都按 HotSpot 同义补成通用 native，事实写在清单里：
+
+| 缺口 | 触发位置 | 补法 |
+|---|---|---|
+| `Class.getDeclaredMethods0` | StreamOpFlag → EnumMap → `getEnumConstantsShared` | op `class_declared_methods`（`engine/concrete/reflect.rs`）。反射对象由 VM 直接填写布局字段，字段名在 `[concrete.vm_fields]` 中以 `method_*` 登记；`slot` 为类文件方法下标；注解取原始字节 |
+| `getDeclaredConstructors0` | `ServiceLoader.getConstructor` | op `class_declared_constructors`，布局字段 `ctor_*` |
+| `ConstantPool` 取得 | — | op `class_constant_pool`，布局字段 `constant_pool_oop` |
+| 本地反射调用 | `DirectMethodHandleAccessor$NativeAccessor.invoke0`、`Method$Direct.invoke0` | op `reflect_invoke`。实参与返回值只支持引用类型；目标抛出异常时求值失败（不建模 InvocationTargetException） |
+| `ClassLoader.findBootstrapClass` | `ServiceLoader.loadProvider` → `Class.forName(Module, String)` | op `boot_class`。按 `defineModule0` 记录的包 → 模块 → 加载器（null）判定 |
+
+- 构建期产生的反射对象经 `Class.reflectionData`（软引用）可达。导出映像时，软引用按「可随时清除」的语义清除：清单 `[concrete] soft_references` / `null_queues` 登记了软引用类型与空队列类型；referent 只在别处也可达时保留。这样反射对象不入映像。
+- 结果：boot report 为「通过」，inited 335，residual_calls 仍为 2（没有新增残差）。DetectBackend 与 StreamOpFlag 都成为构建期初始化类。
+
+**分析器：映像对象身份标记**
+- `Obj::Image(id, finals)` 携带映像对象 id（3d7b3c64）。`ref_eq` 对两个映像标记按 id 折叠 `if_acmp`。
+- `field_value` 对 static final 字段的处理：字节码常量为未定形对象（`Obj::Fields`）时，优先采用映像值（`image_final`）。
+- 收益：`BootstrapLogger.useLazyLoggers` 中 `detectedBackend == CUSTOM` 折成 false（[15,17) 不可达）。
+
+**实测**
+
+| 测例 | b9f47c33 类 / 方法 | 3d7b3c64 类 / 方法 | 差 |
+|---|---|---|---|
+| HelloWorld | 3324 / 19,847 | 3315 / 19,761 | −9 / −86 |
+| CollectorsDemo | 3324 / 19,853 | 3315 / 19,767 | −9 / −86 |
+| DeepCopy | 3573 / 22,505 | 3562 / 22,406 | −11 / −99 |
+| HelloWorld E | 2773 | 2764 / 15,926 | −9 |
+| CollectorsDemo E | — | 2764 / 15,946 | |
+| DeepCopy E | — | 2885 / 16,929 | |
+
+- HelloWorld 减少的 9 个类是 EnumMap 及其 5 个内部类、`StreamOpFlag$MaskBuilder`、`StreamOpFlag$Type`、`BootstrapLogger$DetectBackend$1`。E 下减少的是同一组类。
+
+**切断实验**（HelloWorld，3d7b3c64）
+
+| 变体 | 类 / 方法 |
+|---|---|
+| S：切 `LoggerFinderLoader.service` | 3245 / 19,153 |
+| ES | 2758 / 15,887 |
+| EG：E + 切 `LazyLoggers.getLoggerFromFinder` | 2756 / 15,880 |
+| b9f47c33 上的旧实验 | L（切 logRuntimeExit）3324；F（切 getLoggerFromFinder）3252；LE 929；FE 2834 |
+
+- 结论：扣除 doPrivileged 大集合之后，finder / service 本身只持有约 6–8 个类。E → LE 的 1844 类差由 logRuntimeExit 链上的**其他节点**持有，不在 finder 上。①③ 的收益上限因此受这些节点约束，下一步应先用 `--why` 定位它们。
+
+**E → LE 的 1844 类差：当前头已不存在（2026-10-08，分支 `log-chain2`，b8988868，作业 lg2-why1）**
+
+| 变体（HelloWorld） | 类 / 方法 |
+|---|---|
+| ES | 2758 / 15,887 |
+| LES：ES + 切 logRuntimeExit | 2758 / 15,886 |
+| LE：E + 切 logRuntimeExit | 2764 / 15,925 |
+
+- 在 b8988868 上，切 logRuntimeExit 已经不减任何类：LE = E = 2764，LES = ES = 2758（只少 1 个方法）。可见 logRuntimeExit 链不持有这 1844 个类。ES 与 LE 之差共 6 个类，全部是 `LoggerFinderLoader.service` 与 `ServiceLoader.loadInstalled` 的直接产物（`BootstrapLogger$LogEvent`、`LoggingProviderImpl` 等）。
+- 旧 LE（b9f47c33，929 类）与新 LE（2764）逐类比对，前沿边如下（按首次发现链归因，共 1839 类）：
+
+| 持有点 | 类数 |
+|---|---|
+| `LocaleProviderAdapter.forType@61` 反射实例化 CLDR 适配器（`CLDRLocaleProviderAdapter.<init>`） | 725 |
+| `String.valueOf(Object)@11` 的 toString 派发 | 246 |
+| `executePrivileged(PrivilegedExceptionAction)@29` 派发 | 125 |
+| stream 管线（`AbstractPipeline.evaluate` / `copyInto` / `sourceSpliterator`） | 161 |
+| `StreamEncoder.<init>@4`（字符集） | 69 |
+| 其余（`FileDescriptor.closeAll`、`computeIfAbsent`、`URL.openConnection`、`Pattern.compile` …） | 513 |
+
+- 两边到 `forType` 的链完全相同：`[boot_region] Charset.isSupported` → `checkName` → `String.charAt` 越界消息 → `String.format` → `Locale.<clinit>` → … → `ThreadLocalRandom.<clinit>` → `SecureRandom.getSeed` → `Provider.<clinit>` → `String.toUpperCase(Locale)` → `ConditionalSpecialCasing` → `BreakIterator.getWordInstance` → `LocaleProviderAdapter.forType`。
+- 差别在 `forType@68` 的 `getDeclaredConstructor()` 是否返回：
+  - 旧 LE 中，`getConstructor0` 的循环体不可达（`ReflectionFactory.getExecutableSharedParameterTypes`、`Constructor.copy`、`Constructor.newInstance` 都不在闭包里）。`getDeclaredConstructor` 因此被判为不返回，`@75 newInstance` 之后整片不可达。
+  - 新 LE 中循环体可达，CLDR 适配器被实例化，下游整片回来。
+- 运行期 `getDeclaredConstructor()` 必然返回，所以旧 LE 的 929 是不健全的偏小结果，与 2178 同类（见「测量口径」）。转变发生在 b9f47c33..b8988868 之间：构建期求值器补了反射 native（ffff4c51 / 173f43de），映像标签也在其中（3d7b3c64）。
+- 结论如下：
+  - E 下日志链只剩 finder / service 的约 6–8 个类，logRuntimeExit 本身不持有大集合；
+  - 1844 类实际由 `Charset.isSupported` 根经越界消息与 `ThreadLocalRandom` 种子链持有，交给 charset-build 与越界消息线；
+  - 路径 A 的收益上限是 S 量级：基线下 −70（3315 → 3245），E 下 −6–8。路径 A 仍按终态做：它是精度改进，并且是 ③ 的前提。
+
+**路径 A 与 ③ 的收益上限：0 类，本线不实现（2026-10-08，`log-chain2` 29140373 = 合入 batch-1011 a88d7075 之后，作业 lg2-cut3，sg1）**
+
+| 变体（HelloWorld） | 类 |
+|---|---|
+| 基线 | 3304 |
+| L：切 `Shutdown.logRuntimeExit` | 3304（0） |
+| F：切 `LazyLoggers.getLoggerFromFinder` | 3233（−71） |
+| LF：L + F | 3233（−71） |
+| G：切 `System.getLogger(String)` | 3228（−76） |
+
+- ③（折叠 logRuntimeExit 中的 `isLoggable(DEBUG)`）只能删去 logRuntimeExit 体内 if 分支下的内容。整个 logRuntimeExit 被切掉都不减类（L = 基线；E 下也是 LE = E，见上），所以 ③ 的类收益上界是 0。
+- 路径 A（折叠 `LazyLoggers.getLogger` 中的 `isSystem(module)`）只删去一条边：`LazyLoggers.getLogger@15 → getLoggerFromFinder`。getLoggerFromFinder 还另有一条入口：
+  - 入口链：`getLazyLogger` → `JdkLazyLogger.<init>` → `LazyLoggerAccessor.makeAccessor`；运行期取用时经 `LazyLoggerAccessor.wrapped` → `createLogger@37` → `LazyLoggers$1.apply`（即 loggerSupplier），再到 getLoggerFromFinder。
+  - 这条入口在 HelloWorld 闭包中经 `PlatformLogger.getLogger@41 → getLazyLogger` 可达，与 isSystem 的取值无关，而且运行期也确实会走：惰性 logger 首次使用时就取 finder。
+  - 因此 F 的 −71 不能经路径 A 取得，路径 A 的类收益同样是 0。
+- 路径 A 本身还有一个结构性缺口：`LazyLoggers.getLogger` 的 module 形参按全部调用方汇合。`LoggerFinderLoader$TemporaryLoggerFinder.getLogger` 是另一个调用方，它的 module 经 `LazyLoggerAccessor.moduleRef`（WeakReference）一路传来，值未知。要折叠，需要「常量实参驱动的调用点克隆」，不能只做调用者镜像常量化加 const_eval 标签绑定。实现代价大，类收益为 0。
+- 决定：路径 A 与 ③ 在本线都不实现。日志链剩下的 71–76 类由 PlatformLogger / Tripwire 根经惰性 logger 的取用链持有，终态解法有两种：
+  - 映像求值器在构建期把这些 PlatformLogger 的后端判定落成映像值，使 `BootstrapLogger.useLazyLoggers` / `useSurrogateLoggers` 成为映像常量；
+  - 由 Tripwire 收窄线切掉 Tripwire 根。
+- locale-build 修复 3（`obj_at` 工厂对象保留调用点）合入后，基线变为 3304。上表已按新基线重测。
+
+**为什么 `useSurrogateLoggers` 仍未折叠**
+- `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
+- 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
+  - logRuntimeExit 的调用者模块是 java.base（@CallerSensitive，调用点静态可知）；
+  - `isSystem` 经 `DefaultLoggerFinder$1` 字段 → doPrivileged 按调用点返回 → `Module.getClassLoader` → `VM.isSystemDomainLoader`；
+  - 需要以下能力：调用者模块的常量化、映像 Module 标记穿过 `DefaultLoggerFinder$1` 的字段、doPrivileged 的按调用点返回值（不经 executePrivileged 汇合）、`Module.loader` 的映像读取。
+  - 打通后，exit 路径走 `getLazyLogger`；只剩 `useLazyLoggers()` 的取值依赖 `logManagerConfigured`。此时还需要「service() 仅经由非 exit 根可达」的按上下文值域，或由 Tripwire 收窄线切掉 Tripwire 根。
+- 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。log-chain2 实测确认其类收益上限为 0，不再实现（见上「路径 A 与 ③ 的收益上限」）。
+
+**③ isLoggable(DEBUG)**
+- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
+
+**仍持有日志链的其他根**（交给对应的线）
+- `Tripwire.ENABLED`（doPrivileged 读属性）；
+- `Charset.isSupported`（charset-build 线负责）；
+- PlatformLogger 级别上下文不精确。
+
+**重叠**
+- boot-image-s6 同样编辑 `vm_intrinsics.toml` 的 `[concrete.boot]` / `[concrete.natives]`，合批时可能有文本冲突，两边条目并存即可。
+- reflect-direct 的 `Method$Direct.invoke0` 在求值器中映射为 `reflect_invoke`，与其运行期直连互不影响。
+- `Obj::Image` 签名改为带 id，`field_hooks.rs` 一并改动；boot-image 各线合批时注意此处。
+
+**单测 `closure_cli::param_string_constants_fold_switch` 不归本线所能转过**（batch-1009 验证记录归因为「日志链膨胀」，经核对不成立）
+- 该测要求两项：HelloWorld 闭包不含 `sun/net/www/protocol/jrt/Handler`，且总类数 < 1000。
+- 用已取回的闭包 JSON 逐级回溯 via，`jrt/Handler` 在**所有变体**中都在，包括 LE（切 logRuntimeExit + executePrivileged，929 类）。可见它不由日志链持有，持有者是 `URL$DefaultFactory.createURLStreamHandler@128`：协议名 switch 未折叠。上游有两条：
+  - LE 下：`[boot_region] 根 Charset.isSupported` → `checkName` → `String.charAt` 越界消息 → `String.format` → `Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.addCount` → `ThreadLocalRandom.<clinit>` → `SecureRandom.getSeed` → `SeedGenerator.<clinit>` → `URLSeedGenerator.init` → `new URL(String)`。协议来自 `securerandom.source` 属性，非常量。
+  - 3d7b3c64 基线下：`BootLoader.findResourceAsStream` → `BuiltinClassLoader.findResourceOnClassPath` → `EmbeddedClassPath.url` → `URL.<init>(String, String, int, String, URLStreamHandler)`。协议形参在该调用点不是常量。
+- 类数 < 1000 至少需要同时切掉日志链与 executePrivileged 汇合点（LE = 929）。单独一项都不够：E 为 2764，S / G 的量级见上表。
+- 结论：该测要等三条线都完成才能转过，本分支单独不能使其通过：
+  1. charset-build（`Charset.isSupported` 根）；
+  2. 越界消息 / `ThreadLocalRandom` 种子链收窄；
+  3. 路径 A，加上 doPrivileged 按调用点返回。
+  
+  此外，`EmbeddedClassPath.url` 的协议常量化需要另行处理。
+
+**续作入口**
+- ~~先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点~~ 已完成（见上「当前头已不存在」）；
+- 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
+- ③ 在路径 A 之后做。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -1190,7 +1426,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 3 | 映像物化（档案内 `boot_image`）与装载；抽象分析从映像出发（联合裁剪）；删 `[boot_init]` 的 `calls` / `phases` 与 FS-C2 钩子 | HelloWorld 闭包 ≤ 540 类（目标 ≤ 569），二进制大小增量 ≤ 5%；启动装载 ≤ 1 ms；HelloWorld、TestAppClassLoader、TestModuleLayerDefine、TestBootLayer 输出与 JDK 相同；HelloWorld 闭包上限已由 §5.5.6「按平台上限」取代。**派发状态（2026-10-08）**：机制 ①③（U12）+ U14 `line.separator` / `file.encoding` 钉值合为一个任务，🔄 进行中（分支 u12-props，基于 b558e0c2）；S2 `Class.genericInfo` 入映像（U13）⏳ 待派（有空名额即派） |
 | 4 | a3 归零第一批：VM（审计 10 个方法，全仓属性 8 个）、Module 7、ModuleLayer 2、Class 2，T1 / T2 / T5 / T6；SecurityManager 移出边界 | `#[jvm_boundary]` 全仓 33 → 14（vm_impl 8、module_impl 7、module_layer_impl 2、class_impl 2 归零）；TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary 通过 ；**模块部分 ✅ fcc54fb8**：module_impl 7、module_layer_impl 2 归零，Module / ModuleLayer 移出 VM 边界，三例通过（bimg3-m-fcc54fb8，§5.5.6）；**VM / Class / SecurityManager（cabe9fb0，§5.6）**：vm_impl 8、class_impl 归零，全仓 23 → 14，SecurityManager 移出边界；待合批验证 |
 | 5 | jimage 嵌入数据与 `getNativeMap`（boot-layer 第 5 步），T3 / T4 / T7；L2 6、BootLoader 2、JceSecurity 6（2026-10-08 由第 6 步前移）；U14 `java.home` 构建期钉值，JceSecurity 策略文件改为构建期事实 | `#[jvm_boundary]` 14 → 0；TestClassResourceStream 通过；JCA 用例通过 ；**部分**：44be328e 补 native `BootLoader.getSystemPackageLocation`（TestStringGetCharsLegacy 通过，§5.5.6）；**实现 ✅ 82c49923 / f196dd71（§5.7.1–5.7.4）**：ClassLoader 6、BootLoader 2、JceSecurity 6 归零，三类移出 VM 边界，全仓 `#[jvm_boundary]` = 0；待合批验证（batch-1009） |
-| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native（已随第 5 步实施） | `#[jvm_boundary]` 保持 0；CollectorsDemo 等冷独占正则链 0 类；非引导类构建期初始化**未做**（亦用于压回 JceSecurity 字节码可达带入的类） |
+| 6 | 非引导类的构建期初始化（C3 `build_time_init`），用户程序可达类按同一规则判定；嵌入 java.home 树的 NIO native（已随第 5 步实施） | `#[jvm_boundary]` 保持 0；CollectorsDemo 等冷独占正则链 0 类；**部分 ✅ boot-image-s6（§5.8）**：扩展组 + 尝试隔离落地，HelloWorld / CollectorsDemo 类 2178 → 2148、TestJcaSasl 2276 → 2246，构建期初始化 1328 类（限根模块）；JceSecurity 带入风险实测为 0；**正则链未达**（61 类）：阻塞于映像 lambda 对象（§5.8.3，单独成步）；待合批验证 |
 | 7 | 语料全量 | 档案并集类数不超过现状（7886）；失败数不超过基线 |
 
 ## 7. 风险

@@ -414,8 +414,10 @@ S0 Boot 的 JVM 实载为参照列。
 4. **JCA 提供者构建期求值 + jar 签名校验移除**（构建期求值 + 整体替换）。
    - jcasasl allmech −714，团块差 593。与 c1d §21.5 重定向 1 合并。
 5. **字符集构建期求值**：扩展提供者为空；常量名查找收窄。三例都是 −149 至 −151，团块差 173。
+   - 2026-10-08 新基线复测：只收窄宿主名或只收窄常量名，Δ 都是 0。两者同时收窄的上界为 −141。扩展提供者不能折为空。挂起，等待用户就 U1 字符集域作出决定（见 7.3）。
 6. **日志链构建期求值**（随决定 L）：−52 至 −110。
 7. **locale 适配器链构建期求值**：团块差 295（Formatter 单门只 −25 至 −28，需在其他门关闭后复测）。
+   - 2026-10-08 实施（分支 locale-build，bbeb13a5）：HOST / SPI 适配器出闭包，三例 −18 至 −19 类、−132 至 −144 方法（超过 lcaux 上界，见 7.4）。不涉及 U1：`java.locale.providers` 已折为 null，偏好表恒为 [CLDR, JRE]。CLDR / JRE 本体（lcadapt 上界剩余 −112 至 −126 类）是宿主 locale 下的合法数据访问，不再按构建期求值处理，残余见 7.4 第 5 条。
 8. **类加载 / 资源封闭映像整体替换**（boot-layer 步骤 1–5）：本身减量小（团块差 18），但它是 ServiceLoader 类路径查找、jar 校验等多扇门的根；jar 校验不能用切写入点量化，以整体替换后的实测为准。
 9. **容器元素敏感**（`Objects.equals` 汇合派发）：c1d §21.5 重定向 2，随后续多连通门关闭而显现。
 10. **引用 / 信号按 ③ 收口**：随无 GC 模型与决定 L 实施，减量小。
@@ -456,6 +458,130 @@ S0 Boot 的 JVM 实载为参照列。
 ### 7.2 注解成员签名解析新基线复测（2026-10-08，3f4fee31，分支 annot-sig）
 
 切除集 `annsig` / `annall` / `sigall`，作业 `as-cut-3f4fee31`、`as-gates-3f4fee31`。`parseSig` 折叠的健全收益为 0 类、至多 −2 方法，不实施；`sun/reflect/generics` 由 open(Comparable) 回退独立保留。数据与依据见 `docs/plans/2026-10-05-boot-image-evaluator.md` §5.6.10。
+
+### 7.3 第 5 项字符集构建期求值新基线复测（2026-10-08，641d48ce，分支 charset-build）
+
+作业 `cs-cut-641d48ce`（jp2，基线 + `--cut-sets "charset cshost csext csstd"`，head 含 batch-1010 ab8dd577 / u12-props）；8bdc2721 上的 `cs-cut-8bdc2721`（sg2）逐数相同。产物在 `cluster_results/job/<tag>/01/build/ccomp/`。切除集：
+
+- `charset`：`Charset.lookup2` + `Charset$2.run`（原第 5 项口径，全部按名查找）；
+- `cshost`：宿主名来源——initPhase1 jnu 区段 `Charset.isSupported`（`boot_region` 根）、`System.newPrintStream@24`（stdout / stderr 编码）、`sun/nio/fs/Util.<clinit>@5`（jnu）；
+- `csext`：`Charset.lookupExtendedCharset` + `lookupViaProviders`（扩展 / 类路径提供者）；
+- `csstd`：`sun/nio/cs/StandardCharsets.lookup` 整方法（标准提供者按名反射取类，名字全部收窄的上界）。
+
+| 例 | 基线 类 / 方法 | charset | cshost | csext | csstd |
+|---|---:|---:|---:|---:|---:|
+| HelloWorld | 3324 / 19847 | −149 / −519 | 0 / −1 | −5 / −21 | −141 / −484 |
+| CollectorsDemo | 3324 / 19853 | −149 / −519 | 0 / −1 | −5 / −21 | −141 / −484 |
+| DeepCopy | 3573 / 22505 | −148 / −518 | 0 / −1 | −5 / −21 | −141 / −485 |
+
+charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/charset` 5（`Charset$1` / `$2` / `ExtendedProviderHolder` / `$1` / `ThreadTrackHolder`，即 csext 的 5 类）。
+
+结论：**门是两类名字来源的多连通门，在 U1 下合法；本分支不改分析器，第 5 项挂起待 U1 决定。** 依据：
+
+1. **名字来源。** 标准字符集全集都经 `StandardCharsets.lookup@122` 的 `Class.forName("sun.nio.cs." + cln)` 进入，`cln` 取自 `classMap`（`PreHashedMap`，D8 常量表给出全部值）。进入 `lookup` 的名字有两类：
+   - 宿主名（U1：运行期读取）：jnu 区段 `isSupported`、`newPrintStream` 的 stdout / stderr 编码（`newPrintStream` 是残余调用，名字不折叠）、`Util.<clinit>` 的 jnu；
+   - 常量名：`Charset.defaultCharset@17`（pc 14 已折为 `"UTF-8"`）、`NetworkClient.<clinit>` 的 `file.encoding` 链、`HttpClient` 的 `PrintStream(…, encoding)` 等。
+2. **只切宿主名 Δ = 0。** cshost 切除后，`lookup` 改由 `Charset.defaultCharset` → `StandardCharsets.charsetForName` 首达（来路 `Thread.start0` → 信号处理 → `Shutdown.exit` → `System.getLogger` → `ICUBinary` 资源读取 → `String.getBytes()`）。名字是常量 `"UTF-8"`，但分析器没有字符串常量上下文：`lookup(name)` 只分析一份，`classMap.get` 取全部值。
+3. **只做常量名收窄同样 Δ = 0。** 宿主名在每个程序都存在，它们合法地链入全部标准字符集。csstd −141 是「两类来源都收窄」的上界，兑现需要两件事同时成立：
+   - **(a) 用户重新审视 U1。** jnu / stdout / stderr 编码改为构建期声明的字符集域，例如清单声明「可选宿主编码集」、运行期宿主值不在集合内时按 initPhase1 已有语义回退 UTF-8，口径类似 GraalVM `AddAllCharsets` 的反面。U14 只钉了 `file.encoding`，不覆盖这三个；
+   - **(b) 分析器按字符串常量建上下文。** `Charset.lookup` → `lookup2` → `charsetForName` → `StandardCharsets.lookup` → `canonicalize` / `aliasMap.get` / `classMap.get` 在常量名下克隆，`PreHashedMap.get` 对常量键只取该键的值。这需要常量表从「值集」升级为「键 → 值」（读 `PreHashedMap` 子类 `<init>` 的 `ht` 初始化），并新增字符串选择器上下文（现有 `selector.rs` / `ctxsel.rs` 只克隆 int 常量与 null）。
+   
+   只做 (b) 不做 (a)，收益为 0 类；只做 (a) 不做 (b)，收益也为 0（第 2 条）。
+4. **扩展 / 类路径提供者不能折为空。** csext 的 −5 不健全：
+   - 档案含 jdk.charsets，`ExtendedProviderHolder` 的 `ServiceLoader.loadInstalled(CharsetProvider)` 在封闭档案里的构建期事实是 {`ExtendedCharsets`}，不是空集；
+   - `lookupViaProviders` 的 `ServiceLoader.load(CharsetProvider, SCL)` 也会枚举引导层的模块提供者，同样得到 `ExtendedCharsets`。
+   
+   所以「扩展提供者集合为构建期事实」能确定的只是这个集合本身（服务目录已由 `seeds.services` 给出），类数不变。只有档案剔除 jdk.charsets 时，这 5 类才可删，而那属于模块集决定，不是字符集求值。
+5. **正确性缺口（与收窄方向相反，本分支未修）。**
+   - 现象：`sun/nio/cs/ext/AbstractCharsetProvider.lookup@75` 的 `Class.newInstance` 是反射缺口 `open(java/lang/Class)`（`reflect.gaps` 35 条之一）。`classMap` 是实例字段 `TreeMap`，由 `ExtendedCharsets.<init>` 经 `charset(name, className, aliases)` 以常量实参写入，`[facts.reflect.value_maps]` 只覆盖封存静态 HashMap / CHM。
+   - 后果：闭包里只有 `AbstractCharsetProvider` / `ExtendedCharsets` 2 类，没有任何 `sun/nio/cs/ext` 字符集类。运行期 `Charset.forName(只在 jdk.charsets 中的名字)`，例如 `x-IBM930`，以及 `availableCharsets()` 的扩展部分，都会与 JVM 不同。
+   - 测试覆盖：现有 e2e 64_charsets_ext 用的 GB18030 / Big5 / Shift_JIS / EUC-JP / EUC-KR 在 Linux JDK 21 属标准提供者，覆盖不到这个缺口。
+   - 健全修复的终态：值映射事实扩展到「实例字段映射 + 写入辅助方法的形参常量」，按名取类的候选为全部写入值。修复后闭包会**增加** jdk.charsets 的字符集类，需在语料档案里实测增量。
+
+后续入口：
+
+- 用户就 (a) 作出决定后实施 (b)。验收：`closure_composition_job.sh --cut-sets csstd` 的 −141 为兑现上界，实施后基线应接近 3183 / 3183 / 3432。
+- 第 5 条缺口独立立项（反射建模），与收窄无关。
+
+### 7.4 第 7 项 locale 适配器链（2026-10-08，bbeb13a5，分支 locale-build）
+
+作业（jp1 / jp2，产物在 `cluster_results/job/<tag>/01/build/ccomp/`）：
+
+- `lc-cut-2ef758c8`：切除集 `lcfmt` / `lcaux` / `lcadapt`；
+- `lc-gates-279572aa`：门排名；
+- `lc-enum-751066bc`：枚举常量标记；
+- `lc-diag2-751066bc`、`lc-diag5-b30a2622`、`lc-diag6-fbd752ac`、`lc-diag7-fbd752ac`：溯源，用到 `@trace` / `@openorig` / `@in` / `@objs` / `@m`；
+- `lc-img-fbd752ac`：修复 (a)(b) 后实测；
+- `lc-heap-bbeb13a5`：修复 (c) 后实测，含 `cargo test --release -p closure`（229 passed）。
+
+切除集（`scripts/closure_composition_cuts/`）：
+
+- `lcfmt`：Formatter 取本地化数据的入口；
+- `lcaux`：HOST / SPI 两个辅助适配器的全部可达面；
+- `lcadapt`：`LocaleProviderAdapter.forType` 整体，即本地化数据一次也不查的上界。
+
+三者都不健全，只作上界。
+
+| 例 | 基线 类 / 方法 | lcfmt | lcaux | lcadapt | (a)(b) fbd752ac | (a)(b)(c) bbeb13a5 |
+|---|---:|---:|---:|---:|---:|---:|
+| HelloWorld | 3324 / 19847 | 0 / −5 | −15 / −104 | −145 / −1027 | 0 / −6 | **−19 / −132** |
+| CollectorsDemo | 3324 / 19853 | — | — | — | 0 / −6 | **−19 / −132** |
+| DeepCopy | 3573 / 22505 | 0 / −5 | −14 / −98 | −130 / −978 | 0 / −27 | **−18 / −144** |
+
+（基线 `cs-cut-641d48ce`；切除作业未跑 CollectorsDemo，它与 HelloWorld 的基线逐数相同。）
+
+资源：
+- HelloWorld 闭包耗时 1:25 → 1:27，RSS 2.16 → 2.32 GB；
+- DeepCopy 闭包耗时 3:38 → 4:18，RSS 4.25 → 4.79 GB。
+
+增量来自修复 (c) 新分出的工厂产物内部对象。
+
+结论：
+
+1. **构建期配置已钉值，不涉及 U1。**
+   - `java.locale.providers` 在启动表中不存在，读取折叠为 null，`LocaleProviderAdapter.<clinit>` 的偏好表恒为 [CLDR, JRE]，FALLBACK 只经常量 `forType(Type.FALLBACK)` 进入。
+   - 所以 HOST / SPI 进闭包不是配置不确定，而是分析器精度缺口：`forType` 的实参里有 open[Type]，`Class.forName(type.getAdapterClassName())` 取 Type 全部常量的类名。
+2. **open[Type] 的三个来源，已全部修复（均为通用精度修复，不含类名特判）。**
+   - **(a) 克隆上下文里的枚举 `<clinit>`。** `Type.<clinit>` 被按档位上下文克隆（`#@level:2`），克隆体分配的常量不带枚举常量标记，按普通 Type 抽象对象流入静态字段。
+     - 修复：`enum_consts.rs::enum_const_mark` 不再要求 NOCTX，标记只按（类，偏移）区分。
+     - 效果：`@trace:Type` 由 11591 条降为 13 条。
+   - **(b) 共享空元素数组。** `ArrayList.DEFAULTCAPACITY_EMPTY_ELEMENTDATA`（映像对象 182，长度 0）的元素节点收到全程序 `ArrayList.add` 的写入，汇成 2225 节点的 SCC，再经 `adapterPreference` 迭代流到 `findAdapter`。
+     - JVM 数组长度不可变，向零长数组写入必抛越界。
+     - 修复：`image_start.rs::image_array_site` 把零长、非占位、无宿主来源的映像数组登记为 `empty_arrays`，与字节码零长分配点同口径，写入暂存而不汇合。`concrete/apply.rs::mat_obj` 的物化数组同样按 `elems.is_empty()` 处理。
+   - **(c) 工厂产物的堆上下文截断。** `adapterPreference = Collections.unmodifiableList(list)` 本身按调用点分开（`UnmodifiableRandomAccessList@5377:31#@5363:282`，只包着 `ArrayList@5363:42`）。但它的迭代器 `UnmodifiableCollection$1` 以它为上下文分配，截断到 HEAP_DEPTH=2 后链为 `@7957:0#@5377:31`，丢了调用点。
+     - 后果：全程序 `unmodifiableList` 产物的迭代器汇合，`c` 的读取汇集 6 个包装、9 个列表，其中 `Collectors.toList` 的 `ArrayList@72287:4` 收全局 `Optional.value` 与 EnumSet 迭代的 open 值。
+     - 修复：`classes.rs::obj_at` 中，分配方上下文是调用点上下文（非对象）时，调用点并入本分配点段（`@5377:31@5363:282`），链长不变、身份含调用点。
+3. **兑现量超过 lcaux 上界。**
+   - lcaux 只切 HOST / SPI 面（−15 / −104）。(c) 是程序全局的堆精度改进，其余包装视图迭代器的混合也一并消除，HelloWorld 多出 −4 类、−28 方法。
+   - (a)(b) 单独只有方法级收益（−6 / −27），因为 (c) 仍让 open[Type] 到达 `forType`。
+4. **lcfmt 只有 −5 方法，Formatter 不是独立门。**
+   - Formatter 的本地化数据入口与 `BreakIterator`（`ConditionalSpecialCasing.isFinalCased` → `getWordInstance`）、`DecimalFormatSymbols` 等共用 CLDR / JRE 适配器。
+   - 关掉任一入口，其余入口仍到达。
+5. **残余（lcadapt 上界剩余：HelloWorld −126 类 / −895 方法，DeepCopy −112 类 / −834 方法）是合法数据访问。**
+   - CLDR / JRE 适配器及其资源束、`BreakIterator` 规则、`DecimalFormatSymbols` 数据，由宿主默认 locale（U1，运行期读取）驱动，在每个程序里都可达。不能以构建期求值去掉。
+   - 能继续收窄的只有精度缺口：
+     - `ConditionalSpecialCasing.isConditionMet`：门排名模型 −12、切除实测 −15，条件分支按 locale 语言常量判定；
+     - 格式串常量下不走本地化分支：Formatter 的 `%d` 无 `,` 标志时 `localizedMagnitude` 只取零位字符。
+   - 两者都需要字符串常量上下文，与 7.3 第 3 条 (b)「分析器按字符串常量建上下文」同一机制，建议并入该项。
+
+抽查建议（(b)(c) 是全局精度改动，影响面超出 locale）：
+
+- locale / 格式：`TestFormatLocale`、`TestLocaleConstants`、`TestStringFormat`、`FormatOutput`、`TestLocaleCurrency`、`TestLocaleNumberCjk`、`TestLocaleDateCjk`、`TestLocaleBundleFamilies`、`TestDateTimeFormat`、`TestLocaleLanguageTag`；
+- 集合 / 包装视图 / 收集器：`CollectorsDemo`、`StreamToUnmodifiableCollections`、`TestStreamCollectors`、`TestCollectorsMore`、`CollectorsTeeingTest`；
+- 枚举：`TestEnumSetMap`；
+- 日志格式：`TestLogHandlerFormat`。
+
+与其他线的交叠：
+
+- **batch 代理二分 `container_elements_per_object`：** (b)(c) 同属容器元素 / 堆上下文精度，合批时注意两者对同一批对象的命名与汇合口径，以合批后的 `closure_composition_job.sh` 实测为准；
+- **log-chain：** 日志链 `System.getLogger` 链上的 `unmodifiableList` / `List.of` 产物迭代同样受益于 (c)，其切除上界需在本分支合入后复测；
+- **reflect-marker：** `forType` 的 `Class.forName(常量类名)` 现由枚举常量标记的字段值给出（`method_lookup.rs::enum_field_values`），与 Method 查找标记对象直连互不重叠；
+- **boot-image-s6 / u12-props：** (b) 依赖映像对象的 `placeholder` / `host` 标志判定零长数组是否可被替换；s6 若新增追加对象的种类，需保持这两个标志的语义。`java.locale.providers` 的折叠来自 U12 启动表，不新增属性。
+
+后续入口：
+
+- 本项收口。残余随「字符串常量上下文」立项（与 7.3 (b) 合并）。
+- 资源增量（DeepCopy +0.54 GB）在合批全量时观察。若内存不足机器受影响，(c) 的并段规则只在分配方为工厂调用点上下文时生效，可由 `obj_at` 单点调整。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 

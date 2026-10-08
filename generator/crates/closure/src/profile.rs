@@ -112,9 +112,8 @@ struct Acc {
     services: BTreeMap<String, BTreeSet<(Option<String>, String)>>,
     services_unknown: bool,
     sysprops: Option<Value>,
-    /// 引导映像（各入口须同一映像）与活对象之并
-    image: Option<Value>,
-    image_live: BTreeSet<u64>,
+    /// 引导映像（引导部分各入口相同，扩展组与活对象求并）
+    image: Option<crate::image::ImageData>,
     modules: crate::modules_json::ModuleRows,
 }
 
@@ -238,16 +237,11 @@ impl Acc {
         }
         {
             let img = c.get("boot_image_data").filter(|v| !v.is_null()).ok_or_else(|| format!("入口 {}：closure 缺字段 boot_image_data（引导映像）", e.name))?;
-            let mut body = img.clone();
-            if let Some(o) = body.as_object_mut() {
-                for x in o.remove("live").and_then(|l| l.as_array().cloned()).unwrap_or_default() {
-                    self.image_live.insert(x.as_u64().ok_or("boot_image_data.live 应为整数")?);
-                }
-            }
-            match &self.image {
-                None => self.image = Some(body),
-                Some(p) if *p != body => return Err(format!("入口 {} 的引导映像与其他入口不一致（参考 JDK 或运行时清单不同）", e.name)),
-                Some(_) => {}
+            let d = crate::image::ImageData::from_json(img).map_err(|w| format!("入口 {} 的引导映像：{w}", e.name))?;
+            // 引导部分各入口须相同；构建期初始化扩展组按键求并（image_ext.rs）
+            match &mut self.image {
+                None => self.image = Some(d),
+                Some(p) => p.absorb(&d).map_err(|w| format!("入口 {}：{w}", e.name))?,
             }
         }
         Ok(())
@@ -255,6 +249,13 @@ impl Acc {
 
     fn finish(self, handlers: &HandlerTable) -> Result<Value, String> {
         let set = |k: &str| self.sets.get(k).map(|s| s.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        let image = match self.image.clone() {
+            Some(mut d) => {
+                d.canonicalize()?;
+                Some(d.to_json())
+            }
+            None => None,
+        };
         let mut folds = Vec::new();
         for (id, inputs) in &self.folds {
             if let Some(f) = fold_join::join(id, inputs, handlers)? {
@@ -301,10 +302,7 @@ impl Acc {
             "folds_version": crate::FOLDS_VERSION,
             "folds": folds,
             "system_properties": self.sysprops.clone().unwrap_or_else(|| json!({"values": {}, "dynamic": []})),
-            "boot_image_data": self.image.clone().map(|mut b| {
-                b["live"] = json!(self.image_live);
-                b
-            }),
+            "boot_image_data": image,
             "reflect": {
                 "members": self.reflect_members.iter().map(|(k, m)| json!({"kind": k, "member": m})).collect::<Vec<_>>(),
                 "gaps": set("reflect.gaps"),

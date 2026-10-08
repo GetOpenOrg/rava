@@ -25,6 +25,7 @@ impl Vm {
     pub(super) fn arr(&self, o: u32) -> R<&Vec<CV>> {
         if self.boot {
             self.boot_arr_check(o)?;
+            self.ext_arr_read(o)?;
             self.war_read(super::war::Loc::A(o));
         }
         match &self.heap[o as usize].body {
@@ -122,6 +123,9 @@ impl Vm {
     pub(super) fn get_field(&mut self, env: &Env, o: u32, fr: &FRes) -> R<CV> {
         if self.boot {
             self.boot_field_check(o, fr)?;
+            if self.ext.is_some() {
+                self.ext_get_field(env, o, fr)?;
+            }
         }
         let image = self.image == 0 && self.heap[o as usize].epoch == 0;
         let stable = image && self.stable(env, o);
@@ -137,12 +141,18 @@ impl Vm {
                 self.frozen.insert(a);
             }
         }
+        if self.ext.is_some() {
+            self.ext_freeze(env, o, fr, v);
+        }
         Ok(v)
     }
 
     /// 实例字段写入：映像对象只许写内存缓存字段（记撤销）
     pub(super) fn put_field(&mut self, o: u32, fr: &FRes, v: CV) -> R<()> {
         if self.boot {
+            if !fr.memo {
+                self.ext_write(o)?;
+            }
             self.boot_field_write(o, fr)?;
         }
         let ep = self.cur_epoch();
@@ -153,11 +163,12 @@ impl Vm {
         if !fr.memo {
             self.note_foreign(o);
         }
+        let ext_memo = self.ext_memo();
         let Body::Inst(fs) = &mut self.heap[o as usize].body else {
             return fail(format!("对非实例对象写字段 {}", fr.name));
         };
         let old = fs.iter().position(|(k, _)| *k == fr.key);
-        if shared {
+        if shared || (fr.memo && ext_memo) {
             self.undo.push((o, fr.key, old.map(|i| fs[i].1)));
         }
         match old {
@@ -201,6 +212,7 @@ impl Vm {
             self.undo.push((u32::MAX, fr.key, old));
         }
         if self.boot {
+            self.ext_put_static(&fr.decl, &fr.name)?;
             self.jlog_static(fr.key);
         }
         if let (true, true, CV::R(o)) = (self.image > 0, fr.fin, v) {
@@ -235,9 +247,4 @@ impl Vm {
         }
     }
 
-    /// 身份哈希（按首次查询顺序编号，确定）
-    pub(super) fn identity_hash(&mut self, o: u32) -> i32 {
-        let n = self.ihash.len() as i32;
-        *self.ihash.entry(o).or_insert(0x1000 + n * 7919)
-    }
 }

@@ -256,11 +256,13 @@ impl<'a> Engine<'a> {
         }).collect())
     }
 
-    /// 枚举取值段的候选字符串
-    pub(super) fn enum_field_values(&self, a: &Analysis, v: &V) -> Option<BTreeSet<Rc<str>>> {
+    /// 枚举取值段的候选字符串：接收者所指常量可按身份标记逐个确定时只取这些常量的字段值（`enum_consts.rs`），
+    /// 否则取该枚举类全部方法的 ldc 字符串（超集）
+    pub(super) fn enum_field_values(&mut self, f: &Frame, v: &V) -> Option<BTreeSet<Rc<str>>> {
+        let a = f.a;
         let o = site_of(v)?;
         // 取值方法调用，或直接读字段
-        let (cf, fname, fdesc) = match event_at(a, o, |e| is_invoke(e) || matches!(e, Event::Field { .. }))? {
+        let (cf, fname, fdesc, recv) = match event_at(a, o, |e| is_invoke(e) || matches!(e, Event::Field { .. }))? {
             Event::Invoke { opcode, mref, iface, args } => {
                 if *opcode == classfile::op::INVOKESTATIC || args.len() != 1 {
                     return None;
@@ -272,17 +274,20 @@ impl<'a> Engine<'a> {
                     return None;
                 }
                 let (n, d) = getter_field(rm.code.as_ref()?, &cf.name)?;
-                (cf, n, d)
+                (cf, n, d, args.first().cloned())
             }
-            Event::Field { opcode: classfile::op::GETFIELD, mref, .. } => (self.h.class(&mref.owner)?, mref.name.clone(), mref.desc.clone()),
+            Event::Field { opcode: classfile::op::GETFIELD, mref, recv, .. } => (self.h.class(&mref.owner)?, mref.name.clone(), mref.desc.clone(), recv.clone()),
             _ => return None,
         };
         if cf.access & acc::ENUM == 0 {
             return None;
         }
-        let f = cf.field(&fname, &fdesc)?;
-        if f.is_static() || f.access & acc::FINAL == 0 || fdesc != format!("L{STRING};") || !ctor_writes_plain(&cf, &fname, &fdesc) {
+        let fd = cf.field(&fname, &fdesc)?;
+        if fd.is_static() || fd.access & acc::FINAL == 0 || fdesc != format!("L{STRING};") || !ctor_writes_plain(&cf, &fname, &fdesc) {
             return None;
+        }
+        if let Some(set) = recv.and_then(|r| self.enum_recv_names(f, &r, &cf.name, &fname, &fdesc)) {
+            return Some(set);
         }
         let mut out = BTreeSet::new();
         for i in cf.methods.iter().flat_map(|mm| mm.code.iter().flat_map(|c| c.insns.iter())) {
