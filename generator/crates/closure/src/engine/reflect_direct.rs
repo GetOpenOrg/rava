@@ -156,7 +156,8 @@ impl<'a> Engine<'a> {
     ///   一个枢纽（G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。
     ///   枢纽键是（目标, open(C)），与字节码虚调用及其他直连点共用；单点枢纽数以目标数为界，与 open 类型数无关；
     /// - lambda 与手写层对象接收者（派发规则特殊）经精确集合枢纽（按目标链上次枢纽为父）。
-    /// 已接的实现与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空），值集增长时只增量接入。
+    /// 已接的实现与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空），值集增长时只增量接入；
+    /// 目标实参来源（实参数组的分配点）变化时按新实参重接。
     #[allow(clippy::too_many_arguments)]
     fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, ret: Option<u32>, res: Option<Node>, via: &Via) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
@@ -174,6 +175,12 @@ impl<'a> Engine<'a> {
         let lk = (m, off, key.clone());
         let dk = (off, key.clone());
         let mut done = self.rdirect_done.get_mut(&m).and_then(|d| d.remove(&dk)).unwrap_or_default();
+        // 实参来源（实参数组的分配点随值集增长）变了：已接的实现与 open 枢纽按新实参重接
+        let regrow = done.a.as_ref() != Some(a);
+        if regrow {
+            done.impls.clear();
+            done.a = Some(a.clone());
+        }
         let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| !nonvirt && (self.lambdas.contains_key(r) || self.hwobjs.contains_key(r)));
         let impls: Vec<MemberRef> = if nonvirt {
             if plain.is_empty() && s.open.is_empty() {
@@ -220,10 +227,15 @@ impl<'a> Engine<'a> {
                     h
                 }
             };
-            self.link_hub(h, m, off, &Vec::new(), res);
+            self.link_hub(h, m, off, a, res);
             self.direct_hub_args(h, a);
         }
         if !nonvirt {
+            if regrow {
+                for &h in done.roots.values() {
+                    self.direct_hub_args(h, a);
+                }
+            }
             let mut grew = false;
             for o in s.open.iter() {
                 grew |= done.opens.insert(o);
@@ -231,11 +243,12 @@ impl<'a> Engine<'a> {
             if grew {
                 let opens: Vec<u32> = done.opens.iter().copied().collect();
                 for o in self.direct_open_roots(owner, &opens) {
-                    if done.roots.insert(o) {
-                        let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
-                        self.link_hub(h, m, off, &Vec::new(), res);
-                        self.direct_hub_args(h, a);
+                    if done.roots.contains_key(&o) {
+                        continue;
                     }
+                    let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
+                    self.link_hub(h, m, off, a, res);
+                    done.roots.insert(o, h);
                 }
             }
         }
@@ -254,7 +267,7 @@ impl<'a> Engine<'a> {
         self.open_roots(&rel)
     }
 
-    /// 实参 a 接到枢纽 h 的形参（不含接收者）
+    /// 实参 a 接到枢纽 h 的形参（不含接收者）：调用点已接入（`link_hub` 去重）后实参来源增长时补接
     fn direct_hub_args(&mut self, h: u32, a: &Args) {
         let ptypes = self.hubs[h as usize].ptypes.clone();
         for (j, f) in a.iter().enumerate() {
@@ -280,6 +293,8 @@ pub(super) struct DirectDone {
     impls: BTreeSet<MemberRef>,
     /// 已见的接收者 open 类型
     opens: BTreeSet<u32>,
-    /// 已接入枢纽的 open 类型
-    roots: BTreeSet<u32>,
+    /// 已接入枢纽的 open 类型 → 枢纽
+    roots: BTreeMap<u32, u32>,
+    /// 接边时的目标实参来源（变化即重接）
+    a: Option<Args>,
 }
