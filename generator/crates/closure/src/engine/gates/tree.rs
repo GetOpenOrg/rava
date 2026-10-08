@@ -4,6 +4,10 @@
 //! 消费型限定（`docs/plans/2026-10-01-c1d-closure-bloat.md` §7）：切构造器 / 类初始化 / 含字段写入的方法体、
 //! 或切 new / 字段写入点，会让字段值集变空、按初值折叠，结果非单调——这些节点不作候选。
 //! 调用点只取 invokevirtual / invokeinterface / invokestatic / 非构造的 invokespecial。
+//! 分派转发方法（如特权块 `doPrivileged → executePrivileged`，`forward.rs` 按调用点克隆）照常作候选，但证据中标明：
+//! 其方法体切除量是全部调用点下游之和（2026-10-08 实测 hello 单切 −955、collectors 非单调 +455），未必对应单一机制，
+//! 门应在调用方的调用点上找。不直接排除——按字节码结构分不出「特权块汇合」与「按名查找」（`Charset.lookup` 同为转发方法、
+//! 单切 −163 是单一机制），排除会丢真门。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -90,7 +94,8 @@ impl Engine<'_> {
             return false;
         }
         let Some(cf) = self.gate_code(m) else { return false };
-        let Some(code) = cf.method(&n.key.name, &n.key.desc).and_then(|x| x.code.as_ref()) else { return false };
+        let Some(meth) = cf.method(&n.key.name, &n.key.desc) else { return false };
+        let Some(code) = meth.code.as_ref() else { return false };
         match off {
             None => {
                 !matches!(n.key.name.as_str(), "<init>" | "<clinit>")
@@ -205,6 +210,8 @@ impl Engine<'_> {
             open_hub,
             reads_sysprop,
             in_clinit,
+            forwarder: cf.as_ref().and_then(|cf| cf.method(&n.key.name, &n.key.desc)).is_some_and(|x| x.is_static())
+                && self.forwarders.get(&n.key).is_some_and(|&s| s != 0),
             hub_min: HUB_MIN,
         }
     }

@@ -200,6 +200,32 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 **结论**：本修正只消掉枚举取常量这一个入口；`Method.invoke` 仍经其余 4 个调用点入链，闭包规模不会单因本修正
 降到 ~528。降到切除实验的规模需要这 4 个入口同样不经 `Method.invoke` 体，见 §八。
 
+### 6.5 实例目标 / 非常量名放宽（95558d79，分支 reflect-direct）
+
+改动（`reflect_direct.rs`，无类名字面量）：直连目标放宽到非 CS 实例方法（调用点按 `invoke` 接收者实参经枢纽虚派发接边，`native_invoke`
+已处理实例方法与空接收者 NPE）；基本类型返回装箱流入结果；查找名字非常量时按 `method_lookup.rs` 拼接段取候选；查找类集为空时直连无目标。
+
+| 用例 | 基线 d5a2cb5d 类 / `fold_direct_calls` | 95558d79 后（作业 rdw-61ab696e） |
+|---|---|---|
+| HelloWorld | 2178 / 1 | 2178 / 2 |
+| CollectorsDemo | 2178 / — | 2178 / 2 |
+| DeepCopy | 3573 / 0 | 3573 / 2 |
+
+（基线 3011 → 2178 来自 f19e46e0，与本线无关。）`BasicImageReader$2.run@37`、`HostLocaleProviderAdapter.findInstalledProvider@39` 两个入口已消失，
+类数不变：团块仍经其余入口进来。剩余入口（作业 rdbase-d5a2cb5d / rddiag2-d442e327，`--flows @callers:java/lang/reflect/Method.invoke:`）：
+
+- hello / collectors：`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`（`getDeclaredPublicMethods` 列表 → 字段）、`AnnotationInvocationHandler.equalsImpl@121`（数组元素）；
+- deepcopy 另有 `ObjectStreamClass` 的 5 个 `invoke*`（`getDeclaredMethod` 带形参类型 → 字段）、`HttpConnectSocketImpl.doTunneling@8`、
+  `NTLMAuthenticationProxy.isTrustedSite@12` / `supportsTransparentAuth@8`（静态字段）；deepcopy 的 `getEnumConstantsShared@49` 仍有回退上下文。
+
+切除上界（作业 rdcut-d442e327；切除集 `scripts/closure_composition_cuts/minvoke.txt` / `minvokebody.txt`）：
+
+| 切除集 | HelloWorld | CollectorsDemo | DeepCopy |
+|---|---:|---:|---:|
+| 基线 | 2178 | 2178 | 3573 |
+| `minvoke`（4 个调用点） | 2050 | 2050 | 3573 |
+| `minvokebody`（`Method.invoke` 体） | 2050 | 2050 | 2799 |
+
 ## 七、待验证清单
 
 1. **合批 e2e**：CollectorsDemo、HelloWorld、DeepCopy、TestEnumBasic、TestEnumAdvanced、
@@ -215,11 +241,23 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
    特化入口经 `native_invoke` 按声明键分派；目标不在分派表时与原入口同样落到调用链外，核对 e2e 无新增存根命中。
 6. **档案并 Direct ⊔ Normal**：同一方法在某入口直连、另一入口回退时并后按原入口调用；原入口由回退入口入链，成立。
    需在语料档案构建上核对无存根命中。
+9. **实例目标运行期等价（95558d79）**：直连实例目标经 `native_invoke` 虚派发、基本类型返回装箱，与 `Method.invoke` 输出一致；
+   `invoke(obj, (Object[]) null)` 的无参调用不抛异常。
+10. **门排名单测**：`gates/classify.rs` 新增 `Facts.forwarder` 附注与单测断言，服务器上跑 closure crate 的 gates 单测。
 7. **克隆混合**：某克隆为具体执行（concrete）而未经 `invoke` 处理时不导出直连（按原入口调用），需确认此时原入口在闭包内。
 
 ## 八、遗留
 
-`Method.invoke` 体（CS 判定 → 注解解析、访问器工厂）不再入链的终态，要求它的全部调用点都不经原入口。§6.2 的
+**2026-10-08 进展**：下列「实例目标」「非常量名字」两项已由 95558d79 实施（§6.5）；「`doPrivileged` 派发精度」复核为无缺口（已按调用点克隆，
+各克隆动作值集单一）。剩余只有「反射对象跨方法流动」一种形状，入口清单见 §6.5。续做入口：
+
+- 成员键标记：查找点（`getDeclaredMethod` / `getMethod` / `getDeclaredPublicMethods` 等，`reflect_direct.rs` 已能解析出成员）结果替换为
+  `java/lang/reflect/Method#<member:K>` 标记对象（仿 `class_lookup.rs` 的 forName 结果替换与 `field_handles.rs` 的 `mark_named`），经字段 / 数组 / 列表正常流动；
+- `Method.copy` / `ReflectionFactory.copyMethod` 等复制在清单声明为保键复制（`vm_intrinsics.toml [facts.reflect]`）；
+- `invoke` 调用点：接收者值集全为成员键标记时，对各标记的成员做非 CS 校验后直连，含普通 `Method` 时回退；
+- 收益上界：hello / collectors −128、deepcopy −774（§6.5）。曾考虑的「按 `reflect_members` 全局证明非 CS」在语料模式下不健全，不采用。
+
+原分析（2026-10-08 前）：`Method.invoke` 体（CS 判定 → 注解解析、访问器工厂）不再入链的终态，要求它的全部调用点都不经原入口。§6.2 的
 其余 4 个入口分别需要：
 
 - **实例目标**（`BasicImageReader$2.run`、`AnnotationInvocationHandler.equalsImpl`）：直连目标放宽到非 CS 实例方法，
