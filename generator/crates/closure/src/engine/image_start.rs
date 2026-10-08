@@ -24,6 +24,8 @@ pub(super) struct ImgState {
     pub(super) build_time: HashSet<String>,
     /// 构建期初始化类中已登记的（初始化不展开 `<clinit>`）
     pub(super) touched: HashSet<String>,
+    /// 已尝试过构建期初始化扩展的类（每类只尝试一次，结局即定论）
+    pub(super) tried: HashSet<String>,
     pub(super) statics: HashMap<(String, String), IVal>,
     pub(super) mirror_obj: HashMap<String, u32>,
     pub(super) live: Vec<bool>,
@@ -77,6 +79,7 @@ impl<'a> Engine<'a> {
         self.img = Some(Box::new(ImgState {
             build_time: data.build_time.iter().cloned().collect(),
             touched: HashSet::default(),
+            tried: HashSet::default(),
             statics,
             mirror_obj,
             live: vec![false; data.objs.len()],
