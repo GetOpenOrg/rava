@@ -497,7 +497,89 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 后续入口：
 
 - 用户就 (a) 作出决定后实施 (b)。验收：`closure_composition_job.sh --cut-sets csstd` 的 −141 为兑现上界，实施后基线应接近 3183 / 3183 / 3432。
-- 第 5 条缺口独立立项（反射建模），与收窄无关。
+- 第 5 条缺口已由 7.3.1（分支 charset-ext）修复。
+
+#### 7.3.1 第 5 条缺口修复：实例字段值映射 + 写入辅助方法形参常量（2026-10-08，分支 charset-ext）
+
+根因：`AbstractCharsetProvider.lookup@75` 的 `Class.forName(packagePrefix.concat(cln), true, loader).newInstance()` 推不出类名，原因有三处：
+- `cln` 取自私有实例字段 `classMap`（`TreeMap(String.CASE_INSENSITIVE_ORDER)`），值映射事实只认封存静态 HashMap / CHM；
+- 写入走 `charset(name, className, aliases)` → `classMap.putIfAbsent(name, className)`，值是辅助方法的形参，`ExtendedCharsets.<init>` 以常量实参调用；
+- 前缀经 `String.concat` 拼接，类名切分不认 `concat`。
+
+机制（生成器只做通用建模，类名与方法名全部来自清单）：
+1. **清单** `vm_intrinsics.toml`：
+   - `[facts.reflect.value_maps]` 增加 `TreeMap`，`writers` 增加 `putIfAbsent`；
+   - 新增 `keeps`（remove / containsKey / clear / isEmpty / size / keySet）：不泄漏映射的只读或删除操作；
+   - 新增 `empty_ctors`（`<init>(Comparator)`）：只建空映射的构造器；
+   - `[facts.string_concat]` 增加 `concats = [String.concat]`。
+2. **封存判定**（`engine/sealed.rs` `map_seal`）：
+   - 适用于私有静态或实例字段，创建点为 `new` 加空构造器；
+   - 字段读取只允许作为 readers / keeps / writers 的接收者，或作为实参传给私有 / 静态辅助方法，并由 `helper_keeps` 在被调方内核对该形参只作 reader / keep 接收者。例如 `deleteCharset` → `remove(Map, K)`；
+   - 有 writer 时标记 `read_writes`。
+3. **写入槽**（`engine/map_slot.rs` + `pstrs.rs` `PSlot::V`）：
+   - 逐个 `writer` 调用点检查：接收者是私有字段读取时，值实参并入该字段的值槽；
+   - 字面量直接入槽，形参建子集边（复用 pstrs 的形参常量传播，`charset` 的 `className` 形参在全部 `ExtendedCharsets` 调用点上取并集），其他计算值登记为写入方帧内的输入；
+   - 读取点登记需求，槽变化时唤醒。
+4. **类名切分**（`class_lookup.rs`）：
+   - `concat` 按 (接收者, 实参) 两段处理；
+   - `segment_values` 的映射读取先走 `map_field_names`（创建点值 ∪ 值槽），字段不封存时退回原路径。
+
+实测（作业 `csext-base2-c18e8fc4` us1 / `csext-new-1fae1155` sg2，参考 JDK 21.0.11，基线 c18e8fc4 → 1fae1155）：
+
+| 例 | 基线 类 / 方法 / clinit | 修复后 | Δ | 闭包耗时 |
+|---|---:|---:|---:|---:|
+| HelloWorld | 3315 / 19106 / 769 | 3604 / 19809 / 1048 | +289 / +703 / +279 | 1:53 → 2:00 |
+| CollectorsDemo | 3315 / 19102 / 769 | 3604 / 19805 / 1048 | +289 / +703 / +279 | 1:53 → 1:59 |
+| DeepCopy | 3566 / 21708 / 810 | 3855 / 22411 / 1089 | +289 / +703 / +279 | 5:58 → 6:20 |
+| TestCharsetExtLookup（新） | — | 3608 / 19814 / 1049 | — | 2:03 |
+
+- 增量 289 类全部属于字符集：`sun/nio/cs/ext` 279 类（顶层字符集 122 个及其 Holder / Decoder / Encoder 内部类），`sun/nio/cs` 10 类（`CharsetMapping*`、`DoubleByte$Decoder_EBCDIC` / `_EUC_SIM` 等）。没有删除任何类，其他包没有变化。
+- `reflect_gaps` 35 → 34：`lookup@75` 的缺口消除。`reflect_members` 546 → 661。`translate_code_classes` 2884 → 3172。
+- `--why sun/nio/cs/ext/IBM930` 的首达是 `[reflect] AbstractCharsetProvider.lookup@68`，来路是 `Charset.lookupExtendedCharset` ← `Charset.forName` ← `sun/nio/fs/Util.<clinit>`（jnu 宿主名，U1）。每个程序都经宿主名进入扩展提供者，所以开放世界下全部 jdk.charsets 字符集类入闭包是健全结果，与 7.3 第 3 条的标准字符集同理。若要收窄，需要同一个 (a) + (b)。
+- 参考 JDK 探针确认：`x-IBM930` / `IBM037` / `x-IBM939` / `x-MacRoman` 的实现类都在 jdk.charsets，`GBK` / `Big5` 在 java.base。这是现有 64_charsets_ext 覆盖不到该缺口的原因。
+- 新测试 `tests/e2e/64_charsets_ext/TestCharsetExtLookup.java`：x-IBM930（含 SO/SI 双字节段）、IBM037 / cp037 别名编解码往返，`isSupported`，`availableCharsets` 含扩展名，经映射取 x-MacRoman 编码。期望输出由参考 JDK 生成。
+- 单测：`cargo test -p closure` 234 passed / 0 failed，含新增 `map_writes_instance_field_with_empty_ctor`。
+
+抽查 `csext-f3047901`（jp2 / us1，f3047901）：CollectorsDemo、HelloWorld 在 jp2 编译期 OOM（limit = peak = 11882M；CollectorsDemo 转译 122 s，构建 834 s 后被杀）。初记为 +289 字符集类所致，经下面的二分**更正**：OOM 由 c18e8fc4（boot-image-s6 合入，58a8d48d）引入，与本分支闭包改动无关。
+
+##### 7.3.1.1 java_base 门面 crate OOM 定位与修复（boot-image-s6 发射形态）
+
+二分（`csmem4-f3047901`，jp2，CollectorsDemo，`scripts/crate_mem_profile.py` 逐 crate wait4 峰值）：
+
+| 提交 | boot_image.rs | 映像对象 | 启动函数 | java_base 峰值 / 墙钟 | java_base_decl 峰值 |
+|---|---:|---:|---:|---:|---:|
+| a43ada70（s6 前） | 5.05 MB | 7702 | 575 KB / 3414 行 | 8334 MB / 94 s | 4916 MB |
+| 329ddb99（= a43 + batch-1009 记录） | 同 a43 | 同 | 同 | 8315 MB / 95 s | 5008 MB |
+| c18e8fc4（+ s6） | 11.88 MB | 19347 | 1.29 MB / 10426 行 | **> 11801 MB，308 s 时被杀（-9）** | 4837 MB |
+
+- 闭包类数：a43ada70 / 329ddb99 3322，c18e8fc4 3313，f3047901 3602。本分支增加的 289 个字符集类进 jdk_charsets crate，根 crate 各层规模不变（java_base_decl 23.6 MB、各 body ≈ 5 MB 前后相同），所以不是 OOM 来源。
+- s6 的构建期 `<clinit>` 扩展组使映像对象约增 2.5 倍：基本类型数组 1384 → 5311（u8 元素 35,538 → 256,664；u16 / u32 / u64 字面量列表 566 → 41,811），引用数组 526 → 895，最大单项是 1657 元素的 `Character$UnicodeScript` 引用数组（414 KB）与 2048 节点的 CHM 表（339 KB）。
+- 全部映像对象放在**一个**静态 `BOOT_IMAGE` 的初值里（约 10 MB 的单个初值体），启动序列是**一个** 1.3 MB / 2031 个 `?` 的函数。rustc 对单个函数 / 静态初值体的分析（MIR 构建、借用检查的区域与活跃性数据流）随体规模超线性增长：a43 时 5 MB 已到 8.3 GB，c18 规模翻倍即超过 12G 机内存。
+
+修复（终态，本分支 b3a860ac + 160789c7）：
+- 映像区按规模分段：`__BootImage{k}` / `BOOT_IMAGE_{k}`，每段估算规模 ≤ 4096（实例按布局槽数、引用数组按元素数、基本类型数组按字面量低权重），段间引用照常常量求值。
+- 启动序列中无局部绑定的区段（链接、镜像缓存、驻留、模块表、静态初值、初始化标记、重定位）按 256 条语句一段发射为独立函数 `__start_{k}`；宿主值改写独立成 `__start_host`；只有占位 / 重算绑定跨步骤存活的重放步骤留在 `__start` 体内。
+- 运行期 `__image_register` 改为登记段表：包络区间快速排除堆对象，段表二分判定映像对象（身份哈希语义不变）。
+- 每个体规模有界，java_base 编译峰值只随映像规模线性增长。
+
+附带修复（s6 次序缺陷，分段后首次在 12G 机跑到运行期才暴露）：`csseg-b3a860ac`（us1）CollectorsDemo / CollectorsTeeingTest 构建通过（构建 659 s / 652 s，无 OOM），运行期 panic `Unsafe.compareAndSetReference (offset=0 …)`。链路：`__start` → `System.newPrintStream` 按宿主编码 `Charset.forName` → `lookupExtendedCharset` → `ExtendedProviderHolder.<clinit>` → ServiceLoader → `Class.reflectionData` → `Class$Atomic.casReflectionData`。`Class$Atomic` 构建期已初始化（启动时即标记），但其 `reflectionDataOffset` 的重定位步骤按构建期次序排在 newPrintStream 之后，运行期宿主路径与构建期不同，先读到 0。重定位值（字段偏移 / VM 单元地址）与执行次序无关，现在先于全部重放调用写入（160789c7）。
+
+附带修复 2（14917aed）：DeepCopy 在 160789c7 上编译失败，报 `MethodType$OffsetHolder` 缺 `__si_set_ptypesOffset` / `__si_set_rtypeOffset`（E0599；kr2 与 us1 两台相同，不是 OOM）。原因是两边判定口径不一致：
+- 声明层只在「映像给出静态初值」时给类分配真实静态存储（`has_image_statics` 只看 `statics`）；
+- 启动序列还按重定位 / 重算 / 档位步骤写静态位置。
+
+该类的两个静态字段只由重定位步骤写入，于是成了类型存根，却被调用了 setter。现在两边共用 `ImageData::writes_statics_of`（静态初值 ∪ 档位 / 重定位 / 重算步骤写的静态位置），口径一致。
+
+验证（终态实测）：
+- `csimpl-160789c7`（sg2 16G，CollectorsDemo，逐 crate 峰值）：
+  - boot_image.rs 12.01 MB，分成 24 段映像、42 个启动分段函数；
+  - **java_base 1642 MB / 59 s**（a43ada70 8334 MB，c18e8fc4 超过 11801 MB 被杀）；
+  - 峰值最高的阶段是 type_check_crate，52.7 s，+754 MB；
+  - java_base_decl 4903 MB，成为根模块最重的 crate；body_1..10 都 ≤ 1.92 GB；
+  - 输出与期望一致。
+- `cs12g-160789c7`（协调方在 kr2 12G 上跑）：CollectorsDemo、CollectorsTeeingTest 通过，OOM 消失。
+- `csdc-14917aed`（sg2）：DeepCopy 通过。
+- `csseg-14917aed`（us1）：HelloWorld、CollectorsDemo、CollectorsTeeingTest、DeepCopy、TestCharsetExtLookup、TestIdentityHash、TestIdentityHashSpec 通过，7 / 8。TestSetAccessibleBoundary 构建通过，运行期 `null_recv 违约：Class.getName`（`FieldAccessorImpl.throwFinalFieldIllegalAccessException`）。这是 batch-1010 已知回归（TestFieldReflectAll 同根因），由 fix-1010 的 87c24dea 修复（已在 batch-1012）。本分支基于 c18e8fc4，不含该提交，与本分支改动无关；本分支与 batch-1012（efafdd73）可以无冲突合并。
 
 ### 7.4 第 7 项 locale 适配器链（2026-10-08，bbeb13a5，分支 locale-build）
 

@@ -179,7 +179,10 @@ impl<'a> Engine<'a> {
                 Event::Field { opcode, mref, recv, value } => {
                     self.field(m, off, *opcode, mref, recv.as_ref(), value.as_ref(), Node::S(m, off))
                 }
-                Event::Invoke { opcode, mref, iface, args } => self.invoke(m, off, *opcode, mref, *iface, args),
+                Event::Invoke { opcode, mref, iface, args } => {
+                    self.map_slot_write(m, off, *opcode, mref, args);
+                    self.invoke(m, off, *opcode, mref, *iface, args)
+                }
                 Event::Indy { bsm, name, desc, args } => {
                     if let Some(cf) = &cf {
                         self.indy(m, off, cf, *bsm, name, desc, args, true);

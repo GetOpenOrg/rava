@@ -246,6 +246,17 @@ fn unloc(l: &Value) -> Result<ILoc, String> {
 }
 
 impl ImageData {
+    /// 启动序列写入类 `cls` 的静态字段：静态初值，或档位 / 重定位 / 重算步骤写静态位置。
+    /// 发射层以此判定该类的静态字段须有真实存储（含免触发 setter），与启动序列的写入同一口径
+    pub fn writes_statics_of(&self, cls: &str) -> bool {
+        self.statics.iter().any(|(c, _, _)| c == cls)
+            || self.steps.iter().any(|st| match st {
+                IStep::Level { decl, .. } => decl == cls,
+                IStep::Reloc { loc: ILoc::Static(c, _), .. } | IStep::Recompute { loc: ILoc::Static(c, _), .. } => c == cls,
+                _ => false,
+            })
+    }
+
     pub fn to_json(&self) -> Value {
         let objs: Vec<Value> = self
             .objs

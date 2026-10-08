@@ -1,4 +1,4 @@
-//! 映像区：`__BootImage` 结构与 `BOOT_IMAGE` 常量初值。
+//! 映像区：分段的 `__BootImage{k}` 结构与 `BOOT_IMAGE_{k}` 常量初值。
 //!
 //! 引用的常量形态按槽的静态类型：`Object` → 句柄；类 wrapper → `__from_image(__Ref::image(..))`
 //! （类 vtable 由 `X__inner` 经 supertrait 链实现）；同形数组 → `JArray::__image`。接口视图、类镜像、
@@ -29,11 +29,6 @@ pub(crate) struct Link {
 pub(crate) struct ImageText {
     pub text: String,
     pub links: Vec<Link>,
-}
-
-/// 映像对象的 `Object` 句柄（常量求值可用）
-pub(crate) fn obj_ref(i: u32) -> String {
-    format!("Object(__Obj::image(&BOOT_IMAGE.o{i}.value as &dyn ObjectVTable))")
 }
 
 /// 基本类型描述符字母的 Rust 类型
@@ -134,16 +129,16 @@ impl Plan<'_, '_> {
         }
         let ty = &self.obj(t).ty;
         match st {
-            SlotTy::Object => Some(obj_ref(t)),
+            SlotTy::Object => Some(self.obj_ref(t)),
             SlotTy::Class(c) if !ty.starts_with('[') => {
-                let p = self.path(c);
+                let (p, o) = (self.path(c), self.img(t));
                 Some(format!(
-                    "{p}::__from_image(__Ref::image(__Handle::image(__Obj::image(&BOOT_IMAGE.o{t}.value as &dyn ObjectVTable)), \
-                     &BOOT_IMAGE.o{t}.value as &dyn {p}__VTable))"
+                    "{p}::__from_image(__Ref::image(__Handle::image(__Obj::image(&{o}.value as &dyn ObjectVTable)), \
+                     &{o}.value as &dyn {p}__VTable))"
                 ))
             }
             SlotTy::Array(view) if ty.starts_with('[') && squash(&self.elem_short(ty)) == *view => {
-                Some(format!("JArray::__image(&BOOT_IMAGE.o{t}.value)"))
+                Some(format!("JArray::__image(&{}.value)", self.img(t)))
             }
             _ => None,
         }
@@ -165,10 +160,10 @@ impl Plan<'_, '_> {
     }
 }
 
-/// 构建映像区结构与初值
+/// 构建映像区各段的结构与初值
 pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
-    let mut decl = String::from("#[repr(C)]\npub struct __BootImage {\n");
-    let mut init = String::from("pub static BOOT_IMAGE: __BootImage = __BootImage {\n");
+    let mut decls = vec![String::new(); p.nseg];
+    let mut inits = vec![String::new(); p.nseg];
     let mut links = Vec::new();
     let object_instance = {
         let o = p.path(ty::consts::OBJECT);
@@ -188,12 +183,21 @@ pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
                 (format!("__ImageObj<{inner}>"), format!("__ImageObj::new({hash}, {inner} {{{body}}})"))
             }
         };
-        let _ = writeln!(decl, "    pub o{i}: {ty},");
-        let _ = writeln!(init, "    o{i}: {val},");
+        let k = p.seg[&i];
+        let _ = writeln!(decls[k], "    pub o{i}: {ty},");
+        let _ = writeln!(inits[k], "    o{i}: {val},");
     }
-    decl.push_str("}\n\n// 映像对象只经原子单元 / 引用单元访问（与堆对象同一条件）\nunsafe impl Sync for __BootImage {}\n\n");
-    init.push_str("};\n");
-    Ok(ImageText { text: decl + &init, links })
+    let mut text = String::new();
+    for (k, (decl, init)) in decls.iter().zip(&inits).enumerate() {
+        let _ = write!(
+            text,
+            "#[repr(C)]\npub struct __BootImage{k} {{\n{decl}}}\n\n\
+             // 映像对象只经原子单元 / 引用单元访问（与堆对象同一条件）\n\
+             unsafe impl Sync for __BootImage{k} {{}}\n\n\
+             pub static BOOT_IMAGE_{k}: __BootImage{k} = __BootImage{k} {{\n{init}}};\n\n"
+        );
+    }
+    Ok(ImageText { text, links })
 }
 
 /// 实例对象的 `X__inner { .. }` 字段表（布局全部字段显式给出）
@@ -293,6 +297,5 @@ mod tests {
         assert_eq!(bits(IVal::I(-1)), u64::MAX);
         assert_eq!(bits(IVal::F(0x3f80_0000)), 0x3f80_0000);
         assert_eq!(bits(IVal::N), 0);
-        assert_eq!(obj_ref(3), "Object(__Obj::image(&BOOT_IMAGE.o3.value as &dyn ObjectVTable))");
     }
 }
