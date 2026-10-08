@@ -356,6 +356,14 @@ impl<'a> Engine<'a> {
                 out.push(format!("    callers {cs:?}"));
                 out.push(format!("    sites {:?}", self.site_used.get(&m)));
                 out.push(format!("    sret {:?} nret {:?} rvals {:?}", self.sret.get(&m), self.nret.get(&m), self.ctx.rvals.borrow().get(key)));
+                if let Some((mb, unwrapped)) = self.caller_diag(m) {
+                    let s = self.set_of(Node::S(mb, CALLER));
+                    let el: Vec<String> = s.classes.iter().take(24).map(|x| match self.mirrors.get(&x) {
+                        Some(&t) => format!("{}", self.names[t as usize]),
+                        None => format!("?{}", self.names[x as usize]),
+                    }).collect();
+                    out.push(format!("    caller_set n={} open={} unwrapped={} {el:?}", s.classes.len(), s.open.len(), unwrapped));
+                }
                 if let Some(a) = self.site_analysis(m) {
                     let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
                         absint::Event::Const { value, .. } => Some(format!("@{o}={value:?}")),

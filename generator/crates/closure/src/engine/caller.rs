@@ -120,6 +120,14 @@ impl<'a> Engine<'a> {
         self.node_mirror_set(Node::S(mb, CALLER))
     }
 
+    /// 诊断：m 是已判定的 @CallerSensitive 方法时给出（调用者节点所在本体, 是否有不压栈调用边）
+    pub(super) fn caller_diag(&self, m: usize) -> Option<(usize, bool)> {
+        (self.cs.sensitive.get(&m) == Some(&true)).then(|| {
+            let mb = self.caller_base(m);
+            (mb, self.cs.unwrapped.contains(&mb))
+        })
+    }
+
     /// 方法 m 的分析按其调用者镜像值集作了乐观答复：值集增长时重分析
     pub(super) fn caller_watch(&mut self, m: usize) {
         let n = Node::S(self.caller_base(m), CALLER);
