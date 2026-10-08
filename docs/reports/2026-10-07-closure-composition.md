@@ -618,7 +618,7 @@ HelloWorld 九组切除（d705cb20）：
 
 - 切 `logRuntimeExit` 后，`Formatter` / `Locale` / `TLR` / `Preconditions` / `Charset` 仍在闭包（越界异常消息链是 JVM 真实会走的路径，不切），而 `SecureRandom` / `SeedGenerator` / `CLDRLocaleProviderAdapter` / `jrt/Handler` / `LogManager` 全部出闭包。
 - 也就是说，`Charset.isSupported` 根经越界消息到 Formatter 这段只拉进 Formatter / Locale 本身；CLDR 适配器的反射构造与 `new URL(securerandom.source)` 都要经 (L) 链（`Logger` → `ResourceBundle` / `ServiceLoader` → `SplittableRandom.<clinit>` → `RandomSupport.initialSeed` → `SecureRandom`；以及 JUL `LogManager` 的 locale / jar URL 访问）才到达。
-- §5.9.5（boot-image 计划）记录的「切 logRuntimeExit 类差 0」已不成立：batch-1011 上它又回到唯一持有者（3304 → 537）。
+- boot-image 计划 §5.9.5 与 §5.9.7（log-chain2，同在 c9d00b9b 上）记录的「切 logRuntimeExit 类差 0、路径 A 与 ③ 收益上限 0、不实现」以快照修复前为前提——那时 TLR 种子链是 (L) 链的后备持有者（下表「修复前 + 切」= 3304）。快照修复后两者不再互为后备，路径 A + ③ 的类收益上限变为 HelloWorld −2767、CollectorsDemo −2721，**该决定应重新评估**（§5.9.7 已加注）。
 
 切 `logRuntimeExit` 时修复前后对照（三例，m4）：
 
@@ -652,7 +652,7 @@ HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter
    - 节点返回值：`obj_rets.rs::obj_ret_note` 现在对静态方法直接返回，改为静态克隆节点也记 `nret`，移到 `Ctx` 供 oracle 读；读者按节点登记新依赖（`Dep::Ret` 只在按成员汇合值变化时复核，汇合值已是 Top 后节点值变化不会通知读者）。
    - 单独落地时类数不变（`RandomSupport` 的读值折叠了，但 (L) 链仍持有大集合），须与第 2、3 条一起验收。
 2. **调用方模块。** `System.getLogger` 用 `Reflection.getCallerClass()` 取调用方；要把 `Shutdown.class.getModule()` 折成映像里 java.base 的 Module（类加载器 null），需要 `@CallerSensitive` 调用点按静态调用方给出类字面量，并经静态方法 `LazyLoggers.getLogger` / `isSystem` 传到 `DefaultLoggerFinder$1`（形参常量上下文）。
-3. **`logManagerConfigured` 乐观折叠。** 只由 `redirectTemporaryLoggers` 写 true，而它只经 `LogManager` 可达；需要按「写入点可达才计入」的原始类型静态字段折叠（§5.9.4 所述 ② 式机制），与 1、2 形成互为前提的环，须乐观求解（先假设 false，写入点进闭包再撤销）。
+3. **`logManagerConfigured` 乐观折叠。** 它也决定 §5.9.7 所说的另一条 finder 入口：`JdkLazyLogger` 取用时 `LazyLoggerAccessor.wrapped` → `BootstrapLogger.getLogger(accessor)`，`useSurrogateLoggers()` 为真时建 `SurrogateLogger`，为假才 `createLogger` → `LazyLoggers$1.apply` → `getLoggerFromFinder`。 只由 `redirectTemporaryLoggers` 写 true，而它只经 `LogManager` 可达；需要按「写入点可达才计入」的原始类型静态字段折叠（§5.9.4 所述 ② 式机制），与 1、2 形成互为前提的环，须乐观求解（先假设 false，写入点进闭包再撤销）。
 4. **`Locale.ROOT` 的大小写特判。** `SocketPermission.init@302` 等处 `toLowerCase(Locale.ROOT)`，ROOT 的语言是 ""，不可能等于 "tr" / "az" / "lt"，特殊大小写分支永不执行。`ref_eq` 现在只折 null / 映像对象 / 类字面量，不折内容不同的字符串常量；可健全地折为 false。但 `Locale` 是运行期初始化类，ROOT 不是映像对象，`language` 读不出常量；收益上界只有 −16 类（上表 `ConditionalSpecialCasing` 行），优先级低。
 
 `--gates`（`sc-g1-d705cb20`）没有把 `logRuntimeExit` 排为候选：它的排名只取首达链上的枢纽方法（`executePrivileged` 465 非单调、`Charset.lookup` 150、`getLoggerFromFinder` 71 …），而 `logRuntimeExit` 是 `Thread.start0` → Terminator 信号链上的叶子入口。人工切除表是本项的依据。

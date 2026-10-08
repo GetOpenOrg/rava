@@ -1379,6 +1379,8 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 由 Tripwire 收窄线切掉 Tripwire 根。
 - locale-build 修复 3（`obj_at` 工厂对象保留调用点）合入后，基线变为 3304。上表已按新基线重测。
 
+**2026-10-08 改判前提（分支 seed-chain，c9d00b9b 之上）**：上表 L = 基线 3304 的原因是 `ThreadLocalRandom.<clinit>` 的种子读（`VM.getSavedProperty`）被属性表逃逸弄成未知，`new SecureRandom()` 分支作为后备持有同一大集合。快照读修复（读者 `snapshot = true`）之后，切 logRuntimeExit 为 HelloWorld 3304 → 537、CollectorsDemo 3304 → 583；DeepCopy 另经 `ObjectInputFilter$Config.<clinit>` 的 `System.getLogger` 同一缺口持有（3553 不变）。路径 A + ③ 的类收益上限因此不再是 0，「不实现」的决定需重新评估。实测、所缺机制与续作入口见闭包构成报告 §7.5。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
