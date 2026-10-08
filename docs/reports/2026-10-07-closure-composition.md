@@ -539,11 +539,31 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 - 新测试 `tests/e2e/64_charsets_ext/TestCharsetExtLookup.java`：x-IBM930（含 SO/SI 双字节段）、IBM037 / cp037 别名编解码往返，`isSupported`，`availableCharsets` 含扩展名，经映射取 x-MacRoman 编码。期望输出由参考 JDK 生成。
 - 单测：`cargo test -p closure` 234 passed / 0 failed，含新增 `map_writes_instance_field_with_empty_ctor`。
 
-抽查 `csext-f3047901`（jp2 / us1，f3047901）：
-- CollectorsDemo（jp2）编译期 OOM：内存上限内被杀，limit = peak = 11882M；转译 122 s，构建 834 s 后被杀。属于资源类失败，不阻塞合入。
-- 成因：闭包增加 289 个字符集类（clinit +279、方法 +703，主要是 EBCDIC / CJK 双字节表），java.base / jdk.charsets crate 的编译内存随之升高。
-- 后续：由档案 crate 分层与构建并行度线处理（按 jmod 切分，jdk.charsets 独立 crate），不回退闭包的健全性。
-- 其余用例：待抽查完成后补记。
+抽查 `csext-f3047901`（jp2 / us1，f3047901）：CollectorsDemo、HelloWorld 在 jp2 编译期 OOM（limit = peak = 11882M；CollectorsDemo 转译 122 s，构建 834 s 后被杀）。初记为 +289 字符集类所致，经下面的二分**更正**：OOM 由 c18e8fc4（boot-image-s6 合入，58a8d48d）引入，与本分支闭包改动无关。
+
+##### 7.3.1.1 java_base 门面 crate OOM 定位与修复（boot-image-s6 发射形态）
+
+二分（`csmem4-f3047901`，jp2，CollectorsDemo，`scripts/crate_mem_profile.py` 逐 crate wait4 峰值）：
+
+| 提交 | boot_image.rs | 映像对象 | 启动函数 | java_base 峰值 / 墙钟 | java_base_decl 峰值 |
+|---|---:|---:|---:|---:|---:|
+| a43ada70（s6 前） | 5.05 MB | 7702 | 575 KB / 3414 行 | 8334 MB / 94 s | 4916 MB |
+| 329ddb99（= a43 + batch-1009 记录） | 同 a43 | 同 | 同 | 8315 MB / 95 s | 5008 MB |
+| c18e8fc4（+ s6） | 11.88 MB | 19347 | 1.29 MB / 10426 行 | **> 11801 MB，308 s 时被杀（-9）** | 4837 MB |
+
+- 闭包类数：a43ada70 / 329ddb99 3322，c18e8fc4 3313，f3047901 3602。本分支增加的 289 个字符集类进 jdk_charsets crate，根 crate 各层规模不变（java_base_decl 23.6 MB、各 body ≈ 5 MB 前后相同），所以不是 OOM 来源。
+- s6 的构建期 `<clinit>` 扩展组使映像对象约增 2.5 倍：基本类型数组 1384 → 5311（u8 元素 35,538 → 256,664；u16 / u32 / u64 字面量列表 566 → 41,811），引用数组 526 → 895，最大单项是 1657 元素的 `Character$UnicodeScript` 引用数组（414 KB）与 2048 节点的 CHM 表（339 KB）。
+- 全部映像对象放在**一个**静态 `BOOT_IMAGE` 的初值里（约 10 MB 的单个初值体），启动序列是**一个** 1.3 MB / 2031 个 `?` 的函数。rustc 对单个函数 / 静态初值体的分析（MIR 构建、借用检查的区域与活跃性数据流）随体规模超线性增长：a43 时 5 MB 已到 8.3 GB，c18 规模翻倍即超过 12G 机内存。
+
+修复（终态，本分支 b3a860ac + 160789c7）：
+- 映像区按规模分段：`__BootImage{k}` / `BOOT_IMAGE_{k}`，每段估算规模 ≤ 4096（实例按布局槽数、引用数组按元素数、基本类型数组按字面量低权重），段间引用照常常量求值。
+- 启动序列中无局部绑定的区段（链接、镜像缓存、驻留、模块表、静态初值、初始化标记、重定位）按 256 条语句一段发射为独立函数 `__start_{k}`；宿主值改写独立成 `__start_host`；只有占位 / 重算绑定跨步骤存活的重放步骤留在 `__start` 体内。
+- 运行期 `__image_register` 改为登记段表：包络区间快速排除堆对象，段表二分判定映像对象（身份哈希语义不变）。
+- 每个体规模有界，java_base 编译峰值只随映像规模线性增长。
+
+附带修复（s6 次序缺陷，分段后首次在 12G 机跑到运行期才暴露）：`csseg-b3a860ac`（us1）CollectorsDemo / CollectorsTeeingTest 构建通过（构建 659 s / 652 s，无 OOM），运行期 panic `Unsafe.compareAndSetReference (offset=0 …)`。链路：`__start` → `System.newPrintStream` 按宿主编码 `Charset.forName` → `lookupExtendedCharset` → `ExtendedProviderHolder.<clinit>` → ServiceLoader → `Class.reflectionData` → `Class$Atomic.casReflectionData`。`Class$Atomic` 构建期已初始化（启动时即标记），但其 `reflectionDataOffset` 的重定位步骤按构建期次序排在 newPrintStream 之后，运行期宿主路径与构建期不同，先读到 0。重定位值（字段偏移 / VM 单元地址）与执行次序无关，现在先于全部重放调用写入（160789c7）。
+
+验证：见下方 7.3.1.2（待抽查完成后补记）。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
