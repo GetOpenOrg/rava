@@ -44,8 +44,12 @@ use super::*;
 
 /// 具体上下文的类型名（方法克隆上下文取其类型序号）
 const CONCRETE_CTX: &str = "@concrete";
-/// 单个调用点的实参组合数上限
+/// 单个调用点的实参组合数上限（含形参的笛卡尔积）
 const COMBO_LIMIT: usize = 64;
+/// 只按接收者枚举（实例方法入口、无其他形参）时的接收者数上限：各接收者逐个独立求值、按 (入口, 镜像) 记忆，
+/// 代价随接收者数线性增长、无乘积膨胀，上限只防病态值集。散列表树化桶的键比较类查询以全部可比较键类型的镜像为
+/// 接收者（HelloWorld 实测 > 64 个），按 64 截断时整点回退抽象调用边，把泛型签名解析整棵树拉进闭包
+const RECV_LIMIT: usize = 4096;
 /// 诊断（`--flows @concrete`）列出的实参组合数上限
 const DIAG_COMBOS: usize = 64;
 
@@ -206,8 +210,9 @@ impl<'a> Engine<'a> {
         let mut out: Vec<Vec<AK>> = vec![vec![]];
         if let Some(s) = recv {
             out = self.recv_keys(s)?.into_iter().map(|k| vec![k]).collect();
-            if out.len() > COMBO_LIMIT {
-                return Err(format!("接收者超过 {COMBO_LIMIT} 个"));
+            let limit = if md.params.is_empty() { RECV_LIMIT } else { COMBO_LIMIT };
+            if out.len() > limit {
+                return Err(format!("接收者超过 {limit} 个"));
             }
         }
         for (i, (p, v)) in md.params.iter().zip(args).enumerate() {
