@@ -687,6 +687,7 @@ HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter
 - 三例的 `getLoggerFromFinder` / `LoggerFinderLoader.service` / `redirectTemporaryLoggers` 均不在闭包，`logManagerConfigured` 折成 false、`useSurrogateLoggers` 折成 true；DeepCopy 的 `LogManager` 为 0（`ObjectInputFilter$Config` 与 `LocaleServiceProviderPool.getLocalizedObjectImpl` 两个入口一起关闭）。
 - 未达标：HelloWorld / CollectorsDemo 仍为 3233，`SecureRandom` / `SeedGenerator` 仍在（DeepCopy 同）。首达链改为 `Shutdown.logRuntimeExit@74` → 替身日志器 `SimpleConsoleLogger.log` → `ZonedDateTime.now` → `ZoneRulesProvider.<clinit>` → `ServiceLoader` → jar URL → `Files.createTempFile` → `TempFileHelper.<clinit>` 的 `new SecureRandom()`：替身日志器的 `log` 本身持有大集合，须把 `@10 isLoggable(DEBUG)` 折成 false（HotSpot 上缺省级别 INFO，DEBUG 不记录）。所缺三项机制（抽象对象接收者的 `wrapped()` 收窄、虚调用按调用点映像实参求值、替身 `level` 字段按可达写入点）见计划 §5.9.7「剩余：③」。
 - `param_string_constants_fold_switch` 仍失败（3233 类、含 jrt Handler），随 ③ 转绿。
+- 单测：`lc-ut-debb5179`（kr2，被新头取代后停止）停止前的失败只有 `container_elements_per_object` 与 `param_string_constants_fold_switch`，两者在 7.5.4a 的基线上同样失败；以 sg2 上的 `lc-ut-ef6a1249` 为准（交接时仍在跑，结果在 `cluster_results/job/lc-ut-ef6a1249/`），对照的已知失败：`profile_union_key_and_coverage`、`reflect_new_array_element_precision`（fix-1011）以及上面两项。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
