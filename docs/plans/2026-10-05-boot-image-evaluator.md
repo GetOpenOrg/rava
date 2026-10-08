@@ -1255,6 +1255,19 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - reflect-direct 的 `Method$Direct.invoke0` 在求值器中映射为 `reflect_invoke`，与其运行期直连互不影响。
 - `Obj::Image` 签名改为带 id，`field_hooks.rs` 一并改动；boot-image 各线合批时注意此处。
 
+**单测 `closure_cli::param_string_constants_fold_switch` 不归本线所能转过**（batch-1009 验证记录归因为「日志链膨胀」，经核对不成立）
+- 该测要求两项：HelloWorld 闭包不含 `sun/net/www/protocol/jrt/Handler`，且总类数 < 1000。
+- 用已取回的闭包 JSON 逐级回溯 via，`jrt/Handler` 在**所有变体**中都在，包括 LE（切 logRuntimeExit + executePrivileged，929 类）。可见它不由日志链持有，持有者是 `URL$DefaultFactory.createURLStreamHandler@128`：协议名 switch 未折叠。上游有两条：
+  - LE 下：`[boot_region] 根 Charset.isSupported` → `checkName` → `String.charAt` 越界消息 → `String.format` → `Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.addCount` → `ThreadLocalRandom.<clinit>` → `SecureRandom.getSeed` → `SeedGenerator.<clinit>` → `URLSeedGenerator.init` → `new URL(String)`。协议来自 `securerandom.source` 属性，非常量。
+  - 3d7b3c64 基线下：`BootLoader.findResourceAsStream` → `BuiltinClassLoader.findResourceOnClassPath` → `EmbeddedClassPath.url` → `URL.<init>(String, String, int, String, URLStreamHandler)`。协议形参在该调用点不是常量。
+- 类数 < 1000 至少需要同时切掉日志链与 executePrivileged 汇合点（LE = 929）。单独一项都不够：E 为 2764，S / G 的量级见上表。
+- 结论：该测要等三条线都完成才能转过，本分支单独不能使其通过：
+  1. charset-build（`Charset.isSupported` 根）；
+  2. 越界消息 / `ThreadLocalRandom` 种子链收窄；
+  3. 路径 A，加上 doPrivileged 按调用点返回。
+  
+  此外，`EmbeddedClassPath.url` 的协议常量化需要另行处理。
+
 **续作入口**
 - 先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点，再决定是否做路径 A；
 - 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
