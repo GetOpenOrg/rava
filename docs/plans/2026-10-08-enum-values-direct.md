@@ -339,12 +339,12 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
   - 推送量增长集中在三类：`W->E` 手写数组写入（13 M → 56 M）、`E->S`（25 M → 89 M）、`R->S`（58 M → 114 M）。
   - 出度最大的节点变为 `U java/util/HashMap$Node.value`（32853，基线未进前列），另有多个 `G(·)` 出度约 1.4 万（基线约 7 千）。
   - 推测与 78b744fe 有关：缓存字段不再按逃逸 / open 截断后，值经正常流边扩散，读者增多。未定位到具体站点。
-- **单测**（作业 `rm-ut3-8ce97959`，kr1，`cluster_results/job/rm-ut3-8ce97959/01_kr1.log`）：
-  - 已出结果的套件中，只有 `driver/tests/closure_cli` 失败 2 例（8 过）：
+- **单测**（作业 `rm-ut3-8ce97959`，kr1，rc=0 跑完，日志 `cluster_results/job/rm-ut3-8ce97959/01_kr1.log`）：2 个 target 失败、3 例，其余套件全部通过。
+  - `driver/tests/closure_cli` 2 例：
     - `param_string_constants_fold_switch`：batch-1012 已修的已知失败；
-    - `reflect_new_array_element_precision`：基 a88d7075 上同样失败（closure_cli.rs:150，两次种子闭包不一致），与本分支无关，归种子确定性线。
-  - 其余套件全部通过：7 / 11 / 234 / 31 / 4 / 1 / 17 / 1 / 4。
-  - 收尾时作业仍在跑剩余套件。072d4b17 的同一作业（`rm-ut-072d4b17`，sg1）跑到同样位置后 90 min 超时，失败项相同。
+    - `reflect_new_array_element_precision`：基 a88d7075 上同样失败（closure_cli.rs:150，两次种子闭包不一致），归种子确定性线。
+  - `driver/tests/profile_cli` 1 例 `profile_union_key_and_coverage`（profile_cli.rs:84）：fix-1011 的 fddb9bcb（`fix1011-ut2`）、`sc-ut-6da7e301`、`b1008-ut-6934dc93` 同样失败，属既有失败，与本分支无关。
+  - `container_elements_per_object` / `known_gate_ranks_first` 本次未失败。
 - **抽查未跑**：10 例抽查（TestServiceLoaderEmpty、TestReflectInvokeShapes、ReflectionAPI、TestAnnoReflect、TestAnnoDeepAccess、TestSerialUserGenericCallbacks、TestReflectEnumOps、HelloWorld、CollectorsDemo、DeepCopy）因 6 h 上限收尾未投，留待续作。
 
 ### 9.6 续作入口
