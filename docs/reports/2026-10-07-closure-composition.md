@@ -399,6 +399,10 @@ S0 Boot 的 JVM 实载为参照列。
      （查找点结果换成成员键标记对象，仿 `class_lookup` 的 forName 结果替换与 `field_handles` 的 `mark_named`；`Method.copy` / `ReflectionFactory.copyMethod` 由清单声明为保键复制），
      调用点接收者值集全为成员键标记时按标记直连（非 CS 校验），含普通 `Method` 才回退。
    - 收益上界：hello / collectors −128，deepcopy −774（§3.0）。全部完成后 a3-C 的 `Class.enumConstantDirectory` 手写可删。
+   - 2026-10-08 实施（分支 reflect-marker，29f54f85，未合入；详见 `docs/plans/2026-10-08-enum-values-direct.md` §九）：
+     - 查找结果标记 + 保键复制 + 全标记直连已落地，基于 b9f47c33 的基线（hello / collectors 3324、deepcopy 3573）。
+     - hello / collectors 3324 → 3285，`Method.invoke` 体与注解解析链出闭包；annsig / annall 截断无增量。
+     - deepcopy 不收敛（3000 s 超时）：直连点 `ObjectStreamClass.invokeWriteObject@24` 按 open 类型 × 目标建枢纽，单点 3.7 万。续作见 §9.4。
 2. **doPrivileged 扇出精度**（2026-10-08 复核：**无缺口，不需实施**）。
    - `executePrivileged` 已由 `forward.rs` 按调用点克隆（k = 1，转发链随最外层调用点分开）；`@callers:AccessController.executePrivileged` 无上下文无关体，
      各克隆的动作形参 `@set:` 值集单一。旧基线的 −145 至 −181 是克隆前口径。

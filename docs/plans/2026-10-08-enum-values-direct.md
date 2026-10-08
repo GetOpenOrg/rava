@@ -274,3 +274,54 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 
 - `Constructor.newInstance` 同型门（反射构造）可按同一清单形状扩展（`direct_invokers` 键为构造入口），未实施。
 - 有实参的静态目标（形参类型数组非空）未纳入：需按形参类型精确解析重载与实参拆箱，另行设计。
+
+## 九、反射对象标记直连（分支 reflect-marker，2026-10-08，未合入）
+
+§八「反射对象跨方法流动」的终态实施。基 b9f47c33（batch-1010）。
+
+### 9.1 实现
+
+- **3cb63099 标记机制**：查找入口（`getMethod` / `getDeclaredMethod` / `getDeclaredMethods` / `JavaLangAccess.getDeclaredPublicMethods`）的结果建模为携带所指方法的标记对象（`engine/method_marks.rs`：`Member` 单个成员 / `All` 某类全部方法 / `Gap` 所指未知），形态单个 / 数组 / 列表（经 `Method$Direct.list` 模型）；复制入口（`copyMethod` 等）保持标记；`invoke` 点接收者值集全为非 CS 标记时直连，混入普通 `Method` 即回退（`rdirect_fallback`，单调）。清单 `vm_intrinsics.toml [facts.reflect.direct_invokers]` 声明 `list` / `lookups` / `copies`，生成器无 JDK 类名。标记不作接收者上下文（`ctxsel.rs::recv_ctx` 排除 `rmarks`）。
+- **7c8128b0 列表模型**：`Method$Direct.list` 改为标记数组只读视图（私有 `Marks extends AbstractList` / `It`）。借用 `ArrayList` 时 `elementData` 经 `Arrays.copyOf` 全程序共享分配点扩容，元素混入别处的值，`ServiceLoader$ProviderImpl.invokeFactoryMethod@20` 先直连后回退，把 `Method.invoke` 方法体与注解解析链拉回闭包（hello 3325）。
+- **ac79b624 / 29f54f85 deepcopy 发散修正（未收敛，见 9.3）**：直连实例目标原按「每目标 × 精确接收者集合」建枢纽，接收者集合每增长一次每个目标各建一枢纽。ac79b624 改为按目标链上次枢纽为父、只展开差集；29f54f85 改为精确接收者逐类型选实现、各实现以接收者来源为 this 直接接边（不建枢纽、不按接收者对象克隆，lambda / 手写层对象接收者仍走枢纽）。
+
+### 9.2 实测（`scripts/closure_composition_job.sh`，sg2）
+
+基线是 b9f47c33（作业 `lg-before-b9f47c33`）：hello / collectors 3324、deepcopy 3573。注意 §6.5 与 closure-composition §七 记的 2178 是 61ab696e 口径，不是本基。
+
+| 用例 | 基 b9f47c33 | 7c8128b0 | 29f54f85（作业 rm-ccomp-29f54f85） |
+|---|---|---|---|
+| hello | 3324 | 3285 | 3285（77 s，峰值 2.0 GB，`fold_direct_calls` 7） |
+| collectors | 3324 | 3285 | 3285 |
+| hello.annsig / annall | — | 3285 / 3285 | 3285 / 3285 |
+| deepcopy（及 annsig / annall） | 3573（232 s，3.8 GB） | 3000 s 超时 | 3000 s 超时 |
+
+- hello / collectors 减 41 类、加 2 个模型类（`Method$Direct$Marks` / `$It`）。`Method.invoke` 方法体、`AnnotationParser*`、`AnnotationInvocationHandler*`、`AnnotationType*`、`Proxy*` / `Proxy$Dyn`、`InvocationHandler`、`DirectMethodHandleAccessor*` / `MethodAccessorImpl`、`CallerSensitive`、`Retention` / `RetentionPolicy` / `Inherited`、异常代理类与 `Double` / `LongPipeline` 都已出闭包。annsig / annall 截断集在 hello 上已无增量。
+- hello 中直连的点：`getEnumConstantsShared@49`、`ServiceLoader$ProviderImpl.invokeFactoryMethod@20`、`HttpConnectSocketImpl.doTunneling@8`、`BasicImageReader$2.run@37`、`NTLMAuthenticationProxy.isTrustedSite@12` / `supportsTransparentAuth@8`、`HostLocaleProviderAdapter.findInstalledProvider@39`。`AnnotationInvocationHandler.equalsImpl@121` 所在类已整体出 hello 闭包，未单独核对。
+- 闭包 crate 单测：230 通过（3cb63099 / ac79b624 / 29f54f85 均同）。
+
+### 9.3 deepcopy 发散（未解决）
+
+诊断作业：`rm-diag-ee939793` / `rm-diag2-cb64e9a5` / `rm-diag3-51a1fa57`（临时分支 rm-diag3 = 29f54f85 + 打点，每 120 s 打印标记数、回退点与 `perf_json`，并打印枢纽数最多的调用点）。
+
+29f54f85 下第 937 s 的状态：
+
+- **枢纽**：`hubs` 为 [122529, 3467458, 37698]，基线是 [33909, 421373, 96]。单点枢纽数 `ObjectStreamClass.invokeWriteObject@24` 37698、`invokeWriteReplace@20` 18260，`invokeReadObject@24` / `invokeReadObjectNoData@20` 各 206。
+- **规模**：`flow_edges` 17.8 M（基线 3.4 M），`site_reruns` 1.98 M，峰值 11.2 GB。阶段耗时：sites 216 s、flows 320 s。
+- **标记**：member 405、all 3097、gap 1，回退点 22 个（全在 JDK 内部查找 / 复制入口：`Class.getMethod@55`、`getDeclaredMethod@59`、`copyMethods@24`、`ReflectAccess.copyMethod@1`、`Proxy$Dyn.dispatchObject@5`、`getEnclosingMethod@197`、`getDeclaredPublicMethods@77`）。
+- **结论**：29f54f85 去掉了精确集合枢纽，单点枢纽数却不变。说明这 3.7 万枢纽来自 open 部分：`direct_virtual` 对接收者值集里的每个 open 类型 × 每个目标各建一个 `HubSet::Open` 枢纽。`invokeWriteObject` 的接收者是任意被序列化对象，open 类型成千、目标上百。字节码虚调用点（`invoke.rs`）会跳过被同值集里另一 open 超类型涵盖的 open，并经 `recv_fp` 缓存；直连路径两者都没有。
+
+### 9.4 续作入口
+
+1. **open 枢纽收敛**（首要）。`reflect_direct.rs::direct_virtual` 的 open 部分做三件事：
+   - 只保留与目标声明类相关的 open（`sub(o, owner) || sub(owner, o)`）；
+   - 套用 `invoke.rs` 的超类型涵盖剔除；
+   - 按（调用点, 目标）记已接 open，增量接入。
+
+   更彻底的做法是 open 部分也按实现接边：对 `G(o)` 中属目标声明类子类型的类型选实现，接 `Recv::Feeds`，并在 G 增长时由 `hubs_by_open` 同口径触发重算，枢纽数即与 open 数无关。完成后先用 rm-diag3 打点验证单点枢纽数降到百级以内，再测 deepcopy。
+2. **`All` 标记基数**。deepcopy 有 3097 个 `All` 标记（每类一个，来自 `getDeclaredMethods` 等），每个都逃逸（`escaped` 3.0 万，基线 context_objects 1.1 万）。可改为按（查找点, 范围）共享标记，所指为该点类集合的并。
+3. deepcopy 收敛后再做以下两项：
+   - 实测 deepcopy / annsig / annall，与 3573 对比（§6.5 上界 −774）；
+   - 核对 `ObjectStreamClass.invoke*` 五点、`AnnotationInvocationHandler.equalsImpl@121` 的直连。
+4. **抽查**（未做）：HelloWorld、CollectorsDemo、DeepCopy、TestServiceLoaderEmpty、TestReflectInvokeShapes、ReflectionAPI、TestAnnoReflect、TestAnnoDeepAccess、TestSerialUserGenericCallbacks、TestReflectEnumOps。
+5. **合入冲突点**。`ctxsel.rs::recv_ctx`：log-chain2 / annot-sig 同行加了 `enum_consts` 排除，合并时两个条件都保留。`engine.rs` / `new.rs` 与 fix-1010 / charset-ext / log-chain2 / annot-sig 都在追加字段，属相邻行冲突。`vm_intrinsics.toml` 各自改不同节。
