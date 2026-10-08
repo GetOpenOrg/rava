@@ -563,7 +563,22 @@ charset 的 −149 = `sun/nio/cs` 138 + `sun/util/PreHashedMap*` 6 + `java/nio/c
 
 附带修复（s6 次序缺陷，分段后首次在 12G 机跑到运行期才暴露）：`csseg-b3a860ac`（us1）CollectorsDemo / CollectorsTeeingTest 构建通过（构建 659 s / 652 s，无 OOM），运行期 panic `Unsafe.compareAndSetReference (offset=0 …)`。链路：`__start` → `System.newPrintStream` 按宿主编码 `Charset.forName` → `lookupExtendedCharset` → `ExtendedProviderHolder.<clinit>` → ServiceLoader → `Class.reflectionData` → `Class$Atomic.casReflectionData`。`Class$Atomic` 构建期已初始化（启动时即标记），但其 `reflectionDataOffset` 的重定位步骤按构建期次序排在 newPrintStream 之后，运行期宿主路径与构建期不同，先读到 0。重定位值（字段偏移 / VM 单元地址）与执行次序无关，现在先于全部重放调用写入（160789c7）。
 
-验证：见下方 7.3.1.2（待抽查完成后补记）。
+附带修复 2（14917aed）：DeepCopy 在 160789c7 上编译失败，报 `MethodType$OffsetHolder` 缺 `__si_set_ptypesOffset` / `__si_set_rtypeOffset`（E0599；kr2 与 us1 两台相同，不是 OOM）。原因是两边判定口径不一致：
+- 声明层只在「映像给出静态初值」时给类分配真实静态存储（`has_image_statics` 只看 `statics`）；
+- 启动序列还按重定位 / 重算 / 档位步骤写静态位置。
+
+该类的两个静态字段只由重定位步骤写入，于是成了类型存根，却被调用了 setter。现在两边共用 `ImageData::writes_statics_of`（静态初值 ∪ 档位 / 重定位 / 重算步骤写的静态位置），口径一致。
+
+验证（终态实测）：
+- `csimpl-160789c7`（sg2 16G，CollectorsDemo，逐 crate 峰值）：
+  - boot_image.rs 12.01 MB，分成 24 段映像、42 个启动分段函数；
+  - **java_base 1642 MB / 59 s**（a43ada70 8334 MB，c18e8fc4 超过 11801 MB 被杀）；
+  - 峰值最高的阶段是 type_check_crate，52.7 s，+754 MB；
+  - java_base_decl 4903 MB，成为根模块最重的 crate；body_1..10 都 ≤ 1.92 GB；
+  - 输出与期望一致。
+- `cs12g-160789c7`（协调方在 kr2 12G 上跑）：CollectorsDemo、CollectorsTeeingTest 通过，OOM 消失。
+- `csdc-14917aed`（sg2）：DeepCopy 通过。
+- `csseg-14917aed`（us1）：HelloWorld、CollectorsDemo、CollectorsTeeingTest、DeepCopy、TestCharsetExtLookup、TestIdentityHash、TestIdentityHashSpec 通过，7 / 8。TestSetAccessibleBoundary 构建通过，运行期 `null_recv 违约：Class.getName`（`FieldAccessorImpl.throwFinalFieldIllegalAccessException`）。这是 batch-1010 已知回归（TestFieldReflectAll 同根因），由 fix-1010 的 87c24dea 修复（已在 batch-1012）。本分支基于 c18e8fc4，不含该提交，与本分支改动无关；本分支与 batch-1012（efafdd73）可以无冲突合并。
 
 ## 八、S0 Spring Boot（待 dev 恢复）
 
