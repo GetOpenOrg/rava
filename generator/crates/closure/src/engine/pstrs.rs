@@ -20,18 +20,23 @@
 //! 「形参槽 → 字段槽」，其余写入（拼接、调用结果等）与非常量实参同一口径登记为字段槽的输入，读者在写入方帧里
 //! 按拼接段求名字（求不出即推不出）；值未知的写入使字段槽推不出；字段可经字节码外途径写入（`field_open`）时
 //! 读者不取槽。读取 String 字段的名字段由此取得全部写入名字（如按类型名查找服务时，类型名存于列表对象的字段）。
+//!
+//! 值映射字段同样有槽（`PSlot::V`，按字段、不分接收者）：经读字段的写入入口调用点把写入值并入，口径同 String 字段槽
+//! （字面量、形参子集边、其余值登记为输入，输入为调用点第 1 个实参即写入值）；读者见 `map_slot.rs`。
 
 use super::class_lookup::{event_at, expand, Gap, Part, MAX_NAMES};
 use super::name_eval::Frame;
 use super::sealed::{flatten, is_field};
 use super::*;
 
-/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）/ String 字段（字段节点序号）
+/// 字符串常量集的槽：方法形参（方法，形参槽）/ 枢纽形参（枢纽，形参序号，不含接收者）/ String 字段（字段节点序号）/
+/// 值映射字段的存入值（字段节点序号）
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub(super) enum PSlot {
     M(usize, usize),
     H(u32, usize),
     F(usize),
+    V(usize),
 }
 
 #[derive(Default)]
@@ -101,7 +106,7 @@ impl<'a> Engine<'a> {
             .flatten()
             .filter_map(|s| match *s {
                 PSlot::M(t, j) => Some((t, j)),
-                PSlot::H(..) | PSlot::F(_) => None,
+                PSlot::H(..) | PSlot::F(_) | PSlot::V(_) => None,
             })
             .collect()
     }
@@ -248,6 +253,36 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 方法 m 偏移 off 的写入入口调用把值 v（调用点第 1 个实参，不含接收者）存入值映射字段（字段节点 fi）：并入值映射槽。
+    /// 字面量并入、形参透传登记子集边，其余值登记为槽的输入（读者在写入方帧里按拼接段求名字）
+    pub(super) fn pstr_map_put(&mut self, m: usize, off: u32, fi: usize, v: &V) {
+        let slot = PSlot::V(fi);
+        let lits = v.lit_ids();
+        if !lits.is_empty() {
+            self.pstr_add(slot, lits.into_iter().collect());
+        }
+        match v {
+            V::Null | V::Str(..) => {}
+            v if !computed(v) => {
+                for s in v.srcs().iter() {
+                    if let Src::Param(i) = s {
+                        self.pstr_edge(PSlot::M(m, *i as usize), slot);
+                    }
+                }
+            }
+            _ => {
+                if self.pstr.inputs.entry(slot).or_default().insert((m, off, 1)) {
+                    self.pstr_wake(slot);
+                }
+            }
+        }
+    }
+
+    /// 值映射字段（字段节点 fi）经读字段写入的全部名字与是否推得出（当前站点为读者）
+    pub(super) fn map_slot_names(&mut self, fi: usize, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
+        self.slot_names(PSlot::V(fi), depth)
+    }
+
     /// 方法 m 的 String 形参槽 i 上的名字与是否推得出（当前站点为读者）；None = 非 String 形参 / 不在站点内
     pub(super) fn param_names(&mut self, m: usize, i: usize, depth: u8) -> Option<(BTreeSet<Rc<str>>, bool)> {
         let string = self.id(STRING);
@@ -345,6 +380,7 @@ impl<'a> Engine<'a> {
                 PSlot::M(t, _) => self.pstr.top_m.contains(&t),
                 PSlot::H(h, _) => self.pstr.top_h.contains(&h),
                 PSlot::F(fi) => self.pstr.top_f.contains(&fi),
+                PSlot::V(_) => false,
             };
             complete &= !top;
             inputs.extend(self.pstr.inputs.get(&s).into_iter().flatten().copied());

@@ -23,6 +23,8 @@ pub struct NameFacts {
     resets: HashSet<String>,
     /// 取后缀：结果是接收者字符串自第 0 个 int 实参（不含接收者）起的后缀
     suffixes: HashSet<String>,
+    /// 二元拼接：结果是接收者字符串后接第 0 个实参（不含接收者）
+    concats: HashSet<String>,
     /// 值映射：新建即空、写入入口按（键, 值）存入、读取入口只返回已存入的值或 null 的映射实现类
     value_maps: ValueMaps,
     /// 返回接收者镜像所指类的 binary name（`.` 分隔，数组为描述符形式）/ 简单名：拼接段可由镜像值集确定
@@ -30,12 +32,15 @@ pub struct NameFacts {
     simple_name_of: HashSet<String>,
 }
 
-/// `[facts.reflect.value_maps]`：`classes` 映射实现类；`writers` / `readers` 为写入 / 读取入口（`名字:描述符`）
+/// `[facts.reflect.value_maps]`：`classes` 映射实现类；`writers` / `readers` 为写入 / 读取入口（`名字:描述符`）；
+/// `keeps` 为不存入新值、不交出值的入口（删除 / 判定 / 清空 / 键视图）；`empty_ctors` 为带引用实参但新建即空的构造器描述符
 #[derive(Debug, Default)]
 pub struct ValueMaps {
     pub classes: HashSet<String>,
     pub writers: HashSet<String>,
     pub readers: HashSet<String>,
+    pub keeps: HashSet<String>,
+    pub empty_ctors: HashSet<String>,
 }
 
 fn list(t: Option<&toml::Value>, key: &str) -> Vec<String> {
@@ -72,6 +77,7 @@ impl NameFacts {
             results: list(concat, "results").into_iter().collect(),
             resets: list(concat, "resets").into_iter().collect(),
             suffixes: list(concat, "suffixes").into_iter().collect(),
+            concats: list(concat, "concats").into_iter().collect(),
             name_of: list(reflect, "name_of_receiver").into_iter().collect(),
             simple_name_of: list(reflect, "simple_name_of_receiver").into_iter().collect(),
             value_maps: {
@@ -80,6 +86,8 @@ impl NameFacts {
                     classes: list(vm, "classes").into_iter().collect(),
                     writers: list(vm, "writers").into_iter().collect(),
                     readers: list(vm, "readers").into_iter().collect(),
+                    keeps: list(vm, "keeps").into_iter().collect(),
+                    empty_ctors: list(vm, "empty_ctors").into_iter().collect(),
                 }
             },
         })
@@ -127,6 +135,11 @@ impl NameFacts {
         self.suffixes.contains(member)
     }
 
+    /// 二元拼接：结果是接收者后接第 0 个实参（`String.concat` 语义）
+    pub fn is_concat(&self, member: &str) -> bool {
+        self.concats.contains(member)
+    }
+
     /// 返回接收者镜像所指类的 binary name（`Class.getName` 语义）
     pub fn is_name_of(&self, member: &str) -> bool {
         self.name_of.contains(member)
@@ -163,12 +176,15 @@ mod tests {
             classes = ["a/M"]
             writers = ["put:(La/K;La/K;)La/K;"]
             readers = ["get:(La/K;)La/K;"]
+            keeps = ["remove:(La/K;)La/K;"]
+            empty_ctors = ["<init>:(La/C;)V"]
             [s]
             builders = ["a/B.<init>:()V"]
             appends = ["a/B.add:(Ljava/lang/String;)La/B;"]
             results = ["a/B.str:()Ljava/lang/String;"]
             resets = ["a/B.clear:(I)V"]
             suffixes = ["a/S.tail:(I)La/S;"]
+            concats = ["a/S.cat:(La/S;)La/S;"]
             "#,
         )
         .unwrap();
@@ -177,12 +193,14 @@ mod tests {
         assert_eq!(f.table_bases("get:(Ljava/lang/Object;)Ljava/lang/Object;").collect::<Vec<_>>(), vec!["a/T"]);
         assert!(f.is_builder("a/B.<init>:()V") && f.is_append("a/B.add:(Ljava/lang/String;)La/B;") && f.is_result("a/B.str:()Ljava/lang/String;"));
         assert!(f.is_reset("a/B.clear:(I)V") && f.is_suffix("a/S.tail:(I)La/S;"));
+        assert!(f.is_concat("a/S.cat:(La/S;)La/S;") && !f.is_concat("a/S.tail:(I)La/S;"));
         assert!(f.is_class_load("a/L.load:(Ljava/lang/String;)Ljava/lang/Class;") && !f.is_class_load("a/C.byName:(Ljava/lang/String;)La/C;"));
         assert!(f.is_hw_mirror("a/K", "for_class") && !f.is_hw_mirror("a/K", "new"));
         assert!(f.is_name_of("a/K.name:()Ljava/lang/String;") && !f.is_name_of("a/K.simple:()Ljava/lang/String;"));
         assert!(f.is_simple_name_of("a/K.simple:()Ljava/lang/String;"));
         let vm = f.value_maps();
         assert!(vm.classes.contains("a/M") && vm.writers.len() == 1 && vm.readers.contains("get:(La/K;)La/K;"));
+        assert!(vm.keeps.contains("remove:(La/K;)La/K;") && vm.empty_ctors.contains("<init>:(La/C;)V"));
         let bad: toml::Value = toml::from_str("[r.constant_tables.\"a/T\"]\nx = 1\n").unwrap();
         assert!(NameFacts::from_toml(bad.get("r"), None).is_err());
     }
