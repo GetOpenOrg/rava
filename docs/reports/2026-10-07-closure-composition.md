@@ -108,11 +108,13 @@ uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor -
    模型是不含值流折叠的「与」可达性，多连通团块上单切几乎都近 0；排名必须以实测列为准，模型列只用于选候选与贪心顺序。
    `--gates-verify` 预算（缺省 12）因此是排名质量的瓶颈，大例要给足内存预算（`CCOMP_GATES_ARGS="--gates-mem-mb 9000"`）。
 2. **非单调已能识别**：collectors 单切 `executePrivileged` 实测 2633 类（反升 931，非单调）、jcasasl 单切 `CryptoAlgorithmConstraints.permits` 反升 41，表中照标。
-3. **缺陷：分派转发方法被当成门（已修，7f7d6ae7 / 30cca0fb）**。`AccessController.executePrivileged` 已由 `forward.rs` 按调用点克隆，
+3. **缺陷：分派转发方法被当成单一机制的门（已修，最终形态见下）**。`AccessController.executePrivileged` 已由 `forward.rs` 按调用点克隆，
    各克隆的动作形参值集单一（`@set:` 核对；`@callers:` 无上下文无关体）；它在首达树上是全部特权块调用点的汇合，单切量是互不相关调用点之和，
-   且非单调，不对应任何一个机制。现规则：静态分派转发方法、且各上下文克隆在同一分派点上的目标集不同时，方法体与体内调用点不作候选，
-   调用方里的调用点照常作候选；克隆分派相同的（如 `Charset.lookup`，形参只经字符串拼接）是单一机制，照常作候选。
-   第一版（7f7d6ae7）只看「是否转发方法」，把 `Charset.lookup` 也排除了（作业 `rdg2-7f7d6ae7` 中消失），30cca0fb 收窄为看克隆分派是否不同。
+   且非单调，不对应任何一个机制。
+   - 试过直接排除（7f7d6ae7：静态转发方法不作候选；30cca0fb：收窄为各克隆分派目标不同者）。两版都把 `Charset.lookup` 一并排除
+     （它同为转发方法，各调用点名字不同、克隆分派也不同；作业 `rdg2-7f7d6ae7` / `rdg3-30cca0fb` 中 −163 的字符集门消失），且 30cca0fb 的克隆比对让模型计算 3 s → 55 s。
+     按字节码结构分不出「特权块汇合」与「按名查找」，排除会丢真门。
+   - 终版：照常作候选，证据末条标明「分派转发方法（已按调用点克隆）：切除量是全部调用点下游之和，未必是单一机制，门看调用方调用点」（`Facts.forwarder`）。
 4. **陈旧提示（已撤，7f7d6ae7）**：`closure.toml [gates]` 的 `precision = ["java/security/AccessController"]` 把特权块整体标为精度缺口；
    doPrivileged 已按调用点克隆，该提示不再成立，改为空表。
 
@@ -176,7 +178,7 @@ f19e46e0 之前的 3011 / 3043 已不作口径。HelloWorld 与 CollectorsDemo �
 | `Method.invoke` 其余入口（`minvoke` 切除集 4 个调用点） | −128 | `InetAddress.loadResolver` → `ServiceLoader$ProviderImpl.invokeFactoryMethod@20`；`AnnotationInvocationHandler.equalsImpl@121` | 本线（§七第 1 项），见下 |
 | `Formatter.format` | −25 | `PrintStream.implFormat` | locale |
 | `InetAddress.getAllByName0` | −11 | `URL.equals` → DNS | 容器元素精度 |
-| `executePrivileged` | −955（模型 33） | 全部特权块的汇合 | **不是门**：见 §二「门排名工具核对」 |
+| `executePrivileged` | −955（模型 33） | 全部特权块的汇合 | **不是单一机制**：见 §二「门排名工具核对」 |
 
 日志三门互相重叠（都在 `Shutdown.exit` 之下），合计约 −200 到 −660（`getLoggerFromFinder` 首达树 663 类）；它们与字符集、`Method.invoke` 三条线是
 468 → 2178 的主体。旧基线的 468 没有信号线程根，也没有 `InetAddress.loadResolver` 这条 ServiceLoader 路径。
@@ -399,7 +401,7 @@ S0 Boot 的 JVM 实载为参照列。
 2. **doPrivileged 扇出精度**（2026-10-08 复核：**无缺口，不需实施**）。
    - `executePrivileged` 已由 `forward.rs` 按调用点克隆（k = 1，转发链随最外层调用点分开）；`@callers:AccessController.executePrivileged` 无上下文无关体，
      各克隆的动作形参 `@set:` 值集单一。旧基线的 −145 至 −181 是克隆前口径。
-   - `--gates` 上 `executePrivileged` 的 −955（hello）/ −1606（deepcopy）/ 非单调（collectors）是各特权块调用点之和，属工具缺陷，已修（§二「门排名工具核对」）。
+   - `--gates` 上 `executePrivileged` 的 −955（hello）/ −1606（deepcopy）/ 非单调（collectors）是各特权块调用点之和，属工具缺陷，现已在证据中标注（§二「门排名工具核对」）。
    - 与第 1 项不同机制：第 1 项是反射对象值流，本项是派发上下文，已由 G1 覆盖。
 3. **`SharedSecrets.ensureClassInitialized` 链构建期折叠**（构建期求值 / 清单）。
    - 旧基线下每个程序 −82（HelloWorld 468 → 386）。工作量最小（清单 1 行或一处折叠）。

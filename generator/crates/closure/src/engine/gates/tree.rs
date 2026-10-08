@@ -4,9 +4,10 @@
 //! 消费型限定（`docs/plans/2026-10-01-c1d-closure-bloat.md` §7）：切构造器 / 类初始化 / 含字段写入的方法体、
 //! 或切 new / 字段写入点，会让字段值集变空、按初值折叠，结果非单调——这些节点不作候选。
 //! 调用点只取 invokevirtual / invokeinterface / invokestatic / 非构造的 invokespecial。
-//! 分派转发方法（如特权块 `doPrivileged → executePrivileged`）已按调用点克隆；各克隆分派目标不同时，方法体与
-//! 体内调用点是互不相关的各调用点下游之和（2026-10-08 实测 hello 单切 −955、collectors 非单调 +455），不作候选，
-//! 其调用方里的调用点照常作候选。各克隆分派相同的（如形参只经字符串拼接的查找方法）是单一机制，照常作候选。
+//! 分派转发方法（如特权块 `doPrivileged → executePrivileged`，`forward.rs` 按调用点克隆）照常作候选，但证据中标明：
+//! 其方法体切除量是全部调用点下游之和（2026-10-08 实测 hello 单切 −955、collectors 非单调 +455），未必对应单一机制，
+//! 门应在调用方的调用点上找。不直接排除——按字节码结构分不出「特权块汇合」与「按名查找」（`Charset.lookup` 同为转发方法、
+//! 单切 −163 是单一机制），排除会丢真门。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -94,12 +95,6 @@ impl Engine<'_> {
         }
         let Some(cf) = self.gate_code(m) else { return false };
         let Some(meth) = cf.method(&n.key.name, &n.key.desc) else { return false };
-        // 分派转发方法（静态、形参流到分派接收者，`forward.rs` 按调用点克隆）且各克隆的分派目标不同：方法体与体内
-        // 调用点是互不相关的各调用点下游之和，不对应单一机制；门是调用方里的调用点。各克隆分派相同的转发方法
-        // （形参只经拼接 / 单态接收者）照常作候选
-        if meth.is_static() && self.forwarders.get(&n.key).is_some_and(|&s| s != 0) && self.clones_dispatch_differ(&n.key) {
-            return false;
-        }
         let Some(code) = meth.code.as_ref() else { return false };
         match off {
             None => {
@@ -116,28 +111,6 @@ impl Engine<'_> {
                 _ => false,
             }),
         }
-    }
-
-    /// 同一方法的各上下文克隆在某个分派点上的目标集（按成员代表序号）是否不同
-    fn clones_dispatch_differ(&self, key: &classfile::MemberRef) -> bool {
-        let clones: Vec<usize> = self.methods.values().enumerate().filter(|(_, n)| n.key == *key).map(|(i, _)| i).collect();
-        if clones.len() < 2 {
-            return false;
-        }
-        let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
-        let mut memo = Default::default();
-        let mut per: Vec<BTreeMap<u32, BTreeSet<usize>>> = vec![BTreeMap::new(); clones.len()];
-        for (c, &i) in clones.iter().enumerate() {
-            for ((_, off), ts) in self.dispatch.range((i, 0)..=(i, u32::MAX)) {
-                per[c].entry(*off).or_default().extend(ts.iter().map(|&t| canon[t]));
-            }
-            for ((_, off), hs) in self.hub_sites.range((i, 0)..=(i, u32::MAX)) {
-                for &h in hs {
-                    per[c].entry(*off).or_default().extend(self.hub_targets_canon(h, &canon, &mut memo).iter().copied());
-                }
-            }
-        }
-        per.windows(2).any(|w| w[0] != w[1])
     }
 
     /// 切除条目：`类.方法:描述符` 或 `类.方法:描述符@偏移`
@@ -237,6 +210,8 @@ impl Engine<'_> {
             open_hub,
             reads_sysprop,
             in_clinit,
+            forwarder: cf.as_ref().and_then(|cf| cf.method(&n.key.name, &n.key.desc)).is_some_and(|x| x.is_static())
+                && self.forwarders.get(&n.key).is_some_and(|&s| s != 0),
             hub_min: HUB_MIN,
         }
     }

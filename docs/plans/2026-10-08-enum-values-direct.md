@@ -243,7 +243,7 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
    需在语料档案构建上核对无存根命中。
 9. **实例目标运行期等价（95558d79）**：直连实例目标经 `native_invoke` 虚派发、基本类型返回装箱，与 `Method.invoke` 输出一致；
    `invoke(obj, (Object[]) null)` 的无参调用不抛异常。
-10. **门排名单测（7f7d6ae7 / 30cca0fb）**：`tree.rs` 的转发方法排除规则改动后，服务器上跑 closure crate 的 gates 单测。
+10. **门排名单测**：`gates/classify.rs` 新增 `Facts.forwarder` 附注与单测断言，服务器上跑 closure crate 的 gates 单测。
 7. **克隆混合**：某克隆为具体执行（concrete）而未经 `invoke` 处理时不导出直连（按原入口调用），需确认此时原入口在闭包内。
 
 ## 八、遗留

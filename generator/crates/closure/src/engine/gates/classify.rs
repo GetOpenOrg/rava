@@ -42,6 +42,8 @@ pub struct Facts {
     pub reads_sysprop: bool,
     /// 门方法是类初始化，或首达链近端（3 步内）经类初始化
     pub in_clinit: bool,
+    /// 门（方法体或体内调用点）在静态分派转发方法里（`forward.rs` 按调用点克隆）：切除量是全部调用点下游之和
+    pub forwarder: bool,
     /// 枢纽阈值（`HUB_MIN`）
     pub hub_min: usize,
 }
@@ -84,10 +86,12 @@ pub fn classify(f: &Facts) -> (GateCategory, Vec<String>) {
     if f.in_clinit {
         found.push((GateCategory::BuildTime, "门在类初始化链上（弱：初始化结果可构建期求值）".into()));
     }
+    // 附注，不定类别：转发方法体的切除量是各调用点之和
+    let fwd = f.forwarder.then(|| "分派转发方法（已按调用点克隆）：切除量是全部调用点下游之和，未必是单一机制，门看调用方调用点".to_string());
     if found.is_empty() {
-        return (GateCategory::Precision, vec!["无更强事实，按 ③ 查精度".into()]);
+        return (GateCategory::Precision, std::iter::once("无更强事实，按 ③ 查精度".to_string()).chain(fwd).collect());
     }
-    (found[0].0, found.into_iter().map(|(_, e)| e).collect())
+    (found[0].0, found.into_iter().map(|(_, e)| e).chain(fwd).collect())
 }
 
 #[cfg(test)]
@@ -118,5 +122,9 @@ mod tests {
         let mut ck = base;
         ck.child_kinds.insert("service-provider", 3);
         assert_eq!(classify(&ck).0, GateCategory::BuildTime);
+        let fw = Facts { forwarder: true, hub_min: 8, ..Default::default() };
+        let (c, ev) = classify(&fw);
+        assert_eq!(c, GateCategory::Precision);
+        assert!(ev.last().is_some_and(|e| e.starts_with("分派转发方法")));
     }
 }

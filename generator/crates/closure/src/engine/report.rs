@@ -618,7 +618,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 枢纽（含父链）的目标，按成员代表序号去重；逐枢纽记忆（父链迭代展开，不递归）
-    pub(super) fn hub_targets_canon(&self, h: u32, canon: &[usize], memo: &mut HashMap<u32, Rc<[usize]>>) -> Rc<[usize]> {
+    fn hub_targets_canon(&self, h: u32, canon: &[usize], memo: &mut HashMap<u32, Rc<[usize]>>) -> Rc<[usize]> {
         let mut chain = Vec::new();
         let mut cur = Some(h);
         let mut base: Rc<[usize]> = Rc::from(Vec::new());
