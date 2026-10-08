@@ -75,3 +75,61 @@ f19e46e0 与 d5a2cb5d 均不可达，故归 batch-1008（c1d P1 与引导映像�
 2. 按 §三修 TestFieldReflectAll（field_access 被切断形参的健全性）。
 3. 查 container_elements_per_object（引导映像下 CHM 元素汇合）与 known_gate_ranks_first（接口调用点边形态）。
 4. 以上修好后，在新 head 上重跑全量单测（`--job-timeout 14400`）。
+
+## 七、batch-1010 回归修复（分支 fix-1010）
+
+三项回归均源自 batch-1008（c1d-url-b2 × 引导映像），在 batch-1010 基线 c18e8fc4 上修复（5f3a844c 合入该基线）。
+
+### 1. TestFieldReflectAll null_recv（87c24dea）
+
+- 根因：c1d-url-b2 的 field_access 按调用点建模 Field.get/set 时，对象实参与写入值不流入被调方形参；被调方字节码在运行期照常使用这些形参（`throwFinalFieldIllegalAccessException` 里的 `value.getClass().getName()`），空值集被判为 null_recv 并折叠成 panic。
+- 修复：被切断的被调方形参按未建模来源处理，由 unmodeled 以它们为根沿流边标记。只影响折叠导出，闭包类集不变。
+- 验证：
+  - 抽查 fix1010-fra-87c24dea 6/6 通过（含 TestFieldReflectAll）。
+  - SyspropsLambdaLeak 3499 类，与基线一致（作业 fix1010-sp）。
+  - TestSetAccessibleBoundary 与 TestFieldReflectAll 同点 panic（field_accessor_impl.rs:234）：见 §七.4。
+
+### 2. container_elements_per_object / known_gate_ranks_first（a102b325、6db7cbd9）
+
+- 根因（二者同源）：
+  - f19e46e0 修 parseSig 维数爆炸 OOM（04600e21 的超时）时，把反射数组分配（`Array.newInstance`）的结果概括为 open(Object)。涉及两种情况：元素镜像已达 2 维，以及元素 Class 推不出。
+  - `BytecodeDescriptor.parseSig@125` 的 `Array.newInstance(t,0).getClass()` 作用在 open(Object) 上，展开为全部已实例化类的镜像，用户类也在其中。
+  - 这些镜像经 AnnotationType 与 getDeclaredMethods 枚举进入反射暴露，使用户类的全部方法入链。表现为 ElemTrack 的 `Square.name` 入链，以及 GateFixture 出现无条件的 `C:Impl0 → M:Impl0.run` 边（门候选由此消失）。
+- 二分旁证：
+  - c1d-url-b2 尖 3391eb2d 通过，466 类。
+  - 合入后 04600e21 / b558e0c2 闭包 OOM。
+  - f19e46e0 之后断言失败。
+- 修复：
+  - a102b325：限维结果改为 open(`[[Object`)。3 维及以上的结果恒为 Object[][] 的子类型，这样概括仍可靠，不动点有限。
+  - 6db7cbd9：元素未知的结果改为 open(`[Object`) ∪ open(`[Z`…`[J`)（`reflect.rs::any_array`）。在数组协变下恰好涵盖全部数组，getClass 只展开为数组镜像。
+  - 只有 a102b325 不够，两例仍失败，因为剩余泄漏来自元素未知的那一支。
+- 验证（作业 fix1010-v-6db7cbd9，kr1）：
+  - container_elements_per_object 通过（101s）。
+  - known_gate_ranks_first 通过（228s）。
+  - HelloWorld 闭包 3350 类，RSS 2.54 GB，99.8s。
+  - ElemTrack 3353 类，Square.name 不入链。
+- 与 batch-1011（a88d7075）的关系：
+  - 在 a88d7075 上仍失败（diag5：Square.name 仍入链）。
+  - locale-build 修复 2（零长映像数组不收集全程序 ArrayList.add）与修复 3 不涉及这条反射数组路径，不能消解本问题。本修复与它们正交。
+
+### 3. 撤回的尝试
+
+24e6a882（长度 0 的映像数组按空数组暂存）实测无效，且与 locale-build 修复 2 同点重复，已由 084cd438 撤回。终态以 a88d7075 的实现为准。
+
+### 4. 验证汇总
+
+- 全量单测，fix1010-ut3-6db7cbd9（kr1，6068s，batch 标准命令 `--no-fail-fast`，跳过种子 / 顺序两例）：
+  - 只剩已知失败 `param_string_constants_fold_switch`（U12 日志链）。
+  - container_elements_per_object、known_gate_ranks_first、reflect_new_array_element_precision 均通过。
+  - 其余 37 个测试二进制全过。
+- 早先一次 fix1010-ut-6db7cbd9 没有加 `--no-fail-fast`，在 closure_cli 处停止。它跑了被跳过的两例：
+  - `closure_independent_of_hash_seed` 失败（closure_cli.rs:150）。
+  - `closure_independent_of_order` 失败（closure_cli.rs:237）。
+  - 二者属上游已知不稳定，batch 单测一律跳过。本修复未单独复核。
+- reflect_new_array_element_precision（b1011-ut-a88d7075 新增失败，seeds_agree 断言）：在 6db7cbd9（batch-1010 基线 + 本修复）上通过，来源在 log-chain / locale-build，与 batch-1010 基线无关。
+- TestSetAccessibleBoundary：
+  - 抽查 fix1010-sab-87c24dea（kr2）1/1 通过，确认第 1 项修复已覆盖该 panic。
+  - 在 084cd438 上两次复跑（fix1010-sab、fix1010-sab2）都在 java_base 编译阶段 OOM（11.9G）。属 c18e8fc4 引入的已知 OOM 阻塞，charset-ext 代理在二分。
+- 反射数组 e2e 抽查（fix1010-arr-6db7cbd9）：TestArrayComponentType 同样在编译阶段 OOM，已中止。等 OOM 修复后复跑 TestArrayComponentType、TestReflectArrayDeep、TestVmPlatformNatives。
+
+完工 head：fix-1010 的 6db7cbd9（加本记录提交），按计划合入 batch-1010。
