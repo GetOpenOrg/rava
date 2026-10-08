@@ -1082,10 +1082,9 @@ calls = [
     { init = ["java/lang/invoke/MethodHandle", "java/lang/invoke/ResolvedMethodName", "java/lang/invoke/MemberName", "java/lang/invoke/MethodHandleNatives"] },
     ["java/lang/System.initPhase2:(ZZ)I", 0, 0],
     ["java/lang/System.initPhase3:()V"],
-    # U12（2026-10-08，U1 例外，仅限 (L) 日志链）：构建期确定 System.LoggerFinder 提供者——求值器在此跑完
-    # BootstrapLogger$DetectBackend 与 LoggerFinderLoader.service()（ServiceLoader 查找、提供者构造），提供者实例与
-    # LoggerFinder.service 静态字段进映像，运行期不再走 ServiceLoader；该路径读到的属性取构建期值
-    ["java/lang/System$LoggerFinder.getLoggerFinder:()Ljava/lang/System$LoggerFinder;"],
+    # U12 ①（构建期确定 LoggerFinder 提供者）暂不在此登记：getLoggerFinder 当前会经 FilePermCompat → Security →
+    # StaticProperty.JAVA_HOME（运行期初始化类）被残差化，残差调用成为启动根、反而在启动时急切加载 ServiceLoader
+    # 链；前提与续作入口见 docs/plans/2026-10-05-boot-image-evaluator.md §5.7
 ]
 # HotSpot Threads::initialize_java_lang_classes 在 initPhase1 前初始化的类（JDK 21 次序）
 init = [
@@ -1172,7 +1171,7 @@ user_name = "@deferred"
 # 调用方保护域：与运行期 access_controller_impl.rs 同（恒 null，原生二进制无代码源保护域）
 "java/security/AccessController.getProtectionDomain:(Ljava/lang/Class;)Ljava/security/ProtectionDomain;" = "const:null"
 # 系统模块读取器的资源存在判定（ModuleReader.find 的唯一映像访问点）：按参考 JDK 模块内容回答，构建期不读
-# ${java.home}/lib/modules（U12：LoggerFinder 提供者查找经 BuiltinClassLoader.findMiscResource 遍历各模块）
+# ${java.home}/lib/modules（U12 ①：LoggerFinder 提供者查找经 BuiltinClassLoader.findMiscResource 遍历各模块）
 "jdk/internal/module/SystemModuleFinders$SystemModuleReader.containsImageLocation:(Ljava/lang/String;)Z" = "module_resource:module"
 # 线程 id 计数器：原生地址（thread_impl.rs NEXT_THREAD_ID）→ VM 单元
 "java/lang/Thread.getNextThreadIdOffset:()J" = "vm_cell:next_thread_id"
