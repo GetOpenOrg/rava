@@ -339,10 +339,21 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
   - 推送量增长集中在三类：`W->E` 手写数组写入（13 M → 56 M）、`E->S`（25 M → 89 M）、`R->S`（58 M → 114 M）。
   - 出度最大的节点变为 `U java/util/HashMap$Node.value`（32853，基线未进前列），另有多个 `G(·)` 出度约 1.4 万（基线约 7 千）。
   - 推测与 78b744fe 有关：缓存字段不再按逃逸 / open 截断后，值经正常流边扩散，读者增多。未定位到具体站点。
-- 单测与抽查：见 §9.6。
+- **单测**（作业 `rm-ut3-8ce97959`，kr1，`cluster_results/job/rm-ut3-8ce97959/01_kr1.log`）：
+  - 已出结果的套件中，只有 `driver/tests/closure_cli` 失败 2 例（8 过）：
+    - `param_string_constants_fold_switch`：batch-1012 已修的已知失败；
+    - `reflect_new_array_element_precision`：基 a88d7075 上同样失败（closure_cli.rs:150，两次种子闭包不一致），与本分支无关，归种子确定性线。
+  - 其余套件全部通过：7 / 11 / 234 / 31 / 4 / 1 / 17 / 1 / 4。
+  - 收尾时作业仍在跑剩余套件。072d4b17 的同一作业（`rm-ut-072d4b17`，sg1）跑到同样位置后 90 min 超时，失败项相同。
+- **抽查未跑**：10 例抽查（TestServiceLoaderEmpty、TestReflectInvokeShapes、ReflectionAPI、TestAnnoReflect、TestAnnoDeepAccess、TestSerialUserGenericCallbacks、TestReflectEnumOps、HelloWorld、CollectorsDemo、DeepCopy）因 6 h 上限收尾未投，留待续作。
 
 ### 9.6 续作入口
 
+0. **先同步新基线再验证**。把本分支合到 batch-1012（e5200a3e）或之后的集成分支，然后：
+   - 跑 §9.5 列出的 10 例抽查（tag 建议 `rm-spot-<sha>`）；
+   - 补跑全量单测；
+   - 复测 deepcopy / hello 的类数与耗时（`scripts/closure_composition_job.sh`，对照作业 `rm-cc-8ce97959`、`rm-hc-8ce97959`、`rm-diag17`）。
+   - 诊断分支 rm-diag3 … rm-diag6、rm-diagbase 已删（本地与双远端），打点代码不保留；需要回退点原因时，在 `engine/reflect_direct.rs` 的回退分支处临时加打印。
 1. **deepcopy 耗时回到基线**。先用 `--site-prof` 分别在基线与 8ce97959 上跑 deepcopy，对比重跑最多的站点；再用 `--flows @grow:` 盯 `U java/util/HashMap$Node.value` 与出度最大的 `G(·)` 节点，查清新增扩散的来源（78b744fe 放开的缓存字段、还是直连接边的实参来源）。在生成器内收窄，不回退 78b744fe 的建模口径。
 2. 核对 `ObjectStreamClass.invoke*` 五点与 `AnnotationInvocationHandler.equalsImpl@121` 的直连（deepcopy 中 `invokeWriteObject@24` 枢纽 207、`invokeWriteReplace@20` 83，均已直连）。
 3. `Constructor.newInstance` 同型门、有实参的静态目标：见 §八，未实施。
