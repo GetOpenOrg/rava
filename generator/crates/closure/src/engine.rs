@@ -370,8 +370,10 @@ pub struct Engine<'a> {
     /// （单调：此后恒按原入口接边，已接的直连边保留）
     rdirect: HashMap<(usize, u32), MemberRef>,
     rdirect_fallback: HashSet<(usize, u32)>,
-    /// 直连调用点上各实例目标最近一次的精确集合枢纽与接收者集合（同 `hub_last`，按目标分开：同一调用点有多个目标）
+    /// 直连调用点上各实例目标的 lambda / 手写层对象接收者最近一次的精确集合枢纽与集合（同 `hub_last`，按目标分开）
     rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
+    /// 直连调用点上各实例目标已选过实现的接收者类型与选出的实现（`reflect_direct.rs::direct_virtual`）
+    rdirect_sel: HashMap<(usize, u32, MemberRef), (BTreeSet<u32>, BTreeSet<MemberRef>)>,
     /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
     rmarks: HashMap<u32, method_marks::MethodMark>,
     rmark_fallback: HashSet<(usize, u32)>,

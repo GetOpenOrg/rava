@@ -11,7 +11,7 @@
 //!    InvocationTargetException 包装逐句一致；CS 方法只在 JDK 内且名字可见，缺口不改变此前提）。
 //!
 //! 满足时调用点接到 helper（静态调用，按 @CallerSensitive 声明压栈调用方所在类）与各目标：静态目标直接接边，实例目标
-//! 按 invoke 的接收者实参值集经枢纽虚派发（同字节码虚调用）；目标形参（不含接收者）取 invoke 实参数组的元素
+//! 按 invoke 的接收者实参值集逐类型选实现、各实现以接收者来源为 this 接边（同字节码虚调用的目标选择，见 `direct_virtual`）；目标形参（不含接收者）取 invoke 实参数组的元素
 //! （按下标奇偶槽；open 数组取元素类型 open，同本地访问器的实参池 `reflect_call.rs`）；引用返回值流入调用点结果，
 //! 基本类型返回值经装箱类 `valueOf` 流入（同本地访问器）；
 //! 目标入反射分派面（`reflect_members`，helper 的 native 按声明键分派），不再接原入口——Method.invoke 体内的
@@ -139,18 +139,21 @@ impl<'a> Engine<'a> {
             } else {
                 // 实例目标：按 invoke 的接收者实参（声明类过滤）虚派发，同字节码 invokevirtual / invokeinterface
                 let Some(recv) = args.get(1) else { continue };
-                self.direct_virtual(m, off, &key, cf.is_interface(), recv, &a, rn, &via);
+                self.direct_virtual(m, off, &key, cf.is_interface(), recv, &a, rt, rn, &via);
             }
         }
         self.call_vals = vals;
         self.cs.site_wrapped = outer;
     }
 
-    /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发：精确接收者与 open 部分各经枢纽（枢纽按成员与接收者集合
-    /// 为键，同一调用点上的多个目标互不干扰；精确集合增长时以上次的枢纽为父，只展开差集）。实参 a 每次直接接到
-    /// 枢纽形参（实参数组的分配点随值集增长，而枢纽接入按调用点去重）
+    /// 实例目标 key 在调用点 (m, off) 上按接收者值 recv 派发（同字节码 invokevirtual / invokeinterface 的目标选择）：
+    /// - 精确接收者按类型选出实现（逐类型一次，按调用点与目标记在 `rdirect_sel`），各实现以接收者来源为 this 直接接边
+    ///   （实现的 this 形参按声明类过滤；不按接收者对象克隆）。直连调用点的接收者是被序列化 / 反射调用的任意对象，
+    ///   值集随程序增长、目标又按标记成百，按精确集合建枢纽时每次增长每个目标各建一枢纽（deepcopy 单点 3.7 万枢纽）；
+    ///   按实现接边的边数是「目标的实现数」，与接收者增长次数无关；
+    /// - lambda 与手写层对象接收者（派发规则特殊）与 open 部分仍经枢纽（精确集合按目标链上次枢纽为父）。
     #[allow(clippy::too_many_arguments)]
-    fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, res: Option<Node>, via: &Via) {
+    fn direct_virtual(&mut self, m: usize, off: u32, key: &MemberRef, iface: bool, recv: &V, a: &Args, ret: Option<u32>, res: Option<Node>, via: &Via) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
             self.unresolved.insert(key.to_string());
             return;
@@ -160,10 +163,34 @@ impl<'a> Engine<'a> {
         let fs = self.feeds(m, recv, owner);
         let s = self.value_set(&fs);
         let exact = TypeSet { classes: s.classes.clone(), open: IdSet::default() };
-        let rs: Rc<[u32]> = self.receivers(m, &exact, owner).into();
-        if !rs.is_empty() {
-            // 接收者集合增长时新枢纽以上次的枢纽为父、只展开差集（同字节码调用点 `hub_last`）
-            let lk = (m, off, key.clone());
+        let rs = self.receivers(m, &exact, owner);
+        let lk = (m, off, key.clone());
+        let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| self.lambdas.contains_key(r) || self.hwobjs.contains_key(r));
+        let mut sel = self.rdirect_sel.remove(&lk).unwrap_or_default();
+        for r in plain {
+            let t = self.ty(r);
+            if !sel.0.insert(t) {
+                continue;
+            }
+            let rname = self.names[t as usize].to_string();
+            match self.h.select(&rname, &site) {
+                Some(x) => {
+                    let (o, n, d) = x.key();
+                    sel.1.insert(MemberRef { owner: o, name: n, desc: d });
+                }
+                None => {
+                    self.unresolved.insert(format!("select {rname} {}", site.method().name));
+                }
+            }
+        }
+        let impls: Vec<MemberRef> = sel.1.iter().cloned().collect();
+        self.rdirect_sel.insert(lk.clone(), sel);
+        for k in impls {
+            let t = self.method(k, via.clone());
+            self.edge(m, off, t, Recv::Feeds(fs.clone()), a, ret, res);
+        }
+        if !special.is_empty() {
+            let rs: Rc<[u32]> = special.into();
             let h = match self.rdirect_last.get(&lk).cloned() {
                 Some((h, prev)) if *prev == rs[..] => h,
                 last => {
