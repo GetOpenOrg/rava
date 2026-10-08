@@ -131,7 +131,7 @@ vm_driven = [
     "java/lang/Shutdown",
     "java/lang/ApplicationShutdownHooks",
 ]
-# ③ 精度缺口（分析器事实不足以判定、但已确认属精度问题的门）：doPrivileged 上下文无关派发
-precision = [
-    "java/security/AccessController",
-]
+# ③ 精度缺口（分析器事实不足以判定、但已确认属精度问题的门）。doPrivileged 不在此列：特权块已按调用点克隆
+# （engine/forward.rs），各克隆的动作形参值集只含本调用点的动作（2026-10-08 `--flows @set:` 实测），
+# 转发方法本身不作门（gates/tree.rs），门是各调用点
+precision = []

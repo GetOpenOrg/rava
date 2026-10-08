@@ -4,6 +4,9 @@
 //! 消费型限定（`docs/plans/2026-10-01-c1d-closure-bloat.md` §7）：切构造器 / 类初始化 / 含字段写入的方法体、
 //! 或切 new / 字段写入点，会让字段值集变空、按初值折叠，结果非单调——这些节点不作候选。
 //! 调用点只取 invokevirtual / invokeinterface / invokestatic / 非构造的 invokespecial。
+//! 分派转发方法（如特权块 `doPrivileged → executePrivileged`）已按调用点克隆，方法体与体内调用点是全部调用点
+//! 下游的汇合，切除量是各调用点之和（2026-10-08 实测 hello 单切 −955、collectors 非单调 +455），不作候选；
+//! 其调用方里的调用点照常作候选。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -90,7 +93,13 @@ impl Engine<'_> {
             return false;
         }
         let Some(cf) = self.gate_code(m) else { return false };
-        let Some(code) = cf.method(&n.key.name, &n.key.desc).and_then(|x| x.code.as_ref()) else { return false };
+        let Some(meth) = cf.method(&n.key.name, &n.key.desc) else { return false };
+        // 分派转发方法（静态、形参流到分派接收者，`forward.rs` 按调用点克隆）：各克隆的分派只含本调用点的实参，
+        // 方法体与体内调用点是全部调用点下游的汇合——切除量是各调用点之和，不对应单一机制；门是调用方里的调用点
+        if meth.is_static() && self.forwarders.get(&n.key).is_some_and(|&s| s != 0) {
+            return false;
+        }
+        let Some(code) = meth.code.as_ref() else { return false };
         match off {
             None => {
                 !matches!(n.key.name.as_str(), "<init>" | "<clinit>")
