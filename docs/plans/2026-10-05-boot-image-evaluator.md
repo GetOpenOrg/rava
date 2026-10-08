@@ -1004,7 +1004,46 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 在 b558e0c2 之后、batch-1008 修好发散的头上重测类数与映像数字（命令同上：`rava closure` 两例 + `--flows @concrete`）。
 - e2e 运行期验证未做：需验证启动序列的 `__set_genericInfo` 写入可编译，且 `HashMap` 树化等用到 genericInfo 的测试输出不变。按合批测试流程，随下一批验证分支统一测。
 - 单元测试作业 u13-ut-41d45f3c（jp2）在报告时仍在运行。b558e0c2 的发散可能影响依赖闭包的单测，判读时需与基线同口径对照。
-- 若要让 `sun/reflect/generics` 出闭包，前提是同时消除上面两条路径。注解成员签名解析需要把注解元数据的构建期求值（java_meta）与 `AnnotationParser` 的可达性一并改造；open(Comparable) 路径在开放世界档案下不可删除。这两项是独立课题，不属于 U13 范围。
+- 若要让 `sun/reflect/generics` 出闭包，前提是同时消除上面两条路径。注解成员签名解析需要把注解元数据的构建期求值（java_meta）与 `AnnotationParser` 的可达性一并改造；open(Comparable) 路径在开放世界档案下不可删除。这两项是独立课题，不属于 U13 范围。后续量化见 §5.6.10。
+
+#### 5.6.10 U13 后续：注解成员签名解析出闭包——新基线量化，不实施（2026-10-08，分支 `annot-sig`，基于 batch-1010 65d4882b）
+
+作业：`as-cut-3f4fee31`（jp2，5 例基线 + `--cut-sets 'annsig annall sigall'`）、`as-gates-3f4fee31`（sg2，`--gates hello collectors deepcopy`）。产物在 `cluster_results/job/<tag>/01/build/ccomp/`。作业脚本 3f4fee31 起接受仓库内 `.java` 路径作用例（产物名取小写类名）。
+
+切除集（`scripts/closure_composition_cuts/`）：
+
+- `annsig`：只切 `AnnotationParser.parseSig` 方法体，即「注解成员签名在构建期折叠」的上界；
+- `annall`：切 `AnnotationParser` 全部入口（`parseAnnotations` / `parseSelectAnnotations` / `parseParameterAnnotations` / `parseMemberValue`），即「注解元数据全部构建期求值、运行期不解析字节」的上界；
+- `sigall`：`parseSig` 加 `Class.getGenericInfo`，用于归因 `sun/reflect/generics` 整包。后者是 open(Comparable) 回退路径，开放世界下不可删，这组只作归因。
+
+| 例 | 基线 类 / 方法 | annsig Δ 类 / 方法 | annall Δ 类 / 方法 | sigall Δ 类 / 方法 |
+|---|---:|---:|---:|---:|
+| HelloWorld | 2178 / 13044 | −1 / −21 | −35 / −212 | −50 / −273 |
+| CollectorsDemo | 2178 / 13051 | −1 / −21 | −35 / −212 | −50 / −273 |
+| DeepCopy | 3573 / 22505 | 0 / −2 | −31 / −198 | −33 / −246 |
+| TestAnnoReflect | 2182 / 13051 | 0 / −2（+1） | −28 / −179 | −49 / −254 |
+| TestAnnoDeepAccess | 2189 / 13068 | 0 / −2 | −22 / −161 | −49 / −254 |
+
+各组切除后 `sun/reflect/generics` 剩余类数：annsig、annall 都是 47（不变）；sigall 剩 4（DeepCopy 剩 18）。
+
+**结论：注解成员签名折叠的健全收益是 0 类、至多 −2 方法，不实施。** 依据：
+
+- HelloWorld / CollectorsDemo 的 −1 类 −21 方法是切除不健全造成的假象，不是可兑现的收益。
+  - 切掉 `parseSig` 后返回值集为空，注解类型 `Class` 流不出来，于是 `AnnotationType.getInstance` → `AnnotationType.<init>` → `Method.getDefaultValue` 一支失去接收者；`[annotation]` 种子触发成员（`getRawAnnotations`）随之不可达，`Class$AnnotationData` 与 `Class.createAnnotationData` / `getDeclaredMethods` 等 19 个方法一起消失。
+  - 健全的构建期折叠仍会产出注解类型 `Class`，这些类与方法照样在闭包里。
+  - 剩下的 2 个方法是 `SignatureParser.parseTypeSig` 与 `AnnotationParser.toClass`，DeepCopy 与两个注解用例实测也正是 −2。
+- `sun/reflect/generics` 47 类在 annsig 下一个不少。原因是 open(Comparable) 回退（§5.6.9 第 2 条）独立地把 `ClassRepository.make` → `SignatureParser.parseClassSignature` 及整棵签名树拉进来，`parseSig` 只多用了其中的 `parseTypeSig` 一个入口。两条路径一起切（sigall）才回收 43–49 类；而 open(Comparable) 路径在开放世界档案下不可删（核心原则 2）。
+- 整条注解解析（annall）的上界是 −22 至 −35 类，主要是 `java/util/stream` 12 类（注解解析体内的流式处理带入）、`sun/reflect/annotation` 6–10 类、`java/lang/annotation` 2–6 类。
+  - HelloWorld / CollectorsDemo / DeepCopy 里注解解析的唯一来路是 `Method.invoke` → `Method.isCallerSensitive` → `Reflection.isCallerSensitive` → `isAnnotationPresent(CallerSensitive.class)`，起点是 `ServiceLoader$ProviderImpl.invokeFactoryMethod`（日志链 `LoggerFinderLoader`）。
+  - 这条来路属于 `Method.invoke` 全入口直连（`reflect-direct`）。直连后若这条来路不再经 `Method.invoke` 体，三例的 −35 / −31 类可能随之兑现（以复测为准），无需单独改造注解机制。
+  - 带注解反射的用例（TestAnnoReflect / TestAnnoDeepAccess）运行期确实要解析用户注解。在开放世界档案下，`AnnotationParser` 必须保留，以保证运行期观察与 JVM 一致；它们的 −22 / −28 类不是本项可回收的量。
+- 以手写取代 `parseSig`（描述符直译为 `Class`）属于性能替换，不满足手写准入（C1d 1e623cec 已删除 76a260a0 的同类手写），不作为备选方案。
+  - `Class::__from_descriptor_checked`（`runtime/java_runtime/src/java/lang/class_impl.rs`）是那次手写留下的辅助函数，目前无调用方，可以随下一次手写层清理一并删除。
+
+后续入口：
+
+- `reflect-direct` 合入后，在新头上用 `closure_composition_job.sh --cut-sets 'annsig annall' hello collectors deepcopy` 复测。若 HelloWorld 的基线已不含 `AnnotationParser`，本项自然关闭。
+- 若届时 annsig 在某个用例上的 Δ 类 > 0（前提是 open(Comparable) 路径已经不再首达 `sun/reflect/generics`，例如档案构成变化），再按终态方案实施：沿 U13 的 `image_memo_fields` 机制，把构建期已初始化类上的注解缓存（`Class.annotationData`、`Class.annotationType`）物化进映像。注解实例是动态代理，需先给映像导出加上「代理实例 + `AnnotationInvocationHandler`」的可物化判定。生成器内不写类名，字段在清单中声明。
 
 ### 5.7 第 5 步与第 6 步的 JceSecurity 部分：jimage 嵌入、`${java.home}` 虚拟树、`#[jvm_boundary]` 14 → 0（2026-10-08，分支 `boot-image-s5`，基于 batch-1008 b558e0c2）
 
