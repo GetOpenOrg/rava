@@ -1002,6 +1002,11 @@ stable_types = [
     "java/util/regex/Pattern$Node",
     "java/util/regex/Pattern$CharPredicate",
 ]
+# 软引用（含子类型须精确登记）：导出映像时 referent 不在映像其余部分可达集内即清除（JLS 软引用「可随时清除」
+# 语义；Class.reflectionData 等缓存的构建期反射对象由此不入映像，运行期按需重建）。引用须未入队
+# （queue 为 null 或属 null_queues 类型）
+soft_references = ["java/lang/ref/SoftReference"]
+null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 
 # 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
 # `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
@@ -1055,6 +1060,11 @@ stable_types = [
 "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;" = "caller_class"
 "java/lang/reflect/Array.newArray:(Ljava/lang/Class;I)Ljava/lang/Object;" = "new_array"
 "java/lang/Throwable.fillInStackTrace:(I)Ljava/lang/Throwable;" = "self"
+# 反射（engine/concrete/reflect.rs；HotSpot Reflection::new_method / invoke_method 同义）
+"java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;" = "class_declared_methods"
+"java/lang/Class.getConstantPool:()Ljdk/internal/reflect/ConstantPool;" = "class_constant_pool"
+"jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
+"java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
 
 # 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
 # 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
@@ -1074,6 +1084,20 @@ component_type = "java/lang/Class.componentType"
 reference_referent = "java/lang/ref/Reference.referent"
 class_module = "java/lang/Class.module"
 module_loader = "java/lang/Module.loader"
+reference_queue = "java/lang/ref/Reference.queue"
+# VM 构造反射方法对象时写入的布局字段（reflect.rs）
+method_clazz = "java/lang/reflect/Method.clazz"
+method_name = "java/lang/reflect/Method.name"
+method_parameter_types = "java/lang/reflect/Method.parameterTypes"
+method_return_type = "java/lang/reflect/Method.returnType"
+method_exception_types = "java/lang/reflect/Method.exceptionTypes"
+method_modifiers = "java/lang/reflect/Method.modifiers"
+method_slot = "java/lang/reflect/Method.slot"
+method_signature = "java/lang/reflect/Method.signature"
+method_annotations = "java/lang/reflect/Method.annotations"
+method_parameter_annotations = "java/lang/reflect/Method.parameterAnnotations"
+method_annotation_default = "java/lang/reflect/Method.annotationDefault"
+constant_pool_oop = "jdk/internal/reflect/ConstantPool.constantPoolOop"
 
 # ── 构建期引导映像求值（docs/plans/2026-10-05-boot-image-evaluator.md；engine/concrete/boot*.rs）──
 # 每次闭包分析前按 calls 顺序具体执行 JDK 引导字节码（永久映像纪元），结果见 closure.json summary.boot_image

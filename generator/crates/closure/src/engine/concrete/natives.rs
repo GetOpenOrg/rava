@@ -338,7 +338,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             vm.statics.insert(key, arg(0)?);
             Ok(None)
         }
-        _ => match super::unsafe_ops::call(vm, env, op, &args) {
+        _ => match super::unsafe_ops::call(vm, env, op, &args).or_else(|| super::reflect::call(vm, env, op, info, &args)) {
             Some(r) => r,
             None => class_op(vm, env, op, &args),
         },

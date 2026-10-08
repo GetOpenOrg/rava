@@ -23,6 +23,11 @@ pub struct ConcreteCfg {
     pub implicit: HashMap<String, String>,
     /// VM 布局的字段（字符串字面量与类镜像由 VM 直接构造）：键为语义名（`string_value` / `string_coder` / `component_type`），值为 `类.字段`
     pub vm_fields: HashMap<String, String>,
+    /// 软引用类型（精确类型）：导出映像时，所指对象只经软引用可达、且引用未登记队列（队列字段为 null 或
+    /// `null_queues` 所列类型的对象）的，按「软引用可随时清除」语义清除所指（如类镜像的反射数据缓存）
+    pub soft_references: HashSet<String>,
+    /// 表示「未登记队列」的引用队列类型（精确类型）
+    pub null_queues: HashSet<String>,
     /// 构建期引导求值（`[concrete.boot]`，engine/concrete/boot.rs）
     pub boot: BootCfg,
 }
@@ -90,6 +95,8 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
         image_memo_fields: strs(get("image_memo_fields")).into_iter().collect(),
         stable_types: strs(get("stable_types")),
         vm_fields: table(get("vm_fields"), "vm_fields")?,
+        soft_references: strs(get("soft_references")).into_iter().collect(),
+        null_queues: strs(get("null_queues")).into_iter().collect(),
         implicit: table(get("implicit"), "implicit")?,
         boot: parse_boot(get("boot"))?,
     })
