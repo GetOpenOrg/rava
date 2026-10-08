@@ -99,7 +99,7 @@
 - **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
 - **known_failures**：batch-1008 新增 TestBootLayer（第 5 步已实施，随 batch-1009 复验）、删除 TestXmlSaxEvents。
 - **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava、dev 恢复。
-- **dev（2026-10-08）**：内存条有坏点，等新条到货更换，恢复需数天；BIOS 散热调整随换内存同一次停机做，恢复后先做内存自检再放作业。改名不再等 dev：当前子代理收尾、batch-1009/1010 合入且 gate 通过后单独进行。
+- **dev（2026-10-08）**：内存条有坏点，等新条到货更换，恢复需数天；BIOS 散热调整随换内存同一次停机做，恢复后先做内存自检再放作业。改名不再等 dev，停派点（用户 10-08 定）= batch-1009/1010 放行合入时：停派新代理，在跑代理当前小步提交推送并写恢复入口后收尾，分发器作业清空后改名；硬条件仅「无在跑子代理 + 无在跑分发器」，改名后按恢复入口新开代理续作。
 - **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
