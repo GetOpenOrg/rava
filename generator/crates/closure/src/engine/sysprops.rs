@@ -177,11 +177,21 @@ impl Ctx<'_> {
         }
         // 键为拼接值：只在该方法有登记的候选模式时求（`sysprops_key.rs`）
         let patterned = me.is_some_and(|me| args.iter().any(|a| key_src(a).is_some_and(|o| self.pkeys.borrow().contains_key(&(me, o)))));
-        if !patterned && !args.iter().any(|a| matches!(a, V::Str(..))) {
+        let unseen = me.is_some_and(|me| args.iter().any(|a| key_src(a).is_some_and(|o| !self.pkeys_seen.borrow().contains(&(me, o)))));
+        if !patterned && !unseen && !args.iter().any(|a| matches!(a, V::Str(..))) {
             return None;
         }
         let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
-        match args.get(spec.key)? {
+        let key = args.get(spec.key)?;
+        // 读取点尚未登记候选模式（登记在本次分析之后的调用事件里）：答复 ⊥（读取之后暂不可达），登记后失效重算。
+        // 不按值未知答复——未知值并入返回常量格 / 形参常量格后无法撤回，登记先后会让结果依赖处理顺序
+        if let (Some(me), Some(o)) = (me, key_src(key)) {
+            if !self.pkeys_seen.borrow().contains(&(me, o)) && self.noreturn.borrow().bottom_never() {
+                self.dep(me, Dep::Never);
+                return Some(Ret::Never);
+            }
+        }
+        match key {
             V::Str(..) => self.prop_read(me, &spec, args),
             _ if patterned => self.prop_read_patterns(me, &spec, args),
             _ => None,
