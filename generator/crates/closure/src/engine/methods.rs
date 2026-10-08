@@ -5,17 +5,23 @@ use super::*;
 impl<'a> Engine<'a> {
     /// JVMS §5.5 初始化：超类链、声明非抽象实例方法的超接口、`<clinit>`
     pub fn init(&mut self, cls: &str, via: Via) {
+        if cut::edges_on() && !cls.starts_with('[') {
+            let from = self.via_node(&via);
+            cut::edge(&from, &format!("I:{cls}"));
+        }
+        if cls.starts_with('[') {
+            return;
+        }
+        // 构建期初始化尝试先于档位登记：档位上下文按类的构建期初始化结局决定是否登记 `<clinit>`，
+        // 结局须在登记前确定（否则取决于该类此前是否经别的路径尝试过，闭包随处理次序变化）
+        let settled = self.inited.contains_key(cls) || self.image_init(cls, &via);
         if !self.level_ctxs.is_empty() {
             let lc = self.via_level_any(&via);
             if lc != NOCTX {
                 self.level_init(cls, lc);
             }
         }
-        if cut::edges_on() && !cls.starts_with('[') {
-            let from = self.via_node(&via);
-            cut::edge(&from, &format!("I:{cls}"));
-        }
-        if cls.starts_with('[') || self.inited.contains_key(cls) || self.image_init(cls, &via) {
+        if settled {
             return;
         }
         let Some(cf) = self.touch(cls, Level::Init, via.clone()) else { return };

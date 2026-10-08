@@ -8,7 +8,7 @@ use super::*;
 
 impl<'a> Engine<'a> {
     /// 尝试构建期初始化 cls；返回 cls 是否成为构建期初始化类
-    pub(super) fn image_ext(&mut self, cls: &str) -> bool {
+    pub(in crate::engine) fn image_ext(&mut self, cls: &str) -> bool {
         let (Some(x), Some(s)) = (self.ext_vm.as_deref_mut(), self.img.as_deref_mut()) else { return false };
         let d = Rc::make_mut(&mut s.data);
         let (n0, s0) = (d.objs.len(), d.statics.len());
