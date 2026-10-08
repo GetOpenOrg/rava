@@ -14,6 +14,8 @@ mod boot_cfg;
 pub mod boot_image;
 mod boot_slots;
 mod export;
+mod ext_export;
+mod ext_init;
 mod indy;
 mod init;
 mod interp;
@@ -31,6 +33,8 @@ mod vm_link;
 mod war;
 
 use resolve::MethodSite;
+
+pub(super) use self::ext_init::ExtVm;
 
 use self::snap::{MObj, MV};
 use self::vm::*;

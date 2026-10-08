@@ -72,7 +72,10 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         }
         "bytecode" => vm.run(env, &Rc::new(MInfo { key: info.key.clone(), site: info.site.clone(), index: info.index.clone(), op: None, bytecode: true }), args),
         "identity_hash" => {
-            let h = arg(0)?.r()?.map_or(0, |o| vm.identity_hash(o));
+            let h = match arg(0)?.r()? {
+                Some(o) => vm.identity_hash(o)?,
+                None => 0,
+            };
             ret(CV::I(h))
         }
         "get_class" => {
@@ -323,6 +326,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
         s if s.starts_with("set_static:") => {
             let spec = &s["set_static:".len()..];
             let (owner, name) = spec.rsplit_once('.').map_or_else(|| fail("set_static 操作数"), Ok)?;
+            vm.ext_put_static(owner, name)?;
             let key = vm.fkey(owner, name);
             vm.jlog_static(key);
             vm.statics.insert(key, arg(0)?);

@@ -10,12 +10,15 @@ impl Vm {
             return Ok(());
         }
         match self.init.get(c) {
-            Some(Init::Done | Init::Running) => return Ok(()),
+            Some(Init::Done | Init::Running) => return self.ext_inited(c),
             Some(Init::Failed(w)) => return fail(format!("类初始化失败 {c}：{w}")),
             None => {}
         }
         let key: Rc<str> = Rc::from(c);
         if self.boot {
+            if self.ext.is_some() {
+                return self.ext_init(env, key);
+            }
             return self.boot_init(env, key);
         }
         self.init.insert(key.clone(), Init::Running);
@@ -52,7 +55,7 @@ impl Vm {
 
     /// 引导求值的类初始化：`<clinit>` 在日志标记内执行；延迟值参与求值即撤回其全部效果，该类转为
     /// 运行期初始化（静态字段构建期不可读）。其余失败与异常即构建失败
-    fn boot_init(&mut self, env: &Env, key: Rc<str>) -> R<()> {
+    pub(super) fn boot_init(&mut self, env: &Env, key: Rc<str>) -> R<()> {
         self.jlog_init(&key);
         self.init.insert(key.clone(), Init::Running);
         let m = self.jmark();

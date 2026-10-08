@@ -17,6 +17,8 @@ use classfile::{op, Operand};
 use super::*;
 use crate::image::{IBody, IStep, IVal, ImageData};
 
+mod ext;
+
 pub(super) struct ImgState {
     data: Rc<ImageData>,
     build_time: HashSet<String>,
@@ -185,9 +187,10 @@ impl<'a> Engine<'a> {
     /// 构建期初始化类：初始化已在映像中完成（不展开 `<clinit>`）。返回 true 表示已处理
     pub(super) fn image_init(&mut self, cls: &str, via: &Via) -> bool {
         let Some(s) = self.img.as_mut() else { return false };
-        if !s.build_time.contains(cls) {
+        if !s.build_time.contains(cls) && !self.image_ext(cls) {
             return false;
         }
+        let Some(s) = self.img.as_mut() else { return false };
         if s.touched.insert(cls.to_string()) {
             self.touch(cls, Level::Init, via.clone());
         }

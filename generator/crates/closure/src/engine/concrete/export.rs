@@ -100,7 +100,7 @@ impl Ex<'_> {
     }
 }
 
-fn is_default(v: CV) -> bool {
+pub(super) fn is_default(v: CV) -> bool {
     match v {
         CV::I(0) | CV::J(0) | CV::N => true,
         CV::F(x) => x.to_bits() == 0,
@@ -109,8 +109,9 @@ fn is_default(v: CV) -> bool {
     }
 }
 
-/// 导出映像（含 lambda 对象时失败）；`current_thread` 为 VM 初始线程的堆下标
-pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, String> {
+/// 导出映像（含 lambda 对象时失败）；`current_thread` 为 VM 初始线程的堆下标。
+/// 另返回堆下标 → 映像编号（构建期初始化扩展在其上续编，ext_init.rs）
+pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<(ImageData, HashMap<u32, u32>), String> {
     let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new(), texprs: HashMap::default(), exprs: Vec::new() };
     let mut statics: Vec<(&(Rc<str>, Rc<str>), u32, CV)> = vm.statics.iter().map(|(k, v)| (&vm.fnames[*k as usize], *k, *v)).collect();
     statics.sort_by(|a, b| a.0.cmp(b.0));
@@ -274,7 +275,9 @@ pub(super) fn export(vm: &Vm, current_thread: Option<u32>) -> Result<ImageData, 
         return Err(format!("污点表达式引用了映像根不可达的对象 {} 个", x.order.len() - d.objs.len()));
     }
     d.exprs = x.exprs;
-    Ok(d)
+    d.ext_base = d.objs.len() as u32;
+    d.ext_steps = d.steps.len() as u32;
+    Ok((d, x.ids))
 }
 
 /// 档位步骤：档位字段（`[concrete.boot] level`）与其值
