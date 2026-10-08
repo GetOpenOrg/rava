@@ -1,0 +1,6 @@
+# 字符集按名查找的宿主名来源（U1：sun.jnu.encoding / stdout.encoding / stderr.encoding 运行期取宿主值）：
+# initPhase1 jnu 残差区段的 isSupported 根、newPrintStream 残差调用的 forName、sun.nio.fs.Util 的 jnu forName。
+# 归因用：切掉后剩下的字符集类即「常量名 / 缺省字符集」所需（不健全，只作上界）
+java/nio/charset/Charset.isSupported:(Ljava/lang/String;)Z
+java/lang/System.newPrintStream:(Ljava/io/OutputStream;Ljava/lang/String;)Ljava/io/PrintStream;@24
+sun/nio/fs/Util.<clinit>:()V@5

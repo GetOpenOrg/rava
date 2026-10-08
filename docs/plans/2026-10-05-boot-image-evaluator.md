@@ -784,7 +784,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | S2 泛型签名精度（`Locale.<clinit>` → `LocaleObjectCache` → `ConcurrentHashMap.comparableClassFor@21` → `getGenericInterfaces`） | 598 → 557 | Linux −41（`sun/reflect/generics` 38 类全部 + `GenericSignatureFormatError`、`TypeVariable`、`Annotation`）；macOS 预计同量 | Linux ≈ 587，macOS ≈ 549 | 分析器通用机制：键类型的类签名可在构建期读出（`Locale$LocaleKey` 无签名，`BaseLocale$Key` 只有字段签名），`comparableClassFor` 的泛型接口遍历按已知键类集合折叠。收窄单独不可达（§5.6.5），终态需 `Class.genericInfo` 入映像，U13 已定（§8.4，做） |
 | S1 + S2 | 未合测：lookup 与 `comparableClassFor@21` 没有一起切过。整方法切 `Class.getGenericInterfaces` 无效果（598 → 598，与 lookup 合切仍为 406），所以 S2 以 `comparableClassFor@21` 切口为准 | Linux 约 −233（按两项相加） | Linux ≈ 395，macOS ≈ 430 | 同上两项；合测值待做 |
 
-- 排期：S2 按 U13 已定（§8.4，`Class.genericInfo` 入映像），排在三个机制之后的第一项；S1 按 U14（2026-10-08，§8.4）重估——`lookup` 的三条入口中 jnu 区段与 stdout / stderr 编码仍取决于运行宿主、保持运行期读取，名字不定仍属合法可达；`file.encoding` 钉为 UTF-8 后的收益逐项实测，无收益不钉。
+- 排期：S2 按 U13 已定（§8.4，`Class.genericInfo` 入映像），排在三个机制之后的第一项；S1 按 U14（2026-10-08，§8.4）重估——`lookup` 的三条入口中 jnu 区段与 stdout / stderr 编码仍取决于运行宿主、保持运行期读取，名字不定仍属合法可达；`file.encoding` 钉为 UTF-8 后的收益逐项实测，无收益不钉。2026-10-08 实测（`docs/reports/2026-10-07-closure-composition.md` §7.3）：只切宿主名来源 Δ = 0（常量名 `"UTF-8"` 经 `defaultCharset` 仍按全表反射）；收窄须同时有「U1 字符集域决定」与「字符串常量上下文 + 常量表键→值」，上界 −141 类。
 
 **待验证清单（10-07 起改为合批测试，由主会话合入验证分支后统一跑；本分支 c61b7761 只做过本机 cargo check --tests）**
 

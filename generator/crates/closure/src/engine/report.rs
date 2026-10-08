@@ -53,12 +53,13 @@ impl<'a> Engine<'a> {
     }
 
     /// 直连反射调用点：每个到达该点的克隆都按直连处理且特化入口相同（未分析的克隆不导出），
-    /// 且该点不按 null_recv / noreturn / 常量导出
+    /// 且该点不按 null_recv / noreturn / 常量导出，也不落在死区（dead_pcs / noreturn_dead_pcs：如前序调用定论不返回）
     fn direct_calls(&self, clones: &[usize], all: &[Rc<Analysis>], code: &classfile::Code, f: &Fold) -> Vec<(u32, MemberRef)> {
         let pcs: BTreeSet<u32> = self.rdirect.keys().filter(|(i, _)| clones.contains(i)).map(|(_, pc)| *pc).collect();
+        let dead = |pc: u32| f.dead_pcs.iter().chain(&f.noreturn_dead_pcs).any(|&(s, e)| s <= pc && pc < e);
         let mut out = Vec::new();
         for pc in pcs {
-            if f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.consts.iter().any(|c| c.0 == pc) {
+            if dead(pc) || f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.consts.iter().any(|c| c.0 == pc) {
                 continue;
             }
             let Ok(idx) = code.insns.binary_search_by_key(&pc, |x| x.offset) else { continue };
