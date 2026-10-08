@@ -4,6 +4,7 @@
 #
 # 用法：scripts/closure_composition_job.sh [--gates] [--cut-file F --tag T | --cut-sets "名1 名2 …"] <用例>...
 #   用例：hello | collectors | deepcopy | jcasasl | s0boot（s0boot 需 dev 级内存，见报告）
+#         | 仓库内 .java 相对路径（如 tests/e2e/47_annotations/TestAnnoReflect.java；产物名取小写类名）
 #   --cut-file F：反事实切除条目文件（同 rava closure --cut-file；不健全，只作归因）；--tag T 为产物名后缀
 #   --gates：门自动排名（rava closure --gates，取代手工切除集）：产物 <用例>[.<tag>].gates.json.gz / .gates.md；
 #            额外参数经环境变量 CCOMP_GATES_ARGS 传入（如 "--gates-top 30 --gates-verify 16 --gates-mem-mb 12288"）
@@ -92,6 +93,7 @@ input_of() {
         collectors) echo "$REPO/tests/e2e/04_collections/CollectorsDemo.java" ;;
         deepcopy) echo "$REPO/tests/e2e/23_algorithms/DeepCopy.java" ;;
         jcasasl) jcasasl_src ;;
+        *.java) [[ -f "$REPO/$1" ]] && echo "$REPO/$1" ;;
         *) return 1 ;;
     esac
 }
@@ -106,7 +108,8 @@ for c in "$@"; do
         f="$(input_of "$c")" || { echo "未知用例 $c"; rc_all=1; continue; }
         IN=("$f")
     fi
-    base="$OUT/$c$TAG"
+    name="$c"; [[ "$c" == *.java ]] && name="$(basename "$c" .java | tr '[:upper:]' '[:lower:]')"
+    base="$OUT/$name$TAG"
     timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
     t0=$SECONDS
     if [[ $GATES == 1 ]]; then
