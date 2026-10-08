@@ -661,6 +661,11 @@ HotSpot 上 java.base 调用方（`Shutdown.logRuntimeExit`、`ObjectInputFilter
 
 断言 HelloWorld < 1000 类、闭包不含 `sun/net/www/protocol/jrt/Handler`。当前 3304 类、含 jrt Handler，**仍失败**。切 `logRuntimeExit` 后为 537 类、无 jrt Handler，满足断言——即 (L) 链关闭（U12 ③ 终态）后此测试自然通过；不需要也不应在种子链上另做切除（种子链节点都不是独立门，7.5.1）。
 
+#### 7.5.4a 单测（`sc-ut-6da7e301`，sg2）
+
+- 与 batch-1011 a88d7075（`b1011-ut-a88d7075`）对照：`container_elements_per_object`、`param_string_constants_fold_switch`、`reflect_new_array_element_precision`、`known_gate_ranks_first` 两边同败；closure_cli 通过数 7 → 8（新增 `snapshot_read_ignores_props_escape` 通过）。
+- **新增失败 `profile_union_key_and_coverage`**（profile_cli.rs:84，`--flow-batch 1 --hash-seed 7` 后 `content_digest` 不同）：本分支头重跑两次都失败、c9d00b9b 重跑通过（作业 `sc-prof-060185bc` / `sc-prof-c9d00b9b`）。逐项对照（`sc-pdiag-060185bc`）：类集合相同（3338），差异只有一处折叠——`CharsetEncoder.onMalformedInput` 的空值检查死区 [4, 14] 在缺省批量下成立、`--flow-batch 1` 下不成立（方法 19198 / 19197，一个类 code ↔ init）。这是求值顺序敏感的非单调折叠，与已知跳过的 `closure_independent_of_order` / `closure_independent_of_hash_seed` 同类（b1008 也出现过此测试失败）；快照修复改变了两个 fixture 上的求值次序而使它显现。未定位根因：续作先用 `--flows` 查 `onMalformedInput` 实参在两种批量下的值集，确认是哪个调用点的实参在乐观阶段曾为非空、后被撤销。
+
 #### 7.5.5 续作入口
 
 - 入口是 boot-image 计划 §5.9.4（U12 ③）：按 7.5.3 第 1 → 2 → 3 条的顺序实施。验收：HelloWorld ≤ 640 类（boot-image 计划 §5.5.6 的 Linux 目标；本测切除上界 537）、CollectorsDemo 同量级（上界 583）、DeepCopy 的 `SecureRandom` / `SeedGenerator` / `LogManager` 为 0（`ObjectInputFilter$Config` 入口随第 1、2 条关闭）、`param_string_constants_fold_switch` 通过。
