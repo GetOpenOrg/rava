@@ -118,6 +118,9 @@ impl<'a> Engine<'a> {
                         let o = self.obj_at(m, off, c);
                         self.osite_note(m, o, c, cf);
                         o
+                    } else if let Some(k) = self.enum_const_mark(m, off, c) {
+                        // 枚举常量：身份标记（不作克隆上下文，见 `enum_consts.rs`）
+                        k
                     } else {
                         self.id(c)
                     };

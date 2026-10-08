@@ -128,7 +128,8 @@ for c in "$@"; do
         if [[ $rc == 0 && -s "$base.json" ]]; then gzip -f "$base.json"; else rc_all=1; rm -f "$base.json"; fi
         continue
     fi
-    read -r -a CARGS <<<"${CCOMP_CLOSURE_ARGS:-}"
+    # CCOMP_CLOSURE_ARGS_SEP：参数分隔符（缺省按空白切分；含空格的诊断参数如 `@in:field? …` 用 '|' 等分隔）
+    IFS="${CCOMP_CLOSURE_ARGS_SEP:-$' \t\n'}" read -r -a CARGS <<<"${CCOMP_CLOSURE_ARGS:-}"
     timeout "${CCOMP_TIMEOUT:-3000}" "${timer[@]}" "$RAVA" closure "${IN[@]}" "${CORPUS_JDK_ARGS[@]}" "${CUT[@]}" \
         -o "$base.json" "${CARGS[@]}" >"$base.out" 2>"$base.err"
     rc=$?

@@ -254,6 +254,8 @@ impl<'a> Engine<'a> {
             fh_marks: HashMap::default(),
             fa_sites: HashMap::default(),
             fh_named: HashMap::default(),
+            enum_consts: HashMap::default(),
+            enum_vals: HashMap::default(),
             fa_untrusted: None,
             fa_watch: HashMap::default(),
             fh_released: BTreeSet::new(),
