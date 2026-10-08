@@ -60,6 +60,11 @@ impl NoReturn {
         !self.settled
     }
 
+    /// 定论阶段：缺席一律按值未知
+    pub(super) fn settled(&self) -> bool {
+        self.settled
+    }
+
     /// 收尾阶段（「尚无返回」答复随进度变化，见 `share.rs`）
     pub(super) fn closing(&self) -> bool {
         self.closing

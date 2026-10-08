@@ -84,6 +84,7 @@ impl<'a> Engine<'a> {
                 let load = self.man.names.is_class_load(&key);
                 let (named, top) = if load || self.man.names.is_class_lookup(&key) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
+                self.site_linked(m, off, t);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
                     self.named_class(m, off, &c, !load);

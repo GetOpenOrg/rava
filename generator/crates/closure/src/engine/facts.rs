@@ -271,6 +271,8 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) callers: Option<BTreeSet<Rc<str>>>,
     /// 取调用者类的调用点偏移（其结果的类镜像值集即 `callers`，见 [`Oracle::site_mirror_call`]）
     pub(super) caller_sites: RefCell<BTreeSet<u32>>,
+    /// 静态调用点按克隆节点的返回值答复（`site_rets.rs`；空 = 全部走按成员的返回常量格）
+    pub(super) sites: super::site_rets::SiteTable,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {

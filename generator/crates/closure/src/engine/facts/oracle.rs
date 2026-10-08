@@ -2,6 +2,7 @@
 
 use super::*;
 use super::super::obj_fields::ObjAns;
+use super::super::site_rets::SiteAns;
 
 /// 值带空集合标签（接收者为空的不可修改集合）
 fn is_empty_tag(v: Option<&V>) -> bool {
@@ -71,9 +72,16 @@ impl Oracle for Facts<'_, '_> {
         };
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
-        let r = match per {
-            Some(p) => Some(p),
-            None => {
+        // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）
+        let site = if opcode == classfile::op::INVOKESTATIC { self.sites.iter().find(|(o, _)| *o == off).map(|(_, a)| a) } else { None };
+        let r = match (per, site) {
+            (Some(p), _) => Some(p),
+            (None, Some(SiteAns::Never)) => {
+                self.ctx.dep(me, Dep::Never);
+                return Ret::Never;
+            }
+            (None, Some(SiteAns::Val(v))) => Some(PV::Const(v.clone())),
+            (None, None) => {
                 self.ctx.dep(me, Dep::Ret(t.clone()));
                 self.ctx.rvals.borrow().get(t).cloned()
             }

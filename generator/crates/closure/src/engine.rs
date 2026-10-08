@@ -132,6 +132,7 @@ mod image_memo;
 mod image_start;
 mod static_init;
 mod jca_order;
+mod site_rets;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -443,6 +444,14 @@ pub struct Engine<'a> {
     obj_dirty: BTreeMap<usize, obj_fields::ObjDirty>,
     /// 方法节点 → 各次分析返回值之并（按接收者对象归属的来源，见 `obj_rets.rs`）
     nret: HashMap<usize, PV>,
+    /// 静态调用点 (方法节点, 偏移) → 所接方法节点（见 `site_rets.rs`）
+    site_nodes: HashMap<(usize, u32), usize>,
+    /// 方法 → 最近一次分析所用的静态调用点答复表
+    site_used: HashMap<usize, site_rets::SiteTable>,
+    /// 克隆的静态方法节点 → 各次分析返回值之并
+    sret: HashMap<usize, PV>,
+    /// 克隆的静态方法节点 → 按其返回值答复过调用点的方法
+    sret_readers: HashMap<usize, BTreeSet<usize>>,
     /// 已有返回值的实例方法节点的接收者形参节点：值集增长时把节点返回值补归属到新对象
     oret_watch: HashSet<Node>,
     /// 按对象接收者来源的候选站点（方法键 → 偏移，`obj_fields.rs::obj_site_cands`）

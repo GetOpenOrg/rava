@@ -15,9 +15,18 @@ const MAX_DEPTH: u32 = 3;
 /// 被求值方法的指令数上限
 const MAX_INSNS: usize = 256;
 
-/// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者）
+/// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者；
+/// 引导映像对象：身份与 final 字段在构建期确定，如映像 Module 上的 `getClassLoader()`）
 fn is_const(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..)) || image_id(v).is_some()
+}
+
+/// 引导映像对象的下标与已知 final 字段数（同一对象带不带 finals 的两种标签分开记忆）
+fn image_id(v: &V) -> Option<(u32, usize)> {
+    match v.obj().map(|o| &**o) {
+        Some(crate::absint::Obj::Image(id, fs)) => Some((*id, fs.len())),
+        _ => None,
+    }
 }
 
 /// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）
@@ -31,7 +40,7 @@ fn is_sysprops_tag(v: &V) -> bool {
 
 /// 可作为求值结果导出的常量
 fn exportable(v: &V) -> bool {
-    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..))
+    matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..)) || image_id(v).is_some()
 }
 
 /// 求值记忆：结果与求值的输入（见 `memo.rs`）
@@ -47,6 +56,8 @@ pub(super) enum CArg {
     SysProps,
     /// 类字面量（所指类名取字面量序号）
     Class(u32),
+    /// 引导映像对象（下标, 已知 final 字段数）
+    Image(u32, usize),
 }
 
 /// 记忆键：目标、各实参（非常量 = None）、起始深度
@@ -60,7 +71,7 @@ fn carg(v: &V) -> Option<CArg> {
         V::Str(s, _) => Some(CArg::Str(crate::absint::lit_id(s))),
         v if is_sysprops_tag(v) => Some(CArg::SysProps),
         V::Class(c, _) => Some(CArg::Class(crate::absint::lit_id(c))),
-        _ => None,
+        v => image_id(v).map(|(id, n)| CArg::Image(id, n)),
     }
 }
 
@@ -137,7 +148,7 @@ impl Ctx<'_> {
         self.stats.borrow_mut().ceval[2] += 1;
         self.ceval_depth.set(self.ceval_depth.get() + 1);
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default() });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         let (clean, inp) = self.memo_leave(frame);
         let mut r: Option<PV> = None;
         if !a.conservative {

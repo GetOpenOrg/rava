@@ -304,13 +304,14 @@ impl<'a> Engine<'a> {
         let mirrors = self.param_mirror_sets(m);
         let pobjs = self.obj_sets(m);
         let callers = self.caller_mirrors(m);
+        let sites = self.site_table(m, code);
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
         // 入口状态相同的有效摘要：直接共享并重放其依赖（收尾阶段不共享，见 `share.rs`）
         let closing = self.ctx.noreturn.borrow().closing();
         // 档位上下文（`levels_boot.rs`）的克隆按档位折叠引导查询：不与本体共享摘要
         let level = self.level_of(m);
-        let reuse = if closing || level.is_some() { None } else { self.shared_analysis(&key, &params, &mirrors, &pobjs) };
+        let reuse = if closing || level.is_some() { None } else { self.shared_analysis(&key, &params, &mirrors, &pobjs, &sites) };
         let (a, queries) = if let Some((a, deps, queries)) = reuse {
             self.share_join(m, &a, &deps);
             (a, queries)
@@ -318,7 +319,7 @@ impl<'a> Engine<'a> {
             let entry = (!closing && level.is_none()).then(|| (params.clone(), mirrors.clone()));
             *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
             let objs = super::obj_fields::ObjParams { sets: pobjs.clone(), queries: Default::default() };
-            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level, objs, callers, caller_sites: Default::default() };
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level, objs, callers, caller_sites: Default::default(), sites: sites.clone() };
             let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
             let queries: Rc<[super::obj_fields::ObjQuery]> = facts.objs.queries.take().into();
             let deps = self.ctx.dep_log.borrow_mut().take();
@@ -331,7 +332,7 @@ impl<'a> Engine<'a> {
             a.events.shrink_to_fit();
             let a = Rc::new(a);
             if let (Some((params, mirrors)), Some(deps)) = (entry, deps) {
-                self.share_record(m, (params, mirrors, queries.clone()), &a, deps);
+                self.share_record(m, (params, mirrors, queries.clone()), sites, &a, deps);
             }
             (a, queries)
         };
