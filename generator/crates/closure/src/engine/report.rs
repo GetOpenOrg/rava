@@ -368,7 +368,15 @@ impl<'a> Engine<'a> {
                                 (Some(t), Some(None)) if args.iter().any(|a| a.obj().is_some()) => format!(" trace[{}]", self.ctx.ceval_trace(t, args)),
                                 _ => String::new(),
                             };
-                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}", mref.name))
+                            // 按对象返回值（实例调用）：目标的对象值 / 通配值
+                            let orv = match (&t, *opcode != classfile::op::INVOKESTATIC) {
+                                (Some(t), true) => {
+                                    let ov: Vec<String> = self.ctx.orvals.borrow().get(t).into_iter().flatten().take(6).map(|(o, v)| format!("{}={v:?}", self.names[*o as usize])).collect();
+                                    format!(" orv {ov:?} orw {:?}", self.ctx.orwild.borrow().get(t))
+                                }
+                                _ => String::new(),
+                            };
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}", mref.name))
                         }
                         absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
                             let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);
