@@ -54,7 +54,7 @@ impl<'c, 'a> Plan<'c, 'a> {
         let root = ctx.crates().root().to_string();
         let mut p = Plan { ctx, ems, d, root, live, mat, layouts: BTreeMap::new(), homes };
         // 映像镜像上写入的缓存字段（`mirror_memos`）按镜像类型的存储布局取设值器
-        let memo_tys = d.mirror_memos.iter().map(|m| d.objs[m.0 as usize].ty.as_str());
+        let memo_tys = d.mirror_memos.iter().map(|m| d.objs[m.mirror as usize].ty.as_str());
         let tys: BTreeSet<&str> =
             p.mat.iter().map(|&i| d.objs[i as usize].ty.as_str()).chain(memo_tys).filter(|t| !t.starts_with('[')).collect();
         for t in tys {

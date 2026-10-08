@@ -274,6 +274,8 @@ pub(super) struct Vm {
     pub modules: Vec<(u32, CV, bool, Option<String>, Vec<Rc<str>>)>,
     /// 引导求值的写入日志、脏位置与残差记录（concrete/journal.rs）
     pub bj: super::journal::Journal,
+    /// 构建期初始化扩展（引导映像导出之后，concrete/ext_init.rs）
+    pub ext: Option<Box<super::ext_init::Ext>>,
 }
 
 impl Vm {
@@ -320,6 +322,7 @@ impl Vm {
             base_module: None,
             modules: Vec::new(),
             bj: Default::default(),
+            ext: None,
         }
     }
 

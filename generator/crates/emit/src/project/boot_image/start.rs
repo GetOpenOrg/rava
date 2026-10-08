@@ -336,14 +336,14 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
         g.line(&s);
     }
     // 镜像缓存（U13）：具体求值写在类镜像上的缓存字段，运行期镜像在此写入映像中的值（镜像或值没有读者即不写）
-    for (o, decl, name) in &d.mirror_memos {
-        let Some(IVal::R(t)) = p.fields(*o).iter().find(|f| f.0 == *decl && f.1 == *name).map(|f| f.2) else { continue };
-        if !p.live.contains(o) || !p.live.contains(&t) {
+    for memo in &d.mirror_memos {
+        let (o, IVal::R(t)) = (memo.mirror, memo.val) else { continue };
+        if !p.live.contains(&o) || !p.live.contains(&t) {
             continue;
         }
-        let (Some(m), Some(v)) = (g.obj(*o), g.obj(t)) else { continue };
-        let slot = p.slot(*o, decl, name)?;
-        g.line(&format!("<{} as From<Object>>::from({m}).__set_{}(From::from({v}));", p.full_ty(&p.obj(*o).ty), slot.rust));
+        let (Some(m), Some(v)) = (g.obj(o), g.obj(t)) else { continue };
+        let slot = p.slot(o, &memo.decl, &memo.name)?;
+        g.line(&format!("<{} as From<Object>>::from({m}).__set_{}(From::from({v}));", p.full_ty(&p.obj(o).ty), slot.rust));
     }
     // 占位对象在物化对象中的引用位置（常量形态取 null 的槽；`links` 只登记可链接目标）
     for &i in &p.mat {

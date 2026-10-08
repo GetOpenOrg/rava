@@ -396,6 +396,8 @@ pub struct Engine<'a> {
     pub cold_cut: bool,
     /// 构建期引导映像起点（`install_image`）
     img: Option<Box<image_start::ImgState>>,
+    /// 构建期初始化扩展的求值器（引导映像求值器在导出后保留，concrete/ext_init.rs）
+    ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
     level_inited: HashSet<(String, u32)>,

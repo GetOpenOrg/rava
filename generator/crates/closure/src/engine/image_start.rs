@@ -17,6 +17,8 @@ use classfile::{op, Operand};
 use super::*;
 use crate::image::{IBody, IStep, IVal, ImageData};
 
+mod ext;
+
 pub(super) struct ImgState {
     pub(super) data: Rc<ImageData>,
     pub(super) build_time: HashSet<String>,
@@ -35,7 +37,7 @@ pub(super) struct ImgState {
     pub(super) busy: bool,
     /// VM 模块表已汇入类镜像模块钩子的值池
     pub(super) modules_fed: bool,
-    /// 具体求值的镜像缓存并入（`image_memo.rs`）
+    /// 具体求值的镜像缓存并入（`image_memo.rs`；值随镜像传播）
     pub(super) memo: super::image_memo::MemoState,
 }
 
@@ -84,7 +86,7 @@ impl<'a> Engine<'a> {
             sites: HashMap::default(),
             busy: false,
             modules_fed: false,
-            memo: super::image_memo::MemoState { base: data.objs.len(), ..Default::default() },
+            memo: super::image_memo::MemoState::default(),
             data: data.clone(),
         }));
         let st = self.img.as_ref().expect("映像").statics.clone();
@@ -188,9 +190,10 @@ impl<'a> Engine<'a> {
     /// 构建期初始化类：初始化已在映像中完成（不展开 `<clinit>`）。返回 true 表示已处理
     pub(super) fn image_init(&mut self, cls: &str, via: &Via) -> bool {
         let Some(s) = self.img.as_mut() else { return false };
-        if !s.build_time.contains(cls) {
+        if !s.build_time.contains(cls) && !self.image_ext(cls) {
             return false;
         }
+        let Some(s) = self.img.as_mut() else { return false };
         if s.touched.insert(cls.to_string()) {
             self.touch(cls, Level::Init, via.clone());
         }
@@ -426,7 +429,9 @@ impl<'a> Engine<'a> {
                 }
                 IBody::Inst(fs) => {
                     let site = self.img.as_ref().and_then(|s| s.sites.get(&o).copied());
-                    for (d, n, v) in fs {
+                    // 类镜像：并入的镜像缓存（不在镜像对象体内，`image_memo.rs`）与字段同一口径传播
+                    let memos: Vec<(String, String, IVal)> = if x.mirror.is_some() { self.img.as_ref().expect("映像").memo.of(o).to_vec() } else { Vec::new() };
+                    for (d, n, v) in fs.iter().chain(&memos) {
                         let Some(desc) = self.h.class(d).and_then(|c| c.fields.iter().find(|f| f.name == *n && !f.is_static()).map(|f| f.desc.clone())) else { continue };
                         let key = MemberRef { owner: d.clone(), name: n.clone(), desc };
                         // 抽象对象（容器分配点）的字段值另记入按对象值表（`obj_fields.rs`）：映像对象不经字节码 `new` / `putfield`，

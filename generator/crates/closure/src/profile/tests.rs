@@ -19,7 +19,7 @@ fn closure(classes: &[(&str, &str, &str)], methods: &[(&str, &str)], folds: Vec<
         "folds_version": crate::FOLDS_VERSION,
         "folds": folds,
         "system_properties": {"values": {"file.encoding": "UTF-8"}, "dynamic": ["java.home"]},
-        "boot_image_data": {"live": []},
+        "boot_image_data": crate::image::ImageData::default().to_json(),
         "reflect": {"members": [], "gaps": [], "fields": [], "field_names": [], "static_fields": [], "field_enum_gaps": []},
         "seeds": {"annotation_enums": [], "mirror_inits": [], "reflect_names": {}, "reflect_all": [], "services": [], "services_unknown": false},
     })
