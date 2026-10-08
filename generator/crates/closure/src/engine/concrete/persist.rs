@@ -64,28 +64,31 @@ struct Ex<'v> {
 }
 
 impl Ex<'_> {
-    fn val(&mut self, v: CV) -> Option<FVal> {
-        Some(match v {
+    fn val(&mut self, v: CV) -> Result<FVal, String> {
+        Ok(match v {
             CV::I(x) => FVal::V(IVal::I(x)),
             CV::J(x) => FVal::V(IVal::J(x)),
             CV::F(x) => FVal::V(IVal::F(x.to_bits())),
             CV::D(x) => FVal::V(IVal::D(x.to_bits())),
             CV::N => FVal::V(IVal::N),
-            CV::T(..) => return None,
+            CV::T(..) => return Err("污点值".into()),
             CV::R(o) => {
                 if let Some(t) = self.vm.mirror_of.get(&o) {
-                    return Some(FVal::Mirror(t.clone()));
+                    return Ok(FVal::Mirror(t.clone()));
                 }
                 let h = &self.vm.heap[o as usize];
                 if h.epoch == 0 {
-                    let f = self.vm.image_roots.get(&o)?;
-                    return Some(FVal::Static(f.owner.clone(), f.name.clone()));
+                    let f = self.vm.image_roots.get(&o).ok_or_else(|| format!("引用映像对象 {}（非不变静态字段所持）", h.ty))?;
+                    return Ok(FVal::Static(f.owner.clone(), f.name.clone()));
                 }
-                if self.vm.ihash.contains_key(&o) || matches!(h.body, Body::Lam(_)) {
-                    return None;
+                if self.vm.ihash.contains_key(&o) {
+                    return Err(format!("{} 对象取过身份哈希", h.ty));
+                }
+                if matches!(h.body, Body::Lam(_)) {
+                    return Err(format!("lambda 对象 {}", h.ty));
                 }
                 if let Some(&i) = self.ids.get(&o) {
-                    return Some(FVal::Obj(i));
+                    return Ok(FVal::Obj(i));
                 }
                 let i = self.order.len() as u32;
                 self.ids.insert(o, i);
@@ -96,7 +99,7 @@ impl Ex<'_> {
         })
     }
 
-    fn frag(vm: &Vm, mirror: Rc<str>, decl: &str, name: &str, v: CV) -> Option<Frag> {
+    fn frag(vm: &Vm, mirror: Rc<str>, decl: &str, name: &str, v: CV) -> Result<Frag, String> {
         let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new() };
         let val = x.val(v)?;
         let mut objs = Vec::new();
@@ -113,40 +116,40 @@ impl Ex<'_> {
                     }
                     FBody::Inst(out)
                 }
-                Body::Arr(es) => FBody::Arr(es.iter().map(|&e| x.val(e)).collect::<Option<_>>()?),
-                Body::Lam(_) => return None,
+                Body::Arr(es) => FBody::Arr(es.iter().map(|&e| x.val(e)).collect::<Result<_, _>>()?),
+                Body::Lam(_) => return Err(format!("lambda 对象 {}", h.ty)),
             };
             objs.push(FObj { ty: h.ty.to_string(), body });
         }
-        Some(Frag { mirror, decl: decl.to_string(), name: name.to_string(), val, objs })
+        Ok(Frag { mirror, decl: decl.to_string(), name: name.to_string(), val, objs })
     }
 }
 
 /// 求值（冷 / 热两次）结束、撤销之前：映像状态的写入全部可物化时，按（镜像, 字段）次序给出各缓存片段；
-/// 否则 None（该组实参按冷 / 热轨迹的并入闭包）
-pub(super) fn collect(vm: &Vm, env: &Env) -> Option<Vec<Frag>> {
+/// 否则给出原因（该组实参按冷 / 热轨迹的并入闭包）
+pub(super) fn collect(vm: &Vm, env: &Env) -> Result<Vec<Frag>, String> {
     let img = &env.cfg().image_memo_fields;
-    if img.is_empty() || vm.undo.is_empty() {
-        return None;
+    if vm.undo.is_empty() {
+        return Err("无缓存写入".into());
     }
     let mut keys: BTreeMap<(Rc<str>, u32), u32> = BTreeMap::new();
     for &(o, k, _) in &vm.undo {
-        if o == u32::MAX {
-            return None;
-        }
-        let t = vm.mirror_of.get(&o)?;
         let (d, n) = &vm.fnames[k as usize];
+        if o == u32::MAX {
+            return Err(format!("写静态字段 {d}.{n}"));
+        }
+        let t = vm.mirror_of.get(&o).ok_or_else(|| format!("写映像对象 {} 的字段 {d}.{n}", vm.heap[o as usize].ty))?;
         if !img.contains(&format!("{d}.{n}")) {
-            return None;
+            return Err(format!("写镜像 {t} 的非映像缓存字段 {d}.{n}"));
         }
         keys.insert((t.clone(), k), o);
     }
     let mut out = Vec::with_capacity(keys.len());
     for ((t, k), o) in keys {
         let (d, n) = &vm.fnames[k as usize];
-        let Body::Inst(fs) = &vm.heap[o as usize].body else { return None };
+        let Body::Inst(fs) = &vm.heap[o as usize].body else { return Err("镜像不是实例".into()) };
         let v = fs.iter().find(|(x, _)| *x == k).map_or(CV::N, |e| e.1);
         out.push(Ex::frag(vm, t, d, n, v)?);
     }
-    Some(out)
+    Ok(out)
 }

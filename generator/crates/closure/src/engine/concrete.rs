@@ -70,6 +70,8 @@ pub(super) struct Outcome {
     /// 映像状态的写入全部可物化进引导映像时（`[concrete] image_memo_fields`，见 `concrete/persist.rs`）：
     /// 各缓存片段与只按热求值的结果（运行期缓存已在映像中，执行的即热路径）
     alt: Option<Box<(Vec<persist::Frag>, Outcome)>>,
+    /// 不可物化的原因（诊断）
+    alt_why: Option<String>,
 }
 
 #[derive(Default)]
@@ -131,7 +133,21 @@ impl<'a> Engine<'a> {
             outs.push((c.clone(), r));
         }
         // 镜像缓存可物化进引导映像的组合按热求值入闭包（运行期缓存已命中）
-        let hot: Vec<bool> = outs.iter().map(|(_, r)| r.as_ref().as_ref().ok().and_then(|o| o.alt.as_ref()).is_some_and(|a| self.image_memo_ok(&a.0))).collect();
+        let mut why: Vec<Option<String>> = Vec::new();
+        let mut hot: Vec<bool> = Vec::new();
+        for (_, r) in &outs {
+            let Ok(o) = &**r else {
+                hot.push(false);
+                why.push(None);
+                continue;
+            };
+            let w = match (&o.alt, &o.alt_why) {
+                (Some(a), _) => self.image_memo_ok(&a.0).err(),
+                (None, w) => w.clone(),
+            };
+            hot.push(w.is_none() && o.alt.is_some());
+            why.push(w);
+        }
         let image: Vec<Rc<str>> = outs
             .iter()
             .zip(&hot)
@@ -144,7 +160,7 @@ impl<'a> Engine<'a> {
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
-        for ((c, r), h) in outs.into_iter().zip(hot) {
+        for ((c, r), &h) in outs.into_iter().zip(&hot) {
             if !self.concrete.applied.insert((m, off, c)) {
                 continue;
             }
@@ -157,7 +173,17 @@ impl<'a> Engine<'a> {
                 None => self.concrete_apply(m, off, resolved, md, o),
             }
         }
-        let shown: Vec<String> = combos.iter().take(DIAG_COMBOS).map(|c| format!("{c:?}")).collect();
+        // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
+        let shown: Vec<String> = combos
+            .iter()
+            .zip(why.iter().zip(&hot))
+            .take(DIAG_COMBOS)
+            .map(|(c, (w, &h))| match (h, w) {
+                (true, _) => format!("{c:?}⇒映像"),
+                (false, Some(w)) if w != "无缓存写入" => format!("{c:?}（并：{w}）"),
+                _ => format!("{c:?}"),
+            })
+            .collect();
         let more = combos.len().saturating_sub(DIAG_COMBOS);
         let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
         self.concrete.diag.entry(site_name).or_default().insert(line);
@@ -303,9 +329,10 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
         }
         Ok(())
     })();
-    if r.is_ok() {
-        if let Some(frags) = persist::collect(vm, env) {
-            out.alt = Some(Box::new((frags, hot)));
+    if r.is_ok() && !env.cfg().image_memo_fields.is_empty() {
+        match persist::collect(vm, env) {
+            Ok(frags) => out.alt = Some(Box::new((frags, hot))),
+            Err(w) => out.alt_why = Some(w),
         }
     }
     vm.rollback();

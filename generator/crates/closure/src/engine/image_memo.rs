@@ -22,20 +22,24 @@ pub(super) struct MemoState {
 }
 
 impl<'a> Engine<'a> {
-    /// 片段全部可在映像中解析：由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象
-    pub(super) fn image_memo_ok(&self, frags: &[Frag]) -> bool {
-        let Some(s) = self.img.as_ref() else { return false };
+    /// 片段全部可在映像中解析：由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象；否则给出原因
+    pub(super) fn image_memo_ok(&self, frags: &[Frag]) -> Result<(), String> {
+        let Some(s) = self.img.as_ref() else { return Err("无引导映像".into()) };
         let ok = |v: &FVal| match v {
-            FVal::Static(d, n) => s.build_time.contains(d) && matches!(s.statics.get(&(d.clone(), n.clone())), Some(IVal::R(_))),
-            _ => true,
+            FVal::Static(d, n) if !s.build_time.contains(d) => Err(format!("引用运行期初始化类的静态字段 {d}.{n}")),
+            FVal::Static(d, n) if !matches!(s.statics.get(&(d.clone(), n.clone())), Some(IVal::R(_))) => Err(format!("映像静态字段 {d}.{n} 不是对象")),
+            _ => Ok(()),
         };
-        frags.iter().all(|f| {
-            ok(&f.val)
-                && f.objs.iter().all(|o| match &o.body {
-                    FBody::Inst(fs) => fs.iter().all(|(_, _, v)| ok(v)),
-                    FBody::Arr(es) => es.iter().all(ok),
-                })
-        })
+        for f in frags {
+            ok(&f.val)?;
+            for o in &f.objs {
+                match &o.body {
+                    FBody::Inst(fs) => fs.iter().try_for_each(|(_, _, v)| ok(v))?,
+                    FBody::Arr(es) => es.iter().try_for_each(ok)?,
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 映像中类 c 的镜像对象（没有即新建）
