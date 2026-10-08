@@ -115,6 +115,7 @@ uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor -
      （它同为转发方法，各调用点名字不同、克隆分派也不同；作业 `rdg2-7f7d6ae7` / `rdg3-30cca0fb` 中 −163 的字符集门消失），且 30cca0fb 的克隆比对让模型计算 3 s → 55 s。
      按字节码结构分不出「特权块汇合」与「按名查找」，排除会丢真门。
    - 终版：照常作候选，证据末条标明「分派转发方法（已按调用点克隆）：切除量是全部调用点下游之和，未必是单一机制，门看调用方调用点」（`Facts.forwarder`）。
+     核对（作业 `rdg4-72f1aca5`，hello）：`Charset.lookup` 回到第 4 名（实测 −163），`executePrivileged` 证据带附注，模型计算 3.7 s。
 4. **陈旧提示（已撤，7f7d6ae7）**：`closure.toml [gates]` 的 `precision = ["java/security/AccessController"]` 把特权块整体标为精度缺口；
    doPrivileged 已按调用点克隆，该提示不再成立，改为空表。
 
