@@ -156,6 +156,17 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
             }
             ret(CV::R(vm.mirror(env, &n)?))
         }
+        // 引导类加载器查找（`ClassLoader.findBootstrapClass(binaryName)`，不初始化）：类存在且所在包属于
+        // 加载器为 null 的已定义模块（defineModule0 登记）→ 类镜像，否则 null
+        "boot_class" => {
+            let n = vm.rust_string(env, arg(0)?.obj()?)?.replace('.', "/");
+            if n.starts_with('[') || env.h().class(&n).is_none() {
+                return ret(CV::N);
+            }
+            let pkg = n.rsplit_once('/').map_or("", |(p, _)| p);
+            let boot = vm.pkg_module.get(pkg).is_some_and(|&m| vm.modules.iter().any(|(mo, loader, ..)| *mo == m && *loader == CV::N));
+            ret(if boot { CV::R(vm.mirror(env, &n)?) } else { CV::N })
+        }
         // 模块读取器的资源存在判定（`module_resource:<字段>`）：接收者的 `<字段>`（String）为模块名，实参 1 为
         // 资源名；按参考 JDK 该模块的内容回答（运行期由嵌入的程序 jimage 回答，其内容取自同一参考 JDK）
         m if m.starts_with("module_resource:") => {

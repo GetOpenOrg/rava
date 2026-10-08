@@ -1042,6 +1042,7 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "java/lang/Class.isAssignableFrom:(Ljava/lang/Class;)Z" = "class_is_assignable_from"
 "java/lang/Class.desiredAssertionStatus0:(Ljava/lang/Class;)Z" = "const:false"
 "java/lang/Class.forName0:(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;" = "class_for_name"
+"java/lang/ClassLoader.findBootstrapClass:(Ljava/lang/String;)Ljava/lang/Class;" = "boot_class"
 # 原生二进制不携带 CDS 归档（cds_impl.rs / vm_impl.rs）：查询恒 false、归档恢复为空操作、转储种子恒 0
 "jdk/internal/misc/CDS.isDumpingClassList0:()Z" = "const:false"
 "jdk/internal/misc/CDS.isDumpingArchive0:()Z" = "const:false"
