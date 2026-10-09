@@ -220,6 +220,8 @@ pub(super) struct Ctx<'a> {
     pub(super) dv_top: Cell<Option<usize>>,
     pub(super) dv_depth: Cell<u32>,
     pub(super) dv_budget: Cell<u32>,
+    /// 分派求值诊断轨迹（`--flows @vals:`；None = 不记录）
+    pub(super) dv_trace: RefCell<Option<Vec<String>>>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }

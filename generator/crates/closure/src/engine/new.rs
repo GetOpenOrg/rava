@@ -70,6 +70,7 @@ impl<'a> Engine<'a> {
                 dv_top: Default::default(),
                 dv_depth: Default::default(),
                 dv_budget: Default::default(),
+                dv_trace: Default::default(),
                 stats: Default::default(),
             },
             h,

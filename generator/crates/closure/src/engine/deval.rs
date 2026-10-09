@@ -56,6 +56,31 @@ fn guard_shape(opcode: u8, m: &MemberRef, args: &[V]) -> bool {
 }
 
 impl Ctx<'_> {
+    fn dv_note(&self, f: impl FnOnce() -> String) {
+        if let Some(t) = self.dv_trace.borrow_mut().as_mut() {
+            t.push(format!("{}{}", "  ".repeat(self.dv_depth.get() as usize), f()));
+        }
+    }
+
+    /// 诊断：方法节点 me（成员 key）偏移 off 处的虚 / 接口调用按派发集求值的轨迹（不检查守卫形态）
+    pub(super) fn deval_diag(&self, me: usize, key: &MemberRef, opcode: u8, off: u32, m: &MemberRef, args: &[V]) -> String {
+        if !virtual_call(opcode) || self.dv_top.get().is_some() {
+            return String::new();
+        }
+        *self.dv_trace.borrow_mut() = Some(Vec::new());
+        self.dv_top.set(Some(me));
+        self.dv_budget.set(BUDGET);
+        let r = self.deval_site(key, off, m, args);
+        self.dv_top.set(None);
+        let t = self.dv_trace.borrow_mut().take().unwrap_or_default();
+        let r = match r {
+            Ret::Never => "Never".to_string(),
+            Ret::Value(v) => format!("{v:?}"),
+            Ret::Unknown => "Unknown".to_string(),
+        };
+        format!(" deval {r} [{}]", t.join("; "))
+    }
+
     /// 方法体分析（方法节点 me、成员 key）中无唯一目标的守卫形态调用：按调用点派发集求值；求不出为 None
     pub(super) fn deval_guard(&self, me: usize, key: &MemberRef, opcode: u8, off: u32, m: &MemberRef, args: &[V]) -> Option<Ret> {
         if !guard_shape(opcode, m, args) || self.dv_top.get().is_some() {
@@ -84,6 +109,10 @@ impl Ctx<'_> {
     fn deval_site(&self, key: &MemberRef, off: u32, m: &MemberRef, args: &[V]) -> Ret {
         let Some(top) = self.dv_top.get() else { return Ret::Unknown };
         self.dep(top, Dep::Disp(key.clone(), off));
+        self.dv_note(|| match self.vdisp.borrow().get(&(key.clone(), off)) {
+            None => format!("{key}@{off} 无派发集"),
+            Some(d) => format!("{key}@{off} opaque={} {:?}", d.opaque, d.targets.iter().map(|t| t.to_string()).collect::<Vec<_>>()),
+        });
         let ts: Option<Vec<MemberRef>> = match self.vdisp.borrow().get(&(key.clone(), off)) {
             None => None,
             Some(d) if d.opaque || d.targets.len() > MAX_TARGETS || d.targets.iter().any(|t| t.name != m.name || t.desc != m.desc) => return Ret::Unknown,
@@ -114,27 +143,36 @@ impl Ctx<'_> {
         self.dep(top, Dep::Ret(t.clone()));
         if let Some(PV::Const(v)) = self.rvals.borrow().get(t) {
             if exportable(v) {
+                self.dv_note(|| format!("{t} rvals {v:?}"));
                 return Ret::Value(v.clone());
             }
         }
         let (b, d) = (self.dv_budget.get(), self.dv_depth.get());
         if b == 0 || d >= MAX_DEPTH {
+            self.dv_note(|| format!("{t} 预算 / 深度截断"));
             return Ret::Unknown;
         }
         self.dv_budget.set(b - 1);
         let Some(cf) = self.h.class(&t.owner) else { return Ret::Unknown };
         let Some(meth) = cf.method(&t.name, &t.desc) else { return Ret::Unknown };
-        let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else { return Ret::Unknown };
+        let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else {
+            self.dv_note(|| format!("{t} 无字节码或超长"));
+            return Ret::Unknown;
+        };
         let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
-        let Some(frame) = self.memo_enter(format!("deval:{t}|{bound:?}"), false) else { return Ret::Unknown };
+        let Some(frame) = self.memo_enter(format!("deval:{t}|{bound:?}"), false) else {
+            self.dv_note(|| format!("{t} 重入"));
+            return Ret::Unknown;
+        };
         self.dv_depth.set(d + 1);
         let live = |_: &str| true;
-        let facts = Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: Some(t.clone()), dv: true };
+        let facts = Facts { ctx: self, live: &live, m: None, params: bound.clone(), mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: Some(t.clone()), dv: true };
         let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &facts);
         self.dv_depth.set(d);
         // 不记忆：输入并入外层求值，最外层登记给发起方法
         let (_, inp) = self.memo_leave(frame);
         self.memo_use((d == 0).then_some(top), &Inputs { id: 0, ..inp });
+        self.dv_note(|| format!("{t} {bound:?} conservative={} rets {:?}", a.conservative, a.events.iter().filter(|(_, e)| matches!(e, Event::Return(_))).collect::<Vec<_>>()));
         if a.conservative {
             return Ret::Unknown;
         }
