@@ -4488,3 +4488,71 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
 - 上下文按调用点链命名，深度有界。
 
 具体是否需要，见 32.4 的诊断。
+
+### 32.4 诊断：回退调用点的污染来源（`fmt-d1-0dfce4dd` / `fmt-d2-78614c31` / `fmt-d3-78614c31`，sg2）
+
+诊断手段（均为通用诊断，不含类名特判）：
+- `--flows @taint:<方法模式>`：列出匹配方法节点上被污染的形参槽，逐跳回溯污染来源，直到第一个不是透传的来源。
+  - `taint_site` 处，实参若来自调用方已被污染的形参槽，记为透传，链因此可以继续回溯。
+  - 调用点上下文名 `@<方法>:<偏移>` 会解码出方法标签。
+- 回退行带上下文标签：`回退（<上下文>）：…`。
+
+**结论**：档案里只有一个 parse 调用点回退，它的格式串是**真实的运行期未知值**，不是建模缺陷。
+
+- 回退点是 `Formatter.format(Locale,String,Object[])@11`，所在上下文的格式串形参被污染。
+- 污染链：
+  `Formatter.format(Locale,…)` 槽 2 ← 透传 `Formatter.format(String,…)` 槽 1
+  ← 透传 `String.format` `#@5006:54` 槽 0 ← 实参 `Site(13)`（`SimpleConsoleLogger.format`）。
+  - `@5006:54` 就是 `SimpleConsoleLogger.format`。
+  - 格式串来自 `getSimpleFormatString()` → `Formatting.SIMPLE_CONSOLE_LOGGER_FORMAT`，它的值是
+    `getSimpleFormat("jdk.system.logger.format", …)`。
+  - 也就是说，格式串是运行期系统属性的值。属性缺省时取 `DEFAULT_FORMAT`，即 `"%1$tb %1$td, %1$tY %1$tl:%1$tM:%1$tS %1$Tp …"`，**本身就含日期转换**；实参 1 是 `ZonedDateTime.now()`。
+  - 构建期引导映像按 U1 不钉系统属性，所以这个值只能是 Top。
+- 这条路径在档案里真实可达（`--why`）：
+  `Thread.start0`（引导映像根）→ `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `Shutdown.logRuntimeExit`
+  → `System.Logger.log` → `SimpleConsoleLogger.log/publish/format`。
+  - 要不要真的记日志，取决于运行期属性 `jdk.system.logger.level`（`isLoggable(DEBUG)`）和运行期装载的 LoggerFinder，构建期折不掉。
+  - 每个程序的引导段都含 `Terminator` 信号处理器，所以**每个档案都有这条链**。
+  - DeepCopy 另有一条首次到达的路径：`ObjectInputFilter$Config.<clinit>@114` 的 `System.Logger.log`。反序列化过滤器配置要记日志，级别同样取决于运行期属性。
+- 同一条路径还独立带进了 §31.5 的其他目标：
+  - **ServiceLoader**：首次到达是 `ZonedDateTime.now` → `Clock.systemDefaultZone` → `ZoneId.systemDefault` → `TimeZone.toZoneId`
+    → `ZoneId.of` → `ZoneRegion.ofId` → `ZoneRulesProvider.<clinit>@45`（`ServiceLoader.load`），与 Formatter 无关；
+  - **SPILocaleProviderAdapter**：经 `printInteger` → `localizedMagnitude` → `getZero` → `DecimalFormatSymbols.getInstance`
+    → `LocaleProviderAdapter.forJRE`，不经 `dt`，任何 `%d` 都会走到；
+  - **Calendar**：经 `printDateTime@34`（日志路径必经），也经 `TimeZone.getDisplayName` → CLDR → `MessageFormat`
+    → `SimpleDateFormat`（`%Z` 等转换）。
+
+### 32.5 结论与实测
+
+**能力③的收窄目标在 HelloWorld / DeepCopy 上无法健全达成。** 根因是 32.4 中的运行期退出日志链。
+只要它在档案上，`printDateTime` → Calendar 链和 ServiceLoader、SPILocaleProviderAdapter 都是真实可达的。
+「格式串无日期转换就不到 `printDateTime`」这条在**单个调用点**上成立，但档案按并集计算，其中必有这个日期格式调用点。
+
+实测（`rava closure`，sg2）：
+
+| 用例 | 基线 9a48ca32（类 / 方法） | 机制 B 0dfce4dd（类 / 方法） |
+| --- | --- | --- |
+| HelloWorld | 3407 / 18453 | 3407 / 18453 |
+| DeepCopy | 3727 / 21500 | 3727 / 21500 |
+
+- 其余 parse 调用点都具体求值成功（每个上下文 4–9 组常量）。
+- 机制 B 物化出的说明符对象按对象读 `dt` 时，仍会读到 `owild` 里的 `true`。来源是日志调用点上的抽象 parse：
+  它的说明符按类 id 代表，不是抽象对象，基本类型字段写入一律并入通配值。
+  `--why printDateTime` 首次经由的就是一个 `@concrete` 说明符对象。
+  即使把这一处也分开，`printDateTime` 仍会经日志调用点到达，所以数字不会变。
+
+**机制 B 的去留**：保留。理由如下：
+- 它是常量格式串按对象读说明符字段的终态形式，健全性论证见 32.2；
+- 门在分析前确定，不引入次序依赖；
+- 在不含退出日志链的构建单元上，或者将来日志链被健全地排除后，它直接生效。
+
+当前所有档案都含这条链，所以它对闭包规模的实际收益为 0。这一点在这里如实记录。
+
+**余项（需用户决策 / 另立）**：
+1. 只有一个办法能真正让 `printDateTime` / Calendar / ServiceLoader 出闭包：判定退出日志链（`Shutdown.logRuntimeExit` → `System.Logger`）不可达，
+   或者把它的格式串、级别在构建期钉住。
+   - 这要改 U1「属性运行期取宿主值」的口径（例如把 `jdk.system.logger.level`、`jdk.system.logger.format` 划入构建期钉值的属性，同 U14），是语义决定，不属于分析器精度问题。
+   - 钉住以后，`isLoggable(DEBUG)` 恒假，整条日志链出闭包。ServiceLoader 的首次到达经 `ZonedDateTime.now`，但可能还有其他路径，是否随之退出需实测。
+2. 机制 C（未做，规模收益 0，不建议单独做）：按对象类（`pobj_types`）在抽象执行中的 `new` 也建抽象对象，基本类型字段写入按接收者拆分。
+   这样能消除抽象 parse 对具体说明符 `dt` 的污染，但会改 `bytecode.rs` 的字段写入路径（与 c1d-uri 同区），且受第 1 项支配。
+3. 机制 A（字符串链按调用点克隆）不需要：回退原因不是污染串扰，而是真实未知值。
