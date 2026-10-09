@@ -49,8 +49,11 @@ for sha in "$@"; do
         rc=$?
         wall=$((SECONDS - t0))
         rss="$(grep -E 'Maximum resident' "$OUT/$s8/$n.err" | awk '{printf "%d", $NF/1024}')"
-        cls="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["classes"]))' \
-            "$scratch/closure_input/closure.json" 2>/dev/null || echo '?')"
+        cls="$(python3 -c '
+import json, sys
+c = json.load(open(sys.argv[1]))
+json.dump(c.get("summary", {}), open(sys.argv[2], "w"), indent=1)
+print(len(c["classes"]))' "$scratch/closure_input/closure.json" "$OUT/$s8/$n.summary.json" 2>/dev/null || echo '?')"
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$s8" "$n" "$rc" "$wall" "$rss" "$cls" | tee -a "$SUM"
         grep -E '^\s*\[perf\]' "$OUT/$s8/$n.out" "$OUT/$s8/$n.err" 2>/dev/null | head -40 | sed 's/^/  /'
         [[ $rc == 0 ]] || { rc_all=1; tail -5 "$OUT/$s8/$n.err"; }
