@@ -16,6 +16,8 @@ OUT="$REPO/build/ttime"
 mkdir -p "$OUT"
 EXTRA=""
 [[ "${1:-}" == --extra ]] && { EXTRA="$2"; shift 2; }
+# 额外参数按 shell 引号规则切分（含空格的 --flows 节点标签用引号括起）
+eval "XA=($EXTRA)"
 [[ $# -ge 2 ]] || { echo "用法：$0 [--extra ARGS] <用例,...> <提交>..."; exit 2; }
 IFS=',' read -r -a CASES <<<"$1"; shift
 . "$REPO/scripts/corpus_jdk.sh" "$REPO"
@@ -44,15 +46,13 @@ for sha in "$@"; do
         t0=$SECONDS
         if [[ "${TTIME_MODE:-}" == closure ]]; then
             mkdir -p "$scratch/closure_input"
-            # shellcheck disable=SC2086
-            (cd "$wt" && timeout "${TTIME_TIMEOUT:-3000}" /usr/bin/time -v "$wt/build/bin/rava" closure "$wt/$c" \
-                --java-home "$JAVA_HOME" -o "$scratch/closure_input/closure.json" $EXTRA) \
+                (cd "$wt" && timeout "${TTIME_TIMEOUT:-3000}" /usr/bin/time -v "$wt/build/bin/rava" closure "$wt/$c" \
+                --java-home "$JAVA_HOME" -o "$scratch/closure_input/closure.json" "${XA[@]}") \
                 >"$OUT/$s8/$n.out" 2>"$OUT/$s8/$n.err"
         else
-        # shellcheck disable=SC2086
         (cd "$wt" && timeout "${TTIME_TIMEOUT:-3000}" /usr/bin/time -v "$wt/build/bin/rava" build "$wt/$c" \
             --stop-after emit --out "$scratch" --clean --closure-json --perf \
-            --closure-cache "$wt/build/ttime-cache-$RANDOM" --java-home "$JAVA_HOME" $EXTRA) \
+            --closure-cache "$wt/build/ttime-cache-$RANDOM" --java-home "$JAVA_HOME" "${XA[@]}") \
             >"$OUT/$s8/$n.out" 2>"$OUT/$s8/$n.err"
         fi
         rc=$?
