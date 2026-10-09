@@ -99,7 +99,7 @@ impl Ctx<'_> {
         let Some(md) = parse_method(&t.desc) else { return none };
         let n = md.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         let mut out: Vec<usize> = a
             .events
             .iter()
