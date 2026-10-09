@@ -25,6 +25,10 @@ impl Class {
             static PRIMITIVES: RefCell<HashMap<std::string::String, Class>> = RefCell::new(HashMap::new());
         }
         let key = format!("{}", name);
+        // 映像中的基本类型镜像（构建期 getPrimitiveClass 的结果，以基本类型名为键）是规范实例
+        if let Some(c) = crate::image_rt::image_mirror(&key) {
+            return Ok(Class::from(c));
+        }
         Ok(PRIMITIVES.with(|cache| {
             Clone::clone(cache.borrow_mut().entry(key).or_insert_with(|| {
                 let mut c = Class::default();
@@ -51,6 +55,10 @@ impl Class {
                 RefCell::new(HashMap::new());
         }
         let key = format!("{}", binary_name);
+        // 映像中的类镜像（构建期建立，名字 / 组件类型 / 模块已写定）是该类的规范镜像
+        if let Some(c) = crate::image_rt::image_mirror(&key) {
+            return Class::from(c);
+        }
         if let Some(c) = CLASSES.with(|cache| cache.borrow().get(&key).cloned()) {
             return c;
         }

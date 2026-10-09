@@ -17,7 +17,11 @@ use crate::sync_model::__RefField;
 ///
 /// `_cell`：元素区经本值的引用寻址并被原子写入 / 单元锁改写，类型须含内部可变性（非 `Freeze`），
 /// `&__ArrayObj` 才不会被视为只读不别名的引用。
+///
+/// `repr(C)`：布局与 T 无关（T 只在 `PhantomData`），映像中的擦除协变视图（`__ArrayObj<Object>`）
+/// 可按任意引用元素静态类型取用（`JArray::__image_view`）。
 #[doc(hidden)]
+#[repr(C)]
 pub struct __ArrayObj<T> {
     pub(super) repr: Repr,
     _cell: UnsafeCell<()>,
@@ -285,5 +289,17 @@ impl<T: 'static, S> __ImageArr<T, S> {
         assert!(size_of::<S>() == len * width, "映像数组元素区大小与长度不符");
         assert!(size_of::<__ArrayObj<T>>() % align_of::<S>() == 0, "映像数组元素区未紧随数组对象");
         __ImageArr { head: crate::obj_ref::Header::image(hash), value: __ArrayObj::__image(len, prim), elems }
+    }
+}
+
+impl __ImageArr<Object, ()> {
+    /// 映像数组 `origin` 的擦除协变视图（无元素；对象标识与源数组相同）：映像中以别的元素静态类型
+    /// 引用该数组的槽取此视图（常量求值可用）
+    pub const fn view(origin: Object) -> Self {
+        __ImageArr {
+            head: crate::obj_ref::Header::image(None),
+            value: __ArrayObj { repr: Repr::Covariant(erased_view(origin)), _cell: UnsafeCell::new(()), _elem: PhantomData },
+            elems: (),
+        }
     }
 }

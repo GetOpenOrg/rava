@@ -28,7 +28,7 @@ fn is_prim(t: &str) -> bool {
 }
 
 /// 镜像所指类型的 `Class.getName()` 形态
-fn java_name(t: &str) -> String {
+pub(super) fn java_name(t: &str) -> String {
     match PRIMS.iter().find(|(d, _)| *d == t) {
         Some((_, n)) => n.to_string(),
         None => t.replace('/', "."),

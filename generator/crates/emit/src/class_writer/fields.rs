@@ -207,6 +207,8 @@ pub(crate) fn static_field_rust(ctx: &EmitCtx<'_>, f: &Field, tps: &[String]) ->
 pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], type_only: bool) -> Vec<String> {
     let hw = ctx.input.handwritten.get(ci.name());
     let ex = ctx.extras(ci.name());
+    // 带映像常量值的静态字段：存储由根门面的映像模块定义，本层声明外部静态（计划 2026-10-05 §5.10）
+    let image = crate::project::boot_image::image_statics_of(ctx, ci.name());
     let mut blocks = Vec::new();
     for (i, sf) in ci.fields().iter().enumerate() {
         if !sf.is_static() {
@@ -247,6 +249,8 @@ pub fn static_field_blocks(ctx: &EmitCtx<'_>, ci: &ClassInfo, tps: &[String], ty
             }
             let stub = crate::precheck::stub_call("stub", &format!("{cls}.{fnm}:{fd}"));
             blocks.push(format!("{head}pub fn {fname}() -> Result<{ty}> {{\n    {stub}\n}}\n{setter}"));
+        } else if let Some(sym) = image.get(&sf.name) {
+            blocks.push(format!("{head}#[image_static = \"{sym}\"]\npub static {fname}: {ty};"));
         } else {
             blocks.push(format!("{head}pub static {fname}: {ty};"));
         }
