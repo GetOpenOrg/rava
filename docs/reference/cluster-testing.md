@@ -694,6 +694,7 @@ cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock
 - dev 关机期间用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1，各 15G 内存、1 槽。
 - jp2 直连失败时经 jp1 跳板（服务器条目 `jump` 键，见九）。
 - 全量单测在云上超过 7200 s，作业用 `--job-timeout 14400`（缺省 3600）。
+- 服务器 Python 统一用 uv 安装（项目 `.python-version` 为 3.12，在 `~/.local/share/uv/python`），不动系统 Python（us1 等系统自带 3.10，无 `tomllib`）。`--job --cmd` 里的 Python 脚本一律写 `uv run python3 …`，裸 `python3` 会落到系统 3.10，`run_tests.py` 的动态对照步骤报 `No module named 'tomllib'`。
 
 ### 12.5 分发进程存活判定
 
