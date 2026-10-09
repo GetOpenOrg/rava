@@ -86,37 +86,25 @@ impl Object {
     /// java.lang.Object.wait()V（等价 wait(0)）
     #[jvm_native]
     pub fn wait(&self) -> Result<()> {
-        if self.0.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, 0, 0)
+        crate::monitor::wait_timeout(self.0.__identity() as usize, 0, 0)
     }
 
     /// java.lang.Object.wait(J)V
     #[jvm_native]
     pub fn wait_l(&self, millis: i64) -> Result<()> {
-        if self.0.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, 0)
+        crate::monitor::wait_timeout(self.0.__identity() as usize, millis, 0)
     }
 
     /// java.lang.Object.wait(JI)V
     #[jvm_native]
     pub fn wait_l_i(&self, millis: i64, nanos: i32) -> Result<()> {
-        if self.0.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, nanos)
+        crate::monitor::wait_timeout(self.0.__identity() as usize, millis, nanos)
     }
 
     /// java.lang.Object.notify()V：无等待者时静默
     #[jvm_native]
     pub fn notify(&self) -> Result<()> {
-        if self.0.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify(self.0.__identity() as usize, false)
+        crate::monitor::notify(self.0.__identity() as usize)
     }
 
     /// java.lang.Object.notifyAll()V：notifyAll 无重载，mangle_name 保持
@@ -124,10 +112,7 @@ impl Object {
     /// 手写内部消费方继续可用，双名同体）。
     #[jvm_native]
     pub fn notify_all(&self) -> Result<()> {
-        if self.0.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify_all(self.0.__identity() as usize, false)
+        crate::monitor::notify_all(self.0.__identity() as usize)
     }
 
     /// notifyAll 的生成侧名（mangle 语义别名，见上）
@@ -139,7 +124,7 @@ impl Object {
     /// monitorenter（指令侧，codegen 发射）：可重入获取监视器
     #[jvm_ext]
     pub fn monitor_enter(&self) -> Result<()> {
-        crate::monitor::enter(self.0.__identity() as usize, self.0.is_jvm_null())
+        crate::monitor::enter(self.0.__identity() as usize)
     }
 
     /// monitorexit（指令侧，codegen 发射）：释放一层重入计数

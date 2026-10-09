@@ -97,10 +97,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, 0, 0)
+        crate::monitor::wait_timeout(self.__identity() as usize, 0, 0)
     }
 
     /// java.lang.Object.wait(J)V：millis 为 0 表示无限等待，负值抛 IllegalArgumentException。
@@ -108,10 +105,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, millis, 0)
+        crate::monitor::wait_timeout(self.__identity() as usize, millis, 0)
     }
 
     /// java.lang.Object.wait(JI)V：nanos 须在 0..=999999。
@@ -119,10 +113,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, millis, nanos)
+        crate::monitor::wait_timeout(self.__identity() as usize, millis, nanos)
     }
 
     /// java.lang.Object.notify()V：唤醒一个在该对象监视器上等待的线程，无等待者时静默。
@@ -130,10 +121,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify(self.__identity() as usize, false)
+        crate::monitor::notify(self.__identity() as usize)
     }
 
     /// java.lang.Object.notifyAll()V
@@ -141,10 +129,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify_all(self.__identity() as usize, false)
+        crate::monitor::notify_all(self.__identity() as usize)
     }
 
     /// monitorenter（指令侧）：进入本对象的监视器（可重入）。
@@ -152,10 +137,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::enter(self.__identity() as usize, false)
+        crate::monitor::enter(self.__identity() as usize)
     }
 
     /// monitorexit（指令侧）：退出本对象的监视器一层。
@@ -391,7 +373,9 @@ impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt_f64,
     |v: f64| { let b = __canon_f64_bits(v); (b ^ (b >> 32)) as i32 });
 
 /// Java null 的静态哨兵（不计数，见 `obj_ref`）：`Object::default()` 与无静态类型的 null 共用这一个值。
-static JVM_NULL: __TypedNull = __TypedNull::new("java/lang/Object", None);
+/// 全部 null（本值、各 `__TypedNull`、接口 `__TYPED_NULL`、`__ArrayNull`）的身份都是本值地址，
+/// 监视器入口据此一次比较判 null（`monitor::null_identity`）。
+pub(crate) static JVM_NULL: __TypedNull = __TypedNull::new("java/lang/Object", None);
 
 /// 带静态类型的 null：接口载体（`java_class!` 接口块）与类 wrapper 的 null 装入 Object 的形态。
 /// 值语义仍是 Java null（`is_jvm_null`，身份即 null 哨兵，与任意 null 引用相等），但

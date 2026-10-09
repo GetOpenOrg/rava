@@ -153,7 +153,7 @@ fn run_java_thread(t: &Thread) {
     LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
     let obj = Object::from(Clone::clone(t));
     if let Ok(guard) = crate::monitor::MonitorGuard::acquire(&obj) {
-        let _ = crate::monitor::notify_all(obj.0.__identity() as usize, false);
+        let _ = crate::monitor::notify_all(obj.0.__identity() as usize);
         drop(guard);
     }
 }
@@ -369,10 +369,7 @@ impl Thread {
     /// native `holdsLock(Object)`：当前线程是否持有 obj 的监视器（null → NPE）。
     #[jvm_native]
     pub fn holdsLock(obj: Object) -> Result<bool> {
-        if obj.0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        Ok(crate::monitor::holds_lock(obj.0.__identity() as usize))
+        crate::monitor::holds_lock(obj.0.__identity() as usize)
     }
 
     /// native `interrupt0()`：JDK `interrupt()` 字节码置字段后通知 VM——唤醒同上。
