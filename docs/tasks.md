@@ -96,7 +96,7 @@
 - **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
 - **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
 - **batch-1009b（待测，batch-1009 + c1d-rest a9622d71）**：C1d 收窄余项本轮未收窄（`ref_eq` 不同内容字符串常量折叠，0 类）；c1d 计划 §31 记排名与下一步能力：① 每对象 URI 跟踪三步（§31.3，约 285 类，接 §30 URL 精度）；② 引导区以未知名字调 `Charset.isSupported` 放开全部扩展字符集（约 390 类；U1 已定，属性取值为宿主值时名字未知，需另设计收窄——charset-build / charset-ext 线续作）；③ Formatter 常量格式串构建期求值（§18.5 / §20.5）；`AccessController.executePrivileged` 下游合计 923 类（转发方法，非单一机制）。
-- **batch-1009（待测）**：缓存组回退撤回（bootcache 9a029858，§5.8.6：映像镜像缓存组 = 未回退站点贡献的组，DeepCopy 映像与次序无关；注意 `rava closure` 口径类数 HelloWorld 3456 / DeepCopy 3757，与 e2e 口径 3233 / 3532 不同）。**进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；regress2 遗留（regress2-rest）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留。
+- **batch-1009（待测）**：缓存组回退撤回（bootcache 9a029858，§5.8.6：映像镜像缓存组 = 未回退站点贡献的组，DeepCopy 映像与次序无关；注意 `rava closure` 口径类数 HelloWorld 3456 / DeepCopy 3757，与 e2e 口径 3233 / 3532 不同）。**进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode，regress2 ①）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -227,7 +227,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
-| regress2 遗留 | 🔄 regress2-rest（ce554b84） | Object.wait 帧行号、过渡 `<init>` 帧 |
+| regress2 遗留 | 🔄 ② ✅；① 转 object-bytecode | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿）。按手写边界规则（有字节码即翻译，非用户待定项）派 object-bytecode：根类非 native 方法按字节码翻译。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60，修前为已知失败）。regress2 文档 §10.1b |
 | C4 收官 · 全量 e2e | ⏳ 尚未开始 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
