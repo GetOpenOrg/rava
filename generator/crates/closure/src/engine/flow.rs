@@ -437,13 +437,14 @@ impl<'a> Engine<'a> {
     }
 
     /// 抽象对象 o 的字段节点。已逃逸的对象才与未知接收者视图相连（收 `U`、汇入 `F`）：
-    /// 未逃逸的对象只经字节码可见的引用被访问，open / 非抽象接收者不可能指向它
+    /// 未逃逸的对象只经字节码可见的引用被访问，open / 非抽象接收者不可能指向它。
+    /// o 也可以是类 id：该类非抽象对象（非容器分配点、手写 / VM 产出的实例）的按类视图，恒与未知接收者视图相连
     pub(super) fn obj_field(&mut self, o: u32, fi: usize, tid: u32) -> Node {
         let n = Node::O(o, fi);
         let fs = self.obj_fields.entry(o).or_default();
         if !fs.iter().any(|&(f, _)| f == fi) {
             fs.push((fi, tid));
-            if self.escaped.contains(&o) {
+            if self.escaped.contains(&o) || !self.objs.contains_key(&o) {
                 self.flow(Node::U(fi), n, tid);
                 self.flow(n, Node::F(fi), tid);
             }
@@ -462,6 +463,11 @@ impl<'a> Engine<'a> {
                 for (fi, tid) in self.obj_fields.get(&x).cloned().unwrap_or_default() {
                     self.flow(Node::U(fi), Node::O(x, fi), tid);
                     self.flow(Node::O(x, fi), Node::F(fi), tid);
+                }
+                // 逃逸对象进 G：open 值按 G 展开（派发枢纽、open 站点、闸门）时逐个取到它，以它自身为接收者进其上下文，
+                // 与逃逸数组同口径。类 id 由此只代表非抽象对象（字段走按类视图），不再兼指逃逸的抽象对象
+                if self.g.insert(x) {
+                    self.on_g_grow(x);
                 }
             } else if let Some(&t) = self.arrays.get(&x) {
                 if !self.escaped.insert(x) {

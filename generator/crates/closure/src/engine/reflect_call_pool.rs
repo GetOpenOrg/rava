@@ -97,29 +97,26 @@ impl Engine<'_> {
             let m = &self.rcall_members[i];
             (m.key.clone(), m.iface, m.virt)
         };
-        if virt && self.rcall_members[i].fallback && !s.classes.iter().any(|x| self.rcall_hub_misses(x)) {
+        if self.rcall_members[i].fallback && !s.classes.iter().any(|x| self.rcall_hub_misses(x)) {
+            return;
+        }
+        // 静态成员没有接收者：池值只作实参（`rcall_bind`）
+        if self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(|mm| mm.is_static())).unwrap_or(false) {
             return;
         }
         let owner = self.id(&key.owner);
         let via = Via::class("reflect", &key.owner);
         let opens: Vec<u32> = s.open.iter().filter(|&o| self.sub(o, owner) || self.sub(owner, o)).collect();
-        if !opens.is_empty() {
-            if virt {
-                if !std::mem::replace(&mut self.rcall_members[i].fallback, true) {
-                    self.rcall_stats.hub_fallbacks += 1;
-                    self.vm_dispatch(&key, iface, via.clone(), VmBind::Rcall(i));
-                }
-            } else {
-                let o = TypeSet { classes: IdSet::default(), open: IdSet::from_sorted(opens) };
-                let o = self.filter(&o, owner);
-                if !o.is_empty() {
-                    self.rcall_stats.open_recvs += 1;
-                    let t = self.method(key.clone(), via.clone());
-                    self.add_to(Node::P(t, 0), &o);
-                }
+        // 所指未知的接收者退回 VM 枢纽：按 G 中 ⊂ 声明类的成员逐个进其接收者上下文（不可覆写成员的目标固定为
+        // 成员本身）。不以 open 接收者进方法本体——本体按 open 汇合全部逃逸对象的字段，写回时流向每个逃逸对象
+        if !opens.is_empty() && !std::mem::replace(&mut self.rcall_members[i].fallback, true) {
+            self.rcall_stats.hub_fallbacks += 1;
+            if !virt {
+                self.rcall_stats.open_recvs += 1;
             }
+            self.vm_dispatch(&key, iface, virt, via.clone(), VmBind::Rcall(i));
         }
-        let fallback = virt && self.rcall_members[i].fallback;
+        let fallback = self.rcall_members[i].fallback;
         let xs: Vec<u32> = s.classes.iter().filter(|&x| !fallback || self.rcall_hub_misses(x)).collect();
         let mut wait = false;
         for x in xs {
@@ -130,7 +127,7 @@ impl Engine<'_> {
                 self.rcall_stats.synthetic_recvs += 1;
                 continue;
             }
-            if virt && !self.rcall_hub_misses(x) {
+            if !self.rcall_hub_misses(x) {
                 // 枢纽可能涵盖：挂起（`done` 已记，排空时取出判定）
                 self.rcall_members[i].wait.push(x);
                 wait = true;

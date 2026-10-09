@@ -342,6 +342,9 @@ impl<'a> Engine<'a> {
             let t = self.method_ctx(key.clone(), c, via.clone());
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
         }
+        if !rest.open.is_empty() && self.fixed_open(m, off, &key, &fs, site, &rest.open, &via, a, res) {
+            rest.open = IdSet::default();
+        }
         if !rest.is_empty() {
             // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体
             let base = self.relay_ctx(m, &key);
@@ -354,6 +357,32 @@ impl<'a> Engine<'a> {
             };
             self.edge(m, off, t, recv, a, ret, res);
         }
+    }
+
+    /// 非虚调用的 open 接收者经固定目标的 open 枢纽（[`HubSet::Fixed`]）：G 中 ⊂ open 类型的成员逐个以自身为 this
+    /// 进其接收者上下文（逃逸的抽象对象各进自己的克隆，类 id 进本体），G 增长由枢纽增量展开。open 若进方法本体，
+    /// 本体以 open 读写字段时取全部逃逸对象的并集、写回流向每个逃逸对象。
+    /// 下列情形仍按原样进方法本体：被调方继承调用方上下文（内存访问中继）、调用点按选择子常量克隆（克隆按调用点，
+    /// 枢纽跨调用点共用）、接收者来源带接口界（`Recv::Bounded`，枢纽展开不受该界约束）、数组类型上的调用
+    #[allow(clippy::too_many_arguments)]
+    fn fixed_open(&mut self, m: usize, off: u32, key: &MemberRef, fs: &[Feed], site: bool, opens: &IdSet, via: &Via, a: &Args, res: Option<Node>) -> bool {
+        if is_array_type(&key.owner) || self.relay_ctx(m, key) != NOCTX || (site && self.recv_call_clones(m, key)) || self.feeds_bound(fs).is_some() {
+            return false;
+        }
+        let iface = self.h.class(&key.owner).is_some_and(|c| c.is_interface());
+        let (Some(msite), Some(md)) = (self.h.resolve_method(&key.owner, &key.name, &key.desc, iface), parse_method(&key.desc)) else {
+            return false;
+        };
+        if msite.method().is_static() {
+            return false;
+        }
+        let owner = self.id(&key.owner);
+        let opens: Vec<u32> = opens.iter().collect();
+        for o in self.open_roots(&opens) {
+            let h = self.hub(key, iface, owner, HubSet::Fixed(o), None, &msite, &md, via.clone());
+            self.link_hub(h, m, off, a, res);
+        }
+        true
     }
 
     /// 调用边：接收者注入 this、实参按位置流入形参（被调声明类型过滤）、返回值流回结果节点

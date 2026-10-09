@@ -166,6 +166,17 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// 值 x 是非抽象对象的类 id（不是抽象对象、数组分配点、类镜像、lambda、手写实现对象，也不是所指未知的
+    /// Class 实例）：其实例字段按类视图访问（`obj_field`）
+    pub(super) fn plain_class_value(&mut self, x: u32) -> bool {
+        !self.objs.contains_key(&x)
+            && !self.arrays.contains_key(&x)
+            && !self.mirrors.contains_key(&x)
+            && !self.lambdas.contains_key(&x)
+            && !self.hwobjs.contains_key(&x)
+            && x != self.id(CLASS)
+    }
+
     /// G 中 ⊂ t 的成员
     pub(super) fn g_of(&mut self, t: u32) -> Rc<[u32]> {
         if !self.g_sub.contains_key(&t) {

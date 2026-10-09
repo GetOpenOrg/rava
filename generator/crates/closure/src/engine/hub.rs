@@ -20,7 +20,7 @@ impl<'a> Engine<'a> {
         let ptypes = md.params.iter().map(|p| self.ptype(p)).collect();
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
         let (open, pending, parent, set) = match &key.2 {
-            HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None, None),
+            HubSet::Open(o) | HubSet::Vm(o) | HubSet::Fixed(o) | HubSet::VmFixed(o) => (Some(*o), Vec::new(), None, None),
             HubSet::Exact(rs) => {
                 let parent = self.hub_parent(&key.0, iface, lc, rs, parent);
                 let pending = match parent.and_then(|p| self.hubs[p as usize].set.clone()) {
@@ -30,11 +30,13 @@ impl<'a> Engine<'a> {
                 (None, pending, parent, Some(rs.clone()))
             }
         };
+        let fixed = matches!(key.2, HubSet::Fixed(_) | HubSet::VmFixed(_));
         let (lambdas, special) = parent.map(|p| (self.hubs[p as usize].lambdas.clone(), self.hubs[p as usize].special.clone())).unwrap_or_default();
         self.hubs.push(Hub {
             site: site.clone(),
             owner,
             open,
+            fixed,
             parent,
             set,
             ptypes,
@@ -280,7 +282,8 @@ impl<'a> Engine<'a> {
         let links = |e: &Self| -> Vec<_> { e.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect() };
         let ret = self.hubs[h as usize].ret;
         // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
-        if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
+        let fixed = self.hubs[h as usize].fixed;
+        if !fixed && (self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r)) {
             Rc::make_mut(&mut self.hubs[h as usize].lambdas).push(r);
             let saved = self.call_vals.take();
             for ((m, off), l) in links(self) {
@@ -295,7 +298,8 @@ impl<'a> Engine<'a> {
         }
         let rt = self.ty(r);
         let rname = self.names[rt as usize].to_string();
-        let Some(sel) = self.h.select(&rname, &site) else {
+        let sel = if fixed { Some(site.clone()) } else { self.h.select(&rname, &site) };
+        let Some(sel) = sel else {
             self.unresolved.insert(format!("select {rname} {}", site.method().name));
             return;
         };
@@ -304,8 +308,11 @@ impl<'a> Engine<'a> {
         let cx = self.recv_ctx(r);
         let t = cut::with_ctx(Some(format!("H:{h}")), Some(format!("A:{rname}")), || self.method_ctx(MemberRef { owner: o, name: n, desc: d }, cx, via));
         if self.vm_hubs.contains(&h) {
-            // VM 反射虚调用：目标与 `expose` 的反射成员同口径（形参按枢纽接法：实参池 / open；返回值由反射调用点给出）
-            self.vm_targets.insert(t);
+            // VM 反射调用：目标与 `expose` 的反射成员同口径（形参按枢纽接法：实参池 / open；返回值由反射调用点给出）。
+            // 不可覆写成员不经槽调用，不计入虚派发目标
+            if !fixed {
+                self.vm_targets.insert(t);
+            }
             self.add_to(Node::P(t, 0), &TypeSet::exact(r));
             self.vm_hub_target(h, t);
             return;
@@ -366,7 +373,7 @@ impl<'a> Engine<'a> {
     /// VM 按反射对象虚调用 key（声明类 cls 上的实例方法）：经 open(cls) 的 VM 枢纽派发到各接收者的选中实现，
     /// G 增长时增量展开（反射取到基类方法、以子类实例调用时执行的是子类覆写）
     /// 目标形参按 bind 接（同一成员的枢纽共用，接法逐次并入，已选中的目标补接）
-    pub(super) fn vm_dispatch(&mut self, key: &MemberRef, iface: bool, via: Via, bind: VmBind) {
+    pub(super) fn vm_dispatch(&mut self, key: &MemberRef, iface: bool, virt: bool, via: Via, bind: VmBind) {
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
             self.unresolved.insert(key.to_string());
             return;
@@ -374,7 +381,8 @@ impl<'a> Engine<'a> {
         let Some(md) = parse_method(&key.desc) else { return };
         let owner = self.id(&key.owner);
         let before = self.hubs.len();
-        let h = self.hub(key, iface, owner, HubSet::Vm(owner), None, &site, &md, via);
+        let set = if virt { HubSet::Vm(owner) } else { HubSet::VmFixed(owner) };
+        let h = self.hub(key, iface, owner, set, None, &site, &md, via);
         self.vm_hub_bind(h, bind);
         if (h as usize) < before {
             return;
