@@ -63,7 +63,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 ### 不属于手写：指令语义与运行时基础设施
 
 - **指令级语义**归生成器与运行时基础设施，不对应任何手写 Java 方法：类初始化触发与初始化锁（JVMS §5.5）、
-  `monitorenter` / `monitorexit`、数组存取与越界、异常表。（`Object.wait` / `notify` 是 native，属类 1。）
+  `monitorenter` / `monitorexit`、数组存取与越界、异常表。（`Object.notify` / `notifyAll` / `wait0` 是 native，属类 1；`wait()` / `wait(J)` / `wait(JI)` 有字节码，现为根类手写体，终态按字节码翻译，见 regress2 文档 §10.1b。）
 - **运行时基础设施**不对应 Java 方法：对象模型（`java/lang/Object` 的 `ObjectVTable`）、数组与字符串的内部表示、
   异常与 `Result`（`error.rs`）、crate 骨架（`lib.rs`）。
 

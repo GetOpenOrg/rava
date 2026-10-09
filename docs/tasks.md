@@ -226,7 +226,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
-| regress2 遗留 | ⏳ | Object.wait 帧行号、过渡 `<init>` 帧 |
+| regress2 遗留 | ⏳ 待用户定（regress2-rest） | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿），终态为根类非 native 方法按字节码翻译，待用户定。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60）。regress2 文档 §10.1b |
 | C4 收官 · 全量 e2e | ⏳ 尚未开始 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
