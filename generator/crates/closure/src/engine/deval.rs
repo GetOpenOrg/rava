@@ -156,6 +156,13 @@ impl Ctx<'_> {
             }
         }
         if !deep {
+            // 返回常量格缺席（目标尚未分析或尚无返回）：同按成员的返回常量答复（`facts/oracle.rs`），按不返回乐观答复；
+            // 过早答「未知」会让守卫之后的调用边先接上，而调用边只增不撤
+            if !self.rvals.borrow().contains_key(t) && self.noreturn.borrow().answer_never(t) {
+                self.dep(top, Dep::Never);
+                self.dv_note(|| format!("{t} 尚无返回"));
+                return Ret::Never;
+            }
             self.dv_note(|| format!("{t} 只取返回常量格"));
             return Ret::Unknown;
         }
