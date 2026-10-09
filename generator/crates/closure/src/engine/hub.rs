@@ -125,6 +125,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
+        self.vdisp_note(m, off, None);
         if cut::edges_on() {
             cut::edge_plain(&self.site_node(m, off), &format!("H:{h}"));
         }

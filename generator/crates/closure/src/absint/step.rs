@@ -115,8 +115,16 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let index = pop(s)?;
                 let arr = pop(s)?;
                 let ty = arr.static_type().and_then(component);
+                // 元素封存的常量数组在常量下标上取该元素（事件照发：用途判定仍看到这次读取）
+                let elem = match (arr.obj().map(|o| &**o), &index) {
+                    (Some(Obj::Elems(es)), V::Int(i)) => usize::try_from(*i).ok().and_then(|i| es.get(i)).cloned(),
+                    _ => None,
+                };
                 self.ev(off, Event::ArrayLoad { array: arr, index });
-                s.stack.push(V::Ref { ty, nonnull: false, src: src1(Src::Site(off)), obj: None });
+                match self.folded(opc, off, elem) {
+                    Some(v) => s.stack.push(v),
+                    None => s.stack.push(V::Ref { ty, nonnull: false, src: src1(Src::Site(off)), obj: None }),
+                }
             }
             // xstore
             0x36..=0x3a | 0x3b..=0x4e => {
@@ -489,6 +497,7 @@ impl<'a, O: Oracle> Interp<'a, O> {
                 let a = pop(s)?;
                 s.stack.push(match a.obj().map(|o| &**o) {
                     Some(&Obj::Len(n)) => V::Int(n),
+                    Some(Obj::Elems(es)) => i32::try_from(es.len()).map_or(V::Top, V::Int),
                     _ => V::Top,
                 });
             }

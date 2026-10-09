@@ -49,6 +49,8 @@ pub(super) struct Access {
     pub a: Analysis,
     /// 访问方法所在类（取引导方法表）
     pub owner: String,
+    /// 访问方法名
+    pub name: String,
     pub reads: Vec<u32>,
     pub writes: Vec<V>,
 }
@@ -131,47 +133,52 @@ pub(super) fn flatten(parts: &[Part]) -> Option<BTreeSet<Rc<str>>> {
     Some(names.into_iter().map(Rc::from).collect())
 }
 
-impl<'a> Engine<'a> {
-    /// private 字段 f（静态或实例）在其嵌套内的全部访问（按不读事实的 Oracle 分析）；非 private、
-    /// 嵌套成员缺失或访问方法无法建模时为 None
-    pub(super) fn nest_accesses(&self, f: &MemberRef) -> Option<Vec<Access>> {
-        let cf = self.h.class(&f.owner)?;
-        let fd = cf.field(&f.name, &f.desc)?;
-        if fd.access & acc::PRIVATE == 0 {
-            return None;
-        }
-        let host = cf.nest_host.clone().unwrap_or_else(|| cf.name.clone());
-        let hcf = self.h.class(&host)?;
-        let mut out = vec![];
-        for c in std::iter::once(&host).chain(hcf.nest_members.iter()) {
-            let cf = self.h.class(c)?;
-            for mm in &cf.methods {
-                let Some(code) = mm.code.as_ref() else { continue };
-                let hits = code.insns.iter().any(|i| matches!(&i.operand, classfile::Operand::Field(r) if r == f));
-                if !hits {
+/// private 字段 f（静态或实例）在其嵌套内的全部访问（按不读事实的 Oracle 分析）；非 private、
+/// 嵌套成员缺失或访问方法无法建模时为 None
+pub(super) fn nest_accesses(h: &Hierarchy, f: &MemberRef) -> Option<Vec<Access>> {
+    let cf = h.class(&f.owner)?;
+    let fd = cf.field(&f.name, &f.desc)?;
+    if fd.access & acc::PRIVATE == 0 {
+        return None;
+    }
+    let host = cf.nest_host.clone().unwrap_or_else(|| cf.name.clone());
+    let hcf = h.class(&host)?;
+    let mut out = vec![];
+    for c in std::iter::once(&host).chain(hcf.nest_members.iter()) {
+        let cf = h.class(c)?;
+        for mm in &cf.methods {
+            let Some(code) = mm.code.as_ref() else { continue };
+            let hits = code.insns.iter().any(|i| matches!(&i.operand, classfile::Operand::Field(r) if r == f));
+            if !hits {
+                continue;
+            }
+            let a = absint::analyze(&cf.name, &mm.desc, mm.is_static(), code, &Plain);
+            if a.conservative {
+                return None;
+            }
+            let mut acc = Access { a, owner: cf.name.clone(), name: mm.name.clone(), reads: vec![], writes: vec![] };
+            for i in &code.insns {
+                if !matches!(&i.operand, classfile::Operand::Field(r) if r == f) {
                     continue;
                 }
-                let a = absint::analyze(&cf.name, &mm.desc, mm.is_static(), code, &Plain);
-                if a.conservative {
-                    return None;
+                // 不可达的访问没有事件
+                let Some(Event::Field { opcode, value, .. }) = event_at(&acc.a, i.offset, is_field) else { continue };
+                match (*opcode, value) {
+                    (GETSTATIC | GETFIELD, _) => acc.reads.push(i.offset),
+                    (PUTSTATIC | PUTFIELD, Some(v)) => acc.writes.push(v.clone()),
+                    _ => return None,
                 }
-                let mut acc = Access { a, owner: cf.name.clone(), reads: vec![], writes: vec![] };
-                for i in &code.insns {
-                    if !matches!(&i.operand, classfile::Operand::Field(r) if r == f) {
-                        continue;
-                    }
-                    // 不可达的访问没有事件
-                    let Some(Event::Field { opcode, value, .. }) = event_at(&acc.a, i.offset, is_field) else { continue };
-                    match (*opcode, value) {
-                        (GETSTATIC | GETFIELD, _) => acc.reads.push(i.offset),
-                        (PUTSTATIC | PUTFIELD, Some(v)) => acc.writes.push(v.clone()),
-                        _ => return None,
-                    }
-                }
-                out.push(acc);
             }
+            out.push(acc);
         }
-        Some(out)
+    }
+    Some(out)
+}
+
+impl<'a> Engine<'a> {
+    /// private 字段 f（静态或实例）在其嵌套内的全部访问（见 [`nest_accesses`]）
+    pub(super) fn nest_accesses(&self, f: &MemberRef) -> Option<Vec<Access>> {
+        nest_accesses(self.h, f)
     }
 
     /// 按名取类拆段：值是常量字符串数组（字段 / 不逃出本方法的局部数组）的元素（值映射字段的读取见 `map_slot.rs`）
