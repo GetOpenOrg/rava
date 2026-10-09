@@ -76,6 +76,43 @@ P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHa
 
 已知失败 3 项（container_elements_per_object / known_gate_ranks_first / param_string_constants_fold_switch），**新增失败 1 项：`reflect_new_array_element_precision`**（closure_cli.rs:150，`seeds_agree("62_reflection/TestModuleLayerDefine.java")`，种子 0 / 1 / 2 的闭包集合不同）。`-q` 下断言消息没有留存。疑似来自本分支：RECV_LIMIT 让更多组合进入具体求值，温求值和驻留串查表也可能引入顺序依赖。**合入前必须修**（续作 0）。
 
+### 并入集成分支后（2026-10-09，合并 b4395473 = 本分支 + ce554b84）
+
+计数口径同上（`closure_composition_job.sh`，`--flows @concrete`）；注意此口径下集成分支 HelloWorld 为 3456 类，与 tasks.md 的 3233（另一口径）不可直接比。
+
+| 头 | 作业 | hello | collectors | deepcopy | hello gen / ann | deepcopy gen / ann |
+|---|---|---|---|---|---|---|
+| ce554b84（集成分支，基线） | as-base3-ce554b84 | 3456 / 18678 | — | 3757 / 21717 | 47 (210) / 0 | 47 (210) / 0 |
+| b4395473（合并） | as-merge-b4395473 | 3433 / 18542 | 3433 / 18549 | 3735 / 21592 | 28 (92) / 0 | 29 (102) / 0 |
+| 9a535840（合并 + 两处定论修复） | as-settle-9a535840 | **3407 / 18453** | 3407 / 18460 | **3727 / 21500** | **4 (8)** / 0 | 22 (13) / 0 |
+
+净收益（对集成分支）：hello −49 类 / −225 方法，deepcopy −30 类 / −217 方法。`SignatureParser` 三例均「不在闭包内」，`comparableClassFor@21` 两点全部组合「⇒映像」、无回退。
+
+- ann = 0：P1 已由集成分支的 reflect-marker（查找结果标记化）断开，与第四节 csanno 上界一致。
+- hello 剩余 gen 4 类 / 8 方法：`ClassRepository.getSuperInterfaces` 与 `ParameterizedTypeImpl` 的访问器 / `equals` / `hashCode` / `toString`——热路径读映像中的 genericInfo 后实际执行的方法，是运行期真实残余。
+- deepcopy 剩余 gen 22 类只有 13 个方法：多出的 18 类是映像中 genericInfo 对象图的类型（签名树节点、`ClassScope`、`CoreReflectionFactory`，level 为 layout / alloc），属映像数据，不带代码。
+
+#### 种子确定性（续作 0）
+
+并入集成分支后 `reflect_new_array_element_precision` 不再失败（作业 as-seed-b4395473：TestModuleLayerDefine 种子 0 / 1 / 2 的类 / 方法 / 反射成员集合逐项相同，3523 / 19174 / 645；该单测与 `profile_union_key_and_coverage` 均通过）。原失败由集成分支 fix-1011 / batch-1013 的顺序根因修复消解（同属 §5.8.6「看到未定论状态须答 ⊥」一类）。
+
+排查中在本分支代码上另找到两处同类顺序依赖，按终态修掉（不靠排序）：
+
+1. **类初始化登记取决于共享 VM 的求值历史**（cbd5f9d7）：具体求值所有组合共用一个 VM，类初始化状态跨组合保留，结果只登记「本次求值触发的初始化」（inited）。先求值的组合若按热路径入闭包，其冷路径完成的初始化不登记；之后按冷 / 热之并入闭包的组合再请求该类时它已完成初始化、也不登记——该类 `<clinit>` 是否入闭包随求值次序变化。改为一律按「请求初始化」（touched）登记：请求集合只取决于本组实参的执行路径。
+2. **片段可物化判定读未定论的构建期初始化结局**（9a535840）：`image_memo_prepare` 对片段所引静态字段（`FVal::Static`）只查当时的 `build_time` 集合；声明类尚未尝试构建期初始化时按「运行期初始化」答复，该组实参按冷 / 热之并入闭包，之后该类经别的路径构建期初始化也撤不回（`applied` 已登记）。改为先对这些声明类调 `image_ext` 定论（同 `image_settle_reads`）。
+
+#### P2 第四层：三个待查假设的结论
+
+并入后 csanno 已无必要（P1 由 reflect-marker 断开），直接在合并头上查 `--why SignatureParser`：首达链为 `ConcurrentHashMap.comparableClassFor@21`（concrete）→ `SignatureParser.<init>`，诊断里两个组合未物化：`ZonedDateTime` / `LocalDateTime`「（并：引用运行期初始化类的静态字段 sun/reflect/generics/tree/BottomSignature.singleton）」——其 genericInfo 含通配符类型实参 `Comparable<ChronoLocalDateTime<?>>`，`Wildcard` 的下界是 `BottomSignature.make()` 的单例。
+
+| 假设 | 结论 |
+|---|---|
+| ① 温轨迹重解析（惰性字段被温求值撤销） | 否：定论修复后全部组合「⇒映像」，签名解析不再出现在任何入闭包轨迹里 |
+| ② 初始化轨迹（`ClassRepository.<clinit>` / 映像类型要求运行期初始化） | 否（`ClassRepository` 已由集成分支 U13 列入 `[concrete.boot]` 构建期初始化）；同形问题出在 `BottomSignature`：片段引其静态单例，类的构建期初始化结局未定 |
+| ③ 闭包单调（早期轮次失败后撤不回） | 是，但不在回退：两点无任何回退记录；撤不回的是「按冷 / 热之并」的 `applied` 登记，触发者是②中未定论的构建期初始化结局（修复 2） |
+
+asig-cs（并入前、csanno 下）诊断全标「⇒映像」却仍有签名解析，推测同属修复 1 / 2 的次序依赖（入闭包的判定早于类状态定论）；并入前的头未复测，不作定论。
+
 ## 五、失败 / 否定路线
 
 - §5.6.10 的「annsig（只折叠 `parseSig`）」：健全收益 0 类，不实施（结论不变）。
@@ -85,9 +122,9 @@ P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHa
 
 ## 六、续作入口
 
-1. **合 reflect-marker 后联测**：本分支 ①②③（P2）+ reflect-marker（P1 invoke 直连）合并后，量 hello / collectors / deepcopy 的 gen / ann；目标 0 / 0。合并后若 ann 仍非 0，用 `--why sun/reflect/annotation/AnnotationParser` 查剩余 invoke 点（`NTLMAuthenticationProxy` 等 `<clinit>` 期反射调用是否被标记覆盖）。
-0. **种子确定性回归（阻塞合入）**：本地不能跑，在服务器上跑 `cargo test --release -p driver --test closure_cli reflect_new_array_element_precision -- --nocapture` 取差异集合。重点查三处：`persist::collect` / `rollback_non_image` 的撤销分区顺序；`Ex.interned` 是 HashMap，构造驻留串表时的遍历顺序；`image_memo::prepare` 追加字符串的顺序。按片段内容排序或改用 BTreeMap。
-1'. **P2 第四层（优先）**：用 `--cut-file csanno.txt --flows @concrete` 跑 hello，对 `comparableClassFor@21` 的每个组合输出冷 / 温 / 热轨迹里是否含 `SignatureParser.parseClassSig`（在 concrete.rs 诊断里加一列「轨迹含签名解析的组合」，按方法 id 比对，不写类名字面量，由 `--why` 目标给出），定位后修温轨迹或初始化轨迹的归属。目标是 csanno 下 gen = 0。
+1. ~~合 reflect-marker 后联测~~：已量（as-settle-9a535840），ann = 0；gen 余 hello 4 类 / 8 方法（热路径真实残余）、deepcopy 22 类 / 13 方法（映像数据类型）。gen 再降须让 `comparableClassFor` 的结果本身构建期折叠（另立项，非本分支）。
+0. ~~种子确定性回归~~：已消解（见「并入集成分支后」）。
+1'. ~~P2 第四层~~：已完成，`SignatureParser` 出闭包（见「并入集成分支后」）。
 2. **csanno 上界**：已量（第四节），hello −59 类，deepcopy −54 类；合 reflect-marker 后的实测应逼近该上界，若差距大则剩余 invoke 点未被标记覆盖。
 3. **终态备选（P1）**：若标记化覆盖不全，`Method` 的 CS 判定结果在构建期按方法注解求值并写入映像（与 `Class.genericInfo` 同走 `image_memo_fields` 清单，类名只在 TOML），运行期 `isCallerSensitive` 只读缓存位，不再到达 `AnnotationParser`。
 4. **运行期反射读注解的正确性**：链出闭包只针对不读注解的程序；`TestAnnoReflect` / `TestAnnoDeepAccess` 等真读注解的程序链仍可达（入口是用户代码的 `getAnnotation`），合入前抽查。
