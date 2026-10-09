@@ -15,7 +15,7 @@ struct Stub {
 }
 
 impl Oracle for Stub {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {

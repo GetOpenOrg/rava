@@ -6,15 +6,19 @@
 //! 从哪里读（`readers`）、按键改写的入口（`writers`）、只读查询入口（`queries`：接收者为表对象时
 //! 既不改写表、结果也不持有表的引用）；实参序号含接收者。删除入口（`remove = true`）只可能改变
 //! 启动时存在的键：只被删除、从未写入的键保持「不存在」。
+//! 读取入口带 `snapshot = true` 的读的是启动快照（引导期保存、此后无写入方的属性表副本）：取值同样按本表，
+//! 但不受运行期改写 / 属性表对象逃逸影响。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-/// 读取入口：`receiver` = 接收者须为系统属性表对象；`key` / `default` = 键 / 缺省值的实参序号
+/// 读取入口：`receiver` = 接收者须为系统属性表对象；`key` / `default` = 键 / 缺省值的实参序号；
+/// `snapshot` = 读启动快照（不随运行期改写变化）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PropRead {
     pub receiver: bool,
     pub key: usize,
     pub default: Option<usize>,
+    pub snapshot: bool,
 }
 
 /// 按键改写入口：`key` = 键的实参序号；`remove` = 删除该键（启动时不存在的键删除后仍不存在）
@@ -69,10 +73,14 @@ impl SysProps {
         out.holders = list("holders").into_iter().collect();
         out.queries = list("queries").into_iter().collect();
         for (k, v) in sec.get("readers").and_then(|v| v.as_table()).into_iter().flatten() {
-            let t = v.as_table().ok_or_else(|| err(k, "须为 { key = 序号, receiver = 布尔, default = 序号 }"))?;
+            let t = v.as_table().ok_or_else(|| err(k, "须为 { key = 序号, receiver = 布尔, default = 序号, snapshot = 布尔 }"))?;
             let key = idx(t, "key").ok_or_else(|| err(k, "缺 key"))?;
-            let receiver = t.get("receiver").and_then(|v| v.as_bool()).unwrap_or(false);
-            out.readers.insert(k.clone(), PropRead { receiver, key, default: idx(t, "default") });
+            let flag = |f: &str| t.get(f).and_then(|v| v.as_bool()).unwrap_or(false);
+            let (receiver, snapshot) = (flag("receiver"), flag("snapshot"));
+            if receiver && snapshot {
+                return Err(err(k, "receiver 与 snapshot 不能同时为 true（快照不是运行期属性表对象）"));
+            }
+            out.readers.insert(k.clone(), PropRead { receiver, key, default: idx(t, "default"), snapshot });
         }
         for (k, v) in sec.get("writers").and_then(|v| v.as_table()).into_iter().flatten() {
             let t = v.as_table().ok_or_else(|| err(k, "须为 { key = 序号, remove = 布尔 }"))?;
@@ -151,6 +159,7 @@ mod tests {
             [s.readers]
             "x/P.get:(Ljava/lang/String;)Ljava/lang/String;" = { receiver = true, key = 1 }
             "x/Q.get:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;" = { key = 0, default = 1 }
+            "x/V.saved:(Ljava/lang/String;)Ljava/lang/String;" = { key = 0, snapshot = true }
             [s.writers]
             "x/P.set:(Ljava/lang/String;Ljava/lang/String;)V" = { key = 1 }
             "x/P.remove:(Ljava/lang/Object;)Ljava/lang/Object;" = { key = 1, remove = true }
@@ -161,10 +170,14 @@ mod tests {
         assert_eq!(p.lookup("user.dir"), PropValue::Dynamic);
         assert_eq!(p.lookup("nope"), PropValue::Absent);
         assert!(p.is_holder("a/B.props:Lx/P;") && !p.is_empty());
-        assert_eq!(p.reader("x/P.get:(Ljava/lang/String;)Ljava/lang/String;"), Some(PropRead { receiver: true, key: 1, default: None }));
+        assert_eq!(p.reader("x/P.get:(Ljava/lang/String;)Ljava/lang/String;"), Some(PropRead { receiver: true, key: 1, default: None, snapshot: false }));
         assert_eq!(
             p.reader("x/Q.get:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
-            Some(PropRead { receiver: false, key: 0, default: Some(1) })
+            Some(PropRead { receiver: false, key: 0, default: Some(1), snapshot: false })
+        );
+        assert_eq!(
+            p.reader("x/V.saved:(Ljava/lang/String;)Ljava/lang/String;"),
+            Some(PropRead { receiver: false, key: 0, default: None, snapshot: true })
         );
         assert!(p.is_query("x/P.names:()Ljava/util/Set;") && !p.is_query("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"));
         assert_eq!(p.writer("x/P.set:(Ljava/lang/String;Ljava/lang/String;)V"), Some(PropWrite { key: 1, remove: false }));
@@ -176,5 +189,7 @@ mod tests {
         let e = parse("[s]\ndynamic = [\"a\"]\n[s.values]\na = \"1\"\n").unwrap_err();
         assert!(e.contains("a"));
         assert!(parse("").unwrap().is_empty());
+        let e = parse("[s.readers]\n\"x/V.r:()V\" = { key = 0, receiver = true, snapshot = true }\n").unwrap_err();
+        assert!(e.contains("snapshot"));
     }
 }

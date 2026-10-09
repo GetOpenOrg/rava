@@ -7,8 +7,15 @@ fn entry_state(owner: &str, desc: &str, is_static: bool, max_locals: u16, param:
     let md = parse_method(desc)?;
     let mut locals = Vec::with_capacity(max_locals as usize);
     if !is_static {
-        // 接收者：求值器给出的非空常量（字符串 / 类字面量）按其值，否则为属主类型的非空引用
-        let this = param(0).filter(|v| v.nonnull() == Some(true) && !matches!(v, V::Ref { .. }));
+        // 接收者：求值器给出的非空常量（字符串 / 类字面量）按其值；引导映像对象（身份确定、final 字段已知）与
+        // 构造完成标签的对象（final 字段已知、运行期类确定）按该标签（进入方法体即非空）；否则为属主类型的非空引用
+        let this = param(0).and_then(|v| match v {
+            V::Ref { obj: Some(o), .. } if matches!(*o, Obj::Image(..) | Obj::Fields(_)) => {
+                Some(V::Ref { ty: Some(Rc::from(owner)), nonnull: true, src: src1(Src::Param(0)), obj: Some(o) })
+            }
+            V::Ref { .. } => None,
+            v => (v.nonnull() == Some(true)).then_some(v),
+        });
         locals.push(this.map_or_else(|| V::Ref { ty: Some(Rc::from(owner)), nonnull: true, src: src1(Src::Param(0)), obj: None }, |v| v.rebased(Src::Param(0))));
     }
     let base = u16::from(!is_static);
@@ -72,7 +79,7 @@ fn conservative(code: &Code) -> Analysis {
         events.push((h.handler, Event::Catch(h.catch_type.clone())));
     }
     events.sort_by_key(|e| e.0);
-    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], mirror_field_assumed: vec![], conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
+    Analysis { reachable: vec![true; code.insns.len()], events, pending_types: vec![], mirror_assumed: vec![], mirror_field_assumed: vec![], site_mirror_assumed: false, conservative: true, cfg: Rc::new(cfg::Cfg::build(code)), selector_params: 0 }
 }
 
 /// 分析一个方法体
@@ -136,7 +143,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
         })
         .collect();
     let mut hlocals: Vec<Option<Vec<V>>> = vec![None; code.exception_table.len()];
-    let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], selects: 0 };
+    let mut interp = Interp { oracle, emit: None, assumed: vec![], field_assumed: vec![], site_assumed: false, selects: 0 };
     let mut tr = track.then(init::Track::default);
 
     let merge = |entry: &mut BTreeMap<usize, State>, work: &mut Vec<usize>, i: usize, st: &State| -> Option<()> {
@@ -321,6 +328,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
     mirror_field_assumed.sort();
     mirror_field_assumed.dedup();
     let selector_params = interp.selects;
+    let site_mirror_assumed = interp.site_assumed;
     drop(interp);
     mirror_assumed.sort();
     let mut pending_types: Vec<String> = insns
@@ -345,7 +353,7 @@ pub(super) fn run<O: Oracle>(owner: &str, desc: &str, is_static: bool, code: &Co
     events.sort_by_key(|e| e.0);
     pending_types.sort();
     pending_types.dedup();
-    let a = Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params };
+    let a = Analysis { reachable, events, pending_types, mirror_assumed, mirror_field_assumed, site_mirror_assumed, conservative: false, cfg: Rc::new(cfg::Cfg::build(code)), selector_params };
     Some((a, tr.map(init::Track::finish)))
 }
 

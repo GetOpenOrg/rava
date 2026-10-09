@@ -165,7 +165,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="远端跑 rava closure / emit / compile 并取回结果与错误摘要")
     ap.add_argument("mode", choices=MODES)
     ap.add_argument("test", help="用例名（HelloWorld）或 tests/e2e 下相对路径")
-    ap.add_argument("--ref", required=True, help="java_rta 提交（须已推送 origin，服务器从内部仓库取）")
+    ap.add_argument("--ref", required=True, help="rava 提交（须已推送 origin，服务器从内部仓库取）")
     ap.add_argument("--args", default="", help="追加给 rava 的参数（一个字符串，须写成 --args=\"--perf\"；或放在 -- 之后）")
     ap.add_argument("--tag", help="作业 tag（缺省 rr-<模式>-<用例>-<sha8>）")
     ap.add_argument("--fresh", action="store_true", help="tag 加时间戳，不复用同 tag 的已成功结果")

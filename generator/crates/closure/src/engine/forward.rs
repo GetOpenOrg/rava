@@ -27,25 +27,32 @@ fn bit(i: u16) -> SlotMask {
     }
 }
 
-impl<'a> Engine<'a> {
+impl Engine<'_> {
     /// 分派转发方法：静态方法，且有引用形参流到分派接收者
     pub(super) fn forwarder(&mut self, key: &MemberRef) -> bool {
+        self.ctx.forwarder(key)
+    }
+}
+
+impl Ctx<'_> {
+    /// 分派转发方法：静态方法，且有引用形参流到分派接收者
+    pub(super) fn forwarder(&self, key: &MemberRef) -> bool {
         let is_static = self.h.class(&key.owner).and_then(|cf| cf.method(&key.name, &key.desc).map(|m| m.is_static())).unwrap_or(false);
         is_static && self.dispatch_slots(key) != 0
     }
 
     /// 流到分派接收者的形参槽（按成员缓存；递归成环处取 0——只少克隆，不影响可达性）
-    pub(super) fn dispatch_slots(&mut self, key: &MemberRef) -> SlotMask {
-        if let Some(&r) = self.forwarders.get(key) {
+    pub(super) fn dispatch_slots(&self, key: &MemberRef) -> SlotMask {
+        if let Some(&r) = self.forwarders.borrow().get(key) {
             return r;
         }
-        self.forwarders.insert(key.clone(), 0);
+        self.forwarders.borrow_mut().insert(key.clone(), 0);
         let r = self.dispatch_slots_uncached(key);
-        self.forwarders.insert(key.clone(), r);
+        self.forwarders.borrow_mut().insert(key.clone(), r);
         r
     }
 
-    fn dispatch_slots_uncached(&mut self, key: &MemberRef) -> SlotMask {
+    fn dispatch_slots_uncached(&self, key: &MemberRef) -> SlotMask {
         use classfile::op;
         let Some(cf) = self.h.class(&key.owner) else { return 0 };
         let Some(meth) = cf.method(&key.name, &key.desc) else { return 0 };
@@ -58,7 +65,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return 0 };
         let live = |_: &str| true;
-        let a = self.ctx.aux_analyze(&key.owner, &key.desc, meth.is_static(), code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() });
+        let a = self.aux_analyze(&key.owner, &key.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         if a.conservative {
             return 0;
         }

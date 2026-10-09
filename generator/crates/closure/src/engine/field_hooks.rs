@@ -106,7 +106,7 @@ impl Ctx<'_> {
             }
             obj = m;
         }
-        let tag = Rc::new(crate::absint::Obj::Image(obj, Vec::new()));
+        let tag = self.img_module_tags.get().and_then(|t| t.get(&obj).cloned()).unwrap_or_else(|| Rc::new(crate::absint::Obj::Image(obj, Vec::new())));
         Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) })
     }
 

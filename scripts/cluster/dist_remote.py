@@ -11,13 +11,13 @@ from dist_conn import _connect_with_retry  # noqa: F401  转出
 
 
 def resolve_spot_ref(ref: str) -> str:
-    """短哈希在本地 java_rta 仓库解析为完整 40 位哈希（服务器端 git fetch 只认分支名或完整哈希）；
+    """短哈希在本地 rava 仓库解析为完整 40 位哈希（服务器端 git fetch 只认分支名或完整哈希）；
     分支名与完整哈希原样返回。本地无法唯一解析时报错退出。"""
     if not re.fullmatch(r"[0-9a-fA-F]{4,39}", ref):
         return ref
     repo = config.LOCAL_E2E_DIR.parent.parent if config.LOCAL_E2E_DIR else None
     if repo is None:
-        raise SystemExit(f"--ref {ref} 是短哈希，但找不到本地 java_rta 仓库来解析；请改用完整哈希或分支名")
+        raise SystemExit(f"--ref {ref} 是短哈希，但找不到本地 rava 仓库来解析；请改用完整哈希或分支名")
     import subprocess
     r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
                        capture_output=True, text=True)
@@ -108,7 +108,7 @@ def prepare_main_checkout(client, remote_dir: str) -> str | None:
         return str(e)
 
 
-# ── 语料参考 JDK（java_rta tools/refjdk.toml） ───────────────────────────────
+# ── 语料参考 JDK（rava tools/refjdk.toml） ───────────────────────────────
 
 NO_REFJDK_MARK = "__RAVA_NO_REFJDK_SCRIPT__"
 REFJDK_TIMEOUT = 1200   # 首次下载约 200MB + 解压；已就位时为空操作

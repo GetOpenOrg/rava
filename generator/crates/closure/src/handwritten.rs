@@ -26,6 +26,7 @@ mod scan;
 mod stype;
 mod syntax;
 mod macro_fn_lint;
+mod mentions;
 mod thread_local_lint;
 mod type_refs;
 mod units;
@@ -238,6 +239,8 @@ pub struct Handwritten {
     /// 共置手写文件的顶层 fn 返回类型（文件模块路径 → 返回表；模块路径调用 `super::x_impl::f` 首次解析时载入）
     file_rets: RefCell<HashMap<String, Rc<stype::LocalRets>>>,
     abbrev: HashMap<String, String>,
+    /// 手写层点名的词（见 `mentions.rs`；首次使用时载入）
+    mentions: RefCell<Option<Rc<HashSet<String>>>>,
     pub errors: RefCell<Vec<String>>,
 }
 
@@ -392,6 +395,7 @@ impl Handwritten {
             units: RefCell::new(None),
             file_rets: RefCell::new(HashMap::new()),
             abbrev,
+            mentions: RefCell::new(None),
             errors: RefCell::new(Vec::new()),
         }
     }

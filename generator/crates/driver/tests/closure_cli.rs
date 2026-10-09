@@ -332,12 +332,32 @@ fn returns_per_site_receiver() {
 
 /// 一次 `rava closure -o` 的 summary.sysprops_unstable
 fn sysprops_unstable(java: &str) -> Option<serde_json::Value> {
-    let out = std::env::temp_dir().join(format!("rava_sysprops_{}_{java}.json", std::process::id()));
+    Some(closure_json(java)?["summary"]["sysprops_unstable"].clone())
+}
+
+/// 一次 `rava closure -o` 的完整 JSON
+fn closure_json(java: &str) -> Option<serde_json::Value> {
+    let out = std::env::temp_dir().join(format!("rava_cjson_{}_{java}.json", std::process::id()));
     closure(java, &["-o", out.to_str().unwrap()])?;
     let text = std::fs::read_to_string(&out).expect("读闭包 JSON");
     let _ = std::fs::remove_file(&out);
-    let d: serde_json::Value = serde_json::from_str(&text).expect("闭包 JSON");
-    Some(d["summary"]["sysprops_unstable"].clone())
+    Some(serde_json::from_str(&text).expect("闭包 JSON"))
+}
+
+/// 启动快照读取（`snapshot = true`）不受属性表逃逸影响：本例把 System.props 存入静态字段（全部不折叠），
+/// ThreadLocalRandom.<clinit> 经 VM.getSavedProperty 读 java.util.secureRandomSeed 仍折叠为 null →
+/// parseBoolean 为 false，SecureRandom.getSeed 分支（@185）为死区
+#[test]
+fn snapshot_read_ignores_props_escape() {
+    let Some(d) = closure_json("SyspropsLambdaLeak.java") else { return };
+    assert_eq!(d["summary"]["sysprops_unstable"]["all"], serde_json::Value::Bool(true), "本例应全部不折叠");
+    let folds = d["folds"].as_array().expect("folds");
+    let f = folds
+        .iter()
+        .find(|f| f["method"] == "java/util/concurrent/ThreadLocalRandom.<clinit>:()V")
+        .expect("ThreadLocalRandom.<clinit> 应有折叠点");
+    let dead = f["dead_pcs"].as_array().unwrap().iter().any(|r| r[0].as_u64() <= Some(185) && r[1].as_u64() > Some(185));
+    assert!(dead, "快照读取未折叠：{f}");
 }
 
 /// lambda 返回系统属性表：lambda 封闭于创建方法的一次调用、结果原路返回后只读 → 不逃逸；

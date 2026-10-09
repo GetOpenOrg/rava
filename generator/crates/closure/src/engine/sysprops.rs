@@ -30,12 +30,14 @@ pub(super) enum DefArg {
     Const(V),
 }
 
-/// 读取入口的形态：键 / 缺省值的实参序号；`receiver` = 接收者须为属性表对象
+/// 读取入口的形态：键 / 缺省值的实参序号；`receiver` = 接收者须为属性表对象；
+/// `snapshot` = 读启动快照（不查不折叠集合：运行期改写与属性表对象逃逸不影响快照）
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PropSum {
     pub(super) receiver: bool,
     pub(super) key: usize,
     pub(super) default: DefArg,
+    pub(super) snapshot: bool,
 }
 
 /// 返回属性表对象的方法与调用方可见性（均只增不减，两侧先后到达都能判定）
@@ -177,11 +179,21 @@ impl Ctx<'_> {
         }
         // 键为拼接值：只在该方法有登记的候选模式时求（`sysprops_key.rs`）
         let patterned = me.is_some_and(|me| args.iter().any(|a| key_src(a).is_some_and(|o| self.pkeys.borrow().contains_key(&(me, o)))));
-        if !patterned && !args.iter().any(|a| matches!(a, V::Str(..))) {
+        let unseen = me.is_some_and(|me| args.iter().any(|a| key_src(a).is_some_and(|o| !self.pkeys_seen.borrow().contains(&(me, o)))));
+        if !patterned && !unseen && !args.iter().any(|a| matches!(a, V::Str(..))) {
             return None;
         }
         let spec = self.read_spec(me, opcode, m, iface, Some(c))?;
-        match args.get(spec.key)? {
+        let key = args.get(spec.key)?;
+        // 读取点尚未登记候选模式（登记在本次分析之后的调用事件里）：答复 ⊥（读取之后暂不可达），登记后失效重算。
+        // 不按值未知答复——未知值并入返回常量格 / 形参常量格后无法撤回，登记先后会让结果依赖处理顺序
+        if let (Some(me), Some(o)) = (me, key_src(key)) {
+            if !self.pkeys_seen.borrow().contains(&(me, o)) && self.noreturn.borrow().bottom_never() {
+                self.dep(me, Dep::Never);
+                return Some(Ret::Never);
+            }
+        }
+        match key {
             V::Str(..) => self.prop_read(me, &spec, args),
             _ if patterned => self.prop_read_patterns(me, &spec, args),
             _ => None,
@@ -190,7 +202,7 @@ impl Ctx<'_> {
 
     /// 清单属性读取锚点（成员键）的读取形态
     pub(super) fn reader_spec(&self, k: &str) -> Option<PropSum> {
-        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param) })
+        self.man.sysprops.reader(k).map(|r| PropSum { receiver: r.receiver, key: r.key, default: r.default.map_or(DefArg::None, DefArg::Param), snapshot: r.snapshot })
     }
 
     /// 调用是否属性读取（清单锚点 / 摘要形态的字节码方法）
@@ -219,8 +231,8 @@ impl Ctx<'_> {
             return None;
         }
         let V::Str(key, _) = args.get(spec.key)? else { return None };
-        self.note_props(me);
-        {
+        if !spec.snapshot {
+            self.note_props(me);
             let u = self.punstable.borrow();
             if u.all || u.keys.contains(&**key) {
                 return None;
@@ -268,7 +280,7 @@ impl Ctx<'_> {
         let code = meth.code.as_ref()?;
         let n = parse_method(&t.desc)?.params.len() + usize::from(!meth.is_static());
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None, objs: Default::default() });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: vec![None; n], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         if a.conservative {
             return None;
         }
@@ -312,7 +324,7 @@ impl Ctx<'_> {
                 v => DefArg::Param(param_of(v)?),
             },
         };
-        Some(PropSum { receiver: false, key, default })
+        Some(PropSum { receiver: false, key, default, snapshot: inner.snapshot })
     }
 }
 
@@ -365,7 +377,7 @@ impl Ctx<'_> {
         let mut params = vec![None; md.params.len() + base];
         params[i] = Some(self.sysprops_ref(&p.descriptor()));
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![], level: None, objs: Default::default() });
+        let a = self.aux_analyze(&cf.name, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
         if a.conservative {
             return false;
         }

@@ -8,7 +8,7 @@ rava 服务器环境初始化。
   4. 安装 uv
   5. git clone / git pull rava 项目
   6. uv sync 初始化 Python 依赖
-  7. 语料参考 JDK（java_rta tools/refjdk.toml 的固定构建）落到数据目录 <refjdk_root>/<tag>/
+  7. 语料参考 JDK（rava tools/refjdk.toml 的固定构建）落到数据目录 <refjdk_root>/<tag>/
      （config.REFJDK_ROOT，可按服务器 refjdk_root 覆盖；不动 apt / /usr/lib/jvm）
   8. GraalVM 参照基线依赖（不计入就绪判定，缺失不影响 e2e 派发）：
      apt zlib1g-dev（native-image 链接需要）；Oracle GraalVM（config.GRAALVM_*，钉版本 + sha256）

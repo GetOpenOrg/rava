@@ -37,8 +37,8 @@ pub(super) struct CInit {
 struct InitFacts<'a, 'b>(Facts<'a, 'b>);
 
 impl Oracle for InitFacts<'_, '_> {
-    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
-        let r = self.0.invoke_result(opcode, m, iface, args);
+    fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
+        let r = self.0.invoke_result(opcode, off, m, iface, args);
         if !matches!(r, Ret::Unknown) {
             return r;
         }
@@ -147,7 +147,7 @@ impl Ctx<'_> {
         let Some(code) = meth.code.as_ref() else { return none() };
         let Some(frame) = self.memo_enter(format!("<init>#{init}"), true) else { return (None, false, Inputs::default()) };
         let live = |_: &str| true;
-        let facts = Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() };
+        let facts = Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) };
         let r = absint::analyze_init(&cf.name, &init.desc, code, &InitFacts(facts));
         let (clean, inp) = self.memo_leave(frame);
         (r.map(Rc::new), clean, inp)

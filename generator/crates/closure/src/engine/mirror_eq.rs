@@ -46,6 +46,9 @@ fn mirror_targets(classes: impl IntoIterator<Item = u32>, open: bool, mirror: im
 /// 镜像答复登记的哨兵类：答复是「形参镜像值集上的接收者钩子字段读结果」（见模块注释）
 pub(super) const HOOK_FIELD: u32 = u32::MAX;
 
+/// 镜像答复登记的哨兵类：答复取决于整个值集（调用点镜像值集上的实例调用，`Oracle::site_mirror_call`），值集任何增长都重分析
+pub(super) const HOOK_ANY: u32 = u32::MAX - 1;
+
 impl<'a> Engine<'a> {
     /// 值 x 是否是 Class 对象（非数组、实例类型为 Class）
     fn is_class_obj(&self, cls: u32, x: u32) -> bool {
@@ -62,11 +65,17 @@ impl<'a> Engine<'a> {
                 if *pt != Some(cls) {
                     return None;
                 }
-                let s = self.set_of(Node::P(m, i as u16));
-                let ts = mirror_targets(s.classes.iter(), !s.open.is_empty(), |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x))?;
-                Some(ts.into_iter().map(|t| Rc::from(&*self.names[t as usize])).collect())
+                self.node_mirror_set(Node::P(m, i as u16))
             })
             .collect()
+    }
+
+    /// 节点值集里 Class 对象所指的类（含所指未知的 Class 对象或 open 时为 None）
+    pub(super) fn node_mirror_set(&mut self, n: Node) -> Option<BTreeSet<Rc<str>>> {
+        let cls = self.id(CLASS);
+        let s = self.set_of(n);
+        let ts = mirror_targets(s.classes.iter(), !s.open.is_empty(), |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x))?;
+        Some(ts.into_iter().map(|t| Rc::from(&*self.names[t as usize])).collect())
     }
 
     /// 节点 n 的值集新增 delta：依赖其「不含某类镜像」答复的方法在答复可能失效时重分析
@@ -77,6 +86,9 @@ impl<'a> Engine<'a> {
             .iter()
             .copied()
             .filter(|&(_, c)| {
+                if c == HOOK_ANY {
+                    return true;
+                }
                 if c == HOOK_FIELD {
                     let boot = |t| self.defining_loader(t) == crate::loaders::Loader::Boot;
                     return may_hook(delta.classes.iter(), !delta.open.is_empty(), |x| self.mirrors.get(&x).copied(), |x| self.is_class_obj(cls, x), boot);
