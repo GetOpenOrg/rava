@@ -607,7 +607,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if virt {
-                self.vm_dispatch(&key, cf.is_interface(), true, via.clone(), VmBind::Open);
+                self.vm_dispatch(&key, cf.is_interface(), via.clone(), VmBind::Open);
             }
             let t = self.method(key, via.clone());
             self.open_params(t);

@@ -680,18 +680,13 @@ impl<'a> Engine<'a> {
     pub fn dispatched(&self) -> Vec<String> {
         let canon: Vec<usize> = self.methods.values().map(|m| self.mbase[&m.key]).collect();
         let mut ids: BTreeSet<usize> = BTreeSet::new();
-        // 固定目标枢纽（非虚调用的 open 接收者）只在经槽调用的非虚调用点（`direct_virtual_sites`）上算派发
-        let counted = |site: &(usize, u32), h: u32| !self.hubs[h as usize].fixed || self.direct_virtual_sites.contains(site);
-        let hub_keys = self.hub_sites.iter().filter(|(k, hs)| hs.iter().any(|&h| counted(k, h))).map(|(k, _)| k);
-        for site in self.recv_sites.iter().chain(self.direct_virtual_sites.iter()).chain(hub_keys) {
+        for site in self.recv_sites.iter().chain(self.direct_virtual_sites.iter()).chain(self.hub_sites.keys()) {
             ids.extend(self.dispatch.get(site).into_iter().flatten().filter(|t| !self.is_pseudo_method(**t)).map(|&t| canon[t]));
         }
         let mut memo: HashMap<u32, Rc<[usize]>> = HashMap::default();
-        for (k, hs) in &self.hub_sites {
+        for hs in self.hub_sites.values() {
             for &h in hs {
-                if counted(k, h) {
-                    ids.extend(self.hub_targets_canon(h, &canon, &mut memo).iter().copied());
-                }
+                ids.extend(self.hub_targets_canon(h, &canon, &mut memo).iter().copied());
             }
         }
         ids.extend(self.vm_targets.iter().map(|&t| canon[t]));

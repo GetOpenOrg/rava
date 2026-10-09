@@ -235,8 +235,6 @@ pub(super) struct Hub {
     pub(super) owner: u32,
     /// open 类型（open 枢纽）
     pub(super) open: Option<u32>,
-    /// 目标固定为已解析方法（非虚调用：private / final / invokespecial），不按接收者选择实现
-    pub(super) fixed: bool,
     pub(super) parent: Option<u32>,
     /// 精确集合枢纽的接收者集合（升序，与枢纽键共享）；父枢纽承接其中的子集部分
     pub(super) set: Option<Rc<[u32]>>,
@@ -295,15 +293,10 @@ pub(super) struct Link {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) enum HubSet {
     Open(u32),
-    /// 非虚调用（目标即已解析方法）的 open 接收者：按 G 中 ⊂ open 类型的成员逐个进其接收者上下文，
-    /// 逃逸的抽象对象各进自己的克隆（不经方法本体以 open 汇合各对象的字段）
-    Fixed(u32),
     Exact(Rc<[u32]>),
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
-    /// VM 按反射对象调用不可覆写的实例方法：同 [`HubSet::Vm`]，目标固定为该成员
-    VmFixed(u32),
 }
 
 #[derive(Clone)]

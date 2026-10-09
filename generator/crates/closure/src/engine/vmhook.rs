@@ -13,8 +13,7 @@ pub(super) const VMHOOK_KIND: &str = "vm-hook";
 impl<'a> Engine<'a> {
     /// 类 id 进 G：登记其 VM 钩子节点（伪类型与数组无手写文件）
     pub(super) fn vm_hooks_on_alloc(&mut self, id: u32) {
-        // 逃逸的抽象对象进 G 时其类早已实例化（钩子随类进入）
-        if self.lambdas.contains_key(&id) || self.hwobjs.contains_key(&id) || self.objs.contains_key(&id) {
+        if self.lambdas.contains_key(&id) || self.hwobjs.contains_key(&id) {
             return;
         }
         let cls = self.names[id as usize].to_string();

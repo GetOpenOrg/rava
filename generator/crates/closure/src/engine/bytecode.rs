@@ -388,7 +388,7 @@ impl<'a> Engine<'a> {
         let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
         let fi = self.field_node(key);
         let instance = opcode == op::GETFIELD || opcode == op::PUTFIELD;
-        let (objs, plain, other) = match recv.filter(|_| instance) {
+        let (objs, other) = match recv.filter(|_| instance) {
             Some(v) => {
                 let oid = self.id(&f.owner);
                 let fs = self.feeds(m, v, oid);
@@ -400,30 +400,20 @@ impl<'a> Engine<'a> {
                     self.field_hook(&decl, f, opcode, &via, res);
                 }
                 let objs: Vec<u32> = s.classes.iter().filter(|x| self.objs.contains_key(x)).collect();
-                // 非抽象对象的类 id：按类视图 O(类, f)（`obj_field`，恒与未知接收者视图相连）。open 值按 G 展开时逃逸的
-                // 抽象对象各自出现，类 id 不再兼指它们，故类 id 接收者不读写全部逃逸对象的并集 F / U
-                let plain: Vec<u32> = s.classes.iter().filter(|&x| self.plain_class_value(x)).collect();
                 // 类镜像上读接收者钩子字段（VM 注入状态）：值只由钩子落地（应用 / 平台类镜像已接钩子值池，引导类
                 // 镜像恒 null），不经全局字段节点——否则一个镜像读到的是全部镜像的值并集
                 let vm_read = opcode == op::GETFIELD && self.recv_hook_field(&decl, f);
-                let rest = s
-                    .classes
-                    .iter()
-                    .filter(|x| !self.objs.contains_key(x) && !plain.contains(x) && !(vm_read && self.mirrors.contains_key(x)))
-                    .count();
-                (objs, plain, !s.open.is_empty() || rest > 0)
+                let rest = s.classes.iter().filter(|x| !self.objs.contains_key(x) && !(vm_read && self.mirrors.contains_key(x))).count();
+                (objs.clone(), !s.open.is_empty() || rest > 0)
             }
-            None => (vec![], vec![], true),
+            None => (vec![], true),
         };
         let other = other && (!fresh || self.recv_mark(m, off, FIELD_OTHER));
         if opcode == op::PUTFIELD {
             // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）
             let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
-            // 非抽象对象（类 id）的写入值同样并入通配值（按对象值表只为抽象对象逐个建表）
-            self.obj_field_put(&key, &objs, other || !plain.is_empty(), &value.map_or(PV::Top, PV::of));
+            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of));
         }
-        // 抽象对象与按类视图一并按对象节点接（类 id 与对象 id 不相交，合并后仍升序）
-        let objs: Vec<u32> = if plain.is_empty() { objs } else { IdSet::from_iter(objs.into_iter().chain(plain)).iter().collect() };
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {
             let fs = match value {
