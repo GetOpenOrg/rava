@@ -36,8 +36,8 @@ for t in "$@"; do
   /usr/bin/time -v "$rava" build "$t" --stop-after emit --clean > "$out/$name.emit.log" 2>&1
   rc=$?
   t1=$(date +%s)
-  scratch=$(ls -td build/jdk*/*/ 2>/dev/null | grep -v "/target/$" | head -1)
-  scratch=${scratch%/}
+  # scratch 取 emit 日志里「[emit] … → <路径>（bin …）」的路径（服务器与本机分根方式不同）
+  scratch=$(sed -n 's/^\[emit\].* → \([^ （]*\).*/\1/p' "$out/$name.emit.log" | tail -1)
   echo "== $name  scratch=$scratch  emit rc=$rc  transpile $((t1 - t0)) s" >> "$sum"
   grep -E "Maximum resident|Elapsed" "$out/$name.emit.log" | sed 's/^/  emit /' >> "$sum"
   [[ $rc -eq 0 ]] || continue
