@@ -4425,4 +4425,4 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
 - `cr-g3-a6dca5c0`（kr2）：门排名，见 31.2。
 - `cr-m1-a450ee23`：类数，见 31.1。
 - `cr-d1-a450ee23` / `cr-d3-a450ee23`（jp2）：URL 与 Formatter 诊断，见 31.3 / 31.5。
-- `cr-u1-4afa42b6`（jp2）：`cargo test --release -p closure --lib absint`。
+- `cr-u1-4afa42b6`（jp2）：`cargo test --release -p closure --lib absint`，40 个通过、0 失败（含新增 `distinct_string_constants_ref_ne`）。
