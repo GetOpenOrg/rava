@@ -5,7 +5,7 @@
 > 状态（2026-10-02）：§1–§9 ✅ 6c7eb831；§10.1a 栈帧来源统一 ✅ 已合入集成分支 be1b97be（frames-unify bf91f075）。
 > 遗留（2026-10-09 复核，§10.1b，作业 r2-wait-a79e2b60）：过渡类手写 `<init>` 不成帧 ✅ 已随过渡手写删除消失；
 > Object.wait 帧 ⏳ 仍在——根因不是帧登记，而是根类 `wait()` / `wait(J)` / `wait(JI)` 有字节码却整体手写，
-> 终态为根类非 native 方法按字节码翻译（待用户定，见 §10.1b）。
+> 终态为根类非 native 方法按字节码翻译（用户已定，object-bytecode 分支实施中，见 §10.1b-实施；e2e 复验未完）。
 
 ## 1. TestForNameInit —— 已修
 
@@ -233,6 +233,15 @@ TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFra
   `object_impl.rs` 去掉 equals（含 String 内容比较捷径）/ toString / wait 族的手写近似，固有方法只做 null 检查与转交，
   新增 native `wait0`。
 - **审计**：根类非 native 方法若未翻译（构造器体不是单条 return 时）计入 `non_native_overrides`；按构造当前为 0。
+- **验证记录**（JDK 21 参考构建 jdk-21.0.11+10）：
+  - ob-b-9873a830（jp2）：单测 `cargo test -p emit -p closure -p input` 全过；e2e 全挂 `E0432 unresolved import Blocker`——
+    声明层底段看不见上层段类，373a077b 改为声明层文件只用预导入、方法体导入只进实现层。
+  - ob-c-db41935c（jp2，合入 main c249cdec 后）：闭包 HelloWorld classes 1870（嵌套口径）/ 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（b74d2e7e 基线 3059 / 3304，均降）；14 例 e2e 同一编译错：翻译后 `equals` 体
+    `this == obj` 为 `&Object == Object` 无实现。d716bdc3 在 Object 基础设施（`object_ext.rs`）补引用形态同一性比较。
+    作业 6600s 超时，c249cdec 基线闭包未测出。
+  - ob-d-d716bdc3（us1）：c249cdec 基线闭包对比 + 6 例 e2e 复验——结果见下条（恢复入口：本作业结果目录
+    `cluster_results/job/ob-d-d716bdc3/`）。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
