@@ -705,6 +705,8 @@ pgrep -f "\.venv/bin/python3? .*distribute_tests"
 作业分发器的进程名为 `python`，抽查为 `python3`，正则两者都覆盖。禁止用 `ps -eo` 判断（macOS 上 `-e` 不列全部进程）。
 同一 tag 只留一个实例，多余的 `kill -9`。
 
+等待作业结束不要写 `until ! pgrep -f "<tag>"`：`pgrep -f` 会匹配到等待循环自己所在 shell 的命令行（其中含 `<tag>`），循环永不退出（10-10 清理过 26 个这样挂了数小时到 19 小时的等待进程）。改用上面带 `\.venv/bin/python3? .*distribute_tests.*<tag>` 的正则，或等日志里的结束标记（`grep -q "日志与产物" <log>` / `rc=`），且给循环设上限次数。
+
 ### 12.6 子代理等作业
 
 用 Bash `run_in_background` 写 until 循环，盯 `cluster_results/<spot|job>/<tag>/summary.json` 的 status，
