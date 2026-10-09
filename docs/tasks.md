@@ -85,22 +85,26 @@
 |---|---|---|---|
 | FS-P1..P3 / C4 | 系统属性全集、`System.exit`、`getenv`、ServiceLoader 静态服务表 | ✅ P1 `b938ea5`（同批附带 FS-Q9 修复 `83a4ac2`）、P2/P3 `098d5e9`（用户验证 TestSystemPropsSpec / TestShutdownHooks / TestSystemExitEnv PASS，后者含 `f4d0351`+`e2f78ef`）；C4 方案已出未实施 | 验证：TestSystemPropsSpec TestShutdownHooks TestSystemExitEnv |
 
-## 📌 现状（2026-10-08）
+## 📌 现状（2026-10-09）
 
-> 下方依赖树与活跃任务表已于同日整表对齐本节。
+> 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
-- **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f（origin、github 均已推）。之后的工作都在合批分支上，未合入集成分支。
-- **batch-1009**（d5a2cb5d，验证中：全量单测 + 抽查）：batch-1008（user-unreach-stubs、c1d-url-b2、boot-image-s3 / s4、enum-values-direct、closure-composition、docs-align；HelloWorld 闭包 OOM 修复 f19e46e0；合批语义取舍见 c1d §30.18）+ closure-gates（c6a19c4c，`rava closure --gates`）+ boot-image-s5（57a9cec2，第 5 步 jimage + JceSecurity，`#[jvm_boundary]` 14 → 0，U14 `java.home` 钉值）。batch-1007 / 1008 已被取代。
-- **batch-1010**（c3f3e0f9，攒批中，待 batch-1009 放行后验证）：u13-generic（28ae3df8，U13 `Class.genericInfo` 入映像；机制生效但 HelloWorld 闭包 −0——`sun/reflect/generics` 另经注解签名解析与 open(Comparable) 键两条路径可达，见引导映像 §5.6.9）。
-- **进行中**：u12-props（U12 机制 ①③ + U14 `line.separator` / `file.encoding` 钉值）；reflect-direct（闭包收窄 ①：`Method.invoke` 全入口直连，先以 `--gates` 出新基线数）；boot-image-s6（第 6 步：非引导类构建期初始化）；ensure-init（闭包收窄 ③：`ensureClassInitialized`）。
-- **待派（按序）**：注解签名解析出闭包（java_meta 构建期求值 + `AnnotationParser` 可达性，U13 后续）；闭包构成报告 §七其余项——JCA、字符集、locale、类加载封闭映像、容器元素（以 `--gates` 实测排名为准）。
-- **派发规则（2026-10-08）**：子代理上限 5；有空名额即按已定顺序派发，不需再请示用户；子代理不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理（用户 10-08）。
-- **用户已定（2026-10-08）**：U12 接受为 U1 例外（日志路径属性构建期取值，①③ 解除挂起）；U13 `Class.genericInfo` 入映像；去除无映像回退保留；U14 部分修订 U1——`line.separator`（按目标三元组）、`file.encoding`（UTF-8）、`java.home`（构建期值）构建期钉值，`sun.jnu.encoding`、`stdout/stderr.encoding` 仍运行期读取，每项实测闭包类数、无收益不钉。见引导映像计划 §8.4。
-- **暂缓**：build-memsafe；纯优化线（10-06 分级）；引用类语义（无 GC，C4 之后，`docs/plans/2026-10-07-no-gc-memory-model.md`）；S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例——等 dev 恢复。
-- **known_failures**：batch-1008 新增 TestBootLayer（第 5 步已实施，随 batch-1009 复验）、删除 TestXmlSaxEvents。
-- **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava、dev 恢复。
-- **dev（2026-10-08）**：内存条有坏点，等新条到货更换，恢复需数天；BIOS 散热调整随换内存同一次停机做，恢复后先做内存自检再放作业。改名不再等 dev，停派点（用户 10-08 定）= batch-1009/1010 放行合入时：停派新代理，在跑代理当前小步提交推送并写恢复入口后收尾，分发器作业清空后改名；硬条件仅「无在跑子代理 + 无在跑分发器」，改名后按恢复入口新开代理续作。
-- **测试资源**：dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；工作流见 `docs/reference/cluster-testing.md` 十二。
+- **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。
+- **batch-1012 放行记录**：单测仅已知失败；抽查 53/55（TestUrlParsingFaces 已知，TestJndiNoProvider 转译超时、放宽重跑通过）。java_base OOM 根因与修复：s6（c18e8fc4）后启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，charset-ext 将映像分 24 段、启动函数拆 42 个（b3a860ac）、重定位先于回放（160789c7）、`ImageData::writes_statics_of` 统一判定（14917aed），java_base 峰值 11.8 GB → 1.6 GB。
+- **batch-1013 放行记录**：fix-1011 后续（3f78902a）+ reflect-marker（d51837e4，DeepCopy 3553 → 3532，HelloWorld / CollectorsDemo 3304 → 3263）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c，HelloWorld / CollectorsDemo → 3233，DeepCopy 3511，LogManager 0）。单测 A 组仅已知失败、B 组全过（`profile_union_key_and_coverage` 本次通过，第四根因仍在）。抽查 50/55：TestUrlParsingFaces 已知；DeepCopy、TestJndiNoProvider、TestSerialDefaultSuid、TestSerialUserGenericCallbacks 转译超 600 s，放宽超时重跑全部通过。
+- **转译耗时回归**（进行中，perf-regress）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
+- **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
+- **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
+- **进行中（10-09 派）**：缓存组回退撤回（bootcache，§5.8.6）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留。
+- **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
+- **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
+- **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
+- **暂缓**：
+  - build-memsafe；纯优化线（10-06 分级）；U1 重议；
+  - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
+  - 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例。
+- **C4 全量**：尚未开始。前置：转译耗时回归修复、dev 恢复（换内存条 + BIOS + 内存自检）。
+- **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
 
@@ -163,6 +167,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【暂缓】
 │   ├─ ⏸ build-memsafe 内存友好缺省构建档（10-08 暂缓）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
+│   ├─ ⏸ 声明层底段收窄：S7-4 / S7-5 收 SCC → D8 自动切段，每个声明 crate ≤1.3 GB ◀── C4（10-08 用户定）
 │   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
 │   ├─ ⏸ 不实施 / 挂起（10-06 用户定）：方法句柄对象化、T2 余 4b、b1 序列化收窄、a5 关系型边界推理
 │   └─ ⏸ 缓：虚拟线程余项（T6 规模、pinned）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
@@ -202,23 +207,21 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | D 分析性能 | D1 处理顺序无关（分支 closure-order-free，定性为正确性） | 继续 |
 | D 分析性能 | D2 枢纽翻新 / 延迟站点重跑等结构改造、D3 在线节点合并 | 暂停（V12 后提速线暂停） |
 | E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
-| E 编译资源 | E2 D8 声明层分段 | 缓（视 B4 结果） |
+| E 编译资源 | E2 D8 声明层分段 | 机制已合入（b51f9531 / b093069f）；底段收窄随 S7-4 / S7-5，C4 之后（见活跃任务「声明层底段收窄」） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
-| F 纯优化 | 二进制 ≤3 MB、S7-3～5、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
+| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
 
 ## 🔴 活跃任务
 
-> 依赖关系见上方「任务依赖树」。本表只列在途 / 待验证 / 待启项（2026-10-08）；已完成与过时行已删，见历史 §J 与各计划文档。
+> 依赖关系见上方「任务依赖树」。本表只列在途 / 待验证 / 待启项（2026-10-09）；已完成与过时行已删，见历史 §J 与各计划文档。
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| 合批 batch-1008 | 🧪 待合批验证（batch-1008，6934dc93 → 修复 b558e0c2） | 含 boot-image-s4（c614f840）、c1d-url-b2（3391eb2d）、user-unreach-stubs（108558e0）、enum-values-direct（59451c29）、closure-composition（c3a06331）。首次验证抽查 41/41 因映像求值失败；修复后映像求值通过，HelloWorld emit 内存超限（峰值约 11.9G）定位中。语义取舍见 c1d §30.18；known_failures +TestBootLayer、−TestXmlSaxEvents |
-| 引导映像第 3–4 步 | 🧪 待合批验证（boot-image-s3 / s4，batch-1008） | `#[jvm_boundary]` 23 → 14；VM / Module / ModuleLayer / Class / SecurityManager 移出边界；去除无映像回退（用户 10-08 确认保留） |
-| 引导映像第 5 步 | 🔄 进行中（boot-image-s5） | jimage 嵌入 + `getNativeMap`；ClassLoader 6、BootLoader 2、JceSecurity 6 归零，`#[jvm_boundary]` 14 → 0；U14 `java.home` 构建期钉值（JceSecurity 策略文件改为构建期事实）；验收 TestClassResourceStream、TestBootLayer、JCA 用例 |
-| u12-props：引导映像机制 ①③ + U14 属性钉值 | 🔄 进行中（u12-props，基于 b558e0c2） | U12：构建期确定 `LoggerFinder` 提供者、日志级别按映像值折叠；U14：`line.separator` 按目标三元组、`file.encoding` = UTF-8 构建期钉值，依赖类入映像。每项实测闭包类数，无收益不钉。HelloWorld 按平台上限 Linux ≤ 640 / macOS ≤ 590 |
-| 引导映像 S2 genericInfo | ⏳ 待派（U13 已定 2026-10-08，有空名额即派） | `Class.genericInfo` 入映像，`sun/reflect/generics` 出 HelloWorld 闭包 |
+| 缓存组回退撤回 | 🔄 bootcache（a6dca5c0） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
+| reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
+| 日志链缺口 ③ | 🔄 logchain3（a6dca5c0） | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
+| 转译耗时回归 | 🔄 进行中（perf-regress，基于 5090505f） | DeepCopy 527 → 912 s、序列化两例 ≈520 → ≈890 s、TestJndiNoProvider 324 → 1006 s；目标回到 batch-1012 水平以下（JNDI ≤350 s）、DeepCopy 峰值 ≤6 GB、闭包类集不变大 |
 | 引导映像零拷贝 | ⏳（§8.3，10-07 定） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
-| 闭包门自动排名 | 🔄 进行中（closure-gates） | `rava closure --gates`；在新基线上解释 HelloWorld 468 与约 3011 类的落差 |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
@@ -228,6 +231,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
+| 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md` |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 

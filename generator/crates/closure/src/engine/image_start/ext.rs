@@ -8,8 +8,14 @@ use super::*;
 
 impl<'a> Engine<'a> {
     /// 尝试构建期初始化 cls；返回 cls 是否成为构建期初始化类
-    pub(super) fn image_ext(&mut self, cls: &str) -> bool {
+    pub(in crate::engine) fn image_ext(&mut self, cls: &str) -> bool {
         let (Some(x), Some(s)) = (self.ext_vm.as_deref_mut(), self.img.as_deref_mut()) else { return false };
+        if s.build_time.contains(cls) {
+            return true;
+        }
+        if !s.tried.insert(cls.to_string()) {
+            return false;
+        }
         let d = Rc::make_mut(&mut s.data);
         let (n0, s0) = (d.objs.len(), d.statics.len());
         let Some(classes) = x.attempt(&self.ctx, self.cp, cls, d) else { return false };
@@ -24,11 +30,34 @@ impl<'a> Engine<'a> {
             st.vals.extend(vals);
         }
         self.image_appended(n0);
+        // 辅助分析（无方法上下文，不经 getstatic 预先定论）在尝试之前读过这些类的静态字段：记忆作废、取用者重算
+        let set: HashSet<&str> = classes.iter().map(String::as_str).collect();
+        let deps = self.ctx.ceval_drop(|inp| inp.reads.iter().any(|r| set.contains(r.owner.as_str())));
+        if !deps.is_empty() {
+            self.invalidate_all(Some(deps), Why::FieldPut);
+        }
         let keys: Vec<(MemberRef, usize)> = self.fields.keys().enumerate().filter(|(_, k)| classes.contains(&k.owner)).map(|(i, k)| (k.clone(), i)).collect();
         for (k, fi) in keys {
             self.image_field(&k, fi);
         }
         classes.iter().any(|c| c == cls)
+    }
+
+    /// 方法体分析之前：其 getstatic 所读静态字段的声明类先确定构建期初始化结局。字段答复（映像值 / `<clinit>`
+    /// 常量 / 缺省值）取决于声明类是否构建期初始化；结局未定时答复只能是未知，定论后变精确——格只升不降，
+    /// 先前的未知已并入形参常量等汇合格无法撤回，闭包随处理次序变化。读点执行即触发声明类初始化（JVMS §5.5），
+    /// 尝试只是提前；只在死代码中读到的类多一次尝试，结局与次序无关
+    pub(in crate::engine) fn image_settle_reads(&mut self, code: &classfile::Code) {
+        if self.ext_vm.is_none() {
+            return;
+        }
+        for x in &code.insns {
+            let (classfile::op::GETSTATIC, classfile::Operand::Field(f)) = (x.opcode, &x.operand) else { continue };
+            let Some(fi) = self.ctx.field_info(f) else { continue };
+            if fi.access & acc::STATIC != 0 && !self.inited.contains_key(fi.key.owner.as_str()) {
+                self.image_ext(&fi.key.owner);
+            }
+        }
     }
 
     /// 追加的映像对象（下标 ≥ n0：扩展组、镜像缓存组）接入映像状态：活标记扩容、新建的类镜像登记；

@@ -211,7 +211,7 @@ impl Engine<'_> {
             reads_sysprop,
             in_clinit,
             forwarder: cf.as_ref().and_then(|cf| cf.method(&n.key.name, &n.key.desc)).is_some_and(|x| x.is_static())
-                && self.forwarders.get(&n.key).is_some_and(|&s| s != 0),
+                && self.ctx.forwarders.borrow().get(&n.key).is_some_and(|&s| s != 0),
             hub_min: HUB_MIN,
         }
     }

@@ -60,8 +60,9 @@ impl<'a> Engine<'a> {
             a.push(f);
         }
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
+        // 反射对象查找 / 复制入口的结果按标记建模（`method_marks.rs`）时不接被调方返回值；
         // 按键查找入口的结果先经闸门（`keyed.rs`）
-        let res = Some(self.keyed_res(m, off, &resolved, pargs));
+        let res = if self.method_marks_site(m, off, opcode, mref, args) { None } else { Some(self.keyed_res(m, off, &resolved, pargs)) };
         let recv_feeds = |e: &mut Self| match recv_v {
             Some(v) => e.feeds(m, v, owner),
             None => vec![Feed::S(TypeSet::open(owner))],
@@ -84,6 +85,7 @@ impl<'a> Engine<'a> {
                 let load = self.man.names.is_class_load(&key);
                 let (named, top) = if load || self.man.names.is_class_lookup(&key) { self.class_lookup(m, off, args) } else { (vec![], true) };
                 let t = self.method_ctx(resolved, ctx, via);
+                self.site_linked(m, off, t);
                 self.edge(m, off, t, Recv::None, &a, ret, if top { res } else { None });
                 for c in named {
                     self.named_class(m, off, &c, !load);
@@ -185,13 +187,9 @@ impl<'a> Engine<'a> {
                     }
                     return;
                 }
-                // open(o) 的接收者（G 中 ⊂ o 者）被同一值集里另一 open 超类型的枢纽涵盖：只接后者，目标与结果相同
                 let opens: Vec<u32> = opens.unwrap_or_default().iter().collect();
                 let mut hubs = Vec::new();
-                for &o in &opens {
-                    if opens.iter().any(|&p| p != o && self.sub(o, p)) {
-                        continue;
-                    }
+                for o in self.open_roots(&opens) {
                     let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                     hubs.push(h);
@@ -201,6 +199,18 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+    }
+
+    /// 值集的 open 类型中各自建枢纽者：open(o) 的接收者（G 中 ⊂ o 者）被同一值集里另一 open 超类型的枢纽涵盖时
+    /// 只接后者，目标与结果相同
+    pub(super) fn open_roots(&mut self, opens: &[u32]) -> Vec<u32> {
+        let mut out = Vec::with_capacity(opens.len());
+        for &o in opens {
+            if !opens.iter().any(|&p| p != o && self.sub(o, p)) {
+                out.push(o);
+            }
+        }
+        out
     }
 
     /// 接收者 r 上分派已解析方法

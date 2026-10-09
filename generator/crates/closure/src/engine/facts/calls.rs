@@ -18,10 +18,11 @@ impl Ctx<'_> {
         let k = m.to_string();
         let fact = self.man.return_fact(&k).map(fact_value);
         // 类型取返回描述符（absint 对 ty = None 的调用结果按描述符补齐），来源由 absint 换成本调用点
+        let caller_class = self.man.returns_caller_class(&k);
         let nonnull_ret = if self.man.empty.is_factory(&k) {
             Some(V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: Some(Rc::new(crate::absint::Obj::Empty)) })
         } else {
-            self.man.returns_caller_class(&k).then(nonnull_ref)
+            caller_class.then(nonnull_ref)
         };
         let empty_query = self.man.empty.query(&m.name, &m.desc).map(fact_value);
         let target = self
@@ -66,9 +67,27 @@ impl Ctx<'_> {
             empty_query,
             str_kind,
             shape,
+            caller_class,
         });
         self.calls.borrow_mut().entry(m.clone()).or_default().push((opcode, iface, c.clone()));
         c
+    }
+
+    /// 接收者带构造完成标签（`Obj::Fields`）的虚 / 接口调用按标签所示的类选出的目标（JVMS §5.4.6）；只取字节码方法。
+    /// 标签的字段键取自 `new` 出的类自己的 final 实例字段（`construct.rs`），其声明类即对象的运行期类；
+    /// 标签只在合流两侧相同时保留，故带标签的值只可能是该类的对象（值的静态类型可经 checkcast 放宽，不用它）
+    pub(in crate::engine) fn tagged_target(&self, opcode: u8, m: &MemberRef, iface: bool, recv: Option<&V>) -> Option<MemberRef> {
+        use classfile::op;
+        if !matches!(opcode, op::INVOKEVIRTUAL | op::INVOKEINTERFACE) {
+            return None;
+        }
+        let Some(crate::absint::Obj::Fields(fs)) = recv.and_then(V::obj).map(|o| &**o) else { return None };
+        let cls = &fs.first()?.0.owner;
+        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
+        let sel = self.h.select(cls, &site)?;
+        let (o, n, d) = sel.key();
+        let tm = sel.class.method(&n, &d)?;
+        (tm.code.is_some() && self.kind_of(&sel.class, tm) == Kind::Bytecode).then_some(MemberRef { owner: o, name: n, desc: d })
     }
 
     /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）

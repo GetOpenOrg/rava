@@ -14,8 +14,8 @@ pub enum Ret {
 }
 
 pub trait Oracle {
-    /// 调用结果（返回值事实 / null→false 纯函数 / 被调方法的返回常量）
-    fn invoke_result(&self, opcode: u8, m: &MemberRef, iface: bool, args: &[V]) -> Ret;
+    /// 调用结果（返回值事实 / null→false 纯函数 / 被调方法的返回常量）；off = 调用指令偏移
+    fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret;
     /// 字段读（getstatic / getfield）的常量值；recv = getfield 的接收者
     fn field(&self, opcode: u8, f: &MemberRef, recv: Option<&V>) -> Option<V>;
     /// getfield 的结果：缺省取 [`Self::field`]；Never = 乐观假设下尚无可读到的值（按对象读的 ⊥，见引擎 `obj_fields.rs`），
@@ -53,6 +53,11 @@ pub trait Oracle {
     /// （方法体为接收者钩子字段的平凡取值时按 [`Oracle::param_mirror_field`] 读该字段），乐观答复同 [`Oracle::param_mirror_field`]
     /// （记入 [`Analysis::mirror_field_assumed`]）；None = 未知
     fn param_mirror_call(&self, _i: u16, _m: &MemberRef) -> Option<V> {
+        None
+    }
+    /// 偏移 off 处调用产出的 Class 值（如 @CallerSensitive 方法体内取调用者类）为接收者调用 m：该值的类镜像值集已知、
+    /// 且每个镜像上 m 的结果由类的事实定出时为该结果，乐观答复记入 [`Analysis::site_mirror_assumed`]；None = 未知
+    fn site_mirror_call(&self, _off: u32, _m: &MemberRef) -> Option<V> {
         None
     }
     /// 是否为类镜像子类型判定（清单 `[facts.reflect] mirror_subtype_tests`，`K.isAssignableFrom(x)` 形态：
@@ -133,6 +138,8 @@ pub struct Analysis {
     pub mirror_assumed: Vec<(u16, String)>,
     /// 按形参镜像值集折叠了 VM 注入字段读的形参序号（[`Oracle::param_mirror_field`]）——形参值集增长后需重分析
     pub mirror_field_assumed: Vec<u16>,
+    /// 按调用点产出的类镜像值集折叠了实例调用（[`Oracle::site_mirror_call`]）——该值集增长后需重分析
+    pub site_mirror_assumed: bool,
     /// 无法建模、按全部可达保守处理
     pub conservative: bool,
     /// 基本块控制流图（拼接链拆段的循环判定用）

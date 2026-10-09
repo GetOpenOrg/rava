@@ -25,7 +25,8 @@ impl<'a> Engine<'a> {
             } else if let Some(cls) = self.man.defined_class(&key.to_string()).map(str::to_string) {
                 let k = self.mirror(&cls);
                 self.add_to(Node::R(m), &TypeSet::exact(k));
-            } else if !self.man.returns_receiver(&key.to_string()) && !reads {
+            } else if !self.man.returns_receiver(&key.to_string()) && !reads && !self.man.direct_invokers.is_native(&key.to_string()) {
+                // 直连 helper 的 native：目标返回值由直连调用点逐目标流入调用点结果（`reflect_direct.rs`）
                 open_ret = Some(rt);
             }
         }
@@ -100,7 +101,8 @@ impl<'a> Engine<'a> {
             || self.man.returns_primitive_class(&ks)
             || self.man.defined_class(&ks).is_some()
             || self.man.array_allocator(&ks).is_some()
-            || self.man.returns_static_base(&ks);
+            || self.man.returns_static_base(&ks)
+            || self.man.direct_invokers.is_native(&ks);
         let rt = self.methods[m].rtype.filter(|_| !modeled);
         let is_static = self.methods[m].is_static;
         for t in self.hw_exports(&key.owner, &mh, rt, is_static) {

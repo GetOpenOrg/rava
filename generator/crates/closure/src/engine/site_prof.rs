@@ -18,7 +18,9 @@ pub(super) const TRIG_SERVICES: u8 = TRIG_REOPEN + 4;
 pub(super) const TRIG_TAINT: u8 = TRIG_REOPEN + 5;
 pub(super) const TRIG_RELEASE: u8 = TRIG_REOPEN + 6;
 pub(super) const TRIG_PATTERN: u8 = TRIG_REOPEN + 7;
-const TRIG_NAMES: [&str; 8] = ["reopen", "pstr", "pstr_wake", "pstr_reanalyzed", "services", "taint", "release", "pattern"];
+/// 无名字查找点的共享反射对象标记所指增长（`method_marks.rs`）
+pub(super) const TRIG_MARK_ALL: u8 = TRIG_REOPEN + 8;
+const TRIG_NAMES: [&str; 9] = ["reopen", "pstr", "pstr_wake", "pstr_reanalyzed", "services", "taint", "release", "pattern", "mark_all"];
 
 /// 调用点路径
 pub(super) const PATH_STATIC: u8 = 1;

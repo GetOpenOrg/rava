@@ -15,7 +15,7 @@ test 池 = 云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1（各 15G 内存
 工作流见「十二、工作流与现状」。
 
 ```
-本地 Mac（调度中心，java_rta 主检出）
+本地 Mac（调度中心，rava 主检出）
 ├── scripts/cluster/cluster_config.py    资源阈值、重试策略；读本机服务器清单
 ├── scripts/cluster/env_setup.py         环境初始化（幂等，自动跳过已安装步骤）
 ├── scripts/cluster/distribute_tests.py  主调度器（任务池 + 并发 worker）
@@ -36,7 +36,7 @@ test 池 = 云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1（各 15G 内存
 ### 语料参考 JDK
 
 语料（e2e、抽查、作业）在所有服务器上使用同一个固定 JDK 构建，与本机生成 expected 的构建同源
-（java_rta `tools/refjdk.toml` 钉 tag + 各平台 URL + sha256，方案见 java_rta `docs/plans/2026-10-03-reference-jdk-21.md`）。
+（rava `tools/refjdk.toml` 钉 tag + 各平台 URL + sha256，方案见 rava `docs/plans/2026-10-03-reference-jdk-21.md`）。
 
 - **落位**：服务器数据目录 `config.REFJDK_ROOT = /data/rava-jdk`；remote_dir 不在 /data 的服务器以 `refjdk_root` 键覆盖
   （ubuntu：`/mnt/d/workspace/rava-jdk`）。只写数据目录，不动 apt 包、`/usr/lib/jvm`、update-alternatives 与 shell 配置。
@@ -51,7 +51,7 @@ test 池 = 云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1（各 15G 内存
 
 ### GraalVM 参照基线依赖
 
-java_rta `scripts/graalvm_bench.sh`（JVM / native-image / rava 多条件计时，报告 `docs/reports/2026-10-04-graalvm-baseline.md`）在服务器上的依赖由 `env_setup.py` 第 8 步安装：
+rava `scripts/graalvm_bench.sh`（JVM / native-image / rava 多条件计时，报告 `docs/reports/2026-10-04-graalvm-baseline.md`）在服务器上的依赖由 `env_setup.py` 第 8 步安装：
 
 - **zlib1g-dev**（apt）：Linux 上 native-image 链接需要 `-lz`，缺失时构建报 `cannot find -lz`。
 - **Oracle GraalVM**：`config.GRAALVM_*` 钉版本（21.0.12，与本机 macOS 基线同版）、归档 URL 和 sha256，落到 `<refjdk_root>/graalvm-21/`（与参考 JDK 同盘），只写数据目录，不动 `/usr/lib/jvm`。安装时用 `<refjdk_root>/.graalvm.lock` 互斥，下载校验后原子换入，版本不符就整目录替换。
@@ -416,10 +416,10 @@ flowchart TD
 ## 十、完整命令参考
 
 ```bash
-# 工作目录：java_rta 主检出根目录（服务器清单见 ~/.config/rava/cluster.toml）
+# 工作目录：rava 主检出根目录（服务器清单见 ~/.config/rava/cluster.toml）
 # 现行池（2026-10-08）：不加 --servers 时 test 池 = 7 台云服务器，job 池 = 7 台云服务器 + ubuntu；dev 关机待恢复
 # 被测分支须先推 origin 与 github（云服务器从 GitHub 检出）
-cd ~/dev/workspace/java_rta
+cd ~/dev/workspace/rava
 
 # ── 全量跑批 ──────────────────────────────────────────────────────────────────
 
@@ -490,7 +490,7 @@ uv run --group cluster python scripts/cluster/env_setup.py --check-only        #
 ## 十一、子代理工作流：已知失败 / 合批 / 远端 rava
 
 > 2026-10-04 起（提速四项 ① ②）；2026-10-07 起合入改为合批（11.4、十二 12.1），子代理不自发抽查、不入合入队列。
-> 所有命令在 java_rta 主检出根目录下执行；被测提交须先推送 origin 与 github（dev / ubuntu 从内部仓库取，云服务器从 GitHub 取）。
+> 所有命令在 rava 主检出根目录下执行；被测提交须先推送 origin 与 github（dev / ubuntu 从内部仓库取，云服务器从 GitHub 取）。
 
 ### 11.1 失败日志保全
 
@@ -506,7 +506,7 @@ uv run --group cluster python scripts/cluster/env_setup.py --check-only        #
 
 ### 11.2 已知失败清单
 
-清单在 java_rta `docs/known_failures.toml`（集成分支上的版本为准），条目 `test / signature / owner / since / note`。
+清单在 rava `docs/known_failures.toml`（集成分支上的版本为准），条目 `test / signature / owner / since / note`。
 判定：失败日志含**同名条目**的 signature 子串才算已知；同名而签名不符、OOM、超时一律算新失败。
 修好对应失败的分支，在同一提交里删掉条目；新增条目须写明责任分支 / 任务与登记日期。
 
@@ -521,7 +521,7 @@ uv run --group cluster python scripts/cluster/known_failures.py <spot_tag> [--te
 不复用别人的 tag（守护发现同 tag 下有其他提交的结果会直接 blocked）：
 
 ```bash
-git -C ~/dev/workspace/java_rta push origin <分支>
+git -C ~/dev/workspace/rava push origin <分支>
 uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot c1dt2-1a2b3c4d \
     --ref <40 位 sha> --per-dir 0 --tests StockTrans TestSerialDefaultSuid HelloWorld
 uv run --group cluster python scripts/cluster/known_failures.py c1dt2-1a2b3c4d --tests StockTrans TestSerialDefaultSuid HelloWorld
@@ -559,7 +559,7 @@ compile 模式与 run_tests 一致分两段（`build --stop-after emit` 再 `rav
 - 四件工具（原在 server_maintenance `dist-tools` 分支，2026-10-07 随全部分发脚本迁入 `scripts/cluster/`）：`failure_extract.py` + `dist_e2e.py`（日志保全）、`known_failures.py`、
   `merge_queue.py` + `merge_daemon.py`、`remote_rava.py`；单元测试 `tests/unit/cluster/test_merge_queue.py`、`tests/unit/cluster/test_merge_daemon.py`。
 - 已知失败清单 `docs/known_failures.toml` 已并入集成分支（原在 `dist-known-failures` 分支 3ac45c90）。
-- 守护**未启用、不再使用**：2026-10-07 起合入走合批（11.4）；试运行一律 `--dry-run`（演练 worktree `~/dev/workspace/java_rta_dryrun_wt`）。
+- 守护**未启用、不再使用**：2026-10-07 起合入走合批（11.4）；试运行一律 `--dry-run`（演练 worktree `~/dev/workspace/rava_dryrun_wt`）。
 - 未覆盖 / 已知局限：
   - 正式路径的推送 / 主仓快进 / 删分支 / push_pending 续推只由单元测试（临时仓库 + 裸远端）覆盖，真实远端未推过；
   - `generator+macros_core`、`generator+rava_coro` 闸门变体未真实跑过（命令与 generator 同构，仅多一步）；
@@ -572,7 +572,7 @@ compile 模式与 run_tests 一致分两段（`build --stop-after emit` 再 `rav
 ### 11.7 试运行记录（2026-10-04）
 
 格式：输入 → 预期 → 实际（异常与修复）。tag 均以 `tools-` 开头；守护均为 `--dry-run`，集成 worktree、主仓 main、
-两远端在整个试运行期间保持协调者自己的提交（3c094c1d），未被守护改动。临时 java_rta 分支：`tools-trial-ok`
+两远端在整个试运行期间保持协调者自己的提交（3c094c1d），未被守护改动。临时 rava 分支：`tools-trial-ok`
 （7b124b9b，注释改动）、`tools-trial-gatefail`（643b3066，`#[cfg(test)]` E0308）、`tools-trial-conflict`（b1ef22a1，
 与集成分支同处改 tasks.md）、`tools-trial-doc`（a7ba160a，只改文档），试运行结束后删除。
 
@@ -665,8 +665,8 @@ rust-closure-analyzer 与 main 均只随协调者自己的提交前进。
   `tools-co-3` emit HelloWorld `-- --perf` @34001bde rc 0（2.6s / 287MB）；三者 `checkouts.json` 均为空，
   8 台服务器上没有 `tools-` 检出。
 
-试运行收尾：临时分支 `tools-trial-*` 已从本地、origin、github 删除，`java_rta_tools_trial` worktree 已移除；
-演练 worktree `java_rta_dryrun_wt` 保留，守护每次演练前自动重置。
+试运行收尾：临时分支 `tools-trial-*` 已从本地、origin、github 删除，`rava_tools_trial` worktree 已移除；
+演练 worktree `rava_dryrun_wt` 保留，守护每次演练前自动重置。
 
 ## 十二、工作流与现状（2026-10-08）
 

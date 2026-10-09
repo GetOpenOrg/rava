@@ -48,6 +48,7 @@ fn maps() -> ValueMaps {
         classes: ["a/M".to_string()].into(),
         writers: ["put:(La/K;La/K;)La/K;".to_string()].into(),
         readers: ["get:(La/K;)La/K;".to_string()].into(),
+        ..Default::default()
     }
 }
 
@@ -250,4 +251,24 @@ fn builder_prefix_statements_in_order() {
     assert_eq!(lits, vec![vec![Rc::from("x")], vec![Rc::from("y")], vec![Rc::from("z")]]);
     let a = absint::analyze("a/H", "(Z)V", true, &builder_statements(true), &Plain);
     assert!(builder_prefix(&f, &a, 0, 31).is_none());
+}
+
+/// 实例字段：`this.m = new M(c)`——比较器构造（`empty_ctors`）新建即空，写入 putfield 本字段成立；未列为空构造时不给候选
+#[test]
+fn map_writes_instance_field_with_empty_ctor() {
+    let f = map_field();
+    let c = code(vec![
+        i(0, ALOAD_0, Operand::None),
+        i(1, op::NEW, Operand::Class("a/M".into())),
+        i(4, DUP, Operand::None),
+        i(5, ALOAD_1, Operand::None),
+        i(6, op::INVOKESPECIAL, Operand::Method(mref("a/M", "<init>", "(La/C;)V"), false)),
+        i(9, op::PUTFIELD, Operand::Field(f.clone())),
+        i(12, op::RETURN, Operand::None),
+    ]);
+    let a = absint::analyze("a/H", "(La/C;)V", false, &c, &Plain);
+    assert!(!a.conservative);
+    let with_empty = ValueMaps { empty_ctors: ["<init>:(La/C;)V".to_string()].into(), ..maps() };
+    assert_eq!(map_writes(&a, 1, &f, &with_empty), Some(vec![]));
+    assert_eq!(map_writes(&a, 1, &f, &maps()), None);
 }

@@ -48,6 +48,7 @@ mod reflect;
 mod reflect_call;
 mod reflect_call_pool;
 mod reflect_direct;
+mod method_marks;
 use reflect_call::{RHook, RcallMember};
 mod flow;
 mod bytecode;
@@ -99,6 +100,7 @@ mod builder;
 mod name_eval;
 mod name_ops;
 mod sealed;
+mod map_slot;
 mod nest;
 mod method_lookup;
 mod lookup_pair;
@@ -132,6 +134,7 @@ mod image_memo;
 mod image_start;
 mod static_init;
 mod jca_order;
+mod site_rets;
 
 use graph::FlowGraph;
 use share::Dep;
@@ -183,7 +186,7 @@ const ARRAY_RET: u32 = u32::MAX - 2;
 /// 站点键：@CallerSensitive 方法的调用者类镜像集（`[facts.reflect] caller_class` 在该方法体内的返回值，见 `caller.rs`）
 const CALLER: u32 = u32::MAX - 3;
 /// 反射数组分配（`Array.newInstance`）逐元素类型建分配点的元素维数上限：元素类镜像所指已是这么多维的数组时，
-/// 结果按 open(Object) 概括（见 `reflect.rs::deep_mirror`）
+/// 结果按 open(`[[Object`) 概括（见 `reflect.rs::deep_mirror`）
 const REFLECT_ARRAY_DIMS: usize = 2;
 /// 数组元素节点的下标奇偶槽
 const PARITIES: [u8; 2] = [0, 1];
@@ -306,8 +309,6 @@ pub struct Engine<'a> {
     dflt_alloc: HashSet<u32>,
     /// 新鲜工厂方法判定缓存（按成员）
     factories: HashMap<MemberRef, bool>,
-    /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward`）
-    forwarders: HashMap<MemberRef, u64>,
     /// 内存访问中继槽判定缓存（按成员）：流到手写内存访问成员内存槽的形参槽；非空即继承调用方上下文（`relay`）
     relays: relay::RelayCache,
     pub inited: IndexMap<String, Via>,
@@ -370,6 +371,17 @@ pub struct Engine<'a> {
     /// （单调：此后恒按原入口接边，已接的直连边保留）
     rdirect: HashMap<(usize, u32), MemberRef>,
     rdirect_fallback: HashSet<(usize, u32)>,
+    /// 直连调用点上各实例目标的 lambda / 手写层对象接收者最近一次的精确集合枢纽与集合（同 `hub_last`，按目标分开）
+    rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
+    /// 直连调用点上各实例目标已接的精确接收者与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
+    rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
+    /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
+    rmarks: HashMap<u32, method_marks::MethodMark>,
+    rmark_fallback: HashSet<(usize, u32)>,
+    /// 无名字查找点的共享标记（`MethodMark::All`）→ 所指类集（随查找类值集增长）与读取其所指的直连调用点
+    /// （所指增长时重跑）
+    rmark_all: HashMap<u32, BTreeSet<String>>,
+    rmark_readers: HashMap<u32, BTreeSet<(usize, u32)>>,
     rcall_stats: reflect_call::RcallStats,
     /// 各通道实参池中待定的值：是否被池中 open 涵盖、进不进去冗余视图 RN，到工作队列排空时判定（`reflect_call.rs`）
     rcall_rn_pending: [IdSet; 2],
@@ -443,6 +455,14 @@ pub struct Engine<'a> {
     obj_dirty: BTreeMap<usize, obj_fields::ObjDirty>,
     /// 方法节点 → 各次分析返回值之并（按接收者对象归属的来源，见 `obj_rets.rs`）
     nret: HashMap<usize, PV>,
+    /// 静态调用点 (方法节点, 偏移) → 所接方法节点（见 `site_rets.rs`）
+    site_nodes: HashMap<(usize, u32), usize>,
+    /// 方法 → 最近一次分析所用的静态调用点答复表
+    site_used: HashMap<usize, site_rets::SiteTable>,
+    /// 克隆的静态方法节点 → 各次分析返回值之并
+    sret: HashMap<usize, PV>,
+    /// 克隆的静态方法节点 → 按其返回值答复过调用点的方法
+    sret_readers: HashMap<usize, BTreeSet<usize>>,
     /// 已有返回值的实例方法节点的接收者形参节点：值集增长时把节点返回值补归属到新对象
     oret_watch: HashSet<Node>,
     /// 按对象接收者来源的候选站点（方法键 → 偏移，`obj_fields.rs::obj_site_cands`）

@@ -125,6 +125,8 @@ struct Interp<'a, O: Oracle> {
     assumed: Vec<(u16, String)>,
     /// 已作出的形参镜像字段答复（形参序号）
     field_assumed: Vec<u16>,
+    /// 已作出调用点镜像值集答复
+    site_assumed: bool,
     /// 见 [`Analysis::selector_params`]
     selects: u64,
 }
@@ -179,12 +181,22 @@ impl<O: Oracle> Interp<'_, O> {
     }
 
     /// 接收者只来自一个 Class 形参的实例调用按形参镜像值集求结果（记为乐观答复）
+    /// 接收者只来自一个调用点产出的 Class 值时按该调用点的类镜像值集求结果（同样记为乐观答复）
     fn param_mirror_call(&mut self, recv: Option<&V>, m: &MemberRef) -> Option<V> {
         let Some(V::Ref { src, .. }) = recv else { return None };
-        let [Src::Param(i)] = &src[..] else { return None };
-        let v = self.oracle.param_mirror_call(*i, m)?;
-        self.field_assumed.push(*i);
-        Some(v)
+        match &src[..] {
+            [Src::Param(i)] => {
+                let v = self.oracle.param_mirror_call(*i, m)?;
+                self.field_assumed.push(*i);
+                Some(v)
+            }
+            [Src::Site(o)] => {
+                let v = self.oracle.site_mirror_call(*o, m)?;
+                self.site_assumed = true;
+                Some(v)
+            }
+            _ => None,
+        }
     }
 }
 

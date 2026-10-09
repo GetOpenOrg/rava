@@ -9,7 +9,7 @@ struct Stub {
 }
 
 impl Oracle for Stub {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -114,7 +114,7 @@ fn instanceof_dead_type_still_has_else_side() {
 struct Mirrors(Option<Vec<&'static str>>);
 
 impl Oracle for Mirrors {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -159,7 +159,7 @@ fn class_literal_eq_folds_by_param_mirrors() {
 struct Sets;
 
 impl Oracle for Sets {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -223,7 +223,7 @@ fn final_static_read_after_put() {
 struct Offsets;
 
 impl Oracle for Offsets {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, f: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -279,7 +279,7 @@ fn empty_collection_tag_join() {
 struct SubTests;
 
 impl Oracle for SubTests {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -339,7 +339,7 @@ fn mirror_subtype_test_narrows_true_side() {
 struct KeyTests;
 
 impl Oracle for KeyTests {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -445,7 +445,7 @@ fn key_test_skips_rewritten_local() {
 struct MirrorField(Option<V>);
 
 impl Oracle for MirrorField {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -509,7 +509,7 @@ fn const_length_array_folds_arraylength() {
 struct ImageGetter([Option<u32>; 2]);
 
 impl Oracle for ImageGetter {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {
@@ -557,7 +557,7 @@ fn image_object_results_compare_by_identity() {
 struct StaticNonNull(Option<V>);
 
 impl Oracle for StaticNonNull {
-    fn invoke_result(&self, _: u8, _: &MemberRef, _: bool, _: &[V]) -> Ret {
+    fn invoke_result(&self, _: u8, _: u32, _: &MemberRef, _: bool, _: &[V]) -> Ret {
         Ret::Unknown
     }
     fn field(&self, _: u8, _: &MemberRef, _: Option<&V>) -> Option<V> {

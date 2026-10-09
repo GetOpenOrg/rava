@@ -70,8 +70,8 @@ impl Ctx<'_> {
         if spec.receiver && !args.first().is_some_and(|v| v.obj().is_some_and(|o| **o == Obj::SysProps)) {
             return None;
         }
-        self.note_props(Some(me));
-        {
+        if !spec.snapshot {
+            self.note_props(Some(me));
             let u = self.punstable.borrow();
             if u.all || u.keys.iter().any(|k| parts_match(p, k)) {
                 return None;
@@ -110,6 +110,8 @@ impl Engine<'_> {
             let f = Frame { m: Some(m), a: &a, owner: &owner, up: None };
             self.name_parts(&f, key, Gap::Class, 0).and_then(|p| expand(&p)).map(Rc::from)
         };
+        // 首次登记同样触发重算：登记前该读取点答复 ⊥（`sysprops.rs` derived_result）
+        let first = self.ctx.pkeys_seen.borrow_mut().insert((m, o));
         let changed = {
             let mut pk = self.ctx.pkeys.borrow_mut();
             match pats {
@@ -117,7 +119,7 @@ impl Engine<'_> {
                 None => pk.remove(&(m, o)).is_some(),
             }
         };
-        if changed {
+        if first || changed {
             self.pkey_dirty.insert(m);
         }
     }

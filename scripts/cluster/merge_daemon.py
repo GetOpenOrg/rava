@@ -11,7 +11,7 @@
 
 每条的处理：
   1. 抽查：名单为空只允许 doc-only；抽查进程不在跑且结果不全 → 发起 / 重发（断线、infra 失败后续跑，
-     至多 MAX_SPOT_LAUNCHES 次）；在跑 → 等下一轮；完成 → 按 java_rta docs/known_failures.toml 判定，
+     至多 MAX_SPOT_LAUNCHES 次）；在跑 → 等下一轮；完成 → 按 rava docs/known_failures.toml 判定，
      有新失败（含同名签名不符）→ blocked 并写新失败摘要。
   2. 合并（--dry-run 时在独立演练 worktree 里做，不动集成分支、不推送）：集成 worktree 须在
      rust-closure-analyzer 上且无已跟踪改动；git merge -q --no-ff；冲突 → merge --abort，blocked。
@@ -42,8 +42,8 @@ from cluster_config import RESULTS_DIR  # noqa: E402
 LOG_PATH = RESULTS_DIR / "merge_daemon.log"
 from cluster_config import REPO_ROOT as MAIN_REPO  # noqa: E402
 WS = MAIN_REPO.parent
-INTEG_WT = WS / "java_rta_closure_wt"
-DRYRUN_WT = WS / "java_rta_dryrun_wt"
+INTEG_WT = WS / "rava_closure_wt"
+DRYRUN_WT = WS / "rava_dryrun_wt"
 HEAVY_LOCK = WS / "heavy_lock.py"
 INTEG_BRANCH = "rust-closure-analyzer"
 REMOTES = ("origin",)
@@ -499,7 +499,7 @@ def main(argv=None) -> int:
     ap.add_argument("--integ-wt", default=str(INTEG_WT))
     ap.add_argument("--main-repo", default=str(MAIN_REPO))
     ap.add_argument("--dry-run-wt", default=str(DRYRUN_WT))
-    ap.add_argument("--known", help="known_failures.toml 路径（缺省读 java_rta 集成分支上的版本）")
+    ap.add_argument("--known", help="known_failures.toml 路径（缺省读 rava 集成分支上的版本）")
     ap.add_argument("--log", default=str(LOG_PATH))
     ap.add_argument("--results-dir", default=str(RESULTS_DIR))
     sub = ap.add_subparsers(dest="sub")

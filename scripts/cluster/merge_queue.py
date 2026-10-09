@@ -4,7 +4,7 @@
 
   提交方填写：
     id            条目号（缺省 = spot tag）
-    branch        分支名（java_rta 仓库）
+    branch        分支名（rava 仓库）
     sha           完整 40 位提交哈希（已推送 origin）
     spot          抽查 tag（结果在 test_results/spot/<tag>/）
     tests         抽查用例名单（空 = 不抽查，仅 doc-only 允许）

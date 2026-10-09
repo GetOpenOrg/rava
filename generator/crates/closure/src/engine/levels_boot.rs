@@ -81,7 +81,7 @@ impl Engine<'_> {
     /// 档位上下文中触发的类初始化：超类链、带默认方法的超接口、`<clinit>` 在档位上下文中登记
     /// （映像中已初始化的类运行期不再初始化）
     pub(super) fn level_init(&mut self, cls: &str, lc: u32) {
-        if cls.starts_with('[') || self.img.as_ref().is_some_and(|s| s.is_build_time(cls)) {
+        if cls.starts_with('[') || self.image_settled_build_time(cls) {
             return;
         }
         if !self.level_inited.insert((cls.to_string(), lc)) {
@@ -102,6 +102,16 @@ impl Engine<'_> {
             let k = MemberRef { owner: cls.to_string(), name: "<clinit>".into(), desc: "()V".into() };
             self.method_ctx(k, lc, Via::class("clinit", cls));
         }
+    }
+
+    /// cls 是构建期初始化类。尚未尝试过的类先尝试构建期初始化（与 [`Engine::init`] 同一口径；档位上下文触发的
+    /// 初始化在本体中同样触发，尝试只是提前），使判定只取决于类本身的结局、与它此前是否经别的路径尝试过无关
+    fn image_settled_build_time(&mut self, cls: &str) -> bool {
+        let Some(s) = self.img.as_ref() else { return false };
+        if s.is_build_time(cls) {
+            return true;
+        }
+        !self.inited.contains_key(cls) && self.image_ext(cls)
     }
 
     /// 残差步骤的被调方法作根（ctx = 档位上下文或 NOCTX；形参取构建期记录的实参，无记录时 open；

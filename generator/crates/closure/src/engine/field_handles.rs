@@ -16,7 +16,7 @@ use super::*;
 pub(super) type EnumScope = (bool, Option<String>);
 
 /// 标记数组的伪分配偏移（与字节码偏移不相交：字节码偏移 < 2^16）
-const MARK_ARRAY: u32 = 0x4000_0000;
+pub(super) const MARK_ARRAY: u32 = 0x4000_0000;
 
 impl<'a> Engine<'a> {
     /// 字段枚举（cls = 接收者 Class 值所指的类，None = 推不出）：句柄写入口已按保守口径可达时放开，

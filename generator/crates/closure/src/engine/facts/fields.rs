@@ -33,6 +33,33 @@ impl Ctx<'_> {
             || deser && deser_writes(fi.access, fi.serializable)
     }
 
+    /// 显式声明序列化字段面的类（清单 `serial_persistent_fields`：private static final 的该名该型字段）：
+    /// 默认序列化 / 反序列化只按声明里的名字绑定本类字段，其余字段不经偏移读写。名字取自 `<clinit>` 的字符串常量
+    /// （声明数组的元素按名字构造）；`<clinit>` 从它类静态字段 / 方法调用取得同型数组时名字推不出，按未声明处理
+    fn serial_declared(&self, owner: &str) -> Option<HashSet<String>> {
+        use classfile::{op, Const, Operand};
+        let cf = self.h.class(owner)?;
+        let need = acc::PRIVATE | acc::STATIC | acc::FINAL;
+        let (_, desc) = self
+            .man
+            .serial_persistent_fields()
+            .iter()
+            .find(|(n, d)| cf.fields.iter().any(|f| f.name == *n && f.desc == *d && f.access & need == need))?;
+        let code = cf.method("<clinit>", "()V")?.code.as_ref()?;
+        let mut names = HashSet::default();
+        for x in &code.insns {
+            match &x.operand {
+                Operand::Ldc(Const::String(s)) => {
+                    names.insert(s.clone());
+                }
+                Operand::Field(f) if x.opcode == op::GETSTATIC && f.owner != cf.name && f.desc == *desc => return None,
+                Operand::Method(m, _) if m.desc.rsplit_once(')').is_some_and(|(_, r)| r == desc) => return None,
+                _ => {}
+            }
+        }
+        Some(names)
+    }
+
     pub(in crate::engine) fn field_info(&self, f: &MemberRef) -> Option<Rc<FieldInfo>> {
         if let Some(fi) = self.fields.borrow().get(f) {
             return fi.clone();
@@ -44,12 +71,13 @@ impl Ctx<'_> {
             let injected = self.man.is_injected_static(&key.owner, &key.name);
             // VM 状态字段（清单字段钩子）由钩子落地写入，同属字节码外的写入来源
             let open = injected
-                || matches!(self.domain(&key.owner), Domain::Boundary | Domain::Root)
+                || self.boundary_field(&key.owner, &key.name)
                 || !self.hw.member(&key.owner, &key.name).fns.is_empty()
                 || self.man.vm_state.field_hook(&key.owner, &key.name, &key.desc).is_some();
             let constant = if injected { None } else { fd.constant_value.clone() };
             let markers = self.man.serializable_markers();
-            let serializable = markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x));
+            let serializable = (markers.is_empty() || markers.iter().any(|x| self.h.is_subtype(&key.owner, x)))
+                && self.serial_declared(&key.owner).is_none_or(|names| names.contains(&key.name));
             Rc::new(FieldInfo { key, access: fd.access, constant, open, serializable })
         });
         self.fields.borrow_mut().insert(f.clone(), fi.clone());
@@ -117,7 +145,7 @@ impl Ctx<'_> {
         let mut puts: HashMap<(&str, &str), Vec<Option<V>>> = HashMap::default();
         let a = cls.method("<clinit>", "()V").and_then(|m| m.code.as_ref()).map(|code| {
             let live = |_: &str| true;
-            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default() })
+            self.aux_analyze(&cls.name, "()V", true, code, &Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) })
         });
         for (_, e) in a.iter().flat_map(|a| &a.events) {
             if let Event::Field { opcode: classfile::op::PUTSTATIC, mref, value, .. } = e {

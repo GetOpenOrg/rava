@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use closure::image::{IBody, IExpr, ILoc, IReloc, IStep, IVal};
 use ty::type_map::{parse_descriptor_params, parse_descriptor_return};
 
-use super::values::{bits, obj_ref, prim_rust, Link, LinkLoc};
+use super::values::{bits, prim_rust, Link, LinkLoc};
 use super::{Plan, START_FN};
 use crate::error::{EmitError, Result};
 
@@ -33,11 +33,11 @@ fn split_member(key: &str) -> Result<(&str, &str, &str)> {
 fn store_ref(p: &Plan<'_, '_>, loc: &LinkLoc, v: &str) -> String {
     match loc {
         LinkLoc::Field(o, cls, rust) => {
-            format!("<{} as From<Object>>::from({}).__set_{rust}(From::from({v}));", p.full_ty(cls), obj_ref(*o))
+            format!("<{} as From<Object>>::from({}).__set_{rust}(From::from({v}));", p.full_ty(cls), p.obj_ref(*o))
         }
         LinkLoc::Elem(o, j) => {
             let t = p.elem_rust(&p.obj(*o).ty[1..]);
-            format!("JArray::<{t}>::__image(&BOOT_IMAGE.o{o}.value).set({j}, From::from({v}))?;")
+            format!("JArray::<{t}>::__image(&{}.value).set({j}, From::from({v}))?;", p.img(*o))
         }
     }
 }
@@ -73,7 +73,7 @@ impl Gen<'_, '_, '_> {
         if o.placeholder {
             return self.bound.contains(&t).then(|| format!("ph{t}.clone()"));
         }
-        self.p.mat.contains(&t).then(|| obj_ref(t))
+        self.p.mat.contains(&t).then(|| self.p.obj_ref(t))
     }
 
     /// 值按描述符 `desc` 的 Rust 表达式（引用经 `From::from` 转为目标类型）
@@ -231,11 +231,11 @@ impl Gen<'_, '_, '_> {
             }
             ILoc::Field(o, decl, n) => {
                 let slot = p.slot(*o, decl, n)?;
-                format!("<{} as From<Object>>::from({}).__set_{}({v});", p.full_ty(&p.obj(*o).ty), obj_ref(*o), slot.rust)
+                format!("<{} as From<Object>>::from({}).__set_{}({v});", p.full_ty(&p.obj(*o).ty), p.obj_ref(*o), slot.rust)
             }
             ILoc::Elem(o, j) => {
                 let t = p.elem_rust(&p.obj(*o).ty[1..]);
-                format!("JArray::<{t}>::__image(&BOOT_IMAGE.o{o}.value).set({j}, {v})?;")
+                format!("JArray::<{t}>::__image(&{}.value).set({j}, {v})?;", p.img(*o))
             }
         };
         self.line(&s);
@@ -310,11 +310,37 @@ fn static_setter(p: &Plan<'_, '_>, cls: &str, name: &str) -> Option<String> {
     Some(acc)
 }
 
-/// 启动函数文本
+/// 无局部绑定区段每个分段函数的语句数上限。启动序列逐条语句独立（无跨语句局部），整段放进一个函数时
+/// rustc 对单个函数体的分析（MIR 构建、借用检查的活跃性数据流）随语句数超线性增长；分段后每个函数体
+/// 规模有界，编译峰值只随映像规模线性增长。
+const SEG_STMTS: usize = 256;
+
+/// 把无局部绑定的语句行按 [`SEG_STMTS`] 条一段发射为独立函数 `__start_{k}`，返回依次调用它们的语句
+fn segment(body: &str, fns: &mut String, next: &mut usize) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut calls = String::new();
+    for chunk in lines.chunks(SEG_STMTS) {
+        let k = *next;
+        *next += 1;
+        let _ = write!(fns, "#[inline(never)]\nfn __start_{k}() -> Result<()> {{\n");
+        for l in chunk {
+            let _ = writeln!(fns, "{l}");
+        }
+        fns.push_str("    Ok(())\n}\n\n");
+        let _ = writeln!(calls, "    __start_{k}()?;");
+    }
+    calls
+}
+
+/// 启动函数文本：`__start` 依次调用分段函数；宿主值改写（局部限于本区段）独立成函数；重放步骤的占位 /
+/// 重算绑定跨步骤存活，留在 `__start` 体内
 pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
     let mut g = Gen { p, out: String::new(), bound: BTreeSet::new(), evaluated: BTreeSet::new(), ph_refs: BTreeMap::new() };
     let d = p.d;
-    g.line("__image_register(&BOOT_IMAGE as *const __BootImage as *const u8, ::std::mem::size_of::<__BootImage>());");
+    let segs: Vec<String> = (0..p.nseg)
+        .map(|k| format!("(&BOOT_IMAGE_{k} as *const __BootImage{k} as *const u8, ::std::mem::size_of::<__BootImage{k}>())"))
+        .collect();
+    g.line(&format!("__image_register(&[{}]);", segs.join(", ")));
     for (name, v) in &d.cells {
         g.line(&format!("rt::vm_cell({name:?}, {v}i64);"));
     }
@@ -323,7 +349,7 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
         if !p.mat.contains(&t) {
             return Err(EmitError::Input(format!("引导映像的初始线程 #{t} 未物化")));
         }
-        g.line(&format!("rt::bind_initial_thread({});", obj_ref(t)));
+        g.line(&format!("rt::bind_initial_thread({});", p.obj_ref(t)));
     }
     // 链接：常量不可表达的映像内引用与类镜像；占位对象留到其步骤
     for l in links {
@@ -369,10 +395,18 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             }
         }
     }
+    let mut fns = String::new();
+    let mut next = 0usize;
+    let mut main = segment(&std::mem::take(&mut g.out), &mut fns, &mut next);
     host_rewrite(&mut g)?;
+    let host = std::mem::take(&mut g.out);
+    if !host.is_empty() {
+        let _ = write!(fns, "#[inline(never)]\nfn __start_host() -> Result<()> {{\n{host}    Ok(())\n}}\n\n");
+        main.push_str("    __start_host()?;\n");
+    }
     for &s in &d.strings {
         if p.mat.contains(&s) {
-            g.line(&format!("rt::intern({});", obj_ref(s)));
+            g.line(&format!("rt::intern({});", p.obj_ref(s)));
         }
     }
     // VM 模块表（§5.5.1 S5）：映像中的模块与其定义加载器登记为运行期 VM 模块表的初值（类镜像的模块按
@@ -386,7 +420,7 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             _ => "Object::__NULL".to_string(),
         };
         let pkgs: Vec<String> = m.packages.iter().map(|x| format!("{x:?}")).collect();
-        g.line(&format!("rt::define_module({}, {loader}, {}, {:?}, &[{}]);", obj_ref(m.obj), m.open, m.location, pkgs.join(", ")));
+        g.line(&format!("rt::define_module({}, {loader}, {}, {:?}, &[{}]);", p.obj_ref(m.obj), m.open, m.location, pkgs.join(", ")));
     }
     // 静态字段初值（零值即存储缺省值；重算 / 重定位槽由步骤写入）
     for (cls, name, v) in &d.statics {
@@ -415,12 +449,18 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             g.line(&format!("{}::__boot_initialized();", p.expr_path(cls)));
         }
     }
-    for st in &d.steps {
+    // 重定位（字段偏移 / VM 单元地址）的值与执行次序无关，先于任何重放调用写入：构建期初始化的类在运行期
+    // 从启动起即视为已初始化，宿主相关路径上的重放调用（如按宿主编码查字符集）可能先于其构建期次序读到这些槽
+    for st in d.steps.iter().filter(|st| matches!(st, IStep::Reloc { .. })) {
+        step(&mut g, st)?;
+    }
+    main.push_str(&segment(&std::mem::take(&mut g.out), &mut fns, &mut next));
+    for st in d.steps.iter().filter(|st| !matches!(st, IStep::Reloc { .. })) {
         step(&mut g, st)?;
     }
     g.line("Ok(())");
     Ok(format!(
-        "/// 构建期引导映像的启动序列（`main` 在创建 VM 之后调用）\npub fn {START_FN}() {{\n    rt::run(__start)\n}}\n\nfn __start() -> Result<()> {{\n{}}}\n",
+        "/// 构建期引导映像的启动序列（`main` 在创建 VM 之后调用）\npub fn {START_FN}() {{\n    rt::run(__start)\n}}\n\nfn __start() -> Result<()> {{\n{main}{}}}\n\n{fns}",
         g.out
     ))
 }
@@ -454,7 +494,7 @@ fn host_rewrite(g: &mut Gen<'_, '_, '_>) -> Result<()> {
             let full = p.full_ty(ty);
             g.line(&format!("let h: Object = {src};"));
             g.line("if !h.0.is_jvm_null() {");
-            g.line(&format!("    let (src, dst) = (<{full} as From<Object>>::from(h), <{full} as From<Object>>::from({}));", obj_ref(s)));
+            g.line(&format!("    let (src, dst) = (<{full} as From<Object>>::from(h), <{full} as From<Object>>::from({}));", p.obj_ref(s)));
             for slot in &p.layouts[ty] {
                 g.line(&format!("    dst.__set_{0}(src.__get_{0}());", slot.rust));
             }

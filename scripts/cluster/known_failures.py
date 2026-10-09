@@ -1,13 +1,13 @@
-"""已知失败判定：把抽查（spot）结果与 java_rta docs/known_failures.toml 对照。
+"""已知失败判定：把抽查（spot）结果与 rava docs/known_failures.toml 对照。
 
-清单格式见 java_rta docs/known_failures.toml：[[known]] 条目含 test / signature / owner / since / note。
+清单格式见 rava docs/known_failures.toml：[[known]] 条目含 test / signature / owner / since / note。
 判定：失败用例的本地失败日志包含某条同名条目的 signature 子串 → 已知；否则（含同名但签名不符）→ 新失败。
 OOM / 超时 / 无结果（日志里没有签名）自然落入新失败；infra 失败与未跑完的用例单列（未完成）。
 
 清单来源（按序取第一个可用的）：
   1. 显式 --known PATH
-  2. java_rta 仓库集成分支上的版本：git -C <java_rta> show rust-closure-analyzer:docs/known_failures.toml
-  3. java_rta 主检出工作区里的 docs/known_failures.toml
+  2. rava 仓库集成分支上的版本：git -C <rava> show rust-closure-analyzer:docs/known_failures.toml
+  3. rava 主检出工作区里的 docs/known_failures.toml
 
 命令行（在仓库根目录下）：
   uv run --group cluster python scripts/cluster/known_failures.py <spot_tag> [--tests A B ...] [--known PATH] [--json]
@@ -176,7 +176,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="抽查结果的已知失败判定")
     ap.add_argument("tag")
     ap.add_argument("--tests", nargs="+", help="期望的用例名单（缺省取 state 里出现过的）")
-    ap.add_argument("--known", help="known_failures.toml 路径（缺省读 java_rta 集成分支）")
+    ap.add_argument("--known", help="known_failures.toml 路径（缺省读 rava 集成分支）")
     ap.add_argument("--jdk", type=int, default=DEFAULT_JDK)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--results-dir", default=str(RESULTS_DIR), help="test_results 目录（缺省本检出的）")
