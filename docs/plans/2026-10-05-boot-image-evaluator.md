@@ -1307,7 +1307,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - pd1–pd6：缺省次序与 fb1 次序的 MinimalMain / NullView 折叠对照。pd3 / pd4 定位并验证修复 2，pd5 排除形参常量差异，pd6（叠加修复 3）两例 `folds equal True`，剩余只有 via 差异。
 - scp2–scp4：seed-chain 叠加修复后跑两项单测。scp3（修复 1、2）上 profile 仍失败；scp4（修复 1–3，jp2）上 `reflect_new_array_element_precision` 与 `profile_union_key_and_coverage` 均通过。
 
-**残留：具体求值站点的镜像缓存在站点回退后不撤回**（未修，fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败）
+**残留：具体求值站点的镜像缓存在站点回退后不撤回**（fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败；已由 `bootcache` 修复，见下）
 - **作业**：
   - ut2-fddb9bcb：全量单测。失败项为已知三项，加上本项。
   - pf3：档案对照。默认与 fb1 + seed 7 的 classes / methods 只有 via 不同；digest 差在 `boot_image_data.ext` / `mirror_memos`。
@@ -1319,6 +1319,27 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 难点：剔除后要重编号；活标记与分析侧已记录的映像对象号要同步；`m:` 组可能被扩展期共享，需按引用判定。
   - 另一种做法是推迟镜像缓存入映像到站点定论之后，但那样会丢失分析期的缓存值传播（热轨迹精度）。
 - seed-chain 叠加三处修复（scp4）时该测试恰好通过，属于次序巧合。
+
+**残留修复：镜像缓存组按贡献调用点的最终状态取舍（2026-10-09，分支 `bootcache`，019878f0）**
+- **做法**：
+  - `image_memo_apply` 记下每个 `f:` 组的贡献调用点（`MemoState.sites`；该组已由别的调用点并入时同样记入）。
+  - 分析结束时（`image_final`），先剔除贡献者全部处于 `concrete.fallback` 的 `f:` 组及其缓存记录，再调用 `ImageData::drop_memo_groups` 按引用求闭包：根是引导对象、`c:` / `s:` 组、保留的 `f:` 组与缓存记录、静态字段；`m:` 组只有被引用时才保留。之后压实下标，照常规范化。
+  - `m:` 组只看内容、不看由谁新建：无论镜像由扩展期还是镜像缓存的 prepare 新建，同一份最终内容得到同一结论。不被引用的镜像在运行期按需新建，语义不变。
+  - 结果：映像的镜像缓存组 = 最终未回退调用点贡献的组。未回退调用点已应用的组合等于最终组合，所以这部分与处理次序无关。
+- **可达性不另撤**：回退调用点接了抽象调用边，抽象分析覆盖入口对全体接收者的执行（包括冷路径），已应用组合的具体轨迹和缓存值带入的类型都包含在其中；`getGenericInfo` 读取点的接收者含未缓存镜像，`genericInfo` 值集含 null，不会因被剔除的缓存而折叠。实测两种次序的类 / 方法集合逐项相同（见下）。
+- **否决的做法**：d94ae437 把新组合的应用与回退一律挂起到工作队列不动点再判定（已由 ced4f41f 撤回）。bc-t1 中 TestModuleLayerDefine 的 `reflect_new_array_element_precision` 失败：种子 0 / 1 的方法集合相差 `ForEachOps$ForEachOp$OfRef.get`。挂起改变了分析中间态，触发了其他单调格的次序依赖。撤回提交说明中写的「闭包 3233→3456」是口径误读：`rava closure` 在 a6dca5c0 上本来就是 3456 / 3757，见下表。
+- **实测**（`rava closure`，参考 JDK 21.0.11；缺省次序 vs `--flow-batch 1 --hash-seed 7`）：
+
+| 作业 | 用例 | 类 / 方法 | boot_image_data 两次序相同 | 闭包耗时（缺省 / fb1） |
+|---|---|---|---|---|
+| bc-base-a6dca5c0（sg1，基线） | HelloWorld | 3456 / 18678 | 是 | 113 / 116 s |
+| 同上 | DeepCopy | 3757 / 21717 | **否**（ext / mirror_memos / objs / live 等不同，objs 21297 vs 21306） | 933 / 1163 s |
+| bc-cc2-019878f0（us1） | HelloWorld | 3456 / 18678 | 是 | 105 / 108 s |
+| 同上 | DeepCopy | 3757 / 21717 | **是** | 895 / 1136 s |
+
+  - 类 / 方法集合在两种次序下逐项相同，与基线一致，类数不增。
+- **单测**（bc-t2-019878f0，sg1）：`closure` 的 `image_ext` 5 项（新增 `drop_memo_groups_matches_never_applied`）、`reflect_new_array_element_precision`、`profile_union_key_and_coverage` 全部通过。
+- **e2e 抽查**（bc-sp1-019878f0，us1）：HelloWorld、TestGenericSuperclassReflect、TestOwnerTypeFaces、TestModuleLayerDefine 通过（转译 116–134 s）。DeepCopy 转译超过 600 s 的超时，属于 a6dca5c0 上已知的转译耗时回归（基线 912 s，由 perf-regress 修），与本改动无关。上表中本分支 DeepCopy 的闭包耗时（895 s）不高于基线（933 s）。
 
 **恢复入口**：
 - `engine/levels_boot.rs`：`image_settled_build_time`。
