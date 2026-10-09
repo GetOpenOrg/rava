@@ -78,7 +78,7 @@ impl<'a> Engine<'a> {
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
                 let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 // 按名加载（class_loads）同样解析，只取镜像不初始化
                 let key = self.mref_key(mref);

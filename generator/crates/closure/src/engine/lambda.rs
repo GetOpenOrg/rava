@@ -312,7 +312,7 @@ impl<'a> Engine<'a> {
                     let Some(t) = self.ptype(p) else { continue };
                     let fs = self.feeds(m, v, t);
                     let entry = self.man.indy_helpers.stringify.clone();
-                    self.indy_helper(m, off, entry.as_deref(), std::slice::from_ref(v), vec![Some(fs)]);
+                    self.indy_helper(m, off, entry.as_deref(), vec![Some(fs)]);
                 }
             }
             Some(IndyKind::ObjectMethods) => self.object_methods(m, off, &b.args, name, &md, args),
@@ -344,7 +344,7 @@ impl<'a> Engine<'a> {
     /// 拼接的引用实参 / record 的引用分量接入清单登记的 `[indy]` 分量处理入口（静态方法，
     /// 如 `String.valueOf(Object)` / `Objects.hashCode(Object)` / `Objects.equals(Object,Object)`）的形参：
     /// 生成器在调用点发射对它的静态调用。清单装载时已校验必填项；解析不到记入 unresolved，不回落
-    fn indy_helper(&mut self, m: usize, off: u32, entry: Option<&str>, vals: &[V], fs: Args) {
+    fn indy_helper(&mut self, m: usize, off: u32, entry: Option<&str>, fs: Args) {
         let Some(key) = entry.and_then(super::seeds::parse_member) else { return };
         let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, false) else {
             self.unresolved.insert(key.to_string());
@@ -355,7 +355,7 @@ impl<'a> Engine<'a> {
         let resolved = MemberRef { owner: o, name: n, desc: d };
         self.init(&resolved.owner, via.clone());
         let heap = parse_method(&resolved.desc).is_some_and(|md| md.ret.iter().chain(&md.params).any(|r| r.is_reference()));
-        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: vals });
+        let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap });
         let t = self.method_ctx(resolved, ctx, via);
         self.edge(m, off, t, Recv::None, &fs, None, None);
     }
@@ -408,7 +408,7 @@ impl<'a> Engine<'a> {
             _ => return,
         };
         let fs: Args = vec![Some(vec![Feed::N(node)]); n];
-        self.indy_helper(m, off, entry.as_deref(), &[], fs);
+        self.indy_helper(m, off, entry.as_deref(), fs);
     }
 }
 
