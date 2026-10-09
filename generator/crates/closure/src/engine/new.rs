@@ -105,6 +105,7 @@ impl<'a> Engine<'a> {
             direct_virtual_sites: HashSet::default(),
             pvals: HashMap::default(),
             ptaint: HashSet::default(),
+            ptaint_why: HashMap::default(),
             pstr: Default::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),

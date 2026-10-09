@@ -236,7 +236,8 @@ impl<'a> Engine<'a> {
 
     fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
         self.concrete.fallback.insert((m, off));
-        self.concrete.diag.entry(site).or_default().insert(format!("回退：{why}"));
+        let at = self.ctx_label(m);
+        self.concrete.diag.entry(site).or_default().insert(format!("回退（{at}）：{why}"));
         false
     }
 
