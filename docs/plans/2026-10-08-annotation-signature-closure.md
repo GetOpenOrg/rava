@@ -101,6 +101,15 @@ P1 全断后 ann 归零，gen 剩 28 / 29 类。剩余首达链是 `ConcurrentHa
 1. **类初始化登记取决于共享 VM 的求值历史**（cbd5f9d7）：具体求值所有组合共用一个 VM，类初始化状态跨组合保留，结果只登记「本次求值触发的初始化」（inited）。先求值的组合若按热路径入闭包，其冷路径完成的初始化不登记；之后按冷 / 热之并入闭包的组合再请求该类时它已完成初始化、也不登记——该类 `<clinit>` 是否入闭包随求值次序变化。改为一律按「请求初始化」（touched）登记：请求集合只取决于本组实参的执行路径。
 2. **片段可物化判定读未定论的构建期初始化结局**（9a535840）：`image_memo_prepare` 对片段所引静态字段（`FVal::Static`）只查当时的 `build_time` 集合；声明类尚未尝试构建期初始化时按「运行期初始化」答复，该组实参按冷 / 热之并入闭包，之后该类经别的路径构建期初始化也撤不回（`applied` 已登记）。改为先对这些声明类调 `image_ext` 定论（同 `image_settle_reads`）。
 
+#### 顺序无关单测（`closure_independent_of_order`）
+
+本分支头上该单测在 DeepCopy batch 1 / seed 1 失败（作业 as-ut-9a535840）。对照（as-ord-9a535840，本分支；as-ord-ce554b84，集成分支头）：
+
+- 本分支：缺省与 batch 1 / seed 1 的类 / 方法 / 反射 / 映像数据全部相同（3730 / 21516），只差 `dispatch` 一键——多目标派发点在缺省下是 `FindOps$FindOp.evaluateSequential@20`，在 batch 1 / seed 1 下是 `FindOps$FindTask.doLeaf@29`（目标同为 `FindSink$OfRef` / `ForEachOp$OfRef` / `ReduceOps$2ReducingSink` 的 `get`，另一个调用点只剩单目标、被 `len > 1` 过滤）；batch 7 / seed 2 与缺省相同。
+- 集成分支头：同一处 `dispatch` 差异原样存在，且另有 `boot_image_data`（mirror_memos / strings 对象编号）差异——后者被本分支修复 1 / 2 消掉。
+
+结论：该差异先于本分支存在（集成分支 gate 不跑此单测，故未暴露），不是本分支引入；本分支只减少顺序依赖。两调用点结构相同（`wrapAndCopyInto(sinkSupplier.get(), …).get()`），推测根因在流分析的对象敏感克隆 / 枢纽接入次序（哪个调用点先接上 `wrapAndCopyInto` 返回值的合并上下文，哪个得到全集），未定位，待另立项按 §5.8.6 定论（续作 6）。
+
 #### P2 第四层：三个待查假设的结论
 
 并入后 csanno 已无必要（P1 由 reflect-marker 断开），直接在合并头上查 `--why SignatureParser`：首达链为 `ConcurrentHashMap.comparableClassFor@21`（concrete）→ `SignatureParser.<init>`，诊断里两个组合未物化：`ZonedDateTime` / `LocalDateTime`「（并：引用运行期初始化类的静态字段 sun/reflect/generics/tree/BottomSignature.singleton）」——其 genericInfo 含通配符类型实参 `Comparable<ChronoLocalDateTime<?>>`，`Wildcard` 的下界是 `BottomSignature.make()` 的单例。
@@ -132,3 +141,4 @@ asig-cs（并入前、csanno 下）诊断全标「⇒映像」却仍有签名解
    - reflect-marker：P1 归它；本分支不碰 `method_marks.rs`。
    - log-chain2：路径 A 去掉 hello 的 `LoggerFinderLoader.service()`，会同时去掉 `invokeFactoryMethod@20` 这一 P1 入口；不改 concrete.rs，无代码冲突。
    - fix-1010 / charset-ext：不碰 `engine/concrete*` 与 `image_memo.rs`，预期无冲突（扩展字符集类进闭包会增加 `comparableClassFor` 接收者数，在 `RECV_LIMIT` 之内）。
+6. **派发点顺序依赖（先于本分支）**：`FindOps` 两个结构相同的 `TerminalSink.get` 调用点谁得多目标随处理次序变化（见「顺序无关单测」）；属流分析克隆 / 枢纽接入次序，另立项修，修好前 `closure_independent_of_order` 的 DeepCopy 对角组合在集成分支上同样失败。
