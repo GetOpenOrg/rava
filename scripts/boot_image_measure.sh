@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 引导映像验收测量（docs/plans/2026-10-05-boot-image-evaluator.md §5.10）：服务器作业用。
 #
-# 用法：scripts/boot_image_measure.sh <out_dir> <Test.java>...
+# 用法：scripts/boot_image_measure.sh <out_dir> <Test.java | 已构建可执行文件>...（可执行文件只做 boot_probe）
 # 每例：转译（--stop-after emit，计时）→ 留存 boot_image.rs → 逐 crate 峰值编译（crate_mem_profile，缺省档）
 # → 运行输出与墙钟（30 次中位数）→ 缺省档二进制体积、`__boot_image_start` uprobe 计时 → release 档体积与墙钟
 # （MEASURE_RELEASE=0 跳过）。结果汇总到 <out_dir>/summary.txt。
@@ -31,31 +31,55 @@ print(f"median {ts[len(ts)//2]:.3f} ms  min {ts[0]:.3f} ms  max {ts[-1]:.3f} ms 
 EOF
 }
 
-# `__boot_image_start` 本身的耗时（§5.10 门槛 ≤ 1 ms）：uprobe / uretprobe 成对计时（bpftrace，需免密 sudo）。
-# 工具或权限不具备时写明原因（不改服务器配置、不装软件）
-boot_probe() { # <exe> <out_prefix>
-  local exe=$1 pre=$2 sym
-  sym=$(nm "$exe" 2>/dev/null | awk '$3 ~ /__boot_image_start/ { print $3; exit }')
-  if [[ -z $sym ]]; then echo "  boot_probe: 符号 __boot_image_start 不在二进制中"; return; fi
-  if ! command -v bpftrace > /dev/null; then
-    echo "  boot_probe: 无 bpftrace（perf: $(command -v perf || echo 无)；perf_event_paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null)；sudo -n: $(sudo -n true 2>/dev/null && echo 可用 || echo 不可用)）"
-    return
-  fi
-  if ! sudo -n true 2> /dev/null; then echo "  boot_probe: bpftrace 需 root，sudo -n 不可用"; return; fi
-  local i
-  : > "$pre.boot_probe.txt"
-  for i in $(seq 1 10); do
-    sudo -n bpftrace -q -e "uprobe:$exe:$sym { @s = nsecs; } uretprobe:$exe:$sym /@s/ { printf(\"boot_us %d\\n\", (nsecs - @s) / 1000); clear(@s); }" -c "$exe" 2>&1 | grep '^boot_us' >> "$pre.boot_probe.txt"
-  done
-  python3 - "$pre.boot_probe.txt" <<'EOF2'
+# `__boot_image_start` 本身的耗时（§5.10 门槛 ≤ 1 ms）：uprobe / uretprobe 成对计时（tracefs uprobe_events，
+# 需免密 sudo；探针用后即删）。权限或内核能力不具备时写明原因（不改服务器配置、不装软件）
+boot_probe() { # <exe> <out_prefix>：tracefs uprobe / uretprobe 计 __boot_image_start 入口到返回（只依赖 sudo -n）
+  local exe=$1 pre=$2 line sym vaddr off tr ev i
+  exe=$(readlink -f "$exe")
+  line=$(nm "$exe" 2>/dev/null | awk '$3 ~ /__boot_image_start/ { print $1, $3; exit }')
+  if [[ -z $line ]]; then echo "  boot_probe: 符号 __boot_image_start 不在二进制中"; return; fi
+  read -r vaddr sym <<< "$line"
+  if ! sudo -n true 2> /dev/null; then echo "  boot_probe: uprobe 需 root，sudo -n 不可用"; return; fi
+  # 虚拟地址 → 文件偏移（所在 LOAD 段：off = vaddr - p_vaddr + p_offset）
+  off=$(readelf -lW "$exe" | python3 -c '
 import sys
-v = sorted(int(l.split()[1]) for l in open(sys.argv[1]) if l.startswith("boot_us"))
-print(f"  boot_probe: __boot_image_start median {v[len(v)//2]} us  min {v[0]} us  max {v[-1]} us  (n={len(v)})" if v else "  boot_probe: 无采样")
+a = int(sys.argv[1], 16)
+for l in sys.stdin:
+    f = l.split()
+    if f[:1] == ["LOAD"]:
+        o, v, m = int(f[1], 16), int(f[2], 16), int(f[5], 16)
+        if v <= a < v + m: print(hex(a - v + o)); break
+' "$vaddr")
+  if [[ -z $off ]]; then echo "  boot_probe: 无法定位 $sym 的文件偏移"; return; fi
+  tr=/sys/kernel/tracing; sudo -n test -d $tr/events || tr=/sys/kernel/debug/tracing
+  ev=$tr/uprobe_events
+  sudo -n sh -c "echo '-:rava_boot/bis' >> $ev; echo '-:rava_boot/bie' >> $ev" 2> /dev/null
+  if ! sudo -n sh -c "echo 'p:rava_boot/bis $exe:$off' >> $ev && echo 'r:rava_boot/bie $exe:$off' >> $ev"; then
+    echo "  boot_probe: 写 $ev 失败（内核未启用 CONFIG_UPROBE_EVENTS？）"; return
+  fi
+  sudo -n sh -c "echo > $tr/trace; echo 1 > $tr/events/rava_boot/enable; echo 1 > $tr/tracing_on"
+  for i in $(seq 1 10); do "$exe" > /dev/null 2>&1; done
+  sudo -n cat $tr/trace > "$pre.boot_probe.txt"
+  sudo -n sh -c "echo 0 > $tr/events/rava_boot/enable; echo '-:rava_boot/bis' >> $ev; echo '-:rava_boot/bie' >> $ev"
+  python3 - "$pre.boot_probe.txt" "$sym" "$off" <<'EOF2'
+import re, sys
+start, v = {}, []
+for l in open(sys.argv[1]):
+    m = re.search(r'-(\d+)\s+\[\d+\].*?\s(\d+\.\d+):\s+(bis|bie):', l)
+    if not m: continue
+    pid, t, e = m.group(1), float(m.group(2)), m.group(3)
+    if e == "bis": start[pid] = t
+    elif pid in start: v.append((t - start.pop(pid)) * 1e6)
+v.sort()
+print(f"  boot_probe: {sys.argv[2]} @ {sys.argv[3]}  median {v[len(v)//2]:.0f} us  min {v[0]:.0f} us  max {v[-1]:.0f} us  (n={len(v)})" if v else "  boot_probe: 无采样")
 EOF2
 }
 
 for t in "$@"; do
   name=$(basename "$t" .java)
+  if [[ $t != *.java && -x $t ]]; then # 只探测已构建的二进制
+    echo "== $name  boot_probe only" >> "$sum"; boot_probe "$t" "$out/$name" >> "$sum"; continue
+  fi
   t0=$(date +%s)
   /usr/bin/time -v "$rava" build "$t" --stop-after emit --clean > "$out/$name.emit.log" 2>&1
   rc=$?
