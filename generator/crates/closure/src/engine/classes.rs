@@ -520,6 +520,15 @@ impl<'a> Engine<'a> {
         {
             return true;
         }
+        // 值持有者：final 的 `Object` 型实例字段由本类构造器从实参写入（回调上下文的「当前对象」等）。字段值是构造方
+        // 交来的任意值，按类共用字段视图时各分配点交来的值汇合——读方（如反序列化）拿到写方（序列化）全部对象图
+        // 作写入目标。按对象分开才能让每个持有者只给出自身构造实参
+        let obj_desc = format!("L{OBJECT};");
+        if chain.iter().any(|cf| {
+            cf.fields.iter().any(|f| !f.is_static() && f.access & classfile::acc::FINAL != 0 && f.desc == obj_desc && ctor_stores_arg(cf, &f.name, &f.desc))
+        }) {
+            return true;
+        }
         // 持有按键查找键类实例字段的对象（`[facts.keyed_lookups]` 入口的返回类型）：字段值是按键选出的服务对象，
         // 键随对象的构造实参而定，按对象分开才能让各对象只派发到自身键选出的服务（计划 c1d §30.4 / B4①）
         let kcs: Vec<u32> = self.key_classes();
@@ -731,4 +740,22 @@ mod tests {
         let inner = SType::Field(Box::new(ret.clone()), "form".into());
         assert_eq!(derived_nodes(&inner), vec![&ret, &inner]);
     }
+}
+
+/// 本类某个构造器以「`aload` 非 this 局部量 → `putfield` 本类该字段」写入字段（值直接取自构造实参）
+fn ctor_stores_arg(cf: &ClassFile, name: &str, desc: &str) -> bool {
+    const ALOAD: u8 = 0x19;
+    const ALOAD_1: u8 = 0x2b;
+    const ALOAD_3: u8 = 0x2d;
+    cf.methods.iter().filter(|mm| mm.is_init()).any(|mm| {
+        let Some(code) = &mm.code else { return false };
+        code.insns.windows(2).any(|w| {
+            w[1].opcode == classfile::op::PUTFIELD
+                && matches!(&w[1].operand, classfile::Operand::Field(f) if f.owner == cf.name && f.name == name && f.desc == desc)
+                && match (w[0].opcode, &w[0].operand) {
+                    (ALOAD, classfile::Operand::Local(i)) => *i > 0,
+                    (op, _) => (ALOAD_1..=ALOAD_3).contains(&op),
+                }
+        })
+    })
 }
