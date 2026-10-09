@@ -12,9 +12,9 @@
 //! - **静态字段初值**：带映像值的静态字段由本模块以常量初值定义其存储（外部符号 [`static_symbol`]，声明层
 //!   `#[image_static]` 只声明外部静态）；构建期完成初始化的类以 `#[boot_initialized = true]` 让初始化状态
 //!   单元的初值即「已完成」；
-//! - **映像表** `IMAGE_TABLES`：类镜像、驻留串（按内容有序）、构建期初始化类、VM 模块表初值，启动时登记一次，
-//!   运行期首次查询时直接查表；
-//! - **启动序列** `__boot_image_start`：登记映像区与映像表 → VM 单元 → 初始线程 → 宿主值改写 → 按构建期
+//! - **映像表** `IMAGE_TABLES`：类镜像、驻留串（按内容有序）、构建期初始化类、VM 模块表初值，以链接期符号
+//!   导出，运行期按符号直接查表，启动时不登记；
+//! - **启动序列** `__boot_image_start`：登记映像区 → VM 单元 → 初始线程 → 宿主值改写 → 按构建期
 //!   次序重放重定位 / 重算 / 残差调用（档位随之切换），占位对象随步骤回填。
 //!
 //! 类名只来自映像数据与类文件，生成器中不出现 JDK 类名字面量。
@@ -42,6 +42,9 @@ use crate::phase2::Emissions;
 pub const MODULE: &str = "boot_image";
 /// 启动入口（`main` 在创建 VM 之后调用）
 pub const START_FN: &str = "__boot_image_start";
+
+/// 映像表的外部符号名（根门面以此导出 `IMAGE_TABLES`，运行时 `image_rt` 以同名外部静态声明）
+pub const IMAGE_TABLES_SYMBOL: &str = "__rava_image_tables";
 
 /// 物化计划：活对象的分类与各类的存储布局
 pub(crate) struct Plan<'c, 'a> {

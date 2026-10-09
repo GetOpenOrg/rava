@@ -1,4 +1,4 @@
-//! 启动序列 `__boot_image_start`（计划 §5.5.2 D4 / D5、§5.10）：登记映像区与映像表 → VM 单元 → 初始线程 →
+//! 启动序列 `__boot_image_start`（计划 §5.5.2 D4 / D5、§5.10）：登记映像区 → VM 单元 → 初始线程 →
 //! 残差写入 → 宿主值改写 → 按构建期次序重放（档位、重定位、重算、残差调用 / 读取）。映像对象、静态字段初值、
 //! 类镜像、驻留表、VM 模块表与构建期初始化状态都是常量，启动时不逐项写入。
 //!
@@ -323,11 +323,9 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, residual: &[Residual], tabs: &TablesTex
         .map(|k| format!("(&BOOT_IMAGE_{k} as *const __BootImage{k} as *const u8, ::std::mem::size_of::<__BootImage{k}>())"))
         .collect();
     g.line(&format!("__image_register(&[{}]);", segs.join(", ")));
-    g.line("rt::install(&IMAGE_TABLES);");
-    let keep: Vec<String> = (0..tabs.keep).map(|k| format!("&IMAGE_STATICS_{k}")).collect();
-    if !keep.is_empty() {
-        g.line(&format!("::std::hint::black_box(({},));", keep.join(", ")));
-    }
+    // 映像表与静态字段存储是运行期按外部符号引用的定义：启动函数经保活引用使其随启动序列一同链接
+    let keep: Vec<String> = std::iter::once("&IMAGE_TABLES".to_string()).chain((0..tabs.keep).map(|k| format!("&IMAGE_STATICS_{k}"))).collect();
+    g.line(&format!("::std::hint::black_box(({},));", keep.join(", ")));
     for (name, v) in &d.cells {
         g.line(&format!("rt::vm_cell({name:?}, {v}i64);"));
     }

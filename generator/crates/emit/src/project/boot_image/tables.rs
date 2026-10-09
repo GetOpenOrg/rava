@@ -2,7 +2,7 @@
 //!
 //! - **静态字段存储**：带映像常量值的静态字段，其存储单元在此以常量初值定义（外部符号 [`static_symbol`]，
 //!   声明层 `#[image_static]` 只声明同名外部静态）；每个字段一个静态，初值规模有界；
-//! - **映像表** `IMAGE_TABLES`：类镜像（按键）、驻留串（按 UTF-16 内容）、构建期初始化类、VM 模块表初值。
+//! - **映像表** `IMAGE_TABLES`（链接期符号 [`IMAGE_TABLES_SYMBOL`]，运行期按符号查表）：类镜像（按键）、驻留串（按 UTF-16 内容）、构建期初始化类、VM 模块表初值。
 //!   大表按块（[`CHUNK`]）各成一个静态，块间与块内整体有序，运行期分块二分查找。
 
 use std::fmt::Write as _;
@@ -11,7 +11,7 @@ use closure::image::{IBody, IVal};
 
 use super::layout::{static_cell, Cell};
 use super::values::bits;
-use super::{image_static_accessor, is_image_constant, static_symbol, Plan};
+use super::{image_static_accessor, is_image_constant, static_symbol, Plan, IMAGE_TABLES_SYMBOL};
 use crate::error::{EmitError, Result};
 
 /// 每块表项数
@@ -176,7 +176,7 @@ pub(crate) fn tables(p: &Plan<'_, '_>) -> Result<TablesText> {
     }
     let _ = write!(
         out,
-        "\n/// 映像表（启动时登记一次，运行期首次查询时直接查表）\npub static IMAGE_TABLES: rt::ImageTables = rt::ImageTables {{\n    \
+        "\n/// 映像表（链接期符号，运行期 `image_rt` 按符号直接查表，启动时不登记）\n#[unsafe(export_name = {IMAGE_TABLES_SYMBOL:?})]\npub static IMAGE_TABLES: rt::ImageTables = rt::ImageTables {{\n    \
          mirrors: &[{}],\n    strings: &[{}],\n    build_time: &[{}],\n    modules: &[\n        {}\n    ],\n}};\n\n",
         mirror_refs.join(", "),
         string_refs.join(", "),

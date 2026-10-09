@@ -27,6 +27,30 @@ fn __intern_key(s: &String) -> Vec<u16> {
     }
 }
 
+/// `s` 的 UTF-16 码元序列与 `key` 的字典序比较（映像驻留表二分查找用；逐元素读取，不分配）。
+/// 码元解码同 [`__intern_key`]。
+fn __units_cmp(s: &String, key: &[u16]) -> std::cmp::Ordering {
+    let val = s.__get_value();
+    let latin1 = s.__get_coder() == 0i8;
+    let bytes = val.len().unwrap_or(0) as usize;
+    let len = if latin1 { bytes } else { bytes / 2 };
+    let byte = |i: usize| val.get(i as i32).unwrap_or(0) as u8;
+    for (i, &k) in key.iter().enumerate().take(len) {
+        let u = if latin1 {
+            u16::from(byte(i))
+        } else if cfg!(target_endian = "big") {
+            u16::from_be_bytes([byte(2 * i), byte(2 * i + 1)])
+        } else {
+            u16::from_le_bytes([byte(2 * i), byte(2 * i + 1)])
+        };
+        match u.cmp(&k) {
+            std::cmp::Ordering::Equal => {}
+            o => return o,
+        }
+    }
+    len.cmp(&key.len())
+}
+
 crate::__process_static! {
     /// 全局字符串驻留表（S-6）：内容（UTF-16 code units）→ 规范实例。
     ///
@@ -47,18 +71,15 @@ impl String {
     #[doc(hidden)]
     pub fn __interned(self) -> String {
         let key = __intern_key(&self);
-        // 构建期驻留表（映像常量，按内容有序）中的规范实例优先
-        if let Some(canon) = crate::image_rt::image_string(&key, __intern_key) {
-            return canon;
-        }
         __STRING_INTERN_TABLE.with(|table| {
-            let mut map = table.borrow_mut();
-            if let Some(canon) = map.get(&key) {
-                Clone::clone(canon)
-            } else {
-                map.insert(key, Clone::clone(&self));
-                self
+            if let Some(canon) = table.borrow().get(&key) {
+                return Clone::clone(canon);
             }
+            // 运行期表未命中：构建期驻留表（映像常量，按内容有序）中的规范实例优先；查到即回填运行期表，
+            // 此后同内容（如循环中的字面量加载）一次散列命中
+            let canon = crate::image_rt::image_string(&key, __units_cmp).unwrap_or(self);
+            table.borrow_mut().insert(key, Clone::clone(&canon));
+            canon
         })
     }
 
