@@ -24,8 +24,12 @@ pub fn blocking<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// 安全点（字段 / 数组元素读取、监视器操作处的生成代码调用点）：并行后端无需让出。
+/// debug 档断言不持字段锁（安全点处会执行 Java 代码或阻塞，持锁即可能自死锁 / 拖住他线程）。
 #[inline(always)]
-pub fn safepoint() {}
+#[cfg_attr(debug_assertions, track_caller)]
+pub fn safepoint() {
+    crate::sync_model::__assert_no_field_lock("安全点");
+}
 
 /// `Thread.yield`：让出当前 OS 线程时间片。
 pub fn yield_now() {
@@ -95,6 +99,9 @@ pub fn clinit_done(class: &str) -> bool {
 
 /// 进入类初始化（`state` 为该类的状态单元）。非泛型：全部类共用一份实例。
 pub fn clinit_enter(class: &'static str, state: &'static __PrimCell<u8>) -> ClinitEnter {
+    // `<clinit>` 入口（生成的 `__class_init` 慢路径经 `class_init` 到此）：初始化体执行任意 Java
+    // 代码、他线程初始化中时阻塞等待，持字段锁进入即可能死锁（debug 档断言）
+    crate::sync_model::__assert_no_field_lock("类初始化");
     // 持有者登记：<clinit> 内启动的线程据此等待而非越过未完成的初始化。状态转换在
     // CLINIT_OWNERS 锁内完成（两线程同时读到 0 时只有一个进入 <clinit>——JVMS §5.5 的 LC 锁）。
     let me = std::thread::current().id();
