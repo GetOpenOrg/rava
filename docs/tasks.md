@@ -89,6 +89,8 @@
 
 > 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
+- **转译耗时回归（perf-regress，未完成）**：调查与恢复入口见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。b1012 的跳变来自 c18e8fc4 与 bbeb13a5，b1013 的跳变来自 8ce97959。主导开销是 ConcurrentHashMap 表数组 N²（E→S / W→E 推送约 2.5×）。head 仍比 b1012 慢约 1.6×；0269f622 带来 +1 类，合批前须解决。
+
 - **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f。batch-1007 至 1011 已被 batch-1012 包含，不再单独放行。
 - **batch-1012**（e5200a3e，验证中，放行即为改名停派点）：batch-1011（3cd43e28：batch-1010 + boot-image-s6 c18e8fc4 + charset-build + log-chain / log-chain2 + locale-build）+ fix-1010（24f8029c，batch-1010 三项回归）+ charset-ext（d85354b0）+ fix-1011（5fcd911f）。全量单测拆两组：B 组全过，A 组仅已知失败 `param_string_constants_fold_switch`。抽查除 TestJndiNoProvider 外全过（剩余用例续跑中）。
   - **java_base OOM 根因**：c18e8fc4（s6）后启动映像对象 7702 → 19347，全部放在一个 static 和一个启动函数里。charset-ext 修复：映像分 24 段、启动函数拆 42 个（b3a860ac），重定位先于回放（160789c7），用 `ImageData::writes_statics_of` 统一判定静态存储（14917aed）。修复后 java_base 峰值 1642 MB（原 11.8 GB）。
