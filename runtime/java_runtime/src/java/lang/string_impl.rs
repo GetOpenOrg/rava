@@ -47,6 +47,10 @@ impl String {
     #[doc(hidden)]
     pub fn __interned(self) -> String {
         let key = __intern_key(&self);
+        // 构建期驻留表（映像常量，按内容有序）中的规范实例优先
+        if let Some(canon) = crate::image_rt::image_string(&key, __intern_key) {
+            return canon;
+        }
         __STRING_INTERN_TABLE.with(|table| {
             let mut map = table.borrow_mut();
             if let Some(canon) = map.get(&key) {

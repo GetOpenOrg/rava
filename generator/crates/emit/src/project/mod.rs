@@ -200,6 +200,7 @@ fn emit_classes<'l>(
             text: ct.text,
             methods: ct.methods,
             scope: Arc::clone(scope),
+            iface_views: Vec::new(),
         };
         perf.classes.push((j.binary.to_string(), *t_prep + t_text));
         ems.insert(j.binary.to_string(), em);

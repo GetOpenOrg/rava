@@ -88,9 +88,10 @@ static CLINIT_GEN: Mutex<u64> = Mutex::new(0);
 static CLINIT_DONE: Mutex<Option<std::collections::HashSet<&'static str>>> = Mutex::new(None);
 static CLINIT_CV: Condvar = Condvar::new();
 
-/// 类是否已成功完成初始化（binary name，`/` 分隔）
+/// 类是否已成功完成初始化（binary name，`/` 分隔）：构建期完成初始化的类查映像表（其状态单元的初值
+/// 即「已完成」，见宏 `expand_class_init`），其余查运行期登记
 pub fn clinit_done(class: &str) -> bool {
-    CLINIT_DONE.lock().as_ref().is_some_and(|s| s.contains(class))
+    crate::image_rt::build_time(class) || CLINIT_DONE.lock().as_ref().is_some_and(|s| s.contains(class))
 }
 
 /// 进入类初始化（`state` 为该类的状态单元）。非泛型：全部类共用一份实例。
@@ -142,14 +143,6 @@ pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>
     let mut gen = CLINIT_GEN.lock();
     *gen += 1;
     CLINIT_CV.notify_all();
-}
-
-/// 构建期已初始化的类（引导映像，计划 2026-10-05-boot-image-evaluator D4）：启动序列在静态字段
-/// 写入映像值之后调用，不运行 `<clinit>`，直接进入「已初始化」（同 `clinit_exit` 的成功分支）。
-/// 启动序列单线程执行，无等待者。
-pub fn boot_initialized(class: &'static str, state: &'static __PrimCell<u8>) {
-    CLINIT_DONE.lock().get_or_insert_with(Default::default).insert(class);
-    state.set(3);
 }
 
 // ── 跨线程移交 ──────────────────────────────────────────────────────────────

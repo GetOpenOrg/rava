@@ -235,6 +235,8 @@ pub(crate) struct ClassMeta {
     pub impl_methods: Vec<String>,
     /// 展开层（`#[rava_layer = "decl" | "body"]`；缺省完整展开），见 `gen::layer`
     pub layer: super::gen::layer::Layer,
+    /// 构建期引导映像中已完成初始化的类（`#[boot_initialized = true]`）：初始化状态单元的初值即「已完成」
+    pub boot_initialized: bool,
 }
 
 impl ClassMeta {
@@ -291,6 +293,8 @@ impl ClassMeta {
                     s.split(';').filter(|x| !x.is_empty()).map(|x| x.to_owned()).collect();
             } else if path.is_ident("is_interface") {
                 m.is_interface = lit_bool(attr)?;
+            } else if path.is_ident("boot_initialized") {
+                m.boot_initialized = lit_bool(attr)?;
             } else if path.is_ident("to_string_vtable") {
                 m.to_string_vtable = Some(lit_str(attr)?);
             } else if path.is_ident("hash_code_vtable") {

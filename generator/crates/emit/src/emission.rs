@@ -101,6 +101,9 @@ pub struct ClassEmission {
     pub methods: Vec<EmittedMethod>,
     /// 本文件的名字作用域（第一阶段建立，第二阶段续用；导入块由其认领记录生成）
     pub scope: std::sync::Arc<ty::NameScope>,
+    /// 本类 `impl I for X` 块实现的接口（binary name；宏据此为存储类型实现 `I__VTable`，运行期接口视图查询
+    /// 只命中这些接口）。第二阶段接口实现解析写入，引导映像的接口视图常量以之为准
+    pub iface_views: Vec<String>,
 }
 
 impl ClassEmission {

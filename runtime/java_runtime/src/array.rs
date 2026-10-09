@@ -58,6 +58,13 @@ impl<T> JArray<T> {
     #[doc(hidden)]
     pub const fn __image(value: &'static __ArrayObj<T>) -> Self { JArray(Some(__Obj::image(value))) }
 
+    /// 映像中擦除协变视图（`__ImageArr::view`）的引用，取本引用元素静态类型（常量求值可用）
+    #[doc(hidden)]
+    pub const fn __image_view(value: &'static __ArrayObj<Object>) -> Self {
+        // SAFETY: `__ArrayObj` 为 repr(C)，布局与元素类型无关；视图形态的存取全部经擦除函数指针，不按 T 解释元素区
+        JArray(Some(__Obj::image(unsafe { &*(value as *const __ArrayObj<Object> as *const __ArrayObj<T>) })))
+    }
+
     /// 映像中引用数组的 null 元素（数组元素类型的类型化 null）
     #[doc(hidden)]
     pub const __IMAGE_NULL: Self = JArray(None);
