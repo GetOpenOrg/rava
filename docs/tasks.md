@@ -91,21 +91,13 @@
 
 - **转译耗时回归（perf-regress，未完成）**：调查与恢复入口见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。b1012 的跳变来自 c18e8fc4 与 bbeb13a5，b1013 的跳变来自 8ce97959。主导开销是 ConcurrentHashMap 表数组 N²（E→S / W→E 推送约 2.5×）。head 仍比 b1012 慢约 1.6×；0269f622 带来 +1 类，合批前须解决。
 
-- **集成分支与 main**：rust-closure-analyzer = main = 7ed2154f。batch-1007 至 1011 已被 batch-1012 包含，不再单独放行。
-- **batch-1012**（e5200a3e，验证中，放行即为改名停派点）：batch-1011（3cd43e28：batch-1010 + boot-image-s6 c18e8fc4 + charset-build + log-chain / log-chain2 + locale-build）+ fix-1010（24f8029c，batch-1010 三项回归）+ charset-ext（d85354b0）+ fix-1011（5fcd911f）。全量单测拆两组：B 组全过，A 组仅已知失败 `param_string_constants_fold_switch`。抽查除 TestJndiNoProvider 外全过（剩余用例续跑中）。
-  - **java_base OOM 根因**：c18e8fc4（s6）后启动映像对象 7702 → 19347，全部放在一个 static 和一个启动函数里。charset-ext 修复：映像分 24 段、启动函数拆 42 个（b3a860ac），重定位先于回放（160789c7），用 `ImageData::writes_statics_of` 统一判定静态存储（14917aed）。修复后 java_base 峰值 1642 MB（原 11.8 GB）。
-  - **TestJndiNoProvider**：sg1 上转译超时 600 s；在 jp2 单独重跑通过，但转译 569.8 s（b1009 为 324 s，慢 1.76×）。不阻塞放行，改名后派代理调查。
-- **batch-1013**（6c687d65，攒批完成，改名后开测）：batch-1012 + fix-1011 后续（3f78902a）+ reflect-marker（d51837e4）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c）。
-  - **fix-1011**：已修三处顺序相关根因（5fcd911f、7d56de55 image_settle_reads、bfe1bbb9 pkeys_seen）。第四处未修：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回，导致单测 `profile_union_key_and_coverage` 失败。终态做法：分析结束时删除只由回退站点贡献的缓存组，见引导映像计划 §5.8.6。
-  - **reflect-marker**：DeepCopy 3553 → 3532 类，HelloWorld / CollectorsDemo 3304 → 3263 类。DeepCopy 分析耗时 502 → 889 s，峰值内存 5.9 → 7.7 GB，原因未查明，疑为 78b744fe。续作见 `2026-10-08-enum-values-direct.md` §9.6。
-  - **logger-chain**：HelloWorld / CollectorsDemo 3304 → 3233 类，DeepCopy 3511 类，LogManager 为 0。目标 537 / 583 未达到。剩余持有者是 `logRuntimeExit@74` 的 `log(DEBUG)`，需要把 `isLoggable(DEBUG)` 折叠为 false（缺口 ③），见引导映像计划 §5.9.7。
-- **改名**：batch-1012 放行合入后停派新代理，分发器清空后改名。改名后重建巡检 cron，并更新 cluster.toml、巡检脚本路径和服务器检出的 origin。
-- **改名后待派（按序）**：
-  - 缓存组回退撤回（§5.8.6）；
-  - reflect-marker 耗时回归与 §9.6；
-  - 日志链缺口 ③；
-  - annot-sig 续作；
-  - TestJndiNoProvider 转译变慢调查。
+- **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。
+- **batch-1012 放行记录**：单测仅已知失败；抽查 53/55（TestUrlParsingFaces 已知，TestJndiNoProvider 转译超时、放宽重跑通过）。java_base OOM 根因与修复：s6（c18e8fc4）后启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，charset-ext 将映像分 24 段、启动函数拆 42 个（b3a860ac）、重定位先于回放（160789c7）、`ImageData::writes_statics_of` 统一判定（14917aed），java_base 峰值 11.8 GB → 1.6 GB。
+- **batch-1013 放行记录**：fix-1011 后续（3f78902a）+ reflect-marker（d51837e4，DeepCopy 3553 → 3532，HelloWorld / CollectorsDemo 3304 → 3263）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c，HelloWorld / CollectorsDemo → 3233，DeepCopy 3511，LogManager 0）。单测 A 组仅已知失败、B 组全过（`profile_union_key_and_coverage` 本次通过，第四根因仍在）。抽查 50/55：TestUrlParsingFaces 已知；DeepCopy、TestJndiNoProvider、TestSerialDefaultSuid、TestSerialUserGenericCallbacks 转译超 600 s，放宽超时重跑全部通过。
+- **转译耗时回归**（进行中，perf-regress）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
+- **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
+- **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
+- **进行中（10-09 派）**：缓存组回退撤回（bootcache，§5.8.6）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留；并发小步 A → B（无 GC 文档 §四，10-09 定）。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -113,7 +105,7 @@
   - build-memsafe；纯优化线（10-06 分级）；U1 重议；
   - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
   - 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例。
-- **C4 全量**：尚未开始。前置：合批合入集成分支、改名 rava。
+- **C4 全量**：尚未开始。前置：转译耗时回归修复、dev 恢复（换内存条 + BIOS + 内存自检）。
 - **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
@@ -219,7 +211,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
 | E 编译资源 | E2 D8 声明层分段 | 机制已合入（b51f9531 / b093069f）；底段收窄随 S7-4 / S7-5，C4 之后（见活跃任务「声明层底段收窄」） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
-| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
+| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4、PGO（前置：perf 剖析拆分开销，含 volatile 读 SeqCst 排队） | 暂停 |
 
 ## 🔴 活跃任务
 
@@ -227,12 +219,10 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| 合批 batch-1012 | 🧪 验证中（e5200a3e） | 包含 batch-1009 至 1011；单测达标；抽查除 TestJndiNoProvider（转译 1.76× 变慢，不阻塞）外全过；放行即为改名停派点 |
-| 合批 batch-1013 | ⏳ 改名后开测（6c687d65） | fix-1011 后续、reflect-marker、logger-chain + seed-chain；单测预期失败 `profile_union_key_and_coverage`（第四根因） |
-| 缓存组回退撤回 | ⏳ 改名后派 | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
+| 缓存组回退撤回 | 🔄 bootcache（a6dca5c0） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
 | reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
-| 日志链缺口 ③ | ⏳ 改名后派 | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
-| TestJndiNoProvider 转译变慢 | ⏳ 改名后派 | b1009 324 s → b1012 569.8 s（jp2），sg1 上超过 600 s 超时 |
+| 日志链缺口 ③ | 🔄 logchain3（a6dca5c0） | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
+| 转译耗时回归 | 🔄 进行中（perf-regress，基于 5090505f） | DeepCopy 527 → 912 s、序列化两例 ≈520 → ≈890 s、TestJndiNoProvider 324 → 1006 s；目标回到 batch-1012 水平以下（JNDI ≤350 s）、DeepCopy 峰值 ≤6 GB、闭包类集不变大 |
 | 引导映像零拷贝 | ⏳（§8.3，10-07 定） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
@@ -244,7 +234,9 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
-| 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md` |
+| 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
+| 并发小步 A | ⏳ 待派 | 持锁断言（`with` / `__RefSlot` 守卫计数、`drop_slow` 断言、写锁自持有、`__safepoint` / `<clinit>` 断言）、`with` 拆 `&T` / `with_mut`、对象头位布局常量与 `IMAGE_OBJ`、监视器入口 null 判定与置位。无 GC 文档 §四 |
+| 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---
