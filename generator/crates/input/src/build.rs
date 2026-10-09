@@ -96,6 +96,9 @@ pub struct ReflectFacts {
 /// 发射层输入
 pub struct EmitInput {
     pub registry: Registry,
+    /// 根类（`Domain::Root`，即 Object）：不入注册表（类型结构由手写 `object.rs` 承载），
+    /// 非 native 方法按字节码翻译成根方法体（`emit::project::root_bodies`）
+    pub root: Option<ClassInfo>,
     pub user_classes: Vec<String>,
     /// lib crate 名 → 发射类（声明序）
     pub lib_crates: Vec<(String, Vec<String>)>,
@@ -221,6 +224,18 @@ fn closure_classes(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> (Vec<Arc
         out.push(cf);
     }
     (out, opaque)
+}
+
+/// 根类（闭包事实中 `Domain::Root` 的类）：方法体按字节码翻译，不入注册表
+fn root_class(inp: &BuildInput<'_>, warnings: &mut Vec<String>) -> Option<ClassInfo> {
+    let c = inp.facts.classes.iter().find(|c| c.domain == Domain::Root)?;
+    match inp.cp.get(&c.name) {
+        Some(cf) => Some(ClassInfo::new(cf)),
+        None => {
+            warnings.push(format!("根类无法装载：{}", c.name));
+            None
+        }
+    }
 }
 
 /// 预检链事实：分析器方法节点 id；abstract 方法除外（无方法体，派发落到子类实现，
@@ -436,7 +451,11 @@ impl<'a> BuildInput<'a> {
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
         let registry = self.registry(&lib_crates, &jdk_classes)?;
         lap("input.registry");
-        let normalized = self.normalize(&registry)?;
+        let root = root_class(self, &mut warnings);
+        let mut normalized = self.normalize(&registry)?;
+        if let Some(r) = &root {
+            normalized.extend(self.normalize_class(r)?);
+        }
         lap("input.normalize");
         let strings = visited_strings(&closure, &visited, &normalized);
         let reflect = self.reflect();
@@ -473,6 +492,7 @@ impl<'a> BuildInput<'a> {
             warnings,
             normalized,
             registry,
+            root,
             timings,
         })
     }

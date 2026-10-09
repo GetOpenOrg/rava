@@ -14,7 +14,17 @@ impl Ctx<'_> {
                 let hw = self.boundary_carried(cf, m, &member);
                 return if hw { Kind::Handwritten("boundary") } else { Kind::Bytecode };
             }
-            Domain::Root => return Kind::Handwritten("root"),
+            // 根类：只有 native 方法手写承载，其余（`<init>` / `equals` / `toString` / `wait*` / `finalize`）
+            // 发射层按字节码翻译，同样按字节码建模
+            Domain::Root => {
+                return if m.is_native() {
+                    Kind::Handwritten("root")
+                } else if m.code.is_none() {
+                    Kind::Abstract
+                } else {
+                    Kind::Bytecode
+                };
+            }
             _ => {}
         }
         if m.is_native() {
