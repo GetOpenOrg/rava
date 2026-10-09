@@ -1646,6 +1646,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | `__boot_image_start`（uprobe，10 次中位数） | **156.4 ms**（min 153.9 / max 171.5，n=10；作业 zc-probe4-669365cf） | **176.3 ms**（min 172.4 / max 179.4，n=10） |
 
 - **启动 ≤ 1 ms 未达到**：缺省开发档下，`__boot_image_start` 本身耗时 156 ms（HelloWorld）/ 176 ms（DeepCopy），分别占整进程墙钟的 88% / 60%。探针在启动函数入口与返回处成对触发，量的是函数本身。这说明零拷贝虽然删掉了逐槽写入，启动序列里剩下的 VM 单元、初始线程、残差、宿主改写与重定位步骤在未优化代码下仍是主要成本。原因定位用 perf 采样（作业 zc-prof-669365cf，kr2，取回 `build/zc/self.txt` / `children.txt`），该作业在 6h 上限前仍在 kr2 排队，热点结论待取回后补入续作 0。
+  - **热点（zc-prof-669365cf，kr2，HelloWorld 开发档，10-10 取回）**：整进程 87% 在 `lang_start` 之下。① 约 17% 为一次性解码行表与 pc 映射（某 `OnceLock` 初始化内，`meta_codec::leb128` 自身 9.1%、`Vec::push` 3.3%、`pc_maps` 解码 1.5%）——启动路径上有栈遍历触发点（疑查调用者类或填异常栈，未确认）；② 约 16% 缺页、约 7% 动态链接器重定位，`.rela.dyn` 24.8 MB，主要是映像常量中的指针在 PIE 下的重定位；③ 其余为残差路径上翻译后的 Java 代码（如 `StringLatin1.compareToCI`）与原子计数。续作方向：pc 映射按方法按需解码或构建期编成定长格式，并消除启动路径上的栈遍历；映像改非 PIE 链接或消除映像常量的指针重定位；残差进一步常量化。原始报告 `cluster_results/job/zc-prof-669365cf/01/build/zc/self.txt`、`children.txt`。
 - 体积：缩小 0.9%，满足 ≤ +5%。`.data` 增加约 0.4 MB（映像静态的常量初值），`.text` 减少约 2 MB（删掉了启动期逐槽写入的代码）。
 - 门面峰值：HelloWorld 1610 MB，与基线持平。DeepCopy 1779 MB，比基线 1769 MB 高 10 MB（+0.6%），超出约 1.6 GB 的目标；但基线本身已在 1.6 GB 以上，零拷贝没有带来实质增长。门面墙钟增加 12 / 20 s，来自常量求值与大静态。若要把 DeepCopy 压到 1.6 GB 以下，需要把门面的映像静态分到多个 crate（与 decl / body 分层同法），列为续作。
 - release 档：jp1（11.9 GB）上 fat LTO 链接 OOM，与基线相同，本轮跳过。
