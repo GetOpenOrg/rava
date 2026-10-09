@@ -101,6 +101,8 @@ mod builder;
 mod name_eval;
 mod name_ops;
 mod sealed;
+mod sealed_elems;
+mod deval;
 mod map_slot;
 mod nest;
 mod method_lookup;

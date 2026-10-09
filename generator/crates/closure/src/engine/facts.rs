@@ -211,6 +211,19 @@ pub(super) struct Ctx<'a> {
     /// 分派转发槽判定缓存（按成员）：流到分派接收者的形参槽；静态方法非空即按调用点区分上下文（`forward.rs`），
     /// 常量实参求值穿过转发方法不计深度（`consteval.rs`）
     pub(super) forwarders: RefCell<HashMap<MemberRef, u64>>,
+    /// 元素封存的数组字段判定缓存（`sealed_elems.rs`）
+    pub(super) sealed_arrs: RefCell<HashMap<MemberRef, bool>>,
+    /// 调用点派发集（按调用方成员与偏移汇合各上下文，`deval.rs`）与查询过它的方法
+    pub(super) vdisp: RefCell<HashMap<(MemberRef, u32), super::deval::VDisp>>,
+    pub(super) vwatch: RefCell<HashMap<(MemberRef, u32), BTreeSet<usize>>>,
+    /// 进行中的分派求值：发起的方法节点、嵌套深度、剩余求值次数（`deval.rs`）
+    pub(super) dv_top: Cell<Option<usize>>,
+    pub(super) dv_depth: Cell<u32>,
+    pub(super) dv_budget: Cell<u32>,
+    /// 分派求值诊断轨迹（`--flows @vals:`；None = 不记录）
+    pub(super) dv_trace: RefCell<Option<Vec<String>>>,
+    /// 一次分派求值内的结果缓存（`deval.rs`；键为目标与绑定实参，值 None = 未知、Some(None) = 不返回）
+    pub(super) dv_cache: RefCell<HashMap<String, Option<Option<V>>>>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }
@@ -278,6 +291,10 @@ pub(super) struct Facts<'c, 'a> {
     pub(super) caller_sites: RefCell<BTreeSet<u32>>,
     /// 静态调用点按克隆节点的返回值答复（`site_rets.rs`；空 = 全部走按成员的返回常量格）
     pub(super) sites: super::site_rets::SiteTable,
+    /// 被分析方法的成员（方法体分析与分派求值时给出：按调用点派发集求值，`deval.rs`）
+    pub(super) key: Option<MemberRef>,
+    /// 分派求值中的嵌套分析（`deval.rs`）
+    pub(super) dv: bool,
 }
 
 pub(super) fn const_value(c: &Const) -> Option<V> {

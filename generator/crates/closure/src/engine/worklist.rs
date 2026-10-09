@@ -324,7 +324,7 @@ impl<'a> Engine<'a> {
             let entry = (!closing && level.is_none()).then(|| (params.clone(), mirrors.clone()));
             *self.ctx.dep_log.borrow_mut() = entry.is_some().then(Vec::new);
             let objs = super::obj_fields::ObjParams { sets: pobjs.clone(), queries: Default::default() };
-            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level, objs, callers, caller_sites: Default::default(), sites: sites.clone() };
+            let facts = Facts { ctx: &self.ctx, live: &live, m: Some(m), params, mirrors, level, objs, callers, caller_sites: Default::default(), sites: sites.clone(), key: Some(key.clone()), dv: false };
             let mut a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &facts);
             let queries: Rc<[super::obj_fields::ObjQuery]> = facts.objs.queries.take().into();
             let deps = self.ctx.dep_log.borrow_mut().take();
