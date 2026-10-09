@@ -60,7 +60,10 @@ impl<T> JArray<T> {
 
     /// 映像中擦除协变视图（`__ImageArr::view`）的引用，取本引用元素静态类型（常量求值可用）
     #[doc(hidden)]
-    pub const fn __image_view(value: &'static __ArrayObj<Object>) -> Self {
+    pub const fn __image_view(value: &'static __ArrayObj<Object>) -> Self
+    where
+        T: 'static,
+    {
         // SAFETY: `__ArrayObj` 为 repr(C)，布局与元素类型无关；视图形态的存取全部经擦除函数指针，不按 T 解释元素区
         JArray(Some(__Obj::image(unsafe { &*(value as *const __ArrayObj<Object> as *const __ArrayObj<T>) })))
     }
