@@ -1,6 +1,6 @@
 # 转译耗时回归调查（2026-10-09，分支 perf-regress）
 
-> 状态：**未完成**（第三轮）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），pr-tg6 / pr-tg7 核实类集合比 bedc57aa 少 2 个、无新增；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
+> 状态：**未完成，第三轮到时收尾**（10-10 04:30）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），pr-tg6 / pr-tg7 核实类集合比 bedc57aa 少 2 个、无新增；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
 
 ## 现象
 
@@ -163,12 +163,12 @@ pr-tg6 按 c02c1825 → e5200a3e 顺序跑；第三段 c02c1825 因脚本在共�
 
 - 类集合（对照 pr-tg1 的 bedc57aa 类表）：两例都少了 `java/lang/reflect/InaccessibleObjectException` 与 `sun/security/provider/certpath/X509CertificatePair`，没有新增类。后者推测同样是非空常量恢复后被剪掉的分支带出的类，未单独 --why。
 - 耗时与峰值：c02c1825 与 bedc57aa 持平（DeepCopy +2%，JNDI +1%，在噪声内），比 e5200a3e 慢 1.68×。峰值 6.9 GB（DeepCopy）/ 8.0 GB（JNDI），未达到 ≤6 GB 目标。CHM 表合并未修是主因。
-- 单测（dev）：A 组 pr-ut-c02c1825 只有已知失败 `param_string_constants_fold_switch`；B 组 pr-utB-c02c1825 全过。
+- 单测（dev）：A 组 pr-ut-c02c1825 只有已知失败 `param_string_constants_fold_switch`；B 组 pr-utB-c02c1825 全过；`closure_independent_of_hash_seed`（pr-uth-c02c1825）通过。
 
 ## 残留与建议
 
 1. **CHM 表合并（最高优先，未修）**：引入点见「第三轮 · CHM 表合并：open CHM 的引入点」。终态方向是摘要克隆的接收者取调用方实参集而不是 open，字段写按接收者对象落 O，不落公共 U；另核实 Object[] 元素 open 的来源。逐逃逸对象展开（93d80e65）已证代价过高且不消合并，不再走这条路。不截断入口、不关精度。
-2. **c02c1825 的验证**：类集合、测时、单测 A / B 已完成（见「第三轮实测」）。`closure_independent_of_hash_seed`（pr-uth-c02c1825，dev）结果见下一行。
+2. **c02c1825 的验证**：类集合、测时、单测 A / B 已完成（见「第三轮实测」）。`closure_independent_of_hash_seed`（pr-uth-c02c1825，dev）通过（1 passed，8947 s）。
 3. TreeBin.find → findTreeNode：选择子常量克隆的非虚调用点可按「基调用点 × 常量」建枢纽（未做）。
 4. `lambda_vals.rs` 的 lambda 捕获参数常量仍用 `PV::of`，与 `bind_params` / 枢纽的 `PV::of_ret` 不同口径（未改，需单独测类集合）。
 5. 在 3972ce9b（pr-tmp-eg-1dbfd22c）/ cfa8a743（pr-tmp-eg-8ce97959）/ 6c687d65 上逐点测 JNDI（未做）。
