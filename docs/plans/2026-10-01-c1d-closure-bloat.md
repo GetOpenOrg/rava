@@ -4475,6 +4475,12 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
   - DeepCopy：jar `JarURLConnection`、`JarVerifier`、`PKCS7` 出闭包；`java/net/JarURLConnection` 只剩 type 级
     （`ResourceBundle$Control.needsReload@98` 的 instanceof）。
   - `URL.of` 的全部上下文（URI$1.create 分配的 `jrt` URI 加全部映像 URI）只到快路径 @123 / @136，慢路径 @238 / @251 不可达。
+- 生成器单测（cab8ece3，sg1 / kr1）：cfg 7、classfile 11、closure lib 237、rava bin 31、rava_link 4、archive_emit_cli 1、
+  build_cli 17 全过；closure_cli 除 `closure_independent_of_hash_seed` 外全部跑完，唯一失败为已知 `param_string_constants_fold_switch`。
+  `closure_independent_of_order` 失败于 `FindOps` 派发点（`FindOp.evaluateSequential@20` ↔ `FindTask.doLeaf@29`），
+  即 afdfa922 已记录的先于本分支存在的差异（续作 6），与 URI 线无关。
+  `closure_independent_of_hash_seed` 在单测作业里两次被 2h 上限截断，已在合并基线后的 23d22d77 上于 dev 单独补跑
+  （作业 `uri-utH-23d22d77`），结果待取。
 
 ### 32.3 余项（不属本线）
 
