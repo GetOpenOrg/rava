@@ -217,6 +217,29 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 上下文值集诊断：`@ctxsets:<方法键子串>`——匹配方法的上下文克隆数，及按形参值集元素数之和排序的前 25 个克隆
+        // （各形参 / 返回值的元素数、调用方数与前 4 个调用方）
+        if let Some(q) = pat.strip_prefix("@ctxsets:") {
+            let mut v: Vec<(usize, String)> = Vec::new();
+            let mut n = 0usize;
+            for (i, mn) in self.methods.values().enumerate() {
+                if !mn.key.to_string().contains(q) {
+                    continue;
+                }
+                n += 1;
+                let size = |e: &Self, nd: Node| e.graph.get(&nd).map_or(0, |s| s.classes.len() + s.open.len());
+                let ps: Vec<usize> = (0..mn.ptypes.len()).map(|j| size(self, Node::P(i, j as u16))).collect();
+                let r = size(self, Node::R(i));
+                let cs: Vec<usize> = self.callers.get(&i).into_iter().flatten().copied().collect();
+                let cl: Vec<String> = cs.iter().take(4).map(|&c| self.ctx_label(c)).collect();
+                let tot = ps.iter().sum::<usize>() + r;
+                v.push((tot, format!("  {tot}\tP {ps:?} R {r} 调用方 {} {cl:?}\t{}", cs.len(), self.ctx_label(i))));
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            out.push(format!("@ctxsets {q}: {n} 个克隆"));
+            out.extend(v.into_iter().take(25).map(|x| x.1));
+            return out;
+        }
         // 污染路径诊断：`@path:<节点子串>|<类名>`——从匹配节点沿流边反向，经含该类的节点走到源头（最短路径）
         if let Some((np, cls)) = pat.strip_prefix("@path:").and_then(|v| v.split_once('|')) {
             let (open, cls) = match cls.strip_prefix("open:") {
