@@ -109,7 +109,7 @@ POLL_INTERVAL        = 12    # 轮询远端结果目录的间隔（秒）
 MAX_INFRA_RETURNS    = 3     # 单个测试因网络 / 执行异常归还超过此次数即记为 infra 失败，不再派发
 BREAKER_DISCONNECTS  = 3     # 服务器连续断线达此次数后冷却
 BREAKER_COOLDOWN     = 600   # 冷却时长（秒），期间该服务器不领新任务
-# 缺省 JDK 主版本 = java_rta 语料参考构建的主版本：run_tests 不传 --jdk 即用参考构建；
+# 缺省 JDK 主版本 = rava 语料参考构建的主版本：run_tests 不传 --jdk 即用参考构建；
 # 其他主版本（如 --jdk 25）传 --jdk N，属实验覆盖（run_tests 标记非参考构建）
 DEFAULT_JDK     = 21
 
