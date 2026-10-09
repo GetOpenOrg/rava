@@ -1,0 +1,2 @@
+# 反射调用的 @CallerSensitive 判定读注解（Reflection.isCallerSensitive 的 isAnnotationPresent 派发点；全部 Method.invoke 入口经直连 / 标记不再走注解解析的上界）
+jdk/internal/reflect/Reflection.isCallerSensitive:(Ljava/lang/reflect/Method;)Z@18

@@ -1,0 +1,41 @@
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  java.lang.Object.wait Object.java:339 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:13 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:18 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  java.lang.Object.wait Object.java:488 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:23 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  java.lang.Object.wait Object.java:339 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:29 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:34 native=false
+java.lang.IllegalMonitorStateException: current thread is not owner
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  java.lang.Object.wait Object.java:488 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:39 native=false
+java.lang.IllegalArgumentException: timeout value is negative
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:45 native=false
+java.lang.IllegalArgumentException: nanosecond timeout value out of range
+  java.lang.Object.wait Object.java:480 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:52 native=false
+java.lang.InterruptedException
+  java.lang.Object.wait0 Object.java:-2 native=true
+  java.lang.Object.wait Object.java:366 native=false
+  java.lang.Object.wait Object.java:339 native=false
+  TestObjectWaitFrames.main TestObjectWaitFrames.java:60 native=false
+done
