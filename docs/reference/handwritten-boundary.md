@@ -63,7 +63,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
 ### 不属于手写：指令语义与运行时基础设施
 
 - **指令级语义**归生成器与运行时基础设施，不对应任何手写 Java 方法：类初始化触发与初始化锁（JVMS §5.5）、
-  `monitorenter` / `monitorexit`、数组存取与越界、异常表。（`Object.notify` / `notifyAll` / `wait0` 是 native，属类 1；`wait()` / `wait(J)` / `wait(JI)` 有字节码，现为根类手写体，终态按字节码翻译，见 regress2 文档 §10.1b。）
+  `monitorenter` / `monitorexit`、数组存取与越界、异常表。（`Object.notify` / `notifyAll` / `wait0` 是 native，属类 1；根类其余有字节码的方法——`equals`、`toString`、`wait()` / `wait(J)` / `wait(JI)`、`finalize`——按字节码翻译为自由函数 `Object__<fn>_body`（`generator/crates/emit/src/project/root_bodies.rs`），`object.rs` / `object_impl.rs` 只转交，见 regress2 文档 §10.1b。）
 - **运行时基础设施**不对应 Java 方法：对象模型（`java/lang/Object` 的 `ObjectVTable`）、数组与字符串的内部表示、
   异常与 `Result`（`error.rs`）、crate 骨架（`lib.rs`）。
 
@@ -134,6 +134,7 @@ native 方法的手写实现要在注释里说明它与 JVM 可观测行为一�
   - 类 2 / 类 3：有上限的枚举，新增须登记并说明依据；
   - 未登记的非 native 手写：直接计为回归（与 `non_native_overrides` 同口径，该项 2026-09-28 已清零）；
   - 反向检查：登记为非 native 的方法必须确有字节码。
+  - 根类（`Domain::Root`，不入注册表）同口径：非 native 方法一律翻译字节码（档案链外为 panic 存根），`<init>` 体非单条 `return` 时计 `HwAudit::Override`（`root_bodies::emit`）；分析器侧根类事实 native → 手写、有码 → 字节码（`closure/src/engine/facts/kinds.rs`），不再整类视为手写。
 - 分析器对手写的建模：手写返回对分析不透明、只能取 open(返回类型)，精度低于字节码（C1d 实测：`jdk/internal/misc`
   放行后 CollectorsDemo 闭包 −105 类）。这是收窄手写的直接收益之一。
 
