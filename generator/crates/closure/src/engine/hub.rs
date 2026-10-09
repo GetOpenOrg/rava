@@ -147,7 +147,8 @@ impl<'a> Engine<'a> {
         } else {
             self.pstr_top_h(h);
         }
-        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
+        // 形参常量格与逐个接边同口径（`bind_params` 取 `PV::of_ret`：确定非空的无标签引用记为「非空引用」）
+        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of_ret)).collect();
         self.hub_vals(h, &mine);
         self.prof_seg(site_prof::SEG_LINK_REPLAY);
         let hub = &mut self.hubs[h as usize];
