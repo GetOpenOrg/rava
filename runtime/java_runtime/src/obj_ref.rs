@@ -254,6 +254,8 @@ impl<T: ?Sized> __Obj<T> {
     /// 最后一个引用释放：析构值（含尾随元素）并归还分配
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
+        // 锁内释放对象会重入任意析构链（析构再取同一字段锁即自死锁）：debug 档断言不持字段锁
+        crate::sync_model::__assert_no_field_lock("释放对象");
         // SAFETY: 计数已归零，本线程独占；头记录分配大小
         unsafe {
             let size = self.header().size;
