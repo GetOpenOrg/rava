@@ -1340,6 +1340,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 类 / 方法集合在两种次序下逐项相同，与基线一致，类数不增。
 - **单测**（bc-t2-019878f0，sg1）：`closure` 的 `image_ext` 5 项（新增 `drop_memo_groups_matches_never_applied`）、`reflect_new_array_element_precision`、`profile_union_key_and_coverage` 全部通过。
 - **e2e 抽查**（bc-sp1-019878f0，us1）：HelloWorld、TestGenericSuperclassReflect、TestOwnerTypeFaces、TestModuleLayerDefine 通过（转译 116–134 s）。DeepCopy 转译超过 600 s 的超时，属于 a6dca5c0 上已知的转译耗时回归（基线 912 s，由 perf-regress 修），与本改动无关。上表中本分支 DeepCopy 的闭包耗时（895 s）不高于基线（933 s）。
+- **DeepCopy 放宽超时重跑**（bc-sp2-019878f0，sg2，`--transpile-timeout 1800`）：通过，转译 954 s、构建 724 s。与基线 912 s 相差 +4.6%，但两者不在同一台服务器，属于跨机波动范围；同口径的闭包对比（上表）本分支不慢于基线。
 
 **恢复入口**：
 - `engine/levels_boot.rs`：`image_settled_build_time`。
