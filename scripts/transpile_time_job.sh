@@ -31,13 +31,17 @@ for sha in "$@"; do
     s8="${full:0:8}"
     wt="$REPO/build/ttime-wt/$s8"
     [[ -d "$wt" ]] || git -C "$REPO" worktree add -q --detach "$wt" "$full" || { rc_all=1; continue; }
-    echo "═══ $(date '+%H:%M:%S') 构建 rava @$s8"
-    t0=$SECONDS
-    cargo build --release -q -p driver --manifest-path "$wt/generator/Cargo.toml" --target-dir "$TARGET" \
-        || { echo "构建失败 @$s8"; rc_all=1; continue; }
-    mkdir -p "$wt/build/bin"
-    cp "$TARGET/release/rava" "$wt/build/bin/rava"
-    echo "  构建 $((SECONDS - t0))s"
+    # 同一提交在参数中重复出现（交替测时）时复用首次构建的二进制：共享 target 下 cargo 按 mtime 判新鲜，
+    # 回到较早检出的 worktree 时不会重链，release/rava 会是上一个提交的产物
+    if [[ ! -x "$wt/build/bin/rava" ]]; then
+        echo "═══ $(date '+%H:%M:%S') 构建 rava @$s8"
+        t0=$SECONDS
+        cargo build --release -q -p driver --manifest-path "$wt/generator/Cargo.toml" --target-dir "$TARGET" \
+            || { echo "构建失败 @$s8"; rc_all=1; continue; }
+        mkdir -p "$wt/build/bin"
+        cp "$TARGET/release/rava" "$wt/build/bin/rava"
+        echo "  构建 $((SECONDS - t0))s"
+    fi
     mkdir -p "$OUT/$s8"
     for c in "${CASES[@]}"; do
         n="$(basename "$c" .java)"
