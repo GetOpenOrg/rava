@@ -1501,6 +1501,41 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - ③ 按上面 1 → 2 → 3 实施；入口是 `engine/obj_rets.rs`（按对象返回值）与 `engine/facts/oracle.rs::invoke_result` 的虚调用分支（目前只有构造完成标签的 `tagged_target`，需扩到抽象对象集的逐目标求值）。
 - 诊断：`--flows '@vals:Shutdown.logRuntimeExit'` 看 `@10 isLoggable` 的 `orv`（按对象返回值）与 `ceval`；`--why java/security/SecureRandom` 看首达链是否仍经 `logRuntimeExit@74`。
 
+**2026-10-09 ③ 落地：`logRuntimeExit@10 isLoggable(DEBUG)` 折成 false（分支 `logchain3`，基于 a6dca5c0；作业 `lc3-ub2`、`lc3-d3`、`lc3-d4`、`lc3-dc`、`lc3-ut`、`lc3-sp`）**
+
+实际链条与上面「所缺机制 1–3」的预想不同。接收者不必收窄到对象：`@10` 的派发集只有 `AbstractLoggerWrapper.isLoggable`，`wrapped()` 之后 `@5 isLoggable` 的派发集只有 `SimpleConsoleLogger.isLoggable(System.Logger.Level)`（闭包中只有替身日志器被实例化）。因此实现了两个通用机制，生成器 crate 不出现类名或字段名字面量：
+
+| 机制 | 位置 | 内容 |
+|---|---|---|
+| 封闭常量数组元素 | `absint/obj.rs` `Obj::Elems`；`engine/sealed_elems.rs`；`facts/fields.rs::static_const` | 条件：`private static final` 数组字段只在本类 `<clinit>` 中写一次，所有读都是 `aaload`（`load_only`，数组不逃逸、不被改写）；`<clinit>` 中从 `anewarray` 到 `putstatic` 是直线段，期间只有常量下标、常量值的 `aastore`。满足时字段值带元素表，`aaload` 按常量下标取元素，`arraylength` 取长度。`PlatformLogger.spi2platformLevelMapping` 即属此类，`toPlatformLevel(DEBUG)` 因此求得映像对象 `PlatformLogger$Level.FINE` |
+| 按调用点派发集求值 | `engine/deval.rs`；`Dep::Disp`（`share.rs`）；`Engine::vdisp_note`（`invoke.rs::edge`、`hub.rs::link_hub`）；`facts/oracle.rs::invoke_result` | 守卫形态的虚 / 接口调用（返回 boolean、非接收者实参含常量、无唯一目标）按闭包中该调用点的派发集逐目标做常量实参求值，然后汇合：全部不返回则不返回，全部为同一常量则取该常量，否则未知。派发集按「调用方成员 + 偏移」汇合全部上下文，只增；含非字节码目标、接入枢纽、成员名或描述符不符（转接）、目标数超过 4 的调用点不求值。嵌套求值中，唯一目标的调用求方法体；多目标调用只在实参（含接收者）含常量时展开方法体，否则只取各目标的返回常量格。非 final 字段读取取字段值集（`fvals`），读者登记为发起的方法。深度上限 6，一次发起最多求值 64 次，被求值方法不超过 256 条指令，同一次发起内按「目标 + 绑定实参」缓存结果 |
+
+- 失效与单调：发起的方法登记 `Dep::Disp(调用方成员, 偏移)`、`Dep::Ret(目标)`、字段读者与记忆输入。派发集增长时，登记过该调用点的方法失效重算。答复只随派发集、字段值集、返回常量格单调上升（不返回 → 常量 → 未知）。
+- 乐观起点：以下两种情况在定论阶段之前都答「不返回」，与 `noreturn.rs` 同口径：派发集尚无记录（调用边还没接上）；只取返回常量格时该格缺席（`answer_never`）。这一点必须做。调用边只增不撤，第一版（e966772b）在目标尚未分析时过早答「未知」，`@18..@74` 的边先接上，之后答案虽然变成 0，类数仍是 3456（`lc3-d3` 诊断显示事后求值为 `Int(0)`、类数不变）。d1df66a6 修正后才兑现。
+- 求值链（`--flows '@vals:Shutdown.logRuntimeExit'` 的 `deval` 轨迹）：`@10` {AWL.isLoggable} → `@1 wrapped()` 只取返回常量格（未知，不展开）→ `@5` {SCL.isLoggable(Level)} → `toPlatformLevel(DEBUG)` 经元素表得到 FINE → `isLoggable(PlatformLogger.Level)`（final）→ `effectiveLevel()`（private）：`level` 字段值集为 {null}，取 `@8 defaultPlatformLevel()`，其派发集为 {SurrogateLogger}，返回常量格为映像 INFO → `FINE.ordinal() = 3 >= INFO.ordinal() = 5` 为假 → 0。
+- 语义与 JDK 一致的依据：
+  1. `spi2platformLevelMapping` 是私有 static final 数组，只在 `<clinit>` 中构造，读者只做 `aaload`，运行期元素恒为 `<clinit>` 写入的映像枚举对象。
+  2. `SurrogateLogger.defaultPlatformLevel()` 返回 static final `JUL_DEFAULT_LEVEL`，它是 `<clinit>` 中的常量 INFO，不读属性。
+  3. 替身对象的 `level` 只由 `setLevel` / `setPlatformLevel` 写非 null。字段值集是「初值 ⊔ 可达写入点」的最小不动点，论证同上文缺口 3：不动点上写点不可达，运行期就不会写。
+  4. 级别能否在运行期改变：只有上条的写点能改。用户程序一旦使写点或其他日志后端可达（例如使用 java.util.logging 或配置 LoggerFinder），字段值集或派发集会增长，读者失效，折叠自动撤销，那个程序里不会折叠。所以不需要额外判定「级别会不会变」，每个程序都在自己的不动点上是健全的。
+  5. 派发集是不动点上 `@10` / `@5` 实际可达的全部实现。闭包外的实现在运行期不可能成为接收者，理由同字段值集论证。
+
+**实测（类 / 方法；a6dca5c0 基线与切除上界来自 `lc3-ub2`，sg2；d1df66a6 来自 `lc3-d4`（jp1）与 `lc3-dc`（us1））**
+
+| 测例 | a6dca5c0 基线 | 切 `logRuntimeExit@74` 上界 | d1df66a6 | 闭包耗时（基线 → d1df66a6） |
+|---|---:|---:|---:|---|
+| HelloWorld | 3456 / 18678 | 575 | **575 / 1875** | 112 s → 6 s |
+| CollectorsDemo | 3456（e966772b，未兑现版） | — | **614 / 2000** | 118 s → 5 s |
+| DeepCopy | 3757 / 21717 | 3757 | 3757 / 21717 | 945 s → 917 s |
+
+- HelloWorld 兑现了切除上界 575。任务给的目标是 537 / 583，那是 seed-chain 时的基线；a6dca5c0 上的切除上界是 575，剩下的差额不在本链上。
+- DeepCopy 不减类，也不应该减：切掉 `@74` 的上界就是 3757。ef6a1249 时的首达链是 `logRuntimeExit@74`，现在已不经日志链。`--why java/security/SecureRandom` 显示，首达链变成 `Terminator.setup → Signal.handle@71 → StringBuilder.append(Object) → String.valueOf@11` 的 toString 派发 → `SecureRandom.toString`，另有 `TempFileHelper.<clinit>@29 new SecureRandom` 的分配。这条链交给 toString 派发收窄 / `Signal.handle` 消息串线。
+- 确定性与单测（d1df66a6；合并 c249cdec 后为 ddcbf492）：
+  - `closure_independent_of_order`（lc3-utb，us1）：HelloWorld 全矩阵（5 种 batch × 4 种 seed）通过。基线 a6dca5c0 在 HelloWorld 段就失败（batch-1009 记录的 closure_cli.rs:237），本线之后断言推进到 DeepCopy 段，在 batch 1 / seed 1 处失败。
+  - DeepCopy 缺省与 batch 1 / seed 1 的逐键对照：基线 c249cdec（lc3-ordb3）和本线 ddcbf492（lc3-ord3）**差异完全相同**，都只有 `dispatch` 键下一项：`FindOps$FindOp.evaluateSequential@20` 与 `FindOps$FindTask.doLeaf@29` 的派发集互换。这是上游已有的 FindOps 派发次序依赖，由 order-findops 线负责，本线没有引入新的次序依赖。
+  - 其余 closure_cli 单测（lc3-uta，kr2）：container_elements_per_object、no_recording_without_queries、**param_string_constants_fold_switch（原已知失败，现转绿）**、recording_flow_queries、returns_per_receiver_object、returns_per_site_receiver、snapshot_read_ignores_props_escape、stack_overflow_error_in_minimal_closure、reflect_new_array_element_precision、sysprops_lambda_return_confined、unsure_lookup_releases_known_names 全部通过。`closure_independent_of_hash_seed` 在 6600 s 作业上限内没有跑完（JNDI / Serial 族各 3 种子），没有失败输出。
+  - 下方「单测 param_string_constants_fold_switch 不归本线所能转过」是 ③ 落地前的结论：③ 落地后 HelloWorld 降到 575 类，`jrt/Handler` 所在的链也随日志链一起剪掉，该测已实测通过。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
@@ -1511,7 +1546,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。log-chain2 实测确认其类收益上限为 0，不再实现（见上「路径 A 与 ③ 的收益上限」）。
 
 **③ isLoggable(DEBUG)**
-- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
+- （log-chain2 时的旧结论，已由上方「2026-10-09 ③ 落地」取代）未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
 
 **仍持有日志链的其他根**（交给对应的线）
 - `Tripwire.ENABLED`（doPrivileged 读属性）；

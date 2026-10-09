@@ -389,7 +389,8 @@ impl<'a> Engine<'a> {
                             } else {
                                 String::new()
                             };
-                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}", mref.name))
+                            let dv = if t.is_none() { self.ctx.deval_diag(m, key, *opcode, *o, mref, args) } else { String::new() };
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}{dv}", mref.name))
                         }
                         absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
                             let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);

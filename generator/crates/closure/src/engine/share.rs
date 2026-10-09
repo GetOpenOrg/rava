@@ -29,6 +29,8 @@ pub(super) enum Dep {
     Props,
     /// 记忆条目（编号见 `memo.rs`）的取用者
     Memo(u32),
+    /// 调用点派发集（调用方成员、偏移）的查询者（见 `deval.rs`）
+    Disp(MemberRef, u32),
 }
 
 /// 一份可共享的摘要
@@ -80,6 +82,9 @@ impl Ctx<'_> {
             }
             Dep::Memo(i) => {
                 self.mdeps.borrow_mut().entry(*i).or_default().insert(m);
+            }
+            Dep::Disp(k, off) => {
+                self.vwatch.borrow_mut().entry((k.clone(), *off)).or_default().insert(m);
             }
         }
         if let Some(log) = self.dep_log.borrow_mut().as_mut() {
