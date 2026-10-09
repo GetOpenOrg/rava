@@ -4426,3 +4426,62 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
 - `cr-m1-a450ee23`：类数，见 31.1。
 - `cr-d1-a450ee23` / `cr-d3-a450ee23`（jp2）：URL 与 Formatter 诊断，见 31.3 / 31.5。
 - `cr-u1-4afa42b6`（jp2）：`cargo test --release -p closure --lib absint`，40 个通过、0 失败（含新增 `distinct_string_constants_ref_ne`）。
+
+## 32. §31.3 能力 ④ 落地：URI 按对象，`URL.of` 慢路径出闭包（2026-10-10，分支 `c1d-uri`，基于 9a48ca32）
+
+### 32.1 机制（三处，均按字节码与清单判定，不列类名）
+
+1. **键载体类**（`engine/key_carriers.rs`，④-1）：键形参取 `[facts.keyed_lookups]` 各入口的 `key` 与 `scheme_sites` 的 URL 串形参，
+   在这些形参所属方法的声明类内求不动点：调用键形参方法时，键实参来自本方法形参，则该形参也是键形参；
+   来自无实参实例调用 `x.g()` 的返回值，且 g 的实现（沿超类解析）读取本类或超类的实例字段，则 x 的静态类型是键载体类。
+   键载体类按容器形态类处理（`classes.rs::container_shape`），对象按分配点分开，读取方法按接收者对象克隆，
+   P3 按对象取返回值（`obj_rets.rs`）。实测载体为 `URI`（`URL.of@247 uri.toString()` 流入 `URL.<init>(URL,String,…)` 的 spec，
+   即协议键）与 `UrlDeserializedState`（`getProtocol()`）。`Provider$Service` 的键是直接 getfield，不是载体。
+   判定在首次查询时一次求出，只取决于清单与类文件，与处理顺序无关。
+2. **反序列化写入不进 `owild`**（`obj_fields.rs::untracked_instance`，④-3）：值集里以类 id 出现的容器形态类实例，只能来自
+   不经分配点的途径（反序列化 `<alloc>`、反射 / Unsafe 分配），与任何抽象对象都不是同一个运行期对象。
+   `putfield` 接收者是这类实例时，写入只并入全局值集 `fvals`，不并入 `owild`。`readObject` → `Parser` 写回的
+   `authority` / `fragment` 等因此不再把全部 URI 抽象对象的按对象读拉回 Top。
+   同时字节码写入值改取 `PV::of_ret`，确定非空的引用记为「非空引用」，`path == null` 一类判定可折。
+3. **映像对象全字段确定初始化**（`image_start.rs` + `facts.rs::oimage`，本节新增）：映像只列非缺省值。
+   构建期确定内容的抽象对象（非占位、非延迟值、非类镜像）的未列出实例字段，逐字段记缺省值进 `ovals`，并登记 `oimage`；
+   按对象读（`obj_field_value`）对 `oimage` 对象不再并入初值。此前映像 URI（`SystemModuleFinders` 的 `jrt:/<模块>` 位置）
+   的 `scheme` 按对象值是 `"jrt"`，但与初值 null 汇合成 Top，`URL.of` 在这些上下文中仍走慢路径（只有机制 1、2 时，
+   Hello 中 12 个映像 URI 上下文都到 @247 / @251）。
+
+诊断：新增 `--flows '@ofield:<字段键子串>'`，列出 `owild`、各抽象对象的字段值，映像对象另列映像原值与占位 / 延迟标记。
+
+### 32.2 实测（`rava closure`，`closure_composition_job.sh deepcopy hello`）
+
+| 作业 | 提交 | 用例 | 类 | 方法 | 闭包耗时 |
+|---|---|---|---:|---:|---:|
+| uri-base-9a48ca32（sg1） | 9a48ca32（基线） | HelloWorld | 3407 | 18453 | 109.4 s |
+| uri-base-9a48ca32（sg1） | 9a48ca32（基线） | DeepCopy | 3727 | 21500 | 957.9 s |
+| uri-new-45aa8d24（kr1） | 45aa8d24（机制 1 + 2） | HelloWorld | 2232 | 11411 | 39.2 s |
+| uri-new-45aa8d24（kr1） | 45aa8d24（机制 1 + 2） | DeepCopy | 3088 | 17088 | 610.5 s |
+| uri-new-cab8ece3（kr1） | cab8ece3（机制 1 + 2 + 3） | HelloWorld | **2158** | **11061** | 36.3 s |
+| uri-new-cab8ece3（kr1） | cab8ece3（机制 1 + 2 + 3） | DeepCopy | **3070** | **17036** | 579.3 s |
+
+- 净变化：HelloWorld 少 1249 类、少 7392 方法；DeepCopy 少 657 类、少 4464 方法。两例都只减不增（新增 0 类）。
+  闭包耗时 HelloWorld 109 → 36 s，DeepCopy 958 → 579 s。sg1 与 kr1 是同规格云服务器；cab8ece3 一轮另带一个 `--flows @vals` 查询。
+- 收益远大于 §31.2 贪心模型的约 285 类。原因是慢路径 `new URL(null, spec, null)` 的协议键放开到全部 URL Handler
+  （jar / http / ftp …），继而带入各 `URLConnection`、`JarFile` / zip、`nio.file`、JCA 提供者与证书链。
+  门排名只计 jar 一支，其他 Handler 的下游没有计入。
+  HelloWorld 减少最多的包：`sun/security/util` 101、`sun/security/provider` 95、`sun/security/ec` 84、`sun/net/www` 82、
+  `sun/security/x509` 74、`com/sun/crypto` 52、`java/util/concurrent` 34、`java/nio/file` 29、`sun/security/pkcs11` 26。
+- 出口判定：
+  - HelloWorld：`sun/net/www/protocol/jar/JarURLConnection`、`java/net/JarURLConnection`、`JarVerifier`、`PKCS7`、`X500Name` 全部出闭包；
+    `CertificateFactory` 只剩 type 级。
+  - DeepCopy：jar `JarURLConnection`、`JarVerifier`、`PKCS7` 出闭包；`java/net/JarURLConnection` 只剩 type 级
+    （`ResourceBundle$Control.needsReload@98` 的 instanceof）。
+  - `URL.of` 的全部上下文（URI$1.create 分配的 `jrt` URI 加全部映像 URI）只到快路径 @123 / @136，慢路径 @238 / @251 不可达。
+
+### 32.3 余项（不属本线）
+
+- DeepCopy 仍有 347 个 `sun/security` / `java/security/cert` / `java/util/jar` 类，来源与 jar URL 无关：
+  - x509 / 证书工厂：`CodeSource.readObject`（反序列化可达的 `readObject`，反射根）→ `CertificateFactory.generateCertificate`
+    → `X509Factory` → `X509CertImpl`。这是用户合法语义（序列化）面上的开放类型问题，同 §31.2 #6。
+  - pkcs11：`ObjectInputFilter$Config$Global.checkInput` → `ResourceBundle.getBundle` → `ResourceBundle$CacheKey.getProviders`
+    → `ServiceLoader.load` 的服务提供者，同 §29 的 pkcs11 归因。
+  - `X500Name`：`PrintStream.println` 引导区残差 → `String.valueOf` → `X509CertInfo.toString` 开放派发。
+- jar `Handler` 仍因 `URLClassPath.<init>` 无条件构造留在闭包（§30.15），但它的 `openConnection` 下游已经不可达。
