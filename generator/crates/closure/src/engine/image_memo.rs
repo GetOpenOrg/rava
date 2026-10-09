@@ -7,6 +7,11 @@
 //! - 映像中没有的类镜像由构建期求值器新建，按 `m:` 组追加（与扩展期新建的镜像同键同内容）；
 //! - 分析结束时与扩展组一并按键排序重编号，档案按键求并（同键内容与缓存值须相同）。
 //!
+//! 每组记下贡献它的具体求值调用点。调用点在接收者集合增长后可能永久回退（`concrete.rs`），回退前已并入的组
+//! 撤不回分析，却只取决于回退前调用点被处理时的中间集合（随处理次序变化）。分析结束时只由回退调用点贡献的组
+//! 剔除（[`Engine::image_final`] → [`crate::image::ImageData::drop_memo_groups`]），映像的镜像缓存组 = 最终未回退
+//! 调用点所贡献的组。
+//!
 //! 镜像是活对象时，缓存值随镜像传播（`image_drain` 并读 [`MemoState::of`]），之后与映像中其他对象同一口径。
 
 use super::concrete::persist::{FBody, FVal, Frag};
@@ -18,6 +23,8 @@ use crate::image_ext::memo_key;
 pub(super) struct MemoState {
     /// 已并入的缓存（组键）
     keys: HashSet<String>,
+    /// 组键 → 贡献它的具体求值调用点（含该组已由其他调用点并入的情形）
+    pub(super) sites: HashMap<String, BTreeSet<(usize, u32)>>,
     /// 镜像对象 → 其缓存（声明类, 字段名, 值）
     by_mirror: HashMap<u32, Vec<(String, String, IVal)>>,
 }
@@ -91,9 +98,12 @@ impl<'a> Engine<'a> {
 
     /// 片段并入映像（须先经 [`Self::image_memo_prepare`]）：每个（镜像, 字段）一组，已并入的不重复写——同一缓存的值
     /// 与求值实参无关，取首个；不同程序 / 实参得到不同值由档案合并的同键比对报出
-    pub(super) fn image_memo_apply(&mut self, frags: &[Frag]) {
+    pub(super) fn image_memo_apply(&mut self, site: (usize, u32), frags: &[Frag]) {
         for f in frags {
             let key = memo_key(&f.mirror, &f.decl, &f.name);
+            if let Some(s) = self.img.as_mut() {
+                s.memo.sites.entry(key.clone()).or_default().insert(site);
+            }
             if self.img.as_ref().is_none_or(|s| s.memo.keys.contains(&key)) {
                 continue;
             }

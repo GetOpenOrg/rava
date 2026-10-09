@@ -85,11 +85,14 @@ impl<'a> Engine<'a> {
         self.ext_vm.as_deref().map_or(serde_json::Value::Null, |x| x.report())
     }
 
-    /// 分析结束时的映像数据：引导映像 + 扩展组（构建期初始化扩展与镜像缓存），活对象登记后规范化（按键排序重编号）
+    /// 分析结束时的映像数据：引导映像 + 扩展组（构建期初始化扩展与镜像缓存），活对象登记后剔除只由回退调用点贡献的
+    /// 镜像缓存组（`image_memo.rs`），再规范化（按键排序重编号）
     pub fn image_final(&self) -> Option<Result<ImageData, String>> {
         let s = self.img.as_ref()?;
         let mut d = (*s.data).clone();
         d.live = self.image_live();
-        Some(d.canonicalize().map(|()| d))
+        let drop: BTreeSet<String> =
+            s.memo.sites.iter().filter(|(_, ws)| ws.iter().all(|&w| self.concrete_fell_back(w))).map(|(k, _)| k.clone()).collect();
+        Some(d.drop_memo_groups(&drop).and_then(|()| d.canonicalize()).map(|()| d))
     }
 }

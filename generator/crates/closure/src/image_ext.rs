@@ -186,6 +186,123 @@ impl ImageData {
         Ok(())
     }
 
+    /// 剔除镜像缓存组 `drop`（只由最终回退的具体求值调用点贡献，见 `engine/image_memo.rs`），以及剔除后不再被引用的
+    /// 类镜像组（`m:`）。保留集合按引用求闭包：引导对象、其余扩展组（`c:` / `s:`）、保留的镜像缓存组与缓存记录、
+    /// 静态字段为根，落进 `m:` 组（或 `drop` 中的组）的引用使整组保留。`m:` 组只装类镜像，不被引用时运行期按需
+    /// 新建同一镜像，故无论由扩展期还是镜像缓存新建，判定只看内容。保留对象压实（扩展部分顺次前移），之后照常规范化
+    pub fn drop_memo_groups(&mut self, drop: &BTreeSet<String>) -> Result<(), String> {
+        let base = self.ext_base as usize;
+        let n = self.objs.len();
+        // 对象 → 所在扩展组
+        let mut owner = vec![usize::MAX; n - base];
+        for (gi, g) in self.ext.iter().enumerate() {
+            for k in g.start..g.start + g.len {
+                owner[k as usize - base] = gi;
+            }
+        }
+        let weak = |g: &IGroup| g.key.starts_with(MIRROR_KEY) || drop.contains(&g.key);
+        let mut keep: Vec<bool> = self.ext.iter().map(|g| !weak(g)).collect();
+        if keep.iter().all(|&k| k) {
+            return Ok(());
+        }
+        let memos = self.memos_by_key()?;
+        let mut work: Vec<u32> = Vec::new();
+        let push_val = |v: IVal, work: &mut Vec<u32>| {
+            if let IVal::R(o) = v {
+                work.push(o);
+            }
+        };
+        for (gi, g) in self.ext.iter().enumerate() {
+            if keep[gi] {
+                work.extend(g.start..g.start + g.len);
+                if let Some(m) = memos.get(&g.key) {
+                    work.push(m.mirror);
+                    push_val(m.val, &mut work);
+                }
+            }
+        }
+        work.extend(0..base as u32);
+        for st in &self.statics {
+            push_val(st.2, &mut work);
+        }
+        let mut seen = vec![false; n];
+        while let Some(o) = work.pop() {
+            let i = o as usize;
+            if i >= n || std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            if i >= base {
+                let gi = owner[i - base];
+                if gi != usize::MAX && !keep[gi] {
+                    keep[gi] = true;
+                    let g = &self.ext[gi];
+                    work.extend(g.start..g.start + g.len);
+                    if let Some(m) = memos.get(&g.key) {
+                        work.push(m.mirror);
+                        push_val(m.val, &mut work);
+                    }
+                }
+            }
+            match &self.objs[i].body {
+                IBody::Inst(fs) => fs.iter().for_each(|f| push_val(f.2, &mut work)),
+                IBody::Arr(es) => es.iter().for_each(|&v| push_val(v, &mut work)),
+            }
+        }
+        if keep.iter().all(|&k| k) {
+            return Ok(());
+        }
+        let kept_keys: BTreeSet<&str> = self.ext.iter().zip(&keep).filter(|e| *e.1).map(|e| e.0.key.as_str()).collect();
+        // 旧下标 → 新下标（剔除的对象不应再被引用）
+        let mut map = vec![u32::MAX; n - base];
+        let mut at = base as u32;
+        for (gi, g) in self.ext.iter().enumerate() {
+            if keep[gi] {
+                for k in 0..g.len {
+                    map[(g.start + k) as usize - base] = at + k;
+                }
+                at += g.len;
+            }
+        }
+        let f = |x: u32| if (x as usize) < base { x } else { map[x as usize - base] };
+        let gsteps = self.group_steps();
+        let mut objs: Vec<IObj> = self.objs[..base].to_vec();
+        let mut steps: Vec<IStep> = self.steps[..self.ext_steps as usize].to_vec();
+        let mut ext = Vec::new();
+        for (gi, g) in self.ext.iter().enumerate() {
+            if !keep[gi] {
+                continue;
+            }
+            let start = objs.len() as u32;
+            for k in 0..g.len {
+                objs.push(remap_obj(&self.objs[(g.start + k) as usize], &f));
+            }
+            let (a, b) = gsteps[gi];
+            for st in &self.steps[a..b] {
+                steps.push(remap_step(st, &f)?);
+            }
+            ext.push(IGroup { key: g.key.clone(), start, len: g.len, nsteps: g.nsteps });
+        }
+        let mut mirror_memos = Vec::new();
+        for m in &self.mirror_memos {
+            if kept_keys.contains(self.memo_key_of(m)?.as_str()) {
+                mirror_memos.push(remap_memo(m, &f));
+            }
+        }
+        for s in &mut self.statics {
+            s.2 = remap_val(s.2, &f);
+        }
+        if self.statics.iter().any(|s| s.2 == IVal::R(u32::MAX)) {
+            return Err("剔除镜像缓存组后静态字段引用了被剔除的对象".into());
+        }
+        self.strings = self.strings.iter().map(|&x| f(x)).filter(|&x| x != u32::MAX).collect();
+        self.live = self.live.iter().map(|&x| f(x)).filter(|&x| x != u32::MAX).collect();
+        self.objs = objs;
+        self.steps = steps;
+        self.ext = ext;
+        self.mirror_memos = mirror_memos;
+        Ok(())
+    }
+
     /// 扩展组按键排序重编号；静态字段、构建期初始化类、活对象随之有序
     pub fn canonicalize(&mut self) -> Result<(), String> {
         let base = self.ext_base;
@@ -355,5 +472,27 @@ mod tests {
         let b = img(&[("c:p/B", &[obj("p/C", Some(0))])], &[]);
         let mut x = a.clone();
         assert!(x.absorb(&b).is_err());
+    }
+
+    #[test]
+    fn drop_memo_groups_matches_never_applied() {
+        let fk = memo_key("p/T", "q/C", "memo");
+        // 回退调用点并入过镜像缓存（及其镜像 m:p/T）；m:p/U 被类组引用，m:p/V 无人引用
+        let mut a = memo_img(
+            &[("m:p/V", &[mirror_obj("p/V")]), ("m:p/T", &[mirror_obj("p/T")]), (fk.as_str(), &[obj("q/R", None)]), ("m:p/U", &[mirror_obj("p/U")]), ("c:p/A", &[obj("p/A", Some(4))])],
+            None,
+        );
+        a.live = vec![1, 2, 3, 4, 5];
+        a.drop_memo_groups(&[fk.clone()].into_iter().collect()).unwrap();
+        a.canonicalize().unwrap();
+        // 从未并入：只有类组及其引用的镜像
+        let mut b = img(&[("c:p/A", &[obj("p/A", Some(2))]), ("m:p/U", &[mirror_obj("p/U")])], &[1, 2]);
+        b.canonicalize().unwrap();
+        assert_eq!(a, b);
+        // 保留的镜像缓存连同其镜像保留
+        let mut c = memo_img(&[("m:p/T", &[mirror_obj("p/T")]), (fk.as_str(), &[obj("q/R", None)])], None);
+        let before = c.clone();
+        c.drop_memo_groups(&BTreeSet::new()).unwrap();
+        assert_eq!(c, before);
     }
 }
