@@ -1530,7 +1530,11 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 
 - HelloWorld 兑现了切除上界 575。任务给的目标是 537 / 583，那是 seed-chain 时的基线；a6dca5c0 上的切除上界是 575，剩下的差额不在本链上。
 - DeepCopy 不减类，也不应该减：切掉 `@74` 的上界就是 3757。ef6a1249 时的首达链是 `logRuntimeExit@74`，现在已不经日志链。`--why java/security/SecureRandom` 显示，首达链变成 `Terminator.setup → Signal.handle@71 → StringBuilder.append(Object) → String.valueOf@11` 的 toString 派发 → `SecureRandom.toString`，另有 `TempFileHelper.<clinit>@29 new SecureRandom` 的分配。这条链交给 toString 派发收窄 / `Signal.handle` 消息串线。
-- 确定性：`closure_cli` 的 D1（`--flow-batch` × `--hash-seed` 矩阵）见下方单测结果。
+- 确定性与单测（d1df66a6；合并 c249cdec 后为 ddcbf492）：
+  - `closure_independent_of_order`（lc3-utb，us1）：HelloWorld 全矩阵（5 种 batch × 4 种 seed）通过。基线 a6dca5c0 在 HelloWorld 段就失败（batch-1009 记录的 closure_cli.rs:237），本线之后断言推进到 DeepCopy 段，在 batch 1 / seed 1 处失败。
+  - DeepCopy 缺省与 batch 1 / seed 1 的逐键对照：基线 c249cdec（lc3-ordb3）和本线 ddcbf492（lc3-ord3）**差异完全相同**，都只有 `dispatch` 键下一项：`FindOps$FindOp.evaluateSequential@20` 与 `FindOps$FindTask.doLeaf@29` 的派发集互换。这是上游已有的 FindOps 派发次序依赖，由 order-findops 线负责，本线没有引入新的次序依赖。
+  - 其余 closure_cli 单测（lc3-uta，kr2）：container_elements_per_object、no_recording_without_queries、**param_string_constants_fold_switch（原已知失败，现转绿）**、recording_flow_queries、returns_per_receiver_object、returns_per_site_receiver、snapshot_read_ignores_props_escape、stack_overflow_error_in_minimal_closure、reflect_new_array_element_precision、sysprops_lambda_return_confined、unsure_lookup_releases_known_names 全部通过。`closure_independent_of_hash_seed` 在 6600 s 作业上限内没有跑完（JNDI / Serial 族各 3 种子），没有失败输出。
+  - 下方「单测 param_string_constants_fold_switch 不归本线所能转过」是 ③ 落地前的结论：③ 落地后 HelloWorld 降到 575 类，`jrt/Handler` 所在的链也随日志链一起剪掉，该测已实测通过。
 
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
@@ -1542,7 +1546,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。log-chain2 实测确认其类收益上限为 0，不再实现（见上「路径 A 与 ③ 的收益上限」）。
 
 **③ isLoggable(DEBUG)**
-- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
+- （log-chain2 时的旧结论，已由上方「2026-10-09 ③ 落地」取代）未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
 
 **仍持有日志链的其他根**（交给对应的线）
 - `Tripwire.ENABLED`（doPrivileged 读属性）；
