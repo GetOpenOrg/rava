@@ -89,7 +89,7 @@
 
 > 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
-- **转译耗时回归（perf-regress，未完成）**：调查与恢复入口见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。b1012 的跳变来自 c18e8fc4 与 bbeb13a5，b1013 的跳变来自 8ce97959。主导开销是 ConcurrentHashMap 表数组经摘要克隆的 F→U 往返散到全体逃逸对象（机制已确认，未修）。head 5bfc1f67 仍比 b1012 慢约 1.6×；0269f622 的 +1 类（InaccessibleObjectException）未修，见 pr-tg4（40705e1a 的 @CallerSensitive 假设无效）。
+- **转译耗时回归（perf-regress，未完成）**：调查与恢复入口见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。b1012 的跳变来自 c18e8fc4 与 bbeb13a5，b1013 的跳变来自 8ce97959。主导开销是 ConcurrentHashMap 表数组经摘要克隆的 F→U 往返散到全体逃逸对象，open CHM 接收者源自 Object[] 元素读出的 open 值（未修；逃逸对象进 G 的实验 93d80e65 更慢，已撤回）。0269f622 的 +1 类（InaccessibleObjectException）的真因是枢纽形参常量格丢非空，已在 c02c1825 修复，待 pr-tg6 核实。head c02c1825 仍比 b1012 慢约 1.6×。
 
 - **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。
 - **batch-1012 放行记录**：单测仅已知失败；抽查 53/55（TestUrlParsingFaces 已知，TestJndiNoProvider 转译超时、放宽重跑通过）。java_base OOM 根因与修复：s6（c18e8fc4）后启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，charset-ext 将映像分 24 段、启动函数拆 42 个（b3a860ac）、重定位先于回放（160789c7）、`ImageData::writes_statics_of` 统一判定（14917aed），java_base 峰值 11.8 GB → 1.6 GB。
