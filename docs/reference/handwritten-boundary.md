@@ -152,6 +152,8 @@ JceSecurity 6，见 boot-image §5.6、§5.7）。
 | 模块资源 / `${java.home}` 文件 | 发射层把闭包读取的模块资源写成 jimage 嵌入（唯一手写 native `NativeImageBuffer.getNativeMap`）；`java.home` 构建期钉值（U14），其下 `conf/security`、`lib/modules`、`lib/tzdb.dat` 为只读嵌入虚拟树，由 NIO / `UnixFileSystem` 的 native 手写读取（`jdk_resources`） |
 | VM 引导期 | 构建期引导映像求值（`vm_intrinsics.toml [concrete.boot]`），原 `seeds.toml [boot_init]` 已删除 |
 
+根类 `java/lang/Object`（2026-10-09，object-bytecode 分支）：非 native 方法（`equals`、`toString`、`wait` 三重载、`finalize`）按字节码翻译，手写只剩 native（`getClass`、`hashCode`、`clone`、`notify`、`notifyAll`、`wait0`）与 `ObjectVTable` 运行时契约；HelloWorld / DeepCopy 闭包与基线相同（regress2 §10.1b-实施）。
+
 已移出 `[vm_boundary]`、整类按字节码翻译（手写只剩 `ACC_NATIVE`）：`VM`、`Module`、`ModuleLayer`、`SecurityManager`（引导映像第 4 步）、`Unsafe`（a3-U0~U3）、`FileSystems`（a3-X2）、`InvokerBytecodeGenerator`（a3-X1，类定义点按 `[[intrinsic]] class_definition` 登记）。
 
 原 `[boundary]` 前缀、`[release]`、`seeds.toml [data_bundle]`、`seeds.toml [boot_init]`（引导初始化改由构建期引导映像求值器承担，`[concrete.boot]` 在 `vm_intrinsics.toml`，引导映像第 3–4 步）已删除。截断的原始理由

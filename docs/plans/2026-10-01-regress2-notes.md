@@ -240,8 +240,13 @@ TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFra
     DeepCopy 2109 / 3730、3269（b74d2e7e 基线 3059 / 3304，均降）；14 例 e2e 同一编译错：翻译后 `equals` 体
     `this == obj` 为 `&Object == Object` 无实现。d716bdc3 在 Object 基础设施（`object_ext.rs`）补引用形态同一性比较。
     作业 6600s 超时，c249cdec 基线闭包未测出。
-  - ob-d-d716bdc3（us1）：c249cdec 基线闭包对比 + 6 例 e2e 复验——结果见下条（恢复入口：本作业结果目录
-    `cluster_results/job/ob-d-d716bdc3/`）。
+  - ob-d-d716bdc3（us1）：闭包与 c249cdec 基线**完全相同**——HelloWorld classes 1870 / 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（两侧逐项一致；JDK 21 `wait(J)` 的 Blocker 链未带入新类，无需收窄）。
+    6 例 e2e（TestObjectWaitFrames TestEqualsHashCode TestWaitNotify TestToStringThrows TestObjectNativeFrames
+    TestVirtualThread）复验结果写入 `cluster_results/job/ob-d-d716bdc3/01_us1.log` 末尾（截稿时未出）。
+  - 恢复入口：读上述日志；若仍有编译错，查 `build/jdk21/<test>/java_base_body_1/src/body/java/lang/object_body.rs`
+    对应行，修生成器（`emit/src/project/root_bodies.rs::free_fn` 接收者改写）或 Object 基础设施；全通过后补跑
+    TestNativeFrameTrace TestStackWalkerLines HelloWorld ObjectMethods TestContinuationPinned 抽查，再合入。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
