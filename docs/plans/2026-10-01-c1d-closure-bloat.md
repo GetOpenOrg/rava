@@ -4332,3 +4332,97 @@ enum-values-direct（59451c29）、closure-composition（c3a06331），合并修
 b558e0c2 之后映像求值通过，但 HelloWorld emit 内存超限（峰值约 11.9G）。
 
 **待补：根因与修复。**
+
+## 31. C1d 余项：门排名复测与来源归因（2026-10-09，分支 `c1d-rest`，基于 a6dca5c0）
+
+目标口径：DeepCopy ≤ 2803、StockTrans ≤ 2807、TSDS ≤ 2809、HelloWorld 468。本节只做排名、归因与一处通用小步，
+不碰在跑线（日志链 logchain3、具体求值缓存组 bootcache、注解签名 annot-sig、转译耗时 perf-regress）。
+
+### 31.1 实测基线（`rava closure`，`closure_composition_job.sh`）
+
+| 作业 | 提交 | 用例 | 类 | 方法 | 备注 |
+|---|---|---|---:|---:|---|
+| cr-m1-a450ee23 | a450ee23 | DeepCopy | 3757 | — | 单次约 15 min（耗时回归由 perf-regress 修） |
+| cr-m1-a450ee23 | a450ee23 | DeepCopy + `logging` 切除集 | 3703 | — | 日志链只占 54 类 |
+| cr-m1-a450ee23 | a450ee23 | HelloWorld | 3456 | — | |
+| cr-g3-a6dca5c0 | a6dca5c0 | DeepCopy + `logging`（门排名基线） | 3703 | 21355 | 与 a450ee23 相同：31.4 的小步类数 0 变化 |
+
+结论：日志链（logchain3 的范围）不是 DeepCopy 的主体。即使切掉日志链，DeepCopy 离目标仍差约 900 类。
+
+### 31.2 门排名（cr-g3-a6dca5c0，DeepCopy + `logging` 切除，`--gates-verify 3 --gates-timeout 2400`）
+
+| # | 门 | 首达树 | 单切 Δ 模型 | 实测 | 类别 |
+|---:|---|---:|---:|---:|---|
+| 1 | `AccessController.executePrivileged(PrivilegedAction,…)` 方法体 | 1322 | 210 | 923（→ 2780） | 转发方法：Δ 是全部调用点下游之和，不对应单一机制 |
+| 2 | `Charset.lookup`（引导区根 `Charset.isSupported #@level:0`） | 2050 | 290 | 超时 | 构建期可求值；`sun/nio/cs/ext` 279 |
+| 3 | `StandardCharsets.charsetForName` | 63 | 101 | — | 同上链 |
+| 4 | jar `JarURLConnection.getInputStream` | 609 | 96 | — | 精度缺口；贪心第 4 步再接 `CertificateFactory.generateCertificate` +189 |
+| 5 | `executePrivileged(PrivilegedExceptionAction,…)` | 1055 | 50 | — | 转发方法 |
+| 6 | `DeepCopy.deepCopy` | 989 | 47 | — | 用户合法语义（序列化） |
+| 7–8 | `SPILocaleProviderAdapter.findInstalledProvider` / `$1.run` | 763 | 14 | — | |
+| 10 | `Formatter$FormatSpecifier.print` | 1860 | 4 | — | 区域内部互为替补（§16） |
+
+贪心 15 步累计（模型）−1201 类。可归到一个机制、且不与在跑线重叠的来源只有两块：
+
+- **字符集（#2/#3，约 390 类）**：引导区以未知名字调用 `Charset.isSupported`，查找放开到全部扩展字符集。
+  要收窄，须先有 U1 的属性取值决定，再加字符串常量上下文（§13、charset-build / charset-ext 线）。本线不做。
+- **jar URL（#4 + 证书链，约 285 类）**：见 31.3。
+
+### 31.3 jar URL 的真实来源：`URI.toURL` 慢路径（cr-d1 / cr-d3-a450ee23 诊断）
+
+`ServiceLoader$LazyClassPathLookupIterator.parse(URL)` 的实参是两个抽象对象：`URL@25827:123` 和 `URL@25827:238`
+（`URL.of(URI, null)` 在 `URI.toURL@2` 上下文中的两个分配点）。`@path` 反向链如下：
+
+```
+SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module + "/" + name)   // URI(String,String) 构造
+  → BuiltinClassLoader.findResource(ModuleReference,String)@64  u.toURL()
+  → URL.of(uri, null)
+      @123 快路径：handler == null && "jrt".equals(scheme) && !isOpaque && rawAuthority == null && rawFragment == null
+           → new URL("jrt", host, port, file, null)              // 协议是常量，键控查找只给 jrt Handler
+      @238 慢路径：new URL(null, uri.toString(), null)           // spec 形状未知，键控查找放开 → jar Handler
+  → checkURL → BuiltinClassLoader$1.next → CompoundEnumeration → nextProviderClass@168/@173 → parse
+```
+
+- 闭包里存活的 `ModuleReader` 只有 `SystemModuleReader` 和 `NullModuleReader`（`instantiated` 实查）。
+  所以运行期到达这里的 URI 全是 `jrt` 方案：scheme 常量、path 非空、authority / fragment 从不写入。
+  实际执行只走 @123，@238 在这条链上不可达。
+- 分析器走到 @238 的原因是 URI **不是抽象对象**：`@objs:P0 java/net/URI.toURL` 为空。
+  `container_shape` 只把泛型容器和持有键类字段的类（如 URL 的 `handler`）建成抽象对象，URI 两样都不是，
+  于是 `uri.getScheme()` 等读的是 `URI.scheme` 的全局值集（Top），快路径条件判不定。
+- 终态能力（记为 ④，归 §30 的 URL 精度线）：
+  1. 把「实例字段经读取方法流入键控查找键（`[facts.keyed_lookups]` 的 `key`）」的类也建成按对象的抽象对象，
+     使 URI 按分配点分开。判定按字节码，不列类名。
+  2. 用 P3（按接收者对象的返回值）求 `getScheme` / `isOpaque` / `getRawAuthority` / `getRawFragment`，
+     再用 `string_equality` 判定 `"jrt".equals`。
+  3. 解决 `owild` 阻塞：反序列化出的 URI 由 `readObject` → `parse` 经字节码写 `this.authority` 等字段，
+     接收者是序列化类 id，不是抽象对象，写入并入 `owild[字段]`。按对象读的答复含 `owild`，所以仍是 Top。
+     需要把「接收者只可能是反序列化分配对象」的写入从 `owild` 中分离出来（反序列化对象与抽象对象不相交，
+     见 `obj_fields.rs` 健全性第 3 条的论证），否则 ① ② 落地后收益仍为 0。
+  - 预期收益：jar `JarURLConnection` / `JarVerifier` / PKCS7 / X500 / 证书工厂链。贪心模型合计约 285 类，
+    实测待能力落地后再测。jar `Handler` 本身仍因 `URLClassPath.<init>` 无条件构造而留在闭包里（§30.15）。
+
+### 31.4 小步：确定字符串的引用相等折叠（a450ee23 + 单测 4afa42b6）
+
+`absint.rs::ref_eq`：两个内容不同的确定字符串（`V::Str`）一定是不同对象，`if_acmp` 按「不等」折叠。
+内容相同时不断言是同一个对象，因为非字面量来源可能是副本。
+
+- 动机：a5-4e 的 `ConditionalSpecialCasing` / 大小写转换链里有 `locale.getLanguage() == "tr"` 一类的引用比较。
+- 实测：DeepCopy（含 `logging` 切除）3703 → 3703，0 变化。原因是 `toUpperCase` 系列按上下文不敏感分析，
+  `Locale` 语言值在合流后已经是 Top，到不了两侧都是确定串的形态。
+- 规则本身健全且通用，保留。
+
+### 31.5 Formatter 区域（排名 #10，首达 1860）
+
+- 诊断：`Formatter.parse(String)` 在全部上下文中形参值都是 Top（含 `logging` 切除）。
+  `FormatSpecifier.print` 读的 `dt` 值集为 `{0, 1}`，所以 `printDateTime` 进入的 Calendar → SPILocaleProviderAdapter
+  → ServiceLoader 链保持可达。
+- 单靠「`charAt` 结果属于常量串字符集」不够：`%<s` 走正则回退 `FormatSpecifier(String, Matcher)`，
+  其中 `dt` 由 `m.start(5)` 决定。收窄必须按常量格式串具体求值 `parse`，并在 `print` 上按接收者对象分开读字段
+  （§18.5 / §20.5 的具体求值器路线）。这属于多步设计，本线不展开。
+
+### 31.6 作业清单
+
+- `cr-g3-a6dca5c0`（kr2）：门排名，见 31.2。
+- `cr-m1-a450ee23`：类数，见 31.1。
+- `cr-d1-a450ee23` / `cr-d3-a450ee23`（jp2）：URL 与 Formatter 诊断，见 31.3 / 31.5。
+- `cr-u1-4afa42b6`（jp2）：`cargo test --release -p closure --lib absint`。
