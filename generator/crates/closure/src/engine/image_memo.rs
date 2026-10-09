@@ -36,26 +36,54 @@ impl MemoState {
     }
 }
 
-/// 片段引用的类镜像（含被缓存的镜像本身）
-fn frag_mirrors(f: &Frag) -> Vec<&str> {
-    let mut names: Vec<&str> = vec![&*f.mirror];
-    for v in std::iter::once(&f.val).chain(f.objs.iter().flat_map(|o| -> Box<dyn Iterator<Item = &FVal>> {
+/// 片段里的全部值（缓存值与各片段对象的字段 / 元素）
+fn frag_vals(f: &Frag) -> impl Iterator<Item = &FVal> {
+    std::iter::once(&f.val).chain(f.objs.iter().flat_map(|o| -> Box<dyn Iterator<Item = &FVal>> {
         match &o.body {
             FBody::Inst(fs) => Box::new(fs.iter().map(|e| &e.2)),
             FBody::Arr(es) => Box::new(es.iter()),
         }
-    })) {
-        if let FVal::Mirror(m) = v {
-            names.push(m);
-        }
-    }
+    }))
+}
+
+/// 片段引用的类镜像（含被缓存的镜像本身）
+fn frag_mirrors(f: &Frag) -> Vec<&str> {
+    let mut names: Vec<&str> = vec![&*f.mirror];
+    names.extend(frag_vals(f).filter_map(|v| match v {
+        FVal::Mirror(m) => Some(&**m),
+        _ => None,
+    }));
     names
+}
+
+/// 片段引用的静态字段的声明类
+fn frag_statics(f: &Frag) -> impl Iterator<Item = &str> {
+    frag_vals(f).filter_map(|v| match v {
+        FVal::Static(d, _) => Some(d.as_str()),
+        _ => None,
+    })
+}
+
+/// 片段引用的驻留字符串
+fn frag_strs(f: &Frag) -> Vec<&[u16]> {
+    frag_vals(f)
+        .filter_map(|v| match v {
+            FVal::Str(u) => Some(u.as_slice()),
+            _ => None,
+        })
+        .collect()
 }
 
 impl<'a> Engine<'a> {
     /// 片段全部可在映像中表达时备好其所需的类镜像（映像中没有的经构建期求值器新建）；否则给出原因：
     /// 由不变静态字段持有的对象须是构建期初始化类静态字段的映像对象，片段对象的类型须属映像根模块
     pub(super) fn image_memo_prepare(&mut self, frags: &[Frag]) -> Result<(), String> {
+        // 片段所引静态字段的声明类先确定构建期初始化结局（同 `image_settle_reads`）：结局未定时按「运行期初始化」
+        // 答复会让该组实参按冷 / 热之并入闭包，之后该类经别的路径构建期初始化也撤不回，闭包随处理次序变化
+        let decls: BTreeSet<&str> = frags.iter().flat_map(frag_statics).collect();
+        for d in decls {
+            self.image_ext(d);
+        }
         let Some(s) = self.img.as_ref() else { return Err("无引导映像".into()) };
         let Some(x) = self.ext_vm.as_deref() else { return Err("无构建期求值器".into()) };
         let ok = |v: &FVal| match v {
@@ -79,6 +107,9 @@ impl<'a> Engine<'a> {
             for n in frag_mirrors(f) {
                 self.image_mirror_obj(n)?;
             }
+            for u in frag_strs(f) {
+                self.image_string_obj(u)?;
+            }
         }
         Ok(())
     }
@@ -92,6 +123,16 @@ impl<'a> Engine<'a> {
         let d = Rc::make_mut(&mut s.data);
         let n0 = d.objs.len();
         let o = x.mirror(&self.ctx, self.cp, c, d)?;
+        self.image_appended(n0);
+        Ok(o)
+    }
+
+    /// 映像中内容为 u 的驻留字符串对象（没有即经构建期求值器驻留并追加）
+    fn image_string_obj(&mut self, u: &[u16]) -> Result<u32, String> {
+        let (Some(x), Some(s)) = (self.ext_vm.as_deref_mut(), self.img.as_deref_mut()) else { return Err("无构建期求值器".into()) };
+        let d = Rc::make_mut(&mut s.data);
+        let n0 = d.objs.len();
+        let o = x.string(&self.ctx, self.cp, u, d)?;
         self.image_appended(n0);
         Ok(o)
     }
@@ -116,6 +157,15 @@ impl<'a> Engine<'a> {
                     Err(w) => unreachable!("镜像缓存的类镜像已备好：{n}：{w}"),
                 }
             }
+            let mut sobj: HashMap<&[u16], u32> = HashMap::default();
+            for u in frag_strs(f) {
+                match self.image_string_obj(u) {
+                    Ok(o) => {
+                        sobj.insert(u, o);
+                    }
+                    Err(w) => unreachable!("镜像缓存的驻留字符串已备好：{w}"),
+                }
+            }
             let s = self.img.as_mut().expect("映像");
             let start = s.data.objs.len() as u32;
             let res = |v: &FVal| match v {
@@ -123,6 +173,7 @@ impl<'a> Engine<'a> {
                 FVal::Obj(i) => IVal::R(start + i),
                 FVal::Mirror(m) => IVal::R(mobj[&**m]),
                 FVal::Static(d, n) => s.statics[&(d.clone(), n.clone())],
+                FVal::Str(u) => IVal::R(sobj[u.as_slice()]),
             };
             let objs: Vec<IObj> = f
                 .objs

@@ -95,8 +95,8 @@
 - **转译耗时回归**（进行中，perf-regress）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
 - **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
 - **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
-- **batch-1009b（待测，batch-1009 + c1d-rest a9622d71）**：C1d 收窄余项本轮未收窄（`ref_eq` 不同内容字符串常量折叠，0 类）；c1d 计划 §31 记排名与下一步能力：① 每对象 URI 跟踪三步（§31.3，约 285 类，接 §30 URL 精度）；② 引导区以未知名字调 `Charset.isSupported` 放开全部扩展字符集（约 390 类；U1 已定，属性取值为宿主值时名字未知，需另设计收窄——charset-build / charset-ext 线续作）；③ Formatter 常量格式串构建期求值（§18.5 / §20.5）；`AccessController.executePrivileged` 下游合计 923 类（转发方法，非单一机制）。
-- **batch-1009（待测）**：缓存组回退撤回（bootcache 9a029858，§5.8.6：映像镜像缓存组 = 未回退站点贡献的组，DeepCopy 映像与次序无关；注意 `rava closure` 口径类数 HelloWorld 3456 / DeepCopy 3757，与 e2e 口径 3233 / 3532 不同）。**进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode，regress2 ①）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留。
+- **batch-1009c 已合入（10-09，按用户指示先合入，单测与 57 例抽查转合入后验证）**：含 bootcache（缓存组 = 未回退站点贡献的组，§5.8.6）、c1d-rest（C1d 收窄余项 0 类；c1d 计划 §31 记下一步能力：① 每对象 URI 跟踪约 285 类；② 引导区未知名字调 `Charset.isSupported` 放开全部扩展字符集约 390 类，charset 线续作；③ Formatter 常量格式串构建期求值）、regress2-rest（② ✅，① 转 object-bytecode）、annot-sig（SignatureParser 出闭包，HelloWorld 3456→3407、DeepCopy 3757→3727，`rava closure` 口径；e2e 口径另计）。
+- **进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；派发点顺序依赖（order-findops，`closure_independent_of_order` DeepCopy 失败，集成分支同样存在）；转译耗时回归续作（perf-regress，主因 CHM 表数组跨上下文合并，见 2026-10-09-transpile-time-regression.md）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -210,7 +210,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
 | E 编译资源 | E2 D8 声明层分段 | 机制已合入（b51f9531 / b093069f）；底段收窄随 S7-4 / S7-5，C4 之后（见活跃任务「声明层底段收窄」） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
-| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4 | 暂停 |
+| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4、PGO（前置：perf 剖析拆分开销，含 volatile 读 SeqCst 排队） | 暂停 |
 
 ## 🔴 活跃任务
 
@@ -233,7 +233,9 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
-| 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md` |
+| 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
+| 并发小步 A | ⏳ 待派 | 持锁断言（`with` / `__RefSlot` 守卫计数、`drop_slow` 断言、写锁自持有、`__safepoint` / `<clinit>` 断言）、`with` 拆 `&T` / `with_mut`、对象头位布局常量与 `IMAGE_OBJ`、监视器入口 null 判定与置位。无 GC 文档 §四 |
+| 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---

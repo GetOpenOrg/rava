@@ -1,0 +1,2 @@
+# ServiceLoader 静态工厂方法反射调用点（P1：字段携带 Method 的 Method.invoke；切除上界）
+java/util/ServiceLoader$ProviderImpl.invokeFactoryMethod:()Ljava/lang/Object;@20
