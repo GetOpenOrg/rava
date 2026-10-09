@@ -393,26 +393,34 @@ impl<'a> Engine<'a> {
         Some(Feed::S(set))
     }
 
-    /// 映像数组对象 o 的分配点（逐对象：不同映像数组的元素互不混合）
+    /// 映像数组对象 o 的分配点：引用元素数组逐对象（不同映像数组的元素互不混合）；基本类型元素数组按类型共用一个分配点
+    /// （元素不携带引用，逐对象分开不带来任何流精度，只把成千上万个映像字节 / 字符数组带进字段值集与元素聚合）
     fn image_array_site(&mut self, o: u32, t: &str, via: &Via) -> u32 {
         if let Some(&id) = self.img.as_ref().and_then(|s| s.sites.get(&o)) {
             return id;
         }
         self.touch_desc(t, via);
         let tid = self.id(t);
-        let id = self.id(&format!("{t}@image{o}"));
-        self.arrays.insert(id, tid);
         // 长度 0 的映像数组（如共享的空元素数组常量）：数组长度不可变，向它的元素写入必抛越界，元素节点暂存不收值
         // （与字节码零长分配点同口径，`classes.rs::array_site`）；宿主内容数组与占位对象在启动时可能换成别的内容，不按空处理
         let fixed_empty = self.img.as_ref().is_some_and(|s| {
             let x = &s.data.objs[o as usize];
             !x.placeholder && x.host.is_none() && matches!(&x.body, IBody::Arr(es) if es.is_empty())
         });
-        if fixed_empty {
-            self.empty_arrays.insert(id, HashMap::default());
-        }
-        if self.g.insert(id) {
-            self.on_g_grow(id);
+        let primitive = t.len() == 2;
+        let label = match (primitive, fixed_empty) {
+            (true, true) => format!("{t}@image-empty"),
+            (true, false) => format!("{t}@image"),
+            (false, _) => format!("{t}@image{o}"),
+        };
+        let id = self.id(&label);
+        if self.arrays.insert(id, tid).is_none() {
+            if fixed_empty {
+                self.empty_arrays.insert(id, HashMap::default());
+            }
+            if self.g.insert(id) {
+                self.on_g_grow(id);
+            }
         }
         self.img.as_mut().expect("映像").sites.insert(o, id);
         id
