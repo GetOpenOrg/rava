@@ -39,7 +39,32 @@ impl Slot {
     }
 }
 
+/// 汇集节点与槽位节点间的流边过滤
+#[derive(Clone, Copy)]
+enum Filt {
+    /// 各对象同一过滤类型
+    Same(u32),
+    /// 手写写入数组元素：逐数组按分量类型（[`Engine::elem_write_filter`]）；汇集节点自身不过滤（Object）。
+    /// 只用于写向元素槽（字节码数组元素站点只有读向），故按 (槽位, 方向, 集合) 共享的汇集节点过滤口径唯一
+    ArrayWrite,
+}
+
 impl Engine<'_> {
+    fn filt_of(&mut self, f: Filt, o: u32) -> u32 {
+        match f {
+            Filt::Same(t) => t,
+            Filt::ArrayWrite => self.elem_write_filter(o).unwrap_or_else(|| self.id(OBJECT)),
+        }
+    }
+
+    /// 汇集节点之间（子集链）的过滤
+    fn filt_chain(&mut self, f: Filt) -> u32 {
+        match f {
+            Filt::Same(t) => t,
+            Filt::ArrayWrite => self.id(OBJECT),
+        }
+    }
+
     /// 字节码字段读站点 (m, off) 新接上抽象对象 objs（升序、此前未接过）：字段 fi（类型 tid）的值流到 res
     pub(super) fn gather_read(&mut self, m: usize, off: u32, fi: usize, tid: u32, objs: &[u32], res: Node) {
         match self.gather_node(m, off, Slot::Field(fi), tid, objs, false) {
@@ -83,7 +108,7 @@ impl Engine<'_> {
         let obj = self.id(OBJECT);
         let key = (s, i, p);
         let last = self.hw_gather_last.get(&key).cloned();
-        let (now, g) = self.gather_step(last, Slot::Elem(p), obj, ys, false);
+        let (now, g) = self.gather_step(last, Slot::Elem(p), Filt::Same(obj), ys, false);
         if let Some(now) = now {
             self.hw_gather_last.insert(key, now);
         }
@@ -103,10 +128,50 @@ impl Engine<'_> {
         }
     }
 
+    /// 手写读内存调用点 s 的源实参新增数组 xs（升序，可含已接过的）：元素槽 p 的值按 rt 流到结果 res。
+    /// 同一批数组（如各上下文的哈希表数组）被大量调用点（中继读方法的各克隆）读取时经汇集节点共享
+    pub(super) fn gather_hw_read(&mut self, s: u32, p: u8, xs: &[u32], res: Node, rt: u32) {
+        let obj = self.id(OBJECT);
+        let last = self.hw_rgather_last.get(&(s, p)).cloned();
+        let (now, g) = self.gather_step(last, Slot::Elem(p), Filt::Same(obj), xs, false);
+        if let Some(now) = now {
+            self.hw_rgather_last.insert((s, p), now);
+        }
+        match g {
+            Some(g) => self.flow(Node::G(g), res, rt),
+            None => {
+                for &x in xs {
+                    self.flow(Node::E(x, p), res, rt);
+                }
+            }
+        }
+    }
+
+    /// 手写方法调用点 s 的写入目标实参 i 新增引用元素数组 ys（升序，可含已接过的）：写入来源 `W(s, i)` 流到各数组的
+    /// 元素槽 p（逐数组按 [`Self::elem_write_filter`] 过滤）。同一批数组被大量调用点（CAS / 有序写的各克隆）写入时经汇集节点共享
+    pub(super) fn gather_hw_write(&mut self, s: u32, i: u16, p: u8, ys: &[u32]) {
+        let obj = self.id(OBJECT);
+        let last = self.hw_wgather_last.get(&(s, i, p)).cloned();
+        let (now, g) = self.gather_step(last, Slot::Elem(p), Filt::ArrayWrite, ys, true);
+        if let Some(now) = now {
+            self.hw_wgather_last.insert((s, i, p), now);
+        }
+        match g {
+            Some(g) => self.flow(Node::W(s, i), Node::G(g), obj),
+            None => {
+                for &y in ys {
+                    if let Some(f) = self.elem_write_filter(y) {
+                        self.flow(Node::W(s, i), Node::E(y, p), f);
+                    }
+                }
+            }
+        }
+    }
+
     /// 字节码站点 (m, off) 累计对象（原有 ∪ objs）对应的汇集节点；累计不足 `GATHER_MIN` 时 None（调用方逐对象接边）
     fn gather_node(&mut self, m: usize, off: u32, slot: Slot, f: u32, objs: &[u32], put: bool) -> Option<u32> {
         let last = self.gather_last.get(&m).and_then(|s| s.get(&(off, slot))).cloned();
-        let (now, g) = self.gather_step(last, slot, f, objs, put);
+        let (now, g) = self.gather_step(last, slot, Filt::Same(f), objs, put);
         if let Some(now) = now {
             self.gather_last.entry(m).or_default().insert((off, slot), now);
         }
@@ -115,7 +180,7 @@ impl Engine<'_> {
 
     /// 站点原有记录 last（汇集节点, 累计对象）并入 objs（升序，可含已接过的）后的新记录（不变时 None）与汇集节点；
     /// 槽位节点与汇集节点间按 f 过滤
-    fn gather_step(&mut self, last: Option<(u32, Rc<[u32]>)>, slot: Slot, f: u32, objs: &[u32], put: bool) -> (Option<(u32, Rc<[u32]>)>, Option<u32>) {
+    fn gather_step(&mut self, last: Option<(u32, Rc<[u32]>)>, slot: Slot, f: Filt, objs: &[u32], put: bool) -> (Option<(u32, Rc<[u32]>)>, Option<u32>) {
         let (g0, prev) = last.unwrap_or((NO_GATHER, Rc::from([])));
         // 两段均升序：归并
         let mut full: Vec<u32> = Vec::with_capacity(prev.len() + objs.len());
@@ -146,18 +211,20 @@ impl Engine<'_> {
                 let rest: Vec<u32> = if g0 == NO_GATHER {
                     full.to_vec()
                 } else {
+                    let fc = self.filt_chain(f);
                     if put {
-                        self.flow(Node::G(g), Node::G(g0), f);
+                        self.flow(Node::G(g), Node::G(g0), fc);
                     } else {
-                        self.flow(Node::G(g0), Node::G(g), f);
+                        self.flow(Node::G(g0), Node::G(g), fc);
                     }
                     full.iter().copied().filter(|o| prev.binary_search(o).is_err()).collect()
                 };
                 for o in rest {
+                    let fo = self.filt_of(f, o);
                     if put {
-                        self.flow(Node::G(g), slot.node(o), f);
+                        self.flow(Node::G(g), slot.node(o), fo);
                     } else {
-                        self.flow(slot.node(o), Node::G(g), f);
+                        self.flow(slot.node(o), Node::G(g), fo);
                     }
                 }
                 g

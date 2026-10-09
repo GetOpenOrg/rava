@@ -345,6 +345,10 @@ pub struct Engine<'a> {
     gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
     /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
     hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
+    /// 手写读内存调用点 (序号, 元素槽) → (当前汇集节点, 累计数组)：源实参数组元素流向结果（`gather.rs::gather_hw_read`）
+    hw_rgather_last: HashMap<(u32, u8), (u32, Rc<[u32]>)>,
+    /// 手写方法调用点 (序号, 写入目标实参, 元素槽) → (当前汇集节点, 累计数组)：写入来源流向数组元素（`gather.rs::gather_hw_write`）
+    hw_wgather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）

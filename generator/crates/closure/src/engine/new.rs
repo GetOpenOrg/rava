@@ -115,6 +115,8 @@ impl<'a> Engine<'a> {
             gather_ids: HashMap::default(),
             gather_last: HashMap::default(),
             hw_gather_last: HashMap::default(),
+            hw_rgather_last: HashMap::default(),
+            hw_wgather_last: HashMap::default(),
             vm_hubs: HashSet::default(),
             vm_targets: HashSet::default(),
             vm_open_hubs: HashSet::default(),
