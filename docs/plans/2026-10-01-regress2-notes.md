@@ -209,6 +209,31 @@ TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFra
   4. 根类非 native 手写方法计入 raw-audit（现不计数，是隐形手写），终态 0。
   量级：closure / instr / emit / runtime 四处，非小修；涉及根类模型，按授权范围先报用户再实施。
 
+#### 10.1b-实施（object-bytecode，2026-10-09，用户已定终态）
+
+与上面草案的差异：翻译体不做成泛型 `_base<T>`，而是**以根类句柄为接收者的自由函数**
+`Object__<fn>_body(this: &Object, ..)`——根类字节码里的 `this` 是 Object，方法体生成器对根类接收者走 bare-Object
+固有方法路径（`this.getClass()?` / `this.hashCode()?` / `this.wait0(..)?`），与生成类的 `let this = self;` 同型。
+各对象类型需要能给出「自身的 Object 句柄」，为此 `ObjectVTable` 加 `__object()`（缺省 None）。
+
+- **闭包**（`closure/src/engine/facts/kinds.rs`）：根类方法按自身字节码分类——native → 手写，无码 → 抽象，其余 → 字节码。
+- **输入 / 上下文**：`EmitInput.root` 携带根类 `ClassInfo`（根类仍不入注册表）；`EmitCtx::code_class` 在注册表未命中时回落根类，
+  方法体生成器（`method_bodies.rs`）与行表的行号查询都用它。
+- **发射**（新模块 `emit/src/project/root_bodies.rs`）：根类全部非 native 有码实例方法（构造器 / 类初始化除外）各生成一个
+  `Object__<fn>_body`；在档案调用链上的按字节码翻译，链外的生成同签名 `panic!("stub: ..")` 存根（运行时契约总要链接到
+  这组符号）。命名与调用侧同源（`root_bodies::rust_name`：根类重载取描述符后缀名，前提是该名在手写 API 名面）。
+  落盘与生成类拆层同构：方法体放首个实现 crate 的 `body/java/lang/object_body.rs`（`#[export_name]`），声明层同路径文件
+  放外部声明块（`#[link_name]`，符号由 `rava_macros_core::plan::free_fn_link` 求出，与宏拆层同一规则）——方法体引用的类
+  （`StringBuilder` 等）可能落在声明层上层段，不能直接放声明层底段。无实现 crate 时整体落声明层。生成期事实在第二阶段前并入。
+- **行表**：方法体文件头 `// [root_bodies] <类> <源文件>` 让 `line_tables::scan` 进入方法区模式（方法属性为注释形态
+  `// #[java_method(..)]`，第 0 列 `}` 结束方法区间）；`root_line_registration` 只登记根类 native 方法（`wait0` 记 -2）。
+- **运行时**：`ObjectVTable` 的 `equals` / `__to_string` / `wait` 族缺省体与 `Object__{finalize,equals,toString}_base`
+  转交翻译体（`__object()` 为 None 的非 Java 类载体——基本类型盒、`JvmRef`、lambda 载体、null 哨兵——保留载体语义）；
+  `java_class!` 宏的存储 impl 与数组对象应答 `__object()`（`Object::__from_storage` 引用计数加一取回同一对象）；
+  `object_impl.rs` 去掉 equals（含 String 内容比较捷径）/ toString / wait 族的手写近似，固有方法只做 null 检查与转交，
+  新增 native `wait0`。
+- **审计**：根类非 native 方法若未翻译（构造器体不是单条 return 时）计入 `non_native_overrides`；按构造当前为 0。
+
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
 - 现象（C6 抽查，ubuntu）：运行期 `InternalError`，`Caused by: NullPointerException`，dyn miss 0，未命中存根。

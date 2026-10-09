@@ -180,11 +180,9 @@ impl RootBodies {
             return Ok((decl_path, full));
         };
         let mut body = header;
+        // 声明层底段只见预导入：根类方法签名只含根类、字符串与基本类型（预导入名），方法体引用的类
+        // 可能在声明层上层段，其导入只放实现层
         let mut decl = format!("{}\n{GEN_NOTE}\nuse crate::prelude::*;\n", crate::class_writer::FILE_ALLOW);
-        for l in imports {
-            decl.push_str(l);
-            decl.push('\n');
-        }
         for f in &self.fns {
             let (sym, block) = rava_macros_core::plan::free_fn_link(&self.class, &f.text)
                 .map_err(|e| EmitError::Assert(format!("{}.{}:{}：链接拆分失败：{e}", self.class, f.name, f.desc)))?;
