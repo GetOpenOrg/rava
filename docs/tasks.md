@@ -104,7 +104,7 @@
   - build-memsafe；纯优化线（10-06 分级）；U1 重议；
   - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
   - 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例。
-- **C4 全量**：尚未开始。前置：转译耗时回归修复、dev 恢复（换内存条 + BIOS + 内存自检）。
+- **C4 全量**：10-09 在 dev（128G / 16 槽，Memtest86+ 四轮 0 错误、BIOS 风扇曲线已调）上 `--reset` 开跑，基于 main c249cdec，放宽超时（转译 1800 / 运行 900 / 构建 ×2，单例 9000 s）。转译耗时回归未修完即开跑，修复合入后续用例自动受益；全量期间 main 冻结语义改动，只合修复全量失败的提交。
 - **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
@@ -228,7 +228,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
 | regress2 遗留 | 🔄 ② ✅；① 转 object-bytecode | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿）。按手写边界规则（有字节码即翻译，非用户待定项）派 object-bytecode：根类非 native 方法按字节码翻译。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60，修前为已知失败）。regress2 文档 §10.1b |
-| C4 收官 · 全量 e2e | ⏳ 尚未开始 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
+| C4 收官 · 全量 e2e | 🔄 10-09 dev 上开跑 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
