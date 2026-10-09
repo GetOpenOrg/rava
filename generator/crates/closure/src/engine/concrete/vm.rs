@@ -201,7 +201,7 @@ pub(super) struct Trace {
     pub puts: BTreeMap<MemberRef, Vec<Put>>,
     /// 求值中触发初始化的类
     pub inited: BTreeSet<String>,
-    /// 求值中请求初始化的类（含此前已完成初始化的）：只按热求值入闭包时，冷求值完成的初始化由此补登
+    /// 求值中请求初始化的类（含此前已完成初始化的）：入闭包按它登记，与共享 VM 中此前的求值次序无关（concrete.rs merge）
     pub touched: BTreeSet<String>,
     /// 按白名单操作执行的手写承载方法
     pub natives: BTreeSet<MemberRef>,

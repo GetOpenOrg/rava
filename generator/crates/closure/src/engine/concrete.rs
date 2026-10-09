@@ -345,9 +345,7 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                     let x = sn.value(v)?;
                     hot.thrown.push(x);
                 }
-                let mut t = trace.clone();
-                t.inited.extend(t.touched.iter().cloned());
-                merge(&mut hot, t);
+                merge(&mut hot, trace.clone());
             }
             merge(&mut out, trace);
             if warm_next {
@@ -407,5 +405,9 @@ fn merge(out: &mut Outcome, t: Trace) {
     for (k, ps) in t.puts {
         out.puts.entry(k).or_default().extend(ps);
     }
+    // 按「请求初始化」（touched）登记，不按「本次求值触发了初始化」（inited）：后者取决于共享 VM 里此前哪次求值
+    // 先初始化了该类（如先求值的组合按热路径入闭包、其冷路径完成的初始化不登记），闭包随求值次序变化。
+    // 请求集合只取决于本组实参的执行路径
     out.inited.extend(t.inited);
+    out.inited.extend(t.touched);
 }
