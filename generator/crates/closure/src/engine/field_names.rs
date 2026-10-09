@@ -202,8 +202,18 @@ impl Engine<'_> {
                 slot_clean(Some(&PV::of(v))) || names_known(&v.srcs(), |j| self.ptaint.contains(&(m, j)))
             });
             if !clean {
-                let v = vals.get(i - base).map(|v| format!("{v:?}")).unwrap_or_default();
-                self.taint_slot(t, i, TaintWhy::Value(Some(m), v));
+                // 诊断：实参来自调用方已污染的形参槽时记为透传，来源链可继续回溯
+                let up = vals.get(i - base).and_then(|v| {
+                    v.srcs().iter().find_map(|s| match s {
+                        Src::Param(j) if self.ptaint.contains(&(m, *j as usize)) => Some(*j as usize),
+                        _ => None,
+                    })
+                });
+                let why = match up {
+                    Some(j) => TaintWhy::Pass(m, j),
+                    None => TaintWhy::Value(Some(m), vals.get(i - base).map(|v| format!("{v:?}")).unwrap_or_default()),
+                };
+                self.taint_slot(t, i, why);
             }
         }
     }
@@ -231,7 +241,7 @@ impl Engine<'_> {
         let mut slots: Vec<(usize, usize)> = self.ptaint.iter().copied().filter(|&(t, _)| self.ctx_label(t).contains(pat)).collect();
         slots.sort_unstable();
         for (t, i) in slots {
-            out.push(format!("  {} 槽 {i}", self.ctx_label(t)));
+            out.push(format!("  {} 槽 {i}{}", self.ctx_label(t), self.ctx_sites(t)));
             let mut cur = (t, i);
             for _ in 0..40 {
                 match self.ptaint_why.get(&cur) {
@@ -245,6 +255,26 @@ impl Engine<'_> {
                         break;
                     }
                     None => break,
+                }
+            }
+        }
+        out
+    }
+}
+
+impl Engine<'_> {
+    /// 诊断：上下文名里各调用点段 `@<方法>:<偏移>` 的方法标签（调用点上下文只记方法编号）
+    fn ctx_sites(&self, t: usize) -> String {
+        let c = self.methods[t].ctx;
+        if c == NOCTX {
+            return String::new();
+        }
+        let mut out = String::new();
+        for seg in self.names[c as usize].split(['#', '~']) {
+            let Some((m, off)) = seg.strip_prefix('@').and_then(|r| r.split_once(':')) else { continue };
+            if let Ok(m) = m.parse::<usize>() {
+                if m < self.methods.len() {
+                    out.push_str(&format!(" [@{m}:{off} = {}]", self.method_label(m)));
                 }
             }
         }
