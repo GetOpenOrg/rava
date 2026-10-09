@@ -1,6 +1,6 @@
 # 转译耗时回归调查（2026-10-09，分支 perf-regress）
 
-> 状态：**未完成**（第三轮）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），待 pr-tg6 核实；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
+> 状态：**未完成**（第三轮）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），pr-tg6 / pr-tg7 核实类集合比 bedc57aa 少 2 个、无新增；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
 
 ## 现象
 
@@ -64,7 +64,8 @@
 | 509c0297fb95659c30c13792e147a743b16ae73d | 作业脚本另存 `<用例>.classes` | – |
 | 5a5a049c53af9f166bfd2652ba291bd227c51237 | `--flows @ctxsets:<方法键>` 诊断 | – |
 | 40705e1a | @CallerSensitive 目标不经枢纽中转、逐调用点接边 | 对多出类无效（pr-tg4）；补上中转目标不调 `caller_edge` 的潜在缺口，保留 |
-| c02c18250bd48f64dc1a007911416d04e2f47165 | 精确集合枢纽的形参常量格改用 `PV::of_ret`，与逐个接边同口径 | 消除 0269f622 的 +1 类（待 pr-tg6 核实） |
+| c02c18250bd48f64dc1a007911416d04e2f47165 | 精确集合枢纽的形参常量格改用 `PV::of_ret`，与逐个接边同口径 | 两例都少 InaccessibleObjectException 与 X509CertificatePair，无新增类；耗时与 bedc57aa 持平（pr-tg6 / pr-tg7） |
+| 53a03514 | 测时脚本对重复出现的提交复用首次构建的二进制 | – |
 
 另有工具提交：a1ce56b7、3f48d10d、025b56c2、fb0bd6f2（`@objstat`）、34699639。
 
@@ -151,12 +152,23 @@
 
 ### 第三轮实测（us1，同机交替，build 模式，秒 / MB / 类）
 
-作业 pr-tg6 运行中（结果落 `cluster_results/job/pr-tg6/01/build/ttime/`）。
+pr-tg6 按 c02c1825 → e5200a3e 顺序跑；第三段 c02c1825 因脚本在共享 target 下复用了上一提交的二进制而失败（53a03514 修复），改由 pr-tg7 在同机补跑。
+
+| 提交 | DeepCopy | TestJndiNoProvider |
+|---|---|---|
+| c02c1825（pr-tg6） | 875 / 6908 / 3726 | 1005 / 8051 / 4007 |
+| e5200a3e（pr-tg6） | 520 / 5959 / 3842 | 597 / 6840 / 4086 |
+| c02c1825（pr-tg7） | 876 / 6915 / 3726 | 1011 / 8049 / 4007 |
+| bedc57aa（pr-tg1，参照） | 855 / 7208 / 3728 | 993 / 7831 / 4009 |
+
+- 类集合（对照 pr-tg1 的 bedc57aa 类表）：两例都少了 `java/lang/reflect/InaccessibleObjectException` 与 `sun/security/provider/certpath/X509CertificatePair`，没有新增类。后者推测同样是非空常量恢复后被剪掉的分支带出的类，未单独 --why。
+- 耗时与峰值：c02c1825 与 bedc57aa 持平（DeepCopy +2%，JNDI +1%，在噪声内），比 e5200a3e 慢 1.68×。峰值 6.9 GB（DeepCopy）/ 8.0 GB（JNDI），未达到 ≤6 GB 目标。CHM 表合并未修是主因。
+- 单测（dev）：A 组 pr-ut-c02c1825 只有已知失败 `param_string_constants_fold_switch`；B 组 pr-utB-c02c1825 全过。
 
 ## 残留与建议
 
 1. **CHM 表合并（最高优先，未修）**：引入点见「第三轮 · CHM 表合并：open CHM 的引入点」。终态方向是摘要克隆的接收者取调用方实参集而不是 open，字段写按接收者对象落 O，不落公共 U；另核实 Object[] 元素 open 的来源。逐逃逸对象展开（93d80e65）已证代价过高且不消合并，不再走这条路。不截断入口、不关精度。
-2. **c02c1825 的验证**：pr-tg6（us1，DeepCopy + JNDI，c02c1825 / e5200a3e / c02c1825 交替）与 dev 上的单测 pr-ut-c02c1825（A 组）、pr-utB-c02c1825（B 组）、pr-uth-c02c1825（`closure_independent_of_hash_seed`）。结果见「第三轮实测」；收尾时未出的项在 `cluster_results/job/<tag>/` 取。
+2. **c02c1825 的验证**：类集合、测时、单测 A / B 已完成（见「第三轮实测」）。`closure_independent_of_hash_seed`（pr-uth-c02c1825，dev）结果见下一行。
 3. TreeBin.find → findTreeNode：选择子常量克隆的非虚调用点可按「基调用点 × 常量」建枢纽（未做）。
 4. `lambda_vals.rs` 的 lambda 捕获参数常量仍用 `PV::of`，与 `bind_params` / 枢纽的 `PV::of_ret` 不同口径（未改，需单独测类集合）。
 5. 在 3972ce9b（pr-tmp-eg-1dbfd22c）/ cfa8a743（pr-tmp-eg-8ce97959）/ 6c687d65 上逐点测 JNDI（未做）。
@@ -165,7 +177,7 @@
 
 ## 恢复入口
 
-- 分支 perf-regress，代码 head c02c18250bd48f64dc1a007911416d04e2f47165（集成分支 c249cdec 已 merge 进来，即 bedc57aa）；worktree `/Users/yuwei/dev/workspace/rava_perfregress`。
+- 分支 perf-regress，代码 head c02c18250bd48f64dc1a007911416d04e2f47165，脚本修复 53a03514（集成分支 c249cdec 已 merge 进来，即 bedc57aa）；worktree `/Users/yuwei/dev/workspace/rava_perfregress`。
 - 先取第 2 项结果。之后做第 1 项：在一台空闲服务器上跑
   `TTIME_MODE=closure bash scripts/transpile_time_job.sh --extra '--flows @opens:java/util/concurrent/ConcurrentHashMap' tests/e2e/23_algorithms/DeepCopy.java <head>`，先确认摘要克隆 P0 的 open 由哪种克隆构造给出（配合 `@ctxsets:ConcurrentHashMap.addCount`），再核实三个 Object[] 的身份与元素为何 open（`--extra` 内不得含 `$`，含 `|` 须加引号；经 `distribute_tests.py --job <tag> --fetch 'build/ttime/**'` 下发）。
 - 同机对照基准（pr-tg1，us1，build 模式，秒 / MB / 类）：e5200a3e DeepCopy 522 / 5959 / 3842、JNDI 600 / 6810 / 4086；bedc57aa DeepCopy 855 / 7208 / 3728、JNDI 993 / 7831 / 4009。
