@@ -243,7 +243,8 @@ TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFra
   - ob-d-d716bdc3（us1）：闭包与 c249cdec 基线**完全相同**——HelloWorld classes 1870 / 3442、translate_code_classes 3022；
     DeepCopy 2109 / 3730、3269（两侧逐项一致；JDK 21 `wait(J)` 的 Blocker 链未带入新类，无需收窄）。
     6 例 e2e（TestObjectWaitFrames TestEqualsHashCode TestWaitNotify TestToStringThrows TestObjectNativeFrames
-    TestVirtualThread）复验结果写入 `cluster_results/job/ob-d-d716bdc3/01_us1.log` 末尾（截稿时未出）。
+    TestVirtualThread）复验在作业 6600s 上限内未跑完（run_tests 输出在其结束后才汇总，日志无 e2e 结果）——**e2e 未验证**。
+    续作：以 `--spot` 抽查（逐例落结果）复验 f30e17a5 起分支头，勿再与闭包对比串在一个 `--job` 里。
   - 恢复入口：读上述日志；若仍有编译错，查 `build/jdk21/<test>/java_base_body_1/src/body/java/lang/object_body.rs`
     对应行，修生成器（`emit/src/project/root_bodies.rs::free_fn` 接收者改写）或 Object 基础设施；全通过后补跑
     TestNativeFrameTrace TestStackWalkerLines HelloWorld ObjectMethods TestContinuationPinned 抽查，再合入。
