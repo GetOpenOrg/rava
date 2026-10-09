@@ -590,3 +590,24 @@ fn nonnull_static_field_folds_null_test() {
     let a = analyze("p/A", "()V", true, &code, &StaticNonNull(None));
     assert_eq!(a.reachable, vec![true; 6]);
 }
+
+/// `if ("a" == "b") ...`：内容不同的两个确定字符串必是不同对象，相等分支不可达；内容相同不断言同一（两支都可达）
+#[test]
+fn distinct_string_constants_ref_ne() {
+    let code = |b: &str| {
+        code_of(
+            vec![
+                (0, op::LDC, Operand::Ldc(Const::String("a".into()))),
+                (2, op::LDC, Operand::Ldc(Const::String(b.into()))),
+                (4, 0xa6, Operand::Branch(8)), // if_acmpne
+                (7, op::RETURN, Operand::None),
+                (8, op::RETURN, Operand::None),
+            ],
+            9,
+        )
+    };
+    let a = analyze("p/A", "()V", true, &code("b"), &Stub { live: vec![] });
+    assert_eq!(a.reachable, vec![true, true, true, false, true]);
+    let a = analyze("p/A", "()V", true, &code("a"), &Stub { live: vec![] });
+    assert_eq!(a.reachable, vec![true; 5]);
+}

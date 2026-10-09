@@ -413,6 +413,26 @@ impl ExtVm {
         self.vm.ext.as_deref().and_then(|x| x.ids.get(&o)).copied().ok_or_else(|| format!("类镜像 {t} 未导出"))
     }
 
+    /// 内容为 units 的驻留字符串在映像中的编号：映像中没有即由本求值器驻留，按共享组追加进映像数据 `d`
+    /// （镜像缓存所引用的驻留串，`engine/image_memo.rs`）
+    pub(in crate::engine) fn string(&mut self, ctx: &Ctx, cp: &ClassPath, units: &[u16], d: &mut crate::image::ImageData) -> Result<u32, String> {
+        let x = self.vm.ext.as_deref().ok_or("非扩展期")?;
+        if let Some(w) = &x.broken {
+            return Err(format!("扩展求值已中止：{w}"));
+        }
+        let env = Env { ctx, cp };
+        let o = self.vm.string(&env, units).map_err(|f| match f {
+            Flow::Fail(w) | Flow::Defer(w) => w,
+            Flow::Throw(o) => format!("抛出 {}", self.vm.ty(o)),
+            Flow::Implicit(k) => format!("隐式异常 {k}"),
+        })?;
+        if let Some(&i) = self.vm.ext.as_deref().and_then(|x| x.ids.get(&o)) {
+            return Ok(i);
+        }
+        self.vm.ext_append(cp, d, self.from, &[o])?;
+        self.vm.ext.as_deref().and_then(|x| x.ids.get(&o)).copied().ok_or_else(|| "驻留字符串未导出".to_string())
+    }
+
     /// 类型属映像根模块（映像对象的类型限于此模块，见 [`Ext::at_home`]）
     pub(in crate::engine) fn at_home(&self, cp: &ClassPath, ty: &str) -> bool {
         self.vm.ext.as_deref().is_some_and(|x| x.at_home(cp, ty))
