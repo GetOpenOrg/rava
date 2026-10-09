@@ -382,9 +382,19 @@ mod mt {
             }
         }
 
-        /// 锁内对值执行 `f`（`f` 不得访问同一单元）。
+        /// 锁内只读访问值（`f` 不得访问同一单元、不得执行 Java 代码）。
         #[inline]
-        pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+            let _g = self.lock();
+            let _held = Held::field();
+            // SAFETY: 持锁独占
+            f(unsafe { &*self.val.get() })
+        }
+
+        /// 锁内改写值（`f` 不得访问同一单元、不得执行 Java 代码）。换下的旧值须从 `f` 返回、
+        /// 放锁后再释放：锁内释放对象会重入任意析构链（debug 档 `drop_slow` 断言）。
+        #[inline]
+        pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
             let _g = self.lock();
             let _held = Held::field();
             // SAFETY: 持锁独占
@@ -408,7 +418,7 @@ mod mt {
 
         #[inline]
         pub fn replace(&self, v: T) -> T {
-            self.with(|cur| std::mem::replace(cur, v))
+            self.with_mut(|cur| std::mem::replace(cur, v))
         }
 
         #[inline]

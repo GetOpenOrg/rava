@@ -131,14 +131,14 @@ impl System {
     /// native `setOut0(PrintStream)`：System.setOut 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
     pub fn setOut0(out: PrintStream) -> Result<()> {
-        STDOUT.with(|slot| *slot.borrow_mut() = Some(out));
+        STDOUT.set(Some(out));
         Ok(())
     }
 
     /// native `setErr0(PrintStream)`：System.setErr 的写入步。
     #[jvm_native]
     pub fn setErr0(err: PrintStream) -> Result<()> {
-        STDERR.with(|slot| *slot.borrow_mut() = Some(err));
+        STDERR.set(Some(err));
         Ok(())
     }
 
@@ -163,7 +163,7 @@ impl System {
     /// native `setIn0(InputStream)`：System.setIn 的写入步（字段 final，JDK 经 native 改写）。
     #[jvm_native]
     pub fn setIn0(input: InputStream) -> Result<()> {
-        STDIN.with(|slot| *slot.borrow_mut() = Some(input));
+        STDIN.set(Some(input));
         Ok(())
     }
 
