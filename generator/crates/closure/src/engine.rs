@@ -375,6 +375,11 @@ pub struct Engine<'a> {
     rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
     /// 直连调用点上各实例目标已接的精确接收者与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
     rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
+    /// 有挂起精确接收者的直连记录（方法, (偏移, 目标)），排空时定夺（`reflect_direct.rs::rdirect_release`）
+    rdirect_wait: Vec<(usize, (u32, MemberRef))>,
+    /// 直连精确接收者：被 open 涵盖而略去的数 / 排空时放行的数
+    rdirect_absorbed: usize,
+    rdirect_released: usize,
     /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
     rmarks: HashMap<u32, method_marks::MethodMark>,
     rmark_fallback: HashSet<(usize, u32)>,

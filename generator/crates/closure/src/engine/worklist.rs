@@ -102,6 +102,10 @@ impl<'a> Engine<'a> {
                 if self.rcall_release() {
                     continue;
                 }
+                // 直连反射调用点的精确接收者在不动点上判定涵盖（`reflect_direct.rs::rdirect_release`）
+                if self.rdirect_release() {
+                    continue;
+                }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
                 let seeded = self.seed_round();
