@@ -298,7 +298,7 @@ impl __ImageArr<Object, ()> {
     pub const fn view(origin: Object) -> Self {
         __ImageArr {
             head: crate::obj_ref::Header::image(None),
-            value: __ArrayObj { repr: Repr::Covariant(super::view::erased_view(origin)), _cell: UnsafeCell::new(()), _elem: PhantomData },
+            value: __ArrayObj { repr: Repr::Covariant(erased_view(origin)), _cell: UnsafeCell::new(()), _elem: PhantomData },
             elems: (),
         }
     }
