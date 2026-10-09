@@ -1,6 +1,6 @@
 # 转译耗时回归调查（2026-10-09，分支 perf-regress）
 
-> 状态：**未完成，到时收尾**（第二轮 6 h 上限）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类已按机制修复（40705e1a，验证作业排队中）；CHM 表合并机制已确认，终态修复未实施。恢复入口见文末。
+> 状态：**未完成，到时收尾**（第二轮 6 h 上限）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类未修（40705e1a 无效，见 pr-tg4）；CHM 表合并机制已确认，终态修复未实施。恢复入口见文末。
 
 ## 现象
 
@@ -59,7 +59,7 @@
 | 5c064a33 | 直连反射调用点的精确接收者被 open 涵盖时由 open 枢纽展开 | 小 |
 | 5af967a8 | 基本类型元素映像数组按类型共用分配点 | 小 |
 | 19350546 | `--perf` 摘要加 edge_groups（诊断） | – |
-| 0269f62218bf72c7a6f8ffd3733242373ae1a222 | final 实例方法调用点抽象对象接收者 ≥ HUB_MIN 走精确集合枢纽 | DeepCopy 832 → 794（jp2），JNDI 1007 → 910；类数 +1（InaccessibleObjectException），根因与修复见「续作」节（40705e1a） |
+| 0269f62218bf72c7a6f8ffd3733242373ae1a222 | final 实例方法调用点抽象对象接收者 ≥ HUB_MIN 走精确集合枢纽 | DeepCopy 832 → 794（jp2），JNDI 1007 → 910；类数 +1（InaccessibleObjectException），未修，见 pr-tg4（40705e1a 无效） |
 | a4c4d0c1179fa602ccd08b2c32bcbb71fd9428e8 | 工厂产物并入的调用点段计入堆深度 | head 上无可测增益 |
 | 509c0297fb95659c30c13792e147a743b16ae73d | 作业脚本另存 `<用例>.classes` | – |
 | 5a5a049c53af9f166bfd2652ba291bd227c51237 | `--flows @ctxsets:<方法键>` 诊断 | – |
@@ -81,7 +81,9 @@
 
 ## 续作（10-09 下午，同一分支）
 
-### 多出的类：@CallerSensitive 目标经枢纽中转丢调用者镜像（已修，40705e1a）
+### 多出的类：@CallerSensitive 目标经枢纽中转丢调用者镜像（未修，见 pr-tg4）
+
+> pr-tg4（us1，5bfc1f67）：DeepCopy 849 s / 6933 MB / 3728 类，类集合与 bedc57aa 完全相同，仍含 InaccessibleObjectException——下述假设机制不成立，40705e1a 无效。
 
 - `--why java/lang/reflect/InaccessibleObjectException`（作业 pr-tw2，jp1，bedc57aa）：`DeepCopy.main → ObjectOutputStream.writeObject → ObjectStreamClass.lookup → … → ObjectStreamClass.getDeclaredSUID@23 → Field.setAccessible@11 → Field.checkCanSetAccessible → AccessibleObject.checkCanSetAccessible(Class,Class,Z)@40 → throwInaccessibleObjectException`。
 - 机制：0269f622 让 final 方法调用点（`Field.setAccessible`，Field 为 final 类）在接收者 ≥ HUB_MIN 时经精确集合枢纽。枢纽对中转目标（`hub_plain`）只接 HP→P / R→HR，不走 `edge`，因而不调 `caller_edge`——@CallerSensitive 目标的调用者节点收不到该调用点所在类（ObjectStreamClass）的镜像，`getCallerClass` 不再折叠到 java.base 模块，`checkCanSetAccessible` 的拒绝分支可达。虚调用枢纽有同一缺口（此前未被触发）。
