@@ -17,7 +17,7 @@ const MAX_INSNS: usize = 256;
 
 /// 可作为求值输入的常量实参（类字面量：所指类已知的 Class 对象，如 `X.class.desiredAssertionStatus()` 的接收者；
 /// 引导映像对象：身份与 final 字段在构建期确定，如映像 Module 上的 `getClassLoader()`）
-fn is_const(v: &V) -> bool {
+pub(super) fn is_const(v: &V) -> bool {
     matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..) | V::Class(..)) || image_id(v).is_some()
 }
 
@@ -31,7 +31,7 @@ fn image_id(v: &V) -> Option<(u32, usize)> {
 
 /// 随常量实参一并绑定的实参：系统属性表对象（被调方法里对它的读取按键折叠，如属性读取的包装方法）、
 /// 构造完成标签的对象（被调方法里按标签读 final 字段、按标签的类选虚调用目标）
-fn bindable(v: &V) -> bool {
+pub(super) fn bindable(v: &V) -> bool {
     is_const(v) || is_sysprops_tag(v) || fields_tag(v)
 }
 
@@ -45,7 +45,7 @@ fn is_sysprops_tag(v: &V) -> bool {
 }
 
 /// 可作为求值结果导出的常量
-fn exportable(v: &V) -> bool {
+pub(super) fn exportable(v: &V) -> bool {
     matches!(v, V::Int(_) | V::Long(_) | V::Null | V::Str(..)) || image_id(v).is_some()
 }
 
@@ -165,7 +165,7 @@ impl Ctx<'_> {
         let depth = self.ceval_depth.get();
         self.ceval_depth.set(depth + u32::from(!pass));
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         let (clean, inp) = self.memo_leave(frame);
         let mut r: Option<PV> = None;
         if !a.conservative {
@@ -190,7 +190,7 @@ impl Ctx<'_> {
         let Some(code) = meth.code.as_ref() else { return "无代码".into() };
         let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
         let live = |_: &str| true;
-        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound.clone(), mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound.clone(), mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
             Event::Return(v) => Some(format!("@{o} ret {v:?}")),
             Event::Const { value, .. } => Some(format!("@{o}={value:?}")),

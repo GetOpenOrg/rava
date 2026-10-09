@@ -326,6 +326,7 @@ impl<'a> Engine<'a> {
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         if self.dispatch.entry((m, off)).or_default().insert(t) {
             self.ctx.stats.borrow_mut().sprof.dispatch_new += 1;
+            self.vdisp_note(m, off, Some(t));
         }
         self.callers.entry(t).or_default().insert(m);
         self.caller_edge(m, t);

@@ -56,7 +56,7 @@ impl Ctx<'_> {
         };
         let params: Vec<Option<V>> = std::iter::once(None).chain(rest.iter().map(|v| PV::of(v).value())).collect();
         let live = |_: &str| true;
-        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let a = self.aux_analyze(&cf.name, &init.desc, false, code, &Facts { ctx: self, live: &live, m: None, params, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         let out = (!a.conservative).then(|| self.ctor_puts(&cf.name, &finals, &a)).flatten();
         (*clean, *inp) = self.memo_leave(frame);
         out

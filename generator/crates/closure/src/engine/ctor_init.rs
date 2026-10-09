@@ -147,7 +147,7 @@ impl Ctx<'_> {
         let Some(code) = meth.code.as_ref() else { return none() };
         let Some(frame) = self.memo_enter(format!("<init>#{init}"), true) else { return (None, false, Inputs::default()) };
         let live = |_: &str| true;
-        let facts = Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) };
+        let facts = Facts { ctx: self, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false };
         let r = absint::analyze_init(&cf.name, &init.desc, code, &InitFacts(facts));
         let (clean, inp) = self.memo_leave(frame);
         (r.map(Rc::new), clean, inp)
