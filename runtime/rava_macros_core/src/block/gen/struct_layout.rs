@@ -241,6 +241,10 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
                 fn __identity(&self) -> *const () {
                     self as *const Self as *const ()
                 }
+                // 根类字节码方法体的 `this`：运行时类对象恒在 `__Obj` 分配（或映像对象）中
+                fn __object(&self) -> ::std::option::Option<Object> {
+                    ::std::option::Option::Some(unsafe { Object::__from_storage(self) })
+                }
                 #hash_code_inner_bridge
                 #equals_inner_bridge
                 #interface_query

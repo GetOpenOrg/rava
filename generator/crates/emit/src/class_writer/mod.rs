@@ -40,7 +40,7 @@ pub const INTERFACE_IMPLS_SLOT: &str = "//@@rava:interface-impls@@";
 /// 接口协变 upcast 插入位（`interface_gen.UPCASTS_SLOT`）
 pub const INTERFACE_UPCASTS_SLOT: &str = "//@@rava:interface-upcasts@@";
 
-const FILE_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs, unused_comparisons)]";
+pub(crate) const FILE_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, non_camel_case_types, static_mut_refs, unused_comparisons)]";
 
 /// lib 模式（jar 输入）下类所在 crate 的定向参数
 #[derive(Clone, Copy)]
