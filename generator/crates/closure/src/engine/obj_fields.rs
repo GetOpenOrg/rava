@@ -10,7 +10,8 @@
 //!   两张表都从 ⊥ 起算（不含初值）。
 //! - **读取**：`getfield` 的接收者只来自一个形参 / 站点（[`Recv`]），且其值集全由抽象对象组成时，答复
 //!   「owild ⊔ 各对象值 ⊔ 未确定初始化对象的初值」，否则退回全局值集。确定初始化（字节码 `new` 分配、
-//!   各构造器完成前该字段必然已写且未在写入前交出 / 读取，见 `ctor_init.rs`）的对象不并入初值。
+//!   各构造器完成前该字段必然已写且未在写入前交出 / 读取，见 `ctor_init.rs`）的对象不并入初值；构建期确定内容的映像
+//!   对象（`oimage`，`image_start.rs` 逐字段记入映像值、未列出的记缺省值）同样不并入。
 //! - **⊥**（值集为空，或各对象尚无写入）：定论阶段之前答复 [`ObjAns::Never`]——读取之后暂不可达，读者记入
 //!   `never`，排空时重算（同 `noreturn.rs`）；定论阶段退回全局值集。⊥ 若在收尾阶段就退回全局值集，随后到达的
 //!   对象 / 写入会把答复收窄，而按宽答复建立的边与登记不可撤回，结果依赖处理顺序（散列种子）。
@@ -165,7 +166,7 @@ impl Ctx<'_> {
         let ov = ov.get(key);
         let mut dflt = false;
         for &o in objs {
-            if !dflt && self.obj_definite(o).binary_search(key).is_err() {
+            if !dflt && !self.oimage.borrow().contains(&o) && self.obj_definite(o).binary_search(key).is_err() {
                 dflt = true;
                 pv = Some(PV::join(pv.as_ref(), &default_pv(&key.desc)));
             }

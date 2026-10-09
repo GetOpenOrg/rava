@@ -142,6 +142,8 @@ pub(super) struct Ctx<'a> {
     pub(super) cinit_drop: Cell<bool>,
     /// 字节码 `new` 分配的抽象对象 → (类, 分配方法里该类的构造器调用)
     pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
+    /// 构建期确定内容的映像抽象对象：全部实例字段由映像给出（未列出即缺省值，已显式记入 `ovals`），按对象读不并入初值
+    pub(super) oimage: RefCell<HashSet<u32>>,
     /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
     pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
     /// 字段 → 抽象对象 → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
