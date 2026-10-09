@@ -30,6 +30,7 @@ impl<'a> Engine<'a> {
                 cinit_rets: Default::default(),
                 osite: Default::default(),
                 odef: Default::default(),
+                osnap: Default::default(),
                 odeps: Default::default(),
                 owdeps: Default::default(),
                 orvals: Default::default(),

@@ -70,6 +70,8 @@ pub(super) struct Outcome {
     pcs: BTreeMap<MemberRef, BTreeSet<u32>>,
     calls: BTreeMap<(MemberRef, u32), BTreeSet<MemberRef>>,
     puts: BTreeMap<MemberRef, Vec<Put>>,
+    /// 其中接收者不是本次求值新分配对象的写入（见 `Trace::shared_puts`）
+    shared_puts: BTreeMap<MemberRef, Vec<Put>>,
     inited: BTreeSet<String>,
     objs: Vec<MObj>,
     /// 返回值（void 为 None）/ 抛出的异常对象
@@ -97,6 +99,9 @@ pub(super) struct Concrete {
     applied: HashSet<(usize, u32, Vec<AK>)>,
     /// 已回退抽象调用边的调用点
     fallback: HashSet<(usize, u32)>,
+    /// 结果按对象物化的类：`[concrete] object_results` 各入口字节码自身 `new` 的类（分析前按字节码确定，
+    /// 按对象读的形参门据此放行，见 `obj_fields.rs::obj_param_set`）
+    pobj_types: HashSet<Rc<str>>,
     /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
@@ -104,6 +109,23 @@ pub(super) struct Concrete {
 impl<'a> Engine<'a> {
     pub(super) fn concrete_init(&mut self) {
         self.concrete.ctx = self.id(CONCRETE_CTX);
+        let mut types: HashSet<Rc<str>> = HashSet::default();
+        for k in &self.man.concrete.object_results {
+            let Some((head, desc)) = k.split_once(':') else { continue };
+            let Some((owner, name)) = head.rsplit_once('.') else { continue };
+            let code = self.h.class(owner).and_then(|cf| cf.method(name, desc).and_then(|x| x.code.clone()));
+            for x in code.iter().flat_map(|c| c.insns.iter()) {
+                if let (classfile::op::NEW, classfile::Operand::Class(c)) = (x.opcode, &x.operand) {
+                    types.insert(Rc::from(c.as_str()));
+                }
+            }
+        }
+        self.concrete.pobj_types = types;
+    }
+
+    /// 类 t 的结果实例按对象物化（见 `pobj_types`）
+    pub(super) fn per_object_type(&self, t: &str) -> bool {
+        self.concrete.pobj_types.contains(t)
     }
 
     pub(super) fn is_concrete(&self, m: usize) -> bool {
@@ -172,16 +194,16 @@ impl<'a> Engine<'a> {
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
         for ((c, r), &h) in outs.into_iter().zip(&hot) {
-            if !self.concrete.applied.insert((m, off, c)) {
+            if !self.concrete.applied.insert((m, off, c.clone())) {
                 continue;
             }
             let Ok(o) = &*r else { continue };
             match o.alt.as_ref().filter(|_| h) {
                 Some(a) => {
                     self.image_memo_apply((m, off), &a.0);
-                    self.concrete_apply(m, off, resolved, md, &a.1);
+                    self.concrete_apply(m, off, resolved, md, &a.1, &obj_tag(&k, &c, true));
                 }
-                None => self.concrete_apply(m, off, resolved, md, o),
+                None => self.concrete_apply(m, off, resolved, md, o, &obj_tag(&k, &c, false)),
             }
         }
         // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
@@ -382,6 +404,16 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
     }
 }
 
+/// 按对象物化的结果对象的名字标签：入口 + 实参组合 + 冷热（同一组实参在各调用点的结果相同，共用同一组抽象对象）。
+/// 取内容散列而非序号：名字与求值 / 应用次序无关
+fn obj_tag(entry: &str, args: &[AK], hot: bool) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in format!("{entry}|{args:?}|{hot}").bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 /// 一组实参入闭包的结果：热求值（缓存物化进映像）或冷 / 热之并
 fn pick(o: &Outcome, hot: bool) -> &Outcome {
     match &o.alt {
@@ -409,6 +441,9 @@ fn merge(out: &mut Outcome, t: Trace) {
     }
     for (k, ps) in t.puts {
         out.puts.entry(k).or_default().extend(ps);
+    }
+    for (k, ps) in t.shared_puts {
+        out.shared_puts.entry(k).or_default().extend(ps);
     }
     // 按「请求初始化」（touched）登记，不按「本次求值触发了初始化」（inited）：后者取决于共享 VM 里此前哪次求值
     // 先初始化了该类（如先求值的组合按热路径入闭包、其冷路径完成的初始化不登记），闭包随求值次序变化。

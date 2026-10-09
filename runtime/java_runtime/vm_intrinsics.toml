@@ -1013,6 +1013,10 @@ entries = [
     # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
     "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
 ]
+# 结果按对象物化的入口（须同在 entries）：入口字节码自身 `new` 的类的结果实例各成一个抽象对象，字段值按对象记录，
+# 这些类的实例方法按接收者对象读字段（如格式串解析出的各说明符各读自己的转换类别，不含日期转换的格式串
+# 不再经说明符的打印方法到达日期格式化链）
+object_results = ["java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;"]
 # 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入。
 # 引导求值中缓存写入不记日志（撤回时保留：重算得同一值，不算运行期改写）
 memo_fields = [

@@ -3,7 +3,8 @@
 //! 全局值集 `fvals` 按字段键汇合全部对象的写入。本模块在它旁边按抽象对象（容器分配点）分开记录：
 //! - **写入**：字节码 `putfield` 的接收者值集里的每个抽象对象，各自并入 `ovals[(对象, 字段)]`；
 //!   接收者值集里的其余值（open / 非抽象对象的类 / 无接收者）并入 `owild[字段]`。
-//!   基本类型字段不拆接收者，物化快照（`concrete/apply.rs`）的写入也一律并入 `owild`。
+//!   基本类型字段的字节码写入不拆接收者，物化快照（`concrete/apply.rs`）的写入也并入 `owild`；结果按对象物化的入口（`[concrete] object_results`）例外：
+//!   入口自身分配的类的结果实例是抽象对象，快照字段值按对象记入 `ovals`，只有接收者不是求值中新分配对象的写入并入 `owild`。
 //!   写站点按接收者增量重跑（`bytecode.rs::field` 的 `recv_delta`），后到的抽象对象同样补记。
 //!   两张表都从 ⊥ 起算（不含初值）。
 //! - **读取**：`getfield` 的接收者只来自一个形参 / 站点（[`Recv`]），且其值集全由抽象对象组成时，答复
@@ -163,7 +164,7 @@ impl Ctx<'_> {
         let ov = ov.get(key);
         let mut dflt = false;
         for &o in objs {
-            if !dflt && self.obj_definite(o).binary_search(key).is_err() {
+            if !dflt && !self.osnap.borrow().contains(&o) && self.obj_definite(o).binary_search(key).is_err() {
                 dflt = true;
                 pv = Some(PV::join(pv.as_ref(), &default_pv(&key.desc)));
             }
@@ -200,14 +201,15 @@ impl Engine<'_> {
         ObjSets { params, sites }
     }
 
-    /// 形参 i 的对象集：只看声明类型为容器形态类的引用形参
+    /// 形参 i 的对象集：只看声明类型为容器形态类、或具体求值结果按对象物化的类（`concrete.rs::per_object_type`，
+    /// 分析前按字节码确定）的引用形参
     fn obj_param_set(&mut self, m: usize, i: u16) -> Option<Rc<[u32]>> {
         let t = (*self.methods[m].ptypes.get(i as usize)?)?;
         if self.arrays.contains_key(&t) || self.names[t as usize].starts_with('[') {
             return None;
         }
         let name = self.names[t as usize].clone();
-        if self.container(&name) {
+        if self.container(&name) || self.per_object_type(&name) {
             self.node_objs(Node::P(m, i))
         } else {
             None
