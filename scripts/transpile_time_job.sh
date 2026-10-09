@@ -6,7 +6,7 @@
 # 用法：scripts/transpile_time_job.sh [--extra "<rava build 额外参数>"] <用例.java 相对路径,...> <提交>...
 #   用例以逗号分隔（如 tests/e2e/23_algorithms/DeepCopy.java,tests/e2e/73_jndi_script/TestJndiNoProvider.java）
 #   提交须已推送（脚本先 git fetch origin <提交>）
-# 产物：build/ttime/<sha8>/<用例>.{out,err,time}、closure 类数；汇总 build/ttime/summary.tsv
+# 产物：build/ttime/<sha8>/<用例>.{out,err,summary.json,classes}（classes 为闭包类名表，供对照）、closure 类数；汇总 build/ttime/summary.tsv
 #       作业取回：--fetch 'build/ttime/**'
 # 环境：TTIME_TIMEOUT 单例转译上限秒（缺省 3000）
 #       TTIME_MODE=closure 改跑 rava closure（--extra 传 --flows / --site-prof 等诊断参数；输出见 <用例>.err）
@@ -62,7 +62,10 @@ for sha in "$@"; do
 import json, sys
 c = json.load(open(sys.argv[1]))
 json.dump(c.get("summary", {}), open(sys.argv[2], "w"), indent=1)
-print(len(c["classes"]))' "$scratch/closure_input/closure.json" "$OUT/$s8/$n.summary.json" 2>/dev/null || echo '?')"
+cs = c["classes"]
+names = sorted(x if isinstance(x, str) else x.get("name", str(x)) for x in (cs if isinstance(cs, list) else cs.keys()))
+open(sys.argv[3], "w").write("\n".join(names) + "\n")
+print(len(cs))' "$scratch/closure_input/closure.json" "$OUT/$s8/$n.summary.json" "$OUT/$s8/$n.classes" 2>/dev/null || echo '?')"
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$s8" "$n" "$rc" "$wall" "$rss" "$cls" | tee -a "$SUM"
         grep -E '^\s*\[perf\]' "$OUT/$s8/$n.out" "$OUT/$s8/$n.err" 2>/dev/null | head -40 | sed 's/^/  /'
         [[ $rc == 0 ]] || { rc_all=1; tail -5 "$OUT/$s8/$n.err"; }
