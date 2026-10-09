@@ -102,6 +102,10 @@ impl<'a> Engine<'a> {
                 if self.rcall_release() {
                     continue;
                 }
+                // 具体求值调用点的新组合 / 回退在不动点上判定（`concrete/release.rs`），先于「不返回」收尾
+                if self.concrete_release() {
+                    continue;
+                }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
                 let seeded = self.seed_round();

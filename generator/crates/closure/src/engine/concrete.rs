@@ -6,6 +6,8 @@
 //! - 结果对象图物化为类型流（实例化类型、字段值集、数组元素、返回值集）；
 //! - 不接抽象调用边。
 //! 任一组合失败（不可建模的指令 / native / 共享状态改写）即整个调用点回退抽象调用边；回退后不再撤回。
+//! 新组合的应用与回退只在工作队列不动点上判定（`concrete/release.rs`）：已应用的组合（含并入映像的镜像缓存）
+//! 撤不回，判定时刻若随处理次序变化，回退站点残留的组合就随次序变化。
 //! 每组实参先冷后热各求值一次（内存缓存字段先写后读），轨迹取并；求值后撤销对映像的缓存写入。
 
 mod apply;
@@ -24,6 +26,7 @@ mod members;
 mod natives;
 pub(super) mod persist;
 mod reflect;
+mod release;
 mod snap;
 mod stable;
 mod taint;
@@ -79,6 +82,14 @@ pub(super) struct Outcome {
     alt_why: Option<String>,
 }
 
+/// 挂起调用点的最新输入（每次处理调用点时覆盖；不动点上即定值）
+pub(super) struct Held {
+    resolved: MemberRef,
+    md: MethodDesc,
+    recv: Option<TypeSet>,
+    args: Vec<V>,
+}
+
 #[derive(Default)]
 pub(super) struct Concrete {
     /// 具体上下文（类型序号）
@@ -92,6 +103,8 @@ pub(super) struct Concrete {
     applied: HashSet<(usize, u32, Vec<AK>)>,
     /// 已回退抽象调用边的调用点
     fallback: HashSet<(usize, u32)>,
+    /// 挂起待判定的调用点 → 最新输入（`concrete/release.rs`）
+    held: BTreeMap<(usize, u32), Held>,
     /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
@@ -111,7 +124,10 @@ impl<'a> Engine<'a> {
     }
 
     /// 调用 m@off → resolved（静态调用，或接收者值集为 recv 的非虚调用）按具体求值处理；返回 true 即不再接抽象调用边。
-    /// 接收者尚无取值时暂不接边（接收者增长时调用方重处理）
+    /// 接收者尚无取值时暂不接边（接收者增长时调用方重处理）。
+    ///
+    /// 这里只登记调用点的最新输入：出现尚未应用的实参组合（或组合不可枚举）时挂起，新组合的应用与回退都在
+    /// 工作队列不动点上判定（`concrete/release.rs`）。已应用的组合保留，挂起期间不接抽象边
     pub(super) fn concrete_call(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> bool {
         if self.concrete.fallback.contains(&(m, off)) || self.is_concrete(m) {
             return false;
@@ -120,89 +136,31 @@ impl<'a> Engine<'a> {
         if !self.man.concrete.entries.contains(&*k) {
             return false;
         }
-        let site_name = format!("{}@{off}", self.methods[m].key);
         if recv.is_some_and(|s| s.classes.is_empty() && s.open.is_empty()) {
             return true;
         }
-        let combos = match self.combos(m, off, md, recv, args) {
-            Ok(c) => c,
-            Err(why) => return self.concrete_fallback(m, off, site_name, why),
+        if self.h.resolve_method(&resolved.owner, &resolved.name, &resolved.desc, false).is_none() {
+            return false;
+        }
+        let fresh = match self.combos(m, off, md, recv, args) {
+            Ok(cs) => cs.into_iter().any(|c| !self.concrete.applied.contains(&(m, off, c))),
+            Err(_) => true,
         };
-        let Some(site) = self.h.resolve_method(&resolved.owner, &resolved.name, &resolved.desc, false) else { return false };
-        let mut outs = Vec::new();
-        for c in &combos {
-            let r = self.concrete_eval(&site, resolved, c);
-            if let Err(w) = &*r {
-                return self.concrete_fallback(m, off, site_name, format!("{c:?}：{w}"));
-            }
-            outs.push((c.clone(), r));
+        if fresh {
+            let h = Held { resolved: resolved.clone(), md: md.clone(), recv: recv.cloned(), args: args.to_vec() };
+            self.concrete.held.insert((m, off), h);
         }
-        // 镜像缓存可物化进引导映像的组合按热求值入闭包（运行期缓存已命中）
-        let mut why: Vec<Option<String>> = Vec::new();
-        let mut hot: Vec<bool> = Vec::new();
-        for (_, r) in &outs {
-            let Ok(o) = &**r else {
-                hot.push(false);
-                why.push(None);
-                continue;
-            };
-            let w = match (&o.alt, &o.alt_why) {
-                (Some(a), _) => self.image_memo_prepare(&a.0).err(),
-                (None, w) => w.clone(),
-            };
-            hot.push(w.is_none() && o.alt.is_some());
-            why.push(w);
-        }
-        let image: Vec<Rc<str>> = outs
-            .iter()
-            .zip(&hot)
-            .filter_map(|((_, r), &h)| r.as_ref().as_ref().ok().map(|o| pick(o, h)))
-            .flat_map(|o| apply::image_types(o).cloned().collect::<Vec<_>>())
-            .collect();
-        if let Some(t) = image.iter().find(|t| self.container(t)) {
-            return self.concrete_fallback(m, off, site_name, format!("结果引用映像中的容器形态对象 {t}"));
-        }
-        let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
-        self.dispatch.entry((m, off)).or_default().insert(entry);
-        self.callers.entry(entry).or_default().insert(m);
-        for ((c, r), &h) in outs.into_iter().zip(&hot) {
-            if !self.concrete.applied.insert((m, off, c)) {
-                continue;
-            }
-            let Ok(o) = &*r else { continue };
-            match o.alt.as_ref().filter(|_| h) {
-                Some(a) => {
-                    self.image_memo_apply(&a.0);
-                    self.concrete_apply(m, off, resolved, md, &a.1);
-                }
-                None => self.concrete_apply(m, off, resolved, md, o),
-            }
-        }
-        // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
-        let shown: Vec<String> = combos
-            .iter()
-            .zip(why.iter().zip(&hot))
-            .take(DIAG_COMBOS)
-            .map(|(c, (w, &h))| match (h, w) {
-                (true, _) => format!("{c:?}⇒映像"),
-                (false, Some(w)) if w != "无缓存写入" => format!("{c:?}（并：{w}）"),
-                _ => format!("{c:?}"),
-            })
-            .collect();
-        let more = combos.len().saturating_sub(DIAG_COMBOS);
-        let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
-        self.concrete.diag.entry(site_name).or_default().insert(line);
         true
     }
 
-    fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
+    pub(super) fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
         self.concrete.fallback.insert((m, off));
         self.concrete.diag.entry(site).or_default().insert(format!("回退：{why}"));
         false
     }
 
     /// 调用点实参的全部组合（笛卡尔积，超上限即失败）
-    fn combos(&mut self, m: usize, off: u32, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> Result<Vec<Vec<AK>>, String> {
+    pub(super) fn combos(&mut self, m: usize, off: u32, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> Result<Vec<Vec<AK>>, String> {
         let mut out: Vec<Vec<AK>> = vec![vec![]];
         if let Some(s) = recv {
             out = self.recv_keys(s)?.into_iter().map(|k| vec![k]).collect();
@@ -269,7 +227,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 一组实参的求值（按 (入口, 实参) 记忆）
-    fn concrete_eval(&mut self, site: &MethodSite, entry: &MemberRef, args: &[AK]) -> Rc<Result<Outcome, String>> {
+    pub(super) fn concrete_eval(&mut self, site: &MethodSite, entry: &MemberRef, args: &[AK]) -> Rc<Result<Outcome, String>> {
         let key = (entry.clone(), args.to_vec());
         if let Some(r) = self.concrete.memo.get(&key) {
             return r.clone();
@@ -351,7 +309,7 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
 }
 
 /// 一组实参入闭包的结果：热求值（缓存物化进映像）或冷 / 热之并
-fn pick(o: &Outcome, hot: bool) -> &Outcome {
+pub(super) fn pick(o: &Outcome, hot: bool) -> &Outcome {
     match &o.alt {
         Some(a) if hot => &a.1,
         _ => o,
