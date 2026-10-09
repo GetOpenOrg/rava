@@ -172,7 +172,7 @@ impl<'a> Engine<'a> {
             let Ok(o) = &*r else { continue };
             match o.alt.as_ref().filter(|_| h) {
                 Some(a) => {
-                    self.image_memo_apply(&a.0);
+                    self.image_memo_apply((m, off), &a.0);
                     self.concrete_apply(m, off, resolved, md, &a.1);
                 }
                 None => self.concrete_apply(m, off, resolved, md, o),
@@ -193,6 +193,11 @@ impl<'a> Engine<'a> {
         let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
         self.concrete.diag.entry(site_name).or_default().insert(line);
         true
+    }
+
+    /// 调用点是否已回退抽象调用边
+    pub(super) fn concrete_fell_back(&self, w: (usize, u32)) -> bool {
+        self.concrete.fallback.contains(&w)
     }
 
     fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
