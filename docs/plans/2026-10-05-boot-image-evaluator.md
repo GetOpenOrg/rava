@@ -1564,7 +1564,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 | 字符串驻留（`rt::intern`） | `IMG_STRINGS_k` 按 UTF-16 内容有序，`String.intern` 先查表。内容随宿主改写的串不入表 |
 | VM 模块登记（`rt::define_module`） | `IMAGE_TABLES.modules` 常量；`Module` 的 VM 模块表首次访问时以它为初值 |
 
-- 启动序列：`rt::install(&IMAGE_TABLES)` 登记一次（O(1)）→ VM 单元 → 绑定初始线程 → 残差（只剩没有常量形态的槽：`SlotTy::Other` 字段和静态）→ 占位对象槽 → 分段残差 → 宿主改写 → 重定位与其他步骤。
+- 启动序列：映像表以链接期符号 `__rava_image_tables` 导出，运行期直接按符号查表，不登记（3cb588d7，见 §5.10.5）→ VM 单元 → 绑定初始线程 → 残差（只剩没有常量形态的槽：`SlotTy::Other` 字段和静态）→ 占位对象槽 → 分段残差 → 宿主改写 → 重定位与其他步骤。
 - 大表每块 1024 项，各成一个静态，运行期分块二分查找，满足 java_base 编译峰值约束（不出现巨型静态）。
 - 旧路径 `rt::mirror` / `intern` / `define_module`、静态初值 setter、`__boot_initialized`、链接表 `links` 已一并删除，不保留双路径。
 
@@ -1612,6 +1612,58 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
      - 另以 uprobes 测 `__boot_image_start` ≤ 1 ms。
   3. 单测 closure / emit / input；抽查 HelloWorld、CollectorsDemo、DeepCopy、TestJcaSasl；`scripts/seed_check.sh HelloWorld`。
   4. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段，生成代码里仍以注释占位）与 S6 标准流（`System.out/err/in` 手写侧状态）未做，做法见 §5.5.5「未完成」2、3。残差现状：HelloWorld 启动序列只剩 `File.FS` 一处静态残差写入，外加宿主改写和重定位步骤。
+
+#### 5.10.5 验证与实测（2026-10-10，头 669365cf）
+
+**本轮修复**
+- 3cb588d7：映像表改为链接期符号。
+  - 根门面 `#[unsafe(export_name = "__rava_image_tables")] pub static IMAGE_TABLES`（常量 `IMAGE_TABLES_SYMBOL`）。
+  - 运行期 `image_rt` 以 `extern "Rust" { #[link_name] static IMAGE_TABLES }` 直接查表。
+  - 删除 `OnceLock` 与 `rt::install`。启动序列不再做登记，也就不存在「首次查找早于登记」的时序问题。保活由启动函数的 `black_box((&IMAGE_TABLES, &IMAGE_STATICS_k…))` 承担。
+- 3cb588d7：驻留查找。
+  - `String.__interned` 先查运行期驻留表，未命中才二分映像表 `image_string`，结果回填运行期表，所以同一字面量只付一次二分。
+  - 二分比较 `__units_cmp` 逐码元读取 Latin-1 / UTF-16，不分配。
+  - 排序口径：生成端按 `Vec<u16>` 排序，运行期按 `[u16]` 切片比较，二者一致。镜像键两端都按 `str` 字节序。
+- 56390b53：`array/obj.rs` 的辅助文件改回只用 `use super::*`，修复 `runtime_helpers_follow_convention`；问题来自 f87c343d。
+- 3cb588d7 / 669365cf：测量脚本。
+  - `boot_probe` 用 tracefs `uprobe_events`（p/r 探针按文件偏移注册，只依赖免密 sudo，用后即删）计 `__boot_image_start` 入口到返回。
+  - 参数为可执行文件时只探测。
+  - `MEASURE_RELEASE=0` 跳过 release 档。
+
+**测量**（jp1，作业 zc-meas-3cb588d7，缺省档，对照 §5.10.3 的 c249cdec 列）
+
+| 口径 | HelloWorld 基线 → 零拷贝 | DeepCopy 基线 → 零拷贝 |
+|---|---|---|
+| 转译墙钟 / 峰值 RSS | 122 s / 2.52 GB → 121 s / 2.56 GB | 973 s / 8.35 GB → 974 s / 8.66 GB |
+| `boot_image.rs` | 12.08 MB / 49,324 行 → 13.09 MB / 50,846 行 | 12.99 MB / 54,009 行 → 14.06 MB / 54,331 行 |
+| 编译总墙钟 | 310 s → 317 s | 356 s → 352 s |
+| 门面 `java_base` 峰值 / 墙钟 | 1632 MB / 57 s → **1610 MB** / 69 s | 1769 MB / 60 s → **1779 MB** / 80 s |
+| `java_base_decl` 峰值 | 4761 → 4745 MB | 5274 → 5352 MB |
+| 缺省档二进制 | 501.8 → **497.3 MB（−0.9%）** | 553.7 → **548.9 MB（−0.9%）** |
+| `.text` / `.data.rel.ro` / `.data` | 145.2 / 8.01 / 3.55 → 143.3 / 8.13 / 3.96 MB（合计 −0.9%） | 159.4 / 8.90 / 3.77 → 157.3 / 9.04 / 4.22 MB（合计 −0.9%） |
+| 运行输出 | 3 行，rc=0 | 27 行，rc=0 |
+| 整进程墙钟中位数（30 次） | 195.2 → **178.3 ms（−8.7%）** | 313.8 → **291.8 ms（−7.0%）** |
+| `__boot_image_start`（uprobe，10 次中位数） | **156.4 ms**（min 153.9 / max 171.5，n=10；作业 zc-probe4-669365cf） | 作业 zc-probe4-669365cf 进行中（结果取回到 `cluster_results/job/zc-probe4-669365cf/01/build/zc/probe_DeepCopy/`） |
+
+- **启动 ≤ 1 ms 未达到**：缺省开发档下，`__boot_image_start` 本身耗时 156 ms，占整进程 178 ms 的 88%。探针在启动函数入口与返回处成对触发，量的是函数本身。这说明零拷贝虽然删掉了逐槽写入，启动序列里剩下的 VM 单元、初始线程、残差、宿主改写与重定位步骤在未优化代码下仍是主要成本。原因定位用 perf 采样（作业 zc-prof-669365cf，kr2，取回 `build/zc/self.txt` / `children.txt`），结论见下文续作 0。
+- 体积：缩小 0.9%，满足 ≤ +5%。`.data` 增加约 0.4 MB（映像静态的常量初值），`.text` 减少约 2 MB（删掉了启动期逐槽写入的代码）。
+- 门面峰值：HelloWorld 1610 MB，与基线持平。DeepCopy 1779 MB，比基线 1769 MB 高 10 MB（+0.6%），超出约 1.6 GB 的目标；但基线本身已在 1.6 GB 以上，零拷贝没有带来实质增长。门面墙钟增加 12 / 20 s，来自常量求值与大静态。若要把 DeepCopy 压到 1.6 GB 以下，需要把门面的映像静态分到多个 crate（与 decl / body 分层同法），列为续作。
+- release 档：jp1（11.9 GB）上 fat LTO 链接 OOM，与基线相同，本轮跳过。
+
+**正确性**
+- 抽查 zc-spot-3cb588d7（kr2）：HelloWorld、CollectorsDemo、DeepCopy 全部 PASS。
+- TestJcaSasl 不在语料中，取自 `scripts/closure_composition_job.sh`，以作业 zc-jca-3cb588d7 跑：stdout（true / 20 / true）、未捕获 `SaslException` 的消息和退出码 1 都与 JDK 一致。rava 不打印栈帧行，属既有行为。
+- 单测：
+  - zc-ut2-56390b53（kr2，`--no-fail-fast`）：closure 237、emit 85、`jdk_literal_lint` 2、input 21，全部通过。
+  - zc-ut-3cb588d7（jp1）：driver `archive_emit_cli` 通过；`closure_cli` 12 例通过，`param_string_constants_fold_switch` 失败（已知）。`closure_independent_of_hash_seed` / `closure_independent_of_order` 跑了 3 小时仍未结束，为给测量让出机器被中止，无结果；order 例的 DeepCopy 派发差异是既有已知问题，见 annot-sig 文档续作 6。
+- `scripts/seed_check.sh HelloWorld`（jp1）：`seed-diff-lines=0`。
+
+**未解决 / 续作**
+0. 启动 ≤ 1 ms：HelloWorld 的 `__boot_image_start` 实测 156 ms（缺省档）。按 perf 热点逐项消掉：没有常量形态的残差改为常量，构建期能定的宿主改写钉值，重定位并入常量；然后用 `scripts/boot_image_measure.sh <out> <可执行文件>` 复测。注意 `rava build` 必须带 `--keep-artifacts`，否则运行后会删除可执行文件。release 档需在内存足够的机器上复测。
+1. DeepCopy 门面峰值 1779 MB，超出约 1.6 GB 的目标（基线 1769 MB 也超出）。做法：把门面的映像静态（`__IS_n` / 映像对象 / 表分块）按块数切到多个 crate，门面只留表头和启动序列。
+2. `closure_cli` 的 hash_seed / order 两例运行时间超过 3 小时，需单独作业复跑，复跑时不要与测量同机。
+3. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段）与 S6 标准流（`System.out/err/in`）未做，做法见 §5.5.5「未完成」2、3。
+4. release 档体积 / 墙钟：jp1 内存不够，需在 ≥ 16 GB 的机器上测。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
