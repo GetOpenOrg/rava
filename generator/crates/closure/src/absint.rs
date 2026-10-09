@@ -154,6 +154,8 @@ impl<O: Oracle> Interp<'_, O> {
             }
         }
         let (c, v) = match (a, b) {
+            // 内容不同的两个确定字符串必是不同对象（内容相同不能断言同一：非字面量来源可能是副本）
+            (V::Str(x, _), V::Str(y, _)) if x != y => return Some(false),
             (V::Class(x, _), V::Class(y, _)) => return Some(x == y),
             (V::Class(c, _), v) | (v, V::Class(c, _)) => (c, v),
             _ => return None,

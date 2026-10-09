@@ -3,7 +3,9 @@
 分支 regress2（基于 rust-closure-analyzer@f685c7b5）。复现与验证均单例运行。
 
 > 状态（2026-10-02）：§1–§9 ✅ 6c7eb831；§10.1a 栈帧来源统一 ✅ 已合入集成分支 be1b97be（frames-unify bf91f075）。
-> 遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 `<init>` 不成帧 ◀── C1d-a a2（过渡手写删除）。
+> 遗留（2026-10-09 复核，§10.1b，作业 r2-wait-a79e2b60）：过渡类手写 `<init>` 不成帧 ✅ 已随过渡手写删除消失；
+> Object.wait 帧 ⏳ 仍在——根因不是帧登记，而是根类 `wait()` / `wait(J)` / `wait(JI)` 有字节码却整体手写，
+> 终态为根类非 native 方法按字节码翻译（待用户定，见 §10.1b）。
 
 ## 1. TestForNameInit —— 已修
 
@@ -174,6 +176,38 @@
 - 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段）、
   62_reflection/TestStackWalkerLines（直接 / 递归 / lambda / default / 继承 / 构造器 / clinit 帧的 StackWalker 行号）、
   06_exceptions/TestObjectNativeFrames（Object.clone / notify / notifyAll native 帧），expected 均为 JDK 21 实测。
+
+### 10.1b regress2 遗留复核（2026-10-09，regress2-rest）
+
+作业 r2-wait-a79e2b60（us1，ref a79e2b60，参考 JDK jdk-21.0.11+10）：TestNativeFrameTrace / TestObjectNativeFrames /
+TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFrames（expected 为参考 JDK 实测）失败。
+
+- **② 过渡类手写 `<init>` 不成帧 —— ✅ 已消失**。证据：`closure.toml [vm_boundary]` 只剩 `java/lang/Class`
+  （其 `<init>` 只由 VM 调用，Java 代码不可达，不出现在任何栈上）；`runtime/` 下 `#[jvm_boundary]` 0 处；
+  `non_native_overrides` 0（09-28 起）；作业中 4 个 scratch 内 `// [meta] #[java_method(name = "<init>"` 均为 0 处
+  （手写 `<init>` 的唯一登记形态，`class_writer/methods.rs` 对 `<init>` 不出签名注释即不成帧的分支已无输入）。
+- **① Object.wait 帧 —— 仍在，且不是「行号哨兵」问题**。JDK 21 的 `wait()` / `wait(J)` / `wait(JI)` **不是 native**：
+  `wait()` → `wait(0L)`（Object.java:339）；`wait(J)` 经 `Blocker.begin()` 调 **native `wait0(J)`**（:366）、
+  捕获 InterruptedException 时对虚拟线程清中断、finally `Blocker.end`；`wait(JI)` 校验纳秒（:476 / :480 抛 IAE）后调
+  `wait(J)`（:488）。JDK 帧形态为 `wait0 (Native Method)` + 各 `wait` 重载的字节码行号帧（见 expected）。
+  现状：根类手写体把三个重载各写成一个 fn（`object.rs` 的 ObjectVTable 默认方法与 `object_impl.rs` 的固有方法），
+  按非 native 记 -1，产出单帧 `Object.wait Object.java:-1`，少 `wait0` 帧与重载间的嵌套帧。
+  改哨兵为 -2 也不对：JDK 的 native 帧是 `wait0`，`wait` 帧有真实行号，只能从 `wait` 自己的字节码得到。
+  另外手写体跳过了 `Blocker.begin/end`（虚拟线程在 `wait` 期间钉住载体时对 ForkJoinPool 的补偿），
+  与 VirtualThread 字节码翻译终态（2026-10-03 定）语义不一致——帧只是同一缺口的可观测面。
+  handwritten-boundary.md 二节「`Object.wait` / `notify` 是 native」的表述不准，已更正。
+- **终态（待用户定）**：根类按手写边界规则逐方法划分——`ObjectVTable` 对象模型仍是运行时基础设施，但根类**有字节码的
+  非 native 方法**（`wait()` / `wait(J)` / `wait(JI)`、`equals`、`toString`、`finalize`）按字节码翻译，手写只剩 ACC_NATIVE
+  （`getClass` / `hashCode` / `clone` / `notify` / `notifyAll` / `wait0`）。帧随之自然对齐（翻译体带 `// line N`，
+  `wait0` 按 native 登记为 -2），不需要任何帧登记特判。需要的通用机制：
+  1. 生成器为根类发射翻译体：根类无 `java_class!` 生成文件，翻译体落为 `invokespecial` 落点同形的自由函数
+     `Object__<m>_base<T: ObjectVTable + ?Sized>(this: &T, ..)`（与现有 `Object__toString_base` 等同一命名），
+     放根类目录下的生成文件；`impl Object` 固有方法与 ObjectVTable 默认方法只做转发（不成帧，同派发外壳）；
+  2. 行表：根类翻译体按生成文件的 `// line N` 标记成表，`root_line_registration` 只登记 native；
+  3. 闭包：根类非 native 方法改按字节码建模（当前按手写体扫描），`Blocker` / `CarrierThread` 分支的折叠依赖
+     「非导出包类不可由用户扩展」，非虚拟线程程序的闭包应不增长（验收：HelloWorld / DeepCopy 类集不变大）；
+  4. 根类非 native 手写方法计入 raw-audit（现不计数，是隐形手写），终态 0。
+  量级：closure / instr / emit / runtime 四处，非小修；涉及根类模型，按授权范围先报用户再实施。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 

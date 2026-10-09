@@ -59,7 +59,7 @@ animal.speak();
 
 - 判定单位是**方法**，不是类或包；`@IntrinsicCandidate` 之类的性能内建照样翻译字节码
 - 准入三类：① `ACC_NATIVE`；② 运行模型替换（lambda / indy 引导、LambdaForm 编译、动态代理等运行期类定义点）；③ VM 注入的状态与 VM 驱动行为的落地语义（引用类语义随 `Rc` 释放触发、不引入 GC，JVMTI、栈遍历等）
-- 过渡类（策略截断）：`[boundary]` 前缀已删除（规范 §三 / §七），只剩 `closure.toml [vm_boundary]` 中整方法手写的 `#[jvm_boundary]`（当前全仓 14：`ClassLoader` 6、`BootLoader` 2、`JceSecurity` 6；终态 0，由引导映像第 5 步与 JceSecurity 构建期求值归零）；单独计数，不作为新增手写的理由
+- 过渡类（策略截断）：`[boundary]` 前缀已删除（规范 §三 / §七）；整方法手写的 `#[jvm_boundary]` 已归零（引导映像第 5 步与 JceSecurity 构建期求值，2026-10-09 核实 runtime/ 下 0 处），`closure.toml [vm_boundary]` 只剩 `java/lang/Class`（其 `<init>` 只由 VM 调用）；新增即回归
 - 终态下 Java 类的 struct 一律由字节码生成；VM 注入的隐藏字段由清单声明、生成器追加
 - 每个非 native 手写方法在清单登记类别，raw-audit 按类计数（`non_native_overrides` 2026-09-28 已清零，新增即回归）
 - `System.out.println`、`String`、`ArrayList` 等的 Rust 实现必须来自 JDK `.class` 字节码翻译，不得手写近似实现
