@@ -4,8 +4,8 @@ use super::StoreCtx;
 use crate::env::{ident, to_ir_type, type_text};
 use crate::error::SimResult;
 use crate::exprs::{
-    clone_moved_var, clone_plain, default_value, is_default, is_null, maybe_downcast, object_from, object_type,
-    opaque_let_value, qualified_from,
+    clone_moved_var, clone_plain, default_value, is_default, is_default_or_null, is_null, maybe_downcast, object_from, object_type,
+    opaque_let_value, qualified_from, typed_default,
 };
 use crate::names::safe_name;
 use crate::state::{Local, StackSim};
@@ -38,6 +38,10 @@ impl StackSim<'_> {
 
     /// `<Declared as ::std::convert::From<Object>>::from(Object::from(src))`：经 Object 边界按声明类型重建
     fn rebuild_via_object(&self, declared: &RsType, src: Expr) -> SimResult<Expr> {
+        if is_default_or_null(&src) {
+            // null 存入：即声明类型的空引用，无需经 Object 边界
+            return typed_default(to_ir_type(declared, self.env)?);
+        }
         qualified_from(to_ir_type(declared, self.env)?, object_type()?, object_from(src)?)
     }
 
