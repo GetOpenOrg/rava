@@ -55,22 +55,17 @@ impl Engine<'_> {
     /// 字节码调用点 (m, off) 以接收者上下文 base 调用实例方法 key（已选中的实现）时的上下文：实参（`call_vals`，
     /// 不含接收者）在 key 的选择子形参上传常量时按调用点克隆、链尾接 base，否则即 base
     pub(super) fn recv_call_ctx(&mut self, m: usize, off: u32, key: &MemberRef, base: u32) -> u32 {
-        if self.recv_call_clones(m, key) {
+        if self.methods[m].kind != Kind::Bytecode {
+            return base;
+        }
+        let Some(args) = self.call_vals.clone() else { return base };
+        // 实例方法的掩码按形参序号含接收者槽 0
+        let mask = self.ctx.selector_slots(key) >> 1;
+        if mask != 0 && selector::null_selector(mask, &args) {
             self.const_ctx(m, off, base)
         } else {
             base
         }
-    }
-
-    /// `recv_call_ctx` 是否按调用点克隆（与接收者上下文无关）
-    pub(super) fn recv_call_clones(&self, m: usize, key: &MemberRef) -> bool {
-        if self.methods[m].kind != Kind::Bytecode {
-            return false;
-        }
-        let Some(args) = self.call_vals.as_ref() else { return false };
-        // 实例方法的掩码按形参序号含接收者槽 0
-        let mask = self.ctx.selector_slots(key) >> 1;
-        mask != 0 && selector::null_selector(mask, args)
     }
 
     /// 调用点 (m, off) 以形态 call 调用静态方法 key 时的上下文。在建节点前判定，不建出无调用方的本体
