@@ -97,7 +97,8 @@
 - **转译耗时回归**（进行中，perf-regress）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
 - **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
 - **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
-- **进行中（10-09 派）**：缓存组回退撤回（bootcache，§5.8.6）；日志链缺口 ③（logchain3）；annot-sig 续作（并入 a6dca5c0 后先修 `reflect_new_array_element_precision`）。**待派（按序）**：C1d 闭包收窄余项（以 `rava closure --gates` 排名为准）；引导映像零拷贝（§8.3）；regress2 遗留；并发小步 A → B（无 GC 文档 §四，10-09 定）。
+- **batch-1009c 已合入（10-09，按用户指示先合入，单测与 57 例抽查转合入后验证）**：含 bootcache（缓存组 = 未回退站点贡献的组，§5.8.6）、c1d-rest（C1d 收窄余项 0 类；c1d 计划 §31 记下一步能力：① 每对象 URI 跟踪约 285 类；② 引导区未知名字调 `Charset.isSupported` 放开全部扩展字符集约 390 类，charset 线续作；③ Formatter 常量格式串构建期求值）、regress2-rest（② ✅，① 转 object-bytecode）、annot-sig（SignatureParser 出闭包，HelloWorld 3456→3407、DeepCopy 3757→3727，`rava closure` 口径；e2e 口径另计）。
+- **进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；派发点顺序依赖（order-findops，`closure_independent_of_order` DeepCopy 失败，集成分支同样存在）；转译耗时回归续作（perf-regress，主因 CHM 表数组跨上下文合并，见 2026-10-09-transpile-time-regression.md）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -219,16 +220,16 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
-| 缓存组回退撤回 | 🔄 bootcache（a6dca5c0） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
+| 缓存组回退撤回 | ✅ bootcache 9a029858 → batch-1009（待测） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
 | reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
 | 日志链缺口 ③ | 🔄 logchain3（a6dca5c0） | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
 | 转译耗时回归 | 🔄 进行中（perf-regress，基于 5090505f） | DeepCopy 527 → 912 s、序列化两例 ≈520 → ≈890 s、TestJndiNoProvider 324 → 1006 s；目标回到 batch-1012 水平以下（JNDI ≤350 s）、DeepCopy 峰值 ≤6 GB、闭包类集不变大 |
-| 引导映像零拷贝 | ⏳（§8.3，10-07 定） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
+| 引导映像零拷贝 | 🔄 boot-zerocopy（基于 batch-1009，U4 / U11 §5.5.6） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
-| regress2 遗留 | ⏳ | Object.wait 帧行号、过渡 `<init>` 帧 |
+| regress2 遗留 | 🔄 ② ✅；① 转 object-bytecode | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿）。按手写边界规则（有字节码即翻译，非用户待定项）派 object-bytecode：根类非 native 方法按字节码翻译。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60，修前为已知失败）。regress2 文档 §10.1b |
 | C4 收官 · 全量 e2e | ⏳ 尚未开始 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |

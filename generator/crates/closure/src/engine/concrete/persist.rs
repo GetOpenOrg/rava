@@ -23,6 +23,8 @@ pub(in crate::engine) enum FVal {
     Mirror(Rc<str>),
     /// 由不变静态字段持有的映像对象（声明类, 字段名）
     Static(String, String),
+    /// 映像中的驻留字符串（UTF-16 内容；按内容取映像的驻留对象，驻留串的身份即其内容）
+    Str(Vec<u16>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +60,8 @@ fn is_default(v: CV) -> bool {
 
 struct Ex<'v> {
     vm: &'v Vm,
+    /// 驻留字符串对象 → 内容（首次遇到映像中的非静态所持对象时建）
+    interned: Option<HashMap<u32, &'v [u16]>>,
     ids: HashMap<u32, u32>,
     order: Vec<u32>,
     q: VecDeque<u32>,
@@ -78,8 +82,15 @@ impl Ex<'_> {
                 }
                 let h = &self.vm.heap[o as usize];
                 if h.epoch == 0 {
-                    let f = self.vm.image_roots.get(&o).ok_or_else(|| format!("引用映像对象 {}（非不变静态字段所持）", h.ty))?;
-                    return Ok(FVal::Static(f.owner.clone(), f.name.clone()));
+                    if let Some(f) = self.vm.image_roots.get(&o) {
+                        return Ok(FVal::Static(f.owner.clone(), f.name.clone()));
+                    }
+                    let vm = self.vm;
+                    let rev = self.interned.get_or_insert_with(|| vm.strings.iter().map(|(u, &o)| (o, u.as_slice())).collect());
+                    return match rev.get(&o) {
+                        Some(u) => Ok(FVal::Str(u.to_vec())),
+                        None => Err(format!("引用映像对象 {}（非不变静态字段所持、非驻留字符串）", h.ty)),
+                    };
                 }
                 if self.vm.ihash.contains_key(&o) {
                     return Err(format!("{} 对象取过身份哈希", h.ty));
@@ -100,7 +111,7 @@ impl Ex<'_> {
     }
 
     fn frag(vm: &Vm, mirror: Rc<str>, decl: &str, name: &str, v: CV) -> Result<Frag, String> {
-        let mut x = Ex { vm, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new() };
+        let mut x = Ex { vm, interned: None, ids: HashMap::default(), order: Vec::new(), q: VecDeque::new() };
         let val = x.val(v)?;
         let mut objs = Vec::new();
         while let Some(o) = x.q.pop_front() {
@@ -125,24 +136,62 @@ impl Ex<'_> {
     }
 }
 
-/// 求值（冷 / 热两次）结束、撤销之前：映像状态的写入全部可物化时，按（镜像, 字段）次序给出各缓存片段；
-/// 否则给出原因（该组实参按冷 / 热轨迹的并入闭包）
-pub(super) fn collect(vm: &Vm, env: &Env) -> Result<Vec<Frag>, String> {
-    let img = &env.cfg().image_memo_fields;
+/// 撤销日志的一条写入是否为类镜像上 `image_memo_fields` 的字段（可物化进映像）；否则给出原因
+fn image_write(vm: &Vm, env: &Env, o: u32, k: u32) -> Result<Rc<str>, String> {
+    let (d, n) = &vm.fnames[k as usize];
+    if o == u32::MAX {
+        return Err(format!("写静态字段 {d}.{n}"));
+    }
+    let t = vm.mirror_of.get(&o).ok_or_else(|| format!("写映像对象 {} 的字段 {d}.{n}", vm.heap[o as usize].ty))?;
+    if !env.cfg().image_memo_fields.contains(&format!("{d}.{n}")) {
+        return Err(format!("写镜像 {t} 的非映像缓存字段 {d}.{n}"));
+    }
+    Ok(t.clone())
+}
+
+/// 冷求值后撤销日志里既有映像缓存字段的写入、又有其他缓存写入（需温求值）
+pub(super) fn mixed(vm: &Vm, env: &Env) -> bool {
+    let (mut img, mut other) = (false, false);
+    for &(o, k, _) in &vm.undo {
+        match image_write(vm, env, o, k) {
+            Ok(_) => img = true,
+            Err(_) => other = true,
+        }
+    }
+    img && other
+}
+
+/// 只撤销非映像缓存字段的写入；映像缓存字段的写入原样留在撤销日志（求值结束时整体撤销）
+pub(super) fn rollback_non_image(vm: &mut Vm, env: &Env) {
+    let all = std::mem::take(&mut vm.undo);
+    let (keep, drop): (Vec<_>, Vec<_>) = all.into_iter().partition(|&(o, k, _)| image_write(vm, env, o, k).is_ok());
+    vm.undo = drop;
+    vm.rollback();
+    vm.undo = keep;
+}
+
+/// 求值结束、撤销之前：映像缓存字段的写入可物化时，按（镜像, 字段）次序给出各缓存片段，另附运行期仍重算的
+/// 非映像缓存（partial = 已做温求值，非映像写入不阻止物化）；否则给出原因（该组实参按冷 / 热轨迹的并入闭包）
+pub(super) fn collect(vm: &Vm, env: &Env, partial: bool) -> Result<(Vec<Frag>, Option<String>), String> {
     if vm.undo.is_empty() {
         return Err("无缓存写入".into());
     }
     let mut keys: BTreeMap<(Rc<str>, u32), u32> = BTreeMap::new();
+    let mut other = None;
     for &(o, k, _) in &vm.undo {
-        let (d, n) = &vm.fnames[k as usize];
-        if o == u32::MAX {
-            return Err(format!("写静态字段 {d}.{n}"));
+        match image_write(vm, env, o, k) {
+            Ok(t) => {
+                keys.insert((t, k), o);
+            }
+            Err(w) => {
+                other.get_or_insert(w);
+            }
         }
-        let t = vm.mirror_of.get(&o).ok_or_else(|| format!("写映像对象 {} 的字段 {d}.{n}", vm.heap[o as usize].ty))?;
-        if !img.contains(&format!("{d}.{n}")) {
-            return Err(format!("写镜像 {t} 的非映像缓存字段 {d}.{n}"));
+    }
+    if let Some(w) = &other {
+        if !partial || keys.is_empty() {
+            return Err(w.clone());
         }
-        keys.insert((t.clone(), k), o);
     }
     let mut out = Vec::with_capacity(keys.len());
     for ((t, k), o) in keys {
@@ -151,5 +200,5 @@ pub(super) fn collect(vm: &Vm, env: &Env) -> Result<Vec<Frag>, String> {
         let v = fs.iter().find(|(x, _)| *x == k).map_or(CV::N, |e| e.1);
         out.push(Ex::frag(vm, t, d, n, v)?);
     }
-    Ok(out)
+    Ok((out, other))
 }
