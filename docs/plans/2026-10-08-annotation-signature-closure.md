@@ -160,5 +160,5 @@ asig-cs（并入前、csanno 下）诊断全标「⇒映像」却仍有签名解
      - 顺序单测（同一作业）：`closure_independent_of_order` 通过（kr2 作业 03，7280 s，ut_rc=0）。`closure_independent_of_hash_seed` 在 jp2（作业 01）的前四例都通过：StockTrans、DeepCopy、TestSerialDefaultSuid（本次修复的目标例）、TestSerialProxyForm，三个种子一致，callback 断言成立。跑到第五例 TestSerialUserGenericCallbacks 时，作业撞上 4 h 上限被杀（jp2 比 kr2 慢约 4 倍）。
      - **未决**：
        - hash_seed 后三例（TestSerialUserGenericCallbacks / TestSerialLookupPairing / TestJndiNoProvider）尚未得出结论。曾在 kr2 作业目录 `build/hsr/` 并行补跑（三例各跑三个种子，脚本 `/tmp/hs_rest.sh`），但 kr2 随后 ssh 失联，疑与作业 04 叠加后内存吃紧有关。
-       - 生成器全量单测（作业 04，在 kr2）和 closure_cli 其余单测（作业 05，在 jp2）都还没取回结果。
+       - 生成器全量单测（作业 04，在 kr2）只取回一部分：kr2 失联前已出的 32 组 `test result` 全部 0 失败，driver 的 bins / 其余测试文件与 `rava_macros_core` 是否跑完未知。closure_cli 其余单测（作业 05，在 jp2）中断前只出现已知失败 `param_string_constants_fold_switch`。kr2 失联后分发器停止，作业 04 / 05 都标为中断（⏸）。
        - 下一步：kr2 恢复后取回 `build/hsr/result`，或在 jp2 上用单独作业顺序续跑这三例；`--job csm-e1701aa6` 同 tag 续跑可补齐作业 04 / 05。
