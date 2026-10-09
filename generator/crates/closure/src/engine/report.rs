@@ -430,6 +430,34 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 抽象对象构成诊断：`@objstat`——抽象对象 / 数组分配点按（类型, 来源）计数（来源：映像逐对象 / 字节码分配点），
+        // 另计各类型的逃逸数与按 G 计的成员数（前 60）
+        if pat == "@objstat" {
+            let mut by: HashMap<(u32, bool, bool), (usize, usize)> = HashMap::default();
+            for (&id, &t) in self.objs.iter().chain(self.arrays.iter()) {
+                let name = &self.names[id as usize];
+                let img = name.contains("@image");
+                let e = by.entry((t, self.arrays.contains_key(&id), img)).or_default();
+                e.0 += 1;
+                e.1 += usize::from(self.escaped.contains(&id));
+            }
+            let (mut ti, mut tb) = (0, 0);
+            let mut v: Vec<(usize, String)> = Vec::new();
+            for ((t, arr, img), (n, esc)) in by {
+                if img {
+                    ti += n;
+                } else {
+                    tb += n;
+                }
+                let kind = if img { "映像" } else { "字节码" };
+                let shape = if arr { "数组" } else { "对象" };
+                v.push((n, format!("  {n}\t逃逸 {esc}\t{kind}{shape}\t{}", self.names[t as usize])));
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            out.push(format!("@objstat 映像 {ti}、字节码 {tb}、G {}", self.g.len()));
+            out.extend(v.into_iter().take(60).map(|x| x.1));
+            return out;
+        }
         // 抽象对象明细诊断：`@objs:<节点子串>`——匹配节点（前 4 个）值集里的抽象对象 / 数组分配点名（前 40，标逃逸）
         if let Some(q) = pat.strip_prefix("@objs:") {
             let mut ns: Vec<Node> = self.graph.keys().filter(|n| self.node_str(**n).contains(q)).copied().collect();
