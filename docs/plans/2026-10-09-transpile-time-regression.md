@@ -1,6 +1,6 @@
 # 转译耗时回归调查（2026-10-09，分支 perf-regress）
 
-> 状态：**未完成**（第三轮）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），待 pr-tg6 核实；CHM 表合并的源头定位到 Object[] 元素读出的 open 值，终态修复未实施。恢复入口见文末。
+> 状态：**未完成**（第三轮）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），待 pr-tg6 核实；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
 
 ## 现象
 
@@ -132,15 +132,22 @@
 
 - 设计：逃逸抽象对象进实例化集合 G，类 id 字段走按类视图，非虚调用 / 反射非虚成员的 open 接收者经固定目标枢纽。目的是让 open 值按 G 展开时，每个逃逸对象进自己的接收者克隆，从而不再在 F / U 汇合。
 - 实测（us1）：pr-tg5（build）DeepCopy 1141 s / 9793 MB / 3729 类；pr-st6（closure）1132 s / 9607 MB / 3729 类。比 bedc57aa 慢 33%，峰值 +36%，多出 `MethodHandleImpl$CountingWrapper$1`。`@ctxsets` 显示 transfer / tabAt 克隆的 `tab` 仍含约 724 张表，表合并没有消除。
-- 结论：按逃逸对象展开克隆的代价是 179 个 CHM × 克隆数，而且合并的源头不在 open 接收者的派发上（见下节），因此撤回。
+- 结论：按逃逸对象展开克隆的代价是 179 个 CHM × 克隆数，而且合并的主要引入点是摘要克隆自己构造的 open 接收者，展开 G 触及不到（见下节），因此撤回。
 
-### CHM 表合并的源头：open 的 CHM 值来自 Object[] 元素读
+### CHM 表合并：open CHM 的引入点
 
-- `--flows @opens:java/util/concurrent/ConcurrentHashMap`（pr-why4，3f9c14db）列出 open CHM 接收者的注入点：
-  - 输出列出的注入点为 `ObjectOutputStream$HandleTable.growSpine@55` 与三处 `[Ljava/lang/Object;` 元素读（`elements[偶] [Ljava/lang/Object;@22854:34`、`@22867:9`、`@702:25`）。序列化句柄表等对象数组存着全部被序列化对象，从中读出的元素是 open 值（这是对输出的解读，三个数组的身份尚未逐一核实）。
-  - 收到 open CHM 接收者（P0）的方法有：addCount、fullAddCount、helpTransfer、initTable、putVal、sumCount、transfer（含两个常量克隆）、treeifyBin、tryPresize、Object.getClass。
-- 判断：open CHM 不是哪个调用点的派发缺陷，而是「从 Object[] 元素读出的 open 值」以 CHM 类型进入这些方法的摘要克隆。这些克隆读 F(table)，写回 U，U 再流向每个逃逸 CHM 的 O(table)。
-- 终态方向：在源头把 open 值收窄，不在汇合点逐对象展开。Object[] 元素读得到的值应是该数组实际存入值的集合（数组元素的写入集），不是 open。需要查清 `@22854` / `@22867` / `@702` 这三个数组为何元素是 open（数组本身来自 open 源，或元素写入经过不建模的路径，例如 `System.arraycopy` / `Arrays.copyOf` 手写读写）。下一步命令见恢复入口。
+`--flows @opens:java/util/concurrent/ConcurrentHashMap`（pr-why4，3f9c14db）列出 open(CHM) 的引入点，即含 open(CHM) 但没有任何前驱含同一 open 的节点。共三类：
+
+1. **CHM 私有 / 内部方法的接收者形参 P0**：addCount、fullAddCount、helpTransfer、initTable、putVal、sumCount、transfer（含两个常量克隆 `#~@1827:267`、`#~@1860:186`）、treeifyBin、tryPresize，以及 Object.getClass。这些 P0 没有 open 前驱，说明 open 接收者是克隆构造时直接给的，也就是摘要克隆（NOCTX / 档位 / 常量克隆）的 open 接收者，不是从调用方流进来的。
+2. **三个 `[Ljava/lang/Object;` 分配点的元素节点**（`@22854:34`、`@22867:9`、`@702:25`，奇偶两槽），以及 `ObjectOutputStream$HandleTable.growSpine@55`。这些是对象数组元素直接播种 open 的点（数组身份未逐一核实，推测是序列化句柄表一类的对象数组，以及手写数组复制的结果）。
+3. **`ConcurrentHashMap$CollectionView.map`** 在 `EntrySetView@23449:12` 各上下文克隆上的字段节点。
+
+结论与终态方向：
+
+- 表合并的主因是第 1 类。摘要克隆为节省上下文，用 open 接收者代表「任意 CHM」。克隆体读 F(table)、写回 U，U 流入全部逃逸 CHM 的 O(table)，形成 F→U 往返。
+- 93d80e65 改的是「open 值按 G 展开」，没有碰摘要克隆自己构造的 open 接收者，所以合并没有消除。
+- 终态修复：摘要克隆不对接收者字段做公共 U 写回。做法是让摘要克隆体对 open 接收者的字段写只落「写入值集」，在各具体接收者对象的上下文（调用方实参已知时）按对象落到 O；对接收者本就未知的调用（反射 / VM 入口），写回 U 是语义必需的。这需要把摘要克隆的接收者形参改为「调用方实参集」，而不是 open。
+- 第 2 类（Object[] 元素 open）需单独核实来源。如果来自手写数组复制没有建模元素流，应按数组复制语义接元素边。
 
 ### 第三轮实测（us1，同机交替，build 模式，秒 / MB / 类）
 
@@ -148,7 +155,7 @@
 
 ## 残留与建议
 
-1. **CHM 表合并（最高优先，未修）**：源头见「第三轮 · CHM 表合并的源头」。终态方向是把 Object[] 元素读得到的 open 值收窄为数组的实际写入集，从源头消除 open CHM 接收者。逐逃逸对象展开（93d80e65）已证代价过高且不消合并，不再走这条路。不截断入口、不关精度。
+1. **CHM 表合并（最高优先，未修）**：引入点见「第三轮 · CHM 表合并：open CHM 的引入点」。终态方向是摘要克隆的接收者取调用方实参集而不是 open，字段写按接收者对象落 O，不落公共 U；另核实 Object[] 元素 open 的来源。逐逃逸对象展开（93d80e65）已证代价过高且不消合并，不再走这条路。不截断入口、不关精度。
 2. **c02c1825 的验证**：pr-tg6（us1，DeepCopy + JNDI，c02c1825 / e5200a3e / c02c1825 交替）与 dev 上的单测 pr-ut-c02c1825（A 组）、pr-utB-c02c1825（B 组）、pr-uth-c02c1825（`closure_independent_of_hash_seed`）。结果见「第三轮实测」；收尾时未出的项在 `cluster_results/job/<tag>/` 取。
 3. TreeBin.find → findTreeNode：选择子常量克隆的非虚调用点可按「基调用点 × 常量」建枢纽（未做）。
 4. `lambda_vals.rs` 的 lambda 捕获参数常量仍用 `PV::of`，与 `bind_params` / 枢纽的 `PV::of_ret` 不同口径（未改，需单独测类集合）。
@@ -160,5 +167,5 @@
 
 - 分支 perf-regress，代码 head c02c18250bd48f64dc1a007911416d04e2f47165（集成分支 c249cdec 已 merge 进来，即 bedc57aa）；worktree `/Users/yuwei/dev/workspace/rava_perfregress`。
 - 先取第 2 项结果。之后做第 1 项：在一台空闲服务器上跑
-  `TTIME_MODE=closure bash scripts/transpile_time_job.sh --extra '--flows @opens:java/util/concurrent/ConcurrentHashMap' tests/e2e/23_algorithms/DeepCopy.java <head>`，核实三个 Object[] 的身份与元素为何 open（`--extra` 内不得含 `$`，含 `|` 须加引号；经 `distribute_tests.py --job <tag> --fetch 'build/ttime/**'` 下发）。
+  `TTIME_MODE=closure bash scripts/transpile_time_job.sh --extra '--flows @opens:java/util/concurrent/ConcurrentHashMap' tests/e2e/23_algorithms/DeepCopy.java <head>`，先确认摘要克隆 P0 的 open 由哪种克隆构造给出（配合 `@ctxsets:ConcurrentHashMap.addCount`），再核实三个 Object[] 的身份与元素为何 open（`--extra` 内不得含 `$`，含 `|` 须加引号；经 `distribute_tests.py --job <tag> --fetch 'build/ttime/**'` 下发）。
 - 同机对照基准（pr-tg1，us1，build 模式，秒 / MB / 类）：e5200a3e DeepCopy 522 / 5959 / 3842、JNDI 600 / 6810 / 4086；bedc57aa DeepCopy 855 / 7208 / 3728、JNDI 993 / 7831 / 4009。
