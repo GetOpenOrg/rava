@@ -27,6 +27,7 @@ use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, 
 use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
+mod xpath_diag;
 mod meta_classes;
 mod idset;
 mod facts;
