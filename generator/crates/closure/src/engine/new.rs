@@ -71,6 +71,7 @@ impl<'a> Engine<'a> {
                 dv_depth: Default::default(),
                 dv_budget: Default::default(),
                 dv_trace: Default::default(),
+                dv_cache: Default::default(),
                 stats: Default::default(),
             },
             h,

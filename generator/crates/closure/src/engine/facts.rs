@@ -222,6 +222,8 @@ pub(super) struct Ctx<'a> {
     pub(super) dv_budget: Cell<u32>,
     /// 分派求值诊断轨迹（`--flows @vals:`；None = 不记录）
     pub(super) dv_trace: RefCell<Option<Vec<String>>>,
+    /// 一次分派求值内的结果缓存（`deval.rs`；键为目标与绑定实参，值 None = 未知、Some(None) = 不返回）
+    pub(super) dv_cache: RefCell<HashMap<String, Option<Option<V>>>>,
     /// 性能观测（`summary.perf`）
     pub(super) stats: RefCell<super::stats::Stats>,
 }

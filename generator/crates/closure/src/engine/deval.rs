@@ -6,6 +6,7 @@
 //! - 派发集按调用方成员与偏移汇合全部上下文（`vdisp`，只增）；含非字节码目标、枢纽或成员名 / 描述符与调用不符
 //!   （lambda 实现等转接）时不求值；目标数超过上限不求值；
 //! - 嵌套求值里的调用同样按此求值：唯一目标求其方法体，虚 / 接口调用按嵌套方法该偏移的派发集；
+//!   实参（含接收者）全非常量的多目标调用只取各目标的返回常量格，不展开方法体；一次求值内同目标同绑定实参的结果缓存；
 //! - 嵌套求值读非 final 字段时取字段值集（初值 ∪ 可达写入，`fvals`），读者登记为发起的方法；
 //! - 派发集尚无记录（调用边还没接上）：定论阶段之前按不返回乐观答复（同 `noreturn.rs`），查询过的调用点在派发集
 //!   增长时令发起方法失效重算（`Dep::Disp`）；
@@ -68,10 +69,7 @@ impl Ctx<'_> {
             return String::new();
         }
         *self.dv_trace.borrow_mut() = Some(Vec::new());
-        self.dv_top.set(Some(me));
-        self.dv_budget.set(BUDGET);
-        let r = self.deval_site(key, off, m, args);
-        self.dv_top.set(None);
+        let r = self.deval_top(me, key, off, m, args);
         let t = self.dv_trace.borrow_mut().take().unwrap_or_default();
         let r = match r {
             Ret::Never => "Never".to_string(),
@@ -81,15 +79,22 @@ impl Ctx<'_> {
         format!(" deval {r} [{}]", t.join("; "))
     }
 
+    /// 发起一次分派求值（发起方法节点 me）
+    fn deval_top(&self, me: usize, key: &MemberRef, off: u32, m: &MemberRef, args: &[V]) -> Ret {
+        self.dv_top.set(Some(me));
+        self.dv_budget.set(BUDGET);
+        let r = self.deval_site(key, off, m, args);
+        self.dv_top.set(None);
+        self.dv_cache.borrow_mut().clear();
+        r
+    }
+
     /// 方法体分析（方法节点 me、成员 key）中无唯一目标的守卫形态调用：按调用点派发集求值；求不出为 None
     pub(super) fn deval_guard(&self, me: usize, key: &MemberRef, opcode: u8, off: u32, m: &MemberRef, args: &[V]) -> Option<Ret> {
         if !guard_shape(opcode, m, args) || self.dv_top.get().is_some() {
             return None;
         }
-        self.dv_top.set(Some(me));
-        self.dv_budget.set(BUDGET);
-        let r = self.deval_site(key, off, m, args);
-        self.dv_top.set(None);
+        let r = self.deval_top(me, key, off, m, args);
         match r {
             Ret::Unknown => None,
             r => Some(r),
@@ -99,7 +104,7 @@ impl Ctx<'_> {
     /// 分派求值的嵌套分析（成员 key）中的调用：唯一目标 t 求其方法体，否则虚 / 接口调用按调用点派发集
     pub(super) fn deval_invoke(&self, key: &MemberRef, opcode: u8, off: u32, m: &MemberRef, args: &[V], t: Option<&MemberRef>) -> Ret {
         match t {
-            Some(t) => self.deval_call(t, args),
+            Some(t) => self.deval_call(t, args, true),
             None if virtual_call(opcode) => self.deval_site(key, off, m, args),
             None => Ret::Unknown,
         }
@@ -126,9 +131,12 @@ impl Ctx<'_> {
             }
             return Ret::Unknown;
         };
+        // 实参（含接收者）全非常量的多目标调用只取各目标的返回常量格：方法体求值只在常量实参能带来精度时展开
+        // （`wrapped()` 之类取包装对象的调用不逐层展开，预算留给守卫链）
+        let deep = args.iter().any(is_const);
         let mut acc = Ret::Never;
         for t in &ts {
-            acc = join(acc, self.deval_call(t, args));
+            acc = join(acc, self.deval_call(t, args, deep));
             if matches!(acc, Ret::Unknown) {
                 break;
             }
@@ -136,8 +144,8 @@ impl Ctx<'_> {
         acc
     }
 
-    /// 字节码方法 t 在实参 args（含接收者）上的结果
-    fn deval_call(&self, t: &MemberRef, args: &[V]) -> Ret {
+    /// 字节码方法 t 在实参 args（含接收者）上的结果；deep = 返回常量格之外展开方法体求值
+    fn deval_call(&self, t: &MemberRef, args: &[V], deep: bool) -> Ret {
         let Some(top) = self.dv_top.get() else { return Ret::Unknown };
         // 返回常量格已是常量（各上下文汇合）：即为本次结果
         self.dep(top, Dep::Ret(t.clone()));
@@ -147,6 +155,32 @@ impl Ctx<'_> {
                 return Ret::Value(v.clone());
             }
         }
+        if !deep {
+            self.dv_note(|| format!("{t} 只取返回常量格"));
+            return Ret::Unknown;
+        }
+        let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
+        let ck = format!("{t}|{bound:?}");
+        if let Some(c) = self.dv_cache.borrow().get(&ck) {
+            return match c {
+                None => Ret::Unknown,
+                Some(None) => Ret::Never,
+                Some(Some(v)) => Ret::Value(v.clone()),
+            };
+        }
+        let r = self.deval_body(t, bound);
+        let c = match &r {
+            Ret::Unknown => None,
+            Ret::Never => Some(None),
+            Ret::Value(v) => Some(Some(v.clone())),
+        };
+        self.dv_cache.borrow_mut().insert(ck, c);
+        r
+    }
+
+    /// 方法体求值（绑定实参 bound）
+    fn deval_body(&self, t: &MemberRef, bound: Vec<Option<V>>) -> Ret {
+        let Some(top) = self.dv_top.get() else { return Ret::Unknown };
         let (b, d) = (self.dv_budget.get(), self.dv_depth.get());
         if b == 0 || d >= MAX_DEPTH {
             self.dv_note(|| format!("{t} 预算 / 深度截断"));
@@ -159,7 +193,6 @@ impl Ctx<'_> {
             self.dv_note(|| format!("{t} 无字节码或超长"));
             return Ret::Unknown;
         };
-        let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
         let Some(frame) = self.memo_enter(format!("deval:{t}|{bound:?}"), false) else {
             self.dv_note(|| format!("{t} 重入"));
             return Ret::Unknown;
