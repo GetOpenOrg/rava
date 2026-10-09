@@ -9,6 +9,7 @@
 # 产物：build/ttime/<sha8>/<用例>.{out,err,time}、closure 类数；汇总 build/ttime/summary.tsv
 #       作业取回：--fetch 'build/ttime/**'
 # 环境：TTIME_TIMEOUT 单例转译上限秒（缺省 3000）
+#       TTIME_MODE=closure 改跑 rava closure（--extra 传 --flows / --site-prof 等诊断参数；输出见 <用例>.err）
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/build/ttime"
@@ -41,11 +42,19 @@ for sha in "$@"; do
         scratch="$wt/build/ttime-scratch/$n"
         echo "═══ $(date '+%H:%M:%S') 转译 $n @$s8"
         t0=$SECONDS
+        if [[ "${TTIME_MODE:-}" == closure ]]; then
+            mkdir -p "$scratch/closure_input"
+            # shellcheck disable=SC2086
+            (cd "$wt" && timeout "${TTIME_TIMEOUT:-3000}" /usr/bin/time -v "$wt/build/bin/rava" closure "$wt/$c" \
+                --java-home "$JAVA_HOME" -o "$scratch/closure_input/closure.json" $EXTRA) \
+                >"$OUT/$s8/$n.out" 2>"$OUT/$s8/$n.err"
+        else
         # shellcheck disable=SC2086
         (cd "$wt" && timeout "${TTIME_TIMEOUT:-3000}" /usr/bin/time -v "$wt/build/bin/rava" build "$wt/$c" \
             --stop-after emit --out "$scratch" --clean --closure-json --perf \
             --closure-cache "$wt/build/ttime-cache-$RANDOM" --java-home "$JAVA_HOME" $EXTRA) \
             >"$OUT/$s8/$n.out" 2>"$OUT/$s8/$n.err"
+        fi
         rc=$?
         wall=$((SECONDS - t0))
         rss="$(grep -E 'Maximum resident' "$OUT/$s8/$n.err" | awk '{printf "%d", $NF/1024}')"
