@@ -1596,9 +1596,9 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 服务器编译：
   - zc-meas-a1264f66：HelloWorld 发射成功，`boot_image.rs` 12.63 MB / 48,870 行；2065 个映像静态，4 个数组视图，1021 处接口常量。`java_base_decl` 只有 1 处错误 E0310（`array.rs` 的 `__image_view`），已由 5a405015 修复。
   - zc-chk1-a1264f66：确认该错误是 `cargo check --keep-going` 下的唯一错误。依赖 decl 的 crate（各 body 层、门面）尚未检查到。
-  - zc-chk2-5a405015 已排队，本节写作时未出结果。
+  - **zc-chk2-5a405015**：HelloWorld scratch 全工作区 `cargo check --keep-going` 零错误（decl、各 body 层、门面 `boot_image.rs`、用户层），仅 1 条既有警告（`pc_map.rs:99` 函数项转整数）。前述的门面别名可见性、常量视图、接口 vtable 路径、`ImageTables` 的 `Sync` 均已通过类型检查。
 - **续作入口**：
-  1. 在 boot-zerocopy 头上重跑检查作业，命令同 zc-chk2：`rava build HelloWorld --stop-after emit --clean`，然后在 scratch 里 `cargo check --keep-going --message-format short`，取回 `build/zc/check.txt`。按错误修生成器、宏或运行时，直到零错误。重点风险：
+  1. （类型检查已过，5a405015）合并 main 后的头上可复跑检查作业确认；，命令同 zc-chk2：`rava build HelloWorld --stop-after emit --clean`，然后在 scratch 里 `cargo check --keep-going --message-format short`，取回 `build/zc/check.txt`。运行期风险仍待第 2 步验证：
      - 门面对 `crate::<模块>::__STATIC_TY_*` 别名的可见性；
      - `__ImageArr::view` 的常量求值；
      - `&dyn X__VTable` 接口路径；
