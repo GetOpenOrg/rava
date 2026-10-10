@@ -93,20 +93,29 @@ impl Ctx<'_> {
     /// 接收者带映像对象标签（`Obj::Image`）的虚 / 接口调用按该映像对象的运行期类选出的目标；只取字节码方法。
     /// 映像标签只在合流两侧是同一映像对象时保留，故带标签的值恰是该对象
     pub(in crate::engine) fn image_target(&self, opcode: u8, m: &MemberRef, iface: bool, recv: Option<&V>) -> Option<MemberRef> {
+        self.image_target_r(opcode, m, iface, recv).ok()
+    }
+
+    /// `image_target` 的过程：求不出时给出原因（诊断用）
+    pub(in crate::engine) fn image_target_r(&self, opcode: u8, m: &MemberRef, iface: bool, recv: Option<&V>) -> Result<MemberRef, String> {
         use classfile::op;
         if !matches!(opcode, op::INVOKEVIRTUAL | op::INVOKEINTERFACE) {
-            return None;
+            return Err("非虚调用".into());
         }
-        let Some(crate::absint::Obj::Image(id, _)) = recv.and_then(V::obj).map(|o| &**o) else { return None };
-        let x = self.img_data.get()?.objs.get(*id as usize)?;
+        let Some(crate::absint::Obj::Image(id, _)) = recv.and_then(V::obj).map(|o| &**o) else { return Err("接收者无映像标签".into()) };
+        let data = self.img_data.get().ok_or("无映像数据")?;
+        let x = data.objs.get(*id as usize).ok_or_else(|| format!("映像对象越界 {id}/{}", data.objs.len()))?;
         if x.placeholder {
-            return None;
+            return Err(format!("占位对象 {}", x.ty));
         }
-        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
-        let sel = self.h.select(&x.ty, &site)?;
+        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface).ok_or("调用点解析失败")?;
+        let sel = self.h.select(&x.ty, &site).ok_or_else(|| format!("{} 上选不出目标", x.ty))?;
         let (o, n, d) = sel.key();
-        let tm = sel.class.method(&n, &d)?;
-        (tm.code.is_some() && self.kind_of(&sel.class, tm) == Kind::Bytecode).then_some(MemberRef { owner: o, name: n, desc: d })
+        let tm = sel.class.method(&n, &d).ok_or("目标方法缺失")?;
+        if tm.code.is_none() || self.kind_of(&sel.class, tm) != Kind::Bytecode {
+            return Err(format!("目标非字节码方法 {o}.{n}"));
+        }
+        Ok(MemberRef { owner: o, name: n, desc: d })
     }
 
     /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）

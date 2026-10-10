@@ -415,7 +415,7 @@ impl<'a> Engine<'a> {
                             let dv = if t.is_none() { self.ctx.deval_diag(m, key, *opcode, *o, mref, args) } else { String::new() };
                             // 受理调用答复与映像接收者目标（`[facts.system_properties.accepted]`）
                             let acc = if args.iter().any(|a| a.accepted_by().is_some()) {
-                                let it = self.ctx.image_target(*opcode, mref, *iface, args.first());
+                                let it = self.ctx.image_target_r(*opcode, mref, *iface, args.first());
                                 format!(" acc {:?} itgt {:?}", self.ctx.accepted_call(*opcode, mref, *iface, t.as_ref(), args), it.map(|t| t.to_string()))
                             } else {
                                 String::new()
