@@ -114,18 +114,23 @@ fn _entry_of(t: &[VmModule], m: &Module) -> Option<usize> {
 /// add_module_exports / add_module_exports_to_all_unnamed 的包归属检查（命名且非 open 的模块）。
 fn _check_export(m: &Module, pn: &String, from_word: &str) -> Result<()> {
     let pkg = format!("{}", pn).replace('.', "/");
-    _vm_modules(|t| {
-        let Some(i) = _entry_of(t, m) else { return Ok(()) };
+    // 锁内只求出消息，异常对象在锁外构造（构造异常执行 Java 代码）
+    let msg = _vm_modules(|t| {
+        let i = _entry_of(t, m)?;
         let e = &t[i];
         if e.open || e.packages.contains(&pkg) {
-            return Ok(());
+            return None;
         }
         let owner = t.iter().find(|o| o.loader == e.loader && o.packages.contains(&pkg));
-        Err(match owner {
-            Some(o) => _iae(&format!("Package: {} found in module {}, not in {}: {}", pkg, o.name, from_word, e.name)),
-            None => _iae(&format!("Package {} not found in {} {}", pkg, from_word, e.name)),
+        Some(match owner {
+            Some(o) => format!("Package: {} found in module {}, not in {}: {}", pkg, o.name, from_word, e.name),
+            None => format!("Package {} not found in {} {}", pkg, from_word, e.name),
         })
-    })
+    });
+    match msg {
+        Some(msg) => Err(_iae(&msg)),
+        None => Ok(()),
+    }
 }
 
 impl Module {
@@ -175,22 +180,32 @@ impl Module {
             }
             packages.push(pkg);
         }
-        _vm_modules(|t| {
+        let location = if location.is_jvm_null() { None } else { Some(format!("{}", location)) };
+        let entry = VmModule { module: Clone::clone(&module), loader, name: name.clone(), open: is_open, location, packages };
+        // 锁内只求出消息，异常对象在锁外构造（构造异常执行 Java 代码）；未登记的表项在锁外释放
+        let rejected = _vm_modules(|t| {
             let same_loader = |e: &&VmModule| e.loader == loader;
             if t.iter().filter(same_loader).any(|e| e.name == name) {
-                return Err(_ise(&format!("Module {} is already defined", name)));
+                return Some((format!("Module {} is already defined", name), entry));
             }
-            if let Some((pkg, other)) = packages.iter()
+            let clash = entry.packages.iter()
                 .find_map(|p| t.iter().filter(same_loader).find(|e| e.packages.contains(p)).map(|e| (p, e)))
-            {
-                return Err(_ise(&format!(
+                .map(|(pkg, other)| format!(
                     "Package {} for module {} is already in another module, {}, defined to the class loader",
-                    pkg.replace('/', "."), name, other.name)));
+                    pkg.replace('/', "."), name, other.name));
+            if let Some(msg) = clash {
+                return Some((msg, entry));
             }
-            let location = if location.is_jvm_null() { None } else { Some(format!("{}", location)) };
-            t.push(VmModule { module: Clone::clone(&module), loader, name: name.clone(), open: is_open, location, packages });
-            Ok(())
-        })
+            t.push(entry);
+            None
+        });
+        match rejected {
+            Some((msg, entry)) => {
+                drop(entry);
+                Err(_ise(&msg))
+            }
+            None => Ok(()),
+        }
     }
 
     /// native `addReads0(from, to)`：HotSpot `Modules::add_reads_module`——from 为 null → NPE；

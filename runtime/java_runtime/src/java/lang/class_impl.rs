@@ -29,14 +29,14 @@ impl Class {
         if let Some(c) = crate::image_rt::image_mirror(&key) {
             return Ok(Class::from(c));
         }
-        Ok(PRIMITIVES.with(|cache| {
-            Clone::clone(cache.borrow_mut().entry(key).or_insert_with(|| {
-                let mut c = Class::default();
-                c._init_not_null();
-                c.__set_name(Clone::clone(&name));
-                c
-            }))
-        }))
+        if let Some(c) = PRIMITIVES.with(|cache| cache.borrow().get(&key).cloned()) {
+            return Ok(c);
+        }
+        // 镜像在锁外构造；并发首次请求先入表者为规范实例，落选者在锁外释放
+        let mut c = Class::default();
+        c._init_not_null();
+        c.__set_name(Clone::clone(&name));
+        Ok(PRIMITIVES.with(|cache| cache.intern(key, c)))
     }
 
     /// `ldc` 装载的类字面量（`X.class` / `X[].class`）：每个 binary name 对应唯一
@@ -73,7 +73,7 @@ impl Class {
         if let Some(rest) = key.strip_prefix('[') {
             c.__set_componentType(class_for_descriptor(rest));
         }
-        CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
+        CLASSES.with(|cache| cache.intern(key, c))
     }
 
     /// VM 注入状态 `classLoader` 的落地（vm_intrinsics.toml `[vm_state.field_hooks]`，准入 ③）：HotSpot
