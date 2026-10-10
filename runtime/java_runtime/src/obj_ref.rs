@@ -15,12 +15,13 @@ use std::ptr::NonNull;
 use std::sync::atomic::{fence, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
-/// 对象头：值地址前 16 字节
+/// 对象头：值地址前 16 字节。第二个字的位布局见下方常量组（只经这组常量读写）。
 #[repr(C, align(16))]
 pub(crate) struct Header {
     strong: AtomicUsize,
-    /// 整个分配的字节数（头 + 值 + 尾随元素）
-    size: usize,
+    /// 堆对象：分配字节数（头 + 值 + 尾随元素，16 对齐）| 低 4 位标志；映像对象：`IMAGE_OBJ` |
+    /// 可选 `IMAGE_HASHED` + 哈希。原子：监视器标记 `fetch_or` 与释放时的读取并发
+    word: AtomicUsize,
 }
 
 /// 头的大小，也是值相对分配起点的偏移
@@ -32,21 +33,80 @@ const STATIC_TAG: usize = 1;
 /// 计数上限：超出即中止（与 `Arc` 同一防护，防止计数回绕后提前释放）
 const MAX_REFCOUNT: usize = isize::MAX as usize;
 
-/// 映像对象的常驻强引用计数：克隆 / 释放照常增减而永不归零（不释放、不需要静态标记位）
+/// 映像对象的常驻强引用计数：克隆 / 释放照常增减而永不归零（不释放、不需要静态标记位）。
+/// 构建期写好的映像内部引用没有对应的加一，运行期覆盖时计数从此值往下漂：计数不得作为永生判据
 const IMMORTAL: usize = 1 << 62;
-/// 映像对象头第二个字的标记：低 32 位为构建期身份哈希（堆对象该字为分配字节数，恒为 16 的倍数）
+
+// ── 对象头第二个字的位布局（无 GC 文档第三节第 8 条；只经这组常量读写）──────────────
+//
+// 映像对象：`IMAGE_OBJ` 恒置；构建期取过身份哈希的另置 `IMAGE_HASHED`，哈希占低 32 位。
+// 堆对象：16 对齐的分配字节数，低 4 位为标志——`MONITOR_MARK`（第 0 位），第 1–3 位保留。
+// 运行期不写映像对象的第二个字（只做计数加减）。
+
+/// 映像对象：带构建期身份哈希（第 63 位）
 const IMAGE_HASHED: usize = 1 << 63;
+/// 映像对象（第 62 位）：`Header::image` 一律置，与堆对象（分配大小远小于 2^62）区分
+const IMAGE_OBJ: usize = 1 << 62;
+/// 映像对象：构建期身份哈希（低 32 位）
+const IMAGE_HASH_MASK: usize = 0xFFFF_FFFF;
+/// 堆对象：曾进入监视器（身份侧表有条目，第 0 位）
+const MONITOR_MARK: usize = 1 << 0;
+/// 堆对象：低位标志区（第 0–3 位；分配大小 16 对齐，低 4 位空闲）
+const HEAP_FLAGS: usize = ALIGN - 1;
+/// 堆对象：已定义的标志（其余标志位保留，恒为 0）
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+const HEAP_DEFINED_FLAGS: usize = MONITOR_MARK;
 
 impl Header {
     /// 映像对象头（计划 2026-10-05-boot-image-evaluator §5.5.2 D2 / D3）
     pub(crate) const fn image(hash: Option<i32>) -> Header {
         Header {
             strong: AtomicUsize::new(IMMORTAL),
-            size: match hash {
-                Some(h) => IMAGE_HASHED | (h as u32 as usize),
-                None => 0,
-            },
+            word: AtomicUsize::new(match hash {
+                Some(h) => IMAGE_OBJ | IMAGE_HASHED | (h as u32 as usize & IMAGE_HASH_MASK),
+                None => IMAGE_OBJ,
+            }),
         }
+    }
+
+    /// 堆对象头（`size` 为 16 对齐的分配字节数，标志清零）
+    #[inline(always)]
+    fn heap(size: usize) -> Header {
+        debug_assert!(size >= HEAD && size & HEAP_FLAGS == 0);
+        Header { strong: AtomicUsize::new(1), word: AtomicUsize::new(size) }
+    }
+
+    /// 堆对象的分配字节数（屏蔽标志位）
+    #[inline(always)]
+    fn size(&self) -> usize {
+        self.word.load(Ordering::Relaxed) & !HEAP_FLAGS
+    }
+
+    /// 堆对象是否曾进入监视器（映像对象恒为 false：不置标记）
+    #[inline(always)]
+    #[allow(dead_code)] // 侧表回收（第三节第 5 条）在 drop_slow 中读取
+    fn has_monitor(&self) -> bool {
+        let w = self.word.load(Ordering::Relaxed);
+        w & IMAGE_OBJ == 0 && w & MONITOR_MARK != 0
+    }
+
+    /// 映像对象的构建期身份哈希
+    #[inline(always)]
+    fn image_hash(&self) -> Option<i32> {
+        let w = self.word.load(Ordering::Relaxed);
+        (w & IMAGE_OBJ != 0 && w & IMAGE_HASHED != 0).then_some((w & IMAGE_HASH_MASK) as u32 as i32)
+    }
+
+    /// 对象头合理性（debug 档断言）：第二个字带 `IMAGE_OBJ`，或为 ≥ `HEAD` 的 16 的倍数且低位
+    /// 只含已定义标志；且计数 > 0
+    #[cfg(debug_assertions)]
+    fn assert_sane(&self, id: usize) {
+        let w = self.word.load(Ordering::Relaxed);
+        let strong = self.strong.load(Ordering::Relaxed);
+        let word_ok = w & IMAGE_OBJ != 0
+            || (w & IMAGE_HASHED == 0 && w & !HEAP_FLAGS >= HEAD && w & HEAP_FLAGS & !HEAP_DEFINED_FLAGS == 0);
+        assert!(word_ok && strong > 0,
+            "对象头不合理：身份 {id:#x}，第二个字 {w:#x}，计数 {strong}（身份不是 __Obj 对象的值地址？）");
     }
 }
 
@@ -83,23 +143,52 @@ pub fn __image_register(segs: &[(*const u8, usize)]) {
     }
 }
 
+/// 对象值地址 `a` 是否落在映像区某段内（段内对象值地址前 HEAD 字节是其映像对象头）
+#[inline]
+fn in_image(a: usize) -> bool {
+    let hi = IMAGE_HI.load(Ordering::Acquire);
+    if a >= hi || a < IMAGE_LO.load(Ordering::Relaxed) + HEAD {
+        return false;
+    }
+    let Some(segs) = IMAGE_SEGS.get() else { return false };
+    let k = segs.partition_point(|s| s.0 + HEAD <= a);
+    let Some(&(start, end)) = k.checked_sub(1).and_then(|k| segs.get(k)) else { return false };
+    a >= start + HEAD && a < end
+}
+
 /// 映像对象的构建期身份哈希：`id` 为对象值地址；不在映像区或构建期未取哈希 → None
 #[inline]
 pub fn __image_hash(id: *const ()) -> Option<i32> {
     let a = id as usize;
-    let hi = IMAGE_HI.load(Ordering::Acquire);
-    if a >= hi || a < IMAGE_LO.load(Ordering::Relaxed) + HEAD {
-        return None;
-    }
-    let segs = IMAGE_SEGS.get()?;
-    let k = segs.partition_point(|s| s.0 + HEAD <= a);
-    let &(start, end) = segs.get(k.checked_sub(1)?)?;
-    if a < start + HEAD || a >= end {
+    if !in_image(a) {
         return None;
     }
     // SAFETY: 映像段内的对象值地址前 HEAD 字节是其对象头（映像段结构的每个字段都是 `__ImageObj` / 映像数组）
-    let size = unsafe { (*((a - HEAD) as *const Header)).size };
-    (size & IMAGE_HASHED != 0).then_some(size as u32 as i32)
+    unsafe { (*((a - HEAD) as *const Header)).image_hash() }
+}
+
+/// 对象第一次进入监视器（身份侧表新建条目时）：在 `id - HEAD` 的对象头置 `MONITOR_MARK`。
+/// 映像对象（带 `IMAGE_OBJ`）跳过：永不释放，侧表条目不会悬空。本步只置标记，释放时据此删
+/// 侧表条目随第三节第 5 条实施。
+///
+/// # Safety
+/// `id` 是存活 `__Obj` 对象（堆对象或映像对象）的身份即值地址，调用方持有其引用；
+/// 不得为 null 身份（静态哨兵没有对象头）。
+pub unsafe fn __mark_monitor(id: *const ()) {
+    let a = id as usize;
+    // SAFETY: 调用方保证 a 是对象值地址，前 HEAD 字节为其对象头
+    let h = unsafe { &*((a - HEAD) as *const Header) };
+    #[cfg(debug_assertions)]
+    h.assert_sane(a);
+    let w = h.word.load(Ordering::Relaxed);
+    if w & IMAGE_OBJ != 0 {
+        return;
+    }
+    debug_assert!(!in_image(a), "映像段内对象头缺 IMAGE_OBJ：身份 {a:#x}，第二个字 {w:#x}");
+    if w & MONITOR_MARK == 0 {
+        // 置位者持有对象引用，其后的计数减一（Release）与 drop 的 Acquire 栅栏使释放线程看到标记
+        h.word.fetch_or(MONITOR_MARK, Ordering::Relaxed);
+    }
 }
 
 /// Java 对象的共享指针：堆对象引用计数，静态哨兵不计数。
@@ -153,7 +242,7 @@ impl<T> __Obj<T> {
         }
         // SAFETY: base 按 Header 对齐、空间足够
         unsafe {
-            (base as *mut Header).write(Header { strong: AtomicUsize::new(1), size });
+            (base as *mut Header).write(Header::heap(size));
             let value = base.add(HEAD) as *mut T;
             init(value);
             __Obj { ptr: NonNull::new_unchecked(value), _owns: PhantomData }
@@ -254,9 +343,12 @@ impl<T: ?Sized> __Obj<T> {
     /// 最后一个引用释放：析构值（含尾随元素）并归还分配
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
-        // SAFETY: 计数已归零，本线程独占；头记录分配大小
+        // 锁内释放对象会重入任意析构链（析构再取同一字段锁即自死锁）：debug 档断言不持字段锁
+        crate::sync_model::__assert_no_field_lock("释放对象");
+        // SAFETY: 计数已归零，本线程独占；头记录分配大小。第二个字（含监视器标记）的读取在
+        // `Drop` 的 Acquire 栅栏之后
         unsafe {
-            let size = self.header().size;
+            let size = self.header().size();
             let base = (self.ptr.as_ptr() as *mut u8).sub(HEAD);
             std::ptr::drop_in_place(self.ptr.as_ptr());
             std::alloc::dealloc(base, Layout::from_size_align_unchecked(size, ALIGN));
@@ -365,5 +457,23 @@ mod tests {
         assert_eq!(__image_hash(&IMG.b.value as *const u64 as *const ()), None);
         let heap = __Obj::new(5u64);
         assert_eq!(__image_hash(heap.as_ptr() as *const ()), None);
+    }
+
+    #[test]
+    fn monitor_mark_keeps_size_and_skips_image() {
+        __image_register(&[(&IMG as *const Img as *const u8, std::mem::size_of::<Img>())]);
+        let heap = __Obj::new(D(1));
+        let size = heap.header().size();
+        // SAFETY: 存活堆对象 / 映像对象的值地址
+        unsafe {
+            __mark_monitor(heap.as_ptr() as *const ());
+            __mark_monitor(heap.as_ptr() as *const ());
+            __mark_monitor(&IMG.b.value as *const u64 as *const ());
+        }
+        assert!(heap.header().has_monitor());
+        assert_eq!(heap.header().size(), size);
+        assert!(!__Obj::image(&IMG.b.value).header().has_monitor());
+        assert_eq!(__image_hash(&IMG.b.value as *const u64 as *const ()), None);
+        drop(heap);
     }
 }

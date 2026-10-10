@@ -77,9 +77,9 @@ impl String {
             }
             // 运行期表未命中：构建期驻留表（映像常量，按内容有序）中的规范实例优先；查到即回填运行期表，
             // 此后同内容（如循环中的字面量加载）一次散列命中
+            // 并发未命中：先入表者为规范实例（同内容只一个身份），落选者在锁外释放
             let canon = crate::image_rt::image_string(&key, __units_cmp).unwrap_or(self);
-            table.borrow_mut().insert(key, Clone::clone(&canon));
-            canon
+            table.intern(key, canon)
         })
     }
 
