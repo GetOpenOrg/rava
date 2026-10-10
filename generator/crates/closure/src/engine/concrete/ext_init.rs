@@ -80,7 +80,8 @@ struct Snap {
     cells: Vec<i64>,
 }
 
-/// 32 位 FNV-1a（身份哈希：正数、非零）
+/// 32 位 FNV-1a（身份哈希：正数、非零）。类镜像的哈希与运行期 `class_impl.rs::mirror_identity_hash` 逐位一致
+/// （两侧单测以 `"m:a/B"` → 210234197 守护）
 pub(super) fn fnv32(s: &str) -> i32 {
     let mut h: u32 = 0x811c_9dc5;
     for b in s.bytes() {
@@ -196,8 +197,11 @@ impl Vm {
         if let Some(&h) = self.ihash.get(&o) {
             return Ok(h);
         }
+        // 类镜像是运行期对象（映像以 `rt::mirror` 链接）：哈希按所指类型确定，与运行期 `Class::__mirror_hash`
+        // 同一函数（`"m:" + 类型键` 的 FNV-1a）——映像中以镜像为键分桶的表运行期才查得到。
         // 扩展期的共享对象（字符串 / 类镜像）不论是否在尝试中，一律取键哈希（与导出同值，`ext_export.rs`）
-        let shared = self.ext.as_deref().and_then(|x| x.shared.get(&o)).map(|k| fnv32(k));
+        let shared = self.mirror_of.get(&o).map(|t| fnv32(&format!("m:{t}")));
+        let shared = shared.or_else(|| self.ext.as_deref().and_then(|x| x.shared.get(&o)).map(|k| fnv32(k)));
         let h = if let Some(h) = shared {
             h
         } else if !self.ext_memo() {
@@ -458,5 +462,14 @@ impl ExtVm {
             "failed": x.failed.iter().map(|(c, w)| (c.to_string(), serde_json::Value::from(w.as_str()))).chain(self.export_failed.iter().map(|(c, w)| (c.clone(), serde_json::Value::from(format!("导出：{w}"))))).collect::<serde_json::Map<String, serde_json::Value>>(),
             "reasons": top.into_iter().map(|(w, n)| serde_json::json!([w, n])).collect::<Vec<_>>(),
         })
+    }
+}
+
+#[cfg(test)]
+mod mirror_hash_tests {
+    /// 类镜像哈希与运行期 `class_impl.rs::mirror_identity_hash("a/B")` 同值
+    #[test]
+    fn mirror_hash_matches_runtime() {
+        assert_eq!(super::fnv32("m:a/B"), 210234197);
     }
 }

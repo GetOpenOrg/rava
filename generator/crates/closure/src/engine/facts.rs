@@ -169,6 +169,8 @@ pub(super) struct Ctx<'a> {
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
     /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
     pub(super) fopen: RefCell<HashSet<MemberRef>>,
+    /// 求值中折叠出符号偏移、尚待放开的字段（上下文只读，由工作循环排空经 `open_field` 放开并使读者失效）
+    pub(super) fopen_pending: RefCell<Vec<MemberRef>>,
     /// 偏移可得、不折叠的字段名（按名取得推不出所属类）
     pub(super) fopen_names: RefCell<HashSet<String>>,
     /// 手写体写入的字段：只不折叠，偏移不因此可得（手写体按 Rust 字段直接写，不经偏移）

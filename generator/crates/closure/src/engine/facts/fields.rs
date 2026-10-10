@@ -115,7 +115,11 @@ impl Ctx<'_> {
     }
 
     /// 按名取字段偏移的调用折叠为符号偏移：Class 实参是类字面量、名字是字符串常量，且该类自身声明了
-    /// 同名实例字段（VM 只查声明类本身，查不到即抛出）
+    /// 同名实例字段（VM 只查声明类本身，查不到即抛出）。
+    ///
+    /// 符号偏移只在这里产生：产生即登记放开该字段（「按偏移可达 ⇒ 字段不折叠」）。取偏移的调用点可能不经活方法
+    /// 分析——构建期初始化类的 `<clinit>` 由 `static_const` 辅助求值，偏移经 static final 字段传到 Unsafe 的字节码
+    /// 包装方法（形参汇合后不再是符号偏移）再到原子读写，按名入口（`field_names.rs`）与消费点都看不到所指字段
     pub(in crate::engine) fn field_offset(&self, opcode: u8, r: crate::manifest::NameResolver, args: &[V]) -> Option<V> {
         let base = usize::from(opcode != classfile::op::INVOKESTATIC);
         let cls = match r.class {
@@ -125,7 +129,11 @@ impl Ctx<'_> {
         let (V::Class(c, _), Some(V::Str(name, _))) = (cls, args.get(r.name + base)) else { return None };
         let cf = self.h.class(c)?;
         let fd = cf.fields.iter().find(|f| f.name == **name && !f.is_static())?;
-        Some(V::Offset(Rc::new(MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() })))
+        let key = MemberRef { owner: cf.name.clone(), name: fd.name.clone(), desc: fd.desc.clone() };
+        if !self.fopen.borrow().contains(&key) {
+            self.fopen_pending.borrow_mut().push(key.clone());
+        }
+        Some(V::Offset(Rc::new(key)))
     }
 
     /// static final 字段：ConstantValue，或 `<clinit>` 唯一一次常量赋值

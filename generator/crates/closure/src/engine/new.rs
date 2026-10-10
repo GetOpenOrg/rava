@@ -42,6 +42,7 @@ impl<'a> Engine<'a> {
                 oclass: Default::default(),
                 rvals: Default::default(),
                 fopen: Default::default(),
+                fopen_pending: Default::default(),
                 fopen_names: Default::default(),
                 fhw: Default::default(),
                 fhw_names: Default::default(),
