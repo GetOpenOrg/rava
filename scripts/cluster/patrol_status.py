@@ -38,6 +38,7 @@ AGENT_TASKS_GLOB = os.environ.get(
 AGENT_RECENT_HOURS = 3        # 只列最近活动在此范围内的子代理
 AGENT_MAX_HOURS = 6           # 超过即需收尾续作
 AGENT_IDLE_MINUTES = 30       # 超过即需关注
+DEV_SPILL_MEM_G = 30           # dev 可用内存低于此值才溢出到云服务器
 REMOTE_DISK_MIN_G = 20
 LOCAL_DISK_MIN_G = 25
 
@@ -213,7 +214,7 @@ def probe(server: dict, by_label: dict) -> tuple[str, list[str] | None]:
         return server["label"], None
 
 
-def report_servers(servers: list[dict]) -> None:
+def report_servers(servers: list[dict], disp: list[dict]) -> None:
     section(f"服务器资源（测试优先放 dev；数据盘 <{REMOTE_DISK_MIN_G}G 需清理）")
     by_label = {s["label"]: s for s in servers}
     with ThreadPoolExecutor(len(servers) or 1) as ex:
@@ -231,6 +232,13 @@ def report_servers(servers: list[dict]) -> None:
             warn.append("有余量，新测试放这里")
         print(f"  {s['label']}: 核 {ncpu} 负载 {load} 可用内存 {avail}G/{total}G {data_root(s)} 空闲 {disk}G "
               f"作业目录 {dirs} 在跑进程 {procs}" + (f"  ← {'，'.join(warn)}" if warn else ""))
+    dev = res.get("dev")
+    if dev and dev[2].isdigit() and int(dev[2]) >= DEV_SPILL_MEM_G:
+        # dev 可用内存充足时，云服务器上的作业都应改放 dev（只在 dev 内存不足或槽满时溢出）
+        for d in disp:
+            off = [x for x in d["servers"] if x != "dev"]
+            if off:
+                print(f"  !! {d['kind']} {d['tag']}（{d['wt']}）用了 {' '.join(off)}，dev 有余量应放 dev")
 
 
 # ── 子代理进展 ────────────────────────────────────────────────────────────────
@@ -485,7 +493,7 @@ def main() -> int:
     report_occupancy(disp, servers)
     report_results(disp)
     if not args.no_remote:
-        report_servers(servers)
+        report_servers(servers, disp)
     report_agents()
     report_local(disp)
     report_branches()
