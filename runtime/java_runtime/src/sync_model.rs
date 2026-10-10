@@ -44,24 +44,11 @@ pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot, __SlotRead, 
 
 /// 持锁登记（无 GC 文档第四节小步 A）：当前线程持有的字段锁——`__RefField::with` / `with_mut` 的
 /// 临界区与 `__RefSlot` 的读写守卫——计数，`__RefSlot` 另记槽位地址（自持有检查）。
-/// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。
+/// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。登记存放在
+/// `exec_context` 的持锁登记载体槽（`hold_slot`）：持锁期间不让出，登记与载体绑定。
 mod held {
     #[cfg(debug_assertions)]
-    use std::cell::{Cell, RefCell};
-
-    /// 槽位登记容量：嵌套持有超过此数的槽位不再登记地址（计数照常），只漏检自持有
-    #[cfg(debug_assertions)]
-    const SLOTS: usize = 16;
-
-    /// 一项槽位持有：(槽地址, 是否写锁, 加锁位置)；地址 0 为空位
-    #[cfg(debug_assertions)]
-    type SlotHold = (usize, bool, Option<&'static std::panic::Location<'static>>);
-
-    #[cfg(debug_assertions)]
-    std::thread_local! {
-        static COUNT: Cell<usize> = const { Cell::new(0) };
-        static HELD_SLOTS: RefCell<[SlotHold; SLOTS]> = const { RefCell::new([(0, false, None); SLOTS]) };
-    }
+    use crate::exec_context::hold_slot;
 
     /// 持锁凭据：存活期间计入当前线程的持锁数（随守卫释放，含 panic 展开路径）
     pub(crate) struct Held {
@@ -76,7 +63,7 @@ mod held {
         pub(crate) fn field() -> Held {
             #[cfg(debug_assertions)]
             {
-                let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+                let _ = hold_slot(|h| h.count.set(h.count.get() + 1));
                 Held { slot: 0 }
             }
             #[cfg(not(debug_assertions))]
@@ -91,9 +78,7 @@ mod held {
             #[cfg(debug_assertions)]
             {
                 let here = std::panic::Location::caller();
-                let prior = HELD_SLOTS
-                    .try_with(|s| s.borrow().iter().find(|h| h.0 == addr && (write || h.1)).copied())
-                    .ok()
+                let prior = hold_slot(|h| h.slots.borrow().iter().find(|h| h.0 == addr && (write || h.1)).copied())
                     .flatten();
                 if let Some((_, prior_write, at)) = prior {
                     panic!("字段锁自持有：槽位 {addr:#x} 在 {here} 加{}锁，本线程已于 {} 持有其{}锁",
@@ -127,17 +112,14 @@ mod held {
 
         #[cfg(debug_assertions)]
         fn record(addr: usize, write: bool, at: &'static std::panic::Location<'static>) -> Held {
-            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
-            let slot = HELD_SLOTS
-                .try_with(|s| {
-                    let mut s = s.borrow_mut();
-                    s.iter_mut().find(|h| h.0 == 0).map(|h| {
-                        *h = (addr, write, Some(at));
-                        addr
-                    })
+            let slot = hold_slot(|h| {
+                h.count.set(h.count.get() + 1);
+                h.slots.borrow_mut().iter_mut().find(|h| h.0 == 0).map(|h| {
+                    *h = (addr, write, Some(at));
+                    addr
                 })
-                .ok()
-                .flatten()
+            })
+            .flatten()
                 .unwrap_or(0);
             Held { slot }
         }
@@ -146,23 +128,23 @@ mod held {
     #[cfg(debug_assertions)]
     impl Drop for Held {
         fn drop(&mut self) {
-            let _ = COUNT.try_with(|c| c.set(c.get().saturating_sub(1)));
-            if self.slot != 0 {
-                let slot = self.slot;
-                let _ = HELD_SLOTS.try_with(|s| {
-                    // 同槽多次读持有：去掉任一项即可（登记只用于判定「是否持有」）
-                    if let Some(h) = s.borrow_mut().iter_mut().rev().find(|h| h.0 == slot) {
-                        *h = (0, false, None);
+            let slot = self.slot;
+            let _ = hold_slot(|h| {
+                h.count.set(h.count.get().saturating_sub(1));
+                // 同槽多次读持有：去掉任一项即可（登记只用于判定「是否持有」）
+                if slot != 0 {
+                    if let Some(e) = h.slots.borrow_mut().iter_mut().rev().find(|e| e.0 == slot) {
+                        *e = (0, false, None);
                     }
-                });
-            }
+                }
+            });
         }
     }
 
     /// 当前线程持有的字段锁数（debug 档）
     #[cfg(debug_assertions)]
     pub(crate) fn count() -> usize {
-        COUNT.try_with(Cell::get).unwrap_or(0)
+        hold_slot(|h| h.count.get()).unwrap_or(0)
     }
 }
 
