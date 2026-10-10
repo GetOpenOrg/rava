@@ -53,3 +53,45 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
   6. 合批跑测试集，报告注明断言覆盖范围（debug 档才生效）。
 - **小步 B（volatile / 监视器 SeqCst，单独提交）**：volatile 引用字段的加锁 CAS **与解锁 store** 都改为 SeqCst（`class_init.rs:140-154` 与实例字段布局按 `is_volatile` 分流，非 volatile 保持 Acquire / Release）；监视器进入纳入 SeqCst 全序（以监视器退出后加 SeqCst 栅栏为出发点）。提交说明逐条论证：volatile 之间（引用-引用、引用-基本类型）、volatile 与监视器、两个监视器之间、IRIW；写明 ARMv8 硬件上测不出差别，正确性只能靠模型推理。volatile 读改为 SeqCst 后的排队开销记为性能关注点。
 - 监视器入口改为接收句柄：不作为本次正确性前提，登记为长期整理方向。
+
+## 五、现状与交接（2026-10-10）
+
+### 1. 已完成
+
+- **文档**：第三节约束 1–8、第四节小步 A / B，提交 879bf139，已快进进集成分支 rust-closure-analyzer。约束经外部评审多轮核对后定稿：
+  - 判据用 `IMAGE_OBJ` 位，不用计数，也不用指针标记；
+  - 对象头由 `identity - HEAD` 推导；
+  - 逃逸分析的三条约束必须同时满足。
+- **小步 A 第 1–5 项**：分支 conc-step-a（基于 879bf139），工作区 `rava_concA`，已推送 origin 和 github，**未合入**。
+
+| 提交 | 内容 |
+|---|---|
+| 78d2b9c6 | 第 1–2 项：持锁线程局部计数（只在 `debug_assertions` 下生效，挂在 RAII 持锁凭据上，panic 展开时也会减计数），覆盖 `with` / `with_mut` 与 `__RefSlot` 读写守卫（新守卫类型 `__SlotRead` / `__SlotWrite`）；`__RefSlot` 写锁自持有检查（16 项线程局部数组），并检查「已持写锁再加读锁」；`drop_slow` 断言释放时不持字段锁；`__GilStatic::set` 改为在锁外释放旧值 |
+| 4400cc70 | 第 3 项：`gil::safepoint` 与 `gil::clinit_enter` 断言不持字段锁（`<clinit>` 唯一入口经 `clinit_enter`，生成器不改） |
+| 2031ac5c | 第 4 项：`with(&T)` / `with_mut(&mut T)` 拆分。实际调用方只有 3 处（`sync_model::replace`、`field_desc::__ref_field` 的 Update 分支、`array/store.rs` 引用元素 `update`），全部改为 `with_mut`；`System.setOut0` / `setErr0` / `setIn0` 改为在锁外释放旧流 |
+| f00af3cc | 第 5 项：第二个字改为私有 `AtomicUsize`，位布局常量集中定义；`Header::image` 一律置 `IMAGE_OBJ`，仍可常量构造，映像生成器不改；`__mark_monitor` 含两条 debug 断言（不在映像段内、对象头合理性）；监视器入口先比较 `&raw const JVM_NULL` 并抛 NPE，删除 `is_null` 参数；`holds_lock` 改为返回 `Result<bool>`，null 抛 NPE；`monitorexit(null)` 抛 NPE；`monitor_for` 新建条目时置标记，**不删条目** |
+
+### 2. 未验证（合入前必须完成）
+
+- **`java_runtime` 编译未确认**。它不能脱离生成层单独编译。子代理只在临时 crate 里检查了 `sync_model.rs` 与 `obj_ref.rs`（debug / release 都通过）。以下 8 个文件没有经过编译器：
+  - `monitor.rs`、`gil.rs`、`field_desc.rs`、`system_impl.rs`、`array/store.rs`
+  - `java/lang/object.rs`、`java/lang/object_impl.rs`、`java/lang/thread_impl.rs`
+- generator 全工作区（`--release --tests`）与 `rava_macros_core` 的 cargo check 已通过。
+- **预计 debug 档会触发的断言**：子代理有意没有预先清理，这些正是断言要找的违例：
+  - `thread_impl` 中 `LIVE_THREADS ... retain`：在 `__RefSlot` 写锁内释放线程对象；
+  - `System.in_()` 并发首读：`get_or_insert` 在锁内丢掉多余的流；
+  - 各登记表 `insert` 覆盖旧值：旧值在写锁内释放；
+  - 持 `__RefSlot` 守卫期间执行 Java 代码的地方，会被安全点断言抓到。
+
+### 3. 下一步（按序）
+
+1. **服务器 debug 档抽查**（第 6 项前半）：在 conc-step-a 上跑 HelloWorld，加几个多线程 / 监视器用例（如 `wait` / `notify`、`synchronized` 静态方法、`Thread.holdsLock`）。先确认 `java_runtime` 能编译，再收集断言报出的违例。抽查要用 debug 档（不加 `--release`），否则断言不生效。
+2. **逐个修违例**：统一写法是在锁内换出旧值、放锁后再 drop。安全点违例改为放锁后再调 Java。每类违例单独提交。
+3. **进合批**（第 6 项后半）：交给协调会话排批。报告要注明断言只在 debug 档覆盖，release 档的抽查只能验证功能。
+4. **小步 B**（第四节）：A 合入后另派代理、单独提交。分支基于含 A 的集成分支。
+5. 第三节第 5 条的侧表删条目（`drop_slow` 见 `MONITOR_MARK` 即先删后释放）、PARKERS 回收，以及第 1–4、6、7 条，按第二节排期在 C4 之后实施。
+
+### 4. 注意
+
+- 另有协调巡检会话（rava-b5）在管服务器作业、合批和 tasks.md。发抽查或合批前先和它对齐，避免同 tag 作业冲突，也避免子代理总数超过上限 5。
+- 计数漂移的结论：无害，`Drop` 不改，但计数不得作为永生判据（第三节第 8 条）。后续代码不要引入 `strong >= IMMORTAL` 这类判断。
