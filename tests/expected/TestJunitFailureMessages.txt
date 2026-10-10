@@ -1,7 +1,7 @@
 fail=7
 nullMismatch :: expected null, but was:<not-null>
 intMismatch :: expected:<1> but was:<2>
-sameMismatch :: expected same:<java.lang.Object@5ecddf8f> was not:<java.lang.Object@3f102e87>
+sameMismatch :: expected same:<Token(left)> was not:<Token(right)>
 runtimeException :: not-implemented
 stringMismatch :: expected:<[lef]t> but was:<[righ]t>
 doubleMismatch :: expected:<1.5> but was:<2.5>

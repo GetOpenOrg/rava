@@ -65,6 +65,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import dyn_compare
+import e2e_form
 
 ROOT   = Path(__file__).parent.parent
 # rava 二进制：批次开头构建一次（_ensure_rava），逐例直接执行
@@ -330,14 +331,17 @@ def _aux_full(cls_aux: str, raw_v: int, eq_v: int, bin_name: str = "",
     return " | ".join(parts)
 
 
-def _dyn_compare(bin_name: str, ws: Path, sink: dict[str, dict]) -> str:
-    """转译成功后的动态对照（C5）：明细落盘 logs/dyn/<test>.json，返回结果行短指标。"""
+def _dyn_compare(java_file: Path, bin_name: str, ws: Path, sink: dict[str, dict]) -> str:
+    """转译成功后的动态对照（C5）：明细落盘 logs/dyn/<test>.json，返回结果行短指标。
+    形态用例的 JVM 类路径追加其依赖 jar（与转译同一锁选择）。"""
     if not DYN_COMPARE:
         return ""
     java = Path(_jdk_tool("java"))
     java_home = Path(os.environ.get("JAVA_HOME") or java.resolve().parent.parent)
+    form = e2e_form.form_of(java_file)
     try:
-        res = dyn_compare.run(ws, java_home, OUT / "dyn_agent", ROOT, timeout=EXPECTED_GEN_TIMEOUT)
+        res = dyn_compare.run(ws, java_home, OUT / "dyn_agent", ROOT, timeout=EXPECTED_GEN_TIMEOUT,
+                              libs=form.classpath() if form is not None else [])
     except Exception as e:  # 对照只做观测，自身故障不影响测试判定
         res = {"error": f"{type(e).__name__}: {e}"}
     sink[bin_name] = res
@@ -562,14 +566,29 @@ def _test_workspace(bin_name: str) -> Path:
 
 
 def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
-    """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。"""
+    """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。
+
+    形态目录（form.toml）的用例追加依赖参数（`--deps/--cp`）；依赖未就绪时不转译，
+    日志以 `deps-fetch-fail` 起头（[`_fail_category`] 据此归类）。"""
+    form = e2e_form.form_of(java_file)
+    deps_args: list[str] = []
+    if form is not None:
+        err = form.ensure()
+        if err is not None:
+            return False, f"{e2e_form.DEPS_FETCH_FAIL}: {err}"
+        deps_args = form.deps_args()
     args = [str(RAVA), "build", str(java_file), "--stop-after", "emit", "--out", str(out_dir),
-            "--java-home", os.environ["JAVA_HOME"], *MAIN_FLAGS]
+            "--java-home", os.environ["JAVA_HOME"], *deps_args, *MAIN_FLAGS]
     try:
         r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
     except subprocess.TimeoutExpired:
         return False, f"transpile timeout ({fmt_dur(TRANSPILE_TIMEOUT)})"
     return r.returncode == 0, (r.stdout + r.stderr)
+
+
+def _fail_category(log: str) -> str:
+    """转译段失败的类别：依赖未就绪单列（进失败棘轮，不静默跳过），其余为 transpile。"""
+    return e2e_form.DEPS_FETCH_FAIL if log.startswith(e2e_form.DEPS_FETCH_FAIL) else "transpile"
 
 
 # ── 生成物清理（默认开启，--keep-artifacts 关闭）──────────────────────────────
@@ -1109,11 +1128,17 @@ def _update_expected(java_file: Path) -> tuple[str, str]:
     class_name = _class_name(java_file)
     classes_dir = _versioned(OUT) / "expected-classes" / _to_bin_name(class_name)
     classes_dir.mkdir(parents=True, exist_ok=True)
-    r = _run([_jdk_tool("javac"), "-g", "-d", str(classes_dir), str(java_file)], cwd=ROOT)
+    form = e2e_form.form_of(java_file)
+    if form is not None and (err := form.ensure()) is not None:
+        return e2e_form.DEPS_FETCH_FAIL, err[:120]
+    cp_libs = [str(p) for p in form.classpath()] if form is not None else []
+    r = _run([_jdk_tool("javac"), "-g", *(["-cp", os.pathsep.join(cp_libs)] if cp_libs else []),
+              "-d", str(classes_dir), str(java_file)], cwd=ROOT)
     if r.returncode != 0:
         return "javac-fail", r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "javac error"
     try:
-        r = subprocess.run([_jdk_tool("java"), *GOLDEN_JVM_FLAGS, "-cp", str(classes_dir), class_name],
+        r = subprocess.run([_jdk_tool("java"), *GOLDEN_JVM_FLAGS,
+                            "-cp", e2e_form.java_classpath(classes_dir, form), class_name],
                            cwd=ROOT, capture_output=True, text=True, timeout=EXPECTED_GEN_TIMEOUT,
                            env=_fixed_env())
     except subprocess.TimeoutExpired:
@@ -1215,7 +1240,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
                    f"— transpile error ({fmt_dur(t_transpile)})",
                    aux=_aux_full("", 0, 0, eta=_eta), prog=prog)
             print(log[-500:])
-            _fail("transpile", str(rel))
+            _fail(_fail_category(log), str(rel))
             continue
 
         _rc = _parse_readability(log)
@@ -1230,7 +1255,7 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
             equiv_counts[class_name] = _ec
         if _fc:
             fallback_counts[class_name] = _fc
-        _cls_aux = _join_aux(_transpile_aux(log), _dyn_compare(bin_name, ws, dyn_results))
+        _cls_aux = _join_aux(_transpile_aux(log), _dyn_compare(java_file, bin_name, ws, dyn_results))
 
         if no_run:
             _pline(name_w, "NORUN", java_file.relative_to(E2E),
@@ -1391,7 +1416,7 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
         ws = _test_workspace(bin_name)
         ok, log = _transpile(java_file, out_dir=ws)
         _parse_raw(log)
-        dyn = _dyn_compare(bin_name, ws, dyn_results) if ok else ""
+        dyn = _dyn_compare(java_file, bin_name, ws, dyn_results) if ok else ""
         return (java_file, ok, log, _parse_readability(log), _parse_equiv(log),
                 _parse_fallback(log), dyn)
 
@@ -1579,7 +1604,7 @@ def _update_expected_parallel(files: list[Path], jobs: int) -> int:
     print(f"\n{'='*50}")
     updated = results.get("updated", [])
     print(f"updated: {len(updated)} / {len(files)}")
-    for status in ("javac-fail", "java-fail", "timeout"):
+    for status in ("javac-fail", "java-fail", "timeout", e2e_form.DEPS_FETCH_FAIL):
         items = results.get(status, [])
         if items:
             print(f"\n{status}: {len(items)}")
@@ -1681,7 +1706,12 @@ def main():
                     help="透传 rava build --strict（兜底硬失败 + 缺手写 native 编译报错）")
     ap.add_argument("--no-dyn",          action="store_true",
                     help="关闭动态对照（真实 JVM 类加载轨迹 vs 静态闭包；缺省开，每测试一次 java 运行）")
+    ap.add_argument("--pilot-libs",      metavar="DIR", default=None,
+                    help="形态用例（目录含 form.toml）的 jar 资产根；锁取 DIR 上级目录下的同名锁"
+                         f"（缺省 {e2e_form.DEFAULT_PILOT_LIBS.relative_to(ROOT)}，缺失时按 form.toml fetch 取包一次）")
     args = ap.parse_args()
+    if args.pilot_libs is not None:
+        e2e_form.set_pilot_libs(Path(args.pilot_libs).resolve())
 
     global BUILD_TIMEOUT, BUILD_TIMEOUT_SCALE, MAIN_FLAGS, DYN_COMPARE
     DYN_COMPARE = not args.no_dyn

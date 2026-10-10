@@ -212,13 +212,28 @@ match = [["javac 编译失败"]]
 tests = ["TestJunitAssertFamily", "TestJunitAssertThrowsAssume", "TestJunitBeforeClassState", "TestJunitFailureMessages",
          "TestJunitHamcrestBridge", "TestJunitIgnoreAndExpected", "TestJunitLifecycleOrder", "TestJunitNewInstancePerTest",
          "TestJunitRunnerResult", "TestJunitTimeoutFast"]
-cause = "run_tests 无依赖包概念，junit4 + hamcrest 不在 javac classpath；非生成器问题"
+cause = "run_tests 无依赖包概念，junit4 + hamcrest 不在 javac classpath；非生成器问题。J3 形态接线修复：用例目录 form.toml 声明依赖锁与锁条目名（scripts/e2e_form.py），rava build 追加 --deps/--cp，期望生成与动态对照的 javac / java 带同一类路径；锁或 jar 缺失时批次内跨进程互斥取包一次，仍缺记 deps-fetch-fail。junit-d22152f8（dev）10 例全部完成转译、编译与运行，8 例逐字通过，余 2 例见 junit-identity-hash-expected（已修）"
 introduced = ""
-fixed = []
-status = "open"
-owner = "J3 / W0-3 形态接线"
-diagnose = "看是否为 javac 阶段失败、缺的符号是否来自依赖包"
-doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md"
+fixed = ["5f312221", "168d0f23"]
+status = "pending"
+owner = "junit-j3j4（待合批放行）"
+diagnose = "看是否为 javac 阶段失败、缺的符号是否来自依赖包；用例目录有无 form.toml；日志 [form] 行是否报锁 / jar 缺失（deps-fetch-fail）"
+doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md §七 第 14 条"
+since = "2026-10-10"
+
+[[pattern]]
+id = "junit-identity-hash-expected"
+stage = "output"
+symptom = "63_junit 用例只差一行：assertSame 失败消息里 java.lang.Object@<十六进制> 与期望不同（每次运行值都变）"
+match = [["expected same:<java.lang.Object@"]]
+tests = ["TestJunitAssertFamily", "TestJunitFailureMessages"]
+cause = "测试打印两个 new Object() 的身份哈希（JUnit assertSame 失败消息含 String.valueOf(obj)）。HotSpot 身份哈希取线程内 xorshift 序列，同一 JVM 逐次确定，故期望双跑确定性闸门通过；原生二进制按地址取哈希，逐次不同。无法也不应复现 HotSpot 哈希序列（取决于 JVM 内部此前的哈希请求次数）。违反 e2e 方法论 §五「不打印 identityHash」，属测试确定性缺陷，非生成器问题。修法（10-10 用户批准改测试源：测试本身不合规，不属「合法测试不改」）：被比较对象改为定值 toString、按身份比较的 Token 类型，断言语义不变；期望经 JDK 21 重生成并双跑一致"
+introduced = "d4efc8d6（63_junit expected 补齐）"
+fixed = ["junit-j3j4 本条目所在提交"]
+status = "fixed"
+owner = "junit-j3j4"
+diagnose = "diff 只有 Object@ 哈希行时即本条；对照 docs/reference/e2e-coverage-methodology.md §五"
+doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md §七 第 15 条"
 since = "2026-10-10"
 
 [[pattern]]
@@ -1293,5 +1308,35 @@ introduced = ""
 fixed = ["0fcbb7f3"]
 status = "fixed"
 diagnose = "看数组的 Class 是否由创建时元素类型决定"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "direct-invoke-override-not-dispatched"
+stage = "run"
+symptom = "Method.invoke 改写为直连帮助方法后，子类覆盖方法运行期命中 vtable 槽存根（stub: X$Derived.m）"
+match = [["stub: TestReflectFieldMethod$Derived.describe"], ["stub: TestReflectInvokePerReceiver$Derived.who"]]
+tests = ["TestReflectFieldMethod", "TestReflectInvokePerReceiver"]
+cause = "直连反射调用（[facts.reflect.direct_invokers]）按接收者逐实现连边（engine/reflect_direct.rs direct_send），所选实现进了 methods 却未计入 dispatched；帮助方法的 native invoke0 经 vtable 槽虚调用，生成器（vtable_prune）对不在 dispatched 的覆盖方法槽条目发存根。修法：非 private 实现同 VM 反射虚调用一样记入 vm_targets"
+introduced = "29f54f85 / 75bead2f（直连点改按接收者连边、去掉枢纽）"
+fixed = ["677c07d4"]
+status = "pending"
+owner = "c4-reflect"
+diagnose = "rava closure --why 所报方法：在 methods 而不在 dispatched（report.rs dispatched()）即为此类；查对应连边路径是否记录派发目标"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "reflect-helper-frame-visible"
+stage = "output"
+symptom = "栈遍历（SecurityManager 上下文 / StackWalker）多出 java.lang.reflect.Method$Direct 帧"
+match = [["java.lang.reflect.Method$Direct"]]
+tests = ["TestSecurityManagerContext"]
+cause = "直连改写把 Method.invoke 调用点换成 VM 支持类帮助方法 Method$Direct.invoke，其帧不被 is_ignored_by_security_stack_walk 与 StackWalker 的 isReflectionFrame 识别为反射帧。修法：行表（frame_lines.json）按清单 direct_invokers 把帮助方法帧呈现为原 invoker（Method.invoke），host 记实际类，所有栈消费者统一生效"
+introduced = "29f54f85 / 75bead2f（直连反射调用改写）"
+fixed = ["07e849f6"]
+status = "pending"
+owner = "c4-reflect"
+diagnose = "看多出的帧是否为清单 helper；查 closure_input/frame_lines.json 中该方法的 class/name 是否已改为 invoker"
 doc = ""
 since = "2026-10-10"
