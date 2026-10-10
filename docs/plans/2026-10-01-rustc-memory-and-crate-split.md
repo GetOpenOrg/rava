@@ -1047,3 +1047,18 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
 | `impl ObjectVTable for`（wrapper，余 `__view_into` / `__erased_vtable` / `__view_as` / `__erased_inner` / `__unsafe_*` 等） | 15.40 | 2,506 个 impl |
 | extern 块 + 外部声明 | 14.13 | |
 | Clone / PartialEq / Debug / Default / From | 6.64 | 约 2.4 万 |
+
+### 7.8 声明层底段分阶段实测（S7-4 §9.8 第 3 项，2026-10-11）
+
+> 被 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §9.8 引用。目的：在收窄前，按 rustc 阶段弄清现形态声明 crate 的峰值落在哪一段，判断「按体量拟合峰值」是否稳定，以及路线一删掉的类初始化骨架在哪个阶段计费。
+
+**口径**
+- 作业 s7d-prof1-f0b2c9de，dev，提交 f0b2c9de（已并入 59d84dfe，noreturn 修复后的基线）。
+- 输入是 CollectorsDemo 单例的 `--stop-after emit` scratch。`java_base_decl` 不分段。
+- 工具：
+  - `cargo build --timings`；
+  - `scripts/rustc_profile.sh`：`CRATE=<声明 crate>` 逐 crate 跑，含 `-Z time-passes` 与 `/usr/bin/time -v`；`SELF_PROFILE=1` 时加 `-Z self-profile`，只对 `java_base_decl`，用 measureme `summarize` 汇总；
+  - `scripts/mono_stats.py`：单态化统计。
+- nightly 不可用时，用 stable 加 `RUSTC_BOOTSTRAP=1`。
+
+结果：作业运行中，回填。
