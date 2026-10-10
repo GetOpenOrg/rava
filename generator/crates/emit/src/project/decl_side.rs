@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use ty::ident::is_rust_keyword;
 
-use super::decl_segments::{plan, DeclGraph, DeclNode, DECL_SEGMENT_CLASSES};
+use super::decl_segments::{plan, DeclGraph, DeclNode, DECL_SEGMENT_BYTES};
 use super::fs::{walk, Writer};
 use super::module_side::{lib_manifest, path_dep};
 use crate::ctx::EmitCtx;
@@ -24,6 +24,12 @@ use crate::error::{io_err, Result};
 const SEGMENT_ALLOW: &str = "#![allow(unused_variables, unused_mut, dead_code, non_snake_case, unused_imports, \
                              non_camel_case_types, non_upper_case_globals, static_mut_refs, ambiguous_glob_reexports, \
                              unused_comparisons)]";
+
+/// 上层段 lib.rs 中与类无关的固定行（属性、注释、`pub use <前段>::*;`）的体量上界（字节）
+const SEGMENT_FIXED_BYTES: usize = 1024;
+
+/// 上层段 crate 名相对底段名的最长后缀（`_<j>`，j ≤ 99999）
+const SEGMENT_SUFFIX_BYTES: usize = 6;
 
 /// 声明层分段：`names[0]` 为底段，其后为上层段（链序）
 #[derive(Debug, Clone)]
@@ -90,7 +96,21 @@ fn companion_hosts(rel: &Path) -> Vec<PathBuf> {
 
 /// 规划分段并把上层段类的落盘路径改到 `<out>/<段>/src/…`（类文本不变）。须在拆层之后、落盘之前调用
 pub fn segment(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path) -> DeclSegs {
-    segment_with_cap(ctx, ems, decl_src, out_dir, DECL_SEGMENT_CLASSES)
+    segment_with_cap(ctx, ems, decl_src, out_dir, DECL_SEGMENT_BYTES)
+}
+
+/// 类落在上层段时为其写出的 mod 行体量上界：所在包 mod.rs 的 `pub mod x; pub use x::*;`，外加按「本类独占该包」
+/// 计的包头（`#![allow(..)]`、`pub use <前段>::<包>::*;`）与各级祖先目录的 `pub mod <子包>;`（逐类全额计入，只会偏大）
+fn mod_overhead(rel: &Path, prev_len: usize) -> usize {
+    let comp_len = |s: &str| s.len() + 2; // 可能的 `r#`
+    let stem = rel.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let class_lines = "pub mod ;\n".len() + "pub use ::*;\n".len() + 2 * comp_len(&stem);
+    let comps: Vec<String> =
+        rel.parent().map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    let pkg_path: usize = comps.iter().map(|c| comp_len(c) + 2).sum();
+    let pkg_head = "#![allow(ambiguous_glob_reexports)]\n".len() + "pub use ::::*;\n".len() + prev_len + pkg_path;
+    let ancestors: usize = comps.iter().map(|c| "pub mod ;\n".len() + comp_len(c)).sum();
+    class_lines + pkg_head + ancestors
 }
 
 fn segment_with_cap(
@@ -105,10 +125,19 @@ fn segment_with_cap(
         .filter(|(_, em)| em.crate_name == crates.root())
         .filter_map(|(i, em)| em.path.strip_prefix(decl_src).ok().map(|r| (i, r.to_path_buf())))
         .collect();
-    if members.len() <= cap {
+    // 权重 = 落盘字节（类文本原样写出）+ 落在上层段时的 mod 行上界；手写类随 overlay 计入 base
+    let prev_len = decl.len() + SEGMENT_SUFFIX_BYTES;
+    let weights: Vec<usize> = members
+        .iter()
+        .map(|(i, rel)| if ems[*i].handwritten { 0 } else { ems[*i].text.len() + mod_overhead(rel, prev_len) })
+        .collect();
+    let cap = cap.saturating_sub(SEGMENT_FIXED_BYTES);
+    let hw = handwritten_files(&ctx.runtime_src());
+    // 不分段时底段 crate 还含全部手写 overlay（保守：手写真源全部计入）
+    let base: usize = hw.iter().map(|(_, t)| t.len()).sum();
+    if base + weights.iter().sum::<usize>() <= cap {
         return DeclSegs::single(&decl);
     }
-    let hw = handwritten_files(&ctx.runtime_src());
     let hosts: BTreeSet<PathBuf> = hw.iter().flat_map(|(rel, _)| companion_hosts(rel)).collect();
     let nodes: Vec<DeclNode<'_>> = members
         .iter()
@@ -130,7 +159,7 @@ fn segment_with_cap(
         .collect();
     let texts: Vec<&str> = hw.iter().map(|(_, t)| t.as_str()).collect();
     let g = DeclGraph::build(&nodes, &texts, &pinned);
-    let segs = plan(&g, cap);
+    let segs = plan(&g, &weights, base, cap);
     drop(nodes);
     if segs.len() <= 1 {
         return DeclSegs::single(&decl);
@@ -280,6 +309,21 @@ mod tests {
     fn paths_escape_keywords() {
         assert_eq!(pkg_of(Path::new("java/lang/ref/cleaner.rs")), "java::lang::ref");
         assert_eq!(rust_path(Path::new("java/lang/ref")), "java::lang::r#ref");
+    }
+
+    #[test]
+    fn mod_overhead_bounds_written_lines() {
+        let rel = Path::new("java/lang/ref/cleaner.rs");
+        let prev = "java_base_decl_12";
+        // 本类独占新包时上层段为它写出的全部行
+        let written = [
+            "#![allow(ambiguous_glob_reexports)]\n".to_string(),
+            format!("pub use {prev}::java::lang::r#ref::*;\n"),
+            "pub mod cleaner;\npub use cleaner::*;\n".to_string(),
+            "pub mod java;\npub mod lang;\npub mod r#ref;\n".to_string(),
+        ];
+        let actual: usize = written.iter().map(String::len).sum();
+        assert!(mod_overhead(rel, "java_base_decl".len() + SEGMENT_SUFFIX_BYTES) >= actual);
     }
 
     #[test]

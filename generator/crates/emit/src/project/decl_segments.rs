@@ -8,17 +8,24 @@
 //!   与钉底的类（共置手写伴生文件的宿主、手写类文件）。类 → 类的边取声明层文本里的
 //!   `crate::<包>::<名>` 路径（含 `use` 花括号组与 `X__VTable` 等派生名）。
 //! - **规划**：Tarjan 求 SCC，凝聚图按「被依赖者在前」做 Kahn 拓扑序（同层按最小键名优先，确定性）；
-//!   含 INFRA 的 SCC 是唯一汇点，为底段；其余分量按拓扑序连续切成 k = ⌈余量 / 上限⌉ 个均衡段，
+//!   含 INFRA 的 SCC 是唯一汇点，为底段（不可再切，原样保留）；其余分量按拓扑序连续切段，
+//!   每段源码体量（各类权重之和）≤ 上限，段数取最少，在最少段数下再使最大段最小（均衡），
 //!   第 j 段只依赖 < j 的段，各段经镜像链（段 j 只依赖段 j−1）对外呈现完整视图。
-//! - 总类数不超过上限、或底段之外无类时不分段（与现状布局一致）。
+//! - 整个声明层（含手写基础量）体量不超过上限、或底段之外无类时不分段（与现状布局一致）。
 //!
-//! 分段只依赖类集合与引用关系（每段类数上限为常量，不随机器内存变化）。
+//! 分段只依赖类集合、引用关系与各类权重（权重 = 落盘源码字节的保守上界，由调用方给出；
+//! 上限为常量，不随机器内存变化），与 hash 种子、遍历顺序无关。
 
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::cmp::Reverse;
 
-/// 每个声明段的类数上限
-pub const DECL_SEGMENT_CLASSES: usize = 650;
+/// 每个声明段 crate 的源码体量上限（字节，按 10^6 计 MB 的 5.5 MB）。
+///
+/// 标定来源：S7 计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §9.8.3 第 1 条与
+/// §9.8.1「标定修正（10-11，s7d-prof1-f0b2c9de）」——现形态声明 crate 峰值对源码体量分段线性插值，
+/// 1.3 GB 约对应 5.9 MB 源码（实测点 7.39 MB → 1.46 GB），扣插值误差留约 7% 余量取 5.5 MB。
+/// 峰值由展开后 AST/HIR/MIR 规模决定（rustc 拆分计划 §7.8），按体量而非类数切分
+pub const DECL_SEGMENT_BYTES: usize = 5_500_000;
 
 /// 声明层的一个类节点
 #[derive(Debug, Clone)]
@@ -91,15 +98,20 @@ impl DeclGraph {
     }
 }
 
-/// 分段结果：`segments[0]` 为底段（含全部钉底类），段内按键名排序；不分段时只有一段
-pub fn plan(g: &DeclGraph, cap: usize) -> Vec<Vec<usize>> {
+/// 分段结果：`segments[0]` 为底段（含全部钉底类），段内按键名排序；不分段时只有一段。
+///
+/// `weights[v]` 为类 v 的体量权重；`base` 为底段 crate 在类之外的固定体量（手写文件等），只参与
+/// 「是否分段」判定；`cap` 为每段体量上限
+pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, cap: usize) -> Vec<Vec<usize>> {
     let n = g.keys.len();
     let all = || {
         let mut v: Vec<usize> = (0..n).collect();
         v.sort_by(|&a, &b| g.key(a).cmp(g.key(b)));
         v
     };
-    if n <= cap.max(1) {
+    let weight = |v: usize| weights.get(v).copied().unwrap_or(0);
+    let total: usize = (0..n).map(weight).sum();
+    if base.saturating_add(total) <= cap {
         return vec![all()];
     }
     let (comp, ncomp) = tarjan(&g.edges);
@@ -109,12 +121,11 @@ pub fn plan(g: &DeclGraph, cap: usize) -> Vec<Vec<usize>> {
     for v in 0..n {
         members[comp[v]].push(v);
     }
-    let rest: Vec<usize> = order.into_iter().filter(|&c| c != bottom).collect();
-    let rest_total: usize = rest.iter().map(|&c| members[c].len()).sum();
-    if rest_total == 0 {
+    let rest: Vec<usize> = order.into_iter().filter(|&c| c != bottom && !members[c].is_empty()).collect();
+    if rest.is_empty() {
         return vec![all()];
     }
-    let sizes: Vec<usize> = rest.iter().map(|&c| members[c].len()).collect();
+    let sizes: Vec<usize> = rest.iter().map(|&c| members[c].iter().map(|&v| weight(v)).sum()).collect();
     let bins = cut(&sizes, cap);
     let k = bins.last().map_or(0, |b| b + 1);
     let mut segs: Vec<Vec<usize>> = vec![Vec::new(); k + 1];
@@ -128,22 +139,38 @@ pub fn plan(g: &DeclGraph, cap: usize) -> Vec<Vec<usize>> {
     segs
 }
 
-/// 连续均衡切段：k = ⌈总量 / 上限⌉，每项按其中点落入的 1/k 区间定段（单调不减、无空段）
-fn cut(sizes: &[usize], cap: usize) -> Vec<usize> {
-    let total: usize = sizes.iter().sum();
-    let k = total.div_ceil(cap.max(1)).clamp(1, sizes.len().max(1));
-    let mut prefix = 0usize;
-    let mut last = 0usize;
+/// 贪心连续装箱：当前箱非空且装入后超过 `bound` 即开新箱（单项超过 `bound` 时独占一箱）
+fn greedy(sizes: &[usize], bound: usize) -> Vec<usize> {
+    let (mut bin, mut load) = (0usize, 0usize);
     let mut out = Vec::with_capacity(sizes.len());
-    for &s in sizes {
-        let mid = prefix + s / 2;
-        prefix += s;
-        let bin = ((mid as u128 * k as u128 / total.max(1) as u128) as usize).min(k - 1);
-        let bin = if out.is_empty() { 0 } else { bin.clamp(last, last + 1) };
+    for (i, &s) in sizes.iter().enumerate() {
+        if i > 0 && load.saturating_add(s) > bound {
+            bin += 1;
+            load = 0;
+        }
+        load += s;
         out.push(bin);
-        last = bin;
     }
     out
+}
+
+/// 连续切段：段数取上限 `cap` 下的最少段数 k（贪心即最优），再二分求 k 段内最小的段体量上界并按其贪心切，
+/// 使各段均衡。每段 ≤ `cap`（单个分量本身超过 `cap` 时独占一段）；段号单调不减、无空段
+fn cut(sizes: &[usize], cap: usize) -> Vec<usize> {
+    let cap = cap.max(1);
+    let count = |b: &[usize]| b.last().map_or(0, |x| x + 1);
+    let k = count(&greedy(sizes, cap));
+    let total: usize = sizes.iter().sum();
+    let (mut lo, mut hi) = (total.div_ceil(k.max(1)).min(cap), cap);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if count(&greedy(sizes, mid)) <= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    greedy(sizes, hi)
 }
 
 /// 迭代式 Tarjan：返回 (各节点分量号, 分量数)
@@ -427,6 +454,11 @@ mod tests {
         DeclNode { key, pkg: pkg.into(), ident: ident.into(), text }
     }
 
+    /// 各类权重均为 1（按类数切）
+    fn plan1(g: &DeclGraph, cap: usize) -> Vec<Vec<usize>> {
+        plan(g, &vec![1; g.keys.len()], 0, cap)
+    }
+
     fn keys(g: &DeclGraph, segs: &[Vec<usize>]) -> Vec<Vec<String>> {
         segs.iter().map(|s| s.iter().map(|&v| g.key(v).to_string()).collect()).collect()
     }
@@ -472,7 +504,7 @@ mod tests {
     fn small_set_is_not_split() {
         let nodes = vec![node("a/A", "a", "A", ""), node("a/B", "a", "B", "")];
         let g = DeclGraph::build(&nodes, &[], &[]);
-        assert_eq!(keys(&g, &plan(&g, 10)), vec![vec!["a/A", "a/B"]]);
+        assert_eq!(keys(&g, &plan1(&g, 10)), vec![vec!["a/A", "a/B"]]);
     }
 
     #[test]
@@ -488,7 +520,7 @@ mod tests {
             node("u/T", "u", "T", ""),
         ];
         let g = DeclGraph::build(&nodes, &["fn infra(o: Obj) -> Str { todo() }"], &[]);
-        let segs = keys(&g, &plan(&g, 3));
+        let segs = keys(&g, &plan1(&g, 3));
         assert_eq!(segs[0], vec!["l/Obj", "l/Str"]);
         // 余 5 类、上限 3 → 2 段；P、Q 同段，R 不早于 P
         assert_eq!(segs.len(), 3);
@@ -506,7 +538,7 @@ mod tests {
             node("a/D", "a", "D", ""),
         ];
         let g = DeclGraph::build(&nodes, &[], &[0]);
-        let segs = keys(&g, &plan(&g, 2));
+        let segs = keys(&g, &plan1(&g, 2));
         assert_eq!(segs[0], vec!["a/A", "a/B"]);
         assert_eq!(segs[1..].concat(), vec!["a/C", "a/D"]);
     }
@@ -522,16 +554,16 @@ mod tests {
             node("E", "p", "E", "crate::p::D"),
         ];
         let g = DeclGraph::build(&nodes, &[], &[]);
-        let segs = keys(&g, &plan(&g, 2));
+        let segs = keys(&g, &plan1(&g, 2));
         assert_eq!(segs, vec![vec![], vec!["A", "B"], vec!["C", "D"], vec!["E"]]);
-        assert_eq!(segs, keys(&g, &plan(&g, 2)));
+        assert_eq!(segs, keys(&g, &plan1(&g, 2)));
     }
 
     #[test]
     fn everything_in_bottom_means_no_split() {
         let nodes = vec![node("a/A", "a", "A", ""), node("a/B", "a", "B", ""), node("a/C", "a", "C", "")];
         let g = DeclGraph::build(&nodes, &["A B C"], &[]);
-        assert_eq!(plan(&g, 1).len(), 1);
+        assert_eq!(plan1(&g, 1).len(), 1);
     }
 
     #[test]
@@ -539,5 +571,38 @@ mod tests {
         assert_eq!(cut(&[3, 3, 3, 3, 3, 3, 3, 4], 10), vec![0, 0, 0, 1, 1, 1, 2, 2]);
         assert_eq!(cut(&[1, 30, 1], 10), vec![0, 1, 2]);
         assert_eq!(cut(&[4], 10), vec![0]);
+        // 中点均衡会把 6 + 6 落进同一段（12 > 10）；硬上限下须三段
+        assert_eq!(cut(&[6, 6, 6], 10), vec![0, 1, 2]);
+        assert_eq!(cut(&[6, 4, 6, 4], 10), vec![0, 0, 1, 1]);
+        // 最少段数下取均衡：贪心按 10 切为 10|2，均衡后为 6|6
+        assert_eq!(cut(&[2, 2, 2, 2, 2, 2], 10), vec![0, 0, 0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn cut_never_exceeds_cap_unless_single_oversized() {
+        let sizes: Vec<usize> = (0..200).map(|i| (i * 7919 % 97) + 1).collect();
+        for cap in [97, 100, 150, 333, 1000] {
+            let bins = cut(&sizes, cap);
+            let k = bins.last().unwrap() + 1;
+            let mut load = vec![0usize; k];
+            for (s, b) in sizes.iter().zip(&bins) {
+                load[*b] += s;
+            }
+            assert!(load.iter().all(|&l| l <= cap), "cap {cap}: {load:?}");
+            assert!(bins.windows(2).all(|w| w[1] == w[0] || w[1] == w[0] + 1));
+            assert_eq!(k, greedy(&sizes, cap).last().unwrap() + 1, "段数最少");
+        }
+    }
+
+    #[test]
+    fn split_by_bytes_not_class_count() {
+        // 3 类、无钉底：体量 4 + 4 + 4 > 10 须切；每段体量 ≤ 10
+        let nodes = vec![node("a/A", "a", "A", ""), node("a/B", "a", "B", ""), node("a/C", "a", "C", "")];
+        let g = DeclGraph::build(&nodes, &[], &[]);
+        let segs = plan(&g, &[4, 4, 4], 0, 10);
+        assert_eq!(keys(&g, &segs), vec![vec![], vec!["a/A", "a/B"], vec!["a/C"]]);
+        // 总体量 ≤ 上限不切；手写基础量计入判定
+        assert_eq!(plan(&g, &[3, 3, 3], 0, 10).len(), 1);
+        assert_eq!(keys(&g, &plan(&g, &[3, 3, 3], 2, 10)), vec![vec![], vec!["a/A", "a/B", "a/C"]]);
     }
 }

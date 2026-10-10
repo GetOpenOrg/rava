@@ -2,7 +2,11 @@
 """声明层 D8 图的文本解析：D8 同款路径 / 字面量提取 + 引用出现处的上下文分类（`decl_scc_graph.py` 用）。"""
 import re
 
-CAP = 650
+# D8 段上限（与 generator/crates/emit/src/project/decl_segments.rs DECL_SEGMENT_BYTES、
+# decl_side.rs SEGMENT_FIXED_BYTES / SEGMENT_SUFFIX_BYTES 同值）
+CAP_BYTES = 5_500_000
+SEGMENT_FIXED_BYTES = 1024
+SEGMENT_SUFFIX_BYTES = 6
 KINDS = ["inherit", "hidden", "sig", "field", "body", "nest", "exc", "attr", "macro", "top"]
 INHERIT_KEYS = {"super_class", "interfaces", "all_supertypes", "declared_by", "superclass", "all_superclasses",
                 "ancestor_fields_layout", "to_string_vtable", "hash_code_vtable", "equals_vtable", "binary_name"}

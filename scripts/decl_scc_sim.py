@@ -31,7 +31,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from decl_scc_choke import entry_rows, greedy_cuts  # noqa: E402
-from decl_scc_graph import CAP, KINDS, Graph, load_handwritten, load_nodes, plan, reach, tarjan  # noqa: E402
+from decl_scc_graph import KINDS, Graph, load_handwritten, load_nodes, plan, reach, tarjan  # noqa: E402
 
 COMBOS = [
     ("①", set(KINDS)),
@@ -163,12 +163,12 @@ def main():
                       "points": pts, "budget_mb_for_1300": round((1300 - f[0]) / f[1], 2) if f[1] else None}
     # 复现校验
     adj, inf = g.adjacency(set(KINDS), "d8")
-    segs = plan(g, adj, inf)
+    segs = plan(g, adj, inf, a.root)
     actual = {}
     for i, x in enumerate(nodes):
         actual.setdefault(x[4], set()).add(i)
-    # D8 总类数（含手写类节点，此处不可见）≤ 上限时不分段；手写类节点只连 INFRA、恒在底段，不影响上段
-    sim = {k: set(s) for k, s in enumerate(segs)} if len(segs) > 1 and g.n > CAP else {0: set(range(g.n))}
+    # D8 按体量切（plan 内含不分段判定）；手写类节点权重 0、只连 INFRA、恒在底段，不影响上段
+    sim = {k: set(s) for k, s in enumerate(segs)} if len(segs) > 1 else {0: set(range(g.n))}
     ok = all(sim.get(k, set()) == actual.get(k, set()) for k in set(sim) | set(actual))
     out["reproduce"] = {"ok": ok, "actual": {k: len(v) for k, v in sorted(actual.items())},
                         "simulated": {k: len(v) for k, v in sorted(sim.items())}}
