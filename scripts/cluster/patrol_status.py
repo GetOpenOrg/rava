@@ -419,6 +419,17 @@ def report_wait_loops(procs: dict) -> None:
     if not loops:
         print("  无")
         return
+
+    def ancestors(pid: str) -> set:
+        seen = set()
+        while (pid := procs.get(pid, {}).get("ppid")) and pid not in seen:
+            seen.add(pid)
+        return seen
+
+    # 外层包装 shell（命令行里带着同一循环文本）与内层循环是同一个，只留最内层
+    for t, pids in loops.items():
+        outer = set().union(*(ancestors(x) for x in pids))
+        loops[t] = [x for x in pids if x not in outer]
     now = time.time()
     # 循环已等到目标、正在执行后续命令（有非 sleep 子进程）的不算遗留
     busy = {p["ppid"] for p in procs.values() if Path(p["cmd"].split()[0]).name != "sleep"}
