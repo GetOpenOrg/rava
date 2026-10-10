@@ -371,9 +371,12 @@ impl<'a> Engine<'a> {
                         self.init(&decl, via.clone());
                     }
                     self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
-                    // 具体上下文执行过的字段访问运行期照样执行：引用字段登记字段节点，构建期初始化类的静态字段
-                    // 取映像值（所指映像对象成为活对象）——否则只经具体上下文读到的映像静态不发射，运行期读成 null
-                    if parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_some() {
+                    // 具体上下文执行过的静态字段访问运行期照样执行：引用类型静态字段登记字段节点，构建期初始化类的
+                    // 取映像值（所指映像对象成为活对象，内容随之入队）——否则只经具体上下文读到的映像静态不发射，运行期
+                    // 读成 null。实例字段不登记：接收者来自静态 / 实参 / 新建对象，前两者的映像对象已活、内容已传播，
+                    // 按字段并集登记反把全部活对象的该字段值并入（如类镜像的 genericInfo）
+                    let is_static = opc == op::GETSTATIC || opc == op::PUTSTATIC;
+                    if is_static && parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_some() {
                         self.field_node(MemberRef { owner: decl, name: f.name.clone(), desc: f.desc.clone() });
                     }
                 }
