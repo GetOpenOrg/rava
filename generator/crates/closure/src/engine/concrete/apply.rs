@@ -371,6 +371,11 @@ impl<'a> Engine<'a> {
                         self.init(&decl, via.clone());
                     }
                     self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
+                    // 具体上下文执行过的字段访问运行期照样执行：引用字段登记字段节点，构建期初始化类的静态字段
+                    // 取映像值（所指映像对象成为活对象）——否则只经具体上下文读到的映像静态不发射，运行期读成 null
+                    if parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_some() {
+                        self.field_node(MemberRef { owner: decl, name: f.name.clone(), desc: f.desc.clone() });
+                    }
                 }
                 (Operand::Method(mref, iface), opc) => {
                     let lvl = if opc == op::INVOKESTATIC || opc == op::INVOKESPECIAL { Level::Layout } else { Level::Type };
