@@ -66,7 +66,7 @@ owner = "虚拟线程终态线（VirtualThread 字节码翻译 + Continuation �
 since = "2026-10-06"
 note = "debug 档下创建 1e5 VT 过慢，「同时休眠」时序判定不成立；vt6-spot-4a983fe8 / vt-int-2602f409 / r1n-sp-204f8cbe 等同 diff"
 deferred = "面外"
-deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomcat 执行器再评估"
+deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomcat 执行器再评估。S0 面复核（10-10，apis0-dev4-0517c6f3，面为一跳 ∪ JVM 实载退回口径）：专属 12 个方法中面外 2 个（Thread$Builder.start、Thread.isAlive，占 17%），机械分层判主力；但关键 API Thread.ofVirtual 只被 1 个 jar 引用，计为命中只是因为 Thread 类被实载（报告 G4 类级高估），S0 缺省配置不开虚拟线程，失败的是规模时序这一非面因素。因此维持暂缓，且不进入阈值标定集；S0 闭包面产出后再复核"
 
 [[known]]
 test = "TestBootLayer"

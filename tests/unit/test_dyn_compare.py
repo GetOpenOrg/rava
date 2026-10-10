@@ -194,6 +194,32 @@ class AttributeTest(unittest.TestCase):
         self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), sites), ('sigpoly-model', poly))
         self.assertEqual(dc.model_sites({'sigpoly_sites': [poly], 'indy_models': [{'site': indy}]}), sites)
 
+    def test_build_time_init(self):
+        # 构建期初始化类的 <clinit>（闭包不展开，不在 methods）：其内加载归 build-time-init，不计漏覆盖
+        bt = frozenset({'java/util/S'})
+        clinit = ('java/util/S', '<clinit>', '()V', 4)
+        e = ev(('java/util/EM', '<init>', '()V', 0), ('java/util/S$MB', 'build', '()V', 2), clinit,
+               ('java/util/A', 'f', '()V', 1), MAIN)
+        self.assertEqual(dc.attribute(e, self.methods, self.r, frozenset(), {}, bt),
+                         ('build-time-init', 'java/util/S.<clinit>:()V@4'))
+        # 无构建期初始化信息：同一栈照旧计漏覆盖（帧为未建模的 <clinit>）
+        self.assertEqual(dc.attribute(e, self.methods, self.r),
+                         (dc.MISS, 'java/util/S.<clinit>:()V@4'))
+        # 运行期初始化类（不在 build_time）的 <clinit> 不豁免；构建期类的其他方法不豁免
+        self.assertEqual(dc.attribute(ev(('java/util/T', '<clinit>', '()V', 0), MAIN), self.methods, self.r,
+                                      frozenset(), {}, bt)[0], dc.MISS)
+        self.assertEqual(dc.attribute(ev(('java/util/S', 'g', '()V', 0), MAIN), self.methods, self.r,
+                                      frozenset(), {}, bt)[0], dc.MISS)
+        # 构建期 <clinit> 先于「帧已建模」判定（即便闭包里有该 <clinit> 的翻译体）
+        m = dict(self.methods, **{'java/util/S.<clinit>:()V': 'bytecode'})
+        self.assertEqual(dc.attribute(ev(('java/util/X', 'y', '()V', 0), clinit, MAIN), m, self.r,
+                                      frozenset(), {}, bt)[0], 'build-time-init')
+
+    def test_build_time_classes(self):
+        self.assertEqual(dc.build_time_classes({'boot_image_data': {'build_time': ['a/B', 'a/C']}}),
+                         frozenset({'a/B', 'a/C'}))
+        self.assertEqual(dc.build_time_classes({}), frozenset())
+
 
 def closure():
     return {
@@ -228,6 +254,20 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(dc.provenance_pct(res), '50%')
         self.assertEqual(dc.summary_tag(res), 'dyn miss 1 / extra 2 prov 50% / unattr 1')
         self.assertEqual(dc.summary_tag({'error': 'x'}), 'dyn ERR')
+
+    def test_build_time_init_not_miss(self):
+        # 构建期初始化类的 <clinit> 在 JVM 程序期执行时加载的类：归 build-time-init，不计漏覆盖
+        c = closure()
+        c['boot_image_data'] = {'build_time': ['java/util/Flags']}
+        xlog = XLOG + "[0.04s][info][class,load] java.util.Flags$Mask source: jrt:/java.base\n"
+        agent = ("L java/util/Flags$Mask main\nF java/util/Flags <clinit> ()V 7\n"
+                 "F Main main ([Ljava/lang/String;)V 9\n")
+        res = dc.compare(c, xlog, agent, rules(), 'Main')
+        self.assertEqual(res['miss'], [])
+        self.assertEqual([m['class'] for m in res['attributed']['build-time-init']], ['java/util/Flags$Mask'])
+        del c['boot_image_data']
+        res = dc.compare(c, xlog, agent, rules(), 'Main')
+        self.assertEqual([m['class'] for m in res['miss']], ['java/util/Flags$Mask'])
 
     def test_main_class_of(self):
         self.assertEqual(dc.main_class_of(closure()), 'Main')
