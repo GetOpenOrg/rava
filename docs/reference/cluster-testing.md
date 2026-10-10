@@ -696,7 +696,7 @@ rust-closure-analyzer 与 main 均只随协调者自己的提交前进。
 ### 12.3 本机只跑 cargo check
 
 ```bash
-cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock.py cargo check --release --tests --target-dir ../build/check-target
+cd generator && CARGO_BUILD_JOBS=2 python3 ../../heavy_lock.py cargo check --release --tests --target-dir ../build/check-target
 ```
 
 单测、闭包分析（`rava closure`，11.5 `remote_rava.py`）、e2e 都发分布式。
