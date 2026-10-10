@@ -202,6 +202,26 @@ p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
 - 单测（us1，p4-ut，f0ceb0ab）：A / B 组与 rava_macros_core 全过，0 失败（顺序 / 种子两项单独跑，见下）。
 - 顺序无关（p4-uoh，dev，c3ec480d；p4-uoh-head2，jp1，d14e11fe）：`closure_independent_of_hash_seed` 失败，StockTrans 种子 0 多 `Nodes$CollectionNode.forEach`。这与集成分支已登记的失败同一根因（tasks.md order-findops 条：`engine/ctxsel.rs` `selector_ctx` 读尚未定论的常量格来选上下文；集成分支上表现为 TestSerialDefaultSuid 多出同一方法），不是本轮引入。`closure_independent_of_order` 在 c3ec480d / d14e11fe 上失败于 HelloWorld / DeepCopy。这两个提交都不含 203be167（order-findops 修复），集成分支修复前同样失败。合入新基线（405c84db）后的复测：p4-uoh-m2（34cdcf9e）与同机对照 p4-uoh-m2b（405c84db），截止交付时仍在 dev 上运行；旧基线对照 p4-uoh-int2（81a2ee61，us1）也未出结果。
 
+### 顺序无关回归：映像活性随接收者到达次序变化（fix-order-live，10-10）
+
+- 现象：batch-1010g（含 c3ec480d）起，`closure_independent_of_order` 在 DeepCopy 上失败。二分：6a668ac6 通过，6a668ac6 + batch-1010g（c958e863）即失败。类集合与方法集合各次序相同，只有 `boot_image_data.live` 不同。
+- 差异的形态（ol-mx2-main，main 583edccd，DeepCopy 缺省次序对 4 组 batch / seed）：差异对象的根全是各类的 `serialPersistentFields` 静态值（ObjectStreamField 数组及其名字串），涉及 StringBuffer、Permissions、SAXException、URL、BigInteger、FilePermissionCollection。各组缺的类不同，batch 7 / seed 2 一组恰好相同。
+- 触发链（探针 ol-pf / ol-pf3）：
+  1. `ObjectStreamClass.getDeclaredSerialFields@6` 按 Class 值集逐类给出按名字段句柄标记 `Field#<name:X.serialPersistentFields>`。两种次序下标记都会生成。
+  2. 标记作接收者到达 `Field.get` 调用点，由 `field_access_site` 按所指字段建模。这一步登记字段节点，映像随之把该静态值标为活对象。
+  3. 调用点接收者多时走集合枢纽。`hub_recv` 对同一接入记录已接过边的目标，改走 `edge_more` 增量接边。
+- 根因：`edge_more`（`engine/invoke.rs`，2c503775 起）假定接法与接收者无关，只接 this 与返回值。但句柄存取入口（`RetModel::HandleAccess`）的接法取决于接收者本身：来源标记按所指字段或口径逐调用点建模，非标记按字节码接边。因此同一调用点上只有先到的接收者被当作标记处理，后到标记所指的字段节点永不登记。`link_hub` 重放父枢纽已展开的接收者时，又把它们合成一个闭值集，`field_access_recv` 把它归为 `Covered`，本调用点同样不登记所指字段。哪个标记先到取决于处理次序，活性因此随次序变化。c3ec480d 新增值持有者容器形态后，枢纽的接收者组成与到达次序跟着变了，这个缺陷才显现，c3ec480d 本身的判定与次序无关。
+- 修复（aad074f8）：
+  - `engine/invoke.rs` `edge_more`：目标是句柄存取入口时，对每个接收者完整调用 `edge`。
+  - `engine/hub.rs` `link_hub`：重放父枢纽的接收者时，句柄存取入口改为逐个接收者以 `Recv::Exact` 接边，与 `hub_recv` 同口径。
+  - 修复后每个到达的标记都按所指字段建模，字段节点集合是「到达过的标记」这一单调事实，与次序无关。
+- 实测（dev，closure 模式；main 583edccd → aad074f8）：
+  - DeepCopy：类 3075 / 方法 16838 不变；活对象 20229 → 20315。多出的是各次序取并后的 `serialPersistentFields` 静态值，运行期 `ObjectStreamClass` 按名反射读取它们，属健全性补齐。闭包耗时 114 → 107 s，峰值 3.19 GB → 3.20 GB。
+  - HelloWorld：580 / 1896 / 4123 活对象不变，2.2 s。
+  - 次序矩阵（ol-mx-fix1）：4 组 batch / seed 与缺省次序逐键相同，耗时 85–101 s。
+- 单测 / 抽查：见 tasks.md 对应条目。
+- 附：`closure_independent_of_hash_seed` 在 batch-1010k（932a4ba4）曾失败，在 batch-1010l（751e0d6f）通过，本轮未单独定位其来源。
+
 ## 残留与建议
 
 1. **CHM 表合并：已修**（c3ec480d，见「第四轮」）。第三轮的「摘要克隆 open 接收者」方向不再需要。
