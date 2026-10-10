@@ -212,6 +212,9 @@ impl Engine<'_> {
         if let Some(r) = self.probe_report(pat) {
             return Some(r);
         }
+        if let Some(q) = pat.strip_prefix("@xpath:") {
+            return Some(self.xpath_report(q));
+        }
         if pat == "@keyed" {
             return Some(self.keyed_report());
         }

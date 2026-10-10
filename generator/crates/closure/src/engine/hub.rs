@@ -148,7 +148,8 @@ impl<'a> Engine<'a> {
         } else {
             self.pstr_top_h(h);
         }
-        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
+        // 形参常量格与逐个接边同口径（`bind_params` 取 `PV::of_ret`：确定非空的无标签引用记为「非空引用」）
+        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of_ret)).collect();
         self.hub_vals(h, &mine);
         self.prof_seg(site_prof::SEG_LINK_REPLAY);
         let hub = &mut self.hubs[h as usize];
@@ -346,9 +347,11 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 目标经枢纽中转：字节码方法本体、结果取其返回值节点（非按调用点建模）
+    /// 目标经枢纽中转：字节码方法本体、结果取其返回值节点（非按调用点建模）。
+    /// @CallerSensitive 目标的调用者镜像取自各调用点所在类（`caller_edge`），经枢纽中转会丢掉调用点，
+    /// 故逐调用点接边（`edge` 按接入调用点并入调用者镜像）
     pub(super) fn hub_plain(&mut self, t: usize) -> bool {
-        if self.methods[t].kind != Kind::Bytecode || self.methods[t].is_static {
+        if self.methods[t].kind != Kind::Bytecode || self.methods[t].is_static || self.is_caller_sensitive(t) {
             return false;
         }
         self.methods[t].ret_model == RetModel::Plain && self.passthrough(t).is_none()
