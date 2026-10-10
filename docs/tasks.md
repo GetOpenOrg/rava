@@ -155,7 +155,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │   │     └─▶ 第 6 步 非引导类构建期初始化（C3 build_time_init）──▶ 第 7 步 语料全量
 │   │
 │   ├─ 🔄 u12-props（基于 b558e0c2）：U12 机制 ①③（构建期定 LoggerFinder 提供者、日志级别折叠）+ U14 `line.separator`（按目标三元组）/ `file.encoding`（UTF-8）钉值；逐项实测闭包类数，无收益不钉
-│   ├─ ⏳ 待派：S2 `Class.genericInfo` 入映像（U13 已定 10-08），有空名额即派
+│   ├─ ✅ S2 `Class.genericInfo` 入映像（U13，u13-generic，见引导映像计划 §5.6.9；闭包规模不变，收益限于运行期）
 │   │
 │   ├─ 🔄 闭包门自动排名 `rava closure --gates`（closure-gates）──▶ 解释 HelloWorld 468 与约 3011 类的落差（引导映像 §8.4 待核对）
 │   │
