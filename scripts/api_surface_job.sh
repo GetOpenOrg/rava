@@ -2,7 +2,7 @@
 # 阶段 API 面作业（dev 上以作业模式运行；本机不跑）：取包 → 样例应用 javac + 真 JVM 运行（记录输出与实载类）
 # → rava 闭包两变体（A：仅 main；B：main + JVM 实载的框架类作 --seed-class；并行，看门狗记 RSS / 超时）→ 面文件与 e2e 分层数据。
 # 环境变量：API_SURFACE_CLOSURE_TIMEOUT（每变体秒数，缺省 2400）、API_SURFACE_CLOSURE_MEM_MB（每变体 RSS 上限，缺省不设）、
-#           API_SURFACE_OUT_RATIO（分层暂缓门槛，缺省 0.5）、API_SURFACE_JOBS（e2e javac 并行度，缺省 8）
+#           API_SURFACE_OUT_RATIO（分层暂缓门槛，缺省 auto＝按标定集定）、API_SURFACE_JOBS（e2e javac 并行度，缺省 8）
 #
 # 用法：scripts/api_surface_job.sh [阶段=s0]        样例在 tests/lib_pilot/<阶段>_boot/（src/ resources/ jars.txt）
 # 产物：build/api_surface/<阶段>/（作业 --fetch 'build/api_surface/<阶段>/**'；含 closure_<变体>.json.gz / .rss / .killed），面与分层数据另写
@@ -65,7 +65,7 @@ grep -c ' source: jrt:/\| source: shared objects file' "$RAW/classload.log" | se
 #    看门狗每 30 s 采样 RSS（写 closure_<变体>.rss：秒 RSS_MiB），超时（API_SURFACE_CLOSURE_TIMEOUT，缺省 2400 s）
 #    或 RSS 超上限（API_SURFACE_CLOSURE_MEM_MB，缺省不设）即按 PID 终止，记下终止原因，得到精确的阻塞点数据；
 #    两变体各有上限，一个超限不连累另一个（槽 scope 上限按两者之和给 --slot-mem）
-#    API_SURFACE_VARIANTS（缺省 "a b"）选跑哪些变体；API_SURFACE_STACK_EVERY=N（秒，缺省 0 关）时 rava 在 gdb 下运行，
+#    API_SURFACE_VARIANTS（缺省 "a b"，置空则不跑闭包）选跑哪些变体；API_SURFACE_STACK_EVERY=N（秒，缺省 0 关）时 rava 在 gdb 下运行，
 #    看门狗每 N 秒与终止前各发一次 SIGUSR1（gdb 截获、不传给 rava），全线程栈印在 closure_<变体>.out（gdb 标准输出，
 #    「=== STACK」分隔），各次取栈的时刻与 RSS 记在 closure_<变体>.stacks，
 #    用于定位超时 / 超内存时所处的分析阶段（服务器 ptrace_scope=1，只能由父进程 gdb 取栈）
@@ -73,7 +73,7 @@ MAIN="$(grep -rl 'static void main' "$APP/src" | head -1 | sed "s|$APP/src/||; s
 CL_TIMEOUT="${API_SURFACE_CLOSURE_TIMEOUT:-2400}"
 CL_MEM="${API_SURFACE_CLOSURE_MEM_MB:-0}"
 CL_STACK="${API_SURFACE_STACK_EVERY:-0}"
-VARIANTS="${API_SURFACE_VARIANTS:-a b}"
+VARIANTS="${API_SURFACE_VARIANTS-a b}"
 start_closure() {
     local tag="$1"; shift
     step "闭包 $tag 启动（上限 ${CL_TIMEOUT}s / ${CL_MEM} MiB）"
@@ -151,7 +151,7 @@ cp "$REPO/tests/api_surface/$STAGE.txt" "$OUT/"
 step "分层"
 JUNIT_CP="$(ls "$DEPS"/pilot-libs/junit-*.jar "$DEPS"/pilot-libs/hamcrest-*.jar 2>/dev/null | paste -sd: -)"
 "${PY[@]}" "$REPO/scripts/api_surface.py" tiers --face "$REPO/tests/api_surface/$STAGE.txt" --face-data "$OUT/face.json" \
-    --cp "$JUNIT_CP" -j "${API_SURFACE_JOBS:-8}" --out-ratio "${API_SURFACE_OUT_RATIO:-0.5}" --out "$REPO/tests/api_surface/tiers_$STAGE.toml" --data "$OUT/tiers.json" || exit 2
+    --cp "$JUNIT_CP" -j "${API_SURFACE_JOBS:-8}" --out-ratio "${API_SURFACE_OUT_RATIO:-auto}" --out "$REPO/tests/api_surface/tiers_$STAGE.toml" --data "$OUT/tiers.json" || exit 2
 cp "$REPO/tests/api_surface/tiers_$STAGE.toml" "$OUT/"
 gzip -c "$RAW/classload.log" >"$OUT/classload.log.gz"
 step "完成"

@@ -15,7 +15,9 @@
   2. 专属方法 = 该例方法集 − 通用方法（被 ≥ --df 比例的 e2e 用例引用，如打印 / 拼接 / 装箱）；
      专属为空 → 主力（无专属 API，属语义性质）；
   3. 专属方法中面外占比 > --out-ratio → 暂缓（主要覆盖面外 API）；否则 → 主力。
-     阈值由数据决定（tiers.json 的 out_ratio_hist 给出分布），与 common_df 一同写入分层 toml。
+     阈值由数据决定：--out-ratio auto（缺省）按标定集取分错最少、间隔最宽的分界中点。标定集 = known_failures.toml
+     中 deferred 为阶段（S<n>）的条目（暂缓）与无 deferred 的条目（保留），并上 tests/api_surface/out_ratio_labels.toml
+     的复核判定；阈值、标定明细与 out_ratio_hist 分布一同写入分层 toml / tiers.json。
 """
 
 import argparse
@@ -228,6 +230,38 @@ def toml_list(name, items, per_line=1):
     return lines
 
 
+def calibrate_out_ratio(ratios, labels_path):
+    """按标定集定面外占比阈值：候选为相邻占比的中点，取分错最少者，并列时取所在间隔最宽者（间隔中点）。"""
+    kf = tomllib.loads((ROOT / "docs/known_failures.toml").read_text(encoding="utf-8"))
+    lab = tomllib.loads(labels_path.read_text(encoding="utf-8")) if labels_path.exists() else {}
+    want = {}
+    for e in kf.get("known", []):
+        dv = e.get("deferred")
+        if dv is None:
+            want[e["test"]] = False
+        elif dv[:1] == "S" and dv[1:].isdigit():
+            want[e["test"]] = True
+    want.update({t: True for t in lab.get("deferred", [])})
+    want.update({t: False for t in lab.get("kept", [])})
+    for t in lab.get("exclude", []):
+        want.pop(t, None)
+    by_stem = {tid.split("/")[-1]: tid for tid in ratios}
+    pts = sorted((round(ratios[by_stem[t]], 4), w, t) for t, w in want.items() if t in by_stem)
+    vals = sorted({0.0, 1.0, *(r for r, _, _ in pts)})
+    best = None
+    for lo, hi in zip(vals, vals[1:]):
+        t = round((lo + hi) / 2, 4)
+        err = [n for r, w, n in pts if (r > t) != w]
+        key = (len(err), -(hi - lo))
+        if best is None or key < best[0]:
+            best = (key, t, err, lo, hi)
+    if best is None:
+        return {"threshold": 0.5, "labels": [], "errors": [], "gap": None}
+    _, t, err, lo, hi = best
+    return {"threshold": t, "gap": [lo, hi], "errors": err,
+            "labels": [{"test": n, "out_ratio": r, "deferred": w} for r, w, n in pts]}
+
+
 def cmd_tiers(a):
     idx = JdkIndex.load(Path(a.java_home))
     face = [l.strip() for l in Path(a.face).read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -259,6 +293,17 @@ def cmd_tiers(a):
         df.update(ms)
     cut = max(2, int(a.df * len(msets)))
     common = {k for k, c in df.items() if c >= cut}
+
+    ratios = {}
+    for tid, ms in msets.items():
+        spec = ms - common
+        if spec and tid.split("/")[0] not in semantic:
+            ratios[tid] = len(spec - face_set) / len(spec)
+    calib = calibrate_out_ratio(ratios, Path(a.labels))
+    if a.out_ratio == "auto":
+        a.out_ratio = calib["threshold"]
+    else:
+        a.out_ratio = float(a.out_ratio)
 
     tiers, detail = {"main": [], "deferred": []}, {}
     for tid in sorted(msets):
@@ -311,7 +356,8 @@ def cmd_tiers(a):
         'stage = "S0"',
         'face = "tests/api_surface/s0.txt"',
         f"common_df = {a.df}  # 通用方法门槛：被 ≥ 该比例 e2e 用例引用（本轮 ≥ {cut} 例，{len(common)} 个方法）",
-        f"out_ratio = {a.out_ratio}  # 暂缓门槛：专属方法中面外占比 > 该值（非语义目录、专属非空的用例）",
+        f"out_ratio = {a.out_ratio}  # 暂缓门槛：专属方法中面外占比 > 该值（非语义目录、专属非空的用例）；"
+        f"标定 {len(calib['labels'])} 例，分界间隔 {calib['gap']}，分错 {len(calib['errors'])}",
         "",
         "[summary]",
         f"tests = {len(detail)}",
@@ -345,6 +391,7 @@ def cmd_tiers(a):
     # 面外占比分布（非语义目录、专属非空）：定 --out-ratio 的数据依据；detail 全量供离线换阈值重分
     rated = [d["out_ratio"] for d in detail.values() if not d["semantic"] and d["specific"]]
     data["out_ratio"] = a.out_ratio
+    data["out_ratio_calibration"] = calib
     data["out_ratio_hist"] = {f"{i / 10:.1f}": sum(1 for r in rated if i / 10 <= r < (i + 1) / 10 or (i == 9 and r == 1.0))
                               for i in range(10)}
     data["out_ratio_full"] = sum(1 for r in rated if r == 1.0)
@@ -376,7 +423,8 @@ def main():
     t.add_argument("--java-home", default=os.environ.get("JAVA_HOME", ""))
     t.add_argument("--cp", help="e2e javac 类路径（63_junit 需 junit / hamcrest）")
     t.add_argument("--df", type=float, default=0.10)
-    t.add_argument("--out-ratio", type=float, default=0.5, help="暂缓门槛：专属方法中面外占比 > 该值")
+    t.add_argument("--out-ratio", default="auto", help="暂缓门槛：专属方法中面外占比 > 该值；auto = 按标定集定")
+    t.add_argument("--labels", default=str(ROOT / "tests/api_surface/out_ratio_labels.toml"))
     t.add_argument("-j", "--jobs", type=int, default=8)
     t.add_argument("--out", required=True)
     t.add_argument("--data", required=True)

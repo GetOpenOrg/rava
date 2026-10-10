@@ -1,0 +1,10 @@
+# 面外占比阈值（tiers --out-ratio auto）的复核标定集：只写用例名，判据是「区分该用例的关键 API 是否在阶段面上」，
+# 依据见 docs/reports/api-surface-s0.md §七。docs/known_failures.toml 中 deferred 为阶段（S<n>）的条目自动记为暂缓、
+# 无 deferred 的条目自动记为保留；deferred 为「面外」的条目属非面因素（如规模压测），不参与标定。
+# 本文件补充已移出 known_failures、但复核结论仍有效的用例。
+
+# 关键 API 在面外（§7.1 维持面外；用例已修复移出 known_failures）
+deferred = ["TestModuleLayerDefine", "TestLocaleDateCjk"]
+
+# 关键 API 在面上（§7.2 保留）
+kept = ["TestClassModuleFace", "TestProtectionDomainFaces", "TestSetAccessibleBoundary", "TestXmlSaxEvents", "TestLocaleCurrency"]
