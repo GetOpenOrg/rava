@@ -280,3 +280,346 @@ status = "fixed"
 diagnose = "--flow-batch 1 --hash-seed 7 复现，查常量格中只升不降的形参常量来源"
 doc = "docs/tasks.md 现状节 fix-1011 第四根因"
 since = "2026-10-10"
+
+# ══ 历史补登（2026-09-16 起，failure-history 2026-10-10 按提交根因与分诊文档回溯） ══════════════
+# 只登记根因与修复提交都已核实的原因；集群日志里真实出现过的稳定子串才写进 match，否则留空。
+
+# ── 历史补登：运行期（存根 / native / 违约 panic） ─────────────────────────────
+
+[[pattern]]
+id = "l3-dispatch-serial-callback"
+stage = "run"
+symptom = "序列化回调经 L3 反射分派命中存根（ArrayList.writeObject / <alloc> 分派闭包缺席）"
+match = [["stub: L3 反射分派未覆盖 java/util/ArrayList.writeObject"], ["stub: L3 反射分派未覆盖 java/util/ArrayList.<alloc>"]]
+tests = ["StockTrans", "TestSerialDefaultSuid", "TestSerialProxyForm"]
+cause = "ObjectStreamClass.getPrivateMethod(cl, \"writeObject\", ..) 的 cl 来自 obj.getClass() 而非类常量，按名方法查找的事实只认常量所指类，序列化钩子不入 L3 分派闭包；c1d-t2 改为类未知、名与形参已知的查找按已实例化且声明该方法的类计入"
+introduced = ""
+fixed = ["35c5f0ee"]
+status = "fixed"
+diagnose = "rava closure --why <回调所在类>；查按名查方法站点的类实参来源是否为 getClass() 一类非常量"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.5"
+since = "2026-10-10"
+
+[[pattern]]
+id = "unsafe-rmw-renamed-field"
+stage = "run"
+symptom = "Unsafe / VarHandle 引用族读-改-写 panic（unsafe__impl.rs：无实例引用字段臂）"
+match = [["引用族读-改-写"]]
+tests = ["TestSocketErrorPaths", "TestSocketLoopbackPair"]
+cause = "Unsafe 偏移登记表记 Java 字段名，对象 by-name 协议按 Rust 字段名生成臂；字段名为 Rust 关键字（Socket.in → in_）、含 $ 或遮蔽祖先同名字段时落空"
+introduced = ""
+fixed = ["f66e9c40"]
+status = "fixed"
+diagnose = "看 panic 消息里的 offset 对应字段（Java 名 / Rust 名是否不同）；查生成的 #[field_slots] 是否含该字段"
+doc = "docs/plans/2026-10-03-jndi-transpile-perf.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "by-name-site-unsure-drops-known"
+stage = "run"
+symptom = "XML 工厂缺省实现类找不到（FactoryConfigurationError: Provider …Impl not found）"
+match = [["DocumentBuilderFactoryImpl not found"], ["FactoryConfigurationError"]]
+tests = ["TestDomBuildTree", "TestSaxLocatorAttributes", "TestSaxNamespaceCallbacks", "TestXmlDomParse",
+         "TestXmlFactoryConfigs", "TestXmlXPath", "TestXmlStax", "TestXmlSaxEvents"]
+cause = "FactoryFinder 按名取类站点的名字含推不出的支（系统属性 / 服务文件读出）时整个站点作废，缺省实现类的常量名也不放行，工厂实现类不入闭包"
+introduced = ""
+fixed = ["a5de7eee"]
+status = "fixed"
+diagnose = "rava closure --why <实现类>；看按名取类站点的名字值集是否含已知常量与推不出的支"
+doc = "docs/plans/2026-10-07-c4-run-failures.md 一"
+since = "2026-10-10"
+
+[[pattern]]
+id = "beans-editor-ctor-lookup-incomplete"
+stage = "run"
+symptom = "PropertyEditorManager.findEditor 对基本类型返回 null，随后 NPE"
+match = []
+tests = ["TestBeansPropertyEditor"]
+cause = "预置编辑器镜像与按名取类结果在 InstanceFinder.instantiate 同一上下文合流，Class.newInstance 接收者值集不齐全，构造器查找不点名编辑器类，编辑器从未实例化"
+introduced = ""
+fixed = ["3005a63d", "ff651aca", "f123b89c"]
+status = "fixed"
+diagnose = "--flows 看 Class.newInstance 接收者值集是否含 open(Class)；查 constructor_lookups 是否点名目标类"
+doc = "docs/plans/2026-10-07-c4-run-failures.md 二"
+since = "2026-10-10"
+
+[[pattern]]
+id = "iface-local-subinterface-carrier"
+stage = "run"
+symptom = "接口声明局部再赋值后接口派发落空：AbstractMethodError: java/util/Set.iterator（接收者实为 ArrayList）"
+match = [["AbstractMethodError: java/util/Set.iterator"]]
+tests = ["TestPropertiesXmlRoundTrip"]
+cause = "Properties.store0 的 entries 声明为 Collection、首值为子接口 Set、后值为 ArrayList；「再赋值接口声明局部取载体」规则跳过接口首值，按 Set 定型，ArrayList 被包成 Set 视图"
+introduced = ""
+fixed = ["a927148c"]
+status = "fixed"
+diagnose = "看失败方法里该局部的 LVT 声明类型与各次存储的值类型；查 sim/src/store/align.rs 的载体选择"
+doc = "docs/plans/2026-10-07-c4-run-failures.md 一"
+since = "2026-10-10"
+
+[[pattern]]
+id = "iface-local-narrowed-to-first-class"
+stage = "run"
+symptom = "ClassCastException: java/util/ArrayList$SubList cannot be cast to java/util/ArrayList"
+match = [["ArrayList$SubList cannot be cast to java/util/ArrayList"]]
+tests = ["SequenceGenerator"]
+cause = "接口声明的局部（List s = new ArrayList; s = s.subList(..)）被收窄为首值具体类 ArrayList，再赋值经 Object 边界按 ArrayList 重建"
+introduced = ""
+fixed = ["1d96b97f"]
+status = "fixed"
+diagnose = "看局部在 LVT 区间内是否有多次引用存储；生成的声明类型是否为首值具体类"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.3"
+since = "2026-10-10"
+
+[[pattern]]
+id = "jla-unregistered-before-arrays-support"
+stage = "run"
+symptom = "UTF16 字符串 hashCode NPE（CJK 键放入 HashMap / Properties 即失败）"
+match = []
+tests = ["TestStringHashUtf16", "TestPropertiesXmlRoundTrip"]
+cause = "initPhase1 属性表段放字符串键触发 ArraysSupport.<clinit>，此时 JavaLangAccess 尚未登记，JLA 永久缓存 null，utf16hashCode 经 JLA.getUTF16Char NPE；C1d 删除 vectorizedHashCode 手写后暴露"
+introduced = "C1d 删除 ArraysSupport.vectorizedHashCode 手写（暴露）"
+fixed = ["1b096880"]
+status = "fixed"
+diagnose = "看 NPE 是否只在含非 Latin1 字符的字符串上出现；查 SharedSecrets 登记先于哪些 <clinit>"
+doc = "docs/plans/2026-10-07-c4-run-failures.md 一"
+since = "2026-10-10"
+
+[[pattern]]
+id = "module-unnamed-handwritten"
+stage = "output"
+symptom = "java.base 类落在无名模块：jbase-named=false、setAccessible 不抛 InaccessibleObjectException、ModuleLayer 定义 NPE"
+match = [["+jbase-named=false"], ["+jdk-open=unexpected"]]
+tests = ["TestClassModuleFace", "TestSetAccessibleBoundary", "TestModuleLayerDefine"]
+cause = "Module / ModuleLayer / Class.getModule 手写近似，JDK 类全落无名模块单例（isNamed 恒 false），checkCanSetAccessible 见未命名即放行；引导映像第 4 步改回字节码、VM 模块表以映像为初值"
+introduced = ""
+fixed = ["e50d4ba3", "fcc54fb8"]
+status = "fixed"
+diagnose = "看 Class.getModule().isNamed() 与 ModuleLayer.boot() 是否为空层；查 Module 相关方法是否仍有手写体"
+doc = "docs/plans/2026-10-05-boot-image-evaluator.md §5.5.6"
+since = "2026-10-10"
+
+[[pattern]]
+id = "module-nested-clinit-carried-stub"
+stage = "run"
+symptom = "stub: java/lang/Module$ReflectionData.exports / reads（静态字段访问器为存根）"
+match = [["stub: java/lang/Module$ReflectionData."]]
+tests = ["TestBootLayer", "TestClassModuleFace", "TestModuleLayerDefine"]
+cause = "Module 嵌套类 Module$ReflectionData 随外层归入 clinit_carried，<clinit> 不翻译、静态访问器生成为存根；Module 移出 VM 边界时嵌套类一并按字节码翻译"
+introduced = "e50d4ba3（模块类回到字节码后暴露）"
+fixed = ["fcc54fb8"]
+status = "fixed"
+diagnose = "查存根所在类是否为 vm_boundary / clinit_carried 类的嵌套类"
+doc = "docs/plans/2026-10-05-boot-image-evaluator.md §5.5.6"
+since = "2026-10-10"
+
+[[pattern]]
+id = "boot-package-location-native"
+stage = "run"
+symptom = "native: jdk/internal/loader/BootLoader.getSystemPackageLocation（getPackage / getProtectionDomain 路径）"
+match = [["native: jdk/internal/loader/BootLoader.getSystemPackageLocation"]]
+tests = ["TestProtectionDomainFaces", "TestStringGetCharsLegacy"]
+cause = "a3-L1 BootLoader 回到字节码后新增的 native 未实现；只补 native 不够，PackageHelper.findModule 还要在 boot layer 找到命名模块，须随命名 java.base / 非空 boot layer 一并落地"
+introduced = ""
+fixed = ["44be328e", "e50d4ba3"]
+status = "fixed"
+diagnose = "看调用链是否经 BootLoader.getDefinedPackage；确认 VM 模块表含 location"
+doc = "docs/plans/2026-10-07-c4-misc-failures.md 四"
+since = "2026-10-10"
+
+[[pattern]]
+id = "boot-layer-services-catalog-null"
+stage = "run"
+symptom = "Console.<clinit> 抛 ExceptionInInitializerError（ModuleLayer.getServicesCatalog NPE）"
+match = []
+tests = ["CheckOutputDeviceIsATerminal"]
+cause = "C1d 删除 System$2.getServicesCatalog 手写覆盖后按字节码走 ModuleLayer.getServicesCatalog，手写 boot layer 的 servicesCatalog 为 null（HotSpot 在 initPhase2 注入的 VM 状态未落地）"
+introduced = "1e623cec（C1d 删除过渡手写，暴露）"
+fixed = ["24c45c0a"]
+status = "fixed"
+diagnose = "看 EIIE 的 Caused by 栈是否经 ServiceLoader.load(ModuleLayer.boot(), ..)；查 vm_intrinsics.toml [vm_state.field_hooks]"
+doc = "docs/plans/2026-10-07-c4-misc-failures.md 七"
+since = "2026-10-10"
+
+[[pattern]]
+id = "iface-carrier-null-receiver"
+stage = "run"
+symptom = "null 接收者上的接口调用报 AbstractMethodError（receiver: null）而非 NullPointerException"
+match = [["AbstractMethodError: ", "(receiver: null)"]]
+tests = ["TestInstanceofElseDispatch"]
+cause = "invokeinterface 落到接口载体方法后载体不判 null 直接查 vtable，未命中即 panic AbstractMethodError；JVM 语义为先抛 NPE。注意：接收者为何为 null 常另有原因（见 inetaddress-clinit-vm-boundary 等）"
+introduced = ""
+fixed = ["b4669206"]
+status = "fixed"
+diagnose = "先判断接收者本应为 null（则是本条）还是不应为 null（静态字段未初始化 / 折叠，另查根因）"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "inetaddress-clinit-vm-boundary"
+stage = "run"
+symptom = "InetAddress.getLoopbackAddress 处 impl 为 null（AbstractMethodError: java/net/InetAddressImpl.loopbackAddress，receiver: null / main 线程 NPE）"
+match = [["AbstractMethodError: java/net/InetAddressImpl.loopbackAddress"]]
+tests = ["TestSocketLoopbackPair", "TestHttpLoopbackSync"]
+cause = "InetAddress 列在 [vm_boundary] 与 clinit_carried，<clinit> 不翻译，静态 impl 为 null；整类改为字节码翻译"
+introduced = ""
+fixed = ["88971251"]
+status = "fixed"
+diagnose = "查为 null 的静态字段所属类是否在 vm_boundary / clinit_carried 中"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "native-builtin-lib-missing"
+stage = "run"
+symptom = "native: jdk/internal/loader/NativeLibraries.findBuiltinLib"
+match = [["native: jdk/internal/loader/NativeLibraries.findBuiltinLib"]]
+tests = ["TestSocketErrorPaths", "TestSocketLoopbackPair"]
+cause = "NativeLibraries 的 native 未实现；按 JDK 语义认内建库（返回库名否则 null），load 登记进程句柄与 JNI 1.8"
+introduced = ""
+fixed = ["ea33ff1e"]
+status = "fixed"
+diagnose = "按 native 描述符补共置手写"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "native-varhandle-bitwise-missing"
+stage = "run"
+symptom = "native: java/lang/invoke/VarHandle.getAndBitwiseOr 等签名多态方法未实现"
+match = [["native: java/lang/invoke/VarHandle.getAndBitwise"]]
+tests = ["TestSocketErrorPaths", "TestSocketLoopbackPair"]
+cause = "var_handle_impl.rs 只实现了 get / set / CAS / getAndSet / getAndAdd 族，getAndBitwiseOr/And/Xor 九个方法缺失"
+introduced = ""
+fixed = ["2f8ec056"]
+status = "fixed"
+diagnose = "看命中的 VarHandle 访问模式是否在 var_handle_impl.rs 中有实现"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "truncated-body-same-class-callee-stub"
+stage = "run"
+symptom = "stub: jdk/internal/misc/Unsafe.bool2byte（截断体内同类被调方为存根）"
+match = [["stub: jdk/internal/misc/Unsafe.bool2byte"]]
+tests = ["TestMethodHandleDirect", "TestReflectStaticFieldInit"]
+cause = "截断体运行期照字节码执行，但其同类截断被调方只在另有路径时入闭包，否则发射为存根（Unsafe.compareAndSetBoolean → bool2byte）"
+introduced = ""
+fixed = ["2d15a07d"]
+status = "fixed"
+diagnose = "查存根方法的调用者是否为边界类上无手写承载的截断体"
+doc = "docs/plans/2026-10-02-c1d-reflect-narrow.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "carrier-thread-local-stub"
+stage = "run"
+symptom = "stub: jdk/internal/misc/CarrierThreadLocal.<init>（NativeBuffers 经 toRealPath 入链）"
+match = [["stub: jdk/internal/misc/CarrierThreadLocal.<init>"]]
+tests = ["TestUnixFileNatives"]
+cause = "CarrierThreadLocal / TerminatingThreadLocal 在边界域包内未放行，<init> 为存根；closure 放行后按字节码翻译"
+introduced = ""
+fixed = ["c13e702c"]
+status = "fixed"
+diagnose = "查存根类是否被边界域截断；rava closure --why 看入链路径"
+doc = "docs/plans/2026-10-02-native-gaps.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-free-fn-return-type-lost"
+stage = "run"
+symptom = "stub: java/lang/Thread.setContextClassLoader（initPhase3 回调丢失）"
+match = [["stub: java/lang/Thread.setContextClassLoader"]]
+tests = ["ThreadTest", "TestParallelCapable"]
+cause = "手写扫描对 super::x_impl::f() / crate::m::f() 等模块路径自由 fn 调用不给静态类型，其返回值上的 Java 方法调用（__vm_initial_thread()?.setContextClassLoader）丢回调；01572ce6 收窄加载器链后不再有字节码路径兜底"
+introduced = "01572ce6（加载器链收窄后暴露）"
+fixed = ["95fb7320"]
+status = "fixed"
+diagnose = "查存根方法是否只由手写体调用；看手写扫描对该调用表达式是否给出接收者类型"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-class-init-not-modeled"
+stage = "run"
+symptom = "AbstractMethodError: jdk/internal/access/JavaLangInvokeAccess.newMemberName（receiver: null，无实现者）"
+match = [["AbstractMethodError: jdk/internal/access/JavaLangInvokeAccess.newMemberName"]]
+tests = ["TestStackWalkerFrames"]
+cause = "手写体里的 T::__class_init() 未被分析器建模为类初始化，MethodHandleImpl.<clinit> 登记的 MethodHandleImpl$1 不入闭包，SharedSecrets 的 JLIA 无实现者"
+introduced = ""
+fixed = ["5bcc93ae"]
+status = "fixed"
+diagnose = "看 SharedSecrets 访问接口的实现类由哪个 <clinit> 登记、该 <clinit> 是否只经手写体触发"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "class-holder-truncated"
+stage = "run"
+symptom = "stub: java/lang/Class$Holder.allPermDomain（getProtectionDomain 回落值为存根）"
+match = [["stub: java/lang/Class$Holder.allPermDomain"]]
+tests = ["TestProtectionDomainFaces"]
+cause = "Class$Holder 是纯 Java 静态状态，随外层 VM 边界类 Class 截断为存根；入 translate_nested 按字节码翻译"
+introduced = ""
+fixed = ["c97ceed1"]
+status = "fixed"
+diagnose = "查存根类是否为 vm_boundary 类的嵌套类"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（ProtectionDomainFaces 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "field-handle-cut-param-null-recv"
+stage = "run"
+symptom = "null_recv 违约：java/lang/Class.getName 的接收者非 null（field_accessor_impl，Field.get/set 异常路径）"
+match = [["null_recv 违约：java/lang/Class.getName", "field_accessor_impl"]]
+tests = ["TestFieldReflectAll"]
+cause = "Field.get/set 按调用点建模时对象实参 / 写入值不流入被调方形参，被调方字节码运行期照常使用这些形参（throwFinalFieldIllegalAccessException 的 value.getClass()），空值集被判 null_recv"
+introduced = ""
+fixed = ["87c24dea"]
+status = "fixed"
+diagnose = "看 null_recv 的接收者是否为按调用点建模而切断流入的形参"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "module-descriptor-image-container-fields"
+stage = "run"
+symptom = "stub: java/lang/module/ModuleDescriptor.provides（引导层服务目录漏服务）"
+match = [["stub: java/lang/module/ModuleDescriptor.provides"]]
+tests = ["HelloWorld", "CollectorsDemo", "FieldDemo", "ReflectionAPI", "ReflectionBasic"]
+cause = "映像对象不经字节码写入，按对象读只得初值（size 0 / table null），引导层 HashMap 迭代被折成不可达，ModuleLayer.getServicesCatalog 漏服务；映像容器对象的字段值改记入按对象值表"
+introduced = ""
+fixed = ["6db384e8"]
+status = "fixed"
+diagnose = "查存根所在读取路径是否遍历引导映像中的容器对象"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "lambda-vtable-default-not-maximal"
+stage = "run"
+symptom = "stub: java/util/regex/Pattern$CharPredicate.union（lambda 对象调用超接口 default 落到存根）"
+match = [["stub: java/util/regex/Pattern$CharPredicate.union"]]
+tests = ["ABCProblem"]
+cause = "lambda 合成对象各接口 vtable 的 default 条目取了超接口上的声明，而非闭包上的极大声明（JVMS §5.4.6）"
+introduced = ""
+fixed = ["958251ab"]
+status = "fixed"
+diagnose = "看存根方法是否为某函数式接口的 default 方法、lambda 实现的是其子接口"
+doc = "docs/plans/2026-10-06-c4-preflight.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "transitional-handwritten-missing-method"
+stage = "run"
+symptom = "过渡手写类未实现的方法命中存根（JavaLangAccess.registerShutdownHook 等）"
+match = [["stub: jdk/internal/access/JavaLangAccess.registerShutdownHook"], ["stub: jdk/internal/access/JavaLangAccess.getCarrierThreadLocal"],
+         ["stub: sun/nio/cs/StreamDecoder"]]
+tests = ["TestRandomAccessFile", "TestCharsetNamedStreams", "TestUnixFileNatives"]
+cause = "java_lang_access_impl.rs（SystemJavaLangAccess）/ stream_decoder_impl.rs 等过渡整类手写只实现部分方法，接口派发落存根；C1d 终态删除过渡手写、JavaLangAccess 实现取自 System$2 字节码"
+introduced = ""
+fixed = ["1e623cec"]
+status = "fixed"
+diagnose = "查存根方法所在类是否仍有整类手写；按手写边界规范改走字节码"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.5"
+since = "2026-10-10"
