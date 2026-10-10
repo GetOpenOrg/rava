@@ -9,7 +9,7 @@
 //! | `__Shared<T>` | `Arc<T>` |
 //! | `__PrimCell<T>` | 原子单元（SeqCst，64 位位形；long/double 无撕裂） |
 //! | `__RefSlot<T>` | 读写锁（`borrow` = 可重入读、`borrow_mut` = 写） |
-//! | `__RefField<T>` | 引用字段内联单元：字节自旋锁 + 值（临界区只做克隆 / 交换） |
+//! | `__RefField<T>` | 引用字段内联单元：字节自旋锁 + 值（临界区只做克隆 / 交换；普通族 Acquire / Release，volatile 族 SeqCst） |
 //! | `__process_static!` | 全局 `OnceLock` 单元 |
 //! | `__ThreadSafe` | `Send + Sync` |
 //! | `__DynFn!` | `dyn Fn(..) -> R + Send + Sync` |
@@ -44,24 +44,11 @@ pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot, __SlotRead, 
 
 /// 持锁登记（无 GC 文档第四节小步 A）：当前线程持有的字段锁——`__RefField::with` / `with_mut` 的
 /// 临界区与 `__RefSlot` 的读写守卫——计数，`__RefSlot` 另记槽位地址（自持有检查）。
-/// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。
+/// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。登记存放在
+/// `exec_context` 的持锁登记载体槽（`hold_slot`）：持锁期间不让出，登记与载体绑定。
 mod held {
     #[cfg(debug_assertions)]
-    use std::cell::{Cell, RefCell};
-
-    /// 槽位登记容量：嵌套持有超过此数的槽位不再登记地址（计数照常），只漏检自持有
-    #[cfg(debug_assertions)]
-    const SLOTS: usize = 16;
-
-    /// 一项槽位持有：(槽地址, 是否写锁, 加锁位置)；地址 0 为空位
-    #[cfg(debug_assertions)]
-    type SlotHold = (usize, bool, Option<&'static std::panic::Location<'static>>);
-
-    #[cfg(debug_assertions)]
-    std::thread_local! {
-        static COUNT: Cell<usize> = const { Cell::new(0) };
-        static HELD_SLOTS: RefCell<[SlotHold; SLOTS]> = const { RefCell::new([(0, false, None); SLOTS]) };
-    }
+    use crate::exec_context::hold_slot;
 
     /// 持锁凭据：存活期间计入当前线程的持锁数（随守卫释放，含 panic 展开路径）
     pub(crate) struct Held {
@@ -76,7 +63,7 @@ mod held {
         pub(crate) fn field() -> Held {
             #[cfg(debug_assertions)]
             {
-                let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+                let _ = hold_slot(|h| h.count.set(h.count.get() + 1));
                 Held { slot: 0 }
             }
             #[cfg(not(debug_assertions))]
@@ -91,9 +78,7 @@ mod held {
             #[cfg(debug_assertions)]
             {
                 let here = std::panic::Location::caller();
-                let prior = HELD_SLOTS
-                    .try_with(|s| s.borrow().iter().find(|h| h.0 == addr && (write || h.1)).copied())
-                    .ok()
+                let prior = hold_slot(|h| h.slots.borrow().iter().find(|h| h.0 == addr && (write || h.1)).copied())
                     .flatten();
                 if let Some((_, prior_write, at)) = prior {
                     panic!("字段锁自持有：槽位 {addr:#x} 在 {here} 加{}锁，本线程已于 {} 持有其{}锁",
@@ -127,17 +112,14 @@ mod held {
 
         #[cfg(debug_assertions)]
         fn record(addr: usize, write: bool, at: &'static std::panic::Location<'static>) -> Held {
-            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
-            let slot = HELD_SLOTS
-                .try_with(|s| {
-                    let mut s = s.borrow_mut();
-                    s.iter_mut().find(|h| h.0 == 0).map(|h| {
-                        *h = (addr, write, Some(at));
-                        addr
-                    })
+            let slot = hold_slot(|h| {
+                h.count.set(h.count.get() + 1);
+                h.slots.borrow_mut().iter_mut().find(|h| h.0 == 0).map(|h| {
+                    *h = (addr, write, Some(at));
+                    addr
                 })
-                .ok()
-                .flatten()
+            })
+            .flatten()
                 .unwrap_or(0);
             Held { slot }
         }
@@ -146,23 +128,23 @@ mod held {
     #[cfg(debug_assertions)]
     impl Drop for Held {
         fn drop(&mut self) {
-            let _ = COUNT.try_with(|c| c.set(c.get().saturating_sub(1)));
-            if self.slot != 0 {
-                let slot = self.slot;
-                let _ = HELD_SLOTS.try_with(|s| {
-                    // 同槽多次读持有：去掉任一项即可（登记只用于判定「是否持有」）
-                    if let Some(h) = s.borrow_mut().iter_mut().rev().find(|h| h.0 == slot) {
-                        *h = (0, false, None);
+            let slot = self.slot;
+            let _ = hold_slot(|h| {
+                h.count.set(h.count.get().saturating_sub(1));
+                // 同槽多次读持有：去掉任一项即可（登记只用于判定「是否持有」）
+                if slot != 0 {
+                    if let Some(e) = h.slots.borrow_mut().iter_mut().rev().find(|e| e.0 == slot) {
+                        *e = (0, false, None);
                     }
-                });
-            }
+                }
+            });
         }
     }
 
     /// 当前线程持有的字段锁数（debug 档）
     #[cfg(debug_assertions)]
     pub(crate) fn count() -> usize {
-        COUNT.try_with(Cell::get).unwrap_or(0)
+        hold_slot(|h| h.count.get()).unwrap_or(0)
     }
 }
 
@@ -334,8 +316,15 @@ mod mt {
     /// 引用字段内联单元：字节自旋锁 + 值，与对象存储同一分配（不再每字段一个 `Arc` + 读写锁）。
     ///
     /// 临界区只做值的克隆（引用计数加一）或交换，不执行 Java 代码、不让出，旧值在锁外释放；
-    /// 不对外暴露守卫，同线程不会重入。读写都经获取 / 释放序，引用发布随之携带被引对象的
-    /// 构造写入（final 字段语义）。`const fn new`：静态字段单元可常量初始化。
+    /// 不对外暴露守卫，同线程不会重入。`const fn new`：静态字段单元可常量初始化。
+    ///
+    /// 内存序按访问方式分两族（同一存储，由访问器选择，与 `__PrimCell` 的 `get` / `get_plain` 同构）：
+    /// - 普通族（`get` / `set` / `with` / `with_mut` …）：加锁 CAS 取 Acquire、解锁 store 取 Release。
+    ///   普通引用字段与 `*aload` / `*astore`；引用发布随之携带被引对象的构造写入（final 字段语义）。
+    /// - volatile 族（`*_volatile`）：加锁 CAS 与解锁 store **都取 SeqCst**，每次访问的两条锁字
+    ///   操作都进入 SeqCst 全序 S。volatile 字段（字节码 ACC_VOLATILE，宏按字段属性分流）的
+    ///   getfield / putfield / getstatic / putstatic、Unsafe / VarHandle 的引用读-改-写走这一族。
+    ///   论证见无 GC 文档（docs/plans/2026-10-07-no-gc-memory-model.md）第五节「小步 B」。
     pub struct __RefField<T> {
         locked: AtomicBool,
         val: UnsafeCell<T>,
@@ -345,10 +334,17 @@ mod mt {
     unsafe impl<T: Send> Send for __RefField<T> {}
     unsafe impl<T: Send + Sync> Sync for __RefField<T> {}
 
-    struct FieldGuard<'a>(&'a AtomicBool);
-    impl Drop for FieldGuard<'_> {
+    /// 加锁凭据：`SC` 选解锁 store 的序（SeqCst / Release），与加锁 CAS 的序成对
+    struct FieldGuard<'a, const SC: bool>(&'a AtomicBool);
+    impl<const SC: bool> Drop for FieldGuard<'_, SC> {
         #[inline(always)]
-        fn drop(&mut self) { self.0.store(false, Release) }
+        fn drop(&mut self) { self.0.store(false, if SC { SeqCst } else { Release }) }
+    }
+
+    /// 加锁 CAS 成功序：volatile 族 SeqCst，普通族 Acquire（失败序恒 Relaxed：失败不建立任何序）
+    #[inline(always)]
+    const fn lock_order(sc: bool) -> std::sync::atomic::Ordering {
+        if sc { SeqCst } else { Acquire }
     }
 
     impl<T> __RefField<T> {
@@ -356,16 +352,16 @@ mod mt {
         pub const fn new(v: T) -> Self { __RefField { locked: AtomicBool::new(false), val: UnsafeCell::new(v) } }
 
         #[inline(always)]
-        fn lock(&self) -> FieldGuard<'_> {
-            if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_err() {
-                self.lock_slow();
+        fn lock<const SC: bool>(&self) -> FieldGuard<'_, SC> {
+            if self.locked.compare_exchange_weak(false, true, lock_order(SC), Relaxed).is_err() {
+                self.lock_slow::<SC>();
             }
             FieldGuard(&self.locked)
         }
 
         #[cold]
         #[inline(never)]
-        fn lock_slow(&self) {
+        fn lock_slow<const SC: bool>(&self) {
             let mut spins = 0u32;
             loop {
                 while self.locked.load(Relaxed) {
@@ -376,7 +372,7 @@ mod mt {
                         std::thread::yield_now();
                     }
                 }
-                if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() {
+                if self.locked.compare_exchange_weak(false, true, lock_order(SC), Relaxed).is_ok() {
                     return;
                 }
             }
@@ -385,7 +381,7 @@ mod mt {
         /// 锁内只读访问值（`f` 不得访问同一单元、不得执行 Java 代码）。
         #[inline]
         pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-            let _g = self.lock();
+            let _g = self.lock::<false>();
             let _held = Held::field();
             // SAFETY: 持锁独占
             f(unsafe { &*self.val.get() })
@@ -395,19 +391,43 @@ mod mt {
         /// 放锁后再释放：锁内释放对象会重入任意析构链（debug 档 `drop_slow` 断言）。
         #[inline]
         pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-            let _g = self.lock();
+            self.with_mut_ordered::<false, R>(f)
+        }
+
+        /// `with_mut` 的 volatile 族（加锁 / 解锁都 SeqCst）：Unsafe / VarHandle 的引用读-改-写
+        /// （compareAndSet / compareAndExchange / getAndSet，volatile 访问模式）。
+        #[inline]
+        pub fn with_mut_volatile<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            self.with_mut_ordered::<true, R>(f)
+        }
+
+        #[inline(always)]
+        fn with_mut_ordered<const SC: bool, R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            let _g = self.lock::<SC>();
             let _held = Held::field();
             // SAFETY: 持锁独占
             f(unsafe { &mut *self.val.get() })
+        }
+
+        /// 锁内克隆（`SC` 选加锁 / 解锁的序）
+        #[inline(always)]
+        fn get_ordered<const SC: bool>(&self) -> T where T: Clone {
+            let _g = self.lock::<SC>();
+            // SAFETY: 持锁独占
+            unsafe { (*self.val.get()).clone() }
         }
 
         /// 读：锁内克隆。不经 `with` 的闭包：读路径（静态 / 实例引用字段 getter、引用数组元素）
         /// 标 `#[inline(always)]`，opt-level 0 的调用方 crate 里只剩加锁 CAS、克隆与解锁。
         #[inline(always)]
         pub fn get(&self) -> T where T: Clone {
-            let _g = self.lock();
-            // SAFETY: 持锁独占
-            unsafe { (*self.val.get()).clone() }
+            self.get_ordered::<false>()
+        }
+
+        /// volatile 读（加锁 / 解锁都 SeqCst）
+        #[inline(always)]
+        pub fn get_volatile(&self) -> T where T: Clone {
+            self.get_ordered::<true>()
         }
 
         /// 写：锁内交换，旧值在锁外释放。
@@ -416,9 +436,20 @@ mod mt {
             drop(self.replace(v));
         }
 
+        /// volatile 写（加锁 / 解锁都 SeqCst），旧值在锁外释放。
+        #[inline]
+        pub fn set_volatile(&self, v: T) {
+            drop(self.replace_volatile(v));
+        }
+
         #[inline]
         pub fn replace(&self, v: T) -> T {
             self.with_mut(|cur| std::mem::replace(cur, v))
+        }
+
+        #[inline]
+        pub fn replace_volatile(&self, v: T) -> T {
+            self.with_mut_volatile(|cur| std::mem::replace(cur, v))
         }
 
         #[inline]
@@ -437,8 +468,19 @@ mod mt {
         /// 引用字段读（存储 `None` = 从未写入，按声明类型的缺省值应答）。
         #[inline(always)]
         pub fn get_or_default(&self) -> T where T: Clone + Default {
+            self.get_or_default_ordered::<false>()
+        }
+
+        /// volatile 引用字段读（加锁 / 解锁都 SeqCst）。
+        #[inline(always)]
+        pub fn get_or_default_volatile(&self) -> T where T: Clone + Default {
+            self.get_or_default_ordered::<true>()
+        }
+
+        #[inline(always)]
+        fn get_or_default_ordered<const SC: bool>(&self) -> T where T: Clone + Default {
             let v = {
-                let _g = self.lock();
+                let _g = self.lock::<SC>();
                 // SAFETY: 持锁独占
                 match unsafe { &*self.val.get() } {
                     Some(v) => Some(v.clone()),

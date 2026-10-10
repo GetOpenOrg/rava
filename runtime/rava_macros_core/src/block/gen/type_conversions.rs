@@ -213,11 +213,14 @@ fn field_descs(ctx: &GenContext) -> Vec<TokenStream2> {
         let java = ctx.meta.field_slots.iter()
             .find(|(decl, _, r)| decl == binary_name && *r == rust)
             .map_or(rust.as_str(), |(_, java, _)| java.as_str());
+        // 引用字段的单元协议按 volatile 修饰取序（`of_ref_volatile`：Unsafe / VarHandle 按名读写
+        // 与字段访问器同为 SeqCst 族，无 GC 文档第四节小步 B）
+        let of_ref = if ctx.is_volatile(name) { format_ident!("of_ref_volatile") } else { format_ident!("of_ref") };
         if ctx.is_erased(name) {
-            return quote! { __FieldDesc::of_ref::<Object>(#java, #rust) };
+            return quote! { __FieldDesc::#of_ref::<Object>(#java, #rust) };
         }
         if !is_basic(ty) {
-            return quote! { __FieldDesc::of_ref::<#ty>(#java, #rust) };
+            return quote! { __FieldDesc::#of_ref::<#ty>(#java, #rust) };
         }
         let k = match quote!(#ty).to_string().as_str() {
             "bool" => "Bool",

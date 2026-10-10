@@ -142,20 +142,28 @@ pub(crate) fn expand_statics(
         let (raw_get, raw_set) = (raw_getter(name), raw_setter(name));
         // 无锁静态单元（R1 Q1(a)）：常量初始化的普通 `static`，不经 `OnceLock`。
         // 基本类型为原子单元（普通字段 relaxed、volatile 为 SeqCst）；引用类型为内联自旋单元
-        // （读写经获取 / 释放序）。`<clinit>` 写入与读者之间的 happens-before 由初始化状态的
+        // （普通字段加锁 / 解锁取获取 / 释放序，volatile 字段两者都取 SeqCst——无 GC 文档
+        // 第四节小步 B）。按字段属性的 volatile 修饰（字节码 ACC_VOLATILE）分流，存储同一。
+        // `<clinit>` 写入与读者之间的 happens-before 由初始化状态的
         // 发布（`clinit_exit`）/ 观察（`__class_init` 快路径）给出（JLS §12.4.2）
+        let volatile = java_field_is_volatile(&st.attrs);
         let (cell_ty, load, store) = if is_atomic_prim(ty) {
-            let (load, store) = if java_field_is_volatile(&st.attrs) {
+            let (load, store) = if volatile {
                 (quote! { #cell.get() }, quote! { #cell.set(v) })
             } else {
                 (quote! { #cell.get_plain() }, quote! { #cell.set_plain(v) })
             };
             (quote! { __PrimCell<#ty> = __PrimCell::zeroed() }, load, store)
         } else {
+            let (load, store) = if volatile {
+                (quote! { #cell.get_or_default_volatile() }, quote! { #cell.set_volatile(::std::option::Option::Some(v)) })
+            } else {
+                (quote! { #cell.get_or_default() }, quote! { #cell.set(::std::option::Option::Some(v)) })
+            };
             (
                 quote! { __RefField<::std::option::Option<#ty>> = __RefField::new(::std::option::Option::None) },
-                quote! { #cell.get_or_default() },
-                quote! { #cell.set(::std::option::Option::Some(v)) },
+                load,
+                store,
             )
         };
         match &image_sym {

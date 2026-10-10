@@ -86,13 +86,6 @@ note = "`.class` 资源未内嵌：base.getResourceAsStream(\"java/lang/Object.c
 
 # ── C4 全量第一轮（dev，c249cdec → 583edccd 续跑）失败复跑后仍失败、此前未登记（10-10）──
 [[known]]
-test = "TestThreadNatives"
-signature = "安全点时持有 1 把字段锁"
-owner = "并发小步 B（conc-step-b，无 GC 文档 §四）"
-since = "2026-10-10"
-note = "debug 档 sync_model 持锁检查（小步 A 78d2b9c6 引入）在安全点发现 __RefField 临界区 / __RefSlot 守卫未释放，panic 于 java/lang/thread.rs"
-
-[[known]]
 test = "TestUrlParsingFaces"
 signature = "java.net.MalformedURLException: unknown protocol: https"
 owner = "c4-url（URL 协议处理器补种）"
