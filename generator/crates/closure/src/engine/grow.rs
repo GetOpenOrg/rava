@@ -39,13 +39,12 @@ impl<'a> Engine<'a> {
 
     /// open 展开的取值面扩大（G 增长 / 数组逃逸）：x 落在其 open 类型与接收者上界之下的方法与站点重跑
     pub(super) fn reopen(&mut self, x: u32) {
-        self.g_log.push(x);
         self.mirror_reopen(x);
         if self.cuts.no_reopen {
             return;
         }
         let keys: Vec<(u32, u32)> =
-            self.open_methods.keys().chain(self.open_sites.keys()).chain(self.open_calls.keys()).copied().collect();
+            self.open_methods.keys().chain(self.open_sites.keys()).copied().collect();
         let hit: HashSet<(u32, u32)> = keys.into_iter().filter(|&(o, owner)| self.sub(x, o) && self.sub(x, owner)).collect();
         let mut open: BTreeSet<usize> = BTreeSet::new();
         let mut sites: BTreeSet<(usize, u32)> = BTreeSet::new();
@@ -57,17 +56,6 @@ impl<'a> Engine<'a> {
         for (k, ws) in &self.open_sites {
             if hit.contains(k) {
                 sites.extend(ws.iter().copied());
-            }
-        }
-        let mut calls: BTreeSet<u32> = BTreeSet::new();
-        for (k, cs) in &self.open_calls {
-            if hit.contains(k) {
-                calls.extend(cs.iter().copied());
-            }
-        }
-        for c in calls {
-            if self.in_cwork.insert(c) {
-                self.cwork.push_back(c);
             }
         }
         for m in open {

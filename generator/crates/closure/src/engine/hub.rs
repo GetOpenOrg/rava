@@ -130,6 +130,8 @@ impl<'a> Engine<'a> {
                         self.edge(m, off, t, Recv::Exact(r), a, ret, res);
                     }
                 }
+            } else {
+                self.link_more(h, m, off, a);
             }
             return;
         }
@@ -198,6 +200,48 @@ impl<'a> Engine<'a> {
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
         self.prof_seg(site_prof::SEG_LINK_EXPAND);
         self.hub_expand(h);
+    }
+
+    /// 同一调用点以另一组实参再接入（同一调用点上不同方法引用 lambda 的转发调用，捕获拼接后实参不同）：
+    /// 接入记录的实参并为两组之并，新增部分汇入 `HP`；逐调用点派发的接收者与按调用点建模的目标以并后的实参重接
+    fn link_more(&mut self, h: u32, m: usize, off: u32, a: &Args) {
+        let Some(l) = self.hubs[h as usize].links.get(&(m, off)).cloned() else { return };
+        let merged: Args = l
+            .a
+            .iter()
+            .zip(a.iter())
+            .map(|(x, y)| match (x, y) {
+                (Some(x), Some(y)) => {
+                    let mut v = x.clone();
+                    v.extend(y.iter().filter(|f| !x.contains(f)).cloned());
+                    Some(v)
+                }
+                (x, y) => x.clone().or_else(|| y.clone()),
+            })
+            .collect();
+        if merged == l.a {
+            return;
+        }
+        let ptypes = self.hubs[h as usize].ptypes.clone();
+        for (j, f) in a.iter().enumerate() {
+            if let (Some(fs), Some(Some(pt))) = (f, ptypes.get(j)) {
+                self.feed(fs, Node::HP(h, j as u16), *pt);
+            }
+        }
+        let hub = &mut self.hubs[h as usize];
+        hub.links.insert((m, off), Rc::new(Link { id: l.id, a: merged.clone(), res: l.res, cv: l.cv.clone() }));
+        let (site, lambdas, special, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone(), hub.ret);
+        let saved = std::mem::replace(&mut self.call_vals, l.cv.clone());
+        for &r in lambdas.iter() {
+            self.lprof_replay(h, false);
+            self.dispatch_one(m, off, r, &site, &merged, ret, l.res, NOCTX);
+        }
+        for (t, rs) in special {
+            for &r in rs.iter() {
+                self.edge(m, off, t, Recv::Exact(r), &merged, ret, l.res);
+            }
+        }
+        self.call_vals = saved;
     }
 
     /// 枢纽 h 的祖先中调用点 (m, off) 已接入的最近者

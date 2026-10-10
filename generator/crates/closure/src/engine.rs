@@ -459,12 +459,9 @@ pub struct Engine<'a> {
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
-    /// open 展开取值面的增长记录（G 新成员 / 新逃逸的数组分配点，按到达顺序，只增不减）：
-    /// lambda 调用读者按其位置标记只展开已有 open 类型的增量（`lambda.rs::lambda_dispatch`）
-    g_log: Vec<u32>,
     /// 正在读值集的 lambda 调用（优先于 `cur_site` 登记为读者）
     cur_call: Option<u32>,
-    /// 类型集节点 → 读它的 lambda 调用；open 展开过的 lambda 调用，按 (open 类型, 接收者上界) 索引
+    /// 类型集节点 → 读它的 lambda 调用
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
@@ -490,7 +487,6 @@ pub struct Engine<'a> {
     site_cands: HashMap<MemberRef, Rc<[u32]>>,
     /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
     shared: HashMap<MemberRef, Vec<share::Shared>>,
-    open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,
     /// 手写方法调用点（调用方, 偏移, 被调方法）→ 序号；数组写入按调用点建模

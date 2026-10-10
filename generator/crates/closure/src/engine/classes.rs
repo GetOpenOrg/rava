@@ -191,14 +191,11 @@ impl<'a> Engine<'a> {
         let mut out = IdSet::from_sorted(exact);
         {
             for o in s.open.iter() {
-                match (self.cur_call, self.cur_site) {
-                    (Some(c), _) => {
-                        self.open_calls.entry((o, owner)).or_default().insert(c);
-                    }
-                    (None, Some(w)) => {
+                match self.cur_site {
+                    Some(w) => {
                         self.open_sites.entry((o, owner)).or_default().insert(w);
                     }
-                    (None, None) => {
+                    None => {
                         self.open_methods.entry((o, owner)).or_default().insert(m);
                     }
                 }
@@ -215,28 +212,6 @@ impl<'a> Engine<'a> {
             }
         }
         out.iter().collect()
-    }
-
-    /// 已展开过的 open 类型 opens 在 `g_log[mark..]` 上的增量接收者（与 [`Self::receivers`] 同口径筛选），
-    /// 并入 out（升序、去重）
-    pub(super) fn receivers_since(&mut self, opens: &IdSet, owner: u32, mark: usize, out: Vec<u32>) -> Vec<u32> {
-        if opens.is_empty() || self.cuts.no_open_recv || mark >= self.g_log.len() {
-            return out;
-        }
-        let mut set = IdSet::from_sorted(out);
-        for i in mark..self.g_log.len() {
-            let x = self.g_log[i];
-            if set.contains(&x) || !self.g.contains(&x) || !self.sub(x, owner) {
-                continue;
-            }
-            if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
-                continue;
-            }
-            if opens.iter().any(|o| self.sub(x, o)) {
-                set.insert(x);
-            }
-        }
-        set.iter().collect()
     }
 
     // ── 类登记 ──────────────────────────────────────────────────────────────

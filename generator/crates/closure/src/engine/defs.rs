@@ -206,8 +206,8 @@ pub(super) struct LCall {
     pub(super) call: LambdaCall,
     /// 已接过的接收值
     pub(super) done: TypeSet,
-    /// `done.open` 已按 G 展开到的 `g_log` 位置（其后的成员是这些 open 类型尚未展开的增量）
-    pub(super) g_mark: usize,
+    /// 方法引用的精确接收者集合（达 `HUB_MIN` 时）当前接入的集合枢纽
+    pub(super) hub: Option<(u32, Rc<[u32]>)>,
     /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
     pub(super) live: bool,
 }

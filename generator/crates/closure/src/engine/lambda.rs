@@ -45,7 +45,7 @@ impl<'a> Engine<'a> {
                 if !c.live {
                     c.live = true;
                     c.done = TypeSet::default();
-                    c.g_mark = 0;
+                    c.hub = None;
                     self.lprof_call(lid, m, off, true);
                     self.lambda_step(m, off, Some(id));
                 }
@@ -55,7 +55,7 @@ impl<'a> Engine<'a> {
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lprof_kind(false, dup);
-            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), g_mark: 0, live: true });
+            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, live: true });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
@@ -64,7 +64,7 @@ impl<'a> Engine<'a> {
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
-        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), g_mark: 0, live: false });
+        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, live: false });
         self.lprof_call(lid, m, off, true);
         self.lprof_kind(true, false);
         self.lambda_step(m, off, None);
@@ -165,19 +165,62 @@ impl<'a> Engine<'a> {
                     }
                     return;
                 }
-                // 新到达的 open 类型按 G 的当前成员整体展开；已展开过的 open 类型只展开其后到达 G 的增量
-                // （G 增长经 open 索引重跑本调用）。读者单元持有的已接接收值与 `g_mark` 一致：
-                // 增量展开与整体展开后经 `dispatched` 去重的派发集合相同
                 let owner = self.id(&k.owner);
-                let mark = std::mem::replace(&mut self.lcalls[at].g_mark, self.g_log.len());
-                let recv = self.receivers(m, &delta, owner);
-                let recv = self.receivers_since(&done.open, owner, mark, recv);
-                self.cur_call = reader;
-                let class = if id.is_none() { 0 } else if done.is_empty() { 1 } else { 2 };
-                self.lprof_recv(lid, &recv, class);
-                for r in recv {
-                    self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
+                if id.is_none() {
+                    // 非字节码调用方的临时调用：按当前值逐接收者完整接边
+                    let recv = self.receivers(m, &cur, owner);
+                    self.cur_call = reader;
+                    self.lprof_recv(lid, &recv, 0);
+                    for r in recv {
+                        self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
+                    }
+                    return;
                 }
+                self.cur_call = reader;
+                self.lambda_virtual(at, m, off, (k, l.imh.interface, owner), &site, via, (&cur, &delta), &rest, res);
+            }
+        }
+    }
+
+    /// 方法引用（虚 / 接口）在调用点上的分派，与字节码虚调用点同口径：精确接收者少量时逐个派发、
+    /// 达 `HUB_MIN` 时经精确集合枢纽，open 部分经 open 枢纽（G 增长在枢纽上增量展开）。
+    /// 调用点接入枢纽一次，此后只由接收值增长驱动换接；不按读者单元逐个展开 open 接收者
+    #[allow(clippy::too_many_arguments)]
+    fn lambda_virtual(&mut self, at: usize, m: usize, off: u32, member: (&MemberRef, bool, u32), site: &resolve::MethodSite, via: Via, vals: (&TypeSet, &TypeSet), rest: &Args, res: Option<Node>) {
+        let (k, iface, owner) = member;
+        let (cur, delta) = vals;
+        let (lid, ret) = (self.lcalls[at].call.0, self.lcalls[at].call.2);
+        let Some(md) = parse_method(&k.desc) else { return };
+        if !delta.classes.is_empty() {
+            let all = TypeSet { classes: cur.classes.clone(), open: IdSet::default() };
+            let recv: Rc<[u32]> = self.receivers(m, &all, owner).into();
+            if recv.len() < HUB_MIN {
+                let fresh = TypeSet { classes: delta.classes.clone(), open: IdSet::default() };
+                let fresh = self.receivers(m, &fresh, owner);
+                self.lprof_recv(lid, &fresh, 1);
+                for r in fresh {
+                    self.dispatch_one(m, off, r, site, rest, ret, res, lid);
+                }
+            } else {
+                let last = self.lcalls[at].hub.clone();
+                let h = match last {
+                    Some((h, rs)) if rs[..] == recv[..] => h,
+                    last => {
+                        let h = self.hub(k, iface, owner, HubSet::Exact(recv.clone()), last.map(|x| x.0), site, &md, via.clone());
+                        self.lcalls[at].hub = Some((h, recv));
+                        h
+                    }
+                };
+                self.lprof_recv(lid, &[h], 2);
+                self.link_hub(h, m, off, rest, res);
+            }
+        }
+        if !delta.open.is_empty() {
+            let opens: Vec<u32> = cur.open.iter().collect();
+            for o in self.open_roots(&opens) {
+                let h = self.hub(k, iface, owner, HubSet::Open(o), None, site, &md, via.clone());
+                self.lprof_recv(lid, &[h], 2);
+                self.link_hub(h, m, off, rest, res);
             }
         }
     }
