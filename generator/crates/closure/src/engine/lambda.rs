@@ -43,12 +43,18 @@ impl<'a> Engine<'a> {
                 let c = &mut self.lcalls[id as usize];
                 if !c.live {
                     c.live = true;
+                    self.lprof_revive();
                     self.lprof_call(lid, m, off, true);
                     self.lambda_step(m, off, Some(id));
                 }
                 return;
             }
-            let dup = self.lprof.is_some() && at.keys().any(|k| k.0 == lid);
+            // 剖析：同一调用点已有同一 lambda 的读者时记下与之不同的分量（实参 / 返回类型 / 结果节点）
+            let dup = if self.lprof.is_some() {
+                at.keys().find(|k| k.0 == lid).map(|k| [k.1 != call.1, k.2 != call.2, k.3 != call.3])
+            } else {
+                None
+            };
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lprof_kind(false, dup);
@@ -63,7 +69,7 @@ impl<'a> Engine<'a> {
         }
         self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, fixed: false, live: false });
         self.lprof_call(lid, m, off, true);
-        self.lprof_kind(true, false);
+        self.lprof_kind(true, None);
         self.lambda_step(m, off, None);
         let tmp = self.lcalls.pop();
         debug_assert!(tmp.is_some_and(|c| !c.live));

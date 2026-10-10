@@ -45,8 +45,11 @@ pub(super) struct LambdaProf {
     recv_by: [u64; 3],
     /// 非字节码调用方的临时 lambda 调用次数
     transient: u64,
-    /// 新建读者时同一调用点已有同一 lambda 的其他读者（实参 / 结果节点不同）
+    /// 新建读者时同一调用点已有同一 lambda 的其他读者；其中实参 / 返回类型 / 结果节点不同者
     dup_site: u64,
+    dup_by: [u64; 3],
+    /// 读者复活次数
+    revived: u64,
 }
 
 impl LambdaProf {
@@ -66,6 +69,8 @@ impl LambdaProf {
             recv_by: [0; 3],
             transient: 0,
             dup_site: 0,
+            dup_by: [0; 3],
+            revived: 0,
         }
     }
 }
@@ -119,10 +124,21 @@ impl Engine<'_> {
     }
 
     /// 非字节码调用方的临时调用 / 新读者的调用点已有同一 lambda 的读者
-    pub(super) fn lprof_kind(&mut self, transient: bool, dup_site: bool) {
+    pub(super) fn lprof_kind(&mut self, transient: bool, dup: Option<[bool; 3]>) {
         let Some(p) = self.lprof.as_mut() else { return };
         p.transient += u64::from(transient);
-        p.dup_site += u64::from(dup_site);
+        if let Some(d) = dup {
+            p.dup_site += 1;
+            for (n, x) in p.dup_by.iter_mut().zip(d) {
+                *n += u64::from(x);
+            }
+        }
+    }
+
+    pub(super) fn lprof_revive(&mut self) {
+        if let Some(p) = self.lprof.as_mut() {
+            p.revived += 1;
+        }
     }
 
     fn lprof_tick(&mut self) {
@@ -141,7 +157,7 @@ impl Engine<'_> {
         let Some(p) = self.lprof.as_ref() else { return };
         let tag = format!("[lambda-prof #{} {}s]", p.seq, p.t0.elapsed().as_secs());
         eprintln!(
-            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={} recv_by(transient/direct/hub_link)={:?} transient={} dup_site={}",
+            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={} recv_by(transient/direct/hub_link)={:?} transient={} dup_site={} dup_by(args/ret/res)={:?} revived={}",
             stats::peak_rss_mb(),
             self.methods.len(),
             self.hubs.len(),
@@ -152,7 +168,9 @@ impl Engine<'_> {
             p.recv_total,
             p.recv_by,
             p.transient,
-            p.dup_site
+            p.dup_site,
+            p.dup_by,
+            p.revived
         );
         let mut hs: Vec<(&u32, &u64)> = p.hub_replay.iter().collect();
         hs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
