@@ -312,6 +312,21 @@ diagnose = "--flow-batch 1 --hash-seed 7 复现，查常量格中只升不降的
 doc = "docs/tasks.md 现状节 fix-1011 第四根因"
 since = "2026-10-10"
 
+[[pattern]]
+id = "image-live-handle-order"
+stage = "unit"
+symptom = "closure_independent_of_order 失败：DeepCopy 类 / 方法相同，只有 boot_image_data.live 随 batch / seed 变化（差异根为各类 serialPersistentFields 静态值）"
+match = []
+tests = ["closure_independent_of_order"]
+cause = "枢纽对已接边目标走 edge_more 增量接边、父枢纽重放合成闭值集，句柄存取入口（HandleAccess）只对先到的接收者按来源标记建模，后到标记所指字段节点不登记，映像活性随接收者到达次序而变"
+introduced = "c3ec480d"
+fixed = ["aad074f8"]
+status = "fixed"
+owner = "fix-order-live"
+diagnose = "cmp 两次序闭包 JSON 定位 live 差异对象，回溯到静态字段根；RAVA_PROBE_FIELD 类探针看该字段节点由谁登记、标记是否到达句柄存取调用点"
+doc = "docs/plans/2026-10-09-transpile-time-regression.md「顺序无关回归」节"
+since = "2026-10-10"
+
 # ══ 历史补登（2026-09-16 起，failure-history 2026-10-10 按提交根因与分诊文档回溯） ══════════════
 # 只登记根因与修复提交都已核实的原因；集群日志里真实出现过的稳定子串才写进 match，否则留空。
 
