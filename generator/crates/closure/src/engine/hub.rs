@@ -122,6 +122,14 @@ impl<'a> Engine<'a> {
                     self.lprof_replay(h, false);
                     self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
                 }
+                // lambda 上非 SAM 方法的目标（`hub_recv` 登记在逐调用点目标表）同样按当前值重新接边
+                let special = self.hubs[h as usize].special.clone();
+                for (t, rs) in special {
+                    let ls: Vec<u32> = rs.iter().copied().filter(|r| self.lambdas.contains_key(r)).collect();
+                    for r in ls {
+                        self.edge(m, off, t, Recv::Exact(r), a, ret, res);
+                    }
+                }
             }
             return;
         }
