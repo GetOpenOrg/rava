@@ -237,6 +237,21 @@ doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md §七 第 15 条"
 since = "2026-10-10"
 
 [[pattern]]
+id = "dyncmp-build-time-clinit"
+stage = "transpile"
+symptom = "动态对照报 [miss]，负责帧是某个 JDK 类的 <clinit>（如 StreamOpFlag.<clinit> → StreamOpFlag$Type / $MaskBuilder / EnumMap / EnumMap$1，VarHandle.<clinit> → VarHandleGuards），但用例逐字通过、运行期不命中存根"
+match = [["[miss]", ".<clinit>:()V@"]]
+tests = ["TestJunitFailureMessages"]
+cause = "对照口径问题，非闭包缺口。帧所属类在 closure.json boot_image_data.build_time（引导映像或构建期初始化扩展 c:<类> 组），其 <clinit> 由构建期求值器执行、结果物化进映像，发射为 #[boot_initialized = true]，原生程序运行期不执行；JVM 基准则在程序期首次使用时才执行它，期间加载的辅助类被当作漏覆盖。dev 实测（dyncmp-fact3）5 个类本身亦在 build_time、不在闭包，映像活对象不含其实例。修法：dyn_compare 栈上遇构建期初始化类的 <clinit> 即归 build-time-init（先于帧已建模判定），数据取 closure.json，无类名特判。局限：只记首次加载，类若在构建期 <clinit> 与运行期路径都需要，后者由 --methods 方法粒度对照兜底"
+introduced = "构建期初始化（C3 build_time_init，boot-image-s6）后潜伏，J4（junit-j3j4）首次暴露"
+fixed = ["abdaf4ca"]
+status = "pending"
+owner = "dyncmp-bootinit"
+diagnose = "看 [miss] 的负责帧是否为 X.<clinit>，再查 closure_input/closure.json 的 boot_image_data.build_time 是否含 X、生成的 X 类头是否有 #[boot_initialized = true]；含即本条，不含则是真实漏覆盖"
+doc = "docs/tasks.md 现状节「框架推进顺序」条"
+since = "2026-10-10"
+
+[[pattern]]
 id = "native-unimplemented"
 stage = "run"
 symptom = "运行期命中未实现的 native 方法"
