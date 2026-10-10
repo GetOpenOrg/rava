@@ -25,6 +25,13 @@ impl<'a> Engine<'a> {
             } else if let Some(cls) = self.man.defined_class(&key.to_string()).map(str::to_string) {
                 let k = self.mirror(&cls);
                 self.add_to(Node::R(m), &TypeSet::exact(k));
+            } else if self.man.is_predefined_definer(&key.to_string()) {
+                // 类定义 native：运行期按字节内容查预定义类表，命中返回该类、未命中抛 LinkageError——
+                // 返回值恰为预定义类镜像之并（无预定义类时为空，docs/plans/2026-10-10-xsltc-translet.md §4.2）
+                for cls in self.cp.names_of(Origin::Predefined) {
+                    let k = self.mirror(&cls);
+                    self.add_to(Node::R(m), &TypeSet::exact(k));
+                }
             } else if !self.man.returns_receiver(&key.to_string()) && !reads && !self.man.direct_invokers.is_native(&key.to_string()) {
                 // 直连 helper 的 native：目标返回值由直连调用点逐目标流入调用点结果（`reflect_direct.rs`）
                 open_ret = Some(rt);
@@ -100,6 +107,7 @@ impl<'a> Engine<'a> {
             || self.man.returns_declaring_class(&ks)
             || self.man.returns_primitive_class(&ks)
             || self.man.defined_class(&ks).is_some()
+            || self.man.is_predefined_definer(&ks)
             || self.man.array_allocator(&ks).is_some()
             || self.man.returns_static_base(&ks)
             || self.man.direct_invokers.is_native(&ks);

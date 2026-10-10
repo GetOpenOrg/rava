@@ -4,7 +4,9 @@
 //! - JDK 类：按所在模块查 JDK 自己的模块 → 加载器映射（清单 `[vm_state.loader_map]` 指向的类，其 `<clinit>`
 //!   把字符串常量集合写入 boot / platform 两个静态字段）。在 boot 集合中的为引导加载器（null），在 platform
 //!   集合中的为平台加载器，其余 JDK 模块为应用加载器；
-//! - 运行时镜像独有类 / VM 支持类、无模块归属的 JDK 类：引导加载器。
+//! - 运行时镜像独有类 / VM 支持类、无模块归属的 JDK 类：引导加载器；
+//! - 预定义类（`Origin::Predefined`）：由程序运行期调用类定义 native 的加载器定义，构建期不知道是哪一个，
+//!   属性值 `defined` 交运行时按定义记录应答（`runtime/java_runtime/src/predefined.rs`）。
 //!
 //! 生成器据此给类块写 `defining_loader` 属性，运行时镜像的读取钩子按它填充定义加载器。
 
@@ -21,6 +23,8 @@ pub enum Loader {
     Boot,
     Platform,
     App,
+    /// 运行期由类定义 native 的调用方加载器定义（预定义类）
+    Defined,
 }
 
 impl Loader {
@@ -30,6 +34,7 @@ impl Loader {
             Loader::Boot => None,
             Loader::Platform => Some("platform"),
             Loader::App => Some("app"),
+            Loader::Defined => Some("defined"),
         }
     }
 }
@@ -74,6 +79,7 @@ impl DefiningLoaders {
                 Some(_) if !self.boot.is_empty() => Loader::App,
                 _ => Loader::Boot,
             },
+            Some(Origin::Predefined) => Loader::Defined,
             Some(Origin::Image) | None => Loader::Boot,
         }
     }

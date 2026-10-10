@@ -138,6 +138,9 @@ pub struct UserMeta {
     /// 本程序 jimage（`${java.home}/lib/modules` 格式，boot-image §5.7）：闭包读取的 JDK 模块资源，
     /// `NativeImageBuffer.getNativeMap` 映射给翻译的 `BasicImageReader`；8 字节对齐
     pub module_image: &'static [u8],
+    /// 预定义类（docs/plans/2026-10-10-xsltc-translet.md）：(类文件 SHA-256 小写十六进制, 类名)，按哈希有序；
+    /// 类定义 native（`ClassLoader.defineClass0/1/2`）按实参字节的哈希查表
+    pub predefined_classes: &'static [(&'static str, &'static str)],
 }
 
 static USER_META: std::sync::OnceLock<&'static UserMeta> = std::sync::OnceLock::new();
@@ -321,6 +324,10 @@ pub fn class_path_resources() -> &'static [(&'static str, &'static [u8])] {
 /// 本程序 jimage（只在用户侧：模块资源随本程序闭包；未登记用户侧时为空）
 pub fn module_image() -> &'static [u8] {
     USER_META.get().map_or(&[], |m| m.module_image)
+}
+/// 预定义类表（只在用户侧；未登记用户侧时为空）
+pub fn predefined_classes() -> &'static [(&'static str, &'static str)] {
+    USER_META.get().map_or(&[], |m| m.predefined_classes)
 }
 /// 行表中各 Java 方法的 LineNumberTable（StackFrameInfo bci ↔ 行号）。
 pub fn line_numbers() -> &'static [LineNumbers] {

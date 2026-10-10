@@ -147,15 +147,19 @@ impl Ctx<'_> {
     /// 字节码方法 t 在实参 args（含接收者）上的结果；deep = 返回常量格之外展开方法体求值
     fn deval_call(&self, t: &MemberRef, args: &[V], deep: bool) -> Ret {
         let Some(top) = self.dv_top.get() else { return Ret::Unknown };
-        // 返回常量格已是常量（各上下文汇合）：即为本次结果
+        // 返回常量格已是常量（各上下文汇合）：不展开时即为本次结果；展开时只作方法体求不出时的退路——
+        // 汇合格在不动点途中只是部分上下文之并，先取它会得出与本次实参下精确值不可比的暂时答复
+        // （见 `facts/oracle.rs` 同名口径），据此连上的边不可撤回
         self.dep(top, Dep::Ret(t.clone()));
-        if let Some(PV::Const(v)) = self.rvals.borrow().get(t) {
-            if exportable(v) {
-                self.dv_note(|| format!("{t} rvals {v:?}"));
-                return Ret::Value(v.clone());
-            }
-        }
+        let rc = match self.rvals.borrow().get(t) {
+            Some(PV::Const(v)) if exportable(v) => Some(v.clone()),
+            _ => None,
+        };
         if !deep {
+            if let Some(v) = rc {
+                self.dv_note(|| format!("{t} rvals {v:?}"));
+                return Ret::Value(v);
+            }
             // 返回常量格缺席（目标尚未分析或尚无返回）：同按成员的返回常量答复（`facts/oracle.rs`），按不返回乐观答复；
             // 过早答「未知」会让守卫之后的调用边先接上，而调用边只增不撤
             if !self.rvals.borrow().contains_key(t) && self.noreturn.borrow().answer_never(t) {
@@ -168,21 +172,29 @@ impl Ctx<'_> {
         }
         let bound: Vec<Option<V>> = args.iter().map(|a| bindable(a).then(|| a.stripped())).collect();
         let ck = format!("{t}|{bound:?}");
-        if let Some(c) = self.dv_cache.borrow().get(&ck) {
-            return match c {
-                None => Ret::Unknown,
-                Some(None) => Ret::Never,
-                Some(Some(v)) => Ret::Value(v.clone()),
-            };
-        }
-        let r = self.deval_body(t, bound);
-        let c = match &r {
-            Ret::Unknown => None,
-            Ret::Never => Some(None),
-            Ret::Value(v) => Some(Some(v.clone())),
+        let cached = self.dv_cache.borrow().get(&ck).cloned();
+        let r = match cached {
+            Some(None) => Ret::Unknown,
+            Some(Some(None)) => Ret::Never,
+            Some(Some(Some(v))) => Ret::Value(v),
+            None => {
+                let r = self.deval_body(t, bound);
+                let c = match &r {
+                    Ret::Unknown => None,
+                    Ret::Never => Some(None),
+                    Ret::Value(v) => Some(Some(v.clone())),
+                };
+                self.dv_cache.borrow_mut().insert(ck, c);
+                r
+            }
         };
-        self.dv_cache.borrow_mut().insert(ck, c);
-        r
+        match (r, rc) {
+            (Ret::Unknown, Some(v)) => {
+                self.dv_note(|| format!("{t} rvals {v:?}"));
+                Ret::Value(v)
+            }
+            (r, _) => r,
+        }
     }
 
     /// 方法体求值（绑定实参 bound）
