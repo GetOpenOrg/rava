@@ -1061,4 +1061,41 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
   - `scripts/mono_stats.py`：单态化统计。
 - nightly 不可用时，用 stable 加 `RUSTC_BOOTSTRAP=1`。
 
-结果：作业运行中，回填。
+**结果**（rustc 1.99.0 stable 加 `RUSTC_BOOTSTRAP=1`，debug，`CARGO_BUILD_JOBS=2`；`java_base_decl` 617 类，817 个 .rs，源码 7.39 MB）
+
+| 测法 | 墙钟 | 峰值 RSS |
+|---|---:|---:|
+| `cargo build -p java_base_decl --timings`（含依赖） | 19.5 s | 1.54 GB |
+| `rustc_profile.sh`（只计本 crate rustc） | 16.6 s | 1.46 GB |
+| 同上加 `-Z self-profile` | 18.9 s | 1.51 GB |
+
+`-Z time-passes` 的 RSS 台阶（MB，阶段起点 → 终点）：
+
+| 阶段 | 耗时 s | RSS | 增量 |
+|---|---:|---|---:|
+| macro_expand_crate（`java_class!` 展开） | 4.13 | 43 → 523 | +480 |
+| resolve_crate | 0.39 | 523 → 598 | +75 |
+| coherence_checking | 0.82 | 741 → 867 | +126 |
+| type_check_crate | 3.14 | 741 → 1026 | +285 |
+| MIR_borrow_checking | 3.36 | 1026 → 1311 | +285 |
+| monomorphization_collector_graph_walk | 0.84 | 1324 → 1454 | +131 |
+| generate_crate_metadata | 1.56 | 1323 → 1461 | +138 |
+| codegen_crate / LLVM_passes | 1.82 / 1.93 | 1461 → 1490，之后降到 1040 | +29 / −425 |
+
+- **峰值落在前端，不在 LLVM**。展开、类型检查、借用检查三段占 1.05 GB 增量，峰值点在单态化收集与元数据生成之后（约 1.46–1.49 GB）。LLVM 段反而释放内存。
+  - 结论：声明层峰值由「展开后的 AST/HIR/MIR 规模」决定。路线一删掉的类初始化骨架与 per-class 展开项，正是在这三段计费，按源码体量估峰的口径成立。
+- self-profile 前列（自用时间）：
+  - expand_proc_macro 3.51 s（15.3%，1251 次）；
+  - typeck_root 2.06 s（3.8 万项）；
+  - LLVM_passes 1.98 s；
+  - LLVM_module_codegen_emit_obj 1.85 s；
+  - mir_borrowck 1.40 s（3.7 万项）。
+  - 声明层每类展开出的固有方法与 impl 数量（约 3.7–4.1 万个 body）是主要计费单位。
+- 单态化（`mono_stats.py`）：条目 24077、实例 52164。按 size_est：
+  - std/core 31.2%；
+  - 生成的非泛型项 22.0%；
+  - 生成的泛型实例 20.1%；
+  - 宏展开项 14.7%。
+  - 单项前列：`Option::map` 1895 个实例、`field_desc::__ref_field` 158 个、`object_ext::__class_from_object` 471 个。都是常数级 helper 的多实例，不随签名边成环。
+- **新标定点**：现形态 7.39 MB → 1.46 GB（rustc 本身）。§9.8 的线性拟合（406 + 193.9 × MB）在此处给出 1839 MB，高估 26%。中段（3–7.4 MB）的实测斜率只有约 104 MB/MB，1.3 GB 对应源码约 5.9 MB。修正后的口径见 §9.8.1「标定修正」。
+- 档案级（并集档案 scratch）的分阶段实测没有在本轮做，留作 S7-4 实施后的对照项。
