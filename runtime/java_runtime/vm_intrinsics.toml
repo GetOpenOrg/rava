@@ -527,6 +527,8 @@ caller_class = [
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
+    # 动态代理类定义点：代理实现接口的方法对象由 VM 按接口声明方法表构造（Proxy$Dyn 载体）
+    "java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V",
 ]
 constructors = [
     "java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;",
@@ -1085,6 +1087,8 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = "field_offset"
 "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "cas_reference"
 "java/lang/Class.registerNatives:()V" = "noop"
+# 代理类定义点的 Method 预取只填进程级缓存（proxy_dyn_impl.rs），调用时按需构造同一对象：求值期无可见效果
+"java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V" = "noop"
 "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
 "java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"
 "java/lang/Class.isArray:()Z" = "class_is_array"

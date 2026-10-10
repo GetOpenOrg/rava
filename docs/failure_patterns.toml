@@ -1385,3 +1385,18 @@ owner = "spring-core-slice"
 diagnose = "看调用点描述符与祖先真实方法描述符的返回部分是否不同（javap 祖先类的 bridge）"
 doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #11"
 since = "2026-10-10"
+
+[[pattern]]
+id = "proxy-interface-method-meta-pruned"
+stage = "run"
+symptom = "JDK / 库接口经动态代理调用时 InvocationHandler 收到 null Method（method.getName() 处 NullPointerException，栈经 Proxy_Dyn::__vm_proxy_invoke）"
+match = [["NullPointerException", "__vm_proxy_invoke"]]
+tests = ["lib_pilot sc1"]
+cause = "代理调用按 (接口, 名字, 描述符) 从方法元数据表取 Method，档案侧方法表按反射事实（meta_methods）裁剪；代理实现的接口没有被建模为成员枚举，非用户接口的方法表为 0 行"
+introduced = ""
+fixed = []
+status = "pending"
+owner = "spring-core-slice"
+diagnose = "closure.json reflect.meta_methods 是否含代理接口；reflect.gaps 是否有 Proxy$Dyn.defineInterfaceMethods 的缺口"
+doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #11"
+since = "2026-10-10"
