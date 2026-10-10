@@ -5,7 +5,8 @@
 #   - `-Z dump-mono-stats`：单态化实例（<out>/<name>.mono/）；
 #   - `/usr/bin/time -l`（macOS）/ `-v`（Linux）：峰值 RSS（<out>/<name>.time.log）；rustc 诊断在 <out>/<name>.stderr.log；
 #   - 每 2 s 采样 rustc RSS（<out>/<name>.rss.log）。
-# 依赖（该 crate Cargo.toml [dependencies] 中的各包）先单独编好，不计入测量。
+# 依赖先以 `cargo build -p <crate>` 编好（与计时步同一单元图，特性合一一致，计时步不会重编依赖），不计入测量。
+# 输出 peak_rss（/usr/bin/time，cargo 全部子进程中的最大者）与 rustc_peak（本 crate rustc 的 time-passes 最大 RSS）。
 #
 # 用法：scripts/rustc_profile.sh <out_dir> <scratch>...   例：build/rp build/hello_world build/deep_copy
 # 环境变量：TOOLCHAIN（缺省 nightly）、SELF_PROFILE=1（另加 -Z self-profile，产出 .mm_profdata）
@@ -20,8 +21,8 @@ export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
 for ws in "$@"; do
     ws="$(cd "$ws" && pwd)"; name="$(basename "$ws")"
     export CARGO_TARGET_DIR="$OUT/target"
-    deps=$(awk '/^\[dependencies\]/{d=1;next} /^\[/{d=0} d && /=/ && !/^[[:space:]]*#/{split($0,a,/[ =]/); print "-p", a[1]}' "$ws/$CR/Cargo.toml" | tr '\n' ' ')
-    (cd "$ws" && cargo +"$TC" build -q $deps) || { echo "DEPS-FAIL $name"; continue; }
+    # 按 -p 依赖名逐个编译时特性合一可能与目标 crate 的单元图不同，计时步会重编依赖并计入峰值；故先整编目标 crate
+    (cd "$ws" && cargo +"$TC" build -q -p "$CR" --lib) || { echo "DEPS-FAIL $name"; continue; }
     rm -rf "$OUT/$name.mono"; mkdir -p "$OUT/$name.mono"
     extra=""
     if [ "${SELF_PROFILE:-0}" = 1 ]; then
@@ -48,5 +49,6 @@ for ws in "$@"; do
         peak=$(awk -F: '/Maximum resident set size/ {printf "%.2f", $2/1048576}' "$OUT/$name.time.log")
         wall=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$OUT/$name.time.log")
     fi
-    echo "$name rc=$rc wall=${wall}s peak_rss=${peak}GB"
+    rpeak=$(grep -oE 'rss: *[0-9]+MB *-> *[0-9]+MB' "$OUT/$name.passes.log" | grep -oE '[0-9]+' | sort -n | tail -1)
+    echo "$name rc=$rc wall=${wall}s peak_rss=${peak}GB rustc_peak=${rpeak:-?}MB"
 done
