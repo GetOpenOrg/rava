@@ -144,6 +144,8 @@ pub(super) struct Ctx<'a> {
     pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
     /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
     pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
+    /// 具体求值结果按对象物化的抽象对象（`concrete/apply.rs`）：快照含全部实例字段，各字段都确定写入
+    pub(super) osnap: RefCell<HashSet<u32>>,
     /// 字段 → 抽象对象 → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
     pub(super) odeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
     /// 字段 → 按对象读过它的方法（`owild` 变化时失效）

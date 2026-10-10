@@ -68,6 +68,7 @@ impl Vm {
                 self.put_static(&fr, v)?;
                 if self.tracing() {
                     let p = self.put_of(env, v);
+                    self.trace.shared_puts.entry(fr.mref()).or_default().push(p.clone());
                     self.trace.puts.entry(fr.mref()).or_default().push(p);
                     self.trace.memo_vals.push((fr.mref(), v));
                 }
@@ -91,6 +92,9 @@ impl Vm {
         self.put_field(o, fr, v)?;
         if self.tracing() {
             let p = self.put_of(env, v);
+            if self.heap[o as usize].epoch != self.cur_epoch() {
+                self.trace.shared_puts.entry(fr.mref()).or_default().push(p.clone());
+            }
             self.trace.puts.entry(fr.mref()).or_default().push(p);
             if self.heap[o as usize].epoch == 0 {
                 self.trace.memo_vals.push((fr.mref(), v));

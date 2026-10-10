@@ -41,8 +41,12 @@ fn pv_of(v: &MV) -> PV {
 
 impl<'a> Engine<'a> {
     /// 一组实参的结果并入调用点 m@off（入口 entry）
-    pub(super) fn concrete_apply(&mut self, m: usize, off: u32, entry: &MemberRef, md: &MethodDesc, o: &Outcome) {
+    /// tag 为按对象物化时结果对象的名字标签（见 `concrete.rs::obj_tag`）
+    pub(super) fn concrete_apply(&mut self, m: usize, off: u32, entry: &MemberRef, md: &MethodDesc, o: &Outcome, tag: &str) {
         let via = Via::method("concrete", m, Some(off));
+        // 结果按对象物化（`[concrete] object_results`）：入口自身分配的类的结果实例各成一个抽象对象
+        let ek = self.mref_key(entry);
+        let per_obj = self.man.concrete.object_results.contains(&*ek);
         let cctx = self.concrete.ctx;
         let mut grown: Vec<MemberRef> = Vec::new();
         for (k, pcs) in &o.pcs {
@@ -75,17 +79,32 @@ impl<'a> Engine<'a> {
             }
             for p in ps {
                 let pv = pv_of(&MV::Prim(p.clone()));
-                // 物化写入不按抽象对象分开：同时并入按对象读的通配值（见 `obj_fields.rs`）
-                self.wild_put(f, &pv);
+                // 物化写入不按抽象对象分开：同时并入按对象读的通配值（见 `obj_fields.rs`）。按对象物化时新分配对象上的
+                // 写入不并入：进结果的新对象各按快照值记入自己的字段（`mat_field`），其余新对象程序不可见；
+                // 按类型代表的结果对象不是抽象对象，不出现在按对象读的对象集里
+                if !per_obj {
+                    self.wild_put(f, &pv);
+                }
                 self.field_put(f, pv);
             }
             self.concrete_str_puts(m, f, ps);
         }
+        if per_obj {
+            for (f, ps) in &o.shared_puts {
+                if self.static_final(f) {
+                    continue;
+                }
+                for p in ps {
+                    self.wild_put(f, &pv_of(&MV::Prim(p.clone())));
+                }
+            }
+        }
         // 结果对象图
         let obj = self.id(OBJECT);
         let mut ids: Vec<Option<TypeSet>> = vec![None; o.objs.len()];
+        let mut own: Vec<Option<u32>> = vec![None; o.objs.len()];
         for i in 0..o.objs.len() {
-            self.mat_obj(m, off, &o.objs, i, &mut ids, &via);
+            own[i] = self.mat_obj(m, off, &o.objs, i, &mut ids, &via, per_obj.then_some(tag));
         }
         for (i, x) in o.objs.iter().enumerate() {
             let me = ids[i].clone().unwrap_or_default();
@@ -100,12 +119,12 @@ impl<'a> Engine<'a> {
                 }
             } else {
                 for (f, v) in &x.fields {
-                    self.mat_field(f, v, &ids, &via);
+                    self.mat_field(f, v, &ids, &via, own[i], per_obj);
                 }
             }
         }
         for (f, v) in &o.memo {
-            self.mat_field(f, v, &ids, &via);
+            self.mat_field(f, v, &ids, &via, None, false);
         }
         for v in &o.thrown {
             self.mat_val(v, &ids, &via);
@@ -144,8 +163,24 @@ impl<'a> Engine<'a> {
         self.invalidate_all(deps, Why::RetConst);
     }
 
-    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via) {
+    /// 第 i 个结果对象的值集；按对象物化（tag 为 Some）且其类在 `pobj_types` 中时为抽象对象，返回该对象
+    #[allow(clippy::too_many_arguments)]
+    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via, tag: Option<&str>) -> Option<u32> {
         let x = &objs[i];
+        if let Some(tag) = tag.filter(|_| x.lam.is_none() && !x.arr && self.per_object_type(&x.ty)) {
+            self.instantiate_type(&x.ty, via.clone());
+            let chain = format!("@concrete:{tag}:{i}");
+            let tid = self.id(&x.ty);
+            let id = self.id(&format!("{}{chain}", x.ty));
+            self.objs.insert(id, tid);
+            // 链首段 → 类（同 `classes.rs::obj_at`）：以该对象为属主的内部分配据此判定是否沿用属主链
+            self.seg_cls.entry(Rc::from(chain.as_str())).or_insert(tid);
+            self.obj_chain.insert(id, Rc::from(chain));
+            // 快照含全部实例字段（含初值）：各字段都确定写入，按对象读不并入初值
+            self.ctx.osnap.borrow_mut().insert(id);
+            ids[i] = Some(TypeSet::exact(id));
+            return Some(id);
+        }
         let s = if let Some(l) = &x.lam {
             TypeSet::exact(self.id(&lam_name(l, m, off, i)))
         } else if x.arr {
@@ -156,6 +191,7 @@ impl<'a> Engine<'a> {
             TypeSet::exact(self.id(&x.ty))
         };
         ids[i] = Some(s);
+        None
     }
 
     /// 具体求值中 String 字段的写入并入字段常量集与字段字符串槽（与字节码写入同一口径，见 bytecode.rs）：
@@ -215,20 +251,30 @@ impl<'a> Engine<'a> {
         self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, (cap, None), &l.bargs);
     }
 
-    /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）
-    fn mat_field(&mut self, f: &MemberRef, v: &MV, ids: &[Option<TypeSet>], via: &Via) {
+    /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）。
+    /// 按对象物化的对象（own）：值记入该对象的字段（按对象值表与对象字段节点），不并入通配值与未知接收者视图；
+    /// 同一次物化中其余按类型代表的对象（per_obj）不并入通配值（见 `concrete_apply`）
+    fn mat_field(&mut self, f: &MemberRef, v: &MV, ids: &[Option<TypeSet>], via: &Via, own: Option<u32>, per_obj: bool) {
         if !self.static_final(f) {
             let pv = pv_of(v);
-            self.wild_put(f, &pv);
+            match own {
+                Some(o) => self.obj_field_put(f, &[o], false, &pv),
+                None if !per_obj => self.wild_put(f, &pv),
+                None => {}
+            }
             self.field_put(f, pv);
         }
         if parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_none() {
             return;
         }
         let fi = self.field_node(f.clone());
-        if let Some(f) = self.mat_val(v, ids, via) {
+        if let Some(fd) = self.mat_val(v, ids, via) {
             let obj = self.id(OBJECT);
-            self.feed(&[f], Node::U(fi), obj);
+            let node = match own.zip(self.fields.get_index(fi).and_then(|e| *e.1)) {
+                Some((o, tid)) => self.obj_field(o, fi, tid),
+                None => Node::U(fi),
+            };
+            self.feed(&[fd], node, obj);
         }
     }
 
