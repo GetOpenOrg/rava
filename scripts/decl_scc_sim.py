@@ -189,6 +189,14 @@ def main():
     out["chokes"] = {f"{n}/{infra}": chokes(g, keep, infra, a.hubs, a.cuts, calib)
                      for infra in ("d8", "placed") for n, keep in COMBOS if n in ("①", "②", "⑤")}
     out["inherit_cycles"] = inherit_cycles(g)
+    # 供 decl_scc_full（class 文件图）复用：类声明字节、INFRA 根与手写字节（按 binary name）
+    k = g.keys
+    out["graph_export"] = {
+        "class_bytes": {k[i]: g.size[i] for i in range(g.n)},
+        "infra_roots": {"d8": sorted(k[i] for i in g.infra_d8 | g.pinned), "placed": sorted(k[i] for i in g.infra_placed)},
+        "placed_edges": {k[h]: sorted(k[j] for j in js) for h, js in sorted(g.placed_edges.items())},
+        "hw_bytes_total": g.hw_bytes_total, "hw_bytes_infra": g.hw_bytes_infra,
+        "hw_bytes_placed": {k[h]: b for h, b in sorted(g.hw_bytes_placed.items())}}
     if a.json:
         with open(a.json, "w") as fh:
             json.dump(out, fh, ensure_ascii=False, indent=1)
