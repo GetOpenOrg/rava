@@ -1072,6 +1072,17 @@ memo_fields = [
     # Class.newInstance 的构造器缓存与调用者访问检查缓存：命中与重查得同一构造器 / 同一检查结论
     "java/lang/Class.cachedConstructor",
     "java/lang/Class.newInstanceCallerCache",
+    # Class.newInstance 的反射工厂缓存（c1d 计划 §37）：为 null 时取 ReflectionFactory 单例写入，命中与重取得同一单例
+    "java/lang/Class.reflectionFactory",
+]
+# 取引导映像值的静态字段（c1d 计划 §37）：声明类构建期初始化，字段只在为 null 时惰性写入或单调置位一次，映像中
+# 已是终值；闭包期具体求值读到映像值（对象图按值导入），走运行期同一条已初始化快路径。
+# ReflectionFactory.config：访问器选择按构建期钉值（jdk.reflect.useNativeAccessorOnly = true，见 system_properties），
+# 反射构造落到本地访问器 newInstance0（[concrete.natives] reflect_new）；VM.javaLangInvokeInited：引导序列中
+# MethodHandleNatives.<clinit> 置位，运行期恒为 true
+image_statics = [
+    "jdk/internal/reflect/ReflectionFactory.config",
+    "jdk/internal/misc/VM.javaLangInvokeInited",
 ]
 # 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
 # （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
@@ -1099,6 +1110,11 @@ stable_types = [
 # （queue 为 null 或属 null_queues 类型）
 soft_references = ["java/lang/ref/SoftReference"]
 null_queues = ["java/lang/ref/ReferenceQueue$Null"]
+
+# 一次写入的登记表静态字段 → 登记者类（c1d 计划 §37）：只由登记者 <clinit> 写一次（运行期登记者已在构建期初始化）。
+# 闭包期具体求值放行这次跨类写入；读到 null 先初始化登记者，仍为 null 才失败；求值 VM 创建时先按类名序初始化全部登记者
+[concrete.registry_statics]
+"jdk/internal/access/SharedSecrets.javaLangReflectAccess" = "java/lang/reflect/AccessibleObject"
 
 # 手写承载方法的具体语义：成员（`类.方法:描述符`）→ 操作名（engine/concrete/natives.rs）
 # `bytecode`：手写承载与 JDK 字节码语义一致的方法（边界类未登记翻译的 `<clinit>` 等），求值时解释其字节码；
