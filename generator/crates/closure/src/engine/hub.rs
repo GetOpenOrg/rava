@@ -189,16 +189,13 @@ impl<'a> Engine<'a> {
         // 故与它的 lambda 表相同的前缀直接跳过，结果与逐个查登记相同
         let anc = if replay { self.linked_ancestor(m, off, h) } else { None };
         let skip = anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas));
-        let mut key: Option<LambdaCall> = None;
         for &r in &lambdas[skip..] {
             if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                 continue;
             }
             if same {
-                let k = key.get_or_insert_with(|| (r, a.clone(), ret, res));
-                k.0 = r;
-                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(k)).copied();
-                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended) {
+                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, res))).copied();
+                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended && args_cover(&self.lcalls[id as usize].call.1, a)) {
                     self.lcall_revive(id);
                     continue;
                 }

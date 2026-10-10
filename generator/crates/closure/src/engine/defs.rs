@@ -196,6 +196,55 @@ pub(super) struct HwWrite {
 /// 按声明形参位置的实参来源（基本类型为 None）
 pub(super) type Args = Vec<Option<Vec<Feed>>>;
 
+/// 调用点上 lambda 调用读者的键（lambda、返回类型、结果节点）：同一调用点同一 lambda 的不同实参并入同一读者
+pub(super) type LambdaKey = (u32, Option<u32>, Option<Node>);
+
+/// b 的各实参来源都已含于 a
+pub(super) fn args_cover(a: &Args, b: &Args) -> bool {
+    b.iter().enumerate().all(|(j, y)| {
+        let Some(y) = y else { return true };
+        let Some(Some(xs)) = a.get(j) else { return y.is_empty() };
+        y.iter().all(|f| match f {
+            Feed::N(_) => xs.contains(f),
+            Feed::S(s) => xs.iter().any(|g| matches!(g, Feed::S(t) if s.is_subset_of(t))),
+        })
+    })
+}
+
+/// 实参并集（按位置；同一位置的值集来源并为一个）。b 已含于 a 时为 None
+pub(super) fn merge_args(a: &Args, b: &Args) -> Option<Args> {
+    if args_cover(a, b) {
+        return None;
+    }
+    let mut out = a.clone();
+    let mut grew = false;
+    if out.len() < b.len() {
+        out.resize(b.len(), None);
+    }
+    for (x, y) in out.iter_mut().zip(b) {
+        let Some(y) = y else { continue };
+        let xs = x.get_or_insert_with(Vec::new);
+        for f in y {
+            match f {
+                Feed::N(_) => {
+                    if !xs.contains(f) {
+                        xs.push(f.clone());
+                        grew = true;
+                    }
+                }
+                Feed::S(s) => match xs.iter_mut().find_map(|g| if let Feed::S(t) = g { Some(t) } else { None }) {
+                    Some(t) => grew |= t.add_all(s),
+                    None => {
+                        xs.push(f.clone());
+                        grew = true;
+                    }
+                },
+            }
+        }
+    }
+    grew.then_some(out)
+}
+
 /// 一次 lambda 调用：(lambda, 实参, 返回类型, 结果节点)
 pub(super) type LambdaCall = (u32, Args, Option<u32>, Option<Node>);
 

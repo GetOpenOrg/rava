@@ -34,29 +34,35 @@ impl<'a> Engine<'a> {
     /// 字节码调用点上的调用登记为读者单元（[`LCall`]）：接一次流边，此后只由其接收值（捕获 / 首个 SAM 实参）
     /// 的增长与 open 展开的 G 增长驱动增量重跑；调用点重跑、同一调用重入均不再进入
     pub(super) fn invoke_lambda(&mut self, m: usize, off: u32, lid: u32, a: &Args, ret: Option<u32>, res: Option<Node>) {
-        let call: LambdaCall = (lid, a.clone(), ret, res);
         if self.methods[m].kind == Kind::Bytecode {
             let at = self.lambda_done.entry(m).or_default().entry(off).or_default();
-            if let Some(&id) = at.get(&call) {
-                // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元，不另建
-                self.lcall_revive(id);
+            if let Some(&id) = at.get(&(lid, ret, res)) {
+                // 同一调用点同一 lambda 再登记：沿用原读者单元。实参已含于读者的实参即同一调用（调用方重分析后），
+                // 否则实参并入读者（各实参的接边效果按来源累加，并后完整重接与分别接边之并相同）
+                let Some(merged) = merge_args(&self.lcalls[id as usize].call.1, a) else {
+                    self.lcall_revive(id);
+                    return;
+                };
+                self.lprof_kind(false, Some([true, false, false]));
+                self.lcall_clear(id);
+                let c = &mut self.lcalls[id as usize];
+                c.call.1 = merged;
+                c.live = true;
+                self.lprof_call(lid, m, off, true);
+                self.lambda_step(m, off, Some(id));
                 return;
             }
-            // 剖析：同一调用点已有同一 lambda 的读者时记下与之不同的分量（实参 / 返回类型 / 结果节点）
-            let dup = if self.lprof.is_some() {
-                at.keys().find(|k| k.0 == lid).map(|k| [k.1 != call.1, k.2 != call.2, k.3 != call.3])
-            } else {
-                None
-            };
+            let call: LambdaCall = (lid, a.clone(), ret, res);
             let id = self.lcalls.len() as u32;
-            at.insert(call.clone(), id);
-            self.lprof_kind(false, dup);
+            at.insert((lid, ret, res), id);
+            self.lprof_kind(false, None);
             self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true, suspended: false });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
         }
         // 非字节码调用方：按当前值完整接边；同一 lambda 以相同实参重入即外层已接上全部流边
+        let call: LambdaCall = (lid, a.clone(), ret, res);
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
@@ -115,23 +121,28 @@ impl<'a> Engine<'a> {
     /// 读者接边的被调方透传摘要变化：清掉读者的已接记录与它逐接收者派发的去重记录，按新摘要完整重接。
     /// 作废的读者复活时完整重接（同 `reset_sites`）
     pub(super) fn lcall_resum(&mut self, id: u32) {
+        self.lcall_clear(id);
+        if !self.lcalls[id as usize].live {
+            return;
+        }
+        self.ctx.stats.borrow_mut().reapply += 1;
+        if self.in_cwork.insert(id) {
+            self.cwork.push_back(id);
+        }
+    }
+
+    /// 读者的已接记录清空（下次接边完整重接）：接收值、集合枢纽、静态接边标记与逐接收者派发的去重记录
+    fn lcall_clear(&mut self, id: u32) {
         let c = &mut self.lcalls[id as usize];
         let (m, off, lid) = (c.m, c.off, c.call.0);
         let done = std::mem::take(&mut c.done);
         c.hub = None;
         c.fixed = false;
         c.suspended = false;
-        if !c.live {
-            return;
-        }
         if let Some(d) = self.dispatched.get_mut(&m) {
             for r in done.classes.iter() {
                 d.remove(&(off, r, lid));
             }
-        }
-        self.ctx.stats.borrow_mut().reapply += 1;
-        if self.in_cwork.insert(id) {
-            self.cwork.push_back(id);
         }
     }
 

@@ -463,7 +463,7 @@ pub struct Engine<'a> {
     /// 反射调用点（方法 → 偏移）已处理过的 Class 实参值（`field_lookup.rs::ReflSeen`）；同一分析结果下成立，与 `recv_done` 同口径作废
     refl_seen: HashMap<usize, HashMap<u32, field_lookup::ReflSeen>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
-    lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
+    lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaKey, u32>>>,
     lcalls: Vec<LCall>,
     /// 正在读值集的 lambda 调用（优先于 `cur_site` 登记为读者）
     cur_call: Option<u32>,
