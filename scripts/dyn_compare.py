@@ -115,6 +115,8 @@ class DomainRules:
     release: list[str]
     vm_upcalls: list[str]
     user: set[str] = field(default_factory=set)
+    # JVM 链接期直接调用的单个方法（`类.方法:描述符`，closure.toml `[dynamic] vm_upcall_methods`）
+    vm_upcall_methods: set[str] = field(default_factory=set)
     # 依赖 jar 内的类（形态用例的第三方库）：按字节码翻译，归 lib 域
     lib: set[str] = field(default_factory=set)
 
@@ -124,9 +126,11 @@ class DomainRules:
         放行 = [vm_boundary] translate_nested，即 VM 契约边界类中按字节码翻译的嵌套类）"""
         closure = load_manifest("closure.toml")
         vm = closure.get("vm_boundary", {})
+        dyn = closure.get("dynamic", {})
         return cls(vm_boundary=set(vm.get("classes", [])),
                    release=list(vm.get("translate_nested", [])),
-                   vm_upcalls=list(closure.get("dynamic", {}).get("vm_upcall_classes", [])),
+                   vm_upcalls=list(dyn.get("vm_upcall_classes", [])),
+                   vm_upcall_methods=set(dyn.get("vm_upcall_methods", [])),
                    user=set(user), lib=set(lib or ()))
 
     def domain(self, cls: str) -> str:
@@ -142,8 +146,9 @@ class DomainRules:
             return BOUNDARY
         return "translate"
 
-    def is_vm_upcall(self, cls: str) -> bool:
-        return any(entry_matches(e, cls) for e in self.vm_upcalls)
+    def is_vm_upcall(self, cls: str, mid: str | None = None) -> bool:
+        """类级条目覆盖类的全部方法；方法级条目只覆盖该方法（`mid` = `类.方法:描述符`）。"""
+        return any(entry_matches(e, cls) for e in self.vm_upcalls) or (mid is not None and mid in self.vm_upcall_methods)
 
 
 # ── 轨迹解析 ────────────────────────────────────────────────────────────────────
@@ -250,7 +255,7 @@ def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRul
         if (mc := model_sites.get(_frame_str(e.caller))) is not None:
             cats[mc] += 1
             continue
-        if rules.is_vm_upcall(callee_cls):
+        if rules.is_vm_upcall(callee_cls, e.callee):
             cats["vm-upcall"] += 1
             continue
         mmiss.append({"method": e.callee, "caller": _frame_str(e.caller)})
@@ -313,7 +318,7 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
                 # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载。
                 # 正上方是 JVM 链接期上调入口（`vm_upcall_classes`）→ 整段是该调用点的链接（解析引导方法、
                 # 执行引导方法、编译 LambdaForm），途经的 JDK 帧即便在闭包内也不是模型再次进入
-                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0]):
+                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0], _frame_id(frames[depth + 1])):
                     return mc, _frame_str(f)
                 above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
                 if not above:
@@ -326,7 +331,7 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
             return "handwritten", _frame_str(f)
         if rules.domain(f[0]) == BOUNDARY:
             return "boundary-code", _frame_str(f)
-        if rules.is_vm_upcall(f[0]):
+        if rules.is_vm_upcall(f[0], mid):
             return "vm-upcall", _frame_str(f)
         if depth > 0 and _sig(mid) in boundary_sigs:
             return "boundary-dispatch", _frame_str(f)
