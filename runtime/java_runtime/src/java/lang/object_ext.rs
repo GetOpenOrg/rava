@@ -374,6 +374,17 @@ impl From<Object> for i8    { fn from(o: Object) -> i8    { o.downcast::<i8>()  
 impl From<Object> for i16   { fn from(o: Object) -> i16   { o.downcast::<i16>()   } }
 impl From<Object> for u16   { fn from(o: Object) -> u16   { o.downcast::<u16>()   } }
 
+// 根类方法体自由函数（`Object__<fn>_body(this: &Object, ..)`）的接收者是引用，`if_acmp` 两侧一为
+// `&Object` 一为 `Object`：引用形态的同一性比较转交值形态
+impl PartialEq<Object> for &Object {
+    #[inline]
+    fn eq(&self, other: &Object) -> bool { **self == *other }
+}
+impl PartialEq<&Object> for Object {
+    #[inline]
+    fn eq(&self, other: &&Object) -> bool { *self == **other }
+}
+
 // Object equality: null == null，基本类型值相等，其他类型 Rc 指针相等
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {

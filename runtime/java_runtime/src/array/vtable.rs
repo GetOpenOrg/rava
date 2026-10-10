@@ -32,6 +32,8 @@ fn array_class<T: Default + Into<Object> + 'static>(tag: Option<&Rc<str>>) -> cr
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> crate::java::lang::ObjectVTable for __ArrayObj<T> {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn __identity(&self) -> *const () { self.identity() }
+    /// 根类字节码方法体（equals / toString / wait）的 `this`：数组对象本身
+    fn __object(&self) -> Option<Object> { Some(Object::from(self.handle())) }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { Some(Ok(self.len())) }
 
     /// 数组类的 Class 对象（JLS §10.8：`new String[0].getClass()` 是
@@ -216,6 +218,7 @@ impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_mo
     fn __interface(&self, slot: &mut dyn std::any::Any) { self.target().__interface(slot) }
     fn __class_name(&self) -> &'static str { self.target().__class_name() }
     fn __identity(&self) -> *const () { self.target().__identity() }
+    fn __object(&self) -> Option<Object> { self.target().__object() }
     fn __array_len(&self) -> Option<crate::error::Result<i32>> { self.target().__array_len() }
     fn __erased_vtable(&self, slot: &mut dyn std::any::Any) { self.target().__erased_vtable(slot) }
     fn __array_elem_assignable(&self, target_elem: &str, slot: &mut dyn std::any::Any) -> bool {

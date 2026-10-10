@@ -283,7 +283,7 @@ pub(super) fn generate(ctx: &GenContext) -> syn::Result<(TokenStream2, Vec<Token
     let has_clinit = ctx.fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
     let (init_state, class_init_fn) = class_init::expand_class_init(
         &ctx.struct_ident, &ctx.meta.binary_name, ctx.meta.superclass.as_ref(),
-        &ctx.meta.init_interfaces, has_clinit);
+        &ctx.meta.init_interfaces, has_clinit, ctx.meta.boot_initialized);
 
     let wrapper_impl = quote! {
         #(#static_storage)*

@@ -85,6 +85,22 @@ pub fn elide(inner: &str, plan: &[Elision]) -> String {
     out
 }
 
+/// 模块级非泛型自由函数文本的跨层链接（生成器直接发射的自由函数，如根类方法体）：与宏拆层同一规则
+/// 求 (链接符号, 声明层外部声明块文本)。实现层在原文本函数项前插入 `#[export_name = "<符号>"]`
+/// 即可（保留原文本行布局），声明层放外部声明块
+pub fn free_fn_link(binary_name: &str, item: &str) -> Result<(String, String), String> {
+    let ts = TokenStream2::from_str(item).map_err(|e| format!("词法：{e}"));
+    let split = ts.and_then(|ts| super::gen::layer::split_free_fn(binary_name, &ts).map_err(|e| e.to_string()));
+    proc_macro2::extra::invalidate_current_thread_spans();
+    let s = split?;
+    let decl = s.decl;
+    let block = quote::quote! {
+        #[allow(non_snake_case, clippy::too_many_arguments)]
+        unsafe extern "Rust" { #decl }
+    };
+    Ok((s.sym, block.to_string()))
+}
+
 /// 声明模式展开文本，摘要常量值与 try 标签序号归一（对照用：剥体前后展开只应差这两处）
 pub fn decl_expansion_normalized(inner: &str) -> Result<String, String> {
     let ts = TokenStream2::from_str(inner).map_err(|e| format!("词法：{e}"))?;

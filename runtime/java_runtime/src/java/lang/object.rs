@@ -23,10 +23,22 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         __object_identity_hash(self)
     }
 
-    /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的类
-    /// 即 `Object.equals` 本体——引用相等（`this == obj`，身份比较）。
+    /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的运行时类
+    /// 对象执行 `Object.equals` 的字节码翻译体（生成的根类方法体 `Object__equals_body`）。
+    /// 非 Java 类载体（[`ObjectVTable::__object`] 为 None）按引用相等应答。
     fn equals(&self, other: Object) -> crate::error::Result<bool> {
-        Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity())
+        match self.__object() {
+            Some(this) => super::object_body::Object__equals_body(&this, other),
+            None => Ok(!other.0.is_jvm_null() && self.__identity() == other.0.__identity()),
+        }
+    }
+
+    /// 本对象的 Object 句柄（根类字节码方法体的 `this`）：运行时类对象——生成类的存储、
+    /// `new Object()` 实例、数组——应答 Some（同一对象，引用计数加一）；非 Java 类载体
+    /// （基本类型盒、`JvmRef`、lambda 载体、null 哨兵）应答 None，根类方法由各自的载体语义承载。
+    #[doc(hidden)]
+    fn __object(&self) -> Option<Object> {
+        None
     }
 
     /// 用于 Display/Debug 的 Rust 字符串（内部用途，避免与 Java toString() -> Result<String> 冲突）
@@ -35,10 +47,14 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     }
 
     /// `Object.toString()` 的虚分派入口（可失败形态，FS-E3）：覆盖 toString 的类由宏桥接到
-    /// 翻译体，toString 抛出的异常以 `Err` 传播（可被 catch）；未覆盖的类回落 `__obj_str`。
-    /// `__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
+    /// 翻译体，toString 抛出的异常以 `Err` 传播（可被 catch）；未覆盖的运行时类对象执行
+    /// `Object.toString` 的字节码翻译体（`getClass().getName() + "@" + Integer.toHexString(hashCode())`），
+    /// 非 Java 类载体回落 `__obj_str`。`__obj_str` 只服务 Rust 侧 Display / Debug（不可失败）。
     fn __to_string(&self) -> crate::error::Result<std::string::String> {
-        Ok(self.__obj_str())
+        match self.__object() {
+            Some(this) => super::object_body::Object__toString_body(&this).map(|s| s.to_string()),
+            None => Ok(self.__obj_str()),
+        }
     }
 
     /// 动态代理钩子（FS-R R4a）：接口载体分派 vtable 未命中时询问接收者。代理载体类
@@ -83,16 +99,17 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 
     // ── Object 监视器方法（S-20，JLS §17.2）────────────────────────────────
     //
-    // 按对象身份（__identity）挂接 monitor.rs 的监视器侧表。以 trait 默认方法
-    // 提供给全部实现类型（生成类 wrapper、基本类型盒、数组、JvmRef），具体类
+    // 以 trait 默认方法提供给全部实现类型（生成类存储、基本类型盒、数组、JvmRef），具体类
     // 不感知；`Object` 包装器的固有方法（object_impl.rs）承载 bare-Object 接收者
-    // 的调用（invokevirtual java/lang/Object.*）。重载命名与生成侧同源：
+    // 的调用（invokevirtual java/lang/Object.*）。wait 三个重载是字节码方法：运行时类对象
+    // 转交生成的根类方法体（object_body，等待落到 native `wait0`）；notify / notifyAll 是
+    // native，按对象身份（__identity）挂接 monitor.rs 的监视器侧表。重载命名与生成侧同源：
     // wait()V → wait、wait(J)V → wait_l、wait(JI)V → wait_l_i（描述符后缀 _PRIM_SUFFIX，J→l）。
     // 调用点恒为具体类型接收者（生成侧对 wrapper / 数组 / 盒类型静态调用，Object 走固有
     // 方法），故以 `where Self: Sized` 移出 vtable：只在被调用的类型上单态化，不再为每个
     // 实现类型各生成一份（emitter-performance §5.5 N4）。
 
-    /// java.lang.Object.wait()V（等价 wait(0)）
+    /// java.lang.Object.wait()V：运行时类对象转交 Object 的翻译体（final，非虚），载体直接等待
     fn wait(&self) -> crate::error::Result<()>
     where
         Self: Sized,
@@ -100,10 +117,14 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, 0, 0)
+        match self.__object() {
+            Some(this) => super::object_body::Object__wait_body(&this),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, false, 0, 0),
+        }
     }
 
-    /// java.lang.Object.wait(J)V：millis 为 0 表示无限等待，负值抛 IllegalArgumentException。
+    /// java.lang.Object.wait(J)V：运行时类对象转交 Object 的翻译体（参数校验、虚拟线程中断处理、
+    /// native `wait0`）；非 Java 类载体直接等待本对象监视器
     fn wait_l(&self, millis: i64) -> crate::error::Result<()>
     where
         Self: Sized,
@@ -111,10 +132,13 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, millis, 0)
+        match self.__object() {
+            Some(this) => super::object_body::Object__wait_l_body(&this, millis),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, false, millis, 0),
+        }
     }
 
-    /// java.lang.Object.wait(JI)V：nanos 须在 0..=999999。
+    /// java.lang.Object.wait(JI)V：运行时类对象转交 Object 的翻译体（nanos 校验后转 wait(J)）
     fn wait_l_i(&self, millis: i64, nanos: i32) -> crate::error::Result<()>
     where
         Self: Sized,
@@ -122,7 +146,10 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.__identity() as usize, false, millis, nanos)
+        match self.__object() {
+            Some(this) => super::object_body::Object__wait_l_i_body(&this, millis, nanos),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, false, millis, nanos),
+        }
     }
 
     /// java.lang.Object.notify()V：唤醒一个在该对象监视器上等待的线程，无等待者时静默。
@@ -306,11 +333,14 @@ pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
     Ok(__object_identity_hash(this))
 }
 
-/// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize
-/// 方法体为空（JDK 语义）。GC 触发的终结调用不建模（无 GC，见 compatibility.md）。
+/// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize 的翻译体。
+/// GC 触发的终结调用不建模（无 GC，见 compatibility.md）。
 #[allow(non_snake_case)]
-pub fn Object__finalize_base<T: ObjectVTable + ?Sized>(_this: &T) -> crate::error::Result<()> {
-    Ok(())
+pub fn Object__finalize_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<()> {
+    match this.__object() {
+        Some(o) => super::object_body::Object__finalize_body(&o),
+        None => Ok(()),
+    }
 }
 
 /// `invokespecial java/lang/Object.getClass` 的落点（javac 对 `super.getClass()` 发射）：
@@ -320,19 +350,24 @@ pub fn Object__getClass_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error
     this.getClass()
 }
 
-/// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：引用相等（`this == o`）。
-/// 按对象标识比较（存储重建视图时共享标识单元，与 `==` 同源）。
+/// `super.equals(o)`（invokespecial java/lang/Object.equals）的落点：Object.equals 的翻译体
+/// （引用相等 `this == o`）；非 Java 类载体按对象标识比较。
 #[allow(non_snake_case)]
 pub fn Object__equals_base<T: ObjectVTable + ?Sized>(this: &T, other: Object) -> crate::error::Result<bool> {
-    Ok(!other.0.is_jvm_null() && this.__identity() == other.0.__identity())
+    match this.__object() {
+        Some(o) => super::object_body::Object__equals_body(&o, other),
+        None => Ok(!other.0.is_jvm_null() && this.__identity() == other.0.__identity()),
+    }
 }
 
-/// `super.toString()`（invokespecial java/lang/Object.toString）的落点：
-/// `getClass().getName() + "@" + Integer.toHexString(hashCode())`，hashCode 走虚派发。
+/// `super.toString()`（invokespecial java/lang/Object.toString）的落点：Object.toString 的翻译体
+/// （`getClass().getName() + "@" + Integer.toHexString(hashCode())`，hashCode 走虚派发）。
 #[allow(non_snake_case)]
 pub fn Object__toString_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<crate::java::lang::String> {
-    let text = format!("{}@{:x}", crate::meta::java_name(this.__class_name()), this.hashCode());
-    Ok(crate::java::lang::String::from(text))
+    match this.__object() {
+        Some(o) => super::object_body::Object__toString_body(&o),
+        None => Ok(crate::java::lang::String::from(this.__obj_str())),
+    }
 }
 
 // ── 基本类型 ObjectVTable impl（int 装箱进 Object 的场景）─────────────────────
@@ -492,6 +527,17 @@ impl Object {
     #[inline]
     pub fn __alloc<T: ObjectVTable>(value: T) -> Object {
         Object(__Obj::new(value).map_ptr(|p| p as *mut dyn ObjectVTable))
+    }
+
+    /// 以存储自身重建 Object（`ObjectVTable::__object`）：引用计数加一，同一对象。
+    ///
+    /// # Safety
+    /// `value` 必须是某个 `__Obj` 所持的堆值或映像值（不得是静态哨兵或栈上的值）。
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn __from_storage<T: ObjectVTable>(value: &T) -> Object {
+        // SAFETY: 调用方保证 value 位于 `__Obj` 分配（或带头部的映像对象）中
+        Object(unsafe { __Obj::from_value(value) }.map_ptr(|p| p as *mut dyn ObjectVTable))
     }
 
     /// 存储（运行时类对象）装入 Object：句柄交出所持对象，或分配后直接装入（S7-2b）。

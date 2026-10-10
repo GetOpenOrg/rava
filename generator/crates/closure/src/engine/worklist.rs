@@ -103,6 +103,10 @@ impl<'a> Engine<'a> {
                 if self.rcall_release() {
                     continue;
                 }
+                // 直连反射调用点的精确接收者在不动点上判定涵盖（`reflect_direct.rs::rdirect_release`）
+                if self.rdirect_release() {
+                    continue;
+                }
                 // 工作队列排空：清单种子按当前可达集补种，补入的新工作继续传播
                 self.stat_enter(Phase::Seeds);
                 let seeded = self.seed_round();
@@ -357,7 +361,7 @@ impl<'a> Engine<'a> {
         let unchanged = self.methods[m].applied.as_ref().is_some_and(|o| o.events == a.events);
         self.ctx.stats.borrow_mut().analyzed(m, unchanged);
         // 透传摘要变化：调用方按新摘要重接调用边
-        let returned = a.returned_params();
+        let returned = self.returned_of(m, &a);
         if self.methods[m].returned.replace(returned.clone()).is_some_and(|old| old != returned) {
             for c in self.callers.get(&m).cloned().unwrap_or_default() {
                 self.ctx.stats.borrow_mut().reapply += 1;

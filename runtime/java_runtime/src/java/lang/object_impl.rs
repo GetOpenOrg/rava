@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use super::object::Object;
-use super::string::String as JvmString;
+use super::object_body::{Object__finalize_body, Object__wait_body, Object__wait_l_body, Object__wait_l_i_body};
 
 /// `new Object()` 的实例体：无 Java 字段；占 1 字节使每个实例拥有独立堆地址（对象身份）。
 pub struct Instance(#[allow(dead_code)] u8);
@@ -14,8 +14,11 @@ impl super::object::ObjectVTable for Instance {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn is_instance_of(&self, type_id: &str) -> bool { type_id == "java/lang/Object" }
     fn hashCode(&self) -> i32 { super::object::__identity_hash(self as *const Instance as *const ()) }
+    // SAFETY: 实例只经 `Object::__alloc` 分配或作为映像对象（带头部）存在
+    fn __object(&self) -> Option<Object> { Some(unsafe { Object::__from_storage(self) }) }
+    /// Display / Debug：Object.toString 的翻译体文本
     fn __obj_str(&self) -> std::string::String {
-        format!("java.lang.Object@{:x}", self.hashCode())
+        self.__to_string().unwrap_or_else(|_| "java.lang.Object".to_owned())
     }
 }
 
@@ -48,28 +51,29 @@ impl Object {
         Ok(self.0.hashCode())
     }
 
-    /// `finalize()`（protected，方法体为空）：静态祖先链未覆盖 finalize 的类上
-    /// `this.finalize()` 经根路由落此（invoke_virtual 的 protected void 根方法分支）。
-    /// GC 触发的终结调用不建模（无 GC）。
-    pub fn finalize(&self) -> Result<()> { Ok(()) }
-
-    #[jvm_native]
-    pub fn equals(&self, other: Object) -> Result<bool> {
-        // 不做引用相等捷径：equals 是虚方法，覆盖者（如动态代理转发 InvocationHandler）对
-        // 自身同样须执行覆盖体；未覆盖类的身份比较由 ObjectVTable::equals 默认体承载。
-        // String 内容比较：通过 Display impl（string_ext.rs 中使用字节数组解码）
+    /// `finalize()`（protected）：静态祖先链未覆盖 finalize 的类上 `this.finalize()` 经根路由落此，
+    /// 执行 Object.finalize 的翻译体。GC 触发的终结调用不建模（无 GC）。
+    pub fn finalize(&self) -> Result<()> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        // String 是 final：运行时类即 String ⇔ 描述符同址（S7-2b：Object 持有存储，按描述符识别）
-        let is_str = |o: &Object| o.0.__desc().is_some_and(|d| std::ptr::eq(d, JvmString::__DESC));
-        if is_str(self) && is_str(&other) {
-            return Ok(format!("{}", JvmString::from(self.clone())) == format!("{}", JvmString::from(other)));
+        Object__finalize_body(self)
+    }
+
+    // ── 字节码方法的 bare-Object 接收者入口 ─────────────────────────────────
+    //
+    // equals / toString / wait 三个重载是 Object 的字节码方法，语义在生成的根类方法体
+    // （`object_body`，按 JDK 字节码翻译）。这里只是接收者静态类型为 Object 时的调用入口：
+    // invokevirtual 的隐式 null 检查 + 分派——可覆盖的 equals / toString 经 vtable 落到运行时类
+    // 的覆盖体或根类翻译体；final 的 wait 直接调用翻译体。命名与生成侧同源（描述符后缀）。
+
+    pub fn equals(&self, other: Object) -> Result<bool> {
+        if self.0.is_jvm_null() {
+            return Err(crate::error::JvmError::null_pointer());
         }
         self.0.equals(other)
     }
 
-    #[jvm_native]
     pub fn toString(&self) -> Result<String> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
@@ -77,37 +81,35 @@ impl Object {
         Ok(String::from(self.0.__to_string()?.as_str()))
     }
 
-    // ── Object 监视器方法（S-20）：bare-Object 接收者的调用落点 ─────────────
-    //
-    // invokevirtual java/lang/Object.{wait,notify,notifyAll} 在接收者静态类型为
-    // Object 时直调本层固有方法（与 getClass 同一形态）；具体类型接收者经
-    // ObjectVTable 的默认方法（object.rs）分派。命名与生成侧同源（描述符后缀）。
-
-    /// java.lang.Object.wait()V（等价 wait(0)）
-    #[jvm_native]
+    /// java.lang.Object.wait()V
     pub fn wait(&self) -> Result<()> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, 0, 0)
+        Object__wait_body(self)
     }
 
     /// java.lang.Object.wait(J)V
-    #[jvm_native]
     pub fn wait_l(&self, millis: i64) -> Result<()> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, 0)
+        Object__wait_l_body(self, millis)
     }
 
     /// java.lang.Object.wait(JI)V
-    #[jvm_native]
     pub fn wait_l_i(&self, millis: i64, nanos: i32) -> Result<()> {
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
-        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, nanos)
+        Object__wait_l_i_body(self, millis, nanos)
+    }
+
+    /// java.lang.Object.wait0(J)V（private native）：在本对象监视器上等待，millis 为 0 表示无限等待；
+    /// 中断以 InterruptedException 返回（监视器侧表，monitor.rs）
+    #[jvm_native]
+    pub fn wait0(&self, millis: i64) -> Result<()> {
+        crate::monitor::wait_timeout(self.0.__identity() as usize, false, millis, 0)
     }
 
     /// java.lang.Object.notify()V：无等待者时静默

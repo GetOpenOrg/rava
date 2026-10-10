@@ -35,6 +35,8 @@ pub(crate) const META_ATTRS: &[&str] = &[
     "java_native",
     "jvm_native",
     "rava_moved",
+    // 静态字段的映像初值（`#[image_static = "<符号>"]`，存储由根门面的映像模块定义）
+    "image_static",
     // 文档属性（`///` 与 `#[doc(hidden)]`）只服务 rustdoc；生成源码里照常可读，展开后不再随方法逐个复制
     // （拆 crate §7.5.4 #7）
     "doc",

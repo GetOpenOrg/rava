@@ -83,6 +83,13 @@ impl Vm {
             let cm = self.mirror(env, ct)?;
             self.put_vm_field(env, o, "component_type", CV::R(cm))?;
         }
+        // 镜像名（HotSpot `JVM_InitClassName` 的驻留结果）：映像镜像是运行期的规范镜像（零拷贝，计划 §5.10），
+        // 名字随镜像入映像，运行期不再按需建名
+        if (self.boot || self.ext.is_some()) && env.cfg().vm_fields.contains_key("class_name") {
+            let u: Vec<u16> = super::natives::java_name(&t).encode_utf16().collect();
+            let s = self.string(env, &u)?;
+            self.put_vm_field(env, o, "class_name", CV::R(s))?;
+        }
         if self.boot {
             self.mirror_module(env, &t, o)?;
         }

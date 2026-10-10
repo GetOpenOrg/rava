@@ -133,7 +133,11 @@ pub(crate) fn expand_statics(
             }
             continue;
         }
-        let cell = format_ident!("__STATIC_{}_{}", struct_ident, name);
+        let cell_ident = format_ident!("__STATIC_{}_{}", struct_ident, name);
+        // 带映像初值的静态字段：存储由根门面的映像模块以常量初值定义（零拷贝，计划 2026-10-05 §5.10），
+        // 本层只声明外部静态（同一单元类型经 `__STATIC_TY_*` 别名给出）；访问经 `unsafe` 取引用
+        let image_sym = super::util::attr_str(&st.attrs, "image_static");
+        let cell = if image_sym.is_some() { quote! { (unsafe { &#cell_ident }) } } else { quote! { #cell_ident } };
         let setter = format_ident!("set_{}", name);
         let (raw_get, raw_set) = (raw_getter(name), raw_setter(name));
         // 无锁静态单元（R1 Q1(a)）：常量初始化的普通 `static`，不经 `OnceLock`。
@@ -154,10 +158,26 @@ pub(crate) fn expand_statics(
                 quote! { #cell.set(::std::option::Option::Some(v)) },
             )
         };
-        storage.push(quote! {
-            #[allow(non_upper_case_globals)]
-            static #cell: #cell_ty;
-        });
+        match &image_sym {
+            Some(sym) => {
+                let (cty, _) = split_cell_ty(&cell_ty);
+                let alias = format_ident!("__STATIC_TY_{}_{}", struct_ident, name);
+                storage.push(quote! {
+                    #[doc(hidden)]
+                    #[allow(non_camel_case_types)]
+                    pub type #alias = #cty;
+                    unsafe extern "Rust" {
+                        #[link_name = #sym]
+                        #[allow(non_upper_case_globals)]
+                        static #cell_ident: #alias;
+                    }
+                });
+            }
+            None => storage.push(quote! {
+                #[allow(non_upper_case_globals)]
+                static #cell_ident: #cell_ty;
+            }),
+        }
         if !getter_handwritten {
             members.push(quote! {
                 #(#keep_attrs)*
@@ -198,6 +218,16 @@ pub(crate) fn expand_statics(
     }
     members.push(statics_table(statics));
     (storage, members)
+}
+
+/// `单元类型 = 初值` 形态的拆分（外部静态只取类型）
+fn split_cell_ty(t: &TokenStream2) -> (TokenStream2, TokenStream2) {
+    let toks: Vec<proc_macro2::TokenTree> = t.clone().into_iter().collect();
+    let at = toks
+        .iter()
+        .position(|x| matches!(x, proc_macro2::TokenTree::Punct(p) if p.as_char() == '='))
+        .expect("单元类型带初值");
+    (toks[..at].iter().cloned().collect(), toks[at + 1..].iter().cloned().collect())
 }
 
 /// 带反射标记的静态字段的 Java 字段名：`cfg_attr(any(), java_field(name = "..", .., reflect = true))`
@@ -355,11 +385,15 @@ pub(crate) fn expand_class_init(
     superclass: Option<&Type>,
     init_interfaces: &[Type],
     has_clinit: bool,
+    boot_initialized: bool,
 ) -> (TokenStream2, TokenStream2) {
     let state = format_ident!("__CLINIT_STATE_{}", struct_ident);
+    // 构建期引导映像中已完成初始化的类：状态初值即「已完成」（静态字段的映像值是常量初值），
+    // 运行期不运行 `<clinit>`、启动时不登记
+    let init = if boot_initialized { quote! { __PrimCell::from_bits(3) } } else { quote! { __PrimCell::zeroed() } };
     let storage = quote! {
         #[allow(non_upper_case_globals)]
-        static #state: __PrimCell<u8> = __PrimCell::zeroed();
+        static #state: __PrimCell<u8> = #init;
     };
     let init_super = superclass.map(|sup| quote! { <#sup>::__class_init()?; });
     // JVMS §5.5 步骤 7：父类之后、本类 `<clinit>` 之前，初始化带 default 方法的超接口
@@ -387,12 +421,6 @@ pub(crate) fn expand_class_init(
             })
         }
 
-        /// 构建期引导映像：本类在构建期已完成初始化（静态字段已由启动序列写入映像值），
-        /// 登记后直接进入「已初始化」，不运行 `<clinit>`
-        #[doc(hidden)]
-        pub fn __boot_initialized() {
-            __boot_initialized_run(#binary_name, &#state);
-        }
     };
     (storage, member)
 }

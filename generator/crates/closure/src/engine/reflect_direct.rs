@@ -151,7 +151,9 @@ impl<'a> Engine<'a> {
     /// 门控（非虚目标也一样：private / final 的 `writeObject` / `readObject` 等序列化回调只在有 C 的实例时可达）：
     /// - 精确接收者（⊂ C）逐对象选实现（非虚目标即已解析方法），各实现以选中它的接收者为 this 接边（不按接收者对象
     ///   克隆）；已接的接收者记在 `rdirect_done`，值集增长时只接新到者。this 只收精确接收者——open 部分不直接流入
-    ///   方法体（否则无 C 实例逃逸时方法体也按 open(C) 接收者分析）；
+    ///   方法体（否则无 C 实例逃逸时方法体也按 open(C) 接收者分析）。已逃逸、属于值集中某 open 类型的精确接收者经该 open
+    ///   的枢纽展开（open 视图读到它的字段），不再逐个作 this 接边——否则一个上下文里汇合全部已逃逸实例（如序列化回调的
+    ///   接收者汇合全部可序列化映射），读出它们全部的内容；涵盖判定在工作队列排空时做（`rdirect_release`）；
     /// - open 部分经 open 枢纽，按 C 归一（`direct_open_roots`）：值集含 C 的超类型 open 时只接 open(C) 一个枢纽
     ///   （G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。枢纽键是
     ///   （目标, open(C)），与字节码虚调用及其他直连点共用，G 增长时由枢纽增量展开；单点枢纽数以目标数为界，与 open
@@ -179,33 +181,35 @@ impl<'a> Engine<'a> {
         // 实参来源（实参数组的分配点随值集增长）变了：已接的接收者与 open 枢纽按新实参重接
         let regrow = done.a.as_ref() != Some(a);
         if regrow {
-            done.sent.clear();
             done.a = Some(a.clone());
         }
         let (special, plain): (Vec<u32>, Vec<u32>) = rs.into_iter().partition(|r| !nonvirt && (self.lambdas.contains_key(r) || self.hwobjs.contains_key(r)));
-        let mut by_impl: BTreeMap<MemberRef, Vec<u32>> = BTreeMap::new();
+        let mut grew = false;
+        for o in s.open.iter() {
+            grew |= done.opens.insert(o);
+        }
+        // 已被接收者 open 涵盖的精确接收者由 open 枢纽展开，永久略去；尚未涵盖的挂起，到工作队列排空时定夺
+        // （`rdirect_release`，同 `reflect_call_pool.rs` 的涵盖判定口径）
+        let opens: Vec<u32> = done.opens.iter().copied().collect();
+        let mut send = Vec::new();
         for r in plain {
-            if !done.sent.insert(r) {
+            if done.sent.contains(&r) {
                 continue;
             }
-            let t = self.ty(r);
-            let rname = self.names[t as usize].to_string();
-            match self.h.select(&rname, &site) {
-                Some(x) => {
-                    let (o, n, d) = x.key();
-                    by_impl.entry(MemberRef { owner: o, name: n, desc: d }).or_default().push(r);
-                }
-                None => {
-                    self.unresolved.insert(format!("select {rname} {}", rm.name));
-                }
+            if self.rcall_covered(r, &opens) {
+                done.sent.insert(r);
+                done.wait.remove(&r);
+                self.rdirect_absorbed += 1;
+            } else if done.wait.insert(r) && !std::mem::replace(&mut done.waiting, true) {
+                self.rdirect_wait.push((m, dk.clone()));
             }
         }
-        for (k, mut rs) in by_impl {
-            rs.sort_unstable();
-            let t = self.method(k, via.clone());
-            let recv = TypeSet { classes: IdSet::from_sorted(rs), open: IdSet::default() };
-            self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+        done.pend = Some(DirectPend { iface, ret, res, via: via.clone() });
+        if regrow {
+            // 实参变了：已放行者按新实参重接（挂起者照常等排空）
+            send.extend(std::mem::take(&mut done.released));
         }
+        self.direct_send(m, off, key, &site, &mut done, send, a, ret, res, via);
         if !special.is_empty() {
             let rs: Rc<[u32]> = special.into();
             let h = match self.rdirect_last.get(&lk).cloned() {
@@ -224,10 +228,6 @@ impl<'a> Engine<'a> {
                 self.direct_hub_args(h, a);
             }
         }
-        let mut grew = false;
-        for o in s.open.iter() {
-            grew |= done.opens.insert(o);
-        }
         if grew {
             let opens: Vec<u32> = done.opens.iter().copied().collect();
             for o in self.direct_open_roots(owner, &opens) {
@@ -240,6 +240,74 @@ impl<'a> Engine<'a> {
             }
         }
         self.rdirect_done.entry(m).or_default().insert(dk, done);
+    }
+
+    /// 精确接收者 rs 按所选实现分组，各实现以选中它的接收者为 this 接边；接过的记入 `released`
+    #[allow(clippy::too_many_arguments)]
+    fn direct_send(&mut self, m: usize, off: u32, key: &MemberRef, site: &resolve::MethodSite, done: &mut DirectDone, rs: Vec<u32>, a: &Args, ret: Option<u32>, res: Option<Node>, via: &Via) {
+        let mut by_impl: BTreeMap<MemberRef, Vec<u32>> = BTreeMap::new();
+        for r in rs {
+            done.released.insert(r);
+            let t = self.ty(r);
+            let rname = self.names[t as usize].to_string();
+            match self.h.select(&rname, site) {
+                Some(x) => {
+                    let (o, n, d) = x.key();
+                    by_impl.entry(MemberRef { owner: o, name: n, desc: d }).or_default().push(r);
+                }
+                None => {
+                    self.unresolved.insert(format!("select {rname} {}", key.name));
+                }
+            }
+        }
+        for (k, mut rs) in by_impl {
+            rs.sort_unstable();
+            let t = self.method(k, via.clone());
+            let recv = TypeSet { classes: IdSet::from_sorted(rs), open: IdSet::default() };
+            self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+        }
+    }
+
+    /// 工作队列排空：直连调用点上挂起的精确接收者按此刻的接收者 open 与逃逸集定夺——已被涵盖的略去（由 open 枢纽
+    /// 展开），其余逐个接到所选实现。涵盖条件随分析只增不减，到达时判定会使「逐个接边」与「经枢纽」的取舍取决于
+    /// 求值先后；排空时的状态是单调部分的不动点，与求值次序无关（同 [`Self::rcall_release`]）。
+    /// 放行后才到的接收者照常挂起、下一次排空再判
+    pub(super) fn rdirect_release(&mut self) -> bool {
+        let mut ws = std::mem::take(&mut self.rdirect_wait);
+        if ws.is_empty() {
+            return false;
+        }
+        ws.sort_unstable();
+        // 先按同一时刻的状态定夺全部挂起者，再接边（接边不影响本轮其余调用点的判定）
+        let mut plan = Vec::new();
+        for (m, dk) in ws {
+            let Some(mut done) = self.rdirect_done.get_mut(&m).and_then(|d| d.remove(&dk)) else { continue };
+            done.waiting = false;
+            let opens: Vec<u32> = done.opens.iter().copied().collect();
+            let mut send = Vec::new();
+            for r in std::mem::take(&mut done.wait) {
+                done.sent.insert(r);
+                if self.rcall_covered(r, &opens) {
+                    self.rdirect_absorbed += 1;
+                } else {
+                    send.push(r);
+                }
+            }
+            plan.push((m, dk, done, send));
+        }
+        let mut any = false;
+        for (m, dk, mut done, send) in plan {
+            let (off, key) = (dk.0, dk.1.clone());
+            if let (false, Some(p), Some(a)) = (send.is_empty(), done.pend.clone(), done.a.clone()) {
+                if let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, p.iface) {
+                    self.rdirect_released += send.len();
+                    self.direct_send(m, off, &key, &site, &mut done, send, &a, p.ret, p.res, &p.via);
+                    any = true;
+                }
+            }
+            self.rdirect_done.entry(m).or_default().insert(dk, done);
+        }
+        any
     }
 
     /// 直连实例目标（声明类 c）的接收者 open 类型 opens 中各自建枢纽者：有 c 的超类型时即 c 本身（其接收者
@@ -276,12 +344,28 @@ impl<'a> Engine<'a> {
 /// 直连调用点上一个实例目标已接的部分（`direct_virtual`）
 #[derive(Default)]
 pub(super) struct DirectDone {
-    /// 已作为 this 接到所选实现的精确接收者
+    /// 已定夺的精确接收者（被 open 涵盖而略去，或已放行）
     sent: BTreeSet<u32>,
+    /// 已作为 this 接到所选实现的精确接收者（实参变化时按新实参重接）
+    released: BTreeSet<u32>,
+    /// 挂起待排空时定夺的精确接收者；本记录是否已登记在 `rdirect_wait`
+    wait: BTreeSet<u32>,
+    waiting: bool,
+    /// 最近一次接边的目标形态（排空放行时接边用）
+    pend: Option<DirectPend>,
     /// 已见的接收者 open 类型
     opens: BTreeSet<u32>,
     /// 已接入枢纽的 open 类型 → 枢纽
     roots: BTreeMap<u32, u32>,
     /// 接边时的目标实参来源（变化即重接）
     a: Option<Args>,
+}
+
+/// 直连实例目标的接边形态（`DirectDone::pend`）
+#[derive(Clone)]
+pub(super) struct DirectPend {
+    iface: bool,
+    ret: Option<u32>,
+    res: Option<Node>,
+    via: Via,
 }
