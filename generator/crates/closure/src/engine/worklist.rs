@@ -364,10 +364,14 @@ impl<'a> Engine<'a> {
         // 透传摘要变化：调用方按新摘要重接调用边
         let returned = self.returned_of(m, &a);
         if self.methods[m].returned.replace(returned.clone()).is_some_and(|old| old != returned) {
-            for c in self.callers.get(&m).cloned().unwrap_or_default() {
+            // 只经 lambda 调用读者接边的调用方不整方法重接：读者各自按新摘要重接（`lcall_resum`）
+            for c in self.dcallers.get(&m).cloned().unwrap_or_default() {
                 self.ctx.stats.borrow_mut().reapply += 1;
                 self.methods[c].applied = None;
                 self.push_m(c);
+            }
+            for id in self.lcallers.get(&m).cloned().unwrap_or_default() {
+                self.lcall_resum(id);
             }
         }
         if !a.pending_types.is_empty() {

@@ -107,6 +107,35 @@ impl<'a> Engine<'a> {
     /// 方法引用到 @CallerSensitive 方法（`MethodHandles::lookup`）：进入实现方法的边以 lambda 类为调用方
     /// （生成器同判据以隐藏类名压栈）
     pub(super) fn lambda_step(&mut self, m: usize, off: u32, id: Option<u32>) {
+        let outer_call = std::mem::replace(&mut self.cur_lcall, id);
+        self.lambda_step_in(m, off, id);
+        self.cur_lcall = outer_call;
+    }
+
+    /// 读者接边的被调方透传摘要变化：清掉读者的已接记录与它逐接收者派发的去重记录，按新摘要完整重接。
+    /// 作废的读者复活时完整重接（同 `reset_sites`）
+    pub(super) fn lcall_resum(&mut self, id: u32) {
+        let c = &mut self.lcalls[id as usize];
+        let (m, off, lid) = (c.m, c.off, c.call.0);
+        let done = std::mem::take(&mut c.done);
+        c.hub = None;
+        c.fixed = false;
+        c.suspended = false;
+        if !c.live {
+            return;
+        }
+        if let Some(d) = self.dispatched.get_mut(&m) {
+            for r in done.classes.iter() {
+                d.remove(&(off, r, lid));
+            }
+        }
+        self.ctx.stats.borrow_mut().reapply += 1;
+        if self.in_cwork.insert(id) {
+            self.cwork.push_back(id);
+        }
+    }
+
+    fn lambda_step_in(&mut self, m: usize, off: u32, id: Option<u32>) {
         let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
         let lid = self.lcalls[at].call.0;
         let k = self.lambdas[&lid].imh.member.clone();

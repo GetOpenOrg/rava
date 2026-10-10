@@ -233,6 +233,7 @@ impl<'a> Engine<'a> {
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
+        self.dcallers.entry(entry).or_default().insert(m);
         for (((c, r), &h), b) in outs.into_iter().zip(&hot).zip(&bad) {
             if b.is_some() || !self.concrete.applied.insert((m, off, c.clone())) {
                 continue;

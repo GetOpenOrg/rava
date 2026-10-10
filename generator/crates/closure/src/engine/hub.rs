@@ -112,6 +112,13 @@ impl<'a> Engine<'a> {
 
     /// 调用点接入枢纽：实参汇入 `HP`，`HR` 流向结果；逐调用点派发的接收者对本调用点派发
     pub(super) fn link_hub(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
+        // 枢纽上的接边属调用点（重接随调用方整方法重接），不归当前 lambda 调用读者
+        let outer = self.cur_lcall.take();
+        self.link_hub_in(h, m, off, a, res);
+        self.cur_lcall = outer;
+    }
+
+    fn link_hub_in(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
         // 同一分析结果下重跑调用点：实参来源与常量不变，已接入即完成（与 `dispatched` 同口径，分析重算时清空）。
         // 字节码调用点上的 lambda 调用由自身读者单元增量驱动；非字节码调用方按当前值重新接边
         if !self.hub_linked.entry(m).or_default().insert((off, h)) {

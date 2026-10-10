@@ -370,6 +370,10 @@ impl<'a> Engine<'a> {
             self.vdisp_note(m, off, Some(t));
         }
         self.callers.entry(t).or_default().insert(m);
+        match self.cur_lcall {
+            Some(id) => self.lcallers.entry(t).or_default().insert(id),
+            None => self.dcallers.entry(t).or_default().insert(m),
+        };
         self.caller_edge(m, t);
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();

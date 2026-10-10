@@ -407,6 +407,12 @@ pub struct Engine<'a> {
     rcall_wait_members: Vec<usize>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
+    /// 被调方 → 经调用点自身（非 lambda 调用读者）接边的调用方：被调方透传摘要变化时整方法重接
+    dcallers: HashMap<usize, BTreeSet<usize>>,
+    /// 被调方 → 接边的 lambda 调用读者：被调方透传摘要变化时只重接这些读者（`lcall_resum`）
+    lcallers: HashMap<usize, BTreeSet<u32>>,
+    /// 正在接边的 lambda 调用读者（`lambda_step` 置，进入枢纽接入时清）
+    cur_lcall: Option<u32>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
     call_vals: Option<Rc<[V]>>,
     /// 进行中的 lambda 接边：捕获值所在创建点与接收者位置（`lambda_vals.rs`）
