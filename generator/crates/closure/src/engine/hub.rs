@@ -148,6 +148,7 @@ impl<'a> Engine<'a> {
         } else {
             self.pstr_top_h(h);
         }
+        self.taint_hub_site(m, h, ptypes.len(), cv.as_deref());
         // 形参常量格与逐个接边同口径（`bind_params` 取 `PV::of_ret`：确定非空的无标签引用记为「非空引用」）
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of_ret)).collect();
         self.hub_vals(h, &mine);
@@ -246,7 +247,9 @@ impl<'a> Engine<'a> {
         }
         let Some(vals) = self.hubs[h as usize].vals.clone() else { return };
         let n = self.methods[t].ptypes.len();
-        self.bind_pvs(t, base, n, Some(&vals));
+        // 污染不看合流后的常量格：各接入点的污染已记在枢纽形参槽上，沿上面的子集边到达目标形参槽
+        self.pstr_offsite(t);
+        self.join_pvs(t, base, n, Some(&vals));
     }
 
     /// 新成员 x 进入 G（或数组逃逸）：已展开、open 类型含 x 的枢纽展开之

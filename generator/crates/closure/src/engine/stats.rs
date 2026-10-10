@@ -408,6 +408,9 @@ impl<'a> Engine<'a> {
         });
         // 主要边种类按端点方法（去上下文）汇总的前列：{种类: {"src": [[端点, 边数]], "dst": [...]}}
         v["edge_groups"] = self.edge_groups(top);
+        // 按对象物化（concrete.rs `object_results`）：[对象数, 回退后应用的组合数, 上下文含物化对象的方法节点数]
+        let pctx = self.methods.iter().filter(|x| x.1.ctx != NOCTX && self.names[x.1.ctx as usize].contains("@concrete:")).count();
+        v["pobj"] = json!([self.concrete.pobj_stats[0], self.concrete.pobj_stats[1], pctx]);
         v
     }
 }

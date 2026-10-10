@@ -30,6 +30,18 @@ fn put_str(p: &Put) -> Option<Option<V>> {
     }
 }
 
+/// 按对象物化对象内容文本的递归深度上限（更深处只取类名：合并更粗，仍健全）
+const CONTENT_DEPTH: usize = 4;
+
+/// 内容文本的 64 位 FNV-1a 散列（十六进制）
+fn fnv_hex(s: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 fn pv_of(v: &MV) -> PV {
     match v {
         MV::Prim(Put::Int(x)) => PV::Const(V::Int(*x)),
@@ -41,8 +53,7 @@ fn pv_of(v: &MV) -> PV {
 
 impl<'a> Engine<'a> {
     /// 一组实参的结果并入调用点 m@off（入口 entry）
-    /// tag 为按对象物化时结果对象的名字标签（见 `concrete.rs::obj_tag`）
-    pub(super) fn concrete_apply(&mut self, m: usize, off: u32, entry: &MemberRef, md: &MethodDesc, o: &Outcome, tag: &str) {
+    pub(super) fn concrete_apply(&mut self, m: usize, off: u32, entry: &MemberRef, md: &MethodDesc, o: &Outcome) {
         let via = Via::method("concrete", m, Some(off));
         // 结果按对象物化（`[concrete] object_results`）：入口自身分配的类的结果实例各成一个抽象对象
         let ek = self.mref_key(entry);
@@ -104,7 +115,7 @@ impl<'a> Engine<'a> {
         let mut ids: Vec<Option<TypeSet>> = vec![None; o.objs.len()];
         let mut own: Vec<Option<u32>> = vec![None; o.objs.len()];
         for i in 0..o.objs.len() {
-            own[i] = self.mat_obj(m, off, &o.objs, i, &mut ids, &via, per_obj.then_some(tag));
+            own[i] = self.mat_obj(m, off, &o.objs, i, &mut ids, &via, per_obj);
         }
         for (i, x) in o.objs.iter().enumerate() {
             let me = ids[i].clone().unwrap_or_default();
@@ -163,16 +174,26 @@ impl<'a> Engine<'a> {
         self.invalidate_all(deps, Why::RetConst);
     }
 
-    /// 第 i 个结果对象的值集；按对象物化（tag 为 Some）且其类在 `pobj_types` 中时为抽象对象，返回该对象
+    /// 第 i 个结果对象的值集；按对象物化（per_obj）且其类在 `pobj_types` 中时为抽象对象，返回该对象。
+    /// 对象按内容命名（`content_name`）：快照相同的同类对象（各格式串里形态相同的说明符等）是同一个抽象对象，
+    /// 对象数以不同的快照形态为上界，与实参组合数、调用点数无关；名字只取决于内容，与求值 / 应用次序无关
     #[allow(clippy::too_many_arguments)]
-    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via, tag: Option<&str>) -> Option<u32> {
+    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via, per_obj: bool) -> Option<u32> {
         let x = &objs[i];
-        if let Some(tag) = tag.filter(|_| x.lam.is_none() && !x.arr && self.per_object_type(&x.ty)) {
+        if per_obj && self.pobj_of(x) {
             self.instantiate_type(&x.ty, via.clone());
-            let chain = format!("@concrete:{tag}:{i}");
+            let mut text = String::new();
+            self.content_name(objs, i, 0, &mut text);
+            let chain = format!("@concrete:{}", fnv_hex(&text));
             let tid = self.id(&x.ty);
             let id = self.id(&format!("{}{chain}", x.ty));
-            self.objs.insert(id, tid);
+            if self.objs.insert(id, tid).is_none() {
+                let n = &mut self.concrete.pobj_stats;
+                n[0] += 1;
+                if n[0] >= 64 && n[0].is_power_of_two() {
+                    eprintln!("[closure] 按对象物化：{} 个对象，回退后应用 {} 组，峰值 {} MiB", n[0], n[1], crate::engine::peak_mem_mb());
+                }
+            }
             // 链首段 → 类（同 `classes.rs::obj_at`）：以该对象为属主的内部分配据此判定是否沿用属主链
             self.seg_cls.entry(Rc::from(chain.as_str())).or_insert(tid);
             self.obj_chain.insert(id, Rc::from(chain));
@@ -192,6 +213,40 @@ impl<'a> Engine<'a> {
         };
         ids[i] = Some(s);
         None
+    }
+
+    /// 快照对象 x 按对象物化（非数组、非 lambda、类在 `pobj_types` 中）
+    fn pobj_of(&self, x: &MObj) -> bool {
+        x.lam.is_none() && !x.arr && self.per_object_type(&x.ty)
+    }
+
+    /// 第 i 个快照对象的内容文本（命名用）：按对象物化的对象取类与各字段值，引用的按对象物化对象递归取内容；
+    /// 其余对象按其物化形态（类 / 数组类 / lambda 接口）取，它们物化后不按对象区分，内容不影响抽象状态。
+    /// 内容相同即物化后的抽象状态相同，合并不损精度
+    fn content_name(&self, objs: &[MObj], i: usize, depth: usize, out: &mut String) {
+        use std::fmt::Write;
+        let x = &objs[i];
+        if !self.pobj_of(x) {
+            let kind = if x.lam.is_some() { "λ" } else if x.arr { "[]" } else { "" };
+            let _ = write!(out, "{kind}{}", x.ty);
+            return;
+        }
+        if depth >= CONTENT_DEPTH {
+            let _ = write!(out, "{}{{…}}", x.ty);
+            return;
+        }
+        let _ = write!(out, "{}{{", x.ty);
+        for (f, v) in &x.fields {
+            let _ = write!(out, "{}.{}=", f.owner, f.name);
+            match v {
+                MV::Obj(j) => self.content_name(objs, *j, depth + 1, out),
+                v => {
+                    let _ = write!(out, "{v:?}");
+                }
+            }
+            out.push(';');
+        }
+        out.push('}');
     }
 
     /// 具体求值中 String 字段的写入并入字段常量集与字段字符串槽（与字节码写入同一口径，见 bytecode.rs）：
@@ -316,6 +371,14 @@ impl<'a> Engine<'a> {
                         self.init(&decl, via.clone());
                     }
                     self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
+                    // 具体上下文执行过的静态字段访问运行期照样执行：引用类型静态字段登记字段节点，构建期初始化类的
+                    // 取映像值（所指映像对象成为活对象，内容随之入队）——否则只经具体上下文读到的映像静态不发射，运行期
+                    // 读成 null。实例字段不登记：接收者来自静态 / 实参 / 新建对象，前两者的映像对象已活、内容已传播，
+                    // 按字段并集登记反把全部活对象的该字段值并入（如类镜像的 genericInfo）
+                    let is_static = opc == op::GETSTATIC || opc == op::PUTSTATIC;
+                    if is_static && parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_some() {
+                        self.field_node(MemberRef { owner: decl, name: f.name.clone(), desc: f.desc.clone() });
+                    }
                 }
                 (Operand::Method(mref, iface), opc) => {
                     let lvl = if opc == op::INVOKESTATIC || opc == op::INVOKESPECIAL { Level::Layout } else { Level::Type };

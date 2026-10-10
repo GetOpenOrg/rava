@@ -104,6 +104,8 @@ pub(super) struct Concrete {
     /// 结果按对象物化的类：`[concrete] object_results` 各入口字节码自身 `new` 的类（分析前按字节码确定，
     /// 按对象读的形参门据此放行，见 `obj_fields.rs::obj_param_set`）
     pobj_types: HashSet<Rc<str>>,
+    /// 诊断：按对象物化出的抽象对象数 / 回退后应用的已知常量组合数（`summary.perf.pobj`；对象数每翻倍报一行进度）
+    pub(super) pobj_stats: [u64; 2],
     /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
@@ -159,7 +161,7 @@ impl<'a> Engine<'a> {
             }
             match self.combos(m, off, md, recv, args) {
                 Ok(c) => {
-                    if self.concrete_run(m, off, resolved, md, &k, &c, site_name.clone(), false) {
+                    if self.concrete_run(m, off, resolved, md, &c, site_name.clone(), false) {
                         return true;
                     }
                 }
@@ -172,7 +174,7 @@ impl<'a> Engine<'a> {
             if let Some(c) = self.concrete_known(m, off, md, recv, args) {
                 let c: Vec<Vec<AK>> = c.into_iter().filter(|c| self.concrete.partial_tried.insert((m, off, c.clone()))).collect();
                 if !c.is_empty() {
-                    self.concrete_run(m, off, resolved, md, &k, &c, site_name, true);
+                    self.concrete_run(m, off, resolved, md, &c, site_name, true);
                 }
             }
         }
@@ -182,7 +184,7 @@ impl<'a> Engine<'a> {
     /// 逐组求值并应用。partial = false：任一组失败即整点回退（返回 false）；partial = true（已回退的按对象物化入口）：
     /// 跳过失败的组合，其余照常应用
     #[allow(clippy::too_many_arguments)]
-    fn concrete_run(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, k: &str, combos: &[Vec<AK>], site_name: String, partial: bool) -> bool {
+    fn concrete_run(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, combos: &[Vec<AK>], site_name: String, partial: bool) -> bool {
         let Some(site) = self.h.resolve_method(&resolved.owner, &resolved.name, &resolved.desc, false) else { return false };
         let mut outs = Vec::new();
         for c in combos {
@@ -236,6 +238,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if partial {
+                self.concrete.pobj_stats[1] += 1;
                 // 逐组记诊断：应用集合单调，诊断行集合也与次序无关
                 self.concrete.diag.entry(site_name.clone()).or_default().insert(format!("回退后应用已知常量组合 {c:?}"));
             }
@@ -243,9 +246,9 @@ impl<'a> Engine<'a> {
             match o.alt.as_ref().filter(|_| h) {
                 Some(a) => {
                     self.image_memo_apply((m, off), &a.0);
-                    self.concrete_apply(m, off, resolved, md, &a.1, &obj_tag(k, &c, true));
+                    self.concrete_apply(m, off, resolved, md, &a.1);
                 }
-                None => self.concrete_apply(m, off, resolved, md, o, &obj_tag(k, &c, false)),
+                None => self.concrete_apply(m, off, resolved, md, o),
             }
         }
         if partial {
@@ -468,16 +471,6 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
         Err(Flow::Throw(_) | Flow::Implicit(_)) => Err("实参构造抛出异常".into()),
         Err(Flow::Defer(w)) => Err(w),
     }
-}
-
-/// 按对象物化的结果对象的名字标签：入口 + 实参组合 + 冷热（同一组实参在各调用点的结果相同，共用同一组抽象对象）。
-/// 取内容散列而非序号：名字与求值 / 应用次序无关
-fn obj_tag(entry: &str, args: &[AK], hot: bool) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in format!("{entry}|{args:?}|{hot}").bytes() {
-        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{h:016x}")
 }
 
 /// 一组实参入闭包的结果：热求值（缓存物化进映像）或冷 / 热之并

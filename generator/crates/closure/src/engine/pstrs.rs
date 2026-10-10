@@ -97,18 +97,9 @@ impl<'a> Engine<'a> {
         self.pstr.sites.get(&(m, i)).into_iter().flatten().copied().collect()
     }
 
-    /// 方法形参槽 (m, i) 的子集边后继中的方法形参槽（污染沿边传播，engine/field_names.rs）
-    pub(super) fn pstr_succ_methods(&self, m: usize, i: usize) -> Vec<(usize, usize)> {
-        self.pstr
-            .succ
-            .get(&PSlot::M(m, i))
-            .into_iter()
-            .flatten()
-            .filter_map(|s| match *s {
-                PSlot::M(t, j) => Some((t, j)),
-                PSlot::H(..) | PSlot::F(_) | PSlot::V(_) => None,
-            })
-            .collect()
+    /// 槽 s 的子集边后继中记污染的槽（方法 / 枢纽形参槽）
+    pub(super) fn pstr_succ_slots(&self, s: PSlot) -> Vec<PSlot> {
+        self.pstr.succ.get(&s).into_iter().flatten().copied().filter(|u| matches!(u, PSlot::M(..) | PSlot::H(..))).collect()
     }
 
     /// 常量并入槽 at，沿子集边传递（只传新增部分）
@@ -141,6 +132,10 @@ impl<'a> Engine<'a> {
         }
         self.pstr.pred.entry(to).or_default().insert(from);
         self.pstr_wake(to);
+        // 污染与常量同沿子集边：新边的来源槽已污染时目标槽随之污染
+        if self.slot_tainted(from) {
+            self.taint_slot(to, super::field_names::TaintWhy::Pass(from));
+        }
         let xs = self.pstr.sets.get(&from).cloned().unwrap_or_default();
         if !xs.is_empty() {
             self.pstr_add(to, xs);

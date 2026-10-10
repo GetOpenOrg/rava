@@ -329,7 +329,9 @@ pub struct Engine<'a> {
     /// 出现过非字符串常量实参（或无调用点记录即进入）的形参槽：名字取自这些槽的按名取字段站点按保守回退处理
     ptaint: HashSet<(usize, usize)>,
     /// 诊断（`--flows @taint:`）：污染槽的首个来源（透传来源槽，或调用方节点与原因）
-    ptaint_why: HashMap<(usize, usize), field_names::TaintWhy>,
+    ptaint_why: HashMap<pstrs::PSlot, field_names::TaintWhy>,
+    /// 出现过非字符串常量实参的枢纽形参槽（枢纽 → 形参序号）：沿子集边污染目标方法形参槽（`hub_bind`）
+    htaint: HashSet<(u32, usize)>,
     /// 流到形参的字符串常量集（按名查找的名字来自形参时逐个展开；只并不减，见 `pstrs.rs`）
     pstr: pstrs::PStrs,
     /// 具体求值（engine/concrete.rs）
