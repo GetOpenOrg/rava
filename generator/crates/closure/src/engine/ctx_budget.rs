@@ -17,12 +17,18 @@ use super::*;
 
 /// 同一成员按抽象对象上下文建克隆的上限；超出后按类型上下文合并
 const CTX_BUDGET: u32 = 2048;
+/// 方法节点总数上限（试验）：超出后新到的对象上下文一律按类合并（`^类|`，不带堆上下文尾）
+const GLOBAL_CTX_BUDGET: usize = 200_000;
 
 impl Engine<'_> {
     /// 新建字节码方法克隆前对对象上下文做预算收口（见模块说明）；只在节点不存在时调用，已建的克隆照常沿用
     pub(super) fn budget_ctx(&mut self, key: &MemberRef, ctx: u32) -> u32 {
         if ctx == NOCTX || !self.objs.contains_key(&ctx) || self.ctx_heap.contains_key(&ctx) || self.level_ctxs.contains_key(&ctx) {
             return ctx;
+        }
+        if self.methods.len() >= GLOBAL_CTX_BUDGET {
+            self.ctx_stats.merged += 1;
+            return self.class_ctx(ctx);
         }
         let n = self.ctx_fine.entry(key.clone()).or_default();
         if *n < CTX_BUDGET {
@@ -35,8 +41,16 @@ impl Engine<'_> {
 
     /// 对象上下文 r 的类型上下文：`^类|堆上下文尾`（尾 = r 的分配点链去掉首段）
     fn typed_ctx(&mut self, r: u32) -> u32 {
-        let tid = self.objs[&r];
         let tail = self.obj_chain.get(&r).and_then(|c| c.split_once('#').map(|(_, t)| t.to_string())).unwrap_or_default();
+        self.typed_named(self.objs[&r], tail)
+    }
+
+    /// 对象上下文 r 的类上下文：`^类|`（不带堆上下文尾）
+    fn class_ctx(&mut self, r: u32) -> u32 {
+        self.typed_named(self.objs[&r], String::new())
+    }
+
+    fn typed_named(&mut self, tid: u32, tail: String) -> u32 {
         let name = format!("^{}|{tail}", self.names[tid as usize]);
         if let Some(&id) = self.ids.get(name.as_str()) {
             return id;
