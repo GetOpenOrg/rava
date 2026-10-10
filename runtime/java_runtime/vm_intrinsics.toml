@@ -533,6 +533,11 @@ methods = [
 constructors = [
     "java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;",
 ]
+# 开放枚举：上列成员枚举中、枚举结果交给用户代码的入口。用户代码可对拿到的 Method 反射调用任意接收者
+# （代理调用处理器把 Method 转发给被代理对象），所指类不论属用户还是 JDK，全部成员入反射分派面（同用户类被枚举）
+exposing_enumerators = [
+    "java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V",
+]
 record_accessors = [
     "java/lang/Class.getRecordComponents0:()[Ljava/lang/reflect/RecordComponent;",
 ]
