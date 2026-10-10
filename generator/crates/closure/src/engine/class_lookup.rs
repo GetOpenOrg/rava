@@ -13,8 +13,10 @@
 //! - 按名查方法（`[facts.reflect] method_lookups`）复用同一拆段，推不出的段记为任意串，见 `method_lookup.rs`；
 //! - 辅助方法的返回值：唯一目标，或按接收者值集派发的各目标（`callee_returns`），每个返回值一支（`Part::Alt`），
 //!   展开后逐支成候选模式（`expand`，至多 64 个）；
-//! - 按名取类（`Gap::Class`）的推不出段记为任意串：含任意串的候选只匹配闭包里的类名（运行期按名只取得到 VM 登记的
-//!   生成类），站点模式只增不减，新类进入闭包时站点重跑（`pattern_class_added`）；按名加载（`class_loads`）同此口径；
+//! - 按名取类（`Gap::Class`）的推不出段记为任意串：首段是字面量的候选（名字落在固定包前缀下，推不出的段来自运行期
+//!   数据，如 `前缀 + 协议名 + 后缀` 的处理器类名）按类路径匹配，命中的类全部入链（开放世界）；首段即任意串的候选
+//!   只匹配闭包里的类名（运行期按名只取得到 VM 登记的生成类），站点模式只增不减，新类进入闭包时站点重跑
+//!   （`pattern_class_added`）；按名加载（`class_loads`）同此口径；
 //! - 候选名笛卡尔积后只保留类路径上存在的类；结果唯一地经实例化入口（`instantiators`）再唯一地 checkcast 到 T 时，
 //!   只保留 T 的子类型（其余候选在运行时抛 ClassCastException，不产生可观察的成员调用）。
 //!
@@ -138,6 +140,17 @@ pub(super) fn is_invoke(e: &Event) -> bool {
     matches!(e, Event::Invoke { .. })
 }
 
+/// 候选模式首段是非空字面量（或候选集）：名字落在固定前缀的命名空间里，推不出的段由运行期数据决定
+/// （如按协议名拼出的处理器类名）。这类候选按类路径匹配——开放世界下运行期可点名前缀下任何存在的类；
+/// 首段即任意串的候选不限定命名空间，仍按闭包里的类名匹配
+pub(super) fn anchored(parts: &[Part]) -> bool {
+    match parts.first() {
+        Some(Part::Lit(l)) => !l.is_empty(),
+        Some(Part::Any(set)) => !set.is_empty() && set.iter().all(|l| !l.is_empty()),
+        _ => false,
+    }
+}
+
 impl<'a> Engine<'a> {
     /// 按名取类调用点（方法 m、偏移 off、实参 args）的所指类集与是否推不出（top）。
     /// 类集为空且非 top = 候选来源尚未流到（值集增长时重跑）；top = 结果另接被调方法返回的所指未知的 Class。
@@ -233,7 +246,8 @@ impl<'a> Engine<'a> {
         }
         let expect = self.expected_type(&a, off);
         let mut out: BTreeSet<String> = BTreeSet::new();
-        // 含任意串的候选：运行期按名只取得到生成范围内的类（VM 只登记生成的类），按闭包里的类名匹配。
+        // 含任意串的候选：首段为字面量的按类路径匹配（见 [`anchored`]）；其余运行期按名只取得到生成范围内的类
+        // （VM 只登记生成的类），按闭包里的类名匹配。
         // 站点的模式只增不减（各次求值的并集，结果单调）；新类进入闭包时由 `pattern_class_added` 重跑本站点
         if !wild.is_empty() {
             let pats = self.class_patterns.entry((m, off)).or_default();
@@ -243,11 +257,19 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        if let Some(pats) = self.class_patterns.get(&(m, off)) {
+        if let Some(pats) = self.class_patterns.get(&(m, off)).cloned() {
             for cls in self.classes.keys() {
                 let dotted = cls.replace('/', ".");
                 if pats.iter().any(|p| parts_match(p, &dotted)) && expect.as_ref().is_none_or(|t| self.h.is_subtype(cls, t)) {
                     out.insert(cls.clone());
+                }
+            }
+            // 首段是字面量（固定包前缀）的候选：类路径上能匹配的类运行期都可能被点名（开放世界），全部入链
+            for p in pats.iter().filter(|p| anchored(p)) {
+                for cls in self.classpath_matches(p).iter() {
+                    if expect.as_ref().is_none_or(|t| self.h.is_subtype(cls, t)) {
+                        out.insert(cls.to_string());
+                    }
                 }
             }
         }
@@ -592,6 +614,25 @@ impl<'a> Engine<'a> {
             Some(c) => self.h.class(c).is_some(),
             None => elem.len() == 1 && "ZBCSIJFD".contains(elem),
         }
+    }
+
+    /// 候选模式在类路径上匹配到的类（`/` 分隔，按名排序）；同一模式只扫描一次类路径
+    fn classpath_matches(&mut self, p: &[Part]) -> Rc<[String]> {
+        let key = format!("{p:?}");
+        if let Some(r) = self.cp_pattern_hits.get(&key) {
+            return r.clone();
+        }
+        let mut hits: Vec<String> = self
+            .cp
+            .indexed()
+            .map(|(n, _)| n)
+            .filter(|n| !n.starts_with('[') && parts_match(p, &n.replace('/', ".")))
+            .map(str::to_string)
+            .collect();
+        hits.sort();
+        let r: Rc<[String]> = hits.into();
+        self.cp_pattern_hits.insert(key, r.clone());
+        r
     }
 
     /// 新类进入闭包：按名取类站点里含任意串的候选模式能匹配该类名时重跑该站点

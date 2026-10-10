@@ -616,9 +616,10 @@ class_lookups = [
     "java/lang/Class.forName:(Ljava/lang/String;)Ljava/lang/Class;",
     "java/lang/Class.forName:(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
 ]
-# 名字里推不出的段记为任意串：含任意串的候选按闭包里的类名匹配（运行期按名只取得到生成范围内的类——VM 只登记
-# 生成的类，见 class_impl.rs `forName0` / `__is_known_class`），新类进入闭包时站点重跑；整条名字无任何字面量约束时
-# 仍按推不出处理。名字是辅助方法的返回值时，虚调用按接收者值集逐个选出实现，各返回值各成一支
+# 名字里推不出的段记为任意串：首段是字面量的候选（固定包前缀，如 `前缀 + 协议名 + ".Handler"`）按类路径匹配，命中
+# 的类全部入链（开放世界：推不出的段来自运行期数据，前缀下任何存在的类都可能被点名）；首段即任意串的候选按闭包里的
+# 类名匹配（运行期按名只取得到生成范围内的类——VM 只登记生成的类，见 class_impl.rs `forName0` / `__is_known_class`），
+# 新类进入闭包时站点重跑；整条名字无任何字面量约束时仍按推不出处理。名字是辅助方法的返回值时，虚调用按接收者值集逐个选出实现，各返回值各成一支
 # 按名加载（不初始化，返回类镜像或 null）：解析同按名取类，结果只取镜像、不初始化（ClassSpecializer 按物种名
 # 加载预生成物种类）
 class_loads = [
