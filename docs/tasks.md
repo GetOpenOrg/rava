@@ -135,7 +135,7 @@
 - **fix-xsltc（2026-10-10，方案待决）**：TestXmlTransform 运行期 `Translet class loaded, but unable to create translet instance.` 分诊：运行期定义类没有终态承载——`TemplatesImpl.defineTransletClasses` → `ClassLoader.defineClass1`（手写）对格式合法的类文件一律抛 `LinkageError`，被包成 TRANSLET_OBJECT_ERR；不是生成器 / 闭包 / 反射缺陷。终态方案：按内容寻址的预定义类（构建期取得运行期会定义的类文件、按用户类翻译进用户 crate，运行期 defineClass 按 SHA-256 查表，未命中维持 LinkageError）；字节来源 S1 构建期求值 / S2 训练运行（建议）/ 两者并用，以及训练触发方式、同字节多次定义语义，待用户定（X1–X3）。见 [`docs/plans/2026-10-10-xsltc-translet.md`](plans/2026-10-10-xsltc-translet.md)。旁证遗留：未捕获异常报告只读 `cause` 字段，不打印经 `getCause()` 覆盖给出的 cause。
 - **C4 全量**：10-09 在 dev（128G / 16 槽，Memtest86+ 四轮 0 错误、BIOS 风扇曲线已调）上 `--reset` 开跑，基于 main c249cdec，放宽超时（转译 1800 / 运行 900 / 构建 ×2，单例 9000 s）。转译耗时回归未修完即开跑，修复合入后续用例自动受益；全量期间 main 冻结语义改动，只合修复全量失败的提交。
 - **C4 运行超时 4 例分诊（c4-runtimeout，10-10）**：AmicablePairs、RamanujanPrimes、SelfReferentialSequence、TestParallelArrayCas（另 TestCommonPool 同症）在 c249cdec 上运行超 900 s，均为语义缺陷（并行流 / ForkJoinPool 卡死），不是 debug 档性能：10-06 的 3f59a8e9 上运行 13.3 / 1.3 / 42 / 0.71 s（CommonPool 0.1 s）。根因属 `offset-field-folded`（只经 Unsafe 按偏移写的字段在构建期初始化类 `<clinit>` 按名取偏移、未放开而被折叠）；c249cdec 不含 lc3-fix 4c42ac44，集成分支头 589052eb 抽查 c4rt-a 5/5 通过（运行 2.53 / 0.84 / 6.97 / 1.13 s，CommonPool 0.17 s）。无需新修复；fix-clone 5177e182（符号偏移产生处即放开）是同类终态收口。分诊中重复实现的 dead3574 已撤回（5743e146）。已登记 `docs/failure_patterns.toml`。
-- **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
+- **测试资源**：dev 已恢复（10-09），测试优先放 dev（缺省 24 槽），云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1 只作溢出；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
 
@@ -240,7 +240,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | E 编译资源 | E1 B4 内存友好缺省构建档（分支 build-memsafe，16 GB 机器全部可构建为硬约束） | 暂缓（2026-10-08） |
 | E 编译资源 | E2 D8 声明层分段 | 机制已合入（b51f9531 / b093069f）；底段收窄随 S7-4 / S7-5，C4 之后（见活跃任务「声明层底段收窄」） |
 | B 架构终态 | B5 第三方库通用机制：JNI ABI 层（库自带 native 原样调用）、构建期捕获运行期生成类（三方依赖分层 §3.6；rava 仓库不放任何第三方库专属内容，库配置归用户项目） | 缓（10-06 用户定） |
-| F 纯优化 | 二进制 ≤3 MB、S7-4～5（S7-3 已合入）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4、PGO（前置：perf 剖析拆分开销，含 volatile 读 SeqCst 排队） | 暂停 |
+| F 纯优化 | 二进制 ≤3 MB、S7-5（S7-3 已合入，S7-4 10-10 提前开工）、VT `instanceof` / `checkcast` 走 `__ClassDesc`、IR 结构化收敛 / TypeIR G4、PGO（前置：perf 剖析拆分开销，含 volatile 读 SeqCst 排队） | 暂停 |
 
 ## 🔴 活跃任务
 
@@ -259,13 +259,13 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
 | regress2 遗留 | 🔄 ② ✅；① 转 object-bytecode | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿）。按手写边界规则（有字节码即翻译，非用户待定项）派 object-bytecode：根类非 native 方法按字节码翻译。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60，修前为已知失败）。regress2 文档 §10.1b |
 | C4 收官 · 全量 e2e | 🔄 10-09 dev 上开跑 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
-| JUnit 依赖包测试 | ⏳ J3 / J4 待合批（junit-j3j4） | J0–J2 ✅（f9298933 / ea2627ec）；J3 ✅、J4 ✅（身份哈希 2 例经批准改测试源）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` §七 14–16 |
-| 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
+| JUnit 依赖包测试 | ✅ J3 / J4 已合入（batch-1010p，2226e47f） | J0–J2 ✅（f9298933 / ea2627ec）；J3 ✅、J4 ✅（身份哈希 2 例经批准改测试源）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` §七 14–16 |
+| 框架驱动 API 覆盖 | 🔄 dev 上复算 S0 闭包面（10-10） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
-| 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
+| 声明层底段收窄 | 🔄 S7-4 10-10 提前开工（用户定） | 先做依赖图模拟验证「最大 SCC 降到 22%」，且 22% 段本身 ≤1.3 GB；模拟同时对比底段可达集 / 全集、逐入口统计扇出咽喉、在现形态底段实测阶段剖析（time-passes / timings），类型标记 crate 评估纳入预编译 java.base 维度；结论汇总进 S7 计划 §9.8。D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
-| 并发小步 A | ✅ 已完工待合批（分支 conc-step-a） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
-| 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
+| 并发小步 A | ✅ 已合入（batch-1010l，583edccd） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
+| 并发小步 B | ⏳ 合批测试中（conc-step-b，batch-1010n） | batch-1010n 的 hash_seed 单测确定性失败（TestSerialLookupPairing 种子 0 / 1 类集合差 SunJCE 类），另一根因，待单独定位；volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---
