@@ -126,6 +126,8 @@ pub(super) struct Ctx<'a> {
     pub(super) img_statics: std::cell::RefCell<Option<super::static_init::ImgStatics>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
+    /// 调用方 → 调用点偏移 → 字节码字面常量实参掩码（见 `selector.rs` `site_literals`）
+    pub(super) site_lits: RefCell<HashMap<MemberRef, Rc<HashMap<u32, super::selector::SiteLits>>>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 按抽象对象的实例字段写入值：字段 → 抽象对象 → 值（见 `obj_fields.rs`）

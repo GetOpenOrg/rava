@@ -78,7 +78,7 @@ impl<'a> Engine<'a> {
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
                 let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 // 按名加载（class_loads）同样解析，只取镜像不初始化
                 let key = self.mref_key(mref);
@@ -481,7 +481,8 @@ impl<'a> Engine<'a> {
                 }
             } else if let Some(ps) = self.passthrough(t) {
                 // 透传方法：结果 = 本调用点对应实参（逐调用点，不经 R 汇合）。实参按被调形参的声明类型收窄，与经
-                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关
+                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关。
+                // 反方向（汇合 → 透传）的边撤不回，故尚无返回路径（⊥）答空集透传而非汇合（`returned_params`）
                 for i in ps {
                     let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(i as usize - base).cloned().flatten() };
                     let Some(fs) = fs else { continue };

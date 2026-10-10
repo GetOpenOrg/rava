@@ -21,6 +21,7 @@ impl<'a> Engine<'a> {
                 img_module_tags: Default::default(),
                 img_statics: Default::default(),
                 selectors: Default::default(),
+                site_lits: Default::default(),
                 fvals: Default::default(),
                 ovals: Default::default(),
                 owild: Default::default(),
