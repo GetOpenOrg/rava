@@ -1,8 +1,8 @@
-# XSLTC translet：运行期定义的类（预定义类方案，待决）
+# XSLTC translet：运行期定义的类（预定义类方案，fix-xsltc2 已实施）
 
 > 分支 fix-xsltc（基线 batch-1010h 873b30f3）。起因：e2e `71_xml/TestXmlTransform` 运行期失败，
 > `TransformerConfigurationException: Translet class loaded, but unable to create translet instance.`
-> （failure_patterns `xsltc-translet-create`）。本文是分诊结论与终态方案。方案要新增机制，**未实施，等用户决定**（§6）。
+> （failure_patterns `xsltc-translet-create`）。本文是分诊结论与终态方案。10-10 用户采纳 S2（§6），fix-xsltc2 按 §5 实施，实施记录见 §8。
 
 ## 0. 结论
 
@@ -248,3 +248,55 @@ S2 的实施中，以下情况视为「跑不通」，应停下并回报，按�
 - 未捕获异常报告不打印经 `getCause()` 覆盖给出的 cause（§1.2）：`report_uncaught_in` 应按 JVM `printStackTrace` 走虚调用 `getCause()`。
 - `ClassLoader.defineClass0`（`Lookup.defineClass` / `defineHiddenClass` 的入口）在 rava 里尚无手写；预定义类方案实施时一并补上，
   隐藏类的名字后缀规则与 §4.1 一致。
+
+## 8. 实施记录（fix-xsltc2，2026-10-10）
+
+分支 fix-xsltc2（基线 d401e742；10-10 合入集成分支 6a668ac6 后为 3b65f6cf 起）。§5 第 1–6 步全部实施，未触发 §6.2 切换条件。
+
+### 8.1 各步落点
+
+| 步 | 提交 | 落点 |
+|---|---|---|
+| 1 记录代理 | f0cc4f7c | `scripts/dyn_agent/define_record.c`（JVMTI `ClassFileLoadHook`，非引导加载器的定义按序原样落盘 `<序号>.class`；调用栈含清单另行承载的类定义点（`kind = "class_definition"`，如动态代理）的不记录；类路径已有 / 非法字节由构建端 `normalize` 剔除）；`classfile::sha256`（生成器侧 SHA-256，无外部依赖） |
+| 2 输入通道 | 290bd5ce | 预定义类目录 = `classes/<binary name>.class` + `predefined.toml`；`resolve` 新增来源 `Origin::Predefined`（用户域，定义加载器 `"defined"`）；`rava build --predefined <目录>` / `--train-predefined`、`rava trace`（生产构建显式训练，产物写用户指定目录） |
+| 3 闭包 | 290bd5ce | `vm_intrinsics.toml` 新增 `predefined_definers`（`defineClass0/1/2`，附 X3 语义注释）；`engine/hw.rs` 把定义点返回值置为全体预定义类精确镜像之并，无预定义类时不变 |
+| 4 发射与元数据 | 2ae5dabe | `input` 对预定义来源的用户类求内容哈希；user meta 发射 `PREDEFINED_CLASSES: &[(哈希, 原名)]`（按哈希排序），`rava_meta_tables` 汇总进 `UserMeta.predefined_classes` |
+| 5 运行期 | 57465630 | `predefined.rs`（SHA-256、二分查表、定义记录：类 / 加载器 / ProtectionDomain）；`class_loader_impl.rs` 的 `defineClass0/1/2` 共用 `_define`：格式检查不变 → 求哈希查表 → 未命中抛 `LinkageError`（报实际哈希与同名预定义类的期望哈希，即 §7 风险 1 的构建后自检）→ 名字不符 `NoClassDefFoundError (wrong name: …)` → 同加载器重复定义 `LinkageError attempted duplicate class definition` → 记录并返回；`findLoadedClass0` / `__vm_defining_loader` / `getProtectionDomain0` / `__is_known_class` 查定义记录（定义前不可见）；`ClassLoader.defineClass0` 补上（`Lookup.defineClass` 入口）；`report_uncaught_in` 改为虚调 `getCause()` |
+| 6 按需训练 | 290bd5ce、cd818df0 | `build_stages` 首轮闭包后若类定义 native 可达且允许训练，以参考 JDK 跑一次训练运行（`-Xshare:off -agentpath:…`，超时 600 s），产物并入类路径后重算闭包（缓存键随输入变）；新鲜度按用户类 / jar / 代理源 / java home / main 的戳判断，不新鲜即删旧产物重训；`run_tests.py` 的语料转译带 `--train-predefined`，生产构建缺省不训练 |
+
+训练产物只在 scratch（`build/<test>/predefined/`）与用户项目目录，不提交。
+
+### 8.2 实测
+
+- TestXmlTransform 训练：`训练运行 exit 0（0.3s）：记录 29 个定义 → 预定义类 1 个，同名不同内容 0 个，类路径已有 28，非法字节 0`；
+  预定义类 `die/verwandlung/GregorSamsa`（sha256 `0b8b7f20…7044f`，定义 1 次），user meta 生成表项；第二次构建判为新鲜、不重训（作业 xsltc2-ev-new）。
+  记录到的另 28 个是测试自己的类与 XSLTC 运行期辅助类，类路径上已有，正确过滤。
+- 两侧字节一致：rava 运行期 XSLTC 生成的 translet 字节命中训练表（TestXmlTransform 通过，未触发未命中报错），§7 风险 1 未发生，不需要切 B1。
+- 抽查 xsltc2-s1（cd818df0，dev）：TestXmlTransform、TestDefineClassRejects、HelloWorld、DeepCopy 全过；TestXmlTransform 转译 338.7 s、编译 486.8 s。
+- 抽查 xsltc2-s2（3b65f6cf，dev）：15 例全过——TestXmlTransform、TestDefineClassRejects、71_xml 其余 11 例（TestDomBuildTree、TestDomResultNode、TestQNameFaces、TestSaxLocatorAttributes、TestSaxNamespaceCallbacks、TestXmlDomParse、TestXmlFactoryConfigs、TestXmlSaxEvents、TestXmlStax、TestXmlXPath）、CollectorsDemo、HelloWorld、DeepCopy；TestXmlTransform 转译 469.8 s、编译 510.7 s、运行 0.9 s。
+- 闭包规模（`rava closure`）：集成基线 6a668ac6 → 本分支 3b65f6cf（作业 xsltc2-ev3-base / -new）：
+
+  | 用例 | 类数 | 方法数 | 方法上下文 |
+  |---|---|---|---|
+  | HelloWorld | 577 → 577 | 1896 → 1897 | 5784 → 5787 |
+  | DeepCopy | 3116 → 3116 | 17270 → 17270 | 154552 → 154560 |
+
+  HelloWorld 多出的唯一方法是 `java/lang/Throwable.getCause:()Ljava/lang/Throwable;`（闭包 JSON 中基线 0 处、本分支 2 处），
+  来自 `report_uncaught_in` 改虚调 `getCause()`（任务要求的修复，手写调用经 `uncaught` VM 规则入闭包）；预定义类机制本身不改变两例闭包。
+  DeepCopy 已含 `getCause` 与 `defineClass1/2`，方法数不变；它可达类定义 native，语料构建会跑一次训练（预定义类 0 个，闭包不变）。
+  （d401e742 → cd818df0 同样是 HelloWorld 577 / 1896 → 1897，作业 xsltc2-ev-base / -new。）
+- 单测：见 §8.4。
+
+### 8.3 未完成与遗留
+
+- **同名不同内容**（§4.1 内部键加哈希后缀）未实现：训练中同名多内容的类按冲突整体排除（训练摘要计数「同名不同内容」），运行期定义时走未命中 `LinkageError`。
+  XSLTC 同名多内容只在同一进程编译多份不同样式表时出现，现有语料无此用例；实现时按 §4.1 走隐藏类名路径。
+- **语料档案模式**（§4.2 末条）未接：预定义类目前只在 per-test 构建的用户 crate 里，`rava profile` / 档案计算还不把它作为所属测试的入口种子；
+  档案模式下预定义类调用到、而档案外的 JDK 方法会落存根。
+- **隐藏类**（`defineClass0` 带 `HIDDEN_CLASS` 标志）：JVMTI 规范规定隐藏类不触发 `ClassFileLoadHook`，训练记录不到，
+  运行期 `Lookup.defineHiddenClass` 定义用户字节仍走未命中 `LinkageError`（JDK 内部的隐藏类——lambda、LambdaForm——另有 VM 承载，不受影响）。
+  需要时改用字节码插桩记录 `defineClass0` 实参（S2 的记录手段扩展），不改承载。
+- 训练运行不注入 rava 构建期钉值的属性配置（引导映像 U14），程序若按平台属性分支生成不同字节会未命中；运行期报期望 / 实际哈希便于定位。
+- `defineClass0` 的 `classData` 未保存（`MethodHandles.classData` 取不到）；`Class.forName` 对预定义类的可见性只看「是否已定义」，不区分加载器；
+  重复定义报错消息不含 JVM 给出的加载器描述。
+- `report_uncaught_in` 虚调 `getCause()` 使 `Throwable.getCause` 经 `uncaught` VM 规则进入每个程序的闭包：HelloWorld 方法数 +1，属正确依赖（JVM 的未捕获报告同样经 `printStackTrace` 虚调 `getCause`）。
