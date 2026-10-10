@@ -55,6 +55,7 @@ impl<'a> Engine<'a> {
             let call: LambdaCall = (lid, a.clone(), ret, res);
             let id = self.lcalls.len() as u32;
             at.insert((lid, ret, res), id);
+            self.reader_register(id);
             self.lprof_kind(false, None);
             self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true, suspended: false });
             self.lprof_call(lid, m, off, true);
@@ -114,7 +115,12 @@ impl<'a> Engine<'a> {
     /// （生成器同判据以隐藏类名压栈）
     pub(super) fn lambda_step(&mut self, m: usize, off: u32, id: Option<u32>) {
         let outer_call = std::mem::replace(&mut self.cur_lcall, id);
-        self.lambda_step_in(m, off, id);
+        // 登记过的读者单元按登记归属；非字节码调用方的临时调用沿用外层归属
+        if id.is_some() {
+            self.reader_scope(|e| e.lambda_step_in(m, off, id));
+        } else {
+            self.lambda_step_in(m, off, id);
+        }
         self.cur_lcall = outer_call;
     }
 

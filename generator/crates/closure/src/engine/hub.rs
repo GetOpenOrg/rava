@@ -52,6 +52,8 @@ impl<'a> Engine<'a> {
             link_seq: 0,
             edged: HashSet::default(),
             anchor: None,
+            ltargets: BTreeSet::new(),
+            lhubs: BTreeSet::new(),
         });
         if let HubSet::Exact(rs) = &key.2 {
             let fam = self.hub_family.entry((key.0.clone(), iface, lc)).or_default();
@@ -115,8 +117,10 @@ impl<'a> Engine<'a> {
     /// 调用点接入枢纽：实参汇入 `HP`，`HR` 流向结果；逐调用点派发的接收者对本调用点派发
     pub(super) fn link_hub(&mut self, h: u32, m: usize, off: u32, a: &Args, res: Option<Node>) {
         // 枢纽上的接边属调用点（重接随调用方整方法重接），不归当前 lambda 调用读者
+        // 枢纽 lambda 读者代接时，接入记录与其接边归该读者的枢纽（`hub_reader.rs`）
+        let host = self.reader_hub();
         let outer = self.cur_lcall.take();
-        self.link_hub_in(h, m, off, a, res);
+        self.with_reader(host, |e| e.link_hub_in(h, m, off, a, res));
         self.cur_lcall = outer;
     }
 
@@ -144,8 +148,8 @@ impl<'a> Engine<'a> {
             }
             return;
         }
-        self.hub_sites.entry((m, off)).or_default().insert(h);
-        self.vdisp_note(m, off, None);
+        let host = self.reader_hub();
+        self.note_hub_site(host, h, m, off);
         if cut::edges_on() {
             cut::edge_plain(&self.site_node(m, off), &format!("H:{h}"));
         }
@@ -183,7 +187,7 @@ impl<'a> Engine<'a> {
         } else {
             let id = hub.link_seq;
             hub.link_seq += 1;
-            hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
+            hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv, host }));
             id
         };
         let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
@@ -196,20 +200,25 @@ impl<'a> Engine<'a> {
         let lambdas: &[u32] = if replay && !at_anchor { &[] } else { &lambdas[skip..] };
         let (la, lres) = if replay { self.hub_lambda_call(h) } else { (a.clone(), res) };
         let saved = if replay { self.call_vals.take() } else { None };
-        for &r in lambdas {
-            if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
-                continue;
-            }
-            if replay {
-                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, lres))).copied();
-                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended) {
-                    self.lcall_revive(id);
+        // 锚点上的读者归本枢纽；非字节码接入点逐调用点派发，归属同接入记录
+        let owner = if replay { Some(h) } else { host };
+        let lambdas = lambdas.to_vec();
+        self.with_reader(owner, |e| {
+            for r in lambdas {
+                if replay && !e.hub_lsent.entry(m).or_default().insert((off, r)) {
                     continue;
                 }
+                if replay {
+                    let id = e.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, lres))).copied();
+                    if let Some(id) = id.filter(|&id| e.lcalls[id as usize].suspended) {
+                        e.lcall_revive(id);
+                        continue;
+                    }
+                }
+                e.lprof_replay(h, true);
+                e.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX);
             }
-            self.lprof_replay(h, true);
-            self.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX);
-        }
+        });
         if replay {
             self.call_vals = saved;
         }
@@ -268,16 +277,18 @@ impl<'a> Engine<'a> {
             }
         }
         let hub = &mut self.hubs[h as usize];
-        hub.links.insert((m, off), Rc::new(Link { id: l.id, a: merged.clone(), res: l.res, cv: l.cv.clone() }));
+        hub.links.insert((m, off), Rc::new(Link { id: l.id, a: merged.clone(), res: l.res, cv: l.cv.clone(), host: l.host }));
         let (site, lambdas, special, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone(), hub.ret);
         let saved = std::mem::replace(&mut self.call_vals, l.cv.clone());
         // lambda 接收者的读者在枢纽锚点、以枢纽节点为实参，新增实参已汇入 `HP`
         let _ = (lambdas, site);
-        for (t, rs) in special {
-            for &r in rs.iter() {
-                self.edge(m, off, t, Recv::Exact(r), &merged, ret, l.res);
+        self.with_reader(l.host, |e| {
+            for (t, rs) in special {
+                for &r in rs.iter() {
+                    e.edge(m, off, t, Recv::Exact(r), &merged, ret, l.res);
+                }
             }
-        }
+        });
         self.call_vals = saved;
     }
 
@@ -415,12 +426,12 @@ impl<'a> Engine<'a> {
                     let (la, lres) = self.hub_lambda_call(h);
                     self.lprof_replay(h, true);
                     self.call_vals = None;
-                    self.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX);
+                    self.with_reader(Some(h), |e| e.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX));
                     continue;
                 }
                 self.lprof_replay(h, true);
                 self.call_vals = l.cv.clone();
-                self.dispatch_one(m, off, r, &site, &l.a, ret, l.res, NOCTX);
+                self.with_reader(l.host, |e| e.dispatch_one(m, off, r, &site, &l.a, ret, l.res, NOCTX));
             }
             self.call_vals = saved;
             return;
@@ -475,10 +486,10 @@ impl<'a> Engine<'a> {
             // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
             self.call_vals = l.cv.clone();
             if self.hubs[h as usize].edged.contains(&(l.id, t)) {
-                self.edge_more(m, off, t, r, &l.a, ret, l.res);
+                self.with_reader(l.host, |e| e.edge_more(m, off, t, r, &l.a, ret, l.res));
                 continue;
             }
-            self.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res);
+            self.with_reader(l.host, |e| e.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res));
             self.hubs[h as usize].edged.insert((l.id, t));
         }
         self.call_vals = saved;

@@ -56,6 +56,7 @@ mod bytecode;
 mod invoke;
 mod reflect_writes;
 mod hub;
+mod hub_reader;
 mod recv_fp;
 mod site_prof;
 mod lambda_prof;
@@ -413,6 +414,10 @@ pub struct Engine<'a> {
     lcallers: HashMap<usize, BTreeSet<u32>>,
     /// 正在接边的 lambda 调用读者（`lambda_step` 置，进入枢纽接入时清）
     cur_lcall: Option<u32>,
+    /// 枢纽 lambda 读者所属枢纽：读者单元 → 枢纽（`hub_reader.rs`）
+    hub_reader_lcalls: HashMap<u32, u32>,
+    /// 显式指定的读者归属（Some(None) = 不归任何枢纽读者），优先于 `cur_lcall` 的登记（`hub_reader.rs`）
+    reader_over: Option<Option<u32>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
     call_vals: Option<Rc<[V]>>,
     /// 进行中的 lambda 接边：捕获值所在创建点与接收者位置（`lambda_vals.rs`）

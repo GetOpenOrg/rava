@@ -164,6 +164,8 @@ impl<'a> Engine<'a> {
             dcallers: HashMap::default(),
             lcallers: HashMap::default(),
             cur_lcall: None,
+            hub_reader_lcalls: HashMap::default(),
+            reader_over: None,
             call_vals: None,
             lambda_cap: None,
             unresolved: BTreeSet::new(),

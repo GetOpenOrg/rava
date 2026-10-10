@@ -776,27 +776,33 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// 枢纽（含父链）的目标，按成员代表序号去重；逐枢纽记忆（父链迭代展开，不递归）
+    /// 枢纽的目标，按成员代表序号去重：经枢纽中转的目标与 lambda 读者的目标（`hub_reader.rs`），
+    /// 含父链与读者接入的枢纽（逐个可达枢纽迭代展开，不递归；读者接入可成环）。逐枢纽记忆可达闭包
     fn hub_targets_canon(&self, h: u32, canon: &[usize], memo: &mut HashMap<u32, Rc<[usize]>>) -> Rc<[usize]> {
-        let mut chain = Vec::new();
-        let mut cur = Some(h);
-        let mut base: Rc<[usize]> = Rc::from(Vec::new());
-        while let Some(c) = cur {
-            if let Some(r) = memo.get(&c) {
-                base = r.clone();
-                break;
+        if let Some(r) = memo.get(&h) {
+            return r.clone();
+        }
+        let mut seen: HashSet<u32> = HashSet::default();
+        let mut stack = vec![h];
+        let mut v: Vec<usize> = Vec::new();
+        while let Some(c) = stack.pop() {
+            if !seen.insert(c) {
+                continue;
             }
-            chain.push(c);
-            cur = self.hubs[c as usize].parent;
+            if let Some(r) = memo.get(&c) {
+                v.extend(r.iter().copied());
+                continue;
+            }
+            let hub = &self.hubs[c as usize];
+            v.extend(hub.plain.iter().map(|&t| canon[t]));
+            v.extend(hub.ltargets.iter().filter(|&&t| !self.is_pseudo_method(t)).map(|&t| canon[t]));
+            stack.extend(hub.parent);
+            stack.extend(hub.lhubs.iter().copied());
         }
-        for c in chain.into_iter().rev() {
-            let mut v: Vec<usize> = self.hubs[c as usize].plain.iter().map(|&t| canon[t]).collect();
-            v.extend(base.iter().copied());
-            v.sort_unstable();
-            v.dedup();
-            base = v.into();
-            memo.insert(c, base.clone());
-        }
-        base
+        v.sort_unstable();
+        v.dedup();
+        let r: Rc<[usize]> = v.into();
+        memo.insert(h, r.clone());
+        r
     }
 }
