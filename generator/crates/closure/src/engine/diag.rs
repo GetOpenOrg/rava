@@ -227,6 +227,9 @@ impl Engine<'_> {
         if pat == "@concrete" {
             return Some(self.concrete.diag.iter().flat_map(|(k, vs)| vs.iter().map(move |v| format!("  {k}：{v}"))).collect());
         }
+        if let Some(q) = pat.strip_prefix("@taint:") {
+            return Some(self.taint_report(q));
+        }
         if pat == "@foldfields" {
             return Some(self.fold_fields());
         }

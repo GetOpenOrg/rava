@@ -103,12 +103,33 @@ pub fn parse_tag(tag: &str) -> Option<Locale> {
     Some(norm(first, script, region, &rest.join("_")))
 }
 
-/// ResourceBundle 候选后缀（由具体到一般，不含 ROOT）
+/// ResourceBundle 候选后缀（由具体到一般，不含 ROOT）。与 `ResourceBundle.Control.getCandidateLocales` 同一口径：
+/// 中文缺文字时按地区补（CN / SG → Hans，TW / HK / MO → Hant），缺地区时按文字补（Hans → CN，Hant → TW）——
+/// 资源束按补全后的候选装载（`_zh_Hant` 族只经补出的文字可达）
 pub fn parent_chain(l: &Locale) -> Vec<String> {
     let (lang, script, region, variant) = l;
     if lang.is_empty() {
         return vec![];
     }
+    let (mut script, mut region) = (script.clone(), region.clone());
+    if lang == "zh" {
+        if script.is_empty() && !region.is_empty() {
+            script = match region.as_str() {
+                "TW" | "HK" | "MO" => "Hant",
+                "CN" | "SG" => "Hans",
+                _ => "",
+            }
+            .to_string();
+        } else if !script.is_empty() && region.is_empty() {
+            region = match script.as_str() {
+                "Hans" => "CN",
+                "Hant" => "TW",
+                _ => "",
+            }
+            .to_string();
+        }
+    }
+    let (script, region) = (&script, &region);
     let mut c = Vec::new();
     if !script.is_empty() {
         if !region.is_empty() && !variant.is_empty() {
@@ -202,9 +223,13 @@ impl<'c> Tracer<'c> {
         self.value_before(ins, i)
     }
 
-    /// ins[i] 消费的栈顶值：invokestatic 且实参全为字面量 → 溯源其返回值
+    /// ins[i] 消费的栈顶值：invokestatic 且实参全为字面量 → 溯源其返回值；同类型静态常量的别名
+    /// （`getstatic T.A; putstatic T.B`，如以另一常量赋值的地区常量）→ 溯源所指常量
     fn value_before(&self, ins: &[Insn], i: usize) -> Option<Vec<String>> {
         let call = ins.get(i.checked_sub(1)?)?;
+        if let (GETSTATIC, Operand::Field(r)) = (call.opcode, &call.operand) {
+            return (r.desc == format!("L{};", r.owner)).then(|| self.static_field(&r.owner, &r.name)).flatten();
+        }
         let Operand::Method(r, _) = &call.operand else { return None };
         if call.opcode != INVOKESTATIC {
             return None;
@@ -350,6 +375,10 @@ mod tests {
         assert_eq!(l, ("zh".into(), "Hant".into(), "TW".into(), "".into()));
         assert_eq!(parent_chain(&l), vec!["zh_Hant_TW", "zh_Hant", "zh_TW", "zh"]);
         assert_eq!(parent_chain(&parse_tag("fr_FR").unwrap()), vec!["fr_FR", "fr"]);
+        // 中文按地区补文字、按文字补地区（ResourceBundle.Control 同口径）
+        assert_eq!(parent_chain(&parse_tag("zh_TW").unwrap()), vec!["zh_Hant_TW", "zh_Hant", "zh_TW", "zh"]);
+        assert_eq!(parent_chain(&parse_tag("zh_CN").unwrap()), vec!["zh_Hans_CN", "zh_Hans", "zh_CN", "zh"]);
+        assert_eq!(parent_chain(&parse_tag("zh-Hant").unwrap()), vec!["zh_Hant_TW", "zh_Hant", "zh_TW", "zh"]);
         assert!(parse_tag("123").is_none());
     }
 

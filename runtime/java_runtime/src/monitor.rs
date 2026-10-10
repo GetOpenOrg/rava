@@ -34,8 +34,14 @@
 //!   - `wait` 的 `InterruptedException`（中断唤醒）：语料无中断等待，未实现
 //!     （见 thread_impl.rs 模块注释的取舍说明）。
 //!   - 侧表条目不回收（对象回收后指针身份可能复用）：监视器按身份惰性创建且
-//!     数量以「曾被同步块锁定的对象」为界，测试负载下无泄漏压力；引入弱键
-//!     回收需对象生命周期钩子，随对象模型收敛。
+//!     数量以「曾被同步块锁定的对象」为界。新建条目时已在对象头置 `MONITOR_MARK`
+//!     （`obj_ref::__mark_monitor`），释放时据此先删条目再归还内存随无 GC 文档
+//!     第三节第 5 条实施。
+//!
+//! ## null
+//!
+//! 所有 null 的身份都是同一个哨兵地址（`JVM_NULL`），没有对象头：各入口先比较一次
+//! 身份即抛 NullPointerException，null 身份不进侧表、不进置位函数。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -440,37 +446,54 @@ impl<V> IdentityTable<V> {
 
 static MONITORS: IdentityTable<Arc<Monitor>> = IdentityTable::new();
 
-/// 按对象身份取（惰性创建）监视器。
+/// null 的身份（全部 null 共用 `JVM_NULL` 哨兵的地址）
+#[inline(always)]
+fn null_identity() -> usize {
+    &raw const crate::java::lang::object::JVM_NULL as usize
+}
+
+/// 身份为 null → NullPointerException（JVMS §6.5 monitorenter / monitorexit；Object 监视器方法）
+#[inline(always)]
+fn non_null(identity: usize) -> Result<usize> {
+    if identity == null_identity() {
+        return Err(JvmError::null_pointer());
+    }
+    Ok(identity)
+}
+
+/// 按对象身份取（惰性创建）监视器。`identity` 非 null（调用方已经 `non_null` 判定）。
+/// 新建条目时在对象头置 `MONITOR_MARK`（映像对象跳过）。
 fn monitor_for(identity: usize) -> Arc<Monitor> {
+    debug_assert_ne!(identity, null_identity(), "null 身份进入监视器侧表");
     let mut table = MONITORS.shard(identity);
-    Clone::clone(table.entry(identity).or_insert_with(|| Arc::new(Monitor::new())))
+    Clone::clone(table.entry(identity).or_insert_with(|| {
+        // SAFETY: identity 是调用方持有引用的存活对象的身份（值地址），非 null
+        unsafe { crate::obj_ref::__mark_monitor(identity as *const ()) };
+        Arc::new(Monitor::new())
+    }))
 }
 
 // ── VM 入口（monitorenter / monitorexit / Object 监视器方法）────────────────
 
-/// `monitorenter`：进入 `identity` 对象的监视器。identity 为 null 单元 → NPE
+/// `monitorenter`：进入 `identity` 对象的监视器。identity 为 null → NPE
 /// （JVMS §6.5：objectref 为 null 时抛 NullPointerException）。
-pub fn enter(identity: usize, is_null: bool) -> Result<()> {
-    if is_null {
-        return Err(JvmError::null_pointer());
-    }
-    monitor_for(identity).enter();
+pub fn enter(identity: usize) -> Result<()> {
+    monitor_for(non_null(identity)?).enter();
     crate::exec_context::monitor_entered();
     Ok(())
 }
 
 /// `monitorexit`：退出 `identity` 对象的监视器一层。
+/// identity 为 null → NPE（JVMS §6.5 monitorexit）。
 pub fn exit(identity: usize) -> Result<()> {
-    monitor_for(identity).exit()?;
+    monitor_for(non_null(identity)?).exit()?;
     crate::exec_context::monitor_exited();
     Ok(())
 }
 
 /// `Object.wait(millis, nanos)`（wait() = wait(0,0)）。null 检查同上。
-pub fn wait_timeout(identity: usize, is_null: bool, millis: i64, nanos: i32) -> Result<()> {
-    if is_null {
-        return Err(JvmError::null_pointer());
-    }
+pub fn wait_timeout(identity: usize, millis: i64, nanos: i32) -> Result<()> {
+    let identity = non_null(identity)?;
     let me = current_thread_identity()?;
     let result = monitor_for(identity).wait_timeout(me, millis, nanos);
     if let Err(e) = &result {
@@ -482,29 +505,25 @@ pub fn wait_timeout(identity: usize, is_null: bool, millis: i64, nanos: i32) -> 
     result
 }
 
-/// `Thread.holdsLock(obj)`：当前线程是否持有 `identity` 对象的监视器。
-pub fn holds_lock(identity: usize) -> bool {
+/// `Thread.holdsLock(obj)`：当前线程是否持有 `identity` 对象的监视器（null → NPE，JDK 同）。
+/// 只查不建：从未进入监视器的对象没有条目，应答 false。
+pub fn holds_lock(identity: usize) -> Result<bool> {
+    let identity = non_null(identity)?;
     let table = MONITORS.shard(identity);
-    match table.get(&identity) {
+    Ok(match table.get(&identity) {
         Some(m) => m.state.lock().owner == Some(std::thread::current().id()),
         None => false,
-    }
+    })
 }
 
 /// `Object.notify()`。
-pub fn notify(identity: usize, is_null: bool) -> Result<()> {
-    if is_null {
-        return Err(JvmError::null_pointer());
-    }
-    monitor_for(identity).notify_one()
+pub fn notify(identity: usize) -> Result<()> {
+    monitor_for(non_null(identity)?).notify_one()
 }
 
 /// `Object.notifyAll()`。
-pub fn notify_all(identity: usize, is_null: bool) -> Result<()> {
-    if is_null {
-        return Err(JvmError::null_pointer());
-    }
-    monitor_for(identity).notify_waiters()
+pub fn notify_all(identity: usize) -> Result<()> {
+    monitor_for(non_null(identity)?).notify_waiters()
 }
 
 // ── ACC_SYNCHRONIZED 方法的 RAII 守卫（codegen 前导发射）─────────────────────
@@ -518,10 +537,7 @@ pub struct MonitorGuard {
 impl MonitorGuard {
     /// 进入 `obj` 的监视器并返回守卫。构造失败（NPE 等）时不产生需回滚的持有。
     pub fn acquire(obj: &Object) -> Result<Self> {
-        if obj.0.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let monitor = monitor_for(obj.0.__identity() as usize);
+        let monitor = monitor_for(non_null(obj.0.__identity() as usize)?);
         monitor.enter();
         crate::exec_context::monitor_entered();
         Ok(MonitorGuard { monitor: Some(monitor) })

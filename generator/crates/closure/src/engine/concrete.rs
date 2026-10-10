@@ -70,6 +70,8 @@ pub(super) struct Outcome {
     pcs: BTreeMap<MemberRef, BTreeSet<u32>>,
     calls: BTreeMap<(MemberRef, u32), BTreeSet<MemberRef>>,
     puts: BTreeMap<MemberRef, Vec<Put>>,
+    /// 其中接收者不是本次求值新分配对象的写入（见 `Trace::shared_puts`）
+    shared_puts: BTreeMap<MemberRef, Vec<Put>>,
     inited: BTreeSet<String>,
     objs: Vec<MObj>,
     /// 返回值（void 为 None）/ 抛出的异常对象
@@ -97,6 +99,13 @@ pub(super) struct Concrete {
     applied: HashSet<(usize, u32, Vec<AK>)>,
     /// 已回退抽象调用边的调用点
     fallback: HashSet<(usize, u32)>,
+    /// 回退后逐组应用时已处理过的 (调用方节点, 偏移, 实参)：单组的结论（应用 / 失败 / 引用容器）与次序无关，处理一次即可
+    partial_tried: HashSet<(usize, u32, Vec<AK>)>,
+    /// 结果按对象物化的类：`[concrete] object_results` 各入口字节码自身 `new` 的类（分析前按字节码确定，
+    /// 按对象读的形参门据此放行，见 `obj_fields.rs::obj_param_set`）
+    pobj_types: HashSet<Rc<str>>,
+    /// 诊断：按对象物化出的抽象对象数 / 回退后应用的已知常量组合数（`summary.perf.pobj`；对象数每翻倍报一行进度）
+    pub(super) pobj_stats: [u64; 2],
     /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
@@ -104,6 +113,23 @@ pub(super) struct Concrete {
 impl<'a> Engine<'a> {
     pub(super) fn concrete_init(&mut self) {
         self.concrete.ctx = self.id(CONCRETE_CTX);
+        let mut types: HashSet<Rc<str>> = HashSet::default();
+        for k in &self.man.concrete.object_results {
+            let Some((head, desc)) = k.split_once(':') else { continue };
+            let Some((owner, name)) = head.rsplit_once('.') else { continue };
+            let code = self.h.class(owner).and_then(|cf| cf.method(name, desc).and_then(|x| x.code.clone()));
+            for x in code.iter().flat_map(|c| c.insns.iter()) {
+                if let (classfile::op::NEW, classfile::Operand::Class(c)) = (x.opcode, &x.operand) {
+                    types.insert(Rc::from(c.as_str()));
+                }
+            }
+        }
+        self.concrete.pobj_types = types;
+    }
+
+    /// 类 t 的结果实例按对象物化（见 `pobj_types`）
+    pub(super) fn per_object_type(&self, t: &str) -> bool {
+        self.concrete.pobj_types.contains(t)
     }
 
     pub(super) fn is_concrete(&self, m: usize) -> bool {
@@ -116,9 +142,12 @@ impl<'a> Engine<'a> {
     }
 
     /// 调用 m@off → resolved（静态调用，或接收者值集为 recv 的非虚调用）按具体求值处理；返回 true 即不再接抽象调用边。
-    /// 接收者尚无取值时暂不接边（接收者增长时调用方重处理）
+    /// 接收者尚无取值时暂不接边（接收者增长时调用方重处理）。
+    /// 结果按对象物化的入口（`[concrete] object_results`）在调用点回退之后仍逐组应用实参里的已知常量组合（`concrete_known`）：
+    /// 回退前已应用的组合撤不回，回退后若不再应用，结果就取决于回退前到达了哪些组合（处理次序）。逐组应用后，应用集合
+    /// 恒为终态的已知常量组合（求值成功者），回退与否只取决于终态的污染与上限，二者都与次序无关
     pub(super) fn concrete_call(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> bool {
-        if self.concrete.fallback.contains(&(m, off)) || self.is_concrete(m) {
+        if self.is_concrete(m) {
             return false;
         }
         let k = self.mref_key(resolved);
@@ -126,18 +155,44 @@ impl<'a> Engine<'a> {
             return false;
         }
         let site_name = format!("{}@{off}", self.methods[m].key);
-        if recv.is_some_and(|s| s.classes.is_empty() && s.open.is_empty()) {
-            return true;
+        if !self.concrete.fallback.contains(&(m, off)) {
+            if recv.is_some_and(|s| s.classes.is_empty() && s.open.is_empty()) {
+                return true;
+            }
+            match self.combos(m, off, md, recv, args) {
+                Ok(c) => {
+                    if self.concrete_run(m, off, resolved, md, &c, site_name.clone(), false) {
+                        return true;
+                    }
+                }
+                Err(why) => {
+                    self.concrete_fallback(m, off, site_name.clone(), why);
+                }
+            }
         }
-        let combos = match self.combos(m, off, md, recv, args) {
-            Ok(c) => c,
-            Err(why) => return self.concrete_fallback(m, off, site_name, why),
-        };
+        if self.concrete.fallback.contains(&(m, off)) && self.man.concrete.object_results.contains(&*k) {
+            if let Some(c) = self.concrete_known(m, off, md, recv, args) {
+                let c: Vec<Vec<AK>> = c.into_iter().filter(|c| self.concrete.partial_tried.insert((m, off, c.clone()))).collect();
+                if !c.is_empty() {
+                    self.concrete_run(m, off, resolved, md, &c, site_name, true);
+                }
+            }
+        }
+        false
+    }
+
+    /// 逐组求值并应用。partial = false：任一组失败即整点回退（返回 false）；partial = true（已回退的按对象物化入口）：
+    /// 跳过失败的组合，其余照常应用
+    #[allow(clippy::too_many_arguments)]
+    fn concrete_run(&mut self, m: usize, off: u32, resolved: &MemberRef, md: &MethodDesc, combos: &[Vec<AK>], site_name: String, partial: bool) -> bool {
         let Some(site) = self.h.resolve_method(&resolved.owner, &resolved.name, &resolved.desc, false) else { return false };
         let mut outs = Vec::new();
-        for c in &combos {
+        for c in combos {
             let r = self.concrete_eval(&site, resolved, c);
             if let Err(w) = &*r {
+                if partial {
+                    continue;
+                }
                 return self.concrete_fallback(m, off, site_name, format!("{c:?}：{w}"));
             }
             outs.push((c.clone(), r));
@@ -159,21 +214,33 @@ impl<'a> Engine<'a> {
             hot.push(h);
             why.push(if h { o.alt_why.clone() } else { w });
         }
-        let image: Vec<Rc<str>> = outs
-            .iter()
-            .zip(&hot)
-            .filter_map(|((_, r), &h)| r.as_ref().as_ref().ok().map(|o| pick(o, h)))
-            .flat_map(|o| apply::image_types(o).cloned().collect::<Vec<_>>())
-            .collect();
-        if let Some(t) = image.iter().find(|t| self.container(t)) {
-            return self.concrete_fallback(m, off, site_name, format!("结果引用映像中的容器形态对象 {t}"));
+        // 结果引用映像中的容器形态对象的组合不可应用：整点回退，或（partial）跳过该组
+        let mut bad: Vec<Option<Rc<str>>> = Vec::new();
+        for ((_, r), &h) in outs.iter().zip(&hot) {
+            let types: Vec<Rc<str>> = r.as_ref().as_ref().ok().map(|o| apply::image_types(pick(o, h)).cloned().collect()).unwrap_or_default();
+            bad.push(types.into_iter().find(|t| self.container(t)));
+        }
+        if !partial {
+            if let Some(t) = bad.iter().flatten().next() {
+                let t = t.clone();
+                return self.concrete_fallback(m, off, site_name, format!("结果引用映像中的容器形态对象 {t}"));
+            }
+        }
+        if partial && bad.iter().all(Option::is_some) {
+            // 无可应用的组合：不接具体入口（是否有可应用组合与次序无关）
+            return false;
         }
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
         self.callers.entry(entry).or_default().insert(m);
-        for ((c, r), &h) in outs.into_iter().zip(&hot) {
-            if !self.concrete.applied.insert((m, off, c)) {
+        for (((c, r), &h), b) in outs.into_iter().zip(&hot).zip(&bad) {
+            if b.is_some() || !self.concrete.applied.insert((m, off, c.clone())) {
                 continue;
+            }
+            if partial {
+                self.concrete.pobj_stats[1] += 1;
+                // 逐组记诊断：应用集合单调，诊断行集合也与次序无关
+                self.concrete.diag.entry(site_name.clone()).or_default().insert(format!("回退后应用已知常量组合 {c:?}"));
             }
             let Ok(o) = &*r else { continue };
             match o.alt.as_ref().filter(|_| h) {
@@ -183,6 +250,9 @@ impl<'a> Engine<'a> {
                 }
                 None => self.concrete_apply(m, off, resolved, md, o),
             }
+        }
+        if partial {
+            return false;
         }
         // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
         // 未物化（按冷 / 热之并入闭包）的组合全部列出，物化的只列前 DIAG_COMBOS 组
@@ -214,7 +284,8 @@ impl<'a> Engine<'a> {
 
     fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
         self.concrete.fallback.insert((m, off));
-        self.concrete.diag.entry(site).or_default().insert(format!("回退：{why}"));
+        let at = self.ctx_label(m);
+        self.concrete.diag.entry(site).or_default().insert(format!("回退（{at}）：{why}"));
         false
     }
 
@@ -257,7 +328,27 @@ impl<'a> Engine<'a> {
         Ok(out)
     }
 
+    /// 已回退调用点的已知常量组合：接收者只取所指已知的类镜像，引用实参只取字面量与形参常量（含 null），不看污染、
+    /// 不设组合上限（污染与上限决定的是能否不接抽象边，已回退的点抽象边已接，这里只补按对象的结果）。
+    /// 任一实参无常量取值（或原始类型实参非常量）即无组合
+    fn concrete_known(&mut self, m: usize, off: u32, md: &MethodDesc, recv: Option<&TypeSet>, args: &[V]) -> Option<Vec<Vec<AK>>> {
+        let mut out: Vec<Vec<AK>> = vec![vec![]];
+        if let Some(s) = recv {
+            out = s.classes.iter().filter_map(|x| self.mirrors.get(&x).map(|&c| vec![AK::Mirror(self.names[c as usize].clone())])).collect();
+        }
+        for (p, v) in md.params.iter().zip(args) {
+            let ks = self.arg_keys_with(m, off, p, v, false)?;
+            out = out.into_iter().flat_map(|c| ks.iter().map(move |k| [c.clone(), vec![k.clone()]].concat())).collect();
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
     fn arg_keys(&mut self, m: usize, off: u32, p: &FieldType, v: &V) -> Option<Vec<AK>> {
+        self.arg_keys_with(m, off, p, v, true)
+    }
+
+    /// strict：引用实参要求名字全部已知（未被污染）；否则只取已知部分
+    fn arg_keys_with(&mut self, m: usize, off: u32, p: &FieldType, v: &V, strict: bool) -> Option<Vec<AK>> {
         if !p.is_reference() {
             return match (p, v) {
                 (FieldType::Prim(b'J'), V::Long(x)) => Some(vec![AK::Long(*x)]),
@@ -271,7 +362,7 @@ impl<'a> Engine<'a> {
             V::Class(c, _) => Some(vec![AK::Mirror(c.clone())]),
             V::Ref { nonnull, .. } => {
                 let srcs = v.srcs();
-                if !field_names::names_known(&srcs, |i| self.ptaint.contains(&(m, i))) {
+                if strict && !field_names::names_known(&srcs, |i| self.ptaint.contains(&(m, i))) {
                     return None;
                 }
                 let mut ks: BTreeSet<Rc<str>> = v.lits().into_iter().collect();
@@ -409,6 +500,9 @@ fn merge(out: &mut Outcome, t: Trace) {
     }
     for (k, ps) in t.puts {
         out.puts.entry(k).or_default().extend(ps);
+    }
+    for (k, ps) in t.shared_puts {
+        out.shared_puts.entry(k).or_default().extend(ps);
     }
     // 按「请求初始化」（touched）登记，不按「本次求值触发了初始化」（inited）：后者取决于共享 VM 里此前哪次求值
     // 先初始化了该类（如先求值的组合按热路径入闭包、其冷路径完成的初始化不登记），闭包随求值次序变化。

@@ -51,9 +51,8 @@ crate::__process_static! {
 /// 生成项目 main 启动时登记分派闭包（binary name 斜线形态；重登记幂等）。
 pub fn register_method_dispatch(dispatchers: &[(&str, ReflectDispatch)]) {
     DISPATCHERS.with(|d| {
-        let mut d = d.borrow_mut();
         for (name, f) in dispatchers {
-            d.insert((*name).to_owned(), Clone::clone(f));
+            d.put((*name).to_owned(), Clone::clone(f));
         }
     });
 }

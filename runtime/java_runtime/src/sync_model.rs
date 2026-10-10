@@ -40,12 +40,155 @@ pub fn __unused_any() -> __AnyRef {
     static UNUSED: std::sync::OnceLock<__AnyRef> = std::sync::OnceLock::new();
     UNUSED.get_or_init(|| std::sync::Arc::new(())).clone()
 }
-pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot};
+pub use self::mt::{__AtomicRepr, __PrimCell, __RefField, __RefSlot, __SlotRead, __SlotWrite};
+
+/// 持锁登记（无 GC 文档第四节小步 A）：当前线程持有的字段锁——`__RefField::with` / `with_mut` 的
+/// 临界区与 `__RefSlot` 的读写守卫——计数，`__RefSlot` 另记槽位地址（自持有检查）。
+/// 只在 debug 档生效：release 档 `Held` 是无 `Drop` 的零大小值，登记与断言整体消去。
+mod held {
+    #[cfg(debug_assertions)]
+    use std::cell::{Cell, RefCell};
+
+    /// 槽位登记容量：嵌套持有超过此数的槽位不再登记地址（计数照常），只漏检自持有
+    #[cfg(debug_assertions)]
+    const SLOTS: usize = 16;
+
+    /// 一项槽位持有：(槽地址, 是否写锁, 加锁位置)；地址 0 为空位
+    #[cfg(debug_assertions)]
+    type SlotHold = (usize, bool, Option<&'static std::panic::Location<'static>>);
+
+    #[cfg(debug_assertions)]
+    std::thread_local! {
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+        static HELD_SLOTS: RefCell<[SlotHold; SLOTS]> = const { RefCell::new([(0, false, None); SLOTS]) };
+    }
+
+    /// 持锁凭据：存活期间计入当前线程的持锁数（随守卫释放，含 panic 展开路径）
+    pub(crate) struct Held {
+        /// 登记的槽位地址（0 = 未登记：`__RefField` 临界区或登记表已满）
+        #[cfg(debug_assertions)]
+        slot: usize,
+    }
+
+    impl Held {
+        /// `__RefField` 临界区
+        #[inline(always)]
+        pub(crate) fn field() -> Held {
+            #[cfg(debug_assertions)]
+            {
+                let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+                Held { slot: 0 }
+            }
+            #[cfg(not(debug_assertions))]
+            Held {}
+        }
+
+        /// `__RefSlot` 守卫（加锁之前调用）：`write` 时本线程已持有该槽（读或写）、读时本线程已持有
+        /// 该槽的写锁即 panic 报两处加锁位置（读写锁不可重入升级，继续加锁即自死锁）
+        #[inline(always)]
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub(crate) fn slot(addr: usize, write: bool) -> Held {
+            #[cfg(debug_assertions)]
+            {
+                let here = std::panic::Location::caller();
+                let prior = HELD_SLOTS
+                    .try_with(|s| s.borrow().iter().find(|h| h.0 == addr && (write || h.1)).copied())
+                    .ok()
+                    .flatten();
+                if let Some((_, prior_write, at)) = prior {
+                    panic!("字段锁自持有：槽位 {addr:#x} 在 {here} 加{}锁，本线程已于 {} 持有其{}锁",
+                        if write { "写" } else { "读" },
+                        at.map_or_else(|| "?".to_owned(), |l| l.to_string()),
+                        if prior_write { "写" } else { "读" });
+                }
+                Self::record(addr, write, here)
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                let _ = (addr, write);
+                Held {}
+            }
+        }
+
+        /// `try_borrow*` 成功后登记（不阻塞，不需自持有检查）
+        #[inline(always)]
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub(crate) fn slot_acquired(addr: usize, write: bool) -> Held {
+            #[cfg(debug_assertions)]
+            {
+                Self::record(addr, write, std::panic::Location::caller())
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                let _ = (addr, write);
+                Held {}
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        fn record(addr: usize, write: bool, at: &'static std::panic::Location<'static>) -> Held {
+            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+            let slot = HELD_SLOTS
+                .try_with(|s| {
+                    let mut s = s.borrow_mut();
+                    s.iter_mut().find(|h| h.0 == 0).map(|h| {
+                        *h = (addr, write, Some(at));
+                        addr
+                    })
+                })
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            Held { slot }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    impl Drop for Held {
+        fn drop(&mut self) {
+            let _ = COUNT.try_with(|c| c.set(c.get().saturating_sub(1)));
+            if self.slot != 0 {
+                let slot = self.slot;
+                let _ = HELD_SLOTS.try_with(|s| {
+                    // 同槽多次读持有：去掉任一项即可（登记只用于判定「是否持有」）
+                    if let Some(h) = s.borrow_mut().iter_mut().rev().find(|h| h.0 == slot) {
+                        *h = (0, false, None);
+                    }
+                });
+            }
+        }
+    }
+
+    /// 当前线程持有的字段锁数（debug 档）
+    #[cfg(debug_assertions)]
+    pub(crate) fn count() -> usize {
+        COUNT.try_with(Cell::get).unwrap_or(0)
+    }
+}
+
+/// debug 档断言：当前线程不持有任何字段锁（`what` 为断言点说明）。release 档为空。
+///
+/// 断言点：对象释放（`drop_slow`：锁内释放对象会重入任意析构链）、安全点、类初始化入口。
+#[inline(always)]
+#[cfg_attr(debug_assertions, track_caller)]
+pub fn __assert_no_field_lock(what: &str) {
+    #[cfg(debug_assertions)]
+    {
+        let n = held::count();
+        if n != 0 {
+            panic!("{what}时持有 {n} 把字段锁（__RefField 临界区 / __RefSlot 守卫）");
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = what;
+}
 
 mod mt {
     use std::cell::UnsafeCell;
     use std::marker::PhantomData;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::{Acquire, Relaxed, Release, SeqCst}};
+
+    use super::held::Held;
 
     /// 可放入原子单元的基本类型：与 u64 位形互转（JVM 基本类型 + 运行时计数用整型）。
     pub trait __AtomicRepr: Copy {
@@ -239,10 +382,21 @@ mod mt {
             }
         }
 
-        /// 锁内对值执行 `f`（`f` 不得访问同一单元）。
+        /// 锁内只读访问值（`f` 不得访问同一单元、不得执行 Java 代码）。
         #[inline]
-        pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
             let _g = self.lock();
+            let _held = Held::field();
+            // SAFETY: 持锁独占
+            f(unsafe { &*self.val.get() })
+        }
+
+        /// 锁内改写值（`f` 不得访问同一单元、不得执行 Java 代码）。换下的旧值须从 `f` 返回、
+        /// 放锁后再释放：锁内释放对象会重入任意析构链（debug 档 `drop_slow` 断言）。
+        #[inline]
+        pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            let _g = self.lock();
+            let _held = Held::field();
             // SAFETY: 持锁独占
             f(unsafe { &mut *self.val.get() })
         }
@@ -264,7 +418,7 @@ mod mt {
 
         #[inline]
         pub fn replace(&self, v: T) -> T {
-            self.with(|cur| std::mem::replace(cur, v))
+            self.with_mut(|cur| std::mem::replace(cur, v))
         }
 
         #[inline]
@@ -308,35 +462,134 @@ mod mt {
         }
     }
     /// 引用字段 / 可变槽：`RefCell` 同名方法集的读写锁。`borrow` 为可重入读（同线程嵌套读
-    /// 不死锁），`borrow_mut` 为写。同线程读后写与 `RefCell` 的 panic 同属违例形态。
+    /// 不死锁），`borrow_mut` 为写。同线程读后写与 `RefCell` 的 panic 同属违例形态：debug 档
+    /// 加锁前查本线程的持有登记，自持有即 panic 报位置（release 档直接自死锁）。
     pub struct __RefSlot<T> {
         lock: parking_lot::RwLock<T>,
+    }
+
+    /// `__RefSlot` 读守卫（debug 档随守卫登记持锁）
+    pub struct __SlotRead<'a, T> {
+        g: parking_lot::RwLockReadGuard<'a, T>,
+        _held: Held,
+    }
+
+    /// `__RefSlot` 写守卫（debug 档随守卫登记持锁）
+    pub struct __SlotWrite<'a, T> {
+        g: parking_lot::RwLockWriteGuard<'a, T>,
+        _held: Held,
+    }
+
+    impl<T> std::ops::Deref for __SlotRead<'_, T> {
+        type Target = T;
+        #[inline(always)]
+        fn deref(&self) -> &T { &self.g }
+    }
+    impl<T> std::ops::Deref for __SlotWrite<'_, T> {
+        type Target = T;
+        #[inline(always)]
+        fn deref(&self) -> &T { &self.g }
+    }
+    impl<T> std::ops::DerefMut for __SlotWrite<'_, T> {
+        #[inline(always)]
+        fn deref_mut(&mut self) -> &mut T { &mut self.g }
     }
 
     impl<T> __RefSlot<T> {
         #[inline]
         pub const fn new(v: T) -> Self { __RefSlot { lock: parking_lot::RwLock::new(v) } }
+        #[inline(always)]
+        fn addr(&self) -> usize { self as *const Self as usize }
         #[inline]
-        pub fn borrow(&self) -> parking_lot::RwLockReadGuard<'_, T> { self.lock.read_recursive() }
-        #[inline]
-        pub fn borrow_mut(&self) -> parking_lot::RwLockWriteGuard<'_, T> { self.lock.write() }
-        #[inline]
-        pub fn try_borrow(&self) -> Result<parking_lot::RwLockReadGuard<'_, T>, ()> {
-            self.lock.try_read_recursive().ok_or(())
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn borrow(&self) -> __SlotRead<'_, T> {
+            let _held = Held::slot(self.addr(), false);
+            __SlotRead { g: self.lock.read_recursive(), _held }
         }
         #[inline]
-        pub fn try_borrow_mut(&self) -> Result<parking_lot::RwLockWriteGuard<'_, T>, ()> {
-            self.lock.try_write().ok_or(())
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn borrow_mut(&self) -> __SlotWrite<'_, T> {
+            let _held = Held::slot(self.addr(), true);
+            __SlotWrite { g: self.lock.write(), _held }
         }
         #[inline]
-        pub fn replace(&self, v: T) -> T { std::mem::replace(&mut *self.lock.write(), v) }
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn try_borrow(&self) -> Result<__SlotRead<'_, T>, ()> {
+            let g = self.lock.try_read_recursive().ok_or(())?;
+            Ok(__SlotRead { g, _held: Held::slot_acquired(self.addr(), false) })
+        }
         #[inline]
-        pub fn take(&self) -> T where T: Default { std::mem::take(&mut *self.lock.write()) }
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn try_borrow_mut(&self) -> Result<__SlotWrite<'_, T>, ()> {
+            let g = self.lock.try_write().ok_or(())?;
+            Ok(__SlotWrite { g, _held: Held::slot_acquired(self.addr(), true) })
+        }
+        /// 锁内换值，旧值返回给调用方在锁外释放
+        #[inline]
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn replace(&self, v: T) -> T { std::mem::replace(&mut *self.borrow_mut(), v) }
+        #[inline]
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn take(&self) -> T where T: Default { std::mem::take(&mut *self.borrow_mut()) }
         #[inline]
         pub fn into_inner(self) -> T { self.lock.into_inner() }
         #[inline]
         pub fn get_mut(&mut self) -> &mut T { self.lock.get_mut() }
     }
+
+    // 登记表的写入形态（无 GC 文档第四节小步 A）：锁内只换出值，被替换 / 落选的值放锁后再释放
+    // （锁内释放对象会重入任意析构链，debug 档 `drop_slow` 断言）；值的构造在锁外完成。
+
+    impl<T: Clone> __RefSlot<Option<T>> {
+        /// 槽为空时写入 `v`，返回槽中的值（并发首次写入：先写入者胜出，保持单一身份）。落选的 `v` 在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn get_or_insert(&self, v: T) -> T {
+            let (cur, unused) = {
+                let mut g = self.borrow_mut();
+                match &*g {
+                    Some(cur) => (cur.clone(), Some(v)),
+                    None => {
+                        *g = Some(v.clone());
+                        (v, None)
+                    }
+                }
+            };
+            drop(unused);
+            cur
+        }
+    }
+
+    impl<K: Eq + std::hash::Hash, V> __RefSlot<std::collections::HashMap<K, V>> {
+        /// 写入 `k → v`；被覆盖的旧值在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn put(&self, k: K, v: V) {
+            let old = self.borrow_mut().insert(k, v);
+            drop(old);
+        }
+
+        /// 按键取规范值：已有则取表中的值，否则写入 `v`（先写入者胜出，保持单一身份）。落选的 `v` 在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn intern(&self, k: K, v: V) -> V where V: Clone {
+            use std::collections::hash_map::Entry;
+            let (cur, unused) = match self.borrow_mut().entry(k) {
+                Entry::Occupied(e) => (e.get().clone(), Some(v)),
+                Entry::Vacant(e) => (e.insert(v).clone(), None),
+            };
+            drop(unused);
+            cur
+        }
+    }
+
+    impl<T> __RefSlot<Vec<T>> {
+        /// 摘除满足 `pred` 的元素；摘下的元素在锁外释放。`pred` 不得执行 Java 代码。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn remove_where(&self, pred: impl FnMut(&T) -> bool) {
+            let mut pred = pred;
+            let gone: Vec<T> = self.borrow_mut().extract_if(.., |x| pred(x)).collect();
+            drop(gone);
+        }
+    }
+
     impl<T: Default> Default for __RefSlot<T> {
         fn default() -> Self { Self::new(T::default()) }
     }
@@ -422,17 +675,23 @@ impl<T: __AtomicRepr> __GilStatic<__PrimCell<T>> {
 
 impl<T> __GilStatic<__RefSlot<T>> {
     #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn with_borrow<R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
-        self.with(|c| f(&c.borrow()))
+        f(&self.force().borrow())
     }
     #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn with_borrow_mut<R>(&'static self, f: impl FnOnce(&mut T) -> R) -> R {
-        self.with(|c| f(&mut c.borrow_mut()))
+        f(&mut self.force().borrow_mut())
     }
+    /// 写入；旧值在锁外释放
     #[inline]
-    pub fn set(&'static self, v: T) { self.with(|c| *c.borrow_mut() = v) }
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn set(&'static self, v: T) { drop(self.force().replace(v)) }
     #[inline]
-    pub fn replace(&'static self, v: T) -> T { self.with(|c| c.replace(v)) }
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn replace(&'static self, v: T) -> T { self.force().replace(v) }
     #[inline]
-    pub fn take(&'static self) -> T where T: Default { self.with(|c| c.take()) }
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn take(&'static self) -> T where T: Default { self.force().take() }
 }

@@ -9,6 +9,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub struct ConcreteCfg {
     /// 入口方法（`类.方法:描述符`）
     pub entries: HashSet<String>,
+    /// 结果按对象物化的入口（须同在 `entries`）：结果对象图里入口字节码自身 `new` 的类的实例各成一个抽象对象，
+    /// 字段值按对象记录（不并入通配值），接收者 / 形参是这些类的方法按对象读字段（engine/concrete/apply.rs）
+    pub object_results: HashSet<String>,
     /// 手写承载方法的具体语义：成员 → 操作名（engine/concrete/natives.rs）
     pub natives: HashMap<String, String>,
     /// 内存缓存字段（`类.字段`）：首次求值写入、之后命中；轨迹按冷 / 热两次求值取并
@@ -90,6 +93,7 @@ pub fn parse(t: Option<&toml::Value>) -> Result<ConcreteCfg, String> {
     let get = |k: &str| t.and_then(|t| t.get(k));
     Ok(ConcreteCfg {
         entries: strs(get("entries")).into_iter().collect(),
+        object_results: strs(get("object_results")).into_iter().collect(),
         natives: table(get("natives"), "natives")?,
         memo_fields: strs(get("memo_fields")).into_iter().collect(),
         image_memo_fields: strs(get("image_memo_fields")).into_iter().collect(),

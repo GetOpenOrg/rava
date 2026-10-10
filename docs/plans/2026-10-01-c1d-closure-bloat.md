@@ -4491,3 +4491,263 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
     → `ServiceLoader.load` 的服务提供者，同 §29 的 pkcs11 归因。
   - `X500Name`：`PrintStream.println` 引导区残差 → `String.valueOf` → `X509CertInfo.toString` 开放派发。
 - jar `Handler` 仍因 `URLClassPath.<init>` 无条件构造留在闭包（§30.15），但它的 `openConnection` 下游已经不可达。
+
+## 33. 能力③：常量格式串的具体求值与按对象读说明符字段（2026-10-10，分支 `c1d-fmt`，基于 9a48ca32）
+
+目标：格式串里没有日期转换时，`FormatSpecifier.print` 不再到达 `printDateTime` → Calendar →
+SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字节码建模，不对 Formatter 做特判。
+
+### 33.1 现状与阻塞
+
+`Formatter.parse(String)` 已经是具体求值入口（`[concrete] entries`）。要收窄，以下两个条件必须同时成立：
+
+1. **档案里每个 parse 调用点都具体求值成功。** 只要有一个调用点回退抽象调用边，抽象的 `parse` / 说明符构造器
+   就会以 Top 格式串执行：`dt = true` 的写入经字节码 `putfield` 并入通配值（基本类型字段不拆接收者），
+   每个说明符读到的 `dt` 都是 `{0, 1}`。
+2. **`print` 按接收者对象读 `dt`。** 改造前，具体求值的结果对象按**类型**代表（`TypeSet::exact(类)`），
+   字段值写进全局值集和通配值。即使各调用点都成功，只要档案里某个常量格式串含日期转换（日志的
+   `SimpleFormatter` 缺省格式就有），全局 `dt` 仍是 `{0, 1}`。
+
+### 33.2 机制 B：结果按对象物化（`[concrete] object_results`，第 1 步，已实现）
+
+- **清单**：`object_results` 列出结果按对象物化的入口（须同在 `entries`）。首个入口是 `Formatter.parse`。
+- **按对象的类**（`pobj_types`）：分析开始前扫描各入口**自身字节码**里的 `new`，得到这些类。
+  对 parse 而言，就是说明符、定长串和列表三个类。列表也因此按对象物化：迭代时按接收者对象读 `elementData`，只取到本次解析出的说明符。这个集合在分析期间固定不变，所以按对象读的门与处理次序无关。
+- **物化**（`concrete/apply.rs`）：结果快照里属于这些类的实例（不含数组和 lambda）各成一个抽象对象，
+  名字为 `类@concrete:<散列>:<快照序号>`。散列取「入口 + 实参组合 + 冷热」的内容，因此与求值次序无关；
+  同一组实参在不同调用点得到同一组对象。
+  - 对象登记进 `objs` 与 `obj_chain`。
+  - 快照字段值记入 `ovals[(对象, 字段)]`，引用值进对象字段节点 `O(对象, 字段)`。
+    这些值不并入 `owild`，也不进 `U`；全局值集 `fvals` 照常并入，供不按对象读的读者使用。
+  - 对象记入 `osnap`。快照含全部实例字段，所以按对象读不再并入初值。
+- **写入分流**：轨迹另记 `shared_puts`，即接收者不是本次求值新分配对象的写入（静态字段、映像对象、
+  此前求值的对象）。按对象物化的入口只把 `shared_puts` 并入 `owild`。
+  - 新分配对象上的写入：进了结果的对象由快照按对象记录；没进结果的对象程序看不到。
+  - 同一次物化里仍按类型代表的结果对象（不在 `pobj_types` 中的类的实例）不是抽象对象，不会出现在按对象读的对象集里
+    （`node_objs` 要求值集全由抽象对象组成），所以它们的写入不并入 `owild` 也是健全的。
+  - 其他入口的行为不变。
+- **读取**：`obj_param_set` 的门从「声明类型是容器形态类」放宽为「容器形态类，或在 `pobj_types` 中」。
+  `print` 按接收者对象克隆（`recv_ctx`），克隆内 `this` 的值集就是该说明符对象，`getfield dt` 读到的是
+  「该对象的快照值 ⊔ owild」。
+
+**单调性**：
+- `pobj_types` 在分析前确定，门不随分析变化。
+- 新增对象只让值集增长，按对象读的复核机制不变（`obj_grown` / `odeps`）。
+- 具体求值结果按 (入口, 实参) 记忆。对象名只取决于内容，同一组实参重复应用时幂等（`applied`）。
+- `osnap` 只增不减，且只登记快照对象。快照字段集是全部实例字段，所以「不并初值」恒成立，
+  不受构造器摘要作废（`odef` 清空）的影响。
+
+**健全性**：
+- 对一个物化对象的写入有三种来源，各有覆盖：
+  1. 求值期间的写入：由快照最终值覆盖；
+  2. 求值之后程序对它的字节码写入：接收者值集里含该抽象对象，照常按对象记录；
+  3. 未知接收者的写入：对象逃逸后经 `U` 与 `owild` 覆盖。
+- 求值期间对其他既有对象的写入经 `shared_puts` 进入 `owild`。
+
+### 33.3 机制 A：字符串链按调用点克隆（视诊断决定是否需要）
+
+如果诊断显示 parse 调用点回退的原因是「实参不可枚举」（形参被 Top 污染），或「组合数超过 64」（全部调用点的
+常量格式串汇合），就需要给「字符串形参原样转给具体求值入口字符串形参」的转发链按调用点克隆，
+使污染的调用链与常量调用链分开。形式与选择子形参（`selector.rs`）相同：
+- 掩码按字节码判定，并沿 static / special / 直接实例调用递归；
+- 上下文按调用点链命名，深度有界。
+
+具体是否需要，见 33.4 的诊断。
+
+### 33.4 诊断：回退调用点的污染来源（`fmt-d1-0dfce4dd` / `fmt-d2-78614c31` / `fmt-d3-78614c31`，sg2）
+
+诊断手段（均为通用诊断，不含类名特判）：
+- `--flows @taint:<方法模式>`：列出匹配方法节点上被污染的形参槽，逐跳回溯污染来源，直到第一个不是透传的来源。
+  - `taint_site` 处，实参若来自调用方已被污染的形参槽，记为透传，链因此可以继续回溯。
+  - 调用点上下文名 `@<方法>:<偏移>` 会解码出方法标签。
+- 回退行带上下文标签：`回退（<上下文>）：…`。
+
+**结论**：档案里只有一个 parse 调用点回退，它的格式串是**真实的运行期未知值**，不是建模缺陷。
+
+- 回退点是 `Formatter.format(Locale,String,Object[])@11`，所在上下文的格式串形参被污染。
+- 污染链：
+  `Formatter.format(Locale,…)` 槽 2 ← 透传 `Formatter.format(String,…)` 槽 1
+  ← 透传 `String.format` `#@5006:54` 槽 0 ← 实参 `Site(13)`（`SimpleConsoleLogger.format`）。
+  - `@5006:54` 就是 `SimpleConsoleLogger.format`。
+  - 格式串来自 `getSimpleFormatString()` → `Formatting.SIMPLE_CONSOLE_LOGGER_FORMAT`，它的值是
+    `getSimpleFormat("jdk.system.logger.format", …)`。
+  - 也就是说，格式串是运行期系统属性的值。属性缺省时取 `DEFAULT_FORMAT`，即 `"%1$tb %1$td, %1$tY %1$tl:%1$tM:%1$tS %1$Tp …"`，**本身就含日期转换**；实参 1 是 `ZonedDateTime.now()`。
+  - 构建期引导映像按 U1 不钉系统属性，所以这个值只能是 Top。
+- 这条路径在档案里真实可达（`--why`）：
+  `Thread.start0`（引导映像根）→ `Signal$1.run` → `Terminator$1.handle` → `Shutdown.exit` → `Shutdown.logRuntimeExit`
+  → `System.Logger.log` → `SimpleConsoleLogger.log/publish/format`。
+  - 要不要真的记日志，取决于运行期属性 `jdk.system.logger.level`（`isLoggable(DEBUG)`）和运行期装载的 LoggerFinder，构建期折不掉。
+  - 每个程序的引导段都含 `Terminator` 信号处理器，所以**每个档案都有这条链**。
+  - DeepCopy 另有一条首次到达的路径：`ObjectInputFilter$Config.<clinit>@114` 的 `System.Logger.log`。反序列化过滤器配置要记日志，级别同样取决于运行期属性。
+- 同一条路径还独立带进了 §31.5 的其他目标：
+  - **ServiceLoader**：首次到达是 `ZonedDateTime.now` → `Clock.systemDefaultZone` → `ZoneId.systemDefault` → `TimeZone.toZoneId`
+    → `ZoneId.of` → `ZoneRegion.ofId` → `ZoneRulesProvider.<clinit>@45`（`ServiceLoader.load`），与 Formatter 无关；
+  - **SPILocaleProviderAdapter**：经 `printInteger` → `localizedMagnitude` → `getZero` → `DecimalFormatSymbols.getInstance`
+    → `LocaleProviderAdapter.forJRE`，不经 `dt`，任何 `%d` 都会走到；
+  - **Calendar**：经 `printDateTime@34`（日志路径必经），也经 `TimeZone.getDisplayName` → CLDR → `MessageFormat`
+    → `SimpleDateFormat`（`%Z` 等转换）。
+
+### 33.5 结论与实测
+
+**能力③的收窄目标在 HelloWorld / DeepCopy 上无法健全达成。** 根因是 33.4 中的运行期退出日志链。
+只要它在档案上，`printDateTime` → Calendar 链和 ServiceLoader、SPILocaleProviderAdapter 都是真实可达的。
+「格式串无日期转换就不到 `printDateTime`」这条在**单个调用点**上成立，但档案按并集计算，其中必有这个日期格式调用点。
+
+实测（`rava closure`，sg2）：
+
+| 用例 | 基线 9a48ca32（类 / 方法） | 机制 B 0dfce4dd（类 / 方法） |
+| --- | --- | --- |
+| HelloWorld | 3407 / 18453 | 3407 / 18453 |
+| DeepCopy | 3727 / 21500 | 3727 / 21500 |
+
+- 其余 parse 调用点都具体求值成功（每个上下文 4–9 组常量）。
+- 机制 B 物化出的说明符对象按对象读 `dt` 时，仍会读到 `owild` 里的 `true`。来源是日志调用点上的抽象 parse：
+  它的说明符按类 id 代表，不是抽象对象，基本类型字段写入一律并入通配值。
+  `--why printDateTime` 首次经由的就是一个 `@concrete` 说明符对象。
+  即使把这一处也分开，`printDateTime` 仍会经日志调用点到达，所以数字不会变。
+
+**机制 B 的去留**：保留。理由如下：
+- 它是常量格式串按对象读说明符字段的终态形式，健全性论证见 33.2；
+- 门在分析前确定，不引入次序依赖；
+- 在不含退出日志链的构建单元上，或者将来日志链被健全地排除后，它直接生效。
+
+当前所有档案都含这条链，所以它对闭包规模的实际收益为 0。这一点在这里如实记录。
+
+**余项（需用户决策 / 另立）**：
+1. 只有一个办法能真正让 `printDateTime` / Calendar / ServiceLoader 出闭包：判定退出日志链（`Shutdown.logRuntimeExit` → `System.Logger`）不可达，
+   或者把它的格式串、级别在构建期钉住。
+   - 这要改 U1「属性运行期取宿主值」的口径（例如把 `jdk.system.logger.level`、`jdk.system.logger.format` 划入构建期钉值的属性，同 U14），是语义决定，不属于分析器精度问题。
+   - 钉住以后，`isLoggable(DEBUG)` 恒假，整条日志链出闭包。ServiceLoader 的首次到达经 `ZonedDateTime.now`，但可能还有其他路径，是否随之退出需实测。
+2. 机制 C（未做，规模收益 0，不建议单独做）：按对象类（`pobj_types`）在抽象执行中的 `new` 也建抽象对象，基本类型字段写入按接收者拆分。
+   这样能消除抽象 parse 对具体说明符 `dt` 的污染，但会改 `bytecode.rs` 的字段写入路径（与 c1d-uri 同区），且受第 1 项支配。
+3. 机制 A（字符串链按调用点克隆）不需要：回退原因不是污染串扰，而是真实未知值。
+
+### 33.6 次序依赖回归、逐组应用与停用（2026-10-10 续，分支 `c1d-fmt`）
+
+**回归**：机制 B（42e25cf4）令 HelloWorld `closure_independent_of_order` 失败（`fmt-o-78614c31`；基线 9a48ca32 HelloWorld 通过，只有既有的 DeepCopy FindOps 差异）。
+`fmt-od-78614c31` 对照缺省次序与 batch 1 / seed 0：缺省次序多出 `ArrayListSpliterator.tryAdvance@48 → DistinctSpliterator.accept` 等流水线派发目标。
+根因：parse 调用点先应用了若干常量组合，之后污染到达，调用点不可撤回地回退。回退前已应用的组合留下各自的按对象结果，而哪些组合先到达取决于处理次序。
+机制 B 之前，这些结果是类 id 代表，会被回退后的抽象结果吸收；按对象物化后不再被吸收。
+
+**修正（5dbc0bdc、1a64da69）**：对按对象物化的入口，调用点回退后仍逐组应用实参中的已知常量组合（`concrete_known`）。
+- 接收者只取所指已知的镜像；引用实参取字面量、形参常量和 null，不看污染。
+- 失败的组合，或结果引用映像容器的组合，逐组跳过；每个 (调用点, 实参) 只处理一次（`partial_tried`）。
+- 应用集合由此恒为终态的已知常量组合，与次序无关。
+- 残留的次序依赖只在原始类型实参由常量变为非常量时出现（回退前应用过的整型组合撤不回），parse 无此形态。
+
+**新问题：内存**。同步 batch-1009d（logchain3：退出日志链 `isLoggable(DEBUG)` 构建期折叠）之后，在 dev 上实测：
+
+| 用例 | 基线 589052eb（类） | 本分支 8850f928 / 1a64da69（机制 B + 逐组应用） |
+| --- | --- | --- |
+| HelloWorld | 577 | 577 |
+| DeepCopy | 3727（561 s，峰值 9.0 GiB） | 超 14 GiB 被 OOM 杀（700–755 s） |
+
+- logchain3 后 HelloWorld 的退出日志链已出闭包（33.5 余项 1 由日志链缺口 ③ 以构建期折叠健全解决，不需改 U1）。HelloWorld 不论是否开机制 B 都是 577，机制 B 在其上无增量。
+- DeepCopy 在逐组应用不设组合上限时内存爆。`partial_tried` 去重后依旧，所以内存不在重复处理上，而在组合数，以及每组物化的抽象对象与按对象字段值。
+  - 未确认的一点：只开机制 B、不开逐组应用时 DeepCopy 是否也超限。旧基线上机制 B 未超（sg2 无内存上限）。
+
+**处置（0ad9f474）**：`vm_intrinsics.toml [concrete] object_results` 暂置空，机制 B 与逐组应用的代码保留，但不生效。闭包行为回到基线。
+dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
+
+| 用例 | 基线 589052eb（类 / 方法） | 0ad9f474（类） |
+| --- | --- | --- |
+| HelloWorld | 577 / 1896 | 577 |
+| DeepCopy | 3727 / 21509 | 3727（563 s，峰值 9.0 GiB） |
+
+- 基线 HelloWorld 闭包已不含 Calendar / SPILocaleProviderAdapter / ServiceLoader（logchain3 所致）。DeepCopy 三者仍在。Calendar 的首次到达是 `Preconditions.outOfBoundsMessage@338` → `String.format` → `Formatter.format(Locale,…) #@level:2@89` → `FormatSpecifier.print@11` → `printDateTime@34`。
+  这条路径上的格式串都是常量，但到达 parse 时处在 `@level:2` 截断上下文，值已合并。这里正是机制 B 与逐组应用的用武之地，需先解决内存问题再验证。
+- 闭包单测 240 通过。
+- `closure_independent_of_order`（`fmt-o6-95d8c128`，sg2）：HelloWorld 全矩阵通过，机制 B 引入的回归已消除。DeepCopy 在 batch 1 / seed 1 与缺省不同，同基线既有失败（FindOps 派发集，归 order-findops）。
+  本分支置空 `object_results` 后新增代码不生效，差异内容未逐项比对。
+
+**接手方向**：
+1. 先实测 DeepCopy 只开机制 B（逐组应用关掉）时的峰值，定位内存来自组合数还是物化对象数（`--flows @concrete` 的「回退后应用已知常量组合」诊断行数）。
+2. 若来自组合数：按入口给逐组应用设终态可判定的上限。超限时的处理要与次序无关，例如该调用点整体不做按对象物化，结果改按类 id 代表，回退前已物化的对象也并入代表（需要撤回机制）。
+3. 若来自物化对象：同一说明符类、同一字段值的对象按值合并（对象名改按字段值散列而非组合序号），对象数以不同说明符形态为上界。
+4. 恢复 `object_results` 后重跑 HelloWorld / DeepCopy 闭包计数与 `closure_independent_of_order`。
+
+### 33.7 内存受控、枢纽形参槽污染与具体上下文活性（2026-10-10 续，分支 `c1d-fmt2`，基于 batch-1010f 956efa18）
+
+按 §33.6 接手方向 1–4 执行，`[concrete] object_results` 已恢复为 `Formatter.parse`。
+
+**内存来源：物化对象数（9347252b 计数诊断，dev）**
+
+| 配置 | 物化对象 | 回退后应用组合 | DeepCopy 峰值 |
+| --- | --- | --- | --- |
+| 只开机制 B（7b9c213b，临时） | 128+ | — | 9.1 GiB |
+| 机制 B + 逐组应用（07c0606e，临时） | 512+ | 55 | 13.2 GiB（趋势超 14 GiB） |
+
+内存随物化对象数增长，而非组合数本身。按 §33.6 方向 3 处理。
+
+**修正 1：结果对象按内容命名（f8af6fed）**。按对象物化的结果对象名由组合序号改为 `{类}@concrete:{快照内容 FNV 散列}`。
+同类、快照相同的对象合并为一个抽象对象，对象数的上界是不同说明符形态数，与格式串条数、调用点数无关。
+合并按内容判定，与到达次序无关。fmt2-m3-f8af6fed：DeepCopy 物化对象 64、回退后应用 33 组，峰值 RSS 8.6 GiB。
+
+**修正 2：枢纽形参槽记污染（b29b3042）**。原先污染按方法形参槽（`ptaint`）判定。经 `String.format` / `PrintStream.printf` 等虚分派枢纽到达 `Formatter.format` 时，
+各接入点的实参在枢纽处合流成常量格，用户 printf 字面量与真正未知的格式串混成一体，于是整个调用点回退。
+现在枢纽形参槽单列（`htaint`，`PSlot::H`）：
+- 污染沿 pstr 子集边（H→M、H→父枢纽 H）传播，`taint_slot` 统一用工作表推进。
+- 接入点按实参自身判定（`taint_hub_site` / `arg_taint`）。干净的字面量不会污染枢纽槽。
+- `hub_bind` 不再按常量格合流绑定，而是改走 `join_pvs`。
+- `taint_report` 的路径能显示枢纽跳转。
+
+fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直接具体求值），峰值 RSS 8.2 GiB；HelloWorld 577 / 1896。
+
+**修正 3：去掉实测开关（0a8facaa）**。回退后逐组应用常开。
+
+**修正 4：具体上下文执行过的字段访问登记字段节点（6afde4a0）**。
+- 抽查发现 LahNumbers 运行期 NPE，基线通过：`printf("%5s", n)` → `FormatSpecifier.width` → `Integer.parseInt(CharSequence,III)` → `Character.digit` → `CharacterDataLatin1.digit`。
+- 根因：这三个方法只经 `Formatter.format@11` 的具体上下文到达（via `concrete`）。`process_concrete` 按轨迹登记依赖，但不登记字段节点，
+  所以构建期初始化类 `CharacterDataLatin1` 的静态表（A / B / DIGITS / sharpsMap）没有经 `image_field` 取映像值，映像对象不是活对象，没有发射，运行期读到 null。
+- 机制 B 之前，这些方法同时经抽象路径到达，缺口被掩盖。
+- 终态修正（6afde4a0 → 9cc7f4a7）：具体上下文里执行过的指令运行期照样执行，所以静态字段访问（get/putstatic，引用类型）与抽象路径一样调用 `field_node`：取映像值，所指对象成为活对象，内容随之入队。
+- 只登记静态字段：
+  - 实例字段的接收者来自静态字段、实参或新建对象，前两者的映像对象已活、内容已传播，无需另登记。
+  - 6afde4a0 也登记了实例字段，按字段并集会把全部活对象的该字段值并入。HelloWorld 因此 577→592，多出类镜像 genericInfo 链（`TypeVariableImpl` / `CoreReflectionFactory` 等 15 类）。
+- 收紧后 HelloWorld 580 / 1896，比基线多 3 类（ClassRepository / ClassSignature / Signature / Tree 链上的 `ClassSignature`、`Signature`、`Tree`）。来源是三处具体上下文的静态读，它们运行期真实执行：
+  - `ClassRepository.NONE`：`ConcurrentHashMap.comparableClassFor` → `Class.getGenericInfo`。
+  - `Pattern$Qtype.GREEDY` / `POSSESSIVE`：`Formatter.<clinit>` 的 `Pattern.compile`。
+  - `CharacterDataLatin1.B`。
+  
+  这些在基线上同样只经具体上下文到达、映像静态未发射，属于既有的健全性缺口（运行期读到 null），不是机制 B 引入的。增量是健全性的代价。
+- 若要去掉这 3 类：只做引用比较的静态（如 `NONE` 哨兵）不需要内容，可以只发射对象而不入队内容。这需要「仅身份」活性层，留作后续。
+
+**Calendar 仍未出 DeepCopy 闭包：健全路径阻塞**（`--why java/util/Calendar`，fmt2-m4 / m5）。
+- 用户 printf 路径已解决。Calendar 首达改为日志链：`ObjectInputStream` → `ObjectInputFilter$Config.<clinit>@114` → `System.Logger.log` → `SimpleConsoleLogger` → `MessageFormat` → `SimpleDateFormat.initializeCalendar`。
+- `printDateTime` 仍经两类真正未知的格式串可达：
+  - `SimpleConsoleLogger.format`（Site(13)）：格式串取自 `jdk.system.logger.format` 属性。
+  - `CLDRTimeZoneNameProviderImpl.toGMTFormat`（Site(147)）：格式串取自资源束字符串。
+  
+  两者都是健全可达，超出能力③的范围。日志链的出闭包归 a5-4f 日志后端线；资源束串的出闭包需要按名资源的构建期常量化。
+- TestStringFormat 另有一条：@concrete 说明符对象的按对象读混入了抽象 parse 的通配值（`owild`，机制 C 污染），`printDateTime` 经此可达。机制 C 的按对象读与通配分离留作后续。
+
+**实测（dev，终版：基线 main b1dae15c 对本分支 b04de767；`closure_composition_job.sh`，峰值为 RSS）**
+
+| 用例 | 基线 b1dae15c（类 / 方法，峰值） | 本分支 b04de767（类 / 方法，峰值） |
+| --- | --- | --- |
+| HelloWorld | 577 / 1896，0.44 GiB | 580 / 1896，0.43 GiB |
+| DeepCopy | 3038 / 16715，3.14 GiB | 3028 / 16587，2.80 GiB |
+| LahNumbers | 2158 / 11077，1.43 GiB | 675 / 2431，0.48 GiB |
+| CollectorsDemo | 616 / 2021 | 619 / 2021 |
+| TestStringFormat | 2158 / 11072，1.45 GiB | 2161 / 11072，1.49 GiB |
+| StockTrans | 3036 / 16699，3.12 GiB | 3026 / 16571，3.03 GiB |
+
+- 对 main 6a668ac6（合并 batch-1010d 后、batch-1010g/h 前）：
+  - DeepCopy 3069 / 17019 → 3055 / 16872，峰值 4.98 → 3.82 GiB，耗时 366 → 199 s。
+  - LahNumbers 2158 / 11085 → 675 / 2431。
+  - StockTrans 3067 → 3053，峰值 4.98 → 3.79 GiB。
+- 合并前（基线 956efa18，c1d-uri 未入）：DeepCopy 3727 / 21509 → 3726 / 21506，峰值 9.0 → 8.2 GiB（fmt2-m4 / m7）。
+- DeepCopy 与 StockTrans 的峰值和耗时下降，因为用户 printf / format 的格式串全部具体求值，parse 不再走抽象回退。
+- LahNumbers 大幅收缩，原因相同：printDateTime 等不再经用户格式串可达，Calendar / 区域数据链出闭包。DeepCopy 中 Calendar 仍经日志链与未知格式串可达，见上。
+- HelloWorld、CollectorsDemo、TestStringFormat 各 +3 类，是修正 4 的健全性代价（`ClassRepository.NONE` 链），方法数不变。
+- 作业：
+  - 终版：fmt2-base-b1dae15c、fmt2-ut-b04de767 第 5 / 6 项（实测）。
+  - 合并 1010d 后：fmt2-base-6a668ac6、fmt2-mj-6a668ac6 / fmt2-mj-10e97917（取 json，方法数）、fmt2-ut-10e97917 第 5 项（实测）。
+  - 合并前：fmt2-base-956efa18、fmt2-m3-f8af6fed、fmt2-m4-b29b3042、fmt2-m5-b29b3042、fmt2-m7-6afde4a0、fmt2-h8-6afde4a0 / fmt2-h9-9cc7f4a7（HelloWorld 增量归因）。
+  - 诊断：fmt2-npe3-0a8facaa（NPE 栈）、fmt2-lbase-956efa18 / fmt2-lmine-0a8facaa（映像活性对照）。
+- 单测：
+  - 终版（fmt2-ut-b04de767）：组 A / 组 B 0 失败（`param_string_constants_fold_switch` 已不再失败），`closure_independent_of_hash_seed` 通过。
+  - `closure_independent_of_order` 在 DeepCopy batch 1 / seed 1 失败，差异只在 `boot_image_data.live`（3 个映像对象）。main b1dae15c 同样失败（fmt2-ov-b1dae15c，差异形态相同），属 batch-1010g/h 引入的既有失败，非本线。
+  - 合并 1010d 后（fmt2-ut-10e97917）：组 A / 组 B 0 失败，order 与 hash_seed 均通过。
+  - 合并前（fmt2-ut-0a8facaa）：组 A / 组 B 0 失败，order 通过。
+- 抽查 30 例（含 printf / String.format 用例 25 例），fmt2-spot-6afde4a0、fmt2-spot-9cc7f4a7、fmt2-spot-10e97917、fmt2-spot-b04de767 四轮均 30/30 通过。0a8facaa 上 LahNumbers 的 NPE 已由修正 4 解决。

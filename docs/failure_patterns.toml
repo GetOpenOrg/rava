@@ -34,14 +34,30 @@ symptom = "只经 Unsafe 按偏移写的字段被折叠成初值：CAS 无限重
 match = [["Exception in thread \"main\" java.lang.NullPointerException"], ["run timeout"]]
 tests = ["ReflectionAPI", "TestAnnoReflect", "TestAnnoDeepAccess", "TestAnnoArrayMembers", "TestAnnoNestedArray",
          "TestAnnoValues", "TestBeansIndexedProps", "TestBeansIntrospector", "TestCallerSensitiveHandle", "TestJucSync",
-         "AmicablePairs", "RamanujanPrimes", "SelfReferentialSequence", "TestParallelArrayCas", "TestCommonPool"]
-cause = "字段只经 Unsafe CAS 写（只进流图、不进常量格），偏移在构建期初始化的 <clinit> 里按名取得；消费符号偏移处未放开字段，getfield 被折叠成初值。Class.reflectionData / Class.annotationType 为 lc3-fix 所修；AtomicInteger.value 类（JucSync 等）为 fix-clone 所修。并行流 / ForkJoinPool 类（AmicablePairs、RamanujanPrimes、SelfReferentialSequence、TestParallelArrayCas、TestCommonPool，C4 全量 c249cdec 上运行超 900 s）同属此类，lc3-fix 即修复（c4-runtimeout 分诊）"
+         "AmicablePairs", "RamanujanPrimes", "SelfReferentialSequence", "TestParallelArrayCas", "TestCommonPool",
+         "TestRandomFactoryAll", "TestProcessBuilder"]
+cause = "字段只经 Unsafe CAS 写（只进流图、不进常量格），偏移在构建期初始化的 <clinit> 里按名取得；消费符号偏移处未放开字段，getfield 被折叠成初值。Class.reflectionData / Class.annotationType 为 lc3-fix 所修；AtomicInteger.value 类（JucSync 等）为 fix-clone 所修。并行流 / ForkJoinPool 类（AmicablePairs、RamanujanPrimes、SelfReferentialSequence、TestParallelArrayCas、TestCommonPool，C4 全量 c249cdec 上运行超 900 s）同属此类，lc3-fix 即修复（c4-runtimeout 分诊）。TestRandomFactoryAll（NPE）、TestProcessBuilder（运行超时）在 C4 全量 c249cdec 上失败，5177e182（含 4c42ac44）抽查即通过（fixclone-attr5177），并入本条。fix-clone 的终态修法：符号偏移的唯一产生处 facts/fields.rs::field_offset 登记所指字段，工作循环排空时 open_field 并使读者失效——不论偏移在哪条路径（aux 求值的 <clinit>、手写层、站点求值）被产生，字段都不再折叠"
 introduced = "78b744fe（reflect-marker：边界类字段改为手写层提及才开放，暴露潜伏缺陷）"
 fixed = ["4c42ac44", "5177e182"]
-status = "pending"
-owner = "fix-clone（5177e182 待抽查与放行）"
+status = "fixed"
+owner = "fix-clone"
 diagnose = "二分到暴露提交；查失败点读取的字段是否只经 Unsafe 写、偏移是否在构建期 <clinit> 按名取得；hw_offset.rs::site_offset 是否对该偏移 open_field。先确认失败提交是否已含 4c42ac44 / 5177e182：不含时直接在集成分支头抽查（c4-runtimeout 即如此结案）"
 doc = "docs/tasks.md 现状节 lc3-fix / 注解反射 NPE 回归"
+since = "2026-10-10"
+
+[[pattern]]
+id = "concrete-ctx-image-static-dead"
+stage = "run"
+symptom = "只经具体求值上下文（via kind = concrete）到达的方法运行期读构建期初始化类的静态表得 null：NPE（如 printf 宽度解析 Character.digit → CharacterDataLatin1.digit）"
+match = [["Exception in thread \"main\" java.lang.NullPointerException", "CharacterDataLatin1"]]
+tests = ["LahNumbers"]
+cause = "process_concrete 按轨迹登记依赖但不登记字段节点，映像静态未经 image_field 取值，所指映像对象不活、不发射；具体上下文的方法运行期照样执行。机制 B 让 Formatter.format 的用户格式串全部具体求值后，Integer.parseInt / Character.digit 不再经抽象路径到达，缺口暴露"
+introduced = "b29b3042（枢纽形参槽污染：用户格式串改走具体求值，暴露潜伏缺陷）"
+fixed = ["6afde4a0", "9cc7f4a7"]
+status = "pending"
+owner = "c1d-fmt2（终版 b04de767 待合批放行）"
+diagnose = "rava closure 输出 boot_image_data.live 查该类 statics 所指对象是否活；methods 里读该静态的方法 via 是否只有 kind = concrete；RUST_BACKTRACE=full rava build 看 [vm-throw] 栈"
+doc = "docs/plans/2026-10-01-c1d-closure-bloat.md §33.7 修正 4"
 since = "2026-10-10"
 
 # ── 编译期 ──────────────────────────────────────────────────────────────────────
@@ -162,12 +178,12 @@ stage = "output"
 symptom = "ClassLoader.registerAsParallelCapable / isRegisteredAsParallelCapable 恒为 false"
 match = [["+Capable register = false"]]
 tests = ["TestParallelCapable"]
-cause = "待定"
-introduced = ""
-fixed = []
-status = "open"
+cause = "非 offset-field-folded 同类。引导映像保留构建期身份哈希（计划 2026-10-05-boot-image-evaluator §5.5.2 D3），但类镜像是运行期对象（映像经 rt::mirror 链接）：求值器给镜像按首次查询编号取哈希（0x1000+n*7919），运行期镜像按地址取哈希，两侧不等。映像中以镜像为键、按哈希分桶的表（ClassLoader$ParallelLoaders.loaderTypes 的 WeakHashMap，Reflection.fieldFilterMap / methodFilterMap 等）运行期查不到构建期放入的键，registerAsParallelCapable 的超类检查失败、isRegisteredAsParallelCapable 恒 false。修法：镜像身份哈希两侧取同一确定函数（\"m:\" + 类型键的 FNV-1a）：求值器 identity_hash 对镜像优先取之，运行期 for_class / getPrimitiveClass 建镜像时登记，Object.hashCode / System.identityHashCode / super.hashCode 对类对象经 __object_identity_hash 取登记值"
+introduced = "boot image 引入时（类镜像经 rt::mirror 链接、哈希未随映像）"
+fixed = ["96143cf3"]
+status = "fixed"
 owner = "fix-clone"
-diagnose = "查 ParallelLoaders 注册集合的写入是否被折叠或未进映像（可能与 offset-field-folded 同类）"
+diagnose = "boot_image.rs 中找 __set_key / __set_referent(From::from(rt::mirror(..))) 的映像 Node / Entry：其 hash 字段为构建期值，对照运行期 Class 对象的 identityHashCode 是否同值（concrete/ext_init.rs::identity_hash 与 class_impl.rs::mirror_identity_hash 须逐位一致，两侧单测以 \"m:a/B\" → 210234197 守护）"
 doc = ""
 since = "2026-10-10"
 
@@ -177,12 +193,12 @@ stage = "output"
 symptom = "zh 区域数据回落到 root（CNY 符号输出 CN¥ 而非 ¥；CJK 日期文本）"
 match = [["sym=[CN¥]"]]
 tests = ["TestLocaleCurrency", "TestLocaleDateCjk"]
-cause = "待定：zh 区域资源未装载而回落 root（fix-clone 调查中）；另一说为 CLDR 随 JDK 小版本漂移的 expected 基线问题（known_failures 10-03 登记）。10-06 前即失败，非新回归"
-introduced = ""
-fixed = []
-status = "open"
+cause = "地区补种漏掉别名常量：seeds/locale.rs 的常量溯源器只认 `<clinit>` 里「字面量实参 invokestatic → putstatic」，而 Locale.<clinit> 的 CHINA / PRC / TAIWAN 以 `getstatic SIMPLIFIED_CHINESE / TRADITIONAL_CHINESE; putstatic` 赋值，用户 `getstatic Locale.CHINA` 溯不出 zh_CN，jdk.localedata 的 zh 资源束类（CurrencyNames_zh、FormatData_zh、cldr/ext 下 zh 族等）不进闭包，运行期 zh 回落 root（CN¥ / 英文日期文本）。非 expected 基线问题（同 JDK 下 ¥ 正确）；10-06 的 NPE 签名已随其他修复消失。修法：value_before 对同类型静态常量别名溯源所指常量；中文候选链按 ResourceBundle.Control 口径补文字 / 地区（zh_TW → zh_Hant_TW / zh_Hant）"
+introduced = "地区补种（seeds.toml [locale]）引入起即存在"
+fixed = ["222fd151"]
+status = "fixed"
 owner = "fix-clone"
-diagnose = "同一 JDK 小版本下核对 expected；查 LocaleProviderAdapter 是否找到 zh 资源包"
+diagnose = "对照用户直接写 `new Locale(\"zh\",\"CN\")` 的探针与写 `Locale.CHINA` 的用例，比较 scratch 中 jdk_localedata 的 zh 资源束类清单；缺即补种溯源缺口"
 doc = ""
 since = "2026-10-10"
 

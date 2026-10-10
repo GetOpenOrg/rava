@@ -155,7 +155,7 @@ impl<T: 'static> Store<'_, T> {
                 }
             }
             Store::Ref(s) => {
-                let (cur, replaced) = s[i].with(|v| {
+                let (cur, replaced) = s[i].with_mut(|v| {
                     let cur = v.clone();
                     let replaced = f(cur.clone()).map(|n| std::mem::replace(v, n));
                     (cur, replaced)
