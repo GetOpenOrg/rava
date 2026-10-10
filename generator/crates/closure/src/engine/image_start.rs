@@ -75,6 +75,7 @@ impl<'a> Engine<'a> {
             }
         }
         let _ = self.ctx.img_modules.set(img_modules);
+        let _ = self.ctx.img_data.set(data.clone());
         let mirror_obj = data.objs.iter().enumerate().filter_map(|(i, o)| o.mirror.clone().map(|m| (m, i as u32))).collect();
         self.img = Some(Box::new(ImgState {
             build_time: data.build_time.iter().cloned().collect(),

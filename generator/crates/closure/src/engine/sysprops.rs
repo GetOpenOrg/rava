@@ -269,9 +269,15 @@ impl Ctx<'_> {
         Some(Ret::Value(V::Ref { ty: Some(Rc::from(crate::absint::STRING)), nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) }))
     }
 
-    /// 受理调用（目标 t 为受理方法、受理实参带同一方法的受理标签）的结果：非空（类型由调用点按描述符补）
-    pub(super) fn accepted_call(&self, t: &MemberRef, args: &[V]) -> Option<V> {
-        let k = t.to_string();
+    /// 受理调用（目标为受理方法、受理实参带同一方法的受理标签）的结果：非空（类型由调用点按描述符补）。
+    /// t = 已知的唯一目标；无唯一目标时按映像对象接收者的运行期类选目标
+    pub(super) fn accepted_call(&self, opcode: u8, m: &MemberRef, iface: bool, t: Option<&MemberRef>, args: &[V]) -> Option<V> {
+        // 先筛实参带受理标签的调用（绝大多数调用不带，免去成员键拼接）
+        args.iter().find_map(V::accepted_by)?;
+        let k = match t {
+            Some(t) => t.to_string(),
+            None => self.image_target(opcode, m, iface, args.first())?.to_string(),
+        };
         let i = self.man.sysprops.acceptor(&k)?;
         (args.get(i)?.accepted_by()? == k).then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None })
     }

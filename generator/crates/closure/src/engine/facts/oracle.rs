@@ -79,16 +79,17 @@ impl Oracle for Facts<'_, '_> {
                 }
             }
         }
+        // 受理调用：实参是引导期校验过的动态属性值（`[facts.system_properties.accepted]`）；
+        // 目标不唯一时按映像对象接收者的运行期类选目标
+        if let Some(v) = self.ctx.accepted_call(opcode, m, iface, c.target.as_ref().or(tagged.as_ref()), args) {
+            return Ret::Value(v);
+        }
         let Some(t) = c.target.as_ref().or(tagged.as_ref()) else {
             return match per {
                 Some(PV::Const(v)) => Ret::Value(v),
                 _ => Ret::Unknown,
             };
         };
-        // 受理调用：实参是引导期校验过的动态属性值（`[facts.system_properties.accepted]`）
-        if let Some(v) = self.ctx.accepted_call(t, args) {
-            return Ret::Value(v);
-        }
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
         // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）

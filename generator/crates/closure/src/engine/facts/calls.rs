@@ -90,6 +90,25 @@ impl Ctx<'_> {
         (tm.code.is_some() && self.kind_of(&sel.class, tm) == Kind::Bytecode).then_some(MemberRef { owner: o, name: n, desc: d })
     }
 
+    /// 接收者带映像对象标签（`Obj::Image`）的虚 / 接口调用按该映像对象的运行期类选出的目标；只取字节码方法。
+    /// 映像标签只在合流两侧是同一映像对象时保留，故带标签的值恰是该对象
+    pub(in crate::engine) fn image_target(&self, opcode: u8, m: &MemberRef, iface: bool, recv: Option<&V>) -> Option<MemberRef> {
+        use classfile::op;
+        if !matches!(opcode, op::INVOKEVIRTUAL | op::INVOKEINTERFACE) {
+            return None;
+        }
+        let Some(crate::absint::Obj::Image(id, _)) = recv.and_then(V::obj).map(|o| &**o) else { return None };
+        let x = self.img_data.get()?.objs.get(*id as usize)?;
+        if x.placeholder {
+            return None;
+        }
+        let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface)?;
+        let sel = self.h.select(&x.ty, &site)?;
+        let (o, n, d) = sel.key();
+        let tm = sel.class.method(&n, &d)?;
+        (tm.code.is_some() && self.kind_of(&sel.class, tm) == Kind::Bytecode).then_some(MemberRef { owner: o, name: n, desc: d })
+    }
+
     /// 调用的唯一目标（静态 / 构造 / 私有 / final 方法 / final 类）
     pub(in crate::engine) fn exact_target(&self, opcode: u8, m: &MemberRef, iface: bool) -> Option<(std::sync::Arc<ClassFile>, MemberRef)> {
         use classfile::op;
