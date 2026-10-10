@@ -6,11 +6,17 @@
 //! 共用一个按可空性分支的方法：形参常量按全部调用点汇合为 Top 后，所有分支都按可达处理，任一调用点的编号 /
 //! 非空实参都把全部分支（及其流入的值）带入闭包。
 //!
-//! 策略：调用点在 int 选择子形参上传常量时，被调方（静态方法）按调用点克隆，链尾接调用方上下文（截断到
-//! HEAP_DEPTH，同一调用方克隆里的多个调用点各传不同编号时互不汇合）；在引用选择子形参上传 null 时，被调方
+//! 策略：调用点在 int 选择子形参上传**字节码字面常量**时，被调方（静态方法）按调用点克隆，链尾接调用方上下文（截断到
+//! HEAP_DEPTH，同一调用方克隆里的多个调用点各传不同编号时互不汇合）；在引用选择子形参上传字面 null 时，被调方
 //! （静态或实例方法）按调用点克隆，堆上下文与不克隆时相同（`ctxsel.rs` `const_ctx`）；否则静态方法在调用方已处于
-//! 某个上下文中时继承之（常量可能来自调用方克隆上的形参常量，转发链随外层调用点分开），实例方法照常按接收者克隆。
+//! 某个上下文中时继承之（调用方克隆上的形参常量经转发到达被调方，转发链随外层调用点分开），实例方法照常按接收者克隆。
 //! 克隆只细分形参常量，分支判定仍由字节码与形参常量决定。
+//!
+//! 字面常量（`site_literals`）：调用方字节码用不读事实的 Oracle 分析时该实参即为常量（`iconst` / `bipush` / `ldc` /
+//! `aconst_null` 及其局部运算、复制，本方法新建数组的长度），与引擎的分析事实无关。是否克隆因此是（调用点, 调用方上下文）
+//! 的函数、不随实参格变化：常量格给出的常量（字段 / 返回值 / 形参常量格的中间态）可能在后续写入后升 Top，若据此按调用点
+//! 克隆，已接上的克隆边撤不回，克隆体（链截断后各外层上下文共用）汇合的值随处理次序进出闭包（引导映像计划 §5.8.6：
+//! 不得读未定论的格做不可撤回的决定）。不克隆时被调方的形参常量照常按全部调用方汇合，常量仍剪枝。
 //!
 //! 判定只看字节码（不读分析事实的 Oracle），结果按成员记忆；成环处按记忆帧规则（`memo.rs`）不写入记忆，
 //! 与处理次序无关。
@@ -61,6 +67,82 @@ impl Ctx<'_> {
     }
 }
 
+/// 调用点上字节码字面常量实参的位置（按实参序号，不含接收者）
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) struct SiteLits {
+    /// int 族字面常量
+    pub ints: u64,
+    /// 字面 null
+    pub nulls: u64,
+}
+
+impl SiteLits {
+    /// 选择子形参（掩码 mask，按实参序号）上有 int 字面常量
+    pub(super) fn int_on(self, mask: u64) -> bool {
+        self.ints & mask != 0
+    }
+
+    /// 选择子形参上有字面 null
+    pub(super) fn null_on(self, mask: u64) -> bool {
+        self.nulls & mask != 0
+    }
+}
+
+impl Ctx<'_> {
+    /// 调用方 caller 在调用点 off 上的字面常量实参（只看字节码，按调用方记忆，与处理次序无关）
+    pub(super) fn site_literals(&self, caller: &MemberRef, off: u32) -> SiteLits {
+        let table = self.site_lits.borrow().get(caller).cloned();
+        let table = match table {
+            Some(t) => t,
+            None => {
+                let t = Rc::new(self.site_literals_uncached(caller));
+                self.site_lits.borrow_mut().insert(caller.clone(), t.clone());
+                t
+            }
+        };
+        table.get(&off).copied().unwrap_or_default()
+    }
+
+    fn site_literals_uncached(&self, key: &MemberRef) -> HashMap<u32, SiteLits> {
+        let out = HashMap::default();
+        let Some(cf) = self.h.class(&key.owner) else { return out };
+        let Some(meth) = cf.method(&key.name, &key.desc) else { return out };
+        let Some(code) = meth.code.as_ref() else { return out };
+        let a = absint::analyze(&key.owner, &key.desc, meth.is_static(), code, &Plain);
+        if a.conservative {
+            return out;
+        }
+        site_table(&a)
+    }
+}
+
+/// 一次不读事实的方法体分析里各调用点的字面常量实参
+fn site_table(a: &absint::Analysis) -> HashMap<u32, SiteLits> {
+    let mut out = HashMap::default();
+    for (off, e) in &a.events {
+        let Event::Invoke { opcode, args, .. } = e else { continue };
+        let pargs = if *opcode == classfile::op::INVOKESTATIC { &args[..] } else { args.get(1..).unwrap_or(&[]) };
+        let lits = literals(pargs);
+        if lits != SiteLits::default() {
+            out.insert(*off, lits);
+        }
+    }
+    out
+}
+
+/// 实参中的字面常量位置
+fn literals(args: &[V]) -> SiteLits {
+    let mut r = SiteLits::default();
+    for (j, v) in args.iter().enumerate().take(64) {
+        match v {
+            V::Int(_) => r.ints |= 1 << j,
+            V::Null => r.nulls |= 1 << j,
+            _ => {}
+        }
+    }
+    r
+}
+
 /// 值恰为入口处的本方法形参（int 族形参的原值 / 可空性未知的引用形参）：形参序号
 fn param_of(v: &V) -> Option<u16> {
     match v {
@@ -82,16 +164,6 @@ fn forwarded(mask: u64, args: &[V]) -> u64 {
     out
 }
 
-/// 选择子形参上有 int 常量实参。mask 按实参序号（静态方法即形参序号）
-pub(super) fn const_selector(mask: u64, args: &[V]) -> bool {
-    args.iter().enumerate().any(|(j, v)| j < 64 && mask & (1 << j) != 0 && matches!(v, V::Int(_)))
-}
-
-/// 选择子形参上有 null 实参。mask 同 [`const_selector`]
-pub(super) fn null_selector(mask: u64, args: &[V]) -> bool {
-    args.iter().enumerate().any(|(j, v)| j < 64 && mask & (1 << j) != 0 && *v == V::Null)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,15 +175,15 @@ mod tests {
         let args = [V::Int(3), V::Arg(2), V::Top];
         assert_eq!(forwarded(0b10, &args), 0b100);
         assert_eq!(forwarded(0b01, &args), 0);
-        assert!(const_selector(0b01, &args));
-        assert!(!const_selector(0b10, &args));
+        assert!(literals(&args).int_on(0b01));
+        assert!(!literals(&args).int_on(0b10));
         // 引用形参原样转发、null 实参
         let r = V::Ref { ty: None, nonnull: false, src: Rc::from([Src::Param(1)].as_slice()), obj: None };
         let args = [V::Null, r];
         assert_eq!(forwarded(0b10, &args), 0b10);
-        assert!(null_selector(0b01, &args));
-        assert!(!null_selector(0b10, &args));
-        assert!(!const_selector(0b01, &args));
+        assert!(literals(&args).null_on(0b01));
+        assert!(!literals(&args).null_on(0b10));
+        assert!(!literals(&args).int_on(0b01));
     }
 
     #[test]
@@ -154,5 +226,29 @@ mod tests {
         let code = switch_code(vec![(0x1a, Operand::None), (0x04, Operand::None), (0x60, Operand::None)]);
         let a = absint::analyze("p/X", "(I)V", true, &code, &Plain);
         assert_eq!(a.selector_params, 0);
+    }
+
+    #[test]
+    fn site_literals_ignore_field_values() {
+        use classfile::{op, Code, Insn};
+        // static ()V：iconst_3；invokestatic p/Y.g(I)V；getstatic p/X.n:I；invokestatic p/Y.g(I)V；aconst_null；invokestatic p/Y.h(Lp/Z;)V；return
+        let g = MemberRef { owner: "p/Y".into(), name: "g".into(), desc: "(I)V".into() };
+        let h = MemberRef { owner: "p/Y".into(), name: "h".into(), desc: "(Lp/Z;)V".into() };
+        let n = MemberRef { owner: "p/X".into(), name: "n".into(), desc: "I".into() };
+        let insns = vec![
+            Insn { offset: 0, opcode: 0x06, operand: Operand::None },
+            Insn { offset: 1, opcode: op::INVOKESTATIC, operand: Operand::Method(g.clone(), false) },
+            Insn { offset: 4, opcode: op::GETSTATIC, operand: Operand::Field(n) },
+            Insn { offset: 7, opcode: op::INVOKESTATIC, operand: Operand::Method(g, false) },
+            Insn { offset: 10, opcode: 0x01, operand: Operand::None },
+            Insn { offset: 11, opcode: op::INVOKESTATIC, operand: Operand::Method(h, false) },
+            Insn { offset: 14, opcode: op::RETURN, operand: Operand::None },
+        ];
+        let code = Code { max_stack: 1, max_locals: 0, code_len: 15, insns, exception_table: vec![] };
+        let t = site_table(&absint::analyze("p/X", "()V", true, &code, &Plain));
+        assert!(t[&1].int_on(1));
+        // 字段值（引擎的常量格可能暂为常量）不是字面常量：是否克隆不随常量格变化
+        assert!(!t.contains_key(&7));
+        assert!(t[&11].null_on(1));
     }
 }

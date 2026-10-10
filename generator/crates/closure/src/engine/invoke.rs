@@ -78,7 +78,7 @@ impl<'a> Engine<'a> {
                 }
                 // 克隆上下文的选择见 `ctxsel.rs`
                 let heap = md.ret.iter().chain(&md.params).any(|r| r.is_reference());
-                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap, args: pargs });
+                let ctx = self.static_ctx(m, off, &resolved, Call::Invoke { heap });
                 // 按名取类：名字能由常量拼出时结果只含所指类的镜像，不再接被调方法返回的所指未知的 Class
                 // 按名加载（class_loads）同样解析，只取镜像不初始化
                 let key = self.mref_key(mref);
@@ -317,7 +317,7 @@ impl<'a> Engine<'a> {
         rest.classes = IdSet::from_sorted(cls);
         // 字节码调用点自身在被调方选择子形参上传常量时按调用点克隆（`ctxsel.rs`）
         let cx = |e: &mut Self, base: u32| if site { e.recv_call_ctx(m, off, &key, base) } else { base };
-        if let Some((msite, md)) = nv.filter(|_| dedup && !objs.is_empty() && !self.recv_call_clones(m, &key)) {
+        if let Some((msite, md)) = nv.filter(|_| dedup && !objs.is_empty() && !self.recv_call_clones(m, off, &key)) {
             // 本调用点已接的全部抽象对象接收者（`recv_done` 登记了全集，按属主收窄）
             let done: Vec<u32> = self.recv_done.get(&m).and_then(|d| d.get(&off)).map(|v| v.iter().copied().filter(|x| self.objs.contains_key(x)).collect()).unwrap_or_default();
             let all: Vec<u32> = done.into_iter().filter(|&x| self.sub(x, owner)).collect();
