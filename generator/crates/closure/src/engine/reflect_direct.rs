@@ -260,9 +260,15 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        // 本地访问器按接收者经 vtable 槽调用所选实现（同 VM 反射虚调用 `vm_targets`）：非 private 的实现计入
+        // `dispatched`，否则生成器对其槽条目发存根（只经直连点到达的覆盖方法运行期命中存根）
+        let slotted = !site.method().is_private();
         for (k, mut rs) in by_impl {
             rs.sort_unstable();
             let t = self.method(k, via.clone());
+            if slotted {
+                self.vm_targets.insert(t);
+            }
             let recv = TypeSet { classes: IdSet::from_sorted(rs), open: IdSet::default() };
             self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
         }

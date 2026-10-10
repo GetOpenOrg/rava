@@ -14,6 +14,20 @@ import static org.junit.Assert.assertSame;
  */
 public class TestJunitFailureMessages {
 
+    /** 定值 toString、按身份比较（不覆盖 equals / hashCode）：失败消息不含身份哈希（e2e 方法论 §五）。 */
+    static final class Token {
+        private final String name;
+
+        Token(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            return "Token(" + name + ")";
+        }
+    }
+
     public static class Sample {
         @Test
         public void intMismatch() {
@@ -42,7 +56,7 @@ public class TestJunitFailureMessages {
 
         @Test
         public void sameMismatch() {
-            assertSame(new Object(), new Object());
+            assertSame(new Token("left"), new Token("right"));
         }
 
         @Test

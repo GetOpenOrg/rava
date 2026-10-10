@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cluster_config import CONFIG_PATH, REPO_ROOT, RESULTS_DIR  # noqa: E402
 
 REPO = REPO_ROOT
+WS_ROOT = REPO.parent
 CR = RESULTS_DIR
 SEEN = Path.home() / ".cache" / "rava_patrol_seen"
 INTEGRATION = "rust-closure-analyzer"
@@ -37,6 +38,7 @@ AGENT_TASKS_GLOB = os.environ.get(
 AGENT_RECENT_HOURS = 3        # 只列最近活动在此范围内的子代理
 AGENT_MAX_HOURS = 6           # 超过即需收尾续作
 AGENT_IDLE_MINUTES = 30       # 超过即需关注
+DEV_SPILL_MEM_G = 30           # dev 可用内存低于此值才溢出到云服务器
 REMOTE_DISK_MIN_G = 20
 LOCAL_DISK_MIN_G = 25
 
@@ -212,7 +214,7 @@ def probe(server: dict, by_label: dict) -> tuple[str, list[str] | None]:
         return server["label"], None
 
 
-def report_servers(servers: list[dict]) -> None:
+def report_servers(servers: list[dict], disp: list[dict]) -> None:
     section(f"服务器资源（测试优先放 dev；数据盘 <{REMOTE_DISK_MIN_G}G 需清理）")
     by_label = {s["label"]: s for s in servers}
     with ThreadPoolExecutor(len(servers) or 1) as ex:
@@ -230,6 +232,13 @@ def report_servers(servers: list[dict]) -> None:
             warn.append("有余量，新测试放这里")
         print(f"  {s['label']}: 核 {ncpu} 负载 {load} 可用内存 {avail}G/{total}G {data_root(s)} 空闲 {disk}G "
               f"作业目录 {dirs} 在跑进程 {procs}" + (f"  ← {'，'.join(warn)}" if warn else ""))
+    dev = res.get("dev")
+    if dev and dev[2].isdigit() and int(dev[2]) >= DEV_SPILL_MEM_G:
+        # dev 可用内存充足时，云服务器上的作业都应改放 dev（只在 dev 内存不足或槽满时溢出）
+        for d in disp:
+            off = [x for x in d["servers"] if x != "dev"]
+            if off:
+                print(f"  !! {d['kind']} {d['tag']}（{d['wt']}）用了 {' '.join(off)}，dev 有余量应放 dev")
 
 
 # ── 子代理进展 ────────────────────────────────────────────────────────────────
@@ -283,29 +292,159 @@ def report_agents() -> None:
 
 # ── 本机进程与资源 ────────────────────────────────────────────────────────────
 
+def etime_seconds(e: str) -> int:
+    """ps etime（[[dd-]hh:]mm:ss）→ 秒。"""
+    days, _, rest = e.rpartition("-")
+    parts = [int(x) for x in rest.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return (int(days) if days else 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def classify(cmd: str) -> str | None:
+    """按进程自身的可执行文件归类；shell / uv 包装进程（命令行里只是带了这些字样）不算。"""
+    argv = cmd.split()
+    exe = Path(argv[0]).name if argv else ""
+    script = Path(argv[1]).name if len(argv) > 1 else ""
+    if exe.startswith("python"):
+        if script == "distribute_tests.py" and ".venv/bin/" in argv[0]:
+            return "分发器"
+        if script == "heavy_lock.py":
+            return "heavy_lock"
+        if script == "run_tests.py":
+            return "rava/e2e"
+        if "unittest" in argv[1:3]:
+            return "脚本单测"
+        return None
+    if exe in ("cargo", "rustc") or (exe.startswith("cargo-") and "rava" in cmd):
+        return "编译"
+    if exe == "rava":
+        return "rava/e2e"
+    return None
+
+
 def report_local(disp: list[dict]) -> None:
-    section("本机项目进程")
-    counts = {
-        "分发器": len(disp),
-        "heavy_lock": len(sh("pgrep -f '[h]eavy_lock.py'").split()),
-        "cargo": len(sh("pgrep -x cargo").split()),
-        "rustc": len(sh("pgrep -x rustc").split()),
-        "rava": len(sh("pgrep -f 'release/[r]ava '").split()),
-    }
-    print("  " + "  ".join(f"{k} {v}" for k, v in counts.items()))
-    heavy = []
-    for line in sh("ps -axo pid=,ppid=,rss=,etime=,comm=").splitlines():
+    """本机项目进程逐条列出并标违规 / 异常：本机只允许经 heavy_lock 的 cargo check，
+    e2e / rava build / 不经锁的编译都应在服务器；另标孤儿进程、所在 worktree 已删、分发器对应结果已完成。"""
+    section("本机项目进程（本机只允许经 heavy_lock 的 cargo check）")
+    procs = {}
+    for line in sh("ps -ww -axo pid=,ppid=,etime=,rss=,command=").splitlines():
         f = line.split(None, 4)
-        if len(f) == 5 and int(f[2]) > 300 * 1024:
-            heavy.append((int(f[2]) // 1024, f))
-    for mb, f in sorted(heavy, reverse=True)[:8]:
-        print(f"  重进程 {f[0]} ppid={f[1]} {mb}MB {f[3]} {Path(f[4]).name}")
+        if len(f) == 5:
+            procs[f[0]] = {"ppid": f[1], "etime": f[2], "rss": int(f[3]) // 1024, "cmd": f[4]}
+    def ancestors(pid: str):
+        seen = 0
+        while pid in procs and seen < 30:
+            pid = procs[pid]["ppid"]; seen += 1
+            yield pid
+    mine = {pid: k for pid, p in procs.items() if (k := classify(p["cmd"]))}
+    pids = [p for p, k in mine.items() if k != "分发器"]
+    cwds = {}
+    if pids:
+        cur = None
+        for line in sh(f"lsof -a -d cwd -p {','.join(pids)} -Fpn 2>/dev/null").splitlines():
+            if line.startswith("p"):
+                cur = line[1:]
+            elif line.startswith("n") and cur:
+                cwds[cur] = line[1:]
+    alive_tags = {d["pid"]: d for d in disp}
+    rows = 0
+    for pid, kind in sorted(mine.items(), key=lambda x: (x[1], int(x[0]))):
+        p = procs[pid]
+        warn = []
+        if kind == "编译":
+            if any(classify(procs[a]["cmd"]) == "编译" for a in ancestors(pid) if a in procs):
+                continue                      # 只列最外层 cargo，子 rustc 不重复列
+            if not any(classify(procs[a]["cmd"]) == "heavy_lock" for a in ancestors(pid) if a in procs):
+                warn.append("未经 heavy_lock")
+        if kind == "rava/e2e":
+            warn.append("本机禁跑，应上服务器")
+        where = cwds.get(pid, "")
+        m = re.search(r"/(rava\w*)(/|$)", where or p["cmd"])
+        wt = m.group(1) if m else "?"
+        if m and not (WS_ROOT / wt).exists():
+            warn.append("worktree 已删")
+        if kind == "分发器":
+            d = alive_tags.get(pid, {})
+            base = CR / d.get("kind", "") / d.get("tag", "")
+            if d.get("kind") == "job" and (line := job_line(base)) and etime_seconds(p["etime"]) > 600:
+                warn.append("结果已全部完成仍在跑")
+            label = f"{d.get('kind', '')} {d.get('tag', '')}"
+            if procs.get(p["ppid"], {}).get("ppid") == "1" or p["ppid"] == "1":
+                warn.append("已脱离发起会话")
+        else:
+            label = p["cmd"][:70]
+        if etime_seconds(p["etime"]) > 4 * 3600 and kind != "分发器":
+            warn.append("运行超 4h")
+        print(f"  {kind:6} {pid:>6} {p['etime']:>11} {p['rss']:5}MB {wt:16} {label}"
+              + (f"  ← {'，'.join(warn)}" if warn else ""))
+        rows += 1
+    if not rows:
+        print("  无")
+    report_wait_loops(procs)
+    heavy = [(p["rss"], pid, p) for pid, p in procs.items() if p["rss"] > 300]
+    for mb, pid, p in sorted(heavy, reverse=True)[:5]:
+        print(f"  重进程 {pid} ppid={p['ppid']} {mb}MB {p['etime']} {Path(p['cmd'].split()[0]).name}")
     section(f"本机资源（磁盘 <{LOCAL_DISK_MIN_G}G 需清理）")
     df = sh("df -g / | tail -1").split()
     free_g = int(df[3]) if len(df) > 3 and df[3].isdigit() else -1
     print(f"  磁盘空闲 {free_g}G" + ("  ← 低于阈值" if 0 <= free_g < LOCAL_DISK_MIN_G else ""))
     print("  " + sh("memory_pressure | tail -1").strip())
     print("  swap " + sh("sysctl -n vm.swapusage").strip())
+
+
+def wait_target(cmd: str) -> str | None:
+    """后台等待循环（until / while kill -0 / for i in seq）所等的目标：分发器 tag、日志文件或 PID。"""
+    if not re.search(r"\buntil\b|while kill -0|for i in \$\(seq", cmd):
+        return None
+    if m := re.search(r"pgrep -f \S*\[d\]istribute_tests\.\*([\w.-]+)", cmd):
+        return f"tag:{m.group(1)}"
+    if m := re.search(r"kill -0 (\d+)", cmd):
+        return f"pid:{m.group(1)}"
+    if m := re.search(r"(?:grep -q \"[^\"]*\"|\[ -s) (\S+?)(?:\s|;|\])", cmd):
+        return f"file:{m.group(1)}"
+    return None                                # 命令行只是带了这些字样（如巡检自身），不算
+
+
+def report_wait_loops(procs: dict) -> None:
+    """等待循环：标重复（同目标多个）、所等文件超 30 分钟无更新（作业已结束 / 标记永不出现）、
+    所等分发器已不在、运行超 4h。查进程须用 ps -ww 全宽，截断会漏。"""
+    section("本机等待循环（until / while / for 轮询）")
+    loops = {}
+    for pid, p in procs.items():
+        if Path(p["cmd"].split()[0]).name not in ("zsh", "bash", "sh", "/bin/zsh"):
+            continue
+        if (t := wait_target(p["cmd"])):
+            loops.setdefault(t, []).append(pid)
+    if not loops:
+        print("  无")
+        return
+    now = time.time()
+    # 循环已等到目标、正在执行后续命令（有非 sleep 子进程）的不算遗留
+    busy = {p["ppid"] for p in procs.values() if Path(p["cmd"].split()[0]).name != "sleep"}
+    for t, pids in sorted(loops.items()):
+        if all(x in busy for x in pids):
+            print(f"  {t:48} {' '.join(sorted(pids, key=int))}  已进入后续命令")
+            continue
+        warn = []
+        kind, _, val = t.partition(":")
+        if len(pids) > 1:
+            warn.append(f"重复 {len(pids)} 个")
+        if kind == "file":
+            f = Path(val.strip("\"'"))
+            if "$" in val:
+                pass                                   # 目标是 shell 变量，无法静态判定
+            elif not f.exists() or now - f.stat().st_mtime > 1800:
+                warn.append("所等文件 30 分钟无更新")
+        elif kind == "tag" and not sh(f"pgrep -f '[d]istribute_tests.*{val}'").strip():
+            warn.append("所等分发器已不在")
+        elif kind == "pid" and val not in procs:
+            warn.append("所等进程已不在")
+        oldest = max(etime_seconds(procs[x]["etime"]) for x in pids)
+        if oldest > 4 * 3600:
+            warn.append("运行超 4h")
+        print(f"  {t:48} {' '.join(sorted(pids, key=int))}  最长 {oldest // 60}m"
+              + (f"  ← {'，'.join(warn)}" if warn else ""))
 
 
 # ── 分支 ──────────────────────────────────────────────────────────────────────
@@ -361,7 +500,7 @@ def main() -> int:
     report_occupancy(disp, servers)
     report_results(disp)
     if not args.no_remote:
-        report_servers(servers)
+        report_servers(servers, disp)
     report_agents()
     report_local(disp)
     report_branches()

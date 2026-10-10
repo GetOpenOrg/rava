@@ -71,6 +71,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -114,31 +115,40 @@ class DomainRules:
     release: list[str]
     vm_upcalls: list[str]
     user: set[str] = field(default_factory=set)
+    # JVM 链接期直接调用的单个方法（`类.方法:描述符`，closure.toml `[dynamic] vm_upcall_methods`）
+    vm_upcall_methods: set[str] = field(default_factory=set)
+    # 依赖 jar 内的类（形态用例的第三方库）：按字节码翻译，归 lib 域
+    lib: set[str] = field(default_factory=set)
 
     @classmethod
-    def from_manifest(cls, user: set[str]) -> "DomainRules":
+    def from_manifest(cls, user: set[str], lib: "set[str] | None" = None) -> "DomainRules":
         """closure.toml 直读（与闭包分析器 input::RuntimeManifest 同一口径：C1d 终态无包前缀截断，
         放行 = [vm_boundary] translate_nested，即 VM 契约边界类中按字节码翻译的嵌套类）"""
         closure = load_manifest("closure.toml")
         vm = closure.get("vm_boundary", {})
+        dyn = closure.get("dynamic", {})
         return cls(vm_boundary=set(vm.get("classes", [])),
                    release=list(vm.get("translate_nested", [])),
-                   vm_upcalls=list(closure.get("dynamic", {}).get("vm_upcall_classes", [])),
-                   user=set(user))
+                   vm_upcalls=list(dyn.get("vm_upcall_classes", [])),
+                   vm_upcall_methods=set(dyn.get("vm_upcall_methods", [])),
+                   user=set(user), lib=set(lib or ()))
 
     def domain(self, cls: str) -> str:
         if cls in self.user:
             return "user"
         if cls == ROOT_CLASS:
             return "root"
+        if cls in self.lib:
+            return "lib"
         if any(entry_matches(r, cls) for r in self.release):
             return "translate"
         if cls.split("$", 1)[0] in self.vm_boundary:
             return BOUNDARY
         return "translate"
 
-    def is_vm_upcall(self, cls: str) -> bool:
-        return any(entry_matches(e, cls) for e in self.vm_upcalls)
+    def is_vm_upcall(self, cls: str, mid: str | None = None) -> bool:
+        """类级条目覆盖类的全部方法；方法级条目只覆盖该方法（`mid` = `类.方法:描述符`）。"""
+        return any(entry_matches(e, cls) for e in self.vm_upcalls) or (mid is not None and mid in self.vm_upcall_methods)
 
 
 # ── 轨迹解析 ────────────────────────────────────────────────────────────────────
@@ -245,7 +255,7 @@ def compare_methods(closure: dict, entries: list[MethodEntry], rules: "DomainRul
         if (mc := model_sites.get(_frame_str(e.caller))) is not None:
             cats[mc] += 1
             continue
-        if rules.is_vm_upcall(callee_cls):
+        if rules.is_vm_upcall(callee_cls, e.callee):
             cats["vm-upcall"] += 1
             continue
         mmiss.append({"method": e.callee, "caller": _frame_str(e.caller)})
@@ -308,7 +318,7 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
                 # （拼接时的 toString、lambda 实现方法）从该帧起照常归因；其上全是模型外帧 → 链接期加载。
                 # 正上方是 JVM 链接期上调入口（`vm_upcall_classes`）→ 整段是该调用点的链接（解析引导方法、
                 # 执行引导方法、编译 LambdaForm），途经的 JDK 帧即便在闭包内也不是模型再次进入
-                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0]):
+                if depth + 1 < len(frames) and rules.is_vm_upcall(frames[depth + 1][0], _frame_id(frames[depth + 1])):
                     return mc, _frame_str(f)
                 above = [j for j in range(depth + 1, len(frames)) if methods.get(_frame_id(frames[j])) == BYTECODE]
                 if not above:
@@ -321,7 +331,7 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
             return "handwritten", _frame_str(f)
         if rules.domain(f[0]) == BOUNDARY:
             return "boundary-code", _frame_str(f)
-        if rules.is_vm_upcall(f[0]):
+        if rules.is_vm_upcall(f[0], mid):
             return "vm-upcall", _frame_str(f)
         if depth > 0 and _sig(mid) in boundary_sigs:
             return "boundary-dispatch", _frame_str(f)
@@ -446,6 +456,17 @@ def user_classes(classes_dir: Path) -> set[str]:
             for p in classes_dir.rglob("*.class")}
 
 
+def jar_classes(jars: "list[Path]") -> set[str]:
+    """依赖 jar 内的类名（版本化条目 `META-INF/versions/` 与 module-info 除外）。"""
+    out: set[str] = set()
+    for j in jars:
+        with zipfile.ZipFile(j) as z:
+            out.update(n[:-6] for n in z.namelist()
+                       if n.endswith(".class") and not n.startswith("META-INF/")
+                       and not n.endswith("module-info.class"))
+    return out
+
+
 _PROP_LINE = re.compile(r"^    (\S+) =(?: |$)")
 
 
@@ -480,8 +501,9 @@ def _java_run(cmd: list[str], cwd: Path, timeout: float) -> str | None:
 
 
 def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
-        timeout: float = 120.0, methods: bool = False) -> dict:
-    """对一个转译 scratch（含 closure_input/）做动态对照，返回结果字典（`error` 键表示未完成）。"""
+        timeout: float = 120.0, methods: bool = False, libs: "list[Path] | None" = None) -> dict:
+    """对一个转译 scratch（含 closure_input/）做动态对照，返回结果字典（`error` 键表示未完成）。
+    libs：依赖 jar（类路径序，追加在用户类目录之后；其中的类归 lib 域）。"""
     t0 = time.perf_counter()
     cin = ws / "closure_input"
     cj = cin / "closure.json"
@@ -504,12 +526,13 @@ def run(ws: Path, java_home: Path, agent_cache: Path, cwd: Path,
         opt = f"{agent_p},methods={main}" if methods else str(agent_p)
         err = _java_run([java, "-Xshare:off", *native_config(java), f"-agentpath:{lib}={opt}",
                          f"-Xlog:class+load=info,class+init=info:file={xlog_p}",
-                         "-cp", str(classes_dir), main.replace("/", ".")], cwd, timeout)
+                         "-cp", os.pathsep.join([str(classes_dir), *map(str, libs or [])]),
+                         main.replace("/", ".")], cwd, timeout)
         xlog = xlog_p.read_text(errors="replace") if xlog_p.exists() else ""
         agent = agent_p.read_text(errors="replace") if agent_p.exists() else ""
     if not xlog:
         return {"error": f"基准轨迹为空（java {err or '无输出'}）"}
-    rules = DomainRules.from_manifest(user_classes(classes_dir))
+    rules = DomainRules.from_manifest(user_classes(classes_dir), jar_classes(libs or []))
     res = compare(closure, xlog, agent, rules, main)
     if methods:
         res["methods"] = compare_methods(closure, parse_methods(agent), rules, model_sites(closure))
@@ -580,11 +603,14 @@ def main() -> int:
                     help="JDK home（缺省 JAVA_HOME）")
     ap.add_argument("--methods", action="store_true",
                     help="方法粒度对照（MethodEntry 事件，解释执行，慢一个量级）")
+    ap.add_argument("--lib", action="append", default=[], metavar="JAR",
+                    help="依赖 jar（形态用例；按类路径序重复给出）")
     args = ap.parse_args()
     if not args.java_home:
         sys.exit("需要 --java-home 或 JAVA_HOME")
     ws = Path(args.workspace).resolve()
-    res = run(ws, Path(args.java_home), ROOT / "build" / "dyn_agent", ROOT, methods=args.methods)
+    res = run(ws, Path(args.java_home), ROOT / "build" / "dyn_agent", ROOT, methods=args.methods,
+              libs=[Path(j).resolve() for j in args.lib])
     text = json.dumps(res, ensure_ascii=False, indent=1)
     if args.out:
         Path(args.out).write_text(text)

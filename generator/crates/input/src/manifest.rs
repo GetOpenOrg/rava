@@ -71,6 +71,10 @@ pub struct RuntimeManifest {
     pub vm_constants: VmConstants,
     /// VM 注入状态的落地（`[vm_state]`：字段访问钩子、模块 → 加载器映射来源）
     pub vm_state: closure::manifest::VmState,
+    /// 栈帧别名：特化入口（`类.方法:描述符`）→ 它所特化的方法。特化入口是调用点改写的产物（直连反射调用
+    /// `[facts.reflect.direct_invokers]` 的 helper），执行的就是原方法，其帧对栈遍历的全部消费方（getCallerClass /
+    /// getClassContext 的反射帧跳过、StackWalker 的反射帧过滤、Throwable 栈）都呈现为原方法的帧
+    pub frame_aliases: BTreeMap<String, String>,
 }
 
 fn load_toml(dir: &Path, name: &str) -> Result<Table, InputError> {
@@ -208,7 +212,13 @@ impl RuntimeManifest {
                 null_to_false: str_list(vmc, "null_to_false", "vm_constants")?.into_iter().collect(),
             },
             vm_state: closure::manifest::VmState::from_toml(&vm).map_err(InputError::Manifest)?,
+            frame_aliases: frame_aliases(&vm)?,
         })
+    }
+
+    /// 方法 (类, 名, 描述符) 的栈帧别名（[`Self::frame_aliases`]）：所特化方法的 (类, 名, 描述符)
+    pub fn frame_alias(&self, class: &str, name: &str, desc: &str) -> Option<(&str, &str, &str)> {
+        self.frame_aliases.get(&format!("{class}.{name}:{desc}")).and_then(|m| split_member(m))
     }
 
     /// `[indy]` 分类（未列出 → None，按普通静态调用处理）
@@ -251,6 +261,13 @@ fn indy_helpers(vm: &Table) -> Result<BTreeMap<String, String>, InputError> {
         }
     }
     Ok(out)
+}
+
+/// 栈帧别名：直连反射调用各入口的 helper → 入口
+fn frame_aliases(vm: &Table) -> Result<BTreeMap<String, String>, InputError> {
+    let sec = vm.get("facts").and_then(|s| s.get("reflect")).and_then(|s| s.get("direct_invokers"));
+    let d = closure::manifest::DirectInvokers::from_toml(sec).map_err(InputError::Manifest)?;
+    Ok(d.entries().map(|(entry, x)| (x.helper.to_string(), entry.to_string())).collect())
 }
 
 /// `类.方法:描述符` → `(类, 方法, 描述符)`

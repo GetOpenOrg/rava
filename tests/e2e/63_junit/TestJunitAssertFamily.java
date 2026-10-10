@@ -15,6 +15,20 @@ import static org.junit.Assert.fail;
  */
 public class TestJunitAssertFamily {
 
+    /** 定值 toString、按身份比较（不覆盖 equals / hashCode）：失败消息不含身份哈希（e2e 方法论 §五）。 */
+    static final class Token {
+        private final String name;
+
+        Token(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            return "Token(" + name + ")";
+        }
+    }
+
     static void check(String name, Runnable r) {
         try {
             r.run();
@@ -40,7 +54,7 @@ public class TestJunitAssertFamily {
         check("assertNotNull", () -> assertNotNull(new Object()));
         Object o = new Object();
         check("assertSame", () -> assertSame(o, o));
-        check("assertSame-fail", () -> assertSame(new Object(), new Object()));
+        check("assertSame-fail", () -> assertSame(new Token("left"), new Token("right")));
         check("assertNotSame", () -> assertNotSame(new Object(), new Object()));
         check("assertNotEquals", () -> assertNotEquals(1, 2));
         check("assertNotEquals-fail", () -> assertNotEquals(1, 1));

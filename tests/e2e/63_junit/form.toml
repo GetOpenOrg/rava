@@ -1,0 +1,6 @@
+# 63_junit 形态：本目录用例按「带第三方依赖的用户项目」构建（scripts/e2e_form.py）。
+# 依赖锁由 fetch_pilot_deps.sh 生成（tests/lib_pilot/deps/pom.xml 钉版本），生成物不入库；
+# cp 为锁条目名，类路径取锁序。
+deps  = "tests/lib_pilot/deps/target/deps.lock.toml"
+cp    = ["hamcrest", "junit"]
+fetch = "scripts/fetch_pilot_deps.sh --no-scan"
