@@ -569,7 +569,9 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
     """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。
 
     形态目录（form.toml）的用例追加依赖参数（`--deps/--cp`）；依赖未就绪时不转译，
-    日志以 `deps-fetch-fail` 起头（[`_fail_category`] 据此归类）。"""
+    日志以 `deps-fetch-fail` 起头（[`_fail_category`] 据此归类）。
+    语料构建带 `--train-predefined`：闭包触达类定义 native 时 rava 按需跑训练运行，产物落 scratch
+    （docs/plans/2026-10-10-xsltc-translet.md X2），未触达的用例不受影响。"""
     form = e2e_form.form_of(java_file)
     deps_args: list[str] = []
     if form is not None:
@@ -578,7 +580,7 @@ def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
             return False, f"{e2e_form.DEPS_FETCH_FAIL}: {err}"
         deps_args = form.deps_args()
     args = [str(RAVA), "build", str(java_file), "--stop-after", "emit", "--out", str(out_dir),
-            "--java-home", os.environ["JAVA_HOME"], *deps_args, *MAIN_FLAGS]
+            "--java-home", os.environ["JAVA_HOME"], "--train-predefined", *deps_args, *MAIN_FLAGS]
     try:
         r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
     except subprocess.TimeoutExpired:

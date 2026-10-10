@@ -100,12 +100,12 @@ stage = "run"
 symptom = "XSLT 变换运行期 TransformerConfigurationException：Translet class loaded, but unable to create translet"
 match = [["Translet class loaded, but unable to c"]]
 tests = ["TestXmlTransform"]
-cause = "运行期定义类在 rava 中没有终态承载：TemplatesImpl.defineTransletClasses 经 TransletClassLoader.defineClass 调 ClassLoader.defineClass1（native 手写），该手写对格式合法的类文件一律抛 LinkageError（原生二进制类全集构建期定死），defineTransletClasses 的 catch (LinkageError) 包成 TRANSLET_OBJECT_ERR。不是生成器 / 闭包 / 反射缺陷。fix-domstack 修好转译超时后首次暴露。终态方案（按内容寻址的预定义类，字节来源待决）见 doc"
+cause = "运行期定义类在 rava 中没有终态承载：TemplatesImpl.defineTransletClasses 经 TransletClassLoader.defineClass 调 ClassLoader.defineClass1（native 手写），该手写对格式合法的类文件一律抛 LinkageError（原生二进制类全集构建期定死），defineTransletClasses 的 catch (LinkageError) 包成 TRANSLET_OBJECT_ERR。不是生成器 / 闭包 / 反射缺陷。fix-domstack 修好转译超时后首次暴露。终态方案：按内容寻址的预定义类（X1 = S2 训练运行，语料构建 rava build 按需自动训练，生产构建显式 rava trace），fix-xsltc2 实施，见 doc"
 introduced = ""
-fixed = []
-status = "open"
+fixed = ["fix-xsltc2 cd818df0"]
+status = "pending"
 owner = "fix-xsltc"
-diagnose = "run.log 不打印 Caused by（TransformerException 的 cause 存在 containedException、经 getCause() 覆盖给出，未捕获报告只读 cause 字段）；用探针捕获异常后按 getCause() 打印链（作业 xsltc-probe2）。cause 为 LinkageError「runtime class definition is not supported」即本条"
+diagnose = "run.log 不打印 Caused by（TransformerException 的 cause 存在 containedException、经 getCause() 覆盖给出，fix-xsltc2 起未捕获报告经虚调 getCause() 取链）；用探针捕获异常后按 getCause() 打印链（作业 xsltc-probe2）。cause 为 LinkageError「runtime class definition is not supported」即本条"
 doc = "docs/plans/2026-10-10-xsltc-translet.md"
 since = "2026-10-10"
 
@@ -340,6 +340,21 @@ fixed = ["7d56de55"]
 status = "fixed"
 diagnose = "--flow-batch 1 --hash-seed 7 复现，查常量格中只升不降的形参常量来源"
 doc = "docs/tasks.md 现状节 fix-1011 第四根因"
+since = "2026-10-10"
+
+[[pattern]]
+id = "image-live-handle-order"
+stage = "unit"
+symptom = "closure_independent_of_order 失败：DeepCopy 类 / 方法相同，只有 boot_image_data.live 随 batch / seed 变化（差异根为各类 serialPersistentFields 静态值）"
+match = []
+tests = ["closure_independent_of_order"]
+cause = "枢纽对已接边目标走 edge_more 增量接边、父枢纽重放合成闭值集，句柄存取入口（HandleAccess）只对先到的接收者按来源标记建模，后到标记所指字段节点不登记，映像活性随接收者到达次序而变"
+introduced = "c3ec480d"
+fixed = ["aad074f8"]
+status = "fixed"
+owner = "fix-order-live"
+diagnose = "cmp 两次序闭包 JSON 定位 live 差异对象，回溯到静态字段根；RAVA_PROBE_FIELD 类探针看该字段节点由谁登记、标记是否到达句柄存取调用点"
+doc = "docs/plans/2026-10-09-transpile-time-regression.md「顺序无关回归」节"
 since = "2026-10-10"
 
 # ══ 历史补登（2026-09-16 起，failure-history 2026-10-10 按提交根因与分诊文档回溯） ══════════════
@@ -1369,4 +1384,34 @@ status = "pending"
 owner = "c4-url"
 diagnose = "--trace-class sun/net/www/protocol/<协议>/Handler 看是否入闭包；查按名取类站点的候选模式是否含任意串、首段是否字面量"
 doc = "docs/plans/2026-10-07-c4-run-failures.md §三"
+since = "2026-10-10"
+
+[[pattern]]
+id = "safepoint-under-field-lock"
+stage = "run"
+symptom = "debug 档 panic「安全点时持有 N 把字段锁（__RefField 临界区 / __RefSlot 守卫）」"
+match = [["安全点时持有", "把字段锁"]]
+tests = ["TestThreadNatives"]
+cause = "手写层持 __RefSlot / __RefField 守卫期间读写 Java 字段或调 Java 方法：包装类型的字段 getter 带 __safepoint()，安全点断言（小步 A 4400cc70）报持锁。本例为 Thread.getThreads 在 LIVE_THREADS 读锁内按 eetop 过滤。修法：锁内只复制句柄 / 求出纯数据，放锁后再做 Java 侧访问（不放宽断言）"
+introduced = "78d2b9c6 / 4400cc70（小步 A 持锁计数与安全点断言，暴露潜伏的锁内安全点）"
+fixed = ["efafe2cb"]
+status = "pending"
+owner = "并发小步 B（conc-step-b）"
+diagnose = "看回溯中 __assert_no_field_lock ← safepoint 之上的帧，找最近的 __RefSlot::with / __GilStatic::with / __RefField::with 闭包，把闭包内的 Java 访问移到锁外"
+doc = "docs/plans/2026-10-07-no-gc-memory-model.md §四 小步 A、§五"
+since = "2026-10-10"
+
+[[pattern]]
+id = "thread-local-outside-carrier-slots"
+stage = "unit"
+symptom = "单测 closure::handwritten::thread_local_lint::tests::thread_locals_only_in_carrier_slots 失败"
+match = []
+tests = []
+cause = "手写层在 exec_context.rs / java/lang/thread_impl.rs 之外定义 thread_local!（小步 A 78d2b9c6 在 sync_model.rs 的 mod held 定义持锁登记）。持锁登记生存期不跨让出点、与载体绑定，移入 exec_context.rs 的载体槽 HoldSlot（hold_slot 存取），lint 文档头写明载体槽判据"
+introduced = "78d2b9c6"
+fixed = ["3b95ceeb"]
+status = "pending"
+owner = "并发小步 B（conc-step-b）"
+diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
+doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"

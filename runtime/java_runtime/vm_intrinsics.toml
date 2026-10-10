@@ -525,6 +525,19 @@ primitive_class = [
 caller_class = [
     "jdk/internal/reflect/Reflection.getCallerClass:()Ljava/lang/Class;",
 ]
+# predefined_definers：类定义 native（手写准入类 1 native，语义为类 2 运行期类定义点）。原生二进制没有运行期类定义，
+#   程序运行期会定义的类由构建期取得其类文件（训练运行记录 / 用户项目提供，`rava build --train-predefined` /
+#   `--predefined <目录>`、`rava trace`），按内容寻址翻译进用户 crate（预定义类）。这些 native 对实参字节求 SHA-256
+#   查预定义类表：命中返回该类（记录定义加载器），未命中抛 LinkageError 并报出实际哈希与同名预定义类的期望哈希。
+#   分析器把返回值建模为预定义类镜像之并（无预定义类时为空）。实现：java/lang/class_loader_impl.rs、predefined.rs。
+#   语义差异（X3）：同一份字节被多个加载器各定义一次时共用一个静态链接的类（静态字段共用，getClassLoader 为首个
+#   定义者），JVM 得到各自独立的类；见 docs/plans/java-rust-translation-reference.md「运行期定义的类」
+#   与 docs/plans/2026-10-10-xsltc-translet.md §4.4
+predefined_definers = [
+    "java/lang/ClassLoader.defineClass0:(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;[BIILjava/security/ProtectionDomain;ZILjava/lang/Object;)Ljava/lang/Class;",
+    "java/lang/ClassLoader.defineClass1:(Ljava/lang/ClassLoader;Ljava/lang/String;[BIILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;",
+    "java/lang/ClassLoader.defineClass2:(Ljava/lang/ClassLoader;Ljava/lang/String;Ljava/nio/ByteBuffer;IILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;",
+]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
 ]

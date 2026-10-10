@@ -11,6 +11,7 @@ pub mod extras;
 pub mod insn;
 pub mod module;
 pub mod reader;
+pub mod sha256;
 
 pub use class::{acc, parse, Annotation, BootstrapMethod, ClassFile, Code, ElementValue, ExceptionEntry, Field, Method};
 pub use constant::{Const, MemberRef, MethodHandle};

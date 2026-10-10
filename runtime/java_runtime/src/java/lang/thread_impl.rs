@@ -283,12 +283,13 @@ impl Thread {
     }
 
     /// native `getThreads()`：全部存活平台线程（Thread.getAllThreads 的数据源）。
+    ///
+    /// 线程表读锁内只复制句柄；`eetop` 过滤在放锁后做——Java 字段读取是安全点，持 `__RefSlot`
+    /// 守卫进入安全点违反持锁约束（无 GC 文档第四节小步 A），快照中落选的句柄也在锁外释放。
     #[jvm_native]
     pub fn getThreads() -> Result<JArray<Thread>> {
-        Ok(JArray::from(LIVE_THREADS.with(|v| v.borrow().iter()
-            .filter(|t| t.__get_eetop() != 0)
-            .map(Clone::clone)
-            .collect::<Vec<_>>())))
+        let snapshot: Vec<Thread> = LIVE_THREADS.with(|v| v.borrow().to_vec());
+        Ok(JArray::from(snapshot.into_iter().filter(|t| t.__get_eetop() != 0).collect::<Vec<_>>()))
     }
 
     /// native `getStackTrace0()`：他线程的栈快照。Java 帧元数据不随原生栈保留（FS-E1），

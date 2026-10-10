@@ -92,6 +92,34 @@ pub(crate) fn release_slot<R>(f: impl FnOnce(&ReleaseSlot) -> R) -> Option<R> {
     RELEASE.try_with(f).ok()
 }
 
+/// 持锁登记的载体槽（无 GC 文档第四节小步 A，见 `sync_model::held`，仅 debug 档）：持有字段锁的计数与
+/// `__RefSlot` 槽位登记表。持有字段锁期间不得让出（安全点断言持锁数为 0；`__RefSlot` 的 OS 读写锁守卫
+/// 不能跨载体释放），一次持有的登记与注销总在同一载体上，所以与载体绑定而不随执行流。
+#[cfg(debug_assertions)]
+pub(crate) struct HoldSlot {
+    pub(crate) count: Cell<usize>,
+    /// (槽地址, 是否写锁, 加锁位置)；地址 0 为空位
+    pub(crate) slots: RefCell<[(usize, bool, Option<&'static std::panic::Location<'static>>); HOLD_SLOTS]>,
+}
+
+/// 槽位登记容量：嵌套持有超过此数的槽位不再登记地址（计数照常），只漏检自持有
+#[cfg(debug_assertions)]
+pub(crate) const HOLD_SLOTS: usize = 16;
+
+#[cfg(debug_assertions)]
+std::thread_local! {
+    static HOLD: HoldSlot = const {
+        HoldSlot { count: Cell::new(0), slots: RefCell::new([(0, false, None); HOLD_SLOTS]) }
+    };
+}
+
+/// 访问本载体的持锁登记槽（不内联，仅 debug 档）；线程局部已销毁（线程退出期）→ None。
+#[cfg(debug_assertions)]
+#[inline(never)]
+pub(crate) fn hold_slot<R>(f: impl FnOnce(&HoldSlot) -> R) -> Option<R> {
+    HOLD.try_with(f).ok()
+}
+
 /// 当前执行流的块（每次重新读取线程局部，不内联）
 #[inline(never)]
 pub fn current() -> *const ExecContext {

@@ -795,6 +795,26 @@ Counter::set_counter(v)?;   // putstatic
 用户类与 JDK 类走同一机制；转译 BFS 把被引用类的 `<clinit>` 及其父类链的 `<clinit>` 一并入队。
 调用链进入 `jdk/internal/`、`sun/` 等内部包前缀时截断为手写边界类；`closure.toml [vm_boundary]` 登记的 VM 自举类按方法划分：手写提供的方法取手写，其余按字节码翻译。终态只手写 VM 契约层（native、VM 注入状态、运行模型替换），内部包前缀截断由 C1d 取消（`docs/plans/2026-09-29-boundary-narrowing.md`）。
 
+
+### 14.3 运行期定义的类（预定义类）
+
+原生二进制没有运行期类定义。程序运行期经 `ClassLoader.defineClass`（`defineClass0/1/2`）定义的类（如 XSLTC 编译出的 translet），
+在构建期取得类文件（语料构建：`rava build --train-predefined` 按需以参考 JDK 跑训练运行记录；生产构建：用户显式 `rava trace`，
+产物归用户项目，`rava build --predefined <目录>` 读入），与用户类同样按字节码翻译进用户 crate。运行期类定义 native 对实参字节求
+SHA-256，查生成的预定义类表：命中即「定义」该类（登记定义加载器与保护域，返回其镜像），未命中抛 `LinkageError`，消息带实际哈希与
+同名预定义类的期望哈希。方案见 [`2026-10-10-xsltc-translet.md`](2026-10-10-xsltc-translet.md)。
+
+**与 JVM 的语义差异（决定 X3）**：
+
+| 情形 | JVM | rava |
+|------|-----|------|
+| 同一份字节被两个加载器各定义一次（如对同一样式表两次 `newTemplates`） | 两个不同的类，静态字段各一份 | 一个静态链接的类，两次定义返回同一镜像，静态字段共用；`getClassLoader()` / `getProtectionDomain()` 为首个定义者 |
+| 定义后按名查找（`Class.forName(name, init, loader)`） | 只在定义加载器（及委派到它的加载器）上可见 | 定义后按名可见，不区分发起加载器；定义前不可见（`ClassNotFoundException`） |
+| 训练运行未覆盖到的字节（输入在运行期才确定且训练时未出现） | 正常定义 | `LinkageError`（运行期字节码解释不在终态内，见计划 §6.2 B5） |
+| 隐藏类（`Lookup.defineHiddenClass`，lambda / 代理等 VM 承载的定义点之外） | 正常定义 | 训练运行记录不到（JVMTI 不对隐藏类发 ClassFileLoadHook），按未命中处理 |
+
+XSLTC translet 的静态字段只在 `<clinit>` 写常量，共用不可观察。出现可观察的真实用例时按计划 §6.2 B4（每次定义一个新类）切换。
+
 ---
 
 ## 15 方法调用约定

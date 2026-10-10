@@ -148,12 +148,16 @@ impl Class {
 
     /// 原生镜像中「可加载」的类：生成闭包内的类（java_meta 修饰符表，含用户类）与数组类名；
     /// 隐藏类不可按名加载（JVM 同：`Class.forName` 对隐藏类名抛 ClassNotFoundException）。
+    /// 预定义类（定义加载器表项 `defined`）在经类定义 native 定义之前不可见（crate::predefined；定义后按名可见，
+    /// 不区分发起加载器——X3 共用一个类的近似）。
     /// 供 `forName0` 与 `ClassLoader.findBootstrapClass` 共用。
     #[doc(hidden)]
     pub fn __is_known_class(slash_name: &str) -> bool {
         slash_name.starts_with('[')
             || !crate::meta::is_hidden_class(slash_name)
                 && crate::meta::class_modifiers().iter().any(|(n, _)| *n == slash_name)
+                && (crate::meta::class_defining_loader(slash_name) != Some("defined")
+                    || crate::predefined::is_defined(slash_name))
     }
 
     /// native `Class.getRecordComponents0()`：record 分量反射（声明序）。数据源是
@@ -199,6 +203,10 @@ impl Class {
     #[jvm_native]
     pub fn getProtectionDomain0(&self) -> Result<crate::java::security::ProtectionDomain> {
         let name = format!("{}", self.__get_name()).replace('.', "/");
+        // 预定义类：首次定义时 defineClass 传入的保护域（crate::predefined）
+        if crate::meta::class_defining_loader(&name) == Some("defined") {
+            return Ok(crate::predefined::protection_domain(&name).unwrap_or_default());
+        }
         if crate::meta::class_defining_loader(&name) != Some("app") {
             return Ok(Default::default());
         }

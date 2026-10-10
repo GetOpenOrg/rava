@@ -173,8 +173,16 @@ impl<'a> Engine<'a> {
             if anc.is_some_and(|p| self.ancestor_sent(p, t, &rs)) {
                 continue;
             }
-            let recv = TypeSet { classes: rs.iter().copied().collect(), open: IdSet::default() };
-            self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+            if matches!(self.methods[t].ret_model, RetModel::HandleAccess(_)) {
+                // 句柄存取入口按接收者逐个接边（与 `hub_recv` 同口径）：合成值集会把来源标记一并归为
+                // 「由标记给出身份」，本调用点不登记所指字段，结果随调用点经父枢纽还是直接收到接收者而变
+                for &r in rs.iter() {
+                    self.edge(m, off, t, Recv::Exact(r), a, ret, res);
+                }
+            } else {
+                let recv = TypeSet { classes: rs.iter().copied().collect(), open: IdSet::default() };
+                self.edge(m, off, t, Recv::Feeds(vec![Feed::S(recv)]), a, ret, res);
+            }
             self.hubs[h as usize].edged.insert((id, t));
         }
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
