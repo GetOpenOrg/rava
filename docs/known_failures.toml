@@ -165,27 +165,6 @@ since = "2026-10-10"
 note = "debug 档 sync_model 持锁检查（小步 A 78d2b9c6 引入）在安全点发现 __RefField 临界区 / __RefSlot 守卫未释放，panic 于 java/lang/thread.rs"
 
 [[known]]
-test = "TestSecurityManagerContext"
-signature = "java.lang.reflect.Method$Direct"
-owner = "c4-reflect（反射调用帧与覆盖方法存根）"
-since = "2026-10-10"
-note = "反射调用栈多出 Method$Direct 帧：reflect = [Probe, TestSecurityManagerContext, java.lang.reflect.Method$Direct, TestSecurityManagerContext]"
-
-[[known]]
-test = "TestReflectFieldMethod"
-signature = "stub: TestReflectFieldMethod$Derived.describe:(I)Ljava/lang/String;"
-owner = "c4-reflect（反射调用帧与覆盖方法存根）"
-since = "2026-10-10"
-note = "反射 Method.invoke 分派到子类覆盖方法，该覆盖方法未入档案而命中存根"
-
-[[known]]
-test = "TestReflectInvokePerReceiver"
-signature = "stub: TestReflectInvokePerReceiver$Derived.who:(Ljava/lang/Object;)Ljava/lang/String;"
-owner = "c4-reflect（反射调用帧与覆盖方法存根）"
-since = "2026-10-10"
-note = "同 TestReflectFieldMethod：按接收者分派的子类覆盖方法未入档案"
-
-[[known]]
 test = "TestUrlParsingFaces"
 signature = "java.net.MalformedURLException: unknown protocol: https"
 owner = "c4-url（URL 协议处理器补种）"

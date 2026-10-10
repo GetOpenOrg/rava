@@ -1295,3 +1295,33 @@ status = "fixed"
 diagnose = "看数组的 Class 是否由创建时元素类型决定"
 doc = ""
 since = "2026-10-10"
+
+[[pattern]]
+id = "direct-invoke-override-not-dispatched"
+stage = "run"
+symptom = "Method.invoke 改写为直连帮助方法后，子类覆盖方法运行期命中 vtable 槽存根（stub: X$Derived.m）"
+match = [["stub: TestReflectFieldMethod$Derived.describe"], ["stub: TestReflectInvokePerReceiver$Derived.who"]]
+tests = ["TestReflectFieldMethod", "TestReflectInvokePerReceiver"]
+cause = "直连反射调用（[facts.reflect.direct_invokers]）按接收者逐实现连边（engine/reflect_direct.rs direct_send），所选实现进了 methods 却未计入 dispatched；帮助方法的 native invoke0 经 vtable 槽虚调用，生成器（vtable_prune）对不在 dispatched 的覆盖方法槽条目发存根。修法：非 private 实现同 VM 反射虚调用一样记入 vm_targets"
+introduced = "29f54f85 / 75bead2f（直连点改按接收者连边、去掉枢纽）"
+fixed = ["677c07d4"]
+status = "pending"
+owner = "c4-reflect"
+diagnose = "rava closure --why 所报方法：在 methods 而不在 dispatched（report.rs dispatched()）即为此类；查对应连边路径是否记录派发目标"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "reflect-helper-frame-visible"
+stage = "output"
+symptom = "栈遍历（SecurityManager 上下文 / StackWalker）多出 java.lang.reflect.Method$Direct 帧"
+match = [["java.lang.reflect.Method$Direct"]]
+tests = ["TestSecurityManagerContext"]
+cause = "直连改写把 Method.invoke 调用点换成 VM 支持类帮助方法 Method$Direct.invoke，其帧不被 is_ignored_by_security_stack_walk 与 StackWalker 的 isReflectionFrame 识别为反射帧。修法：行表（frame_lines.json）按清单 direct_invokers 把帮助方法帧呈现为原 invoker（Method.invoke），host 记实际类，所有栈消费者统一生效"
+introduced = "29f54f85 / 75bead2f（直连反射调用改写）"
+fixed = ["07e849f6"]
+status = "pending"
+owner = "c4-reflect"
+diagnose = "看多出的帧是否为清单 helper；查 closure_input/frame_lines.json 中该方法的 class/name 是否已改为 invoker"
+doc = ""
+since = "2026-10-10"
