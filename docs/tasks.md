@@ -102,6 +102,19 @@
 - **batch-1009c 已合入（10-09，按用户指示先合入，单测与 57 例抽查转合入后验证）**：含 bootcache（缓存组 = 未回退站点贡献的组，§5.8.6）、c1d-rest（C1d 收窄余项 0 类；c1d 计划 §31 记下一步能力：① 每对象 URI 跟踪约 285 类；② 引导区未知名字调 `Charset.isSupported` 放开全部扩展字符集约 390 类，charset 线续作；③ Formatter 常量格式串构建期求值）、regress2-rest（② ✅，① 转 object-bytecode）、annot-sig（SignatureParser 出闭包，HelloWorld 3456→3407、DeepCopy 3757→3727，`rava closure` 口径；e2e 口径另计）。
 - **进行中（10-09 派）**：根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；转译耗时回归续作（perf-regress，主因 CHM 表数组跨上下文合并，见 2026-10-09-transpile-time-regression.md）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
 - **派发点顺序依赖（order-findops，10-10 完工入 batch-1010b）**：FindOps 根因为 `absint/oracle.rs` `returned_params` 在尚无返回路径（⊥）时答 None（汇合），改答空集（§5.8.6），`closure_independent_of_order` 通过，HelloWorld / DeepCopy 方法各 −1（`ForEachOp$OfRef.get`）。`closure_independent_of_hash_seed` 仍失败（TestSerialDefaultSuid 种子 0 多 `Nodes$CollectionNode.forEach`）：`engine/ctxsel.rs` `selector_ctx` 读尚未定论的常量格选上下文（`ArrayDeque.grow` → `Arrays.copyOf` 常量阶段按调用点克隆，撤不回），终态修法为选择子掩码非空即一律按调用点克隆（续作 6，见 2026-10-08-annotation-signature-closure.md），10-10 派 ctxsel-mono。
+- **c1d-fmt2（10-10 完工待合批，分支 c1d-fmt2）**：C1d 能力③，详见 c1d 计划 §33.7。
+  - 机制 B（`[concrete] object_results` = `Formatter.parse`）已恢复。内存受控靠结果对象按内容合并，用户 printf 不再污染 Formatter.format 靠枢纽形参槽污染。
+  - 修复具体上下文的映像静态活性缺口（LahNumbers NPE，failure_patterns `concrete-ctx-image-static-dead`）。
+  - 对 main 6a668ac6 实测：
+
+    | 用例 | 基线（类 / 方法，峰值） | 本分支（类 / 方法，峰值） |
+    | --- | --- | --- |
+    | DeepCopy | 3069 / 17019，4.98 GiB | 3055 / 16872，3.82 GiB |
+    | LahNumbers | 2158 | 675 |
+    | HelloWorld | 577 / 1896 | 580 / 1896 |
+
+    HelloWorld 的 +3 类是健全性代价（`ClassRepository.NONE`）。
+  - 余项：DeepCopy 的 Calendar 仍经日志链（`ObjectInputFilter$Config.<clinit>` → System.Logger → MessageFormat）与真正未知格式串（`SimpleConsoleLogger.format` 属性、`toGMTFormat` 资源束串）可达；TestStringFormat 有机制 C 的 owild 污染；「仅身份」映像活性层未做。
 - **引导映像零拷贝（boot-zerocopy，10-10 完工入 batch-1010b）**：映像表改链接期符号、驻留查找回填运行期表；整进程墙钟 HelloWorld 195 → 178 ms、DeepCopy 314 → 292 ms，二进制 −0.9%。未达标：`__boot_image_start` 156 / 176 ms（目标 ≤1 ms，热点采样作业 zc-prof-669365cf）、DeepCopy 门面峰值 1779 MB（目标约 1.6 GB，需映像静态按块分 crate）；release 档待大内存机器；D5 残差区、S6 标准流未做。续作入口：引导映像计划 §5.10.5（属纯优化，按 10-06 分级暂缓）。
 - **fix-e0283-nd（10-10，C4 全量失败 NormalDistribution）**：根因——null 存入 / 汇合 / 实参等路径先把 null 落成无类型 `Default::default()`，随后再经 Object 边界或 `From` / `Into` / checkcast 转换（`<T as From<Object>>::from(Object::from(Default::default()))`），源类型不可推断（E0283，`AbstractPipeline` 局部 `p` 的跨实例化重建）。修法：在转换构造的公共入口统一处理——`sim::exprs` 的 `object_from` 对无类型缺省值取 Object 的 null，`qualified_from` / `into_call` / `instr::coerce::cast_node` 取目标类型的 `<T as Default>::default()`，`from_call` 原样返回；文本层 `to_object_text` 与 `unify` 的 `from_object` / `from_common` 同口径；存储重建 `rebuild_via_object` 对 null 直接取声明类型缺省值。验证：抽查 fixnd2（jp2）NormalDistribution 通过；单测作业 fixnd-ut2（dev，generator 除 driver）全过。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。

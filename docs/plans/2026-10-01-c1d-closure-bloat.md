@@ -4681,7 +4681,7 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 
 **修正 1：结果对象按内容命名（f8af6fed）**。按对象物化的结果对象名由组合序号改为 `{类}@concrete:{快照内容 FNV 散列}`。
 同类、快照相同的对象合并为一个抽象对象，对象数的上界是不同说明符形态数，与格式串条数、调用点数无关。
-合并按内容判定，与到达次序无关。fmt2-m3-f8af6fed：DeepCopy 物化对象 64、回退后应用 33 组，峰值 9.04 GB RSS（约 8.4 GiB）。
+合并按内容判定，与到达次序无关。fmt2-m3-f8af6fed：DeepCopy 物化对象 64、回退后应用 33 组，峰值 RSS 8.6 GiB。
 
 **修正 2：枢纽形参槽记污染（b29b3042）**。原先污染按方法形参槽（`ptaint`）判定。经 `String.format` / `PrintStream.printf` 等虚分派枢纽到达 `Formatter.format` 时，
 各接入点的实参在枢纽处合流成常量格，用户 printf 字面量与真正未知的格式串混成一体，于是整个调用点回退。
@@ -4691,7 +4691,7 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 - `hub_bind` 不再按常量格合流绑定，而是改走 `join_pvs`。
 - `taint_report` 的路径能显示枢纽跳转。
 
-fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直接具体求值），峰值 8.55 GB；HelloWorld 577 / 1896。
+fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直接具体求值），峰值 RSS 8.2 GiB；HelloWorld 577 / 1896。
 
 **修正 3：去掉实测开关（0a8facaa）**。回退后逐组应用常开。
 
@@ -4721,19 +4721,24 @@ fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直�
   两者都是健全可达，超出能力③的范围。日志链的出闭包归 a5-4f 日志后端线；资源束串的出闭包需要按名资源的构建期常量化。
 - TestStringFormat 另有一条：@concrete 说明符对象的按对象读混入了抽象 parse 的通配值（`owild`，机制 C 污染），`printDateTime` 经此可达。机制 C 的按对象读与通配分离留作后续。
 
-**实测（dev）**
+**实测（dev，合并 batch-1010d 后：基线 main 6a668ac6 对本分支 10e97917；`closure_composition_job.sh`，峰值为 RSS）**
 
-| 用例 | 基线 956efa18（类 / 方法，峰值） | 本分支（类 / 方法，峰值） |
+| 用例 | 基线 6a668ac6（类 / 方法，峰值） | 本分支 10e97917（类 / 方法，峰值） |
 | --- | --- | --- |
-| HelloWorld | 577 / 1896 | M7_HELLO |
-| DeepCopy | 3727 / 21509，9.0 GiB | M7_DEEP |
-| LahNumbers | 3406 / 18457（fmt2-lbase） | M7_LAH |
-| CollectorsDemo | 616 / 2021 | M7_COLL |
-| TestStringFormat | 3406 / 18454，2.39 GB | M7_TSF |
-| StockTrans | 3724 / 21499，7.78 GB | M7_STOCK |
+| HelloWorld | 577 / 1896，0.44 GiB | 580 / 1896，0.43 GiB |
+| DeepCopy | 3069 / 17019，4.98 GiB，366 s | 3055 / 16872，3.82 GiB，199 s |
+| LahNumbers | 2158 / 11085，1.38 GiB | 675 / 2431，0.48 GiB |
+| CollectorsDemo | 616 | 619 |
+| TestStringFormat | 2158，1.37 GiB | 2161，1.43 GiB |
+| StockTrans | 3067，4.98 GiB | 3053，3.79 GiB |
 
-- LahNumbers 的大幅收缩来自用户 `printf` 的格式串全部具体求值：printDateTime 等不再可达，Calendar / 区域数据链出闭包。
-- 作业：fmt2-base-956efa18、fmt2-m3-f8af6fed、fmt2-m4-b29b3042、fmt2-m5-b29b3042、fmt2-m7-6afde4a0、fmt2-npe3-0a8facaa（NPE 栈）、fmt2-lbase-956efa18 / fmt2-lmine-0a8facaa（映像活性对照）。
-- 单测：fmt2-ut-0a8facaa 组 A / 组 B 0 失败，`closure_independent_of_order` 通过（2621 s）。终版见 UT_FINAL。
-- 抽查：SPOT_FINAL。
-- `closure_independent_of_hash_seed`：待 batch-1010d 并入 main 后同步再跑（未做）。
+- 合并前（基线 956efa18，c1d-uri 未入）：DeepCopy 3727 / 21509 → 3726 / 21506，峰值 9.0 → 8.2 GiB（fmt2-m4 / m7）。
+- DeepCopy 与 StockTrans 的峰值和耗时下降，因为用户 printf / format 的格式串全部具体求值，parse 不再走抽象回退。
+- LahNumbers 大幅收缩，原因相同：printDateTime 等不再经用户格式串可达，Calendar / 区域数据链出闭包。DeepCopy 中 Calendar 仍经日志链与未知格式串可达，见上。
+- HelloWorld、CollectorsDemo、TestStringFormat 各 +3 类，是修正 4 的健全性代价（`ClassRepository.NONE` 链），方法数不变。
+- 作业：
+  - 合并后：fmt2-base-6a668ac6、fmt2-mj-6a668ac6 / fmt2-mj-10e97917（取 json，方法数）、fmt2-ut-10e97917 第 5 项（实测）。
+  - 合并前：fmt2-base-956efa18、fmt2-m3-f8af6fed、fmt2-m4-b29b3042、fmt2-m5-b29b3042、fmt2-m7-6afde4a0、fmt2-h8-6afde4a0 / fmt2-h9-9cc7f4a7（HelloWorld 增量归因）。
+  - 诊断：fmt2-npe3-0a8facaa（NPE 栈）、fmt2-lbase-956efa18 / fmt2-lmine-0a8facaa（映像活性对照）。
+- 单测（fmt2-ut-10e97917）：组 A / 组 B 及 `closure_independent_of_order`、`closure_independent_of_hash_seed` 的结果见 UT_FINAL。合并前 fmt2-ut-0a8facaa 的组 A / 组 B 均 0 失败，order 通过。
+- 抽查 30 例（含 printf / String.format 用例 25 例），fmt2-spot-6afde4a0、fmt2-spot-9cc7f4a7、fmt2-spot-10e97917 三轮均 30/30 通过。0a8facaa 上 LahNumbers 的 NPE 已由修正 4 解决。
