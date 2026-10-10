@@ -83,33 +83,22 @@ impl Object {
 
     /// java.lang.Object.wait()V
     pub fn wait(&self) -> Result<()> {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.0.__identity() as usize, 0, 0)
-=======
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
         Object__wait_body(self)
->>>>>>> theirs
     }
 
     /// java.lang.Object.wait(J)V
     pub fn wait_l(&self, millis: i64) -> Result<()> {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.0.__identity() as usize, millis, 0)
-=======
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
         Object__wait_l_body(self, millis)
->>>>>>> theirs
     }
 
     /// java.lang.Object.wait(JI)V
     pub fn wait_l_i(&self, millis: i64, nanos: i32) -> Result<()> {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.0.__identity() as usize, millis, nanos)
-=======
         if self.0.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -121,7 +110,6 @@ impl Object {
     #[jvm_native]
     pub fn wait0(&self, millis: i64) -> Result<()> {
         crate::monitor::wait_timeout(self.0.__identity() as usize, millis, 0)
->>>>>>> theirs
     }
 
     /// java.lang.Object.notify()V：无等待者时静默

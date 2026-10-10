@@ -114,9 +114,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.__identity() as usize, 0, 0)
-=======
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -124,7 +121,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             Some(this) => super::object_body::Object__wait_body(&this),
             None => crate::monitor::wait_timeout(self.__identity() as usize, 0, 0),
         }
->>>>>>> theirs
     }
 
     /// java.lang.Object.wait(J)V：运行时类对象转交 Object 的翻译体（参数校验、虚拟线程中断处理、
@@ -133,9 +129,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.__identity() as usize, millis, 0)
-=======
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -143,7 +136,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             Some(this) => super::object_body::Object__wait_l_body(&this, millis),
             None => crate::monitor::wait_timeout(self.__identity() as usize, millis, 0),
         }
->>>>>>> theirs
     }
 
     /// java.lang.Object.wait(JI)V：运行时类对象转交 Object 的翻译体（nanos 校验后转 wait(J)）
@@ -151,9 +143,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-<<<<<<< ours
-        crate::monitor::wait_timeout(self.__identity() as usize, millis, nanos)
-=======
         if self.is_jvm_null() {
             return Err(crate::error::JvmError::null_pointer());
         }
@@ -161,7 +150,6 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
             Some(this) => super::object_body::Object__wait_l_i_body(&this, millis, nanos),
             None => crate::monitor::wait_timeout(self.__identity() as usize, millis, nanos),
         }
->>>>>>> theirs
     }
 
     /// java.lang.Object.notify()V：唤醒一个在该对象监视器上等待的线程，无等待者时静默。
