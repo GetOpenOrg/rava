@@ -110,6 +110,9 @@ pub(super) struct Concrete {
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
 
+/// 实测用（临时）：回退后逐组应用开关
+const MEASURE_PARTIAL: bool = false;
+
 impl<'a> Engine<'a> {
     pub(super) fn concrete_init(&mut self) {
         self.concrete.ctx = self.id(CONCRETE_CTX);
@@ -170,7 +173,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-        if self.concrete.fallback.contains(&(m, off)) && self.man.concrete.object_results.contains(&*k) {
+        if MEASURE_PARTIAL && self.concrete.fallback.contains(&(m, off)) && self.man.concrete.object_results.contains(&*k) {
             if let Some(c) = self.concrete_known(m, off, md, recv, args) {
                 let c: Vec<Vec<AK>> = c.into_iter().filter(|c| self.concrete.partial_tried.insert((m, off, c.clone()))).collect();
                 if !c.is_empty() {

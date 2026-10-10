@@ -1019,7 +1019,7 @@ entries = [
 # 2026-10-10 暂置空（机制 B 停用）：开启后 DeepCopy 闭包超 14 GiB 内存被杀（回退后逐组应用未设上限，见
 # docs/plans/2026-10-01-c1d-closure-bloat.md §32.6），接手者解决内存后恢复为
 # ["java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;"]
-object_results = []
+object_results = ["java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;"]
 # 内存缓存字段（`类.字段`）：可读映像对象上的这些字段；冷 / 热两次求值取并，求值后撤销写入。
 # 引导求值中缓存写入不记日志（撤回时保留：重算得同一值，不算运行期改写）
 memo_fields = [
