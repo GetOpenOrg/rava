@@ -41,6 +41,12 @@ pub(super) struct LambdaProf {
     lams: HashMap<u32, LamStat>,
     replay_total: u64,
     recv_total: u64,
+    /// 接收者展开按读者状态分列：非字节码临时调用 / 复活 / 首步 / 增量重跑
+    recv_by: [u64; 4],
+    /// 非字节码调用方的临时 lambda 调用次数
+    transient: u64,
+    /// 新建读者时同一调用点已有同一 lambda 的其他读者（实参 / 结果节点不同）
+    dup_site: u64,
 }
 
 impl LambdaProf {
@@ -57,6 +63,9 @@ impl LambdaProf {
             lams: HashMap::default(),
             replay_total: 0,
             recv_total: 0,
+            recv_by: [0; 4],
+            transient: 0,
+            dup_site: 0,
         }
     }
 }
@@ -99,13 +108,21 @@ impl Engine<'_> {
     }
 
     /// 方法引用 lid 在调用点按接收者表 recv 逐个派发
-    pub(super) fn lprof_recv(&mut self, lid: u32, recv: &[u32]) {
+    pub(super) fn lprof_recv(&mut self, lid: u32, recv: &[u32], class: usize) {
         let Some(p) = self.lprof.as_mut() else { return };
+        p.recv_by[class] += recv.len() as u64;
         let s = p.lams.entry(lid).or_default();
         s.recv_dispatch += recv.len() as u64;
         s.recvs.extend(recv.iter().copied());
         p.recv_total += recv.len() as u64;
         self.lprof_tick();
+    }
+
+    /// 非字节码调用方的临时调用 / 新读者的调用点已有同一 lambda 的读者
+    pub(super) fn lprof_kind(&mut self, transient: bool, dup_site: bool) {
+        let Some(p) = self.lprof.as_mut() else { return };
+        p.transient += u64::from(transient);
+        p.dup_site += u64::from(dup_site);
     }
 
     fn lprof_tick(&mut self) {
@@ -124,7 +141,7 @@ impl Engine<'_> {
         let Some(p) = self.lprof.as_ref() else { return };
         let tag = format!("[lambda-prof #{} {}s]", p.seq, p.t0.elapsed().as_secs());
         eprintln!(
-            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={}",
+            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={} recv_by(transient/revived/first/rerun)={:?} transient={} dup_site={}",
             stats::peak_rss_mb(),
             self.methods.len(),
             self.hubs.len(),
@@ -132,7 +149,10 @@ impl Engine<'_> {
             self.g.len(),
             self.lambdas.len(),
             p.replay_total,
-            p.recv_total
+            p.recv_total,
+            p.recv_by,
+            p.transient,
+            p.dup_site
         );
         let mut hs: Vec<(&u32, &u64)> = p.hub_replay.iter().collect();
         hs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));

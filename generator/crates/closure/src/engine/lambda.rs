@@ -50,8 +50,10 @@ impl<'a> Engine<'a> {
                 }
                 return;
             }
+            let dup = self.lprof.is_some() && at.keys().any(|k| k.0 == lid);
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
+            self.lprof_kind(false, dup);
             self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), g_mark: 0, live: true, revived: false });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
@@ -63,6 +65,7 @@ impl<'a> Engine<'a> {
         }
         self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), g_mark: 0, live: false, revived: false });
         self.lprof_call(lid, m, off, true);
+        self.lprof_kind(true, false);
         self.lambda_step(m, off, None);
         let tmp = self.lcalls.pop();
         debug_assert!(tmp.is_some_and(|c| !c.live));
@@ -173,7 +176,8 @@ impl<'a> Engine<'a> {
                 // lambda 接收者的嵌套调用随之复活（与整体重派发时重新登记同口径）
                 let old = if revived && !done.is_empty() { self.receivers(m, &done, owner) } else { Vec::new() };
                 self.cur_call = reader;
-                self.lprof_recv(lid, &recv);
+                let class = if id.is_none() { 0 } else if revived { 1 } else if done.is_empty() { 2 } else { 3 };
+                self.lprof_recv(lid, &recv, class);
                 for r in recv {
                     self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
                 }
