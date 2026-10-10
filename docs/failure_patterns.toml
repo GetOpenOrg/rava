@@ -99,12 +99,12 @@ stage = "transpile"
 symptom = "转译耗时成倍增长，缺省时限下转译超时（放宽时限可通过）"
 match = [["transpile timeout"]]
 tests = ["DeepCopy", "TestSerialDefaultSuid", "TestSerialUserGenericCallbacks", "TestJndiNoProvider"]
-cause = "ConcurrentHashMap 表数组跨上下文合并等导致分析工作量膨胀（batch-1012 → 1013：DeepCopy 527 → 912 s，JNDI 324 → 1006 s）"
-introduced = "78b744fe 与 batch-1012 区间（疑点）"
-fixed = ["cf58a73f"]
-status = "open"
+cause = "SerialCallbackContext.obj 不是容器形态、按类共用 F/U：序列化写方整张对象图（约 1.2 万值）流到反序列化 defaultReadObject 的 curContext.getObj()，FieldReflector.getObjFieldValues / setObjFieldValues 按未知偏移整堆读写，CHM.table / CollectionView.map 等对象字段互灌（逃逸 CHM 1 → 28），F(table)↔U(table) 往返成 N² 合并（batch-1012 → 1013：DeepCopy 527 → 912 s，JNDI 324 → 1006 s）。修复：final Object 型实例字段由构造器从实参写入的「值持有者」按分配点 × 堆上下文分对象（纯字节码形态，无类名）"
+introduced = "8ce97959（serialPersistentFields 使精确 readObject / writeObject 派发可达，暴露值持有者按类共用的潜伏缺陷）"
+fixed = ["cf58a73f", "c3ec480d"]
+status = "pending"
 owner = "perf-regress4"
-diagnose = "放宽时限重跑确认是慢而非死循环；对照 timings_jdk21.tsv 各批次转译秒数；看分析器 profile 的热点上下文"
+diagnose = "放宽时限重跑确认是慢而非死循环；对照 timings_jdk21.tsv 各批次转译秒数；--flows @openstat / @escin:<类> 看 open 接收者与逃逸对象的引入点，@path 追值来源字段（perf-regress4 实测：DeepCopy 527 → 306 s、峰值 5983 → 4104 MB，JNDI 606 → 348 s）"
 doc = "docs/plans/2026-10-09-transpile-time-regression.md"
 since = "2026-10-10"
 
@@ -121,7 +121,7 @@ introduced = ""
 fixed = []
 status = "open"
 owner = "转译耗时 / 峰值线（perf-regress）"
-diagnose = "看 OOM 行的 peak 与阶段；与历史峰值对照判断是否回归"
+diagnose = "看 OOM 行的 peak 与阶段；与历史峰值对照判断是否回归。c3ec480d（值持有者按对象分开）使序列化路径转译峰值降约 1.9 GB（DeepCopy 5983 → 4104 MB，JNDI 6812 → 4616 MB）；HttpLoopback 两例未复测"
 doc = ""
 since = "2026-10-10"
 
