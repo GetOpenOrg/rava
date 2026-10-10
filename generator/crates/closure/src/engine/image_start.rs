@@ -75,6 +75,7 @@ impl<'a> Engine<'a> {
             }
         }
         let _ = self.ctx.img_modules.set(img_modules);
+        *self.ctx.img_types.borrow_mut() = data.objs.iter().map(|o| (!o.placeholder).then(|| Rc::from(o.ty.as_str()))).collect();
         let mirror_obj = data.objs.iter().enumerate().filter_map(|(i, o)| o.mirror.clone().map(|m| (m, i as u32))).collect();
         self.img = Some(Box::new(ImgState {
             build_time: data.build_time.iter().cloned().collect(),
@@ -443,6 +444,12 @@ impl<'a> Engine<'a> {
     /// 活对象内容传播（工作表，避免深对象图递归）
     pub(super) fn image_drain(&mut self) {
         let Some(s) = self.img.as_mut() else { return };
+        // 映像对象的运行期类补齐到当前映像（含此前追加的对象）
+        {
+            let mut ts = self.ctx.img_types.borrow_mut();
+            let n = ts.len();
+            ts.extend(s.data.objs.iter().skip(n).map(|o| (!o.placeholder).then(|| Rc::from(o.ty.as_str()))));
+        }
         if s.busy {
             return;
         }
