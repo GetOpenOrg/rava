@@ -91,7 +91,21 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
 4. **小步 B**（第四节）：A 合入后另派代理、单独提交。分支基于含 A 的集成分支。
 5. 第三节第 5 条的侧表删条目（`drop_slow` 见 `MONITOR_MARK` 即先删后释放）、PARKERS 回收，以及第 1–4、6、7 条，按第二节排期在 C4 之后实施。
 
-### 4. 注意
+### 4. 收口（2026-10-10，接手会话）
+
+- **同步**：两次合并集成分支（dcf246a8 → 405c84db 基线，冲突只在 `object.rs` / `object_impl.rs`：取上游「wait 转交 Object 翻译体、native `wait0` 落监视器」的形态，`wait_timeout` 去掉 `is_null` 参数；393b970f 补清残留冲突标记；3f5cecdc 合入 6a668ac6，无冲突）。
+- **`java_runtime` 编译已确认**：第 2 节所列 8 个文件经服务器 debug 档抽查编译通过。
+- **debug 档抽查**（dev，profile=debug，断言生效）：
+  - concA-393b970f（修复前）15 例：13 通过，0 例断言违例；
+  - concA-ff1caecf（修复后）20 例：18 通过，0 例断言违例。覆盖 synchronized（TestSynchronized / SynchronizedTest）、wait / notify（TestWaitNotify / TestWaitNotifyQueue / TestObjectWaitFrames）、线程（TestThreadInterrupt / TestThreadJoin / TestThreadStates / TestThreadUncaught / TestJucSync）、标准流替换（TestSystemSetStreams）、类初始化（ClinitOrder / TestStaticInit / TestConcurrentClinit）、登记表路径（StringInternDemo / TestDynamicProxy / TestModuleLayerDefine / TestPrimitiveClassMirror / TestMethodHandleCombinators）与 HelloWorld；
+  - 两例失败 TestConcurrentClinit（`clinit runs=0`）、TestJucSync（`latch work=0` / `barrier trips=0`）在集成分支 405c84db 上同样失败（对照抽查 concA-base-405c84db），不属本步；TestJucSync 由 batch-1010i 的 fix-clone 修复。
+- **违例修复**：预计的违例在抽查中都没有触发——`drop_slow` 断言只在释放最后一个引用时生效，这些位点在测试时序下释放的都不是最后一个引用。按终态写法全部改掉（不等时序撞上）：
+  - ad7f59f6（锁内释放对象）：`__RefSlot` 增加登记表写入形态 `get_or_insert`（Option 槽）、`put` / `intern`（HashMap 槽）、`remove_where`（Vec 槽），锁内只换出值，被替换 / 落选的值在锁外释放。迁移：线程表三处 `retain`、`__vm_bind_initial`、`currentThread` 写初始线程、System.in / out / err 并发首读、动态物种 / 类型化 null / 类初始化钩子 / 反射分派登记的覆盖写入、字符串驻留 / 类字面量镜像 / 基本类型镜像 / 代理方法缓存。字符串驻留原来是后写入者覆盖，并发未命中时两线程会拿到不同实例，改 `intern` 后同内容只有一个身份；基本类型镜像改为在锁外构造。
+  - ff1caecf（持锁执行 Java 代码）：`Module.defineModule0` 与导出检查在写锁内构造异常对象，改为锁内只求出消息、锁外构造异常；`Class.setSigners` 的类名键在锁外求出。
+- **断言覆盖范围**：持锁计数、自持有检查、`drop_slow` / 安全点 / `<clinit>` 断言、`__mark_monitor` 断言只在 debug 档生效；release 档抽查只能验证功能。`std::cell::RefCell` 线程局部槽（CURRENT / CARRIER 等）不在登记范围内。
+- **状态**：小步 A 已完工，待合批（全量单测与 e2e 由协调会话排批）。小步 B 在 A 合入后另派。
+
+### 5. 注意
 
 - 另有协调巡检会话（rava-b5）在管服务器作业、合批和 tasks.md。发抽查或合批前先和它对齐，避免同 tag 作业冲突，也避免子代理总数超过上限 5。
 - 计数漂移的结论：无害，`Drop` 不改，但计数不得作为永生判据（第三节第 8 条）。后续代码不要引入 `strong >= IMMORTAL` 这类判断。
