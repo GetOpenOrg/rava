@@ -69,13 +69,28 @@ stage = "transpile"
 symptom = "转译数秒内栈溢出（fatal runtime error: stack overflow）"
 match = [["has overflowed its stack"], ["stack overflow, aborting"]]
 tests = ["TestDomResultNode", "TestResourceBundleFaces"]
-cause = "待定：TestDomResultNode 由 fix-domstack 查；TestResourceBundleFaces 在 batch-1010d（c1d-uri + ctxsel-mono）上出现，来源二分中（rbf-main / rbf-uri）"
+cause = "闭包分析的常量实参求值（consteval.rs）穿过静态分派转发方法（转发构造完成标签对象）不计深度；ResourceBundle.findBundle 是自递归的转发方法，环上整数实参逐层变化使每层求值键都不同，memo_enter 同键截断拦不住，const_eval → aux_analyze → invoke_result → const_eval 嵌套约 1200 层撑爆主线程 8 MB 栈。两例同源（TestResourceBundleFaces 在 main 589052eb 上同样溢出，fix-domstack 上两例都通过），非 batch-1010d 引入"
+introduced = "ef6a1249（常量实参求值穿过分派转发方法不计深度）"
+fixed = ["b4da5107"]
+status = "pending"
+owner = "fix-domstack"
+diagnose = "dev 上 gdb -batch -ex run -ex 'bt 80' -ex 'bt -60' --args rava build <Test.java> --stop-after emit 取栈（栈溢出时 RUST_BACKTRACE 无输出）；看重复的帧环属哪个求值器，在其 memo_enter 处按嵌套层数打印求值键，看键是否逐层变化"
+doc = "docs/tasks.md 现状节 fix-domstack 条"
+since = "2026-10-10"
+
+[[pattern]]
+id = "xsltc-translet-create"
+stage = "run"
+symptom = "XSLT 变换运行期 TransformerConfigurationException：Translet class loaded, but unable to create translet"
+match = [["Translet class loaded, but unable to c"]]
+tests = ["TestXmlTransform"]
+cause = "运行期定义类在 rava 中没有终态承载：TemplatesImpl.defineTransletClasses 经 TransletClassLoader.defineClass 调 ClassLoader.defineClass1（native 手写），该手写对格式合法的类文件一律抛 LinkageError（原生二进制类全集构建期定死），defineTransletClasses 的 catch (LinkageError) 包成 TRANSLET_OBJECT_ERR。不是生成器 / 闭包 / 反射缺陷。fix-domstack 修好转译超时后首次暴露。终态方案（按内容寻址的预定义类，字节来源待决）见 doc"
 introduced = ""
 fixed = []
 status = "open"
-owner = "fix-domstack"
-diagnose = "确认是否同一递归（RUST_BACKTRACE 或加大栈复现取栈）；对照 main 与批次各合入点二分"
-doc = ""
+owner = "fix-xsltc"
+diagnose = "run.log 不打印 Caused by（TransformerException 的 cause 存在 containedException、经 getCause() 覆盖给出，未捕获报告只读 cause 字段）；用探针捕获异常后按 getCause() 打印链（作业 xsltc-probe2）。cause 为 LinkageError「runtime class definition is not supported」即本条"
+doc = "docs/plans/2026-10-10-xsltc-translet.md"
 since = "2026-10-10"
 
 [[pattern]]
