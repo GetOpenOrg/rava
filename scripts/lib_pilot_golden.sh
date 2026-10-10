@@ -7,6 +7,10 @@
 #   scripts/lib_pilot_golden.sh m3     # junit4 crate（Runner 路径）：JUnitCore.runClasses
 #   scripts/lib_pilot_golden.sh m4     # junit4 crate（@Test(timeout=) 路径）：FailOnTimeout
 #   scripts/lib_pilot_golden.sh m5     # 跨 crate 分派链：user 类实现 lib 类型并被 lib 回调
+#   scripts/lib_pilot_golden.sh sc1    # spring-core 切片（矩阵 #11）：ResolvableType / MethodParameter 泛型元数据
+#   scripts/lib_pilot_golden.sh sc2    # spring-core 切片：AntPathMatcher
+#   scripts/lib_pilot_golden.sh sc3    # spring-core 切片：PropertyPlaceholderHelper + StringUtils
+#   scripts/lib_pilot_golden.sh sc4    # spring-core 切片：StreamUtils + MultiValueMap
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
@@ -35,7 +39,7 @@ PY
 # 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
 . "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3|m4|m5 [--no-transpile|--emit-only]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1|sc2|sc3|sc4 [--no-transpile|--emit-only]}"
 TRANSPILE=1
 EMIT_ONLY=0
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
@@ -80,6 +84,18 @@ m5)
     CP="$LIBS/junit-4.13.2.jar:$LIBS/hamcrest-3.0.jar"
     LIB_ARGS=(--deps "$LOCK" --cp hamcrest,junit
               --seed-class "$HAMCREST_ALL,org.junit.runner.JUnitCore,org.junit.Assert,org.junit.Test,org.junit.Before")
+    ;;
+sc1|sc2|sc3|sc4)
+    # spring-core 切片（矩阵 #11）：用户 main 为唯一入口，库类按档案调用链翻译，不设整包种子；
+    # spring-jcl 是 spring-core 的日志门面依赖（LogFactory）
+    case "$MODE" in
+        sc1) MAIN=SpringResolvableTypeMain ;;
+        sc2) MAIN=SpringAntPathMain ;;
+        sc3) MAIN=SpringPlaceholderMain ;;
+        sc4) MAIN=SpringStreamMultiValueMain ;;
+    esac
+    CP="$LIBS/spring-core-6.2.19.jar:$LIBS/spring-jcl-6.2.19.jar"
+    LIB_ARGS=(--deps "$LOCK" --cp spring-core,spring-jcl)
     ;;
 *) echo "未知模式: $MODE" >&2; exit 2;;
 esac

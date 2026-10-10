@@ -34,7 +34,8 @@ CR = RESULTS_DIR
 SEEN = Path.home() / ".cache" / "rava_patrol_seen"
 INTEGRATION = "rust-closure-analyzer"
 AGENT_TASKS_GLOB = os.environ.get(
-    "RAVA_AGENT_TASKS_GLOB", f"/private/tmp/claude-{os.getuid()}/*rava*/*/tasks")
+    "RAVA_AGENT_TASKS_GLOB",
+    f"{'/private/tmp' if sys.platform == 'darwin' else '/tmp'}/claude-{os.getuid()}/*rava*/*/tasks")
 AGENT_RECENT_HOURS = 3        # 只列最近活动在此范围内的子代理
 AGENT_MAX_HOURS = 6           # 超过即需收尾续作
 AGENT_IDLE_MINUTES = 30       # 超过即需关注
@@ -394,11 +395,15 @@ def report_local(disp: list[dict]) -> None:
     for mb, pid, p in sorted(heavy, reverse=True)[:5]:
         print(f"  重进程 {pid} ppid={p['ppid']} {mb}MB {p['etime']} {Path(p['cmd'].split()[0]).name}")
     section(f"本机资源（磁盘 <{LOCAL_DISK_MIN_G}G 需清理）")
-    df = sh("df -g / | tail -1").split()
+    darwin = sys.platform == "darwin"
+    df = sh(f"df {'-g' if darwin else '-BG'} {WS_ROOT} | tail -1").replace("G", "").split()
     free_g = int(df[3]) if len(df) > 3 and df[3].isdigit() else -1
     print(f"  磁盘空闲 {free_g}G" + ("  ← 低于阈值" if 0 <= free_g < LOCAL_DISK_MIN_G else ""))
-    print("  " + sh("memory_pressure | tail -1").strip())
-    print("  swap " + sh("sysctl -n vm.swapusage").strip())
+    if darwin:
+        print("  " + sh("memory_pressure | tail -1").strip())
+        print("  swap " + sh("sysctl -n vm.swapusage").strip())
+    else:
+        print("  " + sh("free -g | sed -n '1,3p'").strip().replace("\n", "\n  "))
 
 
 def wait_target(cmd: str) -> str | None:

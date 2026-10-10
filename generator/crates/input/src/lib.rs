@@ -9,6 +9,7 @@ pub mod build;
 mod compose;
 pub mod facts;
 pub mod handwritten;
+mod lib_order;
 pub mod manifest;
 pub mod norm;
 mod par;

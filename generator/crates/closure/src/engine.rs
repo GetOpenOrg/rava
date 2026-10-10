@@ -601,6 +601,8 @@ pub struct Engine<'a> {
     rpending: Vec<(RHook, usize, TypeSet)>,
     /// 已枚举（类别, 所指类）；有对应反射调用可达时成员入链
     enumerated: BTreeSet<(Members, u32)>,
+    /// 经开放枚举（清单 `exposing_enumerators`）得到的（类别, 所指类）：全部成员有分派臂，不论域
+    exposed_all: BTreeSet<(Members, u32)>,
     /// 可达的反射调用类别
     invokable: BTreeSet<Members>,
     /// 反射点名：类型 id → 在以 Class 为接收者 / 实参的调用里与之同现的字符串常量（按名取成员）

@@ -21,11 +21,24 @@ impl<'a> Engine<'a> {
         for (key, group) in groups {
             let clones: Vec<usize> = group.iter().map(|(i, _)| *i).collect();
             let Some(all) = group.into_iter().map(|(_, a)| a).collect::<Option<Vec<_>>>() else { continue };
-            if all.iter().any(|a| a.conservative) {
-                continue;
-            }
             let Some(cf) = self.h.class(&key.owner) else { continue };
             let Some(code) = cf.method(&key.name, &key.desc).and_then(|x| x.code.as_ref()) else { continue };
+            if all.iter().any(|a| a.conservative) {
+                // 保守分析（全部可达、无值折叠）只导出解析失败点：发射层不能按调用 / 字段访问翻译闭包外的类
+                let reachable = vec![true; code.insns.len()];
+                let no_class = self.no_class_sites(code, &reachable);
+                if !no_class.is_empty() {
+                    let mut f = fold_of(key.to_string(), code, &[]);
+                    let ends: Vec<u32> = no_class.iter().map(|s| s.0).collect();
+                    f.noreturn_dead_pcs = fold::cut_after(code, &reachable, &ends);
+                    f.no_class = no_class;
+                    f.dead_pcs.clear();
+                    f.dead_handlers.clear();
+                    f.violations.clear();
+                    out.push(f);
+                }
+                continue;
+            }
             let mut f = fold_of(key.to_string(), code, &all);
             // 具体轨迹里抛出异常的调用：其后继不可达（活调用顺序落入死区），按不返回的调用点导出
             let mut thrown: Vec<u32> = Vec::new();
@@ -44,7 +57,7 @@ impl<'a> Engine<'a> {
             if !f.violations.is_empty() {
                 eprintln!("[closure] folds 自检违约：{} @{:?}", f.method, f.violations);
             }
-            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() || !f.direct_calls.is_empty() {
+            if !f.dead_pcs.is_empty() || !f.dead_handlers.is_empty() || !f.dead_catches.is_empty() || !f.consts.is_empty() || !f.null_recv.is_empty() || !f.noreturn_calls.is_empty() || !f.no_class.is_empty() || !f.direct_calls.is_empty() {
                 out.push(f);
             }
         }
@@ -59,7 +72,7 @@ impl<'a> Engine<'a> {
         let dead = |pc: u32| f.dead_pcs.iter().chain(&f.noreturn_dead_pcs).any(|&(s, e)| s <= pc && pc < e);
         let mut out = Vec::new();
         for pc in pcs {
-            if dead(pc) || f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.consts.iter().any(|c| c.0 == pc) {
+            if dead(pc) || f.null_recv.contains(&pc) || f.noreturn_calls.contains(&pc) || f.no_class.iter().any(|s| s.0 == pc) || f.consts.iter().any(|c| c.0 == pc) {
                 continue;
             }
             let Ok(idx) = code.insns.binary_search_by_key(&pc, |x| x.offset) else { continue };

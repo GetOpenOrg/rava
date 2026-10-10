@@ -258,6 +258,7 @@ impl<'a> Engine<'a> {
             enum_recv: HashMap::default(),
             rpending: Vec::new(),
             enumerated: BTreeSet::new(),
+            exposed_all: BTreeSet::new(),
             reflect_names: HashMap::default(),
             named_ctors: BTreeSet::new(),
             ctor_lookups: BTreeMap::new(),

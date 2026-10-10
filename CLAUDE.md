@@ -150,7 +150,7 @@ build/                              # gitignore：每测试一次性 scratch
 
 ```bash
 # ── 本机：只跑 cargo check 与分布式派发 ──────────────────────────────────────────
-(cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock.py cargo check --release --tests --target-dir ../build/check-target)   # 本机唯一的编译检查
+(cd generator && CARGO_BUILD_JOBS=2 python3 ../../heavy_lock.py cargo check --release --tests --target-dir ../build/check-target)   # 本机唯一的编译检查
 uv run --group cluster python scripts/cluster/distribute_tests.py --no-monitor --skip-setup --spot <tag> --ref <sha> --per-dir 0 --tests A B   # 集群抽查（--job 作业 / --reset 全量；结果 cluster_results/，服务器清单 ~/.config/rava/cluster.toml；dev 关机期间只有云服务器可用，见 docs/reference/cluster-testing.md）
 uv run --group cluster python -m unittest discover -s tests/unit/cluster   # 集群分发脚本单元测试
 
