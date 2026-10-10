@@ -58,6 +58,7 @@ mod reflect_writes;
 mod hub;
 mod recv_fp;
 mod site_prof;
+mod lambda_prof;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -643,6 +644,8 @@ pub struct Engine<'a> {
     cut_nodes: HashMap<u32, bool>,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
     probes: Option<Box<diag::Probes>>,
+    /// 枢纽 lambda 重放 / 方法引用接收者展开剖析（`--lambda-prof`；未开为 None）
+    lprof: Option<Box<lambda_prof::LambdaProf>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
     rmwrap: sysprops_write::RmWrap,

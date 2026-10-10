@@ -2,6 +2,8 @@
 # 阶段 API 面作业（dev 上以作业模式运行；本机不跑）：取包 → 样例应用 javac + 真 JVM 运行（记录输出与实载类）
 # → rava 闭包两变体（A：仅 main；B：main + JVM 实载的框架类作 --seed-class；并行，看门狗记 RSS / 超时）→ 面文件与 e2e 分层数据。
 # 环境变量：API_SURFACE_CLOSURE_TIMEOUT（每变体秒数，缺省 2400）、API_SURFACE_CLOSURE_MEM_MB（每变体 RSS 上限，缺省不设）、
+#           API_SURFACE_LAMBDA_PROF（秒，缺省 0 关：rava closure --lambda-prof 间隔，枢纽 lambda 重放 / 方法引用展开前列打在 closure_<变体>.err）、
+#           API_SURFACE_CLOSURE_ONLY（置 1 时闭包后即结束，不算面与分层；闭包诊断用）、
 #           API_SURFACE_OUT_RATIO（分层暂缓门槛，缺省 auto＝按标定集定）、API_SURFACE_JOBS（e2e javac 并行度，缺省 8）
 #
 # 用法：scripts/api_surface_job.sh [阶段=s0]        样例在 tests/lib_pilot/<阶段>_boot/（src/ resources/ jars.txt）
@@ -73,6 +75,7 @@ MAIN="$(grep -rl 'static void main' "$APP/src" | head -1 | sed "s|$APP/src/||; s
 CL_TIMEOUT="${API_SURFACE_CLOSURE_TIMEOUT:-2400}"
 CL_MEM="${API_SURFACE_CLOSURE_MEM_MB:-0}"
 CL_STACK="${API_SURFACE_STACK_EVERY:-0}"
+CL_LPROF=(); (( ${API_SURFACE_LAMBDA_PROF:-0} > 0 )) && CL_LPROF=(--lambda-prof "$API_SURFACE_LAMBDA_PROF")
 VARIANTS="${API_SURFACE_VARIANTS-a b}"
 start_closure() {
     local tag="$1"; shift
@@ -86,7 +89,7 @@ start_closure() {
         : >"$OUT/closure_$tag.stacks"
     fi
     "${timer[@]}" "${dbg[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
-        -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err" &
+        -o "$RAW/closure_$tag.json" "${CL_LPROF[@]}" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err" &
     local wpid=$!
     (
         t0=$SECONDS; : >"$OUT/closure_$tag.rss"; pid=""; next_stack=$CL_STACK
@@ -141,6 +144,7 @@ for v in $VARIANTS; do
     case $v in a) start_closure a ;; b) start_closure b "${SEEDS[@]}" ;; esac
 done
 for v in $VARIANTS; do finish_closure "$v"; done
+[[ "${API_SURFACE_CLOSURE_ONLY:-0}" == 1 ]] && { step "完成（只算闭包）"; exit 0; }
 
 # 5. 面 + 分层
 step "面"

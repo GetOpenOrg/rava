@@ -278,6 +278,7 @@ impl<'a> Engine<'a> {
             cuts: Default::default(),
             cut_nodes: Default::default(),
             probes: None,
+            lprof: None,
             spret: Default::default(),
             rmwrap: Default::default(),
             fenum_pending: BTreeSet::new(),

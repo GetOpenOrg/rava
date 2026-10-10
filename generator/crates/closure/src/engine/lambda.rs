@@ -43,6 +43,7 @@ impl<'a> Engine<'a> {
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), live: true });
+            self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
         }
@@ -51,6 +52,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), live: false });
+        self.lprof_call(lid, m, off, true);
         self.lambda_step(m, off, None);
         let tmp = self.lcalls.pop();
         debug_assert!(tmp.is_some_and(|c| !c.live));
@@ -63,7 +65,8 @@ impl<'a> Engine<'a> {
         if !c.live {
             return;
         }
-        let (m, off) = (c.m, c.off);
+        let (m, off, lid) = (c.m, c.off, c.call.0);
+        self.lprof_call(lid, m, off, false);
         let site = self.cur_site.replace((m, off));
         let vals = self.call_vals.take();
         self.lambda_step(m, off, Some(id));
@@ -153,6 +156,7 @@ impl<'a> Engine<'a> {
                 let s = TypeSet { classes: delta.classes, open: cur.open };
                 let recv = self.receivers(m, &s, owner);
                 self.cur_call = reader;
+                self.lprof_recv(lid, &recv);
                 for r in recv {
                     self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
                 }

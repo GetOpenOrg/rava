@@ -119,6 +119,7 @@ impl<'a> Engine<'a> {
                 let hub = &self.hubs[h as usize];
                 let (site, lambdas, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.ret);
                 for &r in lambdas.iter() {
+                    self.lprof_replay(h, false);
                     self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
                 }
             }
@@ -167,6 +168,7 @@ impl<'a> Engine<'a> {
             if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                 continue;
             }
+            self.lprof_replay(h, true);
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
         }
         for (t, rs) in special {
@@ -300,6 +302,7 @@ impl<'a> Engine<'a> {
                 if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                     continue;
                 }
+                self.lprof_replay(h, true);
                 self.call_vals = l.cv.clone();
                 self.dispatch_one(m, off, r, &site, &l.a, ret, l.res, NOCTX);
             }
