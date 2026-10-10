@@ -9,23 +9,77 @@
 //!   `crate::<包>::<名>` 路径（含 `use` 花括号组与 `X__VTable` 等派生名）。
 //! - **规划**：Tarjan 求 SCC，凝聚图按「被依赖者在前」做 Kahn 拓扑序（同层按最小键名优先，确定性）；
 //!   含 INFRA 的 SCC 是唯一汇点，为底段（不可再切，原样保留）；其余分量按拓扑序连续切段，
-//!   每段源码体量（各类权重之和）≤ 上限，段数取最少，在最少段数下再使最大段最小（均衡），
 //!   第 j 段只依赖 < j 的段，各段经镜像链（段 j 只依赖段 j−1）对外呈现完整视图。
-//! - 整个声明层（含手写基础量）体量不超过上限、或底段之外无类时不分段（与现状布局一致）。
+//! - **段预算（上游感知）**：上段 rustc 峰值同时取决于本段体量与上游链（底段 + 前面各段）体量，
+//!   见 [`UPPER_SEGMENT_PEAK`]。逐段装入分量，直到再装一个会使预测峰值超过限值；上游越大，段越小。
+//! - 整个声明层（含手写基础量）体量不超过 [`DECL_SEGMENT_BYTES`]、或底段之外无类时不分段（与现状布局一致）。
 //!
 //! 分段只依赖类集合、引用关系与各类权重（权重 = 落盘源码字节的保守上界，由调用方给出；
-//! 上限为常量，不随机器内存变化），与 hash 种子、遍历顺序无关。
+//! 预算为常量，不随机器内存变化），与 hash 种子、遍历顺序无关。
 
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::cmp::Reverse;
 
-/// 每个声明段 crate 的源码体量上限（字节，按 10^6 计 MB 的 5.5 MB）。
+/// 不分段时整个声明层 crate（底段形态：含手写 overlay）的源码体量上限（字节，按 10^6 计 MB 的 5.5 MB）。
+/// 只用于「是否分段」判定；分段后上段按 [`UPPER_SEGMENT_PEAK`] 逐段求预算。
 ///
 /// 标定来源：S7 计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §9.8.3 第 1 条与
 /// §9.8.1「标定修正（10-11，s7d-prof1-f0b2c9de）」——现形态声明 crate 峰值对源码体量分段线性插值，
 /// 1.3 GB 约对应 5.9 MB 源码（实测点 7.39 MB → 1.46 GB），扣插值误差留约 7% 余量取 5.5 MB。
 /// 峰值由展开后 AST/HIR/MIR 规模决定（rustc 拆分计划 §7.8），按体量而非类数切分
 pub const DECL_SEGMENT_BYTES: usize = 5_500_000;
+
+/// 1 MB = 10^6 字节（源码体量与峰值同用此单位，与标定口径一致）
+const MB: i64 = 1_000_000;
+
+/// 声明段 crate 的 rustc 峰值目标（MB）
+pub const DECL_PEAK_TARGET_MB: i64 = 1300;
+
+/// 拟合残差的保守余量（MB）：标定点最大残差 32 MB，上游超出标定区间（≤ 22 MB）时外推，取其 2 倍
+pub const DECL_PEAK_MARGIN_MB: i64 = 64;
+
+/// 上段 rustc 峰值的线性模型：峰值 = `intercept` + `per_own` × 本段字节 + `per_upstream` × 上游字节，
+/// 峰值单位为字节（MB × 10^6）；`limit` 为峰值上限
+#[derive(Debug, Clone, Copy)]
+pub struct PeakModel {
+    pub intercept: i64,
+    pub per_own: i64,
+    pub per_upstream: i64,
+    pub limit: i64,
+}
+
+impl PeakModel {
+    /// 本段 `own` 字节、上游 `upstream` 字节时预测峰值不超过限值
+    pub fn fits(&self, own: usize, upstream: usize) -> bool {
+        let peak = self.intercept as i128 + self.per_own as i128 * own as i128 + self.per_upstream as i128 * upstream as i128;
+        peak <= self.limit as i128
+    }
+}
+
+/// 上段峰值模型：峰值 MB ≈ −9 + 240 × 本段 MB + 13 × 上游 MB，限值 = 1300 − 64 MB。
+///
+/// 标定来源：S7 计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §9.8.4（dev，debug，
+/// 作业 d8mb-prof2 / prof3 / probe-6086a4e6）——8 个上段实测点（本段 2.16–5.52 MB、上游 4.6–21.8 MB，
+/// 峰值取本 crate rustc time-passes 最大 RSS）手工拟合，残差 ≤ 32 MB。上游 = 底段与前面各段的源码字节：
+/// 镜像链里上游元数据在展开、解析阶段按需载入，故上游越大本段预算越小。
+/// `per_own` > `per_upstream` 保证逐段装满即段数最少（见 [`cut`]）
+pub const UPPER_SEGMENT_PEAK: PeakModel = PeakModel {
+    intercept: -9 * MB,
+    per_own: 240,
+    per_upstream: 13,
+    limit: (DECL_PEAK_TARGET_MB - DECL_PEAK_MARGIN_MB) * MB,
+};
+
+/// 分段预算
+#[derive(Debug, Clone, Copy)]
+pub struct SegmentBudget {
+    /// 不分段时整个声明层（含手写基础量与固定行）的体量上限
+    pub single: usize,
+    /// 每个 crate 在类之外的固定行体量（lib.rs 属性、`pub use` 等）
+    pub fixed: usize,
+    /// 上段峰值模型
+    pub model: PeakModel,
+}
 
 /// 声明层的一个类节点
 #[derive(Debug, Clone)]
@@ -100,9 +154,9 @@ impl DeclGraph {
 
 /// 分段结果：`segments[0]` 为底段（含全部钉底类），段内按键名排序；不分段时只有一段。
 ///
-/// `weights[v]` 为类 v 的体量权重；`base` 为底段 crate 在类之外的固定体量（手写文件等），只参与
-/// 「是否分段」判定；`cap` 为每段体量上限
-pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, cap: usize) -> Vec<Vec<usize>> {
+/// `weights[v]` 为类 v 的体量权重；`base` 为底段 crate 在类之外的体量（手写文件等），参与「是否分段」
+/// 判定并计入上段的上游体量
+pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, budget: &SegmentBudget) -> Vec<Vec<usize>> {
     let n = g.keys.len();
     let all = || {
         let mut v: Vec<usize> = (0..n).collect();
@@ -111,7 +165,7 @@ pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, cap: usize) -> Vec<Ve
     };
     let weight = |v: usize| weights.get(v).copied().unwrap_or(0);
     let total: usize = (0..n).map(weight).sum();
-    if base.saturating_add(total) <= cap {
+    if base.saturating_add(total).saturating_add(budget.fixed) <= budget.single {
         return vec![all()];
     }
     let (comp, ncomp) = tarjan(&g.edges);
@@ -126,7 +180,8 @@ pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, cap: usize) -> Vec<Ve
         return vec![all()];
     }
     let sizes: Vec<usize> = rest.iter().map(|&c| members[c].iter().map(|&v| weight(v)).sum()).collect();
-    let bins = cut(&sizes, cap);
+    let bottom_bytes = base + budget.fixed + members[bottom].iter().map(|&v| weight(v)).sum::<usize>();
+    let bins = cut(&sizes, bottom_bytes, budget);
     let k = bins.last().map_or(0, |b| b + 1);
     let mut segs: Vec<Vec<usize>> = vec![Vec::new(); k + 1];
     segs[0] = members[bottom].clone();
@@ -139,38 +194,25 @@ pub fn plan(g: &DeclGraph, weights: &[usize], base: usize, cap: usize) -> Vec<Ve
     segs
 }
 
-/// 贪心连续装箱：当前箱非空且装入后超过 `bound` 即开新箱（单项超过 `bound` 时独占一箱）
-fn greedy(sizes: &[usize], bound: usize) -> Vec<usize> {
-    let (mut bin, mut load) = (0usize, 0usize);
+/// 连续切段：逐段贪心装入分量，当前段非空且再装一个会使预测峰值（本段体量含固定行、上游 = 底段
+/// `bottom` + 前面各段）超限时开新段；单个分量本身超限时独占一段。段号单调不减、无空段。
+///
+/// 段数最少：设前缀和 S，第 j 段从前缀 p 起，可达前缀 r 满足 per_own·(S(r) − S(p)) + per_upstream·S(p) ≤ 常数，
+/// 右端随 S(p) 增（per_own > per_upstream），故每段装满使后续各段的可达位置都不落后于任何其他切法
+fn cut(sizes: &[usize], bottom: usize, budget: &SegmentBudget) -> Vec<usize> {
+    let (mut bin, mut up, mut own, mut open) = (0usize, bottom, budget.fixed, false);
     let mut out = Vec::with_capacity(sizes.len());
-    for (i, &s) in sizes.iter().enumerate() {
-        if i > 0 && load.saturating_add(s) > bound {
+    for &s in sizes {
+        if open && !budget.model.fits(own.saturating_add(s), up) {
             bin += 1;
-            load = 0;
+            up = up.saturating_add(own);
+            own = budget.fixed;
         }
-        load += s;
+        own = own.saturating_add(s);
+        open = true;
         out.push(bin);
     }
     out
-}
-
-/// 连续切段：段数取上限 `cap` 下的最少段数 k（贪心即最优），再二分求 k 段内最小的段体量上界并按其贪心切，
-/// 使各段均衡。每段 ≤ `cap`（单个分量本身超过 `cap` 时独占一段）；段号单调不减、无空段
-fn cut(sizes: &[usize], cap: usize) -> Vec<usize> {
-    let cap = cap.max(1);
-    let count = |b: &[usize]| b.last().map_or(0, |x| x + 1);
-    let k = count(&greedy(sizes, cap));
-    let total: usize = sizes.iter().sum();
-    let (mut lo, mut hi) = (total.div_ceil(k.max(1)).min(cap), cap);
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if count(&greedy(sizes, mid)) <= k {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    greedy(sizes, hi)
 }
 
 /// 迭代式 Tarjan：返回 (各节点分量号, 分量数)
@@ -454,9 +496,40 @@ mod tests {
         DeclNode { key, pkg: pkg.into(), ident: ident.into(), text }
     }
 
+    /// 固定上限 `cap` 的预算（峰值只看本段体量、无固定行）
+    fn flat(cap: usize) -> SegmentBudget {
+        SegmentBudget {
+            single: cap,
+            fixed: 0,
+            model: PeakModel { intercept: 0, per_own: 1, per_upstream: 0, limit: cap as i64 },
+        }
+    }
+
     /// 各类权重均为 1（按类数切）
     fn plan1(g: &DeclGraph, cap: usize) -> Vec<Vec<usize>> {
-        plan(g, &vec![1; g.keys.len()], 0, cap)
+        plan(g, &vec![1; g.keys.len()], 0, &flat(cap))
+    }
+
+    /// 实际预算（固定行 1 KB）
+    fn real() -> SegmentBudget {
+        SegmentBudget { single: DECL_SEGMENT_BYTES, fixed: 1024, model: UPPER_SEGMENT_PEAK }
+    }
+
+    /// 各段（本段体量, 上游体量）
+    fn loads(sizes: &[usize], bins: &[usize], bottom: usize, fixed: usize) -> Vec<(usize, usize)> {
+        let k = bins.last().map_or(0, |b| b + 1);
+        let mut own = vec![fixed; k];
+        for (s, b) in sizes.iter().zip(bins) {
+            own[*b] += s;
+        }
+        let mut up = bottom;
+        own.into_iter()
+            .map(|o| {
+                let r = (o, up);
+                up += o;
+                r
+            })
+            .collect()
     }
 
     fn keys(g: &DeclGraph, segs: &[Vec<usize>]) -> Vec<Vec<String>> {
@@ -567,31 +640,53 @@ mod tests {
     }
 
     #[test]
-    fn cut_balances_and_never_skips() {
-        assert_eq!(cut(&[3, 3, 3, 3, 3, 3, 3, 4], 10), vec![0, 0, 0, 1, 1, 1, 2, 2]);
-        assert_eq!(cut(&[1, 30, 1], 10), vec![0, 1, 2]);
-        assert_eq!(cut(&[4], 10), vec![0]);
-        // 中点均衡会把 6 + 6 落进同一段（12 > 10）；硬上限下须三段
-        assert_eq!(cut(&[6, 6, 6], 10), vec![0, 1, 2]);
-        assert_eq!(cut(&[6, 4, 6, 4], 10), vec![0, 0, 1, 1]);
-        // 最少段数下取均衡：贪心按 10 切为 10|2，均衡后为 6|6
-        assert_eq!(cut(&[2, 2, 2, 2, 2, 2], 10), vec![0, 0, 0, 1, 1, 1]);
+    fn cut_fills_each_segment_and_never_skips() {
+        assert_eq!(cut(&[1, 30, 1], 0, &flat(10)), vec![0, 1, 2]);
+        assert_eq!(cut(&[4], 0, &flat(10)), vec![0]);
+        assert_eq!(cut(&[6, 6, 6], 0, &flat(10)), vec![0, 1, 2]);
+        assert_eq!(cut(&[6, 4, 6, 4], 0, &flat(10)), vec![0, 0, 1, 1]);
+        assert_eq!(cut(&[2, 2, 2, 2, 2, 2], 0, &flat(10)), vec![0, 0, 0, 0, 0, 1]);
     }
 
     #[test]
-    fn cut_never_exceeds_cap_unless_single_oversized() {
-        let sizes: Vec<usize> = (0..200).map(|i| (i * 7919 % 97) + 1).collect();
-        for cap in [97, 100, 150, 333, 1000] {
-            let bins = cut(&sizes, cap);
-            let k = bins.last().unwrap() + 1;
-            let mut load = vec![0usize; k];
-            for (s, b) in sizes.iter().zip(&bins) {
-                load[*b] += s;
-            }
-            assert!(load.iter().all(|&l| l <= cap), "cap {cap}: {load:?}");
+    fn budget_shrinks_as_upstream_grows() {
+        // 峰值 = 2 × 本段 + 上游 ≤ 20，底段 4：段 1 本段 ≤ 8（3+3），段 2 上游 10 → ≤ 5（3），
+        // 段 3 上游 13 → ≤ 3.5（3），段 4 上游 16 → ≤ 2：单个分量超限独占
+        let b = SegmentBudget { single: 0, fixed: 0, model: PeakModel { intercept: 0, per_own: 2, per_upstream: 1, limit: 20 } };
+        assert_eq!(cut(&[3, 3, 3, 3, 3, 3], 4, &b), vec![0, 0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn cut_respects_model_unless_single_oversized() {
+        let b = real();
+        let sizes: Vec<usize> = (0..2000).map(|i| (i * 7919 % 9973) * 3 + 500).collect();
+        for bottom in [0usize, 4_620_000, 21_820_000, 40_000_000] {
+            let bins = cut(&sizes, bottom, &b);
             assert!(bins.windows(2).all(|w| w[1] == w[0] || w[1] == w[0] + 1));
-            assert_eq!(k, greedy(&sizes, cap).last().unwrap() + 1, "段数最少");
+            let counts = bins.iter().fold(vec![0usize; bins.last().unwrap() + 1], |mut c, &x| {
+                c[x] += 1;
+                c
+            });
+            for (j, (own, up)) in loads(&sizes, &bins, bottom, b.fixed).into_iter().enumerate() {
+                assert!(b.model.fits(own, up) || counts[j] == 1, "bottom {bottom} seg {j}: {own} / {up}");
+            }
         }
+    }
+
+    #[test]
+    fn probe_pressure_is_split_under_real_budget() {
+        // §9.8.4 探针：DeepCopy 上段 718 类共 5.52 MB、上游 21.8 MB 合成一段实测 1597 MB；现预算须切开且每段达标
+        let sizes = vec![5_520_000 / 718; 718];
+        let b = real();
+        let bins = cut(&sizes, 21_820_000, &b);
+        let segs = loads(&sizes, &bins, 21_820_000, b.fixed);
+        assert!(segs.len() >= 2);
+        for (own, up) in segs {
+            let peak_mb = (-9 * MB + 240 * own as i64 + 13 * up as i64) / MB;
+            assert!(peak_mb <= DECL_PEAK_TARGET_MB - DECL_PEAK_MARGIN_MB, "{own} / {up}: {peak_mb}");
+        }
+        // HelloWorld 量级（底段 4.62 MB、上段 2.17 MB）仍为一段
+        assert_eq!(cut(&vec![2_170_000 / 237; 237], 4_620_000, &b).last(), Some(&0));
     }
 
     #[test]
@@ -599,10 +694,10 @@ mod tests {
         // 3 类、无钉底：体量 4 + 4 + 4 > 10 须切；每段体量 ≤ 10
         let nodes = vec![node("a/A", "a", "A", ""), node("a/B", "a", "B", ""), node("a/C", "a", "C", "")];
         let g = DeclGraph::build(&nodes, &[], &[]);
-        let segs = plan(&g, &[4, 4, 4], 0, 10);
+        let segs = plan(&g, &[4, 4, 4], 0, &flat(10));
         assert_eq!(keys(&g, &segs), vec![vec![], vec!["a/A", "a/B"], vec!["a/C"]]);
         // 总体量 ≤ 上限不切；手写基础量计入判定
-        assert_eq!(plan(&g, &[3, 3, 3], 0, 10).len(), 1);
-        assert_eq!(keys(&g, &plan(&g, &[3, 3, 3], 2, 10)), vec![vec![], vec!["a/A", "a/B", "a/C"]]);
+        assert_eq!(plan(&g, &[3, 3, 3], 0, &flat(10)).len(), 1);
+        assert_eq!(keys(&g, &plan(&g, &[3, 3, 3], 2, &flat(10))), vec![vec![], vec!["a/A", "a/B", "a/C"]]);
     }
 }

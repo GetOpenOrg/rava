@@ -4,7 +4,7 @@ import os
 import re
 from collections import defaultdict
 
-from decl_scc_parse import (CAP_BYTES, SEGMENT_FIXED_BYTES, SEGMENT_SUFFIX_BYTES, IDENT, KINDS, Ctx, crate_paths, hw_idents, kind_of,  # noqa: F401
+from decl_scc_parse import (CAP_BYTES, PEAK_INTERCEPT, PEAK_PER_OWN, PEAK_PER_UPSTREAM, PEAK_LIMIT, SEGMENT_FIXED_BYTES, SEGMENT_SUFFIX_BYTES, IDENT, KINDS, Ctx, crate_paths, hw_idents, kind_of,  # noqa: F401
                             stem, string_literals)
 
 
@@ -274,39 +274,31 @@ def mod_overhead(rel, prev_len):
     return class_lines + pkg_head + ancestors
 
 
-def greedy(sizes, bound):
-    out, b, load = [], 0, 0
-    for i, s in enumerate(sizes):
-        if i > 0 and load + s > bound:
-            b, load = b + 1, 0
-        load += s
+def fits(own, up):
+    """D8 `PeakModel::fits`：预测峰值不超过限值"""
+    return PEAK_INTERCEPT + PEAK_PER_OWN * own + PEAK_PER_UPSTREAM * up <= PEAK_LIMIT
+
+
+def cut(sizes, bottom):
+    """D8 `cut`：逐段装满（上游感知预算），单个超限分量独占一段"""
+    out, b, up, own, open_ = [], 0, bottom, SEGMENT_FIXED_BYTES, False
+    for s in sizes:
+        if open_ and not fits(own + s, up):
+            b, up, own = b + 1, up + own, SEGMENT_FIXED_BYTES
+        own += s
+        open_ = True
         out.append(b)
     return out
 
 
-def cut(sizes, cap):
-    """D8 `cut`：最少段数 + 均衡，每段 ≤ cap（单个超限分量独占一段）"""
-    cap = max(cap, 1)
-    k = greedy(sizes, cap)[-1] + 1 if sizes else 0
-    lo, hi = min(-(-sum(sizes) // max(k, 1)), cap), cap
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if greedy(sizes, mid)[-1] + 1 <= k:
-            hi = mid
-        else:
-            lo = mid + 1
-    return greedy(sizes, hi)
-
-
 def plan(g, adj, infra, root="java_base"):
-    """D8 `plan`：返回段列表（段 0 为底段，元素为类下标）。按体量切：权重 = 类文件字节 + mod 行上界，
+    """D8 `plan`：返回段列表（段 0 为底段，元素为类下标）。按上游感知预算切：权重 = 类文件字节 + mod 行上界，
     底段基础量 = 手写真源总字节"""
     import heapq
     n = g.n
     prev_len = len(root + "_decl") + SEGMENT_SUFFIX_BYTES
     weight = [g.size[v] + mod_overhead(g.nodes[v][3], prev_len) for v in range(n)]
-    cap = CAP_BYTES - SEGMENT_FIXED_BYTES
-    if g.hw_bytes_total + sum(weight) <= cap:
+    if g.hw_bytes_total + sum(weight) + SEGMENT_FIXED_BYTES <= CAP_BYTES:
         return [sorted(range(n))]
     comp, nc = tarjan(adj)
     members = defaultdict(list)
@@ -339,7 +331,8 @@ def plan(g, adj, infra, root="java_base"):
     if not rest:
         return [sorted(range(n))]
     sizes = [sum(weight[v] for v in members[c]) for c in rest]
-    bins = cut(sizes, cap)
+    bottom_bytes = g.hw_bytes_total + SEGMENT_FIXED_BYTES + sum(weight[v] for v in members[bottom])
+    bins = cut(sizes, bottom_bytes)
     segs = [list(members[bottom])] + [[] for _ in range(max(bins) + 1)]
     for c, b in zip(rest, bins):
         segs[b + 1].extend(members[c])

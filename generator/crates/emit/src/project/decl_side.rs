@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use ty::ident::is_rust_keyword;
 
-use super::decl_segments::{plan, DeclGraph, DeclNode, DECL_SEGMENT_BYTES};
+use super::decl_segments::{plan, DeclGraph, DeclNode, SegmentBudget, DECL_SEGMENT_BYTES, UPPER_SEGMENT_PEAK};
 use super::fs::{walk, Writer};
 use super::module_side::{lib_manifest, path_dep};
 use crate::ctx::EmitCtx;
@@ -96,7 +96,8 @@ fn companion_hosts(rel: &Path) -> Vec<PathBuf> {
 
 /// 规划分段并把上层段类的落盘路径改到 `<out>/<段>/src/…`（类文本不变）。须在拆层之后、落盘之前调用
 pub fn segment(ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path) -> DeclSegs {
-    segment_with_cap(ctx, ems, decl_src, out_dir, DECL_SEGMENT_BYTES)
+    let budget = SegmentBudget { single: DECL_SEGMENT_BYTES, fixed: SEGMENT_FIXED_BYTES, model: UPPER_SEGMENT_PEAK };
+    segment_with_budget(ctx, ems, decl_src, out_dir, &budget)
 }
 
 /// 类落在上层段时为其写出的 mod 行体量上界：所在包 mod.rs 的 `pub mod x; pub use x::*;`，外加按「本类独占该包」
@@ -113,8 +114,8 @@ fn mod_overhead(rel: &Path, prev_len: usize) -> usize {
     class_lines + pkg_head + ancestors
 }
 
-fn segment_with_cap(
-    ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path, cap: usize,
+fn segment_with_budget(
+    ctx: &EmitCtx<'_>, ems: &mut IndexMap<String, ClassEmission>, decl_src: &Path, out_dir: &Path, budget: &SegmentBudget,
 ) -> DeclSegs {
     let crates = ctx.crates();
     let decl = crates.decl();
@@ -131,11 +132,10 @@ fn segment_with_cap(
         .iter()
         .map(|(i, rel)| if ems[*i].handwritten { 0 } else { ems[*i].text.len() + mod_overhead(rel, prev_len) })
         .collect();
-    let cap = cap.saturating_sub(SEGMENT_FIXED_BYTES);
     let hw = handwritten_files(&ctx.runtime_src());
-    // 不分段时底段 crate 还含全部手写 overlay（保守：手写真源全部计入）
+    // 底段 crate 含全部手写 overlay（保守：手写真源全部计入），参与不分段判定并计入上段的上游体量
     let base: usize = hw.iter().map(|(_, t)| t.len()).sum();
-    if base + weights.iter().sum::<usize>() <= cap {
+    if base + weights.iter().sum::<usize>() + budget.fixed <= budget.single {
         return DeclSegs::single(&decl);
     }
     let hosts: BTreeSet<PathBuf> = hw.iter().flat_map(|(rel, _)| companion_hosts(rel)).collect();
@@ -159,7 +159,7 @@ fn segment_with_cap(
         .collect();
     let texts: Vec<&str> = hw.iter().map(|(_, t)| t.as_str()).collect();
     let g = DeclGraph::build(&nodes, &texts, &pinned);
-    let segs = plan(&g, &weights, base, cap);
+    let segs = plan(&g, &weights, base, budget);
     drop(nodes);
     if segs.len() <= 1 {
         return DeclSegs::single(&decl);
