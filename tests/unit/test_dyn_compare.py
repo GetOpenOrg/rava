@@ -127,6 +127,17 @@ class AttributeTest(unittest.TestCase):
                                      ('java/lang/invoke/MethodHandleNatives', 'linkCallSite',
                                       '()V', 0), MAIN)), 'vm-upcall')
 
+    def test_vm_upcall_method(self):
+        # 方法级条目：JVM 解析符号引用对类加载器的上调（jar 类路径加载）归 vm-upcall；同类其他方法仍计漏覆盖
+        load = 'java/lang/ClassLoader.loadClass:(Ljava/lang/String;)Ljava/lang/Class;'
+        r = rules(vm_upcall_methods={load})
+        loader = ('java/lang/ClassLoader', 'loadClass', '(Ljava/lang/String;)Ljava/lang/Class;', 3)
+        c, f = dc.attribute(ev(('java/util/zip/ZipFile', '<init>', '()V', 0), loader, MAIN), self.methods, r)
+        self.assertEqual((c, f), ('vm-upcall', load + '@3'))
+        other = ('java/lang/ClassLoader', 'getParent', '()Ljava/lang/ClassLoader;', 0)
+        c, _ = dc.attribute(ev(('java/util/zip/ZipFile', '<init>', '()V', 0), other, MAIN), self.methods, r)
+        self.assertEqual(c, dc.MISS)
+
     def test_vm_entry(self):
         self.assertEqual(self.cat(ev(('java/lang/Thread2', 'exit', '()V', 0))), 'vm-entry')
         self.assertEqual(self.cat(ev()), 'vm-entry')

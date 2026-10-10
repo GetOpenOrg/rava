@@ -212,13 +212,28 @@ match = [["javac 编译失败"]]
 tests = ["TestJunitAssertFamily", "TestJunitAssertThrowsAssume", "TestJunitBeforeClassState", "TestJunitFailureMessages",
          "TestJunitHamcrestBridge", "TestJunitIgnoreAndExpected", "TestJunitLifecycleOrder", "TestJunitNewInstancePerTest",
          "TestJunitRunnerResult", "TestJunitTimeoutFast"]
-cause = "run_tests 无依赖包概念，junit4 + hamcrest 不在 javac classpath；非生成器问题"
+cause = "run_tests 无依赖包概念，junit4 + hamcrest 不在 javac classpath；非生成器问题。J3 形态接线修复：用例目录 form.toml 声明依赖锁与锁条目名（scripts/e2e_form.py），rava build 追加 --deps/--cp，期望生成与动态对照的 javac / java 带同一类路径；锁或 jar 缺失时批次内跨进程互斥取包一次，仍缺记 deps-fetch-fail。junit-d22152f8（dev）10 例全部完成转译、编译与运行，8 例逐字通过，余 2 例见 junit-identity-hash-expected（已修）"
 introduced = ""
-fixed = []
-status = "open"
-owner = "J3 / W0-3 形态接线"
-diagnose = "看是否为 javac 阶段失败、缺的符号是否来自依赖包"
-doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md"
+fixed = ["5f312221", "168d0f23"]
+status = "pending"
+owner = "junit-j3j4（待合批放行）"
+diagnose = "看是否为 javac 阶段失败、缺的符号是否来自依赖包；用例目录有无 form.toml；日志 [form] 行是否报锁 / jar 缺失（deps-fetch-fail）"
+doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md §七 第 14 条"
+since = "2026-10-10"
+
+[[pattern]]
+id = "junit-identity-hash-expected"
+stage = "output"
+symptom = "63_junit 用例只差一行：assertSame 失败消息里 java.lang.Object@<十六进制> 与期望不同（每次运行值都变）"
+match = [["expected same:<java.lang.Object@"]]
+tests = ["TestJunitAssertFamily", "TestJunitFailureMessages"]
+cause = "测试打印两个 new Object() 的身份哈希（JUnit assertSame 失败消息含 String.valueOf(obj)）。HotSpot 身份哈希取线程内 xorshift 序列，同一 JVM 逐次确定，故期望双跑确定性闸门通过；原生二进制按地址取哈希，逐次不同。无法也不应复现 HotSpot 哈希序列（取决于 JVM 内部此前的哈希请求次数）。违反 e2e 方法论 §五「不打印 identityHash」，属测试确定性缺陷，非生成器问题。修法（10-10 用户批准改测试源：测试本身不合规，不属「合法测试不改」）：被比较对象改为定值 toString、按身份比较的 Token 类型，断言语义不变；期望经 JDK 21 重生成并双跑一致"
+introduced = "d4efc8d6（63_junit expected 补齐）"
+fixed = ["junit-j3j4 本条目所在提交"]
+status = "fixed"
+owner = "junit-j3j4"
+diagnose = "diff 只有 Object@ 哈希行时即本条；对照 docs/reference/e2e-coverage-methodology.md §五"
+doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md §七 第 15 条"
 since = "2026-10-10"
 
 [[pattern]]
