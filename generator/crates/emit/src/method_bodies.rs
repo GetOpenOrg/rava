@@ -172,7 +172,7 @@ impl MethodBodyEmitter for MethodBodies {
         let (name, desc) = (&req.method.name, &req.method.desc);
         let key = format!("{}.{name}:{desc}", req.class.name());
         let owner = ctx
-            .class(req.declaring_class)
+            .code_class(req.declaring_class)
             .ok_or_else(|| BodyError::Fatal(format!("{key}：出处类 {} 不在注册表", req.declaring_class)))?;
         let index = owner.methods().iter().position(|m| &m.name == name && &m.desc == desc);
         let code = index.and_then(|i| ctx.input.code(req.declaring_class, &owner.methods()[i]));

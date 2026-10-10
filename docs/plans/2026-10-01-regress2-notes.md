@@ -5,7 +5,7 @@
 > 状态（2026-10-02）：§1–§9 ✅ 6c7eb831；§10.1a 栈帧来源统一 ✅ 已合入集成分支 be1b97be（frames-unify bf91f075）。
 > 遗留（2026-10-09 复核，§10.1b，作业 r2-wait-a79e2b60）：过渡类手写 `<init>` 不成帧 ✅ 已随过渡手写删除消失；
 > Object.wait 帧 ⏳ 仍在——根因不是帧登记，而是根类 `wait()` / `wait(J)` / `wait(JI)` 有字节码却整体手写，
-> 终态为根类非 native 方法按字节码翻译（待用户定，见 §10.1b）。
+> 终态为根类非 native 方法按字节码翻译（用户已定，object-bytecode 分支实施中，见 §10.1b-实施；e2e 复验未完）。
 
 ## 1. TestForNameInit —— 已修
 
@@ -208,6 +208,46 @@ TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFra
      「非导出包类不可由用户扩展」，非虚拟线程程序的闭包应不增长（验收：HelloWorld / DeepCopy 类集不变大）；
   4. 根类非 native 手写方法计入 raw-audit（现不计数，是隐形手写），终态 0。
   量级：closure / instr / emit / runtime 四处，非小修；涉及根类模型，按授权范围先报用户再实施。
+
+#### 10.1b-实施（object-bytecode，2026-10-09，用户已定终态）
+
+与上面草案的差异：翻译体不做成泛型 `_base<T>`，而是**以根类句柄为接收者的自由函数**
+`Object__<fn>_body(this: &Object, ..)`——根类字节码里的 `this` 是 Object，方法体生成器对根类接收者走 bare-Object
+固有方法路径（`this.getClass()?` / `this.hashCode()?` / `this.wait0(..)?`），与生成类的 `let this = self;` 同型。
+各对象类型需要能给出「自身的 Object 句柄」，为此 `ObjectVTable` 加 `__object()`（缺省 None）。
+
+- **闭包**（`closure/src/engine/facts/kinds.rs`）：根类方法按自身字节码分类——native → 手写，无码 → 抽象，其余 → 字节码。
+- **输入 / 上下文**：`EmitInput.root` 携带根类 `ClassInfo`（根类仍不入注册表）；`EmitCtx::code_class` 在注册表未命中时回落根类，
+  方法体生成器（`method_bodies.rs`）与行表的行号查询都用它。
+- **发射**（新模块 `emit/src/project/root_bodies.rs`）：根类全部非 native 有码实例方法（构造器 / 类初始化除外）各生成一个
+  `Object__<fn>_body`；在档案调用链上的按字节码翻译，链外的生成同签名 `panic!("stub: ..")` 存根（运行时契约总要链接到
+  这组符号）。命名与调用侧同源（`root_bodies::rust_name`：根类重载取描述符后缀名，前提是该名在手写 API 名面）。
+  落盘与生成类拆层同构：方法体放首个实现 crate 的 `body/java/lang/object_body.rs`（`#[export_name]`），声明层同路径文件
+  放外部声明块（`#[link_name]`，符号由 `rava_macros_core::plan::free_fn_link` 求出，与宏拆层同一规则）——方法体引用的类
+  （`StringBuilder` 等）可能落在声明层上层段，不能直接放声明层底段。无实现 crate 时整体落声明层。生成期事实在第二阶段前并入。
+- **行表**：方法体文件头 `// [root_bodies] <类> <源文件>` 让 `line_tables::scan` 进入方法区模式（方法属性为注释形态
+  `// #[java_method(..)]`，第 0 列 `}` 结束方法区间）；`root_line_registration` 只登记根类 native 方法（`wait0` 记 -2）。
+- **运行时**：`ObjectVTable` 的 `equals` / `__to_string` / `wait` 族缺省体与 `Object__{finalize,equals,toString}_base`
+  转交翻译体（`__object()` 为 None 的非 Java 类载体——基本类型盒、`JvmRef`、lambda 载体、null 哨兵——保留载体语义）；
+  `java_class!` 宏的存储 impl 与数组对象应答 `__object()`（`Object::__from_storage` 引用计数加一取回同一对象）；
+  `object_impl.rs` 去掉 equals（含 String 内容比较捷径）/ toString / wait 族的手写近似，固有方法只做 null 检查与转交，
+  新增 native `wait0`。
+- **审计**：根类非 native 方法若未翻译（构造器体不是单条 return 时）计入 `non_native_overrides`；按构造当前为 0。
+- **验证记录**（JDK 21 参考构建 jdk-21.0.11+10）：
+  - ob-b-9873a830（jp2）：单测 `cargo test -p emit -p closure -p input` 全过；e2e 全挂 `E0432 unresolved import Blocker`——
+    声明层底段看不见上层段类，373a077b 改为声明层文件只用预导入、方法体导入只进实现层。
+  - ob-c-db41935c（jp2，合入 main c249cdec 后）：闭包 HelloWorld classes 1870（嵌套口径）/ 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（b74d2e7e 基线 3059 / 3304，均降）；14 例 e2e 同一编译错：翻译后 `equals` 体
+    `this == obj` 为 `&Object == Object` 无实现。d716bdc3 在 Object 基础设施（`object_ext.rs`）补引用形态同一性比较。
+    作业 6600s 超时，c249cdec 基线闭包未测出。
+  - ob-d-d716bdc3（us1）：闭包与 c249cdec 基线**完全相同**——HelloWorld classes 1870 / 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（两侧逐项一致；JDK 21 `wait(J)` 的 Blocker 链未带入新类，无需收窄）。
+    6 例 e2e（TestObjectWaitFrames TestEqualsHashCode TestWaitNotify TestToStringThrows TestObjectNativeFrames
+    TestVirtualThread）复验在作业 6600s 上限内未跑完（run_tests 输出在其结束后才汇总，日志无 e2e 结果）——**e2e 未验证**。
+    续作：以 `--spot` 抽查（逐例落结果）复验 f30e17a5 起分支头，勿再与闭包对比串在一个 `--job` 里。
+  - 恢复入口：读上述日志；若仍有编译错，查 `build/jdk21/<test>/java_base_body_1/src/body/java/lang/object_body.rs`
+    对应行，修生成器（`emit/src/project/root_bodies.rs::free_fn` 接收者改写）或 Object 基础设施；全通过后补跑
+    TestNativeFrameTrace TestStackWalkerLines HelloWorld ObjectMethods TestContinuationPinned 抽查，再合入。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 
