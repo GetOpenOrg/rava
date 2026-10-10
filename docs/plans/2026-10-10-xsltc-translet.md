@@ -307,15 +307,24 @@ S2 的实施中，以下情况视为「跑不通」，应停下并回报，按�
 已知失败 `param_string_constants_fold_switch` 本轮通过；新增失败两条：
 
 1. `classfile::sha256::tests::known_vectors`：单测第三条向量的期望值抄错（实现无误，前两条向量通过，本机 hashlib 复核），1cfd5276 已改。
-2. **`closure_cli::reflect_new_array_element_precision` 失败（未解决）**：该例先断言 TestModuleLayerDefine 在哈希种子 0 / 1 / 2 下闭包集合一致，
+2. **`closure_cli::reflect_new_array_element_precision` 失败（已修，7646c9ba）**：该例先断言 TestModuleLayerDefine 在哈希种子 0 / 1 / 2 下闭包集合一致。
    本分支种子 0 比种子 1 多 10 类（SunJCE、SASL 提供者、`ApplicationShutdownHooks`、`UndeclaredThrowableException` 等）。
-   集成基线 6a668ac6 / b1dae15c 各跑 2 次均通过，本分支 3b65f6cf / 合入 b1dae15c 后的 9a6bee69 各跑 2 次均稳定复现（作业 xsltc2-rn-base / -new / -base2 / -new2）。
-   - 分叉点（作业 xsltc2-why / -why2，`--why`）：`Shutdown.logRuntimeExit` → `System.getLogger` → `LazyLoggers.getLogger`，
-     其中 `DefaultLoggerFinder.isSystem(module)` 种子 1 折叠为真，`getLoggerFromFinder` 分支死；种子 0 不折叠，
-     `LoggerFinderLoader` → 服务加载 `LoggingProviderImpl` → JUL `LogManager` → 安全提供者整棵子树入闭包。
-     这是又一处「按未定论的格值做不可撤回决定」的顺序依赖，与 ctxsel-mono 修掉的 `selector_ctx` 同类，属闭包引擎缺陷。
-   - 本分支只是扰动了不动点的求值顺序：诊断提交 E1（`predefined_definers` 置空，类定义 native 回到原建模）仍以同一差异失败；
-     E2（`report_uncaught_in` 回退 `getCause()` 虚调）换成另一差异失败（种子 0 / 2 方法集合差 `AbstractLoggerWrapper.log`，同在日志链）。
-     两处改动单独撤回都消不掉，说明手写层新增调用点（`class_loader_impl.rs` 等经手写扫描入闭包）同样会触发。
-   - 终态修法在引擎：定位 `isSystem` 折叠读取的格值来源（`Module.loader` 经 `ModuleLayer.defineModules` 流入层加载器），
-     改为单调（未定论时不折叠或可撤回）。待派引擎线处理；本分支不在生成器里绕开。
+   集成基线各跑 2 次均通过，本分支各跑 2 次均稳定复现。本分支只是扰动了不动点的求值顺序，暴露出引擎既有缺陷。
+   - 分叉点：`Shutdown.logRuntimeExit` → `System.getLogger` → `LazyLoggers.getLogger`。种子 1 中 `DefaultLoggerFinder.isSystem(module)` 折叠为真，
+     `getLoggerFromFinder` 分支是死分支；种子 0 中它为假，`TemporaryLoggerFinder` → JUL `LogManager` → 安全提供者整棵子树入闭包。
+   - 根因（诊断作业 xs3-rv / xs3-or，诊断提交已撤回）：种子 0 先分析 `isSystem`（实参为引导映像中的模块对象）。
+     其中 `Boolean.TRUE` 映像对象上的 `booleanValue` 调用点没有按对象答复，答复取 `rvals[Boolean.booleanValue]`。
+     此刻只分析过 FALSE 接收者，汇合格是 `Const(0)`。`facts/oracle.rs` 的 `invoke_result` 对单常量汇合格直接返回，不先按本调用点求值，
+     于是 `isSystem` 返回 0。`getLogger` 据此连上 `getLoggerFromFinder` 分支，这条边不可撤回。
+     种子 1 先见到 TRUE，汇合格已含 1，`isSystem` 为 1。答复从 0 变 1 而不是 0 → {0,1}，违反单调性。
+     原先的猜测「`Module.loader` 经 `ModuleLayer.defineModules`」不成立。
+   - 修法（引擎，单调化）：调用点答复先按本调用点常量实参具体求值，求值只依赖实参与字节码，记忆与处理次序无关；求不出（`Unknown`）时才退回汇合格。
+     落点：`generator/crates/closure/src/engine/facts/oracle.rs:115`（`invoke_result` 的 `Some(PV::Const(v))` 分支），
+     以及 `generator/crates/closure/src/engine/deval.rs:148` 起（`deval_call`：浅层直接取常量格，深层先取 dv_cache / `deval_body`，`Unknown` 时退回常量格）。
+     终态答复不变，只消除了不动点途中与终态不可比的暂时答复。生成器、清单、测试均未改动。通用分析见 c1d 计划 §35。
+   - 验证：
+     - 修法提交 9e7fa2b0（xs3-fix-ut，jp1）：`closure_cli` 11 例全过（含本例）；`closure_independent_of_hash_seed` 通过。
+       `closure_independent_of_order` 失败，属 main 既有（batch-1010g/h 引入，另线在修）。
+       组 B 仅 main 既有的 `thread_locals_only_in_carrier_slots` lint 失败。
+     - 合入 main a8fbebb6 后 ef8bc9da（xs3-m-ut2，jp1）：`closure_cli` 11 例全过，体积种子 0 / 1 / 2 一致（c1d 计划 §35.4）。
+       顺序单测、组 B 与抽查（xs3-m-spot3，dev）结果见 tasks.md 本条。
