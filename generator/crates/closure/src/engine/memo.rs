@@ -9,7 +9,7 @@
 //!   一帧的子树里截断层都不低于本帧层号时，其结果与外层无关（截断只来自本帧自身的递归），可以记忆，
 //!   否则只供本次使用、不写入记忆。
 //! - 深度上限：`<clinit>` 常量 / 构造器摘要 / 属性读取摘要从深度 0 开始计算（与外层深度无关），
-//!   常量实参求值的记忆键带起始深度。
+//!   常量实参求值的记忆键带起始深度（计深度层数与穿过分派转发方法的次数，两者各有上限）。
 //!
 //! 由此记忆里的每个答复都等于「在空上下文中计算该键」的答复，与处理次序无关。
 
@@ -20,7 +20,7 @@ pub(super) struct Frame {
     key: String,
     level: usize,
     saved_cut: usize,
-    saved_depth: u32,
+    saved_depth: super::consteval::EvalDepth,
 }
 
 /// 帧栈：进行中的键 → 层号；子树里递归保护命中的最低层号（无命中 = usize::MAX）
@@ -36,7 +36,7 @@ impl Guards {
     }
 
     /// 进入键 key 的计算；已在进行中 → 记下截断层并返回 None
-    fn enter(&mut self, key: String, depth: u32) -> Result<Frame, ()> {
+    fn enter(&mut self, key: String, depth: super::consteval::EvalDepth) -> Result<Frame, ()> {
         if let Some(&l) = self.active.get(&key) {
             self.cut = self.cut.min(l);
             return Err(());
@@ -81,7 +81,7 @@ impl Ctx<'_> {
         let depth = self.ceval_depth.get();
         let f = self.guards.borrow_mut().enter(key, depth).ok()?;
         if fresh {
-            self.ceval_depth.set(0);
+            self.ceval_depth.set(Default::default());
         }
         self.mrecs.borrow_mut().push(MemoRec::default());
         Some(f)
@@ -174,10 +174,10 @@ mod tests {
     #[test]
     fn cut_below_frame_blocks_memo() {
         let mut g = Guards::new();
-        let a = g.enter("a".into(), 0).ok().unwrap();
-        let b = g.enter("b".into(), 0).ok().unwrap();
+        let a = g.enter("a".into(), Default::default()).ok().unwrap();
+        let b = g.enter("b".into(), Default::default()).ok().unwrap();
         // b 的子树里撞上进行中的 a：b 的答复取决于外层在算 a
-        assert!(g.enter("a".into(), 0).is_err());
+        assert!(g.enter("a".into(), Default::default()).is_err());
         assert!(!g.leave(&b));
         // 对 a 自身而言是自递归截断：与外层无关
         assert!(g.leave(&a));
@@ -186,12 +186,12 @@ mod tests {
     #[test]
     fn self_recursion_keeps_memo() {
         let mut g = Guards::new();
-        let a = g.enter("a".into(), 0).ok().unwrap();
-        let b = g.enter("b".into(), 0).ok().unwrap();
-        assert!(g.enter("b".into(), 0).is_err());
+        let a = g.enter("a".into(), Default::default()).ok().unwrap();
+        let b = g.enter("b".into(), Default::default()).ok().unwrap();
+        assert!(g.enter("b".into(), Default::default()).is_err());
         assert!(g.leave(&b));
         // 兄弟帧不受此前子树的截断影响
-        let c = g.enter("c".into(), 0).ok().unwrap();
+        let c = g.enter("c".into(), Default::default()).ok().unwrap();
         assert!(g.leave(&c));
         assert!(g.leave(&a));
         assert!(g.active.is_empty());
