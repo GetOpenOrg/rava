@@ -60,7 +60,7 @@ mod recv_fp;
 mod site_prof;
 mod lambda_prof;
 mod ctx_prof;
-mod ctx_budget;
+mod ctx_free;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -439,11 +439,9 @@ pub struct Engine<'a> {
     ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
-    /// 上下文预算（`ctx_budget.rs`）：成员 → 已建对象上下文克隆数；类型上下文 → 类；上下文无关方法缓存；计数
-    ctx_fine: HashMap<MemberRef, u32>,
-    typed_ctxs: HashMap<u32, u32>,
+    /// 上下文透明方法（`ctx_free.rs`）：判定缓存；进本体的次数（诊断）
     ctx_free_memo: HashMap<MemberRef, bool>,
-    ctx_stats: ctx_budget::CtxStats,
+    ctx_free_hits: u64,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,
