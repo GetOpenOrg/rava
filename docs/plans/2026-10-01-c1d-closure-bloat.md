@@ -4491,3 +4491,103 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
     → `ServiceLoader.load` 的服务提供者，同 §29 的 pkcs11 归因。
   - `X500Name`：`PrintStream.println` 引导区残差 → `String.valueOf` → `X509CertInfo.toString` 开放派发。
 - jar `Handler` 仍因 `URLClassPath.<init>` 无条件构造留在闭包（§30.15），但它的 `openConnection` 下游已经不可达。
+
+## 34. §31 能力 ②：引导区字符集未知名查找（2026-10-10，分支 `c1d-charset`，基于 b1dae15c / 44e49b2e）
+
+目标：DeepCopy / HelloWorld 闭包中经 `Charset.lookup` / `isSupported` 引导区根带入的 `sun/nio/cs/ext` 等扩展字符集类归零
+（程序按名用到的除外），不新增类，正确性不变。
+
+### 34.1 来源诊断（`--why` / `--flows @vals:Charset.lookup2` / 反事实切除）
+
+基线（cs-base-44e49b2e，`rava closure`，`closure_composition_job.sh`）：DeepCopy 3038 类，其中 `sun/nio/cs/ext` 281、
+`sun/nio/cs` 标准字符集 177；HelloWorld 577 类，ext 0、标准 165。HelloWorld 没有扩展字符集问题。
+
+扩展字符集只经一处进闭包：`Charset.lookup2` 在标准提供者查不到名字时调用 `lookupExtendedCharset`（扩展提供者，
+`AbstractCharsetProvider.lookup` 按名反射 `Class.forName(packagePrefix + cln)` 放开 `jdk.charsets` 全部类）和 `lookupViaProviders`
+（服务提供者）。所以问题不在引导区根本身，而在哪些调用点以「推不出的名字」调用 `Charset.forName` / `isSupported`。
+DeepCopy 的来源：
+
+| # | 来源 | 名字 | 性质 | 归属 |
+|---:|---|---|---|---|
+| 1 | `sun/nio/fs/Util.<clinit>@5` `Charset.forName(sun.jnu.encoding)` | 动态属性（U14：运行期宿主值） | 引导期已校验，可折 | 本线 34.2 |
+| 2 | `Parser.enc`（XML 声明编码）← `Properties.loadFromXML` ← `Decompressor.decompressResource@125` 开放派发 | 运行期读入 | 派发不精确：jimage 解压不会到 `loadFromXML` | c1d-fmt2（Formatter / 派发线） |
+| 3 | `String.<init>([B,String)` / `([BII,String)` 反射面 | 反射实参 | 反射根暴露 | 反射面 |
+| 4 | `DerValue.string2bytes@118` 常量 `"UTF_32BE"` ← `X500Principal` 反射构造 ← `JCAUtil.tryCommitCertEvent` ← `CertificateFactory.generateCertificate` ← `CodeSource.readObject` | 常量（标准字符集名） | 常量查找不经具体求值（34.4） | x509 残差 §32.3 |
+| 5 | `JISAutoDetect` 等扩展字符集内部的常量名（`"EUC_JP"`、`"ISO-2022-JP"`） | 常量 | 只在扩展字符集已入闭包时可达 | 随 1–4 |
+
+反事实切除（不健全，只作上界，cut 集见 `scripts/closure_composition_cuts/cs*.txt`）：
+
+| 切除集 | 内容 | DeepCopy 类 | ext |
+|---|---|---:|---:|
+| csextrefl | `AbstractCharsetProvider.lookup` 整方法 | 2779 | 2 |
+| csall | 1 + 2 + 3 | 3038 | 281 |
+| csall_nojnu / norefl / noxml | 各去掉一项 | 3038 | 281 |
+| csrest（43764ba3 上，1 已由 34.2 折叠） | 2 + 3 + 4 | 2743 | 2 |
+
+csall 不动说明 1–3 之外还有来源（即 4）。四者任一单独存在，都会让 `lookupExtendedCharset` 可达，从而放开全部 281 类。
+扩展字符集的规模（约 260 类）只由「是否有一个推不出名字的调用点」决定，是全有或全无的结构。
+
+### 34.2 机制：动态系统属性的受理性质（`[facts.system_properties.accepted]`）
+
+`sun.jnu.encoding` 在 U14 下是运行期宿主值，名字推不出。但 `System.initPhase1`（档位 0）会用 `Charset.isSupported` 校验它，
+不受支持就改写为 `"UTF-8"`。档位 0 时 `VM.isBooted()` 为 false，`lookupExtendedCharset` / `lookupViaProviders` 直接返回 null，
+所以校验通过只能是标准提供者受理了这个名字。`StandardCharsets.charsetForName` 只依赖名字，与档位无关，
+因此自档位 1 起，任何以读到的 jnu 值调用标准提供者 `charsetForName` 的结果恒非空。
+
+实现（通用，不列类名；事实只在清单）：
+
+1. 清单 `vm_intrinsics.toml` 的 `[facts.system_properties.accepted]`：
+   `"sun.jnu.encoding" = { method = "sun/nio/cs/StandardCharsets.charsetForName:(…)…", arg = 1, from_level = 1 }`。
+   键须同时列在 `dynamic`，否则清单解析报错（`manifest/sysprops.rs::Accepted`）。
+2. 读取：动态键在有方法上下文、档位 ≥ `from_level`（非档位上下文即引导完成之后）时，读到的值带受理标签
+   `Obj::Accepted(method)`（`absint/obj.rs`），类型为 String，非空；取值本身仍未知（U14 不变）。
+3. 受理调用（`engine/sysprops.rs::accepted_call`，oracle 在取目标之前调用）：第 `arg` 号实参带同一方法的受理标签，
+   且调用目标就是该方法时，结果答复为非空。目标先取唯一目标 / 构造标签目标；都没有时，按映像对象接收者的
+   运行期类选目标（`facts/calls.rs::image_target`）。`Charset.standardProvider` 是映像中的 `StandardCharsets` 对象，
+   `lookup2@39` 的接收者带 `Obj::Image` 标签，按它选出 `StandardCharsets.charsetForName`。
+4. 映像对象的运行期类表 `Ctx.img_types`：装入映像时建立，映像追加对象（扩展组、镜像缓存组）后由 `image_drain` 补齐。
+   第一版直接持有 `Rc<ImageData>`，有两个问题：一是追加对象越界（`Charset.standardProvider` 的对象号 9145 > 装入时的 9143），
+   二是映像数据写时复制，Ctx 多持有一份引用，每次追加就整份复制。现只存类名。
+
+效果：`lookup2` 的受理上下文中 `@39` 答复非空，`@48 lookupExtendedCharset` / `@57 lookupViaProviders` 不可达，
+`--why` 的首条路径从 `Util.<clinit>@5` 换到来源 2（`Parser.enc`）。
+
+健全性：受理标签只表示「标准提供者受理该名」，只在档位 ≥ 1 时生效，取值不折。程序在运行期用 `System.setProperty`
+改写 `sun.jnu.encoding` 不在模型内，与现有 `dynamic` 键的口径一致（该属性是 JDK 内部只读属性）。
+
+### 34.3 实测（同一基线 44e49b2e，`rava closure`）
+
+| 作业 | 提交 | 用例 | 类 | ext | 标准字符集 |
+|---|---|---|---:|---:|---:|
+| cs-base-44e49b2e | 44e49b2e（基线） | DeepCopy | 3038 | 281 | 177 |
+| cs-base-44e49b2e | 44e49b2e（基线） | HelloWorld | 577 | 0 | 165 |
+| cs-j6-07467d78 | 07467d78（本线） | DeepCopy | 3038 | 281 | 177 |
+| cs-j7-07467d78 | 07467d78（本线） | HelloWorld | 577 | 0 | 165 |
+| cs-k1-43764ba3 | 43764ba3 + csrest 切除 | DeepCopy | 2743 | 2 | 167 |
+
+- 类集合与基线逐类相同（DeepCopy、HelloWorld 都没有新增或减少的类）。来源 1 已折叠，`--why` 的首条路径换成来源 2，
+  但扩展字符集全有或全无，来源 2–4 任一在就仍是 281。
+- 来源 2–4 都出闭包后（csrest 上界），DeepCopy 为 2743（−295），ext 只剩 `ExtendedCharsets` / `AbstractCharsetProvider`
+  两个类型级类（服务提供者登记），比整方法切除扩展反射（csextrefl 2779）还少 36 类：服务提供者查找也不再可达。
+- 引导区根 `Charset.isSupported #@level:0`（§31.2 #2 的首达树）本身不是来源：档位 0 时 `VM.isBooted()` 按
+  `level_queries` 折为 false，`lookupExtendedCharset` / `lookupViaProviders` 返回 null。§31 把它记成来源，是因为门排名的
+  首达树是 BFS 首达，不是因果来源。
+
+### 34.4 无效的尝试（已撤回）
+
+- `Charset.forName` 列入 `[concrete] entries`（e89c01b8，撤回 a5825fa2）：常量名调用点的具体求值必然回退——
+  先读可变静态 `Charset.cache1`。
+- 把 `Charset.cache1` / `cache2`、`StandardCharsets.cache` / `classMap` / `aliasMap` 登记为 `memo_fields`（696557db，撤回 0bdac51e）：
+  求值随后卡在 `StandardCharsets.cache()@21` 读 `sun/nio/cs/UTF_8.INSTANCE`。`UTF_8` 在引导映像中是运行期初始化类（不透明），
+  非引导求值没有占位语义，读即回退。两项都没有收益，按清单最小原则撤回。
+
+### 34.5 余项
+
+- 来源 4（`"UTF_32BE"` 常量名）：终态是常量名的 `Charset.forName` / `charsetForName` 在构建期按标准提供者求值。
+  需要的能力：闭包期具体求值读运行期初始化类的 final 引用静态时，得到占位对象，可存放、可传递，参与身份运算或取字段即回退。
+  这与引导求值的占位语义相同，但闭包期求值的轨迹消费方要能处理占位对象。此外，上游 x509 链本身属 §32.3 残差，
+  该链出闭包后来源 4 一并消失。
+- 来源 2（XML 声明编码）：`Decompressor.decompressResource@125` 派发到 `Properties.loadFromXML` 不精确，归 c1d-fmt2。
+- 来源 3（`String` 按名字符集构造器的反射面）：反射根暴露，属反射面收窄。
+- U14 口径冲突（只记录，本线未改）：`stdout.encoding` / `stderr.encoding` 在 `values` 表中钉值，与 U14「运行期宿主值」不一致；
+  rava 的 `native_encoding` 取值与 HotSpot 的 `nl_langinfo(CODESET)` 不同。两者都不影响本节的折叠：受理性质只依赖引导期校验。
