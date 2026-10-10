@@ -420,7 +420,12 @@ def report_wait_loops(procs: dict) -> None:
         print("  无")
         return
     now = time.time()
+    # 循环已等到目标、正在执行后续命令（有非 sleep 子进程）的不算遗留
+    busy = {p["ppid"] for p in procs.values() if Path(p["cmd"].split()[0]).name != "sleep"}
     for t, pids in sorted(loops.items()):
+        if all(x in busy for x in pids):
+            print(f"  {t:48} {' '.join(sorted(pids, key=int))}  已进入后续命令")
+            continue
         warn = []
         kind, _, val = t.partition(":")
         if len(pids) > 1:
