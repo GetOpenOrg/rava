@@ -6,7 +6,9 @@
 //! - `class_constant_pool`：`getConstantPool()`——新建常量池对象，`constant_pool_oop` 指向所属类镜像；
 //! - `reflect_invoke`：本地访问器 `invoke0(Method, obj, args)`——按 (声明类, slot) 取方法，静态方法先初始化
 //!   声明类，实例方法除私有外按接收者类型虚选择。实参 / 返回值只支持引用类型（基本类型的装箱拆箱不建模，
-//!   求值失败）；目标抛出异常时 HotSpot 包装为 InvocationTargetException，这里不建模、求值失败。
+//!   求值失败）；目标抛出异常时 HotSpot 包装为 InvocationTargetException，这里不建模、求值失败；
+//! - `reflect_new`：本地访问器 `newInstance0(Constructor, args)`——按 (声明类, slot) 取构造器，初始化声明类、
+//!   分配实例并执行 `<init>`（HotSpot `Reflection::invoke_constructor`）；实参与异常的建模口径同 `reflect_invoke`。
 //!
 //! 构建期产生的反射对象经类镜像的反射数据缓存（软引用）可达；导出映像时软引用按「可随时清除」语义清除
 //! （`export.rs`），不入映像。
@@ -79,6 +81,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: &[CV]) 
         "class_declared_constructors" => declared_members(vm, env, info, args, "ctor"),
         "class_constant_pool" => constant_pool(vm, env, info, args),
         "reflect_invoke" => invoke(vm, env, args),
+        "reflect_new" => construct(vm, env, args),
         _ => return None,
     })
 }
@@ -205,6 +208,58 @@ fn invoke(vm: &mut Vm, env: &Env, args: &[CV]) -> R<Option<CV>> {
     match vm.call(env, &target, call_args) {
         Ok(r) => Ok(Some(r.unwrap_or(CV::N))),
         Err(Flow::Throw(_) | Flow::Implicit(_)) => fail(format!("反射调用目标抛出异常（InvocationTargetException 包装未建模）{mref}")),
+        Err(e) => Err(e),
+    }
+}
+
+/// 反射调用的引用实参：实参数组按形参类型核对（基本类型形参不建模）
+fn ref_args(vm: &Vm, env: &Env, arr: CV, ps: &[&str], what: &str) -> R<Vec<CV>> {
+    if !ps.iter().all(|p| is_ref(p)) {
+        return fail(format!("反射调用的基本类型实参 {what}"));
+    }
+    let actual: Vec<CV> = match arr.r()? {
+        Some(a) => vm.arr(a)?.clone(),
+        None => Vec::new(),
+    };
+    if actual.len() != ps.len() {
+        return fail(format!("反射调用实参个数 {what}"));
+    }
+    for (v, p) in actual.iter().zip(ps) {
+        vm.check_identity(*v)?;
+        if let Some(o) = v.r()? {
+            if !vm.instance_of(env, &vm.ty(o), o, mirror_key(p)) {
+                return fail(format!("反射调用实参类型不符 {what}"));
+            }
+        }
+    }
+    Ok(actual)
+}
+
+fn construct(vm: &mut Vm, env: &Env, args: &[CV]) -> R<Option<CV>> {
+    let c = arg(args, 0)?.obj()?;
+    let clazz = vm.get_vm_field(env, c, "ctor_clazz")?.obj()?;
+    let slot = vm.get_vm_field(env, c, "ctor_slot")?.i()?;
+    let t = vm.mirror_of.get(&clazz).cloned().map_or_else(|| fail("非类镜像"), Ok)?;
+    let cf = vm.class(env, &t)?;
+    let Some(meth) = usize::try_from(slot).ok().and_then(|i| cf.methods.get(i)).filter(|m| m.name == "<init>") else {
+        return fail(format!("反射构造器 slot 越界 {t}#{slot}"));
+    };
+    let desc = meth.desc.clone();
+    if cf.is_interface() || cf.is_abstract() {
+        return fail(format!("反射实例化抽象类 {t}"));
+    }
+    let mref = MemberRef { owner: t.to_string(), name: "<init>".into(), desc };
+    let (ps, _) = split_desc(&mref.desc)?;
+    let actual = ref_args(vm, env, arg(args, 1)?, &ps, &mref.to_string())?;
+    vm.ensure_init(env, &t)?;
+    let target = vm.resolve(env, &mref, false)?;
+    let o = vm.alloc(&t, Body::Inst(Vec::new()));
+    let mut call_args = Vec::with_capacity(actual.len() + 1);
+    call_args.push(CV::R(o));
+    call_args.extend(actual);
+    match vm.call(env, &target, call_args) {
+        Ok(_) => Ok(Some(CV::R(o))),
+        Err(Flow::Throw(_) | Flow::Implicit(_)) => fail(format!("反射构造目标抛出异常（InvocationTargetException 包装未建模）{mref}")),
         Err(e) => Err(e),
     }
 }

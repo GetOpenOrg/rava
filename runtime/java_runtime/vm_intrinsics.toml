@@ -1069,6 +1069,9 @@ memo_fields = [
     "sun/nio/cs/StandardCharsets.cache",
     "sun/nio/cs/StandardCharsets.classMap",
     "sun/nio/cs/StandardCharsets.aliasMap",
+    # Class.newInstance 的构造器缓存与调用者访问检查缓存：命中与重查得同一构造器 / 同一检查结论
+    "java/lang/Class.cachedConstructor",
+    "java/lang/Class.newInstanceCallerCache",
 ]
 # 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
 # （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
@@ -1158,6 +1161,8 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "java/lang/Class.getConstantPool:()Ljdk/internal/reflect/ConstantPool;" = "class_constant_pool"
 "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
 "java/lang/reflect/Method$Direct.invoke0:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_invoke"
+"jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_new"
+"jdk/internal/reflect/NativeConstructorAccessorImpl.newInstance0:(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;" = "reflect_new"
 
 # 隐式异常（JVMS §6.5 各指令的运行期异常）：种类 → VM 抛出的异常类型。具体求值时按异常表查找处理器，
 # 未被捕获则作为求值结果的抛出值；异常对象由 VM 直接分配（消息惰性给出，不执行构造器）
