@@ -122,6 +122,9 @@ pub(super) struct Ctx<'a> {
     pub(super) img_modules: std::cell::OnceCell<HashMap<String, Vec<(u32, bool)>>>,
     /// 映像 VM 模块对象 → 其映像标签（带 final 实例字段常量，如定义加载器；装入映像时建立）
     pub(super) img_module_tags: std::cell::OnceCell<HashMap<u32, Rc<crate::absint::Obj>>>,
+    /// 映像对象的运行期类（下标 = 映像对象号；占位对象为 None）。装入映像时建立，映像追加对象（扩展组、
+    /// 镜像缓存组）后由 `image_drain` 补齐——只存类名，不持有映像数据（映像数据写时复制，持有即每次追加整份复制）
+    pub(super) img_types: RefCell<Vec<Option<Rc<str>>>>,
     /// 映像中构建期初始化类的静态字段初值（装入映像时建立，见 `static_init.rs`）
     pub(super) img_statics: std::cell::RefCell<Option<super::static_init::ImgStatics>>,
     /// 选择子形参缓存（见 `selector.rs`）

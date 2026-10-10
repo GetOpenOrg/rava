@@ -305,6 +305,15 @@ queries = [
 # 不经 MethodHandle 访问器——原生二进制不在运行期生成 LambdaForm
 "jdk.reflect.useNativeAccessorOnly" = "true"
 
+# 动态键取值的受理性质（c1d 计划 §34）：取值仍是运行期宿主值（U14 不变），但引导期已校验它被 method 受理——
+# 自档位 from_level 起，以读到的值作 method 的 arg 号实参（含接收者）调用恒返回非空，分析器按此折叠该调用结果。
+# sun.jnu.encoding：System.initPhase1（档位 0）以 Charset.isSupported 校验，不受支持即改写为 "UTF-8"；档位 0 时
+# Charset.lookupExtendedCharset / lookupViaProviders 因 VM.isBooted() 为 false 返回 null，校验通过即标准提供者
+# 受理该名（StandardCharsets.charsetForName 只依赖名字，与档位无关）。于是此后 Charset.forName(jnu) 在
+# lookup2 中由标准提供者命中，扩展字符集 / 服务提供者查找不可达
+[facts.system_properties.accepted]
+"sun.jnu.encoding" = { method = "sun/nio/cs/StandardCharsets.charsetForName:(Ljava/lang/String;)Ljava/nio/charset/Charset;", arg = 1, from_level = 1 }
+
 # 读取入口：实参序号含接收者；receiver = 接收者须为系统属性表对象；default = 缺省值实参；snapshot = 读启动快照（见下）。
 # 包装方法（System.getProperty 等）由分析器从字节码识别：返回值恰是入口读取、键来自形参
 [facts.system_properties.readers]

@@ -1,0 +1,6 @@
+# 字符集未知名来源归因（§34，不健全，只作上界）：jnu 由受理性质折叠之后的其余来源——String 按名字符集构造器（反射面）、
+# XML 解析器声明编码、DER 串编码（x509 残差 §32.3，常量名 "UTF_32BE"）
+java/lang/String.<init>:([BLjava/lang/String;)V
+java/lang/String.<init>:([BIILjava/lang/String;)V
+jdk/internal/util/xml/impl/Parser.enc:(Ljava/lang/String;Ljava/io/InputStream;)Ljava/io/Reader;
+sun/security/util/DerValue.string2bytes:(BLjava/lang/String;)[B@118
