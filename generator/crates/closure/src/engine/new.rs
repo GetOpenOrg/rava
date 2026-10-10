@@ -188,6 +188,7 @@ impl<'a> Engine<'a> {
             refl_seen: HashMap::default(),
             lambda_done: HashMap::default(),
             lcalls: Vec::new(),
+            g_log: Vec::new(),
             cur_call: None,
             call_watch: HashMap::default(),
             mirror_watch: HashMap::default(),

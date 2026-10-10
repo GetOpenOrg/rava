@@ -217,6 +217,28 @@ impl<'a> Engine<'a> {
         out.iter().collect()
     }
 
+    /// 已展开过的 open 类型 opens 在 `g_log[mark..]` 上的增量接收者（与 [`Self::receivers`] 同口径筛选），
+    /// 并入 out（升序、去重）
+    pub(super) fn receivers_since(&mut self, opens: &IdSet, owner: u32, mark: usize, out: Vec<u32>) -> Vec<u32> {
+        if opens.is_empty() || self.cuts.no_open_recv || mark >= self.g_log.len() {
+            return out;
+        }
+        let mut set = IdSet::from_sorted(out);
+        for i in mark..self.g_log.len() {
+            let x = self.g_log[i];
+            if set.contains(&x) || !self.g.contains(&x) || !self.sub(x, owner) {
+                continue;
+            }
+            if self.arrays.contains_key(&x) && !self.escaped.contains(&x) {
+                continue;
+            }
+            if opens.iter().any(|o| self.sub(x, o)) {
+                set.insert(x);
+            }
+        }
+        set.iter().collect()
+    }
+
     // ── 类登记 ──────────────────────────────────────────────────────────────
 
     pub(super) fn domain(&self, cls: &str) -> Domain {

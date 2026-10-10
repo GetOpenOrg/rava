@@ -459,6 +459,9 @@ pub struct Engine<'a> {
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
     lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
     lcalls: Vec<LCall>,
+    /// open 展开取值面的增长记录（G 新成员 / 新逃逸的数组分配点，按到达顺序，只增不减）：
+    /// lambda 调用读者按其位置标记只展开已有 open 类型的增量（`lambda.rs::lambda_dispatch`）
+    g_log: Vec<u32>,
     /// 正在读值集的 lambda 调用（优先于 `cur_site` 登记为读者）
     cur_call: Option<u32>,
     /// 类型集节点 → 读它的 lambda 调用；open 展开过的 lambda 调用，按 (open 类型, 接收者上界) 索引

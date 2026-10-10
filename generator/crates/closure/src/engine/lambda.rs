@@ -42,7 +42,7 @@ impl<'a> Engine<'a> {
             }
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
-            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), live: true });
+            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), g_mark: 0, live: true });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
@@ -51,7 +51,7 @@ impl<'a> Engine<'a> {
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
-        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), live: false });
+        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), g_mark: 0, live: false });
         self.lprof_call(lid, m, off, true);
         self.lambda_step(m, off, None);
         let tmp = self.lcalls.pop();
@@ -151,10 +151,13 @@ impl<'a> Engine<'a> {
                     }
                     return;
                 }
-                // open 部分按 G 的当前成员展开（G 增长经 open 索引重跑本调用；已派发者由 `dispatched` 去重）
+                // 新到达的 open 类型按 G 的当前成员整体展开；已展开过的 open 类型只展开其后到达 G 的增量
+                // （G 增长经 open 索引重跑本调用）。已接过的接收者与本调用的去重登记同时作废（`reset_offsets`），
+                // 故增量展开与整体展开后经 `dispatched` / `lambda_done` 去重的派发集合相同
                 let owner = self.id(&k.owner);
-                let s = TypeSet { classes: delta.classes, open: cur.open };
-                let recv = self.receivers(m, &s, owner);
+                let mark = std::mem::replace(&mut self.lcalls[at].g_mark, self.g_log.len());
+                let recv = self.receivers(m, &delta, owner);
+                let recv = self.receivers_since(&done.open, owner, mark, recv);
                 self.cur_call = reader;
                 self.lprof_recv(lid, &recv);
                 for r in recv {

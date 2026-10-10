@@ -206,6 +206,8 @@ pub(super) struct LCall {
     pub(super) call: LambdaCall,
     /// 已接过的接收值
     pub(super) done: TypeSet,
+    /// `done.open` 已按 G 展开到的 `g_log` 位置（其后的成员是这些 open 类型尚未展开的增量）
+    pub(super) g_mark: usize,
     /// 调用方分析重算后作废（调用点重跑时按新分析重新登记）
     pub(super) live: bool,
 }
