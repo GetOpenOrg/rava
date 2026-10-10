@@ -4573,6 +4573,14 @@ csall 不动说明 1–3 之外还有来源（即 4）。四者任一单独存�
   `level_queries` 折为 false，`lookupExtendedCharset` / `lookupViaProviders` 返回 null。§31 把它记成来源，是因为门排名的
   首达树是 BFS 首达，不是因果来源。
 
+验证（43764ba3，与 94460ade 代码相同）：
+- 抽查 cs-spot-43764ba3（dev）12/12 通过：DeepCopy、HelloWorld、64_charsets_ext 全部 4 例（TestCharsetAvailable / Gbk /
+  CjkFamily / ExtLookup），以及编码相关的 UTF8EncodeDecode、TestCharsetEncoderFaces、TestStreamEncoderCharsets、
+  TestCharsetForName、TestCharsetNamedStreams、TestUrlEncoderDecoder。
+- 单测 cs-ut-43764ba3（dev）：workspace 除 driver 全过（closure lib 242），closure_cli 11/11 过
+  （跳过 hash_seed / order 两项长测）。
+- 诊断：`--flows @vals:<方法>` 的调用事件中，带受理标签实参的调用点追加 `acc <答复> itgt <映像接收者目标或求不出的原因>`。
+
 ### 34.4 无效的尝试（已撤回）
 
 - `Charset.forName` 列入 `[concrete] entries`（e89c01b8，撤回 a5825fa2）：常量名调用点的具体求值必然回退——
