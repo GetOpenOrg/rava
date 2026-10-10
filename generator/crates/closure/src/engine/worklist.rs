@@ -53,6 +53,7 @@ impl<'a> Engine<'a> {
         let mut batch = 0usize;
         loop {
             self.pkey_flush();
+            self.fopen_flush();
             if !self.obj_dirty.is_empty() {
                 self.stat_enter(Phase::Flows);
                 self.obj_flush();
@@ -123,6 +124,9 @@ impl<'a> Engine<'a> {
                 }
                 // JCA 提供者序：其余放行都完成后判定装载器调用点能否继续扣住（`jca_order.rs`）
                 if self.jca_order_release() {
+                    continue;
+                }
+                if self.fopen_flush() {
                     continue;
                 }
                 self.promote_layout();
@@ -204,6 +208,17 @@ impl<'a> Engine<'a> {
             self.open_static(&key);
             self.offset_fields_opened(Some((&key.name, Some(&key))));
         }
+    }
+
+    /// 排空求值中折叠出符号偏移的字段（`field_offset`）：逐个放开；有新放开时返回 true
+    fn fopen_flush(&mut self) -> bool {
+        let pending = std::mem::take(&mut *self.ctx.fopen_pending.borrow_mut());
+        let mut opened = false;
+        for f in pending {
+            opened |= !self.ctx.fopen.borrow().contains(&f);
+            self.open_field(f);
+        }
+        opened
     }
 
     pub(super) fn open_field_name(&mut self, name: &str) {
