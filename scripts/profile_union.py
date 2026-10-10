@@ -9,7 +9,7 @@
                               合成并集 closure.json，供 `rava emit` 生成近似档案树（测声明层峰值、单例
                               只编用户 crate 的耗时）。只保留用户 T 的用户类；JDK 部分取并集。
                               折叠按方法取参与测试中折叠点最少的一份（与该测试闭包自洽，可编译；
-                              只用于体量测量，不代表档案的折叠语义）
+                              只用于体量测量，不代表档案的折叠语义；引导映像取用户 T 那一例）
   folds <dir>... --jdk-home H 折叠精度代价：逐例折叠点、并集（同一方法在全部到达测试中折叠一致才保留）、
                               开放世界（null_recv 的静态接收者类型可被用户扩展时不折叠）
 """
@@ -167,7 +167,7 @@ def cmd_merge(a):
         for mid in fm:
             if ok(mid):
                 folds.setdefault(mid, []).append(fm[mid])
-        for k in ("clinit", "refs", "unresolved", "dispatched", "instantiated", "hw_inherited"):
+        for k in ("clinit", "refs", "unresolved", "dispatched", "instantiated", "hw_inherited", "sam_types"):
             sets[k] |= {x for x in d.get(k, []) if ok(x)}
         for x in d.get("missing", []):
             sets["missing_names"].add(x["name"])
@@ -229,6 +229,9 @@ def cmd_merge(a):
         "dispatched": sorted(sets["dispatched"]),
         "instantiated": sorted(sets["instantiated"]),
         "hw_inherited": sorted(sets["hw_inherited"]),
+        "sam_types": sorted(sets["sam_types"]),
+        # 引导映像按用户 T 那一例（只用于体量测量；映像是逐程序的构建期求值结果，不做并集）
+        "boot_image_data": next(d for n, d in docs if n == a.user).get("boot_image_data"),
         "system_properties": {"values": {k: v for k, v in sp_vals.items() if v is not None}, "dynamic": sorted(sp_dyn)},
         "summary": {"classes": len(classes), "methods": len(methods)},
     }
