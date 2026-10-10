@@ -950,3 +950,317 @@ status = "fixed"
 diagnose = "看 closure.json classes / instantiated 是否缺该类"
 doc = ""
 since = "2026-10-10"
+
+# ── 历史补登：编译期 ──────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "sibling-catch-slot-name"
+stage = "compile"
+symptom = "用户 crate error[E0425]: cannot find value `e` in this scope（兄弟 catch 块复用同一槽位名）"
+match = [["cannot find value `e` in this scope"]]
+tests = ["TestMultiCatchOrder"]
+cause = "作用域外赋值升 let 时，前一兄弟 catch / else 块内声明的同名变量在后一兄弟块里仍被当作已声明，后者的赋值不再升 let"
+introduced = "7f075394（catch 变量重赋值不提升为 let）"
+fixed = ["620a5c94"]
+status = "fixed"
+diagnose = "看 E0425 所在 catch / else 块与前一兄弟块是否用同一 JVM 槽位"
+doc = "docs/plans/2026-10-06-c4-preflight.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "vtable-hook-ambiguous-simple-name"
+stage = "compile"
+symptom = "error[E0034]: multiple `__as_X` found（祖先与本类简单名相同，如 java.sql.Date ⊂ java.util.Date）"
+match = [["error[E0034]", "__as_"]]
+tests = ["TestSqlDateTime"]
+cause = "宏生成的 vtable 缺省方法 wrapper 重建钩子用方法调用语法，祖先与本类简单名相同时 supertrait 同名 __as_X 歧义；改为以本类 trait 限定调用"
+introduced = ""
+fixed = ["005f98e7"]
+status = "fixed"
+diagnose = "看 E0034 的候选是否来自同简单名的两个 trait"
+doc = "docs/plans/2026-10-07-c4-misc-failures.md 二"
+since = "2026-10-10"
+
+[[pattern]]
+id = "lowercase-class-module-clash"
+stage = "compile"
+symptom = "全小写 Java 类名与 Rust 模块同名：expected type, found module（E0425 / E0573）"
+match = [["expected type, found module"]]
+tests = ["TestXmlTransform"]
+cause = "类的 Rust 模块名与类型名未分离，全小写类名（java_cup lr_parser、xalan 内部类等）与同包子包 / 模块名冲突"
+introduced = ""
+fixed = ["1afed3fc"]
+status = "fixed"
+diagnose = "看报错名字是否同时是包内某子包或类模块名；查 module_names 的冲突追加 _t 规则"
+doc = "docs/plans/2026-10-07-overload-naming-hierarchy.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "iface-overload-cross-hierarchy"
+stage = "compile"
+symptom = "接口跨层重载同取无后缀名：this method takes N arguments but M were supplied（E0061）/ E0308"
+match = []
+tests = ["TestXmlTransform"]
+cause = "接口方法重载判定只看本接口自有方法，ContentHandler.endElement(3 参) 与子接口 ExtendedContentHandler 的单参重载同取无后缀名"
+introduced = ""
+fixed = ["1b3c26d1"]
+status = "fixed"
+diagnose = "看 E0061 的被调方是否在接口层次上有同名不同参的成员"
+doc = "docs/plans/2026-10-07-overload-naming-hierarchy.md §6.1"
+since = "2026-10-10"
+
+[[pattern]]
+id = "class-overload-unimplemented-iface-member"
+stage = "compile"
+symptom = "类自有方法与接口上未实现的同名抽象成员共名，this.m() 落到自有一参方法（E0061）"
+match = []
+tests = []
+cause = "hierarchy_overloaded_names 的继承参数段只沿超类链收集，接口上声明、类链未实现的抽象成员不计（AbstractBasicFileAttributeView.readAttributes）"
+introduced = ""
+fixed = ["83e9b23d"]
+status = "fixed"
+diagnose = "看被调方是否只声明在接口上、类有同名不同参的自有方法"
+doc = "docs/plans/2026-10-03-gen-fixes.md 1"
+since = "2026-10-10"
+
+[[pattern]]
+id = "lmf-return-adapt-missing"
+stage = "compile"
+symptom = "lambda / 方法引用闭包返回值类型不符 E0308（Integer → int 拆箱、int → long 拓宽）"
+match = []
+tests = ["TestComparatorNullsFirst", "TestStreamTerminalEdges"]
+cause = "生成闭包原样返回实现方法的返回值，缺 LambdaMetafactory 的返回适配（拆箱、基本类型拓宽）"
+introduced = ""
+fixed = ["7f075394"]
+status = "fixed"
+diagnose = "看 E0308 是否在 lambda 闭包体尾；对照 SAM 与实现方法的返回类型"
+doc = "docs/plans/2026-10-03-gen-fixes.md 2"
+since = "2026-10-10"
+
+[[pattern]]
+id = "catch-reassign-and-labeled-break"
+stage = "compile"
+symptom = "catch 变量重赋值被提升为 let（E0283）；内层 try 中 break 'l0 不计落出致循环判为 !（E0308）"
+match = []
+tests = ["TestJndiNoProvider"]
+cause = "catch 绑定写在结构行头里，promote_undeclared_assigns 不认作已声明；java_try! 落出判定 BreakScan 只认无标签 break"
+introduced = ""
+fixed = ["7f075394"]
+status = "fixed"
+diagnose = "看报错处是否为 catch 体内对异常变量的赋值，或带标签 break 的循环"
+doc = "docs/plans/2026-10-03-gen-fixes.md 2"
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-boundary-call-result-untyped"
+stage = "compile"
+symptom = "汇合点漏转换 E0308（手写边界方法调用结果参与分支汇合）"
+match = []
+tests = ["TestJndiNoProvider"]
+cause = "手写边界方法调用结果未按发射签名定型，汇合点漏转换"
+introduced = ""
+fixed = ["28c498cb"]
+status = "fixed"
+diagnose = "看 E0308 两侧之一是否为手写方法调用结果"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-inherited-member-undeclared"
+stage = "compile"
+symptom = "手写体调用超类型方法 E0599（DecimalFormat 上没有 setParseIntegerOnly）"
+match = []
+tests = ["DeepCopy", "TestBmhDynamicSpecies"]
+cause = "手写文件整体编译，接收者调用超类型方法需要继承成员发射，但手写体的这类需求没有来源；此前由别处声明把方法拉成虚方法掩盖了缺口"
+introduced = ""
+fixed = ["a3f4a479"]
+status = "fixed"
+diagnose = "看 E0599 的调用是否在手写文件、方法是否声明在接收者的超类型上"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-signature-param-mismatch"
+stage = "compile"
+symptom = "FileChannelImpl.open / <init> 手写签名 E0308"
+match = []
+tests = []
+cause = "手写签名的 parent 形参类型与描述符（Closeable）不一致"
+introduced = ""
+fixed = ["535b8834"]
+status = "fixed"
+diagnose = "对照手写签名与字节码描述符"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "boot-image-static-writer-mismatch"
+stage = "compile"
+symptom = "error[E0599]: no associated function or constant named `__si_set_…`（启动序列写静态，声明层无对应存储）"
+match = [["no associated function or constant named `__si_set_"]]
+tests = ["DeepCopy"]
+cause = "引导映像启动序列写静态位置的类与声明层静态存储的判定不一致；统一为 ImageData::writes_statics_of"
+introduced = ""
+fixed = ["14917aed"]
+status = "fixed"
+diagnose = "看 __si_set_ 所属类是否被判为构建期初始化"
+doc = ""
+since = "2026-10-10"
+
+# ── 历史补登：转译期与资源 ────────────────────────────────────────────────────
+
+[[pattern]]
+id = "sam-prescan-off-chain"
+stage = "transpile"
+symptom = "发射阶段 sam-objects 断言「接口未发射」"
+match = [["[sam-objects] 接口未发射"]]
+tests = ["Matrix", "CompletableFutureDemo", "HashJoin", "GrayCode", "Calculate_Pi"]
+cause = "SAM 预扫描扫了调用链外、只发存根的 JDK 方法里的 invokedynamic 站点，其接口停在 L1 被移出发射集"
+introduced = ""
+fixed = ["9d920193"]
+status = "fixed"
+diagnose = "看断言里的接口与站点所在方法是否在调用链上"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "reflect-array-dimension-blowup"
+stage = "resource"
+symptom = "HelloWorld 闭包分析内存膨胀至 OOM（反射数组维数逐轮增长）"
+match = []
+tests = ["HelloWorld"]
+cause = "构建期值的基本类型类镜像按名取成引用类（[LB;）；parseSig 式递归使 Array.newInstance 结果逐轮加一维直到 255 维；反射数组逐类型建模限 2 维"
+introduced = ""
+fixed = ["f19e46e0", "a102b325", "6db7cbd9"]
+status = "fixed"
+diagnose = "看闭包类集中是否出现多维数组类或 [LB; 一类名字"
+doc = ""
+since = "2026-10-10"
+
+# ── 历史补登：Python 生成器时期（2026-09，代码已删；语义要点对 Rust 生成器同样适用） ──
+
+[[pattern]]
+id = "float-compare-nan"
+stage = "output"
+symptom = "NaN 比较结果反转（NaN==NaN 为 true、Double.isNaN 为 false）"
+match = []
+tests = ["TestNaN", "TestFloatBits"]
+cause = "dcmpl/dcmpg/fcmpl/fcmpg 统一降级为 (a>b)-(a<b)，NaN 时得 0；JVMS §6.5 规定 l 变体为 -1、g 变体为 +1"
+introduced = ""
+fixed = ["73a6c540"]
+status = "fixed"
+diagnose = "看浮点比较指令的发射是否区分 l / g 变体"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "math-handwritten-approx"
+stage = "output"
+symptom = "Math.rint / expm1 等末位或舍入与 JDK 不同"
+match = []
+tests = []
+cause = "手写 rint 用 round()（非 HALF_EVEN）、expm1 用 Rust exp_m1（与 FdLibm 不同点舍入）；删除手写覆盖，走 StrictMath / FdLibm 字节码链"
+introduced = ""
+fixed = ["00789066", "444ad9a9"]
+status = "fixed"
+diagnose = "查对应 Math 方法是否有手写覆盖；按手写边界规范改走字节码"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "double-tostring-sci-notation"
+stage = "output"
+symptom = "double 拼接不转科学计数（ulp 打印成长小数）"
+match = []
+tests = ["TestMathExact"]
+cause = "拼接路径的 java_fmt_f64 走 Rust Display，缺 Double.toString 的 10^-3 / 10^7 界外科学计数规则；同一语义两份实现、弱的一份被拼接路径使用"
+introduced = ""
+fixed = ["2c27f14b"]
+status = "fixed"
+diagnose = "对照拼接与 Double.toString 两条路径的输出"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "mutf8-non-bmp-literal"
+stage = "output"
+symptom = "非 BMP 字符串字面量变成 U+FFFD"
+match = []
+tests = ["TestStringCodePoints"]
+cause = "常量池 Modified UTF-8 按标准 UTF-8 解码，代理对被判非法替换为 U+FFFD"
+introduced = ""
+fixed = ["16296bf4"]
+status = "fixed"
+diagnose = "查常量池解码是否按 JVMS §4.4.7 MUTF-8"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "caller-class-symbol-format"
+stage = "run"
+symptom = "Reflection.getCallerClass 解析失败致 ExceptionInInitializerError（随 rustc 版本变化）"
+match = []
+tests = ["TestAtomics"]
+cause = "getCallerClass 解析 std Backtrace 符号还原 Java 类，只适配一种 rustc 的符号打印形态（泛型组 / 跨模块 impl 组形态不同）；终态由 rust-symbol-stack-frames 的行表帧源取代"
+introduced = ""
+fixed = ["e737df12"]
+status = "fixed"
+diagnose = "对照不同 rustc 版本的符号形态"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "is-jnull-wrapper-always-false"
+stage = "run"
+symptom = "手写层 null 判定对具体类 wrapper 恒 false（缺省值回落被吞，下游 NumberFormatException → EIIE）"
+match = []
+tests = ["TestAtomics", "TestArrayList", "TestEnumSetMap", "TestFilesApi", "TestStringEdge"]
+cause = "_is_jnull<T> 内部 downcast_ref::<Object>() 只对 Object 载体生效，对 java_class! wrapper 恒 false"
+introduced = ""
+fixed = ["6b1e5c64", "4a2299e4"]
+status = "fixed"
+diagnose = "查手写层 null 判定是否统一走 vtable 钩子"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "hoist-shadowed-let"
+stage = "run"
+symptom = "分支内赋值被遮蔽 let 吞失（CHM.transfer 扩容丢节点）"
+match = []
+tests = ["TestHoistShadow", "TestChmTransfer"]
+cause = "同一 JVM 变量被 javac 拆成多条 LVT 区间，兄弟分支各自 FIRST-BIND 成 let，提升只降级首个 let，其余分段 let 遮蔽外层绑定"
+introduced = ""
+fixed = ["c5db91f5"]
+status = "fixed"
+diagnose = "看丢失的赋值是否在 let 遮蔽的内层作用域；按 LVT 活跃区间判定变量身份"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "record-pattern-disjoint-try"
+stage = "run"
+symptom = "record pattern 解构的用户方法整体退化为 panic 存根"
+match = []
+tests = ["TestRecordPattern"]
+cause = "javac 对每个解构访问器发不相连的 try 区间、共享同一 MatchException 处理器；结构化只为首区间装 try 节点，后续区间违反「词法 try 组 == 控制流 try 组」不变量"
+introduced = ""
+fixed = ["325d7da5"]
+status = "fixed"
+diagnose = "看方法是否含 record pattern；查 TryCatchPlan 的多区间 try 组"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "array-getclass-static-type"
+stage = "output"
+symptom = "数组 getClass().getName() / getSimpleName() 取静态类型（协变上转后错）"
+match = []
+tests = ["TestArrayCovariance"]
+cause = "数组接收者的 getClass 被早路径拦截为按静态类型描述符取 Class，协变上转后静态元素类型只是上界"
+introduced = ""
+fixed = ["0fcbb7f3"]
+status = "fixed"
+diagnose = "看数组的 Class 是否由创建时元素类型决定"
+doc = ""
+since = "2026-10-10"
