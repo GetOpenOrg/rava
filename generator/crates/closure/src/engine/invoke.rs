@@ -580,6 +580,12 @@ impl<'a> Engine<'a> {
         if cur.as_ref() == Some(&new) {
             return;
         }
+        if let Ok(q) = std::env::var("RAVA_DIAG_PV") {
+            let l = self.method_label(t);
+            if l.contains(&q) {
+                eprintln!("[diag-pv] {l} ctx={} {cur:?} -> {new:?} vals={vals:?}", self.methods[t].ctx);
+            }
+        }
         self.pvals.insert(t, new);
         if cur.is_some() {
             self.invalidate(t, Why::ParamConst);
