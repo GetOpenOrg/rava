@@ -44,6 +44,21 @@ diagnose = "二分到暴露提交；查失败点读取的字段是否只经 Unsa
 doc = "docs/tasks.md 现状节 lc3-fix / 注解反射 NPE 回归"
 since = "2026-10-10"
 
+[[pattern]]
+id = "concrete-ctx-image-static-dead"
+stage = "run"
+symptom = "只经具体求值上下文（via kind = concrete）到达的方法运行期读构建期初始化类的静态表得 null：NPE（如 printf 宽度解析 Character.digit → CharacterDataLatin1.digit）"
+match = [["Exception in thread \"main\" java.lang.NullPointerException", "CharacterDataLatin1"]]
+tests = ["LahNumbers"]
+cause = "process_concrete 按轨迹登记依赖但不登记字段节点，映像静态未经 image_field 取值，所指映像对象不活、不发射；具体上下文的方法运行期照样执行。机制 B 让 Formatter.format 的用户格式串全部具体求值后，Integer.parseInt / Character.digit 不再经抽象路径到达，缺口暴露"
+introduced = "b29b3042（枢纽形参槽污染：用户格式串改走具体求值，暴露潜伏缺陷）"
+fixed = ["6afde4a0", "9cc7f4a7"]
+status = "pending"
+owner = "c1d-fmt2（9cc7f4a7 待合批放行）"
+diagnose = "rava closure 输出 boot_image_data.live 查该类 statics 所指对象是否活；methods 里读该静态的方法 via 是否只有 kind = concrete；RUST_BACKTRACE=full rava build 看 [vm-throw] 栈"
+doc = "docs/plans/2026-10-01-c1d-closure-bloat.md §32.7 修正 4"
+since = "2026-10-10"
+
 # ── 编译期 ──────────────────────────────────────────────────────────────────────
 
 [[pattern]]

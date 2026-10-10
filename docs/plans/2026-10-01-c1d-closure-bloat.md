@@ -4600,3 +4600,75 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 2. 若来自组合数：按入口给逐组应用设终态可判定的上限。超限时的处理要与次序无关，例如该调用点整体不做按对象物化，结果改按类 id 代表，回退前已物化的对象也并入代表（需要撤回机制）。
 3. 若来自物化对象：同一说明符类、同一字段值的对象按值合并（对象名改按字段值散列而非组合序号），对象数以不同说明符形态为上界。
 4. 恢复 `object_results` 后重跑 HelloWorld / DeepCopy 闭包计数与 `closure_independent_of_order`。
+
+### 32.7 内存受控、枢纽形参槽污染与具体上下文活性（2026-10-10 续，分支 `c1d-fmt2`，基于 batch-1010f 956efa18）
+
+按 §32.6 接手方向 1–4 执行，`[concrete] object_results` 已恢复为 `Formatter.parse`。
+
+**内存来源：物化对象数（9347252b 计数诊断，dev）**
+
+| 配置 | 物化对象 | 回退后应用组合 | DeepCopy 峰值 |
+| --- | --- | --- | --- |
+| 只开机制 B（7b9c213b，临时） | 128+ | — | 9.1 GiB |
+| 机制 B + 逐组应用（07c0606e，临时） | 512+ | 55 | 13.2 GiB（趋势超 14 GiB） |
+
+内存随物化对象数增长，而非组合数本身。按 §32.6 方向 3 处理。
+
+**修正 1：结果对象按内容命名（f8af6fed）**。按对象物化的结果对象名由组合序号改为 `{类}@concrete:{快照内容 FNV 散列}`。
+同类、快照相同的对象合并为一个抽象对象，对象数的上界是不同说明符形态数，与格式串条数、调用点数无关。
+合并按内容判定，与到达次序无关。fmt2-m3-f8af6fed：DeepCopy 物化对象 64、回退后应用 33 组，峰值 9.04 GB RSS（约 8.4 GiB）。
+
+**修正 2：枢纽形参槽记污染（b29b3042）**。原先污染按方法形参槽（`ptaint`）判定。经 `String.format` / `PrintStream.printf` 等虚分派枢纽到达 `Formatter.format` 时，
+各接入点的实参在枢纽处合流成常量格，用户 printf 字面量与真正未知的格式串混成一体，于是整个调用点回退。
+现在枢纽形参槽单列（`htaint`，`PSlot::H`）：
+- 污染沿 pstr 子集边（H→M、H→父枢纽 H）传播，`taint_slot` 统一用工作表推进。
+- 接入点按实参自身判定（`taint_hub_site` / `arg_taint`）。干净的字面量不会污染枢纽槽。
+- `hub_bind` 不再按常量格合流绑定，而是改走 `join_pvs`。
+- `taint_report` 的路径能显示枢纽跳转。
+
+fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直接具体求值），峰值 8.55 GB；HelloWorld 577 / 1896。
+
+**修正 3：去掉实测开关（0a8facaa）**。回退后逐组应用常开。
+
+**修正 4：具体上下文执行过的字段访问登记字段节点（6afde4a0）**。
+- 抽查发现 LahNumbers 运行期 NPE，基线通过：`printf("%5s", n)` → `FormatSpecifier.width` → `Integer.parseInt(CharSequence,III)` → `Character.digit` → `CharacterDataLatin1.digit`。
+- 根因：这三个方法只经 `Formatter.format@11` 的具体上下文到达（via `concrete`）。`process_concrete` 按轨迹登记依赖，但不登记字段节点，
+  所以构建期初始化类 `CharacterDataLatin1` 的静态表（A / B / DIGITS / sharpsMap）没有经 `image_field` 取映像值，映像对象不是活对象，没有发射，运行期读到 null。
+- 机制 B 之前，这些方法同时经抽象路径到达，缺口被掩盖。
+- 终态修正（6afde4a0 → 9cc7f4a7）：具体上下文里执行过的指令运行期照样执行，所以静态字段访问（get/putstatic，引用类型）与抽象路径一样调用 `field_node`：取映像值，所指对象成为活对象，内容随之入队。
+- 只登记静态字段：
+  - 实例字段的接收者来自静态字段、实参或新建对象，前两者的映像对象已活、内容已传播，无需另登记。
+  - 6afde4a0 也登记了实例字段，按字段并集会把全部活对象的该字段值并入。HelloWorld 因此 577→592，多出类镜像 genericInfo 链（`TypeVariableImpl` / `CoreReflectionFactory` 等 15 类）。
+- 收紧后 HelloWorld 580 / 1896，比基线多 3 类（ClassRepository / ClassSignature / Signature / Tree 链上的 `ClassSignature`、`Signature`、`Tree`）。来源是三处具体上下文的静态读，它们运行期真实执行：
+  - `ClassRepository.NONE`：`ConcurrentHashMap.comparableClassFor` → `Class.getGenericInfo`。
+  - `Pattern$Qtype.GREEDY` / `POSSESSIVE`：`Formatter.<clinit>` 的 `Pattern.compile`。
+  - `CharacterDataLatin1.B`。
+  
+  这些在基线上同样只经具体上下文到达、映像静态未发射，属于既有的健全性缺口（运行期读到 null），不是机制 B 引入的。增量是健全性的代价。
+- 若要去掉这 3 类：只做引用比较的静态（如 `NONE` 哨兵）不需要内容，可以只发射对象而不入队内容。这需要「仅身份」活性层，留作后续。
+
+**Calendar 仍未出 DeepCopy 闭包：健全路径阻塞**（`--why java/util/Calendar`，fmt2-m4 / m5）。
+- 用户 printf 路径已解决。Calendar 首达改为日志链：`ObjectInputStream` → `ObjectInputFilter$Config.<clinit>@114` → `System.Logger.log` → `SimpleConsoleLogger` → `MessageFormat` → `SimpleDateFormat.initializeCalendar`。
+- `printDateTime` 仍经两类真正未知的格式串可达：
+  - `SimpleConsoleLogger.format`（Site(13)）：格式串取自 `jdk.system.logger.format` 属性。
+  - `CLDRTimeZoneNameProviderImpl.toGMTFormat`（Site(147)）：格式串取自资源束字符串。
+  
+  两者都是健全可达，超出能力③的范围。日志链的出闭包归 a5-4f 日志后端线；资源束串的出闭包需要按名资源的构建期常量化。
+- TestStringFormat 另有一条：@concrete 说明符对象的按对象读混入了抽象 parse 的通配值（`owild`，机制 C 污染），`printDateTime` 经此可达。机制 C 的按对象读与通配分离留作后续。
+
+**实测（dev）**
+
+| 用例 | 基线 956efa18（类 / 方法，峰值） | 本分支（类 / 方法，峰值） |
+| --- | --- | --- |
+| HelloWorld | 577 / 1896 | M7_HELLO |
+| DeepCopy | 3727 / 21509，9.0 GiB | M7_DEEP |
+| LahNumbers | 3406 / 18457（fmt2-lbase） | M7_LAH |
+| CollectorsDemo | 616 / 2021 | M7_COLL |
+| TestStringFormat | 3406 / 18454，2.39 GB | M7_TSF |
+| StockTrans | 3724 / 21499，7.78 GB | M7_STOCK |
+
+- LahNumbers 的大幅收缩来自用户 `printf` 的格式串全部具体求值：printDateTime 等不再可达，Calendar / 区域数据链出闭包。
+- 作业：fmt2-base-956efa18、fmt2-m3-f8af6fed、fmt2-m4-b29b3042、fmt2-m5-b29b3042、fmt2-m7-6afde4a0、fmt2-npe3-0a8facaa（NPE 栈）、fmt2-lbase-956efa18 / fmt2-lmine-0a8facaa（映像活性对照）。
+- 单测：fmt2-ut-0a8facaa 组 A / 组 B 0 失败，`closure_independent_of_order` 通过（2621 s）。终版见 UT_FINAL。
+- 抽查：SPOT_FINAL。
+- `closure_independent_of_hash_seed`：待 batch-1010d 并入 main 后同步再跑（未做）。
