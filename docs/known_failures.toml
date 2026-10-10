@@ -92,9 +92,3 @@ owner = "并发小步 B（conc-step-b，无 GC 文档 §四）"
 since = "2026-10-10"
 note = "debug 档 sync_model 持锁检查（小步 A 78d2b9c6 引入）在安全点发现 __RefField 临界区 / __RefSlot 守卫未释放，panic 于 java/lang/thread.rs"
 
-[[known]]
-test = "TestUrlParsingFaces"
-signature = "java.net.MalformedURLException: unknown protocol: https"
-owner = "c4-url（URL 协议处理器补种）"
-since = "2026-10-10"
-note = "长期按已知失败对待但此前未登记；https 协议处理器未入闭包"

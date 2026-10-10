@@ -251,14 +251,17 @@ def agent_info(path: str) -> dict | None:
         return None
     if time.time() - mtime > AGENT_RECENT_HOURS * 3600:
         return None
-    start, last, wts = None, "", {}
+    start, last, wts, stop = None, "", {}, None
     with open(real, encoding="utf-8", errors="ignore") as fh:
         for line in fh:
             try:
                 o = json.loads(line)
             except ValueError:
                 continue
-            content = (o.get("message") or {}).get("content")
+            msg = o.get("message") or {}
+            content = msg.get("content")
+            if o.get("type") == "assistant":
+                stop = msg.get("stop_reason")
             if start is None and o.get("timestamp"):
                 start = o["timestamp"]
             if isinstance(content, list):
@@ -271,14 +274,19 @@ def agent_info(path: str) -> dict | None:
     t0 = datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp() if start else mtime
     return {"id": Path(path).stem, "hours": (time.time() - t0) / 3600,
             "idle": (time.time() - mtime) / 60,
-            "desc": max(wts, key=wts.get) if wts else "rava（主检出）", "last": last[:60]}
+            "desc": max(wts, key=wts.get) if wts else "rava（主检出）", "last": last[:60],
+            # 末条 assistant 消息以 end_turn 收尾即已交回结果（可能仍有后台作业，完成时会被唤醒）
+            "ended": stop == "end_turn"}
 
 
 def report_agents() -> None:
     section(f"子代理进展（最近 {AGENT_RECENT_HOURS}h 有活动；>{AGENT_MAX_HOURS}h 收尾续作，"
             f">{AGENT_IDLE_MINUTES}m 无活动需关注）")
     infos = [i for p in glob.glob(AGENT_TASKS_GLOB + "/a*.output") if (i := agent_info(p))]
-    for i in sorted(infos, key=lambda i: i["idle"]):
+    for i in sorted(infos, key=lambda i: (i["ended"], i["idle"])):
+        if i["ended"]:
+            print(f"  {i['id'][:9]}  已交回 {i['idle']:3.0f}m 前  {i['desc']}  | {i['last']}")
+            continue
         warn = []
         if i["hours"] > AGENT_MAX_HOURS:
             warn.append("超时长")
