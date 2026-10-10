@@ -157,7 +157,8 @@ fn param_of(v: &V) -> Option<usize> {
 
 impl Ctx<'_> {
     /// 由调用实参派生的结果：值相等判定、属性表持有方法、属性读取
-    pub(super) fn derived_result(&self, me: Option<usize>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
+    /// level = 读取点所在的引导档位（None = 非档位上下文）
+    pub(super) fn derived_result(&self, me: Option<usize>, level: Option<i32>, opcode: u8, m: &MemberRef, iface: bool, args: &[V], c: &CallInfo) -> Option<Ret> {
         if c.value_eq {
             return match args {
                 [V::Str(a, _), V::Str(b, _)] => Some(Ret::Value(V::Int((a == b) as i32))),
@@ -194,7 +195,7 @@ impl Ctx<'_> {
             }
         }
         match key {
-            V::Str(..) => self.prop_read(me, &spec, args),
+            V::Str(..) => self.prop_read(me, &spec, args, Some(level)),
             _ if patterned => self.prop_read_patterns(me, &spec, args),
             _ => None,
         }
@@ -225,8 +226,10 @@ impl Ctx<'_> {
         self.prop_summary(me, &c)
     }
 
-    /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）
-    pub(super) fn prop_read(&self, me: Option<usize>, spec: &PropSum, args: &[V]) -> Option<Ret> {
+    /// 属性读取的折叠值（键不是常量 / 键不稳定 / 取值启动期才定 → None）。
+    /// at = 主分析中读取点所在的引导档位（Some(None) = 非档位上下文）：取值启动期才定、但有受理性质的键，
+    /// 读取点不在受理档位之前时给出受理标签（`Obj::Accepted`）的非空串；None = 只求常量
+    pub(super) fn prop_read(&self, me: Option<usize>, spec: &PropSum, args: &[V], at: Option<Option<i32>>) -> Option<Ret> {
         if spec.receiver && !args.first().is_some_and(is_sysprops) {
             return None;
         }
@@ -240,7 +243,7 @@ impl Ctx<'_> {
         }
         let v = match self.man.sysprops.lookup(key) {
             PropValue::Const(s) => V::lit(Rc::from(s)),
-            PropValue::Dynamic => return None,
+            PropValue::Dynamic => return self.accepted_read(me, key, at),
             PropValue::Absent => match &spec.default {
                 DefArg::None => V::Null,
                 DefArg::Const(v) => v.clone(),
@@ -251,6 +254,32 @@ impl Ctx<'_> {
             },
         };
         Some(Ret::Value(v))
+    }
+
+    /// 动态键读取的受理标签：只在主分析（有外层方法）中、读取点不在受理档位之前时给出——
+    /// 非档位上下文即引导完成之后（档位上下文中的残差步骤按其档位判定）
+    fn accepted_read(&self, me: Option<usize>, key: &str, at: Option<Option<i32>>) -> Option<Ret> {
+        let a = self.man.sysprops.accepted(key)?;
+        let level = at?;
+        me?;
+        if level.is_some_and(|l| l < a.from_level) {
+            return None;
+        }
+        let tag = Rc::new(Obj::Accepted(Rc::from(a.method.as_str())));
+        Some(Ret::Value(V::Ref { ty: Some(Rc::from(crate::absint::STRING)), nonnull: true, src: Rc::from([].as_slice()), obj: Some(tag) }))
+    }
+
+    /// 受理调用（目标为受理方法、受理实参带同一方法的受理标签）的结果：非空（类型由调用点按描述符补）。
+    /// t = 已知的唯一目标；无唯一目标时按映像对象接收者的运行期类选目标
+    pub(super) fn accepted_call(&self, opcode: u8, m: &MemberRef, iface: bool, t: Option<&MemberRef>, args: &[V]) -> Option<V> {
+        // 先筛实参带受理标签的调用（绝大多数调用不带，免去成员键拼接）
+        args.iter().find_map(V::accepted_by)?;
+        let k = match t {
+            Some(t) => t.to_string(),
+            None => self.image_target(opcode, m, iface, args.first())?.to_string(),
+        };
+        let i = self.man.sysprops.acceptor(&k)?;
+        (args.get(i)?.accepted_by()? == k).then(|| V::Ref { ty: None, nonnull: true, src: Rc::from([].as_slice()), obj: None })
     }
 
     /// 字节码方法的读取摘要：全部返回值恰为某读取点的结果，读取键为本方法形参、缺省值为形参或常量

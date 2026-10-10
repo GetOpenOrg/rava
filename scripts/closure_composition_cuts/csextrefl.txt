@@ -1,0 +1,3 @@
+# 扩展提供者按名反射取类（AbstractCharsetProvider.lookup@68/@75 Class.forName(packagePrefix.concat(cln))）整方法切除：
+# 扩展字符集类（jdk.charsets）全部只由「程序按名用到」决定时的上界；标准提供者与扩展提供者对象本身保留
+sun/nio/cs/ext/AbstractCharsetProvider.lookup:(Ljava/lang/String;)Ljava/nio/charset/Charset;
