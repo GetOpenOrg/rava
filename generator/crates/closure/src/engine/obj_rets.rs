@@ -102,6 +102,14 @@ impl Facts<'_, '_> {
         let rc = Recv::of(args.first())?;
         let s = Rc::new(RetSite { opcode, m: t.clone(), iface });
         let r = self.ctx.obj_ret_answer(&self.objs.sets, rc, &s);
+        if std::env::var("RAVA_DIAG_OR").is_ok_and(|q| t.to_string().contains(&q)) {
+            let objs: Vec<String> = self.objs.sets.get(rc).map(|os| os.iter().map(|&o| {
+                let k = self.ctx.obj_ret_key(&s, o);
+                let v = k.as_ref().and_then(|k| self.ctx.orvals.borrow().get(&**k).and_then(|ov| ov.get(&o).cloned()));
+                format!("{o}:{:?}={v:?}", self.ctx.oclass.borrow().get(&o))
+            }).collect()).unwrap_or_default();
+            eprintln!("[diag-or] m={:?} {t} rc={rc:?} objs={objs:?} r={r:?}", self.m);
+        }
         self.objs.queries.borrow_mut().push(ObjQuery::Ret(rc, s, r.clone()));
         if r.is_some() {
             self.ctx.stats.borrow_mut().oret_hits += 1;

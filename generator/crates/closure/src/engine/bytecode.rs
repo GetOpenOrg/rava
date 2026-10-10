@@ -276,7 +276,7 @@ impl<'a> Engine<'a> {
                 Event::Invoke { mref, .. } => Some(format!("@{o} {}", mref.name)),
                 _ => None,
             }).collect();
-            eprintln!("[diag-rv] {} r={r:?} cur={cur:?} ev {}", self.ctx_label(m), evs.join(" "));
+            eprintln!("[diag-rv] m={m} {} r={r:?} cur={cur:?} ev {}", self.ctx_label(m), evs.join(" "));
         }
         self.sysprops_rval(m, a, &r);
         self.obj_ret_note(m, &r);
