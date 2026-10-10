@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cluster_config import CONFIG_PATH, REPO_ROOT, RESULTS_DIR  # noqa: E402
 
 REPO = REPO_ROOT
+WS_ROOT = REPO.parent
 CR = RESULTS_DIR
 SEEN = Path.home() / ".cache" / "rava_patrol_seen"
 INTEGRATION = "rust-closure-analyzer"
@@ -283,23 +284,98 @@ def report_agents() -> None:
 
 # ── 本机进程与资源 ────────────────────────────────────────────────────────────
 
+def etime_seconds(e: str) -> int:
+    """ps etime（[[dd-]hh:]mm:ss）→ 秒。"""
+    days, _, rest = e.rpartition("-")
+    parts = [int(x) for x in rest.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return (int(days) if days else 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def classify(cmd: str) -> str | None:
+    """按进程自身的可执行文件归类；shell / uv 包装进程（命令行里只是带了这些字样）不算。"""
+    argv = cmd.split()
+    exe = Path(argv[0]).name if argv else ""
+    script = Path(argv[1]).name if len(argv) > 1 else ""
+    if exe.startswith("python"):
+        if script == "distribute_tests.py" and ".venv/bin/" in argv[0]:
+            return "分发器"
+        if script == "heavy_lock.py":
+            return "heavy_lock"
+        if script == "run_tests.py":
+            return "rava/e2e"
+        if "unittest" in argv[1:3]:
+            return "脚本单测"
+        return None
+    if exe in ("cargo", "rustc") or (exe.startswith("cargo-") and "rava" in cmd):
+        return "编译"
+    if exe == "rava":
+        return "rava/e2e"
+    return None
+
+
 def report_local(disp: list[dict]) -> None:
-    section("本机项目进程")
-    counts = {
-        "分发器": len(disp),
-        "heavy_lock": len(sh("pgrep -f '[h]eavy_lock.py'").split()),
-        "cargo": len(sh("pgrep -x cargo").split()),
-        "rustc": len(sh("pgrep -x rustc").split()),
-        "rava": len(sh("pgrep -f 'release/[r]ava '").split()),
-    }
-    print("  " + "  ".join(f"{k} {v}" for k, v in counts.items()))
-    heavy = []
-    for line in sh("ps -axo pid=,ppid=,rss=,etime=,comm=").splitlines():
+    """本机项目进程逐条列出并标违规 / 异常：本机只允许经 heavy_lock 的 cargo check，
+    e2e / rava build / 不经锁的编译都应在服务器；另标孤儿进程、所在 worktree 已删、分发器对应结果已完成。"""
+    section("本机项目进程（本机只允许经 heavy_lock 的 cargo check）")
+    procs = {}
+    for line in sh("ps -axo pid=,ppid=,etime=,rss=,command=").splitlines():
         f = line.split(None, 4)
-        if len(f) == 5 and int(f[2]) > 300 * 1024:
-            heavy.append((int(f[2]) // 1024, f))
-    for mb, f in sorted(heavy, reverse=True)[:8]:
-        print(f"  重进程 {f[0]} ppid={f[1]} {mb}MB {f[3]} {Path(f[4]).name}")
+        if len(f) == 5:
+            procs[f[0]] = {"ppid": f[1], "etime": f[2], "rss": int(f[3]) // 1024, "cmd": f[4]}
+    def ancestors(pid: str):
+        seen = 0
+        while pid in procs and seen < 30:
+            pid = procs[pid]["ppid"]; seen += 1
+            yield pid
+    mine = {pid: k for pid, p in procs.items() if (k := classify(p["cmd"]))}
+    pids = [p for p, k in mine.items() if k != "分发器"]
+    cwds = {}
+    if pids:
+        cur = None
+        for line in sh(f"lsof -a -d cwd -p {','.join(pids)} -Fpn 2>/dev/null").splitlines():
+            if line.startswith("p"):
+                cur = line[1:]
+            elif line.startswith("n") and cur:
+                cwds[cur] = line[1:]
+    alive_tags = {d["pid"]: d for d in disp}
+    rows = 0
+    for pid, kind in sorted(mine.items(), key=lambda x: (x[1], int(x[0]))):
+        p = procs[pid]
+        warn = []
+        if kind == "编译":
+            if any(classify(procs[a]["cmd"]) == "编译" for a in ancestors(pid) if a in procs):
+                continue                      # 只列最外层 cargo，子 rustc 不重复列
+            if not any(classify(procs[a]["cmd"]) == "heavy_lock" for a in ancestors(pid) if a in procs):
+                warn.append("未经 heavy_lock")
+        if kind == "rava/e2e":
+            warn.append("本机禁跑，应上服务器")
+        where = cwds.get(pid, "")
+        m = re.search(r"/(rava\w*)(/|$)", where or p["cmd"])
+        wt = m.group(1) if m else "?"
+        if m and not (WS_ROOT / wt).exists():
+            warn.append("worktree 已删")
+        if kind == "分发器":
+            d = alive_tags.get(pid, {})
+            base = CR / d.get("kind", "") / d.get("tag", "")
+            if d.get("kind") == "job" and (line := job_line(base)) and etime_seconds(p["etime"]) > 600:
+                warn.append("结果已全部完成仍在跑")
+            label = f"{d.get('kind', '')} {d.get('tag', '')}"
+            if procs.get(p["ppid"], {}).get("ppid") == "1" or p["ppid"] == "1":
+                warn.append("已脱离发起会话")
+        else:
+            label = p["cmd"][:70]
+        if etime_seconds(p["etime"]) > 4 * 3600 and kind != "分发器":
+            warn.append("运行超 4h")
+        print(f"  {kind:6} {pid:>6} {p['etime']:>11} {p['rss']:5}MB {wt:16} {label}"
+              + (f"  ← {'，'.join(warn)}" if warn else ""))
+        rows += 1
+    if not rows:
+        print("  无")
+    heavy = [(p["rss"], pid, p) for pid, p in procs.items() if p["rss"] > 300]
+    for mb, pid, p in sorted(heavy, reverse=True)[:5]:
+        print(f"  重进程 {pid} ppid={p['ppid']} {mb}MB {p['etime']} {Path(p['cmd'].split()[0]).name}")
     section(f"本机资源（磁盘 <{LOCAL_DISK_MIN_G}G 需清理）")
     df = sh("df -g / | tail -1").split()
     free_g = int(df[3]) if len(df) > 3 and df[3].isdigit() else -1
