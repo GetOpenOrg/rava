@@ -1402,6 +1402,21 @@ doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #11"
 since = "2026-10-10"
 
 [[pattern]]
+id = "proxy-forwarded-jdk-method-undispatched"
+stage = "run"
+symptom = "调用处理器把代理收到的 Method 转发给 JDK 对象（method.invoke(target, args)），运行期 panic「stub: L3 反射分派未覆盖 java/lang/reflect/ParameterizedType.getRawType:…（分派闭包缺席 / 方法未发射）」"
+match = [["L3 反射分派未覆盖", "分派闭包缺席"]]
+tests = ["lib_pilot sc1"]
+cause = "代理接口的方法经 Proxy$Dyn.defineInterfaceMethods 枚举，但枚举只对用户类开放全部方法；JDK 接口的方法只有按名查找才入反射分派面。代理把 Method 交给用户调用处理器，处理器可对任意接收者反射调用。修法：清单 [facts.reflect] exposing_enumerators 标记枚举结果交给用户代码的入口，所指类不论域，全部方法入分派面（engine/reflect.rs expose）"
+introduced = ""
+fixed = ["60e68cc7"]
+status = "pending"
+owner = "spring-core-slice"
+diagnose = "closure.json reflect 成员是否含代理接口的方法；查该接口是否只经 defineInterfaceMethods 枚举（无按名查找）"
+doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #11"
+since = "2026-10-10"
+
+[[pattern]]
 id = "url-protocol-handler-by-name"
 stage = "run"
 symptom = "new URL(\"https://…\") 运行期抛 MalformedURLException: unknown protocol: <协议>（内建处理器未入闭包）"
