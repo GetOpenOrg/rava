@@ -1143,6 +1143,8 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "java/lang/Class.isPrimitive:()Z" = "class_is_primitive"
 "java/lang/Class.isInterface:()Z" = "class_is_interface"
 "java/lang/Class.getModifiers:()I" = "class_modifiers"
+# 类文件 access_flags：闭包期反射访问检查（Reflection.verifyMemberAccess，c1d 计划 §37）与引导求值共用
+"jdk/internal/reflect/Reflection.getClassAccessFlags:(Ljava/lang/Class;)I" = "class_access_flags"
 "java/lang/Class.getSuperclass:()Ljava/lang/Class;" = "class_superclass"
 "java/lang/Class.getInterfaces0:()[Ljava/lang/Class;" = "class_interfaces"
 "java/lang/Class.getGenericSignature0:()Ljava/lang/String;" = "class_signature"
@@ -1344,7 +1346,6 @@ user_name = "@deferred"
 # 线程启动是运行期副作用：镜像里的线程对象在运行期启动
 "java/lang/Thread.start0:()V" = "defer"
 "java/lang/Thread.setPriority0:(I)V" = "defer"
-"jdk/internal/reflect/Reflection.getClassAccessFlags:(Ljava/lang/Class;)I" = "class_access_flags"
 "jdk/internal/misc/Unsafe.ensureClassInitialized0:(Ljava/lang/Class;)V" = "unsafe_ensure_init"
 "jdk/internal/misc/Unsafe.shouldBeInitialized0:(Ljava/lang/Class;)Z" = "unsafe_should_be_init"
 # 文件系统查询：宿主相关
