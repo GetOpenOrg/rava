@@ -358,4 +358,4 @@
     `new Object()`，失败消息含 HotSpot 身份哈希，违反方法论 §五——测试本身不合规，不属「合法测试不改」。改为定值
     toString（`Token(left)` / `Token(right)`）、不覆盖 equals / hashCode 的嵌套类型，断言语义不变；期望经本机 OpenJDK
     21.0.12（类路径 hamcrest-3.0 + junit-4.13.2，锁序）重生成，双跑逐字一致，差异仅该一行。known_failures 两条删除，
-    failure_patterns `junit-identity-hash-expected` 记 fixed。dev 抽查结果见下。
+    failure_patterns `junit-identity-hash-expected` 记 fixed。抽查 junit-5a0993c1（dev，5a0993c1）：**63_junit 10/10 + HelloWorld 全部 PASS**——J4 验收 10/10 达成。
