@@ -1,0 +1,281 @@
+# 失败原因库（只增不删）
+#
+# 用途：记录 e2e / 单测失败的「症状 → 根因 → 修复」历史，供分诊复用。与 docs/known_failures.toml 的分工：
+#   known_failures.toml   当前未修的失败，判定抽查失败是否「已知」（修复后删除条目）；
+#   failure_patterns.toml 历史上出现过的失败原因，修复后保留，只更新 status / fixed。
+# scripts/cluster/known_failures.py 对新失败按本文件匹配，输出「疑似历史原因」提示；提示不改变已知 / 新失败判定。
+#
+# 条目字段：
+#   id          唯一短名（kebab-case）
+#   stage       失败阶段：transpile / compile / run / output / unit / resource
+#   symptom     症状一句话
+#   match       匹配规则：数组的数组；任一组内全部子串都出现在失败日志中即命中（组内 AND、组间 OR）。
+#               匹配前剔除 dyn-compare 的 `[no-provenance]` 行（静态钉入、无来源记录的 VM 异常类清单，
+#               几乎每个测试都有，不代表运行期抛出，不能作为症状）。match 为空的条目不参与自动匹配（如单测类）
+#   tests       出现过该原因的用例（命中本列表的用例在提示中排前）
+#   cause       根因（一两句；长篇分析放 doc 指向的文档）
+#   introduced  引入提交（未知留空；潜伏缺陷写暴露它的提交并在 cause 里说明）
+#   fixed       修复提交（可多个）
+#   status      fixed / open / pending（修复已提交、待放行验证）
+#   owner       负责分支 / 任务（status 非 fixed 时必填）
+#   diagnose    定位方法（下次同症状从哪里查起）
+#   doc         详细分析所在文档与章节
+#   since       首次登记日期
+#
+# 维护：每个修复代理交付时新增或更新条目（同一修复合入同一提交）；协调攒批时检查，缺登记的退回补登。
+# 同症状可有多条不同原因，逐条并列；新原因不要改写旧条目的 cause。
+
+# ── 运行期：常量折叠错误 ────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "offset-field-folded"
+stage = "run"
+symptom = "只经 Unsafe 按偏移写的字段被折叠成初值：CAS 无限重试（运行超时）、读到 null（NPE）、计数恒为 0"
+match = [["Exception in thread \"main\" java.lang.NullPointerException"], ["run timeout"]]
+tests = ["ReflectionAPI", "TestAnnoReflect", "TestAnnoDeepAccess", "TestAnnoArrayMembers", "TestAnnoNestedArray",
+         "TestAnnoValues", "TestBeansIndexedProps", "TestBeansIntrospector", "TestCallerSensitiveHandle", "TestJucSync"]
+cause = "字段只经 Unsafe CAS 写（只进流图、不进常量格），偏移在构建期初始化的 <clinit> 里按名取得；消费符号偏移处未放开字段，getfield 被折叠成初值。Class.reflectionData / Class.annotationType 为 lc3-fix 所修；AtomicInteger.value 类（JucSync 等）为 fix-clone 所修"
+introduced = "78b744fe（reflect-marker：边界类字段改为手写层提及才开放，暴露潜伏缺陷）"
+fixed = ["4c42ac44", "5177e182"]
+status = "pending"
+owner = "fix-clone（5177e182 待抽查与放行）"
+diagnose = "二分到暴露提交；查失败点读取的字段是否只经 Unsafe 写、偏移是否在构建期 <clinit> 按名取得；hw_offset.rs::site_offset 是否对该偏移 open_field"
+doc = "docs/tasks.md 现状节 lc3-fix / 注解反射 NPE 回归"
+since = "2026-10-10"
+
+# ── 编译期 ──────────────────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "untyped-default-e0283"
+stage = "compile"
+symptom = "error[E0283]: type annotations needed，位置在 null 经 Object::from / From / Into / checkcast 转换处"
+match = [["error[E0283]"]]
+tests = ["NormalDistribution", "TestRandomStreams"]
+cause = "null 先生成为无类型 Default::default()，再经 Object::from / From / Into / checkcast 转换，Rust 推不出内层类型（如 AbstractPipeline 局部变量跨两种泛型实例化重建）"
+introduced = ""
+fixed = ["d4f45a58"]
+status = "pending"
+owner = "batch-1010e"
+diagnose = "看 build.log 中 E0283 所在表达式是否为 Object::from(Default::default()) 一类；转换辅助函数（sim/exprs.rs、instr/coerce.rs、method/unify.rs）对无类型缺省值取目标类型缺省值"
+doc = "docs/tasks.md 现状节 fix-e0283-nd"
+since = "2026-10-10"
+
+# ── 转译期 ──────────────────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "transpile-stack-overflow"
+stage = "transpile"
+symptom = "转译数秒内栈溢出（fatal runtime error: stack overflow）"
+match = [["has overflowed its stack"], ["stack overflow, aborting"]]
+tests = ["TestDomResultNode", "TestResourceBundleFaces"]
+cause = "待定：TestDomResultNode 由 fix-domstack 查；TestResourceBundleFaces 在 batch-1010d（c1d-uri + ctxsel-mono）上出现，来源二分中（rbf-main / rbf-uri）"
+introduced = ""
+fixed = []
+status = "open"
+owner = "fix-domstack"
+diagnose = "确认是否同一递归（RUST_BACKTRACE 或加大栈复现取栈）；对照 main 与批次各合入点二分"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "transpile-time-regression-chm"
+stage = "transpile"
+symptom = "转译耗时成倍增长，缺省时限下转译超时（放宽时限可通过）"
+match = [["transpile timeout"]]
+tests = ["DeepCopy", "TestSerialDefaultSuid", "TestSerialUserGenericCallbacks", "TestJndiNoProvider"]
+cause = "ConcurrentHashMap 表数组跨上下文合并等导致分析工作量膨胀（batch-1012 → 1013：DeepCopy 527 → 912 s，JNDI 324 → 1006 s）"
+introduced = "78b744fe 与 batch-1012 区间（疑点）"
+fixed = ["cf58a73f"]
+status = "open"
+owner = "perf-regress4"
+diagnose = "放宽时限重跑确认是慢而非死循环；对照 timings_jdk21.tsv 各批次转译秒数；看分析器 profile 的热点上下文"
+doc = "docs/plans/2026-10-09-transpile-time-regression.md"
+since = "2026-10-10"
+
+# ── 资源 ────────────────────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "transpile-oom-14g"
+stage = "resource"
+symptom = "转译期超出 14 GB 内存上限被杀（__RAVA_OOM_KILL__）"
+match = [["__RAVA_OOM_KILL__"]]
+tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync"]
+cause = "java.net.http 闭包规模大，分析峰值超过单例内存上限；资源类失败，不阻塞合入"
+introduced = ""
+fixed = []
+status = "open"
+owner = "转译耗时 / 峰值线（perf-regress）"
+diagnose = "看 OOM 行的 peak 与阶段；与历史峰值对照判断是否回归"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "boot-image-single-function-oom"
+stage = "resource"
+symptom = "编译 java_base 峰值暴涨（11.8 GB）被杀"
+match = []
+tests = []
+cause = "启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，rustc 单函数内存爆炸"
+introduced = "c18e8fc4（boot-image s6）"
+fixed = ["b3a860ac", "160789c7", "14917aed"]
+status = "fixed"
+diagnose = "看 build.log 中被杀的 crate 与最大函数；统计映像对象数与启动函数规模"
+doc = "docs/tasks.md 现状节 batch-1012 放行记录"
+since = "2026-10-10"
+
+# ── 输出不一致 ──────────────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "root-object-handwritten-frames"
+stage = "output"
+symptom = "Object.wait 栈帧与 JDK 不同（缺 wait0 native 帧与 wait 行号帧）"
+match = [["java.lang.Object.wait0"]]
+tests = ["TestObjectWaitFrames"]
+cause = "根类 Object 的 wait 三重载有字节码却整体手写，违反手写边界"
+introduced = ""
+fixed = ["78af2fa8"]
+status = "pending"
+owner = "batch-1010"
+diagnose = "看栈帧差异涉及的方法是否为有字节码的手写方法；按手写边界规范改走字节码翻译"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.1b"
+since = "2026-10-10"
+
+[[pattern]]
+id = "parallel-capable-unregistered"
+stage = "output"
+symptom = "ClassLoader.registerAsParallelCapable / isRegisteredAsParallelCapable 恒为 false"
+match = [["+Capable register = false"]]
+tests = ["TestParallelCapable"]
+cause = "待定"
+introduced = ""
+fixed = []
+status = "open"
+owner = "fix-clone"
+diagnose = "查 ParallelLoaders 注册集合的写入是否被折叠或未进映像（可能与 offset-field-folded 同类）"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "locale-zh-root-fallback"
+stage = "output"
+symptom = "zh 区域数据回落到 root（CNY 符号输出 CN¥ 而非 ¥；CJK 日期文本）"
+match = [["sym=[CN¥]"]]
+tests = ["TestLocaleCurrency", "TestLocaleDateCjk"]
+cause = "待定：zh 区域资源未装载而回落 root（fix-clone 调查中）；另一说为 CLDR 随 JDK 小版本漂移的 expected 基线问题（known_failures 10-03 登记）。10-06 前即失败，非新回归"
+introduced = ""
+fixed = []
+status = "open"
+owner = "fix-clone"
+diagnose = "同一 JDK 小版本下核对 expected；查 LocaleProviderAdapter 是否找到 zh 资源包"
+doc = ""
+since = "2026-10-10"
+
+# ── 测试接线 / 平台缺口（入库起未通过） ──────────────────────────────────────────
+
+[[pattern]]
+id = "junit-classpath-missing"
+stage = "transpile"
+symptom = "63_junit 用例 javac 报 cannot find symbol"
+match = [["javac 编译失败"]]
+tests = ["TestJunitAssertFamily", "TestJunitAssertThrowsAssume", "TestJunitBeforeClassState", "TestJunitFailureMessages",
+         "TestJunitHamcrestBridge", "TestJunitIgnoreAndExpected", "TestJunitLifecycleOrder", "TestJunitNewInstancePerTest",
+         "TestJunitRunnerResult", "TestJunitTimeoutFast"]
+cause = "run_tests 无依赖包概念，junit4 + hamcrest 不在 javac classpath；非生成器问题"
+introduced = ""
+fixed = []
+status = "open"
+owner = "J3 / W0-3 形态接线"
+diagnose = "看是否为 javac 阶段失败、缺的符号是否来自依赖包"
+doc = "docs/plans/2026-10-05-junit-e2e-deps-task.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "native-unimplemented"
+stage = "run"
+symptom = "运行期命中未实现的 native 方法"
+match = [["native: "]]
+tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync"]
+cause = "ACC_NATIVE 方法缺手写实现（如 sun/nio/ch/IOUtil.fdLimit）"
+introduced = ""
+fixed = []
+status = "open"
+owner = "套接字 native 层（jmod 覆盖 java.net.http 线）"
+diagnose = "按日志中的 native 描述符补共置手写 <x>_impl.rs"
+doc = "docs/known_failures.toml"
+since = "2026-10-10"
+
+[[pattern]]
+id = "resource-bundle-by-name"
+stage = "run"
+symptom = "按名装载的资源包找不到（MissingResourceException / Could not load any resource bundle）"
+match = [["Can't find bundle for base name"], ["Could not load any resource bundle"]]
+tests = ["TestRowSetProvider", "TestXmlTransform", "TestXmlSaxEvents"]
+cause = "模块资源包按名装载未被分析器建模，资源包类不入闭包"
+introduced = ""
+fixed = []
+status = "open"
+owner = "ResourceBundle 按名加载的分析器建模 / 模块资源"
+diagnose = "rava closure --why <资源包类> 看是否入闭包；查 seeds.toml 资源束查找补种"
+doc = "docs/known_failures.toml"
+since = "2026-10-10"
+
+[[pattern]]
+id = "class-resource-not-embedded"
+stage = "run"
+symptom = "getResourceAsStream(\"…/X.class\") 返回 null 后 NPE"
+match = []
+tests = ["TestBootLayer"]
+cause = "模块内容中的 .class 资源未内嵌，随引导映像第 5 步 jimage 嵌入解决"
+introduced = ""
+fixed = []
+status = "open"
+owner = "引导映像第 5 步 T3"
+diagnose = "对照 JDK 输出前缀相同、首个差异处为资源读取"
+doc = "docs/plans/2026-10-02-boot-layer.md §2.3"
+since = "2026-10-10"
+
+[[pattern]]
+id = "debug-profile-too-slow"
+stage = "run"
+symptom = "debug 档运行超时或时序判定不成立，release 档或放宽时限可过"
+match = [["+all sleeping at once: false"]]
+tests = ["TestVirtualThreadScale", "FibonacciMatrixExponentiation", "FractionReduction", "IQPuzzle", "RailwayCircuit"]
+cause = "纯性能：debug 档运行慢（非语义错误）"
+introduced = ""
+fixed = []
+status = "open"
+owner = "运行期性能"
+diagnose = "同一构建换 release 档或放宽 --run-timeout 复跑；与 JDK 耗时比较倍数"
+doc = "docs/plans/2026-10-06-c4-preflight.md 第四节"
+since = "2026-10-10"
+
+# ── 单测 ────────────────────────────────────────────────────────────────────────
+
+[[pattern]]
+id = "closure-order-findops"
+stage = "unit"
+symptom = "closure_independent_of_order 失败：DeepCopy 闭包随处理次序变化（FindOps 派发点集合不同）"
+match = []
+tests = ["closure_independent_of_order"]
+cause = "returned_params 在 ⊥ 时答成非空集，派发点结论依赖先后次序"
+introduced = ""
+fixed = ["203be167"]
+status = "pending"
+owner = "batch-1010b"
+diagnose = "--flow-batch 1 / --hash-seed 多组对照，diff 闭包类集与派发集，定位首个不同的站点"
+doc = "docs/plans/2026-10-05-boot-image-evaluator.md §5.8.6"
+since = "2026-10-10"
+
+[[pattern]]
+id = "static-outcome-order"
+stage = "unit"
+symptom = "profile_union_key_and_coverage 等确定性单测随批次顺序失败"
+match = []
+tests = ["profile_union_key_and_coverage"]
+cause = "getstatic 所读静态字段的声明类在方法体分析前未定构建期初始化结局，先并入的「未知」无法撤回"
+introduced = ""
+fixed = ["7d56de55"]
+status = "fixed"
+diagnose = "--flow-batch 1 --hash-seed 7 复现，查常量格中只升不降的形参常量来源"
+doc = "docs/tasks.md 现状节 fix-1011 第四根因"
+since = "2026-10-10"

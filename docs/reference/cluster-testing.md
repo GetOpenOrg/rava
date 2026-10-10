@@ -515,6 +515,12 @@ uv run --group cluster python scripts/cluster/known_failures.py <spot_tag> [--te
 # 退出码 0 = 完成且无新失败；1 = 有新失败；2 = 未完成（未出结果 / infra 失败）；3 = 清单读取错误
 ```
 
+**失败原因库**（2026-10-10 起）：`docs/failure_patterns.toml` 记历史上出现过的「症状 → 根因 → 修复」，只增不删（修好后改 `status` / `fixed`，不删条目）。`known_failures.py` 对每个新失败按 `match` 匹配（组内 AND、组间 OR，用例在条目 `tests` 中者排前），输出「疑似历史原因」行；提示只供分诊参考，不改变已知 / 新失败判定和退出码。字段与维护说明见文件头。
+
+- 匹配前剔除 dyn-compare 的 `[no-provenance]` 行：它列的是静态钉入、无来源记录的 VM 异常类（`CloneNotSupportedException` / `ExceptionInInitializerError` / `NegativeArraySizeException` 等），几乎每个测试日志都有，**不是运行期抛出，不能当症状归类**（10-10 曾据此把七例误归为同一组）。
+- 每个修复代理交付时，在同一提交里新增或更新条目（新根因新增一条；同症状不同根因并列，不改写旧条目的 `cause`）；协调攒批时检查，缺登记的退回补登。
+- 分诊新失败：先看提示命中的条目的 `diagnose` 与 `doc`，确认是否同一根因；不是同一根因就新增条目。
+
 ### 11.3 子代理自发抽查（tag 前缀）
 
 子代理用**自己的 tag 前缀**（任务代号小写，如 `c1dt2-`、`a3t-`），tag = `<前缀><sha8>`，一个提交一个 tag，
@@ -704,6 +710,8 @@ pgrep -f "\.venv/bin/python3? .*distribute_tests"
 
 作业分发器的进程名为 `python`，抽查为 `python3`，正则两者都覆盖。禁止用 `ps -eo` 判断（macOS 上 `-e` 不列全部进程）。
 同一 tag 只留一个实例，多余的 `kill -9`。
+
+等待作业结束不要写 `until ! pgrep -f "<tag>"`：`pgrep -f` 会匹配到等待循环自己所在 shell 的命令行（其中含 `<tag>`），循环永不退出（10-10 清理过 26 个这样挂了数小时到 19 小时的等待进程）。改用方括号写法 `pgrep -f "[d]istribute_tests.*<tag>"`（正则只匹配 `distribute_tests`，循环命令行里的字面 `[d]istribute` 匹配不上自己），或等日志里的结束标记（`grep -q "日志与产物" <log>` / `rc=`），且给循环设上限次数。
 
 ### 12.6 子代理等作业
 
