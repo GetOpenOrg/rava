@@ -39,13 +39,10 @@ impl<'a> Engine<'a> {
             let at = self.lambda_done.entry(m).or_default().entry(off).or_default();
             if let Some(&id) = at.get(&call) {
                 // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元，不另建。
-                // 重分析（含被调方摘要变化后的完整重接）作废了站点去重，接边效果随被调方摘要而变：
-                // 复活即清空已接记录，按新读者完整接边
+                // 已接记录由作废方式决定（`worklist.rs`）：偏移重跑保留、只接增量；被调方摘要变化清空、完整重接
                 let c = &mut self.lcalls[id as usize];
                 if !c.live {
                     c.live = true;
-                    c.done = TypeSet::default();
-                    c.hub = None;
                     self.lprof_call(lid, m, off, true);
                     self.lambda_step(m, off, Some(id));
                 }
@@ -55,7 +52,7 @@ impl<'a> Engine<'a> {
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lprof_kind(false, dup);
-            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, live: true });
+            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
@@ -64,7 +61,7 @@ impl<'a> Engine<'a> {
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
-        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, live: false });
+        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, fixed: false, live: false });
         self.lprof_call(lid, m, off, true);
         self.lprof_kind(true, false);
         self.lambda_step(m, off, None);
@@ -119,6 +116,10 @@ impl<'a> Engine<'a> {
         let at = id.map_or(self.lcalls.len() - 1, |i| i as usize);
         let (lid, a, ret, res) = self.lcalls[at].call.clone();
         let l = self.lambdas[&lid].clone();
+        // 静态 / 构造实现的接边只取决于调用本身：读者单元已接过即成立（被调方摘要变化时由 `reset_sites` 清掉）
+        if matches!(l.imh.kind, 6 | 8) && id.is_some() && std::mem::replace(&mut self.lcalls[at].fixed, true) {
+            return;
+        }
         let k = &l.imh.member;
         let via = Via::method("lambda", m, Some(off));
         let Some(site) = self.h.resolve_method(&k.owner, &k.name, &k.desc, l.imh.interface) else {

@@ -208,6 +208,8 @@ pub(super) struct LCall {
     pub(super) done: TypeSet,
     /// 方法引用的精确接收者集合（达 `HUB_MIN` 时）当前接入的集合枢纽
     pub(super) hub: Option<(u32, Rc<[u32]>)>,
+    /// 静态 / 构造实现已接边
+    pub(super) fixed: bool,
     /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
     pub(super) live: bool,
 }

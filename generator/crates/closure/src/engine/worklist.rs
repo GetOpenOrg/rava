@@ -417,7 +417,8 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.refl_seen.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
-        // lambda 调用读者只作废不注销：重分析后以同一调用再登记时复活（`invoke_lambda`），不另建读者单元
+        // lambda 调用读者只作废不注销：重分析后以同一调用再登记时复活（`invoke_lambda`），不另建读者单元。
+        // 被调方摘要未变：同一调用已接的流边与接边效果仍成立，复活后只接增量
         if let Some(d) = self.lambda_done.get(&m) {
             for off in offs {
                 for &id in d.get(off).into_iter().flat_map(HashMap::values) {
@@ -437,9 +438,14 @@ impl<'a> Engine<'a> {
         self.recv_fp.remove(&m);
         self.gather_last.remove(&m);
         self.refl_seen.remove(&m);
+        // 首次 / 被调方摘要变化：接边效果随摘要而变，读者清空已接记录，复活时按新读者完整接边
         for at in self.lambda_done.get(&m).into_iter().flat_map(HashMap::values) {
             for &id in at.values() {
-                self.lcalls[id as usize].live = false;
+                let c = &mut self.lcalls[id as usize];
+                c.live = false;
+                c.done = TypeSet::default();
+                c.hub = None;
+                c.fixed = false;
             }
         }
     }
