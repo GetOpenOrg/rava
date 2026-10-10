@@ -318,6 +318,9 @@ pub(super) struct Hub {
     pub(super) link_seq: u32,
     /// 已对 (接入记录, 按调用点建模的目标) 完整接边：同一记录再派发该目标的新接收者时只接接收者相关部分
     pub(super) edged: HashSet<(u32, usize)>,
+    /// lambda 接收者的读者所在调用点：首个接入的字节码调用点。枢纽上的 lambda 只在此处以枢纽形参 / 返回节点
+    /// （`HP` / `HR`）为实参 / 结果各建一个读者，其余字节码接入点的实参经 `HP` 汇入、结果经 `HR` 流出，不逐调用点派发
+    pub(super) anchor: Option<(usize, u32)>,
 }
 
 /// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时

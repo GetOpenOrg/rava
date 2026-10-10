@@ -51,6 +51,7 @@ impl<'a> Engine<'a> {
             links: BTreeMap::new(),
             link_seq: 0,
             edged: HashSet::default(),
+            anchor: None,
         });
         if let HubSet::Exact(rs) = &key.2 {
             let fam = self.hub_family.entry((key.0.clone(), iface, lc)).or_default();
@@ -189,20 +190,28 @@ impl<'a> Engine<'a> {
         // 本调用点已接入的最近祖先：它的 lambda 接收者都已送达本调用点（`hub_lsent` 已登记，重放即跳过），
         // 故与它的 lambda 表相同的前缀直接跳过，结果与逐个查登记相同
         let anc = if replay { self.linked_ancestor(m, off, h) } else { None };
-        let skip = anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas));
-        for &r in &lambdas[skip..] {
+        // 字节码接入点：lambda 读者只建在枢纽锚点，实参 / 结果取枢纽节点（见 `Hub::anchor`）
+        let at_anchor = replay && *self.hubs[h as usize].anchor.get_or_insert((m, off)) == (m, off);
+        let skip = if replay { 0 } else { anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas)) };
+        let lambdas: &[u32] = if replay && !at_anchor { &[] } else { &lambdas[skip..] };
+        let (la, lres) = if replay { self.hub_lambda_call(h) } else { (a.clone(), res) };
+        let saved = if replay { self.call_vals.take() } else { None };
+        for &r in lambdas {
             if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                 continue;
             }
-            if same {
-                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, res))).copied();
-                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended && args_cover(&self.lcalls[id as usize].call.1, a)) {
+            if replay {
+                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(&(r, ret, lres))).copied();
+                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended) {
                     self.lcall_revive(id);
                     continue;
                 }
             }
             self.lprof_replay(h, true);
-            self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
+            self.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX);
+        }
+        if replay {
+            self.call_vals = saved;
         }
         for (t, rs) in special {
             if anc.is_some_and(|p| self.ancestor_sent(p, t, &rs)) {
@@ -223,6 +232,13 @@ impl<'a> Engine<'a> {
         // 首个调用点接入后展开（先并入实参常量，再按形参值分析目标）
         self.prof_seg(site_prof::SEG_LINK_EXPAND);
         self.hub_expand(h);
+    }
+
+    /// 枢纽上 lambda 读者的实参与结果节点：枢纽形参节点 `HP`、返回节点 `HR`
+    fn hub_lambda_call(&self, h: u32) -> (Args, Option<Node>) {
+        let hub = &self.hubs[h as usize];
+        let a = hub.ptypes.iter().enumerate().map(|(j, pt)| pt.map(|_| vec![Feed::N(Node::HP(h, j as u16))])).collect();
+        (a, hub.ret.map(|_| Node::HR(h)))
     }
 
     /// 同一调用点以另一组实参再接入（同一调用点上不同方法引用 lambda 的转发调用，捕获拼接后实参不同）：
@@ -255,10 +271,8 @@ impl<'a> Engine<'a> {
         hub.links.insert((m, off), Rc::new(Link { id: l.id, a: merged.clone(), res: l.res, cv: l.cv.clone() }));
         let (site, lambdas, special, ret) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone(), hub.ret);
         let saved = std::mem::replace(&mut self.call_vals, l.cv.clone());
-        for &r in lambdas.iter() {
-            self.lprof_replay(h, false);
-            self.dispatch_one(m, off, r, &site, &merged, ret, l.res, NOCTX);
-        }
+        // lambda 接收者的读者在枢纽锚点、以枢纽节点为实参，新增实参已汇入 `HP`
+        let _ = (lambdas, site);
         for (t, rs) in special {
             for &r in rs.iter() {
                 self.edge(m, off, t, Recv::Exact(r), &merged, ret, l.res);
@@ -391,8 +405,17 @@ impl<'a> Engine<'a> {
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             Rc::make_mut(&mut self.hubs[h as usize].lambdas).push(r);
             let saved = self.call_vals.take();
+            let anchor = self.hubs[h as usize].anchor;
             for ((m, off), l) in links(self) {
-                if self.methods[m].kind == Kind::Bytecode && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
+                if self.methods[m].kind == Kind::Bytecode {
+                    // 字节码接入点只在锚点以枢纽节点建一个读者
+                    if anchor != Some((m, off)) || !self.hub_lsent.entry(m).or_default().insert((off, r)) {
+                        continue;
+                    }
+                    let (la, lres) = self.hub_lambda_call(h);
+                    self.lprof_replay(h, true);
+                    self.call_vals = None;
+                    self.dispatch_one(m, off, r, &site, &la, ret, lres, NOCTX);
                     continue;
                 }
                 self.lprof_replay(h, true);
