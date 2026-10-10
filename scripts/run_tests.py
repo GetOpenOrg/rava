@@ -562,9 +562,12 @@ def _test_workspace(bin_name: str) -> Path:
 
 
 def _transpile(java_file: Path, out_dir: Path) -> tuple[bool, str]:
-    """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。"""
+    """`rava build --stop-after emit`：overlay 手写代码 + 生成该测试的 Rust 代码。
+
+    语料构建带 `--train-predefined`：闭包触达类定义 native 时 rava 按需跑训练运行，产物落 scratch
+    （docs/plans/2026-10-10-xsltc-translet.md X2），未触达的用例不受影响。"""
     args = [str(RAVA), "build", str(java_file), "--stop-after", "emit", "--out", str(out_dir),
-            "--java-home", os.environ["JAVA_HOME"], *MAIN_FLAGS]
+            "--java-home", os.environ["JAVA_HOME"], "--train-predefined", *MAIN_FLAGS]
     try:
         r = _run(args, cwd=ROOT, timeout=TRANSPILE_TIMEOUT)
     except subprocess.TimeoutExpired:
