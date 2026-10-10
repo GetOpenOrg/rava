@@ -210,7 +210,7 @@ impl Class {
 
     /// 反射族内部：本类声明方法行（构造器/类初始化器行含在内，消费方按
     /// JDK 语义过滤）。消费方：getDeclaredMethod / getDeclaredMethods。
-    fn __declared_method_rows(&self) -> &'static [crate::meta::MethodMeta] {
+    pub(crate) fn __declared_method_rows(&self) -> &'static [crate::meta::MethodMeta] {
         let cls_key = format!("{}", self.__get_name()).replace('.', "/");
         crate::meta::class_methods().iter()
             .find(|(n, _)| *n == cls_key)

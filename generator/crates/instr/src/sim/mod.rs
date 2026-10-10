@@ -47,6 +47,7 @@ pub fn sim_instr(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, ins: &N
         }
         NInsn::NullRecv { call } => abrupt::null_recv(env, sim, call),
         NInsn::NoReturn { call } => abrupt::noreturn(env, sim, log, call),
+        NInsn::NoClassDef { at, class } => abrupt::no_class_def(env, sim, at, class),
     }
 }
 

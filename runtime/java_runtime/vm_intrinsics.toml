@@ -540,9 +540,16 @@ predefined_definers = [
 ]
 methods = [
     "java/lang/Class.getDeclaredMethods0:(Z)[Ljava/lang/reflect/Method;",
+    # 动态代理类定义点：代理实现接口的方法对象由 VM 按接口声明方法表构造（Proxy$Dyn 载体）
+    "java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V",
 ]
 constructors = [
     "java/lang/Class.getDeclaredConstructors0:(Z)[Ljava/lang/reflect/Constructor;",
+]
+# 开放枚举：上列成员枚举中、枚举结果交给用户代码的入口。用户代码可对拿到的 Method 反射调用任意接收者
+# （代理调用处理器把 Method 转发给被代理对象），所指类不论属用户还是 JDK，全部成员入反射分派面（同用户类被枚举）
+exposing_enumerators = [
+    "java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V",
 ]
 record_accessors = [
     "java/lang/Class.getRecordComponents0:()[Ljava/lang/reflect/RecordComponent;",
@@ -1099,6 +1106,8 @@ null_queues = ["java/lang/ref/ReferenceQueue$Null"]
 "jdk/internal/misc/Unsafe.objectFieldOffset:(Ljava/lang/Class;Ljava/lang/String;)J" = "field_offset"
 "jdk/internal/misc/Unsafe.compareAndSetReference:(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z" = "cas_reference"
 "java/lang/Class.registerNatives:()V" = "noop"
+# 代理类定义点的 Method 预取只填进程级缓存（proxy_dyn_impl.rs），调用时按需构造同一对象：求值期无可见效果
+"java/lang/reflect/Proxy$Dyn.defineInterfaceMethods:(Ljava/lang/Class;)V" = "noop"
 "java/lang/Class.getPrimitiveClass:(Ljava/lang/String;)Ljava/lang/Class;" = "primitive_class"
 "java/lang/Class.initClassName:()Ljava/lang/String;" = "class_name"
 "java/lang/Class.isArray:()Z" = "class_is_array"

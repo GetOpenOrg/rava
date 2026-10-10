@@ -100,7 +100,7 @@ pub struct EmitInput {
     /// 非 native 方法按字节码翻译成根方法体（`emit::project::root_bodies`）
     pub root: Option<ClassInfo>,
     pub user_classes: Vec<String>,
-    /// lib crate 名 → 发射类（声明序）
+    /// lib crate 名 → 发射类（声明序 = 依赖方向，见 `lib_order`）
     pub lib_crates: Vec<(String, Vec<String>)>,
     /// java_runtime 发射的 JDK 类（闭包序）
     pub jdk_classes: Vec<String>,
@@ -452,6 +452,8 @@ impl<'a> BuildInput<'a> {
         let visited = visited_of(self);
         lap("input.closure");
         let (lib_crates, jdk_classes) = self.lib_split(&closure)?;
+        let files: BTreeMap<&str, &Arc<ClassFile>> = closure.iter().map(|c| (c.name.as_str(), c)).collect();
+        let lib_crates = crate::lib_order::order(lib_crates, &files, &visited);
         let registry = self.registry(&lib_crates, &jdk_classes)?;
         lap("input.registry");
         let root = root_class(self, &mut warnings);
