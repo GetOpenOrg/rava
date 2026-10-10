@@ -320,7 +320,7 @@ def report_local(disp: list[dict]) -> None:
     e2e / rava build / 不经锁的编译都应在服务器；另标孤儿进程、所在 worktree 已删、分发器对应结果已完成。"""
     section("本机项目进程（本机只允许经 heavy_lock 的 cargo check）")
     procs = {}
-    for line in sh("ps -axo pid=,ppid=,etime=,rss=,command=").splitlines():
+    for line in sh("ps -ww -axo pid=,ppid=,etime=,rss=,command=").splitlines():
         f = line.split(None, 4)
         if len(f) == 5:
             procs[f[0]] = {"ppid": f[1], "etime": f[2], "rss": int(f[3]) // 1024, "cmd": f[4]}
@@ -373,6 +373,7 @@ def report_local(disp: list[dict]) -> None:
         rows += 1
     if not rows:
         print("  无")
+    report_wait_loops(procs)
     heavy = [(p["rss"], pid, p) for pid, p in procs.items() if p["rss"] > 300]
     for mb, pid, p in sorted(heavy, reverse=True)[:5]:
         print(f"  重进程 {pid} ppid={p['ppid']} {mb}MB {p['etime']} {Path(p['cmd'].split()[0]).name}")
@@ -382,6 +383,53 @@ def report_local(disp: list[dict]) -> None:
     print(f"  磁盘空闲 {free_g}G" + ("  ← 低于阈值" if 0 <= free_g < LOCAL_DISK_MIN_G else ""))
     print("  " + sh("memory_pressure | tail -1").strip())
     print("  swap " + sh("sysctl -n vm.swapusage").strip())
+
+
+def wait_target(cmd: str) -> str | None:
+    """后台等待循环（until / while kill -0 / for i in seq）所等的目标：分发器 tag、日志文件或 PID。"""
+    if not re.search(r"\buntil\b|while kill -0|for i in \$\(seq", cmd):
+        return None
+    if m := re.search(r"pgrep -f \S*\[d\]istribute_tests\.\*([\w.-]+)", cmd):
+        return f"tag:{m.group(1)}"
+    if m := re.search(r"kill -0 (\d+)", cmd):
+        return f"pid:{m.group(1)}"
+    if m := re.search(r"(?:grep -q \"[^\"]*\"|\[ -s) (\S+?)(?:\s|;|\])", cmd):
+        return f"file:{m.group(1)}"
+    return None                                # 命令行只是带了这些字样（如巡检自身），不算
+
+
+def report_wait_loops(procs: dict) -> None:
+    """等待循环：标重复（同目标多个）、所等文件超 30 分钟无更新（作业已结束 / 标记永不出现）、
+    所等分发器已不在、运行超 4h。查进程须用 ps -ww 全宽，截断会漏。"""
+    section("本机等待循环（until / while / for 轮询）")
+    loops = {}
+    for pid, p in procs.items():
+        if Path(p["cmd"].split()[0]).name not in ("zsh", "bash", "sh", "/bin/zsh"):
+            continue
+        if (t := wait_target(p["cmd"])):
+            loops.setdefault(t, []).append(pid)
+    if not loops:
+        print("  无")
+        return
+    now = time.time()
+    for t, pids in sorted(loops.items()):
+        warn = []
+        kind, _, val = t.partition(":")
+        if len(pids) > 1:
+            warn.append(f"重复 {len(pids)} 个")
+        if kind == "file":
+            f = Path(val)
+            if not f.exists() or now - f.stat().st_mtime > 1800:
+                warn.append("所等文件 30 分钟无更新")
+        elif kind == "tag" and not sh(f"pgrep -f '[d]istribute_tests.*{val}'").strip():
+            warn.append("所等分发器已不在")
+        elif kind == "pid" and val not in procs:
+            warn.append("所等进程已不在")
+        oldest = max(etime_seconds(procs[x]["etime"]) for x in pids)
+        if oldest > 4 * 3600:
+            warn.append("运行超 4h")
+        print(f"  {t:48} {' '.join(sorted(pids, key=int))}  最长 {oldest // 60}m"
+              + (f"  ← {'，'.join(warn)}" if warn else ""))
 
 
 # ── 分支 ──────────────────────────────────────────────────────────────────────
