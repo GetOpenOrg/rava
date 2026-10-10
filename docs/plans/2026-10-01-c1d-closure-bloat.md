@@ -4582,6 +4582,16 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
   - 未确认的一点：只开机制 B、不开逐组应用时 DeepCopy 是否也超限。旧基线上机制 B 未超（sg2 无内存上限）。
 
 **处置（0ad9f474）**：`vm_intrinsics.toml [concrete] object_results` 暂置空，机制 B 与逐组应用的代码保留，但不生效。闭包行为回到基线。
+dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
+
+| 用例 | 基线 589052eb（类 / 方法） | 0ad9f474（类） |
+| --- | --- | --- |
+| HelloWorld | 577 / 1896 | 577 |
+| DeepCopy | 3727 / 21509 | 3727（563 s，峰值 9.0 GiB） |
+
+- 基线 HelloWorld 闭包已不含 Calendar / SPILocaleProviderAdapter / ServiceLoader（logchain3 所致）。DeepCopy 三者仍在。Calendar 的首次到达是 `Preconditions.outOfBoundsMessage@338` → `String.format` → `Formatter.format(Locale,…) #@level:2@89` → `FormatSpecifier.print@11` → `printDateTime@34`。
+  这条路径上的格式串都是常量，但到达 parse 时处在 `@level:2` 截断上下文，值已合并。这里正是机制 B 与逐组应用的用武之地，需先解决内存问题再验证。
+- 闭包单测 240 通过。
 
 **接手方向**：
 1. 先实测 DeepCopy 只开机制 B（逐组应用关掉）时的峰值，定位内存来自组合数还是物化对象数（`--flows @concrete` 的「回退后应用已知常量组合」诊断行数）。
