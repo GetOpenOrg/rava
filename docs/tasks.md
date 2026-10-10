@@ -102,8 +102,24 @@
 - **batch-1009c 已合入（10-09，按用户指示先合入，单测与 57 例抽查转合入后验证）**：含 bootcache（缓存组 = 未回退站点贡献的组，§5.8.6）、c1d-rest（C1d 收窄余项 0 类；c1d 计划 §31 记下一步能力：① 每对象 URI 跟踪约 285 类；② 引导区未知名字调 `Charset.isSupported` 放开全部扩展字符集约 390 类，charset 线续作；③ Formatter 常量格式串构建期求值）、regress2-rest（② ✅，① 转 object-bytecode）、annot-sig（SignatureParser 出闭包，HelloWorld 3456→3407、DeepCopy 3757→3727，`rava closure` 口径；e2e 口径另计）。
 - **进行中（10-09 派）**：根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；转译耗时回归第四轮已达标（perf-regress4，c3ec480d，待合入；根因与实测见 2026-10-09-transpile-time-regression.md「第四轮」）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
 - **派发点顺序依赖（order-findops，10-10 完工入 batch-1010b）**：FindOps 根因为 `absint/oracle.rs` `returned_params` 在尚无返回路径（⊥）时答 None（汇合），改答空集（§5.8.6），`closure_independent_of_order` 通过，HelloWorld / DeepCopy 方法各 −1（`ForEachOp$OfRef.get`）。`closure_independent_of_hash_seed` 仍失败（TestSerialDefaultSuid 种子 0 多 `Nodes$CollectionNode.forEach`）：`engine/ctxsel.rs` `selector_ctx` 读尚未定论的常量格选上下文（`ArrayDeque.grow` → `Arrays.copyOf` 常量阶段按调用点克隆，撤不回），终态修法为选择子掩码非空即一律按调用点克隆（续作 6，见 2026-10-08-annotation-signature-closure.md），10-10 派 ctxsel-mono。
+- **c1d-fmt2（10-10 完工待合批，分支 c1d-fmt2）**：C1d 能力③，详见 c1d 计划 §33.7。
+  - 机制 B（`[concrete] object_results` = `Formatter.parse`）已恢复。内存受控靠结果对象按内容合并，用户 printf 不再污染 Formatter.format 靠枢纽形参槽污染。
+  - 修复具体上下文的映像静态活性缺口（LahNumbers NPE，failure_patterns `concrete-ctx-image-static-dead`）。
+  - 对 main b1dae15c 实测：
+
+    | 用例 | 基线（类 / 方法，峰值） | 本分支 b04de767（类 / 方法，峰值） |
+    | --- | --- | --- |
+    | DeepCopy | 3038 / 16715，3.14 GiB | 3028 / 16587，2.80 GiB |
+    | LahNumbers | 2158 / 11077 | 675 / 2431 |
+    | HelloWorld | 577 / 1896 | 580 / 1896 |
+
+    HelloWorld 的 +3 类是健全性代价（`ClassRepository.NONE`）。
+  - 单测 A / B 0 失败，hash_seed 通过，抽查 30/30。
+  - **main b1dae15c 的 `closure_independent_of_order` 失败**：DeepCopy batch 1 / seed 1，差异在 `boot_image_data.live`，fmt2-ov-b1dae15c，batch-1010g/h 引入。
+  - 余项：DeepCopy 的 Calendar 仍经日志链（`ObjectInputFilter$Config.<clinit>` → System.Logger → MessageFormat）与真正未知格式串（`SimpleConsoleLogger.format` 属性、`toGMTFormat` 资源束串）可达；TestStringFormat 有机制 C 的 owild 污染；「仅身份」映像活性层未做。
 - **引导映像零拷贝（boot-zerocopy，10-10 完工入 batch-1010b）**：映像表改链接期符号、驻留查找回填运行期表；整进程墙钟 HelloWorld 195 → 178 ms、DeepCopy 314 → 292 ms，二进制 −0.9%。未达标：`__boot_image_start` 156 / 176 ms（目标 ≤1 ms，热点采样作业 zc-prof-669365cf）、DeepCopy 门面峰值 1779 MB（目标约 1.6 GB，需映像静态按块分 crate）；release 档待大内存机器；D5 残差区、S6 标准流未做。续作入口：引导映像计划 §5.10.5（属纯优化，按 10-06 分级暂缓）。
 - **fix-e0283-nd（10-10，C4 全量失败 NormalDistribution）**：根因——null 存入 / 汇合 / 实参等路径先把 null 落成无类型 `Default::default()`，随后再经 Object 边界或 `From` / `Into` / checkcast 转换（`<T as From<Object>>::from(Object::from(Default::default()))`），源类型不可推断（E0283，`AbstractPipeline` 局部 `p` 的跨实例化重建）。修法：在转换构造的公共入口统一处理——`sim::exprs` 的 `object_from` 对无类型缺省值取 Object 的 null，`qualified_from` / `into_call` / `instr::coerce::cast_node` 取目标类型的 `<T as Default>::default()`，`from_call` 原样返回；文本层 `to_object_text` 与 `unify` 的 `from_object` / `from_common` 同口径；存储重建 `rebuild_via_object` 对 null 直接取声明类型缺省值。验证：抽查 fixnd2（jp2）NormalDistribution 通过；单测作业 fixnd-ut2（dev，generator 除 driver）全过。
+- **fix-clone（10-10，C4 全量失败 TestJucSync / TestLocaleCurrency / TestLocaleDateCjk / TestParallelCapable / TestRandomFactoryAll / TestProcessBuilder）**：三个根因——① `offset-field-folded`（JucSync / RandomFactoryAll / ProcessBuilder）：只经 Unsafe 按偏移写的字段在构建期初始化类 `<clinit>` 按名取偏移、未放开而被折叠，5177e182 在符号偏移产生处（`field_offset`）即 `open_field` 收口；② 类镜像身份哈希构建期与运行期不一致（ParallelCapable）：映像内以 Class 为键的 WeakHashMap / HashMap（`ParallelLoaders.loaderTypes`、`Reflection.fieldFilterMap` 等）在运行期按地址哈希查不中，96143cf3 令镜像身份哈希按所指类型名确定（求值器 `fnv32("m:"+名)`，运行期 `Class::__pin_mirror_hash` 同值）；③ 地区补种漏别名常量（LocaleCurrency / LocaleDateCjk）：`Locale.CHINA / PRC / TAIWAN` 在 `<clinit>` 以另一常量赋值，溯源器只认字面量 invokestatic，zh 资源束类不进闭包而回落 root，222fd151 补别名溯源与中文候选链补文字 / 地区。验证（dev，222fd151）：抽查 9/9（6 例 + HelloWorld / DeepCopy / CollectorsDemo）；单测 fixclone-ut222c（closure_cli 11/11）/ fixclone-ut222r（其余全过，0 failed）。known_failures 删 TestLocaleCurrency（原误记为 expected 基线）/ TestLocaleDateCjk。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -244,7 +260,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
-| 并发小步 A | ⏳ 待派 | 持锁断言（`with` / `__RefSlot` 守卫计数、`drop_slow` 断言、写锁自持有、`__safepoint` / `<clinit>` 断言）、`with` 拆 `&T` / `with_mut`、对象头位布局常量与 `IMAGE_OBJ`、监视器入口 null 判定与置位。无 GC 文档 §四 |
+| 并发小步 A | ✅ 已完工待合批（分支 conc-step-a） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
 | 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 

@@ -110,7 +110,7 @@ where T: Clone + From<Object>, Object: From<T>
         }
         __RefAccess::Update(f) => {
             // 锁内读出当前值并按 f 写入（f 只比较引用、不访问本单元）；被替换的旧值在锁外释放
-            let (cur, old) = slot.with(|g| {
+            let (cur, old) = slot.with_mut(|g| {
                 let cur: Object = g.as_ref().map(|b| Object::from(Clone::clone(b))).unwrap_or_default();
                 let old = f(Clone::clone(&cur))
                     .map(|n| std::mem::replace(g, Some(<T as From<Object>>::from(n))));

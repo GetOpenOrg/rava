@@ -142,7 +142,9 @@ impl Class {
     #[jvm_native]
     pub fn setSigners(&self, signers: JArray<Object>) -> Result<()> {
         if !self.isPrimitive()? {
-            _signers_table(|t| { t.insert(self.__slash_name(), signers); });
+            // 键在锁外求出；被覆盖的旧签名者数组在锁外释放
+            let key = self.__slash_name();
+            drop(_signers_table(|t| t.insert(key, signers)));
         }
         Ok(())
     }

@@ -30,6 +30,18 @@ fn put_str(p: &Put) -> Option<Option<V>> {
     }
 }
 
+/// 按对象物化对象内容文本的递归深度上限（更深处只取类名：合并更粗，仍健全）
+const CONTENT_DEPTH: usize = 4;
+
+/// 内容文本的 64 位 FNV-1a 散列（十六进制）
+fn fnv_hex(s: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
 fn pv_of(v: &MV) -> PV {
     match v {
         MV::Prim(Put::Int(x)) => PV::Const(V::Int(*x)),
@@ -43,6 +55,9 @@ impl<'a> Engine<'a> {
     /// 一组实参的结果并入调用点 m@off（入口 entry）
     pub(super) fn concrete_apply(&mut self, m: usize, off: u32, entry: &MemberRef, md: &MethodDesc, o: &Outcome) {
         let via = Via::method("concrete", m, Some(off));
+        // 结果按对象物化（`[concrete] object_results`）：入口自身分配的类的结果实例各成一个抽象对象
+        let ek = self.mref_key(entry);
+        let per_obj = self.man.concrete.object_results.contains(&*ek);
         let cctx = self.concrete.ctx;
         let mut grown: Vec<MemberRef> = Vec::new();
         for (k, pcs) in &o.pcs {
@@ -75,17 +90,32 @@ impl<'a> Engine<'a> {
             }
             for p in ps {
                 let pv = pv_of(&MV::Prim(p.clone()));
-                // 物化写入不按抽象对象分开：同时并入按对象读的通配值（见 `obj_fields.rs`）
-                self.wild_put(f, &pv);
+                // 物化写入不按抽象对象分开：同时并入按对象读的通配值（见 `obj_fields.rs`）。按对象物化时新分配对象上的
+                // 写入不并入：进结果的新对象各按快照值记入自己的字段（`mat_field`），其余新对象程序不可见；
+                // 按类型代表的结果对象不是抽象对象，不出现在按对象读的对象集里
+                if !per_obj {
+                    self.wild_put(f, &pv);
+                }
                 self.field_put(f, pv);
             }
             self.concrete_str_puts(m, f, ps);
         }
+        if per_obj {
+            for (f, ps) in &o.shared_puts {
+                if self.static_final(f) {
+                    continue;
+                }
+                for p in ps {
+                    self.wild_put(f, &pv_of(&MV::Prim(p.clone())));
+                }
+            }
+        }
         // 结果对象图
         let obj = self.id(OBJECT);
         let mut ids: Vec<Option<TypeSet>> = vec![None; o.objs.len()];
+        let mut own: Vec<Option<u32>> = vec![None; o.objs.len()];
         for i in 0..o.objs.len() {
-            self.mat_obj(m, off, &o.objs, i, &mut ids, &via);
+            own[i] = self.mat_obj(m, off, &o.objs, i, &mut ids, &via, per_obj);
         }
         for (i, x) in o.objs.iter().enumerate() {
             let me = ids[i].clone().unwrap_or_default();
@@ -100,12 +130,12 @@ impl<'a> Engine<'a> {
                 }
             } else {
                 for (f, v) in &x.fields {
-                    self.mat_field(f, v, &ids, &via);
+                    self.mat_field(f, v, &ids, &via, own[i], per_obj);
                 }
             }
         }
         for (f, v) in &o.memo {
-            self.mat_field(f, v, &ids, &via);
+            self.mat_field(f, v, &ids, &via, None, false);
         }
         for v in &o.thrown {
             self.mat_val(v, &ids, &via);
@@ -147,8 +177,34 @@ impl<'a> Engine<'a> {
         self.invalidate_all(deps, Why::RetConst);
     }
 
-    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via) {
+    /// 第 i 个结果对象的值集；按对象物化（per_obj）且其类在 `pobj_types` 中时为抽象对象，返回该对象。
+    /// 对象按内容命名（`content_name`）：快照相同的同类对象（各格式串里形态相同的说明符等）是同一个抽象对象，
+    /// 对象数以不同的快照形态为上界，与实参组合数、调用点数无关；名字只取决于内容，与求值 / 应用次序无关
+    #[allow(clippy::too_many_arguments)]
+    fn mat_obj(&mut self, m: usize, off: u32, objs: &[MObj], i: usize, ids: &mut [Option<TypeSet>], via: &Via, per_obj: bool) -> Option<u32> {
         let x = &objs[i];
+        if per_obj && self.pobj_of(x) {
+            self.instantiate_type(&x.ty, via.clone());
+            let mut text = String::new();
+            self.content_name(objs, i, 0, &mut text);
+            let chain = format!("@concrete:{}", fnv_hex(&text));
+            let tid = self.id(&x.ty);
+            let id = self.id(&format!("{}{chain}", x.ty));
+            if self.objs.insert(id, tid).is_none() {
+                let n = &mut self.concrete.pobj_stats;
+                n[0] += 1;
+                if n[0] >= 64 && n[0].is_power_of_two() {
+                    eprintln!("[closure] 按对象物化：{} 个对象，回退后应用 {} 组，峰值 {} MiB", n[0], n[1], crate::engine::peak_mem_mb());
+                }
+            }
+            // 链首段 → 类（同 `classes.rs::obj_at`）：以该对象为属主的内部分配据此判定是否沿用属主链
+            self.seg_cls.entry(Rc::from(chain.as_str())).or_insert(tid);
+            self.obj_chain.insert(id, Rc::from(chain));
+            // 快照含全部实例字段（含初值）：各字段都确定写入，按对象读不并入初值
+            self.ctx.ofull.borrow_mut().insert(id);
+            ids[i] = Some(TypeSet::exact(id));
+            return Some(id);
+        }
         let s = if let Some(l) = &x.lam {
             TypeSet::exact(self.id(&lam_name(l, m, off, i)))
         } else if x.arr {
@@ -159,6 +215,41 @@ impl<'a> Engine<'a> {
             TypeSet::exact(self.id(&x.ty))
         };
         ids[i] = Some(s);
+        None
+    }
+
+    /// 快照对象 x 按对象物化（非数组、非 lambda、类在 `pobj_types` 中）
+    fn pobj_of(&self, x: &MObj) -> bool {
+        x.lam.is_none() && !x.arr && self.per_object_type(&x.ty)
+    }
+
+    /// 第 i 个快照对象的内容文本（命名用）：按对象物化的对象取类与各字段值，引用的按对象物化对象递归取内容；
+    /// 其余对象按其物化形态（类 / 数组类 / lambda 接口）取，它们物化后不按对象区分，内容不影响抽象状态。
+    /// 内容相同即物化后的抽象状态相同，合并不损精度
+    fn content_name(&self, objs: &[MObj], i: usize, depth: usize, out: &mut String) {
+        use std::fmt::Write;
+        let x = &objs[i];
+        if !self.pobj_of(x) {
+            let kind = if x.lam.is_some() { "λ" } else if x.arr { "[]" } else { "" };
+            let _ = write!(out, "{kind}{}", x.ty);
+            return;
+        }
+        if depth >= CONTENT_DEPTH {
+            let _ = write!(out, "{}{{…}}", x.ty);
+            return;
+        }
+        let _ = write!(out, "{}{{", x.ty);
+        for (f, v) in &x.fields {
+            let _ = write!(out, "{}.{}=", f.owner, f.name);
+            match v {
+                MV::Obj(j) => self.content_name(objs, *j, depth + 1, out),
+                v => {
+                    let _ = write!(out, "{v:?}");
+                }
+            }
+            out.push(';');
+        }
+        out.push('}');
     }
 
     /// 具体求值中 String 字段的写入并入字段常量集与字段字符串槽（与字节码写入同一口径，见 bytecode.rs）：
@@ -218,20 +309,30 @@ impl<'a> Engine<'a> {
         self.new_lambda(m, off, name, ctx, (l.iface.clone(), &l.sam), imh, (cap, None), &l.bargs);
     }
 
-    /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）
-    fn mat_field(&mut self, f: &MemberRef, v: &MV, ids: &[Option<TypeSet>], via: &Via) {
+    /// 字段写入：常量格并入值集，引用值并入未知接收者视图（物化对象按类型代表，读者经字段并集取值）。
+    /// 按对象物化的对象（own）：值记入该对象的字段（按对象值表与对象字段节点），不并入通配值与未知接收者视图；
+    /// 同一次物化中其余按类型代表的对象（per_obj）不并入通配值（见 `concrete_apply`）
+    fn mat_field(&mut self, f: &MemberRef, v: &MV, ids: &[Option<TypeSet>], via: &Via, own: Option<u32>, per_obj: bool) {
         if !self.static_final(f) {
             let pv = pv_of(v);
-            self.wild_put(f, &pv);
+            match own {
+                Some(o) => self.obj_field_put(f, &[o], false, &pv),
+                None if !per_obj => self.wild_put(f, &pv),
+                None => {}
+            }
             self.field_put(f, pv);
         }
         if parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_none() {
             return;
         }
         let fi = self.field_node(f.clone());
-        if let Some(f) = self.mat_val(v, ids, via) {
+        if let Some(fd) = self.mat_val(v, ids, via) {
             let obj = self.id(OBJECT);
-            self.feed(&[f], Node::U(fi), obj);
+            let node = match own.zip(self.fields.get_index(fi).and_then(|e| *e.1)) {
+                Some((o, tid)) => self.obj_field(o, fi, tid),
+                None => Node::U(fi),
+            };
+            self.feed(&[fd], node, obj);
         }
     }
 
@@ -273,6 +374,14 @@ impl<'a> Engine<'a> {
                         self.init(&decl, via.clone());
                     }
                     self.field_handwritten(&decl, &f.name, &f.desc, &via, None);
+                    // 具体上下文执行过的静态字段访问运行期照样执行：引用类型静态字段登记字段节点，构建期初始化类的
+                    // 取映像值（所指映像对象成为活对象，内容随之入队）——否则只经具体上下文读到的映像静态不发射，运行期
+                    // 读成 null。实例字段不登记：接收者来自静态 / 实参 / 新建对象，前两者的映像对象已活、内容已传播，
+                    // 按字段并集登记反把全部活对象的该字段值并入（如类镜像的 genericInfo）
+                    let is_static = opc == op::GETSTATIC || opc == op::PUTSTATIC;
+                    if is_static && parse_field(&f.desc).and_then(|t| self.ptype(&t)).is_some() {
+                        self.field_node(MemberRef { owner: decl, name: f.name.clone(), desc: f.desc.clone() });
+                    }
                 }
                 (Operand::Method(mref, iface), opc) => {
                     let lvl = if opc == op::INVOKESTATIC || opc == op::INVOKESPECIAL { Level::Layout } else { Level::Type };

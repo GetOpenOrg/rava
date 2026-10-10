@@ -34,7 +34,7 @@ crate::__process_static! {
 
 /// `generateConcreteSpeciesCode` 登记（key → SpeciesData）。
 pub fn register(key: std::string::String, species_data: Object) {
-    REGISTRY.with(|r| { r.borrow_mut().insert(key, species_data); });
+    REGISTRY.with(|r| r.put(key, species_data));
 }
 
 fn lookup(key: &str) -> Option<Object> {

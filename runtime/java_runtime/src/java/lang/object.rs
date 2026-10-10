@@ -20,7 +20,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
     fn hashCode(&self) -> i32 {
-        __identity_hash(self.__identity())
+        __object_identity_hash(self)
     }
 
     /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的运行时类
@@ -119,7 +119,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         }
         match self.__object() {
             Some(this) => super::object_body::Object__wait_body(&this),
-            None => crate::monitor::wait_timeout(self.__identity() as usize, false, 0, 0),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, 0, 0),
         }
     }
 
@@ -134,7 +134,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         }
         match self.__object() {
             Some(this) => super::object_body::Object__wait_l_body(&this, millis),
-            None => crate::monitor::wait_timeout(self.__identity() as usize, false, millis, 0),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, millis, 0),
         }
     }
 
@@ -148,7 +148,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
         }
         match self.__object() {
             Some(this) => super::object_body::Object__wait_l_i_body(&this, millis, nanos),
-            None => crate::monitor::wait_timeout(self.__identity() as usize, false, millis, nanos),
+            None => crate::monitor::wait_timeout(self.__identity() as usize, millis, nanos),
         }
     }
 
@@ -157,10 +157,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify(self.__identity() as usize, false)
+        crate::monitor::notify(self.__identity() as usize)
     }
 
     /// java.lang.Object.notifyAll()V
@@ -168,10 +165,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::notify_all(self.__identity() as usize, false)
+        crate::monitor::notify_all(self.__identity() as usize)
     }
 
     /// monitorenter（指令侧）：进入本对象的监视器（可重入）。
@@ -179,10 +173,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     where
         Self: Sized,
     {
-        if self.is_jvm_null() {
-            return Err(crate::error::JvmError::null_pointer());
-        }
-        crate::monitor::enter(self.__identity() as usize, false)
+        crate::monitor::enter(self.__identity() as usize)
     }
 
     /// monitorexit（指令侧）：退出本对象的监视器一层。
@@ -274,6 +265,18 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 #[doc(hidden)]
 pub use super::object_impl::Instance as __ObjectInstance;
 
+/// 对象的身份哈希（`Object.hashCode` / `System.identityHashCode` 的入口）：类镜像取按所指类型确定的值
+/// （与构建期引导映像同值，`Class::__mirror_hash`），其余对象取 [`__identity_hash`]。
+pub fn __object_identity_hash<T: ObjectVTable + ?Sized>(o: &T) -> i32 {
+    let id = o.__identity();
+    if o.__class_name() == "java/lang/Class" {
+        if let Some(h) = super::Class::__mirror_hash(id) {
+            return h;
+        }
+    }
+    __identity_hash(id)
+}
+
 /// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：
 /// 实例体地址经 SplitMix64 混合取 31 位——非负、非零（HotSpot markWord 的 31 位 hash 域，
 /// 0 保留为「未计算」，取 0 时换 0xBAD），低位分布均匀（地址对齐使低位恒 0，直接截断
@@ -318,7 +321,7 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
 /// Object.hashCode 是 ACC_NATIVE：身份哈希，取实例体的堆地址（与 `new Object()` 实例一致）。
 #[allow(non_snake_case)]
 pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<i32> {
-    Ok(__identity_hash(this.__identity()))
+    Ok(__object_identity_hash(this))
 }
 
 /// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize 的翻译体。
@@ -426,7 +429,9 @@ impl_vtable_primitive!(f64, "java/lang/Double", crate::java_fmt_f64,
     |v: f64| { let b = __canon_f64_bits(v); (b ^ (b >> 32)) as i32 });
 
 /// Java null 的静态哨兵（不计数，见 `obj_ref`）：`Object::default()` 与无静态类型的 null 共用这一个值。
-static JVM_NULL: __TypedNull = __TypedNull::new("java/lang/Object", None);
+/// 全部 null（本值、各 `__TypedNull`、接口 `__TYPED_NULL`、`__ArrayNull`）的身份都是本值地址，
+/// 监视器入口据此一次比较判 null（`monitor::null_identity`）。
+pub(crate) static JVM_NULL: __TypedNull = __TypedNull::new("java/lang/Object", None);
 
 /// 带静态类型的 null：接口载体（`java_class!` 接口块）与类 wrapper 的 null 装入 Object 的形态。
 /// 值语义仍是 Java null（`is_jvm_null`，身份即 null 哨兵，与任意 null 引用相等），但
@@ -504,9 +509,7 @@ impl Object {
         // 运行期按名建立的类型化 null：每名一个泄漏的 'static 值（名字集合有界：静态类型名）。
         // 同名的接口载体 null 与类 null 不会并存（类与接口不同名）；带描述符的覆盖无描述符的
         let n = Object::__from_static(Box::leak(Box::new(__TypedNull(binary_name, desc))));
-        TYPED_NULLS.with(|m| {
-            m.borrow_mut().insert(binary_name, Clone::clone(&n));
-        });
+        TYPED_NULLS.with(|m| m.put(binary_name, Clone::clone(&n)));
         n
     }
 
