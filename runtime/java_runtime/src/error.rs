@@ -166,6 +166,11 @@ impl JvmError {
             format!("Could not initialize class {}", binary_name.replace('/', ".")))))
     }
 
+    /// 类解析失败（JVMS §5.4.3）：引用的类不在类路径上。消息为类的内部名（斜线形态，与 HotSpot 一致）
+    pub fn class_not_found_at_resolution(internal_name: &str) -> Self {
+        vm_throw(crate::java::lang::NoClassDefFoundError::new_str(String::from(internal_name.to_string())))
+    }
+
     /// `<clinit>` 异常收尾（JVMS §5.5 步骤 11）：Error 及其子类原样传播，
     /// 其余包装为 ExceptionInInitializerError。
     pub fn in_initializer(cause: JvmError) -> Self {

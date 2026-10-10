@@ -140,6 +140,7 @@ fn fold_json(f: &Fold) -> Value {
         "consts": f.consts.iter().map(|(pc, op, v, ty)| json!({"pc": pc, "kind": kind(*op), "value": const_json(v, ty), "type": ty})).collect::<Vec<_>>(),
         "null_recv": f.null_recv,
         "noreturn_calls": f.noreturn_calls,
+        "no_class": f.no_class.iter().map(|(pc, c)| json!({"pc": pc, "class": c})).collect::<Vec<_>>(),
         "noreturn_dead_pcs": f.noreturn_dead_pcs.iter().map(|(a, b)| json!([a, b])).collect::<Vec<_>>(),
         "direct_calls": f.direct_calls.iter().map(|(pc, h)| json!({"pc": pc, "target": h.to_string()})).collect::<Vec<_>>(),
     })
@@ -235,6 +236,7 @@ impl Closure<'_> {
             "fold_violations": folds.iter().map(|f| f.violations.len()).sum::<usize>(),
             "fold_null_recv": folds.iter().map(|f| f.null_recv.len()).sum::<usize>(),
             "fold_noreturn_calls": folds.iter().map(|f| f.noreturn_calls.len()).sum::<usize>(),
+            "fold_no_class": folds.iter().map(|f| f.no_class.len()).sum::<usize>(),
             "fold_direct_calls": folds.iter().map(|f| f.direct_calls.len()).sum::<usize>(),
             "fold_noreturn_dead_bytes": folds.iter().flat_map(|f| &f.noreturn_dead_pcs).map(|(a, b)| b - a).sum::<u32>(),
             "fold_props": folds.iter().map(|f| f.props.len()).sum::<usize>(),

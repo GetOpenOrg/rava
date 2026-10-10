@@ -5,6 +5,9 @@
 //!   确为 null → NullPointerException；否则 panic 报出违约点（分析器缺写入来源），不静默当作 NPE。
 //! - [`noreturn`]：调用照常翻译，返回值丢弃，其后 `__noreturn("被调方");`（返回 `!`）——被调方若违反
 //!   分析结论而正常返回，panic 报出违约点，不会继续执行已删去的代码。
+//! - [`no_class_def`]：解析的类不在类路径上的指令（folds `no_class`）——不翻译，弹出其操作数（副作用按求值序
+//!   保留）后 `return Err(__no_class_def("类内部名"));`，与 JVM 解析失败同样抛 NoClassDefFoundError，
+//!   覆盖它的处理器照常捕获。
 
 use classfile::{Insn, Operand};
 use ir::{Expr, Lit, Stmt};
@@ -66,5 +69,31 @@ pub fn noreturn(env: &InstrEnv, sim: &mut StackSim, log: &mut InstrLog, call_ins
         sim.emit(let_discard(e.expr))?;
     }
     sim.emit(Stmt::Expr(call(&["__noreturn"], vec![Expr::Lit(Lit::Str(member))])?))?;
+    Ok(())
+}
+
+/// 解析失败点：抛 NoClassDefFoundError（JVMS §5.4.3；消息为类的内部名，与 HotSpot 一致）
+pub fn no_class_def(env: &InstrEnv, sim: &mut StackSim, at: &Insn, class: &str) -> InstrResult<()> {
+    use classfile::op;
+    let operands = match (&at.operand, at.opcode) {
+        (Operand::Field(_), op::GETSTATIC) => 0,
+        (Operand::Field(_), op::PUTSTATIC | op::GETFIELD) => 1,
+        (Operand::Field(_), _) => 2,
+        (Operand::Method(m, _), o) => ty::type_map::parse_descriptor_params(&m.desc).len() + usize::from(o != op::INVOKESTATIC),
+        (Operand::Class(_), op::ANEWARRAY) => 1,
+        (Operand::MultiANewArray(_, dims), _) => usize::from(*dims),
+        _ => 0,
+    };
+    let mut popped = Vec::with_capacity(operands);
+    for _ in 0..operands.min(sim.state.stack.len()) {
+        popped.push(sim.pop()?);
+    }
+    for v in popped.into_iter().rev() {
+        if looks_effectful(&text(env, &v.expr)) {
+            sim.emit(let_discard(v.expr))?;
+        }
+    }
+    let err = call(&["__no_class_def"], vec![Expr::Lit(Lit::Str(class.to_string()))])?;
+    sim.emit(Stmt::Return(Some(call(&["Err"], vec![err])?)))?;
     Ok(())
 }
