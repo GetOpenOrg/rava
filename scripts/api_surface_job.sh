@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # 阶段 API 面作业（dev 上以作业模式运行；本机不跑）：取包 → 样例应用 javac + 真 JVM 运行（记录输出与实载类）
-# → rava 闭包两变体（A：仅 main；B：main + JVM 实载的框架类作 --seed-class）→ 面文件与 e2e 分层数据。
+# → rava 闭包两变体（A：仅 main；B：main + JVM 实载的框架类作 --seed-class；并行，看门狗记 RSS / 超时）→ 面文件与 e2e 分层数据。
+# 环境变量：API_SURFACE_CLOSURE_TIMEOUT（每变体秒数，缺省 2400）、API_SURFACE_CLOSURE_MEM_MB（每变体 RSS 上限，缺省不设）、
+#           API_SURFACE_OUT_RATIO（分层暂缓门槛，缺省 0.5）、API_SURFACE_JOBS（e2e javac 并行度，缺省 8）
 #
 # 用法：scripts/api_surface_job.sh [阶段=s0]        样例在 tests/lib_pilot/<阶段>_boot/（src/ resources/ jars.txt）
-# 产物：build/api_surface/<阶段>/（作业 --fetch 'build/api_surface/<阶段>/**'），面与分层数据另写
+# 产物：build/api_surface/<阶段>/（作业 --fetch 'build/api_surface/<阶段>/**'；含 closure_<变体>.json.gz / .rss / .killed），面与分层数据另写
 #       tests/api_surface/<阶段>.txt、tests/api_surface/tiers_<阶段>.toml（同样取回后入库）
 # 口径：docs/plans/2026-10-07-framework-driven-api-coverage.md 步骤 1 / 2
 set -uo pipefail
@@ -59,27 +61,64 @@ echo "JVM rc=$?"; cat "$OUT/jvm_stdout.txt" | head -40
     --source "$CLS" $(echo "$CP" | tr ':' '\n' | sed 's/^/--source /')
 grep -c ' source: jrt:/\| source: shared objects file' "$RAW/classload.log" | sed 's/^/JVM 实载 JDK 类 /'
 
-# 4. rava 闭包两变体（失败如实记录，不中断后续一跳面）
+# 4. rava 闭包两变体，并行跑（失败如实记录，不中断后续一跳面）
+#    看门狗每 30 s 采样 RSS（写 closure_<变体>.rss：秒 RSS_MiB），超时（API_SURFACE_CLOSURE_TIMEOUT，缺省 2400 s）
+#    或 RSS 超上限（API_SURFACE_CLOSURE_MEM_MB，缺省不设）即按 PID 终止，记下终止原因，得到精确的阻塞点数据；
+#    两变体各有上限，一个超限不连累另一个（槽 scope 上限按两者之和给 --slot-mem）
 MAIN="$(grep -rl 'static void main' "$APP/src" | head -1 | sed "s|$APP/src/||; s|\.java$||; s|/|.|g")"
-run_closure() {
+CL_TIMEOUT="${API_SURFACE_CLOSURE_TIMEOUT:-2400}"
+CL_MEM="${API_SURFACE_CLOSURE_MEM_MB:-0}"
+start_closure() {
     local tag="$1"; shift
-    step "闭包 $tag"
-    local t0=$SECONDS
+    step "闭包 $tag 启动（上限 ${CL_TIMEOUT}s / ${CL_MEM} MiB）"
     local timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
-    timeout "${API_SURFACE_CLOSURE_TIMEOUT:-2400}" "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
-        -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err"
-    local rc=$?
-    echo "闭包 $tag rc=$rc 耗时 $((SECONDS - t0))s"
+    "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
+        -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err" &
+    local wpid=$!
+    (
+        t0=$SECONDS; : >"$OUT/closure_$tag.rss"; pid=""
+        while kill -0 "$wpid" 2>/dev/null; do
+            [[ -z "$pid" ]] && pid="$(pgrep -P "$wpid" -x rava | head -1)"
+            [[ -z "$pid" && ${#timer[@]} == 0 ]] && pid="$wpid"
+            el=$((SECONDS - t0))
+            rss=0; [[ -n "$pid" ]] && rss=$(awk '/^VmRSS/ {print int($2/1024)}' "/proc/$pid/status" 2>/dev/null || echo 0)
+            echo "$el ${rss:-0}" >>"$OUT/closure_$tag.rss"
+            why=""
+            (( el >= CL_TIMEOUT )) && why="超时 ${el}s"
+            (( CL_MEM > 0 && ${rss:-0} >= CL_MEM )) && why="RSS ${rss} MiB ≥ 上限 ${CL_MEM} MiB（${el}s）"
+            if [[ -n "$why" && -n "$pid" ]]; then
+                echo "$why" >"$OUT/closure_$tag.killed"
+                kill -TERM "$pid" 2>/dev/null; sleep 10; kill -KILL "$pid" 2>/dev/null
+                break
+            fi
+            sleep 30
+        done
+    ) &
+    eval "CL_W_$tag=$wpid CL_D_$tag=$! CL_T_$tag=$SECONDS"
+}
+finish_closure() {
+    local tag="$1" wv="CL_W_$1" dv="CL_D_$1" tv="CL_T_$1"
+    wait "${!wv}"; local rc=$?
+    wait "${!dv}" 2>/dev/null
+    step "闭包 $tag rc=$rc 耗时 $((SECONDS - ${!tv}))s"
+    [[ -s "$OUT/closure_$tag.killed" ]] && echo "  看门狗终止：$(cat "$OUT/closure_$tag.killed")"
+    echo "  RSS 采样末 3 行（秒 MiB）：$(tail -3 "$OUT/closure_$tag.rss" | paste -sd'|' -)"
     grep -E "Maximum resident|Elapsed" "$OUT/closure_$tag.err" | sed 's/^\s*/  /'
     grep -vE "^\s+(Maximum|Elapsed|Command|User|System|Percent|Average|Exit|Swaps|File|Socket|Signals|Page|Voluntary|Involuntary|Minor|Major)" \
         "$OUT/closure_$tag.err" | tail -15
     head -c 3000 "$OUT/closure_$tag.out"; echo
-    [[ $rc == 0 ]] || rm -f "$RAW/closure_$tag.json"
+    if [[ $rc == 0 && -s "$RAW/closure_$tag.json" ]]; then
+        gzip -c "$RAW/closure_$tag.json" >"$OUT/closure_$tag.json.gz"
+    else
+        rm -f "$RAW/closure_$tag.json"
+    fi
 }
-run_closure a
 SEEDS=()
 while read -r c; do [[ -n "$c" ]] && SEEDS+=(--seed-class "$c"); done <"$OUT/seed_classes.txt"
-run_closure b "${SEEDS[@]}"
+start_closure a
+start_closure b "${SEEDS[@]}"
+finish_closure a
+finish_closure b
 
 # 5. 面 + 分层
 step "面"
@@ -90,7 +129,7 @@ cp "$REPO/tests/api_surface/$STAGE.txt" "$OUT/"
 step "分层"
 JUNIT_CP="$(ls "$DEPS"/pilot-libs/junit-*.jar "$DEPS"/pilot-libs/hamcrest-*.jar 2>/dev/null | paste -sd: -)"
 "${PY[@]}" "$REPO/scripts/api_surface.py" tiers --face "$REPO/tests/api_surface/$STAGE.txt" --face-data "$OUT/face.json" \
-    --cp "$JUNIT_CP" -j "${API_SURFACE_JOBS:-8}" --out "$REPO/tests/api_surface/tiers_$STAGE.toml" --data "$OUT/tiers.json" || exit 2
+    --cp "$JUNIT_CP" -j "${API_SURFACE_JOBS:-8}" --out-ratio "${API_SURFACE_OUT_RATIO:-0.5}" --out "$REPO/tests/api_surface/tiers_$STAGE.toml" --data "$OUT/tiers.json" || exit 2
 cp "$REPO/tests/api_surface/tiers_$STAGE.toml" "$OUT/"
 gzip -c "$RAW/classload.log" >"$OUT/classload.log.gz"
 step "完成"
