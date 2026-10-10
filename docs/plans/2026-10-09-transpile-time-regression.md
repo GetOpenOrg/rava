@@ -246,7 +246,7 @@ p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
   | HelloWorld | 580 / 1896，1.8 s | 580 / 1897，1.8 s | 580 / 1897，三种子一致，1.8 s |
 
   三个用例在三个种子下类、方法、reflect、boot_image_data 都逐项相同。TestSerialLookupPairing 少掉的 2390 类 / 13784 方法是定论后「值未知」答复接上的守卫后调用链（`mergePermissions` → 策略文件 → URL / HTTP / NTLM → JCA 提供者等），闭包耗时降为约 1/3。本例在 main 上比 batch-1010n 时更大（5472 对 4107），因为 c4-url 按类路径放行 URL 协议处理器后，这条链又带入了更多协议实现。
-- 单测：A / B 组按合批规则在批次里测；顺序单测见 tasks.md（hs-seq）。
+- 单测：A / B 组按合批规则在批次里测；顺序单测 closure_independent_of_hash_seed / closure_independent_of_order 在修复提交 ae5f5c73 上 2/2 通过（hs-seq，dev，3402 s）。
 
 ## 残留与建议
 
