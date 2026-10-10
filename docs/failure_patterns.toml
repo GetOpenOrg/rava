@@ -1355,3 +1355,33 @@ owner = "c4-url"
 diagnose = "--trace-class sun/net/www/protocol/<协议>/Handler 看是否入闭包；查按名取类站点的候选模式是否含任意串、首段是否字面量"
 doc = "docs/plans/2026-10-07-c4-run-failures.md §三"
 since = "2026-10-10"
+
+[[pattern]]
+id = "safepoint-under-field-lock"
+stage = "run"
+symptom = "debug 档 panic「安全点时持有 N 把字段锁（__RefField 临界区 / __RefSlot 守卫）」"
+match = [["安全点时持有", "把字段锁"]]
+tests = ["TestThreadNatives"]
+cause = "手写层持 __RefSlot / __RefField 守卫期间读写 Java 字段或调 Java 方法：包装类型的字段 getter 带 __safepoint()，安全点断言（小步 A 4400cc70）报持锁。本例为 Thread.getThreads 在 LIVE_THREADS 读锁内按 eetop 过滤。修法：锁内只复制句柄 / 求出纯数据，放锁后再做 Java 侧访问（不放宽断言）"
+introduced = "78d2b9c6 / 4400cc70（小步 A 持锁计数与安全点断言，暴露潜伏的锁内安全点）"
+fixed = ["efafe2cb"]
+status = "pending"
+owner = "并发小步 B（conc-step-b）"
+diagnose = "看回溯中 __assert_no_field_lock ← safepoint 之上的帧，找最近的 __RefSlot::with / __GilStatic::with / __RefField::with 闭包，把闭包内的 Java 访问移到锁外"
+doc = "docs/plans/2026-10-07-no-gc-memory-model.md §四 小步 A、§五"
+since = "2026-10-10"
+
+[[pattern]]
+id = "thread-local-outside-carrier-slots"
+stage = "unit"
+symptom = "单测 closure::handwritten::thread_local_lint::tests::thread_locals_only_in_carrier_slots 失败"
+match = []
+tests = []
+cause = "手写层在 exec_context.rs / java/lang/thread_impl.rs 之外定义 thread_local!（小步 A 78d2b9c6 在 sync_model.rs 的 mod held 定义持锁登记）。持锁登记生存期不跨让出点、与载体绑定，移入 exec_context.rs 的载体槽 HoldSlot（hold_slot 存取），lint 文档头写明载体槽判据"
+introduced = "78d2b9c6"
+fixed = ["3b95ceeb"]
+status = "pending"
+owner = "并发小步 B（conc-step-b）"
+diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
+doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
+since = "2026-10-10"
