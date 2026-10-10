@@ -199,6 +199,9 @@ pub(super) struct Trace {
     pub calls: BTreeMap<(MemberRef, u32), BTreeSet<MemberRef>>,
     /// 实例字段写入（声明字段, 值）
     pub puts: BTreeMap<MemberRef, Vec<Put>>,
+    /// 其中接收者不是本次求值新分配对象的写入（静态字段 / 映像对象 / 此前求值的对象）：结果按对象物化时只有这部分并入
+    /// 通配值（新分配对象的写入随快照按对象记录，未进结果的新对象程序不可见）
+    pub shared_puts: BTreeMap<MemberRef, Vec<Put>>,
     /// 求值中触发初始化的类
     pub inited: BTreeSet<String>,
     /// 求值中请求初始化的类（含此前已完成初始化的）：入闭包按它登记，与共享 VM 中此前的求值次序无关（concrete.rs merge）

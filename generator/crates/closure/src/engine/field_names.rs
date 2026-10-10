@@ -188,7 +188,8 @@ impl Engine<'_> {
     pub(super) fn taint_params(&mut self, t: usize, base: usize, n: usize, vals: Option<&[PV]>) {
         for i in base..n {
             if !slot_clean(vals.and_then(|vs| vs.get(i - base))) {
-                self.taint_slot(t, i);
+                let v = vals.and_then(|vs| vs.get(i - base)).map(|v| format!("{v:?}"));
+                self.taint_slot(t, i, TaintWhy::Value(None, v.unwrap_or_else(|| "无调用点实参值".into())));
             }
         }
     }
@@ -201,7 +202,18 @@ impl Engine<'_> {
                 slot_clean(Some(&PV::of(v))) || names_known(&v.srcs(), |j| self.ptaint.contains(&(m, j)))
             });
             if !clean {
-                self.taint_slot(t, i);
+                // 诊断：实参来自调用方已污染的形参槽时记为透传，来源链可继续回溯
+                let up = vals.get(i - base).and_then(|v| {
+                    v.srcs().iter().find_map(|s| match s {
+                        Src::Param(j) if self.ptaint.contains(&(m, *j as usize)) => Some(*j as usize),
+                        _ => None,
+                    })
+                });
+                let why = match up {
+                    Some(j) => TaintWhy::Pass(m, j),
+                    None => TaintWhy::Value(Some(m), vals.get(i - base).map(|v| format!("{v:?}")).unwrap_or_default()),
+                };
+                self.taint_slot(t, i, why);
             }
         }
     }
@@ -209,18 +221,73 @@ impl Engine<'_> {
     /// 槽 (t, i) 记为污染：读过它的站点入站点队列重跑，沿形参子集边传给透传的被调槽。
     /// 不在此处同步重跑：污染发生在接边中途（`edge` → `bind_params`），同步重跑会重入调用事件并清掉
     /// 外层调用点的实参值（`call_vals`），外层余下的接边随之丢失形参字符串集
-    fn taint_slot(&mut self, t: usize, i: usize) {
-        let mut work = vec![(t, i)];
-        while let Some((t, i)) = work.pop() {
+    fn taint_slot(&mut self, t: usize, i: usize, why: TaintWhy) {
+        let mut work = vec![(t, i, why)];
+        while let Some((t, i, why)) = work.pop() {
             if !self.ptaint.insert((t, i)) {
                 continue;
             }
+            self.ptaint_why.insert((t, i), why);
             for off in self.pstr_readers(t, i) {
                 self.push_site((t, off), site_prof::TRIG_TAINT, None);
             }
-            work.extend(self.pstr_succ_methods(t, i));
+            work.extend(self.pstr_succ_methods(t, i).into_iter().map(|(u, j)| (u, j, TaintWhy::Pass(t, i))));
         }
     }
+
+    /// 诊断：方法标签含 pat 的节点上各污染槽的来源链（逐跳回溯到首个非透传来源）
+    pub(super) fn taint_report(&self, pat: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut slots: Vec<(usize, usize)> = self.ptaint.iter().copied().filter(|&(t, _)| self.ctx_label(t).contains(pat)).collect();
+        slots.sort_unstable();
+        for (t, i) in slots {
+            out.push(format!("  {} 槽 {i}{}", self.ctx_label(t), self.ctx_sites(t)));
+            let mut cur = (t, i);
+            for _ in 0..40 {
+                match self.ptaint_why.get(&cur) {
+                    Some(TaintWhy::Pass(u, j)) => {
+                        out.push(format!("    ← 透传 {} 槽 {j}", self.ctx_label(*u)));
+                        cur = (*u, *j);
+                    }
+                    Some(TaintWhy::Value(m, v)) => {
+                        let by = m.map(|m| self.ctx_label(m)).unwrap_or_else(|| "非字节码入口".into());
+                        out.push(format!("    ← 实参 {v}（{by}）"));
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+        out
+    }
+}
+
+impl Engine<'_> {
+    /// 诊断：上下文名里各调用点段 `@<方法>:<偏移>` 的方法标签（调用点上下文只记方法编号）
+    fn ctx_sites(&self, t: usize) -> String {
+        let c = self.methods[t].ctx;
+        if c == NOCTX {
+            return String::new();
+        }
+        let mut out = String::new();
+        for seg in self.names[c as usize].split(['#', '~']) {
+            let Some((m, off)) = seg.strip_prefix('@').and_then(|r| r.split_once(':')) else { continue };
+            if let Ok(m) = m.parse::<usize>() {
+                if m < self.methods.len() {
+                    out.push_str(&format!(" [@{m}:{off} = {}]", self.method_label(m)));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// 形参槽污染的来源（诊断）
+pub(super) enum TaintWhy {
+    /// 沿形参子集边自 (方法, 槽) 透传
+    Pass(usize, usize),
+    /// 调用方节点（None = 非字节码入口）传入的实参值
+    Value(Option<usize>, String),
 }
 
 /// 名字值的全部来源都是可取回的字面量或未污染的形参槽（其常量集即名字全集）
