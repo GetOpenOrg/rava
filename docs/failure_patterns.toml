@@ -79,6 +79,21 @@ doc = "docs/tasks.md 现状节 fix-domstack 条"
 since = "2026-10-10"
 
 [[pattern]]
+id = "xsltc-translet-create"
+stage = "run"
+symptom = "XSLT 变换运行期 TransformerConfigurationException：Translet class loaded, but unable to create translet"
+match = [["Translet class loaded, but unable to c"]]
+tests = ["TestXmlTransform"]
+cause = "待分诊：XSLTC 把样式表编译成字节码后按运行期定义的类实例化（TemplatesImpl.getTransletInstance），疑运行期类定义 / 反射实例化未覆盖。fix-domstack 修好转译超时后首次暴露"
+introduced = ""
+fixed = []
+status = "open"
+owner = "待派"
+diagnose = "看 run.log 中 TransformerConfigurationException 的 cause 链；对照 TemplatesImpl.defineTransletClasses / getTransletInstance 的翻译与手写边界"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
 id = "transpile-time-regression-chm"
 stage = "transpile"
 symptom = "转译耗时成倍增长，缺省时限下转译超时（放宽时限可通过）"
