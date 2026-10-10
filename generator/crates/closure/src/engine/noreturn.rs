@@ -193,7 +193,10 @@ mod tests {
         assert!(!nr.answer_never(&t));
         // 同一 never 集合再次出现：停滞，停滞批次在定论窗口内按值未知重算
         assert_eq!(nr.drain(never.clone()), vec![1, 2]);
-        assert!(!nr.answer_never(&u));
+        assert!(nr.waiting.is_empty(), "排空清空等待计数，由重算的 nr_end 重建");
+        // 窗口内之后入链的 u 分析仍含未定论答复（引擎经 nr_end 重新登记等待）
+        inc(&mut nr.waiting, &u);
+        assert!(!nr.answer_never(&u), "定论窗口内等待中的目标也按值未知");
         // 窗口在停滞批次全部重算完后关闭：之后入链的方法重新按收尾口径答复
         nr.processed(7);
         nr.processed(1);
