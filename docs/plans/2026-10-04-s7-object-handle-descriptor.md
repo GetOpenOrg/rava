@@ -482,6 +482,7 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 - 节点 = java.base 声明层每个生成类文件；边取自文件里的 `crate::` 路径（含花括号组、`r#`、`as`、`__` 后缀词干）与属性字符串里的二进制名（按 `;` 拆）。
 - INFRA 伪节点：所有类 → INFRA；INFRA → 手写运行时文件里出现的类名与钉住类（有 `_impl` / `_ext` 共置手写的宿主、整类手写的类）。含 INFRA 的 SCC 必为底段。
 - Tarjan（迭代）求 SCC，Kahn 依赖先行定序；底段之外的类按拓扑序连续切成均衡段，每段 ≤ `DECL_SEGMENT_CLASSES` = 650 类；java.base 声明类数 ≤ 650 时不拆。全程无类名。
+  - **10-11 起改为按源码体量切**：不分段判定 ≤ `DECL_SEGMENT_BYTES` = 5.5 MB；分段后上段按上游感知峰值预算（`UPPER_SEGMENT_PEAK`）逐段装满，见 §9.8.4。
 
 **布局**（`decl_side.rs`）——与 §9.6 的「跨段写 crate 前缀 + 门面镜像树」不同，实施取**镜像链**，省掉了按类改写前缀：
 - 底段仍叫 `java_base_decl`；上段 `java_base_decl_<j>` 只依赖前一段，`lib.rs` 为 `pub use <前段>::*;` 加本段顶层包 mod；每个包 `mod.rs` 写 `pub use <前段>::<包>::*;`（前段视图有该包时）、`pub mod <子包>;`、`pub mod x; pub use x::*;`。显式 mod 遮蔽 glob，叶子项每类只在一段，不冲突。
@@ -741,7 +742,7 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 
 #### 9.8.3 推荐方案（待用户确认后实施）
 
-1. **D8 的段上限从「650 类」改为「源码体量」，立即需要，与路线选择无关。**
+1. **D8 的段上限从「650 类」改为「源码体量」，立即需要，与路线选择无关。**（10-11 已实施，分支 d8-mb：先按 5.5 MB 常量，同日改为上游感知预算，实测见 §9.8.4）
    - 现状就已越线：CollectorsDemo 的 `java_base_decl` 617 类低于 650，所以不分段；源码 7.39 MB，实测 1.46 GB，超过 1.3 GB。
    - 按修正标定，体量上限取 **≤ 5.5 MB**（1.3 GB 对应约 5.9 MB，扣插值误差留 7% 余量）。
    - 按体量切分后，单程序在现图（①）上底段约 5.07 MB / 1218 MB，已满足。⑤ 的上段也不会再出现 493 类、4.8 MB 这样的超大段。
@@ -758,3 +759,95 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
 **后续**
 - 档案级（并集档案 scratch）的分阶段实测（作业 B）本轮没有做，S7-4 实施后用 `scripts/rustc_profile.sh` 的 `CRATE=` 补测。
 - 实施后用 `scripts/decl_scc_sim.py` 重跑生成层图，对照本节预测，并用新实测点更新标定。
+
+#### 9.8.4 D8 按体量切分的实施与实测（2026-10-11，分支 d8-mb）
+
+**实施**（33e23c00；`rustc_profile.sh` 修正 4461a0d3）
+- `decl_segments.rs`：`DECL_SEGMENT_CLASSES = 650` 换成 `DECL_SEGMENT_BYTES = 5_500_000`（按 §9.8.3 第 1 条与 §9.8.1「标定修正」取值，常量注释写明来源）。
+- `plan` 按各类权重切段；`cut` 改为两步：先按上限贪心取最少段数 k，再二分求 k 段内最小的段上界，按它贪心切。
+  - 每段 ≤ 上限，只有单个分量本身超限时才独占一段。
+  - 段号单调、无空段；只依赖拓扑序与权重，结果确定。
+  - 原中点均衡法在体量不均时会超限（例如 6+6+6、上限 10，原法切出 12 的段）。
+- `decl_side.rs`：权重 = 类文本落盘字节（`Writer` 原样写出 `em.text`，两者一致）+ 该类落在上段时 mod 行的上界。
+  - mod 行上界按「本类独占新包」逐类全额计入：包头、`pub use <前段>::<包>::*;`、各级 `pub mod`。只会偏大，有单测守护。
+  - 另预留 lib.rs 固定行 1 KB。
+  - 「不分段」判定计入手写真源全量（不分段时底段 crate 含全部 overlay）。
+  - 底段（含 INFRA 的 SCC）原样不切。
+- 模拟器同步：`decl_scc_sim.py` / `decl_scc_graph.py` / `decl_scc_parse.py` 改为按同一权重和同一切法复现 D8。
+- `rustc_profile.sh` 有测量缺陷：依赖步原先按 `-p <依赖名>` 逐个编，特性合一与目标 crate 的单元图不同，计时步会重编前段，`/usr/bin/time` 把前段峰值算进来（首轮 d8mb-prof-33e23c00 上段 1.02–4.22 GB 均为失真值）。
+  - 修正：依赖步改为 `cargo build -p <crate>`；另输出本 crate rustc 的 time-passes 最大 RSS（`rustc_peak`）。
+
+**实测**（dev，debug，rustc 1.99.0 stable + `RUSTC_BOOTSTRAP=1`；作业 d8mb-prof2-4461a0d3 / d8mb-prof3-4461a0d3；源码 = crate `src/` 下全部 .rs 字节；峰值 = 本 crate rustc 的 time-passes 最大 RSS，`/usr/bin/time` 值括注）
+
+| 例 | crate | 类 | 源码 MB | 峰值 MB |
+|---|---|---:|---:|---:|
+| HelloWorld | `java_base_decl`（底段） | 342 | 4.62 | 1122（1.06 GB） |
+| HelloWorld | `java_base_decl_1` | 237 | 2.17 | 604（0.57 GB） |
+| CollectorsDemo | `java_base_decl`（底段） | 384 | 5.12 | 1191（1.13 GB） |
+| CollectorsDemo | `java_base_decl_1` | 234 | 2.16 | 576（0.56 GB） |
+| DeepCopy | `java_base_decl`（底段） | 1895 | 21.82 | **4417**（4.31 GB） |
+| DeepCopy | `java_base_decl_1` | 369 | 2.76 | 938（0.91 GB） |
+| DeepCopy | `java_base_decl_2` | 349 | 2.76 | 975（0.93 GB） |
+| FWord / PartitionInteger / RailwayCircuit | `java_base_decl_1`（底段 17.3–17.8 MB） | 377–378 | 3.14 | 967–972 |
+
+- 三例的全部非底段声明 crate ≤ 3.14 MB、≤ 0.98 GB，达标。
+- CollectorsDemo 原先不分段（617 类，7.39 MB，1.46 GB），现切为底段 5.12 MB（1.19 GB）加一个上段，两者都 ≤ 1.3 GB。
+- DeepCopy 底段 21.8 MB、4.4 GB：这是含 INFRA 的签名 SCC，D8 不可再切，归底段收窄（§9.8.3 第 2、3 条）。
+- 抽查 d8mb-33e23c00（dev，33e23c00）：HelloWorld、DeepCopy、CollectorsDemo、TestSerialLookupPairing、FWord 5/5 通过。emit 单测（d8mb-ut-4461a0d3）91 例全过。
+
+**第一轮遗留：5.5 MB 对上段不够保守**（已由下文「上游感知预算」解决）
+- 上段的峰值同时取决于本段体量和上游链（底段加前面各段）的元数据体量。上游元数据在展开、解析阶段按需载入：
+  - 同为 2.2 MB 左右的上段，上游 5 MB 时 macro_expand 后 RSS 为 214 MB，上游 22 MB 时为 336 MB。
+- 7 个上段实测点手工拟合：峰值 MB ≈ −9 + 240 × 本段 MB + 13 × 上游 MB，残差 ≤ 32 MB（HelloWorld 上段 −32，其余 ≤ 3）。
+  - 每 MB 斜率 240，高于底段标定中段的约 104：底段含手写 overlay 和整类手写，每字节展开量小。§9.8.1 的标定只对底段成立。
+- **探针验证**（d8mb-probe-6086a4e6，临时分支 d8-mb-probe 上限放到 6.0 MB，不合入）：DeepCopy 的上段合成一个 718 类、5.52 MB 的段，上游 21.8 MB。
+  - 实测 **1597 MB**（`/usr/bin/time` 1.51 GB），拟合式预测 1599 MB。
+  - 结论：段体量接近 5.5 MB 的上段会超 1.3 GB。现有三例上段只有 2.2–3.1 MB，所以没有触发。
+- 按拟合式，≤ 1.3 GB 的本段上限是 (1309 − 13 × 上游 MB) / 240：
+  - 上游 5 MB 时为 5.2 MB；
+  - 上游 22 MB 时为 4.3 MB；
+  - 上游 40 MB（语料档案底段量级）时为 3.3 MB；
+  - 上游 60 MB 时为 2.2 MB。
+- 协调者 10-11 裁决：采用上游感知预算（终态，覆盖语料档案），不用固定 4.0 MB 常量。
+
+**上游感知预算（a1771258）**
+- `decl_segments.rs`：
+  - 新增 `PeakModel` 与常量 `UPPER_SEGMENT_PEAK`：峰值 = −9 MB + 240 × 本段字节 + 13 × 上游字节，限值 = `DECL_PEAK_TARGET_MB` 1300 − `DECL_PEAK_MARGIN_MB` 64 = 1236 MB。
+  - 余量 64 MB 取标定最大残差 32 MB 的 2 倍：语料档案的上游（约 40–50 MB）超出标定区间（≤ 22 MB），属外推。
+  - 注释写明标定来源（本节、8 个点、残差 ≤ 32 MB）。
+- 切法 `cut`：逐段贪心装满。
+  - 本段 = 固定行 1 KB + 各分量权重；上游 = 底段（手写真源全量 + 固定行 + 底段类权重）+ 前面各段。
+  - 当前段非空且再装一个会使预测峰值超限，就开新段；单个分量本身超限时独占一段。
+  - 段数最少：240 > 13，前段装得越满，后段可达位置越远，所以贪心最优。原「最少段数下均衡」的二分去掉了。
+  - 只依赖拓扑序与字节数，结果确定。
+- `DECL_SEGMENT_BYTES` = 5.5 MB 只保留为「整个声明层是否分段」的判定（底段形态，含手写 overlay，按 §9.8.1 标定）。
+- 权重偏大（mod 行逐类全额计入），本段与上游都按上界计。两个系数为正，所以预测只会偏高。
+- 模拟器 `decl_scc_graph.py` / `decl_scc_parse.py` 同步。
+- 单测新增：
+  - 预算随上游收缩；
+  - 每段满足模型（单个超限分量除外）；
+  - 探针压力（718 × 7.7 KB、上游 21.8 MB）必被切开且每段达标；
+  - HelloWorld 量级不切。
+- 各段本段预算（MB）= (1245 − 13 × 上游 MB) / 240：上游 5 MB 时 4.92，22 MB 时 4.01，40 MB 时 3.02，60 MB 时 1.94；上游 ≥ 95.8 MB 时无可行段。
+  - 语料档案 java.base 声明层总量约 50 MB（§9.8.1：底段 38.4 MB 加 3 个上段各约 3.9 MB）。末段上游 ≤ 50 MB，预算 ≥ 2.5 MB，可覆盖。
+  - 底段收窄后上游起点更低，预算更宽。
+
+**复测**（dev，作业 d8mb-prof4-a1771258，口径同上；预测按上式，未扣余量）
+
+| 例 | crate | 类 | 源码 MB | 上游 MB | 预测 MB | 实测峰值 MB |
+|---|---|---:|---:|---:|---:|---:|
+| HelloWorld | `java_base_decl_1` | 237 | 2.17 | 4.62 | 571 | 594（0.56 GB） |
+| CollectorsDemo | `java_base_decl_1` | 234 | 2.16 | 5.12 | 576 | 576（0.56 GB） |
+| DeepCopy | `java_base_decl_1` | 518 | 3.92 | 21.82 | 1215 | **1221**（1.14 GB） |
+| DeepCopy | `java_base_decl_2` | 200 | 1.60 | 25.74 | 711 | 725（0.69 GB） |
+| FWord | `java_base_decl_1` | 377 | 3.14 | 17.35 | 970 | 967（0.94 GB） |
+
+- 底段与第一轮相同：HelloWorld 4.62 MB / 1122 MB，CollectorsDemo 5.12 MB / 1191 MB，DeepCopy 21.82 MB / 4417 MB，FWord 17.35 MB。
+- 全部上段 ≤ 1.3 GB。新增 3 个点的残差 +6、+14、−3 MB，在 64 MB 余量内。
+- **探针同等压力**：DeepCopy 上段（718 类，共 5.52 MB，上游 21.8 MB）在 6.0 MB 探针下合成一段，实测 1597 MB。现预算切为 3.92 MB + 1.60 MB 两段，实测 1221 / 725 MB。
+  - 第 1 段装到预算边缘（预测 1215 ≤ 1236），是模型在上限处的直接验证。
+- 抽查 d8mb-a1771258（dev）：HelloWorld、DeepCopy、CollectorsDemo、TestSerialLookupPairing、FWord 5/5 通过。emit 单测（d8mb-ut-a1771258）93 例全过。
+- 遗留：
+  - 13 × 上游的系数只在上游 ≤ 26 MB 内实测，档案量级（40–50 MB）待 S7-4 档案构建时复测。上游 ≥ 95.8 MB 时镜像链本身越线，需改为按实际依赖连段。
+  - DeepCopy 底段 4.4 GB 归底段收窄。
+

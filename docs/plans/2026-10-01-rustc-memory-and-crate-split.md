@@ -1099,3 +1099,14 @@ Digester 声明 crate 的 nightly 分阶段测量（`scripts/rustc_profile.sh`�
   - 单项前列：`Option::map` 1895 个实例、`field_desc::__ref_field` 158 个、`object_ext::__class_from_object` 471 个。都是常数级 helper 的多实例，不随签名边成环。
 - **新标定点**：现形态 7.39 MB → 1.46 GB（rustc 本身）。§9.8 的线性拟合（406 + 193.9 × MB）在此处给出 1839 MB，高估 26%。中段（3–7.4 MB）的实测斜率只有约 104 MB/MB，1.3 GB 对应源码约 5.9 MB。修正后的口径见 §9.8.1「标定修正」。
 - 档案级（并集档案 scratch）的分阶段实测没有在本轮做，留作 S7-4 实施后的对照项。
+
+**D8 按体量切分后（2026-10-11，分支 d8-mb，作业 d8mb-prof2 / prof3 / probe）**
+- D8 段上限由 650 类改为源码 5.5 MB 后，CollectorsDemo 切为底段 5.12 MB（1191 MB）和上段 2.16 MB（576 MB）。HelloWorld、DeepCopy 的全部上段 ≤ 2.76 MB、≤ 975 MB。明细见 S7 计划 §9.8.4。
+- **测法修正**：`rustc_profile.sh` 的依赖步原先按 `-p <依赖名>` 逐个编，特性合一与目标单元图不同，计时步会重编前段，`/usr/bin/time` 计入前段峰值，上段读数虚高到 1.0–4.2 GB。
+  - 现改为 `cargo build -p <crate>` 预编，并另报 `rustc_peak`（本 crate time-passes 最大 RSS）。
+  - 本节上表是底段（无前段可重编），不受影响。
+- **上段每 MB 的代价高于底段**：上段峰值 ≈ −9 + 240 × 本段 MB + 13 × 上游 MB（7 点，残差 ≤ 32 MB）。
+  - 探针中一个 5.52 MB 的上段（上游 21.8 MB）实测 1597 MB，与预测吻合。
+  - 5.5 MB 常量对上段不够。同日改为上游感知预算（a1771258）：逐段要求预测峰值 ≤ 1300 − 64 MB。
+  - 复测：DeepCopy 上段切为 3.92 MB + 1.60 MB，实测 1221 / 725 MB；HelloWorld、CollectorsDemo、FWord 上段 576–967 MB。
+  - 明细见 S7 计划 §9.8.4「上游感知预算」。

@@ -55,6 +55,24 @@ fn build(java: &str, tag: &str, extra: &[&str]) -> Option<(String, PathBuf)> {
 }
 
 /// 目录下全部 .rs 文本（路径序）
+/// 根模块声明层类文件：D8 按段预算切段后类可落在底段 `java_base_decl` 或任一上段 `java_base_decl_<k>`，
+/// 按「类所在的声明 crate」定位（恰好一个段含该文件），不写死段号
+fn decl_file(out: &Path, rel: &str) -> PathBuf {
+    let mut hits: Vec<PathBuf> = std::fs::read_dir(out)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n == "java_base_decl" || n.strip_prefix("java_base_decl_").is_some_and(|k| k.parse::<usize>().is_ok())
+        })
+        .map(|e| e.path().join("src").join(rel))
+        .filter(|p| p.is_file())
+        .collect();
+    hits.sort();
+    assert_eq!(hits.len(), 1, "声明层类文件 {rel} 须恰在一个声明段：{hits:?}");
+    hits.pop().unwrap()
+}
+
 fn rs_text(dir: &Path) -> String {
     let mut files = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -319,7 +337,7 @@ fn name_level_classes_emit_opaque() {
 #[test]
 fn this_receiver_never_null_recv() {
     let Some((_, out)) = build("NullRecvThis.java", "nullrecv-this", &[]) else { return };
-    let enc = std::fs::read_to_string(out.join("java_base_decl/src/java/nio/charset/charset_encoder.rs")).unwrap();
+    let enc = std::fs::read_to_string(decl_file(&out, "java/nio/charset/charset_encoder.rs")).unwrap();
     let hits: Vec<&str> = enc.lines().filter(|l| l.contains("__null_recv(")).collect();
     assert!(hits.is_empty(), "{hits:#?}");
     std::fs::remove_dir_all(&out).ok();
@@ -389,7 +407,7 @@ fn concrete_trace_call_not_null_recv() {
 #[test]
 fn bridge_merged_inherited_slot_not_stubbed() {
     let Some((_, out)) = build("BridgeMergedSlot.java", "bridge-slot", &[]) else { return };
-    let rs = std::fs::read_to_string(out.join("java_base_decl/src/java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
+    let rs = std::fs::read_to_string(decl_file(&out, "java/util/spliterators_empty_spliterator_of_ref.rs")).unwrap();
     let line = rs.lines().find(|l| l.contains("pub fn tryAdvance(")).expect("继承的 tryAdvance 转发");
     assert!(!line.contains("__stub"), "{line}");
     std::fs::remove_dir_all(&out).ok();

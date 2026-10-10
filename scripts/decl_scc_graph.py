@@ -4,7 +4,7 @@ import os
 import re
 from collections import defaultdict
 
-from decl_scc_parse import (CAP, IDENT, KINDS, Ctx, crate_paths, hw_idents, kind_of,  # noqa: F401
+from decl_scc_parse import (CAP_BYTES, PEAK_INTERCEPT, PEAK_PER_OWN, PEAK_PER_UPSTREAM, PEAK_LIMIT, SEGMENT_FIXED_BYTES, SEGMENT_SUFFIX_BYTES, IDENT, KINDS, Ctx, crate_paths, hw_idents, kind_of,  # noqa: F401
                             stem, string_literals)
 
 
@@ -260,10 +260,46 @@ def tarjan(adj):
     return comp, nc
 
 
-def plan(g, adj, infra):
-    """D8 `plan`：返回段列表（段 0 为底段，元素为类下标）"""
+def mod_overhead(rel, prev_len):
+    """D8 `decl_side::mod_overhead`：类落在上层段时 mod 行体量上界"""
+    def comp_len(c):
+        return len(c) + 2
+    stem_ = os.path.splitext(os.path.basename(rel))[0]
+    class_lines = len("pub mod ;\n") + len("pub use ::*;\n") + 2 * comp_len(stem_)
+    d = os.path.dirname(rel)
+    comps = d.split(os.sep) if d else []
+    pkg_path = sum(comp_len(c) + 2 for c in comps)
+    pkg_head = len("#![allow(ambiguous_glob_reexports)]\n") + len("pub use ::::*;\n") + prev_len + pkg_path
+    ancestors = sum(len("pub mod ;\n") + comp_len(c) for c in comps)
+    return class_lines + pkg_head + ancestors
+
+
+def fits(own, up):
+    """D8 `PeakModel::fits`：预测峰值不超过限值"""
+    return PEAK_INTERCEPT + PEAK_PER_OWN * own + PEAK_PER_UPSTREAM * up <= PEAK_LIMIT
+
+
+def cut(sizes, bottom):
+    """D8 `cut`：逐段装满（上游感知预算），单个超限分量独占一段"""
+    out, b, up, own, open_ = [], 0, bottom, SEGMENT_FIXED_BYTES, False
+    for s in sizes:
+        if open_ and not fits(own + s, up):
+            b, up, own = b + 1, up + own, SEGMENT_FIXED_BYTES
+        own += s
+        open_ = True
+        out.append(b)
+    return out
+
+
+def plan(g, adj, infra, root="java_base"):
+    """D8 `plan`：返回段列表（段 0 为底段，元素为类下标）。按上游感知预算切：权重 = 类文件字节 + mod 行上界，
+    底段基础量 = 手写真源总字节"""
     import heapq
     n = g.n
+    prev_len = len(root + "_decl") + SEGMENT_SUFFIX_BYTES
+    weight = [g.size[v] + mod_overhead(g.nodes[v][3], prev_len) for v in range(n)]
+    if g.hw_bytes_total + sum(weight) + SEGMENT_FIXED_BYTES <= CAP_BYTES:
+        return [sorted(range(n))]
     comp, nc = tarjan(adj)
     members = defaultdict(list)
     for v in range(n):
@@ -291,20 +327,12 @@ def plan(g, adj, infra):
             if pending[d] == 0:
                 heapq.heappush(heap, (min_key[d], d))
     bottom = comp[infra]
-    rest = [c for c in order if c != bottom]
-    sizes = [len(members[c]) for c in rest]
-    total = sum(sizes)
-    if total == 0:
+    rest = [c for c in order if c != bottom and members[c]]
+    if not rest:
         return [sorted(range(n))]
-    k = max(1, min(-(-total // CAP), len(sizes)))
-    bins, prefix, last = [], 0, 0
-    for s in sizes:
-        mid = prefix + s // 2
-        prefix += s
-        b = min(mid * k // total, k - 1)
-        b = 0 if not bins else max(last, min(b, last + 1))
-        bins.append(b)
-        last = b
+    sizes = [sum(weight[v] for v in members[c]) for c in rest]
+    bottom_bytes = g.hw_bytes_total + SEGMENT_FIXED_BYTES + sum(weight[v] for v in members[bottom])
+    bins = cut(sizes, bottom_bytes)
     segs = [list(members[bottom])] + [[] for _ in range(max(bins) + 1)]
     for c, b in zip(rest, bins):
         segs[b + 1].extend(members[c])
