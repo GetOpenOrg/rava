@@ -111,7 +111,7 @@ pub(super) struct Concrete {
 }
 
 /// 实测用（临时）：回退后逐组应用开关
-const MEASURE_PARTIAL: bool = false;
+const MEASURE_PARTIAL: bool = true;
 
 impl<'a> Engine<'a> {
     pub(super) fn concrete_init(&mut self) {
