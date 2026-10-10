@@ -235,7 +235,16 @@ impl<'a> Engine<'a> {
                     return;
                 }
                 self.cur_call = reader;
-                self.lambda_virtual(at, m, off, (k, l.imh.interface, owner), &site, via, (&cur, &delta), &rest, res);
+                let src = first();
+                let shared = src.iter().map(|f| match f {
+                    Feed::N(n) => Some(*n),
+                    Feed::S(_) => None,
+                });
+                let grow = match shared.collect::<Option<Vec<Node>>>() {
+                    Some(ns) => HubSet::Grow(ns.into(), u32::MAX),
+                    None => HubSet::Grow(Rc::from([]), at as u32),
+                };
+                self.lambda_virtual(at, m, off, (k, l.imh.interface, owner), &site, via, (&cur, &delta), &rest, res, grow);
             }
         }
     }
@@ -244,12 +253,20 @@ impl<'a> Engine<'a> {
     /// 达 `HUB_MIN` 时经精确集合枢纽，open 部分经 open 枢纽（G 增长在枢纽上增量展开）。
     /// 调用点接入枢纽一次，此后只由接收值增长驱动换接；不按读者单元逐个展开 open 接收者
     #[allow(clippy::too_many_arguments)]
-    fn lambda_virtual(&mut self, at: usize, m: usize, off: u32, member: (&MemberRef, bool, u32), site: &resolve::MethodSite, via: Via, vals: (&TypeSet, &TypeSet), rest: &Args, res: Option<Node>) {
+    fn lambda_virtual(&mut self, at: usize, m: usize, off: u32, member: (&MemberRef, bool, u32), site: &resolve::MethodSite, via: Via, vals: (&TypeSet, &TypeSet), rest: &Args, res: Option<Node>, grow: HubSet) {
         let (k, iface, owner) = member;
         let (cur, delta) = vals;
         let (lid, ret) = (self.lcalls[at].call.0, self.lcalls[at].call.2);
         let Some(md) = parse_method(&k.desc) else { return };
-        if !delta.classes.is_empty() {
+        if let (false, Some((h, _))) = (delta.classes.is_empty(), self.lcalls[at].hub.clone()) {
+            // 已接入增长枢纽：只并入新增接收者
+            let fresh = TypeSet { classes: delta.classes.clone(), open: IdSet::default() };
+            let fresh = self.receivers(m, &fresh, owner);
+            self.lprof_recv(lid, &fresh, 2);
+            for r in fresh {
+                self.hub_recv(h, r);
+            }
+        } else if !delta.classes.is_empty() {
             let all = TypeSet { classes: cur.classes.clone(), open: IdSet::default() };
             let recv: Rc<[u32]> = self.receivers(m, &all, owner).into();
             if recv.len() < HUB_MIN {
@@ -260,17 +277,14 @@ impl<'a> Engine<'a> {
                     self.dispatch_one(m, off, r, site, rest, ret, res, lid);
                 }
             } else {
-                let last = self.lcalls[at].hub.clone();
-                let h = match last {
-                    Some((h, rs)) if rs[..] == recv[..] => h,
-                    last => {
-                        let h = self.hub(k, iface, owner, HubSet::Exact(recv.clone()), last.map(|x| x.0), site, &md, via.clone());
-                        self.lcalls[at].hub = Some((h, recv));
-                        h
-                    }
-                };
+                // 首次达 `HUB_MIN`：接入增长枢纽，已有接收者全部并入（共用枢纽上已并入的即跳过）
+                let h = self.hub(k, iface, owner, grow, None, site, &md, via.clone());
+                self.lcalls[at].hub = Some((h, Rc::from([])));
                 self.lprof_recv(lid, &[h], 2);
                 self.link_hub(h, m, off, rest, res);
+                for &r in recv.iter() {
+                    self.hub_recv(h, r);
+                }
             }
         }
         if !delta.open.is_empty() {

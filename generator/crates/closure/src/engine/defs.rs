@@ -353,6 +353,9 @@ pub(super) enum HubSet {
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
+    /// 方法引用的绑定接收者（捕获值或首个 SAM 实参）达 `HUB_MIN` 后的增长枢纽：接收者随该值增长逐个并入（`hub_recv`），
+    /// 调用点只接入一次。来源全为图节点时按来源共用（捕获值在各调用点相同），否则按读者单元各用一个（第二分量）
+    Grow(Rc<[Node]>, u32),
 }
 
 #[derive(Clone)]

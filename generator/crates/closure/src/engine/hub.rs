@@ -21,6 +21,7 @@ impl<'a> Engine<'a> {
         let ret = md.ret.as_ref().and_then(|r| self.ptype(r));
         let (open, pending, parent, set) = match &key.2 {
             HubSet::Open(o) | HubSet::Vm(o) => (Some(*o), Vec::new(), None, None),
+            HubSet::Grow(..) => (None, Vec::new(), None, None),
             HubSet::Exact(rs) => {
                 let parent = self.hub_parent(&key.0, iface, lc, rs, parent);
                 let pending = match parent.and_then(|p| self.hubs[p as usize].set.clone()) {
@@ -353,6 +354,13 @@ impl<'a> Engine<'a> {
 
     /// 枢纽展开一个接收者：方法本体经枢纽中转，按调用点建模的目标逐调用点派发
     pub(super) fn hub_recv(&mut self, h: u32, r: u32) {
+        // 枢纽上的接边属各接入调用点，不归当前 lambda 调用读者
+        let outer = self.cur_lcall.take();
+        self.hub_recv_in(h, r);
+        self.cur_lcall = outer;
+    }
+
+    fn hub_recv_in(&mut self, h: u32, r: u32) {
         let owner = self.hubs[h as usize].owner;
         if !self.sub(r, owner) {
             return;
