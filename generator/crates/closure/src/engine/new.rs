@@ -176,6 +176,7 @@ impl<'a> Engine<'a> {
             img: None,
             ext_vm: None,
             level_ctxs: HashMap::default(),
+            ctx_clones: HashMap::default(),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),

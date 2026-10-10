@@ -130,6 +130,14 @@ impl<'a> Engine<'a> {
         if ctx != NOCTX && kind != Kind::Bytecode {
             return self.method_node(key, NOCTX, via);
         }
+        // 抽象对象上下文克隆达上限：并入无上下文本体（接收者值照常汇入本体形参，结果是克隆的上界）
+        if ctx != NOCTX && self.objs.contains_key(&ctx) && !self.level_ctxs.contains_key(&ctx) {
+            let n = self.ctx_clones.entry(key.clone()).or_default();
+            if *n >= CTX_CAP {
+                return self.method_node(key, NOCTX, via);
+            }
+            *n += 1;
+        }
         let mut ptypes = Vec::new();
         if !is_static {
             ptypes.push(Some(self.id(&key.owner)));

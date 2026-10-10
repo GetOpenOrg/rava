@@ -164,6 +164,8 @@ use rtfn::RTFN_KIND;
 
 /// 精确接收者达到此数时经集合枢纽派发
 const HUB_MIN: usize = 8;
+/// 同一方法按抽象对象上下文克隆的上限：超出后的上下文并入无上下文本体（档位上下文不计）
+const CTX_CAP: u32 = 64;
 /// 字段站点在 `recv_done` 中的哨兵：与值无关的部分已接 / 未知接收者视图已接（抽象对象 id 不会取到）
 const FIELD_STATIC: u32 = u32::MAX;
 const FIELD_OTHER: u32 = u32::MAX - 1;
@@ -437,6 +439,8 @@ pub struct Engine<'a> {
     ext_vm: Option<Box<concrete::ExtVm>>,
     /// 引导档位上下文 → 档位（`levels_boot.rs`）；档位上下文中已登记初始化的类
     level_ctxs: HashMap<u32, i32>,
+    /// 方法 → 已建的抽象对象上下文克隆数（`CTX_CAP`）
+    ctx_clones: HashMap<MemberRef, u32>,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,
