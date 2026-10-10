@@ -141,7 +141,7 @@ impl Engine<'_> {
         }
     }
 
-    fn lprof_tick(&mut self) {
+    pub(super) fn lprof_tick(&mut self) {
         let Some(p) = self.lprof.as_mut() else { return };
         p.tick = p.tick.wrapping_add(1);
         if p.tick & TICK_MASK != 0 || p.last.elapsed() < p.every {
@@ -215,6 +215,7 @@ impl Engine<'_> {
         for (c, n) in cs.into_iter().take(TOP) {
             eprintln!("{tag} ctxc n={n} {}", self.names[c as usize]);
         }
+        self.ctx_prof_dump(&tag);
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {
