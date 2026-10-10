@@ -12,6 +12,15 @@ use super::*;
 
 /// 嵌套求值深度上限
 const MAX_DEPTH: u32 = 3;
+/// 一条嵌套求值链上穿过分派转发方法（不计深度）的次数上限
+const MAX_PASS: u32 = 8;
+
+/// 嵌套求值的位置：计深度的层数、穿过分派转发方法的次数（两者都随记忆键，见 `memo.rs`）
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+pub(super) struct EvalDepth {
+    pub(super) nest: u32,
+    pub(super) pass: u32,
+}
 /// 被求值方法的指令数上限
 const MAX_INSNS: usize = 256;
 
@@ -69,7 +78,7 @@ pub(super) enum CArg {
 }
 
 /// 记忆键：目标、各实参（非常量 = None）、起始深度
-pub(super) type CKey = (MemberRef, Vec<Option<CArg>>, u32);
+pub(super) type CKey = (MemberRef, Vec<Option<CArg>>, EvalDepth);
 
 fn carg(v: &V) -> Option<CArg> {
     match v {
@@ -152,18 +161,20 @@ impl Ctx<'_> {
         let Some(code) = meth.code.as_ref().filter(|c| c.insns.len() <= MAX_INSNS) else { return empty() };
         // 穿过分派转发方法（`forward.rs`：静态方法把引用形参交给虚 / 接口分派）且转发的是构造完成标签对象时
         // 不计深度：转发方法本身不产生值，深度留给被转发的动作体（如特权块 `doPrivileged → executePrivileged
-        // → action.run()`）。转发链有限、同键重入由 `memo_enter` 截断，求值仍然终止
-        let pass = meth.is_static() && {
+        // → action.run()`）。穿过次数单独计数、有上限：转发方法可以成环（自递归或互相递归的静态方法），
+        // 环上其余实参逐层变化（如递减的整数）时每层键都不同，`memo_enter` 的同键截断拦不住，
+        // 不设上限则嵌套无界（TestDomResultNode 转译期栈溢出）。超过上限的转发按普通调用计深度
+        let cur = self.ceval_depth.get();
+        let pass = cur.pass < MAX_PASS && meth.is_static() && {
             let mask = self.dispatch_slots(t);
             bound.iter().enumerate().any(|(i, b)| i < 64 && mask & (1 << i) != 0 && b.as_ref().is_some_and(fields_tag))
         };
-        if !pass && self.ceval_depth.get() >= MAX_DEPTH {
+        if !pass && cur.nest >= MAX_DEPTH {
             return None;
         }
         let frame = self.memo_enter(format!("ceval:{key}"), false)?;
         self.stats.borrow_mut().ceval[2] += 1;
-        let depth = self.ceval_depth.get();
-        self.ceval_depth.set(depth + u32::from(!pass));
+        self.ceval_depth.set(if pass { EvalDepth { pass: cur.pass + 1, ..cur } } else { EvalDepth { nest: cur.nest + 1, ..cur } });
         let live = |_: &str| true;
         let a = self.aux_analyze(&t.owner, &t.desc, meth.is_static(), code, &Facts { ctx: self, live: &live, m: None, params: bound, mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         let (clean, inp) = self.memo_leave(frame);
@@ -198,7 +209,7 @@ impl Ctx<'_> {
             Event::Field { mref, value, .. } => Some(format!("@{o} {} = {value:?}", mref.name)),
             _ => None,
         }).collect();
-        format!("bound {bound:?} conservative {} insns {} depth {} events {}", a.conservative, code.insns.len(), self.ceval_depth.get(), evs.join(" "))
+        format!("bound {bound:?} conservative {} insns {} depth {:?} events {}", a.conservative, code.insns.len(), self.ceval_depth.get(), evs.join(" "))
     }
 
     /// 字段 f 转为不折叠：读过它的求值记忆作废（其余记忆的输入未变，重算结果相同）；返回取用过作废记忆的方法

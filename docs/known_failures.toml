@@ -158,10 +158,10 @@ deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomc
 
 [[known]]
 test = "TestXmlTransform"
-signature = "Could not load any resource bundle by com.sun.org.apache.xml.internal.serializer.utils.SerializerMessages"
-owner = "java.xml 模块资源包按名装载（与 TestXmlSaxEvents / TestRowSetProvider 同根因）"
+signature = "Translet class loaded, but unable to c"
+owner = "fix-xsltc：运行期定义类无承载（defineClass1 对合法类文件抛 LinkageError），预定义类方案待决（docs/plans/2026-10-10-xsltc-translet.md；failure_patterns xsltc-translet-create）"
 since = "2026-10-07"
-note = "编译期重载命名已修：接口层次跨层重载由 1b3c26d1 修复（ovl-base-1fe9e5ea 编译通过），类视图规则 5 由 gen-overload-hier 补齐（设计 docs/plans/2026-10-07-overload-naming-hierarchy.md；ovl-spot-dff8d8be / -r 抽查编译通过、运行期止于 SerializerMessages 资源束未装载）；先前小写类名与模块同名由 gen-lc-naming 1afed3fc 修复"
+note = "2026-10-10 fix-domstack（b4da5107）：main 589052eb 上本例转译 30 min 超时，修复常量实参求值转发穿透无界后转译 2m49s、编译通过，运行期止于 TransformerConfigurationException「Translet class loaded, but unable to create translet」（fixdomd-b4da5107），签名随之更新；此前止于 SerializerMessages 资源束未装载。编译期重载命名已修：接口层次跨层重载由 1b3c26d1 修复（ovl-base-1fe9e5ea 编译通过），类视图规则 5 由 gen-overload-hier 补齐（设计 docs/plans/2026-10-07-overload-naming-hierarchy.md；ovl-spot-dff8d8be / -r 抽查编译通过、运行期止于 SerializerMessages 资源束未装载）；先前小写类名与模块同名由 gen-lc-naming 1afed3fc 修复"
 deferred = "S1"
 deferred_reason = "javax.xml.transform 由 spring-web SourceHttpMessageConverter / spring-oxm 使用"
 
@@ -171,10 +171,3 @@ signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "引导映像第 5 步 T3（jimage 嵌入数据 + getNativeMap，docs/plans/2026-10-05-boot-image-evaluator.md / 2026-10-02-boot-layer.md §2.3 第 6 条）"
 since = "2026-10-08"
 note = "`.class` 资源未内嵌：base.getResourceAsStream(\"java/lang/Object.class\") 返回 null 后 readNBytes NPE（前 23 行与 JDK 相同）；模块内容中的类字节随第 5 步 jimage 一并嵌入"
-
-[[known]]
-test = "TestResourceBundleFaces"
-signature = "has overflowed its stack"
-owner = "fix-domstack"
-since = "2026-10-10"
-note = "转译期栈溢出（同 transpile-stack-overflow / TestDomResultNode），main 上已存在，非 batch-1010d 引入；修复合入时删除本条"
