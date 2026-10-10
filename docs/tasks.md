@@ -89,18 +89,18 @@
 
 > 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
-- **转译耗时回归（perf-regress，未完成）**：调查与恢复入口见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。b1012 的跳变来自 c18e8fc4 与 bbeb13a5，b1013 的跳变来自 8ce97959。主导开销是 ConcurrentHashMap 表数组经摘要克隆的 F→U 往返散到全体逃逸对象，open CHM 接收者主要由摘要克隆直接构造（未修；逃逸对象进 G 的实验 93d80e65 更慢，已撤回）。0269f622 的 +1 类（InaccessibleObjectException）的真因是枢纽形参常量格丢非空，已在 c02c1825 修复，类集合比 bedc57aa 少 2 个、无新增（pr-tg6 / pr-tg7）。head 仍比 e5200a3e 慢 1.68×，峰值 6.9 / 8.0 GB。
+- **转译耗时回归（perf-regress4，第四轮达标，待合入）**：见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。CHM 表合并的真因是 `SerialCallbackContext.obj` 按类共用：序列化写方的全部对象图成了反序列化 `setObjFieldValues` 的写入目标，引起整堆字段互灌（8ce97959 让 `defaultReadObject` 路径入档案后触发）。c3ec480d 让值持有者（final `Object` 字段由构造器从实参写入）按对象分开。us1 同机对照（p4-t2）：DeepCopy 527 → 306 s / 4.1 GB，JNDI 606 → 348 s，序列化两例约 520 → 约 310 s；类集合对 batch-1010c 无新增（减少 17–40 个）。
 
 - **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。
 - **batch-1012 放行记录**：单测仅已知失败；抽查 53/55（TestUrlParsingFaces 已知，TestJndiNoProvider 转译超时、放宽重跑通过）。java_base OOM 根因与修复：s6（c18e8fc4）后启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，charset-ext 将映像分 24 段、启动函数拆 42 个（b3a860ac）、重定位先于回放（160789c7）、`ImageData::writes_statics_of` 统一判定（14917aed），java_base 峰值 11.8 GB → 1.6 GB。
 - **batch-1013 放行记录**：fix-1011 后续（3f78902a）+ reflect-marker（d51837e4，DeepCopy 3553 → 3532，HelloWorld / CollectorsDemo 3304 → 3263）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c，HelloWorld / CollectorsDemo → 3233，DeepCopy 3511，LogManager 0）。单测 A 组仅已知失败、B 组全过（`profile_union_key_and_coverage` 本次通过，第四根因仍在）。抽查 50/55：TestUrlParsingFaces 已知；DeepCopy、TestJndiNoProvider、TestSerialDefaultSuid、TestSerialUserGenericCallbacks 转译超 600 s，放宽超时重跑全部通过。
-- **转译耗时回归**（进行中，perf-regress）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
+- **转译耗时回归**（第四轮达标，perf-regress4 待合入）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
 - **fix-1011 第四根因**：具体求值站点（`Class.getGenericInterfaces`）回退普通分析后，已写入映像的缓存组没有撤回；终态做法是分析结束时删除只由回退站点贡献的缓存组（引导映像计划 §5.8.6）。
 - **日志链缺口 ③**：HelloWorld 3233 未达 537 / 583；剩余持有者 `logRuntimeExit@74` 的 `log(DEBUG)`，需把 `isLoggable(DEBUG)` 按映像值折叠为 false（§5.9.7）。
 - **lc3-fix（4c42ac44，基于 batch-1009d / logchain3）**：修复 ReflectionAPI 运行超时。根因是 `Class$Atomic.<clinit>` 经 static_const 折叠，按名取偏移（`objectFieldOffset`）从未放开 `Class.reflectionData`。Unsafe CAS 只写流图、不进常量格，getfield 被折叠成 null，`newReflectionData` 的 CAS 因此无限重试；收窄后的闭包暴露了这个潜伏缺陷。修复在 `hw_offset.rs::site_offset`：消费符号偏移即 `open_field`，恢复「按偏移访问 ⇒ 字段不折叠」。dev 验证：抽查 6/6（ReflectionAPI 运行 0.02 s），单测 A 11/11、B 全过。
 - **注解反射 NPE 回归（TestAnnoReflect / TestAnnoDeepAccess）同由 lc3-fix 修复**：二分定位到 reflect-marker 78b744fe（边界类字段改为「手写层提及才开放」，`Class.annotationType` 只经 Unsafe CAS 写、偏移在构建期初始化的 `Class$Atomic.<clinit>` 按名取得，故被折叠成 null）。与 reflectionData 同一缺陷；lc3-fix 在符号偏移消费点放开字段，dev 抽查 anno-on-7d261f96 两例通过。另一修法 anno-fix（fe1ad3ab：读取映像偏移槽即放开字段）放开范围更宽且暴露 `reflect_new_array_element_precision` 的顺序依赖（须随 order-findops），弃用、分支已删。
 - **batch-1009c 已合入（10-09，按用户指示先合入，单测与 57 例抽查转合入后验证）**：含 bootcache（缓存组 = 未回退站点贡献的组，§5.8.6）、c1d-rest（C1d 收窄余项 0 类；c1d 计划 §31 记下一步能力：① 每对象 URI 跟踪约 285 类；② 引导区未知名字调 `Charset.isSupported` 放开全部扩展字符集约 390 类，charset 线续作；③ Formatter 常量格式串构建期求值）、regress2-rest（② ✅，① 转 object-bytecode）、annot-sig（SignatureParser 出闭包，HelloWorld 3456→3407、DeepCopy 3757→3727，`rava closure` 口径；e2e 口径另计）。
-- **进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；派发点顺序依赖（order-findops，`closure_independent_of_order` DeepCopy 失败，集成分支同样存在）；转译耗时回归续作（perf-regress，主因 CHM 表数组跨上下文合并，见 2026-10-09-transpile-time-regression.md）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
+- **进行中（10-09 派）**：引导映像零拷贝（boot-zerocopy）；根类非 native 方法按字节码翻译（object-bytecode）；日志链缺口 ③（logchain3）；派发点顺序依赖（order-findops，`closure_independent_of_order` DeepCopy 失败，集成分支同样存在）；转译耗时回归第四轮已达标（perf-regress4，c3ec480d，待合入）。**待派（按序）**：并发小步 A → B（无 GC 文档 §四，10-09 定）；C1d §31 三项能力。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
@@ -225,7 +225,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 缓存组回退撤回 | ✅ bootcache 9a029858 → batch-1009（待测） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
 | reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
 | 日志链缺口 ③ | 🔄 logchain3（a6dca5c0） | 把 `isLoggable(DEBUG)` 按映像值折叠为 false，去掉 `logRuntimeExit@74` 持有者；HelloWorld 3233 → 目标 537 / 583。§5.9.7 |
-| 转译耗时回归 | 🔄 进行中（perf-regress，基于 5090505f） | DeepCopy 527 → 912 s、序列化两例 ≈520 → ≈890 s、TestJndiNoProvider 324 → 1006 s；目标回到 batch-1012 水平以下（JNDI ≤350 s）、DeepCopy 峰值 ≤6 GB、闭包类集不变大 |
+| 转译耗时回归 | ✅ 第四轮达标（perf-regress4，c3ec480d，待合入） | 四例比 batch-1012 快约 40%（DeepCopy 306 s / 4.1 GB、JNDI 348 s、序列化两例约 310 s），类集合对 batch-1010c 无新增 |
 | 引导映像零拷贝 | 🔄 boot-zerocopy（基于 batch-1009，U4 / U11 §5.5.6） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
 | C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
