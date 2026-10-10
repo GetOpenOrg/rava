@@ -173,13 +173,20 @@ def report_results(disp: list[dict]) -> None:
 
 # ── 服务器资源 ────────────────────────────────────────────────────────────────
 
-REMOTE_PROBE = (
+def remote_probe(data_root: str) -> str:
+    """数据根目录：服务器设了 remote_dir 用其上级（作业目录与之并列），否则 /data。"""
+    d = shlex.quote(data_root)
+    return (
     "echo \"$(nproc) $(cut -d' ' -f1 /proc/loadavg) "
     "$(free -g | awk '/Mem/{print $7, $2}') "
-    "$(df -BG /data 2>/dev/null | awk 'NR==2{print $4}' | tr -d G) "
-    "$(ls -d /data/rava-spot-* 2>/dev/null | wc -l) "
+    f"$(df -BG {d} 2>/dev/null | awk 'NR==2{{print $4}}' | tr -d G) "
+    f"$(ls -d {d}/rava-spot-* 2>/dev/null | wc -l) "
     "$(pgrep -c -f 'rava (build|closure)|cargo (test|build)|rustc')\""
-)
+    )
+
+
+def data_root(server: dict) -> str:
+    return str(Path(server["remote_dir"]).parent) if server.get("remote_dir") else "/data"
 
 
 def ssh_argv(server: dict, by_label: dict) -> list[str]:
@@ -198,7 +205,7 @@ def ssh_argv(server: dict, by_label: dict) -> list[str]:
 
 def probe(server: dict, by_label: dict) -> tuple[str, list[str] | None]:
     try:
-        r = subprocess.run(ssh_argv(server, by_label) + [REMOTE_PROBE], capture_output=True, text=True, timeout=25)
+        r = subprocess.run(ssh_argv(server, by_label) + [remote_probe(data_root(server))], capture_output=True, text=True, timeout=25)
         f = r.stdout.split()
         return server["label"], (f if r.returncode == 0 and len(f) == 7 else None)
     except subprocess.TimeoutExpired:
@@ -206,7 +213,7 @@ def probe(server: dict, by_label: dict) -> tuple[str, list[str] | None]:
 
 
 def report_servers(servers: list[dict]) -> None:
-    section(f"服务器资源（测试优先放 dev；/data <{REMOTE_DISK_MIN_G}G 需清理）")
+    section(f"服务器资源（测试优先放 dev；数据盘 <{REMOTE_DISK_MIN_G}G 需清理）")
     by_label = {s["label"]: s for s in servers}
     with ThreadPoolExecutor(len(servers) or 1) as ex:
         res = dict(ex.map(lambda s: probe(s, by_label), servers))
@@ -221,7 +228,7 @@ def report_servers(servers: list[dict]) -> None:
             warn.append("磁盘不足")
         if s["label"] == "dev" and float(load) < int(ncpu) / 2:
             warn.append("有余量，新测试放这里")
-        print(f"  {s['label']}: 核 {ncpu} 负载 {load} 可用内存 {avail}G/{total}G /data 空闲 {disk}G "
+        print(f"  {s['label']}: 核 {ncpu} 负载 {load} 可用内存 {avail}G/{total}G {data_root(s)} 空闲 {disk}G "
               f"作业目录 {dirs} 在跑进程 {procs}" + (f"  ← {'，'.join(warn)}" if warn else ""))
 
 
