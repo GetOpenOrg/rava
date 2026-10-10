@@ -180,7 +180,8 @@ impl Engine<'_> {
             let set = match (hub.open, &hub.set) {
                 (Some(o), _) => format!("open {}", self.names[o as usize]),
                 (None, Some(s)) => format!("exact {}", s.len()),
-                _ => "vm".into(),
+                // 无 open、无固定集合：方法引用的增长枢纽（`HubSet::Grow`）
+                _ => format!("grow {}", hub.recvs.len()),
             };
             eprintln!(
                 "{tag} hub H{h} replay={n} fresh={} links={} lambdas={} special={} plain={} parent={:?} [{set}] {o}.{nm}{d} via={}",
