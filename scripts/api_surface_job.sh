@@ -65,30 +65,52 @@ grep -c ' source: jrt:/\| source: shared objects file' "$RAW/classload.log" | se
 #    看门狗每 30 s 采样 RSS（写 closure_<变体>.rss：秒 RSS_MiB），超时（API_SURFACE_CLOSURE_TIMEOUT，缺省 2400 s）
 #    或 RSS 超上限（API_SURFACE_CLOSURE_MEM_MB，缺省不设）即按 PID 终止，记下终止原因，得到精确的阻塞点数据；
 #    两变体各有上限，一个超限不连累另一个（槽 scope 上限按两者之和给 --slot-mem）
+#    API_SURFACE_VARIANTS（缺省 "a b"）选跑哪些变体；API_SURFACE_STACK_EVERY=N（秒，缺省 0 关）时 rava 在 gdb 下运行，
+#    看门狗每 N 秒与终止前各发一次 SIGUSR1（gdb 截获、不传给 rava），全线程栈印在 closure_<变体>.out（gdb 标准输出，
+#    「=== STACK」分隔），各次取栈的时刻与 RSS 记在 closure_<变体>.stacks，
+#    用于定位超时 / 超内存时所处的分析阶段（服务器 ptrace_scope=1，只能由父进程 gdb 取栈）
 MAIN="$(grep -rl 'static void main' "$APP/src" | head -1 | sed "s|$APP/src/||; s|\.java$||; s|/|.|g")"
 CL_TIMEOUT="${API_SURFACE_CLOSURE_TIMEOUT:-2400}"
 CL_MEM="${API_SURFACE_CLOSURE_MEM_MB:-0}"
+CL_STACK="${API_SURFACE_STACK_EVERY:-0}"
+VARIANTS="${API_SURFACE_VARIANTS:-a b}"
 start_closure() {
     local tag="$1"; shift
     step "闭包 $tag 启动（上限 ${CL_TIMEOUT}s / ${CL_MEM} MiB）"
     local timer=(); [[ -x /usr/bin/time ]] && timer=(/usr/bin/time -v)
-    "${timer[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
+    local dbg=()
+    if (( CL_STACK > 0 )) && command -v gdb >/dev/null; then
+        dbg=(gdb -q -batch -ex "set pagination off" -ex "handle SIGUSR1 stop print nopass" -ex "handle SIGPIPE nostop noprint pass" -ex run)
+        for _ in $(seq 1 64); do dbg+=(-ex "echo \\n=== STACK\\n" -ex "thread apply all bt 40" -ex continue); done
+        dbg+=(--args)
+        : >"$OUT/closure_$tag.stacks"
+    fi
+    "${timer[@]}" "${dbg[@]}" "$RAVA" closure "$CLS" "${CORPUS_JDK_ARGS[@]}" --main "$MAIN" --deps "$DEPS/deps.lock.toml" --cp "$NAMES" \
         -o "$RAW/closure_$tag.json" "$@" >"$OUT/closure_$tag.out" 2>"$OUT/closure_$tag.err" &
     local wpid=$!
     (
-        t0=$SECONDS; : >"$OUT/closure_$tag.rss"; pid=""
+        t0=$SECONDS; : >"$OUT/closure_$tag.rss"; pid=""; next_stack=$CL_STACK
         while kill -0 "$wpid" 2>/dev/null; do
-            [[ -z "$pid" ]] && pid="$(pgrep -P "$wpid" -x rava | head -1)"
-            [[ -z "$pid" && ${#timer[@]} == 0 ]] && pid="$wpid"
+            if [[ -z "$pid" ]]; then
+                pid="$(pgrep -f "^$RAVA closure .*/closure_$tag\.json" | head -1)"
+                gpid="$(pgrep -P "$wpid" -x gdb | head -1)"
+                [[ -z "$gpid" && ${#timer[@]} == 0 ]] && gpid="$wpid"
+            fi
             el=$((SECONDS - t0))
             rss=0; [[ -n "$pid" ]] && rss=$(awk '/^VmRSS/ {print int($2/1024)}' "/proc/$pid/status" 2>/dev/null || echo 0)
             echo "$el ${rss:-0}" >>"$OUT/closure_$tag.rss"
             why=""
             (( el >= CL_TIMEOUT )) && why="超时 ${el}s"
             (( CL_MEM > 0 && ${rss:-0} >= CL_MEM )) && why="RSS ${rss} MiB ≥ 上限 ${CL_MEM} MiB（${el}s）"
+            if [[ -n "$pid" && ${#dbg[@]} -gt 0 ]] && { [[ -n "$why" ]] || (( el >= next_stack )); }; then
+                next_stack=$((el + CL_STACK))
+                echo "=== ${el}s RSS ${rss} MiB" >>"$OUT/closure_$tag.stacks"
+                kill -USR1 "$pid" 2>/dev/null; sleep 20
+            fi
             if [[ -n "$why" && -n "$pid" ]]; then
                 echo "$why" >"$OUT/closure_$tag.killed"
                 kill -TERM "$pid" 2>/dev/null; sleep 10; kill -KILL "$pid" 2>/dev/null
+                [[ -n "${gpid:-}" ]] && kill -KILL "$gpid" 2>/dev/null
                 break
             fi
             sleep 30
@@ -115,10 +137,10 @@ finish_closure() {
 }
 SEEDS=()
 while read -r c; do [[ -n "$c" ]] && SEEDS+=(--seed-class "$c"); done <"$OUT/seed_classes.txt"
-start_closure a
-start_closure b "${SEEDS[@]}"
-finish_closure a
-finish_closure b
+for v in $VARIANTS; do
+    case $v in a) start_closure a ;; b) start_closure b "${SEEDS[@]}" ;; esac
+done
+for v in $VARIANTS; do finish_closure "$v"; done
 
 # 5. 面 + 分层
 step "面"
