@@ -28,6 +28,7 @@ use crate::api_roots::api_roots;
 use crate::build_libs::{self, Libs};
 use crate::build_opts::{BuildOpts, Mode, Stage, CLOSURE_INPUT_DIR};
 use crate::cargo;
+use crate::predefined;
 use crate::compile_cmd::{compile_stage, CompileArgs};
 use crate::status::{BuildStatus, EmitSummary, STATUS_FILE};
 use crate::closure_cmd::{find_runtime_dir, seed_roots, MAIN};
@@ -72,9 +73,15 @@ pub(crate) fn javac(home: &Path, java_files: &[PathBuf], jars: &[PathBuf], out: 
     Ok(())
 }
 
-/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类（同名先加入者优先，与 `rava closure` 一致）。
+/// 用户类目录 → 依赖库 jar → JDK → 镜像独有 / VM 支持类 → 预定义类（同名先加入者优先，与 `rava closure` 一致）。
 /// 全部加入后做 JDK 包遮蔽与模块图硬校验（build / audit / profile 三流程共用此装配点）
-pub(crate) fn class_path(user_dir: &Path, libs: &[crate::build_libs::LibEntry], home: &Path, images: &[PathBuf]) -> Result<ClassPath, String> {
+pub(crate) fn class_path(
+    user_dir: &Path,
+    libs: &[crate::build_libs::LibEntry],
+    home: &Path,
+    images: &[PathBuf],
+    predefined: Option<&Path>,
+) -> Result<ClassPath, String> {
     let release = resolve::jdk::major_of(home).ok_or(format!("{}：无法识别 JDK 主版本", home.display()))?;
     let mut cp = ClassPath::new(release);
     cp.add(Origin::User, user_dir).map_err(|e| format!("{}：{e}", user_dir.display()))?;
@@ -85,6 +92,9 @@ pub(crate) fn class_path(user_dir: &Path, libs: &[crate::build_libs::LibEntry], 
     cp.add_jdk(home).map_err(|e| e.to_string())?;
     for d in images {
         cp.add(Origin::Image, d).map_err(|e| format!("{}：{e}", d.display()))?;
+    }
+    if let Some(d) = predefined {
+        cp.add(Origin::Predefined, d).map_err(|e| format!("{}：{e}", d.display()))?;
     }
     cp.shadow_jdk_owned_packages();
     resolve::modules::check(&cp).map_err(|e| format!("[modules] {e}"))?;
@@ -250,6 +260,21 @@ pub(crate) fn analyze<R: Send>(
     })
 }
 
+/// 一轮闭包分析的去向：发射（或到此为止），或先做训练运行再重算
+enum Round<R> {
+    Done(Option<R>),
+    Train,
+}
+
+/// 闭包触达的预定义类（按名排序；与用户类同属用户侧发射）
+fn predefined_in_closure(cp: &ClassPath, facts: &ClosureFacts) -> Vec<String> {
+    let mut v: Vec<String> =
+        facts.classes.iter().filter(|c| cp.origin(&c.name) == Some(Origin::Predefined)).map(|c| c.name.clone()).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 /// 一次发射所需的全部输入
 pub(crate) struct EmitJob<'a> {
     pub cp: &'a ClassPath,
@@ -402,24 +427,59 @@ fn build_stages(o: &BuildOpts, rt: &Path, repo: &Path, out: &Path, st: &mut Buil
         return Ok(());
     }
     st.stage = Stage::Closure;
-    let cp = class_path(&classes, &libs_sel, &home, &image_dirs(o, &home, rt))?;
-    let facts = resolve::ModuleFacts::build(&cp);
-    let Libs { crates, jars } = build_libs::from_lock(&libs_sel, &cp, &facts)?;
-    let _ = &jars;
-    let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
-    perf.mark("classpath");
+    // 预定义类目录：显式 `--predefined`（生产构建，`rava trace` 产物），或语料构建按需训练的 scratch 目录
+    let pre_dir: Option<PathBuf> = match (&o.predefined, o.train_predefined) {
+        (Some(p), _) => Some(abs(p)),
+        (None, true) => Some(out.join(predefined::SCRATCH_DIR)),
+        (None, false) => None,
+    };
+    let inputs = predefined::Inputs { home: &home, repo, classes: &classes, jars: &jars, main: o.main.as_deref() };
+    // 按需训练：产物与输入不符（或尚无）时先删旧产物，闭包若触达类定义 native 则训练后重算闭包
+    let mut may_train = false;
+    if let (true, Some(d)) = (o.train_predefined, &pre_dir) {
+        may_train = !predefined::fresh(d, &inputs);
+        if may_train && d.exists() {
+            remove_dir(d)?;
+        }
+    }
+    let definers: Vec<String> =
+        if may_train { Manifest::load(rt)?.predefined_definers().into_iter().map(String::from).collect() } else { Vec::new() };
     let java_files: Vec<PathBuf> = o.java_files(Mode::Build).iter().map(|p| abs(p)).collect();
     let emit_too = o.stop_after >= Stage::Emit;
     let profile = o.profile.as_deref().map(|p| crate::profile_emit::load(p, rt, &home)).transpose()?;
-    let emitted = analyze(&cp, rt, &user[0], o, &o.seed_classes, &cin.join("closure.json"), &mut perf, |single, perf| {
-        if !emit_too {
-            return Ok(None);
+    let emitted = loop {
+        let pre = pre_dir.as_deref().and_then(predefined::classes_dir);
+        let cp = class_path(&classes, &libs_sel, &home, &image_dirs(o, &home, rt), pre.as_deref())?;
+        let facts = resolve::ModuleFacts::build(&cp);
+        let Libs { crates, jars: _ } = build_libs::from_lock(&libs_sel, &cp, &facts)?;
+        let user = user_order(&cp, o.java_files(Mode::Build), o.main.as_deref())?;
+        perf.mark("classpath");
+        let round = analyze(&cp, rt, &user[0], o, &o.seed_classes, &cin.join("closure.json"), &mut perf, |single, perf| {
+            if may_train && predefined::needs_training(single, &definers) {
+                return Ok(Round::Train);
+            }
+            if !emit_too {
+                return Ok(Round::Done(None));
+            }
+            let mut composed = None;
+            let facts = crate::profile_emit::facts(profile.as_ref(), single, &mut composed)?;
+            let mut user = user.clone();
+            user.extend(predefined_in_closure(&cp, single));
+            let job = EmitJob { cp: &cp, facts, rt, user: &user, java_files: java_files.clone(), home: &home, out, libs: &crates, o };
+            emit_scratch(&job, perf).map(|r| Round::Done(Some(r)))
+        })?;
+        match round {
+            Round::Done(r) => break r,
+            Round::Train => {
+                may_train = false;
+                let man = Manifest::load(rt)?;
+                let dir = pre_dir.as_deref().ok_or("训练产物目录缺失")?;
+                let t = predefined::Train { inputs: &inputs, main: &user[0], out: dir, cp: &cp, man: &man };
+                println!("[predefined] {}", predefined::train(&t)?);
+                perf.mark("train");
+            }
         }
-        let mut composed = None;
-        let facts = crate::profile_emit::facts(profile.as_ref(), single, &mut composed)?;
-        let job = EmitJob { cp: &cp, facts, rt, user: &user, java_files, home: &home, out, libs: &crates, o };
-        emit_scratch(&job, perf).map(Some)
-    })?;
+    };
     let Some((r, timings)) = emitted else {
         print_perf(o.perf, &perf, &[], None);
         return Ok(());
@@ -475,8 +535,10 @@ pub fn run_emit(args: &Args) -> Result<(), String> {
         }
         remove_dir(&out)?;
     }
-    let cp = class_path(&classes, &[], &home, &image_dirs(&o, &home, &rt))?;
-    let user = user_order(&cp, o.java_files(Mode::Emit), None)?;
+    let pre = o.predefined.as_deref().and_then(predefined::classes_dir);
+    let cp = class_path(&classes, &[], &home, &image_dirs(&o, &home, &rt), pre.as_deref())?;
+    let mut user = user_order(&cp, o.java_files(Mode::Emit), None)?;
+    user.extend(predefined_in_closure(&cp, &single));
     perf.mark("classpath");
     let java_files = o.java_files(Mode::Emit).iter().map(|p| abs(p)).collect();
     let job = EmitJob { cp: &cp, facts, rt: &rt, user: &user, java_files, home: &home, out: &out, libs: &[], o: &o };

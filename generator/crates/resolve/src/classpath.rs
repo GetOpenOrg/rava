@@ -28,6 +28,18 @@ pub enum Origin {
     Jdk,
     /// 运行时镜像独有类（jlink 预生成）/ VM 支持类
     Image,
+    /// 预定义类：程序运行期经类定义 native（`ClassLoader.defineClass0/1/2`）定义的类，构建期取得其类文件
+    /// （训练运行记录或用户项目提供），按内容寻址进用户 crate（docs/plans/2026-10-10-xsltc-translet.md §4）。
+    /// 属用户域（按字节码翻译、程序私有、不进档案），但不在应用类路径上：不是类路径资源、不由应用加载器
+    /// 定义，只作为类定义 native 的返回值进入闭包
+    Predefined,
+}
+
+impl Origin {
+    /// 程序私有的类（用户类与预定义类）：用户域，不进档案
+    pub fn is_program(self) -> bool {
+        matches!(self, Origin::User | Origin::Predefined)
+    }
 }
 
 /// 依赖锁条目喂入的库元数据（J2 由 `deps.lock.toml` 填充）：坐标与显式模块名兜底

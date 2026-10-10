@@ -103,7 +103,7 @@ impl ModuleFacts {
                     node.kind = match view.origin {
                         Origin::Jdk | Origin::Image => ModuleKind::Jdk,
                         Origin::Lib => ModuleKind::Lib,
-                        Origin::User => ModuleKind::User,
+                        Origin::User | Origin::Predefined => ModuleKind::User,
                     };
                     node.exports = d.exports.clone();
                     node.opens = d.opens.clone();
@@ -116,7 +116,7 @@ impl ModuleFacts {
                 match view.origin {
                     Origin::Jdk | Origin::Image => e.0 += 1,
                     Origin::Lib => e.1 += 1,
-                    Origin::User => e.2 += 1,
+                    Origin::User | Origin::Predefined => e.2 += 1,
                 }
                 Some(d.name.clone())
             } else if view.origin == Origin::Lib && path.is_file() {
@@ -254,7 +254,7 @@ impl<'a> ModuleGraph<'a> {
         }
         match self.cp.origin(class) {
             // 用户 / 库档案里无描述符的类：无名模块（不按包借用具名模块）
-            Some(Origin::User | Origin::Lib) => None,
+            Some(Origin::User | Origin::Lib | Origin::Predefined) => None,
             _ => self.f.package_owner.get(package_of(class)).map(|(_, m)| m.as_str()),
         }
     }

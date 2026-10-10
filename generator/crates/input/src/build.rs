@@ -129,6 +129,9 @@ pub struct EmitInput {
     /// 类路径资源（§30.15）：应用类路径的全部文件 (资源名, 字节)，按名有序、同名按类路径序；
     /// 读表入口不在调用链上时为空
     pub class_path_resources: Vec<(String, Vec<u8>)>,
+    /// 预定义类（`Origin::Predefined`，训练运行记录、闭包触达的用户侧类）：(类文件 SHA-256 十六进制, 类名)，按哈希有序；
+    /// 运行时类定义 native 对实参字节求同一哈希查表（docs/plans/2026-10-10-xsltc-translet.md §4）
+    pub predefined_classes: Vec<(String, String)>,
     /// 预检链事实：分析器方法节点 id（`类.方法:描述符`）
     pub precheck_visited: BTreeSet<String>,
     pub handwritten: HandwrittenMap,
@@ -192,7 +195,7 @@ const CLINIT_DESC: &str = "()V";
 
 /// 闭包类的装载口径：lib / JDK / 镜像档案（用户档案只经本编译单元进入）
 fn load(cp: &ClassPath, name: &str) -> Option<Arc<ClassFile>> {
-    if cp.origin(name) == Some(Origin::User) {
+    if cp.origin(name).is_some_and(Origin::is_program) {
         return None;
     }
     cp.get(name)
@@ -466,6 +469,13 @@ impl<'a> BuildInput<'a> {
         module_resources.sort_by(|a, b| (&a.name, &a.module).cmp(&(&b.name, &b.module)));
         module_resources.dedup_by(|a, b| a.name == b.name && a.module == b.module);
         let class_path_resources = if self.class_path_read(&visited) { self.cp.class_path_files() } else { Vec::new() };
+        let mut predefined_classes: Vec<(String, String)> = self
+            .user_classes
+            .iter()
+            .filter(|c| self.cp.origin(c) == Some(Origin::Predefined))
+            .filter_map(|c| Some((classfile::sha256::hex(&self.cp.bytes(c)?), c.clone())))
+            .collect();
+        predefined_classes.sort();
         warnings.extend(f.missing.iter().map(|m| format!("闭包引用的类不存在：{m}")));
         warnings.extend(f.reflect_gaps.iter().map(|g| format!("反射缺口：{g}")));
         lap("input.reflect");
@@ -487,6 +497,7 @@ impl<'a> BuildInput<'a> {
             boot_image: f.boot_image.clone(),
             module_resources,
             class_path_resources,
+            predefined_classes,
             precheck_visited: precheck_visited(f, &closure),
             handwritten,
             warnings,

@@ -8,10 +8,11 @@
 //!   [--keep-artifacts]
 //!   [--raw-sites FILE] [--perf] [--emit-jobs N] [--closure-json]
 //!   [--cut 类.方法:描述符[@偏移]]… [--cut-file F]… [--dump-edges F]（后三项为闭包诊断，同 `rava closure`）
-//!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N] [--profile profile.json]`
+//!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N] [--profile profile.json]
+//!   [--predefined DIR | --train-predefined]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
 //!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE]
-//!   [--perf] [--emit-jobs N] [--profile profile.json]`（`--java`：源文件，决定用户类包布局与入口序）
+//!   [--perf] [--emit-jobs N] [--profile profile.json] [--predefined DIR]`（`--java`：源文件，决定用户类包布局与入口序）
 //!
 //! 选项语义见 docs/environment-variables.md。
 
@@ -126,10 +127,16 @@ pub struct BuildOpts {
     pub closure_cache_max_mb: Option<u64>,
     /// 档案发射（T1 1b）：非用户侧事实取该 `profile.json`（`rava profile` 产物），用户侧取本程序单例闭包
     pub profile: Option<PathBuf>,
+    /// 预定义类目录（`rava trace` 产物，生产构建由用户项目提供；docs/plans/2026-10-10-xsltc-translet.md §5）
+    pub predefined: Option<PathBuf>,
+    /// build（语料）：闭包发现类定义 native 可达时，以参考 JDK 跑一次训练运行，产物写 `<scratch>/predefined/`
+    /// 并入输入后重算闭包（X2：语料自动、生产显式）
+    pub train_predefined: bool,
 }
 
-const VALUED: [&str; 28] = [
+const VALUED: [&str; 29] = [
     "--profile",
+    "--predefined",
     "--stop-after",
     "--target-dir",
     "--build-timeout",
@@ -158,7 +165,8 @@ const VALUED: [&str; 28] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 12] = [
+const FLAGS: [&str; 13] = [
+    "--train-predefined",
     "--clean",
     "--strict",
     "--batch",
@@ -173,7 +181,8 @@ const FLAGS: [&str; 12] = [
     "--keep-artifacts",
 ];
 /// 只属于 build 的选项
-const BUILD_ONLY: [&str; 25] = [
+const BUILD_ONLY: [&str; 26] = [
+    "--train-predefined",
     "--release",
     "--release-small",
     "--dev-opt",
@@ -237,6 +246,7 @@ impl BuildOpts {
                     "--perf" => o.perf = true,
                     "--closure-json" => o.closure_json = true,
                     "--keep-artifacts" => o.keep_artifacts = true,
+                    "--train-predefined" => o.train_predefined = true,
                     _ => o.strict = true,
                 }
                 continue;
@@ -272,6 +282,7 @@ impl BuildOpts {
                 "--api-package" => o.api_packages.push(v.clone()),
                 "--closure-cache" => o.closure_cache = Some(PathBuf::from(v)),
                 "--profile" => o.profile = Some(PathBuf::from(v)),
+                "--predefined" => o.predefined = Some(PathBuf::from(v)),
                 "--closure-cache-max-mb" => {
                     o.closure_cache_max_mb = Some(v.parse().map_err(|_| format!("--closure-cache-max-mb 需为数字：{v}"))?)
                 }
@@ -286,6 +297,9 @@ impl BuildOpts {
     fn validate(&self, mode: Mode) -> Result<(), String> {
         if self.jdk.is_some() && self.java_home.is_some() {
             return Err("--jdk 与 --java-home 互斥".into());
+        }
+        if self.predefined.is_some() && self.train_predefined {
+            return Err("--predefined 与 --train-predefined 互斥（显式给出的预定义类目录不再训练）".into());
         }
         if self.api_recursive && self.api_packages.is_empty() {
             return Err("--api-recursive 需配合 --api-package".into());

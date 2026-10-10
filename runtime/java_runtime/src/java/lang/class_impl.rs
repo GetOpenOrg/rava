@@ -120,9 +120,15 @@ impl Class {
         } else {
             elem
         };
-        let loader = match crate::meta::class_defining_loader(&elem.replace('.', "/")) {
+        let slash = elem.replace('.', "/");
+        let loader = match crate::meta::class_defining_loader(&slash) {
             Some("app") => crate::jdk::internal::loader::ClassLoaders::appClassLoader()?,
             Some("platform") => crate::jdk::internal::loader::ClassLoaders::platformClassLoader()?,
+            // 预定义类：运行期定义记录的首个定义者（crate::predefined；未定义前为 null）
+            Some("defined") => match crate::predefined::defining_loader(&slash) {
+                Some(l) => l,
+                None => return Ok(self),
+            },
             _ => return Ok(self),
         };
         self.__set_classLoader(loader);

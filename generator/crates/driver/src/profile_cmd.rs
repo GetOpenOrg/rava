@@ -201,7 +201,7 @@ impl Env {
             }
             _ => return Err(format!("入口 {}：输入须为若干 .java 文件或恰一个类目录", e.name)),
         };
-        let cp = crate::build_cmd::class_path(&classes, &libs, &self.home, &self.images)?;
+        let cp = crate::build_cmd::class_path(&classes, &libs, &self.home, &self.images, None)?;
         let main = crate::build_cmd::user_order(&cp, &java, e.main.as_deref())?.remove(0);
         let man = Manifest::load(&self.rt)?;
         let hw = Handwritten::new(&self.rt);

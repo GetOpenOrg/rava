@@ -126,7 +126,7 @@ pub fn runtime_digest(runtime_root: &Path) -> Result<String, String> {
 /// 非用户归档的摘要：每个归档按来源与树摘要计入，排序去重（与路径、给出顺序无关）
 pub fn archives_digest(archives: &[(Origin, PathBuf)]) -> Result<String, String> {
     let mut items: Vec<String> = Vec::new();
-    for (o, p) in archives.iter().filter(|(o, _)| *o != Origin::User) {
+    for (o, p) in archives.iter().filter(|(o, _)| !o.is_program()) {
         items.push(format!("{o:?} {}", tree_digest(p, &|_| false)?));
     }
     items.sort();

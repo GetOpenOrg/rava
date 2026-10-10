@@ -4859,3 +4859,54 @@ csall 不动说明 1–3 之外还有来源（即 4）。四者任一单独存�
 - 来源 3（`String` 按名字符集构造器的反射面）：反射根暴露，属反射面收窄。
 - U14 口径冲突（只记录，本线未改）：`stdout.encoding` / `stderr.encoding` 在 `values` 表中钉值，与 U14「运行期宿主值」不一致；
   rava 的 `native_encoding` 取值与 HotSpot 的 `nl_langinfo(CODESET)` 不同。两者都不影响本节的折叠：受理性质只依赖引导期校验。
+
+## 35. 调用点答复的单调性：先按本调用点求值，返回常量格只作退路（2026-10-10，分支 `fix-xsltc2`，7646c9ba）
+
+### 35.1 问题
+
+工作表不动点里连上的边不可撤回。所以任何暂时答复都必须 ⊑ 终态答复，否则闭包随处理次序（哈希种子）变化，且只会多不会少。
+
+返回常量格 `rvals` 是全部上下文返回值之并，按 `Dep::Ret` 失效重算，本身单调。但在不动点途中它只是**已分析上下文**之并，是终态的下近似。
+旧实现中，`facts/oracle.rs` 的 `invoke_result` 与 `deval.rs` 的 `deval_call` 见到单常量格 `Const(v)` 就直接把 `v` 当作本调用点答复。
+只有整数、非空引用、带形状或无类型引用才先试按本调用点常量实参求值。
+
+单常量格被当成「精确值」使用：分支据此折叠，死分支不连边。之后格扩成 `Top` 或另一常量时，调用者虽经 `Dep::Ret` 重算，
+但前一轮按 `v` 连上的边已经留下，而按旧答复判死、按新答复可达的分支也要在重算后才补上。
+若暂时答复与终态精确值**不可比**（`0` 对终态按本调用点求值的 `1`），闭包就多出只有暂时答复才可达的子树。
+
+### 35.2 实例（TestModuleLayerDefine，种子 0 多 10 类）
+
+调用链：`LazyLoggers.getLogger` → `DefaultLoggerFinder.isSystem(module)` → `Boolean.TRUE` 映像对象上的 `booleanValue()`。
+
+- 种子 0 先分析了 FALSE 接收者，`rvals[booleanValue] = Const(0)`，`isSystem` 得 0。
+- `getLoggerFromFinder` 分支因此连边，进而进入 `TemporaryLoggerFinder`、JUL `LogManager`、安全提供者子树。
+- 种子 1 先见 TRUE，得 1，该分支是死分支。
+
+按本调用点求值（接收者是 TRUE 映像）任何次序下都得 1。
+
+### 35.3 修法
+
+调用点答复一律先按本调用点常量实参求值（`const_eval` / `deval_body`），求不出（`Unknown`）才退回返回常量格。
+
+- `const_eval` 的结果只依赖实参与字节码，记忆键含深度帧与截断层，与处理次序无关，所以优先取它不引入新的次序依赖。
+- 汇合格只在求值放弃时作为退路，此时它与旧行为相同。
+- `ctor_init.rs` 的 InitFacts 原本就是「先求值、后取格」，不改。
+- 落点：
+  - `generator/crates/closure/src/engine/facts/oracle.rs:115`（`invoke_result`）。
+  - `generator/crates/closure/src/engine/deval.rs:148`（`deval_call`）：浅层（`!deep`）仍直接取常量格，深层先取 dv_cache / `deval_body`。
+
+残余风险：求值本身被深度 / 预算截断而返回 `Unknown` 的调用点仍取汇合格，仍可能得到不可比的暂时答复。
+终态做法是让截断答复也取 `Top` 而非部分格，届时需评估精度代价。本次实测（下表）未见此类差异。
+
+### 35.4 实测（jp1 / us1，`rava closure`，种子 0 / 1 / 2 三次结果完全一致）
+
+| 用例 | main a8fbebb6（类 / 方法 / 反射成员） | fix-xsltc2 ef8bc9da |
+| --- | --- | --- |
+| HelloWorld | 580 / 1896 / 61 | 580 / 1897 / 61 |
+| DeepCopy | 3075 / 16838 / 975 | 3075 / 16838 / 975 |
+| TestModuleLayerDefine | 2277 / 11755 / 433 | 2277 / 11758 / 433 |
+| TestXmlTransform | 5237 / 30483 / 839 | 5237 / 30483 / 839 |
+
+- 方法数差异来自 xsltc 分支的正确依赖（xsltc 计划 §8.3：未捕获报告虚调 `getCause` 等），与本修法无关，修法不增大闭包。
+- 修法前本分支 TestModuleLayerDefine 种子 0 多 10 类。
+- 作业：xs3-size-main（基线）、xs3-m-ut2（本分支）；修法前诊断见 xs3-rv / xs3-or。
