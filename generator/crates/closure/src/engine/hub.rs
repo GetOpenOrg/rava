@@ -362,7 +362,15 @@ impl<'a> Engine<'a> {
         if self.methods[t].kind != Kind::Bytecode {
             return None;
         }
-        self.analysis(t)?.returned_params()
+        let a = self.analysis(t)?;
+        self.returned_of(t, &a)
+    }
+
+    /// 分析 a 的透传摘要（[`Analysis::returned_params`]）。只对引用返回的方法有意义：无引用返回值的方法
+    /// 不接返回值流，恒按非透传（尚无返回路径的空集只是引用返回值的 ⊥，不必为它们逐调用点接边）
+    pub(super) fn returned_of(&self, t: usize, a: &Analysis) -> Option<Vec<u16>> {
+        self.methods[t].rtype?;
+        a.returned_params()
     }
 
     /// VM 按反射对象虚调用 key（声明类 cls 上的实例方法）：经 open(cls) 的 VM 枢纽派发到各接收者的选中实现，

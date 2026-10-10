@@ -19,6 +19,7 @@ pub mod lib_crates;
 pub mod mod_tree;
 pub mod module_side;
 pub mod overlay;
+pub mod root_bodies;
 #[cfg(test)]
 mod tests;
 
@@ -200,6 +201,7 @@ fn emit_classes<'l>(
             text: ct.text,
             methods: ct.methods,
             scope: Arc::clone(scope),
+            iface_views: Vec::new(),
         };
         perf.classes.push((j.binary.to_string(), *t_prep + t_text));
         ems.insert(j.binary.to_string(), em);
@@ -282,6 +284,7 @@ pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitt
     archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user, crates };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
+    root_bodies::emit(ctx, &mut state, bodies)?;
     state.check_lambda_ledger()?;
     finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
     Ok(Precheck::scan(ems.values(), &ctx.input.precheck_visited))
@@ -307,6 +310,8 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     archive_side::seed_requests(ctx, &mut state);
     let lay = Layouts { jdk: &jdk, libs: &libs, user: &user, crates };
     let mut ems = emit_classes(ctx, &mut state, bodies, &w, &lay, &mut perf)?;
+    // 根类非 native 方法的字节码翻译体（生成期事实须在第二阶段之前并入）
+    let roots = root_bodies::emit(ctx, &mut state, bodies)?;
     state.check_lambda_ledger()?;
     perf.mark("classes");
     let disp = finish_phase2(ctx, &mut state, &mut ems, &lay, &mut perf)?;
@@ -318,13 +323,22 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let precheck = Precheck::scan(ems.values(), &ctx.input.precheck_visited);
     let readability = crate::audit::readability_counts(ems.values().map(|em| em.text.as_str()));
     // S4 物理拆层：根模块生成类分声明层（原位）与实现层（`<根>_body_k`）；其余模块 crate 不拆
-    let body_plan = layers::split(ctx, &mut ems, &decl_src)?;
+    let mut body_plan = layers::split(ctx, &mut ems, &decl_src)?;
     // D8：声明层按签名 SCC 分段（上层段类改落 `<根>_decl_<j>`）
     let segs = decl_side::segment(ctx, &mut ems, &decl_src, out_dir);
     let root_classes = jdk.files.keys().filter(|c| crates.crate_of(c) == crates.root()).count();
     perf.crates = crate_stats(&ems, &body_plan, crates, root_classes, &segs.upper_srcs(out_dir));
+    let root_file = match &roots {
+        Some(rb) => {
+            let site = site_for(&lay, JobCrate::Jdk(crates.root()));
+            let imports = import_lines(ctx, &site.import_site(), &rb.scope);
+            Some(rb.place(&imports, &mut body_plan, &decl_src)?)
+        }
+        None => None,
+    };
     perf.mark("layers");
-    let files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
+    let mut files: Vec<(&Path, &str)> = ems.values().map(|em| (em.path.as_path(), em.text.as_str())).collect();
+    files.extend(root_file.iter().map(|(p, t)| (p.as_path(), t.as_str())));
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     perf.mark("write");
     for src in &jdk_srcs {
@@ -340,7 +354,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let mut final_files = files;
     final_files.extend(body_files.iter().map(|(p, t)| (p.as_path(), *t)));
     let lnt = |class: &str, name: &str, desc: &str| {
-        let i = ctx.class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
+        let i = ctx.code_class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
     let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &decl_src))?;
@@ -386,21 +400,18 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     })
 }
 
-/// 手写根类的行表登记（根类无生成文件）：根类字节码的方法按调用侧根类命名规则对应 overlay
+/// 手写根类的行表登记（根类无 `java_class!` 生成文件）：根类字节码的 native 方法按调用侧根类命名规则对应 overlay
 /// 落盘的根类手写文件中的 fn（根类重载取描述符后缀名，前提是该名在手写 API 名面中；
 /// 规则与登记形态见 `line_tables::handwritten::root_methods`）
 fn root_line_registration(ctx: &EmitCtx<'_>, decl_src: &Path) -> Vec<(PathBuf, Vec<line_tables::handwritten::HwMethod>)> {
     let root = ty::consts::OBJECT;
     let Some(cf) = ctx.cp.get(root) else { return Vec::new() };
     let source = cf.source_file.clone().unwrap_or_default();
-    let rust_name = |name: &str, desc: &str| {
-        let mangled = ty::type_map::mangle_name(&ctx.manifest.ty, name, desc);
-        let chosen = if mangled != name && ctx.root_api().contains(&mangled) { mangled } else { name.to_string() };
-        ty::ident::safe_ident(&chosen)
-    };
+    let rust_name = |name: &str, desc: &str| root_bodies::rust_name(ctx, name, desc);
     // 可覆盖 = 实例、非 final、非 private（虚派发目标可被子类替换）
     let overridable = |a: u16| a & (classfile::acc::STATIC | classfile::acc::FINAL | classfile::acc::PRIVATE) == 0;
-    let methods = cf.methods.iter().map(|m| (m.name.as_str(), m.desc.as_str(), m.is_native(), overridable(m.access)));
+    // 非 native 方法按字节码翻译进 `root_bodies` 文件，由其行表头登记；手写只剩 native
+    let methods = cf.methods.iter().filter(|m| m.is_native()).map(|m| (m.name.as_str(), m.desc.as_str(), true, overridable(m.access)));
     let hws = line_tables::handwritten::root_methods(root, &source, &ctx.short(root), methods, &rust_name);
     crate::ctx::EmitShared::root_files(decl_src).into_iter().map(|p| (p, hws.clone())).collect()
 }

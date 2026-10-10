@@ -61,6 +61,9 @@ fn link_symbol(binary_name: &str, fn_name: &str, sig_text: &str) -> String {
 pub(crate) struct SplitFn {
     pub(crate) body: TokenStream2,
     pub(crate) decl: TokenStream2,
+    /// 链接符号（实现层 `#[export_name]` 与声明层 `#[link_name]` 共用）
+    #[cfg_attr(not(feature = "plan"), allow(dead_code))]
+    pub(crate) sym: String,
 }
 
 /// 把一个非泛型模块级自由函数拆成实现层定义（加 `#[export_name]`）与声明层外部声明。
@@ -105,7 +108,7 @@ pub(crate) fn split_free_fn(binary_name: &str, item: &TokenStream2) -> syn::Resu
         #[link_name = #sym]
         #vis safe fn #name(#(#params),*) #output;
     };
-    Ok(SplitFn { body, decl })
+    Ok(SplitFn { body, decl, sym })
 }
 
 /// 按层取一组可拆的自由函数：完整 = 原样；声明层 = 一个外部声明块；实现层 = 导出定义

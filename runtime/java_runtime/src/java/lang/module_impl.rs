@@ -4,7 +4,7 @@ use super::Module;
 // java.lang.Module 伴生：VM 模块表（HotSpot `Modules` / `ModuleEntryTable` 的可观测部分）。
 //
 // 模块系统按字节码运行：引导层（initPhase2）在构建期求值，其模块对象、读边与导出表都在映像中；
-// 启动序列把映像中 defineModule0 登记过的模块登记为本表的初值（`__vm_register`），运行期新定义的层
+// 映像中 defineModule0 登记过的模块是本表的初值（首次访问时取自映像表），运行期新定义的层
 // 经 `defineModule0` 追加。类镜像的模块（`Class.module`，VM 在建镜像时写入）由 `Class.__vm_module`
 // 钩子按「定义加载器 + 包」查本表落地，未登记的包归其加载器的无名模块。
 
@@ -27,22 +27,27 @@ struct VmModule {
 
 fn _vm_modules<R>(f: impl FnOnce(&mut Vec<VmModule>) -> R) -> R {
     crate::__process_static! {
-        static MODULES: crate::sync_model::__RefSlot<Vec<VmModule>> = crate::sync_model::__RefSlot::new(Vec::new());
+        static MODULES: crate::sync_model::__RefSlot<Vec<VmModule>> = crate::sync_model::__RefSlot::new(_image_modules());
     }
     MODULES.with(|t| f(&mut t.borrow_mut()))
 }
 
-impl Module {
-    /// 启动序列：映像中的模块登记为 VM 模块表的初值（`image_rt::define_module`）
-    pub fn __vm_register(module: Object, loader: Object, open: bool, location: Option<&str>, packages: &[&str]) {
-        let module = Module::from(module);
-        let name = format!("{}", module.__get_name());
-        let loader = _identity(loader);
-        let location = location.map(str::to_string);
-        let packages = packages.iter().map(|p| p.to_string()).collect();
-        _vm_modules(|t| t.push(VmModule { module, loader, name, open, location, packages }));
-    }
+/// 映像中 defineModule0 登记过的模块：VM 模块表的初值（首次访问模块表时取自映像表，启动时不逐项登记）
+fn _image_modules() -> Vec<VmModule> {
+    crate::image_rt::modules()
+        .iter()
+        .map(|m| {
+            let module = Module::from(crate::image_rt::object(m.module));
+            let name = format!("{}", module.__get_name());
+            let loader = m.loader.map_or(0, |l| _identity(crate::image_rt::object(l)));
+            let location = m.location.map(str::to_string);
+            let packages = m.packages.iter().map(|p| p.to_string()).collect();
+            VmModule { module, loader, name, open: m.open, location, packages }
+        })
+        .collect()
+}
 
+impl Module {
     /// 引导加载器定义的包 `pkg`（内部形式）所属模块的位置（HotSpot `ClassLoader::get_system_package`
     /// 取包所在模块的 location）；未登记 → None
     pub fn __vm_boot_package_location(pkg: &str) -> Option<std::string::String> {
