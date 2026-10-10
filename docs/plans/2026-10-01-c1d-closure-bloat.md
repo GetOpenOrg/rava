@@ -4855,6 +4855,8 @@ csall 不动说明 1–3 之外还有来源（即 4）。四者任一单独存�
   需要的能力：闭包期具体求值读运行期初始化类的 final 引用静态时，得到占位对象，可存放、可传递，参与身份运算或取字段即回退。
   这与引导求值的占位语义相同，但闭包期求值的轨迹消费方要能处理占位对象。此外，上游 x509 链本身属 §32.3 残差，
   该链出闭包后来源 4 一并消失。
+  **进展（2026-10-11，§36）**：占位语义与构造器本地访问器实例化（`reflect_new`）已落地，类集合不变、种子无关。
+  常量名求值现在停在 `Class.reflectionFactory` / `SharedSecrets` 登记表链，来源 4 仍成立。余项与终态设计见 §36.5。
 - 来源 2（XML 声明编码）：`Decompressor.decompressResource@125` 派发到 `Properties.loadFromXML` 不精确，归 c1d-fmt2。
 - 来源 3（`String` 按名字符集构造器的反射面）：反射根暴露，属反射面收窄。
 - U14 口径冲突（只记录，本线未改）：`stdout.encoding` / `stderr.encoding` 在 `values` 表中钉值，与 U14「运行期宿主值」不一致；
@@ -4910,3 +4912,92 @@ csall 不动说明 1–3 之外还有来源（即 4）。四者任一单独存�
 - 方法数差异来自 xsltc 分支的正确依赖（xsltc 计划 §8.3：未捕获报告虚调 `getCause` 等），与本修法无关，修法不增大闭包。
 - 修法前本分支 TestModuleLayerDefine 种子 0 多 10 类。
 - 作业：xs3-size-main（基线）、xs3-m-ut2（本分支）；修法前诊断见 xs3-rv / xs3-or。
+
+## 36. §34.5 来源 4：闭包期具体求值的占位语义（2026-10-11，分支 `c1d-placeholder`，基于 c02fbf35）
+
+### 36.1 目标与路径
+
+终态：常量名的 `Charset.forName` / `charsetForName`（如 `DerValue.string2bytes@118` 的 `"UTF_32BE"`）在构建期按标准提供者求值，
+扩展字符集提供者不因此入闭包。
+
+闭包期具体求值是一台新的 `Vm`（非引导模式），自行执行 `<clinit>`。`<clinit>` 失败的类记为不可建模（opaque），
+任何失败（Fail / Defer）都让调用点回退为抽象调用边。基线中 `Charset.forName("UTF_32BE")` 在第一步就失败：
+读 `sun/nio/cs/UTF_8.INSTANCE`，而 `UTF_8` 的初始化不可建模。
+
+### 36.2 机制（1918ca5a）
+
+- **占位对象**：读不可建模类的 final 引用静态字段（描述符以 `L` / `[` 开头）时，不再失败，而是得到占位对象。
+  - 复用引导求值的占位机制（`bj.placeholders` / `check_identity` 延迟）。
+  - 同一字段多次读取得同一占位（`ph_of`）。
+  - 占位对象记录来源静态字段（`ph_origin`）。
+- **可存放、可传递**：占位对象可以存进字段、数组、局部变量，也可以作实参传递。
+- **即回退的操作**：
+  - 身份运算（`acmp` / `ifnull` / `monitor` / `athrow` / `checkcast` / `instanceof` 不可判定 / native 实参 / lambda 接收者 / 字符串化）走 `check_identity` 延迟。
+    原本只在引导模式生效，现两种模式统一。
+  - 内容访问（取字段、写字段、数组读写、`arraylength`）经 `ph_access` 延迟。
+- **轨迹 / 快照消费方**：
+  - `snap.rs`：快照把占位对象映射为 `MV::Static(来源字段)`，落成该字段的抽象值。
+  - `persist.rs`：持久化拒绝占位对象。
+  - `apply.rs`：轨迹消费无需改动，因为占位对象不改变执行到的指令集合。
+- **opaque 判定**：`init.rs` 把 `<clinit>` 中的 Defer 也算作初始化不可建模，与 Fail 相同，避免占位延迟被当成成功初始化。
+- **清单**（`vm_intrinsics.toml`，无类名特判）：
+  - `[concrete] entries` 加入 `Charset.forName`。
+  - `memo_fields` 登记字符集查找缓存：`Charset.cache1` / `cache2`，`StandardCharsets.cache` / `classMap` / `aliasMap`。
+
+### 36.3 反射实例化（c595e601）
+
+`StandardCharsets.lookup` 以 `Class.forName(...).newInstance()` 实例化字符集类。为此做了两件事：
+
+- `[concrete.natives]` 中，构造器本地访问器 `newInstance0`（`DirectConstructorHandleAccessor$NativeAccessor` / `NativeConstructorAccessorImpl`）
+  映射为具体操作 `reflect_new`：
+  1. 读 `Constructor.clazz` / `slot`；
+  2. 校验 slot 是 `<init>`，且所属类不是抽象类或接口；
+  3. 初始化该类、分配对象、执行 `<init>`；`<init>` 抛异常即失败。
+- `memo_fields` 登记 `Class.cachedConstructor` / `newInstanceCallerCache`。
+
+不采用「把 `Class.newInstance` 整体替换为具体操作」。只有带 pcs 的方法才登记执行到的指令，本地操作执行的被调方法没有 pcs，
+方法体依赖不会进入闭包，所以整体替换对闭包不健全。
+
+### 36.4 实测（dev，`rava closure`，`scripts/closure_composition_job.sh`）
+
+| 用例 | 基线 c02fbf35（类 / ext） | 1918ca5a | c595e601 |
+| --- | --- | --- | --- |
+| HelloWorld，种子 0 / 1 / 2 | 580 / 0 | 580 / 0 | 580 / 0 |
+| DeepCopy，种子 0 / 1 / 2 | 3033 / 281 | 3033 / 281 | 3033 / 281 |
+| DeepCopy，切除来源 2、3（`csall_nojnu.txt`） | 3033 / 281 | 3033 / 281 | 3033 / 281 |
+
+- 各提交的类集合与基线逐类相同，三个种子结果一致：闭包不增大，结果与种子无关。
+- 基线切除来源 2、3 后仍为 281，说明来源 4 单独即可拉入全部扩展字符集，本节改动前该路径成立。
+- `--flows @concrete` 中 `DerValue.string2bytes@118 [Str("UTF_32BE")]` 的回退点逐步后移：
+  - 基线：读 `UTF_8.INSTANCE`（不可建模类的静态字段）。
+  - 1918ca5a：通过占位对象，停在读映像对象可变字段 `Class.cachedConstructor @ Class.newInstance@19`。
+  - c595e601：停在读可变静态字段 `Class.reflectionFactory @ Class.getReflectionFactory@0`。
+- 占位语义本身生效且正确回退。例如 `JISAutoDetect$Decoder.decodeLoop@69 [Str("ISO-2022-JP")]` 中，
+  `Charset$ExtendedProviderHolder.extendedProviders` 的占位对象参与身份运算，按延迟回退，没有被当成具体值。
+- 结论：**来源 4 路径仍成立**，DeepCopy ext 仍为 281。本节交付的是占位语义与反射实例化两个前置能力，常量名求值还差 §36.5 的反射工厂链。
+
+作业：c1dph-base（基线）、c1dph-m1（1918ca5a）、c1dph-i2 / c1dph-i2f（c595e601）、c1dph-ut（单测）、c1dph-sp（抽查）。
+
+### 36.5 余项：`Class.newInstance` 的反射工厂链（终态设计）
+
+JDK 21 的链：
+
+1. `Class.newInstance` → `getReflectionFactory`，读可变静态 `Class.reflectionFactory`。
+2. → `ReflectionFactory.<clinit>` → `new ReflectionFactory()` → `SharedSecrets.getJavaLangReflectAccess()`，读可变静态 `javaLangReflectAccess`。
+3. 该静态由 `AccessibleObject.<clinit>` 经 `SharedSecrets.setJavaLangReflectAccess` 写入。这是跨类的 putstatic，闭包期会失败，
+   于是 `AccessibleObject` 被记为不可建模。
+4. 之后进入 `newConstructorAccessor` → `MethodHandleAccessorFactory`，并读 `ReflectionFactory.config()` 的属性。
+
+需要的能力（都走清单，生成器不写类名）：
+
+- **一次写入的登记表静态字段**（`[concrete] registry_statics`）：
+  - 声明「只由登记者类的 `<clinit>` 写一次」的静态字段，例如 `SharedSecrets` 的各 `javaXxxAccess`。
+  - 闭包期允许登记者的 `<clinit>` 跨类写入这类字段。
+  - 读到 null 时，先按清单初始化登记者，仍为 null 才失败。语义与运行期「首次使用前已登记」一致，结果与求值次序无关。
+- **`Class.reflectionFactory` 登记为 memo_fields**：它是惰性缓存，写入值与次序无关。
+- **访问器选择**：`ReflectionFactory.config()` 读 `useNativeAccessorOnly` 等属性，需按 U14 口径给出构建期钉值或受理性质。
+  本地访问器分支已由 `reflect_new` 承接；MethodHandle 访问器分支需要 `DirectMethodHandle` 链在闭包期可求值，代价更高。
+  终态选择是钉住「本地访问器」口径，让 `newInstance0` 落到 `reflect_new`。
+
+三项落地后，`Charset.forName("UTF_32BE")` 预期在构建期得到 `sun/nio/cs/UTF_32BE` 实例，来源 4 出闭包。
+ext 是否从 281 下降，还取决于来源 2（XML 声明编码，c1d-fmt2）和来源 3（`String` 按名字符集构造器的反射面）。
