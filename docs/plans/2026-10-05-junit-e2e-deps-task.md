@@ -348,7 +348,8 @@
     - 动态对照：AssertFamily 漏覆盖 57 全部是 JVM jar 类路径加载机制（URLClassPath$JarLoader / ZipFile / JarFile /
       Manifest …），栈顶未建模帧为 JVM 解析符号引用时对应用类加载器的上调 `ClassLoader.loadClass(String)`——原生
       二进制静态链接，没有这条路径。closure.toml `[dynamic]` 增方法级 `vm_upcall_methods`（只供 dyn_compare 读，
-      不影响闭包），该帧之上归 `vm-upcall`。FailureMessages 漏覆盖 5（StreamOpFlag.<clinit> → EnumMap 等、
+      不影响闭包），该帧之上归 `vm-upcall`；抽查 junit-cc50cfd8（dev）复验 AssertFamily dyn miss 57 → **0**（vm-upcall=57），
+      其失败按新签名判为已知。FailureMessages 漏覆盖 5（StreamOpFlag.<clinit> → EnumMap 等、
       VarHandle.<clinit> → VarHandleGuards）是构建期初始化类 `<clinit>` 的通用口径问题，与 JUnit 无关，未在本任务处理。
     - 闭包规模：本分支未改生成器 / 分析器 / runtime 代码（只改 scripts、closure.toml 的 dyn 专用段、测试与文档），
       HelloWorld / DeepCopy 闭包类数与 main 相同（变化 0）。
