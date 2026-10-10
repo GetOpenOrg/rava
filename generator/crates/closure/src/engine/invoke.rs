@@ -400,9 +400,16 @@ impl<'a> Engine<'a> {
     }
 
     /// 已对 (m, off, t) 以同一实参 a（同一实参值）完整接边后，再派发新接收者 r：
-    /// 调用关系、形参常量、字符串常量与实参边都已接上且不随接收者变化，只接接收者及依赖接收者的结果部分
+    /// 调用关系、形参常量、字符串常量与实参边都已接上且不随接收者变化，只接接收者及依赖接收者的结果部分。
+    /// 句柄存取入口的接法依赖接收者本身（来源标记按所指字段 / 口径逐调用点建模，非标记按字节码接边，
+    /// `field_access.rs`）：每个接收者完整接边——沿用先到接收者的接法会使后到标记的所指字段不登记，
+    /// 字段节点与映像活性随接收者到达次序而变
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge_more(&mut self, m: usize, off: u32, t: usize, r: u32, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
+        if matches!(self.methods[t].ret_model, RetModel::HandleAccess(_)) {
+            self.edge(m, off, t, Recv::Exact(r), a, ret, res);
+            return;
+        }
         let recv_fs = self.edge_this(t, Recv::Exact(r));
         self.edge_ret(m, off, t, recv_fs, None, a, ret, res);
     }
