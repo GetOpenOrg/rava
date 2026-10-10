@@ -532,6 +532,12 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        // 键载体类（`key_carriers.rs`）：实例字段经读取方法流入按键查找键，按对象分开才能让各对象的键各自确定
+        // （计划 c1d §31.3 能力 ④-1：jrt 方案的 URI 只走 `URL.of` 的快路径）
+        let carriers = self.key_carriers();
+        if chain.iter().any(|cf| carriers.contains(&cf.name)) {
+            return true;
+        }
         if !generic {
             return false;
         }
