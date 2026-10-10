@@ -123,7 +123,7 @@
 - **fix-clone（10-10，C4 全量失败 TestJucSync / TestLocaleCurrency / TestLocaleDateCjk / TestParallelCapable / TestRandomFactoryAll / TestProcessBuilder）**：三个根因——① `offset-field-folded`（JucSync / RandomFactoryAll / ProcessBuilder）：只经 Unsafe 按偏移写的字段在构建期初始化类 `<clinit>` 按名取偏移、未放开而被折叠，5177e182 在符号偏移产生处（`field_offset`）即 `open_field` 收口；② 类镜像身份哈希构建期与运行期不一致（ParallelCapable）：映像内以 Class 为键的 WeakHashMap / HashMap（`ParallelLoaders.loaderTypes`、`Reflection.fieldFilterMap` 等）在运行期按地址哈希查不中，96143cf3 令镜像身份哈希按所指类型名确定（求值器 `fnv32("m:"+名)`，运行期 `Class::__pin_mirror_hash` 同值）；③ 地区补种漏别名常量（LocaleCurrency / LocaleDateCjk）：`Locale.CHINA / PRC / TAIWAN` 在 `<clinit>` 以另一常量赋值，溯源器只认字面量 invokestatic，zh 资源束类不进闭包而回落 root，222fd151 补别名溯源与中文候选链补文字 / 地区。验证（dev，222fd151）：抽查 9/9（6 例 + HelloWorld / DeepCopy / CollectorsDemo）；单测 fixclone-ut222c（closure_cli 11/11）/ fixclone-ut222r（其余全过，0 failed）。known_failures 删 TestLocaleCurrency（原误记为 expected 基线）/ TestLocaleDateCjk。
 - **已知单测失败**：`param_string_constants_fold_switch`。在缺少相应修复的分支上还会出现：`container_elements_per_object` / `known_gate_ranks_first`（缺 fix-1010）、`profile_union_key_and_coverage`（第四根因修复前）。
 - **known_failures**：batch-1008 新增 TestBootLayer、删除 TestXmlSaxEvents；抽查已知失败 TestUrlParsingFaces。
-- **框架推进顺序（10-10 用户定）**：① 反射组修复（c4-reflect：反射调子类覆盖方法命中存根、反射帧可见；JUnit 与 Spring 共同前提）→ ② JUnit：J3 形态接线 + J4 注解驱动反射入口通用建模（`2026-10-05-junit-e2e-deps-task.md`），让 63_junit 的 10 例 e2e 跑通（**10-10 junit-j3j4 交付**：J3 形态接线完成；J4 无补种下 10 例全部转译 / 编译 / 运行，8 例逐字通过，通用注解反射建模由既有机制覆盖、未改分析器；余 AssertFamily / FailureMessages 只差 JVM 身份哈希一行，属测试确定性缺陷，改测试源待用户裁定；新增 TestAnnotationDrivenRunner 通过；见任务书 §七 第 14、15 条；m5 `@Before` 字段写回 W0-4 已于 10-05 J2A 5/5 GOLDEN 收口）→ ③ spring-core / beans 切片（矩阵 #11，可与 ② 并行）→ ④ S0 最小 Boot 应用。S0 API 面计算（api-surface-s0，只分析不改生成器）可与 JUnit 并行。依据：JUnit 的注解扫描 / 反射实例化 / Method.invoke 是 Spring IoC 核心路径的子集。**待派（名额空出即按序）**：JUnit J3 + J4 → spring-core 切片 → S0 API 面续作。
+- **框架推进顺序（10-10 用户定）**：① 反射组修复（c4-reflect：反射调子类覆盖方法命中存根、反射帧可见；JUnit 与 Spring 共同前提）→ ② JUnit：J3 形态接线 + J4 注解驱动反射入口通用建模（`2026-10-05-junit-e2e-deps-task.md`），让 63_junit 的 10 例 e2e 跑通（**10-10 junit-j3j4 交付**：J3 形态接线完成；J4 无补种下 10 例全部转译 / 编译 / 运行，通用注解反射建模由既有机制覆盖、未改分析器；AssertFamily / FailureMessages 期望含 JVM 身份哈希（违反方法论 §五），经用户批准改为定值 toString 对象并重生成期望；新增 TestAnnotationDrivenRunner 通过；见任务书 §七 第 14–16 条。**遗留（不在 J4 范围）**：TestJunitFailureMessages 动态对照漏覆盖 5（StreamOpFlag.<clinit> → StreamOpFlag$Type / $MaskBuilder / EnumMap / EnumMap$1，VarHandle.<clinit> → VarHandleGuards），属构建期初始化类 `<clinit>` 运行期引用的通用口径问题，与 JUnit 无关，待排；m5 `@Before` 字段写回 W0-4 已于 10-05 J2A 5/5 GOLDEN 收口）→ ③ spring-core / beans 切片（矩阵 #11，可与 ② 并行）→ ④ S0 最小 Boot 应用。S0 API 面计算（api-surface-s0，只分析不改生成器）可与 JUnit 并行。依据：JUnit 的注解扫描 / 反射实例化 / Method.invoke 是 Spring IoC 核心路径的子集。**待派（名额空出即按序）**：JUnit J3 + J4 → spring-core 切片 → S0 API 面续作。
 - **C4 全量第一轮（10-10，dev）**：1109 例，复跑后通过 1090、失败 19。已登记 13（JUnit 10、VirtualThreadScale、HttpLoopback 2、XmlTransform）；新登记 known_failures 5 例（f680bab4）并派修：TestThreadNatives → conc-step-b；TestReflectFieldMethod / TestReflectInvokePerReceiver / TestSecurityManagerContext → c4-reflect；TestUrlParsingFaces → c4-url。TestHttpLoopbackAsync 本轮编译 OOM（14 GB），资源类。
 - **派发规则**：子代理上限 5，不得再派代理。协调巡检自动攒批、空闲即测、放行合入与清理。
 - **暂缓**：
@@ -188,7 +188,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 │
 ├─ 【近期】依赖 C4 收官
 │   ├─ ⏳ scripts-into-rava S6 → S7 → S8（产品路径 Python 归零）
-│   ├─ ⏳ JUnit 依赖包测试 J3 形态接线 → J4 10 例跑通（2026-10-05-junit-e2e-deps-task.md；10-10 junit-j3j4 待合批：8/10，余 2 例身份哈希待裁定）
+│   ├─ ⏳ JUnit 依赖包测试 J3 形态接线 → J4 10 例跑通（2026-10-05-junit-e2e-deps-task.md；10-10 junit-j3j4 待合批）
 │   ├─ ⏳ 框架驱动 API 覆盖（2026-10-07-framework-driven-api-coverage.md）：S0 闭包面复算 ◀── dev 恢复；再扩其他流行库
 │   ├─ ⏳ jmod 覆盖第 1–4 步（2026-10-03-jmod-coverage.md）
 │   ├─ ⏳ 引用类语义：无 GC 模型（编译期逃逸分析整组释放 + 所有权推断弱引用，2026-10-07-no-gc-memory-model.md）◀── C4
@@ -258,7 +258,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
 | regress2 遗留 | 🔄 ② ✅；① 转 object-bytecode | 过渡 `<init>` 帧 ✅ 已随过渡手写删除消失；Object.wait 帧仍错（单帧 -1，JDK 为 `wait0` native + `wait` 行号帧）——根因是根类 `wait` 三重载有字节码却整体手写（还跳过 Blocker 载体补偿）。按手写边界规则（有字节码即翻译，非用户待定项）派 object-bytecode：根类非 native 方法按字节码翻译。边界用例 TestObjectWaitFrames（作业 r2-wait-a79e2b60，修前为已知失败）。regress2 文档 §10.1b |
 | C4 收官 · 全量 e2e | 🔄 10-09 dev 上开跑 | JDK 21 ⊇ 1029 例基线；前置：合批（batch-1008 起）合入集成分支，以及改名 rava 与 dev BIOS 维护窗口。10-06／10-07 的首轮全量分诊修复已合入（c4-preflight / c4-regress / c4-misc / c4-runfix 等） |
-| JUnit 依赖包测试 | ⏳ J3 / J4 待合批（junit-j3j4） | J0–J2 ✅（f9298933 / ea2627ec）；J3 ✅、J4 8/10（余 2 例期望含身份哈希，待裁定）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` §七 14–15 |
+| JUnit 依赖包测试 | ⏳ J3 / J4 待合批（junit-j3j4） | J0–J2 ✅（f9298933 / ea2627ec）；J3 ✅、J4 ✅（身份哈希 2 例经批准改测试源）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` §七 14–16 |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
 | 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |

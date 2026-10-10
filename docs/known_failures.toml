@@ -32,24 +32,6 @@ note = "运行期未捕获 NPE（无 Java 栈）；m2-f0c12c3b、main-charset-e5
 deferred = "S1"
 deferred_reason = "Charset.availableCharsets 由 spring-web StringHttpMessageConverter 使用"
 
-# 63_junit：J3 形态接线 + J4 后 8/10 逐字通过（junit-d22152f8）。余下两例只差 JVM 身份哈希一行：期望文件含
-# HotSpot 打印的 Object@<identityHashCode>（JVM 上逐次确定，取决于 HotSpot 线程内 xorshift 序列与 JVM 内部
-# 此前的哈希请求次数），原生二进制按地址取身份哈希、逐次不同。违反 e2e 方法论 §五「不打印 identityHash」，
-# 测试源改动须用户裁定（任务书「不改测试源」），见 failure_patterns.toml junit-identity-hash-expected
-[[known]]
-test = "TestJunitAssertFamily"
-signature = "-FAIL assertSame-fail :: expected same:<java.lang.Object@4f023edb> was not:<java.lang.Object@3a71f4dd>"
-owner = "63_junit 测试确定性（待用户裁定：assertSame-fail 改用定值 toString 对象）"
-since = "2026-10-10"
-note = "其余 17 行逐字一致；唯一差异是 assertSame 失败消息里两个 new Object() 的身份哈希"
-
-[[known]]
-test = "TestJunitFailureMessages"
-signature = "-sameMismatch :: expected same:<java.lang.Object@5ecddf8f> was not:<java.lang.Object@3f102e87>"
-owner = "63_junit 测试确定性（待用户裁定：sameMismatch 改用定值 toString 对象）"
-since = "2026-10-10"
-note = "其余行逐字一致；唯一差异是 assertSame 失败消息里两个 new Object() 的身份哈希"
-
 [[known]]
 test = "TestHttpLoopbackSync"
 signature = "native: sun/nio/ch/IOUtil.fdLimit:()I"

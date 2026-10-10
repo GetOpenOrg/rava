@@ -353,3 +353,9 @@
       VarHandle.<clinit> → VarHandleGuards）是构建期初始化类 `<clinit>` 的通用口径问题，与 JUnit 无关，未在本任务处理。
     - 闭包规模：本分支未改生成器 / 分析器 / runtime 代码（只改 scripts、closure.toml 的 dyn 专用段、测试与文档），
       HelloWorld / DeepCopy 闭包类数与 main 相同（变化 0）。
+
+16. **身份哈希 2 例改测试源（2026-10-10，用户批准）**：AssertFamily / FailureMessages 的 assertSame 失败用例原用两个
+    `new Object()`，失败消息含 HotSpot 身份哈希，违反方法论 §五——测试本身不合规，不属「合法测试不改」。改为定值
+    toString（`Token(left)` / `Token(right)`）、不覆盖 equals / hashCode 的嵌套类型，断言语义不变；期望经本机 OpenJDK
+    21.0.12（类路径 hamcrest-3.0 + junit-4.13.2，锁序）重生成，双跑逐字一致，差异仅该一行。known_failures 两条删除，
+    failure_patterns `junit-identity-hash-expected` 记 fixed。dev 抽查结果见下。
