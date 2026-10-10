@@ -530,6 +530,8 @@ pub struct Engine<'a> {
     lookup_top: HashSet<(usize, u32)>,
     /// 按名取类调用点里含任意串的候选模式（只增不减）：新类进入闭包时按类名匹配，命中即重跑该站点
     class_patterns: HashMap<(usize, u32), Vec<Vec<class_lookup::Part>>>,
+    /// 首段为字面量的候选模式在类路径上的匹配结果（按模式文本缓存，见 `class_lookup.rs::classpath_matches`）
+    cp_pattern_hits: HashMap<String, Rc<[String]>>,
     /// 本次按名取类求值中，常量表读取的接收者含非常量表的值（候选只覆盖常量表部分，结果另接所指未知的 Class）
     lookup_partial: bool,
     /// 名字求值中合流值拆支的当前嵌套层数（`name_ops.rs`）

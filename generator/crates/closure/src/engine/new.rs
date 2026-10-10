@@ -235,6 +235,7 @@ impl<'a> Engine<'a> {
             fpair_done: HashSet::default(),
             fopen_name_via: HashMap::default(),
             class_patterns: HashMap::default(),
+            cp_pattern_hits: HashMap::default(),
             flow_batch: super::worklist::FLOW_BATCH,
             open_methods: BTreeMap::new(),
             open_sites: BTreeMap::new(),
