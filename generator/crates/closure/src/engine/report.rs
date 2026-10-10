@@ -445,6 +445,35 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 按对象字段值诊断：`@ofield:<字段键子串>`——通配值 owild 与各抽象对象的值（`obj_fields.rs`）；
+        // 映像对象另列该字段在映像中的原始值与对象的占位 / 延迟标记
+        if let Some(q) = pat.strip_prefix("@ofield:") {
+            let mut out: Vec<String> = Vec::new();
+            let owild = self.ctx.owild.borrow();
+            let ovals = self.ctx.ovals.borrow();
+            let mut keys: Vec<&MemberRef> = ovals.keys().chain(owild.keys()).filter(|k| k.to_string().contains(q)).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys.into_iter().take(8) {
+                out.push(format!("  {k}：owild {:?}", owild.get(k)));
+                let mut vs: Vec<(String, String)> = ovals.get(k).into_iter().flatten().map(|(&o, v)| (self.names[o as usize].to_string(), format!("{v:?}"))).collect();
+                vs.sort();
+                for (n, v) in vs.into_iter().take(60) {
+                    let mut img = String::new();
+                    if let (Some(i), Some(s)) = (n.rsplit_once("@image").and_then(|(_, i)| i.parse::<usize>().ok()), self.img.as_ref()) {
+                        if let Some(x) = s.data.objs.get(i) {
+                            let raw = match &x.body {
+                                crate::image::IBody::Inst(fs) => fs.iter().find(|(d, f, _)| *d == k.owner && *f == k.name).map(|e| format!("{:?}", e.2)),
+                                crate::image::IBody::Arr(_) => None,
+                            };
+                            img = format!(" 映像原值 {raw:?} 占位 {} 延迟 {}", x.placeholder, x.deferred.is_some());
+                        }
+                    }
+                    out.push(format!("    {n} = {v}{img}"));
+                }
+            }
+            return out;
+        }
         // 方法节点序号诊断：`@m:<序号>`（数组分配点名里的方法序号）
         if let Some(i) = pat.strip_prefix("@m:").and_then(|v| v.parse::<usize>().ok()) {
             return vec![format!("  {i} = {}", self.ctx_label(i))];

@@ -101,6 +101,8 @@ pub(super) struct KeyedState {
     slots: HashMap<(u32, Rc<str>), KeySlot>,
     /// 诊断：站点键实参读自的字段（`@keyed` 列出其开放成因）
     key_fields: BTreeSet<MemberRef>,
+    /// 键载体类（懒求，见 `key_carriers.rs`）
+    pub(super) carriers: Option<Rc<BTreeSet<String>>>,
 }
 
 /// 构造器链追溯深度上限
