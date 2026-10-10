@@ -197,7 +197,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【暂缓】
 │   ├─ ⏸ build-memsafe 内存友好缺省构建档（10-08 暂缓）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
-│   ├─ ⏸ 声明层底段收窄：S7-4 / S7-5 收 SCC → D8 自动切段，每个声明 crate ≤1.3 GB ◀── C4（10-08 用户定）
+│   ├─ ◐ 声明层底段收窄：模拟分析中（10-10 提前开工，S7 计划 §9.8），实施待确认；目标所有声明 crate ≤1.3 GB
 │   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
 │   ├─ ⏸ 不实施 / 挂起（10-06 用户定）：方法句柄对象化、T2 余 4b、b1 序列化收窄、a5 关系型边界推理
 │   └─ ⏸ 缓：虚拟线程余项（T6 规模、pinned）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
@@ -261,7 +261,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | JUnit 依赖包测试 | ⏳ J3 / J4 ◀── C4 | J0–J2 ✅（f9298933 / ea2627ec）；任务书 `docs/plans/2026-10-05-junit-e2e-deps-task.md` |
 | 框架驱动 API 覆盖 | ⏸ 暂缓（等 dev 恢复） | S0 第 1 步 ✅ c76c800e；闭包两变体在 15G 云服务器上未产出，dev 恢复后复算 |
 | build-memsafe | ⏸ 暂缓（2026-10-08） | 内存友好缺省构建档（16 GB 机器全部可构建为硬约束） |
-| 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
+| 声明层底段收窄 | 模拟分析中（10-10 用户提前开工），实施待确认；任务说明与模拟见 S7 计划 §9.8 | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
 | 并发小步 A | ✅ 已完工待合批（分支 conc-step-a） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
 | 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
