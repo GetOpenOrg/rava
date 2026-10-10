@@ -687,7 +687,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 1. TestBootLayer（第 3 步验收项）：作业 bimg3-bl-fcc54fb8 实跑，前 23 行与 JDK 相同（引导层、java.base / java.sql 模块、Configuration、无名模块均正确），在 `base.getResourceAsStream("java/lang/Object.class")` 返回 null 后 `readNBytes` NPE。原因：`input/src/resources.rs` 的资源推导按设计排除 `.class`（`path_like` 单测断言 `!path_like("p/q/A.class")`），类字节不在嵌入资源中。按 boot-layer 第 5 步（2026-10-02-boot-layer.md §2.3 第 6 条：jimage 嵌入数据 + `getNativeMap`，`.class` 字节同属模块内容）一并解决；是否放开 `.class` 资源推导属该步设计，未自行改动。其后各行（系统类加载器、线程组、属性、标准流）未覆盖到。
 2. 闭包规模（需决策，2026-10-07 晚拆分实测，见下「闭包回升拆分」）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。
 3. 二进制体积 / 启动：基线 af1bf145 HelloWorld release 二进制 7,761,904 字节（已无符号，`.text` 4.70 MB、`.rodata` 0.41 MB、`.data.rel.ro` 0.48 MB），整进程墙钟中位数 0.99 ms（30 次）。本分支同口径作业 bimg3-meas2-f442cecf 因 dev 关机维护被停，未得数；uprobes 测 `__boot_image_start` 需未 strip 的产物（缺省 release 已无符号），须另配。测量脚本两作业共用 `/tmp/meas_*.txt` 会串扰，重跑时须按 tag 区分文件名。
-4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
+4. U11 零拷贝终态：外部静态、常量视图与镜像、映像表已实现（分支 boot-zerocopy f87c343d，§5.10），服务器编译仍在收口。D5 残差区段和 S6 标准流未做。
 
 **闭包回升拆分（2026-10-07 晚，Linux JDK 21，`rava closure` HelloWorld，summary.classes；作业 bimg3-why-* / bimg3-cut-95cc94f2 / bimg3-fold-86f4f9be / bimg3-base-*）**
 
@@ -1576,6 +1576,131 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
 - ③ 在路径 A 之后做。
 
+### 5.10 U11 零拷贝终态（2026-10-09，分支 `boot-zerocopy`，基于 9f0542fb）
+
+#### 5.10.1 S7「永久区」定稿
+
+映像对象是生成的根门面 `boot_image` 模块里的 `#[repr(C)]` 静态结构，布局和堆对象相同：16 字节头加值。
+- 头的强计数初值为 `IMMORTAL`（1<<62）。克隆和释放照常增减，计数永远不会归零，所以映像对象从不被释放。不另设区段标记，`Rc` 语义不变，也不引入 GC，与 §1 的无 GC 决定一致。
+- 句柄 `__Obj::image(&'static T)` 是 `const fn`，因此在常量求值中可用，映像对象之间的引用、视图和镜像都能直接写成常量。
+- 身份哈希仍用头第二个字的 `IMAGE_HASHED` 标记，不需要按地址区间判定。
+
+结论：永久区就是 Rust 静态区本身。S7 不需要新的句柄形态，§3.3 的乙方案按此落地。
+
+#### 5.10.2 设计（f87c343d）
+
+| 原启动期动作（§5.5.5） | 零拷贝终态 |
+|---|---|
+| 静态字段初值经 `__si_set_*` 写入 | 声明层 `#[image_static = "sym"]` 只声明外部静态（宏发 `__STATIC_TY_<类>_<字段>` 类型别名和 `extern "Rust"` 块）。根门面以常量初值定义：`#[unsafe(export_name = sym)] pub static __IS_n`，每个字段一个静态。定义由保活块 `IMAGE_STATICS_k` 经启动函数 `black_box` 引用，保证被链接。符号为 `__rava_image_static_` 加转义后的类名和字段名 |
+| `__boot_initialized()` 逐类置完成态 | `#[boot_initialized = true]` 让构建期初始化类的 `CLINIT` 状态初值即为完成态（`__PrimCell::from_bits(3)`）；`gil::clinit_done` 另查映像表 `build_time` |
+| 接口视图链接 | 常量 `__IfaceRef::image(obj, &img.value as &dyn X__VTable)`；接口实现块由 `ClassEmission.iface_views` 登记 |
+| 数组视图链接（元素类型不符） | 常量 `__ImageArr::<Object, ()>::view(obj)`（协变擦除视图，`const fn`） |
+| Class 镜像登记（`rt::mirror`）与 memo 写入 | 镜像是物化的映像对象：求值器给镜像写 `Class.name`（清单 `vm_fields.class_name`），memo 并入字段。镜像表 `IMG_MIRRORS_k` 按键有序，`Class.forName` / `getPrimitiveClass` 先查表 |
+| 字符串驻留（`rt::intern`） | `IMG_STRINGS_k` 按 UTF-16 内容有序，`String.intern` 先查表。内容随宿主改写的串不入表 |
+| VM 模块登记（`rt::define_module`） | `IMAGE_TABLES.modules` 常量；`Module` 的 VM 模块表首次访问时以它为初值 |
+
+- 启动序列：映像表以链接期符号 `__rava_image_tables` 导出，运行期直接按符号查表，不登记（3cb588d7，见 §5.10.5）→ VM 单元 → 绑定初始线程 → 残差（只剩没有常量形态的槽：`SlotTy::Other` 字段和静态）→ 占位对象槽 → 分段残差 → 宿主改写 → 重定位与其他步骤。
+- 大表每块 1024 项，各成一个静态，运行期分块二分查找，满足 java_base 编译峰值约束（不出现巨型静态）。
+- 旧路径 `rt::mirror` / `intern` / `define_module`、静态初值 setter、`__boot_initialized`、链接表 `links` 已一并删除，不保留双路径。
+
+#### 5.10.3 基线实测（服务器 jp1，Linux JDK 21，`scripts/boot_image_measure.sh`，缺省档）
+
+| 口径 | 9215350f（作业 zc-base2-9215350f）HelloWorld / DeepCopy | c249cdec（作业 zc-base3-c249cdec）HelloWorld / DeepCopy |
+|---|---|---|
+| 转译墙钟 / 峰值 RSS | 120 s / 2.45 GB；925 s / 7.88 GB | 122 s / 2.52 GB；973 s / 8.35 GB |
+| `boot_image.rs` | 12.23 MB / 50,143 行；12.53 MB / 51,716 行 | 12.08 MB / 49,324 行；12.99 MB / 54,009 行 |
+| 编译总墙钟（crate_mem_profile） | 309 s；345 s | 310 s；356 s |
+| 门面 `java_base` 编译峰值 / 墙钟 | 1639 MB / 56 s；1720 MB / 60 s | 1632 MB / 57 s；1769 MB / 60 s |
+| `java_base_decl` 峰值 | 4806 MB；5308 MB | 4761 MB；5274 MB |
+| 缺省档二进制（含调试信息） | 506,742,800 B；556,592,832 B | 501,844,056 B；553,692,264 B |
+| `.text` / `.data.rel.ro` / `.data` | 146.1 / 8.07 / 3.58 MB；159.9 / 8.95 / 3.70 MB | 145.2 / 8.01 / 3.55 MB；159.4 / 8.90 / 3.77 MB |
+| 整进程墙钟中位数（30 次） | 195.6 ms；304.1 ms | 195.2 ms；313.8 ms |
+| release 档 | 用户 crate 链接 OOM（jp1 上限 11.9 GB），无数据 | 同左 |
+
+说明：
+- 这里的缺省档是未优化的开发档，整进程墙钟约 195 ms，大头不在映像装载。≤1 ms 门槛针对 `__boot_image_start` 本身，须按 §5.5.5 用 uprobes 单独测；本脚本只给整进程对照。
+- release 档在 jp1 上 fat LTO 链接 OOM（与本线无关，基线同样失败），体积对照因此按缺省档的 `.text` / `.data*` 分项比较。
+
+#### 5.10.4 进展与恢复入口（2026-10-09 19:30，6 小时上限到点）
+
+- 提交：
+  - f87c343d：零拷贝主体（数据形态、发射、启动序列、删旧路径）。三步互相依赖，合为一个提交，不留双路径。
+  - a1264f66：测量脚本 scratch 路径修正。
+  - 5a405015：`JArray::__image_view` 加 `T: 'static`。
+  - 7a45058f：合并 main c249cdec。
+- 服务器编译：
+  - zc-meas-a1264f66：HelloWorld 发射成功，`boot_image.rs` 12.63 MB / 48,870 行；2065 个映像静态，4 个数组视图，1021 处接口常量。`java_base_decl` 只有 1 处错误 E0310（`array.rs` 的 `__image_view`），已由 5a405015 修复。
+  - zc-chk1-a1264f66：确认该错误是 `cargo check --keep-going` 下的唯一错误。依赖 decl 的 crate（各 body 层、门面）尚未检查到。
+  - **zc-chk2-5a405015**：HelloWorld scratch 全工作区 `cargo check --keep-going` 零错误（decl、各 body 层、门面 `boot_image.rs`、用户层），仅 1 条既有警告（`pc_map.rs:99` 函数项转整数）。前述的门面别名可见性、常量视图、接口 vtable 路径、`ImageTables` 的 `Sync` 均已通过类型检查。
+- **续作入口**：
+  1. （类型检查已过，5a405015）合并 main 后的头上可复跑检查作业确认；，命令同 zc-chk2：`rava build HelloWorld --stop-after emit --clean`，然后在 scratch 里 `cargo check --keep-going --message-format short`，取回 `build/zc/check.txt`。运行期风险仍待第 2 步验证：
+     - 门面对 `crate::<模块>::__STATIC_TY_*` 别名的可见性；
+     - `__ImageArr::view` 的常量求值；
+     - `&dyn X__VTable` 接口路径；
+     - `rt::ImageTables` 的 `Sync`；
+     - 驻留串 UTF-16 字节序。
+  2. 零错误后，用 `scripts/boot_image_measure.sh` 在新头上测量 HelloWorld / DeepCopy，与上表 c249cdec 列对照：
+     - 门面 `java_base` 峰值 ≤ 约 1.6 GB（基线 1632 / 1769 MB）；
+     - `.text + .data*` 增量 ≤ +5%；
+     - 运行输出一致；
+     - 整进程墙钟不劣化；
+     - 另以 uprobes 测 `__boot_image_start` ≤ 1 ms。
+  3. 单测 closure / emit / input；抽查 HelloWorld、CollectorsDemo、DeepCopy、TestJcaSasl；`scripts/seed_check.sh HelloWorld`。
+  4. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段，生成代码里仍以注释占位）与 S6 标准流（`System.out/err/in` 手写侧状态）未做，做法见 §5.5.5「未完成」2、3。残差现状：HelloWorld 启动序列只剩 `File.FS` 一处静态残差写入，外加宿主改写和重定位步骤。
+
+#### 5.10.5 验证与实测（2026-10-10，头 669365cf）
+
+**本轮修复**
+- 3cb588d7：映像表改为链接期符号。
+  - 根门面 `#[unsafe(export_name = "__rava_image_tables")] pub static IMAGE_TABLES`（常量 `IMAGE_TABLES_SYMBOL`）。
+  - 运行期 `image_rt` 以 `extern "Rust" { #[link_name] static IMAGE_TABLES }` 直接查表。
+  - 删除 `OnceLock` 与 `rt::install`。启动序列不再做登记，也就不存在「首次查找早于登记」的时序问题。保活由启动函数的 `black_box((&IMAGE_TABLES, &IMAGE_STATICS_k…))` 承担。
+- 3cb588d7：驻留查找。
+  - `String.__interned` 先查运行期驻留表，未命中才二分映像表 `image_string`，结果回填运行期表，所以同一字面量只付一次二分。
+  - 二分比较 `__units_cmp` 逐码元读取 Latin-1 / UTF-16，不分配。
+  - 排序口径：生成端按 `Vec<u16>` 排序，运行期按 `[u16]` 切片比较，二者一致。镜像键两端都按 `str` 字节序。
+- 56390b53：`array/obj.rs` 的辅助文件改回只用 `use super::*`，修复 `runtime_helpers_follow_convention`；问题来自 f87c343d。
+- 3cb588d7 / 669365cf：测量脚本。
+  - `boot_probe` 用 tracefs `uprobe_events`（p/r 探针按文件偏移注册，只依赖免密 sudo，用后即删）计 `__boot_image_start` 入口到返回。
+  - 参数为可执行文件时只探测。
+  - `MEASURE_RELEASE=0` 跳过 release 档。
+
+**测量**（jp1，作业 zc-meas-3cb588d7，缺省档，对照 §5.10.3 的 c249cdec 列）
+
+| 口径 | HelloWorld 基线 → 零拷贝 | DeepCopy 基线 → 零拷贝 |
+|---|---|---|
+| 转译墙钟 / 峰值 RSS | 122 s / 2.52 GB → 121 s / 2.56 GB | 973 s / 8.35 GB → 974 s / 8.66 GB |
+| `boot_image.rs` | 12.08 MB / 49,324 行 → 13.09 MB / 50,846 行 | 12.99 MB / 54,009 行 → 14.06 MB / 54,331 行 |
+| 编译总墙钟 | 310 s → 317 s | 356 s → 352 s |
+| 门面 `java_base` 峰值 / 墙钟 | 1632 MB / 57 s → **1610 MB** / 69 s | 1769 MB / 60 s → **1779 MB** / 80 s |
+| `java_base_decl` 峰值 | 4761 → 4745 MB | 5274 → 5352 MB |
+| 缺省档二进制 | 501.8 → **497.3 MB（−0.9%）** | 553.7 → **548.9 MB（−0.9%）** |
+| `.text` / `.data.rel.ro` / `.data` | 145.2 / 8.01 / 3.55 → 143.3 / 8.13 / 3.96 MB（合计 −0.9%） | 159.4 / 8.90 / 3.77 → 157.3 / 9.04 / 4.22 MB（合计 −0.9%） |
+| 运行输出 | 3 行，rc=0 | 27 行，rc=0 |
+| 整进程墙钟中位数（30 次） | 195.2 → **178.3 ms（−8.7%）** | 313.8 → **291.8 ms（−7.0%）** |
+| `__boot_image_start`（uprobe，10 次中位数） | **156.4 ms**（min 153.9 / max 171.5，n=10；作业 zc-probe4-669365cf） | **176.3 ms**（min 172.4 / max 179.4，n=10） |
+
+- **启动 ≤ 1 ms 未达到**：缺省开发档下，`__boot_image_start` 本身耗时 156 ms（HelloWorld）/ 176 ms（DeepCopy），分别占整进程墙钟的 88% / 60%。探针在启动函数入口与返回处成对触发，量的是函数本身。这说明零拷贝虽然删掉了逐槽写入，启动序列里剩下的 VM 单元、初始线程、残差、宿主改写与重定位步骤在未优化代码下仍是主要成本。原因定位用 perf 采样（作业 zc-prof-669365cf，kr2，取回 `build/zc/self.txt` / `children.txt`），该作业在 6h 上限前仍在 kr2 排队，热点结论待取回后补入续作 0。
+  - **热点（zc-prof-669365cf，kr2，HelloWorld 开发档，10-10 取回）**：整进程 87% 在 `lang_start` 之下。① 约 17% 为一次性解码行表与 pc 映射（某 `OnceLock` 初始化内，`meta_codec::leb128` 自身 9.1%、`Vec::push` 3.3%、`pc_maps` 解码 1.5%）——启动路径上有栈遍历触发点（疑查调用者类或填异常栈，未确认）；② 约 16% 缺页、约 7% 动态链接器重定位，`.rela.dyn` 24.8 MB，主要是映像常量中的指针在 PIE 下的重定位；③ 其余为残差路径上翻译后的 Java 代码（如 `StringLatin1.compareToCI`）与原子计数。续作方向：pc 映射按方法按需解码或构建期编成定长格式，并消除启动路径上的栈遍历；映像改非 PIE 链接或消除映像常量的指针重定位；残差进一步常量化。原始报告 `cluster_results/job/zc-prof-669365cf/01/build/zc/self.txt`、`children.txt`。
+- 体积：缩小 0.9%，满足 ≤ +5%。`.data` 增加约 0.4 MB（映像静态的常量初值），`.text` 减少约 2 MB（删掉了启动期逐槽写入的代码）。
+- 门面峰值：HelloWorld 1610 MB，与基线持平。DeepCopy 1779 MB，比基线 1769 MB 高 10 MB（+0.6%），超出约 1.6 GB 的目标；但基线本身已在 1.6 GB 以上，零拷贝没有带来实质增长。门面墙钟增加 12 / 20 s，来自常量求值与大静态。若要把 DeepCopy 压到 1.6 GB 以下，需要把门面的映像静态分到多个 crate（与 decl / body 分层同法），列为续作。
+- release 档：jp1（11.9 GB）上 fat LTO 链接 OOM，与基线相同，本轮跳过。
+
+**正确性**
+- 抽查 zc-spot-3cb588d7（kr2）：HelloWorld、CollectorsDemo、DeepCopy 全部 PASS。
+- TestJcaSasl 不在语料中，取自 `scripts/closure_composition_job.sh`，以作业 zc-jca-3cb588d7 跑：stdout（true / 20 / true）、未捕获 `SaslException` 的消息和退出码 1 都与 JDK 一致。rava 不打印栈帧行，属既有行为。
+- 单测：
+  - zc-ut2-56390b53（kr2，`--no-fail-fast`）：closure 237、emit 85、`jdk_literal_lint` 2、input 21，全部通过。
+  - zc-ut-3cb588d7（jp1）：driver `archive_emit_cli` 通过；`closure_cli` 12 例通过，`param_string_constants_fold_switch` 失败（已知）。`closure_independent_of_hash_seed` / `closure_independent_of_order` 跑了 3 小时仍未结束，为给测量让出机器被中止，无结果；order 例的 DeepCopy 派发差异是既有已知问题，见 annot-sig 文档续作 6。
+- `scripts/seed_check.sh HelloWorld`（jp1）：`seed-diff-lines=0`。
+
+**未解决 / 续作**
+0. 启动 ≤ 1 ms：HelloWorld 的 `__boot_image_start` 实测 156 ms（缺省档）。按 perf 热点逐项消掉：没有常量形态的残差改为常量，构建期能定的宿主改写钉值，重定位并入常量；然后用 `scripts/boot_image_measure.sh <out> <可执行文件>` 复测。注意 `rava build` 必须带 `--keep-artifacts`，否则运行后会删除可执行文件。release 档需在内存足够的机器上复测。
+1. DeepCopy 门面峰值 1779 MB，超出约 1.6 GB 的目标（基线 1769 MB 也超出）。做法：把门面的映像静态（`__IS_n` / 映像对象 / 表分块）按块数切到多个 crate，门面只留表头和启动序列。
+2. `closure_cli` 的 hash_seed / order 两例运行时间超过 3 小时，需单独作业复跑，复跑时不要与测量同机。
+3. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段）与 S6 标准流（`System.out/err/in`）未做，做法见 §5.5.5「未完成」2、3。
+4. release 档体积 / 墙钟：jp1 内存不够，需在 ≥ 16 GB 的机器上测。
+
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
 | 步 | 内容 | 验收 |
@@ -1646,6 +1771,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - **顺序**：C4 冻结解除后，先在服务器上把现有实现（3e309fec）编译、跑通，排除正确性问题；再单独一步改零拷贝；最后实测体积（≤+5%）与启动装载（≤1 ms）。
 - 不采纳「实测达标即接受现状」的备选。
 - §5.5.5 其余待决项（2、4、5、7–15）按代理实现认可；D5 物化与 S6 标准流随零拷贝一步排期。
+- **实施（2026-10-09，§5.10）**：静态字段初值、接口和数组视图、Class 镜像、驻留串、VM 模块表、构建期初始化状态全部改为常量。启动期链接、镜像登记、驻留、模块登记、静态初值写入均已删除。S7 永久区定稿为 Rust 静态区加常驻计数头（§5.10.1）。
 
 ### 8.4 U12 / U13 / U14 与去除无映像回退（已定，2026-10-08）
 

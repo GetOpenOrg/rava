@@ -13,6 +13,9 @@ use crate::env::InstrEnv;
 use crate::error::{InstrError, InstrResult};
 use crate::log::{Audit, InstrLog};
 
+/// 无类型缺省值的文本形态（null 流入具体引用类型槽位的产物）
+const DEFAULT_TEXT: &str = "Default::default()";
+
 /// 装箱分类（`_object_coercion_kind`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectKind {
@@ -45,6 +48,10 @@ fn void_to_object(env: &InstrEnv, val: &str) -> InstrError {
 /// `clone`：先 `Clone::clone(&v)`（值仍被后续使用时）
 pub fn to_object(env: &InstrEnv, val: Expr, t: &RsType, clone: bool) -> InstrResult<Expr> {
     let kind = object_kind(env, t);
+    if sim::exprs::is_default(&val) && !matches!(kind, ObjectKind::Prim | ObjectKind::Void) {
+        // 无类型缺省值（某引用类型的 null）：即 Object 的 null
+        return Ok(Expr::Lit(ir::Lit::Null));
+    }
     if kind == ObjectKind::Prim {
         // 负数字面量补外层括号：`-1i32.into()` 解析为 `-(1i32.into())`
         let recv = if text(env, &val).trim_start().starts_with('-') { paren(val) } else { val };
@@ -63,6 +70,10 @@ pub fn to_object(env: &InstrEnv, val: Expr, t: &RsType, clone: bool) -> InstrRes
 /// [`to_object`] 的文本入口（块级合并值、条件原子、lambda 体等按文本拼接的路径）
 pub fn to_object_text(env: &InstrEnv, val: &str, t: &RsType, clone: bool) -> InstrResult<String> {
     let obj = ir::anchors::OBJECT;
+    if val == DEFAULT_TEXT && !matches!(object_kind(env, t), ObjectKind::Prim | ObjectKind::Void) {
+        // 无类型缺省值（某引用类型的 null）装箱：即 Object 的 null（`Object::from(Default::default())` 不可推断，E0283）
+        return Ok(format!("{obj}::default()"));
+    }
     match object_kind(env, t) {
         // 负数字面量补外层括号：`-1i32.into()` 解析为 `-(1i32.into())`
         ObjectKind::Prim if val.trim_start().starts_with('-') => Ok(format!("({val}).into()")),
@@ -81,6 +92,12 @@ pub fn to_object_text(env: &InstrEnv, val: &str, t: &RsType, clone: bool) -> Ins
 /// checkcast / 跨实例化转换节点（`cast_node`）：`checked` → `try_cast::<T>("binary")?`；
 /// 否则 `<T as From<Object>>::from(..)`
 pub fn cast_node(e: Expr, target: Type, binary: &str, checked: bool, box_first: bool) -> Expr {
+    // 无类型缺省值（null）的转换：源类型不可推断（E0283），null 恒通过 checkcast → 目标类型的缺省值
+    if sim::exprs::is_default(&e) {
+        if let Ok(d) = sim::exprs::typed_default(target.clone()) {
+            return d;
+        }
+    }
     let mode = if checked { CastMode::Checked { binary: binary.to_string() } } else { CastMode::Unchecked };
     Expr::CheckCast(CastExpr { expr: Box::new(e), target, mode, box_first })
 }

@@ -70,6 +70,9 @@ pub struct FrameMethod {
 }
 
 const BLOCK_OPENS: [&str; 2] = ["rava_macros::java_class! {", "rava_macros::java_interface! {"];
+/// 根类方法体文件（`project::root_bodies`，无 `java_class!` 块）的行表头：`// [root_bodies] <类> <源文件>`。
+/// 头之后整个文件是方法区：方法起点同为 `#[java_method]` 属性行（在注释中），第 0 列的 `}` 结束方法区间
+pub const ROOT_BODIES_OPEN: &str = "// [root_bodies] ";
 const MARK: &str = " // line ";
 
 /// 行表方法项
@@ -155,6 +158,8 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
     let mut out = FileLines { rel: rel.to_string(), ..Default::default() };
     let (mut class, mut source) = (String::new(), String::new());
     let mut in_block = false;
+    // 根类方法体文件：头行给出类与源文件，第 0 列 `}` 只结束方法区间
+    let mut root_file = false;
     let mut method: Option<u32> = None;
     let mut marks = 0usize;
     for (i, line) in text.lines().enumerate() {
@@ -163,6 +168,15 @@ pub fn scan(rel: &str, text: &str) -> Option<FileLines> {
             if BLOCK_OPENS.iter().any(|o| line.trim_end().ends_with(o)) {
                 in_block = true;
                 (class, source, method) = (String::new(), String::new(), None);
+            } else if let Some((c, src)) = line.strip_prefix(ROOT_BODIES_OPEN).and_then(|r| r.trim().split_once(' ')) {
+                (in_block, root_file) = (true, true);
+                (class, source, method) = (c.to_string(), src.trim().to_string(), None);
+            }
+            continue;
+        }
+        if root_file && line == "}" {
+            if method.take().is_some() {
+                out.rows.push((no, NO_METHOD, 0));
             }
             continue;
         }
@@ -484,6 +498,29 @@ mod tests {
         };
         prune(&mut stub_only);
         assert!(stub_only.rows.is_empty() && stub_only.methods.is_empty());
+    }
+
+    #[test]
+    fn root_bodies_file_regions() {
+        // 根类方法体文件：头行给类与源文件，注释形态的方法属性开区间，第 0 列 `}` 只结束方法区间
+        let text = [
+            "use crate::prelude::*;",
+            "",
+            "// [root_bodies] p/R R.java",
+            "// #[java_method(name = \"f\", descriptor = \"()V\")]",
+            "#[export_name = \"s\"]",
+            "pub fn R__f_body(this: &R) -> Result<()> {",
+            "    g()?; // line 7",
+            "}",
+            "// #[java_method(name = \"h\", descriptor = \"()V\")]",
+            "pub fn R__h_body(this: &R) -> Result<()> {",
+            "    k()?; // line 9",
+            "}",
+        ]
+        .join("\n");
+        let t = scan("b/src/body/p/r_body.rs", &text).expect("有标记");
+        assert_eq!(t.methods, vec![Method::new("p/R", "f", "()V", "R.java", "p/R"), Method::new("p/R", "h", "()V", "R.java", "p/R")]);
+        assert_eq!(t.rows, vec![(4, 0, 0), (7, 0, 7), (8, NO_METHOD, 0), (9, 1, 0), (11, 1, 9), (12, NO_METHOD, 0)]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use ty::ident::safe_ident;
 use ty::ClassInfo;
 
-use crate::class_writer::fields::{flatten_super_fields, resolve_field_rust, PRIMITIVE_RUST_TYPES};
+use crate::class_writer::fields::{flatten_super_fields, resolve_field_rust, static_field_rust, PRIMITIVE_RUST_TYPES};
 use crate::ctx::EmitCtx;
 use crate::text::contains_word;
 
@@ -22,7 +22,7 @@ pub enum SlotTy {
     Iface(String),
     /// 数组：槽的 Rust 类型文本（去空白，与映像数组的短形态比对）
     Array(String),
-    /// 无法在常量中构造的类型：启动时经 `From<Object>` 回填
+    /// 无法在常量中构造的类型：启动序列经 `From<Object>` 写入（残差写入）
     Other,
 }
 
@@ -123,6 +123,13 @@ pub fn instance_layout(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<Slot> {
     }
     out.extend(own);
     out
+}
+
+/// 静态字段的存储单元（与宏展开的静态单元一致：基本类型为 `__PrimCell`，其余为 `__RefField<Option<T>>`）
+pub fn static_cell(ctx: &EmitCtx<'_>, ci: &ClassInfo, f: &classfile::Field) -> Cell {
+    let tps = ctx.ty.effective_class_type_params(ci).to_vec();
+    let view = static_field_rust(ctx, f, &tps);
+    cell(ctx, &f.desc, &view, false, PRIMITIVE_RUST_TYPES.contains(&view.as_str()))
 }
 
 #[cfg(test)]

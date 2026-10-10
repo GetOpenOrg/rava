@@ -27,6 +27,7 @@ use crate::handwritten::{member_matches, CRATE_ROOT, to_snake, MODULE_SUFFIXES, 
 use crate::manifest::{Domain, Fact, IndyKind, LinkRoute, Manifest, Members, PropValue};
 
 mod sets;
+mod xpath_diag;
 mod meta_classes;
 mod idset;
 mod facts;
@@ -346,6 +347,10 @@ pub struct Engine<'a> {
     gather_last: HashMap<usize, HashMap<(u32, gather::Slot), (u32, Rc<[u32]>)>>,
     /// 手写方法调用点 (序号, 实参, 元素槽) → (当前汇集节点, 累计数组)：该实参数组元素流向写入来源（`gather.rs::gather_hw_elems`）
     hw_gather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
+    /// 手写读内存调用点 (序号, 元素槽) → (当前汇集节点, 累计数组)：源实参数组元素流向结果（`gather.rs::gather_hw_read`）
+    hw_rgather_last: HashMap<(u32, u8), (u32, Rc<[u32]>)>,
+    /// 手写方法调用点 (序号, 写入目标实参, 元素槽) → (当前汇集节点, 累计数组)：写入来源流向数组元素（`gather.rs::gather_hw_write`）
+    hw_wgather_last: HashMap<(u32, u16, u8), (u32, Rc<[u32]>)>,
     /// VM 反射虚调用枢纽（[`HubSet::Vm`]）
     vm_hubs: HashSet<u32>,
     /// VM 反射虚调用枢纽选中的目标（按接收者虚分派到的实现；并入 `dispatched` 输出）
@@ -377,6 +382,11 @@ pub struct Engine<'a> {
     rdirect_last: HashMap<(usize, u32, MemberRef), (u32, Rc<[u32]>)>,
     /// 直连调用点上各实例目标已接的精确接收者与已接入枢纽的 open 类型（方法 → (偏移, 目标) → 记录；同 `hub_linked` 清空）
     rdirect_done: HashMap<usize, HashMap<(u32, MemberRef), reflect_direct::DirectDone>>,
+    /// 有挂起精确接收者的直连记录（方法, (偏移, 目标)），排空时定夺（`reflect_direct.rs::rdirect_release`）
+    rdirect_wait: Vec<(usize, (u32, MemberRef))>,
+    /// 直连精确接收者：被 open 涵盖而略去的数 / 排空时放行的数
+    rdirect_absorbed: usize,
+    rdirect_released: usize,
     /// 反射对象标记（`method_marks.rs`）：标记 id → 所指方法；结果不按标记建模的查找 / 复制调用点（单调：此后恒接被调方返回值）
     rmarks: HashMap<u32, method_marks::MethodMark>,
     rmark_fallback: HashSet<(usize, u32)>,

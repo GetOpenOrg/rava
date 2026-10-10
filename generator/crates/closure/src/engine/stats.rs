@@ -356,7 +356,7 @@ impl<'a> Engine<'a> {
         }
         let mut members: Vec<(String, (u32, u32))> = by_member.into_iter().collect();
         members.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0)));
-        json!({
+        let mut v = json!({
             "phases_ms": phases,
             "peak_rss_mb": peak_rss_mb(),
             "peak_mem_mb": peak_mem_mb(),
@@ -405,7 +405,10 @@ impl<'a> Engine<'a> {
             "type_nodes": self.graph.len(),
             "top_contexts": by_ctx.iter().take(top).map(|&(m, c)| json!([self.ctx_label(m), c])).collect::<Vec<_>>(),
             "top_members": members.iter().take(top).map(|(k, (c, n))| json!([k, c, n])).collect::<Vec<_>>(),
-        })
+        });
+        // 主要边种类按端点方法（去上下文）汇总的前列：{种类: {"src": [[端点, 边数]], "dst": [...]}}
+        v["edge_groups"] = self.edge_groups(top);
+        v
     }
 }
 
@@ -491,6 +494,50 @@ impl<'a> Engine<'a> {
             .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         serde_json::json!(v.into_iter().take(30).collect::<Vec<_>>())
+    }
+
+    fn edge_groups(&self, top: usize) -> serde_json::Value {
+        const PAIRS: [(&str, &str); 6] = [("R", "S"), ("E", "S"), ("W", "E"), ("P", "P"), ("S", "P"), ("G", "S")];
+        let ix = |k: &str| KIND_NAMES.iter().position(|x| *x == k).unwrap_or(usize::MAX);
+        let pairs: Vec<(usize, usize)> = PAIRS.iter().map(|(a, b)| (ix(a), ix(b))).collect();
+        // 稀疏计数（只记有该种类边的节点），不随节点总数占内存
+        let mut src: Vec<HashMap<u32, u64>> = vec![HashMap::default(); pairs.len()];
+        let mut dst: Vec<HashMap<u32, u64>> = vec![HashMap::default(); pairs.len()];
+        for (s, es) in self.graph.edges.iter().enumerate() {
+            if es.is_empty() {
+                continue;
+            }
+            let sk = kind_ix(self.graph.node_at(s as u32));
+            for &(d, _) in es {
+                let dk = kind_ix(self.graph.node_at(d));
+                if let Some(p) = pairs.iter().position(|&x| x == (sk, dk)) {
+                    *src[p].entry(s as u32).or_default() += 1;
+                    *dst[p].entry(d).or_default() += 1;
+                }
+            }
+        }
+        let base = |i: u32| {
+            let l = self.node_label(self.graph.node_at(i));
+            match l.find(" #") {
+                Some(k) => l[..k].to_string(),
+                None => l,
+            }
+        };
+        let group = |v: &HashMap<u32, u64>| {
+            let mut m: HashMap<String, u64> = HashMap::default();
+            for (&i, &c) in v {
+                *m.entry(base(i)).or_default() += c;
+            }
+            let mut v: Vec<(String, u64)> = m.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            v.truncate(top);
+            v
+        };
+        let mut out = serde_json::Map::new();
+        for (p, (a, b)) in PAIRS.iter().enumerate() {
+            out.insert(format!("{a}->{b}"), serde_json::json!({"src": group(&src[p]), "dst": group(&dst[p])}));
+        }
+        serde_json::Value::Object(out)
     }
 
     fn node_label(&self, n: &Node) -> String {

@@ -126,11 +126,22 @@ pub fn arm_value(env: &InstrEnv, e: &StackEntry) -> MethodResult<String> {
     Ok(text::expr(env, &sim::exprs::clone_moved_var(e.expr.clone(), &e.ty)?))
 }
 
+/// 无类型缺省值（null 臂）经转换：源类型不可推断（E0283）→ 直接取目标类型的缺省值
+fn typed_default(target: &str) -> String {
+    format!("<{target} as ::std::default::Default>::default()")
+}
+
 fn from_common(common: &str, v: &str) -> String {
+    if v == "Default::default()" {
+        return typed_default(common);
+    }
     format!("<{common} as ::std::convert::From<_>>::from({v})")
 }
 
 fn from_object(target: &str, v: &str) -> String {
+    if v == "Default::default()" {
+        return typed_default(target);
+    }
     format!("<{target} as ::std::convert::From<Object>>::from(Object::from({v}))")
 }
 

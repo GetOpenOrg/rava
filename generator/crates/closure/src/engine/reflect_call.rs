@@ -471,6 +471,8 @@ impl<'a> Engine<'a> {
             "absorbed": self.rcall_stats.absorbed,
             "released": self.rcall_stats.released,
             "release_rounds": self.rcall_stats.release_rounds,
+            "direct_absorbed": self.rdirect_absorbed,
+            "direct_released": self.rdirect_released,
         })
     }
 }
