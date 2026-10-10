@@ -1033,13 +1033,6 @@ memo_fields = [
     "java/lang/Class.reflectionData",
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
-    # 字符集查找缓存（c1d 计划 §34）：Charset 的两项最近查找缓存与标准提供者的按名缓存 / 惰性建成的
-    # 类名表、别名表——命中与重算得同一字符集（标准提供者按名字确定，别名 / 类名表是常量表的惰性副本）
-    "java/nio/charset/Charset.cache1",
-    "java/nio/charset/Charset.cache2",
-    "sun/nio/cs/StandardCharsets.cache",
-    "sun/nio/cs/StandardCharsets.classMap",
-    "sun/nio/cs/StandardCharsets.aliasMap",
 ]
 # 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
 # （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
