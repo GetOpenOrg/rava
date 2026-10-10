@@ -69,5 +69,109 @@ class ClassifyTest(unittest.TestCase):
             kf.parse_known('[[known]]\ntest = "X"\n')
 
 
+PATTERNS = """
+[[pattern]]
+id = "e0283"
+stage = "compile"
+symptom = "E0283"
+match = [["error[E0283]"]]
+tests = ["NormalDistribution"]
+cause = "无类型缺省值"
+introduced = ""
+fixed = ["d4f45a58"]
+status = "fixed"
+owner = ""
+diagnose = ""
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "clone-noise"
+stage = "run"
+symptom = "只用于验证 [no-provenance] 行被剔除"
+match = [["CloneNotSupportedException"]]
+tests = []
+cause = "x"
+introduced = ""
+fixed = []
+status = "open"
+owner = "y"
+diagnose = ""
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "npe-or-timeout"
+stage = "run"
+symptom = "NPE / 超时"
+match = [["NullPointerException"], ["run timeout"]]
+tests = ["ReflectionAPI"]
+cause = "z"
+introduced = ""
+fixed = []
+status = "open"
+owner = "w"
+diagnose = ""
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "unit-only"
+stage = "unit"
+symptom = "单测类，不参与自动匹配"
+match = []
+tests = []
+cause = "u"
+introduced = ""
+fixed = []
+status = "fixed"
+owner = ""
+diagnose = ""
+doc = ""
+since = "2026-10-10"
+"""
+
+
+class PatternTest(unittest.TestCase):
+    def test_match_and_noise(self):
+        pats = kf.parse_patterns(PATTERNS)
+        log = ("[FAIL ] x — compile error  error[E0283]: type annotations needed\n"
+               "  [no-provenance] x: java/lang/CloneNotSupportedException\n")
+        self.assertEqual([p.id for p in kf.match_patterns("X", log, pats)], ["e0283"])
+
+    def test_or_groups_and_test_rank(self):
+        pats = kf.parse_patterns(PATTERNS + PATTERNS.replace('id = "', 'id = "b-').replace(
+            'tests = ["ReflectionAPI"]', 'tests = ["Other"]'))
+        hits = kf.match_patterns("ReflectionAPI", "[FAIL ] y — run timeout (> 15m)\n", pats)
+        self.assertEqual([p.id for p in hits], ["npe-or-timeout", "b-npe-or-timeout"])
+
+    def test_hints_on_new_failures(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            d = root / "spot" / "t1" / "error_logs"
+            d.mkdir(parents=True)
+            (d.parent / "state_jdk21.json").write_text(json.dumps(
+                {"passed": {}, "failed": {"N": {"error": "compile error"}}}), encoding="utf-8")
+            (d / "N_jp1_jdk21.log").write_text("error[E0283]: type annotations needed\n", encoding="utf-8")
+            v = kf.classify("t1", ["N"], [], "x", root, patterns=kf.parse_patterns(PATTERNS))
+            self.assertEqual(len(v.new[0]["hints"]), 1)
+            self.assertTrue(v.new[0]["hints"][0].startswith("e0283（fixed，修复 d4f45a58）"))
+
+    def test_bad_patterns(self):
+        base = PATTERNS.split("[[pattern]]")[1]
+        with self.assertRaises(ValueError):  # 缺字段
+            kf.parse_patterns('[[pattern]]\nid = "x"\n')
+        with self.assertRaises(ValueError):  # id 重复
+            kf.parse_patterns("[[pattern]]" + base + "[[pattern]]" + base)
+        with self.assertRaises(ValueError):  # 未修复须有 owner
+            kf.parse_patterns("[[pattern]]" + base.replace('status = "fixed"', 'status = "open"'))
+        with self.assertRaises(ValueError):  # 空匹配组
+            kf.parse_patterns("[[pattern]]" + base.replace('[["error[E0283]"]]', '[[]]'))
+
+    def test_repo_file_parses(self):
+        repo_file = _HERE.parents[2] / "docs" / "failure_patterns.toml"
+        self.assertTrue(kf.parse_patterns(repo_file.read_text(encoding="utf-8")))
+
+
 if __name__ == "__main__":
     unittest.main()
