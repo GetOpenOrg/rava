@@ -233,6 +233,26 @@ impl Engine<'_> {
         if pat == "@foldfields" {
             return Some(self.fold_fields());
         }
+        // 逃逸来源诊断：`@escin:<类>`——流入逃逸汇点、值集含该类抽象对象的源节点（按含该类已逃逸对象数排序，前 60）
+        if let Some(q) = pat.strip_prefix("@escin:") {
+            let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };
+            let of_cls = |x: u32| self.objs.get(&x) == Some(&cid);
+            let total = self.escaped.iter().filter(|&&x| of_cls(x)).count();
+            let mut v: Vec<(usize, String)> = Vec::new();
+            for (src, edges) in &self.graph.flow_list() {
+                if !edges.iter().any(|(d, _)| *d == Node::Esc) {
+                    continue;
+                }
+                let n = self.graph.get(src).map_or(0, |s| s.classes.iter().filter(|&x| of_cls(x)).count());
+                if n > 0 {
+                    v.push((n, format!("  {n}\t{}", self.node_str(*src))));
+                }
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            let mut out = vec![format!("  已逃逸 {total} 个，源节点 {} 个", v.len())];
+            out.extend(v.into_iter().take(60).map(|x| x.1));
+            return Some(out);
+        }
         if let Some(q) = pat.strip_prefix("@openinj:") {
             let Some(&cid) = self.ids.get(q) else { return Some(vec![format!("无此类：{q}")]) };
             let mut v: Vec<String> =

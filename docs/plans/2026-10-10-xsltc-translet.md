@@ -1,0 +1,229 @@
+# XSLTC translet：运行期定义的类（预定义类方案，待决）
+
+> 分支 fix-xsltc（基线 batch-1010h 873b30f3）。起因：e2e `71_xml/TestXmlTransform` 运行期失败，
+> `TransformerConfigurationException: Translet class loaded, but unable to create translet instance.`
+> （failure_patterns `xsltc-translet-create`）。本文是分诊结论与终态方案。方案要新增机制，**未实施，等用户决定**（§6）。
+
+## 0. 结论
+
+- **失败类别**：运行期定义类这一能力在 rava 里没有终态承载。不是生成器翻译缺陷、闭包遗漏或反射覆盖问题。
+- **失败点**：`TemplatesImpl.defineTransletClasses` → `TransletClassLoader.defineClass(byte[], pd)` →
+  `ClassLoader.defineClass1`（native，手写 `runtime/java_runtime/src/java/lang/class_loader_impl.rs`）。
+  该手写对格式合法的类文件一律抛 `LinkageError("…: runtime class definition is not supported by the native image …")`。
+  `defineTransletClasses` 的 `catch (LinkageError e)` 把它包成 `ErrorMsg.TRANSLET_OBJECT_ERR`，就是用例看到的消息。
+- **终态方案（建议）**：建立**预定义类**机制。构建期取得程序运行期会定义的类文件，像用户类一样翻译进用户 crate；
+  运行期的类定义 native 按字节内容查登记表，命中就返回静态链接的类，未命中按现状抛 `LinkageError`。
+  需要用户定的是构建期字节的来源（§3，决定点 X1）。
+
+## 1. 分诊
+
+### 1.1 cause 链
+
+JDK 21 源码（`TemplatesImpl.java` 458–545 行）：
+
+```java
+for (int i = 0; i < classCount; i++) {
+    _class[i] = loader.defineClass(_bytecodes[i], pd);   // → ClassLoader.defineClass1（native）
+    ...
+}
+...
+catch (ClassFormatError e) { → TRANSLET_CLASS_ERR }
+catch (LinkageError e)     { → TRANSLET_OBJECT_ERR }       // "Translet class loaded, but unable to create translet instance."
+```
+
+`getTransletInstance` 里反射实例化失败（`InstantiationException` 等）也报同一消息，但走不到那一步：
+rava 的 `defineClass1` 对完整类文件无条件抛 `LinkageError`（`_define_class_error` 的 `ClassFileShape::Complete` 分支）。
+XSLTC 产出的类文件格式合法（JVM 上能定义），不会落到 `ClassFormatError` 分支。
+
+服务器探针（作业 `xsltc-probe2`，dev，873b30f3）：用例同款代码，捕获异常后按 `getCause()` 打印链。结果见 §1.4。
+
+### 1.2 旁证：run.log 没有 `Caused by`
+
+`TransformerException` 把 cause 存在自己的 `containedException` 字段并覆盖了 `getCause()`，
+`Throwable.cause` 字段仍是未设置哨兵（`this`）。rava 的未捕获异常报告（`runtime/java_runtime/src/error.rs`
+`report_uncaught_in`）直接读 `cause` 字段，所以不打印 `Caused by`。JVM 的 `printStackTrace` 走虚调用 `getCause()`，会打印。
+这是报告器的保真缺口，与本失败无关，记为 §7 遗留项。
+
+### 1.3 XSLTC 产物的性质（本机 JDK 21.0.12 实测）
+
+| 项 | 实测 |
+|---|---|
+| 本用例样式表产出的类 | 1 个：`die.verwandlung.GregorSamsa extends AbstractTranslet`，3925 字节，major 45 |
+| 确定性 | 同一进程两次编译、两个进程各编译一次，SHA-256 相同（`0b8b7f20f2cb8801…`） |
+| 类名 | 缺省固定为 `die.verwandlung.GregorSamsa`：**不同样式表产出同名、不同内容的类** |
+| 静态字段 | `_sNamesArray` / `_sUrisArray` / `_sTypesArray` / `_sNamespaceArray`，只在 `<clinit>` 写常量 |
+| 依赖 | 只引用 java.xml 内部类（`AbstractTranslet`、`BasisLibrary`、DTM 迭代器、`SerializationHandler` 等） |
+| 字节码形态 | 无 `jsr` / `ret`；无 StackMapTable（major 45）。rava 的方法翻译不依赖 StackMapTable（`classfile/src/class.rs` 不解析该属性） |
+
+fixdomd-b4da5107 抽查的动态对照里，`[miss]` 16 条都出自 `AbstractTranslet.transform` 调到的 DTM / xsltc 迭代器类。
+这些类只被 translet 的代码使用，translet 不在闭包里，它们自然也不在。这说明预定义类必须作为闭包的根参与分析（§4.2）。
+
+### 1.4 探针结果
+
+作业 `xsltc-probe2`（dev，873b30f3；探针 `TestXsltcProbe` 只在服务器检出里临时写入，不入库）。转译 3m55s、编译 10m28s、运行 1.6 s，输出：
+
+```
+factory=com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl
+identity=[<root><a x="1">one</a><b>two</b></root>]
+templates=com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl
+chain[0]=javax.xml.transform.TransformerConfigurationException: Translet class loaded, but unable to create translet instance.
+chain[1]=java.lang.LinkageError: <Unknown>: runtime class definition is not supported by the native image (class universe is fixed at build time)
+```
+
+- identity 变换（不经 translet）正确；`newTemplates` 在 rava 里**完整跑完了 XSLTC 编译**（得到 `TemplatesImpl`），说明
+  java_cup 语法分析、BCEL 生成整条链的翻译是对的；
+- 失败恰在 `defineClass1`，cause 即上述手写抛出的 `LinkageError`（XSLTC 传入的类名为 null，故显示 `<Unknown>`）。
+
+## 2. 现有同类机制为什么不能复用
+
+运行期类定义点（手写准入第 ② 类）现在有三种承载，都假设「被定义类的行为在构建期由 rava 自己知道」：
+
+| 机制 | 被定义的类 | 承载 |
+|---|---|---|
+| lambda / indy、LambdaForm | 形状由 JDK 规则决定 | `[indy]`、原生 LambdaForm 解释器 |
+| `Proxy$Dyn`、`Species_Dyn`、`InjectedInvokerDyn`、`SerializationConstructorAccessorDyn` | 一个通用支持类就能表达全部实例 | `runtime/java_support/` 的 Java 源，`[facts.reflect.defined_classes]` 把定义点映射到支持类 |
+| `ClassLoader.defineClass1/2` | 任意字节 | 只做格式检查，合法即 `LinkageError`（TestDefineClassRejects 覆盖） |
+
+translet 的语义全在样式表编译出的字节码里，没有一个通用支持类能表达它，所以不能套 `Proxy$Dyn` 一类的做法。
+要执行 translet，只有两条路：构建期拿到字节码并翻译，或者运行期解释字节码。
+
+## 3. 方案比较
+
+公共部分是承载：**按内容寻址的预定义类**（§4）。各方案的区别只在构建期字节从哪里来。
+运行期总是重新执行真实的生成代码（XSLTC 照常编译样式表），再用生成出的字节去查表，
+所以字节来源的猜测不影响正确性：猜错或漏了，结果只是未命中、抛 `LinkageError`，和现在一样。
+
+### S1：构建期求值（rava 具体引擎在构建期执行生成调用）
+
+做法：分析器在档案调用链上找「输入在构建期可确定」的生成调用（本例 `tf.newTemplates(new StreamSource(new StringReader(常量)))`），
+由具体引擎（`engine/concrete`，即引导映像求值器）在构建期执行，在类定义 native 处截获字节。
+
+- 优点：不依赖外部运行；与引导映像同一套引擎；字节来自同一份参考 JDK 字节码，与运行期逐字节相同。
+- 缺点：
+  1. **选点没有通用规则**。字节由 XSLTC 整条编译链（JAXP 工厂查找 → SAX 解析 → java_cup 语法分析 → BCEL 生成）算出。
+     要先认出 `newTemplates(src)` 这一层调用是生成点，再判定接收者（`TransformerFactory.newInstance()`，读系统属性与
+     `jaxp.properties`）和实参对象图（`StreamSource` → `StringReader` → 字符串常量）都可在构建期求值。
+     现有常量实参求值（`consteval.rs`）的规模上限是 256 条指令、深度 3，量级差得很远。
+  2. **引擎能力缺口未知**。XSLTC 编译涉及 ThreadLocal、`ResourceBundle` 错误消息、SAX 工厂服务查找、`jdk.xml.*` 安全限制属性。
+     具体引擎至今只跑过 initPhase1–3 与 `<clinit>`（引导映像计划 §5.8，隔离规则严格：跨类静态只读 init_only 字段等），
+     能否跑完一次 XSLT 编译要先做探针才知道。
+  3. **覆盖面窄**。主流框架的样式表来自资源文件（资源已构建期嵌入，原则上可求值）；但同属这一类的 CGLIB / ByteBuddy
+     （Spring AOP、Hibernate 代理）的输入是运行期扫描到的 bean 类，构建期通常算不出。
+- 规模：选点规则、引擎补能力、截获字节三部分，估计与引导映像第 6 步（非引导类构建期初始化）相当。
+
+### S2：训练运行记录（建议）
+
+做法：在参考 JDK 上运行程序，用 JVMTI 代理（`ClassFileLoadHook`）记录所有经 `defineClass` 一类入口定义、
+且不在类路径 / 模块中的类文件，按内容哈希落盘，作为构建输入。
+
+- 优点：
+  1. 对一切运行期字节码生成器通用（XSLTC、CGLIB、ByteBuddy、Javassist、Groovy），不需要按生成器写规则，
+     生成器代码里也不出现类名。
+  2. 参考 JDK 与 javac / jmods / golden JVM 同源（`tools/refjdk.toml`），记录的字节与 rava 运行期重新生成的字节逐字节相同（§1.3 已验证确定性）。
+  3. 语料构建已有现成的 JVM 运行与 JVMTI 代理：`scripts/dyn_compare.py` 的 `load_trace` 代理，`--update-expected` 的 golden 运行。
+  4. 业界做法一致：GraalVM native-image 的 `predefined-classes-config.json`（tracing agent 记录、运行期按哈希匹配），
+     Spring Boot AOT 在构建期预生成 CGLIB 代理类。
+- 缺点：覆盖面取决于训练运行走到哪里，没走到的定义点运行期仍报 `LinkageError`；生产构建要求用户提供训练运行，
+  训练产物归用户项目（与「库配置归用户项目、rava 不放第三方库内容」一致）。
+- 语料侧落点：训练运行由 `rava build` 在闭包分析发现「类定义 native 可达、且字节不是常量」时按需触发
+  （参考 JDK `java -agentpath:<record>`，产物写 scratch `build/<test>/predefined/`）。TestDefineClassRejects 也会触发，
+  但记录为空（全部被拒）。golden 运行与训练运行可合并为一次。
+
+### S2b：自举训练（S2 的变体）
+
+训练运行不用参考 JVM，而用 rava 自己编出的二进制：以记录模式运行，未命中的定义把字节落盘，再重建。
+
+- 优点：记录的字节就是 rava 运行期自己生成的字节，不存在「JVM 生成的字节与 rava 重新生成的字节不同」的风险（见 §7 风险 1）；构建不依赖参考 JVM 运行程序。
+- 缺点：未命中时定义仍然失败，程序在第一个失败点之后走的路径与 JVM 不同，后续定义点要多轮「运行 → 重建」才能逐个暴露；
+  每轮都要完整编译一次（本例约 10 分钟）。
+
+### S3：运行期字节码解释器（不建议）
+
+在运行时里放一个 JVM 字节码解释器，解释执行运行期定义的类。被解释类要继承已编译类（translet 继承 `AbstractTranslet`），
+对象模型要支持「编译出的 struct + 解释期追加字段」，虚分派要能跨编译 / 解释两侧。这相当于在原生二进制里再做一个 JVM，
+违背「生成的 Rust 是可读中间层」的定位，二进制体积也要承担整个解释器。不建议。
+
+### 比较
+
+| | S1 构建期求值 | S2 训练运行 | S3 运行期解释 |
+|---|---|---|---|
+| 本用例 | 可（需引擎补能力） | 可 | 可 |
+| 资源文件样式表 | 原则上可 | 可 | 可 |
+| CGLIB / ByteBuddy（输入运行期才知道） | 一般不可 | 可（训练覆盖到的） | 可 |
+| 构建依赖 | 无新增 | 参考 JDK 运行一次程序 | 无 |
+| 生成器 / 引擎工作量 | 大（选点规则 + 引擎能力） | 中（代理 + 输入通道） | 极大 |
+| 可读性 / 体积 | 不变 | 不变 | 显著变差 |
+
+## 4. 承载：按内容寻址的预定义类（S1 / S2 共用）
+
+### 4.1 输入与翻译
+
+- 预定义类是**程序私有**的：进用户 crate（生产构建静态链接；语料构建同样进各测试自己的 user crate），不进档案。
+- 输入：一组类文件，每个带内容哈希（SHA-256）与原始 binary name。翻译走用户类同一路径（字节码 → Rust），
+  手写准入不变：它们是有字节码的方法，全部按字节码翻译。
+- **同名不同内容**（XSLTC 缺省类名固定）：内部键在原名后加内容哈希后缀，形如隐藏类 `die/verwandlung/GregorSamsa/0x<哈希前 16 位>`，
+  沿用 `Class.for_class` 对隐藏类名的处理。`getName()` 返回原名：由元数据表给出（预定义类的名字条目），不从内部键推导。
+  只有一个内容时不加后缀。
+
+### 4.2 闭包分析
+
+- 预定义类的根：类定义 native（`ClassLoader.defineClass0/1/2`）的返回值 = 预定义类镜像集合（多个精确镜像的并）。
+  沿用 `[facts.reflect.defined_classes]` 的建模方式（`engine/hw.rs` 把定义点返回值置为支持类的精确镜像），
+  清单项从「定义点 → 单个支持类」扩成「定义点 → 预定义类集合」，集合由输入给出，清单里只登记哪些 native 是类定义点。
+- 随后 `getConstructor().newInstance()`、`getSuperclass()` 等在这些镜像上按已有反射分析解析，
+  translet 的方法与它调用的 DTM / 迭代器类进入闭包。
+- 没有预定义类输入时，定义点返回值与现在相同（不新增任何类）。HelloWorld / DeepCopy 不经过类定义 native，闭包不变。
+- 语料档案：档案是全体入口调用链的并集，预定义类调用到的 JDK 方法要进档案，所以预定义类作为其所属测试的入口种子参与档案计算。
+
+### 4.3 运行期
+
+`defineClass0/1/2` 的手写（类 1 native，语义登记为类 2「运行期类定义点」）：
+
+1. 现有参数检查与格式检查不变（TestDefineClassRejects 的输出不变）；
+2. 格式合法时对区间字节求 SHA-256，查生成的预定义类表（java_meta，键为哈希）：
+   - 命中：校验调用方给的 `name` 与类文件中的名字一致（不一致按 JVM 抛 `NoClassDefFoundError: … (wrong name: …)`）；
+     同一加载器重复定义同名类按 JVM 抛 `LinkageError: … attempted duplicate class definition`；
+     记录 (加载器, 类) 为定义关系，返回该类镜像；
+   - 未命中：维持现在的 `LinkageError`。
+3. 定义加载器：`Class.__vm_defining_loader`（`[vm_state.field_hooks]`）先查运行期定义记录，再查生成器给出的静态表。
+   `TemplatesImpl` 在定义前经 `ModuleLayer.defineModules` 建了模块 `jdk.translet`，`Class.module` 钩子按「定义加载器 + 包」查 VM 模块表，
+   有了正确的定义加载器就能查到该模块。
+
+### 4.4 与 JVM 的语义差异（需登记）
+
+同一份字节被两个加载器各定义一次（例如对同一样式表调两次 `newTemplates`）时，JVM 得到两个不同的类，静态字段各一份；
+rava 只有一个静态链接的类，两次定义返回同一镜像，静态字段共用，`getClassLoader()` 返回首个定义者。
+XSLTC translet 的静态字段只在 `<clinit>` 写常量，共用不可观察。这一差异写进 `java-rust-translation-reference.md` 与清单注释。
+（决定点 X3。）
+
+## 5. 实施步骤（按 S2，待批准）
+
+1. **记录代理**：在 `load_trace` 代理旁加记录模式：`ClassFileLoadHook` 中 `loader != null`、类不来自类路径 / jrt 的，
+   按 SHA-256 写 `<哈希>.class` 与清单（原名、定义次数）。
+2. **构建输入通道**：`rava build` 读 scratch `predefined/`（语料由按需训练运行生成；生产由用户项目目录提供），
+   `input` crate 把这些类登记为用户域的预定义类。
+3. **闭包**：类定义 native 的返回值建模（§4.2），清单 `vm_intrinsics.toml` 登记 `defineClass0/1/2` 为类定义点。
+4. **发射与元数据**：内部键与原名（§4.1），java_meta 生成哈希 → 类表与名字条目。
+5. **运行期**：`class_loader_impl.rs` 三个 native 查表（§4.3），`class_impl.rs` 定义加载器钩子查运行期定义记录。
+6. **按需训练**：闭包发现类定义 native 可达且有非常量字节时，以参考 JDK 跑一次训练运行，结果并入输入后重算闭包。
+
+验收：TestXmlTransform 通过；TestDefineClassRejects 输出不变；71_xml 其余用例、HelloWorld、DeepCopy、CollectorsDemo 无新增失败；
+HelloWorld / DeepCopy 闭包类数、方法数不变；闭包单测 A、B 组无新增失败。
+
+## 6. 待用户决定
+
+- **X1 字节来源**：S2 训练运行（建议）/ S2b 自举训练 / S1 构建期求值 / S1 与 S2 并用（S1 管构建期可求值的输入，S2 管其余）。
+- **X2 训练运行的触发**：语料构建由 `rava build` 按需自动触发（建议）；还是只由 `--update-expected` 一类的 golden 运行顺带产出、随用例入库。
+  生产构建是否要求用户显式执行训练命令（建议显式，如 `rava trace`，产物归用户项目，不自动运行用户程序）。
+- **X3 同字节多次定义**：接受 §4.4 的共用语义并登记差异（建议）；或要求每次定义得到不同的类（需要每对象携带类指针、静态字段按定义实例分存，代价大）。
+
+## 7. 遗留与风险
+
+- **风险 1：两侧字节不同**。按内容寻址要求 rava 运行期重新生成的字节与构建期取得的字节逐字节相同。XSLTC 本身是确定的（§1.3），
+  但若生成器内部按身份哈希排序（以无 `hashCode` 覆盖的对象为 `HashMap` 键再遍历），JVM 与 rava 的身份哈希不同会使字节不同。
+  XSLTC 的表以字符串为键，预计不受影响；实施时以「训练字节 = rava 运行期字节」作为每个预定义类的构建后自检（运行期未命中时
+  报出期望哈希与实际哈希，便于定位）。S2b 没有这一风险；S1 的具体引擎身份哈希按自己的规则取（`fnv32`，引导映像计划 §5.8.1），与运行期不同，同样受影响。
+
+- 未捕获异常报告不打印经 `getCause()` 覆盖给出的 cause（§1.2）：`report_uncaught_in` 应按 JVM `printStackTrace` 走虚调用 `getCause()`。
+- `ClassLoader.defineClass0`（`Lookup.defineClass` / `defineHiddenClass` 的入口）在 rava 里尚无手写；预定义类方案实施时一并补上，
+  隐藏类的名字后缀规则与 §4.1 一致。
