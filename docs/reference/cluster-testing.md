@@ -306,7 +306,7 @@ cluster_results/
         └── error_logs/
 ```
 
-> C4 验收全量（`--reset`）等 dev 恢复后在 dev 上跑；dev 关机期间云服务器只做抽查与作业。
+> C4 验收全量（`--reset`）等 dev 恢复后在 dev 上跑；10-09 dev 恢复，测试主要放 dev（16 槽），云服务器只作溢出。
 > 续跑口径：已通过的测试默认在最新代码上仍通过，重启只跑未通过的（失败的用 --reset-failed 重新入队），
 > 服务器始终拉最新代码；只有 --reset 才在最新代码上从头全量。不再使用远端 `--record-passed` 清单
 > （残留清单会让 run_tests 跳过测试、被误判失败）。失败日志合并为单文件，避免文件堆积。
@@ -515,6 +515,12 @@ uv run --group cluster python scripts/cluster/known_failures.py <spot_tag> [--te
 # 退出码 0 = 完成且无新失败；1 = 有新失败；2 = 未完成（未出结果 / infra 失败）；3 = 清单读取错误
 ```
 
+**失败原因库**（2026-10-10 起）：`docs/failure_patterns.toml` 记历史上出现过的「症状 → 根因 → 修复」，只增不删（修好后改 `status` / `fixed`，不删条目）。`known_failures.py` 对每个新失败按 `match` 匹配（组内 AND、组间 OR，用例在条目 `tests` 中者排前），输出「疑似历史原因」行；提示只供分诊参考，不改变已知 / 新失败判定和退出码。字段与维护说明见文件头。
+
+- 匹配前剔除 dyn-compare 的 `[no-provenance]` 行：它列的是静态钉入、无来源记录的 VM 异常类（`CloneNotSupportedException` / `ExceptionInInitializerError` / `NegativeArraySizeException` 等），几乎每个测试日志都有，**不是运行期抛出，不能当症状归类**（10-10 曾据此把七例误归为同一组）。
+- 每个修复代理交付时，在同一提交里新增或更新条目（新根因新增一条；同症状不同根因并列，不改写旧条目的 `cause`）；协调攒批时检查，缺登记的退回补登。
+- 分诊新失败：先看提示命中的条目的 `diagnose` 与 `doc`，确认是否同一根因；不是同一根因就新增条目。
+
 ### 11.3 子代理自发抽查（tag 前缀）
 
 子代理用**自己的 tag 前缀**（任务代号小写，如 `c1dt2-`、`a3t-`），tag = `<前缀><sha8>`，一个提交一个 tag，
@@ -694,6 +700,7 @@ cd generator && CARGO_BUILD_JOBS=2 python3 /Users/yuwei/dev/workspace/heavy_lock
 - dev 关机期间用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1，各 15G 内存、1 槽。
 - jp2 直连失败时经 jp1 跳板（服务器条目 `jump` 键，见九）。
 - 全量单测在云上超过 7200 s，作业用 `--job-timeout 14400`（缺省 3600）。
+- 服务器 Python 统一用 uv 安装（项目 `.python-version` 为 3.12，在 `~/.local/share/uv/python`），不动系统 Python（us1 等系统自带 3.10，无 `tomllib`）。`--job --cmd` 里的 Python 脚本一律写 `uv run python3 …`，裸 `python3` 会落到系统 3.10，`run_tests.py` 的动态对照步骤报 `No module named 'tomllib'`。
 
 ### 12.5 分发进程存活判定
 
@@ -703,6 +710,8 @@ pgrep -f "\.venv/bin/python3? .*distribute_tests"
 
 作业分发器的进程名为 `python`，抽查为 `python3`，正则两者都覆盖。禁止用 `ps -eo` 判断（macOS 上 `-e` 不列全部进程）。
 同一 tag 只留一个实例，多余的 `kill -9`。
+
+等待作业结束不要写 `until ! pgrep -f "<tag>"`：`pgrep -f` 会匹配到等待循环自己所在 shell 的命令行（其中含 `<tag>`），循环永不退出（10-10 清理过 26 个这样挂了数小时到 19 小时的等待进程）。改用方括号写法 `pgrep -f "[d]istribute_tests.*<tag>"`（正则只匹配 `distribute_tests`，循环命令行里的字面 `[d]istribute` 匹配不上自己），或等日志里的结束标记（`grep -q "日志与产物" <log>` / `rc=`），且给循环设上限次数。
 
 ### 12.6 子代理等作业
 

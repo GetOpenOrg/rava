@@ -34,7 +34,7 @@ pub(super) struct CallerState {
 
 impl<'a> Engine<'a> {
     /// 方法 t 是否标注 @CallerSensitive（按声明处注解，与生成器包装口径一致）
-    fn is_caller_sensitive(&mut self, t: usize) -> bool {
+    pub(super) fn is_caller_sensitive(&mut self, t: usize) -> bool {
         if let Some(&b) = self.cs.sensitive.get(&t) {
             return b;
         }

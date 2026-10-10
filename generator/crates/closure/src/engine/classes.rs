@@ -595,17 +595,21 @@ impl<'a> Engine<'a> {
             _ if recursive => &[],
             _ => &outer,
         };
-        // 分配方是调用点上下文（工厂方法按调用点克隆，如包装视图工厂）而非对象：调用点并进本分配点的段，
-        // 不另占一段——工厂产物的身份是「分配点 × 调用点」，其方法里分配的对象（视图的迭代器等）以它为上下文时
+        // 分配方是调用点上下文（工厂方法按调用点克隆，如包装视图工厂）而非对象：调用点并进本分配点的段——
+        // 工厂产物的身份是「分配点 × 调用点」，其方法里分配的对象（视图的迭代器等）以它为上下文时
         // 链首段即带上调用点，截断到 HEAP_DEPTH 后不丢工厂调用点（否则全程序同一工厂产物的内部对象汇合，
-        // 其字段读取跨调用点混合各产物包装的容器内容）
+        // 其字段读取跨调用点混合各产物包装的容器内容）。并入的调用点照样占一层深度：产物不再接调用点上下文的
+        // 外层段（调用方的上下文），产物划分与不并入时相同（分配点 × 调用点），只是调用点随产物下传给其内部对象；
+        // 否则产物按「分配点 × 调用点 × 调用方上下文」成倍展开，其上的方法克隆与内部对象随之相乘
+        let mut room = HEAP_DEPTH - 1;
         if ctx != NOCTX && !self.objs.contains_key(&ctx) {
             if let Some((first, rest)) = segs.split_first() {
                 chain.push_str(first);
                 segs = rest;
+                room -= 1;
             }
         }
-        for seg in segs.iter().take(HEAP_DEPTH - 1) {
+        for seg in segs.iter().take(room) {
             chain.push('#');
             chain.push_str(seg);
         }
@@ -662,7 +666,7 @@ impl<'a> Engine<'a> {
         }
         let Some(code) = meth.code.as_ref() else { return false };
         let live = |_: &str| true;
-        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]) });
+        let a = self.ctx.aux_analyze(&key.owner, &key.desc, true, code, &Facts { ctx: &self.ctx, live: &live, m: None, params: vec![], mirrors: vec![], level: None, objs: Default::default(), callers: None, caller_sites: Default::default(), sites: Rc::from([]), key: None, dv: false });
         if a.conservative {
             return false;
         }

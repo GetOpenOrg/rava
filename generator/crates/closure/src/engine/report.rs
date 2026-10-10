@@ -217,6 +217,29 @@ impl<'a> Engine<'a> {
             }
             return out;
         }
+        // 上下文值集诊断：`@ctxsets:<方法键子串>`——匹配方法的上下文克隆数，及按形参值集元素数之和排序的前 25 个克隆
+        // （各形参 / 返回值的元素数、调用方数与前 4 个调用方）
+        if let Some(q) = pat.strip_prefix("@ctxsets:") {
+            let mut v: Vec<(usize, String)> = Vec::new();
+            let mut n = 0usize;
+            for (i, mn) in self.methods.values().enumerate() {
+                if !mn.key.to_string().contains(q) {
+                    continue;
+                }
+                n += 1;
+                let size = |e: &Self, nd: Node| e.graph.get(&nd).map_or(0, |s| s.classes.len() + s.open.len());
+                let ps: Vec<usize> = (0..mn.ptypes.len()).map(|j| size(self, Node::P(i, j as u16))).collect();
+                let r = size(self, Node::R(i));
+                let cs: Vec<usize> = self.callers.get(&i).into_iter().flatten().copied().collect();
+                let cl: Vec<String> = cs.iter().take(4).map(|&c| self.ctx_label(c)).collect();
+                let tot = ps.iter().sum::<usize>() + r;
+                v.push((tot, format!("  {tot}\tP {ps:?} R {r} 调用方 {} {cl:?}\t{}", cs.len(), self.ctx_label(i))));
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            out.push(format!("@ctxsets {q}: {n} 个克隆"));
+            out.extend(v.into_iter().take(25).map(|x| x.1));
+            return out;
+        }
         // 污染路径诊断：`@path:<节点子串>|<类名>`——从匹配节点沿流边反向，经含该类的节点走到源头（最短路径）
         if let Some((np, cls)) = pat.strip_prefix("@path:").and_then(|v| v.split_once('|')) {
             let (open, cls) = match cls.strip_prefix("open:") {
@@ -389,7 +412,8 @@ impl<'a> Engine<'a> {
                             } else {
                                 String::new()
                             };
-                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}", mref.name))
+                            let dv = if t.is_none() { self.ctx.deval_diag(m, key, *opcode, *o, mref, args) } else { String::new() };
+                            Some(format!("@{o} {}{args:?} ceval {ev:?}{tr}{orv}{dv}", mref.name))
                         }
                         absint::Event::Field { mref, .. } => self.ctx.field_info(mref).map(|fi| {
                             let fopen = self.ctx.fopen.borrow().contains(&fi.key) || self.ctx.fopen_names.borrow().contains(&fi.key.name);
@@ -428,6 +452,34 @@ impl<'a> Engine<'a> {
                 let opens: Vec<String> = s.open.iter().map(|o| self.names[o as usize].to_string()).collect();
                 out.push(format!("  {}：数组分配点 {arr}、抽象对象 {obj}、open {opens:?}、其余 {}：{}", self.node_str(n), other.len(), other.iter().take(40).cloned().collect::<Vec<_>>().join(" ")));
             }
+            return out;
+        }
+        // 抽象对象构成诊断：`@objstat`——抽象对象 / 数组分配点按（类型, 来源）计数（来源：映像逐对象 / 字节码分配点），
+        // 另计各类型的逃逸数与按 G 计的成员数（前 60）
+        if pat == "@objstat" {
+            let mut by: HashMap<(u32, bool, bool), (usize, usize)> = HashMap::default();
+            for (&id, &t) in self.objs.iter().chain(self.arrays.iter()) {
+                let name = &self.names[id as usize];
+                let img = name.contains("@image");
+                let e = by.entry((t, self.arrays.contains_key(&id), img)).or_default();
+                e.0 += 1;
+                e.1 += usize::from(self.escaped.contains(&id));
+            }
+            let (mut ti, mut tb) = (0, 0);
+            let mut v: Vec<(usize, String)> = Vec::new();
+            for ((t, arr, img), (n, esc)) in by {
+                if img {
+                    ti += n;
+                } else {
+                    tb += n;
+                }
+                let kind = if img { "映像" } else { "字节码" };
+                let shape = if arr { "数组" } else { "对象" };
+                v.push((n, format!("  {n}\t逃逸 {esc}\t{kind}{shape}\t{}", self.names[t as usize])));
+            }
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            out.push(format!("@objstat 映像 {ti}、字节码 {tb}、G {}", self.g.len()));
+            out.extend(v.into_iter().take(60).map(|x| x.1));
             return out;
         }
         // 抽象对象明细诊断：`@objs:<节点子串>`——匹配节点（前 4 个）值集里的抽象对象 / 数组分配点名（前 40，标逃逸）

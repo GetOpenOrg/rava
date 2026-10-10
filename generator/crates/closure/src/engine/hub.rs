@@ -125,6 +125,7 @@ impl<'a> Engine<'a> {
             return;
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
+        self.vdisp_note(m, off, None);
         if cut::edges_on() {
             cut::edge_plain(&self.site_node(m, off), &format!("H:{h}"));
         }
@@ -147,7 +148,8 @@ impl<'a> Engine<'a> {
         } else {
             self.pstr_top_h(h);
         }
-        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of)).collect();
+        // 形参常量格与逐个接边同口径（`bind_params` 取 `PV::of_ret`：确定非空的无标签引用记为「非空引用」）
+        let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of_ret)).collect();
         self.hub_vals(h, &mine);
         self.prof_seg(site_prof::SEG_LINK_REPLAY);
         let hub = &mut self.hubs[h as usize];
@@ -345,9 +347,11 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// 目标经枢纽中转：字节码方法本体、结果取其返回值节点（非按调用点建模）
+    /// 目标经枢纽中转：字节码方法本体、结果取其返回值节点（非按调用点建模）。
+    /// @CallerSensitive 目标的调用者镜像取自各调用点所在类（`caller_edge`），经枢纽中转会丢掉调用点，
+    /// 故逐调用点接边（`edge` 按接入调用点并入调用者镜像）
     pub(super) fn hub_plain(&mut self, t: usize) -> bool {
-        if self.methods[t].kind != Kind::Bytecode || self.methods[t].is_static {
+        if self.methods[t].kind != Kind::Bytecode || self.methods[t].is_static || self.is_caller_sensitive(t) {
             return false;
         }
         self.methods[t].ret_model == RetModel::Plain && self.passthrough(t).is_none()
@@ -358,7 +362,15 @@ impl<'a> Engine<'a> {
         if self.methods[t].kind != Kind::Bytecode {
             return None;
         }
-        self.analysis(t)?.returned_params()
+        let a = self.analysis(t)?;
+        self.returned_of(t, &a)
+    }
+
+    /// 分析 a 的透传摘要（[`Analysis::returned_params`]）。只对引用返回的方法有意义：无引用返回值的方法
+    /// 不接返回值流，恒按非透传（尚无返回路径的空集只是引用返回值的 ⊥，不必为它们逐调用点接边）
+    pub(super) fn returned_of(&self, t: usize, a: &Analysis) -> Option<Vec<u16>> {
+        self.methods[t].rtype?;
+        a.returned_params()
     }
 
     /// VM 按反射对象虚调用 key（声明类 cls 上的实例方法）：经 open(cls) 的 VM 枢纽派发到各接收者的选中实现，

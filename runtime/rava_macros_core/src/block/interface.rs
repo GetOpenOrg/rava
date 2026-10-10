@@ -181,7 +181,7 @@ pub(crate) fn expand_interface(
     let has_clinit = fns.iter().any(|f| f.sig.ident == class_init::CLINIT_FN);
     // 接口初始化不触发父接口初始化（JVMS §5.5）
     let (init_state, class_init_fn) =
-        class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit);
+        class_init::expand_class_init(struct_ident, binary_name, None, &[], has_clinit, meta.boot_initialized);
 
     // 无 binary name 的载体（手写接口块缺元数据）退化为无类型 null
     let null_ref = if binary_name.is_empty() {

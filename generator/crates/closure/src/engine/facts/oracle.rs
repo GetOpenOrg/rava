@@ -66,6 +66,19 @@ impl Oracle for Facts<'_, '_> {
         };
         // 无唯一目标时，带构造完成标签的接收者按标签所示的类选目标
         let tagged = if c.target.is_none() { self.ctx.tagged_target(opcode, m, iface, args.first()) } else { None };
+        // 分派求值（`deval.rs`）：嵌套求值中的调用一律按目标 / 派发集求；方法体中无唯一目标的守卫形态调用按派发集求
+        if let Some(k) = &self.key {
+            if self.dv {
+                match self.ctx.deval_invoke(k, opcode, off, m, args, c.target.as_ref().or(tagged.as_ref())) {
+                    Ret::Unknown => {}
+                    r => return r,
+                }
+            } else if let (Some(me), None, None, false) = (self.m, &c.target, &tagged, matches!(per, Some(PV::Const(_)))) {
+                if let Some(r) = self.ctx.deval_guard(me, k, opcode, off, m, args) {
+                    return r;
+                }
+            }
+        }
         let Some(t) = c.target.as_ref().or(tagged.as_ref()) else {
             return match per {
                 Some(PV::Const(v)) => Ret::Value(v),
@@ -119,7 +132,7 @@ impl Oracle for Facts<'_, '_> {
         if let Some(v) = self.ctx.object_field(self.m, opcode, f, recv) {
             return Some(v);
         }
-        self.ctx.field_value(self.m, f)
+        self.ctx.field_value(self.reader(), f)
     }
     fn getfield(&self, f: &MemberRef, recv: Option<&V>) -> Ret {
         let op = classfile::op::GETFIELD;
@@ -137,7 +150,7 @@ impl Oracle for Facts<'_, '_> {
             }
             None => {}
         }
-        self.ctx.field_value(self.m, f).map_or(Ret::Unknown, Ret::Value)
+        self.ctx.field_value(self.reader(), f).map_or(Ret::Unknown, Ret::Value)
     }
     fn construct(&self, init: &MemberRef, args: &[V]) -> Option<Rc<Obj>> {
         self.ctx.construct(self.m, init, args)

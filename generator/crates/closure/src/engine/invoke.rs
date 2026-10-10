@@ -120,7 +120,8 @@ impl<'a> Engine<'a> {
                             return;
                         }
                     }
-                    self.edge_recv(m, off, resolved, via, r, &a, ret, res, true);
+                    let nv = (!rm.is_private() && !rm.is_static() && !is_array_type(&mref.owner)).then_some((&site, &md));
+                    self.edge_recv_hub(m, off, resolved, via, r, &a, ret, res, nv);
                     return;
                 }
                 let r = recv_feeds(self);
@@ -270,6 +271,21 @@ impl<'a> Engine<'a> {
     /// 按接收者当前值拆分（接收者节点属调用方，增长时调用方重处理）
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge_recv(&mut self, m: usize, off: u32, key: MemberRef, via: Via, fs: Vec<Feed>, a: &Args, ret: Option<u32>, res: Option<Node>, site: bool) {
+        self.edge_recv_in(m, off, key, via, fs, a, ret, res, site, None);
+    }
+
+    /// 字节码调用点上的 final 实例方法 / final 类方法（经槽调用的非虚目标，`nv` 为其调用点解析与描述符）。
+    /// 抽象对象接收者达 `HUB_MIN` 时与虚调用同样经精确集合枢纽：各对象仍进各自的接收者上下文克隆
+    /// （`hub_recv` 与逐个接边同口径取 `recv_ctx`），调用点只接一次枢纽。递归的 final 方法（树节点查找 / 插入）
+    /// 的每个接收者克隆里同一调用点都会见到同一批对象，逐个接边是 克隆数 × 对象数 条边，经枢纽是二者之和。
+    /// 调用点按选择子常量克隆（`recv_call_clones`）时仍逐个接边，克隆口径不变
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn edge_recv_hub(&mut self, m: usize, off: u32, key: MemberRef, via: Via, fs: Vec<Feed>, a: &Args, ret: Option<u32>, res: Option<Node>, nv: Option<(&resolve::MethodSite, &classfile::descriptor::MethodDesc)>) {
+        self.edge_recv_in(m, off, key, via, fs, a, ret, res, true, nv);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edge_recv_in(&mut self, m: usize, off: u32, key: MemberRef, via: Via, fs: Vec<Feed>, a: &Args, ret: Option<u32>, res: Option<Node>, site: bool, nv: Option<(&resolve::MethodSite, &classfile::descriptor::MethodDesc)>) {
         // 接收者按被调方法声明类收窄（checkcast 不改变值来源，来源节点可能更宽）
         let owner = self.id(&key.owner);
         // 字节码调用点自身的接收者（非 lambda 转接）：重跑时只接新增的值（同一分析结果下实参来源、常量与
@@ -301,6 +317,25 @@ impl<'a> Engine<'a> {
         rest.classes = IdSet::from_sorted(cls);
         // 字节码调用点自身在被调方选择子形参上传常量时按调用点克隆（`ctxsel.rs`）
         let cx = |e: &mut Self, base: u32| if site { e.recv_call_ctx(m, off, &key, base) } else { base };
+        if let Some((msite, md)) = nv.filter(|_| dedup && !objs.is_empty() && !self.recv_call_clones(m, &key)) {
+            // 本调用点已接的全部抽象对象接收者（`recv_done` 登记了全集，按属主收窄）
+            let done: Vec<u32> = self.recv_done.get(&m).and_then(|d| d.get(&off)).map(|v| v.iter().copied().filter(|x| self.objs.contains_key(x)).collect()).unwrap_or_default();
+            let all: Vec<u32> = done.into_iter().filter(|&x| self.sub(x, owner)).collect();
+            if all.len() >= HUB_MIN {
+                let last = self.hub_last.get(&(m, off)).cloned();
+                let h = match last {
+                    Some((h, rs)) if *rs == all[..] => h,
+                    last => {
+                        let rs: Rc<[u32]> = all.into();
+                        let h = self.hub(&key, false, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), msite, md, via.clone());
+                        self.hub_last.insert((m, off), (h, rs));
+                        h
+                    }
+                };
+                self.link_hub(h, m, off, a, res);
+                objs.clear();
+            }
+        }
         for x in objs {
             let base = self.recv_ctx(x);
             let c = cx(self, base);
@@ -326,6 +361,7 @@ impl<'a> Engine<'a> {
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
         if self.dispatch.entry((m, off)).or_default().insert(t) {
             self.ctx.stats.borrow_mut().sprof.dispatch_new += 1;
+            self.vdisp_note(m, off, Some(t));
         }
         self.callers.entry(t).or_default().insert(m);
         self.caller_edge(m, t);
@@ -480,7 +516,8 @@ impl<'a> Engine<'a> {
                 }
             } else if let Some(ps) = self.passthrough(t) {
                 // 透传方法：结果 = 本调用点对应实参（逐调用点，不经 R 汇合）。实参按被调形参的声明类型收窄，与经
-                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关
+                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关。
+                // 反方向（汇合 → 透传）的边撤不回，故尚无返回路径（⊥）答空集透传而非汇合（`returned_params`）
                 for i in ps {
                     let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(i as usize - base).cloned().flatten() };
                     let Some(fs) = fs else { continue };

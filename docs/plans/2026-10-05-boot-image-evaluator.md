@@ -687,7 +687,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 1. TestBootLayer（第 3 步验收项）：作业 bimg3-bl-fcc54fb8 实跑，前 23 行与 JDK 相同（引导层、java.base / java.sql 模块、Configuration、无名模块均正确），在 `base.getResourceAsStream("java/lang/Object.class")` 返回 null 后 `readNBytes` NPE。原因：`input/src/resources.rs` 的资源推导按设计排除 `.class`（`path_like` 单测断言 `!path_like("p/q/A.class")`），类字节不在嵌入资源中。按 boot-layer 第 5 步（2026-10-02-boot-layer.md §2.3 第 6 条：jimage 嵌入数据 + `getNativeMap`，`.class` 字节同属模块内容）一并解决；是否放开 `.class` 资源推导属该步设计，未自行改动。其后各行（系统类加载器、线程组、属性、标准流）未覆盖到。
 2. 闭包规模（需决策，2026-10-07 晚拆分实测，见下「闭包回升拆分」）：服务器 Linux JDK 21 HelloWorld 档案 `[emit]` 本分支 f442cecf 为 3053 个 JDK 类，集成分支 af1bf145 为 466（作业 bimg3-meas-af1bf145）。远超第 3 步 ≤ 540 门槛。
 3. 二进制体积 / 启动：基线 af1bf145 HelloWorld release 二进制 7,761,904 字节（已无符号，`.text` 4.70 MB、`.rodata` 0.41 MB、`.data.rel.ro` 0.48 MB），整进程墙钟中位数 0.99 ms（30 次）。本分支同口径作业 bimg3-meas2-f442cecf 因 dev 关机维护被停，未得数；uprobes 测 `__boot_image_start` 需未 strip 的产物（缺省 release 已无符号），须另配。测量脚本两作业共用 `/tmp/meas_*.txt` 会串扰，重跑时须按 tag 区分文件名。
-4. U11 零拷贝终态（外部静态、常量视图 / 镜像、D5 残差区段、S6 标准流）未做。
+4. U11 零拷贝终态：外部静态、常量视图与镜像、映像表已实现（分支 boot-zerocopy f87c343d，§5.10），服务器编译仍在收口。D5 残差区段和 S6 标准流未做。
 
 **闭包回升拆分（2026-10-07 晚，Linux JDK 21，`rava closure` HelloWorld，summary.classes；作业 bimg3-why-* / bimg3-cut-95cc94f2 / bimg3-fold-86f4f9be / bimg3-base-*）**
 
@@ -1307,7 +1307,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - pd1–pd6：缺省次序与 fb1 次序的 MinimalMain / NullView 折叠对照。pd3 / pd4 定位并验证修复 2，pd5 排除形参常量差异，pd6（叠加修复 3）两例 `folds equal True`，剩余只有 via 差异。
 - scp2–scp4：seed-chain 叠加修复后跑两项单测。scp3（修复 1、2）上 profile 仍失败；scp4（修复 1–3，jp2）上 `reflect_new_array_element_precision` 与 `profile_union_key_and_coverage` 均通过。
 
-**残留：具体求值站点的镜像缓存在站点回退后不撤回**（未修，fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败）
+**残留：具体求值站点的镜像缓存在站点回退后不撤回**（fix-1011 头 fddb9bcb 上 `profile_union_key_and_coverage` 因此失败；已由 `bootcache` 修复，见下）
 - **作业**：
   - ut2-fddb9bcb：全量单测。失败项为已知三项，加上本项。
   - pf3：档案对照。默认与 fb1 + seed 7 的 classes / methods 只有 via 不同；digest 差在 `boot_image_data.ext` / `mirror_memos`。
@@ -1319,6 +1319,28 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
   - 难点：剔除后要重编号；活标记与分析侧已记录的映像对象号要同步；`m:` 组可能被扩展期共享，需按引用判定。
   - 另一种做法是推迟镜像缓存入映像到站点定论之后，但那样会丢失分析期的缓存值传播（热轨迹精度）。
 - seed-chain 叠加三处修复（scp4）时该测试恰好通过，属于次序巧合。
+
+**残留修复：镜像缓存组按贡献调用点的最终状态取舍（2026-10-09，分支 `bootcache`，019878f0）**
+- **做法**：
+  - `image_memo_apply` 记下每个 `f:` 组的贡献调用点（`MemoState.sites`；该组已由别的调用点并入时同样记入）。
+  - 分析结束时（`image_final`），先剔除贡献者全部处于 `concrete.fallback` 的 `f:` 组及其缓存记录，再调用 `ImageData::drop_memo_groups` 按引用求闭包：根是引导对象、`c:` / `s:` 组、保留的 `f:` 组与缓存记录、静态字段；`m:` 组只有被引用时才保留。之后压实下标，照常规范化。
+  - `m:` 组只看内容、不看由谁新建：无论镜像由扩展期还是镜像缓存的 prepare 新建，同一份最终内容得到同一结论。不被引用的镜像在运行期按需新建，语义不变。
+  - 结果：映像的镜像缓存组 = 最终未回退调用点贡献的组。未回退调用点已应用的组合等于最终组合，所以这部分与处理次序无关。
+- **可达性不另撤**：回退调用点接了抽象调用边，抽象分析覆盖入口对全体接收者的执行（包括冷路径），已应用组合的具体轨迹和缓存值带入的类型都包含在其中；`getGenericInfo` 读取点的接收者含未缓存镜像，`genericInfo` 值集含 null，不会因被剔除的缓存而折叠。实测两种次序的类 / 方法集合逐项相同（见下）。
+- **否决的做法**：d94ae437 把新组合的应用与回退一律挂起到工作队列不动点再判定（已由 ced4f41f 撤回）。bc-t1 中 TestModuleLayerDefine 的 `reflect_new_array_element_precision` 失败：种子 0 / 1 的方法集合相差 `ForEachOps$ForEachOp$OfRef.get`。挂起改变了分析中间态，触发了其他单调格的次序依赖。撤回提交说明中写的「闭包 3233→3456」是口径误读：`rava closure` 在 a6dca5c0 上本来就是 3456 / 3757，见下表。
+- **实测**（`rava closure`，参考 JDK 21.0.11；缺省次序 vs `--flow-batch 1 --hash-seed 7`）：
+
+| 作业 | 用例 | 类 / 方法 | boot_image_data 两次序相同 | 闭包耗时（缺省 / fb1） |
+|---|---|---|---|---|
+| bc-base-a6dca5c0（sg1，基线） | HelloWorld | 3456 / 18678 | 是 | 113 / 116 s |
+| 同上 | DeepCopy | 3757 / 21717 | **否**（ext / mirror_memos / objs / live 等不同，objs 21297 vs 21306） | 933 / 1163 s |
+| bc-cc2-019878f0（us1） | HelloWorld | 3456 / 18678 | 是 | 105 / 108 s |
+| 同上 | DeepCopy | 3757 / 21717 | **是** | 895 / 1136 s |
+
+  - 类 / 方法集合在两种次序下逐项相同，与基线一致，类数不增。
+- **单测**（bc-t2-019878f0，sg1）：`closure` 的 `image_ext` 5 项（新增 `drop_memo_groups_matches_never_applied`）、`reflect_new_array_element_precision`、`profile_union_key_and_coverage` 全部通过。
+- **e2e 抽查**（bc-sp1-019878f0，us1）：HelloWorld、TestGenericSuperclassReflect、TestOwnerTypeFaces、TestModuleLayerDefine 通过（转译 116–134 s）。DeepCopy 转译超过 600 s 的超时，属于 a6dca5c0 上已知的转译耗时回归（基线 912 s，由 perf-regress 修），与本改动无关。上表中本分支 DeepCopy 的闭包耗时（895 s）不高于基线（933 s）。
+- **DeepCopy 放宽超时重跑**（bc-sp2-019878f0，sg2，`--transpile-timeout 1800`）：通过，转译 954 s、构建 724 s。与基线 912 s 相差 +4.6%，但两者不在同一台服务器，属于跨机波动范围；同口径的闭包对比（上表）本分支不慢于基线。
 
 **恢复入口**：
 - `engine/levels_boot.rs`：`image_settled_build_time`。
@@ -1479,6 +1501,41 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - ③ 按上面 1 → 2 → 3 实施；入口是 `engine/obj_rets.rs`（按对象返回值）与 `engine/facts/oracle.rs::invoke_result` 的虚调用分支（目前只有构造完成标签的 `tagged_target`，需扩到抽象对象集的逐目标求值）。
 - 诊断：`--flows '@vals:Shutdown.logRuntimeExit'` 看 `@10 isLoggable` 的 `orv`（按对象返回值）与 `ceval`；`--why java/security/SecureRandom` 看首达链是否仍经 `logRuntimeExit@74`。
 
+**2026-10-09 ③ 落地：`logRuntimeExit@10 isLoggable(DEBUG)` 折成 false（分支 `logchain3`，基于 a6dca5c0；作业 `lc3-ub2`、`lc3-d3`、`lc3-d4`、`lc3-dc`、`lc3-ut`、`lc3-sp`）**
+
+实际链条与上面「所缺机制 1–3」的预想不同。接收者不必收窄到对象：`@10` 的派发集只有 `AbstractLoggerWrapper.isLoggable`，`wrapped()` 之后 `@5 isLoggable` 的派发集只有 `SimpleConsoleLogger.isLoggable(System.Logger.Level)`（闭包中只有替身日志器被实例化）。因此实现了两个通用机制，生成器 crate 不出现类名或字段名字面量：
+
+| 机制 | 位置 | 内容 |
+|---|---|---|
+| 封闭常量数组元素 | `absint/obj.rs` `Obj::Elems`；`engine/sealed_elems.rs`；`facts/fields.rs::static_const` | 条件：`private static final` 数组字段只在本类 `<clinit>` 中写一次，所有读都是 `aaload`（`load_only`，数组不逃逸、不被改写）；`<clinit>` 中从 `anewarray` 到 `putstatic` 是直线段，期间只有常量下标、常量值的 `aastore`。满足时字段值带元素表，`aaload` 按常量下标取元素，`arraylength` 取长度。`PlatformLogger.spi2platformLevelMapping` 即属此类，`toPlatformLevel(DEBUG)` 因此求得映像对象 `PlatformLogger$Level.FINE` |
+| 按调用点派发集求值 | `engine/deval.rs`；`Dep::Disp`（`share.rs`）；`Engine::vdisp_note`（`invoke.rs::edge`、`hub.rs::link_hub`）；`facts/oracle.rs::invoke_result` | 守卫形态的虚 / 接口调用（返回 boolean、非接收者实参含常量、无唯一目标）按闭包中该调用点的派发集逐目标做常量实参求值，然后汇合：全部不返回则不返回，全部为同一常量则取该常量，否则未知。派发集按「调用方成员 + 偏移」汇合全部上下文，只增；含非字节码目标、接入枢纽、成员名或描述符不符（转接）、目标数超过 4 的调用点不求值。嵌套求值中，唯一目标的调用求方法体；多目标调用只在实参（含接收者）含常量时展开方法体，否则只取各目标的返回常量格。非 final 字段读取取字段值集（`fvals`），读者登记为发起的方法。深度上限 6，一次发起最多求值 64 次，被求值方法不超过 256 条指令，同一次发起内按「目标 + 绑定实参」缓存结果 |
+
+- 失效与单调：发起的方法登记 `Dep::Disp(调用方成员, 偏移)`、`Dep::Ret(目标)`、字段读者与记忆输入。派发集增长时，登记过该调用点的方法失效重算。答复只随派发集、字段值集、返回常量格单调上升（不返回 → 常量 → 未知）。
+- 乐观起点：以下两种情况在定论阶段之前都答「不返回」，与 `noreturn.rs` 同口径：派发集尚无记录（调用边还没接上）；只取返回常量格时该格缺席（`answer_never`）。这一点必须做。调用边只增不撤，第一版（e966772b）在目标尚未分析时过早答「未知」，`@18..@74` 的边先接上，之后答案虽然变成 0，类数仍是 3456（`lc3-d3` 诊断显示事后求值为 `Int(0)`、类数不变）。d1df66a6 修正后才兑现。
+- 求值链（`--flows '@vals:Shutdown.logRuntimeExit'` 的 `deval` 轨迹）：`@10` {AWL.isLoggable} → `@1 wrapped()` 只取返回常量格（未知，不展开）→ `@5` {SCL.isLoggable(Level)} → `toPlatformLevel(DEBUG)` 经元素表得到 FINE → `isLoggable(PlatformLogger.Level)`（final）→ `effectiveLevel()`（private）：`level` 字段值集为 {null}，取 `@8 defaultPlatformLevel()`，其派发集为 {SurrogateLogger}，返回常量格为映像 INFO → `FINE.ordinal() = 3 >= INFO.ordinal() = 5` 为假 → 0。
+- 语义与 JDK 一致的依据：
+  1. `spi2platformLevelMapping` 是私有 static final 数组，只在 `<clinit>` 中构造，读者只做 `aaload`，运行期元素恒为 `<clinit>` 写入的映像枚举对象。
+  2. `SurrogateLogger.defaultPlatformLevel()` 返回 static final `JUL_DEFAULT_LEVEL`，它是 `<clinit>` 中的常量 INFO，不读属性。
+  3. 替身对象的 `level` 只由 `setLevel` / `setPlatformLevel` 写非 null。字段值集是「初值 ⊔ 可达写入点」的最小不动点，论证同上文缺口 3：不动点上写点不可达，运行期就不会写。
+  4. 级别能否在运行期改变：只有上条的写点能改。用户程序一旦使写点或其他日志后端可达（例如使用 java.util.logging 或配置 LoggerFinder），字段值集或派发集会增长，读者失效，折叠自动撤销，那个程序里不会折叠。所以不需要额外判定「级别会不会变」，每个程序都在自己的不动点上是健全的。
+  5. 派发集是不动点上 `@10` / `@5` 实际可达的全部实现。闭包外的实现在运行期不可能成为接收者，理由同字段值集论证。
+
+**实测（类 / 方法；a6dca5c0 基线与切除上界来自 `lc3-ub2`，sg2；d1df66a6 来自 `lc3-d4`（jp1）与 `lc3-dc`（us1））**
+
+| 测例 | a6dca5c0 基线 | 切 `logRuntimeExit@74` 上界 | d1df66a6 | 闭包耗时（基线 → d1df66a6） |
+|---|---:|---:|---:|---|
+| HelloWorld | 3456 / 18678 | 575 | **575 / 1875** | 112 s → 6 s |
+| CollectorsDemo | 3456（e966772b，未兑现版） | — | **614 / 2000** | 118 s → 5 s |
+| DeepCopy | 3757 / 21717 | 3757 | 3757 / 21717 | 945 s → 917 s |
+
+- HelloWorld 兑现了切除上界 575。任务给的目标是 537 / 583，那是 seed-chain 时的基线；a6dca5c0 上的切除上界是 575，剩下的差额不在本链上。
+- DeepCopy 不减类，也不应该减：切掉 `@74` 的上界就是 3757。ef6a1249 时的首达链是 `logRuntimeExit@74`，现在已不经日志链。`--why java/security/SecureRandom` 显示，首达链变成 `Terminator.setup → Signal.handle@71 → StringBuilder.append(Object) → String.valueOf@11` 的 toString 派发 → `SecureRandom.toString`，另有 `TempFileHelper.<clinit>@29 new SecureRandom` 的分配。这条链交给 toString 派发收窄 / `Signal.handle` 消息串线。
+- 确定性与单测（d1df66a6；合并 c249cdec 后为 ddcbf492）：
+  - `closure_independent_of_order`（lc3-utb，us1）：HelloWorld 全矩阵（5 种 batch × 4 种 seed）通过。基线 a6dca5c0 在 HelloWorld 段就失败（batch-1009 记录的 closure_cli.rs:237），本线之后断言推进到 DeepCopy 段，在 batch 1 / seed 1 处失败。
+  - DeepCopy 缺省与 batch 1 / seed 1 的逐键对照：基线 c249cdec（lc3-ordb3）和本线 ddcbf492（lc3-ord3）**差异完全相同**，都只有 `dispatch` 键下一项：`FindOps$FindOp.evaluateSequential@20` 与 `FindOps$FindTask.doLeaf@29` 的派发集互换。这是上游已有的 FindOps 派发次序依赖，由 order-findops 线负责，本线没有引入新的次序依赖。
+  - 其余 closure_cli 单测（lc3-uta，kr2）：container_elements_per_object、no_recording_without_queries、**param_string_constants_fold_switch（原已知失败，现转绿）**、recording_flow_queries、returns_per_receiver_object、returns_per_site_receiver、snapshot_read_ignores_props_escape、stack_overflow_error_in_minimal_closure、reflect_new_array_element_precision、sysprops_lambda_return_confined、unsure_lookup_releases_known_names 全部通过。`closure_independent_of_hash_seed` 在 6600 s 作业上限内没有跑完（JNDI / Serial 族各 3 种子），没有失败输出。
+  - 下方「单测 param_string_constants_fold_switch 不归本线所能转过」是 ③ 落地前的结论：③ 落地后 HelloWorld 降到 575 类，`jrt/Handler` 所在的链也随日志链一起剪掉，该测已实测通过。
+
 **为什么 `useSurrogateLoggers` 仍未折叠**
 - `useSurrogateLoggers = detectedBackend == JUL_DEFAULT && !logManagerConfigured`。前半已可按映像值得到。但 `logManagerConfigured` 的唯一写点 `redirectTemporaryLoggers` 只在 `LoggerFinderLoader.service()` 中调用，而 service() 仍经由 `Tripwire` → `PlatformLogger` 上下文与 `LazyLoggers.getLoggerFromFinder`（@15，非系统模块分支）可达。按「映像初值 ⊔ 可达 putstatic」，该字段为 {false, true}，不能折叠。
 - 终态解法是路径 A：折叠 `LazyLoggers.getLogger` 的 `isSystem(module)`。
@@ -1489,7 +1546,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - 本分支未实现路径 A，工作量大，涉及 doPrivileged 返回值的上下文敏感化。log-chain2 实测确认其类收益上限为 0，不再实现（见上「路径 A 与 ③ 的收益上限」）。
 
 **③ isLoggable(DEBUG)**
-- 未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
+- （log-chain2 时的旧结论，已由上方「2026-10-09 ③ 落地」取代）未做。前提是 `useSurrogateLoggers` 折成 true；之后按 `JUL_DEFAULT_LEVEL = INFO` 折叠 `SurrogateLogger.isLoggable`。实测切掉整个 logRuntimeExit 不减类，③ 的类收益上限为 0，不再做。
 
 **仍持有日志链的其他根**（交给对应的线）
 - `Tripwire.ENABLED`（doPrivileged 读属性）；
@@ -1518,6 +1575,131 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - ~~先在 ES 变体上用 `--why` 定位 E → LE 的 1844 类的持有节点~~ 已完成（见上「当前头已不存在」）；
 - 路径 A 的改动点：`absint` 中 @CallerSensitive 调用者模块常量化，以及 `engine/facts` 中 doPrivileged 的按调用点返回值；
 - ③ 在路径 A 之后做。
+
+### 5.10 U11 零拷贝终态（2026-10-09，分支 `boot-zerocopy`，基于 9f0542fb）
+
+#### 5.10.1 S7「永久区」定稿
+
+映像对象是生成的根门面 `boot_image` 模块里的 `#[repr(C)]` 静态结构，布局和堆对象相同：16 字节头加值。
+- 头的强计数初值为 `IMMORTAL`（1<<62）。克隆和释放照常增减，计数永远不会归零，所以映像对象从不被释放。不另设区段标记，`Rc` 语义不变，也不引入 GC，与 §1 的无 GC 决定一致。
+- 句柄 `__Obj::image(&'static T)` 是 `const fn`，因此在常量求值中可用，映像对象之间的引用、视图和镜像都能直接写成常量。
+- 身份哈希仍用头第二个字的 `IMAGE_HASHED` 标记，不需要按地址区间判定。
+
+结论：永久区就是 Rust 静态区本身。S7 不需要新的句柄形态，§3.3 的乙方案按此落地。
+
+#### 5.10.2 设计（f87c343d）
+
+| 原启动期动作（§5.5.5） | 零拷贝终态 |
+|---|---|
+| 静态字段初值经 `__si_set_*` 写入 | 声明层 `#[image_static = "sym"]` 只声明外部静态（宏发 `__STATIC_TY_<类>_<字段>` 类型别名和 `extern "Rust"` 块）。根门面以常量初值定义：`#[unsafe(export_name = sym)] pub static __IS_n`，每个字段一个静态。定义由保活块 `IMAGE_STATICS_k` 经启动函数 `black_box` 引用，保证被链接。符号为 `__rava_image_static_` 加转义后的类名和字段名 |
+| `__boot_initialized()` 逐类置完成态 | `#[boot_initialized = true]` 让构建期初始化类的 `CLINIT` 状态初值即为完成态（`__PrimCell::from_bits(3)`）；`gil::clinit_done` 另查映像表 `build_time` |
+| 接口视图链接 | 常量 `__IfaceRef::image(obj, &img.value as &dyn X__VTable)`；接口实现块由 `ClassEmission.iface_views` 登记 |
+| 数组视图链接（元素类型不符） | 常量 `__ImageArr::<Object, ()>::view(obj)`（协变擦除视图，`const fn`） |
+| Class 镜像登记（`rt::mirror`）与 memo 写入 | 镜像是物化的映像对象：求值器给镜像写 `Class.name`（清单 `vm_fields.class_name`），memo 并入字段。镜像表 `IMG_MIRRORS_k` 按键有序，`Class.forName` / `getPrimitiveClass` 先查表 |
+| 字符串驻留（`rt::intern`） | `IMG_STRINGS_k` 按 UTF-16 内容有序，`String.intern` 先查表。内容随宿主改写的串不入表 |
+| VM 模块登记（`rt::define_module`） | `IMAGE_TABLES.modules` 常量；`Module` 的 VM 模块表首次访问时以它为初值 |
+
+- 启动序列：映像表以链接期符号 `__rava_image_tables` 导出，运行期直接按符号查表，不登记（3cb588d7，见 §5.10.5）→ VM 单元 → 绑定初始线程 → 残差（只剩没有常量形态的槽：`SlotTy::Other` 字段和静态）→ 占位对象槽 → 分段残差 → 宿主改写 → 重定位与其他步骤。
+- 大表每块 1024 项，各成一个静态，运行期分块二分查找，满足 java_base 编译峰值约束（不出现巨型静态）。
+- 旧路径 `rt::mirror` / `intern` / `define_module`、静态初值 setter、`__boot_initialized`、链接表 `links` 已一并删除，不保留双路径。
+
+#### 5.10.3 基线实测（服务器 jp1，Linux JDK 21，`scripts/boot_image_measure.sh`，缺省档）
+
+| 口径 | 9215350f（作业 zc-base2-9215350f）HelloWorld / DeepCopy | c249cdec（作业 zc-base3-c249cdec）HelloWorld / DeepCopy |
+|---|---|---|
+| 转译墙钟 / 峰值 RSS | 120 s / 2.45 GB；925 s / 7.88 GB | 122 s / 2.52 GB；973 s / 8.35 GB |
+| `boot_image.rs` | 12.23 MB / 50,143 行；12.53 MB / 51,716 行 | 12.08 MB / 49,324 行；12.99 MB / 54,009 行 |
+| 编译总墙钟（crate_mem_profile） | 309 s；345 s | 310 s；356 s |
+| 门面 `java_base` 编译峰值 / 墙钟 | 1639 MB / 56 s；1720 MB / 60 s | 1632 MB / 57 s；1769 MB / 60 s |
+| `java_base_decl` 峰值 | 4806 MB；5308 MB | 4761 MB；5274 MB |
+| 缺省档二进制（含调试信息） | 506,742,800 B；556,592,832 B | 501,844,056 B；553,692,264 B |
+| `.text` / `.data.rel.ro` / `.data` | 146.1 / 8.07 / 3.58 MB；159.9 / 8.95 / 3.70 MB | 145.2 / 8.01 / 3.55 MB；159.4 / 8.90 / 3.77 MB |
+| 整进程墙钟中位数（30 次） | 195.6 ms；304.1 ms | 195.2 ms；313.8 ms |
+| release 档 | 用户 crate 链接 OOM（jp1 上限 11.9 GB），无数据 | 同左 |
+
+说明：
+- 这里的缺省档是未优化的开发档，整进程墙钟约 195 ms，大头不在映像装载。≤1 ms 门槛针对 `__boot_image_start` 本身，须按 §5.5.5 用 uprobes 单独测；本脚本只给整进程对照。
+- release 档在 jp1 上 fat LTO 链接 OOM（与本线无关，基线同样失败），体积对照因此按缺省档的 `.text` / `.data*` 分项比较。
+
+#### 5.10.4 进展与恢复入口（2026-10-09 19:30，6 小时上限到点）
+
+- 提交：
+  - f87c343d：零拷贝主体（数据形态、发射、启动序列、删旧路径）。三步互相依赖，合为一个提交，不留双路径。
+  - a1264f66：测量脚本 scratch 路径修正。
+  - 5a405015：`JArray::__image_view` 加 `T: 'static`。
+  - 7a45058f：合并 main c249cdec。
+- 服务器编译：
+  - zc-meas-a1264f66：HelloWorld 发射成功，`boot_image.rs` 12.63 MB / 48,870 行；2065 个映像静态，4 个数组视图，1021 处接口常量。`java_base_decl` 只有 1 处错误 E0310（`array.rs` 的 `__image_view`），已由 5a405015 修复。
+  - zc-chk1-a1264f66：确认该错误是 `cargo check --keep-going` 下的唯一错误。依赖 decl 的 crate（各 body 层、门面）尚未检查到。
+  - **zc-chk2-5a405015**：HelloWorld scratch 全工作区 `cargo check --keep-going` 零错误（decl、各 body 层、门面 `boot_image.rs`、用户层），仅 1 条既有警告（`pc_map.rs:99` 函数项转整数）。前述的门面别名可见性、常量视图、接口 vtable 路径、`ImageTables` 的 `Sync` 均已通过类型检查。
+- **续作入口**：
+  1. （类型检查已过，5a405015）合并 main 后的头上可复跑检查作业确认；，命令同 zc-chk2：`rava build HelloWorld --stop-after emit --clean`，然后在 scratch 里 `cargo check --keep-going --message-format short`，取回 `build/zc/check.txt`。运行期风险仍待第 2 步验证：
+     - 门面对 `crate::<模块>::__STATIC_TY_*` 别名的可见性；
+     - `__ImageArr::view` 的常量求值；
+     - `&dyn X__VTable` 接口路径；
+     - `rt::ImageTables` 的 `Sync`；
+     - 驻留串 UTF-16 字节序。
+  2. 零错误后，用 `scripts/boot_image_measure.sh` 在新头上测量 HelloWorld / DeepCopy，与上表 c249cdec 列对照：
+     - 门面 `java_base` 峰值 ≤ 约 1.6 GB（基线 1632 / 1769 MB）；
+     - `.text + .data*` 增量 ≤ +5%；
+     - 运行输出一致；
+     - 整进程墙钟不劣化；
+     - 另以 uprobes 测 `__boot_image_start` ≤ 1 ms。
+  3. 单测 closure / emit / input；抽查 HelloWorld、CollectorsDemo、DeepCopy、TestJcaSasl；`scripts/seed_check.sh HelloWorld`。
+  4. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段，生成代码里仍以注释占位）与 S6 标准流（`System.out/err/in` 手写侧状态）未做，做法见 §5.5.5「未完成」2、3。残差现状：HelloWorld 启动序列只剩 `File.FS` 一处静态残差写入，外加宿主改写和重定位步骤。
+
+#### 5.10.5 验证与实测（2026-10-10，头 669365cf）
+
+**本轮修复**
+- 3cb588d7：映像表改为链接期符号。
+  - 根门面 `#[unsafe(export_name = "__rava_image_tables")] pub static IMAGE_TABLES`（常量 `IMAGE_TABLES_SYMBOL`）。
+  - 运行期 `image_rt` 以 `extern "Rust" { #[link_name] static IMAGE_TABLES }` 直接查表。
+  - 删除 `OnceLock` 与 `rt::install`。启动序列不再做登记，也就不存在「首次查找早于登记」的时序问题。保活由启动函数的 `black_box((&IMAGE_TABLES, &IMAGE_STATICS_k…))` 承担。
+- 3cb588d7：驻留查找。
+  - `String.__interned` 先查运行期驻留表，未命中才二分映像表 `image_string`，结果回填运行期表，所以同一字面量只付一次二分。
+  - 二分比较 `__units_cmp` 逐码元读取 Latin-1 / UTF-16，不分配。
+  - 排序口径：生成端按 `Vec<u16>` 排序，运行期按 `[u16]` 切片比较，二者一致。镜像键两端都按 `str` 字节序。
+- 56390b53：`array/obj.rs` 的辅助文件改回只用 `use super::*`，修复 `runtime_helpers_follow_convention`；问题来自 f87c343d。
+- 3cb588d7 / 669365cf：测量脚本。
+  - `boot_probe` 用 tracefs `uprobe_events`（p/r 探针按文件偏移注册，只依赖免密 sudo，用后即删）计 `__boot_image_start` 入口到返回。
+  - 参数为可执行文件时只探测。
+  - `MEASURE_RELEASE=0` 跳过 release 档。
+
+**测量**（jp1，作业 zc-meas-3cb588d7，缺省档，对照 §5.10.3 的 c249cdec 列）
+
+| 口径 | HelloWorld 基线 → 零拷贝 | DeepCopy 基线 → 零拷贝 |
+|---|---|---|
+| 转译墙钟 / 峰值 RSS | 122 s / 2.52 GB → 121 s / 2.56 GB | 973 s / 8.35 GB → 974 s / 8.66 GB |
+| `boot_image.rs` | 12.08 MB / 49,324 行 → 13.09 MB / 50,846 行 | 12.99 MB / 54,009 行 → 14.06 MB / 54,331 行 |
+| 编译总墙钟 | 310 s → 317 s | 356 s → 352 s |
+| 门面 `java_base` 峰值 / 墙钟 | 1632 MB / 57 s → **1610 MB** / 69 s | 1769 MB / 60 s → **1779 MB** / 80 s |
+| `java_base_decl` 峰值 | 4761 → 4745 MB | 5274 → 5352 MB |
+| 缺省档二进制 | 501.8 → **497.3 MB（−0.9%）** | 553.7 → **548.9 MB（−0.9%）** |
+| `.text` / `.data.rel.ro` / `.data` | 145.2 / 8.01 / 3.55 → 143.3 / 8.13 / 3.96 MB（合计 −0.9%） | 159.4 / 8.90 / 3.77 → 157.3 / 9.04 / 4.22 MB（合计 −0.9%） |
+| 运行输出 | 3 行，rc=0 | 27 行，rc=0 |
+| 整进程墙钟中位数（30 次） | 195.2 → **178.3 ms（−8.7%）** | 313.8 → **291.8 ms（−7.0%）** |
+| `__boot_image_start`（uprobe，10 次中位数） | **156.4 ms**（min 153.9 / max 171.5，n=10；作业 zc-probe4-669365cf） | **176.3 ms**（min 172.4 / max 179.4，n=10） |
+
+- **启动 ≤ 1 ms 未达到**：缺省开发档下，`__boot_image_start` 本身耗时 156 ms（HelloWorld）/ 176 ms（DeepCopy），分别占整进程墙钟的 88% / 60%。探针在启动函数入口与返回处成对触发，量的是函数本身。这说明零拷贝虽然删掉了逐槽写入，启动序列里剩下的 VM 单元、初始线程、残差、宿主改写与重定位步骤在未优化代码下仍是主要成本。原因定位用 perf 采样（作业 zc-prof-669365cf，kr2，取回 `build/zc/self.txt` / `children.txt`），该作业在 6h 上限前仍在 kr2 排队，热点结论待取回后补入续作 0。
+  - **热点（zc-prof-669365cf，kr2，HelloWorld 开发档，10-10 取回）**：整进程 87% 在 `lang_start` 之下。① 约 17% 为一次性解码行表与 pc 映射（某 `OnceLock` 初始化内，`meta_codec::leb128` 自身 9.1%、`Vec::push` 3.3%、`pc_maps` 解码 1.5%）——启动路径上有栈遍历触发点（疑查调用者类或填异常栈，未确认）；② 约 16% 缺页、约 7% 动态链接器重定位，`.rela.dyn` 24.8 MB，主要是映像常量中的指针在 PIE 下的重定位；③ 其余为残差路径上翻译后的 Java 代码（如 `StringLatin1.compareToCI`）与原子计数。续作方向：pc 映射按方法按需解码或构建期编成定长格式，并消除启动路径上的栈遍历；映像改非 PIE 链接或消除映像常量的指针重定位；残差进一步常量化。原始报告 `cluster_results/job/zc-prof-669365cf/01/build/zc/self.txt`、`children.txt`。
+- 体积：缩小 0.9%，满足 ≤ +5%。`.data` 增加约 0.4 MB（映像静态的常量初值），`.text` 减少约 2 MB（删掉了启动期逐槽写入的代码）。
+- 门面峰值：HelloWorld 1610 MB，与基线持平。DeepCopy 1779 MB，比基线 1769 MB 高 10 MB（+0.6%），超出约 1.6 GB 的目标；但基线本身已在 1.6 GB 以上，零拷贝没有带来实质增长。门面墙钟增加 12 / 20 s，来自常量求值与大静态。若要把 DeepCopy 压到 1.6 GB 以下，需要把门面的映像静态分到多个 crate（与 decl / body 分层同法），列为续作。
+- release 档：jp1（11.9 GB）上 fat LTO 链接 OOM，与基线相同，本轮跳过。
+
+**正确性**
+- 抽查 zc-spot-3cb588d7（kr2）：HelloWorld、CollectorsDemo、DeepCopy 全部 PASS。
+- TestJcaSasl 不在语料中，取自 `scripts/closure_composition_job.sh`，以作业 zc-jca-3cb588d7 跑：stdout（true / 20 / true）、未捕获 `SaslException` 的消息和退出码 1 都与 JDK 一致。rava 不打印栈帧行，属既有行为。
+- 单测：
+  - zc-ut2-56390b53（kr2，`--no-fail-fast`）：closure 237、emit 85、`jdk_literal_lint` 2、input 21，全部通过。
+  - zc-ut-3cb588d7（jp1）：driver `archive_emit_cli` 通过；`closure_cli` 12 例通过，`param_string_constants_fold_switch` 失败（已知）。`closure_independent_of_hash_seed` / `closure_independent_of_order` 跑了 3 小时仍未结束，为给测量让出机器被中止，无结果；order 例的 DeepCopy 派发差异是既有已知问题，见 annot-sig 文档续作 6。
+- `scripts/seed_check.sh HelloWorld`（jp1）：`seed-diff-lines=0`。
+
+**未解决 / 续作**
+0. 启动 ≤ 1 ms：HelloWorld 的 `__boot_image_start` 实测 156 ms（缺省档）。按 perf 热点逐项消掉：没有常量形态的残差改为常量，构建期能定的宿主改写钉值，重定位并入常量；然后用 `scripts/boot_image_measure.sh <out> <可执行文件>` 复测。注意 `rava build` 必须带 `--keep-artifacts`，否则运行后会删除可执行文件。release 档需在内存足够的机器上复测。
+1. DeepCopy 门面峰值 1779 MB，超出约 1.6 GB 的目标（基线 1769 MB 也超出）。做法：把门面的映像静态（`__IS_n` / 映像对象 / 表分块）按块数切到多个 crate，门面只留表头和启动序列。
+2. `closure_cli` 的 hash_seed / order 两例运行时间超过 3 小时，需单独作业复跑，复跑时不要与测量同机。
+3. D5 残差区段（initPhase1 / initPhase3 的 jnu 编码段）与 S6 标准流（`System.out/err/in`）未做，做法见 §5.5.5「未完成」2、3。
+4. release 档体积 / 墙钟：jp1 内存不够，需在 ≥ 16 GB 的机器上测。
 
 ## 6. 分步计划（每步单独提交，验收数字为硬门槛）
 
@@ -1589,6 +1771,7 @@ D9 消掉了 `newPrintStream` 一支：形参 open 时，编码名可为 null �
 - **顺序**：C4 冻结解除后，先在服务器上把现有实现（3e309fec）编译、跑通，排除正确性问题；再单独一步改零拷贝；最后实测体积（≤+5%）与启动装载（≤1 ms）。
 - 不采纳「实测达标即接受现状」的备选。
 - §5.5.5 其余待决项（2、4、5、7–15）按代理实现认可；D5 物化与 S6 标准流随零拷贝一步排期。
+- **实施（2026-10-09，§5.10）**：静态字段初值、接口和数组视图、Class 镜像、驻留串、VM 模块表、构建期初始化状态全部改为常量。启动期链接、镜像登记、驻留、模块登记、静态初值写入均已删除。S7 永久区定稿为 Rust 静态区加常驻计数头（§5.10.1）。
 
 ### 8.4 U12 / U13 / U14 与去除无映像回退（已定，2026-10-08）
 

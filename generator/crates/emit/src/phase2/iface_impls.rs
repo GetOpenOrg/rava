@@ -142,6 +142,8 @@ fn object_args(n: usize) -> Vec<String> {
 #[derive(Default)]
 struct ImplTexts {
     blocks: Vec<String>,
+    /// 有 impl 块的接口（binary name）
+    views: Vec<String>,
     /// (泛型头, 源类型, 目标擦除接口载体)
     upcasts: Vec<(String, String, String)>,
 }
@@ -252,6 +254,7 @@ fn recv_impls(
             ctx.ty.derived(&iface_bin, "__VTable");
             let body: Vec<String> = decls.iter().flat_map(|d| d.split('\n')).map(|l| format!("    {l}")).collect();
             out.blocks.push(format!("impl{recv_generics} {iface_short} for {recv_ty} {{\n{}\n}}", body.join("\n")));
+            out.views.push(iface_bin.clone());
         }
         let erased_iface_ty = rust_type(&iface_short, &object_args(iface_params.len()));
         let up_g = if recv_is_iface || recv_params.is_empty() { String::new() } else { format!("<{}>", recv_params.join(", ")) };
@@ -304,10 +307,11 @@ pub fn resolve_interface_impls(ctx: &EmitCtx<'_>, state: &mut ProjectState, ems:
             Some(ci) if wants_impls(ctx, recv_bin, recv) => recv_impls(ctx, &mut reqs, ems, recv, ci),
             _ => ImplTexts::default(),
         };
-        (apply_impls(&recv.text, &texts), reqs)
+        (apply_impls(&recv.text, &texts), texts.views, reqs)
     });
-    for (i, (text, reqs)) in results.into_iter().enumerate() {
+    for (i, (text, views, reqs)) in results.into_iter().enumerate() {
         ems[i].text = text;
+        ems[i].iface_views = views;
         state.inherited_requests.extend(reqs);
     }
 }

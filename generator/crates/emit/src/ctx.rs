@@ -228,6 +228,11 @@ impl<'a> EmitShared<'a> {
         self.input.registry.get(name)
     }
 
+    /// 方法体出处类：注册表类，或根类（不入注册表，方法体按字节码翻译）
+    pub fn code_class(&self, name: &str) -> Option<&'a ClassInfo> {
+        self.class(name).or_else(|| self.input.root.as_ref().filter(|r| r.name() == name))
+    }
+
     /// 类的补充属性（LVT、注解原始字节、Deprecated 等；按需二次解析并缓存）
     pub fn extras(&self, cls: &str) -> Arc<ClassExtras> {
         if let Some(x) = self.extras.read().unwrap_or_else(|e| e.into_inner()).get(cls) {

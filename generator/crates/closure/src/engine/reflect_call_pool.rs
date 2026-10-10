@@ -23,7 +23,7 @@ impl Engine<'_> {
 
     /// 值 x 已被通道 ch 池中的 open 涵盖：x 不是 lambda / 手写实现对象，抽象对象 / 数组分配点须已逃逸（未逃逸的只经
     /// 字节码可见引用读写，open 视图碰不到它），且属于池中某 open 类型。三个条件随分析只增不减，一旦成立永远成立
-    fn rcall_covered(&mut self, x: u32, opens: &[u32]) -> bool {
+    pub(super) fn rcall_covered(&mut self, x: u32, opens: &[u32]) -> bool {
         let synthetic = self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x);
         let hidden = (self.objs.contains_key(&x) || self.arrays.contains_key(&x)) && !self.escaped.contains(&x);
         !synthetic && !hidden && opens.iter().any(|&o| self.sub(x, o))

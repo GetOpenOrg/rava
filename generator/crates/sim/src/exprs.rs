@@ -48,23 +48,44 @@ pub fn clone_plain(e: Expr) -> SimResult<Expr> {
     call2(CLONE, Vec::new(), "clone", vec![e])
 }
 
-/// `From::from(v)`
+/// `<T as ::std::default::Default>::default()`：目标类型确定的空引用 / 缺省值
+pub fn typed_default(target: Type) -> SimResult<Expr> {
+    let trait_ = Path { global: true, segments: vec![seg("std", Vec::new())?, seg("default", Vec::new())?, seg(DEFAULT, Vec::new())?] };
+    Ok(Expr::Call {
+        func: FnPath::Qualified { self_ty: Box::new(target), trait_: Some(trait_), rest: vec![seg("default", Vec::new())?] },
+        args: Vec::new(),
+    })
+}
+
+/// `From::from(v)`；`v` 为无类型缺省值时原样返回（`From::from(Default::default())` 源类型不可推断，E0283）
 pub fn from_call(e: Expr) -> SimResult<Expr> {
+    if is_default(&e) {
+        return Ok(e);
+    }
     call2(FROM, Vec::new(), "from", vec![e])
 }
 
-/// `Object::from(v)`
+/// `Object::from(v)`；`v` 为无类型缺省值（某引用类型的 null）时即 Object 的 null
 pub fn object_from(e: Expr) -> SimResult<Expr> {
+    if is_default(&e) {
+        return Ok(Expr::Lit(Lit::Null));
+    }
     call2(ir::anchors::OBJECT, Vec::new(), "from", vec![e])
 }
 
-/// `Into::<T>::into(v)`
+/// `Into::<T>::into(v)`；`v` 为无类型缺省值时取目标类型的缺省值
 pub fn into_call(target: Type, e: Expr) -> SimResult<Expr> {
+    if is_default(&e) {
+        return typed_default(target);
+    }
     call2(INTO, vec![target], "into", vec![e])
 }
 
-/// `<Target as ::std::convert::From<Src>>::from(v)`
+/// `<Target as ::std::convert::From<Src>>::from(v)`；`v` 为无类型缺省值（null 流经转换）时取目标类型的缺省值
 pub fn qualified_from(target: Type, src: Type, e: Expr) -> SimResult<Expr> {
+    if is_default(&e) {
+        return typed_default(target);
+    }
     let trait_ = Path {
         global: true,
         segments: vec![seg("std", Vec::new())?, seg("convert", Vec::new())?, seg(FROM, vec![src])?],
@@ -311,5 +332,26 @@ pub fn maybe_downcast(e: Expr, ty: &RsType, env: &dyn SimEnv) -> SimResult<Expr>
         Ok(unchecked_cast(e, to_ir_type(ty, env)?, false))
     } else {
         Ok(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> Type {
+        named("Foo", vec![object_type().unwrap()]).unwrap()
+    }
+
+    /// 无类型缺省值（null）经 Object 边界 / 转换：不得发射 `Object::from(Default::default())`
+    /// 一类源类型不可推断的形态（回归：NormalDistribution `AbstractPipeline` 局部 null 存入，E0283）
+    #[test]
+    fn default_through_conversions_stays_inferable() {
+        assert_eq!(object_from(default_value().unwrap()).unwrap(), Expr::Lit(Lit::Null));
+        let typed = typed_default(target()).unwrap();
+        assert_eq!(qualified_from(target(), object_type().unwrap(), default_value().unwrap()).unwrap(), typed);
+        assert_eq!(qualified_from(target(), Type::Infer, default_value().unwrap()).unwrap(), typed);
+        assert_eq!(into_call(target(), default_value().unwrap()).unwrap(), typed);
+        assert_eq!(from_call(default_value().unwrap()).unwrap(), default_value().unwrap());
     }
 }

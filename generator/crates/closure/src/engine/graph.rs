@@ -224,6 +224,11 @@ impl FlowGraph {
         self.iter().count()
     }
     /// 全部流边按源节点展开（诊断 / 观测）
+    /// 节点所属代表的序号（诊断）
+    pub(super) fn rep_of(&self, n: &Node) -> Option<u32> {
+        let &i = self.ids.get(n)?;
+        Some(self.rep[i as usize])
+    }
     /// 序号对应的节点
     #[inline]
     pub(super) fn node_at(&self, i: u32) -> &Node {

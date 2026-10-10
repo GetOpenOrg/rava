@@ -151,16 +151,17 @@ pub struct Analysis {
 
 impl Analysis {
     /// 返回值只来自形参（恒等 / 透传方法，如 requireNonNull）：返回这些形参序号。
-    /// 调用点据此把实参直接接到结果，不经上下文无关的返回节点汇合
+    /// 调用点据此把实参直接接到结果，不经上下文无关的返回节点汇合。
+    /// 尚无返回路径（被调方按「不返回」⊥ 答复、其后代码不可达）时为空集：⊥ 不是「汇合」——
+    /// 若答 None，调用点会接上返回节点的汇合边，返回路径出现、摘要转为透传后该边撤不回，
+    /// 调用点是否汇合全体调用方的实参取决于它是否先于定论处理（计划 2026-10-05 §5.8.6）
     pub fn returned_params(&self) -> Option<Vec<u16>> {
         if self.conservative {
             return None;
         }
         let mut ps: BTreeSet<u16> = BTreeSet::new();
-        let mut any = false;
         for (_, e) in &self.events {
             let Event::Return(v) = e else { continue };
-            any = true;
             match v {
                 V::Null => {}
                 V::Ref { .. } => {
@@ -172,6 +173,6 @@ impl Analysis {
                 _ => return None,
             }
         }
-        any.then(|| ps.into_iter().collect())
+        Some(ps.into_iter().collect())
     }
 }

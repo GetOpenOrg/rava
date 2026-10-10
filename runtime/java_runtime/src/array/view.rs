@@ -60,23 +60,32 @@ pub(super) fn covariant_view_of<T: Clone + Default + From<Object> + Into<Object>
 /// 边界按 T 重建（wrapper 经擦除路径，保持运行时类），写入在源数组的协变视图闭包
 /// 做存储检查（ArrayStoreException）。对象标识与源数组相同。
 pub(super) fn erased_object_view<T: 'static>(origin: Object) -> JArray<T> {
-    JArray::covariant(CovariantView {
-        origin,
-        get: |o, i| o.array_load_object(i),
-        set: |o, i, v| o.array_store_object(i, v),
-        // 原子读-改-写：源数组的 Object 元素视图（`__view_into` → 源 Own 存储的协变视图，
-        // 其 update 在源存储写锁内完成）
-        update: |o, i, f| {
-            let unused = crate::sync_model::__unused_any();
-            let mut slot: Option<JArray<Object>> = None;
-            o.0.__view_into(unused, &mut slot);
-            match slot {
-                Some(view) => view.__update(i, f),
-                None => Err(crate::error::JvmError::class_cast(format!(
-                    "{} 不是引用元素数组", o.0.__class_name()))),
-            }
-        },
-    })
+    JArray::covariant(erased_view(origin))
+}
+
+/// 源数组的 Object 级协变视图本体（常量求值可用：映像中形态不一致的数组引用即此视图的映像对象）
+pub(super) const fn erased_view(origin: Object) -> CovariantView {
+    CovariantView { origin, get: erased_get, set: erased_set, update: erased_update }
+}
+
+fn erased_get(o: &Object, i: i32) -> crate::error::Result<Object> {
+    o.array_load_object(i)
+}
+
+fn erased_set(o: &Object, i: i32, v: Object) -> crate::error::Result<()> {
+    o.array_store_object(i, v)
+}
+
+/// 原子读-改-写：源数组的 Object 元素视图（`__view_into` → 源 Own 存储的协变视图，
+/// 其 update 在源存储写锁内完成）
+fn erased_update(o: &Object, i: i32, f: &mut dyn FnMut(Object) -> Option<Object>) -> crate::error::Result<Object> {
+    let unused = crate::sync_model::__unused_any();
+    let mut slot: Option<JArray<Object>> = None;
+    o.0.__view_into(unused, &mut slot);
+    match slot {
+        Some(view) => view.__update(i, f),
+        None => Err(crate::error::JvmError::class_cast(format!("{} 不是引用元素数组", o.0.__class_name()))),
+    }
 }
 
 // ── 自有存储源数组的协变视图元素访问（`covariant_view` 按元素类型 T 单态化的函数指针）──

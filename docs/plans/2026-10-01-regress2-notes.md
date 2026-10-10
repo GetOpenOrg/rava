@@ -3,7 +3,9 @@
 分支 regress2（基于 rust-closure-analyzer@f685c7b5）。复现与验证均单例运行。
 
 > 状态（2026-10-02）：§1–§9 ✅ 6c7eb831；§10.1a 栈帧来源统一 ✅ 已合入集成分支 be1b97be（frames-unify bf91f075）。
-> 遗留：Object.wait(J/JI) 手写帧行号 -1、过渡类手写 `<init>` 不成帧 ◀── C1d-a a2（过渡手写删除）。
+> 遗留（2026-10-09 复核，§10.1b，作业 r2-wait-a79e2b60）：过渡类手写 `<init>` 不成帧 ✅ 已随过渡手写删除消失；
+> Object.wait 帧 ⏳ 仍在——根因不是帧登记，而是根类 `wait()` / `wait(J)` / `wait(JI)` 有字节码却整体手写，
+> 终态为根类非 native 方法按字节码翻译（用户已定，object-bytecode 分支实施中，见 §10.1b-实施；e2e 复验未完）。
 
 ## 1. TestForNameInit —— 已修
 
@@ -174,6 +176,78 @@
 - 边界用例：06_exceptions/TestNativeFrameTrace（sleep0 native 帧、延迟 lambda、catch 区段）、
   62_reflection/TestStackWalkerLines（直接 / 递归 / lambda / default / 继承 / 构造器 / clinit 帧的 StackWalker 行号）、
   06_exceptions/TestObjectNativeFrames（Object.clone / notify / notifyAll native 帧），expected 均为 JDK 21 实测。
+
+### 10.1b regress2 遗留复核（2026-10-09，regress2-rest）
+
+作业 r2-wait-a79e2b60（us1，ref a79e2b60，参考 JDK jdk-21.0.11+10）：TestNativeFrameTrace / TestObjectNativeFrames /
+TestStackWalkerLines 通过；新增边界用例 06_exceptions/TestObjectWaitFrames（expected 为参考 JDK 实测）失败。
+
+- **② 过渡类手写 `<init>` 不成帧 —— ✅ 已消失**。证据：`closure.toml [vm_boundary]` 只剩 `java/lang/Class`
+  （其 `<init>` 只由 VM 调用，Java 代码不可达，不出现在任何栈上）；`runtime/` 下 `#[jvm_boundary]` 0 处；
+  `non_native_overrides` 0（09-28 起）；作业中 4 个 scratch 内 `// [meta] #[java_method(name = "<init>"` 均为 0 处
+  （手写 `<init>` 的唯一登记形态，`class_writer/methods.rs` 对 `<init>` 不出签名注释即不成帧的分支已无输入）。
+- **① Object.wait 帧 —— 仍在，且不是「行号哨兵」问题**。JDK 21 的 `wait()` / `wait(J)` / `wait(JI)` **不是 native**：
+  `wait()` → `wait(0L)`（Object.java:339）；`wait(J)` 经 `Blocker.begin()` 调 **native `wait0(J)`**（:366）、
+  捕获 InterruptedException 时对虚拟线程清中断、finally `Blocker.end`；`wait(JI)` 校验纳秒（:476 / :480 抛 IAE）后调
+  `wait(J)`（:488）。JDK 帧形态为 `wait0 (Native Method)` + 各 `wait` 重载的字节码行号帧（见 expected）。
+  现状：根类手写体把三个重载各写成一个 fn（`object.rs` 的 ObjectVTable 默认方法与 `object_impl.rs` 的固有方法），
+  按非 native 记 -1，产出单帧 `Object.wait Object.java:-1`，少 `wait0` 帧与重载间的嵌套帧。
+  改哨兵为 -2 也不对：JDK 的 native 帧是 `wait0`，`wait` 帧有真实行号，只能从 `wait` 自己的字节码得到。
+  另外手写体跳过了 `Blocker.begin/end`（虚拟线程在 `wait` 期间钉住载体时对 ForkJoinPool 的补偿），
+  与 VirtualThread 字节码翻译终态（2026-10-03 定）语义不一致——帧只是同一缺口的可观测面。
+  handwritten-boundary.md 二节「`Object.wait` / `notify` 是 native」的表述不准，已更正。
+- **终态（待用户定）**：根类按手写边界规则逐方法划分——`ObjectVTable` 对象模型仍是运行时基础设施，但根类**有字节码的
+  非 native 方法**（`wait()` / `wait(J)` / `wait(JI)`、`equals`、`toString`、`finalize`）按字节码翻译，手写只剩 ACC_NATIVE
+  （`getClass` / `hashCode` / `clone` / `notify` / `notifyAll` / `wait0`）。帧随之自然对齐（翻译体带 `// line N`，
+  `wait0` 按 native 登记为 -2），不需要任何帧登记特判。需要的通用机制：
+  1. 生成器为根类发射翻译体：根类无 `java_class!` 生成文件，翻译体落为 `invokespecial` 落点同形的自由函数
+     `Object__<m>_base<T: ObjectVTable + ?Sized>(this: &T, ..)`（与现有 `Object__toString_base` 等同一命名），
+     放根类目录下的生成文件；`impl Object` 固有方法与 ObjectVTable 默认方法只做转发（不成帧，同派发外壳）；
+  2. 行表：根类翻译体按生成文件的 `// line N` 标记成表，`root_line_registration` 只登记 native；
+  3. 闭包：根类非 native 方法改按字节码建模（当前按手写体扫描），`Blocker` / `CarrierThread` 分支的折叠依赖
+     「非导出包类不可由用户扩展」，非虚拟线程程序的闭包应不增长（验收：HelloWorld / DeepCopy 类集不变大）；
+  4. 根类非 native 手写方法计入 raw-audit（现不计数，是隐形手写），终态 0。
+  量级：closure / instr / emit / runtime 四处，非小修；涉及根类模型，按授权范围先报用户再实施。
+
+#### 10.1b-实施（object-bytecode，2026-10-09，用户已定终态）
+
+与上面草案的差异：翻译体不做成泛型 `_base<T>`，而是**以根类句柄为接收者的自由函数**
+`Object__<fn>_body(this: &Object, ..)`——根类字节码里的 `this` 是 Object，方法体生成器对根类接收者走 bare-Object
+固有方法路径（`this.getClass()?` / `this.hashCode()?` / `this.wait0(..)?`），与生成类的 `let this = self;` 同型。
+各对象类型需要能给出「自身的 Object 句柄」，为此 `ObjectVTable` 加 `__object()`（缺省 None）。
+
+- **闭包**（`closure/src/engine/facts/kinds.rs`）：根类方法按自身字节码分类——native → 手写，无码 → 抽象，其余 → 字节码。
+- **输入 / 上下文**：`EmitInput.root` 携带根类 `ClassInfo`（根类仍不入注册表）；`EmitCtx::code_class` 在注册表未命中时回落根类，
+  方法体生成器（`method_bodies.rs`）与行表的行号查询都用它。
+- **发射**（新模块 `emit/src/project/root_bodies.rs`）：根类全部非 native 有码实例方法（构造器 / 类初始化除外）各生成一个
+  `Object__<fn>_body`；在档案调用链上的按字节码翻译，链外的生成同签名 `panic!("stub: ..")` 存根（运行时契约总要链接到
+  这组符号）。命名与调用侧同源（`root_bodies::rust_name`：根类重载取描述符后缀名，前提是该名在手写 API 名面）。
+  落盘与生成类拆层同构：方法体放首个实现 crate 的 `body/java/lang/object_body.rs`（`#[export_name]`），声明层同路径文件
+  放外部声明块（`#[link_name]`，符号由 `rava_macros_core::plan::free_fn_link` 求出，与宏拆层同一规则）——方法体引用的类
+  （`StringBuilder` 等）可能落在声明层上层段，不能直接放声明层底段。无实现 crate 时整体落声明层。生成期事实在第二阶段前并入。
+- **行表**：方法体文件头 `// [root_bodies] <类> <源文件>` 让 `line_tables::scan` 进入方法区模式（方法属性为注释形态
+  `// #[java_method(..)]`，第 0 列 `}` 结束方法区间）；`root_line_registration` 只登记根类 native 方法（`wait0` 记 -2）。
+- **运行时**：`ObjectVTable` 的 `equals` / `__to_string` / `wait` 族缺省体与 `Object__{finalize,equals,toString}_base`
+  转交翻译体（`__object()` 为 None 的非 Java 类载体——基本类型盒、`JvmRef`、lambda 载体、null 哨兵——保留载体语义）；
+  `java_class!` 宏的存储 impl 与数组对象应答 `__object()`（`Object::__from_storage` 引用计数加一取回同一对象）；
+  `object_impl.rs` 去掉 equals（含 String 内容比较捷径）/ toString / wait 族的手写近似，固有方法只做 null 检查与转交，
+  新增 native `wait0`。
+- **审计**：根类非 native 方法若未翻译（构造器体不是单条 return 时）计入 `non_native_overrides`；按构造当前为 0。
+- **验证记录**（JDK 21 参考构建 jdk-21.0.11+10）：
+  - ob-b-9873a830（jp2）：单测 `cargo test -p emit -p closure -p input` 全过；e2e 全挂 `E0432 unresolved import Blocker`——
+    声明层底段看不见上层段类，373a077b 改为声明层文件只用预导入、方法体导入只进实现层。
+  - ob-c-db41935c（jp2，合入 main c249cdec 后）：闭包 HelloWorld classes 1870（嵌套口径）/ 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（b74d2e7e 基线 3059 / 3304，均降）；14 例 e2e 同一编译错：翻译后 `equals` 体
+    `this == obj` 为 `&Object == Object` 无实现。d716bdc3 在 Object 基础设施（`object_ext.rs`）补引用形态同一性比较。
+    作业 6600s 超时，c249cdec 基线闭包未测出。
+  - ob-d-d716bdc3（us1）：闭包与 c249cdec 基线**完全相同**——HelloWorld classes 1870 / 3442、translate_code_classes 3022；
+    DeepCopy 2109 / 3730、3269（两侧逐项一致；JDK 21 `wait(J)` 的 Blocker 链未带入新类，无需收窄）。
+    6 例 e2e（TestObjectWaitFrames TestEqualsHashCode TestWaitNotify TestToStringThrows TestObjectNativeFrames
+    TestVirtualThread）复验在作业 6600s 上限内未跑完（run_tests 输出在其结束后才汇总，日志无 e2e 结果）——**e2e 未验证**。
+    续作：以 `--spot` 抽查（逐例落结果）复验 f30e17a5 起分支头，勿再与闭包对比串在一个 `--job` 里。
+  - 恢复入口：读上述日志；若仍有编译错，查 `build/jdk21/<test>/java_base_body_1/src/body/java/lang/object_body.rs`
+    对应行，修生成器（`emit/src/project/root_bodies.rs::free_fn` 接收者改写）或 Object 基础设施；全通过后补跑
+    TestNativeFrameTrace TestStackWalkerLines HelloWorld ObjectMethods TestContinuationPinned 抽查，再合入。
 
 ### 10.2 UTF8EncodeDecode —— 模块资源改由调用链字节码推导
 

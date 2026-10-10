@@ -150,15 +150,18 @@ impl<'a> Engine<'a> {
         if !delta.open.is_empty() {
             self.add_to(res, &TypeSet::open(rt));
         }
+        // 数组元素：各数组的元素节点经汇集节点流到结果（与逐数组接边同集合，见 `gather.rs`）。
+        // DMH 字段访问器的基址是对象 / 类镜像，不读数组元素
+        if gate != Gate::Handle {
+            let xs: Vec<u32> = delta.classes.iter().filter(|x| self.arrays.contains_key(x)).collect();
+            if !xs.is_empty() {
+                for p in PARITIES {
+                    self.gather_hw_read(s, p, &xs, res, rt);
+                }
+            }
+        }
         for x in delta.classes.iter() {
             if self.arrays.contains_key(&x) {
-                // DMH 字段访问器的基址是对象 / 类镜像，不读数组元素
-                if gate == Gate::Handle {
-                    continue;
-                }
-                for p in PARITIES {
-                    self.flow(Node::E(x, p), res, rt);
-                }
                 continue;
             }
             // 类镜像：同时是静态字段基址（staticFieldBase），读所指类的静态引用字段（所指未知按 open）与 Class 的实例字段。
@@ -292,20 +295,26 @@ impl<'a> Engine<'a> {
                 self.gather_hw_elems(s, i, p, ys, &targets);
             }
         }
-        for &y in ys {
-            // 写入目标：DMH 字段访问器经解释器的字段写入只落在对象 / 类镜像所指字段上，不写数组元素
-            match ws.get(i as usize) {
-                Some(Some(w)) if !(w.fields && self.site_gate(s) == Gate::Handle) => {}
-                _ => continue,
-            }
-            let t = self.arrays[&y];
-            let Some(c) = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1) else { continue };
-            let cid = self.id(&c);
-            let f = self.elem_filter(y, cid);
+        // 写入目标：DMH 字段访问器经解释器的字段写入只落在对象 / 类镜像所指字段上，不写数组元素
+        match ws.get(i as usize) {
+            Some(Some(w)) if !(w.fields && self.site_gate(s) == Gate::Handle) => {}
+            _ => return,
+        }
+        // 引用元素数组：写入值经汇集节点分发到各数组元素（与逐数组接边同集合，见 `gather.rs`）
+        let refs: Vec<u32> = ys.iter().copied().filter(|&y| self.elem_write_filter(y).is_some()).collect();
+        if !refs.is_empty() {
             for p in PARITIES {
-                self.flow(Node::W(s, i), Node::E(y, p), f);
+                self.gather_hw_write(s, i, p, &refs);
             }
         }
+    }
+
+    /// 写入数组 y 的元素时的流边过滤：分量类型（反射数组按分量精确类型）；基本类型元素数组为 None
+    pub(super) fn elem_write_filter(&mut self, y: u32) -> Option<u32> {
+        let t = self.arrays[&y];
+        let c = absint::component(&self.names[t as usize].clone()).filter(|c| c.len() > 1)?;
+        let cid = self.id(&c);
+        Some(self.elem_filter(y, cid))
     }
 
     /// 手写调用点 s 的读写口径：调用方是清单声明的方法句柄解释器时按 DMH 所指字段

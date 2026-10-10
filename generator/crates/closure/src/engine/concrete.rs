@@ -7,6 +7,7 @@
 //! - 不接抽象调用边。
 //! 任一组合失败（不可建模的指令 / native / 共享状态改写）即整个调用点回退抽象调用边；回退后不再撤回。
 //! 每组实参先冷后热各求值一次（内存缓存字段先写后读），轨迹取并；求值后撤销对映像的缓存写入。
+//! 冷求值兼写映像缓存与非映像缓存时插一次温求值（只撤销非映像缓存），映像缓存物化后按温 / 热之并入闭包。
 
 mod apply;
 mod boot;
@@ -44,8 +45,12 @@ use super::*;
 
 /// 具体上下文的类型名（方法克隆上下文取其类型序号）
 const CONCRETE_CTX: &str = "@concrete";
-/// 单个调用点的实参组合数上限
+/// 单个调用点的实参组合数上限（含形参的笛卡尔积）
 const COMBO_LIMIT: usize = 64;
+/// 只按接收者枚举（实例方法入口、无其他形参）时的接收者数上限：各接收者逐个独立求值、按 (入口, 镜像) 记忆，
+/// 代价随接收者数线性增长、无乘积膨胀，上限只防病态值集。散列表树化桶的键比较类查询以全部可比较键类型的镜像为
+/// 接收者（HelloWorld 实测 > 64 个），按 64 截断时整点回退抽象调用边，把泛型签名解析整棵树拉进闭包
+const RECV_LIMIT: usize = 4096;
 /// 诊断（`--flows @concrete`）列出的实参组合数上限
 const DIAG_COMBOS: usize = 64;
 
@@ -75,7 +80,7 @@ pub(super) struct Outcome {
     /// 映像状态的写入全部可物化进引导映像时（`[concrete] image_memo_fields`，见 `concrete/persist.rs`）：
     /// 各缓存片段与只按热求值的结果（运行期缓存已在映像中，执行的即热路径）
     alt: Option<Box<(Vec<persist::Frag>, Outcome)>>,
-    /// 不可物化的原因（诊断）
+    /// 不可物化的原因；可物化（alt 为 Some）时为运行期仍重算的非映像缓存（温求值，诊断）
     alt_why: Option<String>,
 }
 
@@ -137,7 +142,7 @@ impl<'a> Engine<'a> {
             }
             outs.push((c.clone(), r));
         }
-        // 镜像缓存可物化进引导映像的组合按热求值入闭包（运行期缓存已命中）
+        // 镜像缓存可物化进引导映像的组合按热（有温求值时温 / 热之并）入闭包（运行期缓存已命中）
         let mut why: Vec<Option<String>> = Vec::new();
         let mut hot: Vec<bool> = Vec::new();
         for (_, r) in &outs {
@@ -150,8 +155,9 @@ impl<'a> Engine<'a> {
                 (Some(a), _) => self.image_memo_prepare(&a.0).err(),
                 (None, w) => w.clone(),
             };
-            hot.push(w.is_none() && o.alt.is_some());
-            why.push(w);
+            let h = w.is_none() && o.alt.is_some();
+            hot.push(h);
+            why.push(if h { o.alt_why.clone() } else { w });
         }
         let image: Vec<Rc<str>> = outs
             .iter()
@@ -172,27 +178,38 @@ impl<'a> Engine<'a> {
             let Ok(o) = &*r else { continue };
             match o.alt.as_ref().filter(|_| h) {
                 Some(a) => {
-                    self.image_memo_apply(&a.0);
+                    self.image_memo_apply((m, off), &a.0);
                     self.concrete_apply(m, off, resolved, md, &a.1);
                 }
                 None => self.concrete_apply(m, off, resolved, md, o),
             }
         }
         // 诊断：缓存物化进映像的组合标「⇒映像」，未物化的附原因
+        // 未物化（按冷 / 热之并入闭包）的组合全部列出，物化的只列前 DIAG_COMBOS 组
+        let mut n_hot = 0;
         let shown: Vec<String> = combos
             .iter()
             .zip(why.iter().zip(&hot))
-            .take(DIAG_COMBOS)
+            .filter(|(_, (_, &h))| {
+                n_hot += usize::from(h);
+                !h || n_hot <= DIAG_COMBOS
+            })
             .map(|(c, (w, &h))| match (h, w) {
-                (true, _) => format!("{c:?}⇒映像"),
+                (true, Some(w)) => format!("{c:?}⇒映像（温：{w}）"),
+                (true, None) => format!("{c:?}⇒映像"),
                 (false, Some(w)) if w != "无缓存写入" => format!("{c:?}（并：{w}）"),
                 _ => format!("{c:?}"),
             })
             .collect();
-        let more = combos.len().saturating_sub(DIAG_COMBOS);
+        let more = combos.len() - shown.len();
         let line = format!("具体求值 {} 组实参：{}{}", combos.len(), shown.join(" "), if more > 0 { format!(" …（另 {more} 组）") } else { String::new() });
         self.concrete.diag.entry(site_name).or_default().insert(line);
         true
+    }
+
+    /// 调用点是否已回退抽象调用边
+    pub(super) fn concrete_fell_back(&self, w: (usize, u32)) -> bool {
+        self.concrete.fallback.contains(&w)
     }
 
     fn concrete_fallback(&mut self, m: usize, off: u32, site: String, why: String) -> bool {
@@ -206,8 +223,9 @@ impl<'a> Engine<'a> {
         let mut out: Vec<Vec<AK>> = vec![vec![]];
         if let Some(s) = recv {
             out = self.recv_keys(s)?.into_iter().map(|k| vec![k]).collect();
-            if out.len() > COMBO_LIMIT {
-                return Err(format!("接收者超过 {COMBO_LIMIT} 个"));
+            let limit = if md.params.is_empty() { RECV_LIMIT } else { COMBO_LIMIT };
+            if out.len() > limit {
+                return Err(format!("接收者超过 {limit} 个"));
             }
         }
         for (i, (p, v)) in md.params.iter().zip(args).enumerate() {
@@ -284,12 +302,17 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败。热求值的结果另记一份：缓存写入可物化进映像时按它入闭包
+/// 冷 / 热两次求值，轨迹与结果取并；任一次失败即失败。热求值的结果另记一份：缓存写入可物化进映像时按它入闭包。
+/// 冷求值同时写了映像缓存字段与非映像缓存（如别的镜像缓存字段）时，只撤销后者再求值一次（温）：运行期首次执行时
+/// 映像缓存已在、非映像缓存为空，执行的即温路径，此后为热路径；映像片段只取映像缓存字段，按温 / 热之并入闭包
 fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcome, String> {
     let mut out = Outcome::default();
     let mut hot = Outcome::default();
+    let img = !env.cfg().image_memo_fields.is_empty();
+    let mut partial = false;
     let r = (|| {
-        for pass in 0..2 {
+        let mut pass = 0;
+        while pass < 2 {
             vm.epoch += 1;
             vm.trace = Trace::default();
             vm.steps = 0;
@@ -316,7 +339,8 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                 let x = sn.value(*v)?;
                 out.memo.push((f.clone(), x));
             }
-            if pass == 1 && !env.cfg().image_memo_fields.is_empty() {
+            let warm_next = pass == 0 && img && !partial && persist::mixed(vm, env);
+            if (pass == 1 || partial) && img {
                 let mut sn = snap::Snap::new(vm, env, &mut hot.objs);
                 if let Some(v) = ret {
                     let x = sn.value(v)?;
@@ -326,17 +350,25 @@ fn eval(vm: &mut Vm, env: &Env, site: &MethodSite, args: &[AK]) -> Result<Outcom
                     let x = sn.value(v)?;
                     hot.thrown.push(x);
                 }
-                let mut t = trace.clone();
-                t.inited.extend(t.touched.iter().cloned());
-                merge(&mut hot, t);
+                merge(&mut hot, trace.clone());
             }
             merge(&mut out, trace);
+            if warm_next {
+                // 温：只撤销非映像缓存的写入，映像缓存保留（撤销日志里留待求值结束整体撤销）
+                persist::rollback_non_image(vm, env);
+                partial = true;
+                continue;
+            }
+            pass += 1;
         }
         Ok(())
     })();
-    if r.is_ok() && !env.cfg().image_memo_fields.is_empty() {
-        match persist::collect(vm, env) {
-            Ok(frags) => out.alt = Some(Box::new((frags, hot))),
+    if r.is_ok() && img {
+        match persist::collect(vm, env, partial) {
+            Ok((frags, note)) => {
+                out.alt = Some(Box::new((frags, hot)));
+                out.alt_why = note;
+            }
             Err(w) => out.alt_why = Some(w),
         }
     }
@@ -378,5 +410,9 @@ fn merge(out: &mut Outcome, t: Trace) {
     for (k, ps) in t.puts {
         out.puts.entry(k).or_default().extend(ps);
     }
+    // 按「请求初始化」（touched）登记，不按「本次求值触发了初始化」（inited）：后者取决于共享 VM 里此前哪次求值
+    // 先初始化了该类（如先求值的组合按热路径入闭包、其冷路径完成的初始化不登记），闭包随求值次序变化。
+    // 请求集合只取决于本组实参的执行路径
     out.inited.extend(t.inited);
+    out.inited.extend(t.touched);
 }
