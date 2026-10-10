@@ -84,13 +84,13 @@ stage = "run"
 symptom = "XSLT 变换运行期 TransformerConfigurationException：Translet class loaded, but unable to create translet"
 match = [["Translet class loaded, but unable to c"]]
 tests = ["TestXmlTransform"]
-cause = "待分诊：XSLTC 把样式表编译成字节码后按运行期定义的类实例化（TemplatesImpl.getTransletInstance），疑运行期类定义 / 反射实例化未覆盖。fix-domstack 修好转译超时后首次暴露"
+cause = "运行期定义类在 rava 中没有终态承载：TemplatesImpl.defineTransletClasses 经 TransletClassLoader.defineClass 调 ClassLoader.defineClass1（native 手写），该手写对格式合法的类文件一律抛 LinkageError（原生二进制类全集构建期定死），defineTransletClasses 的 catch (LinkageError) 包成 TRANSLET_OBJECT_ERR。不是生成器 / 闭包 / 反射缺陷。fix-domstack 修好转译超时后首次暴露。终态方案（按内容寻址的预定义类，字节来源待决）见 doc"
 introduced = ""
 fixed = []
 status = "open"
-owner = "待派"
-diagnose = "看 run.log 中 TransformerConfigurationException 的 cause 链；对照 TemplatesImpl.defineTransletClasses / getTransletInstance 的翻译与手写边界"
-doc = ""
+owner = "fix-xsltc"
+diagnose = "run.log 不打印 Caused by（TransformerException 的 cause 存在 containedException、经 getCause() 覆盖给出，未捕获报告只读 cause 字段）；用探针捕获异常后按 getCause() 打印链（作业 xsltc-probe2）。cause 为 LinkageError「runtime class definition is not supported」即本条"
+doc = "docs/plans/2026-10-10-xsltc-translet.md"
 since = "2026-10-10"
 
 [[pattern]]
