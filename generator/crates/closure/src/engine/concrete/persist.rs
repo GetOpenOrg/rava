@@ -80,6 +80,9 @@ impl Ex<'_> {
                 if let Some(t) = self.vm.mirror_of.get(&o) {
                     return Ok(FVal::Mirror(t.clone()));
                 }
+                if self.vm.bj.ph_origin.contains_key(&o) {
+                    return Err("占位对象（初始化不可建模类的静态字段）".into());
+                }
                 let h = &self.vm.heap[o as usize];
                 if h.epoch == 0 {
                     if let Some(f) = self.vm.image_roots.get(&o) {

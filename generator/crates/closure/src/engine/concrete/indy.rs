@@ -113,6 +113,7 @@ impl Vm {
             }
             7 => self.call(env, &site, rest)?,
             5 | 9 => {
+                self.check_identity(rest[0])?;
                 let recv = rest[0].obj()?;
                 if matches!(self.heap[recv as usize].body, Body::Lam(_)) {
                     return fail("lambda 实现方法的接收者是 lambda");
@@ -189,6 +190,7 @@ impl Vm {
             (_, CV::J(x)) => x.to_string(),
             (_, CV::N) => "null".to_string(),
             (_, CV::R(o)) => {
+                self.check_identity(v)?;
                 if &*self.ty(o) == STRING {
                     return self.units(env, o);
                 }

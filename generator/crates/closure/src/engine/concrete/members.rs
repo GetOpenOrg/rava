@@ -46,7 +46,18 @@ impl Vm {
                     }
                     self.boot_static_check(env, &fr)?;
                 }
-                if self.opaque.contains(&fr.decl) || env.man().is_injected_static(&fr.decl, &fr.name) {
+                if env.man().is_injected_static(&fr.decl, &fr.name) {
+                    return fail(format!("读取 VM 承载的静态字段 {}.{}", fr.decl, fr.name));
+                }
+                if self.opaque.contains(&fr.decl) {
+                    // 闭包期：初始化不可建模的类的 final 引用静态字段同样得占位对象（与引导求值同一机制）。
+                    // 其值在该类 `<clinit>` 后不变，求值可存放、传递它；身份运算与内容访问即失败回退抽象调用边，
+                    // 快照以该静态字段的抽象值代表（snap.rs）
+                    if !self.boot && fr.fin && matches!(fr.desc.as_bytes().first(), Some(b'L' | b'[')) {
+                        let o = self.static_placeholder(&fr);
+                        st.push(CV::R(o));
+                        return Ok(());
+                    }
                     return fail(format!("读取 VM 承载的静态字段 {}.{}", fr.decl, fr.name));
                 }
                 let v = match self.statics.get(&fr.key) {
@@ -114,9 +125,7 @@ impl Vm {
                 resolved
             }
             _ => {
-                if self.boot {
-                    self.check_identity(args[0])?;
-                }
+                self.check_identity(args[0])?;
                 let recv = args[0].obj()?;
                 if let Body::Lam(l) = &self.heap[recv as usize].body {
                     let l = l.clone();
@@ -169,12 +178,27 @@ impl Vm {
 }
 
 impl Vm {
+    /// 闭包期静态字段占位对象（按字段复用）：登记为占位对象并记来源字段
+    fn static_placeholder(&mut self, fr: &FRes) -> u32 {
+        if let Some(&o) = self.bj.ph_of.get(&fr.key) {
+            return o;
+        }
+        let ty = fr.desc.strip_prefix('L').and_then(|t| t.strip_suffix(';')).unwrap_or(&fr.desc);
+        let body = if ty.starts_with('[') { Body::Arr(Vec::new()) } else { Body::Inst(Vec::new()) };
+        let o = self.alloc(ty, body);
+        self.mark_placeholder(o, &format!("初始化不可建模类的静态字段 {}.{}", fr.decl, fr.name));
+        self.bj.ph_of.insert(fr.key, o);
+        self.bj.ph_origin.insert(o, fr.mref());
+        o
+    }
+
     /// 写入值的常量格投影：字符串对象取其内容（内容不可读时为 Other）
     fn put_of(&mut self, env: &Env, v: CV) -> Put {
         match v {
             CV::I(x) => Put::Int(x),
             CV::J(x) => Put::Long(x),
             CV::N => Put::Null,
+            CV::R(o) if self.bj.ph_origin.contains_key(&o) => Put::Other,
             CV::R(o) if &*self.heap[o as usize].ty == STRING => self.rust_string(env, o).map_or(Put::Other, |s| Put::Str(Rc::from(s))),
             _ => Put::Other,
         }

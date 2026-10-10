@@ -29,9 +29,9 @@ impl Vm {
         self.clinit_floor.push(floor);
         let mut r = self.do_init(env, c);
         self.clinit_floor.pop();
-        // 初始化中途失败（不可建模）且未改写此前已有的映像状态：本类与期间完成初始化的类改为静态不可读，
+        // 初始化中途失败（不可建模；含占位对象参与求值）且未改写此前已有的映像状态：本类与期间完成初始化的类改为静态不可读，
         // 部分执行留下的对象只经这些类的静态字段可达
-        if matches!(r, Err(Flow::Fail(_))) && self.foreign == foreign {
+        if matches!(r, Err(Flow::Fail(_) | Flow::Defer(_))) && self.foreign == foreign {
             self.opaque.insert(key.clone());
             let later: Vec<Rc<str>> = self.done_log[done..].to_vec();
             self.opaque.extend(later);

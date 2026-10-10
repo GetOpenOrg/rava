@@ -23,6 +23,7 @@ impl Vm {
     }
 
     pub(super) fn arr(&self, o: u32) -> R<&Vec<CV>> {
+        self.ph_access(o)?;
         if self.boot {
             self.boot_arr_check(o)?;
             self.ext_arr_read(o)?;
@@ -53,6 +54,7 @@ impl Vm {
 
     /// 数组写入（不记引导日志：调用方已按元素记）
     pub(super) fn arr_store(&mut self, o: u32) -> R<&mut Vec<CV>> {
+        self.ph_access(o)?;
         let ep = self.cur_epoch();
         self.note_foreign(o);
         let h = &mut self.heap[o as usize];
@@ -121,6 +123,7 @@ impl Vm {
     /// 实例字段读：映像对象（`<clinit>` 构造、程序其余部分可见）只许读 final 字段、内存缓存字段，以及
     /// 发布后不再改写的类型（`[concrete] stable_types`）的全部字段——经后者取到的映像数组同样冻结
     pub(super) fn get_field(&mut self, env: &Env, o: u32, fr: &FRes) -> R<CV> {
+        self.ph_access(o)?;
         if self.boot {
             self.boot_field_check(o, fr)?;
             if self.ext.is_some() {
@@ -149,6 +152,7 @@ impl Vm {
 
     /// 实例字段写入：映像对象只许写内存缓存字段（记撤销）
     pub(super) fn put_field(&mut self, o: u32, fr: &FRes, v: CV) -> R<()> {
+        self.ph_access(o)?;
         if self.boot {
             if !fr.memo {
                 self.ext_write(o)?;

@@ -79,6 +79,9 @@ pub(super) struct Journal {
     pub dirty_cells: HashSet<usize>,
     /// 残差调用结果的占位对象：可存放、可传递；判空、比较身份、分派、取类型即延迟值参与求值
     pub placeholders: HashSet<u32>,
+    /// 闭包期占位对象：静态字段键 → 占位对象（按字段复用）、占位对象 → 来源静态字段（快照以其抽象值代表）
+    pub ph_of: HashMap<u32, u32>,
+    pub ph_origin: HashMap<u32, MemberRef>,
     /// 已知非空的占位对象（清单声明结果非空的延迟调用）：判空可在构建期定值
     pub nonnull: HashSet<u32>,
     pub recs: Vec<Rec>,
@@ -306,6 +309,14 @@ impl Vm {
         match v {
             CV::R(o) if self.bj.placeholders.contains(&o) => defer(format!("延迟值参与求值：{} 的结果参与身份运算", self.deferred.get(&o).map_or("残差调用", |k| k))),
             _ => Ok(()),
+        }
+    }
+
+    /// 闭包期占位对象的内容访问（字段 / 元素读写）：即失败回退（引导求值经延迟值登记另行判定）
+    pub(super) fn ph_access(&self, o: u32) -> R<()> {
+        match self.bj.ph_origin.get(&o) {
+            Some(f) => defer(format!("占位对象参与求值：{}.{} 的内容被访问", f.owner, f.name)),
+            None => Ok(()),
         }
     }
 

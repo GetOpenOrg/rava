@@ -58,7 +58,7 @@ impl Vm {
     pub(super) fn call(&mut self, env: &Env, site: &MethodSite, args: Vec<CV>) -> R<Option<CV>> {
         let info = self.info(env, site);
         if let Some(op) = &info.op {
-            if self.boot && !op.starts_with("set_static:") && op != "noop" && args.iter().any(|&a| self.is_placeholder(a)) {
+            if !op.starts_with("set_static:") && op != "noop" && args.iter().any(|&a| self.is_placeholder(a)) {
                 return defer(format!("延迟值参与求值：残差调用的结果传给 native {}", info.key));
             }
             return super::natives::call(self, env, op, &info, args);
@@ -227,6 +227,8 @@ impl Vm {
                             let ct = e.strip_prefix('L').and_then(|x| x.strip_suffix(';')).unwrap_or(e);
                             let vt = self.ty(o);
                             if !self.instance_of(env, &vt, o, ct) {
+                                // 占位对象的运行期类型是其声明类型的子类型：声明类型不可赋给元素类型即延迟值参与求值
+                                self.check_identity(v)?;
                                 return implicit("store");
                             }
                         }
@@ -314,10 +316,8 @@ impl Vm {
             0xa4 => cmp_branch!(|a, b| a <= b),
             0xa5 | 0xa6 => {
                 let (b, a) = (pop!(), pop!());
-                if self.boot {
-                    self.check_identity(a)?;
-                    self.check_identity(b)?;
-                }
+                self.check_identity(a)?;
+                self.check_identity(b)?;
                 let (b, a) = (b.r()?, a.r()?);
                 return Ok(if (a == b) == (op == 0xa5) { Next::Jump(target(insn)) } else { Next::Fall });
             }
@@ -370,18 +370,14 @@ impl Vm {
             0xbe => {
                 // 数组长度不可变：映像数组同样可取
                 let a = pop!();
-                if self.boot {
-                    self.check_identity(a)?;
-                }
+                self.check_identity(a)?;
                 let a = a.obj()?;
                 let Body::Arr(v) = &self.heap[a as usize].body else { return fail("期望数组") };
                 st.push(CV::I(v.len() as i32));
             }
             0xbf => {
                 let v = pop!();
-                if self.boot {
-                    self.check_identity(v)?;
-                }
+                self.check_identity(v)?;
                 return Err(Flow::Throw(v.obj()?));
             }
             0xc0 | 0xc1 => {
@@ -389,7 +385,7 @@ impl Vm {
                 let v = pop!();
                 // 占位对象的运行期类型是其声明类型的子类型：声明类型可赋给 c 时 checkcast 必过，
                 // 已知非空时 instanceof 为真；其余即延迟值参与求值
-                if self.boot && self.is_placeholder(v) {
+                if self.is_placeholder(v) {
                     let o = v.obj()?;
                     if !self.instance_of(env, &self.ty(o), o, c) || (op == 0xc1 && !self.bj.nonnull.contains(&o)) {
                         self.check_identity(v)?;
@@ -410,9 +406,7 @@ impl Vm {
             }
             0xc2 | 0xc3 => {
                 let v = pop!();
-                if self.boot {
-                    self.check_identity(v)?;
-                }
+                self.check_identity(v)?;
                 v.obj()?;
             }
             0xc5 => {
@@ -425,7 +419,7 @@ impl Vm {
             }
             0xc6 | 0xc7 => {
                 let v = pop!();
-                if self.boot && !matches!(v, CV::R(o) if self.bj.nonnull.contains(&o)) {
+                if !matches!(v, CV::R(o) if self.bj.nonnull.contains(&o)) {
                     self.check_identity(v)?;
                 }
                 let v = v.r()?;

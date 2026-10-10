@@ -57,6 +57,10 @@ impl<'s, 'e, 'a> Snap<'s, 'e, 'a> {
         if let Some(&i) = self.seen.get(&o) {
             return Ok(MV::Obj(i));
         }
+        // 占位对象（闭包期读到的初始化不可建模类的 final 引用静态字段）：取来源静态字段的抽象值
+        if let Some(f) = self.vm.bj.ph_origin.get(&o) {
+            return Ok(MV::Static(f.clone()));
+        }
         let h = &self.vm.heap[o as usize];
         if &*h.ty == STRING {
             return Ok(MV::Str);

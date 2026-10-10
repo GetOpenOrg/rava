@@ -1044,6 +1044,9 @@ entries = [
     "java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern;",
     # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
     "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
+    # 常量名的字符集查找（c1d 计划 §36）：标准提供者按名字确定结果，常量名调用点按轨迹入闭包，不经扩展 / 服务提供者
+    # 查找；各字符集单例所在类的初始化不可建模，其 INSTANCE 读取得占位对象（可存放、传递，身份运算即回退）
+    "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset;",
 ]
 # 结果按对象物化的入口（须同在 entries）：入口字节码自身 `new` 的类的结果实例各成一个抽象对象，字段值按对象记录，
 # 这些类的实例方法按接收者对象读字段（如格式串解析出的各说明符各读自己的转换类别，不含日期转换的格式串
@@ -1059,6 +1062,13 @@ memo_fields = [
     "java/lang/Class.reflectionData",
     "java/lang/String.hash",
     "java/lang/String.hashIsZero",
+    # 字符集查找缓存（c1d 计划 §36）：Charset 的两项最近查找缓存与标准提供者的按名缓存 / 惰性建成的
+    # 类名表、别名表——命中与重算得同一字符集（标准提供者按名字确定，别名 / 类名表是常量表的惰性副本）
+    "java/nio/charset/Charset.cache1",
+    "java/nio/charset/Charset.cache2",
+    "sun/nio/cs/StandardCharsets.cache",
+    "sun/nio/cs/StandardCharsets.classMap",
+    "sun/nio/cs/StandardCharsets.aliasMap",
 ]
 # 写入引导映像的内存缓存字段（U13，计划 2026-10-05-boot-image-evaluator §8.4）：具体求值在类镜像上写入的值
 # （求值结束时的对象图）物化进引导映像，启动序列写入运行期镜像；该组实参只按热求值的轨迹入闭包（运行期缓存命中，
