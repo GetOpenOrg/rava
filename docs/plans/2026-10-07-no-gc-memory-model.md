@@ -105,7 +105,67 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
 - **断言覆盖范围**：持锁计数、自持有检查、`drop_slow` / 安全点 / `<clinit>` 断言、`__mark_monitor` 断言只在 debug 档生效；release 档抽查只能验证功能。`std::cell::RefCell` 线程局部槽（CURRENT / CARRIER 等）不在登记范围内。
 - **状态**：小步 A 已完工，待合批（全量单测与 e2e 由协调会话排批）。小步 B 在 A 合入后另派。
 
-### 5. 注意
+### 5. 并发小步 B（2026-10-10，分支 conc-step-b）
+
+**提交**（按序；B 的语义改动单独一提交）：
+
+| 提交 | 内容 |
+|---|---|
+| 3b95ceeb | 小步 A 遗留修复（分支 fix-held-carrier-slot，基于 main 583edccd，已并入 conc-step-b）：持锁登记（debug 档计数 + 槽位登记表）由 `sync_model.rs` 的 `thread_local!` 移入 `exec_context.rs` 载体槽 `HoldSlot` / `hold_slot`。归属判定：持字段锁期间不得让出（安全点断言持锁数为 0，OS 读写锁守卫不能跨载体释放），登记生存期不跨让出点，与载体绑定，和对象释放槽同类。`thread_local_lint` 文档头写明载体槽判据并登记两类载体槽，`ALLOWED` 不变（不按文件放行） |
+| c955162e | 小步 B 本体（见下） |
+| efafe2cb | 小步 A 暴露的锁内安全点：`Thread.getThreads` 在 `LIVE_THREADS` 读锁内调 `__get_eetop()`（包装字段 getter 带 `__safepoint()`），TestThreadNatives debug 档 panic。改为锁内 `to_vec` 复制句柄、放锁后过滤；`failure_patterns.toml` 登记 `safepoint-under-field-lock`，`known_failures.toml` 删 TestThreadNatives |
+
+**小步 B 改动点**：
+
+- `runtime/java_runtime/src/sync_model.rs`：`__RefField` 分两族，存储与布局不变（映像常量、偏移表、`__FieldDesc` 不动）。
+  - 普通族 `get` / `set` / `with` / `with_mut` / `get_or_default`：加锁 CAS 用 Acquire，解锁 store 用 Release。
+  - volatile 族 `get_volatile` / `set_volatile` / `replace_volatile` / `with_mut_volatile` / `get_or_default_volatile`：加锁 CAS 与解锁 store 都用 SeqCst。
+  - 加锁凭据 `FieldGuard<'_, const SC: bool>` 按 const 参数选解锁序（`lock_order`），运行期无分支。
+- 宏按字段属性 `java_field(modifiers = ".. volatile ..")` 分流。该属性由生成器按字节码 ACC_VOLATILE 写出，覆盖自有字段与继承的 `superclass_volatile_fields`。分流点：
+  - `rava_macros_core/src/block/class_init.rs:144-160`：静态引用字段；
+  - `block/gen/virtual_dispatch/inner_impls.rs:42-58`：实例引用字段，含擦除字段，如 `AtomicReference.value`；
+  - `block/gen/type_conversions.rs:216-218`：描述符 `of_ref_volatile`。
+- `field_desc.rs` 的 `__ref_field<T, VOLATILE>`：
+  - 按名读写随字段声明取族；
+  - 读-改-写（CAS / 交换）一律用 volatile 族；
+  - 浅拷贝用普通族。
+- `array/store.rs:142-160`：引用元素的 `update`（只服务 Unsafe / VarHandle 的 CAS / 交换）用 volatile 族。
+- `unsafe__impl/access.rs`：`getReferenceVolatile` / `putReferenceVolatile` 套上与基本类型 volatile 相同的栅栏包络，覆盖作用于非 volatile 位置的 volatile 访问模式。
+- `monitor.rs:132-149`：`Monitor::exit` 在计数归零让出、放状态锁之后执行一次 SeqCst 栅栏；重入层不加。
+
+**论证要点**（全文见 c955162e 提交说明；Rust = C++20 模型，S 为 SeqCst 全序）：
+
+1. **volatile 引用-引用**：同一字段的访问是同一锁字上的 SC 操作，锁字修改序 ⊆ S。Dekker 两侧都读到旧值会在 S 中成环，因此不可能。
+2. **volatile 引用-基本类型**：基本侧是 SC load / store，读见与否都给出 coherence-ordered-before，进入 S；第 1 条的链条逐项成立。
+3. **volatile 与监视器**：同一监视器的进入 / 退出之间按状态锁修改序有 synchronizes-with。退出后的 SC 栅栏让「退出 → 本线程其后的 SC 操作」直接在 S 中有序。
+4. **两个监视器之间**：exit(m1) 的 Release store 与 enter(m2) 的 Acquire CAS 之间允许 store-load 重排。两侧栅栏 F1、F2 在 S 中必有先后，按栅栏规则，后者的进入必观察到前者的让出，不会互等。
+5. **IRIW**：四次读都是 SC，禁止结果 1,0,1,0 会使 S 成环。
+6. **改前状态**：改前（Acquire / Release 锁字）在 C++20 下五项其实已成立，靠 sw 链加 strongly-happens-before。B 把每次 volatile 访问本身放进 S，论证不再绕道锁链；将来引用读改为无锁路径时，结论不变。
+7. **硬件上测不出**：ARMv8 上 LDAR / STLR 本身是 RCsc，CASA 与 CASAL 只差写半边的释放语义；x86 上 lock cmpxchg 是全屏障。硬件上测不出差别，正确性只能靠模型推理，e2e 只验证功能不回归。
+
+**实测**：
+
+- **debug 档抽查**：concB-dbg-f4581b9b（dev，含 3b95ceeb 与 B）25/25 通过。持锁断言生效，0 例违例。
+  - 覆盖：synchronized、wait / notify、线程、类初始化、Atomic*、VarHandle 引用 RMW、Unsafe 字段偏移、volatile 基本类型、自旋 volatile、虚拟线程时钟 park、ForkJoin common pool、并行数组 CAS、CHM transfer、字段修饰符反射等。
+  - 小步 A 抽查时基线同败的 TestConcurrentClinit / TestJucSync 本轮通过（fix-clone 等已并入基线）。
+- **efafe2cb 后 debug 档**：concB-tn-358a2a8d 抽查 5/5 通过（TestThreadNatives / TestThreadStates / TestThreadJoin / TestThreadInterrupt / HelloWorld）。
+- **release 档抽查**：concB-rel-c955162e（us1），RELRESULT。
+- **单测**：concB-ut-f4581b9b，A 组（closure_cli）与 B 组（其余工作区 + driver 其余集成测试 + rava_macros_core）共 630 通过、0 失败，日志无 FAILED 行。
+  - thread_local_lint 单独作业 tlfix-3b95ceeb 通过。
+
+**性能关注点**：
+
+- volatile 引用读仍要加锁，读者在锁字上排队。
+- SC 化后的指令变化：
+  - x86 上解锁由 mov 变为 xchg；
+  - ARMv8 LSE 上加锁由 CASA 变为 CASAL；
+  - 监视器每次让出多一次 `mfence` / `dmb ish`。
+- 高争用的 volatile 引用（如 `ConcurrentHashMap` 的 table、`AtomicReference`）是首要观测对象。终态方向是引用读无锁化（原子指针读 / 序锁），对标计时时记录。
+- 残留观察（不属本步）：
+  - 基本类型数组的 Unsafe 访问用 Relaxed load，但位于栅栏包络之内；
+  - 非 volatile 静态字段的 Unsafe RMW 经 `STATIC_RMW_LOCK`。
+
+### 6. 注意
 
 - 另有协调巡检会话（rava-b5）在管服务器作业、合批和 tasks.md。发抽查或合批前先和它对齐，避免同 tag 作业冲突，也避免子代理总数超过上限 5。
 - 计数漂移的结论：无害，`Drop` 不改，但计数不得作为永生判据（第三节第 8 条）。后续代码不要引入 `strong >= IMMORTAL` 这类判断。

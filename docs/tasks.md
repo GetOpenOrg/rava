@@ -262,7 +262,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 声明层底段收窄 | ⏸ C4 之后（10-08 用户定，按现有顺序） | D8 分段已合入：上段每段约 330 类、约 1.27 GB；底段 `java_base_decl` 是含 INFRA 的签名 SCC（约 76% 类），现状形态即下限，峰值 7.9 GB（D8 时）→ 4.9 GB（10-08 CollectorsDemo，sg2）。终态：S7-4 / S7-5 把最大 SCC 收到约 22%，D8 机制自动切段，每个声明 crate ≤1.3 GB，D8 无需改。计划 `docs/plans/2026-10-04-s7-object-handle-descriptor.md` §九（§9.5 / §9.7） |
 | 引用类语义 | ⏸ 暂缓（C4 之后） | 无 GC 模型，`docs/plans/2026-10-07-no-gc-memory-model.md`；10-09 补第三节约束 1–8（Weak 可靠、SoftReference、OOM 偏差、侧表 / PARKERS 回收、cycle_finder、逃逸分析与对象头不变量） |
 | 并发小步 A | ✅ 已完工待合批（分支 conc-step-a） | 第 1–5 项 78d2b9c6 / 4400cc70 / 2031ac5c / f00af3cc；违例修复 ad7f59f6（登记表锁内释放对象）/ ff1caecf（持锁执行 Java 代码）。debug 档抽查 20 例 0 断言违例，失败 2 例（TestConcurrentClinit / TestJucSync）基线同败。断言只在 debug 档生效。无 GC 文档 §四、§五-4 |
-| 并发小步 B | ⏳ ◀── 小步 A | volatile 引用字段加锁 / 解锁 SeqCst、监视器进入纳入 SeqCst 全序，单独提交逐条论证（含 IRIW）。无 GC 文档 §四 |
+| 并发小步 B | ✅ 已完工待合批（分支 conc-step-b） | 小步 A 遗留 3b95ceeb（持锁登记移入载体槽，thread_local_lint）；B 本体 c955162e（volatile 引用字段加锁 / 解锁 SeqCst、监视器让出后 SeqCst 栅栏，提交说明逐条论证含 IRIW）；efafe2cb（Thread.getThreads 锁内安全点，TestThreadNatives）。debug 抽查 25/25 + 5/5，单测 630/0。无 GC 文档 §四、§五-5 |
 | 测试分发 | ✅ 2026-10-02 起 | 全部 e2e 与重命令作业经 `scripts/cluster/distribute_tests.py` 在服务器执行；dev 关机期间用云服务器（jp1、jp2、kr1、kr2、sg1、sg2、us1）；本机只跑 cargo check；合批测试见 `docs/reference/cluster-testing.md` 十二 |
 
 ---
