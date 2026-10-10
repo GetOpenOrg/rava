@@ -138,7 +138,9 @@ impl<T: 'static> Store<'_, T> {
     }
 
     /// 元素原子读-改-写：基本元素为位形 CAS 循环（重试时 `f` 重新求值），引用元素在单元锁内
-    /// 完成「读 → 判定 → 写」，被替换的旧值锁外释放。返回旧值。
+    /// 完成「读 → 判定 → 写」，被替换的旧值锁外释放。返回旧值。消费方只有 Unsafe / VarHandle
+    /// 的 CAS / 交换（volatile 访问模式）：基本元素 SeqCst CAS，引用元素取单元的 volatile 族
+    /// （加锁 / 解锁都 SeqCst，无 GC 文档第四节小步 B）。
     pub(super) fn update(&self, i: i32, f: &mut dyn FnMut(T) -> Option<T>) -> crate::error::Result<T>
     where T: Clone {
         let i = self.index(i)?;
@@ -155,7 +157,7 @@ impl<T: 'static> Store<'_, T> {
                 }
             }
             Store::Ref(s) => {
-                let (cur, replaced) = s[i].with_mut(|v| {
+                let (cur, replaced) = s[i].with_mut_volatile(|v| {
                     let cur = v.clone();
                     let replaced = f(cur.clone()).map(|n| std::mem::replace(v, n));
                     (cur, replaced)

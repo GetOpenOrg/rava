@@ -80,7 +80,15 @@ impl __FieldDesc {
     pub const fn of_ref<T>(java: &'static str, rust: &'static str) -> Self
     where T: Clone + From<Object>, Object: From<T>
     {
-        Self { java, rust, kind: __FieldKind::Ref(__ref_field::<T>) }
+        Self { java, rust, kind: __FieldKind::Ref(__ref_field::<T, false>) }
+    }
+
+    /// volatile 引用 / 擦除字段项：读写取单元的 volatile 族（加锁 / 解锁都 SeqCst），与该字段
+    /// 的访问器同序（无 GC 文档第四节小步 B）
+    pub const fn of_ref_volatile<T>(java: &'static str, rust: &'static str) -> Self
+    where T: Clone + From<Object>, Object: From<T>
+    {
+        Self { java, rust, kind: __FieldKind::Ref(__ref_field::<T, true>) }
     }
 
     /// 基本单元字段项
@@ -90,27 +98,32 @@ impl __FieldDesc {
 }
 
 /// 引用单元的协议实现，按字段载体类型 `T` 实例化（跨类共享）。擦除字段 `T = Object`。
+/// `VOLATILE`：字段声明为 volatile，读写取单元的 volatile 族（SeqCst）；读-改-写（Unsafe /
+/// VarHandle 的 CAS / 交换，volatile 访问模式）一律取 volatile 族；浅拷贝取普通族。
 ///
 /// # Safety
 /// `slot`（与 `CopyInto` 的目标）必须指向存活存储中载体类型为 `T` 的引用字段。
 #[doc(hidden)]
 #[inline(never)]
-pub unsafe fn __ref_field<T>(slot: *const (), op: &mut __RefAccess<'_>) -> Option<Object>
+pub unsafe fn __ref_field<T, const VOLATILE: bool>(slot: *const (), op: &mut __RefAccess<'_>) -> Option<Object>
 where T: Clone + From<Object>, Object: From<T>
 {
     type Cell<T> = __RefField<Option<T>>;
     // SAFETY: 调用方保证
     let slot: &Cell<T> = unsafe { &*(slot as *const Cell<T>) };
     match op {
-        __RefAccess::Get => Some(slot.get().map(Object::from).unwrap_or_default()),
+        __RefAccess::Get => {
+            let v = if VOLATILE { slot.get_volatile() } else { slot.get() };
+            Some(v.map(Object::from).unwrap_or_default())
+        }
         __RefAccess::Set(v) => {
-            let v = <T as From<Object>>::from(v.take().unwrap_or_default());
-            slot.set(Some(v));
+            let v = Some(<T as From<Object>>::from(v.take().unwrap_or_default()));
+            if VOLATILE { slot.set_volatile(v) } else { slot.set(v) }
             Some(Object::default())
         }
         __RefAccess::Update(f) => {
             // 锁内读出当前值并按 f 写入（f 只比较引用、不访问本单元）；被替换的旧值在锁外释放
-            let (cur, old) = slot.with_mut(|g| {
+            let (cur, old) = slot.with_mut_volatile(|g| {
                 let cur: Object = g.as_ref().map(|b| Object::from(Clone::clone(b))).unwrap_or_default();
                 let old = f(Clone::clone(&cur))
                     .map(|n| std::mem::replace(g, Some(<T as From<Object>>::from(n))));
