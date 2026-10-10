@@ -114,6 +114,7 @@ impl<'a> Engine<'a> {
             pvals: HashMap::default(),
             ptaint: HashSet::default(),
             ptaint_why: HashMap::default(),
+            htaint: HashSet::default(),
             pstr: Default::default(),
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
