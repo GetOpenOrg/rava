@@ -5,11 +5,12 @@
   scripts/marker_crate_probe.py <names.txt> <out_dir>
   (cd <out_dir> && /usr/bin/time -v cargo build)        # 只在服务器上跑
 
-<names.txt>：每行一个 binary name（如 `java/lang/String`；可由 `jimage list` 取 java.base 全部类）。
+<names.txt>：每行一个 binary name（如 `java/lang/String`；可由 `jimage list` 取 java.base 全部类），其后可跟空格分隔的
+全部祖先（父类与接口的传递闭包，由 `decl_scc_full.py --ancestors` 产出）；清单内的祖先各生成一个上转 `From`。
 每类生成的形态即 §9.8 标记路线的标记 crate 内容上限：
   - `#[repr(transparent)] pub struct X { h: Handle, _p: ::std::marker::PhantomData<fn() -> X> }`（句柄 + 零尺寸类型标记）；
   - `Clone` / `PartialEq` / `Debug` 三个 impl（句柄身份语义，与现 wrapper 相同的 std trait 面）；
-  - `From<X> for Handle` 与固有 `const BINARY_NAME`。
+  - `From<X> for Handle`、对清单内每个祖先 A 的上转 `From<X> for A`，与固有 `const BINARY_NAME`。
 不含方法、字段访问器、描述符数据与 vtable trait（它们留在各声明 crate）。按包生成嵌套模块，类名按 rava 规则
 把 `$` 换成 `_`、`-` 换成 `_`；同名冲突加序号。输出确定。
 """
@@ -37,10 +38,14 @@ def ident(s):
     return "r#" + s if s in KEYWORDS else s
 
 
+def upcast(name, anc_path):
+    return f"impl From<{name}> for {anc_path} {{ fn from(x: {name}) -> Self {{ {anc_path} {{ h: x.h, _p: ::std::marker::PhantomData }} }} }}"
+
+
 def item(name, bin_name):
     return f"""
 #[repr(transparent)]
-pub struct {name} {{ h: crate::Handle, _p: ::std::marker::PhantomData<fn() -> {name}> }}
+pub struct {name} {{ pub(crate) h: crate::Handle, pub(crate) _p: ::std::marker::PhantomData<fn() -> {name}> }}
 impl {name} {{ pub const BINARY_NAME: &'static str = "{bin_name}"; }}
 impl Clone for {name} {{ fn clone(&self) -> Self {{ Self {{ h: self.h.clone(), _p: ::std::marker::PhantomData }} }} }}
 impl PartialEq for {name} {{
@@ -59,7 +64,12 @@ def main():
     if len(sys.argv) != 3:
         print(__doc__)
         return 1
-    names = sorted({line.strip() for line in open(sys.argv[1]) if line.strip()})
+    anc = {}
+    for line in open(sys.argv[1]):
+        f = line.split()
+        if f:
+            anc.setdefault(f[0], set()).update(f[1:])
+    names = sorted(anc)
     out = sys.argv[2]
     tree = {}
     for b in names:
@@ -68,13 +78,10 @@ def main():
         for p in parts[:-1]:
             node = node.setdefault(ident(p), {})
         node.setdefault("", []).append(b)
-    os.makedirs(os.path.join(out, "src"), exist_ok=True)
-    with open(os.path.join(out, "Cargo.toml"), "w") as f:
-        f.write('[package]\nname = "marker_probe"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\npath = "src/lib.rs"\n')
-    lines = [HEADER]
+    # 第一遍：定每类的 Rust 路径（同名冲突加序号）
+    path = {}
 
-    def emit(node, depth):
-        pad = "    " * depth
+    def assign(node, prefix):
         used = set()
         for b in node.get("", []):
             n = ident(b.rsplit("/", 1)[-1])
@@ -83,8 +90,27 @@ def main():
                 k += 1
                 n = f"{base}_{k}"
             used.add(n)
+            path[b] = (n, "crate::" + "::".join(prefix + [n]))
+        for m in sorted(k for k in node if k):
+            assign(node[m], prefix + [m])
+    assign(tree, [])
+    ups = 0
+    os.makedirs(os.path.join(out, "src"), exist_ok=True)
+    with open(os.path.join(out, "Cargo.toml"), "w") as f:
+        f.write('[package]\nname = "marker_probe"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\npath = "src/lib.rs"\n')
+    lines = [HEADER]
+
+    def emit(node, depth):
+        pad = "    " * depth
+        nonlocal ups
+        for b in node.get("", []):
+            n = path[b][0]
             for ln in item(n, b).splitlines():
                 lines.append(pad + ln if ln else ln)
+            for a in sorted(anc[b]):
+                if a in path:
+                    lines.append(pad + upcast(n, path[a][1]))
+                    ups += 1
         for m in sorted(k for k in node if k):
             lines.append(f"{pad}pub mod {m} {{")
             emit(node[m], depth + 1)
@@ -93,7 +119,7 @@ def main():
     with open(os.path.join(out, "src", "lib.rs"), "w") as f:
         f.write("\n".join(lines) + "\n")
     size = os.path.getsize(os.path.join(out, "src", "lib.rs"))
-    print(f"marker_probe: {len(names)} 类，lib.rs {size / 1e6:.2f} MB")
+    print(f"marker_probe: {len(names)} 类，上转 From {ups}，lib.rs {size / 1e6:.2f} MB")
     return 0
 
 

@@ -12,6 +12,8 @@
 
 用法：
   scripts/decl_scc_full.py <java.base 解包目录> --sim-json <decl_scc_sim --json 输出> [--json out.json]
+  scripts/decl_scc_full.py <java.base 解包目录> --ancestors <out.txt>   每行「类 祖先…」（传递父类与接口），供
+                                                                       marker_crate_probe 生成上转 From
 解包：jimage extract --dir <dir> --include 'regex:/java.base/.*' <JAVA_HOME>/lib/modules（<dir>/java.base/...）
 """
 import argparse
@@ -161,12 +163,36 @@ def volume(b, ex, infra, avg):
     return v + ex["hw_bytes_infra"] + sum(ex["hw_bytes_placed"].get(c, 0) for c in b)
 
 
+def ancestors(nodes):
+    memo = {}
+
+    def go(c):
+        if c not in memo:
+            memo[c] = set()
+            acc = set()
+            for p in nodes.get(c, {}).get("inherit", ()):
+                if p in nodes:
+                    acc.add(p)
+                    acc |= go(p)
+            memo[c] = acc
+        return memo[c]
+    return {c: sorted(go(c)) for c in sorted(nodes)}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("jdk_dir")
-    ap.add_argument("--sim-json", required=True)
+    ap.add_argument("--sim-json")
     ap.add_argument("--json")
+    ap.add_argument("--ancestors")
     a = ap.parse_args()
+    if a.ancestors:
+        with open(a.ancestors, "w") as fh:
+            for c, xs in ancestors(load(a.jdk_dir)).items():
+                fh.write(" ".join([c] + xs) + "\n")
+        return 0
+    if not a.sim_json:
+        ap.error("需要 --sim-json 或 --ancestors")
     sim = json.load(open(a.sim_json))
     ex = sim["graph_export"]
     fit = sim.get("fit")
