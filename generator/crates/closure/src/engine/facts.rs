@@ -126,6 +126,8 @@ pub(super) struct Ctx<'a> {
     pub(super) img_statics: std::cell::RefCell<Option<super::static_init::ImgStatics>>,
     /// 选择子形参缓存（见 `selector.rs`）
     pub(super) selectors: RefCell<HashMap<MemberRef, u64>>,
+    /// 调用方 → 调用点偏移 → 字节码字面常量实参掩码（见 `selector.rs` `site_literals`）
+    pub(super) site_lits: RefCell<HashMap<MemberRef, Rc<HashMap<u32, super::selector::SiteLits>>>>,
     /// 非 static final 字段的值集（初值 ∪ 可达写入；缺席 = 只有初值）
     pub(super) fvals: RefCell<HashMap<MemberRef, PV>>,
     /// 按抽象对象的实例字段写入值：字段 → 抽象对象 → 值（见 `obj_fields.rs`）
@@ -142,10 +144,11 @@ pub(super) struct Ctx<'a> {
     pub(super) cinit_drop: Cell<bool>,
     /// 字节码 `new` 分配的抽象对象 → (类, 分配方法里该类的构造器调用)
     pub(super) osite: RefCell<HashMap<u32, (Rc<str>, Rc<[MemberRef]>)>>,
+    /// 全部实例字段由构建期内容给出的抽象对象，按对象读不并入初值：映像抽象对象（`image_start.rs`，未列出的字段即缺省值，
+    /// 已显式记入 `ovals`），以及具体求值结果按对象物化的对象（`concrete/apply.rs`，快照含全部实例字段）
+    pub(super) ofull: RefCell<HashSet<u32>>,
     /// 抽象对象上确定初始化的字段（惰性，见 `ctor_init.rs::obj_definite`）
     pub(super) odef: RefCell<HashMap<u32, Rc<[MemberRef]>>>,
-    /// 具体求值结果按对象物化的抽象对象（`concrete/apply.rs`）：快照含全部实例字段，各字段都确定写入
-    pub(super) osnap: RefCell<HashSet<u32>>,
     /// 字段 → 抽象对象 → 按对象读过它的方法（`ovals` 该项变化时失效；开放判定变化走 `fdeps`）
     pub(super) odeps: RefCell<HashMap<MemberRef, HashMap<u32, BTreeSet<usize>>>>,
     /// 字段 → 按对象读过它的方法（`owild` 变化时失效）

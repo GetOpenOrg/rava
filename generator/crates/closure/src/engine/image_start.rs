@@ -466,6 +466,24 @@ impl<'a> Engine<'a> {
                     let site = self.img.as_ref().and_then(|s| s.sites.get(&o).copied());
                     // 类镜像：并入的镜像缓存（不在镜像对象体内，`image_memo.rs`）与字段同一口径传播
                     let memos: Vec<(String, String, IVal)> = if x.mirror.is_some() { self.img.as_ref().expect("映像").memo.of(o).to_vec() } else { Vec::new() };
+                    // 构建期确定内容的抽象对象：映像只列非缺省值，未列出的实例字段即缺省值——逐字段显式记入按对象值表，
+                    // 并登记为全部字段确定初始化（`ofull`），按对象读不再并入初值（否则 "jrt" ⊔ null 汇合成 Top，
+                    // 映像 URI 的协议判不定，计划 c1d §32）。占位（运行期结果）/ 延迟值（启动序列按宿主值写入）/ 类镜像不登记
+                    if let (Some(xo), false, None, None) = (site, x.placeholder, &x.deferred, &x.mirror) {
+                        let mut cls = Some(x.ty.clone());
+                        let mut unlisted: Vec<MemberRef> = Vec::new();
+                        while let Some(c) = cls.take().and_then(|c| self.h.class(&c)) {
+                            for f in c.fields.iter().filter(|f| !f.is_static() && !fs.iter().any(|(d, n, _)| *d == c.name && *n == f.name)) {
+                                unlisted.push(MemberRef { owner: c.name.clone(), name: f.name.clone(), desc: f.desc.clone() });
+                            }
+                            cls = c.super_name.clone();
+                        }
+                        for key in unlisted {
+                            let pv = default_pv(&key.desc);
+                            self.obj_field_put(&key, &[xo], false, &pv);
+                        }
+                        self.ctx.ofull.borrow_mut().insert(xo);
+                    }
                     for (d, n, v) in fs.iter().chain(&memos) {
                         let Some(desc) = self.h.class(d).and_then(|c| c.fields.iter().find(|f| f.name == *n && !f.is_static()).map(|f| f.desc.clone())) else { continue };
                         let key = MemberRef { owner: d.clone(), name: n.clone(), desc };

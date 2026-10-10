@@ -2,14 +2,18 @@
 //!
 //! 全局值集 `fvals` 按字段键汇合全部对象的写入。本模块在它旁边按抽象对象（容器分配点）分开记录：
 //! - **写入**：字节码 `putfield` 的接收者值集里的每个抽象对象，各自并入 `ovals[(对象, 字段)]`；
-//!   接收者值集里的其余值（open / 非抽象对象的类 / 无接收者）并入 `owild[字段]`。
-//!   基本类型字段的字节码写入不拆接收者，物化快照（`concrete/apply.rs`）的写入也并入 `owild`；结果按对象物化的入口（`[concrete] object_results`）例外：
-//!   入口自身分配的类的结果实例是抽象对象，快照字段值按对象记入 `ovals`，只有接收者不是求值中新分配对象的写入并入 `owild`。
+//!   接收者值集里的其余值（open / 非抽象对象的类 / 无接收者）并入 `owild[字段]`；容器形态类的非抽象对象实例
+//!   （反序列化等不经分配点建出、以类 id 出现的对象）与抽象对象不相交，不并入（`untracked_instance`）。
+//!   写入值取返回常量格（[`PV::of_ret`]：确定非空的引用记为「非空引用」，`path == null` 一类判定据此可折）。
+//!   基本类型字段的字节码写入不拆接收者，物化快照（`concrete/apply.rs`）的写入也并入 `owild`；结果按对象物化的入口
+//!   （`[concrete] object_results`）例外：入口自身分配的类的结果实例是抽象对象，快照字段值按对象记入 `ovals`，只有接收者
+//!   不是求值中新分配对象的写入并入 `owild`。
 //!   写站点按接收者增量重跑（`bytecode.rs::field` 的 `recv_delta`），后到的抽象对象同样补记。
 //!   两张表都从 ⊥ 起算（不含初值）。
 //! - **读取**：`getfield` 的接收者只来自一个形参 / 站点（[`Recv`]），且其值集全由抽象对象组成时，答复
 //!   「owild ⊔ 各对象值 ⊔ 未确定初始化对象的初值」，否则退回全局值集。确定初始化（字节码 `new` 分配、
-//!   各构造器完成前该字段必然已写且未在写入前交出 / 读取，见 `ctor_init.rs`）的对象不并入初值。
+//!   各构造器完成前该字段必然已写且未在写入前交出 / 读取，见 `ctor_init.rs`）的对象不并入初值；构建期确定内容的映像
+//!   对象（`image_start.rs` 逐字段记入映像值、未列出的记缺省值）与具体求值按对象物化的对象（快照含全部实例字段）同样不并入（`ofull`）。
 //! - **⊥**（值集为空，或各对象尚无写入）：定论阶段之前答复 [`ObjAns::Never`]——读取之后暂不可达，读者记入
 //!   `never`，排空时重算（同 `noreturn.rs`）；定论阶段退回全局值集。⊥ 若在收尾阶段就退回全局值集，随后到达的
 //!   对象 / 写入会把答复收窄，而按宽答复建立的边与登记不可撤回，结果依赖处理顺序（散列种子）。
@@ -164,7 +168,7 @@ impl Ctx<'_> {
         let ov = ov.get(key);
         let mut dflt = false;
         for &o in objs {
-            if !dflt && !self.osnap.borrow().contains(&o) && self.obj_definite(o).binary_search(key).is_err() {
+            if !dflt && !self.ofull.borrow().contains(&o) && self.obj_definite(o).binary_search(key).is_err() {
                 dflt = true;
                 pv = Some(PV::join(pv.as_ref(), &default_pv(&key.desc)));
             }
@@ -255,6 +259,19 @@ impl Engine<'_> {
         let out: Rc<[u32]> = out.into();
         self.site_cands.insert(key, out.clone());
         out
+    }
+
+    /// 值集里的类 id x 是容器形态类的非抽象对象实例：容器形态类经字节码 `new`、lambda、手写体与引导映像建出的对象一律是
+    /// 抽象对象（`obj_at` / `image_obj_site`），具体求值的结果引用容器形态对象时整体回退（`concrete.rs`），所以值集里
+    /// 以类 id 出现的该类实例只来自不经分配点的途径（反序列化的 `<alloc>`、反射 / Unsafe 分配），与任何抽象对象都不是
+    /// 同一个运行期对象。其上的字节码写入只需对按类 id 的读取可见（全局值集 `fvals` 照常并入），不并入 `owild`——
+    /// 否则 `readObject` → 解析器写回的字段（URI 的 `authority` 等）令全部抽象对象的按对象读退回 Top（计划 c1d §31.3 ④-3）
+    pub(super) fn untracked_instance(&mut self, x: u32) -> bool {
+        if self.objs.contains_key(&x) || self.arrays.contains_key(&x) || self.mirrors.contains_key(&x) || self.lambdas.contains_key(&x) || self.hwobjs.contains_key(&x) {
+            return false;
+        }
+        let name = self.names[x as usize].clone();
+        !name.starts_with('[') && self.container(&name)
     }
 
     /// 字节码写站点：值并入接收者值集里各抽象对象的字段值；其余接收者并入 `owild`

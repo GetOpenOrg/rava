@@ -403,7 +403,10 @@ impl<'a> Engine<'a> {
                 // 类镜像上读接收者钩子字段（VM 注入状态）：值只由钩子落地（应用 / 平台类镜像已接钩子值池，引导类
                 // 镜像恒 null），不经全局字段节点——否则一个镜像读到的是全部镜像的值并集
                 let vm_read = opcode == op::GETFIELD && self.recv_hook_field(&decl, f);
-                let rest = s.classes.iter().filter(|x| !self.objs.contains_key(x) && !(vm_read && self.mirrors.contains_key(x))).count();
+                // 容器形态类的非抽象对象实例（反序列化等不经分配点建出的对象）与抽象对象不相交，其上的写入不进通配值
+                // （见 `obj_fields.rs::untracked_instance`）
+                let cand: Vec<u32> = s.classes.iter().filter(|x| !self.objs.contains_key(x) && !(vm_read && self.mirrors.contains_key(x))).collect();
+                let rest = cand.into_iter().filter(|&x| !(opcode == op::PUTFIELD && self.untracked_instance(x))).count();
                 (objs.clone(), !s.open.is_empty() || rest > 0)
             }
             None => (vec![], true),
@@ -412,7 +415,7 @@ impl<'a> Engine<'a> {
         if opcode == op::PUTFIELD {
             // 按对象的字段写入值：新增抽象对象各自并入，其余接收者首次并入通配值（见 `obj_fields.rs`）
             let key = MemberRef { owner: decl.clone(), name: f.name.clone(), desc: f.desc.clone() };
-            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of));
+            self.obj_field_put(&key, &objs, other, &value.map_or(PV::Top, PV::of_ret));
         }
         let nodes: Vec<Node> = objs.iter().map(|&o| self.obj_field(o, fi, tid)).collect();
         if opcode == op::PUTSTATIC || opcode == op::PUTFIELD {

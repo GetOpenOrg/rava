@@ -198,7 +198,7 @@ impl<'a> Engine<'a> {
             self.seg_cls.entry(Rc::from(chain.as_str())).or_insert(tid);
             self.obj_chain.insert(id, Rc::from(chain));
             // 快照含全部实例字段（含初值）：各字段都确定写入，按对象读不并入初值
-            self.ctx.osnap.borrow_mut().insert(id);
+            self.ctx.ofull.borrow_mut().insert(id);
             ids[i] = Some(TypeSet::exact(id));
             return Some(id);
         }

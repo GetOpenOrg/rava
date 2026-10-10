@@ -4,13 +4,14 @@
 //! 选择规则全部在本文件，调用方只描述调用的形态：
 //!
 //! - **接收者**（`recv_ctx`）：实例方法按接收者抽象对象克隆（对象敏感，容器对象各进其克隆）；非对象接收者进本体。
-//!   字节码调用点在被调方引用选择子形参（`selector.rs`）上传 null 时（`recv_call_ctx`）按调用点克隆（`const_ctx`）。
+//!   字节码调用点在被调方引用选择子形参（`selector.rs`）上传字面 null 时（`recv_call_ctx`）按调用点克隆（`const_ctx`）。
 //! - **静态调用**（`static_ctx`，按 `Call` 形态）：
 //!   1. 字节码 `invokestatic`：返回引用或有引用形参的辅助方法继承调用方上下文（返回值与经实参写入的字段 / 元素
 //!      按容器对象分开，如 `casTabAt(tab, i, null, node)` 只写进本容器的表）；只有基本类型形参与返回的
 //!      按本体共享；上下文无关的调用方调用新鲜工厂（`fresh_factory`）按调用点克隆。
-//!      选择子形参（`selector.rs`）上传 int 常量时按调用点克隆、链尾接调用方上下文；只在引用选择子形参上传 null 时
-//!      按调用点克隆、堆上下文同上述规则所得（`const_ctx`）；否则调用方在上下文中则继承。
+//!      选择子形参（`selector.rs`）上传 int 字面常量时按调用点克隆、链尾接调用方上下文；只在引用选择子形参上传字面
+//!      null 时按调用点克隆、堆上下文同上述规则所得（`const_ctx`）；否则调用方在上下文中则继承。「字面」= 调用方字节码
+//!      不读事实即可定的常量（`site_literals`）：克隆判定是（调用点, 调用方上下文）的函数，不随实参格变化。
 //!   2. lambda 静态实现方法：继承 lambda 创建时的上下文。
 //!   3. 方法句柄常量（`MethodHandle` 静态引用）：本体。
 //!   4. 以上结果为本体、调用方是字节码方法、被调是分派转发方法（`forward.rs`）时：按调用点克隆
@@ -24,10 +25,10 @@
 use super::*;
 
 /// 静态调用的形态
-pub(super) enum Call<'x> {
-    /// 字节码 invokestatic：返回类型或形参是否含引用（可能经返回值 / 实参对象的字段与元素读写调用方上下文中的对象）、
-    /// 实参（不含接收者）
-    Invoke { heap: bool, args: &'x [V] },
+pub(super) enum Call {
+    /// 字节码 invokestatic：返回类型或形参是否含引用（可能经返回值 / 实参对象的字段与元素读写调用方上下文中的对象）。
+    /// 选择子克隆只看调用点字节码的字面常量（`selector.rs` `site_literals`），不取实参值
+    Invoke { heap: bool },
     /// lambda 静态实现方法的 SAM 调用：lambda 创建时的上下文
     Lambda(u32),
     /// 方法句柄常量引用的静态方法
@@ -52,10 +53,10 @@ impl Engine<'_> {
         }
     }
 
-    /// 字节码调用点 (m, off) 以接收者上下文 base 调用实例方法 key（已选中的实现）时的上下文：实参（`call_vals`，
-    /// 不含接收者）在 key 的选择子形参上传常量时按调用点克隆、链尾接 base，否则即 base
+    /// 字节码调用点 (m, off) 以接收者上下文 base 调用实例方法 key（已选中的实现）时的上下文：调用点在 key 的选择子形参上
+    /// 传字面 null（`selector.rs` `site_literals`，只看字节码）时按调用点分开（`const_ctx`，堆上下文即 base），否则即 base
     pub(super) fn recv_call_ctx(&mut self, m: usize, off: u32, key: &MemberRef, base: u32) -> u32 {
-        if self.recv_call_clones(m, key) {
+        if self.recv_call_clones(m, off, key) {
             self.const_ctx(m, off, base)
         } else {
             base
@@ -63,27 +64,26 @@ impl Engine<'_> {
     }
 
     /// `recv_call_ctx` 是否按调用点克隆（与接收者上下文无关）
-    pub(super) fn recv_call_clones(&self, m: usize, key: &MemberRef) -> bool {
+    pub(super) fn recv_call_clones(&self, m: usize, off: u32, key: &MemberRef) -> bool {
         if self.methods[m].kind != Kind::Bytecode {
             return false;
         }
-        let Some(args) = self.call_vals.as_ref() else { return false };
         // 实例方法的掩码按形参序号含接收者槽 0
         let mask = self.ctx.selector_slots(key) >> 1;
-        mask != 0 && selector::null_selector(mask, args)
+        mask != 0 && self.ctx.site_literals(&self.methods[m].key, off).null_on(mask)
     }
 
     /// 调用点 (m, off) 以形态 call 调用静态方法 key 时的上下文。在建节点前判定，不建出无调用方的本体
     pub(super) fn static_ctx(&mut self, m: usize, off: u32, key: &MemberRef, call: Call) -> u32 {
         let caller = self.methods[m].ctx;
         let ctx = match call {
-            Call::Invoke { heap, args } => {
+            Call::Invoke { heap } => {
                 let c = match caller {
                     _ if !heap => NOCTX,
                     NOCTX if self.fresh_factory(key) => self.site_ctx(m, off),
                     c => c,
                 };
-                self.selector_ctx(m, off, key, args, c)
+                self.selector_ctx(m, off, key, c)
             }
             Call::Lambda(c) => c,
             Call::Handle => NOCTX,
@@ -98,8 +98,9 @@ impl Engine<'_> {
         ctx
     }
 
-    /// 按选择子形参克隆的上下文（不克隆时为 dflt）
-    fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, args: &[V], dflt: u32) -> u32 {
+    /// 按选择子形参克隆的上下文（不克隆时为 dflt）。是否克隆只看调用点的字面常量实参（`selector.rs` `site_literals`），
+    /// 不读实参格：常量格的中间态常量升 Top 后已接的克隆边撤不回（§5.8.6）
+    fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, dflt: u32) -> u32 {
         if self.methods[m].kind != Kind::Bytecode {
             return dflt;
         }
@@ -108,12 +109,13 @@ impl Engine<'_> {
             return dflt;
         }
         let c = self.methods[m].ctx;
-        if selector::const_selector(mask, args) {
-            // 同一调用方（克隆）里不同调用点传不同常量：按调用点分开，链尾接调用方上下文
+        let lits = self.ctx.site_literals(&self.methods[m].key, off);
+        if lits.int_on(mask) {
+            // 同一调用方（克隆）里不同调用点传不同编号：按调用点分开，链尾接调用方上下文
             return self.site_ctx_in(m, off, c);
         }
         let inherit = if c != NOCTX { c } else { dflt };
-        if selector::null_selector(mask, args) {
+        if lits.null_on(mask) {
             self.const_ctx(m, off, inherit)
         } else {
             inherit

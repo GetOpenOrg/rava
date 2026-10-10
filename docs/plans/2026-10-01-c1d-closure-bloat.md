@@ -4427,12 +4427,77 @@ SystemModuleFinders$SystemModuleReader.find → JNUA.create("jrt", "/" + module 
 - `cr-d1-a450ee23` / `cr-d3-a450ee23`（jp2）：URL 与 Formatter 诊断，见 31.3 / 31.5。
 - `cr-u1-4afa42b6`（jp2）：`cargo test --release -p closure --lib absint`，40 个通过、0 失败（含新增 `distinct_string_constants_ref_ne`）。
 
-## 32. 能力③：常量格式串的具体求值与按对象读说明符字段（2026-10-10，分支 `c1d-fmt`，基于 9a48ca32）
+## 32. §31.3 能力 ④ 落地：URI 按对象，`URL.of` 慢路径出闭包（2026-10-10，分支 `c1d-uri`，基于 9a48ca32）
+
+### 32.1 机制（三处，均按字节码与清单判定，不列类名）
+
+1. **键载体类**（`engine/key_carriers.rs`，④-1）：键形参取 `[facts.keyed_lookups]` 各入口的 `key` 与 `scheme_sites` 的 URL 串形参，
+   在这些形参所属方法的声明类内求不动点：调用键形参方法时，键实参来自本方法形参，则该形参也是键形参；
+   来自无实参实例调用 `x.g()` 的返回值，且 g 的实现（沿超类解析）读取本类或超类的实例字段，则 x 的静态类型是键载体类。
+   键载体类按容器形态类处理（`classes.rs::container_shape`），对象按分配点分开，读取方法按接收者对象克隆，
+   P3 按对象取返回值（`obj_rets.rs`）。实测载体为 `URI`（`URL.of@247 uri.toString()` 流入 `URL.<init>(URL,String,…)` 的 spec，
+   即协议键）与 `UrlDeserializedState`（`getProtocol()`）。`Provider$Service` 的键是直接 getfield，不是载体。
+   判定在首次查询时一次求出，只取决于清单与类文件，与处理顺序无关。
+2. **反序列化写入不进 `owild`**（`obj_fields.rs::untracked_instance`，④-3）：值集里以类 id 出现的容器形态类实例，只能来自
+   不经分配点的途径（反序列化 `<alloc>`、反射 / Unsafe 分配），与任何抽象对象都不是同一个运行期对象。
+   `putfield` 接收者是这类实例时，写入只并入全局值集 `fvals`，不并入 `owild`。`readObject` → `Parser` 写回的
+   `authority` / `fragment` 等因此不再把全部 URI 抽象对象的按对象读拉回 Top。
+   同时字节码写入值改取 `PV::of_ret`，确定非空的引用记为「非空引用」，`path == null` 一类判定可折。
+3. **映像对象全字段确定初始化**（`image_start.rs` + `facts.rs::oimage`，本节新增）：映像只列非缺省值。
+   构建期确定内容的抽象对象（非占位、非延迟值、非类镜像）的未列出实例字段，逐字段记缺省值进 `ovals`，并登记 `oimage`；
+   按对象读（`obj_field_value`）对 `oimage` 对象不再并入初值。此前映像 URI（`SystemModuleFinders` 的 `jrt:/<模块>` 位置）
+   的 `scheme` 按对象值是 `"jrt"`，但与初值 null 汇合成 Top，`URL.of` 在这些上下文中仍走慢路径（只有机制 1、2 时，
+   Hello 中 12 个映像 URI 上下文都到 @247 / @251）。
+
+诊断：新增 `--flows '@ofield:<字段键子串>'`，列出 `owild`、各抽象对象的字段值，映像对象另列映像原值与占位 / 延迟标记。
+
+### 32.2 实测（`rava closure`，`closure_composition_job.sh deepcopy hello`）
+
+| 作业 | 提交 | 用例 | 类 | 方法 | 闭包耗时 |
+|---|---|---|---:|---:|---:|
+| uri-base-9a48ca32（sg1） | 9a48ca32（基线） | HelloWorld | 3407 | 18453 | 109.4 s |
+| uri-base-9a48ca32（sg1） | 9a48ca32（基线） | DeepCopy | 3727 | 21500 | 957.9 s |
+| uri-new-45aa8d24（kr1） | 45aa8d24（机制 1 + 2） | HelloWorld | 2232 | 11411 | 39.2 s |
+| uri-new-45aa8d24（kr1） | 45aa8d24（机制 1 + 2） | DeepCopy | 3088 | 17088 | 610.5 s |
+| uri-new-cab8ece3（kr1） | cab8ece3（机制 1 + 2 + 3） | HelloWorld | **2158** | **11061** | 36.3 s |
+| uri-new-cab8ece3（kr1） | cab8ece3（机制 1 + 2 + 3） | DeepCopy | **3070** | **17036** | 579.3 s |
+
+- 净变化：HelloWorld 少 1249 类、少 7392 方法；DeepCopy 少 657 类、少 4464 方法。两例都只减不增（新增 0 类）。
+  闭包耗时 HelloWorld 109 → 36 s，DeepCopy 958 → 579 s。sg1 与 kr1 是同规格云服务器；cab8ece3 一轮另带一个 `--flows @vals` 查询。
+- 收益远大于 §31.2 贪心模型的约 285 类。原因是慢路径 `new URL(null, spec, null)` 的协议键放开到全部 URL Handler
+  （jar / http / ftp …），继而带入各 `URLConnection`、`JarFile` / zip、`nio.file`、JCA 提供者与证书链。
+  门排名只计 jar 一支，其他 Handler 的下游没有计入。
+  HelloWorld 减少最多的包：`sun/security/util` 101、`sun/security/provider` 95、`sun/security/ec` 84、`sun/net/www` 82、
+  `sun/security/x509` 74、`com/sun/crypto` 52、`java/util/concurrent` 34、`java/nio/file` 29、`sun/security/pkcs11` 26。
+- 出口判定：
+  - HelloWorld：`sun/net/www/protocol/jar/JarURLConnection`、`java/net/JarURLConnection`、`JarVerifier`、`PKCS7`、`X500Name` 全部出闭包；
+    `CertificateFactory` 只剩 type 级。
+  - DeepCopy：jar `JarURLConnection`、`JarVerifier`、`PKCS7` 出闭包；`java/net/JarURLConnection` 只剩 type 级
+    （`ResourceBundle$Control.needsReload@98` 的 instanceof）。
+  - `URL.of` 的全部上下文（URI$1.create 分配的 `jrt` URI 加全部映像 URI）只到快路径 @123 / @136，慢路径 @238 / @251 不可达。
+- 生成器单测（cab8ece3，sg1 / kr1）：cfg 7、classfile 11、closure lib 237、rava bin 31、rava_link 4、archive_emit_cli 1、
+  build_cli 17 全过；closure_cli 除 `closure_independent_of_hash_seed` 外全部跑完，唯一失败为已知 `param_string_constants_fold_switch`。
+  `closure_independent_of_order` 失败于 `FindOps` 派发点（`FindOp.evaluateSequential@20` ↔ `FindTask.doLeaf@29`），
+  即 afdfa922 已记录的先于本分支存在的差异（续作 6），与 URI 线无关。
+  `closure_independent_of_hash_seed` 在单测作业里两次被 2h 上限截断，已在合并基线后的 23d22d77 上于 dev 单独补跑
+  （作业 `uri-utH-23d22d77`），结果待取。
+
+### 32.3 余项（不属本线）
+
+- DeepCopy 仍有 347 个 `sun/security` / `java/security/cert` / `java/util/jar` 类，来源与 jar URL 无关：
+  - x509 / 证书工厂：`CodeSource.readObject`（反序列化可达的 `readObject`，反射根）→ `CertificateFactory.generateCertificate`
+    → `X509Factory` → `X509CertImpl`。这是用户合法语义（序列化）面上的开放类型问题，同 §31.2 #6。
+  - pkcs11：`ObjectInputFilter$Config$Global.checkInput` → `ResourceBundle.getBundle` → `ResourceBundle$CacheKey.getProviders`
+    → `ServiceLoader.load` 的服务提供者，同 §29 的 pkcs11 归因。
+  - `X500Name`：`PrintStream.println` 引导区残差 → `String.valueOf` → `X509CertInfo.toString` 开放派发。
+- jar `Handler` 仍因 `URLClassPath.<init>` 无条件构造留在闭包（§30.15），但它的 `openConnection` 下游已经不可达。
+
+## 33. 能力③：常量格式串的具体求值与按对象读说明符字段（2026-10-10，分支 `c1d-fmt`，基于 9a48ca32）
 
 目标：格式串里没有日期转换时，`FormatSpecifier.print` 不再到达 `printDateTime` → Calendar →
 SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字节码建模，不对 Formatter 做特判。
 
-### 32.1 现状与阻塞
+### 33.1 现状与阻塞
 
 `Formatter.parse(String)` 已经是具体求值入口（`[concrete] entries`）。要收窄，以下两个条件必须同时成立：
 
@@ -4443,7 +4508,7 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
    字段值写进全局值集和通配值。即使各调用点都成功，只要档案里某个常量格式串含日期转换（日志的
    `SimpleFormatter` 缺省格式就有），全局 `dt` 仍是 `{0, 1}`。
 
-### 32.2 机制 B：结果按对象物化（`[concrete] object_results`，第 1 步，已实现）
+### 33.2 机制 B：结果按对象物化（`[concrete] object_results`，第 1 步，已实现）
 
 - **清单**：`object_results` 列出结果按对象物化的入口（须同在 `entries`）。首个入口是 `Formatter.parse`。
 - **按对象的类**（`pobj_types`）：分析开始前扫描各入口**自身字节码**里的 `new`，得到这些类。
@@ -4479,7 +4544,7 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
   3. 未知接收者的写入：对象逃逸后经 `U` 与 `owild` 覆盖。
 - 求值期间对其他既有对象的写入经 `shared_puts` 进入 `owild`。
 
-### 32.3 机制 A：字符串链按调用点克隆（视诊断决定是否需要）
+### 33.3 机制 A：字符串链按调用点克隆（视诊断决定是否需要）
 
 如果诊断显示 parse 调用点回退的原因是「实参不可枚举」（形参被 Top 污染），或「组合数超过 64」（全部调用点的
 常量格式串汇合），就需要给「字符串形参原样转给具体求值入口字符串形参」的转发链按调用点克隆，
@@ -4487,9 +4552,9 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
 - 掩码按字节码判定，并沿 static / special / 直接实例调用递归；
 - 上下文按调用点链命名，深度有界。
 
-具体是否需要，见 32.4 的诊断。
+具体是否需要，见 33.4 的诊断。
 
-### 32.4 诊断：回退调用点的污染来源（`fmt-d1-0dfce4dd` / `fmt-d2-78614c31` / `fmt-d3-78614c31`，sg2）
+### 33.4 诊断：回退调用点的污染来源（`fmt-d1-0dfce4dd` / `fmt-d2-78614c31` / `fmt-d3-78614c31`，sg2）
 
 诊断手段（均为通用诊断，不含类名特判）：
 - `--flows @taint:<方法模式>`：列出匹配方法节点上被污染的形参槽，逐跳回溯污染来源，直到第一个不是透传的来源。
@@ -4522,9 +4587,9 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
   - **Calendar**：经 `printDateTime@34`（日志路径必经），也经 `TimeZone.getDisplayName` → CLDR → `MessageFormat`
     → `SimpleDateFormat`（`%Z` 等转换）。
 
-### 32.5 结论与实测
+### 33.5 结论与实测
 
-**能力③的收窄目标在 HelloWorld / DeepCopy 上无法健全达成。** 根因是 32.4 中的运行期退出日志链。
+**能力③的收窄目标在 HelloWorld / DeepCopy 上无法健全达成。** 根因是 33.4 中的运行期退出日志链。
 只要它在档案上，`printDateTime` → Calendar 链和 ServiceLoader、SPILocaleProviderAdapter 都是真实可达的。
 「格式串无日期转换就不到 `printDateTime`」这条在**单个调用点**上成立，但档案按并集计算，其中必有这个日期格式调用点。
 
@@ -4542,7 +4607,7 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
   即使把这一处也分开，`printDateTime` 仍会经日志调用点到达，所以数字不会变。
 
 **机制 B 的去留**：保留。理由如下：
-- 它是常量格式串按对象读说明符字段的终态形式，健全性论证见 32.2；
+- 它是常量格式串按对象读说明符字段的终态形式，健全性论证见 33.2；
 - 门在分析前确定，不引入次序依赖；
 - 在不含退出日志链的构建单元上，或者将来日志链被健全地排除后，它直接生效。
 
@@ -4557,7 +4622,7 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
    这样能消除抽象 parse 对具体说明符 `dt` 的污染，但会改 `bytecode.rs` 的字段写入路径（与 c1d-uri 同区），且受第 1 项支配。
 3. 机制 A（字符串链按调用点克隆）不需要：回退原因不是污染串扰，而是真实未知值。
 
-### 32.6 次序依赖回归、逐组应用与停用（2026-10-10 续，分支 `c1d-fmt`）
+### 33.6 次序依赖回归、逐组应用与停用（2026-10-10 续，分支 `c1d-fmt`）
 
 **回归**：机制 B（42e25cf4）令 HelloWorld `closure_independent_of_order` 失败（`fmt-o-78614c31`；基线 9a48ca32 HelloWorld 通过，只有既有的 DeepCopy FindOps 差异）。
 `fmt-od-78614c31` 对照缺省次序与 batch 1 / seed 0：缺省次序多出 `ArrayListSpliterator.tryAdvance@48 → DistinctSpliterator.accept` 等流水线派发目标。
@@ -4577,7 +4642,7 @@ SPILocaleProviderAdapter → ServiceLoader 链（§31.5）。只用通用的字�
 | HelloWorld | 577 | 577 |
 | DeepCopy | 3727（561 s，峰值 9.0 GiB） | 超 14 GiB 被 OOM 杀（700–755 s） |
 
-- logchain3 后 HelloWorld 的退出日志链已出闭包（32.5 余项 1 由日志链缺口 ③ 以构建期折叠健全解决，不需改 U1）。HelloWorld 不论是否开机制 B 都是 577，机制 B 在其上无增量。
+- logchain3 后 HelloWorld 的退出日志链已出闭包（33.5 余项 1 由日志链缺口 ③ 以构建期折叠健全解决，不需改 U1）。HelloWorld 不论是否开机制 B 都是 577，机制 B 在其上无增量。
 - DeepCopy 在逐组应用不设组合上限时内存爆。`partial_tried` 去重后依旧，所以内存不在重复处理上，而在组合数，以及每组物化的抽象对象与按对象字段值。
   - 未确认的一点：只开机制 B、不开逐组应用时 DeepCopy 是否也超限。旧基线上机制 B 未超（sg2 无内存上限）。
 
@@ -4601,9 +4666,9 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 3. 若来自物化对象：同一说明符类、同一字段值的对象按值合并（对象名改按字段值散列而非组合序号），对象数以不同说明符形态为上界。
 4. 恢复 `object_results` 后重跑 HelloWorld / DeepCopy 闭包计数与 `closure_independent_of_order`。
 
-### 32.7 内存受控、枢纽形参槽污染与具体上下文活性（2026-10-10 续，分支 `c1d-fmt2`，基于 batch-1010f 956efa18）
+### 33.7 内存受控、枢纽形参槽污染与具体上下文活性（2026-10-10 续，分支 `c1d-fmt2`，基于 batch-1010f 956efa18）
 
-按 §32.6 接手方向 1–4 执行，`[concrete] object_results` 已恢复为 `Formatter.parse`。
+按 §33.6 接手方向 1–4 执行，`[concrete] object_results` 已恢复为 `Formatter.parse`。
 
 **内存来源：物化对象数（9347252b 计数诊断，dev）**
 
@@ -4612,7 +4677,7 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 | 只开机制 B（7b9c213b，临时） | 128+ | — | 9.1 GiB |
 | 机制 B + 逐组应用（07c0606e，临时） | 512+ | 55 | 13.2 GiB（趋势超 14 GiB） |
 
-内存随物化对象数增长，而非组合数本身。按 §32.6 方向 3 处理。
+内存随物化对象数增长，而非组合数本身。按 §33.6 方向 3 处理。
 
 **修正 1：结果对象按内容命名（f8af6fed）**。按对象物化的结果对象名由组合序号改为 `{类}@concrete:{快照内容 FNV 散列}`。
 同类、快照相同的对象合并为一个抽象对象，对象数的上界是不同说明符形态数，与格式串条数、调用点数无关。
