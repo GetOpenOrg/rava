@@ -149,7 +149,9 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
   - 覆盖：synchronized、wait / notify、线程、类初始化、Atomic*、VarHandle 引用 RMW、Unsafe 字段偏移、volatile 基本类型、自旋 volatile、虚拟线程时钟 park、ForkJoin common pool、并行数组 CAS、CHM transfer、字段修饰符反射等。
   - 小步 A 抽查时基线同败的 TestConcurrentClinit / TestJucSync 本轮通过（fix-clone 等已并入基线）。
 - **efafe2cb 后 debug 档**：concB-tn-358a2a8d 抽查 5/5 通过（TestThreadNatives / TestThreadStates / TestThreadJoin / TestThreadInterrupt / HelloWorld）。
-- **release 档抽查**：concB-rel-c955162e（us1），RELRESULT。
+- **release 档抽查**：concB-rel-358a2a8d（dev，25 例 + TestThreadNatives）25/26 通过。
+  - 唯一失败 TestObjectWaitFrames：release 档缺 `Object.wait Object.java:480` 一帧（`wait(JI)` 越界纳秒路径）。基线 456c77d7 release 同败（concB-relbase-456c77d7），差异逐字相同，不属本线。debug 档通过。
+  - 先前 us1 的 concB-rel-c955162e 前 11 例中，DeepCopy 为资源类 OOM（11.9G 上限），其余通过；本轮在 dev 上 DeepCopy 通过。
 - **单测**：concB-ut-f4581b9b，A 组（closure_cli）与 B 组（其余工作区 + driver 其余集成测试 + rava_macros_core）共 630 通过、0 失败，日志无 FAILED 行。
   - thread_local_lint 单独作业 tlfix-3b95ceeb 通过。
 
