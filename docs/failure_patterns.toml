@@ -623,3 +623,330 @@ status = "fixed"
 diagnose = "查存根方法所在类是否仍有整类手写；按手写边界规范改走字节码"
 doc = "docs/plans/2026-10-01-regress2-notes.md §10.5"
 since = "2026-10-10"
+
+# ── 历史补登：运行期（闭包精度 / 生成器语义） ───────────────────────────────────
+
+[[pattern]]
+id = "forname-array-descriptor-null-recv"
+stage = "run"
+symptom = "Class.forName(\"[I\").getName() 处 null_recv 违约 panic"
+match = []
+tests = ["TestForNameInit"]
+cause = "按名取类（engine/class_lookup.rs）对描述符形式的数组类名直接跳过，候选集为空且非 top，后续 getName 被判接收者恒 null"
+introduced = ""
+fixed = ["be997659"]
+status = "fixed"
+diagnose = "看 null_recv 接收者是否来自 forName / loadClass，名字是否为数组描述符"
+doc = "docs/plans/2026-10-01-regress2-notes.md §1"
+since = "2026-10-10"
+
+[[pattern]]
+id = "unmodeled-unresident-read-null-recv"
+stage = "run"
+symptom = "代理注解调用结果上的调用 null_recv 违约（如 annotationType().getSimpleName()）"
+match = []
+tests = ["TestAnnoNestedArray"]
+cause = "代理接口调用经 open 枢纽派发不到目标，结果类型集为空、读取点不驻留流图；未建模派生只给驻留节点打标，下游以它为接收者的调用按空集判恒 null"
+introduced = ""
+fixed = ["33080701"]
+status = "fixed"
+diagnose = "看 null_recv 的接收者是否为动态代理 / open 派发调用的结果；查 engine/unmodeled.rs 的派生标记"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "turbofish-bare-typevar-cce"
+stage = "run"
+symptom = "泛型类构造实参被按调用方类型变量做检查转换，ClassCastException（Box<Integer>.map(Object::toString)）"
+match = []
+tests = ["TestNestedGeneric"]
+cause = "生成器擦除方法级类型变量，构造实参为顶层 Object；resolve_ctor_turbofish_args 视其为无约束，取调用方的 T 引入 Java 不做的 checkcast"
+introduced = ""
+fixed = ["a606a042"]
+status = "fixed"
+diagnose = "看 CCE 处生成的 ::<T>::new(From::from(..)) 的类型实参来源（instr/src/invoke/bind.rs）"
+doc = "docs/plans/2026-10-01-regress2-notes.md §2"
+since = "2026-10-10"
+
+[[pattern]]
+id = "concat-null-tostring-npe"
+stage = "run"
+symptom = "字符串拼接 null 引用实参时 NPE（\"x\" + System.getProperty(不存在的键)）"
+match = []
+tests = ["TestPropertiesDefaults", "TestSystemPropsSpec"]
+cause = "实参被折叠为 null 后静态类型不再是 String，走引用实参分支生成 Object::toString()；手写 Object.toString 对 null 接收者抛 NPE，而拼接语义是 String.valueOf"
+introduced = "f7977d04（手写 Object 方法对 null 接收者抛 NPE，暴露）"
+fixed = ["e2eb4655", "a8544942"]
+status = "fixed"
+diagnose = "看 NPE 是否在 invokedynamic 拼接处、实参是否可为 null"
+doc = "docs/plans/2026-10-01-regress2-notes.md §5"
+since = "2026-10-10"
+
+[[pattern]]
+id = "annotation-seed-excludes-user-enum"
+stage = "run"
+symptom = "AnnotationFormatError: Invalid default（注解默认值里的用户枚举取不到常量）"
+match = [["AnnotationFormatError: Invalid default"]]
+tests = ["TestAnnoValues"]
+cause = "注解种子收集把用户类排除在枚举 / Class 元素类型之外（沿用用户类全部入链的旧假设），只在注解属性里出现的用户枚举停在 L1；且不扫注解类型的 AnnotationDefault"
+introduced = ""
+fixed = ["a5c6dacf"]
+status = "fixed"
+diagnose = "rava closure --why <枚举类> 看级别是否为 L1；查 closure/src/seeds/annotation.rs"
+doc = "docs/plans/2026-10-01-regress2-notes.md §4"
+since = "2026-10-10"
+
+[[pattern]]
+id = "annotation-seed-nested-user-members"
+stage = "output"
+symptom = "嵌套注解数组的第二层成员丢失（@Branch({…}) 打印成 @Branch()）"
+match = []
+tests = ["TestAnnoNestedArray"]
+cause = "注解种子只给 JDK 注解类型补种方法表，用户注解类型未补，AnnotationParser 按未知成员丢弃全部取值"
+introduced = ""
+fixed = ["7fdbfa8c"]
+status = "fixed"
+diagnose = "对照注解 toString 缺失的成员；查用户注解类型的方法是否入闭包"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md"
+since = "2026-10-10"
+
+[[pattern]]
+id = "module-resource-hand-listed"
+stage = "run"
+symptom = "Character.getName 抛 InternalError（Caused by NPE：uniName.dat 资源流为 null）"
+match = []
+tests = ["UTF8EncodeDecode"]
+cause = "模块资源只嵌入 seeds.toml [module_resources] 手登记的路径，uniName.dat 缺席；改为由调用链上方法体的 ldc 资源名按 Class.resolveName 规则推导"
+introduced = ""
+fixed = ["404f56b7"]
+status = "fixed"
+diagnose = "看失败点是否为 getResourceAsStream 返回 null；查资源名是否为调用链上的 ldc 常量"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.2"
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-inference-gaps-after-upcall-decl-removal"
+stage = "run"
+symptom = "删除手写回调声明后推断没接上：ResourceBundle.setParent / FileInputStream.read([BII)I 存根、unreflectField 接收者 null"
+match = []
+tests = ["DateTest", "CalendarTask", "Currency", "FileIODemo", "FieldDemo"]
+cause = "手写体静态类型推断缺口：索引表达式不取容器元素类型、关键字字段访问器（in → __get_in_）未还原 Java 字段名、T::__class_init() 不作为类初始化回调"
+introduced = "59dbedc1（C6 步骤 2 删除手写 upcalls 声明）"
+fixed = ["6803e087"]
+status = "fixed"
+diagnose = "看存根方法的调用者是否只在手写体；查 handwritten/stype.rs 对该表达式的静态类型"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md 六"
+since = "2026-10-10"
+
+[[pattern]]
+id = "hw-ctor-shaped-helper-fn"
+stage = "run"
+symptom = "NumberFormat.setParseIntegerOnly 命中存根（手写 getIntegerInstance 内）"
+match = []
+tests = ["DateTest"]
+cause = "动态类型推断按 new_ 前缀把本文件辅助 fn（Self::new_format）当成构造 Self，接收者记为已推出却解析不到类，回调边落空"
+introduced = "59dbedc1（C6 步骤 2）"
+fixed = ["d78940ff"]
+status = "fixed"
+diagnose = "看手写体中接收者来自构造器名形态的辅助 fn 调用"
+doc = "docs/plans/2026-10-01-c4-regression-fixes.md 六"
+since = "2026-10-10"
+
+[[pattern]]
+id = "class-generic-signature-null"
+stage = "run"
+symptom = "泛型反射退化：Class cannot be cast to ParameterizedType、Mismatch of count of formal and actual type arguments、类型形参为空"
+match = [["class java.lang.Class cannot be cast to class java.lang.reflect.ParameterizedType"],
+         ["MalformedParameterizedTypeException: Mismatch of count"]]
+tests = ["TestGenericSuperclassReflect", "TestOwnerTypeFaces", "TestMemberModifiers"]
+cause = "Class.getGenericSignature0 手写恒返回 null，类级泛型签名缺席，getGenericSuperclass / Interfaces 退回 Class、getTypeParameters 为空；元数据新增 CLASS_SIGNATURE 表按表返回"
+introduced = ""
+fixed = ["b8fb31f6"]
+status = "fixed"
+diagnose = "看 getGenericSignature0 返回值；查 java_meta CLASS_SIGNATURE 是否含该类"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（R2 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "array-source-instanceof-folded"
+stage = "output"
+symptom = "toGenericString 输出 <CCE>，类型变量 bounds 未具化"
+match = []
+tests = ["TestMemberModifiers"]
+cause = "TypeVariableImpl.getBounds 的 value instanceof FieldTypeSignature[]（静态类型 Object[]）被编译期折叠为假——数组源未考虑协变"
+introduced = ""
+fixed = ["89b30f0b"]
+status = "fixed"
+diagnose = "查被删的 instanceof 分支的源静态类型是否为引用元素数组"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（R2 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "opaque-user-class-no-field-rows"
+stage = "run"
+symptom = "只经类字面量出现的用户类 getDeclaredField 抛 NoSuchFieldException"
+match = []
+tests = ["TestOwnerTypeFaces"]
+cause = "只经类字面量出现的用户类判为 L1（java_class_opaque!），不透明形态不发字段行，CLASS_FIELDS 无该类"
+introduced = ""
+fixed = ["d1e37fc5"]
+status = "fixed"
+diagnose = "rava closure --why <类> 看级别；查 java_meta CLASS_FIELDS"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（R2 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "bridge-method-not-in-reflect"
+stage = "run"
+symptom = "stub: L3 反射分派未覆盖 java/lang/Comparable.compareTo（桥方法不在反射元数据与分派臂）"
+match = [["stub: L3 反射分派未覆盖 java/lang/Comparable.compareTo"]]
+tests = ["TestInterfaceMethodReflect"]
+cause = "桥方法（ACC_BRIDGE）不发射为 Rust 方法，方法元数据与分派臂里都没有，getMethod 落到接口、isBridge 计数为 0"
+introduced = ""
+fixed = ["44977c83"]
+status = "fixed"
+diagnose = "看 L3 存根的描述符是否为擦除后的桥签名"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（R11 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "reflect-array-native-missing"
+stage = "run"
+symptom = "native: java/lang/reflect/Array.get / set 系未实现"
+match = [["native: java/lang/reflect/Array."]]
+tests = ["TestReflectArrayDeep"]
+cause = "Array.get/set 系 18 个 ACC_NATIVE 方法缺手写，按 HotSpot Reflection::array_get / array_set 补"
+introduced = ""
+fixed = ["67223ecb"]
+status = "fixed"
+diagnose = "按 native 描述符补共置手写"
+doc = "docs/plans/2026-10-03-gen-fixes.md 4"
+since = "2026-10-10"
+
+[[pattern]]
+id = "canonicalize-requires-existing-path"
+stage = "run"
+symptom = "getCanonicalPath 对不存在的路径抛 IOException: No such file or directory (os error 2)"
+match = [["No such file or directory (os error 2)"]]
+tests = ["TestFileCanonicalPaths"]
+cause = "手写 UnixFileSystem.canonicalize0 直接 realpath，要求整条路径存在；JDK（canonicalize_md.c）逐段剥离取可解析最长前缀再接回尾部"
+introduced = ""
+fixed = ["4308ba57"]
+status = "fixed"
+diagnose = "对照 JDK native 源码逐句核对手写 native 语义"
+doc = "docs/plans/2026-10-07-c4-misc-failures.md 三"
+since = "2026-10-10"
+
+[[pattern]]
+id = "static-field-table-empty-macro-attr"
+stage = "run"
+symptom = "按名访问静态字段落空（StockTrans serialVersionUID 未命中）"
+match = []
+tests = ["StockTrans"]
+cause = "宏按属性字符串子串匹配 java_field 反射标记，编译器后端的字符串化空白形态与 proc_macro2 回退实现不同，实际构建中全部类的静态字段表为空"
+introduced = ""
+fixed = ["402840af"]
+status = "fixed"
+diagnose = "看 java_meta 静态字段表是否为空；宏解析改用语法树而非字符串"
+doc = ""
+since = "2026-10-10"
+
+# ── 历史补登：输出不一致 ──────────────────────────────────────────────────────
+
+[[pattern]]
+id = "array-covariance-isassignablefrom"
+stage = "output"
+symptom = "Object[].class.isAssignableFrom(Integer[].class) 为 false（arr-covariant=false）"
+match = [["+arr-covariant=false"]]
+tests = ["TestClassCastSubclass"]
+cause = "手写 Class.isAssignableFrom 只查超类型表，数组类不在表中退化为同名相等；改为统一走 __name_assignable（含数组协变）"
+introduced = ""
+fixed = ["c029e39b"]
+status = "fixed"
+diagnose = "查数组 / 基本类型类的相容判定是否走同一真源"
+doc = "docs/plans/2026-10-03-gen-fixes.md 3"
+since = "2026-10-10"
+
+[[pattern]]
+id = "reflect-invoke-no-arg-check"
+stage = "output"
+symptom = "Method.invoke 实参个数 / 类型不符不抛 IllegalArgumentException"
+match = [["-argc-iae=IllegalArgumentException"], ["-type-iae=IllegalArgumentException"]]
+tests = ["TestInvokeNullArgs"]
+cause = "native invoke 直通 reflect_invoke，缺 HotSpot Reflection::invoke_method 的前置校验（空接收者 NPE、实参个数 / 类型 IAE）"
+introduced = ""
+fixed = ["a126de03"]
+status = "fixed"
+diagnose = "查 reflect_dispatch::native_invoke 的描述符校验"
+doc = "docs/reports/e2enew-da8abee1-triage.md 三（R5 实施要点）"
+since = "2026-10-10"
+
+[[pattern]]
+id = "instanceof-same-erasure-folded"
+stage = "output"
+symptom = "嵌套记录模式整段消失（少输出行）"
+match = []
+tests = ["RecordPatternTest"]
+cause = "静态 instanceof 只认类型文本相等或严格子类型；同一擦除类仅类型实参不同（Decorator<Decorator<..>> instanceof Decorator）被判互斥并折叠为 false"
+introduced = ""
+fixed = ["b8f5ba28"]
+status = "fixed"
+diagnose = "看缺失输出对应的 if 是否在生成代码中被删；查静态 instanceof 判定"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.4"
+since = "2026-10-10"
+
+[[pattern]]
+id = "rust-symbol-stack-frames"
+stage = "output"
+symptom = "栈帧 / 调用者信息为 Rust 符号解析结果（行号 -1、帧缺失或多余）"
+match = []
+tests = ["PrintDebugStatement", "ReflectionGetSource"]
+cause = "vm_stack 按 Rust 符号名解析帧，行号恒 -1 且受内联与符号形态影响；终态改为发射层生成 Java 行表、按 (文件, 行) 查表恢复 Java 帧，单一帧源"
+introduced = ""
+fixed = ["7fdabf63", "bf91f075"]
+status = "fixed"
+diagnose = "对照栈帧差异；查 java_meta 行表是否含该方法"
+doc = "docs/plans/2026-10-01-regress2-notes.md §10.1 / §10.1a"
+since = "2026-10-10"
+
+[[pattern]]
+id = "opaque-class-metadata-dropped"
+stage = "output"
+symptom = "不透明（L1）类的反射查询错误：isAssignableFrom 恒 false、getEnclosingClass / isMemberClass 缺失；或 main 类初始化钩子 E0599 __class_init"
+match = []
+tests = ["TestClassNaming", "TestClassLiteral"]
+cause = "L1 不透明类只发 #[binary_name]，丢了类级元数据（超类型 / 内部类 / 修饰符等），java_meta 建不出层次表；class_init_hooks 也未排除不透明类"
+introduced = ""
+fixed = ["5d3914b7"]
+status = "fixed"
+diagnose = "rava closure --why <类> 看级别；查 java_class_opaque! 是否带类级元数据行"
+doc = "docs/plans/2026-10-01-regress2-notes.md §3"
+since = "2026-10-10"
+
+[[pattern]]
+id = "opaque-annotation-type-no-class-annos"
+stage = "output"
+symptom = "反射调用 @CallerSensitive 方法时调用者报为宿主类"
+match = []
+tests = ["TestCallerSensitiveHandle"]
+cause = "CallerSensitive 为 L1 不透明注解类型，L1 类不发类级注解，@Retention(RUNTIME) 读不到，Method 注解解析丢弃 @CallerSensitive，Method.invoke 走直调不经注入调用器（B1 元数据裁剪回归）"
+introduced = "B1 元数据裁剪"
+fixed = ["eb6940e8"]
+status = "fixed"
+diagnose = "看 CLASS_ANNO 是否含该注解类型的行"
+doc = ""
+since = "2026-10-10"
+
+[[pattern]]
+id = "single-letter-class-as-primitive"
+stage = "output"
+symptom = "单字母用户类（如 S）的虚调用静态绑到超类实现（PolymorphicCopy 打印 T 而非 S）"
+match = []
+tests = ["PolymorphicCopy"]
+cause = "Engine::touch 把长度为 1 且属于 BCDFIJSZV 的类名当基本类型描述符跳过，单字母用户类不入实例化集，虚槽判定只见一个实现"
+introduced = ""
+fixed = ["26bf9671"]
+status = "fixed"
+diagnose = "看 closure.json classes / instantiated 是否缺该类"
+doc = ""
+since = "2026-10-10"
