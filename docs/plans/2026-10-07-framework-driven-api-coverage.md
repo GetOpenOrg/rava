@@ -55,3 +55,14 @@
   - 步骤 1 产出已入库：`tests/api_surface/s0.txt`（面 2868，其中公开 2865，JVM 实载命中 2087）、`tests/api_surface/tiers_s0.toml`（主力 1095 / 暂缓 10 / 补测 1376，`common_df = 0.1`），报告 `docs/reports/api-surface-s0.md` 第五～七节已补。
   - **闭包两变体在 15G 上均未产出**：A 超时 2400 s；B（加 1987 个种子）在峰值 11.6 GiB 时被 OOM 杀掉。面与分层暂取「一跳 ∪ JVM 实载近似」，标「闭包待 dev 恢复复算」。dev 恢复后用同一作业脚本换新 tag 复算（加 `--slot-mem dev=28`，必要时放宽 `API_SURFACE_CLOSURE_TIMEOUT`），重出 s0.txt 与分层。
   - 遗留：分层规则 3（专属 ∩ 面 ≠ ∅）在一跳全集上区分度不足，复算时改为以闭包面加面外占比阈值判定（见报告 §5.5）。known_failures 复核有差异 2 例（TestStringGetCharsLegacy、TestVirtualThreadScale，见报告 §七），未改 toml。
+- 10-10 dev 复算（分支 api-surface-s0b，作业 apis0-dev2-b4e01dc7 / apis0-dev3-b05da66c / apis0-dev4-0517c6f3）：
+  - **闭包仍未产出，闸门 G1 未解除**。
+    - A：RSS 58451 MiB 时（2251 s，上限 57344 MiB）被看门狗终止。
+    - B：31822 MiB 时（1831 s，上限 30720 MiB）被终止。
+    - 两者都是单线程，内存近似线性增长（A 约 22 MiB/s，B 约 16 MiB/s），资源阶段之后没有阶段日志。
+    - gdb 定时取栈 4 次，都落在 `link_hub`（hub.rs:170，枢纽向新调用点重放 lambda）→ `invoke_lambda` → `lambda_dispatch`（lambda.rs:157，方法引用按开放接收者展开）→ `dispatch_one` 的乘积路径上。
+    - 具体 Java 类 / 方法要等分析器加诊断才能读出，release 只有行表。见报告 §5.1、§六 G1。
+  - 解除 G1 是分析器任务：先加枢纽重放 / lambda 展开计数诊断，再把重放改为「枢纽 × lambda」只连接一次，并让接收者展开增量传播。终态目标为 S0 A / B 两个变体都在 dev 上产出，峰值 ≤ 16 GiB、耗时 ≤ 30 min。
+  - 分层规则 3 改为「面外占比 > out_ratio → 暂缓」。阈值由标定集数据决定（`--out-ratio auto`；标定集 = known_failures 阶段暂缓 / 保留 + `tests/api_surface/out_ratio_labels.toml`，共 14 例），零分错，`out_ratio = 0.4476`。
+  - 重出 `tiers_s0.toml`：主力 989、暂缓 121、补测 1370。面仍是退回口径，`s0.txt` 与 10-07 逐字节相同（2868）。
+  - known_failures 复核：5 个阶段暂缓与机械分层一致。TestVirtualThreadScale 机械判主力（面外 2 / 12），维持暂缓，toml 补写依据（命中属 Thread 类实载造成的类级高估，失败属非面因素）。TestStringGetCharsLegacy 已于 f442cecf 修复移出。报告 §7.0。
