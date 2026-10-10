@@ -107,6 +107,7 @@
   - 引用类语义（无 GC，C4 之后）；声明层底段收窄（C4 之后）；
   - 等 dev 恢复：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例。
 - **C4 全量**：10-09 在 dev（128G / 16 槽，Memtest86+ 四轮 0 错误、BIOS 风扇曲线已调）上 `--reset` 开跑，基于 main c249cdec，放宽超时（转译 1800 / 运行 900 / 构建 ×2，单例 9000 s）。转译耗时回归未修完即开跑，修复合入后续用例自动受益；全量期间 main 冻结语义改动，只合修复全量失败的提交。
+- **C4 运行超时 4 例分诊（c4-runtimeout，10-10）**：AmicablePairs、RamanujanPrimes、SelfReferentialSequence、TestParallelArrayCas（另 TestCommonPool 同症）在 c249cdec 上运行超 900 s，均为语义缺陷（并行流 / ForkJoinPool 卡死），不是 debug 档性能：10-06 的 3f59a8e9 上运行 13.3 / 1.3 / 42 / 0.71 s（CommonPool 0.1 s）。根因属 `offset-field-folded`（只经 Unsafe 按偏移写的字段在构建期初始化类 `<clinit>` 按名取偏移、未放开而被折叠）；c249cdec 不含 lc3-fix 4c42ac44，集成分支头 589052eb 抽查 c4rt-a 5/5 通过（运行 2.53 / 0.84 / 6.97 / 1.13 s，CommonPool 0.17 s）。无需新修复；fix-clone 5177e182（符号偏移产生处即放开）是同类终态收口。分诊中重复实现的 dead3574 已撤回（5743e146）。已登记 `docs/failure_patterns.toml`。
 - **测试资源**：dev 内存坏，禁止投作业，等换内存条（BIOS 散热调整同一次停机做）。现用云服务器 jp1、jp2、kr1、kr2、sg1、sg2、us1；本机只跑 cargo check。合批全量单测拆 A（`-p driver --test closure_cli`）和 B（其余）两组并行，各约 1 小时。工作流见 `docs/reference/cluster-testing.md` 十二。
 
 ## 🌳 任务依赖树（2026-10-08，集成分支 rust-closure-analyzer = main = 7ed2154f）
