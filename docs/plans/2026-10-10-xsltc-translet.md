@@ -300,3 +300,22 @@ S2 的实施中，以下情况视为「跑不通」，应停下并回报，按�
 - `defineClass0` 的 `classData` 未保存（`MethodHandles.classData` 取不到）；`Class.forName` 对预定义类的可见性只看「是否已定义」，不区分加载器；
   重复定义报错消息不含 JVM 给出的加载器描述。
 - `report_uncaught_in` 虚调 `getCause()` 使 `Throwable.getCause` 经 `uncaught` VM 规则进入每个程序的闭包：HelloWorld 方法数 +1，属正确依赖（JVM 的未捕获报告同样经 `printStackTrace` 虚调 `getCause`）。
+
+### 8.4 单测（未清零项）
+
+作业 xsltc2-ut3（3b65f6cf，dev；闭包 A 组 + B 组 + lint，均跳过 hash_seed / order 两例）：`jdk_literal_lint` / `no_jdk_literals` 通过，
+已知失败 `param_string_constants_fold_switch` 本轮通过；新增失败两条：
+
+1. `classfile::sha256::tests::known_vectors`：单测第三条向量的期望值抄错（实现无误，前两条向量通过，本机 hashlib 复核），1cfd5276 已改。
+2. **`closure_cli::reflect_new_array_element_precision` 失败（未解决）**：该例先断言 TestModuleLayerDefine 在哈希种子 0 / 1 / 2 下闭包集合一致，
+   本分支种子 0 比种子 1 多 10 类（SunJCE、SASL 提供者、`ApplicationShutdownHooks`、`UndeclaredThrowableException` 等）。
+   集成基线 6a668ac6 / b1dae15c 各跑 2 次均通过，本分支 3b65f6cf / 合入 b1dae15c 后的 9a6bee69 各跑 2 次均稳定复现（作业 xsltc2-rn-base / -new / -base2 / -new2）。
+   - 分叉点（作业 xsltc2-why / -why2，`--why`）：`Shutdown.logRuntimeExit` → `System.getLogger` → `LazyLoggers.getLogger`，
+     其中 `DefaultLoggerFinder.isSystem(module)` 种子 1 折叠为真，`getLoggerFromFinder` 分支死；种子 0 不折叠，
+     `LoggerFinderLoader` → 服务加载 `LoggingProviderImpl` → JUL `LogManager` → 安全提供者整棵子树入闭包。
+     这是又一处「按未定论的格值做不可撤回决定」的顺序依赖，与 ctxsel-mono 修掉的 `selector_ctx` 同类，属闭包引擎缺陷。
+   - 本分支只是扰动了不动点的求值顺序：诊断提交 E1（`predefined_definers` 置空，类定义 native 回到原建模）仍以同一差异失败；
+     E2（`report_uncaught_in` 回退 `getCause()` 虚调）换成另一差异失败（种子 0 / 2 方法集合差 `AbstractLoggerWrapper.log`，同在日志链）。
+     两处改动单独撤回都消不掉，说明手写层新增调用点（`class_loader_impl.rs` 等经手写扫描入闭包）同样会触发。
+   - 终态修法在引擎：定位 `isSystem` 折叠读取的格值来源（`Module.loader` 经 `ModuleLayer.defineModules` 流入层加载器），
+     改为单调（未定论时不折叠或可撤回）。待派引擎线处理；本分支不在生成器里绕开。
