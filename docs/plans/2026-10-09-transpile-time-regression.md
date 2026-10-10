@@ -200,7 +200,7 @@ p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
 - 类集合：四例对 batch-1010c **无新增**，分别减少 DeepCopy 40、JNDI 17、SerialDefaultSuid 40、SerialUserGenericCallbacks 20 个，减少的是整堆互灌带入的各集合拆分器、AbstractMap$1 等。对 e5200a3e 只多 `Method$Direct$It` / `Method$Direct$Marks`，属 b1013 的直连反射支持，与本轮无关。
 - e2e 单例（dev，p4-e1 / p4-e2）：DeepCopy、TestSerialDefaultSuid、TestSerialUserGenericCallbacks、TestSerializationHooks、TestSerialAllocTargets、SerializableDemo 全部 PASS。
 - 单测（us1，p4-ut，f0ceb0ab）：A / B 组与 rava_macros_core 全过，0 失败（顺序 / 种子两项单独跑，见下）。
-- 顺序无关：UNIT_ORDER
+- 顺序无关（p4-uoh，dev，c3ec480d；p4-uoh-head2，jp1，d14e11fe）：`closure_independent_of_hash_seed` 失败，StockTrans 种子 0 多 `Nodes$CollectionNode.forEach`。这与集成分支已登记的失败同一根因（tasks.md order-findops 条：`engine/ctxsel.rs` `selector_ctx` 读尚未定论的常量格来选上下文；集成分支上表现为 TestSerialDefaultSuid 多出同一方法），不是本轮引入。`closure_independent_of_order` 在 c3ec480d / d14e11fe 上失败于 HelloWorld / DeepCopy。这两个提交都不含 203be167（order-findops 修复），集成分支修复前同样失败。合入新基线（405c84db）后的复测：p4-uoh-m2（34cdcf9e）与同机对照 p4-uoh-m2b（405c84db），截止交付时仍在 dev 上运行；旧基线对照 p4-uoh-int2（81a2ee61，us1）也未出结果。
 
 ## 残留与建议
 
@@ -211,5 +211,5 @@ p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
 
 ## 恢复入口
 
-- 分支 perf-regress4，修复 c3ec480d，诊断 a7d8ea4b（`@escin`），已 merge origin/rust-closure-analyzer（f0ceb0ab）；worktree `/Users/yuwei/dev/workspace/rava_perf4`。
+- 分支 perf-regress4，修复 c3ec480d，诊断 a7d8ea4b（`@escin`），已 merge origin/rust-closure-analyzer（f0ceb0ab、d14e11fe、34cdcf9e）；worktree `/Users/yuwei/dev/workspace/rava_perf4`。
 - 同机对照基准（p4-t2，us1，build 模式）见「第四轮 · 实测」。
