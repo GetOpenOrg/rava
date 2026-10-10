@@ -222,6 +222,32 @@ p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
 - 单测 / 抽查：见 tasks.md 对应条目。
 - 附：`closure_independent_of_hash_seed` 在 batch-1010k（932a4ba4）曾失败，在 batch-1010l（751e0d6f）通过，本轮未单独定位其来源。
 
+### 种子无关回归：定论阶段常开，之后入链的方法得到暂时的「值未知」答复（fix-hs-sunjce，10-10）
+
+- 现象：batch-1010n（683eb272 = main a8fbebb6 + conc-step-b）上 `closure_independent_of_hash_seed` 稳定失败于 35_io/TestSerialLookupPairing，种子 1 比种子 0 多 931 个类、6526 个方法（SunJCE 等 JCA 提供者及其依赖）。main、fix-order-live 各自通过；conc-step-b 只改手写层，改变的是可达方法的组成与处理次序，不是判定本身。
+- 分叉点（探针 hs-diag1 / hs-diag2c，按调用点打印 oracle 答复与字段读）：
+  - 种子 0：`ProtectionDomain.toString@134` 处 `Policy.isSet()` 每次都答 0，`@140–153` 折成死代码，`mergePermissions` 不入链。
+  - 种子 1：`toString` 首次分析时 `isSet` 尚未分析（返回常量格缺席），却答了「值未知」，`@147 mergePermissions` 的调用边先接上。之后 `isSet` 分析得 0、`toString` 重算也折了，但调用边只增不撤。`mergePermissions → Policy.getPolicyNoCheck` 写入 `policyInfo = new PolicyInfo(PolicyFile, true)`，`isSet` 的返回格随之真的升为 Top，形成自证的环。再经 PolicyFile → URL.openStream → HTTP → NTLM → `Cipher.getInstance`，补入 JCA 提供者。
+- 根因（`engine/noreturn.rs`）：返回常量格缺席时的答复分三段：
+  1. 乐观阶段：一律按不返回。
+  2. 收尾阶段：只对未建 / 未分析 / 等待中的被调方法按不返回。
+  3. 定论：两次排空的 `never` 相同、或轮数到上限时，缺席一律按值未知。
+
+  定论本意只针对停滞的那一批方法（互相等待的环、接收者恒空而永不建节点的目标），但 `settled` 置位后不再复位。定论重算接上的新边、以及之后各项放行（`jca_order_release`、`fopen_flush`、下一轮补种 / 按名取类放行）补入的方法，首次分析时遇到尚未分析的被调方法也一律答「值未知」。这个答复与终态精确值不可比，据此连上的守卫后调用边不可撤回。哪些方法落在定论之后首次分析取决于处理次序，闭包因此随种子变化。
+- 修复：定论改为窗口（`engine/noreturn.rs` `drain` / `processed`，`engine/worklist.rs` `run` 出队处理后调 `nr_processed`）。停滞时记下这一批方法，窗口只开到它们全部重算完；之后入链的方法恢复收尾口径（未建 / 未分析 / 等待中的被调方法按不返回答复、记入 `never`、下次排空重算）。终止性不变：每次定论都让停滞批次在窗口内得到定论答复，增长有限，轮数上限照旧。
+- 与 xsltc 修复（7646c9ba，调用点答复先取常量实参求值）的关系：只叠加 7646c9ba 时（hs-x1c，jp2），TestSerialLookupPairing 三个种子的类 / 方法集合一致，但都落在大集合上（4107 类 / 24084 方法，`mergePermissions`、`getPolicyNoCheck` 与 SunJCE 均入链，`toString@140` 折为 true），不是最小不动点：`isSet` 恒为 0 自洽，`getPolicyNoCheck` 只经 `mergePermissions` 可达。7646c9ba 改变了处理次序，三个种子都在定论之后才首次分析 `toString`；定论常开的缺陷仍在，只是碰巧各种子一致。
+- 证实（hs-diag3，kr1，诊断分支 18d69b97 打印收尾 / 定论状态）：两个种子都在第一次排空后的第三轮 `nr_drain` 就进入定论（日志第 313 行，此时闭包远未长成），其后的绝大部分分析都在定论常开下进行。种子 1 的 `toString@134` 四次答复都是 `rvals=None closing=true settled=true -> Unknown`，随后 `isSet` 分析得 0，再随 `getPolicyNoCheck` 写入升为 Top。种子 0 的 `toString` 首次分析时 `isSet` 已有返回格 0。
+- 实测（dev，closure 模式，种子 0 / 1 / 2；修复 ae5f5c73 = 修复提交 + 合入 batch-1010r）：
+
+  | 用例 | main 177c88a8（种子 0） | batch-1010r 70379737（种子 0） | 修复（三个种子） |
+  |---|---|---|---|
+  | TestSerialLookupPairing | 5472 类 / 30626 方法，474 s | 5472 / 30624，465 s | **3082 / 16840，三种子一致**，118–155 s |
+  | DeepCopy | 3080 / 16855，106 s | 3080 / 16855，106 s | 3080 / 16855，三种子一致，97–109 s |
+  | HelloWorld | 580 / 1896，1.8 s | 580 / 1897，1.8 s | 580 / 1897，三种子一致，1.8 s |
+
+  三个用例在三个种子下类、方法、reflect、boot_image_data 都逐项相同。TestSerialLookupPairing 少掉的 2390 类 / 13784 方法是定论后「值未知」答复接上的守卫后调用链（`mergePermissions` → 策略文件 → URL / HTTP / NTLM → JCA 提供者等），闭包耗时降为约 1/3。本例在 main 上比 batch-1010n 时更大（5472 对 4107），因为 c4-url 按类路径放行 URL 协议处理器后，这条链又带入了更多协议实现。
+- 单测：A / B 组按合批规则在批次里测；顺序单测 closure_independent_of_hash_seed / closure_independent_of_order 在修复提交 ae5f5c73 上 2/2 通过（hs-seq，dev，3402 s）。
+
 ## 残留与建议
 
 1. **CHM 表合并：已修**（c3ec480d，见「第四轮」）。第三轮的「摘要克隆 open 接收者」方向不再需要。

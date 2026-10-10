@@ -140,6 +140,7 @@ impl<'a> Engine<'a> {
             self.in_mwork.remove(&m);
             self.stat_enter(Phase::Process);
             self.process(m);
+            self.nr_processed(m);
             self.stat_leave();
         }
     }

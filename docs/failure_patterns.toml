@@ -357,6 +357,21 @@ diagnose = "cmp 两次序闭包 JSON 定位 live 差异对象，回溯到静态�
 doc = "docs/plans/2026-10-09-transpile-time-regression.md「顺序无关回归」节"
 since = "2026-10-10"
 
+[[pattern]]
+id = "noreturn-settled-sticky"
+stage = "unit"
+symptom = "closure_independent_of_hash_seed 失败：TestSerialLookupPairing 种子 1 比种子 0 多 SunJCE 等 JCA 提供者（+931 类 / +6526 方法）"
+match = []
+tests = ["closure_independent_of_hash_seed"]
+cause = "noreturn 定论（settled）置位后常开：定论重算与其后各项放行补入的方法首次分析时，返回常量格缺席的被调方法一律答值未知（ProtectionDomain.toString 在 Policy.isSet 分析前得未知答复），守卫后调用边 mergePermissions 先接上且不可撤回，经 getPolicyNoCheck 写 policyInfo 使 isSet 真升为 Top，自证成环；落在定论之后首次分析的方法随处理次序变化。修法：定论只作窗口，停滞批次全部重算完即关闭，之后恢复收尾口径"
+introduced = ""
+fixed = ["fix-hs-sunjce"]
+status = "pending"
+owner = "fix-hs-sunjce"
+diagnose = "按调用点打印 oracle 答复（返回常量格 / 收尾 / 定论状态），找种子间首个不同的答复；若是格缺席答「值未知」且处于定论之后，即本模式"
+doc = "docs/plans/2026-10-09-transpile-time-regression.md「种子无关回归：定论阶段常开」节"
+since = "2026-10-10"
+
 # ══ 历史补登（2026-09-16 起，failure-history 2026-10-10 按提交根因与分诊文档回溯） ══════════════
 # 只登记根因与修复提交都已核实的原因；集群日志里真实出现过的稳定子串才写进 match，否则留空。
 

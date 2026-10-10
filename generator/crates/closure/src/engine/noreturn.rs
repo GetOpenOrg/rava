@@ -9,7 +9,12 @@
 //!   「不返回」答复：仍按不返回答复并记入 `never`，下次排空时重算；
 //! - 否则（全部节点已分析且没有返回路径）：定论，按值未知求值。
 //! 每次排空重算 `never` 中的方法，直到为空；两次排空的 `never` 相同（互相等待的环、接收者恒空而永不建节点的目标）
-//! 或收尾轮数达到上限时转为全部按值未知，保证终止。
+//! 或收尾轮数达到上限时，对这一批停滞的方法转为按值未知重算（定论窗口），保证终止。
+//!
+//! 定论只覆盖停滞的那一批方法的重算：窗口在这批方法全部重算完后关闭，之后入链的方法（定论重算接上的新边、
+//! 其后各项放行补入的工作）重新按收尾口径答复。定论若一直生效，此后才首次分析的方法遇到尚未分析的被调方法
+//! 就答「值未知」，守卫之后的调用边先接上且不可撤回（例：`toString` 在 `isSet` 分析之前得到未知答复，
+//! 接上 `mergePermissions` 后经策略文件 / 网络链一路补入 JCA 提供者），闭包随处理次序变化。
 
 use super::*;
 
@@ -23,8 +28,10 @@ pub(super) struct NoReturn {
     waiting: HashMap<MemberRef, u32>,
     /// 收尾阶段：乐观假设已关
     closing: bool,
-    /// 定论阶段：缺席一律按值未知
+    /// 定论窗口：缺席一律按值未知（只在停滞批次重算期间开启）
     settled: bool,
+    /// 定论窗口内尚未重算的停滞方法；全部重算完关闭窗口
+    settling: HashSet<usize>,
     last: Option<BTreeSet<usize>>,
     rounds: u32,
 }
@@ -60,7 +67,7 @@ impl NoReturn {
         !self.settled
     }
 
-    /// 定论阶段：缺席一律按值未知
+    /// 定论窗口：缺席一律按值未知
     pub(super) fn settled(&self) -> bool {
         self.settled
     }
@@ -85,11 +92,19 @@ impl NoReturn {
             self.closing = true;
         } else if self.last.as_ref() == Some(&never) || self.rounds >= MAX_ROUNDS {
             self.settled = true;
+            self.settling = never.iter().copied().collect();
         }
         self.rounds += 1;
         let out = never.iter().copied().collect();
         self.last = Some(never);
         out
+    }
+
+    /// 方法处理完毕：定论窗口内的停滞方法全部重算完即关闭窗口，恢复收尾口径
+    fn processed(&mut self, m: usize) {
+        if self.settled && self.settling.remove(&m) && self.settling.is_empty() {
+            self.settled = false;
+        }
     }
 }
 
@@ -128,6 +143,11 @@ impl<'a> Engine<'a> {
         if waiting {
             inc(&mut nr.waiting, &key);
         }
+    }
+
+    /// 方法出队处理完毕（定论窗口计数）
+    pub(super) fn nr_processed(&self, m: usize) {
+        self.ctx.noreturn.borrow_mut().processed(m);
     }
 
     /// 队列排空（补种已收敛）：还有要重算的方法时返回 true
@@ -171,9 +191,19 @@ mod tests {
         assert!(nr.answer_never(&t) && nr.answer_never(&u));
         dec(&mut nr.unanalyzed, &t);
         assert!(!nr.answer_never(&t));
-        // 同一 never 集合再次出现：停滞，转定论
+        // 同一 never 集合再次出现：停滞，停滞批次在定论窗口内按值未知重算
         assert_eq!(nr.drain(never.clone()), vec![1, 2]);
-        assert!(!nr.answer_never(&u));
+        assert!(nr.waiting.is_empty(), "排空清空等待计数，由重算的 nr_end 重建");
+        // 窗口内之后入链的 u 分析仍含未定论答复（引擎经 nr_end 重新登记等待）
+        inc(&mut nr.waiting, &u);
+        assert!(!nr.answer_never(&u), "定论窗口内等待中的目标也按值未知");
+        // 窗口在停滞批次全部重算完后关闭：之后入链的方法重新按收尾口径答复
+        nr.processed(7);
+        nr.processed(1);
+        assert!(!nr.answer_never(&u), "停滞批次未重算完，窗口仍开");
+        nr.processed(2);
+        assert!(nr.answer_never(&u), "窗口关闭后等待中的目标恢复按不返回答复");
+        assert!(nr.answer_never(&key("new")), "窗口关闭后尚无节点的目标恢复按不返回答复");
         assert!(nr.drain(BTreeSet::new()).is_empty());
     }
 }
