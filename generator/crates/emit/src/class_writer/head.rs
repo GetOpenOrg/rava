@@ -205,6 +205,10 @@ fn macro_input_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo, inp: &HeadInput<'_>, lin
     if !inp.superclass_rust.is_empty() {
         lines.push(format!("#[superclass        = \"{}\"]", inp.superclass_rust));
     }
+    // 构建期引导映像中已完成初始化的类：初始化状态单元的初值即「已完成」（计划 2026-10-05 §5.10）
+    if crate::project::boot_image::is_boot_initialized(ctx, ci.name()) {
+        lines.push("#[boot_initialized  = true]".into());
+    }
     let init_ifaces = default_init_interfaces(ctx, ci);
     if !init_ifaces.is_empty() {
         lines.push(format!("#[init_interfaces   = \"{}\"]", init_ifaces.join(";")));

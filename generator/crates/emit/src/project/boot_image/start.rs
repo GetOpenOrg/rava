@@ -1,5 +1,6 @@
-//! 启动序列 `__boot_image_start`（计划 §5.5.2 D4 / D5）：登记映像区 → VM 单元 → 链接 → 宿主值改写 →
-//! 驻留 → VM 模块表 → 静态字段初值 → 构建期初始化标记 → 按构建期次序重放（档位、重定位、重算、残差调用 / 读取）。
+//! 启动序列 `__boot_image_start`（计划 §5.5.2 D4 / D5、§5.10）：登记映像区 → VM 单元 → 初始线程 →
+//! 残差写入 → 宿主值改写 → 按构建期次序重放（档位、重定位、重算、残差调用 / 读取）。映像对象、静态字段初值、
+//! 类镜像、驻留表、VM 模块表与构建期初始化状态都是常量，启动时不逐项写入。
 //!
 //! 占位对象（残差调用 / 重放 native / 运行期初始化类静态读取的结果）在其步骤处绑定为局部 `ph{i}`，随即
 //! 回填映像中全部引用该占位的位置；之后的步骤实参直接使用该绑定。
@@ -10,17 +11,10 @@ use std::fmt::Write as _;
 use closure::image::{IBody, IExpr, ILoc, IReloc, IStep, IVal};
 use ty::type_map::{parse_descriptor_params, parse_descriptor_return};
 
-use super::values::{bits, prim_rust, Link, LinkLoc};
-use super::{Plan, START_FN};
+use super::tables::TablesText;
+use super::values::{bits, prim_rust, LinkLoc, Residual};
+use super::{image_static_accessor, Plan, START_FN};
 use crate::error::{EmitError, Result};
-
-/// 类镜像名（映像 `IObj.mirror`：binary name / 数组描述符 / 基本类型描述符字符）→ 描述符
-fn mirror_desc(name: &str) -> String {
-    if name.starts_with('[') || name.len() == 1 {
-        return name.to_string();
-    }
-    format!("L{name};")
-}
 
 /// 被调成员键 `cls.name:desc`
 fn split_member(key: &str) -> Result<(&str, &str, &str)> {
@@ -67,9 +61,6 @@ impl Gen<'_, '_, '_> {
     /// 映像对象 `t` 作为 `Object` 的表达式（未绑定的占位 → None）
     fn obj(&self, t: u32) -> Option<String> {
         let o = self.p.obj(t);
-        if let Some(m) = &o.mirror {
-            return Some(format!("rt::mirror({:?})", mirror_desc(m)));
-        }
         if o.placeholder {
             return self.bound.contains(&t).then(|| format!("ph{t}.clone()"));
         }
@@ -295,19 +286,10 @@ fn prim_lit(c: u8, b: u64) -> String {
     }
 }
 
-/// 静态字段经启动序列写入时的访问器名；不由启动序列写入（非生成类、常量、VM 注入、手写访问器）→ None
+/// 静态字段经启动序列写入时的访问器名；不由启动序列写入（非根 crate 生成类、常量、VM 注入、手写访问器）→ None
 fn static_setter(p: &Plan<'_, '_>, cls: &str, name: &str) -> Option<String> {
-    let ci = p.generated(cls)?;
-    let f = ci.fields().iter().find(|f| f.is_static() && f.name == name)?;
-    if f.constant_value.is_some() || p.ctx.manifest.vm_injected_statics.contains_key(&format!("{cls}.{name}")) {
-        return None;
-    }
-    let acc = ci.static_accessor(name);
-    let hw = p.ctx.input.handwritten.get(cls);
-    if hw.is_some_and(|h| h.methods.contains(&acc) || h.methods.contains(&format!("set_{acc}"))) {
-        return None;
-    }
-    Some(acc)
+    p.generated(cls)?;
+    image_static_accessor(p.ctx, cls, name)
 }
 
 /// 无局部绑定区段每个分段函数的语句数上限。启动序列逐条语句独立（无跨语句局部），整段放进一个函数时
@@ -334,13 +316,16 @@ fn segment(body: &str, fns: &mut String, next: &mut usize) -> String {
 
 /// 启动函数文本：`__start` 依次调用分段函数；宿主值改写（局部限于本区段）独立成函数；重放步骤的占位 /
 /// 重算绑定跨步骤存活，留在 `__start` 体内
-pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
+pub(crate) fn start_fn(p: &Plan<'_, '_>, residual: &[Residual], tabs: &TablesText) -> Result<String> {
     let mut g = Gen { p, out: String::new(), bound: BTreeSet::new(), evaluated: BTreeSet::new(), ph_refs: BTreeMap::new() };
     let d = p.d;
     let segs: Vec<String> = (0..p.nseg)
         .map(|k| format!("(&BOOT_IMAGE_{k} as *const __BootImage{k} as *const u8, ::std::mem::size_of::<__BootImage{k}>())"))
         .collect();
     g.line(&format!("__image_register(&[{}]);", segs.join(", ")));
+    // 映像表与静态字段存储是运行期按外部符号引用的定义：启动函数经保活引用使其随启动序列一同链接
+    let keep: Vec<String> = std::iter::once("&IMAGE_TABLES".to_string()).chain((0..tabs.keep).map(|k| format!("&IMAGE_STATICS_{k}"))).collect();
+    g.line(&format!("::std::hint::black_box(({},));", keep.join(", ")));
     for (name, v) in &d.cells {
         g.line(&format!("rt::vm_cell({name:?}, {v}i64);"));
     }
@@ -351,31 +336,19 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
         }
         g.line(&format!("rt::bind_initial_thread({});", p.obj_ref(t)));
     }
-    // 链接：常量不可表达的映像内引用与类镜像；占位对象留到其步骤
-    for l in links {
-        if p.obj(l.target).placeholder {
-            g.ph_refs.entry(l.target).or_default().push(Target::Loc(l.loc.clone()));
-            continue;
-        }
-        let v = g.obj(l.target).expect("链接目标已物化");
-        let s = store_ref(p, &l.loc, &v);
+    // 残差写入：槽类型无常量形态的映像内引用（目标均已物化）
+    for r in residual {
+        let s = store_ref(p, &r.loc, &p.obj_ref(r.target));
         g.line(&s);
     }
-    // 镜像缓存（U13）：具体求值写在类镜像上的缓存字段，运行期镜像在此写入映像中的值（镜像或值没有读者即不写）
-    for memo in &d.mirror_memos {
-        let (o, IVal::R(t)) = (memo.mirror, memo.val) else { continue };
-        if !p.live.contains(&o) || !p.live.contains(&t) {
-            continue;
-        }
-        let (Some(m), Some(v)) = (g.obj(o), g.obj(t)) else { continue };
-        let slot = p.slot(o, &memo.decl, &memo.name)?;
-        g.line(&format!("<{} as From<Object>>::from({m}).__set_{}(From::from({v}));", p.full_ty(&p.obj(o).ty), slot.rust));
+    for r in &tabs.statics {
+        g.line(&format!("{}::__si_set_{}(From::from({}))?;", p.expr_path(&r.cls), r.acc, p.obj_ref(r.target)));
     }
-    // 占位对象在物化对象中的引用位置（常量形态取 null 的槽；`links` 只登记可链接目标）
+    // 占位对象的引用位置（物化对象的字段 / 元素、静态字段；常量形态取 null），在其步骤处回填
     for &i in &p.mat {
         match &p.obj(i).body {
-            IBody::Inst(fs) => {
-                for (decl, name, v) in fs {
+            IBody::Inst(_) => {
+                for (decl, name, v) in p.fields(i) {
                     if let IVal::R(t) = v {
                         if p.obj(*t).placeholder && p.live.contains(t) {
                             let s = p.slot(i, decl, name)?;
@@ -395,6 +368,15 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
             }
         }
     }
+    for (cls, name, v) in &d.statics {
+        if let IVal::R(t) = *v {
+            if p.obj(t).placeholder && p.live.contains(&t) {
+                if let Some(acc) = static_setter(p, cls, name) {
+                    g.ph_refs.entry(t).or_default().push(Target::Static(cls.clone(), acc));
+                }
+            }
+        }
+    }
     let mut fns = String::new();
     let mut next = 0usize;
     let mut main = segment(&std::mem::take(&mut g.out), &mut fns, &mut next);
@@ -403,51 +385,6 @@ pub(crate) fn start_fn(p: &Plan<'_, '_>, links: &[Link]) -> Result<String> {
     if !host.is_empty() {
         let _ = write!(fns, "#[inline(never)]\nfn __start_host() -> Result<()> {{\n{host}    Ok(())\n}}\n\n");
         main.push_str("    __start_host()?;\n");
-    }
-    for &s in &d.strings {
-        if p.mat.contains(&s) {
-            g.line(&format!("rt::intern({});", p.obj_ref(s)));
-        }
-    }
-    // VM 模块表（§5.5.1 S5）：映像中的模块与其定义加载器登记为运行期 VM 模块表的初值（类镜像的模块按
-    // 「定义加载器 + 包」查表；运行期 defineModule0 的重名 / 包冲突检查以之为准）
-    for m in &d.modules {
-        if !p.mat.contains(&m.obj) {
-            continue;
-        }
-        let loader = match m.loader {
-            IVal::R(l) => g.obj(l).ok_or_else(|| EmitError::Input(format!("引导映像模块 #{} 的定义加载器 #{l} 未物化", m.obj)))?,
-            _ => "Object::__NULL".to_string(),
-        };
-        let pkgs: Vec<String> = m.packages.iter().map(|x| format!("{x:?}")).collect();
-        g.line(&format!("rt::define_module({}, {loader}, {}, {:?}, &[{}]);", p.obj_ref(m.obj), m.open, m.location, pkgs.join(", ")));
-    }
-    // 静态字段初值（零值即存储缺省值；重算 / 重定位槽由步骤写入）
-    for (cls, name, v) in &d.statics {
-        let Some(acc) = static_setter(p, cls, name) else { continue };
-        let desc = g.loc_desc(&ILoc::Static(cls.clone(), name.clone()))?;
-        let c = desc.as_bytes()[0];
-        let val = match *v {
-            IVal::N | IVal::T(..) => continue,
-            IVal::R(t) if p.obj(t).placeholder => {
-                if p.live.contains(&t) {
-                    g.ph_refs.entry(t).or_default().push(Target::Static(cls.clone(), acc));
-                }
-                continue;
-            }
-            IVal::R(t) => match g.obj(t) {
-                Some(o) => format!("From::from({o})"),
-                None => continue,
-            },
-            v if bits(v) == 0 => continue,
-            v => prim_lit(c, bits(v)),
-        };
-        g.line(&format!("{}::__si_set_{acc}({val})?;", p.expr_path(cls)));
-    }
-    for cls in &d.build_time {
-        if p.generated(cls).is_some() {
-            g.line(&format!("{}::__boot_initialized();", p.expr_path(cls)));
-        }
     }
     // 重定位（字段偏移 / VM 单元地址）的值与执行次序无关，先于任何重放调用写入：构建期初始化的类在运行期
     // 从启动起即视为已初始化，宿主相关路径上的重放调用（如按宿主编码查字符集）可能先于其构建期次序读到这些槽
@@ -473,7 +410,7 @@ fn host_rewrite(g: &mut Gen<'_, '_, '_>) -> Result<()> {
     for &a in &p.mat {
         let Some((native, idx)) = &p.obj(a).host else { continue };
         for &s in &p.mat {
-            if p.fields(s).iter().any(|(_, _, v)| *v == IVal::R(a)) {
+            if p.fields(s).any(|(_, _, v)| *v == IVal::R(a)) {
                 by_native.entry(native.as_str()).or_default().push((*idx, s));
             }
         }
@@ -545,9 +482,6 @@ mod tests {
 
     #[test]
     fn literals_and_names() {
-        assert_eq!(mirror_desc("I"), "I");
-        assert_eq!(mirror_desc("[I"), "[I");
-        assert_eq!(mirror_desc("a/B"), "La/B;");
         assert_eq!(prim_lit(b'Z', 1), "true");
         assert_eq!(prim_lit(b'I', u64::MAX), "-1i32");
         assert_eq!(prim_lit(b'C', 0x41), "65u16");

@@ -481,7 +481,8 @@ impl<'a> Engine<'a> {
                 }
             } else if let Some(ps) = self.passthrough(t) {
                 // 透传方法：结果 = 本调用点对应实参（逐调用点，不经 R 汇合）。实参按被调形参的声明类型收窄，与经
-                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关
+                // P → R 的汇合路径同一口径：摘要随分析推进由透传转为汇合时，已接的透传边被 R 涵盖，结果与处理次序无关。
+                // 反方向（汇合 → 透传）的边撤不回，故尚无返回路径（⊥）答空集透传而非汇合（`returned_params`）
                 for i in ps {
                     let fs = if !is_static && i == 0 { recv_fs.clone() } else { a.get(i as usize - base).cloned().flatten() };
                     let Some(fs) = fs else { continue };

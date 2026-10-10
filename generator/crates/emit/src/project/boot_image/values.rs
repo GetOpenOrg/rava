@@ -1,8 +1,11 @@
 //! 映像区：分段的 `__BootImage{k}` 结构与 `BOOT_IMAGE_{k}` 常量初值。
 //!
 //! 引用的常量形态按槽的静态类型：`Object` → 句柄；类 wrapper → `__from_image(__Ref::image(..))`
-//! （类 vtable 由 `X__inner` 经 supertrait 链实现）；同形数组 → `JArray::__image`。接口视图、类镜像、
-//! 占位对象与形态不一致的引用不在常量中构造：槽取 null，由启动序列链接（[`Link`]）。
+//! （类 vtable 由 `X__inner` 经 supertrait 链实现）；接口载体 → `__from_image(__IfaceRef::image(..))`
+//! （对象的类有 `impl I for X` 块时取接口视图，否则与运行期 `__IfaceRef::new` 同为无视图）；同形数组 →
+//! `JArray::__image`，形态不一致的数组 → 映像中的擦除协变视图（`JArray::__image_view`）。类镜像是映像对象。
+//! 占位对象的槽取 null，由启动序列在其步骤处回填；槽类型无常量形态（[`SlotTy::Other`]）的引用是残差写入
+//! （[`Residual`]），由启动序列写入。
 
 use std::fmt::Write as _;
 
@@ -19,16 +22,16 @@ pub(crate) enum LinkLoc {
     Elem(u32, u32),
 }
 
-/// 启动序列写入的引用：位置 ← 映像对象
+/// 残差写入：槽类型无常量形态的映像内引用（位置 ← 映像对象），由启动序列写入
 #[derive(Clone, Debug)]
-pub(crate) struct Link {
+pub(crate) struct Residual {
     pub loc: LinkLoc,
     pub target: u32,
 }
 
 pub(crate) struct ImageText {
     pub text: String,
-    pub links: Vec<Link>,
+    pub residual: Vec<Residual>,
 }
 
 /// 基本类型描述符字母的 Rust 类型
@@ -122,23 +125,39 @@ impl Plan<'_, '_> {
         }
     }
 
-    /// 物化对象 `t` 作为 `st` 类型槽值的常量形态；常量不可表达 → None（启动链接）
+    /// 物化对象 `t` 作为 `st` 类型槽值的常量形态；未物化（占位 / 不活）或槽类型无常量形态 → None
     pub fn const_ref(&self, st: &SlotTy, t: u32) -> Option<String> {
         if !self.mat.contains(&t) {
             return None;
         }
         let ty = &self.obj(t).ty;
+        let arr = ty.starts_with('[');
         match st {
             SlotTy::Object => Some(self.obj_ref(t)),
-            SlotTy::Class(c) if !ty.starts_with('[') => {
+            SlotTy::Class(c) if !arr => {
                 let (p, o) = (self.path(c), self.img(t));
                 Some(format!(
                     "{p}::__from_image(__Ref::image(__Handle::image(__Obj::image(&{o}.value as &dyn ObjectVTable)), \
                      &{o}.value as &dyn {p}__VTable))"
                 ))
             }
-            SlotTy::Array(view) if ty.starts_with('[') && squash(&self.elem_short(ty)) == *view => {
-                Some(format!("JArray::__image(&{}.value)", self.img(t)))
+            SlotTy::Iface(c) => {
+                let p = self.path(c);
+                let view = !arr && self.ems.get(ty).is_some_and(|em| em.iface_views.iter().any(|v| v == c));
+                let r = if view {
+                    format!("__IfaceRef::image({}, &{}.value as &dyn {p}__VTable)", self.obj_ref(t), self.img(t))
+                } else {
+                    format!("__IfaceRef::null({})", self.obj_ref(t))
+                };
+                Some(format!("{p}::__from_image({r})"))
+            }
+            SlotTy::Array(view) if arr => {
+                if squash(&self.elem_short(ty)) == *view {
+                    Some(format!("JArray::__image(&{}.value)", self.img(t)))
+                } else {
+                    self.views.borrow_mut().insert(t);
+                    Some(format!("JArray::__image_view(&BOOT_VIEW_{t}.value)"))
+                }
             }
             _ => None,
         }
@@ -154,17 +173,13 @@ impl Plan<'_, '_> {
         }
     }
 
-    /// 映像中可直接引用的对象（链接与重放的目标；占位对象在其步骤之后另行回填）
-    pub fn linkable(&self, t: u32) -> bool {
-        self.mat.contains(&t) || (self.live.contains(&t) && self.obj(t).mirror.is_some())
-    }
 }
 
 /// 构建映像区各段的结构与初值
 pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
     let mut decls = vec![String::new(); p.nseg];
     let mut inits = vec![String::new(); p.nseg];
-    let mut links = Vec::new();
+    let mut residual = Vec::new();
     let object_instance = {
         let o = p.path(ty::consts::OBJECT);
         format!("{}__ObjectInstance", o.strip_suffix(p.ctx.declared(ty::consts::OBJECT).as_str()).unwrap_or(&o))
@@ -173,13 +188,13 @@ pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
         let o = p.obj(i);
         let hash = o.hash.map_or("None".to_string(), |h| format!("Some({h})"));
         let (ty, val) = match &o.body {
-            IBody::Arr(es) => array_value(p, i, &o.ty, es, &hash, &mut links),
+            IBody::Arr(es) => array_value(p, i, &o.ty, es, &hash, &mut residual),
             IBody::Inst(_) if o.ty == ty::consts::OBJECT => {
                 (format!("__ImageObj<{object_instance}>"), format!("__ImageObj::new({hash}, {object_instance}::IMAGE)"))
             }
             IBody::Inst(_) => {
                 let inner = p.inner(&o.ty);
-                let body = inst_value(p, i, &mut links)?;
+                let body = inst_value(p, i, &mut residual)?;
                 (format!("__ImageObj<{inner}>"), format!("__ImageObj::new({hash}, {inner} {{{body}}})"))
             }
         };
@@ -197,11 +212,21 @@ pub(crate) fn image_struct(p: &Plan<'_, '_>) -> Result<ImageText> {
              pub static BOOT_IMAGE_{k}: __BootImage{k} = __BootImage{k} {{\n{init}}};\n\n"
         );
     }
-    Ok(ImageText { text, links })
+    Ok(ImageText { text, residual })
+}
+
+/// 擦除协变视图：每个被异形引用的映像数组一个（独立静态，初值只有源数组句柄与擦除存取函数）。
+/// 须在全部常量引用生成之后调用
+pub(crate) fn views_text(p: &Plan<'_, '_>) -> String {
+    let mut text = String::new();
+    for &t in p.views.borrow().iter() {
+        let _ = writeln!(text, "pub static BOOT_VIEW_{t}: __ImageArr<Object, ()> = __ImageArr::view({});", p.obj_ref(t));
+    }
+    text
 }
 
 /// 实例对象的 `X__inner { .. }` 字段表（布局全部字段显式给出）
-fn inst_value(p: &Plan<'_, '_>, i: u32, links: &mut Vec<Link>) -> Result<String> {
+fn inst_value(p: &Plan<'_, '_>, i: u32, residual: &mut Vec<Residual>) -> Result<String> {
     let ty = &p.obj(i).ty;
     let layout = &p.layouts[ty];
     let mut vals: Vec<Option<IVal>> = vec![None; layout.len()];
@@ -222,8 +247,8 @@ fn inst_value(p: &Plan<'_, '_>, i: u32, links: &mut Vec<Link>) -> Result<String>
                 IVal::R(t) => match p.const_ref(st, t) {
                     Some(r) => format!("__RefField::new(Some({r}))"),
                     None => {
-                        if p.linkable(t) {
-                            links.push(Link { loc: LinkLoc::Field(i, ty.clone(), s.rust.clone()), target: t });
+                        if p.mat.contains(&t) {
+                            residual.push(Residual { loc: LinkLoc::Field(i, ty.clone(), s.rust.clone()), target: t });
                         }
                         "__RefField::new(None)".to_string()
                     }
@@ -237,7 +262,7 @@ fn inst_value(p: &Plan<'_, '_>, i: u32, links: &mut Vec<Link>) -> Result<String>
 }
 
 /// 数组对象：`__ImageArr<T, S>` 类型与初值
-fn array_value(p: &Plan<'_, '_>, i: u32, desc: &str, es: &[IVal], hash: &str, links: &mut Vec<Link>) -> (String, String) {
+fn array_value(p: &Plan<'_, '_>, i: u32, desc: &str, es: &[IVal], hash: &str, residual: &mut Vec<Residual>) -> (String, String) {
     let elem = &desc[1..];
     let n = es.len();
     let t = p.elem_rust(elem);
@@ -274,8 +299,8 @@ fn array_value(p: &Plan<'_, '_>, i: u32, desc: &str, es: &[IVal], hash: &str, li
             IVal::R(target) => match p.const_ref(&st, *target) {
                 Some(r) => r,
                 None => {
-                    if p.linkable(*target) {
-                        links.push(Link { loc: LinkLoc::Elem(i, j as u32), target: *target });
+                    if p.mat.contains(target) {
+                        residual.push(Residual { loc: LinkLoc::Elem(i, j as u32), target: *target });
                     }
                     p.typed_null(&st)
                 }
