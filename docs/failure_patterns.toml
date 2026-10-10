@@ -33,13 +33,14 @@ stage = "run"
 symptom = "只经 Unsafe 按偏移写的字段被折叠成初值：CAS 无限重试（运行超时）、读到 null（NPE）、计数恒为 0"
 match = [["Exception in thread \"main\" java.lang.NullPointerException"], ["run timeout"]]
 tests = ["ReflectionAPI", "TestAnnoReflect", "TestAnnoDeepAccess", "TestAnnoArrayMembers", "TestAnnoNestedArray",
-         "TestAnnoValues", "TestBeansIndexedProps", "TestBeansIntrospector", "TestCallerSensitiveHandle", "TestJucSync"]
-cause = "字段只经 Unsafe CAS 写（只进流图、不进常量格），偏移在构建期初始化的 <clinit> 里按名取得；消费符号偏移处未放开字段，getfield 被折叠成初值。Class.reflectionData / Class.annotationType 为 lc3-fix 所修；AtomicInteger.value 类（JucSync 等）为 fix-clone 所修"
+         "TestAnnoValues", "TestBeansIndexedProps", "TestBeansIntrospector", "TestCallerSensitiveHandle", "TestJucSync",
+         "AmicablePairs", "RamanujanPrimes", "SelfReferentialSequence", "TestParallelArrayCas", "TestCommonPool"]
+cause = "字段只经 Unsafe CAS 写（只进流图、不进常量格），偏移在构建期初始化的 <clinit> 里按名取得；消费符号偏移处未放开字段，getfield 被折叠成初值。Class.reflectionData / Class.annotationType 为 lc3-fix 所修；AtomicInteger.value 类（JucSync 等）为 fix-clone 所修。并行流 / ForkJoinPool 类（AmicablePairs、RamanujanPrimes、SelfReferentialSequence、TestParallelArrayCas、TestCommonPool，C4 全量 c249cdec 上运行超 900 s）同属此类，lc3-fix 即修复（c4-runtimeout 分诊）"
 introduced = "78b744fe（reflect-marker：边界类字段改为手写层提及才开放，暴露潜伏缺陷）"
 fixed = ["4c42ac44", "5177e182"]
 status = "pending"
 owner = "fix-clone（5177e182 待抽查与放行）"
-diagnose = "二分到暴露提交；查失败点读取的字段是否只经 Unsafe 写、偏移是否在构建期 <clinit> 按名取得；hw_offset.rs::site_offset 是否对该偏移 open_field"
+diagnose = "二分到暴露提交；查失败点读取的字段是否只经 Unsafe 写、偏移是否在构建期 <clinit> 按名取得；hw_offset.rs::site_offset 是否对该偏移 open_field。先确认失败提交是否已含 4c42ac44 / 5177e182：不含时直接在集成分支头抽查（c4-runtimeout 即如此结案）"
 doc = "docs/tasks.md 现状节 lc3-fix / 注解反射 NPE 回归"
 since = "2026-10-10"
 
