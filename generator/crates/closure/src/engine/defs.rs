@@ -212,6 +212,9 @@ pub(super) struct LCall {
     pub(super) fixed: bool,
     /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
     pub(super) live: bool,
+    /// 本次重分析按偏移作废前仍有效（`reset_offsets` 置、`process_bytecode` 收尾清）：作废到复活之间
+    /// 同步执行事件、不排空流，接收值的增长都已排进读者队列，复活不必补跑
+    pub(super) suspended: bool,
 }
 
 /// 被调方法的接收者

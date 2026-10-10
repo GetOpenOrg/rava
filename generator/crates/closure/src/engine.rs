@@ -564,6 +564,8 @@ pub struct Engine<'a> {
     pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
+    /// 本次重分析按偏移挂起的 lambda 调用读者（`reset_offsets` 登记，`process_bytecode` 收尾清标记）
+    lc_suspended: Vec<u32>,
     /// 下一次 `add_to` 来自流边推送时为源节点序号，否则为 [`diag::NO_SRC`]（诊断：区分直接注入点、记录型查询的来源）
     flow_src: u32,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）

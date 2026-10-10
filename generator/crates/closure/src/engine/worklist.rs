@@ -422,7 +422,11 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.lambda_done.get(&m) {
             for off in offs {
                 for &id in d.get(off).into_iter().flat_map(HashMap::values) {
-                    self.lcalls[id as usize].live = false;
+                    let c = &mut self.lcalls[id as usize];
+                    if std::mem::replace(&mut c.live, false) {
+                        c.suspended = true;
+                        self.lc_suspended.push(id);
+                    }
                 }
             }
         }
@@ -443,6 +447,7 @@ impl<'a> Engine<'a> {
             for &id in at.values() {
                 let c = &mut self.lcalls[id as usize];
                 c.live = false;
+                c.suspended = false;
                 c.done = TypeSet::default();
                 c.hub = None;
                 c.fixed = false;

@@ -38,15 +38,8 @@ impl<'a> Engine<'a> {
         if self.methods[m].kind == Kind::Bytecode {
             let at = self.lambda_done.entry(m).or_default().entry(off).or_default();
             if let Some(&id) = at.get(&call) {
-                // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元，不另建。
-                // 已接记录由作废方式决定（`worklist.rs`）：偏移重跑保留、只接增量；被调方摘要变化清空、完整重接
-                let c = &mut self.lcalls[id as usize];
-                if !c.live {
-                    c.live = true;
-                    self.lprof_revive();
-                    self.lprof_call(lid, m, off, true);
-                    self.lambda_step(m, off, Some(id));
-                }
+                // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元，不另建
+                self.lcall_revive(id);
                 return;
             }
             // 剖析：同一调用点已有同一 lambda 的读者时记下与之不同的分量（实参 / 返回类型 / 结果节点）
@@ -58,7 +51,7 @@ impl<'a> Engine<'a> {
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lprof_kind(false, dup);
-            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true });
+            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), hub: None, fixed: false, live: true, suspended: false });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
@@ -67,13 +60,31 @@ impl<'a> Engine<'a> {
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
-        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, fixed: false, live: false });
+        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), hub: None, fixed: false, live: false, suspended: false });
         self.lprof_call(lid, m, off, true);
         self.lprof_kind(true, None);
         self.lambda_step(m, off, None);
         let tmp = self.lcalls.pop();
         debug_assert!(tmp.is_some_and(|c| !c.live));
         self.lambda_stack.remove(&call);
+    }
+
+    /// 读者以同一调用再登记即复活。已接记录由作废方式决定（`worklist.rs`）：偏移重跑保留、只接增量；
+    /// 被调方摘要变化清空、完整重接。本次重分析挂起的读者已接到作废时刻，此后的增长已排进读者队列，直接复活
+    pub(super) fn lcall_revive(&mut self, id: u32) {
+        let c = &mut self.lcalls[id as usize];
+        if c.live {
+            return;
+        }
+        c.live = true;
+        let (m, off, lid) = (c.m, c.off, c.call.0);
+        let suspended = std::mem::replace(&mut c.suspended, false);
+        self.lprof_revive();
+        if suspended {
+            return;
+        }
+        self.lprof_call(lid, m, off, true);
+        self.lambda_step(m, off, Some(id));
     }
 
     /// lambda 调用读者的接收值增长 / open 展开的 G 增长：只处理增量

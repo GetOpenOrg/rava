@@ -241,6 +241,7 @@ impl<'a> Engine<'a> {
             open_sites: BTreeMap::new(),
             pending_types: BTreeMap::new(),
             lambda_stack: HashSet::default(),
+            lc_suspended: Vec::new(),
             mirrors: HashMap::default(),
             prim_mirror: None,
             cs: Default::default(),

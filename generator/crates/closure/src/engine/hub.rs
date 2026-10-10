@@ -164,19 +164,37 @@ impl<'a> Engine<'a> {
         let mine: Vec<PV> = (0..ptypes.len()).map(|j| cv.as_ref().and_then(|vs| vs.get(j)).map_or(PV::Top, PV::of_ret)).collect();
         self.hub_vals(h, &mine);
         self.prof_seg(site_prof::SEG_LINK_REPLAY);
-        let hub = &mut self.hubs[h as usize];
-        let id = hub.link_seq;
-        hub.link_seq += 1;
-        hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
-        let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
         let replay = self.methods[m].kind == Kind::Bytecode;
+        let hub = &mut self.hubs[h as usize];
+        // 调用方重分析后以同一接入（实参来源、结果节点、实参常量）重接：沿用原接入记录；
+        // 送达本调用点的 lambda 读者若在本次重分析中挂起，按同一调用直接复活，不再逐个派发
+        let same = replay && hub.links.get(&(m, off)).is_some_and(|l| l.a == *a && l.res == res && l.cv == cv);
+        let id = if same {
+            hub.links[&(m, off)].id
+        } else {
+            let id = hub.link_seq;
+            hub.link_seq += 1;
+            hub.links.insert((m, off), Rc::new(Link { id, a: a.clone(), res, cv }));
+            id
+        };
+        let (site, lambdas, special) = (hub.site.clone(), hub.lambdas.clone(), hub.special.clone());
         // 本调用点已接入的最近祖先：它的 lambda 接收者都已送达本调用点（`hub_lsent` 已登记，重放即跳过），
         // 故与它的 lambda 表相同的前缀直接跳过，结果与逐个查登记相同
         let anc = if replay { self.linked_ancestor(m, off, h) } else { None };
         let skip = anc.map_or(0, |p| common_prefix(&lambdas, &self.hubs[p as usize].lambdas));
+        let mut key: Option<LambdaCall> = None;
         for &r in &lambdas[skip..] {
             if replay && !self.hub_lsent.entry(m).or_default().insert((off, r)) {
                 continue;
+            }
+            if same {
+                let k = key.get_or_insert_with(|| (r, a.clone(), ret, res));
+                k.0 = r;
+                let id = self.lambda_done.get(&m).and_then(|d| d.get(&off)).and_then(|at| at.get(k)).copied();
+                if let Some(id) = id.filter(|&id| self.lcalls[id as usize].suspended) {
+                    self.lcall_revive(id);
+                    continue;
+                }
             }
             self.lprof_replay(h, true);
             self.dispatch_one(m, off, r, &site, a, ret, res, NOCTX);
