@@ -4592,6 +4592,8 @@ dev 实测（`fmt-b2-589052eb` / `fmt-g5-0ad9f474`）：
 - 基线 HelloWorld 闭包已不含 Calendar / SPILocaleProviderAdapter / ServiceLoader（logchain3 所致）。DeepCopy 三者仍在。Calendar 的首次到达是 `Preconditions.outOfBoundsMessage@338` → `String.format` → `Formatter.format(Locale,…) #@level:2@89` → `FormatSpecifier.print@11` → `printDateTime@34`。
   这条路径上的格式串都是常量，但到达 parse 时处在 `@level:2` 截断上下文，值已合并。这里正是机制 B 与逐组应用的用武之地，需先解决内存问题再验证。
 - 闭包单测 240 通过。
+- `closure_independent_of_order`（`fmt-o6-95d8c128`，sg2）：HelloWorld 全矩阵通过，机制 B 引入的回归已消除。DeepCopy 在 batch 1 / seed 1 与缺省不同，同基线既有失败（FindOps 派发集，归 order-findops）。
+  本分支置空 `object_results` 后新增代码不生效，差异内容未逐项比对。
 
 **接手方向**：
 1. 先实测 DeepCopy 只开机制 B（逐组应用关掉）时的峰值，定位内存来自组合数还是物化对象数（`--flows @concrete` 的「回退后应用已知常量组合」诊断行数）。
