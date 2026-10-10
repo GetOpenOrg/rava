@@ -23,6 +23,7 @@ pub mod native_memory;
 pub mod vm_stack;
 pub mod pc_map;
 pub mod posix;
+pub mod predefined;
 pub mod net_posix;
 pub mod species_dyn;
 pub mod injected_invoker;
