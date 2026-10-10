@@ -35,9 +35,17 @@ final class Proxy$Dyn extends Proxy {
             if (!intf.isInterface()) {
                 throw new IllegalArgumentException(intf.getName() + " is not an interface");
             }
+            defineInterfaceMethods(intf);
         }
         return new Proxy$Dyn(h, intfs);
     }
+
+    /**
+     * 代理类定义点的接口方法对象：ProxyGenerator 生成的代理类以 static final 字段持有每个接口方法的
+     * Method（类初始化时取得），本 VM 按接口的声明方法表构造并缓存（同一方法同一对象），接口方法调用
+     * 经此取 Method 交 InvocationHandler。闭包分析按成员枚举（[facts.reflect] methods）保留接口的方法元数据。
+     */
+    private static native void defineInterfaceMethods(Class<?> intf);
 
     /** 代理是否实现 type（含超接口，instanceof / checkcast 的 VM 应答）。 */
     boolean implementsType(Class<?> type) {

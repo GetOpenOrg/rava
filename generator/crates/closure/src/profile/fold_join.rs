@@ -6,6 +6,7 @@
 //! - 死区：D = ∩ D_X（区间集求交，端点仍是各输入的端点，即指令起点或代码长度）；
 //! - 活指令 p 的折叠：在 p 活着的入口上逐点取格的并——NullRecv ⊔ NullRecv = NullRecv，
 //!   NullRecv / NoReturn 两两之并 = NoReturn（都不正常返回；照常调用，之后截断），Const(v) ⊔ Const(v) = Const(v)，
+//!   NoClass(c) ⊔ NoClass(c) = NoClass(c)（解析失败点：类路径事实，各入口一致），
 //!   Direct(h) ⊔ Direct(h) = Direct(h)（直连反射调用点，特化入口 h），Direct(h) ⊔ NullRecv = Direct(h)（NullRecv 的入口不给
 //!   原入口入链，并后若按原入口调用会撞到闭包外的存根；接收者为 null 时特化入口同样抛 NullPointerException），
 //!   其余组合与未折叠（Normal）之并都是 Normal（Normal / NoReturn / Const 的入口照常给原入口入链，按原入口调用成立）；
@@ -16,7 +17,7 @@
 //!
 //! 输出把 D 全部写入 dead_pcs（noreturn_dead_pcs 为空），按 `input::norm` 的规则逐条成立：
 //! 活指令 p 顺序落入 D 时，p 活着的每个入口 X 里 p 都顺序落入 D_X，故 p 在 X 中是跳转 / 无后继指令或
-//! 不返回的调用点，并后 p 仍是跳转 / 无后继或 NullRecv / NoReturn；活跳转的目标在 D 内则在每个 D_X 内，
+//! 不返回的调用点或解析失败点，并后 p 仍是跳转 / 无后继或 NullRecv / NoReturn / NoClass；活跳转的目标在 D 内则在每个 D_X 内，
 //! 与 X 自身的合法性矛盾；D 内的处理器全部列入 dead_handlers。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -83,6 +84,8 @@ struct In {
     consts: BTreeMap<u32, (String, Value)>,
     null_recv: BTreeSet<u32>,
     noreturn: BTreeSet<u32>,
+    /// pc → 解析失败的类
+    no_class: BTreeMap<u32, String>,
     /// pc → 特化入口
     direct: BTreeMap<u32, String>,
 }
@@ -129,6 +132,12 @@ fn parse(f: Option<&Value>) -> Result<In, String> {
         let t = c.get("target").and_then(Value::as_str).ok_or_else(|| format!("direct_calls 缺 target：{c}"))?;
         direct.insert(pc, t.to_string());
     }
+    let mut no_class = BTreeMap::new();
+    for c in f.get("no_class").and_then(Value::as_array).into_iter().flatten() {
+        let pc = c.get("pc").and_then(Value::as_u64).ok_or_else(|| format!("no_class 缺 pc：{c}"))? as u32;
+        let cls = c.get("class").and_then(Value::as_str).ok_or_else(|| format!("no_class 缺 class：{c}"))?;
+        no_class.insert(pc, cls.to_string());
+    }
     Ok(In {
         dead: normalize(dead),
         handlers: pcs(f, "dead_handlers")?,
@@ -136,6 +145,7 @@ fn parse(f: Option<&Value>) -> Result<In, String> {
         consts,
         null_recv: pcs(f, "null_recv")?,
         noreturn: pcs(f, "noreturn_calls")?,
+        no_class,
         direct,
     })
 }
@@ -145,6 +155,7 @@ fn parse(f: Option<&Value>) -> Result<In, String> {
 enum St {
     NullRecv,
     NoReturn,
+    NoClass(String),
     Const(String),
     Direct(String),
     Normal,
@@ -155,6 +166,8 @@ fn status(x: &In, pc: u32) -> St {
         St::NullRecv
     } else if x.noreturn.contains(&pc) {
         St::NoReturn
+    } else if let Some(c) = x.no_class.get(&pc) {
+        St::NoClass(c.clone())
     } else if let Some((k, _)) = x.consts.get(&pc) {
         St::Const(k.clone())
     } else if let Some(t) = x.direct.get(&pc) {
@@ -168,6 +181,7 @@ fn lub(a: St, b: St) -> St {
     match (a, b) {
         (St::NullRecv, St::NullRecv) => St::NullRecv,
         (St::NullRecv | St::NoReturn, St::NullRecv | St::NoReturn) => St::NoReturn,
+        (St::NoClass(x), St::NoClass(y)) if x == y => St::NoClass(x),
         (St::Const(x), St::Const(y)) if x == y => St::Const(x),
         (St::Direct(x), St::Direct(y)) if x == y => St::Direct(x),
         (St::Direct(x), St::NullRecv) | (St::NullRecv, St::Direct(x)) => St::Direct(x),
@@ -181,8 +195,9 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
     let Some(first) = xs.first() else { return Ok(None) };
     let dead = xs[1..].iter().fold(first.dead.clone(), |d, x| intersect(&d, &x.dead));
     // 活指令的折叠：候选点为任一入口的折叠点
-    let cand: BTreeSet<u32> = xs.iter().flat_map(|x| x.null_recv.iter().chain(&x.noreturn).chain(x.consts.keys()).chain(x.direct.keys()).copied()).collect();
+    let cand: BTreeSet<u32> = xs.iter().flat_map(|x| x.null_recv.iter().chain(&x.noreturn).chain(x.no_class.keys()).chain(x.consts.keys()).chain(x.direct.keys()).copied()).collect();
     let (mut null_recv, mut noreturn, mut consts, mut direct) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut no_class = Vec::new();
     for pc in cand {
         if in_ranges(&dead, pc) {
             continue;
@@ -191,6 +206,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
         match st {
             Some(St::NullRecv) => null_recv.push(pc),
             Some(St::NoReturn) => noreturn.push(pc),
+            Some(St::NoClass(c)) => no_class.push(json!({"pc": pc, "class": c})),
             Some(St::Const(k)) => {
                 let entry = xs.iter().find_map(|x| x.consts.get(&pc).filter(|(kk, _)| *kk == k)).map(|(_, v)| v.clone());
                 consts.extend(entry);
@@ -214,7 +230,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
         .flat_map(|x| &x.catches)
         .filter(|c| !dead_handlers.contains(&c.handler) && xs.iter().all(|x| catch_dead(x, c)))
         .collect();
-    if dead.is_empty() && dead_handlers.is_empty() && catches.is_empty() && consts.is_empty() && null_recv.is_empty() && noreturn.is_empty() && direct.is_empty() {
+    if dead.is_empty() && dead_handlers.is_empty() && catches.is_empty() && consts.is_empty() && null_recv.is_empty() && noreturn.is_empty() && no_class.is_empty() && direct.is_empty() {
         return Ok(None);
     }
     Ok(Some(json!({
@@ -225,6 +241,7 @@ pub(super) fn join(method: &str, inputs: &[Option<Value>], handlers: &HandlerTab
         "consts": consts,
         "null_recv": null_recv,
         "noreturn_calls": noreturn,
+        "no_class": no_class,
         "noreturn_dead_pcs": [],
         "direct_calls": direct,
     })))

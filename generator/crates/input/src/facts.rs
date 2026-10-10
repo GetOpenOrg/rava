@@ -120,7 +120,9 @@ pub struct MethodFold {
     pub null_recv: BTreeSet<u32>,
     /// 定论不返回的活调用点：调用照常翻译，其后控制流终止
     pub noreturn_calls: BTreeSet<u32>,
-    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
+    /// 解析失败的活指令：pc → 不在类路径上的类（执行即 NoClassDefFoundError，指令不翻译）
+    pub no_class: BTreeMap<u32, String>,
+    /// 把 noreturn_calls、null_recv 与 no_class 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
     /// 直连反射调用点：pc → 特化入口（静态方法）。该调用指令改写为对特化入口的 invokestatic（栈形不变）
     pub direct_calls: BTreeMap<u32, MemberRef>,
@@ -248,6 +250,7 @@ impl ClosureFacts {
                 consts,
                 null_recv: f.null_recv.iter().copied().collect(),
                 noreturn_calls: f.noreturn_calls.iter().copied().collect(),
+                no_class: f.no_class.iter().cloned().collect(),
                 noreturn_dead_pcs: f.noreturn_dead_pcs.clone(),
                 direct_calls: f.direct_calls.iter().cloned().collect(),
             };
@@ -424,6 +427,9 @@ pub(crate) fn parse_fold(f: &Value) -> Result<MethodFold, InputError> {
     };
     for h in f.get("dead_handlers").and_then(Value::as_array).into_iter().flatten() {
         mf.dead_handlers.insert(u32_of(h)?);
+    }
+    for c in f.get("no_class").and_then(Value::as_array).into_iter().flatten() {
+        mf.no_class.insert(u32_of(c.get("pc").ok_or_else(|| missing("pc"))?)?, str_of(c, "class")?.to_string());
     }
     for c in f.get("dead_catches").and_then(Value::as_array).into_iter().flatten() {
         let at = |k: &str| u32_of(c.get(k).ok_or_else(|| missing(k))?);
