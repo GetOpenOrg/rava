@@ -40,6 +40,7 @@ fn shape(v: &[NInsn]) -> Vec<(u32, u8)> {
             NInsn::FoldCall { call, .. } => (call.offset, call.opcode),
             NInsn::NullRecv { call } => (call.offset, 1),
             NInsn::NoReturn { call } => (call.offset, 2),
+            NInsn::NoClassDef { at, .. } => (at.offset, 3),
         })
         .collect()
 }
@@ -244,4 +245,22 @@ fn prune_skips_external_jump_in() {
     let vc = VmConstants { null_returns: ["p/V.get:()Ljava/lang/Object;".to_string()].into(), ..Default::default() };
     let out = vc.prune(c.into_iter().map(NInsn::Op).collect(), &[]);
     assert_eq!(out.len(), 5);
+}
+
+#[test]
+fn no_class_site_is_abrupt_and_keeps_handler() {
+    // 解析失败点：指令不翻译、作为终点截断其后；覆盖它的处理器保留（NoClassDefFoundError 照常被捕获）
+    let v = serde_json::json!({"no_class": [{"pc": 2, "class": "q/Gone"}], "noreturn_dead_pcs": [[5, 6]]});
+    let fold = parse_fold(&v).unwrap();
+    assert_eq!(fold.no_class.get(&2).map(String::as_str), Some("q/Gone"));
+    let n = apply_fold("A.m:()Z", &call_code(), &fold).unwrap();
+    assert_eq!(shape(&n.insns), vec![(0, ALOAD_1), (1, ICONST_0), (2, 3), (6, ICONST_0), (7, op::IRETURN)]);
+    assert!(n.insns[2].insn().is_none() && n.insns[2].is_abrupt());
+    assert!(matches!(&n.insns[2], NInsn::NoClassDef { class, .. } if class == "q/Gone"));
+    assert_eq!(n.exception_table.len(), 1);
+    // 与其它折叠重叠、或落在死区内，都是格式错
+    let bad = MethodFold { no_class: [(2, "q/Gone".to_string())].into(), null_recv: [2].into(), ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
+    let bad = MethodFold { no_class: [(5, "q/Gone".to_string())].into(), dead_pcs: vec![(5, 6)], ..Default::default() };
+    assert!(apply_fold("A.m:()Z", &call_code(), &bad).is_err());
 }

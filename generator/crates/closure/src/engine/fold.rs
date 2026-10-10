@@ -22,7 +22,11 @@ pub struct Fold {
     /// 定论不返回的活调用点：唯一目标为字节码方法，全部节点已分析且没有任何返回路径（见 `noreturn.rs`）。
     /// 分析在定论阶段按值未知继续分析其后的代码（folds 规则 7），这里单独给出；发射层可在调用后终止控制流
     pub noreturn_calls: Vec<u32>,
-    /// 把 noreturn_calls 与 null_recv 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
+    /// 解析失败的活指令 (pc, 类)：指令（字段 / 方法访问、new、anewarray、multianewarray、ldc 类字面量）解析的类
+    /// 不在类路径上（JVMS §5.4.3：解析失败在该指令处抛 NoClassDefFoundError，消息为类的内部名）。
+    /// 发射层不翻译该指令，改为抛出；与 consts / null_recv / noreturn_calls / direct_calls 不相交
+    pub no_class: Vec<(u32, String)>,
+    /// 把 noreturn_calls、null_recv 与 no_class 当作控制流终点时另外不可达的区间（与 dead_pcs 不相交，格式同 dead_pcs）
     pub noreturn_dead_pcs: Vec<(u32, u32)>,
     /// 直连反射调用点（pc, 特化入口）：全部到达该点的克隆都按直连处理（`reflect_direct.rs`），发射层把该调用指令
     /// 改写为对特化入口的 invokestatic（栈形不变）。与 null_recv / noreturn_calls / consts 不相交
@@ -115,6 +119,7 @@ pub(super) fn fold_of(method: String, code: &classfile::Code, all: &[Rc<Analysis
         consts,
         null_recv: Vec::new(),
         noreturn_calls: Vec::new(),
+        no_class: Vec::new(),
         noreturn_dead_pcs: Vec::new(),
         direct_calls: Vec::new(),
         props: Vec::new(),
@@ -273,8 +278,14 @@ impl Engine<'_> {
         stops.extend_from_slice(thrown);
         stops.sort_unstable();
         stops.dedup();
+        // 解析失败的指令只抛 NoClassDefFoundError（JVMS 先解析、后取接收者与实参）：不再按其他折叠导出
+        f.no_class = self.no_class_sites(code, &reachable);
+        let unresolved = |pc: &u32| f.no_class.binary_search_by_key(pc, |s| s.0).is_ok();
+        stops.retain(|pc| !unresolved(pc));
+        f.null_recv.retain(|pc| !unresolved(pc));
+        f.consts.retain(|c| !unresolved(&c.0));
         // null_recv 调用点的目标集为空，同样不会正常返回：一并作为截断终点（须先算出 f.null_recv）
-        let mut ends: Vec<u32> = stops.iter().chain(&f.null_recv).copied().collect();
+        let mut ends: Vec<u32> = stops.iter().chain(&f.null_recv).chain(f.no_class.iter().map(|s| &s.0)).copied().collect();
         ends.sort_unstable();
         ends.dedup();
         if !ends.is_empty() {
@@ -288,6 +299,37 @@ impl Engine<'_> {
         let nulls = &f.null_recv;
         f.consts.retain(|c| live(&c.0) && nulls.binary_search(&c.0).is_err());
         f.noreturn_calls = stops.into_iter().filter(live).collect();
+        f.no_class.retain(|s| live(&s.0));
+    }
+
+    /// 解析失败的活指令：解析目标类（数组取元素类，基本类型数组不解析类）不在类路径上。
+    /// checkcast / instanceof 不在此列：值为 null 时不解析（JVMS §6.5），不是无条件抛出
+    pub(super) fn no_class_sites(&self, code: &classfile::Code, reachable: &[bool]) -> Vec<(u32, String)> {
+        use classfile::{op, Const, Operand};
+        let elem = |c: &str| -> Option<String> {
+            let e = c.trim_start_matches('[');
+            match e.strip_prefix('L').and_then(|x| x.strip_suffix(';')) {
+                Some(x) => Some(x.to_string()),
+                None if e.len() != c.len() => None,
+                None => Some(e.to_string()),
+            }
+        };
+        let mut out = Vec::new();
+        for (i, x) in code.insns.iter().enumerate() {
+            if !reachable[i] {
+                continue;
+            }
+            let cls = match (&x.operand, x.opcode) {
+                (Operand::Field(r), _) | (Operand::Method(r, _), op::INVOKEVIRTUAL | op::INVOKESPECIAL | op::INVOKESTATIC | op::INVOKEINTERFACE) => elem(&r.owner),
+                (Operand::Class(c), op::NEW | op::ANEWARRAY) | (Operand::MultiANewArray(c, _), _) => elem(c),
+                (Operand::Ldc(Const::Class(c)), _) => elem(c),
+                _ => None,
+            };
+            if let Some(c) = cls.filter(|c| self.h.class(c).is_none()) {
+                out.push((x.offset, c));
+            }
+        }
+        out
     }
 
     /// 调用结果由清单派生规则给出（值相等 / 字符串运算 / 系统属性读取）：不按被调字节码判定

@@ -308,6 +308,15 @@ pub fn __null_recv<T: Clone + Into<Object>>(recv: &T, callee: &'static str) -> e
     panic!("null_recv 违约：{callee} 的接收者非 null（闭包分析判定恒为 null）")
 }
 
+/// 解析失败点（闭包分析 folds `no_class`：指令解析的类不在类路径上）：生成器不翻译该指令，发射
+/// `return Err(__no_class_def("类内部名"))`——与 JVM 在该指令处解析失败同样抛 NoClassDefFoundError，
+/// 覆盖它的异常处理器照常捕获（`catch (Throwable)` / `catch (NoClassDefFoundError)` 的可选依赖探测）。
+#[cold]
+#[inline(never)]
+pub fn __no_class_def(internal_name: &'static str) -> error::JvmError {
+    error::JvmError::class_not_found_at_resolution(internal_name)
+}
+
 /// 方法入口的栈界检查（宏在每个返回 `Result` 的 Java 方法入口注入 `__stack_check()?;`）：当前执行流
 /// （平台线程或虚拟线程的协程栈）的栈指针低于软件栈界即抛 `StackOverflowError`（§21.8.2「溢出检测」）。
 /// 快路径是一次不内联的栈界比较；构造异常在冷路径。
@@ -517,7 +526,7 @@ pub mod prelude {
     pub use super::_ts_str_label_eq;
     pub use super::_ts_int_label_eq;
     pub use super::{idiv, irem, ldiv, lrem};
-    pub use super::{__stub, __null_recv, __noreturn, __stack_check, __enter};
+    pub use super::{__stub, __null_recv, __noreturn, __no_class_def, __stack_check, __enter};
 
     pub use super::java_fmt_f64;
     pub use super::java_fmt_f32;

@@ -98,6 +98,14 @@ pub(super) fn resolve_direct_call_sig(
         // 返回类型按 owner 在接收者静态类型下的实参化形态解析
         d.sig_recv_ty = owner_view(env, ci_recv, &site.obj_ty, ob);
         d.sig_owner = ob.clone();
+        // 协变返回（继承形态）：调用描述符命中祖先的合成桥，生成的 Rust 方法是同名真实方法
+        // → 返回类型按祖先真实方法（与接收者自身声明的协变分支同规则）
+        let real_desc = reg.get(ob).and_then(|c| {
+            c.methods().iter().find(|m| !m.is_synthetic() && m.name == mname && m.desc.starts_with(&pdesc)).map(|m| m.desc.clone())
+        });
+        if let Some(rd) = real_desc.filter(|rd| *rd != jvm_desc) {
+            d.redesc(env, &rd);
+        }
         log.inherited(&obj_jvm, mname, &pdesc);
     } else if owner_bin.is_none()
         && (env.ctx.facts.root_virtual.contains(&key)

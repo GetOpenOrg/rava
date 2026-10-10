@@ -11,7 +11,8 @@
 //!    副作用保留），只丢弃返回值、改压常量。
 //! 5. 控制流终点：null_recv 调用点替换为 [`NInsn::NullRecv`]（不调用，抛 NPE），noreturn 调用点
 //!    替换为 [`NInsn::NoReturn`]（调用后终止）；两者其后另外不可达的 noreturn_dead_pcs 与 dead_pcs
-//!    合并删除。死区只从跳转 / switch / return / athrow 或这两类终点之后开始。
+//!    合并删除；no_class 解析失败点替换为 [`NInsn::NoClassDef`]（不翻译，抛 NoClassDefFoundError）。
+//!    死区只从跳转 / switch / return / athrow 或这三类终点之后开始。
 //! 6. 直连反射调用点（direct_calls）：invokevirtual 改写为对特化入口的 invokestatic（特化入口形参 = 原接收者 +
 //!    原形参，返回类型同原调用，栈形不变；偏移沿用原指令）。
 //!
@@ -46,6 +47,9 @@ pub enum NInsn {
     NullRecv { call: Insn },
     /// 不返回的调用点：`call` 照常翻译，其后控制流终止
     NoReturn { call: Insn },
+    /// 解析失败点（JVMS §5.4.3）：`at` 解析的类 `class` 不在类路径上——弹出 `at` 的操作数后抛
+    /// NoClassDefFoundError（消息为类的内部名），`at` 不翻译
+    NoClassDef { at: Insn, class: String },
 }
 
 impl NInsn {
@@ -54,20 +58,21 @@ impl NInsn {
             NInsn::Op(i) => i.offset,
             NInsn::FoldField { get, .. } => get.offset,
             NInsn::FoldCall { call, .. } | NInsn::NullRecv { call } | NInsn::NoReturn { call } => call.offset,
+            NInsn::NoClassDef { at, .. } => at.offset,
         }
     }
-    /// 翻译出的 JVM 指令本体（FoldCall / NoReturn 为保留的调用指令；FoldField / NullRecv 为 None）
+    /// 翻译出的 JVM 指令本体（FoldCall / NoReturn 为保留的调用指令；FoldField / NullRecv / NoClassDef 为 None）
     pub fn insn(&self) -> Option<&Insn> {
         match self {
             NInsn::Op(i) => Some(i),
             NInsn::FoldCall { call, .. } | NInsn::NoReturn { call } => Some(call),
-            NInsn::FoldField { .. } | NInsn::NullRecv { .. } => None,
+            NInsn::FoldField { .. } | NInsn::NullRecv { .. } | NInsn::NoClassDef { .. } => None,
         }
     }
 
     /// 控制流终点（无正常后继，只经覆盖它的异常处理器转移）
     pub fn is_abrupt(&self) -> bool {
-        matches!(self, NInsn::NullRecv { .. } | NInsn::NoReturn { .. })
+        matches!(self, NInsn::NullRecv { .. } | NInsn::NoReturn { .. } | NInsn::NoClassDef { .. })
     }
 }
 
@@ -301,6 +306,14 @@ fn validate(fold: &MethodFold, code: &Code, is_dead: &dyn Fn(u32) -> bool, where
             return Err(err(where_, format!("noreturn_calls pc={pc} 同时列为常量")));
         }
     }
+    for &pc in fold.no_class.keys() {
+        if !starts.contains(&pc) || is_dead(pc) {
+            return Err(err(where_, format!("no_class pc={pc} 不是活指令起点")));
+        }
+        if fold.consts.contains_key(&pc) || fold.noreturn_calls.contains(&pc) || fold.null_recv.contains(&pc) || fold.direct_calls.contains_key(&pc) {
+            return Err(err(where_, format!("no_class pc={pc} 同时列为常量 / noreturn / null_recv / 直连调用")));
+        }
+    }
     for (&pc, helper) in &fold.direct_calls {
         let orig = code.insns.iter().find(|x| x.offset == pc).filter(|x| x.opcode == op::INVOKEVIRTUAL && !is_dead(pc));
         let Some(Insn { operand: Operand::Method(orig, _), .. }) = orig else {
@@ -352,6 +365,10 @@ pub fn apply_fold(method_key: &str, code: &Code, fold: &MethodFold) -> Result<No
         }
         if fold.noreturn_calls.contains(&ins.offset) {
             out.push(NInsn::NoReturn { call: ins.clone() });
+            continue;
+        }
+        if let Some(class) = fold.no_class.get(&ins.offset) {
+            out.push(NInsn::NoClassDef { at: ins.clone(), class: class.clone() });
             continue;
         }
         let o = ins.opcode;

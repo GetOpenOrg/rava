@@ -182,6 +182,8 @@ pub struct Manifest {
     caller_sensitive: HashSet<String>,
     component_returns: HashSet<String>,
     member_enumerators: HashMap<String, Members>,
+    /// `[facts.reflect] exposing_enumerators`：枚举结果交给用户代码的成员枚举（所指类全部成员对反射调用开放）
+    exposing_enumerators: HashSet<String>,
     member_invokers: HashMap<String, Vec<Members>>,
     method_lookups: HashSet<String>,
     constructor_lookups: HashSet<String>,
@@ -500,6 +502,7 @@ impl Manifest {
             caller_sensitive: strings(&vm, "caller_sensitive", "annotations").into_iter().collect(),
             component_returns: reflect("component_of_receiver").into_iter().collect(),
             member_enumerators,
+            exposing_enumerators: reflect("exposing_enumerators").into_iter().collect(),
             member_invokers,
             method_lookups: reflect("method_lookups").into_iter().collect(),
             constructor_lookups: reflect("constructor_lookups").into_iter().collect(),
@@ -789,6 +792,11 @@ impl Manifest {
     /// 反射成员枚举：接收者类镜像所指类的哪类成员成为反射对象
     pub fn member_enumerator(&self, member: &str) -> Option<Members> {
         self.member_enumerators.get(member).copied()
+    }
+
+    /// 成员枚举的结果交给用户代码（如代理调用处理器收到的 Method 实参）：所指类不论域，全部成员对反射调用开放
+    pub fn exposes_enumerated(&self, member: &str) -> bool {
+        self.exposing_enumerators.contains(member)
     }
 
     /// 反射调用：调用哪类成员（Method / Constructor 对象所表示的成员）

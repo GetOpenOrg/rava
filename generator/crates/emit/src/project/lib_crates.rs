@@ -1,7 +1,8 @@
 //! lib crate 发射（jar 输入模式 `--lib`；← `project_writer` 的 lib crate 段）。
 //!
 //! 每个 lib crate 一个 `crate-type = ["lib"]` 的独立 crate：类文件 + lib.rs 顶层包模块树 +
-//! Java 可见性映射 + 按目标 crate 定向的引用。依赖方向 = 声明序（后声明者 path 依赖先声明者），
+//! Java 可见性映射 + 按目标 crate 定向的引用。依赖方向 = 声明序（后声明者 path 依赖先声明者；声明序由
+//! `input::lib_order` 按类间引用拓扑排定、互引 jar 合并），
 //! user crate 依赖全部 lib crate。
 
 use std::collections::BTreeSet;

@@ -69,6 +69,20 @@ fn rebox(kind: u8, v: Object) -> Result<Object> {
 }
 
 impl Proxy_Dyn {
+    /// 代理类定义点：接口全部声明实例方法的 Method 对象入进程级缓存（ProxyGenerator 生成类的
+    /// static final Method 字段的对应物；调用时按 (声明接口, 名字, 描述符) 命中同一对象）。
+    #[jvm_native]
+    pub fn defineInterfaceMethods(intf: Class) -> Result<()> {
+        let iface = format!("{}", intf.__get_name()).replace('.', "/");
+        for meta in intf.__declared_method_rows() {
+            if meta.inherited || meta.is_static || meta.name.starts_with('<') {
+                continue;
+            }
+            proxy_method(&iface, meta.name, meta.descriptor)?;
+        }
+        Ok(())
+    }
+
     /// instanceof / checkcast：实例接口列表中任一接口（含其超接口）可赋值给 `type_id`。
     pub fn __vm_proxy_implements(&self, type_id: &str) -> bool {
         let intfs = self.__get_intfs();
