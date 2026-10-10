@@ -41,8 +41,8 @@ pub(super) struct LambdaProf {
     lams: HashMap<u32, LamStat>,
     replay_total: u64,
     recv_total: u64,
-    /// 接收者展开按读者状态分列：非字节码临时调用 / 复活 / 首步 / 增量重跑
-    recv_by: [u64; 4],
+    /// 接收者展开按读者状态分列：非字节码临时调用 / 首步（含复活）/ 增量重跑
+    recv_by: [u64; 3],
     /// 非字节码调用方的临时 lambda 调用次数
     transient: u64,
     /// 新建读者时同一调用点已有同一 lambda 的其他读者（实参 / 结果节点不同）
@@ -63,7 +63,7 @@ impl LambdaProf {
             lams: HashMap::default(),
             replay_total: 0,
             recv_total: 0,
-            recv_by: [0; 4],
+            recv_by: [0; 3],
             transient: 0,
             dup_site: 0,
         }
@@ -141,7 +141,7 @@ impl Engine<'_> {
         let Some(p) = self.lprof.as_ref() else { return };
         let tag = format!("[lambda-prof #{} {}s]", p.seq, p.t0.elapsed().as_secs());
         eprintln!(
-            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={} recv_by(transient/revived/first/rerun)={:?} transient={} dup_site={}",
+            "{tag} rss_peak={}MiB methods={} hubs={} lcalls={} g={} lambdas={} replay_total={} recv_total={} recv_by(transient/first/rerun)={:?} transient={} dup_site={}",
             stats::peak_rss_mb(),
             self.methods.len(),
             self.hubs.len(),

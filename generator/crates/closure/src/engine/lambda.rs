@@ -38,15 +38,16 @@ impl<'a> Engine<'a> {
         if self.methods[m].kind == Kind::Bytecode {
             let at = self.lambda_done.entry(m).or_default().entry(off).or_default();
             if let Some(&id) = at.get(&call) {
-                // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元。
-                // 已接过的接收值的流边都在图上，只接增量；派发去重登记随重分析作废，复活时补回（`lambda_dispatch`）
+                // 调用方重分析后同一调用（同一 lambda、实参来源、结果节点）再登记：沿用原读者单元，不另建。
+                // 重分析（含被调方摘要变化后的完整重接）作废了站点去重，接边效果随被调方摘要而变：
+                // 复活即清空已接记录，按新读者完整接边
                 let c = &mut self.lcalls[id as usize];
                 if !c.live {
                     c.live = true;
-                    c.revived = true;
+                    c.done = TypeSet::default();
+                    c.g_mark = 0;
                     self.lprof_call(lid, m, off, true);
                     self.lambda_step(m, off, Some(id));
-                    self.lcalls[id as usize].revived = false;
                 }
                 return;
             }
@@ -54,7 +55,7 @@ impl<'a> Engine<'a> {
             let id = self.lcalls.len() as u32;
             at.insert(call.clone(), id);
             self.lprof_kind(false, dup);
-            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), g_mark: 0, live: true, revived: false });
+            self.lcalls.push(LCall { m, off, call, done: TypeSet::default(), g_mark: 0, live: true });
             self.lprof_call(lid, m, off, true);
             self.lambda_step(m, off, Some(id));
             return;
@@ -63,7 +64,7 @@ impl<'a> Engine<'a> {
         if !self.lambda_stack.insert(call.clone()) {
             return;
         }
-        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), g_mark: 0, live: false, revived: false });
+        self.lcalls.push(LCall { m, off, call: call.clone(), done: TypeSet::default(), g_mark: 0, live: false });
         self.lprof_call(lid, m, off, true);
         self.lprof_kind(true, false);
         self.lambda_step(m, off, None);
@@ -156,7 +157,6 @@ impl<'a> Engine<'a> {
                 let reader = std::mem::replace(&mut self.cur_call, id);
                 let cur = self.value_set(&first());
                 let done = std::mem::replace(&mut self.lcalls[at].done, cur.clone());
-                let revived = std::mem::take(&mut self.lcalls[at].revived);
                 let delta = TypeSet { classes: cur.classes.minus(&done.classes), open: cur.open.minus(&done.open) };
                 if kind == 7 {
                     self.cur_call = reader;
@@ -172,21 +172,11 @@ impl<'a> Engine<'a> {
                 let mark = std::mem::replace(&mut self.lcalls[at].g_mark, self.g_log.len());
                 let recv = self.receivers(m, &delta, owner);
                 let recv = self.receivers_since(&done.open, owner, mark, recv);
-                // 复活的读者：已接过的接收者（`done` 按当前 G 展开）的流边都在图上，只补回随重分析作废的派发去重登记；
-                // lambda 接收者的嵌套调用随之复活（与整体重派发时重新登记同口径）
-                let old = if revived && !done.is_empty() { self.receivers(m, &done, owner) } else { Vec::new() };
                 self.cur_call = reader;
-                let class = if id.is_none() { 0 } else if revived { 1 } else if done.is_empty() { 2 } else { 3 };
+                let class = if id.is_none() { 0 } else if done.is_empty() { 1 } else { 2 };
                 self.lprof_recv(lid, &recv, class);
                 for r in recv {
                     self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
-                }
-                for r in old {
-                    if self.lambdas.contains_key(&r) {
-                        self.dispatch_one(m, off, r, &site, &rest, ret, res, lid);
-                    } else {
-                        self.dispatched.entry(m).or_default().insert((off, r, lid));
-                    }
                 }
             }
         }
