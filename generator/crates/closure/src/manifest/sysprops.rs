@@ -8,6 +8,8 @@
 //! 启动时存在的键：只被删除、从未写入的键保持「不存在」。
 //! 读取入口带 `snapshot = true` 的读的是启动快照（引导期保存、此后无写入方的属性表副本）：取值同样按本表，
 //! 但不受运行期改写 / 属性表对象逃逸影响。
+//! `accepted` 给出 `dynamic` 键取值的已知性质：引导期已校验该值被某方法受理（以它作 `arg` 实参调用时返回非空），
+//! 自引导档位 `from_level` 起读到的值恒满足——值本身仍取宿主环境（不折叠），只是该受理调用的结果按非空折叠。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -38,6 +40,14 @@ pub enum PropValue<'a> {
     Absent,
 }
 
+/// 动态键取值的受理性质：自档位 `from_level` 起，以该值作 `method` 的 `arg` 号实参（含接收者）调用恒返回非空
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Accepted {
+    pub method: String,
+    pub arg: usize,
+    pub from_level: i32,
+}
+
 #[derive(Debug, Default)]
 pub struct SysProps {
     values: BTreeMap<String, String>,
@@ -48,6 +58,8 @@ pub struct SysProps {
     writers: HashMap<String, PropWrite>,
     /// 只读查询入口（接收者为系统属性表对象时不算逃逸）
     queries: HashSet<String>,
+    /// 动态键 → 受理性质
+    accepted: HashMap<String, Accepted>,
 }
 
 fn idx(t: &toml::Table, k: &str) -> Option<usize> {
@@ -88,7 +100,27 @@ impl SysProps {
             let remove = t.get("remove").and_then(|v| v.as_bool()).unwrap_or(false);
             out.writers.insert(k.clone(), PropWrite { key, remove });
         }
+        for (k, v) in sec.get("accepted").and_then(|v| v.as_table()).into_iter().flatten() {
+            let t = v.as_table().ok_or_else(|| err(k, "须为 { method = 成员键, arg = 序号, from_level = 档位 }"))?;
+            if !out.dynamic.contains(k) {
+                return Err(err(k, "列在 accepted 须同时列在 dynamic（常量键直接折叠）"));
+            }
+            let method = t.get("method").and_then(|v| v.as_str()).ok_or_else(|| err(k, "缺 method"))?.to_string();
+            let arg = idx(t, "arg").ok_or_else(|| err(k, "缺 arg"))?;
+            let from_level = t.get("from_level").and_then(|v| v.as_integer()).and_then(|i| i32::try_from(i).ok()).ok_or_else(|| err(k, "缺 from_level"))?;
+            out.accepted.insert(k.clone(), Accepted { method, arg, from_level });
+        }
         Ok(out)
+    }
+
+    /// 动态键 k 取值的受理性质
+    pub fn accepted(&self, k: &str) -> Option<&Accepted> {
+        self.accepted.get(k)
+    }
+
+    /// 受理方法为 method 的性质（实参序号）
+    pub fn acceptor(&self, method: &str) -> Option<usize> {
+        self.accepted.values().find(|a| a.method == method).map(|a| a.arg)
     }
 
     /// 启动时键 k 的取值
@@ -191,5 +223,15 @@ mod tests {
         assert!(parse("").unwrap().is_empty());
         let e = parse("[s.readers]\n\"x/V.r:()V\" = { key = 0, receiver = true, snapshot = true }\n").unwrap_err();
         assert!(e.contains("snapshot"));
+        let e = parse("[s.accepted]\nk = { method = \"x/P.f:(Ljava/lang/String;)Lx/C;\", arg = 1, from_level = 1 }\n").unwrap_err();
+        assert!(e.contains("dynamic"));
+    }
+
+    #[test]
+    fn accepted_property() {
+        let p = parse("[s]\ndynamic = [\"k\"]\n[s.accepted]\nk = { method = \"x/P.f:(Ljava/lang/String;)Lx/C;\", arg = 1, from_level = 1 }\n").unwrap();
+        assert_eq!(p.accepted("k"), Some(&Accepted { method: "x/P.f:(Ljava/lang/String;)Lx/C;".into(), arg: 1, from_level: 1 }));
+        assert_eq!(p.acceptor("x/P.f:(Ljava/lang/String;)Lx/C;"), Some(1));
+        assert_eq!(p.accepted("other"), None);
     }
 }

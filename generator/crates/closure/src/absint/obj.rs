@@ -34,6 +34,9 @@
 //!   任何可能改写或泄露它的操作（追加、作为实参 / 写入字段 / 数组 / 再次执行该分配点）撤掉全组标签，
 //!   追加结果另得新标签；不进常量格、不跨方法，异常处理器入口撤掉
 //!
+//! - `Accepted(m)`：取值运行期才定、但已知被方法 m 受理的字符串（清单 `[facts.system_properties.accepted]`：
+//!   引导期校验过的动态属性值）。以它作 m 的受理实参调用恒返回非空。串不可变，标签随值跨方法传递（常量格保留）
+//!
 //! 标签只随值传播：两个值合流时标签相同才保留（null 与对象合流保留对象标签，可空性另记）；
 //! 属性表（或可能的属性表）与其它值合流得 `MaybeSysProps`。
 
@@ -67,6 +70,8 @@ pub enum Obj {
     Str(Shape),
     /// 构建器内容（分配点偏移, 内容形状）
     Builder { group: u32, content: Shape },
+    /// 被该方法（成员键）受理的字符串
+    Accepted(Rc<str>),
 }
 
 impl Obj {
@@ -119,6 +124,14 @@ impl V {
     /// 带形状标签的引用（常量格保留，跨方法传递）
     pub fn shape_tagged(&self) -> bool {
         matches!(self, V::Ref { obj: Some(o), .. } if matches!(**o, Obj::Str(_)))
+    }
+
+    /// 受理标签所示的方法（成员键）
+    pub fn accepted_by(&self) -> Option<&str> {
+        match self.obj().map(|o| &**o) {
+            Some(Obj::Accepted(m)) => Some(m),
+            _ => None,
+        }
     }
 
     /// 条件分支判定成立一侧的收窄值：其类型流取本方法该偏移处的收窄节点
