@@ -594,7 +594,7 @@ impl<'a> Engine<'a> {
         // 再拆分出的拆分器）时不算内部分配：沿用属主会把新对象按「分配点 × 属主」成倍展开，其上的方法克隆与
         // lambda 调用随之相乘，而这些对象的状态并不归属主管理。分配方无属主 / 属主在巢外时：递归结构不延长链
         // （否则分配点两两组合成 O(站点²) 个抽象对象而不带来任何分派精度），其余照常以分配方为上下文
-        let ctx_cls = if ctx == NOCTX { None } else { self.objs.get(&ctx).map(|&t| self.names[t as usize].clone()) };
+        let ctx_cls = if ctx == NOCTX { None } else { self.ctx_obj_cls(ctx).map(|t| self.names[t as usize].clone()) };
         let owner_cls = outer.get(1).and_then(|g| self.seg_cls.get(g.as_str())).map(|&t| self.names[t as usize].clone());
         let internal = match (&ctx_cls, &owner_cls) {
             (Some(x), Some(o)) => self.internal_alloc(x, cls) && self.same_nest(x, o),
@@ -614,7 +614,7 @@ impl<'a> Engine<'a> {
         // 外层段（调用方的上下文），产物划分与不并入时相同（分配点 × 调用点），只是调用点随产物下传给其内部对象；
         // 否则产物按「分配点 × 调用点 × 调用方上下文」成倍展开，其上的方法克隆与内部对象随之相乘
         let mut room = HEAP_DEPTH - 1;
-        if ctx != NOCTX && !self.objs.contains_key(&ctx) {
+        if ctx != NOCTX && self.ctx_obj_cls(ctx).is_none() {
             if let Some((first, rest)) = segs.split_first() {
                 chain.push_str(first);
                 segs = rest;

@@ -61,6 +61,7 @@ mod site_prof;
 mod lambda_prof;
 mod ctx_prof;
 mod ctx_free;
+mod ctx_budget;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -442,6 +443,10 @@ pub struct Engine<'a> {
     /// 上下文透明方法（`ctx_free.rs`）：判定缓存；进本体的次数（诊断）
     ctx_free_memo: HashMap<MemberRef, bool>,
     ctx_free_hits: u64,
+    /// 上下文预算（`ctx_budget.rs`）：成员 → 已建对象上下文克隆数；类型上下文 → 类；计数
+    ctx_fine: HashMap<MemberRef, u32>,
+    typed_ctxs: HashMap<u32, u32>,
+    ctx_stats: ctx_budget::CtxStats,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,

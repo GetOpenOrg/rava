@@ -18,6 +18,7 @@ enum CtxKind {
     Site,
     Const,
     Level,
+    Typed,
     Other,
 }
 
@@ -31,6 +32,8 @@ impl Engine<'_> {
             CtxKind::Const
         } else if self.objs.contains_key(&c) {
             CtxKind::Obj
+        } else if self.typed_ctxs.contains_key(&c) {
+            CtxKind::Typed
         } else if self.obj_chain.contains_key(&c) {
             CtxKind::Site
         } else {
@@ -71,6 +74,7 @@ impl Engine<'_> {
         let mut ks: Vec<_> = kinds.iter().map(|(k, (n, s))| (*k, *n, s.len())).collect();
         ks.sort();
         eprintln!("{tag} ctxfree hits={} members={}", self.ctx_free_hits, self.ctx_free_memo.values().filter(|&&f| f).count());
+        eprintln!("{tag} ctxbudget merged={} typed={}", self.ctx_stats.merged, self.ctx_stats.typed);
         eprintln!("{tag} ctxkind objs={} {}", self.objs.len(), ks.iter().map(|(k, n, d)| format!("{k:?}={n}/{d}")).collect::<Vec<_>>().join(" "));
         let bounds = [8usize, 64, 256, 1024, usize::MAX];
         let mut hist = [(0u64, 0u64); 5];
