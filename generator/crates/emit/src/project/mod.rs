@@ -357,7 +357,10 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
         let i = ctx.code_class(class)?.methods().iter().position(|m| m.name == name && m.desc == desc)?;
         ctx.extras(class).methods.get(i).map(|m| m.line_numbers.clone())
     };
-    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &root_line_registration(ctx, &decl_src))?;
+    let alias = |class: &str, name: &str, desc: &str| {
+        ctx.manifest.frame_alias(class, name, desc).map(|(c, n, d)| (c.to_string(), n.to_string(), d.to_string()))
+    };
+    let user_lines = line_tables::write(&mut w, out_dir, &final_files, &lnt, &alias, &root_line_registration(ctx, &decl_src))?;
     meta_sides::write_user(ctx, &mut w, &user_src, &final_files, &user_lines)?;
     let body_names: Vec<&str> = body_plan.names().collect();
     mod_tree::complete_lib_rs(&decl_src, &runtime_src, &mut w)?;

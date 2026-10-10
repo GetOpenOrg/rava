@@ -258,6 +258,27 @@ pub fn prune(t: &mut FileLines) {
     t.methods = methods;
 }
 
+/// 栈帧别名（清单 `frame_aliases`：调用点改写出的特化入口 → 它所特化的方法）：特化入口的方法体执行的就是原方法，
+/// 帧呈现为原方法的帧（类 / 名 / 描述符 / 源文件 / 修饰位 / 注解都取原方法），栈遍历的消费方按原方法判定
+/// （HotSpot `is_ignored_by_security_stack_walk` 的 Method.invoke、StackWalker 的反射帧过滤）。特化入口体的 Java 行
+/// 不是原方法源文件的行，记为无行号（[`LINE_UNKNOWN`]）；原方法的帧元数据取不到时仍按宿主（特化入口所在类）查找
+fn apply_aliases(t: &mut FileLines, alias: &dyn Fn(&str, &str, &str) -> Option<(String, String, String)>) {
+    let mut aliased = Vec::new();
+    for (i, m) in t.methods.iter_mut().enumerate() {
+        let Some((class, name, descriptor)) = alias(&m.class, &m.name, &m.descriptor) else { continue };
+        if m.host.is_empty() {
+            m.host = std::mem::take(&mut m.class);
+        }
+        (m.class, m.name, m.descriptor) = (class, name, descriptor);
+        aliased.push(i as u32);
+    }
+    for r in &mut t.rows {
+        if r.2 != 0 && aliased.contains(&r.1) {
+            r.2 = LINE_UNKNOWN;
+        }
+    }
+}
+
 /// 方法项取帧元数据；取不到的方法其行记 [`NO_METHOD`]（与运行期「无元数据不成帧」同义），由 [`prune`] 删去
 fn attach_frames(t: &mut FileLines, frames: &rava_meta_tables::FrameIndex) {
     let mut dead = Vec::new();
@@ -345,6 +366,7 @@ pub fn write(
     out_dir: &Path,
     files: &[(&Path, &str)],
     lnt: &dyn Fn(&str, &str, &str) -> Option<Vec<(u16, u16)>>,
+    alias: &dyn Fn(&str, &str, &str) -> Option<(String, String, String)>,
     root: &[(PathBuf, Vec<handwritten::HwMethod>)],
 ) -> Result<String> {
     let mut tables: Vec<FileLines> = files
@@ -377,6 +399,9 @@ pub fn write(
         if let Some(t) = std::fs::read_to_string(path).ok().and_then(|c| handwritten::companion_table(&rel, &c, hws)) {
             tables.push(t);
         }
+    }
+    for t in &mut tables {
+        apply_aliases(t, alias);
     }
     // 复制进他类的方法体（`declared_by`）可能来自另一源文件：源文件取声明类型自己的 `source`
     let sources: std::collections::HashMap<String, String> =
@@ -474,6 +499,25 @@ mod tests {
         assert_eq!(back.files[0].rel, "user/src/a.rs");
         assert_eq!(back.files[0].methods[0].name, "f");
         assert_eq!(back.files[0].rows[1], (9, 0, 7));
+    }
+
+    #[test]
+    fn alias_presents_specialized_method() {
+        let mut t = FileLines {
+            rel: "a.rs".into(),
+            methods: vec![Method::new("p/H", "h", "(Lp/M;)V", "H.java", "p/H"), Method::new("p/H", "g", "()V", "H.java", "p/H")],
+            rows: vec![(3, 0, 0), (4, 0, 7), (5, 0, 8), (7, 1, 0), (8, 1, 9)],
+        };
+        let alias = |c: &str, n: &str, d: &str| {
+            ((c, n, d) == ("p/H", "h", "(Lp/M;)V")).then(|| ("p/M".to_string(), "m".to_string(), "()V".to_string()))
+        };
+        apply_aliases(&mut t, &alias);
+        assert_eq!((t.methods[0].class.as_str(), t.methods[0].name.as_str(), t.methods[0].descriptor.as_str()), ("p/M", "m", "()V"));
+        assert_eq!(t.methods[0].host, "p/H");
+        assert_eq!(t.methods[1].class, "p/H");
+        assert_eq!(t.rows, vec![(3, 0, 0), (4, 0, LINE_UNKNOWN), (5, 0, LINE_UNKNOWN), (7, 1, 0), (8, 1, 9)]);
+        prune(&mut t);
+        assert_eq!(t.rows, vec![(4, 0, LINE_UNKNOWN), (7, NO_METHOD, 0), (8, 1, 9)]);
     }
 
     #[test]

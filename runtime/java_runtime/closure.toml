@@ -91,6 +91,13 @@ clinit_carried = [
 vm_upcall_classes = [
     "java/lang/invoke/MethodHandleNatives",
 ]
+# 方法级条目（`类.方法:描述符`，只覆盖该方法）：JVM 解析符号引用时对非引导类加载器的上调
+# （SystemDictionary 经 `loadClass(String)` 加载类路径上的类：jar 类路径下首次用到库类时才建
+# URLClassPath$JarLoader、打开 ZipFile、读 Manifest）。原生二进制静态链接全部类，没有这条解析路径；
+# 用户代码显式调用的 loadClass 按字节码建模在闭包内，不经本条归因。
+vm_upcall_methods = [
+    "java/lang/ClassLoader.loadClass:(Ljava/lang/String;)Ljava/lang/Class;",
+]
 
 # ── 门排名的处理类别提示（rava closure --gates，读取入口 generator/crates/closure/src/manifest/gates.rs）──
 # 门排名给每个门（让闭包膨胀的枢纽方法体 / 调用点）标处理类别：精度缺口 / 构建期可求值 / 运行模型替换 / VM 驱动。

@@ -196,6 +196,11 @@ impl DirectInvokers {
     pub fn is_empty(&self) -> bool {
         self.by_entry.is_empty()
     }
+
+    /// 全部入口：(反射调用入口 `类.方法:描述符`, 登记)
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &DirectInvoker)> {
+        self.by_entry.iter().map(|(k, d)| (k.as_str(), d))
+    }
 }
 
 #[cfg(test)]
