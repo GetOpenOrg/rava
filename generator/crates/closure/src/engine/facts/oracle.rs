@@ -102,18 +102,15 @@ impl Oracle for Facts<'_, '_> {
             }
         };
         match r {
-            // 小集合：先按本调用点的常量实参求值，求不出时取集合
-            Some(PV::Const(v @ V::Ints(_))) => match eval() {
+            // 汇合格是常量（含小集合 / 非空引用 / 映像对象）：先按本调用点的常量实参求值，求不出时取汇合格。
+            // 求值结果只取决于本调用点实参与被调方法的字节码，是本调用点的精确值；汇合格在不动点途中只是部分
+            // 调用上下文返回值之并（如只见过 FALSE 接收者时 `booleanValue` 汇合为 0），直接取用会得出与终态
+            // 精确值不可比的暂时答复（0 → 1，而非 0 → {0,1}），据此连上的边不可撤回，闭包随处理次序变化。
+            // 先取求值则答复在汇合格增长时单调：求值可知时恒为同一精确值，不可知时随汇合格单调上升
+            Some(PV::Const(v)) => match eval() {
                 Ret::Unknown => Ret::Value(v),
                 x => x,
             },
-            // 非空 / 带类型的无对象引用：先按本调用点的常量实参求值（可能得出字符串常量、null 或映像对象），
-            // 求不出时取该引用（求值结果是本调用点实参下的精确值，比汇合格精确且同样可靠）
-            Some(PV::Const(v)) if is_nonnull_ref(&v) || v.shape_tagged() || matches!(v, V::Ref { obj: None, .. }) => match eval() {
-                Ret::Unknown => Ret::Value(v),
-                x => x,
-            },
-            Some(PV::Const(v)) => Ret::Value(v),
             Some(PV::Top) => eval(),
             None if self.ctx.noreturn.borrow().answer_never(t) => {
                 self.ctx.dep(me, Dep::Never);
