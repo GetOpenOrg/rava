@@ -8,18 +8,13 @@ use super::*;
 
 impl<'a> Engine<'a> {
     /// 调用点 (m, off) 的偏移实参（序号含接收者）所指字段节点：调用方当前分析给出符号偏移时。
-    ///
-    /// 符号偏移是按名取得的字段偏移，按名取偏移即放开该字段（`field_names.rs`）。取偏移的调用点却可能不经活方法
-    /// 分析：`<clinit>` 由常量求值（`static_const`）折叠、偏移经 static final 字段直达访问点（如类镜像的反射数据
-    /// 缓存按 CAS 写入），按名入口从未登记。这里在消费点补放开所指字段：其常量格与按对象值不再按字节码写入折叠
+    /// 所指字段在符号偏移产生处已放开（`facts/fields.rs::field_offset`）
     fn site_offset(&mut self, m: usize, off: u32, idx: Option<usize>) -> Option<usize> {
         let idx = idx?;
         let a = self.methods[m].applied.clone()?;
         let Some(Event::Invoke { args, .. }) = class_lookup::event_at(&a, off, class_lookup::is_invoke) else { return None };
         let V::Offset(f) = args.get(idx)? else { return None };
-        let f = (**f).clone();
-        self.open_field(f.clone());
-        Some(self.field_node(f))
+        Some(self.field_node((**f).clone()))
     }
 
     /// 登记 / 复核站点 s 的触及字段；偏移实参变化即放宽并按当前实参集重放写入与读取
