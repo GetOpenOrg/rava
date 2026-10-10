@@ -103,13 +103,13 @@ impl Ctx<'_> {
             return Err("非虚调用".into());
         }
         let Some(crate::absint::Obj::Image(id, _)) = recv.and_then(V::obj).map(|o| &**o) else { return Err("接收者无映像标签".into()) };
-        let data = self.img_data.get().ok_or("无映像数据")?;
-        let x = data.objs.get(*id as usize).ok_or_else(|| format!("映像对象越界 {id}/{}", data.objs.len()))?;
-        if x.placeholder {
-            return Err(format!("占位对象 {}", x.ty));
-        }
+        let ty = match self.img_types.borrow().get(*id as usize) {
+            None => return Err(format!("映像对象 {id} 未登记")),
+            Some(None) => return Err(format!("映像对象 {id} 是占位对象")),
+            Some(Some(t)) => t.clone(),
+        };
         let site = self.h.resolve_method(&m.owner, &m.name, &m.desc, iface).ok_or("调用点解析失败")?;
-        let sel = self.h.select(&x.ty, &site).ok_or_else(|| format!("{} 上选不出目标", x.ty))?;
+        let sel = self.h.select(&ty, &site).ok_or_else(|| format!("{ty} 上选不出目标"))?;
         let (o, n, d) = sel.key();
         let tm = sel.class.method(&n, &d).ok_or("目标方法缺失")?;
         if tm.code.is_none() || self.kind_of(&sel.class, tm) != Kind::Bytecode {

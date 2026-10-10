@@ -19,7 +19,7 @@ impl<'a> Engine<'a> {
                 loaders: Default::default(),
                 img_modules: Default::default(),
                 img_module_tags: Default::default(),
-                img_data: Default::default(),
+                img_types: Default::default(),
                 img_statics: Default::default(),
                 selectors: Default::default(),
                 site_lits: Default::default(),
