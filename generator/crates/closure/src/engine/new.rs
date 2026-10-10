@@ -41,6 +41,7 @@ impl<'a> Engine<'a> {
                 rvals: Default::default(),
                 fopen: Default::default(),
                 fopen_names: Default::default(),
+                offset_pending: Default::default(),
                 fhw: Default::default(),
                 fhw_names: Default::default(),
                 fopen_all: Cell::new(false),
