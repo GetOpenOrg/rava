@@ -122,20 +122,33 @@ impl Monitor {
 
     /// 退出监视器一层（重入计数递减；归零时让出并唤醒竞争者）。
     /// 未持有监视器时抛 `IllegalMonitorStateException`（VM 级失衡报告）。
+    ///
+    /// 让出（计数归零）后放状态锁、再执行一次 SeqCst 栅栏：监视器动作纳入 SeqCst 全序
+    /// （JLS §17.4.4 同步序）。状态锁的解锁只是 Release store，C++20 / Rust 模型允许它与本线程
+    /// 随后的读（另一监视器的进入 CAS、volatile 读的加锁 CAS / 原子读）重排；栅栏把「退出 →
+    /// 其后任何同步动作」钉成 store-load 有序，进入动作随之按状态锁的修改序排在全序中。
+    /// 论证见无 GC 文档（docs/plans/2026-10-07-no-gc-memory-model.md）第五节「小步 B」。
+    /// 重入层的退出不让出监视器，他线程观察不到，不加栅栏。
     fn exit(&self) -> Result<()> {
         let me = std::thread::current().id();
-        let mut st = self.state.lock();
-        match st.owner {
-            Some(o) if o == me => {
-                st.count -= 1;
-                if st.count == 0 {
-                    st.owner = None;
-                    self.acquire_q.notify_one();
+        let released = {
+            let mut st = self.state.lock();
+            match st.owner {
+                Some(o) if o == me => {
+                    st.count -= 1;
+                    if st.count == 0 {
+                        st.owner = None;
+                        self.acquire_q.notify_one();
+                    }
+                    st.count == 0
                 }
-                Ok(())
+                _ => return Err(JvmError::illegal_monitor_state("current thread is not owner")),
             }
-            _ => Err(JvmError::illegal_monitor_state("current thread is not owner")),
+        };
+        if released {
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
         }
+        Ok(())
     }
 
     /// `Object.wait(millis, nanos)`：校验参数（HotSpot JVM_MonitorWait 同序：

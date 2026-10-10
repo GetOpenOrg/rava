@@ -39,13 +39,21 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
     // 字段访问器 impl 体（三个 vtable impl 生成点共用）。
     // 擦除字段（__inner 中以 Object 存储）：签名 Object 化（与 trait 声明一致），
     // impl 直连存储（Object 进 Object 出）；类型化转换移到 wrapper 委托（β' 边界）。
+    // 内存序按 volatile 修饰分流（存储同一）：基本字段 SeqCst / relaxed；引用（含擦除）字段
+    // volatile 族（加锁 CAS 与解锁 store 都 SeqCst）/ 普通族（Acquire / Release），无 GC 文档
+    // 第四节小步 B。
     let accessor_impl_items = |name: &syn::Ident, ty: &Type, basic: bool| -> TokenStream2 {
         let get = format_ident!("__get_{}", name);
         let set = format_ident!("__set_{}", name);
+        let (ref_get, ref_set) = if ctx.is_volatile(name) {
+            (format_ident!("get_or_default_volatile"), format_ident!("set_volatile"))
+        } else {
+            (format_ident!("get_or_default"), format_ident!("set"))
+        };
         if ctx.is_erased(name) {
             quote! {
-                fn #get(&self) -> Object { self.#name.get_or_default() }
-                fn #set(&self, v: Object) { self.#name.set(::std::option::Option::Some(v)); }
+                fn #get(&self) -> Object { self.#name.#ref_get() }
+                fn #set(&self, v: Object) { self.#name.#ref_set(::std::option::Option::Some(v)); }
             }
         } else if basic && ctx.is_volatile(name) {
             quote! {
@@ -59,8 +67,8 @@ pub(crate) fn vtable_impls(ctx: &GenContext) -> syn::Result<TokenStream2> {
             }
         } else {
             quote! {
-                fn #get(&self) -> #ty { self.#name.get_or_default() }
-                fn #set(&self, v: #ty) { self.#name.set(::std::option::Option::Some(v)); }
+                fn #get(&self) -> #ty { self.#name.#ref_get() }
+                fn #set(&self, v: #ty) { self.#name.#ref_set(::std::option::Option::Some(v)); }
             }
         }
     };

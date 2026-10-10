@@ -9,7 +9,7 @@
 //! | `__Shared<T>` | `Arc<T>` |
 //! | `__PrimCell<T>` | 原子单元（SeqCst，64 位位形；long/double 无撕裂） |
 //! | `__RefSlot<T>` | 读写锁（`borrow` = 可重入读、`borrow_mut` = 写） |
-//! | `__RefField<T>` | 引用字段内联单元：字节自旋锁 + 值（临界区只做克隆 / 交换） |
+//! | `__RefField<T>` | 引用字段内联单元：字节自旋锁 + 值（临界区只做克隆 / 交换；普通族 Acquire / Release，volatile 族 SeqCst） |
 //! | `__process_static!` | 全局 `OnceLock` 单元 |
 //! | `__ThreadSafe` | `Send + Sync` |
 //! | `__DynFn!` | `dyn Fn(..) -> R + Send + Sync` |
@@ -334,8 +334,15 @@ mod mt {
     /// 引用字段内联单元：字节自旋锁 + 值，与对象存储同一分配（不再每字段一个 `Arc` + 读写锁）。
     ///
     /// 临界区只做值的克隆（引用计数加一）或交换，不执行 Java 代码、不让出，旧值在锁外释放；
-    /// 不对外暴露守卫，同线程不会重入。读写都经获取 / 释放序，引用发布随之携带被引对象的
-    /// 构造写入（final 字段语义）。`const fn new`：静态字段单元可常量初始化。
+    /// 不对外暴露守卫，同线程不会重入。`const fn new`：静态字段单元可常量初始化。
+    ///
+    /// 内存序按访问方式分两族（同一存储，由访问器选择，与 `__PrimCell` 的 `get` / `get_plain` 同构）：
+    /// - 普通族（`get` / `set` / `with` / `with_mut` …）：加锁 CAS 取 Acquire、解锁 store 取 Release。
+    ///   普通引用字段与 `*aload` / `*astore`；引用发布随之携带被引对象的构造写入（final 字段语义）。
+    /// - volatile 族（`*_volatile`）：加锁 CAS 与解锁 store **都取 SeqCst**，每次访问的两条锁字
+    ///   操作都进入 SeqCst 全序 S。volatile 字段（字节码 ACC_VOLATILE，宏按字段属性分流）的
+    ///   getfield / putfield / getstatic / putstatic、Unsafe / VarHandle 的引用读-改-写走这一族。
+    ///   论证见无 GC 文档（docs/plans/2026-10-07-no-gc-memory-model.md）第五节「小步 B」。
     pub struct __RefField<T> {
         locked: AtomicBool,
         val: UnsafeCell<T>,
@@ -345,10 +352,17 @@ mod mt {
     unsafe impl<T: Send> Send for __RefField<T> {}
     unsafe impl<T: Send + Sync> Sync for __RefField<T> {}
 
-    struct FieldGuard<'a>(&'a AtomicBool);
-    impl Drop for FieldGuard<'_> {
+    /// 加锁凭据：`SC` 选解锁 store 的序（SeqCst / Release），与加锁 CAS 的序成对
+    struct FieldGuard<'a, const SC: bool>(&'a AtomicBool);
+    impl<const SC: bool> Drop for FieldGuard<'_, SC> {
         #[inline(always)]
-        fn drop(&mut self) { self.0.store(false, Release) }
+        fn drop(&mut self) { self.0.store(false, if SC { SeqCst } else { Release }) }
+    }
+
+    /// 加锁 CAS 成功序：volatile 族 SeqCst，普通族 Acquire（失败序恒 Relaxed：失败不建立任何序）
+    #[inline(always)]
+    const fn lock_order(sc: bool) -> std::sync::atomic::Ordering {
+        if sc { SeqCst } else { Acquire }
     }
 
     impl<T> __RefField<T> {
@@ -356,16 +370,16 @@ mod mt {
         pub const fn new(v: T) -> Self { __RefField { locked: AtomicBool::new(false), val: UnsafeCell::new(v) } }
 
         #[inline(always)]
-        fn lock(&self) -> FieldGuard<'_> {
-            if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_err() {
-                self.lock_slow();
+        fn lock<const SC: bool>(&self) -> FieldGuard<'_, SC> {
+            if self.locked.compare_exchange_weak(false, true, lock_order(SC), Relaxed).is_err() {
+                self.lock_slow::<SC>();
             }
             FieldGuard(&self.locked)
         }
 
         #[cold]
         #[inline(never)]
-        fn lock_slow(&self) {
+        fn lock_slow<const SC: bool>(&self) {
             let mut spins = 0u32;
             loop {
                 while self.locked.load(Relaxed) {
@@ -376,7 +390,7 @@ mod mt {
                         std::thread::yield_now();
                     }
                 }
-                if self.locked.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() {
+                if self.locked.compare_exchange_weak(false, true, lock_order(SC), Relaxed).is_ok() {
                     return;
                 }
             }
@@ -385,7 +399,7 @@ mod mt {
         /// 锁内只读访问值（`f` 不得访问同一单元、不得执行 Java 代码）。
         #[inline]
         pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-            let _g = self.lock();
+            let _g = self.lock::<false>();
             let _held = Held::field();
             // SAFETY: 持锁独占
             f(unsafe { &*self.val.get() })
@@ -395,19 +409,43 @@ mod mt {
         /// 放锁后再释放：锁内释放对象会重入任意析构链（debug 档 `drop_slow` 断言）。
         #[inline]
         pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-            let _g = self.lock();
+            self.with_mut_ordered::<false, R>(f)
+        }
+
+        /// `with_mut` 的 volatile 族（加锁 / 解锁都 SeqCst）：Unsafe / VarHandle 的引用读-改-写
+        /// （compareAndSet / compareAndExchange / getAndSet，volatile 访问模式）。
+        #[inline]
+        pub fn with_mut_volatile<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            self.with_mut_ordered::<true, R>(f)
+        }
+
+        #[inline(always)]
+        fn with_mut_ordered<const SC: bool, R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+            let _g = self.lock::<SC>();
             let _held = Held::field();
             // SAFETY: 持锁独占
             f(unsafe { &mut *self.val.get() })
+        }
+
+        /// 锁内克隆（`SC` 选加锁 / 解锁的序）
+        #[inline(always)]
+        fn get_ordered<const SC: bool>(&self) -> T where T: Clone {
+            let _g = self.lock::<SC>();
+            // SAFETY: 持锁独占
+            unsafe { (*self.val.get()).clone() }
         }
 
         /// 读：锁内克隆。不经 `with` 的闭包：读路径（静态 / 实例引用字段 getter、引用数组元素）
         /// 标 `#[inline(always)]`，opt-level 0 的调用方 crate 里只剩加锁 CAS、克隆与解锁。
         #[inline(always)]
         pub fn get(&self) -> T where T: Clone {
-            let _g = self.lock();
-            // SAFETY: 持锁独占
-            unsafe { (*self.val.get()).clone() }
+            self.get_ordered::<false>()
+        }
+
+        /// volatile 读（加锁 / 解锁都 SeqCst）
+        #[inline(always)]
+        pub fn get_volatile(&self) -> T where T: Clone {
+            self.get_ordered::<true>()
         }
 
         /// 写：锁内交换，旧值在锁外释放。
@@ -416,9 +454,20 @@ mod mt {
             drop(self.replace(v));
         }
 
+        /// volatile 写（加锁 / 解锁都 SeqCst），旧值在锁外释放。
+        #[inline]
+        pub fn set_volatile(&self, v: T) {
+            drop(self.replace_volatile(v));
+        }
+
         #[inline]
         pub fn replace(&self, v: T) -> T {
             self.with_mut(|cur| std::mem::replace(cur, v))
+        }
+
+        #[inline]
+        pub fn replace_volatile(&self, v: T) -> T {
+            self.with_mut_volatile(|cur| std::mem::replace(cur, v))
         }
 
         #[inline]
@@ -437,8 +486,19 @@ mod mt {
         /// 引用字段读（存储 `None` = 从未写入，按声明类型的缺省值应答）。
         #[inline(always)]
         pub fn get_or_default(&self) -> T where T: Clone + Default {
+            self.get_or_default_ordered::<false>()
+        }
+
+        /// volatile 引用字段读（加锁 / 解锁都 SeqCst）。
+        #[inline(always)]
+        pub fn get_or_default_volatile(&self) -> T where T: Clone + Default {
+            self.get_or_default_ordered::<true>()
+        }
+
+        #[inline(always)]
+        fn get_or_default_ordered<const SC: bool>(&self) -> T where T: Clone + Default {
             let v = {
-                let _g = self.lock();
+                let _g = self.lock::<SC>();
                 // SAFETY: 持锁独占
                 match unsafe { &*self.val.get() } {
                     Some(v) => Some(v.clone()),
