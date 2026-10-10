@@ -672,7 +672,9 @@ instantiators = [
 # AnnotationInvocationHandler.equalsImpl（getDeclaredMethods 数组经字段）、ObjectStreamClass 的 readObject / writeObject 等
 # （按形参名与形参类型数组查找，经字段）。lookups 口径：public = Class.getMethod（公开成员沿超类链与超接口）；
 # declared = 只查声明类（getDeclaredMethod / getDeclaredMethods）；declared_public = 只查声明类的公开方法。
-# native = helper 体内执行目标调用的 native：直连调用点已逐目标接边，其返回值不按 open 交出、形参值池不按返回类型逃逸
+# native = helper 体内执行目标调用的 native：直连调用点已逐目标接边，其返回值不按 open 交出、形参值池不按返回类型逃逸。
+# helper 的栈帧呈现为入口的帧（发射层行表的帧别名，input/manifest.rs frame_aliases、emit line_tables::apply_aliases）：
+# getCallerClass / getClassContext 按 Method.invoke 跳过、StackWalker 按反射帧过滤，与 HotSpot 一致
 [facts.reflect.direct_invokers."java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"]
 helper = "java/lang/reflect/Method$Direct.invoke:(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
 list = "java/lang/reflect/Method$Direct.list:([Ljava/lang/reflect/Method;)Ljava/util/List;"

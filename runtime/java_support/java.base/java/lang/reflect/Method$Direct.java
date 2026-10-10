@@ -11,7 +11,7 @@
  * （本方法标注 @CallerSensitive，生成器在改写后的调用点压入调用方所在类，getCallerClass 取到的即原
  * Method.invoke 的调用者）；访问器恒为本地访问器（jdk.reflect.useNativeAccessorOnly），其非 CS 调用即
  * invoke0(method, obj, args)。clazz / modifiers 是 Method 的私有字段，本类经等值的 getDeclaringClass /
- * getModifiers 取得。
+ * getModifiers 取得。本方法的栈帧呈现为 Method.invoke 的帧（清单帧别名，发射层行表），栈遍历按 Method.invoke 判定。
  *
  * 编译：转译时以当前 JDK 的 javac --patch-module java.base 编入 java.lang.reflect 包
  * （generator/crates/resolve/src/image.rs VM 支持类目录）。
