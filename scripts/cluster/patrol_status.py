@@ -431,8 +431,10 @@ def report_wait_loops(procs: dict) -> None:
         if len(pids) > 1:
             warn.append(f"重复 {len(pids)} 个")
         if kind == "file":
-            f = Path(val)
-            if not f.exists() or now - f.stat().st_mtime > 1800:
+            f = Path(val.strip("\"'"))
+            if "$" in val:
+                pass                                   # 目标是 shell 变量，无法静态判定
+            elif not f.exists() or now - f.stat().st_mtime > 1800:
                 warn.append("所等文件 30 分钟无更新")
         elif kind == "tag" and not sh(f"pgrep -f '[d]istribute_tests.*{val}'").strip():
             warn.append("所等分发器已不在")
