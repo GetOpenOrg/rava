@@ -143,6 +143,10 @@ pub struct Manifest {
     /// 模拟删除共置手写的放行条目（`rava closure --release-bytecode`）：前缀内按精确名提供的手写不再取手写
     hw_dropped: Vec<String>,
     intrinsics: HashSet<String>,
+    /// `[[intrinsic]] kind = "class_definition"` 的成员（VM 另行承载的运行期类定义点）：训练运行不记录经它们定义的类
+    class_definitions: Vec<String>,
+    /// `[facts.reflect] predefined_definers`：类定义 native，返回值 = 预定义类镜像之并
+    predefined_definers: HashSet<String>,
     null_to_false: HashSet<String>,
     returns: HashMap<String, Fact>,
     receiver_returns: HashSet<String>,
@@ -248,11 +252,15 @@ impl Manifest {
         let release = strings(&closure, "vm_boundary", "translate_nested");
 
         let mut intrinsics = HashSet::new();
+        let mut class_definitions = Vec::new();
         if let Some(arr) = vm.get("intrinsic").and_then(|v| v.as_array()) {
             for e in arr {
                 let member = e.get("member").and_then(|v| v.as_str()).unwrap_or_default();
                 if e.get("kind").is_none() || e.get("reason").is_none() {
                     return Err(format!("vm_intrinsics.toml：内建条目须写明 kind 与 reason：{member}"));
+                }
+                if e.get("kind").and_then(|v| v.as_str()) == Some("class_definition") {
+                    class_definitions.push(member.to_string());
                 }
                 intrinsics.insert(member.to_string());
             }
@@ -463,6 +471,8 @@ impl Manifest {
                 .unwrap_or_default(),
             hw_dropped: Vec::new(),
             intrinsics,
+            class_definitions,
+            predefined_definers: reflect("predefined_definers").into_iter().collect(),
             null_to_false: strings(&vm, "vm_constants", "null_to_false").into_iter().collect(),
             returns,
             receiver_returns: strings(&vm, "facts", "receiver_returns").into_iter().collect(),
@@ -768,6 +778,23 @@ impl Manifest {
     /// VM 承载的运行期类定义点所返回类的成员承载类（VM 支持类）：返回值即其类镜像
     pub fn defined_class(&self, member: &str) -> Option<&str> {
         self.defined_class_returns.get(member).map(String::as_str)
+    }
+
+    /// 类定义 native（`[facts.reflect] predefined_definers`）：返回值为预定义类（`Origin::Predefined`）镜像之并
+    pub fn is_predefined_definer(&self, member: &str) -> bool {
+        self.predefined_definers.contains(member)
+    }
+
+    /// 类定义 native 全集（排序）
+    pub fn predefined_definers(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.predefined_definers.iter().map(String::as_str).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// VM 另行承载的运行期类定义点（`[[intrinsic]] kind = "class_definition"`，清单序）
+    pub fn class_definitions(&self) -> &[String] {
+        &self.class_definitions
     }
 
     /// 返回调用它的 @CallerSensitive 方法的调用者类镜像（`Reflection.getCallerClass` 语义）

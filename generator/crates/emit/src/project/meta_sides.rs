@@ -60,6 +60,12 @@ fn resource_tables(ctx: &EmitCtx<'_>, w: &mut Writer, user_src: &Path) -> Result
         src += &format!("    ({name:?}, include_bytes!(\"{RESOURCE_DIR}/class_path/{i}\")),\n");
     }
     src += "];\n";
+    src += "\n// 预定义类（训练运行记录）：(类文件 SHA-256, 类名)，按哈希有序；类定义 native 按实参字节哈希查表\n\
+            pub const PREDEFINED_CLASSES: &[(&str, &str)] = &[\n";
+    for (sha, name) in &ctx.input.predefined_classes {
+        src += &format!("    ({sha:?}, {name:?}),\n");
+    }
+    src += "];\n";
     w.write_bytes(&user_src.join(RESOURCE_DIR).join("modules"), &super::jimage::write(&ctx.input.module_resources))?;
     src += &format!(
         "\n// 本程序 jimage（{} 份模块资源；格式见生成器 `project/jimage.rs`）\n\

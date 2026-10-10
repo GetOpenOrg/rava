@@ -35,7 +35,7 @@ impl Engine<'_> {
         }
         let Some(cf) = self.h.class(cls) else { return true };
         let origin = self.cp.origin(cls);
-        if origin == Some(Origin::User) {
+        if origin.is_some_and(Origin::is_program) {
             return true;
         }
         if !cf.permitted_subclasses.is_empty() {

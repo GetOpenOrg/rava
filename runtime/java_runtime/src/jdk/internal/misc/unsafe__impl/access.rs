@@ -142,16 +142,20 @@ impl Unsafe {
         panic!("stub: jdk/internal/misc/Unsafe.putReference:(Ljava/lang/Object;JLjava/lang/Object;)V (offset={} 无实例引用字段臂且非引用元素数组)", offset)
     }
 
-    /// `getReferenceVolatile(Object o, long offset)`：引用 volatile 读。
+    /// `getReferenceVolatile(Object o, long offset)`：引用 volatile 读。单元与 plain 同一，
+    /// 内存序同「基本类型 volatile 访问」节的栅栏包络：volatile 访问模式可作用于非 volatile
+    /// 声明的位置（引用元素数组、普通字段），单元自身的序（普通族 Acquire / Release）不足以
+    /// 进入 SeqCst 全序，由前导 SeqCst 栅栏补足（无 GC 文档第四节小步 B）。
     #[jvm_native]
     pub fn getReferenceVolatile(&self, o: Object, offset: i64) -> Result<Object> {
-        self.getReference(o, offset)
+        _volatile_load(|| self.getReference(o, offset))
     }
 
-    /// `putReferenceVolatile(Object o, long offset, Object x)`：引用 volatile 写。
+    /// `putReferenceVolatile(Object o, long offset, Object x)`：引用 volatile 写（栅栏包络同上，
+    /// 尾随 SeqCst 栅栏）。
     #[jvm_native]
     pub fn putReferenceVolatile(&self, o: Object, offset: i64, x: Object) -> Result<()> {
-        self.putReference(o, offset, x)
+        _volatile_store(|| self.putReference(o, offset, x))
     }
 
     /// `park(boolean isAbsolute, long time)`：LockSupport.park 的 VM 底座（permit 语义的

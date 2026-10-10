@@ -39,6 +39,12 @@
     其上全是模型外帧 → `sigpoly-model`；
   - 其余不在闭包的帧（调用方已建模，被调方未建模）→ **漏覆盖**，记录该帧（静态分析漏掉的方法）；
   - 全部帧已建模而类不在闭包 → **漏覆盖**（漏掉的是类引用边）。
+- 帧是构建期初始化类（closure.json `boot_image_data.build_time`：引导映像与构建期初始化扩展）的
+  `<clinit>` → `build-time-init`：该 `<clinit>` 已由构建期求值器执行、结果物化进映像，原生程序运行期
+  不再执行它，其间加载的类（初始化期间的辅助类、只存在于构建期的中间对象类型）不属运行期程序。
+  此规则先于「帧已建模」判定：栈底帧照常上溯，一旦遇到构建期初始化的 `<clinit>` 即整段归该类。
+  局限（同首次加载归因）：类若先在构建期 `<clinit>` 内、后在运行期路径上被需要，只记首次加载，
+  后者由方法粒度对照（`--methods`）兜底。
 - 隐藏类帧（lambda 代理、LambdaForm 编译体：JVMTI 类名含 `.`）透明跳过。
 - 无加载事件（agent 盲区）→ `unattributed`。
 
@@ -95,7 +101,9 @@ BYTECODE = "bytecode"
 # 程序期加载类的分类
 MISS = "miss"
 UNATTRIBUTED = "unattributed"
-ATTRIBUTED = ("handwritten", "boundary-code", "boundary-dispatch", "vm-upcall", "vm-entry")
+BUILD_TIME_INIT = "build-time-init"
+ATTRIBUTED = ("handwritten", "boundary-code", "boundary-dispatch", "vm-upcall", "vm-entry", BUILD_TIME_INIT)
+CLINIT = "<clinit>"
 BOUNDARY = "boundary"
 
 
@@ -300,9 +308,16 @@ def model_sites(closure: dict) -> dict[str, str]:
     return out
 
 
+def build_time_classes(closure: dict) -> frozenset[str]:
+    """构建期完成初始化的类（closure.json `boot_image_data.build_time`；运行期初始化类不在内）：
+    其 `<clinit>` 由构建期求值器执行，原生程序运行期不执行。"""
+    return frozenset((closure.get("boot_image_data") or {}).get("build_time") or ())
+
+
 def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
               boundary_sigs: set[str] = frozenset(),
-              model_sites: Mapping[str, str] = {}) -> tuple[str, str | None]:
+              model_sites: Mapping[str, str] = {},
+              build_time: frozenset[str] = frozenset()) -> tuple[str, str | None]:
     """按调用栈归因一次程序期加载 → (分类, 负责帧)。"""
     frames = list(reversed(ev.frames))           # 栈底在前
     if not frames:
@@ -311,6 +326,8 @@ def attribute(ev: LoadEvent, methods: dict[str, str], rules: DomainRules,
     while depth < len(frames):
         f = frames[depth]
         mid = _frame_id(f)
+        if f[1] == CLINIT and f[0] in build_time:
+            return BUILD_TIME_INIT, _frame_str(f)    # 构建期已执行的 <clinit>：运行期不执行
         kind = methods.get(mid)
         if kind == BYTECODE:
             if (mc := model_sites.get(_frame_str(f))) is not None:
@@ -363,6 +380,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
     events = parse_agent(agent)
     bsigs = boundary_ref_sigs(closure.get("refs", []), rules)
     msites = model_sites(closure)
+    btime = build_time_classes(closure)
 
     miss: list[dict] = []
     unattributed: list[dict] = []
@@ -374,7 +392,7 @@ def compare(closure: dict, xlog: str, agent: str, rules: DomainRules,
         seen.add(name)
         dom = rules.domain(name)
         ev = events.get(name)
-        cat, frame = attribute(ev, methods, rules, bsigs, msites) if ev is not None else (UNATTRIBUTED, None)
+        cat, frame = attribute(ev, methods, rules, bsigs, msites, btime) if ev is not None else (UNATTRIBUTED, None)
         item = {"class": name, "domain": dom, "frame": frame,
                 "thread": ev.thread if ev else None,
                 "stack": [_frame_str(f) for f in ev.frames[:16]] if ev else []}

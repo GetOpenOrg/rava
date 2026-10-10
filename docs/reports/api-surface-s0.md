@@ -1,6 +1,6 @@
 # S0 API 面报告（最小 Spring Boot）
 
-> 日期：2026-10-07（框架稿；dev 关机维护，闭包与扫描未跑完，数据节待补）
+> 日期：2026-10-07 立稿；2026-10-10 dev 复算（闭包仍未产出，见 §5.1 与闸门 G1；分层规则 3 改为面外占比阈值，见 §5.5）
 > 口径：[framework-driven-api-coverage](../plans/2026-10-07-framework-driven-api-coverage.md) 步骤 1（面计算）与步骤 2 的数据部分。
 > 产出物：`tests/api_surface/s0.txt`（面，每行 `owner.name:descriptor`，owner 为声明类内部名）、
 > `tests/api_surface/tiers_s0.toml`（e2e 分层 + 补测清单）。两者均由 `scripts/api_surface_job.sh s0` 在 dev 上生成，本机不跑。
@@ -54,7 +54,7 @@ INFO ... --- [s0-boot] [main] s0app.GreetingRunner : runner done
 4. **e2e 分层**（`scripts/api_surface.py tiers`）：每例单独 javac（63_junit 带 junit / hamcrest 类路径），常量池 JDK 方法集解析到声明类；
    - 语义类目录白名单 → 主力；
    - 专属方法 = 方法集 − 通用方法（被 ≥10% e2e 用例引用，如打印 / 拼接 / 装箱，不让它们把所有用例都拉进主力）；专属为空 → 主力；
-   - 专属 ∩ 面 ≠ ∅ → 主力，否则 → 暂缓；
+   - 专属方法中面外占比 > `out_ratio` → 暂缓，否则 → 主力。阈值由标定集数据决定（`--out-ratio auto`，见 §5.5），脚本里不写类名；
    - 补测 = 一跳面上的公开 JDK 方法（java / javax / org.w3c / org.xml / org.ietf 包下 public 类的 public / protected 方法）中 e2e 零直接引用者。
 
 ## 四、语义类目录白名单（目录名推断，请复核）
@@ -65,22 +65,40 @@ INFO ... --- [s0-boot] [main] s0app.GreetingRunner : runner done
 
 未列入（按 API 面分层）的边界目录及理由：04 / 13 / 33 / 44 集合 API；05 / 17 / 27 / 42 字符串与正则 API；18_arrays_advanced（`java.util.Arrays` 工具面占多数）；24_object_methods（含反射调用例）；47_annotations（注解反射）；48_refs（引用 / VarHandle）；58_misc（混合）；59_method_handles（`java.lang.invoke`）。
 
-## 五、结果（kr2 作业 `apis0-kr2b-1fdb1bed`，@ 1fdb1bed；闭包待 dev 恢复复算）
+## 五、结果（面与分层：dev 作业 `apis0-dev4-0517c6f3` @ 0517c6f3；闭包：§5.1）
 
-### 5.1 闭包实测（两变体均未产出）
+### 5.1 闭包口径实测（dev 复算，两变体仍未产出）
 
-| 变体 | 入口 | 结果 | 耗时 | 峰值 RSS | 失败点 |
+dev（128G / 32 线程）三轮作业，作业脚本带看门狗：每 30 s 采样 RSS，超时或 RSS 超上限时按 PID 终止，并记下终止原因。第三轮另在 gdb 下运行，每 600 s 取一次全线程栈（`API_SURFACE_STACK_EVERY`）。
+
+| 作业 | 变体 | 上限 | 结果 | RSS 曲线（秒：MiB） | 末条阶段日志 |
 |---|---|---|---|---|---|
-| A | `s0app.S0Application.main` | rc=124（超时） | 2400 s（上限） | 未取到（`timeout` 先于 `/usr/bin/time` 结束） | 资源束与按名读资源阶段已过（ServiceLoader 读 log4j / slf4j provider、`sun.util.logging.resources.logging` 束），之后 37 分钟无新输出，未到达不动点 |
-| B | A + 1987 个实载框架类种子 | rc=137（SIGKILL，内存上限） | 737 s | 11.58 GiB（12140864 KB，机器上限 11891 MiB） | 展开阶段，无阶段日志即被杀 |
+| kr2 `apis0-kr2b-1fdb1bed`（15G） | A | 2400 s | 超时 | 未采 | 按名读资源（累计 12）之后 37 分钟无输出 |
+| 同上 | B | 机器内存 11891 MiB | OOM 杀（737 s，11.58 GiB） | 未采 | 无 |
+| dev `apis0-dev2-b4e01dc7` @ b4e01dc7，A / B 并行 | A | 30720 MiB | 看门狗终止：RSS 31552 MiB（1260 s）；time -v 峰值 32307552 KB，用户态 1246 s（单线程） | 150:3489、300:8968、600:16814、900:21462、1200:27998 | 「按名读取：81 个调用点 → 资源 +1（累计 12）」 |
+| 同上 | B | 30720 MiB | 看门狗终止：RSS 31822 MiB（1831 s）；峰值 32583116 KB | 300:6042、600:9663、900:13771、1201:19142、1501:26538、1801:30565 | 「按对象物化：64 个对象……峰值 1014 MiB」（第 1 条） |
+| dev `apis0-dev3-b05da66c` @ b05da66c，只跑 A，gdb 取栈 | A | 57344 MiB | 看门狗终止：**RSS 58451 MiB ≥ 57344 MiB（2251 s）**；time -v 峰值 60662260 KB，用户态 2236 s | 300:11744、601:17070、921:24440、1221:33874、1541:41078、1841:49181、2161:53459 | 同 dev2 A（22 条阶段日志，资源阶段后无输出） |
 
-kr2 为 15G / 8 核，作业内存上限 11891 MiB。结论：S0 档案规模的闭包在该机型上不可完成，A 是时间不够，B 是内存不够。**本节以下的「调用链命中」一律取 JVM 实载近似**：一跳方法的声明类被真 JVM 加载，就算命中（`chain_mode = "jvm-loaded"`）。dev 恢复后用同一作业脚本复算，`s0.txt` 与 `tiers_s0.toml` 随之重出。
+**阻塞点**：资源阶段之后，闭包主循环的内存近似线性增长，A 约 22 MiB/s（≈ 1.3 GiB/min），B 约 16 MiB/s。增长期间没有任何阶段日志，到 57 GiB 仍未出现收敛迹象。dev3 的 4 次取栈（601 / 1221 / 1841 / 2251 s）落在同一条路径上：
+
+```
+Engine::run → process → process_bytecode → event → invoke → invoke_inner (invoke.rs:195)
+  → link_hub (hub.rs:170：分派枢纽向新链入的调用点重放已登记的 lambda 列表)
+  → dispatch_one (invoke.rs:231) → invoke_lambda (lambda.rs:46) → lambda_step → lambda_connect
+  → lambda_dispatch (lambda.rs:157：虚方法引用的 lambda 按开放接收者集在 G 上展开，逐接收者 dispatch_one)
+  → dispatch_one (invoke.rs:251/262) → edge / edge_this / caller_edge → add_to → tau_check_add
+     或 bind_lambda_params (lambda_vals.rs:25) → bind_pvs → taint_params → taint_slot（HashSet 插入）
+```
+
+第 4 次取栈是 lambda 套 lambda：接收者本身是 lambda，于是 `invoke_lambda → lambda_dispatch → dispatch_one → invoke_lambda` 嵌套了两层。从结构看，增长量与「枢纽链入的调用点数 × 枢纽上的 lambda 数 × 方法引用的开放接收者数」成正比，而 `dispatched` 去重键 `(off, r, via_lambda)` 按调用点区分，挡不住这种乘积。release 构建（debug=1、fat LTO）只有行表、没有局部变量，分析器在这一阶段也不打进度，因此**具体是哪个 Java 枢纽 / 方法引用无法从栈上读出**。要定位到类 / 方法，需要给分析器加诊断输出（枢纽重放计数、lambda 展开计数按枢纽打点），这属于分析器改动，不在本任务（只分析）范围内，列为闸门 G1。
+
+闭包未产出，所以「闭包面对比一跳面」这一节暂时没有数据。面仍按退回口径计算（一跳 ∪ JVM 实载命中，`chain_mode = "jvm-loaded"`）。
 
 ### 5.2 面规模
 
 | 口径 | 方法数 |
 |---|---|
-| 调用链面（闭包） | 0（未产出） |
+| 调用链面（闭包） | 0（dev 复算仍未产出，见 §5.1） |
 | 一跳面（18 jar 常量池引用，解析到声明类） | 2868 |
 | 并集 = `tests/api_surface/s0.txt` | **2868** |
 | 其中公开 JDK API（java / javax / org.w3c / org.xml / org.ietf，public 类 public / protected） | 2865 |
@@ -118,16 +136,41 @@ kr2 为 15G / 8 核，作业内存上限 11891 MiB。结论：S0 档案规模的
 
 ### 5.5 e2e 分层（`tests/api_surface/tiers_s0.toml`）
 
+**闭包口径下的规则 3（10-10 起）**：面外占比 = 专属方法中不在面上的个数 ÷ 专属方法数。占比 > `out_ratio` 判暂缓，否则判主力（只对非语义目录、专属非空的用例）。原规则「专属 ∩ 面 ≠ ∅ → 主力」在一跳全集上几乎总成立，已废弃。
+
+**阈值由数据定**（`scripts/api_surface.py tiers --out-ratio auto`，作业缺省）：
+- 标定集共 14 例，判据是区分该例的关键 API 是否在面上（§七的人工复核）：
+  - 暂缓 7 例：TestCharsetAvailable、TestHttpLoopbackSync / Async、TestXmlTransform、TestRowSetProvider，以及已修复移出 known_failures 的 TestModuleLayerDefine、TestLocaleDateCjk；
+  - 保留 7 例：TestClassModuleFace、TestProtectionDomainFaces、TestSetAccessibleBoundary、TestXmlSaxEvents、TestLocaleCurrency、TestBootLayer、TestThreadNatives。
+- 来源：`docs/known_failures.toml` 中 deferred 为阶段（S<n>）的条目记暂缓，无 deferred 的条目记保留；另加 `tests/api_surface/out_ratio_labels.toml` 的复核判定。deferred 为「面外」的非面因素条目（TestVirtualThreadScale）不参与标定。
+- 选法：在相邻占比的中点中，取分错最少的一个；并列时取所在间隔最宽的。
+
+标定结果是**零分错**：保留例最大占比 0.4286（TestClassModuleFace），暂缓例最小占比 0.4667（TestXmlTransform），取中点得 **`out_ratio = 0.4476`**，写在 toml 头部。
+
+| 标定例 | 面外占比 | 标签 | 标定例 | 面外占比 | 标签 |
+|---|---|---|---|---|---|
+| TestXmlSaxEvents | 0.0 | 保留 | TestXmlTransform | 0.4667 | 暂缓 |
+| TestThreadNatives | 0.1053 | 保留 | TestModuleLayerDefine | 0.4681 | 暂缓 |
+| TestSetAccessibleBoundary | 0.2 | 保留 | TestCharsetAvailable | 0.5 | 暂缓 |
+| TestLocaleCurrency | 0.2222 | 保留 | TestLocaleDateCjk | 0.7143 | 暂缓 |
+| TestProtectionDomainFaces | 0.2727 | 保留 | TestHttpLoopbackAsync | 0.7241 | 暂缓 |
+| TestBootLayer | 0.4082 | 保留 | TestHttpLoopbackSync | 0.7647 | 暂缓 |
+| TestClassModuleFace | 0.4286 | 保留 | TestRowSetProvider | 1.0 | 暂缓 |
+
+参与规则 3 的 428 例面外占比分布（区间下界：例数）：0.0：115、0.1：64、0.2：56、0.3：44、0.4：41、0.5：36、0.6：26、0.7：21、0.8：13、0.9 以上：12，其中恰为 1.0 的 10 例。分布单调下降，没有天然断点，所以阈值只能由标定集决定，不能靠分布形状。
+
 | 项 | 数 |
 |---|---|
-| e2e 用例 | 1105（javac 失败 1：`41_patterns_advanced/TestUnnamedVar`，未命名变量需 `--enable-preview`，属白名单目录，缺省主力） |
+| e2e 用例 | 1110（javac 失败 1：`41_patterns_advanced/TestUnnamedVar`，未命名变量需 `--enable-preview`，属白名单目录，缺省主力） |
 | 通用方法（被 ≥ 10%，即 ≥ 110 例引用；`common_df = 0.1`） | 22 个（`println` 系列、`StringBuilder`、`ArrayList` / `List` / `Iterator`、`LambdaMetafactory`、`StringConcatFactory` 等） |
-| **主力** | **1095**（白名单目录 674，规则 2 / 3 共 421） |
-| **暂缓** | **10** |
-| **补测**（面上公开 JDK 方法、e2e 零直接引用） | **1376** |
-| e2e 已直接引用的面方法 | 1490 |
+| **主力** | **989**（原规则 1095） |
+| **暂缓** | **121**（原规则 10） |
+| **补测**（面上公开 JDK 方法、e2e 零直接引用） | **1370** |
+| e2e 已直接引用的面方法 | 1496 |
 
-暂缓 10 例（专属方法全部在面外）：
+暂缓按目录（前列）：04_collections 13、35_io 13、37_datetime 8、62_reflection 8、48_refs 7、33_maps 6、53_io_api 6、30_streams 5、58_misc 5、59_method_handles 5、34_concurrency 4、38_math 4，其余 20 个目录共 37 例。明细（每例的面内 / 面外专属方法）见作业产物 `tiers.json` 的 `detail`。注意：面仍是退回口径（一跳 ∪ JVM 实载），闭包面产出后，同一阈值下的暂缓集会随面收窄而变化，届时重出。
+
+原规则下的暂缓 10 例（专属方法全部在面外，新规则下仍全部暂缓）：
 
 | 用例 | 面外的专属 API |
 |---|---|
@@ -144,16 +187,34 @@ kr2 为 15G / 8 核，作业内存上限 11891 MiB。结论：S0 档案规模的
 
 补测清单按包分布（前 10）：java.util 163、java.util.concurrent 116、java.lang 111、java.io 73、javax.xml.stream 70、java.time 65、javax.net.ssl 61、java.lang.reflect 52、java.net 52、javax.management 46。被最多 jar 引用的缺口有：`UnsupportedOperationException.<init>()`（10 jar）；`Boolean.equals`、`IllegalArgument / IllegalStateException.<init>(String, Throwable)`、`List.equals`（8）；`ClassLoader.getResources`、`String.toLowerCase(Locale)`、`Method.getParameterCount`、`LinkedHashSet / HashSet / LinkedHashMap / ArrayDeque.<init>(I)`、`Lock.lock / unlock`、`Stream.concat`（6–7）；`Annotation.annotationType`、`Executable.getParameters`、`Constructor.getParameterTypes`、`URL.openConnection`、`URLConnection.getInputStream`（5–6）。补测应按 `s0.txt` 的排序优先覆盖命中项；面外的 javax.xml.stream / javax.net.ssl / javax.management 等待闭包复算确认后再定。
 
-**分层的区分度不足（须在闭包复算时一并修正）**：当前面是一跳全集（2868 个），比调用链宽，所以规则 3「专属 ∩ 面 ≠ ∅」几乎对所有用例成立，暂缓只剩 10 例。典型例子是 TestCharsetAvailable：唯一落在面内的专属方法是 `Map.containsKey`，关键 API `Charset.availableCharsets` 在面外，却判了主力。终态口径是：面取闭包调用链面（不取一跳并集），并以「专属方法中面外占比」或「关键 API 在面外」判暂缓。阈值做成 `tiers` 参数，与 `common_df` 同样写入数据文件。本轮 toml 按任务口径原样产出。
+**区分度（10-10 已修正）**：原规则 3「专属 ∩ 面 ≠ ∅ → 主力」在一跳全集上几乎总成立，例如 TestCharsetAvailable 只因 `Map.containsKey` 落在面内就判了主力。现已改为上文的面外占比阈值，TestCharsetAvailable 的占比为 0.5，判暂缓。剩下的一项是把面本身换成闭包调用链面，这取决于 G1。
 
 ## 六、闸门项
 
-1. **G1 闭包规模（实测）**：S0 档案在 15G 机型上闭包不可完成。A 超时 40 分钟，资源束阶段之后无进展；B 带 1987 个框架种子，在 11.6 GiB 处被 OOM 杀掉。这是 S0 一跳面以外所有口径的前置条件。dev（大内存）恢复后先复算，拿到真实峰值和不动点轮数，再判断是需要分析器内存优化，还是可以分片。
+1. **G1 闭包规模（实测，未解除）**：S0 档案闭包在 dev 上同样不可完成。A（只以 main 为入口）到 RSS 58451 MiB（2251 s，上限 57344 MiB）被终止；B（加 1987 个种子）到 31822 MiB（1831 s，上限 30720 MiB）被终止。两者都是单线程近似线性增长，没有不动点迹象。栈定位在「分派枢纽向新调用点重放 lambda（hub.rs:170 `link_hub`）× 方法引用 lambda 按开放接收者展开（lambda.rs:157 `lambda_dispatch`）」的乘积路径上（§5.1）。解除条件是 S0 的 A / B 两个变体都在 dev 上产出闭包，终态目标为峰值 ≤ 16 GiB、耗时 ≤ 30 min（可在 15G 机型外的常规开发机上完成）。下一步属于分析器任务：(1) 加诊断，按枢纽 / 方法引用计数重放与展开次数，定位到具体的 Java 类和方法；(2) 改造枢纽 lambda 重放，按「枢纽 × lambda」而非「调用点 × lambda」只连接一次，并让方法引用接收者展开随开放集增量传播，不在每个调用点重新做全量展开。这是 S0 一跳面以外所有口径的前置条件。
 2. **G2 反射实例化与组件扫描**：Boot 的 bean 类由 `@ComponentScan` 包扫描、`AutoConfiguration.imports` 与 `spring.factories` 按名装载，再经反射构造。只以 main 为入口（A）看不见这些类，只能靠 JVM 实载种子（B）补。在档案口径下，需要分析器对「资源枚举 → `Class.forName` / 构造器反射」做通用建模（K10 资源枚举）。按原则，不往 runtime/ 加库种子。
 3. **G3 CGLIB 子类合成（K11）**：`@Configuration` 增强类 `$$SpringCGLIB$$` 在运行期定义，实载类中可见。这属于运行期类定义点，需要走构建期合成或 AOT 产物，不能靠静态闭包。
 4. **G4 面的精度**：在闭包产出前，「命中」是类级近似（声明类被加载即算命中），会高估。例如 `Thread.ofVirtual`、`Transformer.setOutputProperty` 因 `Thread` / `Transformer` 类被加载而计为命中，但 S0 启动路径未必调用它们。
 
 ## 七、已知失败首批暂缓判定的复核
+
+### 7.0 10-10 复核（dev 数据，新规则 3，`out_ratio = 0.4476`）
+
+现有暂缓条目（`docs/known_failures.toml`）与机械分层逐例对照如下。面仍为退回口径（闭包未产出）。
+
+| 用例 | toml 现判 | 面外占比（面外 / 专属） | 机械分层 | 结论 |
+|---|---|---|---|---|
+| TestCharsetAvailable | S1 | 0.5（1 / 2） | 暂缓 | 一致，维持 S1（原规则下判主力，属误判，已纠正） |
+| TestHttpLoopbackSync | S1 | 0.7647（26 / 34） | 暂缓 | 一致，维持 |
+| TestHttpLoopbackAsync | S1 | 0.7241（21 / 29） | 暂缓 | 一致，维持 |
+| TestXmlTransform | S1 | 0.4667（7 / 15） | 暂缓 | 一致，维持 |
+| TestRowSetProvider | S2 | 1.0（10 / 10） | 暂缓 | 一致，维持 |
+| TestVirtualThreadScale | 面外 | 0.1667（2 / 12） | 主力 | **有差异**。维持暂缓，toml 补写依据：面外的只有 `Thread$Builder.start`、`Thread.isAlive`；关键 API `Thread.ofVirtual` 只被 1 个 jar 引用，计为命中只是因为 `Thread` 类被实载（G4 类级高估）；S0 缺省不开虚拟线程，失败原因是规模时序，属非面因素。不进入阈值标定集，闭包面产出后再复核 |
+| TestStringGetCharsLegacy | （已移出） | 0.1（语义目录 52） | 主力 | 10-07 复核建议移出暂缓；该例已在 f442cecf 修复，并从 known_failures 删除，无需再动 |
+
+未暂缓的已知失败（TestBootLayer 0.4082、TestThreadNatives 0.1053）判主力，与 toml 一致。10-07 复核后已修复移出的 TestModuleLayerDefine（0.4681）、TestLocaleDateCjk（0.7143）判暂缓，与当时「关键 API 在面外」的结论一致。保留各例（§7.2）判主力，占比都 ≤ 0.4286。**toml 唯一改动**：TestVirtualThreadScale 的 `deferred_reason` 补上上述依据，阶段字段不变。
+
+以下 7.1 / 7.2 为 10-07 首轮复核（kr2 数据，原规则 3），保留备查。
 
 口径：看用例的关键 API（区分该用例的那组方法）是否在 S0 面上。机械分层结果一并列出，仅供参考，因为第五节已指出规则 3 区分度不足。**判定变化只在此列出，不改 `docs/known_failures.toml`。**
 

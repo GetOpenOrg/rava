@@ -3,9 +3,10 @@
 
 两个子命令（均在 dev 上经 scripts/api_surface_job.sh 以作业模式运行，本机不跑）：
 
-  face   闭包调用链面（rava closure 产物里 owner 为 JDK 类的方法）∪ 一跳面（阶段 jar 常量池的 JDK 方法引用，
-         经 jdk_index 解析到声明类）→ 面文件（每行 `owner.name:descriptor`，按「引用 jar 数 × 调用链命中」排序）
-         + face.json（规模、按包聚合、排序前列、JVM 实载类对照）。
+  face   面 = 闭包调用链面（rava closure 产物里 owner 为 JDK 类、非 missing 的方法，各变体并集）；任一变体都未产出时
+         退回近似口径「一跳面（阶段 jar 常量池的 JDK 方法引用，经 jdk_index 解析到声明类），声明类被 JVM 实载即算命中」。
+         → 面文件（每行 `owner.name:descriptor`，按「引用 jar 数 × 调用链命中」排序）
+         + face.json（规模、口径、按包聚合、排序前列、一跳对照、JVM 实载类对照）。
   tiers  tests/e2e 每例的 JDK 方法集（常量池口径，同 jdk_method_scan / e2e_redundancy_scan，另带描述符并解析到
          声明类）与面求交 → 分层 toml（主力 / 暂缓）+ 补测清单（一跳面上 e2e 零直接引用的公开方法）+ tiers.json。
 
@@ -13,7 +14,10 @@
   1. 语义类目录白名单（tests/api_surface/semantic_dirs.toml）→ 主力；
   2. 专属方法 = 该例方法集 − 通用方法（被 ≥ --df 比例的 e2e 用例引用，如打印 / 拼接 / 装箱）；
      专属为空 → 主力（无专属 API，属语义性质）；
-  3. 专属 ∩ 面 ≠ ∅ → 主力；否则 → 暂缓（只覆盖面外 API）。
+  3. 专属方法中面外占比 > --out-ratio → 暂缓（主要覆盖面外 API）；否则 → 主力。
+     阈值由数据决定：--out-ratio auto（缺省）按标定集取分错最少、间隔最宽的分界中点。标定集 = known_failures.toml
+     中 deferred 为阶段（S<n>）的条目（暂缓）与无 deferred 的条目（保留），并上 tests/api_surface/out_ratio_labels.toml
+     的复核判定；阈值、标定明细与 out_ratio_hist 分布一同写入分层 toml / tiers.json。
 """
 
 import argparse
@@ -132,16 +136,16 @@ def cmd_face(a):
         per_jar[jar.name] = len(refs)
         jar_count.update(refs)
     onehop = set(jar_count)
-    face = chain | onehop
     loaded = other = None
     if a.classload and Path(a.classload).exists():
         loaded, other = jvm_loaded(Path(a.classload))
     # 闭包全部未产出时的近似：一跳方法的声明类被真 JVM 实载 = 调用链命中（报告须标「闭包待复算」）
     chain_mode = "closure" if any(v.get("status") == "ok" for v in variants.values()) else "jvm-loaded"
-    if chain_mode == "jvm-loaded" and loaded is not None:
-        hit = {k for k in onehop if split_key(k)[0] in loaded}
+    if chain_mode == "jvm-loaded":
+        face = onehop
+        hit = {k for k in onehop if split_key(k)[0] in loaded} if loaded is not None else set()
     else:
-        hit = chain
+        face, hit = chain, chain
 
     def rank(k):
         j, c = jar_count.get(k, 0), 1 if k in hit else 0
@@ -162,15 +166,24 @@ def cmd_face(a):
         row[1] += k in hit
         row[2] += k in onehop
         row[3] += public(k)
+    # 一跳对照：一跳面中落在调用链外的部分（闭包剪掉的可选特性引用），按包聚合
+    onehop_out = onehop - chain if chain_mode == "closure" else set()
+    out_pkg = Counter(pkg_of(split_key(k)[0]) for k in onehop_out)
     data = {
         "face": len(face), "chain": len(chain), "onehop": len(onehop), "both": len(chain & onehop),
         "onehop_only": len(onehop - chain), "chain_only": len(chain - onehop),
         "public": sum(1 for k in face if public(k)), "chain_classes": len(chain_classes),
+        "chain_public": sum(1 for k in chain if public(k)), "onehop_public": sum(1 for k in onehop if public(k)),
+        "onehop_out_by_pkg": out_pkg.most_common(40),
+        "onehop_out_top": sorted(onehop_out, key=lambda k: (-jar_count[k], k))[:120],
+        "onehop_out_jars": Counter(jar_count[k] for k in onehop_out).most_common(),
+        "chain_by_pkg": Counter(pkg_of(split_key(k)[0]) for k in chain).most_common(60),
         "chain_mode": chain_mode, "hit": len(hit), "public_hit": sum(1 for k in hit if public(k)),
         "variants": variants, "per_jar_onehop": per_jar,
         "by_pkg": sorted(([p, *r] for p, r in by_pkg.items()), key=lambda r: -r[1]),
         "top": [[k, jar_count.get(k, 0), k in hit] for k in ordered[:a.top]],
         "onehop_jars": {k: jar_count[k] for k in onehop},
+        "onehop_all": sorted(onehop),
         "missing_lib_classes_top": [n for n, _ in missing_all.most_common(60)],
     }
     if loaded is not None:
@@ -181,6 +194,8 @@ def cmd_face(a):
                        "lost_by_pkg": lost_pkg.most_common(40), "lost_sample": lost[:200]}
     Path(a.data).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[api-surface] 面 {len(face)}（{chain_mode}，命中 {len(hit)}，调用链 {len(chain)}，一跳 {len(onehop)}，交 {len(chain & onehop)}）→ {a.out}")
+    for n, v in variants.items():
+        print(f"  变体 {n}: {v}")
 
 
 def compile_test(java: Path, out: Path, javac: str, cp: str) -> bool:
@@ -215,6 +230,38 @@ def toml_list(name, items, per_line=1):
     return lines
 
 
+def calibrate_out_ratio(ratios, labels_path):
+    """按标定集定面外占比阈值：候选为相邻占比的中点，取分错最少者，并列时取所在间隔最宽者（间隔中点）。"""
+    kf = tomllib.loads((ROOT / "docs/known_failures.toml").read_text(encoding="utf-8"))
+    lab = tomllib.loads(labels_path.read_text(encoding="utf-8")) if labels_path.exists() else {}
+    want = {}
+    for e in kf.get("known", []):
+        dv = e.get("deferred")
+        if dv is None:
+            want[e["test"]] = False
+        elif dv[:1] == "S" and dv[1:].isdigit():
+            want[e["test"]] = True
+    want.update({t: True for t in lab.get("deferred", [])})
+    want.update({t: False for t in lab.get("kept", [])})
+    for t in lab.get("exclude", []):
+        want.pop(t, None)
+    by_stem = {tid.split("/")[-1]: tid for tid in ratios}
+    pts = sorted((round(ratios[by_stem[t]], 4), w, t) for t, w in want.items() if t in by_stem)
+    vals = sorted({0.0, 1.0, *(r for r, _, _ in pts)})
+    best = None
+    for lo, hi in zip(vals, vals[1:]):
+        t = round((lo + hi) / 2, 4)
+        err = [n for r, w, n in pts if (r > t) != w]
+        key = (len(err), -(hi - lo))
+        if best is None or key < best[0]:
+            best = (key, t, err, lo, hi)
+    if best is None:
+        return {"threshold": 0.5, "labels": [], "errors": [], "gap": None}
+    _, t, err, lo, hi = best
+    return {"threshold": t, "gap": [lo, hi], "errors": err,
+            "labels": [{"test": n, "out_ratio": r, "deferred": w} for r, w, n in pts]}
+
+
 def cmd_tiers(a):
     idx = JdkIndex.load(Path(a.java_home))
     face = [l.strip() for l in Path(a.face).read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -247,6 +294,17 @@ def cmd_tiers(a):
     cut = max(2, int(a.df * len(msets)))
     common = {k for k, c in df.items() if c >= cut}
 
+    ratios = {}
+    for tid, ms in msets.items():
+        spec = ms - common
+        if spec and tid.split("/")[0] not in semantic:
+            ratios[tid] = len(spec - face_set) / len(spec)
+    calib = calibrate_out_ratio(ratios, Path(a.labels))
+    if a.out_ratio == "auto":
+        a.out_ratio = calib["threshold"]
+    else:
+        a.out_ratio = float(a.out_ratio)
+
     tiers, detail = {"main": [], "deferred": []}, {}
     for tid in sorted(msets):
         ms = msets[tid]
@@ -254,21 +312,22 @@ def cmd_tiers(a):
         spec = ms - common
         inf = sorted(spec & face_set)
         outf = sorted(spec - face_set)
+        ratio = len(outf) / len(spec) if spec else 0.0
         if d in semantic:
             tier, why = "main", "语义类目录"
         elif not spec:
             tier, why = "main", "无专属 API"
-        elif inf:
-            tier, why = "main", f"专属 {len(spec)}，面内 {len(inf)}"
+        elif ratio > a.out_ratio:
+            tier, why = "deferred", f"专属 {len(spec)}，面外 {len(outf)}（{ratio:.0%} > {a.out_ratio:.0%}）"
         else:
-            tier, why = "deferred", f"专属 {len(spec)} 全在面外"
+            tier, why = "main", f"专属 {len(spec)}，面外 {len(outf)}（{ratio:.0%} ≤ {a.out_ratio:.0%}）"
         tiers[tier].append(tid)
-        detail[tid] = {"tier": tier, "why": why, "methods": len(ms), "specific": len(spec),
-                       "in_face": inf[:40], "out_face": outf[:40], "n_in": len(inf), "n_out": len(outf)}
+        detail[tid] = {"tier": tier, "why": why, "methods": len(ms), "specific": len(spec), "out_ratio": round(ratio, 4),
+                       "semantic": d in semantic, "in_face": inf, "out_face": outf, "n_in": len(inf), "n_out": len(outf)}
     for tid in failed:
         tiers["main"].append(tid)
-        detail[tid] = {"tier": "main", "why": "javac 失败，缺省主力", "methods": 0, "specific": 0,
-                       "in_face": [], "out_face": [], "n_in": 0, "n_out": 0}
+        detail[tid] = {"tier": "main", "why": "javac 失败，缺省主力", "methods": 0, "specific": 0, "out_ratio": 0.0,
+                       "semantic": tid.split("/")[0] in semantic, "in_face": [], "out_face": [], "n_in": 0, "n_out": 0}
 
     covered = set(df)
     gap = []
@@ -297,6 +356,8 @@ def cmd_tiers(a):
         'stage = "S0"',
         'face = "tests/api_surface/s0.txt"',
         f"common_df = {a.df}  # 通用方法门槛：被 ≥ 该比例 e2e 用例引用（本轮 ≥ {cut} 例，{len(common)} 个方法）",
+        f"out_ratio = {a.out_ratio}  # 暂缓门槛：专属方法中面外占比 > 该值（非语义目录、专属非空的用例）；"
+        f"标定 {len(calib['labels'])} 例，分界间隔 {calib['gap']}，分错 {len(calib['errors'])}",
         "",
         "[summary]",
         f"tests = {len(detail)}",
@@ -327,6 +388,14 @@ def cmd_tiers(a):
         by_dir[tid.split("/")[0]][d["tier"]] += 1
     data["by_dir"] = {k: dict(v) for k, v in sorted(by_dir.items())}
     data["deferred_detail"] = {t: detail[t] for t in tiers["deferred"]}
+    # 面外占比分布（非语义目录、专属非空）：定 --out-ratio 的数据依据；detail 全量供离线换阈值重分
+    rated = [d["out_ratio"] for d in detail.values() if not d["semantic"] and d["specific"]]
+    data["out_ratio"] = a.out_ratio
+    data["out_ratio_calibration"] = calib
+    data["out_ratio_hist"] = {f"{i / 10:.1f}": sum(1 for r in rated if i / 10 <= r < (i + 1) / 10 or (i == 9 and r == 1.0))
+                              for i in range(10)}
+    data["out_ratio_full"] = sum(1 for r in rated if r == 1.0)
+    data["detail"] = detail
     Path(a.data).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[api-surface] 分层：主力 {len(tiers['main'])}，暂缓 {len(tiers['deferred'])}，补测 {len(gap)}"
           f"（javac 失败 {len(failed)}）→ {a.out}")
@@ -354,6 +423,8 @@ def main():
     t.add_argument("--java-home", default=os.environ.get("JAVA_HOME", ""))
     t.add_argument("--cp", help="e2e javac 类路径（63_junit 需 junit / hamcrest）")
     t.add_argument("--df", type=float, default=0.10)
+    t.add_argument("--out-ratio", default="auto", help="暂缓门槛：专属方法中面外占比 > 该值；auto = 按标定集定")
+    t.add_argument("--labels", default=str(ROOT / "tests/api_surface/out_ratio_labels.toml"))
     t.add_argument("-j", "--jobs", type=int, default=8)
     t.add_argument("--out", required=True)
     t.add_argument("--data", required=True)

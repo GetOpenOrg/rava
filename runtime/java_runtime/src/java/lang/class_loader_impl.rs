@@ -34,6 +34,7 @@ impl ClassLoader {
 
     /// native `findLoadedClass0(String name)`：本加载器作为定义加载器登记过的类。原生镜像中类对象
     /// 预先存在，「已由某内建加载器定义」即 `defining_loader` 表项（app / platform）所指加载器是本加载器；
+    /// 预定义类（表项 `defined`）看运行期定义记录（本加载器经 defineClass 定义过）；
     /// 其余加载器（自定义加载器、引导形态的类）不命中 → null，`loadClass` 随即按委派模型继续。
     /// 于是 `BuiltinClassLoader.loadClassOrNull` 对闭包内的类在 `findLoadedClass` 一步命中，不进入
     /// `findClassInModuleOrNull → defineClass`（引导层方案 §2.3 第 5 项）。
@@ -46,6 +47,8 @@ impl ClassLoader {
         let defined_here = match crate::meta::class_defining_loader(&slash) {
             Some("app") => crate::jdk::internal::loader::ClassLoaders::appClassLoader()? == *self,
             Some("platform") => crate::jdk::internal::loader::ClassLoaders::platformClassLoader()? == *self,
+            // 预定义类：运行期经类定义 native 由本加载器定义过（crate::predefined）
+            Some("defined") => crate::predefined::defined_by(&slash, self),
             _ => false,
         };
         if !defined_here {
@@ -56,18 +59,25 @@ impl ClassLoader {
 }
 
 // ── 运行期类定义点（类 2：运行模型替换）────────────────────────────────────────────────
-// 原生二进制没有运行期类定义：类全集在编译期定死，字节码不再被加载执行。defineClass1 / 2 按
+// 原生二进制没有运行期类定义：类全集在编译期定死，字节码不再被加载执行。defineClass0 / 1 / 2 按
 // HotSpot `jvm_define_class_common` → `ClassFileParser` 的检查次序给出可在不定义类的前提下判定的
-// 结果（截断 / 魔数 / 主次版本，异常类型与消息与 JDK 21 实测一致）；格式合法的类文件无法定义，
-// 抛 LinkageError 说明原因（Java 可捕获，不 panic）。登记：vm_intrinsics.toml 注释 / docs/plans/2026-10-02-native-gaps.md。
+// 结果（截断 / 魔数 / 主次版本，异常类型与消息与 JDK 21 实测一致）；格式合法的类文件按内容（SHA-256）
+// 查预定义类表（构建期取得、已翻译进用户 crate 的类，docs/plans/2026-10-10-xsltc-translet.md §4.3）：
+// 命中即定义该类（crate::predefined 登记定义加载器），未命中抛 LinkageError 并报出实际哈希与同名预定义类的
+// 期望哈希（Java 可捕获，不 panic）。登记：vm_intrinsics.toml `[facts.reflect] predefined_definers`。
 
-/// 类文件头检查；返回应抛出的异常。`name` 为调用方给出的类名（null → `<Unknown>`，点换斜线）。
-fn _define_class_error(name: &String, bytes: &[u8]) -> JvmError {
-    let shown = if _is_jnull(&Object::from(Clone::clone(name))) {
+/// 调用方给出的类名（null → `<Unknown>`，点换斜线）
+fn _shown_name(name: &String) -> std::string::String {
+    if _is_jnull(&Object::from(Clone::clone(name))) {
         "<Unknown>".to_owned()
     } else {
         format!("{}", name).replace('.', "/")
-    };
+    }
+}
+
+/// 类文件头检查；返回应抛出的异常，格式完整的类文件返回 None（交给预定义类查表）。
+fn _define_class_error(name: &String, bytes: &[u8]) -> Option<JvmError> {
+    let shown = _shown_name(name);
     let built = if bytes.len() < 8 {
         crate::java::lang::ClassFormatError::new_str(String::from("Truncated class file")).map(Object::from)
     } else {
@@ -99,16 +109,63 @@ fn _define_class_error(name: &String, bytes: &[u8]) -> JvmError {
                     format!("Unknown constant tag {} in class file {}", tag, shown).as_str())).map(Object::from),
                 ClassFileShape::ExtraBytes => crate::java::lang::ClassFormatError::new_str(String::from(
                     format!("Extra bytes at the end of class file {}", shown).as_str())).map(Object::from),
-                ClassFileShape::Complete => crate::java::lang::LinkageError::new_str(String::from(format!(
-                    "{}: runtime class definition is not supported by the native image (class universe is fixed at build time)",
-                    shown).as_str())).map(Object::from),
+                ClassFileShape::Complete => return None,
             }
         }
     };
+    Some(match built {
+        Ok(e) => JvmError::from(e),
+        Err(e) => e,
+    })
+}
+
+/// 构造异常对象（构造本身的异常原样返回）
+fn _throwable(built: Result<Object>) -> JvmError {
     match built {
         Ok(e) => JvmError::from(e),
         Err(e) => e,
     }
+}
+
+/// 类定义 native 的共同部分：格式检查 → 按内容查预定义类表 → 定义（登记定义加载器与保护域）。
+/// `initialize`：defineClass0 的立即初始化（Lookup.defineClass 语义）。
+fn _define(loader: ClassLoader, name: &String, bytes: &[u8], pd: crate::java::security::ProtectionDomain,
+           initialize: bool) -> Result<super::Class> {
+    if let Some(e) = _define_class_error(name, bytes) {
+        return Err(e);
+    }
+    let shown = _shown_name(name);
+    let sha = crate::predefined::sha256_hex(bytes);
+    let Some(class) = crate::predefined::lookup(&sha) else {
+        let expected = crate::predefined::expected(&shown);
+        let hint = if expected.is_empty() {
+            std::string::String::new()
+        } else {
+            format!("; predefined {} has sha256 {}", shown, expected.join(", "))
+        };
+        return Err(_throwable(crate::java::lang::LinkageError::new_str(String::from(format!(
+            "{}: runtime class definition is not supported by the native image (class universe is fixed at build time); \
+             class file sha256 {} is not among the predefined classes{}",
+            shown, sha, hint).as_str())).map(Object::from)));
+    };
+    // HotSpot ClassFileParser：调用方给的名字与类文件中的名字不符 → NoClassDefFoundError
+    if shown != "<Unknown>" && shown != class {
+        return Err(_throwable(crate::java::lang::NoClassDefFoundError::new_str(String::from(
+            format!("{} (wrong name: {})", shown, class).as_str())).map(Object::from)));
+    }
+    // SystemDictionary：同一加载器重复定义同名类 → LinkageError
+    if crate::predefined::defined_by(class, &loader) {
+        return Err(_throwable(crate::java::lang::LinkageError::new_str(String::from(
+            format!("attempted duplicate class definition for {}.", class.replace('/', ".")).as_str())).map(Object::from)));
+    }
+    let mirror = super::Class::for_class(String::from(class));
+    if crate::predefined::record(class, Clone::clone(&loader), pd) {
+        mirror.__set_classLoader(loader);
+    }
+    if initialize {
+        crate::ensure_class_initialized(class)?;
+    }
+    Ok(mirror)
 }
 
 /// 类文件结构走查结果（只按长度前缀走一遍，不做语义校验）。
@@ -179,30 +236,48 @@ fn _walk_class_file(bytes: &[u8]) -> ClassFileShape {
     }
 }
 
+/// 字节数组区间（ClassLoader.c 的参数检查：b 为 null → NPE；len < 0 或区间越界 → ArrayIndexOutOfBoundsException）
+fn _range_bytes(b: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
+    if b.is_jvm_null() {
+        return Err(JvmError::null_pointer());
+    }
+    let all = b.to_vec();
+    if len < 0 || off < 0 || (off as i64 + len as i64) > all.len() as i64 {
+        return Err(JvmError::array_index_out_of_bounds_message(std::string::String::new()));
+    }
+    Ok(all[off as usize..(off + len) as usize].iter().map(|v| *v as u8).collect())
+}
+
 impl ClassLoader {
+    /// static native `defineClass0(loader, lookup, name, b, off, len, pd, initialize, flags, classData)`：
+    /// `Lookup.defineClass` / `defineHiddenClass` 的入口（JVM_LookupDefineClass）。参数检查同 defineClass1，
+    /// 随后经 `_define` 按内容查预定义类表。隐藏类（flags 含 HIDDEN_CLASS）不触发 ClassFileLoadHook，
+    /// 训练运行记录不到，按未命中处理；lambda / 代理等 VM 另行承载的定义点不经此处。classData 不落地
+    /// （命中的只可能是非隐藏类，Lookup.defineClass 传 null）。
+    #[jvm_native]
+    pub fn defineClass0(loader: ClassLoader, _lookup: super::Class, name: String, b: JArray<i8>, off: i32, len: i32,
+                        pd: crate::java::security::ProtectionDomain, initialize: bool, _flags: i32,
+                        _class_data: Object) -> Result<super::Class> {
+        let bytes = _range_bytes(&b, off, len)?;
+        _define(loader, &name, &bytes, pd, initialize)
+    }
+
     /// static native `defineClass1(loader, name, b, off, len, pd, source)`：ClassLoader.c 的
     /// 参数检查（b 为 null → NPE；len < 0 或区间越界 → ArrayIndexOutOfBoundsException）后取区间字节，
-    /// 经 `_define_class_error` 判定（见上）。
+    /// 经 `_define` 判定（见上）。
     #[jvm_native]
-    pub fn defineClass1(_loader: ClassLoader, name: String, b: JArray<i8>, off: i32, len: i32,
-                        _pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
-        if b.is_jvm_null() {
-            return Err(JvmError::null_pointer());
-        }
-        let all = b.to_vec();
-        if len < 0 || off < 0 || (off as i64 + len as i64) > all.len() as i64 {
-            return Err(JvmError::array_index_out_of_bounds_message(std::string::String::new()));
-        }
-        let bytes: Vec<u8> = all[off as usize..(off + len) as usize].iter().map(|v| *v as u8).collect();
-        Err(_define_class_error(&name, &bytes))
+    pub fn defineClass1(loader: ClassLoader, name: String, b: JArray<i8>, off: i32, len: i32,
+                        pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
+        let bytes = _range_bytes(&b, off, len)?;
+        _define(loader, &name, &bytes, pd, false)
     }
 
     /// static native `defineClass2(loader, name, b, off, len, pd, source)`：直接缓冲区形态
     /// （ClassLoader.defineClass(ByteBuffer) 只对 direct 缓冲区调用本 native）；地址取 Buffer.address
     /// （GetDirectBufferAddress），为 0 → NPE。
     #[jvm_native]
-    pub fn defineClass2(_loader: ClassLoader, name: String, b: crate::java::nio::ByteBuffer, off: i32, len: i32,
-                        _pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
+    pub fn defineClass2(loader: ClassLoader, name: String, b: crate::java::nio::ByteBuffer, off: i32, len: i32,
+                        pd: crate::java::security::ProtectionDomain, _source: String) -> Result<super::Class> {
         if _is_jnull(&Object::from(Clone::clone(&b))) {
             return Err(JvmError::null_pointer());
         }
@@ -212,7 +287,7 @@ impl ClassLoader {
         }
         let mut bytes = vec![0u8; len.max(0) as usize];
         crate::native_memory::read(&Object::default(), address + off as i64, &mut bytes)?;
-        Err(_define_class_error(&name, &bytes))
+        _define(loader, &name, &bytes, pd, false)
     }
 
     /// static native `retrieveDirectives()`：HotSpot `JVM_AssertionStatusDirectives`——按 `-ea` / `-da`

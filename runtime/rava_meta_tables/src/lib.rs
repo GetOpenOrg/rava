@@ -74,6 +74,7 @@ const USER_FIELDS: &[(&str, &str)] = &[
     // 构建期嵌入资源（发射层 `meta_sides` 以 `include_bytes!` 给出）
     ("class_path_resources", "CLASS_PATH_RESOURCES"),
     ("module_image", "MODULE_IMAGE"),
+    ("predefined_classes", "PREDEFINED_CLASSES"),
 ];
 
 /// 扫描 `texts`（生成文件文本，顺序无关）渲染全部反射元数据表（表组 `META_POOL`，编码见 [`codec`]）。

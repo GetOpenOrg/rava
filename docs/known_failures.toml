@@ -66,16 +66,7 @@ owner = "虚拟线程终态线（VirtualThread 字节码翻译 + Continuation �
 since = "2026-10-06"
 note = "debug 档下创建 1e5 VT 过慢，「同时休眠」时序判定不成立；vt6-spot-4a983fe8 / vt-int-2602f409 / r1n-sp-204f8cbe 等同 diff"
 deferred = "面外"
-deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomcat 执行器再评估"
-
-[[known]]
-test = "TestXmlTransform"
-signature = "Translet class loaded, but unable to c"
-owner = "fix-xsltc：运行期定义类无承载（defineClass1 对合法类文件抛 LinkageError），预定义类方案待决（docs/plans/2026-10-10-xsltc-translet.md；failure_patterns xsltc-translet-create）"
-since = "2026-10-07"
-note = "2026-10-10 fix-domstack（b4da5107）：main 589052eb 上本例转译 30 min 超时，修复常量实参求值转发穿透无界后转译 2m49s、编译通过，运行期止于 TransformerConfigurationException「Translet class loaded, but unable to create translet」（fixdomd-b4da5107），签名随之更新；此前止于 SerializerMessages 资源束未装载。编译期重载命名已修：接口层次跨层重载由 1b3c26d1 修复（ovl-base-1fe9e5ea 编译通过），类视图规则 5 由 gen-overload-hier 补齐（设计 docs/plans/2026-10-07-overload-naming-hierarchy.md；ovl-spot-dff8d8be / -r 抽查编译通过、运行期止于 SerializerMessages 资源束未装载）；先前小写类名与模块同名由 gen-lc-naming 1afed3fc 修复"
-deferred = "S1"
-deferred_reason = "javax.xml.transform 由 spring-web SourceHttpMessageConverter / spring-oxm 使用"
+deferred_reason = "虚拟线程规模压测；Boot 虚拟线程开关随 S1 Tomcat 执行器再评估。S0 面复核（10-10，apis0-dev4-0517c6f3，面为一跳 ∪ JVM 实载退回口径）：专属 12 个方法中面外 2 个（Thread$Builder.start、Thread.isAlive，占 17%），机械分层判主力；但关键 API Thread.ofVirtual 只被 1 个 jar 引用，计为命中只是因为 Thread 类被实载（报告 G4 类级高估），S0 缺省配置不开虚拟线程，失败的是规模时序这一非面因素。因此维持暂缓，且不进入阈值标定集；S0 闭包面产出后再复核"
 
 [[known]]
 test = "TestBootLayer"
@@ -85,10 +76,3 @@ since = "2026-10-08"
 note = "`.class` 资源未内嵌：base.getResourceAsStream(\"java/lang/Object.class\") 返回 null 后 readNBytes NPE（前 23 行与 JDK 相同）；模块内容中的类字节随第 5 步 jimage 一并嵌入"
 
 # ── C4 全量第一轮（dev，c249cdec → 583edccd 续跑）失败复跑后仍失败、此前未登记（10-10）──
-[[known]]
-test = "TestThreadNatives"
-signature = "安全点时持有 1 把字段锁"
-owner = "并发小步 B（conc-step-b，无 GC 文档 §四）"
-since = "2026-10-10"
-note = "debug 档 sync_model 持锁检查（小步 A 78d2b9c6 引入）在安全点发现 __RefField 临界区 / __RefSlot 守卫未释放，panic 于 java/lang/thread.rs"
-
