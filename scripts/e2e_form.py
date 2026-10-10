@@ -19,6 +19,7 @@ S7 拆分 run_tests 时本模块整体搬入 `scripts/e2e/select.py`。
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import shlex
 import subprocess
@@ -92,13 +93,15 @@ class Form:
     def _can_fetch(self) -> bool:
         return bool(self.fetch) and self.lock_path() == (ROOT / self.deps).resolve()
 
-    def ensure(self) -> str | None:
-        """就绪检查（批次内只做一次；缺失且可取包时取包一次）。返回 None = 就绪，否则为失败原因。"""
-        with self._lock:
-            if self._checked:
-                return self._error
-            err = self._missing()
-            if err is not None and self._can_fetch():
+    def _fetch_locked(self, err: str) -> str | None:
+        """跨进程互斥取包（同一检出下多槽 run_tests 并发）：持锁后先复查，别的进程已取好则不再取。"""
+        lock_file = ROOT / "build" / ".form_fetch.lock"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_file, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                if (err := self._missing()) is None:
+                    return None
                 cmd = shlex.split(self.fetch)
                 print(f"[form] {self.dir}：{err}——取包：{self.fetch}", flush=True)
                 r = subprocess.run([str(ROOT / cmd[0]), *cmd[1:]], cwd=ROOT,
@@ -107,6 +110,18 @@ class Form:
                 if err is not None and r.returncode != 0:
                     tail = (r.stderr.strip() or r.stdout.strip()).splitlines()[-3:]
                     err += f"；取包退出 {r.returncode}：{' | '.join(tail)}"
+                return err
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+    def ensure(self) -> str | None:
+        """就绪检查（批次内只做一次；缺失且可取包时取包一次）。返回 None = 就绪，否则为失败原因。"""
+        with self._lock:
+            if self._checked:
+                return self._error
+            err = self._missing()
+            if err is not None and self._can_fetch():
+                err = self._fetch_locked(err)
             self._error = err
             if err is None:
                 sel = set(self.cp)
