@@ -104,6 +104,8 @@ pub(super) struct Concrete {
     /// 结果按对象物化的类：`[concrete] object_results` 各入口字节码自身 `new` 的类（分析前按字节码确定，
     /// 按对象读的形参门据此放行，见 `obj_fields.rs::obj_param_set`）
     pobj_types: HashSet<Rc<str>>,
+    /// 诊断：按对象物化出的抽象对象数 / 回退后应用的已知常量组合数（`summary.perf.pobj`；对象数每翻倍报一行进度）
+    pub(super) pobj_stats: [u64; 2],
     /// 诊断：调用点 → 各方法上下文的结论（成功时列出实参组合，按上下文分别求值的调用点逐条记录）
     pub(super) diag: BTreeMap<String, BTreeSet<String>>,
 }
@@ -236,6 +238,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if partial {
+                self.concrete.pobj_stats[1] += 1;
                 // 逐组记诊断：应用集合单调，诊断行集合也与次序无关
                 self.concrete.diag.entry(site_name.clone()).or_default().insert(format!("回退后应用已知常量组合 {c:?}"));
             }

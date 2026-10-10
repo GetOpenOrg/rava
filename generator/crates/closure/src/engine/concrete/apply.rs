@@ -172,7 +172,13 @@ impl<'a> Engine<'a> {
             let chain = format!("@concrete:{tag}:{i}");
             let tid = self.id(&x.ty);
             let id = self.id(&format!("{}{chain}", x.ty));
-            self.objs.insert(id, tid);
+            if self.objs.insert(id, tid).is_none() {
+                let n = &mut self.concrete.pobj_stats;
+                n[0] += 1;
+                if n[0] >= 64 && n[0].is_power_of_two() {
+                    eprintln!("[closure] 按对象物化：{} 个对象，回退后应用 {} 组，峰值 {} MiB", n[0], n[1], crate::engine::peak_mem_mb());
+                }
+            }
             // 链首段 → 类（同 `classes.rs::obj_at`）：以该对象为属主的内部分配据此判定是否沿用属主链
             self.seg_cls.entry(Rc::from(chain.as_str())).or_insert(tid);
             self.obj_chain.insert(id, Rc::from(chain));
