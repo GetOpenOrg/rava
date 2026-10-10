@@ -189,7 +189,7 @@ def main(argv=None) -> int:
     job_dir = RESULTS / "job" / tag
     job_dir.mkdir(parents=True, exist_ok=True)
     dist_log = job_dir / "remote_rava.out"
-    argv_dist = ["uv", "run", "python", "rava/distribute_tests.py", "--job", tag, "--ref", sha,
+    argv_dist = ["uv", "run", "--group", "cluster", "python", "cluster/distribute_tests.py", "--job", tag, "--ref", sha,
                  "--cmd", cmd, "--fetch", f"{OUT_REL}/**", "--job-timeout", str(a.timeout)]
     if a.servers:
         argv_dist += ["--servers", *a.servers]
