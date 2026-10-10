@@ -104,7 +104,7 @@ impl System {
         if x.0.is_jvm_null() {
             return Ok(0);
         }
-        Ok(super::object::__identity_hash(x.0.__identity()))
+        Ok(super::object::__object_identity_hash(&*x.0))
     }
 
     /// static lineSeparator：JDK 在 initPhase1 中由 line.separator 属性赋值（不经 `<clinit>`）；

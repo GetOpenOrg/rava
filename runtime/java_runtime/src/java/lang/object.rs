@@ -20,7 +20,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// `System.identityHashCode`、`Object__hashCode_base` 同一来源（`__identity`），
     /// 未覆盖 hashCode 的类满足 `hashCode() == identityHashCode()`（JLS 契约，S-6）。
     fn hashCode(&self) -> i32 {
-        __identity_hash(self.__identity())
+        __object_identity_hash(self)
     }
 
     /// java.lang.Object.equals(Object)Z 的虚分派入口：覆盖的类由宏桥接到翻译体；未覆盖的类
@@ -247,6 +247,18 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
 #[doc(hidden)]
 pub use super::object_impl::Instance as __ObjectInstance;
 
+/// 对象的身份哈希（`Object.hashCode` / `System.identityHashCode` 的入口）：类镜像取按所指类型确定的值
+/// （与构建期引导映像同值，`Class::__mirror_hash`），其余对象取 [`__identity_hash`]。
+pub fn __object_identity_hash<T: ObjectVTable + ?Sized>(o: &T) -> i32 {
+    let id = o.__identity();
+    if o.__class_name() == "java/lang/Class" {
+        if let Some(h) = super::Class::__mirror_hash(id) {
+            return h;
+        }
+    }
+    __identity_hash(id)
+}
+
 /// 身份哈希（`Object.hashCode` / `System.identityHashCode` 的唯一来源，FS-M5）：
 /// 实例体地址经 SplitMix64 混合取 31 位——非负、非零（HotSpot markWord 的 31 位 hash 域，
 /// 0 保留为「未计算」，取 0 时换 0xBAD），低位分布均匀（地址对齐使低位恒 0，直接截断
@@ -291,7 +303,7 @@ pub fn Object__clone_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::R
 /// Object.hashCode 是 ACC_NATIVE：身份哈希，取实例体的堆地址（与 `new Object()` 实例一致）。
 #[allow(non_snake_case)]
 pub fn Object__hashCode_base<T: ObjectVTable + ?Sized>(this: &T) -> crate::error::Result<i32> {
-    Ok(__identity_hash(this.__identity()))
+    Ok(__object_identity_hash(this))
 }
 
 /// `super.finalize()`（invokespecial java/lang/Object.finalize）的落点：Object.finalize

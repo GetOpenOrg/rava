@@ -30,6 +30,8 @@ impl Class {
                 let mut c = Class::default();
                 c._init_not_null();
                 c.__set_name(Clone::clone(&name));
+                let desc = match key_desc(&name) { Some(d) => d, None => "" };
+                c.__pin_mirror_hash(desc);
                 c
             }))
         }))
@@ -65,7 +67,30 @@ impl Class {
         if let Some(rest) = key.strip_prefix('[') {
             c.__set_componentType(class_for_descriptor(rest));
         }
-        CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)))
+        let mirror_key = key.replace('.', "/");
+        let c = CLASSES.with(|cache| Clone::clone(cache.borrow_mut().entry(key).or_insert(c)));
+        c.__pin_mirror_hash(&mirror_key);
+        c
+    }
+
+    /// 类镜像的身份哈希按所指类型确定（VM 注入状态的落地，准入 ③）：构建期引导映像以同一函数给镜像取哈希，
+    /// 映像中以镜像为键、按哈希分桶的表（`WeakHashMap` 等）运行期查找才能命中（计划 2026-10-05-boot-image-evaluator
+    /// §5.5.2 D3：映像对象保留构建期哈希；镜像是运行期对象，故两侧取同一确定值）。
+    /// `key`：binary name（斜线形态）/ 数组描述符 / 基本类型描述符字符，与生成器 `concrete::vm_link::mirror` 的键同形；
+    /// 哈希为 `"m:" + key` 的 32 位 FNV-1a（正数、非零），与生成器 `concrete::ext_init::fnv32` 逐位一致。
+    fn __pin_mirror_hash(&self, key: &str) {
+        if key.is_empty() {
+            return;
+        }
+        let id = Object::from(Clone::clone(self)).0.__identity() as usize;
+        let h = mirror_identity_hash(key);
+        MIRROR_HASHES.with(|m| { m.borrow_mut().insert(id, h); });
+    }
+
+    /// 类镜像的身份哈希（`Object.hashCode` / `System.identityHashCode` 对类对象的落点）：
+    /// `id` 为对象标识；非经 `for_class` / `getPrimitiveClass` 建立的类对象 → None（回落地址哈希）
+    pub fn __mirror_hash(id: *const ()) -> Option<i32> {
+        MIRROR_HASHES.with(|m| m.borrow().get(&(id as usize)).copied())
     }
 
     /// VM 注入状态 `classLoader` 的落地（vm_intrinsics.toml `[vm_state.field_hooks]`，准入 ③）：HotSpot
@@ -366,6 +391,46 @@ impl Class {
             }
         }
         Ok(class_for_descriptor(desc))
+    }
+}
+
+crate::__process_static! {
+    /// 类镜像标识 → 身份哈希（镜像常驻缓存、不释放，标识不复用）
+    static MIRROR_HASHES: RefCell<HashMap<usize, i32>> = RefCell::new(HashMap::new());
+}
+
+/// 类镜像身份哈希：`"m:" + key` 的 32 位 FNV-1a，最高位清零、最低位置一（正数、非零）。
+/// 与生成器 `concrete::ext_init::fnv32` 同一算法（两侧单测以同一已知值守护）。
+fn mirror_identity_hash(key: &str) -> i32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in "m:".bytes().chain(key.bytes()) {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    ((h & 0x7fff_ffff) | 1) as i32
+}
+
+/// 基本类型名 → 描述符字符（类镜像哈希的键）
+fn key_desc(name: &String) -> Option<&'static str> {
+    Some(match format!("{}", name).as_str() {
+        "byte" => "B",
+        "char" => "C",
+        "double" => "D",
+        "float" => "F",
+        "int" => "I",
+        "long" => "J",
+        "short" => "S",
+        "boolean" => "Z",
+        "void" => "V",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod mirror_hash_tests {
+    /// 与生成器 `concrete::ext_init` 的 `fnv32("m:a/B")` 同值（两侧同一已知值）
+    #[test]
+    fn mirror_hash_matches_generator() {
+        assert_eq!(super::mirror_identity_hash("a/B"), 210234197);
     }
 }
 
