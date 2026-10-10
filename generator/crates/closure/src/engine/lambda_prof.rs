@@ -194,6 +194,27 @@ impl Engine<'_> {
                 self.via_label(&hub.via),
             );
         }
+        // 方法上下文克隆前列：同一方法的上下文数、上下文对象所属类型的方法数
+        let mut by_m: HashMap<String, u64> = HashMap::default();
+        let mut by_c: HashMap<u32, u64> = HashMap::default();
+        for i in 0..self.methods.len() {
+            let c = self.methods[i].ctx;
+            if c == NOCTX {
+                continue;
+            }
+            *by_m.entry(self.method_label(i)).or_default() += 1;
+            *by_c.entry(c).or_default() += 1;
+        }
+        let mut ms: Vec<(String, u64)> = by_m.into_iter().collect();
+        ms.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for (l, n) in ms.into_iter().take(TOP) {
+            eprintln!("{tag} ctxm n={n} {l}");
+        }
+        let mut cs: Vec<(u32, u64)> = by_c.into_iter().collect();
+        cs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for (c, n) in cs.into_iter().take(TOP) {
+            eprintln!("{tag} ctxc n={n} {}", self.names[c as usize]);
+        }
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {
