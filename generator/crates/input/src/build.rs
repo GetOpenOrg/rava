@@ -192,7 +192,7 @@ const CLINIT_DESC: &str = "()V";
 
 /// 闭包类的装载口径：lib / JDK / 镜像档案（用户档案只经本编译单元进入）
 fn load(cp: &ClassPath, name: &str) -> Option<Arc<ClassFile>> {
-    if cp.origin(name) == Some(Origin::User) {
+    if cp.origin(name).is_some_and(Origin::is_program) {
         return None;
     }
     cp.get(name)

@@ -22,6 +22,7 @@ mod compile_cmd;
 mod deps_lock;
 mod gates_cmd;
 mod profile_cmd;
+mod predefined;
 mod profile_emit;
 mod status;
 
@@ -36,10 +37,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn usage() -> ExitCode {
     eprintln!(
         "用法：\n  rava closure <Test.java | 类目录> [--jdk <主版本>] [--runtime <路径>] [--main <类>] [-o closure.json] [--why <类|方法>]… [--report <md>] [--flow-batch N] [--hash-seed N] [--cut <类.方法:描述符[@偏移]>]… [--cut-file <文件>]… [--dump-edges <文件>] [--site-prof] [--gates [--gates-top N] [--gates-verify N] [--gates-jobs N] [--gates-mem-mb N] [--gates-timeout 秒] [--gates-out <json>] [--gates-md <md>]]\n  \
-         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--deps deps.lock.toml] [--cp 锁条目名[,…]] [--launch \"<启动选项>\"] [--seed-class FQN[,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--release | --dev-opt] [--target-dir D] [--keep-artifacts] [--closure-cache D] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F] [--profile profile.json]\n  \
+         rava build <A.java>… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--image D]… [--locale L]… [--root 类.方法:描述符]… [--deps deps.lock.toml] [--cp 锁条目名[,…]] [--launch \"<启动选项>\"] [--seed-class FQN[,…]]… [--batch] [--api-package P]… [--api-recursive] [--trace-class 类] [--clean] [--stop-after javac|closure|emit|compile|run] [--build-timeout 秒] [--release | --dev-opt] [--target-dir D] [--keep-artifacts] [--closure-cache D] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--cut 条目]… [--cut-file F]… [--dump-edges F] [--profile profile.json] [--predefined DIR | --train-predefined]\n  \
+         rava trace <A.java>… --predefined DIR [--jdk N | --java-home P] [--runtime R] [--out DIR] [--main 类] [--deps deps.lock.toml] [--cp 锁条目名[,…]]（训练运行：记录运行期定义的类，供 build --predefined）\n  \
          rava compile <scratch> [--release | --dev-opt] [--target-dir D] [--build-timeout 秒] [--keep-artifacts] [--runtime R]\n  \
          rava prune <scratch>…\n  \
-         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--profile profile.json]\n  \
+         rava emit <closure.json> [--classes DIR] [--java A.java]… [--jdk N | --java-home P] [--runtime R] [--out DIR] [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE] [--perf] [--emit-jobs N] [--profile profile.json] [--predefined DIR]\n  \
          rava profile [<A.java | 类目录>]… [--entries <清单>] [--closure <closure.json>]… [--jdk N | --java-home P] [--runtime R] [--image D]… [-o profile.json] [--entry-out DIR] [--closure-cache D] [--flow-batch N] [--hash-seed N] | rava profile --covers <profile.json> <closure.json>…
          rava image-dirs [--jdk N | --java-home P] [--runtime R]\n  \
          rava jdk [--jdk N | --java-home P] [--runtime R] [--home-only | --json] | rava jdk --list\n  \
@@ -121,6 +123,7 @@ fn main() -> ExitCode {
         "jdk" => jdk_cmd(&args),
         "audit" => audit_cmd::run(&args),
         "profile" => profile_cmd::run(&args),
+        "trace" => predefined::run_trace(&args),
         _ => return usage(),
     };
     match r {

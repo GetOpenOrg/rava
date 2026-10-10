@@ -101,7 +101,7 @@ fn scan_in(o: &BuildOpts, rt: &Path, home: &Path, tmp: &Path) -> Result<Gaps, St
     let libs_sel = build_libs::select_entries(o)?;
     let jars: Vec<PathBuf> = libs_sel.iter().map(|e| e.path.clone()).collect();
     javac(home, &o.inputs, &jars, &classes)?;
-    let cp = class_path(&classes, &libs_sel, home, &image_dirs(o, home, rt))?;
+    let cp = class_path(&classes, &libs_sel, home, &image_dirs(o, home, rt), None)?;
     let Libs { crates, .. } = build_libs::from_lock(&libs_sel, &cp, &resolve::ModuleFacts::build(&cp))?;
     let seed_classes = o.seed_classes.clone();
     let user = user_order(&cp, &o.inputs, o.main.as_deref())?;
@@ -268,7 +268,7 @@ fn run_api(a: &AuditArgs) -> Result<(), String> {
 /// api 模式入口规模（public 类数 / 入口方法数），口径同 build 的 `[api]` 行
 fn api_counts(o: &BuildOpts, rt: &Path, entry_dir: &Path) -> Result<(usize, usize), String> {
     let home = resolve::jdk::choose(o.jdk, o.java_home.as_deref(), Some(&repo_root(rt)))?.home;
-    let cp = class_path(entry_dir, &[], &home, &image_dirs(o, &home, rt))?;
+    let cp = class_path(entry_dir, &[], &home, &image_dirs(o, &home, rt), None)?;
     let (roots, n_cls) = api_roots(&cp, &o.api_packages, o.api_recursive);
     Ok((n_cls, roots.len()))
 }
