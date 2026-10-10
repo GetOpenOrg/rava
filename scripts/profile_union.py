@@ -142,8 +142,9 @@ def cmd_merge(a):
 
     classes, methods, folds, fold_part = {}, {}, {}, defaultdict(list)
     sets = defaultdict(set)
-    reflect = {"members": {}, "fields": {}, "field_names": set(), "gaps": set(), "field_enum_gaps": []}
-    seeds = {"data_bundles": set(), "annotation_enums": set(), "jca": {}, "reflect_names": defaultdict(set),
+    reflect = {"members": {}, "fields": {}, "static_fields": {}, "field_names": set(), "gaps": set(), "field_enum_gaps": [],
+               "allocations": set(), "meta_methods": set(), "meta_fields": set()}
+    seeds = {"data_bundles": set(), "annotation_enums": set(), "mirror_inits": set(), "named_resources": set(), "jca": {}, "reflect_names": defaultdict(set),
              "reflect_all": set(), "services": defaultdict(dict), "services_unknown": False}
     ci = {"targets": set(), "unknown": False, "sites": [], "unknown_sites": []}
     sp_vals, sp_dyn = {}, set()
@@ -177,11 +178,16 @@ def cmd_merge(a):
                 reflect["members"][x["member"]] = x
         for x in r.get("fields", []):
             reflect["fields"][(x["owner"], x["name"])] = x
+        for x in r.get("static_fields", []):
+            reflect["static_fields"][(x["owner"], x["name"])] = x
+        for k in ("allocations", "meta_methods", "meta_fields"):
+            reflect[k] |= set(r.get(k, []))
         reflect["field_names"] |= set(r.get("field_names", []))
         reflect["gaps"] |= set(r.get("gaps", []))
         s = d.get("seeds", {})
         seeds["data_bundles"] |= set(s.get("data_bundles", []))
-        seeds["annotation_enums"] |= set(s.get("annotation_enums", []))
+        for k in ("annotation_enums", "mirror_inits", "named_resources"):
+            seeds[k] |= set(s.get(k, []))
         for j in s.get("jca", []):
             seeds["jca"][json.dumps(j, sort_keys=True)] = j
         for o, ns in (s.get("reflect_names") or {}).items():
@@ -217,9 +223,11 @@ def cmd_merge(a):
         "folds_version": docs[0][1].get("folds_version"),
         "folds": out_folds,
         "reflect": {"members": list(reflect["members"].values()), "fields": list(reflect["fields"].values()),
+                    "static_fields": list(reflect["static_fields"].values()),
                     "field_names": sorted(reflect["field_names"]), "gaps": sorted(reflect["gaps"]),
-                    "field_enum_gaps": []},
-        "seeds": {"data_bundles": sorted(seeds["data_bundles"]), "annotation_enums": sorted(seeds["annotation_enums"]),
+                    "field_enum_gaps": [], **{k: sorted(reflect[k]) for k in ("allocations", "meta_methods", "meta_fields")}},
+        "seeds": {"data_bundles": sorted(seeds["data_bundles"]),
+                  **{k: sorted(seeds[k]) for k in ("annotation_enums", "mirror_inits", "named_resources")},
                   "jca": list(seeds["jca"].values()),
                   "reflect_names": {k: sorted(v) for k, v in seeds["reflect_names"].items()},
                   "reflect_all": sorted(seeds["reflect_all"]),
@@ -235,6 +243,17 @@ def cmd_merge(a):
         "system_properties": {"values": {k: v for k, v in sp_vals.items() if v is not None}, "dynamic": sorted(sp_dyn)},
         "summary": {"classes": len(classes), "methods": len(methods)},
     }
+    # 本脚本未识别的键（closure.json 格式新增项）取用户 T 那一例，保证格式完整；逐键列出便于补并集规则
+    user_doc = next(d for n, d in docs if n == a.user)
+    filled = []
+    for path, src, dst in (("", user_doc, out), ("reflect.", user_doc.get("reflect", {}), out["reflect"]),
+                           ("seeds.", user_doc.get("seeds", {}), out["seeds"])):
+        for k, v in src.items():
+            if k not in dst:
+                dst[k] = v
+                filled.append(path + k)
+    if filled:
+        print(f"按用户例补齐的键：{', '.join(sorted(filled))}")
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     print(f"并集：类 {len(classes)}，方法 {len(methods)}，折叠方法 {len(out_folds)}（来自 {len(docs)} 例，用户 {a.user}）")
 
