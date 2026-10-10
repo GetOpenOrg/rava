@@ -51,7 +51,8 @@ impl<'a> Engine<'a> {
     pub(super) fn relay_ctx(&mut self, m: usize, key: &MemberRef) -> u32 {
         let caller = self.methods[m].ctx;
         // 具体求值上下文不外传（其方法按轨迹处理，不是堆上下文）
-        if caller == NOCTX || self.methods[m].kind != Kind::Bytecode || self.is_concrete(m) {
+        // 枢纽 lambda 读者不继承锚点方法的上下文（`hub_reader.rs`）
+        if caller == NOCTX || self.methods[m].kind != Kind::Bytecode || self.is_concrete(m) || self.reader_hub().is_some() {
             return NOCTX;
         }
         if self.relay_slots(key) != 0 {

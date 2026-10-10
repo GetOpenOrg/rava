@@ -319,8 +319,13 @@ pub(super) struct Hub {
     /// 已对 (接入记录, 按调用点建模的目标) 完整接边：同一记录再派发该目标的新接收者时只接接收者相关部分
     pub(super) edged: HashSet<(u32, usize)>,
     /// lambda 接收者的读者所在调用点：首个接入的字节码调用点。枢纽上的 lambda 只在此处以枢纽形参 / 返回节点
-    /// （`HP` / `HR`）为实参 / 结果各建一个读者，其余字节码接入点的实参经 `HP` 汇入、结果经 `HR` 流出，不逐调用点派发
+    /// （`HP` / `HR`）为实参 / 结果各建一个读者，其余字节码接入点的实参经 `HP` 汇入、结果经 `HR` 流出，不逐调用点派发。
+    /// 锚点只是读者单元的宿主（随接入先后而定）：读者的效果归枢纽而非锚点调用点（`hub_reader.rs`），与锚点是谁无关
     pub(super) anchor: Option<(usize, u32)>,
+    /// 本枢纽 lambda 读者接边的目标：报告中计入枢纽的每个接入点（与 `plain` 同口径）
+    pub(super) ltargets: BTreeSet<usize>,
+    /// 本枢纽 lambda 读者接入的枢纽（方法引用的虚分派）：其目标同样计入本枢纽的每个接入点
+    pub(super) lhubs: BTreeSet<u32>,
 }
 
 /// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
@@ -346,6 +351,8 @@ pub(super) struct Link {
     pub(super) a: Args,
     pub(super) res: Option<Node>,
     pub(super) cv: Option<Rc<[V]>>,
+    /// 代哪个枢纽的 lambda 读者接入（None = 调用点自身接入）：按本记录的接边归该枢纽（`hub_reader.rs`）
+    pub(super) host: Option<u32>,
 }
 
 /// 枢纽的接收者集合键

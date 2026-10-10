@@ -365,10 +365,7 @@ impl<'a> Engine<'a> {
     /// 调用边：接收者注入 this、实参按位置流入形参（被调声明类型过滤）、返回值流回结果节点
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
-        if self.dispatch.entry((m, off)).or_default().insert(t) {
-            self.ctx.stats.borrow_mut().sprof.dispatch_new += 1;
-            self.vdisp_note(m, off, Some(t));
-        }
+        self.note_target(m, off, t);
         self.callers.entry(t).or_default().insert(m);
         match self.cur_lcall {
             Some(id) => self.lcallers.entry(t).or_default().insert(id),

@@ -65,7 +65,8 @@ impl Engine<'_> {
 
     /// `recv_call_ctx` 是否按调用点克隆（与接收者上下文无关）
     pub(super) fn recv_call_clones(&self, m: usize, off: u32, key: &MemberRef) -> bool {
-        if self.methods[m].kind != Kind::Bytecode {
+        // 枢纽 lambda 读者不取锚点调用点的字面常量（`hub_reader.rs`）
+        if self.methods[m].kind != Kind::Bytecode || self.reader_hub().is_some() {
             return false;
         }
         // 实例方法的掩码按形参序号含接收者槽 0
@@ -75,12 +76,14 @@ impl Engine<'_> {
 
     /// 调用点 (m, off) 以形态 call 调用静态方法 key 时的上下文。在建节点前判定，不建出无调用方的本体
     pub(super) fn static_ctx(&mut self, m: usize, off: u32, key: &MemberRef, call: Call) -> u32 {
-        let caller = self.methods[m].ctx;
+        // 枢纽 lambda 读者不继承锚点方法的上下文、不按锚点调用点克隆（`hub_reader.rs`）
+        let reader = self.reader_hub().is_some();
+        let caller = if reader { NOCTX } else { self.methods[m].ctx };
         let ctx = match call {
             Call::Invoke { heap } => {
                 let c = match caller {
                     _ if !heap => NOCTX,
-                    NOCTX if self.fresh_factory(key) => self.site_ctx(m, off),
+                    NOCTX if !reader && self.fresh_factory(key) => self.site_ctx(m, off),
                     c => c,
                 };
                 self.selector_ctx(m, off, key, c)
@@ -89,7 +92,7 @@ impl Engine<'_> {
             Call::Handle => NOCTX,
             Call::Eager => return caller,
         };
-        if ctx == NOCTX && self.methods[m].kind == Kind::Bytecode && self.forwarder(key) {
+        if ctx == NOCTX && !reader && self.methods[m].kind == Kind::Bytecode && self.forwarder(key) {
             return match caller {
                 NOCTX => self.site_ctx(m, off),
                 c => c,
@@ -101,7 +104,7 @@ impl Engine<'_> {
     /// 按选择子形参克隆的上下文（不克隆时为 dflt）。是否克隆只看调用点的字面常量实参（`selector.rs` `site_literals`），
     /// 不读实参格：常量格的中间态常量升 Top 后已接的克隆边撤不回（§5.8.6）
     fn selector_ctx(&mut self, m: usize, off: u32, key: &MemberRef, dflt: u32) -> u32 {
-        if self.methods[m].kind != Kind::Bytecode {
+        if self.methods[m].kind != Kind::Bytecode || self.reader_hub().is_some() {
             return dflt;
         }
         let mask = self.ctx.selector_slots(key);
