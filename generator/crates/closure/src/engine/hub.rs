@@ -294,7 +294,18 @@ impl<'a> Engine<'a> {
         // 调用点表只在逐调用点派发时用到（经枢纽中转的目标不逐调用点接边）
         let links = |e: &Self| -> Vec<_> { e.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect() };
         let ret = self.hubs[h as usize].ret;
-        // lambda 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
+        // lambda 上的非 SAM 方法（Object 方法 / 接口 default 方法）：目标与接收者无关地由所实现的接口选出，
+        // 与 Java 类接收者同样按目标逐调用点接边并登记为按调用点建模的目标——调用点重接时每个目标一条边，
+        // 不逐 lambda 重放（open 枢纽上 lambda 数以千计）
+        let non_sam = self.lambdas.get(&r).is_some_and(|l| site.method().name != l.sam);
+        if non_sam && !self.vm_hubs.contains(&h) {
+            let via = self.hubs[h as usize].via.clone();
+            if let Some(t) = self.lambda_member(r, &site, via) {
+                self.hub_special(h, t, r);
+            }
+            return;
+        }
+        // lambda 的 SAM 与手写实现对象不是 Java 类：逐调用点派发（dispatch_one 按其 SAM / trait impl 选目标）
         if self.lambdas.contains_key(&r) || self.hwobjs.contains_key(&r) {
             Rc::make_mut(&mut self.hubs[h as usize].lambdas).push(r);
             let saved = self.call_vals.take();
@@ -331,19 +342,7 @@ impl<'a> Engine<'a> {
             self.hub_bind(h, t);
         }
         if !self.hub_plain(t) {
-            Rc::make_mut(self.hubs[h as usize].special.entry(t).or_default()).push(r);
-            let saved = self.call_vals.take();
-            for ((m, off), l) in links(self) {
-                // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
-                self.call_vals = l.cv.clone();
-                if self.hubs[h as usize].edged.contains(&(l.id, t)) {
-                    self.edge_more(m, off, t, r, &l.a, ret, l.res);
-                    continue;
-                }
-                self.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res);
-                self.hubs[h as usize].edged.insert((l.id, t));
-            }
-            self.call_vals = saved;
+            self.hub_special(h, t, r);
             return;
         }
         self.add_to(Node::P(t, 0), &TypeSet::exact(r));
@@ -359,6 +358,25 @@ impl<'a> Engine<'a> {
         if let Some(rt) = self.hubs[h as usize].ret {
             self.flow(Node::R(t), Node::HR(h), rt);
         }
+    }
+
+    /// 接收者 r 的目标 t 按调用点建模：登记进枢纽的逐调用点目标表，对已接入的各调用点接边
+    fn hub_special(&mut self, h: u32, t: usize, r: u32) {
+        Rc::make_mut(self.hubs[h as usize].special.entry(t).or_default()).push(r);
+        let ret = self.hubs[h as usize].ret;
+        let links: Vec<_> = self.hubs[h as usize].links.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let saved = self.call_vals.take();
+        for ((m, off), l) in links {
+            // 同一接入记录已对 t 完整接边：实参、形参常量与调用关系不变，只补接收者相关部分
+            self.call_vals = l.cv.clone();
+            if self.hubs[h as usize].edged.contains(&(l.id, t)) {
+                self.edge_more(m, off, t, r, &l.a, ret, l.res);
+                continue;
+            }
+            self.edge(m, off, t, Recv::Exact(r), &l.a, ret, l.res);
+            self.hubs[h as usize].edged.insert((l.id, t));
+        }
+        self.call_vals = saved;
     }
 
     /// 目标经枢纽中转：字节码方法本体、结果取其返回值节点（非按调用点建模）。

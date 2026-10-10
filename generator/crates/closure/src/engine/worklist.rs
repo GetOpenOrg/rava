@@ -417,9 +417,10 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.refl_seen.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
-        if let Some(d) = self.lambda_done.get_mut(&m) {
+        // lambda 调用读者只作废不注销：重分析后以同一调用再登记时复活（`invoke_lambda`），不另建读者单元
+        if let Some(d) = self.lambda_done.get(&m) {
             for off in offs {
-                for (_, id) in d.remove(off).unwrap_or_default() {
+                for &id in d.get(off).into_iter().flat_map(HashMap::values) {
                     self.lcalls[id as usize].live = false;
                 }
             }
@@ -436,8 +437,8 @@ impl<'a> Engine<'a> {
         self.recv_fp.remove(&m);
         self.gather_last.remove(&m);
         self.refl_seen.remove(&m);
-        for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
-            for (_, id) in at {
+        for at in self.lambda_done.get(&m).into_iter().flat_map(HashMap::values) {
+            for &id in at.values() {
                 self.lcalls[id as usize].live = false;
             }
         }

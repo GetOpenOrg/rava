@@ -208,8 +208,10 @@ pub(super) struct LCall {
     pub(super) done: TypeSet,
     /// `done.open` 已按 G 展开到的 `g_log` 位置（其后的成员是这些 open 类型尚未展开的增量）
     pub(super) g_mark: usize,
-    /// 调用方分析重算后作废（调用点重跑时按新分析重新登记）
+    /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
     pub(super) live: bool,
+    /// 刚复活、尚未补回派发去重登记
+    pub(super) revived: bool,
 }
 
 /// 被调方法的接收者
