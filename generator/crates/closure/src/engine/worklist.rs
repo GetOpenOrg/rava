@@ -383,6 +383,14 @@ impl<'a> Engine<'a> {
         }
         self.methods[m].analysis = Some(a.clone());
         self.methods[m].aseq = self.methods[m].aseq.wrapping_add(1);
+        if let Ok(q) = std::env::var("RAVA_DIAG_VALS") {
+            let l = self.method_label(m);
+            if l.contains(&q) {
+                for line in self.flows_of(&format!("@vals:{l}")) {
+                    eprintln!("[diag-vals] {line}");
+                }
+            }
+        }
         self.nr_end(m);
         Some(a)
     }
