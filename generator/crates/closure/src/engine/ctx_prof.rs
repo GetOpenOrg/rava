@@ -18,6 +18,7 @@ enum CtxKind {
     Site,
     Const,
     Level,
+    Typed,
     Other,
 }
 
@@ -31,6 +32,8 @@ impl Engine<'_> {
             CtxKind::Const
         } else if self.objs.contains_key(&c) {
             CtxKind::Obj
+        } else if self.typed_ctxs.contains_key(&c) {
+            CtxKind::Typed
         } else if self.obj_chain.contains_key(&c) {
             CtxKind::Site
         } else {
@@ -70,6 +73,7 @@ impl Engine<'_> {
         }
         let mut ks: Vec<_> = kinds.iter().map(|(k, (n, s))| (*k, *n, s.len())).collect();
         ks.sort();
+        eprintln!("{tag} ctxbudget free={} merged={} typed={}", self.ctx_stats.free, self.ctx_stats.merged, self.ctx_stats.typed);
         eprintln!("{tag} ctxkind objs={} {}", self.objs.len(), ks.iter().map(|(k, n, d)| format!("{k:?}={n}/{d}")).collect::<Vec<_>>().join(" "));
         let bounds = [8usize, 64, 256, 1024, usize::MAX];
         let mut hist = [(0u64, 0u64); 5];
@@ -85,6 +89,7 @@ impl Engine<'_> {
             let mut kc: HashMap<CtxKind, u32> = HashMap::default();
             let mut sites: HashSet<&str> = HashSet::default();
             let mut classes: HashSet<u32> = HashSet::default();
+            let mut typed: HashSet<(u32, &str)> = HashSet::default();
             for &c in cs {
                 *kc.entry(self.ctx_kind(c)).or_default() += 1;
                 if let Some(s) = self.ctx_site(c) {
@@ -92,11 +97,13 @@ impl Engine<'_> {
                 }
                 if let Some(&t) = self.objs.get(&c) {
                     classes.insert(t);
+                    let tail = self.obj_chain.get(&c).and_then(|ch| ch.split_once('#').map(|x| x.1)).unwrap_or("");
+                    typed.insert((t, tail));
                 }
             }
             let mut kv: Vec<_> = kc.into_iter().collect();
             kv.sort();
-            eprintln!("{tag} ctxmerge n={} sites={} classes={} kinds={kv:?} {}", cs.len(), sites.len(), classes.len(), self.method_label(b));
+            eprintln!("{tag} ctxmerge n={} sites={} classes={} typed={} kinds={kv:?} {}", cs.len(), sites.len(), classes.len(), typed.len(), self.method_label(b));
         }
         let mut by_site: HashMap<&str, u64> = HashMap::default();
         let mut by_cls: HashMap<u32, u64> = HashMap::default();
