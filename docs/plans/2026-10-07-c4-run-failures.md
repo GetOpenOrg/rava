@@ -118,7 +118,7 @@
   `LocaleServiceProvider` 实现时，原闭包运行期落 ClassNotFoundException。若要收回，正途是 ServiceLoader 遍历按档案内
   服务提供者集折叠（无提供者时循环体不可达），属另一项精度改进，不在本修复内。
 
-## 三、TestUrlParsingFaces：URL 协议处理器按包前缀装载（待决）
+## 三、TestUrlParsingFaces：URL 协议处理器按包前缀装载（10-10 已按 A 实施，c4-url）
 
 **根因**：`URL$DefaultFactory.createURLStreamHandler@162` 以 `"sun.net.www.protocol." + protocol + ".Handler"` 按名取类，
 `protocol` 来自 URL 字符串的字符循环解析，推不出；分析器对该站点生成受约束模式 `[Lit("sun.net.www.protocol."), Wild, Lit(".Handler")]`，
@@ -135,6 +135,15 @@
 
 **建议**：A（正确性优先、与档案开放世界口径一致），同时以档案规模衡量：协议处理器只在 `URL(String)` 解析可达时入链，
 体积代价按三测点实测后决定是否对 https 的 SSL 栈做按需拆分。需用户 / 协调者拍板，本项停在此处。
+
+**实施（2026-10-10，分支 c4-url）**：按 A 实施，但以候选模式形状限定范围——首段是非空字面量（固定包前缀）的
+任意串候选按类路径匹配、命中全部入链；首段即任意串的候选仍只匹配闭包内类名（不限定命名空间，按类路径匹配会膨胀）。
+实现 `class_lookup.rs::anchored` / `classpath_matches`（同一模式只扫描一次类路径）。闭包对照（main 583edccd → 2122af05）：
+HelloWorld 580 → 580；DeepCopy 3028 → 3033（ftp / http / https / jmod / mailto 五个 Handler）；TestUrlParsingFaces
+3404 → 5123（+1719，新增站点只有 DefaultFactory@162，点名 https / jmod / mailto；其余为 https.Handler 经
+`URL.openConnection` 分派可达后带入的 SSL 默认上下文（JCA，约 835）、HttpsURLConnectionImpl（约 210）、
+certpath LDAP → JNDI → RMI 注册表服务（约 310）与序列化 / Proxy（约 106））。体积代价属 https 支持本身；收窄途径是
+`URL.handler` 按对象区分处理器（字段按分配点敏感），另立精度项。
 
 ## 四、提交与抽查
 

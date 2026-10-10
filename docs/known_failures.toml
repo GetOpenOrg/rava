@@ -184,10 +184,3 @@ signature = "stub: TestReflectInvokePerReceiver$Derived.who:(Ljava/lang/Object;)
 owner = "c4-reflect（反射调用帧与覆盖方法存根）"
 since = "2026-10-10"
 note = "同 TestReflectFieldMethod：按接收者分派的子类覆盖方法未入档案"
-
-[[known]]
-test = "TestUrlParsingFaces"
-signature = "java.net.MalformedURLException: unknown protocol: https"
-owner = "c4-url（URL 协议处理器补种）"
-since = "2026-10-10"
-note = "长期按已知失败对待但此前未登记；https 协议处理器未入闭包"
