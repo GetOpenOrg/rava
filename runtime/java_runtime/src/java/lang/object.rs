@@ -497,9 +497,7 @@ impl Object {
         // 运行期按名建立的类型化 null：每名一个泄漏的 'static 值（名字集合有界：静态类型名）。
         // 同名的接口载体 null 与类 null 不会并存（类与接口不同名）；带描述符的覆盖无描述符的
         let n = Object::__from_static(Box::leak(Box::new(__TypedNull(binary_name, desc))));
-        TYPED_NULLS.with(|m| {
-            m.borrow_mut().insert(binary_name, Clone::clone(&n));
-        });
+        TYPED_NULLS.with(|m| m.put(binary_name, Clone::clone(&n)));
         n
     }
 

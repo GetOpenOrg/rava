@@ -150,7 +150,7 @@ fn run_java_thread(t: &Thread) {
     t.__set_eetop(0);
     let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
     let id = thread_identity(t);
-    LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
+    LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
     let obj = Object::from(Clone::clone(t));
     if let Ok(guard) = crate::monitor::MonitorGuard::acquire(&obj) {
         let _ = crate::monitor::notify_all(obj.0.__identity() as usize);
@@ -168,15 +168,12 @@ impl Thread {
         let t = Clone::clone(self);
         t.__set_eetop(1);
         let _ = t.__get_holder().__set_threadStatus(JVMTI_ALIVE | JVMTI_RUNNABLE);
-        let old = INITIAL_THREAD.with(|m| m.borrow_mut().replace(Clone::clone(&t)));
-        LIVE_THREADS.with(|v| {
-            let mut v = v.borrow_mut();
-            if let Some(old) = old {
-                let id = thread_identity(&old);
-                v.retain(|x| thread_identity(x) != id);
-            }
-            v.insert(0, Clone::clone(&t));
-        });
+        // 换下的旧初始线程与摘下的表项都在锁外释放
+        if let Some(old) = INITIAL_THREAD.replace(Some(Clone::clone(&t))) {
+            let id = thread_identity(&old);
+            LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
+        }
+        LIVE_THREADS.with(|v| v.borrow_mut().insert(0, Clone::clone(&t)));
         set_carrier_slot(Some(Clone::clone(&t)));
         set_current_slot(Some(t));
     }
@@ -263,7 +260,7 @@ impl Thread {
             return Ok(t);
         }
         let main = platform_main_thread();
-        INITIAL_THREAD.with(|m| *m.borrow_mut() = Some(Clone::clone(&main)));
+        INITIAL_THREAD.set(Some(Clone::clone(&main)));
         set_carrier_slot(Some(Clone::clone(&main)));
         set_current_slot(Some(Clone::clone(&main)));
         LIVE_THREADS.with(|v| v.borrow_mut().insert(0, Clone::clone(&main)));
@@ -438,7 +435,7 @@ fn spawn_vm_system_thread(name: &'static str, body: impl FnOnce() + Send + 'stat
             t.__set_eetop(0);
             let _ = t.__get_holder().__set_threadStatus(JVMTI_TERMINATED);
             let id = thread_identity(&t);
-            LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
+            LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
             set_current_slot(None);
             set_carrier_slot(None);
             drop(t);
@@ -446,7 +443,7 @@ fn spawn_vm_system_thread(name: &'static str, body: impl FnOnce() + Send + 'stat
         });
     if spawned.is_err() {
         let id = thread_identity(&t);
-        LIVE_THREADS.with(|v| v.borrow_mut().retain(|x| thread_identity(x) != id));
+        LIVE_THREADS.with(|v| v.remove_where(|x| thread_identity(x) == id));
         crate::gil::note_terminated(true);
         return Err(JvmError::out_of_memory("unable to create native thread"));
     }

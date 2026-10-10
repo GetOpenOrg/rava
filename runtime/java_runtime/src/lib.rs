@@ -458,9 +458,8 @@ crate::__process_static! {
 /// 生成项目 main 启动时登记类初始化钩子。`binary_name` 归一为点分形态（与 `Class` 对象承载的名字一致）。
 pub fn register_class_init_hooks(hooks: &[(&str, ClassInitHook)]) {
     CLASS_INIT_HOOKS.with(|h| {
-        let mut h = h.borrow_mut();
         for (name, hook) in hooks {
-            h.insert(name.replace('/', "."), Clone::clone(hook));
+            h.put(name.replace('/', "."), Clone::clone(hook));
         }
     });
 }

@@ -27,8 +27,7 @@ fn proxy_method(iface: &str, name: &str, desc: &str) -> Result<Method> {
         return Ok(m);
     }
     let m = Class::for_class(String::from(iface)).__table_method(name, desc)?;
-    PROXY_METHODS.with(|c| { c.borrow_mut().insert(key, Clone::clone(&m)); });
-    Ok(m)
+    Ok(PROXY_METHODS.with(|c| c.intern(key, m)))
 }
 
 /// 描述符形参的首字符序列（基本类型字符；引用 / 数组 → 'L'）。

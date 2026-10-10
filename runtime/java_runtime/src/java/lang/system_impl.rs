@@ -153,11 +153,8 @@ impl System {
         }
         let fis = FileInputStream::new_filedescriptor(FileDescriptor::in_()?)?;
         let bis: InputStream = BufferedInputStream::new_inputstream(fis.into())?.into();
-        Ok(STDIN.with(|s| {
-            let mut b = s.borrow_mut();
-            // 并发首次读取：先写入者胜出，保持单一流身份
-            Clone::clone(b.get_or_insert(bis))
-        }))
+        // 并发首次读取：先写入者胜出，保持单一流身份；落选的流在锁外释放
+        Ok(STDIN.with(|s| s.get_or_insert(bis)))
     }
 
     /// native `setIn0(InputStream)`：System.setIn 的写入步（字段 final，JDK 经 native 改写）。
@@ -195,11 +192,8 @@ fn std_stream(
         return ps;
     }
     let ps = new_std_print_stream(fd);
-    slot.with(|s| {
-        let mut b = s.borrow_mut();
-        // 并发首次读取：先写入者胜出，保持单一流身份
-        Clone::clone(b.get_or_insert(ps))
-    })
+    // 并发首次读取：先写入者胜出，保持单一流身份；落选的流在锁外释放
+    slot.with(|s| s.get_or_insert(ps))
 }
 
 /// 标准流的构造（对应 System.newPrintStream(new FileOutputStream(fd), enc)，enc 固定为 UTF-8）。

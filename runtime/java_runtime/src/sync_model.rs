@@ -536,6 +536,60 @@ mod mt {
         #[inline]
         pub fn get_mut(&mut self) -> &mut T { self.lock.get_mut() }
     }
+
+    // 登记表的写入形态（无 GC 文档第四节小步 A）：锁内只换出值，被替换 / 落选的值放锁后再释放
+    // （锁内释放对象会重入任意析构链，debug 档 `drop_slow` 断言）；值的构造在锁外完成。
+
+    impl<T: Clone> __RefSlot<Option<T>> {
+        /// 槽为空时写入 `v`，返回槽中的值（并发首次写入：先写入者胜出，保持单一身份）。落选的 `v` 在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn get_or_insert(&self, v: T) -> T {
+            let (cur, unused) = {
+                let mut g = self.borrow_mut();
+                match &*g {
+                    Some(cur) => (cur.clone(), Some(v)),
+                    None => {
+                        *g = Some(v.clone());
+                        (v, None)
+                    }
+                }
+            };
+            drop(unused);
+            cur
+        }
+    }
+
+    impl<K: Eq + std::hash::Hash, V> __RefSlot<std::collections::HashMap<K, V>> {
+        /// 写入 `k → v`；被覆盖的旧值在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn put(&self, k: K, v: V) {
+            let old = self.borrow_mut().insert(k, v);
+            drop(old);
+        }
+
+        /// 按键取规范值：已有则取表中的值，否则写入 `v`（先写入者胜出，保持单一身份）。落选的 `v` 在锁外释放。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn intern(&self, k: K, v: V) -> V where V: Clone {
+            use std::collections::hash_map::Entry;
+            let (cur, unused) = match self.borrow_mut().entry(k) {
+                Entry::Occupied(e) => (e.get().clone(), Some(v)),
+                Entry::Vacant(e) => (e.insert(v).clone(), None),
+            };
+            drop(unused);
+            cur
+        }
+    }
+
+    impl<T> __RefSlot<Vec<T>> {
+        /// 摘除满足 `pred` 的元素；摘下的元素在锁外释放。`pred` 不得执行 Java 代码。
+        #[cfg_attr(debug_assertions, track_caller)]
+        pub fn remove_where(&self, pred: impl FnMut(&T) -> bool) {
+            let mut pred = pred;
+            let gone: Vec<T> = self.borrow_mut().extract_if(.., |x| pred(x)).collect();
+            drop(gone);
+        }
+    }
+
     impl<T: Default> Default for __RefSlot<T> {
         fn default() -> Self { Self::new(T::default()) }
     }
