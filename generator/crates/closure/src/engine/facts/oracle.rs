@@ -41,7 +41,7 @@ impl Oracle for Facts<'_, '_> {
                 return Ret::Value(v);
             }
         }
-        if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
+        if let Some(r) = self.ctx.derived_result(self.m, self.level, opcode, m, iface, args, &c) {
             return r;
         }
         // 返回串形状事实：常量实参能求出常量时取常量
@@ -78,6 +78,11 @@ impl Oracle for Facts<'_, '_> {
                     return r;
                 }
             }
+        }
+        // 受理调用：实参是引导期校验过的动态属性值（`[facts.system_properties.accepted]`）；
+        // 目标不唯一时按映像对象接收者的运行期类选目标
+        if let Some(v) = self.ctx.accepted_call(opcode, m, iface, c.target.as_ref().or(tagged.as_ref()), args) {
+            return Ret::Value(v);
         }
         let Some(t) = c.target.as_ref().or(tagged.as_ref()) else {
             return match per {
