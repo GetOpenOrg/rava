@@ -316,12 +316,6 @@ impl<'a> Engine<'a> {
         // lambda 实现 / 具体求值节点，其各入口一律不带实参值），形参值未知，固定为 Top
         let n = self.methods[m].ptypes.len();
         if !self.pvals.contains_key(&m) {
-            if let Ok(q) = std::env::var("RAVA_DIAG_PV") {
-                let l = self.method_label(m);
-                if l.contains(&q) {
-                    eprintln!("[diag-pv] {l} 无调用点即分析，形参置 Top");
-                }
-            }
             self.pstr_top_m(m);
             self.taint_params(m, 0, n, None);
         }
@@ -330,12 +324,6 @@ impl<'a> Engine<'a> {
         let mirrors = self.param_mirror_sets(m);
         let pobjs = self.obj_sets(m);
         let callers = self.caller_mirrors(m);
-        if let Ok(q) = std::env::var("RAVA_DIAG_PV") {
-            let l = self.method_label(m);
-            if l.contains(&q) || l.contains("System.getLogger") {
-                eprintln!("[diag-pv] 分析 {l} ctx={} pvals={:?} callers={callers:?}", self.methods[m].ctx, self.pvals.get(&m));
-            }
-        }
         let sites = self.site_table(m, code);
         self.stat_enter(Phase::Analyze);
         self.nr_begin(m);
@@ -398,14 +386,6 @@ impl<'a> Engine<'a> {
         }
         self.methods[m].analysis = Some(a.clone());
         self.methods[m].aseq = self.methods[m].aseq.wrapping_add(1);
-        if let Ok(q) = std::env::var("RAVA_DIAG_VALS") {
-            let l = self.method_label(m);
-            if l.contains(&q) {
-                for line in self.flows_of(&format!("@vals:{l}")) {
-                    eprintln!("[diag-vals] {line}");
-                }
-            }
-        }
         self.nr_end(m);
         Some(a)
     }

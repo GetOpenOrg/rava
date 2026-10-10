@@ -537,12 +537,6 @@ impl<'a> Engine<'a> {
     pub(super) fn bind_params(&mut self, m: usize, t: usize, base: usize, n: usize) {
         let cv = self.call_vals.clone();
         let vals: Option<Vec<PV>> = cv.as_ref().map(|vs| vs.iter().map(PV::of_ret).collect());
-        if let Ok(q) = std::env::var("RAVA_DIAG_PV") {
-            let l = self.method_label(t);
-            if l.contains(&q) {
-                eprintln!("[diag-pv] 绑定 {} → {l} vals={vals:?}", self.ctx_label(m));
-            }
-        }
         match &cv {
             Some(vs) => {
                 self.taint_site(m, t, base, n, vs);
@@ -585,12 +579,6 @@ impl<'a> Engine<'a> {
             .collect();
         if cur.as_ref() == Some(&new) {
             return;
-        }
-        if let Ok(q) = std::env::var("RAVA_DIAG_PV") {
-            let l = self.method_label(t);
-            if l.contains(&q) {
-                eprintln!("[diag-pv] {l} ctx={} {cur:?} -> {new:?} vals={vals:?}", self.methods[t].ctx);
-            }
         }
         self.pvals.insert(t, new);
         if cur.is_some() {

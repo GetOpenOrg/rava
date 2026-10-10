@@ -169,19 +169,10 @@ impl Ctx<'_> {
             let mask = self.dispatch_slots(t);
             bound.iter().enumerate().any(|(i, b)| i < 64 && mask & (1 << i) != 0 && b.as_ref().is_some_and(fields_tag))
         };
-        let diag = std::env::var("RAVA_DIAG_CE").is_ok_and(|p| p.split(',').any(|p| key.contains(p)));
         if !pass && cur.nest >= MAX_DEPTH {
-            if diag {
-                eprintln!("[diag-ce] {key} 深度截断 {cur:?}");
-            }
             return None;
         }
-        let Some(frame) = self.memo_enter(format!("ceval:{key}"), false) else {
-            if diag {
-                eprintln!("[diag-ce] {key} 递归截断 {cur:?}");
-            }
-            return None;
-        };
+        let frame = self.memo_enter(format!("ceval:{key}"), false)?;
         self.stats.borrow_mut().ceval[2] += 1;
         self.ceval_depth.set(if pass { EvalDepth { pass: cur.pass + 1, ..cur } } else { EvalDepth { nest: cur.nest + 1, ..cur } });
         let live = |_: &str| true;
@@ -200,15 +191,6 @@ impl Ctx<'_> {
             Some(PV::Const(v)) if is_sysprops_tag(&v) => Some(v.stripped()),
             _ => None,
         };
-        if std::env::var("RAVA_DIAG_CE").is_ok_and(|p| p.split(',').any(|p| key.contains(p))) {
-            let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
-                Event::Return(v) => Some(format!("@{o} ret {v:?}")),
-                Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
-                Event::Invoke { mref, .. } => Some(format!("@{o} {}", mref.name)),
-                _ => None,
-            }).collect();
-            eprintln!("[diag-ce] {key} depth {cur:?} clean {clean} cons {} v {v:?} ev {}", a.conservative, evs.join(" "));
-        }
         Some(((v, inp), clean))
     }
 

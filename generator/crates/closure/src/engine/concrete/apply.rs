@@ -164,9 +164,6 @@ impl<'a> Engine<'a> {
 
     fn join_rval(&mut self, key: &MemberRef, r: PV) {
         let cur = self.ctx.rvals.borrow().get(key).cloned();
-        if std::env::var("RAVA_DIAG_PV").is_ok_and(|q| key.to_string().contains(&q)) {
-            eprintln!("[diag-rv] 具体求值 {key} r={r:?} cur={cur:?}");
-        }
         let new = PV::join(cur.as_ref(), &r);
         if cur.as_ref() == Some(&new) {
             return;

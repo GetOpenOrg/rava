@@ -268,16 +268,6 @@ impl<'a> Engine<'a> {
             }
         }
         let Some(r) = r else { return };
-        if std::env::var("RAVA_DIAG_PV").is_ok_and(|q| self.methods[m].key.to_string().contains(&q)) {
-            let cur = self.ctx.rvals.borrow().get(&self.methods[m].key).cloned();
-            let evs: Vec<String> = a.events.iter().filter_map(|(o, e)| match e {
-                Event::Return(v) => Some(format!("@{o} ret {v:?}")),
-                Event::Const { value, .. } => Some(format!("@{o}={value:?}")),
-                Event::Invoke { mref, .. } => Some(format!("@{o} {}", mref.name)),
-                _ => None,
-            }).collect();
-            eprintln!("[diag-rv] m={m} {} r={r:?} cur={cur:?} ev {}", self.ctx_label(m), evs.join(" "));
-        }
         self.sysprops_rval(m, a, &r);
         self.obj_ret_note(m, &r);
         self.site_ret_note(m, &r);
