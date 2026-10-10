@@ -83,11 +83,3 @@ signature = "Exception in thread \"main\" java.lang.NullPointerException"
 owner = "引导映像第 5 步 T3（jimage 嵌入数据 + getNativeMap，docs/plans/2026-10-05-boot-image-evaluator.md / 2026-10-02-boot-layer.md §2.3 第 6 条）"
 since = "2026-10-08"
 note = "`.class` 资源未内嵌：base.getResourceAsStream(\"java/lang/Object.class\") 返回 null 后 readNBytes NPE（前 23 行与 JDK 相同）；模块内容中的类字节随第 5 步 jimage 一并嵌入"
-
-# ── C4 全量第一轮（dev，c249cdec → 583edccd 续跑）失败复跑后仍失败、此前未登记（10-10）──
-[[known]]
-test = "TestUrlParsingFaces"
-signature = "java.net.MalformedURLException: unknown protocol: https"
-owner = "c4-url（URL 协议处理器补种）"
-since = "2026-10-10"
-note = "长期按已知失败对待但此前未登记；https 协议处理器未入闭包"

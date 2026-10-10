@@ -89,6 +89,7 @@
 
 > 依赖树仍为 10-08 版本，以本节与活跃任务表为准。
 
+- **c4-url（TestUrlParsingFaces，10-10）**：根因是 `URL$DefaultFactory.createURLStreamHandler@162` 按 `"sun.net.www.protocol." + protocol + ".Handler"` 按名取类，protocol 推不出，旧口径含任意串的候选只匹配已在闭包中的类，https 处理器不入闭包。修法：首段为字面量的任意串候选按类路径匹配（开放世界，`class_lookup.rs::anchored`），不用补种、无类名特判。类数：HelloWorld 580 不变、DeepCopy 3028 → 3033（+5 个处理器类）、TestUrlParsingFaces 3404 → 5123（https.Handler 经 `URL.openConnection` 分派牵出 SSL / JCA / certpath-LDAP / JNDI-RMI 栈，属 https 支持的固有代价）。抽查 8/8 通过（TestUrlParsingFaces、HelloWorld、DeepCopy、TestBuiltinUrlProtocol、TestUrlProtocolOpen、TestEmbeddedUrlRebuild、TestUriRawParts、TestSecurityPermissions）；全量单测仅 thread_local_lint 失败（main 既有，与本改动无关）；known_failures 条目已删。详见 `docs/plans/2026-10-07-c4-run-failures.md` §三。
 - **转译耗时回归（perf-regress4，第四轮达标，待合入）**：见 [`docs/plans/2026-10-09-transpile-time-regression.md`](plans/2026-10-09-transpile-time-regression.md)。CHM 表合并的真因是 `SerialCallbackContext.obj` 按类共用：序列化写方的全部对象图成了反序列化 `setObjFieldValues` 的写入目标，引起整堆字段互灌（8ce97959 让 `defaultReadObject` 路径入档案后触发）。c3ec480d 让值持有者（final `Object` 字段由构造器从实参写入）按对象分开。us1 同机对照（p4-t2）：DeepCopy 527 → 306 s / 4.1 GB，JNDI 606 → 348 s，序列化两例约 520 → 约 310 s；类集合对 batch-1010c 无新增（减少 17–40 个）。
 
 - **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。

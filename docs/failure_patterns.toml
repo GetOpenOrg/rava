@@ -1385,3 +1385,18 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+[[pattern]]
+id = "url-protocol-handler-by-name"
+stage = "run"
+symptom = "new URL(\"https://…\") 运行期抛 MalformedURLException: unknown protocol: <协议>（内建处理器未入闭包）"
+match = [["MalformedURLException: unknown protocol: https"], ["MalformedURLException: unknown protocol: http"], ["MalformedURLException: unknown protocol: ftp"], ["MalformedURLException: unknown protocol: mailto"]]
+tests = ["TestUrlParsingFaces"]
+cause = "URL$DefaultFactory.createURLStreamHandler@162 以 \"sun.net.www.protocol.\" + protocol + \".Handler\" 按名取类，protocol 来自 URL 串的逐字符解析、推不出，站点模式为 [Lit, Wild, Lit]；旧口径含任意串的候选只匹配已在闭包中的类，https / jmod / mailto 处理器无其他入链路径，运行期 Class.forName 取不到。修法（class_lookup.rs::anchored / classpath_matches）：首段为字面量（固定包前缀）的任意串候选按类路径匹配、命中的类全部入链（开放世界）；首段即任意串的候选仍只匹配闭包内类名"
+introduced = ""
+fixed = ["c4-url"]
+status = "pending"
+owner = "c4-url"
+diagnose = "--trace-class sun/net/www/protocol/<协议>/Handler 看是否入闭包；查按名取类站点的候选模式是否含任意串、首段是否字面量"
+doc = "docs/plans/2026-10-07-c4-run-failures.md §三"
+since = "2026-10-10"
