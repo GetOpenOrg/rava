@@ -10,6 +10,8 @@
 //!
 //! 预算取 e2e 语料实测每成员对象上下文克隆数的上界之上（DeepCopy / TestSerialLookupPairing 最多 1736，
 //! `ConcurrentHashMap$Node.<init>`），语料用例不触发，闭包与不设预算时逐项相同；只在框架规模的档案上生效。
+//! 只计实际新建的字节码克隆：非字节码方法本就回落本体，不占预算（初版按请求计数，DeepCopy 记 1.1 万次空合并）。
+//! 已知局限：触发后按先到先得分配细克隆名额，哪些上下文拿到细克隆随处理顺序变化（§4.10 遗留）。
 
 use super::*;
 
@@ -17,13 +19,9 @@ use super::*;
 const CTX_BUDGET: u32 = 2048;
 
 impl Engine<'_> {
-    /// 建节点前对对象上下文做预算收口（见模块说明）
+    /// 新建字节码方法克隆前对对象上下文做预算收口（见模块说明）；只在节点不存在时调用，已建的克隆照常沿用
     pub(super) fn budget_ctx(&mut self, key: &MemberRef, ctx: u32) -> u32 {
         if ctx == NOCTX || !self.objs.contains_key(&ctx) || self.ctx_heap.contains_key(&ctx) || self.level_ctxs.contains_key(&ctx) {
-            return ctx;
-        }
-        // 已建的克隆照常沿用（同一成员同一上下文始终落到同一节点）
-        if self.methods.contains_key(&(key.clone(), ctx)) {
             return ctx;
         }
         let n = self.ctx_fine.entry(key.clone()).or_default();

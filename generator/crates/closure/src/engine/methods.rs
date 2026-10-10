@@ -97,7 +97,6 @@ impl<'a> Engine<'a> {
     /// 方法节点（上下文已定；非字节码方法不克隆，回落本体）
     fn method_node(&mut self, key: MemberRef, ctx: u32, via: Via) -> usize {
         let ctx = self.free_ctx(&key, ctx);
-        let ctx = self.budget_ctx(&key, ctx);
         if !self.fwriter_live {
             self.handle_writer_edge(&key, &via);
         }
@@ -131,6 +130,11 @@ impl<'a> Engine<'a> {
         };
         if ctx != NOCTX && kind != Kind::Bytecode {
             return self.method_node(key, NOCTX, via);
+        }
+        // 新建字节码克隆前做预算收口（只计实际建出的对象上下文克隆）
+        let merged = self.budget_ctx(&key, ctx);
+        if merged != ctx {
+            return self.method_node(key, merged, via);
         }
         let mut ptypes = Vec::new();
         if !is_static {
