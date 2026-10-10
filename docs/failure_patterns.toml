@@ -54,7 +54,7 @@ cause = "process_concrete 按轨迹登记依赖但不登记字段节点，映像
 introduced = "b29b3042（枢纽形参槽污染：用户格式串改走具体求值，暴露潜伏缺陷）"
 fixed = ["6afde4a0", "9cc7f4a7"]
 status = "pending"
-owner = "c1d-fmt2（9cc7f4a7 待合批放行）"
+owner = "c1d-fmt2（终版 b04de767 待合批放行）"
 diagnose = "rava closure 输出 boot_image_data.live 查该类 statics 所指对象是否活；methods 里读该静态的方法 via 是否只有 kind = concrete；RUST_BACKTRACE=full rava build 看 [vm-throw] 栈"
 doc = "docs/plans/2026-10-01-c1d-closure-bloat.md §33.7 修正 4"
 since = "2026-10-10"

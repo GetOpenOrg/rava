@@ -4721,24 +4721,33 @@ fmt2-m4-b29b3042：DeepCopy 回退后应用组合 0（用户格式串全部直�
   两者都是健全可达，超出能力③的范围。日志链的出闭包归 a5-4f 日志后端线；资源束串的出闭包需要按名资源的构建期常量化。
 - TestStringFormat 另有一条：@concrete 说明符对象的按对象读混入了抽象 parse 的通配值（`owild`，机制 C 污染），`printDateTime` 经此可达。机制 C 的按对象读与通配分离留作后续。
 
-**实测（dev，合并 batch-1010d 后：基线 main 6a668ac6 对本分支 10e97917；`closure_composition_job.sh`，峰值为 RSS）**
+**实测（dev，终版：基线 main b1dae15c 对本分支 b04de767；`closure_composition_job.sh`，峰值为 RSS）**
 
-| 用例 | 基线 6a668ac6（类 / 方法，峰值） | 本分支 10e97917（类 / 方法，峰值） |
+| 用例 | 基线 b1dae15c（类 / 方法，峰值） | 本分支 b04de767（类 / 方法，峰值） |
 | --- | --- | --- |
 | HelloWorld | 577 / 1896，0.44 GiB | 580 / 1896，0.43 GiB |
-| DeepCopy | 3069 / 17019，4.98 GiB，366 s | 3055 / 16872，3.82 GiB，199 s |
-| LahNumbers | 2158 / 11085，1.38 GiB | 675 / 2431，0.48 GiB |
-| CollectorsDemo | 616 | 619 |
-| TestStringFormat | 2158，1.37 GiB | 2161，1.43 GiB |
-| StockTrans | 3067，4.98 GiB | 3053，3.79 GiB |
+| DeepCopy | 3038 / 16715，3.14 GiB | 3028 / 16587，2.80 GiB |
+| LahNumbers | 2158 / 11077，1.43 GiB | 675 / 2431，0.48 GiB |
+| CollectorsDemo | 616 / 2021 | 619 / 2021 |
+| TestStringFormat | 2158 / 11072，1.45 GiB | 2161 / 11072，1.49 GiB |
+| StockTrans | 3036 / 16699，3.12 GiB | 3026 / 16571，3.03 GiB |
 
+- 对 main 6a668ac6（合并 batch-1010d 后、batch-1010g/h 前）：
+  - DeepCopy 3069 / 17019 → 3055 / 16872，峰值 4.98 → 3.82 GiB，耗时 366 → 199 s。
+  - LahNumbers 2158 / 11085 → 675 / 2431。
+  - StockTrans 3067 → 3053，峰值 4.98 → 3.79 GiB。
 - 合并前（基线 956efa18，c1d-uri 未入）：DeepCopy 3727 / 21509 → 3726 / 21506，峰值 9.0 → 8.2 GiB（fmt2-m4 / m7）。
 - DeepCopy 与 StockTrans 的峰值和耗时下降，因为用户 printf / format 的格式串全部具体求值，parse 不再走抽象回退。
 - LahNumbers 大幅收缩，原因相同：printDateTime 等不再经用户格式串可达，Calendar / 区域数据链出闭包。DeepCopy 中 Calendar 仍经日志链与未知格式串可达，见上。
 - HelloWorld、CollectorsDemo、TestStringFormat 各 +3 类，是修正 4 的健全性代价（`ClassRepository.NONE` 链），方法数不变。
 - 作业：
-  - 合并后：fmt2-base-6a668ac6、fmt2-mj-6a668ac6 / fmt2-mj-10e97917（取 json，方法数）、fmt2-ut-10e97917 第 5 项（实测）。
+  - 终版：fmt2-base-b1dae15c、fmt2-ut-b04de767 第 5 / 6 项（实测）。
+  - 合并 1010d 后：fmt2-base-6a668ac6、fmt2-mj-6a668ac6 / fmt2-mj-10e97917（取 json，方法数）、fmt2-ut-10e97917 第 5 项（实测）。
   - 合并前：fmt2-base-956efa18、fmt2-m3-f8af6fed、fmt2-m4-b29b3042、fmt2-m5-b29b3042、fmt2-m7-6afde4a0、fmt2-h8-6afde4a0 / fmt2-h9-9cc7f4a7（HelloWorld 增量归因）。
   - 诊断：fmt2-npe3-0a8facaa（NPE 栈）、fmt2-lbase-956efa18 / fmt2-lmine-0a8facaa（映像活性对照）。
-- 单测（fmt2-ut-10e97917）：组 A / 组 B 及 `closure_independent_of_order`、`closure_independent_of_hash_seed` 的结果见 UT_FINAL。合并前 fmt2-ut-0a8facaa 的组 A / 组 B 均 0 失败，order 通过。
-- 抽查 30 例（含 printf / String.format 用例 25 例），fmt2-spot-6afde4a0、fmt2-spot-9cc7f4a7、fmt2-spot-10e97917 三轮均 30/30 通过。0a8facaa 上 LahNumbers 的 NPE 已由修正 4 解决。
+- 单测：
+  - 终版（fmt2-ut-b04de767）：组 A / 组 B 0 失败（`param_string_constants_fold_switch` 已不再失败），`closure_independent_of_hash_seed` 通过。
+  - `closure_independent_of_order` 在 DeepCopy batch 1 / seed 1 失败，差异只在 `boot_image_data.live`（3 个映像对象）。main b1dae15c 同样失败（fmt2-ov-b1dae15c，差异形态相同），属 batch-1010g/h 引入的既有失败，非本线。
+  - 合并 1010d 后（fmt2-ut-10e97917）：组 A / 组 B 0 失败，order 与 hash_seed 均通过。
+  - 合并前（fmt2-ut-0a8facaa）：组 A / 组 B 0 失败，order 通过。
+- 抽查 30 例（含 printf / String.format 用例 25 例），fmt2-spot-6afde4a0、fmt2-spot-9cc7f4a7、fmt2-spot-10e97917、fmt2-spot-b04de767 四轮均 30/30 通过。0a8facaa 上 LahNumbers 的 NPE 已由修正 4 解决。

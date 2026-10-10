@@ -105,15 +105,17 @@
 - **c1d-fmt2（10-10 完工待合批，分支 c1d-fmt2）**：C1d 能力③，详见 c1d 计划 §33.7。
   - 机制 B（`[concrete] object_results` = `Formatter.parse`）已恢复。内存受控靠结果对象按内容合并，用户 printf 不再污染 Formatter.format 靠枢纽形参槽污染。
   - 修复具体上下文的映像静态活性缺口（LahNumbers NPE，failure_patterns `concrete-ctx-image-static-dead`）。
-  - 对 main 6a668ac6 实测：
+  - 对 main b1dae15c 实测：
 
-    | 用例 | 基线（类 / 方法，峰值） | 本分支（类 / 方法，峰值） |
+    | 用例 | 基线（类 / 方法，峰值） | 本分支 b04de767（类 / 方法，峰值） |
     | --- | --- | --- |
-    | DeepCopy | 3069 / 17019，4.98 GiB | 3055 / 16872，3.82 GiB |
-    | LahNumbers | 2158 | 675 |
+    | DeepCopy | 3038 / 16715，3.14 GiB | 3028 / 16587，2.80 GiB |
+    | LahNumbers | 2158 / 11077 | 675 / 2431 |
     | HelloWorld | 577 / 1896 | 580 / 1896 |
 
     HelloWorld 的 +3 类是健全性代价（`ClassRepository.NONE`）。
+  - 单测 A / B 0 失败，hash_seed 通过，抽查 30/30。
+  - **main b1dae15c 的 `closure_independent_of_order` 失败**：DeepCopy batch 1 / seed 1，差异在 `boot_image_data.live`，fmt2-ov-b1dae15c，batch-1010g/h 引入。
   - 余项：DeepCopy 的 Calendar 仍经日志链（`ObjectInputFilter$Config.<clinit>` → System.Logger → MessageFormat）与真正未知格式串（`SimpleConsoleLogger.format` 属性、`toGMTFormat` 资源束串）可达；TestStringFormat 有机制 C 的 owild 污染；「仅身份」映像活性层未做。
 - **引导映像零拷贝（boot-zerocopy，10-10 完工入 batch-1010b）**：映像表改链接期符号、驻留查找回填运行期表；整进程墙钟 HelloWorld 195 → 178 ms、DeepCopy 314 → 292 ms，二进制 −0.9%。未达标：`__boot_image_start` 156 / 176 ms（目标 ≤1 ms，热点采样作业 zc-prof-669365cf）、DeepCopy 门面峰值 1779 MB（目标约 1.6 GB，需映像静态按块分 crate）；release 档待大内存机器；D5 残差区、S6 标准流未做。续作入口：引导映像计划 §5.10.5（属纯优化，按 10-06 分级暂缓）。
 - **fix-e0283-nd（10-10，C4 全量失败 NormalDistribution）**：根因——null 存入 / 汇合 / 实参等路径先把 null 落成无类型 `Default::default()`，随后再经 Object 边界或 `From` / `Into` / checkcast 转换（`<T as From<Object>>::from(Object::from(Default::default()))`），源类型不可推断（E0283，`AbstractPipeline` 局部 `p` 的跨实例化重建）。修法：在转换构造的公共入口统一处理——`sim::exprs` 的 `object_from` 对无类型缺省值取 Object 的 null，`qualified_from` / `into_call` / `instr::coerce::cast_node` 取目标类型的 `<T as Default>::default()`，`from_call` 原样返回；文本层 `to_object_text` 与 `unify` 的 `from_object` / `from_common` 同口径；存储重建 `rebuild_via_object` 对 null 直接取声明类型缺省值。验证：抽查 fixnd2（jp2）NormalDistribution 通过；单测作业 fixnd-ut2（dev，generator 除 driver）全过。
