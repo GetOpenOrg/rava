@@ -1,6 +1,6 @@
 # 转译耗时回归调查（2026-10-09，分支 perf-regress）
 
-> 状态：**未完成，第三轮到时收尾**（10-10 04:30）。四例转译仍比 b1012 慢约 1.6×，耗时目标未达到。0269f622 多出的类真因已找到并修复（c02c1825，枢纽形参常量格），pr-tg6 / pr-tg7 核实类集合比 bedc57aa 少 2 个、无新增；CHM 表合并的引入点已列出（主因是摘要克隆的 open 接收者），终态修复未实施。恢复入口见文末。
+> 状态：**第四轮达标**（10-10，分支 perf-regress4，修复提交 c3ec480d）。CHM 表合并的真因是 `SerialCallbackContext.obj` 按类共用字段视图：序列化写方的全部对象图成了反序列化 `setObjFieldValues` 的写入目标，按偏移整堆互灌字段。值持有者按对象分开后，四例转译比 e5200a3e 快 40%（DeepCopy 306 s / 4.1 GB，JNDI 348 s），类集合对 batch-1010c 无新增。第三轮及以前的「摘要克隆 open 接收者」判断是误读，见「第四轮」。
 
 ## 现象
 
@@ -165,19 +165,51 @@ pr-tg6 按 c02c1825 → e5200a3e 顺序跑；第三段 c02c1825 因脚本在共�
 - 耗时与峰值：c02c1825 与 bedc57aa 持平（DeepCopy +2%，JNDI +1%，在噪声内），比 e5200a3e 慢 1.68×。峰值 6.9 GB（DeepCopy）/ 8.0 GB（JNDI），未达到 ≤6 GB 目标。CHM 表合并未修是主因。
 - 单测（dev）：A 组 pr-ut-c02c1825 只有已知失败 `param_string_constants_fold_switch`；B 组 pr-utB-c02c1825 全过；`closure_independent_of_hash_seed`（pr-uth-c02c1825）通过。
 
+## 第四轮（10-10，分支 perf-regress4，基于 batch-1010c）
+
+### 真因：`SerialCallbackContext.obj` 按类共用，写方对象图成为读方写入目标
+
+- 第三轮把 CHM 私有方法的 P0 列为 open(CHM) 引入点，是误读：`edge_recv_in` 把非对象接收者（open + 类 id）以字面 `Feed::S(rest)` 交给 NOCTX 本体，`@opens` / `@openinj` 因而把这些 P0 报为「无前驱」，open 实际来自调用方。新增诊断 `--flows @escin:<类>`（a7d8ea4b）列出流入逃逸汇点的源节点。
+- `@trace:open:ConcurrentHashMap`（p4-trace3，dev）：最早的 open(CHM) 来自手写写入 `FieldReflector.setObjFieldValues@241 → Unsafe.putReference`。写入值是 vals 数组里的 open(Object)，按字段类型收窄后，写进大量抽象对象（含映像对象 `KeySetView@image236`）的 `CollectionView.map`。随后 `KeySetView.add` 读出 open(CHM)，进入 putVal / initTable / transfer 的 NOCTX 本体，F(table) → U(table) 的往返把表散到全体逃逸 CHM。
+- 写入目标为何这么宽（p4-path1，`@path`）：
+  1. 写方 `writeSerialData` 构造 `new SerialCallbackContext(obj, slotDesc)`。
+  2. 读方 `defaultReadObject` 用 `curContext.getObj()` 取当前对象，再交给 `setObjFieldValues`。
+  3. `SerialCallbackContext` 不是容器形态类，`obj` 字段走按类共用的 F / U，于是读方拿到写方 `writeObject0` 递归走过的全部对象（12179 个值）作为反序列化写入目标。
+  4. 结果是 `getObjFieldValues` 读出的整堆字段值经 `setObjFieldValues` 按偏移写回整堆对象的同类型字段，形成整堆字段互灌。CHM 的 table / map 字段被灌成全体表集合，逃逸 CHM 从 1 个涨到 28 个。
+- 8ce97959 之所以触发跳变：它让 `ObjectStreamClass` 的 Method 缓存不再混入 open(Method)，`invokeWriteObject` / `invokeReadObject` 精确派发到各类自身的 readObject / writeObject，`defaultReadObject` 这条路径因而进入档案。
+
+### 修复（c3ec480d，`engine/classes.rs` `container_shape`）
+
+- 新增一类容器形态：**值持有者**，即类链上有 final 的 `Object` 型实例字段，且本类某个构造器以「aload 非 this 局部量 → putfield 该字段」写入它。
+- 这类对象按分配点 × 堆上下文分开，每个持有者只给出自身的构造实参。读方与写方的 `SerialCallbackContext` 因此是不同的抽象对象。
+- 纯字节码形态判定，不列类名。结果只取决于类文件，与分析顺序无关；更细的对象划分只缩小值集，是单调的。
+- 修复后（p4-d1，dev，closure 模式）：DeepCopy 411 → 166 s，峰值 7240 → 4177 MB；逃逸 CHM 从 28 个降到 1 个，open(CHM) 引入点清零；`setObjFieldValues` 的写入目标不再含写方对象。
+
+### 实测（p4-t2，us1，build 模式，同机交替，先 e5200a3e 后 c3ec480d；秒 / MB / 类）
+
+| 用例 | e5200a3e | c3ec480d | batch-1010c（a7d8ea4b，us1 closure 模式，p4-esc1 / p4-c1） |
+|---|---|---|---|
+| DeepCopy | 527 / 5983 / 3842 | **306 / 4104 / 3686** | 861 / 6777 / 3726 |
+| TestJndiNoProvider | 606 / 6812 / 4086 | **348 / 4616 / 3990** | 984 / 7933 / 4007 |
+| TestSerialDefaultSuid | 520 / 5907 / 3847 | **309 / 4131 / 3691** | 866 / 7131 / 3731 |
+| TestSerialUserGenericCallbacks | 521 / 6294 / 3845 | **313 / 4032 / 3749** | 863 / 6982 / 3769 |
+
+p4-t1（us1，c3ec480d 单跑）：DeepCopy 309 / 4082，JNDI 354 / 4642。
+
+- 四例都比 e5200a3e 快约 40%，JNDI 348 s ≤ 350 s，DeepCopy 峰值 4.1 GB ≤ 6 GB。
+- 类集合：四例对 batch-1010c **无新增**，分别减少 DeepCopy 40、JNDI 17、SerialDefaultSuid 40、SerialUserGenericCallbacks 20 个，减少的是整堆互灌带入的各集合拆分器、AbstractMap$1 等。对 e5200a3e 只多 `Method$Direct$It` / `Method$Direct$Marks`，属 b1013 的直连反射支持，与本轮无关。
+- e2e 单例（dev，p4-e1 / p4-e2）：DeepCopy、TestSerialDefaultSuid、TestSerialUserGenericCallbacks、TestSerializationHooks、TestSerialAllocTargets、SerializableDemo 全部 PASS。
+- 单测（us1，p4-ut，f0ceb0ab）：A / B 组与 rava_macros_core 全过，0 失败（顺序 / 种子两项单独跑，见下）。
+- 顺序无关（p4-uoh，dev，c3ec480d；p4-uoh-head2，jp1，d14e11fe）：`closure_independent_of_hash_seed` 失败，StockTrans 种子 0 多 `Nodes$CollectionNode.forEach`。这与集成分支已登记的失败同一根因（tasks.md order-findops 条：`engine/ctxsel.rs` `selector_ctx` 读尚未定论的常量格来选上下文；集成分支上表现为 TestSerialDefaultSuid 多出同一方法），不是本轮引入。`closure_independent_of_order` 在 c3ec480d / d14e11fe 上失败于 HelloWorld / DeepCopy。这两个提交都不含 203be167（order-findops 修复），集成分支修复前同样失败。合入新基线（405c84db）后的复测：p4-uoh-m2（34cdcf9e）与同机对照 p4-uoh-m2b（405c84db），截止交付时仍在 dev 上运行；旧基线对照 p4-uoh-int2（81a2ee61，us1）也未出结果。
+
 ## 残留与建议
 
-1. **CHM 表合并（最高优先，未修）**：引入点见「第三轮 · CHM 表合并：open CHM 的引入点」。终态方向是摘要克隆的接收者取调用方实参集而不是 open，字段写按接收者对象落 O，不落公共 U；另核实 Object[] 元素 open 的来源。逐逃逸对象展开（93d80e65）已证代价过高且不消合并，不再走这条路。不截断入口、不关精度。
-2. **c02c1825 的验证**：类集合、测时、单测 A / B 已完成（见「第三轮实测」）。`closure_independent_of_hash_seed`（pr-uth-c02c1825，dev）通过（1 passed，8947 s）。
-3. TreeBin.find → findTreeNode：选择子常量克隆的非虚调用点可按「基调用点 × 常量」建枢纽（未做）。
-4. `lambda_vals.rs` 的 lambda 捕获参数常量仍用 `PV::of`，与 `bind_params` / 枢纽的 `PV::of_ret` 不同口径（未改，需单独测类集合）。
-5. 在 3972ce9b（pr-tmp-eg-1dbfd22c）/ cfa8a743（pr-tmp-eg-8ce97959）/ 6c687d65 上逐点测 JNDI（未做）。
-6. 序列化两例（TestSerialDefaultSuid / TestSerialUserGenericCallbacks）尚未在 us1 / jp1 上与 e5200a3e 同机对照。
-7. 临时引用：**保留** pr-tmp-eg-1dbfd22c、pr-tmp-eg-8ce97959（第 5 项要用，origin 与 github 均在）。
+1. **CHM 表合并：已修**（c3ec480d，见「第四轮」）。第三轮的「摘要克隆 open 接收者」方向不再需要。
+2. TreeBin.find → findTreeNode：选择子常量克隆的非虚调用点可按「基调用点 × 常量」建枢纽（未做，耗时已达标，优先级降低）。
+3. `lambda_vals.rs` 的 lambda 捕获参数常量仍用 `PV::of`，与 `bind_params` / 枢纽的 `PV::of_ret` 不同口径（未改，需单独测类集合）。
+4. 临时引用 pr-tmp-eg-1dbfd22c、pr-tmp-eg-8ce97959：逐点测 JNDI 已无必要，可删。
 
 ## 恢复入口
 
-- 分支 perf-regress，代码 head c02c18250bd48f64dc1a007911416d04e2f47165，脚本修复 53a03514（集成分支 c249cdec 已 merge 进来，即 bedc57aa）；worktree `/Users/yuwei/dev/workspace/rava_perfregress`。
-- 先取第 2 项结果。之后做第 1 项：在一台空闲服务器上跑
-  `TTIME_MODE=closure bash scripts/transpile_time_job.sh --extra '--flows @opens:java/util/concurrent/ConcurrentHashMap' tests/e2e/23_algorithms/DeepCopy.java <head>`，先确认摘要克隆 P0 的 open 由哪种克隆构造给出（配合 `@ctxsets:ConcurrentHashMap.addCount`），再核实三个 Object[] 的身份与元素为何 open（`--extra` 内不得含 `$`，含 `|` 须加引号；经 `distribute_tests.py --job <tag> --fetch 'build/ttime/**'` 下发）。
-- 同机对照基准（pr-tg1，us1，build 模式，秒 / MB / 类）：e5200a3e DeepCopy 522 / 5959 / 3842、JNDI 600 / 6810 / 4086；bedc57aa DeepCopy 855 / 7208 / 3728、JNDI 993 / 7831 / 4009。
+- 分支 perf-regress4，修复 c3ec480d，诊断 a7d8ea4b（`@escin`），已 merge origin/rust-closure-analyzer（f0ceb0ab、d14e11fe、34cdcf9e）；worktree `/Users/yuwei/dev/workspace/rava_perf4`。
+- 同机对照基准（p4-t2，us1，build 模式）见「第四轮 · 实测」。
