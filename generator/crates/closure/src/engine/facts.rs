@@ -164,9 +164,6 @@ pub(super) struct Ctx<'a> {
     pub(super) rvals: RefCell<HashMap<MemberRef, PV>>,
     /// 偏移可得、不折叠的字段：反射 / VarHandle / Unsafe 按名取得的字段
     pub(super) fopen: RefCell<HashSet<MemberRef>>,
-    /// 已求出符号偏移、尚待放开的字段（`field_offset` 登记，引擎主循环排空为 `open_field`）：符号偏移可能在
-    /// 常量求值（`static_const` 折叠的 `<clinit>`、构建期初始化类不入链）中求出，此时按名取偏移的调用点不经活方法分析
-    pub(super) offset_pending: RefCell<Vec<MemberRef>>,
     /// 偏移可得、不折叠的字段名（按名取得推不出所属类）
     pub(super) fopen_names: RefCell<HashSet<String>>,
     /// 手写体写入的字段：只不折叠，偏移不因此可得（手写体按 Rust 字段直接写，不经偏移）

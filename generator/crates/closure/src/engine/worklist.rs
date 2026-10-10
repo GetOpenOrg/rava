@@ -53,7 +53,6 @@ impl<'a> Engine<'a> {
         let mut batch = 0usize;
         loop {
             self.pkey_flush();
-            self.offset_drain();
             if !self.obj_dirty.is_empty() {
                 self.stat_enter(Phase::Flows);
                 self.obj_flush();
@@ -124,10 +123,6 @@ impl<'a> Engine<'a> {
                 }
                 // JCA 提供者序：其余放行都完成后判定装载器调用点能否继续扣住（`jca_order.rs`）
                 if self.jca_order_release() {
-                    continue;
-                }
-                // 收尾放行中求出的符号偏移：放开所指字段，读者重算
-                if self.offset_drain() {
                     continue;
                 }
                 self.promote_layout();

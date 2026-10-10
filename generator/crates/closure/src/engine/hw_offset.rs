@@ -8,30 +8,18 @@ use super::*;
 
 impl<'a> Engine<'a> {
     /// 调用点 (m, off) 的偏移实参（序号含接收者）所指字段节点：调用方当前分析给出符号偏移时。
-    /// 符号偏移求出时所指字段已登记放开（[`Self::offset_drain`]），这里只取字段节点
+    ///
+    /// 符号偏移是按名取得的字段偏移，按名取偏移即放开该字段（`field_names.rs`）。取偏移的调用点却可能不经活方法
+    /// 分析：`<clinit>` 由常量求值（`static_const`）折叠、偏移经 static final 字段直达访问点（如类镜像的反射数据
+    /// 缓存按 CAS 写入），按名入口从未登记。这里在消费点补放开所指字段：其常量格与按对象值不再按字节码写入折叠
     fn site_offset(&mut self, m: usize, off: u32, idx: Option<usize>) -> Option<usize> {
         let idx = idx?;
         let a = self.methods[m].applied.clone()?;
         let Some(Event::Invoke { args, .. }) = class_lookup::event_at(&a, off, class_lookup::is_invoke) else { return None };
         let V::Offset(f) = args.get(idx)? else { return None };
-        Some(self.field_node((**f).clone()))
-    }
-
-    /// 排空已求出符号偏移、待放开的字段（`Ctx::field_offset` 登记）：按名取偏移即放开该字段。
-    /// 取偏移的调用点可能不经活方法分析——`<clinit>` 由常量求值（`static_const`）折叠、构建期初始化类的
-    /// `<clinit>` 不入链，偏移经 static final 字段直达 Unsafe 访问点（引用读写、基本类型 CAS / getAndAdd），
-    /// 按名入口从未登记；字段若仍按字节码写入折叠，按偏移的写入不进常量格，读取被折叠为缺省值（CAS 重试
-    /// 不终止、任务完成状态恒为初值）。返回是否放开了新字段
-    pub(super) fn offset_drain(&mut self) -> bool {
-        let fs = std::mem::take(&mut *self.ctx.offset_pending.borrow_mut());
-        let mut any = false;
-        for f in fs {
-            if !self.ctx.fopen.borrow().contains(&f) {
-                self.open_field(f);
-                any = true;
-            }
-        }
-        any
+        let f = (**f).clone();
+        self.open_field(f.clone());
+        Some(self.field_node(f))
     }
 
     /// 登记 / 复核站点 s 的触及字段；偏移实参变化即放宽并按当前实参集重放写入与读取
