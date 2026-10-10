@@ -41,7 +41,7 @@ impl Oracle for Facts<'_, '_> {
                 return Ret::Value(v);
             }
         }
-        if let Some(r) = self.ctx.derived_result(self.m, opcode, m, iface, args, &c) {
+        if let Some(r) = self.ctx.derived_result(self.m, self.level, opcode, m, iface, args, &c) {
             return r;
         }
         // 返回串形状事实：常量实参能求出常量时取常量
@@ -85,6 +85,10 @@ impl Oracle for Facts<'_, '_> {
                 _ => Ret::Unknown,
             };
         };
+        // 受理调用：实参是引导期校验过的动态属性值（`[facts.system_properties.accepted]`）
+        if let Some(v) = self.ctx.accepted_call(t, args) {
+            return Ret::Value(v);
+        }
         let eval = || self.ctx.const_eval(self.m, t, args).map_or(Ret::Unknown, Ret::Value);
         let Some(me) = self.m else { return eval() };
         // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）

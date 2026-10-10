@@ -52,7 +52,7 @@ impl Ctx<'_> {
                 Some(k) => {
                     let mut a = args.to_vec();
                     a[spec.key] = V::lit(k.as_str());
-                    let Some(Ret::Value(v)) = self.prop_read(Some(me), spec, &a) else { return None };
+                    let Some(Ret::Value(v)) = self.prop_read(Some(me), spec, &a, None) else { return None };
                     v
                 }
                 None => self.absent_read(me, spec, args, p)?,
