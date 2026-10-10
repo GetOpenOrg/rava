@@ -306,3 +306,56 @@
       第 7 条已知回归）。
 
 
+
+14. **J3 形态接线（2026-10-10，分支 junit-j3j4：5f312221 / 168d0f23）**：
+    - `scripts/e2e_form.py`（新，S7 拆分时整体搬入 `scripts/e2e/select.py`）：`form_of(java_file)`（按目录缓存，
+      无 form.toml 返回 None）、`Form.deps_args()` → `--deps <锁> --cp <条目名,…>`、`Form.classpath()`（锁序 jar
+      绝对路径）、`java_classpath(classes, form)`；条目名口径与 `driver::deps_lock` 一致（坐标 artifactId，否则
+      文件名 stem）。Python 中无库名 / 类名，依赖内容全部来自锁。
+    - `tests/e2e/63_junit/form.toml`：`deps` / `cp = ["hamcrest", "junit"]` / `fetch = "scripts/fetch_pilot_deps.sh --no-scan"`
+      （取包命令是形态数据，Python 不写死脚本名）。
+    - 取包：形态在批次内首次用到时检查一次（线程安全）；缺锁 / 缺 jar 且锁为缺省路径时取包，**跨进程 fcntl
+      互斥 + 持锁复查**（多槽共用一个检出，fetch 脚本会 `rm -rf pilot-libs`，168d0f23）；取包后仍缺 → 该用例记
+      `deps-fetch-fail`（结果行 / 失败分类 / 汇总同列），不静默跳过。
+    - `run_tests.py` 接线点：①转译追加 `deps_args()`；②期望生成 javac / java 带 `-cp classes:jars`；③动态对照
+      JVM `-cp` 带同一 jar 表，jar 内类在 dyn 域判定中记 `lib` 域（`dyn_compare.py --lib JAR`）。
+      **偏离任务书 ③**：任务书写「从 scratch 的 profile.json entries[].classpath 读取」，但单入口 `rava build`
+      不写 profile.json（只有 `rava profile` 写），实测 scratch 内无此文件；改为由形态把 jar 表作参数传入。
+      S6 把 dyn 并入 rava 时数据源改为 rava 内部的入口类路径（同一锁选集），本处 Python 随 S6 删除。
+    - `--pilot-libs DIR`：jar 资产根；非缺省时锁取 `DIR` 上级目录下与 `deps` 同名的锁（与 fetch 产出布局一致），
+      且不自动取包。
+    - 单测 `tests/unit/test_e2e_form.py` 7 例。非形态目录零行为变化：作业 `junit-nr-d22152f8`（dev）以 a8fbebb6 的
+      run_tests / dyn_compare 与本分支各跑 `--no-run --filter HelloWorld`，规范化时间后逐行对照：**NORUN-EQUAL**（两侧 rc=0，dyn miss 0）。
+
+15. **J4 注解驱动反射入口：无补种 8/10 逐字通过（2026-10-10，抽查 junit-d22152f8，dev）**：
+    - 63_junit 10 例**全部完成转译、编译与运行**，只经 `--deps/--cp`，无任何 `--seed-class` / 库专属清单：
+      AssertThrowsAssume / BeforeClassState / HamcrestBridge / IgnoreAndExpected / LifecycleOrder /
+      NewInstancePerTest / RunnerResult / TimeoutFast **8 例 PASS**；新增用例 `47_annotations/TestAnnotationDrivenRunner`
+      （用户自定义注解 + 集合传递的类镜像 → getMethods / getDeclaredMethods / getDeclaredFields → 注解与元素值过滤 /
+      修饰符过滤 → Constructor.newInstance / Field.set / Method.invoke，含继承、覆盖、静态、期望异常、私有字段注入；
+      期望取本机 OpenJDK 21.0.12）PASS；HelloWorld / DeepCopy PASS。
+    - 结论：通用建模已由既有机制覆盖，**J4 无需改分析器 / 生成器**——用户类注解经 seeds/annotation.rs 按
+      RuntimeVisibleAnnotations 通用补种（含元注解、嵌套注解、enum / Class 元素类型）；成员枚举
+      `Enum(Members)` 对类镜像值集点名；反射调用通道（reflect_call.rs）按接收者实参池与 VM 枢纽派发；
+      本分支基于 a8fbebb6，未含 c4-reflect（反射调子类覆盖命中存根）；63_junit 的反射调用目标均为测试类自身声明
+      的方法，未踩该缺口，两分支无文件交叠。JUnit 的 @Test / @Before / @BeforeClass /
+      @Ignore / @Test(expected, timeout) 全部经此通用路径发现。生成器与分析器无 junit / hamcrest 字面量（未改）。
+    - 余 2 例（AssertFamily / FailureMessages）只差 assertSame 失败消息中 `java.lang.Object@<身份哈希>` 一行：
+      期望来自 HotSpot（线程内 xorshift，同 JVM 逐次确定），原生二进制按地址取哈希、逐次不同（sg1 与 dev 两次运行
+      值也不同）。属测试确定性缺陷（e2e 方法论 §五「不打印 identityHash」），非生成器问题；本任务禁止改测试源，
+      待用户裁定（建议：被比较对象改为带定值 toString 的对象）。known_failures 已改登此签名，failure_patterns
+      `junit-identity-hash-expected`。
+    - 动态对照：AssertFamily 漏覆盖 57 全部是 JVM jar 类路径加载机制（URLClassPath$JarLoader / ZipFile / JarFile /
+      Manifest …），栈顶未建模帧为 JVM 解析符号引用时对应用类加载器的上调 `ClassLoader.loadClass(String)`——原生
+      二进制静态链接，没有这条路径。closure.toml `[dynamic]` 增方法级 `vm_upcall_methods`（只供 dyn_compare 读，
+      不影响闭包），该帧之上归 `vm-upcall`；抽查 junit-cc50cfd8（dev）复验 AssertFamily dyn miss 57 → **0**（vm-upcall=57），
+      其失败按新签名判为已知。FailureMessages 漏覆盖 5（StreamOpFlag.<clinit> → EnumMap 等、
+      VarHandle.<clinit> → VarHandleGuards）是构建期初始化类 `<clinit>` 的通用口径问题，与 JUnit 无关，未在本任务处理。
+    - 闭包规模：本分支未改生成器 / 分析器 / runtime 代码（只改 scripts、closure.toml 的 dyn 专用段、测试与文档），
+      HelloWorld / DeepCopy 闭包类数与 main 相同（变化 0）。
+
+16. **身份哈希 2 例改测试源（2026-10-10，用户批准）**：AssertFamily / FailureMessages 的 assertSame 失败用例原用两个
+    `new Object()`，失败消息含 HotSpot 身份哈希，违反方法论 §五——测试本身不合规，不属「合法测试不改」。改为定值
+    toString（`Token(left)` / `Token(right)`）、不覆盖 equals / hashCode 的嵌套类型，断言语义不变；期望经本机 OpenJDK
+    21.0.12（类路径 hamcrest-3.0 + junit-4.13.2，锁序）重生成，双跑逐字一致，差异仅该一行。known_failures 两条删除，
+    failure_patterns `junit-identity-hash-expected` 记 fixed。抽查 junit-5a0993c1（dev，5a0993c1）：**63_junit 10/10 + HelloWorld 全部 PASS**——J4 验收 10/10 达成。
