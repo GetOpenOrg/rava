@@ -99,6 +99,8 @@ pub(super) struct Concrete {
     applied: HashSet<(usize, u32, Vec<AK>)>,
     /// 已回退抽象调用边的调用点
     fallback: HashSet<(usize, u32)>,
+    /// 回退后逐组应用时已处理过的 (调用方节点, 偏移, 实参)：单组的结论（应用 / 失败 / 引用容器）与次序无关，处理一次即可
+    partial_tried: HashSet<(usize, u32, Vec<AK>)>,
     /// 结果按对象物化的类：`[concrete] object_results` 各入口字节码自身 `new` 的类（分析前按字节码确定，
     /// 按对象读的形参门据此放行，见 `obj_fields.rs::obj_param_set`）
     pobj_types: HashSet<Rc<str>>,
@@ -168,7 +170,10 @@ impl<'a> Engine<'a> {
         }
         if self.concrete.fallback.contains(&(m, off)) && self.man.concrete.object_results.contains(&*k) {
             if let Some(c) = self.concrete_known(m, off, md, recv, args) {
-                self.concrete_run(m, off, resolved, md, &k, &c, site_name, true);
+                let c: Vec<Vec<AK>> = c.into_iter().filter(|c| self.concrete.partial_tried.insert((m, off, c.clone()))).collect();
+                if !c.is_empty() {
+                    self.concrete_run(m, off, resolved, md, &k, &c, site_name, true);
+                }
             }
         }
         false
@@ -218,6 +223,10 @@ impl<'a> Engine<'a> {
                 let t = t.clone();
                 return self.concrete_fallback(m, off, site_name, format!("结果引用映像中的容器形态对象 {t}"));
             }
+        }
+        if partial && bad.iter().all(Option::is_some) {
+            // 无可应用的组合：不接具体入口（是否有可应用组合与次序无关）
+            return false;
         }
         let entry = self.method_ctx(resolved.clone(), self.concrete.ctx, Via::method("concrete", m, Some(off)));
         self.dispatch.entry((m, off)).or_default().insert(entry);
