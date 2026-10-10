@@ -1010,6 +1010,9 @@ Z = "java/lang/Boolean"
 entries = [
     "java/util/Formatter.parse:(Ljava/lang/String;)Ljava/util/List;",
     "java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern;",
+    # 按常量名取字符集（c1d 计划 §34）：标准提供者命中即返回，轨迹不经扩展 / 服务提供者查找；
+    # 名字推不出的调用点照旧回退抽象调用边
+    "java/nio/charset/Charset.forName:(Ljava/lang/String;)Ljava/nio/charset/Charset;",
     # 实例方法入口：接收者值集须全部是所指已知的类镜像（逐镜像求值）
     "java/lang/Class.getGenericInterfaces:()[Ljava/lang/reflect/Type;",
 ]
