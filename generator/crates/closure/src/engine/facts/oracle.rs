@@ -15,6 +15,15 @@ fn dbg_field_on(f: &MemberRef) -> bool {
     std::env::var("RAVA_DBG_FIELD").is_ok_and(|w| w.split(',').any(|k| k == f.to_string()))
 }
 
+/// 临时诊断：答复的种类名（`Ret` 无 Debug）
+fn ret_kind(r: &Ret) -> &'static str {
+    match r {
+        Ret::Value(_) => "Value",
+        Ret::Never => "Never",
+        Ret::Unknown => "Unknown",
+    }
+}
+
 impl Oracle for Facts<'_, '_> {
     fn invoke_result(&self, opcode: u8, off: u32, m: &MemberRef, iface: bool, args: &[V]) -> Ret {
         if let Some(l) = self.level {
@@ -100,17 +109,8 @@ impl Oracle for Facts<'_, '_> {
         let Some(me) = self.m else { return eval() };
         // 静态调用点接克隆节点：取节点返回值（`site_rets.rs`，依赖由引擎登记）
         let site = if opcode == classfile::op::INVOKESTATIC { self.sites.iter().find(|(o, _)| *o == off).map(|(_, a)| a) } else { None };
-        // 临时诊断（RAVA_DBG_RET，逗号分隔多键）：被调成员键匹配时打印答复
-        if let Ok(want) = std::env::var("RAVA_DBG_RET") {
-            if want.split(',').any(|k| t.to_string().contains(k)) {
-                eprintln!(
-                    "[invoke] {t} @{off} rvals={:?} per={per:?} @ 方法#{me}",
-                    self.ctx.rvals.borrow().get(t)
-                );
-            }
-        }
-        let r = match (per, site) {
-            (Some(p), _) => Some(p),
+        let r = match (&per, site) {
+            (Some(p), _) => Some(p.clone()),
             (None, Some(SiteAns::Never)) => {
                 self.ctx.dep(me, Dep::Never);
                 return Ret::Never;
@@ -121,6 +121,17 @@ impl Oracle for Facts<'_, '_> {
                 self.ctx.rvals.borrow().get(t).cloned()
             }
         };
+        // 临时诊断（RAVA_DBG_RET，逗号分隔多键）：被调成员键匹配时打印汇合格与答复来源
+        if let Ok(want) = std::env::var("RAVA_DBG_RET") {
+            if want.split(',').any(|k| t.to_string().contains(k)) {
+                let ans = match &r {
+                    Some(PV::Const(v)) => format!("汇合Const({v:?})→求值{}", ret_kind(&eval())),
+                    Some(PV::Top) => format!("汇合Top→求值{}", ret_kind(&eval())),
+                    None => format!("汇合缺席（Never={}）", self.ctx.noreturn.borrow().answer_never(t)),
+                };
+                eprintln!("[invoke] {t} @{off} per={per:?} site={site:?} {ans} @ 方法#{me}");
+            }
+        }
         match r {
             // 汇合格是常量（含小集合 / 非空引用 / 映像对象）：先按本调用点的常量实参求值，求不出时取汇合格。
             // 求值结果只取决于本调用点实参与被调方法的字节码，是本调用点的精确值；汇合格在不动点途中只是部分
