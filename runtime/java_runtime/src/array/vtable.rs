@@ -8,13 +8,11 @@ use super::*;
 /// 数组类（JLS §10.8）：反射创建数组按组件标签，其余按元素类型 T。
 fn array_class<T: Default + Into<Object> + 'static>(tag: Option<&Rc<str>>) -> crate::error::Result<crate::java::lang::Class> {
     if let Some(d) = JArray::<T>::primitive_elem_descriptor() {
-        return Ok(crate::java::lang::Class::for_class(
-            crate::java::lang::String::from(format!("[{}", d).as_str())));
+        return Ok(crate::java::lang::Class::for_class(format!("[{}", d).as_str()));
     }
     if let Some(tag) = tag {
         let binary = if tag.starts_with('[') { format!("[{}", tag) } else { format!("[L{};", tag) };
-        return Ok(crate::java::lang::Class::for_class(
-            crate::java::lang::String::from(binary.as_str())));
+        return Ok(crate::java::lang::Class::for_class(binary.as_str()));
     }
     let elem_name = format!("{}", Into::<Object>::into(T::default())
         .0.getClass()?
@@ -25,8 +23,7 @@ fn array_class<T: Default + Into<Object> + 'static>(tag: Option<&Rc<str>>) -> cr
     } else {
         format!("[L{};", elem_name)
     };
-    Ok(crate::java::lang::Class::for_class(
-        crate::java::lang::String::from(binary.as_str())))
+    Ok(crate::java::lang::Class::for_class(binary.as_str()))
 }
 
 impl<T: Clone + Default + From<Object> + Into<Object> + 'static + crate::sync_model::__ThreadSafe> crate::java::lang::ObjectVTable for __ArrayObj<T> {

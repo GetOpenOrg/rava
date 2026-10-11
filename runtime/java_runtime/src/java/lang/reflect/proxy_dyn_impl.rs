@@ -26,7 +26,7 @@ fn proxy_method(iface: &str, name: &str, desc: &str) -> Result<Method> {
     if let Some(m) = PROXY_METHODS.with(|c| c.borrow().get(&key).cloned()) {
         return Ok(m);
     }
-    let m = Class::for_class(String::from(iface)).__table_method(name, desc)?;
+    let m = Class::for_class(iface).__table_method(name, desc)?;
     Ok(PROXY_METHODS.with(|c| c.intern(key, m)))
 }
 

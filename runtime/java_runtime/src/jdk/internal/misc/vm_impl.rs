@@ -27,7 +27,7 @@ impl VM {
             if f.class_extends("jdk/internal/reflect/MethodAccessorImpl") || f.class_extends("jdk/internal/reflect/ConstructorAccessorImpl") {
                 continue;
             }
-            let c = crate::java::lang::Class::for_class(String::from(f.class));
+            let c = crate::java::lang::Class::for_class(f.class);
             let loader = c.__vm_defining_loader()?.__get_classLoader();
             let lo = Object::from(Clone::clone(&loader));
             if !lo.0.is_jvm_null() && lo.0.__identity() != platform.0.__identity() {

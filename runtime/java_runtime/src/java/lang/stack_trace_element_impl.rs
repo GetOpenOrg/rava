@@ -35,7 +35,7 @@ impl StackTraceElement {
             let decl = frames.as_ref().and_then(|f| f.entries.get(i as usize))
                 .map(|e| e.declaring_class.replace('.', "/"))
                 .unwrap_or_else(|| "<unknown>".to_owned());
-            element.__set_declaringClassObject(super::Class::for_class(String::from(decl.as_str())));
+            element.__set_declaringClassObject(super::Class::for_class(decl.as_str()));
             if let Some(entry) = frames.as_ref().and_then(|f| f.entries.get(i as usize)) {
                 element.__set_declaringClass(String::from(entry.declaring_class.as_str()));
                 element.__set_methodName(String::from(entry.method_name.as_str()));

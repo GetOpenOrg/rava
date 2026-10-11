@@ -21,7 +21,7 @@ impl Class {
     #[jvm_native]
     pub fn getDeclaringClass0(&self) -> Result<Class> {
         Ok(match self.__nest() {
-            Some(m) if m.self_entry && !m.outer.is_empty() => Class::for_class(String::from(m.outer)),
+            Some(m) if m.self_entry && !m.outer.is_empty() => Class::for_class(m.outer),
             _ => Class::default(),
         })
     }
@@ -45,7 +45,7 @@ impl Class {
         };
         let opt = |s: &str| if s.is_empty() { Object::default() } else { Object::from(String::from(s)) };
         Ok(JArray::from(vec![
-            Object::from(Class::for_class(String::from(cls))),
+            Object::from(Class::for_class(cls)),
             opt(name),
             opt(desc),
         ]))
@@ -78,7 +78,7 @@ impl Class {
         if key.starts_with('[') || !key.contains('/') && !key.contains('$') {
             return Ok(Clone::clone(self));
         }
-        Ok(Class::for_class(String::from(key.split('$').next().unwrap_or(&key))))
+        Ok(Class::for_class(key.split('$').next().unwrap_or(&key)))
     }
 
     /// native `initClassName()`：镜像名在 for_class 建镜像时写入，直接返回。
@@ -104,7 +104,7 @@ impl Class {
             return Ok(JArray::from(Vec::<Class>::new()));
         }
         let members: &[&str] = self.__nest().map(|m| m.members).unwrap_or(&[]);
-        Ok(JArray::from(members.iter().map(|n| Class::for_class(String::from(*n))).collect::<Vec<Class>>()))
+        Ok(JArray::from(members.iter().map(|n| Class::for_class(*n)).collect::<Vec<Class>>()))
     }
 
     /// native `getNestMembers0()`：嵌套宿主在首位，其后为宿主 NestMembers 属性所列成员（声明序），
@@ -119,7 +119,7 @@ impl Class {
         let host_name = host.__slash_name();
         let mut out = vec![Clone::clone(&host)];
         if let Some((_, list)) = crate::meta::nest_members().iter().find(|(n, _)| *n == host_name) {
-            out.extend(list.iter().map(|n| Class::for_class(String::from(*n))));
+            out.extend(list.iter().map(|n| Class::for_class(*n)));
         }
         Ok(JArray::from(out))
     }

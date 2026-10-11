@@ -42,9 +42,9 @@ pub(crate) fn write_lit(rd: &Renderer<'_>, out: &mut String, lit: &Lit) {
             out.push_str("])");
         }
         Lit::ClassRef(binary) => {
-            let _ = write!(out, "{}::for_class({}::from(", anchors::CLASS, anchors::STRING);
+            let _ = write!(out, "{}::for_class(", anchors::CLASS);
             write_str_token(out, binary);
-            out.push_str("))");
+            out.push(')');
         }
         Lit::Null => {
             let _ = write!(out, "{}::default()", anchors::OBJECT);
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(r(&Lit::JStringUtf16(vec![0xD800, 0x41])), "String::from_utf16_lit(&[0xD800, 0x0041])");
         assert_eq!(
             r(&Lit::ClassRef("java/lang/Thread".into())),
-            "Class::for_class(String::from(\"java/lang/Thread\"))"
+            "Class::for_class(\"java/lang/Thread\")"
         );
         assert_eq!(r(&Lit::Null), "Object::default()");
         assert_eq!(r(&Lit::Unit), "()");

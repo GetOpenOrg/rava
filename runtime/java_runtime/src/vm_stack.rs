@@ -171,7 +171,7 @@ fn external_type(desc: &str) -> (std::string::String, &str) {
 
 /// 直接父类（java_meta 表，无表项 → None）。
 pub fn direct_super(class: &str) -> Option<&'static str> {
-    crate::meta::class_direct_super().iter().find(|(c, _)| *c == class).map(|(_, s)| *s)
+    crate::meta::row(crate::meta::class_direct_super(), class).copied()
 }
 
 /// 捕获当前线程的 Java 帧序列（自栈顶向下）：返回地址逐个查地址表（`pc_map`），每个物理帧给出其内联链上

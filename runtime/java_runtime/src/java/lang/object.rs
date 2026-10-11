@@ -87,9 +87,7 @@ pub trait ObjectVTable: 'static + crate::sync_model::__ThreadSafe {
     /// null 检查语义：JVM 里对 null 引用调 getClass 抛 NPE，由调用侧的 null 守卫承载；
     /// 此处到达即 receiver 非 null。
     fn getClass(&self) -> crate::error::Result<crate::java::lang::Class> {
-        Ok(crate::java::lang::Class::for_class(
-            crate::java::lang::String::from(self.__class_name()),
-        ))
+        Ok(crate::java::lang::Class::for_class(self.__class_name()))
     }
 
     /// java.lang.Comparable.compareTo(Object)I — 接口方法，不实现 Comparable 的类调用时 panic

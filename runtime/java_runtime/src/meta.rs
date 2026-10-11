@@ -194,6 +194,13 @@ fn user_line(m: &'static UserMeta, table: &'static [u8]) -> meta_codec::Reader {
     meta_codec::Reader::new(meta_codec::pool_index(&POOL, m.line_pool), table)
 }
 
+/// 按类名有序的合并表（档案侧 BTreeMap 序、合并后稳定排序）按键查首行：二分定位，与线性 `find` 同取首个
+/// 同名行，不分配
+pub fn row<V>(rows: &'static [(&'static str, V)], key: &str) -> Option<&'static V> {
+    let i = rows.partition_point(|(k, _)| *k < key);
+    rows.get(i).filter(|(k, _)| *k == key).map(|(_, v)| v)
+}
+
 // 合并表查询入口一律写成普通 fn（不经 macro_rules! 生成）：闭包分析器按 syn 扫描手写模块函数，
 // 宏展开出的 fn 对其不可见，跨文件调用边会丢失（2026-10-04 种子不确定回归）。
 

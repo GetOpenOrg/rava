@@ -36,7 +36,7 @@ impl InvokerBytecodeGenerator {
 fn interpreter_entry(mt: MethodType) -> Result<MemberName> {
     const REF_INVOKE_STATIC: i8 = 6;
     MemberName::new_class_str_methodtype_b(
-        crate::java::lang::Class::for_class(crate::java::lang::String::from("java/lang/invoke/LambdaForm")),
+        crate::java::lang::Class::for_class("java/lang/invoke/LambdaForm"),
         crate::java::lang::String::from("interpretWithArguments"),
         mt,
         REF_INVOKE_STATIC,
