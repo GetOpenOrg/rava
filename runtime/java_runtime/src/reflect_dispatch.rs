@@ -295,16 +295,45 @@ pub fn take_bad_arg() -> bool {
     crate::exec_context::state().bad_arg.replace(false)
 }
 
-// ── 包装类实例的结构化取值（P-B 可回退原型）────────────────────────────────────
+// ── 包装类实例的结构化取值（P-C 承载字段直读，可回退文本）────────────────────────
 //
-// 翻译出的包装类实例（`Integer.valueOf` 等工厂产出）此前经 `__obj_str().parse()` 取回基本值：
-// 一次翻译体 toString（构建 Java String）+ UTF-16→UTF-8 转换 + 文本解析，是反射热路径的
-// 已量化项（docs/reports/2026-10-11-rt-perf-profiling.md §三）。P-B 原型经 hashCode 虚分派
-// 一次取回值位，无分配、无文本往返。**收窄到实测通过的类型**（Integer / Short / Byte，恒等
-// hashCode，rtpp-verify3/dbg2 见证）：Character / Boolean 无实参级见证、Float 实测不通过
-// （翻译 Float 的 hashCode 路径对 3.0f 应答 0，TestReflectBoxCast `narrow` 行 1.5 → 0.0，
-// 疑 floatToIntBits 链；见报告 §三.4），三者维持文本路径。Long / Double 的 hashCode 折叠到
-// int 不可逆，本就文本。结构化承载的完整方案 P-A「ObjectVTable 原生值视图臂」见上述报告。
+// 翻译出的包装类实例（`Integer.valueOf` 等工厂产出）的取值路径演进：
+//   文本（基线）→ `__obj_str().parse()`：一次翻译体 toString（构建 Java String）+
+//     UTF-16→UTF-8 转换 + 文本解析，反射热路径的已量化项（rt-perf-profiling §三）；
+//   P-B（rtpp 原型）→ hashCode 虚分派一次取回值位；b1012-widen5 实测对翻译 Short 应答 0——
+//     根因：**运行时经 ObjectVTable 桥的调用对闭包分析器不可见**，程序自身不触达包装类的
+//     hashCode / toString 时这些槽是存根（stub.rs `stub_body`：hashCode → `Ok(0)`、
+//     toString → 二进制名文本），P-B 取 0、文本路径解析失败（widen-char IAE）；rtpp §三.4 的
+//     「翻译 Float.hashCode 对 3.0f 应答 0」同根因（存根而非 floatToIntBits 链缺陷——直呼
+//     站点入链后翻译体正确，TestWrapperValueFaces 见证）。Integer 当时通过是 invoke 站点
+//     装箱产生原生盒（downcast 命中），未走到 hashCode 臂。
+//   P-C（现行）→ **承载字段 `value` 直读**：JDK 八包装类的值都承载在本类声明的 final 基本
+//     字段 `value` 上（JDK 1.0 起稳定），经实例字段协议（`__instance_field`，Field.get /
+//     Unsafe 按名单元同一数据面）一次原子位读——不依赖任何方法体是否在闭包链上，无分配、
+//     无文本往返，Long / Double 也按位精确（NaN / -0.0 位形保留）。字段种类与期望不符
+//     （形态演化）→ None，回落文本路径（toString 在链上时仍可用）。结构化承载的完整方案
+//     P-A「ObjectVTable 原生值视图臂」见上述报告。
+
+/// 翻译包装类实例的承载字段 `value` 直读（P-C，上文注记）：按对象运行时类的描述符
+/// 字段表取本类声明的基本字段单元。null / 非类对象 / 无此字段 / 种类不符 → None。
+#[inline]
+fn wrapper_value<T: crate::sync_model::__AtomicRepr>(
+    v: &Object,
+    want: fn(&crate::field_desc::__FieldKind) -> bool,
+) -> Option<T> {
+    let cls = v.0.__class_name();
+    // SAFETY：p 由 __instance_field 按存活存储（v 持有）算出；want 已核对单元的 Java 基本
+    // 种类与 T 一致（与 field_reflect::access 同一协议）
+    let (kind, p) = (*v.0).__instance_field(cls, "value")?.ok()?;
+    want(&kind).then(|| unsafe { crate::field_desc::prim_at::<T>(p).get() })
+}
+
+/// `want` 谓词的简写：单元种类为 `__FieldKind::$variant`
+macro_rules! is_kind {
+    ($variant:ident) => {
+        |k: &crate::field_desc::__FieldKind| matches!(k, crate::field_desc::__FieldKind::$variant)
+    };
+}
 
 /// 装箱 Object → i32（两形态：站点装箱原生盒 Rc<i32> / 翻译 Integer 包装——
 /// 与 field_impl 的 __unbox_int 同一双路径策略，此处作为协议公共面）。
@@ -329,14 +358,17 @@ pub fn unbox_i32(v: &Object) -> Option<i32> {
         return Some(*b as i32);
     }
     match v.0.__class_name() {
-        // P-B：Integer / Short / Byte 的 hashCode 即值（final 类，恒等契约，实测通过）
-        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" => Some(v.0.hashCode()),
+        // P-C 承载字段直读（文件头注记）：Integer / Short / Byte 恒等；Character 拓宽经 unbox_char
+        "java/lang/Integer" => wrapper_value::<i32>(v, is_kind!(Int)),
+        "java/lang/Short" => wrapper_value::<i16>(v, is_kind!(Short)).map(|x| x as i32),
+        "java/lang/Byte" => wrapper_value::<i8>(v, is_kind!(Byte)).map(|x| x as i32),
         "java/lang/Character" => unbox_char(v).map(|c| c as i32),
         _ => None,
     }
 }
 
-/// 装箱 Object → char（UTF-16 码元）：原生 u16 盒 / 翻译 Character 包装（toString 为该字符）。
+/// 装箱 Object → char（UTF-16 码元）：原生 u16 盒 / 翻译 Character 包装（承载字段 `value:C`
+/// 直读；回落 toString 单字符文本——toString 在链上时可用）。
 /// char 形参只接受 Character 实参（JDK：int 不窄化为 char）。
 pub fn unbox_char(v: &Object) -> Option<u16> {
     if v.0.is_jvm_null() {
@@ -346,6 +378,9 @@ pub fn unbox_char(v: &Object) -> Option<u16> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Character" {
+        if let Some(c) = wrapper_value::<u16>(v, is_kind!(Char)) {
+            return Some(c);
+        }
         let mut buf = [0u16; 2];
         let s = v.0.__obj_str();
         let mut chars = s.chars();
@@ -366,7 +401,9 @@ pub fn unbox_i64(v: &Object) -> Option<i64> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Long" {
-        return v.0.__obj_str().parse::<i64>().ok();
+        // P-C 承载字段直读；回落 toString 文本（Long.MIN_VALUE 等全值域按位精确）
+        return wrapper_value::<i64>(v, is_kind!(Long))
+            .or_else(|| v.0.__obj_str().parse::<i64>().ok());
     }
     // JLS §5.1.2 拓宽：byte / short / char / int → long（Method.invoke / Field.set 的实参转换）
     unbox_i32(v).map(|x| x as i64)
@@ -380,17 +417,19 @@ pub fn unbox_bool(v: &Object) -> Option<bool> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Boolean" {
-        return match v.0.__obj_str().as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        };
+        return wrapper_value::<bool>(v, is_kind!(Bool))
+            .or_else(|| match v.0.__obj_str().as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            });
     }
     None
 }
 
-/// 装箱 Object → double：原生盒 / 翻译 Double、Float 包装（toString 文本——Rust 浮点解析
-/// 接受 Java 的 `NaN` / `Infinity` / `1.0E10` 形态）；JLS §5.1.2 拓宽接受全部数值类型。
+/// 装箱 Object → double：原生盒 / 翻译 Double、Float 包装（承载字段 `value:D` 直读，按位精确；
+/// 回落 toString 文本——Rust 浮点解析接受 Java 的 `NaN` / `Infinity` / `1.0E10` 形态）；
+/// JLS §5.1.2 拓宽接受全部数值类型。
 pub fn unbox_f64(v: &Object) -> Option<f64> {
     if v.0.is_jvm_null() {
         return None;
@@ -399,14 +438,14 @@ pub fn unbox_f64(v: &Object) -> Option<f64> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Double" {
-        return v.0.__obj_str().parse::<f64>().ok();
+        return wrapper_value::<f64>(v, is_kind!(Double))
+            .or_else(|| v.0.__obj_str().parse::<f64>().ok());
     }
     unbox_f32(v).map(|x| x as f64)
 }
 
-/// 装箱 Object → float：原生盒 / 翻译 Float 包装（toString 文本——Rust 浮点解析
-/// 接受 Java 的 `NaN` / `Infinity` / `1.0E10` 形态）；拓宽接受 byte / short / char / int / long。
-///（Float 的 hashCode 位形取值实测不通过，维持文本路径，见文件头 P-B 注记。）
+/// 装箱 Object → float：原生盒 / 翻译 Float 包装（承载字段 `value:F` 直读，NaN / -0.0 位形
+/// 精确；回落 toString 文本）；拓宽接受 byte / short / char / int / long。
 pub fn unbox_f32(v: &Object) -> Option<f32> {
     if v.0.is_jvm_null() {
         return None;
@@ -415,7 +454,8 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Float" {
-        return v.0.__obj_str().parse::<f32>().ok();
+        return wrapper_value::<f32>(v, is_kind!(Float))
+            .or_else(|| v.0.__obj_str().parse::<f32>().ok());
     }
     unbox_i64(v).map(|x| x as f32)
 }
