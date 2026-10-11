@@ -16,6 +16,7 @@ import sys
 import time
 
 import cluster_config as config
+import ssh_client
 from ssh_client import create_ssh_client
 
 # 阈值（摄氏度 / 百分比）
@@ -315,7 +316,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="服务器硬件状态检查")
     ap.add_argument("labels", nargs="*", default=["dev"], help="集群清单中的服务器标签，缺省 dev")
     ap.add_argument("--watch", type=float, metavar="秒", help="持续模式：按间隔输出一行精简读数（仅第一台）")
+    ap.add_argument("--trust-new-host", action="store_true",
+                    help="首次接入：未登记主机密钥的服务器按 TOFU 登记进 rava known_hosts（缺省拒绝连接）")
     args = ap.parse_args()
+    if args.trust_new_host:
+        ssh_client.TRUST_NEW_HOSTS = True
 
     rc = 0
     for label in args.labels:

@@ -1074,14 +1074,6 @@ def _precheck_summary(bin_name: str) -> str:
     return "\n".join(lines)
 
 
-def _run_binary(class_name: str) -> tuple[bool, str]:
-    """直接执行已编译的 binary（共享 target 目录下，不经 cargo 避免锁竞争）。"""
-    bin_name = _to_bin_name(class_name)
-    bin_path = SHARED_TARGET / _profile_dir(bin_name) / bin_name
-    r = subprocess.run([str(bin_path)], capture_output=True, text=True, env=_fixed_env())
-    return r.returncode == 0, r.stdout
-
-
 def _expected_path(class_name: str) -> Path:
     return EXPECT / f"{class_name}.txt"
 
@@ -1252,7 +1244,6 @@ def _run_sequential(filter_str: list[str] | None, no_run: bool,
         _fc = _parse_fallback(log)
         _raw_per = _parse_raw(log)
         _eq_sum = sum(_ec.values()) if _ec else 0
-        _parse_raw(log)
         if _ec:
             equiv_counts[class_name] = _ec
         if _fc:
@@ -1412,15 +1403,13 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
 
     dyn_results: dict[str, dict] = {}
 
-    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, dict[str, int],
-                                                 dict[str, int], dict[str, int], str]:
+    def _transpile_one(java_file: Path) -> tuple[Path, bool, str, str]:
+        # 工作线程只转译；日志解析（_parse_raw / _parse_fallback 累加全局计数）一律在主线程做
         bin_name = _to_bin_name(_class_name(java_file))
         ws = _test_workspace(bin_name)
         ok, log = _transpile(java_file, out_dir=ws)
-        _parse_raw(log)
         dyn = _dyn_compare(java_file, bin_name, ws, dyn_results) if ok else ""
-        return (java_file, ok, log, _parse_readability(log), _parse_equiv(log),
-                _parse_fallback(log), dyn)
+        return java_file, ok, log, dyn
 
     transpile_ok: list[Path] = []
     transpile_fail: list[Path] = []
@@ -1430,11 +1419,12 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_transpile_one, f): f for f in pending}
         for fut in as_completed(futures):
-            java_file, ok, log, rc, ec, fc, dyn = fut.result()
+            java_file, ok, log, dyn = fut.result()
             rel = java_file.relative_to(ROOT)
             if ok:
                 print(f"  [transpile] {rel} OK", flush=True)
                 transpile_ok.append(java_file)
+                rc, ec, fc = _parse_readability(log), _parse_equiv(log), _parse_fallback(log)
                 if rc:
                     readability_counts[_class_name(java_file)] = rc
                 if ec:
@@ -1505,8 +1495,10 @@ def _run_parallel(filter_str: list[str] | None, jobs: int,
 
     def _run_one(java_file: Path) -> tuple[Path, bool, str, list[str]]:
         class_name = _class_name(java_file)
-        ok, actual = _run_binary(class_name)
-        if not ok:
+        status, actual = _run_bin(class_name)
+        if status == "timeout":
+            return java_file, False, f"run timeout (> {fmt_dur(RUN_TIMEOUT)})", []
+        if status != "ok":
             # run 族失败：直跑二进制抓 stderr 自动分类子族（stub-hit 等）
             fam, detail = _classify_run_failure(class_name)
             run_sub[class_name] = (fam, detail)

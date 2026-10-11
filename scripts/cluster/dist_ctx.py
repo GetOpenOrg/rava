@@ -17,6 +17,9 @@ results_dir: Path = RESULTS_DIR
 # task_timeout 为单例从发起到结束的总时限（秒，None = config.TASK_TIMEOUT）
 run_tests_args: str = ""
 task_timeout: int | None = None
+# 本次运行要测的完整提交（main() 由 --ref / origin/main 解析；None = 解析不出，不做租约提交比对）。
+# 接上旧租约时提交不符则回收重派
+target_commit: str | None = None
 # 监控运行时静默 _log，避免内容打到表格下方
 monitor_active = False
 # 监控用全局引用（在 main() 里赋值，使监控可在 pool/state 就绪前提前启动）
@@ -45,7 +48,7 @@ def _unregister_conn(label: str):
 def _kill_cmd(work_dir: str, sig: str, test: str = "") -> str:
     """结束工作目录为 work_dir 的 run_tests 进程（同一服务器上其他实例 / 其他检出目录的测试不受影响）；
     给出 test 时只结束跑该测试的那一个（--filter /<test>.java），同一检出目录下其他槽的测试不受影响。"""
-    d = work_dir.rstrip("/")
+    d = shlex.quote(work_dir.rstrip("/"))
     pat = "scripts/run_tests.py" + (f" .*--filter /{re.escape(test)}\\.java( |$)" if test else "")
     return (
         f"for p in $(pgrep -f {shlex.quote(pat)} 2>/dev/null); do "

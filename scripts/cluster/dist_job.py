@@ -34,7 +34,9 @@ from dist_ctx import _shutdown, _log
 from dist_remote import (
     _check_resources, _resource_ok, _connect_with_retry, _fetch_git_hash, prepare_spot_checkout,
     job_remote_dir, remove_checkout, ensure_reference_jdk, refjdk_env, mem_limited, parse_oom_line, NO_MEMLIMIT_MARK,
+    resolve_target_commit,
 )
+from dist_state import load_json_strict, atomic_write_text, resume_deadline, lease_ref_matches
 import remote_run
 from remote_run import make_run_key, runs_root
 
@@ -72,11 +74,11 @@ def _job_signal_handler(signum, frame):
 class JobBoard:
     """作业池 + summary.json 持久化。"""
 
-    def __init__(self, cmds: list[str], out_dir: Path):
+    def __init__(self, cmds: list[str], out_dir: Path, target_commit: str | None = None):
         self.out_dir = out_dir
         self.path = out_dir / "summary.json"
         self._lock = threading.Lock()
-        old = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        old = load_json_strict(self.path, {})
         self.data: dict[str, dict] = {}
         pending = []
         self._leases: dict[str, str] = {}   # 服务器 → 作业序号（上次本地中断时仍在远端运行）
@@ -86,6 +88,14 @@ class JobBoard:
             if prev and prev.get("cmd") == cmd and prev.get("rc") == 0:
                 self.data[key] = prev
                 _log(f"[job {key}] 已成功（{prev.get('server')} @ {prev.get('commit', '?')[:9]}），跳过")
+            elif (prev and prev.get("cmd") == cmd and prev.get("status") == "running"
+                  and prev.get("run_dir") and prev.get("server") not in self._leases
+                  and not lease_ref_matches(prev.get("commit"), target_commit)):
+                # 旧租约跑的不是本次 --ref 的提交：回收重派（远端残留运行由该槽下次连接时 cleanup_orphans 结束）
+                self.data[key] = {"cmd": cmd, "status": "pending"}
+                pending.append(key)
+                _log(f"[job {key}] 上次在 {prev['server']} 运行于 {(prev.get('commit') or '?')[:9]}，"
+                     f"本次目标 {target_commit[:9]}，回收重派")
             elif (prev and prev.get("cmd") == cmd and prev.get("status") == "running"
                   and prev.get("run_dir") and prev.get("server") not in self._leases):
                 self.data[key] = prev
@@ -113,7 +123,7 @@ class JobBoard:
             p = self._checkouts_path()
             cur = set(json.loads(p.read_text(encoding="utf-8"))) if p.exists() else set()
             cur = (cur | {label}) if present else (cur - {label})
-            p.write_text(json.dumps(sorted(cur)), encoding="utf-8")
+            atomic_write_text(p, json.dumps(sorted(cur)))
 
     def take_lease(self, label: str) -> str | None:
         with self._lock:
@@ -166,9 +176,7 @@ class JobBoard:
             self._save()
 
     def _save(self):
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        atomic_write_text(self.path, json.dumps(self.data, indent=2, ensure_ascii=False))
 
 
 def _fetch_artifacts(client, work_dir: str, globs: list[str], dest: Path) -> list[str]:
@@ -246,7 +254,7 @@ def _run_job(client, server: dict, key: str, entry: dict, timeout: int, out_dir:
 
         out = remote_run.run_detached(
             server, client, run_dir, _job_cmd(server, entry["cmd"], work_dir, entry["jobs"]),
-            on_line=on_line, timeout_at=entry["start"] + timeout, on_client=on_client,
+            on_line=on_line, timeout_at=entry.get("deadline") or entry["start"] + timeout, on_client=on_client,
         )
     if out.attached:
         _log(f"[{label}] ↪ job {key} 结果目录已存在，接上（{run_dir}）")
@@ -314,6 +322,9 @@ def job_worker(server: dict, board: JobBoard, tag: str, ref: str, globs: list[st
                 orphans_cleaned = True
             if resumed:
                 entry = board.data[key]
+                # 期限 = max(原期限, 接上时刻 + 时限)：本地停机期间不计入作业时限
+                board.record(key, deadline=resume_deadline(
+                    entry.get("deadline") or entry["start"] + timeout, timeout))
                 _log(f"[{label}] ↪ 接上 job {key}（{entry['run_key']}）")
             else:
                 res = _check_resources(client)
@@ -356,9 +367,11 @@ def job_worker(server: dict, board: JobBoard, tag: str, ref: str, globs: list[st
                 run_key = make_run_key(f"job{key}", commit[:12], tag)
                 _log(f"[{label}] → job {key}: {cmd}")
                 # 先落租约再发起：本地中途退出后可凭 summary.json 接上
+                start = time.time()
                 board.record(key, status="running", server=label, commit=commit, run_key=run_key,
                              run_dir=f"{runs_root(work_dir)}/{run_key}", work_dir=work_dir,
-                             start=time.time(), jobs=max(1, ncpu // 2 // server.get("slots", 1)))
+                             start=start, deadline=start + timeout,
+                             jobs=max(1, ncpu // 2 // server.get("slots", 1)))
                 entry = board.data[key]
 
             status, rc, oom, client = _run_job(client, server, key, entry, timeout, board.out_dir)
@@ -443,11 +456,12 @@ def run_jobs(tag: str, ref: str, cmds: list[str], globs: list[str], servers: lis
     out_dir.mkdir(parents=True, exist_ok=True)
     signal.signal(signal.SIGINT, _job_signal_handler)
     signal.signal(signal.SIGTERM, _job_signal_handler)
-    board = JobBoard(cmds, out_dir)
+    target = resolve_target_commit(ref)
+    board = JobBoard(cmds, out_dir, target)
     if board.unfinished() == 0:
         _log("所有作业均已成功")
         _remove_stale_checkouts(board, tag)
-        return
+        return 0
     # --servers 按物理机标签筛选（缺省取 config pools 含 "job" 的服务器），再按槽展开：每槽一个工作线程
     picked = slot_servers(pick_servers(servers, "job"))
     board.release_leases({s["label"] for s in picked})
@@ -463,3 +477,13 @@ def run_jobs(tag: str, ref: str, cmds: list[str], globs: list[str], servers: lis
         _log(f"{mark} {key} [{v.get('server', '-')}] rc={rc}" + (f" OOM {oom}" if oom else "")
              + (" infra 失败（网络 / 执行异常）" if v.get("infra") else "") + f"  {v['cmd']}")
     _log(f"日志与产物: {out_dir}")
+    return job_exit_code(board.data, _shutdown.is_set())
+
+
+def job_exit_code(data: dict, interrupted: bool) -> int:
+    """作业模式退出码：全部 done 且 rc=0 → 0；中断 → 130；其余（失败 / 超时 / OOM / infra / 未完成）→ 1。"""
+    if interrupted:
+        return 130
+    ok = all(v.get("status") == "done" and v.get("rc") == 0 and not v.get("infra")
+             and not v.get("timeout") and not v.get("oom") for v in data.values())
+    return 0 if ok else 1
