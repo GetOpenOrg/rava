@@ -72,6 +72,12 @@ impl ScopeState {
         self.methods.iter().map(String::as_str)
     }
 
+    /// 方法 trait 记录快照（按方法体前后差分出「该方法体所需的方法 trait」，§9.9 K3 收尾：
+    /// 留在声明层的方法体按推断类型解析方法调用，其导入不能按词剪枝）
+    pub fn methods_set(&self) -> BTreeSet<String> {
+        self.methods.clone()
+    }
+
     /// binary 的显示名（已认领）
     pub fn name_of(&self, binary: &str) -> Option<&str> {
         self.by_bin.get(binary).map(String::as_str)
@@ -111,6 +117,11 @@ impl NameScope {
     /// 状态快照
     pub fn snapshot(&self) -> ScopeState {
         self.lock().clone()
+    }
+
+    /// 方法 trait 记录快照
+    pub fn methods_set(&self) -> BTreeSet<String> {
+        self.lock().methods.clone()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ScopeState> {

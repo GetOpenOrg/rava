@@ -31,8 +31,19 @@ pub(crate) fn trait_ident(ctx: &GenContext) -> syn::Ident {
 }
 
 /// 该固有成员是否移入方法 trait
+///
+/// 不移入（除 `const fn` 与 std 同名外，S7 计划 §9.9 K3 收尾）：字段访问器（`__get_*` / `__set_*`）、
+/// `_init_not_null`、`__init_on`——它们的跨 crate 调用点（实现层体、子类构造器体、反射分派尾巴）
+/// 都在实现层或对本类，固有 impl 即可解析；放进 trait 只会让声明层 crate 的展开 / 类型检查 /
+/// 元数据为每个字段多付一份签名（§9.9 K3 峰值归因：trait 项是签名双份的主要来源）。
+/// K6 搬 struct 进标记 crate 后固有失效，届时按 K6 前置项处理（同 std 同名成员，见下）
 fn moves_to_trait(f: &ImplItemFn) -> bool {
-    f.sig.constness.is_none() && !STD_COLLISIONS.contains(&f.sig.ident.to_string().as_str())
+    let n = f.sig.ident.to_string();
+    f.sig.constness.is_none()
+        && !STD_COLLISIONS.contains(&n.as_str())
+        && !matches!(n.as_str(), "_init_not_null" | "__init_on")
+        && !n.starts_with("__get_")
+        && !n.starts_with("__set_")
 }
 
 /// trait 中的方法声明：签名同实现（形参模式去 `mut` / 非标识符模式改 `_`，无体声明不接受模式），
@@ -177,10 +188,16 @@ mod tests {
         assert!(out.contains(&format!("impl < {bounds} > L__Methods < E > for L < E >")), "{out}");
         assert!(out.contains("fn new () -> Result < Self > ;"), "{out}");
         assert!(out.contains("fn make (k : i32) -> Result < L < Object > > ;"), "{out}");
-        for m in ["fn _init_not_null (& mut self) ;", "fn __get_n (& self) -> i32 ;", "fn COUNT () -> Result < i32 > ;",
-                  "fn __class_init () -> Result < () > ;"] {
+        for m in ["fn COUNT () -> Result < i32 > ;", "fn __class_init () -> Result < () > ;"] {
             assert!(out.contains(m), "{m}: {out}");
         }
+        // K3 收尾：访问器 / _init_not_null / __init_on 留固有 impl（trait 项少一份签名）
+        let tr = out.split("pub trait L__Methods").nth(1).unwrap().split("impl <").next().unwrap();
+        for m in ["fn _init_not_null", "fn __get_n", "fn __init_on"] {
+            assert!(!tr.contains(m), "{m} 不应在 trait 声明里: {tr}");
+        }
+        assert!(out.contains("pub fn _init_not_null (& mut self)"), "{out}");
+        assert!(out.contains("pub fn __get_n (& self) -> i32"), "{out}");
     }
 
     /// 与 std prelude trait 同名的 Java 方法（`clone`）留在固有 impl（trait 内同名即 E0034）

@@ -132,7 +132,13 @@ class Graph:
                 stmt = text[pos:stmt_end if stmt_end > 0 else len(text)]
                 name = path[-1]
                 m = re.search(r"\b%s\s+as\s+([A-Za-z_][A-Za-z0-9_]*)" % re.escape(name), stmt)
-                local[m.group(1) if m else name] = j
+                alias = m.group(1) if m else name
+                if alias == "_":
+                    # 方法 trait 匿名导入（`use …::X__Methods as _;`，§9.9 K3）：D8 按 crate:: 路径
+                    # 无条件建边（decl_segments.rs `crate_paths`）；别名 `_` 不进 local（多条会互相覆盖）
+                    self._add(i, j, "macro", None)
+                else:
+                    local[alias] = j
             else:
                 kind, key = kind_of(ck)
                 self._add(i, j, kind, key)
