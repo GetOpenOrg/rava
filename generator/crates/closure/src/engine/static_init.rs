@@ -73,6 +73,14 @@ impl Engine<'_> {
             }
         }
         *self.ctx.img_statics.borrow_mut() = Some(ImgStatics { build_time, vals });
+        // 临时诊断（RAVA_DBG_FIELD）：装入后打印该字段键的映像状态
+        if let Ok(want) = std::env::var("RAVA_DBG_FIELD") {
+            let owner = want.split('.').next().unwrap_or("");
+            let name = want.split('.').nth(1).and_then(|s| s.split(':').next()).unwrap_or("");
+            let bt = self.ctx.img_statics.borrow();
+            let (bt_has, st_has) = bt.as_ref().map_or((false, false), |s| (s.build_time.contains(owner), s.vals.contains_key(&(owner.to_string(), name.to_string()))));
+            eprintln!("[img-install] {owner} build_time={bt_has} statics({name}) 有 {st_has}");
+        }
     }
 }
 
