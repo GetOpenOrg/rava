@@ -68,7 +68,10 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             p.join("::"),
             registration_turbofish(ctx, ems, c)
         ));
-        paths.push(p.join("::"));
+        // 接口载体成员保持 inherent（无方法 trait）
+        if !ci.is_interface() {
+            paths.push(p.join("::"));
+        }
     }
     // 注解枚举元素类型、按类镜像强制初始化的目标类：运行期按名触发 `<clinit>`；
     // 不透明（L1）类只有类型身份、不初始化，不登记
@@ -82,8 +85,9 @@ fn class_init_hooks(ctx: &EmitCtx<'_>, user: &UserLayout, jdk: &JdkLayout, ems: 
             jrt_path(ctx, en),
             registration_turbofish(ctx, ems, en)
         ));
-        // 手写类无生成的方法 trait
-        if ems.get(en).is_some_and(|em| !em.handwritten) {
+        // 手写类、接口载体无生成的方法 trait
+        let iface = ctx.class(en).is_some_and(|ci| ci.is_interface());
+        if !iface && ems.get(en).is_some_and(|em| !em.handwritten) {
             paths.push(jrt_path(ctx, en));
         }
     }
