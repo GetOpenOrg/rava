@@ -501,7 +501,7 @@ P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `a
 - TSLP 的 `MemorySessionImpl` / `MemorySegment$Scope` 档位（layout ↔ type）连带 31 条 folds、4 条 refs，随种子落在 main 自身的两种状态之一：
   main 种子 1 / 2 与种子 0 就不同，8e5f13f6 各种子都与 main 的某一种子逐项相同。这是基线既有的种子依赖，不是本分支引入的。
 - `summary` 中 `rcall.channels`、`build_time_init` 失败信息一类计数在 main 上同样随种子变化，不在集合口径内。
-- `closure_independent_of_order` / `closure_independent_of_hash_seed`（5ae32b76，release，串行）：5ae32b76 两项均通过（5658 s）；8e5f13f6 复跑见交接。
+- `closure_independent_of_order` / `closure_independent_of_hash_seed`（5ae32b76，release，串行）：5ae32b76 两项均通过（5658 s），8e5f13f6 两项均通过（3927 s）。
 
 **S0 A 实测**（RSS MiB / 方法上下文 / 枢纽；`--lambda-prof 60`）：
 
@@ -512,6 +512,10 @@ P5 `flows` 1.21 → ≤ 0.4 s、P7 `sites` 1.54 → ≤ 0.5 s 与 `analyze` + `a
 | ~450 s | 19534 / 55.5 万 / 60k（441 s） | 12319 / 40.8 万 / 66k | 9201 / 31.5 万 / 65k（494 s） | 11980 / 36.9 万 / 59k（499 s） |
 | ~650 s | 21 GB 时停止（480 s） | 17487 / 48.2 万 / 87k | 12478 / 35.2 万 / 73k | 11980 / 39.8 万 / 80k（625 s） |
 | 终止 | — | 1020 s 达 25.4 GB 被看门狗杀 | 1891 s 达 24.7 GB 被杀（rss_peak 23168，43 万，13.3 万） | 779 s：15442 / 44.7 万 / 8.7 万（接收者 9012 万）；816 s 主动停止（曲线已与 5ae32b76 同形） |
+
+**快速回归探针 sb3**（spring-beans 切片 `SpringPropertyEditorMain`，`batch-1011g`；`rava build --stop-after emit`，dev，看门狗 24 GiB）：
+- 8e5f13f6 的 RSS（s / MiB）：90 / 3091、330 / 10287、570 / 14389、811 / 16264、1051 / 17889、1231 / 22927；1261 s 达 25.2 GB 被杀，不收敛。
+- 对照（协调者实测）：main 40G 槽 489 s 时仍在增长；99805d32 在 265 s OOM。规模比 S0 小，可作 G1 的快速回归探针。
 
 **结论**：
 - ctx_free 与 5ae32b76 的曲线同形（779 s 15.4 GB vs 5ae32b76 731 s 17.5 GB），只压低约 10%。
