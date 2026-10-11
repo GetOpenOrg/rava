@@ -44,15 +44,19 @@
 //! try 体 / 处理器里指向 try 之外循环的 `break` / `continue` 改写为带该循环标签的形式
 //! （`java_class!` 展开方法体时已知外围循环；循环没有标签时为其补一个）。
 //! 闭包体不改写（闭包内的 `?` 属于闭包自身的返回）。
+//!
+//! ## 标签命名（确定性）
+//!
+//! `N` 是本 try 语句在 `java_try!` 词法嵌套中的深度（最外层 0）：同层并列的 try 互不包含，
+//! 复用同一编号不冲突；嵌套的 try 深度不同，编号不同。补给外围循环的标签 `'java_loop_D`
+//! 同理取循环嵌套深度。标签用 `Span::mixed_site()`（卫生标识）：与方法体里用户 / 生成器
+//! 书写的标签、其他宏调用展开出的标签互不可见。展开结果只依赖输入，同一输入逐字节相同。
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use syn::parse::{Parse, ParseStream};
 use syn::visit_mut::{self, VisitMut};
 use syn::{Block, Expr, Ident, Lifetime, Stmt, Token, Type};
-
-static LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct CatchClause {
     binding: Ident,
@@ -334,10 +338,10 @@ fn expr_never_falls_through(e: &Expr) -> bool {
 
 /// 展开一个 try 语句。try 体与处理器里的嵌套 `java_try!` 必须已经展开（见 `TryExpander`）。
 /// 返回展开结果，以及是否引用了外围循环的标签。
-fn expand_input(input: TryInput, target: LoopTarget) -> (TokenStream2, bool) {
-    let n = LABEL_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let label = Lifetime::new(&format!("'java_try_{n}"), Span::call_site());
-    let end_label = Lifetime::new(&format!("'java_try_end_{n}"), Span::call_site());
+/// `depth` = 本 try 的 `java_try!` 词法嵌套深度（标签编号，见模块文档「标签命名」）。
+fn expand_input(input: TryInput, target: LoopTarget, depth: usize) -> (TokenStream2, bool) {
+    let label = Lifetime::new(&format!("'java_try_{depth}"), Span::mixed_site());
+    let end_label = Lifetime::new(&format!("'java_try_end_{depth}"), Span::mixed_site());
     let mut rewriter = ExitRewriter {
         label: label.clone(),
         end_label: end_label.clone(),
@@ -434,6 +438,8 @@ fn expand_input(input: TryInput, target: LoopTarget) -> (TokenStream2, bool) {
 struct TryExpander {
     /// 每层循环：(标签, 标签是否由本展开器补上)；None = 尚无标签
     loops: Vec<Option<(Lifetime, bool)>>,
+    /// 当前所在的 `java_try!` 词法嵌套深度
+    depth: usize,
     error: Option<syn::Error>,
 }
 
@@ -447,15 +453,19 @@ impl TryExpander {
             Err(e) => { self.error = Some(e); return None; }
         };
         // 内层 try 先自洽展开，再由本层改写其残余出口（catch 体、未匹配重抛）
+        let depth = self.depth;
+        self.depth += 1;
         self.visit_block_mut(&mut input.body);
         for clause in input.catches.iter_mut() {
             self.visit_block_mut(&mut clause.body);
         }
+        self.depth = depth;
         let (target, fresh) = match self.loops.last() {
             Some(Some((l, _))) => (LoopTarget::Label(l.clone()), false),
             Some(None) => {
-                let n = LABEL_COUNTER.fetch_add(1, Ordering::Relaxed);
-                let l = Lifetime::new(&format!("'java_loop_{n}"), Span::call_site());
+                // 循环嵌套深度编号：外围各层循环的补标签互不相同
+                let d = self.loops.len() - 1;
+                let l = Lifetime::new(&format!("'java_loop_{d}"), Span::mixed_site());
                 (LoopTarget::Label(l), true)
             }
             None => (LoopTarget::Unknown, false),
@@ -464,7 +474,7 @@ impl TryExpander {
             (LoopTarget::Label(l), true) => Some(l.clone()),
             _ => None,
         };
-        let (tokens, uses_loop_label) = expand_input(input, target);
+        let (tokens, uses_loop_label) = expand_input(input, target, depth);
         if uses_loop_label {
             if let (Some(l), Some(slot)) = (fresh_label, self.loops.last_mut()) {
                 *slot = Some((l, true));
@@ -539,7 +549,7 @@ impl VisitMut for TryExpander {
 /// 独立的 `java_try! { .. }` 宏调用：外围循环不可见。
 pub fn expand(input: TokenStream2) -> TokenStream2 {
     let mac: syn::Macro = syn::parse_quote! { java_try! { #input } };
-    let mut expander = TryExpander { loops: Vec::new(), error: None };
+    let mut expander = TryExpander { loops: Vec::new(), depth: 0, error: None };
     let expanded = expander.expanded(&mac);
     match (expander.error, expanded) {
         (Some(e), _) => e.to_compile_error(),
@@ -552,7 +562,7 @@ pub fn expand(input: TokenStream2) -> TokenStream2 {
 /// `java_class!` 的方法体改写基于语法树，宏调用的内容对它不可见；
 /// 先展开，try / catch 体里的字段访问、继承方法调用才会与体外代码得到同样的改写。
 pub fn expand_in_block(block: &mut Block) {
-    let mut expander = TryExpander { loops: Vec::new(), error: None };
+    let mut expander = TryExpander { loops: Vec::new(), depth: 0, error: None };
     expander.visit_block_mut(block);
 }
 
@@ -589,6 +599,42 @@ mod tests {
             }
         });
         assert!(never_falls_through(&b.stmts));
+    }
+
+    fn expand_block(src: Block) -> String {
+        let mut b = src;
+        expand_in_block(&mut b);
+        quote!(#b).to_string()
+    }
+
+    #[test]
+    fn labels_are_deterministic_and_nesting_numbered() {
+        let src: Block = syn::parse_quote!({
+            loop {
+                java_try! {
+                    try { f()?; java_try! { try { g()?; break; } catch (e: A) { h()?; } } }
+                    catch (e: B) { continue; }
+                }
+            }
+            java_try! { try { k()?; } catch (e: C) { m()?; } }
+        });
+        let a = expand_block(src.clone());
+        // 同一输入再次展开（进程内其他展开之后）逐字节相同
+        let _ = expand(quote! { try { z()?; } catch (e: D) { } });
+        assert_eq!(a, expand_block(src));
+        // 外层深度 0、内层深度 1；并列的第二个 try 复用深度 0；补给循环的标签按循环深度编号
+        assert!(a.contains("'java_try_0 :") && a.contains("'java_try_1 :"), "{a}");
+        assert!(!a.contains("'java_try_2"), "{a}");
+        assert!(a.contains("'java_loop_0 : loop"), "{a}");
+        assert_eq!(a.matches("'java_try_end_0 :").count(), 2, "{a}");
+    }
+
+    #[test]
+    fn standalone_expansion_is_deterministic() {
+        let input = quote! { try { a()?; java_try! { try { b()?; } catch (e: X) { } } } catch (e: Y) { } };
+        let a = expand(input.clone()).to_string();
+        assert_eq!(a, expand(input).to_string());
+        assert!(a.contains("'java_try_0") && a.contains("'java_try_1"), "{a}");
     }
 
     #[test]

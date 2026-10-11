@@ -101,7 +101,8 @@ pub fn free_fn_link(binary_name: &str, item: &str) -> Result<(String, String), S
     Ok((s.sym, block.to_string()))
 }
 
-/// 声明模式展开文本，摘要常量值与 try 标签序号归一（对照用：剥体前后展开只应差这两处）
+/// 声明模式展开文本，摘要常量值归一（对照用：剥体前后展开只应差这一处；`java_try!` 标签按词法嵌套
+/// 深度编号，与体数无关，无需归一）
 pub fn decl_expansion_normalized(inner: &str) -> Result<String, String> {
     let ts = TokenStream2::from_str(inner).map_err(|e| format!("词法：{e}"))?;
     let s = super::expand(ts).to_string();
@@ -118,33 +119,7 @@ pub fn decl_expansion_normalized(inner: &str) -> Result<String, String> {
         rest = &rest[v1..];
     }
     out.push_str(rest);
-    Ok(renumber_try_labels(&out))
-}
-
-/// `java_try!` 标签序号取自进程级计数器（序号只需在函数内唯一），剥体前后展开的体数不同会整体
-/// 平移后续序号：按首次出现顺序重编号（`'java_try_N` 与 `'java_try_end_N` 共用 N），归一这种平移。
-fn renumber_try_labels(s: &str) -> String {
-    const PREFIXES: [&str; 2] = ["'java_try_end_", "'java_try_"];
-    let mut map: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(p) = rest.find("'java_try_") {
-        let prefix = PREFIXES.iter().find(|x| rest[p..].starts_with(**x)).copied().unwrap_or("'java_try_");
-        let d0 = p + prefix.len();
-        let d1 = d0 + rest[d0..].find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len() - d0);
-        if d1 == d0 {
-            out.push_str(&rest[..d0]);
-            rest = &rest[d0..];
-            continue;
-        }
-        let next = map.len();
-        let k = *map.entry(&rest[d0..d1]).or_insert(next);
-        out.push_str(&rest[..d0]);
-        out.push_str(&k.to_string());
-        rest = &rest[d1..];
-    }
-    out.push_str(rest);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -187,12 +162,6 @@ mod tests {
         assert!(out.contains("pub __r : __Handle ,"), "{out}");
         assert!(!out.contains("__Ref <") && !out.contains("__Ref ::"), "{out}");
         assert!(out.contains("self . __r . view :: < dyn B__VTable > (0u16)"), "{out}");
-    }
-
-    #[test]
-    fn try_labels_renumbered_by_first_use() {
-        let a = renumber_try_labels("'java_try_end_7 : { 'java_try_7 : { break 'java_try_end_7 ; } } 'java_try_9 x");
-        assert_eq!(a, "'java_try_end_0 : { 'java_try_0 : { break 'java_try_end_0 ; } } 'java_try_1 x");
     }
 
     #[test]
