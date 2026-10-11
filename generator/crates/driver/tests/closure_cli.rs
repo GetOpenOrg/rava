@@ -266,6 +266,18 @@ fn reflect_new_array_element_precision() {
     }
 }
 
+/// 反射构造器按描述符收窄（c1d a5-4）：序列化路径的构造器查找以 null / 空数组取无参构造器、record 规范构造器查找
+/// 只对 record 接收者按分量类型取、默认 SUID 计算只读构造器元数据，JDK 类（如 String）只暴露被请求的构造器——
+/// 不再因全部构造器反射可达经 `Charset.forName(未知名)` 拉入扩展字符集；三个种子结果一致
+#[test]
+fn reflect_constructor_descriptor_precision() {
+    let Some([classes, _, members]) = seeds_agree("23_algorithms/DeepCopy.java") else { return };
+    let ext: Vec<_> = classes.iter().filter(|c| c.starts_with("sun/nio/cs/ext/")).take(5).collect();
+    assert!(ext.is_empty(), "扩展字符集经反射构造器入闭包：{ext:?}");
+    let ctor = "java/lang/String.<init>:([BIILjava/lang/String;)V";
+    assert!(!members.contains(ctor), "未被请求的 JDK 构造器成为反射成员：{ctor}");
+}
+
 /// 形参字符串常量进形参常量格：URL 构造器把协议名常量传给 URL$DefaultFactory.createURLStreamHandler，
 /// 其字符串 switch（String.hashCode / equals 折叠）只取 file 臂。形参字符串一律置 Top 时 switch 不折叠，
 /// 经 jrt 处理器、类路径 JarLoader、服务加载与反射池把 HelloWorld 闭包撑到约 2856 类（正常约 500 类）

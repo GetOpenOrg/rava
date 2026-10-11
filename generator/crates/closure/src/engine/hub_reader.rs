@@ -6,7 +6,9 @@
 //! - 接边目标记入枢纽的 `ltargets`，报告中计入枢纽的每个接入点（与经枢纽中转的 `plain` 同口径），不写锚点的派发表；
 //! - 读者接入的枢纽（方法引用的虚分派）记入 `lhubs`，不写锚点的枢纽表，其目标同样计入本枢纽的每个接入点；
 //! - 读者接边时不取锚点方法的克隆上下文与调用点字面常量（实参本就是全部接入点在 `HP` 上的汇合）：
-//!   静态目标不继承调用方上下文、不按调用点克隆，中继方法不继承调用方上下文，选择子不按调用点克隆。
+//!   静态目标不继承调用方上下文、不按调用点克隆，中继方法不继承调用方上下文，选择子不按调用点克隆；
+//! - 实现方法的 SAM 实参值取自枢纽（与经枢纽中转的目标 `hub_bind` 同口径）：常量取全部接入点的合流值 `vals`
+//!   （合流值变宽时按 `lbind` 重新并入），字符串槽与污染沿枢纽形参槽 → 目标形参槽的子集边到达；捕获值仍取创建点帧。
 //!
 //! 读者归属：锚点派发期间显式指定（`reader_over`），读者单元此后的增量接边按其登记（`hub_reader_lcalls`）。
 //!
@@ -71,5 +73,76 @@ impl Engine<'_> {
         }
         self.hub_sites.entry((m, off)).or_default().insert(h);
         self.vdisp_note(m, off, None);
+    }
+
+    /// 枢纽 h 的 lambda 读者接到实现方法 t（形参类型 ptypes，非接收者形参自 base 起）：捕获值取创建点帧，
+    /// SAM 实参取枢纽（常量取合流值，字符串槽与污染沿 `PSlot::H` → `PSlot::M` 的子集边）
+    pub(super) fn hub_lambda_bind(&mut self, h: u32, t: usize, base: usize, ptypes: &[Option<u32>], c: &lambda_vals::LambdaCap) {
+        let n = ptypes.len();
+        let Some(cv) = c.vals.clone() else {
+            self.bind_pvs(t, base, n, None);
+            return;
+        };
+        let sn = self.hubs[h as usize].ptypes.len();
+        let (cm, coff) = c.site;
+        let kc = c.skip.min(cv.len());
+        let ks = c.skip.saturating_sub(cv.len()).min(sn);
+        let mid = (base + cv.len() - kc).min(n);
+        self.taint_site(cm, t, base, mid, &cv[kc..]);
+        let string = self.id(STRING);
+        let cap_at = |j: usize| (j >= kc).then(|| base + j - kc).filter(|&p| p < n);
+        self.pstr_site(cm, coff, &cv, |j| cap_at(j).map(|p| pstrs::PSlot::M(t, p)), |j| cap_at(j).and_then(|p| ptypes.get(p).copied().flatten()) == Some(string));
+        self.pstr_offsite(t);
+        for j in ks..sn {
+            let p = mid + j - ks;
+            if p < n {
+                self.pstr_edge(pstrs::PSlot::H(h, j), pstrs::PSlot::M(t, p));
+            }
+        }
+        self.hubs[h as usize].lbind.insert((t, mid, ks));
+        let mut pvs: Vec<PV> = cv[kc..].iter().take(mid - base).map(PV::of).collect();
+        pvs.extend(self.hub_sam_vals(h, ks));
+        self.join_pv_range(t, base, &pvs);
+    }
+
+    /// 枢纽 h 的合流值变宽：读者接过的实现方法重新并入 SAM 实参常量
+    pub(super) fn hub_lrebind(&mut self, h: u32) {
+        for (t, mid, ks) in self.hubs[h as usize].lbind.clone() {
+            let vals = self.hub_sam_vals(h, ks);
+            self.join_pv_range(t, mid, &vals);
+        }
+    }
+
+    /// 枢纽合流值自第 ks 个实参起（尚无合流值时为空：对应槽按 Top 并入）
+    fn hub_sam_vals(&self, h: u32, ks: usize) -> Vec<PV> {
+        let hub = &self.hubs[h as usize];
+        let sn = hub.ptypes.len();
+        match &hub.vals {
+            Some(vs) => vs.get(ks..).map(<[PV]>::to_vec).unwrap_or_default(),
+            None => vec![PV::Top; sn.saturating_sub(ks)],
+        }
+    }
+
+    /// vals 自形参位 from 起并入 t 的形参常量格；区间外的槽不变（尚无格时为 Top）
+    fn join_pv_range(&mut self, t: usize, from: usize, vals: &[PV]) {
+        let n = self.methods[t].ptypes.len();
+        let cur = self.pvals.get(&t).cloned();
+        let new: Vec<PV> = (0..n)
+            .map(|i| {
+                let c = cur.as_ref().and_then(|c| c.get(i));
+                match i.checked_sub(from).and_then(|j| vals.get(j)) {
+                    Some(v) => PV::join(c, v),
+                    None if cur.is_some() => c.cloned().unwrap_or(PV::Top),
+                    None => PV::Top,
+                }
+            })
+            .collect();
+        if cur.as_ref() == Some(&new) {
+            return;
+        }
+        self.pvals.insert(t, new);
+        if cur.is_some() {
+            self.invalidate(t, Why::ParamConst);
+        }
     }
 }

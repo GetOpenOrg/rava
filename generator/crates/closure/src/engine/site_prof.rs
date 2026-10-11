@@ -28,9 +28,8 @@ pub(super) const PATH_SPECIAL: u8 = 2;
 pub(super) const PATH_NONVIRT: u8 = 3;
 pub(super) const PATH_VFP_HIT: u8 = 4;
 pub(super) const PATH_VSMALL: u8 = 5;
-pub(super) const PATH_VHUB_SAME: u8 = 6;
-pub(super) const PATH_VHUB_NEW: u8 = 7;
-const PATH_NAMES: [&str; 8] = ["-", "static", "special", "nonvirt", "vfp_hit", "vsmall", "vhub_same", "vhub_new"];
+pub(super) const PATH_VHUB: u8 = 6;
+const PATH_NAMES: [&str; 7] = ["-", "static", "special", "nonvirt", "vfp_hit", "vsmall", "vhub"];
 
 /// 触发节点相对调用点来源的角色
 const ROLE_NAMES: [&str; 5] = ["-", "recv", "arg", "other_node", "not_node"];

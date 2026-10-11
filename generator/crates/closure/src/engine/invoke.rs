@@ -162,24 +162,10 @@ impl<'a> Engine<'a> {
                         self.dispatch_one(m, off, r, &site, &a, ret, res, NOCTX);
                     }
                 } else {
-                    // 同一调用点、同一接收者集合即同一枢纽键（成员与接口标志由该偏移的指令决定）
+                    // 经增长枢纽：按接收值来源取枢纽，只并入新增接收者
                     self.prof_seg(site_prof::SEG_HUB);
-                    let last = self.hub_last.get(&(m, off)).cloned();
-                    let h = match last {
-                        Some((h, rs)) if *rs == recv[..] => {
-                            self.prof_path(site_prof::PATH_VHUB_SAME);
-                            h
-                        }
-                        last => {
-                            self.prof_path(site_prof::PATH_VHUB_NEW);
-                            let rs = recv.clone();
-                            let h = self.hub(mref, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
-                            self.hub_last.insert((m, off), (h, rs));
-                            h
-                        }
-                    };
-                    self.prof_seg(site_prof::SEG_LINK);
-                    self.link_hub(h, m, off, &a, res);
+                    self.prof_path(site_prof::PATH_VHUB);
+                    self.grow_hub(m, off, mref, iface, owner, &r, false, &recv, &site, &md, via.clone(), &a, res);
                 }
                 self.prof_seg(site_prof::SEG_LINK);
                 if let Some((_, hubs)) = cached {
@@ -191,7 +177,7 @@ impl<'a> Engine<'a> {
                 let opens: Vec<u32> = opens.unwrap_or_default().iter().collect();
                 let mut hubs = Vec::new();
                 for o in self.open_roots(&opens) {
-                    let h = self.hub(mref, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
+                    let h = self.hub(mref, iface, owner, HubSet::Open(o), &site, &md, via.clone());
                     self.link_hub(h, m, off, &a, res);
                     hubs.push(h);
                 }
@@ -328,17 +314,7 @@ impl<'a> Engine<'a> {
             let done: Vec<u32> = self.recv_done.get(&m).and_then(|d| d.get(&off)).map(|v| v.iter().copied().filter(|x| self.objs.contains_key(x)).collect()).unwrap_or_default();
             let all: Vec<u32> = done.into_iter().filter(|&x| self.sub(x, owner)).collect();
             if all.len() >= HUB_MIN {
-                let last = self.hub_last.get(&(m, off)).cloned();
-                let h = match last {
-                    Some((h, rs)) if *rs == all[..] => h,
-                    last => {
-                        let rs: Rc<[u32]> = all.into();
-                        let h = self.hub(&key, false, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), msite, md, via.clone());
-                        self.hub_last.insert((m, off), (h, rs));
-                        h
-                    }
-                };
-                self.link_hub(h, m, off, a, res);
+                self.grow_hub(m, off, &key, false, owner, &fs, true, &all, msite, md, via.clone(), a, res);
                 objs.clear();
             }
         }

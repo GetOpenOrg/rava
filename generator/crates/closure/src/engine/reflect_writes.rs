@@ -26,6 +26,9 @@ impl<'a> Engine<'a> {
         if self.man.is_constructor_lookup(&k) {
             self.constructor_lookup(m, off, &k, mref, opcode, args);
         }
+        if self.man.is_constructor_enumeration(&k) && self.man.constructor_enumeration_requests(&self.methods[m].key.to_string()) {
+            self.constructor_enumeration(m, off, &k, opcode, args);
+        }
         if let Some(idx) = self.man.serial_allocator(&k) {
             self.serial_alloc_site(m, off, &k, opcode, args, idx);
         }

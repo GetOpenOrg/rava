@@ -582,6 +582,38 @@ constructor_lookups = [
     "java/lang/Class.getDeclaredConstructor:([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
     "java/lang/Class.newInstance:()Ljava/lang/Object;",
 ]
+# 构造器请求（非用户类的构造器只取被请求的描述符，用户类被枚举即全部）：
+#   constructor_lookups 调用点按形参类型数组请求——null / 长度 0 / 本方法内以类字面量逐个填满且不逃出的数组给出
+#   确定描述符（Class.newInstance 为无参），推不出时请求全部；
+# constructor_enumerations  构造器枚举调用：接收者所指类的全部构造器被请求（枚举结果交给调用者）。公开枚举
+#                     （getConstructors / getDeclaredConstructors）在调用者处判定，体内共用的私有枚举在其余调用者
+#                     （如 getEnclosingConstructor，接收者为外围类）处判定；
+# constructor_enumeration_wrappers  包装枚举的方法：请求由其自身调用点给出，体内的枚举调用不另行请求——查找
+#                     （getConstructor0，枚举只为按描述符挑选）与公开枚举（调用者处判定）；
+# constructor_metadata_readers  只读枚举结果元数据（修饰符 / 形参类型）、从不构造的调用者：不请求。
+#                     computeDefaultSUID 把构造器包进 MemberSignature 只取名字 / 签名 / 修饰符算默认 SUID；
+#                     superHasAccessibleConstructor 只取修饰符
+constructor_enumerations = [
+    "java/lang/Class.privateGetDeclaredConstructors:(Z)[Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.getConstructors:()[Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.getDeclaredConstructors:()[Ljava/lang/reflect/Constructor;",
+]
+constructor_enumeration_wrappers = [
+    "java/lang/Class.getConstructor0:([Ljava/lang/Class;I)Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.getConstructors:()[Ljava/lang/reflect/Constructor;",
+    "java/lang/Class.getDeclaredConstructors:()[Ljava/lang/reflect/Constructor;",
+]
+constructor_metadata_readers = [
+    "java/io/ObjectStreamClass.computeDefaultSUID:(Ljava/lang/Class;)J",
+    "jdk/internal/reflect/ReflectionFactory.superHasAccessibleConstructor:(Ljava/lang/Class;)Z",
+]
+# record_constructor_lookups  方法体内构造器查找的 Class 数组实参恒为接收者的 record 分量类型（getRecordComponents
+#                     经流映射为类型数组）：请求规范构造器；非 record 接收者分量数组为 null（Arrays.stream 抛出），查找不可达。
+#                     JDK 21 在 doPrivileged 的 lambda 体内，JDK 24 起直接在 canonicalRecordCtr 体内
+record_constructor_lookups = [
+    "java/io/ObjectStreamClass.lambda$canonicalRecordCtr$2:(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+    "java/io/ObjectStreamClass.canonicalRecordCtr:(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;",
+]
 # method_to_handle   反射对象（Method）转成方法句柄的入口（`Lookup.unreflect*` 与 LambdaForm 具名函数都经此构造 MemberName）：
 #                     按 Method 实参的来源追踪——来自常量名查找（getDeclaredMethod 等）的只点名该方法经方法句柄通道调用，
 #                     来自形参的回溯到调用点，来源不明时全部按反射对象查到的方法另接方法句柄通道的实参池（见下）

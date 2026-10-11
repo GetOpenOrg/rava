@@ -141,7 +141,7 @@ impl Engine<'_> {
         }
     }
 
-    fn lprof_tick(&mut self) {
+    pub(super) fn lprof_tick(&mut self) {
         let Some(p) = self.lprof.as_mut() else { return };
         p.tick = p.tick.wrapping_add(1);
         if p.tick & TICK_MASK != 0 || p.last.elapsed() < p.every {
@@ -177,20 +177,18 @@ impl Engine<'_> {
         for (&h, &n) in hs.into_iter().take(TOP) {
             let hub = &self.hubs[h as usize];
             let (o, nm, d) = hub.site.key();
-            let set = match (hub.open, &hub.set) {
-                (Some(o), _) => format!("open {}", self.names[o as usize]),
-                (None, Some(s)) => format!("exact {}", s.len()),
-                // 无 open、无固定集合：方法引用的增长枢纽（`HubSet::Grow`）
-                _ => format!("grow {}", hub.recvs.len()),
+            let set = match hub.open {
+                Some(o) => format!("open {}", self.names[o as usize]),
+                // 增长枢纽（`HubSet::Grow`）
+                None => format!("grow {}", hub.recvs.len()),
             };
             eprintln!(
-                "{tag} hub H{h} replay={n} fresh={} links={} lambdas={} special={} plain={} parent={:?} [{set}] {o}.{nm}{d} via={}",
+                "{tag} hub H{h} replay={n} fresh={} links={} lambdas={} special={} plain={} [{set}] {o}.{nm}{d} via={}",
                 p.hub_pairs.get(&h).copied().unwrap_or(0),
                 hub.links.len(),
                 hub.lambdas.len(),
                 hub.special.len(),
                 hub.plain.len(),
-                hub.parent,
                 self.via_label(&hub.via),
             );
         }
@@ -215,6 +213,8 @@ impl Engine<'_> {
         for (c, n) in cs.into_iter().take(TOP) {
             eprintln!("{tag} ctxc n={n} {}", self.names[c as usize]);
         }
+        self.ctx_prof_dump(&tag);
+        self.hub_prof_dump(&tag);
         let mut ls: Vec<(&u32, &LamStat)> = p.lams.iter().collect();
         ls.sort_by(|a, b| (b.1.recv_dispatch + b.1.steps).cmp(&(a.1.recv_dispatch + a.1.steps)).then(a.0.cmp(b.0)));
         for (&lid, s) in ls.into_iter().take(TOP) {

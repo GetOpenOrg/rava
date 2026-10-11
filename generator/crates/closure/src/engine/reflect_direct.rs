@@ -158,7 +158,7 @@ impl<'a> Engine<'a> {
     ///   （G(o) ∩ C = G(C)），否则只接与 C 相关的 open 并剔除被超类型涵盖者（`open_roots`，同字节码虚调用）。枢纽键是
     ///   （目标, open(C)），与字节码虚调用及其他直连点共用，G 增长时由枢纽增量展开；单点枢纽数以目标数为界，与 open
     ///   类型数无关；
-    /// - lambda 与手写层对象接收者（派发规则特殊）经精确集合枢纽（按目标链上次枢纽为父）。
+    /// - lambda 与手写层对象接收者（派发规则特殊）经按（调用点, 目标）的增长枢纽。
     /// 已接的接收者与 open 按（调用点, 目标）记在 `rdirect_done`（与 `hub_linked` 同口径清空）；目标实参来源（实参数组的
     /// 分配点）变化时按新实参重接。
     #[allow(clippy::too_many_arguments)]
@@ -175,7 +175,6 @@ impl<'a> Engine<'a> {
         let nonvirt = rm.is_private() || rm.is_final() || site.class.access & acc::FINAL != 0 && !site.class.is_interface();
         let exact = TypeSet { classes: s.classes.clone(), open: IdSet::default() };
         let rs = self.receivers(m, &exact, owner);
-        let lk = (m, off, key.clone());
         let dk = (off, key.clone());
         let mut done = self.rdirect_done.get_mut(&m).and_then(|d| d.remove(&dk)).unwrap_or_default();
         // 实参来源（实参数组的分配点随值集增长）变了：已接的接收者与 open 枢纽按新实参重接
@@ -211,16 +210,12 @@ impl<'a> Engine<'a> {
         }
         self.direct_send(m, off, key, &site, &mut done, send, a, ret, res, via);
         if !special.is_empty() {
-            let rs: Rc<[u32]> = special.into();
-            let h = match self.rdirect_last.get(&lk).cloned() {
-                Some((h, prev)) if *prev == rs[..] => h,
-                last => {
-                    let h = self.hub(key, iface, owner, HubSet::Exact(rs.clone()), last.map(|x| x.0), &site, &md, via.clone());
-                    self.rdirect_last.insert(lk, (h, rs));
-                    h
-                }
-            };
+            // 按调用点（及目标）的增长枢纽，只并入新到的接收者
+            let h = self.hub(key, iface, owner, HubSet::Grow(GrowSrc::Site(m, off)), &site, &md, via.clone());
             self.link_hub(h, m, off, a, res);
+            for r in special {
+                self.hub_recv(h, r);
+            }
             self.direct_hub_args(h, a);
         }
         if regrow {
@@ -234,7 +229,7 @@ impl<'a> Engine<'a> {
                 if done.roots.contains_key(&o) {
                     continue;
                 }
-                let h = self.hub(key, iface, owner, HubSet::Open(o), None, &site, &md, via.clone());
+                let h = self.hub(key, iface, owner, HubSet::Open(o), &site, &md, via.clone());
                 self.link_hub(h, m, off, a, res);
                 done.roots.insert(o, h);
             }
