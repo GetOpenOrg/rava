@@ -6,7 +6,7 @@
 //!   - `ClassName__inner` 存储 struct（平铺字段，无 `_super` 嵌套）
 //!   - `impl AncestorVTable for ClassName__inner`（字段访问器 + 覆盖方法）
 //!   - `pub struct ClassName { __r: __Handle }`（对象句柄，S7-2；视图经 `__vt()` 现取，§9.9 K1）
-//!   - 接口：载体 `pub struct Iface { __ref: __IfaceRef<dyn Iface__VTable> }`（Object 句柄 + 接口视图指针，S7-2c）
+//!   - 接口：载体 `pub struct Iface { __ref: __IfaceRef }`（只持 Object 句柄，S7-2c；视图经 `enter` 现取，§9.9 K2）
 //!   - `impl From<ClassName> for Object`（Object 直接持有存储，S7-2b）
 //!   - 字段访问器委托 + 虚方法委托 + 构造器（on wrapper）
 //!   - `ClassName__methodName_base` 自由函数（super() 调用路由）

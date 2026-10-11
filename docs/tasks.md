@@ -204,7 +204,7 @@ rava 终态：Java 的新编译后端（开发者只写 Java，构建产出原�
 ├─ 【暂缓】
 │   ├─ ✅ build-memsafe 内存友好缺省构建档（10-11 交付，待合入；2026-10-11-build-memsafe.md）
 │   ├─ ⏸ 纯优化线（10-06 分级）：二进制 ≤3 MB、S7-4 / S7-5、D2 / D3 引擎结构改造、IR 收敛 / TypeIR G4
-│   ├─ ◐ 声明层底段收窄：模拟分析完成（S7 计划 §9.8）；10-11 用户裁决类型标记 crate 路线 A（每类方法 trait，属内部细节，同 `ObjectVTable`；常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施分解 K1–K8 见 §9.9（分支 s7-marker；K1 wrapper 只持句柄 10-11 完成，单测与抽查 12/12 过）；D8 上段已改按上游感知峰值预算切分（d8-mb，§9.8.4，待攒批合入）；目标所有声明 crate ≤1.3 GB
+│   ├─ ◐ 声明层底段收窄：模拟分析完成（S7 计划 §9.8）；10-11 用户裁决类型标记 crate 路线 A（每类方法 trait，属内部细节，同 `ObjectVTable`；常数级分派开销；标记 crate 按档案生成；语料档案目标 ⑤），实施分解 K1–K8 见 §9.9（分支 s7-marker；K1 wrapper 只持句柄 10-11 完成，单测与抽查 12/12 过；K2 接口载体只持 Object 10-11 完成（s7-k2 847493cb，dev 抽查 5/5，§4.3 计时运行无变化、二进制 −0.83%，待合批单测）；下一步 K4，K3 / K5 可并行）；D8 上段已改按上游感知峰值预算切分（d8-mb，§9.8.4，待攒批合入）；目标所有声明 crate ≤1.3 GB
 │   ├─ ⏸ 等 dev 恢复（换内存条，数天）：S0 Spring Boot 闭包、确定性单测（`closure_independent_of_*`）、重例
 │   ├─ ⏸ 不实施 / 挂起（10-06 用户定）：方法句柄对象化、T2 余 4b、b1 序列化收窄、a5 关系型边界推理
 │   └─ ⏸ 缓：虚拟线程余项（T6 规模；pinned 已消解 0/260，vt-rest）、T1-M3、第三方库通用机制（JNI 层 / 构建期捕获运行期生成类）
@@ -259,7 +259,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 日志链缺口 ③ | ✅ d1df66a6 | HelloWorld 575 / 1875（切除上界兑现）；余项路径 A 见 §5.9.7 |
 | 转译耗时回归 | ✅ 第四轮达标（perf-regress4，c3ec480d，待合入） | 四例比 batch-1012 快约 40%（DeepCopy 306 s / 4.1 GB、JNDI 348 s、序列化两例约 310 s），类集合对 batch-1010c 无新增 |
 | 引导映像零拷贝 | 🔄 boot-zerocopy（基于 batch-1009，U4 / U11 §5.5.6） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
-| C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；余 §29 能力③（随引导映像）、格式串常量求值、a5-4e ICU、a5-4f 日志后端 |
+| C1d-a-a5-4 | ⏳ | 终态 DeepCopy ≤2803 / StockTrans ≤2807 / TSDS ≤2809 / HelloWorld 468；10-11 c1d-a54 dea3057d jimage 资源恒未压缩，DeepCopy 3033→3001、StockTrans 3031→2999、TSDS 3038→3006、HelloWorld 580（计划 §38）；余：来源 3 描述符精确构造器模型（−295）、a5-4f 日志后端（−44）、§29 能力③（−30，随引导映像）、a5-4e ICU、格式串常量求值 |
 | C1d-a-precheck | ⏳ | 按目标平台 jmod 扫描（清单落盘已做 8ed3a5e3） |
 | C1d-b-b2 | ⏳ ◀── why2-93e0f28e 取证 | 任务 2 |
 | C1d-b-b3余 | ⏳ | URL$DefaultFactory 反射构造器扇出收窄 |
