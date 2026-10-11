@@ -122,6 +122,8 @@ impl<'a> Engine<'a> {
             hubs: Vec::new(),
             hub_ids: HashMap::default(),
             hubs_by_open: BTreeMap::new(),
+            grow_max: 0,
+            hub_upgraded: 0,
             hub_sites: BTreeMap::new(),
             gathers: Vec::new(),
             gather_ids: HashMap::default(),

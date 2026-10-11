@@ -324,6 +324,12 @@ pub(super) struct Hub {
     /// 本枢纽 lambda 读者接边的实现方法形参段：（目标, 首个 SAM 实参所在形参位, 首个取用的枢纽实参序号）。
     /// SAM 实参常量取枢纽合流值 `vals`，合流值变宽时按此重新并入（`hub_reader.rs`）
     pub(super) lbind: BTreeSet<(usize, usize, usize)>,
+    /// 增长枢纽的共享键（调用成员, 接口调用, 只收抽象对象）：接收者超过 `HUB_SHARE` 时据此升级（`hub_share.rs`）
+    pub(super) share: Option<(MemberRef, bool, bool)>,
+    /// 已升级：调用点接入与接收者一律转发到此共享枢纽
+    pub(super) fwd: Option<u32>,
+    /// 按调用点建模目标的已接效果键（目标, 接收者效果键）：同键接收者的逐调用点效果相同，只接一个代表（`hub_share.rs`）
+    pub(super) skeys: HashSet<(usize, u32)>,
 }
 
 /// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
@@ -363,6 +369,9 @@ pub(super) enum HubSet {
     /// 精确接收者达 `HUB_MIN` 后的增长枢纽：接收者随值集增长逐个并入（`hub_recv`），调用点只接入一次。
     /// 按接收值的来源建立（见 [`GrowSrc`]），不按接收者集合建立：同一来源的各调用点值集恒同，共用一个枢纽
     Grow(GrowSrc),
+    /// 共享枢纽：接收者超过 `HUB_SHARE` 的增长枢纽永久升级后，按（调用成员, 接口调用, 只收抽象对象）共用一个，
+    /// 接收者为各升级枢纽精确接收者之并（不取 G：未逃逸的精确接收者不在 G 中），见 `hub_share.rs`
+    Shared(bool),
 }
 
 /// 增长枢纽的来源键

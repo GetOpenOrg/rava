@@ -57,6 +57,7 @@ mod invoke;
 mod reflect_writes;
 mod hub;
 mod hub_reader;
+mod hub_share;
 mod recv_fp;
 mod site_prof;
 mod lambda_prof;
@@ -345,6 +346,9 @@ pub struct Engine<'a> {
     hubs: Vec<Hub>,
     hub_ids: HashMap<(MemberRef, bool, HubSet, u32), u32>,
     hubs_by_open: BTreeMap<u32, Vec<u32>>,
+    /// 增长枢纽接收者数的峰值 / 升级为共享枢纽的增长枢纽数（`hub_share.rs`）
+    grow_max: usize,
+    hub_upgraded: usize,
     /// 调用点 → 所连枢纽（输出分派结果用）
     hub_sites: BTreeMap<(usize, u32), BTreeSet<u32>>,
     /// 汇集节点：序号 → (槽位, 对象数, 写入向)；(槽位, 写入向, 对象集合) → 序号；字节码站点 (偏移, 槽位) → (当前汇集节点, 累计对象)

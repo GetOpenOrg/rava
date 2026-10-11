@@ -3,7 +3,8 @@
 //! 打印三类数据（stderr，`[lambda-prof …]` 前缀）：
 //! - `hubkind`：枢纽按种类（open / 增长 / VM）的个数、接入点数、展开接收者数、lambda 表长总数、逐调用点目标接收者总数；
 //! - `hubm`：按调用成员归并的枢纽数前列（附各种类个数、不同档位上下文数、接入点 / 接收者总数）；
-//! - `hubsite`：按建立枢纽的调用点（不分克隆上下文）归并的枢纽数前列。
+//! - `hubsite`：按建立枢纽的调用点（不分克隆上下文）归并的枢纽数前列；
+//! - `hubshare`：增长枢纽接收者峰值、已升级数、共享枢纽数、阈值，及未升级增长枢纽按接收者数分档的（个数, 接收者和）。
 
 use super::*;
 
@@ -74,6 +75,21 @@ impl Engine<'_> {
             by_site.entry(site).or_default().add(k, hub);
         }
         eprintln!("{tag} hubkind {}", all.line());
+        let mut hist = [(0u64, 0u64); 6];
+        for hub in self.hubs.iter().filter(|h| h.share.is_some() && h.fwd.is_none()) {
+            let n = hub.recvs.len();
+            let b = [16, 64, 256, 1024, hub_share::HUB_SHARE].iter().position(|&c| n <= c).unwrap_or(5);
+            hist[b].0 += 1;
+            hist[b].1 += n as u64;
+        }
+        let shared = self.hub_ids.keys().filter(|k| matches!(k.2, HubSet::Shared(_))).count();
+        eprintln!(
+            "{tag} hubshare grow_max={} upgraded={} shared={} T={} hist(<=16,<=64,<=256,<=1024,<=T,>T)={hist:?}",
+            self.grow_max,
+            self.hub_upgraded,
+            shared,
+            hub_share::HUB_SHARE
+        );
         let mut ms: Vec<(String, (Agg, HashSet<u32>))> = by_m.into_iter().collect();
         ms.sort_by(|a, b| b.1 .0.n.cmp(&a.1 .0.n).then(a.0.cmp(&b.0)));
         for (l, (a, lcs)) in ms.into_iter().take(TOP) {

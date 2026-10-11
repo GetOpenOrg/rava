@@ -118,7 +118,7 @@ impl<'a> Engine<'a> {
     }
 
     /// 方法 t 是反射调用入口时的通道
-    fn rcall_entry(&mut self, t: usize) -> Option<u8> {
+    pub(super) fn rcall_entry(&mut self, t: usize) -> Option<u8> {
         if let Some(&c) = self.rcall_entries.get(&t) {
             return c;
         }
