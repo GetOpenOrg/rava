@@ -10,6 +10,7 @@ pub mod descriptor;
 pub mod extras;
 pub mod insn;
 pub mod module;
+pub mod names;
 pub mod reader;
 pub mod sha256;
 
@@ -27,6 +28,8 @@ pub enum Error {
     BadCode(u32),
     BadAnnotationTag(u8),
     Io(String, String),
+    /// 档案（路径）内的类名不能安全用作路径分量（见 [`names::is_valid_binary_name`]）
+    BadClassName(String, String),
 }
 
 impl std::fmt::Display for Error {
@@ -40,6 +43,7 @@ impl std::fmt::Display for Error {
             Error::BadCode(pc) => write!(f, "pc {pc} 处 switch 表非法"),
             Error::BadAnnotationTag(t) => write!(f, "注解元素 tag {} 非法", *t as char),
             Error::Io(p, e) => write!(f, "{p}: {e}"),
+            Error::BadClassName(p, n) => write!(f, "{p}: 类名 `{n}` 的段须为合法 Java 标识符（不得为空 / . / ..）"),
         }
     }
 }

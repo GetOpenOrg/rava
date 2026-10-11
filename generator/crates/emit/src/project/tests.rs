@@ -90,7 +90,7 @@ fn writer_never_overwrites_handwritten() {
     let rt = runtime(&root);
     let out = root.join("build").join("t");
     prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     let obj = out.join("java_runtime/src/java/lang/object.rs");
     assert!(w.is_handwritten(&obj));
     w.write(&obj, "rava_macros::java_class! {}\n").unwrap();
@@ -107,7 +107,7 @@ fn mod_tree_declares_disk_contents() {
     let out = root.join("build").join("t");
     prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
     let src = out.join("java_runtime/src");
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("java/lang/string.rs"), "rava_macros::java_class! {}\n").unwrap();
     w.write(&src.join("java/lang/r#ref/reference.rs"), "x").unwrap();
     w.write(&src.join("java/util/stream/collectors_collector_impl.rs"), "rava_macros::java_class! {}\n").unwrap();
@@ -159,7 +159,7 @@ fn mod_tree_prunes_stale_package_dirs() {
     put(&src.join("jdk_resources/sub/mod.rs"), "// 手写子树\n");
     put(&src.join("java/nio/mod.rs"), "pub mod buffer;\n");
     prepare_scratch(&out, &rt, &root.join("m"), &single(), false).unwrap();
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("java/lang/module.rs"), "rava_macros::java_class! {}\n").unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!src.join("java/lang/module").exists(), "陈旧包目录删除（与 module.rs 并存即 E0761）");
@@ -225,11 +225,11 @@ fn companion_skipped_when_used_module_absent() {
     let src = out.join("java_runtime/src");
     let dir = src.join("java/lang/invoke");
     let gen = "rava_macros::java_class! {}\n";
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     assert!(!read(&dir.join("mod.rs")).contains("mod natives_impl;"), "依赖模块缺席 → 不声明");
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("natives.rs"), gen).unwrap();
     w.write(&dir.join("member_name.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
@@ -260,7 +260,7 @@ fn companion_item_segments_probed_precisely() {
     let dir = src.join("p");
     let gen = "rava_macros::java_class! {}\n";
     let write = |extra: &[&str]| {
-        let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+        let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
         for f in ["a.rs", "b.rs", "c.rs"].iter().chain(extra) {
             w.write(&dir.join(f), gen).unwrap();
         }
@@ -295,12 +295,12 @@ fn stacked_companion_needs_generated_host() {
     let src = out.join("java_runtime/src");
     let dir = src.join("java/net");
     let gen = "rava_macros::java_class! {}\n";
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("bar.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     let m = read(&dir.join("mod.rs"));
     assert!(!m.contains("foo_impl"), "Foo / FooImpl 均缺席 → 不声明：{m}");
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&dir.join("foo_impl_t.rs"), gen).unwrap();
     write_mod_tree(&src, Some(&rt), 2, &mut w).unwrap();
     let m = read(&dir.join("mod.rs"));
@@ -325,7 +325,7 @@ fn user_crate_sweeps_previous_test() {
     put(&src.join("org/x/gone.rs"), gen);
     put(&src.join("notes.rs"), "// 非生成\n");
     // 本轮写出
-    let mut w = Writer::new(&[out.join("java_runtime/src")], &rt.join("src"));
+    let mut w = Writer::new(&out, &[out.join("java_runtime/src")], &rt.join("src"));
     w.write(&src.join("digester.rs"), gen).unwrap();
     w.write(&src.join("org/x/y.rs"), gen).unwrap();
     w.write(&src.join("org/x/mod.rs"), "pub mod y;\n").unwrap();

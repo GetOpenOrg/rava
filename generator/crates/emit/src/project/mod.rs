@@ -275,7 +275,7 @@ fn crate_stats(
 /// `out_dir` 只用于推导目标路径（判定手写真源同路径覆盖），不创建、不写入
 pub fn scan_gaps(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyEmitter) -> Result<Precheck> {
     let crates = ctx.crates();
-    let w = Writer::new(&crates.src_dirs(out_dir), &ctx.runtime_src());
+    let w = Writer::new(out_dir, &crates.src_dirs(out_dir), &ctx.runtime_src());
     let jdk = JdkLayout::build(ctx, out_dir);
     let user = UserLayout::build(ctx, &out_dir.join("user").join("src"));
     let libs = LibPlan::build(ctx, out_dir, &jdk.generated);
@@ -298,7 +298,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     let user_src = out_dir.join(USER_CRATE).join("src");
     let runtime_src = ctx.runtime_src();
     let mut perf = Perf::new();
-    let mut w = Writer::new(&jdk_srcs, &runtime_src);
+    let mut w = Writer::new(out_dir, &jdk_srcs, &runtime_src);
     let jdk = JdkLayout::build(ctx, out_dir);
     if let Some((cls, dir)) = jdk.helper_clash(ctx, out_dir) {
         return Err(crate::error::EmitError::Assert(format!("类 {cls} 的包目录与手写私有辅助目录 {} 冲突", dir.display())));
