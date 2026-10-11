@@ -131,7 +131,7 @@ id = "transpile-oom-14g"
 stage = "resource"
 symptom = "转译期超出 14 GB 内存上限被杀（__RAVA_OOM_KILL__）"
 match = [["__RAVA_OOM_KILL__"]]
-tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync"]
+tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync", "DeepCopy", "DataEncryptionStandard"]  # 后二例为 JDK 25 档案（2026-10-11 fix-jdk25 抽查）
 cause = "java.net.http 闭包规模大，分析峰值超过单例内存上限；资源类失败，不阻塞合入"
 introduced = ""
 fixed = []
@@ -1591,9 +1591,69 @@ match = [["takeVirtualThreadListToUnblock"]]
 tests = ["TestVirtualThreadScale", "TestLongChainRelease"]
 cause = "JDK 25 VirtualThread 新增 native（takeVirtualThreadListToUnblock / postPinnedEvent / notifyJvmtiDisableSuspend），删去 notifyJvmtiHideFrames。本模型虚拟线程在 synchronized 上 pin 于载体阻塞、不入 VM 等待链，链表恒空：takeVirtualThreadListToUnblock 按 HotSpot 空表语义永久阻塞 unblocker 守护线程；其余两个为 JFR / JVMTI 通知 no-op；按 jdk_ge_25 分版本"
 introduced = "c7cfb932（JDK 25 档案暴露）"
-fixed = []
+fixed = ["387216e7"]
 status = "pending"
 owner = "fix-jdk25"
 diagnose = "javap -p java.lang.VirtualThread | grep native 对照 runtime/java_runtime/src/java/lang/virtual_thread_impl.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "erased-setter-inner-into-e0283"
+stage = "compile"
+symptom = "JDK 25：stack_stream_factory_caller_class_finder.rs 等 this.__set_<字段>(Into::<Object>::into(x.into())) 报 E0283（type annotations needed）"
+match = [["E0283", "__set_"]]
+tests = ["TestStackWalkerFrames"]
+cause = "宏 restore_erased_accessors 对擦除字段（superclass_erased_fields）的 setter 实参外包 Into::<Object>::into；生成器按 wrapper 形参（字段声明类型）已写尾部裸 .into()，外包后其目标类型不可推断。修法：实参尾部裸 .into() 改写为 Into::<声明类型>::into(recv) 再外包 Into<Object>（runtime/rava_macros_core/src/block/rewrite.rs，单测 erased_setter_pins_inner_into）"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "查生成文件 __set_ 调用的实参尾部 .into() 与字段是否在 superclass_erased_fields"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-stackwalk-buffer-size-limit"
+stage = "run"
+symptom = "JDK 25 运行期 InternalError「not enough space in buffers」（StackWalker.forEach / getCallerClass / Throwable 行号）"
+match = [["not enough space in buffers"]]
+tests = ["TestStackWalkerLines", "TestStackWalkerFrames"]
+cause = "JDK 25 callStackWalk / fetchStackFrames 传入的是缓冲总长 bufferSize（帧填至 bufferSize），JDK 21 传 batchSize（填至 startIndex+batchSize）。手写 native 统一按 limit 判空间：JDK 21 调用方传 start_index+batch_size，JDK 25 传 bufferSize"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -c StackStreamFactory$AbstractStackWalker 对照 callStackWalk 实参；runtime/java_runtime/src/java/lang/stack_stream_factory_abstract_stack_walker_impl.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-class-protection-domain-field"
+stage = "run"
+symptom = "JDK 25：Class.getProtectionDomain().getCodeSource() 恒 null（TestProtectionDomainFaces 输出 codesource-nonnull=false）"
+match = [["codesource-nonnull=false"]]
+tests = ["TestProtectionDomainFaces"]
+cause = "JDK 25 删去 Class.getProtectionDomain0 native，改读字段 Class.protectionDomain（VM 在定义类时注入），空则回落 Holder.allPermDomain。修法：vm_intrinsics.toml [vm_state.field_hooks] 登记 protectionDomain 读前接收者钩子 Class.__vm_protection_domain（boot_noop），首读时按定义加载器 / 预定义表求出 ProtectionDomain 写回字段；JDK 21 仍为 getProtectionDomain0 native，两者共用 __defined_protection_domain"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -p java.lang.Class | grep -i protectionDomain；runtime/java_runtime/src/java/lang/class_impl/attrs.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-stackframeinfo-reflective-element-flow"
+stage = "run"
+symptom = "JDK 25 运行期 panic「stub: java/lang/StackFrameInfo.declaringClass」（FrameBuffer.at → ClassFrameInfo.declaringClass）"
+match = [["stub: java/lang/StackFrameInfo.declaringClass"]]
+tests = ["TestStackWalkerFrames"]
+cause = "JDK 25 StackFrameBuffer 以反射 type.getDeclaredConstructor(StackWalker).newInstance 分配帧元素再存入 stackFrames 数组；闭包分析器对 Constructor.newInstance 结果到数组元素的流未建模（StackFrameInfo 经 [reflect] 入闭包但其 declaringClass 未被判可达，生成存根）。属闭包反射建模缺口，不在本分支范围（G1 闭包 hub）"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = []
+status = "open"
+owner = "闭包反射建模（G1 后续，待派）"
+diagnose = "rava build --jdk 25 TestStackWalkerFrames --stop-after emit --trace-class java/lang/StackFrameInfo；查 declaringClass 是否在档案调用链上"
 doc = ""
 since = "2026-10-11"
