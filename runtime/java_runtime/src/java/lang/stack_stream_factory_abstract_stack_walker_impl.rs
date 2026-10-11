@@ -177,9 +177,10 @@ where
     /// int startIndex, T[] frames)`（JDK 21）。续体参数：本模型无虚拟线程续体帧（VirtualThread 为 VM 边界类），
     /// 帧流即当前载体线程栈。
     ///
-    /// 两个版本的 native 体各自直接调 `__fill_in_frames`（帧数组实参不经中间 helper 转手）：闭包分析器按
-    /// native 形参建模手写体对实参数组的写入，多一跳转手后 JDK 21 仅类模式帧缓冲的 Class 元素被判恒 null
-    ///（failure_patterns `jdk21-stackwalk-cfg-scan-regression`）
+    /// 两个版本的 native 体各自直接调 `__fill_in_frames` 并直接上调 `self.doStackWalk`：闭包手写扫描器只在
+    /// 本 fn 体内认 `self` 上的回调（经辅助 fn 并入的调用不再视为 `self` 接收者），上调移进 `&self` 辅助后
+    /// doStackWalk 的接收者与本 native 的 this 断开，JDK 21 仅类模式帧缓冲的 Class 元素被判恒 null
+    ///（failure_patterns `hw-upcall-self-lost-in-helper`）
     #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
@@ -193,7 +194,10 @@ where
         }
         let mut stream = Self::__anchor_stream(skipframes);
         let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
-        self.__walk_batches(stream, skipframes, batch_size, start_index, end_index)
+        let anchor = Self::__register_anchor(stream, start_index, end_index)?;
+        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
+        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
+        Ok(R::from(result?))
     }
 
     /// native `callStackWalk(int mode, int skipframes, ContinuationScope, Continuation, int bufferSize,
@@ -213,7 +217,10 @@ where
         }
         let mut stream = Self::__anchor_stream(skipframes);
         let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
-        self.__walk_batches(stream, skipframes, batch_size, start_index, end_index)
+        let anchor = Self::__register_anchor(stream, start_index, end_index)?;
+        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
+        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
+        Ok(R::from(result?))
     }
 
     /// 本线程栈快照为帧流：跳过 StackWalker 实现帧，再跳 `skipframes` 帧
@@ -224,8 +231,8 @@ where
         Anchored { frames: all, cursor }
     }
 
-    /// 首批已填：登记锚点、上调 `doStackWalk`，返回（含异常完成）后锚点失效
-    fn __walk_batches(&self, stream: Anchored, skipframes: i32, batch_size: i32, start_index: i32, end_index: i32) -> Result<R> {
+    /// 首批已填：登记锚点并返回之；调用方上调 `doStackWalk`，返回（含异常完成）后移除锚点
+    fn __register_anchor(stream: Anchored, start_index: i32, end_index: i32) -> Result<i64> {
         if end_index - start_index < 1 {
             return Err(_internal_error("stack walk: decode failed"));
         }
@@ -236,9 +243,7 @@ where
             a
         };
         crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
-        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
-        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
-        Ok(R::from(result?))
+        Ok(anchor)
     }
 
     /// native `fetchStackFrames(long mode, long anchor, int batchSize, int startIndex, T[] frames)`（JDK 21）：
