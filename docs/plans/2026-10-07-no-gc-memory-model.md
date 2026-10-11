@@ -226,3 +226,73 @@ C4 收官之后实施。入队路径进闭包后，`ReferenceQueue.poll` 当前�
 
 - 另有协调巡检会话（rava-b5）在管服务器作业、合批和 tasks.md。发抽查或合批前先和它对齐，避免同 tag 作业冲突，也避免子代理总数超过上限 5。
 - 计数漂移的结论：无害，`Drop` 不改，但计数不得作为永生判据（第三节第 8 条）。后续代码不要引入 `strong >= IMMORTAL` 这类判断。
+
+## 六、无 GC 第一步现状（2026-10-11，分支 nogc-escape）
+
+### 1. 结论
+
+- 逃逸分析 + 区域整组释放已经端到端打通。PartitionInteger 的 `findCombo` stream 区域 `@8..=23`
+  （`Arrays.stream(combo).map(i -> primes[i]).sum()`）通过判定并被包装为 `java_scope!({ … })`。
+- **判据的「内存不随迭代增长」已达成**：release 档峰值 RSS 恒定在 **57 MB**（三次实测：56.8 / 57.0 / 57.1 MB），
+  输出与 JDK 逐字一致。改造前是 1 分 34 秒 OOM（19.8 GB）。
+- **判据的「运行时间回到 JDK 量级」未达成**：release 三次实测 46.2 / 46.5 / 47.0 s。同机（kr1）JVM SerialGC 为
+  0.70–0.74 s，峰值 RSS 110 MB，rava 慢约 65 倍。
+  - 回收已不是瓶颈，剩下的是 stream 管线本身的执行开销。每个叶子约 3.7 µs，含 10 余次分配与数十次动态派发。
+  - 这一步只把「OOM 不可跑」变成「可跑、内存平稳」。追平运行时间属于运行时性能线（审查即派 C 等），
+    不在区域释放的范围内。
+  - debug 档抽查里 PartitionInteger 撞 300 s 运行超时，原因同上（dev 档约 10 倍于 release）。
+- 设计（§4.5）与实现的差异，按终态取了更精确的方案：
+  - 堆改为**字段敏感**：每个节点按字段名分槽，数组元素与 lambda 捕获各占一槽；未知内容为 `{O, AX}`。
+  - 摘要改为**按实参上下文**：键为（类、方法、实参抽象值），每个方法最多 16 个上下文，之后并入合并上下文。
+    不动点按轮次推进，每轮末尾跑静默循环；轮数上限为 256。
+  - 新增**必抛路径剪枝**：无处理器覆盖时，必然以未捕获异常结束的指令序列不分析。这样做是安全的，
+    因为异常出口不整组释放，只撤销日志持有。
+  - 区域栈放在 `exec_context.rs` 的载体槽 `region_slot`，没有单独开线程局部。
+  - `[escape]` 新增 `fresh` 效果：native 新建、内容为空、运行时类未知的对象，派发同 CHA，instanceof 为 ⊤。
+    已登记 `Array.newArray`。`Object.getClass` / `Object.hashCode` 登记为 pure。
+  - record 的 ObjectMethods 引导已建模。根类有字节码的方法不当作手写方法。
+- 诊断开关：`rava build --escape-trace`（项目不设环境变量）。输出逐区域判定、拒绝原因与摘要调用链，以及改写结果。
+
+### 2. 实测（kr1，提交 812b763f，`--release`）
+
+| 测点 | rava | JVM（SerialGC） |
+|---|---:|---:|
+| 运行墙钟（3 次） | 46.2 / 46.5 / 47.0 s | 0.70 / 0.71 / 0.74 s |
+| 峰值 RSS | 57 MB（恒定） | 110 MB |
+| 二进制 | 54.2 MB（strip 前产物含调试段） | — |
+| 输出 | 与 JDK 一致（md5 8bb42de8…） | — |
+
+抽查（jp1 / kr1，提交 aead4a60，dev 档）：
+- 8/9 通过：HelloWorld、DeepCopy、CollectorsDemo、StreamDemo、StreamTest、LambdaCaptureTest、
+  PrimitiveStreams、ArraysStream。
+- PartitionInteger 运行超时（300 s，原因见上）。
+
+生成器单测：
+- 首轮（aead4a60）闭包 crate 有 1 例失败：`thread_local_lint` 不允许 `region.rs` 自定义线程局部。
+  已在 812b763f 把区域槽移入 `exec_context.rs` 载体槽来修复。
+- 全量复跑作业 `nogc-unit3`（kr1）在交接时仍在排队。
+
+### 3. 失败路线（不要重走）
+
+- **上下文不敏感摘要**：经 `requireNonNull` 等公共方法，形参互相污染，区域全部被拒。
+- **字段不敏感堆**：`sourceStage` 自环把节点内容并成一团，误判「存入旧对象」。
+- **第一版轮次方案**：后面的摘要请求在本轮不再执行，导致不收敛。已改为每轮末尾跑静默循环。
+- **新上下文形参初值取 null**：int 实参与 Void 合流后失真。已改为直接取实参。
+- **把 `fresh` 效果建成 `Alloc("<fresh>…")`**：不健全。未知类上的虚派发解析为空，被当作「不返回」；
+  instanceof 也会被误折叠。已改为独立的 `Native` 节点。
+
+### 4. 剩余拒绝（PartitionInteger，均为真实逃逸或待建模）
+
+- `printf` 段（`findCombo @174..=182`、`partition @69..=75`、`main @0..=63`）：被拒，因为 `PrintStream.formatter` 存进了旧对象。
+  这是真实缓存，正确拒绝。
+- `System.out.print` 段（`@87..=99` 等）：被拒，因为 AQS 锁 `Node` 被 CAS 进了旧对象。这是真实逃逸。
+- 这些段的对象不成环，引用计数可以回收，不影响内存平稳。
+
+### 5. 下一步
+
+1. **运行时间**：stream 管线执行开销归运行时性能线。perf 剖析作业 `nogc-perf3` 的结果见
+   `cluster_results/job/nogc-perf3/`。release 档默认 strip，需要带 `CARGO_PROFILE_RELEASE_STRIP=none` 才有符号。
+2. **所有权推断 `Weak`**（第一节第 2 条第二项）：处理逃逸到旧对象、但仍然成环的结构。
+3. **引用类语义**：随 `Rc` 释放触发。
+4. **JDK 方法体内的区域**：需要开放世界分析。档案共享方法体，事实只能取自 JDK 侧。
+5. `thread_local_lint` 文档头需要登记新载体槽 `region_slot` 的理由。该文件属闭包 crate（G1 负责），本分支未改。

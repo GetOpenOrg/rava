@@ -1505,3 +1505,18 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+[[pattern]]
+id = "region-escape-after-group-free"
+stage = "run"
+symptom = "debug 档 panic「区域逃逸：<类型> 在整组释放后仍有 N 个组外引用」"
+match = [["区域逃逸", "整组释放后仍有"]]
+tests = []
+cause = "逃逸分析（generator/crates/escape）判定区域对象不逃逸、生成器插入 java_scope! 后，运行时整组释放时发现组外仍持有组内对象：分析器对某个 native / 手写方法或引导方法的建模偏乐观（vm_intrinsics.toml [escape] 效果登记不实、手写方法被当作字节码分析等），或区域语句段改写把仍被段外引用的临时量包进了块。release 档不检查，表现为悬垂引用"
+introduced = "nogc-escape（无 GC 第一步，区域整组释放）"
+fixed = []
+status = "open"
+owner = "无 GC 内存模型（nogc-escape）；诊断守卫，尚无实例"
+diagnose = "rava build <Test.java> --stop-after emit --escape-trace：看该方法各区域判定与摘要调用链，核对 panic 类型在区域内的去向；先修分析器建模或 [escape] 登记（宁可拒绝区域），不放宽运行时断言"
+doc = "docs/plans/2026-10-07-no-gc-memory-model.md §4.5、§六"
+since = "2026-10-11"
