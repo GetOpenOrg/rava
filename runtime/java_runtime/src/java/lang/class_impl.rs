@@ -324,7 +324,7 @@ impl Class {
         // 层次表按名有序（`meta::merged` 排序）：二分定位与线性 find 同取首个同名行（`meta::row`
         // 的口径）——checkcast / 反射实参校验热路径不再 O(表长) 扫描
         if crate::meta::row(crate::meta::class_hierarchy(), source)
-            .is_some_and(|(_, supers)| supers.contains(&target))
+            .is_some_and(|supers| supers.contains(&target))
         {
             return true;
         }
@@ -336,7 +336,7 @@ impl Class {
             if !seen.insert(cur) {
                 continue;
             }
-            if let Some((_, ifaces)) = crate::meta::row(crate::meta::class_interfaces(), cur) {
+            if let Some(ifaces) = crate::meta::row(crate::meta::class_interfaces(), cur) {
                 for i in ifaces.iter() {
                     if *i == target {
                         return true;
