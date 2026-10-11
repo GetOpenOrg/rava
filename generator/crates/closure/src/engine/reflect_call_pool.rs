@@ -110,12 +110,16 @@ impl Engine<'_> {
                     self.vm_dispatch(&key, iface, via.clone(), VmBind::Rcall(i));
                 }
             } else {
-                let o = TypeSet { classes: IdSet::default(), open: IdSet::from_sorted(opens) };
-                let o = self.filter(&o, owner);
-                if !o.is_empty() {
-                    self.rcall_stats.open_recvs += 1;
-                    let t = self.method(key.clone(), via.clone());
-                    self.add_to(Node::P(t, 0), &o);
+                // 静态成员没有接收者：open 部分不灌入其形参 0（`rcall_widen` 已登记本体并接实参池）
+                let st = self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
+                if !st {
+                    let o = TypeSet { classes: IdSet::default(), open: IdSet::from_sorted(opens) };
+                    let o = self.filter(&o, owner);
+                    if !o.is_empty() {
+                        self.rcall_stats.open_recvs += 1;
+                        let t = self.method(key.clone(), via.clone());
+                        self.add_to(Node::P(t, 0), &o);
+                    }
                 }
             }
         }
@@ -148,12 +152,19 @@ impl Engine<'_> {
         self.arrays.contains_key(&x) && !self.escaped.contains(&x)
     }
 
-    /// 成员 i 对接收者 x 逐个派发：按接收者选中实现，进按接收者克隆的上下文，P0 = exact(x)，形参接实参池
+    /// 成员 i 对接收者 x 逐个派发：按接收者选中实现，进按接收者克隆的上下文，P0 = exact(x)，形参接实参池。
+    /// 静态成员没有接收者：池值作「接收者」派发只造出无意义的（成员, 池对象）克隆（静态形参 0 被灌入对象值），
+    /// 与 `rcall_widen` 的静态短路同一口径——静态成员只经 `rcall_bind` 接实参池，不按池值克隆
     fn rcall_dispatch_recv(&mut self, i: usize, x: u32) {
         let (key, iface, virt, mask) = {
             let m = &self.rcall_members[i];
             (m.key.clone(), m.iface, m.virt, m.mask)
         };
+        let st = self.h.class(&key.owner).is_some_and(|cf| cf.method(&key.name, &key.desc).is_some_and(|mm| mm.is_static()));
+        if !virt && st {
+            self.rcall_stats.static_recvs += 1;
+            return;
+        }
         let k = if virt {
             let Some(site) = self.h.resolve_method(&key.owner, &key.name, &key.desc, iface) else {
                 self.unresolved.insert(key.to_string());
@@ -172,7 +183,8 @@ impl Engine<'_> {
         };
         self.rcall_stats.dispatched += 1;
         let via = Via::class("reflect", &key.owner);
-        let cx = self.recv_ctx(x);
+        // 接收者来源的上下文：目标是上下文平方法时并入本体（`ctx_flat.rs`）
+        let cx = self.flat_ctx(&k, self.recv_ctx(x));
         let t = self.method_ctx(k, cx, via);
         if virt {
             self.vm_targets.insert(t);

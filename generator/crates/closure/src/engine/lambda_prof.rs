@@ -172,6 +172,20 @@ impl Engine<'_> {
             p.dup_by,
             p.revived
         );
+        // 工作表与大表瞬时状态（定位周期性 RSS 尖峰：工作表突发 / 大表扩容）
+        eprintln!(
+            "{tag} wip mwork={} swork={} cwork={} fwork={} watch={} site_nodes={} dispatched={} objs={} hubs_sites={} mref_keys={}",
+            self.mwork.len(),
+            self.swork.len(),
+            self.cwork.len(),
+            self.fwork.len(),
+            self.watch.len(),
+            self.site_nodes.len(),
+            self.dispatched.values().map(|s| s.len()).sum::<usize>(),
+            self.objs.len(),
+            self.hub_sites.len(),
+            self.mref_keys.len(),
+        );
         let mut hs: Vec<(&u32, &u64)> = p.hub_replay.iter().collect();
         hs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
         for (&h, &n) in hs.into_iter().take(TOP) {

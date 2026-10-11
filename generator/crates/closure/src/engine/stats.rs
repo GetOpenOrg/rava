@@ -414,6 +414,9 @@ impl<'a> Engine<'a> {
         // 增长枢纽接收者峰值 / 升级为共享枢纽的增长枢纽数 / 共享枢纽数 / 升级阈值（hub_share.rs）
         let shared = self.hub_ids.keys().filter(|k| matches!(k.2, HubSet::Shared(_))).count();
         v["hub_share"] = json!([self.grow_max, self.hub_upgraded, shared, hub_share::HUB_SHARE]);
+        // 选择性上下文（ctx_flat.rs）：档位、继承 / 接收者来源并入本体的次数、判为平的成员数、
+        // 略去的静态反射成员「接收者」派发数（reflect_call_pool.rs）
+        v["ctx_flat"] = json!([self.ctx_flat_mode, self.ctx_flat_hits, self.ctx_flat_memo.values().filter(|&&f| f).count(), self.rcall_stats.static_recvs]);
         v
     }
 }

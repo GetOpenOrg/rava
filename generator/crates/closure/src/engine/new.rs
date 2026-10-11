@@ -179,6 +179,13 @@ impl<'a> Engine<'a> {
             level_ctxs: HashMap::default(),
             ctx_free_memo: HashMap::default(),
             ctx_free_hits: 0,
+            ctx_flat_memo: HashMap::default(),
+            ctx_flat_hits: 0,
+            ctx_flat_mode: std::env::var("RAVA_CTX_FLAT").ok().map_or(1, |v| match v.as_str() {
+                "0" | "off" | "false" => 0,
+                "2" | "broad" => 2,
+                _ => 1,
+            }),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),
