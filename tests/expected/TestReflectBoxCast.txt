@@ -1,0 +1,15 @@
+int 50 51 52 0 54
+int-inst true true java.lang.Integer true
+int-cache true 2
+long 15 21 27 java.lang.Long
+bool true false true java.lang.Boolean
+narrow q -5 300 1.5 2.5 2.5 true
+static 144 145
+ref p:42 q:42 box42 true 1
+iface box42 5
+field 42 42.0 42 1234567890123 true q 2.25 field-text
+field-inst true java.lang.Integer true 42
+static-field 99 -7 92
+field-rw 8 8
+ctor box42 box5 box5 1 6 sb! 2
+ctor-wrapper 77 78
