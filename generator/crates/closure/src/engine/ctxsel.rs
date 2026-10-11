@@ -87,20 +87,20 @@ impl Engine<'_> {
                 let c = match caller {
                     _ if !heap => NOCTX,
                     NOCTX if !reader && self.fresh_factory(key) => self.site_ctx(m, off),
-                    // 继承调用方上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`）
-                    c => self.flat_ctx(key, c),
+                    // 继承调用方上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`，位 1）
+                    c => self.flat_ctx(key, c, 1),
                 };
                 self.selector_ctx(m, off, key, c)
             }
-            // lambda 静态实现方法继承创建时的上下文：同样按 `ctx_flat.rs` 收口
-            Call::Lambda(c) => self.flat_ctx(key, c),
+            // lambda 静态实现方法继承创建时的上下文：同样按 `ctx_flat.rs` 收口（位 4）
+            Call::Lambda(c) => self.flat_ctx(key, c, 4),
             Call::Handle => NOCTX,
-            Call::Eager => return self.flat_ctx(key, caller),
+            Call::Eager => return self.flat_ctx(key, caller, 1),
         };
         if ctx == NOCTX && !reader && self.methods[m].kind == Kind::Bytecode && self.forwarder(key) {
             return match caller {
                 NOCTX => self.site_ctx(m, off),
-                c => self.flat_ctx(key, c),
+                c => self.flat_ctx(key, c, 1),
             };
         }
         ctx

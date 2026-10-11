@@ -209,7 +209,7 @@ impl<'a> Engine<'a> {
                 // 构造器引用：容器类在 lambda 创建点分配抽象对象；构造器是上下文平方法时并入本体（`ctx_flat.rs`）
                 let oid = if self.container(&k.owner) { self.obj_at(l.site.0, l.site.1, &k.owner) } else { self.id(&k.owner) };
                 let cond = Some(format!("A:{}", self.names[lid as usize]));
-                let cx = self.flat_ctx(&resolved, self.recv_ctx(oid));
+                let cx = self.flat_ctx(&resolved, self.recv_ctx(oid), 2);
                 let t = super::cut::with_ctx(None, cond, || self.method_ctx(resolved, cx, via));
                 self.edge(m, off, t, Recv::Exact(oid), &all, None, None);
                 if let (Some(res), Some(rt)) = (res, ret) {

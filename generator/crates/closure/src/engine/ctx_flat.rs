@@ -28,10 +28,10 @@
 use super::*;
 
 impl Engine<'_> {
-    /// 继承 / 接收者来源的上下文收口：key 是上下文平方法时并入本体（`NOCTX`）。
-    /// 档位与具体求值上下文不收口（引导查询折叠 / 具体求值不与本体共享摘要）
-    pub(super) fn flat_ctx(&mut self, key: &MemberRef, ctx: u32) -> u32 {
-        if ctx == NOCTX || ctx == self.concrete.ctx || self.level_ctxs.contains_key(&ctx) || self.ctx_flat_mode == 0 {
+    /// 继承 / 接收者来源的上下文收口：key 是上下文平方法时并入本体（`NOCTX`）。bit 为收口来源的位开关
+    /// （1 继承 / 2 接收者 / 4 lambda 创建上下文）。档位与具体求值上下文不收口（引导查询折叠 / 具体求值不与本体共享摘要）
+    pub(super) fn flat_ctx(&mut self, key: &MemberRef, ctx: u32, bit: u8) -> u32 {
+        if ctx == NOCTX || ctx == self.concrete.ctx || self.level_ctxs.contains_key(&ctx) || self.ctx_flat_mode & bit == 0 {
             return ctx;
         }
         if self.ctx_flat(key) {
@@ -75,10 +75,10 @@ impl Engine<'_> {
                 0xb2 | 0xb3 => {}
                 // 实例字段：克隆携带逐对象字段常量，并入即汇合
                 0xb4 | 0xb5 => return false,
-                // new：非容器类分配无堆身份（异常等）；容器类分配点带堆上下文链，宽档放行（粗化）
+                // new：非容器类分配无堆身份（异常等）；容器类分配点带堆上下文链，宽档（位 16）放行（粗化）
                 0xbb => {
                     let classfile::insn::Operand::Class(c) = &i.operand else { return false };
-                    if self.ctx_flat_mode < 2 && self.container(c) {
+                    if self.ctx_flat_mode & 16 == 0 && self.container(c) {
                         return false;
                     }
                 }

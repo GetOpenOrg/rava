@@ -181,10 +181,16 @@ impl<'a> Engine<'a> {
             ctx_free_hits: 0,
             ctx_flat_memo: HashMap::default(),
             ctx_flat_hits: 0,
-            ctx_flat_mode: std::env::var("RAVA_CTX_FLAT").ok().map_or(1, |v| match v.as_str() {
+            // RAVA_CTX_FLAT 位开关（诊断 / 二分用）：1 继承收口、2 接收者收口、4 lambda 创建上下文收口、
+            // 8 反射池静态成员短路；0/off 全关（= 基线行为），缺省 15（全开），broad = 15|16（容器分配放行）
+            ctx_flat_mode: std::env::var("RAVA_CTX_FLAT").ok().map_or(15, |v| match v.as_str() {
                 "0" | "off" | "false" => 0,
-                "2" | "broad" => 2,
-                _ => 1,
+                "1" | "inherit" => 1,
+                "2" | "recv" => 2,
+                "4" | "lambda" => 4,
+                "8" | "pool" => 8,
+                "broad" => 31,
+                other => other.parse().unwrap_or(15),
             }),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),

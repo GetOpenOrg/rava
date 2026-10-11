@@ -239,9 +239,9 @@ impl<'a> Engine<'a> {
                 let base = match self.recv_ctx(r) {
                     NOCTX => {
                         let r = self.relay_ctx(m, &key);
-                        self.flat_ctx(&key, r)
+                        self.flat_ctx(&key, r, 1)
                     }
-                    c => self.flat_ctx(&key, c),
+                    c => self.flat_ctx(&key, c, 2),
                 };
                 let cx = self.recv_call_ctx(m, off, &key, base);
                 let t = cut::with_ctx(None, Some(format!("A:{rname}")), || self.method_ctx(key, cx, via));
@@ -324,7 +324,7 @@ impl<'a> Engine<'a> {
         }
         for x in objs {
             // 接收者来源的上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`）
-            let base = self.flat_ctx(&key, self.recv_ctx(x));
+            let base = self.flat_ctx(&key, self.recv_ctx(x), 2);
             let c = cx(self, base);
             let t = self.method_ctx(key.clone(), c, via.clone());
             self.edge(m, off, t, Recv::Exact(x), a, ret, res);
@@ -332,7 +332,7 @@ impl<'a> Engine<'a> {
         if !rest.is_empty() {
             // 非对象接收者：内存访问中继方法继承调用方上下文（`relay.rs`），其余进本体；平方法同样收口
             let r = self.relay_ctx(m, &key);
-            let base = self.flat_ctx(&key, r);
+            let base = self.flat_ctx(&key, r, 1);
             let c = cx(self, base);
             let t = self.method_ctx(key, c, via);
             // 物化后的值集不再带来源节点：来源的接口界随接收者传下（`getClass` 结果只展开同时 ⊂ 该接口的子类型）
