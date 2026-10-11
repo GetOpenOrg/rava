@@ -937,6 +937,48 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     - K1 在 c7cfb932 之前已合入，K2 前测点已含 K1，所以这组数字只反映 K2 的增量。K1 相对 S7-3 的开销没有单独测量。
     - 语料里没有真正的热循环用例：`tests/perf` 只有 VirtualThreadScale，也没有 HelloWorld 循环版。分派开销要定量，须补一个百万次级接口 / 虚分派循环用例，留到 K8 档案验收时一并做。
   - 旁证：dev 上 K2 前 StockTrans 测得构建 882.70 s、运行 0.039 s、二进制 79 085 128 B。该次之后 dev 转跑 JDK25 全量，计时改到 jp1 重做，dev 这一点不作对照。jp1 上这一对被其他作业占机阻塞 26 分钟以上，单次构建约 15 分钟，前后两次加起来超过一小时，所以中止、未测，留到 K8 档案验收时连同热循环用例一起补测。
+- K3 实现已提交（s7-k3，基于 main c6b126cc），**未达验收，未合入**。提交：72ed9339（宏方法 trait + 生成器按 owner 导入）、430f6bd8（合成调用 / 反射分派 / 引导映像 / main 导入，runtime 补 `use`，宏单测修正）、f5d9e2ca（invokevirtual 接收者静态类型登记）、f3368359（接口载体不导入方法 trait）。
+  - 宏（`runtime/rava_macros_core/src/block/gen/wrapper/method_trait.rs`）：每类生成 `pub trait X__Methods<G…>: Sized` 与 `impl X__Methods for X`。`const fn`、关联常量与 std 同名成员（`clone` / `eq` / `hash` 等）仍留固有 impl。接口载体成员也仍为固有。
+  - 生成器：`NameScope.methods` 记录用到的方法 trait，`ctx.ty.use_methods(bin)` 登记，项目写出时按 `em.scope` 渲染 `use …::X__Methods as _;`。`instr/src/method_traits.rs` 的 `record_insn` / `record_member` 自 owner 沿超类链找声明类，止于接口或 Object。登记来源：逐指令 owner；invokestatic / invokevirtual / invokespecial 入口（覆盖 indy 辅助、`concat_stringify`、ObjectMethods 等合成调用）；invokevirtual 接收者静态类型比 owner 更具体时（协变返回、上游已知子类）；`phase2/dispatch.rs` 反射分派臂（`String::valueOf_obj`）；`boot_image` `Plan.methods`；`main.rs` 钩子类与主类（跳过接口和手写类）。
+  - runtime：约 86 个手写文件只加 `use … as _;`，diff 经核对不含其他改动。除 `_impl.rs` / `_ext.rs` 外，也涉及非共置的基础设施文件：`error.rs`、`lib.rs`、`array_impl.rs`、`monitor.rs`、`reflect_dispatch.rs` 等。
+- K3 验证（jp2 / sg1）：
+  - 宏单测 21/21（作业 s7k3-it2b）。生成器本机 `cargo check --tests` 通过。
+  - 生成树对照（9 例：HelloWorld、DeepCopy、InheritanceChain、TestGenerics、InterfaceDispatch、TestDynamicProxy、CollectorsDemo、TestZonedDateTime、TestArrayList；基线 c6b126cc 对 430f6bd8）：按「层 + 相对路径」归一后，方法体文本逐字节不变，只多出 `use …__Methods as _;` 行。闭包类集合、raw-audit 一致。`__Methods` 只出现在 `use` 行，可读层方法体中没有。其余差异都是 D8 段归属变化与 `java_base_body_N` 重新编号：D8 按源码体量切段，`use` 行增加了体量。DeepCopy 的引导映像 crate 路径也因此变化。
+  - 工作区 `cargo check`（f5d9e2ca，作业 s7k3-it3）：TestDynamicProxy、TestZonedDateTime、TestGenerics、InterfaceDispatch、TestArrayList 通过；430f6bd8 上 HelloWorld、CollectorsDemo、InheritanceChain 已通过。DeepCopy 失败：`user/src/main.rs` 有 14 处 E0432，原因是导入了接口载体的 `__Methods`（`InvocationHandler`、`java.security.Key` 系列）。f3368359 已修，**未复测**。
+  - **峰值内存未达标**（sg1 同机，`/usr/bin/time` maxRSS，基线 → K3）：
+
+    | 用例 | crate | 基线 | K3 | 变化 |
+    |---|---|---|---|---|
+    | HelloWorld | java_base_decl（底段） | 1 022 680 KB / 31.1 s | 1 270 836 KB / 38.5 s | +24% |
+    | HelloWorld | java_base_body_1 / _2 | 860 / 989 MB | 879 / 1 006 MB | +2% |
+    | DeepCopy | java_base_decl（底段） | 4 154 428 KB / 122.2 s | 5 430 308 KB / 165.9 s | +31% |
+    | DeepCopy | 声明上段 | decl_1 1 080 MB、decl_2 601 MB | decl_1 799 MB（段数 3 → 2） | — |
+    | DeepCopy | body 最大段 | 1 951 MB | 1 937 MB | −1% |
+
+    方法体 crate 在 ±5% 内。声明底段升 24–31%，超出 ±5%。成因待分：一是每类多出 trait 定义加 trait impl（成员签名展开两遍），以及 trait 方法解析的类型检查开销；二是 D8 按体量重新切段，底段吸收了原上段内容（DeepCopy 段数 3 → 2）。
+- K3 未完成项（交回时状态）：
+  1. DeepCopy 复测：f3368359 之后全部 9 例工作区 `cargo check` 通过。
+  2. 声明底段峰值归因与收回。先固定 D8 段划分再对照（关闭 `use` 行计入体量，或按基线段表强制划分），区分「段重切」与「trait 展开」两部分。若 trait 展开占主：
+     - trait 只声明签名、方法体留在 trait impl，避免在 trait 定义里再展开缺省体；
+     - 字段访问器、`__init_on`、`_init_not_null` 这类不跨 crate 使用的内部成员留固有 impl；
+     - 评估以上两项后再定是否需要按类拆 trait。
+     目标：同机 ±5%。
+  3. 生成器全量单测（含 `no_jdk_literals` / `jdk_literal_lint`）未跑。本机只跑过 `cargo check --tests`。
+  4. 七例抽查集未跑（只做到 `cargo check`，未运行比对输出）。
+  5. std 同名成员与接口载体成员仍为固有 impl：K6 搬 struct 后跨 crate 失效。需在 K6 前改名（如经 `__`-前缀内部名转发），或整体并入方法 trait。
+- K3 经验（供后续步骤）：
+  - 手写文件不止 `_impl.rs`：基础设施文件（`error.rs`、`lib.rs`、`monitor.rs`、`reflect_dispatch.rs`、`array_impl.rs` 等）也直接调用生成类的方法，同样需要显式导入。K4 把基础设施拆进 `runtime/java_marker/` 时，标记层文件不得调用 `X__Methods`（标记层无方法面）。依赖行为的调用须留在行为层，或经 `extern "Rust"` 转交。
+  - 合成调用（indy 降级、ObjectMethods、反射分派臂、引导映像、main 钩子）不经字节码 invoke 指令，必须在生成点逐一登记。漏登记表现为 E0599 / E0425（找不到关联函数）。补登记以 invoke 入口统一登记为主，避免散点。
+  - K6：`X__Methods` 的定义与 impl 须留在声明 crate（与方法体同层），不能进标记 crate。孤儿规则允许：trait 本地、类型外来。导入路径须随之改指声明 crate 的 `pub use`。
+- **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
+  - **K3 收尾**（先做）：完成上面未完成项 1–4，达标后合入；第 5 项并入 K6 前置。
+  - **K4** 运行时基础设施分层：按上表实施。新增两项要求：
+    - 标记层基础只含类型与句柄，不含任何 `use …__Methods`；
+    - 迁移前先扫 K3 加入的 `use` 行，确定哪些文件属行为层。
+  - **K5** 类初始化骨架去按类展开：与 K3、K4 无依赖，可与 K3 收尾并行。
+  - **K6** 标记 crate 生成：前提是 K3（含第 5 项改名）、K4、K5。方法 trait 与其 impl 留声明 crate；标记 crate 展开文本不含 `__Methods`。
+  - **K7** D8 共置手写随宿主：独立。注意 K3 增加的 `use` 行改变了按体量切段的结果，模拟器（`decl_scc_sim.py`）的体量口径需同步计入导入行，或改为不计 `use` 行。
+  - **K8** 档案验收：按上表；连同 K2 留下的 §4.3 热循环用例、StockTrans 计时一并补测。
 - 下一步：
-  - K4（运行时基础设施分层）；
-  - K3（方法 trait）与 K5（类初始化骨架）同 K1、K2 互不依赖，可并行派发。
+  - K3 收尾（未完成项 1–4），然后 K4（运行时基础设施分层）；
+  - K5（类初始化骨架）与 K1–K4 互不依赖，可并行派发。
