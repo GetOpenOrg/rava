@@ -71,6 +71,13 @@ impl Engine<'_> {
         let mut ks: Vec<_> = kinds.iter().map(|(k, (n, s))| (*k, *n, s.len())).collect();
         ks.sort();
         eprintln!("{tag} ctxfree hits={} members={}", self.ctx_free_hits, self.ctx_free_memo.values().filter(|&&f| f).count());
+        eprintln!(
+            "{tag} ctxflat mode={} hits={} members={} static_pool_recvs={}",
+            self.ctx_flat_mode,
+            self.ctx_flat_hits,
+            self.ctx_flat_memo.values().filter(|&&f| f).count(),
+            self.rcall_stats.static_recvs
+        );
         eprintln!("{tag} ctxkind objs={} {}", self.objs.len(), ks.iter().map(|(k, n, d)| format!("{k:?}={n}/{d}")).collect::<Vec<_>>().join(" "));
         let bounds = [8usize, 64, 256, 1024, usize::MAX];
         let mut hist = [(0u64, 0u64); 5];

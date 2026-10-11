@@ -179,6 +179,23 @@ impl<'a> Engine<'a> {
             level_ctxs: HashMap::default(),
             ctx_free_memo: HashMap::default(),
             ctx_free_hits: 0,
+            ctx_flat_memo: HashMap::default(),
+            ctx_flat_hits: 0,
+            // RAVA_CTX_FLAT 位开关（诊断 / 二分用）：1 继承收口、2 接收者收口、4 lambda 创建上下文收口、
+            // 8 反射池静态成员短路、16 宽档（容器分配放行）。0/off 全关（= 基线行为）。缺省 8：
+            // 继承 / 接收者 / lambda 三路收口在语料上精度变宽（性能计划 §4.13：DeepCopy 超时 / OOM、lambdas +1），
+            // 只有池静态短路过四例集合口径（DeepCopy 类 / 方法等全一致，仅统计项差：method_contexts −46、
+            // 句柄通道 targets 417→374——被去掉的（静态成员, 池对象）克隆不产生成员级差异）
+            ctx_flat_mode: std::env::var("RAVA_CTX_FLAT").ok().map_or(8, |v| match v.as_str() {
+                "0" | "off" | "false" => 0,
+                "1" | "inherit" => 1,
+                "2" | "recv" => 2,
+                "4" | "lambda" => 4,
+                "8" | "pool" => 8,
+                "all" => 15,
+                "broad" => 31,
+                other => other.parse().unwrap_or(8),
+            }),
             level_inited: HashSet::default(),
             mwork: VecDeque::new(),
             in_mwork: HashSet::default(),

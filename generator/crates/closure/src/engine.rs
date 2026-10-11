@@ -63,6 +63,7 @@ mod site_prof;
 mod lambda_prof;
 mod ctx_prof;
 mod ctx_free;
+mod ctx_flat;
 mod hub_prof;
 mod gather;
 mod defs;
@@ -446,6 +447,10 @@ pub struct Engine<'a> {
     /// 上下文透明方法（`ctx_free.rs`）：判定缓存；进本体的次数（诊断）
     ctx_free_memo: HashMap<MemberRef, bool>,
     ctx_free_hits: u64,
+    /// 上下文平方法（`ctx_flat.rs`）：判定缓存；继承 / 接收者来源并入本体的次数；档位（0 关 / 1 紧 / 2 宽）
+    ctx_flat_memo: HashMap<MemberRef, bool>,
+    ctx_flat_hits: u64,
+    ctx_flat_mode: u8,
     level_inited: HashSet<(String, u32)>,
 
     mwork: VecDeque<usize>,

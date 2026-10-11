@@ -21,6 +21,9 @@
 //! 调用点上下文（`site_ctx` / `site_ctx_in`）是以调用点命名的堆上下文，克隆体内的容器分配以它为链首。
 //! 形参常量上下文（`const_ctx`）只为形参常量（null）分开方法节点：堆上下文取外层上下文，克隆体内的分配与不克隆时
 //! 同一抽象对象——只剪去常量判定不可达的分支，不改变对象敏感的粒度。
+//!
+//! 选择性收口（`ctx_flat.rs`）：继承与接收者来源的上下文在目标是上下文平方法（判据只看字节码）时并入本体，
+//! 按调用点新建的上下文（工厂 / 转发 / 选择子 / 档位 / 具体求值）不受影响。
 
 use super::*;
 
@@ -84,18 +87,20 @@ impl Engine<'_> {
                 let c = match caller {
                     _ if !heap => NOCTX,
                     NOCTX if !reader && self.fresh_factory(key) => self.site_ctx(m, off),
-                    c => c,
+                    // 继承调用方上下文：key 是上下文平方法时并入本体（`ctx_flat.rs`，位 1）
+                    c => self.flat_ctx(key, c, 1),
                 };
                 self.selector_ctx(m, off, key, c)
             }
-            Call::Lambda(c) => c,
+            // lambda 静态实现方法继承创建时的上下文：同样按 `ctx_flat.rs` 收口（位 4）
+            Call::Lambda(c) => self.flat_ctx(key, c, 4),
             Call::Handle => NOCTX,
-            Call::Eager => return caller,
+            Call::Eager => return self.flat_ctx(key, caller, 1),
         };
         if ctx == NOCTX && !reader && self.methods[m].kind == Kind::Bytecode && self.forwarder(key) {
             return match caller {
                 NOCTX => self.site_ctx(m, off),
-                c => c,
+                c => self.flat_ctx(key, c, 1),
             };
         }
         ctx

@@ -86,6 +86,8 @@ pub(super) struct RcallStats {
     pub(super) open_recvs: usize,
     /// 跳过的 lambda / 手写实现对象接收者
     pub(super) synthetic_recvs: usize,
+    /// 略去的静态成员「接收者」派发数（静态成员没有接收者，池值派发只造无意义克隆，`reflect_call_pool.rs`）
+    pub(super) static_recvs: usize,
     /// 去冗余：被池中 open 涵盖而略去的值数 / 排空时放行进视图的值数 / 有放行的排空轮数
     pub(super) absorbed: usize,
     pub(super) released: usize,
