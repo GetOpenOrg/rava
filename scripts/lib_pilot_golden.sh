@@ -11,6 +11,10 @@
 #   scripts/lib_pilot_golden.sh sc2    # spring-core 切片：AntPathMatcher
 #   scripts/lib_pilot_golden.sh sc3    # spring-core 切片：PropertyPlaceholderHelper + StringUtils
 #   scripts/lib_pilot_golden.sh sc4    # spring-core 切片：StreamUtils + MultiValueMap
+#   scripts/lib_pilot_golden.sh jc1    # jackson-core 切片（矩阵 #3）：JsonParser 流式解析与 token 状态机（含吞吐基准）
+#   scripts/lib_pilot_golden.sh jc2    # jackson-core 切片：JsonGenerator 往返
+#   scripts/lib_pilot_golden.sh jc3    # jackson-core 切片：数字边角与编码（含数字吞吐基准）
+#   scripts/lib_pilot_golden.sh jc4    # jackson-core 切片：JsonFactory 配置与特性开关
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
@@ -39,7 +43,7 @@ PY
 # 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
 . "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1|sc2|sc3|sc4 [--no-transpile|--emit-only]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1|sc2|sc3|sc4|jc1|jc2|jc3|jc4 [--no-transpile|--emit-only]}"
 TRANSPILE=1
 EMIT_ONLY=0
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
@@ -97,12 +101,31 @@ sc1|sc2|sc3|sc4)
     CP="$LIBS/spring-core-6.2.19.jar:$LIBS/spring-jcl-6.2.19.jar"
     LIB_ARGS=(--deps "$LOCK" --cp spring-core,spring-jcl)
     ;;
+jc1|jc2|jc3|jc4)
+    # jackson-core 切片（矩阵 #3）：同 sc*，用户 main 为唯一入口，库类按档案调用链翻译
+    case "$MODE" in
+        jc1) MAIN=JacksonParserMain ;;
+        jc2) MAIN=JacksonGeneratorMain ;;
+        jc3) MAIN=JacksonNumbersEncodingMain ;;
+        jc4) MAIN=JacksonFactoryConfigMain ;;
+    esac
+    CP="$(ls "$LIBS"/jackson-core-*.jar | head -1)"
+    LIB_ARGS=(--deps "$LOCK" --cp jackson-core)
+    ;;
 *) echo "未知模式: $MODE" >&2; exit 2;;
 esac
 
 echo "== [1/3] JVM 侧 golden（真 jar）=="
 rm -rf classes && "$JAVAC" -d classes -cp "$CP" "$MAIN.java"
-"$JAVA" -Dstdout.encoding=UTF-8 -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt"
+# 三测点（运行 / 构建耗时与二进制大小）写 /tmp/${MODE}_metrics.txt；程序自报的基准行（stderr 中
+# JC_BENCH 等）一并记入。毫秒计时取 date +%s%N
+now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+METRICS="/tmp/${MODE}_metrics.txt"
+: > "$METRICS"
+T0=$(now_ms)
+"$JAVA" -Dstdout.encoding=UTF-8 -cp "classes:$CP" "$MAIN" > "golden/${MODE}_jvm.txt" 2> "/tmp/${MODE}_jvm.err"
+echo "jvm_run_ms=$(( $(now_ms) - T0 ))" >> "$METRICS"
+sed -n 's/^\(JC_BENCH .*\)/jvm \1/p' "/tmp/${MODE}_jvm.err" >> "$METRICS"
 echo "JVM 侧 $(wc -l < "golden/${MODE}_jvm.txt" | tr -d ' ') 行"
 
 echo "== [2/3] 转译 + 编译 + 运行（翻译 crate）=="
@@ -113,19 +136,30 @@ print(re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', sys.argv[1]).lower())
 PY
 )"
 if [[ "$TRANSPILE" == 1 ]]; then
+    T0=$(now_ms)
     "$RAVA" build "tests/lib_pilot/$MAIN.java" "${CORPUS_JDK_ARGS[@]}" --clean "${LIB_ARGS[@]}" \
         --out "$SCRATCH" --stop-after emit > "/tmp/${MODE}_transpile.log" 2>&1 \
         || { echo "转译失败，见 /tmp/${MODE}_transpile.log" >&2; exit 1; }
+    echo "transpile_ms=$(( $(now_ms) - T0 ))" >> "$METRICS"
 fi
 if [[ "$EMIT_ONLY" == 1 ]]; then
     echo "emit-only：$SCRATCH"
     exit 0
 fi
+T0=$(now_ms)
 "$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
+echo "compile_ms=$(( $(now_ms) - T0 ))" >> "$METRICS"
 EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
-"$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>>"/tmp/${MODE}_cargo.err" \
-    || { echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
+echo "exe_bytes=$(stat -c %s "$EXE")" >> "$METRICS"
+T0=$(now_ms)
+"$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>"/tmp/${MODE}_rs.err" \
+    || { cat "/tmp/${MODE}_rs.err" >> "/tmp/${MODE}_cargo.err"; echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
+echo "rs_run_ms=$(( $(now_ms) - T0 ))" >> "$METRICS"
+sed -n 's/^\(JC_BENCH .*\)/rs \1/p' "/tmp/${MODE}_rs.err" >> "$METRICS"
+grep -h "^\[emit\]\|^\[jar\]\|^\[lib" "/tmp/${MODE}_transpile.log" 2>/dev/null | sed "s/^/transpile: /" >> "$METRICS" || true
+echo "== 三测点 =="
+cat "$METRICS"
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then
