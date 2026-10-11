@@ -6,12 +6,14 @@
 #   2) TestReflectLdcHotLoop 三段（ldc / 类字面量 / Method.invoke）逐段墙钟（计时副本 RldcSegments）；
 #   3) stream 管线 vs 手写循环（BenchStreamLoop，每元素 ns）——PartitionInteger 46 s 的归因旁证。
 # 用法（仅服务器作业）：scripts/perf_rt_bench.sh <out.tsv> [全例运行次数，缺省 5]
+#   环境变量 CASES="A B C" 只跑子集（类名空格分隔，缺省全部三个）
 # 测试源写在 tests/e2e/99_rtbench/（作业检出内自建，作业后即弃，不入库）。
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:?用法: $0 <out.tsv> [运行次数]}"
 REPS="${2:-5}"
+CASES="${CASES:-BenchReflectArg RldcSegments BenchStreamLoop}"
 BENCH="$REPO/tests/e2e/99_rtbench"
 CLS="$REPO/build/rtpp-classes"
 mkdir -p "$BENCH" "$CLS"
@@ -146,7 +148,7 @@ run_one() { # $1=side $2=类名 $3=完整运行命令（bash -c 执行）
     done
 }
 
-for c in BenchReflectArg RldcSegments BenchStreamLoop; do
+for c in $CASES; do
     echo "=== $c rava build"
     "$RAVA" build "$BENCH/$c.java" --release --keep-artifacts --stop-after compile > "$CLS/$c.rava.log" 2>&1 \
         || { echo "RAVA BUILD FAIL $c" >&2; tail -5 "$CLS/$c.rava.log" >&2; continue; }

@@ -295,6 +295,17 @@ pub fn take_bad_arg() -> bool {
     crate::exec_context::state().bad_arg.replace(false)
 }
 
+// ── 包装类实例的结构化取值（P-B 可回退原型）────────────────────────────────────
+//
+// 翻译出的包装类实例（`Integer.valueOf` 等工厂产出）此前经 `__obj_str().parse()` 取回基本值：
+// 一次翻译体 toString（构建 Java String）+ UTF-16→UTF-8 转换 + 文本解析，是反射热路径的
+// 已量化大头（docs/reports/2026-10-11-rt-perf-profiling.md）。包装类均为 final，其 hashCode
+// 契约与值一一对应（JDK 规范：Integer/Byte/Short 恒等、Character = 码元、Boolean 1231/1237、
+// Float = floatToIntBits）——经 hashCode 虚分派一次取回值位，无分配、无文本往返，结果与文本
+// 路径逐值相同；接收名单与原文本路径的类名集合一致（JLS §5.1.2 拓宽口径不变，陌生类名仍
+// 拒收）。Long / Double 的 hashCode 折叠到 int 不可逆，仍走文本路径（结构化承载的完整方案
+// P-A「ObjectVTable 原生值视图臂」见上述报告）。
+
 /// 装箱 Object → i32（两形态：站点装箱原生盒 Rc<i32> / 翻译 Integer 包装——
 /// 与 field_impl 的 __unbox_int 同一双路径策略，此处作为协议公共面）。
 ///
@@ -317,14 +328,16 @@ pub fn unbox_i32(v: &Object) -> Option<i32> {
     if let Some(b) = any.downcast_ref::<u16>() {
         return Some(*b as i32);
     }
+    // P-B：Integer / Short / Byte / Character 的 hashCode 即值（final 类，规范契约）
     match v.0.__class_name() {
-        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" => v.0.__obj_str().parse::<i32>().ok(),
-        "java/lang/Character" => unbox_char(v).map(|c| c as i32),
+        "java/lang/Integer" | "java/lang/Short" | "java/lang/Byte" | "java/lang/Character" => {
+            Some(v.0.hashCode())
+        }
         _ => None,
     }
 }
 
-/// 装箱 Object → char（UTF-16 码元）：原生 u16 盒 / 翻译 Character 包装（toString 为该字符）。
+/// 装箱 Object → char（UTF-16 码元）：原生 u16 盒 / 翻译 Character 包装（hashCode 即码元）。
 /// char 形参只接受 Character 实参（JDK：int 不窄化为 char）。
 pub fn unbox_char(v: &Object) -> Option<u16> {
     if v.0.is_jvm_null() {
@@ -334,14 +347,7 @@ pub fn unbox_char(v: &Object) -> Option<u16> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Character" {
-        let mut buf = [0u16; 2];
-        let s = v.0.__obj_str();
-        let mut chars = s.chars();
-        let c = chars.next()?;
-        if chars.next().is_some() {
-            return None;
-        }
-        return c.encode_utf16(&mut buf).first().copied();
+        return v.0.hashCode().try_into().ok();
     }
     None
 }
@@ -368,9 +374,9 @@ pub fn unbox_bool(v: &Object) -> Option<bool> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Boolean" {
-        return match v.0.__obj_str().as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
+        return match v.0.hashCode() {
+            1231 => Some(true),
+            1237 => Some(false),
             _ => None,
         };
     }
@@ -392,7 +398,8 @@ pub fn unbox_f64(v: &Object) -> Option<f64> {
     unbox_f32(v).map(|x| x as f64)
 }
 
-/// 装箱 Object → float：原生盒 / 翻译 Float 包装；拓宽接受 byte / short / char / int / long。
+/// 装箱 Object → float：原生盒 / 翻译 Float 包装（hashCode = floatToIntBits，按位还原）；
+/// 拓宽接受 byte / short / char / int / long。
 pub fn unbox_f32(v: &Object) -> Option<f32> {
     if v.0.is_jvm_null() {
         return None;
@@ -401,7 +408,7 @@ pub fn unbox_f32(v: &Object) -> Option<f32> {
         return Some(*b);
     }
     if v.0.__class_name() == "java/lang/Float" {
-        return v.0.__obj_str().parse::<f32>().ok();
+        return Some(f32::from_bits(v.0.hashCode() as u32));
     }
     unbox_i64(v).map(|x| x as f32)
 }
