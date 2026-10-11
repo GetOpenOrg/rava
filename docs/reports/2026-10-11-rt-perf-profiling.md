@@ -4,8 +4,7 @@
 > `__obj_str` 文本解析、无 GC 第一步后 PartitionInteger 的 stream 管线开销。任务书以「热点定位
 > 到行 + 占比数字」为验收；本报告给出同机（kr1）rava 与 JVM 对照、热点函数与行号、占比，
 > 以及随附微修复与 unbox 承载方案评估。基线提交 7b0bf81a（batch-1011k + 剖析脚本），
-> 修复提交 9157a73e。作业：`cluster_results/job/rtpp-prof1/`（基线剖析）、
-> `cluster_results/job/rtpp-verify1/`（修复后验证与 A/B）。
+> 修复链 9157a73e → fc68236d → 57eda4ee（P-B 收窄定稿）。作业索引见 §八。
 >
 > 注：jackson jc1 分派视图约 19% 已归 S7 线（tasks.md 第 4 条），不在本报告范围。
 
@@ -136,9 +135,39 @@ BenchReflectArg，ns/调用，中位）：
   1.23% + String `Display::fmt`/`units` 中 `__obj_str` 的 to_string 份额，
   合计约 4–5% 全样本（invoke 段占 82% ⇒ 折合每次调用约 80–100 ns）。
 
-### 4. A/B 结果（P-B 落地后，作业 rtpp-verify1）
+### 4. A/B 结果与 P-B 收窄（作业 rtpp-dbg2，57eda4ee 前一档 4b4ce416）
 
-（待填：idInt / idInt2 / RldcSegments invoke 段修复前后对照）
+A/B 两档跨机（基线 kr1 / 修复档云池另一台，同规格 15G；RldcSegments ldc 段两机 31.3 vs
+31.5 ms 基本一致、class 段 +9% 差异，解读时按 ~10% 机差折算）：
+
+| 测点 | 基线（kr1） | 修复档 | 变化 |
+|---|---:|---:|---|
+| RldcSegments invoke 段（1M 迭代 ×2 调用） | 3529 ms | 3120 ms | **−11.6%**（扣 ~10% 机差 ≈ −20%） |
+| BenchReflectArg idInt | 1910 ns | 1615 ns | −15% |
+| BenchReflectArg idInt2 | 2465 ns | 1944 ns | −21% |
+| TestReflectLdcHotLoop 整例墙钟 | 4.25–4.31 s | 3.66 s（rtpp-verify3 实跑） | −14% |
+
+**P-B 收窄（实测否决与见证不足的部分）**：rtpp-verify3 回归 7 例中 TestReflectBoxCast
+`narrow` 行 `1.5 → 0.0`——`half(3.0f)` 的 Float 实参经 hashCode 位形取值得到 0.0，即翻译
+Float 的 hashCode 路径（→ `floatToIntBits` 链）对 3.0f 应答 0（根因未查，独立缺陷嫌疑，
+已记 §七遗留）；Character / Boolean 的实参级路径无既有测例见证。最终形态（57eda4ee）：
+**Integer / Short / Byte（恒等 hashCode，回归通过）走结构化取值；Character / Boolean /
+Float / Long / Double 维持文本路径**。收窄后 A/B 的 int 路数字仍然成立（回归与 A/B 用例
+只经 int 实参）。
+
+回归（rtpp-verify3，fc68236d 档，7 例）：PartitionInteger PASS（run 49.4 s，与基线
+48–50 s 持平——微修复不伤 stream 路径）、TestIfaceAssignWalk（新）PASS、
+TestInvokeNullArgs / TestReflectFieldMethod / TestReflectLdcHotLoop PASS、
+TestReflectBoxCast FAIL（即上述 Float 行，已修）、TestUnboxWrapperFaces 因 expected
+当时未入库被 SKIP（expected 已随 57eda4ee 入库，rtpp-verify4 复跑）。
+
+### 5. 修复后剖析（rtpp-prof2，kr1，fc68236d 档，F997 自采样 top）
+
+unbox 文本簇整体退出 top15（`Integer.getChars` / `toString_i` / `AbstractStringBuilder` /
+`String.__init_on_arr` 由 0.84–1.23% 各项归零）；新的 top = `invoke0`（含 member_key
+内联）7.67%、String `Display::fmt` 7.10%、malloc 6.12% + cfree 4.51%、`String::units`
+3.83%、`is_static_descriptor` 2.61%、`native_invoke` 1.50%、varargs `Store::to_vec`
+1.71%——**member_key 分派键重建成为明确的下一目标**（与 §七.1 一致）。
 
 ## 四、对象 3：PartitionInteger release 48 s（JVM 0.65–0.70 s）
 
@@ -192,20 +221,29 @@ self 视图呈弥散形态：最大单点 `ReducingSink.accept_i` 3.08%（内层
 | 对象释放 | ~5% | Object drop_glue 4.4%（自耗第一）+ malloc 1.5% |
 | 装箱 | <3% | Integer::from 0.76% 等（IntStream 全程基本类型，无装箱热点） |
 
-## 六、微修复（提交 9157a73e）
+## 六、微修复（9157a73e → fc68236d → 57eda4ee）
 
 1. `Class.__name_assignable`（`runtime/java_runtime/src/java/lang/class_impl.rs:324`）：
    层次表与直接超接口表由线性 `iter().find` 改 `meta::row` 二分（表按名有序，同取首个同名行，
    与 meta::row 既有口径一致）。调用面：反射实参校验（`reflect_dispatch.rs:199`）、数组
    checkcast 视图（`array.rs:366`）、`isAssignableFrom`、代理与 Array.set 分量检查。
-2. `rd::unbox_*`（`reflect_dispatch.rs:298` 起）：翻译包装类实例取值从 `__obj_str().parse()`
-   文本往返改为 hashCode 结构化取值（P-B 原型，见 §三）；Long/Double 不可逆仍走文本。
+   （fc68236d 修解构：`meta::row` 返回 `Option<&V>` 仅值，rtpp-verify2 曾因此发射构建
+   E0308 两处——java_runtime 裸检出不可 cargo check，此类错误只有发射构建能拦截。）
+2. `rd::unbox_i32`（`reflect_dispatch.rs:298` 起）：翻译 Integer / Short / Byte 实例取值从
+   `__obj_str().parse()` 文本往返改为 hashCode 结构化取值（P-B 原型收窄后的最终形态，
+   见 §三.4）；Character / Boolean / Float / Long / Double 维持文本路径。
 
-回归测例（expected 由服务器 JVM 生成）：`tests/e2e/62_reflection/TestIfaceAssignWalk.java`
-（两条查表路径 + 反射实参校验 + 拒收面）、`TestUnboxWrapperFaces.java`（全值域 + 拓宽 +
-Float 位形 + 拒收面）。
+回归测例（expected 由服务器 JVM 生成并入库）：`tests/e2e/62_reflection/
+TestIfaceAssignWalk.java`（两条查表路径 + 反射实参校验 + 拒收面）、`TestUnboxWrapperFaces.java`
+（全值域 + 拓宽 + Float 位形 + 拒收面）。既有测例覆盖：TestReflectBoxCast / TestInvokeNullArgs /
+TestReflectFieldMethod / TestReflectLdcHotLoop / PartitionInteger。
 
-## 七、下一步建议
+## 七、下一步建议（含本步遗留）
+
+0. **遗留（本步发现，未收口）**：翻译 `Float.hashCode` 链（疑 `floatToIntBits`）对 3.0f
+   应答 0——P-B 的 Float 位形取值因此被否决；这本身是一个可疑的翻译面缺陷（或 hashCode
+   桥接缺口），值得单独立测例核查（`Float.valueOf(3.0f).hashCode()` 期望 1077936128）。
+   另外 43f37f63（us1）43 µs/迭代与本测 4.3 µs/迭代差约 10 倍未闭合（§二）。
 
 1. **Method.invoke 分派键重建（最大单项，String 簇 ~17% + 其分配 ~16% 的一部分）**：
    `__member_key`（`method_impl.rs:36`）每次 invoke 从 clazz/name/parameterTypes 重建
@@ -234,6 +272,9 @@ Float 位形 + 拒收面）。
   （rava_macros / rava_macros_core / rava_coro）`--release --tests` 通过。
   `java_runtime` 单独不可 cargo check（`src/java` 等目录的 mod.rs 与伴生类模块由发射层
   在 scratch 内生成，裸检出 E0583 为既有形态，pristine 5328072a 同败）——其编译验证经
-  rtpp 作业的端到端构建承载。
-- 回归与 A/B：作业 rtpp-verify1（expected 生成、7 例回归、BenchReflectArg /
-  RldcSegments 复测、修复后行级剖析），结果见 `cluster_results/job/rtpp-verify1/`。
+  rtpp 作业的端到端构建承载（rtpp-dbg1 曾借此把 E0308 定位到行）。
+- 作业索引：rtpp-prof1（基线剖析 + 对照基准 + 整例墙钟，kr1，7b0bf81a）、rtpp-verify2
+  （首验，E0308 暴露，sg2）、rtpp-dbg1（E0308 定位，sg2）、rtpp-verify3（7 例回归，
+  fc68236d）、rtpp-dbg2（失败例差分 + A/B 基准，4b4ce416）、rtpp-verify4（收窄后 7 例
+  复跑，57eda4ee）、rtpp-prof2（修复后剖析，视排队情况）。结果均在
+  `cluster_results/job/rtpp-*/`。
