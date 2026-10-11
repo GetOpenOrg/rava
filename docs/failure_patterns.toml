@@ -1657,3 +1657,18 @@ owner = "闭包反射建模（G1 后续，待派）"
 diagnose = "rava build --jdk 25 TestStackWalkerFrames --stop-after emit --trace-class java/lang/StackFrameInfo；查 declaringClass 是否在档案调用链上"
 doc = ""
 since = "2026-10-11"
+
+[[pattern]]
+id = "hw-scanner-cfg-blind"
+stage = "compile"
+symptom = "JDK 21：DeepCopy 闭包 3076 → 6479 类，编译 E0599 GSSNameSpi 上无 equals_obj；TestStackWalkerFrames 运行 null_recv（Class.getName 接收者判恒 null，isMethodHandleFrame）"
+match = [["no method named `equals_obj` found for struct `gss_name_spi::GSSNameSpi`"], ["null_recv", "isMethodHandleFrame"]]
+tests = ["DeepCopy", "TestStackWalkerFrames"]
+cause = "闭包手写扫描器不识别 #[cfg]：stack_stream_factory_abstract_stack_walker_impl.rs 的 cfg(jdk_ge_25) 分支（ResolvedMethodName 分配、对 info 的按名写 name / type_ / classOrMemberName）在 JDK 21 下也被建模，按名写只知字段名使值流放宽、闭包翻倍（本机二分确认仅此文件引起）；equals_obj 为接口重声明 Object 方法时调用点带重载后缀而接口块不发射的潜伏缺陷，随闭包扩张暴露。null_recv 根因未钉死（cfg 并入与 callStackWalk→__call_stack_walk 多一跳二者之一）。候选：扫描器按参考 JDK 求值 cfg(jdk_ge_25)，见交接文档"
+introduced = "efc32d6f"
+fixed = []
+status = "open"
+owner = "fix-jdk25（待协调者定夺：涉及 closure/src/handwritten）"
+diagnose = "同一 rava 二进制、只换 runtime 文件做 --stop-after emit 二分，比较 [emit] JDK 类数；--trace-class sun/security/jgss/GSSUtil"
+doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md"
+since = "2026-10-11"
