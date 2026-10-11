@@ -16,7 +16,7 @@ public class TestReflectLdcHotLoop {
     private static int twice(int x) { return x * 2; }
 
     public static void main(String[] args) throws Exception {
-        final int n = 200_000;
+        final int n = 1_000_000;
 
         // ldc：同一字面量恒为同一驻留对象
         String first = "hot-literal";
@@ -47,8 +47,9 @@ public class TestReflectLdcHotLoop {
         tw.setAccessible(true);
         long invSum = 0;
         for (int i = 0; i < n; i++) {
-            invSum += (Integer) step.invoke(o, i & 255);
-            invSum += (Integer) tw.invoke(null, i & 127);
+            // 返回值经 hashCode 取值（Integer.hashCode 即其值），不做 checkcast
+            invSum += step.invoke(o, i & 255).hashCode();
+            invSum += tw.invoke(null, i & 127).hashCode();
         }
         System.out.println("invoke " + invSum);
     }
