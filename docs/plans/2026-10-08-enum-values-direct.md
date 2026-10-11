@@ -360,3 +360,20 @@ HelloWorld 与 CollectorsDemo 结果相同，`Method.invoke` 的调用点共 5 �
 4. **合入**。与 batch-1012（e5200a3e，含 fix-1010 / charset-ext / fix-1011）、seed-chain（c7fbaf8c）、annot-sig（2867cbde）三方试合并（`git merge-tree`）均无冲突。
    - 同文件重叠：batch-1012 也改了 `engine.rs`、`engine/bytecode.rs`、`vm_intrinsics.toml`；seed-chain 也改了 `vm_intrinsics.toml`，但两者改的都是不同节。annot-sig 无同文件改动。
    - 语义上需留意：本分支改了 `facts/fields.rs::field_info` 的可序列化字段面（`serialPersistentFields`）。若别的分支依赖「可序列化类全部非 transient 字段可经偏移写入」，合入后要复测。
+
+### 9.7 耗时回归复测：已消失（2026-10-11，分支 reflect-perf，main 30bd666f）
+
+§9.5 记的 deepcopy 闭包耗时回归（基 a88d7075 502 s / 5.9 GB → 8ce97959 889 s / 7.7 GB），在当前 main 上复测已不存在，不需二分与修复。
+
+- **作业**：`rp-cc-30bd666f`（main 30bd666f）与同机对照 `rp-cc-a88d7075`（reflect-marker 的基，78b744fe 之前），都在 dev 上用 `scripts/closure_composition_job.sh` 跑（closure 模式，`/usr/bin/time -v`），两作业同时启动，dev 上另有两个单测作业在跑。
+
+| 用例 | a88d7075（同机对照） | main 30bd666f |
+|---|---|---|
+| DeepCopy | 232 s / 6268 MB / 3553 类 | **99 s / 2928 MB / 3033 类** |
+| TestSerialDefaultSuid | — | 98 s / 2922 MB / 3038 类 |
+| TestJndiNoProvider | — | 415 s / 7143 MB / 5116 类 |
+
+- DeepCopy 已低于目标（≤ 520 s、≤ 6 GB）：同机比 a88d7075 快 57%、峰值降 53%，类数少 520。§9.5 的 502 s 是 kr2 读数，dev 上同一提交只要 232 s，所以两组数字只能各自同机比较。
+- **回归消失的原因**：perf-regress4 的 c3ec480d（`SerialCallbackContext.obj` 等值持有者按对象分开，见 `2026-10-09-transpile-time-regression.md` 第四轮）。§9.5 怀疑的 78b744fe 只是触发者：8ce97959 让 `defaultReadObject` 路径入档案，由此暴露出整堆字段互灌，§9.5 记的 `W->E` / `E->S` / `R->S` 推送暴涨和 `HashMap$Node.value` 高出度都是它的表现。之后 aad074f8（句柄存取入口逐接收者接边）、c1d §34–§36 的具体求值又陆续收窄。78b744fe 的建模口径（边界类字段只在手写层点名时按手写处理）保持不变。
+- **TestJndiNoProvider**：不在本行目标内。415 s 是 closure 模式读数，不能直接和转译计划里 us1 build 模式的 348 s 比。类数 5116 比两例序列化多约 2080，其中含 SunJCE 等 JCA 提供者（`.out` 前 200 KB 中 `com/sun/crypto/provider` 出现 58 次）。它的调用链经类路径 jar 校验到达 `Security.getProviders`，属已知合法可达（`2026-10-06-c1d-jca-provider-order.md` §根因），本轮不处理。峰值 7.0 GB 高于序列化两例，若需压低，另立 JNDI 项，从 JCA 门入手。
+- **结论**：tasks.md 的「reflect-marker 耗时回归」行关闭。§9.6 第 1 项完成，第 2、3 项照旧留作续作。
