@@ -1519,3 +1519,18 @@ status = "fixed"
 diagnose = "scripts/diag/vt_repeat.sh TestContinuationPinned 100 20（JDK=1 同口径对照）；机制看 scripts/diag/pinned_race.sh 的 early / earlySameCarrier / stateFlips，与参考 JDK 同量级即非 rava 偏差"
 doc = "docs/plans/2026-10-01-c1d-closure-bloat.md §21.8.5「pinned」与「B3 余项现状（2026-10-11）」"
 since = "2026-10-11"
+
+[[pattern]]
+id = "iface-root-member-overload-name"
+stage = "compile"
+symptom = "E0599：接口上找不到 equals_obj（如 GSSNameSpi.equals_obj）——接口重声明根类 equals(Object) 且带同名重载，调用点带描述符后缀"
+match = [["E0599", "equals_obj"]]
+tests = ["TestIfaceObjectOverload", "DeepCopy"]
+cause = "规划器不在接口上发射重声明的根类公开虚方法（root_keyed，经根类 vtable 分派），但调用点 naming::mangle_if_overloaded 按接口重载态（equals 有 equals(Self) 重载）把 equals(Object) 改名为 equals_obj。潜伏缺陷，闭包扩张纳入 jgss 后暴露（fix-jdk25 交接 C 节）。修复：owner::is_iface_root_member 作单一判定，接口接收者上的根类公开方法命名同根类，lambda 实现句柄重定向共用"
+introduced = ""
+fixed = ["5b6aacf0"]
+status = "pending"
+owner = "fix-iface-obj-overload"
+diagnose = "看报错方法是否为根类公开方法（equals / hashCode / toString）且接收者为接口；查 instr/src/naming.rs mangle_uncached 与 input/src/plan.rs root_keyed 是否同口径"
+doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md C 节；翻译对照 §13.4"
+since = "2026-10-11"
