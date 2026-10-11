@@ -187,6 +187,7 @@ impl<'a> Engine<'a> {
             self.unresolved.insert(key.to_string());
         }
         self.push_m(idx);
+        self.lprof_tick();
         if kind != Kind::Missing && (is_static && key.name != "<clinit>" || key.name == "<init>") {
             self.init(&key.owner, via.clone());
         }
