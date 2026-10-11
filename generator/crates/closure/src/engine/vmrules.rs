@@ -46,8 +46,8 @@ pub(super) const VM_RULES: &[VmRule] = &[
     // StackOverflowError：宏在每个生成方法入口注入 __stack_check（lib.rs），耗尽时经 JvmError::stack_overflow 构造；
     // 注入调用对分析器不可见，规则落到构造入口（与 null_pointer / out_of_memory 同口径，a3-T1b）
     VmRule { id: "stack-check", basis: "JVMS §2.5.2 / §2.5.6：方法调用入口 Java 虚拟机栈耗尽", ops: &[], fns: &["stack_overflow"] },
-    // 线程未捕获异常的默认报告（输出异常描述）
-    VmRule { id: "uncaught", basis: "JLS §11.3：未捕获异常终结线程，由默认未捕获异常处理报告", ops: &[], fns: &["report_uncaught_in"] },
+    // 线程未捕获异常：线程退出时虚调 Thread.dispatchUncaughtException 交处理器；引导失败由 VM 原生打印
+    VmRule { id: "uncaught", basis: "JLS §11.3：未捕获异常终结线程，经线程的 UncaughtExceptionHandler 报告（JNI DetachCurrentThread / 线程退出）", ops: &[], fns: &["dispatch_uncaught", "report_uncaught"] },
     // NullPointerException
     VmRule { id: "null-check", basis: "JVMS §6.5 getfield / putfield / invoke* / athrow / arraylength / monitor* / 数组存取：objectref 为 null", ops: NULL_CHECKED, fns: &["null_pointer"] },
     VmRule { id: "null-check-array", basis: "JVMS §6.5 *aload / *astore：arrayref 为 null", ops: ARRAY_ACCESS, fns: &["null_pointer"] },

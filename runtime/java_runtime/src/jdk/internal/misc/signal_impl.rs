@@ -103,7 +103,9 @@ fn ensure_dispatcher() -> Result<()> {
         let n = crate::gil::blocking(|| unsafe { libc::read(read_fd, &mut b as *mut u8 as *mut libc::c_void, 1) });
         if n == 1 {
             if let Err(e) = Signal::dispatch(i32::from(b)) {
-                e.report_uncaught_in("Signal Dispatcher");
+                if let Ok(me) = crate::java::lang::Thread::currentThread() {
+                    e.dispatch_uncaught(&me);
+                }
             }
         } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
             continue;

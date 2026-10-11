@@ -84,7 +84,6 @@ impl Header {
 
     /// 堆对象是否曾进入监视器（映像对象恒为 false：不置标记）
     #[inline(always)]
-    #[allow(dead_code)] // 侧表回收（第三节第 5 条）在 drop_slow 中读取
     fn has_monitor(&self) -> bool {
         let w = self.word.load(Ordering::Relaxed);
         w & IMAGE_OBJ == 0 && w & MONITOR_MARK != 0
@@ -168,8 +167,8 @@ pub fn __image_hash(id: *const ()) -> Option<i32> {
 }
 
 /// 对象第一次进入监视器（身份侧表新建条目时）：在 `id - HEAD` 的对象头置 `MONITOR_MARK`。
-/// 映像对象（带 `IMAGE_OBJ`）跳过：永不释放，侧表条目不会悬空。本步只置标记，释放时据此删
-/// 侧表条目随第三节第 5 条实施。
+/// 映像对象（带 `IMAGE_OBJ`）跳过：永不释放，侧表条目不会悬空。释放时 `drop_slow` 据此调
+/// `monitor::forget` 删侧表条目（第三节第 5 条）。
 ///
 /// # Safety
 /// `id` 是存活 `__Obj` 对象（堆对象或映像对象）的身份即值地址，调用方持有其引用；
@@ -350,6 +349,10 @@ impl<T: ?Sized> __Obj<T> {
         unsafe {
             let size = self.header().size();
             let base = (self.ptr.as_ptr() as *mut u8).sub(HEAD);
+            // 曾进入监视器 / 挂过 parker：先摘侧表条目，再析构与归还（无 GC 文档第三节第 5 条）
+            if self.header().has_monitor() {
+                crate::monitor::forget(self.ptr.as_ptr() as *const () as usize);
+            }
             std::ptr::drop_in_place(self.ptr.as_ptr());
             std::alloc::dealloc(base, Layout::from_size_align_unchecked(size, ALIGN));
         }
