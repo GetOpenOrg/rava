@@ -96,6 +96,7 @@
 - **集成分支与 main**：rust-closure-analyzer = main，已含 batch-1013（669be8c6 起）。batch-1012（fcabee4a，含 1009–1011）与 batch-1013 均已放行。改名 rava 于 10-09 完成（目录、origin `yw/rava.git`、脚本路径）；dev 检出的 origin / 目录待 dev 恢复后改。
 - **batch-1012 放行记录**：单测仅已知失败；抽查 53/55（TestUrlParsingFaces 已知，TestJndiNoProvider 转译超时、放宽重跑通过）。java_base OOM 根因与修复：s6（c18e8fc4）后启动映像对象 7702 → 19347 且集中在单个 static 与单个启动函数，charset-ext 将映像分 24 段、启动函数拆 42 个（b3a860ac）、重定位先于回放（160789c7）、`ImageData::writes_statics_of` 统一判定（14917aed），java_base 峰值 11.8 GB → 1.6 GB。
 - **batch-1013 放行记录**：fix-1011 后续（3f78902a）+ reflect-marker（d51837e4，DeepCopy 3553 → 3532，HelloWorld / CollectorsDemo 3304 → 3263）+ logger-chain（65ab8a99，含 seed-chain c7fbaf8c，HelloWorld / CollectorsDemo → 3233，DeepCopy 3511，LogManager 0）。单测 A 组仅已知失败、B 组全过（`profile_union_key_and_coverage` 本次通过，第四根因仍在）。抽查 50/55：TestUrlParsingFaces 已知；DeepCopy、TestJndiNoProvider、TestSerialDefaultSuid、TestSerialUserGenericCallbacks 转译超 600 s，放宽超时重跑全部通过。
+- **reflect-marker 耗时回归（已消失，10-11 关闭）**：main 30bd666f 在 dev 上复测（closure 模式，作业 rp-cc-30bd666f）：DeepCopy 99 s / 2.9 GB / 3033 类，同机 a88d7075 为 232 s / 6.3 GB / 3553 类；TestSerialDefaultSuid 98 s / 2.9 GB；TestJndiNoProvider 415 s / 7.0 GB / 5116 类（含 JCA 提供者，属已知可达）。消失的原因是 perf-regress4 的 c3ec480d，78b744fe 只是触发者，其口径不变。详见 enum-values-direct §9.7。
 - **转译耗时回归**（第四轮达标，perf-regress4 待合入）：转译秒数 DeepCopy 527 → 912、TestSerialDefaultSuid 538 → 862、TestSerialUserGenericCallbacks 514 → 907（batch-1012 → 1013），TestJndiNoProvider 324 → 570 → 1006（batch-1009 → 1012 → 1013）；疑点 78b744fe 与 batch-1012 区间。目标：4 例回到 batch-1012 水平以下（JNDI ≤350 s），DeepCopy 峰值 ≤6 GB，闭包类集不变大。
 - **fix-1011 第四根因**：✅ 已随 bootcache 入 batch-1009c 合入（缓存组 = 未回退站点贡献的组，引导映像计划 §5.8.6）。
 - **日志链缺口 ③**：✅ d1df66a6 兑现（HelloWorld 3456 → 575 / 1875、CollectorsDemo 614 / 2000，闭包 112 s → 6 s；537 / 583 是 seed-chain 时的旧基线），详见引导映像计划 §5.9.7；`useSurrogateLoggers` 未折叠的终态解法（路径 A：折叠 `isSystem(module)`）记于同节。
@@ -254,7 +255,7 @@ closure-gates ──▶ 闭包落差解释 / C1d 收窄余项 ──────
 | 任务 | 状态 | 目标 / 说明 |
 |------|------|------------|
 | 缓存组回退撤回 | ✅ bootcache 9a029858 → batch-1009（待测） | 具体求值站点回退普通分析时，撤回只由该站点贡献的映像缓存组；修复后 `profile_union_key_and_coverage` 应通过。引导映像计划 §5.8.6 |
-| reflect-marker 耗时回归 | ⏳ 改名后派 | DeepCopy 分析 502 → 889 s、峰值 5.9 → 7.7 GB，疑为 78b744fe；续作 enum-values-direct §9.6 |
+| reflect-marker 耗时回归 | ✅ 已消失（reflect-perf 7caab3ef） | dev 复测 DeepCopy 分析 99 s / 2.9 GB，无需代码改动；结论见 enum-values-direct §9.6 |
 | 日志链缺口 ③ | ✅ d1df66a6 | HelloWorld 575 / 1875（切除上界兑现）；余项路径 A 见 §5.9.7 |
 | 转译耗时回归 | ✅ 第四轮达标（perf-regress4，c3ec480d，待合入） | 四例比 batch-1012 快约 40%（DeepCopy 306 s / 4.1 GB、JNDI 348 s、序列化两例约 310 s），类集合对 batch-1010c 无新增 |
 | 引导映像零拷贝 | 🔄 boot-zerocopy（基于 batch-1009，U4 / U11 §5.5.6） | 映像落为 Rust 常量；体积 ≤+5%、启动装载 ≤1 ms |
