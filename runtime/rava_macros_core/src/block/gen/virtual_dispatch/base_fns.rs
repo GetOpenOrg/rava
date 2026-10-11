@@ -34,23 +34,11 @@ pub(crate) fn define_base_has_body(ctx: &GenContext, f: &FnItem) -> bool {
     }
     let mut b = base_body(ctx, block);
     replace_clone_this_in_ok(&mut b);
-    let bs_flat: String = quote!(#b).to_string().split_whitespace().collect::<Vec<_>>().join(" ");
-    let has_bare_clone_this = bs_flat.contains("Clone :: clone (this)")
-        || bs_flat.contains("Clone :: clone(this)")
-        || bs_flat.contains("Clone::clone (this)")
-        || bs_flat.contains("Clone::clone(this)");
-    // this.method() 中是否有非 vtable / 非 accessor 方法
-    let parts: Vec<&str> = bs_flat.split("this .").chain(bs_flat.split("this.")).skip(1).collect();
-    let has_non_vtable_call = parts.iter().any(|part| {
-        let trimmed = part.trim_start();
-        let mname: String = trimmed.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-        !mname.is_empty()
-            && !mname.starts_with("__")
-            && trimmed[mname.len()..].trim_start().starts_with('(')
-            && !ctx.vtable_define_names.contains(&mname)
-    });
-    let has_self_ref = bs_flat.contains("Self ::") || bs_flat.contains("Self::");
-    !(has_bare_clone_this || has_non_vtable_call || has_self_ref)
+    // 与 classify_vtable_body 同一份事实；vtable 上声明的方法在 base 上下文可直接调用
+    let facts = BodyFacts::of(&b);
+    !(facts.self_path
+        || facts.clone_this
+        || facts.calls_wrapper_method(|m| ctx.vtable_define_names.contains(m)))
 }
 
 /// 生成 base 函数的 VirtualOverride 条目（按 vtable_overrides 有序表遍历，同名只取首个，
