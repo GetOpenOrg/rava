@@ -271,6 +271,12 @@ impl<'a> Engine<'a> {
     }
 
     pub(super) fn process(&mut self, m: usize) {
+        // 临时诊断（RAVA_DBG_METH）：方法键匹配时打印处理
+        if let Ok(want) = std::env::var("RAVA_DBG_METH") {
+            if self.methods[m].key.to_string().contains(&want) {
+                eprintln!("[proc] {}（第 {} 次，kind {:?}）", self.methods[m].key, self.methods[m].aseq, self.methods[m].kind);
+            }
+        }
         if self.cuts.active() && self.cuts.method(&self.methods[m].key.to_string()) {
             return;
         }
