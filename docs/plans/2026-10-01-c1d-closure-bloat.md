@@ -5221,7 +5221,7 @@ DeepCopy 大包：`sun/nio/cs/ext` 281、`java/util` 277、`sun/nio/cs` 177、`s
   TestDynamicProxy、HelloWorld、TestJdkConstructorLookup、TestCtorReflect、TestCtorLookupRuntimeClass、
   TestAbstractCtorInstantiation、TestMethodHandleDirect。
 - 单测 ut-a54r-4e7f24f5（dev）：closure lib 244 / 244；closure_cli（除种子 / 顺序两项）12 / 12；
-  `closure_independent_of_hash_seed` / `closure_independent_of_order` 交回时仍在跑（作业 02），种子无关性已由上面三种子闭包单独验证。
+  `closure_independent_of_hash_seed` / `closure_independent_of_order` 作业 02 在 dev 上触及 90 分钟作业时限被截断、未出结论（该二例一向耗时，见前文 2h 截断记录），由批次顺序单测作业 S 覆盖，种子无关性已由上面三种子闭包单独验证。
 
 **遗留。**
 - 终态是按构造器对象来源请求：在构造器调用点（`constructor_invokers`）按 Constructor 值的来源查找 / 枚举给出请求，
