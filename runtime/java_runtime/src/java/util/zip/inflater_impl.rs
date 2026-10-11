@@ -17,13 +17,7 @@ fn lib() -> Result<&'static zlib::Zlib> {
     zlib::zlib().ok_or_else(|| internal_error("zlib not available"))
 }
 
-fn copy_in(a: &JArray<i8>, off: i32, len: i32) -> Result<Vec<u8>> {
-    let mut v = Vec::with_capacity(len.max(0) as usize);
-    for i in off..off.saturating_add(len) {
-        v.push(a.get(i)? as u8);
-    }
-    Ok(v)
-}
+use zlib::copy_in;
 
 fn copy_out(a: &JArray<i8>, off: i32, data: &[u8]) -> Result<()> {
     for (i, b) in data.iter().enumerate() {
@@ -44,11 +38,12 @@ fn inflate_raw(addr: i64, input: *const u8, input_len: i32, output: *mut u8, out
     let z = lib()?;
     let strm = zlib::stream(addr);
     // SAFETY: strm 为活动流；input / output 在调用期间有效（堆副本或直接内存），zlib 不保留指针
+    let (avail_in, avail_out) = (zlib::avail(input_len)?, zlib::avail(output_len)?);
     let ret = unsafe {
         (*strm).next_in = input;
-        (*strm).avail_in = input_len as u32;
+        (*strm).avail_in = avail_in;
         (*strm).next_out = output;
-        (*strm).avail_out = output_len as u32;
+        (*strm).avail_out = avail_out;
         (z.inflate)(strm, zlib::Z_PARTIAL_FLUSH)
     };
     // SAFETY: 读取调用后的剩余量与 msg
@@ -90,7 +85,7 @@ impl Inflater {
         let z = lib()?;
         let dict = copy_in(&b, off, len)?;
         // SAFETY: addr 为 init 返回的活动流
-        let ret = unsafe { (z.inflate_set_dictionary)(zlib::stream(addr), dict.as_ptr(), len as u32) };
+        let ret = unsafe { (z.inflate_set_dictionary)(zlib::stream(addr), dict.as_ptr(), dict.len() as u32) };
         match ret {
             zlib::Z_OK => Ok(()),
             zlib::Z_STREAM_ERROR | zlib::Z_DATA_ERROR => Err(JvmError::illegal_argument(
@@ -108,7 +103,8 @@ impl Inflater {
     pub fn inflateBytesBytes(&self, addr: i64, input: JArray<i8>, input_off: i32, input_len: i32,
                              output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
         let inbuf = copy_in(&input, input_off, input_len)?;
-        let mut outbuf = vec![0u8; output_len.max(0) as usize];
+        zlib::check_out(&output, output_off, output_len)?;
+        let mut outbuf = vec![0u8; output_len as usize];
         let r = inflate_raw(addr, inbuf.as_ptr(), input_len, outbuf.as_mut_ptr(), output_len)?;
         copy_out(&output, output_off, &outbuf[..r.out_used.max(0) as usize])?;
         self.inflate_status(r)
@@ -127,7 +123,8 @@ impl Inflater {
     #[jvm_native]
     pub fn inflateBufferBytes(&self, addr: i64, input_addr: i64, input_len: i32,
                               output: JArray<i8>, output_off: i32, output_len: i32) -> Result<i64> {
-        let mut outbuf = vec![0u8; output_len.max(0) as usize];
+        zlib::check_out(&output, output_off, output_len)?;
+        let mut outbuf = vec![0u8; output_len as usize];
         let r = inflate_raw(addr, input_addr as *const u8, input_len, outbuf.as_mut_ptr(), output_len)?;
         copy_out(&output, output_off, &outbuf[..r.out_used.max(0) as usize])?;
         self.inflate_status(r)
@@ -166,8 +163,9 @@ impl Inflater {
     #[jvm_native]
     pub fn setDictionaryBuffer(addr: i64, buf_addr: i64, len: i32) -> Result<()> {
         let z = lib()?;
-        // SAFETY: addr 为活动流；buf_addr 为直接内存地址，len 已由 Java 侧界检查
-        let ret = unsafe { (z.inflate_set_dictionary)(zlib::stream(addr), buf_addr as *const u8, len as u32) };
+        let len = zlib::avail(len)?;
+        // SAFETY: addr 为活动流；buf_addr 为直接内存地址，len 已由 Java 侧界检查且非负
+        let ret = unsafe { (z.inflate_set_dictionary)(zlib::stream(addr), buf_addr as *const u8, len) };
         match ret {
             zlib::Z_OK => Ok(()),
             zlib::Z_STREAM_ERROR | zlib::Z_DATA_ERROR => Err(JvmError::illegal_argument(

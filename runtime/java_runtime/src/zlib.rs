@@ -148,3 +148,37 @@ pub fn free_stream(addr: i64) {
 pub fn pack(input_used: i32, output_used: i32, flag62: bool, flag63: bool) -> i64 {
     (input_used as i64) | ((output_used as i64) << 31) | ((flag62 as i64) << 62) | ((flag63 as i64) << 63)
 }
+
+/// 区间 `[off, off + len)` 越出长度 `length` 的异常（`Preconditions.checkFromIndexSize` 同消息）。
+fn range_error(off: i32, len: i32, length: i32) -> crate::error::JvmError {
+    crate::error::JvmError::array_index_out_of_bounds_message(format!(
+        "Range [{off}, {off} + {len}) out of bounds for length {length}"))
+}
+
+/// zlib 的 `uInt` 可用量（avail_in / avail_out / 字典长）：负长度不得经 `as u32` 变成巨大正数，
+/// 抛 ArrayIndexOutOfBoundsException（Java 侧 `checkFromIndexSize` 已拦截，此为 native 入口的防线）。
+pub fn avail(len: i32) -> crate::error::Result<u32> {
+    u32::try_from(len).map_err(|_| range_error(0, len, 0))
+}
+
+/// 从 Java 数组 `a[off .. off + len)` 复制出 zlib 输入（越界 / 负值先整段校验，不做部分复制）。
+pub fn copy_in(a: &crate::JArray<i8>, off: i32, len: i32) -> crate::error::Result<Vec<u8>> {
+    let length = a.len()?;
+    if off < 0 || len < 0 || off > length - len {
+        return Err(range_error(off, len, length));
+    }
+    let mut v = Vec::with_capacity(len as usize);
+    for i in off..off + len {
+        v.push(a.get(i)? as u8);
+    }
+    Ok(v)
+}
+
+/// 输出写回 Java 数组前的区间校验（同 [`copy_in`] 口径）。
+pub fn check_out(a: &crate::JArray<i8>, off: i32, len: i32) -> crate::error::Result<()> {
+    let length = a.len()?;
+    if off < 0 || len < 0 || off > length - len {
+        return Err(range_error(off, len, length));
+    }
+    Ok(())
+}
