@@ -6,6 +6,18 @@
 //! - 引用元素：逐元素内联自旋单元 `__RefField<T>`（锁内只克隆 / 交换，旧值锁外释放）。
 //!
 //! 任何元素访问都经原子指令或单元锁，不存在非原子的并发访问（无数据竞争 UB）。
+//!
+//! ## 跨元素原子读-改-写的原子性边界
+//!
+//! 区间落在单个元素内时是真原子（该元素上的 CAS 循环）。跨元素（如 byte[] 上的 int 路径）在
+//! 分条锁内「读 → 改 → 写」，与其他**跨元素**读-改-写互斥且可线性化（区间覆盖的对齐字全部分条
+//! 按地址序加锁，重叠区间必共享分条）；与**元素内**访问（普通读写、元素 CAS）之间只保证逐元素
+//! 原子与逐位置一致性——不保证整区间一步可见。后者是元素宽度原子单元的固有上限：要整区间一步
+//! 原子须以包含它的 8 字节对齐字为单一原子单元（`rava_rawmem` 的设计），但元素路径与字路径并发
+//! 属**混宽原子访问**（`AtomicU8` 写 vs `AtomicU64` CAS），在 Rust 内存模型下是未定义行为（Miri：
+//! mixed-size atomic access 直接报 UB）；把元素路径也改成字粒度合并（子字元素每次普通写变 CAS
+//! 循环）会让 byte[] / short[] 的批量写慢一个数量级，不取。真 JVM 靠平台指令（x86 lock cmpxchg、
+//! aarch64 独占对）给出跨元素整区间原子；此处以分条互斥逼近，边界如实记录。
 
 use super::*;
 use std::cell::UnsafeCell;
@@ -186,7 +198,8 @@ fn elem_bytes(bits: u64, n: usize) -> [u8; 8] {
     out
 }
 
-/// 跨元素的字节读-改-写互斥（按数组存储地址分条）：只在一次访问跨越多个元素时使用
+/// 跨元素的字节读-改-写互斥（按 8 字节对齐字的存储地址分条）：只在一次访问跨越多个元素时使用。
+/// 同一次访问覆盖的**全部**对齐字的分条都按地址序持有（见 [`Store::update_bytes`]）。
 static STRIPES: [parking_lot::Mutex<()>; 16] = [const { parking_lot::const_mutex(()) }; 16];
 
 impl<'a, T: 'static> Store<'a, T> {
@@ -259,8 +272,12 @@ impl<'a, T: 'static> Store<'a, T> {
 
     /// `width` 字节值的原子读-改-写（值为本机字节序零扩展位形；`op` 给 None 即只读）。区间在单个
     /// 元素内时为该元素上的 CAS 循环（与元素的原子访问同一单元，真原子）；跨元素时（如 byte[] 上
-    /// 的 int / long 访问）在分条锁内读 → 改 → 写，与其他跨元素读-改-写互斥。越界返回 None。
-    pub(super) fn update_bytes(&self, start: usize, width: usize, op: &mut dyn FnMut(u64) -> Option<u64>) -> Option<u64> {
+    /// 的 int / long 访问）锁住区间覆盖的**全部** 8 字节对齐字（元素区 8 字节对齐，`width ≤ 8` 至多
+    /// 两个）的分条，在锁内读 → 改 → 写——与其他跨元素读-改-写互斥且可线性化（重叠区间必共享至少
+    /// 一个对齐字；分条按地址序加锁，无死锁）。旧实现只按区间首地址取单条：两个重叠区间跨 16 字节
+    /// 分条边界时可落入不同分条，读-改-写交错丢对方更新。与元素内访问（普通读写、元素 CAS）之间的
+    /// 原子性边界见模块头注。回调为泛型（内联进 CAS 热循环）。越界返回 None。
+    pub(super) fn update_bytes<F: FnMut(u64) -> Option<u64> + ?Sized>(&self, start: usize, width: usize, op: &mut F) -> Option<u64> {
         let (slots, first, last) = self.covering(start, width)?;
         let w = size_of::<T>();
         if last == first + 1 {
@@ -281,7 +298,12 @@ impl<'a, T: 'static> Store<'a, T> {
                 }
             }
         }
-        let _g = STRIPES[(slots.as_ptr() as usize >> 4) % STRIPES.len()].lock();
+        let addr = slots.as_ptr() as usize + start;
+        let s0 = ((addr & !7usize) >> 4) % STRIPES.len();
+        let s1 = (((addr + width - 1) & !7usize) >> 4) % STRIPES.len();
+        // 两字可落在同一条（同一 16 字节块内）：分条是非重入互斥，同条只锁一次
+        let _g0 = STRIPES[s0].lock();
+        let _g1 = (s1 != s0).then(|| STRIPES[s1].lock());
         let mut b = [0u8; 8];
         self.read_bytes(start, &mut b[..width]);
         let old = crate::native_memory::load_bits(&b[..width]);

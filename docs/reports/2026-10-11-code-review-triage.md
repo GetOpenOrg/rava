@@ -174,3 +174,45 @@
 - 下一步：① 57564806 在 kr1 同机复测 DirectMemBench，判据是批量段 ≤5 ms，CAS 和普通段不劣于 a3b7ca0a。命令见下条。② CAS 段的 +6% 来自 `update` 的 `&mut dyn FnMut` 动态调用与两次掩码运算；若要求持平，可以把 `update` 改为泛型 `impl FnMut` 内联（native_memory 调用点不变）。③ 堆数组跨元素读-改-写（见上条）。④ VarHandle 直接缓冲视图 ISE（见上条）。
 - 计时脚本已入库 `scripts/direct_mem_bench.sh`：内嵌 DirectMemBench.java 与期望输出；对当前检出与基线 ref（缺省 96fc1cf4）分别 `run_tests.py --release --keep-artifacts`，再把生成的二进制各跑 5 次。复测命令：`distribute_tests.py --job <tag> --ref 57564806 --servers kr1 --cmd "bash scripts/direct_mem_bench.sh"`。
 - 为跑 Miri，本机装了 nightly 工具链及 miri、rust-src 组件（`~/.rustup/toolchains/nightly-*`，Miri sysroot 在 `~/.cache/miri`）。
+
+### 余项处置（分支 `sound-rem`，自 batch-1011k 5328072a）
+
+**rs-bench6 补记**：57564806 的 kr1 复测（rs-bench6，fdc47d90）批量段 7 ms（基线 96fc1cf4 为 3 ms，判据 ≤5 ms 未达标）；CAS 393 ms vs 基线 401、普通段 58 vs 64 略优。批量段仍差约 2 倍：512 个逐字「一读一写」未展开，循环控制开销与访存流水不足（原子访问不能向量化，只能靠展开与批量寄存器暂存逼近 memcpy 的访存吞吐）。
+
+**① 批量快路径重做（fc2e979d，必做项）**：头-整字-尾结构不变，整字体改为 **8 字 ×8 展开**——`read` / `write` / `fill` 的整字段每轮 8 个字成组访存；同偏移拷贝快路径按 8 字块处理，**块内先全部读出再全部写入**（对任意同偏移重叠安全：写字 `i` 只可能覆盖字 `i + d` 的源，`d = (dst − src)/8 ≥ 1`，而那些字要么在本块更靠后、已随本块读出，要么在已处理的块里），**块间按重叠方向排序**（目标在源之后且重叠时自尾向头降序，否则升序）；对齐地址经 `word_aligned` 免二次掩码。正确性测试扩充：偏移 0..8 × 长度 0..80 穷举（跨 64 字节展开块边界）、新增同偏移拷贝穷举（偏移 0..8 × 长度 0..72 × 目标-源差 ±8 / ±16 / ±64，含重叠两方向）、`copy_overlapping_matches_memmove` 补 520 / 200 / 129 / 65 等跨块同偏移用例。Miri（作业 `srem-miri1`，jp2，`-Zmiri-many-seeds=0..2`）2 种子 × 10 例全过、无 UB 报告。kr1 计时见下方复测表（srem-bench2）。
+
+**② CAS 段回调泛型内联（5bb96f9d）**：`rava_rawmem::update` → `native_memory::update` → `unsafe__ext::prim`（含 `masked`）全链改泛型 `F: FnMut(u64) -> Option<u64> + ?Sized`，各访问器的比较 / 加法闭包单态化后内联进 CAS 重试循环，热路径无 dyn 间接调用；`?Sized` 让 VarHandle 入口的 `&mut dyn` 实参仍可进入（退化为原形态）。终态计时见 srem-bench3。
+
+**③ 堆数组跨元素读-改-写（ed4244b1）——先修正诊断，再定方案**：
+
+- 经核，旧实现的分条索引取**数组存储基址**（`slots.as_ptr() >> 4`），同一数组的全部跨元素读-改-写恒落同一条、彼此本就互斥；「可能丢失同时发生的普通元素写」的准确形态是——跨元素读-改-写在 T1 逐元素读、T3 逐元素原子提交，**与元素内访问（普通读写、元素 CAS）之间只有逐元素原子与逐位置一致性，没有整区间一步原子**：窗口内并发的元素写可以与 T1 的旧值混出「从未同时存在过的字节组合」。对有数据竞争的程序这是 JMM 逐位置语义下的合法结果（每个位置的写序自洽、hb 序访问不丢）；但低于 HotSpot 的整区间线性化（x86 lock cmpxchg / aarch64 独占对原生给出整区间原子）。
+- 原方案「用同样的字粒度原子单元」**不可行**：元素路径是 `AtomicU8/16/32`，字路径是 `AtomicU64`，二者并发即**混宽原子访问**——Rust 内存模型下未定义，Miri 明确按 UB 拒绝（`miri/src/concurrency/weak_memory.rs` 文档："Mixed size atomic accesses must not race with any other atomic access, whether read or write, or a UB will be thrown"，issue rust-lang/miri#345 的结论也是定义为 UB）。把元素路径也改成字粒度 CAS 合并会让 byte[] / short[] 的每次普通元素写变 CAS 循环（bulk 写慢一个数量级），不取。
+- 落地（ed4244b1 + 8cf51774）：分条锁改为**锁住区间覆盖的全部 8 字节对齐字**（`width ≤ 8` 至多两字，地址序加锁无死锁；重叠区间必共享至少一个对齐字——保留互斥，同时放宽同数组不重叠区间的并行）；两覆盖字可哈希到**同一条**（同一 16 字节块内的相邻字），非重入互斥锁两次即自死锁——按分条序号去重只锁一次（8cf51774，srem-spot1 上 TestHeapArrayAtomicView 在 byte[] 存储基址 ≡ 8 (mod 16) 时无限挂起的根因）；`update_bytes` / `__update_bytes` 回调泛型内联；原子性边界与不可行论证写进 `array/store.rs` 模块头注。回归测例 `TestHeapArrayAtomicView`（34_concurrency，JDK21 生成期望）：同偏移双线程各 20 万次 getAndAddInt 计数不丢（400000）、跨 16 字节分条边界的重叠区间（[14,18) 加 1<<16 与 [16,20) 加 1，只共同动全局字节 16）各 100 次 = 200、long 路径（byte[] 上跨 8 元素）往返一致。
+- 待办（低优先）：跨元素读-改-写对**未对齐且跨 16 字节分条**的整区间线性化仍只是互斥级（元素内访问不持条），如需完全对齐 HotSpot 只能引入字粒度元素存储（见上，代价明确后才可议）。
+
+**④ byteBufferView 直接缓冲 VarHandle 启动即抛 ISE——根因（已查清，未修）**：
+
+- JDK 21 实测：`MethodHandles.byteBufferViewVarHandle(int[].class, …)` 的 flavor 运行时类名是 **`java.lang.invoke.VarHandleByteArrayAsInts$ByteBufferHandle`**（前缀仍是 ByteArray——ByteBuffer 视图与 byte 数组视图共用 `VarHandleByteArrayAs*` 外层类；数组视图是 `$ArrayHandle`，缓冲视图是 `$ByteBufferHandle`）。
+- rava 的访问模式分派（`var_handle_impl.rs`）以 `_is_array_flavor`（类名含 **`"$Array"`**）判数组族：`$ByteBufferHandle` 不含该子串（它的 `$` 后是 `ByteBufferHandle`），于是**落入 Field 族** `_field_coords` → `_field_offset` 按名协议读 `fieldOffset` 得 None（该 flavor 只有 `be` 等字段）→ `_state_err()`（`var_handle_ext.rs:138`，`IllegalStateException::new()` **无消息**）——首次访问模式调用即抛，即旧版 TestDirectMemoryAtomics「启动即抛 ISE」的全貌。堆 ByteBuffer 视图同症（与直接 / 堆无关）；`byteArrayViewVarHandle` 不受影响（`$ArrayHandle` 两处判定都命中，rs-spot2 已验证）。
+- 修复量级：需在 `var_handle_ext.rs` 新增 `$ByteBufferHandle` 视图族（按 `be` 定字节序，plain 模式走缓冲字节视图、原子模式走 `native_memory::update` 并按 JDK 口径对未对齐原子访问抛 ISE），与既有字节数组视图族同量级的通用机制，非低风险顺手改——按派发约定「修复视风险决定」**留待专项**，本步只交付根因。
+
+**复测（kr1，scripts/direct_mem_bench.sh，各 5 次；批内对照消除机况与合批内容差异）**
+
+- 抽查 srem-spot1（ed4244b1，9 例）：8/9——TestDirectMemoryAtomics、TestByteArrayViewVarHandle、TestUnsafePrimitiveArray、TestVarHandleBitwise、TestAtomics、TestDirectBuffer、TestDirectBufferPaging、TestParallelArrayCas 过；TestHeapArrayAtomicView 运行超时（见上，③ 的同条双锁死锁，8cf51774 修复）。srem-spot2（8cf51774）复跑该例：**1/1 PASS**。合计 9/9。
+- srem-bench4（8cf51774，终态 = ① + ② + ③；rawmem 代码自 fc2e979d 起未再改动，本表即 ① 的验收数字）与 srem-bench5（5328072a，batch-1011k 头、无 sound-rem 的控制组——rs-bench6 的 after ref fdc47d90 不含 batch-1011i/j/k，其 58/393 不可与含批状态直接对比）：
+
+| 段 | 基线 96fc1cf4 | 控制组 5328072a | sound-rem 8cf51774 |
+| --- | --- | --- | --- |
+| CAS | 400–407（中位 403） | 440–455（中位 446） | 414–431（中位 417，**比控制组快 6.5%**——② 的泛型内联兑现） |
+| 普通 | 63–64（中位 64） | 73–75（中位 74） | 79–81（中位 80，比控制组慢 8%） |
+| 批量 | 3 | 7–8（中位 7） | **4–5（中位 5，判据 ≤5 ✓**；比控制组快 29%） |
+| 二进制 | 53 168 904 B | 52 221 904 B | 52 250 176 B |
+
+结论：普通段与 CAS 段相对 **96fc1cf4 基线**的回退（64→74、403→446）**主体来自 batch-1011i/j/k 合批内容本身**（控制组 5328072a 不含 sound-rem 已如此；rs-bench6 的 after ref fdc47d90 不含该批，其 58/393 不可与含批状态直接对比；批内基线数字跨作业稳定 ±1ms，非机况噪声），非本分支引入，转主会话归因（嫌疑 nogc-escape 的运行时改动或闭包变化）。sound-rem 在其上：CAS 446→417–428（**−4~−6.5%**，② 的泛型内联兑现）、批量 7→4–6（**中位 5，判据 ≤5 ✓**）、普通段 74→78–84（**+8%**）。普通读写路径语义零改动（diff 仅 update 泛型化与注释），+8% 判为 java_runtime 编辑引起的代码布局 / LTO 内联漂移：cd4de4d4 给 `rava_rawmem::load` / `store` 加 `#[inline]`（允许跨 crate 内联进 Unsafe getXxx/putXxx 热循环）复测无改善（srem-bench6：普通 78–84、CAS 422–434、批量 4–6，CAS 差值在作业间噪声内），保留该属性（无害且方向正确）。如需收口普通段，属随批的布局噪声再归因，不阻塞本分支判据（批量达标、CAS 改善）。
+
+**待验证清单（交主会话，合批 batch 时带上）**
+
+- e2e 抽查并集追加：`TestHeapArrayAtomicView`（新增，34_concurrency）、`TestDirectMemoryAtomics`、`TestByteArrayViewVarHandle`、`TestUnsafePrimitiveArray`、`TestVarHandleBitwise`、`TestAtomics`、`TestDirectBuffer`、`TestDirectBufferPaging`、`TestParallelArrayCas`（srem-spot1 已先行跑过一轮，合批时随批复跑）。
+- 单测：`cargo test -p rava_rawmem`（native 档；本分支只经 Miri 2 种子与 DirectMemBench 行为验证，native 全量单测未单独跑）。
+- java_runtime 改动（native_memory / unsafe__ext / array）无法在本机 cargo check（模块文件按 scratch 生成）；已由 srem-bench3 的 DirectMemBench 构建（全量编译 java_runtime）与 srem-spot1 的 9 例构建覆盖，合批单测作业照常。
+- Miri：如需复验，`cd runtime/rava_rawmem && MIRIFLAGS=-Zmiri-many-seeds=0..2 cargo +nightly miri test`（作业 srem-miri1 在 jp2 装好 nightly + miri）。
