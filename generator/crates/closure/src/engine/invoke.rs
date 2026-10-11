@@ -232,11 +232,7 @@ impl<'a> Engine<'a> {
                 self.call_vals = vals;
                 return;
             }
-            // 非 SAM 方法（default / Object 方法）按 lambda 类实现的接口选择：函数式接口在前，其后为 altMetafactory 附加接口
-            let ifaces: Vec<String> = std::iter::once(&l.iface).chain(&l.markers).cloned().collect();
-            if let Some(sel) = ifaces.iter().find_map(|i| self.h.select(i, site)) {
-                let (o, n, d) = sel.key();
-                let t = self.method(MemberRef { owner: o, name: n, desc: d }, via);
+            if let Some(t) = self.lambda_member(r, site, via) {
                 self.edge(m, off, t, Recv::Exact(r), a, ret, res);
             }
             return;
@@ -265,6 +261,16 @@ impl<'a> Engine<'a> {
                 self.unresolved.insert(format!("select {rname} {}", site.method().name));
             }
         }
+    }
+
+    /// lambda 对象 r 上非 SAM 方法（default / Object 方法）的实现：按 lambda 类实现的接口选择，
+    /// 函数式接口在前，其后为 altMetafactory 附加接口
+    pub(super) fn lambda_member(&mut self, r: u32, site: &resolve::MethodSite, via: Via) -> Option<usize> {
+        let l = self.lambdas.get(&r)?;
+        let ifaces: Vec<String> = std::iter::once(&l.iface).chain(&l.markers).cloned().collect();
+        let sel = ifaces.iter().find_map(|i| self.h.select(i, site))?;
+        let (o, n, d) = sel.key();
+        Some(self.method(MemberRef { owner: o, name: n, desc: d }, via))
     }
 
     /// 非虚调用（special / private / final）：接收者里的抽象对象各进其克隆，其余接收者进方法本体。
@@ -359,11 +365,12 @@ impl<'a> Engine<'a> {
     /// 调用边：接收者注入 this、实参按位置流入形参（被调声明类型过滤）、返回值流回结果节点
     #[allow(clippy::too_many_arguments)]
     pub(super) fn edge(&mut self, m: usize, off: u32, t: usize, recv: Recv, a: &[Option<Vec<Feed>>], ret: Option<u32>, res: Option<Node>) {
-        if self.dispatch.entry((m, off)).or_default().insert(t) {
-            self.ctx.stats.borrow_mut().sprof.dispatch_new += 1;
-            self.vdisp_note(m, off, Some(t));
-        }
+        self.note_target(m, off, t);
         self.callers.entry(t).or_default().insert(m);
+        match self.cur_lcall {
+            Some(id) => self.lcallers.entry(t).or_default().insert(id),
+            None => self.dcallers.entry(t).or_default().insert(m),
+        };
         self.caller_edge(m, t);
         let is_static = self.methods[t].is_static;
         let ptypes = self.methods[t].ptypes.clone();

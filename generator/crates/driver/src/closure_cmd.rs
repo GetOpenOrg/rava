@@ -37,7 +37,7 @@ const VALUE_OPTS: &[&str] = &[
     "--jdk", "--java-home", "--runtime", "--main", "-o", "--why", "--flows", "--report", "--release", "--release-bytecode",
     "--deps",
     "--cp", "--image", "--root", "--seed-class", "--locale", "--cut", "--cut-file", "--dump-edges", "--flow-batch",
-    "--hash-seed", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
+    "--hash-seed", "--lambda-prof", "--closure-cache", "--closure-cache-max-mb", "--boot-report",
 ];
 /// 开关选项
 const FLAG_OPTS: &[&str] = &["--cold-cut", "--site-prof", "--gates"];
@@ -91,7 +91,7 @@ pub(crate) fn diag_opts<S: AsRef<str>>(cuts: &[S], cut_files: &[S], dump_edges: 
         let text = std::fs::read_to_string(f).map_err(|e| format!("--cut-file {f}：{e}"))?;
         all.extend(text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
     }
-    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false, keep_edges: false })
+    Ok(closure::engine::Diag { cuts: all, dump_edges: dump_edges.map(PathBuf::from), flows: Vec::new(), site_prof: false, keep_edges: false, lambda_prof: 0 })
 }
 
 /// .java → javac 编译到临时目录；目录原样返回
@@ -198,6 +198,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         diag: closure::engine::Diag {
             flows: flows.iter().map(|f| f.to_string()).collect(),
             site_prof: args.rest.iter().any(|a| a == "--site-prof"),
+            lambda_prof: num("--lambda-prof")?.unwrap_or(0),
             ..diag_opts(&multi("--cut"), &multi("--cut-file"), args.opt("--dump-edges"))? },
         cold_cut: args.rest.iter().any(|a| a == "--cold-cut"),
         flow_batch: num("--flow-batch")?.map(|n| n as usize),
@@ -206,7 +207,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         return crate::gates_cmd::child(&input_desc, &h, &man, &hw, &out);
     }
     if args.rest.iter().any(|a| a == "--gates") {
-        let diag = ["--why", "--flows", "--report", "--boot-report", "--dump-edges", "--site-prof"];
+        let diag = ["--why", "--flows", "--report", "--boot-report", "--dump-edges", "--site-prof", "--lambda-prof"];
         if let Some(a) = args.rest.iter().find(|a| diag.contains(&a.as_str())) {
             return Err(format!("--gates 不与 {a} 同用（门排名自带溯源链；诊断请单独运行）"));
         }

@@ -364,10 +364,14 @@ impl<'a> Engine<'a> {
         // 透传摘要变化：调用方按新摘要重接调用边
         let returned = self.returned_of(m, &a);
         if self.methods[m].returned.replace(returned.clone()).is_some_and(|old| old != returned) {
-            for c in self.callers.get(&m).cloned().unwrap_or_default() {
+            // 只经 lambda 调用读者接边的调用方不整方法重接：读者各自按新摘要重接（`lcall_resum`）
+            for c in self.dcallers.get(&m).cloned().unwrap_or_default() {
                 self.ctx.stats.borrow_mut().reapply += 1;
                 self.methods[c].applied = None;
                 self.push_m(c);
+            }
+            for id in self.lcallers.get(&m).cloned().unwrap_or_default() {
+                self.lcall_resum(id);
             }
         }
         if !a.pending_types.is_empty() {
@@ -417,10 +421,16 @@ impl<'a> Engine<'a> {
         if let Some(d) = self.refl_seen.get_mut(&m) {
             d.retain(|o, _| !offs.contains(o));
         }
-        if let Some(d) = self.lambda_done.get_mut(&m) {
+        // lambda 调用读者只作废不注销：重分析后以同一调用再登记时复活（`invoke_lambda`），不另建读者单元。
+        // 被调方摘要未变：同一调用已接的流边与接边效果仍成立，复活后只接增量
+        if let Some(d) = self.lambda_done.get(&m) {
             for off in offs {
-                for (_, id) in d.remove(off).unwrap_or_default() {
-                    self.lcalls[id as usize].live = false;
+                for &id in d.get(off).into_iter().flat_map(HashMap::values) {
+                    let c = &mut self.lcalls[id as usize];
+                    if std::mem::replace(&mut c.live, false) {
+                        c.suspended = true;
+                        self.lc_suspended.push(id);
+                    }
                 }
             }
         }
@@ -436,9 +446,15 @@ impl<'a> Engine<'a> {
         self.recv_fp.remove(&m);
         self.gather_last.remove(&m);
         self.refl_seen.remove(&m);
-        for (_, at) in self.lambda_done.remove(&m).unwrap_or_default() {
-            for (_, id) in at {
-                self.lcalls[id as usize].live = false;
+        // 首次 / 被调方摘要变化：接边效果随摘要而变，读者清空已接记录，复活时按新读者完整接边
+        for at in self.lambda_done.get(&m).into_iter().flat_map(HashMap::values) {
+            for &id in at.values() {
+                let c = &mut self.lcalls[id as usize];
+                c.live = false;
+                c.suspended = false;
+                c.done = TypeSet::default();
+                c.hub = None;
+                c.fixed = false;
             }
         }
     }

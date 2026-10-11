@@ -76,6 +76,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     e.seeds.locales = input.locales.clone();
     e.cold_cut = input.cold_cut;
     e.set_site_prof(input.diag.site_prof);
+    e.set_lambda_prof(input.diag.lambda_prof);
     if let Some(n) = input.flow_batch.filter(|&n| n > 0) {
         e.flow_batch = n;
     }
@@ -96,6 +97,7 @@ pub fn analyze<'a>(input: &Input<'a>, h: &'a Hierarchy<'a>, man: &'a Manifest, h
     }
     e.root_vm_rules();
     e.run();
+    e.lambda_prof_final();
     // 映像数据 = 引导映像 + 分析中追加的扩展组（构建期初始化扩展与镜像缓存，规范化后与发现次序无关）
     match e.image_final() {
         Some(Ok(d)) => boot_image.data = d,

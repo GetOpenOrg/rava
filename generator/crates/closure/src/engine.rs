@@ -56,8 +56,10 @@ mod bytecode;
 mod invoke;
 mod reflect_writes;
 mod hub;
+mod hub_reader;
 mod recv_fp;
 mod site_prof;
+mod lambda_prof;
 mod gather;
 mod defs;
 pub use defs::{ClassNode, From, Kind, Level, Via};
@@ -406,6 +408,16 @@ pub struct Engine<'a> {
     rcall_wait_members: Vec<usize>,
     /// 调用边的反向表（被调 → 调用方）：被调方法重算后调用方重处理（透传摘要可能变化）
     callers: HashMap<usize, BTreeSet<usize>>,
+    /// 被调方 → 经调用点自身（非 lambda 调用读者）接边的调用方：被调方透传摘要变化时整方法重接
+    dcallers: HashMap<usize, BTreeSet<usize>>,
+    /// 被调方 → 接边的 lambda 调用读者：被调方透传摘要变化时只重接这些读者（`lcall_resum`）
+    lcallers: HashMap<usize, BTreeSet<u32>>,
+    /// 正在接边的 lambda 调用读者（`lambda_step` 置，进入枢纽接入时清）
+    cur_lcall: Option<u32>,
+    /// 枢纽 lambda 读者所属枢纽：读者单元 → 枢纽（`hub_reader.rs`）
+    hub_reader_lcalls: HashMap<u32, u32>,
+    /// 显式指定的读者归属（Some(None) = 不归任何枢纽读者），优先于 `cur_lcall` 的登记（`hub_reader.rs`）
+    reader_over: Option<Option<u32>>,
     /// 当前字节码调用点的实参值（不含接收者）；其余入口（手写 / 方法句柄 / lambda）为 None = 形参值未知
     call_vals: Option<Rc<[V]>>,
     /// 进行中的 lambda 接边：捕获值所在创建点与接收者位置（`lambda_vals.rs`）
@@ -445,9 +457,9 @@ pub struct Engine<'a> {
     dispatched: HashMap<usize, HashSet<(u32, u32, u32)>>,
     /// 已接入枢纽的调用点：方法 → (偏移, 枢纽)（同 `dispatched`，分析重算时清空）
     hub_linked: HashMap<usize, HashSet<(u32, u32)>>,
-    /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者)（同 `hub_linked` 清空）。
+    /// 字节码调用点经枢纽已分派的 lambda / 手写实现对象接收者：方法 → (偏移, 接收者, 枢纽)（同 `hub_linked` 清空）。
     /// 调用点换接子枢纽时继承的接收者、同一接收者经多个枢纽到达时，同一分析结果下重派发是恒等重放
-    hub_lsent: HashMap<usize, HashSet<(u32, u32)>>,
+    hub_lsent: HashMap<usize, HashSet<(u32, u32, u32)>>,
     /// 字段读写 / 非虚调用站点已接上的接收者抽象对象：方法 → (偏移, 对象)（同 `dispatched`）。
     /// 站点因接收者集合增长重跑时只接新增对象。按站点存升序表（站点多有几十到上百个对象，比逐条哈希省内存）
     recv_done: HashMap<usize, HashMap<u32, Vec<u32>>>,
@@ -456,11 +468,11 @@ pub struct Engine<'a> {
     /// 反射调用点（方法 → 偏移）已处理过的 Class 实参值（`field_lookup.rs::ReflSeen`）；同一分析结果下成立，与 `recv_done` 同口径作废
     refl_seen: HashMap<usize, HashMap<u32, field_lookup::ReflSeen>>,
     /// 字节码调用点上已登记的 lambda 调用：方法 → 偏移 → 调用 → `lcalls` 序号（同 `dispatched`，分析重算时作废）
-    lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaCall, u32>>>,
+    lambda_done: HashMap<usize, HashMap<u32, HashMap<LambdaKey, u32>>>,
     lcalls: Vec<LCall>,
     /// 正在读值集的 lambda 调用（优先于 `cur_site` 登记为读者）
     cur_call: Option<u32>,
-    /// 类型集节点 → 读它的 lambda 调用；open 展开过的 lambda 调用，按 (open 类型, 接收者上界) 索引
+    /// 类型集节点 → 读它的 lambda 调用
     call_watch: HashMap<Node, HashSet<u32>>,
     /// Class 形参节点 → 依赖「值集不含某类镜像」答复的（方法, 类序号）：值集增长到可能含该镜像时重分析
     mirror_watch: HashMap<Node, BTreeSet<(usize, u32)>>,
@@ -486,7 +498,6 @@ pub struct Engine<'a> {
     site_cands: HashMap<MemberRef, Rc<[u32]>>,
     /// 方法 → 可共享的摘要（按入口状态，见 `share.rs`）
     shared: HashMap<MemberRef, Vec<share::Shared>>,
-    open_calls: BTreeMap<(u32, u32), BTreeSet<u32>>,
     cwork: VecDeque<u32>,
     in_cwork: HashSet<u32>,
     /// 手写方法调用点（调用方, 偏移, 被调方法）→ 序号；数组写入按调用点建模
@@ -564,6 +575,8 @@ pub struct Engine<'a> {
     pending_types: BTreeMap<usize, Vec<String>>,
     /// 进行中的 lambda 调用（lambda, 实参）：绑定方法引用的接收者可能是 lambda 自身，同一调用重入即成环
     lambda_stack: HashSet<LambdaCall>,
+    /// 本次重分析按偏移挂起的 lambda 调用读者（`reset_offsets` 登记，`process_bytecode` 收尾清标记）
+    lc_suspended: Vec<u32>,
     /// 下一次 `add_to` 来自流边推送时为源节点序号，否则为 [`diag::NO_SRC`]（诊断：区分直接注入点、记录型查询的来源）
     flow_src: u32,
     /// open 的直接注入点：节点 → 注入的 open 类型（诊断 `@openorig`）
@@ -643,6 +656,8 @@ pub struct Engine<'a> {
     cut_nodes: HashMap<u32, bool>,
     /// 记录型 `--flows` 查询（诊断；未登记为 None，热路径只判空）
     probes: Option<Box<diag::Probes>>,
+    /// 枢纽 lambda 重放 / 方法引用接收者展开剖析（`--lambda-prof`；未开为 None）
+    lprof: Option<Box<lambda_prof::LambdaProf>>,
     /// 返回属性表对象的方法与其调用方可见性（sysprops.rs）
     spret: sysprops::SpRet,
     rmwrap: sysprops_write::RmWrap,

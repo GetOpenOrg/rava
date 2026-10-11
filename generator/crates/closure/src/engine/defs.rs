@@ -196,6 +196,56 @@ pub(super) struct HwWrite {
 /// 按声明形参位置的实参来源（基本类型为 None）
 pub(super) type Args = Vec<Option<Vec<Feed>>>;
 
+/// 调用点上 lambda 调用读者的键（lambda、返回类型、结果节点、所属枢纽读者）：同一调用点同一 lambda 的不同实参并入同一读者；
+/// 锚定在同一调用点的不同枢纽各有读者（共用则后到枢纽的效果记到先到者名下，随处理顺序而变）
+pub(super) type LambdaKey = (u32, Option<u32>, Option<Node>, Option<u32>);
+
+/// b 的各实参来源都已含于 a
+pub(super) fn args_cover(a: &Args, b: &Args) -> bool {
+    b.iter().enumerate().all(|(j, y)| {
+        let Some(y) = y else { return true };
+        let Some(Some(xs)) = a.get(j) else { return y.is_empty() };
+        y.iter().all(|f| match f {
+            Feed::N(_) => xs.contains(f),
+            Feed::S(s) => xs.iter().any(|g| matches!(g, Feed::S(t) if s.is_subset_of(t))),
+        })
+    })
+}
+
+/// 实参并集（按位置；同一位置的值集来源并为一个）。b 已含于 a 时为 None
+pub(super) fn merge_args(a: &Args, b: &Args) -> Option<Args> {
+    if args_cover(a, b) {
+        return None;
+    }
+    let mut out = a.clone();
+    let mut grew = false;
+    if out.len() < b.len() {
+        out.resize(b.len(), None);
+    }
+    for (x, y) in out.iter_mut().zip(b) {
+        let Some(y) = y else { continue };
+        let xs = x.get_or_insert_with(Vec::new);
+        for f in y {
+            match f {
+                Feed::N(_) => {
+                    if !xs.contains(f) {
+                        xs.push(f.clone());
+                        grew = true;
+                    }
+                }
+                Feed::S(s) => match xs.iter_mut().find_map(|g| if let Feed::S(t) = g { Some(t) } else { None }) {
+                    Some(t) => grew |= t.add_all(s),
+                    None => {
+                        xs.push(f.clone());
+                        grew = true;
+                    }
+                },
+            }
+        }
+    }
+    grew.then_some(out)
+}
+
 /// 一次 lambda 调用：(lambda, 实参, 返回类型, 结果节点)
 pub(super) type LambdaCall = (u32, Args, Option<u32>, Option<Node>);
 
@@ -206,8 +256,15 @@ pub(super) struct LCall {
     pub(super) call: LambdaCall,
     /// 已接过的接收值
     pub(super) done: TypeSet,
-    /// 调用方分析重算后作废（调用点重跑时按新分析重新登记）
+    /// 方法引用的精确接收者集合（达 `HUB_MIN` 时）当前接入的集合枢纽
+    pub(super) hub: Option<(u32, Rc<[u32]>)>,
+    /// 静态 / 构造实现已接边
+    pub(super) fixed: bool,
+    /// 调用方分析重算后作废（调用点重跑时以同一调用再登记即复活）
     pub(super) live: bool,
+    /// 本次重分析按偏移作废前仍有效（`reset_offsets` 置、`process_bytecode` 收尾清）：作废到复活之间
+    /// 同步执行事件、不排空流，接收值的增长都已排进读者队列，复活不必补跑
+    pub(super) suspended: bool,
 }
 
 /// 被调方法的接收者
@@ -262,6 +319,14 @@ pub(super) struct Hub {
     pub(super) link_seq: u32,
     /// 已对 (接入记录, 按调用点建模的目标) 完整接边：同一记录再派发该目标的新接收者时只接接收者相关部分
     pub(super) edged: HashSet<(u32, usize)>,
+    /// lambda 接收者的读者所在调用点：首个接入的字节码调用点。枢纽上的 lambda 只在此处以枢纽形参 / 返回节点
+    /// （`HP` / `HR`）为实参 / 结果各建一个读者，其余字节码接入点的实参经 `HP` 汇入、结果经 `HR` 流出，不逐调用点派发。
+    /// 锚点只是读者单元的宿主（随接入先后而定）：读者的效果归枢纽而非锚点调用点（`hub_reader.rs`），与锚点是谁无关
+    pub(super) anchor: Option<(usize, u32)>,
+    /// 本枢纽 lambda 读者接边的目标：报告中计入枢纽的每个接入点（与 `plain` 同口径）
+    pub(super) ltargets: BTreeSet<usize>,
+    /// 本枢纽 lambda 读者接入的枢纽（方法引用的虚分派）：其目标同样计入本枢纽的每个接入点
+    pub(super) lhubs: BTreeSet<u32>,
 }
 
 /// 反射数组分配调用点（`Array.newInstance(c, n)` 等）的状态。结果的取法只在工作队列排空（单调部分的不动点）时
@@ -287,6 +352,8 @@ pub(super) struct Link {
     pub(super) a: Args,
     pub(super) res: Option<Node>,
     pub(super) cv: Option<Rc<[V]>>,
+    /// 代哪个枢纽的 lambda 读者接入（None = 调用点自身接入）：按本记录的接边归该枢纽（`hub_reader.rs`）
+    pub(super) host: Option<u32>,
 }
 
 /// 枢纽的接收者集合键
@@ -297,6 +364,9 @@ pub(super) enum HubSet {
     /// VM 按反射对象虚调用（`Method.invoke` / REF_invokeVirtual 的 MemberName）：接收者 open(类型)，
     /// 无字节码调用点；展开到的每个目标形参 open
     Vm(u32),
+    /// 方法引用的绑定接收者（捕获值或首个 SAM 实参）达 `HUB_MIN` 后的增长枢纽：接收者随该值增长逐个并入（`hub_recv`），
+    /// 调用点只接入一次。来源全为图节点时按来源共用（捕获值在各调用点相同），否则按读者单元各用一个（第二分量）
+    Grow(Rc<[Node]>, u32),
 }
 
 #[derive(Clone)]

@@ -62,6 +62,10 @@ impl<'a> Engine<'a> {
                 self.event(m, *off, e, &cf);
             }
         }
+        // 未以同一调用再登记的挂起读者保持作废（再登记时按作废读者补跑）
+        for id in std::mem::take(&mut self.lc_suspended) {
+            self.lcalls[id as usize].suspended = false;
+        }
     }
 
     /// 读者站点的类型集增长：只重跑该偏移处的事件（分析已失效时方法整体在队列里）
