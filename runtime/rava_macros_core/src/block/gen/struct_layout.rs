@@ -100,12 +100,17 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
         let owner_vtable = format_ident!("{}__VTable", owner);
         quote! { #owner_vtable }
     };
+    // 桥接目标 `Owner` 或 `Owner::<槽名>`（槽名缺省为 Java 方法名；类内同名重载时生成器给出带后缀的槽名）
+    let bridge_target = |target: &str, java_name: &str| -> (TokenStream2, Ident) {
+        let (owner, slot) = split_bridge_target(target, java_name);
+        (bridge_path(owner), format_ident!("{}", slot))
+    };
     let hash_code_inner_bridge: proc_macro2::TokenStream = match &ctx.meta.hash_code_vtable {
         Some(owner) => {
-            let path = bridge_path(owner);
+            let (path, slot) = bridge_target(owner, "hashCode");
             quote! {
                 fn hashCode(&self) -> i32 {
-                    match #path::hashCode(self) {
+                    match #path::#slot(self) {
                         Ok(h) => h,
                         Err(e) => panic!("hashCode 抛出异常: {:?}", e),
                     }
@@ -116,10 +121,10 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     };
     let equals_inner_bridge: proc_macro2::TokenStream = match &ctx.meta.equals_vtable {
         Some(owner) => {
-            let path = bridge_path(owner);
+            let (path, slot) = bridge_target(owner, "equals");
             quote! {
                 fn equals(&self, other: Object) -> Result<bool> {
-                    #path::equals(self, other)
+                    #path::#slot(self, other)
                 }
             }
         }
@@ -153,13 +158,13 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     // 继承链上有翻译出的 toString() 时，根类的字符串化入口桥接到该虚方法（经所属 vtable 分派）
     let to_string_inner_bridge: proc_macro2::TokenStream = match &ctx.meta.to_string_vtable {
         Some(owner) => {
-            let path = bridge_path(owner);
+            let (path, slot) = bridge_target(owner, "toString");
             quote! {
                 fn __to_string(&self) -> Result<::std::string::String> {
-                    #path::toString(self).map(|s| ::std::string::ToString::to_string(&s))
+                    #path::#slot(self).map(|s| ::std::string::ToString::to_string(&s))
                 }
                 fn __obj_str(&self) -> ::std::string::String {
-                    match #path::toString(self) {
+                    match #path::#slot(self) {
                         Ok(s) => ::std::string::ToString::to_string(&s),
                         Err(e) => panic!("toString 抛出异常: {:?}", e),
                     }
@@ -265,5 +270,26 @@ pub(crate) fn generate(ctx: &GenContext) -> TokenStream2 {
     quote! {
         #inner_struct
         #obj_vtable_for_inner
+    }
+}
+
+/// 拆分根类桥接属性值 `Owner` / `Owner::<槽名>`；缺槽名时取 Java 方法名
+fn split_bridge_target<'s>(target: &'s str, java_name: &'s str) -> (&'s str, &'s str) {
+    target.split_once("::").unwrap_or((target, java_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_bridge_target;
+
+    #[test]
+    fn bridge_target_defaults_to_java_name() {
+        assert_eq!(split_bridge_target("Foo", "equals"), ("Foo", "equals"));
+    }
+
+    #[test]
+    fn bridge_target_takes_overload_slot() {
+        assert_eq!(split_bridge_target("Foo", "hashCode"), ("Foo", "hashCode"));
+        assert_eq!(split_bridge_target("Foo::equals_obj", "equals"), ("Foo", "equals_obj"));
     }
 }
