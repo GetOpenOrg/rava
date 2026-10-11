@@ -5166,7 +5166,7 @@ DeepCopy 大包：`sun/nio/cs/ext` 281、`java/util` 277、`sun/nio/cs` 177、`s
 
 ### 38.3 下一步（按可收窄类数排序）
 
-1. **来源 3：描述符精确的构造器模型（−295 量级，可达终态目标）。**
+1. ✅ **来源 3：描述符精确的构造器模型（−295 量级，可达终态目标）。** 已落地，实得 −342，见 §38.4。
    - `getDeclaredConstructor(Class...)` 的参数类型数组若在闭包期可求（序列化路径上来自 `ObjectStreamClass` 字段 / 记录组件），
      只暴露匹配描述符的构造器。
    - 按名、按枚举得到的类型不再连带暴露全部构造器，须有构造器查找点且描述符匹配。
@@ -5174,3 +5174,57 @@ DeepCopy 大包：`sun/nio/cs/ext` 281、`java/util` 277、`sun/nio/cs` 177、`s
 2. **a5-4f 日志后端（−44 净）。**
 3. **§29 能力③ `ResourceBundle.getServiceLoader`（−30）。** 随引导映像做未知 `Class` 的消解。
 4. **a5-4e ICU（−1）。** 解压分支出闭包后，ICU 链只剩 `ICUBinary` 直读。
+
+### 38.4 落地：反射构造器按描述符收窄（2026-10-11，分支 `c1d-a54-reflect`，基于 batch-1011h + c1d-a54，77974a5e / 4e7f24f5）
+
+**模型。** 非用户类的构造器从「点名 ∧ 已枚举 → 全部」改为「点名 ∧ 已枚举 ∧ 被请求的描述符」。用户类与开放枚举
+（`exposing_enumerators`）不变，仍是被枚举即全部。请求（`Engine::ctor_reqs`：类 → 形参描述符集，None 表示全部，单调并入）
+有三个来源。
+
+1. **构造器查找点**（`constructor_lookups`）按 Class 数组实参的抽象值推出描述符（`ctor_params`）：
+   - null 与常量长度 0 的数组取无参构造器。`getExternalizableConstructor@5` 走 `aconst_null`；
+     `newConstructorForSerialization@46` 走 `iconst_0; anewarray`。
+   - 本方法新建的定长数组，若除本查找外的用途都是在常量下标上存入类字面量（每个下标恰存一次），取对应描述符。
+   - `Class.newInstance` 取无参构造器。
+   - 其余情况推不出，请求全部。基本类型类（`Integer.TYPE`）不是类字面量，保守。
+2. **record 规范构造器查找**（新事实 `record_constructor_lookups`）：方法体内查找的 Class 数组恒为接收者的 record 分量类型。
+   该数组由 `getRecordComponents` 经流映射得到，抽象解释推不出。
+   - record 接收者：按分量描述符请求规范构造器。
+   - 非 record 接收者：分量数组为 null，`Arrays.stream` 先抛出，查找不可达，不请求。
+   - 登记 JDK 21 的 `lambda$canonicalRecordCtr$2` 与 JDK 24+ 的 `canonicalRecordCtr` 两个键。
+3. **构造器枚举调用**（`constructor_enumerations`）：公开枚举 `getConstructors` / `getDeclaredConstructors` 在调用者处判定。
+   - 公开枚举体内共用的 `privateGetDeclaredConstructors` 的接收者是全体调用者之并，所以在其余调用者处判定
+     （`getEnclosingConstructor`，接收者为外围类）。
+   - 包装方法（`constructor_enumeration_wrappers`：`getConstructor0` 与两个公开枚举）体内的枚举不另行请求。
+   - 只读元数据的调用者（`constructor_metadata_readers`：`computeDefaultSUID` 把构造器包进 `MemberSignature`
+     只取名字 / 签名 / 修饰符，`superHasAccessibleConstructor` 只取修饰符）不请求。
+
+**归因**（诊断分支 c018eaeb / c97759ab，DeepCopy，事后已删）。`String` 的点名来自 ASM `ClassWriter.getCommonSuperClass` 与
+`PKCS9Attribute.<clinit>` 的 forName，枚举来自 `getDeclaredConstructors0`。只做查找点描述符（77974a5e）时类数不变（3001）：
+请求全部的来源有两处，一是 record 查找的 lambda（数组推不出），二是 `computeDefaultSUID` 经公开枚举。两处都收窄后，`String`
+只剩 `<init>()V` 一个反射构造成员，`([BIILjava/lang/String;)V` 经 `Charset.forName(未知名)` 拉入的扩展字符集出闭包。
+
+**结果**（dev，`rava closure`，与基线 6a8f1358 对照；类 / 方法 / 反射成员三个集合都是基线子集）：
+
+| 用例 | 类 | 方法 | 反射成员 |
+|---|---|---|---|
+| DeepCopy | 3001 → **2659**（−342） | 16425 → 15386 | 977 → 801 |
+| StockTrans | 2999 → 2657（−342） | 16409 → 15374 | 966 → 790 |
+| TestSerialDefaultSuid | 3006 → 2664（−342） | 16417 → 15383 | 981 → 805 |
+| HelloWorld | 580 → 580 | 1897 → 1897 | 61 → 61 |
+
+- DeepCopy 减少的 342 类里，`sun/nio/cs` 有 291 个（扩展字符集基本出清），`sun/security/provider` 7 个，
+  `java/util/random` 与 `jdk/random` 合计约 8 个（随机数生成器的构造器反射面）。已低于 ≤2803 的目标。
+- 确定性：DeepCopy 种子 0 / 1 / 2 的三个集合逐项相同。新增单测 `closure_cli::reflect_constructor_descriptor_precision`：
+  三种子一致，无 `sun/nio/cs/ext/`，`String.<init>([BIILjava/lang/String;)V` 不是反射成员。
+- 抽查 a54r-4e7f24f5（dev）12 / 12 通过：DeepCopy、StockTrans、TestSerialDefaultSuid、TestSerialProxyForm、TestAnnoReflect、
+  TestDynamicProxy、HelloWorld、TestJdkConstructorLookup、TestCtorReflect、TestCtorLookupRuntimeClass、
+  TestAbstractCtorInstantiation、TestMethodHandleDirect。
+- 单测 ut-a54r-4e7f24f5（dev）：closure lib 244 / 244；closure_cli（除种子 / 顺序两项）12 / 12；
+  `closure_independent_of_hash_seed` / `closure_independent_of_order` 交回时仍在跑（作业 02），种子无关性已由上面三种子闭包单独验证。
+
+**遗留。**
+- 终态是按构造器对象来源请求：在构造器调用点（`constructor_invokers`）按 Constructor 值的来源查找 / 枚举给出请求，
+  不再需要 `constructor_metadata_readers` 这类调用者清单。这需要 Constructor 对象的过程间来源跟踪（字段 / 实参流），
+  `computeDefaultSUID` 把元素存进 `MemberSignature.member` 后才读元数据，过程内逃逸判定不够。
+- 查找点上的基本类型类（`int.class` → `Integer.TYPE` 静态读）尚不成描述符，含之的数组保守为全部。
