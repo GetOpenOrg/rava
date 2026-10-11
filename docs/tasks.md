@@ -97,7 +97,7 @@
 - batch-1011h 已放行（main = rust-closure-analyzer = c6b126cc）。
 - batch-1011i（0b91182b）：抽查 36/36，单测 A / B / P 通过，**单测 S 失败**（`closure_independent_of_hash_seed` 断言 closure_cli.rs:150，种子 0 与 1/2 闭包集合不同；作业时 ref dd1445e6）。重跑作业 b1011i-seed 不过滤输出，用于定位差异类。
 - batch-1011j（74919e58，叠 1011i）：单测四作业全过、抽查 57/57，已放行（10-11 晚，main = rust-closure-analyzer = 74919e58），1011i 内容随之并入。
-- batch-1011k（叠 1011j，含 review-soundness）：单测四作业与 58 例抽查在 dev 上跑。
+- batch-1011k（叠 1011j，含 review-soundness + resolve 单测临时目录同名互删修复 fda1c09b）：单测四作业全过、抽查 58/58，已放行（10-12，main = rust-closure-analyzer = fda1c09b）。
 
 **剩余工作**
 1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。b1011i-seed 实测：`35_io/TestSerialLookupPairing.java` 种子 0 比种子 1 多 `java/security/ProtectionDomain$JavaSecurityAccessImpl` 与 `jdk/internal/access/JavaSecurityAccess`（前 5 例一致）。首要嫌疑 c1d-a54-reflect（构造器请求 `ctor_reqs` / `ctor_params`，其确定性单测当时超时未跑完）；诊断作业 b1011i-seedwhy 在 1011i 复现（种子 0 为 2317 类，种子 1 / 2 为 2316 类）；但 **batch-1011j 的单测 S（含该例）通过**，疑为 1011j 并入的 fix-jdk25（ProtectionDomain 面）掩盖而非修复。对照诊断：1011i 种子 0 经 `java/io/ObjectStreamClass.newInstance:()Ljava/lang/Object;@65` 分派到 `ProtectionDomain$JavaSecurityAccessImpl.doIntersectionPrivilege`（接收者来自引导映像），种子 1 不经此分支；1011j 两种子都不含二者。1011j 单测 S 三种子 7 例全过，**已放行（main = 74919e58）**。遗留：确认是 1011j 修复了根因（候选 fix-jdk25 手写扫描器 cfg 求值、G1 枢纽按效果键去重），还是只掩盖了该例——在 1011i 与 1011j 之间二分该例的种子一致性。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
