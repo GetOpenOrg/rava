@@ -321,7 +321,7 @@ mod tests {
                 match k { #[cfg(jdk_ge_25)] 1 => p(), _ => q() }
             }
         }
-        struct S { #[cfg(jdk_ge_25)] new_f: i32, keep: i32 }
+        struct S { #[cfg(jdk_ge_25)] new_f: i32, keep: u8 }
     "#;
 
     #[test]
