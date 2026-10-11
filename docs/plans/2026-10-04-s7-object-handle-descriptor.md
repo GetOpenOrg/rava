@@ -994,10 +994,18 @@ S7 去掉的是 wrapper 持有的 `__Shared<dyn X__VTable>` 与每类基础设�
     3. 1+2 叠加估到 +4–5%（临界达标）。
     4. 或修订 K3 过渡期阈值（±5% → ±10%）：D8 自身的 ≤1.3 GB 段目标不受影响（修复后 HelloWorld 底段约 1.11 GB < 1.3 GB；DeepCopy 底段基线本就 4.15 GB 超 1.3 GB，归 K5/K7 底段收窄）。
   - **验证状态**：
-    - 本机：`cargo check --release --tests` 过；宏单测 26/26（`--features plan`）与缺省 21/21、emit layers 4/4；生成树工作区构建 0 错（HelloWorld、TestDynamicProxy，dev）。
-    - 服务器（作业 `s7k3-fix1-*`）：复测（同机基线 vs 修复 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate 峰值 + 全工作区构建，即 DeepCopy f3368359 后复测）、单测 A（closure_cli）/ B（workspace 除 driver + 宏，含 `no_jdk_literals` / `jdk_literal_lint`）、DeepCopy release 二进制对照 batch-1011k。结果见下「K3 收尾服务器数据」。
+    - 本机：`cargo check --release --tests` 过；宏单测 26/26（`--features plan`）与缺省 21/21、emit layers 4/4；生成树工作区构建 0 错（HelloWorld、TestDynamicProxy，dev）。生成树对照（基线 9baa7c22 对 15276d82，HelloWorld 全部 1 045 个 `java_class!` 块按「层 + 相对路径」归一后逐字节一致，差异全部是文件头 `use crate::` 行）。
+    - 本机 CollectorsDemo（同法）：底段 1 108 680 → 1 191 856（+7.5%）、上段 524 224 → 571 276（+9.0%）、body 两段 +2.8% / +1.5%。
+    - 服务器单测 B（`s7k3-fix1-utB`，sg2）：workspace 除 driver 全部 + driver bins/各 CLI + 宏测试共 37 个测试目标 637 通过 0 失败（含 `no_jdk_literals` / `jdk_literal_lint`、emit layers / method_trait / decl_plan 新测试）。
+    - 服务器（其余作业 `s7k3-fix1-*`，进行中）：复测（同机基线 vs 修复 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate 峰值 + 全工作区构建，即 DeepCopy f3368359 后复测）、单测 A（closure_cli）、DeepCopy release 二进制对照 batch-1011k。结果见下「K3 收尾服务器数据」。
   - **K6 前置项（K3 相关，搬 struct 进标记 crate 前必须处理）**：std 同名成员（E0034）与接口载体成员（固有）之外，新增本轮留固有的字段访问器、`_init_not_null`、`__init_on`——须改名经 `__`-前缀内部名转发、并入方法 trait，或由 K6 的标记层机制另行承载。
   - **待验证清单（交主会话合批）**：七例抽查集（HelloWorld、CollectorsDemo、DeepCopy、TestDynamicProxy、TestAnnoReflect、TestSerialLookupPairing、TestXmlTransform）＋相关例（InheritanceChain、InterfaceDispatch、LambdaBasic、StreamDemo、TestCollections、TestGenerics、Polymorphism、TestZonedDateTime、TestArrayList）；生成树对照（`compare_trees.sh`，基线 9baa7c22 对 15276d82：预期方法体文本不变、差异只在文件头匿名导入行与 D8 段归属复原）。
+- **K3 收尾交接（10-12 晨，子代理到点停止；作业在跑，结果收集法如下）**：
+  - `s7k3-fix2-15276d82`（jp2，复测：基线 9baa7c22 vs 15276d82 × HelloWorld / CollectorsDemo / DeepCopy 逐 crate `/usr/bin/time` 峰值 + 全工作区构建 + 模拟器分段复现）：完成后日志尾有 `===== mem.txt =====` 全表（`cluster_results/job/<tag>/01_jp2.log`），`--fetch` 已声明，`build/k3fix.tgz` 会落到结果目录。首个同名作业 `s7k3-fix1-15276d82` 跑完 rc=0（44 min）但未取回产物（spot 目录已清理），数字以 fix2 为准。
+  - `s7k3-fix1-utA`（us1，closure_cli）：`01_us1.log` 流式收 `test result` 行；跳过项为 `closure_independent_of_hash_seed / of_order`（确定性单测，按 12.3 不在本机跑）。
+  - `s7k3-fix2-rel`（kr2，DeepCopy release 二进制对照 batch-1011k，`CARGO_BUILD_JOBS=1`）：`s7k3-fix1-rel`（JOBS=2）在 15G 服务器 OOM（限 11891M）——本分支基线 9baa7c22 不含 E1（build-memsafe，在 batch-1011h 才合入）；JOBS=1 重试中，若仍 OOM 改在 dev 跑或合入 E1 后复测。
+  - 数字回填位置：本节「K3 收尾」的实测表与「K3 收尾服务器数据」（待建小节）。预期：服务器同机比值与本机一致（底段 / 上段约 +8%、body ±5% 内）；若出入大于 2 pp，优先核对两例的段成员表（模拟器复现行）。
+  - 主会话合批抽查清单见上「待验证清单」。
 - **K4 及后续方案**（10-11 用户暂停派发新代理，K4 未派，以下为续作入口）：
   - **K3 收尾**：10-11 晚已完成分解归因与两轮修复（15276d82，见上「K3 收尾」节）：切段漂移全部收回（与基线逐类一致）、底段峰值 +24–31% 收窄到 +8%（本机口径）、body crate 达标、DeepCopy 工作区复测与全量单测已发服务器作业。**剩余决策**：声明 crate ±5% 阈值是否放宽到 ±10%（或实施上面选项 1/2 追加收窄），须用户裁决后合入。
   - **K4** 运行时基础设施分层：按上表实施。新增两项要求：

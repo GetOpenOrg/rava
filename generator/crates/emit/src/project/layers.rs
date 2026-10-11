@@ -83,7 +83,7 @@ fn module_path(rel: &Path) -> String {
 /// 声明层剥去下沉方法体（判定与宏同一份代码，`rava_macros_core::plan`）。
 /// 方法 trait 匿名导入（`use crate::…::X__Methods as _;`，§9.9 K3）在声明层文件头的保留策略
 #[derive(Debug, Default)]
-pub(crate) enum AnonKeep {
+pub enum AnonKeep {
     /// 只按词剪枝（纯外壳文件：无留体 fn）
     #[default]
     Word,
