@@ -47,9 +47,8 @@ public class TestReflectLdcHotLoop {
         tw.setAccessible(true);
         long invSum = 0;
         for (int i = 0; i < n; i++) {
-            // 返回值经 hashCode 取值（Integer.hashCode 即其值），不做 checkcast
-            invSum += step.invoke(o, i & 255).hashCode();
-            invSum += tw.invoke(null, i & 127).hashCode();
+            invSum += (Integer) step.invoke(o, i & 255);
+            invSum += (Integer) tw.invoke(null, i & 127);
         }
         System.out.println("invoke " + invSum);
     }

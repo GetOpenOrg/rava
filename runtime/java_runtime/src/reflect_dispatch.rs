@@ -33,7 +33,7 @@
 //! 族其他未覆盖面语义一致）。
 
 use crate::error::Result;
-use crate::java::lang::Object;
+use crate::java::lang::{Boolean, Byte, Character, Double, Float, Integer, Long, Object, Short};
 use crate::prelude::JArray;
 
 /// 按名分派入口：(方法名, 描述符, 接收者, 实参) → 处理结果（各类生成的 `__reflect_dispatch`）。
@@ -201,7 +201,35 @@ pub fn native_invoke(declaring_slash: &str, name: &str, descriptor: &str,
         }
         return Err(bad_arg());
     }
-    reflect_invoke(declaring_slash, name, descriptor, recv, args)
+    let r = reflect_invoke(declaring_slash, name, descriptor, recv, args)?;
+    // 基本类型返回值按返回描述符装箱（HotSpot `Reflection::invoke_method` 的 `box`）
+    match descriptor.rsplit_once(')').and_then(|(_, ret)| ret.bytes().next()) {
+        Some(k @ (b'Z' | b'B' | b'C' | b'S' | b'I' | b'J' | b'F' | b'D')) => box_value(k, r),
+        _ => Ok(r),
+    }
+}
+
+/// VM 装箱点（HotSpot `Reflection::box`）：`kind` 为基本类型描述符首字母，`v` 为分派臂产出的该种类
+/// 原生值盒——经包装类 `valueOf` 得到真正的包装类实例（缓存池身份语义同 JDK 的反射访问器）。
+/// 原生值盒只报包装类名、不是翻译包装类的实例，不能视图化为包装类及其超类型（`(Integer)` /
+/// `(Number)` 强转失配）；它只作 VM 内部的擦除载体（方法句柄 / Unsafe / 字段协议按原生盒取值），
+/// 交给 Java 代码之前须在此装箱。已是包装类实例（非原生值盒）的值原样返回。
+pub fn box_value(kind: u8, v: Object) -> Result<Object> {
+    if v.0.is_jvm_null() {
+        return Ok(v);
+    }
+    let any = v.0.as_any();
+    Ok(match kind {
+        b'Z' => match any.downcast_ref::<bool>() { Some(x) => Object::from(Boolean::valueOf_z(*x)?), None => v },
+        b'B' => match any.downcast_ref::<i8>() { Some(x) => Object::from(Byte::valueOf_b(*x)?), None => v },
+        b'C' => match any.downcast_ref::<u16>() { Some(x) => Object::from(Character::valueOf(*x)?), None => v },
+        b'S' => match any.downcast_ref::<i16>() { Some(x) => Object::from(Short::valueOf_s(*x)?), None => v },
+        b'I' => match any.downcast_ref::<i32>() { Some(x) => Object::from(Integer::valueOf_i(*x)?), None => v },
+        b'J' => match any.downcast_ref::<i64>() { Some(x) => Object::from(Long::valueOf_l(*x)?), None => v },
+        b'F' => match any.downcast_ref::<f32>() { Some(x) => Object::from(Float::valueOf_f(*x)?), None => v },
+        b'D' => match any.downcast_ref::<f64>() { Some(x) => Object::from(Double::valueOf_d(*x)?), None => v },
+        _ => v,
+    })
 }
 
 /// 描述符形参逐项切片（`(I[JLjava/lang/String;)V` → `I`、`[J`、`Ljava/lang/String;`），不分配
