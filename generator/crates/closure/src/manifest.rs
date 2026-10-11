@@ -77,7 +77,7 @@ pub use gates::{GateCategory, GateHints};
 mod vm_state;
 pub use vm_state::{FieldHook, LoaderMapSrc, VmState};
 pub use indy_helpers::IndyHelpers;
-pub use sections::{EmitSections, IndyKind, InjectedValue};
+pub use sections::{EmitSections, EscapeEffect, IndyKind, InjectedValue};
 pub use names::{NameFacts, ValueMaps};
 pub use sysprops::{PropRead, PropValue, PropWrite, SysProps};
 

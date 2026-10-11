@@ -30,6 +30,8 @@ pub struct EmitOptions {
     pub debug: bool,
     /// 逐类发射的并行度（0 = 可用核数；1 = 串行）。输出与并行度无关
     pub jobs: usize,
+    /// 逃逸分析与区域改写的逐区域判定输出到 stderr（`--escape-trace`）
+    pub escape_trace: bool,
     /// 档案发射（`--profile`）：档案 crate 的包版本取其源码树摘要（同内容共享编译产物），否则取 scratch 路径
     pub archive: bool,
 }
@@ -70,6 +72,8 @@ pub struct EmitShared<'a> {
     /// vtable 槽族裁剪计划与逐方法判定缓存（C3 第 5 项，见 `vtable_prune`）
     pub(crate) slot_plan: OnceLock<crate::vtable_prune::SlotPlan>,
     pub(crate) slot_memo: Mutex<HashMap<(String, String, String), bool>>,
+    /// 逃逸分析的世界视图（用户方法区域整组释放，见 `escape`）
+    escape: escape::WorldCache,
 }
 
 /// 发射上下文视图：共享上下文 + 本文件的类型层（名字经文件作用域认领）
@@ -154,6 +158,7 @@ impl<'a> EmitShared<'a> {
             module_crates: OnceLock::new(),
             slot_plan: OnceLock::new(),
             slot_memo: Mutex::new(HashMap::new()),
+            escape: escape::WorldCache::default(),
         })
     }
 
@@ -320,6 +325,10 @@ impl<'a> EmitShared<'a> {
 
     /// A-5 可合成函数式接口账本（首次查询时预扫描；方法体生成器在 invokedynamic 站点经
     /// [`crate::sam::SamLedger::site_ctor_path`] 查询构造路径）
+    pub fn escape_world(&self) -> escape::World<'_> {
+        escape::World::new(self.input, self.manifest, &self.escape)
+    }
+
     pub fn sam(&self) -> &crate::sam::SamLedger {
         self.sam.get_or_init(|| crate::sam::SamLedger::prescan(&self.view()))
     }

@@ -1,0 +1,9 @@
+[package]
+name = "escape"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classfile.workspace = true
+ty.workspace = true
+input.workspace = true

@@ -92,6 +92,36 @@ pub(crate) fn release_slot<R>(f: impl FnOnce(&ReleaseSlot) -> R) -> Option<R> {
     RELEASE.try_with(f).ok()
 }
 
+/// 区域整组释放的载体槽（无 GC 文档 §4.5，见 `region.rs`）：活动区域栈与区域日志。区域内没有让出点
+/// （park / yield / Continuation.run 等 native 命中即不插区域，并行后端无抢占），一个区域总在同一载体上
+/// 进入与退出，所以与载体绑定而不随执行流。
+pub(crate) struct RegionSlot {
+    /// 活动区域数（快速判定）
+    pub(crate) depth: Cell<u32>,
+    /// 挂起登记的嵌套数
+    pub(crate) suspended: Cell<u32>,
+    pub(crate) frames: RefCell<Vec<crate::region::Frame>>,
+    /// 区域日志：(对象值地址, 类型操作)
+    pub(crate) log: RefCell<Vec<(*mut u8, &'static crate::obj_ref::group::Ops)>>,
+}
+
+std::thread_local! {
+    static REGION: RegionSlot = const {
+        RegionSlot {
+            depth: Cell::new(0),
+            suspended: Cell::new(0),
+            frames: RefCell::new(Vec::new()),
+            log: RefCell::new(Vec::new()),
+        }
+    };
+}
+
+/// 访问本载体的区域槽（不内联）；线程局部已销毁（线程退出期）→ None。
+#[inline(never)]
+pub(crate) fn region_slot<R>(f: impl FnOnce(&RegionSlot) -> R) -> Option<R> {
+    REGION.try_with(f).ok()
+}
+
 /// 持锁登记的载体槽（无 GC 文档第四节小步 A，见 `sync_model::held`，仅 debug 档）：持有字段锁的计数与
 /// `__RefSlot` 槽位登记表。持有字段锁期间不得让出（安全点断言持锁数为 0；`__RefSlot` 的 OS 读写锁守卫
 /// 不能跨载体释放），一次持有的登记与注销总在同一载体上，所以与载体绑定而不随执行流。
@@ -188,6 +218,11 @@ pub fn native_enter() {
 /// `<clinit>` 执行结束
 pub fn native_exit() {
     pins().native_exited();
+}
+
+/// 当前执行流栈上的 native 帧数（区域登记的深度判定，见 `region.rs`）
+pub fn native_depth() -> u32 {
+    pins().natives()
 }
 
 /// `doYield` 的判定（当前执行流为最内层）；不在 Continuation 内返回 None

@@ -313,6 +313,7 @@ pub(crate) fn with_emit_ctx<R>(
         java_files: j.java_files.clone(),
         batch: j.o.batch,
         debug: j.o.debug,
+        escape_trace: j.o.escape_trace,
         jobs: j.o.emit_jobs,
         archive: j.o.profile.is_some(),
     };

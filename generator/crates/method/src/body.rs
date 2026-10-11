@@ -48,6 +48,8 @@ pub struct MethodRequest<'a> {
     pub rust_name: Option<&'a str>,
     /// 方法体发射在 vtable trait 的默认实现内
     pub in_vtable_body: bool,
+    /// 逃逸分析给出的整组释放区域（字节码偏移区间，含两端；见 [`crate::regions`]）
+    pub regions: &'a crate::regions::RegionPlan,
 }
 
 /// 生成过程的外部登记（调用方持有：生成失败时已发生的登记同样保留，与 Python 全局登记一致）
@@ -165,6 +167,7 @@ fn structured_entries<'e>(
     mut ledger: JumpLedger,
     code: &NormCode,
     local_vars: &[LocalVar],
+    regions: &crate::regions::RegionPlan,
 ) -> MethodResult<Vec<Entry>> {
     if code.insns.is_empty() {
         return Ok(Vec::new());
@@ -173,6 +176,7 @@ fn structured_entries<'e>(
     let blocks = Blocks::new(env, sim, &mut sink.log, ledger, &code.insns, &code.exception_table, local_vars, CondValues::default())?;
     let out = blocks.run()?;
     let mut nodes = out.nodes;
+    crate::regions::wrap_regions(&mut nodes, regions);
     let entries = if out.dispatch {
         let ids: Vec<NodeId> = nodes.order.clone();
         let d = build_dispatch(out.entry, &ids);
@@ -314,7 +318,7 @@ pub fn gen_method_body<'e>(env: &'e InstrEnv<'e>, req: &MethodRequest, sink: &mu
     let mut entries = prologue(req, &mut sink.log);
     let ledger = JumpLedger::new(format!("{class_name}.{}:{}", m.name, m.desc));
     if let Some(code) = req.code {
-        entries.extend(structured_entries(env, &mut sim, sink, ledger, code, req.local_vars)?);
+        entries.extend(structured_entries(env, &mut sim, sink, ledger, code, req.local_vars, req.regions)?);
     }
     if sim.state.underflow {
         return cfg_err(format!("stack underflow in {class_name}.{}", m.name));

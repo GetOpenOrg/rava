@@ -114,6 +114,11 @@ impl Pins {
     }
 
     /// 离开一个 native 帧
+    /// 本执行流栈上的 native 帧数（含执行中的 `<clinit>`）：区域登记只在进入区域时的深度上进行
+    pub fn natives(&self) -> u32 {
+        self.natives.get()
+    }
+
     pub fn native_exited(&self) {
         self.natives.set(self.natives.get().saturating_sub(1));
     }

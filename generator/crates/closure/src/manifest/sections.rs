@@ -123,6 +123,42 @@ pub(super) fn indy_kinds(vm: &toml::Table) -> Result<Vec<(String, IndyKind)>, St
     Ok(out)
 }
 
+/// 逃逸分析对 native / 手写方法的效果登记（vm_intrinsics.toml `[escape]`，无 GC 文档 §4.5）；未登记即不透明
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscapeEffect {
+    /// 不存放、不保留实参；返回基本类型，或与实参无关的既有对象 / native 期间的（不登记的）分配
+    Pure,
+    /// 同 `Pure`，但返回接收者本身
+    ReturnsReceiver,
+    /// 把第 1 个实参数组的元素复制进第 3 个实参数组（`arraycopy` 形态）
+    ArrayCopy,
+    /// 同 `Pure`，但返回 native 期间新建、内容为空的对象（不登记，可被区域对象引用）
+    Fresh,
+}
+
+/// `[escape]`：`类.方法:描述符` → 效果
+fn escape_effects(vm: &toml::Table) -> Result<std::collections::BTreeMap<String, EscapeEffect>, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for (key, eff) in [
+        ("pure", EscapeEffect::Pure),
+        ("returns_receiver", EscapeEffect::ReturnsReceiver),
+        ("array_copy", EscapeEffect::ArrayCopy),
+        ("fresh", EscapeEffect::Fresh),
+    ] {
+        let where_ = format!("vm_intrinsics.toml [escape] {key}");
+        for m in str_list(get(vm, "escape", key), &where_)? {
+            let well_formed = m
+                .split_once(':')
+                .is_some_and(|(head, desc)| desc.starts_with('(') && head.rsplit_once('.').is_some());
+            if !well_formed {
+                return Err(format!("{where_}：应为 `类.方法:描述符`：{m}"));
+            }
+            out.insert(m, eff);
+        }
+    }
+    Ok(out)
+}
+
 /// 只由发射层消费的节（分析器不读，随 [`super::Manifest`] 一并解析与校验）
 #[derive(Debug, Clone, Default)]
 pub struct EmitSections {
@@ -134,6 +170,8 @@ pub struct EmitSections {
     pub sigpoly_callsite_typed: Vec<String>,
     /// vm_intrinsics.toml `[vm_constants] null_returns`
     pub null_returns: Vec<String>,
+    /// vm_intrinsics.toml `[escape]`：逃逸分析效果登记
+    pub escape_effects: std::collections::BTreeMap<String, EscapeEffect>,
 }
 
 impl EmitSections {
@@ -143,6 +181,7 @@ impl EmitSections {
             class_path_readers: str_list(get(vm, "class_path", "resource_readers"), "vm_intrinsics.toml [class_path] resource_readers")?,
             sigpoly_callsite_typed: str_list(get(vm, "sigpoly", "callsite_typed"), "vm_intrinsics.toml [sigpoly] callsite_typed")?,
             null_returns: str_list(get(vm, "vm_constants", "null_returns"), "vm_intrinsics.toml [vm_constants] null_returns")?,
+            escape_effects: escape_effects(vm)?,
         })
     }
 }

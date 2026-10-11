@@ -4,14 +4,14 @@
 //! 只由 [`closure::manifest::Manifest`] 解析与校验（唯一真源）；本模块是它的投影，不另行解析 TOML：
 //! - closure.toml：`[vm_boundary]`（含 `translate_nested` / `clinit_carried`）；
 //! - seeds.toml：`[module_resources]`；
-//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[class_path]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）、`[vm_state]`、直连反射入口。
+//! - vm_intrinsics.toml：`[[intrinsic]]`、`[caller_sensitive]`、`[sigpoly]`、`[class_path]`、`[indy]`、`[vm_constants]`（含 `injected_statics` 子表）、`[vm_state]`、`[escape]`、直连反射入口。
 //!
 //! 文件缺失视为空表；格式约定违反时返回 [`InputError::Manifest`]。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub use closure::manifest::IndyKind;
+pub use closure::manifest::{EscapeEffect, IndyKind};
 use closure::manifest::{InjectedValue, Manifest};
 
 use crate::prune::VmConstants;
@@ -35,6 +35,8 @@ pub struct RuntimeManifest {
     pub class_path_readers: Vec<String>,
     /// VM 内建成员
     pub intrinsic_members: BTreeSet<String>,
+    /// 逃逸分析效果登记：`类.方法:描述符` → 效果
+    pub escape_effects: BTreeMap<String, EscapeEffect>,
     pub caller_sensitive_annotations: BTreeSet<String>,
     pub sigpoly_callsite_typed: BTreeSet<String>,
     /// 引导方法（`类.方法`）→ 分类
@@ -82,6 +84,7 @@ impl RuntimeManifest {
             module_resource_paths: m.emit.module_resource_paths.clone(),
             class_path_readers: m.emit.class_path_readers.clone(),
             intrinsic_members: set(&mut m.intrinsic_members()),
+            escape_effects: m.emit.escape_effects.clone(),
             caller_sensitive_annotations: set(&mut m.caller_sensitive_annotations()),
             sigpoly_callsite_typed: m.emit.sigpoly_callsite_typed.iter().cloned().collect(),
             indy_kinds: m.indy_kinds().map(|(k, v)| (k.to_string(), v)).collect(),

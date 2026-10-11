@@ -11,7 +11,7 @@
 //!   [--closure-cache DIR（缺省 <仓库>/build/closure_cache）] [--closure-cache-max-mb N] [--profile profile.json]
 //!   [--predefined DIR | --train-predefined]`
 //! - `rava emit <closure.json> [--classes DIR] [--jdk N | --java-home P] [--runtime R] [--out DIR]
-//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--full-precheck] [--raw-sites FILE]
+//!   [--java A.java]… [--image D]… [--clean] [--strict] [--debug] [--escape-trace] [--full-precheck] [--raw-sites FILE]
 //!   [--perf] [--emit-jobs N] [--profile profile.json] [--predefined DIR]`（`--java`：源文件，决定用户类包布局与入口序）
 //!
 //! 选项语义见 docs/environment-variables.md。
@@ -112,6 +112,8 @@ pub struct BuildOpts {
     pub strict: bool,
     /// 诊断明细：存根兜底逐条 / 闭包未解析调用
     pub debug: bool,
+    /// 逃逸分析逐区域判定（拒绝原因与摘要调用链）、区域改写结果打印到 stderr
+    pub escape_trace: bool,
     /// 输出完整预检明细（不截断），不输出审计与发射汇总；build 须配合 `--stop-after emit`
     pub full_precheck: bool,
     /// Raw 逃生舱构造位点剖面追加写入的文件
@@ -168,7 +170,8 @@ const VALUED: [&str; 30] = [
     "--cut-file",
     "--dump-edges",
 ];
-const FLAGS: [&str; 14] = [
+const FLAGS: [&str; 15] = [
+    "--escape-trace",
     "--train-predefined",
     "--clean",
     "--strict",
@@ -247,6 +250,7 @@ impl BuildOpts {
                     "--clean" => o.clean = true,
                     "--batch" => o.batch = true,
                     "--debug" => o.debug = true,
+                    "--escape-trace" => o.escape_trace = true,
                     "--full-precheck" => o.full_precheck = true,
                     "--api-recursive" => o.api_recursive = true,
                     "--perf" => o.perf = true,

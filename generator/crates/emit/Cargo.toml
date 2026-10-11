@@ -16,6 +16,7 @@ closure.workspace = true
 toml.workspace = true
 instr.workspace = true
 method.workspace = true
+escape.workspace = true
 cfg.workspace = true
 ir.workspace = true
 # 拆层剥体：与 java_class! 宏同一份解析与判定（§7.5.2）

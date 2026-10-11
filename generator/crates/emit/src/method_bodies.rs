@@ -182,6 +182,15 @@ impl MethodBodyEmitter for MethodBodies {
         let hooks = Hooks { ctx, code_owner: req.declaring_class, method_index: index.unwrap_or(0) };
         let ictx = InstrCtx::new(ctx.ty, ctx.manifest, &self.facts, &hooks, req.class.name()).with_code_owner(req.declaring_class);
         let env = InstrEnv::new(ictx, req.class_type_params);
+        // 用户方法：逃逸分析规划整组释放区域（继承展开的视图不做，区间以出处类字节码为准）
+        let trace = ctx.opts.escape_trace;
+        let spans = match index {
+            Some(i) if ctx.is_user(req.declaring_class) && req.declaring_class == req.class.name() => {
+                escape::plan_regions(&ctx.escape_world(), owner, &owner.methods()[i], trace)
+            }
+            _ => Vec::new(),
+        };
+        let regions = method::regions::RegionPlan { spans, trace };
         let mreq = MethodRequest {
             class: req.class,
             method: req.method,
@@ -191,6 +200,7 @@ impl MethodBodyEmitter for MethodBodies {
             overloaded: req.overloaded_names.contains(name),
             rust_name: req.rust_name,
             in_vtable_body: req.in_vtable_body,
+            regions: &regions,
         };
         let mut sink = MethodSink::default();
         let res = gen_method_body(&env, &mreq, &mut sink);

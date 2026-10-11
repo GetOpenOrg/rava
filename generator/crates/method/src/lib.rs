@@ -26,6 +26,7 @@ pub mod fold_array;
 pub mod lines;
 pub mod node;
 pub mod postprocess;
+pub mod regions;
 pub mod sig;
 pub mod split_try;
 pub mod text;
