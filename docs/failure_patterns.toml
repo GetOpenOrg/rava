@@ -1505,3 +1505,18 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+[[pattern]]
+id = "inherited-covariant-bridge-slot-unfilled"
+stage = "run"
+symptom = "经祖先类型调用协变覆盖的方法命中声明者抽象存根（stub: <祖先>.m:()L<宽返回类型>;），而中间祖先已有协变实现与桥"
+match = []
+tests = ["lib_pilot jc1（jackson-core JsonParser.getParsingContext）"]
+cause = "协变桥与真实方法同由祖先声明（ParserBase 声明 getParsingContext:JsonReadContext 与桥 :JsonStreamContext，覆盖 JsonParser 抽象方法），接收者（ReaderBasedJsonParser）两者都继承：phase2 resolve_bridge_member 只在真实方法由接收者自己声明时接受协变桥，其余返回 None，回落普通继承只补真实方法的接收者槽位，桥所占的祖先槽位落到声明者的存根。修法：真实方法在接收者严格超类链上时同样生成桥转发成员（槽位名指回声明者），真实方法经 real_want 补继承；接口 impl 仍按真实方法落位。例外：祖先真实方法自身已以 vtable_erasure 直接占桥槽位（同类声明桥与真实方法，如 CharBuffer.array、BoundMethodHandle.internalValues）时继承的真实成员已填槽，不补桥成员（否则 E0201 重名，8cfff721）"
+introduced = ""
+fixed = ["376d1981", "8cfff721"]
+status = "pending"
+owner = "pilot-jackson-core（框架矩阵 #3）"
+diagnose = "对照存根所在类与接收者生成文件：接收者有 inherited_from 的真实方法成员、缺 virtual_in=<祖先> 的 *_super_<m> 桥成员即本条"
+doc = "docs/plans/2026-10-03-framework-pilot-test-matrix.md #3 交付记录"
+since = "2026-10-11"
