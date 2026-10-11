@@ -24,15 +24,6 @@ pub fn remove_trailing_return_ok(lines: &mut Vec<String>) {
     }
 }
 
-/// boolean 返回方法：`Ok(1i32)` / `Ok(0i32)` → `Ok(true)` / `Ok(false)`（JVM 以 int 0/1 表示 boolean）
-pub fn fix_bool_returns(lines: &mut [String]) {
-    for l in lines.iter_mut() {
-        if l.contains("Ok(1i32)") || l.contains("Ok(0i32)") {
-            *l = l.replace("Ok(1i32)", "Ok(true)").replace("Ok(0i32)", "Ok(false)");
-        }
-    }
-}
-
 /// `this` 取值拷贝按绑定方式归一：构造器（owned）→ `Clone::clone(&this)`；实例方法（`&Self`）→
 /// `Clone::clone(this)`
 pub fn normalize_this_clone(lines: &mut [String], this_is_owned: bool) {

@@ -124,6 +124,10 @@ fn metadata_lines(ctx: &EmitCtx<'_>, ci: &ClassInfo) -> Vec<String> {
     if !cf.permitted_subclasses.is_empty() {
         lines.push(format!("#[permitted_subclasses = \"{}\"]", q(&cf.permitted_subclasses.join(","))));
     }
+    // NestHost 属性（嵌套成员声明的宿主）：Class.getNestHost0 的数据源，运行期按宿主 NestMembers 校验
+    if let Some(h) = &cf.nest_host {
+        lines.push(format!("#[nest_host         = \"{}\"]", q(h)));
+    }
     if !cf.nest_members.is_empty() {
         lines.push(format!("#[nest_members      = \"{}\"]", q(&cf.nest_members.join(","))));
     }

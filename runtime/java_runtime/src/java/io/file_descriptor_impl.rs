@@ -40,9 +40,8 @@ impl FileDescriptor {
         Ok(())
     }
 
-    /// native sync0()：强制落盘（fsync）。失败抛 IOException（JDK 精确类型为
-    /// SyncFailedException——IOException 子类，仅当语料引用时才生成，按捕获
-    /// 语义等价降型为 IOException，消息保留 "sync failed" 前缀）。
+    /// native sync0()：强制落盘（fsync）。失败抛 `SyncFailedException("sync failed")`
+    /// （FileDescriptor_md.c 同：无效 fd 的 fsync 同样失败，消息不带 errno 文本）。
     #[jvm_native]
     pub fn sync0(&self) -> Result<()> {
         let fd = self.__get_fd();
@@ -50,15 +49,14 @@ impl FileDescriptor {
             // 嵌入资源位于二进制 .rodata，无落盘语义
             return Ok(());
         }
-        if fd < 0 {
-            return Err(JvmError::from(super::IOException::new_str(
-                String::from("sync failed"))?));
-        }
         use std::os::fd::FromRawFd;
-        let f = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
-        f.sync_all().map_err(|e| {
-            JvmError::from(super::IOException::new_str(
-                String::from(format!("sync failed: {}", e))).unwrap())
-        })
+        let ok = fd >= 0 && {
+            let f = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+            f.sync_all().is_ok()
+        };
+        if ok {
+            return Ok(());
+        }
+        Err(JvmError::from(super::SyncFailedException::new(String::from("sync failed"))?))
     }
 }

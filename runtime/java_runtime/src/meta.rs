@@ -97,6 +97,8 @@ extern "Rust" {
     static CLASS_ACCESS_FLAGS: &'static [u8];
     #[link_name = "__java_meta_CLASS_SOURCE_FILE"]
     static CLASS_SOURCE_FILE: &'static [u8];
+    #[link_name = "__java_meta_NEST_HOST"]
+    static NEST_HOST: &'static [u8];
     #[link_name = "__java_meta_CLASS_SIGNATURE"]
     static CLASS_SIGNATURE: &'static [u8];
     #[link_name = "__java_meta_CLASS_DEFINING_LOADER"]
@@ -124,6 +126,7 @@ pub struct UserMeta {
     pub hidden_classes: &'static [u8],
     pub permitted_subclasses: &'static [u8],
     pub nest_members: &'static [u8],
+    pub nest_host: &'static [u8],
     pub class_access_flags: &'static [u8],
     pub class_source_file: &'static [u8],
     pub class_signature: &'static [u8],
@@ -291,6 +294,12 @@ pub fn class_access_flags() -> &'static [(&'static str, i32)] {
 pub fn class_source_file() -> &'static [(&'static str, &'static str)] {
     static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
     merged(&CELL, || meta_codec::pairs(archive_meta(unsafe { CLASS_SOURCE_FILE })), |m| meta_codec::pairs(user_meta(m, m.class_source_file)), Some(|a, b| a.0.cmp(b.0)))
+}
+/// 类 → NestHost 属性值（声明的嵌套宿主；无该属性的类不在表中）。
+pub fn nest_host(class: &str) -> Option<&'static str> {
+    static CELL: std::sync::OnceLock<&'static [(&'static str, &'static str)]> = std::sync::OnceLock::new();
+    let t = merged(&CELL, || meta_codec::pairs(archive_meta(unsafe { NEST_HOST })), |m| meta_codec::pairs(user_meta(m, m.nest_host)), Some(|a, b| a.0.cmp(b.0)));
+    t.binary_search_by(|(c, _)| (*c).cmp(class)).ok().map(|i| t[i].1)
 }
 /// 类 → 类级 Signature 属性（泛型签名；无该属性的类不在表中）。
 pub fn class_signature(class: &str) -> Option<&'static str> {

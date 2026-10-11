@@ -48,7 +48,12 @@ pub fn sim_returns(env: &InstrEnv, sim: &mut StackSim, _log: &mut InstrLog, ins:
             // 返回类型与栈类型不匹配（窄类型 / bool ↔ i32）：显式转换
             let ret = sim.cfg.return_type.clone();
             let narrow = matches!(ret, RsType::Prim(Prim::I8 | Prim::I16 | Prim::U16 | Prim::Bool | Prim::I32));
-            let v = if ty_text(env, &e.ty) != ty_text(env, &ret) && narrow { coerce::value(e.expr, &e.ty, &ret) } else { e.expr };
+            let v = match (&ret, &e.expr) {
+                // 返回类型 Z 的 int 常量 0 / 1（JVM 以 iconst 表示 boolean）：直接出 bool 字面量
+                (RsType::Prim(Prim::Bool), Expr::Lit(Lit::Int { value: b @ (0 | 1), .. })) => Expr::Lit(Lit::Bool(*b == 1)),
+                _ if ty_text(env, &e.ty) != ty_text(env, &ret) && narrow => coerce::value(e.expr, &e.ty, &ret),
+                _ => e.expr,
+            };
             sim.emit(return_ok(v)?)?;
         }
         "areturn" => {
