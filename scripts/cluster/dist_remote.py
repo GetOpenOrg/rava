@@ -27,6 +27,29 @@ def resolve_spot_ref(ref: str) -> str:
     return full
 
 
+def resolve_target_commit(ref: str) -> str | None:
+    """本次运行要测的完整提交（续跑时与旧租约的提交比对）。完整哈希原样返回；分支名先问 origin
+    （服务器 fetch 的就是它），再退回本地 origin/<ref>、<ref>；都解析不出返回 None（不做比对）。"""
+    import subprocess
+    if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        return ref.lower()
+    repo = config.REPO_ROOT
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "ls-remote", "origin", f"refs/heads/{ref}"],
+                           capture_output=True, text=True, timeout=30)
+        sha = r.stdout.split()[0] if r.returncode == 0 and r.stdout.strip() else ""
+        if re.fullmatch(r"[0-9a-f]{40}", sha):
+            return sha
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for cand in (f"origin/{ref}", ref):
+        r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{cand}^{{commit}}"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return None
+
+
 def drop_missing_tests(ref: str, names: list[str]) -> tuple[list[str], list[str]]:
     """按 ref 的 tests/e2e 树过滤抽查名单：master_passed 与 --tests 可能含已剪枝的用例（如 acc13430
     冗余剪枝删掉的 184 例），派出去只会得到「No test files found」。返回 (保留, 丢弃)；

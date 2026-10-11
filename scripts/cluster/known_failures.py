@@ -28,6 +28,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 from cluster_config import RESULTS_DIR  # noqa: E402
+import dist_state  # noqa: E402
 from cluster_config import REPO_ROOT as JAVA_RTA  # noqa: E402
 INTEG_BRANCH = "rust-closure-analyzer"
 KNOWN_REL = "docs/known_failures.toml"
@@ -222,7 +223,7 @@ def classify(tag: str, tests: list[str] | None, known: list[KnownEntry], known_s
              results_dir: Path = RESULTS_DIR, jdk: int = DEFAULT_JDK,
              patterns: list[Pattern] | None = None) -> Verdict:
     spot_dir = results_dir / "spot" / tag
-    state_path = spot_dir / f"state_jdk{jdk}.json"
+    state_path = dist_state.state_path(spot_dir, jdk)
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     passed, failed = state.get("passed", {}), state.get("failed", {})
     infra = state.get("infra_failed", {})

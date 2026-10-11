@@ -244,11 +244,19 @@ SSH 断开不丢任务、不丢结果：测试 / 作业在远端以 `setsid nohu
 **派发租约**：派发前写入 `state_jdk{N}.json` 的 `leases`（作业写在 `summary.json` 的 running 条目），
 完成后清除。本地进程被杀或重启后，各服务器 worker 先按租约接上原结果目录，再领新任务。
 
-> **已知缺陷（2026-10-10，未修）**：续跑接上旧租约时，超时仍从原派发时刻起算，停机间隔也算进去。
-> 接上后不久，任务就会被判 TIMEOUT，记为失败，但这是假失败。C4 第一轮续跑时，6 个 c249cdec 的旧租约（含 4 例反射用例）
-> 都这样被判超时。分诊时，对接上旧租约的 TIMEOUT 一律先重跑，
-> 不按代码失败登记。终态修复：接上旧租约时按接上时刻重算超时期限，或者旧租约所在的提交已不是本次 ref 时，
-> 直接归还任务池重跑。
+> **续跑接旧租约（2026-10-11 已修，原「已知缺陷」）**：本地重启后接上旧租约时，期限取
+> `max(原期限, 接上时刻 + 时限)`（`dist_state.resume_deadline`；新租约记 `deadline = start + 时限`），
+> 停机间隔不再算进单例时限；旧租约的提交不是本次目标提交（抽查 / 作业为 `--ref`，全量为 origin/main，
+> `dist_remote.resolve_target_commit` 解析；解析不出时不比对）时，租约回收、测试 / 作业归还任务池重派，
+> 远端残留运行由清理残留步骤结束。e2e 与作业模式同口径。修复前（如 C4 第一轮续跑 6 个 c249cdec 旧租约）
+> 记下的 TIMEOUT 属假失败，分诊时先重跑。
+
+**状态文件与测试名（2026-10-11）**：状态文件路径只经 `dist_state.state_path(结果目录, jdk)` 取得，巡检遍历
+全部 `state_jdk*.json` 按 JDK 分行汇报。状态 / `summary.json` 解析失败时备份为 `<名>.corrupt-<时间>` 并报错退出，
+不再静默清空；写入一律同目录临时文件 + fsync + `os.replace`。测试名在 `--tests`、`load_test_list`、`sample_passed`、
+读租约四个入口统一校验为 Java 标识符形（字母或下划线开头，后接字母 / 数字 / 下划线，字母含 Unicode），拼远端命令一律
+`shlex.quote`。分发器退出码：本次范围内全部通过（作业全部 rc=0）为 0，有失败 / infra 失败 / 未跑完为 1，中断为 130；
+`--cleanup-servers` 只清 `--servers` 所选（缺省 test 池）服务器的 `remote_dir`。
 
 **异常归还与 infra 失败**：只有远端确认已死且没有 done 时才把任务归还任务池。同一测试归还超过
 `MAX_INFRA_RETURNS=3` 次，记为 infra 失败（`infra_failed_jdk{N}.txt`），不计入失败数，下一轮自动重新入队。
@@ -416,6 +424,20 @@ flowchart TD
 - 跳板连接按跳板服务器缓存、各线程共用，失效时重建；跳板自身只试直连 → 代理
 - 实现在 `dist_conn.py`
 - `env_setup.py` 的检查与初始化使用同一套重连逻辑
+
+**主机密钥校验（2026-10-11 起，取代 `AutoAddPolicy`）**：`ssh_client.py` 建连先读系统 `~/.ssh/known_hosts`，再读
+rava 维护的 known_hosts（缺省 `~/.config/rava/known_hosts`；`cluster.toml` 顶层 `known_hosts` 键或环境变量
+`RAVA_KNOWN_HOSTS` 覆盖），策略为拒绝：未登记的主机不连（每主机 stderr 告警一次、不重试），密钥不符由 paramiko 拒绝。
+直连、跳板、SOCKS5 代理三条链路都按目标真实地址（非 22 端口为 `[host]:port`）查密钥，同一条目通用。
+首次接入新服务器（TOFU，须显式）：
+
+```bash
+uv run --group cluster python scripts/cluster/ssh_client.py trust [标签 ...]   # 缺省全部服务器；经 直连 → 跳板 → 代理 建连，把当前密钥写入 rava known_hosts
+uv run --group cluster python scripts/cluster/distribute_tests.py ... --trust-new-host   # 分发时遇未登记主机按 TOFU 登记（hw_check.py 同名选项）
+```
+
+2026-10-11 已预采集 ubuntu / dev / jp1 / jp2 / kr1 / sg1 / sg2 / us1 的密钥进 `~/.config/rava/known_hosts`；kr2 当时
+SSH 握手不通（banner 读取失败，与密钥无关）未登记，恢复后须先 `ssh_client.py trust kr2`（或 `--trust-new-host`）。
 
 ---
 
