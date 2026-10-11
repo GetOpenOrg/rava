@@ -31,8 +31,8 @@ fn c_bytes(p: *const libc::c_char) -> JArray<i8> {
 /// JNI `throwUnixException(env, ECANCELED)` 的取消检查：cancel 地址非 0 且所指 int 非 0
 #[cfg(target_os = "linux")]
 fn cancelled(cancel: i64) -> bool {
-    // SAFETY: cancel 非 0 时为调用方（Files.copy 的可取消任务）持有的直接内存 int
-    cancel != 0 && unsafe { std::ptr::read_volatile(cancel as *const i32) } != 0
+    // SAFETY: cancel 非 0 时为调用方（Files.copy 的可取消任务）持有的直接内存 int，经原子单元读
+    cancel != 0 && unsafe { crate::native_memory::load_volatile_direct(cancel, 4) } != 0
 }
 
 impl LinuxNativeDispatcher {

@@ -17,8 +17,8 @@ impl super::unix_file_system::UnixFileSystem {
             if n == 0 {
                 return Ok(());
             }
-            // SAFETY: cancel 非 0 时指向 Cancellable 的轮询 int
-            if cancel != 0 && unsafe { std::ptr::read_volatile(cancel as *const i32) } != 0 {
+            // SAFETY: cancel 非 0 时指向 Cancellable 的轮询 int（直接内存，经原子单元读）
+            if cancel != 0 && unsafe { crate::native_memory::load_volatile_direct(cancel, 4) } != 0 {
                 return Err(unix_exception(libc::ECANCELED));
             }
             let (mut pos, mut len) = (0usize, n as usize);

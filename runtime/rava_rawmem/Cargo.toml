@@ -1,0 +1,11 @@
+[package]
+name = "rava_rawmem"
+version = "0.1.0"
+edition = "2021"
+description = "直接内存（Unsafe 绝对地址）的字粒度原子访问原语：批量读写 / 填充 / 拷贝与 CAS 同一 8 字节原子单元，无混访数据竞争"
+
+[lib]
+name = "rava_rawmem"
+path = "src/lib.rs"
+
+[dependencies]

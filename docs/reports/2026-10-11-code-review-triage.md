@@ -97,9 +97,9 @@
 
 ## 二、待办（不派，主线空档或相关改动顺手做）
 
-- 健全性：`Handoff<T>` 无界 Send（`gil.rs:158`）；`native_memory` 批量拷贝与 CAS 混访、未对齐 CAS 退化、`fill` 负数（`native_memory.rs:83-162`）；`rava_coro` Drop 中 `expect`（`stack.rs:393,409`）。
-- 生成器 / 宏：描述符 / 注解递归无深度上限（其余七项已由「一、生成器修复」处理）。
-- 运行时其他：`runtime_impl.rs:44-50` 无条件读 `/proc`（macOS 恒 0）。
+- 健全性：`Handoff<T>` 无界 Send（`gil.rs:158`）；`native_memory` 批量拷贝与 CAS 混访、未对齐 CAS 退化、`fill` 负数（`native_memory.rs:83-162`）；`rava_coro` Drop 中 `expect`（`stack.rs:393,409`）。→ 已修，见五。
+- 生成器 / 宏：描述符 / 注解递归无深度上限 → 已修，见五（其余七项已由「一、生成器修复」处理）。
+- 运行时其他：`runtime_impl.rs:44-50` 无条件读 `/proc`（macOS 恒 0）。→ 已修，见五。
 - 工具：`ssh_client.py:47` AutoAddPolicy（报告所列 :77 不存在）。
 
 ## 三、已失效
@@ -115,3 +115,62 @@
 - `merge_daemon.py` / `merge_queue.py`：已停用，无调用者（仅单测与文档引用），删除或恢复。
 - CI：仓库无 CI 配置；现行以集群单测四作业 + 抽查代替。
 - 「main 既有」失败缺机器基线、用户文档、构建进度输出：属产品化项。
+
+## 五、健全性修复（分支 `review-soundness`）
+
+二「待办」中健全性四项、描述符 / 注解递归深度与 `runtime_impl.rs` 的 `/proc` 一项已修。逐项如下。
+
+| 项 | 修法 | 见证 |
+|---|---|---|
+| `Handoff<T>` 无界 Send（`gil.rs`） | 只实现 `unsafe impl Send for Handoff<Thread>`，SAFETY 写明理由：Thread 不是 Send 只因 `dyn ObjectVTable` 没带 Send 约束；对象存储是原子引用计数加线程安全单元；线程对象本就跨 OS 线程共享。其他 `T` 可以构造，但不能跨线程移动 | `gil.rs` 内的编译期断言：`Handoff<Thread>: Send`，且 `Handoff<Rc<u8>>` 不是 Send（`AmbiguousIfSend` 手法，与 static_assertions 的 `assert_not_impl_any!` 相同）。独立片段实测：恢复无界实现后报 E0283；把 `Handoff(Rc)` 移进 `thread::spawn` 报 E0277 |
+| `native_memory` 原子与非原子混访（`native_memory.rs`） | 新 crate `runtime/rava_rawmem`。直接内存的读、写、填充、拷贝与 CAS 全部落在包含该地址的 8 字节对齐 `AtomicU64` 上：普通访问用 Relaxed，字内部分写用 CAS 合并，读-改-写用 SeqCst CAS 循环，只替换自身字节。同一地址的并发访问因此都是同宽原子操作，没有数据竞争，也没有混宽原子访问。Unsafe 的 get/put 走普通读写（不要求对齐），CAS 族走 `update`。取消标记（`Files.copy`）的 `read_volatile` 改走同一原子单元 | rava_rawmem 单测 8 例：各宽度对齐 CAS 见证旧值；未对齐 CAS 被拒且不写；负长度被拒；任意对齐读写往返；批量读写、填充、重叠拷贝与 memmove 一致；CAS 计数与同字相邻字节的批量写并发不丢更新；同字两半并发 CAS。e2e 新增 `TestDirectMemoryAtomics` |
+| 未对齐 CAS | 抛 IllegalArgumentException（`Unaligned atomic update ..., not supported`），不再静默退化为非原子读-改-写。依据：HotSpot 对 int/long CAS 不查对齐，结果随平台而异（x86 靠 split lock 仍原子，aarch64 无 LSE2 时对齐故障，表现为 InternalError）；JDK 自身对无法以单字原子完成的更新规定抛 IAE（`Unsafe.compareAndExchangeShort`：「Update spans the word, not supported」）。这里取后者，各平台一致。VarHandle 视图（byteBufferView / byteArrayView）在 Java 侧已对未对齐的原子访问抛 IllegalStateException，到不了 native | 同上 |
+| `fill` / `copy` 负 bytes | native 入口抛 IAE（`negative size: n`）。Java 侧 `Unsafe.setMemory` / `copyMemory` / `copySwapMemory` 在调用 `*0` native 之前已执行 `checkSize`（负数抛 IAE）和 `checkPrimitivePointer`（JDK 21 `Unsafe.java` 462、735、797 行），这些公开包装按字节码翻译（a3-U1）。native 侧检查属纵深防御，守住 native 入口本身 | `negative_length_rejected` |
+| `rava_coro` Drop 中的 `expect`（`stack.rs`） | 两处改为 `let-else` 加 `debug_assert!`：release 下泄漏该栈槽，不在 drop 中 panic；debug 下照常断言 | `drop_with_unknown_chunk_leaks_instead_of_aborting`（release 下不 panic、计数一致；debug 下 `should_panic`） |
+| 描述符数组维数递归（`descriptor.rs`） | 前导 `[` 改为循环计数，上限 255（JVMS §4.3.2 / §4.4.1），超限返回 None | `array_dimensions_capped_at_255`：255 维可解析且往返一致；256 维在字段、方法参数、返回值三处都被拒；65535 维被拒，不栈溢出 |
+| 注解元素值递归（`class.rs` / `extras.rs`） | `annotation` / `element_value` / `anno_refs` 带深度参数，上限 `MAX_ANNOTATION_DEPTH = 256`（JVMS 不设上限，javac 产物远低于此），超限报 `Error::AnnotationTooDeep`。`anno_refs` 原本容忍格式错，现在只上抛深度错 | `element_value_depth_capped`（256 层通过，257 层报错，十万层 `@` 链报错且不栈溢出）、`anno_refs_depth_capped` |
+| `Runtime.totalMemory` 的 `/proc`（`runtime_impl.rs`） | 按 cfg 分平台：Linux / Android 读 `/proc/self/statm`；Apple 用 Mach `task_info(MACH_TASK_BASIC_INFO).resident_size`；其他平台不可得，结果为 0 | 独立片段对 aarch64-apple-darwin、x86_64-unknown-linux-gnu、x86_64-unknown-freebsd 三个目标做 `cargo check` 均通过（nightly `-Zbuild-std`）；Linux 实测返回常驻集 |
+
+配套改动：`overlay.rs` 不再逐个硬编码 `rava_macros` / `rava_coro`，改为把 java_runtime 清单里每个 `path = "../<兄弟 crate>"` 统一改写为绝对路径。overlay 单测断言 rava_rawmem 为绝对路径，且清单中不再残留 `"../`。
+
+**Miri**：`cargo +nightly miri test` 跑 rava_rawmem 全部 8 例，取 4 个种子（`-Zmiri-many-seeds=0..4`），均通过，未报 UB 或数据竞争。并发用例在 Miri 下降为 40 次迭代。rava_coro 含内联汇编栈切换与 mmap，Miri 无法执行，未跑。没有用 loom：rava_rawmem 只用 std 原子，Miri 的弱内存模拟已覆盖。
+
+**验收结果**
+
+- 本机：generator `cargo check --release --tests` 无误；emit 单测 93 + 2、classfile 15、rava_rawmem 9（含偏移 0..8 × 长度 0..40 穷举）、rava_coro release 与 debug 均通过。
+- 全量单测作业 `rs-ut2`（sg1，a6c8fcac）：`ut-closure`（closure_cli 11 例，3654 s）与 `ut-rest` 两条都是 rc=0，无失败。
+- 抽查 `rs-spot2`（sg1，a6c8fcac）：11/11 PASS（DeepCopy、HelloWorld、StreamDemo、TestAtomics、TestByteArrayViewVarHandle、TestDirectBuffer、TestDirectBufferPaging、TestThreadJoin、TestThreadNatives、TestUnsafePrimitiveArray、TestVarHandleBitwise）。另有 1 次 infra 失败，是该 ref 上的旧 VarHandle 版 TestDirectMemoryAtomics（无期望文件），以 rs-spot3 为准。
+- 抽查 `rs-spot3`（kr1，a3b7ca0a）：TestDirectMemoryAtomics（Unsafe 版）PASS，1/1。
+
+**计时**（作业 `rs-bench5`，kr1 同机，前 96fc1cf4 → 后 a3b7ca0a，各 5 次）
+
+基准是 sun.misc.Unsafe 绝对地址热循环（DirectMemBench，跑在 rava 生成的 release 二进制上）：
+
+- CAS 段：getAndAddInt 加 compareAndSwapLong，500 万次；
+- 普通段：putInt / getInt，204.8 万次；
+- 批量段：copyMemory 4 KiB 加 setMemory 96 B，2 万次。
+
+| 段 | 前 | 后（a3b7ca0a） |
+|---|---|---|
+| CAS | 413–441 ms（中位 417） | 439–445 ms（中位 441，+6%） |
+| 普通 | 63–66 ms | 57–58 ms（−10%） |
+| 批量 | 3 ms | 59–61 ms（**20 倍回退**） |
+| 进程总耗时 | 0.517–0.548 s | 0.595–0.599 s |
+| 构建 | 转译 58.9 s、编译 11 m 52 s | 转译 58.6 s、编译 11 m 46 s |
+| 二进制 | 53 168 904 B | 53 181 072 B（+12 KB） |
+
+批量段回退的原因：拷贝经 512 字节栈缓冲，`spans` 闭包每个字都切段并逐字节复制。57564806 改了两处：
+
+- 读、写、填充改为「头段 / 整字 / 尾段」显式循环；
+- 源与目标字内偏移相同的拷贝走逐字一读一写的快路径。
+
+本机微基准（`copy` 4 KiB 加 `fill` 96 B，2 万次）由 26 ms 降到 3 ms，与 memcpy 基线同量级。偏移不同的拷贝由 27 ms 降到 4.7 ms。Miri 2 种子 9/9 通过。**57564806 的 kr1 同机复测未做**（用户指令暂停后收尾），列入下一步。
+
+**遗留**
+
+- 堆上基本类型数组经 `__update_bytes` 做跨元素读-改-写（例如在 `byte[]` 上经 int 字路径做 byte CAS）时，走 stripe 锁下的读-改-写，可能丢失同时发生的普通元素写。这不在本步「直接内存」范围内，需在 `array/store.rs` 用同样的字粒度原子单元解决。
+- 直接内存还有 FFI 写入方（zlib 的 `inflate` / `deflate`、`read(2)` 写入直接缓冲区、`CStr::from_ptr(c_path(address))` 读路径），它们在 Rust 内存模型之外，与 Java 线程并发访问同一缓冲区属于 Java 程序自身的数据竞争。
+- 预先存在的缺陷（main 96fc1cf4 上同样存在，与本分支无关）：在 `ByteBuffer.allocateDirect` 上用 `MethodHandles.byteBufferViewVarHandle` 做原子访问时，程序启动即抛 `IllegalStateException`（无消息）。kr1 上 rs-bench4 前后两版二进制都是约 7 ms 内抛出。因此 TestDirectMemoryAtomics 改用 Unsafe 绝对地址；VarHandle 直接缓冲视图需另立任务查根因。
+- 下一步：① 57564806 在 kr1 同机复测 DirectMemBench，判据是批量段 ≤5 ms，CAS 和普通段不劣于 a3b7ca0a。命令见下条。② CAS 段的 +6% 来自 `update` 的 `&mut dyn FnMut` 动态调用与两次掩码运算；若要求持平，可以把 `update` 改为泛型 `impl FnMut` 内联（native_memory 调用点不变）。③ 堆数组跨元素读-改-写（见上条）。④ VarHandle 直接缓冲视图 ISE（见上条）。
+- 计时脚本已入库 `scripts/direct_mem_bench.sh`：内嵌 DirectMemBench.java 与期望输出；对当前检出与基线 ref（缺省 96fc1cf4）分别 `run_tests.py --release --keep-artifacts`，再把生成的二进制各跑 5 次。复测命令：`distribute_tests.py --job <tag> --ref 57564806 --servers kr1 --cmd "bash scripts/direct_mem_bench.sh"`。
+- 为跑 Miri，本机装了 nightly 工具链及 miri、rust-src 组件（`~/.rustup/toolchains/nightly-*`，Miri sysroot 在 `~/.cache/miri`）。

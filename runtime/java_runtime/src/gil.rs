@@ -154,9 +154,36 @@ pub fn clinit_exit(class: &'static str, ok: bool, state: &'static __PrimCell<u8>
 
 // ── 跨线程移交 ──────────────────────────────────────────────────────────────
 
-/// 把线程对象移交给新 OS 线程的载体（对象模型为 `Arc` + 线程安全单元，移交安全）。
+/// 把线程对象移交给新 OS 线程的载体（`start0` / VM 系统线程派生）。
+///
+/// 只有 `Handoff<Thread>` 是 `Send`：其余 `T` 可以构造，但不能跨线程移动（例如手写 native 里的
+/// `Rc` 经此越界即编译失败，见下方 `_handoff_send_bound` 的编译期见证）。
 pub struct Handoff<T>(pub T);
-unsafe impl<T> Send for Handoff<T> {}
+
+// SAFETY: `Thread` 只因句柄内的 `dyn ObjectVTable` 未带 `Send` 约束而不是 `Send`；Java 对象的存储是
+// `__Obj`（原子引用计数）+ 线程安全单元（`__PrimCell` / `__RefField` / 监视器），生成的类结构体
+// 不含 `Rc` / `Cell` 等线程局部状态，Java 线程对象本就由多个 OS 线程共享（`currentThread`、`join`、
+// `interrupt`）。移交只把一个强引用从派生线程交给新线程，不复制、不别名非同步状态。其他 `T` 没有
+// 这一论证，故不放开。
+unsafe impl Send for Handoff<crate::java::lang::Thread> {}
+
+/// 编译期见证：`Handoff<Thread>` 是 `Send`，`Handoff<Rc<_>>` 不是。若有人把 Send 实现放宽为
+/// 无界泛型，`AmbiguousIfSend` 对 `Handoff<Rc<u8>>` 出现两个候选实现，类型推断歧义，本 crate 编译失败
+///（static_assertions `assert_not_impl_any!` 的同一手法）。
+const _: () = {
+    fn assert_send<T: Send>() {}
+    trait AmbiguousIfSend<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct Invalid;
+    impl<T: ?Sized + Send> AmbiguousIfSend<Invalid> for T {}
+    #[allow(dead_code)]
+    fn _handoff_send_bound() {
+        assert_send::<Handoff<crate::java::lang::Thread>>();
+        let _ = <Handoff<std::rc::Rc<u8>> as AmbiguousIfSend<_>>::some_item;
+    }
+};
 
 /// 类初始化骨架的慢路径（JVMS §5.5）：他线程初始化中则等待、同线程递归立即返回、失败后
 /// NoClassDefFoundError；初始化体（父类 / 超接口初始化、`<clinit>`）由调用方给出。

@@ -37,7 +37,7 @@ fn runtime(root: &Path) -> PathBuf {
     put(&rt.join("build.rs"), "fn main() {}\n");
     put(
         &rt.join("Cargo.toml"),
-        "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\nrava_coro = { path = \"../rava_coro\" }\n",
+        "[package]\nname = \"java_runtime\"\nversion = \"0.1.0\"\n[dependencies]\nrava_macros = { path = \"../rava_macros\" }\nrava_coro = { path = \"../rava_coro\" }\nrava_rawmem = { path = \"../rava_rawmem\" }\n",
     );
     let meta = root.join("runtime").join("java_meta");
     put(&meta.join("Cargo.toml"), "[package]\nname = \"java_meta\"\nversion = \"0.1.0\"\n");
@@ -54,6 +54,7 @@ fn runtime(root: &Path) -> PathBuf {
     sib("rava_macros", "syn = \"2\"\nrava_macros_core = { path = \"../rava_macros_core\" }\n");
     sib("rava_macros_core", "");
     sib("rava_coro", "");
+    sib("rava_rawmem", "");
     rt
 }
 
@@ -82,6 +83,7 @@ fn overlay_copies_rewrites_and_prunes() {
     let mtime = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
     let macros_src = root.join("runtime/rava_macros/src/lib.rs");
     assert_eq!(mtime(&vendor.join("rava_macros/src/lib.rs")), mtime(&macros_src), "mtime 取真源");
+    assert!(cargo.contains("path = \"../vendor/rava_rawmem\""), "rava_rawmem 一并落入 vendor");
     assert!(!cargo.contains("0.1.0"));
     assert!(src.join("sun/mod.rs").exists(), "顶层占位 mod.rs");
     assert!(out.join("java_runtime/build.rs").exists());

@@ -26,10 +26,10 @@ extern "C" fn copy_progress(
     _dst: *const libc::c_char,
     ctx: *mut libc::c_void,
 ) -> libc::c_int {
-    // SAFETY: ctx 为 directCopy0 传入的取消标记地址（调用方持有的直接内存 int）
+    // SAFETY: ctx 为 directCopy0 传入的取消标记地址（调用方持有的直接内存 int，经原子单元读）
     if what == libc::COPYFILE_COPY_DATA
         && (stage == libc::COPYFILE_ERR
-            || (stage == libc::COPYFILE_PROGRESS && unsafe { std::ptr::read_volatile(ctx as *const i32) } != 0))
+            || (stage == libc::COPYFILE_PROGRESS && unsafe { crate::native_memory::load_volatile_direct(ctx as i64, 4) } != 0))
     {
         return libc::COPYFILE_QUIT;
     }

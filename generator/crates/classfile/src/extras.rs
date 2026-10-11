@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::constant::{ConstantPool, CpEntry};
 use crate::reader::Reader;
-use crate::Error;
+use crate::{Error, MAX_ANNOTATION_DEPTH};
 
 /// 局部变量表条目（LVT 一条 + 同 (slot, start, name) 的 LVTT 签名）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,9 +142,14 @@ enum AnnoForm {
     Default,
 }
 
-/// 收集注解属性体引用的常量池索引（格式错误时保留已收集部分）
-fn anno_refs(data: &[u8], form: AnnoForm, refs: &mut BTreeSet<u16>) {
-    fn ev(r: &mut Reader, refs: &mut BTreeSet<u16>) -> Result<(), Error> {
+/// 收集注解属性体引用的常量池索引。一般格式错误时保留已收集部分；嵌套超过
+/// [`MAX_ANNOTATION_DEPTH`] 报 [`Error::AnnotationTooDeep`]（与 class.rs 的注解解析同一上限）。
+fn anno_refs(data: &[u8], form: AnnoForm, refs: &mut BTreeSet<u16>) -> Result<(), Error> {
+    /// `depth`：外层已嵌套的注解 / 数组元素值层数（顶层 0）
+    fn ev(r: &mut Reader, refs: &mut BTreeSet<u16>, depth: usize) -> Result<(), Error> {
+        if depth > MAX_ANNOTATION_DEPTH {
+            return Err(Error::AnnotationTooDeep(MAX_ANNOTATION_DEPTH));
+        }
         let tag = r.u1()?;
         match tag {
             b'B' | b'C' | b'I' | b'S' | b'Z' | b'J' | b'F' | b'D' | b's' | b'c' => {
@@ -154,43 +159,47 @@ fn anno_refs(data: &[u8], form: AnnoForm, refs: &mut BTreeSet<u16>) {
                 refs.insert(r.u2()?);
                 refs.insert(r.u2()?);
             }
-            b'@' => anno(r, refs)?,
+            b'@' => anno(r, refs, depth)?,
             b'[' => {
                 for _ in 0..r.u2()? {
-                    ev(r, refs)?;
+                    ev(r, refs, depth + 1)?;
                 }
             }
             _ => {}
         }
         Ok(())
     }
-    fn anno(r: &mut Reader, refs: &mut BTreeSet<u16>) -> Result<(), Error> {
+    fn anno(r: &mut Reader, refs: &mut BTreeSet<u16>, depth: usize) -> Result<(), Error> {
         refs.insert(r.u2()?);
         for _ in 0..r.u2()? {
             refs.insert(r.u2()?);
-            ev(r, refs)?;
+            ev(r, refs, depth + 1)?;
         }
         Ok(())
     }
     let mut r = Reader::new(data);
-    let _ = (|| -> Result<(), Error> {
+    let walked = (|| -> Result<(), Error> {
         match form {
             AnnoForm::Annos => {
                 for _ in 0..r.u2()? {
-                    anno(&mut r, refs)?;
+                    anno(&mut r, refs, 0)?;
                 }
             }
             AnnoForm::Params => {
                 for _ in 0..r.u1()? {
                     for _ in 0..r.u2()? {
-                        anno(&mut r, refs)?;
+                        anno(&mut r, refs, 0)?;
                     }
                 }
             }
-            AnnoForm::Default => ev(&mut r, refs)?,
+            AnnoForm::Default => ev(&mut r, refs, 0)?,
         }
         Ok(())
     })();
+    match walked {
+        Err(e @ Error::AnnotationTooDeep(_)) => Err(e),
+        _ => Ok(()),
+    }
 }
 
 fn attribute<'a>(r: &mut Reader<'a>, pool: &'a ConstantPool) -> Result<(&'a str, &'a [u8]), Error> {
@@ -286,7 +295,7 @@ pub fn parse_extras(data: &[u8]) -> Result<ClassExtras, Error> {
             match name {
                 "Deprecated" => f.deprecated = true,
                 "RuntimeVisibleAnnotations" => {
-                    anno_refs(body, AnnoForm::Annos, &mut refs);
+                    anno_refs(body, AnnoForm::Annos, &mut refs)?;
                     f.raw_annotations = body.to_vec();
                 }
                 _ => {}
@@ -303,15 +312,15 @@ pub fn parse_extras(data: &[u8]) -> Result<ClassExtras, Error> {
                 "Code" => code_locals(body, &pool, &mut m)?,
                 "Deprecated" => m.deprecated = true,
                 "RuntimeVisibleAnnotations" => {
-                    anno_refs(body, AnnoForm::Annos, &mut refs);
+                    anno_refs(body, AnnoForm::Annos, &mut refs)?;
                     m.raw_annotations = body.to_vec();
                 }
                 "RuntimeVisibleParameterAnnotations" => {
-                    anno_refs(body, AnnoForm::Params, &mut refs);
+                    anno_refs(body, AnnoForm::Params, &mut refs)?;
                     m.raw_param_annotations = body.to_vec();
                 }
                 "AnnotationDefault" => {
-                    anno_refs(body, AnnoForm::Default, &mut refs);
+                    anno_refs(body, AnnoForm::Default, &mut refs)?;
                     m.raw_annotation_default = body.to_vec();
                 }
                 _ => {}
@@ -324,7 +333,7 @@ pub fn parse_extras(data: &[u8]) -> Result<ClassExtras, Error> {
         match name {
             "Deprecated" => out.deprecated = true,
             "RuntimeVisibleAnnotations" => {
-                anno_refs(body, AnnoForm::Annos, &mut refs);
+                anno_refs(body, AnnoForm::Annos, &mut refs)?;
                 out.raw_annotations = body.to_vec();
             }
             "Record" => {
@@ -402,4 +411,33 @@ mod tests {
         assert_eq!(anno_const(&pool, 1), Some(AnnoConst::Utf16(vec![0xD800])));
         assert_eq!(anno_const(&pool, 2), Some(AnnoConst::Utf8("ab".into())));
     }
+
+    /// 嵌套 `levels` 层数组元素值（每层 1 个元素），最内层为 `s` 常量（常量池 #1）
+    fn nested_arrays(levels: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        for _ in 0..levels {
+            v.extend_from_slice(&[b'[', 0, 1]);
+        }
+        v.extend_from_slice(&[b's', 0, 1]);
+        v
+    }
+
+    #[test]
+    fn anno_refs_depth_capped() {
+        let mut refs = BTreeSet::new();
+        assert!(anno_refs(&nested_arrays(MAX_ANNOTATION_DEPTH), AnnoForm::Default, &mut refs).is_ok());
+        assert!(refs.contains(&1));
+        let deep = anno_refs(&nested_arrays(MAX_ANNOTATION_DEPTH + 1), AnnoForm::Default, &mut BTreeSet::new());
+        assert!(matches!(deep, Err(Error::AnnotationTooDeep(_))));
+        // 注解互递归链（@ → 元素 → @ …）超长：报错而不爆栈
+        let mut chain = vec![0, 1];
+        for _ in 0..100_000 {
+            chain.extend_from_slice(&[0, 1, 0, 1, 0, 1, b'@']);
+        }
+        let r = anno_refs(&chain, AnnoForm::Annos, &mut BTreeSet::new());
+        assert!(matches!(r, Err(Error::AnnotationTooDeep(_))));
+        // 一般截断仍容错（保留已收集部分）
+        assert!(anno_refs(&[b'['], AnnoForm::Default, &mut BTreeSet::new()).is_ok());
+    }
 }
+

@@ -21,7 +21,7 @@ impl Runtime {
         Ok(crate::posix::default_max_heap())
     }
 
-    /// native `totalMemory()`：当前已向 OS 申请的内存（进程常驻集，/proc/self/statm）。
+    /// native `totalMemory()`：当前已向 OS 申请的内存（进程常驻集，按平台取值，见 `resident_bytes`）。
     #[jvm_native]
     pub fn totalMemory(&self) -> Result<i64> {
         Ok(resident_bytes().unwrap_or(0) as i64)
@@ -41,11 +41,38 @@ impl Runtime {
     }
 }
 
-/// 进程常驻集字节数（Linux /proc/self/statm 第 2 列 × 页大小；其余平台不可得）。
+/// 进程常驻集字节数（Linux：/proc/self/statm 第 2 列 × 页大小）。
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn resident_bytes() -> Option<u64> {
     let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
     let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
     // SAFETY: sysconf 只查询系统常量
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page > 0 { Some(pages * page as u64) } else { None }
+}
+
+/// 进程常驻集字节数（macOS / iOS：Mach `task_info(MACH_TASK_BASIC_INFO).resident_size`，与 HotSpot
+/// `os::Bsd` 取 RSS 同一来源）。
+#[cfg(target_vendor = "apple")]
+fn resident_bytes() -> Option<u64> {
+    // SAFETY: 输出缓冲为按值初始化的 mach_task_basic_info，count 给出其以 integer_t 计的长度；
+    // mach_task_self 返回当前任务端口，无副作用
+    #[allow(deprecated)] // libc 把 mach_task_self 标为弃用（建议 mach2 crate），语义不变
+    unsafe {
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        let kr = libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            &mut info as *mut _ as libc::task_info_t,
+            &mut count,
+        );
+        (kr == libc::KERN_SUCCESS).then_some(info.resident_size)
+    }
+}
+
+/// 其余平台没有可移植的常驻集查询：报告不可得（totalMemory 为 0）。
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+fn resident_bytes() -> Option<u64> {
+    None
 }
