@@ -61,8 +61,8 @@
 验证：本机 cargo check（generator `--release --tests`、rava_macros_core `--tests`）通过；集群单测 ut-closure / ut-rest（作业 perf-rt-ut，82f55952）641 过 0 败；抽查 perf-rt-a4（43f37f63，jp2 + kr1）DeepCopy / StreamDemo / TestAnnoReflect / TestDynamicProxy / HelloWorld / TestReflectLdcHotLoop 6/6 PASS。
 
 余项：
-- 微基准改后仍约 43 µs / 迭代（JVM 为微秒以下），剩余开销在 `Method.invoke` 的字节码翻译路径（访问检查、参数装箱、`MethodAccessor` 链），未剖析；属后续性能项。
-- 既有缺陷：`Method.invoke` 返回的装箱 `Integer` 经 `(Integer)` checkcast 抛 `ClassCastException: java/lang/Integer cannot be cast to java/lang/Integer`（`try_cast<Integer>` 失配，前后均复现），微基准改经 `hashCode()` 取值绕开；需另修。
+- 微基准改后仍约 43 µs / 迭代（JVM 为微秒以下），剩余开销在 `Method.invoke` 的字节码翻译路径（访问检查、参数装箱、`MethodAccessor` 链），未剖析；属后续性能项。**→ 已深剖（2026-10-11，分支 rt-perf-prof）**：见 [`2026-10-11-rt-perf-profiling.md`](2026-10-11-rt-perf-profiling.md)。kr1 同机（基线 7b0bf81a）：invoke 段 1.76 µs/调用（JVM 31 ns，56 倍），热点前三 = 分派键 String 重建簇 ~17%（`__member_key` 每次 invoke 重建类名/方法名/描述符，`method_impl.rs:36`）、分配器簇 ~16%、分派协议簇 ~10%（`is_static_descriptor` 等）；`rd::unbox_*` 文本往返量化为 idInt−idRef=178 ns/调用边界开销的一部分，已落 P-B 结构化取值微修复（hashCode 契约，9157a73e，随附 `__name_assignable` 二分化）。PartitionInteger 48 s vs JVM 0.65 s（72 倍）：大头为每叶子管线构建 25–30% + 每元素约 5 重接口分派（`__IfaceRef::enter` ×2），装箱 <3%，self 弥散无单点可修——归生成器侧单态化 / S7 线。43 µs 与本测 4.3 µs/迭代（整例）差约 10 倍未闭合（彼时 us1 / 43f37f63，见报告 §二）。
+- 既有缺陷：`Method.invoke` 返回的装箱 `Integer` 经 `(Integer)` checkcast 抛 `ClassCastException: java/lang/Integer cannot be cast to java/lang/Integer`（`try_cast<Integer>` 失配，前后均复现），微基准改经 `hashCode()` 取值绕开；需另修。**→ 已修**（fix-invoke-box-cast 84d9468f：VM 装箱点经包装类 `valueOf`，batch-1011i 并入；测试 6333f82d 恢复直接强转）。
 
 ### 生成器修复（分支 `review-generator`，自 96fc1cf4）
 

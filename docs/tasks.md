@@ -103,12 +103,13 @@
 1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。b1011i-seed 实测：`35_io/TestSerialLookupPairing.java` 种子 0 比种子 1 多 `java/security/ProtectionDomain$JavaSecurityAccessImpl` 与 `jdk/internal/access/JavaSecurityAccess`（前 5 例一致）。首要嫌疑 c1d-a54-reflect（构造器请求 `ctor_reqs` / `ctor_params`，其确定性单测当时超时未跑完）；诊断作业 b1011i-seedwhy 在 1011i 复现（种子 0 为 2317 类，种子 1 / 2 为 2316 类）；但 **batch-1011j 的单测 S（含该例）通过**，疑为 1011j 并入的 fix-jdk25（ProtectionDomain 面）掩盖而非修复。b1011i-seedwhy2 / b1011j-seedwhy2 对照两批的 `--why` 路径。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
 2. **G1 闭包不收敛**（S0 A 34.9 GB、sb3 30.6 GB 被杀，主因是方法上下文）：选择性按对象建上下文（上下文不敏感预分析，目标 S0 ≤20 万上下文、峰值 ≤16 GiB）；查清每约 240 s 一次的约 6 GB 尖峰；补跑扫描中缺的 28 例（11 例类路径问题，17 例需 ≥16 GiB 槽）。矩阵 #12 spring-beans sb1–sb3 与 S0 Boot 受此阻塞。见性能计划 §4.12。
 3. **S7 K3 方法 trait（s7-k3，未合入）**：声明底段峰值 +24–31%（上限 ±5%），先固定切段分离两个成因；DeepCopy 在 f3368359 后复测；全量单测（含 `no_jdk_literals`）与抽查；与 Rust 标准 trait 同名的方法和接口载体方法移入 trait（K6 前必须完成）。之后 K4–K8。见 S7 计划 §9.9。
-4. **运行时性能（三测点对照 JVM）**：
-   - jackson-core jc1 release 8.95 s（JVM 0.71 s）：分派视图约 19%（归 S7），字段经 vtable 约 8%，String 跨 crate 不内联约 4%。
-   - `Method.invoke` 微基准约 43 µs / 迭代：访问检查、参数装箱、`MethodAccessor` 链未剖析。
-   - `rd::unbox_*` 解析 `__obj_str` 文本，反射热路径偏慢。
-   - 无 GC 第一步后 PartitionInteger release 46 s（JVM 0.71 s）：stream 管线执行开销。
-   - 见分诊报告 C 节、无 GC 文档 §六。
+4. **运行时性能（三测点对照 JVM）**：**10-11 已深剖**（分支 rt-perf-prof，报告 [`2026-10-11-rt-perf-profiling.md`](reports/2026-10-11-rt-perf-profiling.md)，作业 rtpp-prof1 / rtpp-verify1，kr1 同机，基线 7b0bf81a）：
+   - `Method.invoke`：invoke 段 **1.76 µs/调用**（JVM 31 ns，56 倍）；热点前三 = `__member_key` 每次重建分派键的 String 簇 ~17%（`method_impl.rs:36`）、分配器簇 ~16%、分派协议簇 ~10%（`is_static_descriptor` 2.27% 等）。微修复已入（9157a73e）：`__name_assignable` 二分化 + `rd::unbox_*` P-B 结构化取值（文本往返量化为 idInt−idRef=178 ns 边界开销的主要可去部分，Long/Double 仍文本）；下一步最大单项 = 分派键缓存（Method 身份侧表或发射层预计算，随反射建模线）。
+   - `rd::unbox_*`：文本往返（翻译 toString + UTF-16→UTF-8 + parse）≈ 全样本 4–5%；P-A 终态（ObjectVTable 原生值视图臂）归 S7 K 系设计。
+   - PartitionInteger release **48 s**（JVM 0.65 s，72 倍）：大头 = 每叶子管线构建 25–30% + 每元素约 5 重接口分派（`__IfaceRef::enter` ×2，`handle.rs:187`）；装箱 <3%；self 弥散无单点可修——生成器侧按调用点单态化 / PGO 或 S7 分派形态是正解，运行时侧不动。
+   - jackson-core jc1 分派视图约 19% 与 String 跨 crate 不内联约 4% 仍归 S7 线口径（本步未复测）。
+   - 遗留：43f37f63（us1）43 µs/迭代 与 本测 4.3 µs/迭代 差 10 倍未闭合（疑 lineage / 机差，见报告 §二）。
+   - 见分诊报告 C 节余项（已更新）、无 GC 文档 §六。
 5. **JDK 25 适配**：问题 A（StackFrameInfo 反射元素流，`FrameBuffer.at → ClassFrameInfo.declaringClass` 存根，归反射建模）；DeepCopy / DataEncryptionStandard 转译 OOM；合批后 JDK 25 全量复跑（`--reset-failed --jdk 25`），按其余失败分类处理。见 `docs/reports/2026-10-11-fix-jdk25-handoff.md`。
 6. **闭包分析器手写扫描器**：`&self` 辅助 fn 内 `self.X()` 保留 on_self（`hw-upcall-self-lost-in-helper`，现由手写侧规避）。
 7. **无 GC 后续**：所有权推断 `Weak`（逃逸到旧对象但成环）；引用类语义随 `Rc` 释放触发；JDK 方法体内区域（需开放世界事实）；`thread_local_lint` 文档头登记 `region_slot` 理由。见无 GC 文档 §六-5。
