@@ -578,6 +578,14 @@ impl<'a> Engine<'a> {
 
     /// 类 c 的构造器请求并入形参描述符 d（None = 全部）；有新增返回 true
     fn ctor_request(&mut self, c: u32, d: Option<Rc<str>>) -> bool {
+        // 临时诊断（RAVA_DBG_CTOR）：类名匹配（或 `*` 只看 d=None 的全部请求）时打印请求与当前状态
+        if let Ok(want) = std::env::var("RAVA_DBG_CTOR") {
+            let name = &self.names[c as usize];
+            if (want == "*" && d.is_none()) || **name == *want {
+                let site = self.cur_site.map(|(m, o)| format!("{}@{o}", self.methods[m].key)).unwrap_or_else(|| "?".into());
+                eprintln!("[ctor-req] {name} <- {d:?}（此前 {:?}）@ {site}", self.ctor_reqs.get(&c).map(|x| x.clone()));
+            }
+        }
         match (self.ctor_reqs.get_mut(&c), d) {
             (None, d) => {
                 self.ctor_reqs.insert(c, d.map(|d| BTreeSet::from([d])));
@@ -705,6 +713,13 @@ impl<'a> Engine<'a> {
             .map(|mm| (mm.name.clone(), mm.desc.clone(), k != Members::Constructors && overridable(mm)))
             .collect();
         let via = Via::class("reflect", &cls);
+        // 临时诊断（RAVA_DBG_CTOR）：类名匹配时打印本次入链的成员与请求集
+        if let Ok(want) = std::env::var("RAVA_DBG_CTOR") {
+            if cls == want {
+                let site = self.cur_site.map(|(m, o)| format!("{}@{o}", self.methods[m].key)).unwrap_or_else(|| "?".into());
+                eprintln!("[ctor-expose] {cls}：picked {:?}（reqs {reqs:?}，user={user}）@ {site}", picked.iter().map(|(_, d, _)| d.as_ref()).collect::<Vec<&str>>());
+            }
+        }
         if k == Members::Constructors && !picked.is_empty() {
             self.instantiate(&cls, via.clone());
         }
