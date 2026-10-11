@@ -1,0 +1,98 @@
+── 整数分级
+  0 tok=VALUE_NUMBER_INT type=INT nan=false num=0 dbl=0.0 flt=0.0 dec=0 big=0 long=0 int=0
+  -0 tok=VALUE_NUMBER_INT type=INT nan=false num=0 dbl=0.0 flt=0.0 dec=0 big=0 long=0 int=0
+  2147483647 tok=VALUE_NUMBER_INT type=INT nan=false num=2147483647 dbl=2.147483647E9 flt=2.1474836E9 dec=2147483647 big=2147483647 long=2147483647 int=2147483647
+  2147483648 tok=VALUE_NUMBER_INT type=LONG nan=false num=2147483648 dbl=2.147483648E9 flt=2.1474836E9 dec=2147483648 big=2147483648 long=2147483648 int= int!InputCoercionException:Numeric value (2147483648) out of range of int (-2147483648 - 2147483647)
+  -2147483648 tok=VALUE_NUMBER_INT type=INT nan=false num=-2147483648 dbl=-2.147483648E9 flt=-2.1474836E9 dec=-2147483648 big=-2147483648 long=-2147483648 int=-2147483648
+  -2147483649 tok=VALUE_NUMBER_INT type=LONG nan=false num=-2147483649 dbl=-2.147483649E9 flt=-2.1474836E9 dec=-2147483649 big=-2147483649 long=-2147483649 int= int!InputCoercionException:Numeric value (-2147483649) out of range of int (-2147483648 - 2147483647)
+  9223372036854775807 tok=VALUE_NUMBER_INT type=LONG nan=false num=9223372036854775807 dbl=9.223372036854776E18 flt=9.223372E18 dec=9223372036854775807 big=9223372036854775807 long=9223372036854775807 int= int!InputCoercionException:Numeric value (9223372036854775807) out of range of int (-2147483648 - 2147483647)
+  9223372036854775808 tok=VALUE_NUMBER_INT type=BIG_INTEGER nan=false num=9223372036854775808 dbl=9.223372036854776E18 flt=9.223372E18 dec=9223372036854775808 big=9223372036854775808 long= long!InputCoercionException:Numeric value (9223372036854775808) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (9223372036854775808) out of range of int (-2147483648 - 2147483647)
+  -9223372036854775808 tok=VALUE_NUMBER_INT type=LONG nan=false num=-9223372036854775808 dbl=-9.223372036854776E18 flt=-9.223372E18 dec=-9223372036854775808 big=-9223372036854775808 long=-9223372036854775808 int= int!InputCoercionException:Numeric value (-9223372036854775808) out of range of int (-2147483648 - 2147483647)
+  -9223372036854775809 tok=VALUE_NUMBER_INT type=BIG_INTEGER nan=false num=-9223372036854775809 dbl=-9.223372036854776E18 flt=-9.223372E18 dec=-9223372036854775809 big=-9223372036854775809 long= long!InputCoercionException:Numeric value (-9223372036854775809) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (-9223372036854775809) out of range of int (-2147483648 - 2147483647)
+  123456789012345678901234567890 tok=VALUE_NUMBER_INT type=BIG_INTEGER nan=false num=123456789012345678901234567890 dbl=1.2345678901234568E29 flt=1.2345679E29 dec=123456789012345678901234567890 big=123456789012345678901234567890 long= long!InputCoercionException:Numeric value (123456789012345678901234567890) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (123456789012345678901234567890) out of range of int (-2147483648 - 2147483647)
+── 小数与科学计数
+  0.1 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=0.1 dbl=0.1 flt=0.1 dec=0.1 big=0 long=0 int=0
+  -0.0 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=-0.0 dbl=-0.0 flt=-0.0 dec=0.0 big=0 long=0 int=0
+  1e3 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1000.0 dbl=1000.0 flt=1000.0 dec=1E+3 big=1000 long=1000 int=1000
+  1E-3 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=0.001 dbl=0.001 flt=0.001 dec=0.001 big=0 long=0 int=0
+  1.5e+10 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.5E10 dbl=1.5E10 flt=1.5E10 dec=1.5E+10 big=15000000000 long=15000000000 int= int!InputCoercionException:Numeric value (1.5e+10) out of range of int (-2147483648 - 2147483647)
+  6.02214076E23 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=6.02214076E23 dbl=6.02214076E23 flt=6.0221406E23 dec=6.02214076E+23 big=602214076000000000000000 long= long!InputCoercionException:Numeric value (6.02214076E23) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (6.02214076E23) out of range of int (-2147483648 - 2147483647)
+  4.9e-324 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=4.9E-324 dbl=4.9E-324 flt=0.0 dec=4.9E-324 big=0 long=0 int=0
+  1e-400 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=0.0 dbl=0.0 flt=0.0 dec=1E-400 big=0 long=0 int=0
+  1.7976931348623157e308 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.7976931348623157E308 dbl=1.7976931348623157E308 flt=Infinity dec=1.7976931348623157E+308 big=179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 long= long!InputCoercionException:Numeric value (1.7976931348623157e308) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (1.7976931348623157e308) out of range of int (-2147483648 - 2147483647)
+  1e309 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=Infinity dbl=Infinity flt=Infinity dec=1E+309 big=1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 long= long!InputCoercionException:Numeric value (1e309) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (1e309) out of range of int (-2147483648 - 2147483647)
+  3.14159265358979323846264338327950288 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=3.141592653589793 dbl=3.141592653589793 flt=3.1415927 dec=3.14159265358979323846264338327950288 big=3 long=3 int=3
+  0.30000000000000004 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=0.30000000000000004 dbl=0.30000000000000004 flt=0.3 dec=0.30000000000000004 big=0 long=0 int=0
+  1234567890.0987654321e-5 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=12345.678900987654 dbl=12345.678900987654 flt=12345.679 dec=12345.678900987654321 big=12345 long=12345 int=12345
+── 非标准数字
+  NaN tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=true num=NaN dbl=NaN flt=NaN dec= dec!NumberFormatException big= big!NumberFormatException long=0 int=0
+  Infinity tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=true num=Infinity dbl=Infinity flt=Infinity dec= dec!NumberFormatException big= big!NumberFormatException long= long!InputCoercionException:Numeric value (Infinity) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (Infinity) out of range of int (-2147483648 - 2147483647)
+  -Infinity tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=true num=-Infinity dbl=-Infinity flt=-Infinity dec= dec!NumberFormatException big= big!NumberFormatException long= long!InputCoercionException:Numeric value (-Infinity) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (-Infinity) out of range of int (-2147483648 - 2147483647)
+  +Infinity tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=true num=Infinity dbl=Infinity flt=Infinity dec= dec!NumberFormatException big= big!NumberFormatException long= long!InputCoercionException:Numeric value (+Infinity) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (+Infinity) out of range of int (-2147483648 - 2147483647)
+  5 tok=VALUE_NUMBER_INT type=INT nan=false num=5 dbl=5.0 flt=5.0 dec=5 big=5 long=5 int=5
+  .5 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=0.5 dbl=0.5 flt=0.5 dec=0.5 big=0 long=0 int=0
+  5. tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=5.0 dbl=5.0 flt=5.0 dec=5 big=5 long=5 int=5
+  7 tok=VALUE_NUMBER_INT type=INT nan=false num=7 dbl=7.0 flt=7.0 dec=7 big=7 long=7 int=7
+  -.25 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=-0.25 dbl=-0.25 flt=-0.25 dec=-0.25 big=0 long=0 int=0
+── 慢速解析器
+  2.2250738585072011e-308 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=2.225073858507201E-308 dbl=2.225073858507201E-308 flt=0.0 dec=2.2250738585072011E-308 big=0 long=0 int=0
+  9007199254740993 tok=VALUE_NUMBER_INT type=LONG nan=false num=9007199254740993 dbl=9.007199254740992E15 flt=9.007199E15 dec=9007199254740993 big=9007199254740993 long=9007199254740993 int= int!InputCoercionException:Numeric value (9007199254740993) out of range of int (-2147483648 - 2147483647)
+  0.1e1 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.0 dbl=1.0 flt=1.0 dec=1 big=1 long=1 int=1
+  1.0000000000000002 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.0000000000000002 dbl=1.0000000000000002 flt=1.0 dec=1.0000000000000002 big=1 long=1 int=1
+  123456789012345678901234567890.123456789e-20 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.2345678901234567E9 dbl=1.2345678901234567E9 flt=1.234568E9 dec=1234567890.12345678901234567890123456789 big=1234567890 long=1234567890 int=1234567890
+  8.41e21 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=8.41E21 dbl=8.41E21 flt=8.41E21 dec=8.41E+21 big=8410000000000000000000 long= long!InputCoercionException:Numeric value (8.41e21) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (8.41e21) out of range of int (-2147483648 - 2147483647)
+  5e-324 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=4.9E-324 dbl=4.9E-324 flt=0.0 dec=5E-324 big=0 long=0 int=0
+── 快速解析器
+  2.2250738585072011e-308 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=2.225073858507201E-308 dbl=2.225073858507201E-308 flt=0.0 dec=2.2250738585072011E-308 big=0 long=0 int=0
+  9007199254740993 tok=VALUE_NUMBER_INT type=LONG nan=false num=9007199254740993 dbl=9.007199254740992E15 flt=9.007199E15 dec=9007199254740993 big=9007199254740993 long=9007199254740993 int= int!InputCoercionException:Numeric value (9007199254740993) out of range of int (-2147483648 - 2147483647)
+  0.1e1 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.0 dbl=1.0 flt=1.0 dec=1 big=1 long=1 int=1
+  1.0000000000000002 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.0000000000000002 dbl=1.0000000000000002 flt=1.0 dec=1.0000000000000002 big=1 long=1 int=1
+  123456789012345678901234567890.123456789e-20 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=1.2345678901234567E9 dbl=1.2345678901234567E9 flt=1.234568E9 dec=1234567890.12345678901234567890123456789 big=1234567890 long=1234567890 int=1234567890
+  8.41e21 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=8.41E21 dbl=8.41E21 flt=8.41E21 dec=8.41E+21 big=8410000000000000000000 long= long!InputCoercionException:Numeric value (8.41e21) out of range of long (-9223372036854775808 - 9223372036854775807) int= int!InputCoercionException:Numeric value (8.41e21) out of range of int (-2147483648 - 2147483647)
+  5e-324 tok=VALUE_NUMBER_FLOAT type=DOUBLE nan=false num=4.9E-324 dbl=4.9E-324 flt=0.0 dec=5E-324 big=0 long=0 int=0
+── 数字生成
+  default [1E+20,1.2300E-7,0.000,1267650600228229401496703205376,4.9E-324,1.7976931348623157E308,1.0E7,0.001,0.3,0.30000000000000004,"NaN","-Infinity",-0.0]
+  plain+nanstr [100000000000000000000,0.00000012300,0.000,1267650600228229401496703205376,4.9E-324,1.7976931348623157E308,1.0E7,0.001,0.3,0.30000000000000004,"NaN","-Infinity",-0.0]
+  numbers-as-strings ["5","5497558138880","2.5","9.99"]
+── 编码探测
+  UTF-8 UTF8StreamJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-8+BOM UTF8StreamJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-16BE ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-16BE+BOM ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-16LE ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-16LE+BOM ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-32BE ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-32BE+BOM ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-32LE ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+  UTF-32LE+BOM ReaderBasedJsonParser 3:6b e9 79 12:41 e9 4e2d 1f600 41 1f603 a 22 2f ff 
+── 编码生成
+  UTF8 name=UTF-8 bigEndian=false bits=8 len=40 hex=7b2273c3a9223a22c3a9e4b8ad5c75443833445c75444530 back={"sé":"é中\uD83D\uDE00\u0001\u001F"}
+  UTF16_BE name=UTF-16BE bigEndian=true bits=16 len=52 hex=007b0022007300e90022003a002200e94e2dd83dde00005c back={"sé":"é中😀\u0001\u001F"}
+  UTF16_LE name=UTF-16LE bigEndian=false bits=16 len=52 hex=7b0022007300e90022003a002200e9002d4e3dd800de5c00 back={"sé":"é中😀\u0001\u001F"}
+  UTF32_BE name=UTF-32BE bigEndian=true bits=32 len=100 hex=0000007b0000002200000073000000e9000000220000003a back={"sé":"é中😀\u0001\u001F"}
+  UTF32_LE name=UTF-32LE bigEndian=false bits=32 len=100 hex=7b0000002200000073000000e9000000220000003a000000 back={"sé":"é中😀\u0001\u001F"}
+  escapeNonAscii=false upper=true writer="é中😀</script> \u0000" stream="é中\uD83D\uDE00</script> \u0000"
+  escapeNonAscii=true upper=true writer="\u00E9\u4E2D\uD83D\uDE00</script>\u2028\u0000" stream="\u00E9\u4E2D\uD83D\uDE00</script>\u2028\u0000"
+  escapeNonAscii=false upper=false writer="é中😀</script> \u0000" stream="é中\ud83d\ude00</script> \u0000"
+  escapeNonAscii=true upper=false writer="\u00e9\u4e2d\ud83d\ude00</script>\u2028\u0000" stream="\u00e9\u4e2d\ud83d\ude00</script>\u2028\u0000"
+── 非法编码
+  5b22c3225d -> JsonParseException: Invalid UTF-8 middle byte 0x22 |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+  5b22ff225d -> JsonParseException: Invalid UTF-8 start byte 0xff |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  5b22eda080225d -> JsonParseException: Invalid UTF-8: Illegal surrogate character 0xd800 |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 6]
+  5b22f09f98225d -> JsonParseException: Invalid UTF-8 middle byte 0x22 |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 7]
+  5b226101225d -> JsonParseException: Illegal unquoted character ((CTRL-CHAR, code 1)): has to be escaped using backslash to be included in string value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  c ["\ud83d"] OK d83d 
+  b ["\ud83d"] OK d83d 
+  c ["\ude00x"] OK de00 78 
+  b ["\ude00x"] OK de00 78 
+  c ["\u12"] -> JsonParseException: Unexpected character ('"' (code 34)): expected a hex-digit for character escape sequence |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 7]
+  b ["\u12"] -> JsonParseException: Unexpected character ('"' (code 34)): expected a hex-digit for character escape sequence |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 7]
+  c ["\uZZZZ"] -> JsonParseException: Unexpected character ('Z' (code 90)): expected a hex-digit for character escape sequence |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+  b ["\uZZZZ"] -> JsonParseException: Unexpected character ('Z' (code 90)): expected a hex-digit for character escape sequence |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+── JsonStringEncoder
+  quote=q\"b\\s/\t\u0007é😀
+  quoteUtf8=715c22625c5c732f5c745c7530303037c3a9f09f9880
+  utf8=7122625c732f0907c3a9f09f9880
+  sb=pre:x\ny
+── 数字吞吐基准
+  bytes=2695736 lsum=-5268514409685513 dsum=7.523394337172528E10 bsum=-1722049.6320

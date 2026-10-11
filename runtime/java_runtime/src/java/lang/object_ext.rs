@@ -385,29 +385,33 @@ impl PartialEq<&Object> for Object {
     fn eq(&self, other: &&Object) -> bool { *self == **other }
 }
 
-// Object equality: null == null，基本类型值相等，其他类型 Rc 指针相等
+// Object equality: null == null，基本类型值相等，其他类型 Rc 指针相等。
+// `if_acmp` 热路径：两侧各取一次运行时类型标识（每次 downcast 都是一次虚调用），只在两侧同为
+// 值盒类型时按值比较，其余直接走 null / 同一性判定
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
-        macro_rules! try_eq {
-            ($t:ty) => {
-                if let (Some(a), Some(b)) = (
-                    self.0.as_any().downcast_ref::<$t>(),
-                    other.0.as_any().downcast_ref::<$t>()
-                ) {
-                    return a == b;
-                }
-            };
-        }
-        try_eq!(());  // null == null
-        try_eq!(i32); try_eq!(i64); try_eq!(bool);
-        try_eq!(i8); try_eq!(i16); try_eq!(u16);
-        // 浮点原生值盒按位比较：值盒无对象身份，同一性以值位承载——0.0 与 -0.0 不同一、
-        // NaN 盒与自身同一（Rust `==` 的 IEEE 比较两者皆反，致 Double.equals 捷径误判）
-        if let (Some(a), Some(b)) = (self.0.as_any().downcast_ref::<f32>(), other.0.as_any().downcast_ref::<f32>()) {
-            return a.to_bits() == b.to_bits();
-        }
-        if let (Some(a), Some(b)) = (self.0.as_any().downcast_ref::<f64>(), other.0.as_any().downcast_ref::<f64>()) {
-            return a.to_bits() == b.to_bits();
+        use ::std::any::{Any, TypeId};
+        let (a, b): (&dyn Any, &dyn Any) = (self.0.as_any(), other.0.as_any());
+        let ta = a.type_id();
+        if ta == b.type_id() {
+            macro_rules! val_eq {
+                ($t:ty) => {
+                    if ta == TypeId::of::<$t>() {
+                        return a.downcast_ref::<$t>() == b.downcast_ref::<$t>();
+                    }
+                };
+            }
+            val_eq!(());  // null == null
+            val_eq!(i32); val_eq!(i64); val_eq!(bool);
+            val_eq!(i8); val_eq!(i16); val_eq!(u16);
+            // 浮点原生值盒按位比较：值盒无对象身份，同一性以值位承载——0.0 与 -0.0 不同一、
+            // NaN 盒与自身同一（Rust `==` 的 IEEE 比较两者皆反，致 Double.equals 捷径误判）
+            if ta == TypeId::of::<f32>() {
+                return a.downcast_ref::<f32>().map(|x| x.to_bits()) == b.downcast_ref::<f32>().map(|x| x.to_bits());
+            }
+            if ta == TypeId::of::<f64>() {
+                return a.downcast_ref::<f64>().map(|x| x.to_bits()) == b.downcast_ref::<f64>().map(|x| x.to_bits());
+            }
         }
         match (self.0.is_jvm_null(), other.0.is_jvm_null()) {
             (true, true) => true,

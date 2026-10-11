@@ -110,6 +110,22 @@ pub struct BridgeMember<'c> {
     pub bridge: &'c Method,
     /// 协变桥的槽位名（wrapper 取唯一名时指回声明者）
     pub vtable_name: String,
+    /// 协变桥与真实方法均由祖先声明（接收者继承二者）
+    pub inherited_real: bool,
+}
+
+/// `anc` 是否在 `ci` 的严格超类链上
+fn in_super_chain(ctx: &EmitCtx<'_>, ci: &ClassInfo, anc: &str) -> bool {
+    let reg = ctx.ty.reg;
+    let mut cur = ci.super_class().to_string();
+    let mut seen = BTreeSet::new();
+    while !cur.is_empty() && seen.insert(cur.clone()) {
+        if cur == anc {
+            return true;
+        }
+        cur = reg.get(&cur).map(|c| c.super_class().to_string()).unwrap_or_default();
+    }
+    false
 }
 
 fn find_slot<'e>(em: &'e ClassEmission, name: &str, param_desc: &str, covariant_desc: Option<&str>) -> Option<&'e EmittedMethod> {
@@ -189,8 +205,11 @@ pub fn resolve_bridge_member<'c>(
     let real_owner_is_recv = std::ptr::eq(real_owner_ci, recv_ci) || real_owner_ci.name() == recv_ci.name();
     let real_param = param_part(&real_desc).to_string();
     let covariant = real_param == param_desc && ret_part(&real_desc) != ret_part(&bridge.desc);
+    // 协变桥与真实方法同在祖先（接收者两者都继承）：JVM 下祖先桥照样被继承，桥所占的祖先槽位
+    // 须由接收者的转发成员填充，否则该槽位回落声明者的存根
+    let inherited_real = covariant && !real_owner_is_recv && in_super_chain(ctx, recv_ci, real_owner_ci.name());
     if covariant {
-        if !allow_covariant || !real_owner_is_recv {
+        if !allow_covariant || !(real_owner_is_recv || inherited_real) {
             return None;
         }
     } else if real_param == param_desc
@@ -237,6 +256,14 @@ pub fn resolve_bridge_member<'c>(
     if covariant && vt_bin.is_empty() {
         return None;
     }
+    // 祖先的真实方法自身已占桥所在槽位（同类声明桥与真实方法时以 vtable_erasure 直接落槽，
+    // 如 CharBuffer.array），继承的真实成员即已填槽，不再另补桥成员
+    if inherited_real {
+        let real_slot = ems.get(real_owner_ci.name()).and_then(|e| e.find(name, &real_param)).map(|m| m.virtual_in.as_str());
+        if real_slot == Some(vt_bin.as_str()) {
+            return None;
+        }
+    }
     if member_name == real_rust {
         if !covariant {
             return None;
@@ -248,7 +275,7 @@ pub fn resolve_bridge_member<'c>(
             return None;
         }
     }
-    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_classes, real_want, bridge, vtable_name })
+    Some(BridgeMember { member_name, vt_bin, real_sig, real_rust, real_classes, real_want, bridge, vtable_name, inherited_real })
 }
 
 /// 本类的协变返回覆盖已声明 (name, param_desc)，但同参异返回的 ACC_BRIDGE 桥承担的是另一个

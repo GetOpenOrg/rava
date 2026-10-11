@@ -1,0 +1,100 @@
+── 缺省特性
+  factory INTERN_FIELD_NAMES def=true mask=1 on=true
+  factory CANONICALIZE_FIELD_NAMES def=true mask=2 on=true
+  factory FAIL_ON_SYMBOL_HASH_OVERFLOW def=true mask=4 on=true
+  factory USE_THREAD_LOCAL_FOR_BUFFER_RECYCLING def=true mask=8 on=true
+  factory CHARSET_DETECTION def=true mask=16 on=true
+  sread AUTO_CLOSE_SOURCE def=true on=true
+  sread IGNORE_UNDEFINED def=false on=false
+  sread STRICT_DUPLICATE_DETECTION def=false on=false
+  sread CLEAR_CURRENT_TOKEN_ON_CLOSE def=true on=true
+  sread INCLUDE_SOURCE_IN_LOCATION def=false on=false
+  sread USE_FAST_BIG_NUMBER_PARSER def=false on=false
+  sread USE_FAST_DOUBLE_PARSER def=false on=false
+  swrite AUTO_CLOSE_CONTENT def=true on=true
+  swrite AUTO_CLOSE_TARGET def=true on=true
+  swrite FLUSH_PASSED_TO_STREAM def=true on=true
+  swrite WRITE_BIGDECIMAL_AS_PLAIN def=false on=false
+  swrite IGNORE_UNKNOWN def=false on=false
+  swrite STRICT_DUPLICATE_DETECTION def=false on=false
+  swrite USE_FAST_DOUBLE_WRITER def=false on=false
+  jread ALLOW_JAVA_COMMENTS def=false mask=1 mapped=ALLOW_COMMENTS
+  jread ALLOW_YAML_COMMENTS def=false mask=2 mapped=ALLOW_YAML_COMMENTS
+  jread ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER def=false mask=4 mapped=ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER
+  jread ALLOW_SINGLE_QUOTES def=false mask=8 mapped=ALLOW_SINGLE_QUOTES
+  jread ALLOW_UNESCAPED_CONTROL_CHARS def=false mask=16 mapped=ALLOW_UNQUOTED_CONTROL_CHARS
+  jread ALLOW_UNQUOTED_FIELD_NAMES def=false mask=32 mapped=ALLOW_UNQUOTED_FIELD_NAMES
+  jread ALLOW_RS_CONTROL_CHAR def=false mask=64 mapped=ALLOW_RS_CONTROL_CHAR
+  jread ALLOW_LEADING_DECIMAL_POINT_FOR_NUMBERS def=false mask=128 mapped=ALLOW_LEADING_DECIMAL_POINT_FOR_NUMBERS
+  jread ALLOW_LEADING_PLUS_SIGN_FOR_NUMBERS def=false mask=256 mapped=ALLOW_LEADING_PLUS_SIGN_FOR_NUMBERS
+  jread ALLOW_LEADING_ZEROS_FOR_NUMBERS def=false mask=512 mapped=ALLOW_NUMERIC_LEADING_ZEROS
+  jread ALLOW_NON_NUMERIC_NUMBERS def=false mask=1024 mapped=ALLOW_NON_NUMERIC_NUMBERS
+  jread ALLOW_TRAILING_DECIMAL_POINT_FOR_NUMBERS def=false mask=2048 mapped=ALLOW_TRAILING_DECIMAL_POINT_FOR_NUMBERS
+  jread ALLOW_MISSING_VALUES def=false mask=4096 mapped=ALLOW_MISSING_VALUES
+  jread ALLOW_TRAILING_COMMA def=false mask=8192 mapped=ALLOW_TRAILING_COMMA
+  jwrite ESCAPE_NON_ASCII def=false mask=1
+  jwrite QUOTE_FIELD_NAMES def=true mask=2
+  jwrite WRITE_HEX_UPPER_CASE def=true mask=4
+  jwrite WRITE_NAN_AS_STRINGS def=true mask=8
+  jwrite WRITE_NUMBERS_AS_STRINGS def=false mask=16
+  jwrite ESCAPE_FORWARD_SLASHES def=false mask=32
+  jwrite COMBINE_UNICODE_SURROGATES_IN_UTF8 def=false mask=64
+  masks factory=31 parser=1048577 generator=2079 fparser=0 fgen=0
+  format=JSON async=true chars=true binary=false ordering=false codec=null sep=[ ]
+  version=2.22 group=com.fasterxml.jackson.core artifact=jackson-core
+  readConstraints depth=1000 num=1000 str=20000000 name=50000 doc=-1 tokens=-1
+  writeConstraints depth=1000
+── 宽松读特性
+  strict c after [] JsonParseException: Unexpected character ('/' (code 47)): maybe a (non-standard) comment? (not recognized as one since Feature 'ALLOW_COMMENTS' not enabled for parser) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]
+  lax c OK { unquoted: single arr: [ 1 null 3 ] ctl: a	b esc: q }
+  strict b after [] JsonParseException: Unexpected character ('/' (code 47)): maybe a (non-standard) comment? (not recognized as one since Feature 'ALLOW_COMMENTS' not enabled for parser) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]
+  lax b OK { unquoted: single arr: [ 1 null 3 ] ctl: a	b esc: q }
+  ALLOW_JAVA_COMMENTS OK [ 1 ] | strict after [] JsonParseException: Unexpected character ('/' (code 47)): maybe a (non-standard) comment? (not recognized as one since Feature 'ALLOW_COMMENTS' not enabled for parser) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]
+  ALLOW_SINGLE_QUOTES OK [ x ] | strict after [[] JsonParseException: Unexpected character (''' (code 39)): expected a valid value (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  ALLOW_UNQUOTED_FIELD_NAMES OK { a: 1 } | strict after [{] JsonParseException: Unexpected character ('a' (code 97)): was expecting double-quote to start field name |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  ALLOW_TRAILING_COMMA OK [ 1 2 ] | strict after [[ 1 2] JsonParseException: Unexpected character (']' (code 93)): expected a valid value (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 6]
+  rs OK { a: 1 } [ 2 ]
+── 重复键
+  off OK { a: 1 b: { a: 2 c: 3 } a: 4 }
+  on c after [{ a: 1 b: { a: 2 c: 3 }] JsonParseException: Duplicate field 'a' |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 29]
+  on b after [{ a: 1 b: { a: 2 c: 3 }] JsonParseException: Duplicate field 'a' |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 29]
+  write dup JsonGenerationException: Duplicate field 'x'
+── 读写约束
+  [[[1]]] c OK [ [ [ 1 ] ] ]
+  [[[1]]] b OK [ [ [ 1 ] ] ]
+  [[[[1]]]] c after [[ [ [] StreamConstraintsException: Document nesting depth (4) exceeds the maximum allowed (3, from `StreamReadConstraints.getMaxNestingDepth()`)
+  [[[[1]]]] b after [[ [ [] StreamConstraintsException: Document nesting depth (4) exceeds the maximum allowed (3, from `StreamReadConstraints.getMaxNestingDepth()`)
+  [12345] c OK [ 12345 ]
+  [12345] b OK [ 12345 ]
+  [123456] c after [[] StreamConstraintsException: Number value length (6) exceeds the maximum allowed (5, from `StreamReadConstraints.getMaxNumberLength()`)
+  [123456] b after [[] StreamConstraintsException: Number value length (6) exceeds the maximum allowed (5, from `StreamReadConstraints.getMaxNumberLength()`)
+  [1.2345] c OK [ 1.2345 ]
+  [1.2345] b OK [ 1.2345 ]
+  ["12345678"] c OK [ 12345678 ]
+  ["12345678"] b OK [ 12345678 ]
+  ["123456789"] c after [[] StreamConstraintsException: String value length (9) exceeds the maximum allowed (8, from `StreamReadConstraints.getMaxStringLength()`)
+  ["123456789"] b after [[] StreamConstraintsException: String value length (9) exceeds the maximum allowed (8, from `StreamReadConstraints.getMaxStringLength()`)
+  {"abcd":1} c OK { abcd: 1 }
+  {"abcd":1} b OK { abcd: 1 }
+  {"abcde":1} c after [{] StreamConstraintsException: Name length (5) exceeds the maximum allowed (4, from `StreamReadConstraints.getMaxNameLength()`)
+  {"abcde":1} b after [{] StreamConstraintsException: Name length (5) exceeds the maximum allowed (4, from `StreamReadConstraints.getMaxNameLength()`)
+  doclen after [] StreamConstraintsException: Document length (17) exceeds the maximum allowed (10, from `StreamReadConstraints.getMaxDocumentLength()`)
+  tokens after [[ 1 2 3] StreamConstraintsException: Token count (5) exceeds the maximum allowed (4, from `StreamReadConstraints.getMaxTokenCount()`)
+  write depth StreamConstraintsException: Document nesting depth (3) exceeds the maximum allowed (2, from `StreamWriteConstraints.getMaxNestingDepth()`)
+  bad builder Cannot set maxNestingDepth to a negative value
+── 写特性 / 根分隔 / 自定义转义 / 装饰器
+  writer {html:"\u003Cb\u003E<HASH>1\u003C/b\u003E \u2028 é a/b"} ;; 2 ;; "x"
+  stream {html:"\u003Cb\u003E<HASH>1\u003C/b\u003E \u2028 é a/b"} ;; 2 ;; "x"
+  copy sep=[ ;; ] escapes=true quote=false
+  rebuilt sep=[ ;; ] escapes=true quote=true
+  per-gen features=2079 highest=127
+  per-gen [100000,1E+5,"\u00E9"]
+  out /*os*/{"K":"VALUE"} | /*w*/"w" created=2
+  in bytes OK { a: [ b ] }
+  in chars OK { a: [ b ] }
+  in reader r
+── 解析器级开关
+  default allowComments=false autoClose=true mask=1048577
+  changed allowComments=true autoClose=true mask=1048579
+  readCaps=0 canReadTypeId=false canReadObjectId=false
+  legacy OK { a: b } | OK { a: b }

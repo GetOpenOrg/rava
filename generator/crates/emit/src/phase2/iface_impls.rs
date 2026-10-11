@@ -184,8 +184,9 @@ fn iface_decls(
             if owner_bin != recv_bin {
                 let recv_ci_reg = ctx.ty.reg.get(recv_bin).expect("接收者在注册表");
                 let recv_target = match resolve_bridge_member(ctx, recv_ci_reg, &im.name, &pdesc, ems, Some(recv), true) {
-                    Some(b) => b.member_name,
-                    None => ctx.ty.receiver_member_name(&method.name, &method.descriptor, recv_ci),
+                    // 祖先协变桥：接口按 located 的真实方法落位（桥成员只填祖先类槽位）
+                    Some(b) if !b.inherited_real => b.member_name,
+                    _ => ctx.ty.receiver_member_name(&method.name, &method.descriptor, recv_ci),
                 };
                 if own_names.contains(recv_target.as_str()) || provided.contains(&recv_target) {
                     continue;

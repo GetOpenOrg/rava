@@ -1,0 +1,208 @@
+── String (ReaderBasedJsonParser)
+  START_OBJECT id=1 name=null path= depth=1 struct=true/false
+  FIELD_NAME id=5 name=id path=/id depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=id path=/id depth=1 text=42 num=true struct=false/false
+  FIELD_NAME id=5 name=name path=/name depth=1 struct=false/false
+  VALUE_STRING id=6 name=name path=/name depth=1 text=rava num=false struct=false/false
+  FIELD_NAME id=5 name=tags path=/tags depth=1 struct=false/false
+  START_ARRAY id=3 name=tags path=/tags depth=2 struct=true/false
+  VALUE_STRING id=6 name=null path=/tags/0 depth=2 text=a num=false struct=false/false
+  VALUE_STRING id=6 name=null path=/tags/1 depth=2 text=b num=false struct=false/false
+  START_OBJECT id=1 name=null path=/tags/2 depth=3 struct=true/false
+  FIELD_NAME id=5 name=deep path=/tags/2/deep depth=3 struct=false/false
+  START_ARRAY id=3 name=deep path=/tags/2/deep depth=4 struct=true/false
+  VALUE_NUMBER_INT id=7 name=null path=/tags/2/deep/0 depth=4 text=1 num=true struct=false/false
+  VALUE_NUMBER_FLOAT id=8 name=null path=/tags/2/deep/1 depth=4 text=2.5 num=true struct=false/false
+  VALUE_TRUE id=9 name=null path=/tags/2/deep/2 depth=4 text=true num=false struct=false/false
+  VALUE_NULL id=11 name=null path=/tags/2/deep/3 depth=4 text=null num=false struct=false/false
+  END_ARRAY id=4 name=deep path=/tags/2/deep depth=3 struct=false/true
+  END_OBJECT id=2 name=null path=/tags/2 depth=2 struct=false/true
+  END_ARRAY id=4 name=tags path=/tags depth=1 struct=false/true
+  FIELD_NAME id=5 name=empty path=/empty depth=1 struct=false/false
+  START_OBJECT id=1 name=empty path=/empty depth=2 struct=true/false
+  END_OBJECT id=2 name=empty path=/empty depth=1 struct=false/true
+  FIELD_NAME id=5 name=none path=/none depth=1 struct=false/false
+  START_ARRAY id=3 name=none path=/none depth=2 struct=true/false
+  END_ARRAY id=4 name=none path=/none depth=1 struct=false/true
+  FIELD_NAME id=5 name=flag path=/flag depth=1 struct=false/false
+  VALUE_FALSE id=10 name=flag path=/flag depth=1 text=false num=false struct=false/false
+  FIELD_NAME id=5 name=neg path=/neg depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=neg path=/neg depth=1 text=-7 num=true struct=false/false
+  FIELD_NAME id=5 name=esc path=/esc depth=1 struct=false/false
+  VALUE_STRING id=6 name=esc path=/esc depth=1 text=x
+yA num=false struct=false/false
+  END_OBJECT id=2 name=null path= depth=0 struct=false/true
+  tokens=32 closed=true last=null
+── byte[] (UTF8StreamJsonParser)
+  START_OBJECT id=1 name=null path= depth=1 struct=true/false
+  FIELD_NAME id=5 name=id path=/id depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=id path=/id depth=1 text=42 num=true struct=false/false
+  FIELD_NAME id=5 name=name path=/name depth=1 struct=false/false
+  VALUE_STRING id=6 name=name path=/name depth=1 text=rava num=false struct=false/false
+  FIELD_NAME id=5 name=tags path=/tags depth=1 struct=false/false
+  START_ARRAY id=3 name=tags path=/tags depth=2 struct=true/false
+  VALUE_STRING id=6 name=null path=/tags/0 depth=2 text=a num=false struct=false/false
+  VALUE_STRING id=6 name=null path=/tags/1 depth=2 text=b num=false struct=false/false
+  START_OBJECT id=1 name=null path=/tags/2 depth=3 struct=true/false
+  FIELD_NAME id=5 name=deep path=/tags/2/deep depth=3 struct=false/false
+  START_ARRAY id=3 name=deep path=/tags/2/deep depth=4 struct=true/false
+  VALUE_NUMBER_INT id=7 name=null path=/tags/2/deep/0 depth=4 text=1 num=true struct=false/false
+  VALUE_NUMBER_FLOAT id=8 name=null path=/tags/2/deep/1 depth=4 text=2.5 num=true struct=false/false
+  VALUE_TRUE id=9 name=null path=/tags/2/deep/2 depth=4 text=true num=false struct=false/false
+  VALUE_NULL id=11 name=null path=/tags/2/deep/3 depth=4 text=null num=false struct=false/false
+  END_ARRAY id=4 name=deep path=/tags/2/deep depth=3 struct=false/true
+  END_OBJECT id=2 name=null path=/tags/2 depth=2 struct=false/true
+  END_ARRAY id=4 name=tags path=/tags depth=1 struct=false/true
+  FIELD_NAME id=5 name=empty path=/empty depth=1 struct=false/false
+  START_OBJECT id=1 name=empty path=/empty depth=2 struct=true/false
+  END_OBJECT id=2 name=empty path=/empty depth=1 struct=false/true
+  FIELD_NAME id=5 name=none path=/none depth=1 struct=false/false
+  START_ARRAY id=3 name=none path=/none depth=2 struct=true/false
+  END_ARRAY id=4 name=none path=/none depth=1 struct=false/true
+  FIELD_NAME id=5 name=flag path=/flag depth=1 struct=false/false
+  VALUE_FALSE id=10 name=flag path=/flag depth=1 text=false num=false struct=false/false
+  FIELD_NAME id=5 name=neg path=/neg depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=neg path=/neg depth=1 text=-7 num=true struct=false/false
+  FIELD_NAME id=5 name=esc path=/esc depth=1 struct=false/false
+  VALUE_STRING id=6 name=esc path=/esc depth=1 text=x
+yA num=false struct=false/false
+  END_OBJECT id=2 name=null path= depth=0 struct=false/true
+  tokens=32 closed=true last=null
+── Reader (ReaderBasedJsonParser)
+  START_OBJECT id=1 name=null path= depth=1 struct=true/false
+  FIELD_NAME id=5 name=id path=/id depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=id path=/id depth=1 text=42 num=true struct=false/false
+  FIELD_NAME id=5 name=name path=/name depth=1 struct=false/false
+  VALUE_STRING id=6 name=name path=/name depth=1 text=rava num=false struct=false/false
+  FIELD_NAME id=5 name=tags path=/tags depth=1 struct=false/false
+  START_ARRAY id=3 name=tags path=/tags depth=2 struct=true/false
+  VALUE_STRING id=6 name=null path=/tags/0 depth=2 text=a num=false struct=false/false
+  VALUE_STRING id=6 name=null path=/tags/1 depth=2 text=b num=false struct=false/false
+  START_OBJECT id=1 name=null path=/tags/2 depth=3 struct=true/false
+  FIELD_NAME id=5 name=deep path=/tags/2/deep depth=3 struct=false/false
+  START_ARRAY id=3 name=deep path=/tags/2/deep depth=4 struct=true/false
+  VALUE_NUMBER_INT id=7 name=null path=/tags/2/deep/0 depth=4 text=1 num=true struct=false/false
+  VALUE_NUMBER_FLOAT id=8 name=null path=/tags/2/deep/1 depth=4 text=2.5 num=true struct=false/false
+  VALUE_TRUE id=9 name=null path=/tags/2/deep/2 depth=4 text=true num=false struct=false/false
+  VALUE_NULL id=11 name=null path=/tags/2/deep/3 depth=4 text=null num=false struct=false/false
+  END_ARRAY id=4 name=deep path=/tags/2/deep depth=3 struct=false/true
+  END_OBJECT id=2 name=null path=/tags/2 depth=2 struct=false/true
+  END_ARRAY id=4 name=tags path=/tags depth=1 struct=false/true
+  FIELD_NAME id=5 name=empty path=/empty depth=1 struct=false/false
+  START_OBJECT id=1 name=empty path=/empty depth=2 struct=true/false
+  END_OBJECT id=2 name=empty path=/empty depth=1 struct=false/true
+  FIELD_NAME id=5 name=none path=/none depth=1 struct=false/false
+  START_ARRAY id=3 name=none path=/none depth=2 struct=true/false
+  END_ARRAY id=4 name=none path=/none depth=1 struct=false/true
+  FIELD_NAME id=5 name=flag path=/flag depth=1 struct=false/false
+  VALUE_FALSE id=10 name=flag path=/flag depth=1 text=false num=false struct=false/false
+  FIELD_NAME id=5 name=neg path=/neg depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=neg path=/neg depth=1 text=-7 num=true struct=false/false
+  FIELD_NAME id=5 name=esc path=/esc depth=1 struct=false/false
+  VALUE_STRING id=6 name=esc path=/esc depth=1 text=x
+yA num=false struct=false/false
+  END_OBJECT id=2 name=null path= depth=0 struct=false/true
+  tokens=32 closed=true last=null
+── InputStream (UTF8StreamJsonParser)
+  START_OBJECT id=1 name=null path= depth=1 struct=true/false
+  FIELD_NAME id=5 name=id path=/id depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=id path=/id depth=1 text=42 num=true struct=false/false
+  FIELD_NAME id=5 name=name path=/name depth=1 struct=false/false
+  VALUE_STRING id=6 name=name path=/name depth=1 text=rava num=false struct=false/false
+  FIELD_NAME id=5 name=tags path=/tags depth=1 struct=false/false
+  START_ARRAY id=3 name=tags path=/tags depth=2 struct=true/false
+  VALUE_STRING id=6 name=null path=/tags/0 depth=2 text=a num=false struct=false/false
+  VALUE_STRING id=6 name=null path=/tags/1 depth=2 text=b num=false struct=false/false
+  START_OBJECT id=1 name=null path=/tags/2 depth=3 struct=true/false
+  FIELD_NAME id=5 name=deep path=/tags/2/deep depth=3 struct=false/false
+  START_ARRAY id=3 name=deep path=/tags/2/deep depth=4 struct=true/false
+  VALUE_NUMBER_INT id=7 name=null path=/tags/2/deep/0 depth=4 text=1 num=true struct=false/false
+  VALUE_NUMBER_FLOAT id=8 name=null path=/tags/2/deep/1 depth=4 text=2.5 num=true struct=false/false
+  VALUE_TRUE id=9 name=null path=/tags/2/deep/2 depth=4 text=true num=false struct=false/false
+  VALUE_NULL id=11 name=null path=/tags/2/deep/3 depth=4 text=null num=false struct=false/false
+  END_ARRAY id=4 name=deep path=/tags/2/deep depth=3 struct=false/true
+  END_OBJECT id=2 name=null path=/tags/2 depth=2 struct=false/true
+  END_ARRAY id=4 name=tags path=/tags depth=1 struct=false/true
+  FIELD_NAME id=5 name=empty path=/empty depth=1 struct=false/false
+  START_OBJECT id=1 name=empty path=/empty depth=2 struct=true/false
+  END_OBJECT id=2 name=empty path=/empty depth=1 struct=false/true
+  FIELD_NAME id=5 name=none path=/none depth=1 struct=false/false
+  START_ARRAY id=3 name=none path=/none depth=2 struct=true/false
+  END_ARRAY id=4 name=none path=/none depth=1 struct=false/true
+  FIELD_NAME id=5 name=flag path=/flag depth=1 struct=false/false
+  VALUE_FALSE id=10 name=flag path=/flag depth=1 text=false num=false struct=false/false
+  FIELD_NAME id=5 name=neg path=/neg depth=1 struct=false/false
+  VALUE_NUMBER_INT id=7 name=neg path=/neg depth=1 text=-7 num=true struct=false/false
+  FIELD_NAME id=5 name=esc path=/esc depth=1 struct=false/false
+  VALUE_STRING id=6 name=esc path=/esc depth=1 text=x
+yA num=false struct=false/false
+  END_OBJECT id=2 name=null path= depth=0 struct=false/true
+  tokens=32 closed=true last=null
+── 位置
+  START_OBJECT line=1 col=1 char=0
+  FIELD_NAME line=2 col=3 char=4
+  VALUE_NUMBER_INT line=2 col=9 char=10
+  FIELD_NAME line=3 col=3 char=15
+  START_ARRAY line=3 col=9 char=21
+  VALUE_TRUE line=3 col=11 char=23
+  VALUE_FALSE line=4 col=2 char=31
+  END_ARRAY line=4 col=8 char=37
+  END_OBJECT line=5 col=1 char=39
+  bytes START_OBJECT line=1 col=1 byte=0
+  bytes FIELD_NAME line=2 col=3 byte=4
+  bytes VALUE_NUMBER_INT line=2 col=9 byte=10
+  bytes FIELD_NAME line=3 col=3 byte=15
+  bytes START_ARRAY line=3 col=9 byte=21
+  bytes VALUE_TRUE line=3 col=11 byte=23
+  bytes VALUE_FALSE line=4 col=2 byte=31
+  bytes END_ARRAY line=4 col=8 byte=37
+  bytes END_OBJECT line=5 col=1 byte=39
+── 快速路径
+  chars k1:VALUE_STRING=v1 k2:VALUE_NUMBER_INT=7 k3:VALUE_TRUE=true k4:START_OBJECT(skipped→END_OBJECT) k5:VALUE_STRING=tail
+  bytes k1:VALUE_STRING=v1 k2:VALUE_NUMBER_INT=7 k3:VALUE_TRUE=true k4:START_OBJECT(skipped→END_OBJECT) k5:VALUE_STRING=tail
+  nextTextValue s1 s2 <VALUE_NUMBER_INT> s4
+  coerce 10/10/10.0/true 20/20/20.0/false 3/3/3.9/false 1/1/1.0/true 0/0/0.0/false -1/-2/-3.0/false
+── 多根值
+  VALUE_NUMBER_INT VALUE_STRING END_ARRAY END_OBJECT VALUE_TRUE VALUE_NULL
+── 畸形输入
+  c {"a":1,} -> JsonParseException after [START_OBJECT FIELD_NAME VALUE_NUMBER_INT]: Unexpected character ('}' (code 125)): was expecting double-quote to start field name |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 8]
+  b {"a":1,} -> JsonParseException after [START_OBJECT FIELD_NAME VALUE_NUMBER_INT]: Unexpected character ('}' (code 125)): was expecting double-quote to start field name |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 8]
+  c [1,2 -> JsonEOFException after [START_ARRAY VALUE_NUMBER_INT VALUE_NUMBER_INT]: Unexpected end-of-input: expected close marker for Array (start marker at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+  b [1,2 -> JsonEOFException after [START_ARRAY VALUE_NUMBER_INT VALUE_NUMBER_INT]: Unexpected end-of-input: expected close marker for Array (start marker at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+  c {"a" 1} -> JsonParseException after [START_OBJECT]: Unexpected character ('1' (code 49)): was expecting a colon to separate field name and value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 6]
+  b {"a" 1} -> JsonParseException after [START_OBJECT]: Unexpected character ('1' (code 49)): was expecting a colon to separate field name and value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 6]
+  c [tru] -> JsonParseException after [START_ARRAY]: Unrecognized token 'tru': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  b [tru] -> JsonParseException after [START_ARRAY]: Unrecognized token 'tru': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  c "unterminated -> JsonEOFException after [VALUE_STRING]: Unexpected end-of-input: was expecting closing quote for a string value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 14]
+  b "unterminated -> JsonEOFException after [VALUE_STRING]: Unexpected end-of-input in VALUE_STRING |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 14]
+  c {"a":01} -> JsonParseException after [START_OBJECT]: Invalid numeric value: Leading zeroes not allowed |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 7]
+  b {"a":01} -> JsonParseException after [START_OBJECT]: Invalid numeric value: Leading zeroes not allowed |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 7]
+  c [1]] -> JsonParseException after [START_ARRAY VALUE_NUMBER_INT END_ARRAY]: Unexpected close marker ']': no open Array to close |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  b [1]] -> JsonParseException after [START_ARRAY VALUE_NUMBER_INT END_ARRAY]: Unexpected close marker ']': no open Array to close |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  c {'a':1} -> JsonParseException after [START_OBJECT]: Unexpected character (''' (code 39)): was expecting double-quote to start field name |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  b {'a':1} -> JsonParseException after [START_OBJECT]: Unexpected character (''' (code 39)): was expecting double-quote to start field name |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 2]
+  c // c\n1 -> JsonParseException after []: Unexpected character ('/' (code 47)): maybe a (non-standard) comment? (not recognized as one since Feature 'ALLOW_COMMENTS' not enabled for parser) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]
+  b // c\n1 -> JsonParseException after []: Unexpected character ('/' (code 47)): maybe a (non-standard) comment? (not recognized as one since Feature 'ALLOW_COMMENTS' not enabled for parser) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 1]
+  c ["\q"] -> JsonParseException after [START_ARRAY VALUE_STRING]: Unrecognized character escape 'q' (code 113) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  b ["\q"] -> JsonParseException after [START_ARRAY VALUE_STRING]: Unrecognized character escape 'q' (code 113) |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  c {"a":1}x -> JsonParseException after [START_OBJECT FIELD_NAME VALUE_NUMBER_INT END_OBJECT]: Unrecognized token 'x': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 8]
+  b {"a":1}x -> JsonParseException after [START_OBJECT FIELD_NAME VALUE_NUMBER_INT END_OBJECT]: Unrecognized token 'x': was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false') |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 8]
+  c [-] -> JsonParseException after [START_ARRAY]: Unexpected character (']' (code 93)) in numeric value: expected digit (0-9) to follow minus sign, for valid numeric value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 3]
+  b [-] -> JsonParseException after [START_ARRAY]: Unexpected character (']' (code 93)) in numeric value: expected digit (0-9) to follow minus sign, for valid numeric value |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 3]
+  c [1.] -> JsonParseException after [START_ARRAY]: Unexpected character (']' (code 93)) in numeric value: Decimal point not followed by a digit |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 3]
+  b [1.] -> JsonParseException after [START_ARRAY]: Unexpected character (']' (code 93)) in numeric value: Decimal point not followed by a digit |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 4]
+  c [NaN] -> JsonParseException after [START_ARRAY]: Non-standard token 'NaN': enable `JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS` to allow |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+  b [NaN] -> JsonParseException after [START_ARRAY]: Non-standard token 'NaN': enable `JsonReadFeature.ALLOW_NON_NUMERIC_NUMBERS` to allow |  at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 5]
+── 非阻塞 feed
+  chunk=1 notAvail>0=true { id 42 name rava tags [ a b { deep [ 1 2.5 true null ] } ] empty { } none [ ] flag false neg -7 esc x
+yA }
+  chunk=7 notAvail>0=true { id 42 name rava tags [ a b { deep [ 1 2.5 true null ] } ] empty { } none [ ] flag false neg -7 esc x
+yA }
+  chunk=129 notAvail>0=true { id 42 name rava tags [ a b { deep [ 1 2.5 true null ] } ] empty { } none [ ] flag false neg -7 esc x
+yA }
+── JsonPointer
+  ptr=/tags/2/deep/1 head=tags tail=/2/deep/1 last=/1 append=/tags/2/deep/1/z
+  hit VALUE_NUMBER_FLOAT 2.5
+  escape a/b c~d
+── 吞吐基准
+  bytes=6705536 rounds=5 tokens=5000010 sum=644000823810

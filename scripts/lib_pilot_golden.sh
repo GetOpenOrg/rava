@@ -14,7 +14,12 @@
 #   scripts/lib_pilot_golden.sh sb1    # spring-beans 切片（矩阵 #12）：BeanUtils
 #   scripts/lib_pilot_golden.sh sb2    # spring-beans 切片：BeanWrapperImpl 属性读写与嵌套路径
 #   scripts/lib_pilot_golden.sh sb3    # spring-beans 切片：PropertyEditor 族与类型转换
+#   scripts/lib_pilot_golden.sh jc1    # jackson-core 切片（矩阵 #3）：JsonParser 流式解析与 token 状态机（含吞吐基准）
+#   scripts/lib_pilot_golden.sh jc2    # jackson-core 切片：JsonGenerator 往返
+#   scripts/lib_pilot_golden.sh jc3    # jackson-core 切片：数字边角与编码（含数字吞吐基准）
+#   scripts/lib_pilot_golden.sh jc4    # jackson-core 切片：JsonFactory 配置与特性开关
 #   scripts/lib_pilot_golden.sh m2 --no-transpile   # 只重跑对账（复用已生成 scratch）
+#   PILOT_PROFILE=release scripts/lib_pilot_golden.sh jc1   # 编译档（dev 缺省 / dev-opt / release / release-small）；性能测点用 release
 #
 # 前置：参考 JDK（tools/refjdk.toml，scripts/fetch_reference_jdk.sh 取包；JDK=N 改用本机 JDK，仅供实验）；jar 资产在 tests/lib_pilot/deps/target/pilot-libs/
 #（scripts/fetch_pilot_deps.sh --no-scan 导出，同时生成依赖锁 deps.lock.toml；可经 PILOT_LIBS 覆盖）。
@@ -42,7 +47,7 @@ PY
 # 语料 JDK 与 run_tests.py 同口径：golden JVM 与转译语料同源于参考构建
 . "$REPO_ROOT/scripts/corpus_jdk.sh" "$REPO_ROOT"
 JAVAC="$JAVA_HOME/bin/javac"; JAVA="$JAVA_HOME/bin/java"
-MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1..sc4|sb1..sb3 [--no-transpile|--emit-only]}"
+MODE="${1:?用法: $0 m1|m2|m3|m4|m5|sc1..sc4|sb1..sb3|jc1..jc4 [--no-transpile|--emit-only]}"
 TRANSPILE=1
 EMIT_ONLY=0
 [[ "${2:-}" == "--no-transpile" ]] && TRANSPILE=0
@@ -110,6 +115,17 @@ sb1|sb2|sb3)
     CP="$LIBS/spring-beans-6.2.19.jar:$LIBS/spring-core-6.2.19.jar:$LIBS/spring-jcl-6.2.19.jar"
     LIB_ARGS=(--deps "$LOCK" --cp spring-beans,spring-core,spring-jcl)
     ;;
+jc1|jc2|jc3|jc4)
+    # jackson-core 切片（矩阵 #3）：同 sc 口径，用户 main 为唯一入口，库类按档案调用链翻译
+    case "$MODE" in
+        jc1) MAIN=JacksonParserMain ;;
+        jc2) MAIN=JacksonGeneratorMain ;;
+        jc3) MAIN=JacksonNumbersEncodingMain ;;
+        jc4) MAIN=JacksonFactoryConfigMain ;;
+    esac
+    CP="$LIBS/jackson-core-2.22.3.jar"
+    LIB_ARGS=(--deps "$LOCK" --cp jackson-core)
+    ;;
 *) echo "未知模式: $MODE" >&2; exit 2;;
 esac
 
@@ -141,7 +157,9 @@ if [[ "$EMIT_ONLY" == 1 ]]; then
     exit 0
 fi
 _t0=$EPOCHREALTIME
-"$RAVA" compile "$SCRATCH" > "/tmp/${MODE}_cargo.err" 2>&1 \
+PROFILE_ARGS=()
+[[ -n "${PILOT_PROFILE:-}" && "$PILOT_PROFILE" != dev ]] && PROFILE_ARGS=(--"$PILOT_PROFILE")
+"$RAVA" compile "$SCRATCH" "${PROFILE_ARGS[@]}" > "/tmp/${MODE}_cargo.err" 2>&1 \
     || { echo "编译失败，见 /tmp/${MODE}_cargo.err 与 $SCRATCH/build_status.json" >&2; exit 1; }
 COMPILE_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.1f}')")
 EXE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["exe"])' "$SCRATCH/build_status.json")"
@@ -149,7 +167,9 @@ _t0=$EPOCHREALTIME
 "$EXE" > "$REPO_ROOT/tests/lib_pilot/golden/${MODE}_rs.txt" 2>>"/tmp/${MODE}_cargo.err" \
     || { echo "运行失败，见 /tmp/${MODE}_cargo.err" >&2; exit 1; }
 RUN_S=$(python3 -c "print(f'{$EPOCHREALTIME-$_t0:.3f}')")
-echo "METRICS ${MODE} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
+# 程序自报的吞吐基准行（stderr 的 JC_BENCH；JVM 侧直接打在本日志）
+grep -h "^JC_BENCH" "/tmp/${MODE}_cargo.err" | sed "s/^/rs /" || true
+echo "METRICS ${MODE} profile=${PILOT_PROFILE:-dev} run_s=${RUN_S} jvm_run_s=${JVM_S} transpile_s=${TRANSPILE_S} compile_s=${COMPILE_S} bin_bytes=$(stat -c %s "$EXE")"
 
 echo "== [3/3] 逐字对账 =="
 if diff -u "tests/lib_pilot/golden/${MODE}_jvm.txt" "tests/lib_pilot/golden/${MODE}_rs.txt"; then
