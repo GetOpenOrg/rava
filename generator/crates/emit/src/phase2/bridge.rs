@@ -256,6 +256,14 @@ pub fn resolve_bridge_member<'c>(
     if covariant && vt_bin.is_empty() {
         return None;
     }
+    // 祖先的真实方法自身已占桥所在槽位（同类声明桥与真实方法时以 vtable_erasure 直接落槽，
+    // 如 CharBuffer.array），继承的真实成员即已填槽，不再另补桥成员
+    if inherited_real {
+        let real_slot = ems.get(real_owner_ci.name()).and_then(|e| e.find(name, &real_param)).map(|m| m.virtual_in.as_str());
+        if real_slot == Some(vt_bin.as_str()) {
+            return None;
+        }
+    }
     if member_name == real_rust {
         if !covariant {
             return None;
