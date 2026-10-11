@@ -45,7 +45,7 @@ pub(super) fn call(vm: &mut Vm, env: &Env, op: &str, info: &MInfo, args: Vec<CV>
     let zero = || if returns_void(desc) { None } else { desc.rsplit(')').next().map(CV::zero) };
     match op {
         "noop" => Ok(zero()),
-        "const:false" | "const:0" => ret(CV::I(0)),
+        "const:false" => ret(CV::I(0)),
         "const:true" => ret(CV::I(1)),
         "const:null" => ret(CV::N),
         c if c.starts_with("const:") => match c["const:".len()..].parse::<i64>() {

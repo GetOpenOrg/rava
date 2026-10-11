@@ -252,6 +252,12 @@ value_equals = [
 # 映像中 javaLangInvokeInited = true，静态字段非空 / 常量折叠按映像值与写点给出）
 "jdk/internal/misc/VM.isBooted:()Z" = true
 "jdk/internal/misc/VM.isModuleSystemInited:()Z" = true
+# 模块镜像资源恒未压缩：原生二进制唯一打开的 jimage 是 emitter 写出的 `${java.home}/lib/modules`
+# （generator/crates/emit/src/project/jimage.rs 对每个条目恒写 ATTRIBUTE_COMPRESSED = 0），
+# jdk.internal.jimage 不导出，用户无法构造指向别的镜像的 ImageLocation，也无法子类化。
+# BasicImageReader.getResource(Buffer) 因此只走 `compressedSize == 0` 直读分支，
+# 解压分支（Decompressor → Properties.loadFromXML → XML 解析器）不可达
+"jdk/internal/jimage/ImageLocation.getCompressedSize:()J" = 0
 
 # VM 初始系统属性表：原生二进制启动时 `System.props` 的内容（构建期引导映像执行 initPhase1 写入，宿主相关键
 # 经 SystemProps$Raw 启动重放取值，本表须与之一致）。原生二进制无 `-D` 注入机制，因此：
