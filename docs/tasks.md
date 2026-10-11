@@ -100,7 +100,7 @@
 - batch-1011k（叠 1011j，含 review-soundness）：未开测。
 
 **剩余工作**
-1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
+1. **种子无关性回归（阻塞放行）**：1011i 新引入，1011h 时通过。b1011i-seed 实测：`35_io/TestSerialLookupPairing.java` 种子 0 比种子 1 多 `java/security/ProtectionDomain$JavaSecurityAccessImpl` 与 `jdk/internal/access/JavaSecurityAccess`（前 5 例一致）。首要嫌疑 c1d-a54-reflect（构造器请求 `ctor_reqs` / `ctor_params`，其确定性单测当时超时未跑完）；诊断作业 b1011i-seedwhy（三种子 `--why`）在跑。候选来源是 1011i 新并入的 c1d-a54-reflect、review-runtime-perf、fix-iface-obj-overload、pilot-jackson-core、fix-invoke-box-cast，按 b1011i-seed 输出的差异类定位，修到 S 通过后再放行 1011i / 1011j / 1011k。
 2. **G1 闭包不收敛**（S0 A 34.9 GB、sb3 30.6 GB 被杀，主因是方法上下文）：选择性按对象建上下文（上下文不敏感预分析，目标 S0 ≤20 万上下文、峰值 ≤16 GiB）；查清每约 240 s 一次的约 6 GB 尖峰；补跑扫描中缺的 28 例（11 例类路径问题，17 例需 ≥16 GiB 槽）。矩阵 #12 spring-beans sb1–sb3 与 S0 Boot 受此阻塞。见性能计划 §4.12。
 3. **S7 K3 方法 trait（s7-k3，未合入）**：声明底段峰值 +24–31%（上限 ±5%），先固定切段分离两个成因；DeepCopy 在 f3368359 后复测；全量单测（含 `no_jdk_literals`）与抽查；与 Rust 标准 trait 同名的方法和接口载体方法移入 trait（K6 前必须完成）。之后 K4–K8。见 S7 计划 §9.9。
 4. **运行时性能（三测点对照 JVM）**：
@@ -112,7 +112,7 @@
 5. **JDK 25 适配**：问题 A（StackFrameInfo 反射元素流，`FrameBuffer.at → ClassFrameInfo.declaringClass` 存根，归反射建模）；DeepCopy / DataEncryptionStandard 转译 OOM；合批后 JDK 25 全量复跑（`--reset-failed --jdk 25`），按其余失败分类处理。见 `docs/reports/2026-10-11-fix-jdk25-handoff.md`。
 6. **闭包分析器手写扫描器**：`&self` 辅助 fn 内 `self.X()` 保留 on_self（`hw-upcall-self-lost-in-helper`，现由手写侧规避）。
 7. **无 GC 后续**：所有权推断 `Weak`（逃逸到旧对象但成环）；引用类语义随 `Rc` 释放触发；JDK 方法体内区域（需开放世界事实）；`thread_local_lint` 文档头登记 `region_slot` 理由。见无 GC 文档 §六-5。
-8. **健全性审查余项**：57564806（rawmem 批量快路径）kr1 复测作业 rs-bench6 在跑（判据：批量段 ≤5 ms，CAS / 普通段不劣于 a3b7ca0a）；CAS +6%，`update` 回调改泛型内联；堆数组跨元素读-改-写改字粒度原子（`array/store.rs`）；direct ByteBuffer 的 byteBufferView VarHandle 启动即抛 ISE（main 既有，根因未查）。见分诊报告五。
+8. **健全性审查余项**：57564806（rawmem 批量快路径）kr1 复测 rs-bench6 **未达标**：批量段 7 ms（基线 96fc1cf4 为 3 ms，判据 ≤5 ms），CAS 393 vs 401 ms、普通段 58 vs 64 ms 略优——批量快路径需重做；CAS +6%，`update` 回调改泛型内联；堆数组跨元素读-改-写改字粒度原子（`array/store.rs`）；direct ByteBuffer 的 byteBufferView VarHandle 启动即抛 ISE（main 既有，根因未查）。见分诊报告五。
 9. **生成器审查余项**：vendor 迁移 `cp -a` / `mv` 保留 mtime 复验（sg1 上三次中断，需重发）。见分诊报告「生成器修复」节。
 10. **反射强转同类风险**：`coerce.rs` 的 `to_object_text` 与方法句柄 invoke 路径可能有 fix-invoke-box-cast 同类失配，待构造测例核查。
 11. **GSSNameSpi 大闭包复查**：E0599 已修（fix-iface-obj-overload），闭包已回落到 3001 类不再触发；下次闭包纳入 jgss 时复验。
