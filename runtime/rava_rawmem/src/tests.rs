@@ -89,9 +89,37 @@ fn bulk_read_write_fill_copy() {
     assert_eq!(all[25], 22, "填充终点后一字节不变");
 }
 
+/// 起点偏移 0..8 × 长度 0..40 全组合：读 / 写 / 填充 / 同偏移拷贝与逐字节参照一致，区间外字节不变。
+#[test]
+fn bulk_every_offset_and_length() {
+    for off in 0..8usize {
+        for n in 0..40usize {
+            let b = Buf::new(8);
+            let base = b.addr();
+            let init: Vec<u8> = (0..b.len()).map(|i| (i * 7 + 1) as u8).collect();
+            unsafe { write(base, &init) };
+            let src: Vec<u8> = (0..n).map(|i| (200 - i) as u8).collect();
+            unsafe { write(base + off, &src) };
+            let mut want = init.clone();
+            want[off..off + n].copy_from_slice(&src);
+            assert_eq!(b.bytes(), want, "write off={off} n={n}");
+            let mut back = vec![0u8; n];
+            unsafe { read(base + off, &mut back) };
+            assert_eq!(back, src, "read off={off} n={n}");
+            unsafe { fill(base + off, n, 0x5A) };
+            want[off..off + n].fill(0x5A);
+            assert_eq!(b.bytes(), want, "fill off={off} n={n}");
+            unsafe { copy(base + 64 - 16 + off % 8 - 8, base + off, n.min(8)) };
+            let from = 64 - 16 + off % 8 - 8;
+            want.copy_within(from..from + n.min(8), off);
+            assert_eq!(b.bytes(), want, "copy off={off} n={n}");
+        }
+    }
+}
+
 #[test]
 fn copy_overlapping_matches_memmove() {
-    for (from, to, n) in [(0usize, 7usize, 1500usize), (7, 0, 1500), (3, 3, 100), (0, 600, 512), (1, 2, 1023)] {
+    for (from, to, n) in [(0usize, 7usize, 1500usize), (7, 0, 1500), (3, 3, 100), (0, 600, 512), (1, 2, 1023), (0, 8, 1500), (8, 0, 1500), (3, 11, 1001), (11, 3, 1001), (2, 10, 5), (13, 5, 3), (5, 13, 16), (6, 14, 2)] {
         let b = Buf::new(400);
         let base = b.addr();
         let init: Vec<u8> = (0..b.len()).map(|i| (i * 31 % 251) as u8).collect();

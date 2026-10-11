@@ -104,46 +104,64 @@ fn bits_of(bytes: &[u8]) -> u64 {
     }
 }
 
-/// 按字切分 `[addr, addr + n)`：对每段给出（段起址、字内偏移、段长、段在区间内的起点）。
+/// `addr` 起、总长 `n` 的区间在第一个对齐字边界之前的字节数（头段长）。
 #[inline]
-fn spans(addr: usize, n: usize, mut f: impl FnMut(usize, usize, usize, usize)) {
-    let mut done = 0;
-    while done < n {
-        let a = addr + done;
-        let off = a & (WORD - 1);
-        let take = (WORD - off).min(n - done);
-        f(a, off, take, done);
-        done += take;
-    }
+fn head_len(addr: usize, n: usize) -> usize {
+    (addr.wrapping_neg() & (WORD - 1)).min(n)
 }
 
-/// 读 `dst.len()` 字节。
+/// 读 `dst.len()` 字节：头 / 尾不足一字的段各一次整字读取后截取，中间整字逐字 Relaxed 读。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
 pub unsafe fn read(addr: usize, dst: &mut [u8]) {
-    spans(addr, dst.len(), |a, off, take, at| {
+    let n = dst.len();
+    let h = head_len(addr, n);
+    if h > 0 {
+        let off = addr & (WORD - 1);
+        // SAFETY: 由调用方保证
+        let w = unsafe { word(addr) }.load(Ordering::Relaxed).to_ne_bytes();
+        dst[..h].copy_from_slice(&w[off..off + h]);
+    }
+    let (body, tail) = dst[h..].split_at_mut((n - h) / WORD * WORD);
+    let mut a = addr + h;
+    for c in body.chunks_exact_mut(WORD) {
+        // SAFETY: 由调用方保证
+        c.copy_from_slice(&unsafe { word(a) }.load(Ordering::Relaxed).to_ne_bytes());
+        a += WORD;
+    }
+    if !tail.is_empty() {
         // SAFETY: 由调用方保证
         let w = unsafe { word(a) }.load(Ordering::Relaxed).to_ne_bytes();
-        dst[at..at + take].copy_from_slice(&w[off..off + take]);
-    });
+        let t = tail.len();
+        tail.copy_from_slice(&w[..t]);
+    }
 }
 
-/// 写 `src`。
+/// 写 `src`：头 / 尾不足一字的段经同字 CAS 合并，中间整字逐字 Relaxed 写。
 ///
 /// # Safety
 /// 见模块头注的地址前提。
 pub unsafe fn write(addr: usize, src: &[u8]) {
-    spans(addr, src.len(), |a, off, take, at| {
-        let part = &src[at..at + take];
-        if take == WORD {
-            // SAFETY: 由调用方保证
-            unsafe { word(a) }.store(u64::from_ne_bytes(part.try_into().unwrap_or([0; WORD])), Ordering::Relaxed);
-        } else {
-            // SAFETY: 由调用方保证
-            unsafe { merge(a, off, take, bits_of(part)) };
-        }
-    });
+    let n = src.len();
+    let h = head_len(addr, n);
+    if h > 0 {
+        // SAFETY: 由调用方保证
+        unsafe { merge(addr, addr & (WORD - 1), h, bits_of(&src[..h])) };
+    }
+    let (body, tail) = src[h..].split_at((n - h) / WORD * WORD);
+    let mut a = addr + h;
+    for c in body.chunks_exact(WORD) {
+        let mut b = [0u8; WORD];
+        b.copy_from_slice(c);
+        // SAFETY: 由调用方保证
+        unsafe { word(a) }.store(u64::from_ne_bytes(b), Ordering::Relaxed);
+        a += WORD;
+    }
+    if !tail.is_empty() {
+        // SAFETY: 由调用方保证
+        unsafe { merge(a, 0, tail.len(), bits_of(tail)) };
+    }
 }
 
 /// `[addr, addr + n)` 填 `value`（Unsafe.setMemory0）。
@@ -152,25 +170,70 @@ pub unsafe fn write(addr: usize, src: &[u8]) {
 /// 见模块头注的地址前提。
 pub unsafe fn fill(addr: usize, n: usize, value: u8) {
     let full = u64::from_ne_bytes([value; WORD]);
-    spans(addr, n, |a, off, take, _| {
-        if take == WORD {
-            // SAFETY: 由调用方保证
-            unsafe { word(a) }.store(full, Ordering::Relaxed);
-        } else {
-            // SAFETY: 由调用方保证
-            unsafe { merge(a, off, take, full) };
-        }
-    });
+    let h = head_len(addr, n);
+    if h > 0 {
+        // SAFETY: 由调用方保证
+        unsafe { merge(addr, addr & (WORD - 1), h, full) };
+    }
+    let mut a = addr + h;
+    let end = addr + n;
+    while end - a >= WORD {
+        // SAFETY: 由调用方保证
+        unsafe { word(a) }.store(full, Ordering::Relaxed);
+        a += WORD;
+    }
+    if a < end {
+        // SAFETY: 由调用方保证
+        unsafe { merge(a, 0, end - a, full) };
+    }
 }
 
-/// 拷贝 `n` 字节（memmove 语义，区间可重叠）：按块经栈缓冲读出再写入，目标在源之后且重叠时自尾向头。
+/// 拷贝 `n` 字节（memmove 语义，区间可重叠）。
+///
+/// 源与目标字内偏移相同时（`allocateMemory` 区间之间、缓冲区同偏移拷贝的常见情形）走逐字快路径：
+/// 头 / 尾段先整段读出再写入，中间整字一读一写；目标在源之后且重叠时自尾向头。其余情形按块经栈缓冲
+/// 读出再写入。
 ///
 /// # Safety
 /// 两个区间均满足模块头注的地址前提。
 pub unsafe fn copy(src: usize, dst: usize, n: usize) {
+    let backward = dst > src && dst < src.wrapping_add(n);
+    if (src ^ dst) & (WORD - 1) == 0 {
+        let h = head_len(dst, n);
+        let words = (n - h) / WORD;
+        let t = n - h - words * WORD;
+        // SAFETY: 由调用方保证；小段整段读出再写入
+        let small = |at: usize, len: usize| unsafe {
+            let mut b = [0u8; WORD];
+            read(src + at, &mut b[..len]);
+            write(dst + at, &b[..len]);
+        };
+        // SAFETY: 由调用方保证；源与目标同偏移，第 i 字一读一写
+        let step = |i: usize| unsafe {
+            let at = h + i * WORD;
+            word(dst + at).store(word(src + at).load(Ordering::Relaxed), Ordering::Relaxed);
+        };
+        if backward {
+            if t > 0 {
+                small(n - t, t);
+            }
+            (0..words).rev().for_each(step);
+            if h > 0 {
+                small(0, h);
+            }
+        } else {
+            if h > 0 {
+                small(0, h);
+            }
+            (0..words).for_each(step);
+            if t > 0 {
+                small(n - t, t);
+            }
+        }
+        return;
+    }
     const CHUNK: usize = 512;
     let mut buf = [0u8; CHUNK];
-    let backward = dst > src && dst < src.wrapping_add(n);
     let mut chunk = |at: usize, len: usize| {
         // SAFETY: 由调用方保证；每块先整体读出再写入，重叠方向由遍历次序保证不读到已改写的源
         unsafe {
