@@ -14,4 +14,13 @@ impl<T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_mo
     pub fn refersTo0(&self, obj: Object) -> Result<bool> {
         Ok(Into::<Object>::into(self.__get_referent()) == obj)
     }
+
+    /// native `clear0()`（JDK 25 起 PhantomReference 覆盖 clear 为独立 native）：清除 referent，
+    /// 同 `Reference.clear0`（无 GC，不入队）
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn clear0(&self) -> Result<()> {
+        self.__set_referent(T::default());
+        Ok(())
+    }
 }

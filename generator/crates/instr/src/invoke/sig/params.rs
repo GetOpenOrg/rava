@@ -74,6 +74,11 @@ fn resolve_declarer<'a>(
     ci
 }
 
+/// 方法体发射在接口自身（非继承展开进实现类），且声明者 `ci` 是该接口的超接口
+fn this_in_sub_interface(ctx: &InstrCtx, ci: &ClassInfo) -> bool {
+    ci.name() != ctx.class_name && ctx.reg().get(ctx.class_name).is_some_and(|c| c.is_interface())
+}
+
 fn iface_head(ctx: &InstrCtx, t: &RsType) -> bool {
     matches!(jvm(ctx, t), JvmType::Class { is_interface: true, .. })
 }
@@ -96,7 +101,13 @@ pub(super) fn lookup(env: &InstrEnv, call: &CallRef, caller_tparams: &[String], 
     };
     let callee_tparams = ctx.ty.effective_class_type_params(ci);
     let hw = handwritten_boundary_method(ctx, &cls_bin, &call.name, &call.desc)?;
-    let mut types = ctx.ty.method_sig_types(ci, m, &callee_tparams).params;
+    // 构造器取发射签名（被调 `new` 的真实 Rust 形参）：接口形参在发射侧擦为描述符形态，
+    // 调用点须按同一口径强转（JDK 25 接口 default 体内匿名类的 ACC_MANDATED 外部实例形参）
+    let mut types = if call.name == "<init>" {
+        ctx.ty.emitted_method_sig_types(ci, m, &callee_tparams).params
+    } else {
+        ctx.ty.method_sig_types(ci, m, &callee_tparams).params
+    };
     if types.is_empty() && !hw {
         types = ctx.ty.emitted_method_sig_types(ci, m, &callee_tparams).params;
     }
@@ -152,7 +163,11 @@ pub(super) fn lookup(env: &InstrEnv, call: &CallRef, caller_tparams: &[String], 
                     Some(d) => jvm(ctx, &d).erasure() == jvm(ctx, &t).erasure(),
                     None => false,
                 };
-                let keep_carrier = ctx.ty.is_carrier(&t) && subst_pos.contains(&i) && !(recv.is_this && ci.is_interface());
+                // `this` 经接口声明者：声明者是当前接口自身时形参是本接口的类型形参（不代入）；
+                // 声明者是当前接口的超接口时，接口块里的继承成员声明按本接口视角代入实参
+                //（`Node.OfDouble` default 体里 `this.forEach(dc)` → 继承成员 `forEach_obj(DoubleConsumer)`）
+                let this_iface_own = recv.is_this && ci.is_interface() && !this_in_sub_interface(ctx, ci);
+                let keep_carrier = ctx.ty.is_carrier(&t) && subst_pos.contains(&i) && !this_iface_own;
                 out.push((keep_carrier || same_head).then_some(t));
             }
             other => out.push(other),

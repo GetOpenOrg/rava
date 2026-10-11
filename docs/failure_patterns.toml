@@ -131,7 +131,7 @@ id = "transpile-oom-14g"
 stage = "resource"
 symptom = "转译期超出 14 GB 内存上限被杀（__RAVA_OOM_KILL__）"
 match = [["__RAVA_OOM_KILL__"]]
-tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync"]
+tests = ["TestHttpLoopbackSync", "TestHttpLoopbackAsync", "DeepCopy", "DataEncryptionStandard"]  # 后二例为 JDK 25 档案（2026-10-11 fix-jdk25 抽查）
 cause = "java.net.http 闭包规模大，分析峰值超过单例内存上限；资源类失败，不阻塞合入"
 introduced = ""
 fixed = []
@@ -1520,6 +1520,188 @@ owner = "并发小步 B（conc-step-b）"
 diagnose = "按 lint 报出的位置判定生存期：跨让出点 → ExecState；不跨 → exec_context.rs 载体槽并在 lint 文档头登记"
 doc = "generator/crates/closure/src/handwritten/thread_local_lint.rs 文档头"
 since = "2026-10-10"
+
+# ── JDK 25 全量（c7cfb932，2026-10-11）──────────────────────────────────────────
+
+[[pattern]]
+id = "jdk25-stackwalk-native-signature"
+stage = "compile"
+symptom = "JDK 25：java_base_decl 编译 stack_stream_factory_* 的 callStackWalk 实参类型不符（mode 期望 i64 得 i32）/ fetchStackFrames_i_l_i_i_i_arr_obj 缺失"
+match = [["callStackWalk", "expected `i64`, found `i32`"], ["callStackWalk", "mismatched types", "jdk25"]]
+tests = ["AbstractClassTest", "HelloWorld", "StreamDemo", "DeepCopy", "CompactNumberFormatExample"]
+cause = "手写 native 按 JDK 21 描述符写死：JDK 25 的 callStackWalk mode 改为 int、fetchStackFrames 改为 (IJIII[Object)I，帧由 StackFrameInfo.memberName 改为 ClassFrameInfo.classOrMemberName（ResolvedMethodName）+ flags。修法：手写层以 cfg(jdk_ge_25) 按参考 JDK 主版本分版本（build.rs 由 jdk_feature.txt 注入），填帧与 initStackTraceElement 同步分版本"
+introduced = ""
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap 对照两版 StackStreamFactory$AbstractStackWalker 的 native 描述符；生成侧 #[impl_methods] 与调用点的 Rust 名即参考 JDK 的重载后缀名"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "iface-default-this-superiface-param-erased"
+stage = "compile"
+symptom = "node_of_{double,int,long}.rs：this.forEach_obj(Object::from(..)) 实参 Object，形参期望 DoubleConsumer / IntConsumer / LongConsumer（E0308）"
+match = [["forEach_obj", "node_of_double.rs"], ["forEach_obj", "node_of_int.rs"], ["forEach_obj", "node_of_long.rs"]]
+tests = ["StreamDemo", "CollectorsDemo"]
+cause = "潜伏缺陷（JDK 25 档案把 Node$OfDouble.forEach(Consumer) default 体纳入调用链而暴露）：接口 default 体里 this 调用声明于超接口（Node$OfPrimitive<T_CONS>）的方法时，sig/params.rs 对 this 经接口声明者一律不代入载体实参，形参回落描述符 Object；而接口块里的继承成员声明按本接口视角已代入 DoubleConsumer。修法：仅声明者是当前接口自身时不代入，声明者为当前接口的超接口时按本接口视角代入"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "对照调用点与被调继承成员声明（inherited_from）的形参类型；查 generator/crates/instr/src/invoke/sig/params.rs 的 keep_carrier 判定"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "vm-support-module-compile-failed"
+stage = "compile"
+symptom = "class_loaders_{app,boot,platform}_class_loader.rs：BuiltinClassLoader 上无 findClassOnClassPathOrNull / findResourceOnClassPath 等（E0599，每文件 12 处）；或运行期 panic「stub: Method_Direct.invoke」"
+match = [["no method named `findClassOnClassPathOrNull`"], ["no method named `findResourceOnClassPath`"], ["stub: Method_Direct.invoke"], ["VM 支持类编译失败"]]
+tests = ["AbstractClassTest", "Kosaraju", "DoubleLinkedListTraversing", "MethodRefDemo", "ListMethods", "CollectorsDemo", "ChronologicalOrder"]
+cause = "runtime/java_support 的 VM 支持类按模块整批 javac，JDK 22 起删除 SerializationConstructorAccessorImpl → SerializationConstructorAccessorDyn 不可编译 → 整个 java.base 支持类（EmbeddedClassPath、Method$Direct、Proxy$Dyn 等）缺席；BuiltinClassLoader 伴生 impl 因 super::EmbeddedClassPath 缺席不声明（mod_tree 伴生依赖判定），宿主 #[impl_methods] 仍声称已实现。修法：resolve/image.rs 按 javac 报错剔除出错的源后重编（参考 JDK 无对应类定义点的支持类同时无消费方），其余支持类照常入类路径"
+introduced = "c7cfb932（JDK 25 首次全量暴露）"
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "rava build 输出首行附近查「VM 支持类编译失败 / 已剔除」；--trace-class jdk/internal/loader/EmbeddedClassPath 看是否在闭包；scratch 包 mod.rs 是否声明 <x>_impl"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-new-native-missing"
+stage = "run"
+symptom = "JDK 25 运行期 panic「native: java/lang/ref/PhantomReference.clear0:()V」（及 CDS.needsClassInitBarrier0 / logLambdaFormInvoker 重载）"
+match = [["native: java/lang/ref/PhantomReference.clear0"], ["native: jdk/internal/misc/CDS."]]
+tests = ["CsvToTsv", "GZIPTest", "FileIOTest"]
+cause = "JDK 25 新增 native（PhantomReference.clear0、CDS.needsClassInitBarrier0）与 CDS.logLambdaFormInvoker 新增 Java 重载致 native 的 Rust 名带后缀 _str；手写层无对应实现。修法：cfg(jdk_ge_25) 分版本补齐（emit 输出的 [precheck] native-missing 即清单）"
+introduced = ""
+fixed = ["efc32d6f"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "rava build --jdk 25 --stop-after emit 的 [precheck] native-missing 行"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "iface-anon-mandated-outer-ctor-param"
+stage = "compile"
+symptom = "java/lang/classfile/compound_element.rs：CompoundElement_1::<E>::new(Clone::clone(this), ..) 期望 &CompoundElement<Object>、实得 &CompoundElement<E>（E0308）；同批 class_builder.rs / code_builder.rs this.with(ClassFileElement) 期望 ClassElement / CodeElement"
+match = [["CompoundElement_1", "compound_element.rs"], ["expected `ClassElement`, found `ClassFileElement`"], ["expected `CodeElement`, found `ClassFileElement`"]]
+tests = ["DeepCopy", "DataEncryptionStandard"]
+cause = "JDK 25 javac 对接口 default 方法体内的匿名类省略 this$0 字段、外部实例作为构造器首个 ACC_MANDATED 形参；被调构造器发射签名对接口形参擦为描述符形态（CompoundElement<Object>），调用点却按 method_sig_types 的泛型形态（CompoundElement<E>）定形参、只做 Clone。修法：构造器调用点取被调发射签名（emitted_method_sig_types）为形参，与 new 的真实 Rust 签名同源，接口载体形参经 From 转换。with(ClassFileElement) 一类与 iface-default-this-superiface-param-erased 同根，efc32d6f 已修"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["cf040742"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "对照调用点实参与被调 new 的发射形参；查 generator/crates/instr/src/invoke/sig/params.rs 对 <init> 的签名来源"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-virtualthread-new-natives"
+stage = "run"
+symptom = "运行期 panic：native: java/lang/VirtualThread.takeVirtualThreadListToUnblock:()Ljava/lang/VirtualThread;"
+match = [["takeVirtualThreadListToUnblock"]]
+tests = ["TestVirtualThreadScale", "TestLongChainRelease"]
+cause = "JDK 25 VirtualThread 新增 native（takeVirtualThreadListToUnblock / postPinnedEvent / notifyJvmtiDisableSuspend），删去 notifyJvmtiHideFrames。本模型虚拟线程在 synchronized 上 pin 于载体阻塞、不入 VM 等待链，链表恒空：takeVirtualThreadListToUnblock 按 HotSpot 空表语义永久阻塞 unblocker 守护线程；其余两个为 JFR / JVMTI 通知 no-op；按 jdk_ge_25 分版本"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["387216e7"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -p java.lang.VirtualThread | grep native 对照 runtime/java_runtime/src/java/lang/virtual_thread_impl.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "erased-setter-inner-into-e0283"
+stage = "compile"
+symptom = "JDK 25：stack_stream_factory_caller_class_finder.rs 等 this.__set_<字段>(Into::<Object>::into(x.into())) 报 E0283（type annotations needed）"
+match = [["E0283", "__set_"]]
+tests = ["TestStackWalkerFrames"]
+cause = "宏 restore_erased_accessors 对擦除字段（superclass_erased_fields）的 setter 实参外包 Into::<Object>::into；生成器按 wrapper 形参（字段声明类型）已写尾部裸 .into()，外包后其目标类型不可推断。修法：实参尾部裸 .into() 改写为 Into::<声明类型>::into(recv) 再外包 Into<Object>（runtime/rava_macros_core/src/block/rewrite.rs，单测 erased_setter_pins_inner_into）"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "查生成文件 __set_ 调用的实参尾部 .into() 与字段是否在 superclass_erased_fields"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-stackwalk-buffer-size-limit"
+stage = "run"
+symptom = "JDK 25 运行期 InternalError「not enough space in buffers」（StackWalker.forEach / getCallerClass / Throwable 行号）"
+match = [["not enough space in buffers"]]
+tests = ["TestStackWalkerLines", "TestStackWalkerFrames"]
+cause = "JDK 25 callStackWalk / fetchStackFrames 传入的是缓冲总长 bufferSize（帧填至 bufferSize），JDK 21 传 batchSize（填至 startIndex+batchSize）。手写 native 统一按 limit 判空间：JDK 21 调用方传 start_index+batch_size，JDK 25 传 bufferSize"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -c StackStreamFactory$AbstractStackWalker 对照 callStackWalk 实参；runtime/java_runtime/src/java/lang/stack_stream_factory_abstract_stack_walker_impl.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-class-protection-domain-field"
+stage = "run"
+symptom = "JDK 25：Class.getProtectionDomain().getCodeSource() 恒 null（TestProtectionDomainFaces 输出 codesource-nonnull=false）"
+match = [["codesource-nonnull=false"]]
+tests = ["TestProtectionDomainFaces"]
+cause = "JDK 25 删去 Class.getProtectionDomain0 native，改读字段 Class.protectionDomain（VM 在定义类时注入），空则回落 Holder.allPermDomain。修法：vm_intrinsics.toml [vm_state.field_hooks] 登记 protectionDomain 读前接收者钩子 Class.__vm_protection_domain（boot_noop），首读时按定义加载器 / 预定义表求出 ProtectionDomain 写回字段；JDK 21 仍为 getProtectionDomain0 native，两者共用 __defined_protection_domain"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = ["e6390980"]
+status = "pending"
+owner = "fix-jdk25"
+diagnose = "javap -p java.lang.Class | grep -i protectionDomain；runtime/java_runtime/src/java/lang/class_impl/attrs.rs"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "jdk25-stackframeinfo-reflective-element-flow"
+stage = "run"
+symptom = "JDK 25 运行期 panic「stub: java/lang/StackFrameInfo.declaringClass」（FrameBuffer.at → ClassFrameInfo.declaringClass）"
+match = [["stub: java/lang/StackFrameInfo.declaringClass"]]
+tests = ["TestStackWalkerFrames"]
+cause = "JDK 25 StackFrameBuffer 以反射 type.getDeclaredConstructor(StackWalker).newInstance 分配帧元素再存入 stackFrames 数组；闭包分析器对 Constructor.newInstance 结果到数组元素的流未建模（StackFrameInfo 经 [reflect] 入闭包但其 declaringClass 未被判可达，生成存根）。属闭包反射建模缺口，不在本分支范围（G1 闭包 hub）"
+introduced = "c7cfb932（JDK 25 档案暴露）"
+fixed = []
+status = "open"
+owner = "闭包反射建模（G1 后续，待派）"
+diagnose = "rava build --jdk 25 TestStackWalkerFrames --stop-after emit --trace-class java/lang/StackFrameInfo；查 declaringClass 是否在档案调用链上"
+doc = ""
+since = "2026-10-11"
+
+[[pattern]]
+id = "hw-scanner-cfg-blind"
+stage = "compile"
+symptom = "JDK 21：DeepCopy 闭包 3076 → 6479 类，编译 E0599 GSSNameSpi 上无 equals_obj"
+match = [["no method named `equals_obj` found for struct `gss_name_spi::GSSNameSpi`"]]
+tests = ["DeepCopy"]
+cause = "闭包手写扫描器不识别 #[cfg]：stack_stream_factory_abstract_stack_walker_impl.rs 的 cfg(jdk_ge_25) 分支（ResolvedMethodName 分配、对 info 的按名写 name / type_ / classOrMemberName）在 JDK 21 下也被建模，按名写只知字段名使值流放宽、闭包翻倍。修法：handwritten/cfg.rs 按参考 JDK 三值求值 cfg（jdk_ge_N / not / all / any，其余不定保留），剔除为假的项 / impl 成员 / 语句 / match 分支 / 字段；driver build / closure / profile 传入 ClassPath::release()，emit 的 HwTypeRefs 同口径。修后 DeepCopy 闭包类集与方法集同集成头（3001 类 / 16425 方法，逐项一致）。equals_obj 为独立的潜伏生成器缺陷，随闭包扩张暴露，闭包回落后不再触发"
+introduced = "efc32d6f"
+fixed = ["d279b821"]
+status = "fixed"
+owner = "fix-jdk25"
+diagnose = "同一 rava 二进制、只换 runtime 文件做 --stop-after emit 二分，比较 [emit] JDK 类数；remote_rava closure 两 ref 比 closure.json 的 classes / methods 名集"
+doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md"
+since = "2026-10-11"
+
+[[pattern]]
+id = "hw-upcall-self-lost-in-helper"
+stage = "run"
+symptom = "JDK 21 TestStackWalkerFrames 运行 null_recv：StackStreamFactory（isMethodHandleFrame）中 Class.getName 接收者判恒 null"
+match = [["null_recv", "java/lang/Class.getName", "stack_stream_factory"]]
+tests = ["TestStackWalkerFrames"]
+cause = "native callStackWalk 把 self.doStackWalk 上调移进 &self 辅助 fn（__walk_batches）。闭包手写扫描器并入被调 fn 体时把其调用标为非 self 接收者（objects.rs / scan.rs absorb_body：on_self = false），上调的接收者与 native 的 this 断开，CallerClassFinder 仅类模式帧缓冲（native 写入的 Class 元素）的流断开，Class 元素被判恒 null。二分：集成头通过；只回退该文件通过；回退生成器改动、回退 STE 手写、改回 let 绑定均不过；上调留在 native 体内通过。手写规则：对 this 的 Java 上调须写在 native 体内，辅助 fn 只做无 self 的准备工作"
+introduced = "efc32d6f（栈遍历按 JDK 分版本时引入辅助 fn）"
+fixed = ["725249ef"]
+status = "fixed"
+owner = "fix-jdk25"
+diagnose = "按文件回退做 TestStackWalkerFrames 抽查二分；查手写 native 体内 self.<Java 方法>( 上调是否经辅助 fn 转手"
+doc = "docs/reports/2026-10-11-fix-jdk25-handoff.md"
+since = "2026-10-11"
 
 [[pattern]]
 id = "vt-pinned-carrier-permit"

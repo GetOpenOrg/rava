@@ -187,7 +187,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     let mut man = Manifest::load(&rt)?;
     man.release_more(multi("--release").into_iter().cloned());
     man.release_bytecode(multi("--release-bytecode").into_iter().cloned());
-    let hw = Handwritten::new(&rt);
+    let hw = Handwritten::new(&rt, cp.release());
     let h = Hierarchy::new(&cp);
     let input_desc = closure::Input {
         cp: &cp,

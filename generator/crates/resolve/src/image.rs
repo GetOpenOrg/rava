@@ -230,6 +230,57 @@ fn files_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
     out
 }
 
+/// javac 报错行里的源文件（`<path>.java:<行>: error:`），限于本轮编译的源
+fn failed_sources(stderr: &str, sources: &[PathBuf]) -> BTreeSet<PathBuf> {
+    stderr
+        .lines()
+        .filter_map(|l| l.split_once(".java:").filter(|(_, rest)| rest.contains(": error:")).map(|(p, _)| PathBuf::from(format!("{p}.java"))))
+        .filter(|p| sources.contains(p))
+        .collect()
+}
+
+/// 编译一个模块的 VM 支持类。支持类是参考 JDK 某个运行期类定义点的承载者；参考 JDK 主版本不含该定义点
+/// （如 JDK 22 起删除的 `SerializationConstructorAccessorImpl` 一族）时其源无法编译，也无消费方——
+/// 按 javac 报错剔除出错的源（连带依赖它们的源在下一轮报错剔除）后重编，其余支持类照常入类路径。
+/// 无法归因到源文件的失败整模块放弃
+fn compile_support(javac: &Path, module: &str, mod_dir: &Path, out: &Path, mut sources: Vec<PathBuf>) -> bool {
+    let _ = std::fs::create_dir_all(out);
+    let mut dropped: Vec<PathBuf> = Vec::new();
+    while !sources.is_empty() {
+        let r = Command::new(javac)
+            .arg("--patch-module")
+            .arg(format!("{module}={}", mod_dir.display()))
+            .arg("-nowarn")
+            .arg("-d")
+            .arg(out)
+            .args(&sources)
+            .output();
+        let o = match r {
+            Ok(o) if o.status.success() => {
+                if !dropped.is_empty() {
+                    let names: Vec<String> = dropped.iter().map(|p| p.strip_prefix(mod_dir).unwrap_or(p).display().to_string()).collect();
+                    eprintln!("      VM 支持类（{module}）在本 JDK 不可编译、已剔除：{}", names.join(", "));
+                }
+                return true;
+            }
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("      警告：VM 支持类编译失败（{module}）：{e}");
+                return false;
+            }
+        };
+        let err = String::from_utf8_lossy(&o.stderr);
+        let bad = failed_sources(&err, &sources);
+        if bad.is_empty() {
+            eprintln!("      警告：VM 支持类编译失败（{module}）：{}", err.trim().chars().take(400).collect::<String>());
+            return false;
+        }
+        sources.retain(|s| !bad.contains(s));
+        dropped.extend(bad);
+    }
+    false
+}
+
 fn vm_support_dirs(home: &Path, root: &Path) -> Vec<PathBuf> {
     let javac = exe(home, "javac");
     if !root.is_dir() || !javac.exists() {
@@ -251,28 +302,8 @@ fn vm_support_dirs(home: &Path, root: &Path) -> Vec<PathBuf> {
             h.update(&std::fs::read(s).unwrap_or_default());
         }
         let out = cache_base().join("rava").join("vmsupport").join(h.hex()).join(module);
-        if files_with_ext(&out, "class").is_empty() {
-            let _ = std::fs::create_dir_all(&out);
-            let r = Command::new(&javac)
-                .arg("--patch-module")
-                .arg(format!("{module}={}", mod_dir.display()))
-                .arg("-nowarn")
-                .arg("-d")
-                .arg(&out)
-                .args(&sources)
-                .output();
-            match r {
-                Ok(o) if o.status.success() => {}
-                Ok(o) => {
-                    let err = String::from_utf8_lossy(&o.stderr);
-                    eprintln!("      警告：VM 支持类编译失败（{module}）：{}", err.trim().chars().take(400).collect::<String>());
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("      警告：VM 支持类编译失败（{module}）：{e}");
-                    continue;
-                }
-            }
+        if files_with_ext(&out, "class").is_empty() && !compile_support(&javac, module, &mod_dir, &out, sources) {
+            continue;
         }
         dirs.push(out);
     }
@@ -283,6 +314,15 @@ fn vm_support_dirs(home: &Path, root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_sources_picks_error_files_only() {
+        let a = PathBuf::from("/r/java.base/a/A.java");
+        let b = PathBuf::from("/r/java.base/a/B.java");
+        let err = "/r/java.base/a/A.java:14: error: cannot find symbol\n  symbol: class X\n/r/java.base/a/B.java:3: warning: x\n/other/C.java:1: error: y\n";
+        let got = failed_sources(err, &[a.clone(), b]);
+        assert_eq!(got, BTreeSet::from([a]));
+    }
 
     #[test]
     fn parses_jimage_listing() {

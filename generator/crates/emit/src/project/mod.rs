@@ -342,7 +342,7 @@ pub fn write_project(ctx: &EmitCtx<'_>, out_dir: &Path, bodies: &dyn MethodBodyE
     w.write_all(crate::par::resolve_jobs(ctx.opts.jobs), &files)?;
     perf.mark("write");
     for src in &jdk_srcs {
-        mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
+        mod_tree::write_mod_tree(src, Some(&ctx.runtime_dir), ctx.opts.jdk_major, crate::par::resolve_jobs(ctx.opts.jobs), &mut w)?;
     }
     segs.write_crates(&mut w, out_dir, &decl_src)?;
     perf.mark("mod_tree");

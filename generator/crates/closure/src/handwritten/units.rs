@@ -89,7 +89,7 @@ impl Handwritten {
             if content.contains(GENERATED_MARK) {
                 continue;
             }
-            let file = match syn::parse_file(&content) {
+            let file = match self.cfg.parse_file(&content) {
                 Ok(f) => f,
                 Err(e) => {
                     self.errors.borrow_mut().push(format!("{}：{e}", path.display()));
@@ -153,7 +153,7 @@ impl Handwritten {
             Some(r) => r,
             None => {
                 let content = layout::read_unit(&self.src, &self.src.join(format!("{m}.rs"))).unwrap_or_default();
-                let r = match syn::parse_file(&content) {
+                let r = match self.cfg.parse_file(&content) {
                     Ok(file) if !content.contains(GENERATED_MARK) => file_rets(&file, &self.prelude),
                     _ => Default::default(),
                 };

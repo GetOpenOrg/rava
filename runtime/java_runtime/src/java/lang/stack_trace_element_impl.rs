@@ -14,6 +14,31 @@ use crate::prelude::*;
 use super::*;
 use super::throwable_impl::StackTraceFrames;
 
+fn _ref(obj: &Object, class: &str, field: &str) -> Object {
+    obj.0.__unsafe_ref_get(field).unwrap_or_else(|| panic!("stub: {}.{} 无按名协议", class, field))
+}
+
+/// StackFrameInfo 的方法身份 (声明类, 方法名, flags, type)。JDK 21：经 `memberName`（MemberName 的
+/// clazz / name / flags / type）。
+#[cfg(not(jdk_ge_25))]
+fn _frame_method(info: &Object) -> (Object, Object, i32, Object) {
+    let member = _ref(info, "java/lang/StackFrameInfo", "memberName");
+    let flags = member.0.__unsafe_int_cell("flags").map_or(0, |c| c.get());
+    let field = |name: &str| _ref(&member, "java/lang/invoke/MemberName", name);
+    (field("clazz"), field("name"), flags, field("type_"))
+}
+
+/// JDK 25：ClassFrameInfo.classOrMemberName 为 ResolvedMethodName（声明类在其 vmholder），
+/// name / type / flags 为 StackFrameInfo 自身字段（flags 高位是 RETAIN_CLASS_REF 等非成员位，取成员位）
+#[cfg(jdk_ge_25)]
+fn _frame_method(info: &Object) -> (Object, Object, i32, Object) {
+    const MEMBER_INFO_FLAGS: i32 = 0x00FF_FFFF;
+    let method = _ref(info, "java/lang/ClassFrameInfo", "classOrMemberName");
+    let clazz = _ref(&method, "java/lang/invoke/ResolvedMethodName", "vmholder");
+    let flags = info.0.__unsafe_int_cell("flags").map_or(0, |c| c.get()) & MEMBER_INFO_FLAGS;
+    (clazz, _ref(info, "java/lang/StackFrameInfo", "name"), flags, _ref(info, "java/lang/StackFrameInfo", "type_"))
+}
+
 impl StackTraceElement {
     /// native initStackTraceElements([Ljava/lang/StackTraceElement;Ljava/lang/Object;I)V：
     /// 按 `fillInStackTrace` 捕获的 Rust 栈帧填充元素字段。载体形态不符
@@ -51,7 +76,7 @@ impl StackTraceElement {
 
     /// native `initStackTraceElement(StackTraceElement, StackFrameInfo)`：HotSpot
     /// `java_lang_StackFrameInfo::to_stack_trace_element` → `java_lang_StackTraceElement::fill_in`。
-    /// 方法取自 StackFrameInfo.memberName（栈遍历数据面写入的 clazz / name / flags）：填
+    /// 方法取自栈遍历数据面写入 StackFrameInfo 的方法身份（[`_frame_method`]）：填
     /// declaringClassObject、declaringClass、methodName；fileName = 声明类的 SourceFile 属性（java_meta
     /// 表，无该属性为 null）；lineNumber：native 方法 -2，否则按 memberName 的 (类, 名, type) 取行表中的
     /// LineNumberTable，由 StackFrameInfo.bci 定行（`Method::line_number_from_bci`，无表 -1）。模块 / 类加载器名与 initStackTraceElements 同口径不填。
@@ -64,13 +89,9 @@ impl StackTraceElement {
         if info.0.is_jvm_null() {
             return Err(JvmError::null_pointer());
         }
-        let member = info.0.__unsafe_ref_get("memberName")
-            .unwrap_or_else(|| panic!("stub: java/lang/StackFrameInfo.memberName 无按名协议"));
-        let field = |name: &str| member.0.__unsafe_ref_get(name)
-            .unwrap_or_else(|| panic!("stub: java/lang/invoke/MemberName.{} 无按名协议", name));
-        let clazz = field("clazz").try_cast::<Class>("java/lang/Class")?;
-        let method_name = field("name").try_cast::<String>("java/lang/String")?;
-        let flags = member.0.__unsafe_int_cell("flags").map_or(0, |c| c.get());
+        let (clazz, method_name, flags, type_) = _frame_method(&info);
+        let clazz = clazz.try_cast::<Class>("java/lang/Class")?;
+        let method_name = method_name.try_cast::<String>("java/lang/String")?;
         let binary = format!("{}", clazz.__get_name());
         let slash = binary.replace('.', "/");
         element.__set_declaringClassObject(Clone::clone(&clazz));
@@ -84,7 +105,7 @@ impl StackTraceElement {
             -2
         } else {
             // type 由数据面写为描述符串；Java 侧可能已把它展开为 MethodType，此时按 (类, 名) 唯一对位
-            let descriptor = field("type_").try_cast::<String>("java/lang/String").ok().map(|d| format!("{}", d));
+            let descriptor = type_.try_cast::<String>("java/lang/String").ok().map(|d| format!("{}", d));
             let bci = info.0.__unsafe_int_cell("bci").map_or(0, |c| c.get());
             crate::vm_stack::line_number_from_bci(&slash, &name, descriptor.as_deref(), bci)
         };

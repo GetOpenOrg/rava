@@ -6,6 +6,8 @@
 //!   与 HotSpot 锚定在该帧同口径），跳过 StackWalker 实现帧（持有类为 StackWalker、AbstractStackWalker
 //!   或其直接子类），再跳 `skipframes` 帧，填首批后上调 `doStackWalk(anchor, skipframes, batchSize,
 //!   startIndex, endIndex)`，返回其结果；返回（含异常完成）后锚点失效；
+//! - JDK 25（`cfg(jdk_ge_25)`）：mode 改为 int、fetchStackFrames 多 lastBatchFrameCount 形参；帧为
+//!   ClassFrameInfo / StackFrameInfo（classOrMemberName + flags），见各填帧函数；
 //! - `fetchStackFrames`：按锚点续取下一批，返回 endIndex；锚点不在本线程的活动流中 → InternalError；
 //! - 填帧：未带 SHOW_HIDDEN_FRAMES 或 GET_CALLER_CLASS 模式时跳过 `@Hidden` 方法；FILL_CLASS_REFS_ONLY
 //!   只填 Class，否则填 StackFrameInfo（VM 写入其 memberName 的 clazz / name / type / flags 与 bci）。
@@ -28,6 +30,8 @@ use crate::jdk::internal::vm::{Continuation, ContinuationScope};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+// 模式位（JDK 21 `FILL_CLASS_REFS_ONLY` 与 JDK 25 `CLASS_INFO_ONLY` 同值 0x2；GET_CALLER_CLASS 只在 JDK 21
+// 存在，JDK 25 的 @CallerSensitive 判定移到 Java 侧 CallerClassFinder，模式里不再出现该位）
 const FILL_CLASS_REFS_ONLY: i64 = 0x2;
 const GET_CALLER_CLASS: i64 = 0x4;
 const SHOW_HIDDEN_FRAMES: i64 = 0x20;
@@ -74,7 +78,9 @@ fn _ensure(written: bool, field: &str) {
     }
 }
 
-/// StackFrameInfo 填写（HotSpot `java_lang_StackFrameInfo::set_method_and_bci`）。
+/// StackFrameInfo 填写（HotSpot `java_lang_StackFrameInfo::set_method_and_bci`，JDK 21）：方法身份写入
+/// `memberName` 的 clazz / name / type / flags，bci 写入 StackFrameInfo。
+#[cfg(not(jdk_ge_25))]
 fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     let Some(member) = info.0.__unsafe_ref_get("memberName") else {
         panic!("stub: java/lang/StackFrameInfo.memberName 无按名协议");
@@ -84,6 +90,44 @@ fn _fill_frame_info(info: Object, frame: &JavaFrame) {
     _ensure(member.0.__unsafe_ref_set("name", Object::from(String::from(frame.method.name))), "name");
     _ensure(member.0.__unsafe_ref_set("type_", Object::from(String::from(frame.method.descriptor))), "type");
     _ensure(member.0.__unsafe_int_set("flags", frame.member_name_flags()), "flags");
+    _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
+}
+
+/// ClassFrameInfo.flags 的成员位并入（构造器已写入的 RETAIN_CLASS_REF 等高位保留）
+#[cfg(jdk_ge_25)]
+fn _or_flags(info: &Object, frame: &JavaFrame) {
+    let old = info.0.__unsafe_int_cell("flags").map_or(0, |c| c.get());
+    _ensure(info.0.__unsafe_int_set("flags", old | frame.member_name_flags()), "flags");
+}
+
+/// JDK 25 仅类模式（HotSpot `java_lang_ClassFrameInfo::init_class`）：帧缓冲元素为 ClassFrameInfo，
+/// classOrMemberName 写声明类，flags 并入方法的成员位
+#[cfg(jdk_ge_25)]
+fn _fill_class_only<T>(frames: &JArray<T>, index: i32, frame: &JavaFrame) -> Result<()>
+where
+    T: Clone + Default + 'static + From<Object> + Into<Object> + crate::sync_model::__ThreadSafe,
+{
+    let info: Object = frames.get(index)?.into();
+    let clazz = Object::from(Class::for_class(frame.class));
+    _ensure(info.0.__unsafe_ref_set("classOrMemberName", clazz), "classOrMemberName");
+    _or_flags(&info, frame);
+    Ok(())
+}
+
+/// JDK 25 StackFrameInfo 填写（HotSpot `java_lang_StackFrameInfo::set_method_and_bci`）：classOrMemberName
+/// 写 ResolvedMethodName（声明类在其 vmholder，JLIA.getDeclaringClass 经它取类），flags 并入成员位，写 bci。
+/// HotSpot 的 name / type 由 `expandStackFrameInfo` 惰性补齐；本模型帧不带方法句柄，在此一次填齐
+///（type 为描述符串，getMethodType 原生支持该形态），expandStackFrameInfo 不会被调用
+#[cfg(jdk_ge_25)]
+fn _fill_frame_info(info: Object, frame: &JavaFrame) {
+    let mut method = crate::java::lang::invoke::ResolvedMethodName::default();
+    method._init_not_null();
+    let method = Object::from(method);
+    _ensure(method.0.__unsafe_ref_set("vmholder", Object::from(Class::for_class(frame.class))), "vmholder");
+    _ensure(info.0.__unsafe_ref_set("classOrMemberName", method), "classOrMemberName");
+    _ensure(info.0.__unsafe_ref_set("name", Object::from(String::from(frame.method.name))), "name");
+    _ensure(info.0.__unsafe_ref_set("type_", Object::from(String::from(frame.method.descriptor))), "type");
+    _or_flags(&info, frame);
     _ensure(info.0.__unsafe_int_set("bci", frame.bci), "bci");
 }
 
@@ -117,8 +161,12 @@ where
                         "StackWalker::getCallerClass called from @CallerSensitive '{}' method",
                         frame.external_name())));
                 }
-                let class = Class::for_class(frame.class);
-                frames.set(index, T::from(Object::from(class)))?;
+                // JDK 21：仅类模式的帧缓冲元素是 Class 本身。数组写入留在 native 体内：闭包分析器按 native
+                // 形参建模手写体对实参数组的写入（移入自由函数则其元素值池断开，Class 元素被判恒 null）
+                #[cfg(not(jdk_ge_25))]
+                frames.set(index, T::from(Object::from(Class::for_class(frame.class))))?;
+                #[cfg(jdk_ge_25)]
+                _fill_class_only(frames, index, &frame)?;
             }
             decoded += 1;
         }
@@ -126,22 +174,65 @@ where
     }
 
     /// native `callStackWalk(long mode, int skipframes, ContinuationScope, Continuation, int batchSize,
-    /// int startIndex, T[] frames)`。续体参数：本模型无虚拟线程续体帧（VirtualThread 为 VM 边界类），
+    /// int startIndex, T[] frames)`（JDK 21）。续体参数：本模型无虚拟线程续体帧（VirtualThread 为 VM 边界类），
     /// 帧流即当前载体线程栈。
+    ///
+    /// 两个版本的 native 体各自直接调 `__fill_in_frames` 并直接上调 `self.doStackWalk`：闭包手写扫描器只在
+    /// 本 fn 体内认 `self` 上的回调（经辅助 fn 并入的调用不再视为 `self` 接收者），上调移进 `&self` 辅助后
+    /// doStackWalk 的接收者与本 native 的 this 断开，JDK 21 仅类模式帧缓冲的 Class 元素被判恒 null
+    ///（failure_patterns `hw-upcall-self-lost-in-helper`）
+    #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn callStackWalk(&self, mode: i64, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
                                 batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
+        let limit = start_index + batch_size;
         if frames.is_jvm_null() {
             return Err(_npe("frames_array is null"));
         }
-        if frames.len()? < start_index + batch_size {
+        if frames.len()? < limit {
             return Err(JvmError::illegal_argument("not enough space in buffers"));
         }
+        let mut stream = Self::__anchor_stream(skipframes);
+        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+        let anchor = Self::__register_anchor(stream, start_index, end_index)?;
+        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
+        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
+        Ok(R::from(result?))
+    }
+
+    /// native `callStackWalk(int mode, int skipframes, ContinuationScope, Continuation, int bufferSize,
+    /// int startIndex, T[] frames)`（JDK 25：mode 改为 int；bufferSize 为缓冲区总长（含保留首元素），
+    /// 填帧上界是 bufferSize 而非 startIndex + batchSize，HotSpot `StackWalk::walk` 同口径）
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn callStackWalk(&self, mode: i32, skipframes: i32, _cont_scope: ContinuationScope, _continuation: Continuation,
+                                batch_size: i32, start_index: i32, frames: JArray<T>) -> Result<R> {
+        let mode = i64::from(mode);
+        let limit = batch_size;
+        if frames.is_jvm_null() {
+            return Err(_npe("frames_array is null"));
+        }
+        if frames.len()? < limit {
+            return Err(JvmError::illegal_argument("not enough space in buffers"));
+        }
+        let mut stream = Self::__anchor_stream(skipframes);
+        let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+        let anchor = Self::__register_anchor(stream, start_index, end_index)?;
+        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
+        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
+        Ok(R::from(result?))
+    }
+
+    /// 本线程栈快照为帧流：跳过 StackWalker 实现帧，再跳 `skipframes` 帧
+    fn __anchor_stream(skipframes: i32) -> Anchored {
         let all = crate::vm_stack::capture_java_frames();
         let mut cursor = all.iter().position(|f| !_is_walker_impl(f.class)).unwrap_or(all.len());
         cursor = (cursor + skipframes.max(0) as usize).min(all.len());
-        let mut stream = Anchored { frames: all, cursor };
-        let end_index = Self::__fill_in_frames(mode, &mut stream, batch_size, start_index, &frames)?;
+        Anchored { frames: all, cursor }
+    }
+
+    /// 首批已填：登记锚点并返回之；调用方上调 `doStackWalk`，返回（含异常完成）后移除锚点
+    fn __register_anchor(stream: Anchored, start_index: i32, end_index: i32) -> Result<i64> {
         if end_index - start_index < 1 {
             return Err(_internal_error("stack walk: decode failed"));
         }
@@ -152,16 +243,16 @@ where
             a
         };
         crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
-        let result = self.doStackWalk(anchor, skipframes, batch_size, start_index, end_index);
-        crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor);
-        Ok(R::from(result?))
+        Ok(anchor)
     }
 
-    /// native `fetchStackFrames(long mode, long anchor, int batchSize, int startIndex, T[] frames)`：
-    /// 续取下一批，返回 endIndex（流已到底 → startIndex）。
+    /// native `fetchStackFrames(long mode, long anchor, int batchSize, int startIndex, T[] frames)`（JDK 21）：
+    /// 按锚点续取下一批，返回 endIndex（流已到底 → startIndex）
+    #[cfg(not(jdk_ge_25))]
     #[jvm_native]
     pub fn fetchStackFrames_l_l_i_i_arr_obj(&self, mode: i64, anchor: i64, batch_size: i32, start_index: i32,
                                             frames: JArray<T>) -> Result<i32> {
+        let limit = start_index + batch_size;
         let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
             return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
         };
@@ -169,11 +260,41 @@ where
             if frames.is_jvm_null() {
                 return Err(_npe("frames_array is null"));
             }
-            if frames.len()? < start_index + batch_size {
+            if frames.len()? < limit {
                 return Err(JvmError::illegal_argument("not enough space in buffers"));
             }
             let had_more = stream.cursor < stream.frames.len();
-            let end_index = Self::__fill_in_frames(mode, &mut stream, batch_size, start_index, &frames)?;
+            let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
+            if had_more && end_index == start_index {
+                return Err(_internal_error("doStackWalk: decode frames failed"));
+            }
+            Ok(end_index)
+        })();
+        crate::exec_context::state().walk_anchors.borrow_mut().insert(anchor, stream);
+        result
+    }
+
+    /// native `fetchStackFrames(int mode, long anchor, int lastBatchFrameCount, int bufferSize, int startIndex,
+    /// T[] frames)`（JDK 25）。lastBatchFrameCount 供 HotSpot 把栈帧流推过上一批末帧；本模型的流位置在填帧时
+    /// 已停在下一个待检视帧，无需再推；bufferSize 口径同 callStackWalk
+    #[cfg(jdk_ge_25)]
+    #[jvm_native]
+    pub fn fetchStackFrames_i_l_i_i_i_arr_obj(&self, mode: i32, anchor: i64, _last_batch_frame_count: i32, batch_size: i32,
+                                              start_index: i32, frames: JArray<T>) -> Result<i32> {
+        let mode = i64::from(mode);
+        let limit = batch_size;
+        let Some(mut stream) = crate::exec_context::state().walk_anchors.borrow_mut().remove(&anchor) else {
+            return Err(_internal_error("doStackWalk: corrupted buffers on stack"));
+        };
+        let result = (|| {
+            if frames.is_jvm_null() {
+                return Err(_npe("frames_array is null"));
+            }
+            if frames.len()? < limit {
+                return Err(JvmError::illegal_argument("not enough space in buffers"));
+            }
+            let had_more = stream.cursor < stream.frames.len();
+            let end_index = Self::__fill_in_frames(mode, &mut stream, limit - start_index, start_index, &frames)?;
             if had_more && end_index == start_index {
                 return Err(_internal_error("doStackWalk: decode frames failed"));
             }
